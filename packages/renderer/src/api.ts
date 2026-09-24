@@ -1,17 +1,10 @@
 /**
- * Renderer REST client — narrowed to the design 05 §7.2 surface:
- * health, connections (local). Everything else (sessions/projects/
- * interactions/SSE/config/… passthrough, and the host logs REST surface)
- * is outside this surface; the settings-connections plugin owns its own
- * control-plane client.
- *
- * The transport + wire-contract shapes are the SINGLE shared copy in the
- * chamber sidebar package (shared/control-plane-client.ts, design 04 §3 /
- * 05 §3.1): the App layer here and the connections
- * plugin's control-plane client both consume it, so the two consumers
- * cannot drift apart. This module keeps the App-facing `api` object and
- * re-exports the shared types/functions unchanged (App.tsx's import surface
- * stays as-is).
+ * Renderer REST client, narrowed to health + connections (local); the settings-connections
+ * plugin owns its own control-plane client.
+ * The transport + wire-contract shapes are the SINGLE shared copy in the chamber sidebar
+ * package (shared/control-plane-client.ts): this module and that plugin both consume it, so
+ * the two cannot drift apart. This module keeps the App-facing `api` object and re-exports
+ * the shared types/functions unchanged (App.tsx's import surface stays as-is).
  */
 import {
   controlPlaneUrl,
@@ -25,30 +18,21 @@ import {
   type HealthResponse,
 } from '@dsh-chamber/dsh-chamber-client-core'
 
-/** 统一错误形状（design 04 D1：{error, code?}）+ HTTP 状态 + 响应体 + 限流提示。 */
+/** 统一错误形状 {error, code?} + HTTP 状态 + 响应体 + 限流提示。 */
 export type { ApiError, ApiErrorBody }
 
 export type { ConnectionSummary, HealthResponse }
 
-/**
- * RuntimeAPIs resolver：App 与各组件唯一的数据入口，域命名空间一一映射
- * 控制面 REST 面（契约见 control-plane api.ts 头注注释）。组件不得直接
- * 调用 fetch。
- */
+/** App 与各组件唯一的数据入口，映射控制面 REST 面；组件不得直接调用 fetch。 */
 export const api = {
   host: {
     /** GET /health → {ok, dsh:{status, port, error?}} */
     health: (): Promise<HealthResponse> => request('/health'),
-    /**
-     * GET /api/host/health-events (设计 05 §3): SSE push channel — current
-     * snapshot on connect, then every machine transition. The local
-     * instance's status never waits for a poll tick (the remote roster
-     * already rides desktop pushes).
-     */
+    /** GET /api/host/health-events: SSE push channel — snapshot on connect, then every machine transition. */
     healthEvents: (): EventSource => new EventSource(controlPlaneUrl() + '/api/host/health-events'),
   },
   connections: {
-    /** GET /api/connections → {connection}（04 §3.2）；无连接行 404 → 空数组 */
+    /** GET /api/connections → {connection}；无连接行 404 → 空数组 */
     list: async (): Promise<ConnectionSummary[]> => {
       try {
         const body = await request<{ connection?: ConnectionRowWire }>('/api/connections')
@@ -63,9 +47,8 @@ export const api = {
     createLocal: async (): Promise<ConnectionSummary> => {
       const body = await post<{ connection?: ConnectionRowWire }>('/api/connections', { kind: 'local' })
       const row = body?.connection
-      // 契约破缺（2xx 但没有连接行）绝不折成伪造的 {id:'local', status:'starting'}：
-      // 那让调用方以为本地实例已在启动，真实的契约破缺被静默吞掉。按本文件既有构造
-      // 方式抛 ApiError（Error + status/body）；status=200 = HTTP 成功但响应体违约。
+      // 契约破缺（2xx 但没有连接行）绝不折成伪造的 {id:'local', status:'starting'}——那让调用方
+      // 以为本地实例已在启动。按本文件既有方式抛 ApiError；status=200 = HTTP 成功但响应体违约。
       if (row === undefined || row === null) {
         const error = new Error('connections.createLocal: response carried no connection row') as ApiError
         error.status = 200
@@ -74,7 +57,7 @@ export const api = {
       }
       return toConnectionSummary(row)
     },
-    /** DELETE /api/connections/<id> → {stopped:true}（04 §3.2；本面上只有 local 行） */
+    /** DELETE /api/connections/<id> → {stopped:true}（本面上只有 local 行） */
     remove: (connectionId: string): Promise<{ stopped: boolean }> =>
       request(`/api/connections/${encodeURIComponent(connectionId)}`, { method: 'DELETE' }),
   },

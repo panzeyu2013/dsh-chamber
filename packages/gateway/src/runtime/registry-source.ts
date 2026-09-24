@@ -1,11 +1,9 @@
 /**
- * Gateway-owned registry source persistence (design 18 §9.3, design 17 §12):
- * `<stateDir>/dsh-runtime/registry.json` (owner-only 0600, atomic no-follow
- * write). Corrupt or unsafe content is quarantined byte-for-byte and fails
- * loud — the registry trust anchor is never silently reset to npmjs.
- *
- * Pure functions parameterized by baseDir: there is no per-manager state here,
- * so every runtime module reads/writes through the same two entry points.
+ * Gateway-owned registry source persistence: `<stateDir>/dsh-runtime/registry.json`
+ * (owner-only 0600, atomic no-follow write). Corrupt or unsafe content is
+ * quarantined byte-for-byte and fails loud — the registry trust anchor is never
+ * silently reset to npmjs.
+ * Pure functions parameterized by baseDir: every runtime module shares two entry points.
  */
 import { readdirSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'

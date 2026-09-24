@@ -1,7 +1,5 @@
 /** Host loader entry for the browser-only open-in plugin. */
 
-/** Provides no host-side behavior; the app launch (Finder / VS Code) runs in
- *  the desktop main process (design 16 + open-in extension — there is
- *  deliberately no host plugin / no seed: the action is a local launch, never
- *  an in-instance execution). */
+/** No host-side behavior: the launch runs in the desktop main process, and there
+ *  is deliberately no host plugin / no seed — a local launch, never in-instance. */
 export function apply(): void {}

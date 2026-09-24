@@ -1,34 +1,20 @@
 /**
- * 文档级 SVG 资源 id 归属（N-ctx 绘制不变量；设计侧 design 05 §4.2）。
+ * 文档级 SVG 资源 id 归属（N-ctx 绘制不变量）。
  *
- * 缺陷：上游图标组件（@deepseek-ai/dsh-client-ui-primitives）把 Figma 导出 id 写死
- * 在组件里（IconSettingsOutline16=clip0_1450_63327、BrandWordmark 的 whale/badge
- * clip、IconAgentPresetOutline16 的 mask 等），而 url(#id) 是**文档级**解析；N-ctx
- * 在同一个文档里挂载多个实例壳，同一 id 因此被逐壳重复定义。
+ * 缺陷：上游图标组件把 Figma 导出 id 写死在组件里（clip/mask 等），而 url(#id) 是
+ * **文档级**解析；N-ctx 在同一文档挂载多个实例壳，同一 id 因此被逐壳重复定义。
  *
- * macOS WKWebView 的行为：文档内出现第二份带同名 id 的壳子树后，**新建**图标首次
- * 绘制若解析到未布局子树（instance-hidden / instance-pending）里的 clipper/mask，
- * WebKit 会整块失绘并把结果缓存住（重建元素才自愈，属性回写/揭示都不行）；改名同一
- * 子树里的 id 即可避免这一失绘。因此本模块**让每个 <svg> 自足**：把它「自己定义 +
- * 自己引用」的资源 id 改名为文档唯一 token，引用一起改；若它引用的定义在**别的** svg
- * 里（混合 sprite），把那份定义**复制**进本 svg（消费侧自足化，连同它内部再引用的
- * 定义做传递闭包），外部引用因此永不悬空。
+ * macOS WKWebView：文档内出现第二份同名 id 后，新建图标首次绘制若解析到未布局子树
+ * 里的 clipper/mask，WebKit 会整块失绘并缓存结果（重建元素才自愈）。因此本模块
+ * **让每个 <svg> 自足**：把自己定义且自己引用的资源 id 改名为文档唯一 token；引用的
+ * 定义在别的 svg 里时把那份定义复制进来（连同其内部引用做传递闭包），外部引用永不
+ * 悬空。
  *
- * 边界（刻意保守，宁可少改）：
- * - 只改名「本 <svg> 内定义（id=）且本 <svg> 内被引用（url(#…) 或 href="#…"）」的 id；
- * - 被 a11y 引用（aria-labelledby/aria-describedby/for）或被**样式表**引用（文档级
- *   <style>、同源 CSSOM、svg 内嵌 <style> 的 url(#…)）的 id 一律保留原名：改名会断
- *   开这些引用，而它们不在本模块的重写面内；
- * - 同一批不重复处理：`data-chamber-svg-scope` 标记 + WeakSet 身份兜住重复插入与 React
- *   重排；克隆件不在集合里 ⇒ 用新 token 重做；已 scoped 的 svg 里后补 id/引用会重扫该 svg；
- * - 根 `<svg>` 自身的 id 不改（上游图标不起根 id，外部代码/CSS 更可能按它寻址）；
- * - 嵌套 <svg> 自成作用域（安装器会下钻收集内层 svg）；
- * - 已 scoped 的 svg 里**后补**进新 id/引用（innerHTML 替换、插件追加）会触发该 svg
- *   重扫；直接改属性（不改 childList）不重扫。
- *
- * 安装点：main.tsx 在建 React root 之前调用一次 {@link installSvgResourceScope}；
- * 它观察 document.body 的新增子树（壳与 portal 都覆盖），批处理跑在微任务检查点 ——
- * 必须在首次绘制之前完成改名（见 SvgResourceScopeDeps.schedule）。
+ * 边界（刻意保守，宁可少改）：只改名「本 svg 内定义且本 svg 内引用」的 id；被 a11y
+ * 或样式表引用的 id 保留原名；`data-chamber-svg-scope` 标记 + WeakSet 兜住重复插入
+ * 与 React 重排（克隆件用新 token 重做，后补 id/引用会重扫该 svg）；根 <svg> 自身的 id
+ * 不改；嵌套 <svg> 自成作用域。安装点：main.tsx 建 React root 前调用一次，批处理必须
+ * 在首次绘制之前完成改名（见 SvgResourceScopeDeps.schedule）。
  */
 
 /** 处理过的 <svg> 上的标记属性（值 = 该 svg 的 token）；身份判定以 WeakSet 为准。 */
@@ -54,8 +40,8 @@ const RESOURCE_REFERENCE_ATTRIBUTES = [
 const HREF_ATTRIBUTES = ['href', 'xlink:href'] as const
 
 /**
- * 只有这些元素把 href="#…" 当**资源**引用：<a href="#dom-id"> 是文档链接，不是资源面，
- * 既不改写也不复制（否则会把任意 DOM 拷进 svg）。
+ * 只有这些元素把 href="#…" 当**资源**引用：<a href="#dom-id"> 是文档链接，既不改写
+ * 也不复制（否则会把任意 DOM 拷进 svg）。
  */
 const HREF_RESOURCE_ELEMENTS = [
   'use', 'textpath', 'mpath', 'feimage', 'image', 'pattern',
@@ -63,8 +49,8 @@ const HREF_RESOURCE_ELEMENTS = [
 ] as const
 
 /**
- * 可以被复制进消费方 svg 的「永不直接渲染」定义元素；<use> 指向的可渲染元素（<g>/<path>）
- * 不在内——复制它会重复绘制，且它不是资源定义。
+ * 可复制进消费方 svg 的「永不直接渲染」定义元素；<use> 指向的可渲染元素
+ * （<g>/<path>）不在内——复制它会重复绘制，且它不是资源定义。
  */
 const DEFINITION_ELEMENTS = [
   'clippath', 'mask', 'filter', 'marker', 'pattern',
@@ -84,10 +70,10 @@ const ID_REFERENCE_ATTRIBUTES = ['aria-labelledby', 'aria-describedby', 'for'] a
 const STYLE_ELEMENT = 'style'
 
 /**
- * 本模块用过的 token 前缀（默认 + 每次安装注入的）：重扫/克隆时剥掉旧前缀，id 形状不增长。
- * 只记前缀而不记具体 token，是因为同一文档可能装过多个 module 副本（各自前缀）。
- * **有意不随 disposer/reset 清空**：清掉会让已 scoped 的 id 在下次重扫时叠前缀；代价是显式
- * 注入的前缀会成为一条永久剥离规则（调用方只应使用 `chamber-*` 命名空间）。
+ * 本模块用过的 token 前缀（默认 + 每次安装注入的）：重扫/克隆时剥掉旧前缀，id 形状
+ * 不增长。只记前缀而不记具体 token，因为同一文档可能装过多个 module 副本。
+ * **有意不随 disposer/reset 清空**：清掉会让已 scoped 的 id 下次重扫时叠前缀；代价是
+ * 显式注入的前缀成为永久剥离规则（调用方只应使用 `chamber-*` 命名空间）。
  */
 const activeTokenPrefixes = new Set<string>(['chamber-csvg'])
 
@@ -95,8 +81,7 @@ function escapeForRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-// url(#id) / url( '#id' )；函数名大小写不敏感（CSS 函数名如此），引号成对且捕获两侧
-// 空白原样保留；id 字符集排除空白与引号/括号（`url(#a b)` 这类无效 CSS 不再被当引用）。
+// url(#id) / url( '#id' )；空白原样保留，id 字符集排除空白与引号/括号（函数名大小写不敏感）。
 const URL_REFERENCE_PATTERN = /(url)\((\s*)([\x27\x22]?)#([^\s\x27\x22)]+?)\3(\s*)\)/gi
 
 const scopeTokens = { value: 0 }
@@ -105,15 +90,15 @@ const scopeTokens = { value: 0 }
 const SVG_SCOPE_SEQUENCE_ATTRIBUTE = 'data-chamber-svg-scope-seq'
 
 /**
- * 本模块已经改名过的 <svg>。用 WeakSet 而不是「带标记即跳过」：
- * cloneNode(true) 会把标记属性和 token 一起复制，克隆件因此「看起来已处理」——
- * 若直接跳过，它就和原件同名，重复 id 又回来了。
+ * 本模块已经改名过的 <svg>。用 WeakSet 而不是「带标记即跳过」：cloneNode(true) 会把
+ * 标记属性和 token 一起复制，克隆件因此「看起来已处理」——若直接跳过，它就和原件
+ * 同名，重复 id 又回来了。
  */
 let scopedSvgs = new WeakSet<Element>()
 
 /**
- * 模块自己 append 进文档的节点（外部定义的副本）：observer 会把它们当作新增子树报回来，
- * 若不认领就会触发「重扫 → 再次复制 → 再回灌」的自激循环（每轮新 token，预算只按次生效）。
+ * 模块自己 append 的节点（外部定义的副本）：observer 会把它报回，若不认领就会触发
+ * 「重扫 → 再复制 → 再回灌」的自激循环（每轮新 token，预算只按次生效）。
  */
 let selfProducedNodes = new WeakSet<Node>()
 
@@ -252,8 +237,7 @@ function collectScopeFacts(svg: Element): ScopeFacts {
       if (value === null) continue
       for (const id of value.split(/\s+/)) if (id !== '') preserved.push(id)
     }
-    // svg 内嵌 <style> 的 url(#…) 同样按「保留」处理：样式表是文档级作用域，改名会
-    // 改变它的语义，而要改写它就得替换 React 追踪的文本节点（宁可少改）。
+    // svg 内嵌 <style> 的 url(#…) 同样按「保留」处理：样式表是文档级作用域，改名会改变其语义。
     if (isStyleElement(element)) {
       const css = element.textContent
       if (css !== null && css.toLowerCase().indexOf('url(') >= 0) {
@@ -302,8 +286,8 @@ function applyRenames(svg: Element, renames: ReadonlyMap<string, string>): void 
 }
 
 /**
- * 在文档里查一个 id（消费侧解析外部定义用；没有 document 面时返回 null）。
- * 作者 id 可能被改名多次（重扫/克隆），因此沿重命名链追到当前 id（跳数有上限）。
+ * 查文档里的一个 id（消费侧解析外部定义用）。作者 id 可能被改名多次（重扫/克隆），
+ * 因此沿重命名链追到当前 id（跳数有上限）。
  */
 function resolveDefinition(svg: Element, id: string): Element | null {
   let candidate = id
@@ -324,10 +308,9 @@ function lookupDocumentId(svg: Element, id: string): Element | null {
 }
 
 /**
- * 消费侧自足化：本 svg 引用了**别的 svg** 里的定义时，把那份定义（连同它自己再引用的
- * 外部定义，传递闭包、深度受预算保护）复制进本 svg 并改用副本 id。副本内部 id 与引用
- * 成对改名 ⇒ 副本自身也是自足的。
- * 定义者那边保持原样，别处的引用同样不悬空。
+ * 消费侧自足化：本 svg 引用了**别的 svg** 里的定义时，把那份定义（连同它自己再引用
+ * 的外部定义，传递闭包、受预算保护）复制进本 svg 并改用副本 id；副本内部 id 与引用
+ * 成对改名，因此副本自身也自足，定义者那边保持原样。
  * @returns 原 id → 副本 id（供引用重写）。
  */
 function copyExternalDefinitions(svg: Element, ids: readonly string[], token: string): Map<string, string> {
@@ -344,7 +327,7 @@ function copyExternalDefinitions(svg: Element, ids: readonly string[], token: st
     budget -= 1
     const clone = definition.cloneNode(true) as Element
     // 副本内部自足：内部**全部** id 都换成本 svg 的命名空间（不只是被引用的那些），
-    // 这样复制不会往文档里再塞一份同名定义；引用仍成对改写（根 id 由外层映射接管）。
+    // 这样复制不会往文档里再塞一份同名定义；引用仍成对改写。
     const innerFacts = collectScopeFacts(clone)
     const innerToken = token + '-i' + String(copies.size + 1)
     const innerPlan = resourceRenamePlan(
@@ -517,12 +500,9 @@ export interface SvgResourceScopeDeps {
     callback: (records: readonly SvgScopeRecord[]) => void,
   ) => SvgScopeObserver
   /**
-   * 批处理调度；默认微任务（queueMicrotask）。
-   *
-   * 必须是「首次绘制之前」的钩子：新图标的第一次绘制若解析到坏 clipper，失绘结果会
-   * 被缓存，之后再改名也救不回来（属性回写与揭示都不自愈），所以改名
-   * 机会只有插入后的同一个微任务检查点。因此**刻意不用 requestAnimationFrame**——
-   * 它在被遮挡/后台的 WebView 里会被节流甚至不触发，
+   * 批处理调度；默认微任务。必须是「首次绘制之前」的钩子：新图标的第一次绘制若解析到
+   * 坏 clipper，失绘结果会被缓存，改名机会只有插入后的同一个微任务检查点。因此**刻意
+   * 不用 requestAnimationFrame**——它在被遮挡/后台的 WebView 里会被节流甚至不触发，
    * 那会让图标先绘制、再改名，等于没修。
    */
   readonly schedule?: (run: () => void) => void
@@ -549,8 +529,8 @@ function isElementNode(node: Node): node is Element {
 }
 
 /**
- * 把一棵子树里的 a11y/表单 id 引用记进**文档级**保留集：引用方与定义方常在不同的 svg 里，
- * 只在本地保留会让定义方改名后断链。
+ * 把一棵子树里的 a11y/表单 id 引用记进**文档级**保留集：引用方与定义方常在不同的
+ * svg 里，只在本地保留会让定义方改名后断链。
  */
 function rememberReferenceIds(node: Element): void {
   const stack: Element[] = [node]
@@ -640,26 +620,22 @@ export function installSvgResourceScope(deps: SvgResourceScopeDeps = {}): () => 
     scheduled = false
     const nodes = [...pending]
     pending.clear()
-    // 样式与 a11y 引用面**先**读：同一批里新插入的 <style>/aria 引用必须在改名之前进保留集，
-    // 否则图标先按旧名改名、紧接着读到的新引用当场失效。
+    // 样式与 a11y 引用面**先**读：同一批新插入的 <style>/aria 引用必须在改名之前进保留集。
     for (const node of nodes) rememberReferenceIds(node)
     if (nodes.some(node => containsStyleSheet(node))) rememberDocumentStyleIds(root)
     for (const node of nodes) watchStyleSheetLinks(node)
     const svgs: Element[] = []
     for (const node of nodes) collectSvgElements(node, svgs)
-    // 一遍过：工作量由「这次插入的子树」决定（整页 200+ 个 <svg> 仍是一次微任务内
-    // 完成）。刻意不分片——分片只能让位给同一检查点里的其它微任务，不会把余量让到
-    // 下一帧（首次绘制在检查点之后），却把「全部改名完成」拆成不确定状态。
+    // 一遍过：工作量由这次插入的子树决定（整页 200+ 个 <svg> 仍是一次微任务内完成）。
+    // 刻意不分片——分片只能让位给同一检查点里的其它微任务，不会把余量让到下一帧。
     const touched = new Set<Element>()
     for (const svg of svgs) {
       const wasScoped = scopedSvgs.has(svg)
       const changed = scopeSvgElement(svg, nextSvgScopeToken(tokenPrefix))
-      // 本批「真的处理过」的判据：新 scoped 或真的改了东西；已在集合里的旧 svg 走 0 返回，
-      // 不能算处理过（否则同批重报的 host 会跳过必要的重扫）。
+      // 本批「真的处理过」的判据：新 scoped 或真的改了东西；已在集合里的旧 svg 走 0 返回。
       if (!wasScoped || changed > 0) touched.add(svg)
     }
-    // 后补进「已 scoped svg」的内容（innerHTML 替换、插件追加）：重扫那个宿主 svg，
-    // 否则新引入的静态 id 会与别处重复，而它不会再被任何 pass 看到。
+    // 后补进「已 scoped svg」的内容：重扫那个宿主 svg，否则新引入的静态 id 会与别处重复而不再被看到。
     for (const node of nodes) {
       if (!introducesResourceContent(node)) continue
       const host = nearestScopedAncestorSvg(node)

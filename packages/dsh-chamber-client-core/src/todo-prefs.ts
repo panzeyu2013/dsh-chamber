@@ -1,28 +1,17 @@
 /**
- * 会话待办区 settings 只读订阅（sidebar todo area）— page-wide singleton
- * mirror of the chamber-global `sessionTodo` settings block owned by the
- * desktop main process (chamber-settings.json). The strip is a passive
- * consumer: it only READS the block through window.dshChamber.settings
- * (get + onChanged), never writes (the「通用」GeneralView owns the writes via
- * the settings-bridge's optimistic store).
+ * 会话待办区 settings 只读订阅（sidebar todo area）— page-wide singleton，镜像
+ * 桌面主进程拥有的 chamber-global `sessionTodo` 设置块。待办条是被动消费者：只经
+ * window.dshChamber.settings（get + onChanged）读，从不写（写入归「通用」
+ * GeneralView 的乐观 store）。
  *
- * Decoding is value-validated and unknown-key tolerant on purpose: the
- * sidebar package consumes a SUBSET of the authoritative bridge types
- * (mirrored between desktop/preload.cts and renderer/global.d.ts and guarded
- * by ipc-surface-mirror.test.ts), so this module types the bridge slot
- * structurally and validates every consumed value at runtime — a drift can
- * degrade to the design defaults, never to a fake state.
- *
- * Defaults are ALL ON (design decision): the todo area is a passive
- * presentation that renders only while non-empty — zero footprint otherwise.
- * While the bridge is absent/unhydrated the defaults are served, so the
- * strip behaves per design without waiting for the settings query.
+ * 解码刻意做值校验 + 容忍未知键：侧栏只消费权威桥接类型的子集，因此本模块结构化
+ * 声明桥接槽位并逐值运行时校验——漂移只能退化为设计默认值，绝不变成假状态。默认
+ * 全开（设计决定）：待办区仅在非空时渲染，零占用；桥缺失/未水合期间即按默认值工作。
  */
 import { assertSingletonModule } from './singleton.ts'
 
 assertSingletonModule('todo-prefs')
 
-/** The consumed subset of the chamber settings block. */
 export interface SidebarTodoPrefs {
   enabled: boolean
   onComplete: boolean
@@ -30,8 +19,7 @@ export interface SidebarTodoPrefs {
   onRequest: boolean
 }
 
-/** Design defaults — mirror of the desktop DEFAULT_CHAMBER_SETTINGS.sessionTodo
- *  (packages/desktop/chamber-settings.ts); the test file asserts the mirror. */
+/** Design defaults — mirror of the desktop DEFAULT_CHAMBER_SETTINGS.sessionTodo (chamber-settings.ts). */
 export const SIDEBAR_TODO_PREFS_DEFAULTS: SidebarTodoPrefs = {
   enabled: true,
   onComplete: true,
@@ -46,9 +34,7 @@ const KNOWN_KEYS: ReadonlyArray<keyof SidebarTodoPrefs> = [
   'onRequest',
 ]
 
-/** Decode the raw sessionTodo block value with defaults: non-boolean values
- *  and unknown keys fall back / are filtered; a non-object (absent, null,
- *  scalar) reads as the full defaults. NEVER fabricates a fake off. */
+/** Decode the raw sessionTodo block with defaults: non-boolean values and unknown keys fall back / are filtered; a non-object reads as the full defaults. NEVER fabricates a fake off. */
 export function todoPrefsOf(value: unknown): SidebarTodoPrefs {
   const result: SidebarTodoPrefs = { ...SIDEBAR_TODO_PREFS_DEFAULTS }
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return result
@@ -60,14 +46,12 @@ export function todoPrefsOf(value: unknown): SidebarTodoPrefs {
   return result
 }
 
-/** The consumed settings surface (subset of the authoritative SettingsSurface). */
 interface SettingsApi {
   get(): Promise<{ settings?: { sessionTodo?: unknown } }>
   onChanged(callback: (status: { settings?: { sessionTodo?: unknown } }) => void): () => void
 }
 
-/** Structural window slot — the only surface this module touches (subset of
- *  the authoritative DshChamberBridge). */
+/** Structural window slot — the only surface this module touches (subset of DshChamberBridge). */
 interface BridgeWindow {
   dshChamber?: { settings?: SettingsApi }
 }
@@ -79,10 +63,9 @@ function bridgeSettings(): SettingsApi | null {
 
 let current: SidebarTodoPrefs | null = null
 const listeners = new Set<() => void>()
-/** Live onChanged subscription handle (page-lifetime once attached); released
- *  ONLY when a one-shot query failure re-arms the chain — an abandoned handle
- *  would register one more permanent ipcRenderer listener per retry cycle
- *  (settings-store pattern, settings-store.ts). */
+/** Live onChanged handle (page-lifetime once attached); released ONLY when a one-shot query
+ *  failure re-arms the chain — an abandoned handle would stack one more permanent ipcRenderer
+ *  listener per retry cycle. */
 let bridgeUnsubscribe: (() => void) | null = null
 let retryTimer: ReturnType<typeof setTimeout> | null = null
 /** Slow-chain backoff (fast chain below); capped at 2s. */
@@ -92,17 +75,15 @@ function notify(): void {
   for (const listener of [...listeners]) listener()
 }
 
-/** Stable snapshot for useSyncExternalStore: the module-level cached object,
- *  replaced only on a bridge push/query — identical values never re-render.
- *  Unhydrated (no bridge yet) reads as the design defaults. PURE. */
+/** Stable snapshot for useSyncExternalStore: the module-level cached object, replaced only on
+ *  a bridge push/query — identical values never re-render. Unhydrated reads as the design defaults. PURE. */
 export function getTodoPrefs(): SidebarTodoPrefs {
   return current ?? SIDEBAR_TODO_PREFS_DEFAULTS
 }
 
 function apply(status: { settings?: { sessionTodo?: unknown } } | undefined): void {
   const next = todoPrefsOf(status?.settings?.sessionTodo)
-  // Identity-preserving: unchanged content never notifies (same-value push
-  // after a query must not re-render every sidebar).
+  // Identity-preserving: unchanged content never notifies (a same-value push after a query must not re-render every sidebar).
   if (current !== null && current.enabled === next.enabled
     && current.onComplete === next.onComplete
     && current.onAsk === next.onAsk
@@ -133,9 +114,7 @@ function retryLater(): void {
   retryDelayMs = Math.min(retryDelayMs * 2, 2_000)
 }
 
-/** Fast-probe phase: the bridge appears asynchronously (≤~500ms), so the
- *  first subscriber probes every 100ms up to FAST_PROBE_ATTEMPTS before the
- *  slow chain takes over (settings-store hydration rhythm). */
+/** Fast-probe phase: the bridge appears asynchronously (≤~500ms), so the first subscriber probes every 100ms up to FAST_PROBE_ATTEMPTS before the slow chain takes over. */
 const FAST_PROBE_ATTEMPTS = 20
 const FAST_PROBE_DELAY_MS = 100
 
@@ -161,22 +140,19 @@ function attach(api: SettingsApi): void {
   bridgeUnsubscribe = api.onChanged((status) => apply(status))
   void api.get()
     .then((status) => {
-      // Push wins over a stale query snapshot (mirror of the settings-store
-      // discipline): only apply the query result when no push has landed.
+      // Push wins over a stale query snapshot: only apply the query result when no push has landed.
       if (current === null) apply(status)
     })
     .catch(() => {
-      // A one-shot query failure must not leave the strip unhydrated forever:
-      // release the handle (never stack a second permanent listener) and
-      // re-arm the retry chain (push-delivered updates meanwhile stop — the
-      // release is the price of a clean re-attach).
+      // A one-shot query failure must not leave the strip unhydrated: release the handle (never
+      // stack a second permanent listener) and re-arm the retry chain — push-delivered updates
+      // stop meanwhile, the price of a clean re-attach.
       releaseBridge()
       retryLater()
     })
 }
 
-/** Subscribe to todo-prefs changes; hydrates on the first subscriber (the
- *  module itself never touches the bridge or the window before that). */
+/** Subscribe to todo-prefs changes; hydrates on the first subscriber (the module never touches the bridge or window before that). */
 export function subscribeTodoPrefs(listener: () => void): () => void {
   listeners.add(listener)
   if (current === null && bridgeUnsubscribe === null && retryTimer === null) {

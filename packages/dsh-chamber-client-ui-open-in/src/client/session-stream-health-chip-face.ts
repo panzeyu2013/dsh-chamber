@@ -1,13 +1,11 @@
 /**
- * The stream-health chip's VISIBLE surface as pure decisions (design 14 §D4).
+ * The stream-health chip’s VISIBLE surface as pure decisions.
  *
- * WHY THIS IS A MODULE. The chip is the user's only recovery surface, but this
- * package has no React/DOM test environment (no jsdom, and the repo forbids
- * adding one for this): a behaviour mutation inside the component — a flipped
- * action branch, a notice that renders no button, a ticker that stops re-planning
- * — would be invisible to every test. These three pure functions are the whole
- * visible surface, so they can be pinned behaviourally, and the component is a
- * thin projection of them.
+ * The package has no React/DOM test environment, so these three functions ARE
+ * the whole visible surface and can be pinned behaviourally; the component is a
+ * thin projection of them. A flipped action branch, a notice that renders no
+ * button, or a ticker that stops re-planning would otherwise be invisible to
+ * every test.
  */
 import type {
   SessionOpenState,
@@ -28,10 +26,8 @@ export interface SessionStreamHealthChipFace {
 }
 
 /**
- * Project one plan and open state onto the chip's visible surface.
- * @param plan - the ladder's plan for this tick.
- * @param openState - the official open state the chip subscribed to.
- * @returns the face; `label === null` means the chip renders nothing at all.
+ * Project one plan and open state onto the chip’s visible surface; a null
+ * label means the chip renders nothing at all.
  */
 export function sessionStreamHealthChipFace(
   plan: SessionStreamHealthPlan,
@@ -42,8 +38,7 @@ export function sessionStreamHealthChipFace(
   if (plan.notice === null && !recovering) {
     return { label: null, reload: false, resync: false, marker: 'recovering' }
   }
-  // Churn is informational: the stream reopens on its own, so the chip offers no
-  // action that would interrupt a recovery already in flight.
+  // Churn is informational: no action that would interrupt a recovery in flight.
   const actionable = plan.notice !== null && plan.notice !== 'carrier-churn'
   return {
     label: plan.notice ?? 'healing',
@@ -54,13 +49,9 @@ export function sessionStreamHealthChipFace(
 }
 
 /**
- * Whether the chip must keep its 1 s ticker armed. An idle session, an open stream
- * and a hidden page carry no timer; a holding arm (or a visible notice, which
- * expires from its own fact timestamp and so must keep re-planning) does.
- * @param plan - the ladder's plan for this tick.
- * @param openState - the official open state the chip subscribed to.
- * @param visible - whether the page is currently visible.
- * @returns whether the interval must stay armed.
+ * Whether the chip must keep its 1 s ticker armed: an idle session, an open
+ * stream and a hidden page carry no timer; a holding arm or a visible notice
+ * (which expires from its own fact timestamp) does.
  */
 export function sessionStreamHealthChipHoldsTick(
   plan: SessionStreamHealthPlan,
@@ -74,11 +65,8 @@ export function sessionStreamHealthChipHoldsTick(
 }
 
 /**
- * The `setPlan` identity rule: a plan whose visible surface is unchanged must
- * keep its previous object, or every tick would re-run the effects for nothing.
- * @param previous - the plan currently held by the component.
- * @param next - the plan the seat just produced.
- * @returns whether `previous` may be kept.
+ * The `setPlan` identity rule: a plan whose visible surface is unchanged keeps
+ * its previous object, or every tick would re-run the effects for nothing.
  */
 export function sameSessionStreamHealthPlan(
   previous: SessionStreamHealthPlan,

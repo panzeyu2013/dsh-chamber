@@ -1,7 +1,5 @@
-/**
- * Per-row/source menu state and the inline-rename machine: the kebab-menu
- * registry, the dedicated sort-menu id, the armed rename target and its commit.
- */
+/** Per-row/source menu state and inline-rename machine: the kebab-menu registry,
+ *  the dedicated sort-menu id, the armed rename target and its commit. */
 
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
@@ -15,10 +13,7 @@ export function useSidebarMenus({ servers, runAction }: {
   servers: readonly ChamberServerAggregate[]
   runAction: RunAction
 }) {
-  // Hover-action state: the inline rename target, the per-row failure text,
-  // the open kebab menus (keyed by workspace/session), and the add-workspace
-  // directory-browser dialog (target source + whether the workspace.create
-  // confirm is in flight — the dialog's busy freeze).
+  // Hover-action state: the inline rename target and the open kebab menus (keyed by workspace/session).
   const [renaming, setRenaming] = useState<RenameTarget | null>(null)
 
   const [menuOpen, setMenuOpen] = useState<Record<string, boolean>>({})
@@ -34,18 +29,14 @@ export function useSidebarMenus({ servers, runAction }: {
     })
   }
 
-  // Sort menu open state — DEDICATED (sourceId | null) instead of a
-  // `menuOpen` key: a `${sourceId}/…`-shaped key would collide with a real
-  // workspace's key (workspace ids are wire directory names — one could be
-  // literally `sort`), cross-opening the workspace kebab and the sort menu.
-  // A separate state also allows only ONE sort menu across sources.
+  // Sort menu open state — DEDICATED (sourceId | null), not a `menuOpen` key: a
+  // `${sourceId}/…` key could collide with a real workspace's key (workspace ids are
+  // wire directory names — one could be literally `sort`); it also allows only ONE sort menu.
   const [sortMenuOpen, setSortMenuOpen] = useState<string | null>(null)
-  // chamber (06 §3.1): close the sort menu when its source can no longer
-  // render the anchor (source vanished, disconnected, or a snapshot-fetch
-  // error with no open search capsule) — otherwise the state leaks and the
-  // menu pops open unprompted on reconnect. Runs shell-wide because the
-  // per-source sections are UNMOUNTED on the rail (collapsed): a disconnect
-  // while collapsed must still close the menu id.
+  // Close the sort menu when its source can no longer render the anchor (source
+  // vanished, disconnected, or a snapshot error with no open search capsule), or the
+  // state leaks and the menu pops open unprompted on reconnect. Shell-wide, because
+  // the per-source sections are UNMOUNTED on the collapsed rail.
   const searchStates = useSyncExternalStore(subscribeSearch, getSearchStates, getSearchStates)
   useEffect(() => {
     if (sortMenuOpen === null) return
@@ -60,11 +51,9 @@ export function useSidebarMenus({ servers, runAction }: {
     }
   }, [servers, sortMenuOpen, searchStates])
 
-  // chamber (行内重命名): a rename armed on a row that leaves the projection
-  // (workspace deleted by another ctx, source snapshot dropped / disconnect,
-  // …) must not stay armed invisibly — it would re-materialize the stale
-  // form (with its typed text) when the id reappears. Mirrors the sort-menu
-  // cleanup above: drop the target once its row no longer exists.
+  // A rename armed on a row that leaves the projection (workspace deleted elsewhere,
+  // source snapshot dropped / disconnect) must not stay armed invisibly — it would
+  // re-materialize the stale form (with its typed text) when the id reappears.
   useEffect(() => {
     if (renaming === null) return
     const server = servers.find(candidate => candidate.id === renaming.sourceId)
@@ -81,10 +70,9 @@ export function useSidebarMenus({ servers, runAction }: {
     runAction(`${target.sourceId}/${target.kind}/${target.id}/rename`, async () => {
       const client = getInstanceClient(target.sourceId)
       if (target.kind === 'session') await renameSession(client, target.id, target.value)
-      // chamber (design 05 §2.2.1): the PATCH half of the workspace echo — an
-      // echo row's title is `basenameOf(path)`, so on a source whose shell is
-      // not mounted the rename looks like a no-op until the mount push arrives.
-      // Published by the single funnel together with the wire call.
+      // The PATCH half of the workspace echo: an echo row's title is `basenameOf(path)`,
+      // so on a source whose shell is not mounted the rename looks like a no-op until
+      // the mount push arrives; published by the single funnel with the wire call.
       else await renameWorkspaceForSource(target.sourceId, target.id, target.value)
       chamberBridge.requestRefresh(target.sourceId)
     })

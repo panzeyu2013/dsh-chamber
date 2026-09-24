@@ -1,29 +1,22 @@
 /**
- * Persisted open-in choice (design 20 §5) — the last app the user picked,
- * remembered PER SOURCE and surviving a page reload.
+ * Persisted open-in choice — the last app the user picked, remembered PER SOURCE
+ * and surviving a page reload.
  *
- * WHY PER SOURCE: the unified entry serves every source from one page, so one
- * shared key would let a remote target's choice overwrite the local one (and
- * vice versa), and would remember app ids that do not exist in the context the
- * user is looking at. The key is therefore namespaced by source id; the button
- * additionally falls back to the view-model default whenever the remembered id
- * is not among the current entries (see `OpenInButton`), so a stale or foreign
- * memory can never leave the entry pointing at an impossible app.
- *
- * MIGRATION: the page-wide key `dsh.open-in-app.choice` (written by builds
- * before the per-source split) is still READ once, as the initial value for the
- * LOCAL source, so a user's remembered application survives the upgrade; this
- * package never writes it.
+ * WHY PER SOURCE: the unified entry serves every source from one page, so a
+ * shared key would let a remote target’s choice overwrite the local one and would
+ * remember ids that do not exist in the context being viewed. A stale or foreign
+ * memory can still never point the entry at an impossible app: the button falls
+ * back to the view-model default when the remembered id is not among the current
+ * entries.
  *
  * Persistence is best-effort: an opaque origin or disabled storage degrades to
- * the in-memory value instead of throwing (the button always works, the choice
- * just does not outlive the page).
+ * the in-memory value instead of throwing.
  */
 
 /** Per-source storage key prefix. */
 export const OPEN_IN_CHOICE_STORAGE_PREFIX = 'dsh-chamber.open-in.choice.'
 
-/** The page-wide key earlier builds used; read-only migration source. */
+/** The page-wide key earlier builds used; read once as the LOCAL source’s initial value, never written. */
 export const LEGACY_OPEN_IN_CHOICE_STORAGE_KEY = 'dsh.open-in-app.choice'
 
 /** Source ids the store will build a key for (no whitespace, no separators). */
@@ -59,7 +52,7 @@ function read(sourceId: string): string {
   try {
     const stored = storage()?.getItem(key)
     if (typeof stored === 'string' && stored !== '') return stored
-    // One-time migration of the page-wide key into the LOCAL source's slot.
+    // One-time migration of the page-wide key into the LOCAL source’s slot.
     if (sourceId !== 'local') return ''
     const legacy = storage()?.getItem(LEGACY_OPEN_IN_CHOICE_STORAGE_KEY)
     return typeof legacy === 'string' ? legacy : ''
@@ -74,11 +67,7 @@ function ensureLoaded(sourceId: string): void {
   choices.set(sourceId, read(sourceId))
 }
 
-/**
- * The remembered app id for one source, or '' before the first choice.
- * @param sourceId - the source the entry belongs to.
- * @returns the remembered catalog id.
- */
+/** The remembered app id for one source, or '' before the first choice. */
 export function getOpenInChoice(sourceId: string): string {
   const key = keyFor(sourceId)
   if (key === null) return ''
@@ -86,12 +75,7 @@ export function getOpenInChoice(sourceId: string): string {
   return choices.get(sourceId) ?? ''
 }
 
-/**
- * Remember one picked app id for one source (no-op for an empty/unchanged
- * value, or for a source id that cannot own a key).
- * @param sourceId - the source the entry belongs to.
- * @param appId - the picked catalog id.
- */
+/** Remember one picked app id for one source (no-op when empty/unchanged or unkeyable). */
 export function setOpenInChoice(sourceId: string, appId: string): void {
   const key = keyFor(sourceId)
   if (key === null) return
@@ -106,11 +90,7 @@ export function setOpenInChoice(sourceId: string, appId: string): void {
   for (const listener of [...listeners]) listener()
 }
 
-/**
- * Subscribe to any source's choice change.
- * @param listener - called after a stored choice changed.
- * @returns the unsubscribe function.
- */
+/** Subscribe to any source's choice change; returns the unsubscribe. */
 export function subscribeOpenInChoice(listener: () => void): () => void {
   listeners.add(listener)
   return () => { listeners.delete(listener) }

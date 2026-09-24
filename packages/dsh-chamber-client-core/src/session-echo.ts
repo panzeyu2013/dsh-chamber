@@ -1,61 +1,26 @@
 /**
- * Session creation echo — the local half of「侧栏新建的会话立刻可见」
- * (design 05 §2.2; the session-side sibling of
- * shared/workspace-echo.ts).
+ * Session creation echo — the local half of「侧栏新建的会话立刻可见」 (the
+ * session-side sibling of workspace-echo.ts).
  *
- * WHY an echo exists at all. The sidebar's "+" and the session row menu's fork
- * mint a session over the source's own UNARY client (`session/create` /
- * `session/fork`), not through the mounted ctx's official runtime. The
- * projection that renders the row has exactly two producers, and neither can
- * carry a just-created row on its own:
+ * WHY: the sidebar's "+" and the row menu's fork mint a session over the source's
+ * UNARY client, not through the mounted ctx. The mounted push REPLACES that
+ * source's aggregate from the official summary store, which learns of the
+ * session only through the host's ASYNCHRONOUS `api-session/added` broadcast (an
+ * unmounted source never hears it); the 30s unary fallback keeps a pushed
+ * source's membership frozen, so the new id can only enter as an UNACCOUNTED
+ * stray, hidden while it is a non-current source's provisional blank row.
  *
- * - the mounted ctx's push — the official session-summary store. Its list is
- *   pulled on a connection generation and updated afterwards only by the
- *   host's ASYNCHRONOUS `api-session/added` broadcast (host-wide, one
- *   connection-generation-independent frame per created session). So the store
- *   either does not have the id yet (race: the push that follows the open
- *   request — or any store notification — REPLACES that source's aggregate
- *   from a store without it, erasing the row again) or the source's shell is
- *   not mounted at all and NOBODY ever hears the broadcast. The unmounted case
- *   is the steady state: a post-harvest source keeps its REAL
- *   pushed workspace rows (with the "+" affordance enabled) while its ctx is
- *   gone;
- * - the 30s unary fallback — a fresh `session.list`, but its merge against a
- *   pushed source keeps the pushed WORKSPACE membership frozen
- *   (commitAggregatePull), so a brand-new session can only enter as an
- *   UNACCOUNTED stray — and a stray that is still the provisional blank row of
- *   a non-current source is hidden by the official visibility rule
- *   (sessionVisible).
+ * The echo closes that window with the fact the user's action produced: a
+ * successful create returns the HOST session id, projected locally while the
+ * authoritative view converges (the session-list refresh the App requests on the
+ * fact, or the next mount). NOT a second source of truth: an authoritative row
+ * that ACCOUNTS the id wins, the merge is defensive (an already-listed id
+ * injects no duplicate row, an already-accounted one no membership), and entries
+ * expire / retire with their source. The ledger lives in the renderer App layer.
  *
- * The immediate `requestRefresh` the sidebar fires after a successful create
- * therefore cannot surface the row for either producer.
- *
- * The echo closes that window with a fact the user's own action already
- * produced: a successful create returns the HOST session id. The row is
- * projected locally, in its own workspace, while the authoritative view
- * converges — the official session-list refresh the App requests on the fact
- * (only a MOUNTED ctx has that seam; it forces the summaries to re-read the
- * corpus, covering both a missed broadcast and the race above), or the
- * source's next mount. It is deliberately NOT a second source of truth:
- *
- * - an authoritative row that ACCOUNTS the id (any workspace's `sessionIds`,
- *   real or cwd-derived synthetic) wins and the pending entry is retired
- *   ({@link reconcilePendingSessions});
- * - the projection merge is defensive as well ({@link withSessionEcho}): an id
- *   the aggregate already lists injects no duplicate row, and an id already
- *   accounted injects no membership — a stale ledger entry can never
- *   duplicate or re-home a row;
- * - entries expire ({@link PENDING_SESSION_TTL_MS}) and retire with their
- *   source ({@link forgetPendingSessions}), so a create whose convergence
- *   never arrives cannot pin a phantom row for the rest of the session.
- *
- * The ledger lives in the renderer App layer (never persisted, never polled):
- * renderer-local echo state, exactly like the aggregate it decorates.
- *
- * The module also owns the LOCAL ARCHIVE tombstone ({@link PendingArchive}):
- * the same class of fact in the other direction — the sidebar's archive verb
- * also runs over the unary client, so an unmounted source's frozen view keeps
- * rendering the archived row (see {@link recordPendingArchive}).
+ * It also owns the LOCAL ARCHIVE tombstone ({@link PendingArchive}): the archive
+ * verb runs over the unary client too, so an unmounted source's frozen view
+ * would keep rendering the archived row.
  */
 import type { InstanceAggregate, SessionRow, WorkspaceRow } from './instance-api.ts'
 import { basenameOf } from './instance-api.ts'
@@ -66,11 +31,10 @@ import { assertSingletonModule } from './singleton.ts'
 assertSingletonModule('session-echo')
 
 /**
- * One echoed session creation. `workspaceId`/`path` are optional on purpose:
- * the producer knows the host workspace id (the create wire takes it) but not
- * always the path, and a fork child's membership is resolved from its parent.
- * The App fills whatever it can resolve before recording (see App.tsx) — an
- * entry that resolves nothing still renders, as an ungrouped row.
+ * One echoed session creation. `workspaceId`/`path` are optional: the producer
+ * knows the host workspace id but not always the path, and a fork child's
+ * membership is resolved from its parent. An entry that resolves nothing still
+ * renders, as an ungrouped row.
  */
 export interface PendingSession {
   sessionId: string
@@ -81,11 +45,11 @@ export interface PendingSession {
   /** Display-title hint (fork children); absent = the id ladder. */
   title?: string
   /**
-   * Whether the session is still the host's provisional blank row. A created
-   * session is blank until its first turn; a fork child carries content.
-   * The official visibility rule (blank rows render only while they are the
-   * source's CURRENT session) is deliberately preserved — the echo makes the
-   * row reachable, it does not override upstream semantics.
+   * Whether the session is still the host's provisional blank row (a created
+   * session is blank until its first turn; a fork carries content). The official
+   * visibility rule is preserved: blank rows render only while they are the
+   * source's CURRENT session — the echo makes the row reachable, it does not
+   * override upstream semantics.
    */
   blank: boolean
   /** Epoch ms the echo was recorded; the TTL anchor. */
@@ -96,12 +60,10 @@ export interface PendingSession {
 export type SessionEchoLedger = Readonly<Record<string, readonly PendingSession[]>>
 
 /**
- * How long an unconfirmed echo may stay in the projection. The authoritative
- * convergence is the official session-list refresh / a mount (both unbounded),
- * so the TTL is a leak guard rather than a convergence budget: a session
- * created elsewhere and then deleted/moved on the host would otherwise keep a
- * dead row until that source is remounted. Same order as the workspace echo's
- * 10 minutes — far beyond any realistic "click the server and look" delay.
+ * How long an unconfirmed echo may stay in the projection. Convergence (the
+ * official session-list refresh / a mount) is unbounded, so the TTL is a leak
+ * guard: a session created elsewhere then deleted/moved would otherwise keep a
+ * dead row until remount. Same magnitude as the workspace echo's 10 minutes.
  */
 export const PENDING_SESSION_TTL_MS = 600_000
 
@@ -124,8 +86,7 @@ export interface SessionCreationRecord {
 /**
  * Project one pending echo into the wire row shape the aggregate carries.
  * `displayTitle` is pre-resolved so the row renders the same label the
- * authoritative snapshot would (a blank row renders the localized New Session
- * copy instead, see ServerSection).
+ * authoritative snapshot would (a blank row renders the New Session copy).
  */
 export function sessionEchoRow(pending: PendingSession): SessionRow {
   return {
@@ -144,10 +105,9 @@ export function sessionEchoRow(pending: PendingSession): SessionRow {
 }
 
 /**
- * Record one successful in-app session creation. Idempotent per session id —
- * a saga retry reuses its preallocated id, so an equal re-record replaces the
- * previous entry (and refreshes its TTL anchor) instead of stacking a second
- * row. Only a create/fork reaches this entry point, never a render.
+ * Record one successful in-app session creation. Idempotent per session id — a
+ * saga retry reuses its preallocated id, so an equal re-record replaces the entry
+ * (refreshing its TTL anchor) instead of stacking a second row.
  */
 export function recordPendingSession(
   ledger: SessionEchoLedger,
@@ -175,12 +135,11 @@ export function sweepPendingSessions(ledger: SessionEchoLedger, now: number): Se
 
 /**
  * Drop every echo the given AUTHORITATIVE workspace list already ACCOUNTS
- * (`sessionIds` of any row, synthetic included): once the host's own
- * membership names the session, the authoritative row renders it and the echo
- * must not survive as a duplicate. Identity-preserving when nothing is
- * covered. A row merely LISTED in `sessions` but accounted by no workspace is
- * deliberately NOT a convergence signal — dropping the echo there would
- * re-home the row into the ungrouped bucket, the very jump the echo prevents.
+ * (`sessionIds` of any row, synthetic included): the authoritative row renders
+ * it and the echo must not survive as a duplicate. Identity-preserving when
+ * nothing is covered. A row merely LISTED but accounted by no workspace is NOT a
+ * convergence signal — dropping the echo would re-home the row into the ungrouped
+ * bucket, the very jump the echo prevents.
  */
 export function reconcilePendingSessions(
   ledger: SessionEchoLedger,
@@ -196,10 +155,9 @@ export function reconcilePendingSessions(
 }
 
 /**
- * Retire the echo of one session the user ARCHIVED right after creating it —
- * the withdraw half (same reason as the workspace echo's removal fact: a
- * create-only echo has no exit, so a row archived inside the echo window would
- * stay visible until the TTL or the source's next authoritative push).
+ * Retire the echo of one session the user ARCHIVED right after creating it — the
+ * withdraw half (a create-only echo has no exit, so a row archived inside the
+ * echo window would stay visible until the TTL or the next push).
  * Identity-preserving when the source/id is absent.
  */
 export function removePendingSession(
@@ -219,26 +177,23 @@ export function forgetPendingSessions(
 }
 
 /**
- * Project one aggregate WITH its pending session echoes merged in.
+ * Project one aggregate WITH its pending session echoes merged in. Pure — the
+ * aggregate is never mutated, so the echo disappears the moment the ledger entry
+ * does; identity-preserving when there is nothing to add.
  *
- * Pure projection only — the aggregate itself is never mutated, so the
- * authoritative commit paths stay untouched and the echo disappears the moment
- * the ledger entry does. Identity-preserving when there is nothing to add.
- *
- * The merge contributes BOTH halves a session row needs: the row itself (for
- * an id the aggregate does not list yet) and its workspace MEMBERSHIP (the only
- * route into a workspace group — see derive.ts deriveServerWorkspaces), matched
- * by host workspace id first and by canonical path second (the cwd-derived
- * synthetic groups of an unmounted source carry no host id). An entry that
- * matches neither still renders, in the trailing ungrouped bucket.
+ * The merge contributes BOTH halves a session row needs: the row itself (for an
+ * id the aggregate does not list yet) and its workspace MEMBERSHIP (the only
+ * route into a workspace group), matched by host workspace id first and by
+ * canonical path second (cwd-derived synthetic groups carry no host id). An entry
+ * matching neither renders in the trailing ungrouped bucket.
  */
 export function withSessionEcho(
   aggregate: InstanceAggregate,
   pending: readonly PendingSession[] | undefined,
 ): InstanceAggregate {
   if (pending === undefined || pending.length === 0) return aggregate
-  // Only a committed ok aggregate carries real rows; error / not-connected
-  // aggregates render their own state and have no list to merge into.
+  // Only a committed ok aggregate carries real rows; error / not-connected render
+  // their own state.
   if (aggregate.state !== 'ok') return aggregate
   const accounted = new Set<string>()
   const byId = new Map<string, WorkspaceRow>()
@@ -272,13 +227,9 @@ export function withSessionEcho(
       : aggregate.workspaces.map((workspace) => {
           const extra = membership.get(workspace.workspaceId)
           if (extra === undefined) return workspace
-          // PREPEND, newest echo first: the host's own `attachSession` puts a
-          // new membership at the HEAD (`sessionIds: [sessionId, ...rest]`,
-          // dsh-workspace entity), and the manual (default) render order is this
-          // very array. Appending would render the row at the tail and make it
-          // jump to the head the moment the authoritative baseline lands — the
-          // position jump the workspace echo's placement anchor exists to
-          // prevent. `extra` is in ledger (oldest-first) order, so reverse it.
+          // PREPEND, newest echo first: the host's own attachSession puts a new
+          // membership at the HEAD and manual (default) order renders that array
+          // order — appending would make the row jump to the head on mount.
           return { ...workspace, sessionIds: [...[...extra].reverse(), ...workspace.sessionIds] }
         }),
     sessions: additions.length === 0 ? aggregate.sessions : [...aggregate.sessions, ...additions],
@@ -286,20 +237,17 @@ export function withSessionEcho(
 }
 
 /**
- * One locally-ARCHIVED session awaiting an authoritative archive set — the
- * local half of「归档即隐藏」for a source whose shell is not mounted
- * (design 05 §2.2.1). See {@link recordPendingArchive} for
- * why the archive verb needs an echo of its own.
+ * One locally-ARCHIVED session awaiting an authoritative archive set — the local
+ * half of「归档即隐藏」 for a source whose shell is not mounted (see
+ * {@link recordPendingArchive}).
  */
 export interface PendingArchive {
   sessionId: string
   /**
    * Epoch ms this tombstone was last OBSERVED in that source's (degraded)
-   * session listing — the lease anchor. Every listing that still contains the
-   * id refreshes it ({@link refreshPendingArchives}), so the tombstone lives
-   * exactly as long as the wrong view keeps rendering the row; the TTL only
-   * reaps tombstones whose session is no longer listed at all (nothing left to
-   * hide) or whose source never lists it again.
+   * listing — the lease anchor, refreshed by every listing that still contains
+   * the id, so the tombstone lives exactly as long as the wrong view keeps
+   * rendering the row; the TTL reaps only tombstones nothing lists any more.
    */
   at: number
 }
@@ -315,21 +263,16 @@ export const PENDING_ARCHIVE_TTL_MS = 600_000
  * tombstone (the App applies it by extending that source's
  * `archivedSessionIds`, see {@link withPendingArchives}).
  *
- * WHY the archive verb needs its own echo. A MOUNTED source needs none: the
- * host's workspace-follow upsert carries the new archive set and the producer
- * pushes it, so the row hides on its own. An UNMOUNTED one (the post-harvest
- * steady state — its pushed workspace rows are still real, the row menu is
- * still clickable) has NO live channel at all: `commitAggregatePull`'s mounted
- * merge keeps the last PUSHED `archivedSessionIds` (frozen), and the unary
- * fallback carries no archive wire source at all (documented KNOWN
- * DEGRADATION). The archived row therefore stays in the list — clickable, and
- * opening it dead-ends because the official runtime clears an archived current.
- * The tombstone hides exactly the ids THIS page archived, until
- * an AUTHORITATIVE set covers them; archives made by another client still need
- * a mount (registered residue), and the archive manager surfaces keep reading
- * the authoritative set (the tombstone is a navigation-visibility fact only).
+ * WHY: a MOUNTED source needs no echo (the follow upsert carries the new archive
+ * set and the row hides on its own). An UNMOUNTED one has NO live channel at all:
+ * the mounted merge keeps the last PUSHED archive set frozen, and the unary
+ * fallback has no archive wire source — so the archived row stays listed,
+ * clickable, and opening it dead-ends (the official runtime clears an archived
+ * current). The tombstone hides exactly the ids THIS page archived until an
+ * AUTHORITATIVE set covers them; the archive manager keeps reading the
+ * authoritative set (this is a navigation-visibility fact only).
  *
- * Idempotent per id; a repeat archive refreshes the lease instead of stacking.
+ * Idempotent per id; a repeat archive refreshes the lease.
  */
 export function recordPendingArchive(
   ledger: SessionArchiveLedger,
@@ -349,10 +292,9 @@ export function sweepPendingArchives(ledger: SessionArchiveLedger, now: number):
 
 /**
  * Refresh the lease of every tombstone whose session the given (degraded)
- * listing STILL lists. Called on each unary fallback pull, which is the only
- * clock an unmounted source has: as long as the frozen/stale view keeps
- * rendering the archived row, the tombstone must keep hiding it.
- * Identity-preserving when nothing is listed (or nothing pending).
+ * listing STILL lists. Called on each unary fallback pull — the only clock an
+ * unmounted source has: as long as the frozen view renders the row, the tombstone
+ * must keep hiding it. Identity-preserving when nothing is listed.
  */
 export function refreshPendingArchives(
   ledger: SessionArchiveLedger,
@@ -366,11 +308,9 @@ export function refreshPendingArchives(
 
 /**
  * Drop every tombstone the given AUTHORITATIVE archive set now covers (the
- * mounted push is the convergence signal: once the real set names the id, the
- * row's visibility is the host's fact and the local tombstone has no job
- * left). Identity-preserving when nothing is covered. A degraded view's set
- * must NEVER be passed here — the unary fallback's empty set would un-hide
- * everything.
+ * mounted push is the convergence signal). Identity-preserving when nothing is
+ * covered. A degraded view's set must NEVER be passed here — the unary
+ * fallback's empty set would un-hide everything.
  */
 export function reconcilePendingArchives(
   ledger: SessionArchiveLedger,
@@ -392,12 +332,11 @@ export function forgetPendingArchives(
 
 /**
  * Project one aggregate with the local archive tombstones applied: the ids are
- * appended to `archivedSessionIds`, which is the single field every
- * visibility rule already reads (`sessionVisible` in derive.ts, the workspace
- * "+" reuse resolver). Pure, identity-preserving and provenance-safe: the
- * `archiveSetKnown` flag is deliberately NOT touched, so a degraded view
- * stays degraded for the archive manager while its navigation rows filter
- * what this page itself archived.
+ * appended to `archivedSessionIds`, the single field every visibility rule reads
+ * (`sessionVisible`, the workspace "+" reuse resolver). Pure and provenance-safe:
+ * `archiveSetKnown` is deliberately NOT touched, so a degraded view stays
+ * degraded for the manager while its navigation rows filter what this page
+ * archived.
  */
 export function withPendingArchives(
   aggregate: InstanceAggregate,
@@ -415,4 +354,3 @@ export function withPendingArchives(
   if (extra.length === 0) return aggregate
   return { ...aggregate, archivedSessionIds: [...aggregate.archivedSessionIds, ...extra] }
 }
-

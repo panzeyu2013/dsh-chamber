@@ -1,33 +1,16 @@
 /**
  * Connection registry with JSON persistence (v4: single local row).
  *
- * The catalog is the control plane's durable view of what it manages: the
- * local dsh instance — exactly one connection row with connectionId 'local'
- * (design 03 §2.1). Persisted at <stateDir>/catalog.json on top of
- * json-store.ts — the storage protocol from design 04 §6 / 03 §2.1:
- * synchronous write-through mutations, backup-first atomic writes (random
- * O_EXCL temp + fsync + rename for .bak, then main), a monotonic revision, an explicit recovery state, and
- * "corrupt is never a fake-empty". (The store-level If-Match/409 protocol —
- * json-store mutateIfMatch — is not surfaced through the catalog row
- * APIs; the catalog mutates unconditionally, serialized only within this
- * store instance.) A schemaVersion-less file
- * is treated as v1 and migrated in place to v2 at load, with the original v1
- * document preserved as the .bak (the backup-first protocol handles the
- * ordering).
- *
- * v4 narrowing (01 §4/§5): projects/bindings/adapters are gone — the dsh
- * frontend runtime owns session business and the desktop main process owns
- * the remote-instance registry. Rows whose kind is not 'local' are dropped
- * and counted at load, never silently kept.
- * Only user-editable fields (label/accentColor) persist in the row.
- * status/dshPort/error are PlaneHandle runtime projections and never enter
- * this document (03 §2.1). Legacy copies of those fields are ignored on load
- * and disappear on the next durable catalog write.
- *
- * All row APIs stay synchronous and write-through: they return only after the
- * atomic disk commit succeeds; failure rolls the in-memory document back and
- * throws to the API caller. Runtime lifecycle transitions do not touch the
- * catalog, so they cannot advance its revision or overwrite shared metadata.
+ * The control plane's durable view: exactly one connection row with
+ * connectionId 'local' (runtime projections never enter the document; only
+ * user-editable label/accentColor persist). Persisted at
+ * <stateDir>/catalog.json on top of json-store.ts: synchronous write-through
+ * mutations, backup-first atomic writes (random O_EXCL temp + fsync + rename
+ * for .bak, then main), a monotonic revision, an explicit recovery state, and
+ * "corrupt is never a fake-empty". The store's If-Match/409 protocol is not
+ * surfaced; the catalog mutates unconditionally, serialized within this store
+ * instance. A schemaVersion-less file is v1, migrated in place to v2 with the
+ * original preserved as the .bak; non-'local' rows are dropped and counted.
  */
 
 import { join } from 'node:path'
@@ -46,10 +29,8 @@ export const CATALOG_FILE = 'catalog.json'
 /** Current catalog schema version. */
 export const CATALOG_SCHEMA_VERSION = 2
 
-/**
- * One persisted connection row. The wire response adds live runtime fields
- * separately; this type intentionally contains only durable catalog fields.
- */
+/** One persisted connection row; intentionally only durable catalog fields —
+ *  the wire response adds live runtime fields separately. */
 export interface CatalogConnectionRow {
   connectionId: string
   kind: string
@@ -57,7 +38,7 @@ export interface CatalogConnectionRow {
   accentColor?: string
 }
 
-/** The only caller-editable durable fields (design 03 §2.1.1). */
+/** The only caller-editable durable fields. */
 export interface CatalogEditableFields {
   label?: string
   accentColor?: string
@@ -101,10 +82,8 @@ export interface Catalog {
 }
 
 /**
- * Accepted connection kinds (v4: the catalog only ever holds the local
- * instance — remote instances live in the desktop main-process registry,
- * 03 §2.2). Rows with a kind outside this set are dropped and counted at
- * load, never silently kept.
+ * Accepted connection kinds: the catalog only ever holds the local instance;
+ * rows with a kind outside this set are dropped and counted at load.
  */
 export const CONNECTION_KINDS = new Set(['local'])
 
@@ -138,20 +117,15 @@ function persistedConnectionRow(row: Record<string, unknown>): CatalogConnection
 }
 
 /**
- * Load-time validation + v1→v2 migration. Entry-level failures (missing
- * fields, duplicate ids, non-local kind) drop the row and count it — never
- * silent; document-level failures (bad schemaVersion, revision not a
- * non-negative integer, connections not an array) throw, sending the store
- * down the .bak recovery path. A schemaVersion-less document is v1:
- * migrated in place (schemaVersion 2, revision 0, migration block), with the
- * original v1 document returned as the backup content. v2 legacy documents
- * may still carry a `projects` array; it is stripped at
- * load — v4 has no project table (01 §4).
- * @param raw - the parsed document, read from disk.
- * @returns {doc, dropped, migrated, backupDoc?} — the cleaned document and
- *   dropped counters; throws when the document is unusable as a whole.
+ * Load-time validation + v1→v2 migration. Entry-level failures (missing fields,
+ * duplicate ids, non-local kind) drop the row and count it; document-level
+ * failures (bad schemaVersion, revision not a non-negative integer, connections
+ * not an array) throw, sending the store down the .bak recovery path. A
+ * schemaVersion-less document is v1, migrated in place (schemaVersion 2,
+ * revision 0, migration block) with the original returned as the backup
+ * content. v2 legacy documents may still carry a `projects` array; it is
+ * stripped at load.
  */
-// The store hands the hook a parsed document of unknown shape; internal use only.
 type RawCatalogDocument = any
 
 function validateAndMigrate(raw: RawCatalogDocument): JsonStoreValidateResult {
@@ -186,13 +160,10 @@ function validateAndMigrate(raw: RawCatalogDocument): JsonStoreValidateResult {
 }
 
 /**
- * Entry-level validation with dropped counting. Invalid rows are dropped and
- * counted; the counters surface through the store's recovery state. Rows
- * whose kind is not 'local' are dropped (v4: the catalog never holds remote
- * instances). Valid rows are narrowed to durable metadata, stripping legacy
- * status/dshPort/error projections. The legacy `projects` array is stripped
- * — v4 has no project table and the dsh frontend runtime owns session
- * business.
+ * Entry-level validation with dropped counting: invalid rows are dropped and
+ * counted, surfaced through the store's recovery state. Non-'local' rows are
+ * dropped; valid rows are narrowed to durable metadata, stripping legacy
+ * status/dshPort/error projections and the legacy `projects` array.
  */
 function validateEntries(doc: RawCatalogDocument): CatalogValidateResult {
   const dropped: JsonStoreDroppedCounts = { connections: 0, projects: 0 }
@@ -216,10 +187,8 @@ function validateEntries(doc: RawCatalogDocument): CatalogValidateResult {
 }
 
 /**
- * Create the registry.
- * @param options - {stateDir, logger}.
- * @returns {load(), getConnection(id), upsertConnection(row),
- *   updateConnectionFields(id, fields)}.
+ * Create the registry over {stateDir, logger} and return {load, getConnection,
+ * upsertConnection, updateConnectionFields}.
  */
 export function createCatalog({ stateDir, logger }: CatalogOptions): Catalog {
   const file = join(stateDir, CATALOG_FILE)
@@ -256,9 +225,8 @@ export function createCatalog({ stateDir, logger }: CatalogOptions): Catalog {
   }
 
   /**
-   * Insert or replace one connection row while preserving registration order.
-   * The input is cloned so callers can never mutate the live document before
-   * the write-through transaction commits.
+   * Insert or replace one connection row, preserving registration order. The
+   * input is cloned so callers cannot mutate the live document before commit.
    */
   function upsertConnection(row: CatalogConnectionRow): CatalogConnectionRow {
     const replacement = persistedConnectionRow(row as unknown as Record<string, unknown>)
@@ -273,11 +241,10 @@ export function createCatalog({ stateDir, logger }: CatalogOptions): Catalog {
   }
 
   /**
-   * Update selected fields of one connection row without touching the rest.
-   * A field whose value is `undefined` deletes the key.
-   * @returns {row, updated} or null when the row is absent. `updated` is
-   *   true when anything actually changed (a no-op change does not bump the
-   *   revision).
+   * Update selected fields of one row without touching the rest; a field whose
+   * value is `undefined` deletes the key. Returns {row, updated} or null when
+   * absent; `updated` is true only when something actually changed (a no-op
+   * does not bump the revision).
    */
   function updateConnectionFields(
     connectionId: string,

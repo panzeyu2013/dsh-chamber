@@ -1,64 +1,19 @@
 /**
- * Open-in header utility entry (design 16 §6 + open-in extension): the SINGLE
- * header entry that opens the current
- * session's workspace in an installed app, over the per-source view-model.
+ * Open-in header utility entry: the SINGLE header control that opens the
+ * current session’s workspace in an installed app, over the per-source
+ * view-model (`shared/open-in-view-model.ts` is the single decision surface).
  *
- * Registered into the OFFICIAL conversation header utilities slot
+ * It sits in the OFFICIAL conversation header utilities slot
  * (`conversation.session.header.utilities`, the same right-aligned row as the
- * vendor "Session log" action), so the control lays out INLINE beside it: a
- * `shell.overlay` top-right anchor would overlap that row (details column
- * closed ⇒ the center column reaches the frame edge), so the frame-level
- * position is not an option.
+ * vendor "Session log" action) so it lays out INLINE beside that row; a
+ * `shell.overlay` top-right anchor would overlap it.
  *
- * Presentation matrix (see `shared/open-in-view-model.ts`, the single decision
- * surface):
- *  - LOCAL sources render the instance-hosted application catalog (the chamber
- *    host domain `openInApp/*` in `packages/dsh-chamber-seed-open-in`: real
- *    bundle icons over the instance's own RPC channel) plus the desktop
- *    main-process provider (the VS Code override);
- *  - SSH-transport remote sources render the main provider's remote-capable
- *    apps only (VS Code Remote-SSH);
- *  - HTTP/unknown sources render nothing.
- * ≥1 entries render the official split button — the main button
- * (remembered/default selection) plus the chevron menu, upstream's own single
- * form for any non-empty set; zero renders null.
- * The menu is the official `Menu` primitive (chamber `compact` rows — the
- * menu-density decision, design 06 §7 — fill selection, real app icons, focus
- * transfer and arrow navigation through `autoFocus`), and both halves of the
- * split control carry the design-system `Tooltip` (a native `title` bubble is
- * not used: WebKit and Chromium draw it differently); only the
- * `.instance-view`-scoped dismissal stays local (`instance-view-guard.ts`)
- * because this shell stacks one instance view per source.
- *
- * Superset of the official `open-in-app` client (design 20 §7): the catalog and
- * its real icons (`local-catalog.ts`), the product-label table and button copy
- * (`../locales.ts`), the persisted choice (`choice-store.ts`, per source here),
- * the busy/error dress of the split button (delayed busy paint, decaying
- * error), plus what upstream never had — remote sources through the desktop
- * main-process provider, source-scoped memory and the remote deeplink carrier.
- *
- * PRESENTATION is the official control's, not a chamber variant: the 28px /
- * r14 / `border-l4` split box, a 15px mark in the
- * main button, the design-system `IconChevronDownOutline14` at 11px behind the
- * chevron's own `border-left` hairline, an 18px mark in the menu rows and
- * upstream's own rounded-square fallback glyph for an app whose icon the host
- * does not serve (`OpenInButton.module.css` carries the rule-by-rule mapping).
- * Everything chamber-specific is behaviour, never a second visual language —
- * including the marks: the pipeline draws the icon of the app the MACHINE
- * resolved (the page's machine catalog, design 20 §5), for every channel and
- * every source, exactly as upstream draws whatever icon its host serves. The
- * selection is therefore one question — did the catalog answer this id? — and
- * the miss draws upstream's own rounded square; the chamber keeps no mark and
- * no mark table of its own.
- *
- * Two gates (design 16 §6.3), ANY failure → render null (never a dead button):
- *  1. the merged view-model has ≥1 usable entry (unknown/probe-failed →
- *     hidden, fail-closed);
- *  2. THIS header's session belongs to a workspace with a concrete path.
- *
- * Workspace rows come from the framework's global `useWorkspaces` selector
- * hook (the same store the sidebar groups by), so the plugin keeps zero
- * @dsh-chamber dependency and no direct ctx store access (design 16 §6.2).
+ * Presentation is the OFFICIAL control’s: the 28px / r14 split box, upstream’s
+ * mark sizes, the design-system `Tooltip` on both halves (a native `title`
+ * bubble draws differently across WebKit/Chromium), the official `Menu` at
+ * chamber `compact` density, and upstream’s rounded-square fallback for an id
+ * the catalog cannot answer. TWO GATES, any failure renders null (never a dead
+ * button): ≥1 usable entry, and a workspace path for THIS header’s session.
  */
 import { useEffect, useRef, useState } from 'react'
 import {
@@ -83,9 +38,9 @@ export interface OpenInInjected {
   getViewModel(): OpenInViewModel
   /** Subscribe to view-model changes (pool probes, icons, choice). */
   subscribe(listener: () => void): () => void
-  /** Re-probe both pools on menu open. (Window focus releases only the
-   *  page-wide MAIN pool memo — `coordinator.ts`'s hydration recovery — while
-   *  the machine catalog is re-probed by this call and by each entry's boot.) */
+  /** Re-probe both pools on menu open. (Window focus releases only the page-wide
+   *  MAIN pool memo — `coordinator.ts`’s hydration recovery — while the machine
+   *  catalog is re-probed here and by each entry’s boot.) */
   refresh(): Promise<void>
   /** Launch one entry through its channel; rejects on failure. */
   launch(entry: OpenInViewEntry, path: string): Promise<OpenInResult>
@@ -93,19 +48,18 @@ export interface OpenInInjected {
   getChoice(): string
   /** Remember a picked app id for THIS source. */
   choose(appId: string): void
-  /** Cached host icon `data:` URL for an app id — consulted for every channel,
-   *  null while unknown or when the instance serves none. */
+  /** Cached host icon `data:` URL, consulted for every channel; null while
+   *  unknown or when the instance serves none. */
   iconUrl(appId: string): string | null
   /** Host platform string ('darwin' | 'win32' | 'linux' | …) or null. */
   platform: string | null
 }
 
 /**
- * Slot component props: the injected face plus the framework standard kit the
- * header-utilities slot delivers — the per-header `sessionId` and the global
- * `useWorkspaces` selector hook over the vendor workspace store. Structural
- * subset on purpose (the vendor runtime's published d.ts trees are absent in
- * the workspace symlink, so the plugin types against the slice it reads).
+ * Slot props: the injected face plus the framework standard kit the header
+ * utilities slot delivers (per-header `sessionId`, global `useWorkspaces`
+ * selector). Structural subset on purpose — the vendor runtime publishes no
+ * d.ts tree in the workspace symlink.
  */
 export interface OpenInProps extends OpenInInjected {
   /** The session this header belongs to (framework-supplied). */
@@ -117,27 +71,19 @@ export interface OpenInProps extends OpenInInjected {
 }
 
 /** Quick launches settle well under this delay, so their busy dress never
- *  paints — the visible dim-and-wait treatment is reserved for launches that
- *  are actually taking a while (absorbed from the official client). */
+ *  paints; the visible dim-and-wait treatment is for launches taking a while. */
 const BUSY_DRESS_DELAY_MS = 250
 /** Error dress decay (absorbed from the official client). */
 const ERROR_DECAY_MS = 2_000
 
-/** Rendered size of the app mark inside the main button — the official
- *  client's own `AppIcon` size (`OpenInAppAction.tsx`: `size={15}` inside the
- *  28px split). */
+/** Rendered size of the app mark inside the main button (upstream’s own `AppIcon` size). */
 const BUTTON_MARK_SIZE = 15
-/** Rendered size of the app mark in a menu row (the official plugin's 18px
- *  leading icon, `OpenInAppAction.tsx`: `icon: <AppIcon … size={18}/>`). */
+/** Rendered size of the app mark in a menu row (the official plugin’s 18px leading icon). */
 const MENU_MARK_SIZE = 18
 
-/** Upstream's own fallback glyph (`OpenInAppAction.tsx` `AppIcon`): the single
- *  rounded square it draws for an application whose icon the host does not
- *  serve — a catalog family this client version cannot name, a file manager
- *  with no bundle icon, or an id the machine catalog answered with no pixels.
- *  Its geometry and class treatment are upstream's verbatim; the colour is
- *  inherited (label-primary in the button, the menu row's own icon colour in
- *  the list), never set here. */
+/** Upstream’s own fallback glyph for an app whose icon the host does not serve:
+ *  the single rounded square, geometry and class treatment verbatim, colour
+ *  inherited (never set here). */
 function GenericAppMark({ size }: { size: number }) {
   return (
     <svg
@@ -156,11 +102,8 @@ function GenericAppMark({ size }: { size: number }) {
 }
 
 /** Icon URLs whose image already failed to decode this page (a broken icon is
- *  not re-attempted on every menu open — absorbed from the official client).
- *  The key is the URL, not the app id: one page reads ONE machine catalog, so
- *  the same URL stands for the same bytes in every source's button, and a
- *  failure remembered once must fall back everywhere instead of re-decoding per
- *  source. */
+ *  not re-attempted per menu open). Keyed by URL, not app id: one page reads ONE
+ *  machine catalog, so a failure remembered once falls back everywhere. */
 const failedIcons = new Set<string>()
 
 /** One machine-catalog entry's real bundle icon with the generic fallback. */
@@ -184,17 +127,15 @@ function CatalogIcon({ url, size }: { url: string; size: number }) {
   )
 }
 
-/** Platform-appropriate wording for the "file manager" family: Finder on
- *  macOS, Explorer on Windows, generic file manager elsewhere. */
+/** Platform-appropriate wording for the "file manager" family. */
 function finderLabel(t: Translate, platform: string | null): string {
   if (platform === 'darwin') return t('titleFinder')
   if (platform === 'win32') return t('titleExplorer')
   return t('titleFileManager')
 }
 
-/** Per-entry title used for both the button tooltip/aria-label and the dropdown
- *  row label: the absorbed official label table first, then the chamber's
- *  family wording, then the raw id (a host catalog extension stays visible). */
+/** Per-entry title for both tooltip/aria-label and menu row: the absorbed
+ *  official label table, then our family wording, then the raw id. */
 function appLabel(entry: OpenInViewEntry, t: Translate, platform: string | null): string {
   const labelKey = OPEN_IN_APP_LABEL_KEY[entry.id]
   if (labelKey !== undefined) return t(labelKey)
@@ -203,8 +144,7 @@ function appLabel(entry: OpenInViewEntry, t: Translate, platform: string | null)
   return t('titleGeneric', { app: entry.id })
 }
 
-/** The mark for one entry: the machine's own art when the catalog answered the
- *  id, else upstream's square — the whole selection, with no family in it. */
+/** The machine’s own art when the catalog answered the id, else upstream’s square. */
 function appMark(iconUrl: string | null, size: number) {
   return iconUrl === null ? <GenericAppMark size={size} /> : <CatalogIcon url={iconUrl} size={size} />
 }
@@ -225,16 +165,13 @@ export function OpenInButton({
   const [model, setModel] = useState<OpenInViewModel>(() => getViewModel())
   const [phase, setPhase] = useState<'idle' | 'busy' | 'error'>('idle')
   const [open, setOpen] = useState(false)
-  /** Why the last launch failed, presented IN THE APP (the design-system
-   *  tooltip, beside the red ring) instead of a console line plus a native
-   *  `title` bubble. Cleared with the error dress it belongs to, so no stale
-   *  reason can outlive it. */
+  /** Why the last launch failed, presented in the app (design-system tooltip
+   *  beside the red ring) instead of a console line; cleared with the error dress. */
   const [failureReason, setFailureReason] = useState<string | null>(null)
   const inFlight = useRef(false)
   const busyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const errorTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  /** The menu's anchor element: the official `Menu` renders the anchor itself,
-   *  so this is the wrapper the instance-view guard anchors on. */
+/** The menu’s anchor element — the wrapper the instance-view guard anchors on. */
   const groupRef = useRef<HTMLSpanElement | null>(null)
 
   useEffect(() => subscribe(() => { setModel(getViewModel()) }), [subscribe, getViewModel])
@@ -244,30 +181,24 @@ export function OpenInButton({
     clearTimeout(errorTimer.current)
   }, [])
 
-  // The one piece of the menu that is genuinely N-ctx: this
-  // shell keeps one `.instance-view` per attached source and hides inactive
-  // ones, so an open menu must close when the view that owns it goes inactive
-  // (see instance-view-guard.ts). Focus transfer, arrow/Home/End navigation,
-  // Escape-to-anchor, outside-pointer dismissal, placement and the item markup
-  // all come from the official primitive.
+  // The one genuinely N-ctx piece: this shell keeps one `.instance-view` per
+  // attached source and hides inactive ones, so an open menu must close when the
+  // view that owns it goes inactive. Everything else comes from the primitive.
   useInstanceViewDismissal(open, groupRef, () => { setOpen(false) })
 
   // Hooks run unconditionally (before any gate's early return).
   const workspaces = useWorkspaces(ws => ws.items)
 
-  // Gate 1: the merged view-model decides what this source may use. Unknown or
-  // failed probes contribute nothing (fail-closed); an empty set renders null.
+  // Gate 1: the merged view-model decides what this source may use (fail-closed); an empty set renders null.
   const entries = model.entries
   if (entries.length === 0) return null
 
-  // Gate 2: THIS header's session must live in a workspace with a concrete
-  // path. Both remote and local sources show; the
-  // launch channel decides ssh-remote vs local/instance semantics.
+  // Gate 2: THIS header's session must live in a workspace with a concrete path;
+  // the launch channel decides ssh-remote vs local/instance semantics.
   const path = workspacePathForSession(workspaces, sessionId)
   if (path === undefined || path === '') return null
 
-  // Remembered selection wins when still usable; otherwise the view-model's
-  // default (first VS Code entry, else the first entry).
+  // Remembered selection when still usable, else the view-model default (first VS Code entry, else first).
   const choice = getChoice()
   const activeEntry = entries.find(entry => entry.id === choice)
     ?? entries.find(entry => entry.id === model.defaultEntryId)
@@ -294,8 +225,7 @@ export function OpenInButton({
         setFailureReason(null)
       }, ERROR_DECAY_MS)
     }).catch((error: unknown) => {
-      // Transport-level rejection (IPC fence / host route throw): surfaced in
-      // the app, never an unhandled rejection.
+      // Transport-level rejection (IPC fence / host route throw): surfaced in the app, never unhandled.
       inFlight.current = false
       clearTimeout(busyTimer.current)
       setFailureReason(describeOpenInError(error))
@@ -307,21 +237,15 @@ export function OpenInButton({
     })
   }
 
-  /** The button's accessible name: the action it performs in the remembered
-   *  app, or the failure state (upstream `open.title` / `open.error`). */
+/** The button’s accessible name: the action in the remembered app, or the failure state. */
   const title = phase === 'error' ? t('openError') : t('openTitle', { app: appLabel(activeEntry, t, platform) })
-  /** The tooltip carries the reason of a failed launch (the error dress it
-   *  belongs to), and the neutral "opens locally" hint otherwise. */
+/** The tooltip carries a failed launch’s reason, and the neutral "opens locally" hint otherwise. */
   const tooltip = phase === 'error' && failureReason !== null
     ? `${t('openFailed')}${failureReason}`
     : phase === 'error' ? t('openError') : t('openTooltip')
 
-  // ≥1 usable entry → the official split button: main icon button
-  // (remembered/default selection) + chevron menu. Upstream has no
-  // single-entry form — it renders this same control for one app as for ten —
-  // so neither does this entry. The rows
-  // carry the same real app marks the button does, at the primitive's icon
-  // size (upstream `MenuItem.icon`).
+  // ≥1 usable entry → the official split button (main icon button + chevron
+  // menu), the same form upstream renders for one app as for ten.
   const items: MenuItem[] = entries.map(entry => ({
     id: entry.id,
     label: appLabel(entry, t, platform),
@@ -331,10 +255,8 @@ export function OpenInButton({
     <Menu
       open={open}
       autoFocus
-      // Every chamber popup menu runs at the chamber scale (`compact`,
-      // 26px/12px), not `dense` (34px items). `autoFocus` focus transfer,
-      // arrow-key navigation, `selection="fill"`, item icons and the portal all
-      // stay.
+      // Chamber popup menus run at chamber scale (`compact`, 26px/12px), not
+      // `dense` (34px items); `autoFocus`, arrow keys, fill selection and icons stay.
       compact
       selection="fill"
       align="end"
@@ -345,9 +267,7 @@ export function OpenInButton({
         const chosen = entries.find(entry => entry.id === id)
         if (chosen === undefined) return
         setOpen(false)
-        // A pick while a launch is in flight is ignored whole: persisting the
-        // choice without launching would leave the button naming an app the
-        // gesture never opened (official-client semantics).
+        // A pick while a launch is in flight is ignored whole: persisting without launching would name an app the gesture never opened.
         if (inFlight.current) return
         choose(id)
         openApp(chosen)
@@ -361,9 +281,7 @@ export function OpenInButton({
               data-state={phase}
               disabled={phase === 'busy'}
               onClick={() => {
-                // The anchor REGION is the Menu's own root, so a press on the
-                // main button is not an outside dismissal: close the list here,
-                // so no list lingers over a launch.
+                // The anchor REGION is the Menu's own root, so a main-button press is not an outside dismissal: close the list here.
                 setOpen(false)
                 openApp(activeEntry)
               }}
@@ -372,10 +290,8 @@ export function OpenInButton({
               {appMark(iconUrl(activeEntry.id), BUTTON_MARK_SIZE)}
             </button>
           </Tooltip>
-          {/* Same design-system bubble as the main button: the chevron carries
-              no native `title` (WebKit and Chromium draw native tooltips
-              differently, so the split control shows one bubble source for both
-              halves). */}
+          {/* Same design-system bubble as the main button: no native `title` on
+              either half, whose rendering differs across WebKit and Chromium. */}
           <Tooltip label={t('menuToggle')} side="bottom">
             <button
               type="button"
@@ -390,8 +306,7 @@ export function OpenInButton({
                 if (next) void refresh()
               }}
               onKeyDown={(event) => {
-                // Arrow-key opening stays available (the primitive's `autoFocus`
-                // then moves focus into the list).
+                // Arrow-key opening stays available (the primitive’s `autoFocus` moves focus into the list).
                 if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
                   event.preventDefault()
                   setOpen(true)
@@ -399,9 +314,7 @@ export function OpenInButton({
                 }
               }}
             >
-              {/* The design system's own chevron, at the official client's size
-                  (`OpenInAppAction.tsx`: `IconChevronDownOutline14 size={11}`) —
-                  no hand-drawn glyph and no chamber-invented expand animation. */}
+              {/* The design system's own chevron at the official client's 11px size — no hand-drawn glyph and no invented animation. */}
               <IconChevronDownOutline14 size={11} />
             </button>
           </Tooltip>

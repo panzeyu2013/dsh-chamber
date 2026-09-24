@@ -1,45 +1,21 @@
 /**
- * Generic atomic JSON document store — the control plane's JSON write
- * protocol (design 04 §6 / 03 §2.1).
+ * Generic atomic JSON document store — the control plane's JSON write protocol.
  *
- * Protocol, verbatim from the design:
- *
- * 1. Mutations are synchronous write-through transactions (read-modify-write
- *    runs to completion in one JS turn). A failed persist normally restores
- *    the previous in-memory document and throws to the caller. If an exact,
- *    stable readback proves that the intended main bytes are already online
- *    (for example rename succeeded but the directory fsync then threw), the
- *    new in-memory revision is retained while the durability-unknown error is
- *    still reported.
- * 2. Backup-first persist: atomically replace .bak → atomically replace main.
- *    Each replace uses a random O_EXCL/no-follow temp, file fsync, rename and
- *    parent-directory fsync. If the main write
- *    fails, the backup holds the new document and recovery can take it.
- * 3. lastPersistSucceededAt / recoveryState are only touched after both files
- *    hit disk.
- * 4. Corrupt is never a fake-empty: a corrupt main falls back to .bak and
- *    loads with an explicit recoveryState (the main file is deliberately NOT
- *    rewritten, so the recovery state stays visible); double corruption
- *    throws loudly and the store refuses to load.
- * 5. Dropped rows are counted and surfaced through the recovery state — never
- *    silent.
- * 6. Load sequence: main → .bak → initial. Initial is permitted only when
- *    both leaves are absent; a present corrupt/unsafe backup is evidence and
- *    fails loudly even when main is absent. A schemaVersion-less legacy main
- *    is migrated in place by the onLoadValidate hook (its `migrated` flag);
- *    the migration persist writes the pre-migration document as the .bak so
- *    recovery re-runs the migration (design 03 §2.1: old file retained as an
- *    explicit backup).
- *
- * Revision semantics: the store owns the counter; every changed mutation
- * bumps doc.revision by one. mutateIfMatch(expected, mutator) throws a typed
- * JsonStoreRevisionConflictError ('revision conflict') when they differ.
- *
- * Concurrency boundary: one store instance serializes its own callers because
- * the complete transaction is synchronous. Atomic replacement prevents torn
- * documents but is not a cross-process compare-and-swap; independent store
- * instances require an owner-level lock (the gateway holds its state-dir lock).
- * Do not infer multi-process lost-update protection from revision counters.
+ * - Mutations are synchronous write-through transactions; a failed persist restores
+ *   the previous in-memory document and throws — unless an exact readback proves the
+ *   intended main bytes are already online (revision retained, error still thrown).
+ * - Backup-first persist: .bak then main, each via a random O_EXCL/no-follow temp,
+ *   file fsync, rename and parent fsync; state timestamps change only after both hit
+ *   disk.
+ * - Corrupt is never a fake-empty: a corrupt main falls back to .bak with an explicit
+ *   recoveryState (main deliberately NOT rewritten); double corruption throws loudly;
+ *   dropped rows are counted.
+ * - Load: main → .bak → initial (initial only when both leaves are absent; a present
+ *   corrupt backup fails loudly even when main is absent). A schemaVersion-less legacy
+ *   main is migrated in place with the pre-migration document as the .bak.
+ * - One instance serializes its own callers (transactions are synchronous); atomic
+ *   replacement is NOT a cross-process compare-and-swap — the store owns the revision
+ *   counter and mutateIfMatch throws a typed conflict on mismatch.
  */
 
 import { mkdirSync } from 'node:fs'
@@ -54,9 +30,8 @@ export interface JsonStoreLogger {
 }
 
 /**
- * A JSON document handled by the store. The only fields the store itself
- * owns are the optional schemaVersion and the revision counter; domain
- * fields are free-form.
+ * A JSON document handled by the store. The store itself owns only the optional
+ * schemaVersion and the revision counter; domain fields are free-form.
  */
 interface JsonStoreDocument {
   schemaVersion?: number
@@ -80,18 +55,17 @@ export interface JsonStoreDroppedCounts {
 }
 
 /**
- * Recovery state: null (healthy) or {source: 'main'|'backup',
- * dropped} — the main file is deliberately not rewritten after a recovery,
- * so the state stays visible.
+ * Recovery state: null (healthy) or {source: 'main'|'backup', dropped} — the main
+ * file is deliberately not rewritten after a recovery, so the state stays visible.
  */
 export type JsonStoreRecoveryState =
   | { source: 'main' | 'backup'; dropped: JsonStoreDroppedCounts }
   | null
 
 /**
- * Outcome of the onLoadValidate hook: the cleaned document, the dropped
- * counters, and optionally {migrated: true, backupDoc} for an in-place
- * schema migration (the pre-migration document becomes the .bak).
+ * Outcome of the onLoadValidate hook: the cleaned document, the dropped counters and
+ * optionally {migrated: true, backupDoc} for an in-place schema migration (the
+ * pre-migration document becomes the .bak).
  */
 export interface JsonStoreValidateResult {
   doc: JsonStoreDocument
@@ -106,9 +80,8 @@ interface JsonStoreOptions {
   logger?: JsonStoreLogger
   initial?: JsonStoreDocument
   onLoadValidate?: (doc: JsonStoreDocument) => JsonStoreValidateResult
-  /** Optional owner policy for the main, backup and temporary documents.
-   * Applied to existing files on load and after every open, so umask or a
-   * legacy permissive mode cannot silently weaken a secret-bearing store. */
+  /** Optional owner policy for the main, backup and temporary documents, applied on
+   *  load and after every open so umask or a legacy mode cannot weaken the store. */
   fileMode?: number
 }
 
@@ -131,14 +104,11 @@ export interface JsonStoreStatus {
  * The store surface returned by createJsonStore().
  *
  * Failure semantics: every persistence failure throws synchronously
- * (JsonStorePersistError) — including from the promise-returning members
- * mutate/mutateIfMatch/persist, which are plain (non-async) functions that
- * also throw before returning their promise. Callers must therefore use
- * try/catch or `await` inside a try block; a bare `.catch()` chain misses
- * the synchronous throw. mutate/mutateIfMatch roll the in-memory document
- * back unless the thrown JsonStorePersistError has `onlinePublished === true`;
- * that exact-readback case retains the online revision but still throws
- * because durability was not confirmed.
+ * (JsonStorePersistError) — including from mutate/mutateIfMatch/persist, which are
+ * plain functions that also throw before returning their promise, so a bare
+ * `.catch()` chain misses the synchronous throw. mutate/mutateIfMatch roll the
+ * in-memory document back unless the thrown error has `onlinePublished === true`
+ * (that exact-readback case retains the online revision but still throws).
  */
 export interface JsonStore {
   load(): JsonStoreDocument
@@ -154,9 +124,8 @@ export interface JsonStore {
 }
 
 /**
- * Typed error for If-Match conflicts (design 03 §3.2 step 3). Message is
- * exactly 'revision conflict'; the catalog layer tags it with
- * code 'catalog_revision_conflict' before it reaches routes.
+ * Typed error for If-Match conflicts. Message is exactly 'revision conflict'; the
+ * catalog layer tags it with code 'catalog_revision_conflict'.
  */
 export class JsonStoreRevisionConflictError extends Error {
   expected: number | undefined
@@ -187,31 +156,22 @@ export class JsonStorePersistError extends Error {
   }
 }
 
-/** The backup leaf for a document path (`<file>.bak`; backup-first protocol,
- *  design 03 §2.1). Single source for the derivation: the store, the catalog
- *  tests and any future recovery reader all name the same leaf. */
+/** The backup leaf for a document path (`<file>.bak`; backup-first protocol). Single
+ *  source for the derivation: store, catalog and any recovery reader name the same leaf. */
 export function backupPathFor(filePath: string): string {
   return `${filePath}.bak`
 }
 
 /**
  * Create a JSON document store.
- * @param options - {filePath, logger, initial, onLoadValidate, fileMode}.
- *   - filePath: the main document path (<file>.bak is derived; publication
- *     uses an unguessable exclusive temp in the same directory).
- *   - logger: {warn(...)} sink for persist failures.
- *   - initial: the empty document used when neither main nor .bak exists.
- *   - onLoadValidate(doc): runtime validation/normalization; must return
- *     {doc, dropped: {connections, projects}}. May additionally return
- *     {migrated: true, backupDoc} to signal an in-place schema migration —
- *     the migrated doc is persisted immediately with the pre-migration
- *     document as the backup. Throwing marks the document as unusable at the
- *     document level and sends the loader down the .bak recovery path.
- *   - fileMode: optional mode enforced on main/.bak during load and on every
- *     private temp/write; intended for owner-only stores that may contain
- *     sensitive data.
- * @returns {load(), getDoc(), getSnapshot(), mutate(), mutateIfMatch(),
- *   persist(), getStatus()}.
+ * @param options - filePath (main document; <file>.bak is derived); logger (warn
+ *   sink); initial (document used when neither main nor .bak exists);
+ *   onLoadValidate(doc) — runtime validation/normalization returning {doc, dropped};
+ *   it may return {migrated: true, backupDoc} for an in-place schema migration
+ *   (persisted immediately with the pre-migration document as the backup), and
+ *   throwing sends the loader down the .bak recovery path; fileMode (enforced on
+ *   main/.bak and every private temp/write).
+ * @returns {load, getDoc, getSnapshot, mutate, mutateIfMatch, persist, getStatus}.
  */
 export function createJsonStore({
   filePath,
@@ -251,8 +211,7 @@ export function createJsonStore({
     return JSON.parse(read.value) as JsonStoreDocument
   }
 
-  /** A persist failure after rename is ambiguous: only exact stable bytes at
-   * the public path prove that the intended revision is already online. */
+  /** A persist failure after rename is ambiguous: only exact stable bytes at the public path prove the intended revision is online. */
   function isExactMainReadback(expected: string): boolean {
     try {
       return readPrivateFileNoFollow(filePath, {
@@ -276,22 +235,19 @@ export function createJsonStore({
     return result
   }
 
-  /** A leaf below a missing/non-directory ancestor is absent from this
-   * store's point of view. Persistence will still surface the structural
-   * error; an initial load must retain the long-standing empty-store
-   * behaviour so callers can construct a store before its parent exists. */
+  /** A leaf below a missing/non-directory ancestor is absent from this store's view;
+   *  an initial load must retain the empty-store behaviour so callers can construct a
+   *  store before its parent exists. Persistence will still surface the structural error. */
   function isAbsentPathError(error: unknown): boolean {
     const code = (error as NodeJS.ErrnoException).code
     return code === 'ENOENT' || code === 'ENOTDIR'
   }
 
   /**
-   * Backup-first persist: atomic .bak replacement → atomic main replacement.
-   * lastPersistSucceededAt and recoveryState are only touched when both
-   * writes succeeded. `options.backupDoc` overrides the backup content (used
-   * by in-place migrations, so the backup holds the pre-migration document).
-   * Failures are logged and thrown. Callers must never report a mutation as
-   * successful when the durable commit failed.
+   * Backup-first persist: atomic .bak replacement → atomic main replacement. State
+   * timestamps change only when both writes succeeded. `options.backupDoc` overrides
+   * the backup content (in-place migrations keep the pre-migration document there).
+   * Failures are logged and thrown.
    */
   function persistSync(doc: JsonStoreDocument, options: JsonStorePersistOptions = {}): void {
     let text: string | null = null
@@ -313,10 +269,9 @@ export function createJsonStore({
   }
 
   /**
-   * Read main → .bak → initial. Throws when both main and .bak are unusable
-   * (double corruption — never a fake-empty). A valid .bak loads with an
-   * explicit recoveryState and the main file is NOT rewritten, so the
-   * recovery state stays visible.
+   * Read main → .bak → initial. Throws when both leaves are unusable (double
+   * corruption — never a fake-empty). A valid .bak loads with an explicit recoveryState
+   * and main is NOT rewritten, so the state stays visible.
    */
   function readDocument(): {
     doc: JsonStoreDocument
@@ -366,9 +321,8 @@ export function createJsonStore({
       })
     }
     if (!backupMissing) {
-      // Main missing + backup corrupt/unsafe is evidence of a torn or tampered
-      // write. Initializing here would let the next mutation overwrite the
-      // only recovery evidence with an apparently fresh document.
+      // Main missing + backup corrupt/unsafe is evidence of a torn or tampered write;
+      // initializing would let the next mutation overwrite the only recovery evidence.
       throw new Error(`${filePath} is missing and backup ${backupPath} is corrupt or unsafe`, { cause: backupError })
     }
     return { doc: cloneInitial(), dropped: zeroDropped(), recoveryState: null }
@@ -379,13 +333,11 @@ export function createJsonStore({
   }
 
   /**
-   * Apply a mutator to the in-memory document: read current doc → construct
-   * next → bump revision on change → swap state. Fully synchronous, so
-   * concurrent callers can never interleave.
+   * Apply a mutator to the in-memory document: read current → construct next → bump
+   * revision on change → swap state. Fully synchronous, so callers cannot interleave.
    */
   function apply(mutator: JsonStoreMutator): JsonStoreMutateResult {
-    // Mutators work on a clone: an in-place mutator cannot corrupt the live
-    // document before the write-through transaction commits.
+    // Mutators work on a clone: an in-place mutator cannot corrupt the live document before commit.
     const doc: JsonStoreDocument = structuredClone(state ?? cloneInitial())
     const result = mutator(doc)
     if (!result.changed) return result
@@ -396,10 +348,9 @@ export function createJsonStore({
 
   return {
     /**
-     * Load the document (main → .bak → initial). Returns the loaded document.
-     * Throws on double corruption. A hook-flagged in-place migration is
-     * persisted here (backup-first, pre-migration document as the backup);
-     * a backup-loaded document is never rewritten.
+     * Load the document (main → .bak → initial). A hook-flagged in-place migration is
+     * persisted here (pre-migration document as the backup); a backup-loaded document
+     * is never rewritten. Throws on double corruption.
      */
     load(): JsonStoreDocument {
       const outcome = readDocument()
@@ -409,9 +360,7 @@ export function createJsonStore({
       return state
     },
 
-    /** The live in-memory document (no clone). For store owners that need
-     * synchronous access (the catalog's sync row API); never hand this to
-     * routes. */
+    /** The live in-memory document (no clone), for synchronous store owners; never hand this to routes. */
     getDoc() {
       return state ?? cloneInitial()
     },
@@ -422,12 +371,10 @@ export function createJsonStore({
     },
 
     /**
-     * Apply a mutation. The mutator receives the current document and returns
-     * {next, changed}; a changed mutation bumps revision by one, swaps the
-     * in-memory document, then commits it with a synchronous backup-first
-     * write. A failed write restores the prior state unless exact readback
-     * proves the intended revision is already online; either way it throws
-     * synchronously, so legacy catalog callers cannot ignore the failure.
+     * Apply a mutation: the mutator returns {next, changed}; a changed mutation bumps
+     * revision, swaps the document, then commits with a synchronous backup-first write.
+     * A failed write restores the prior state unless exact readback proves the intended
+     * revision is online; either way it throws synchronously.
      */
     mutate(mutator: JsonStoreMutator): Promise<JsonStoreMutateResult> {
       const previous = state
@@ -443,11 +390,9 @@ export function createJsonStore({
     },
 
     /**
-     * mutate with an If-Match guard: rejects with
-     * JsonStoreRevisionConflictError ('revision conflict') when
-     * doc.revision !== expectedRevision, before anything is applied.
-     * `expectedRevision === undefined` disables the check (preserving the
-     * catalog's current behavior).
+     * mutate with an If-Match guard: rejects with JsonStoreRevisionConflictError
+     * ('revision conflict') when doc.revision !== expectedRevision, before anything is
+     * applied. `expectedRevision === undefined` disables the check.
      */
     mutateIfMatch(
       expectedRevision: number | undefined,
@@ -470,9 +415,8 @@ export function createJsonStore({
     },
 
     /**
-     * Run a backup-first persist. `doc` defaults to the current document;
-     * `options.backupDoc` overrides the .bak content (migrations).
-     * @returns a promise resolving with whether both files were written.
+     * Run a backup-first persist. `doc` defaults to the current document; `backupDoc`
+     * overrides the .bak content (migrations). Resolves with whether both files were written.
      */
     persist(doc: JsonStoreDocument = state ?? cloneInitial(), options: JsonStorePersistOptions = {}): Promise<boolean> {
       try {

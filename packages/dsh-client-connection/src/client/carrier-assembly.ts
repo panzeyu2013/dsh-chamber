@@ -1,44 +1,30 @@
 /**
- * Pure construction policy for the browser connection plugin.
- *
- * This leaf deliberately owns no transport implementation imports: production
- * injects `createWebConnectionRpc` (the generic RPC carrier), while node:test
- * can pin that the SAME resolved per-entry base path reaches it without
- * loading the source-only vendor graph. Keeping the decision here also
- * prevents a future carrier refactor from silently dropping the prefix from
- * the carrier.
- *
- * The assembly owns the generic RPC carrier — plus the worker-local stream
- * opener when the page-owned transport provides one; it resolves one prefix
- * and fans it into every carrier.
+ * Pure construction policy for the browser connection plugin: resolve one
+ * immutable per-entry prefix and fan it into the generic RPC carrier (plus the
+ * worker-local stream opener). Production injects the RPC factory, so the
+ * fan-out stays testable without any transport implementation import.
  */
 import { resolveInstanceBasePath } from '../api-path.ts'
 import type { RpcFetch, RpcStreamOpen } from './rpc.ts'
 
-/** Optional page-owned physical transport (worker preview upstream seam). */
 export interface CarrierTransport {
   fetch: RpcFetch
   openStream?: RpcStreamOpen
 }
 
-/** Factories supplied by the browser plugin's production implementation. */
 export interface ConnectionCarrierFactories<Rpc> {
-  /** Construct the generic RPC carrier over the same per-entry prefix. */
   createRpc(options: { basePath: string; doFetch?: RpcFetch; openStream?: RpcStreamOpen }): Rpc
 }
 
-/** Complete set of carriers installed into `ctx.connection`. */
 export interface ConnectionCarrierAssembly<Rpc> {
   readonly basePath: string
   readonly rpc: Rpc
 }
 
 /**
- * Resolve one immutable per-entry prefix and fan it out to the RPC carrier.
- *
- * The page-owned transport keeps its upstream precedence: even when it
- * replaces the fetch/stream halves, the generic RPC factory still receives the
- * same basePath plus that transport's hooks.
+ * Resolve one immutable per-entry prefix and fan it out to the RPC carrier; a
+ * page-owned transport keeps upstream precedence — the factory receives the same
+ * basePath plus that transport's fetch/stream hooks.
  */
 export function assembleConnectionCarriers<Rpc>(
   explicitBasePath: string | undefined,

@@ -1,13 +1,11 @@
 /**
  * Session-creation attribution ledger。
  *
- * WHY：判据是「多源启动/切换**新增 blank = 0**」，但在没有归因之前这条判据
- * **不可测**——分不清一个 blank 是冷 boot 的交接、预热兜底，还是用户自己点了"+"。
- * 本模块把每次应用内会话创建（含 blank）按**触发路径标签**记账，供验收脚本按标签
- * 聚合；判据第二半是「**无标签外来源**」，即 origin === 'unknown' 必须为 0。
+ * 把每次应用内会话创建（含 blank）按触发路径标签记账，使「多源启动/切换新增 blank = 0」可测：
+ * 没有归因就分不清一个 blank 是冷 boot 交接、预热兜底，还是用户点了 "+"。origin === 'unknown'
+ * 表示未被标签覆盖，计数必须为 0。
  *
- * 边界：只记账不判定——不是第二事实源，不改写任何投影；条目有界（环形，默认 200），
- * 只存 id/标签/时间，不存标题或任何内容（隐私白名单同 gateway 的落盘纪律）。
+ * 只记账不判定，不改写任何投影；条目有界（环形，默认 200），只存 id/标签/时间。
  */
 import { assertSingletonModule } from './singleton.ts'
 
@@ -101,10 +99,7 @@ assertSingletonModule('session-create-ledger')
 /** 进程级单例（所有壳共享；只读仪表） */
 export const sessionCreationLedger = createSessionCreationLedger()
 
-/**
- * 把只读仪表挂到页面全局**一次**（幂等）：验收脚本/CDP 直接读，不需要任何 IPC 或
- * 构建产物。挂的是函数而不是快照，因此不会随时间失真、也不会周期性产生对象。
- */
+/** 把只读仪表幂等地挂到页面全局一次（供外部直接读，无需 IPC/构建产物；挂函数而非快照）。 */
 export function publishSessionCreationInstrument(target: unknown = globalThis): void {
   const host = target as { __dshChamberSessionCreates?: unknown }
   if (host.__dshChamberSessionCreates !== undefined) return

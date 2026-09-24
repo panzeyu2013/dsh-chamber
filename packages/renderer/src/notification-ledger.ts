@@ -1,17 +1,8 @@
 /**
- * Notification decision ledger。
- *
- * WHY：判据里有**负断言**（"离线完成不补发通知"）——通知路径整体坏掉时负断言
- * 也会通过。同一次运行内的正对照需要「这次实时完成**发了一条**」，而两条断言都必须看到
- * **主进程的诚实结果**（shown / suppressed + 原因），不能只看"我们调用了通知"。
- *
- * 因此本账本记录的是 renderer 组装的**每一次决定**：
- *   - `sent`：主进程回 `shown: true`；
- *   - `suppressed`：主进程回 `shown: false`（去重/焦点豁免/系统权限…），带 error 原文；
- *   - `skipped`：根本没有通知桥，或组装/调用抛错（这时**没有**发生任何投递）。
- *
- * 边界：有界环（默认 200）、只存 id/种类/水位/决定与错误串，不存正文；发布为**函数**的
- * 只读全局（活视图，无周期性对象），供仪器/CDP 直接读。
+ * Notification decision ledger：记录 renderer 组装的每一次通知决定。
+ *   - `sent`：主进程回 `shown: true`；`suppressed`：`shown: false`（去重/焦点豁免/系统权限…），
+ *     带 error 原文；`skipped`：没有通知桥或组装/调用抛错（未发生任何投递）。
+ * 有界环（默认 200），只存 id/种类/水位/决定与错误串，不存正文；以函数视图挂全局（活视图）。
  */
 import { createBoundedList } from './bounded-ledger.ts'
 
@@ -49,10 +40,7 @@ export function createNotificationLedger(options: { limit?: number } = {}) {
     counts(): NotificationLedgerCounts {
       return { ...counts }
     },
-    /**
-     * 累计决定数（**不受环形上界影响**）：单组装点锁的读出口——全文件只允许一次
-     * bridge.notify( ⇒ 这里应当恰好多一条账，即使更早的条目已被淘汰。
-     */
+    /** 累计决定数（**不受环形上界影响**）：全文件只允许一次 bridge.notify(，这里应恰好多一条账。 */
     total(): number {
       return counts.sent + counts.suppressed + counts.skipped
     },

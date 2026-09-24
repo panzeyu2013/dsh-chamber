@@ -1,18 +1,14 @@
 /**
- * Writer-quiescence notice model for the local connection card (design 02
- * §3.4 / 04 §3.2).
+ * Writer-quiescence notice model for the local connection card.
  *
- * The control plane answers 409 connection_busy when a managed-host record it
- * cannot clear keeps the local instance from starting; the bare reason
- * ("…writer quiescence is not proven…") advises only an app restart, and a
- * record that merely BECOMES stale (its orphan exited) blocks every start for
- * the whole session.
+ * The control plane answers 409 connection_busy when a managed-host record it cannot clear keeps
+ * the local instance from starting; the bare reason advises only an app restart, and a record that
+ * merely BECOMES stale (its orphan exited) blocks every start for the whole session.
  *
- * This module owns the DISPLAY decision as a pure function so the React card
- * stays a thin renderer: whether the notice appears at all, which blockers are
- * worth naming, whether the explicit 清理并接管 action is offered, and which
- * locale hint explains the state. `sticky` (a failed termination nobody can
- * re-prove) never offers the action — it needs an app restart.
+ * This module owns the DISPLAY decision as a pure function so the React card stays a thin
+ * renderer: whether the notice appears at all, which blockers are worth naming, whether the
+ * explicit 清理并接管 action is offered, and which locale hint explains the state. `sticky` (a
+ * failed termination nobody can re-prove) never offers the action — it needs an app restart.
  */
 
 import type { LocalWriterDiagnosisWire } from '@dsh-chamber/dsh-chamber-client-core'
@@ -32,7 +28,6 @@ export interface WriterNotice {
 
 /**
  * Decide what the card shows for one diagnosis.
- * @param diagnosis - the control plane's verdict (null when the surface has none).
  * @returns null when there is nothing to show (quiescent, or no diagnosis).
  */
 export function writerNotice(diagnosis: LocalWriterDiagnosisWire | null): WriterNotice | null {
@@ -44,8 +39,7 @@ export function writerNotice(diagnosis: LocalWriterDiagnosisWire | null): Writer
       reason: entry.reason,
       takeOverAvailable: entry.takeOverAvailable,
     }))
-  // A sticky verdict (write-time termination failure) reports no blockers: the
-  // evidence is gone, which is exactly why only a restart re-proves it.
+  // A sticky verdict reports no blockers: the evidence is gone, which is exactly why only a restart re-proves it.
   const restartRequired = blockers.length === 0
     && diagnosis.errors.some(line => /restart the app/i.test(line))
   return {
@@ -57,8 +51,8 @@ export function writerNotice(diagnosis: LocalWriterDiagnosisWire | null): Writer
 }
 
 /**
- * Locale key for one machine reason token: the card renders the gloss and
- * keeps the raw token visible beside it, so a report stays copy-pasteable.
+ * Locale key for one machine reason token: the card renders the gloss and keeps the raw token
+ * visible beside it, so a report stays copy-pasteable.
  */
 export function writerReasonKey(reason: string): SettingsConnectionsKey {
   switch (reason) {

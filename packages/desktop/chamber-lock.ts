@@ -1,22 +1,14 @@
 /**
- * chamber-lock.ts —— 双 flavor 跨进程互斥锁（design 25 §6.3；Electron 侧）
+ * chamber-lock —— 双 flavor 跨进程互斥锁（Electron 侧）：同一 userData 根
+ * 绝不允许 Electron 版与 Swift 版并发（registry/凭据事务/runtime 树无跨进程锁）。
  *
- * 设计契约（design 25 §6.3 B2）：同一 userData 根绝不允许 Electron 版与 Swift
- * 版并发（registry/凭据事务/runtime 树无跨进程锁）。Swift 侧用
- * `flock(LOCK_EX|LOCK_NB)`（SidecarSupervisor）；Electron 侧没有 Node 的 flock
- * API，但 **Darwin 的 open(2) 支持 O_EXLOCK**，且 `fs.open` 接受数值 flags
- * （同进程第二次 open 得 EAGAIN，close 后可重取）——因此
- * darwin 上可零依赖实现同一把锁：
- *
+ * Swift 侧用 `flock(LOCK_EX|LOCK_NB)`；Electron 侧借 Darwin open(2) 的
+ * O_EXLOCK（fs.open 接受数值 flags，同进程第二次 open 得 EAGAIN、close 后可重取）：
  *   open(path, O_RDWR | O_CREAT | O_NOFOLLOW | O_EXLOCK | O_NONBLOCK, 0o600)
  *
- * 平台范围（有意收窄，文档化）：`O_EXLOCK` 是 BSD/Darwin 专有；Linux 需 flock(2)
- * （Node 未导出）、Windows 无等价物。而 Swift flavor 只在 macOS 存在——非 darwin
- * 平台不存在跨 flavor 冲突，因此本模块在非 darwin 返回 `unsupported` 标记并
- * 放行（调用方 loud 记录该范围，绝不假装已互斥）。
- *
- * 记录格式与 Swift 侧逐字一致 `{pid, startedAt, shell}`（诊断用；仲裁权在锁
- * 本身，绝不用 pid 探活做仲裁）。
+ * O_EXLOCK 是 BSD/Darwin 专有，而 Swift flavor 只在 macOS 存在：非 darwin 无跨
+ * flavor 冲突，故返回 `unsupported` 放行（调用方 loud 记录，绝不假装已互斥）。
+ * 锁记录 `{pid, startedAt, shell}` 与 Swift 侧逐字一致，仅供诊断；仲裁权在锁本身，绝不用 pid 探活做仲裁。取锁失败 fail-closed。
  */
 import {
   closeSync,
@@ -30,7 +22,7 @@ import {
 import { describeError } from './describe-error.ts'
 import path from 'node:path'
 
-/** 锁文件名（与 Swift `SidecarDirectoryLock` / sidecar-entry 复验同一路径）。 */
+/** 锁文件名（Swift `SidecarDirectoryLock` / sidecar-entry 复验同一路径）。 */
 export const CHAMBER_LOCK_FILE = '.dsh-chamber.lock'
 
 /** Darwin `sys/fcntl.h` 数值（Node 的 fs.constants 不导出 O_EXLOCK/O_NONBLOCK 组合位）。 */
@@ -47,7 +39,6 @@ export interface ChamberLockRecord {
 }
 
 export interface ChamberLockHandle {
-  /** 锁记录路径（诊断）。 */
   recordPath: string
   /** 释放（幂等；进程退出由内核兜底）。 */
   release(): void
@@ -59,15 +50,15 @@ export type ChamberLockResult =
 
 export interface AcquireChamberLockOptions {
   userDataDir: string
-  /** 注入平台（测试用；缺省 process.platform）。 */
+  /** 缺省 process.platform。 */
   platform?: NodeJS.Platform
-  /** 注入时间戳（测试用）。 */
+  /** 记录用时间戳（缺省 Date.now）。 */
   now?: number
-  /** 记录里的 shell 标识（诊断）。 */
+  /** 记录里的 shell 标识。 */
   shell?: string
 }
 
-/** 读取锁记录（诊断用；不存在/不可解析 → null）。 */
+/** 锁记录读取（诊断用；不存在/不可解析 → null）。 */
 export function readChamberLockRecord(recordPath: string): ChamberLockRecord | null {
   try {
     const parsed = JSON.parse(readFileSync(recordPath, 'utf8')) as Partial<ChamberLockRecord>
@@ -83,15 +74,13 @@ export function readChamberLockRecord(recordPath: string): ChamberLockRecord | n
 }
 
 /**
- * 取锁（darwin：O_EXLOCK 独占；非 darwin：unsupported 放行）。失败 fail-closed：
- * 调用方必须据此拒绝启动（另一 flavor 正持有同一 userData）。
+ * 取锁：失败 fail-closed，调用方必须据此拒绝启动（另一 flavor 正持有同一 userData）。
  */
 export function acquireChamberLock(options: AcquireChamberLockOptions): ChamberLockResult {
   const platform = options.platform ?? process.platform
   const recordPath = path.join(options.userDataDir, CHAMBER_LOCK_FILE)
   if (platform !== 'darwin') {
-    // 非 darwin 无 Swift flavor → 无跨 flavor 冲突；不创建锁文件（避免留下
-    // 误导性记录），由调用方 loud 记录平台范围。
+    // 无跨 flavor 冲突；不创建锁文件（避免留下误导性记录），由调用方 loud 记录平台范围。
     return {
       ok: true,
       unsupported: true,

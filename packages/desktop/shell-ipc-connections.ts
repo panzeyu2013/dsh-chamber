@@ -1,8 +1,7 @@
 /**
- * shell-ipc-connections — domain IPC registrations.
- * The handler bodies, registration order and error semantics live here; the shared
- * state/helpers arrive through ShellIpcCtx, the assembly-side deps through
- * ctx.deps.ctx.
+ * shell-ipc-connections — domain IPC registrations: handler bodies, registration
+ * order and error semantics live here; shared state/helpers arrive via ShellIpcCtx,
+ * assembly-side deps via ctx.deps.ctx.
  */
 import type { ShellIpcCtx } from './shell-core.ts'
 import type { ConnectionCredentialMutations } from './connection-save.ts'
@@ -24,21 +23,13 @@ import { gatewaySessionScopeForConnection } from './gateway-session.ts'
 export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
   const { deps, projectInstances } = ctx
   const { transportManager: sm, gatewaySessions, publishRegistryTransition, audit } = ctx.deps.ctx
-  // —— C 组 ——
-  // registry + 凭据 7 注册体（全零 Electron）。trustedIpc 围栏由装配侧在
-  // registrar 注入点包装；事务（connection-save）/ canonicalize
-  // （transport-provider）/ 凭据写入口（ssh/gateway-provider）与 session origin
-  // 纯函数（gateway-session*）为 electron-free 纯模块直接 import。凭据
-  // write-only 语义与「绝不回读」纪律保持：读侧只判存在性（!== null），值绝不
-  // 进入载荷/日志。装配依赖经 ctx：sm = transportManager 句柄（registry 读写
-  // + 状态/生命周期投影）、audit（非秘密审计叶）、gatewaySessions（会话
-  // invalidation 宿主面）、publishRegistryTransition（registry 变更生命周期
-  // sidecar——宿主对象与 SSH_INSTANCES_CHANGED push 文本在 main，本组注册体
-  // 经 ctx 调用）。
-  /** The gateway-session origin for a registered instance (design 17 §9.3
-   * per-origin session key): scheme from `insecureHttp`, explicit port —
-   * URL.origin normalizes default-port elision, so the cache key matches
-   * the registration baseUrl and the provider's probe origin. */
+  // —— C 组 ——registry + 凭据 7 注册体（全零 Electron；trustedIpc 围栏在装配侧注入点
+  // 包装）。事务/canonicalize/凭据写入口为纯模块直接 import。凭据 write-only：读侧只判
+  // 存在性（!== null），值绝不进入载荷/日志。装配依赖经 ctx：sm / audit /
+  // gatewaySessions / publishRegistryTransition。
+  /** 注册实例的 gateway-session origin（per-origin session key）：scheme 来自
+   *  insecureHttp、端口显式——URL.origin 会省默认端口，缓存 key 必须与注册 baseUrl
+   *  及探针 origin 一致。 */
   function gatewayOriginFor(spec: TransportInstanceSpec): GatewaySessionOrigin {
     return {
       baseUrl: `${spec.insecureHttp ? 'http' : 'https'}://${spec.host}:${spec.remotePort}`,
@@ -59,13 +50,11 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
     projectInstances(sm.listInstances())
   );
   /**
-   * Main-owned ADD/EDIT transaction for registry metadata plus every
-   * applicable write-only credential dimension. The renderer sends only
-   * NEW values; old values are snapshotted and compensated here, where
-   * they can never cross IPC. connection-save.ts stops the old live
-   * transport, writes binding-guarded secrets, writes metadata last, and
-   * restores every store plus metadata on any ordinary failure. Exact-id
-   * deletion has its own transaction/channel.
+   * Main-owned ADD/EDIT transaction for registry metadata plus every applicable
+   * write-only credential dimension: the renderer sends only NEW values, old values
+   * are snapshotted/compensated here and never cross IPC. connection-save.ts stops
+   * the old transport, writes binding-guarded secrets, writes metadata last, and
+   * restores all stores on ordinary failure. Exact-id deletion has its own channel.
    */
   deps.ipc.handle(IPC_CHANNELS.SSH_SAVE_CONNECTION, (payload: unknown) => {
     const before = sm.listInstances();
@@ -113,8 +102,7 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
         return refuse(`SSH password is limited to ${MAX_SSH_PASSWORD_CHARS} characters`);
       }
       if (!sshPasswordSupported()) {
-        // design 21 C15: Windows 密码认证不可用(askpass 需 PE 可执行)——门控
-        // 拒绝并给出主路径引导(密钥 / ssh-agent / Pageant)。
+        // Windows 密码认证不可用（askpass 需 PE 可执行）——拒绝并引导密钥/ssh-agent/Pageant。
         return refuse('SSH password auth is not supported on Windows yet — use a key or ssh-agent (Pageant) instead');
       }
     }
@@ -168,9 +156,7 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
       },
       disconnect: id => { sm.disconnect(id); },
       connect: id => {
-        // Password/session state must be invalidated before the replacement
-        // live gateway verifies; otherwise a credential edit could briefly
-        // reuse the old cached Cookie.
+        // 替换 transport 验证前先失效密码/会话状态，否则凭据编辑可能短暂复用旧缓存 Cookie。
         invalidateOldAndCurrentSessions();
         sm.connect(id);
       },
@@ -251,8 +237,7 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
     }
     return publishRegistryTransition(before, result.instances);
   });
-  // clear-only 准入的三个描述符：字段 / 拒绝文案 / 注册表读取各自显式——没有布尔开关，
-  // token 与 password 的独立性因此留在类型面上（design 17 §2.3）。
+  // clear-only 准入的三个描述符：字段 / 拒绝文案 / 注册表读取各自显式——没有布尔开关，token 与 password 的独立性因此留在类型面上。
   const CLEAR_ONLY_SSH_PASSWORD = {
     field: 'password',
     refusal: 'desktop_ssh_set_password is clear-only; use desktop_ssh_save_connection to set credentials',
@@ -268,19 +253,14 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
     refusal: 'desktop_gateway_set_password is clear-only; use desktop_ssh_save_connection to set credentials',
     list: () => sm.listInstances(),
   } as const;
-  // Legacy explicit SSH-password CLEAR action. Non-empty writes are owned
-  // exclusively by desktop_ssh_save_connection so metadata + all credential
-  // domains share one compensated transaction.
+  // Legacy SSH-password CLEAR：非空写入专属 save_connection，使 metadata + 全部凭据域共享一个补偿事务。
   deps.ipc.handle(IPC_CHANNELS.SSH_SET_PASSWORD, (payload: unknown) => {
     const admitted = admitClearOnly(CLEAR_ONLY_SSH_PASSWORD, payload);
     if (!admitted.ok) return { error: admitted.error };
     const { id, spec } = admitted;
-    // Clearing remains available on platforms where accepting a new SSH
-    // password is unsupported; non-empty writes never reach this handler.
+    // 不接受新 SSH 密码的平台上清除仍可用；非空写入永不进入本处理器。
     try {
-      // Rebuild only a live SSH transport so it stops using the cleared
-      // transport credential. Gateway/http transports are unaffected.
-      // Audit records only the credential kind, never its value.
+      // 只重建活的 SSH transport 使其停止使用已清除凭据；gateway/http 不受影响；审计只记凭据 kind 不记值。
       const hadPassword = getSshPassword(id) !== null;
       commitTransportCredentialUpdate(sm, id, status => status.transport === 'ssh', () => {
         setSshPassword(id, null, null);
@@ -300,18 +280,13 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
       return { error: describeError(error) };
     }
   });
-  // Legacy explicit gateway-token CLEAR action. Non-empty writes use the
-  // authoritative save_connection transaction above.
+  // Legacy gateway-token CLEAR：非空写入走上方权威 save_connection 事务。
   deps.ipc.handle(IPC_CHANNELS.GATEWAY_SET_TOKEN, (payload: unknown) => {
     const admitted = admitClearOnly(CLEAR_ONLY_GATEWAY_TOKEN, payload);
     if (!admitted.ok) return { error: admitted.error };
     const { id, spec } = admitted;
     try {
-      // Revoke the currently registered Authorization header BEFORE
-      // clearing the token. disconnect() synchronously emits the old
-      // gateway idle projection, so the control plane unregisters
-      // gateway:<id> before a replacement transport can register.
-      // Audit names the credential kind, never its value.
+      // 先撤销已注册的 Authorization header 再清 token：disconnect() 同步投影旧 gateway idle，控制面在替换 transport 注册前注销 gateway:<id>；审计只记 kind。
       const hadToken = getGatewayToken(id) !== null;
       commitTransportCredentialUpdate(sm, id, status => status.kind === 'gateway', () => {
         setGatewayToken(id, null, null);
@@ -331,16 +306,13 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
       return { error: describeError(error) };
     }
   });
-  // Legacy explicit gateway-password CLEAR action. It also invalidates the
-  // corresponding cached sessions; non-empty writes use save_connection.
+  // Legacy gateway-password CLEAR：同时失效对应缓存会话；非空写入走 save_connection。
   deps.ipc.handle(IPC_CHANNELS.GATEWAY_SET_PASSWORD, (payload: unknown) => {
     const admitted = admitClearOnly(CLEAR_ONLY_GATEWAY_PASSWORD, payload);
     if (!admitted.ok) return { error: admitted.error };
     const { id, spec } = admitted;
     try {
-      // Clearing a password invalidates every cached login session before
-      // the target can reconnect. Both direct and SSH origins are owned by
-      // the exact connection/target scope across historical local ports.
+      // 清除密码前失效全部缓存登录会话：直接与 SSH origin 都按连接/目标 scope 归属，跨历史 localPort。
       if (gatewaySessions === null) throw new Error('gateway session manager is unavailable');
       if (spec.transport === 'http') gatewaySessions.invalidate(gatewayOriginFor(spec));
       if (spec.transport === 'ssh') gatewaySessions.invalidateScope(gatewaySessionScopeForConnection(spec));
@@ -358,9 +330,7 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
         if (liveOrigin === null) throw new Error('invalid ready gateway session origin');
         gatewaySessions.invalidate(liveOrigin);
       }
-      // Same disconnect-before-clear discipline as the token handler: a
-      // live gateway target is rebuilt without the removed credential.
-      // Audit never records the password value.
+      // 与 token 处理器同样的 disconnect-before-clear：活 gateway 目标不带被删凭据重建；审计永不记录密码值。
       const hadPassword = getGatewayPassword(id) !== null;
       commitTransportCredentialUpdate(sm, id, status => status.kind === 'gateway', () => {
         setGatewayPassword(id, null, null);
@@ -381,18 +351,10 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
     }
   });
 
-  // —— D 组 ——
-  // ssh 连接状态 7 注册体（全零 Electron）。trustedIpc 围栏由装配侧在 registrar
-  // 注入点包装。CONFIG_LIST：~/.ssh/config 非秘密投影（alias/hostName/user/port——
-  // keys/proxies/credentials 绝不离开主进程），经纯模块 ssh-config.ts 的
-  // discoverSshConfigHosts 直接 import；CONNECT / DISCONNECT /
-  // STATUS / REVERIFY / LOGS / LOGS_CLEAR 全走 ctx 注入的 transportManager
-  // 句柄（sm；Pick 面扩 reverify/logs/clearLogs，见 ShellAssemblyCtx）。
-  // status/logs 的非秘密投影纪律保持（localPort/phase 等元数据可读；URL/密钥
-  // 绝不进投影/载荷/日志）。
-  // ~/.ssh/config discovery (design 05 §5): non-secret host projections only
-  // (alias/hostName/user/port) — keys/proxies/credentials never leave the
-  // main process.
+  // —— D 组 ——ssh 连接状态 7 注册体（全零 Electron）。CONFIG_LIST 经纯模块
+  // discoverSshConfigHosts 直接 import（~/.ssh/config 非秘密投影：alias/hostName/
+  // user/port 可读，keys/proxies/credentials 绝不离开主进程）；其余 6 个走 ctx 的
+  // sm 句柄（Pick 扩 reverify/logs/clearLogs）。status/logs 同样只投影非秘密元数据。
   deps.ipc.handle(IPC_CHANNELS.SSH_CONFIG_LIST, () => discoverSshConfigHosts());
   deps.ipc.handle(IPC_CHANNELS.SSH_CONNECT, (payload: unknown) => {
     const { id } = payload as { id: string };
@@ -407,18 +369,14 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
     const { id } = payload as { id: string };
     return sm.status(id);
   });
-  // On-demand ready-state re-verification (user activation of a source/
-  // session): one immediate identity probe for a READY transport — a dead
-  // gateway session or remote endpoint flips the phase within one probe
-  // round-trip instead of waiting for the periodic heartbeat (transport-
-  // manager reverify; see READY_VERIFY_INTERVAL_MS).
+  // 按需 ready 态复验（用户激活来源/会话）：对 READY transport 做一次即时身份探针，
+  // 死会话/端点在一个往返内翻相位，不等待周期心跳。
   deps.ipc.handle(IPC_CHANNELS.SSH_REVERIFY, (payload: unknown) => {
     const { id } = payload as { id: string };
     return sm.reverify(id);
   });
-  // 环形日志读/清（transport-manager ring buffer）：LOGS 返回有界环形日志
-  // （非秘密——logSummary 等元数据；URL/密钥纪律同 status 投影），LOGS_CLEAR
-  // 清空该实例环形日志。
+  // 环形日志读/清：LOGS 返回有界非秘密日志（URL/密钥纪律同 status 投影），
+  // LOGS_CLEAR 清空该实例环形日志。
   deps.ipc.handle(IPC_CHANNELS.SSH_LOGS, (payload: unknown) => {
     const { id } = payload as { id: string };
     return sm.logs(id);
@@ -428,22 +386,12 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
     return sm.clearLogs(id);
   });
 
-  // —— E 组 ——
-  // exec/systemd 4 注册体（SSH_START_SERVICE / SSH_STOP_SERVICE / SSH_IS_ACTIVE
-  // / SSH_RESTART_SERVICE，全零 Electron）。装配依赖经 ctx：transportManager（sm）的 exec
-  // 面（Pick 扩 exec——装配侧注入完整现实例）。restart 注册体直用 sm.exec
-  // （plugin-sync 的 ExecFn 别名 execTransport 即 sm.exec 的 as unknown 收窄，
-  // 为适配 plugin-sync 自身的执行契约）。systemctl argv 固定参数数组
-  // `systemctl <action> -- <serviceName>` 与服务名白名单（`^[a-zA-Z0-9]
-  // [a-zA-Z0-9_.-]*$`、首字符字母数字；design 02 §3.9）是 ssh-provider
-  // provider exec 的纯逻辑（白名单拒绝发生在任何 spawn 前），generation 复验
-  // 纪律（exec 结果/status/serviceActive 提交前经 execIsCurrent 复验，防旧代
-  // 污染）在 transport-manager exec 实现内（execEpoch/execIdentityChanged）
-  // ——均在纯模块内部；注册体只做结果投影：
-  // Provider exec channel (design 05 §7.4, ssh: remote systemd): the fresh
-  // status projection on success (serviceActive included), {error} on
-  // failure — loud, never a silent empty success, never an unhandled
-  // rejection.
+  // —— E 组 ——exec/systemd 4 注册体（全零 Electron）。装配依赖经 ctx 的 sm exec 面
+  // （Pick 扩 exec）。restart 直用 sm.exec（plugin-sync 的 ExecFn 别名即 sm.exec 收窄）。
+  // systemctl 固定参数数组与服务名白名单是 ssh-provider 的纯逻辑（白名单拒绝在任何
+  // spawn 前），generation 复验（execIsCurrent/execEpoch）在 transport-manager exec
+  // 实现内——均在纯模块内部；注册体只做结果投影：成功给最新 status（含 serviceActive），
+  // 失败 loud {error}，绝不静默空成功、绝不未处理 rejection。
   deps.ipc.handle(IPC_CHANNELS.SSH_START_SERVICE, (payload: unknown) => {
     const { id } = payload as { id: string };
     return sm.exec(id, 'start').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${describeUnknownError(err)}` }));
@@ -456,11 +404,8 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
     const { id } = payload as { id: string };
     return sm.exec(id, 'is-active').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${describeUnknownError(err)}` }));
   });
-  // SSH_RESTART_SERVICE（design 13 的 ssh 服务重启腿）：
-  // 语义同 provider exec channel——成功时投影最新 status（服务重启的即时
-  // 状态；transport exec 的 ok 分支恒带 status，此处 ?? 兜底为 plugin-sync
-  // ExecResult 契约保留的防御分支，运行时不可达）；
-  // 失败 loud {error}。
+  // SSH_RESTART_SERVICE：语义同 provider exec channel——成功投影最新 status（ok 分支
+  // 恒带 status，?? 兜底为 ExecResult 契约的防御分支），失败 loud {error}。
   deps.ipc.handle(IPC_CHANNELS.SSH_RESTART_SERVICE, (payload: unknown) => {
     const { id } = payload as { id: string };
     return sm.exec(id, 'restart').then(result =>

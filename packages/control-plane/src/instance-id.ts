@@ -1,8 +1,7 @@
 /**
- * Control-plane instance identity (design 02 §2.5): one durable UUID at
- * <stateDir>/instance-id. The exclusive-create name is visible before its
- * writer has completed the file fsync, so concurrent first starts retry a
- * bounded in-progress window and then share the winner's validated UUID.
+ * Control-plane instance identity: one durable UUID at <stateDir>/instance-id.
+ * The exclusive-create name becomes visible before its writer finishes the file
+ * fsync, so concurrent first starts retry a bounded window then share the winner.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -35,9 +34,8 @@ export function isValidInstanceId(value: string): boolean {
 function invalidInstanceId(file: string, observed: string): Error & { code: string; transient: boolean } {
   return Object.assign(new Error(`instance-id must contain exactly one UUID: ${file}`), {
     code: 'instance_id_invalid',
-    // An O_EXCL winner may be observed while its canonical 36-byte UUID is
-    // still being written. A full-width invalid value is stable evidence and
-    // must fail immediately instead of imposing the whole retry window.
+    // An O_EXCL winner may be observed before its UUID is fully written; a
+    // full-width invalid value is stable evidence and fails immediately.
     transient: observed.length < 36,
   })
 }
@@ -45,8 +43,7 @@ function invalidInstanceId(file: string, observed: string): Error & { code: stri
 function readValidatedInstanceId(file: string): string {
   const value = readPrivateFileNoFollow(file, {
     maxBytes: INSTANCE_ID_MAX_BYTES,
-    // Startup is a write-capable owner path: explicitly migrate the legacy
-    // umask-derived mode, then verify the pinned inode is owner-only.
+    // Startup (write-capable owner) migrates the legacy umask-derived mode, then verifies the pinned inode is owner-only.
     tightenMode: 0o600,
     requiredMode: 0o600,
   }).value.trim()
@@ -77,8 +74,7 @@ export function ensureInstanceId(stateDir: string, deps: InstanceIdDeps = {}): s
     if (delayMs > 0) Atomics.wait(sleepCell, 0, 0, delayMs)
   })
 
-  // This helper owns a newly-created root (0700), but does not silently chmod
-  // an existing caller-selected control-plane root as a read side effect.
+  // Owns a newly-created root (0700); never chmods an existing caller-selected root as a read side effect.
   ensurePrivateDirectoryNoFollow(stateDir, 0o700, { existingMode: 'preserve' })
 
   let candidate: string | null = null
@@ -97,8 +93,7 @@ export function ensureInstanceId(stateDir: string, deps: InstanceIdDeps = {}): s
           return candidate
         } catch (createError) {
           if ((createError as NodeJS.ErrnoException).code !== 'EEXIST') throw createError
-          // Another creator owns the visible name. It may still be between
-          // O_EXCL and its file fsync; only that bounded state is retried.
+          // Another creator owns the visible name, possibly between O_EXCL and fsync.
           lastError = createError
         }
       } else if (isTransientCompetingRead(error)) {

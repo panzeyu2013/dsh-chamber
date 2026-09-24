@@ -1,7 +1,6 @@
 /**
- * The add/edit connection form modal. DOM anchors, dictionary keys, event
- * order and CSS classes stay as declared; every value the body closes over is
- * an explicit prop.
+ * The add/edit connection form modal. DOM anchors, dictionary keys, event order and CSS classes
+ * stay as declared; every value the body closes over is an explicit prop.
  */
 import type { Dispatch, ReactNode, SetStateAction } from 'react'
 import type { SshConfigHost, SshInstanceSpec } from '../global.d.ts'
@@ -74,9 +73,7 @@ export function ConnectionFormModal({
           ? null
           : (
             <div className={css.dialogFields}>
-              {/* Target edit: the main-owned transaction refuses credential
-                  reuse and requires each stored dimension independently;
-                  warn before save (see validation). */}
+              {/* Target edit: the main-owned transaction refuses credential reuse and requires each stored dimension independently; warn before save. */}
               {(() => {
                 const reentry = credentialReentryEdit(editing, draft)
                 return reentry.sshPassword || reentry.gatewayToken || reentry.gatewayPassword
@@ -91,10 +88,8 @@ export function ConnectionFormModal({
                     className={clsx(css.input, css.selectArrow)}
                     value={draft.kind}
                     onChange={event => {
-                      // Target and transport are independent dimensions. The
-                      // pure helper preserves the selected transport, adjusts
-                      // only still-defaulted ports, and clears transient values
-                      // that belong to the old target.
+                      // Target and transport are independent dimensions. The pure helper preserves the selected
+                      // transport, adjusts only still-defaulted ports, and clears transient values of the old target.
                       setDraft(changeDraftKind(draft, event.target.value as TransportKind))
                       setFieldErrors({})
                       setFormError(null)
@@ -214,8 +209,7 @@ export function ConnectionFormModal({
                         onChange={event => { setDraft(changeDraftEndpointUrl(draft, event.target.value)) }}
                       />
                       {fieldErrors.gatewayUrl === undefined ? null : <span className={css.error} role="alert">{fieldErrors.gatewayUrl}</span>}
-                      {/* 非拦截安全姿态提示 (design 17 §13.1)：http 明文是
-                          显式用户决策，如实注明、绝不前置拦截。 */}
+                      {/* 非拦截安全姿态提示：http 明文是显式用户决策，如实注明、绝不前置拦截。 */}
                       {/^http:\/\//i.test(draft.gatewayUrl.trim())
                         ? <span className={css.warnHint}>{t('gatewayUrlHttpHint')}</span>
                         : null}
@@ -233,9 +227,7 @@ export function ConnectionFormModal({
                         </div>
                       )
                       : null}
-                    {/* Gateway authentication is target-owned and works over
-                        both transports. dsh+http deliberately has no auth or
-                        SPKI surface. */}
+                    {/* Gateway authentication is target-owned and works over both transports; dsh+http deliberately has no auth or SPKI surface. */}
                     {draft.kind === 'gateway'
                       ? (
                         <div className={css.spanContents}>
@@ -282,11 +274,7 @@ export function ConnectionFormModal({
                       />
                       {fieldErrors.user === undefined ? null : <span className={css.error} role="alert">{fieldErrors.user}</span>}
                     </label>
-                    {/* SSH transport authentication is independent of target
-                        authentication. gateway+ssh therefore renders this
-                        field AND the GatewayAuthFields below.
-                        HTML 规范：清除按钮与输入框同处 label 会污染输入框
-                        可访问名称——故外层用 div。 */}
+                    {/* SSH transport authentication is independent of target authentication; gateway+ssh renders this field AND GatewayAuthFields. HTML 规范：清除按钮与输入框同处 label 会污染输入框可访问名称——故外层用 div。 */}
                     <div className={clsx(css.field, css.spanAll)}>
                       <span className={css.fieldLabelRow}>
                         <label className={css.fieldLabel} htmlFor={sshPasswordFieldId}>{t('fieldPassword')}</label>
@@ -347,9 +335,7 @@ export function ConnectionFormModal({
                       {fieldErrors.sshPort === undefined ? null : <span className={css.error} role="alert">{fieldErrors.sshPort}</span>}
                     </label>
                     <label className={css.field}>
-                      {/* The ssh remote port label/placeholder follows the
-                          TARGET kind (P3-2): dsh listens on 30800, a gateway
-                          on 30801 next to it. */}
+                      {/* The ssh remote port label/placeholder follows the TARGET kind: dsh listens on 30800, a gateway on 30801 next to it. */}
                       <span className={css.fieldLabel}>{draft.kind === 'gateway' ? t('gatewayPort') : t('fieldRemotePort')}</span>
                       <input
                         className={css.input}

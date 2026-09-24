@@ -1,29 +1,21 @@
 /**
- * Page-level client-plugin bundle loader (design 09 §3.2 union table).
+ * Page-level client-plugin bundle loader.
  *
- * WHY THIS MODULE EXISTS (single source): the chamber page executes a source's
- * `dsh.client` bundles in the per-instance shell boot
- * (`packages/renderer/src/host-graph.ts`, which preloads every non-covered
- * graph row before the boot kernel materializes entries); the settings panel
- * renders the source's own boot-ctx ledger and loads nothing. That path needs
- * the SAME page-level bookkeeping: one script execution per combo URL, one
- * factory claim per plugin id (first-load-wins), timeout tombstones that keep
- * observing a script that outlived its request budget, and honest rev-conflict
- * facts.
- * Duplicating that logic would drift; this module owns it and the boot path
- * delegates here.
+ * Single source: the page executes a source's `dsh.client` bundles in the
+ * per-instance shell boot (`renderer/src/host-graph.ts` preloads every non-covered
+ * graph row before the boot kernel materializes entries); the settings panel renders
+ * the source's own boot-ctx ledger and loads nothing. That path needs the SAME
+ * page-level bookkeeping — one script execution per combo URL, one factory claim per
+ * plugin id (first-load-wins), timeout tombstones that keep observing a script that
+ * outlived its request budget, and honest rev-conflict facts — and this module owns
+ * it.
  *
- * The page module table itself is shared across cordis contexts
- * (`dsh-client-web` boot.ts `ensureWebModuleSystem` parks it on
- * `window.__DSH_MODULES__`), so a factory loaded here is reusable by every
- * context on the page — that is the union-table model, and it is why a
- * plugin's module instance may back more than one fiber (documented contract:
- * plugin modules must be stateless at module scope; all state belongs to
- * `ctx.effect`/services).
- *
- * Zero dsh package imports on purpose (this face is consumed by the plain-node
- * renderer tests, the browser renderer, and the settings bridge): the module
- * table is typed structurally, the diagnostic shape is imported type-only.
+ * The page module table is shared across cordis contexts (`dsh-client-web` boot.ts
+ * parks it on `window.__DSH_MODULES__`), so a factory loaded here is reusable by
+ * every context on the page — a plugin's module instance may back more than one fiber
+ * (plugin modules must be stateless at module scope; state belongs to
+ * `ctx.effect`/services). Zero dsh package imports on purpose: the table is typed
+ * structurally and the diagnostic shape is imported type-only.
  */
 import type { PluginGraphDiagnostic } from './aggregate-store.ts'
 import { assertSingletonModule } from './singleton.ts'
@@ -40,24 +32,20 @@ export interface ClientPluginRow {
   rev: string
   /**
    * Package-level dependency edges (the graph row's `inject`), carried through
-   * verbatim. The boot kernel treats this as pass-through data.
+   * verbatim; the boot kernel treats this as pass-through data.
    */
   inject?: readonly string[]
 }
 
 /**
- * A module element can still execute after its request-level timeout. The
- * explicit type keeps that one exceptional lifecycle distinct from ordinary
- * load failures without inspecting arbitrary thrown objects.
+ * A module element can still execute after its request-level timeout. The explicit
+ * type keeps that exceptional lifecycle distinct from ordinary load failures.
  */
 export class BundleLoadTimeoutError extends Error {
   /** Resolves the ORIGINAL element's eventual outcome (true = it loaded). */
   readonly bundleOutcome: Promise<boolean>
 
-  /**
-   * @param message - failure text.
-   * @param bundleOutcome - the still-pending element outcome.
-   */
+  /** @param bundleOutcome - the still-pending element outcome (message = failure text). */
   constructor(message: string, bundleOutcome: Promise<boolean>) {
     super(message)
     this.name = 'BundleLoadTimeoutError'
@@ -66,11 +54,9 @@ export class BundleLoadTimeoutError extends Error {
 }
 
 /**
- * Drop the rows the chamber composite already covers (design 09 §3.3):
- * loading a covered row again would double-register the same plugin on one
- * cordis ctx — this filter is load-bearing, not an optimization.
- * @param rows - the source's raw graph rows.
- * @param covered - covered ids (renderer `CHAMBER_COVERED_IDS`).
+ * Drop the rows the chamber composite already covers: loading a covered row again
+ * would double-register the same plugin on one cordis ctx — this filter is
+ * load-bearing, not an optimization.
  * @returns the kept rows, input order preserved.
  */
 export function dedupeCoveredRows<T extends ClientPluginRow>(
@@ -130,23 +116,17 @@ function messageOf(error: unknown): string {
 }
 
 /**
- * Load the given rows' bundles into the page module table, returning one
- * verdict per row. Semantics:
- *
- * - the id's FIRST loader owns the execution; a later consumer of the same id
- *   at the same rev awaits that same execution (never a second script);
+ * Load the given rows' bundles into the page module table, returning one verdict per
+ * row:
+ * - the id's FIRST loader owns the execution; a later consumer of the same id at the
+ *   same rev awaits that same execution (never a second script);
  * - a later consumer at a DIFFERENT rev reuses the loaded factory and reports
  *   `restart` (same source) or `version` (another source) — the page keeps the
  *   first factory;
- * - an ordinary failure clears the combo + its id records so a later load (or
- *   the caller's recovery pass) may retry;
- * - a DOM-script timeout leaves a tombstone observing the original element:
- *   a late load converts it to success, a late error clears it.
- *
- * @param sourceId - the source the rows belong to (first-load-wins owner).
- * @param rows - the rows to load (duplicates and shared combo URLs allowed).
- * @param deps - the transport + optional diagnostic sink.
- * @param options - failure policy for the calling context.
+ * - an ordinary failure clears the combo + its id records so a later load (or the
+ *   caller's recovery pass) may retry;
+ * - a DOM-script timeout leaves a tombstone observing the original element: a late
+ *   load converts it to success, a late error clears it.
  * @returns one outcome per row, in completion order.
  */
 export async function loadClientPluginRows<T extends ClientPluginRow>(
@@ -168,9 +148,9 @@ export async function loadClientPluginRows<T extends ClientPluginRow>(
         })
         return
       }
-      // Await the ORIGINAL load (read live off the combo record): a
-      // still-pending or tombstoned load must fail THIS caller loud too, and a
-      // late-success conversion of the shared load is observed by later calls.
+      // Await the ORIGINAL load (read live off the combo record): a still-pending or
+      // tombstoned load must fail THIS caller loud too, and a late-success conversion
+      // is observed by later calls.
       try {
         await owned.combo.load
       } catch (error) {
@@ -191,28 +171,26 @@ export async function loadClientPluginRows<T extends ClientPluginRow>(
     }
     let combo = preloadedCombos.get(row.url)
     if (combo === undefined) {
-      // Promise.resolve().then also normalizes a synchronously throwing
-      // transport into the same shared rejected promise.
+      // Promise.resolve().then also normalizes a synchronously throwing transport into
+      // the same shared rejected promise.
       combo = {
         ids: new Set(),
         load: Promise.resolve().then(() => deps.loadBundle(row.url)),
       }
       preloadedCombos.set(row.url, combo)
     }
-    // Publish the ownership BEFORE the load (a concurrent row for the same id
-    // must await the shared execution, never start its own) and fold this id
-    // into the combo's rollback set. The url-level map is what dedupes a
-    // multi-id combo: rows sharing one url await ONE load.
+    // Publish ownership BEFORE the load (a concurrent row for the same id must await
+    // the shared execution) and fold this id into the combo's rollback set; the
+    // url-level map dedupes a multi-id combo (rows sharing one url await ONE load).
     combo.ids.add(row.id)
     preloadedIds.set(row.id, { rev: row.rev, combo, ownerSourceId: sourceId })
     try {
       await combo.load
       outcomes.push({ state: 'loaded', row })
     } catch (error) {
-      // Preload failure must not be marked permanently (the module system does
-      // not re-fetch extra bundles on its own): the combo record is the owner,
-      // so a retry installs a NEW record for the same url and a later catch in
-      // another waiter of the old promise must not clear the new one.
+      // A preload failure must not be marked permanently (the module system does not
+      // re-fetch extra bundles): the combo record is the owner, so a retry installs a NEW
+      // record for the same url and a later catch must not clear the new one.
       const bundleOutcome = error instanceof BundleLoadTimeoutError ? error.bundleOutcome : null
       const clearCombo = (): void => {
         if (preloadedCombos.get(row.url) !== combo) return
@@ -229,9 +207,8 @@ export async function loadClientPluginRows<T extends ClientPluginRow>(
         }
         throw error
       }
-      // DOM-script timeout: removing the element does not reliably cancel its
-      // fetch, so leave the tagged tombstone attached and observe the eventual
-      // outcome (late load → success, late error → a later retry is safe).
+      // DOM-script timeout: removing the element does not reliably cancel its fetch, so
+      // leave the tagged tombstone attached and observe the eventual outcome.
       void bundleOutcome.then(
         succeeded => {
           if (preloadedCombos.get(row.url) !== combo) return

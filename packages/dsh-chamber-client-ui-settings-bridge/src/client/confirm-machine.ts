@@ -1,23 +1,17 @@
 /**
  * Armed-confirmation state machine.
  *
- * One destructive action at a time: a request is ARMED (a dialog opens), then
- * either CANCELled (nothing runs — the request is dropped before its runner is
- * ever called) or ACCEPTed (the runner is launched exactly once, and the dialog
- * becomes a non-dismissible progress surface until the action settles).
+ * One destructive action at a time: a request is ARMED (a dialog opens), then either
+ * CANCELled (nothing runs — the request is dropped before its runner is ever called) or
+ * ACCEPTed (the runner is launched exactly once, and the dialog becomes a
+ * non-dismissible progress surface until the action settles).
  *
- * An accept re-validates the armed request first: a request may carry a
- * `stillValid` hook that reads the CURRENT facts, and a request that fails it is
- * dropped WITHOUT running (the caller reports the drop). An action armed while
- * the world happened to be idle could otherwise still reach the wire after the
- * world moved on — the dialog outlives the render it was armed in, and this
- * section's status is polled.
- *
- * The machine is pure so the invariant that matters — no action reaches the wire
- * without an accept, and an accept launches exactly one runner — is pinned by
- * plain unit tests (test/runtime/confirm-machine-guards.test.ts) instead of DOM rendering: the
- * dsh runtime section both arms (its own gateway mutations) and is armed for it
- * (the shared restart path), so the same transition set serves both.
+ * An accept re-validates the armed request first: a request may carry a `stillValid` hook
+ * that reads the CURRENT facts, and a request that fails it is dropped WITHOUT running.
+ * The dialog outlives the render it was armed in and the section's status is polled, so
+ * an action armed while the world was idle could otherwise still reach the wire after the
+ * world moved on. The machine is pure so the invariant — no action reaches the wire
+ * without an accept, and an accept launches exactly one runner — is pinned by unit tests.
  */
 
 /** The part of an armed request the machine drives: the action to launch on accept. */
@@ -25,12 +19,10 @@ export interface ConfirmRunner {
   /** The confirmed action. It owns its own failure reporting. */
   run: () => Promise<void>
   /**
-   * Re-validation hook consulted by `acceptConfirm` immediately before the
-   * runner would be launched. It MUST read the live
-   * facts of its action, never the render-scope values its request was armed
-   * with — the armed request outlives the render that created it, so a closed
-   * guard at arm time says nothing about the world at accept time. `false` drops
-   * the request unrun. A request without the hook is accepted as armed.
+   * Re-validation hook consulted by `acceptConfirm` immediately before the runner would
+   * be launched. It MUST read the live facts of its action, never the render-scope values
+   * its request was armed with — the request outlives the render that created it. `false`
+   * drops the request unrun; a request without the hook is accepted as armed.
    */
   stillValid?: (() => boolean) | undefined
 }
@@ -68,12 +60,10 @@ export function armConfirm<R extends ConfirmRunner>(request: R): ConfirmState<R>
 }
 
 /**
- * Dismiss the dialog. A cancel performs NOTHING: the request is dropped and its
- * runner is never called. While the action is already running the dialog is a
- * progress surface, so a dismiss is ignored rather than implying a cancellation
- * that does not exist.
- * @param state - the current machine state.
- * @returns the next state (the same object while pending).
+ * Dismiss the dialog. A cancel performs NOTHING: the request is dropped and its runner
+ * is never called. While the action is already running the dialog is a progress
+ * surface, so a dismiss is ignored rather than implying a cancellation that does not
+ * exist (the same object is returned while pending).
  */
 export function cancelConfirm<R extends ConfirmRunner>(state: ConfirmState<R>): ConfirmState<R> {
   return state.pending ? state : { request: null, pending: false }
@@ -83,15 +73,11 @@ export function cancelConfirm<R extends ConfirmRunner>(state: ConfirmState<R>): 
  * Accept the armed request: re-validate it, then hand its runner to the caller's
  * `launch` EXACTLY once and move the machine into its pending state.
  *
- * A second accept — a same-frame double click included — is a no-op, and an
- * accept with nothing armed launches nothing. An armed request whose
- * `stillValid` hook reports `false` is dropped unrun (`outcome: 'dropped'`): the
- * caller must report that drop, never swallow it, because the user's confirm
- * click has to end in either the action or an honest refusal.
- * @param state - the current machine state.
- * @param launch - receives the runner to start (the component starts it and
- * settles the machine; tests pass a spy).
- * @returns the outcome plus the next state.
+ * A second accept — a same-frame double click included — is a no-op, and an accept
+ * with nothing armed launches nothing. A request whose `stillValid` hook reports
+ * `false` is dropped unrun (`outcome: 'dropped'`): the caller must report that drop,
+ * never swallow it, because the user's confirm click has to end in either the action
+ * or an honest refusal.
  */
 export function acceptConfirm<R extends ConfirmRunner>(
   state: ConfirmState<R>,

@@ -1,11 +1,8 @@
 /**
- * 事实源生命周期簇：gateway 只读事实源（session-facts-source）与 SSH/dsh 远端
- * 无壳观察者（source-mux-facts）的创建 / 收敛 / 退订，外加两条与事实账本同域的
- * 全局监听（focus/blur 重算未读、pagehide/hidden 落盘 flush）。整段原样抽出。
- *
- * 稳定签名（id + 化身指纹 + connected）决定重探/停流；所有判定与状态仍在既有
- * 纯模块与 App 的 ref/state 容器里，本 hook 只做订阅生命周期装配。
- * Hook 调用位置、useMemo/useEffect 依赖数组与顺序与抽出前逐字一致。
+ * 事实源生命周期簇：gateway 只读事实源与 SSH/dsh 远端无壳观察者的创建/收敛/退订，
+ * 外加 focus/blur 重算未读与 pagehide/hidden 落盘 flush 两条全局监听。
+ * 稳定签名（id + 化身指纹 + connected）决定重探/停流；判定与状态仍在既有纯模块与 App
+ * 的 ref/state 容器里，本 hook 只做订阅生命周期装配。
  */
 import { useCallback, useEffect, useMemo, useRef, type Dispatch, type SetStateAction } from 'react'
 import type { ChamberServerAggregate, InstanceRuntimeReport } from '@dsh-chamber/dsh-chamber-client-core'
@@ -55,9 +52,8 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
   serversRef.current = servers
 
   /**
-   * 行刷新提示：facts 的 session-added/removed/changed
-   * ⇒ 该来源一次 unary 聚合拉取（行权威仍在聚合，不做第二行源）。四拒：
-   * 未连接 / unverified / 在途 / 1s floor（source-refresh-hint.ts 纯判定）。
+   * 行刷新提示：facts 的 session-added/removed/changed ⇒ 该来源一次 unary 聚合拉取
+   * （行权威仍在聚合，不做第二行源）。四拒：未连接 / unverified / 在途 / 1s floor。
    */
   const requestFactsRefresh = useCallback((sourceId: string): void => {
     const server = serversRef.current.find(candidate => candidate.id === sourceId)
@@ -73,10 +69,8 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
     void refreshAggregateRef.current(sourceId)
   }, [])
 
-  /**
-   * facts 生命周期的稳定签名：来源 id + 化身指纹 + connected。指纹变化 =
-   * 新化身（重探、旧判定作废）；connected 边沿 = 重探 / 停流。
-   */
+  /** facts 生命周期稳定签名：来源 id + 化身指纹 + connected；指纹变化 = 新化身，
+   *  connected 边沿 = 重探/停流。 */
   const gatewayFactsSpec = useMemo(
     () => servers
       .filter(server => server.kind === 'gateway')
@@ -125,10 +119,9 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
   }, [gatewayFactsSpec, applySessionFacts, requestFactsRefresh])
 
   /**
-   * SSH / 其它 dsh 远端来源的**无壳观察者**。网关来源有只读镜像，这些来源没有——
-   * 关壳期间没有任何事实通道，完成会丢。观察者讲实例自己的远程协议（经控制面既有无鉴权
-   * 实例代理），产出的快照与 gateway 事实源**同形**，因此直接喂同一条 applySessionFacts
-   * 管线（同一份事实、同一套未读判定），不需要第二条判定路径。只观察：永不结算瀑布。
+   * SSH / 其它 dsh 远端来源的**无壳观察者**：这些来源没有只读镜像，关壳期间没有事实
+   * 通道，完成会丢。观察者讲实例自己的远程协议，产出的快照与 gateway 事实源**同形**，
+   * 直接喂同一条 applySessionFacts 管线（同一份事实、同一套未读判定）；只观察，永不结算瀑布。
    */
   const sourceMuxSpec = useMemo(
     () => servers
@@ -163,8 +156,7 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
     }
   }, [sourceMuxSpec, applySessionFacts])
 
-  // 焦点参与「正在阅读」谓词：focus/blur 只重算来源账本，
-  // 不回退读标记（「已读」是单向的）。
+  // 焦点参与「正在阅读」谓词：focus/blur 只重算账本，不回退读标记（已读单向）。
   useEffect(() => {
     const onFocusChange = (): void => {
       const ids = new Set<string>([...sessionFactsSourcesRef.current.keys(), ...Object.keys(runtimeFactsRef.current)])

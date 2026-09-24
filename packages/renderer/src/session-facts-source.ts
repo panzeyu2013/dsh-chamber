@@ -1,33 +1,18 @@
 /**
- * Gateway session-state facts source。
- *
- * 只读事实源，**浏览器安全**（零 Node import；只用 fetch / ReadableStream /
- * 定时器；测试全部经注入的 fetchImpl 驱动）：
- *   - 探测 GET  {base}/chamber/session-state（每来源单飞、一次、Abort 超时）；
- *   - 分类**粗粒度**且只有一份：classifySessionFactsProbe 是本客户端唯一分类器
- *     （权威分类器在 packages/control-plane/src/session-state-protocol.ts，两者的
- *     状态语义逐条对齐；本包不能 import 它：exports map 只有 "." 且 barrel 拉
- *     Node 代码）。probe 与流恢复重取**都**调用它，模块内不得再内联一份判定：
- *       404 ⇒ legacy-gateway；503 + session_state_disabled / mode off ⇒
- *       watcher-disabled；其余非 ok ⇒ degraded；2xx 且 protocol 命中 ⇒ ok。
- *     共享字面量由 test/session-state/session-facts-source.test.ts 的源文本锁步测试
- *     对着该模块钉住（route 路径 / protocol / session_state_disabled / serviceable /
- *     completedAtSource），两侧不得静默漂移；
- *   - mode === 'sse' 时消费 SSE 增量（sync / session-state / resync，id 单调游标，
- *     重连带 Last-Event-ID；心跳注释帧只用于活性）；
- *   - mode === 'poll' 时按 pollIntervalMs 重取快照（降级不静默）；
- *   - 静默超时（连在、事件停）⇒ 关流重订阅并整量重取快照，期间标 stale。
- *   - ack 上行（/read、/read-all）失败（网络错误 / 5xx）进 unread-store 的
- *     有界待发表；probe 快照 / SSE sync·增量·心跳任一「通道恢复」点重放，
- *     成功才出队。重放幂等（服务端单调 max），且绝不阻塞读推进。
- *
- * 行数据只承载会话元数据（sessionId / running / pendingKind / 水位），**绝不**
- * 带 title/cwd/消息（隐私条）。判定输入（completedAt/updatedAt/
- * lastTurnEnd）刻意留在本模块产物里，不过侧栏投影（derive.ts 的反 churn 纪律）。
+ * Gateway session-state facts source。只读、浏览器安全（零 Node import；只用 fetch /
+ * ReadableStream / 定时器）。分类**粗粒度且只有一份**：classifySessionFactsProbe 是本
+ * 客户端唯一分类器（权威分类器在 control-plane 的 session-state-protocol，状态语义逐条
+ * 对齐；本包不能 import 它）；probe 与流恢复重取都调用它，模块内不得再内联判定：
+ * 404 ⇒ legacy-gateway；503 + session_state_disabled / mode off ⇒ watcher-disabled；
+ * 其余非 ok ⇒ degraded；2xx 且 protocol 命中 ⇒ ok。共享字面量（route 路径 / protocol /
+ * session_state_disabled / serviceable / completedAtSource）是跨包单一来源，不得本地改写。
+ * mode === 'sse' 消费 SSE 增量（id 单调游标，重连带 Last-Event-ID；心跳只作活性）；
+ * mode === 'poll' 按 pollIntervalMs 重取快照；静默超时 ⇒ 关流重订阅并整量重取，期间标
+ * stale。ack 上行失败进 unread-store 有界待发表，通道恢复点重放，成功才出队（幂等，
+ * 绝不阻塞读推进）。行数据只承载会话元数据，**绝不**带 title/cwd/消息。
  */
 
-/** 快照路由后缀；与 control-plane/src/session-state-protocol.ts 的
- *  SESSION_STATE_PATH 逐字节相同（源文本锁步测试钉住）。 */
+/** 快照路由后缀；与 control-plane 的 SESSION_STATE_PATH 逐字节相同（跨包锁步，不得本地改写）。 */
 export const SESSION_FACTS_ROUTE = '/chamber/session-state'
 export const SESSION_FACTS_STREAM_ROUTE = '/chamber/session-state/stream'
 export const SESSION_FACTS_READ_ROUTE = '/chamber/session-state/read'
@@ -43,19 +28,16 @@ export const SESSION_FACTS_DISABLED_CODE = 'session_state_disabled'
 export const SESSION_FACTS_PROBE_TIMEOUT_MS = 5_000
 
 /**
- * 流建连/首字节 deadline：同一条 HTTP 通道上的同类等待，与 probe 同预算。
- * 到点按「流断开」收口（abort + markStale + 诊断 + 有界重连）——半死隧道下
- * 裸 fetch 可能永不落定，没有它这条流会带着 streamStarted=true 永久楔死：
- * 无 stale、无重连、该来源未读/通知/行刷新静默冻结。
+ * 流建连/首字节 deadline：与 probe 同预算。到点按「流断开」收口（abort + markStale +
+ * 诊断 + 有界重连）——半死隧道下裸 fetch 可能永不落定，否则流会带着 streamStarted=true
+ * 永久楔死：无 stale、无重连、未读/通知/行刷新静默冻结。
  */
 export const SESSION_FACTS_STREAM_CONNECT_TIMEOUT_MS = SESSION_FACTS_PROBE_TIMEOUT_MS
 
 /**
- * 流断开后的重连退避（固定值，有界）。刻意与 source-mux-facts 的 1s→30s
- * 指数退避不同：本源的载体是 HTTP 快照 + SSE 事件流，断开路径自身另有 5s
- * 首字节期限与 60s 静默看门狗，固定 3s 已把重试压到低频；source-mux 是 WS
- * 基线 + 单飞探针，需要更慢的封顶退避。数值差异是载体差异，两侧的阈值表
- * 同一 owner（LADDER_TABLES），退避节奏各自拥有。
+ * 流断开后的重连退避（固定、有界）。刻意与 source-mux-facts 的 1s→30s 指数退避不同：
+ * 本源的载体是 HTTP 快照 + SSE 事件流，断开路径另有 5s 首字节期限与 60s 静默看门狗，
+ * 固定 3s 已把重试压到低频；数值差异是载体差异，两侧阈值表同一 owner，退避节奏各自拥有。
  */
 export const SESSION_FACTS_RECONNECT_MS = 3_000
 
@@ -109,19 +91,16 @@ export interface SessionFactsRow {
   /** host 域内容水位（epoch ms）；0 = 未知。 */
   updatedAt: number
   /**
-   * 完成边沿时刻。**时钟域见 {@link SessionFactsRow.completedAtDomain}**：
-   * 取到 host `turn/end.time` 时是 host 域；拿不到时是观察者域（降级）。
+   * 完成边沿时刻；时钟域见 {@link SessionFactsRow.completedAtDomain}：取到 host
+   * `turn/end.time` 时是 host 域，拿不到时是观察者域（降级）。
    */
   completedAt: number | null
-  /**
-   * observed = 实时观察且带 host 时间戳（可通知）；reconstructed = **缺口重建**（gateway 跨重启）
-   * 或**拿不到 host 时间的降级戳**（无壳观察者），两者都只出未读、不发通知。
-   */
+  /** observed = 实时观察且带 host 时间戳（可通知）；reconstructed = 缺口重建或拿不到
+   *  host 时间的降级戳，两者都只出未读、不发通知。 */
   completedAtSource: SessionFactsCompletedAtSource | null
   /**
    * 完成戳的时钟域：`host` = 可直接与读水位比较；`observer` = 客户端观察者时钟，
-   * **只用于武装、不得推进 host 域读标记**（`unread-derivation` 的 factsWatermark 据此剔除）。
-   * 缺席 = host 域（gateway 行不携带）。
+   * **只用于武装、不得推进 host 域读标记**；缺席 = host 域。
    */
   completedAtDomain?: 'host' | 'observer' | null
   lastTurnEnd: SessionFactsTurnEnd | null
@@ -206,7 +185,6 @@ export interface SessionFactsSource {
   ackAllRead(clientId: string, through: number): void
 }
 
-// ── 纯解析 / 判定（node:test 直测） ─────────────────────────────────────────
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
@@ -237,8 +215,7 @@ export function parseSessionFactsRow(value: unknown): SessionFactsRow | null {
     : null
   let lastTurnEnd: SessionFactsTurnEnd | null = null
   if (isPlainRecord(value.lastTurnEnd) && typeof value.lastTurnEnd.kind === 'string') {
-    // 已知 kind 词汇之外的值按「已知非完成」处理（deriveUnread 的语义），
-    // 但类型面向已知族收敛；cause 只接受 known 值，其余视为缺席。
+    // kind 词汇之外的值按「已知非完成」处理（deriveUnread 语义）；cause 只接受 known 值。
     const rawCause = value.lastTurnEnd.cause
     const cause = rawCause === 'user' || rawCause === 'parent' || rawCause === 'hook'
       || rawCause === 'disposed' || rawCause === 'legacy'
@@ -320,24 +297,20 @@ export function parseSessionFactsSnapshotValue(value: unknown): {
 }
 
 /**
- * 本模块唯一的 abort 来源是 probe 的 deadline 定时器（withTimeout）⇒ AbortError
- * 即 timeout；其余 fetch 拒绝都是 network。只喂 classifier 的 outcome.reason
- * （诊断用），不参与判定。
+ * 本模块唯一的 abort 来源是 probe 的 deadline 定时器 ⇒ AbortError 即 timeout，
+ * 其余 fetch 拒绝都是 network；只喂 classifier 的 outcome.reason（诊断用）。
  */
 function isAbortError(error: unknown): boolean {
   return typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'AbortError'
 }
 
 /**
- * 粗粒度协议分类（顺序即契约，逐条对齐 control-plane 的
- * classifySessionStateProbe；只有 404 是版本事实，5xx/超时绝不是「旧网关」）：
- *   1. 传输失败 / 5xx ⇒ degraded('unavailable')
- *   2. 404            ⇒ legacy-gateway
- *   3. 503 + session_state_disabled ⇒ degraded('watcher-disabled')
- *   4. 2xx 无 protocol / 解析失败  ⇒ degraded('unversioned')
- *   5. protocol > 1   ⇒ degraded('forward-skew')（不静默）
- *   6. protocol === 1 ⇒ ok（mode==='off' 除外）
- *   7. mode === 'off' ⇒ degraded('watcher-disabled')
+ * 粗粒度协议分类（顺序即契约，逐条对齐 control-plane 的 classifySessionStateProbe；
+ * 只有 404 是版本事实，5xx/超时绝不是「旧网关」）：1) 传输失败 / 5xx ⇒
+ * degraded('unavailable')；2) 404 ⇒ legacy-gateway；3) 503 + session_state_disabled ⇒
+ * degraded('watcher-disabled')；4) 2xx 无 protocol / 解析失败 ⇒ degraded('unversioned')；
+ * 5) protocol > 1 ⇒ degraded('forward-skew')；6) protocol === 1 ⇒ ok（mode==='off' 除外）；
+ * 7) mode === 'off' ⇒ degraded('watcher-disabled')。
  */
 export function classifySessionFactsProbe(outcome: SessionFactsProbeOutcome): SessionFactsProbe {
   const empty = { status: null, protocol: null, mode: null, features: [] as readonly string[] }
@@ -401,15 +374,12 @@ export interface SessionFactsDeltaOutcome {
 }
 
 /**
- * 应用一帧 SSE 增量（纯函数；调用方负责重取与 emit）。
- * - cursor <= 当前 cursor ⇒ 幂等丢弃（重复/更旧 id）；
- * - 行数变化 / 行内容变化 → hint（added > removed > changed 优先级）；
- * - 坏载荷 ⇒ refetch（丢帧的收敛路径）。
+ * 应用一帧 SSE 增量（纯函数；调用方负责重取与 emit）。cursor <= 当前 ⇒ 幂等丢弃；
+ * 行数/内容变化 → hint（added > removed > changed）；坏载荷 ⇒ refetch（丢帧的收敛路径）。
  */
 export function applySessionFactsDelta(current: SessionFactsSnapshot, value: unknown): SessionFactsDeltaOutcome {
   if (!isPlainRecord(value)) return { next: null, refetch: true, hint: null }
-  // 非法/缺失游标一律走重取：nonNegativeInt 会把它们降到 0，随后按「更旧帧」**静默丢弃**——
-  // 这与本模块「坏载荷 ⇒ refetch」的契约矛盾（真丢帧会被当成重复）。
+  // 非法/缺失游标一律走重取：降为 0 后会被当「更旧帧」静默丢弃，与「坏载荷 ⇒ refetch」矛盾。
   if (typeof value.cursor !== 'number' || !Number.isInteger(value.cursor) || value.cursor <= 0) {
     return { next: null, refetch: true, hint: null }
   }
@@ -479,7 +449,6 @@ export function parseSessionFactsSseBlock(block: string): SessionFactsSseFrame |
   return { event, id, data: data.join('\n') }
 }
 
-// ── 事实源实例 ───────────────────────────────────────────────────────────────
 
 interface SourceState {
   fingerprint: string
@@ -536,8 +505,8 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
   }
 
   /**
-   * 有界待发 ack 队列（unread-store.createUnreadAckOutbox）：失败（网络
-   * 错误 / 5xx）的 /read、/read-all 在此等待重放，2xx 才出队；读推进永不等待它。
+   * 有界待发 ack 队列（unread-store.createUnreadAckOutbox）：失败（网络错误 / 5xx）的
+   * /read、/read-all 在此等待重放，2xx 才出队；读推进永不等待它。
    */
   const ackOutbox = createUnreadAckOutbox({
     fetchImpl,
@@ -546,10 +515,9 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
   })
 
   /**
-   * 既有「通道恢复」钩子（不新造轮子）：服务端真的回了一帧/一块——probe 快照、
-   * SSE sync、增量帧、心跳注释或 resync 后的整量重取——就是同一条 HTTP/SSE
-   * 通道恢复或仍在的证据。此刻重放待发 ack。只触发不等待（void）：待发表
-   * 永远不得阻塞读推进或快照投递；单飞由 outbox 自己保证。
+   * 既有「通道恢复」钩子：服务端真的回了一帧/一块（probe 快照、SSE sync、增量帧、
+   * 心跳注释或 resync 后的整量重取）就是同一条通道恢复的证据，此刻重放待发 ack。
+   * 只触发不等待（void），单飞由 outbox 保证。
    */
   const noteChannelAlive = (): void => {
     if (state.stopped || !state.connected || ackOutbox.size() === 0) return
@@ -567,11 +535,8 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
   }
 
   /**
-   * 快照构造单一工厂：probe / SSE sync 帧 / refetch 三个入口共用同形状对象，
-   * 字段一旦增删不会漂移。verdict / degradation 由调用点经**唯一分类器**
-   * （classifySessionFactsProbe）判定后传入；mode 仍由调用点按各自入口语义给
-   * （探针默认取 payload 的 mode；SSE sync 帧缺失时沿用上一份快照的 mode 或
-   * 'sse'），本工厂只负责形状——base/main 的 mode 跟踪面原样保留。
+   * 快照构造单一工厂：probe / SSE sync / refetch 三入口共用同形状；verdict /
+   * degradation 由调用点经唯一分类器传入，mode 也由调用点按入口语义给，本工厂只负责形状。
    */
   const buildSnapshot = (
     parsed: NonNullable<ReturnType<typeof parseSessionFactsSnapshotValue>>,
@@ -592,14 +557,9 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
   })
 
   /**
-   * 无载荷降级快照工厂（legacy / disabled / unversioned / 首次失败）：分类器
-   * 判了非 ok 却拿不到协议载荷时，行/游标/read 全空是**事实**而不是猜测；
-   * verdict/degradation 由 classifier 给。它让这条出口与 buildSnapshot 共用同一
-   * 形状（mode 为 null：没有可携带的传输档），不再手写第三份 SessionFactsSnapshot。
-   * stale 默认 true：这些事实没有活载体在刷新，消费者据此降档
-   * （sourceSessionFactsMode 对 legacy/disabled 有更早的专门档位，stale 不改变它们）。
-   * legacy 例外：它按 reconnectMs 有界低频重探（网关可能升级），快照会继续更新，
-   * 因此按事实标 false（main 侧的诚实值）。
+   * 无载荷降级快照工厂（legacy / disabled / unversioned / 首次失败）：拿不到协议载荷时
+   * 行/游标/read 全空是事实而不是猜测；mode 为 null。stale 默认 true（没有活载体在刷新，
+   * 消费者据此降档）；legacy 例外——它按 reconnectMs 有界低频重探，快照会继续更新，按事实标 false。
    */
   const buildEmptySnapshot = (
     verdict: SessionFactsVerdict,
@@ -624,8 +584,8 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
   }
 
   /**
-   * 清掉当前流的建连 deadline。显式传 timer 时只清「就是它自己」的那只：
-   * 一条被 timeout/stop 收口后仍迟到的旧流，不得清掉后继流的定时器。
+   * 清掉当前流的建连 deadline；显式传 timer 时只清「就是它自己」的那只：迟到的旧流
+   * 不得清掉后继流的定时器。
    */
   const clearStreamConnectTimer = (timer?: ReturnType<typeof setTimeout>): void => {
     if (timer === undefined) {
@@ -670,12 +630,9 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
 
   /**
    * 原始快照响应（**不把 !ok 折成异常**）：HTTP 状态是判定的输入，逐条交给
-   * classifySessionFactsProbe；只有传输失败（timeout/network）才走 catch。
-   * 判定 owner 因此唯一 —— 本函数只拥有 carrier。
-   *
-   * 一次探测观测（HTTP carrier 归本模块，判定不在这里）：非 2xx 与坏 JSON 体
-   * 都以 status/body 交回分类器，**永不 throw**。超时经 abort 归入
-   * failure('timeout')，其余异常是 carrier 层的网络失败。
+   * classifySessionFactsProbe；只有传输失败（timeout/network）才走 catch。判定 owner
+   * 唯一——本函数只拥有 carrier。非 2xx 与坏 JSON 体以 status/body 交回、**永不 throw**；
+   * 超时经 abort 归入 failure('timeout')。
    */
   const observeProbe = async (): Promise<SessionFactsProbeOutcome> => {
     const timeout = withTimeout()
@@ -690,8 +647,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
       const body: unknown = await response.json().catch(() => undefined)
       return { kind: 'response', status: response.status, ...(body === undefined ? {} : { body }) }
     } catch (error) {
-      // 唯一 abort 来源是 withTimeout 的 deadline ⇒ AbortError 即 timeout；
-      // 其余 fetch 拒绝都是 network（main 侧 isAbortError 的语义）。
+      // 唯一 abort 来源是 withTimeout 的 deadline ⇒ AbortError 即 timeout，其余是 network。
       return { kind: 'failure', reason: isAbortError(error) ? 'timeout' : 'network' }
     } finally {
       timeout.done()
@@ -699,21 +655,12 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
   }
 
   /**
-   * 一次探测 = **classifier 的唯一生产消费者**（2026-12 单源化）：carrier 事实
-   * （status/body/failure）先组装成 SessionFactsProbeOutcome，判定只由
-   * classifySessionFactsProbe 做。
-   *
-   * 分类 + 发布（**全源唯一判定点**）：探测与流恢复重取都经
-   * classifySessionFactsProbe（纯测试直测的同一函数），快照只携带它的
-   * verdict/degradation；模块内不再有第二份「protocol===1 && mode!=='off'」
-   * 之类的内联分类。发布规则：
-   *   - 2xx 且载荷可解析：快照带该载荷的行/读状态 + 分类器判定
-   *     （forward-skew / mode off 与旧行为一致地保留行）；
-   *   - 无载荷且 unavailable：传输层坏答案不擦除既有镜像事实——保留行、
-   *     标 stale（消费者据此降档）；
-   *   - 其余无载荷结果（404 legacy / 503 disabled / unversioned / 首次失败）：发布
-   *     分类器判定的降级快照（buildEmptySnapshot），能力投影（session-facts-mode）
-   *     因此仍能区分 legacy / disabled / degraded，而不是静默 undefined。
+   * 一次探测 = classifier 的唯一生产消费者，分类 + 发布（全源唯一判定点）：探测与流恢复
+   * 重取都经 classifySessionFactsProbe，快照只携带它的 verdict/degradation，模块内不再有
+   * 第二份内联分类。发布规则：2xx 且载荷可解析 ⇒ 带该载荷的行/读状态 + 分类判定；
+   * unavailable 且已有快照 ⇒ 保留行、标 stale（不擦除既有镜像事实）；其余无载荷结果
+   * （legacy / disabled / unversioned / 首次失败）⇒ 发布分类器判定的空快照，能力投影
+   * 仍能区分三者而不是静默 undefined。
    */
   const publishProbe = (
     outcome: SessionFactsProbeOutcome,
@@ -732,22 +679,17 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
       markStale()
       return { probe, parsed: null }
     }
-    // legacy 是唯一带活重探的 empty 结果（见 shouldRetryProbe）：快照会继续
-    // 刷新，按事实标 non-stale；disabled / unversioned / 首次失败保持 stale。
+    // legacy 是唯一带活重探的 empty 结果：快照会继续刷新，按事实标 non-stale；其余保持 stale。
     state.snapshot = buildEmptySnapshot(probe.verdict, probe.degradation, probe.verdict !== 'legacy-gateway')
     emit()
     return { probe, parsed: null }
   }
 
   /**
-   * 坏答案是否值得**有界重试**（probe 与流恢复重取共用的唯一重试谓词，
-   * 不由各调用点各自判断；谓词只说「是否重试」，退避动作仍归调用路径）：
-   *   - unavailable（网络 / 5xx）与 unversioned（2xx 却无 protocol / 不可解析体）
-   *     都是 carrier 层可能自愈的答案——后者可能是旧宿主缺形状，也可能是反代把
-   *     未注册路由回落成 200 HTML/SPA；
-   *   - 404 legacy 是版本事实，但网关升级后应当被自动接回：给有界低频重探
-   *     （main 契约「网关可能升级，而不是停摆」），退避动作同 unavailable/unversioned；
-   *   - forward-skew 是版本事实、watcher-disabled 是服务事实，重试无意义。
+   * 坏答案是否值得**有界重试**（probe 与流恢复重取共用的唯一谓词；只答「是否重试」，
+   * 退避动作归调用路径）：unavailable / unversioned 是 carrier 层可能自愈的答案；404
+   * legacy 是版本事实但网关升级后应被自动接回，也给有界低频重探；forward-skew 与
+   * watcher-disabled 重试无意义。
    */
   const shouldRetryProbe = (probe: SessionFactsProbe): boolean =>
     probe.degradation === 'unavailable'
@@ -766,8 +708,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
         startDelivery(parsed.mode, parsed.features)
         return
       }
-      // 重试裁决唯一在 shouldRetryProbe（分类语义不变：unversioned 仍是
-      // degraded；重试只是 carrier 层对不可解析 2xx 的有界兜底）。
+      // 重试裁决唯一在 shouldRetryProbe（分类语义不变，重试只是 carrier 层兜底）。
       if (shouldRetryProbe(probe)) {
         diagnostic(
           probe.degradation === 'unversioned' ? '[session-facts] probe unversioned' : '[session-facts] probe failed',
@@ -789,9 +730,8 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
   }
 
   /**
-   * 静默看门狗：在**请求发起时**武装（而不是响应头到达之后）——建连/首字节
-   * 挂起同样是「通道静默」，晚武装会让半死隧道既无 stale 也无重连。间隔保留
-   * 1s floor 防高频；真正的收口判据仍是 lastFrameAt。
+   * 静默看门狗在**请求发起时**武装：建连/首字节挂起同样是通道静默，晚武装会让半死隧道
+   * 既无 stale 也无重连；真正的收口判据仍是 lastFrameAt。
    */
   const armSilenceWatchdog = (): void => {
     if (silenceMs <= 0 || state.silenceTimer !== null) return
@@ -858,10 +798,8 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
       startDelivery(parsed.mode, parsed.features)
       return
     }
-    // 该重取是「流收口后的再对账」：与 probe 共用 shouldRetryProbe 的重试裁决，
-    // 但恢复动作是重连流（本路径要的是可投递的流载体，reprobe 不产生新流）。
-    // unavailable 与 unversioned 都按既有退避重连；404 / forward-skew /
-    // watcher-disabled 是版本或服务事实，不重连假流，也不留静止降级。
+    // 该重取是流收口后的再对账：与 probe 共用 shouldRetryProbe，但恢复动作是重连流；
+    // 版本/服务事实不重连假流，也不留静止降级。
     if (shouldRetryProbe(probe)) {
       diagnostic(
         '[session-facts] snapshot refetch failed',
@@ -886,12 +824,9 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     const controller = new AbortController()
     state.streamController = controller
     state.lastFrameAt = now()
-    // 静默看门狗在**请求发起时**即武装：建连/首字节挂起同样是「通道静默」。
     armSilenceWatchdog()
-    // 建连/首字节 deadline：到点按「流断开」收口。收口动作放在定时器里而不是
-    // 依赖 fetch 因 abort 而 reject —— 忽略 abort 的 carrier 也必须被收口，
-    // 且 catch 侧对 aborted 的早退不得把这次失败吞成「静默」（半死隧道下
-    // 这条流会带着 streamStarted=true 永久楔死）。
+    // 建连/首字节 deadline：到点按流断开收口。收口动作放定时器里而不是依赖 fetch 因 abort
+    // reject——忽略 abort 的 carrier 也必须被收口，且 catch 侧早退不得把这次失败吞成静默。
     const connectTimer = setTimeout(() => {
       if (state.stopped || state.streamController !== controller) return
       diagnostic('[session-facts] stream connect timed out after ' + String(streamConnectTimeoutMs) + 'ms; reconnecting')
@@ -996,8 +931,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
   }
 
   const ack = (method: UnreadAckMethod, route: string, body: Record<string, unknown>): void => {
-    // 载荷纪律与重放归 unread-store（键白名单 / 幂等 max / 有界待发表 /
-    // never-throw），源只负责方法、URL 与「通道恢复」触发点。
+    // 载荷纪律与重放归 unread-store（键白名单/幂等 max/有界待发表/never-throw），源只负责方法、URL 与触发点。
     ackOutbox.post(options.sourceId, method, urlFor(route), body)
   }
 

@@ -1,8 +1,7 @@
 /**
- * Incremental, bounded line assembly for child-process output. Node stream
- * chunks are arbitrary, so redaction/classification must see whole lines;
- * retaining an unterminated line without a cap would let a noisy or hostile
- * child grow the Electron main process indefinitely.
+ * Bounded incremental line assembly for child-process output: chunks are
+ * arbitrary so consumers need whole lines, and an unterminated line must be
+ * capped or a noisy child grows the main process without bound.
  */
 
 export const CHILD_LINE_MAX_CHARS = 64 * 1024

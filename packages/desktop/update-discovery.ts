@@ -1,25 +1,16 @@
 /**
- * update-discovery.ts —— GitHub Releases 发现与候选选择的单一实现
- * （electron-free：updater.ts（Electron/electron-updater 面）与
- * update-headless.ts（Swift sidecar 面）共用）。
- *
- * 边界与语义必须锁步，不能依赖实现碰巧一致：
- * - 有界列表查询唯一实现：URL 由仓库常量推导、per_page=100、Accept 头、
- *   AbortController 超时、非 2xx 响亮错误；
- * - 候选选择唯一实现：draft/prerelease 与通道精确匹配、canonical tag 形状、
- *   BigInt 四元组取最大（beta 号用 BigInt 是 updater.ts 既有的精确语义——
- *   Number 在 >2^53 的 beta 号上会失去精度）；
- * - 形状边界唯一实现：isBoundedReleasesList（非数组/超 100 条）与
- *   isParseableReleaseTag（stable/beta 形状，不看通道/draft）。
- *
- * 两个调用方只保留各自的错误形态差异：updater 的 beta wrapper 在无候选时
- * 响亮抛错；headless 选择器返回 null，并由调用点区分「本通道暂无发布物」
- * （up-to-date）与「非空 feed 零可解析版本」（响亮 error）。
- *
- * 本模块不得 import electron（electron-free-gate.test.ts 面 A）。
+ * update-discovery.ts —— GitHub Releases 发现与候选选择的单一实现（electron-free：
+ * updater.ts 的 Electron/electron-updater 面与 update-headless.ts 的 Swift sidecar
+ * 面共用）。语义必须锁步：有界列表查询唯一实现（URL 由仓库常量推导、per_page=100、
+ * Accept 头、AbortController 超时、非 2xx 响亮错误）；候选选择唯一实现（draft/
+ * prerelease 与通道精确匹配、canonical tag 形状、BigInt 四元组取最大，beta 号用
+ * BigInt 以免 >2^53 失精）；形状边界唯一实现（isBoundedReleasesList、
+ * isParseableReleaseTag，后者只看 stable/beta 形状，不看通道/draft）。两个调用方只
+ * 保留错误形态差异：updater 在无候选时抛错，headless 返回 null 并由调用点区分「本
+ * 通道暂无发布物」与「非空 feed 零可解析版本」（响亮 error）；本模块不得 import electron。
  */
 
-/** The update feed repository (release.yml uploads the same repo's artifacts). */
+/** The update feed repository (release uploads artifacts to the same repo). */
 export const GITHUB_OWNER = 'panzeyu2013'
 export const GITHUB_REPO = 'dsh-chamber'
 
@@ -32,7 +23,6 @@ export const RELEASES_MAX_ENTRIES = 100
 /** tag_name 长度上限（两条消费面共同的防御边界）。 */
 const MAX_TAG_LENGTH = 128
 
-/** 响应必须是数组且 ≤100 条（与 per_page 同一上限）。 */
 export function isBoundedReleasesList(value: unknown): value is unknown[] {
   return Array.isArray(value) && value.length <= RELEASES_MAX_ENTRIES
 }
@@ -41,9 +31,8 @@ export function isBoundedReleasesList(value: unknown): value is unknown[] {
 export const STABLE_TAG_PATTERN = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 export const BETA_TAG_PATTERN = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-beta\.(0|[1-9]\d*)$/
 
-/** feed 条目是否带**可解析版本**（stable 或 beta 形状，不看通道/draft）——
- *  调用点用它区分「本通道暂无发布物」与「feed 形状异常」（响亮
- *  error 判据）。 */
+/** feed 条目是否带**可解析版本**（只看 stable/beta 形状，不看通道/draft）：
+ *  调用点用它区分「本通道暂无发布物」与「feed 形状异常」（响亮 error 判据）。 */
 export function isParseableReleaseTag(tag: unknown): boolean {
   if (typeof tag !== 'string' || tag.length > MAX_TAG_LENGTH) return false
   return STABLE_TAG_PATTERN.test(tag) || BETA_TAG_PATTERN.test(tag)
@@ -57,8 +46,8 @@ export interface ReleaseCandidate {
   version: string
 }
 
-/** 四元组：stable 的 beta 位恒为 0n——通道过滤保证同一通道内不会跨后缀比较，
- *  逐位比较即等价于「stable > 同 base 的 beta（若混入）」+ 数字 beta 号比较。 */
+/** 四元组：stable 的 beta 位恒 0n——通道过滤保证同一通道内不会跨后缀比较，
+ *  逐位比较即等价于数字 beta 号比较。 */
 type VersionParts = readonly [bigint, bigint, bigint, bigint]
 
 function tagVersionParts(tag: string, pattern: RegExp): VersionParts | null {
@@ -81,13 +70,9 @@ function compareVersionParts(left: VersionParts, right: VersionParts): number {
 }
 
 /**
- * 从 GitHub releases 列表选**本通道**最大候选（纯函数；feed 数据不可信）：
- * - 响应必须是数组且 ≤100 条（与 per_page 同界；非数组/超界 → null，绝不猜）；
- * - `draft === false` 且 `prerelease` 与 channel 精确匹配（stable 要 false，
- *   beta 要 true——稳定版不会被 beta 通道选中，反之亦然）；
- * - tag 形状严格：stable `vX.Y.Z` / beta `vX.Y.Z-beta.N`；
- * - 逐条 BigInt 四元组取最大；不可解析的条目跳过（绝不猜测）。
- * 返回 exact tag + 版本号（无前导 v）或 null（无候选）。
+ * 从 GitHub releases 列表选**本通道**最大候选（纯函数；feed 数据不可信）：响应必须
+ * ≤100 条（与 per_page 同界，否则 null）；draft/prerelease 与 channel 精确匹配；tag
+ * 形状严格；逐条 BigInt 四元组取最大，不可解析的条目跳过；返回 exact tag + 版本号或 null。
  */
 export function selectReleaseCandidate(releases: unknown, channel: ReleaseChannel): ReleaseCandidate | null {
   if (!isBoundedReleasesList(releases)) return null
@@ -112,20 +97,17 @@ export function releaseDownloadBase(tag: string): string {
   return `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/${encodeURIComponent(tag)}/`
 }
 
-/** 有界列表查询的调用方文案（两个消费面的错误串各自保持原有措辞）。 */
+/** 有界列表查询的调用方文案（各消费面错误串保持原措辞；非 2xx 抛出
+ *  `${failureLabel} (HTTP ${status})`）。 */
 export interface GithubReleasesFetchOptions {
-  /** AbortController 超时（缺省 10s）。 */
   timeoutMs?: number
-  /** 没有可用 fetch 时的错误串。 */
   unavailableMessage?: string
-  /** 非 2xx 的错误前缀（实际抛出 `${failureLabel} (HTTP ${status})`）。 */
   failureLabel?: string
 }
 
 /**
- * 有界 GitHub releases 列表查询（唯一实现）：Accept 头 + AbortController
- * 超时（timer unref，绝不阻止进程退出），非 2xx 响亮错误；返回已解析 JSON，
- * 形状由调用方经 isBoundedReleasesList / 选择函数校验。
+ * 有界 GitHub releases 列表查询（唯一实现）：Accept 头 + AbortController 超时
+ * （timer unref，绝不阻止进程退出），非 2xx 响亮错误；返回已解析 JSON。
  */
 export async function fetchGithubReleases(
   request: typeof fetch,

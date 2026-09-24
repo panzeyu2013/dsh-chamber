@@ -1,24 +1,17 @@
 /**
- * Host log reading + spawn-diagnostics summary (module 03, host-management
- * deployment — the read side behind a coordinator-wired GET /api/host/logs).
+ * Host log reading + spawn-diagnostics summary (the read side behind GET /api/host/logs).
  *
- * Rolling host logs (design 02 §3.8: "stdout/stderr 管道接入控制面滚动日志"):
- * the convention this module defines is one JSONL file per managed host at
+ * Rolling host logs: one JSONL file per managed host at
  * <stateDir>/host-logs/<port>.log, one entry per line:
  *   {"ts":"<ISO 8601>","stream":"stdout|stderr","line":"<text>"}
  *
- * Honest note: spawn-dsh.ts attaches a per-host JSONL writer (createHostLogWriter)
- * at spawn, so a live host's stdout/stderr lands in <stateDir>/host-logs/<port>.log
- * and reads resolve; a host that exited before any line was captured may still
- * report a typed not-found. The read/diagnostic side never touches the catalog
- * and derives the managed port from the spawn registry
- * (<stateDir>/managed-dsh/<pid>.json) or from an explicit port, so it is
- * unit-testable against plain tmp-directory fixtures.
+ * spawn-dsh.ts attaches a per-host JSONL writer at spawn, so a live host's
+ * stdout/stderr lands there and reads resolve; a host that exited before any line was
+ * captured may still report a typed not-found. The read side never touches the catalog
+ * and derives the managed port from the spawn registry or an explicit port.
  *
- * Tail safety: large files are read from the tail (TAIL_READ_BYTES window);
- * when the needed line count does not fit the window and the file is larger
- * than MAX_WHOLE_READ_BYTES the read returns what the window held and flags
- * `truncated: true` instead of loading the whole file.
+ * Large files are read from the tail; when the needed line count does not fit the
+ * window and the file exceeds MAX_WHOLE_READ_BYTES the read flags `truncated: true`.
  */
 
 import { constants, type Stats } from 'node:fs'
@@ -52,20 +45,17 @@ const MAX_WHOLE_READ_BYTES = 4 * 1024 * 1024
 const LOG_DIR = 'host-logs'
 
 /**
- * Rolling-log ring cap (design 02 §3.8: "RING_BUFFER 行数/字节上限，如 500 行，
- * 滚动丢弃"): how many lines one managed-host log keeps on disk. The writer
- * compacts back to COMPACT_KEEP_LINES once the cap is crossed, so a long-lived
- * host can never grow an unbounded log file (reads additionally clamp with the
- * tail-window/truncated discipline below).
+ * Rolling-log ring cap: how many lines one managed-host log keeps on disk. The writer
+ * compacts back to COMPACT_KEEP_LINES once crossed, so a host can never grow an
+ * unbounded log file (reads additionally clamp with the tail-window discipline).
  */
 export const MAX_LOG_LINES = 500
 
 /** Compaction retains this many trailing lines (so compaction runs ~every 100 writes). */
 export const COMPACT_KEEP_LINES = 400
 
-/** Per-host pending-write ceiling. stdout/stderr remain live when disk is slow:
- * once either ceiling is reached, the newest diagnostic entry is dropped
- * instead of growing memory or applying backpressure to the managed host. */
+/** Per-host pending-write ceiling: once reached, the newest diagnostic entry is dropped
+ *  instead of growing memory or backpressuring the managed host. */
 export const MAX_PENDING_LOG_ENTRIES = 256
 export const MAX_PENDING_LOG_BYTES = 512 * 1024
 
@@ -106,8 +96,7 @@ interface PinnedDirectory {
 }
 
 function assertSafeLeaf(path: string, value: Stats): SafeLeaf {
-  // The unsafe-leaf rule (symlink / non-regular / multi-link) is single-sourced
-  // in private-file.ts; host-logs keeps the stat it needs for size/mtime facts.
+  // The unsafe-leaf rule is single-sourced in private-file.ts; host-logs keeps the stat it needs for size/mtime.
   assertPrivateLeafStatNoFollow(path, value)
   return { identity: privateIdentityOf(value), stat: value }
 }
@@ -129,9 +118,8 @@ async function inspectExpectedLeaf(path: string, expected: FileIdentity): Promis
   return current
 }
 
-/** Pin the caller-owned final log directory where POSIX exposes a no-follow
- * directory descriptor. On Windows, retain the same before/after path
- * identity checks without pretending Node can portably fsync a directory. */
+/** Pin the caller-owned final log directory where POSIX exposes a no-follow directory
+ *  descriptor; on Windows retain the before/after path identity checks. */
 async function pinDirectory(path: string): Promise<PinnedDirectory> {
   const before = await lstat(path)
   if (before.isSymbolicLink() || !before.isDirectory()) {
@@ -182,9 +170,8 @@ async function syncDirectory(pin: PinnedDirectory): Promise<void> {
       await pin.handle.sync()
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code
-      // Directory fsync is a filesystem property: NFS/CIFS/FUSE mounts
-      // commonly reject an O_RDONLY directory fsync (EINVAL/ENOTSUP) on
-      // Linux/macOS desktops alike — tolerate it, keep the identity checks.
+      // NFS/CIFS/FUSE mounts commonly reject an O_RDONLY directory fsync (EINVAL/ENOTSUP):
+      // a durability fallback, never an identity failure — tolerate those codes, keep the checks.
       if (code !== 'EINVAL' && code !== 'ENOTSUP') throw error
     }
   }
@@ -210,9 +197,9 @@ async function removeOwnedLeaf(path: string, expected: FileIdentity): Promise<vo
   if (current !== null && samePrivateIdentity(current.identity, expected)) await unlink(path)
 }
 
-/** One shared lane per backing path. spawn-dsh stdout/stderr and the local
- * lifecycle logger can both create handles for the same port; sharing the
- * queue AND ring is what makes compaction preserve both producers. */
+/** One shared lane per backing path: spawn-dsh stdout/stderr and the local lifecycle
+ *  logger can both create handles for the same port; sharing queue AND ring is what makes
+ *  compaction preserve both producers. */
 const hostLogLanes = new Map<string, AsyncHostLogLane>()
 
 class AsyncHostLogLane {
@@ -237,16 +224,13 @@ class AsyncHostLogLane {
     this.#warn = warn ?? null
   }
 
-  /** Rebind the diagnostic sink when a later handle (one lane is shared per
-   *  backing path and can outlive its creator) brings its own logger. */
+  /** Rebind the diagnostic sink when a later handle brings its own logger (one lane is shared per path). */
   setWarn(warn: (message: string) => void): void {
     this.#warn = warn
   }
 
-  /** Report a dropped batch once per failure episode. The sink runs under
-   *  try/catch: a throwing logger must never escape into #drain (a rejected
-   *  drain would surface on the managed host's stdout/stderr callback stack)
-   *  or into the caller's setState path. */
+  /** Report a dropped batch once per failure episode. The sink runs under try/catch: a
+   *  throwing logger must never escape into #drain or the caller's setState path. */
   #warnDrop(detail: string): void {
     if (this.#warnedOnce) return
     this.#warnedOnce = true
@@ -256,10 +240,9 @@ class AsyncHostLogLane {
   }
 
   /**
-   * Drop all in-memory knowledge of the current backing-file generation.
-   * After any append/compaction failure we cannot prove that the file still
-   * contains the ring; retaining it could resurrect deleted content when a
-   * later compaction replaces a newly-created file.
+   * Drop all in-memory knowledge of the current backing-file generation. After any
+   * append/compaction failure we cannot prove the file still contains the ring; retaining
+   * it could resurrect deleted content when a later compaction replaces a new file.
    */
   #resetGeneration(): void {
     this.#ring = []
@@ -268,9 +251,8 @@ class AsyncHostLogLane {
     this.#needsSetup = true
   }
 
-  /** Load only a bounded tail of an existing generation. A replacement
-   * writer must count earlier lines toward the same on-disk cap, but startup
-   * must not read an arbitrarily large legacy log into memory. */
+  /** Load only a bounded tail of an existing generation: earlier lines must count toward
+   *  the same on-disk cap, but startup must not read an arbitrarily large legacy log. */
   async #hydrateGeneration(parent: PinnedDirectory): Promise<void> {
     await verifyDirectory(parent)
     const before = await inspectLeaf(this.path)
@@ -298,8 +280,7 @@ class AsyncHostLogLane {
       if (lines[lines.length - 1] === '') lines.pop()
       const retained = lines.slice(-COMPACT_KEEP_LINES)
       this.#ring.push(...retained.map(line => `${line}\n`))
-      // A partial tail proves the old generation exceeded our byte budget;
-      // compact it on the next successful append without guessing its count.
+      // A partial tail proves the old generation exceeded our byte budget; compact it on the next successful append.
       this.#linesWritten = info.size > bytes ? MAX_LOG_LINES : lines.length
       const after = assertSafeLeaf(this.path, await fd.stat())
       const atPath = await inspectExpectedLeaf(this.path, opened.identity)
@@ -332,8 +313,8 @@ class AsyncHostLogLane {
     }
   }
 
-  /** Append to the exact active generation, or exclusively create the first
-   * generation. No bytes are dispatched before parent/leaf identity checks. */
+  /** Append to the exact active generation, or exclusively create the first; no bytes
+   *  are dispatched before parent/leaf identity checks. */
   async #append(value: string): Promise<void> {
     const parent = await pinDirectory(this.directory)
     const expected = this.#activeIdentity
@@ -394,8 +375,7 @@ class AsyncHostLogLane {
       tempIdentity = opened.identity
       await inspectExpectedLeaf(tmp, opened.identity)
       await verifyDirectory(parent)
-      // Ring entries already end with '\n' — join with '' (a '\n' join
-      // would double the separators and leave blank lines between entries).
+      // Ring entries already end with '\n' — join with '' (a '\n' join would leave blank lines).
       await writeAll(fd, retained.join(''))
       await fd.sync()
       const after = assertSafeLeaf(tmp, await fd.stat())
@@ -426,11 +406,9 @@ class AsyncHostLogLane {
     }
   }
 
-  /** Drain batches serially. append and compaction share this one lane, so no
-   * buffered append can target the inode renamed away by compaction. */
+  /** Drain batches serially: append and compaction share this lane, so no buffered append can target a renamed-away inode. */
   async #drain(): Promise<void> {
-    // Keep write() enqueue-only even when this is the first entry on an idle
-    // lane; no filesystem work runs on the child stream's data callback stack.
+    // Keep write() enqueue-only even on an idle lane: no filesystem work on the child stream's data callback stack.
     await Promise.resolve()
     while (this.#pending.length > 0) {
       const batch = this.#pending.splice(0)
@@ -439,17 +417,15 @@ class AsyncHostLogLane {
         if (this.#needsSetup) await this.#setup()
         const entries = batch.map(item => item.entry)
         if (this.#linesWritten + entries.length > MAX_LOG_LINES) {
-          // Crossing the cap is one atomic replacement, not append followed by
-          // another full-file write. The backing file therefore never exposes
-          // an oversized batch between two filesystem operations.
+          // Crossing the cap is one atomic replacement, not append followed by a full-file
+          // write: the backing file never exposes an oversized batch between two filesystem ops.
           const retained = [...this.#ring, ...entries].slice(-COMPACT_KEEP_LINES)
           await this.#compact(retained)
           this.#ring = retained
           this.#linesWritten = retained.length
         } else {
           await this.#append(entries.join(''))
-          // Mutate the compaction source only after persistence succeeds: a
-          // swallowed write must never be resurrected by a later replacement.
+          // Mutate the compaction source only after persistence succeeds: a swallowed write must never be resurrected.
           this.#ring.push(...entries)
           if (this.#ring.length > COMPACT_KEEP_LINES) {
             this.#ring.splice(0, this.#ring.length - COMPACT_KEEP_LINES)
@@ -458,17 +434,13 @@ class AsyncHostLogLane {
         }
         this.#pendingEntries -= batch.length
         this.#pendingBytes -= batchBytes
-        // This batch reached disk: a following failure is a NEW episode and
-        // is allowed to warn again.
+        // This batch reached disk: a following failure is a NEW episode and may warn again.
         this.#warnedOnce = false
       } catch (error) {
-        // The failed batch and everything queued behind it are diagnostic-only
-        // and are dropped together — no longer silently: the first failure of
-        // an episode reports the drop once through the injected sink
-        // (spawn-dsh/local-connection pass logger.warn). A later NEW write
-        // gets one fresh setup attempt; a permanently broken disk never
-        // creates an infinite retry loop or wedges the managed host's
-        // stdout/stderr pipe.
+        // The failed batch and everything queued behind it are diagnostic-only and are
+        // dropped together — the first failure of an episode reports the drop once through
+        // the injected sink. A later NEW write gets one fresh setup attempt; a permanently
+        // broken disk never creates an infinite retry loop or wedges the host's stdout pipe.
         this.#warnDrop(error instanceof Error ? error.message : String(error))
         this.#pending = []
         this.#pendingEntries = 0
@@ -536,17 +508,12 @@ function maybeReleaseHostLogLane(lane: AsyncHostLogLane): void {
   }
 }
 
-/** Appending JSONL handle for one managed host (the write side attached by
- * spawn-dsh.ts and local-connection.ts). Handles for the same backing path
- * share one bounded asynchronous lane: writes and compaction are serialized,
- * so a buffered write can never race a rename.
- * The high-water policy drops the newest entry; the control-plane logger
- * already carried it, and diagnostics must never backpressure the host pipe.
- *
- * `options.warn` receives ONE diagnostic per drop episode (the lane re-arms
- * its warning latch after a successful append/compaction). The sink is called
- * under try/catch and never awaited, so a throwing logger cannot surface on
- * the managed host's stdout/stderr callback stack. */
+/** Appending JSONL handle for one managed host (write side of spawn-dsh.ts and
+ * local-connection.ts). Handles for the same backing path share one bounded asynchronous
+ * lane, so a buffered write can never race a rename. The high-water policy drops the
+ * newest entry — the control-plane logger already carried it, and diagnostics must never
+ * backpressure the host pipe. `options.warn` receives ONE diagnostic per drop episode
+ * (re-armed after a successful append/compaction) under try/catch, never awaited. */
 export function createHostLogWriter(
   stateDir: string,
   port: number,
@@ -589,8 +556,8 @@ export function createHostLogWriter(
 type CodedError = Error & { code: string }
 
 /**
- * Typed error for absent connections/logs (design-wide `not_found` code,
- * same family as api.ts 404 {error:'not_found'}).
+ * Typed error for absent connections/logs (design-wide `not_found`, same family as
+ * api.ts 404 {error:'not_found'}).
  */
 function notFoundError(message: string): CodedError {
   const error = new Error(message) as CodedError
@@ -606,11 +573,9 @@ function invalidArgumentError(message: string): CodedError {
 }
 
 /**
- * All valid spawn records from the managed-dsh registry (design 02 §3.3),
- * newest first. Corrupt/pid-less records are skipped (registry discipline:
- * "解析失败或 pid 非整数 → 删文件，不猜测" — reads are read-only, so the
- * corrupt file is left for the reaper). Claim files (claim-<port>.json,
- * external takeovers) are never host-spawn records and are ignored.
+ * All valid spawn records from the managed-dsh registry, newest first. Corrupt/pid-less
+ * records are skipped (reads are read-only, so the corrupt file is left for the reaper).
+ * claim-*.json files are never host-spawn records and are ignored.
  */
 async function listSpawnRecords(stateDir: string): Promise<PidRecord[]> {
   let entries
@@ -644,10 +609,9 @@ async function latestSpawnRecord(stateDir: string): Promise<PidRecord | null> {
 }
 
 /**
- * Resolve a read key to a managed-host port: an explicit port (number or
- * numeric string) wins; otherwise the key must be the known connectionId
- * 'local' (the only spawnable kind in v1), which resolves to the most recent
- * spawn record's port. Unknown connection ids return null (typed not-found).
+ * Resolve a read key to a managed-host port: an explicit port wins; otherwise the key
+ * must be the known connectionId 'local' (the only spawnable kind in v1), which resolves
+ * to the most recent spawn record. Unknown ids return null (typed not-found).
  */
 async function resolvePort(stateDir: string, key: number | string): Promise<number | null> {
   if (typeof key === 'number' && Number.isInteger(key)) return key
@@ -667,9 +631,8 @@ interface LogLine {
 }
 
 /**
- * Parse one rolling-log line. JSONL entries yield {ts, stream, line};
- * non-JSON lines (raw passthrough, unknown writer) yield {ts:null,
- * stream:null, line:raw} — an honest "no metadata" rather than a guess.
+ * Parse one rolling-log line. JSONL entries yield {ts, stream, line}; non-JSON lines yield
+ * {ts:null, stream:null, line:raw} — an honest "no metadata", never a guess.
  */
 function parseLogLine(raw: string): LogLine | null {
   const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw
@@ -688,15 +651,10 @@ function parseLogLine(raw: string): LogLine | null {
 }
 
 /**
- * Read the last `limit` log lines (plus `offset` skipped from the newest
- * end), oldest first. Truncation-safe: only the file tail is read into
- * memory unless the file is small enough to read whole.
- * @param path - the rolling-log file.
- * @param limit - lines to return (must be a positive integer).
- * @param offset - lines to skip from the newest end (non-negative integer).
- * @returns {{lines: Array, truncated: boolean}} — `truncated` is true when
- *   the file is larger than MAX_WHOLE_READ_BYTES and the needed line count
- *   did not fit the tail window.
+ * Read the last `limit` log lines (plus `offset` skipped from the newest end), oldest
+ * first. Truncation-safe: only the file tail is read unless the file is small enough to
+ * read whole. `truncated` is true when the file exceeds MAX_WHOLE_READ_BYTES and the
+ * needed line count did not fit the tail window.
  */
 export async function readLogTail(path: string, { limit, offset }: { limit: number; offset: number }): Promise<{ lines: LogLine[]; truncated: boolean }> {
   const parent = await pinDirectory(dirname(path))
@@ -732,16 +690,14 @@ export async function readLogTail(path: string, { limit, offset }: { limit: numb
       const { bytesRead } = await fd.read(buffer, 0, info.size, 0)
       text = buffer.subarray(0, bytesRead).toString('utf8')
     } else {
-      // Read the tail window; its first line is a fragment of a line cut
-      // mid-way — drop it (never return partial lines).
+      // The tail window's first line is a mid-line fragment — drop it (never return partial lines).
       const buffer = Buffer.alloc(TAIL_READ_BYTES)
       const { bytesRead } = await fd.read(buffer, 0, TAIL_READ_BYTES, info.size - TAIL_READ_BYTES)
       text = buffer.subarray(0, bytesRead).toString('utf8')
       const firstBreak = text.indexOf('\n')
       text = firstBreak === -1 ? '' : text.slice(firstBreak + 1)
       if (text.split('\n').filter(line => line !== '').length < needed && info.size <= MAX_WHOLE_READ_BYTES) {
-        // The window is too small but the file is cheap to read whole — do
-        // it for a complete answer (never silently return a subset).
+        // The window is too small but the file is cheap to read whole — do it for a complete answer.
         const whole = Buffer.alloc(info.size)
         const { bytesRead: wholeRead } = await fd.read(whole, 0, info.size, 0)
         text = whole.subarray(0, wholeRead).toString('utf8')
@@ -751,16 +707,14 @@ export async function readLogTail(path: string, { limit, offset }: { limit: numb
     if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
     const truncated = text !== '' && lines.length < needed && info.size > MAX_WHOLE_READ_BYTES
     if (lines.length > needed) lines = lines.slice(lines.length - needed)
-    // offset: drop the newest `offset` lines — offset >= available skips
-    // EVERYTHING (never "return all lines", which would violate the limit
-    // and the skip semantics).
+    // offset: drop the newest `offset` lines; offset >= available skips EVERYTHING
+    // (never "return all lines").
     if (offset > 0) lines = lines.length > offset ? lines.slice(0, lines.length - offset) : []
     const after = assertSafeLeaf(path, await fd.stat())
     await inspectExpectedLeaf(path, opened.identity)
     await verifyDirectory(parent)
-    // Concurrent append is safe: every read above is bounded by the original
-    // size. Replacement/compaction or truncation is not — never return bytes
-    // from a generation the namespace no longer owns.
+    // Concurrent append is safe (every read is bounded by the original size); replacement/
+    // compaction or truncation is not — never return bytes from a generation the namespace no longer owns.
     if (!samePrivateIdentity(opened.identity, after.identity) || after.stat.size < info.size) {
       throw new Error(`host log leaf changed during read: ${path}`)
     }
@@ -815,23 +769,15 @@ interface HostLogsModule {
   logPathFor(stateDir: string, port: number): string
 }
 
-/**
- * Create the host-log read module.
- * @param options - {stateDir, logger}.
- * @returns {{readManagedLog, listDiagnostics, logPathFor}}.
- */
+/** Create the host-log read module; returns {readManagedLog, listDiagnostics, logPathFor}. */
 export function hostLogs({ stateDir, logger }: { stateDir: string; logger?: Logger }): HostLogsModule {
   const warn = (...parts: unknown[]) => logger?.warn?.(...parts)
 
   /**
-   * Read the recent rolling-log lines of a managed host.
-   * @param connectionIdOrPort - a port (number or numeric string) or a
-   *   connectionId ('local' — resolved via the spawn registry).
-   * @param options - {limit=200, offset=0}: limit is clamped to MAX_LIMIT,
-   *   offset skips the newest `offset` lines.
-   * @returns {port, lines, truncated} — entries are {ts, stream, line},
-   *   oldest first. Throws {code:'not_found'} when no managed record or no
-   *   log file exists; {code:'invalid_argument'} on bad limit/offset.
+   * Read the recent rolling-log lines of a managed host. `connectionIdOrPort` is a port
+   * or the connectionId 'local' (resolved via the spawn registry). limit is clamped to
+   * MAX_LIMIT; offset skips the newest lines. Throws {code:'not_found'} or
+   * {code:'invalid_argument'}.
    */
   async function readManagedLog(connectionIdOrPort: number | string, options: { limit?: number; offset?: number } = {}): Promise<ManagedLogResult> {
     const limitRaw = options.limit ?? DEFAULT_LIMIT
@@ -864,11 +810,8 @@ export function hostLogs({ stateDir, logger }: { stateDir: string; logger?: Logg
   }
 
   /**
-   * Spawn diagnostics summary (for the diagnostics endpoint): every managed
-   * spawn record plus per-record rolling-log file facts. The design's
-   * structured lastSpawnDiagnostics (binary/args/cwd/env-counts, §3.2.1)
-   * does not exist in spawn-dsh yet — v1 reports the record fields, which
-   * is the authoritative spawn fact the registry holds.
+   * Spawn diagnostics summary: every managed spawn record plus per-record rolling-log file
+   * facts. v1 reports the record fields, the authoritative spawn fact the registry holds.
    */
   async function listDiagnostics(): Promise<DiagnosticsResult> {
     const records = await listSpawnRecords(stateDir)

@@ -1,19 +1,13 @@
 /**
  * Discard-authorization decisions of the remove-worktree dialog.
- *
- * A removal needs at most ONE explicit discard authorization, and BOTH ways of
- * needing it — a dirty working tree (design 08 §5.3) and a submodule checkout
- * Git refuses to drop without force (refusal code
- * `worktree-submodules`) — are collected by the official `RiskConfirmation` and
- * then ride the SAME `discardChanges` wire flag (the host's `--force`).
- *
- * The dialog asks `nextDiscardGate` at CLICK time and, when it answers a kind,
- * HOLDS that kind in state for as long as the gate is up. The answer goes back
- * to `null` the moment the acknowledgement it named is ticked, so deriving the
- * gate's own `open` from it would dismiss the gate before its confirm could ever
- * run — the confirm would become dead code and the removal would need a second
- * `Remove` click. `discardAuthorized` is the other half:
- * whether the removal may send `discardChanges: true`.
+ * A removal needs at most ONE explicit discard authorization, and BOTH ways of needing it —
+ * a dirty working tree (design 08 §5.3) and a submodule checkout Git refuses to drop without
+ * force (`worktree-submodules`) — are collected by the official `RiskConfirmation` and then
+ * ride the SAME `discardChanges` wire flag (the host's `--force`).
+ * `nextDiscardGate` is asked at CLICK time and the dialog HOLDS the answered kind for as long
+ * as the gate is up: the answer goes back to null the moment the named acknowledgement is
+ * ticked, so deriving the gate's own `open` from it would dismiss the gate before its confirm
+ * could run (dead code + a second `Remove` click).
  */
 
 /** The two acknowledgements the official `RiskConfirmation` gate can collect. */
@@ -21,35 +15,28 @@ export type DiscardGateKind = 'dirty' | 'submodule'
 
 /** The dialog's current authorization facts; both flags are its own state. */
 export interface DiscardGateFacts {
-  /** The target is dirty, or the fresh preflight reported it dirty (stale row
-   *  fact). */
+  /** The target is dirty, or the fresh preflight reported it dirty (stale row fact). */
   needsDiscardConfirmation: boolean
   /** The dirty acknowledgement is already given (`discardChanges`). */
   discardChanges: boolean
-  /** The host refused with `worktree-submodules` (deterministic, pre-mutation,
-   *  nothing removed). */
+  /** The host refused with `worktree-submodules` (deterministic, pre-mutation, nothing removed). */
   submoduleBlock: boolean
   /** The submodule acknowledgement is already given. */
   discardSubmodules: boolean
 }
 
-/** Which discard authorization a `Remove` click still has to collect: the dirty
- *  one first (it covers a worktree that is ALSO blocked by a submodule), then
- *  the submodule one, else none — in which case the click removes directly.
- *  @param facts - the dialog's current authorization facts.
- *  @returns the gate kind to open, or null when nothing is missing. */
+/** Which discard authorization a `Remove` click still has to collect: the dirty one
+ *  first (it covers a worktree also blocked by a submodule), then the submodule one,
+ *  else none — in which case the click removes directly. */
 export function nextDiscardGate(facts: DiscardGateFacts): DiscardGateKind | null {
   if (facts.needsDiscardConfirmation && !facts.discardChanges) return 'dirty'
   if (facts.submoduleBlock && !facts.discardSubmodules) return 'submodule'
   return null
 }
 
-/** Whether the removal may carry `discardChanges: true` (the host's `--force`).
- *  Either acknowledgement authorizes it: both mean "discard the checkout's
- *  working-tree content", the single thing that flag turns on. The branch, its
- *  commits and HEAD stay untouched in both cases.
- *  @param facts - the dialog's current authorization facts.
- *  @returns true when one of the two acknowledgements is given. */
+/** Whether the removal may carry `discardChanges: true` (the host's `--force`):
+ *  either acknowledgement authorizes it, and the branch, its commits and HEAD stay
+ *  untouched in both cases. */
 export function discardAuthorized(facts: DiscardGateFacts): boolean {
   return (facts.needsDiscardConfirmation && facts.discardChanges)
     || (facts.submoduleBlock && facts.discardSubmodules)

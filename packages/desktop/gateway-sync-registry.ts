@@ -1,25 +1,20 @@
 /**
- * Manual gateway chamber-plugin sync re-entry registry (design 21 §6.5): the
- * desktop syncs the chamber host packages into the gateway seed cache
- * automatically after every gateway ready registration. A later,
- * manual `gateway_plugin_sync(id)` re-runs that same sync, so this module
- * retains the LAST ready-registration sync parameters per gateway instance
- * id — the registered transport origin, the registration auth headers and
- * the SPKI pin — purely in memory.
+ * In-memory re-entry registry for the manual gateway chamber-plugin sync: the
+ * desktop stores the last ready registration's sync parameters per gateway id —
+ * transport origin, registration auth headers, SPKI pin — so a later manual
+ * `gateway_plugin_sync(id)` replays that same sync; entries are cleared when
+ * the instance leaves ready or is removed.
  *
- * These parameters are main-process-only material (headers may carry
- * Authorization/Cookie values): they never cross IPC, are never persisted,
- * logged or serialized, and are cleared when the instance leaves ready or
- * is removed. The renderer supplies nothing but the instance id.
- *
- * Pure Node — no Electron imports (unit-testable standalone).
+ * Main-process-only material (headers may carry Authorization/Cookie): never
+ * crosses IPC, never persisted, logged or serialized. The renderer supplies
+ * nothing but the instance id. Pure Node — no Electron imports.
  */
 
 export interface GatewaySyncRegistration {
   /** Registered transport origin (the ready URL). */
   url: string
-  /** Registration auth headers (Authorization/Cookie) — main-process only.
-   *  May be empty: a `--no-auth` deployment registers headerless. */
+  /** Registration auth headers (Authorization/Cookie) — main-process only;
+   *  may be empty when a `--no-auth` deployment registers headerless. */
   headers: Record<string, string>
   /** Registered SPKI certificate pin; null = unpinned. */
   spkiPin: string | null
@@ -27,16 +22,15 @@ export interface GatewaySyncRegistration {
 
 const registrations = new Map<string, GatewaySyncRegistration>()
 
-/** Store (or, with null, clear) the manual-sync re-entry parameters of one
- *  gateway instance: called on every ready registration (overwrite) and
- *  whenever the instance leaves ready / is removed (clear). */
+/** Store (or, with null, clear) one instance's manual-sync parameters: called
+ *  on every ready registration (overwrite) and on leave-ready / removal. */
 export function setGatewaySyncRegistration(id: string, reg: GatewaySyncRegistration | null): void {
   if (reg === null) registrations.delete(id)
   else registrations.set(id, reg)
 }
 
-/** The stored manual-sync re-entry parameters of one gateway instance, or
- *  undefined when it has no active ready registration. */
+/** Stored manual-sync parameters of one instance, or undefined when it has no
+ *  active ready registration. */
 export function getGatewaySyncRegistration(id: string): GatewaySyncRegistration | undefined {
   return registrations.get(id)
 }

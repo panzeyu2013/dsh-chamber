@@ -1,19 +1,13 @@
 /**
- * Settled-boot gap -> copy-shape projection.
+ * Settled-boot gap -> copy-shape projection. Both consuming packages (sidebar
+ * `source.bootGap.*`, connections `bootGap*`) render from their own dictionaries
+ * but share the payload extraction — which kind selects which key, which
+ * structured params survive; each keeps only its key mapping and wording.
  *
- * Two client packages render a sentence for the same structured fact from their
- * own dictionaries: the sidebar (src/client/source-boot-gap.ts, `source.bootGap.*`)
- * and the connections section (plugin-diagnostic.ts, `bootGap*`). Both share
- * the same payload extraction — which kind selects which key, and which
- * structured params survive — so the extraction lives here and each package
- * keeps only its key mapping (the namespace/wording split is deliberate,
- * design 05 §5).
- *
- * Exhaustive by construction: no `default` and a closed return union, so a future
- * ServerBootGapKind is a COMPILE error here instead of silently inheriting
- * another kind's shape. A kind whose structured payload is empty (a hand-built
- * or older-producer row) degrades to 'generic' rather than rendering
- * "缺少  " / "0 个插件家族".
+ * Exhaustive by construction: no `default` and a closed return union, so a new
+ * ServerBootGapKind is a COMPILE error instead of silently inheriting another
+ * kind's shape; an empty structured payload degrades to 'generic' rather than
+ * rendering "缺少  " / "0 个插件家族".
  */
 import type { ServerBootGap } from './aggregate-store.ts'
 
@@ -25,11 +19,7 @@ export type BootGapShape =
   | { key: 'deferred-registration-failed'; failed: number }
   | { key: 'generic' }
 
-/**
- * Project a settled-boot gap to its copy shape.
- * @param gap - the structured gap fact (cross-package contract).
- * @returns the discriminant plus the params the sentence interpolates.
- */
+/** Project a settled-boot gap (the cross-package contract) to its copy shape. */
 export function bootGapShape(gap: ServerBootGap): BootGapShape {
   switch (gap.kind) {
     case 'graph-unavailable':

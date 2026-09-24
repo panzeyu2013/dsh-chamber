@@ -1,13 +1,10 @@
 #!/usr/bin/env node
 /**
- * dsh-chamber — DSH 控制面 CLI（v4 连接管理器薄壳命令面；管理面契约见
- * docs/design/05-connection-manager.md §7.2 REST，命令面即该保留面的消费端）。
- *
- * 全部非 serve 命令消费控制面 REST（05 §7.2；端点形状见
- * docs/design/04-control-plane-api-data.md §3）：
- * - serve: 内嵌 @dsh-chamber/control-plane（createControlPlane），SIGINT/SIGTERM 优雅退出。
- * - 认证/审计：无 auth/audit 子命令，控制面无登录面。
- * - 输出：人读表格；--json 时 JSON.stringify 原样输出。
+ * dsh-chamber — DSH 控制面 CLI（连接管理器薄壳命令面；REST 契约见
+ * docs/design/05-connection-manager.md §7.2）。serve 内嵌
+ * @dsh-chamber/control-plane，SIGINT/SIGTERM 优雅退出；其余命令消费控制面
+ * REST。无 auth/audit 子命令（控制面无登录面）；输出为人读表格，--json 时
+ * JSON.stringify 原样输出。
  */
 
 import { createControlPlane, DEFAULT_CONTROL_PLANE_PORT, StateRootLeaseError } from '@dsh-chamber/control-plane'
@@ -15,7 +12,6 @@ import { followNewLines } from './follow-filter.ts'
 
 const DEFAULT_URL = `http://127.0.0.1:${DEFAULT_CONTROL_PLANE_PORT}`
 
-/** 命令标志：--flag VALUE → string；布尔 --flag → true。 */
 type FlagValue = string | boolean
 type FlagMap = Map<string, FlagValue>
 
@@ -24,20 +20,19 @@ interface ParsedArgs {
   positionals: string[]
 }
 
-/** REST 请求选项（request 的第三参）。 */
 interface RequestOptions {
   url: string
   body?: unknown
 }
 
-/** 统一错误形状（设计 04 D1）：{error, code?}；其余字段仅作展示。 */
+/** 统一错误形状：{error, code?}；其余字段仅作展示。 */
 interface ApiErrorBody {
   error?: unknown
   message?: unknown
   code?: unknown
 }
 
-/** request 抛出的 HTTP 错误：status/code/raw 供命令级错误映射。 */
+
 class ApiRequestError extends Error {
   status: number
   code: string | null
@@ -54,7 +49,6 @@ function asApiError(error: unknown): ApiRequestError | null {
   return error instanceof ApiRequestError ? error : null
 }
 
-/** 各端点响应形状（api.ts 顶部 docblock 为准）。 */
 interface HealthDsh {
   status?: string
   port?: number
@@ -64,7 +58,6 @@ interface HealthResponse {
   ok: boolean
   dsh?: HealthDsh
 }
-/** 连接行投影（04 §3.2：id/label/accentColor/status/dshPort/error）。 */
 interface ConnectionRow {
   id: string
   label?: string
@@ -76,7 +69,6 @@ interface ConnectionRow {
 interface ConnectionsResponse {
   connection: ConnectionRow | null
 }
-/** 写者静默诊断的写者行（GET /api/connections/local/writers，04 §3.2）。 */
 interface WriterRow {
   name?: string
   status?: string
@@ -84,22 +76,17 @@ interface WriterRow {
   reason?: string
   takeOverAvailable?: boolean
 }
-/** 写者静默诊断响应（04 §3.2）：本地实例为何起不来。 */
 interface WriterDiagnosisResponse {
   quiescent?: boolean
   writers?: WriterRow[]
   errors?: string[]
 }
-/** 写者接管响应（POST /api/connections/local/reclaim，04 §3.2）。 */
 interface ReclaimResponse {
   reclaimed?: number[]
   connection?: ConnectionRow | null
   spawned?: boolean
 }
-/**
- * 滚动日志行（实现形状为准，control-plane host-logs.ts parseLogLine）：
- * JSONL 行带 ts/stream；raw passthrough 行两者都是 null（诚实的「无元数据」）。
- */
+/** 滚动日志行：JSONL 行带 ts/stream；raw passthrough 行两者都是 null。 */
 interface LogLine {
   ts: string | null
   stream: 'stdout' | 'stderr' | null
@@ -137,7 +124,6 @@ serve 的状态目录按 --state-dir > DSH_CHAMBER_STATE > ~/.dsh-chamber 解析
 `)
 }
 
-/** 解析参数：--flag VALUE 与布尔 --flag；其余为位置参数。 */
 function parseArgs(argv: string[]): ParsedArgs {
   const flags: FlagMap = new Map()
   const positionals: string[] = []
@@ -163,7 +149,6 @@ function resolveUrl(flags: FlagMap): string {
   return String(flags.get('url') || process.env.DSH_CHAMBER_URL || DEFAULT_URL).replace(/\/+$/, '')
 }
 
-/** REST 请求：返回解析后的 JSON 体。 */
 async function request<T = unknown>(method: string, path: string, { url, body }: RequestOptions): Promise<T> {
   const headers: Record<string, string> = {}
   if (body !== undefined) headers['content-type'] = 'application/json'
@@ -184,7 +169,6 @@ async function request<T = unknown>(method: string, path: string, { url, body }:
     // 非 JSON 响应（如 500 纯文本），按状态码兜底
   }
   if (!res.ok) {
-    // Unified error shape (design 04 D1): {error: string, code?: string}.
     const errorBody = data as ApiErrorBody | null
     const code = errorBody?.code
     const message = errorBody?.error || errorBody?.message
@@ -209,7 +193,6 @@ function printTable(headers: readonly string[], rows: ReadonlyArray<ReadonlyArra
   }
 }
 
-/** 表格兜底：任意对象/数组 → 键值对表格。 */
 function printKeyValue(data: unknown) {
   const entries = Array.isArray(data)
     ? data.map((item, i) => [`[${i}]`, JSON.stringify(item)])
@@ -218,10 +201,8 @@ function printKeyValue(data: unknown) {
 }
 
 /**
- * connections add / reclaim 共用的连接结果投影（04 §3.2 契约：
- * connection: ConnectionRow | null、spawned?: boolean）。两者都可能缺失，缺失
- * **不是**失败值：null 行如实呈现 connection: none（绝不伪造成一个 id），
- * spawned 缺失如实写 unknown（绝不伪造成 false）。
+ * connections add / reclaim 共用的连接结果投影。字段缺失**不是**失败值：null
+ * 行如实呈现 connection: none（绝不伪造 id），spawned 缺失写 unknown（绝不伪造 false）。
  */
 function printConnectionOutcome(data: { connection?: ConnectionRow | null; spawned?: boolean }) {
   const row = data?.connection ?? null
@@ -267,8 +248,7 @@ async function serveCommand({ flags }: ParsedArgs) {
   try {
     await plane.start()
   } catch (error) {
-    // A lease conflict while re-acquiring (the root was taken over between
-    // construction and start) must keep the machine-readable code in stderr.
+    // 重新获取租约时的冲突（构造到 start 间 root 被接管）必须保留 stderr 的机器可读 code。
     logger.error(error instanceof StateRootLeaseError
       ? `failed to start: ${error.code}: ${error.message}`
       : `failed to start: ${String(error)}`)
@@ -339,9 +319,8 @@ async function connectionsAddCommand(flags: FlagMap) {
     )
   } catch (error) {
     const apiError = asApiError(error)
-    // 写者静默闩锁（02 §3.4 / 04 §3.2）：控制面答 409 connection_busy 并带英文
-    // 诊断串——逐字透出对使用者没有可操作性，映射为中文并指向诊断子命令
-    // （DELETE 的 409 映射先例）。其余 409 保留状态码 + code。
+    // 写者静默闩锁：409 connection_busy 带英文诊断串，逐字透出无可操作性，
+    // 映射为中文并指向 writers 子命令；其余 409 保留状态码 + code。
     if (apiError?.status === 409 && apiError.code === 'connection_busy') {
       throw new Error('连接创建被拒绝：本地实例被 DSH_HOME 写者记录挡住（409 connection_busy）；用 dsh-chamber connections writers 查看阻塞写者')
     }
@@ -357,7 +336,7 @@ async function connectionsAddCommand(flags: FlagMap) {
   printConnectionOutcome(data)
 }
 
-/** PATCH /api/connections/local（04 §3.2）：仅 label / accentColor。 */
+/** PATCH /api/connections/local：仅 label / accentColor。 */
 async function connectionsRenameCommand(flags: FlagMap) {
   const label = flags.get('label')
   const accentColor = flags.get('accent-color')
@@ -376,7 +355,7 @@ async function connectionsRenameCommand(flags: FlagMap) {
   printKeyValue(data?.connection ?? {})
 }
 
-/** DELETE /api/connections/local（04 §3.2）：优雅停止 local 实例。 */
+/** DELETE /api/connections/local：优雅停止 local 实例。 */
 async function connectionsRemoveCommand(flags: FlagMap) {
   const url = resolveUrl(flags)
   let data: { stopped?: boolean }
@@ -397,8 +376,8 @@ async function connectionsRemoveCommand(flags: FlagMap) {
 }
 
 /**
- * GET /api/connections/local/writers（04 §3.2）：写者静默诊断——本地实例为何
- * 起不来（阻塞写者 pid/原因/可否接管）。控制面不带托管本地宿主时答 501。
+ * GET /api/connections/local/writers：写者静默诊断（阻塞写者 pid/原因/可否
+ * 接管）。控制面不带托管本地宿主时答 501。
  */
 async function connectionsWritersCommand(flags: FlagMap) {
   const url = resolveUrl(flags)
@@ -437,8 +416,8 @@ async function connectionsWritersCommand(flags: FlagMap) {
 }
 
 /**
- * POST /api/connections/local/reclaim（04 §3.2）：清理本状态目录自己的陈旧/孤儿
- * 写者记录并重启本地实例；仍有活写者时控制面答 409 connection_busy。
+ * POST /api/connections/local/reclaim：清理本状态目录自己的陈旧/孤儿写者记录并
+ * 重启本地实例；仍有活写者时控制面答 409 connection_busy。
  */
 async function connectionsReclaimCommand(flags: FlagMap) {
   const url = resolveUrl(flags)
@@ -484,22 +463,20 @@ async function hostStatusCommand(flags: FlagMap) {
 
 const LOG_FOLLOW_INTERVAL_MS = 2000
 
-/** host logs 默认条数（04 §3.3 默认 200；薄壳沿用 100 的窄默认）。 */
+/** host logs 默认条数（薄壳窄默认）。 */
 const DEFAULT_LOG_LIMIT = 100
 
-/** host logs 条数上限：control-plane host-logs.ts MAX_LIMIT。控制面对超限是
- *  clamp（静默截断到 1000）而非报错，所以上限门必须在薄壳里——超限直接拒绝，
- *  绝不让使用者以为拿到了完整日志。 */
+/** host logs 条数上限：控制面对超限是静默 clamp 而非报错，所以上限门必须在
+ *  薄壳里——超限直接拒绝，绝不让使用者以为拿到了完整日志。 */
 const MAX_LOG_LIMIT = 1000
 
 /** 缺失/无法解析字段的占位（与 stream 既有的 '?' 同族）。 */
 const LOG_FIELD_PLACEHOLDER = '?'
 
 /**
- * 日志行时间戳 → ISO 文本。实现形状是 `ts: string | null`（raw passthrough
- * 行为 null），任何非空字符串都可能不是可解析时间：解析不出来一律打占位——
+ * 日志行时间戳 → ISO 文本。非空字符串也可能不可解析：解析不出来一律打占位——
  * `new Date(null).toISOString()` 会编造 1970，`new Date(<非 ISO>).toISOString()`
- * 抛 RangeError 直接杀掉 --follow，两者都不可接受。
+ * 抛 RangeError 杀掉 --follow。
  */
 function formatLogTimestamp(ts: unknown): string {
   if (typeof ts === 'string' && ts !== '') {
@@ -509,7 +486,7 @@ function formatLogTimestamp(ts: unknown): string {
   return LOG_FIELD_PLACEHOLDER
 }
 
-/** GET /api/host/logs（{lines:[{ts,stream,line}]}）；--follow 每 2s 轮询追加。 */
+/** GET /api/host/logs；--follow 每 2s 轮询追加。 */
 async function hostLogsCommand(flags: FlagMap) {
   const limit = flags.has('limit') ? Number(flags.get('limit')) : DEFAULT_LOG_LIMIT
   if (!Number.isInteger(limit) || limit < 1) throw new Error('host logs --limit 需要正整数')
@@ -587,9 +564,7 @@ async function main(argv: string[]) {
 try {
   await main(process.argv.slice(2))
 } catch (err) {
-  // A state-root lease conflict (createControlPlane construction) must expose
-  // the machine-readable code literally; the message already carries the
-  // root/pid/flavor and the escape hatch, and no stack is ever printed.
+  // 状态目录租约冲突必须逐字透出机器可读 code；绝不打印 stack。
   if (err instanceof StateRootLeaseError) {
     console.error(`dsh-chamber: ${err.code}: ${err.message}`)
   } else {

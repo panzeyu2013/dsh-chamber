@@ -1,29 +1,18 @@
 /**
- * Mobile drawer toggle + backdrop (design 17 §18.4.3): the official sidebar
- * toggle lives inside the sidebar DOM, which the off-canvas transform hides
- * — so the mobile surface needs its own floating entry. Registered into
- * `shell.overlay` (additive list slot). The backdrop dims the conversation
- * behind the open drawer and absorbs stray taps on the live seam right of
- * the drawer (the composer send button must not be hit while the drawer is
- * open). The drawer state is read from the official frame attribute
- * (`data-sidebar-collapsed`) via a scoped observer — the stylesheet drives
- * the visuals, the component only mirrors state for the accessible name.
+ * Mobile drawer toggle + backdrop: the official sidebar toggle lives inside the
+ * sidebar DOM, which the off-canvas transform hides, so the mobile surface
+ * needs its own floating entry (registered into the additive shell.overlay
+ * slot). The backdrop dims the conversation behind the open drawer and absorbs
+ * stray taps on the live seam right of the drawer. The drawer state is read
+ * from the official frame attribute (data-sidebar-collapsed) via a scoped
+ * observer; the stylesheet drives the visuals, the component only mirrors state
+ * for the accessible name.
  *
- * The control is the OFFICIAL glyph
- * (`IconPanelLeftOutline16`, the panel icon the official sidebar toggle
- * draws — ui-sidebar SidebarRoot.tsx) rather than a hand-drawn CSS
- * hamburger, and its accessible NAME is the official one: the official
- * toggle's own `toggle.open` / `toggle.collapse` label pair. Its ARIA is not
- * the official attribute LIST — the official control carries that label
- * alone, because it sits inside the sidebar it collapses — so this
- * out-of-canvas substitute adds one truthful attribute of its own:
- * `aria-expanded`, the disclosure state of the drawer the button shows and
- * hides. `aria-haspopup="true"` is
- * omitted: it would claim an untyped popup, while the drawer is the sidebar itself
- * rendered off-canvas — where upstream has a real popup it names the type
- * (`aria-haspopup="dialog"` on the settings trigger). The touch tier keeps
- * only what the official control cannot give it: the 44px floating box and
- * the tap-absorbing backdrop.
+ * The control draws the OFFICIAL glyph (IconPanelLeftOutline16) and its
+ * accessible name is the official toggle.open/toggle.collapse pair. It adds
+ * one truthful attribute of its own, aria-expanded; aria-haspopup is omitted
+ * (the drawer is the sidebar itself rendered off-canvas, not a popup). The
+ * touch tier adds only the 44px floating box and the tap-absorbing backdrop.
  */
 import { useEffect, useState } from 'react'
 import { IconPanelLeftOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -45,10 +34,8 @@ function findFrame(root: ParentNode): Element | null {
 }
 
 export function MobileNavToggle({ toggleSidebar, t }: MobileNavToggleProps) {
-  // Mirrors the drawer state for aria/tap semantics (the CSS is driven by
-  // the attribute itself). Scoped to the first root slot — N-ctx safe for
-  // the single-instance gateway deployment; multi-instance shells would
-  // scope by their own ctx root (design 17 §18.4 项 2).
+  // Mirrors the drawer state for aria/tap semantics (the CSS is driven by the
+  // attribute itself). Scoped to the first root slot — N-ctx safe.
   const [open, setOpen] = useState(false)
 
   useEffect(() => {

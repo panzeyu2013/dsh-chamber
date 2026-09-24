@@ -39,9 +39,7 @@ export const zh = {
   submoduleDiscardTitle: '丢弃子模块检出？',
   submoduleDiscardLabel: '丢弃该工作树中的子模块检出',
   unhealthyTarget: '工作树不可用，不能作为会话目标。',
-  // Git action failures (shared/action-error.ts + remove-notes.ts code→copy):
-  // every USER-reachable refusal of the logic layer resolves here, so no prose
-  // lives in the coordinator and the en dictionary never falls back to Chinese.
+  // Git action failures (code→copy): every user-reachable refusal resolves here, so no prose lives in the coordinator.
   actionInProgress: '该来源已有 Git 操作正在进行，请等它结束后再试。',
   recoveryPending: '请先完成当前 Git 恢复操作。',
   freshFactsUnavailable: '无法取得最新的 Git 工作树事实，请稍后重试。',

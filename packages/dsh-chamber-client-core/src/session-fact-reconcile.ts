@@ -1,29 +1,14 @@
 /**
  * SessionAuthorityReconciler - the I/O half of the session-fact authority.
- *
- * ## What this module does
- *
- * The POLICY lives in `@dsh-chamber/dsh-stream-state`: `reduceSessionAuthority` owns the
- * running-bit truth, the N=2 confirmation and the exactly-once completion edge, and
- * `ladder.ts` owns the probe cadence. This file only does what a host must do:
- *
- *   1. read the official store projection and the source generation;
- *   2. run the probe ladder and, when it dispatches, perform an independent authority
- *      read (the control-plane unary `session.list`, a carrier independent of the
- *      guarded WS fact channel);
- *   3. feed the read back into the reducer and execute its effects: one confirmation
- *      read for N=2, or the tier-3 write-back through the official store's public
- *      write path (only "running=false", self-verified);
- *   4. publish the authority snapshot the App's escalation ladder consumes
- *      (`runningSince` / `stuckSince` / `progressStamp`).
- *
- * The probe's carrier is the independent unary read; the official refresh resolves on
- * failure (vendor `refreshList()`), so it cannot serve as a second verdict carrier.
- *
- * ## Discipline
- * - single flight: a request while an attempt is in flight only advances `requestedAt`;
- * - fail-closed: every seam failure is a `warn` + stuck evidence, never a throw;
- * - the write-back is idempotent and self-verified; the reducer only ever asks for false.
+ * POLICY (running-bit truth, N=2 confirmation, exactly-once completion edge,
+ * probe cadence) lives in `@dsh-chamber/dsh-stream-state`; this file reads the
+ * official store projection + generation, runs the ladder's independent
+ * authority read (control-plane unary `session.list`, carrier-independent of
+ * the guarded WS fact channel), feeds it back into the reducer and executes
+ * its effects — one confirmation read for N=2, or the tier-3 write-back
+ * ("running=false", self-verified) — and publishes the App's escalation
+ * snapshot. Discipline: single flight; fail-closed (seam failures → warn +
+ * stuck evidence, never a throw); write-back idempotent, only ever asks false.
  */
 import {
   LADDER_TABLES,
@@ -39,7 +24,6 @@ import {
   type SessionAuthorityState,
 } from '@dsh-chamber/dsh-stream-state'
 
-/** The official store projection read each tick. */
 export interface AuthorityOfficialRead {
   /** Every listed session; subagent rows are exported but never reconciled. */
   readonly rows: Readonly<Record<string, AuthorityOfficialRow>>
@@ -57,18 +41,12 @@ export interface SessionAuthorityDeps {
   /** Tier-3 write-back: official `handleSessionStatus(id, false)` + self-verification. */
   readonly correct: (sessionIds: readonly string[]) => Promise<boolean>
   readonly warn: (message: string) => void
-  /**
-   * P5 persistence seam: called exactly once per produced action, so a real-machine
-   * incident can be reconstructed after a reload. Must never break the chain.
-   */
+  /** Persistence seam: called exactly once per produced action; must never break the chain. */
   readonly record?: (entry: AuthorityActionLogEntry) => void
   readonly onSettled?: () => void
 }
 
-/**
- * The authority state published in the runtime report (single projection consumed by
- * the App's escalation ladder; replaced `SessionFactReconcileSnapshot`).
- */
+/** The authority state published in the runtime report (consumed by the App's escalation ladder). */
 export interface SessionAuthoritySnapshot {
   readonly requestedAt: number
   /** Missing = an attempt is in flight. */
@@ -88,12 +66,7 @@ export interface SessionAuthoritySnapshot {
   readonly recent: readonly AuthorityActionLogEntry[]
 }
 
-/**
- * Evidence surface: what the authority actually did, in bounded form. It travels
- * in the runtime report (and each act also emits one warn line, bounded by the probe
- * ladder's quota) so a real-machine incident can answer "did L1 fire / did the bit
- * drop" without a debugger. A file-backed surface remains host work (STATUS).
- */
+/** Bounded evidence surface of what the authority did (travelling in the runtime report). */
 export interface AuthorityActionLogEntry {
   readonly at: number
   readonly kind: 'probe' | 'read-failed' | 'correct' | 'correct-failed' | 'complete' | 'recovered'
@@ -108,15 +81,11 @@ const CONFIG = { confirmReads: 2 } as const
 /** The probe cadence is a property of the one table, not of this module. */
 const PROBE_LADDER = sessionAuthorityProbeLadder(LADDER_TABLES.authority)
 
-/** One official-store row is reconcilable when it claims running and is not a subagent. */
 export function isRunningNonSubagentRow(row: AuthorityOfficialRow | undefined): boolean {
   return row?.running === true && row.subagent !== true
 }
 
-/**
- * Write-back targets: only ids that are BOTH authority-denied and still claiming
- * running in the store (idempotent, minimal write surface). Empty = already converged.
- */
+/** Write-back targets: authority-denied ids still claiming running (idempotent, minimal surface). */
 export function writeBackTargets(
   denied: ReadonlySet<string>,
   official: Readonly<Record<string, Partial<AuthorityOfficialRow> | undefined>>,
@@ -173,10 +142,7 @@ export class SessionAuthorityReconciler {
     this.running = false
   }
 
-  /**
-   * Bounded evidence ring (16 entries); each act also emits one bounded warn line and
-   * is handed to the host's persistence seam (exactly once, in production order).
-   */
+/** Bounded evidence ring (16 entries); one warn line + persistence seam per act. */
   private note(at: number, kind: AuthorityActionLogEntry['kind'], detail?: string): void {
     const entry: AuthorityActionLogEntry = { at, kind, ...(detail === undefined ? {} : { detail }) }
     this.actionLog.push(entry)
@@ -240,10 +206,7 @@ export class SessionAuthorityReconciler {
     }
   }
 
-  /**
-   * One probe episode: an authority read, the reducer's N=2 confirmation read when it
-   * asks for one, then the write-back when the denial is confirmed.
-   */
+/** One probe episode: read → N=2 confirmation read when asked → write-back when confirmed. */
   private async probe(): Promise<void> {
     const first = await this.deps.readAuthority()
     if (first === undefined || !first.ok) {

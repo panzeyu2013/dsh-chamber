@@ -1,11 +1,10 @@
 /**
- * Design 18 startup transaction. Reaper has completed and public local-host
- * starts remain gated while this module completes restore/journal recovery.
+ * Startup transaction. Reaper has completed and public local-host starts remain
+ * gated while this module completes restore/journal recovery.
  *
  * Both entries accept an optional transaction-level AbortSignal: a pre-aborted
- * signal arriving at the apply entry cancels the attempt
- * with zero side effects and leaves the durable journal for the next startup
- * (see apply-phase's abort semantics). Hosts that never abort simply omit it.
+ * signal at the apply entry cancels the attempt with zero side effects and leaves
+ * the durable journal for the next startup. Hosts that never abort omit it.
  */
 import { applyPendingVersion, beginDelayedRollback, type ApplyOutcome } from './apply-phase.ts'
 import type { ManualRollbackPreparation } from './apply-phase.ts'
@@ -53,23 +52,17 @@ export interface StartupDeps {
   validateTarget: (version: string, isBuiltin: boolean) => { ok: true } | { ok: false; error: string }
   switchPointer: (version: string | null) => void
   /**
-   * Spawn the candidate tree and run the activation probes. `signal`
-   * is optional so existing two-argument implementers keep
-   * compiling unchanged. runStartupPhase/runDelayedRollback forward their own
-   * optional transaction-level signal here, so hosts wire the abort at the
-   * orchestration seam instead of inside the probe closure (apply-phase abort
-   * semantics: candidate probes keep the passthrough signal; rollback
-   * verification probes null an already-aborted one).
+   * Spawn the candidate tree and run the activation probes. `signal` is optional so
+   * two-argument implementers keep compiling; the orchestration seam forwards its
+   * transaction-level signal here (candidate probes keep it, rollback verification
+   * probes null an already-aborted one).
    */
   spawnAndProbe: (version: string, isBuiltin: boolean, signal?: AbortSignal) => Promise<ProbeResult[]>
   /**
-   * Shape-awareness: forwarded verbatim to apply-phase (see
-   * ApplyDeps.probeExpectedNames). It stays a function reference all the way
-   * through — the apply phase resolves it only after a probe attempt finished,
-   * because a host may refresh its seeded-domain table inside `spawnAndProbe`
-   * (desktop's probe closure runs `cp.startLocal()`). Capturing an array here
-   * would freeze the cold-start empty table and fail the exact-set verdict
-   * against the freshly seeded run.
+   * Forwarded verbatim to apply-phase. It stays a function reference all the way
+   * through because the apply phase resolves it only after a probe attempt finished:
+   * a host may refresh its seeded-domain table inside `spawnAndProbe`, and capturing
+   * an array here would freeze the cold-start empty table and fail the exact-set verdict.
    */
   probeExpectedNames?: () => readonly string[]
   stopHost: () => Promise<void>
@@ -96,13 +89,9 @@ export type StartupBlockedReason =
   | 'override-corrupt'
   | 'journal-mismatch'
 
-/** The FATAL metadata-corruption blocked reasons (journal/current/override
- *  corrupt + journal-mismatch). Shared single source for both owners — the
- *  desktop main (hard-blocked startup surface) and the gateway composition
- *  boundary (index.ts FATAL_RUNTIME_BLOCKS) plus the gateway manager's
- *  RECOVERABLE_METADATA_BLOCKS (which extends this set with its two recovery
- *  sentinels). One owner cannot drift its block classification from
- *  the other's. */
+/** The FATAL metadata-corruption blocked reasons (journal/current/override corrupt +
+ *  journal-mismatch), shared single source for the desktop main and the gateway
+ *  composition boundary so neither can drift its block classification. */
 export const FATAL_STARTUP_BLOCK_REASONS: readonly StartupBlockedReason[] = [
   'journal-corrupt',
   'current-corrupt',
@@ -128,9 +117,8 @@ export type StartupMetadataHealthStatus =
   | 'recovery-marker-corrupt'
 
 /**
- * An env workspace outranks dormant chamber selection files, but never an
- * unfinished or unreadable metadata-recovery transaction. Main uses this
- * narrow route before its normal selection-corruption block.
+ * An env workspace outranks dormant chamber selection files, but never an unfinished
+ * or unreadable metadata-recovery transaction.
  */
 export function shouldProbeEnvWithDormantCorruptSelection(
   status: StartupMetadataHealthStatus,
@@ -207,8 +195,7 @@ function pointerVersion(state: CurrentPointerState): string | null {
   return state.kind === 'valid' ? state.version : null
 }
 
-/** Immutable pre-swap facts a non-intent journal contributes to an activation
- *  (shared by the startup replay and the delayed-rollback entries). */
+/** Immutable pre-swap facts a non-intent journal contributes to an activation. */
 function activationFactsFromJournal(journal: ActivationJournal): StartupActivationFacts {
   return {
     sourceVersion: journal.sourceVersion,
@@ -224,35 +211,29 @@ function corruptMetadataReason(
   override: OverrideState,
 ): StartupBlockedReason | null {
   if (journal.kind === 'corrupt') return 'journal-corrupt'
-  // 'unknown' (EACCES/EIO) is not a lesser state: it proves neither absence
-  // nor corruption, so it blocks on exactly the corrupt reasons instead of
-  // aliasing builtin / no-override.
+  // 'unknown' (EACCES/EIO) is not a lesser state: it proves neither absence nor
+  // corruption, so it blocks like corrupt rather than aliasing builtin / no-override.
   if (pointer.kind === 'corrupt' || pointer.kind === 'unknown') return 'current-corrupt'
   if (override.kind === 'corrupt' || override.kind === 'unknown') return 'override-corrupt'
   return null
 }
 
-/** The verdict policy: the five dimensions that used to differ between
- *  runStartupPhase (A) and runDelayedRollback (B), plus the explicit A-only
- *  applied-override reachability (commitAppliedOverride). See
- *  commitApplyVerdict. */
+/** The policy dimensions that differ between runStartupPhase (A) and
+ *  runDelayedRollback (B), plus the explicit A-only applied-override reachability. */
 export interface VerdictPolicy {
   readonly allowBuiltin: boolean
   readonly pendingOnRetain: 'target' | 'current'
   readonly mismatch: 'report' | 'fatal'
   readonly clearJournalWhenApplied: boolean
   readonly clearInvalidationOnBuiltinRollback: boolean
-  /** A-only applied-override commit (B1 R4): A(runStartupPhase)=true,
-   *  B(runDelayedRollback)=false. B's verdict input always comes from a
-   *  rollback-needed journal (beginDelayedRollback) whose continuation can
-   *  only settle rolled-back/failed, so the shared 'applied' override clause
-   *  is unreachable from B — declared here instead of relying on caller
-   *  discipline. */
+  /** Applied-override commit is A-only: B's verdict input always comes from a
+   *  rollback-needed journal whose continuation can only settle rolled-back/failed,
+   *  so the shared 'applied' clause is unreachable from B — declared, not assumed. */
   readonly commitAppliedOverride: boolean
 }
 
-/** Everything the verdict commit reads; the host shells pre-check the corrupt
- *  journal/override material states and pass only valid-or-null records. */
+/** Everything the verdict commit reads; hosts pre-check corrupt journal/override
+ *  states and pass only valid-or-null records. */
 export interface VerdictInput {
   readonly shellVersion: string
   readonly applyOutcome: ApplyOutcome
@@ -264,8 +245,8 @@ export interface VerdictInput {
   readonly intentKind: ActivationIntentKind
 }
 
-/** Declarative result of one verdict commit. The shells only map this onto
- *  StartupResult (A) or ApplyOutcome (B). */
+/** Declarative result of one verdict commit; shells map it onto StartupResult (A) or
+ *  ApplyOutcome (B). */
 export interface VerdictCommit {
   readonly override: OverrideRecord | null
   readonly deleteOverride: boolean
@@ -293,15 +274,9 @@ export const DELAYED_ROLLBACK_VERDICT_POLICY: VerdictPolicy = {
 }
 
 /**
- * Pure commit of one apply verdict (audit 2.4). The F4 branch body and every
- * override/journal mutation are moved here verbatim; only the policy
- * dimensions that actually differed between runStartupPhase and
- * runDelayedRollback remain parameterized. The applied-override commit is
- * A-only: runDelayedRollback (B) builds its verdict from a rollback-needed
- * journal (beginDelayedRollback) whose continuation can only settle
- * rolled-back/failed, so B declares commitAppliedOverride=false and never
- * reaches that clause (B1 R4 — explicit policy dimension, not caller
- * discipline).
+ * Pure commit of one apply verdict: all override/journal mutations live here and only
+ * the policy dimensions that actually differ between the two entries stay
+ * parameterized (see VerdictPolicy.commitAppliedOverride).
  */
 export function commitApplyVerdict(input: VerdictInput, policy: VerdictPolicy): VerdictCommit {
   const {
@@ -329,10 +304,8 @@ export function commitApplyVerdict(input: VerdictInput, policy: VerdictPolicy): 
     && intentKind === 'reset-builtin'
     && applyOutcome.status === 'applied'
 
-  // B1 R4: the applied-override commit is an explicit A-only policy dimension
-  // (see VerdictPolicy.commitAppliedOverride). B's input journal is always
-  // rollback-needed, so its outcome can never be 'applied'; the false policy
-  // keeps the clause unreachable even if a caller ever passed one.
+  // The applied-override commit is the A-only policy dimension: B's journal is always
+  // rollback-needed, so its outcome can never be 'applied'.
   const commitsAppliedOverride = policy.commitAppliedOverride && applyOutcome.status === 'applied'
 
   let override: OverrideRecord | null = null
@@ -359,8 +332,8 @@ export function commitApplyVerdict(input: VerdictInput, policy: VerdictPolicy): 
       next.resolvedVersion = targetVersion
       next.swapAttempted = false
     } else if (targetIsBuiltin && commitsAppliedOverride) {
-      // shell-invalidation preserves the historical selection; reset-builtin
-      // took the deleteOverride branch above.
+      // shell-invalidation preserves the historical selection; reset-builtin took the
+      // deleteOverride branch above.
       next.invalidatedAt = current.invalidatedAt ?? new Date().toISOString()
       next.invalidatedReason = current.invalidatedReason ?? 'shell-version-changed'
       next.lastInvalidatedAt = current.lastInvalidatedAt ?? next.invalidatedAt
@@ -378,8 +351,8 @@ export function commitApplyVerdict(input: VerdictInput, policy: VerdictPolicy): 
       && targetIsBuiltin
       && applyOutcome.status === 'rolled-back'
       && applyOutcome.rollbackTarget !== null) {
-      // The startup-time current pointer is the only authoritative old
-      // override. Reactivation clears persisted invalidation, not history.
+      // The startup-time current pointer is the only authoritative old override;
+      // reactivation clears persisted invalidation, not history.
       next.shellVersion = input.shellVersion
       next.invalidatedAt = null
       next.invalidatedReason = null
@@ -439,31 +412,28 @@ export function commitApplyVerdict(input: VerdictInput, policy: VerdictPolicy): 
 }
 
 /**
- * Execute recovery and, when safe, exactly one pending/builtin activation.
- * `signal` is an optional transaction-level abort forwarded to
- * the apply phase: a pre-aborted signal at the apply entry cancels the
- * attempt with zero side effects and leaves the durable journal for the next
- * startup to resume idempotently.
+ * Execute recovery and, when safe, exactly one pending/builtin activation. A
+ * pre-aborted `signal` cancels at the apply entry with zero side effects and leaves
+ * the durable journal for the next startup to resume idempotently.
  */
 export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): Promise<StartupResult> {
-  // Read recovery metadata before cleanup/eviction. The store also protects
-  // every journal version, including the fail-closed corrupt state.
+  // Read recovery metadata before cleanup/eviction; the store also protects every
+  // journal version, including the fail-closed corrupt state.
   let journalState = deps.readActivationJournal()
   let pointerState = deps.readCurrentPointerState()
   let overrideState = deps.readOverrideState()
   const initialMetadataError = corruptMetadataReason(journalState, pointerState, overrideState)
   if (initialMetadataError !== null) {
-    // A data restore marker is independently authoritative and may still be
-    // completed, but cleanup/eviction and every spawn path stay closed while
-    // runtime-selection metadata is unreadable.
+    // A data restore marker is independently authoritative and may still be completed,
+    // but cleanup/eviction and every spawn path stay closed while selection metadata
+    // is unreadable.
     const restored = await deps.completeInterruptedRestore()
     if (restored === 'half' || restored === 'incomplete') {
       return resultBase(restored, restored === 'half' ? 'restore-half' : 'restore-incomplete', [], [])
     }
-    // An environment override is an external, highest-priority runtime
-    // selection. Corrupt dormant chamber metadata must remain untouched and
-    // blocks every chamber mutation, but it cannot shadow a valid env launch
-    // after an independently authoritative restore marker has been completed.
+    // An environment override is an external highest-priority selection: corrupt
+    // dormant metadata blocks every chamber mutation but cannot shadow a valid env
+    // launch after an authoritative restore marker has been completed.
     if (deps.envOverrideActive?.() === true) {
       return resultBase(restored, 'env-override', [], [])
     }
@@ -501,13 +471,12 @@ export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): 
   }
 
   const override = overrideState.kind === 'valid' ? overrideState.record : null
-  // Keep startup's replay gate identical to controller/resolve semantics:
-  // an old-shell pending is invalid even when an interrupted invalidation has
-  // not populated invalidatedAt yet.
+  // Keep the replay gate identical to controller/resolve semantics: an old-shell pending
+  // is invalid even when an interrupted invalidation has not populated invalidatedAt yet.
   const effectivePending = readEffectivePending(override, deps.shellVersion)
 
-  // Env wins over every persisted choice. Restore completion above is still
-  // allowed, but no pointer/snapshot/probe may masquerade as applying pending.
+  // Env wins over every persisted choice; no pointer/snapshot/probe may masquerade as
+  // applying pending.
   if (deps.envOverrideActive?.() === true) {
     const monitoring = journalState.kind === 'valid' && journalState.journal.phase === 'applied-monitoring'
       ? journalState.journal
@@ -524,10 +493,9 @@ export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): 
     }
     if (queued === null) {
       if (!journal.targetIsBuiltin && override?.pending === journal.targetVersion) {
-        // Crash window: apply durably recorded the probe verdict, but startup
-        // died before the single override write that clears pending. Complete
-        // only that verdict commit. Re-applying here would snapshot data that
-        // the target may already have migrated and would erase delayed-rollback evidence.
+        // Crash window: apply durably recorded the probe verdict but died before the
+        // single override write that clears pending; re-applying would snapshot the
+        // target again and could erase delayed-rollback evidence.
         deps.writeOverride({
           ...override,
           chosenVersion: journal.targetVersion,
@@ -545,9 +513,8 @@ export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): 
         if (journal.intentKind === 'version-switch') {
           return resultBase(restored, 'journal-mismatch', cleanedWorkDirs, evicted, journal)
         }
-        // Builtin is not restart-exhausted monitored. Finish the override verdict (including
-        // an interrupted shell-version invalidation) before dropping the
-        // transaction journal.
+        // Builtin is not restart-exhausted monitored; finish the override verdict
+        // (including an interrupted invalidation) before dropping the journal.
         if (journal.intentKind === 'reset-builtin') {
           deps.deleteOverride()
         } else {
@@ -575,16 +542,16 @@ export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): 
       }
 
       if (effectivePending === null) {
-        // Normal post-commit boot: keep the durable restart-exhausted context until another
-        // selection/reset/rollback supersedes it.
+        // Normal post-commit boot: keep the durable restart-exhausted context until
+        // another selection/reset/rollback supersedes it.
         return resultBase(restored, null, cleanedWorkDirs, evicted, journal)
       }
       return resultBase(restored, 'journal-mismatch', cleanedWorkDirs, evicted, journal)
     }
 
     if (queued !== null && !queued.targetIsBuiltin && effectivePending === null) {
-      // Controller committed the intent but failed before override.pending.
-      // Drop only the uncommitted next intent; delayed-rollback monitoring stays intact.
+      // Controller committed the intent but failed before override.pending; drop only
+      // the uncommitted next intent.
       const monitoring = { ...journal, nextIntent: null, updatedAt: new Date().toISOString() }
       deps.writeActivationJournal(monitoring)
       return resultBase(restored, null, cleanedWorkDirs, evicted, monitoring)
@@ -602,8 +569,8 @@ export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): 
       return resultBase(restored, 'journal-mismatch', cleanedWorkDirs, evicted)
     }
     if (!journal.targetIsBuiltin && effectivePending === null) {
-      // Controller intent was published but override.pending was not. No
-      // pointer was touched, so this orphan is safe to discard.
+      // Controller intent was published but override.pending was not; no pointer was
+      // touched, so this orphan is safe to discard.
       safeClearJournal(deps)
       return resultBase(restored, null, cleanedWorkDirs, evicted)
     }
@@ -618,10 +585,8 @@ export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): 
   if (overrideInvalidated
     && journal?.intentKind === 'version-switch'
     && !journalIsRollbackContinuation) {
-    // An app update invalidates both override and pending. A pre-verdict
-    // transaction from the old shell may already have touched the pointer, so
-    // leave its evidence intact and block; never finish applying it under the
-    // new shell contract.
+    // An app update invalidates override and pending; a pre-verdict old-shell
+    // transaction may already have touched the pointer, so leave its evidence and block.
     return resultBase(restored, 'journal-mismatch', cleanedWorkDirs, evicted,
       journal.phase === 'applied-monitoring' ? journal : null)
   }
@@ -652,9 +617,8 @@ export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): 
   const targetIsBuiltin = journal?.targetIsBuiltin ?? false
   const intentKind = journal?.intentKind ?? 'version-switch'
 
-  // Explicit retry clears swapAttempted/lastOutcome in override before entry.
-  // Restore phases always continue; an operational pointer/stop failure does
-  // not repeat automatically on every launch.
+  // Explicit retry clears swapAttempted/lastOutcome before entry; restore phases always
+  // continue, while an operational pointer/stop failure is not repeated on every launch.
   const restoreRecovery = journal?.phase === 'restoring'
     || journal?.phase === 'restore-complete'
     || journal?.phase === 'manual-restoring'
@@ -740,14 +704,11 @@ export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): 
   if (commit.deleteOverride) deps.deleteOverride()
   else if (commit.override !== null) deps.writeOverride(commit.override)
   if (commit.journalAction === 'convert' && verdictJournal !== null && queuedIntent !== null) {
-    // The delayed rollback may race with a user selection. Only after the old activation has
-    // safely rolled back do we turn the queued durable selection into a new
-    // transaction. A crash before this write re-enters restore-complete and
-    // reaches the same decision without losing the selection.
+    // The delayed rollback may race with a user selection: only after the old activation
+    // safely rolled back is the queued durable selection turned into a new transaction.
     deps.writeActivationJournal(convertMonitoringToIntent(verdictJournal, queuedIntent))
   } else if (commit.journalAction === 'clear') {
-    // Intent commit gap or fully committed activation: only the pure verdict
-    // decides; the shell just applies the action.
+    // Intent commit gap or fully committed activation: only the pure verdict decides.
     safeClearJournal(deps)
   }
   const postApplyJournalMismatch = commit.mismatch
@@ -796,9 +757,8 @@ export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): 
 
 /**
  * Restart-exhausted entry. `beginDelayedRollback` durably changes the
- * applied-monitoring journal before any side effect, then the exact same
- * rollback/restore continuation used by startup is executed. Pending may
- * already be null; journal.targetVersion remains authoritative.
+ * applied-monitoring journal before any side effect; pending may already be null and
+ * journal.targetVersion stays authoritative.
  */
 export async function runDelayedRollback(
   deps: StartupDeps,

@@ -1,15 +1,8 @@
 /**
- * Action equivalence normalizer.
- *
- * The differential oracle compares an old wiring against a new one. Their
- * DIAGNOSTIC strings are expected to differ - the new reducer names things
- * differently on purpose - so comparing raw effects would go red for cosmetic
- * reasons and pressure the refactor into keeping legacy wording. This module
- * projects an effect onto a canonical form: (effect kind, target id, semantic
- * reason class), deliberately dropping wording.
- *
- * The normalizer is itself pure and dependency-free because the oracle
- * (scripts/refactor/equivalence.mjs) must be able to load it without a build.
+ * Action equivalence normalizer: projects an effect onto (kind, target id, semantic
+ * reason class), dropping wording so cosmetic diagnostic differences cannot decide a
+ * differential verdict. Unknown text maps to itself - a new cause shows up as a
+ * difference instead of silently matching anything. Pure and dependency-free.
  */
 import type { RecoveryEffect } from './state.ts'
 
@@ -20,9 +13,8 @@ export interface NormalizedEffect {
   readonly reasonClass: string
 }
 
-/** Reason classes collapse the wording variants that mean the same thing.
- * Deliberately conservative: only synonyms are folded; distinct causes stay
- * distinct so a real semantic difference can never hide behind this map. */
+/** Reason classes fold wording variants that mean the same thing; only synonyms are
+ * folded, so distinct causes stay distinct and cannot hide behind this map. */
 const REASON_CLASSES: Readonly<Record<string, string>> = {
   socketNoFrame: 'silent',
   'silent socket replaced': 'silent',
@@ -37,16 +29,14 @@ const REASON_CLASSES: Readonly<Record<string, string>> = {
   throttled: 'throttled',
 }
 
-/** Fold a free-text reason into its class. Unknown text maps to itself so a new
- * cause shows up as a difference instead of silently matching anything. */
+/** Fold a free-text reason into its class; unknown text maps to itself. */
 export function reasonClassOf(reason: string): string {
   return REASON_CLASSES[reason] ?? reason
 }
 
 /**
- * Project one effect. `target` is the identity the effect acts on - a stream id
- * where one exists, else the effect's own name - so reordering unrelated
- * effects cannot masquerade as a match.
+ * Project one effect. `target` is the identity it acts on (a stream id, else the
+ * effect's own name), so reordering unrelated effects cannot masquerade as a match.
  */
 export function normalizeEffect(effect: RecoveryEffect): NormalizedEffect {
   switch (effect.e) {
@@ -66,11 +56,9 @@ export function normalizeEffect(effect: RecoveryEffect): NormalizedEffect {
 }
 
 /**
- * Compare two effect sequences under three allowed divergence classes:
- * wording, intra-tick ordering, and added
- * observability. Concretely: `forensic` effects are compared as a set (their
- * order and count are diagnostic), while every other effect is compared as an
- * ordered multiset per target.
+ * Compare two effect sequences tolerating wording and intra-tick ordering differences.
+ * `forensic` effects are compared as a set (observability may be ADDED, never removed),
+ * every other effect as an ordered multiset per target.
  */
 export function equivalents(a: readonly RecoveryEffect[], b: readonly RecoveryEffect[]): boolean {
   const key = (e: RecoveryEffect): string => {

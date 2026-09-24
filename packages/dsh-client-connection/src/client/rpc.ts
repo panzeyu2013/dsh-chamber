@@ -1,17 +1,8 @@
 /** Browser caller for generic Connection unary RPC channels.
  *
- * ## chamber patch (dsh-chamber connection manager, design 05 §6)
- *
- * The URL is built as `<instanceBase><channel>/<endpoint>` so every generic RPC
- * call lands under the control-plane's per-instance proxy prefix. The origin
- * resolution stays same-origin (`location.origin`, with the `dsh.internal`
- * fallback for no-location environments). With the stock base path `/api` the
- * URL is byte-identical to upstream. Chamber supplies the option from each
- * entry's private Context (`chamberBasePath`); `window.__DSH_BASE_PATH__`
- * remains only as a compatibility fallback for other embedders. The upstream
- * `doFetch`/`openStream` transport overrides are carried on the same options
- * object (`WebConnectionRpcOptions`).
- */
+ * chamber patch: the URL is `<instanceBase><channel>/<endpoint>`, so calls land
+ * under the per-instance proxy prefix; the stock `/api` base is byte-identical to
+ * upstream and `window.__DSH_BASE_PATH__` stays a compatibility fallback. */
 
 import {
   RpcId,
@@ -26,7 +17,6 @@ const INTERNAL_BASE = 'http://dsh.internal'
 const CHANNEL_PATTERN = /^\/[A-Za-z0-9._~-]+$/
 const ENDPOINT_SEGMENT_PATTERN = /^[A-Za-z0-9_$.-]+$/
 
-/** Transport this caller posts through; same signature as the global `fetch`. */
 export type RpcFetch = (input: URL, init: RequestInit) => Promise<Response>
 
 /** Worker-local opener for decoded Gateway Remote streams. */
@@ -36,7 +26,6 @@ export type RpcStreamOpen = (
   signal: AbortSignal,
 ) => AsyncIterable<unknown>
 
-/** chamber patch: generic RPC carrier construction options. */
 export interface WebConnectionRpcOptions {
   /** Per-instance api base path: `/api` (stock, no prefix) or `/api/i/<id>`. */
   basePath?: string
@@ -46,12 +35,8 @@ export interface WebConnectionRpcOptions {
   openStream?: RpcStreamOpen
 }
 
-/**
- * Create the browser-backed generic RPC caller.
- * @param options - chamber patch: per-instance base path plus the upstream
- *   transport overrides (fetch / worker-local stream carrier).
- * @returns caller that owns request correlation and response-envelope validation.
- */
+/** Create the browser-backed generic RPC caller: per-instance base path plus
+ *  the upstream transport overrides. Owns request correlation and envelope validation. */
 export function createWebConnectionRpc(options: WebConnectionRpcOptions = {}): ClientConnectionRpc {
   /** chamber patch: resolved prefix injected before the channel path ('' = stock). */
   const basePath = resolveInstanceBasePath(options.basePath)

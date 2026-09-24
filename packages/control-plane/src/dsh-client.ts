@@ -1,49 +1,23 @@
 /**
- * dsh wire protocol layer. The desktop control-plane uses only the unary
- * client, the unified host-identity probe (probeHostIdentity — the
- * session/canOpenWorkspacePath identity contract with its legacy session/list
- * fallback, single-sourced in rpc-envelope.ts) and the generation-scoped
- * abort semantics. The separately invoked authenticated gateway proxies the
- * same unary wire (runtime-manager.ts consumes call()).
+ * dsh wire protocol layer. The desktop control-plane uses only the unary client, the
+ * unified host-identity probe (single-sourced in rpc-envelope.ts) and the
+ * generation-scoped abort semantics; the gateway proxies the same unary wire. The
+ * interaction/session-runtime domain stays outside this client (a removed domain never
+ * flows back): the answerable surface is the `$events/result` Remote over /api/remote.mux.
  *
- * The interaction/session-runtime domain stays outside this client
- * (CONTRIBUTING.md §范围纪律 — a removed domain never flows back):
- * `respond()` (POST /api/respond, client-response envelope) and
- * `openEventStream()` (the events.mux/events.host downlink consumer) have no
- * counterpart here; the answerable surface is the `$events/result` Remote
- * over /api/remote.mux.
- *
- * Invariants:
- * - rpcId is minted by the initiator (this client) on every unary call and
- *   echoes back in the server-response; a mismatch is a protocol violation.
- * - unary: POST /api/<method>, body {type:'client-request', rpcId, method,
- *   payload}, content-type application/json. Business errors ride the 200
- *   body's result.error branch; non-2xx HTTP statuses express only carrier
- *   failures.
- * - every unary call carries a 30s timeout (DEFAULT_TIMEOUT_MS) merged
- *   with the caller's AbortSignal and the connection generation's signal
- *   (generationSignal); `timeoutMs: null` opts out of the timer entirely
- *   (caller-signal-only policy).
- * - every client-request converges on the rpcId pending table (settle-once):
- *   the `settled` flag + first-writer-wins make response arrival vs timeout
- *   vs caller abort settle each entry exactly once.
- * - every unary response body is read under a per-call byte cap
- *   (UnaryOptions.maxResponseBytes; default MAX_UNARY_RESPONSE_BYTES) so a
- *   damaged/growing host can never grow this process's memory without bound.
- * - probe semantics are decoupled from session-data growth: the unified
- *   identity probe speaks the fixed-size
- *   `session/canOpenWorkspacePath` boolean (HOST_PROBE_MAX_RESPONSE_BYTES)
- *   and only falls back to the session-data-bearing legacy `session/list`
- *   probe (1 MiB default cap) on an HTTP 404 — a runtime tree that predates
- *   the identity method. The periodic health probe verifies the fixed-size
- *   identity contract rather than re-reading the session list.
+ * Invariants: rpcId is minted by this client and must echo back (mismatch = protocol
+ * violation); business errors ride the 200 body's result.error branch while non-2xx
+ * statuses express only carrier failures. Every unary call carries a 30s timeout merged
+ * with the caller's AbortSignal and the generation signal (`timeoutMs: null` opts out),
+ * converges on the rpcId pending table (settle-once), and reads its body under a per-call
+ * byte cap. Probe semantics are decoupled from session-data growth: the identity probe
+ * speaks the fixed-size boolean and only falls back to the session-data-bearing legacy
+ * probe on an HTTP 404.
  */
 
-// The wire envelope is single-sourced in rpc-envelope.ts (cross-package
-// protocol single-sourcing): envelope construction and server-response
-// validation are shared with the desktop probes (ssh-provider.ts) — only the
-// fetch-carrier orchestration (pending table / settle-once / signal
-// composition) stays here.
+// The wire envelope is single-sourced in rpc-envelope.ts: envelope construction and
+// server-response validation are shared with the desktop probes; only the fetch-carrier
+// orchestration (pending table / settle-once / signal composition) stays here.
 import {
   buildClientRequest,
   buildHostIdentityProbePayload,
@@ -69,9 +43,8 @@ export {
 export { mintRpcId } from './rpc-envelope.ts'
 
 /**
- * The narrow unary response form: the server-response envelope's {rpcId,
- * result} pair. `result.ok` selects the value/error branch; business
- * failures additionally surface as RpcBusinessError throws.
+ * The narrow unary response form: the server-response envelope's {rpcId, result} pair.
+ * `result.ok` selects the value/error branch; business failures also throw RpcBusinessError.
  */
 export interface UnaryResponse {
   rpcId: string
@@ -90,10 +63,9 @@ export interface UnaryOptions {
   timeoutMs?: number | null
   /** The connection generation's AbortSignal — its death settles with connection_offline. */
   generationSignal?: AbortSignal
-  /** Per-call response-body cap in bytes (default MAX_UNARY_RESPONSE_BYTES).
-   *  The unified identity probe passes HOST_PROBE_MAX_RESPONSE_BYTES (64 KiB)
-   *  so an oversized answer can never be mistaken for the fixed-size boolean
-   *  identity response. */
+  /** Per-call response-body cap in bytes (default MAX_UNARY_RESPONSE_BYTES). The identity
+   *  probe passes HOST_PROBE_MAX_RESPONSE_BYTES so an oversized answer cannot be mistaken
+   *  for the fixed-size boolean. */
   maxResponseBytes?: number
 }
 
@@ -112,11 +84,9 @@ class BoundedResponseError extends Error {
   }
 }
 
-/** Read one fetch response without allowing a damaged host to grow memory
- * without bound. Content-Length is only a fast rejection; the streamed byte
- * count remains authoritative when the header is absent or dishonest. The
- * cap is per-call (the caller's UnaryOptions.maxResponseBytes), defaulting
- * to MAX_UNARY_RESPONSE_BYTES. */
+/** Read one fetch response without allowing a damaged host to grow memory without bound.
+ *  Content-Length is only a fast rejection; the streamed byte count is authoritative when
+ *  the header is absent or dishonest. The cap is per-call. */
 async function readBoundedJson(response: Response, maxBytes: number): Promise<unknown> {
   const declared = response.headers.get('content-length')
   if (declared !== null && /^\d+$/.test(declared) && Number(declared) > maxBytes) {
@@ -173,11 +143,9 @@ interface PendingEntry {
 }
 
 /**
- * rpcId → PendingCall table, settle-once only (it serves exactly `call`).
- * Node's single thread makes every access serial (each settle runs inside
- * one microtask/event handler); the only race guard needed is the `settled`
- * flag — the first settle path wins and cleans up the remaining listeners,
- * later paths are no-ops.
+ * rpcId → PendingCall table, settle-once only. Node's single thread makes every access
+ * serial; the only race guard needed is the `settled` flag — the first settle path wins
+ * and cleans up the remaining listeners, later paths are no-ops.
  */
 const pendingTable = {
   table: new Map<string, PendingEntry>(),
@@ -227,10 +195,9 @@ export class RpcBusinessError extends Error {
 }
 
 /**
- * A carrier-level failure. `code` is the control plane's own transport error
- * namespace (never a dsh RpcErrorCode):
- *   connection_offline / request_timeout / aborted / protocol_violation /
- *   response_too_large / transport_http_<status> / transport_error
+ * A carrier-level failure. `code` is the control plane's own transport error namespace
+ * (never a dsh RpcErrorCode): connection_offline / request_timeout / aborted /
+ * protocol_violation / response_too_large / transport_http_<status> / transport_error
  */
 export class RpcTransportError extends Error {
   code: string
@@ -260,12 +227,10 @@ interface ComposeSignalsInput {
 }
 
 /**
- * Combine the entry controller, the caller signal, the generation signal and
- * the timeout policy into the fetch AbortSignal, and report which component
- * fired first so the transport error code is accurate. The timeout is a
- * plain (ref'd) timer that aborts the entry controller — the loop stays
- * alive while a request is in flight and the timer is cleared on settle (no
- * leak).
+ * Combine the entry controller, caller signal, generation signal and timeout policy
+ * into the fetch AbortSignal, and report which component fired first so the transport
+ * error code is accurate. The timeout aborts the entry controller and is cleared on
+ * settle (no leak).
  */
 function composeSignals({ signal, generationSignal, timeoutMs, controller }: ComposeSignalsInput): {
   signal: AbortSignal
@@ -308,20 +273,15 @@ function composeSignals({ signal, generationSignal, timeoutMs, controller }: Com
 }
 
 /**
- * One unary call: register on the pending table, POST the client-request
- * envelope, validate the echo, and settle the entry.
- * @param baseUrl - origin of the dsh host, e.g. http://127.0.0.1:17510.
- * @param method - the wire path segment, e.g. 'session/canOpenWorkspacePath'
- *   (POST /api/<method>). dsh 0.1.2-alpha.1 requires slash-separated endpoints
- *   (the old dot paths 404).
+ * One unary call: register on the pending table, POST the client-request envelope,
+ * validate the echo, settle the entry.
+ * @param baseUrl - origin of the dsh host.
+ * @param method - the wire path segment (POST /api/<method>); slash-separated endpoints
+ *   only (dot paths 404).
  * @param payload - the business payload (schema-validated host-side).
- * @param options - {signal?} caller cancellation; {timeoutMs?} override the
- *   default 30s policy (null = caller-signal-only, no timer);
- *   {generationSignal?} the connection generation's AbortSignal — its death
- *   settles this call with connection_offline; {maxResponseBytes?} per-call
- *   response-body cap (default MAX_UNARY_RESPONSE_BYTES).
- * @returns {rpcId, result} — the narrow response form; throws RpcBusinessError
- *   when result.ok is false and RpcTransportError for carrier failures.
+ * @param options - signal / timeoutMs / generationSignal / maxResponseBytes.
+ * @returns {rpcId, result}; throws RpcBusinessError when result.ok is false and
+ *   RpcTransportError for carrier failures.
  */
 export async function call(
   baseUrl: string,
@@ -370,8 +330,7 @@ export async function call(
       headers: authCookie === undefined
         ? { 'content-type': 'application/json' }
         : { 'content-type': 'application/json', cookie: authCookie },
-      // The client-request envelope is single-sourced in rpc-envelope.ts;
-      // JSON.stringify preserves the canonical key order.
+      // The envelope is single-sourced in rpc-envelope.ts; JSON.stringify preserves key order.
       body: JSON.stringify(buildClientRequest(rpcId, method, payload)),
       signal: composed.signal,
     })
@@ -398,16 +357,13 @@ export async function call(
     }
     throw fail(`dsh unary ${method}: response body is not JSON: ${String(error)}`, response.status, 'protocol_violation')
   }
-  // Fetch can finish buffering at the same edge as a caller/generation abort.
-  // Cancellation owns the lifecycle: never accept or cache a response after
-  // its connection generation has already died.
+  // Cancellation owns the lifecycle: never accept or cache a response after its
+  // connection generation has already died, even if buffering finished at the same edge.
   const cancellation = composed.fired()
   if (cancellation !== null) {
     throw fail(`dsh unary ${method}: request cancelled before response settled`, 0, cancellation)
   }
-  // The server-response validation is single-sourced in rpc-envelope.ts; the
-  // unary client additionally requires result.ok to be a boolean (the desktop
-  // probes treat `ok === true` differently and stay lenient).
+  // Validation is single-sourced in rpc-envelope.ts; the unary client additionally requires result.ok to be a boolean.
   const parsed = parseServerResponse(envelope, rpcId)
   if (parsed.kind === 'no-envelope') {
     throw fail(`dsh unary ${method}: missing or mismatched server-response`, response.status, 'protocol_violation')
@@ -423,8 +379,7 @@ export async function call(
   const errorBranch = typeof result.error === 'object' && result.error !== null
     ? result.error
     : { code: 'unknown_rpc_code', message: 'malformed error branch', details: {} }
-  // Business errors ride the resolve path; the surface-facing throw happens
-  // only after the entry settled.
+  // Business errors ride the resolve path; the surface-facing throw happens only after the entry settled.
   pendingTable.settle(rpcId, { rpcId, result })
   throw new RpcBusinessError(errorBranch)
 }
@@ -435,70 +390,41 @@ interface ProbeHostIdentityOptions {
   generationSignal?: AbortSignal
   /** Per-call unary timeout (default 30s policy). */
   timeoutMs?: number | null
-  /** Warning sink for the legacy fallback (required — the fallback must
-   *  never be silent; every control-plane caller owns a Logger). */
+  /** Warning sink for the legacy fallback (required — the fallback must never be silent). */
   logger: { warn(line: string): void }
 }
 
-/** Narrow the transport-error surface to the 404 signal that selects the
- *  legacy fallback. Only an HTTP 404 from the host (the runtime tree does
- *  not register the identity method) falls back; every other failure — 401
- *  auth gate, 5xx, timeout, malformed body — fails loud, never silently
- *  downgrades to the session-data probe. */
+/** Narrow the transport-error surface to the 404 signal that selects the legacy
+ *  fallback. Every other failure — 401 auth gate, 5xx, timeout, malformed body —
+ *  fails loud, never silently downgrades to the session-data probe. */
 function isHostIdentityNotFound(error: unknown): boolean {
   return error instanceof RpcTransportError && error.status === 404
 }
 
-/** Per-baseUrl throttle for the legacy-fallback warning: the diagnostic is a
- *  property of the HOST (its runtime tree predates the identity method), so
- *  re-announcing it on every 500ms readiness retry or every 30s health cycle
- *  would only spam the log without new information. The marker is added when
- *  a legacy fallback succeeds and REMOVED when the identity method later
- *  answers — the throttle therefore means "once per consecutive legacy
- *  episode per baseUrl": a host that switches runtimes back and forth
- *  (restartLocal / stop→start with a version switch on the same port)
- *  re-announces the warning for each new legacy episode, while a persistent
- *  legacy host stays silent after its first warning. */
+/** Per-baseUrl throttle for the legacy-fallback warning: the diagnostic is a property
+ *  of the HOST, so re-announcing it on every readiness retry or health cycle would only
+ *  spam the log. The marker is added when a legacy fallback succeeds and REMOVED when
+ *  the identity method later answers — "once per consecutive legacy episode per baseUrl". */
 const legacyFallbackWarnedBaseUrls = new Set<string>()
 
 /**
- * The unified host-identity probe (single-sourced contract in rpc-envelope.ts:
- * HOST_IDENTITY_METHOD / LEGACY_HOST_PROBE_METHOD / HOST_PROBE_MAX_RESPONSE_BYTES):
- * verify that the host answers the dsh identity wire without ever reading
- * session data.
+ * The unified host-identity probe (contract single-sourced in rpc-envelope.ts): verify
+ * the host answers the dsh identity wire without reading session data.
  *
- *  1. POST the `session/canOpenWorkspacePath` identity Remote (zero-arg →
- *     boolean; response bounded at HOST_PROBE_MAX_RESPONSE_BYTES). The probe
- *     passes when the server-response echoes the rpcId with result.ok ===
- *     true and a BOOLEAN value — value true and value false are equally
- *     healthy: the probe verifies that the method exists, the protocol is
- *     correct and the SessionController is assembled, not the platform
- *     answer itself.
- *  2. HTTP 404 (the runtime tree does not register the identity method) falls
- *     back to the legacy `session/list` probe (default 1 MiB cap). The
- *     caller is warned ONLY when the legacy fallback SUCCEEDS — a successful
- *     legacy answer is the real signal of a pre-identity runtime tree, while
- *     a transient modern-tree 404 (routes still mounting) or a both-404
- *     failure stays quiet. The warning is emitted at most once per
- *     CONSECUTIVE legacy episode per baseUrl (added on fallback success,
- *     cleared on the next identity-method success), so the 30s health cycle
- *     never spams while a host that downgrades again re-announces its state
- *     — upstream identity-method drift stays visible without log spam.
- *  3. Anything else — 401 browser-auth gate, 5xx, timeout, malformed or
- *     non-boolean envelope — fails loud. Failures are never cached.
+ *  1. POST the `session/canOpenWorkspacePath` identity Remote (zero-arg → boolean,
+ *     bounded at HOST_PROBE_MAX_RESPONSE_BYTES). Passes when the response echoes the
+ *     rpcId with result.ok === true and a BOOLEAN value — true and false are equally
+ *     healthy: the probe verifies method presence, protocol correctness and controller
+ *     assembly, not the platform answer.
+ *  2. HTTP 404 falls back to the legacy `session/list` probe (1 MiB cap). The caller is
+ *     warned only when the fallback SUCCEEDS (the real signal of a pre-identity tree),
+ *     at most once per consecutive legacy episode per baseUrl.
+ *  3. Anything else — 401, 5xx, timeout, malformed/non-boolean envelope — fails loud;
+ *     failures are never cached.
  *
- * @param baseUrl - origin of the dsh host, e.g. http://127.0.0.1:17510.
- * @param options - {logger} warning sink (required; the fallback must never
- *   be silent), {signal?} caller cancellation, {generationSignal?} the
- *   connection generation's AbortSignal (its death settles with
- *   connection_offline), {timeoutMs?} unary timeout override.
- * @returns true when the host answered the identity handshake (either the
- *   identity method or the legacy fallback) — resolution IS the health
- *   verdict; the host's boolean answer is deliberately not surfaced so no
- *   caller can mistake value false for a probe failure.
- * @throws RpcBusinessError for the result.error branch; RpcTransportError
- *   (connection_offline / aborted / request_timeout / response_too_large /
- *   protocol_violation / transport_http_<status>).
+ * @returns true when the host answered the identity handshake (either method) — the
+ * boolean answer is deliberately not surfaced so no caller mistakes false for failure.
+ * @throws RpcBusinessError for result.error; RpcTransportError for carrier failures.
  */
 export async function probeHostIdentity(
   baseUrl: string,
@@ -523,16 +449,13 @@ export async function probeHostIdentity(
         'protocol_violation',
       )
     }
-    // Both boolean answers are healthy: only the method presence / protocol
-    // correctness / controller assembly is under test. The identity method
-    // answering also closes the current legacy episode — a later downgrade
-    // re-arms the fallback warning (see legacyFallbackWarnedBaseUrls).
+    // Both boolean answers are healthy. The identity method answering also closes the
+    // current legacy episode; a later downgrade re-arms the warning.
     legacyFallbackWarnedBaseUrls.delete(baseUrl)
     return true
   } catch (error) {
     if (isHostIdentityNotFound(error)) {
-      // Legacy trees answer session/list; a 404 on
-      // BOTH methods (or any non-404 failure of the fallback) fails loud.
+      // Legacy trees answer session/list; a 404 on BOTH methods (or any non-404 fallback failure) fails loud.
       try {
         const { result } = await call(
           baseUrl,
@@ -541,11 +464,8 @@ export async function probeHostIdentity(
           { signal, generationSignal, timeoutMs },
         )
         // Legacy-answer shape check, single-sourced in rpc-envelope.ts
-        // (isLegacyHostProbeValue): the session/list probe validates the value
-        // slot — it answered a plain record carrying an `items` array, so
-        // ok:true with any other value (including a bare object or an array)
-        // is a protocol_violation, never a healthy host. A damaged legacy host
-        // must fail loud, not pass the health probe.
+        // (isLegacyHostProbeValue): an ok:true value that is not a plain record carrying
+        // an `items` array is a protocol_violation, never a healthy host.
         if (!isLegacyHostProbeValue(result.value)) {
           throw new RpcTransportError(
             `dsh ${LEGACY_HOST_PROBE_METHOD}: malformed value slot`,
@@ -563,11 +483,8 @@ export async function probeHostIdentity(
         }
         throw legacyError
       }
-      // Warn only after the fallback SUCCEEDED: a successful legacy answer
-      // proves the host predates the identity method (or that the method is
-      // unavailable while session/list still lives). Transient modern-tree
-      // 404s and both-404 failures never reach this line, so the premise of
-      // the warning is always the observed fact.
+      // Warn only after the fallback SUCCEEDED: a successful legacy answer proves the host
+      // predates the identity method. Transient modern-tree 404s never reach this line.
       if (!legacyFallbackWarnedBaseUrls.has(baseUrl)) {
         legacyFallbackWarnedBaseUrls.add(baseUrl)
         logger.warn(

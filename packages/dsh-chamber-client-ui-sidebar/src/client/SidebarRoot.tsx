@@ -1,127 +1,15 @@
 /**
- * Chamber sidebar shell (design 05 §2): column geometry owned by the shell,
- * region replaced with the chamber multi-source session list.
- *
- * Kept from the official shell: logo row (wide/rail), New Session (rides the
- * runtime action of THIS ctx — always the current source), the fold
- * state machine (slide + crossfade, rail-in animation, frozen-width fade),
- * the pointer-followed scrollbar discipline, and the foot
- * (sidebar.footer.action + sidebar.settings).
- *
- * The region renders
- * every source's sessions in ONE equal list, grouped by source only: source
- * header (label + connection-status dot/spinner — green ready, red
- * error/stopped, gray idle/unknown, spinner while connecting/starting/
- * restarting/degraded (the reconnect cycle folds into one stable "trying"
- * state — no spinner/dot flicker on every retry attempt); the phase text
- * lives on hover only; active source highlighted) →
- * workspace groups → session rows. Remote sources carry a stable accent
- * derived from the source id (hue hash); the local source omits the accent
- * and falls back to the default ink. The accent also feeds the active
- * source/session left inset through a per-element CSS variable
- * (--chamber-source-accent). A session row click asks
- * the App layer to switch to that source's
- * shell and open the session (chamberBridge.requestOpenSession); clicking a
- * remote source's header asks the App layer to switch the active N-ctx view
- * WITHOUT opening a session (chamberBridge.requestActivateSource). Session
- * rows show a state indicator in a fixed TRAILING slot at the row's very end
- * (normal = empty; running = the official dsh ongoing blue RING; pending
- * interactions = a distinguishable 14px icon badge — question `?`,
- * plan-review checklist, approval warning triangle; completed-but-unread = the
- * chamber brand-blue 6px dot — the slot is not a
- * server-identity marker; identity rides the source header accent (fold
- * glyph + active inset) and the rail dots). Hover swaps
- * are TRUE replacements: the actions take no layout space at rest
- * (display:none), so the state icon really sits at the end; hovering swaps
- * the state slot for the row actions (source header: status ↔
- * sort menu + search + add-workspace; workspace header: count ↔ `+`+kebab).
- * Hover actions are
- * icon-based: a
- * workspace header carries a `+`
- * (new session) and a three-dot kebab menu (rename/delete); a session row
- * carries a three-dot kebab menu whose entries are rename / fork / archive —
- * the archive verb lives in the row menu
- * (a second hover button is upstream's explicit anti-pattern, and archiving
- * needs no confirm because it only hides the row);
- * the add-workspace button lives in the source header (source-level creation,
- * next to the per-source search). Actions run over that
- * source's own unary API (v1
- * minimal set: session rename/archive; workspace new-session/rename/delete);
- * failures surface inline, never silently. A trailing synthetic bucket
- * renders stray sessions as an ungrouped group (sessions only — no workspace
- * actions). Every successful action asks the App layer to re-pull that
- * source's snapshot (chamberBridge.requestRefresh); connected sources also
- * offer an add-workspace entry — one in-app directory-browser dialog per
- * source (05 §4; every managed host serves the browse capability) — through
- * the source-header `+`.
- * When a connected source's snapshot fetch failed, its error text replaces
- * the derived workspace list (grouped from session/list cwd facts)
- * instead of pretending there are no workspaces (an
- * active search query keeps its results visible above that error).
- * Disconnected sources render the header (the status dot/spinner always
- * shows the phase kind — no status text, the raw transport reason never
- * surfaces on the main surface (the connections settings page carries the
- * detailed logSummary)); with every source disconnected the list appends
- * the empty hint under the groups. The rail
- * renders one named, operable button per source (the source color dot + the
- * active accent ring keep their tokens).
- * Workspace groups fold/unfold via a header
- * chevron toggle; fold state + ungrouped order live in ONE shared live store
- * (view prefs, 06 §3: getViewPrefs/subscribeViewPrefs/
- * updateViewPrefs — single vite-shared instance across every ctx's sidebar,
- * write-through localStorage + notify, cross-ctx LIVE sync; a fold toggle in
- * any source's sidebar propagates to all sources immediately, no per-ctx
- * stale copy, no write-back resurrecting another ctx's newer state).
- *
- * Per-source session search (wide only, 06 §1) —
- * the source header carries a search icon (hidden for disconnected sources
- * and for sources whose snapshot pull failed, unless the capsule is open so
- * it can be collapsed); expanding renders a capsule input row beneath the
- * header (debounced content search over the source's unary API, one 30s-
- * aborted job per query, results replace the workspace list while a query is
- * active); clicking the icon on an open capsule collapses it (empty query)
- * or just blurs the input. In-source HTML5 drag ordering (06 §2): session
- * rows (real workspaces AND the ungrouped bucket) and real workspace group
- * headers drag within their own source only; commits move
- * sessions/workspaces through the wire methods with an optimistic transient
- * order override that self-heals on the next pull (dropped per key only when
- * the pull confirms the commit, the key's workspace vanished, or the wire
- * commit failed; a stale poll never resets it), while the ungrouped order
- * persists through view prefs. The current-session highlight is
- * channel-based (06 §4): each ctx's plugin reports its own
- * runtime facts through a tokenized chamberBridge runtime producer, the App layer
- * merges them into server.runtime, and this shell highlights the matching
- * row (official selected tint) and marks its workspace group with an accent
- * chevron — without subscribing to any store. The highlight is
- * single-selection: only the source owning this visible ctx
- * renders it, so globally exactly one session — the one being viewed —
- * is highlighted.
- *
- * Collapse is a slide plus crossfade: content freezes at its expanded width
- * (inline style) and fades out in place while the sliding column (AppFrame
- * grid tracks) clips it — nothing reflows mid-slide. At settle the wide-only
- * content unmounts and the four upper controls enter the 56px rail from the
- * same horizontal offset (one icon each, same top-down order) on one fade
- * that ends with the slide. The bottom-pinned settings control only fades.
- *
- * The column also owns whether the scroll regions nested in it draw a
- * scrollbar at all: the shell tracks the pointer and rebinds ui-theme's
- * scrollbar indirection away while it is elsewhere, so a list the user is not
- * pointing at carries no bar.
- *
- * 会话待办区: a PINNED attention block above
- * the scroll region (wide only) — the pure projection derivation
- * (shared/todo-attention.ts) over the SAME merged runtime facts the rows
- * render: completed-but-unread sessions and sessions waiting for an
- * interaction (approval / plan-review / question). Cap 3 +「还有 N 项」
- * expand; click = the authoritative open path (switch source shell if
- * needed + open the conversation) — removal is projection-driven (read /
- * interaction resolved), never optimistic and never dependent on list
- * visibility; the strip never mutates shared fold/view prefs. The master
- * switch + per-kind gates live in the chamber-global「通用」settings
- * (sessionTodo block) and are mirrored read-only here
- * (shared/todo-prefs.ts).
- */
+ * Chamber sidebar shell: column geometry owned by the shell; the region renders every
+ * source's sessions in ONE grouped list (source header → workspace groups → session rows)
+ * instead of the official `sidebar.workspaces` occupant. Remote sources carry a per-element
+ * `--chamber-source-accent` (source-id hue hash); the local source omits it.
+ * Invariants: row click = switch shell + open (`requestOpenSession`), source-header click
+ * = activate without opening; the current-session highlight is channel-based (per-ctx
+ * runtime producer merged by the App) and single-selection — only the source owning the
+ * visible ctx renders it; fold state + ungrouped order live in ONE shared live store
+ * (cross-ctx live sync); drag commits go through the wire with an optimistic override that
+ * self-heals on the next pull; search is a debounced per-source unary content search (one
+ * 30s-aborted job per query); the pinned 待办区 is a pure projection over the SAME merged facts. */
 import type { ReactNode } from 'react'
 import clsx from 'clsx'
 import {
@@ -148,9 +36,8 @@ import { SidebarRootDialogs, useSidebarDialogs } from './sidebar-root-dialogs.ts
 import css from './SidebarRoot.module.css'
 import cc from './sidebar-chamber.module.css'
 
-// Wire the shared search controller's wire fetch once at module scope (the
-// controller stays a pure, plain-node-testable state machine; instance-api's
-// unary client is browser/vite-only).
+// 在模块作用域把共享 search controller 的 wire fetch 接一次（controller 保持纯的、
+// 可用 plain node 测试的状态机；instance-api 的 unary client 仅限浏览器/vite）。
 setSearchFetcher((sourceId, query, signal) => searchSessions(getInstanceClient(sourceId), query, signal))
 
 export function SidebarRoot({
@@ -166,23 +53,18 @@ export function SidebarRoot({
   t,
   renderSlot,
 }: SidebarRootComponentProps) {
-  // Global panel axis: the shell renders one row per registration
-  // (empty by default). The selector hook keeps a row's re-render scoped to
-  // its own selection state.
+  // 全局面板轴：每个注册渲染一行（默认空）；selector hook 把行重渲染限制在自身选中态。
   const panels = (usePanels as PanelsHook)(snapshot => snapshot)
-  // The sidebar's own typecheck program resolves the slots render share
-  // through the loose ambient seam (renderSlot is a 2-arg signature there),
-  // so the contextual 3-arg occurrence is narrowed locally. The runtime
-  // signature is `(key, owner, opts)` and dispatch is by key — the cast is
-  // only a type-level lift, never a runtime change.
+  // 本包的 typecheck program 经 loose ambient seam 解析 slots 渲染共享（那里 renderSlot 是
+  // 2 参签名），故在此收窄为上下文的 3 参；运行时签名是 (key, owner, opts)、按 key 分发，
+  // 该 cast 只是类型层提升，绝不改变运行时。
   const renderWorkspaceGit = renderSlot as (
     key: 'sidebar.workspace.git',
     owner: { wide: boolean },
     opts: { hookContext: { sourceId: string; workspaceId: string; repoKey?: string } },
   ) => ReactNode
 
-  // The shell cross-cutting state is owned by per-subject hooks. Each hook is
-  // called unconditionally in a fixed order, so the effect ordering is stable.
+  // 跨切面状态由各主题 hook 持有；每个 hook 无条件按固定顺序调用，effect 顺序稳定。
   const { wide, column, lastWideWidth, everWide, pointerInside, setPointerInside, cancelLinger, armLinger } =
     useSidebarCollapse(collapsed, width)
   const {
@@ -210,17 +92,13 @@ export function SidebarRoot({
   const { onOpenArchiveCleanup, openWorkspaceBrowser, onDeleteWorkspace } = dialogs
 
   const openSession = (serverId: string, sessionId: string): void => {
-    // A fresh click dismisses any stale failure text on the row immediately
-    // (the dispatch outcome will re-report it if it fails again).
+    // 新点击立即清掉该行陈旧失败文案（若再次失败，dispatch 结果会重报）。
     clearOpenRowError(serverId, sessionId)
     chamberBridge.requestOpenSession(serverId, sessionId)
   }
 
-  // chamber (会话待办区): the strip's guarded open — same authority
-  // as a row click, plus the two guards a row click already gets at its call
-  // site: the drag-end trailing-click suppression (suppressClickRef) and the
-  // same-session inline-rename exclusion (opening the session whose rename
-  // form is on screen would discard the edit mid-typing).
+  // chamber（会话待办区）：受守卫的打开——与行点击同一权威，另加行点击已有的两道守卫：
+  // 拖拽尾部点击抑制（suppressClickRef）与同会话内联重命名排除（打开正在编辑的会话会丢编辑）。
   const requestTodoOpen = (sourceId: string, sessionId: string): void => {
     if (suppressClickRef.current) return
     if (renaming !== null && renaming.kind === 'session'
@@ -228,10 +106,9 @@ export function SidebarRoot({
     openSession(sourceId, sessionId)
   }
 
-  // chamber: ONE context value per render — every per-source section reads
-  // its cross-cutting state/actions through the provider (sidebar-context.ts)
-  // instead of threading ~40 props through three component levels. The shell
-  // owns every store/effect/commit below; ServerSection only consumes.
+  // chamber：每次渲染一个 context value——各 per-source section 经 provider
+  // （sidebar-context.ts）读取跨切面状态/动作，而不是穿三层组件传 ~40 个 prop；
+  // store/effect/commit 全归 shell，ServerSection 只消费。
   const ctxValue: SidebarSectionContextValue = {
     wide,
     t,
@@ -292,8 +169,7 @@ export function SidebarRoot({
       onPointerLeave={() => { armLinger() }}
     >
       <div className={css.logoRow}>
-        {/* Expanded, the wordmark doubles as a New Session shortcut; the
-            collapsed rail's logo is the expand toggle below instead. */}
+        {/* 展开时 wordmark 兼作 New Session 快捷方式；折叠 rail 的 logo 是下方展开开关。 */}
         {wide && (
           <button
             type="button"
@@ -301,24 +177,19 @@ export function SidebarRoot({
             aria-label={t('session.new.label')}
             onClick={() => { startSession() }}
           >
-            {/* Brand holes: the shell keeps the chamber wordmark as
-                the mark fallback and renders nothing for an unregistered
-                name occupant. */}
+            {/* 品牌洞：mark 回退保持 chamber wordmark，name 洞未注册则不渲染。 */}
             <span className={css.brandIdentity} aria-hidden="true">
               <span className={css.brandMark}>
                 {renderSlot('sidebar.brand.mark', { size: 24 }, { fallback: <BrandWordmark /> })}
               </span>
-              {/* No name fallback: the chamber wordmark already carries the
-                  product name in the mark hole, so an unoccupied name hole
-                  renders nothing rather than duplicating it. */}
+              {/* 无 name 回退：mark 洞已带产品名，未占用的 name 洞渲染空而非重复。 */}
               <span className={css.brandName}>
                 {renderSlot('sidebar.brand.name', {}, { fallback: null })}
               </span>
             </span>
           </button>
         )}
-        {/* Rail resting state is the whale mark; hovering swaps in the panel
-            icon (the expand affordance). */}
+        {/* rail 静息态是鲸鱼标；悬停换成面板图标（展开入口）。 */}
         <Tooltip label={collapsed ? t('toggle.open') : t('toggle.collapse')} delayMs={500}>
           <button
             type="button"
@@ -350,8 +221,7 @@ export function SidebarRoot({
         </button>
       </Tooltip>
 
-      {/* Global panel axis: rows appear only when some plugin
-          registers into `sidebar.panellist` (upstream ships none). */}
+      {/* 全局面板轴：只有插件注册进 `sidebar.panellist` 时才有行（上游不带任何）。 */}
       {panels.length > 0 && (
         <nav className={css.panelList} aria-label={t('panels.label')}>
           {panels.map(panel => (
@@ -368,18 +238,12 @@ export function SidebarRoot({
         </nav>
       )}
 
-      {/* The browsing region fills the column between the controls and the
-          foot in both states. chamber patch: the multi-source session list
-          replaces the official `sidebar.workspaces` occupant. The list is
-          wrapped in a region boundary — an unexpected render error must not
-          take the shell (or the app) down. */}
+      {/* 浏览区在两态都填满控件与 foot 之间的列。chamber patch：多来源会话列表替代官方
+          `sidebar.workspaces`；列表包在 region boundary 内——意外渲染错误不得拖垮壳或应用。 */}
       <div className={css.regionArea}>
         <ChamberListBoundary>
-        {/* chamber (会话待办区): the pinned attention block above the
-            scroll region — wide only, renders only while it has entries (pure
-            projection derivation, see SessionTodoArea.tsx). INSIDE the region
-            boundary: a malformed projection or a translate throw must never
-            take the whole shell down (boundary discipline). */}
+        {/* chamber（会话待办区）：滚动区之上的固定 attention 块，仅宽态、仅在有条目时渲染
+            （纯投影派生）。在 region boundary 内：派生异常不得拖垮整个壳。 */}
         {wide ? (
           <>
           <SessionTodoArea
@@ -388,11 +252,8 @@ export function SidebarRoot({
             requestOpen={requestTodoOpen}
             t={t}
           />
-        {/* chamber (scroll sync): the scroll container carries
-            data-chamber-sidebar-scroll + each row data-chamber-row so the
-            renderer's sidebar-scroll-sync can anchor the outgoing shell's
-            scroll and restore the same rows at the same screen position in
-            the incoming shell on N-ctx view switch. */}
+        {/* chamber（scroll sync）：滚动容器带 data-chamber-sidebar-scroll、每行带
+            data-chamber-row，供 renderer 的 sidebar-scroll-sync 在 N-ctx 切换时锚定/恢复滚动位置。 */}
           <div className={cc.chamberList} data-chamber-sidebar-scroll="">
             <SidebarSectionContext.Provider value={ctxValue}>
             {orderedServers.map((server) => (
@@ -406,18 +267,10 @@ export function SidebarRoot({
           </div>
           </>
         ) : (
-          /* The rail renders one NAMED,
-             operable button per source (upstream rail controls are buttons with
-             an accessible name, vendor ui-sidebar SidebarRoot.tsx:63-68). The
-             coloured source dot and the active-source accent ring paint on
-             the inner span; the dot PITCH is the 20px the rail establishes: the
-             button's own `margin: -4px 0` takes the 16px button box down to the
-             8px dot element; the geometry contract is 06 §7's.
-             Operability mirrors the wide source header: activating a remote,
-             usable source asks the App layer to switch the N-ctx view, the
-             current source is marked aria-current, and a managed-down source
-             stays non-activatable (its reason rides the accessible name — the
-             header's own refusal). */
+          /* rail 为每个来源渲染一个有名字、可操作的按钮：彩色来源点与当前来源 accent 环画在
+             内层 span；点距 20px（按钮自身 `margin: -4px 0` 把 16px 按钮盒压到 8px 点元素）。
+             可操作性镜像宽态来源头：远程可用来源请求切换 N-ctx 视图，当前来源标 aria-current，
+             受管停止的来源不可激活（原因进 accessible name——来源头自己的拒绝）。 */
           <div className={cc.railDots}>
             {orderedServers.map((server) => {
               const active = server.id === chamberInstanceId
@@ -440,9 +293,7 @@ export function SidebarRoot({
                     <span
                       className={clsx(cc.railDot, active && cc.railDotActive)}
                       style={{ ...sourceDotStyle(server), ...sourceAccentStyle(server) }}
-                      // Decorative: the button's own aria-label carries the
-                      // source identity + activation hint (upstream panel rows
-                      // hide their glyph slot the same way).
+                      // 装饰性：按钮自己的 aria-label 承载来源身份与激活提示。
                       aria-hidden="true"
                     />
                   </button>
@@ -465,10 +316,8 @@ export function SidebarRoot({
       </div>
 
 
-      {/* The three chamber dialog layers (add-workspace browser / archive
-          manager / workspace-delete confirm) are extracted to
-          sidebar-root-dialogs.tsx, where the single-dialog-layer rule and all
-          of their wiring live. */}
+      {/* 三层 chamber 对话框（添加工作区浏览器 / 归档管理器 / 工作区删除确认）在
+          sidebar-root-dialogs.tsx，单层规则与全部接线在那里。 */}
       <SidebarRootDialogs
         dialogs={dialogs}
         servers={servers}

@@ -2,19 +2,13 @@
 /**
  * Standalone control-plane server (the "server serve" deployment shape).
  *
- * Boot order: orphan reaper → spawn the managed host →
- * open the control-plane HTTP port. With the current createControlPlane
- * contract (index.ts), the reaper runs inside start() before the HTTP bind;
- * the managed local dsh host (web profile) is spawned on demand (first POST
- * /api/connections) rather than eagerly at boot — both documented
- * deviations of the v1 assembly.
+ * Boot order: orphan reaper inside start() before the HTTP bind; the managed
+ * local dsh host (web profile) is spawned on demand (first POST
+ * /api/connections), not eagerly. A live state-root writer fails boot with
+ * `state_root_locked` (exit 1, no stack).
  *
- * CLI: --port (default 17500 — unified with the cli serve default via
- * DEFAULT_CONTROL_PLANE_PORT), --bind (default 127.0.0.1), --state-dir
- * (resolveStateRoot: explicit > $DSH_CHAMBER_STATE > ~/.dsh-chamber), --dsh-path
- * (optional dshWorkspacePath override), --help. A live state-root writer fails
- * boot with `state_root_locked` (exit 1, no stack).
- *
+ * CLI: --port (default 17500), --bind (default 127.0.0.1), --state-dir
+ * (explicit > $DSH_CHAMBER_STATE > ~/.dsh-chamber), --dsh-path, --help.
  * Exit codes: 0 clean shutdown (SIGTERM) / --help, 1 startup failure,
  * 2 configuration error, 130 SIGINT.
  */
@@ -70,7 +64,7 @@ export interface ParsedArgs {
 
 /**
  * Parse the CLI args strictly: only the listed flags, `--key value` or
- * `--key=value`, an optional leading `serve` positional. Anything else is a
+ * `--key=value`, an optional leading `serve` positional; anything else is a
  * configuration error (exit 2).
  */
 function parseArgs(argv: string[]): ParsedArgs {
@@ -189,9 +183,8 @@ async function main(): Promise<number | null> {
     })
   } catch (error) {
     // A live writer on this state root is a startup failure (exit 1), never a
-    // configuration error: the message already carries the holder pid/flavor and
-    // the explicit escape hatch, but the stderr line must start with the
-    // machine-readable code. Never print a stack here.
+    // configuration error. The stderr line must start with the machine-readable
+    // code; never print a stack here.
     if (error instanceof StateRootLeaseError) {
       logger.error(`${error.code}: ${error.message}`)
       return 1

@@ -1,31 +1,18 @@
 /**
- * Per-instance plugin-inventory read face for the connections section: the
- * unary Typert Remote wire — the exact `pluginInventory/list` endpoint the
- * official 插件列表 settings tab consumes —
- * POSTed to `{origin}/api/i/<sourceId>/api/pluginInventory/list` through the
- * control-plane per-instance proxy (design 05 §5 / 03 §3).
+ * Per-instance plugin-inventory read face for the connections section: the unary Typert
+ * Remote wire — the exact `pluginInventory/list` endpoint the official 插件列表 settings tab
+ * consumes — POSTed to `{origin}/api/i/<sourceId>/api/pluginInventory/list` through the
+ * control-plane per-instance proxy.
  *
- * This is the plugin surface for connections WITHOUT the SSH plugin channel:
- * gateway targets (both transports — the desktop's SSH exec surface refuses
- * `kind !== 'dsh'`) and dsh+http direct endpoints. The managed instance's own
- * host serves the Loader snapshot, so the view needs no SSH exec, no local
- * manifest and no new authority — the host fact is only attached through the
- * existing generic proxy (AGENTS.md: host-native capabilities stay the host's
- * job; the control plane only attaches).
- *
- * The transport byte (URL join + client-request envelope + POST +
- * body collection, bounded unary 30s) rides the shared kernel postUnary
- * (`@dsh-chamber/dsh-chamber-client-core`, wire-common.ts) — the SAME
- * source copy the renderer bundles; the envelope/server-response
- * classification ('plugin-inventory:' validation + snapshot ok-value shaping)
- * stays local, while the wrapWireError fold + 503 instance_unavailable
- * classifier come from the shared wire-error module of the same face (a
- * policy-free constructor + predicate — the shared kernel itself still
- * performs no classification, and A/B/F keep their own actions/copies;
- * the fold is D's copy only — see sidebar
- * shared/wire-common.ts's carrier list).
- * Self-contained on purpose (the package's loose-ambient typecheck pattern):
- * the wire types below are structural mirrors of the vendored
+ * This is the plugin surface for connections WITHOUT the SSH plugin channel: gateway targets
+ * (the desktop's SSH exec surface refuses `kind !== 'dsh'`) and dsh+http direct endpoints. The
+ * managed instance's own host serves the Loader snapshot, so the view needs no SSH exec and no
+ * local manifest — the host fact rides the existing generic proxy.
+ * The transport byte (URL join + envelope + POST + body collection, bounded unary 30s) rides the
+ * shared kernel postUnary; the envelope/server-response classification stays local, while the
+ * wrapWireError fold + 503 instance_unavailable classifier come from the shared wire-error module
+ * (the shared kernel itself performs no classification).
+ * Self-contained on purpose: the wire types below are structural mirrors of the vendored
  * `@deepseek-ai/dsh-host-plugin-inventory` types; no dsh package import.
  */
 
@@ -76,10 +63,7 @@ export interface AgentPresetPluginGroup {
 /** Point-in-time inventory returned by the plugin inventory Remote. */
 export interface PluginInventorySnapshot {
   readonly entries: readonly PluginInventoryEntry[]
-  /**
-   * Per-preset compositions, present only when an agent-preset roster is
-   * composed in this deployment.
-   */
+  /** Per-preset compositions, present only when an agent-preset roster is composed in this deployment. */
   readonly agentPresets?: readonly AgentPresetPluginGroup[]
 }
 
@@ -144,8 +128,7 @@ function parsePresetGroup(value: unknown): AgentPresetPluginGroup {
   }
 }
 
-/** Validate the server-response envelope and project its `result` (mirror of
- *  the official parseConnectionResponse / instance-api). */
+/** Validate the server-response envelope and project its `result` (mirror of the official parseConnectionResponse). */
 function parseRemoteResult(value: unknown): { ok: true; value: PluginInventorySnapshot } | { ok: false; error: PluginInventoryRpcFailure } {
   if (!isRecord(value) || value.type !== 'server-response' || !isString(value.rpcId)) {
     throw new TypeError('plugin-inventory: invalid server-response envelope')
@@ -182,22 +165,15 @@ function parseRemoteResult(value: unknown): { ok: true; value: PluginInventorySn
 }
 
 /**
- * Read the managed instance's plugin inventory through the per-instance
- * proxy. TRANSPORT failures (network, non-2xx, the proxy's explicit
- * `instance_unavailable` 503) and BUSINESS failures both throw loud errors —
- * the caller renders the message with a retry; a failure is never a silent
- * empty list.
+ * Read the managed instance's plugin inventory through the per-instance proxy. TRANSPORT
+ * failures (network, non-2xx, the proxy's explicit `instance_unavailable` 503) and BUSINESS
+ * failures both throw loud errors — never a silent empty list.
  * @param sourceId - the proxy source id (`dsh-<id>` / `gateway-<id>`).
  */
 export async function loadPluginInventory(sourceId: string): Promise<PluginInventorySnapshot> {
-  // Shared transport byte (postUnary in wire-common.ts): bounded unary
-  // on the official 30s budget — the control-plane proxy forwards without an
-  // upstream timeout, so a silently hung host would otherwise leave the view
-  // loading forever — fail loud instead. The bare crypto.randomUUID() rpcId
-  // stays explicit so its evaluation remains inside this try (a no-randomUUID
-  // environment folds the throw into the shared wrapWireError below).
-  // Transport rejections propagate raw and are folded via the shared
-  // wire-error module.
+  // Shared transport byte (postUnary): bounded unary on the official 30s budget — the proxy
+  // forwards without an upstream timeout, so a silently hung host would otherwise leave the view
+  // loading forever; fail loud instead. The bare crypto.randomUUID() rpcId stays inside this try.
   let outcome: UnaryPostOutcome
   try {
     outcome = await postUnary(`/api/i/${sourceId}`, 'pluginInventory/list', {}, {
@@ -206,8 +182,7 @@ export async function loadPluginInventory(sourceId: string): Promise<PluginInven
   } catch (error) {
     throw wrapWireError(error)
   }
-  // 503 instance_unavailable (not-ready instance — proxy honesty, design 03
-  // §3.3): the shared classifier throws the byte-identical error.
+  // 503 instance_unavailable (not-ready instance, proxy honesty): the shared classifier throws the byte-identical error.
   throwIfInstanceUnavailable(outcome)
   if (!outcome.ok) {
     throw wrapWireError(new Error(`HTTP ${outcome.status}`))

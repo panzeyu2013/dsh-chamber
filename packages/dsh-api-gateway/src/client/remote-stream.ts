@@ -1,14 +1,9 @@
 /**
- * Reconnecting lifecycle for one single-consumer Remote stream.
- * (design 14 §D4): carrier failures inside a LIVE connection
- * generation are paced and reopened with a bounded backoff instead of escaping
- * as a terminal stream error. Upstream threw the carrier error on the second
- * rapid failure (`waitForRemoteStreamRetry`); the gateway wrapped it as
- * `gateway/internal`, and the session controller latched it on
- * `failEventStream()` — which froze the conversation surface with no retry.
- * The pacing math and the abortable backoff wait live in
- * `./remote-retry-policy.ts` (pure, zero-import, unit-tested); the patch's shape
- * is pinned by `test/patch-lock/remote-stream-carrier-retry-lock.test.ts`.
+ * Reconnecting lifecycle for one single-consumer Remote stream: carrier failures
+ * inside a LIVE connection generation are paced and reopened with bounded backoff
+ * instead of escaping as a terminal error (upstream threw on the second rapid
+ * failure and the controller latched it, freezing the surface). The pacing math and
+ * abortable wait live in `./remote-retry-policy.ts` (pure, zero-import).
  */
 
 import { RemoteError, remoteErrorOf } from '@deepseek-ai/dsh-typert-protocol'
@@ -21,8 +16,7 @@ import {
 import { RemoteStreamCarrierError } from './stream-client.ts'
 import { withDeadline } from '@dsh-chamber/dsh-stream-state'
 
-/** The real clock, injected: the package itself imports nothing. The bound's
- *  SCHEDULING lives in the primitive; its VALUE stays the local constant. */
+/** Real clock, injected: the bound's SCHEDULING lives in the primitive; its VALUE stays local. */
 const RETRY_SCHEDULER = {
   setTimeout: (run: () => void, ms: number): unknown => setTimeout(run, ms),
   clearTimeout: (handle: unknown): void => { clearTimeout(handle as ReturnType<typeof setTimeout>) },
@@ -30,9 +24,7 @@ const RETRY_SCHEDULER = {
 
 /** One item annotated with the physical Remote-stream generation that delivered it. */
 export interface RemoteStreamItem<Item> {
-  /** Monotone physical generation number within this logical stream. */
   readonly generation: number
-  /** Decoded item yielded by the generated Remote method. */
   readonly value: Item
   /** Cancellation lifetime of the generation that delivered this item. */
   readonly signal: AbortSignal
@@ -42,9 +34,7 @@ export interface RemoteStreamItem<Item> {
 
 /** Domain-owned operations used by {@link RemoteStream}. */
 export interface RemoteStreamOptions<Item> {
-  /** Diagnostic owner name used for cancellation failures. */
   readonly name: string
-  /** Open one physical generation of the logical stream. */
   readonly open: (signal: AbortSignal) => AsyncIterable<Item>
   /** Classify a normal generation end after or before its opening item was accepted. */
   readonly ended: (accepted: boolean) => Error
@@ -53,11 +43,10 @@ export interface RemoteStreamOptions<Item> {
 }
 
 /**
- * Reopens one logical Remote stream across carrier generations.
- * Connection owns physical retry timing; Gateway performs each requested
- * replacement. The domain consumer owns its opening item and every later
- * item, and calls {@link RemoteStreamItem.accept} only after validating the
- * opening baseline or cursor.
+ * Reopens one logical Remote stream across carrier generations. Connection owns
+ * physical retry timing; Gateway performs each requested replacement; the domain
+ * consumer calls {@link RemoteStreamItem.accept} only after validating the opening
+ * baseline or cursor.
  */
 export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>> {
   private readonly lifetime = new AbortController()
@@ -67,10 +56,7 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
   private revision = 0
   private taken = false
 
-  /**
-   * @param connection - observable Host generation source used to pace retries.
-   * @param options - domain stream opener, end classification, and diagnostics.
-   */
+  /** @param connection - observable Host generation source used to pace retries. */
   constructor(
     private readonly connection: Pick<ConnectionHandle, 'generation'>,
     private readonly options: RemoteStreamOptions<Item>,
@@ -88,10 +74,7 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
     this.generationAbort?.abort(new Error(`${this.options.name} generation restarted`))
   }
 
-  /**
-   * Permanently stop this stream and wait for its iterator to close.
-   * @returns when the active generation and consumer iterator are quiescent.
-   */
+  /** Permanently stop this stream and wait for its iterator to close. */
   dispose(): Promise<void> {
     if (this.closing !== undefined) return this.closing
     if (!this.lifetime.signal.aborted) {
@@ -158,12 +141,9 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
           attempt++
           try {
             const retryOutcome = await waitForRemoteStreamRetry(this.connection, attempt, signal)
-            // The retry lane's wait for a
-            // live generation is bounded; when the bound fires, the reopen
-            // below is the recovery attempt and the state is published on the
-            // SAME seam a carrier loss uses, so the page fact (and the health
-            // arm reading it) sees "waiting with no progress" instead of an
-            // invisible, error-less stall.
+            // The wait for a live generation is bounded; on expiry the reopen below
+            // IS the recovery attempt, published on the same seam a carrier loss uses
+            // so the page fact sees "waiting with no progress", not an error-less stall.
             if (retryOutcome === 'expired') {
               this.options.carrierFailed?.(
                 new RemoteStreamCarrierError(
@@ -193,30 +173,16 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
   }
 }
 
-/**
- * How the retry lane's wait ended — the caller publishes an expired wait as a
- * carrier condition (bounded, observable) instead of a silent stall.
- */
+/** How the retry lane's wait ended; an expired wait is published as a carrier condition. */
 type RemoteStreamRetryOutcome = 'generation' | 'expired'
 
 /**
- * Pace the next reopen after a carrier failure.
- * - LIVE generation (the connection lane is up): wait the bounded episode
- *   backoff and reopen. A second failure is still a transport hiccup — it must
- *   NOT escape as a terminal stream outcome.
- * - NO generation: wait for the connection to publish one, **bounded** by
- *   {@link REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS}. Upstream waited without a
- *   timer, so a parked lane parked every logical stream on this page forever
- *   (no error edge, no reopen attempt, nothing in the UI but the loading hint).
- *   On expiry the wait resolves with `'expired'` so the caller reopens — the
- *   one action that recovers when the mux itself is still usable — and publishes
- *   the condition through `carrierFailed`. The abort path still ends the stream
- *   terminally.
- * @param connection - observable Host generation source used to pace retries.
- * @param attempt - 1-based consecutive carrier-failure count for this episode.
- * @param signal - generation cancellation lifetime.
- * @returns `'generation'` when a live generation paced the wait, `'expired'`
- *   when the wait hit its bound and the caller should reopen anyway.
+ * Pace the next reopen after a carrier failure. With a LIVE generation, wait the
+ * bounded episode backoff and reopen — a second failure is still a transport hiccup,
+ * never terminal. With NO generation, wait for one bounded by
+ * {@link REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS} (upstream waited without a timer,
+ * parking every stream forever): on expiry the caller reopens and publishes the
+ * condition through `carrierFailed`. Abort still ends the stream terminally.
  */
 async function waitForRemoteStreamRetry(
   connection: Pick<ConnectionHandle, 'generation'>,
@@ -229,12 +195,8 @@ async function waitForRemoteStreamRetry(
     if (delayMs > 0) await delayRemoteStreamRetry(delayMs, signal)
     return 'generation'
   }
-  //  this is a PUSH wait, not a poll - the generation announcement arrives
-  // through `subscribe`, so the condition must never be re-inspected on a timer
-  // (waitForCondition would delay detection by up to one poll interval). The shared
-  // primitive therefore wraps the SUBSCRIPTION as the operation and races it against
-  // the same single bound; abort keeps rejecting, expiry keeps resolving
-  // 'expired', and dispose still runs on every path.
+  // A PUSH wait, not a poll: the announcement arrives through subscribe, so the
+  // condition is never re-inspected on a timer (which would delay detection).
   let dispose: (() => void) | undefined
   let onAbort: (() => void) | undefined
   const generationArrived = new Promise<void>((resolve, reject) => {
@@ -263,13 +225,9 @@ async function waitForRemoteStreamRetry(
 }
 
 /**
- * Mark a terminal escape before it crosses the stream boundary: consumers
- * discriminate failures by code, so an unmarked throw reads as a local bug.
- * Marked failures pass through verbatim. The carrier class never escapes as a
- * terminal outcome — it stays the retry-internal signal fed to `carrierFailed`
- * and the `ended(true)` retry trigger. Enforced by the retry policy above: the
- * only terminal escapes left are a non-carrier error, an aborted lifetime or
- * generation signal, and `ended()`'s own classification.
+ * Mark a terminal escape before it crosses the stream boundary (consumers
+ * discriminate by code). The carrier class never escapes — it stays the
+ * retry-internal signal; only non-carrier errors, aborts and `ended()` are terminal.
  */
 function terminalStreamFailure(error: unknown): Error {
   return remoteErrorOf(error) ?? new RemoteError(

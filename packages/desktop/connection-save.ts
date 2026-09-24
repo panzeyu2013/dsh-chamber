@@ -2,9 +2,8 @@ import type { TransportInstanceInput, TransportInstanceSpec } from './transport-
 import { gatewayCredentialTargetChanged, liveTransportIdentityChanged, sshCredentialEndpointChanged } from './credential-identity.ts'
 import { describeError } from './describe-error.ts'
 
-/** Write-only mutations accepted by the main-owned connection transaction.
- * Missing/empty fields mean "leave untouched"; explicit clearing stays on
- * the existing per-dimension IPC actions. */
+/** Write-only mutations accepted by the main-owned connection transaction: missing/empty
+ *  fields mean "leave untouched"; explicit clearing stays on the per-dimension IPC actions. */
 export interface ConnectionCredentialMutations {
   sshPassword?: string
   gatewayToken?: string
@@ -39,8 +38,8 @@ export type SaveConnectionTransactionResult =
       metadataCommitted: boolean
     }
 
-/** Injectable main-process owners. Every credential getter/setter stays in
- * this boundary; neither old nor new values are ever returned to renderer. */
+/** Injectable main-process owners. Every credential getter/setter stays in this boundary;
+ *  neither old nor new values are ever returned to the renderer. */
 export interface SaveConnectionTransactionDeps {
   listInstances(): TransportInstanceSpec[]
   normalize(input: TransportInstanceInput): TransportInstanceSpec | null
@@ -51,8 +50,8 @@ export interface SaveConnectionTransactionDeps {
   setSshPassword(id: string, password: string | null, spec: TransportInstanceSpec | null): void
   /** Token+password MUST be one write-through gateway-store commit. */
   setGatewaySecrets(id: string, token: string | null, password: string | null, spec: TransportInstanceSpec | null): void
-  /** Invalidate every direct and ready-tunnel origin belonging to the old/new
-   * gateway shape. Must throw on failure so no metadata/secret commit follows. */
+  /** Invalidate every direct and ready-tunnel origin of the old/new gateway shape. Must
+   *  throw on failure so no metadata/secret commit follows. */
   invalidateGatewaySessions(previous: TransportInstanceSpec | null, next: TransportInstanceSpec | null): void
   isActive(id: string): boolean
   disconnect(id: string): void
@@ -86,14 +85,11 @@ function nonEmpty(value: string | undefined): string | undefined {
 }
 
 /**
- * Main-owned registry + credential transaction.
- *
- * All old write-only values are snapshotted in main before the first write.
- * The old live transport is stopped before a new credential can be visible,
- * gateway token+password land in one store commit, SSH lands second, and the
- * registry lands last. Any failure restores metadata and every secret from
- * those main-only snapshots; a compensation failure is loud and the old
- * transport is not reconnected under an uncertain state.
+ * Main-owned registry + credential transaction: all old write-only values are snapshotted
+ * in main before the first write, the old live transport stops before a new credential can
+ * be visible, gateway token+password land in one store commit, SSH lands second, the registry
+ * last. Any failure restores metadata and every secret from those main-only snapshots; a
+ * compensation failure is loud and the old transport is not reconnected under uncertainty.
  */
 export function saveConnectionTransaction(
   deps: SaveConnectionTransactionDeps,
@@ -135,10 +131,9 @@ export function saveConnectionTransaction(
     return { ok: false, instances: before, error: 'gateway credentials are not applicable to a dsh target', metadataCommitted: false }
   }
 
-  // Credential identity and live transport identity are deliberately
-  // separate. transport/http(s)/SPKI-only edits restart the live mechanism
-  // but do not retarget gateway auth. SSH is a transport credential, so it is
-  // retained only across dsh↔gateway when the SSH endpoint itself is stable.
+  // Credential identity and live transport identity are deliberately separate: transport/http(s)/
+  // SPKI-only edits restart the live mechanism but do not retarget gateway auth. SSH is a
+  // transport credential, retained only across dsh↔gateway when the SSH endpoint itself is stable.
   const sshRetarget = previous !== null
     && previous.transport === 'ssh'
     && normalized.transport === 'ssh'
@@ -190,10 +185,9 @@ export function saveConnectionTransaction(
     gatewayToken: oldGatewayToken !== nextGatewayToken || (gatewayRetarget && nextGatewayToken !== null),
     gatewayPassword: oldGatewayPassword !== nextGatewayPassword || (gatewayRetarget && nextGatewayPassword !== null),
   }
-  // ADD is also a lifecycle-generation boundary. Getters intentionally hide
-  // a crash-half credential whose binding has no current registry row; an
-  // unconditional rewrite/clear prevents that raw value from becoming live
-  // again when the same id + endpoint is recreated with blank fields.
+  // ADD is also a lifecycle-generation boundary: getters intentionally hide a crash-half
+  // credential whose binding has no current registry row, so an unconditional rewrite/clear
+  // keeps that raw value from going live again when the same id + endpoint is recreated blank.
   const forceGatewayCommit = previous === null
     || (previous.kind === 'gateway') !== (normalized.kind === 'gateway')
     || gatewayRetarget
@@ -212,9 +206,9 @@ export function saveConnectionTransaction(
   let metadataAttempted = false
 
   try {
-    // Teardown is unconditional for an existing generation: provider execs
-    // may be live while the transport projection is still idle. `wasActive`
-    // controls only whether the transport itself is reconnected afterward.
+    // Teardown is unconditional for an existing generation: provider execs may be live while the
+    // transport projection is still idle. `wasActive` controls only whether the transport itself
+    // is reconnected afterward.
     if (previous !== null && (metadataNeedsRestart || credentialsChanged)) {
       deps.disconnect(id)
       disconnected = true
@@ -225,9 +219,8 @@ export function saveConnectionTransaction(
       deps.invalidateGatewaySessions(previous, normalized.kind === 'gateway' ? normalized : null)
     }
     if (gatewayWriteNeeded) {
-      // Mark the write before invoking the store: a backend may persist and
-      // then throw (for example while syncing its directory). Compensation
-      // must restore the snapshot in that partial-failure case too.
+      // Mark the write before invoking the store: a backend may persist and then throw (e.g.
+      // syncing its directory), and compensation must restore the snapshot in that case too.
       gatewayAttempted = true
       deps.setGatewaySecrets(id, nextGatewayToken, nextGatewayPassword, normalized.kind === 'gateway' ? normalized : null)
     }
@@ -244,9 +237,8 @@ export function saveConnectionTransaction(
     return { ok: true, instances: saved, changes, previous, next: normalized }
   } catch (error) {
     const failures: string[] = []
-    // A replacement may already have started only if an injected/nonstandard
-    // manager violated the pre-disconnect assumption; always stop it before
-    // restoring metadata/secrets.
+    // A replacement may only have started if an injected/nonstandard manager violated the
+    // pre-disconnect assumption; always stop it before restoring metadata/secrets.
     if (metadataAttempted) {
       try { deps.disconnect(id) } catch (restoreError) { failures.push(`disconnecting replacement failed: ${describeError(restoreError)}`) }
     }
@@ -264,8 +256,8 @@ export function saveConnectionTransaction(
     }
 
     if (metadataRestored) {
-      // Attempt both stores even if one restoration fails. Old values remain
-      // main-only throughout and are never included in this result.
+      // Attempt both stores even if one restoration fails. Old values remain main-only
+      // throughout and are never included in this result.
       if (gatewayAttempted) {
         try { deps.setGatewaySecrets(id, oldGatewayToken, oldGatewayPassword, previous?.kind === 'gateway' ? previous : null) } catch (restoreError) {
           failures.push(`restoring gateway credentials failed: ${describeError(restoreError)}`)
@@ -277,8 +269,8 @@ export function saveConnectionTransaction(
         }
       }
     } else {
-      // Never place credentials for the OLD target onto metadata that could
-      // still name the NEW target. Best-effort scrub keeps failure safe.
+      // Never place credentials for the OLD target onto metadata that could still name the NEW
+      // target. Best-effort scrub keeps the failure safe.
       try { deps.setGatewaySecrets(id, null, null, null) } catch (restoreError) {
         failures.push(`scrubbing gateway credentials after metadata rollback failure failed: ${describeError(restoreError)}`)
       }
@@ -304,13 +296,10 @@ export function saveConnectionTransaction(
 }
 
 /**
- * Shared deletion transaction core. Production reaches it through the exact
- * id-addressed `desktop_ssh_delete_connection`; a retained-set wrapper remains
- * only for pure compatibility tests and is not exposed to the renderer.
- * Secrets and gateway sessions are
- * invalidated before the metadata deletion: a hard crash can therefore lose
- * availability, but can never leave old credentials/session state reusable by
- * a recreated id. In-process failures restore the main-only snapshots.
+ * Shared deletion transaction core: secrets and gateway sessions are invalidated before the
+ * metadata deletion, so a hard crash can lose availability but can never leave old
+ * credentials/session state reusable by a recreated id. In-process failures restore the
+ * main-only snapshots.
  */
 function runDeleteConnectionsTransaction(
   deps: DeleteConnectionsTransactionDeps,
@@ -332,9 +321,9 @@ function runDeleteConnectionsTransaction(
   let metadataAttempted = false
   try {
     for (const snapshot of snapshots) {
-      // Deletion always tears down the old generation: an exec-only child can
-      // exist while the transport phase is idle. Only a previously non-idle
-      // transport is eligible for compensation reconnect.
+      // Deletion always tears down the old generation: an exec-only child can exist while the
+      // transport phase is idle. Only a previously non-idle transport is eligible for
+      // compensation reconnect.
       deps.disconnect(snapshot.spec.id)
       if (snapshot.active) disconnected.push(snapshot)
     }
@@ -343,8 +332,8 @@ function runDeleteConnectionsTransaction(
     }
     secretsAttempted = true
     for (const snapshot of snapshots) {
-      // Each durable clear includes its binding. Clearing before registry
-      // commit makes both crash windows fail closed.
+      // Each durable clear includes its binding; clearing before the registry commit makes both
+      // crash windows fail closed.
       deps.setGatewaySecrets(snapshot.spec.id, null, null, null)
       deps.setSshPassword(snapshot.spec.id, null, null)
     }
@@ -408,10 +397,9 @@ function runDeleteConnectionsTransaction(
   }
 }
 
-/** Exact, linearized-by-main-event-loop delete. A stale renderer supplies
- * only the id it intends to remove; the CURRENT authoritative roster is read
- * once here. If another actor already removed that id, the operation is an
- * idempotent no-op and can never delete a concurrently added connection. */
+/** Exact, linearized-by-main-event-loop delete: a stale renderer supplies only the id it intends
+ *  to remove, the CURRENT authoritative roster is read once here, and an already-removed id is
+ *  an idempotent no-op that can never delete a concurrently added connection. */
 export function deleteConnectionTransaction(
   deps: DeleteConnectionsTransactionDeps,
   id: string,

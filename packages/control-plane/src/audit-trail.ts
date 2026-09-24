@@ -1,30 +1,15 @@
 /**
- * Owner-only append-only audit trail core (design 17 §13.4.4) — the
- * single source for BOTH audit surfaces:
+ * Owner-only append-only audit trail core — the single source for both audit
+ * surfaces: packages/gateway/src/audit.ts and packages/desktop/audit-log.ts.
  *
- *  - packages/gateway/src/audit.ts (public request boundary), and
- *  - packages/desktop/audit-log.ts (desktop main process), reached through
- *    the desktop control-plane facade (control-plane-module.ts).
- *
- * Shared here: the rotation cap, the
- * non-secret event shape, the whitelist serializer (the written JSON
- * is rebuilt from a fixed field whitelist so a stray secret field a caller
- * wrongly attaches can never reach disk), and the hardened append/rotate
- * mechanics (no-follow single-link leaves with descriptor/path identity
- * checks, 0600 with loose legacy modes tightened at open, fsync + directory
- * fsync on first creation). Failures propagate to the caller: each surface
- * wrapper keeps its own loud-but-non-fatal contract (an audit trail must
- * never take auth/connection management down with it).
- *
- * The no-follow/identity/mode/fsync primitives themselves are
- * single-sourced in private-file.ts (inspectPrivateLeafNoFollow,
- * openPrivateAppendNoFollow, writePrivateFdAll, removePrivateFileNoFollow,
- * ensurePrivateDirectoryNoFollow); this module keeps only the audit-specific
- * policy (one-slot rotation, evidence-preserving abort, whitelist serializer)
- * on top of them.
- *
- * Pure Node built-ins + the control-plane private-file helpers — no
- * electron, no IPC.
+ * Shared: rotation cap, non-secret event shape, whitelist serializer (the
+ * written JSON is rebuilt from a fixed field whitelist, so a stray secret field
+ * can never reach disk), and hardened append/rotate mechanics (no-follow
+ * single-link leaves with descriptor/path identity checks, 0600 with loose
+ * legacy modes tightened at open, fsync + directory fsync on creation).
+ * Failures propagate: each surface keeps its own loud-but-non-fatal contract —
+ * an audit trail must never take auth/connection management down. The
+ * no-follow/identity primitives are single-sourced in private-file.ts.
  */
 import { closeSync, fstatSync, fsyncSync, renameSync } from 'node:fs'
 import { dirname } from 'node:path'
@@ -49,11 +34,9 @@ export const AUDIT_TRAIL_MAX_BYTES = 5 * 1024 * 1024
 export interface AuditTrailEvent {
   /** ISO-8601 timestamp (e.g. new Date().toISOString()). */
   ts: string
-  /** Event name — e.g. transport_phase, login_success,
-   * login_invalid_credentials, credential_set. */
+  /** Event name (e.g. transport_phase, login_success). */
   event: string
-  /** Non-secret source (registry instance id; gateway login events use
-   * kind gateway). */
+  /** Non-secret source (registry instance id; gateway login events use kind gateway). */
   sourceId?: string
   /** Target kind (dsh | gateway). */
   kind?: string
@@ -127,22 +110,18 @@ function rotateIfNeeded(file: string, maxBytes: number): PrivateFileIdentity | n
   return null
 }
 
-/** Append one pre-serialized audit line (a complete JSONL line INCLUDING its
- * trailing newline — serialization lives in the caller so each surface keeps
- * its own prefix/error wording) under the full no-follow/identity/rotation
- * discipline. Throws on failure; surfaces keep their own
- * loud-but-non-fatal wrapper contracts. */
+/** Append one pre-serialized audit line (complete JSONL including its trailing
+ * newline) under the full no-follow/identity/rotation discipline. Throws on
+ * failure; surfaces keep their own loud-but-non-fatal wrapper contracts. */
 export function appendAuditTrailLine(file: string, line: string, maxBytes: number): void {
   if (!line.endsWith('\n')) {
-    // The contract is: the line arrives COMPLETE from the serializer
-    // wrapper, with exactly one trailing newline. Assert it so a future
-    // wrapper cannot append a second one.
+    // Contract: the line arrives COMPLETE with exactly one trailing newline;
+    // assert it so no future wrapper appends a second one.
     throw new Error('audit line must be a complete JSONL line ending with a newline')
   }
   const parent = dirname(file)
   // Parent discipline single-sourced: create 0700 (real final component,
-  // no-follow) and verify an existing parent without mutating its mode — the
-  // exported contract is unchanged; a symlinked/file parent still fails loud.
+  // no-follow) and verify an existing parent without mutating its mode.
   ensurePrivateDirectoryNoFollow(parent, 0o700, { existingMode: 'preserve' })
   const expected = rotateIfNeeded(file, maxBytes)
   const opened = openPrivateAppendNoFollow(file, {

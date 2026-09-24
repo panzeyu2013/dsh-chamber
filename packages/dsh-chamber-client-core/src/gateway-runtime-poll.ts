@@ -1,14 +1,11 @@
 /**
- * Gateway runtime-action readiness polling (design 18 §9.3: restart is 202 +
- * status polling; design 21 §6.3 decision 12 gives the start primitive the same
- * 202 contract). Pure module (no JSX) with injectable fetch/sleep so the node
- * test harness can cover success, timeout and abort paths.
+ * Gateway runtime-action readiness polling (restart is 202 + status polling; the
+ * start primitive has the same 202 contract). Pure module with injectable fetch/sleep.
  *
  * `action` selects WHICH outcome field and decision table this poll follows:
- * restart reads `restart`, start reads `start` (gateway/runtime-manager.ts
- * GatewayRuntimeStatus). The two are not interchangeable — a start BEGINS from
- * connectionState 'stopped', which the restart table treats as terminal, and a
- * start failure must never be reported as "restart failed".
+ * restart reads `restart`, start reads `start`. The two are not interchangeable —
+ * a start BEGINS from connectionState 'stopped', which the restart table treats
+ * as terminal, and a start failure must never be reported as "restart failed".
  */
 import { pollUntil, sleepMs } from './poll.ts'
 
@@ -23,9 +20,7 @@ export interface GatewayPollDeps {
   action?: GatewayRuntimeAction
 }
 
-/** Connection states that are terminal for a RESTART (resolve ≠ success:
- *  restartLocal also resolves from these, design 18 §9.3). 'stopped' is
- *  deliberately NOT terminal for a START — it is the state a start starts from. */
+/** Connection states terminal for a RESTART (resolve ≠ success). 'stopped' is deliberately NOT terminal for a START — that is the state a start starts from. */
 const TERMINAL_CONNECTION_STATES = new Set(['error', 'restart-exhausted'])
 
 export async function pollGatewayReady(chamberInstanceId: string, signal?: AbortSignal, deps: GatewayPollDeps = {}): Promise<void> {
@@ -34,8 +29,7 @@ export async function pollGatewayReady(chamberInstanceId: string, signal?: Abort
   const timeoutMs = deps.timeoutMs ?? 120_000
   const intervalMs = deps.pollIntervalMs ?? 1_000
   const action: GatewayRuntimeAction = deps.action === 'start' ? 'start' : 'restart'
-  /** Wording anchor: every failure of this poll names the action it followed
-   *  ("start failed: …" / "restart failed: …"). */
+  /** Wording anchor: every failure names the action it followed. */
   const failure = (reason: string): Error =>
     new Error(`${action} failed: ${reason === '' ? `unknown ${action} failure` : reason}`)
   const deadline = Date.now() + timeoutMs
@@ -44,8 +38,7 @@ export async function pollGatewayReady(chamberInstanceId: string, signal?: Abort
   }
   const sleepAbortable = (ms: number): Promise<void> => {
     if (signal === undefined || deps.sleepMs !== undefined) return sleep(ms)
-    // The default sleep is also abort-sensitive: an unmount mid-pause must
-    // not linger for the full interval.
+    // The default sleep is abort-sensitive: an unmount mid-pause must not linger for the full interval.
     return new Promise((resolve, reject) => {
       const timer = setTimeout(resolve, ms)
       signal.addEventListener('abort', () => {
@@ -65,8 +58,7 @@ export async function pollGatewayReady(chamberInstanceId: string, signal?: Abort
     sleep: sleepAbortable,
     onProbeError: (error) => {
       throwIfAborted()
-      // A failure raised by this poll (outcome 'failed', terminal state, …)
-      // must surface; a transient proxy failure while dsh is down keeps polling.
+      // A failure raised by this poll must surface; a transient proxy failure while dsh is down keeps polling.
       if (error instanceof Error && error.message.startsWith(`${action} failed`)) return { kind: 'fail', error }
       return { kind: 'retry' }
     },
@@ -99,31 +91,22 @@ export async function pollGatewayReady(chamberInstanceId: string, signal?: Abort
         return { kind: 'fail', error: failure(detail) }
       }
       const { connectionState, operationError, outcome } = round
-      // A runtime action rejected AFTER the 202 (e.g. a canStartLocal gate
-      // that closed between the route pre-checks and the transaction) sets
-      // <action>:'failed' + operationError while connectionState is still
+      // A runtime action rejected AFTER the 202 (e.g. a canStartLocal gate closed between the
+      // route pre-checks and the transaction) sets <action>:'failed' with connectionState still
       // 'ready' — that must surface as a failure, never as success.
       if (outcome === 'failed') return { kind: 'fail', error: failure(operationError) }
-      // Terminal connection states outrank a (stale/misreported) 'ok':
-      // the action also resolves from restart-exhausted/error/stopped
-      // (resolve ≠ success, design 18 §9.3) — defense-in-depth for older
-      // gateways without the outcome field. 'stopped' is included for a
-      // RESTART only: both the desktop IPC handler and the gateway manager
-      // treat it as a restart failure (a legit restart
-      // never passes through 'stopped' — control-plane resolves it only when
-      // stop() won the epoch race). A START begins from exactly that state
-      // (decision 12), so a stopped answer while start:'running'/absent is
-      // the normal transition, and a genuinely failed start is caught by
-      // start:'failed' above.
+      // Terminal connection states outrank a (stale/misreported) 'ok' — resolve ≠ success,
+      // defense-in-depth for older gateways without the outcome field. 'stopped' fails a
+      // RESTART only (a legit restart never passes through it; control-plane resolves it only
+      // when stop() won the epoch race); a START begins from exactly that state and a genuine
+      // start failure is caught by start:'failed' above.
       if (connectionState !== null && TERMINAL_CONNECTION_STATES.has(connectionState)) {
         return { kind: 'fail', error: failure(operationError) }
       }
       if (action === 'restart' && connectionState === 'stopped') return { kind: 'fail', error: failure(operationError) }
       if (outcome === 'ok') return { kind: 'done', value: true }
-      // Backward-compatible fallback for gateways without the outcome
-      // field (version skew): keep the connectionState contract.
-      // 'degraded' counts as success too — the process is alive and the
-      // next probe returns to ready.
+      // Fallback for gateways without the outcome field (version skew): keep the connectionState
+      // contract. 'degraded' counts as success — the next probe returns to ready.
       if ((connectionState === 'ready' || connectionState === 'degraded') && outcome !== 'running') {
         return { kind: 'done', value: true }
       }

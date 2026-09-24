@@ -1,51 +1,23 @@
 /**
  * Session-state wire contract — THE single source for the read-only
- * /chamber/session-state facts:
+ * /chamber/session-state facts shared by the watcher server (gateway), the desktop
+ * session-facts probe and the renderer's fact projection.
  *
- *   - packages/gateway/src/session-state.ts — the watcher SERVER projects
- *     rows, advertises the descriptor and answers the four claimed routes;
- *   - the desktop session-facts probe — the CLIENT classifies the descriptor
- *     (classifySessionStateProbe) and merges read marks;
- *   - the renderer/sidebar render the resulting verdict through the desktop
- *     fact projection, never by parsing this wire directly.
- *
- * Why one module: the gateway server and the desktop client have no shared
- * runtime, so this module keeps the protocol version, the feature ids, the
- * row model and the read rules from drifting — the same cross-shape single-source role
- * gateway-session-protocol.ts plays for the gateway credential facts (see its
- * header). The desktop cannot import a workspace package from node_modules at
- * runtime (packages/desktop/control-plane-module.ts:1-12), so it consumes this
- * module through that facade's re-exports.
- *
- * Hard rules encoded here (all pure — no I/O, no clock reads, no timers):
- *
- *   - `protocol` is the INTERFACE version, independent of any product version
- *     (「protocol 独立于产品版本」). `features[]` is the capability
- *     axis; an unknown feature id is ignored and NEVER degrades the source
- *     (0.4.x only adds).
- *   - Only HTTP 404 is a VERSION fact (`legacy-gateway`). 5xx and timeouts are
- *     `unavailable`: a starting gateway must never be labelled "not upgraded"
- *     (R17 "不静默/不撒谎").
- *   - `features[]` missing an advertised-required id ⇒ `forward-skew` with the
- *     exact missing ids, so the client degrades per capability
- *     (「features[] 缺项 ⇒ forward-skew（按缺失项降级）」).
+ *   - `protocol` is the INTERFACE version, independent of product version; unknown
+ *     feature ids are ignored and never degrade the source.
+ *   - Only HTTP 404 is a VERSION fact (legacy-gateway); 5xx and timeouts are
+ *     unavailable — a starting gateway must never be labelled "not upgraded".
+ *   - A missing advertised-required feature ⇒ forward-skew with the exact ids.
  *   - `completedAtSource` distinguishes an observed completion edge from a gap
- *     reconstruction; only an observed completion may feed a notification — a
- *     reconstructed one merely shows unread (「离线完成不补通知」).
- *   - Read marks merge monotonically (max) and are evaluated SOURCE-WIDE: the
- *     max over every client's mark for a session plus the source `floor`. This
- *     is what makes "phone read it ⇒ desktop dot goes out" hold (R4/R10:
- *     存储按 client-install、判定按来源取 max).
- *   - Turn-end classification is the R12 closure: `completed` counts as a
- *     completion, `aborted`+`cause=user` is a user stop (never unread), and
- *     blocked/error/max-tokens/interrupted (plus aborted for any other cause)
- *     are neutral.
+ *     reconstruction; only an observed completion may feed a notification.
+ *   - Read marks merge monotonically (max), evaluated SOURCE-WIDE across clients
+ *     plus the source floor (phone read ⇒ desktop dot out); `completed` counts as a
+ *     completion, `aborted`+cause=user is a user stop (never unread), the rest neutral.
  */
 
 /**
- * Interface major version of the /chamber/session-state wire. A semantic
- * deletion/change bumps this and keeps one version of dual reads; 0.4.x only
- * adds (「0.4.x 规则」).
+ * Interface major version of the /chamber/session-state wire. A semantic change
+ * bumps this and keeps one version of dual reads; 0.4.x only adds.
  */
 export const PROTOCOL_VERSION = 1
 
@@ -53,9 +25,8 @@ export const PROTOCOL_VERSION = 1
  *  one initializer, so the two exported names can never drift. */
 export const SESSION_STATE_PROTOCOL_VERSION = PROTOCOL_VERSION
 
-/** Canonical route prefix of the read-only session-state surface. It lives
- *  inside the existing /chamber/* auth gate (gateway dispatch.ts:989-993) —
- *  no new authentication face is created. */
+/** Canonical route prefix of the read-only session-state surface; it lives inside
+ *  the existing /chamber/* auth gate — no new authentication face is created. */
 export const SESSION_STATE_PATH = '/chamber/session-state'
 
 /** SSE increment route; `id:` is a monotonic per-source cursor and
@@ -69,7 +40,7 @@ export const SESSION_STATE_READ_PATH = `${SESSION_STATE_PATH}/read`
  *  server-side "take the current maximum" is explicitly rejected). */
 export const SESSION_STATE_READ_ALL_PATH = `${SESSION_STATE_PATH}/read-all`
 
-/** The four claimed paths in canonical order (route tests iterate this). */
+/** The four claimed paths in canonical order. */
 export const SESSION_STATE_ROUTES = Object.freeze([
   SESSION_STATE_PATH,
   SESSION_STATE_STREAM_PATH,
@@ -78,21 +49,20 @@ export const SESSION_STATE_ROUTES = Object.freeze([
 ] as const)
 
 /**
- * The frozen feature tuple advertised in the descriptor: dotted, lowercase,
- * stable ids; a minor may only ADD ids. The protocol module test keeps an
- * explicit coverage net that fails when this tuple grows without a conscious
- * test update (R10).
+ * The frozen feature tuple advertised in the descriptor: dotted, lowercase, stable
+ * ids; a minor may only ADD ids. An explicit coverage net fails when this tuple
+ * grows without a conscious update.
  */
 export const SESSION_STATE_FEATURES = Object.freeze([
   /** GET /chamber/session-state returns the snapshot descriptor. */
   'session-state.snapshot',
-  /** The SSE increment route exists. */
+/** The SSE increment route exists. */
   'session-state.stream',
   /** The stream resumes from Last-Event-ID within a bounded cursor window. */
   'session-state.last-event-id',
-  /** POST /read upserts a per-session read mark. */
+/** POST /read upserts a per-session read mark. */
   'session-state.read',
-  /** POST /read-all upserts the source-wide read floor. */
+/** POST /read-all upserts the source-wide read floor. */
   'session-state.read-all',
   /** The snapshot carries the host clock (the only unread comparison domain). */
   'session-state.host-clock',
@@ -110,10 +80,9 @@ export type SessionStateFeature = (typeof SESSION_STATE_FEATURES)[number]
 const KNOWN_SESSION_STATE_FEATURES: ReadonlySet<string> = new Set(SESSION_STATE_FEATURES)
 
 /**
- * The features a client requires for unread/pending to be meaningful (R3).
- * A conforming descriptor missing any of these classifies as forward-skew, and
- * the source degrades explicitly instead
- * of claiming ok with silently narrower facts.
+ * The features a client requires for unread/pending to be meaningful. A conforming
+ * descriptor missing any of these classifies as forward-skew, so the source degrades
+ * explicitly instead of claiming ok with silently narrower facts.
  */
 export const SESSION_STATE_BASE_FEATURES: readonly SessionStateFeature[] = Object.freeze([
   'session-state.snapshot',
@@ -121,9 +90,8 @@ export const SESSION_STATE_BASE_FEATURES: readonly SessionStateFeature[] = Objec
 ])
 
 /**
- * Stable, structured degradation codes. They
- * are wire-independent diagnostics: the client maps them to user-visible copy
- * through sessionStateNoteKey, never by parsing prose.
+ * Stable, structured degradation codes: wire-independent diagnostics the client maps
+ * to user-visible copy through sessionStateNoteKey, never by parsing prose.
  */
 export const SESSION_STATE_DEGRADATION_CODES = Object.freeze([
   /** pre-0.4.0 gateway: the route set is absent (HTTP 404). */
@@ -195,8 +163,7 @@ export type SessionStatePendingKind = 'approval' | 'question'
  */
 export type SessionStateCompletedAtSource = 'observed' | 'reconstructed'
 
-/** Persisted turn/end.reason kind family of the pinned dsh
- *  (typert.host.js:2056-2057,2571-2572). */
+/** Persisted turn/end.reason kind family of the pinned dsh. */
 export type SessionTurnEndKind =
   | 'completed'
   | 'aborted'
@@ -208,9 +175,8 @@ export type SessionTurnEndKind =
 /** aborted cause family (dsh TurnEndCancelCause; `legacy` = cause absent). */
 export type SessionTurnEndCause = 'user' | 'parent' | 'hook' | 'disposed' | 'legacy'
 
-/** The last observed turn conclusion of one session (R12's classification
- *  input). `at` is the OBSERVER's clock; `seq` is the host event sequence
- *  number when the follow stream carried one. */
+/** The last observed turn conclusion of one session. `at` is the OBSERVER's clock;
+ *  `seq` is the host event sequence number when the follow stream carried one. */
 export interface SessionTurnEnd {
   kind: SessionTurnEndKind
   cause: SessionTurnEndCause | null
@@ -235,40 +201,35 @@ export interface SessionStateRow {
   lastRunningAt: number | null
   lastTurnEnd: SessionTurnEnd | null
   /**
-   * 仪表 I5：观察者**刷新这一行事实**时的 host 域毫秒（0 = 从未观察）。
-   * 它把「这一行有多新」变成可查询事实（前端落 data-chamber-fact-at），
-   * 使 t_c + 2s 这类判据可测，而不必从沉默里推断。加法字段。
+   * 观察者**刷新这一行事实**时的 host 域毫秒（0 = 从未观察）。加法字段：把「这一行有多新」
+   * 变成可查询事实，使 t_c + 2s 这类判据可测，而不必从沉默里推断。
    */
   factAt: number
 }
 
-/** Source-wide read state. `marks` is the per-session max across clients
- *  known to the observer; `floor` is the read-all floor. `clientId` echoes
- *  the requesting install (snapshot only; never used as a mark key). */
+/** Source-wide read state. `marks` is the per-session max across clients known to the
+ *  observer; `floor` is the read-all floor. `clientId` echoes the requesting install. */
 export interface SessionStateReadState {
   clientId: string | null
   marks: Readonly<Record<string, number>>
   floor: number
 }
 
-/** Host gate + clock carried by every snapshot. When `serviceable` is false
- *  the rows are still returned, but they MUST be read as unknown — host-down
- *  never fabricates a completion (「host 停机语义」). */
+/** Host gate + clock carried by every snapshot. When `serviceable` is false the rows
+ *  are still returned but MUST be read as unknown — host-down never fabricates a completion. */
 export interface SessionStateHostInfo {
   now: number
   serviceable: boolean
   state: SessionStateHostState
 }
 
-/** Full snapshot (GET {SESSION_STATE_PATH}); the SSE first frame is the same
- *  shape. */
+/** Full snapshot (GET {SESSION_STATE_PATH}); the SSE first frame is the same shape. */
 /**
- * Watcher self-diagnostics（仪表 I6/I16）：只读计数器，让客户端与验收
- * 仪器**看见**丢帧、重连、follow 读取与 turn/end 分类的构成，而不是从沉默里猜。
- * 描述符上的加法字段：不认识它的客户端照常工作（v0.4.0 允许加法）。
- * 命名与设计示意字段名有一处诚实偏离：示意写 `gapsDetected`，实现给的是
- * `baselines`/`reconnects`（每次 ready/重连都对账并重读基线）——不存在"检测到缺口"
- * 的独立事件，据此命名会编造一个没有语义的计数器。
+ * Watcher self-diagnostics: read-only counters that let clients and acceptance
+ * instruments SEE dropped frames, reconnects, follow reads and turn/end
+ * classification instead of inferring from silence. Additive descriptor field —
+ * unknown clients keep working. No independent "gap detected" event exists, so the
+ * counters are named baselines/reconnects (each ready/reconnect reconciles).
  */
 export interface SessionStateDiagnostics {
   /** `$events` downlink frames received since start(). */
@@ -309,9 +270,7 @@ export interface SessionStateSnapshot {
 }
 
 /** One SSE increment. Emitted events have no replay, so every (re)connect also
- *  performs a full session/list baseline reconciliation — a delta is an
- *  optimization on top of that baseline, never a replacement for it
- *  (「（重）连必须对账」). */
+ *  performs a full session/list baseline reconciliation; a delta optimizes on top of it. */
 export interface SessionStateDelta {
   cursor: number
   sessions: readonly SessionStateRow[]
@@ -331,9 +290,8 @@ export interface ReadRequest {
   readThrough: number
 }
 
-/** POST {SESSION_STATE_READ_ALL_PATH} body: source-wide floor upsert. The
- *  client supplies `through` so late-discovered rows at or below it are read
- *  from the start — the server must NOT compute "now". */
+/** POST {SESSION_STATE_READ_ALL_PATH} body: source-wide floor upsert. The client
+ *  supplies `through`; the server must NOT compute "now". */
 export interface ReadAllRequest {
   clientId: string
   through: number
@@ -363,9 +321,8 @@ export type SessionStateCapabilityKind =
 /** Transport-failure reason of one capability probe. */
 export type SessionStateProbeFailureReason = 'timeout' | 'network'
 
-/** One capability-probe observation. The caller owns the HTTP carrier and
- *  hands over only facts: a status (+ parsed body when it could be read) or a
- *  transport failure. This module performs no I/O. */
+/** One capability-probe observation: a status (+ parsed body) or a transport failure.
+ *  This module performs no I/O. */
 export type SessionStateProbeOutcome =
   | { readonly kind: 'response'; readonly status: number; readonly body?: unknown }
   | { readonly kind: 'failure'; readonly reason: SessionStateProbeFailureReason }
@@ -409,12 +366,9 @@ function knownFeatures(raw: readonly string[]): readonly SessionStateFeature[] {
 }
 
 /**
- * Parse the descriptor facts out of one 200 response body. Never throws and
- * never guesses: an absent/invalid field stays null, so the classifier can
- * take the most conservative path (compat rule R4). Unknown fields are
- * ignored (compat rule R1).
- * @param value - untrusted JSON body.
- * @returns the descriptor facts, or null when the body is not a plain object.
+ * Parse the descriptor facts out of one 200 response body. Never throws and never
+ * guesses: an absent/invalid field stays null, so the classifier takes the most
+ * conservative path. Unknown fields are ignored.
  */
 export function parseSessionStateDescriptor(value: unknown): SessionStateDescriptor | null {
   if (!isPlainRecord(value)) return null
@@ -432,10 +386,8 @@ export function parseSessionStateDescriptor(value: unknown): SessionStateDescrip
 }
 
 /**
- * Compute the missing-required-feature set of one advertised feature list.
- * @param advertised - raw advertised ids (unknown ids do not count).
- * @param required - features the caller needs (default: the base set).
- * @returns { ok, missing } — ok === false only when a required id is absent.
+ * Compute the missing-required-feature set of one advertised list. Unknown ids do not
+ * count; ok === false only when a required id is absent.
  */
 export function sessionStateFeatureSupport(
   advertised: readonly string[],
@@ -447,23 +399,17 @@ export function sessionStateFeatureSupport(
 }
 
 /**
- * Classify one capability probe observation into the verdict family.
- * The order of the checks IS the contract:
- *
- *   1. transport failure          ⇒ unavailable (never legacy)
- *   2. 404                        ⇒ legacy-gateway
- *   3. 503 + session_state_disabled ⇒ disabled
- *   4. any other non-2xx          ⇒ unavailable
- *   5. 2xx without protocol field ⇒ unversioned
- *   6. 2xx with mode==='off'      ⇒ disabled ("observer off" second shape —
- *      the client must not read it as "not upgraded")
- *   7. protocol > PROTOCOL_VERSION ⇒ forward-skew
- *   8. required feature missing   ⇒ forward-skew (+ missingFeatures)
- *   9. otherwise                  ⇒ ok
- *
- * @param outcome - facts of one probe request.
- * @param requiredFeatures - required ids (default {@link SESSION_STATE_BASE_FEATURES}).
- * @returns the capability verdict (pure; no I/O, no clock).
+ * Classify one capability probe observation into the verdict family. Pure — no I/O,
+ * no clock; `requiredFeatures` defaults to SESSION_STATE_BASE_FEATURES. The order of
+ * the checks IS the contract:
+ *   1. transport failure ⇒ unavailable (never legacy)
+ *   2. 404 ⇒ legacy-gateway; 503 + session_state_disabled ⇒ disabled
+ *   3. any other non-2xx ⇒ unavailable
+ *   4. 2xx without protocol field ⇒ unversioned
+ *   5. 2xx with mode==='off' ⇒ disabled ("observer off" second shape)
+ *   6. protocol > PROTOCOL_VERSION ⇒ forward-skew
+ *   7. required feature missing ⇒ forward-skew (+ missingFeatures)
+ *   8. otherwise ⇒ ok
  */
 export function classifySessionStateProbe(
   outcome: SessionStateProbeOutcome,
@@ -502,9 +448,8 @@ export function classifySessionStateProbe(
     return { kind: 'unversioned', status, ...empty, degradation: 'unversioned', detail: 'status' }
   }
   const features = knownFeatures(descriptor.features)
-  // The kill switch has two server shapes (503 session_state_disabled;
-  // 200 + mode:'off'). Both mean "upgraded gateway, observer turned off" and
-  // must never be rendered as a version-skew hint.
+  // The kill switch has two server shapes (503 session_state_disabled; 200 +
+  // mode:'off'), both meaning "upgraded gateway, observer off" — never a version-skew hint.
   if (descriptor.mode === 'off') {
     return {
       kind: 'disabled',
@@ -554,8 +499,7 @@ export function classifySessionStateProbe(
   }
 }
 
-/** Recognize the 503 kill-switch body ({error:'session_state_disabled'} or
- *  {code:'session_state_disabled'}, including a nested error.code). */
+/** Recognize the 503 kill-switch body ({error|code:'session_state_disabled'}, including nested error.code). */
 function isSessionStateDisabledBody(body: unknown): boolean {
   if (!isPlainRecord(body)) return false
   if (body.error === 'session_state_disabled' || body.code === 'session_state_disabled') return true
@@ -564,12 +508,9 @@ function isSessionStateDisabledBody(body: unknown): boolean {
 }
 
 /**
- * Map one verdict kind to its user-visible copy key, or null for `ok`. The
- * exhaustive switch (no default) makes a new verdict kind a compile error, so
- * a degraded source can never render silently — the "不静默/不噪声" rule.
- * The sidebar owns the actual translations; this function owns the key set.
- * @param kind - classified verdict kind.
- * @returns the stable i18n key, or null when no note is due.
+ * Map one verdict kind to its user-visible copy key, or null for `ok`. The exhaustive
+ * switch (no default) makes a new verdict kind a compile error, so a degraded source
+ * can never render silently. The sidebar owns the translations; this owns the key set.
  */
 export function sessionStateNoteKey(kind: SessionStateCapabilityKind): string | null {
   switch (kind) {
@@ -583,13 +524,9 @@ export function sessionStateNoteKey(kind: SessionStateCapabilityKind): string | 
 }
 
 /**
- * Monotonic read-mark merge: `max(existing, incoming)`. Read marks only ever
- * rise (R22), so a reordered or repeated write can never resurrect unread.
- * Values outside the watermark domain are treated as absent (defensive: the
- * route validator rejects them at the boundary).
- * @param existing - stored mark (null/undefined = none).
- * @param incoming - requested mark.
- * @returns the new mark.
+ * Monotonic read-mark merge: max(existing, incoming). Read marks only ever rise, so a
+ * reordered or repeated write can never resurrect unread. Values outside the watermark
+ * domain are treated as absent.
  */
 export function mergeReadMark(existing: number | null | undefined, incoming: number): number {
   const current = isWatermark(existing) ? existing : 0
@@ -598,17 +535,11 @@ export function mergeReadMark(existing: number | null | undefined, incoming: num
 }
 
 /**
- * Clamp an incoming read mark to the HOST clock at acceptance time. Read marks
- * live in the host domain (R2), so a client may claim to have read
- * up to "now" but never into its own future: a desktop whose clock runs ahead
- * — the ≥1h clock-skew injection — would otherwise send
- * `readThrough = now + 3600_000` and suppress every completion landing in that
- * hour, i.e. lose true unread. Watermarks are produced by the same host domain
- * (`row.updatedAt` / `row.completedAt`), so a legitimate mark is unaffected;
- * the effective (clamped) value is echoed back to the client.
- * @param value - requested mark (already validated as a watermark).
- * @param at - host-domain acceptance time.
- * @returns the mark to store, never above `at`.
+ * Clamp an incoming read mark to the HOST clock at acceptance time. Read marks live in
+ * the host domain, so a client may claim to have read up to "now" but never into its own
+ * future: a desktop clock running ahead would otherwise suppress every completion
+ * landing in the skew window (lost true unread). Watermarks share the same host domain
+ * (`row.updatedAt`/`row.completedAt`), so a legitimate mark is unaffected.
  */
 export function clampReadThrough(value: number, at: number): number {
   const ceiling = isWatermark(at) ? at : 0
@@ -616,14 +547,9 @@ export function clampReadThrough(value: number, at: number): number {
 }
 
 /**
- * Source-wide effective read mark for ONE session: the max over every client's
- * mark for that session plus the source floor. "Stored per client-install,
- * judged per source" is what lets a read on one client clear
- * unread on every other client (R10).
- * @param marks - every known client's mark for the session (missing marks
- *   remain absent; invalid values are ignored).
- * @param floor - source-wide read-all floor (default 0).
- * @returns the effective watermark (0 when nothing was ever read).
+ * Source-wide effective read mark for ONE session: the max over every client's mark for
+ * that session plus the source floor. "Stored per client-install, judged per source" is
+ * what lets a read on one client clear unread on every other client.
  */
 export function effectiveReadMark(
   marks: Iterable<number | null | undefined>,
@@ -637,13 +563,10 @@ export function effectiveReadMark(
 }
 
 /**
- * Classify one turn/end fact for the unread predicate (R12 closure):
- * `completed` counts as a completion; `aborted` with cause `user` is an
- * explicit user stop and must NOT arm unread; every other conclusion
- * (blocked/error/max-tokens/interrupted, aborted for parent/hook/disposed/
- * legacy, or an absent fact) is neutral.
- * @param turnEnd - the observed fact, or null when none could be read.
- * @returns the disposition.
+ * Classify one turn/end fact for the unread predicate: `completed` counts as a
+ * completion; `aborted` with cause `user` is an explicit stop and must NOT arm unread;
+ * every other conclusion (blocked/error/max-tokens/interrupted, aborted for other
+ * causes, or an absent fact) is neutral.
  */
 export function classifyTurnEnd(
   turnEnd: SessionTurnEnd | null | undefined,

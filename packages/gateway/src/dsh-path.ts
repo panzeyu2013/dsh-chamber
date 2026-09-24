@@ -5,17 +5,13 @@ import { isDshWorkspace } from '@dsh-chamber/dsh-runtime'
 
 /**
  * Find a dsh installation without relying on the gateway bundle's own
- * import.meta.url. In a global npm install the `dsh` bin is normally a
- * symlink into `<root>/node_modules/@deepseek-ai/dsh/lib/bin.js`; its real
- * target therefore identifies exactly the workspace root expected by the
- * shared spawn code. Returns null instead of guessing.
+ * import.meta.url. In a global npm install the `dsh` bin is normally a symlink
+ * into `<root>/node_modules/@deepseek-ai/dsh/lib/bin.js`, so its real target
+ * identifies the workspace root expected by the shared spawn code. Returns null
+ * instead of guessing.
  *
- * The workspace markers themselves are NOT defined here: `isDshWorkspace` is
- * derived from the shared core's `resolveDshCliEntry`
- * (@dsh-chamber/dsh-runtime dsh-cli-entry.ts — the single home of the
- * installed-entry/dev-source markers, also consumed by the plugins-tasks
- * executor launch). This file keeps only the gateway-specific PATH/realpath
- * walk.
+ * The markers are NOT defined here: `isDshWorkspace` comes from the shared
+ * `resolveDshCliEntry` core; this file keeps only the PATH/realpath walk.
  */
 export function findDshWorkspace(
   fallback: string,
@@ -24,10 +20,9 @@ export function findDshWorkspace(
   modulePath = fileURLToPath(import.meta.url),
 ): string | null {
   if (isDshWorkspace(fallback)) return fallback
-  // npm/pnpm/Windows may install `dsh` as a shell/.cmd shim instead of a
-  // symlink, so realpath(PATH/dsh) alone cannot reveal its package. Walk from
-  // this installed gateway bundle as well: globally or project-locally
-  // installed sibling packages meet at an ancestor `<root>/node_modules`.
+  // Windows may install `dsh` as a shell/.cmd shim, so realpath(PATH/dsh) alone
+  // cannot reveal its package. Walk up from this bundle as well: sibling
+  // packages meet at an ancestor `<root>/node_modules`.
   let directory = dirname(modulePath)
   const filesystemRoot = parse(directory).root
   while (true) {

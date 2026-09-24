@@ -1,36 +1,21 @@
 /**
- * Chamber open-in client plugin (design 16 + design 20 fork & supersede):
- * ONE header utility entry that opens the current session's workspace in an
- * installed app, over the per-source view-model —
+ * Chamber open-in client plugin: ONE header utility entry that opens the
+ * current session's workspace in an installed app, over the per-source view-model.
  *
- *  - the **machine catalog** (installed apps + their real bundle icons + local
- *    launches) is read ONCE per page from the LOCAL instance's `openInApp/*`
- *    host domain (`packages/dsh-chamber-seed-open-in`, the fork of upstream's
- *    open-in host half) by the renderer shell and injected into every entry as
- *    `chamberMachineCatalog` (design 20 §5): "what is installed on this
- *    machine" is a machine fact, exactly as it is upstream, where the page's
- *    own host answers it;
- *  - **this source's launch capability** selects from that catalog: a LOCAL
- *    source launches on the machine directly, a remote ssh source keeps only
- *    the desktop main-process provider's `remoteCapable` entries (the VS Code
- *    Remote deeplink carrier).
+ *  - the machine catalog (installed apps + real bundle icons + local launches)
+ *    is read ONCE per page from the LOCAL instance's `openInApp/*` host domain
+ *    and injected into every entry as `chamberMachineCatalog`: "what is installed
+ *    on this machine" is a machine fact, exactly as upstream treats it;
+ *  - this source's launch capability selects from that catalog: a LOCAL source
+ *    launches on the machine directly, a remote ssh source keeps only the main
+ *    provider's `remoteCapable` entries (the VS Code Remote-SSH carrier).
  *
- * Registered into the OFFICIAL conversation header utilities slot
- * (`conversation.session.header.utilities`, the same right-aligned row as the
- * vendor "Session log" action). The button lays out inline beside the vendor
- * utilities rather than floating on the frame layer: a `shell.overlay`
- * top-right anchor would overlap that row (details column closed ⇒ the center
- * column reaches the frame edge). The slot is session-scoped, so the component
- * receives the
- * per-header `sessionId` and the framework's global `useWorkspaces` hook —
- * no direct ctx store access.
- *
- * Per-entry facts ride this ctx (`chamberInstanceId`, `chamberTransport`,
- * `chamberSourceFingerprint`, all provided by chamber-entry/shell.ts): the
- * source id and transport decide the matrix, and the fingerprint is the
- * exact-boot proof the trusted main process verifies before a launch. This
- * entry owns NO connection carrier of its own: the machine catalog's transport
- * belongs to the page, not to a source.
+ * The slot is session-scoped, so the component receives the per-header
+ * `sessionId` and the framework's global `useWorkspaces` hook — no direct ctx
+ * store access. Per-entry facts ride this ctx (`chamberInstanceId`,
+ * `chamberTransport`, `chamberSourceFingerprint`): the source id and transport
+ * decide the matrix, and the fingerprint is the exact-boot proof the trusted
+ * main process verifies before a launch. This entry owns no connection carrier.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
@@ -69,18 +54,13 @@ export function apply(ctx: ClientContext): void {
 
   const t = ctx.locale.bind(NS) as Translate
 
-  // Session stream-health seat: the chamber's recovery arm for the ui-chat
-  // freeze (an 'error' journal is never re-opened by the
-  // official stack), registered BEFORE the open-in gates below and
-  // independently of them — a source whose open-in id does not parse still
-  // gets the recovery chip. See session-stream-health.ts for the defect, the
-  // lever and its hard boundary.
+  // Session stream-health seat (the recovery arm for the ui-chat freeze),
+  // registered BEFORE the open-in gates so an unparseable source still gets it.
   registerSessionStreamHealthSeat(ctx, t)
 
-  // Per-boot instance id provided by chamber-entry; loose cast (the sidebar
-  // plugin uses the same `as any` seam — the vendor cordis face stays loose).
-  // Bail on an absent id: without it the gate-2 local
-  // check would let a bogus '' source render a button that can only fail.
+  // Per-boot instance id provided by chamber-entry; loose cast (the vendor cordis
+  // face stays loose). Bail on an absent id: the gate-2 local check would
+  // otherwise let a bogus '' source render a button that can only fail.
   const source = parseOpenInSource(
     (ctx as { chamberInstanceId?: string }).chamberInstanceId,
     (ctx as { chamberTransport?: 'local' | 'ssh' | 'http' }).chamberTransport,
@@ -92,25 +72,21 @@ export function apply(ctx: ClientContext): void {
   )
   if (sourceFingerprint === null) return
 
-  // The machine catalog is a PAGE fact (built once by the renderer shell for
-  // the LOCAL instance, design 20 §5); this entry reads it from its own Context
-  // and never builds a per-source copy. Absent = no machine reader on this page
-  // (the machine pool then stays empty rather than the button breaking).
+  // The machine catalog is a PAGE fact (built once by the renderer shell for the
+  // LOCAL instance); this entry reads it and never builds a per-source copy.
   const machineCatalog = (ctx as { chamberMachineCatalog?: MachineCatalog }).chamberMachineCatalog ?? null
 
-  // Per-source adapter (design 20 §5): owns the rendered-set merge (the page's
-  // machine catalog + the page-wide main pool) and the per-entry channel
-  // routing (local → the machine's own host domain, main → trusted preload IPC
-  // with the exact-boot proof), plus the persisted choice.
+  // Per-source adapter: owns the rendered-set merge (machine catalog + page-wide
+  // main pool), the per-entry channel routing (local → host domain, main →
+  // trusted preload IPC with the exact-boot proof), plus the persisted choice.
   const adapter = createOpenInSourceAdapter({
     source,
     sourceFingerprint,
     translate: t,
     machineCatalog,
     mainPool: { get: getOpenInApps, subscribe: subscribeOpenIn, refresh: refreshApps },
-    // The remembered app is per source (design 20 §5): one page serves every
-    // source, so a shared key would let a remote target overwrite the local
-    // choice (and vice versa).
+    // The remembered app is per source: one page serves every source, so a shared
+    // key would let a remote target overwrite the local choice (and vice versa).
     choice: {
       get: () => getOpenInChoice(source.sourceId),
       set: (appId: string) => { setOpenInChoice(source.sourceId, appId) },
@@ -120,11 +96,8 @@ export function apply(ctx: ClientContext): void {
   })
   ctx.effect(() => () => adapter.dispose(), 'dsh-chamber: open-in adapter')
 
-  // The slot inject factory closes over ctx (same pattern as the vendor
-  // session-log entry): it hands the component this ctx's source id, the
-  // bound translator and the per-ctx model/launch faces; the per-header
-  // session id and the workspace rows come from the framework standard kit
-  // (see OpenInButton props).
+  // The slot inject factory closes over ctx: it hands the component this ctx's
+  // source id, bound translator and per-ctx model/launch faces.
   const injected = (): OpenInInjected => ({
     source,
     t,
@@ -135,29 +108,22 @@ export function apply(ctx: ClientContext): void {
     getChoice: adapter.getChoice,
     choose: adapter.choose,
     iconUrl: adapter.iconUrl,
-    // 保持一次性读取：根因在 Swift shim——它与 preload 同序（只有 info 成功才暴露
-    // dshChamber），因此注入发生时 platform 必然已填；让共享插件用 getter 补偿 shim
-    // 的早暴露不是它的职责。
+    // 一次性读取：Swift shim 与 preload 同序（只有 info 成功才暴露 dshChamber），注入发生时
+    // platform 已填；让共享插件用 getter 补偿 shim 的早暴露不是它的职责。
     platform: bridgePlatform(),
   })
 
   ctx.slots.inject(OPEN_IN_HEADER_SLOT, () => ctx.slots.register({
     name: OPEN_IN_HEADER_SLOT,
-    // Our own id, deliberately NOT the official row's `open-in-app`: the slot
-    // registry THROWS on a duplicate `list` id at the same priority
-    // (ui-slots `register`), so a future boot graph that materializes the
-    // official row would break this surface instead of merely duplicating it.
-    // Everything else about the registration is upstream's (order -10, same
-    // slot, same right-aligned position).
+    // Our own id, deliberately NOT the official row's `open-in-app`: the registry
+    // THROWS on a duplicate list id at the same priority, so a future boot graph
+    // with the official row would break this surface instead of duplicating it.
     id: 'open-in',
-    // Row order is ascending by `order` (default 0). -10 is the official
-    // `open-in-app` row's own value, which keeps the vendor "Session log" entry
-    // (order 0) pinned at the row's far RIGHT and places this button to its left,
-    // with upstream's exact ordering behaviour for any third-party row in
-    // between.
+    // Row order ascends by `order` (default 0). -10 is the official `open-in-app`
+    // row's own value, which keeps the vendor "Session log" entry (0) at the far
+    // right and places this button to its left.
     order: -10,
-    // Neutral entry label (slot registrant diagnostics — the user-facing
-    // tooltip/aria-label comes from the component per app, see OpenInButton).
+    // Neutral entry label (slot diagnostics — the user-facing copy comes from the component).
     label: () => t('titleOpen'),
     inject: injected,
   }, OpenInButton))

@@ -1,28 +1,14 @@
 /**
- * Pure workspace-drag order rules (design 06 §2.2 / design 08 §3.3): ONE
- * implementation of the repo-group invariant, shared by the drop marker, the
- * onDragOver gate, the drop handler and the commit — the visual, the accepted
- * drop and the committed order cannot drift.
- *
- * Invariant: a git MAIN checkout
- * and its derived (worktree) workspaces form a contiguous family — the main
- * first, its worktrees after it in the registry order. A drag therefore:
- *  - may never move a foreign workspace INTO a contiguous family's interior;
- *  - may never move a worktree out of its own family (it reorders inside);
- *  - when dragging the family's main, moves the WHOLE family as one block
- *    (a main drag relocates the group; it can never split it).
- * Families that are already non-contiguous (legacy interleaved orders) are
- * not repaired by foreign drops — they stop constraining them until a main
- * drag pulls the members back together (moved = the whole family, main
- * first). One rule stays ABSOLUTE in a broken family too: a worktree can
- * never be dropped at or above its own main — the violation is never
- * deepened; only the main's own drag heals the family.
- *
- * Rows hidden by their main's repo-group fold render nothing (design 08
- * §3.3), so an 'after' drop must anchor on the next VISIBLE row — the
- * resolver takes a hidden() verdict per row to keep view and commit in
- * lockstep (a marker drawn below a visible row lands below the hidden block
- * that follows it).
+ * Pure workspace-drag order rules: ONE implementation of the repo-group
+ * invariant, shared by drop marker, onDragOver gate, drop handler and commit.
+ * Invariant: a git MAIN checkout and its derived (worktree) workspaces form a
+ * contiguous family (main first, worktrees after in registry order); a drag
+ * never moves a foreign workspace into a contiguous family's interior or a
+ * worktree out of its own family, and dragging the family's main moves the
+ * WHOLE family. Legacy non-contiguous families are not repaired by foreign
+ * drops, but a worktree can never be dropped at or above its own main (only a
+ * main drag heals). Fold-hidden rows render nothing, so an 'after' drop anchors
+ * on the next VISIBLE row (view/commit lockstep).
  */
 import type { WorkspaceGitFlag } from './workspace-git-flags.ts'
 
@@ -32,18 +18,15 @@ export interface WorkspaceDropOver {
 }
 
 export type WorkspaceDropVerdict =
-  /** The position would break a contiguous repo family: marker suppressed,
-   *  drop ignored (nothing moves). */
+  /** The position would break a contiguous repo family: marker suppressed, drop ignored. */
   | { kind: 'blocked' }
   /** Valid position but nothing changes (vanished pieces / already in place). */
   | { kind: 'noop' }
-  /** Valid move: `moved` (block order, main first) lands before the element
-   *  following it in `order` (append when none). */
+  /** Valid move: `moved` (block order, main first) lands before the element following it in `order` (append when none). */
   | { kind: 'move'; order: string[]; moved: string[] }
 
 export interface WorkspaceDropEnv {
-  /** Real workspace ids in the current display order (no ungrouped /
-   *  synthetic buckets — they are neither draggable nor drop targets). */
+  /** Real workspace ids in the current display order (no ungrouped/synthetic buckets — neither draggable nor drop targets). */
   order: readonly string[]
   /** Per-workspace git flag lookup (shared/workspace-git-flags.ts). */
   flag: (workspaceId: string) => WorkspaceGitFlag | undefined
@@ -60,7 +43,6 @@ function derivedOf(order: readonly string[], headId: string, flag: WorkspaceDrop
   return derived
 }
 
-/** All members of the family `order` actually contains, keyed by head id. */
 function familiesOf(order: readonly string[], flag: WorkspaceDropEnv['flag']): Map<string, string[]> {
   const families = new Map<string, string[]>()
   for (const id of order) {
@@ -73,7 +55,6 @@ function familiesOf(order: readonly string[], flag: WorkspaceDropEnv['flag']): M
   return families
 }
 
-/** True when the head and all its derived rows form one run, head first. */
 function contiguous(list: readonly string[], headId: string, members: readonly string[]): boolean {
   const first = list.indexOf(headId)
   if (first === -1) return false
@@ -93,23 +74,19 @@ export function resolveWorkspaceDrop(
   over: WorkspaceDropOver,
 ): WorkspaceDropVerdict {
   const { order, flag, hidden } = env
-  // Vanished target or dragged row: nothing to commit (id-keyed, never
-  // index-keyed — a mid-drag re-render/poll may drop either).
+  // Vanished target or dragged row: nothing to commit (id-keyed, never index-keyed — a mid-drag re-render/poll may drop either).
   const targetIndex = order.indexOf(over.id)
   if (targetIndex === -1) return { kind: 'noop' }
   if (!order.includes(draggedId)) return { kind: 'noop' }
 
-  // The dragged unit: the whole family when the dragged row IS the family
-  // head (a main drag relocates the group; the head also counts when only the
-  // worktrees still carry the link — flag lag), the single row otherwise.
+  // The dragged unit: the whole family when the dragged row IS the family head (flag lag still counts), else the single row.
   const dragFlag = flag(draggedId)
   const ownDerived = derivedOf(order, draggedId, flag)
   const moved = dragFlag?.isMain === true || ownDerived.length > 0
     ? [draggedId, ...ownDerived]
     : [draggedId]
 
-  // Where the unit lands: 'before' = at the target row; 'after' = at the
-  // next VISIBLE row (fold-hidden rows render nothing between visible rows).
+  // Where the unit lands: 'before' = at the target row; 'after' = at the next VISIBLE row (fold-hidden rows render nothing between).
   let anchor: string | undefined
   if (over.half === 'before') {
     anchor = over.id
@@ -118,8 +95,7 @@ export function resolveWorkspaceDrop(
     while (i < order.length && hidden(order[i]!)) i += 1
     anchor = order[i]
   }
-  // Dropping inside the dragged unit's own span (e.g. the main onto one of
-  // its worktrees) leaves the order untouched.
+  // Dropping inside the dragged unit's own span (main onto one of its worktrees) leaves the order untouched.
   if (anchor !== undefined && moved.includes(anchor)) return { kind: 'noop' }
 
   const rest = order.filter(id => !moved.includes(id))
@@ -130,19 +106,16 @@ export function resolveWorkspaceDrop(
     return { kind: 'noop' }
   }
 
-  // A drop is blocked when it splits a family that is contiguous right now.
-  // Broken (legacy) families stay unconstrained until a main drag heals them.
+  // A drop is blocked when it splits a currently-contiguous family; broken (legacy) families stay unconstrained until a main drag heals them.
   const families = familiesOf(order, flag)
   for (const [headId, members] of families) {
     if (!contiguous(order, headId, members)) continue
     if (!contiguous(candidate, headId, members)) return { kind: 'blocked' }
   }
 
-  // Absolute head-first rule for the dragged row itself: a worktree may never
-  // END UP at or above its own main — this holds in a legacy-broken family
-  // too (the constraint above skips non-contiguous families, so without this
-  // check a split worktree could be dragged above its main, deepening the
-  // violation).
+  // Absolute head-first rule for the dragged row itself: a worktree may never END UP at or
+  // above its own main — the contiguous-family check above skips broken families, so without
+  // this a split worktree could be dragged above its main, deepening the violation.
   const dragMainId = dragFlag?.isWorktree === true ? dragFlag.mainWorkspaceId : undefined
   if (dragMainId !== undefined && order.includes(dragMainId)) {
     const draggedAt = candidate.indexOf(draggedId)

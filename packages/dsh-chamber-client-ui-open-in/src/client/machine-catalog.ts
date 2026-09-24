@@ -1,33 +1,19 @@
 /**
- * The machine's application catalog (design 20 §5) — the
- * ONE page-level reader of "which apps are installed here, and what do their
- * icons look like".
+ * The machine’s application catalog — the ONE page-level reader of "which apps
+ * are installed here, and what do their icons look like".
  *
  * That question is a MACHINE fact, not a source fact. Upstream never separates
- * the two: one page is served by one host, so its client reads `apps` and
- * `icon/<id>` from `location.origin` and every source-shaped question (which
- * directory, which host) is answered by that same host. The chamber page
- * attaches N instances, so that identity does not hold: a remote-ssh entry has
- * no icon source of its own to read (the host domain is `localOnly`, and
- * upstream's resolver returns an empty catalog under SSH anyway).
+ * the two (one page = one host), but the chamber page attaches N instances and a
+ * remote-ssh entry has no icon source of its own (the host domain is
+ * `localOnly`). The catalog is therefore read ONCE per page from the LOCAL
+ * instance's `openInApp/*` host domain and injected into every entry's Context;
+ * each entry only decides which apps it can launch.
  *
- * The machine half therefore keeps upstream's own invariant: the catalog is
- * read ONCE per page from the LOCAL instance's `openInApp/*` host domain
- * (the same domain, wire and trust fence the local source's entry uses) and
- * injected into every entry's Context. Each entry then only decides which of
- * those apps it can launch — the local channel on the machine itself, the
- * trusted IPC deeplink carrier for a remote target.
- *
- * This module owns the boot-level cache so that decision never re-reads the
- * host per source: catalog ids and icons are fetched at most once each per
- * page (failures cached too — a missing icon must not be re-requested on every
- * render), batches are serialized (a refresh during an in-flight batch must not
- * drop an id it discovered), and subscribers are notified as pixels arrive.
- * Callers re-probe it when it can have changed: each entry's boot and every
- * menu open (the page's main pool has its own window-focus release in
- * `coordinator.ts`; this catalog is not on that path).
- * `local-catalog.ts` below stays the pure wire parser; the transport is
- * injected, which in production is the page-level instance client for `local`.
+ * Owns the boot-level cache so that decision never re-reads the host per source:
+ * ids and icons are fetched at most once each per page (failures cached too),
+ * batches are serialized so a refresh cannot drop an id it discovered, and
+ * subscribers are notified as pixels arrive. `local-catalog.ts` is the pure wire
+ * parser; the transport is injected.
  */
 import type { OpenInApp } from '../shared/capabilities.ts'
 import { createLocalCatalog, type LocalCatalogOptions } from './local-catalog.ts'
@@ -38,8 +24,8 @@ export interface MachineCatalog {
   /** Cached host icon `data:` URL for an app id; null while unknown or when the
    *  host serves none (the mark then draws its own fallback). */
   iconUrl(appId: string): string | null
-  /** Re-probe the catalog (and prefetch any id the last probe did not answer).
-   *  Concurrent callers share one probe — every entry asks the same question. */
+  /** Re-probe the catalog and prefetch any unanswered id. Concurrent callers
+   *  share one probe — every entry asks the same question. */
   refresh(): Promise<void>
   subscribe(listener: () => void): () => void
   launch(appId: string, path: string): Promise<void>
@@ -62,31 +48,24 @@ export function createMachineCatalog(options: LocalCatalogOptions): MachineCatal
       try {
         listener()
       } catch {
-        // A subscriber must never poison the catalog: this notify runs inside
-        // the probe and the icon flight, so a throw here would reject them and
-        // silently stop every later batch from running. Listener failures are
-        // the listener's own (the button's subscribers only set React state).
+        // A subscriber must never poison the catalog: this notify runs inside the
+        // probe and the icon flight, so a throw here would stop every later batch.
       }
     }
   }
 
   /**
-   * Tail of the icon-fetch queue. Batches are SERIALIZED rather than coalesced
-   * with a `??=` single-flight: a refresh during an in-flight batch can
-   * discover an id the running batch does not carry, and coalescing would
-   * silently drop it until the next refresh. Chaining keeps every discovered
-   * id, and the re-check at run time still avoids a second fetch for an id the
-   * previous batch answered. `LocalCatalog.icon` never rejects (it fails closed
-   * to null), so the queue needs no rejection handling to stay alive.
+ * Tail of the icon-fetch queue. Batches are SERIALIZED rather than coalesced:
+   * a refresh during an in-flight batch can discover an id that batch does not
+   * carry, and coalescing would silently drop it until the next refresh. The
+   * re-check at run time still avoids a second fetch for an answered id.
    */
   let iconFlight: Promise<void> = Promise.resolve()
 
   /**
-   * Fetch the icons of the given entries once per page, per id, in serialized
-   * batches. Eager by design: the catalog is small (only apps the host actually
-   * resolved), each id is fetched at most once, and having the pixels before
-   * the first render is what keeps the button from flashing a fallback mark —
-   * upstream instead lets each `<img>` load on demand and pops in.
+ * Fetch the icons of the given entries once per page, per id, in serialized
+   * batches. Eager by design: having the pixels before the first render keeps the
+   * button from flashing a fallback mark.
    */
   const prefetchIcons = (list: readonly OpenInApp[]): Promise<void> => {
     const wanted = list.filter(entry => !icons.has(entry.id))
@@ -104,12 +83,10 @@ export function createMachineCatalog(options: LocalCatalogOptions): MachineCatal
   }
 
   /**
-   * The catalog read is single-flight, but ONLY the id read: every entry asks
-   * the same question, so concurrent callers share one `apps()` call. The icon
-   * batches are deliberately outside that window — they tail off asynchronously
-   * and can take a while, and a refresh arriving during that tail (the chevron
-   * re-probes on every menu open) must still re-read the ids rather than join a
-   * probe whose app list was already decided.
+ * The catalog read is single-flight, but ONLY the id read: concurrent callers
+   * share one `apps()` call. The icon batches are deliberately outside that
+   * window — they tail off asynchronously, and a refresh arriving during that
+   * tail must re-read the ids rather than join a decided app list.
    */
   let probing: Promise<void> | null = null
   const probeCatalog = (): Promise<void> => {
@@ -123,8 +100,7 @@ export function createMachineCatalog(options: LocalCatalogOptions): MachineCatal
 
   const refresh = async (): Promise<void> => {
     await probeCatalog()
-    // Settle the icon queue as it stands now (this probe's batch included), so
-    // an awaiting caller sees the same pixels a re-render would.
+    // Settle the icon queue as it stands now (this probe’s batch included).
     await iconFlight
   }
 

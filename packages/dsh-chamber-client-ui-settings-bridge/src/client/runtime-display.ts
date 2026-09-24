@@ -1,9 +1,7 @@
 /**
- * Pure display projections for the dsh-runtime section: badge maps,
- * timestamp/registry-error/metadata-component formatting. The component keeps
- * orchestration and JSX; this module has no React imports — plain
- * formatting/mapping functions only. Also owns the section RuntimeTranslate
- * alias so component and helpers share one signature.
+ * Pure display projections for the dsh-runtime section: badge maps, timestamp /
+ * registry-error / metadata-component formatting. The component keeps orchestration and
+ * JSX; this module has no React imports.
  */
 import css from './SettingsShell.module.css'
 import type { SettingsBridgeKey } from '../locales.ts'
@@ -53,10 +51,9 @@ export function formatTimestamp(value: string): string {
   }
 }
 
-/** Map the main-process registry patch failures to localized copy by their
- *  stable machine-readable `code` (never by display-text matching — the main
- *  process may reword `error` without notice). Known codes become dictionary
- *  keys; anything unknown stays honest and raw. */
+/** Map the main-process registry patch failures to localized copy by their stable
+ *  machine-readable `code` (never display-text matching — the main process may reword
+ *  `error` without notice); unknown codes stay honest and raw. */
 export function localizeRegistryError(code: string | undefined, error: string, t: RuntimeTranslate): string {
   if (code === 'invalid-registry-origin') {
     return t('dshRuntimeRegistryInvalidOrigin')

@@ -1,13 +1,10 @@
 /**
- * Shared startup-file hygiene for the main-process owner-only JSON stores —
- * the ssh password mirror (`<userData>/ssh-passwords.json`, design 05 §8),
- * the gateway secrets mirror (`<userData>/gateway-secrets.json`, design 17
- * §12), the chamber settings file (design 14 D7) and the ssh plugin journal
- * (design 21 §6.8). Pure Node — no Electron import. The mechanics are
- * shared here instead of duplicated inside each store module; each helper
- * documents its own contract (corrupt-aside preserve, unbound-legacy
- * preserve with unique `.unbound-<ts>-<pid>` recovery naming, and the legacy
- * FIXED-`.tmp` crash-residue sweep).
+ * Shared startup-file hygiene for the main-process owner-only JSON stores (ssh
+ * password mirror, gateway secrets mirror, chamber settings, ssh plugin journal).
+ * Pure Node — no Electron import. Shared instead of duplicated per store; each
+ * helper owns its contract: corrupt-aside preserve, unbound-legacy preserve under
+ * unique `.unbound-<ts>-<pid>` recovery naming, and the legacy FIXED-`.tmp`
+ * crash-residue sweep.
  */
 
 import { existsSync, renameSync, rmSync } from 'node:fs'
@@ -19,9 +16,8 @@ export function isPlainRecord(value: unknown): value is Record<string, unknown> 
 
 /**
  * THE rename-aside primitive: one try/rename over the target file, returning
- * the actual aside path or the failure text.
- * Every corrupt/legacy preserve path (credential mirrors, chamber settings,
- * ssh plugin journal) builds on this instead of hand-writing the rename.
+ * the actual aside path or the failure text; every corrupt/legacy preserve path
+ * (credential mirrors, chamber settings, plugin journal) builds on this.
  */
 export function preserveFileAside(file: string, suffix: string): { ok: true; path: string } | { ok: false; error: string } {
   const aside = `${file}${suffix}`
@@ -34,10 +30,9 @@ export function preserveFileAside(file: string, suffix: string): { ok: true; pat
 }
 
 /**
- * Preserve an INVALID/UNREADABLE store file as `<file>.corrupt` (renamed
- * aside — reversible evidence, never silently treated as empty) and return
- * the loud notice string. `invalidFile` names the file in the notice
- * ('password file', 'gateway secrets file') — the only per-store variance.
+ * Preserve an INVALID/UNREADABLE store file as `<file>.corrupt` (renamed aside —
+ * reversible evidence, never silently treated as empty) and return the loud
+ * notice naming `invalidFile` — the only per-store variance.
  */
 export function preserveInvalidCredentialFile(file: string, invalidFile: string): string {
   const result = preserveFileAside(file, '.corrupt')
@@ -47,39 +42,26 @@ export function preserveInvalidCredentialFile(file: string, invalidFile: string)
 }
 
 /** Store-specific wording of an unbound-legacy preserve notice — the ONLY
- *  per-store variance (each mirror's legacy sentences differ in noun phrases
- *  and verb agreement; the unique-name loop, the rename and the message
- *  shapes are shared below). */
+ *  per-store variance (unique-name loop, rename and message shapes are shared). */
 export interface UnboundCredentialFileWording {
-  /** Sentence subject naming the legacy store, e.g. 'legacy SSH password
-   *  file' / 'legacy gateway secrets'. */
   subject: string
-  /** Agreement verb, e.g. 'has' / 'have'. */
   hasVerb: string
-  /** Disabled-state auxiliary, e.g. 'is' / 'are'. */
   disabledAuxiliary: string
-  /** Preserved-state auxiliary, e.g. 'was' / 'were'. */
   preservedAuxiliary: string
-  /** The binding kind the legacy values lack, e.g. 'endpoint bindings' /
-   *  'target bindings'. */
   bindingsNoun: string
-  /** Re-entry hint noun, e.g. 'passwords' / 'credentials'. */
   reentryNoun: string
 }
 
 /**
  * Preserve a non-empty LEGACY (unbound) store file under a unique
- * `.unbound-<ts>-<pid>` recovery name (a `-<n>` suffix disambiguates a
- * same-ms collision) and return the loud notice string; on rename failure
- * the store stays in place, disabled, with the failure reported. The store
- * passes its own `wording` only — everything else is shared.
+ * `.unbound-<ts>-<pid>` recovery name (a `-<n>` suffix disambiguates a same-ms
+ * collision) and return the loud notice; on rename failure the store stays in
+ * place, disabled, with the failure reported.
  */
 export function preserveUnboundCredentialFile(file: string, wording: UnboundCredentialFileWording): string {
   const stem = `${file}.unbound-${Date.now()}-${process.pid}`
   let unboundPath = stem
   for (let index = 1; existsSync(unboundPath); index += 1) unboundPath = `${stem}-${index}`
-  // The unique-name loop above only PICKS the path; the rename itself goes
-  // through the shared preserve primitive (one implementation for every store).
   const result = preserveFileAside(file, unboundPath.slice(file.length))
   return result.ok
     ? `${wording.subject} ${wording.hasVerb} no ${wording.bindingsNoun} and ${wording.preservedAuxiliary} preserved at ${result.path}; re-enter ${wording.reentryNoun} to use them`
@@ -89,11 +71,9 @@ export function preserveUnboundCredentialFile(file: string, wording: UnboundCred
 /**
  * One-time crash-residue sweep: the legacy fixed-name `${file}.tmp` persist
  * (open 'w' + rename) can leave that exact-name 0600 residue behind after a
- * hard crash between the two steps. The atomic replace uses a random O_EXCL
- * temp and never reuses or removes that legacy name — sweep it once when the
- * store is configured/loaded. Best-effort only: `force` already swallows
- * ENOENT, and any other failure (permissions…) must not break store
- * configuration, so the remainder is swallowed too.
+ * hard crash between the two steps; the atomic replace uses a random O_EXCL
+ * temp and never reuses that legacy name. Best-effort only: `force` swallows
+ * ENOENT and any other failure (permissions…) must not break store configuration.
  */
 export function removeLegacyTmpResidue(file: string): void {
   try { rmSync(`${file}.tmp`, { force: true }) } catch { /* best-effort hygiene only */ }

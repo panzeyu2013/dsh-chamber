@@ -1,27 +1,16 @@
 /**
  * The shell's explicit load state machine.
  *
- * WHY THIS EXISTS. Three independent booleans scattered across two Swift files
- * each carry a defect that only shows on a real machine:
+ * One state machine with an explicit `generation` replaces three scattered booleans
+ * whose defects only show on a real machine: a `didStartLoading` latch with no reset
+ * point; `webViewContentAlive` true on a failure face; and a probe error recorded as
+ * success. Every event carries its generation, and an event from a superseded
+ * generation is DROPPED rather than applied - a new generation starts at `cold`.
+ * Content is only believable in `loaded`, and a failed probe is a strike, never a
+ * success.
  *
- *   1. a `didStartLoading` latch with NO reset point - once set, a later
- *      generation can never re-enter the loading state (the latch survives the
- *      sidecar restart that invalidated it);
- *   2. `webViewContentAlive` reporting TRUE while the page is a failure face
- *      or a blank shell (it answers "did a load ever commit", not "is there
- *      content");
- *   3. a probe ERROR recorded as if the probe had succeeded (an unreachable
- *      sidecar looks healthy).
- *
- * One state machine with an explicit `generation` replaces that: every event carries
- * the generation it belongs to, and an event from a superseded generation is
- * DROPPED rather than applied. That single rule dissolves (1) - a new generation
- * starts at `cold` again - while (2) and (3) become state predicates: content is
- * only believable in `loaded`, and a failed probe is a strike, never a success.
- *
- * PURITY (enforced by scripts/test.mjs): this module imports NOTHING. The Swift
- * mirror reads `tables.json` and is locked to the same phase names and thresholds
- * by scripts/gates/verify-stream-state-swift-parity.mjs.
+ * PURITY: imports NOTHING; the Swift mirror reads `tables.json` and is locked to the
+ * same phase names and thresholds.
  */
 
 /** The phases, in the order a healthy shell visits them. `retrying` and
@@ -81,19 +70,15 @@ export function initialLoadState(): LoadState {
   }
 }
 
-/** Whether the shell may present real content for this state. The honest answer
- *  to "webViewContentAlive": NOT a boolean the page sets, but this predicate. */
+/** Whether the shell may present real content; NOT a boolean the page sets. */
 export function contentIsBelievable(state: LoadState): boolean {
   return state.phase === 'loaded'
 }
 
-/** Whether the load has outlived its progress SLA (the shell reports this, it does
- *  not act on it: the retry schedule is what acts).
- *
- *  LATE IS A PHASE PREDICATE. `loadingSinceMs` is an arming stamp, not a status:
- *  probeSucceeded/recoveryFailed used to leave it behind, so a settled shell with a
- *  stale stamp read as late forever. Only an ACTIVE load can outlive its SLA, and a
- *  non-finite or rolled-back clock can never make it late (I4). */
+/** Whether the load has outlived its progress SLA (the shell reports this; the retry
+ *  schedule acts on it). LATE IS A PHASE PREDICATE: `loadingSinceMs` is an arming stamp,
+ *  so only an ACTIVE load can be late, and a non-finite or rolled-back clock can never
+ *  make it late. */
 export function loadIsLate(state: LoadState, now: number, env: LoadEnv): boolean {
   if (state.phase !== 'loading' || state.loadingSinceMs === null) return false
   const elapsed = now - state.loadingSinceMs
@@ -105,9 +90,7 @@ export function reduceLoadState(
   event: LoadEvent,
   env: LoadEnv,
 ): { readonly state: LoadState; readonly effects: readonly LoadEffect[] } {
-  // The generation fence, in one place: everything except a NEW generation is
-  // dropped when it belongs to a superseded one. A permanent latch
-  // cannot exist under this rule.
+  // The generation fence: everything except a NEW generation is dropped when superseded.
   if (event.kind !== 'generationStarted' && event.generation !== state.generation) {
     return { state, effects: [] }
   }
@@ -129,17 +112,14 @@ export function reduceLoadState(
       }
 
     case 'loadStarted':
-      // Arming is per-generation, so a load that begins again after a failure is
-      // believed again (a latch would refuse it).
+      // Arming is per-generation, so a load after a failure is believed again.
       return {
         state: { ...state, phase: 'loading', loadingSinceMs: event.at },
         effects: [],
       }
 
     case 'contentAlive':
-      // Content is only believable in `loaded`, and this event is what
-      // puts it there - a page that claims content while probing/retrying is not
-      // believed.
+      // Content is only believable in `loaded`, and this event is what puts it there.
       return {
         state: {
           ...state,
@@ -179,8 +159,7 @@ export function reduceLoadState(
       }
 
     case 'recoveryFailed': {
-      // The give-up gate is one-shot: the failure page is shown at most once per
-      // generation, so a retry storm cannot re-announce it.
+      // The give-up gate is one-shot: the failure page shows at most once per generation.
       if (state.giveUpSpent) {
         return { state, effects: [{ e: 'log', name: 'recovery-failed-again', detail: String(event.generation) }] }
       }

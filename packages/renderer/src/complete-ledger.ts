@@ -3,12 +3,10 @@
  *
  * 两个入口各有**不同规则**，因此共用同一容器与键空间，而不是共用一套判定：
  *   - facts 入口（watcher 水位轨）：每 (source, session, kind) 的已通知水位，单调只升，
- *     严格更高才允许再通知——规则本体在 watermark.ts（shouldNotifyWatermark /
- *     nextNotifiedWatermark），调用点裁决，本模块只存；
- *   - 壳边沿入口（武装轨）：每 (source, session) 的「已发 complete 直到重新 running」
- *     武装位——规则本体在 notification-edges.ts 的 dedupeCompleteEdges。
- * 两轨的键空间、读取、写入与整体清除（forget / prune）只有一处；App 只
- * 持有一个引用，per-source 剪枝不会漏表。本模块不重写任何一轨的裁定规则。
+ *     严格更高才允许再通知（规则本体在 watermark.ts，调用点裁决，本模块只存）；
+ *   - 壳边沿入口（武装轨）：每 (source, session) 的「已发 complete 直到重新 running」武装位
+ *     （规则本体在 notification-edges.ts 的 dedupeCompleteEdges）。
+ * 两轨的键空间、读写与整体清除只有一处；App 只持有一个引用，per-source 剪枝不会漏表。
  */
 import type { UnreadKind } from './unread-store.ts'
 
@@ -37,9 +35,7 @@ export interface CompleteLedger {
 
 const EMPTY_ARMED: ReadonlySet<string> = new Set()
 
-/**
- * @param initialNotified - 持久化的水位表（unread v2 payload.notified）；浅拷贝后写时复制。
- */
+/** @param initialNotified 持久化的水位表（unread v2 payload.notified）；浅拷贝后写时复制。 */
 export function createCompleteLedger(initialNotified: NotifiedWatermarkTable = {}): CompleteLedger {
   let notified: NotifiedWatermarkTable = { ...initialNotified }
   let armed: Record<string, Set<string>> = {}

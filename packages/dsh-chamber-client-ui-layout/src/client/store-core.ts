@@ -1,34 +1,14 @@
 /**
- * The chamber layout store's core factory (design 06 — sidebar width sharing)
- * as a PURE module: every runtime dependency (the store engine, the vendor
- * column geometry, the sidebar view-prefs store) arrives through an injected
- * `LayoutStoreEnvironment`, so the whole decision surface is testable under
- * plain node (`test/layout-store.test.ts`) without the vendor ENGINE/store
- * packages (their source-only tree ships no built `lib/` for node to import).
- * The one vendor dependency the tests DO import directly is the pure
- * `columns.ts` geometry module, used as the real injected face to lock the
- * clamp ranges against the upstream constants. The production wiring lives in
- * `stores.ts` — it builds the default environment from the real modules and
- * re-exports `createLayoutStore`, keeping the registration face
- * (`client/index.ts` → `store: createLayoutStore`) unchanged.
- *
- * Baseline: upstream `ui-layout/src/client/stores.ts` —
- * nested `LayoutState` (`panelInfo` + `layoutInfo`), eight actions including
- * `selectPanel`/`retainMainPanels`, and the eager root instance the frame's
- * `AppFrame` reads (`PropsStore<ReturnType<typeof createLayoutStore>>`).
- *
- * Behavior notes:
- * - the sidebar preference is seeded from — and every drag written back to —
- *   the shared view-prefs store, so all N-ctx boots share one width and it
- *   survives restarts; `toggleSidebar` re-expands to that shared width;
- * - the STORE value is immediate (the frame renders this tick's width); ONLY
- *   the persistence write is trailing-debounced (150ms), so a drag does not
- *   run the full updateViewPrefs path per tick and settles into exactly one
- *   write (last width wins);
- * - every live store instance subscribes to view-prefs changes and adopts
- *   external widths (guarded: a closed sidebar is never re-opened, and
- *   unchanged values — the initiating shell's own echo — terminate the
- *   adoption, so no write loops).
+ * Pure core factory for the chamber layout store (design 06 — sidebar width
+ * sharing): every runtime dependency arrives through an injected
+ * `LayoutStoreEnvironment`, so the decision surface runs under plain node;
+ * production wiring: `stores.ts`.
+ * Contracts: sidebar preference is seeded from — and every drag written back
+ * to — the shared view-prefs store (all N-ctx boots share one width across
+ * restarts; toggleSidebar re-expands to it); the STORE value is immediate and
+ * only the persistence write is trailing-debounced (150ms, exactly one write
+ * per drag, last wins); each live instance adopts external widths without
+ * reopening a closed sidebar (unchanged value breaks the echo).
  */
 import type {
   ActionsDecl,
@@ -38,11 +18,7 @@ import type {
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/src/client/service.ts'
 import type { ChamberSidebarViewPrefs } from '@dsh-chamber/dsh-chamber-client-core'
 
-/**
- * Column geometry and the right-panel preference set (mirrors the vendor
- * `stores.ts` `LayoutInfo`): panel width preferences in px plus the frame
- * measurement and the right panel's reported presentation.
- */
+/** Column geometry and right-panel preference set (mirrors the vendor `LayoutInfo`). */
 export type LayoutInfo = {
   /** Sidebar width preference in px (0 = closed). */
   sidebar: number
@@ -62,10 +38,7 @@ export type LayoutInfo = {
   rightbarInstant: boolean
 }
 
-/**
- * Layout store state: the root panel selection (`panelInfo`, read through the
- * `usePanelInfo` global hook) and the frame/panel geometry (`layoutInfo`).
- */
+/** Root panel selection (`panelInfo`) plus frame/panel geometry (`layoutInfo`). */
 export type LayoutState = {
   panelInfo: {
     /** Null selects the Conversation; global panels keep the current Session intact. */
@@ -74,10 +47,7 @@ export type LayoutState = {
   layoutInfo: LayoutInfo
 }
 
-/**
- * Annotation twin of the actions literal below (the export needs a declared
- * return type); drift fails assignability at the defineStore call.
- */
+/** Declared twin of the actions literal; drift fails assignability at the defineStore call. */
 export type LayoutActions = {
   selectPanel: (draft: LayoutState, panelId: MainPanelId | null) => void
   retainMainPanels: (draft: LayoutState, panelIds: readonly string[]) => void
@@ -117,22 +87,16 @@ export interface LayoutStoreViewPrefs {
   updateViewPrefs(mutator: (prev: ChamberSidebarViewPrefs) => ChamberSidebarViewPrefs): void
 }
 
-/**
- * Injectable environment. Production (stores.ts) passes the real modules;
- * tests pass fakes — the factory logic is identical either way.
- */
+/** Injectable environment; production passes the real modules, tests pass fakes. */
 export interface LayoutStoreEnvironment {
   defineStore: LayoutStoreDefineStore
   columns: LayoutStoreColumns
   viewPrefs: LayoutStoreViewPrefs
-  /** First-render frame width (production: `window.innerWidth`; the vendor
-   *  baseline reads the global directly, this fork injects it so the pure
-   *  module stays runnable under plain node). */
+  /** First-render frame width (production: `window.innerWidth`; injected so the pure module runs under plain node). */
   initialViewportWidth(): number
 }
 
-/** One page-lifetime runtime per environment: live instances (WeakRefs), the
- *  once-per-env subscription flag, and the shared trailing-write timer. */
+/** One page-lifetime runtime per environment: live instances (WeakRefs), subscription flag, shared write timer. */
 interface LayoutStoreRuntime {
   instances: Set<WeakRef<LayoutInstance>>
   subscriptionInstalled: boolean
@@ -140,14 +104,11 @@ interface LayoutStoreRuntime {
 }
 
 /**
- * AppFrame's sidebar-collapsed derivation over one layout snapshot — the
- * vendor frame's own rule (`narrow = viewportWidth < SIDEBAR_AUTO_COLLAPSE`,
- * then `narrow ? !narrowExpanded : sidebar === 0`). Exported so the layoutFacts
- * face can project it as `getCollapsed()` (the mobile plugin consumes THAT
- * method — it never imports this function), and so the rule stays unit-tested.
+ * AppFrame's sidebar-collapsed rule: `narrow = viewportWidth < autoCollapse`,
+ * then `narrow ? !narrowExpanded : sidebar === 0`. Exported for the layoutFacts
+ * `getCollapsed()` projection; consumers call that method, never this function.
  * @param snapshot - the layout store snapshot.
  * @param autoCollapse - the sidebar auto-collapse breakpoint (vendor columns.ts).
- * @returns true when the sidebar renders as the collapsed rail.
  */
 export function collapsedOf(snapshot: LayoutState, autoCollapse: number): boolean {
   const { sidebar, viewportWidth, narrowExpanded } = snapshot.layoutInfo
@@ -171,12 +132,7 @@ function runtimeFor(env: LayoutStoreEnvironment): LayoutStoreRuntime {
 /**
  * Register one live store instance with its environment and, once per
  * environment, install the shared view-prefs subscription that adopts
- * external width changes into every live instance.
- *
- * The vendor baseline mints the root instance eagerly inside `apply` and
- * shares it with the registration (`store: { ...handle, create: () => instance }`),
- * so the fork's assembly calls this explicitly (upstream overrides `create` on the
- * shared handle).
+ * external widths into every live instance.
  * @param env - the environment whose runtime owns the instance.
  * @param instance - the live store instance to track.
  */
@@ -184,8 +140,7 @@ export function trackLayoutInstance(env: LayoutStoreEnvironment, instance: Layou
   const runtime = runtimeFor(env)
   runtime.instances.add(new WeakRef(instance))
   if (runtime.subscriptionInstalled) return
-  // Subscribe BEFORE arming the flag: a throwing subscribe would otherwise
-  // leave the flag set and permanently skip the once-per-env adoption.
+  // Subscribe BEFORE arming the flag: a throwing subscribe must not skip adoption forever.
   env.viewPrefs.subscribeViewPrefs(() => {
     queueMicrotask(() => {
       const width = env.viewPrefs.getViewPrefs().sidebarWidth
@@ -198,17 +153,11 @@ export function trackLayoutInstance(env: LayoutStoreEnvironment, instance: Layou
         }
         const current = currentInstance.getSnapshot().layoutInfo.sidebar
         if (current === 0 || current === width) continue
-        // Per-instance isolation (mirrors the layoutFacts notify guard): one
-        // shell whose store update throws must not starve the rest of the
-        // adoption fan-out.
+        // Per-instance isolation: one throwing store update must not starve the fan-out.
         try {
-          // Adoption deliberately bypasses `setSidebar`: it must not re-run
-          // the persistence write (the width is already persisted) and it
-          // leaves `rightbarInstant` alone (no geometry gesture happened).
-          // The width is re-clamped on the way IN as well: a
-          // preference written by an older build or hand-edited localStorage
-          // must not put the store outside the vendor drag range, or the
-          // stored value and every rendering consumer would disagree.
+          // Bypasses `setSidebar`: the width is already persisted, and no
+          // geometry gesture happened (rightbarInstant untouched). Re-clamped on
+          // the way IN so an older or hand-edited preference stays in range.
           currentInstance.store.update((d) => {
             d.layoutInfo.sidebar = env.columns.clampWidth(width, env.columns.SIDEBAR_MIN, env.columns.SIDEBAR_MAX)
           })
@@ -222,31 +171,19 @@ export function trackLayoutInstance(env: LayoutStoreEnvironment, instance: Layou
 }
 
 /**
- * Create the layout panel store handle. For the sidebar the preference IS the
- * width, so closing it forgets its drag width — reopening restores the shared
- * persisted width (chamber fork) instead of the contract default. The right
- * panel initializes at 45% of the frame on first opening and keeps that px
- * preference across resizes and close. Drag writes clamp to the current
- * frame's range. Narrow sidebar toggles change only the expansion override;
- * opening the right panel clears that override.
- *
- * Chamber fork: the sidebar preference is seeded from — and every drag
- * written back to — the shared view-prefs store, so all N-ctx boots share one
- * width and it survives restarts; each registered instance adopts external
- * width changes through {@link trackLayoutInstance}.
+ * Create the layout panel store handle. Closing the sidebar forgets its drag
+ * width; reopening restores the shared persisted width (chamber fork), not the
+ * contract default. The right panel opens at 45% of the frame on first opening
+ * and keeps that px preference across resizes and close; drag writes clamp to
+ * the current frame's range; narrow toggles change only the expansion override.
+ * Registered instances adopt external widths via {@link trackLayoutInstance}.
  * @param env - injected environment (production uses the stores.ts default).
- * @returns the store handle (spec + type + identity + factory in one).
  */
 export function createLayoutStore(env: LayoutStoreEnvironment): EngineStoreHandle<LayoutState, LayoutActions> {
   const { defineStore, columns, viewPrefs, initialViewportWidth } = env
   const runtime = runtimeFor(env)
 
-  /**
-   * The shared persisted sidebar width preference, clamped into the vendor drag
-   * range. The prefs value is already sanitized+clamped on every write
-   * (view-prefs sanitizePrefs); the re-clamp is defensive, exactly like the
-   * vendor's computeColumns re-clamps preferences that cross the store boundary.
-   */
+  /** Shared persisted sidebar width, re-clamped defensively into the vendor drag range. */
   const prefsSidebarWidth = (): number =>
     columns.clampWidth(
       viewPrefs.getViewPrefs().sidebarWidth ?? columns.SIDEBAR_DEFAULT,
@@ -255,27 +192,14 @@ export function createLayoutStore(env: LayoutStoreEnvironment): EngineStoreHandl
     )
 
   /**
-   * Chamber fork: trailing-debounced persistence of the drag width into the
-   * shared view-prefs store. The vendor frame's drag handle reports dx every
-   * rAF tick (~60/s), so the full updateViewPrefs path (prune + sanitize +
-   * JSON.stringify + localStorage.setItem + notify every shell subscriber) must
-   * not run per tick. The STORE value stays immediate — setSidebar commits the
-   * clamped width synchronously and the frame renders from it this tick — and
-   * ONLY this persistence write is debounced: each tick reschedules a ~150ms
-   * trailing timer, so a drag settles into exactly ONE write (the last width
-   * wins) and a paused gesture flushes early. A drag cut short inside the
-   * window (app quit <150ms after the last tick) loses only that one
-   * intermediate width — accepted trade-off, the next drag re-establishes it.
-   * Shared per environment (production: one module instance across every boot),
-   * so drags in different shells share one timer and the last drag wins —
-   * exactly as the shared prefs store itself resolves.
-   *
-   * No-op guard: a drag landing on the ALREADY-persisted
-   * width skips the whole persist/notify path — no redundant
-   * updateViewPrefs cycle (e.g. the initiating shell's own echo after
-   * adoption, or a drag that returns to the stored width). A still-pending
-   * older write is stale in that case (the final width is the persisted one),
-   * so it is cancelled too.
+   * Trailing-debounced persistence of the drag width. The drag handle reports
+   * dx every rAF tick, so the full updateViewPrefs path (prune + sanitize +
+   * stringify + localStorage + notify) must not run per tick; each tick
+   * reschedules a ~150ms trailing timer, so a drag settles into exactly ONE
+   * write (last width wins) and a paused gesture flushes early. The STORE value
+   * stays immediate. Shared per environment, so the last drag in any shell wins.
+   * A drag landing on the already-persisted width skips the whole persist/notify
+   * path (and cancels a stale pending write).
    */
   const scheduleSidebarWidthWrite = (width: number): void => {
     if (viewPrefs.getViewPrefs().sidebarWidth === width) {
@@ -307,8 +231,7 @@ export function createLayoutStore(env: LayoutStoreEnvironment): EngineStoreHandl
       },
     }),
     actions: {
-      // Upstream baseline: a global panel id replaces the Conversation in the
-      // centre; retainMainPanels clears a selection whose key unregistered.
+      // A global panel id replaces the Conversation in the centre; retain clears an unregistered selection.
       selectPanel: (d, panelId: MainPanelId | null) => {
         d.panelInfo.activePanelId = panelId
       },
@@ -318,34 +241,23 @@ export function createLayoutStore(env: LayoutStoreEnvironment): EngineStoreHandl
         }
       },
       setSidebar: (d, px: number) => {
-        // The STORE value is immediate: the frame renders this tick's width.
+        // STORE value immediate: the frame renders this tick's width.
         d.layoutInfo.rightbarInstant = false
         d.layoutInfo.sidebar = columns.clampWidth(px, columns.SIDEBAR_MIN, columns.SIDEBAR_MAX)
-        // chamber fork: persist the CLAMPED drag width (drag only runs while
-        // the sidebar is open, so this never writes 0/closed) — every other
-        // live boot's store adopts it via the subscription below, and the
-        // next page load seeds from it. The write is idempotent (same clamped
-        // value), so the adoption guard breaks any echo loop. Only the
-        // persistence write is trailing-debounced (scheduleSidebarWidthWrite),
-        // so a drag does not run the full updateViewPrefs path per tick.
+        // Persist the CLAMPED drag width (drags only run while open, so never
+        // 0/closed); idempotent, so the adoption guard breaks any echo loop.
         scheduleSidebarWidthWrite(d.layoutInfo.sidebar)
       },
-      // Narrow toggles flip only the override: the width preference survives
-      // untouched, so re-widening restores the pre-squeeze layout.
+      // Narrow toggles flip only the override; the width preference survives untouched.
       toggleSidebar: (d) => {
         d.layoutInfo.rightbarInstant = false
         if (d.layoutInfo.viewportWidth < columns.SIDEBAR_AUTO_COLLAPSE) d.layoutInfo.narrowExpanded = !d.layoutInfo.narrowExpanded
-        // chamber fork: reopening expands to the SHARED persisted width (the
-        // vendor contract default would fight a user's remembered width);
-        // closing writes 0 without persisting it — the width preference only
-        // ever records an OPEN drag. Documented deviation from the vendor
-        // `ILayout.toggleSidebar` JSDoc ("closed ⟷ contract default width"),
-        // which cannot be edited here (their source is deep-imported); the
-        // behaviour is pinned by test/layout-store.test.ts.
+        // Reopening expands to the SHARED persisted width (a vendor contract
+        // deviation: their default would fight the remembered width); closing
+        // writes 0 without persisting it.
         else d.layoutInfo.sidebar = d.layoutInfo.sidebar === 0 ? prefsSidebarWidth() : 0
       },
-      // Crossing the breakpoint in either direction drops the override: the
-      // narrow default is auto-collapsed, the wide state is the preference.
+      // Crossing the breakpoint drops the override; the wide state is the preference.
       setViewportWidth: (d, width: number) => {
         if (d.layoutInfo.viewportWidth === width) return
         d.layoutInfo.rightbarInstant = false

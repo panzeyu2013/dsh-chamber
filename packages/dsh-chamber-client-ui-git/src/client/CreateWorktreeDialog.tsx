@@ -1,11 +1,9 @@
 /**
  * Create-worktree dialog, organized after OpenChamber's NewWorktreeDialog
- * (design 08 §4.2): New Branch / Existing Branch tabs, an auto-suggested
- * branch name (two-word slug), a worktree directory that auto-syncs from the
- * branch name until edited (with a reset action), the source branch shown as
- * an informative line ("New branch will be created from {source}"), the dsh
- * host's preview as the security step; creating NEVER opens a session (the
- * empty worktree workspace appears immediately, OpenChamber-aligned).
+ * (design 08 §4.2): New Branch / Existing Branch tabs, an auto-suggested branch
+ * name, a worktree directory auto-synced until edited, the source branch as an
+ * informative line, and the host's preview as the security step. Creating NEVER
+ * opens a session (the empty worktree workspace appears immediately).
  */
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Button, IconChevronRightOutline14, Input, Menu, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -31,9 +29,8 @@ export interface CreateWorktreeDialogProps {
 const ADJECTIVES = ['cosmic', 'quiet', 'swift', 'bright', 'calm', 'bold', 'gentle', 'lively', 'sunny', 'rapid']
 const NOUNS = ['dolphin', 'falcon', 'willow', 'rocket', 'meadow', 'ember', 'river', 'breeze', 'maple', 'otter']
 
-/** OpenChamber-style two-word slug suggestion ("cosmic-dolphin"), avoiding
- *  names already taken by existing branches/worktrees (best-effort; the host
- *  preview remains authoritative). */
+/** OpenChamber-style two-word slug suggestion, avoiding names already taken by
+ *  existing branches/worktrees (best-effort; the host preview stays authoritative). */
 function suggestBranchName(taken?: ReadonlySet<string>): string {
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const adjective = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)]!
@@ -44,10 +41,9 @@ function suggestBranchName(taken?: ReadonlySet<string>): string {
   return `worktree-${Date.now().toString(36)}`
 }
 
-/** Blur normalization (OpenChamber parity): trim, strip `refs/heads/`,
- *  collapse whitespace/control characters to `-`, cap at 80 characters.
- *  Non-ASCII (CJK etc.) is PRESERVED — git allows UTF-8 ref names, and the
- *  host's check-ref-format remains the authority for invalid shapes. */
+/** Blur normalization (OpenChamber parity): trim, strip `refs/heads/`, collapse
+ *  whitespace/control characters to `-`, cap at 80 chars. Non-ASCII (CJK) is
+ *  PRESERVED — git allows UTF-8 refs; the host's check-ref-format stays the authority. */
 function normalizeBranchName(name: string): string {
   const stripped = name.trim().replace(/^refs\/heads\//u, '')
   const normalized = stripped
@@ -57,10 +53,8 @@ function normalizeBranchName(name: string): string {
   return normalized.slice(0, 80)
 }
 
-/** OpenChamber resolveCandidateDirectory parity: pick a directory name not
- *  already used by a same-repo worktree — the base name first, then numbered
- *  suffixes (`name-2`, `name-3`…). The host's target-exists check remains the
- *  authoritative guard. */
+/** Pick a directory name not already used by a same-repo worktree — base first,
+ *  then numbered suffixes. The host's target-exists check stays authoritative. */
 function uniqueDirectoryName(base: string, taken: ReadonlySet<string>): string {
   if (!taken.has(base)) return base
   for (let index = 2; index < 100; index += 1) {
@@ -70,15 +64,13 @@ function uniqueDirectoryName(base: string, taken: ReadonlySet<string>): string {
   return `${base}-${Date.now().toString(36)}`
 }
 
-/** Branch + directory names already in use by the snapshot (same-repo
- *  collisions drive the de-dup suggestion and the unique directory). */
+/** Branch + directory names already in use by the snapshot (same-repo collisions). */
 function takenNames(snapshot: GitWorktreeSnapshot | undefined): Set<string> {
   const taken = new Set<string>()
   for (const repo of snapshot?.repos ?? []) {
     for (const worktree of repo.worktrees) {
       if (worktree.branch !== null) taken.add(worktree.branch)
-      // The MAIN checkout lives outside the worktree root — its directory
-      // basename is not a collision for the new worktree's directory.
+      // The MAIN checkout lives outside the worktree root — no directory collision.
       if (!worktree.isMain) taken.add(lastPathSegment(worktree.path))
     }
   }
@@ -97,15 +89,13 @@ function slugifyBranchName(branch: string): string {
   const clean = branch.trim().split('/').at(-1) ?? branch
   const slugged = clean
     .toLowerCase()
-    // Keep CJK/Unicode letters too — a Chinese branch must not degrade to
-    // the generic "worktree" directory.
+    // Keep CJK/Unicode letters too — a Chinese branch must not degrade to the generic "worktree" directory.
     .replace(/[^a-z0-9\u4e00-\u9fff]+/gu, '-')
     .replace(/^-+|-+$/g, '')
   return slugged === '' ? 'worktree' : slugged
 }
 
-/** Custom dropdown built on the repo's own Menu primitive (same design
- *  language as the sidebar's menus). */
+/** Custom dropdown built on the repo's own Menu primitive. */
 function MenuSelect({ value, placeholder, options, disabled, onChange, ariaLabel }: {
   value: string
   placeholder: string
@@ -117,10 +107,8 @@ function MenuSelect({ value, placeholder, options, disabled, onChange, ariaLabel
   const [open, setOpen] = useState(false)
   return (
     <Menu
-      // Every chamber popup menu runs at the chamber scale, so this select-like
-      // dropdown takes the primitive's `compact` form (26px items / 12px
-      // labels) instead of the official default 40px — the dialog's own fields
-      // are chamber-scale too.
+      // Every chamber popup menu runs at chamber scale, so this select-like
+      // dropdown takes the primitive's `compact` form instead of the 40px default.
       compact
       portal
       align="end"
@@ -172,8 +160,7 @@ export function CreateWorktreeDialog({
   const busy = source?.busy !== undefined
   const actionLocked = busy || source?.recovery !== undefined
 
-  // (Re)initialize on open: fresh branch suggestion + synced directory,
-  // OpenChamber-style default of creating the worktree WITHOUT a session.
+  // (Re)initialize on open: fresh branch suggestion + synced directory, and the OpenChamber default of creating WITHOUT a session.
   const prevOpen = useRef(false)
   useEffect(() => {
     if (open === prevOpen.current) return
@@ -189,16 +176,14 @@ export function CreateWorktreeDialog({
     setFormError(null)
   }, [open, source?.snapshot])
 
-  // A changed source workspace means a different repository — the
-  // remembered/selected source branch from the previous repo must not leak
-  // (the restore effect refills from the new repo's saved value).
+  // A changed source workspace means a different repository — the remembered
+  // source branch from the previous repo must not leak.
   useEffect(() => {
     setStartRef('')
   }, [sourceWorkspaceId])
 
   // Selection sync: keep a valid selection; otherwise prefer the opening
-  // workspace, then its repo, then the first option. Runs when late options
-  // arrive (snapshot not ready at open) without touching the form fields.
+  // workspace, then its repo, then the first option.
   useEffect(() => {
     if (!open) return
     if (options.some(option => option.workspaceId === sourceWorkspaceId)) return
@@ -216,8 +201,7 @@ export function CreateWorktreeDialog({
     setDirectoryDraft(slugifyBranchName(branchName))
   }, [open, branchName, directoryTouched])
 
-  // Source branch for the informative line + known branches for the
-  // existing-branch suggestions: from the repo's snapshot rows.
+  // Source branch for the informative line + known branches for the existing-branch suggestions.
   const sourceRepo = useMemo(() => {
     const snapshot = source?.snapshot
     if (snapshot === undefined || sourceWorkspaceId === '') return undefined
@@ -229,11 +213,9 @@ export function CreateWorktreeDialog({
   // localStorage parity), restored when the dialog opens.
   const sourceBranchStorageKey = sourceRepo === undefined ? null : `dsh-chamber.git.source-branch.${sourceRepo.repoId}`
 
-  // Existing-branch choices: the host's branch list (show-ref --heads)
-  // preferred, then the snapshot's known worktree branches as a fallback. An
-  // unborn (zero-commit) row is skipped: its branch name resolves to no commit
-  // (`localBranchHead` → branch-not-found), so offering it would only turn an
-  // empty picker into a failing one.
+  // Existing-branch choices: the host's branch list (show-ref --heads) preferred,
+  // then the snapshot's known worktree branches. An unborn row is skipped — its
+  // name resolves to no commit, so offering it only makes the picker fail.
   const existingBranchChoices = useMemo(
     () => sourceBranchChoices(
       sourceRepo?.branches ?? [],
@@ -244,8 +226,7 @@ export function CreateWorktreeDialog({
     [sourceRepo],
   )
 
-  // Restore the remembered source branch when the key and choices are ready
-  // and the form still has no explicit choice (best-effort).
+  // Restore the remembered source branch when the key and choices are ready.
   useEffect(() => {
     if (!open || startRef !== '') return
     if (sourceBranchStorageKey === null) return
@@ -275,28 +256,22 @@ export function CreateWorktreeDialog({
       setDirectoryTouched(false)
       setDirectoryDraft(uniqueDirectoryName(slugifyBranchName(suggestion), taken))
     } else {
-      // Existing mode must never carry the new-mode random suggestion: the
-      // select shows its placeholder but the submit would send the stale
-      // name (blind mismatch -> branch-not-found).
+      // Existing mode must never carry the new-mode random suggestion: the select
+      // shows its placeholder but the submit would send a stale name.
       setBranchName('')
     }
   }
 
-  // Single-step submit: no preview screen. The
-  // host preview (validation + idempotent token) runs invisibly immediately
-  // before the create; any error surfaces on the button.
+  // Single-step submit: no preview screen. The host preview (validation +
+  // idempotent token) runs invisibly immediately before the create.
   const runCreate = async (): Promise<void> => {
     const cleanBranch = branchName.trim()
     const cleanDirectory = directoryDraft.trim()
     if (sourceWorkspaceId === '' || cleanBranch === '' || cleanDirectory === '') return
     setFormError(null)
-    // Save-time collision guard (OpenChamber resolveCandidateDirectory
-    // parity): a directory still taken by a SAME-REPO worktree is
-    // auto-suffixed so the save never fails with target-exists (the
-    // directory lives under the selected repo's worktree root, so only
-    // same-repo DIRECTORY basenames collide — branch names do not occupy a
-    // directory slot, and mixing them in silently renames a valid directory;
-    // keep this set identical to the `directoryConflict` precheck below).
+    // Save-time collision guard (OpenChamber parity): a directory still taken by
+    // a SAME-REPO worktree is auto-suffixed so the save never fails with
+    // target-exists. Branch names do not occupy a directory slot.
     const sameRepoTaken = new Set<string>()
     if (sourceRepo !== undefined) {
       for (const worktree of sourceRepo.worktrees) {
@@ -312,8 +287,7 @@ export function CreateWorktreeDialog({
         branch: { kind: mode, name: cleanBranch },
         ...(mode === 'new' && startRef !== '' ? { startRef } : {}),
       })
-      // createSession: false — creating a worktree NEVER commits a session
-      // (the empty worktree workspace appears immediately).
+      // createSession: false — creating a worktree NEVER commits a session.
       await createFromPreview(sourceId, preview, { createSession: false, sourceWorkspaceId })
       onClose()
     } catch (error) {
@@ -326,8 +300,7 @@ export function CreateWorktreeDialog({
   const branchReady = branchName.trim() !== ''
   const directoryReady = directoryDraft.trim() !== ''
   const formReady = sourceWorkspaceId !== '' && branchReady && directoryReady
-  // Same-repo directory-collision precheck — the new worktree would land
-  // at <root>/<repo>/<dir>, unique within the repo's worktree root.
+  // Same-repo directory-collision precheck — the new worktree lands at <root>/<repo>/<dir>.
   const directoryConflict = sourceRepo !== undefined && directoryDraft.trim() !== ''
     && sourceRepo.worktrees
       .filter(worktree => !worktree.isMain)
@@ -357,8 +330,7 @@ export function CreateWorktreeDialog({
     >
       <div className={css.fields}>
         <div className={css.tabs} role="tablist" aria-label={t('branchMode')}>
-          {/* Sliding thumb: the active segment's pill glides between the two
-              halves (slider-style switch). */}
+          {/* Sliding thumb: the active segment's pill glides between the two halves. */}
           <span className={css.tabThumb} data-right={mode === 'existing' ? true : undefined} aria-hidden="true" />
           <button
             type="button"
@@ -443,11 +415,9 @@ export function CreateWorktreeDialog({
               <MenuSelect
                 value={startRef}
                 placeholder={sourceBranch ?? t('sourceBranchDefault')}
-                // The main checkout's branch stays SELECTABLE: the host resolves
-                // it to that branch's HEAD, and filtering it out (it is the
-                // implicit default when startRef is empty) would leave a
-                // remembered pick permanently shadowing main and single-branch
-                // repositories with an empty picker.
+                // The main checkout's branch stays SELECTABLE: the host resolves it
+                // to that branch's HEAD, and filtering it out would leave a remembered
+                // pick shadowing main and single-branch repositories.
                 options={existingBranchChoices}
                 disabled={actionLocked}
                 ariaLabel={t('sourceBranch')}

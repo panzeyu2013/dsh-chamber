@@ -1,50 +1,21 @@
 /**
- * Todo 09 (方案 A) module B — the control-plane seed for the chamber host
- * package that exposes the host boot graph.
- *
- * Background (docs/design/09-client-plugin-runtime-loading.md §3.1 方案 A):
- * the chamber frontend loads dsh client plugins (`dsh.client` rows) at runtime
- * by merging the host's own boot graph (composed by the host's
- * `dsh-client-modules` service) with the chamber composite bundle. To read
- * that graph the local host needs a chamber-owned host package exposing it
- * over a Remote (`clientModules.graph()`). This module distributes that
- * package (module A, `packages/dsh-chamber-seed-client-graph`) into the managed local
- * profile and materializes the `--patch` overlay that mounts it:
- *
- *   - ensureSeedPackage copies a chamber host package (package.json +
- *     dist/index.js) into <dshHome>/profiles/web/node_modules/@dsh-chamber/
- *     <package>/ — the profile node_modules anchor user plugins
- *     resolve from (profile layout: $DSH_HOME/profiles/web/package.json +
- *     cordis.patch.yml, see @deepseek-ai/dsh-app-boot profile.ts). Idempotent:
- *     an in-sync copy is skipped, a drifted one is overwritten.
- *   - buildPatchOverlay materializes <stateDir>/dsh-chamber-graph.patch.yml —
- *     a top-level YAML array of loader patch entries (the exact format the
- *     dsh CLI's `--patch <path>` overlay and a bundle's cordis.patch.yml
- *     share, @deepseek-ai/dsh-app-boot loadOverlayPatches) inserting the
- *     chamber host rows and, when the chamber open-in host package is seeded,
- *     an id-targeted disable row for the official web-bundle open-in HOST half
- *     chamber supersedes (audit arch-03 P2-3, design 20 §2.2/§6). Idempotent:
- *     content-identical files are left alone.
- *
- * The overlay is appended to every spawn command line (webProfileArgs in
- * spawn-dsh.ts) and applies at host boot — a pre-existing running local
- * instance picks it up on its next restart (the official plugin-set-change
- * cadence, design 09 §3.2).
- *
- * Security: every path is derived from stateDir/dshHome (internal path
- * concatenation — no user input injection surface); controlled target parents
- * are real final directory components, target reads are stable/no-follow and
- * bounded, and writes use the shared random-O_EXCL/no-follow + file/parent
- * fsync publication primitive with 0600 perms. Source package reads retain
- * their ordinary filesystem/packaged-resource boundary.
+ * The control-plane seed for the chamber host package that exposes the host boot
+ * graph. To read that graph the local host needs a chamber-owned package exposing
+ * it over a Remote (`clientModules.graph()`). This module distributes it into the
+ * managed local profile and materializes the `--patch` overlay that mounts it:
+ * ensureSeedPackage copies package.json + dist/index.js into
+ * <dshHome>/profiles/web/node_modules/@dsh-chamber/<pkg>/ (the anchor user plugins
+ * resolve from; in-sync copies are skipped, drifted ones overwritten), and
+ * buildPatchOverlay writes <stateDir>/dsh-chamber-graph.patch.yml in the shared
+ * loader-patch format. Both are idempotent; the overlay rides every spawn and
+ * applies at host boot. All paths derive from stateDir/dshHome; target parents are
+ * real directory components and writes use the shared no-follow + fsync primitive.
  */
 
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 // The loader `insert` row render/parse/conflict logic is single-sourced in
-// cordis-inserts.ts (cross-package protocol single-sourcing) — shared with
-// the desktop remote seed (plugin-sync.ts); only the fail-loud message
-// wording stays here.
+// cordis-inserts.ts; only the fail-loud message wording stays here.
 import {
   hasExactInsert,
   insertConflict,
@@ -67,13 +38,11 @@ export const HOST_GRAPH_PACKAGE_NAME = '@dsh-chamber/dsh-chamber-seed-client-gra
 /** Chamber-owned host package that executes Git worktree operations in-host. */
 export const HOST_GIT_WORKTREE_PACKAGE_NAME = '@dsh-chamber/dsh-chamber-seed-git-worktree'
 
-/** Chamber-owned host package that purges archived session content in-host
- *  (design 24: `archiveCleanup/{purge,probe}`). */
+/** Chamber-owned host package that purges archived session content in-host. */
 export const HOST_ARCHIVE_CLEANUP_PACKAGE_NAME = '@dsh-chamber/dsh-chamber-seed-archive-cleanup'
 
 /** Chamber-owned host package that serves the local open-in domain in-host
- *  (design 20 §6, the fork of upstream's open-in host half:
- *  `openInApp/{probe,apps,icon,open}`). LOCAL shape only — see `localOnly`. */
+ *  (the fork of upstream's open-in host half). LOCAL shape only — see `localOnly`. */
 export const HOST_OPEN_IN_PACKAGE_NAME = '@dsh-chamber/dsh-chamber-seed-open-in'
 
 /** Loader ids for the chamber-owned host packages. */
@@ -109,30 +78,16 @@ export const HOST_OPEN_IN_INSERT: HostPackageInsert = {
 }
 
 /**
- * The official web bundle's open-in HOST row — `@deepseek-ai/dsh-host-open-in-app`,
- * mounted by `@deepseek-ai/dsh-web-app`'s patch layer (the frozen pin's
- * vendor/harness-packages/@deepseek-ai/dsh-web-app/cordis.patch.yml, the `insert`
- * bundle's `- id: open-in-app` row) — and the id-targeted disable patch that
+ * The official web bundle's open-in HOST row and the id-targeted disable patch that
  * supersedes it whenever chamber's own open-in host package is seeded.
  *
- * Root cause (audit arch-03 P2-3): chamber replaces BOTH halves (design 20
- * §2.2/§6) — the renderer page-own-skips the official CLIENT row
- * (renderer/src/chamber-covered.ts) and chamber's seed-open-in registers the
- * host Remote — but the official HOST half still mounted its three open-in
- * webServer routes with no caller, leaving the domain with a second live wire
- * authority. The disable row rides the same `--patch`
- * overlay, which composes AFTER every bundle layer and both user layers
- * (dsh profile-boot allPatches), so a user layer that re-enables or
- * re-configures the row is superseded too.
- *
- * Shape authority (exact file:line in the frozen pin):
- * - row identity: vendor/harness-packages/@deepseek-ai/dsh-web-app/cordis.patch.yml:65-66
- * - `PatchOptions.disabled?: boolean | null`:
- *   vendor/harness-packages/@deepseek-ai/cordis-plugin-include/src/index.ts:145-156
- * - id lookup + name guard + overrides copy, unmatched row warns and skips:
- *   same file, `applyEntryPatches` (:58-128)
- * - disable means "never init": vendor/harness-packages/@deepseek-ai/cordis-plugin-loader/src/config/entry.ts:19,
- *   :84-108, :168-179.
+ * Chamber replaces BOTH halves (the renderer page-own-skips the official CLIENT row
+ * and chamber's seed-open-in registers the host Remote), but the official HOST half
+ * would still mount its open-in webServer routes with no caller, leaving a second
+ * live wire authority. The disable row rides the same `--patch` overlay, which
+ * composes AFTER every bundle layer and both user layers, so a user layer that
+ * re-enables the row is superseded too. `disabled: true` means "never init"; an
+ * unmatched row warns and skips.
  */
 export const OFFICIAL_OPEN_IN_INSERT_ID = 'open-in-app'
 export const OFFICIAL_OPEN_IN_PACKAGE_NAME = '@deepseek-ai/dsh-host-open-in-app'
@@ -145,60 +100,30 @@ export const OFFICIAL_OPEN_IN_DISABLE: CordisDisablePatch = {
  * One chamber host package: its loader overlay row plus the Typert Remote that
  * proves it live inside a RUNNING instance.
  *
- * THIS list is the single source for every chamber host domain's IDENTITY —
- * the loader insert id/name plus the liveness probe method/args — and the
- * consumers DERIVE from it: the control-plane seed registry, the gateway's
- * syncable/probe maps, the desktop's local+remote injection probes and the
- * connections plugin-management page.
+ * THIS list is the single source for every chamber host domain's IDENTITY — the
+ * loader insert id/name plus the liveness probe method/args — and consumers DERIVE
+ * from it: the control-plane seed registry, the gateway's syncable/probe maps, the
+ * desktop's local+remote injection probes and the plugin-management page.
  *
- * Identity is not the whole wiring: adding a chamber host package still needs
- * ONE row here PLUS these hand-registered wire-ups, each with its own single
- * source and each fail-loud when the domain is absent (a seed/sync skip at any
- * of them is never acceptable):
- *   1. control-plane local profile seed — src/index.ts
- *      (`DEFAULT_HOST_*_PACKAGE_SOURCE_DIR` + `hostPackageSourceDirs`; a
- *      missing insert id throws in `seedEntries`);
- *   2. desktop Electron remote/gateway source dir — main.ts
- *      `chamberHostSourceDirs`;
- *   3. desktop Swift sidecar source dir — sidecar-ctx.ts
- *      `chamberHostSourceDirsFor`;
- *      (2)+(3) are consumed by plugin-sync.ts `chamberHostPackageSeedsFrom`,
- *      which THROWS for a non-localOnly row with no sourceDir key; only a
- *      mapped package whose dist/index.js is absent (existsSync in
- *      `builtChamberHostPackageSeeds`) may be skipped;
- *   4. dsh-runtime `REQUIRED_ACTIVATION_PROBES` — activation-gate.ts;
- *   5. dsh-runtime `HOST_DOMAIN_PROBE_NAMES` — activation-gate.ts (stays
- *      COMPLETE even for `localOnly` rows: the gateway's load-time pin
- *      compares it wholesale);
- *   6. dsh-runtime per-domain probe branch — runtime-probes.ts.
- *
- * packages/control-plane/test/plugins/host-domain-wiring-lockstep.test.ts
- * executes that lockstep from THIS registry: forgetting any of the six fails
- * it red. A hand-maintained parallel row table anywhere else is still a
- * defect (a seeded host package MUST show up in the plugin-management page,
- * and the page must not hardcode the package set).
+ * A new row still needs hand-registered wire-ups, each fail-loud when the domain is
+ * absent: the control-plane local profile seed, the desktop remote/gateway source
+ * dirs (plugin-sync.ts THROWS for a non-localOnly row with no sourceDir key) and
+ * dsh-runtime's activation-probe registry + per-domain probe branch.
  */
 export interface ChamberHostPackageDescriptor {
   /** The loader overlay row (id/name — see cordis-inserts.ts). */
   readonly insert: HostPackageInsert
-  /** Liveness probe: the Remote method (`namespace/method`) and the args it
-   *  accepts. The method MUST be one of dsh-runtime's
-   *  `HOST_DOMAIN_PROBE_NAMES` (pinned by the desktop/gateway drift tests),
-   *  and every probe must be cheap: a 404 from the dsh gateway deterministically
-   *  means "boot row not loaded yet" (injected, restart pending). */
+  /** Liveness probe: the Remote method (`namespace/method`) and its args. The method
+   *  MUST be one of dsh-runtime's `HOST_DOMAIN_PROBE_NAMES`; every probe must be cheap:
+   *  a 404 from the dsh gateway means "boot row not loaded yet". */
   readonly probe: { readonly method: string; readonly args: unknown }
   /**
-   * The domain is meaningful for the LOCAL instance shape only (design 20 §6):
-   * a host domain that acts on the machine the user is sitting at has nothing
-   * to serve on a remote server, and seeding it there would put an unused
-   * launcher surface on someone else's host. Honoured at the SYNC points (the
-   * desktop's remote upload/probe and, thereby, every gateway's synced cache)
-   * and by the plugin-management page, which lists such a row for the LOCAL
-   * target only — a non-local target's table omits it outright rather than
-   * claiming the package is missing (the client projection reads this flag
-   * through `ChamberHostPackageState.localOnly`); the derived probe maps and
-   * `HOST_DOMAIN_PROBE_NAMES` stay COMPLETE, because the gateway's load-time
-   * set-equality pin compares them wholesale.
+   * The domain is meaningful for the LOCAL instance shape only: a host domain that
+   * acts on the machine the user sits at has nothing to serve on a remote server.
+   * Honoured at the sync points (desktop remote upload/probe, every gateway's synced
+   * cache) and by the plugin-management page, which lists such a row for the LOCAL
+   * target only; the derived probe maps and HOST_DOMAIN_PROBE_NAMES stay COMPLETE
+   * because the gateway's load-time set-equality pin compares them wholesale.
    */
   readonly localOnly?: true
 }
@@ -212,22 +137,12 @@ export const CHAMBER_HOST_PACKAGES: readonly ChamberHostPackageDescriptor[] = [
 ]
 
 /**
- * Fail-fast registry pin: every registry row must
- * own a DISTINCT probe method, insert id and package name.
- *
- * The gateway's set-equality drift pin against dsh-runtime's
- * `HOST_DOMAIN_PROBE_NAMES` compares only the SET of domain values, so a row
- * reusing an existing domain would pass it while the per-package
- * activation-probe map silently became ambiguous (one domain standing for two
- * rows); duplicate loader identities are equally unrepresentable in the
- * overlay. Throws, never warns.
- *
- * Lives with the registry's OWNER (this module) and runs at load below, so
- * every consumer — control plane, gateway and the desktop facade — is covered
- * by construction rather than by each consumer remembering to call it. The
- * `registry` parameter exists only so the plain-node suites can pin the
- * duplicate cases with a synthetic list (the load-time call can only ever see
- * the real registry).
+ * Fail-fast registry pin: every registry row must own a DISTINCT probe method, insert
+ * id and package name (the gateway's set-equality pin compares only the SET of domain
+ * values, so a reused domain would pass while the per-package activation-probe map
+ * became ambiguous), and duplicate loader identities are unrepresentable in the
+ * overlay. Throws, never warns; lives with the registry's owner and runs at load, so
+ * every consumer is covered by construction.
  */
 export function assertChamberHostRegistry(
   registry: readonly ChamberHostPackageDescriptor[] = CHAMBER_HOST_PACKAGES,
@@ -255,83 +170,52 @@ export function assertChamberHostRegistry(
 assertChamberHostRegistry()
 
 /**
- * Seed registry: one seedable chamber package/plugin
- * entry. The loader overlay row itself is identical for every entry (cordis
- * `insert` id/name — see cordis-inserts.ts); `kind`/`source` are metadata
- * that drive the seed file set and the future source resolution only.
+ * Seed registry: one seedable chamber package/plugin entry. The loader overlay row is
+ * identical for every entry; `kind`/`source` drive the seed file set and source
+ * resolution only.
  *
- * Consumers:
- * - desktop control plane: the host packages as base entries
- *   (`hostGraphPackageSourceDir` / `hostGitWorktreePackageSourceDir` /
- *   `hostArchiveCleanupPackageSourceDir` / `hostOpenInPackageSourceDir`
- *   options — designs 24 and 20 §6);
- * - gateway: the same rows as desktop-synced entries plus `extraSeedEntries`
- *   — the mobile slot (`@dsh-chamber/dsh-client-ui-mobile`, kind 'client') is
- *   a stub whose packaged source dir ships on the mobile branch; until then an
- *   absent sourceDir is a warned skip, never an error. Rows marked
- *   `localOnly` are never synced, so their cache directory stays absent and
- *   the same skip path applies on that shape.
+ * Consumers: the desktop control plane uses the host packages as base entries
+ * (hostGraphPackageSourceDir / hostGitWorktreePackageSourceDir /
+ * hostArchiveCleanupPackageSourceDir / hostOpenInPackageSourceDir); the gateway adds
+ * extraSeedEntries — a client kind entry is a stub whose absent sourceDir is a warned
+ * skip, never an error, and `localOnly` rows are never synced (the same skip applies).
  */
 export type SeedEntryKind = 'host' | 'client'
 
-/** Where a seed entry's bytes come from. 'packaged' = the owner's own dist
- *  (desktop app resources / gateway host-packages). 'desktop-synced' = a
- *  cache directory under the state root populated by a connecting desktop
- *  (the gateway pass-through seam; no owner resolves it yet). */
+/** Where a seed entry's bytes come from. 'packaged' = the owner's own dist;
+ *  'desktop-synced' = a cache directory under the state root populated by a connecting desktop. */
 export type SeedSource = 'packaged' | 'desktop-synced'
 
 export interface SeedEntry {
   /** The loader overlay row (the only wire-relevant part). */
   insert: HostPackageInsert
-  /** Loader target nature: 'host' packages resolve inside the dsh process
-   *  and may back activation-probe domains; 'client' plugins load in the web
-   *  frontend (e.g. the gateway-hosted browser UI). */
+  /** Loader target nature: 'host' packages resolve inside the dsh process and may back
+   *  activation-probe domains; 'client' plugins load in the web frontend. */
   kind: SeedEntryKind
   source: SeedSource
-  /** Packaged source directory (package.json + seedFiles). null or absent →
-   *  skipped with the caller's warn (a stub entry whose package is not yet
-   *  shipped — e.g. the gateway mobile slot). */
+  /** Packaged source directory (package.json + seedFiles). null/absent → skipped with
+   *  the caller's warn (a stub whose package is not yet shipped). */
   sourceDir: string | null
-  /** Seed file set; defaults to the host base (package.json + dist/index.js).
-   *  Client plugins may extend (css/assets) when their package lands. */
+  /** Seed file set; defaults to the host base (package.json + dist/index.js). */
   seedFiles?: readonly string[]
-  /** Activation-probe domains this entry backs (kind 'host' only). Consumed
-   *  by control-plane (`PlaneHandle.seededProbeDomains`, derived per spawn
-   *  from the ACTUALLY SEEDED host entries) and by the gateway
-   *  (`syncedHostDomainProbeNames`)
-   *  (packages/gateway/src/plugins.ts) over its per-package domain map
-   *  `HOST_PACKAGE_PROBE_DOMAINS` (cache presence per package), and
-   *  dsh-runtime folds that derived list into the expected set through
-   *  `activationProbeNamesForDomains`. Both seed-registry call sites attach
-   *  this field by DERIVING it from the row (`probeDomains:
-   *  [descriptor.probe.method]` in control-plane/src/index.ts and
-   *  gateway/src/index.ts), and the gateway's SYNCABLE_HOST_PACKAGES /
-   *  HOST_PACKAGE_PROBE_DOMAINS are likewise derived from this registry — the
-   *  remaining hand-registered consumer is `HOST_DOMAIN_PROBE_NAMES` in
-   *  packages/dsh-runtime/src/activation-gate.ts (the same domain set, which
-   *  stays complete even for `localOnly` rows — see the descriptor's note),
-   *  pinned by the host-domain wiring lockstep test beside the six wire-ups
-   *  named on the descriptor. */
+  /** Activation-probe domains this entry backs (kind 'host' only). Both seed-registry
+   *  call sites derive it from the row (probeDomains: [descriptor.probe.method]); the
+   *  remaining hand-registered consumer is dsh-runtime's HOST_DOMAIN_PROBE_NAMES, which
+   *  stays complete even for `localOnly` rows. */
   probeDomains?: readonly string[]
 }
 
 /**
- * The canonical chamber host-seed package namespace: every kind 'host' seed
- * entry is named `@dsh-chamber/dsh-chamber-seed-<loader-id>`, matching its
- * directory and its loader id. A host entry outside this scheme would split
- * the naming (and a name whose suffix is not the loader id makes the
- * seeded profile directory, the overlay row and the activation-probe domain
- * disagree).
+ * The canonical chamber host-seed package namespace: every kind 'host' entry is named
+ * `@dsh-chamber/dsh-chamber-seed-<loader-id>`, matching its directory and loader id —
+ * otherwise the profile directory, the overlay row and the probe domain disagree.
  */
 export const HOST_SEED_PACKAGE_PREFIX = '@dsh-chamber/dsh-chamber-seed-'
 
 /**
- * Fail loud when a host seed insert escapes the canonical namespace. Called by
- * both seed registries (control-plane's base entries plus every
- * `extraSeedEntries` addition, and the gateway's syncable list) so a
- * non-conforming host package can never be seeded, synced or probed. Client
- * kind entries (the gateway mobile slot) are exempt by design: they are client
- * plugins, not host seeds, and keep their own naming.
+ * Fail loud when a host seed insert escapes the canonical namespace. Called by both
+ * seed registries so a non-conforming host package can never be seeded, synced or
+ * probed. Client kind entries are exempt — they are client plugins, not host seeds.
  */
 export function assertHostSeedInsertNaming(inserts: readonly HostPackageInsert[]): void {
   for (const insert of inserts) {
@@ -344,31 +228,24 @@ export function assertHostSeedInsertNaming(inserts: readonly HostPackageInsert[]
   }
 }
 
-/** SeedEntry-level form of {@link assertHostSeedInsertNaming}: the host-kind
- *  entries are the ones the namespace rule binds. */
+/** SeedEntry-level form of {@link assertHostSeedInsertNaming}. */
 export function assertHostSeedEntryNaming(entries: readonly SeedEntry[]): void {
   assertHostSeedInsertNaming(entries.filter(entry => entry.kind === 'host').map(entry => entry.insert))
 }
 
 /**
- * The canonical overlay content: a top-level YAML array of loader patch
- * entries — `[{ insert: [{ id: 'client-graph', name: '@dsh-chamber/…' }] }]`
- * possibly followed by id-targeted disable rows
- * (`{ id: 'open-in-app', name: '@deepseek-ai/dsh-host-open-in-app', disabled: true }`)
- * — matching @deepseek-ai/dsh-app-boot's loadOverlayPatches format exactly
- * (a `--patch` overlay and a bundle's cordis.patch.yml share the format;
- * rendered by the shared renderCordisOverlay, single-sourced in
- * cordis-inserts.ts). Insert `name`s resolve through the profile's
- * node_modules anchor, which ensureSeedPackage fills; a disable row's `name`
- * is the upstream bundle's own package specifier.
+ * The canonical overlay content: a top-level YAML array of loader patch entries —
+ * `[{ insert: [{ id, name }] }]` possibly followed by id-targeted disable rows —
+ * matching the shared loadOverlayPatches format (rendered by renderCordisOverlay in
+ * cordis-inserts.ts). Insert names resolve through the profile node_modules anchor; a
+ * disable row's name is the upstream bundle's own package specifier.
  */
 
 /**
- * Reconcile chamber loader rows with the user's profile patch before writing
- * packages or an external overlay. An exact single row is reused and omitted
- * from the overlay; any id/name collision or duplicate is rejected loudly so
- * the next dsh boot cannot fail from a duplicate loader id or double-mount a
- * Remote under two ids.
+ * Reconcile chamber loader rows with the user's profile patch before writing packages
+ * or an overlay: an exact single row is reused and omitted, and any id/name collision
+ * or duplicate is rejected loudly so the next dsh boot cannot fail from a duplicate
+ * loader id or a Remote mounted under two ids.
  */
 export function missingHostPackageInserts(
   profilePatch: string | null,
@@ -393,34 +270,24 @@ export function missingHostPackageInserts(
       }
       throw new Error(`host package seed: package '${insert.name}' is already mounted under a different loader id`)
     }
-    // No conflict: the row is either exactly present (reused, omitted from
-    // the overlay) or has no trace at all (still missing).
+    // No conflict: the row is exactly present (reused) or has no trace at all (still missing).
     if (!hasExactInsert(profilePatch, insert)) missing.push({ ...insert })
   }
   return missing
 }
 
 /**
- * Files seeded from each chamber host package (its complete runtime surface) —
- * the SINGLE SOURCE for every side that names that file set: this module's
- * local profile seed, the desktop's remote seed writer + install probes
- * (plugin-sync.ts), the desktop's gateway upload payload
- * (gateway-provider.ts) and the gateway's sync cache + packaged mobile seed
- * (gateway plugins.ts / index.ts). Were each side to hand-copy the pair, a
- * third seed file would be written locally while the desktop→gateway PUT
- * carries two keys and the gateway still answers 200/changed:true (the
- * remote boot then misses a file with nobody reporting it).
- *
- * ORDER IS PART OF THE CONTRACT: the manifest first (the member every reader
- * parses for name/version), the built entry second — the gateway cache writes
- * in this order and the upload payload is keyed in it.
+ * Files seeded from each chamber host package (its complete runtime surface) — the
+ * SINGLE SOURCE for every side that names that file set (local profile seed, desktop
+ * remote seed writer + install probes, gateway upload payload, gateway sync cache +
+ * packaged mobile seed). Hand-copying the pair would let a third seed file be written
+ * locally while the desktop→gateway PUT carries two keys and the gateway still answers
+ * 200/changed:true. ORDER IS PART OF THE CONTRACT: manifest first, built entry second.
  */
 export const HOST_PACKAGE_SEED_FILES = ['package.json', 'dist/index.js'] as const
 
-/** One package-relative seed file path. Every consumer keys its per-file
- *  table (byte source / size bound) by this union, so a member added to the
- *  tuple above is a compile error on each side that cannot serve it — never a
- *  silently dropped member. */
+/** One package-relative seed file path. Every consumer keys its per-file table by this
+ *  union, so an added member is a compile error on each side that cannot serve it. */
 export type HostPackageSeedFile = (typeof HOST_PACKAGE_SEED_FILES)[number]
 
 const MAX_SEED_TARGET_BYTES = 64 * 1024 * 1024
@@ -436,12 +303,10 @@ function readSeedTarget(path: string, maxBytes = MAX_SEED_TARGET_BYTES): string 
   }
 }
 
-/** Materialize the profile-owned resolution anchors one final component at a
- * time. The official hoisted profile contract makes `web/node_modules` and
- * its scope real directories (package entries beneath them may be pnpm
- * links); this chamber package is a bare seed and owns its package/dist dirs.
- * `profiles/web` remains an ordinary ancestor so established home/profile
- * layouts can still place it through a symlink. */
+/** Materialize the profile-owned resolution anchors one final component at a time: the
+ *  official hoisted profile contract makes `web/node_modules` and its scope real
+ *  directories (package entries beneath them may be pnpm links), while `profiles/web`
+ *  remains an ordinary ancestor so established layouts can place it through a symlink. */
 function ensureSeedTargetParent(dshHome: string, packageName: string, relative: string): string {
   const modulesDir = join(dshHome, 'profiles', 'web', 'node_modules')
   const scopeDir = join(modulesDir, '@dsh-chamber')
@@ -460,21 +325,12 @@ function ensureSeedTargetParent(dshHome: string, packageName: string, relative: 
 }
 
 /**
- * Ensure the host-graph patch overlay exists under <stateDir> and return its
- * absolute path. Idempotent: an existing file whose content matches the
- * canonical overlay is left untouched; a drifted/absent file is (re)written
- * atomically with 0600 perms. Throws on write failure — the state root is the
- * plane's own layout, so an unwritable overlay is a plane problem, never a
- * silent skip.
- * @param stateDir - the control-plane state root.
- * @param inserts - the chamber host rows this spawn must mount (default: the
- *   client-graph row).
- * @param disables - id-targeted non-insert rows applied after every layer
- *   (default: none). The production caller ({@link resolveLocalHostGraphOverlay})
- *   passes {@link OFFICIAL_OPEN_IN_DISABLE} exactly when the chamber open-in
- *   host package is seeded, so the superseded official host half is never
- *   mounted next to chamber's own Remote.
- * @returns the overlay path to pass to spawns as `--patch`.
+ * Ensure the host-graph patch overlay exists under <stateDir> and return its absolute
+ * path. Idempotent: a content-matching file is left untouched; a drifted/absent file is
+ * rewritten atomically with 0600 perms. Throws on write failure — the state root is the
+ * plane's own layout, never a silent skip. `inserts` defaults to the client-graph row;
+ * production passes OFFICIAL_OPEN_IN_DISABLE as `disables` exactly when the chamber
+ * open-in host package is seeded, so the superseded official host half is never mounted.
  */
 export function buildPatchOverlay(
   stateDir: string,
@@ -490,32 +346,16 @@ export function buildPatchOverlay(
 }
 
 /**
- * Distribute one seed entry into the managed local profile so the spawned
- * host can resolve the overlay row. Copies each declared seed file
- * (package.json + dist/index.js by default) to
- * <dshHome>/profiles/web/node_modules/@dsh-chamber/<name>/.
+ * Distribute one seed entry into the managed local profile so the spawned host can
+ * resolve the overlay row: copy each declared seed file to
+ * <dshHome>/profiles/web/node_modules/@dsh-chamber/<name>/. Idempotent per file
+ * (identical bytes skipped, missing/drifted rewritten atomically with 0600).
  *
- * Idempotent per file: an existing target whose bytes hash identically to the
- * source is skipped; a missing or drifted target is rewritten atomically with
- * 0600 perms. Returns whether any file was written.
- *
- * Failure semantics: an absent sourceDir is NOT an error — the entry may not
- * be built or bundled in this runtime (e.g. the packaged desktop, or the
- * gateway mobile stub whose package ships on the mobile branch), so the
- * caller decides how to surface the skip. A source that exists but is missing
- * a declared file, or a copy that fails, throws (fail-loud: a shipped-but-
- * broken entry is a packaging bug, never a silent skip). Note the caller's
- * gate is the BUILT artifact dist/index.js only: a source that passes that
- * gate but is missing another declared file — e.g. package.json
- * present-dist-but-no-manifest — is exactly the shipped-but-broken case and
- * the throw is intentional: the plane surfaces it as a start/spawn error
- * (fail-loud) instead of booting a host whose --patch row cannot resolve.
- * @param dshHome - the managed dsh home (the spawned host's $DSH_HOME).
- * @param packageName - the chamber package name (`@dsh-chamber/…`).
- * @param sourceDir - the entry's packaged source directory.
- * @param seedFiles - per-entry seed file set (defaults to the host base).
- * @returns true when at least one file was written, false when already in
- *   sync or the source package is absent.
+ * An absent sourceDir is NOT an error (the entry may not be built in this runtime), so
+ * the caller decides how to surface the skip. A source that exists but is missing a
+ * declared file, or a failed copy, throws: a shipped-but-broken entry is a packaging bug
+ * and the plane surfaces it as a start error instead of booting a host whose --patch row
+ * cannot resolve.
  */
 export function ensureSeedPackage(
   dshHome: string,
@@ -533,8 +373,7 @@ export function ensureSeedPackage(
   }
   let wrote = false
   for (const relative of files) {
-    // Seed file paths are caller-trusted (the control plane / gateway are the
-    // only producers), but a malformed entry must fail loud instead of
+    // Seed file paths are caller-trusted, but a malformed entry must fail loud instead of
     // escaping the package dir or silently seeding nothing.
     if (typeof relative !== 'string' || relative === '' || relative.startsWith('/') || relative.includes('\\')
       || relative.split('/').includes('..') || relative.split('/').includes('.')) {
@@ -544,10 +383,9 @@ export function ensureSeedPackage(
     if (!existsSync(source)) {
       throw new Error(`chamber seed: ${source} missing in package ${sourceDir}`)
     }
-    // Source packages can live in the development tree or a packaged resource
-    // virtual filesystem, so their established ordinary read boundary stays
-    // unchanged. The chamber-owned target parent, by contrast, must be a real
-    // final component; a pnpm operation may prune it, but may not redirect it.
+    // Source packages may live in the development tree or a packaged resource VFS, so their
+    // read boundary stays unchanged. The chamber-owned target parent must be a real final
+    // component: a pnpm operation may prune it, but may not redirect it.
     const sourceBytes = readFileSync(source)
     const target = ensureSeedTargetParent(dshHome, packageName, relative)
     const current = readSeedTarget(target, Math.max(MAX_SEED_TARGET_BYTES, sourceBytes.length))

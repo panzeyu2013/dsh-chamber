@@ -1,14 +1,12 @@
 /**
- * Notifications-settings helpers for the「通用」notifications control group
- * (design 19 §3.4). Pure
+ * Notifications-settings helpers for the「通用」notifications control group: pure
  * logic only — no React, no DOM — so it is node:test-runnable (same role as
  * update-gate.ts for the update button).
  */
 import type { ChamberSettings } from '../ambient/settings-bridge.d.ts'
 
-/** The notifications settings block (design 19 §3.4 + §3.7) — mirrors the
- *  renderer ChamberNotificationSettings shape (global.d.ts) and the desktop
- *  store (packages/desktop/chamber-settings.ts ChamberNotificationSettings). */
+/** The notifications settings block — mirrors the renderer ChamberNotificationSettings
+ *  shape and the desktop store (chamber-settings.ts ChamberNotificationSettings). */
 export interface NotificationsSettings {
   /** Master switch; default false (low disturbance — opt-in). */
   enabled: boolean
@@ -25,9 +23,8 @@ export interface NotificationsSettings {
   badgeEnabled: boolean
 }
 
-/** Design defaults (design 19 §3.4 + §3.7) — must stay in sync with the
- *  desktop DEFAULT_CHAMBER_SETTINGS.notifications (chamber-settings.ts); the
- *  test file asserts the mirror. */
+/** Design defaults — must stay in sync with the desktop
+ *  DEFAULT_CHAMBER_SETTINGS.notifications (chamber-settings.ts; test-asserted). */
 export const NOTIFICATIONS_DEFAULTS: NotificationsSettings = {
   enabled: false,
   mode: 'hidden-only',
@@ -46,11 +43,11 @@ const KNOWN_KEYS: ReadonlyArray<keyof NotificationsSettings> = [
   'badgeEnabled',
 ]
 
-/** Read the notifications block with defaults — optional chaining only, never
-    a fabricated value (an absent block means "not yet stored": show the
-    design defaults, not a fake off). Unknown future keys are filtered out:
-    the main-process validatePatch rejects unknown nested keys, and a stored
-    block may carry forward-compat keys from a newer build. */
+/** Read the notifications block with defaults — optional chaining only, never a
+    fabricated value (an absent block means "not yet stored": show the design
+    defaults, not a fake off). Unknown future keys are filtered out: the main-process
+    validatePatch rejects unknown nested keys, and a stored block may carry
+    forward-compat keys from a newer build. */
 export function notificationsOf(settings: ChamberSettings | undefined): NotificationsSettings {
   const value = settings?.notifications
   const result: NotificationsSettings = { ...NOTIFICATIONS_DEFAULTS }
@@ -67,11 +64,9 @@ export function notificationsOf(settings: ChamberSettings | undefined): Notifica
   return result
 }
 
-/** Build a PARTIAL nested notifications patch — the main-process
- *  validatePatch accepts partial nested keys and applySettingsPatch
- *  deep-merges them, so only the changed key rides the wire and sibling
- *  switches can never be clobbered by a stale full-object snapshot (N-ctx
- *  shells each own a settings panel in the same document). */
+/** Build a PARTIAL nested notifications patch — validatePatch accepts partial nested
+ *  keys and applySettingsPatch deep-merges them, so only the changed key rides the
+ *  wire and sibling switches can never be clobbered by a stale full-object snapshot. */
 export function notificationsPatch(
   patch: Partial<NotificationsSettings>,
 ): Partial<ChamberSettings> {

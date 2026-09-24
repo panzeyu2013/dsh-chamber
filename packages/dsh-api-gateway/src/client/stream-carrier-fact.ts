@@ -1,15 +1,9 @@
 /**
- * Page-level carrier-churn fact (design 14 §D4).
- *
- * Upstream plumbs `carrierFailed` through the gateway and the session controller
- * but NOTHING consumes it, so a sustained carrier fault inside a live connection
- * generation is silent: the
- * transport lane is healthy, the stream keeps reopening every ≤10s, and no user
- * surface says a word. This module turns that seam into an addressable page fact.
- *
- * Zero imports on purpose: the counter/payload/dispatch contract is testable in
- * plain Node (dispatch is injected) and the browser default only touches the
- * globals the page already owns.
+ * Page-level carrier-churn fact. Upstream plumbs `carrierFailed` through the
+ * gateway and the session controller but nothing consumes it, so a sustained
+ * carrier fault inside a live generation is otherwise silent. This turns that seam
+ * into an addressable page fact (zero imports: dispatch is injected; the browser
+ * default only touches globals the page already owns).
  */
 
 /** Document-level event name carrying one {@link CarrierFailureFact}. */
@@ -17,36 +11,28 @@ export const STREAM_CARRIER_FAILED_EVENT = 'dsh-chamber:stream-carrier-failed'
 
 /** One bounded, non-secret carrier-failure fact. */
 export interface CarrierFailureFact {
-  /** Chamber source id of the boot ctx that owns the stream, when published. */
   readonly instanceId: string | undefined
-  /** Carrier error name (diagnostic; never a payload or credential). */
+  /** Carrier error name; never a payload or credential. */
   readonly stream: string
-  /** Wall-clock milliseconds of this failure. */
   readonly at: number
   /** 1-based count of carrier failures this page has observed. */
   readonly count: number
-  /** Truncated carrier message (gateway-internal English copy only). */
+  /** Truncated gateway-internal message. */
   readonly message: string
 }
 
 /** Environment seams for {@link createCarrierFailureReporter}. */
 export interface CarrierFailureEnvironment {
-  /** Chamber source id of the owning boot ctx. */
   readonly instanceId?: string | undefined
-  /** Clock seam (tests). */
   readonly now?: (() => number) | undefined
-  /** Dispatch seam (tests); defaults to the page-level CustomEvent. */
+  /** Dispatch seam; defaults to the page-level CustomEvent. */
   readonly dispatch?: ((fact: CarrierFailureFact) => void) | undefined
 }
 
 /** Longest carrier message copied into a fact. */
 export const CARRIER_FACT_MESSAGE_MAX = 200
 
-/**
- * Build the per-ctx carrier-failure reporter.
- * @param env - instance id plus the clock/dispatch seams.
- * @returns a handler that counts, bounds and publishes every carrier failure.
- */
+/** Build the per-ctx reporter: counts, bounds and publishes every carrier failure. */
 export function createCarrierFailureReporter(
   env: CarrierFailureEnvironment = {},
 ): (error: unknown) => void {

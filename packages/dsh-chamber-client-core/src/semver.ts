@@ -1,15 +1,12 @@
 /**
  * SemVer 2.0 precedence —— renderer 内的单一实现。
  *
- * 口径（与 dsh-runtime / gateway 的镜像实现按同一套语义对齐；跨包不共享代码）：
- *   - 非法输入返回 null（调用方自行决定「不可比」的呈现），绝不臆造序；
- *   - build metadata（`+…`）按规范不参与优先级比较；
- *   - prerelease 方向按规范：有 prerelease < 无 prerelease；公共前缀后标识符多者更大；
- *     数字标识符按数值比较、数字标识符 < 非数字标识符、其余按 ASCII 字典序。
+ * 口径（跨包按同一套语义对齐，但不共享代码）：非法输入返回 null，绝不臆造序；build metadata
+ * （`+…`）不参与优先级比较；有 prerelease < 无 prerelease；公共前缀后标识符多者更大；数字标识
+ * 符按数值比较、数字 < 非数字、其余按 ASCII 字典序。
  *
- * 已知跨包分叉：packages/dsh-runtime/src/registry-metadata.ts 的
- * compareVersionsDesc 用 split(/[.-]/) 比较且未剥离 build metadata，同一版本集的
- * 「最新」结论可能与这里不同；renderer 侧以本模块为唯一口径。
+ * 已知跨包分叉：dsh-runtime 的 compareVersionsDesc 未剥离 build metadata，同一版本集的「最新」
+ * 结论可能不同；renderer 侧以本模块为准。
  */
 
 interface ParsedSemver {

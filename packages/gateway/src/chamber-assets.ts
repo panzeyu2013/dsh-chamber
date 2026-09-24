@@ -1,8 +1,7 @@
 /**
- * Gateway browser-app assets: the embedded control panel HTML, its script
- * and the mobile light surface. The only interpolation is the dashboard semver
- * helper source (chamber-dashboard-semver.ts), whose template-safety is pinned
- * by the dashboard-semver lockstep test.
+ * Gateway browser-app assets: the embedded control panel HTML, its script and
+ * the mobile light surface. The only interpolation is the dashboard semver
+ * helper source (chamber-dashboard-semver.ts).
  */
 import { DASHBOARD_SEMVER_JS } from './chamber-dashboard-semver.ts'
 

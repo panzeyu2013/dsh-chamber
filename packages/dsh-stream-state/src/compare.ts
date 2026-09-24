@@ -1,12 +1,7 @@
 /**
- * Differential trace comparator.
- *
- * The oracle compares an old wiring's action trace with the new reducer's effect
- * trace. Both sides are projected through the action normalizer first, so wording
- * and intra-tick ordering never decide a verdict; only behavioral differences do.
- *
- * Importable from a plain node script (scripts/refactor/equivalence.mjs) because
- * it touches nothing but the two pure modules: no fs, no DOM, no fork.
+ * Differential trace comparator. Both sides are projected through the action normalizer
+ * first, so wording and intra-tick ordering never decide a verdict; only behavioral
+ * differences do. Pure (no fs, no DOM) so a plain node script can import it.
  */
 import { normalizeEffect } from './normalize.ts'
 import type { RecoveryEffect } from './state.ts'
@@ -46,9 +41,8 @@ function multiset(list: readonly RecoveryEffect[]): Map<string, number> {
 }
 
 /**
- * Compare two effect traces. Behavioral effects are compared as a multiset (so a
- * repeated replacement is a real difference) and forensic effects are compared as
- * a set (so added observability passes while a dropped fact fails).
+ * Compare two effect traces: behavioral effects as a multiset (a repeated replacement is a
+ * real difference), forensic effects as a set (added observability passes, a dropped fact fails).
  */
 export function compareTraces(
   expected: readonly RecoveryEffect[],
@@ -86,7 +80,7 @@ export function compareTraces(
   }
 }
 
-/** One-line-per-difference rendering, used by the CLI report. */
+/** One line per difference; 'equivalent' when the trace is empty. */
 export function formatVerdict(verdict: TraceVerdict): string {
   if (verdict.equivalent) return 'equivalent'
   return verdict.differences

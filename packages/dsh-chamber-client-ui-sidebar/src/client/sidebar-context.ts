@@ -1,11 +1,9 @@
 /**
- * Cross-cutting state for one sidebar shell's per-source sections: the shell
- * (SidebarRoot) owns every store/effect/commit below and provides ONE context
- * value per render; each ServerSection (and the workspace groups / session
- * rows inside it) reads what it needs through useSidebarSection(). Keeping
- * the value in a context (instead of threading ~40 props through three
- * component levels) is what lets the giant shell split into per-source files.
- * Nothing here is a store — the shell re-renders and rebuilds the value.
+ * Cross-cutting state for one sidebar shell's per-source sections: SidebarRoot
+ * owns every store/effect/commit below and provides ONE context value per
+ * render; ServerSection / workspace groups / session rows read what they need
+ * through useSidebarSection(). Nothing here is a store — the shell re-renders
+ * and rebuilds the value.
  */
 import { createContext, useContext, type Dispatch, type MutableRefObject, type ReactNode, type SetStateAction } from 'react'
 import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
@@ -15,7 +13,6 @@ import { getWorkspaceGitFlag, hiddenByMainWorkspaceFold } from '@dsh-chamber/dsh
 import type { ChamberSidebarViewPrefs } from '@dsh-chamber/dsh-chamber-client-core/view-prefs'
 import type { SidebarRootComponentProps } from './contract/slots.ts'
 
-/** In-progress inline rename target. */
 export interface RenameTarget {
   sourceId: string
   kind: 'session' | 'workspace'
@@ -23,30 +20,23 @@ export interface RenameTarget {
   value: string
 }
 
-/** In-flight session-row drag: source identity plus the current insert marker (06 §2.2). */
 export interface SessionDragState {
   /** Source the drag started in — cross-source drops are structurally impossible. */
   sourceId: string
-  /** Workspace id, or the ungrouped bucket id for the source-local loose-session account. */
   accountKey: string
-  /** Whether the row's workspace is the synthetic ungrouped bucket (carried in
-   *  the drag state so the commit resolves the account by id + flag — a real
-   *  workspace whose wire id ever equaled UNGROUPED_WORKSPACE_ID could
-   *  otherwise hijack a bucket drag's anchor). */
+  /** 合成 ungrouped 桶标记：提交时按 id + flag 解析账目，避免真实工作区
+   *  的 wire id 恰好等于 UNGROUPED_WORKSPACE_ID 时劫持桶拖拽的锚点。 */
   ungrouped: boolean
   sessionId: string
-  /** Row the marker sits on and which half (insert above/below it). */
   over: { id: string; half: 'before' | 'after' } | null
 }
 
-/** In-flight real-workspace drag: source identity plus the current marker (06 §2.2). */
 export interface WorkspaceDragState {
   sourceId: string
   workspaceId: string
   over: { id: string; half: 'before' | 'after' } | null
 }
 
-/** In-flight server-group drag (06 §2.4): dragged source + marker. */
 export interface ServerDragState {
   sourceId: string
   over: { id: string; half: 'before' | 'after' } | null
@@ -54,24 +44,19 @@ export interface ServerDragState {
 
 export type DropOver = { id: string; half: 'before' | 'after' }
 
-/**
- * Per-element accent CSS variable for the active source/session left inset:
- * the remote source's hue string, omitted for the local source so the CSS
- * falls back to the default ink.
- */
+/** Per-element accent CSS var for the active source/session left inset: the
+ *  remote source's hue, omitted for the local source (default-ink fallback). */
 export function sourceAccentStyle(server: ChamberServerAggregate): { '--chamber-source-accent': string } | undefined {
   const color = sourceAccentColor(server.id)
   return color === undefined ? undefined : { '--chamber-source-accent': color }
 }
 
 /**
- * Build the resolver environment for one source's workspace drag: the real
- * workspace order in display form (transient drag override first, rows the
- * override does not know appended in registry order — a workspace that
- * appeared mid-drag stays a valid target), the git-flag lookup and the
- * repo-group-fold visibility verdict. Consumed identically by the marker
- * render, the onDragOver gate, the drop handler and the commit — one rule
- * set (shared/workspace-drag-order.ts), no drift between them.
+ * Resolver env for one source's workspace drag: display order (transient drag
+ * override first, rows it does not know appended in registry order — a
+ * workspace that appeared mid-drag stays a valid target), git-flag lookup and
+ * repo-group-fold visibility. One rule set for the marker render, the
+ * onDragOver gate, the drop handler and the commit — no drift between them.
  */
 export function workspaceDropEnv(
   sourceId: string,
@@ -99,9 +84,7 @@ export function workspaceDropEnv(
 }
 
 export interface SidebarSectionContextValue {
-  /** Wide column geometry (server sections only render wide content). */
   wide: boolean
-  /** Locale translate (the sidebar namespace). */
   t: SidebarRootComponentProps['t']
   /** The instance id this ctx's shell belongs to (active-view highlight gate). */
   chamberInstanceId: string | undefined
@@ -112,7 +95,6 @@ export interface SidebarSectionContextValue {
     opts: { hookContext: { sourceId: string; workspaceId: string; repoKey?: string } },
   ) => ReactNode
 
-  /** Shared view prefs snapshot + fold/order toggles. */
   viewPrefs: ChamberSidebarViewPrefs
   toggleWorkspaceFold: (serverId: string, workspaceId: string) => void
   toggleSourceFold: (serverId: string) => void
@@ -121,7 +103,6 @@ export interface SidebarSectionContextValue {
   sessionOrderOverride: Readonly<Record<string, string[]>>
   workspaceOrderOverride: Readonly<Record<string, string[]>>
 
-  /** Drag state machines (owned by the shell; sections read + update them). */
   sessionDrag: SessionDragState | null
   setSessionDrag: Dispatch<SetStateAction<SessionDragState | null>>
   workspaceDrag: WorkspaceDragState | null
@@ -137,13 +118,10 @@ export interface SidebarSectionContextValue {
   sessionDropCommitted: MutableRefObject<boolean>
   workspaceDropCommitted: MutableRefObject<boolean>
   serverDropCommitted: MutableRefObject<boolean>
-  /** Blank-row ghost slot machinery (double-click window layout guard). */
   ghostExpiry: MutableRefObject<Map<string, number>>
   armBlankGhostForClick: () => void
 
-  /** Per-row error text (actions run through the shell's local runAction). */
   rowErrors: Readonly<Record<string, string>>
-  /** Open kebab menus (keyed by row). */
   menuOpen: Readonly<Record<string, boolean>>
   toggleMenu: (key: string) => void
   closeMenu: (key: string) => void
@@ -154,22 +132,17 @@ export interface SidebarSectionContextValue {
   /** Commit the active inline rename (wire call via the shell's runAction). */
   commitRename: () => void
   /** Server-row archive-cleanup entry: opens the archive manager dialog
-   *  (design 24 §6 — the manager lists what is archived and
-   *  offers per-row / multi-select purges; whole-set deletion goes through
-   *  the explicit select-all checkbox — no standalone delete-all). */
+   *  (per-row / multi-select purges; whole-set deletion only through the
+   *  explicit select-all checkbox — no standalone delete-all). */
   onOpenArchiveCleanup: (server: ChamberServerAggregate) => void
-  /** Source-header add-workspace entry (opens the directory browser).
-   *  This is the shell's GUARDED opener, not the raw state setter — it refuses
-   *  while another chamber dialog layer is up, so the section cannot stack a
-   *  second Modal by calling it. Closing stays the shell's own business
-   *  (`browseClose`). */
+  /** Source-header add-workspace entry (opens the directory browser). This is
+   *  the shell's GUARDED opener, not the raw setter — it refuses while another
+   *  chamber dialog layer is up, so the section cannot stack a second Modal by
+   *  calling it; closing stays the shell's own business (`browseClose`). */
   openWorkspaceBrowser: (sourceId: string) => void
 
-  /** Row actions over the source's own unary API. */
   openSession: (serverId: string, sessionId: string) => void
   onNewSession: (server: ChamberServerAggregate, workspaceId: string) => void
-  /** No title parameter — the archive verb runs immediately, so nothing
-   *  consumes a title here. */
   onArchiveSession: (server: ChamberServerAggregate, sessionId: string) => void
   onForkSession: (server: ChamberServerAggregate, session: { id: string; title: string }) => void
   onDeleteWorkspace: (server: ChamberServerAggregate, workspaceId: string, title: string) => void

@@ -1,61 +1,27 @@
 /**
- * Bounded tgz metadata inspection for the materialize upload route (design
- * 21 §6.2 — `PUT /chamber/plugins/materialize`): parse the
- * gzip stream and the ustar 512-byte header blocks INCREMENTALLY with
- * `zlib.createGunzip`, so a hostile archive can never force a full
- * decompression into memory. The upload body is already buffered by the
- * route (≤ 32 MiB), but a zip bomb could still inflate far beyond that —
- * the scan caps both the DECLARED unpacked size (header size fields, with
- * the standard 512-byte padding) and the ACTUAL inflated byte count, and
- * aborts the inflate as soon as either cap trips.
+ * Bounded tgz metadata inspection for the materialize upload route: gzip and
+ * the ustar 512-byte header blocks are parsed INCREMENTALLY, so a hostile
+ * archive can never force a full decompression into memory. Both the DECLARED
+ * unpacked size and the ACTUAL inflated byte count are capped and the inflate
+ * aborts as soon as either cap trips (≤ 4096 entries, ≤ 256 MiB).
  *
- * Caps (design 21 §6.2 / §6.9): ≤ 4096 entries and ≤ 256 MiB unpacked
- * (the §6.9 engineering default — the desktop tarball builder mirrors it as
- * TARBALL_MAX_UNPACKED_BYTES; plugin-tarball.test.ts pins the lockstep).
- *
- * Header discipline (ustar): each entry = 512-byte header, then
- * `ceil(size/512)*512` data bytes. Fields used: name (bytes 0-99,
- * NUL-terminated), size (bytes 124-135, octal, NUL/space-padded), typeflag
- * (byte 156 — '0'/'5'/'x'/'g'/…; every entry counts against the entry cap,
- * PAX 'x'/'g' headers included — conservative). The classic end-of-archive
- * marker (an all-zero header block) stops the scan early without inflating
- * the rest. Errors (bad gzip magic, gunzip failure, truncated tar) map to
- * 'corrupt'; the route answers 400 with a distinct code per error so the
- * client can tell a broken upload from an archive that exceeded the caps.
- *
- * Identity projection (design 21 §6.2/§6.11): the route judges
- * the CLIENT-ASSERTED `x-plugin-name`/`x-plugin-version` headers, so the archive's
- * own `package/package.json` is captured (bounded, ≤ 64 KiB) here and the route
- * requires it to AGREE with the headers. Without this, a caller could upload an
- * archive whose real name is a protected/official one while declaring an
- * innocent third-party name — pnpm installs the ARCHIVE's name, and that name
- * then lands in the profile as a DIRECT dependency (exempt from the post-install
- * verifier), i.e. the exact shadow the protected set exists to prevent.
- * The capture closes at the end of the candidate's own data
- * area (a real archive carries entries after `package/package.json`, and their
- * data must not be appended to the JSON), the oversize flag is per candidate
- * (never sticky) and the capture is bounded by TGZ_MANIFEST_MAX_BYTES — the
- * LAST candidate wins, matching the entry pnpm's extraction overwrites.
- *
- * Pure Node (node:zlib), no dependencies. Returns a promise (the gunzip
- * stream is inherently async); the memory held at any moment is one 512-byte
- * header buffer, the bounded manifest capture, plus the inflater's own window.
+ * Identity: the archive's own `package/package.json` (bounded, ≤ 64 KiB) must
+ * AGREE with the client-asserted x-plugin-name/-version — otherwise an upload
+ * could install a protected/official name as a DIRECT dependency (exempt from
+ * the post-install verifier). The LAST candidate wins; oversize is never sticky.
  */
 
 import { createGunzip } from 'node:zlib'
 
-/** Entry-count cap (design 21 §6.2 / §6.9: ≤ 4096 files). */
+/** Entry-count cap. */
 export const TGZ_MAX_ENTRIES = 4096
-/** Declared/actual unpacked byte cap (design 21 §6.9 engineering default:
- * ≤ 256 MiB decompressed — aligned with the desktop tarball builder's
- * TARBALL_MAX_UNPACKED_BYTES mirror). */
+/** Declared/actual unpacked byte cap — mirrored by the desktop tarball builder. */
 export const TGZ_MAX_UNPACKED_BYTES = 256 * 1024 * 1024
-/** PAX/entry-name echo bound: firstNames never holds more than this many
- * names (the rest are still counted; error surfacing never needs more). */
+/** Error-echo bound: firstNames keeps at most this many names (the rest still count). */
 const FIRST_NAMES_ECHO_LIMIT = 32
-/** Gzip magic bytes (RFC 1952). */
 const GZIP_MAGIC = [0x1f, 0x8b] as const
 
+/** Scan outcome; distinct codes let the route answer 400 per cause. */
 export type TgzScanError = 'not_gzip' | 'corrupt' | 'too_many_entries' | 'too_large'
 
 /** The archive's own package identity (`package/package.json`, npm-pack layout). */
@@ -70,31 +36,27 @@ export type TgzScanResult =
     entries: number
     totalBytes: number
     firstNames: string[]
-    /** null when the archive carries no readable npm-pack manifest; `manifestError`
-     *  says why (the route refuses such an upload — the asserted identity cannot be
-     *  verified). */
+    /** null when no readable npm-pack manifest exists; `manifestError` says why
+     *  (the route refuses such an upload). */
     manifest: TgzManifestProjection | null
     manifestError?: 'missing' | 'invalid' | 'oversized'
   }
   | { ok: false; error: TgzScanError }
 
-/** Manifest capture bound (the same order as the desktop manifest reader). */
 export const TGZ_MANIFEST_MAX_BYTES = 64 * 1024
 
-/** Octal size field: bytes 124-135 (12 bytes), NUL/space padded; empty
- * (all padding) means 0. Non-octal content is not a valid ustar header. */
+/** Octal size field: bytes 124-135, NUL/space padded (all padding = 0);
+ * non-octal content is not a valid ustar header. */
 function parseOctalSize(field: Buffer): number | null {
   const text = field.toString('ascii').replace(/[\0 ]+$/u, '')
   if (text === '') return 0
   if (!/^[0-7]+$/u.test(text)) return null
-  // Octal values with the historic 11-digit cap cannot exceed 8 GiB
-  // (0o77777777777) — safe in a JS number.
+  // The historic 11-digit octal cap cannot exceed 8 GiB — safe in a JS number.
   return parseInt(text, 8)
 }
 
-/** Parse one 512-byte ustar header block. Returns null for the all-zero
- * end-of-archive marker, a header record otherwise, or throws on a field
- * that cannot be a real tar header (honest 'corrupt', never a guess). */
+/** Parse one 512-byte ustar header block: null for the all-zero end marker, a
+ * header record otherwise, or a throw on an impossible field (honest 'corrupt'). */
 function parseTarHeader(block: Buffer): { name: string; size: number; isEnd: boolean } | null {
   let zero = true
   for (const byte of block) {
@@ -113,11 +75,8 @@ function parseTarHeader(block: Buffer): { name: string; size: number; isEnd: boo
   return { name, size, isEnd: false }
 }
 
-/**
- * Bounded metadata scan of a tgz buffer (see module header). Never throws;
- * always resolves a discriminated result. The input buffer stays owned by
- * the caller; inflated bytes are only counted, never retained.
- */
+/** Bounded metadata scan of a tgz buffer (see module header). Never throws;
+ * always resolves a discriminated result; inflated bytes are only counted. */
 export function scanTgzMetadata(buffer: Buffer): Promise<TgzScanResult> {
   return new Promise(resolve => {
     if (buffer.length < 2 || buffer[0] !== GZIP_MAGIC[0] || buffer[1] !== GZIP_MAGIC[1]) {
@@ -142,20 +101,17 @@ export function scanTgzMetadata(buffer: Buffer): Promise<TgzScanResult> {
     let totalBytes = 0
     let inflatedBytes = 0
     const firstNames: string[] = []
-    /** Bytes of entry data still to skip before the next header. */
+    /** Entry data bytes still to skip before the next header. */
     let skipRemaining = 0
     /** Partial header accumulation across chunk boundaries. */
     const headerParts: Buffer[] = []
     let headerLength = 0
     /**
-     * Bounded capture of the npm-pack `package/package.json` (see the module
-     * header). The state is PER CANDIDATE: every candidate header resets it
-     * (an oversized candidate is never sticky, and the LAST candidate wins —
-     * pnpm's tar extraction overwrites, so the last entry is what installs).
-     * Capture stops at the end of the candidate's own data area
-     * (`manifestRemaining` reaches 0) — later entries' data must never leak
-     * into the JSON. `manifestParts === null` = the current candidate has no
-     * readable manifest.
+     * Bounded capture of `package/package.json`. The state is PER CANDIDATE:
+     * every candidate header resets it (oversize never sticky, LAST wins —
+     * pnpm's extraction overwrites). Capture stops at the end of the candidate's
+     * own data area, so later entries never leak in. `manifestParts === null` =
+     * the current candidate has no readable manifest.
      */
     let manifestParts: Buffer[] | null = null
     let manifestCaptured = 0
@@ -166,10 +122,8 @@ export function scanTgzMetadata(buffer: Buffer): Promise<TgzScanResult> {
       if (manifestOversized) return { manifest: null, manifestError: 'oversized' }
       if (manifestParts === null) return { manifest: null, manifestError: 'missing' }
       try {
-        // Only the candidate's declared data bytes were captured — never the
-        // 512-block padding tail, never a later entry's data. A manifest may
-        // still declare its own trailing NUL/space bytes inside that size, so
-        // strip them before parsing.
+        // Only the candidate's declared data bytes were captured. The manifest
+        // may declare trailing NUL/space bytes inside that size — strip them.
         const text = Buffer.concat(manifestParts).subarray(0, manifestCaptured).toString('utf8').replace(/[\0\s]+$/u, '')
         const parsed: unknown = JSON.parse(text)
         if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -241,10 +195,8 @@ export function scanTgzMetadata(buffer: Buffer): Promise<TgzScanResult> {
           return
         }
         if (header.name === 'package/package.json' || header.name === './package/package.json') {
-          // New candidate: the previous capture is closed for good. An
-          // oversized candidate is recorded WITHOUT buffering a single byte
-          // (the capture bound the module header promises), and it is not
-          // sticky — a later readable candidate replaces it entirely.
+          // New candidate: the previous capture is closed for good. An oversized
+          // candidate is recorded WITHOUT buffering a byte, and it is not sticky.
           manifestParts = null
           manifestCaptured = 0
           manifestRemaining = 0
@@ -274,8 +226,7 @@ export function scanTgzMetadata(buffer: Buffer): Promise<TgzScanResult> {
       if (settled) return
       inflatedBytes += chunk.length
       if (inflatedBytes > TGZ_MAX_UNPACKED_BYTES) {
-        // Actual bytes protect against lying size fields / pathological
-        // streams; abort the inflate instead of draining it.
+        // Actual bytes protect against lying size fields: abort instead of draining.
         finish({ ok: false, error: 'too_large' })
         return
       }
@@ -284,8 +235,7 @@ export function scanTgzMetadata(buffer: Buffer): Promise<TgzScanResult> {
     gunzip.on('end', () => {
       if (settled) return
       if (headerLength > 0 || skipRemaining > 0) {
-        // Stream ended inside a header block or entry data: the archive is
-        // truncated (the gzip stream itself is complete, the tar is not).
+        // Stream ended inside a header block or entry data: the tar is truncated.
         finish({ ok: false, error: 'corrupt' })
         return
       }

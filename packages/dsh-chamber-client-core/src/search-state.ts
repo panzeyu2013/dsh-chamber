@@ -1,27 +1,14 @@
 /**
- * Shared per-source session search controller (design 06 §1 — cross-ctx live
- * sync). Owns BOTH the source-keyed search UI state (expanded capsule /
- * query / results) AND the debounced fetch jobs (timers + AbortControllers)
- * as ONE module-level singleton — the same instance every ctx's sidebar sees
- * through the vite shared chunk.
- *
- * The state must not live per-shell in the component: the visible sidebar is
- * the ACTIVE shell's, so a per-shell search started for another source would
- * vanish the moment that source was activated. Because the JOBS live here
- * too, exactly one owner arms them (no duplicate fetches from N shells
- * reacting to the shared state).
- *
+ * Shared per-source session search controller (cross-ctx live sync): owns BOTH
+ * the source-keyed search UI state (expanded capsule / query / results) AND the
+ * debounced fetch jobs (timers + AbortControllers) as ONE module-level
+ * singleton seen by every ctx's sidebar through the vite shared chunk. State
+ * cannot live per-shell (the visible sidebar is the ACTIVE shell's; one owner
+ * arms the jobs; the wire fetch is INJECTED so the module stays testable).
  * Job semantics: one debounced job per expanded, connected, non-empty-query
- * source; a keystroke in one source must not abort or restart another
- * source's in-flight search (re-arm guard); the 30s caller timeout
- * distinguishes "timed out" (error state) from "superseded" (silent).
- * Disconnected sources drop their state so a reconnect starts from a clean
- * collapsed capsule.
- *
- * The wire fetch is INJECTED (setSearchFetcher — the sidebar wires
- * instance-api's searchSessions at module scope) so this module stays a pure
- * controller: plain-node unit-testable (no unbuilt dsh package in the import
- * graph) and the job flow testable with a fake fetcher.
+ * source; a keystroke never aborts another source's in-flight search; the 30s
+ * caller timeout distinguishes "timed out" (error) from "superseded" (silent);
+ * disconnected sources drop their state (reconnect → clean capsule).
  */
 import type { SearchRow } from './instance-api.ts'
 import { chamberBridge } from './aggregate-store.ts'
@@ -30,7 +17,6 @@ import { assertSingletonModule } from './singleton.ts'
 
 assertSingletonModule('search-state')
 
-/** One source's search UI state (capsule + debounced remote results). */
 export interface SourceSearchState {
   expanded: boolean
   query: string
@@ -65,9 +51,9 @@ interface Job {
 }
 const jobs = new Map<string, Job>()
 
-/** Debounce between the latest keystroke and a Host content-search request (06 §1.2). */
+/** Debounce between the latest keystroke and a Host content-search request. */
 const SEARCH_DEBOUNCE_MS = 250
-/** Caller-side search deadline (06 §1.1 — the wire merges its own 30s). */
+/** Caller-side search deadline (the wire merges its own 30s). */
 const SEARCH_TIMEOUT_MS = 30_000
 
 /** Snapshot cache: a fresh Map only when the state changed (identity-preserving for React). */
@@ -78,7 +64,6 @@ function notify(): void {
   for (const listener of [...listeners]) listener()
 }
 
-/** Read-only per-source search states for rendering. */
 export function getSearchStates(): ReadonlyMap<string, SourceSearchState> {
   if (snapshot === null) snapshot = new Map(states)
   return snapshot
@@ -97,7 +82,6 @@ function setState(sourceId: string, next: SourceSearchState): void {
   notify()
 }
 
-/** Open the capsule for a source (idempotent). */
 export function expandSearch(sourceId: string): void {
   const prev = states.get(sourceId)
   if (prev !== undefined && prev.expanded) return
@@ -121,16 +105,14 @@ export function setSearchQuery(sourceId: string, query: string): void {
   reconcileJobs()
 }
 
-/** Collapse + drop the state (Escape / clear button). */
 export function clearSearch(sourceId: string): void {
   collapseSearch(sourceId)
 }
 
 /**
- * Reconcile the debounced fetch jobs against the current states + projection:
- * abort jobs that are no longer wanted (collapsed / disconnected / emptied /
- * re-queried — the CHANGED source only, so sibling in-flight searches
- * survive), then arm jobs for newly-wanted queries.
+ * Reconcile debounced jobs against current states + projection: abort jobs no
+ * longer wanted, then arm newly-wanted ones. Only the CHANGED source is touched,
+ * so sibling in-flight searches survive.
  */
 function reconcileJobs(): void {
   const wanted = new Map<string, string>()
@@ -158,9 +140,8 @@ function reconcileJobs(): void {
       }
     }
   }
-  // Arm jobs for new queries only — an existing same-query job is left in
-  // flight (its own completion updates the state; re-creating it here would
-  // abort and restart every other source's search on each keystroke).
+  // Arm new queries only: an existing same-query job stays in flight (re-creating it
+  // would abort/restart every other source's search on each keystroke).
   for (const [sourceId, query] of wanted) {
     if (jobs.has(sourceId)) continue
     const controller = new AbortController()
@@ -172,34 +153,27 @@ function reconcileJobs(): void {
     const timer = globalThis.setTimeout(() => {
       searchFetcher(sourceId, query, controller.signal)
         .then((result) => {
-          // 所有权镜像（与 .catch 同构）：被替换（abort 且 job 已易主/删除）
-          // 的旧结果静默丢弃；若 abort 只来自 30s 超时定时器而 wire 忽略
-          // abort 仍成功返回（实际几乎不可达——unary client 走 fetch signal），
-          // 仍提交结果——绝不把来源留在 loading。
+          // 所有权镜像（与 .catch 同构）：被替换（abort 且 job 已易主/删除）的旧结果静默丢弃；
+          // 若 abort 只来自 30s 超时而 wire 仍成功返回，仍提交结果——绝不把来源留在 loading。
           if (controller.signal.aborted && jobs.get(sourceId)?.controller !== controller) return
           const current = states.get(sourceId)
           if (current === undefined) return
           states.set(sourceId, { ...current, status: 'ready', items: result.items, hasMore: result.hasMore })
-          // 结果已落地，停掉本 job 的 30s 超时定时器（超时已无意义）。job
-          // 条目保留到下次 query 变更/收起/断连由 reconcileJobs 清理——不可
-          // 在此删除，否则下次 reconcile 会对同一 query 重新 arm 一次重复
-          // 抓取。
+          // 结果已落地，停掉本 job 的超时定时器；job 条目保留到下次 query 变更/收起/断连
+          // 由 reconcileJobs 清理——在此删除会导致下次 reconcile 对同一 query 重复 arm。
           const job = jobs.get(sourceId)
           if (job !== undefined) globalThis.clearTimeout(job.timeout)
           notify()
         })
         .catch(() => {
-          // 30s caller timeout (SEARCH_TIMEOUT_MS) aborts: if THIS job still
-          // owns the controller (not superseded by a newer query or removed),
-          // it is a timeout — land an error state, never linger on pending.
-          // A superseded job exits silently; the new job / cleanup takes over
-          // its state.
+          // 30s caller timeout aborts: if THIS job still owns the controller it is a
+          // timeout → 落 error 状态，绝不停留 pending；被替换的 job 静默退出，由新 job /
+          // cleanup 接管其状态。
           if (controller.signal.aborted && jobs.get(sourceId)?.controller !== controller) return
           const current = states.get(sourceId)
           if (current === undefined) return
           states.set(sourceId, { ...current, status: 'error', items: [], hasMore: false })
-          // 错误落地后同样停掉超时定时器（否则它会在 30s 后去 abort 一个
-          // 已 settled 的 promise——无害但属悬空定时器）。
+          // 错误落地后同样停掉超时定时器（否则 30s 后会 abort 一个已 settled 的 promise——悬空定时器）。
           const job = jobs.get(sourceId)
           if (job !== undefined) globalThis.clearTimeout(job.timeout)
           notify()
@@ -211,8 +185,7 @@ function reconcileJobs(): void {
   if (changed) notify()
 }
 
-// Disconnected sources drop their search state (a reconnect starts from a
-// clean collapsed capsule), and their in-flight jobs are aborted.
+// 断连来源丢弃搜索状态并中止其 in-flight job（重连从干净折叠胶囊开始）。
 chamberBridge.subscribe(() => {
   const live = new Set(
     chamberBridge.getServers().filter(server => server.connected).map(server => server.id),

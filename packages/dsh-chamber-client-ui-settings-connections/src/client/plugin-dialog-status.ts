@@ -1,7 +1,6 @@
 /**
- * Pure tone/status/label projections for the plugin dialog: the dialog body
- * keeps orchestration and JSX. ADD_SPEC lives in PluginDialog.tsx — the gateway
- * plugin-spec lockstep test pins it there by path.
+ * Pure tone/status/label projections for the plugin dialog: the dialog body keeps orchestration
+ * and JSX. ADD_SPEC lives in PluginDialog.tsx — the gateway plugin-spec lockstep test pins it there.
  */
 import clsx from 'clsx'
 import type { SettingsConnectionsKey } from '../locales.ts'
@@ -15,7 +14,7 @@ export type CategoryFilter = 'all' | 'bundle' | 'plain' | 'client'
 export type StatusFilter = 'diff' | 'all'
 export type ViewPhase = 'loading' | 'error' | 'ready'
 
-/** Tone of the remote-list operation status line (design 21 §6.6 list tab). */
+/** Tone of the remote-list operation status line. */
 export type RemoteListTone = 'ok' | 'warn' | 'error'
 
 /** One operation outcome line (undo / row-remove executed outcomes). */
@@ -33,8 +32,7 @@ export function remoteStatusClass(tone: RemoteListTone): string {
   }
 }
 
-/** Tone of the gateway management-zone operation status line (remove /
- *  undo outcomes — the ssh modal's RemoteListTone equivalent). */
+/** Tone of the gateway management-zone operation status line (the ssh modal's RemoteListTone equivalent). */
 export type ManageTone = 'ok' | 'warn' | 'error'
 
 /** One management-zone outcome line (row remove / undo executed outcomes). */
@@ -43,8 +41,7 @@ export interface ManageStatus {
   text: string
 }
 
-/** Tone of the restart-to-apply outcome line (two-tone pair, mirroring the
- *  connection card's restart note): 'error' renders css.error + role="alert";
+/** Tone of the restart-to-apply outcome line: 'error' renders css.error + role="alert";
  *  'ok' renders css.hint + role="status". */
 export type RestartNote = { tone: 'ok' | 'error'; text: string }
 
@@ -78,10 +75,9 @@ export function categoryLabel(category: PluginRow['category']): SettingsConnecti
   }
 }
 
-/** Row-role badge label key (design 21 §6.11.5): the role is the BACKEND's
- *  projection (`rows[].role`) — the dialog renders it, never re-derives it.
- *  null for 'unknown': no label is invented for a role the backend could not
- *  classify (such a row renders without a role badge, still fully visible). */
+/** Row-role badge label key: the role is the BACKEND's projection (`rows[].role`) — the dialog
+ *  renders it, never re-derives it. null for 'unknown': no label is invented for a role the
+ *  backend could not classify (the row renders without a badge, still fully visible). */
 export function roleLabel(role: PluginRowRoleShape): SettingsConnectionsKey | null {
   switch (role) {
     case 'composition': return 'pluginsRoleComposition'
@@ -93,9 +89,8 @@ export function roleLabel(role: PluginRowRoleShape): SettingsConnectionsKey | nu
   }
 }
 
-/** Role badge → the EXISTING category-badge CSS vocabulary (no new CSS):
- *  composition reuses the filled bundle tone, the chamber seed the warn-tint
- *  client tone, everything else the muted plain pill. */
+/** Role badge → the EXISTING category-badge CSS vocabulary (no new CSS): composition reuses the
+ *  filled bundle tone, the chamber seed the warn-tint client tone, everything else the muted plain pill. */
 export function roleBadgeClass(role: PluginRowRoleShape): string {
   switch (role) {
     case 'composition': return css.pluginKindBundle
@@ -109,9 +104,8 @@ export function isActionable(kind: PluginRowKind): boolean {
   return isDifferenceRow(kind)
 }
 
-/** Chamber badge tone → the shared .badge pill family (plan 24 B1.5 reuses
- *  the .badge vocabulary: ok = filled success, warn = outlined warn, danger =
- *  filled error, muted = plain pill). */
+/** Chamber badge tone → the shared .badge pill family (ok = filled success, warn = outlined warn,
+ *  danger = filled error, muted = plain pill). */
 export function chamberBadgeClass(tone: ChamberBadgeTone): string {
   switch (tone) {
     case 'ok': return clsx(css.badge, css.badgeOk)
@@ -122,9 +116,8 @@ export function chamberBadgeClass(tone: ChamberBadgeTone): string {
 }
 
 /**
- * The ssh remote-side chamber badge now lives in plugin-inventory-text.ts
- * (sshChamberBadge) — the row derivation needs it, and that module is the
- * locale-free projection the plain-node suite covers.
+ * The ssh remote-side chamber badge lives in plugin-inventory-text.ts (sshChamberBadge) — the row
+ * derivation needs it, and that module is the locale-free projection the plain-node suite covers.
  */
 
-/** The dialog target descriptor the four card kinds build (plan 24 B1.1). */
+/** The dialog target descriptor the four card kinds build. */

@@ -1,26 +1,14 @@
 /**
- * Session-row state marker（仪表 I1/I13）：
- * 把行尾状态**读数的出处**变成可
- * 查询的 DOM 事实，让验收判据不依赖文案、哈希类名或"看起来对"。
- *
- * 两个属性由调用方发出：
- *   `data-chamber-session-state` = none | running | subagents:N | pending:approval |
- *     pending:plan-review | pending:question | completed
- *   `data-chamber-state-source`  = wire | channel | derived | stale
- *
+ * Session-row state marker：把行尾状态**读数的出处**变成可查询、可机器判定的 DOM 事实。
+ * 两个属性：`data-chamber-session-state` = none | running | subagents:N |
+ * pending:approval | pending:plan-review | pending:question | completed；
+ * `data-chamber-state-source` = wire | channel | derived | stale。
  * 优先级与行尾圆点**同一套**（pending > 子代理 > completed > running > 空槽），
- * 否则仪表会与用户看到的状态互相矛盾。P5：子代理档要求**确证在跑**（stale 或
- * 索引不可用时读数是 `unknown`，中性呈现，见 {@link subagentActivityOf}）。
- *
- * SOURCE 是「这个读数从哪来」，四值各有确切含义（验收要据此区分"显示的是刚发生
- * 的事实"还是"断连后残留的旧事实"）：
- *   - stale   断连来源上仍附加的只读事实——**最优先报出**，因为它是"这一个
- *             读数可能过期"的唯一机器信号；
- *   - channel vendor 经 chamberBridge 运行时通道武装的位（pending/completed）；
- *   - derived chamber 自己的派生量（子代理后代计数，来自 vendor 谱系索引）；
- *   - wire    直读 wire 的运行位（调用方按 `runningRingVisible` 解决快照/通道之争后
- *             传入的布尔）。
- * 纯函数、零依赖：node 直跑。
+ * 否则仪表会与用户看到的状态互相矛盾。子代理档要求**确证在跑**（stale 或索引
+ * 不可用读作 `unknown`，中性呈现）。SOURCE 四值：stale = 断连来源上仍附加的只读
+ * 事实（最优先报出，是"可能过期"的唯一机器信号）；channel = vendor 经运行时通道
+ * 武装的位；derived = chamber 派生量（子代理后代计数）；wire = 直读 wire 运行位
+ * （`runningRingVisible` 解决快照/通道之争）。纯函数、零依赖。
  */
 
 export type SessionRowStateKind =
@@ -44,10 +32,8 @@ export interface SessionRowStateFacts {
   /** 运行中的子代理后代数（稀疏；>0 才覆盖 completed/running）。 */
   runningSubagents?: number
   /**
-   * 子代理活动的可呈现性三值。`none` = 谱系索引可用且没有运行中的后代；
-   * `running` = 确有运行中的后代；`unknown` = 索引不可用，或事实 stale
-   * （断连来源上残留的计数不是「正在干活」的证据）。unknown 中性呈现：不点亮
-   * 子代理读数，也不据此压制别的读数。
+   * 三值。`unknown` = 索引不可用或事实 stale（残留计数不是「正在干活」的证据），
+   * 中性呈现：不点亮子代理读数，也不据此压制别的读数。
    */
   subagentActivity?: SubagentActivity
   /** 该来源的运行时事实是否 stale（断连/主机不可达时仍可附加）。 */
@@ -58,9 +44,8 @@ export interface SessionRowStateFacts {
 export type SubagentActivity = 'none' | 'running' | 'unknown'
 
 /**
- * 这一行实际的子代理活动。守卫只在这里：`stale` 的行（或显式 `unknown`）绝不
- * 报 `running`——断连来源上残留的计数不是「正在干活」的证据。行只带稀疏计数
- * （历史生产者/通道 overylay）时用同一守卫兜底，调用方不再各写一遍。
+ * 守卫只在这里：`stale` 的行（或显式 `unknown`）绝不报 `running`——断连来源上残留的
+ * 计数不是「正在干活」的证据；只带稀疏计数（历史生产者/通道 overlay）时用同一守卫兜底。
  */
 export function subagentActivityOf(
   facts: SessionRowStateFacts | undefined,

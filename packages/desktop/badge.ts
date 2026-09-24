@@ -1,38 +1,19 @@
 /**
- * Dock/taskbar unread badge count (design 19 §3.7) — pure logic, no electron,
- * unit-testable with plain node:test (see test/desktop-shell/badge.test.ts).
- *
- * The renderer projects its「完成未读」blue-dot set into a single non-negative
- * integer and pushes it over `dsh-chamber:badge-count`; the main process is
- * the authority for presentation: payload whitelist → settings adjudication
- * (notifications.badgeEnabled, chamber-settings.json) → platform gate →
- * `app.setBadgeCount(n)` (macOS Dock / Linux Unity launcher). 0 = clear.
- *
- * SINGLE AUTHORITY: that integer is
- * the renderer's **merged projection** count — the same merged facts projection
- * that drives the in-window dots, the todo entries and the notification edges.
- * This module (and the BADGE_COUNT handler in shell-core) consumes exactly that
- * number and never tallies sessions itself: it holds no ledger, reads no
- * runtime-facts row and keeps no per-source map. The holder is
- * replace-on-push, so the renderer's reload fallback (push 0 from the mount
- * effect) clears the OS badge, and the renderer-side dedupe/retry budget is
- * never shadowed by a second desktop state machine.
- *
- * Platform honesty: `app.setBadgeCount` only has an OS-visible effect on
- * macOS (Dock badge) and Linux (Unity launcher); GNOME/KDE show nothing —
- * a documented platform limit, not a silent fake success. Windows needs the
- * `setOverlayIcon` taskbar overlay (a generated numeric image) and is gated
- * off in v1 with a loud log (design 23 real-machine matrix).
+ * Dock/taskbar unread badge count (pure logic, no electron): the renderer pushes its
+ * 「完成未读」 merged count over `dsh-chamber:badge-count`; main adjudicates — payload
+ * whitelist → notifications.badgeEnabled → platform gate → `app.setBadgeCount(n)`, 0 = clear.
+ * SINGLE AUTHORITY: no ledger, no runtime-facts row, no per-source map; the holder is
+ * replace-on-push, so the renderer reload fallback (push 0) clears the OS badge.
+ * Platform honesty: OS-visible only on macOS (Dock) and Linux (Unity); GNOME/KDE show
+ * nothing (never a fake success); Windows needs setOverlayIcon and is gated off loudly.
  */
 
-/** 计数硬上限：会话数级别的计数远小于此值；上限约束被攻破的 renderer 不能
- *  请求任意大数值（Dock 渲染极端值无意义）。超上限 = 载荷非法（响亮拒绝，
- *  不静默截断——截断会把真实的大计数伪装成小计数）。 */
+/** 计数硬上限：会话数级别远小于此值，上限约束被攻破的 renderer 不能请求任意大数值；
+ * 超上限 = 载荷非法（响亮拒绝，不静默截断——截断会把真实大计数伪装成小计数）。 */
 export const MAX_BADGE_COUNT = 9999
 
-/** IPC payload 白名单校验：`{ count: number }`。必须为有限数（结构化克隆可
- *  携带 NaN/Infinity，必须显式拒绝）、非负、≤ MAX_BADGE_COUNT；小数按
- *  Math.floor 归一（与 OpenChamber 同款容忍）。未知/多余字段忽略。 */
+/** IPC payload 白名单：`{ count: number }`，必须有限（结构化克隆可携带 NaN/Infinity）、
+ * 非负、≤ MAX_BADGE_COUNT；小数按 Math.floor 归一，未知字段忽略。 */
 export function validateBadgeRequest(
   raw: unknown,
 ): { ok: true; count: number } | { ok: false; error: string } {
@@ -54,9 +35,8 @@ export function validateBadgeRequest(
   return { ok: true, count: floored };
 }
 
-/** 设置裁决（design 19 §3.7）：badgeEnabled 关闭时强制按 0 处理（清除）——
- *  renderer 始终推真实计数，主进程裁决归零，开关一切立即清零，行为诚实。
- *  重新开启时 pendingBadgeCount 经本函数恢复（main.ts 的 reconcileBadge）。 */
+/** 设置裁决：badgeEnabled 关闭时强制按 0 处理（清除）——renderer 始终推真实计数，
+  * 主进程裁决归零；重新开启时 pendingBadgeCount 经本函数（main.ts 的 reconcileBadge）恢复。 */
 export function adjudicateBadgeCount(
   settings: { badgeEnabled: boolean },
   count: number,
@@ -64,13 +44,10 @@ export function adjudicateBadgeCount(
   return settings.badgeEnabled ? count : 0;
 }
 
-/** 平台能力门（v1）：app.setBadgeCount 只在 macOS（Dock 红气泡）与 Linux
- *  （Unity launcher DBus API；GNOME 的 Dash to Dock 等消费同一 API 的扩展同样
- *  可见）有 OS 可见效果；win32 需要 setOverlayIcon 数字角标图（后续排期）——
- *  门控跳过并 loud 记一次日志，绝不假装成功。平台判断先于 API 可用性判断：
- *  win32 上 setBadgeCount 恒为 undefined，若先查 API 会把设计 23 的专属原因
- *  吞成泛化的「API 缺失」。返回 true 表示已应用到 OS API，不是可见性保证
- *  （GNOME/KDE 无消费方的桌面环境无可见效果——文档化平台限制）。 */
+/** 平台能力门（v1）：setBadgeCount 只在 macOS（Dock）与 Linux（Unity launcher）有 OS 可见
+ * 效果；win32 需要 setOverlayIcon 数字角标图，门控跳过并 loud 记一次日志，绝不假装成功。
+ * 平台判断先于 API 可用性判断（win32 上该 API 恒 undefined，先查 API 会把专属原因吞成
+ * 泛化的 API 缺失）。返回 true 表示已应用到 OS API，不是可见性保证。 */
 export function badgePlatformGate(
   platform: string,
   setBadgeCountAvailable: boolean,

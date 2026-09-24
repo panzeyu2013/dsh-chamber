@@ -1,7 +1,7 @@
 /**
- * Fair, process-local exclusive fence for every operation that can mutate
- * DSH_HOME or runtime-selection metadata. Privileged runtime transactions may
- * wait; renderer-triggered plugin mutations use tryAcquire and fail loud.
+ * Fair, process-local exclusive fence for every operation that can mutate DSH_HOME or
+ * runtime-selection metadata. Privileged runtime transactions may wait; renderer-triggered
+ * plugin mutations use tryAcquire and fail loud.
  */
 export interface OperationLease {
   readonly owner: string

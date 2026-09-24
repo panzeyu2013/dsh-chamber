@@ -1,62 +1,51 @@
 /**
- * Composer behavior layer (design 17 §18.4.4): enter-to-newline and a
- * minimal editability recovery. Anchored on the empirical 0.1.5-alpha.2
- * composer DOM: `div[contenteditable="true"][role="textbox"]
- * [data-composer-input][data-lexical-editor]` — a Lexical editor, NO
- * textarea. Editability has ONE writer in the official component: it flips
- * the `contentEditable` ATTRIBUTE (`contenteditable="true|false"`); the
- * `readonly`/`disabled` attributes are never set.
+ * Composer behavior layer: enter-to-newline and a minimal editability
+ * recovery. Anchored on the official composer DOM:
+ * div[contenteditable="true"][data-composer-input][data-lexical-editor] —
+ * a Lexical editor, NO textarea. Editability has ONE writer in the official
+ * component: it flips the contentEditable ATTRIBUTE
+ * (contenteditable="true|false"); readonly/disabled are never set.
  *
- * All behaviors are meant for the touch tier only — the installer wraps
- * them behind the shared touch-tier media query (the "PC leak" lesson
- * applied to JS, mirroring the stylesheet).
+ * All behaviors are touch-tier only: the installer wraps them behind the
+ * shared touch-tier media query, mirroring the stylesheet.
  */
 
 const COMPOSER_INPUT_SELECTOR = '[data-composer-input]'
-/** The touch tier (design 17 §18.4.2) — shared with the stylesheet tier. */
+/** The touch tier — shared with the stylesheet tier. */
 export const TOUCH_TIER_QUERY = '(max-width: 1023px) and (pointer: coarse)'
-/** The phone tier (design 17 §18.4.2) — shared with the stylesheet tier; the
- *  settings sheet's behavior (settings-sheet.ts) rides THIS tier, not the
- *  touch tier: the stacked sheet it resets is phone-tier CSS only. */
+/** The phone tier — shared with the stylesheet tier. The settings sheet's
+ *  behavior rides THIS tier, not the touch tier: the stacked sheet it resets
+ *  is phone-tier CSS only. */
 export const PHONE_TIER_QUERY = '(max-width: 768px) and (pointer: coarse)'
 
-/** The editability face the gate reads (real `Element` satisfies it). */
+/** The editability face the gate reads (a real Element satisfies it). */
 export interface EditableFace {
   readonly contentEditable?: string
 }
 
 /**
- * Is this the composer's EDITOR — `contenteditable="true"` — rather than the
- * resident node wearing the composer's attributes? The official InputBar keeps
- * ONE div for both states: with no workspace it binds `editor = null`, so
- * `contentEditable` renders false while the div still carries
- * `[data-composer-input]` and, while the workspace-trigger branch is active
- * (`workspaceTrigger = inert && !removed && onRequestWorkspace !== undefined`),
- * `tabIndex=0` plus the official React `onKeyDown`
- * that opens the workspace picker (`onWorkspaceKeyDown`, which accepts Enter or
- * Space). The mobile Enter
- * handler runs at document capture and stops propagation, so intercepting that
- * state swallowed the picker's own keyboard activation (Enter) while inserting
- * nothing — the editability gate keeps the interception on the real editor
- * only. Pure — unit-tested.
+ * Is this the composer's EDITOR (contenteditable="true") rather than the
+ * resident node wearing the composer's attributes? The official InputBar
+ * keeps ONE div for both states: with no workspace editor = null, so
+ * contentEditable renders false while the div still carries
+ * [data-composer-input] and the official onKeyDown that opens the workspace
+ * picker (Enter/Space, tabIndex=0). The mobile Enter handler stops
+ * propagation at capture, so intercepting that state would swallow the
+ * picker's own Enter while inserting nothing. Pure — unit-tested.
  */
 export function isEditableComposer(input: EditableFace | null | undefined): boolean {
   return input !== null && input !== undefined && input.contentEditable === 'true'
 }
 
 /**
- * An open command/model menu with a highlighted option? The official
- * keymap's Enter arbitration picks the highlighted item — the mobile
- * enter-to-newline must NOT swallow that (P2-2). Only intercept when no
- * highlighted menu is open.
- *
- * The trigger menu is the only producer that matters: it keeps focus in the
- * composer and publishes its highlight through `aria-activedescendant` /
- * `role=option[aria-selected]`. A `[role="menu"]
- * [role="menuitem"][aria-selected]` arm could never match — the ui-primitives
- * Menu renders its items WITHOUT `aria-selected` (Menu.tsx) and moves focus
- * into the menu, so a menuitem's Enter never reaches this document handler at
- * all.
+ * An open command/model menu with a highlighted option? The official keymap's
+ * Enter arbitration picks the highlighted item — enter-to-newline must NOT
+ * swallow that. Only intercept when no highlighted menu is open. The trigger
+ * menu is the only producer that matters: it keeps focus in the composer and
+ * publishes its highlight through aria-activedescendant /
+ * role=option[aria-selected] (the ui-primitives Menu renders items without
+ * aria-selected and moves focus into the menu, so a menuitem's Enter never
+ * reaches this document handler anyway).
  */
 function hasHighlightedMenuOpen(): boolean {
   const highlighted = document.querySelector(
@@ -66,10 +55,10 @@ function hasHighlightedMenuOpen(): boolean {
 }
 
 /**
- * Safari composition edge (P2-3): the official keymap keeps a 10ms
- * `recentlyComposing` window after compositionend — Safari's final keydown
- * of a composed input carries neither isComposing nor keyCode 229. Mirror
- * the same window so a finishing Enter is never intercepted.
+ * Safari composition edge: the official keymap keeps a 10ms recentlyComposing
+ * window after compositionend — Safari's final keydown of a composed input
+ * carries neither isComposing nor keyCode 229. Mirror the same window so a
+ * finishing Enter is never intercepted.
  */
 function createComposingGuard(): { isComposingNow(): boolean; attach(): () => void } {
   let lastCompositionEnd = 0
@@ -89,25 +78,16 @@ function createComposingGuard(): { isComposingNow(): boolean; attach(): () => vo
 }
 
 /**
- * Enter sends in the official desktop convention; on a touch keyboard a
- * stray Enter tap fires a message. The mobile convention (surveyed in
- * design 17 §18.4.4 — NOT unanimous: the community splits between
- * Enter=newline and Enter=send with enterkeyhint): Enter inserts a line
- * break, the explicit send affordance is the send button. Composition (IME) input is never
- * intercepted (isComposing AND the legacy keyCode 229 guard, plus the
- * Safari 10ms recently-composing window).
+ * Enter inserts a line break (touch convention; the official desktop default
+ * is Enter=send, which a stray tap would fire). IME composition is never
+ * intercepted (isComposing AND keyCode 229, plus the Safari window).
  *
- * Lexical 0.49 gotcha (H2): the editor's root keydown listener does NOT
- * check defaultPrevented, and the official KEY_ENTER_COMMAND (CRITICAL)
- * fires the submit handler regardless — so preventDefault alone still
- * SENDS. The capture-phase handler must stopPropagation to keep the event
- * away from Lexical's root listener entirely.
- *
- * Scope: only the composer's EDITOR (`contenteditable="true"`) is
- * intercepted. The same div doubles as the no-workspace picker trigger while
- * it renders non-editable, and that state owns Enter through the official
- * React handler — stopping the event there broke the picker instead of
- * inserting a line (see isEditableComposer).
+ * Lexical 0.49 gotcha: its root keydown listener does NOT check
+ * defaultPrevented and KEY_ENTER_COMMAND (CRITICAL) fires submit regardless —
+ * preventDefault alone still SENDS, so the capture-phase handler must
+ * stopPropagation. Scope: only the composer's EDITOR; the same div doubles as
+ * the no-workspace picker trigger while non-editable and owns Enter there via
+ * the official React handler (see isEditableComposer).
  */
 export function installEnterToNewline(): () => void {
   const composing = createComposingGuard()
@@ -116,62 +96,38 @@ export function installEnterToNewline(): () => void {
   const onKeyDown = (event: KeyboardEvent): void => {
     if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return
     if (event.repeat) return
-    // The official ACCELERATED chord is Ctrl/Cmd+Enter — the keymap calls
-    // `submit(event.ctrlKey || event.metaKey)` and the submission policy flips
-    // queue↔steer on it (input/editor/keymap.ts, input/submission-policy.ts).
-    // A newline is not what that gesture means, so it passes through
-    // untouched; the chord only exists with a hardware keyboard, which on
-    // iOS means an iPad with one attached.
+    // The official accelerated submit chord (Ctrl/Cmd+Enter, queue↔steer) is
+    // not a newline gesture — pass it through untouched.
     if (event.ctrlKey || event.metaKey) return
     if (composing.isComposingNow()) return
     const input = event.target instanceof Element ? event.target.closest(COMPOSER_INPUT_SELECTOR) : null
-    // Editability gate: the no-workspace picker state wears the same attribute
-    // with `contenteditable="false"` and owns Enter itself (see
-    // isEditableComposer). Interception without an editor inserts nothing and
-    // would swallow that activation.
+    // Editability gate: the no-workspace picker wears the same attribute as
+    // non-editable and owns Enter itself (see isEditableComposer).
     if (!(input instanceof HTMLElement) || !isEditableComposer(input)) return
-    // A highlighted menu option must keep the official Enter arbitration
-    // Selecting the highlighted item beats inserting a newline.
+    // A highlighted menu option must keep the official Enter arbitration.
     if (hasHighlightedMenuOpen()) return
     event.preventDefault()
     event.stopPropagation()
-    // execCommand is deprecated but remains the only synchronous way to
-    // insert a line break into a Lexical contenteditable from outside its
-    // own input pipeline. WebKit (iOS Safari) does NOT support
-    // insertLineBreak — fall back to insertText('\n') so Enter never
-    // silently dies on the primary mobile platform.
-    // execCommand's boolean result only promises "supported and enabled",
-    // NOT that the edit happened — engines are documented to return false
-    // after actually inserting (and true without inserting). So before
-    // touching the DOM we fingerprint the composer content; the manual
-    // fallback runs ONLY when both commands failed AND the content is
-    // byte-identical to the fingerprint (a false-negative command that
-    // already inserted must never be double-inserted).
+    // execCommand is deprecated but the only synchronous way into a Lexical
+    // contenteditable; WebKit (iOS Safari) lacks insertLineBreak, so fall
+    // back to insertText('\n'). Its boolean only claims "supported", not that
+    // the edit happened, so the manual fallback runs ONLY when both commands
+    // failed AND the fingerprint is unchanged (never double-insert).
     const fingerprint = composerFingerprint(input)
     const ok = document.execCommand('insertLineBreak')
     if (!ok) {
       const fallbackOk = document.execCommand('insertText', false, '\n')
       if (!fallbackOk && fingerprint === composerFingerprint(input) && !insertLineBreakManually(input)) {
-        // Keep the event consumed either way: falling back to the official
-        // Enter=send convention mid-composition would SEND the message
-        // (Lexical ignores defaultPrevented, but the command fires on the
-        // untouched event only when propagation was not stopped — we
-        // already stopped it, so the keystroke is inert). Surface the
-        // failure loudly for real-device triage instead of failing
-        // silently — once per session, never per keystroke.
+        // The event stays consumed (falling back to Enter=send would SEND);
+        // surface the failure once per session, never per keystroke.
         if (!warnedOnce) {
           warnedOnce = true
           console.warn('[dsh-chamber.mobile] composer line-break insertion failed (execCommand + DOM fallback)')
         }
       }
     }
-    // The insert chain bypasses the official keymap pipeline (we stopped the
-    // event before Lexical's submit path), so the pipeline's caret reveal
-    // never runs for this Enter — when the composer has grown past its max
-    // height the new line can land below the visible fold of the composer's
-    // internal scrollport with nobody scrolling it. Reveal is a no-op when
-    // the caret is already visible (and after a fully failed insert there is
-    // nothing to reveal).
+    // This enter bypasses the official pipeline's caret reveal: after a
+    // programmatic insert the new line can land below the scrollport fold.
     revealCaretInComposerScroll(input)
   }
   document.addEventListener('keydown', onKeyDown, true)
@@ -181,8 +137,8 @@ export function installEnterToNewline(): () => void {
   }
 }
 
-/** Cheap content fingerprint of the composer (text + node count): used to
- * tell whether an execCommand that returned false actually inserted. */
+/** Cheap composer fingerprint (text + node count): did a false-returning
+ *  execCommand actually insert? */
 function composerFingerprint(input: Element | null): string {
   if (input === null) return ''
   return `${input.childNodes.length}:${input.textContent ?? ''}`
@@ -190,27 +146,22 @@ function composerFingerprint(input: Element | null): string {
 
 /**
  * Manual contenteditable line-break insertion (Selection/Range, no
- * execCommand): collapses the current selection and inserts a <br> — the
- * standard contenteditable newline representation. Pure DOM fallback for
- * engines where both execCommand forms fail without inserting; returns false
- * when there is no usable selection, when the selection is not inside the
- * composer, when the composer is not editable, or when the DOM insertion
- * throws. NOTE (Lexical caveat): this path bypasses the editor's input
- * pipeline — the <br> is reconciled back into the model by Lexical's root
- * observer, but input-event-driven editor logic and the undo stack do not
- * see the change. It is a best-effort last resort only.
+ * execCommand): collapse the selection and insert a <br>. Returns false
+ * without a usable selection inside an editable composer, or when the DOM
+ * insertion throws. Lexical caveat: this bypasses the editor's input
+ * pipeline — the root observer reconciles the <br> into the model, but
+ * input-event logic and the undo stack do not see it. Last resort only.
  */
 function insertLineBreakManually(input: Element | null): boolean {
   if (input === null || !(input instanceof HTMLElement) || input.contentEditable !== 'true') return false
   const selection = document.getSelection()
   if (selection === null || selection.rangeCount === 0) return false
   const range = selection.getRangeAt(0)
-  // Containment guard: focus and selection can diverge (e.g. after menu
-  // interaction) — never mutate outside the composer.
+  // Focus and selection can diverge (menu interaction): never mutate
+  // outside the composer.
   if (!input.contains(range.commonAncestorContainer)) return false
   // Folding-selection only: a non-collapsed range would delete model text
-  // that Lexical does not read back from the DOM (it would "resurrect" on
-  // the next render).
+  // Lexical does not read back (it would "resurrect" on the next render).
   if (!range.collapsed) return false
   try {
     const br = document.createElement('br')
@@ -227,9 +178,8 @@ function insertLineBreakManually(input: Element | null): boolean {
 
 /**
  * Signed scroll delta (px) that brings the caret rect fully into the
- * composer's internal scrollport ([data-input-scroll]) with a margin.
- * Positive scrolls down, negative scrolls up, 0 = already visible. Pure —
- * unit-tested.
+ * composer's internal scrollport with a margin. Positive scrolls down,
+ * negative up, 0 = already visible. Pure — unit-tested.
  */
 export function caretRevealDelta(
   rectTop: number,
@@ -245,13 +195,9 @@ export function caretRevealDelta(
 
 /**
  * Reveal the caret inside the composer's own scrollport after an Enter
- * newline insert. Native caret scrolling after a programmatic execCommand
- * insert is engine-dependent, so when the composer has grown past its max
- * height ([data-input-scroll] scrollable) the new line can land below the
- * visible fold with nobody scrolling it. No-op when the caret is already
- * visible or the composer has no inner overflow (everything is visible by
- * construction). DOM-bound — the geometry decision (caretRevealDelta) is
- * the unit-tested pure part.
+ * newline insert: native caret scrolling after a programmatic insert is
+ * engine-dependent, so the new line can land below the fold. No-op when the
+ * composer has no inner overflow.
  */
 function revealCaretInComposerScroll(input: Element | null): void {
   if (input === null) return
@@ -262,8 +208,8 @@ function revealCaretInComposerScroll(input: Element | null): void {
   const selection = document.getSelection()
   if (selection === null || selection.rangeCount === 0) return
   const hostRect = scrollHost.getBoundingClientRect()
-  // Collapsed caret rects can be 0×0 at a node boundary (start/end of a
-  // line): fall back to the focus node's own box, then give up.
+  // Collapsed caret rects can be 0×0 at a node boundary: fall back to the
+  // focus node's box, then give up.
   let rect = selection.getRangeAt(0).getBoundingClientRect()
   if (rect.height === 0 && rect.width === 0) {
     const anchor = selection.focusNode
@@ -276,15 +222,12 @@ function revealCaretInComposerScroll(input: Element | null): void {
 }
 
 /** Did an editability mutation flip the composer from non-editable to
- *  editable, while it holds focus? `recordOldValues` carries the observed
- *  attribute before-images (`attributeOldValue`), the tracked-state pair the
- *  in-memory fallback.
+ *  editable while it holds focus? recordOldValues are the attribute
+ *  before-images; the tracked-state pair is the in-memory fallback.
  *
- *  CALLER CONTRACT: pass the before-images of
- *  records whose TARGET is the composer element itself. Passing every
- *  `contenteditable` record of the batch makes any nested Lexical decorator
- *  that flips its own attribute blur+refocus the composer MID-TYPING (the
- *  observer watches the whole document subtree). Pure — unit-tested. */
+ *  CALLER CONTRACT: pass before-images of records whose TARGET is the
+ *  composer itself — every contenteditable record of the batch would let a
+ *  nested Lexical decorator blur+refocus the composer MID-TYPING. Pure. */
 export function isEditabilityFlipToEditable(
   editableNow: boolean,
   focused: boolean,
@@ -296,22 +239,18 @@ export function isEditabilityFlipToEditable(
 }
 
 /**
- * Minimal editability recovery (IME ladder layer 2): when the composer
- * flips back to editable while still focused, the IME may stay closed (a
- * focus event is not re-fired by the official component). Blur + refocus on
- * the flip restores the keyboard. Anchored on the official
- * `contenteditable` attribute (the ONE writer of editability).
+ * Minimal editability recovery (IME ladder layer 2): when the composer flips
+ * back to editable while still focused, the IME may stay closed (no focus
+ * event is re-fired); blur + refocus on the flip restores the keyboard.
  *
- * The flip is read from the mutation's `oldValue` plus a state seeded FROM
- * THE DOM: React writes `contenteditable` on the detached element, so a
- * composer that mounts non-editable produces no record at all — a
- * `lastEditable = true` guess would read the first genuine flip as "no
- * change" and skip the recovery.
+ * The flip is read from the mutation's oldValue plus state seeded FROM THE
+ * DOM: React writes contenteditable on the detached element, so a composer
+ * that mounts non-editable produces no record — a lastEditable = true guess
+ * would read the first genuine flip as "no change" and skip recovery.
  */
-/** MutationObserver options for the editability-recovery channel, exported so
- *  a test can pin the load-bearing option: WITHOUT `attributeOldValue` the
- *  `false -> true` flip is invisible for any composer the observer never saw
- *  mount, and the layer silently does nothing. */
+/** MutationObserver options for the editability-recovery channel: WITHOUT
+ *  attributeOldValue the false -> true flip is invisible for a composer the
+ *  observer never saw mount. */
 export const EDITABILITY_MUTATION_OPTIONS: MutationObserverInit = {
   attributes: true,
   attributeFilter: ['contenteditable'],
@@ -330,8 +269,7 @@ export function installEditabilityRecovery(root: ParentNode = document): () => v
     current = input
     lastEditable = input === null ? null : input.contentEditable === 'true'
   }
-  // Seed from what is on screen, never from an assumption: the composer may
-  // already be mounted (and locked) when this installer runs.
+  // Seed from the DOM, never an assumption: the composer may already be mounted.
   seed(query())
   const observer = new MutationObserver(records => {
     const input = query()
@@ -340,15 +278,13 @@ export function installEditabilityRecovery(root: ParentNode = document): () => v
       return
     }
     const editable = input.contentEditable === 'true'
-    // A FRESH element (session switch, keyed remount) re-seeds instead of
-    // reporting a flip: its previous state was never observed.
+    // A FRESH element re-seeds instead of reporting a flip: never observed.
     const previous = input === current ? lastEditable : editable
     if (isEditabilityFlipToEditable(
       editable,
       input === document.activeElement,
       previous,
-      // Only the composer's OWN attribute flip may recover the keyboard: a
-      // nested decorator's flip would otherwise blur+refocus the composer mid-typing.
+      // Only the composer's OWN flip may recover the keyboard.
       records.filter(record => record.target === input).map(record => record.oldValue),
     )) {
       input.blur()
@@ -360,44 +296,33 @@ export function installEditabilityRecovery(root: ParentNode = document): () => v
   return () => observer.disconnect()
 }
 
-/** The keyboard is considered open when the visual viewport loses more than
- *  120px AND 20% of the layout viewport height (community consensus metric,
- *  design 17 §18.4.4). Pure function — unit-testable. */
+/** Keyboard open when the visual viewport loses more than 120px AND 20% of
+ *  the layout viewport height (browser chrome stays below both). Pure. */
 export function isKeyboardOpen(layoutHeight: number, visualHeight: number): boolean {
   const gap = layoutHeight - visualHeight
   return gap > 120 && gap > layoutHeight * 0.2
 }
 
 /**
- * IME ladder layers 1/3/4 (design 17 §18.4.4 — the five-layer ladder,
- * completed in P1.5):
- *   1. programmatic-focus drop loop — a focus that did NOT come from a
- *      pointer gesture is dropped (blur) and re-dropped for up to 12 rAF
- *      frames (the official React submit effect re-focuses programmatically,
- *      which leaves the IME closed on Android WebView). Mobile-navigation
- *      gestures (drawer rows, session header breadcrumbs) are treated like
- *      programmatic focus: the official InputBar returns focus to the box on
- *      session change, and on iOS that would pop the keyboard right after a
- *      drawer-driven switch — see isNavigationGestureTarget below.
- *   3. pointerup refocus — a tap INSIDE the composer with the keyboard
- *      closed re-focuses within the same gesture (focus({preventScroll})
- *      after pointerup is a user gesture, so the IME opens);
- *   4. visualViewport keyboard detection — feeds layer 3's guard and the
- *      keyboard visibility state.
- * Layer 2 (editability flip) lives in installEditabilityRecovery; layer 5
- * (composer visibility guard) lives in the stylesheet
- * (interactive-widget=resizes-content where the engine honors it) +
- * installComposerVisibilityGuard below (the measured-overlap fallback).
+ * IME ladder layers 1/3/4 (layer 2 is installEditabilityRecovery; layer 5 is
+ * the stylesheet arm plus installComposerVisibilityGuard):
+ *   1. programmatic-focus drop loop — a focus that did not come from a
+ *      pointer gesture is blurred and re-dropped for up to 12 rAF frames
+ *      (the official submit effect re-focuses programmatically, leaving the
+ *      IME closed on Android WebView); navigation gestures classify like
+ *      programmatic focus (isNavigationGestureTarget).
+ *   3. pointerup refocus — a tap inside the composer re-focuses within the
+ *      gesture so the IME opens;
+ *   4. visualViewport keyboard detection (feeds layer 3's guard and state).
  */
 
 /**
- * Gesture regions that are MOBILE NAVIGATION, not typing intent: anything
- * inside the sidebar drawer (its rows are the session switcher) and inside
- * the conversation session header (crumbs/breadcrumbs navigate sessions;
- * the lineage chips open subagent catalogs). A programmatic composer
- * refocus that follows a pointer gesture in these regions (the official
- * InputBar returns focus to the box on session change) must be dropped —
- * otherwise iOS pops the keyboard right after every drawer switch.
+ * Gesture regions that are MOBILE NAVIGATION, not typing intent: the sidebar
+ * drawer (its rows switch sessions) and the conversation session header
+ * (crumbs navigate sessions; lineage chips open subagent catalogs). A
+ * programmatic composer refocus that follows a pointer gesture in these
+ * regions (the official InputBar returns focus to the box on session change)
+ * must be dropped, or iOS pops the keyboard right after every switch.
  */
 export const NAV_GESTURE_SELECTOR = '[data-mobile-role="sidebar"], [data-slot="conversation.session.header"]'
 
@@ -407,13 +332,9 @@ export interface ClosestLike {
 }
 
 /** Pure decision: did this pointer gesture start in a navigation region?
- *  Layer 1 (installImeLadder) does not read this directly — navigation
- *  regions are never inside the composer seat, so nav gestures classify as
- *  non-typing by construction (the seat test alone decides typing intent).
- *  Kept exported as the semantic name for
- *  drawer/session-header gestures: picker/menu and message-area gestures
- *  are neither navigation NOR typing (a message-area scroll must neither
- *  arm typing intent nor cancel a pending navigation drop). */
+ *  Kept exported as the semantic name for drawer/session-header gestures —
+ *  layer 1 does not read it (navigation regions are never inside the
+ *  composer seat, so the seat test alone classifies typing intent). */
 export function isNavigationGestureTarget(target: ClosestLike | null): boolean {
   return target !== null && target.closest(NAV_GESTURE_SELECTOR) !== null
 }
@@ -425,13 +346,10 @@ export interface ImeLadder {
 
 export function installImeLadder(root: ParentNode = document): ImeLadder {
   let lastPointerDown = 0
-  /** The gesture that produced the last pointerdown was TYPING INTENT — it
-   *  started INSIDE the composer seat. This is layer 1's gesture test: a
-   *  programmatic composer refocus after a non-seat gesture (a sidebar
-   *  session switch — the official InputBar returns focus to the box on
-   *  session change; but also any scroll/tap in the message area) must NOT
-   *  count as user-intended typing: it would pop the iOS keyboard right
-   *  after navigation. Only a seat pointerdown is typing intent. */
+  /** The last pointerdown was TYPING INTENT — it started INSIDE the composer
+   *  seat. Layer 1's gesture test: a programmatic refocus after a non-seat
+   *  gesture (sidebar switch, message-area scroll/tap) must NOT count — it
+   *  would pop the iOS keyboard right after navigation. */
   let lastPointerDownInSeat = false
   let keyboardOpen = false
 
@@ -441,7 +359,7 @@ export function installImeLadder(root: ParentNode = document): ImeLadder {
   }
 
   /** Did this pointerdown land inside the composer seat (the input plus its
-   *  `[data-composer-seat]` wrapper — send button etc.)? */
+   *  [data-composer-seat] wrapper)? */
   const gestureInSeat = (event: { target: EventTarget | null }): boolean => {
     const input = root.querySelector(COMPOSER_INPUT_SELECTOR)
     if (!(input instanceof Element)) return false
@@ -451,18 +369,12 @@ export function installImeLadder(root: ParentNode = document): ImeLadder {
   }
 
   const onPointerDown = (event: PointerEvent): void => {
-    // Every pointer type is tracked (mouse included): on coarse-primary
-    // devices with an attached mouse/hardware keyboard a real click into
-    // the composer is typing intent and must not be dropped. Navigation
-    // gestures (drawer rows, header crumbs — isNavigationGestureTarget)
-    // are never inside the seat, so they classify as non-typing by
-    // construction.
+    // Every pointer type counts (mouse included): on a coarse-primary device
+    // a hardware-mouse click into the composer is still typing intent.
     lastPointerDown = Date.now()
-    // Typing intent requires the pointerdown INSIDE the composer seat. A
-    // mid-window pointerdown in the message area (a scroll, a tap on a
-    // bubble) is NEITHER navigation NOR typing: it must not reclassify the
-    // pending navigation refocus as intended typing, and it must not cancel
-    // an in-flight drop loop (切会 + 500ms 内滚动仍弹键盘).
+    // Typing intent requires the seat. A mid-window message-area pointerdown
+    // is NEITHER navigation NOR typing: it must not reclassify a pending
+    // navigation refocus, nor cancel an in-flight drop loop.
     lastPointerDownInSeat = gestureInSeat(event)
   }
 
@@ -470,22 +382,16 @@ export function installImeLadder(root: ParentNode = document): ImeLadder {
     const input = root.querySelector(COMPOSER_INPUT_SELECTOR)
     if (!(input instanceof HTMLElement)) return
     if (event.target !== input && !input.contains(event.target as Node)) return
-    // Layer 1: a recent SEAT gesture is user-intended typing (the tap that
-    // put the caret there). Programmatic refocus after anything else (a
-    // navigation gesture, or a non-seat pointerdown such as a message-area
-    // scroll inside the navigation window) is dropped — and kept dropping
-    // for 12 rAF frames (the official submit effect re-focuses within the
-    // commit). A fresh seat pointerdown cancels the drop loop (the new tap
-    // must win).
+    // Layer 1: a recent SEAT gesture is typing intent. Anything else is
+    // dropped for 12 rAF frames (the official submit effect re-focuses within
+    // the commit); a fresh seat pointerdown cancels the drop loop.
     const fromGesture = Date.now() - lastPointerDown < 500 && lastPointerDownInSeat
     if (fromGesture) return
     let frames = 0
     let cancelled = false
     const onGestureCancel = (event: PointerEvent): void => {
-      // Only a NEW typing gesture (composer seat pointerdown) cancels the
-      // drop loop — a neutral pointerdown (message-area scroll mid-window)
-      // must not interrupt the ongoing drop of a navigation refocus, and a
-      // navigation gesture starts its own drop instead.
+      // Only a NEW typing gesture cancels the drop loop — a neutral
+      // message-area pointerdown must not interrupt a navigation drop.
       if (gestureInSeat(event)) cancelled = true
     }
     document.addEventListener('pointerdown', onGestureCancel, true)
@@ -543,129 +449,61 @@ export function installImeLadder(root: ParentNode = document): ImeLadder {
 /**
  * Composer visibility guard (IME ladder layer 5).
  *
- * WHY NOT INFER THE KEYBOARD (measured on the Chrome 152 rig with the real
- * upstream CSS + this bundle, 390x844, keyboard top at 508): inferring it from
- * `window.innerHeight` vs the visual viewport and writing the lift BOTH as the
- * seat's sticky `bottom` AND as a scrollport `padding-bottom` lifts the seat
- * TWICE — the scrollport is the sticky containing block, so its own padding
- * moves the sticky threshold up by the same amount; measured seat [40..140]
- * where [392..492] was intended — the composer 368px above the keyboard. And
- * because an arm decision that is a heuristic fed by events engines do not
- * guarantee leaves the composer BEHIND the keyboard when a visualViewport
- * event is missing/late (measured `kbd=false, covered=+336` with the keyboard
- * open).
- *
- * THE MEASURED FORM: do not infer the keyboard — measure the overlap.
- * `covered = scrollport.getBoundingClientRect().bottom - (vv.offsetTop +
- * vv.height)`, both in layout coordinates at any pan/zoom, and the scrollport's
- * border box is flex-sized (ui-layout/conversation CSS: `height:100%` +
- * `flex:1; min-height:0`), so it is an ACTUATOR INVARIANT: our own padding /
- * scrollTop / seat-inset writes cannot move it and the loop has a fixed point
- * instead of oscillating. One actuator only — the seat's sticky `bottom`
- * (styles.ts); the scroll range the tail needs comes from an in-flow spacer
- * inserted just before the seat, which does NOT shrink the sticky containing
- * block — no scrollport padding arm is used.
- *
- * Guards: hysteresis (arm at >= KBD_ARM_PX, release below KBD_DISARM_PX) keeps
- * browser-chrome overlap from micro-lifting the seat; typing intent (editable
- * focus / composer selection / grace window) keeps the guard off fields that
- * are not the composer. Triggers: visualViewport resize/scroll, window resize,
- * focusin/focusout, visibilitychange, a `[data-phase]` observer (the sticky
- * seat only exists in the active phase) and a BOUNDED poll while an editable is
- * focused, so an engine that delivers no viewport event still converges.
- * Every outcome is written to the frame as `data-mobile-kbd` (applied px) and
- * `data-mobile-kbd-state` (armed | idle | no-seat | no-frame | still-covered)
- * — the guard cannot fail silently.
- *
- * Verdicts are bounded: after writing the offset the guard re-measures at
- * most KBD_MAX_VERIFY_STEPS times (KBD_VERIFY_SLACK_PX tolerance) and then
- * reports `still-covered` instead of ramping up forever if an engine ignores
- * the sticky inset. The official chat already re-glues the OUTER scroll on
- * seat resize (ui-chat's ResizeObserver follows `[data-composer-seat]`), so
- * this installer owns only the keyboard-driven geometry change.
- *
- * Why the measurement over inference: the arm signal
- * (`innerHeight` vs the visual viewport = "keyboard open") is a guess about a
- * field the plugin does not own, and it needs extra guards against its own
- * false positives — a pinch/FOCUS zoom shrinks the visual viewport with no
- * keyboard (the plugin deliberately keeps user-scalable for WCAG 1.4.4), and a
- * keyboard can belong to a field that is not the composer (settings sheet,
- * question cards). The measured overlap needs no keyboard inference at all:
- * "the conversation's bottom edge is below the visible bottom" is exactly the
- * property the guard must fix, whatever caused it, and it is only actionable
- * while the composer is the focused field — so the TYPE-GATED intent check
- * stays (editable focus / composer selection / grace window, plus
- * composer-only under zoom), and no keyboard heuristic is used on this path.
- *
- * Zoom policy: a blanket scale veto is WRONG — iOS
- * focus-zooms on the drawer's 13px search field (ui-workspace:1187) and the
- * page stays zoomed, so vetoing every zoomed state would leave the composer
- * behind the keyboard for the rest of the session. With the measured overlap
- * the zoom case needs no special branch: the pan/zoom is already inside
- * `vv.offsetTop + vv.height`, so the value is exactly how far the scrollport's
- * bottom edge exceeds the visible bottom (measured: 2x zoom → 400px lift,
- * 18px dead band). Non-composer fields keep the veto — panning a zoomed page
- * must not drive the offset. The focus-zoom trigger itself is eliminated at
- * the source (styles.ts gives the drawer's fields the same 16px floor as the
- * composer/dialogs).
- *
- * Re-sync entries beyond visualViewport events: window resize (rotation /
- * browser chrome), visibilitychange (mobile browsers do not deliver the
- * missed visualViewport events while the tab is suspended), focusin (a seat
- * remount — session switch or reconnect settle — re-arms without a viewport
- * event) and focusout (a blur starts the grace window at the moment it
- * happens, not at the last focusin). Arming is IDEMPOTENT per frame element:
- * a renderer remount replaces the AppFrame while the keyboard stays open with
- * unchanged geometry, so the numeric `applied` short-circuit alone would
- * leave the new frame unarmed and the composer behind the keyboard.
+ * Do not infer the keyboard — measure the overlap: the scrollport's bottom
+ * edge minus the visible bottom (vv.offsetTop + vv.height), in layout
+ * coordinates under pan/zoom. The scrollport's flex-sized border box is an
+ * ACTUATOR INVARIANT (our writes cannot move it), so the loop has a fixed
+ * point. ONE actuator: the seat's sticky bottom plus an in-flow spacer before
+ * the seat — never scrollport padding, which shrinks the sticky containing
+ * block and double-lifts the seat. Guards: hysteresis and typing intent
+ * (editable focus / composer selection / grace window). Triggers:
+ * visualViewport resize/scroll, window resize, focusin/out, visibilitychange,
+ * [data-phase] observer and a bounded poll while an editable is focused (mobile
+ * browsers suspend the missed visualViewport events, so visibilitychange and
+ * focus must re-sync).
+ * Outcomes are written to data-mobile-kbd / data-mobile-kbd-state (armed |
+ * idle | no-seat | no-frame | still-covered); corrections are bounded
+ * (KBD_MAX_VERIFY_STEPS, then still-covered), never a ramp. The zoom veto
+ * stays for non-composer fields (panning a zoomed page is inert).
  */
 export const KBD_OFFSET_QUANTUM_PX = 16
-/** Extra lift above the raw covered height (keeps the seat clear of the
- *  keyboard top even when the engine's final geometry lands mid-step). */
+/** Extra lift above the raw covered height so the seat stays clear of the
+ *  keyboard top. */
 export const KBD_OFFSET_HEADROOM_PX = 8
 /** State attribute toggled on the stamped frame (plugin-owned surface). */
 export const MOBILE_KBD_ATTR = 'data-mobile-kbd'
 /** Offset custom property set on the stamped frame (styles.ts consumes it). */
 export const MOBILE_KBD_VAR = '--chamber-mobile-kbd-offset'
-/** Recently-focused-editable grace window: a blur (or an editability flip
- *  during submit) must keep the compensation armed through the
- *  keyboard-close animation and the editability-recovery refocus instead of
- *  dropping the seat mid-transition. */
+/** Recently-focused-editable grace window: keeps the compensation armed
+ *  through the keyboard-close animation and the editability-recovery refocus. */
 export const KBD_EDITABLE_FOCUS_GRACE_MS = 1_200
-/** Arm threshold: the overlap must be clearly keyboard-scale before the guard
- *  lifts the composer. Chrome/Firefox bottom-bar overlap sits well below this,
- *  so browser chrome alone never micro-lifts the seat (measured: a 60px
- *  overlap stays idle). */
+/** Arm threshold: the overlap must be clearly keyboard-scale before lifting;
+ *  browser-chrome overlap stays well below it (a 60px overlap stays idle). */
 export const KBD_ARM_PX = 96
 /** Release threshold, below the arm threshold on purpose (hysteresis): once
- *  armed the lift is held until the overlap is effectively gone, so a
- *  sliding keyboard (or a 1-2px wobble) cannot flap the seat. */
+ *  armed the lift is held until the overlap is effectively gone. */
 export const KBD_DISARM_PX = 72
-/** Post-write acceptance tolerance: how far the seat's bottom may still sit
- *  below the visible bottom before the guard keeps correcting. */
+/** Post-write acceptance tolerance before the guard keeps correcting. */
 export const KBD_VERIFY_SLACK_PX = 24
-/** Bounded post-write corrections per sync (never an unbounded ramp: an engine
- *  that ignores the sticky inset must be REPORTED, not chased). */
+/** Bounded post-write corrections per sync: an engine that ignores the sticky
+ *  inset must be REPORTED, not chased. */
 export const KBD_MAX_VERIFY_STEPS = 2
-/** Bounded poll cadence/budget while an editable holds focus. Engines that
- *  deliver no visualViewport event on keyboard open (Android WebView) are
- *  covered by this, and it stops as soon as focus leaves. */
+/** Bounded poll cadence/budget while an editable holds focus (covers engines
+ *  that deliver no visualViewport event). */
 export const KBD_POLL_MS = 250
 export const KBD_POLL_BUDGET_MS = 4_000
 /** Diagnosis surface (plugin-owned attribute, never an official one). */
 export const MOBILE_KBD_STATE_ATTR = 'data-mobile-kbd-state'
 /** The in-flow spacer that supplies the scroll range above the raised seat
- *  (replaces the scrollport padding arm, see the section doc). */
+ *  (replaces the scrollport padding arm, see above). */
 export const MOBILE_KBD_SPACER_ATTR = 'data-mobile-kbd-spacer'
-/** The active conversation's sticky composer seat (phase guard: hero/blank
- *  seats are not sticky — only an active session has the bottom-pinned
- *  seat the keyboard can cover). */
+/** The active conversation's sticky composer seat (hero/blank seats are not
+ *  sticky — only an active session has the seat the keyboard can cover). */
 const ACTIVE_SEAT_SELECTOR = '[data-phase="active"] [data-composer-seat]'
 
-/** Hysteresis + quantization for the visibility guard: arm only when the
- *  measured overlap is keyboard-scale, hold while armed until it is
- *  effectively gone, then quantize (ceil + headroom) so the seat never lands
- *  under the keyboard top. Pure — unit-tested. */
+/** Hysteresis + quantization: arm only at keyboard-scale overlap, hold while
+ *  armed, then ceil + headroom so the seat never lands under the keyboard
+ *  top. Pure — unit-tested. */
 export function kbdLiftTarget(
   covered: number,
   armed: boolean,
@@ -676,12 +514,10 @@ export function kbdLiftTarget(
   return nextKbdOffset(covered)
 }
 
-/** Quantized (ceil) offset: applied in steps while the keyboard slides,
- *  always ≥ covered + headroom so the seat never sits under the keyboard
- *  top. 0 when nothing is covered. 16px (cross-check: the 48px step left an
- *  8-55px dead band above the keyboard — iPhone 14 48px, SE 45px, Gboard
- *  44px; 16px leaves 8-23px, and visualViewport events are frame-coalesced,
- *  so the extra steps cost nothing measurable). Pure — unit-tested. */
+/** Quantized (ceil) offset: ≥ covered + headroom, so the seat never sits
+ *  under the keyboard top; 0 when nothing is covered. 16px quantum: a 48px
+ *  step left an 8-55px dead band (visualViewport events are frame-coalesced,
+ *  so extra steps cost nothing). Pure — unit-tested. */
 export function nextKbdOffset(
   covered: number,
   quantum: number = KBD_OFFSET_QUANTUM_PX,
@@ -699,8 +535,8 @@ export function isAtScrollEnd(scrollTop: number, scrollHeight: number, clientHei
 }
 
 /** Does this focus target open a soft keyboard? Covers the Lexical composer
- *  (contenteditable), plain inputs/textareas (settings sheet, question cards)
- *  — the keyboard's owner, whatever the field. */
+ *  (contenteditable) and plain inputs/textareas (settings sheet, question
+ *  cards) — the keyboard's owner, whatever the field. */
 function isEditableFocus(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
   if (target.isContentEditable) return true
@@ -709,9 +545,8 @@ function isEditableFocus(target: EventTarget | null): boolean {
 }
 
 /** Is the caret inside the composer's editor/seat? Used as the zoom-policy
- *  discriminator and as a fallback while the official editor flips
- *  `contenteditable` off during submit (`live && !locked && !machineBusy`,
- *  ui-conversation:15371) — the DOM selection survives that flip. */
+ *  discriminator and as a fallback while the editor flips contenteditable off
+ *  during submit (the DOM selection survives that flip). */
 function isComposerSelection(): boolean {
   const selection = document.getSelection()
   const anchor = selection?.anchorNode ?? null
@@ -725,13 +560,12 @@ export function installComposerVisibilityGuard(root: ParentNode = document): () 
   let applied = 0
   /** The measured edge moved WITH one of our own writes (see applyLift). */
   let carrierPushed = false
-  /** The frame currently carrying the offset (teardown handle: the frame
-   *  persists across seat remounts, so disarm must target the element that
-   *  actually carries the attribute). */
+  /** The frame currently carrying the offset (teardown handle: the frame is
+   *  replaced by renderer remounts, so disarm must target the live element). */
   let armedFrame: HTMLElement | null = null
   /** The in-flow spacer that gives the conversation its scroll range above
    *  the raised seat (a scrollport padding arm would shrink the sticky
-   *  containing block and double-lift the seat — see the section doc). */
+   *  containing block and double-lift the seat). */
   let spacer: HTMLElement | null = null
   let lastEditableFocusAt = 0
   let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -759,11 +593,8 @@ export function installComposerVisibilityGuard(root: ParentNode = document): () 
     spacer = null
   }
 
-  /** The diagnosis surface is torn down with the actuator: a disposed guard
-   *  (or one that has just gone idle) must not leave `data-mobile-kbd-state`
-   *  behind, on the frame OR on <html> — the acceptance walkthrough reads
-   *  both, and a stale 'armed' after dispose reported a live offset that no
-   *  longer existed. */
+  /** The diagnosis surface is torn down with the actuator: a disposed or
+   *  idle guard must not leave a stale data-mobile-kbd-state behind. */
   const clearState = (): void => {
     for (const frame of root.querySelectorAll('[data-mobile-frame]')) {
       if (frame instanceof HTMLElement) frame.removeAttribute(MOBILE_KBD_STATE_ATTR)
@@ -783,19 +614,17 @@ export function installComposerVisibilityGuard(root: ParentNode = document): () 
     carrierPushed = false
   }
 
-  /** The keyboard's owner: an editable element focused right now, a caret
-   *  still inside the composer (the editor flips `contenteditable` off during
-   *  submit without blurring), or either of those within the grace window
-   *  (blur / session-switch refocus). */
+  /** The keyboard's owner: an editable focused now, a caret still inside the
+   *  composer (the editor flips contenteditable off during submit without
+   *  blurring), or either within the grace window. */
   const editableFocused = (): boolean => {
     if (isEditableFocus(document.activeElement)) return true
     if (isComposerSelection()) return true
     return Date.now() - lastEditableFocusAt < KBD_EDITABLE_FOCUS_GRACE_MS
   }
 
-  /** Is the field the COMPOSER's? Only this case is served: a keyboard that
-   *  belongs to the settings sheet or a question card must not move the seat
-   *  (and panning a zoomed page must not drive the offset). */
+  /** Is the field the COMPOSER's? A keyboard belonging to the settings sheet
+   *  or a question card must not move the seat. */
   const composerFocused = (): boolean => {
     const active = document.activeElement
     if (active instanceof Element
@@ -805,14 +634,10 @@ export function installComposerVisibilityGuard(root: ParentNode = document): () 
     return isComposerSelection()
   }
 
-  /** The active conversation's sticky seat. Only an ACTIVE session has the
-   *  bottom-pinned seat the keyboard can cover (hero/blank seats are not
-   *  sticky, and `settling` hides this one). Single-shell deployment: one
-   *  seat — but the phase attribute is NOT unique: a second, hidden
-   *  `[data-phase="active"]` root earlier in DOM order would win the
-   *  first-match query and serve a seat whose scrollport is zero-sized while
-   *  the real seat stayed covered. A candidate is only committed when its
-   *  scrollport is actually laid out. */
+  /** The active conversation's sticky seat, committed only when its
+   *  scrollport is actually laid out: [data-phase="active"] is NOT unique, and
+   *  a hidden earlier match would serve a zero-sized scrollport while the real
+   *  seat stayed covered. */
   const seatOf = (): Element | null => {
     for (const candidate of root.querySelectorAll(ACTIVE_SEAT_SELECTOR)) {
       if (!(candidate instanceof Element)) continue
@@ -826,17 +651,11 @@ export function installComposerVisibilityGuard(root: ParentNode = document): () 
   }
 
   /** THE MEASUREMENT: how far the conversation scrollport's bottom edge sits
-   *  below the visible bottom edge, in layout coordinates. The scrollport's
-   *  border box is flex-sized (never content- or padding-driven), so this
-   *  value is invariant under the guard's own writes — the loop has a fixed
-   *  point instead of oscillating. `null` when the scrollport is absent.
-   *
-   *  PREMISE: "flex-sized" is the upstream CSS contract
-   *  (`.root{height:100%}` → `.body{flex:1}` → `.scrollBody{flex:1;overflow-y:auto}`),
-   *  not something this guard can enforce: a carrier that answers a lift with
-   *  its own growth inflates this measurement (synthetic model: 352 → 5984px
-   *  over the poll window). `applyLift` therefore probes the edge across the
-   *  write itself and latches (`carrierPushed`) instead of trusting the premise. */
+   *  below the visible bottom, in layout coordinates. The scrollport's border
+   *  box is flex-sized upstream, so the value is invariant under the guard's
+   *  own writes. null when the scrollport is absent. That premise is not ours
+   *  to enforce, so applyLift probes the edge across the write and latches
+   *  (carrierPushed) instead of trusting it. */
   const coveredOf = (seat: Element): number | null => {
     const scroller = seat.closest('[data-conversation-scroll]')
     if (!(scroller instanceof HTMLElement)) return null
@@ -854,9 +673,8 @@ export function installComposerVisibilityGuard(root: ParentNode = document): () 
     if (node !== null) phaseObserver.observe(node, { attributes: true, attributeFilter: ['data-phase'] })
   }
 
-  /** Grow the flow above the seat by the lift, without touching the
-   *  scrollport's own box (a scrollport padding would shrink the sticky
-   *  containing block — the measured double-lift defect). */
+  /** Grow the flow above the seat without touching the scrollport's own box
+   *  (padding would shrink the sticky containing block — the double-lift). */
   const ensureSpacer = (seat: Element, height: number): void => {
     if (spacer === null || !spacer.isConnected) {
       spacer = document.createElement('div')
@@ -865,8 +683,7 @@ export function installComposerVisibilityGuard(root: ParentNode = document): () 
       seat.parentElement?.insertBefore(spacer, seat)
     } else if (spacer.nextElementSibling !== seat) {
       // The renderer rebuilds the seat list on remount: keep the spacer
-      // immediately before the seat instead of leaving it orphaned between
-      // other children (the offset would otherwise space the wrong gap).
+      // immediately before the seat instead of orphaning it.
       seat.parentElement?.insertBefore(spacer, seat)
     }
     spacer.style.height = `${height}px`
@@ -900,23 +717,16 @@ export function installComposerVisibilityGuard(root: ParentNode = document): () 
       return
     }
     // A re-arm onto a DIFFERENT frame must clean the previous one: the old
-    // element keeps its plugin-owned attribute/custom property forever
-    // otherwise (a renderer remount replaces the AppFrame while the keyboard
-    // stays open).
+    // element would keep its plugin-owned attribute/custom property forever.
     if (armedFrame !== null && armedFrame !== frame) disarm()
     const scroller = seat.closest('[data-conversation-scroll]')
     const wasAtEnd = scroller instanceof HTMLElement
       && isAtScrollEnd(scroller.scrollTop, scroller.scrollHeight, scroller.clientHeight)
-    /** ONE writer for the whole actuator: the frame attribute (which activates
-     *  the stylesheet arm), the custom property and the spacer height are
-     *  never allowed to disagree — the attribute must not be stamped from the
-     *  pre-verify target while the property/spacer ends higher (measured:
-     *  attr=352 / var=1056 / spacer=1056 with an engine that ignores the
-     *  inset). */
+    /** ONE writer for the actuator: attribute, custom property and spacer
+     *  height are never allowed to disagree. */
     const applyLift = (value: number): void => {
-      // Self-push probe: read the measured edge immediately
-      // before and after THIS write. The window is synchronous, so movement
-      // inside it is caused by us — a viewport-driven move lands outside it.
+      // Self-push probe: read the measured edge immediately before and after
+      // THIS write; the window is synchronous, so movement inside it is ours.
       const node = scroller instanceof HTMLElement ? scroller : null
       const before = node === null ? null : node.getBoundingClientRect().bottom
       const increment = value - applied
@@ -930,23 +740,16 @@ export function installComposerVisibilityGuard(root: ParentNode = document): () 
       applied = value
     }
     armedFrame = frame
-    // A latched carrier never grows again (a shrinking requirement still
-    // releases): the residue is REPORTED as `still-covered`, not chased.
+    // A latched carrier never grows again; the residue is REPORTED, not chased.
     let lift = carrierPushed && target > applied ? applied : target
     applyLift(lift)
-    // Was the conversation pinned to its end before this step? If yes, keep
-    // the message tail glued above the raised seat: the spacer grows the
-    // scroll range below the content, so the pinned scrollport must follow.
+    // If the conversation was pinned to its end, keep the tail glued above
+    // the raised seat (the spacer grows the range below the content).
     if (wasAtEnd && scroller instanceof HTMLElement) scroller.scrollTop += lift
-    // BOUNDED verification: an engine that ignores the sticky inset, or a
-    // geometry that landed short, is corrected at most
-    // KBD_MAX_VERIFY_STEPS times and then REPORTED — never chased. The
-    // residual is measured AFTER the lift was applied, so it is a fresh TOTAL
-    // requirement: subtracting the already-applied lift turns it into the
-    // missing delta. A residual the applied lift already covers therefore
-    // adds nothing — an engine that ignores the sticky inset can never
-    // compound the spacer past the lift the measured overlap called for
-    // (measured 3x overshoot before this).
+    // BOUNDED verification: an engine that ignores the sticky inset or lands
+    // short is corrected at most KBD_MAX_VERIFY_STEPS times, then REPORTED —
+    // the residual is a fresh TOTAL, not an added delta, so the spacer cannot
+    // compound past the measured overlap.
     let steps = 0
     while (!carrierPushed && steps < KBD_MAX_VERIFY_STEPS) {
       const residual = seat.getBoundingClientRect().bottom - visibleBottom()
@@ -958,25 +761,16 @@ export function installComposerVisibilityGuard(root: ParentNode = document): () 
       if (wasAtEnd && scroller instanceof HTMLElement) scroller.scrollTop += extra
       steps += 1
     }
-    // FINAL-lift write: after the loop the attribute carries the same value as
-    // the custom property and the spacer.
+    // FINAL-lift write: attribute, property and spacer all carry this value.
     applyLift(lift)
     const residual = seat.getBoundingClientRect().bottom - visibleBottom()
     setState(residual > KBD_VERIFY_SLACK_PX ? 'still-covered' : 'armed')
   }
 
   /** Bounded poll while an editable holds focus: engines that deliver NO
-   *  visualViewport event on keyboard open (Android WebView) still converge,
-   *  and the poll stops on budget expiry or when focus leaves the editable.
-   *
-   *  The budget is PER FOCUS ARM, never per event: the deadline is stamped
-   *  once when the interval is created and a running interval is never
-   *  extended. Document-wide pointerdown/focusin churn must not reset
-   *  `pollUntil` before the early return: 4Hz synthetic taps would otherwise
-   *  keep the interval alive across the whole 4s window and beyond (measured:
-   *  it never cleared over 6.5s), turning the convergence aid into a permanent
-   *  250ms sync loop. Re-arming is refused while the timer runs; a pointerdown only
-   *  re-syncs once and focusin starts the next genuine focus episode. */
+   *  visualViewport event still converge; the budget is PER FOCUS ARM (the
+   *  deadline is stamped once, a running interval is never extended), so
+   *  pointer/focus churn cannot turn it into a permanent 250ms sync loop. */
   const startPoll = (): void => {
     if (pollTimer !== null) return
     pollUntil = Date.now() + KBD_POLL_BUDGET_MS
@@ -993,22 +787,18 @@ export function installComposerVisibilityGuard(root: ParentNode = document): () 
   const onViewportChange = (): void => sync()
   const onFocusIn = (event: FocusEvent): void => {
     if (isEditableFocus(event.target)) lastEditableFocusAt = Date.now()
-    // A seat remount (session switch / reconnect settle) re-arms here even
-    // when no visualViewport event follows.
+    // A seat remount re-arms here even when no visualViewport event follows.
     startPoll()
     sync()
   }
   const onFocusOut = (event: FocusEvent): void => {
-    // Stamp the grace window at the MOMENT of the blur — the editor flipping
-    // `contenteditable` off during submit, a keepFocus-less control taking
-    // focus and the keyboard-close animation all start here, not at the last
-    // focusin.
+    // Stamp the grace window at the MOMENT of the blur — the editability
+    // flip, a control taking focus and the keyboard-close animation start here.
     if (isEditableFocus(event.target)) lastEditableFocusAt = Date.now()
   }
   const onPointerDown = (): void => {
     // A tap can raise the keyboard with no viewport event: re-sync ONCE. The
-    // poll budget belongs to the focus episode (onFocusIn) — a pointerdown
-    // must never re-arm or extend it.
+    // poll budget belongs to the focus episode — never re-arm or extend it.
     sync()
   }
   const onVisibility = (): void => {
@@ -1040,18 +830,16 @@ export function installComposerVisibilityGuard(root: ParentNode = document): () 
 }
 
 /**
- * Composer self-heal (design 17 §18.4.4): if the composer stays
- * non-editable INSIDE A SUBMISSION WINDOW for BUSY_STUCK_MS while the user
- * actively taps it, force a recovery (blur → restore contenteditable →
- * refocus). The official component is the writer of editability, so this only
- * fires on a genuine stuck submit; a failed recovery leaves the DOM untouched.
+ * Composer self-heal: if the composer stays non-editable INSIDE A SUBMISSION
+ * WINDOW for BUSY_STUCK_MS while the user taps it, force a recovery (blur →
+ * restore contenteditable → refocus). The official component is editability's
+ * only writer, so this fires on a genuine stuck submit; a failed recovery
+ * leaves the DOM untouched.
  */
 export const BUSY_STUCK_MS = 30_000
 
-/** The composer's own phase values that mean a submission is IN FLIGHT — the
- *  official input machine's `adjudicating` / `submitting` (`input/machine.ts`,
- *  the same pair `machineBusy` is built from), published by the composer node
- *  as `data-phase` (its other values are `inert`, `plain` and `claimed`). */
+/** The composer data-phase values that mean a submission is IN FLIGHT
+ *  (official input machine: adjudicating / submitting). */
 export const BUSY_COMPOSER_PHASES: readonly string[] = ['adjudicating', 'submitting']
 
 /** Is the composer inside a submission window? Pure — unit-tested. */
@@ -1060,12 +848,10 @@ export function isComposerSubmitBusy(phase: string | null | undefined): boolean 
 }
 
 /** The official component's own lock marker on the composer node:
- *  `aria-disabled={editorDisabled || undefined}` where
- *  `editorDisabled = removed || (locked && !workspaceTrigger)`. It is the
- *  discriminator the phase cannot see — a block (`blocked`, `parentOffline`,
- *  `removed`, no session) is `locked` INDEPENDENTLY of `machineBusy`, so it
- *  renders non-editable *during* a submission too, and must never be
- *  force-unlocked. Pure over the element face — unit-tested. */
+ *  aria-disabled (editorDisabled = removed || (locked && !workspaceTrigger)).
+ *  It sees what the phase cannot: a block (removed/offline/no session) is
+ *  locked INDEPENDENTLY of machineBusy, so it renders non-editable during a
+ *  submission too and must never be force-unlocked. Pure — unit-tested. */
 export function isOfficiallyDisabled(input: { getAttribute(name: string): string | null }): boolean {
   return input.getAttribute('aria-disabled') === 'true'
 }
@@ -1073,22 +859,11 @@ export function isOfficiallyDisabled(input: { getAttribute(name: string): string
 /**
  * The self-heal clock: 0 unless the composer is non-editable, inside a
  * submission window, AND not officially disabled; otherwise the time that
- * state was FIRST seen.
- *
- * All three halves are load-bearing:
- *  - the PHASE gate scopes the recovery to a stuck SUBMIT (what it exists for);
- *  - the DISABLED gate covers the overlap the phase alone cannot see: upstream
- *    keeps `locked = removed || inert || !live || blocked || parentOffline`
- *    INDEPENDENT of `machineBusy`, so an owner block or an offline parent that
- *    arrives during a submission renders non-editable + busy — and a
- *    force-unlock there would fight a live official block (Lexical's own
- *    `setEditable(false)` gate stays closed, so it produces a half-editable
- *    DOM). `aria-disabled` is the official component's own expression of that
- *    lock (`editorDisabled = removed || (locked && !workspaceTrigger)`);
- *  - seeding from the DOM rather than from a mutation covers the composer that
- *    MOUNTS stuck (React writes `contenteditable` before insertion, so no
- *    record exists).
- * Pure — unit-tested.
+ * state was FIRST seen. All three halves are load-bearing: the PHASE gate
+ * scopes recovery to a stuck SUBMIT; the DISABLED gate covers a block that
+ * arrives during a submission (force-unlocking it would fight a live official
+ * block and produce a half-editable DOM); seeding from the DOM covers the
+ * composer that MOUNTS stuck, where no mutation record exists. Pure.
  */
 export function lockClock(
   editable: boolean,
@@ -1102,9 +877,7 @@ export function lockClock(
 }
 
 /** The recovery decision, re-evaluated against the LIVE state before any DOM
- *  write: the composer must still be non-editable, still inside a submission
- *  window, still not officially disabled, and the clock must have run for the
- *  full window. Pure — unit-tested. */
+ *  write. Pure — unit-tested. */
 export function shouldRecoverStuckComposer(facts: {
   readonly editable: boolean
   readonly busy: boolean
@@ -1114,10 +887,8 @@ export function shouldRecoverStuckComposer(facts: {
   return !facts.editable && facts.busy && !facts.disabled && facts.elapsedMs >= BUSY_STUCK_MS
 }
 
-/** MutationObserver options for the self-heal channel, exported so a test can
- *  pin all three load-bearing attributes: a stuck submit is editability +
- *  phase + the official disabled marker together, and dropping any one of them
- *  either misses the state or fires against a legitimate lock. */
+/** MutationObserver options for the self-heal channel: editability + phase +
+ *  the official disabled marker together. */
 export const SELF_HEAL_MUTATION_OPTIONS: MutationObserverInit = {
   attributes: true,
   attributeFilter: ['contenteditable', 'data-phase', 'aria-disabled'],
@@ -1137,8 +908,8 @@ export function installComposerSelfHeal(root: ParentNode = document): () => void
       lockedSince = 0
       return
     }
-    // A fresh element restarts the clock from its own state: what happened
-    // before it appeared is not observable.
+    // A fresh element restarts the clock: what happened before it appeared is
+    // not observable.
     if (input !== current) {
       current = input
       lockedSince = 0
@@ -1151,8 +922,7 @@ export function installComposerSelfHeal(root: ParentNode = document): () => void
       now,
     )
   }
-  // Install-time seed + attribute channel (editability, phase AND the official
-  // disabled marker: a stuck submit is the three of them together).
+  // Install-time seed + attribute channel (editability, phase AND disabled).
   sync(query())
   const observer = new MutationObserver(() => sync(query()))
   const onPointerDown = (event: PointerEvent): void => {
@@ -1160,12 +930,10 @@ export function installComposerSelfHeal(root: ParentNode = document): () => void
     const input = query()
     if (input === null || !input.contains(event.target as Node)) return
     // A composer that mounted stuck has no mutation to start its clock: the
-    // tap that finds it stuck starts it, so the NEXT tap past the window
-    // recovers instead of never.
+    // tap that finds it stuck starts it.
     sync(input)
     if (lockedSince === 0) return
-    // Re-evaluate against the live state: only a state that is still a stuck
-    // submit may be recovered.
+    // Re-evaluate against the live state: only a still-stuck submit recovers.
     const recover = shouldRecoverStuckComposer({
       editable: input.contentEditable === 'true',
       busy: isComposerSubmitBusy(input.dataset.phase),

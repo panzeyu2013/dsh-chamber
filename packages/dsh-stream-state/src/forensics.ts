@@ -1,19 +1,10 @@
 /**
- * Bounded stream-lifecycle forensics (P5).
+ * Bounded stream-lifecycle forensics: the ONE resident tail buffer of carrier transitions,
+ * drained by every export path through {@link ForensicsSink}.
  *
- * WHY A RING. The page already publishes one live fact per carrier transition
- * (api-gateway stream-forensics.ts), but a live event is gone the moment nobody
- * listens: after a renderer hang or a JSC crash there was no resident record of the
- * last transitions (the console is not persisted, the Swift shell exposes no
- * DevTools). This ring is the bounded, in-page tail buffer - the ONE resident
- * buffer until the upstream instance exposes a renderer-writable forensics verb -
- * and every export path drains it through {@link ForensicsSink}.
- *
- * REDACTION BY CONSTRUCTION. Hosts must only feed bounded diagnostic copy (never a
- * payload, prompt, path or credential); {@link redactForensicsDetail} is the
- * defense-in-depth second line and lives here once. The ring never throws into its
- * caller: a throwing sink or an unusable timestamp must not be able to break the
- * stream lifecycle it observes.
+ * REDACTION BY CONSTRUCTION: hosts feed bounded diagnostic copy only (never a payload,
+ * prompt, path or credential); {@link redactForensicsDetail} is the defense-in-depth
+ * second line. The ring never throws into its caller.
  *
  * PURITY: zero imports, no clock reads (the caller stamps `at`).
  */
@@ -27,7 +18,6 @@ export const FORENSICS_DETAIL_MAX = 120
 /** Longest kind copied into one entry. */
 export const FORENSICS_KIND_MAX = 48
 
-/** One retained lifecycle fact. */
 export interface ForensicsEntry {
   /** 1-based record order inside this ring (survives eviction of older entries). */
   readonly seq: number
@@ -48,9 +38,8 @@ const SECRET_ASSIGNMENT =
   /(authorization|bearer|basic|cookie|password|passwd|secret|token|api[-_]?key)(\s*[=:]\s*|\s+)((?:bearer|basic)\s+)?([^\s,;]+)/giu
 
 /**
- * Mask credential-shaped substrings and remove control characters. This is a
- * second line, not the contract: the caller must not feed secrets in the first
- * place (the reporter's cause strings are bounded diagnostic copy).
+ * Mask credential-shaped substrings and remove control characters - a second line, not
+ * the contract: the caller must not feed secrets in the first place.
  */
 export function redactForensicsDetail(detail: string): string {
   const text = String(detail ?? '')
@@ -85,9 +74,8 @@ export interface ForensicsRing {
 }
 
 /**
- * Build the bounded ring.
- * @param options - optional cap; non-finite/negative/zero values fall back to
- *   {@link FORENSICS_RING_CAP} (a ring that cannot hold anything is not a buffer).
+ * Build the bounded ring; a non-finite/zero/negative cap falls back to
+ * {@link FORENSICS_RING_CAP}, since a ring that cannot hold anything is not a buffer.
  */
 export function createForensicsRing(options: { readonly cap?: number } = {}): ForensicsRing {
   const cap = Number.isFinite(options.cap) && (options.cap as number) >= 1
@@ -109,8 +97,7 @@ export function createForensicsRing(options: { readonly cap?: number } = {}): Fo
       return entry
     },
     snapshot(): readonly ForensicsEntry[] {
-      // Copies, not references: a reader (or a sink) mutating a snapshot entry must
-      // not be able to corrupt the retained tail.
+      // Copies, not references: a reader or sink must not corrupt the retained tail.
       return entries.map((entry) => ({ ...entry }))
     },
     flush(sink: ForensicsSink): number {
@@ -121,8 +108,7 @@ export function createForensicsRing(options: { readonly cap?: number } = {}): Fo
           sink(entry)
           delivered += 1
         } catch {
-          // A throwing sink must never break the ring's owner; the entry is already
-          // out of the buffer either way (flush is a transfer, not a copy).
+          // A throwing sink must never break the ring's owner; the entry is already out.
         }
       }
       return delivered

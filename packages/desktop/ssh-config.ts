@@ -1,23 +1,14 @@
 /**
- * ~/.ssh/config host discovery for the connections settings section
- * (design 05 §5): the Electron main process reads the user's ssh config and
- * projects NON-SECRET metadata only — alias, hostname, user, ssh port.
+ * ~/.ssh/config host discovery for the connections settings section: the
+ * Electron main process projects NON-SECRET metadata only — alias, hostname,
+ * user, ssh port. IdentityFile, ProxyCommand, passwords and every other
+ * keyword are ignored outright; the renderer never sees keys or credentials.
  *
- * Security discipline: IdentityFile, ProxyCommand, passwords, and every
- * other keyword are ignored outright; only Host / HostName / User / Port are
- * ever projected. The renderer never sees keys, proxies, or credentials.
- *
- * Parser scope (deliberately minimal, no dependencies):
- * - Line-based, case-insensitive keywords, `#` comments, double-quoted
- *   arguments, backslash line continuations (folding keeps inner spacing).
- * - Wildcard Host patterns (`*`, `?`, `!`) are skipped as entries, `Host`
- *   multi-alias lines expand to one entry per alias, `Match` blocks are
- *   skipped entirely, and a leading global section (settings before the
- *   first Host) contributes default User/Port to every entry, mirroring
- *   ssh's first-obtained-wins semantics for these fields.
- * - `Include` is not expanded (out of v1 scope).
- * - A missing config file is an empty set; an unreadable/corrupt file is a
- *   loud `{error}` result — never a silent empty success.
+ * Parser (line-based, no dependencies): case-insensitive keywords, `#`
+ * comments, double-quoted arguments, backslash continuations; wildcard Host
+ * patterns (`* ? !`) and `Match` blocks are skipped; a leading global section
+ * supplies default User/Port; `Include` is not expanded. A missing file is an
+ * empty set, an unreadable one a loud `{error}` — never a silent empty success.
  */
 
 import { readFileSync } from 'node:fs'
@@ -70,24 +61,13 @@ function parseDecimalPort(value: string): number | null {
   return isValidPort(parsed) ? parsed : null
 }
 
-/**
- * Parse ssh config text into discovered hosts. Exposed for tests.
- *
- * Line folding follows ssh semantics: a trailing backslash drops the
- * backslash and the newline, everything else is kept (inner spacing
- * included); comments (`#`, outside double quotes) are stripped on the
- * assembled logical line. `Host` may carry several aliases on one line
- * (each becomes an entry); wildcard aliases (`* ? !`) are skipped as
- * entries; `Match` blocks are skipped entirely (their settings must not
- * leak into the previous/following entries); a global section (settings
- * before the first Host) contributes default User/Port to every entry.
- * `Include` is not expanded (out of v1 scope).
- * @param text - the raw config file content.
- * @returns the non-secret host projections.
- */
+/** Parse ssh config text into non-secret host projections. A trailing backslash
+ *  folds the line (inner spacing kept), comments (`#`, outside double quotes)
+ *  are stripped on the assembled logical line, `Host` may carry several aliases
+ *  (one entry each), and a global-section User/Port becomes the default for
+ *  entries that do not set their own (first-obtained-wins). */
 export function parseSshConfig(text: string): SshConfigHost[] {
-  // Assemble logical lines (folding only; whitespace kept for the later
-  // keyword/value split).
+  // Assemble logical lines: folding only; whitespace is kept for the keyword/value split.
   const logicalLines: string[] = []
   let pending = ''
   for (const rawLine of text.split(/\r?\n/)) {
@@ -179,10 +159,8 @@ export function parseSshConfig(text: string): SshConfigHost[] {
   return hosts
 }
 
-/**
- * Strip an unquoted `#` comment from a config line (OpenSSH only treats `#`
- * as a comment start, and only double quotes group arguments).
- */
+/** Strip an unquoted `#` comment from a config line (OpenSSH treats `#` as a
+ *  comment start only outside double quotes). */
 function stripComment(line: string): string {
   let inQuotes = false
   for (let index = 0; index < line.length; index += 1) {
@@ -196,13 +174,8 @@ function stripComment(line: string): string {
   return line
 }
 
-/**
- * Discover hosts from ~/.ssh/config. A missing file is an empty set; an
- * unreadable file is a loud {error} (never a silent empty success — mirrors
- * the repo's "corrupt is never a fake-empty" invariant).
- * @param filePath - the config path (defaults to ~/.ssh/config).
- * @returns {hosts} or {error}.
- */
+/** Discover hosts from ~/.ssh/config: a missing file is an empty set, an
+ *  unreadable one a loud `{error}` (corrupt is never a fake-empty). */
 export function discoverSshConfigHosts(filePath: string = DEFAULT_SSH_CONFIG_PATH): SshConfigDiscovery {
   let text: string
   try {

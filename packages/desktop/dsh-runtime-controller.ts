@@ -1,12 +1,11 @@
 /**
- * dsh runtime controller (design 18 §3.5/§3.6/§5) — main-process orchestration
- * over the data plane: check (registry metadata → version list), install
- * (version-exists gate + no-op gate + single-flight → runtime installer →
- * override.pending). Reset is intentionally not executed here: main owns the
- * snapshot/journal/stop/probe transaction and this controller must never
- * directly delete authoritative recovery metadata. Pure
- * orchestration: fetchMetadata / install / store are injected so tests mock
- * every side effect. State changes are broadcast synchronously via onChanged.
+ * dsh runtime controller: main-process orchestration over the data plane —
+ * check (registry metadata → version list) and install (version/no-op/single-flight
+ * gates → runtime installer → override.pending). Reset is deliberately NOT executed
+ * here: main owns the snapshot/journal/stop/probe transaction and this controller
+ * must never delete authoritative recovery metadata directly. fetchMetadata /
+ * install / store are injected; state changes are broadcast synchronously via
+ * onChanged.
  */
 import type { RegistryMetadata } from '@dsh-chamber/dsh-runtime'
 import type { VersionListEntry } from '@dsh-chamber/dsh-runtime'
@@ -59,31 +58,26 @@ export type RuntimeMetadataComponent =
   | 'recovery-marker'
   | 'retained-evidence'
 
-/** Soft logical-usage ceiling for fresh downloads. Cached activation and all
- * recovery paths deliberately bypass it. totalBytes is a real (dev, ino)
- * deduped walk but category fields may double-count hard-linked tree/store
- * bytes and APFS reflink sharing stays invisible to stat, so this is a
- * conservative hygiene gate rather than a claim about physical free space.
- * Value = the shared core constant (dsh-runtime RUNTIME_LOGICAL_DISK_LIMIT_BYTES);
- * this alias keeps the controller's public export name. */
+/** Fresh-download soft logical-usage ceiling; cached activation and all recovery paths
+ *  bypass it. totalBytes is a real (dev, ino) deduped walk, but category fields may
+ *  double-count hard links/reflinks, so this is conservative hygiene rather than a
+ *  claim about physical free space. Value = the shared core constant; the alias keeps
+ *  the controller's public export name. */
 export const DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES = RUNTIME_LOGICAL_DISK_LIMIT_BYTES
 
 export interface RuntimeState {
   /** The active runtime version (current pointer, falling back to bundled). */
   active: string | null
   bundled: string | null
-  /** Where the active version comes from (§3.5/§3.6 A.1): env (DSH_CHAMBER_DSH_PATH
-   *  overrides everything), user (current pointer set by a prior selection), or
-   *  bundled (no pointer, no env — the app's built-in tree). */
+  /** Where the active version comes from: env (DSH_CHAMBER_DSH_PATH overrides
+   *  everything), user (current pointer set by a prior selection), or bundled. */
   source: 'bundled' | 'user' | 'env'
   latest: string | null
   versions: VersionListEntry[]
   pending: string | null
   phase: RuntimePhase
   error: string | null
-  /** Live control-plane connection state (ready/degraded/…), read at every
-   *  getState via the injected getter; 'unknown' when no getter is wired. The
-   *  renderer mirrors the main apply-now gate off this field. */
+  /** Live control-plane connection state, read at every getState; 'unknown' when no getter is wired. Renderer mirrors the apply-now gate off it. */
   connectionState?: string
   targetVersion?: string | null
   sourceVersion?: string | null
@@ -103,17 +97,12 @@ export interface RuntimeState {
   runtimeBlockedReason?: string | null
   swapAttempted?: boolean
   failure?: RuntimeFailure | null
-  /** Read-failure detail when the runtime failure ledger is unknowable
-   *  (EACCES/EIO/non-ENOENT readdir); null when the set is known. The
-   *  `failure` row stays null in that case — an unknowable set is never
-   *  projected as "no failures" (B1 §2.3 / gateway status twin failureError). */
+  /** Read-failure detail when the failure ledger is unknowable (EACCES/EIO/non-ENOENT):
+   *  `failure` stays null, and an unknowable set is never projected as "no failures". */
   failureError?: string | null
-  /** Durable notice; remains visible even when a bundled compatibility-probe
-   *  failure automatically reactivates the old user tree. */
+  /** Durable notice; stays visible even when the old user tree is auto-reactivated. */
   invalidationNotice?: RuntimeInvalidationNotice | null
-  /** On-demand disk accounting; category fields keep per-path sums (a hard
-   * link may be charged to both categories) while totalBytes is the real
-   * (dev, ino) deduped figure (see RuntimeDiskSummary). */
+  /** On-demand disk accounting: category fields keep per-path sums (a hard link may be charged twice), totalBytes is the real deduped figure. */
   diskUsage?: RuntimeDiskSummary | null
   diskError?: string | null
   diskLimitBytes?: number
@@ -130,8 +119,7 @@ export interface RuntimeState {
   metadataComponents?: RuntimeMetadataComponent[]
   /** Explicit privileged capability. Renderer input can never set this bit. */
   canRecoverMetadata?: boolean
-  /** Live install progress (design 18): download bytes + stage
-   * milestones while an install runs; null when idle. */
+  /** Live install progress (download bytes + stage milestones); null when idle. */
   progress?: RuntimeInstallProgress | null
 }
 
@@ -165,11 +153,10 @@ export interface RuntimeLifecycleProjection {
   progress?: RuntimeInstallProgress | null
 }
 
-/** Controller-local authority verdict (audit 2.2 / Phase B contract §2): a
- *  corrupt or unreadable current-pointer/override pair never resolves to the
- *  bundled default, and a valid applied override that lost its authoritative
- *  current pointer is blocked instead of folded to bundled. Mirrors shell-core
- *  resolveActiveRuntime and the shared core's apply-phase throw semantics. */
+/** Authority verdict: a corrupt or unreadable current-pointer/override pair never
+ *  resolves to the bundled default, and a valid applied override that lost its
+ *  authoritative current pointer is blocked instead of folded to bundled. Mirrors
+ *  shell-core resolveActiveRuntime and the shared core's apply-phase throw semantics. */
 type ActiveVersionResolution =
   | { kind: 'ok'; version: string | null }
   | { kind: 'blocked'; reason: string }
@@ -179,10 +166,8 @@ export interface ControllerDeps {
   install: (opts: InstallOptions) => Promise<InstallResult>
   store: {
     writeOverride: (baseDir: string, record: OverrideRecord) => void
-    /** Authoritative material reads (B1 §2.3 / Phase B contract §1). The
-     *  compatibility record/pointer projections were retired (D5a); these
-     *  State reads are the only reads and must be injected so a read failure
-     *  can never alias the bundled default or "no override". */
+    /** Authoritative material reads: these State reads are the only reads and must be
+     *  injected so a read failure can never alias the bundled default or "no override". */
     readOverrideState: (baseDir: string) => OverrideState
     readCurrentPointerState: (baseDir: string) => CurrentPointerState
     listVersionTrees: (baseDir: string) => string[]
@@ -192,20 +177,16 @@ export interface ControllerDeps {
     validateVersionTree?: (baseDir: string, version: string) => { ok: boolean; error?: string }
     recordFailure?: (baseDir: string, failure: RuntimeFailure) => void
     recordExplicitInstall?: (baseDir: string, version: string) => void
-    /** Full logical accounting used to fail closed before a fresh download.
-     *  异步单遍遍历（runtimeDiskSummaryAsync）——大 store 下同步全树遍历会
-     *  冻结主进程，安装闸口等同一段墙钟时间但进程保持响应。 */
+    /** Full logical accounting used to fail closed before a fresh download. Async single-pass walk: a sync full-tree walk would freeze the main process. */
     runtimeDiskSummary?: (baseDir: string) => Promise<RuntimeDiskSummary>
     /** Persist the activation intent before override.pending is published. */
     writeActivationIntent: (baseDir: string, input: ActivationIntentInput) => void
     /** Explicit reset clears any safe intent/monitoring journal selected by main. */
     clearActivationJournal: (baseDir: string) => void
   }
-  /** The chamber shell version recorded in override records (§3.5 invalidation). */
+  /** Chamber shell version recorded in override records (invalidation input). */
   shellVersion: string
-  /** Live control-plane connection state (ready/degraded/…) for the renderer
-   *  projection; evaluated at every getState so the apply-now mirror never
-   *  goes stale. Absence projects 'unknown' (no gating in the renderer). */
+  /** Live control-plane connection state for the projection; evaluated at every getState (absence projects 'unknown'). */
   connectionState?: () => string
 }
 
@@ -214,15 +195,13 @@ export interface ControllerOptions {
   bundledVersion: string | null
   packageName: string
   registryOrigin: string
-  /** Optional live registry-origin getter (§3.6 A.4 每操作现读)；缺省时用
-   *  `registryOrigin`（启动冻结语义）。main.ts 传 `() => chamberSettings.registryOrigin`。 */
+  /** Optional live registry-origin getter (read per operation); absent = frozen `registryOrigin`. */
   getRegistryOrigin?: () => string
-  /** The version resolved from DSH_CHAMBER_DSH_PATH, or null when env is not set
-   *  (§3.5 env 来源)。 */
+  /** Version resolved from DSH_CHAMBER_DSH_PATH, or null when env is not set. */
   envVersion?: string | null
   /** Presence is authoritative even when the env tree's manifest is unreadable. */
   envOverrideActive?: boolean
-  /** Unix is the design-18 mutation target; unsupported platforms remain read-only. */
+  /** Unix is the mutation target; unsupported platforms remain read-only. */
   managementSupported?: boolean
   managementUnsupportedReason?: string | null
   pnpmEntry: string
@@ -295,10 +274,9 @@ export class DshRuntimeController {
     }
   }
 
-  /** Read both authority leaves once. Both are always classified (even when
-   *  one would have been sufficient): a corrupt pointer blocks under a valid
-   *  override and vice versa, exactly like shell-core resolveActiveRuntime and
-   *  the shared core's apply-phase currentPointer(). */
+  /** Read both authority leaves once. Both are always classified: a corrupt pointer
+   *  blocks under a valid override and vice versa, matching shell-core
+   *  resolveActiveRuntime and the shared core's apply-phase currentPointer(). */
   private readAuthorityState(): { overrideState: OverrideState; pointerState: CurrentPointerState } {
     return {
       overrideState: this.deps.store.readOverrideState(this.baseDir),
@@ -306,8 +284,7 @@ export class DshRuntimeController {
     }
   }
 
-  /** First corrupt/unreadable authority leaf, or null when both are
-   *  classifiable. The reason rides runtimeBlockedReason and the install gate. */
+  /** First corrupt/unreadable authority leaf, or null. The reason rides runtimeBlockedReason and the install gate. */
   private authorityBlockedReason(overrideState: OverrideState, pointerState: CurrentPointerState): string | null {
     if (overrideState.kind === 'corrupt') return sanitizeErrorText('dsh runtime override 元数据损坏')
     if (overrideState.kind === 'unknown') {
@@ -328,23 +305,20 @@ export class DshRuntimeController {
     const blockedReason = this.authorityBlockedReason(overrideState, pointerState)
     if (blockedReason !== null) return { kind: 'blocked', reason: blockedReason }
     const override = overrideState.kind === 'valid' ? overrideState.record : null
-    // User-override validity is the shared core invalidation predicate; the
-    // env branch above stays outside it (env bypasses the override entirely).
+    // User-override validity is the shared core invalidation predicate; the env branch above stays outside it (env bypasses the override entirely).
     const invalidated = override !== null && shouldInvalidate(override, this.deps.shellVersion)
-    // Selection semantics are unchanged: an orphan pointer (no override) is
-    // still ignored. Only the READ MATERIAL changed — corrupt/unknown bytes
-    // are a blocked verdict instead of a bundled fallback.
+    // Selection semantics unchanged: an orphan pointer (no override) is still ignored;
+    // only READ MATERIAL changed — corrupt/unknown bytes are a blocked verdict, not a
+    // bundled fallback.
     const pointer = invalidated || override === null
       ? null
       : (pointerState.kind === 'valid' ? pointerState.version : null)
     if (pointer !== null && this.isUsableTree(pointer)) return { kind: 'ok', version: pointer }
-    // A valid APPLIED user override whose authoritative current pointer is
-    // missing fails closed with shell-core resolveActiveRuntime's exact
-    // predicate and reason (pending / chosenVersion / resolvedVersion absent,
-    // or a rolled-back/failed last termination, still make builtin
-    // authoritative). Folding to the bundled version here would silently boot
-    // the builtin tree over a user-migrated DSH_HOME — the same divergent
-    // verdict the shell-core side already refuses.
+    // A valid APPLIED user override with a missing authoritative current pointer fails
+    // closed with shell-core's exact predicate (pending/chosenVersion/resolvedVersion
+    // absent, or rolled-back/failed last termination, still make builtin authoritative).
+    // Folding to bundled here would silently boot the builtin tree over a user-migrated
+    // DSH_HOME.
     if (override !== null && !invalidated && pointer === null) {
       const builtinIsAuthoritative = override.pending !== null
         || override.chosenVersion === null
@@ -393,9 +367,7 @@ export class DshRuntimeController {
     }
   }
 
-  /** Throttled progress projection (design 18): per-chunk download
-   * bytes would otherwise flood the renderer push. Stage transitions and
-   * the terminal 'done' always emit; byte ticks emit at most every 150ms. */
+  /** Throttled progress projection: stage transitions and terminal 'done' always emit; byte ticks at most every 150ms (per-chunk would flood the renderer). */
   private lastProgressEmit = 0
   private publishInstallProgress(progress: RuntimeInstallProgress): void {
     const now = Date.now()
@@ -415,9 +387,7 @@ export class DshRuntimeController {
     this.refreshMetadataOrigin()
     const { overrideState, pointerState } = this.readAuthorityState()
     const resolution = this.activeVersionFromStates(overrideState, pointerState)
-    // A blocked verdict publishes NO active version: the bundled default must
-    // never stand in for unreadable selection material (fail closed, same
-    // direction as shell-core resolveActiveRuntime).
+    // A blocked verdict publishes NO active version: the bundled default must never stand in for unreadable selection material (fail closed).
     const blockedReason = resolution.kind === 'blocked' ? resolution.reason : null
     const active = resolution.kind === 'ok' ? resolution.version : null
     const override = overrideState.kind === 'valid' ? overrideState.record : null
@@ -457,8 +427,7 @@ export class DshRuntimeController {
       source,
       latest: this.lastMeta?.latest ?? null,
       versions,
-      // effectivePending projects "pending is in effect" (override valid AND
-      // not invalidated by shell-version change) — the shared core predicate.
+      // effectivePending projects "pending is in effect" (override valid AND not invalidated) — the shared core predicate.
       pending: !this.envOverrideActive
         ? effectivePending(override, this.deps.shellVersion)
         : null,
@@ -466,14 +435,11 @@ export class DshRuntimeController {
       error: this.error,
       connectionState: this.deps.connectionState?.() ?? 'unknown',
       ...this.lifecycle,
-      // The authority lock outranks every lifecycle patch: while a leaf stays
-      // corrupt/unreadable no projection may reopen resolution. The reason is
-      // the same one the install gate consumes.
+      // The authority lock outranks every lifecycle patch: while a leaf stays corrupt/unreadable no projection may reopen resolution; the reason is the same one the install gate consumes.
       ...(blockedReason === null ? {} : { runtimeBlocked: true, runtimeBlockedReason: blockedReason }),
       targetVersion: this.lifecycle.targetVersion ?? override?.pending ?? null,
       swapAttempted: this.lifecycle.swapAttempted === true || override?.swapAttempted === true,
-      // Corrupt/unreadable override bytes are NOT "no override": the leaf
-      // exists and is deliberately represented as an unusable override.
+      // Corrupt/unreadable override bytes are NOT "no override": the leaf exists and is deliberately represented as an unusable override.
       hasOverride: overrideState.kind !== 'missing',
       invalidationNotice,
       managementSupported: this.managementSupported,
@@ -481,14 +447,11 @@ export class DshRuntimeController {
     }
   }
 
-  /** Main-process startup/rollback orchestration publishes every material
-   * lifecycle branch through the same renderer projection. */
+  /** Main-process startup/rollback orchestration publishes every material lifecycle branch through the same renderer projection. */
   setLifecycle(patch: RuntimeLifecycleProjection): RuntimeState {
     if (patch.phase !== undefined) {
       const projected = transitionLifecycleProjection(this.phase, patch.phase)
-      // Reject the whole stale projection, not merely its phase: rollback
-      // copy/error/capability fields from an illegal edge must not contaminate
-      // a concurrent checking/installing state.
+      // Reject the whole stale projection, not merely its phase: rollback fields from an illegal edge must not contaminate a concurrent checking/installing state.
       if (projected !== patch.phase) return this.getState()
       this.phase = projected
     }
@@ -526,9 +489,7 @@ export class DshRuntimeController {
       if (this.lastMeta.origin !== origin) throw new Error('registry metadata source mismatch')
       const resolution = this.activeVersion()
       const active = resolution.kind === 'ok' ? resolution.version : null
-      // A blocked authority verdict is never "no active version", so it can
-      // never manufacture an available update either (getState publishes the
-      // blocked state and reason).
+      // A blocked authority verdict is never "no active version", so it can never manufacture an available update either (getState publishes the blocked state and reason).
       this.phase = transition(this.phase, { type: 'check-done', available: resolution.kind === 'ok'
         && this.lastMeta.latest !== null
         && (active === null || compareRuntimeVersions(this.lastMeta.latest, active) === 1)
@@ -552,40 +513,32 @@ export class DshRuntimeController {
     if (!allowedActions(this.phase).includes('install')) {
       return this.getState()
     }
-    // Pending terminal gate (§3.6): a pending override is a swap awaiting the
-    // next startup — installing a DIFFERENT version now would overwrite it, so
-    // reject until [恢复内建] clears the pending. Enforced in the controller,
-    // not just the UI (AGENTS.md core-logic enforcement).
+    // Pending terminal gate: a pending override is a swap awaiting the next startup —
+    // installing a DIFFERENT version now would overwrite it, so reject until [恢复内建]
+    // clears the pending. Enforced in the controller, not just the UI.
     const overrideState = this.deps.store.readOverrideState(this.baseDir)
     if (overrideState.kind === 'corrupt' || overrideState.kind === 'unknown') {
-      // Corrupt/unreadable override bytes are a lock, not an empty slot: a new
-      // pending write would destroy the only pointer to the staged selection.
-      // (getState publishes runtimeBlocked + the exact reason.)
+      // Corrupt/unreadable override bytes are a lock, not an empty slot: a new pending
+      // write would destroy the only pointer to the staged selection.
       return this.getState()
     }
     const pendingOverride = overrideState.kind === 'valid' ? overrideState.record.pending : null
     if (pendingOverride !== null) {
-      // A pending activation is a terminal gate. A forged/late renderer call
-      // must not overwrite the authoritative pending phase with a generic
-      // error state (which would also expose actions that are forbidden while
-      // the swap is unresolved).
+      // A pending activation is a terminal gate: a forged/late renderer call must not
+      // overwrite it with a generic error state (which would also expose actions
+      // forbidden while the swap is unresolved).
       return this.getState()
     }
     const activeResolution = this.activeVersion()
-    // A corrupt/unreadable pointer (or an override that changed between the
-    // gate above and this read) blocks a fresh install instead of installing
-    // over material the controller cannot classify.
+    // A corrupt/unreadable pointer (or an override that changed since the gate above) blocks a fresh install instead of installing over unclassifiable material.
     if (activeResolution.kind === 'blocked') return this.getState()
     const active = activeResolution.version
     // No-op guard: choosing the already-active version is a no-op (§3.6).
     if (isNoopSelection(version, active)) return this.getState()
-    // Offline cached rollback: a locally-cached tree skips the registry
-    // existence gate (and the fresh install) — switching to it is a pointer
-    // swap at next startup, already installed.
+    // Offline cached rollback: a locally-cached tree skips the registry existence gate (and the fresh install) — switching to it is a pointer swap at next startup.
     this.refreshMetadataOrigin()
     const cached = this.cachedVersions().includes(version)
-    // The quota guards only a NEW download/install. A cached rollback/switch
-    // and every recovery path remain available even above the soft ceiling.
+    // The quota guards only a NEW download/install; cached rollback/switch and every recovery path remain available above the soft ceiling.
     if (!cached && this.deps.store.runtimeDiskSummary !== undefined) {
       let disk: RuntimeDiskSummary
       try {
@@ -619,8 +572,7 @@ export class DshRuntimeController {
         return this.getState()
       }
     }
-    // Version-existence gate: only real registry versions with a tarball may
-    // be freshly installed (§3.4/§5); cached trees bypass it.
+    // Version-existence gate: only real registry versions with a tarball may be freshly installed; cached trees bypass it.
     if (!cached && (this.lastMeta === null || !versionExists(this.lastMeta, version))) {
       this.error = `版本不存在或不可安装：${version}`
       this.phase = transition(this.phase, { type: 'error' })
@@ -685,8 +637,7 @@ export class DshRuntimeController {
         pending: version,
         swapAttempted: false,
       }
-      // Tree validation/retention must commit before publishing a pending
-      // activation. If this fails, no broken pending record is left behind.
+      // Tree validation/retention must commit before publishing a pending activation; if this fails no broken pending record is left behind.
       this.deps.store.recordExplicitInstall?.(this.baseDir, resolvedVersion)
       this.deps.store.writeActivationIntent(this.baseDir, {
         targetVersion: resolvedVersion,
@@ -695,8 +646,7 @@ export class DshRuntimeController {
       })
       this.deps.store.writeOverride(this.baseDir, record)
       this.phase = transition(this.phase, { type: 'install-done' })
-      // The install is committed: clear the live bar (the pending phase has
-      // its own copy).
+      // Install committed: clear the live bar (the pending phase has its own copy).
       this.lifecycle = { ...this.lifecycle, progress: null }
     } catch (err) {
       this.error = sanitizeErrorText(err instanceof Error ? err.message : String(err))

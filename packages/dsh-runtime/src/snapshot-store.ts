@@ -1,15 +1,11 @@
 /**
- * dsh runtime snapshot/restore (design 18 §3.7) — the cross-version user-data
- * protection core.
+ * dsh runtime snapshot/restore — the cross-version user-data protection core.
  *
- * Restore is a durable transaction. A snapshot is copied completely to a
- * same-filesystem staging directory before the live DSH_HOME is moved. The
- * marker records every phase and the exact staging/backup paths, so startup
- * recovery never guesses completion from a non-empty directory (a partial
- * copy may also be non-empty). Backups are unique; cleanup is an explicit,
- * writer-fenced operation that preserves the newest completed restore field.
- *
- * Pure node built-ins, baseDir/dshHome injected — no electron, no IPC.
+ * A snapshot is copied completely to a same-filesystem staging directory before the live
+ * DSH_HOME is moved; the marker records every phase and the exact staging/backup paths, so
+ * startup recovery never guesses completion from a non-empty directory. Backups are unique and
+ * cleanup is an explicit, writer-fenced operation that preserves the newest completed restore
+ * field. Pure node built-ins, baseDir/dshHome injected — no electron, no IPC.
  */
 import { cp, lstat, mkdir, readdir, rm } from 'node:fs/promises'
 import {
@@ -52,24 +48,12 @@ function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
   return left.dev === right.dev && left.ino === right.ino
 }
 
-/** Read the restore authority without following either its leaf or runtime dir.
- *  Delegates to the shared private-fs bounded no-follow reader; `tightenMode: false`
- *  keeps the read free of chmod side
- *  effects — the marker is always written 0600 by the shared atomic writer.
- *
- *  The shared reader is STRICTER than an inline implementation in two adversarial
- *  corners (a symlinked
- *  baseDir and a parent stripped of owner-read read 'unsafe' instead of
- *  readable — the write path refuses both) and adds a bigint
- *  ns-precision double snapshot plus single-link checks on both ends. One
- *  narrow benign window: a hard link added between the post-read snapshot and
- *  the final leaf lstat reads 'valid' —
- *  the content is already double-snapshotted stable and any later marker
- *  write is still refused by the atomic writer's single-link check, so the
- *  transaction stays fail-closed. Platform note: on win32 (no O_NOFOLLOW)
- *  private-fs readers/writers hard-fail closed by design (windows-v1.md) —
- *  a marker present on Windows reads 'unsafe' and cannot be written, so
- *  restore recovery on win32 requires the documented manual removal path. */
+/** Read the restore authority without following its leaf or runtime dir. Delegates to the
+ *  private-fs bounded no-follow reader with `tightenMode: false` (no chmod side effects; the
+ *  marker is always 0600). That reader is STRICTER (symlinked baseDir / owner-read-stripped
+ *  parent reads 'unsafe'; bigint ns double snapshot + single-link checks on both ends), and a
+ *  hard link added after the snapshot stays fail-closed because a later write is refused. On
+ *  win32 (no NOFOLLOW) readers/writers hard-fail closed — restore recovery is manual there. */
 function readRestoreMarkerAuthority(baseDir: string): RestoreMarkerAuthorityRead {
   const state = readPrivateFileStateNoFollow(
     snapshotPaths(baseDir).restoreMarker,
@@ -81,9 +65,8 @@ function readRestoreMarkerAuthority(baseDir: string): RestoreMarkerAuthorityRead
   return state.kind === 'missing' ? { kind: 'missing' } : { kind: 'unsafe' }
 }
 
-/** Public status keeps its historical fail-closed union: an unreadable marker
- *  (EACCES/EIO) reports 'unsafe' here, while the restore entries consume the
- *  richer authority state to report cause 'io-error'. */
+/** Public status keeps its historical fail-closed union: an unreadable marker (EACCES/EIO)
+ *  reports 'unsafe' here, while restore entries report cause 'io-error' from the richer state. */
 export function restoreMarkerAuthorityStatus(baseDir: string): RestoreMarkerAuthorityStatus {
   const state = readRestoreMarkerAuthority(baseDir)
   if (state.kind === 'missing') return 'missing'
@@ -123,9 +106,8 @@ export type CopyFn = (src: string, dest: string) => Promise<void>
 export type RestoreOutcome = 'complete' | 'half' | 'incomplete'
 export type RestorePhase = 'copying' | 'staged' | 'backing-up' | 'publishing' | 'published'
 
-/** Honest restore result: the outcome still describes the durable disk state
- *  (complete / resumable-half / resumable-incomplete), while cause/error name
- *  the real failure that used to be folded into 'incomplete'. */
+/** Honest restore result: the outcome describes the durable disk state (complete /
+ *  resumable-half / resumable-incomplete) while cause/error name the real failure. */
 export interface RestoreReport {
   readonly outcome: 'complete' | 'half' | 'incomplete'
   readonly cause: 'copy-failed' | 'io-error' | 'marker-invalid' | 'state-refused' | 'unexpected' | null
@@ -136,11 +118,8 @@ function cleanReport(outcome: RestoreOutcome): RestoreReport {
   return { outcome, cause: null, error: null }
 }
 
-/** Boolean refusal of an owned-directory state (unsafe symlink/identity, or a
- *  failed tighten re-verification): the outcome keeps the historical resumable
- *  value, while cause/error name the directory that failed the trust check
- *  (B1 R3 — these refusals used to fold into a bare 'incomplete'). Like
- *  marker-invalid, this is a validation refusal, not a thrown failure. */
+/** Boolean refusal of an owned-directory state (unsafe symlink/identity, or a failed tighten
+ *  re-verification); like marker-invalid this is a validation refusal, not a thrown failure. */
 function refusedReport(outcome: RestoreOutcome, error: string): RestoreReport {
   return { outcome, cause: 'state-refused', error }
 }
@@ -161,8 +140,8 @@ function failureReport(
   return { outcome, cause, error: error instanceof Error ? error.message : String(error) }
 }
 
-/** EACCES/EIO/unknown OS failures are 'io-error'; a context-specific fallback
- *  (copy-failed / unexpected) covers refusal-style errors without an errno. */
+/** EACCES/EIO/unknown OS failures are 'io-error'; a context fallback (copy-failed / unexpected)
+ *  covers refusal-style errors without an errno. */
 function classifyRestoreFailure(
   error: unknown,
   fallback: 'copy-failed' | 'unexpected',
@@ -170,9 +149,8 @@ function classifyRestoreFailure(
   return isUnreadableFsError(error) ? 'io-error' : fallback
 }
 
-/** Legacy outcome projection. A real failure is no longer silently folded
- *  into 'incomplete': it throws with the report attached, while a validation
- *  refusal (marker-invalid / state-refused) keeps the historical result. */
+/** Legacy outcome projection: a real failure throws with the report attached rather than folding
+ *  into 'incomplete'; validation refusals keep the old result. */
 function requireOutcome(report: RestoreReport): RestoreOutcome {
   if (report.cause === null || report.cause === 'marker-invalid' || report.cause === 'state-refused') return report.outcome
   const error = new Error('runtime restore failed (' + report.cause + '): ' + (report.error ?? 'unknown error'))
@@ -207,8 +185,8 @@ async function ensurePrivateDir(dir: string): Promise<void> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
   }
-  // Never chmod through a directory symlink. The descriptor helper pins the
-  // final component and its parent before tightening the owned inode.
+  // Never chmod through a directory symlink: the descriptor helper pins the final component and
+  // its parent before tightening the owned inode.
   if (!tightenOwnedDirectory(dir)) throw new Error(`不安全的私有目录：${basename(dir)}`)
 }
 
@@ -218,10 +196,8 @@ async function ensureRuntimeSubdir(baseDir: string, dir: string): Promise<void> 
   await ensurePrivateDir(dir)
 }
 
-/** Durable marker write via the shared private-fs atomic writer: O_NOFOLLOW
- *  tmp + file fsync + rename + parent-directory fsync + identity re-verifies.
- *  The marker is authoritative recovery metadata; durability
- *  here is a correctness property, not an optimization. */
+/** Durable marker write via the shared private-fs atomic writer: no-follow tmp + file fsync +
+ *  rename + parent fsync + identity re-verifies — durability, not optimization. */
 async function atomicWriteMarker(baseDir: string, filePath: string, marker: RestoreMarker): Promise<void> {
   atomicWriteRuntimeFileNoFollow(baseDir, filePath, `${JSON.stringify(marker, null, 2)}\n`)
 }
@@ -289,9 +265,8 @@ function tightenOwnedDirectory(path: string): boolean {
   if (before.isSymbolicLink() || !before.isDirectory()) return false
   let fd: number | null = null
   try {
-    // kind 'read' uses the POSIX flags (O_RDONLY|O_NOFOLLOW
-    // — this site never passes O_DIRECTORY); the win32 fallback re-proves
-    // identity around the open instead of following a link.
+    // kind 'read' uses POSIX O_RDONLY|O_NOFOLLOW (no O_DIRECTORY here); the win32 fallback
+    // re-proves identity around the open instead of following a link.
     const openedDirectory = openPrivateNoFollowSync(path, 'read')
     fd = openedDirectory.fd
     const opened = openedDirectory.stats
@@ -334,9 +309,8 @@ async function removeCrashTemporaryEntries(
   const removed: string[] = []
   for (const entry of entries) {
     if (!entry.name.startsWith('.tmp-')) continue
-    // `entry.name` comes from a direct readdir of the private root. rm unlinks
-    // a symlink itself rather than following it; recursive is needed only for
-    // the normal crash-staging directory shape.
+    // `entry.name` comes from a direct readdir of the private root; rm unlinks a symlink itself
+    // rather than following it, and recursive covers the staging shape.
     await rm(join(root, entry.name), { recursive: true, force: true })
     removed.push(`${relativeRoot}/${entry.name}`)
   }
@@ -362,13 +336,10 @@ function backupNameTimestamp(homeName: string, entryName: string): number {
 }
 
 /**
- * Remove crash-only staging and bound completed restore backups. The caller
- * must hold the same writer fence used for snapshot/restore: this helper does
- * not attempt to stop dsh itself. Any restore marker (valid, corrupt, file, or
- * symlink) blocks the entire cleanup. Without a marker, orphan `.tmp-*`
- * entries are safe to remove; restore backups are pruned only when DSH_HOME is
- * a real directory and every matching sibling is a real directory. Exactly
- * the newest backup is retained.
+ * Remove crash-only staging and bound completed restore backups. The caller must hold the same
+ * writer fence used for snapshot/restore. Any restore marker (valid, corrupt, file, or symlink)
+ * blocks the entire cleanup; without one, orphan `.tmp-*` entries are safe to remove and backups
+ * are pruned only when DSH_HOME and every matching sibling are real directories, newest kept.
  */
 export async function cleanupSnapshotArtifacts(
   baseDir: string,
@@ -381,8 +352,8 @@ export async function cleanupSnapshotArtifacts(
     restoreBackupCleanup: 'completed',
   }
 
-  // Presence alone is authoritative. Parsing a corrupt marker to decide what
-  // is disposable would invert the recovery protocol's fail-closed boundary.
+  // Presence alone is authoritative: parsing a corrupt marker to decide what is disposable would
+  // invert the recovery protocol's fail-closed boundary.
   if (restoreMarkerAuthorityStatus(baseDir) !== 'missing') {
     result.restoreBackupCleanup = 'blocked-marker'
     return result
@@ -410,8 +381,8 @@ export async function cleanupSnapshotArtifacts(
     return result
   }
 
-  // Recheck at the destructive backup boundary. Production calls this under
-  // a writer fence, but an unexpected external marker still wins fail closed.
+  // Recheck at the destructive backup boundary: production calls this under a writer fence, but
+  // an unexpected external marker still wins fail closed.
   if (restoreMarkerAuthorityStatus(baseDir) !== 'missing') {
     result.restoreBackupCleanup = 'blocked-marker'
     return result
@@ -444,8 +415,8 @@ export async function cleanupSnapshotArtifacts(
       result.restoreBackupCleanup = 'blocked-unsafe-entry'
       return result
     }
-    // Never unlink a path an external actor could redirect, and never guess
-    // that a same-name file is disposable restore data.
+    // Never unlink a path an external actor could redirect, and never guess that a same-name
+    // file is disposable restore data.
     if (!info.isDirectory() || info.isSymbolicLink()) {
       result.restoreBackupCleanup = 'blocked-unsafe-entry'
       return result
@@ -480,10 +451,9 @@ async function isPublishedSnapshotPath(baseDir: string, path: string): Promise<b
 }
 
 /**
- * A pre-rollback stash source must be a real, non-symlink directory directly
- * under the private pre-rollback root with a stash-shaped basename.
- * `ownedDirectoryState` revalidates the parent's identity without following
- * the leaf, so a redirect between readdir and this check fails closed.
+ * A pre-rollback stash source must be a real, non-symlink directory directly under the private
+ * pre-rollback root with a stash-shaped basename; the parent identity is revalidated without
+ * following the leaf, so a redirect between readdir and this check fails closed.
  */
 async function isPublishedStashPath(baseDir: string, path: string): Promise<boolean> {
   const { preRollbackDir } = snapshotPaths(baseDir)
@@ -494,9 +464,8 @@ async function isPublishedStashPath(baseDir: string, path: string): Promise<bool
   return ownedDirectoryState(candidate) === 'directory'
 }
 
-/** The restore transaction may copy from a snapshot or a pre-rollback stash.
- *  Each check must be awaited before the fallthrough: an un-awaited promise is
- *  truthy and would short-circuit the `||` and mask the stash path. */
+/** The restore transaction may copy from a snapshot or a pre-rollback stash; each check must be
+ *  awaited, since an un-awaited promise is truthy and would mask the stash path. */
 async function isPublishedRestoreSource(baseDir: string, path: string): Promise<boolean> {
   if (await isPublishedSnapshotPath(baseDir, path)) return true
   return isPublishedStashPath(baseDir, path)
@@ -541,8 +510,8 @@ export async function snapshotDshHome(
     if (sourceState === 'directory') await copyFn(dshHome, staging)
     if (ownedDirectoryState(paths.snapshotsDir) !== 'directory'
       || !tightenOwnedDirectory(staging)) throw new Error('快照暂存目录身份不再可信')
-    // Directory publish: bounded Windows retry absorbs third-party handle
-    // occupancy (Defender/indexer/Explorer); POSIX is a plain rename.
+    // Directory publish: bounded Windows retry absorbs third-party handle occupancy
+    // (Defender/indexer/Explorer); POSIX is a plain rename.
     await renameWithWindowsRetry(staging, finalPath)
     if (ownedDirectoryState(paths.snapshotsDir) !== 'directory'
       || !tightenOwnedDirectory(finalPath)) throw new Error('快照发布目录身份不再可信')
@@ -576,8 +545,8 @@ function parseMarker(raw: string, baseDir: string, dshHome: string): RestoreMark
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
   const record = parsed as Record<string, unknown>
 
-  // Legacy markers had no phase and are intrinsically ambiguous. Start a new
-  // staged transaction; do not infer completion from dshHome + `.old`.
+  // Legacy markers had no phase and are intrinsically ambiguous; start a new staged transaction
+  // and do not infer completion from dshHome + `.old`.
   if (record.schemaVersion === undefined) {
     return typeof record.snapshotPath === 'string' && record.snapshotPath !== ''
       ? { legacySnapshotPath: record.snapshotPath }
@@ -589,8 +558,8 @@ function parseMarker(raw: string, baseDir: string, dshHome: string): RestoreMark
   if (typeof record.stagingPath !== 'string' || typeof record.backupPath !== 'string') return null
   if (typeof record.hadDshHome !== 'boolean' || typeof record.startedAt !== 'number' || typeof record.updatedAt !== 'number') return null
   if (resolve(record.dshHome) !== resolve(dshHome)) return null
-  // A marker may name a snapshot or a pre-rollback stash as its source; both
-  // live under the private dsh-runtime root and are re-validated per phase.
+  // A marker may name a snapshot or a pre-rollback stash as its source; both live under the
+  // private dsh-runtime root and are re-validated per phase.
   if (!pathIsInside(record.snapshotPath, snapshotPaths(baseDir).snapshotsDir)
     && !pathIsInside(record.snapshotPath, snapshotPaths(baseDir).preRollbackDir)) return null
 
@@ -679,8 +648,8 @@ async function runRestoreTransaction(
         await copyFn(marker.snapshotPath, marker.stagingPath)
       } catch (error) {
         await rm(marker.stagingPath, { recursive: true, force: true }).catch(() => {})
-        // Reported instead of folded: the marker stays durable for a retry,
-        // but the caller learns the copy itself failed.
+        // Reported instead of folded: the marker stays durable for a retry, but the caller learns
+        // the copy itself failed.
         return failureReport('incomplete', classifyRestoreFailure(error, 'copy-failed'), error)
       }
       if (!tightenOwnedDirectory(marker.stagingPath)) {
@@ -771,9 +740,8 @@ async function runRestoreTransaction(
       return cleanReport('complete')
     }
   } catch (error) {
-    // A real exception no longer masquerades as "the disk state is merely
-    // resumable": the outcome still describes the durable disk state while
-    // cause/error carry the failure to the caller.
+    // A real exception no longer masquerades as "the disk state is merely resumable": the outcome
+    // describes the durable state while cause/error carry the failure.
     return {
       outcome: interruptedOutcome(marker, dshHome),
       cause: classifyRestoreFailure(error, 'unexpected'),
@@ -794,14 +762,10 @@ export type RestoreMarkerSession =
   | { kind: 'blocked'; report: RestoreReport }
 
 /**
- * Shared authority prefix of every restore entry (audit 2.6): read the
- * marker, create the private runtime dir when absent, resume any valid marker
- * (legacy included), or begin a new transaction from the caller's source.
- * spawn.kind === 'resume' never starts a transaction, so
- * completeInterruptedRestore keeps its 'none' short-circuit without touching
- * the filesystem. spawn/hooks are optional additions to the frozen
- * two-argument contract, required to preserve the two restore entries'
- * begin semantics and crash-injection hooks.
+ * Shared authority prefix of every restore entry: read the marker, create the private runtime dir
+ * when absent, resume any valid marker (legacy included), or begin from the caller's source.
+ * spawn.kind === 'resume' never starts a transaction, so completeInterruptedRestore keeps its
+ * 'none' short-circuit without touching the filesystem; spawn/hooks are optional.
  */
 export async function openOrResumeRestoreMarker(
   baseDir: string,
@@ -859,8 +823,7 @@ export async function openOrResumeRestoreMarker(
   return { kind: 'none' }
 }
 
-/** Begin a fresh marker transaction and map any begin failure to a report
- *  (previously folded into a bare 'incomplete'). */
+/** Begin a fresh marker transaction and map any begin failure to a report. */
 async function beginRestoreSession(
   baseDir: string,
   dshHome: string,
@@ -877,7 +840,7 @@ async function beginRestoreSession(
   }
 }
 
-/** Report-returning snapshot restore core (audit 2.6). */
+/** Report-returning snapshot restore core. */
 export async function restoreSnapshotReport(
   baseDir: string,
   dshHome: string,
@@ -904,7 +867,7 @@ export async function restoreSnapshot(
   return requireOutcome(await restoreSnapshotReport(baseDir, dshHome, snapshotPath, copyFn, hooks))
 }
 
-/** Report-returning pre-rollback core (audit 2.6). */
+/** Report-returning pre-rollback core. */
 export async function restorePreRollbackReport(
   baseDir: string,
   dshHome: string,
@@ -921,20 +884,18 @@ export async function restorePreRollbackReport(
   if (session.kind === 'none') return blockedReport('marker-invalid', '没有可恢复的回滚暂存')
   const report = await runRestoreTransaction(baseDir, dshHome, session.marker, copyFn, hooks)
   if (report.outcome === 'complete') {
-    // The stash has been consumed: its content now lives in DSH_HOME and the
-    // pre-restore data is preserved in dsh-home.old. Remove it so the restore
-    // action disappears and the next manual rollback writes a fresh stash. A
-    // 'half' outcome keeps the stash (the durable marker resumes from it).
+    // The stash has been consumed (content now lives in DSH_HOME, pre-restore data in
+    // dsh-home.old): remove it so the rollback action disappears; a 'half' outcome keeps it
+    // because the durable marker resumes from it.
     await rm(stashPath, { recursive: true, force: true }).catch(() => {})
   }
   return report
 }
 
 /**
- * Restore a pre-rollback stash over DSH_HOME. The stash is validated as a
- * real, non-symlink directory under the private pre-rollback root before the
- * restore marker is written, and again inside the copying phase on resume.
- * An existing valid marker (snapshot or stash) wins: recovery continues it.
+ * Restore a pre-rollback stash over DSH_HOME. The stash is validated as a real, non-symlink
+ * directory under the private pre-rollback root before the marker is written and again inside
+ * the copying phase on resume; an existing valid marker (snapshot or stash) wins.
  */
 export async function restorePreRollback(
   baseDir: string,
@@ -999,9 +960,8 @@ function stashTimestamp(name: string): number {
 }
 
 /**
- * Safe, non-symlink pre-rollback stash names (basenames only, newest first).
- * Dirent `isDirectory()` never follows a symlink, and only stash-shaped
- * names are surfaced; anything else in the private root is ignored.
+ * Safe, non-symlink pre-rollback stash names (basenames only, newest first); dirent
+ * `isDirectory()` never follows a symlink and non-stash entries are ignored.
  */
 export async function listPreRollbackStashes(baseDir: string): Promise<string[]> {
   const { preRollbackDir } = snapshotPaths(baseDir)
@@ -1022,10 +982,9 @@ export async function listPreRollbackStashes(baseDir: string): Promise<string[]>
 }
 
 /**
- * Resolve a stash basename into the private pre-rollback root with a no-follow
- * identity check (parent + leaf revalidated, symlinks/unsafe dirs rejected).
- * Tightening the owned inode also proves the path was not redirected after the
- * lstat, and is the validation the restore caller requires before any marker
+ * Resolve a stash basename into the private pre-rollback root with a no-follow identity check
+ * (parent + leaf revalidated, symlinks/unsafe dirs rejected). Tightening the owned inode also
+ * proves the path was not redirected after the lstat; the caller requires this before any marker
  * write or rename.
  */
 async function resolveStashPath(baseDir: string, stashName: string): Promise<string | null> {
@@ -1038,10 +997,9 @@ async function resolveStashPath(baseDir: string, stashName: string): Promise<str
 }
 
 /**
- * Stash current DSH_HOME before manual rollback. This is a still copy into a
- * temporary directory followed by an atomic publish; the live DSH_HOME is not
- * renamed away before the durable restore marker exists. A crash during this
- * helper therefore leaves the authoritative data untouched.
+ * Stash current DSH_HOME before manual rollback: a still copy into a temporary directory
+ * followed by an atomic publish, so the live DSH_HOME is not renamed away before the durable
+ * restore marker exists and a crash here leaves the authoritative data untouched.
  */
 export async function stashPreRollback(
   baseDir: string,
@@ -1093,7 +1051,6 @@ export interface SnapshotSummary {
   latestAt: string | null
   restoreInProgress: boolean
   preRollbackCount: number
-  /** Newest safe stash basename, or null when no stash exists. */
   latestStashName: string | null
 }
 
@@ -1130,8 +1087,8 @@ async function readRestoreSnapshotProtection(baseDir: string): Promise<RestoreSn
   const paths = snapshotPaths(baseDir)
   const authority = readRestoreMarkerAuthority(baseDir)
   if (authority.kind === 'missing') return { kind: 'missing' }
-  // Unsafe or unreadable marker: the only recovery snapshot is unknowable, so
-  // preserve the whole set instead of trading it for bounded storage.
+  // Unsafe or unreadable marker: the only recovery snapshot is unknowable, so preserve the whole
+  // set instead of trading it for bounded storage.
   if (authority.kind === 'unsafe' || authority.kind === 'unknown') return { kind: 'corrupt' }
   try {
     const parsed = JSON.parse(authority.raw) as unknown
@@ -1150,9 +1107,8 @@ async function readRestoreSnapshotProtection(baseDir: string): Promise<RestoreSn
 }
 
 /**
- * Bound snapshots without guessing recovery ownership. The caller supplies
- * active/known-good versions plus exact failure/journal basenames; invalidly
- * named directories are left untouched (fail closed).
+ * Bound snapshots without guessing recovery ownership: the caller supplies active/known-good
+ * versions plus exact failure/journal basenames; invalidly named directories are left untouched.
  */
 export async function pruneSnapshots(baseDir: string, policy: SnapshotRetentionPolicy): Promise<string[]> {
   const protectedVersions = new Set(policy.protectedVersions.map(assertSafeVersion))
@@ -1162,8 +1118,8 @@ export async function pruneSnapshots(baseDir: string, policy: SnapshotRetentionP
     protectedNames.add(name)
   }
   const restoreProtection = await readRestoreSnapshotProtection(baseDir)
-  // A corrupt marker makes the only recovery snapshot unknowable. Preserve
-  // the entire set instead of trading bounded storage for data loss.
+  // A corrupt marker makes the only recovery snapshot unknowable: preserve the entire set
+  // instead of trading bounded storage for data loss.
   if (restoreProtection.kind === 'corrupt') return []
   if (restoreProtection.kind === 'valid') protectedNames.add(restoreProtection.name)
   const keepRecent = policy.keepRecentUnprotected ?? 3
@@ -1206,23 +1162,18 @@ export interface RuntimeSnapshotPruneResult {
   removedSnapshots: string[]
   /** Crash-only staging / restore-backup cleanup outcome. */
   artifactCleanup: SnapshotArtifactCleanupResult
-  /** Why pruning was skipped this pass, or null when it ran to completion.
-   *  These are fail-closed conditions, never silent no-ops. */
+  /** Why pruning was skipped this pass, or null when it ran to completion; fail-closed
+   *  conditions, never silent no-ops. */
   skippedReason: 'none' | 'blocked-marker' | 'retention-corrupt'
 }
 
 /**
- * The single bounded-maintenance routine every owner runs after a runtime
- * transaction (design 18): clean crash-only staging + bound completed restore
- * backups, then prune snapshots to the retention policy. Desktop and gateway
- * owners differ only in WHEN they call it (transaction tail) and in their own
- * writer serialization — the routine itself is one shared implementation so
- * one owner can never silently stop bounding snapshot growth.
- *
- * Fail-closed ordering: an
- * authoritative restore marker blocks ALL cleanup (its evidence may name the
- * only recovery snapshot); corrupt retention metadata preserves every
- * snapshot instead of guessing.
+ * The single bounded-maintenance routine every owner runs after a runtime transaction: clean
+ * crash-only staging + bound completed restore backups, then prune snapshots to the retention
+ * policy. Owners differ only in WHEN they call it and in their own writer serialization — one
+ * shared implementation, so no owner can silently stop bounding snapshot growth. Fail-closed: an
+ * authoritative restore marker blocks ALL cleanup (its evidence may name the only recovery
+ * snapshot), and corrupt retention metadata preserves every snapshot instead of guessing.
  */
 export async function pruneRuntimeSnapshots(
   baseDir: string,
@@ -1235,9 +1186,8 @@ export async function pruneRuntimeSnapshots(
   }
   const retention = runtimeSnapshotRetentionState(baseDir)
   if (retention.kind !== 'valid') {
-    // corrupt OR unknown (EACCES/EIO) protection set: preserve every snapshot.
-    // The detail lives on the retention state; the wire vocabulary keeps its
-    // historical skippedReason value.
+    // corrupt OR unknown (EACCES/EIO) protection set: preserve every snapshot; the wire
+    // vocabulary keeps its historical skippedReason value.
     return { removedSnapshots: [], artifactCleanup, skippedReason: 'retention-corrupt' }
   }
   const removedSnapshots = await pruneSnapshots(baseDir, {
@@ -1285,8 +1235,7 @@ export async function snapshotSummary(baseDir: string): Promise<SnapshotSummary>
   const preRollbackRootState = ownedDirectoryState(paths.preRollbackDir)
   if (preRollbackRootState === 'unsafe') throw new Error('回滚暂存根目录不安全')
   if (preRollbackRootState === 'directory') {
-    // Safe enumeration only: crash staging and non-stash entries are neither
-    // counted nor surfaced (see listPreRollbackStashes).
+    // Safe enumeration only: crash staging and non-stash entries are neither counted nor surfaced.
     const stashes = await listPreRollbackStashes(baseDir)
     preRollbackCount = stashes.length
     latestStashName = stashes[0] ?? null
@@ -1301,9 +1250,8 @@ export async function snapshotSummary(baseDir: string): Promise<SnapshotSummary>
   }
 }
 
-/** Startup completion entry. Marker snapshot/phase is authoritative; the
- *  shared openOrResumeRestoreMarker prefix is the third consumer of the
- *  authority/resume path (audit 2.6). */
+/** Startup completion entry: marker snapshot/phase is authoritative; the shared
+ *  openOrResumeRestoreMarker prefix is the third consumer of the authority path. */
 export async function completeInterruptedRestore(
   baseDir: string,
   dshHome: string,

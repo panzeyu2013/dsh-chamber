@@ -1,12 +1,9 @@
 /**
- * core-ops-create.ts — the GitWorktreeCore create/rollback family.
+ * The GitWorktreeCore create/rollback family.
  *
- * Deps injection instead of class surgery: the factory receives exactly the
- * fields and cross-family callbacks this path uses (git runner, fs, clock,
- * token, operation cap, preview/create-operation tables, common-dir mutex and
- * the read/validate/topology/path callbacks), so no private member of
- * GitWorktreeCore is widened. GitWorktreeCore keeps same-named facade methods
- * and the package/error surface stays stable.
+ * Deps injection instead of class surgery: the factory receives exactly the fields and
+ * cross-family callbacks this path uses, so no private member of GitWorktreeCore is
+ * widened and the facade/package surface stays stable.
  */
 
 import { resolve, sep } from 'node:path'
@@ -90,9 +87,7 @@ export function createWorktreeCreateOps(deps: CreateOpsDeps): CreateOps {
         startHead = branchHead
       } else {
         if (branchHead !== null) fail('branch-exists', `local branch '${input.branch.name}' already exists`)
-        // OpenChamber sourceBranch: the new branch starts from the chosen
-        // local branch's head (pinned as an exact commit), defaulting to the
-        // main checkout HEAD.
+        // OpenChamber sourceBranch: start from the chosen branch's head, defaulting to main HEAD.
         if (input.startRef !== undefined) {
           const startHeadOf = await deps.localBranchHead(topology.mainPath, input.startRef)
           if (startHeadOf === null) fail('branch-not-found', `source branch '${input.startRef}' does not exist`)
@@ -195,9 +190,8 @@ export function createWorktreeCreateOps(deps: CreateOpsDeps): CreateOps {
       }
       return result
     } catch (error) {
-      // Once a mutation was admitted, timeout/output overflow/non-zero exit
-      // and postcondition read failures all have uncertain commit outcome.
-      // The same operation id must reconcile topology before another add.
+      // Once a mutation was admitted, timeout/output overflow/non-zero exit and
+      // postcondition failures all have uncertain outcome; reconcile before another add.
       record.state = record.attemptedCreate ? 'uncertain' : 'ready'
       record.updatedAt = deps.now()
       record.createPromise = undefined
@@ -205,10 +199,10 @@ export function createWorktreeCreateOps(deps: CreateOpsDeps): CreateOps {
     }
   }
 
-  /**
-   * Compensate only a worktree proven to have been created by this operation.
-   * No force and no branch deletion are ever available.
-   */
+/**
+ * Compensate only a worktree proven to have been created by this operation; no force and
+ * no branch deletion are ever available.
+ */
 
   async function rollbackCreate(untrusted: RollbackCreateInput): Promise<RollbackCreateResult> {
     const input = parseRollbackInput(untrusted)
@@ -362,8 +356,7 @@ export function createWorktreeCreateOps(deps: CreateOpsDeps): CreateOps {
         }
       }
 
-      // Re-read the registry immediately before mutation. This cannot make Git
-      // and dsh storage transactional, but it closes ordinary UI races.
+      // Re-read the registry immediately before mutation; this closes ordinary UI races.
       const latest = await deps.readSource()
       const latestWorkspace = deps.workspace(latest, preview.sourceWorkspaceId)
       if (await deps.existingPath(latestWorkspace.path) !== await deps.existingPath(workspace.path)) {
@@ -389,9 +382,8 @@ export function createWorktreeCreateOps(deps: CreateOpsDeps): CreateOps {
       try {
         await deps.gitChecked(topology.mainPath, args, true)
       } catch (error) {
-        // A spawn failure proves Git never accepted the operation. Timeout,
-        // output overflow and non-zero exit remain ambiguous and are reconciled
-        // by identity, but can never grant rollback provenance.
+        // A spawn failure proves Git never accepted the operation; timeout/output/non-zero
+        // exit remain ambiguous and reconciled by identity, never granting rollback provenance.
         if (error instanceof GitWorktreeError && error.code === 'git-spawn-failed') {
           operation.attemptedCreate = false
         }
@@ -441,9 +433,8 @@ export function createWorktreeCreateOps(deps: CreateOpsDeps): CreateOps {
       if (topology.commonDir !== facts.commonDir) fail('repository-changed', 'created repository identity changed')
       const target = topology.worktrees.find(worktree => worktree.path === facts.path)
       if (target === undefined) {
-        // A prior rollback may have committed before its response/post-read
-        // failed. Proven create ownership plus authoritative absence is the
-        // idempotent success condition; the preserved branch is untouched.
+        // A prior rollback may have committed before its response failed; proven create
+        // ownership plus authoritative absence is the idempotent success condition.
         return {
           operationId: id,
           removed: true,
@@ -461,10 +452,8 @@ export function createWorktreeCreateOps(deps: CreateOpsDeps): CreateOps {
       if (target.locked) fail('worktree-locked', 'locked worktrees cannot be rolled back')
       if (target.branch !== facts.branch) fail('worktree-changed', 'the operation-created worktree changed branch')
       if (target.head !== facts.head) fail('worktree-changed', 'the operation-created worktree changed HEAD')
-      // A MISSING target (external actor deleted the directory, the admin
-      // record survives) has no working-tree content to protect or probe —
-      // the rollback then converges by clearing the leftover record (a plain
-      // `git worktree remove` succeeds on the absent directory).
+      // A MISSING target (directory externally deleted, admin record survives) has no
+      // content to protect; rollback converges by clearing the leftover record.
       if (target.missing !== true && await deps.isDirty(target.path)) fail('worktree-dirty', 'dirty worktrees cannot be rolled back')
 
       // Fresh workspace check immediately before Git removal. Never force.
@@ -547,9 +536,8 @@ export function createWorktreeCreateOps(deps: CreateOpsDeps): CreateOps {
     if (deps.createOperations.size < deps.operationCapacity) return
     let oldest: { id: string; updatedAt: number } | undefined
     for (const [id, record] of deps.createOperations) {
-      // Capacity pressure may discard only a proven no-admission failure. An
-      // uncertain/created/rolled-back record is an idempotency tombstone and/or
-      // rollback provenance; evicting it early would permit ABA mutation.
+      // Capacity pressure may discard only a proven no-admission failure: an uncertain/
+      // created/rolled-back record is an idempotency tombstone or rollback provenance.
       if (record.state !== 'ready'
         || record.attemptedCreate
         || record.attemptedRollback

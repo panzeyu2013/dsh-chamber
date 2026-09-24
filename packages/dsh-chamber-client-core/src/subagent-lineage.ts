@@ -1,13 +1,7 @@
 /**
- * Local copy of the vendor `dsh-client-ui-workspace`
- * `indexSubagentDescendants` (ui-workspace/src/client/subagent-lineage.ts).
- *
- * WHY a local copy: a deep-source import would pull vendor ui-workspace
- * sources into chamber typecheck programs, and those sources do not compile
- * under chamber tsconfigs (see ./directory-browse-error.ts header). The
- * function is a pure, self-contained projection; the sidebar's subagent counts
- * reuse it verbatim (client/index.ts), matching the official ui-workspace tree
- * semantics.
+ * Local copy of the vendor `dsh-client-ui-workspace` `indexSubagentDescendants`: a deep-source
+ * import would pull vendor sources into chamber typecheck programs that do not compile under
+ * chamber tsconfigs; the copy must match the official ui-workspace tree semantics.
  */
 
 /** Session id (wire string; kept local to avoid vendor subpath imports). */
@@ -27,11 +21,7 @@ export interface SubagentDescendantSummary {
   readonly runningCount: number
 }
 
-/**
- * Index uninterrupted subagent descendants under each ancestor.
- * @param summaries - Session summaries keyed by id.
- * @returns descendant totals keyed by possible parent id.
- */
+/** Index uninterrupted subagent descendants under each ancestor (totals keyed by possible parent id). */
 export function indexSubagentDescendants(
   summaries: Readonly<Record<SessionId, LineageEntry>>,
 ): ReadonlyMap<SessionId, SubagentDescendantSummary> {

@@ -1,59 +1,16 @@
 /**
- * PluginDialog.tsx — the single unified plugin-management dialog (plan 24
- * B1 / D5-A, design 21 §6.6 勘误⑥ closed): PluginSyncModal (local +
- * ssh) and PluginInventoryView (gateway + http-direct) merged into one
- * component whose backend fork is confined to the data sources and the
- * action dispatch (design 21 §3 single-model matrix). Unified zones:
- *   ① diagnostic banner (bannerProjection — state name + message, never the
- *     state/pluginId/message triple repetition);
- *   ② chamber built-in component table — one row per TARGET-APPLICABLE registry
- *     host package (`applicableChamberPackages`: a `localOnly` row is listed for
- *     the local target alone; the CHAMBER_HOST_PACKAGES projection is the row
- *     source), plus the gateway's chamber CLIENT rows derived from the Loader
- *     inventory (the packaged mobile entry today; never a hardcoded package
- *     name) — columns package | local badge |
- *     remote/gateway badge | version. The rows themselves come from the pure,
- *     tested `deriveChamberRows` (plugin-inventory-text.ts); this component
- *     only maps descriptors to elements. Version drift chips and the
- *     「重新同步 chamber 组件」action (GATEWAY-only) live in this zone;
- *   ③ third-party plugin zone (installed list + per-row remove + add: spec
- *     input + npm search + local import — a plugin source folder OR a ready
- *     .tgz archive, design 21 §6.5 archive-pick; the macOS picker offers
- *     both, Windows/Linux keep the folder dialog);
- *   ④ recovery/action row (gateway only: runtimeDown + undoForLatest →
- *     recovery banner + the 撤销=恢复 entry, which posts
- *     POST /chamber/plugins/undo and waits for the restore op's terminal
- *     state — never a remove-only shortcut).
- *
- * Backend surfaces (design 21 §3):
- *   local  → localPluginList / localPluginAdd / localPluginAddFile /
- *            localPluginRemove (desktop local `dsh plugin` exec);
- *   ssh    → pluginList / pluginApply / pluginMaterializeAddPick /
- *            restartService / seedHostGraph / sshPluginUndo — the sync diff
- *            tab behavior (rows, filters, apply orchestration, chamber
- *            seed/restart actions, installed list with per-row remove and
- *            the「撤销最近变更」toolbar entry) keeps its behavior verbatim;
- *   gateway→ pluginInventory read (Loader badges) + gatewayChamberSeedCache
- *            / gatewayInstalled / gatewayTasks (read-only undo derive — task
- *            rows are NEVER rendered, design D4-A) / gatewayPluginApply /
- *            gatewayPluginMaterialize / gatewayPluginSync + the controlled
- *            managed-dsh restart (POST + pollGatewayReady). Add capability:
- *            spec → gatewayPluginApply(id, {add:[value], remove:[],
- *            deferRestart:false}) classified via classifyGatewayApplyResult;
- *            folder/.tgz → gatewayPluginMaterialize(id) — now terminal on
- *            return (main settles the executor op + the controlled restart):
- *            deferred = persisted for the next ready edge; outcome.restarted
- *            = installed AND live on the running instance; outcome.executed
- *            without restart = installed, mounts at the next restart.
- *   http   → read-only Loader manifest (pluginInventory list) — no /chamber
- *            surface, no add surface.
- *
- * The「变更记录」zone is deleted (the backend journal/backups are kept, the
- * UI does not render task rows — D4-A). The gateway undo entry is
- * recovery-shaped: only while runtimeDown (the card passes stopped/error/
- * restart-exhausted) AND undoForLatest(taskRows) has an action. The ssh
- * undo button stays in the installed tab (behavior unchanged — plan 24
- * scope: GATEWAY is recovery-shaped only).
+ * PluginDialog.tsx — the unified plugin-management dialog (design 21 §3): one
+ * component whose backend fork is confined to data sources + action dispatch.
+ * Zones: ① diagnostic banner (bannerProjection); ② chamber built-in table (rows
+ * DERIVED by the pure `deriveChamberRows`; `localOnly` registry rows apply to the
+ * local target alone); ③ third-party (installed + per-row remove + add: spec / npm
+ * search / local import — folder or .tgz); ④ recovery row (gateway: runtimeDown +
+ * undoForLatest → 撤销=恢复, POST /chamber/plugins/undo, never remove-only).
+ * Backends: local (`dsh plugin` exec), ssh (list/apply/materialize/restart/seed/
+ * undo), gateway (Loader read + /chamber surfaces + controlled managed-dsh
+ * restart), http (read-only Loader manifest — no /chamber, no add).
+ * Journal task rows are NEVER rendered; the ssh undo stays in the installed tab,
+ * the gateway undo is recovery-shaped (runtimeDown only).
  */
 
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
@@ -61,9 +18,8 @@ import type { ReactNode } from 'react'
 import clsx from 'clsx'
 import { chamberBadgeClass, categoryLabel, isActionable, kindLabel, manageStatusClass, remoteStatusClass, roleBadgeClass, roleLabel, type CategoryFilter, type ManageStatus, type PluginPhase, type RemoteListStatus, type RemoteListTone, type RestartNote, type StatusFilter, type ViewPhase } from './plugin-dialog-status.ts'
 import { Button, IconRefreshOutline16, IconTrashOutline16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
-// The page-owned restart→reload completion (design 18 §3.6 item 8, client-core
-// face): a restart-to-apply refreshes the host's plugin mounts, but this window
-// keeps running the pre-restart client plugin set until it boots again.
+// Page-owned restart→reload completion: a restart refreshes the host's plugin
+// mounts, but this window keeps the pre-restart client plugin set until it boots again.
 import {
   RESTART_RELOAD_BUDGET_MS,
   armWindowReloadWhenServed,
@@ -127,7 +83,7 @@ import {
 import { bannerProjection, bootGapText, pluginDiagnosticTone, type PluginDiagnostic, type ServerBootGap } from './plugin-diagnostic.ts'
 import css from './ConnectionsSection.module.css'
 
-/** The §7.2 add-spec whitelist: `name`, `@scope/name`, or `name@<safe version>`. */
+/** Add-spec whitelist: `name`, `@scope/name`, or `name@<safe version>`. */
 const ADD_SPEC = /^(@[a-zA-Z0-9][a-zA-Z0-9._-]*\/)?[a-zA-Z0-9][a-zA-Z0-9._-]*(@(\^|~)?([0-9A-Za-z][0-9A-Za-z._+-]*|latest|next))?$/
 
 export type PluginDialogTarget =
@@ -138,22 +94,15 @@ export type PluginDialogTarget =
 
 /**
  * The unified plugin dialog.
- * @param props.target - the built target descriptor (see PluginDialogTarget).
- * @param props.diagnostic - this instance's client-plugin runtime diagnostic
- *   (design 09 §3.5): the dialog is the detail surface.
- * @param props.onRecheckDiagnostic - host-provided CHANNEL-class self-heal
- *   recheck, fired when the banner is visible / turns channel-class.
- * @param props.runtimeDown - gateway only (plan 24 B1.6): the card passes
- *   true while the managed dsh connectionState ∈ {stopped, error,
- *   restart-exhausted} — the recovery undo surface is gated on it.
- * @param props.onClose - close (gated while nested confirms are open).
+ * @param props.diagnostic - this instance's client-plugin runtime diagnostic; the dialog is its detail surface.
+ * @param props.runtimeDown - gateway only: true while the managed dsh is stopped/error/
+ *   restart-exhausted — gates the recovery undo surface.
  */
 export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnostic, runtimeDown, onClose }: {
   t: (key: SettingsConnectionsKey) => string
   target: PluginDialogTarget
   diagnostic?: PluginDiagnostic | undefined
-  /** The instance's settled-boot gap (design 05 §4), from the bridge
-   *  projection. A DIFFERENT fact from `diagnostic` — see PluginDiagnosticLine. */
+  /** The instance's settled-boot gap — a DIFFERENT fact from `diagnostic`. */
   bootGap?: ServerBootGap | undefined
   onRecheckDiagnostic?: () => void
   runtimeDown?: boolean
@@ -168,15 +117,12 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
    *  plugin can render dialogs in multiple N-ctx panels in one document. */
   const specInputId = useId()
   const sourceId = target.kind === 'gateway' || target.kind === 'http' ? target.sourceId : null
-  /** The RAW registry instance id (no `gateway-` proxy prefix) — every
-   *  /chamber REST wrapper and gateway IPC takes it (the wrappers own the
-   *  /api/i/gateway-<id> prefix themselves). */
+  /** The RAW registry instance id (no `gateway-` proxy prefix) — every /chamber
+   *  REST wrapper and gateway IPC takes it; the wrappers own the /api/i/gateway-<id> prefix. */
   const gatewayId = target.kind === 'gateway' ? target.sourceId.slice('gateway-'.length) : null
 
-  // ---- ssh 对账视图：legacy 整盘 diff 默认折叠，展开时应用。----
   const [diffOpen, setDiffOpen] = useState(false)
 
-  // ---- ssh sync three-view state ----
   const [phase, setPhase] = useState<PluginPhase>('loading')
   const [localManifest, setLocalManifest] = useState<LocalPluginManifest | null>(null)
   const [remoteManifest, setRemoteManifest] = useState<RemotePluginManifest | null>(null)
@@ -192,23 +138,21 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   const [confirmApply, setConfirmApply] = useState(false)
   const applyingRef = useRef(false)
 
-  // ---- chamber-injected host-graph (design 09): manual seed fallback ----
+  // chamber-injected host-graph: manual seed fallback
   const [seedBusy, setSeedBusy] = useState(false)
   const [seedError, setSeedError] = useState<string | null>(null)
-  // ---- one-click restart for the injected-but-not-live state (08 §11) ----
+  // one-click restart for the injected-but-not-live state
   const [restartBusy, setRestartBusy] = useState(false)
   const [restartError, setRestartError] = useState<string | null>(null)
-  /** A seed that wrote/patched needs a restart to take effect, even when
-   *  module A was already live (host-graph live does not prove the newly
-   *  seeded git-worktree boot row loaded). Cleared by a successful restart. */
+  /** A seed that wrote/patched needs a restart even when module A was already
+   *  live (host-graph live does not prove the newly seeded boot row loaded). Cleared
+   *  by a successful restart. */
   const [pendingRestart, setPendingRestart] = useState(false)
 
-  // ---- filters ----
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState<CategoryFilter>('all')
   const [status, setStatus] = useState<StatusFilter>('diff')
 
-  // ---- local list state (local instance) ----
   const [localList, setLocalList] = useState<LocalPluginManifest | null>(null)
   const [localListError, setLocalListError] = useState<string | null>(null)
   const [localLoading, setLocalLoading] = useState(false)
@@ -216,87 +160,75 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   const [localRemoveBusy, setLocalRemoveBusy] = useState(false)
   const [localRemoveError, setLocalRemoveError] = useState<string | null>(null)
 
-  // ---- ssh installed-list state (design 21 §6.6 list tab) ----
   const [remoteListStatus, setRemoteListStatus] = useState<RemoteListStatus | null>(null)
   const [remoteRowErrors, setRemoteRowErrors] = useState<Record<string, string>>({})
   const [remoteRemoveTarget, setRemoteRemoveTarget] = useState<string | null>(null)
   const [remoteRemoveBusy, setRemoteRemoveBusy] = useState(false)
   const [undoBusy, setUndoBusy] = useState(false)
 
-  // ---- gateway / http-direct Loader read ----
   const [viewPhase, setViewPhase] = useState<ViewPhase>('loading')
   const [viewError, setViewError] = useState<string | null>(null)
   const [snapshot, setSnapshot] = useState<PluginInventorySnapshot | null>(null)
-  /** 本地实例 Loader 快照（local zone 第三方行生效状态用；源 = /api/i/local）。
-   *  读失败（实例未运行等）置 null 静默降级——状态列留空，绝不报错横幅
-   *  （本地实例重启入口在连接卡，对话框外）。 */
+  /** 本地实例 Loader 快照（源 = /api/i/local）：读失败（实例未运行等）置 null
+   *  静默降级——状态列留空，绝不报错横幅（本地重启入口在连接卡，对话框外）。 */
   const [localSnapshot, setLocalSnapshot] = useState<PluginInventorySnapshot | null>(null)
   const [reloadNonce, setReloadNonce] = useState(0)
-  /** 最近一次 Loader 快照镜像：reload 期间保留旧帧渲染、仅首载显示 loading，
-   *  避免每次操作后的「loading→footer 闪没 + 瞬时谎报未注入」。 */
+  /** 最近一次 Loader 快照：reload 期间保留旧帧渲染、仅首载显示 loading
+   *  （避免「loading→footer 闪没 + 瞬时谎报未注入」）。 */
   const snapshotRef = useRef<PluginInventorySnapshot | null>(null)
-  /** reload 进行中：刷新按钮 in-flight 禁用（防重复并发 + 隐式 busy 提示）。 */
+  /** reload 进行中：刷新按钮禁用（防重复并发 + 隐式 busy 提示）。 */
   const [reloading, setReloading] = useState(false)
-  // The EXPECTED chamber host-package set + the local side's per-package
-  // state, from the desktop's profile manifest (which derives it from the
-  // control-plane registry — the page never hardcodes the package list).
-  // Unreadable is the same loud hint, never a silent "not injected". Re-runs
-  // on every reload.
+  // The EXPECTED chamber host-package set + the local side's per-package state,
+  // from the desktop's profile manifest (never hardcoded here). Unreadable is the
+  // same loud hint, never a silent "not injected". Re-runs on every reload.
   const [localChamberPackages, setLocalChamberPackages] = useState<ChamberHostPackageState[] | null>(null)
   const [localSideFailed, setLocalSideFailed] = useState(false)
-  // 「重启生效」(design 21 §5.1): controlled managed-dsh restart — the same
-  // POST + pollGatewayReady semantics as the connection card.
+  // 「重启生效」: controlled managed-dsh restart — same POST + pollGatewayReady
+  // semantics as the connection card.
   const [restarting, setRestarting] = useState(false)
   const [restartNote, setRestartNote] = useState<RestartNote | null>(null)
-  // Gateway chamber seed-cache projection (design 21 §6.2 A0 read side).
+  // Gateway chamber seed-cache projection (A0 read side).
   const [seedCache, setSeedCache] = useState<Record<string, string | null> | null>(null)
   const [seedCacheError, setSeedCacheError] = useState<string | null>(null)
-  // Manual chamber sync (design 21 §6.5): re-runs the ready registration's
-  // seed-cache sync through the main process.
+  // Manual chamber sync: re-runs the ready registration's seed-cache sync through the main process.
   const [syncing, setSyncing] = useState(false)
   const [syncNote, setSyncNote] = useState<string | null>(null)
   const [syncError, setSyncError] = useState<string | null>(null)
-  // Gateway management projections (design 21 §6.2): installed list + the
-  // task journal (READ-ONLY undo derive — rows are never rendered, D4-A).
+  // Gateway management projections: installed list + task journal (READ-ONLY undo
+  // derive — rows are never rendered).
   const [installed, setInstalled] = useState<GatewayInstalledProjection | null>(null)
   const [installedError, setInstalledError] = useState<string | null>(null)
   const [taskRows, setTaskRows] = useState<TaskRow[] | null>(null)
   const [tasksError, setTasksError] = useState<string | null>(null)
-  /** Row-remove / undo apply in flight (profile-mutating — single-flight
-   *  with syncing/restarting). */
+  /** Row-remove / undo apply in flight (profile-mutating — single-flight with syncing/restarting). */
   const [removeBusy, setRemoveBusy] = useState(false)
   /** Row awaiting its per-row remove/undo confirm modal. */
   const [removeTarget, setRemoveTarget] = useState<string | null>(null)
-  /** Which flow opened the confirm modal ('undo' vs 'row'). */
   /** Management-zone outcome line (remove/undo executed/refused). */
   const [manageStatus, setManageStatus] = useState<ManageStatus | null>(null)
 
-  // ---- shared add-view state (local / ssh / gateway) ----
   const [draft, setDraft] = useState('')
   const [draftError, setDraftError] = useState<string | null>(null)
   const [installing, setInstalling] = useState(false)
-  /** 本地导入（文件夹/.tgz）专用 busy（与 installing 并存）：导入中时安装按钮
-   *  不显示「安装中…」，避免语义错位（同一 busy 也覆盖 .tgz 导入）。 */
+  /** 本地导入（文件夹/.tgz）专用 busy（与 installing 并存）：导入中安装按钮不显示
+   *  「安装中…」，避免语义错位（同一 busy 也覆盖 .tgz 导入）。 */
   const [folderBusy, setFolderBusy] = useState(false)
   const [addResult, setAddResult] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [searching, setSearching] = useState(false)
   const [hits, setHits] = useState<NpmSearchPackage[]>([])
   const [searchError, setSearchError] = useState<string | null>(null)
-  /** 最近一次成功完成的搜索词：hits 为空且无错误时用于渲染零命中空态
-   *  （改词即失配隐藏；仅在有结果的搜索后清空由下一次搜索覆盖）。 */
+  /** 最近一次成功完成的搜索词：hits 空且无错误时渲染零命中空态（改词即失配隐藏）。 */
   const [searchDone, setSearchDone] = useState<string | null>(null)
 
-  // Diagnostic self-heal (design 09 §3.5): whenever the banner shows a
-  // problem, ask the host to re-check — the host runner re-verifies
-  // CHANNEL-class states only and skips boot-fact classes without fetching,
-  // so this cannot loop.
+  // Diagnostic self-heal: whenever the banner shows a problem, ask the host to
+  // re-check — the host re-verifies CHANNEL-class states only and skips boot-fact
+  // classes without fetching, so this cannot loop.
   useEffect(() => {
     if (diagnostic === undefined || diagnostic.state === 'ok') return
     onRecheckDiagnostic?.()
   }, [diagnostic?.state])
 
-  // ---- local: load the local manifest on open ----
   const loadLocalList = useCallback(async (): Promise<void> => {
     setLocalLoading(true)
     try {
@@ -316,7 +248,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     }
   }, [])
 
-  /** Confirm-remove one plugin from the LOCAL dsh profile (design 13 §5). */
+  /** Confirm-remove one plugin from the LOCAL dsh profile. */
   const confirmLocalRemove = useCallback(async (): Promise<void> => {
     if (localRemoveTarget === null || localRemoveBusy) return
     setLocalRemoveBusy(true)
@@ -324,13 +256,11 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     try {
       const res = await localPluginRemove(localRemoveTarget)
       if ('error' in res) {
-        // 失败即关 Modal：错误落到 zone 顶部 alert 可见（ssh/gateway 同语义；
-        // 不关闭时错误被确认 Modal 叠层遮挡）。
+        // 失败即关 Modal：错误落到 zone 顶部 alert 可见（否则被确认 Modal 叠层遮挡）。
         setLocalRemoveError(res.error)
         setLocalRemoveTarget(null)
       } else {
-        // Main-process confirmation dismissed: silent no-op — nothing was
-        // removed, keep the list as-is (never a misleading refresh).
+        // Main-process confirmation dismissed: silent no-op — nothing removed, no misleading refresh.
         setLocalRemoveTarget(null)
         if (!('cancelled' in res)) await loadLocalList()
       }
@@ -343,9 +273,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   }, [localRemoveTarget, localRemoveBusy, loadLocalList])
 
   /**
-   * Reload the ssh sync projection. `keepChecked` preserves the user's
-   * checked rows (a seed 注入 re-probe must not silently reset the
-   * selection — the chamber rows are not part of the third-party diff).
+   * Reload the ssh sync projection. `keepChecked` preserves the user's checked rows
+   * (a seed 注入 re-probe must not silently reset the selection — the chamber rows
+   * are not part of the third-party diff).
    */
   const loadSync = useCallback(async (keepChecked = false): Promise<void> => {
     if (!isSsh || sshSpec === null) return
@@ -361,11 +291,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         setPhase('error')
         return
       }
-      // Commit the desktop projection the moment it is read. The chamber table
-      // reads it as the 本地 column AND as the fallback row source when the
-      // remote read fails, so a later failure must not discard it: on an ssh
-      // exec failure or an unparseable remote profile the table must still
-      // render the known desktop rows (the zone is phase-independent).
+      // Commit the desktop projection the moment it is read: the chamber table reads
+      // it as the 本地 column AND as the fallback row source when the remote read
+      // fails — a later failure must not discard it (the zone is phase-independent).
       setLocalManifest(localRes.manifest)
       const remoteRes = await pluginList(sshSpec.id)
       if ('error' in remoteRes) {
@@ -373,26 +301,21 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         setPhase('error')
         return
       }
-      // Same for the remote answer: the chamber block is probed independently
-      // of package.json, so a corrupt remote manifest must not throw away rows
-      // and gates the probe DID answer (the error phase renders neither the
-      // dependency list nor the diff, so the early commit is inert elsewhere).
+      // Same for the remote answer: the chamber block is probed independently of
+      // package.json, so a corrupt remote manifest must not throw away rows the probe DID answer.
       setRemoteManifest(remoteRes.manifest)
-      // cat succeeded but package.json failed to parse: the manifest carries a
-      // loud error with an empty dependency set — surface it, never show a
-      // silent "manifests match" against the empty projection.
+      // cat ok but package.json unparseable: the manifest carries a loud error with an
+      // empty dependency set — surface it, never a silent "manifests match".
       if (remoteRes.manifest.error !== undefined && remoteRes.manifest.error !== '') {
         setLoadError(remoteRes.manifest.error)
         setPhase('error')
         return
       }
       setProfileNotInit(!remoteRes.manifest.profileExists)
-      // design 21 §6.11.5 diff/apply 边界（硬要求）：computePluginDiff 的输入只吃
-      // 可操作行（后端判非 protected）。受保护行若进了输入，missing 行默认勾选 ⇒
-      // doApply 会把 `@deepseek-ai/dsh-base@…` 当 add 提交，后端整批拒绝。
-      // 这是 **ssh** 面，故再排除官方 scope（ssh 装面保守，官方行会让整批失效）——
-      // 传输能力过滤，不是保护判定。rows 缺失（旧 producer，§6.11.7）时走
-      // legacyProtectedName 回退（回退路径里官方 scope 同样被排除）。
+      // diff/apply 边界（硬要求）：computePluginDiff 的输入只吃可操作行（后端判非 protected）——
+      // 受保护行进输入 ⇒ missing 行默认勾选，doApply 会把官方包当 add 提交、后端整批拒绝。
+      // ssh 面再排除官方 scope（装面保守，官方行让整批失效），是传输能力过滤而非保护判定；
+      // rows 缺失（旧 producer）走 legacyProtectedName 回退，回退路径同样排除官方 scope。
       const d = computePluginDiff(
         { ...localRes.manifest, dependencies: sshSyncableDependencies(localRes.manifest.dependencies, pluginRowsOf(localRes.manifest)) },
         { ...remoteRes.manifest, dependencies: sshSyncableDependencies(remoteRes.manifest.dependencies, pluginRowsOf(remoteRes.manifest)) },
@@ -413,8 +336,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     }
   }, [isSsh, sshSpec])
 
-  /** Manual host-graph seed fallback (design 09 module B): writes module A
-   *  onto the remote + ensures the cordis.patch.yml insert, then re-probes. */
+  /** Manual host-graph seed fallback: writes module A onto the remote + ensures
+   *  the cordis.patch.yml insert, then re-probes. */
   const doSeedHostGraph = useCallback(async (): Promise<void> => {
     if (!isSsh || sshSpec === null || seedBusy) return
     if (applyingRef.current) return
@@ -422,8 +345,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     setSeedError(null)
     try {
       const res = await seedHostGraph(sshSpec.id)
-      // SshSeedHostGraphResult has no cancelled arm (@dsh-chamber/renderer/global.d.ts):
-      // the main-process seed has no dialog/picker to dismiss.
+      // SshSeedHostGraphResult has no cancelled arm: the main-process seed has no dialog/picker to dismiss.
       if (res.ok) {
         setPendingRestart(res.wrote === true || res.patched === true)
       } else {
@@ -440,14 +362,10 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   }, [isSsh, sshSpec, seedBusy, loadSync])
 
   /**
-   * Arm the page-owned restart→reload completion for this dialog's source
-   * (design 18 §3.6 item 8). Every restart-to-apply path below ends here: the
-   * host restarts and refreshes its plugin mounts, but the window only picks the
-   * new client half up on a fresh boot. Page-owned on purpose — the completion
-   * survives this dialog closing, and the page-level key dedupes
-   * multiple paths arming for the same source.
-   * @param kind - the dialog's backend shape.
-   * @param rawId - the raw registry instance id.
+   * Arm the page-owned restart→reload completion for this dialog's source. Every
+   * restart-to-apply path below ends here: the host refreshes its plugin mounts, but
+   * this window only picks the new client half up on a fresh boot. Page-owned so the
+   * completion survives dialog close; the page-level key dedupes paths for one source.
    */
   const armSourceReload = useCallback((kind: 'ssh' | 'gateway', rawId: string): void => {
     if (kind === 'ssh') {
@@ -470,9 +388,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     }, { budgetMs: RESTART_RELOAD_BUDGET_MS })
   }, [])
 
-  /** One-click restart (design 08 §6.3): the chamber host packages are seeded
-   *  and the insert is in place, but the RUNNING instance has not loaded
-   *  them — restarting is the step that makes them live. Re-probes after. */
+  /** One-click restart: the chamber host packages are seeded and the insert is in
+   *  place, but the RUNNING instance has not loaded them — restarting makes them
+   *  live. Re-probes after. */
   const doRestartNow = useCallback(async (): Promise<void> => {
     if (!isSsh || sshSpec === null || restartBusy || seedBusy) return
     if (applyingRef.current) return
@@ -496,11 +414,10 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   }, [isSsh, sshSpec, restartBusy, seedBusy, loadSync, onRecheckDiagnostic])
 
   /**
-   * Row-level REMOVE on the ssh installed list (design 21 §6.6 ssh 等价):
-   * one-row remove batch through the same plugin_apply surface, classified
-   * through the model layer. Row-level honesty: a refused or executed-but-
-   * failed remove leaves the plugin installed — the failure is attached to
-   * the ROW (verbatim) and no reload runs (nothing changed).
+   * Row-level REMOVE on the ssh installed list: one-row remove batch through the same
+   * plugin_apply surface, classified through the model layer. A refused or executed-but-
+   * failed remove leaves the plugin installed — the failure is attached to the ROW
+   * (verbatim) and no reload runs (nothing changed).
    */
   const confirmRemoteRemove = useCallback(async (): Promise<void> => {
     if (!isSsh || sshSpec === null || remoteRemoveTarget === null) return
@@ -559,9 +476,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     }
   }, [isSsh, sshSpec, remoteRemoveTarget, remoteRemoveBusy, undoBusy, restart, loadSync, t])
 
-  /** 「撤销最近变更」on the ssh installed list (design 21 §6.4/§6.6 ssh
-   *  journal undo): id-only intent into the main-process undo — the journal
-   *  is authoritative, the renderer never supplies a spec. */
+  /** 「撤销最近变更」on the ssh installed list: id-only intent into the main-process
+   *  undo — the journal is authoritative, the renderer never supplies a spec. */
   const doUndo = useCallback(async (): Promise<void> => {
     if (!isSsh || sshSpec === null) return
     if (undoBusy || remoteRemoveBusy) return
@@ -579,8 +495,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
           || (undone.restarted === true && undone.ready !== false)
         if (clean) {
           setRemoteListStatus({ tone: 'ok', text: t('undoDone') })
-          // Only a real restart-to-apply needs the window reload; an undo that
-          // never restarted (restarted === undefined) is already in effect.
+          // Only a real restart-to-apply needs the window reload; an undo that never restarted is already in effect.
           if (undone.restarted === true) armSourceReload('ssh', sshSpec.id)
         } else if (undone.restarted === false) {
           const note = undone.readyNote === undefined ? '' : ` ${undone.readyNote}`
@@ -609,12 +524,10 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     else if (isLocal) void loadLocalList()
   }, [isSsh, isLocal, loadSync, loadLocalList])
 
-  // ---- gateway / http-direct Loader read ----
   useEffect(() => {
     if (sourceId === null) return
     let cancelled = false
-    // 首载（无旧帧）才显示 loading；reload 保留旧快照渲染，避免操作后
-    // footer 闪没 + chamber 远端 badge 瞬时谎报「未注入」。
+    // 首载（无旧帧）才显示 loading；reload 保留旧快照，避免 footer 闪没 + badge 瞬时谎报「未注入」。
     const hadData = snapshotRef.current !== null
     if (!hadData) {
       setViewPhase('loading')
@@ -645,12 +558,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     return () => { cancelled = true }
   }, [sourceId, reloadNonce])
 
-  // ---- local: Loader 快照（local zone 第三方行生效状态） ----
-  // Loads on open and re-runs on every zone reload (reloadNonce — the same
-  // channel the gateway/http snapshot uses); the RUNNING local instance only
-  // changes at a restart (the restart action is 「dsh 运行时」→「重启 dsh」,
-  // outside this dialog — NOT on the local connection card, which only has
-  // start/stop), so no per-action reload is needed here.
+  // local: Loader 快照（第三方行生效状态）——本对话框打开时与每次 zone reload 加载；
+  // 运行中的本地实例只在「dsh 运行时」→「重启 dsh」（对话框外）变化，故无需按操作重载。
   useEffect(() => {
     if (!isLocal) return
     let cancelled = false
@@ -659,8 +568,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       setLocalSnapshot(next)
     }).catch(() => {
       if (cancelled) return
-      // 本地实例未运行/清单不可读 → 快照置 null：状态列中性显示，绝不因读
-      // 失败谎报状态（本地无对话框内重试/重启上下文，静默降级）。
+      // 本地实例未运行/清单不可读 → 快照置 null：状态列中性显示，绝不因读失败谎报状态。
       setLocalSnapshot(null)
     })
     return () => { cancelled = true }
@@ -692,8 +600,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     return () => { cancelled = true }
   }, [sourceId, reloadNonce])
 
-  // Gateway-only chamber seed-cache read (design 21 §6.2, Phase 3 A0 read
-  // side): load on open and re-run on every reload / after a manual sync.
+  // Gateway-only chamber seed-cache read: load on open and re-run on every reload / after a manual sync.
   useEffect(() => {
     if (gatewayId === null) return
     let cancelled = false
@@ -711,13 +618,11 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     return () => { cancelled = true }
   }, [gatewayId, reloadNonce])
 
-  // Gateway-only management projections (design 21 §6.2/§6.6): the installed
-  // list + the task journal load on open and re-run on every reload and
-  // after every executed management op. The journal feeds ONLY the undo
-  // derive (undoForLatest) — task rows are never rendered (D4-A).
-  // The installed read shares the write fence (§6.2), so it is the one read
-  // that retries: the controller aborts a pending fence re-read on reload /
-  // unmount, so a discarded read cannot issue another request.
+  // Gateway-only management projections: installed list + task journal load on open and
+  // after every executed management op. The journal feeds ONLY the undo derive
+  // (undoForLatest) — task rows are never rendered. The installed read shares the write
+  // fence, so it is the one read that retries; a discarded read (reload/unmount) cannot
+  // issue another request.
   useEffect(() => {
     if (gatewayId === null) return
     let cancelled = false
@@ -743,17 +648,14 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     return () => { cancelled = true; controller.abort() }
   }, [gatewayId, reloadNonce])
 
-  /** 受控重启托管 dsh（design 21 §5.1）：POST /api/i/<sourceId>/
-   *  chamber/runtime/restart —— 仅 202 接受；409/400 body.error 逐字。202 后
-   *  按 shared pollGatewayReady 语义轮询；成功刷新清单（同手动刷新通道）。 */
+  /** 受控重启托管 dsh：POST /api/i/<sourceId>/chamber/runtime/restart —— 仅 202 接受；
+   *  409/400 body.error 逐字。202 后按 shared pollGatewayReady 语义轮询；成功刷新清单。 */
   const restartManagedDsh = async (): Promise<void> => {
     if (sourceId === null || restarting) return
     setRestarting(true)
     setRestartNote(null)
     try {
-      // Same single action layer as the connection card (restart-action.ts):
-      // POST + 202 gate + page-owned readiness poll, with the 409 localized
-      // through runtimeRefusalText so both surfaces share one copy.
+      // Same single action layer as the connection card: POST + 202 gate + page-owned readiness poll, 409 localized through runtimeRefusalText.
       const outcome = await runManagedRestart(sourceId, t)
       if (outcome.kind === 'reloaded') {
         setRestartNote({ tone: 'ok', text: t('restartManagedDshOk') })
@@ -768,9 +670,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     }
   }
 
-  /** 手动 chamber 同步（design 21 §6.5）：把桌面本机 chamber 两包重新上传进
-   *  gateway 种子缓存 —— ready 自动同步失败或版本漂移时的兜底入口。失败由
-   *  主进程显式投影为 ok:false + error；无论成败都重读两条投影。 */
+  /** 手动 chamber 同步：把桌面本机 chamber 两包重新上传进 gateway 种子缓存——ready 自动
+   *  同步失败或版本漂移时的兜底。失败显式投影为 ok:false + error；无论成败都重读两条投影。 */
   const chamberSyncNow = async (): Promise<void> => {
     if (gatewayId === null || syncing || restarting || removeBusy) return
     setSyncing(true)
@@ -795,10 +696,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     }
   }
 
-  /** 逐行移除的执行面（design 21 §6.6）：以 {remove:[name],
-   *  deferRestart:false} 走 gateway_plugin_apply IPC（主进程二次确认 +
-   *  白名单复核）。结果经模型层分类（classifyGatewayApplyResult +
-   *  partialCounts）。 */
+  /** 逐行移除：{remove:[name], deferRestart:false} 走 gateway_plugin_apply IPC（主进程
+   *  二次确认 + 白名单复核），结果经 classifyGatewayApplyResult + partialCounts 分类。 */
   const applyRemove = async (name: string): Promise<void> => {
     if (gatewayId === null || removeBusy || restarting || syncing) return
     setRemoveBusy(true)
@@ -830,10 +729,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     }
   }
 
-  /** 恢复横幅的撤销动作（design 21 §3 undoJournal / §6.8 r2）：撤销=恢复。
-   *  直发 POST /chamber/plugins/undo（后端在单飞栅栏下自行选取最新可撤销 op
-   *  并还原其 preImage 两文件），随后按 tasks 投影等到该 op 终态——绝不把
-   *  「已受理」谎报成成功，也不退回 remove-only 语义。 */
+  /** 恢复横幅的撤销动作：撤销=恢复。直发 POST /chamber/plugins/undo（后端在单飞栅栏下自选
+   *  最新可撤销 op 并还原其 preImage），随后按 tasks 投影等到终态——绝不把「已受理」谎报成功。 */
   const applyUndo = async (): Promise<void> => {
     if (gatewayId === null || removeBusy || restarting || syncing) return
     setRemoveBusy(true)
@@ -861,7 +758,6 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     }
   }
 
-  // ---- shared add view ----
   const reloadAfterAdd = useCallback((): void => {
     if (isSsh) void loadSync()
     else if (isLocal) void loadLocalList()
@@ -914,12 +810,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         if ('error' in res) setDraftError(res.error)
         else if ('cancelled' in res) { /* silent no-op (user dismissed the confirmation) */ }
         else {
-          // LOCAL `dsh plugin add` writes the local profile only — the RUNNING
-          // local instance mounts the plugin at its next restart (「dsh 运行时」→
-          // 「重启 dsh」, outside this dialog; the local connection card has only
-          // start/stop), and that restart now completes with one window reload
-          // (design 18 §3.6 item 8), so「已应用/Applied」would still overclaim:
-          // the honest note is deferred and names the entry point.
+          // LOCAL `dsh plugin add` writes the local profile only — the RUNNING instance
+          // mounts it at its next restart (「dsh 运行时」→「重启 dsh」, outside this dialog),
+          // so 「已应用」would overclaim: the honest note is deferred and names the entry point.
           setAddResult(t('pluginsDeferredLocal'))
           setDraft('')
           reloadAfterAdd()
@@ -944,35 +837,28 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         else if ('cancelled' in res) { /* silent no-op (picker dismissed) */ }
         else { setAddResult(t('pluginsDeferred')); reloadAfterAdd() }
       } else if (isGateway && gatewayId !== null) {
-        // gateway_plugin_materialize is now TERMINAL on return: the main
-        // process settles the accepted executor op (task poll) and asks for
-        // the controlled managed-dsh restart, so outcome.restarted answers
+        // gateway_plugin_materialize is TERMINAL on return: main settles the accepted
+        // executor op and asks for the controlled restart, so outcome.restarted answers
         // whether the plugin is LIVE on the running instance.
         const res = await gatewayPluginMaterialize(gatewayId)
         if ('error' in res) {
           if (res.outcome?.executed === true) {
-            // Executed before the restart was refused/failed: installed now,
-            // mounts at the next natural restart (or the footer's 重启生效).
+            // Executed before the restart was refused/failed: installed now, mounts at the next natural restart.
             setAddResult(`${res.error} · ${t('restartNeededHint')}`)
             reloadAfterAdd()
           } else {
-            // Refused / failed / settle-timeout with nothing (or unknown)
-            // executed: a loud error, never a success claim.
+            // Refused / failed / settle-timeout with nothing (or unknown) executed: a loud error, never a success claim.
             setDraftError(res.error)
           }
         } else if ('cancelled' in res) { /* silent no-op (picker dismissed) */ }
         else if ('deferred' in res) {
-          // The gateway persisted the install intent for the next ready edge
-          // (it drains + restarts there; may run after this desktop
-          // disconnects) — never an installed claim.
+          // The gateway persisted the install intent for the next ready edge (it drains +
+          // restarts there; may run after this desktop disconnects) — never an installed claim.
           setAddResult(t('deferredOfflineNote'))
           reloadAfterAdd()
         } else {
-          // outcome: executed + restarted = installed AND the managed dsh
-          // restarted, so the plugin is LIVE now; executed without restart =
-          // the profile changed but the plugin mounts at the next restart —
-          // the same restartNeededHint arm the spec install uses (the import
-          // fact stays visible in the refreshed installed list below).
+          // executed + restarted = installed AND live now; executed without restart = profile
+          // changed, mounts at the next restart (same restartNeededHint arm as the spec install).
           if (res.outcome.restarted) {
             setAddResult(t('materializeLive'))
             armSourceReload('gateway', gatewayId)
@@ -986,8 +872,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         if ('error' in res) setDraftError(res.error)
         else if ('cancelled' in res) { /* silent no-op (picker dismissed) */ }
         else {
-          // Same restart-honesty as the local spec install: the local profile
-          // changed; 「dsh 运行时」→「重启 dsh」mounts it and reloads the window.
+          // Same restart-honesty as the local spec install: 「dsh 运行时」→「重启 dsh」mounts it and reloads the window.
           setAddResult(t('pluginsDeferredLocal'))
           reloadAfterAdd()
         }
@@ -1019,7 +904,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     }
   }, [searchQuery])
 
-  // ---- ssh sync apply orchestration (design 13 §3, unchanged) ----
+  // ssh sync apply orchestration
   const toggleRow = useCallback((name: string): void => {
     if (applyingRef.current) return
     setChecked(prev => {
@@ -1048,14 +933,12 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     setPhase('applying')
     setResult(null)
     setResultError(null)
-    /** Anything actually executed (materialize picks landed or the registry
-     *  batch ran — per-row failures included): the remote profile may have
-     *  changed, so the zone must reload once doApply settles
-     *  (refusals/cancellations set nothing and leave the manifests as-is). */
+    /** Anything actually executed (materialize picks landed or the registry batch ran —
+     *  per-row failures included) may have changed the remote profile, so the zone reloads
+     *  once doApply settles; refusals/cancellations leave the manifests as-is. */
     let executed = false
     try {
-      // Materialize rows: pack-and-transfer via the desktop IPC — per-row
-      // isolation (one failed entity must not block the rest).
+      // Materialize rows: pack-and-transfer via desktop IPC — per-row isolation (one failed entity must not block the rest).
       const failed: PluginApplyFailure[] = []
       let applied = 0
       for (const row of materializeRows) {
@@ -1065,8 +948,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         else { applied += 1; executed = true }
       }
 
-      // Registry rows + removes ride the existing pluginApply orchestration
-      // (remove-first, serial, restart unless deferred, assert, ready recheck).
+      // Registry rows + removes ride pluginApply (remove-first, serial, restart unless deferred, assert, ready recheck).
       if (add.length > 0 || remove.length > 0) {
         const res = await pluginApply(sshSpec.id, { add, remove, restart })
         if ('error' in res) {
@@ -1094,10 +976,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       applyingRef.current = false
       setRestart(true)
       setPhase('done')
-      // doApply 自动重载：executed 后立即走与手动 刷新 相同的 loadSync，让已
-      // 安装/移除行在下方已安装列表即时可见（否则 diff 停留 done 期间列表陈旧）。
-      // phase 随即离开 'done'，收起时的 done 重载因此不会二次运行；
-      // loadSync(true) 保留用户对剩余行的勾选。
+      // doApply 自动重载：executed 后走与手动刷新相同的 loadSync，让已安装/移除行即时可见
+      // （否则 done 期间列表陈旧）；loadSync(true) 保留用户对剩余行的勾选。
       if (executed) void loadSync(true)
     }
   }, [isSsh, sshSpec, diff, checked, restart, seedBusy, restartBusy, remoteRemoveBusy, undoBusy, loadSync, t])
@@ -1124,8 +1004,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     if (applyingRef.current) return
     if (confirmRemove || confirmApply || localRemoveTarget !== null || remoteRemoveTarget !== null) return
     if (removeTarget !== null || removeBusy) return
-    // 非模态 busy 一并门控：安装/导入/撤销/seed/重启在跑时关框会让主进程操作
-    // 继续而结果无处呈现（restarting 受管重启有 unmount abort 属例外，不在此列）。
+    // 非模态 busy 一并门控：安装/导入/撤销/seed/重启在跑时关框会让主进程操作继续而结果无处呈现。
     if (installing || folderBusy || undoBusy || seedBusy || restartBusy || syncing) return
     onClose()
   }, [onClose, confirmRemove, confirmApply, localRemoveTarget, remoteRemoveTarget, removeTarget, removeBusy,
@@ -1135,32 +1014,25 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   const title = `${t('pluginsTitle')} · ${label}`
   const applying = phase === 'applying'
 
-  // ---- ① diagnostic banner (bannerProjection de-dup) ----
+  // diagnostic banner (bannerProjection de-dup)
   const diagnosticBanner = diagnostic !== undefined && diagnostic.state !== 'ok'
     ? bannerProjection(diagnostic, t)
     : null
 
   // ---- ② chamber built-in table ----
-  /** The chamber rows are DERIVED by the pure, tested projection in
-   *  plugin-inventory-text.ts (deriveChamberRows) — this component only maps
-   *  descriptors to elements. Data sources per target (design 13 §6 / 21
-   *  §6.2 / 24 §7): the LOCAL target's expected AND local list come from its
-   *  OWN profile manifest (`localList.chamber`); every remote target's expected
-   *  list and local column come from the desktop's own projection, and ssh
-   *  prefers the remote probe's list when it succeeded — on a probe FAILURE the
-   *  desktop projection is the fallback row source, so a remote-only read
-   *  failure stays visible instead of emptying the table.
-   *  `localOnly` registry rows (design 20 §6) never appear here on a non-local
-   *  target — the derivation drops them before any state is read, so this
-   *  component's row set is already the target's applicable registry rows. */
-  /** The ssh remote probe (design 13 §6): the remote profile manifest's own
-   *  chamber projection, loaded by loadSync. */
+  /** Rows are DERIVED by the pure, tested `deriveChamberRows` (plugin-inventory-text.ts) —
+   *  this component only maps descriptors to elements. The LOCAL target's expected AND
+   *  local list come from its OWN profile manifest; every remote target's expected list
+   *  and local column come from the desktop's own projection, with ssh preferring the
+   *  remote probe when it succeeded (on probe failure the desktop projection is the
+   *  fallback row source, so a remote-only read failure stays visible instead of
+   *  emptying the table). `localOnly` registry rows are dropped before any state is
+   *  read, so a non-local target never lists them. */
   const sshRemoteChamber = isSsh ? remoteManifest?.chamber : undefined
-  /** The desktop's own chamber projection. The dedicated
-   *  `localChamberPackages` read is gated on a gateway/http `sourceId`, so it
-   *  never runs for ssh; that arm reads the same projection from the local
-   *  manifest `loadSync` already fetched (the ssh 本地 column must not sit on
-   *  未知, and a failed probe must not leave the table empty). */
+  /** The desktop's own chamber projection. The dedicated `localChamberPackages` read is
+   *  gated on a gateway/http `sourceId`, so it never runs for ssh; that arm reads the same
+   *  projection from the local manifest loadSync fetched (本地 column must not sit on 未知,
+   *  and a failed probe must not leave the table empty). */
   const desktopChamberPackages = isSsh && localManifest !== null && localManifest.chamber.ok === true
     ? localManifest.chamber.packages
     : localChamberPackages
@@ -1177,20 +1049,16 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   })
   const chamberCacheAbsent = chamberRows.some(row => row.cacheAbsent)
 
-  // BOTH boot rows of EVERY APPLICABLE registry package must be present for the
-  // chamber host layer to be complete — derived over the whole registry-driven
-  // list, so a package added to the registry can never be silently exempt. Both
-  // gates come from the pure projection (sshChamberGates), which filters
-  // `localOnly` rows first: the remote probe reports such a row as a
-  // synthesized installed:false WITHOUT ever asking the remote, so counting it
-  // pinned 「注入」 true forever and the restart branch was unreachable.
+  // BOTH boot rows of EVERY APPLICABLE registry package must be present for the chamber
+  // host layer to be complete — derived over the whole registry-driven list. sshChamberGates
+  // filters `localOnly` first: the remote probe reports such a row as a synthesized
+  // installed:false without asking the remote, so counting it would pin 「注入」 true forever.
   const sshGates = sshChamberGates(sshRemoteChamber)
   const remoteNeedsSeed = isSsh && sshGates.needsSeed
   const remoteInjectedNotLive = isSsh && sshGates.injectedNotLive
   const restartPending = remoteInjectedNotLive || pendingRestart
 
-  /** One row's version cell: the derived version text plus the gateway
-   *  seed-cache comparison (drift marker / 未同步) when the cache was read. */
+  /** One row's version cell: the derived version text plus the seed-cache drift marker (未同步) when the cache was read. */
   const chamberVersionCell = (row: ChamberRowDescriptor): ReactNode => {
     if (row.versionHintKey !== null) return <span className={css.dim}>{t(row.versionHintKey)}</span>
     return (
@@ -1217,8 +1085,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       <p className={css.pluginChamberTitle}>
         {t('chamberInjectedTitle')}
         <span className={css.dim}> · {t('chamberInjectedHint')}</span>
-        {/* chamber 区降级标签：seed-cache 读失败 = 该区数据源不可达（实例停机
-            / 代理拒绝）——区标题如实标注，不静默。 */}
+        {/* chamber 区降级标签：seed-cache 读失败 = 该区数据源不可达——区标题如实标注，不静默。 */}
         {isGateway && seedCacheError !== null
           ? <span className={css.error}> · {t('instanceNotReadyZone')}</span>
           : null}
@@ -1305,19 +1172,16 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   )
 
   // ---- ③ third-party zone ----
-  /** One third-party row's live-state cell (plugin-inventory-text.ts
-   *  thirdPartyLiveState): a badge-family chip when the Loader snapshot
-   *  answers, or a neutral dash when it is unavailable (instance not
-   *  running / read failed) — never a state claim from an unreadable
-   *  snapshot. */
+  /** One row's live-state cell (thirdPartyLiveState): a badge-family chip when the Loader
+   *  snapshot answers, a neutral dash when it is unavailable — never a state claim from an
+   *  unreadable snapshot. */
   const liveStateCell = (state: ThirdPartyLiveState | null): ReactNode => (
     state === null
       ? <span className={css.dim}>—</span>
       : <span className={chamberBadgeClass(state.tone)}>{t(state.labelKey)}</span>
   )
 
-  /** 一行安装列表的角色徽标（design 21 §6.11.5）：角色来自后端 rows 投影，
-   *  渲染端只渲染。受保护行的 title 指向「受保护」提示（见 protectedHint）。 */
+  /** 一行安装列表的角色徽标：角色来自后端 rows 投影，渲染端只渲染；受保护行的 title 指向 protectedHint。 */
   const roleBadge = (row: InstalledRowView): ReactNode => {
     const key = roleLabel(row.role)
     if (key === null) return null
@@ -1331,16 +1195,14 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     )
   }
 
-  /** 受保护行的只读提示（可见文本；受保护 = 安装组合 / chamber 播种 / 运行时
-   *  线族成员，由后端判定）：与「无移除按钮」一起构成只读语义。 */
+  /** 受保护行的只读提示：受保护 = 安装组合 / chamber 播种 / 运行时线族成员（后端判定），与「无移除按钮」一起构成只读语义。 */
   const protectedHint = (row: InstalledRowView): ReactNode => (
     row.protected
       ? <span className={css.dim} title={t('pluginsProtectedHint')}>{t('pluginsProtectedHint')}</span>
       : null
   )
 
-  /** 一行的 spec 格：依赖值优先（file: 值掩码芯片化，不直显本地路径）；掩码后无可展示
-   *  值（spec null）时落到已装版本；两者都有时版本作 dim 后缀。 */
+  /** 一行的 spec 格：依赖值优先（file: 值掩码芯片化，不直显本地路径）；掩码后无值落到已装版本，两者都有时版本作 dim 后缀。 */
   const installedSpecCell = (row: InstalledRowView, unsyncReason?: string | undefined): ReactNode => (
     <>
       {row.spec !== null && row.spec.startsWith('file:')
@@ -1354,8 +1216,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     </>
   )
 
-  /** 逐行操作格：非受保护行保留既有移除按钮行为；受保护行只读（— + 提示），
-   *  绝不给一个后端必然拒绝的动作（§6.11.3 R1）。 */
+  /** 逐行操作格：非受保护行保留既有移除按钮行为；受保护行只读（— + 提示），绝不给后端必然拒绝的动作。 */
   const rowActionCell = (row: InstalledRowView, disabled: boolean, onRemove: () => void): ReactNode => (
     row.removable
       ? (
@@ -1373,9 +1234,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       : <span className={css.dim} title={t('pluginsProtectedHint')}>—</span>
   )
 
-  /** The add section (spec + npm search + local import — a source folder or
-   *  a ready .tgz archive, design 21 §6.5 archive-pick) for the three writable
-   *  backends; http-direct renders no add surface (design 21 §3). */
+  /** The add section (spec + npm search + local import — source folder or ready .tgz)
+   *  for the three writable backends; http-direct renders no add surface. */
   const addSection = isHttp
     ? null
     : (
@@ -1393,9 +1253,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
               onChange={event => { setDraft(event.target.value); setDraftError(null); setAddResult(null) }}
               onKeyDown={event => { if (event.key === 'Enter' && !installing && !folderBusy) void installSpec(draft) }}
             />
-            {/* installing busy 用短文案 pluginsAddInstalling（安装中…），避免
-                busyTasks 全宽文案使按钮宽度跳动 ~80-100px
-                （busyTasks 仍供 footer/应用态使用）。 */}
+            {/* installing busy 用短文案 pluginsAddInstalling，避免 busyTasks 全宽文案使按钮宽度跳动（busyTasks 仍供 footer/应用态使用）。 */}
             <Button
               variant="primary"
               size="sm"
@@ -1467,8 +1325,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       </div>
     )
 
-  /** Local installed list + add (the converged local region, plan 24 B1.1:
-   *  the former list tab and add tab stacked in one zone). */
+  /** Local installed list + add (the converged local region: former list tab and add tab stacked in one zone). */
   const localZone = isLocal
     ? ((): ReactNode => {
       if (localLoading) return <p className={css.dim}>{t('pluginsLoading')}</p>
@@ -1483,11 +1340,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         )
       }
       if (localList === null) return null
-      // design 21 §6.11.5：已安装 = 本 profile 的依赖表，后端投影
-      // 只做 role/protected 标注——安装自带组合（B₀）与 chamber 播种物（S）不造行
-      // （chamber 组件在「chamber 受管组件」表里，官方组合是运行时基线）。受保护名若
-      // 确实出现在依赖表里仍只读可见；旧 producer 无 rows 时回退到 dependencies 的
-      // 过滤（§6.11.7）。
+      // 已安装 = 本 profile 的依赖表，后端投影只做 role/protected 标注——安装自带组合（B₀）
+      // 与 chamber 播种物（S）不造行（官方组合是运行时基线）。受保护名若在依赖表里仍只读可见；
+      // 旧 producer 无 rows 时回退到 dependencies 的过滤。
       const installedRows = projectInstalledRows(localList.dependencies, pluginRowsOf(localList)).rows
       return (
         <div className={css.pluginStack}>
@@ -1531,11 +1386,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
                           {unsync !== undefined && !(row.spec ?? '').startsWith('file:') ? <span className={css.pluginKindUnsync}> · {t('pluginsRowUnsyncable')}</span> : null}
                         </span>
                         <span className={clsx(css.pluginCell, css.pluginCellKind)}>
-                          {/* 状态格只读运行实例的 Loader 快照：只有同名行才给出生效状态。
-                              bundle 层自己从不是 Loader 行（挂载的是它 cordis.patch.yml 的
-                              insert 行），无同名行即中性 —— 绝不承诺「重启后生效」；受保护行
-                              是安装自带基线（宿主侧 boot 层），同样不索要 Loader 状态
-                              （installedRowLiveState）。 */}
+                          {/* 状态格只读运行实例的 Loader 快照：只有同名行才给出生效状态（bundle 层本身不是
+                              Loader 行；受保护行是宿主 boot 基线）——无同名行即中性，绝不承诺「重启后生效」。 */}
                           {liveStateCell(installedRowLiveState(localSnapshot, row))}
                         </span>
                         {rowActionCell(row, localRemoveBusy || applying || installing || folderBusy, () => {
@@ -1558,10 +1410,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   const gatewayZone = isGateway
     ? ((): ReactNode => {
       const opsBlocked = removeBusy || restarting || syncing || installing || folderBusy
-      // design 21 §6.11.5：行集 = 服务端投影的**依赖行**
-      // （受保护判定的权威在服务端，渲染端只消费；B₀/S 不造行）。旧 gateway 无
-      // rows ⇒ 回退到 dependencies 的过滤并置 legacy 标记（§6.11.7），只给出服务端
-      // 仍会接受的动作。
+      // 行集 = 服务端投影的依赖行（受保护判定权威在服务端，渲染端只消费；B₀/S 不造行）。
+      // 旧 gateway 无 rows ⇒ 回退到 dependencies 过滤并置 legacy 标记，只给出服务端仍会接受的动作。
       const projected: { rows: InstalledRowView[]; legacy: boolean } = installed !== null && installed.ok === true
         ? projectInstalledRows(installed.dependencies, pluginRowsOf(installed))
         : { rows: [], legacy: false }
@@ -1609,15 +1459,11 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
                                   {protectedHint(row)}
                                 </label>
                                 <span className={clsx(css.pluginCell, css.pluginCellSpec)}>
-                                  {/* file: values are the server-side mask of
-                                      materialized copies — the chip names what
-                                      it is (ssh-modal mirror). */}
+                                  {/* file: values are the server-side mask of materialized copies (ssh-modal mirror). */}
                                   {installedSpecCell(row)}
                                 </span>
                                 <span className={clsx(css.pluginCell, css.pluginCellKind)}>
-                                  {/* 与 local 列表同一判据（installedRowLiveState）：
-                                      同名 Loader 行才给状态，bundle 层同普通依赖一样
-                                      无同名行即中性 —— 绝不承诺「重启后生效」。 */}
+                                  {/* 与 local 同一判据（installedRowLiveState）：同名 Loader 行才给状态，无同名行即中性——绝不承诺「重启后生效」。 */}
                                   {liveStateCell(installedRowLiveState(snapshot, row))}
                                 </span>
                                 {rowActionCell(row, opsBlocked, () => {
@@ -1633,27 +1479,21 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
                 )
                 : installed.code === 'runtime_busy'
                   ? (
-                    // The §6.2 read/write fence: the READ is fine — the instance
-                    // is mid plugin-change, so the gateway withheld the
-                    // projection instead of publishing a torn one. A retryable
-                    // busy banner (warn-toned, role="status"), never the
-                    // read-error alert and never the profile_absent/corrupt
-                    // copy; the read already re-read once, and 刷新 / the next
-                    // executed op reload again.
+                    // The read/write fence: the READ is fine — the instance is mid plugin-change,
+                    // so the gateway withheld the projection instead of publishing a torn one.
+                    // A retryable busy banner (warn-toned, role="status") — never the read-error
+                    // alert and never profile_absent/corrupt.
                     <p className={css.pluginBanner} role="status">
                       {gatewayReadFenceText(installed.refusalCode, 409, 'gatewayReadFencedBusy', t)}
                     </p>
                   )
                   : (
-                    // profile_absent / profile_corrupt — the readManifest
-                    // codes render as the zone banner and the rows hide
-                    // (nothing trustworthy to list); reload retries.
+                    // profile_absent / profile_corrupt: the zone banner shows the code and the rows hide; reload retries.
                     <p className={css.pluginBanner} role="status">
                       {installed.code === 'profile_absent' ? t('profileAbsentBanner') : t('profileCorruptBanner')}
                     </p>
                   )}
-          {/* §6.11.7 版本歪斜：旧 gateway 不返回 rows，回退路径只列第三方行——
-              理由如实上屏，别让「受保护行不见了」看起来像事实。 */}
+          {/* 版本歪斜：旧 gateway 不返回 rows，回退只列第三方行——理由如实上屏。 */}
           {legacyRows ? <p className={css.hint} role="status">{t('pluginsLegacyGatewayHint')}</p> : null}
           {addSection}
         </div>
@@ -1661,16 +1501,10 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     })()
     : null
 
-  /** http-direct: read-only Loader third-party entries (no /chamber
-   *  surface, no add surface — design 21 §3 backend matrix). The
-   *  third-party projection is the shared pure function (mobile + official
-   *  + every registry-derived chamber row excluded — the expected names come
-   *  from the chamber projection above, never from a literal list, so a
-   *  future registry host package cannot leak into this zone). Each row
-   *  carries its live-state chip (snapshot-derived — rows ARE Loader entries
-   *  here, so the match is the entry itself; the chip subsumes the former
-   *  disabled/failed inline markers with the active/starting states
-   *  included). */
+  /** http-direct: read-only Loader third-party entries (no /chamber surface, no add).
+   *  The projection is the shared pure function — the expected chamber names come from
+   *  the chamber projection above, never a literal list, so a future registry host
+   *  package cannot leak into this zone. Each row carries its live-state chip. */
   const httpZone = isHttp
     ? ((): ReactNode => {
       if (viewPhase === 'loading') return <p className={css.dim}>{t('pluginsLoading')}</p>
@@ -1694,11 +1528,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     : null
 
   // ---- ④ recovery row (gateway only, runtimeDown-gated) ----
-  /** The recovery undo affordance (plan 24 B1.6): only while the managed dsh
-   *  is down (stopped/error/restart-exhausted, as the card projects it) AND
-   *  the task journal's newest ok op is undoable (undoForLatest — the op must
-   *  carry a preImage backup). The tasks read is the ONLY journal consumer —
-   *  no task rows render (D4-A); the action itself is the 撤销=恢复 route. */
+  /** The recovery undo affordance: only while the managed dsh is down AND the journal's
+   *  newest ok op is undoable (must carry a preImage backup). The tasks read is the ONLY
+   *  journal consumer — no task rows render; the action is the 撤销=恢复 route. */
   const recoveryUndo = useMemo(() => {
     if (!isGateway || runtimeDown !== true || taskRows === null) return null
     const undo = undoForLatest(taskRows)
@@ -1707,8 +1539,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
 
   const recoveryZone = isGateway && runtimeDown === true
     ? ((): ReactNode => {
-      // Journal unreadable while the instance is down: say so — the undo
-      // affordance must never silently vanish (proxy honesty).
+      // Journal unreadable while the instance is down: say so — the undo affordance must never silently vanish.
       if (recoveryUndo === null) {
         return taskRows === null && tasksError !== null
           ? <p className={css.error} role="alert">{tasksError}</p>
@@ -1730,7 +1561,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     })()
     : null
 
-  // ---- ssh views (sync-modal semantics preserved) ----
+  // ssh views (sync-modal semantics preserved)
   function renderSyncView(): ReactNode {
     if (phase === 'loading') {
       return <p className={css.dim}>{t('pluginsLoading')}</p>
@@ -1762,8 +1593,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     if (diff === null) return null
     const total = diff.rows.length
     const differenceCount = diff.rows.filter(row => isDifferenceRow(row.kind)).length
-    // design 21 §6.11.5：计数只看可操作（第三方/物化）行——受保护行不进对账面，
-    // 「本地无插件」提示随之修正（与 diff 输入同一收窄规则）。
+    // 计数只看可操作（第三方/物化）行——受保护行不进对账面，「本地无插件」提示随之修正。
     const hasLocal = localManifest !== null
       && Object.keys(sshSyncableDependencies(localManifest.dependencies, pluginRowsOf(localManifest))).length > 0
     const visibleRows = diff.rows.filter(row => {
@@ -1926,16 +1756,13 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     )
   }
 
-  /** The ssh installed-plugins list (design 21 §6.6 list tab, semantics
-   *  preserved from the sync modal:
+  /** The ssh installed-plugins list (semantics preserved from the sync modal:
    *  per-row remove + the「撤销最近变更」toolbar entry). */
   function renderRemoteList(): ReactNode {
     if (phase === 'loading' || phase === 'error') return renderSyncView()
     if (remoteManifest === null) return <p className={css.dim}>{t('pluginsLoading')}</p>
-    // design 21 §6.11.5：远端行集同样来自 desktop main 的投影，
-    // 但只覆盖远端 profile 自己的依赖（B₀/S 不造行）。ssh 的 F 无远端来源 ⇒ 集合退到
-    // B₀ ∪ S，官方 scope 的**装面**由写面保守拒绝（§6.11.3），不是读面把行标 protected。
-    // 旧 producer 无 rows 时回退到 dependencies 的过滤。
+    // 远端行集同样来自 desktop main 的投影，但只覆盖远端 profile 自己的依赖（B₀/S 不造行）。
+    // ssh 的 F 无远端来源 ⇒ 集合退到 B₀ ∪ S，官方 scope 的装面由写面保守拒绝，不是读面标 protected。
     const rows = projectInstalledRows(remoteManifest.dependencies, pluginRowsOf(remoteManifest)).rows
     const opBusy = remoteRemoveBusy || undoBusy
     const opsBlocked = opBusy || applying || seedBusy || restartBusy || installing || folderBusy
@@ -1997,9 +1824,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     )
   }
 
-  /** ssh 统一主视图（design 21 §6.6 登记偏离）：已安装列表 + 添加
-   *  区，与 gateway/local 骨架同构；legacy 整盘 diff 折叠为「对账」次级入口
-   *  （rows/filter/apply/undo 语义逐字保留，仅默认收起）。 */
+  /** ssh 统一主视图：已安装列表 + 添加区，与 gateway/local 骨架同构；legacy 整盘 diff
+   *  折叠为「对账」次级入口（rows/filter/apply/undo 语义逐字保留，仅默认收起）。 */
   const sshZone = isSsh
     ? ((): ReactNode => {
       const diffCount = diff === null ? 0 : diff.rows.filter(row => isDifferenceRow(row.kind)).length
@@ -2113,8 +1939,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
             <>
               <p className={clsx(css.pluginDiagnostic, css.pluginDiagnosticDetail, css.pluginDiagnosticWarn)} role="status">
                 <strong>{t('bootGapLabel')}：{bootGapText(bootGap, t)}</strong>
-                {/* Services already ride the sentence; only the failed-id list is
-                    appended (the sentence carries the count, the span the ids). */}
+                {/* Services already ride the sentence; only the failed-id list is appended (sentence = count, span = ids). */}
                 {(bootGap.failedIds ?? []).length > 0 ? <span>{t('partialSep')}{(bootGap.failedIds ?? []).join(', ')}</span> : null}
               </p>
               <p className={css.hint}>{t('bootGapHint')}</p>
@@ -2129,9 +1954,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
             ? <p className={css.error} role="alert">{restartNote.text}</p>
             : <p className={css.hint} role="status">{restartNote.text}</p>
           : null}
-        {/* Loader 读失败横幅（首载失败或 reload 失败保留旧帧时）：gateway
-            任何非 loading 相位都显示；http 直连仅 reload 失败（首载错误已在
-            httpZone 内渲染，避免重复）。 */}
+        {/* Loader 读失败横幅：gateway 任何非 loading 相位都显示；http 直连仅 reload 失败
+            （首载错误已在 httpZone 内渲染，避免重复）。 */}
         {isGateway && viewError !== null && viewPhase !== 'loading'
           ? <p className={css.error} role="alert">{viewError}</p>
           : isHttp && viewError !== null && viewPhase === 'ready'
@@ -2203,9 +2027,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         )}
       />
 
-      {/* Per-row remove confirm on the ssh installed list (design 21 §6.6):
-          mirrors the local-remove pattern; the same 重启生效 checkbox state
-          the sync apply flow uses governs the restart. */}
+      {/* Per-row remove confirm on the ssh installed list: mirrors the local-remove pattern; the same 重启生效 checkbox state as the sync apply flow governs the restart. */}
       <Modal
         open={remoteRemoveTarget !== null}
         onClose={() => { if (!remoteRemoveBusy) setRemoteRemoveTarget(null) }}
@@ -2230,9 +2052,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         </label>
       </Modal>
 
-      {/* Row-remove confirm (gateway, Phase 5 ③): the per-row remove keeps its
-          main-process confirm; the recovery undo does NOT ride this modal any
-          more — it is a RESTORE posted to /chamber/plugins/undo. */}
+      {/* Row-remove confirm (gateway): the per-row remove keeps its main-process confirm; the recovery undo does NOT ride this modal — it is a RESTORE posted to /chamber/plugins/undo. */}
       {isGateway
         ? (
           <Modal

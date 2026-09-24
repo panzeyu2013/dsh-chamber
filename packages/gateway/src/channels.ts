@@ -1,10 +1,6 @@
-/**
- * Channel registry (design 17 §2.4): the type surface for gateway-managed
- * tunnels (frp/tailscale/zerotier — a FUTURE abstraction). `direct` (bind
- * 0.0.0.0) and `ssh` (the desktop's own ssh-provider) are NOT channels and
- * never enter ChannelKind. MVP ships NO provider: `channels[]` is always
- * empty, and liveness is never derived from persistence (S9).
- */
+/** Channel registry type surface for gateway-managed tunnels (frp/tailscale/
+ * zerotier — a FUTURE abstraction). `direct` and `ssh` are NOT channels; MVP
+ * ships NO provider: `channels[]` empty, liveness never from persistence. */
 
 export type ChannelKind = 'frp' | 'tailscale' | 'zerotier' | (string & {})
 export type ChannelHealth = 'unknown' | 'starting' | 'ready' | 'reconnecting' | 'failed'
@@ -41,12 +37,9 @@ export interface ChannelRegistry {
   list(): ChannelListEntry[]
 }
 
-/**
- * MVP channel registry: accepts providers (so the surface is stable) but ships
- * no instances — every query returns the empty/unknown projection. Liveness
- * (S9) is only ever a live probe result, so the empty registry never reports
- * anything but 'unknown' for an id it does not hold.
- */
+/** MVP registry: accepts providers (stable surface) but ships no instances —
+ * every query returns the empty/unknown projection; liveness is only ever a
+ * live probe result. */
 export function createChannelRegistry(): ChannelRegistry {
   const providers = new Map<string, ChannelProvider>()
   return {
@@ -57,7 +50,6 @@ export function createChannelRegistry(): ChannelRegistry {
       // No instances in MVP — a no-op (idempotent by contract).
     },
     async stop(): Promise<void> {
-      // No instances in MVP.
     },
     resolve(): { baseUrl: string; headers?: Record<string, string> } | null {
       return null

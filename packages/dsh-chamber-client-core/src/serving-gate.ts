@@ -1,17 +1,10 @@
 /**
- * Wait-for-serving gate for a source's client plugin graph
- * (design 09 §3.2).
- *
- * A cold-started instance answers `clientGraph/graph` with
- * `503 instance_unavailable` (the reverse proxy refuses to forward while the
- * managed dsh is not serving yet). The shell's boot fetch waits for the source
- * instead of losing the profile's whole client-plugin set (renderer
- * host-graph `waitForServing`); the settings bridge reads the SAME graph for
- * its contributions.
- *
- * The wait is bounded, and it never waits for a source that is terminally
- * down (`error`/`stopped`/`restart-exhausted`) or absent: those must fail fast
- * with the real reason instead of holding the panel for a minute.
+ * Wait-for-serving gate for a source's client plugin graph: a cold-started
+ * instance answers `clientGraph/graph` with `503 instance_unavailable` (the
+ * proxy refuses to forward until the managed dsh serves), so callers wait
+ * instead of losing the profile's plugin set. The wait is bounded and gives up
+ * fast for a terminally down (`error`/`stopped`/`restart-exhausted`) or absent
+ * source — those must surface the real reason.
  */
 
 import { chamberBridge } from './aggregate-store.ts'
@@ -30,11 +23,9 @@ const TERMINAL_PHASES = new Set(['error', 'stopped', 'restart-exhausted'])
 export interface ServingGateOptions {
   /** Bounded wait; defaults to the shell's 60s boot budget. */
   timeoutMs?: number
-  /** Poll interval (default 250ms). */
   pollMs?: number
   /** Projection read seam (defaults to the page-level chamberBridge store). */
   getSources?: () => readonly ServingGateSource[]
-  /** Sleep seam (tests). */
   sleep?: (ms: number) => Promise<void>
 }
 
@@ -45,12 +36,8 @@ function readSources(options: ServingGateOptions): readonly ServingGateSource[] 
   return chamberBridge.getServers()
 }
 
-/**
- * Resolve true as soon as the source is serving (connected), false when the
- * deadline passes, the source is absent, or it is terminally down.
- * @param sourceId - the projection id ('local' | '<kind>-<id>').
- * @param options - bounded-wait + seam overrides.
- */
+/** Resolve true as soon as the source is serving (connected); false when the deadline passes or
+ *  it is absent/terminally down. @param sourceId - the projection id. */
 export async function waitForSourceServing(
   sourceId: string,
   options: ServingGateOptions = {},
@@ -59,9 +46,8 @@ export async function waitForSourceServing(
   const pollMs = options.pollMs ?? DEFAULT_POLL_MS
   const sleep = options.sleep ?? sleepMs
   const deadline = Date.now() + timeoutMs
-  // Budget lives in classify (not the kernel's deadline) because this gate
-  // probes ONCE past a zero deadline before giving up — the order is: read,
-  // decide connected/terminal, then test the deadline.
+  // The deadline is tested AFTER the connect/terminal decision, so even a zero
+  // remaining budget still probes once.
   const verdict = await pollUntil<boolean | undefined, boolean>({
     intervalMs: pollMs,
     sleep,

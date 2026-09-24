@@ -11,41 +11,32 @@ export interface SegmentedControlProps<T extends string = string> {
   options: SegmentedOption<T>[]
   value: T | null | undefined
   onChange: (value: T) => void
-  /** Accessible name: pass the field label's id (aria-labelledby) or a plain
-      string (aria-label); exactly one of the two. */
+  /** Accessible name: the field label's id (aria-labelledby) or a plain string (aria-label); exactly one. */
   ariaLabel?: string
   ariaLabelledBy?: string
   disabled?: boolean
   className?: string
 }
 
-// TRACK_PADDING 必须与 SegmentedControl.module.css 中 .segmented 的 padding
-// 保持一致（测量出的 left/width 直接对接轨道坐标）。
+// TRACK_PADDING 必须与 SegmentedControl.module.css 中 .segmented 的 padding 一致。
 const TRACK_PADDING = 2
 const SEGMENT_GAP = 2
 
 /**
- * 滑块式分段单选（chamber 设置通用）：轨道内滑块滑向选中项，选中文字反白
- * （label-primary-foreground），未选中灰字。
+ * 滑块式分段单选（chamber 设置通用）：轨道内滑块滑向选中项，选中文字反白，未选中灰字。
  *
- * 选中填充为 dsh 业务蓝 `--dsw-alias-state-business-primary`
- * （`--dsw-static-deepseek-500` / `-400`，浅色 #4176e6 / 深色 #679efe）——不采用
- * 官方中性 `--dsw-alias-brand-primary`（该 token 浅色近黑 / 深色近白，浅色主题下
- * 选中态会发黑），与本页开关、复选框的 "开"色统一；几何仍是 chamber 档（26px 高 /
- * 12px 字）。视觉语言参考官方 switch
- * （SubagentModelSelectionCard）与发送按钮（InputBar .primary：
- * info-fill 蓝底 + 白字形）。
+ * 选中填充为 dsh 业务蓝 `--dsw-alias-state-business-primary`（浅色 #4176e6 / 深色
+ * #679efe）——不采用官方中性 `--dsw-alias-brand-primary`（该 token 浅色近黑 / 深色
+ * 近白，浅色主题下选中态会发黑），与本页开关、复选框的 "开"色统一；几何仍是 chamber
+ * 档（26px 高 / 12px 字）。
  *
- * 与官方不同的是这里保留原生 radio 语义（每个选项一个 input[type=radio]，
- * 键盘方向键切换），滑块是 aria-hidden 的纯装饰层。
+ * 与官方不同：保留原生 radio 语义（每个选项一个 input[type=radio]，键盘方向键切换），
+ * 滑块是 aria-hidden 的纯装饰层。
  *
- * 列宽按内容自适应（flex，各选项 max-content），因此滑块位置/宽度由
- * layout 测量得出——等宽列会让长文案溢出（如「隐藏到托盘」对「退出应用」）。
- * 测量在 useLayoutEffect 中进行，首帧 paint 前完成，无闪烁；测量只在选项
- * 文案签名变化时重跑（语言切换会触发，busy 等无关重渲染不会）。
+ * 列宽按内容自适应，因此滑块位置/宽度由 useLayoutEffect 布局测量得出——等宽列会让长
+ * 文案溢出；测量只在选项文案签名变化时重跑（语言切换触发，busy 等无关重渲染不会）。
  *
- * value 无匹配（如 hydration 前 settings 未到）时滑块隐藏——所有选项都
- * 未选中，滑块停在某一列会误导为"默认选中该项"。
+ * value 无匹配（hydration 前）时滑块隐藏——停在某一列会误导为"默认选中该项"。
  */
 export function SegmentedControl<T extends string>({
   options,

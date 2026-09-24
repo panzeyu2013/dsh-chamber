@@ -1,22 +1,16 @@
 /**
  * Per-instance Git worktree host gateway.
  *
- * TRUST MODEL — this service runs inside each dsh host process and reads that
- * instance's authoritative `workspaceRegistry` and live `agents` services.
- * The browser receives projections and submits only lifecycle intent; it never
- * supplies Git argv and cannot route an operation to another host. Repository
- * paths returned for display are not capabilities: every mutation starts from
- * `workspaceId`, re-reads host state and Git topology, then compares opaque
- * repo/worktree identities plus expected branch and HEAD.
+ * TRUST MODEL - reads the host's authoritative `workspaceRegistry` and live `agents`;
+ * the browser receives projections and submits lifecycle intent only. It never supplies
+ * Git argv and cannot route an operation to another host. Display paths are not
+ * capabilities: every mutation starts from `workspaceId`, re-reads host state and Git
+ * topology, then compares opaque repo/worktree identities plus expected branch and HEAD.
  *
- * Fixed wire namespace: `gitWorktree/{snapshot,previewCreate,create,
- * rollbackCreate,remove}`. This plugin owns no workspace/session persistence:
- * create returns before workspace/session creation so the client can
- * compensate, while remove is deliberately Git-first and returns the still-
- * registered workspace identity for the client's subsequent workspace.delete.
- * Every method returns an explicit `{ok,value}|{ok:false,error}` domain carrier
- * because the generic dsh gateway intentionally does not preserve thrown
- * business-error fields; only unexpected internal failures escape as throws.
+ * Wire namespace is fixed at `gitWorktree/{snapshot,previewCreate,create,rollbackCreate,remove}`.
+ * This plugin owns no persistence: create returns before workspace/session creation so the
+ * client can compensate; remove is Git-first and returns the still-registered workspace
+ * identity. All methods return an explicit `{ok,value}|{ok:false,error}` carrier.
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -36,9 +30,8 @@ import {
   type GitWorktreeDomainResult,
 } from './core.ts'
 
-// Keep this gateway's compilation boundary narrow. Runtime ownership is still
-// enforced by static injection; these structural views avoid dragging every
-// transitive host source package into this standalone plugin's typecheck.
+// Keep this gateway's compilation boundary narrow; runtime ownership is enforced by
+// static injection. These structural views avoid dragging every transitive host package in.
 interface GitWorktreeHostContext extends Context {
   readonly workspaceRegistry: {
     list(): ReadonlyArray<{
@@ -46,10 +39,8 @@ interface GitWorktreeHostContext extends Context {
       readonly path: string
       readonly sessionIds: readonly unknown[]
     }>
-    /** Authoritative archived-session set (design 08 §5.2 amendment): an
-     *  archived running session is INERT and must not block a worktree
-     *  removal. The getter is read on every snapshot; a missing surface throws
-     *  (the core maps it to `state-source-unavailable`), never an empty set. */
+    /** Authoritative archived-session set: an archived running session is INERT and must
+     *  not block a worktree removal. A missing surface throws, never reads as empty. */
     readonly archivedSessionIds: readonly unknown[]
   }
   readonly agents: {
@@ -59,15 +50,10 @@ interface GitWorktreeHostContext extends Context {
       readonly session: {
         readonly header: {
           readonly cwd?: string
-          /** Recorded parent (`session.header.parentSession`): FORK lineage
-           *  when `origin` is absent, delegation lineage when it is
-           *  `'subagent'`. */
+          /** Recorded parent: FORK lineage when `origin` is absent, delegation when `'subagent'`. */
           readonly parentSession?: unknown
-          /** Coarse durable child origin. `'subagent'` = delegation child
-           *  (upstream `packages/subagent/subagent`); absent = fork edge
-           *  (upstream `session/fork` sets no origin). This structural claim
-           *  is re-validated at runtime by the core's source intake, which
-           *  refuses any other value loudly. */
+          /** Coarse durable child origin. `'subagent'` = delegation child; absent = fork
+           *  edge. The core's source intake re-validates any other value loudly. */
           readonly origin?: 'subagent'
         }
       }
@@ -91,12 +77,8 @@ export class GitWorktreeGateway extends TypertRemoteService {
           path: workspace.path,
           sessionIds: workspace.sessionIds.map(String),
         })),
-        // Agent-registry membership is live state; status narrows the
-        // destructive guard to active drivers, while cwd also covers
-        // ungrouped sessions and subagents below a worktree. `origin` rides
-        // along for EVERY agent: only `origin === 'subagent'` edges are
-        // lineage for the archived-aware running guard (a fork edge ends the
-        // walk), so the guard needs the marker on idle rows too.
+        // Agent-registry membership is live state; `origin` rides along for EVERY agent
+        // because only `origin === 'subagent'` edges are lineage for the running guard.
         listAgents: () => host.agents.list().map(agent => ({
           sessionId: String(agent.id),
           status: agent.status,
@@ -108,17 +90,12 @@ export class GitWorktreeGateway extends TypertRemoteService {
             ? {}
             : { origin: agent.session.header.origin }),
         })),
-        // Authoritative archived set. A malformed/absent surface throws here
-        // and readSource turns it into a loud `state-source-*` failure — the
-        // guard must never treat "unreadable" as "nothing archived".
-        // Elements are passed through RAW: the core validates each one as a
-        // non-empty string (`state-source-invalid`), so a drifted element can
-        // never be silently coerced by `String()` into a bogus member.
+        // Authoritative archived set: a malformed/absent surface throws into a loud
+        // `state-source-*` failure, and elements pass through RAW for core validation.
         listArchivedSessionIds: () => {
           const ids = host.workspaceRegistry.archivedSessionIds
           if (!Array.isArray(ids)) throw new Error('workspaceRegistry.archivedSessionIds is not an array')
-          // The cast is the compile-time boundary only: the core re-validates
-          // every element (`requiredString` → `state-source-invalid`).
+          // Compile-time boundary only: the core re-validates every element.
           return ids as readonly string[]
         },
       },

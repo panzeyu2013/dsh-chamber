@@ -1,7 +1,6 @@
 /**
- * Pure per-server runtime capability derivation (design 17 §2/§3,
- * design 18 §3.6). Capability comes from the explicitly projected target
- * kind AND transport — never from a source-id prefix heuristic.
+ * Pure per-server runtime capability derivation. Capability comes from the
+ * explicitly projected target kind AND transport — never from a source-id prefix.
  */
 
 export type DshRuntimeSource = 'local' | 'gateway'
@@ -19,19 +18,14 @@ export interface RuntimeServerProjection {
 }
 
 /**
- * Runtime section mounting matrix (design 18 §3.6):
- * a section exists exactly when a chamber dsh-runtime management surface is
- * reachable:
- * - local/local: complete local management (desktop main-process projection);
- * - gateway over either transport: complete proxied management
- *   (`/chamber/runtime` through the instance proxy);
- * - dsh over ssh or http: no section — the remote runtime is systemd-deployed
- *   (design 13/18 口径) and there is no `/chamber` channel, so no management
- *   surface exists.
+ * Runtime section mounting matrix: a section exists exactly when a chamber
+ * dsh-runtime management surface is reachable — local/local = complete local
+ * management; gateway over either transport = complete proxied management; dsh over
+ * ssh or http = no section (systemd-deployed, no `/chamber` channel).
  *
- * `null` is also the fail-closed result for malformed/impossible tuples; the
- * plugin factory distinguishes the intentional dsh no-mount tuples from
- * malformed input and throws for the latter.
+ * `null` is also the fail-closed result for malformed/impossible tuples; the plugin
+ * factory distinguishes the intentional dsh no-mount tuples from malformed input and
+ * throws for the latter.
  */
 export function deriveRuntimeSource(server: RuntimeServerProjection | undefined): DshRuntimeSource | null {
   if (server === undefined) return null
@@ -45,9 +39,9 @@ export function deriveRuntimeSource(server: RuntimeServerProjection | undefined)
 }
 
 /**
- * The intentional `null` capabilities: any direct dsh target (ssh or http) —
- * no runtime management surface and no `/chamber` channel. A local/gateway
- * source with an impossible transport stays malformed and fails loud.
+ * The intentional `null` capabilities: any direct dsh target (ssh or http) — no
+ * runtime management surface and no `/chamber` channel. A local/gateway source with
+ * an impossible transport stays malformed and fails loud.
  */
 export function runtimeSectionIntentionallyAbsent(server: RuntimeServerProjection): boolean {
   return server.kind === 'dsh'
@@ -55,10 +49,9 @@ export function runtimeSectionIntentionallyAbsent(server: RuntimeServerProjectio
 
 /**
  * Identity of every fact captured by the per-server runtime plugin props.
- * `dshVersion` is deliberately NOT part of it: the registered
- * section receives {t, instanceSource, chamberInstanceId} only, so a version
- * change would dispose/re-register the section, clear its state and restart its
- * poll for a fact it never reads.
+ * `dshVersion` is deliberately NOT part of it: the registered section receives
+ * {t, instanceSource, chamberInstanceId} only, so a version change would
+ * dispose/re-register the section and restart its poll for a fact it never reads.
  */
 export function runtimeServerProjectionKey(server: RuntimeServerProjection): string {
   return JSON.stringify({

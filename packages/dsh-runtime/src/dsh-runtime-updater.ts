@@ -1,19 +1,12 @@
 /**
- * dsh 运行时版本管理（design 18）——编排守卫纯逻辑。纯逻辑、无 electron、
- * 无 spawn / fetch / IPC，可用 node:test 直接单测（dsh-runtime-updater.test.ts）。
+ * dsh 运行时版本管理——编排守卫纯逻辑。无 electron、无 spawn / fetch / IPC，可直接
+ * 单测；数据面（存储/指针/override）见 dsh-runtime-store.ts，安装/下载不在本模块。
  *
- * 本模块只承担「守卫」职责（design 18 §3.6「单飞与幂等」 + §5 数据流）：
- *
- *   - SingleFlight：切换单飞守卫，覆盖整个 install 窗口（含 apply 全程）；
- *   - isNoopSelection：选择当前激活版本 = 无操作（选当前版本无动作）；
- *   - buildVersionList：版本选择器列表（当前版本置顶 + 其余 semver 降序 +
- *     dist-tags.latest 数据标记 + 离线缓存版本标记 + 兼容基线以下数据标记）；
- *   - versionExists：版本存在门禁（design 18 §5「版本存在门禁（integrity）」）——
- *     byVersion 记录存在、tarball 非空且 integrity 是受支持的 SRI → true。
- *     缺失 integrity 的版本可以展示，但不得进入安装路径（安装层对顶层
- *     tarball 做流式 SRI 校验，与门禁同源同口径）。
- *
- * 数据面（存储/指针/override）见 dsh-runtime-store.ts，安装/下载不在本模块。
+ * 守卫：SingleFlight（单飞覆盖整个 install 窗口含 apply 全程）；isNoopSelection
+ * （选当前激活版本 = 无操作）；buildVersionList（active 置顶 + 其余 semver 降序 +
+ * latest/cached/belowBaseline 数据标记）；versionExists（byVersion 记录存在、tarball
+ * 非空且 integrity 是受支持 SRI——缺失 integrity 的版本可展示但不得进入安装路径，安装层
+ * 对顶层 tarball 做流式 SRI 校验，与门禁同源同口径）。
  */
 import { EXACT_SEMVER, compareSemverAsc } from './version-safety.ts';
 import type { RegistryMetadata } from './registry-metadata.ts';
@@ -30,9 +23,9 @@ export interface RuntimeInstallResolution {
 }
 
 /**
- * Bind a selected version to the exact metadata snapshot and current registry
- * trust anchor. A source change between `check` and `install` fails closed;
- * callers must fetch a fresh snapshot from the new source.
+ * Bind a selected version to the exact metadata snapshot and current registry trust anchor.
+ * A source change between `check` and `install` fails closed; callers must fetch a
+ * fresh snapshot from the new source.
  */
 export function bindRuntimeInstallResolution(
   meta: RegistryMetadata,
@@ -61,14 +54,12 @@ export function bindRuntimeInstallResolution(
 }
 
 /**
- * 单飞守卫（design 18 §3.6「单飞守卫覆盖整个 install 窗口」）：整个切换流程
- * （安装 + apply 全程）只能有一个在途。tryBegin 成功置位返回 true；已有在途
- * 返回 false；end 结束在途后允许再入。
+ * 单飞守卫：整个切换流程（安装 + apply 全程）只能有一个在途；tryBegin 置位成功返回
+ * true，已有在途返回 false，end 结束在途后允许再入。
  */
 export class SingleFlight {
   private busy = false;
 
-  /** 尝试进入在途：已有在途 → false；否则置位并返回 true。 */
   tryBegin(): boolean {
     if (this.busy) return false;
     this.busy = true;
@@ -80,16 +71,12 @@ export class SingleFlight {
     this.busy = false;
   }
 
-  /** 是否有在途切换。 */
   get inFlight(): boolean {
     return this.busy;
   }
 }
 
-/**
- * 「选择当前激活版本 = 无操作」（design 18 §3.6）：chosen 与 active 都非 null
- * 且相等 → true；chosen null（未选）、active null（无激活版本）或两者不等 → false。
- */
+/** 「选择当前激活版本 = 无操作」：chosen 与 active 都非 null 且相等 → true。 */
 export function isNoopSelection(chosen: string | null, active: string | null): boolean {
   return chosen !== null && active !== null && chosen === active;
 }
@@ -106,10 +93,9 @@ export interface VersionListEntry {
 }
 
 /**
- * SemVer precedence for controller policy without Number precision loss.
- * The comparison itself is the package-wide single implementation in
- * version-safety.ts (compareSemverAsc); this wrapper only narrows the result
- * and turns non-semver input into null.
+ * SemVer precedence for controller policy without Number precision loss. The comparison
+ * itself is the package-wide single implementation in version-safety.ts; this wrapper
+ * only narrows the result and turns non-semver input into null.
  */
 export function compareRuntimeVersions(a: string, b: string): -1 | 0 | 1 | null {
   if (!EXACT_SEMVER.test(a) || !EXACT_SEMVER.test(b)) return null;
@@ -117,16 +103,11 @@ export function compareRuntimeVersions(a: string, b: string): -1 | 0 | 1 | null 
   return compared === 0 ? 0 : compared < 0 ? -1 : 1;
 }
 
-/** Downgrade predicate for activation-intent arming — the single source of
- *  the `manualRollback: active !== null && compareRuntimeVersions(target,
- *  active) === -1` formula shared by the desktop controller install
- *  (dsh-runtime-controller.ts), the gateway apply() and the gateway
- *  apply-now arm. `active` is the EFFECTIVE
- *  active version (pointer ?? builtin anchor on both owners): a builtin-
- *  active downgrade is still a real data rollback (manualRollback arms the
- *  pre-rollback stash + target-data restore, design 18 §3.7), not a plain
- *  switch. Returns false when `active` is absent or the versions are not
- *  comparable (compareRuntimeVersions === null). */
+/** Downgrade predicate for activation-intent arming — the single source of the
+ *  `manualRollback` formula shared by the desktop controller and the gateway arms.
+ *  `active` is the EFFECTIVE active version (pointer ?? builtin anchor): a builtin-active
+ *  downgrade is still a real data rollback (arms stash + target-data restore), not a
+ *  plain switch. Returns false when `active` is absent or the versions are not comparable. */
 export function isVersionDowngrade(target: string, active: string | null): boolean {
   return active !== null && compareRuntimeVersions(target, active) === -1;
 }
@@ -146,19 +127,14 @@ function isListable(
 }
 
 /**
- * 构建版本选择器列表（design 18 §3.6 A.2 显示规格）：
+ * 构建版本选择器列表：
  *
  *   1. active 版本置顶（精确 semver 即可列出，并从其余列表中去重）；
- *   2. 其余按 semver 降序（compareSemverAsc 取反）。
- *      dist-tags.latest 只作数据标记（不「推荐」钉位/展示——
- *      npm latest 可能是低于内建基线的旧版本，钉位会造成无解释的乱序）；
- *      active 本身就是 latest 时标记打在置顶条目上，不重复出现；
- *   3. cached 标记 = version ∈ cachedVersions（离线缓存版本）；
- *   4. belowBaseline = compatibilityBaseline 非空且 version 严格低于基线
- *      （基线为空或不合法则不标）；基线相等不算 below；
- *   5. registry 候选必须在 byVersion 找到 tarball；但调用方已验证的
- *      cachedVersions 始终与 metadata 取并集。因此 registry 下架/yank 或简略
- *      metadata 缺项不会把本地可回滚树从 UI 隐藏。
+ *   2. 其余按 semver 降序；dist-tags.latest 只作数据标记，不「推荐」钉位/展示
+ *      （npm latest 可能低于内建基线，钉位会造成无解释的乱序）；
+ *   3. cached / belowBaseline 标记（基线相等不算 below）；
+ *   4. registry 候选必须在 byVersion 找到 tarball，但调用方已验证的 cachedVersions
+ *      始终与 metadata 取并集，registry 下架/yank 或 metadata 缺项不会把本地可回滚树隐藏。
  */
 export function buildVersionList(
   meta: {
@@ -169,8 +145,8 @@ export function buildVersionList(
   opts: { active: string | null; cachedVersions: string[]; compatibilityBaseline: string | null },
 ): VersionListEntry[] {
   const byVersion = meta.byVersion;
-  // cachedVersions 是 controller 对目录树跑完整性/平台校验后的投影。
-  // 这里仍过滤精确 semver，避免脏存储名进入 renderer。
+  // cachedVersions 是 controller 对目录树跑完整性/平台校验后的投影；这里仍过滤精确
+  // semver，避免脏存储名进入 renderer。
   const cached = new Set(opts.cachedVersions.filter((version) => EXACT_SEMVER.test(version)));
   const emitted = new Set<string>();
   const entries: VersionListEntry[] = [];
@@ -193,8 +169,7 @@ export function buildVersionList(
     emitted.add(opts.active);
   }
 
-  // 其余候选：registry 可列出版本 ∪ 本地缓存版本，统一降序。dist-tags.latest
-  // 只由 makeEntry 打数据标记，不参与排序。
+  // 其余候选：registry 可列出版本 ∪ 本地缓存版本，统一降序；latest 只打标记、不参与排序。
   const candidates = new Set<string>();
   for (const version of meta.versions) {
     if (isListable(version, byVersion)) candidates.add(version);
@@ -214,9 +189,8 @@ export function buildVersionList(
 }
 
 /**
- * 版本存在门禁（design 18 §5「版本存在门禁」）：version 在 byVersion 中且
- * tarball 非空且 integrity 是受支持的 SRI → true，否则 false。缺失 integrity
- * 的版本可以展示，但不得进入安装路径。
+ * 版本存在门禁：version 在 byVersion 中且 tarball 非空且 integrity 是受支持的 SRI → true。
+ * 缺失 integrity 的版本可以展示，但不得进入安装路径。
  */
 export function versionExists(
   meta: {
@@ -229,10 +203,9 @@ export function versionExists(
 }
 
 /**
- * 离线缓存版本列表（design 18 §3.6 A.2「自由回滚的 UI 基础」）：registry 元数据
- * 不可得时（check 失败 → lastMeta null），用本地已装版本树构建选择器列表——全部
- * 标记 `cached`、无 tarball/integrity/latest/belowBaseline，active 置顶。这样断网
- * /镜像挂时用户仍可回滚到任一已缓存版本。
+ * 离线缓存版本列表：registry 元数据不可得时（check 失败 → lastMeta null），用本地已装
+ * 版本树构建列表——全部标记 `cached`、无 tarball/integrity/latest/belowBaseline，active
+ * 置顶，这样断网/镜像挂时用户仍可回滚到任一已缓存版本。
  */
 export function buildCachedVersionList(cachedVersions: string[], active: string | null): VersionListEntry[] {
   const entries: VersionListEntry[] = [];

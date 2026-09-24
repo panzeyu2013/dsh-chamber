@@ -1,6 +1,4 @@
-/**
- * shell-ipc-open-in — domain IPC registrations
- */
+/** shell-ipc-open-in — domain IPC registrations. */
 import type { ShellIpcCtx } from './shell-core.ts'
 import type { OpenInLaunchContext, OpenInRequest } from './open-in.ts'
 import { IPC_CHANNELS } from './ipc-events.ts'
@@ -16,8 +14,8 @@ export function registerOpenInHandlers(ctx: ShellIpcCtx): void {
     }),
   }))
   deps.ipc.handle(IPC_CHANNELS.OPEN_IN, async (payload: unknown) => {
-    // 载荷形状守卫：不可信渲染载荷直接解构会以 TypeError 落到
-    // transport rejection——统一为 loud {error}，与其余失败面一致。
+    // 载荷形状守卫：不可信渲染载荷直接解构会以 TypeError 落到 transport
+    // rejection；统一为 loud {error}。
     const req = payload as Partial<OpenInRequest> | null
     if (req === null || typeof req !== 'object' || typeof req.appId !== 'string' || typeof req.instanceId !== 'string' || typeof req.path !== 'string' || typeof req.sourceFingerprint !== 'string') {
       return { ok: false, error: 'invalid open-in payload' }
@@ -48,10 +46,9 @@ export function registerOpenInHandlers(ctx: ShellIpcCtx): void {
     };
     const result = await runOpenInLaunch({ appId: req.appId, instanceId: req.instanceId, path: req.path }, scopedOpenInCtx)
     if (!ownsSource()) return { ok: false, error: 'source changed while open-in was in progress' };
-    // vscode 启动成功后将 intent 放入 renderer hold/replay 队列（与 OS
-    // 深链路径对齐；队列/入队在 shell-core，enqueueRendererDeepLinkIntent
-    // 为 core 导出）；finder 无对应激活语义。窗口未就绪也不丢，renderer
-    // 安装监听并 ready 后再推送；该 UI 联动从不阻塞 vscode 启动。
+    // vscode 启动成功后把 intent 放入 renderer hold/replay 队列（与 OS 深链
+    // 路径对齐；finder 无此语义）。窗口未就绪也不丢，renderer ready 后补推；
+    // 该 UI 联动从不阻塞 vscode 启动。
     if (result.ok && req.appId === 'vscode') {
       enqueueRendererDeepLinkIntent({ instanceId: req.instanceId, path: req.path }, sourceToken);
     }

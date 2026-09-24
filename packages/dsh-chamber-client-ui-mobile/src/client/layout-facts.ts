@@ -1,16 +1,12 @@
 /**
- * Layout fact source (design 17 §18.4 项 3, B3 fix): the drawer/collapsed
- * state must drive the mobile behaviors, but the gateway-hosted instance
- * runs the OFFICIAL ui-layout — the chamber fork's `ctx.layoutFacts` service
- * only exists in the desktop renderer (N-ctx shells). The mobile plugin
- * therefore uses a two-tier source:
- *   1. `ctx.layoutFacts` when present (chamber fork — the store exposes the
- *      AppFrame derivation directly, so the plugin never restates the
- *      breakpoint constant);
- *   2. the official frame attribute `data-sidebar-collapsed` observed
- *      directly (gateway-hosted official ui-layout).
- * This keeps the `inject` list to official services only (['slots','locale','layout'])
- * so the plugin never stalls on an unmet chamber-only service.
+ * Layout fact source: the drawer/collapsed state must drive the mobile
+ * behaviors, but the gateway-hosted instance runs the OFFICIAL ui-layout — the
+ * chamber fork's ctx.layoutFacts service exists only in the desktop renderer.
+ * So the source is two-tier: (1) ctx.layoutFacts when present (the fork's store
+ * exposes the AppFrame derivation directly), else (2) the official frame
+ * attribute data-sidebar-collapsed observed directly. The inject list stays
+ * official-services-only, so the plugin never stalls on an unmet chamber-only
+ * service.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { TOUCH_TIER_QUERY } from './composer.ts'
@@ -38,17 +34,13 @@ function findFrame(): Element | null {
 
 /**
  * Build the two-tier source for a ctx. The narrow flag comes from the touch
- * tier matchMedia: the alpha.2 store carries `viewportWidth` (not a `narrow`
- * bit) and neither the store nor the DOM carries a pointer guard, so the tier
- * query is the plugin's own activation contract. `getCollapsed()` comes from
- * the fork's layoutFacts face (tier 1) or the frame attribute (tier 2).
+ * tier matchMedia (the store carries viewportWidth, not a narrow bit, and no
+ * pointer guard): the tier query is the plugin's own activation contract.
  */
 export function createLayoutFactSource(ctx: ClientContext): LayoutFactSource {
   // The official ctx is a cordis proxy: touching an un-provided property
-  // THROWS ("cannot get property without inject"). The chamber fork's
-  // layoutFacts is a chamber-only service — the probe must be exception-
-  // safe (the gateway-hosted official ui-layout is the plugin's PRIMARY
-  // deployment target).
+  // THROWS. layoutFacts is chamber-only, so the probe must be exception-safe
+  // (the gateway-hosted official ui-layout is the PRIMARY deployment target).
   interface LayoutFactsFace {
     /** AppFrame's derived sidebar-collapsed flag (the fork's own derivation). */
     getCollapsed(): boolean
@@ -95,16 +87,15 @@ export function createLayoutFactSource(ctx: ClientContext): LayoutFactSource {
     if (frame !== null) frameObserver.disconnect()
     frame = next
     if (frame !== null) {
-      // data-rightbar-collapsed rides along for forward use; getCollapsed()
-      // reads only the sidebar flag.
+      // data-rightbar-collapsed rides along for forward use; getCollapsed() reads
+      // only the sidebar flag.
       frameObserver.observe(frame, { attributes: true, attributeFilter: ['data-sidebar-collapsed', 'data-rightbar-collapsed'] })
     }
     notify()
   }
   attach()
-  // Structural guard: only childList mutations that ADD a root-slot or
-  // frame candidate can change the frame identity — deep content mutations
-  // (chat streaming, typing) must not re-query the document per batch.
+  // Structural guard: only childList mutations that ADD a root-slot or frame
+  // candidate can change the frame identity — streaming must not re-query.
   const isStructuralTarget = (node: Node): boolean =>
     node instanceof Element
     && (node.matches('[data-slot="root"]')

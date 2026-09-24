@@ -1,48 +1,22 @@
 /**
- * The dsh RPC wire envelope — single source of truth for the unary
- * fetch-carrier envelope shape (cross-package protocol single-sourcing).
+ * The dsh RPC wire envelope — single source of truth for the unary fetch-carrier
+ * envelope shape and the shared host-identity probe contract.
  *
- * The dsh unary contract (mirror of @deepseek-ai/dsh-api-session-controller
- * src/client/contract): a client-request `{type:'client-request', rpcId, method,
- * payload}` is POSTed to `/api/<method>` (content-type application/json) and
- * the host answers with a server-response `{type:'server-response', rpcId,
- * result}` whose `result.ok` boolean selects the value/error branch.
+ * Wire: POST `/api/<method>` (application/json) with a client-request
+ * `{type:'client-request', rpcId, method, payload}`; the host answers a
+ * server-response `{type:'server-response', rpcId, result}` whose `result.ok`
+ * selects the value/error branch.
  *
- * This module also owns the shared HOST-IDENTITY probe contract: every
- * chamber identity/health/readiness probe — control-plane readiness
- * (spawn-dsh), the local-connection health probe, and the desktop SSH
- * endpoint probes — converges on the `session/canOpenWorkspacePath` identity
- * method (a zero-arg Typert Remote → boolean in the `session` namespace of
- * the upstream SessionController, present since dsh 0.1.2-rc.1). The method
- * answers with a fixed-size boolean and never touches session data, so probe
- * response bodies are decoupled from session-count growth. Runtime trees that
- * predate the identity method answer HTTP 404 and are served by the legacy
- * `session/list` probe through each consumer's fallback path (the legacy
- * response grows with session data — the one bounded-1 MiB exception).
+ * Identity probe: every chamber identity/health/readiness probe converges on
+ * `session/canOpenWorkspacePath` (zero-arg Remote → boolean; present since dsh
+ * 0.1.2-rc.1), a fixed-size answer that never touches session data. Trees that
+ * predate it answer 404 and are served by the legacy `session/list` probe (whose
+ * response grows with session data — the one bounded-1 MiB exception). The
+ * dsh-runtime activation probe mirrors the same wire by design.
  *
- * The shape is shared by three consumers:
- *   - control-plane dsh-client.ts `call()` (fetch carrier);
- *   - desktop ssh-provider.ts `verifyDshEndpoint` (node:http carrier,
- *     unary identity probe);
- *   - desktop ssh-provider.ts `probeRemoteMethod` (node:http carrier, Remote
- *     liveness probes).
- * This module owns the shared primitives; the consumers keep their own
- * transport orchestration (fetch vs node:http, pending tables, deadlines)
- * and only the wire shape / validation is centralized here.
- *
- * Invariants:
- * - rpcId is minted by the initiator on every unary call and echoes back in
- *   the server-response; a mismatch is a protocol violation.
- * - `payload` is passed through verbatim (a plain unary probe sends `{}`,
- *   Remote calls send `{args}` — both are caller decisions).
- * - parseServerResponse NEVER guesses: a body that is not a matching
- *   server-response, or whose result slot is not an object, is classified
- *   explicitly (no-envelope / malformed-result) so every caller keeps its
- *   exact failure semantics.
- * - `result.ok` is NOT enforced to be a boolean by the parse (the desktop
- *   probes treat `ok === true` vs "anything else" differently from the unary
- *   client, which requires a boolean) — each consumer applies its own
- *   strictness after the shared structural check.
+ * Invariants: rpcId is minted by the initiator and must echo back; `payload` passes
+ * through verbatim; parseServerResponse NEVER guesses; `result.ok` is not required to
+ * be boolean by the shared parse — each consumer applies its own strictness.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -57,11 +31,9 @@ export interface ClientRequestEnvelope {
 }
 
 /**
- * The narrow server-response wire envelope as parsed from a response body.
- * `result.ok` stays `unknown` here on purpose: the parse validates only the
- * STRUCTURE both consumers share (type + rpcId echo + an object result
- * slot); whether `ok` must be a boolean (the unary client) or merely
- * `=== true` (the desktop probes) is each caller's own strictness.
+ * The narrow server-response wire envelope as parsed. `result.ok` stays `unknown`
+ * on purpose: the parse validates only the structure both consumers share; whether
+ * `ok` must be boolean or merely `=== true` is each caller's own strictness.
  */
 export interface ServerResponseEnvelope {
   type: 'server-response'
@@ -96,52 +68,34 @@ export function buildClientRequest(
   return { type: 'client-request', rpcId, method, payload }
 }
 
-// Shared host-identity probe contract (single source)
-// Every chamber identity/health/readiness probe that shares this package
-// boundary — control-plane local readiness + health (dsh-client.ts
-// probeHostIdentity) and the desktop SSH endpoint probes (ssh-provider.ts
-// verifyDshEndpoint / probeDshSignature, consumed through the
-// control-plane-module facade) — speaks the SAME identity method, and the
-// method name / payload shapes / 64 KiB cap never drift between the fetch
-// carrier and the node:http carrier consumers. The dsh-runtime activation
-// session probe (packages/dsh-runtime, a pure Node package that must not
-// depend on control-plane) mirrors the same wire by design: its constants
-// live beside its own probe layer (runtime-probes.ts) and are pinned by its
-// hermetic contract tests instead of importing this module.
+// Shared host-identity probe contract (single source): every probe sharing this package
+// boundary speaks the SAME method, payload shapes and 64 KiB cap so the fetch and
+// node:http carriers never drift. dsh-runtime mirrors the wire by design.
 
 /**
- * The unified host-identity probe method: `session/canOpenWorkspacePath`, a
- * zero-arg Typert Remote → boolean on the upstream SessionController
- * (`namespace: 'session'`, dsh ≥ 0.1.2-rc.1; the pinned upstream tree
- * registers it beside `session/list`). Pure synchronous platform detection:
- * it never reads session data, never activates an Agent, and performs no IO,
- * so its server-response is a fixed-size boolean regardless of session
- * count. 404 (HTTP) = the runtime tree predates the method — the consumers
- * fall back to LEGACY_HOST_PROBE_METHOD.
+ * The unified host-identity probe method: `session/canOpenWorkspacePath`, a zero-arg
+ * Typert Remote → boolean on the upstream SessionController. Pure platform detection:
+ * no session read, no Agent activation, no IO, so the response is a fixed-size boolean
+ * regardless of session count. HTTP 404 = the tree predates it; fall back to legacy.
  */
 export const HOST_IDENTITY_METHOD = 'session/canOpenWorkspacePath'
 
 /**
  * Earliest pinned generation whose SessionController registers
- * {@link HOST_IDENTITY_METHOD}. Named here (instead of repeated as a literal in
- * diagnostics) so the cutoff has ONE home: the operator-facing warnings that
- * explain a legacy fallback interpolate this constant, and a re-anchor that
- * moves the cutoff changes one line.
+ * {@link HOST_IDENTITY_METHOD}; named so the operator-facing legacy-fallback warning
+ * has ONE home and a re-anchor changes one line.
  */
 export const HOST_IDENTITY_METHOD_SINCE = '0.1.2-rc.1'
 
 /**
- * The legacy host probe method (`session/list`, the same slash-path wire the
- * pre-identity runtimes answer). Its response GROWS with the session list —
- * consumers keep it bounded at 1 MiB and only reach it on an identity-method
- * 404 (a runtime tree that predates dsh 0.1.2-rc.1).
+ * The legacy host probe method (`session/list`). Its response GROWS with the session
+ * list — consumers bound it at 1 MiB and only reach it on an identity-method 404.
  */
 export const LEGACY_HOST_PROBE_METHOD = 'session/list'
 
 /**
- * Response cap for the identity probe (64 KiB per call). The boolean answer
- * is tiny; the cap bounds memory on a misbehaving endpoint while leaving an
- * enormous margin over any legitimate identity response.
+ * Response cap for the identity probe (64 KiB). The boolean answer is tiny; the cap
+ * bounds memory on a misbehaving endpoint with an enormous margin.
  */
 export const HOST_PROBE_MAX_RESPONSE_BYTES = 64 * 1024
 
@@ -150,26 +104,17 @@ export function buildHostIdentityProbePayload(): { args: Record<string, never> }
   return { args: {} }
 }
 
-/** Client-request payload of the legacy session/list probe (the empty typed
- *  request is carried by the wire `_request` marker). */
+/** Client-request payload of the legacy session/list probe (the empty typed request is carried by the wire `_request` marker). */
 export function buildLegacyHostProbePayload(): { args: { _request: Record<string, never> } } {
   return { args: { _request: {} } }
 }
 
 /**
- * The canonical legacy session/list answer shape: a PLAIN RECORD carrying an
- * `items` array. The pre-identity `session/list` probe answered
- * `{ items: [...] }`, so an `ok:true` value with any other shape is a
- * damaged legacy host and must fail closed, never pass a health probe.
- *
- * Single-sourced here (beside the identity/legacy method constants) so the
- * control-plane fallback (dsh-client.ts), the dsh-runtime activation probe
- * (through its injected `legacyShape` seam) and the desktop SSH probes apply
- * the SAME predicate — three hand-maintained copies of this shape previously
- * disagreed (arrays counted as legacy in control-plane, anything non-null in
- * desktop).
- * @param value - the parsed `result.value` of an `ok:true` legacy answer.
- * @returns true only for a non-array object whose `items` property is an array.
+ * The canonical legacy session/list answer shape: a PLAIN RECORD carrying an `items`
+ * array. An `ok:true` value with any other shape is a damaged legacy host and must
+ * fail closed, never pass a health probe. Single-sourced so the control-plane fallback,
+ * dsh-runtime's injected `legacyShape` seam and the desktop SSH probes apply the SAME
+ * predicate.
  */
 export function isLegacyHostProbeValue(value: unknown): boolean {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
@@ -177,13 +122,10 @@ export function isLegacyHostProbeValue(value: unknown): boolean {
 }
 
 /**
- * Narrow a parsed response body to a matching server-response envelope.
- * Never guesses: any shape that is not provably a matching server-response
- * with an object result slot is classified explicitly (see ServerResponseParse).
- * @param body - the parsed response JSON (null when the body was absent or
- *   unparseable — the callers treat that exactly like a non-envelope).
- * @param expectedRpcId - the rpcId this client-request minted; a mismatch is
- *   a protocol violation, never silently accepted.
+ * Narrow a parsed response body to a matching server-response envelope. Never guesses:
+ * anything that is not provably a matching server-response with an object result slot
+ * is classified explicitly. `body` null means absent/unparseable — callers treat that
+ * exactly like a non-envelope.
  */
 export function parseServerResponse(body: unknown, expectedRpcId: string): ServerResponseParse {
   if (typeof body !== 'object' || body === null) return { kind: 'no-envelope' }
@@ -206,36 +148,24 @@ export function parseServerResponse(body: unknown, expectedRpcId: string): Serve
 
 /** The outcome of one raw unary POST over the node:http carrier. */
 export interface RawUnaryOutcome {
-  /** HTTP status when the endpoint answered; null when it did not (timeout /
-   *  connection failure / premature close). */
+  /** HTTP status when the endpoint answered; null when it did not (timeout / connection failure / premature close). */
   status: number | null
   /** Parsed JSON body of a 200 answer; null when absent or unparseable. */
   body: unknown
   /** True when the TOTAL deadline fired before any answer completed. */
   timeout: boolean
-  /** True when the 200 body exceeded maxBodyBytes (bounded memory on a
-   *  misbehaving endpoint — an oversized answer is not an RPC envelope). */
+  /** True when the 200 body exceeded maxBodyBytes (bounded memory on a misbehaving endpoint). */
   oversized: boolean
 }
 
 /**
- * One-shot raw unary call over node:http (the desktop transport probes'
- * carrier — verifyDshEndpoint / probeRemoteMethod; the control-plane unary
- * client uses fetch and does not route through here).
+ * One-shot raw unary call over node:http (the desktop transport probes' carrier; the
+ * control-plane unary client uses fetch instead).
  *
- * Semantics:
- * - TOTAL deadline, not a socket-idle timeout: an endpoint answering slowly
- *   (a byte every few seconds) must never hang the call.
- * - Non-200 answers resolve immediately with the status (body never
- *   accumulated); 200 answers are accumulated under maxBodyBytes.
- * - A premature close after the settle destroy never escapes as an uncaught
- *   error (main-process safety discipline: both the request and the response
- *   carry no-op error handlers after settle).
- * - The request is destroyed on settle so a late error is consumed by its
- *   own handler and the settled guard makes it a no-op.
- * @param options - {url} the POST target, {envelope} the client-request to
- *   send (JSON.stringify'd verbatim — key order preserved), {timeoutMs} the
- *   total deadline, {maxBodyBytes} the 200-body cap.
+ * Semantics: TOTAL deadline, not a socket-idle timeout; non-200 answers resolve
+ * immediately with the status (body never accumulated) while 200 bodies accumulate
+ * under maxBodyBytes; a premature close after the settle destroy never escapes as an
+ * uncaught error; the request is destroyed on settle so a late error is a no-op.
  */
 export function postClientRequest(options: {
   url: string
@@ -254,8 +184,7 @@ export function postClientRequest(options: {
         clearTimeout(timer)
         timer = null
       }
-      // Destroy after settle: any late 'error' on the request is consumed by
-      // its own handler below (settled guard makes it a no-op).
+      // Destroy after settle: a late 'error' is consumed by its own handler (settled guard makes it a no-op).
       req.destroy()
       resolve(outcome)
     }
@@ -263,13 +192,10 @@ export function postClientRequest(options: {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
     }, res => {
-      // A premature close after our destroy must never escape as an
-      // uncaught error (main-process safety discipline).
+      // A premature close after our destroy must never escape as an uncaught error (main-process safety discipline).
       res.on('error', () => {})
       if (res.statusCode !== 200) {
-        // Non-200: the caller classifies from the status alone (dsh-signature
-        // probe, 404-is-deterministic gateway semantics) — never accumulate
-        // a non-200 body.
+        // Non-200: the caller classifies from the status alone — never accumulate a non-200 body.
         res.resume()
         done({ status: res.statusCode ?? null, body: null, timeout: false, oversized: false })
         return
@@ -291,15 +217,13 @@ export function postClientRequest(options: {
         try {
           body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
         } catch {
-          // An unparseable body is not an RPC envelope; null collapses with
-          // the absent-body case (every consumer treats it the same way).
+          // An unparseable body is not an RPC envelope; null collapses with the absent-body case.
           body = null
         }
         done({ status: 200, body, timeout: false, oversized: false })
       })
     })
-    // TOTAL deadline, not the socket-idle timeout: an endpoint that answers
-    // slowly must never hang the call.
+    // TOTAL deadline, not a socket-idle timeout: a slow endpoint must never hang the call.
     timer = setTimeout(() => done({ status: null, body: null, timeout: true, oversized: false }), timeoutMs)
     timer.unref?.()
     req.on('error', () => done({ status: null, body: null, timeout: false, oversized: false }))

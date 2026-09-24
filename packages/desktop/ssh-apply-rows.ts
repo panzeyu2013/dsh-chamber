@@ -1,18 +1,14 @@
 /**
- * Pure row/deny/undo logic for the ssh plugin apply surface (design 21 §6.4
- * ssh 统一增量) — no Electron, no fs:
+ * Pure row/deny/undo logic for the ssh plugin apply surface — no Electron, no fs:
  *
- * - parseSpecName / buildSshApplyRows — name extraction + the RESERVED-name
- *   whole-batch refusal shared by the main-process ssh apply IPC preflight
- *   (before any remote change, matching the gateway same-set deny, decision
- *   19) and applyPlugins' own defense-in-depth deny;
- * - buildSshUndoDecision / describeSshUndoConfirmation — the pure undo
- *   decision over one journal op (ssh-plugin-journal.ts) plus its
- *   confirmation-dialog copy.
+ * - parseSpecName / buildSshApplyRows — name extraction plus the RESERVED-name
+ *   whole-batch refusal shared by the main-process ssh apply preflight (before
+ *   any remote change) and applyPlugins' defense-in-depth deny;
+ * - buildSshUndoDecision / describeSshUndoConfirmation — the pure undo decision
+ *   over one journal op plus its confirmation-dialog copy.
  *
- * The whitelists are the control-plane shared single source (plugin-spec.ts
- * via control-plane-module.ts — the same source the gateway routes and the
- * ssh-provider re-exports consume).
+ * The whitelists come from the control-plane shared single source
+ * (control-plane-module.ts).
  */
 
 import {
@@ -30,10 +26,8 @@ import type { SshJournalOp } from './ssh-plugin-journal.ts'
 /** S 分量：chamber 播种注册表名（单一来源 CHAMBER_HOST_PACKAGES）。 */
 export const SSH_SEED_NAMES: readonly string[] = CHAMBER_HOST_PACKAGES.map(descriptor => descriptor.insert.name)
 
-/**
- * ssh 后端的判定事实（design 21 §6.11）：只有 `B₀ ∪ S`——远端没有 family 事实源，
- * 因此 `familySource:'none'`（装面官方 scope 一律拒）且 `familyNames:null`。
- */
+/** ssh 后端的判定事实：只有 `B₀ ∪ S`——远端无 family 事实源，故
+ *  `familySource:'none'`（装面官方 scope 一律拒）且 `familyNames:null`。 */
 export interface SshProtectionFacts {
   protectedSet: ProtectedSet | null
   runtimeVersion: string | null
@@ -50,30 +44,22 @@ export function defaultSshProtectionFacts(): SshProtectionFacts {
   }
 }
 
-/**
- * Extract the REGISTRY package name of a spec/name: `name`, `name@1.2.3`,
- * `@scope/name`, `@scope/name@1.2.3` → the bare name. Anything that is not a
- * whitelisted registry spec (including `file:`/`link:`/path materialize
- * values, which carry no registry name) → null. The decision paths apply the
- * protected-set judgement to this parsed name; a file: materialize row's name
- * is only ever known from its manifest row (never from the value itself).
- */
+/** Extract the REGISTRY package name of a spec/name (`name`, `name@1.2.3`,
+ *  `@scope/name`, `@scope/name@1.2.3` → bare name); anything not a whitelisted
+ *  registry spec (including `file:`/`link:`/path materialize values) → null —
+ *  a materialize row's name is known only from its manifest row. */
 export function parseSpecName(spec: unknown): string | null {
   if (typeof spec !== 'string' || spec === '') return null
   if (!PLUGIN_NAME_PATTERN.test(spec) && !PLUGIN_SPEC_PATTERN.test(spec)) return null
-  // The extraction is the control-plane extractSpecName core (the same
-  // lastIndexOf('@') rule as gateway-ipc-shared's pluginSpecName); the
-  // protected-set judgement + final name re-validation below stay local.
+  // Extraction delegates to the control-plane core (same lastIndexOf('@') rule
+  // as gateway-ipc-shared); the final name re-validation below stays local.
   const name = extractSpecName(spec)
   return PLUGIN_NAME_PATTERN.test(name) ? name : null
 }
 
-/**
- * The registry VERSION VALUE a spec pins (`name@<value>` → `<value>`); null for a
- * bare name or a non-registry value. Used by the generation check (design 21
- * §6.11.3): an official-scope install must carry an exact version. Single
- * source = control-plane protected-plugins.ts (the gateway reads the same one).
- */
+/** The registry VERSION VALUE a spec pins (`name@<value>` → `<value>`), or
+ *  null for a bare name / non-registry value; single source = control-plane.
+ *  An official-scope install must carry an exact version. */
 export const parseSpecVersion = registrySpecVersion
 
 /** One assembled ssh apply row (kind + the name it touches + its spec). */
@@ -90,8 +76,7 @@ export interface SshApplyRefusal {
   name: string
   kind: 'add' | 'remove'
   /** ALWAYS a refusal: `buildSshApplyRows` drops `defer` (profile absent means
-   *  "let the CLI create it", design 21 §6.11.3 R0), so the type says so and the
-   *  copy can never mislabel a defer as a refusal code. */
+   *  "let the CLI create it"), so a defer can never be mislabeled a refusal. */
   decision: Extract<PluginMutationDecision, { kind: 'refuse' }>
 }
 
@@ -103,17 +88,15 @@ export interface BuildSshApplyRowsResult {
 }
 
 /**
- * Assemble add/remove rows for the ssh apply surface (pure, tolerant of
- * unknown payload shapes — applyPlugins remains the authority on shape
- * validation): extract each row's name/version and run the **protected-set
- * decision** (design 21 §6.11) over every row. The caller REFUSES THE WHOLE
- * BATCH when `refusals` is non-empty — before any remote change.
+ * Assemble add/remove rows for the ssh apply surface (pure; applyPlugins stays
+ * the authority on payload shape validation): extract each row's name/version
+ * and run the protected-set decision over every row. The caller REFUSES THE
+ * WHOLE BATCH when `refusals` is non-empty — before any remote change.
  *
  * ssh facts are `B₀ ∪ S` with no family source: official-scope installs are
  * refused conservatively (an allowed install could shadow the remote anchor's
- * own release packages in a way no local fact can bound), while removes are
- * judged by `B₀ ∪ S` alone (removing an unexpected official-scope copy is
- * restorative, never destructive).
+ * own release packages, unbounded by any local fact), while removes are judged
+ * by `B₀ ∪ S` alone (removing an unexpected official copy is restorative).
  */
 export function buildSshApplyRows(
   addRows: unknown,
@@ -137,8 +120,8 @@ export function buildSshApplyRows(
       profileState: facts.profileState,
       familySource: 'none',
     })
-    // Only `refuse` counts: `defer` (profile absent) means "let the CLI create
-    // it", which is not a batch refusal (design 21 §6.11.3 R0).
+    // Only `refuse` counts: `defer` (profile absent) means "let the CLI
+    // create it", not a batch refusal.
     if (decision.kind !== 'refuse') return
     refused.add(name)
     refusals.push({ name, kind, decision })
@@ -158,30 +141,24 @@ export function describePluginRefusals(refusals: readonly SshApplyRefusal[]): st
     .join('；')
 }
 
-/** Renderer-facing undo projection shape (design 21 §6.4): what undoing the
- *  latest ok op would do, with the re-add spec MASKED when it would name a
- *  remote-local reference. v1 only supports registry re-adds; a remote
- *  `file:` specBefore is reported as unavailable ('file-backed') and is
- *  never sent to the renderer. */
+/** Renderer-facing undo projection: what undoing the latest ok op would do,
+ *  with the re-add spec MASKED when it would name a remote-local reference. v1
+ *  registry re-adds only; a remote `file:` specBefore is never projected. */
 export interface SshUndoInfo {
   /** The name the undo touches. */
   name: string
-  /** Kind of the op being reversed: 'add' — a fresh install is undone by
-   *  removing the name again, an in-place upgrade is undone by restoring
-   *  `spec`; 'remove' — undone by re-adding with `spec`. */
+  /** Op being reversed: 'add' → remove again (fresh install) or restore
+   *  `spec` (in-place upgrade); 'remove' → re-add with `spec`. */
   kind: 'add' | 'remove'
-  /** Registry spec to re-add (restoring an in-place upgrade or undoing a
-   *  remove); null when the undo removes the name. REGISTRY form only — a
-   *  file:-backed specBefore is masked and marked unavailable, never
-   *  projected. */
+  /** Registry spec to re-add (restoring an upgrade or undoing a remove); null
+   *  when the undo removes the name. REGISTRY form only — a file:-backed
+   *  specBefore is masked, never projected. */
   spec: string | null
-  /** Whether the underlying spec was a file: reference (masked; v1 reports
-   *  it unavailable instead of projecting it). */
+  /** Whether the underlying spec was a file: reference (masked, not projected). */
   masked: boolean
   /** Why this op cannot be undone: 'file-backed' = the previous spec was a
-   *  remote file: path (v1 cannot re-add it); 'none' = nothing undoable or
-   *  the previous spec is unknown/not a restorable registry value (ranges,
-   *  x-wildcards, aliases, …). */
+   *  remote file: path; 'none' = unknown or not a restorable registry value
+   *  (ranges, x-wildcards, aliases, …). */
   unavailable?: 'file-backed' | 'none'
 }
 
@@ -189,35 +166,24 @@ export type SshUndoDecision =
   | { ok: true; info: SshUndoInfo; action: { kind: 'add'; spec: string } | { kind: 'remove'; name: string } }
   | { ok: false; error: string; info: SshUndoInfo }
 
-/**
- * Is this registry VERSION VALUE an x-wildcard (`1.x`, `^1.2.x`, `x`, …)?
- * An x-wildcard is a RANGE, not a locked version — applyPlugins refuses it
- * (plugin-sync.ts hasXWildcardVersion, the §7.2 semantic gate on top of the
- * syntax whitelist). An undo re-add whose previous spec is wildcard-shaped
- * must be refused HERE (unavailable 'none') so the decision never reports
- * ok:true and then dies in applyPlugins with a confusing 'invalid add spec'.
- * Mirrors hasXWildcard/hasXWildcardVersion semantics (plugin-sync.ts) —
- * pinned against the apply-side gate by the ssh-apply-rows tests.
- */
+/** Is this registry VERSION VALUE an x-wildcard (`1.x`, `^1.2.x`, `x`, …)?
+ *  An x-wildcard is a RANGE, not a locked version — applyPlugins refuses it, so
+ *  an undo re-add whose previous spec is wildcard-shaped must be refused HERE
+ *  (unavailable 'none') instead of dying later in applyPlugins. */
 function isXWildcardVersionValue(value: string): boolean {
   return /(^|\.)x(\.|$)/i.test(value.replace(/^[\^~]/, ''))
 }
 
 /**
- * The v1 undo decision over one journal op (design 21 §6.4):
- * undoing a change RESTORES the pre-change row state:
- *   - undoing an ok 'add' whose name was ABSENT before (specBefore null —
- *     a fresh install) = remove that name again;
- *   - undoing an ok 'add' that REPLACED an existing row (specBefore
- *     non-null — an in-place upgrade of an already-installed plugin) =
- *     RESTORE the previous spec by re-adding `name@specBefore` (a plain
- *     remove would delete a plugin that existed before the change — the
- *     design 21 §6.4 「撤销=恢复」 row-level semantics);
- *   - undoing an ok 'remove' = re-add `name@specBefore`.
- * The restore re-add is composed into a REGISTRY spec and only accepted
- * when it stays whitelist-shaped AND locked (no x-wildcard); a remote
- * `file:` specBefore is refused (unavailable 'file-backed'); a missing or
- * out-of-model specBefore is refused (unavailable 'none').
+ * The v1 undo decision over one journal op — undoing a change RESTORES the
+ * pre-change row state:
+ *   - ok 'add' with specBefore null (fresh install) → remove the name again;
+ *   - ok 'add' with specBefore non-null (in-place upgrade) → re-add
+ *     `name@specBefore` (a plain remove would delete a pre-existing plugin —
+ *     「撤销=恢复」 semantics);
+ *   - ok 'remove' → re-add `name@specBefore`.
+ * The restore must stay a whitelist-shaped, locked REGISTRY spec: a remote
+ * `file:` specBefore is 'file-backed', a missing/out-of-model one 'none'.
  */
 export function buildSshUndoDecision(op: SshJournalOp): SshUndoDecision {
   if (op.kind === 'add' && op.specBefore === null) {
@@ -228,8 +194,7 @@ export function buildSshUndoDecision(op: SshJournalOp): SshUndoDecision {
   return restoreDecision(op)
 }
 
-/** Shared restore path: an in-place-upgrade undo (add row with specBefore)
- *  and a remove undo both restore the previous spec the same way. */
+/** Shared restore path for an in-place-upgrade undo and a remove undo. */
 function restoreDecision(op: SshJournalOp): SshUndoDecision {
   const specBefore = op.specBefore
   if (specBefore === null) {
@@ -244,11 +209,8 @@ function restoreDecision(op: SshJournalOp): SshUndoDecision {
       info,
     }
   }
-  // Registry version value → compose `name@value` and require the composed
-  // spec to still be whitelist-shaped AND locked: a non-version value (range,
-  // alias, …) or an x-wildcard value cannot be re-added through the ssh
-  // apply surface — refused here (none), never a decision that would die in
-  // applyPlugins as 'invalid add spec'.
+  // Compose `name@value` and require a whitelist-shaped, locked spec: a range,
+  // alias or x-wildcard is refused here, never passed on to die in applyPlugins.
   const spec = `${op.name}@${specBefore}`
   if (!PLUGIN_SPEC_PATTERN.test(spec) || isXWildcardVersionValue(specBefore)) {
     const info: SshUndoInfo = { name: op.name, kind: op.kind, spec: null, masked: false, unavailable: 'none' }
@@ -262,28 +224,22 @@ function restoreDecision(op: SshJournalOp): SshUndoDecision {
   return { ok: true, info, action: { kind: 'add', spec } }
 }
 
-/** Confirmation-dialog copy builder (pure) for 「撤销最近变更」(design 21
- *  §6.4/§6.7: a user-initiated MAIN-process confirmation, default cancel —
- *  the undo re-executes a remote write + restart through the same ssh apply
- *  flow, never a silent script action). zh-CN copy consistent with the
- *  sibling ssh/local confirmations in plugin-sync.ts. `spec` is non-null
- *  exactly when the undo RE-ADDS a registry spec (restoring an in-place
- *  upgrade or undoing a remove); null when the undo removes the name. */
+/** Confirmation-dialog copy builder (pure) for 「撤销最近变更」: user-initiated
+ *  MAIN-process confirmation, default cancel — the undo re-executes a remote
+ *  write + restart through the same ssh apply flow, never a silent action.
+ *  `spec` is non-null exactly when the undo RE-ADDS a registry spec. */
 export function describeSshUndoConfirmation(info: {
   targetLabel: string | null
   targetId: string
   opKind: 'add' | 'remove'
   name: string
-  /** Registry re-add spec (undoes that re-add); null when the undo removes
-   *  the name. */
+  /** Registry re-add spec (undoes that re-add); null when the undo removes the name. */
   spec: string | null
 }): { message: string; detail: string } {
   const target = info.targetLabel ?? info.targetId
   const detailParts: string[] = []
   if (info.spec !== null) {
-    // The undo re-adds a registry spec: undoing a remove, or restoring the
-    // previous spec of an in-place upgrade (an add that replaced an
-    // existing install).
+    // Undoing a remove, or restoring the previous spec of an in-place upgrade.
     detailParts.push(
       info.opKind === 'remove'
         ? `最近一次变更是移除插件 ${info.name}。撤销将以 ${info.spec} 从 npm registry 重新安装它（在远端以该实例用户身份执行）。`

@@ -1,12 +1,11 @@
-/** 每会话事实（来自 06 §4 运行时事实通道 report.sessions 的行）。 */
+/** 每会话事实（运行时事实通道 report.sessions 的行）。 */
 export interface SessionFacts {
   running?: boolean
   completed?: boolean
   pending?: 'approval' | 'plan-review' | 'question'
   /**
-   * 运行中子代理计数（06 §4.5；>0 稀疏）。边沿检测本身忽略它；
-   * notification-projection 用它做「父回合结束但子代理仍在跑」的完成压制
-   * （与官方 Rows 的 pending > runningSubagents > completed 呈现优先级一致）。
+   * 运行中子代理计数（>0 稀疏）。边沿检测本身忽略它；notification-projection 用它做
+   * 「父回合结束但子代理仍在跑」的完成压制（与官方 Rows 的 pending > runningSubagents > completed 一致）。
    */
   runningSubagents?: number
 }
@@ -15,28 +14,19 @@ export interface NotificationEdge { sessionId: string; kind: NotificationKind }
 
 /**
  * 边沿检测：prev 事实 → next 事实 的事件集。
- * - prev 为 undefined（首份上报）：只播种记忆，返回 []（不发事件）。
- * - complete：running true→false 边沿，或 vendor completed 从无到有
- *   （后者只在**边沿记忆已武装**时有意义 —— 它不是断连补发通道：断连撤回会清掉
- *   App 侧的 prevRuntimeFactsRef/notifiedCompleteRef，重连首份上报按"prev 为
- *   undefined"纯播种，窗口内完成/提问一律不补发，见 design 19 §3.5）。
- *   同一 session 同一 tick 两者同时成立只发一次。
- * - ask：pending 变化到 'question'（含直切：question→approval 等不经
- *   undefined 的切换，vendor 组合选择器会正常产生——每个新值都通知一次）。
- * - request：pending 变化到 'approval' 或 'plan-review'。
- * - 输出顺序：按 next 的插入顺序，同一 session 多事件按 complete/ask/request 顺序。
- *
- * 注意：本函数无跨上报记忆——「同一完成只发一次」由
- * dedupeCompleteEdges（App 层持有 notified 集合）负责：正被查看的会话
- * 完成时 vendor 不武装 completed、先走 running 边沿，用户切走后延迟武装
- * 的 completed 会在此产生第二条 complete 边沿，必须由去重层丢弃。
+ * - prev 为 undefined（首份上报）：只播种记忆，返回 []（boot 时已 pending/completed 的会话不得轰炸用户）。
+ * - complete：running true→false，或 vendor completed 从无到有（后者只在**边沿记忆已武装**时
+ *   有意义——不是断连补发通道：重连首份上报按 prev undefined 纯播种）；同 tick 两者同时成立只发一次。
+ * - ask：pending 变化到 'question'（含不经 undefined 的直切）；request：pending 变化到
+ *   'approval' 或 'plan-review'。同值重放与清回 undefined 都不发。
+ * - 输出顺序：next 插入顺序，同一 session 按 complete/ask/request。
+ * 本函数无跨上报记忆——「同一完成只发一次」由 dedupeCompleteEdges（App 层）负责。
  */
 export function detectNotificationEdges(
   prev: Record<string, SessionFacts> | undefined,
   next: Record<string, SessionFacts>,
 ): NotificationEdge[] {
-  // First report: seed memory only, never emit (sessions already pending /
-  // completed at boot must not bombard the user).
+  // First report: seed memory only (sessions already pending/completed at boot must not bombard).
   if (prev === undefined) return []
 
   const edges: NotificationEdge[] = []
@@ -50,11 +40,8 @@ export function detectNotificationEdges(
     const completedEdge = before?.completed !== true && after.completed === true
     const complete = runningEdge || completedEdge
 
-    // ask/request: pending VALUE CHANGE to a concrete value. Any transition to
-    // a concrete value is an edge — including direct switches (question→approval)
-    // that never pass through undefined, which the vendor's combined-selector
-    // (manager.ts statuses.find) produces normally. Same-value replay never
-    // emits; clearing pending back to undefined never emits either.
+    // ask/request: any pending VALUE CHANGE to a concrete value is an edge (including direct
+    // switches that never pass undefined); same-value replay / clearing to undefined never emit.
     const pendingChanged = before?.pending !== after.pending && after.pending != null
     const ask = pendingChanged && after.pending === 'question'
     const request =
@@ -68,11 +55,9 @@ export function detectNotificationEdges(
 }
 
 /**
- * Complete 去重（App 层调用，跨上报记忆）：同一会话的 complete 只发一次，
- * 直到会话重新 running（running=true 时清除记忆，下次完成重新可发）。
- * 解决「正被查看的会话完成 → running 边沿先发 → 切走后 vendor 延迟武装
- * completed → 第二条 complete 边沿」的双发。PURE：返回过滤后的边沿与
- * 更新后的 notified 集合，由调用方持有。
+ * Complete 跨上报去重：同一会话的 complete 只发一次，直到会话重新 running（running=true 清除记忆）。
+ * 解决「正被查看的会话完成 → running 边沿先发 → 切走后 vendor 延迟武装 completed → 第二条边沿」的双发。
+ * PURE：返回过滤后的边沿与更新后的 notified 集合，由调用方持有。
  */
 export function dedupeCompleteEdges(
   edges: readonly NotificationEdge[],

@@ -1,38 +1,18 @@
 /**
- * Error-text projections for the browser-side chamber packages — the
- * repository's single implementation.
- *
- * Two DISTINCT primitives, deliberately not collapsed into one:
- *
- * - {@link errorMessage} — the verbatim-message projection: an Error's message,
- *   anything else String()-ed. It is what a UI shows next to a failed action,
- *   and it may return '' (an Error with an empty message). It can also throw on
- *   a hostile value, because String() can throw.
- * - {@link describeThrown} — the hostile-value projection: never throws, never
- *   returns ''. Use it at a catch boundary whose caller must be settled even
- *   when the thrown value is a proxy whose getters/toString throw.
- *
- * Two copies are deliberately NOT merged here: the desktop main process
- * (packages/desktop/describe-error.ts, which additionally appends an Error
- * cause chain) and the official dsh-client-web copy
- * (packages/dsh-client-web/src/boot.ts, upstream-diffable).
- *
- * Dependency-free on purpose: the consumers' plain-node tests import it.
+ * Error-text projections for the browser-side chamber packages — the single
+ * implementation, with two DISTINCT primitives: {@link errorMessage} (an
+ * Error's message verbatim, anything else String()-ed; may return '' and may
+ * throw) and {@link describeThrown} (hostile-safe: never throws, never '').
+ * The desktop main process and the official dsh-client-web copy keep their own
+ * variants deliberately; dependency-free.
  */
 
-/** The message of an unknown throwable, verbatim (never a fabricated cause).
- * @param err - any thrown value.
- * @returns the Error message, or the String() projection of anything else. */
+/** The message of an unknown throwable, verbatim (never a fabricated cause). */
 export function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-/**
- * Hostile-safe stable text for one thrown value (never throws, never '').
- * @param value - any thrown value.
- * @param fallback - the text used when nothing readable can be extracted.
- * @returns a non-empty diagnostic string.
- */
+/** Hostile-safe stable text for one thrown value: never throws, never returns '' (empty Error message/name and a throwing String() fall back). */
 export function describeThrown(value: unknown, fallback = 'unknown error'): string {
   try {
     if (value instanceof Error) {

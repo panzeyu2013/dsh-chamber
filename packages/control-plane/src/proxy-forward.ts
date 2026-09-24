@@ -1,22 +1,14 @@
 /**
- * Shared reverse-proxy forwarding core (design 17 §8, 方案 A).
+ * Shared reverse-proxy forwarding core.
  *
- * Shared by instance-proxy.ts and gateway-proxy.ts so both reuse
- * the exact Host/Origin rewrite, header-stripping, error semantics, rate
- * limiting, WebSocket splice and heartbeat — no fork, no drift. The two
- * proxies differ only in target resolution, which the caller passes in as a
- * fully-resolved `URL`:
- *
- *   - instance-proxy resolves `/api/i/<id>/*` → transport/local baseUrl and
- *     strips the prefix;
- *   - gateway-proxy resolves every path → `http://127.0.0.1:<localDshPort>`
- *     and forwards the path verbatim (no prefix stripping).
- *
- * The wire behavior (forwarded headers, JSON error bodies, status codes,
- * body caps, WS splice, heartbeat) is identical for both owners. Log lines
- * are the only parameterized surface: callers
- * pass `deps.logPrefix` (instance-proxy → 'instance-proxy', gateway-proxy →
- * 'gateway-proxy') and `deps.id` (the /api/i/<id> id, or a fixed label).
+ * Shared by instance-proxy.ts and gateway-proxy.ts so both reuse the exact
+ * Host/Origin rewrite, header stripping, error semantics, rate limiting,
+ * WebSocket splice and heartbeat — no fork, no drift. The two proxies differ
+ * only in target resolution, which the caller passes as a fully-resolved URL:
+ * instance-proxy resolves `/api/i/<id>/*` and strips the prefix; gateway-proxy
+ * resolves every path to `http://127.0.0.1:<localDshPort>` verbatim. Wire
+ * behavior is identical; only log lines are parameterized (deps.logPrefix,
+ * deps.id).
  */
 
 import { request as httpRequest } from 'node:http'
@@ -27,14 +19,12 @@ import type { Duplex } from 'node:stream'
 import type { Logger } from './types.ts'
 import { startWsHeartbeat } from './ws-heartbeat.ts'
 
-/** Request body cap (design 03 §3.4; aligned with the upstream 300MiB request cap / 200MiB image admission). */
+/** Request body cap (aligned with the upstream 300MiB request cap / 200MiB image admission). */
 export const MAX_REQUEST_BODY_BYTES = 300 * 1024 * 1024
 
-// SPKI certificate pinning (design 17 §13.4.2 / S23): shared single source in
-// spki-pin.ts — the desktop identity probe (gateway-provider.ts) and this
-// proxy core both import it through their own package boundaries, so the two
-// owners can never drift again.
-// Re-exported here for the instance-proxy gate and existing importers.
+// SPKI certificate pinning: single source in spki-pin.ts — the desktop identity
+// probe and this proxy core both import it, so the two owners cannot drift.
+// Re-exported here for existing importers.
 
 export {
   attachSpkiPinVerifier,
@@ -44,13 +34,12 @@ export {
 } from './spki-pin.ts'
 import { attachSpkiPinVerifier } from './spki-pin.ts'
 
-/** Response body cap for non-SSE responses (design 03 §3.4; aligned with the upstream 300MiB request cap / 200MiB image admission). */
+/** Response body cap for non-SSE responses (same upstream 300MiB/200MiB alignment). */
 export const MAX_RESPONSE_BODY_BYTES = 300 * 1024 * 1024
 
-/** HTML-document injection budget (S0): an upstream text/html response is
- * buffered for the owner's injector only when it is at most this large
- * (declared or actual). Single source of the 64 KiB budget: the gateway's
- * html-inject.ts consumes this export directly (no twin constant). */
+/** HTML-document injection budget: an upstream text/html response is buffered
+ * for the owner's injector only when it is at most this large. Single source of
+ * the 64 KiB budget (the gateway's html-inject.ts consumes this export). */
 export const MAX_HTML_INJECTION_BYTES = 64 * 1024
 
 /** Shared memory budget plus per-proxy concurrency defaults. The byte budget
@@ -73,54 +62,27 @@ export function getProcessBufferedRequestBytes(): number {
 }
 
 /**
- * Upstream timeout (design 03 §3.3: "上游连接拒绝 / 超时 → 502 / 504"):
- * how long an upstream may take to answer headers, and — for non-SSE
- * responses — how long its body may idle before the proxy gives up with an
- * explicit 504 (upstream_timeout). SSE streams and upgraded WebSockets are
- * long-lived by nature: the timeout only covers reaching the response/101,
- * never the stream lifetime. A hung upstream cannot stall the request
- * indefinitely.
- *
- * The chamber Git host has a 30s mutation budget and may emit no bytes while
- * Git is working. Keep this idle timeout strictly above that domain timeout so
- * the host result wins instead of a proxy-side 504 after the mutation commits.
+ * Upstream timeout: how long an upstream may take to answer headers, and — for
+ * non-SSE responses — how long its body may idle before the proxy gives up with
+ * an explicit 504 (upstream_timeout). SSE streams and upgraded WebSockets are
+ * long-lived by nature: the timeout only covers reaching the response/101. Kept
+ * strictly above the chamber Git host's 30s mutation budget so the host result
+ * wins instead of a proxy-side 504 after the mutation commits.
  */
 export const UPSTREAM_TIMEOUT_MS = 45_000
 
 /**
- * Long-RPC upstream paths, matched EXACTLY against the RESOLVED target's
- * pathname (the /api/i/<id> instance prefix is stripped before forwarding;
- * root-mounted owners like the gateway keep the path verbatim). Upstream
- * unary RPCs are always `POST /api/<service>/<method>` (two segments — the
- * upstream gateway claims exactly that shape, so pathname variants like a
- * trailing slash or nested sub-path never execute host business and keep the
- * ordinary window; exact matching also guarantees a future POST sub-resource
- * can never be silently exempted).
+ * Long-RPC upstream paths, matched EXACTLY against the RESOLVED target pathname
+ * (the /api/i/<id> prefix is stripped first; root-mounted owners keep the path
+ * verbatim). Upstream unary RPCs are always `POST /api/<service>/<method>`, so
+ * exact matching keeps a future POST sub-resource from being silently exempted.
  *
- * These unary dsh endpoints may legitimately stay silent far beyond the
- * ordinary window: the host business has NO upstream duration cap and its
- * progress is delivered out-of-band (session-log events over the WS mux, or
- * — for chamber host domains — a documented event no-op with idempotent
- * convergence), so the HTTP response is only a completion echo. Cutting them
- * on the ordinary idle window would fabricate a client disconnect that never
- * happened and cancel legitimate host work. A manual `/compact`
- * (commands/execute → dsh-command-compact → dsh-compaction-basic, an LLM
- * summarization call replaying a ~627k-token history) can be aborted at
- * exactly 45 001 ms — the proxy idle window — with `compaction/end {error:
- * "DeepSeek request aborted by caller"}`, leaving the session unchanged.
- *
- * Members: `/api/commands/execute` (the single funnel for every
- * upstream slash command — /compact is currently the only LLM-blocking
- * handler, future long commands arrive through the same path for free) and
- * `/api/archiveCleanup/purge` (chamber archived-session cleanup host domain,
- * design 24: unbounded per-session fs deletions with no cancellation wiring,
- * its own client budget is 5 min — design 24 §5 — which the proxy must not
- * preempt with a misleading 504). The git worktree domain is deliberately
- * NOT here: its host mutation has a hard 30s cap below the ordinary window
- * (design 08). Extend the list only for endpoints with the same contract;
- * the durable fix for arbitrarily long commands is an admission-only
- * upstream `commands.execute` whose outcome arrives over the session-event
- * stream (STATUS).
+ * These endpoints may stay silent far beyond the ordinary window: host business
+ * has no upstream duration cap and progress arrives out-of-band (session-log
+ * events over the WS mux), so the HTTP response is only a completion echo and
+ * cutting it would cancel legitimate work. Members: /api/commands/execute and
+ * /api/archiveCleanup/purge (unbounded fs deletions); the git worktree domain is
+ * deliberately NOT here (hard 30s host cap).
  */
 export const LONG_RPC_PATHS: readonly string[] = [
   '/api/commands/execute',
@@ -128,18 +90,12 @@ export const LONG_RPC_PATHS: readonly string[] = [
 ]
 
 /**
- * Long-RPC insurance fuse — deliberately generous, NOT an SLA, and NOT a
- * business deadline: exempted paths keep a bound so a wedged-but-alive
- * handler cannot occupy a bounded request slot forever, while real end
- * conditions stay liveness-driven (client teardown aborts the upstream; a
- * dead host surfaces through its socket death as an explicit upstream
- * failure). The value has no empirically grounded ceiling — compaction cost
- * grows with session size and any estimate would couple the proxy to session
- * business — so the fuse is set an order of magnitude above the only
- * measured crossing (~627k-token session still running at 45s) and long-RPC
- * activity is observable via the `longRpcRequests`/`longRpcTimeouts`
- * counters. Revisit trigger: a fuse trip counter that is non-zero in a
- * release means a legitimate operation hit the fuse.
+ * Long-RPC insurance fuse — deliberately generous, NOT an SLA or business
+ * deadline: exempted paths keep a bound so a wedged-but-alive handler cannot
+ * occupy a request slot forever, while real end conditions stay liveness-driven
+ * (client teardown aborts upstream; a dead host surfaces as an upstream
+ * failure). Set an order of magnitude above the only measured crossing; the
+ * longRpcRequests/longRpcTimeouts counters make trips observable.
  */
 export const LONG_RPC_UPSTREAM_TIMEOUT_MS = 30 * 60_000
 
@@ -147,41 +103,26 @@ export const LONG_RPC_UPSTREAM_TIMEOUT_MS = 30 * 60_000
 export const CLIENT_BODY_IDLE_TIMEOUT_MS = 30_000
 
 /**
- * WebSocket heartbeat (design 14 extension — sleep/wake stuck-deep-diving
- * fix): ping cadence for the spliced mux downstream. The `/api/remote.mux`
- * host pings every downstream every `websocketHeartbeatIntervalMs` (default
- * 2s) and terminates after two missed pongs (~6s, see ws-heartbeat.ts), but
- * this proxy-side BROWSER-leg ping remains necessary for the
- * sleep/wake case: the host heartbeat cannot guard the browser leg across an
- * OS sleep/wake (its pings simply fail during sleep), where the half-open
- * browser leg may fire no 'error'/'close' — the splice would hold forever
- * while the browser's pump stays "connected" but blind. The proxy pings the
- * browser; after `WS_PING_MISSES_BEFORE_TEARDOWN` cycles without a pong, the
- * splice is torn down so the browser's WebSocket closes and the renderer
- * pump reconnects (fresh stream → host baseline replay → UI re-sync).
+ * WebSocket heartbeat: ping cadence for the spliced mux downstream. The host
+ * mux pings every socket and terminates after two missed pongs (~6s, see
+ * ws-heartbeat.ts), but this proxy-side BROWSER-leg ping remains necessary for
+ * OS sleep/wake: the host heartbeat cannot guard the browser leg across sleep,
+ * where a half-open leg may fire no 'error'/'close' and the splice would hold
+ * forever. After WS_PING_MISSES_BEFORE_TEARDOWN pong-less cycles the splice is
+ * torn down so the browser's WebSocket closes and the renderer pump reconnects.
+ * Values follow the canonical `ws` README example (30s, one unanswered cycle =
+ * dead: the pong round-trip is loopback, so no answer is real death, not noise).
  *
- * Values follow the canonical `ws` README heartbeat example (30s interval,
- * one unanswered ping cycle → terminate): the pong round-trip is loopback, so
- * a full cycle without one is a real death, not scheduler noise.
- *
- * The UPSTREAM (host) leg deliberately has no APPLICATION heartbeat: its
- * death is covered by SSH keepalive for remote tunnels
- * (`ServerAliveInterval=30 × CountMax=3` ≈ 90s, ssh-provider), socket
- * 'error'/'close' for local host death/restart, the host's own send-failure
- * close, and — for direct-http targets only — the OS-level TCP keepalive
- * (instance-proxy passes tcpKeepAliveMs; initial idle 30s, OS-default probes,
- * see instance-proxy.ts). A proxy-side upstream APPLICATION ping would only
- * race SSH keepalive into a reconnect flap against a half-open tunnel
- * (strict tolerance) or fire later than it (lenient tolerance — useless).
- * (The 30s values of TCP keepalive idle / WS_PING / ServerAlive coincide;
- * rationales differ — do not merge them.)
+ * The UPSTREAM (host) leg deliberately has no application heartbeat: SSH
+ * keepalive, socket 'error'/'close', the host's own send-failure close and — for
+ * direct-http targets only — OS-level TCP keepalive (tcpKeepAliveMs) cover it.
  */
 export const WS_PING_INTERVAL_MS = 30_000
 
 /** Consecutive ping cycles without a browser pong before the splice is torn down. */
 export const WS_PING_MISSES_BEFORE_TEARDOWN = 1
 
-/** Response headers converged through to the browser (03 §3.4 / 04 §4.3). */
+/** Response headers converged through to the browser. */
 export const RESPONSE_HEADER_WHITELIST = new Set([
   'content-type',
   'content-encoding',
@@ -201,8 +142,7 @@ export const RESPONSE_HEADER_WHITELIST = new Set([
   'x-ratelimit-reset',
 ])
 
-/** WS stream path forwarded to the instance (03 §3.1 / 05 §3.1): the Typert
- * Remote stream mux; the set admits exactly /api/remote.mux. */
+/** WS stream path forwarded to the instance: the Typert Remote stream mux; the set admits exactly /api/remote.mux. */
 export const WS_STREAM_PATHS = new Set(['/api/remote.mux'])
 
 /** Hop-by-hop and credential headers never forwarded upstream. */
@@ -230,15 +170,11 @@ export const STRIPPED_REQUEST_HEADERS = new Set([
   'x-forwarded-proto',
   'x-forwarded-port',
   'x-real-ip',
-  // NOTE: accept-encoding is NOT in this always-strip set. Only the requests
-  // that must stay
-  // identity keep it off the wire — HTML document navigations (S0 injection
-  // precondition) and text/event-stream streams (transport insurance); see
-  // requiresIdentityUpstreamEncoding + the strip site in forwardHttp. Every
-  // other request forwards the client's negotiation so the upstream gzip
-  // middleware (dsh-host-webserver createGzipMiddleware) can compress it, and
-  // a compressed reply stays parseable because content-encoding/vary ride back
-  // through RESPONSE_HEADER_WHITELIST above.
+  // NOTE: accept-encoding is NOT in this always-strip set. Only requests that
+  // must stay identity lose it — HTML document navigations (S0 injection) and
+  // SSE streams; every other request forwards the client's negotiation so the
+  // upstream gzip middleware can compress, and content-encoding/vary ride back
+  // through RESPONSE_HEADER_WHITELIST.
 ])
 
 /** Only headers required to complete a WebSocket 101 may cross downstream. */
@@ -251,40 +187,20 @@ export const WS_RESPONSE_HEADER_WHITELIST = new Set([
 ])
 
 /**
- * Whether one request is an HTML *document navigation* (the only
- * request class whose accept-encoding must stay identity).
+ * Whether one request is an HTML *document navigation* — the only request class
+ * whose accept-encoding must stay identity. Only an unencoded upstream
+ * `text/html` response can carry the S0 trust injection, and a document load is
+ * the only request that must produce one.
  *
- * Why this class: the S0 trust injection (gateway html-inject.ts) is the
- * precondition for the proxied official dsh frontend declaring itself
- * host-owned, and it only runs on an upstream `text/html` response that is
- * NOT content-encoded (forwardHttp's `htmlInjectable` below). A browser
- * document load is the only request that must produce that injectable
- * document, so it must never negotiate compression; nothing else has to.
+ * Semantics follow the gateway's navigation predicate: GET/HEAD + an `Accept`
+ * advertising text/html + a path outside the JSON/SSE surfaces (`/api`,
+ * `/plugins`, `/auth/…`, `/chamber/<subpath>`; bare `/auth` is not excluded).
+ * Duplicated on purpose: this shared control-plane module must not import
+ * gateway code. A content-addressed asset path (isHashedStaticAssetPath) is
+ * NEVER a navigation: the pinned upstream serves it from disk or 404s it, so no
+ * compression setting can cost the injection.
  *
- * Semantics follow the predicate the gateway uses to decide that a GET/HEAD is
- * a browser navigation (dispatch.ts shouldRedirectToLogin): GET/HEAD + an
- * `Accept` advertising `text/html` + a path outside the JSON/SSE surfaces —
- * `/api`, `/plugins`, `/auth/…` and the `/chamber/<subpath>` endpoints.
- * Document navigations are `/`, `/index.html`, `/chamber`, `/chamber/` and the
- * like. It is duplicated here on purpose: proxy-forward.ts is the shared
- * control-plane module and must not import gateway code.
- *
- * `pathname` is the RESOLVED target pathname (the `/api/i/<id>` prefix is
- * stripped before forwarding, see forwardHttp), i.e. the path the UPSTREAM
- * routes — the exclusion prefixes are the upstream's own surface taxonomy.
- * Bare `/auth` is not excluded, exactly like dispatch.ts (only `/auth/…` is).
- *
- * One deliberate refinement over the dispatch predicate: a content-addressed
- * asset path (isHashedStaticAssetPath) is NEVER a document navigation. In the
- * PINNED upstream the static host serves such a path from disk or 404s it
- * (dsh-host-frontend-static `serveStatic` renders the index only for the dist
- * root and the index path; every other path is a file read), so no compression
- * setting on it can cost the S0 injection, and a browser that opens the asset
- * URL directly (`Accept: text/html`) must not switch the build tree back to
- * identity. A pin whose static host answered a deep path with the rendered
- * index would invalidate that premise and must revisit this exclusion together
- * with the gateway's cache-stamp guard (gateway-proxy.ts
- * `hashedAssetContentTypeMatches`). Pure and total: no timers, no I/O.
+ * `pathname` is the RESOLVED target pathname (upstream taxonomy). Pure and total.
  */
 export function isHtmlDocumentNavigation(method: string | undefined, pathname: string, accept: string | string[] | undefined): boolean {
   const verb = (method ?? '').toUpperCase()
@@ -299,54 +215,36 @@ export function isHtmlDocumentNavigation(method: string | undefined, pathname: s
 }
 
 /**
- * Content-addressed static asset path: Vite's
- * `[name]-[hash][extname]` output under `/assets/`, hash = exactly 8 base64url
- * characters (Vite's default hash width — every measured upstream name has 8),
- * extension exactly `js | css | woff2 | woff | ttf | svg`, and at most ONE nested
- * directory (the pinned dist keeps fonts in `assets/fonts/` and the per-language
- * chunks in `assets/langs/`; without the optional segment the rule could only
- * ever reach the four top-level files).
- *
- * Upstream names: `index-BKQ_L1z6.js`, `cpp-DIPi6g--.js`,
- * `KaTeX_AMS-Regular-BQhdFMY1.woff2` (the last one under `assets/fonts/`). Deliberately NOT matched: unhashed root
- * files (`favicon.svg`, `manifest.webmanifest`, `index.html`) — they carry no
- * `-<hash>` segment and/or an extension outside the set. The EXACT width is
- * what keeps an ordinary hyphenated name out: `/assets/my-super-long-file.js`
- * has no 8-character tail after a `-` (`long-file` is 9, `file` is 4), whereas
- * a `{8,}` class would read `long-file` as a hash because real hashes may
- * contain `-` (`DIPi6g--`). A build configured with a different hash width
- * must widen this deliberately.
- *
- * Still a heuristic over the path alone: the caller decides status/caching
- * policy (this module never caches anything itself). Exported as the shared
- * naming rule for the response-header seam's owner-side implementation.
+ * Content-addressed static asset path: Vite's `[name]-[hash][extname]` output
+ * under `/assets/`, hash = exactly 8 base64url characters, extension exactly
+ * `js | css | woff2 | woff | ttf | svg`, at most ONE nested directory
+ * (`assets/fonts/`, `assets/langs/`). The EXACT width keeps an ordinary
+ * hyphenated name out: `/assets/my-super-long-file.js` has no 8-character tail
+ * after a `-`, whereas a `{8,}` class would read `long-file` as a hash because
+ * real hashes may contain `-` (`DIPi6g--`). Unhashed root files are deliberately
+ * not matched. A build with a different hash width must widen this. Still a
+ * heuristic over the path alone; the caller decides status/caching policy.
  */
 const HASHED_STATIC_ASSET_PATTERN = /^\/assets\/(?:[^/]+\/)?[^/]+-[A-Za-z0-9_-]{8}\.(?:js|css|woff2?|ttf|svg)$/
 
 export function isHashedStaticAssetPath(pathname: string): boolean {
-  // A build never emits `%` or a dot-segment in an asset name, while the
-  // upstream DECODES the path before resolving it — so
-  // `/assets/..%2f..%2fsec-12345678.js` is hash-SHAPED but can name a different
-  // file. Refusing both once, here, keeps the three callers (asset compression
-  // policy, static-serving's immutable rule, the gateway's cache stamp) on the
-  // same answer; a caller-local copy is how they drift apart.
+  // A build never emits `%` or a dot-segment, while the upstream DECODES the
+  // path before resolving it — so `/assets/..%2f..%2fsec-12345678.js` is
+  // hash-SHAPED but can name a different file. Refused once here for all three
+  // callers (asset compression, static-serving, the gateway cache stamp).
   if (pathname.includes('%') || pathname.includes('..')) return false
   return HASHED_STATIC_ASSET_PATTERN.test(pathname)
 }
 
 /**
- * Whether a request advertises a server-sent-event stream.
- * This is NOT a document-navigation rule — it is TRANSPORT-LAYER INSURANCE:
- * a conformant EventSource sends `Accept: text/event-stream`, and letting an
- * upstream compress that long-lived, latency-critical text stream turns it
- * into a buffered one. The pinned upstream's gzip middleware refuses
- * `text/event-stream` and `content-range` responses (dsh-host-webserver
- * createGzipMiddleware), but this shared core also serves remote/older dsh
- * instances whose webserver may carry no such filter, so the proxy keeps the
- * stream class itself on identity instead of trusting every upstream. A
- * fetch-based stream that advertises only a generic wildcard `Accept` cannot
- * be recognized here and stays with the upstream filter, exactly like `/api`.
- * Pure and total.
+ * Whether a request advertises a server-sent-event stream. This is TRANSPORT
+ * insurance, not a navigation rule: a conformant EventSource sends
+ * `Accept: text/event-stream`, and letting an upstream compress that long-lived,
+ * latency-critical stream turns it into a buffered one. The pinned upstream's
+ * gzip middleware refuses text/event-stream, but this core also serves
+ * remote/older instances whose webserver may lack that filter. A fetch-based
+ * stream advertising only a wildcard `Accept` cannot be recognized here and
+ * stays with the upstream filter.
  */
 export function acceptsEventStream(accept: string | string[] | undefined): boolean {
   const acceptValue = Array.isArray(accept) ? accept.join(',') : accept ?? ''
@@ -354,20 +252,14 @@ export function acceptsEventStream(accept: string | string[] | undefined): boole
 }
 
 /**
- * The ONE decision the accept-encoding strip consumes: which requests
- * must reach the upstream with NO compression negotiation. Two disjoint
- * identity-only classes — everything else forwards the client's negotiation to
- * the upstream gzip middleware:
+ * The ONE decision the accept-encoding strip consumes: which requests must reach
+ * the upstream with NO compression negotiation. Two disjoint identity-only
+ * classes — everything else forwards the client's negotiation:
  *
- *   1. HTML document navigations (isHtmlDocumentNavigation): the upstream
- *      `text/html` reply must stay unencoded for S0 trust injection;
- *   2. SSE requests (acceptsEventStream): transport insurance for long-lived
- *      streams, independent of the path and of the method (a POST can stream
- *      too), and not a statement about the document.
+ *   1. HTML document navigations (isHtmlDocumentNavigation);
+ *   2. SSE requests (acceptsEventStream), independent of path and method.
  *
- * Both are documented where they are decided; forwardHttp calls only this
- * predicate, so the strip site and the tests can never disagree about which
- * requests are exempt. Pure and total.
+ * forwardHttp calls only this predicate, so strip site and callers agree.
  */
 export function requiresIdentityUpstreamEncoding(method: string | undefined, pathname: string, accept: string | string[] | undefined): boolean {
   return isHtmlDocumentNavigation(method, pathname, accept) || acceptsEventStream(accept)
@@ -417,18 +309,17 @@ export interface ProxySocket {
   removeListener(event: string, listener: (...args: any[]) => void): unknown
 }
 
-/** Owner-side registry for downstream sockets whose upstream WebSocket
- * handshake has not reached a terminal verdict yet. Node's HTTP server stops
- * tracking a socket once the `upgrade` event fires, while `liveStreams` only
- * receives it after the upstream answers 101; without this middle-state
- * registry stop() has a gap where neither owner can revoke the socket. */
+/** Owner-side registry for downstream sockets whose upstream WebSocket handshake
+ * has not reached a terminal verdict: the HTTP server stops tracking a socket once
+ * `upgrade` fires, and liveStreams only receives it after the 101, so without
+ * this middle state stop() has a gap where neither owner can revoke it. */
 export interface PendingUpgradeTracker {
   readonly size: number
   /** Acquire one handshake lease. The returned release is idempotent. */
   acquire(socket: ProxySocket, ownerId?: string): () => void
-  /** Destroy every pending downstream. Its existing close listener aborts the
-   * corresponding upstream ClientRequest and releases the lease. With an
-   * ownerId, only handshakes authenticated through that transport are closed. */
+  /** Destroy every pending downstream; with an ownerId only handshakes
+   *  authenticated through that transport. The existing close listener aborts the
+   *  upstream request and releases the lease. */
   closeAll(ownerId?: string): void
 }
 
@@ -449,8 +340,7 @@ export function createPendingUpgradeTracker(): PendingUpgradeTracker {
     closeAll(ownerId?: string): void {
       for (const entry of [...entries]) {
         if (ownerId !== undefined && entry.ownerId !== ownerId) continue
-        // Delete eagerly so diagnostics and repeated stop() calls converge even
-        // for a minimal/faulty socket fake that never emits `close`.
+        // Delete eagerly so diagnostics and repeated stop() calls converge even for a faulty socket fake.
         entries.delete(entry)
         try { entry.socket.destroy() } catch { /* already gone */ }
       }
@@ -468,17 +358,14 @@ export interface ProxyForwardCounters {
   activeStreams: number
   /** Bytes currently reserved against the process-wide request-body budget. */
   bufferedRequestBytes: number
-  /** Requests that took the long-RPC window (design 03 §3.4; doubles as a
-   * liveness probe for the exemption list — sustained execute traffic with a
-   * stuck-at-zero counter means the upstream route moved). */
+  /** Requests that took the long-RPC window (liveness probe for the exemption list). */
   longRpcRequests: number
   /** Long-RPC requests that hit the insurance fuse (explicit 504 + abort). */
   longRpcTimeouts: number
 }
 
-/** One established WS splice. `ownerId` is set by the multi-transport
- * instance proxy so revoking a transport also revokes streams authenticated
- * with that transport's old credentials. */
+/** One established WS splice. `ownerId` is set by the multi-transport instance
+ * proxy so revoking a transport also revokes streams authenticated with it. */
 export interface ProxyLiveStream {
   downstream: ProxySocket
   upstream: Duplex
@@ -492,83 +379,60 @@ export interface ProxyForwardDeps {
   /** Log-line prefix (instance-proxy vs gateway-proxy). */
   logPrefix: string
   httpRequest?: HttpRequestFactory
-  /** Upstream timeout in ms (default UPSTREAM_TIMEOUT_MS; tests inject small values). */
+  /** Upstream timeout in ms (default UPSTREAM_TIMEOUT_MS). */
   upstreamTimeoutMs: number
-  /** Upstream idle window for long-RPC paths (default LONG_RPC_UPSTREAM_TIMEOUT_MS; tests inject small values). */
+  /** Upstream idle window for long-RPC paths. */
   longRpcUpstreamTimeoutMs?: number
-  /** Long-RPC paths selecting the exemption (default LONG_RPC_PATHS; `[]` disables the exemption entirely). */
+  /** Long-RPC paths selecting the exemption (default LONG_RPC_PATHS; `[]` disables it). */
   longRpcPaths?: readonly string[]
   clientBodyIdleTimeoutMs: number
   wsPingIntervalMs: number
   wsPingMissesBeforeTeardown: number
   /**
    * Optional OS-level TCP keepalive for the UPSTREAM leg of a spliced
-   * WebSocket, armed before the splice. Only a
-   * direct-http target enables it: the upstream leg deliberately has no
-   * application heartbeat (see the WS_PING_* notes) — an ssh-tunneled target
-   * is covered by ssh keepalive, but a direct http(s) target has no such
-   * coverage, so an idle half-open connection (NAT/proxy GC) would freeze
-   * the stream with no 'error'/'close' ever firing. instance-proxy passes
-   * the value for any NON-loopback resolved target (the desktop's direct
-   * http(s) shape — gateway-kind and dsh-kind alike, discriminated by the
-   * upstream host, not the source-id kind);
-   * `undefined` (the default — local, ssh-tunneled and gateway-proxy
-   * splices) keeps the documented no-heartbeat design untouched.
+   * WebSocket, armed before the splice. Only a direct-http target enables it:
+   * ssh-tunneled targets have ssh keepalive and local legs are loopback, but a
+   * direct http(s) target would otherwise freeze silently on an idle half-open
+   * connection (NAT/proxy GC) with no 'error'/'close'. instance-proxy passes it
+   * for any NON-loopback resolved target; `undefined` keeps the no-heartbeat
+   * design untouched.
    */
   readonly tcpKeepAliveMs?: number
   maxBufferedRequestBytes: number
   /**
-   * Browser-visible prefix for an attached instance. Same-origin upstream
-   * redirects are rewritten through this prefix so a `Location: /login`
-   * cannot escape `/api/i/<id>`. `''` is a valid value for the single-target
-   * gateway whose managed dsh is mounted at the root: the target origin is
-   * stripped and the path is kept verbatim (`http://127.0.0.1:<port>/login`
-   * becomes `/login` at the public origin). `undefined` (no rewriting) is the
+   * Browser-visible prefix for an attached instance: same-origin upstream
+   * redirects are rewritten through it so `Location: /login` cannot escape
+   * `/api/i/<id>`. `''` is valid for the root-mounted gateway (strip the target
+   * origin, keep the path verbatim); `undefined` (no rewriting) is the
    * passthrough default for owners without a mounted prefix.
    */
   responseBasePath?: string
   /**
-   * Optional HTML-document trust injector (S0): when set, an unencoded
-   * `text/html` response no larger than MAX_HTML_INJECTION_BYTES is buffered
-   * whole and rewritten through this seam before it reaches the browser —
-   * the gateway uses it to declare the proxied official dsh frontend
-   * host-owned (`__DSH_TRANSPORT__.ownsHost`, gateway html-inject.ts).
-   * Return the replacement document, or null to forward the body untouched.
-   * `undefined` (the control-plane default) keeps the plain streaming
-   * passthrough byte for byte.
+   * Optional HTML-document trust injector: when set, an unencoded `text/html`
+   * response no larger than MAX_HTML_INJECTION_BYTES is buffered whole and
+   * rewritten through this seam — the gateway uses it to declare the proxied
+   * official frontend host-owned. Return the replacement document, or null to
+   * forward untouched; `undefined` keeps the plain byte-for-byte passthrough.
    */
   readonly injectHtmlDocument?: (html: string) => string | null
   /**
-   * Optional upstream-response header seam: called exactly once per
-   * upstream HTTP response — SSE included — after the response whitelist and
-   * the Location rewrite assembled the browser-facing header map, and before
-   * `writeHead`. It exists so an owner can attach representation metadata the
-   * upstream omitted: the gateway uses it to give content-addressed
-   * `/assets/<name>-<hash>.<ext>` responses (isHashedStaticAssetPath) an
-   * immutable Cache-Control, because the upstream static host writes only
-   * `content-type` and the shell would otherwise be re-downloaded on every
-   * navigation.
-   *
-   * Contract: `pathname` is the RESOLVED target pathname (target.pathname —
-   * the `/api/i/<id>` prefix is already stripped; for the root-mounted gateway
-   * it equals the public path), `status` the upstream status, `headers` the
-   * mutable whitelisted map (`Record<string, string | string[]>`). Mutate it in
-   * place; the return value is ignored. Framing stays the proxy's, and this is
-   * ENFORCED, not merely asked for: the map is re-filtered against
-   * RESPONSE_HEADER_WHITELIST after the callback returns, so a header the
-   * callback adds outside that set (notably `content-length` /
-   * `transfer-encoding`) never reaches the wire, and the content-length is
-   * re-derived from the upstream declaration after the filter. A throwing
-   * callback is fail-soft (logged, the upstream headers forwarded as filtered)
-   * because it runs inside an event listener. `undefined` (the control-plane
-   * default) is a zero-change passthrough.
+   * Optional upstream-response header seam: called exactly once per upstream
+   * HTTP response (SSE included), after the whitelist and Location rewrite
+   * assembled the browser-facing map and before writeHead. It lets an owner add
+   * representation metadata the upstream omitted (the gateway gives
+   * content-addressed `/assets/<name>-<hash>.<ext>` responses an immutable
+   * Cache-Control). Contract: `pathname` is the RESOLVED target pathname,
+   * `headers` the mutable whitelisted map — mutate in place, return ignored.
+   * Framing stays the proxy's and is ENFORCED: the map is re-filtered against
+   * RESPONSE_HEADER_WHITELIST after the callback (so content-length and
+   * transfer-encoding never reach the wire) and content-length is re-derived
+   * from the upstream declaration; a throwing callback is fail-soft (logged).
    */
   readonly onUpstreamResponseHeaders?: (pathname: string, status: number, headers: Record<string, string | string[]>) => void
   /**
-   * Live spliced WS streams (downstream browser leg + upstream host leg),
-   * shared with the owner so its stop() can force-close them: an upgraded
-   * socket leaves the HTTP server's connection tracking, so a lingering
-   * half-open downlink would otherwise hang server.close() forever.
+   * Live spliced WS streams (downstream + upstream legs), shared so stop() can
+   * force-close them: an upgraded socket leaves the HTTP server's tracking, so a
+   * lingering half-open downlink would hang server.close() forever.
    */
   liveStreams: Set<ProxyLiveStream>
   /** Optional transport registry key owning this request/stream. */
@@ -576,9 +440,8 @@ export interface ProxyForwardDeps {
 }
 
 /**
- * Read the request body up to `cap` bytes; rejects with {code:
- * 'body_too_large'} when the cap is exceeded (design 03 §3.4 — explicit
- * 413, never a silent truncation).
+ * Read the request body up to `cap` bytes; rejects with {code: 'body_too_large'}
+ * when exceeded (explicit 413, never silent truncation).
  */
 export async function readBody(
   req: ProxyRequest,
@@ -609,9 +472,8 @@ export async function readBody(
         }),
       ])
     } catch (error) {
-      // Cancel the underlying IncomingMessage iterator as well as our wait;
-      // otherwise a slow client may keep the socket/request parser alive
-      // after the proxy already returned 408.
+      // Cancel the IncomingMessage iterator too, else a slow client may keep the
+      // socket/request parser alive after the proxy already returned 408.
       void iterator.return?.()
       throw error
     } finally {
@@ -635,9 +497,8 @@ export async function readBody(
     size = nextSize
   }
   if (preallocated !== null && chunks.length === 0) return preallocated.subarray(0, size)
-  // A declared Content-Length is enforced by Node's parser in production. If
-  // an injected/test request violates it, preserve correctness without
-  // reading beyond the cap; only that non-production mismatch uses concat.
+  // A declared Content-Length is enforced by Node's parser in production; if an
+  // injected request violates it, do not read beyond the cap.
   if (preallocated !== null && size > preallocated.length) {
     return Buffer.concat([preallocated.subarray(0, preallocated.length), ...chunks], size)
   }
@@ -651,9 +512,9 @@ function waitForDrain(res: ProxyResponse): Promise<void> {
 }
 
 /**
- * A request body with a byte budget, for capped forwarding. `send()` keeps
- * the chunks live only until node:http accepts them and honours writable
- * backpressure instead of queueing the entire 300MiB body unconditionally.
+ * A request body with a byte budget for capped forwarding: `send()` keeps chunks
+ * live only until node:http accepts them and honours writable backpressure
+ * instead of queueing the whole body.
  */
 function bodySource(chunks: Buffer[]): { send: (upstream: ClientRequest) => void; stop: (upstream: ClientRequest) => void; size: number } {
   const size = chunks.reduce((total, chunk) => total + chunk.length, 0)
@@ -691,9 +552,8 @@ function bodySource(chunks: Buffer[]): { send: (upstream: ClientRequest) => void
   }
 }
 
-/** Rewrite only redirects back to the same trusted upstream origin. The
- * mounted prefix is prepended when one exists; `''` (root-mounted owner like
- * the gateway) strips the target origin and keeps the path verbatim. */
+/** Rewrite only redirects back to the same trusted upstream origin, prepending
+ * the mounted prefix when one exists (`''` strips the target origin). */
 export function convergeLocation(value: string, target: URL, responseBasePath: string | undefined): string {
   if (responseBasePath === undefined) return value
   let resolved: URL
@@ -744,8 +604,8 @@ export function rejectUpgrade(socket: ProxySocket, status: number, code: string,
   const body = JSON.stringify({ error: message, code })
   const head = `HTTP/1.1 ${status} ${STATUS_TEXT[status] ?? 'Error'}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nCache-Control: no-store\r\n\r\n`
   try {
-    // The client may have already gone (app exit, page reload): an 'error'
-    // on this socket must be consumed, never an uncaught exception.
+    // The client may have already gone: an 'error' on this socket must be
+    // consumed, never an uncaught exception.
     socket.on('error', () => {})
     socket.write(head + body)
     socket.end()
@@ -755,12 +615,10 @@ export function rejectUpgrade(socket: ProxySocket, status: number, code: string,
 }
 
 /**
- * One-shot upstream silence guard (design 03 §3.4): fires the callback when
- * the upstream produced no socket activity for upstreamTimeoutMs. Covers
- * "headers never arrive" and (re-armed after headers) "body idles" for
- * non-SSE responses; SSE/WebSocket streams never re-arm it, so their
- * lifetime is unbounded. The returned clear is idempotent and must be
- * called on response/error/end.
+ * One-shot upstream silence guard: fires when the upstream produced no socket
+ * activity for upstreamTimeoutMs — covering "headers never arrive" and (re-armed
+ * after headers) "body idles" for non-SSE responses. SSE/WebSocket streams never
+ * re-arm, so their lifetime is unbounded; the returned clear is idempotent.
  */
 export function armUpstreamTimeout(deps: ProxyForwardDeps, counters: ProxyForwardCounters, logger: Logger, onTimeout: () => void): () => void {
   const { id, logPrefix, upstreamTimeoutMs } = deps
@@ -782,34 +640,29 @@ export function armUpstreamTimeout(deps: ProxyForwardDeps, counters: ProxyForwar
 }
 
 /**
- * Whether one HTTP request takes the long-RPC window (design 03 §3.4): POST
- * on one of the exact `paths`. Pure decision predicate — zero timers, tested
- * by table in liveness-timeout.test.ts; forwardHttp consumes it so the arm
- * sites and the counters agree with the same verdict.
+ * Whether one HTTP request takes the long-RPC window: POST on one of the exact
+ * `paths`. Pure decision predicate — forwardHttp consumes it so arm sites and
+ * counters share the verdict.
  */
 export function matchesLongRpcPath(method: string, pathname: string, paths: readonly string[]): boolean {
   return method.toUpperCase() === 'POST' && paths.includes(pathname)
 }
 
 /** Forward an HTTP request to a fully-resolved target (method/body/query kept).
- * `extraHeaders` are the per-transport injected headers (already whitelisted
- * by registerTransport); `tls` carries the optional gateway SPKI pin (S23) —
- * when set and the target is https, the pin gates the connection (see
- * attachSpkiPinVerifier); a mismatch surfaces as an upstream 'error' → the
- * caller's explicit 502 upstream_failed. */
+ * `extraHeaders` are the per-transport injected headers (already whitelisted by
+ * registerTransport); `tls` carries the optional gateway SPKI pin — when set and
+ * the target is https, a mismatch surfaces as an upstream 'error' → 502. */
 export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target: URL, releaseRequest: () => void, logger: Logger, counters: ProxyForwardCounters, deps: ProxyForwardDeps, extraHeaders?: Record<string, string>, tls?: { spkiPin?: string }, authority?: string): Promise<void> {
-  // Select the http/https request by target protocol (design 17 §6: the
-  // gateway transport target is `https://`, which node:http cannot send).
+  // Select the http/https request by target protocol (the gateway transport target is https://).
   const request = deps.httpRequest ?? (target.protocol === 'https:' ? httpsRequest : httpRequest)
   const method = typeof req.method === 'string' && req.method !== '' ? req.method : 'GET'
   const rawLength = Array.isArray(req.headers['content-length']) ? req.headers['content-length'][0] : req.headers['content-length']
   const declared = rawLength === undefined ? NaN : Number(rawLength)
   const methodUsuallyHasNoBody = method.toUpperCase() === 'GET' || method.toUpperCase() === 'HEAD'
-  // GET and HEAD do not normally carry a request body, but RFC framing still
-  // permits one. Once the client declares positive Content-Length or a
-  // Transfer-Encoding, silently discarding those bytes changes the request
-  // and can desynchronise application-level signatures. Keep the cheap
-  // no-body path only for genuinely unframed GET/HEAD requests.
+  // GET/HEAD do not normally carry a body, but RFC framing permits one. If the
+  // client declares positive Content-Length or Transfer-Encoding, silently
+  // discarding those bytes desynchronises application-level signatures; keep the
+  // cheap no-body path only for genuinely unframed GET/HEAD.
   const hasBody = !methodUsuallyHasNoBody
     || (Number.isFinite(declared) && declared > 0)
     || req.headers['transfer-encoding'] !== undefined
@@ -829,9 +682,8 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
       writeError(res, 413, 'body_too_large', 'request body exceeds the 300MiB cap', logger)
       return
     }
-    // Unknown/chunked bodies reserve the full per-request cap. A valid
-    // Content-Length reserves its exact byte count; Node's parser enforces
-    // that framing, so a caller cannot smuggle additional body bytes.
+    // Unknown/chunked bodies reserve the full per-request cap; a valid
+    // Content-Length reserves its exact byte count (Node's parser enforces it).
     const hasDeclaredLength = Number.isFinite(declared) && declared >= 0
     const readCap = hasDeclaredLength ? MAX_REQUEST_BODY_BYTES : MAX_UNDECLARED_REQUEST_BODY_BYTES
     const reservation = hasDeclaredLength ? declared : MAX_UNDECLARED_REQUEST_BODY_BYTES
@@ -860,67 +712,47 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
       }
       return
     }
-    // Unknown/chunked bodies conservatively reserve the full cap while they
-    // are being read. Once complete, retain only the bytes that are actually
-    // still buffered — and keep that reservation until the upstream request
-    // emits `finish`/`close`/`error`.
+    // Unknown/chunked bodies reserve the full cap while reading; once complete,
+    // retain only actually-buffered bytes until `finish`/`close`/`error`.
     if (body.length < bodyReservation) {
       counters.bufferedRequestBytes -= bodyReservation - body.length
       processBufferedRequestBytes -= bodyReservation - body.length
       bodyReservation = body.length
     }
   }
-  // The upstream Host is the target's own authority by default (design 17
-  // §8); an ssh-tunneled gateway target overrides it with the REMOTE gateway
-  // authority (design 17 §9.3 隧道 Host 覆盖 — the gateway's request policy
-  // requires the Host port to equal its listen port, and the tunnel's
-  // loopback URL can never satisfy that). The Origin rewrite below uses the
-  // SAME effective authority so the browser trust fence sees a consistent
-  // same-origin shape.
+  // The upstream Host is the target's own authority by default; an ssh-tunneled
+  // gateway target overrides it with the REMOTE gateway authority (its request
+  // policy requires Host port == listen port, which the tunnel's loopback URL
+  // cannot satisfy). The Origin rewrite below uses the SAME effective authority.
   const effectiveHost = authority ?? target.host
   const headers: Record<string, string> = { host: effectiveHost }
   // Compression negotiation: stripping accept-encoding on EVERY request would
-  // force the whole proxied surface (the 10.65 MiB Vite shell included) to
-  // identity. Keep the
-  // strip for the two identity-only classes only (see
-  // requiresIdentityUpstreamEncoding): HTML document navigations — their
-  // upstream reply must stay unencoded so S0 trust injection can rewrite it
-  // (htmlInjectable below; gateway html-inject.ts) — and text/event-stream
-  // requests, which stay identity as transport insurance for long-lived
-  // streams (a remote/older upstream need not carry the pinned filter). Every
-  // other request — /api, /plugins, /auth, /chamber/<subpath>, assets,
-  // XHR/fetch — forwards the client's negotiation to the upstream gzip
-  // middleware, which itself refuses text/event-stream and content-range
-  // responses (dsh-host-webserver createGzipMiddleware), so the mux/SSE
-  // streams are never compressed mid-flight. The decision is the upstream's
-  // resolved pathname, matching the surface taxonomy isHtmlDocumentNavigation
-  // encodes.
+  // force the whole proxied surface to identity. Strip only for the two
+  // identity-only classes (requiresIdentityUpstreamEncoding): HTML document
+  // navigations (so S0 injection can rewrite the reply) and text/event-stream
+  // requests (transport insurance). Everything else forwards the client's
+  // negotiation to the upstream gzip middleware.
   const identityEncoding = requiresIdentityUpstreamEncoding(method, target.pathname, req.headers.accept)
   for (const [name, value] of Object.entries(req.headers)) {
     const lower = name.toLowerCase()
     if (STRIPPED_REQUEST_HEADERS.has(lower)) continue
     if (lower === 'accept-encoding' && identityEncoding) continue
     if (value === undefined) continue
-    // Same-origin proxy honesty (design 03 §3.1): the browser's page origin
-    // is the CONTROL PLANE (127.0.0.1:17500), but the instance's browser
-    // trust fence (dsh-client-connection node half) requires any attached
-    // Origin to equal the request's Host authority — it compares
-    // `new URL(origin).host === host` regardless of --trusted-host. Rewrite
-    // the origin to the upstream's own authority so the fence sees exactly
-    // the same-origin shape it accepts in the official deployment (page and
-    // api on one host). Requests without an origin header are untouched.
+    // Same-origin proxy honesty: the page origin is the control plane but the
+    // instance's trust fence requires any attached Origin to equal the request's
+    // Host authority. Rewrite the origin to the upstream's own authority so the
+    // fence sees the same-origin shape it accepts; requests without Origin are
+    // untouched.
     if (lower === 'origin') {
       headers[name] = `${target.protocol}//${effectiveHost}`
       continue
     }
     headers[name] = Array.isArray(value) ? value.join(', ') : value
   }
-  // Per-transport extra headers (design 17 §9.3: the gateway's bounded
-  // Authorization and/or dsh_gateway_session Cookie) are injected AFTER the
-  // strip + Origin rewrite so they are never mistaken for a browser header
-  // and never stripped. registerTransport already validated the whitelist;
-  // this filter is defense-in-depth: only the two sanctioned names ever ride
-  // upstream.
+  // Per-transport extra headers (bounded Authorization and/or
+  // dsh_gateway_session Cookie) are injected AFTER strip + Origin rewrite so they
+  // are never mistaken for browser headers. registerTransport validated the
+  // whitelist; this filter is defense-in-depth.
   if (extraHeaders !== undefined) {
     for (const [name, value] of Object.entries(extraHeaders)) {
       const lower = name.toLowerCase()
@@ -928,8 +760,7 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
       headers[lower] = value
     }
   }
-  // Forward the bytes we actually accepted, never an untrusted client
-  // declaration. This also normalizes chunked uploads into a bounded body.
+  // Forward the bytes we actually accepted, never an untrusted client declaration.
   if (body !== null) headers['content-length'] = String(body.length)
   const controller = new AbortController()
   let responseEnded = false
@@ -947,9 +778,8 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     controller.abort()
     releaseRequest()
   }
-  // IncomingMessage `close` means "request parsing completed" on modern
-  // Node, not necessarily that the peer disappeared. Abort only on the
-  // explicit request `aborted` signal or an unfinished ServerResponse close.
+  // IncomingMessage 'close' means parsing completed, not that the peer left;
+  // abort only on the explicit 'aborted' signal or an unfinished ServerResponse close.
   req.on('aborted', onClientClose)
   res.on('close', onClientClose)
   const timeoutAbort = (): void => {
@@ -960,15 +790,10 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     if (!res.headersSent) writeError(res, 504, 'upstream_timeout', 'upstream request timed out', logger)
     else res.destroy()
   }
-  // Headers must arrive within upstreamTimeoutMs; a non-SSE body must not
-  // idle longer than that either (re-armed after headers arrive). SSE and
-  // upgraded WebSockets never re-arm — long-lived by nature.
-  // Long-RPC exemption (design 03 §3.4, LONG_RPC_PATHS): unary endpoints
-  // like /api/commands/execute carry host business with no upstream cap and
-  // out-of-band progress — they get the generous insurance fuse, not the
-  // ordinary idle window. One effective deps object drives every arm so the
-  // log line and re-arms report the same window; the counters make both the
-  // exemption usage and the fuse trips observable (list-liveness probe).
+  // Headers must arrive within upstreamTimeoutMs; a non-SSE body must not idle
+  // longer (re-armed after headers). SSE/WS never re-arm. Long-RPC paths get the
+  // generous fuse instead (LONG_RPC_PATHS); one effective deps object drives every
+  // arm, and counters make exemption usage and fuse trips observable.
   const longRpc = matchesLongRpcPath(method, target.pathname, deps.longRpcPaths ?? LONG_RPC_PATHS)
   const longRpcWindowMs = deps.longRpcUpstreamTimeoutMs ?? LONG_RPC_UPSTREAM_TIMEOUT_MS
   const timeoutDeps = !longRpc || deps.upstreamTimeoutMs === longRpcWindowMs
@@ -987,11 +812,9 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     clearUpstreamTimeout = () => {}
   }
   const source = body === null ? null : bodySource([body])
-  // S23: a pinned gateway target opens a FRESH https connection with the pin
-  // as its trust anchor (rejectUnauthorized: false — the internal-CA case,
-  // the pin alone decides trust); the socket verifier destroys the request on
-  // mismatch. http targets never pin (registerTransport refuses http + pin,
-  // and the https guard here is defense-in-depth).
+  // A pinned gateway target opens a FRESH https connection with the pin as its
+  // trust anchor (rejectUnauthorized: false — the internal-CA case; the pin alone
+  // decides trust). http targets never pin (registerTransport refuses http+pin).
   const tlsSpkiPin = target.protocol === 'https:' ? tls?.spkiPin : undefined
   let upstream: ClientRequest
   try {
@@ -1011,9 +834,8 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     source?.stop(upstream)
     releaseBodyReservation()
   }
-  // `finish` means all accepted request bytes have left ClientRequest's
-  // writable queue. Until then the body remains charged against the process
-  // budget, including while waiting for `drain`.
+  // 'finish' means all accepted request bytes have left ClientRequest's writable
+  // queue; until then the body stays charged against the process budget.
   upstream.once('finish', stopBodySource)
   upstream.once('close', stopBodySource)
   upstream.on('error', upstreamError => {
@@ -1060,15 +882,11 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
       }
       headers[name] = value as string | string[]
     }
-    // Response-header seam: the owner may add representation metadata the
-    // upstream omitted (see ProxyForwardDeps.onUpstreamResponseHeaders). It is
-    // fail-soft because this is an event listener (an escaping throw would be
-    // an uncaught exception), and WHITELIST-BOUNDED: the map is re-filtered
-    // after the callback, so a callback that writes `content-length`,
-    // `transfer-encoding` or any other non-representation header changes
-    // nothing on the wire. Framing stays the proxy's — the content-length is
-    // re-derived below from the upstream declaration, and a chunked or SSE
-    // response carries no length at all. `undefined` = zero-change passthrough.
+    // Response-header seam (see ProxyForwardDeps.onUpstreamResponseHeaders):
+    // fail-soft because it runs inside an event listener, and WHITELIST-BOUNDED —
+    // the map is re-filtered after the callback, so content-length/transfer-encoding
+    // or any other non-representation header changes nothing on the wire. Framing
+    // stays the proxy's; `undefined` = zero-change passthrough.
     const responseStatus = upstreamRes.statusCode ?? 502
     if (deps.onUpstreamResponseHeaders !== undefined) {
       try {
@@ -1085,15 +903,11 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     const corsHeaders = { ...(res._corsHeaders ?? {}) }
     mergeVary(headers, corsHeaders)
     const responseHeaders = { ...headers, ...corsHeaders }
-    // HTML trust-injection seam (S0, gateway html-inject.ts): when the owner
-    // configured an injector, a small unencoded text/html response is
-    // buffered whole so the document can be rewritten before it reaches the
-    // browser. writeHead is deferred for that case — Node's ServerResponse
-    // rejects setHeader() after writeHead() (ERR_HTTP_HEADERS_SENT), so an
-    // injected content-length can only go out with the final headers. Every
-    // other response (and every response when no injector is configured —
-    // the control-plane default) keeps the immediate passthrough writeHead
-    // below, byte for byte. SSE never enters this path.
+    // HTML trust-injection seam: with an injector configured, a small unencoded
+    // text/html response is buffered whole so the document can be rewritten.
+    // writeHead is deferred for that case — setHeader after writeHead throws
+    // ERR_HTTP_HEADERS_SENT — so every other response keeps the immediate
+    // passthrough writeHead below. SSE never enters this path.
     const injectHtmlDocument = deps.injectHtmlDocument
     const contentEncoding = upstreamRes.headers['content-encoding']
     const htmlInjectable = injectHtmlDocument !== undefined && !isSse
@@ -1102,13 +916,12 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
       && (!Number.isFinite(declaredBytes) || declaredBytes <= MAX_HTML_INJECTION_BYTES)
     if (!htmlInjectable) res.writeHead(responseStatus, responseHeaders)
     // Headers are out (or held back only for a small htmlInjectable body): a
-    // stalled non-SSE body gets the same explicit teardown (headersSent=true
-    // → destroy, the browser sees the stream cut).
+    // stalled non-SSE body gets the same explicit teardown (destroy after headers).
     if (!isSse) clearUpstreamTimeout = armUpstreamTimeout(timeoutDeps, counters, logger, upstreamTimeout)
     let received = 0
-    // Buffered htmlInjectable body ([] = still accumulating, null = flushed
-    // or never eligible). The buffer is capped at MAX_HTML_INJECTION_BYTES;
-    // exceeding it falls back to the byte-exact streaming passthrough.
+    // Buffered htmlInjectable body ([] = accumulating, null = flushed or never
+    // eligible), capped at MAX_HTML_INJECTION_BYTES; exceeding it falls back to
+    // the byte-exact streaming passthrough.
     let htmlChunks: Buffer[] | null = htmlInjectable ? [] : null
     let htmlBytes = 0
     let htmlHeadSent = !htmlInjectable
@@ -1124,16 +937,14 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
       }
     }
     upstreamRes.on('data', (chunk: Buffer) => {
-      // This is an IDLE timeout, not a total-duration deadline. Every body
-      // chunk proves progress and starts a fresh idle window.
+      // Idle timeout, not a total-duration deadline: every chunk starts a fresh window.
       if (!isSse) {
         clearUpstreamTimeout()
         clearUpstreamTimeout = armUpstreamTimeout(timeoutDeps, counters, logger, upstreamTimeout)
       }
       received += chunk.length
       if (!isSse && received > MAX_RESPONSE_BODY_BYTES) {
-        // Explicit overflow: abort the upstream stream, never a silent
-        // truncation (design 03 §3.4).
+        // Explicit overflow: abort the upstream stream, never a silent truncation.
         upstreamRes.destroy()
         stopBodySource()
         cleanupClientListeners()
@@ -1150,11 +961,9 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
           htmlBytes += chunk.length
           return
         }
-        // Over budget: the document cannot be rewritten. Send the headers
-        // with the upstream content-length — every byte below is forwarded
-        // unchanged, so the declared length stays truthful — and fall back
-        // to the plain streaming passthrough for the buffered + remaining
-        // bytes.
+        // Over budget: the document cannot be rewritten. Send the headers with the
+        // upstream content-length (every byte below is forwarded unchanged, so the
+        // declaration stays truthful) and fall back to the streaming passthrough.
         sendHtmlHead()
         for (const buffered of htmlChunks) res.write(buffered)
         htmlChunks = null
@@ -1170,10 +979,9 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
       counters.failures += 1
       res.destroy()
     })
-    // A client that closed its connection mid-stream (app exit) turns
-    // res.write into writeAfterFIN — the resulting EPIPE 'error' must be
-    // consumed, and the upstream aborted instead of kept streaming into
-    // a dead response (same teardown family as the upgrade splice).
+    // A client that closed mid-stream turns res.write into writeAfterFIN; consume
+    // the EPIPE 'error' and abort the upstream instead of streaming into a dead
+    // response (same teardown family as the upgrade splice).
     res.on('error', onClientClose)
     upstreamRes.on('end', () => {
       clearTimeoutGuards()
@@ -1185,9 +993,8 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
         res.end()
         return
       }
-      // The whole small htmlInjectable document is buffered: hand it to the
-      // owner's injector, then emit the final headers + body in one
-      // writeHead/end pair so content-length matches what is actually sent.
+      // The whole small document is buffered: hand it to the injector, then emit
+      // final headers + body in one writeHead/end pair so the length matches.
       const buffered = htmlChunks
       htmlChunks = null
       const html = Buffer.concat(buffered, htmlBytes).toString('utf8')
@@ -1196,15 +1003,13 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
         try {
           injected = injectHtmlDocument(html)
         } catch (injectError) {
-          // Fail-soft: an injector throwing must never break the request
-          // (this runs inside an event listener — an uncaught throw would
-          // crash the process). The original document is forwarded instead.
+          // Fail-soft: an injector throwing must never break the request (this runs
+          // inside an event listener); the original document is forwarded instead.
           logger.warn(`${deps.logPrefix}: html document injection failed: ${String(injectError)}`)
         }
       }
       if (injected !== null) {
-        // The declaration is pure ASCII, but the document may not be: use
-        // the byte length for the rewritten content-length.
+        // The declaration is ASCII but the document may not be: use the byte length.
         if (Number.isFinite(declaredBytes)) responseHeaders['content-length'] = String(Buffer.byteLength(injected))
         sendHtmlHead()
         res.end(injected)
@@ -1216,10 +1021,9 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     })
   })
   // A pinned request must remain completely undispatched until secureConnect
-  // proves the peer key. Constructing ClientRequest starts the TLS handshake,
-  // but headers/body are not queued until write()/end(); keeping both calls
-  // exclusively behind this gate therefore prevents Authorization, Cookie,
-  // request headers and business bytes from reaching a mismatched peer.
+  // proves the peer key: constructing ClientRequest starts the TLS handshake, but
+  // headers/body are not queued until write()/end(), both kept behind this gate —
+  // so Authorization, Cookie, headers and business bytes never reach a wrong peer.
   let requestDispatched = false
   const dispatchRequest = (): void => {
     if (requestDispatched || controller.signal.aborted || upstream.destroyed) return
@@ -1228,10 +1032,9 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
       source?.send(upstream)
       if (source === null) upstream.end()
     } catch (error) {
-      // A pinned dispatch runs asynchronously from secureConnect, outside the
-      // forwardHttp setup try/catch. Route synchronous write failures through
-      // the ordinary ClientRequest error path so cleanup/release and the loud
-      // 502 response still happen exactly once.
+      // A pinned dispatch runs asynchronously from secureConnect, outside the setup
+      // try/catch. Route synchronous write failures through the ordinary
+      // ClientRequest error path so cleanup/release and the loud 502 happen once.
       upstream.destroy(error instanceof Error ? error : new Error(String(error)))
     }
   }
@@ -1239,30 +1042,23 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
   else dispatchRequest()
 }
 
-/** Forward a WS upgrade to a fully-resolved target (the /api/remote.mux
- * stream mux).
- * `tls` carries the optional gateway SPKI pin (S23) — when set and the target
- * is https, the pin gates the handshake connection exactly like forwardHttp;
- * a mismatch surfaces as an upstream 'error' → 502 upstream_failed. */
+/** Forward a WS upgrade to a fully-resolved target (the /api/remote.mux stream
+ * mux). `tls` carries the optional gateway SPKI pin: when set and the target is
+ * https, a mismatch surfaces as an upstream 'error' → 502 upstream_failed. */
 export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, head: Buffer, target: URL, releaseHandshake: () => void, logger: Logger, counters: ProxyForwardCounters, deps: ProxyForwardDeps, extraHeaders?: Record<string, string>, tls?: { spkiPin?: string }, authority?: string): Promise<void> {
   const request = deps.httpRequest ?? (target.protocol === 'https:' ? httpsRequest : httpRequest)
-  // The upstream request stays on http(s) — node's http.request performs
-  // the upgrade handshake internally (it never accepts a ws: URL).
+  // node's http.request performs the upgrade handshake internally (never a ws: URL).
   const headers: Record<string, string> = { host: authority ?? target.host }
-  // The handshake allowlist is NOT the HTTP strip set: accept-encoding simply
-  // never rides an upgrade. That stays as-is — a 101 has no body to
-  // compress, and a non-101 reply is drained and replaced by rejectUpgrade, so
-  // there is no representation to negotiate; isHtmlDocumentNavigation is an
-  // HTTP document-navigation decision and an upgrade is never one.
+  // accept-encoding never rides an upgrade: a 101 has no body to compress, and a
+  // non-101 reply is drained and replaced by rejectUpgrade.
   const take = new Set(['upgrade', 'connection', 'sec-websocket-key', 'sec-websocket-version', 'sec-websocket-protocol', 'sec-websocket-extensions'])
   for (const [name, value] of Object.entries(req.headers)) {
     if (!take.has(name.toLowerCase())) continue
     if (value === undefined) continue
     headers[name] = Array.isArray(value) ? value.join(', ') : value
   }
-  // Per-transport extra headers (design 17 §9.3: Authorization and/or
-  // dsh_gateway_session Cookie) ride the upgrade handshake too — the
-  // gateway's WS auth == HTTP auth (S2).
+  // Per-transport extra headers (Authorization and/or dsh_gateway_session Cookie)
+  // ride the upgrade handshake too — the gateway's WS auth == HTTP auth.
   if (extraHeaders !== undefined) {
     for (const [name, value] of Object.entries(extraHeaders)) {
       const lower = name.toLowerCase()
@@ -1273,22 +1069,14 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
   const controller = new AbortController()
   const upgradeStartedAt = Date.now()
   const onClientClose = () => {
-    // A downstream leg that went away while the upstream handshake was still
-    // running left NO trace at all —
-    // the abort path is deliberately silent (the upstream 'error' handler
-    // returns early when the controller aborted), so a mux reconnect whose
-    // first attempt never reached the host was indistinguishable from a
-    // connection that was never requested. Only a close BEFORE any terminal
-    // branch (timeout / non-101 / upstream error) logs: those branches have
-    // already aborted the controller and logged their own cause. Counters are
-    // deliberately untouched (this is a downstream abandon, not an upstream
-    // failure) — the log line is the whole diagnostic.
-    // ATTRIBUTION BOUNDARY: "downstream" here means THIS
-    // socket closed, not "the browser chose to leave" — the control plane's own
-    // transport revocation (instance-proxy `closeAllStreams` /
-    // `revokeTransportTraffic`) destroys these sockets without aborting the
-    // controller, so the same line is printed for a chamber-initiated revoke.
-    // Do not use it alone to conclude the client reconnected on its own.
+    // A downstream leg that went away during the upstream handshake left NO trace:
+    // the abort path is deliberately silent, so a mux reconnect whose first
+    // attempt never reached the host was indistinguishable from a never-requested
+    // connection. Only a close BEFORE any terminal branch (timeout / non-101 /
+    // upstream error) logs; counters stay untouched (a downstream abandon, not an
+    // upstream failure). ATTRIBUTION: "downstream" means THIS socket closed — the
+    // control plane's own transport revocation also destroys it, so do not read
+    // the line alone as a client-initiated reconnect.
     const premature = !controller.signal.aborted
     controller.abort()
     releaseHandshake()
@@ -1298,12 +1086,10 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
       } catch { /* logging must never break teardown */ }
     }
   }
-  // The downstream socket, not IncomingMessage `close`, owns upgrade
-  // handshake liveness (the latter may merely mean the HTTP headers parsed).
+  // The downstream socket, not IncomingMessage 'close', owns handshake liveness.
   socket.on('close', onClientClose)
-  // The upgrade handshake must complete within upstreamTimeoutMs; once the
-  // upstream answers 101 the socket is spliced and the timeout is cleared
-  // (a live WebSocket is long-lived by nature).
+  // The handshake must complete within upstreamTimeoutMs; after the 101 the socket
+  // is spliced and the timeout cleared (a live WebSocket is long-lived).
   const clearUpgradeTimeout = armUpstreamTimeout(deps, counters, logger, () => {
     controller.abort()
     releaseHandshake()
@@ -1324,9 +1110,8 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     try {
       upstream.end()
     } catch (error) {
-      // Pinned dispatch occurs from secureConnect; preserve the ordinary
-      // upstream error/rejection path instead of throwing from an event
-      // listener into the process.
+      // Pinned dispatch occurs from secureConnect; preserve the ordinary upstream
+      // error/rejection path instead of throwing from an event listener.
       upstream.destroy(error instanceof Error ? error : new Error(String(error)))
     }
   }
@@ -1338,17 +1123,14 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     if (abort) return
     counters.failures += 1
     logger.log(`${deps.logPrefix}: upstream ${deps.id} upgrade failed: ${String(upstreamError)}`)
-    // An upstream connect refusal is upstream_failed (502, design 04 §4.2) —
-    // the same code the HTTP path uses; 503 stays reserved for "no tunnel /
-    // not ready". Regression locked by instance-proxy.ts.
+    // An upstream connect refusal is upstream_failed (502) — the same code the HTTP
+    // path uses; 503 stays reserved for "no tunnel / not ready".
     rejectUpgrade(socket, 502, 'upstream_failed', 'upstream WebSocket unavailable', logger)
   })
-  // A non-101 upstream reply (the instance 404s an unknown WS path, its
-  // connection plugin is not mounted, an old dsh version, …): the upgrade
-  // request must never be left with an unread, unlistened stream — a late
-  // RST on that connection is an unhandled socket 'error' (uncaught
-  // ECONNRESET in the main process). Drain-and-destroy the reply and
-  // reject the client upgrade explicitly instead.
+  // A non-101 upstream reply (unknown WS path, unmounted plugin, old dsh, …): the
+  // upgrade request must never be left with an unread, unlistened stream — a late
+  // RST would be an unhandled socket 'error'. Drain-and-destroy the reply and
+  // reject the client upgrade explicitly.
   upstream.on('response', (upstreamRes: IncomingMessage) => {
     clearUpgradeTimeout()
     releaseHandshake()
@@ -1372,33 +1154,22 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     deps.liveStreams.add(stream)
     let tornDown = false
     const openedAt = Date.now()
-    // chamber patch (design 14 extension): the spliced downlinks are
-    // downlink-only WebSockets with no heartbeat from either side — a
-    // silently dead (half-open) BROWSER leg after an OS sleep/wake fires no
-    // 'error'/'close', so without this the splice would hold forever while
-    // the browser's pump stays blind (stuck "Deep diving..." UI, backend
-    // still processing). The heartbeat pings the browser; missed pongs tear
-    // the splice down so the browser's WebSocket closes and the renderer
-    // pump reconnects. Declared before tearDown (which stops it); started
-    // once the splice is wired.
+    // Downlink-only WebSocket with no heartbeat from either side: a silently dead
+    // (half-open) BROWSER leg after OS sleep/wake fires no 'error'/'close', so
+    // without this the splice would hold forever while the pump stays blind. The
+    // heartbeat pings the browser; missed pongs tear the splice down. Declared
+    // before tearDown (which stops it) and started once the splice is wired.
     let heartbeat: { stop(): void } | null = null
-    // One bounded line per stream records which leg ended the splice and how
-    // long it lived. Without it, a mux socket ended by the INSTANCE side (the
-    // official api-gateway server terminates a silent socket after
-    // MAX_MISSED_HEARTBEATS=2 x its 2s heartbeat) or by the browser left no
-    // trace at all and could not be told apart from a client-initiated
-    // reconnect. The cause strings are
-    // stable so the journal is greppable ("upstream close" = the dsh host /
-    // tunnel dropped the socket, "browser close" = the page's socket went
-    // away, "heartbeat lost" = this proxy's own browser-leg watchdog). No
-    // behavior change: teardown ordering, counters and destroys are as before.
+    // One bounded line per stream records which leg ended the splice and how long
+    // it lived. Cause strings are stable and greppable: "upstream close" = the dsh
+    // host / tunnel dropped the socket, "browser close" = the page's socket went
+    // away, "heartbeat lost" = this proxy's browser-leg watchdog.
     const tearDown = (cause: string) => {
       if (tornDown) return
       tornDown = true
-      // The log runs BEFORE the bookkeeping on purpose (a throwing logger must
-      // not cost us the line), but it is wrapped: this is the only statement
-      // here that can throw, and an escaping exception from a socket
-      // 'close'/'error' handler would leave the stream latched forever.
+      // Logged before the bookkeeping (a throwing logger must not cost us the line)
+      // and wrapped: only this statement can throw, and an escaping exception from a
+      // socket 'close'/'error' handler would leave the stream latched forever.
       try {
         logger.log(`${deps.logPrefix}: WebSocket stream ${deps.id} closed (${cause}, ${String(Date.now() - openedAt)}ms)`)
       } catch { /* logging must never break teardown */ }
@@ -1412,13 +1183,10 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
         socket.destroy()
       } catch { /* already gone */ }
     }
-    // Error/close listeners on BOTH ends, attached before any write: on
-    // app exit the browser and the dsh host are torn down at once, so one
-    // pipe can push into a socket that already received the peer's FIN —
-    // node flips write to writeAfterFIN, which destroys with an EPIPE
-    // "ended by the other party" 'error'. Without a listener on that end
-    // the error becomes an uncaught exception. Either end failing or
-    // closing tears both down exactly once.
+    // Error/close listeners on BOTH ends, attached before any write: on app exit one
+    // pipe can push into a socket that already got the peer's FIN, and node's
+    // writeAfterFIN EPIPE would be uncaught without a listener. Either end failing
+    // closes both exactly once.
     socket.on('error', () => { tearDown('browser error') })
     upstreamSocket.on('error', () => { tearDown('upstream error') })
     socket.on('close', () => { tearDown('browser close') })
@@ -1432,36 +1200,28 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     }
     socket.write(wireHeaders.join('\r\n') + '\r\n\r\n')
     if (upstreamHead.length > 0) socket.write(upstreamHead)
-    // Client head bytes (pre-sent frame data, RFC 6455 pipelining) flow to
-    // the upstream socket only after the upstream accepted the upgrade.
+    // Client head bytes (RFC 6455 pipelining) flow upstream only after it accepted the upgrade.
     if (head.length > 0) upstreamSocket.write(head)
-    // OS-level TCP keepalive for the upstream leg of a
-    // direct-http target, armed before the splice. Only owners that opted in
-    // (instance-proxy passes tcpKeepAliveMs for NON-loopback resolved targets
-    // — direct http(s), whatever the source-id kind) hit
-    // this: ssh tunnels already have ssh keepalive covering the leg, so the
-    // local/ssh splices keep the documented no-heartbeat design (see the
-    // WS_PING_* comment above) — a direct http(s) leg has no such coverage
-    // and would otherwise freeze silently on a half-open connection.
+    // OS-level TCP keepalive for the upstream leg of a direct-http target, armed
+    // before the splice. Only opted-in owners hit this: ssh tunnels already have ssh
+    // keepalive, so local/ssh splices keep the no-heartbeat design; a direct
+    // http(s) leg would otherwise freeze silently on a half-open connection.
     if (deps.tcpKeepAliveMs !== undefined) {
-      // The upgrade socket is a net.Socket at runtime (node:http types it as
-      // Duplex); setKeepAlive is the net.Socket surface used here.
+      // setKeepAlive is the net.Socket surface (the upgrade socket is typed Duplex).
       ;(upstreamSocket as Socket).setKeepAlive(true, deps.tcpKeepAliveMs)
     }
     // Socket splice: downstream ↔ upstream; either closing tears both.
     upstreamSocket.pipe(socket as never)
     socket.pipe(upstreamSocket as never)
-    // Start the liveness heartbeat after the splice is wired (design 14
-    // extension; see the tearDown note above). Downstream-only: the
-    // upstream leg's liveness belongs to SSH keepalive / socket events.
+    // Start the liveness heartbeat after the splice is wired; downstream-only (the
+    // upstream leg's liveness belongs to SSH keepalive / socket events).
     heartbeat = startWsHeartbeat({
       downstream: socket,
       intervalMs: deps.wsPingIntervalMs,
       missesBeforeTeardown: deps.wsPingMissesBeforeTeardown,
       onDead: () => {
         // Paren-free cause: every line keeps the parseable shape
-        // `closed (<cause>, <ms>ms)` (cross-check: nested parens broke a
-        // `[^)]*` parser). "heartbeat lost" stays the greppable keyword.
+        // `closed (<cause>, <ms>ms)`; "heartbeat lost" stays the greppable keyword.
         tearDown(`heartbeat lost after ${String(deps.wsPingMissesBeforeTeardown)} unanswered ping(s)`)
       },
     })

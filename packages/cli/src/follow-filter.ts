@@ -1,7 +1,6 @@
 /**
- * Incremental host-log follow over the REST endpoint's bounded tail snapshot.
- * ISO timestamps are only millisecond-precise, so they cannot be a lossless
- * cursor. Compare the previous suffix with the current prefix instead.
+ * Incremental host-log follow over the bounded REST tail snapshot: ISO ts are
+ * millisecond-precise only, so compare the previous suffix with the current prefix.
  */
 export interface HostLogFollowEntry {
   ts?: unknown

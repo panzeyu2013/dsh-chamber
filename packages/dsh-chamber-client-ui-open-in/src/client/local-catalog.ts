@@ -1,30 +1,19 @@
 /**
- * Local application catalog client (design 20 §4.2) — the instance-hosted pool.
+ * Local application catalog client — the instance-hosted pool.
  *
- * The catalog, the applications' real bundle icons and the launches are served
- * by the chamber host domain `openInApp/*` running INSIDE the managed instance
- * (`packages/dsh-chamber-seed-open-in`, the fork of upstream's open-in host
- * half). This module is the browser half of that contract: it owns the wire
- * parsing and nothing else — the transport is an injected call, which in
- * production is the page's machine catalog reading the LOCAL instance through
- * the page-level instance client
- * (`@dsh-chamber/dsh-chamber-client-core/instance-api`, the same route,
- * envelope and trust fence every entry uses — design 20 §4.2/§5).
+ * The catalog, the applications’ real bundle icons and the launches are served
+ * by the chamber host domain `openInApp/*` running INSIDE the managed instance.
+ * This module is the browser half of that contract: it owns wire parsing only;
+ * the transport is an injected call (in production the page-level instance
+ * client for `local`).
  *
- * Fail-closed, like the surrounding button: an unreachable, refusing, drifted
- * or hostile host reads as an EMPTY catalog and never as a thrown UI; a failed
- * icon reads as "no icon", which the button renders through upstream's rounded
- * square (the catalog answered no pixels for that id); only a launch rejects,
- * because that is the one outcome the user must see.
+ * Fail-closed, like the surrounding button: an unreachable, refusing, drifted or
+ * hostile host reads as an EMPTY catalog, never as a thrown UI; a failed icon
+ * reads as "no icon"; only a launch rejects, because the user must see it.
  *
- * TWO envelope levels, one owner each: the injected call is the page-level
- * instance client's `callUnary`, so its answer is the TRANSPORT result
- * `{ok:true,value}` / `{ok:false,error}`; `value` is then the host domain's own
- * carrier, because every `openInApp/*` method returns `domainResult(…)`
- * (`packages/dsh-chamber-seed-open-in/src/core.ts`). This module consumes both
- * levels — reading only the first one would make the production read answer an
- * empty catalog while the unit stubs (which feed the domain carrier directly)
- * stay green.
+ * TWO envelope levels, one owner each: the injected `callUnary` answers the
+ * TRANSPORT result `{ok:true,value}|{ok:false,error}` whose `value` is the host
+ * domain’s own carrier (`domainResult(…)`); both levels are consumed here.
  */
 import type { OpenInApp } from '../shared/capabilities.ts'
 import {
@@ -39,14 +28,11 @@ import {
 } from '../shared/open-in-wire.ts'
 
 /**
- * One generic-RPC call against this entry's instance — in production the
- * page-level instance client's `callUnary`
- * (`@dsh-chamber/dsh-chamber-client-core/instance-api`
- * `getInstanceClient('local')`). The carrier adds the per-instance base path
- * (`/api/i/<id>`) and the connection's own trust handling; `args` is the wire
- * envelope's argument map (parameter names). It answers the TRANSPORT result
- * `{ok:true,value}|{ok:false,error}`, whose `value` is the host domain's own
- * carrier — see `domainCarrierOf` below, which reads both levels.
+ * One generic-RPC call against this entry’s instance — in production the
+ * page-level instance client’s `callUnary`, which adds the per-instance base
+ * path and the connection’s trust handling. `args` is the wire envelope’s
+ * argument map; the answer is the TRANSPORT result, whose `value` is the host
+ * domain’s carrier (`domainCarrierOf` reads both levels).
  */
 export type OpenInAppRpcCall = (
   endpoint: string,
@@ -68,10 +54,9 @@ export interface LocalCatalog {
 }
 
 /**
- * Map a catalog id to the presentation family the chamber button knows:
- * file managers keep the neutral folder mark, the VS Code family keeps the
- * product mark, and every other catalog id is its own family (the label table
- * names it; unknown ids stay nameable-by-id and render the generic mark).
+ * Map a catalog id to the presentation family the chamber button knows: file
+ * managers keep the neutral folder mark, the VS Code family keeps the product
+ * mark, every other id is its own family.
  */
 export function displayKindOf(appId: string): string {
   if (appId === 'finder' || appId === 'explorer' || appId === 'filemanager') return 'file-manager'
@@ -100,20 +85,13 @@ function carrierOf(raw: unknown): OpenInAppDomainResult<unknown> | null {
 }
 
 /**
- * Read one answer from the injected transport (`callUnary`, the page-level
- * instance client). Its result is the generic-RPC envelope: `{ok:true,value}`
- * when the Remote answered — `value` being the host domain's own carrier, see
- * the module header — and `{ok:false,error}` when the RPC layer itself refused
- * the call (the Remote threw, the gateway rejected the payload, internal
- * error). A real transport failure (unreachable instance, non-2xx without the
- * domain-missing opt-in, timeout) never reaches here: `callUnary` THROWS it,
- * which the callers below already catch.
- *
- * A refusal is projected onto the domain carrier's failure arm so the callers
- * keep ONE decision surface (`carrier.ok`): `load`/`icon` fail closed either
- * way, while `launch` reports what the RPC layer actually said instead of
- * calling a named failure "unrecognizable". Only the success arm can carry a
- * domain PAYLOAD, so a drifted result still reads as "no domain answer".
+ * Read one answer from the injected transport: the generic-RPC envelope
+ * `{ok:true,value}` (where `value` is the host domain’s own carrier) or
+ * `{ok:false,error}` when the RPC layer itself refused. A refusal is projected
+ * onto the domain carrier’s failure arm so the callers keep ONE decision
+ * surface: `load`/`icon` fail closed either way, while `launch` reports what the
+ * RPC layer actually said instead of calling a named failure "unrecognizable".
+ * Real transport failures throw and are caught below.
  */
 function domainCarrierOf(raw: unknown): OpenInAppDomainResult<unknown> | null {
   if (typeof raw !== 'object' || raw === null) return null
@@ -148,9 +126,7 @@ function parseIcon(value: unknown): string | null {
 }
 
 /**
- * Build a per-entry local catalog client.
- * @param options - the injected RPC carrier (the page-level instance client's
- *   `callUnary`; both envelope levels are read here, see `domainCarrierOf`).
+ * Build a per-entry local catalog client over the injected RPC carrier.
  * @returns the catalog client (pure over its injected call).
  */
 export function createLocalCatalog(options: LocalCatalogOptions): LocalCatalog {

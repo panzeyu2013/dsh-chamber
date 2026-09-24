@@ -1,4 +1,4 @@
-/** Design 18 §3.4 sustained-health known-good promotion monitor. */
+/** Sustained-health known-good promotion monitor. */
 import { join } from 'node:path'
 import { assertSafeVersion, isSafeVersion } from './version-safety.ts'
 import { markKnownGood, validateVersionTree } from './dsh-runtime-store.ts'
@@ -21,12 +21,11 @@ export const DEFAULT_HEALTH_POLICY: HealthPolicy = {
 export interface CandidateRecord {
   firstProbePassAt: number
   bootCount: number
-  /** Start of the current uninterrupted healthy process window. A closed
-   * window is deliberately represented as null: persisted wall-clock time
-   * alone is never evidence that the runtime remained healthy. */
+  /** Start of the current uninterrupted healthy process window. A closed window is
+   * deliberately null: persisted wall-clock time alone is never evidence of health. */
   healthWindowStartedAt: number | null
-  /** Diagnostic/reset epoch. It also makes the on-disk v2 shape explicit so
-   * legacy records cannot inherit a previously counted boot. */
+  /** Diagnostic/reset epoch; it also makes the on-disk v2 shape explicit so legacy records
+   * cannot inherit a previously counted boot. */
   healthWindowResetAt: number | null
 }
 
@@ -70,10 +69,9 @@ function readCandidates(baseDir: string): Record<string, CandidateRecord> {
       const hasV2Window = Object.prototype.hasOwnProperty.call(rec, 'healthWindowStartedAt')
         && Object.prototype.hasOwnProperty.call(rec, 'healthWindowResetAt')
       if (!hasV2Window) {
-        // Legacy candidates measured `now - firstProbePassAt`, so an app that
-        // was closed for 24h could be promoted immediately on reopening. Keep
-        // the candidate for diagnosis, but close its trust window and discard
-        // the legacy boot count. A fresh successful probe/boot starts v2 data.
+        // Legacy candidates measured `now - firstProbePassAt`, so an app closed for 24h could be
+        // promoted on reopening. Keep the candidate for diagnosis, but close its trust window and
+        // discard the legacy boot count; a fresh successful probe/boot starts v2 data.
         out[version] = {
           firstProbePassAt: rec.firstProbePassAt,
           bootCount: 0,
@@ -147,14 +145,10 @@ export function noteBoot(baseDir: string, version: string, nowMs = Date.now()): 
   writeCandidates(baseDir, versions)
 }
 
-/** Close every candidate's current trust window.
- *
- * Main calls this before the first startup probe and whenever the local
- * runtime becomes degraded/restarting/error. The next successful probe or
- * boot opens a new window; elapsed wall time while the app/host was offline is
- * therefore never carried into known-good promotion. Boot qualification is
- * reset with the window so a boot from an earlier failed window cannot count.
- */
+/** Close every candidate's current trust window. Main calls this before the first startup
+ *  probe and whenever the local runtime becomes degraded/restarting/error; the next successful
+ *  probe or boot opens a new window, so elapsed wall time while the host was offline never
+ *  carries into promotion. Boot qualification resets with the window. */
 export function resetCandidateHealthWindow(baseDir: string, nowMs = Date.now()): void {
   if (!Number.isFinite(nowMs)) throw new Error('nowMs 必须是有限数')
   ensureRuntimeRootNoFollow(baseDir)
@@ -181,9 +175,8 @@ export function removeKnownGoodCandidate(baseDir: string, version: string): void
   writeCandidates(baseDir, versions)
 }
 
-/** Promote only due candidates whose immutable tree still validates. Invalid
- * trees remain candidates/fields for diagnosis but never become rollback
- * targets. */
+/** Promote only due candidates whose immutable tree still validates; invalid trees remain
+ *  candidates for diagnosis but never become rollback targets. */
 export function promoteDueCandidates(
   baseDir: string,
   nowMs = Date.now(),

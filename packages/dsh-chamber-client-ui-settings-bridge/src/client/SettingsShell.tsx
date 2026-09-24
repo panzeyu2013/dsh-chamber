@@ -1,30 +1,15 @@
 /**
- * Chamber settings shell — replaces the official SettingsRoot registration
- * in the `sidebar.settings` slot (registered at a lower priority so the
- * official shell is shadowed, not conflicted). The sidebar-foot trigger plus
- * the centered modal panel keep the official panel geometry (figma
- * 501:29947), but the nav rail is re-aimed: a SERVER dropdown on top
- * (local default; searchable portal, all rows selectable, connection state
- * colored green/red) over the SELECTED server's OWN settings sections. The
- * options column renders that server's own ledger through this panel — the
- * source's own boot ctx, its own registrations, its own renderer-bound seats
- * (settings-source-face.ts, design 05 §5). The
- * chamber-global connections surface is a FIXED nav entry below a divider —
- * it never follows the selected server and renders the official
- * ConnectionsSection as a full options-column view when active.
- *
- * Chrome stays chamber-owned: the header title and close button are
- * self-built (the official `settings.header`/`close` seats are chrome, not
- * content). Every section's config fact still lives on the selected
- * instance's host machine.
+ * Chamber settings shell — replaces the official SettingsRoot registration in the
+ * `sidebar.settings` slot (lower priority: the official shell is shadowed, not
+ * conflicted). The nav rail is re-aimed: a searchable SERVER dropdown over the
+ * SELECTED server's OWN settings sections, rendered through that source's own boot
+ * ctx, registrations and renderer-bound seats (settings-source-face.ts, design 05
+ * §5). The chamber-global connections surface is a FIXED nav entry below a divider —
+ * it never follows the selected server. Chrome stays chamber-owned.
  *
  * The shell also coordinates its OWN ctx's `settings.onboarding` stage
- * (./onboarding.ts, upstream SettingsRoot parity), the trigger row keeps
- * upstream's 42px geometry and returns focus to the trigger on close, and the
- * content header repeats no title the section body already renders. The stage's
- * two axes are split: the active-view fact gates MOUNTING only, while the
- * completed set resets on the sessions fact alone — see the stage comment below
- * for the remount residual this leaves open.
+ * (./onboarding.ts): the active-view fact gates MOUNTING only, the completed set
+ * resets on the sessions fact alone.
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { FocusEvent as ReactFocusEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
@@ -70,7 +55,6 @@ import {
   serverDropdownPlacement,
 } from './server-selector.ts'
 
-/** Registration-side business face for the chamber settings shell. */
 export interface SettingsShellInjected {
   /** Bound translate over the shell's own dictionary namespace ({param} interpolation supported). */
   t: (key: SettingsBridgeKey, params?: Record<string, unknown>) => string
@@ -80,7 +64,6 @@ export interface SettingsShellInjected {
   chamberInstanceId?: string
 }
 
-/** Full component props. */
 export type SettingsShellProps =
   PropsRuntime<'sidebar.settings'>
   & InjectFace<SettingsShellInjected>
@@ -97,9 +80,9 @@ function navIcon(id: string): ReactNode {
 }
 
 /**
- * Server selection default: the hosting instance first (even when not yet
- * connected — its placeholder text keeps the user anchored to their own
- * machine), then the first connected server, then the first row.
+ * Server selection default: the hosting instance first (even when not yet connected —
+ * the placeholder keeps the user anchored to their own machine), then the first
+ * connected server, then the first row.
  */
 function defaultSelection(
   servers: readonly BridgeServerRow[],
@@ -112,10 +95,10 @@ function defaultSelection(
 }
 
 /**
- * Searchable server combobox: rendered through a body portal so a long roster
- * cannot be clipped by the settings panel. Offline rows remain selectable and
- * lead to the explicit unavailable placeholder. The popup flips/clamps to the
- * viewport and keeps listbox keyboard/outside-click/focus-return semantics.
+ * Searchable server combobox rendered through a body portal so a long roster cannot be
+ * clipped: offline rows stay selectable and lead to the explicit unavailable placeholder;
+ * the popup flips/clamps to the viewport and keeps listbox
+ * keyboard/outside-click/focus-return semantics.
  */
 function ServerDropdown({
   servers, selectedId, chamberInstanceId, t, onSelect,
@@ -152,14 +135,10 @@ function ServerDropdown({
     setPosition(serverDropdownPlacement(rect, { width: window.innerWidth, height: window.innerHeight }))
   }, [])
 
-  // Measure before paint so the body portal never flashes at (0, 0), and move
-  // focus to the search input. Focus must NOT use the `autoFocus` attribute:
-  // React runs `autoFocus` in the MUTATION phase, BEFORE the portal's
-  // `popupRef` is attached (refs attach in the LAYOUT phase). The trigger's
-  // resulting blur would then be misread by onRootBlur as "focus left the
-  // dropdown" (popupRef.current is still null), so the list would close the
-  // instant it opens. Focusing here — after refs are attached — lets
-  // onRootBlur see the input inside the portal and keeps the list open.
+  // Measure before paint so the portal never flashes at (0, 0), then focus the search
+  // input. Focus must NOT use `autoFocus`: React runs it in the MUTATION phase, BEFORE
+  // the portal's `popupRef` attaches (LAYOUT), so onRootBlur would read the trigger's
+  // blur as "focus left" and close the list the instant it opens.
   useLayoutEffect(() => {
     if (!open) return
     updatePosition()
@@ -172,10 +151,9 @@ function ServerDropdown({
     }
   }, [open, updatePosition])
 
-  // Outside pointerdown closes. NOTE: Escape/arrow handling lives on the
-  // root div's React onKeyDown (below), NOT on a document listener — the
-  // panel's own Escape listener lives on the document, and stopping the
-  // native event here keeps Escape from closing the whole panel.
+  // Outside pointerdown closes. Escape/arrow handling lives on the root div's
+  // React onKeyDown (below), NOT on a document listener: stopping the native
+  // event here keeps Escape from closing the whole panel.
   useEffect(() => {
     if (!open) return
     const onPointerDown = (event: PointerEvent): void => {
@@ -198,10 +176,10 @@ function ServerDropdown({
     items[next]?.focus()
   }
 
-  // Keyboard handling mirrors the official ModelSelect: it lives on the
-  // root div so the trigger and the list share one dispatch surface.
-  // ArrowDown/ArrowUp on the CLOSED dropdown expand it (rove deferred past
-  // the list's commit via queueMicrotask); Escape closes the dropdown only.
+  // Keyboard handling mirrors the official ModelSelect and lives on the root div
+  // so trigger and list share one dispatch surface. ArrowDown/ArrowUp on the
+  // CLOSED dropdown expand it (rove deferred past the list's commit via
+  // queueMicrotask); Escape closes the dropdown only.
   const onRootKeyDown = (event: ReactKeyboardEvent): void => {
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault()
@@ -249,9 +227,8 @@ function ServerDropdown({
       >
         <span className={clsx(css.dot, selected?.connected === true ? css.dotOk : css.dotErr)} />
         <span className={css.dropdownValue}>{selected?.label ?? t('noServers')}</span>
-        {/* 统一下拉箭头：与运行时 select / 连接表单下拉同一图标
-            词汇（IconChevronDownOutline14）；右缘 inset 由 trigger 的
-            padding 决定（10px），与文字左缘对称。 */}
+        {/* 统一下拉箭头：与运行时 select / 连接表单下拉同一图标词汇
+            （IconChevronDownOutline14）；右缘 inset 由 trigger padding 决定（10px）。 */}
         <span className={css.dropdownArrow} aria-hidden="true">
           <IconChevronDownOutline14 />
         </span>
@@ -280,17 +257,10 @@ function ServerDropdown({
                 aria-selected={selectedId === server.id}
                 aria-label={`${server.label}, ${server.connected ? t('serverConnected') : t('serverOffline')}${server.id === chamberInstanceId ? `, ${t('current')}` : ''}`}
                 className={clsx(css.dropdownItem, selectedId === server.id && css.selected)}
-                // WebKit does not focus a <button> on mouse-down, so pressing
-                // this row would blur the focused search input above with
-                // `relatedTarget: null`; onRootBlur would then close the portal
-                // and unmount the row BEFORE the click landed — the dropdown
-                // closed without switching servers (WKWebView 27 + React 18
-                // portal reproduction: the press reports focusout with a null
-                // relatedTarget; Chromium focuses the row instead, so the
-                // Electron flavor never took that path). Suppressing the default
-                // keeps the focus — and the row — alive until the click activates
-                // it, the same device upstream ui-input-trigger MenuView uses for
-                // its pick rows.
+                // WebKit does not focus a <button> on mouse-down, so pressing this row
+                // would blur the search input with `relatedTarget: null`; onRootBlur
+                // would then close the portal and unmount the row BEFORE the click
+                // landed. Suppressing the default keeps the row alive until the click.
                 onMouseDown={event => event.preventDefault()}
                 onClick={() => {
                   onSelect(server.id)
@@ -313,9 +283,6 @@ function ServerDropdown({
   )
 }
 
-/**
- * The modal panel: mask + panel; nav rail (server dropdown + sections) + options column.
- */
 function SettingsPanel({
   servers, selectedId, face, faceStarting, activeId, onSelectSection, onClose,
   onSelectServer, chamberInstanceId, t, connectionsT,
@@ -336,20 +303,16 @@ function SettingsPanel({
 }) {
   const titleId = useId()
 
-  // Document-level Escape closes the panel (official mirror); the server
-  // dropdown's own Escape stopPropagation keeps a dropdown-open Escape from
-  // reaching here.
+  // Document-level Escape closes the panel; the dropdown's own stopPropagation
+  // keeps a dropdown-open Escape from reaching here.
   const panelRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return
-      // A modal OTHER than this panel owns Escape while it is open (nested
-      // official Modal overlays incl. the connections plugin dialogs, or
-      // another layer's overlay): closing the whole panel underneath it would
-      // swallow the modal's own close intent. The
-      // panel itself IS aria-modal, so the panel NODE must be excluded by
-      // identity — a blanket `[aria-modal="true"]` query self-matches and makes
-      // Escape a no-op; see ./escape-owner.ts.
+      // A modal OTHER than this panel owns Escape while it is open (nested official
+      // Modal overlays): closing the panel underneath it would swallow its close
+      // intent. The panel NODE must be excluded by identity — a blanket
+      // `[aria-modal="true"]` query self-matches and makes Escape a no-op.
       if (nestedModalOwnsEscape(document.querySelectorAll('[aria-modal="true"]'), panelRef.current)) return
       onClose()
     }
@@ -357,16 +320,13 @@ function SettingsPanel({
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [onClose])
 
-  // Baseline focus management: entering the dialog lands on the close button.
   const closeButton = useRef<HTMLButtonElement | null>(null)
   useEffect(() => { closeButton.current?.focus() }, [])
 
   const selected = servers.find(server => server.id === selectedId)
 
-  // The selected server's OWN section ledger — the registry of that
-  // instance's boot ctx, live while the panel is open. Stable
-  // subscribe/getSnapshot closures per face (no resubscribe churn on
-  // unrelated re-renders — official per-face cache pattern).
+  // The selected server's OWN section ledger (that boot ctx's registry, live
+  // while the panel is open); stable subscribe/getSnapshot closures per face.
   const sourceSlots = face?.slots
   const sectionSubscribe = useMemo(
     () => (fn: () => void) => sourceSlots === undefined ? () => {} : sourceSlots.subscribe('settings.section', fn),
@@ -381,52 +341,41 @@ function SettingsPanel({
     () => (sourceSlots === undefined ? [] : sectionRows(sourceSlots)),
     [sourceSlots, sectionVersion, localeRevision],
   )
-  // Active resolution (nav-active.ts): chamber-global fixed ids win; a
-  // server-section id that left the ledger falls back to the first row.
+  // Active resolution (nav-active.ts): chamber-global ids win; a server-section id that left the ledger falls back to the first row.
   const active = resolveActiveSection(activeId, rows)
-  // Header context: the
-  // selected server name sits under the header ONLY for server-owned content
-  // (the chamber-global connections/client pages are server-independent —
-  // implying a server there would mislead). The active section's TITLE is NOT
-  // repeated here: every content branch renders its own heading (the official
-  // sections their `<h2>`, the chamber-global pages theirs), so upstream has
-  // exactly one title per page and the chamber keeps that rule.
+  // Header context: the selected server name sits under the header ONLY for
+  // server-owned content (chamber-global pages are server-independent — implying
+  // a server there would mislead). The active section's TITLE is not repeated:
+  // every content branch renders its own heading, one title per page.
   const headerSub = active !== CONNECTIONS_SECTION_ID && active !== GENERAL_SECTION_ID
     ? selected?.label ?? ''
     : ''
   // Per-source client-plugin runtime diagnostics, keyed by source id
-  // ('local' | '<kind>-<id>'), handed to the chamber-global connections surface.
-  // The diagnostic is a chamber-owned fact (design 09) and belongs in the
-  // connections page, NOT on top of the official dsh「插件」section.
+  // ('local' | '<kind>-<id>'), handed to the chamber-global connections surface:
+  // a chamber-owned fact, so it belongs in the connections page, NOT on top of
+  // the official dsh「插件」section.
   const pluginDiagnostics = useMemo(() => {
     const map: Record<string, BridgeServerRow['pluginDiagnostic']> = {}
     for (const server of servers) map[server.id] = server.pluginDiagnostic
     return map
   }, [servers])
 
-  // Per-source settled-boot gaps (design 05 §4 「降级呈现」): keyed like
-  // the diagnostics above and handed to the same card. The graph channel can
-  // answer `ok` while a surface never registered, so the card needs this SEPARATE
-  // fact to avoid claiming everything is fine next to a missing conversation body.
+  // Per-source settled-boot gaps, keyed like the diagnostics: the graph channel
+  // can answer `ok` while a surface never registered, so the card needs this
+  // SEPARATE fact to avoid claiming everything is fine next to a missing body.
   const bootGaps = useMemo(() => {
     const map: Record<string, BridgeServerRow['bootGap']> = {}
     for (const server of servers) map[server.id] = server.bootGap
     return map
   }, [servers])
 
-  // CHANNEL-class diagnostic self-heal pass (design 09 §3.5): the recorded
-  // diagnostic describes the source's LAST shell boot; a 404 `not-injected` /
-  // `graph-unreachable` can heal without a re-boot (e.g. the gateway's
-  // managed dsh restarted with the desktop-synced chamber host packages right
-  // after the boot that recorded the 404). While the connections page is
-  // open, re-check every source whose diagnostic is a channel fact — once per
-  // activation and once per channel-diagnostic change (the effect keys on a
-  // channel-class signature, never on unrelated roster republishes — another
-  // server's session/phase flips cannot re-probe a still-broken source).
-  // Loop-freedom comes from the recheck contract itself: it writes back only
-  // on a verdict STATE change, so a still-broken channel re-verifies silently
-  // and the pass cannot re-trigger through its own writes; the in-flight set
-  // only collapses republish races.
+  // CHANNEL-class diagnostic self-heal pass: the recorded diagnostic describes the
+  // source's LAST boot, and a 404 `not-injected` / `graph-unreachable` can heal
+  // without a re-boot (e.g. the managed dsh restarted with the synced host packages
+  // right after the boot that recorded it). While the connections page is open,
+  // re-check every source whose diagnostic is a channel fact — once per activation and
+  // once per channel-diagnostic change. Loop-freedom comes from the recheck contract
+  // itself: it writes back only on a verdict STATE change.
   const channelDiagnosticsSignature = useMemo(
     () => servers
       .filter(server => server.pluginDiagnostic !== undefined && isChannelClassDiagnostic(server.pluginDiagnostic.state))
@@ -453,8 +402,7 @@ function SettingsPanel({
     }
   }, [activeConnections, channelDiagnosticsSignature])
 
-  // Explicit dialog-triggered rechecks (plugin dialogs ask for their own
-  // source on open/refresh) — same host-owned write-back.
+  // Explicit dialog-triggered rechecks (plugin dialogs ask for their own source on open/refresh) — same host-owned write-back.
   const recheckDiagnostic = useCallback((sourceId: string): void => {
     void recheckPluginGraphDiagnostic(sourceId)
   }, [])
@@ -512,20 +460,14 @@ function SettingsPanel({
         </nav>
         <div className={css.content}>
           <div className={css.header}>
-            {/* Server sub-line (chamber N-source addition; the duplicated page
-                title is dropped). */}
+            {/* Server sub-line (the duplicated page title is dropped). */}
             {headerSub !== '' && <span className={css.headerSub}>{headerSub}</span>}
             <div className={css.actions}>
-              {/* The official open-document action ("打开配置文件") is a
-                  HOST-MACHINE file operation (native opener): it renders for
-                  the LOCAL instance only and is suppressed for remote
-                  servers (the config there lives on the remote machine). The
-                  outlet is wrapped in an ALL-CONTAINING entry boundary
-                  (containAll): a failure in that foreign entry is contained to
-                  a `<div data-slot-error="settings.action">` and can never
-                  abdicate the chamber-owned `sidebar.settings` entry (which
-                  would fall the shell back to the official SettingsRoot with
-                  no server dropdown). */}
+              {/* The official open-document action ("打开配置文件") is a HOST-MACHINE
+                  operation (native opener): LOCAL instance only, suppressed for remote
+                  servers. The outlet is wrapped in containAll so a foreign entry's
+                  failure can never abdicate the chamber-owned `sidebar.settings` entry
+                  (which would fall back to the official SettingsRoot). */}
               {selectedId === LOCAL_INSTANCE_ID && face !== undefined && (
                 <BridgeEntryBoundary containAll slotKey="settings.action">
                   <BridgeOutlet
@@ -545,9 +487,9 @@ function SettingsPanel({
           </div>
           <div className={css.options}>
             {active === CONNECTIONS_SECTION_ID ? (
-              /* Chamber-global connection management: independent of the
-                 selected server (never refetched on server switch), with that
-                 server's own plugin-graph health rendered inside its card. */
+              /* Chamber-global connection management: independent of the selected
+                 server (never refetched on switch), with that server's own
+                 plugin-graph health rendered inside its card. */
               <ConnectionsSection
                 t={connectionsT}
                 pluginDiagnostics={pluginDiagnostics}
@@ -555,24 +497,21 @@ function SettingsPanel({
                 onRecheckDiagnostic={recheckDiagnostic}
               />
             ) : active === GENERAL_SECTION_ID ? (
-              /* Chamber-global runtime settings (design 14 D7 / design 15):
-                 close-window behavior / launch at login / keep awake / quit
-                 confirmation — reads the main-process chamber-settings.json,
-                 independent of the selected server. The update status (design
-                 11) lives inside this section too. */
+              /* Chamber-global runtime settings: close-window behavior / launch
+                 at login / keep awake / quit confirmation — reads the
+                 main-process chamber-settings.json, independent of the selected
+                 server. The update status lives inside this section too. */
               <GeneralView t={t} />
             ) : selectedId === undefined || selected === undefined ? (
               <p className={css.placeholder}>{t('noServers')}</p>
             ) : !selected.connected ? (
-              /* role="alert"：该分支是"插入即带内容"的整块替换，polite 的
-                 status 不会被播报。 */
+              /* role="alert"：该分支是"插入即带内容"的整块替换，polite 的 status 不会被播报。 */
               <div className={css.unavailableView} role="alert">
                 <p className={css.placeholder}>
                   {selected.id === LOCAL_INSTANCE_ID
                     ? t('localNotReady')
                     : selected.managedRuntimeDown === true
-                      // 隧道正常、托管 dsh 停机——「不可达」的说法不准确，
-                      // 必须说清是哪一层停了。
+                      // 隧道正常、托管 dsh 停机——「不可达」不准确，必须说清是哪一层停了。
                       ? t('managedDshDown')
                       : selected.kind === 'gateway'
                         && (selected.phase === 'starting' || selected.phase === 'restarting')
@@ -580,8 +519,7 @@ function SettingsPanel({
                         ? t('managedDshStarting')
                         : t('targetUnavailable')}
                 </p>
-                {/* design 15 §D1 requires the official Button for every action
-                    pill in this panel (`variant="outline"`, size sm). */}
+                {/* Every action pill in this panel is the official Button (`variant="outline"`, size sm). */}
                 <Button
                   variant="outline"
                   size="sm"
@@ -592,34 +530,25 @@ function SettingsPanel({
                 </Button>
               </div>
             ) : face !== undefined ? (
-              /* The selected server's own ledger: normal content, keyed by
-                 server so a server switch remounts the wrapper and replays
-                 the fade-in. */
+              /* The selected server's own ledger: normal content, keyed by server
+                 so a switch remounts the wrapper and replays the fade-in. */
               rows.length === 0 ? (
-                /* upstream renders an EMPTY options column here (its single-ctx
-                   shell can
-                   never show the panel without sections). The chamber keeps the
-                   honest placeholder deliberately — an unpublished section
-                   ledger is a REACHABLE N-source state (a source whose settings
-                   cluster has not landed in its own boot ctx, or a foreign dsh
-                   target whose plugin graph partially failed), and a bare blank
-                   column would read as "this server has no settings" instead of
-                   "its sections are not here yet". t('sectionsEmpty') is
-                   therefore retained copy, not invented chrome. */
+                /* upstream renders an EMPTY options column here (its single-ctx shell
+                   can never show the panel without sections); the chamber keeps the
+                   honest placeholder deliberately — an unpublished ledger is a
+                   REACHABLE N-source state, and a blank column would read as "this
+                   server has no settings" instead of "its sections are not here yet". */
                 <div key={selectedId} className={css.contentFade}>
                   <p className={css.placeholder}>{t('sectionsEmpty')}</p>
                 </div>
               ) : (
                 active !== undefined && (
                   <div key={selectedId} className={css.contentFade}>
-                    {/* The selected server's OWN section content, rendered
-                        with that server's own renderer-bound seats. containAll
-                        keeps every failure of a foreign entry (an ordinary
-                        render crash or a BridgeAssemblyError from a miswired
-                        entry — e.g. renderSlot for an undeclared slot) inside a
-                        `<div data-slot-error="settings.section">`; it can never
-                        escape to abdicate the chamber-owned shell (falling back
-                        to the official SettingsRoot). */}
+                    {/* The selected server's OWN section content, rendered with
+                        that server's own renderer-bound seats. containAll keeps a
+                        foreign entry's failure (render crash or a BridgeAssemblyError
+                        from a miswired entry) inside a `settings.section` error
+                        div; it can never abdicate the chamber-owned shell. */}
                     <BridgeEntryBoundary containAll slotKey="settings.section">
                       <BridgeOutlet
                         slots={face.slots}
@@ -634,11 +563,10 @@ function SettingsPanel({
                 )
               )
             ) : (
-              /* Connected, but that server's shell has not published its
-                 settings face yet: its frontend is still booting (the App
-                 mounts it for this panel — see chamberBridge.setSettingsTarget).
-                 The distinct key remounts the wrapper so the ready content
-                 replays its fade-in. */
+              /* Connected, but that server's shell has not published its settings
+                 face yet (its frontend is still booting — the App mounts it for
+                 this panel via chamberBridge.setSettingsTarget). The distinct key
+                 remounts the wrapper so the ready content replays its fade-in. */
               <div key={`loading-${selectedId}`} className={css.contentFade}>
                 <div className={css.loadingView}>
                   <IconLoadingOutline16 className={css.loadingSpinner} size={16} aria-hidden="true" />
@@ -656,28 +584,20 @@ function SettingsPanel({
 /**
  * Render the settings trigger and the panel.
  *
- * Complete-bridge contract (design 05 §5): the panel renders the
- * SELECTED source's OWN boot-ctx `settings.section` ledger with that source's
- * OWN renderer-bound seats. Two things make that possible and both live here:
- *
- * 1. this component is that source's `sidebar.settings` occupant, so the
- *    renderer hands it the complete standard kit — it publishes those seats
- *    under its own `chamberInstanceId` (`publishSettingsSourceSeats`);
- * 2. it asks the App layer to keep the selected source's shell MOUNTED while
- *    the panel is open (`chamberBridge.setSettingsTarget`) — the mounted shell
- *    IS the surface, and a closed panel releases the hold.
- *
- * Nothing is mounted twice and no service is stubbed, so a third-party plugin
- * that is active in that instance's own frontend is active here too, with its
- * real `remote`, live settings events and real session/workspace/resource
- * seats.
- * @param props - composed slot props (sidebar.settings seat).
+ * Complete-bridge contract (design 05 §5): the panel renders the SELECTED source's
+ * OWN boot-ctx `settings.section` ledger with that source's OWN renderer-bound
+ * seats. This component is that source's `sidebar.settings` occupant, so the
+ * renderer hands it the complete standard kit (published under its
+ * `chamberInstanceId`), and it asks the App layer to keep that source's shell
+ * MOUNTED while the panel is open (`chamberBridge.setSettingsTarget`). Nothing is
+ * mounted twice and no service is stubbed, so a third-party plugin active in that
+ * instance's frontend is active here too, with its real `remote` and seats.
  */
 export function SettingsShell(props: SettingsShellProps) {
   // The ambient slot face is erased (Record<string, unknown>); the real
   // sidebar.settings owner share is `{ wide: boolean }` and the standard seats
-  // arrive beside it (useSessions / useWorkspaces / usePanelInfo /
-  // useResource / useSessionPendingInteraction / root props).
+  // (useSessions / useWorkspaces / usePanelInfo / useResource /
+  // useSessionPendingInteraction / root props) arrive beside it.
   const wide = props.wide === true
   const { t, connectionsT, chamberInstanceId } = props
   const [open, setOpen] = useState(false)
@@ -688,10 +608,9 @@ export function SettingsShell(props: SettingsShellProps) {
 
   useEffect(() => subscribeServers(() => setServers(getServers())), [])
 
-  // Closing the dialog returns focus to the trigger it was opened from
-  // (upstream SettingsRoot's wasOpen effect). The
-  // restore runs AFTER the close commit, when the dialog can no longer own
-  // focus.
+  // Closing the dialog returns focus to the trigger it was opened from (upstream
+  // SettingsRoot's wasOpen effect), AFTER the close commit, when the dialog can
+  // no longer own focus.
   const triggerButton = useRef<HTMLButtonElement | null>(null)
   const wasOpen = useRef(open)
   useEffect(() => {
@@ -699,10 +618,10 @@ export function SettingsShell(props: SettingsShellProps) {
     wasOpen.current = open
   }, [open])
 
-  // Seat publication: the seats are stable per (binding, source), so the effect
-  // re-publishes only when the renderer swaps one (locale/root binding change)
-  // — not on every render. The same object is handed to this ctx's OWN
-  // onboarding outlet below (one materialization, two readers).
+  // Seat publication: seats are stable per (binding, source), so the effect
+  // re-publishes only when the renderer swaps one (locale/root binding change) —
+  // not every render. The same object feeds this ctx's own onboarding outlet
+  // below (one materialization, two readers).
   const useSessions = props.useSessions
   const useWorkspaces = props.useWorkspaces
   const usePanelInfo = props.usePanelInfo
@@ -728,9 +647,8 @@ export function SettingsShell(props: SettingsShellProps) {
     return publishSettingsSourceSeats(chamberInstanceId, ownSeats)
   }, [chamberInstanceId, ownSeats])
 
-  // The App layer publishes the first projection asynchronously; if the
-  // settings trigger opened first, backfill the selection once servers
-  // arrive. Also re-anchors when the selected server left the projection.
+  // The App layer publishes the first projection asynchronously; backfill the
+  // selection once servers arrive, and re-anchor when the selected server left it.
   useEffect(() => {
     if (servers.length === 0) return
     if (selectedId === undefined || !servers.some(server => server.id === selectedId)) {
@@ -746,18 +664,16 @@ export function SettingsShell(props: SettingsShellProps) {
     return () => { chamberBridge.setSettingsTarget(undefined) }
   }, [open, selectedId])
 
-  // NOTE: no active-reset on server switch — the connections page is
-  // server-independent and stays put; a section id that left the new
-  // server's ledger falls back to its first row via the derived `active`.
+  // No active-reset on server switch — the connections page is server-independent;
+  // a section id that left the new server's ledger falls back to its first row.
   const selected = servers.find(server => server.id === selectedId)
   const selectedConnected = selected?.connected ?? false
 
-  // Face subscription: the registry revision is the uSES snapshot.
   useSyncExternalStore(subscribeSettingsSourceFaces, settingsSourceFaceRevision)
   const face = getSettingsSourceFace(selectedId)
   // A face is renderable only for the exact authoritative source incarnation:
-  // delete/re-add or a transport-identity edit replaces the source under the
-  // same id, and the previous ctx's ledger must never render for the new one.
+  // delete/re-add or a transport-identity edit replaces the source under the same
+  // id, and the previous ctx's ledger must never render for the new one.
   const faceMatchesIncarnation = face !== undefined
     && face.sourceFingerprint !== undefined
     && face.sourceFingerprint === selected?.sourceFingerprint
@@ -772,36 +688,25 @@ export function SettingsShell(props: SettingsShellProps) {
 
   // ---- settings.onboarding stage ----
   // Upstream's SettingsRoot mounts the first not-yet-completed ordered
-  // `settings.onboarding` entry while the CURRENT SESSION is blank or absent,
-  // and paints no chrome of its own. Chamber parity is read from exactly the
-  // two facts upstream reads, both already delivered to this component:
-  // - the CTX'S OWN ledger: this shell is that instance's `sidebar.settings`
-  //   occupant, and the ctx-side half of its face (slots + locale) is published
-  //   by this package's own `apply` in that ctx (settings-source-face.ts);
-  // - the CTX'S OWN sessions seat: `props.useSessions` — the same seat the
-  //   shell publishes for the panel (upstream: `useSessions` from
-  //   PropsRuntime). No seat is invented, and no new fact channel is added.
-  // The stage is deliberately per-ctx, NOT per selected source: a foreign
-  // ctx's step would have to be driven through a foreign hook, and two mounted
-  // shells selecting the same source would mount the same step twice. MOUNTING is
-  // additionally gated on the chamber's active-view fact — the chamber mounts
-  // several instance shells at once, and the step's dialog is document-global, so
-  // a hidden shell must never pop another instance's first-run stage. That gate
-  // does NOT touch the completed set. The per-source
-  // panel rendering above is untouched.
+  // `settings.onboarding` entry while the CURRENT SESSION is blank or absent.
+  // Chamber parity reads exactly the two facts upstream reads: the CTX'S OWN ledger
+  // (this shell is that instance's `sidebar.settings` occupant) and the CTX'S OWN
+  // sessions seat (`props.useSessions`) — no seat invented, no new fact channel. The
+  // stage is deliberately per-ctx, NOT per selected source (a foreign ctx's step would
+  // need a foreign hook, and two shells selecting one source would mount it twice);
+  // MOUNTING is additionally gated on the chamber's active-view fact (document-global
+  // dialog, several mounted shells); that gate does NOT touch the completed set.
   const ownFace = getSettingsSourceFace(chamberInstanceId)
   const ownSlots = ownFace?.slots
   const onboardingSteps = useOnboardingSteps(ownSlots)
   // Both coordinates are read by their OWN unconditional hook call: a composite
   // `useOnboardingActive(...) && useActiveView(...)` would short-circuit the
-  // SECOND hook call whenever the sessions fact is false — a hook sequence that
-  // changes on a routine fact flip (the seat leaving `loading`, the session
-  // stopping being blank) and the one shape React refuses outright.
+  // second hook whenever the sessions fact is false — a hook sequence changing on
+  // a routine fact flip, the one shape React refuses outright.
   const sessionsOnboardingActive = useOnboardingActive(sessionsSeatOf(props))
   const onboardingInActiveView = useActiveView(chamberInstanceId)
   const [completedOnboarding, setCompletedOnboarding] = useState<ReadonlySet<string>>(() => new Set())
-  // The stage itself is the pure projection in ./onboarding.ts: MOUNTING is the
-  // conjunction of the two facts, the RESET is the sessions fact alone.
+  // The stage itself is the pure projection in ./onboarding.ts: MOUNTING = both facts, RESET = sessions alone.
   const onboardingStageState = onboardingStage({
     steps: onboardingSteps,
     completed: completedOnboarding,
@@ -809,18 +714,11 @@ export function SettingsShell(props: SettingsShellProps) {
     inActiveView: onboardingInActiveView,
   })
   const onboardingStep = onboardingStageState.step
-  // A new blank-session run starts the stage over — the SESSIONS fact alone
-  // (upstream SettingsRoot.tsx's reset effect), never the composite: a view
-  // switch is not a new run, and resetting on the composite would re-mount an
-  // acknowledged or explicitly deferred step over a still-blank session (the
-  // probe is replayed in test/bridge/onboarding.test.ts).
-  // RESIDUAL (registered deviation): this set is
-  // component-local, so a REMOUNT of this shell — the App reclaims the instance
-  // and mounts it again — starts an empty set and re-mounts the step upstream
-  // would still consider acknowledged, even though the run never ended. Closing
-  // that needs per-instance state surviving the mount (a chamberBridge/persisted
-  // channel keyed by instance, i.e. a NEW fact channel), which is not part of
-  // this round. The view-switch axis above is fixed; this axis is not.
+  // A new blank-session run starts the stage over — the SESSIONS fact alone (upstream
+  // SettingsRoot's reset effect), never the composite: a view switch is not a new run,
+  // and resetting on the composite would re-mount an acknowledged or explicitly
+  // deferred step over a still-blank session. RESIDUAL: this set is component-local,
+  // so a REMOUNT starts an empty set and re-mounts an acknowledged step.
   useEffect(() => {
     if (!onboardingStageState.resetsCompleted) return
     setCompletedOnboarding(new Set())
@@ -831,8 +729,6 @@ export function SettingsShell(props: SettingsShellProps) {
       return new Set([...previous, id])
     })
   }, [])
-  // `openSection` is the step's own route into the panel: the same two pieces
-  // of viewing state the nav cell drives (upstream openSection).
   const openSection = useCallback((id: string) => {
     setActiveId(id)
     setOpen(true)
@@ -845,8 +741,7 @@ export function SettingsShell(props: SettingsShellProps) {
         type="button"
         className={clsx(css.trigger, !wide && css.rail)}
         // The rail (narrow) form renders the icon only, so the accessible name
-        // must come from the label the official trigger slot also carries
-        // (vendor SettingsRoot.tsx: `aria-label={t('trigger')}`).
+        // must come from the label the official trigger slot also carries.
         aria-label={t('trigger')}
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -870,12 +765,9 @@ export function SettingsShell(props: SettingsShellProps) {
           connectionsT={connectionsT}
         />
       )}
-      {/* Exactly ONE step mounts, from this ctx's own ledger, with this ctx's
-          own renderer-bound seats; the step component owns its ctx reads, its
-          readiness gate and its dialog chrome (`#root` inert ownership lives
-          there, not here). containAll keeps a crashed foreign step inside a
-          `<div data-slot-error="settings.onboarding">` instead of abdicating
-          the chamber-owned `sidebar.settings` seat. */}
+      {/* Exactly ONE step mounts, from this ctx's own ledger with its own
+          renderer-bound seats (the step owns its ctx reads, readiness gate and dialog
+          chrome). containAll keeps a crashed foreign step inside an error div. */}
       {onboardingStep !== undefined && ownSlots !== undefined && (
         <BridgeEntryBoundary containAll slotKey="settings.onboarding">
           <BridgeOutlet
