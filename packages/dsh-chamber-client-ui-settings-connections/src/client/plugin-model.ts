@@ -63,55 +63,6 @@ export interface ModelPluginAdd {
   spec: string
 }
 
-/** Raw batch intent (as the view builds it from checked rows). */
-export interface ApplyInput {
-  add: ModelPluginAdd[]
-  remove: string[]
-  /** true = record the change only; the restart-to-apply is deferred. */
-  defer: boolean
-}
-
-/** The ordered, de-duplicated, net-coalesced batch. */
-export interface OrderedApplyOps {
-  /** Removes in input order (net rule already applied). */
-  removes: string[]
-  /** Adds in input order, first occurrence per name kept. */
-  adds: ModelPluginAdd[]
-  defer: boolean
-  /** Remove entries dropped by the NET rule: the same name is also added, so
-   *  the remove would be a no-op preface — the re-add wins (final effect =
-   *  the name is added). Only cross-list drops are reported; intra-group
-   *  duplicates are pure no-ops and drop silently. */
-  coalesced: string[]
-}
-
-export function orderApplyOps(input: ApplyInput): OrderedApplyOps {
-  const removals: string[] = []
-  const seenRemove = new Set<string>()
-  for (const name of input.remove) {
-    if (seenRemove.has(name)) continue
-    seenRemove.add(name)
-    removals.push(name)
-  }
-  const additions: ModelPluginAdd[] = []
-  const seenAdd = new Set<string>()
-  for (const add of input.add) {
-    if (seenAdd.has(add.name)) continue
-    seenAdd.add(add.name)
-    additions.push(add)
-  }
-  const addedNames = new Set(additions.map(add => add.name))
-  const coalesced: string[] = []
-  const removes = removals.filter(name => {
-    if (addedNames.has(name)) {
-      coalesced.push(name)
-      return false
-    }
-    return true
-  })
-  return { removes, adds: additions, defer: input.defer, coalesced }
-}
-
 /* ---------------------------------------------------------------------------
  * 3. Apply-result normalization (both backends → one outcome)
  * The unified outcome the result surface renders (partial「已完成 n/m」、
@@ -318,18 +269,6 @@ export function partialTextOf(
  *   entity must not block the rest」一致）。
  * describeBatchPolicy 仅 doc-only（无 key 的英文常句，UI 一律走键）。
  */
-
-/** The two failure regimes (design 21 §6.6 single definition):
- *  registryAndRemove = 'fail-fast' means the registry/remove BATCH fails fast
- *  at its submission/refusal boundary — a wholesale refusal (gateway
- *  submission surface, ssh pre-flight) aborts the whole batch; it does NOT
- *  describe ssh execution-time row failures, which are serially isolated and
- *  surface as an executed+partial outcome. materializeRows = 'isolated' in
- *  every phase. */
-export const BATCH_FAILURE_POLICY = {
-  registryAndRemove: 'fail-fast',
-  materializeRows: 'isolated',
-} as const
 
 /** Doc-only policy sentence (unlocalized; 5C key table owns the zh/en copy):
  *  the registry/remove batch submits as one fail-fast unit — a submission or

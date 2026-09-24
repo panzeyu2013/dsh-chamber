@@ -12,7 +12,6 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   actionableDependencies,
-  BATCH_FAILURE_POLICY,
   BATCH_POLICY_SENTENCE,
   classifyGatewayApplyResult,
   classifySshApplyResult,
@@ -20,7 +19,6 @@ import {
   isActionableRow,
   isRemovableRow,
   legacyProtectedName,
-  orderApplyOps,
   partialCounts,
   pluginRowsOf,
   projectInstalledRows,
@@ -70,67 +68,6 @@ test('legacyProtectedName: the official and chamber domains stay refused on the 
   ]) {
     assert.equal(legacyProtectedName(allowed), false, `${JSON.stringify(allowed)} must not be refused`)
   }
-})
-
-// ---------------------------------------------------------------------------
-// 2. Intent model (orderApplyOps)
-// ---------------------------------------------------------------------------
-
-test('orderApplyOps: removes come FIRST, adds after, each group in input order, defer passthrough', () => {
-  const ordered = orderApplyOps({
-    add: [{ name: 'b', spec: 'b@^2.0.0' }, { name: 'a', spec: 'a@1.0.0' }],
-    remove: ['r1', 'r2'],
-    defer: true,
-  })
-  assert.deepEqual(ordered, {
-    removes: ['r1', 'r2'],
-    adds: [{ name: 'b', spec: 'b@^2.0.0' }, { name: 'a', spec: 'a@1.0.0' }],
-    defer: true,
-    coalesced: [],
-  })
-})
-
-test('orderApplyOps: intra-group duplicates are stripped, first occurrence wins (also for differing add specs)', () => {
-  const ordered = orderApplyOps({
-    add: [
-      { name: 'a', spec: 'a@1.0.0' },
-      { name: 'a', spec: 'a@2.0.0' }, // duplicate name — the FIRST spec wins
-      { name: 'b', spec: 'b@^1.0.0' },
-    ],
-    remove: ['x', 'x', 'y'],
-    defer: false,
-  })
-  assert.deepEqual(ordered, {
-    removes: ['x', 'y'],
-    adds: [{ name: 'a', spec: 'a@1.0.0' }, { name: 'b', spec: 'b@^1.0.0' }],
-    defer: false,
-    coalesced: [],
-  })
-})
-
-test('orderApplyOps: add+remove of the same name coalesces to the add (remove reported in coalesced)', () => {
-  const ordered = orderApplyOps({
-    add: [{ name: 'shared', spec: 'shared@^1.0.0' }, { name: 'keep', spec: 'keep' }],
-    remove: ['drop', 'shared', 'shared'],
-    defer: false,
-  })
-  // net rule: 'shared' is removed then re-added → keep only the add; the
-  // duplicate remove entry was already stripped by the intra-group rule.
-  assert.deepEqual(ordered, {
-    removes: ['drop'],
-    adds: [{ name: 'shared', spec: 'shared@^1.0.0' }, { name: 'keep', spec: 'keep' }],
-    defer: false,
-    coalesced: ['shared'],
-  })
-})
-
-test('orderApplyOps: input arrays are never mutated', () => {
-  const add = [{ name: 'a', spec: 'a' }]
-  const remove = ['a']
-  const input = { add, remove, defer: false }
-  orderApplyOps(input)
-  assert.deepEqual(add, [{ name: 'a', spec: 'a' }])
-  assert.deepEqual(remove, ['a'])
 })
 
 // ---------------------------------------------------------------------------
@@ -297,8 +234,7 @@ test('partialCounts: cancelled → null; clean executed → null; executed+parti
 // 4. Batch failure policy — single definition (design 21 §6.6)
 // ---------------------------------------------------------------------------
 
-test('BATCH_FAILURE_POLICY: registry/remove is fail-fast, materialize rows stay isolated', () => {
-  assert.deepEqual(BATCH_FAILURE_POLICY, { registryAndRemove: 'fail-fast', materializeRows: 'isolated' })
+test('describeBatchPolicy: the doc sentence is the policy constant text', () => {
   assert.equal(describeBatchPolicy(), BATCH_POLICY_SENTENCE)
 })
 
