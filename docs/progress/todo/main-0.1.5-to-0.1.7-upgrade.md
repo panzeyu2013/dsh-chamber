@@ -44,24 +44,24 @@
 |---|---|---|
 | **包拓扑** | `packages/` 20 → 23：新增 `dsh-chamber-client-core`（旧 `sidebar/src/shared` 的 41/43 文件提升而来，9 个消费方）、`dsh-chamber-wire`（host↔client 中立契约，`plugin-row`/`plugin-manifest` 唯一声明）、`dsh-stream-state`（纯 TS reducer 唯一所有者 + Swift 镜像 + `tables.json`） | 取件与 §12 里所有 `sidebar/src/shared/<x>` 路径映射到 `dsh-chamber-client-core/src/<x>`；P1-4/P1-7 的新代码落点改为 client-core/wire/stream-state |
 | **搬迁** | sidebar `src/shared/` 整体消失；`client-plugin-loader.ts` → client-core（R059）；`session-fact-reconcile.ts` → client-core 且被重写（A/D）；`archive-purge.ts` → sidebar client；`settings-shell.ts` → client-core；`renderer/runtime-management.ts`、`renderer/svg-resource-scope.ts`、`desktop/gateway-session-test-hooks.ts` 也搬入 | 取件表按路径核对（原 §12.5，已移除）；本分支没改过这些 rename 源，搬迁与分支净增量不直接碰撞 |
-| **门禁** | static 11→**18**→**20**（2026-09-24 新增 `verify:import-cycles`/`verify:file-budgets`/`verify:no-dead-exports` 与 `scripts/refactor/equivalence.mjs`）、typecheck 10→**13**、tests 26→**28**、full 47→**59**；新增 `verify:package-boundaries`（A 禁生产面跨包相对 import、B exports 白名单）、`verify:no-dead-exports`、`verify:upstream-lifecycle-contract`、`verify:ladder-table-parity`、`verify:stream-state-swift-parity`、`verify-artifact-freshness`、`remote-state-injection-matrix`、`refactor/equivalence`、`test:stream-state`、`typecheck:stream-state`、`typecheck:runtime`；`run-checks` 支持 `--jobs N`；registry 判据 C1–C16 → **C1–C16**（C16 = vendor 源消费者双向门，新增 `vendorSourceConsumers` 块，当前唯一登记 `renderer/src/host-graph.ts` ← `dsh-client-modules` 的 `optionalStringArray`/`stripClientSuffix`）；anchors 预算 main 已降到 **665**（本树实测 720 / 预算 743） | §8/§13.5 的验收清单换成新 mode 集合；移植的 `plugin-capability.ts` 必须有真实生产消费方（否则 `verify:no-dead-exports` 红）；H9 修 `host-graph.ts` 时同步 C16 登记；整合后 `--update-budget` 以本树实测重录 |
-| **冲突面** | 全仓「两边都改」68 → **187**（62 干净 / **100 冲突** / 374 冲突块）；AppDelegate 42 → **46**；`main.ts` 0→**16**、`shell-core.ts` 0→**18**、`plugin-sync.ts` 4→**18**、`PluginDialog.tsx` 0→**27**、gateway `routes.ts` 4→11、gateway `index.ts` 5→10、`registry.test.mjs` 3→8、`registry.json` 2→6 | 原 §12.4 的数字与热点表已随取件表移除；「三方干净」清单作废（只剩 `preload.cts`、`registry.mjs`） |
+| **门禁** | static 11→**18**→**20**（2026-09-24 新增 `verify:import-cycles` 与 `verify:file-budgets`；`verify:no-dead-exports` 与 `scripts/refactor/equivalence.mjs` 旧基线已有）、typecheck 10→**13**、tests 26→**28**、full 47→**59**→**61**；新增 `verify:package-boundaries`（A 禁生产面跨包相对 import、B exports 白名单）、`verify:no-dead-exports`、`verify:upstream-lifecycle-contract`、`verify:ladder-table-parity`、`verify:stream-state-swift-parity`、`verify-artifact-freshness`、`remote-state-injection-matrix`、`refactor/equivalence`、`test:stream-state`、`typecheck:stream-state`、`typecheck:runtime`；`run-checks` 支持 `--jobs N`；registry 判据 C1–C16 → **C1–C16**（C16 = vendor 源消费者双向门，新增 `vendorSourceConsumers` 块，当前唯一登记 `renderer/src/host-graph.ts` ← `dsh-client-modules` 的 `optionalStringArray`/`stripClientSuffix`）；anchors 预算 main 已降到 **665**（本树实测 720 / 预算 743） | §8/§13.5 的验收清单换成新 mode 集合；移植的 `plugin-capability.ts` 必须有真实生产消费方（否则 `verify:no-dead-exports` 红）；H9 修 `host-graph.ts` 时同步 C16 登记；整合后 `--update-budget` 以本树实测重录 |
+| **冲突面** | 分支侧 M **187**（**非交集**；对旧 main `745274e7`：76 干净 / 106 冲突 / 391 块，`--diff3`）：**对新 main `267272b0` 为 61 干净 / 121 冲突 / 486 块（默认 401）**，Top 热点 `PluginDialog.tsx` 30/47、`AppDelegate.swift` 28/46、`plugin-sync.ts` 18/31、`main.ts` 16/19（详见 §1.8.1）；`main.ts` 0→**16**、`shell-core.ts` 0→**18**、`plugin-sync.ts` 4→**18**、`PluginDialog.tsx` 0→**27**、gateway `routes.ts` 4→11、gateway `index.ts` 5→10、`registry.test.mjs` 3→8、`registry.json` 2→6 | 原 §12.4 的数字与热点表已随取件表移除；「三方干净」清单作废（只剩 `preload.cts`、`registry.mjs`） |
 | **registry** | main 已有 **6** 条 entries：3 fork（connection/web/**api-gateway**）+ `seed.dsh-chamber-seed-open-in` + **`seed.dsh-chamber-client-ui-layout`** + `mirror.dsh-api-session-controller-goal`（2026-09-24 新增）（type=seed，已进 `chamberNamedForks` 与 `touchpoints.fork-mirror.layout` 生成块） | §12.4 改为：**layout 不再新增 `fork.` 条目**，收敛/合并到 main 的 seed 条目；只有 sidebar 需要新登记（并补 `chamberNamedForks`/生成视图） |
 | **会话/流** | design 14 §D4 已改写为 `dsh-stream-state`（reducer + `tables.json` + Swift 镜像）口径；新增 `verify:upstream-lifecycle-contract`（钉住 pin 的 host `follow` 无首帧期限 + client `doOpen` 无界 await；上游落地期限即要求退役客户端阶梯） | §12.9/P1-7 先按新 §D4 与 `packages/dsh-stream-state/src/*` 重判「chamber 自研健康臂还剩多少独立面」，再决定移植还是改为消费 reducer 输出 |
 | **文档** | main 未新增升级/迁移指南（2026-09-24 新增 `todo/refactor-plan.md`），此前删了 7 份计划/蓝图（`todo/notes/*` 与 `remote-session-state-and-switch.md`）；STATUS 结构不变；`upstream-touchpoints.md` 增 C16 生成块 | 「不要整文件 checkout README/STATUS」的纪律仍然成立；本指南在 main 上不存在，搬过去时手工加索引 |
 | **main 仍缺（10/10 未变）** | `shell-locale.ts`、`safe-mode.ts`（控制面+渲染端）、`startup-error.ts`、`update-schedule.ts`、`update-journal.ts`、`primary-runtime-lock.json`、`prepare-python-payload.mjs`、`CrashDiagnostics.swift`、`UpdateStallWatchdogTests.swift`、`plugin-capability.ts` 全部仍缺；`patches/` 与 `patchedDependencies` 仍未纳入 | §7 的 P0–P2 移植清单整体有效；§17-C 的 patch channel 纳入仍是待办 |
 
-**执行口径（重置后）**：本分支已重置到 main，不再有「分支领先」；提取来源 = `backup/v016-alpha1-pre-reset`（vs 新 main `267272b0`：**1559 文件 / +168490 / −125164**，57 提交）。旧的三方冲突统计（246 文件 / 187 双方都改 / 100 冲突等）是对旧 main `745274e7` 的预演，**需在新基线上重测**（方法见 §6.2）；三方 base 仍是 `82df4c47`，原 §12.2 的三方预演命令仍适用（取件表已移除，数字待新 main 重测）。
+**执行口径（重置后）**：本分支已重置到 main，不再有「分支领先」；提取来源 = `backup/v016-alpha1-pre-reset`（vs 新 main `267272b0`：**1559 文件 / +168490 / −125164**，57 提交）。三方冲突统计已按新基线重测：**195 双方触碰 / 169 严格 M∩M / 121 冲突 / 486 块（`--diff3`）**（见 §1.8.1）；旧记录（187/62/100/374）作废；三方 base 仍是 `82df4c47`，原 §12.2 的三方预演命令仍适用（取件表已移除，数字待新 main 重测）。
 
 
 ### 1.5.1 2026-09-24 二次前进：`745274e7` → `267272b0`（36 提交 / 745 文件 / +50125 / −50955）
 
-**主题**：① **architecture refactor merge**——新增门禁 `verify:import-cycles`/`verify:file-budgets`/`verify:no-dead-exports` 与 `scripts/refactor/equivalence.mjs`；破坏性清理（删除 pre-v2 credential/input 兼容、legacy catalog migration）；settings-bridge/control-plane/client-core 单源化。② **goal-hold port**——活动 goal 期间挂起完成通知、session 恢复与 stream-evidence 轮、ssh registry health、gateway goal projection 进 session-state wire。③ 文档：新增 `todo/refactor-plan.md`，`docs/design/*` 与 STATUS 同步刷新。
+**主题**：① **architecture refactor merge**——新增门禁 `verify:import-cycles`/`verify:file-budgets`（`verify:no-dead-exports` 与 `scripts/refactor/equivalence.mjs` 旧基线已有）；破坏性清理（删除 pre-v2 credential/input 兼容、legacy catalog migration）；settings-bridge/control-plane/client-core 单源化。② **goal-hold port**——活动 goal 期间挂起完成通知、session 恢复与 stream-evidence 轮、ssh registry health、gateway goal projection 进 session-state wire。③ 文档：新增 `todo/refactor-plan.md`，`docs/design/*` 与 STATUS 同步刷新。
 
-**事实**（实测）：`packages/**/package.json` 23 → 23（无增删）；registry **5 → 6**（+ `mirror.dsh-api-session-controller-goal`）；static **18 → 20**；anchors **662 / 665**（符号锚 registry 22 + docs 126）；pin 仍 `fb2c4b9e`（`harness.commit` 未动）。
+**事实**（实测）：`packages/**/package.json` 23 → 23（无增删）；registry **5 → 6**（+ `mirror.dsh-api-session-controller-goal`）；static **18 → 20**、full **59 → 61**；anchors **662 / 665**（符号锚 registry 22 + docs 126）；pin 仍 `fb2c4b9e`（`harness.commit` 未动）；**本机 gitignored 运行时树仍是旧分支 0.1.6-alpha.2，须先 `pnpm install` + `bundle:dsh --force` 刷新（否则 touchpoints C11 红）**。
 
 **对计划的影响**：
-1. **所有取件统计需重测**：§5–§12 的「187 双方都改 / 100 冲突 / 374 块、246 文件净增量」等是旧 main `745274e7` 口径；提取来源改为 `backup/v016-alpha1-pre-reset`（vs 新 main：**1559 文件 / +168490 / −125164**，57 提交），执行前按 §6.2 的预演方法在新基线上重测。
+1. **所有取件统计需重测**：§5–§12 的「187 双方都改 / 100 冲突 / 374 块」等旧口径已在 §1.8.1 重测（**195 触碰 / 169 M∩M / 121 冲突 / 486 块**）；提取来源改为 `backup/v016-alpha1-pre-reset`（vs 新 main：**1559 文件 / +168490 / −125164**，57 提交），执行前按 §6.2 的预演方法在新基线上重测。
 2. **fork 面**：api-gateway 在 main 已登记为第二实现型 fork（`fork.dsh-api-gateway`，deviation **G43**，约 4600 行补丁面：carrier retry、opening deadline + silent-socket upgrade、journal stall watchdog，基于 `@dsh-chamber/dsh-stream-state`）——与我们分支的「会话流健康臂」（§12.9 / P1-7）重叠，合并时**以 main 的注册为权威**，只补我们独有的部分。
 3. **破坏性清理**：pre-v2 credential/input 兼容与 legacy catalog migration 已删；分支侧若有旧路径依赖，按 R2 重定位，不恢复。
 4. **新门禁**：提取后必须过 `run-checks static` 的 20 步（含 import-cycles / file-budgets / no-dead-exports）。
@@ -100,6 +100,73 @@
 | 初始窗口高度 | **按官方形态对齐**：Swift 内容区取官方视口 **1280×772**，放弃 786 折中（转实机核验） | deviations S-49 |
 | open-in | **官方 `ui-open-in-app` 行在复合页生效 + 我们保持严格超集**（`chamber-covered.ts` 移除该行、座冲突复验、实机复验） | design 16/20 / §20.2 bump 清单 |
 | 设置面 | **方案 A**：壳保留 chamber（不改走官方壳，P4 不做）、字段渲染契约用上游 `settings-form`/`configForms`、内容用各来源原生设置 + chamber 自持 | design 15 §6.5 / §22.2.4 P4 |
+
+## 1.8 2026-09-24 重测：提取面、冲突面与待重新决策清单
+
+> 测量口径：MB = `82df4c47`（merge-base）；ours = tag `backup/v016-alpha1-pre-reset`（`e0093418`）；theirs = `267272b0`；三方 `git merge-file`（默认与 `--diff3` 两口径）。**本节数字取代 §1.5/§5–§12 中一切旧 main 口径统计。**
+
+### 1.8.1 规模与分类（实测）
+
+| 口径 | 值 |
+|---|---|
+| 分支侧（MB→tag） | 246 文件 / +20111 / −25450（A36 / M187 / D23） |
+| main 侧（MB→`267272b0`） | 1511 行 / 1529 路径 / +152601 / −114614 |
+| 两点（tag↔main） | 1559 文件 / +168490 / −125164 |
+| 双方触碰 | **195** = 169（严格 M∩M）+ 4（分支 M 且 main 删）+ 22（分支删且 main 改） |
+| 分支新增且仅分支有 | **36**（可直接取件；含 `CrashDiagnostics.swift`/`startup-error.ts`/`safe-mode.ts`/python 载荷/席位测试等） |
+| 分支 M 且 main 未碰 | **14**（三方必 clean，可整文件直取） |
+| main 删除 ∩ 分支触碰 | 5（4 个分支 M 的测试 + `fixture.ts` 双方都删） |
+| 三方合并（182 个 branch-M） | **61 clean / 121 冲突 / 401 块（默认）/ 486 块（`--diff3`）** |
+| 对旧 main `745274e7` 同口径 | 76 clean / 106 冲突 / 331 块（391 `--diff3`） |
+| 36 提交的影响 | clean→conflict **15**、conflict→clean 0；+70 块（默认）/+95（`--diff3`）；主因 `28e2eba8` 注释压缩 |
+| Top 热点（默认/`--diff3`） | `PluginDialog.tsx` 30/47、`AppDelegate.swift` 28/46、`plugin-sync.ts` 18/31、`main.ts` 16/19、`BridgeClientEdgeIntegrationTests.swift` 15/16、`shell-core.ts` 8/15、`gateway/index.ts` 9/11、`gateway/routes.ts` 8/11、`updater.ts` 7/8、`renderer/shell.ts` 6/6、`registry.json` 9/6、`STATUS.md` 8/10、`bridge-shim.js` 8/8 |
+
+> 旧计划里的「187 双方都改 / 62 干净 / 100 冲突 / 374 块」：**187 实为分支侧 M 计数**（246−36A−23D，非交集）；62/100/374 在旧基线下按任何口径都不可复现（同口径为 76/106/391）。8 个旧热点数可 8/8 复现。旧聚合数字一律作废。
+
+### 1.8.2 主题判定表（新 main 对旧分支工作）
+
+| 主题 | 分支侧规模 | 新 main 对应面 | 判定 |
+|---|---|---|---|
+| dsh 0.1.6 pin/runtime | 193 文件 +11698/−27699 | 仍 `fb2c4b9e`；目标 rc.2 | **放弃**（只作学习项） |
+| 写面退役（C 分层） | ~29 文件 +618/−14164（另 settings-connections 511/−3872） | 写面仍在且被重构改过 | 仅分支有 → **保留**（按新 main 重枚举删除清单） |
+| 会话流健康臂 | 5 文件 +171/−41（merge 残留 + FIXME） | `dsh-stream-state` + `Session.resync()` 臂 + G43 | **main 已覆盖**（只留 pin-aware 测试形态） |
+| fork 补丁面（connection/web/api-gateway） | 16 / 4 / 4 文件 | 三 fork 已注册（G43） | **main 权威**；在 rc.2 上重新 replay |
+| Swift 崩溃诊断 | 565 行 + 28 用例 | 0 命中 | 仅分支有 → **保留** |
+| Swift 启动恢复 | AppDelegate +670、`startup-error.ts` | `fatalAlertShown`/`SidecarStartupFailure` | 双方各有 → **合并**（46 块） |
+| 窗口形态/几何 | MainWindowController +58、`titleBarOverlay` | 0 命中（两边都仍 786） | 仅分支有 → **保留**（772 待落） |
+| 更新链 P0-1 | updater 8 块 + 4 新文件 | `restartWatchdog` + availability | 双方各有 → **合并** |
+| 本地化/主题/席位 | `shell-locale.ts`、`native-theme-set`、两席位 | Swift `NativeText`/`ShellPageFacts` 已有；席位 0 | Electron 腿保留 / Swift 腿放弃；席位按 0.1.7 重建 |
+| macOS x64 | revert 提交 | 已 arm64-only | **main 已覆盖 → 放弃** |
+| python 载荷 | 脚本+锁+测试 | 无；`release.yml` 重写 +781/−263 | 仅分支有 → **在新 release.yml 重落** |
+| 设置桥 | 1 文件 +7/−1 | 63 文件完整桥 + design 05 权威 | **main 已覆盖** |
+| open-in | 裁决文档（代码未落） | seed/open-in 重写；官方行仍 covered | 双方各有 → **需落代码** |
+| 归档 design24 | 1 文件 +13/−13（unarchive 发现） | design 24 重写 + 包重写 | main 覆盖结构；分支发现待 rc.2 复核 |
+| registry/roster | 6 文件 +261/−57 | 6 条目 + C16；`registry.mjs` 仍 named⇒seed | 双方各有 → **合并** |
+| 通知/goal/桥健康 | 0 | 6+ 提交、design 19 +739 | **main 已覆盖** |
+| gui-acceptance W-4a | 3 文件 +59/−2 | 仍 `viewPrefsDelta` | 仅分支有 → **保留**（小改） |
+| 文档 R1–R5 | 32 文件 +3042/−336 | 45 文件 +3322/−1209（16 份 design 双改） | 双方各有 → **逐条重判**（3-way docs 18 冲突 / 64 块） |
+
+### 1.8.3 待重新决策清单（需要你裁决）
+
+| # | 事项 | 选项 | 建议 |
+|---|---|---|---|
+| D1 | 写面退役在新 main 上的落法 | (a) 升级完成后独立提交、按新 main 重新枚举删除清单 + 计数锁复核；(b) 与升级同批 | (a)，与 §2.2-A 既有裁决一致 |
+| D2 | open-in「官方行生效 + 严格超集」实现时机 | (a) 随本次升级落；(b) 独立 PR 后置 | (a)，否则裁决悬空（依赖新 pin 的 `OpenPathAction`） |
+| D3 | 窗口高度 1280×772 落地 | (a) 升级中落 + 实机核验；(b) 等实机后定（暂 786） | (a) |
+| D4 | 会话流健康臂权威 | (a) 以 main 的 `Session.resync()` 臂为唯一实现，分支 probe 放弃，pin-aware 测试思路并入 bump 重 derive；(b) 保留分支 fail-closed 作第二保险 | (a)，两套臂会打架 |
+| D5 | registry layout 条目 | (a) 收敛到 main 的 `seed.dsh-chamber-client-ui-layout`，只新增 sidebar fork；(b) 保留分支 fork 条目（需撤 main seed） | (a) |
+| D6 | C11 opt-in 白名单 | (a) 机制取分支版、最终名单 bump 后按 rc.2 锁重新 derive；(b) 其它 | (a) |
+| D7 | 旧分支 0.1.6 pin/runtime 与 fork 补丁面 | (a) 全放弃、只作学习参考，fork 在 rc.2 上重新 replay；(b) 部分保留 | (a) |
+| D8 | 是否现在把 §1.8.2 判定表转成新的取件表（重写 §7/§12） | (a) 现在重写；(b) 开工时再重写 | (a) |
+
+### 1.8.4 无需裁决的机械修复（可直接执行）
+
+1. **刷新派生运行时树**（先 `pnpm install` 再 bundle）：当前 gitignored 的 `packages/desktop/vendor/dsh/**` 仍是旧分支的 0.1.6-alpha.2，导致 `verify-upstream-touchpoints` **C11 硬失败**（C10 警告）；直接跑 `bundle:dsh --force` 会因 `@dsh-chamber/dsh-runtime/dist` 缺失而 `ERR_MODULE_NOT_FOUND`——重置后须先 `pnpm install`（必要时构建 `@dsh-chamber/dsh-runtime`）再 bundle，刷新后回 0.1.5-rc.2。
+2. 清理未跟踪 `.audit/` 与旧构建产物，使 `git status` 只剩 submodule dirty。
+3. `docs/progress/deviations.md` 头部 open 枚举漏 **G43**（实际 open 11 条）——补一条。
+4. `AGENTS.md` 仍写 gates C1–C15（现为 C1–C16）——补 C16。
+5. `todo/refactor-plan.md` 的 §4/§6 数字滞后（类型环 allowance 实为 0、full 实为 61、God 实为 25,392）——属 main 侧文档，是否顺手修由你定。
+6. 计划自身：full 59→**61**、新门禁归属（只有 import-cycles/file-budgets 是 9-24 新增）、§7/§12 旧冲突数字替换。
 
 ## 2. 决策现状：分支既有裁决（沿用）+ 2026-12 四项新增裁决（无待决策项）
 
@@ -224,9 +291,9 @@ node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild
 
 ## 7. 阶段 4 · 把旧分支快照（`backup/v016-alpha1-pre-reset`，0.1.6 时代）的修改与决策移植进来
 
-下表每一项先看 **main 现状**，再决定「复用 main / 移植旧分支快照 / 合并 / 放弃」。冲突数据来自对 `origin/main`（`38f970f3`）、merge-base（`82df4c47`）、本分支做的三方 `git merge-file` 实测（只读）：**两边都改的 187 文件里 62 个文本干净、100 个冲突（374 块）**；最重的是 `AppDelegate.swift`(46)、`PluginDialog.tsx`(27)、`shell-core.ts`(18)、`plugin-sync.ts`(18)、`main.ts`(16)、`gateway/src/routes.ts`(11)、`gateway/src/index.ts`(10)、`registry.test.mjs`(8)。（原 §12.4/§12.5 的清单已随取件表移除）。
+下表每一项先看 **main 现状**，再决定「复用 main / 移植旧分支快照 / 合并 / 放弃」。冲突数据以 §1.8.1 的新基线实测为准（MB `82df4c47`；ours = 旧分支 tag；theirs = `267272b0`）：**双方触碰 195 / 严格 M∩M 169；182 个可三方合并里 61 干净、121 冲突（默认 401 块、`--diff3` 486 块）**；最重的是 `AppDelegate.swift`(46)、`PluginDialog.tsx`(47)、`plugin-sync.ts`(31)、`main.ts`(19)、`shell-core.ts`(15)、`gateway/src/routes.ts`(11)、`gateway/src/index.ts`(11)、`registry.test.mjs`(8)。（原 §12.4/§12.5 的清单已随取件表移除）。
 
-**关键好消息**：`packages/desktop/main.ts`、`preload.cts`、`updater.ts`、`update-headless.ts`、`AppUpdater.swift`、`FrameCodec.swift`、`ShellLog.swift` 的三方合并**全部 CLEAN**（口径 = 相对**旧 main `695f67c8`** 的三方预演；新 main `745274e7` 下这些文件已是冲突面，见 §1.5/§7 的 187/100/374 统计）。
+**关键好消息**：`packages/desktop/main.ts`、`preload.cts`、`updater.ts`、`update-headless.ts`、`AppUpdater.swift`、`FrameCodec.swift`、`ShellLog.swift` 的三方合并**全部 CLEAN**（口径 = 相对**旧 main `695f67c8`** 的三方预演；新 main `267272b0` 下这些文件多数已进入冲突面——`main.ts` 16/19、`updater.ts` 7/8、`shell-core.ts` 8/15 等，见 §1.8.1）。
 
 ### 7.1 P0 · 零冲突纯增益（先做）
 
@@ -322,7 +389,7 @@ npm view @deepseek-ai/dsh@0.1.7-rc.2 dependencies
 
 - 上游 release：<https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.7-rc.2>
 - 分支持久台账：本仓库提交 `72ee40ce`（`docs/progress/todo/upstream-0.1.7-upgrade.md` 原文，含 T1–T11 增量表、0.1.6→0.1.7 研究、重放清单）。
-- 分支增量与 main 的整合裁决来自对 `695f67c8` / merge-base `82df4c47` / `72ee40ce` 的三方只读分析（旧 main `695f67c8` 口径：43 干净 / 25 冲突；新 main `745274e7` 下为 **62 干净 / 100 冲突 / 374 块**，见 §1.5/§7）。
+- 分支增量与 main 的整合裁决来自对 `695f67c8` / merge-base `82df4c47` / `72ee40ce` 的三方只读分析（旧 main `695f67c8` 口径：43 干净 / 25 冲突；新 main `267272b0` 下为 **61 干净 / 121 冲突 / 486 块（`--diff3`，默认 401）**，见 §1.8.1）。
 - 直接跳跃 preflight 来自 `/tmp` 影子 ROOT（`harness.commit=fb2c4b9e`），**未改动任何 tracked 文件**。
 
 ### 11.3 不确定项
@@ -1264,7 +1331,7 @@ main 在 2026-12 前进 **88 提交 / 1390 文件**（`695f67c8` → `745274e7`�
 1. **代码落点**：共享客户端代码 → `dsh-chamber-client-core`；host↔client 契约 → `dsh-chamber-wire`；会话/流状态算法 → `dsh-stream-state`（阈值只写 `tables.json`）；不要再写 `sidebar/src/shared/`（该目录在 main 已不存在）。
 2. **边界门**：生产源禁止跨包相对 import（含 type import）；`exports` 面显式白名单、不许 `*`；vendor 深引只能走 `registry.json` 的 `vendorSourceConsumers`（C16）登记。
 3. **registry**：判据 C1–**C16**；`chamberNamedForks` 在 main 已含 `packages/dsh-chamber-client-ui-layout`（登记为 `seed.dsh-chamber-client-ui-layout`）——**不要**再新增 `fork.` 版 layout 条目，改为收敛到 main 的 seed 条目；只有 `packages/dsh-chamber-client-ui-sidebar` 需要新登记。
-4. **冲突面**：全仓「两边都改」187（62 干净 / 100 冲突 / 374 块），原取件表的 70 条路径里 25 条冲突（136 块；原表已移除）；详见本文件 §1.5（原 §12.4/§12.5 清单已移除）。
+4. **冲突面**：分支侧 M 187（对旧 main 76 干净 / 106 冲突 / 391 块；对 **新 main `267272b0`**：**61 干净 / 121 冲突 / 486 块**，§1.8.1），原取件表的 70 条路径里 25 条冲突（136 块；原表已移除）；详见本文件 §1.5（原 §12.4/§12.5 清单已移除）。
 5. **main 删除的文件/路径 = 重定位，不加回**：`82df4c47..origin/main` 删了 71 个文件，与分支改动的交集 5 个（4 个测试 + 双方都删的 fixture）——按 R2 把我们的改动搬到（原 §12.5 清单已移除） main 的替代落点（`chamber-lock.test.ts`、`plugin-sync.test.ts`、`test/transport/*`），或只保留「删除写面断言」这一删除动作本身；引用 `sidebar/src/shared/...` 的 10 个文件在合并时保留 main 的 `dsh-chamber-client-core` 引用。
 
 #### 22.9.3 本方案路线图的修订
