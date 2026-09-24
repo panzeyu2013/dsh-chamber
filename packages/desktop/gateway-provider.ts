@@ -1080,8 +1080,6 @@ export async function verifyGatewayPasswordSession(
  * the only dsh transport. `kind` is the target dimension of a spec; provider
  * lookup is transport-keyed only (main.ts `providers: { http: … }`). */
 export const gatewayProvider: TransportProvider = {
-  kind: 'gateway',
-
   validateSpec(input: unknown): TransportInstanceSpec | null {
     if (!isValidGatewayInstance(input)) return null
     const record = input as unknown as Record<string, unknown>

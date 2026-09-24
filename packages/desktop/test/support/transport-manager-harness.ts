@@ -183,7 +183,6 @@ export async function waitFor(predicate: () => boolean, timeoutMs = 3000, what =
 
 /** A tunnel provider whose buildStartEnv injects an askpass-style env. */
 export const fakeEnvProvider: TransportProvider = {
-  kind: 'ssh',
   validateSpec(input: unknown): TransportInstanceSpec | null {
     if (input === null || typeof input !== 'object') return null
     const record = input as Record<string, unknown>

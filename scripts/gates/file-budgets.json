@@ -33,13 +33,13 @@
     },
     {
       "path": "packages/desktop/gateway-provider.ts",
-      "lines": 1985,
+      "lines": 1983,
       "target": 1400,
       "note": "gateway transport provider"
     },
     {
       "path": "packages/desktop/ssh-provider.ts",
-      "lines": 1846,
+      "lines": 1845,
       "target": 1500,
       "note": "ssh transport provider"
     },
@@ -57,7 +57,7 @@
     },
     {
       "path": "packages/desktop/transport-manager.ts",
-      "lines": 1809,
+      "lines": 1808,
       "target": 1400,
       "note": "transport lifecycle"
     },

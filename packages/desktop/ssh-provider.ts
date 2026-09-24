@@ -1164,7 +1164,6 @@ export function purgeSshAuth(id: string): void {
 
 /** The ssh provider: validate → spawn args → stderr classification → exec. */
 export const sshProvider: TransportProvider = {
-  kind: 'dsh',
   redactOutput: redactSshStderr,
 
   validateSpec(input: unknown): TransportInstanceSpec | null {

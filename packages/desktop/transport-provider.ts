@@ -351,13 +351,11 @@ export interface TransportProvider {
   /** The registry key this provider declares (normally the transport method,
    * or a test/future key). The runtime resolves the registry by
    * `spec.transport`, with a legacy kind-keyed fallback. */
-  kind: TransportKind
   /**
    * Whitelist-gated spec validation (option-injection safe). Null = reject
    * the entry (dropped loudly by the registry, never silently half-kept).
    * A transport-selected provider may serve multiple shipped target kinds
-   * (ssh and http both serve dsh|gateway); `kind` is only the legacy provider
-   * lookup key when an old spec has no explicit transport. The provider
+   * (ssh serves dsh|gateway; http serves gateway only on the 0.1.2 line). The provider
    * must preserve/whitelist the target kind and normalize its `transport`
    * mechanism, and
    * `insecureHttp`; a spec whose kind/transport the provider cannot serve

@@ -485,9 +485,8 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
   const runExecTimeoutMs = options.runExecTimeoutMs ?? 120_000
   const readyVerifyIntervalMs = options.readyVerifyIntervalMs ?? READY_VERIFY_INTERVAL_MS
   const readyVerifyMinIntervalMs = options.readyVerifyMinIntervalMs ?? READY_VERIFY_MIN_INTERVAL_MS
-  // The registry is keyed by TransportKind; resolveProvider looks up BOTH the
-  // spec's transport ('ssh'|'http') and its legacy kind key — widen for the
-  // transport-keyed lookup (a TransportMethod is a string, not a TransportKind).
+  // The runtime registry is TRANSPORT-keyed ('ssh'|'http'); the key type is a
+  // plain string (a TransportMethod is not a TransportKind).
   const providersByKey = providers as Partial<Record<string, TransportProvider>> | undefined
   // Explicit annotation: `spawnFn ?? default` would otherwise infer a UNION
   // of call signatures (SpawnedProcess | ChildProcess), making `child.on`

@@ -735,7 +735,6 @@ function directSpec(record: Record<string, unknown>, kind: string): TransportIns
 /** A process-less provider: probe-driven ready, no child, optional dispose/exec hooks. */
 function endpointProvider(kind: string, events: string[] = []): TransportProvider {
   return {
-    kind,
     validateSpec(input: unknown): TransportInstanceSpec | null {
       if (input === null || typeof input !== 'object') return null
       const record = input as Record<string, unknown>
