@@ -3,7 +3,7 @@
  *
  */
 import { GitWorktreeError } from './core-errors.ts'
-import { GIT_DIR_POINTER_MAX_BYTES } from './core-parse.ts'
+import { GIT_DIR_POINTER_MAX_BYTES } from './core-constants.ts'
 import type { CreateInput, PreviewCreateInput, RemoveInput, RollbackCreateInput, WorktreeFileSystem } from './core-types.ts'
 import { createHash } from 'node:crypto'
 import { access, lstat, mkdir, open, realpath } from 'node:fs/promises'

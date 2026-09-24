@@ -5,6 +5,10 @@
  * stays stable.
  */
 
+/** Bounded read for the worktree `.git` pointer file (gitdir lines are tiny;
+ *  a hostile or corrupt pointer must never be read whole into memory). */
+export const GIT_DIR_POINTER_MAX_BYTES = 4096
+
 export const READ_TIMEOUT_MS = 10_000
 export const MUTATION_TIMEOUT_MS = 30_000
 export const READ_OUTPUT_CAP = 1024 * 1024

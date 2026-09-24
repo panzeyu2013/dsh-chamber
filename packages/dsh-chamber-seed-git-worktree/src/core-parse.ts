@@ -2,7 +2,7 @@
  * core-parse.ts — Git output parsing, attention probes and DSH_HOME resolution.
  *
  */
-import { MAX_PATH_LENGTH } from './core-constants.ts'
+import { GIT_DIR_POINTER_MAX_BYTES, MAX_PATH_LENGTH } from './core-constants.ts'
 import { GitWorktreeError } from './core-errors.ts'
 import type { RawWorktree } from './core-internals.ts'
 import type { GitAttentionReason, WorktreeFileSystem } from './core-types.ts'
@@ -89,9 +89,6 @@ export function parseWorktreePorcelain(output: string, delimiter: '\0' | '\n' = 
 }
 
 export const ZERO_HEAD = /^0+$/u
-
-/** Bounded read for the worktree `.git` pointer; gitdir lines are tiny. */
-export const GIT_DIR_POINTER_MAX_BYTES = 4096
 
 /** git-dir state files that mark an in-progress Git operation (best-effort). */
 export const ATTENTION_PROBES: ReadonlyArray<{ readonly name: string; readonly reason: GitAttentionReason }> = [
