@@ -48,7 +48,7 @@
 | A8 | Electron 从未 setApplicationMenu（Cmd+C/V 靠默认菜单） | §5 E3 现状列改正，Swift 结论不变（W2 必修） |
 | A9 | §6.1/§6.4 验证项编号 E1/E2 与 §5 边沿表撞车 | 更名 **U1**（userData 实根）/ **S1**（safeStorage 判别单测） |
 | A10 | E8 对话框归属错引 design 24；desktop_pick_directory 已不存在 | E8 = 插件源 folder\|.tgz 一体化 picker（design 21 §10 ⑧ / 13 §5.8）；**删除无消费方的 pickDirectory()** |
-| A13 | userData 清单漏 ssh-plugin-journal 与 *.corrupt/.unbound-* | §6.1 补全 |
+| A13 | userData 清单漏 ssh-plugin-journal 与 *.corrupt | §6.1 补全 |
 | B1/B13 | 资源/打包路径 seam 缺失；sidecar 打包双路径解析未写 | §4.1 HostEdges 补 `resolveResource`/`isPackaged` 能力位（≈15 处直拼点 P1 参数化）；§3.2 补 sidecar 打包布局同构（tsc 产物 + dist/web + host 包 + node/pnpm） |
 | B2 | §6.3 互斥锁设计缺陷（pidfile stale 模式正是 STATUS 判死刑的；未提 Electron 侧同落地；二次 flock 自锁） | §6.3 改 **flock(LOCK_EX\|LOCK_NB)** + 双 flavor 同实现 + fd 常驻 + 复验不二次 flock |
 | B3 | HostEdges 缺渲染器可用性门 | §4.1 补 `webViewLoading()`/`webViewContentAlive()`（或事件状态机进 core）；就绪握手"返回 false → 渲染端有界重试"语义保留 |
@@ -703,7 +703,7 @@ zh-Hant 显示；简繁混排是否可接受需实机判断，若要收口须先
 - 直拼点全集（P1 参数化收口）：chamber-settings.json；runtime 基目录 = userData 本体（dsh-runtime 树在
   <userData>/dsh-runtime/…）；stateDir = userData/state（localDshHome=state/dsh-home）；ssh-plugin-journal.json；
   ssh-passwords.json；gateway-secrets.json；audit-log.jsonl；ssh-instances.json（引用前 grep 现取）。
-- 旧版 Electron 保留物 `*.corrupt` / `*.unbound-*`（A13）在 Swift 首启前决定处置（预期：保留禁用，不主动清理）。
+- 旧版 Electron 保留物 `*.corrupt`（A13）在 Swift 首启前决定处置（预期：保留禁用，不主动清理）。
 - 验证项 **U1**（实机）：Swift 计算的根与 Electron 打包实根一致（编号避开 §5 E 表，A9）。**实施现状**：`PackagedLayout`
   已按 `isPackaged` 解析——装配态 userData 与 Electron `app.getPath('userData')` 同根，node/sidecar/vendor-dsh/
   web-dist 全 bundle-relative；`DSH_CHAMBER_SHELL_*` 仍优先，dev 态保持 `dsh-chamber-dev` 隔离。**代码侧已闭合**

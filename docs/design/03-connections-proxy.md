@@ -123,10 +123,10 @@
   host+user+sshPort；元数据与三凭据由主进程单次补偿事务保存（17 §9.1）。两类 durable mirror 把 binding
   与 secret 同次原子写，读取/注入时复验当前 registry；因此 secret→registry 两次 fsync 间崩溃
   只会隐藏新值，不会把它发给旧目标。同 id 新增/进入/离开/retarget 留空也会强制 clear/rebind，防止
-  半事务 secret 复活；非空 legacy 无 binding 文件 fail closed 并保留唯一 `.unbound-*` 恢复副本、要求重录。
-- **迁移规则（17 §2.2/§9.1）**：旧 `kind:'ssh'` 条目载入时映射为
-  `{kind:'dsh', transport:'ssh'}`；旧 `kind:'gateway'` 条目映射为 `{transport:'http'}`；
-  source id 的 `ssh-` 前缀保留 legacy 兼容映射（deep link 可用）。
+  半事务 secret 复活；非当前 schema 的凭据文件（旧 v1/v2 或无版本）fail closed、保留为 `*.corrupt` 并要求重录（无就地迁移）。
+- **输入契约（17 §2.2/§9.1）**：registry 载入、保存 IPC 与 provider 选择都要求条目自带
+  当前 `kind`+`transport`；pre-v2 形状不再就地映射（旧行在载入时响亮丢弃）；
+  source id 的 `ssh-` 前缀仍保留 legacy 兼容映射（deep link 可用）。
 
 - **生命周期（transport=ssh）**：SSH 隧道（`ssh -N [-p <sshPort>] -L
   <localPort>:127.0.0.1:<remotePort> <user@host>`，sshPort null 时不传

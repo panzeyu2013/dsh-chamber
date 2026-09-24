@@ -26,7 +26,7 @@
   - 写入期终止失败后闩锁**只**能靠重启应用再证明（design 02 §3.4）：`onWriterQuiescenceUnknown` 无扫描证据可依（记录可能已删），对本平面粘滞；触发 = 受管进程组信号被拒或子进程终止超时。
   - 实例写者静默门拦住自动启动恢复路径（同上验收）：shell被 `SIGKILL`/孤儿dsh占DSH_HOME如实拒绝（`409 connection_busy`）但「启动/停止」点不动（状态停 `starting`、端口0），恢复 = 优雅重启应用；仅硬杀后出现。
   - 降级提示目检/实机腿（05 §4）：结构性缺口下三处座位一致性——横幅 ~5s出现/自愈后以「若仍然如此…」回来、侧栏行不重复播报、连接页卡片不同时出现「正常/能力受限」、提示非阻断与 `role="status"`、与body portal叠压；仅单测 + 源码锁，未真机判（`gui-acceptance-checklist.md` §3）。
-  - **切源后侧栏座席/字标与设置导航齿轮空白**（首报场景：切换来源后）：根因、修复契约、被拒方案与残余边界见 design 05 §4.2；回归锁 `packages/renderer/test/svg-resource/`（SVG 自足面）与 `packages/dsh-chamber-client-ui-sidebar/test/visual-lock/`（入场动画面）。（W8/R15③ 收窄部署面：`packages/dsh-chamber-client-ui-mobile/src/client/index.ts` 已装同一 scoper（import 自 renderer 源，不复制），committed `lib/client.js` 由 `packages/dsh-chamber-client-ui-mobile/scripts/artifact-scope-marker.test.mjs` 守卫（缺标记即红，含负控），`packages/desktop/dist/web/assets/*.js` 由 build:renderer 之后的 `scripts/assert-scoper-artifact.mjs` 在 CI 断言——仍待真机判据。**开放项**：① 真机验收未做——需在**重新构建的产物**上重放触发序列（切来源数次 + 开设置面板，rail↔wide、字标/座席一并看）确认不再空白；判据与命令见 design 05 §4.2（`node scripts/dev/svg-resource-probe.mjs --expect-artifact`，人工验收工具、不进 CI、需控制面在跑）；② gateway/mobile 独立部署的官方壳未覆盖——chamber 侧可选收口是把 scoper 装进既有打包插件 `packages/dsh-chamber-client-ui-mobile`（需范围决策），否则等上游/runtime 侧修。
+  - **切源后侧栏座席/字标与设置导航齿轮空白**（首报场景：切换来源后）：根因、修复契约、被拒方案与残余边界见 design 05 §4.2；回归锁 `packages/renderer/test/svg-resource/`（SVG 自足面）与 `packages/dsh-chamber-client-ui-sidebar/test/visual-lock/`（入场动画面）。（W8/R15③ 收窄部署面：`packages/dsh-chamber-client-ui-mobile/src/client/index.ts` 已装同一 scoper（import 自 renderer 源，不复制），committed `lib/client.js` 由 `packages/dsh-chamber-client-ui-mobile/scripts/artifact-scope-marker.test.mjs` 守卫（缺标记即红，含负控），`packages/desktop/dist/web/assets/*.js` 由 build:renderer 之后的 `packages/dsh-chamber-client-ui-mobile/scripts/assert-scoper-artifact.mjs` 在 CI 断言——仍待真机判据。**开放项**：① 真机验收未做——需在**重新构建的产物**上重放触发序列（切来源数次 + 开设置面板，rail↔wide、字标/座席一并看）确认不再空白；判据与命令见 design 05 §4.2（`node scripts/dev/svg-resource-probe.mjs --expect-artifact`，人工验收工具、不进 CI、需控制面在跑）；② gateway/mobile 独立部署的官方壳未覆盖——chamber 侧可选收口是把 scoper 装进既有打包插件 `packages/dsh-chamber-client-ui-mobile`（需范围决策），否则等上游/runtime 侧修。
   - boot死区收敛实机门（05 §4.1）：idle远端点其会话 → 遮罩立即给「连接」+ 切换行且不启动boot（隐藏满宽限后回收；编辑中来源不回收）；`error`、托管 `stopped`/`restart-exhausted` → 就绪门1.5s宽限后判不可服务（不再等满60s），`degraded`（重连在途）不判死、预算内等，两者都能退回本地；挂死boot → 超过10s反馈窗后遮罩给重试/连接/切换 + ⌘R；502（隧道通、远端端口死）→ 非阻断 `.boot-gap` 横幅 + 每ready世代一次自愈。Swift打包态复测遮挡/最小化仍收敛（与S-10同批）。见design 05 §4.1；纯函数/接线锁 `packages/renderer/src/source-readiness.ts`、`packages/renderer/test/lifecycle/source-readiness.test.ts`，通道失败上浮 `packages/renderer/test/lifecycle/host-graph.test.ts`。
 
   - idle来源点会话排队到68s才失败（05 §4.1推迟boot的代价）：`open` 在 `QUEUED_OPEN_TIMEOUT_MS`(68s) 内等不到壳即失败；窗口内点「连接」可在settle后补发，但无"连接成功后自动打开"这条腿。候选收口 = App记下推迟open意图、来源ready时重放（须与既有pending-open队列语义对齐）。
@@ -125,7 +125,7 @@
     ④ 子代理会话（`origin==='subagent'`）不在事实通道 ⇒ 该臂看不见（失效判据 = 该行进入事实通道，或裁决为接受的盲区）；
     ⑤ 隐藏期watchdog不tick；恢复后首个补偿tick按累计running时长判定（隐藏时长计入 `since`，非「重新起算120s」；若要后者须显式重置时段计时，当前不做）；
     ⑥ 阈值（L1 门槛 60s / 等回执 190s / L2 退避 300s / L3 120s）与 新增的 N=2 确认、
-    写回链**未经实机校准**（60s 门槛的语义已由 `test/lifecycle/session-liveness.test.ts` 钉住，但
+    写回链**未经实机校准**（60s 门槛的语义已由 `packages/dsh-chamber-client-ui-sidebar/test/session-state/session-authority-escalation.test.ts` 钉住，但
     真机抖动/慢宿主下的误报率未测）；L1 配额为滚动窗口（10 分钟 ≤3 次）；
     ⑦ 上游语义依赖（refresh 回灌 / emit 无重传 / 失败也 resolve / `mergeOrderedBaseline` 缺席即移除，
     以及 `ClientSessions.handleSessionStatus` 公开且一次写 summaries、物化 Session 与 catalog
@@ -292,6 +292,27 @@
   ⑨ `measure-ui` 尚无 `switchFrameMs`（该字段只在 `switch-frame-probe`），也没有同环境 A/B 基线落入 `perf/data`。
 
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
+
+- **结构性重构与清理（未闭合；计划与实测证据见 [todo/refactor-plan.md](todo/refactor-plan.md)）**：
+  核心指标 = 消除补丁式修改；行数删减经用户裁决**不强制**（仅参考，原 −9,000 指标作废）。
+  机械化三门已落地：`verify:import-cycles`（值环 0；类型环仅 1 条显式 allowance =
+  desktop shell-core ⇄ shell-ipc-*，须先拆 shell-core）、`verify:file-budgets`（15 个 God 文件
+  只降不升）、`verify:no-dead-exports`（零消费者导出即红，含 desktop/renderer 的 entryless 面）。
+  顶层 11 对 state/ref 镜像**全部收口**（roster/facts/echo/remotes/mounted/completed/view
+  各为单源 store + 回归锁）；第 16 轮独立审计补掉 `watchdogRuntimeFactsRef`（第三个
+  runtimeFacts 权威）并加固了 `verify-file-budgets` 的 schema/负控与 `use-deadline` 的
+  stale/null 语义。旧版本兼容清理（第 18 轮，用户裁决「不保留」）：ssh 凭据 v1/v2 迁移、
+  gateway-tokens v1/v2 + 旧兄弟文件迁移、catalog schema-less v1 迁移、json-store 的就地迁移机件
+  （`migrated`/`backupDoc`）、`foldLegacyHostInserts`、`canonicalizeTransportInstanceInput`
+  的 pre-v2 输入映射与 `resolveProvider` 的 legacy kind 键全部删除——非当前 schema 的
+  凭据/catalog 文件 fail closed（保留 `*.corrupt`、响亮、要求重录），旧 `gateway-tokens.json`
+  不再读取，registry 载入/保存要求条目自带当前 `kind`+`transport`（旧行响亮丢弃）。
+  **未收口**：① renderer 外三处同类镜像（`sidebar-root-projection` / `InstanceView` /
+  `DshRuntimeSection`）；② `ssh-<id>`/`ssh:<id>` 别名（design 17 §2.2 深链契约）与旧
+  dsh/gateway 上游版本探测——经用户裁决明确保留。
+  跨包逐字重复复核口径见计划 §6.1（31 组多行体，24 组为 3–5 行守卫、≥8 行 4 组全为
+  win-probes parity 锁；既有约束下可删 0 组）。
+
 
 - **测试运行器并发上限（未闭合）**：`run-checks tests` 的全局文件池默认 `min(8, 核数)`——同窗口实测 c12 文件总工作 217s vs c8 141s（每文件膨胀），吞吐收益递减，默认不动。并发暴露的两处**测试自身缺陷已根治**：`manager-api` 的「占满候选端口」改为整段区间重试；`sidecar-stdio.test.ts` 的固定端口（17910/17921/17922/17924/17926/17931）全部改为 `--port 0`（OS 分配 + ready 帧回传真实端口）——固定端口是跨进程共享资源，并发下 EADDRINUSE 会在 ready 前 exit 70（4 路同端口必现、6 路并行套件可复现；修复后 24 轮并行 0 失败）。仍未定位：`carrier-assembly.test.ts` 的 c16 零汇总。失效判据 = c12/c16 连续跑绿（或端口/资源隔离落地）。
 

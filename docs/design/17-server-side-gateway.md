@@ -967,9 +967,8 @@ rename 到唯一 `.stale-<pid>-<hex>` 名（仅一个竞争者成功，其余见
   历史 v2 fail closed 并保留 `.corrupt`；plaintext 文件在 keychain 后来可用时立即原子升级，成功后才
   投影 `safeStorage`，失败则继续诚实显示明文；
 - token/password binding 与各自值同一次原子写；读取/注入必须匹配当前 registry 的 gateway domain。
-  当前配置路径内结构合法的 v1、带合法 storage 的非空 v2 无可信 target binding，启动时移动为唯一
-  `.unbound-<time>-<pid>[-n]` 恢复文件、禁用并要求显式重录；旁路旧 `gateway-tokens.json` 非空 v1
-  保留原路径并禁用，绝不从当前 registry 猜绑定；
+  非当前 schemaVersion 的文件（旧 v1/v2 或缺失版本）一律 fail closed：保留为 `.corrupt`、禁用并要求显式
+  重录（无就地迁移）；旧 `gateway-tokens.json` 兄弟文件不再读取/迁移，残留原样保留；
 - 载入 gateway/SSH 凭据镜像先 no-follow + regular-file + inode 校验，以已打开 fd `fchmod 0600`
   后才读 secret bytes；宽权限旧文件不再原样使用，symlink 不跟随；
 - 其余纪律不变：原子写、corrupt 响亮失败（保留 `.corrupt`）、删除实例/显式清除即删；凭据仅表单
