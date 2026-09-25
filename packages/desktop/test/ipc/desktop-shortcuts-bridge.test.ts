@@ -18,7 +18,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -36,6 +36,18 @@ import type {
 } from '../../shortcuts-bridge.ts'
 
 const vendorTree = fileURLToPath(new URL('../../vendor/dsh', import.meta.url))
+
+/**
+ * 运行树物化探针：CI 的 test 腿与 checkout-only 环境不跑 bundle:dsh，故真协议行为锁在
+ * 缺树时按仓库惯例**响亮跳过**（本地物化树仍全跑；跳过原因带修复命令）。
+ */
+const vendorTreeReady = existsSync(join(vendorTree, 'node_modules', '@deepseek-ai', 'dsh-client-shortcuts', 'package.json'))
+const vendorTreeSkip = vendorTreeReady ? false : 'vendor/dsh 运行时树未物化（需 pnpm run bundle:dsh）——真协议行为锁跳过'
+
+/** 需要真协议的用例统一入口（⑥ 是纯函数锁，不带 skip）。 */
+function treeTest(name: string, fn: () => Promise<void> | void): void {
+  test(name, { skip: vendorTreeSkip }, fn)
+}
 
 function memoryStorage(): ShortcutStorage & { writes: string[] } {
   const writes: string[] = []
@@ -134,7 +146,7 @@ const WINDOWS = [
   { id: 'test.open', defaults: { 'desktop:windows': { code: 'KeyK', modifiers: ['primary'] } } },
 ]
 
-test('① 活动 runtime 树的 protocol 可加载且形状完整', async () => {
+treeTest('① 活动 runtime 树的 protocol 可加载且形状完整', async () => {
   const protocol = await loadDesktopShortcutProtocol([vendorTree])
   assert.ok(protocol !== null)
   assert.equal(typeof protocol.ShortcutPersistence, 'function')
@@ -144,7 +156,7 @@ test('① 活动 runtime 树的 protocol 可加载且形状完整', async () => 
   assert.equal(typeof protocol.bindingKey, 'function')
 })
 
-test('② get() 发出已接受 revision；命中组合投递归一化 input，未命中不拦截', async () => {
+treeTest('② get() 发出已接受 revision；命中组合投递归一化 input，未命中不拦截', async () => {
   const { bridge, pushes } = await makeBridge()
   const snapshot = await bridge.get(SINGLE)
   assert.equal(snapshot.status, 'ready')
@@ -170,7 +182,7 @@ test('② get() 发出已接受 revision；命中组合投递归一化 input，�
   assert.equal(miss.ignoreMenuShortcuts, false)
 })
 
-test('③ 两键 chord：第二键命中 pair 时按排序 code/secondCode 投递', async () => {
+treeTest('③ 两键 chord：第二键命中 pair 时按排序 code/secondCode 投递', async () => {
   const { bridge } = await makeBridge()
   await bridge.get(CHORD)
   const first = bridge.handleKeyEvent(keyEvent({ meta: true }))
@@ -183,7 +195,7 @@ test('③ 两键 chord：第二键命中 pair 时按排序 code/secondCode 投�
   assert.equal(second.preventDefault, true)
 })
 
-test('④ edit() 落盘并换代；旧 revision 下的命中在新目录中失效', async () => {
+treeTest('④ edit() 落盘并换代；旧 revision 下的命中在新目录中失效', async () => {
   const { bridge, storage } = await makeBridge()
   const snapshot = await bridge.get(SINGLE)
   const saved = await bridge.edit({ type: 'set', id: 'test.open', binding: null }, snapshot.revision)
@@ -196,7 +208,7 @@ test('④ edit() 落盘并换代；旧 revision 下的命中在新目录中失�
   assert.equal(after.input, null, '解绑后 KeyK 不再命中')
 })
 
-test('⑤ closeWindow revision/focus 门 + recording 抑制菜单加速器', async () => {
+treeTest('⑤ closeWindow revision/focus 门 + recording 抑制菜单加速器', async () => {
   const { bridge } = await makeBridge()
   const snapshot = await bridge.get(SINGLE)
   assert.equal(bridge.closeWindow(snapshot.revision, { focused: true, enabled: true }), true)
@@ -229,7 +241,7 @@ test('⑥ desktopKeyEvent 透传 Electron 事实并标注 frame/window', () => {
   assert.equal(fact.windowActive, false)
 })
 
-test('⑦ linux：主文档命中组合不进原生投递段（upstream scopedDesktop 门）', async () => {
+treeTest('⑦ linux：主文档命中组合不进原生投递段（upstream scopedDesktop 门）', async () => {
   const { bridge } = await makeBridge('linux')
   const snapshot = await bridge.get(LINUX)
   assert.equal(snapshot.status, 'ready')
@@ -255,7 +267,7 @@ test('⑦ linux：主文档命中组合不进原生投递段（upstream scopedDe
   assert.equal(miss.ignoreMenuShortcuts, false)
 })
 
-test('⑧ linux：嵌入式 frame 命中仍转发（主文档 DOM + frame 原生转发）', async () => {
+treeTest('⑧ linux：嵌入式 frame 命中仍转发（主文档 DOM + frame 原生转发）', async () => {
   const { bridge } = await makeBridge('linux')
   await bridge.get(LINUX)
 
@@ -279,7 +291,7 @@ test('⑧ linux：嵌入式 frame 命中仍转发（主文档 DOM + frame 原生
   assert.equal(miss.input, null)
 })
 
-test('⑨ windows/macos 不受 Linux 门影响：主文档命中仍原生投递', async () => {
+treeTest('⑨ windows/macos 不受 Linux 门影响：主文档命中仍原生投递', async () => {
   const { bridge: windows } = await makeBridge('windows')
   await windows.get(WINDOWS)
   const hit = windows.handleKeyEvent(keyEvent({ control: true }))
@@ -298,7 +310,7 @@ test('⑨ windows/macos 不受 Linux 门影响：主文档命中仍原生投递'
   assert.equal(second.preventDefault, true)
 })
 
-test('⑩ 缺 parseShortcutEdit 的 protocol 候选在加载期被拒且名字进错误', async () => {
+treeTest('⑩ 缺 parseShortcutEdit 的 protocol 候选在加载期被拒且名字进错误', async () => {
   const complete = protocolFixture(true)
   const incomplete = protocolFixture(false)
   try {
@@ -320,7 +332,7 @@ test('⑩ 缺 parseShortcutEdit 的 protocol 候选在加载期被拒且名字�
   }
 })
 
-test('⑪ N-ctx 偏差证据：命令目录是窗口级单槽（后一个实例 get() 独占），投递 input 无实例身份', async () => {
+treeTest('⑪ N-ctx 偏差证据：命令目录是窗口级单槽（后一个实例 get() 独占），投递 input 无实例身份', async () => {
   // design 25 §4.4.1 的键盘座席按「单窗口 = 单实例」设计：一个 DesktopShortcutsBridge
   // 持有唯一的 definitions/keys/revision，main.ts 把一个 before-input-event 门喂给它。
   // N-ctx 页面里每个实例的官方 shortcuts 服务都会调用 dshDesktop.shortcuts.get(自己的
