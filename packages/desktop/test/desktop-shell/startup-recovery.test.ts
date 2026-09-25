@@ -29,6 +29,7 @@ import {
 } from '../../startup-error.ts'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
+const repoRoot = path.join(here, '..', '..', '..', '..')
 const mainSource = readFileSync(path.join(here, '..', '..', 'main.ts'), 'utf8')
 const COPY = { exit: '退出', restart: '重启', safeModeRestart: '安全模式重启' }
 
@@ -207,6 +208,20 @@ test('main.ts 安全模式声明行 + 显式传给控制面', () => {
   assert.match(mainSource, /safeMode: safeModeActive,/, '控制面必须收到装配期快照')
 })
 
-// 待取件（P2-1 Swift 半边）：跨包/跨语言字面量锁步（env 名与页面全局名 × 控制面 /
-// 渲染端 / Swift AppDelegate / bridge-shim 四处一致）随 Swift 恢复框同批落地——
-// 目前 Swift 壳尚未声明 DSH_CHAMBER_SAFE_MODE，该断言会在那一批恢复。
+
+
+test('跨包/跨语言字面量锁步：env 名与页面全局名四处一致', () => {
+  const cpSafeMode = readFileSync(path.join(repoRoot, 'packages', 'control-plane', 'src', 'safe-mode.ts'), 'utf8')
+  const rendererSafeMode = readFileSync(path.join(repoRoot, 'packages', 'renderer', 'src', 'safe-mode.ts'), 'utf8')
+  // Swift 侧的恢复实现住在扩展文件（AppDelegate+StartupRecovery.swift）；主工程
+  // AppDelegate.swift 只做接线。两处都读，字面量落在哪边都能钉住。
+  const swift = ['AppDelegate+StartupRecovery.swift', 'AppDelegate.swift']
+    .map((name) => readFileSync(path.join(repoRoot, 'macos', 'Sources', 'DSHChamber', name), 'utf8'))
+    .join('\n')
+  assert.equal(SAFE_MODE_ENV, 'DSH_CHAMBER_SAFE_MODE')
+  assert.ok(cpSafeMode.includes(`SAFE_MODE_ENV = '${SAFE_MODE_ENV}'`), '控制面 env 名必须同名')
+  assert.ok(swift.includes(`"${SAFE_MODE_ENV}"`), 'Swift 壳必须认同一 env 名')
+  assert.ok(cpSafeMode.includes("SAFE_MODE_GLOBAL = '__DSH_CHAMBER_SAFE_MODE__'"))
+  assert.ok(rendererSafeMode.includes("SAFE_MODE_GLOBAL = '__DSH_CHAMBER_SAFE_MODE__'"),
+    '注入方与消费方的页面全局名必须逐字相同')
+})

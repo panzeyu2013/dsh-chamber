@@ -84,6 +84,9 @@
 /* ===== 致命提示标题与正文（AppDelegate.fatalStartup 的用户可见原因；日志仍中文） ===== */
 "fatal.startupFailedTitle" = "%@ failed to start";
 "fatal.sidecarAbnormalTitle" = "%@ sidecar error";
+"recovery.exitButton" = "Quit";
+"recovery.restartButton" = "Restart";
+"recovery.safeModeRestartButton" = "Restart in safe mode";
 "fatal.nodeResolveFailed" = "Failed to resolve Node: %@";
 "fatal.sidecarScriptMissingExplicit" = "The sidecar script referenced by DSH_CHAMBER_SHELL_SIDECAR does not exist: %@";
 "fatal.sidecarScriptMissingPackaged" = "The packaged app is missing its sidecar script: %@ (DSH_CHAMBER_SHELL_SIDECAR can override it)";

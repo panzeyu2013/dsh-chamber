@@ -92,6 +92,9 @@
 /* ===== 致命提示标题与正文（AppDelegate.fatalStartup 的用户可见原因；日志仍中文） ===== */
 "fatal.startupFailedTitle" = "%@ 启动失败";
 "fatal.sidecarAbnormalTitle" = "%@ sidecar 异常";
+"recovery.exitButton" = "退出";
+"recovery.restartButton" = "重启";
+"recovery.safeModeRestartButton" = "安全模式重启";
 "fatal.nodeResolveFailed" = "node 解析失败：%@";
 "fatal.sidecarScriptMissingExplicit" = "DSH_CHAMBER_SHELL_SIDECAR 指向的 sidecar 脚本不存在：%@";
 "fatal.sidecarScriptMissingPackaged" = "装配态缺少 sidecar 脚本：%@（DSH_CHAMBER_SHELL_SIDECAR 可显式指定）";

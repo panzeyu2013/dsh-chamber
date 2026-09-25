@@ -448,6 +448,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                         }
                     }))
             do {
+                // B2：引用必须在 start() **之前**落到属性上——spawn/取锁失败的
+                // catch 路径里，恢复重启腿读的是 self.supervisor（nil 会被误判成
+                // 「本进程未创建 supervisor、没取过目录锁」并带锁重启）。
+                self.supervisor = supervisor
                 try supervisor.start()
             } catch {
                 // 二次直接启动：Electron 的
@@ -465,11 +469,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     exit(0)
                 }
                 // 本地化：fatal.sidecarStartFailedDetail（%@ = 底层错误；该 detail
-                // 进 presentFatalAlert 的 informativeText）。
-                let detail = (error as? SidecarDirectoryLock.LockError)?.description
+                // 进恢复框的 informativeText）。
+                let lockError = error as? SidecarDirectoryLock.LockError
+                let detail = lockError?.description
                     ?? NativeText.format(.fatalSidecarStartFailedDetail,
                                          error.localizedDescription)
-                fatalStartup(detail)
+                // 锁冲突两选（安全模式重启救不了锁冲突，另一实例仍持锁）；其余启动
+                // 失败三选。局部 supervisor 可能已取到 flock（spawn/取锁失败）：fatal
+                // 分流前先 stop()（幂等）放掉进程与目录锁，否则重启腿的新实例会撞上
+                // 自己的锁。
+                let recoveryChoices: RecoveryChoices = lockError == nil ? .threeWay : .twoWay
+                Self.recoverFailedStartup(supervisor: supervisor) {
+                    self.fatalStartup(detail, choices: recoveryChoices)
+                }
             }
             self.supervisor = supervisor
             shellLog("[shell] bridge 已启动（Supervisor 守护，锁=\(lockDir)/.dsh-chamber.lock）")
@@ -970,20 +982,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// - **非阻塞**：有可见窗口时用 sheet（`beginSheetModal`），主线程继续服务
     ///   其余 edge 腿；无窗口才退回 `runModal`（否则会占用主线程导致 UI 腿
     ///   `main-thread-busy`）。
-    private static var fatalAlertShown = false
-
+    /// 运行期致命（sidecar 异常/崩溃）：与启动期同一套三选，优先 sheet 呈现；
+    /// 单次呈现门 = RecoveryPresentationGate（与 fatalStartup 共用，绝不留两套门）。
     private static func presentFatalAlert(_ message: String) {
-        guard !fatalAlertShown else { return }
-        fatalAlertShown = true
-        let alert = NSAlert()
-        alert.alertStyle = .critical
-        alert.messageText = NativeText.format(.fatalSidecarAbnormalTitle, MainWindowController.displayName)
-        alert.informativeText = message
-        if let window = NSApp.windows.first(where: { $0.isVisible }) {
-            alert.beginSheetModal(for: window) { _ in exit(1) }
-        } else {
-            alert.runModal()
-            exit(1)
+        let delegate = NSApp.delegate as? AppDelegate
+        Self.enterRecoveryPresentation(message: message) {
+            Self.runThreeChoiceRecovery(message: message, phase: .runtime) { safeMode in
+                delegate?.performRecoveryRelaunch(safeMode: safeMode) ?? false
+            }
         }
     }
 
@@ -1068,20 +1074,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             secondaryShowWindowNotification, object: nil, userInfo: nil, deliverImmediately: true)
     }
 
-    private func fatalStartup(_ message: String) -> Never {
+    /// 恢复重启腿：先回收受管 sidecar（幂等 stop() = 进程回收 + flock 释放），
+    /// 判据通过才以 LaunchServices 拉起新实例（安全模式才注入 env）。任何一步不成立
+    /// 都按退出处理——绝不带锁重启，也绝不假装重启成功。
+    fileprivate func performRecoveryRelaunch(safeMode: Bool) -> Bool {
+        let label = safeMode ? "安全模式重启" : "重启"
+        shellLog("[shell] 恢复动作：\(label)——先走既有清理链（停止 sidecar/控制面并释放目录锁）")
+        if let supervisor {
+            supervisor.stop()
+            let state = supervisor.state
+            shellLog(Self.recoveryCleanupSummary(
+                supervisorState: state, lockRecordPath: supervisor.directoryLock.recordPath))
+            guard Self.canRelaunchAfterCleanup(supervisorState: state) else { return false }
+        } else {
+            bridge?.stop()
+            shellLog(Self.recoveryCleanupSummary(supervisorState: nil))
+        }
+        guard let appURL = Self.recoveryRelaunchBundleURL(
+            bundleURL: Bundle.main.bundleURL,
+            bundleIdentifier: Bundle.main.bundleIdentifier) else {
+            shellLog("[shell] 重启不可用：非 .app 装配（swift run/dev）——按退出处理")
+            return false
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        configuration.environment = Self.recoveryRelaunchEnvironment(
+            base: ProcessInfo.processInfo.environment, safeMode: safeMode)
+        var launched = false
+        var failed = false
+        NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { _, error in
+            if let error {
+                failed = true
+                shellLog("[shell] 重启失败：\(error.localizedDescription)")
+            } else {
+                launched = true
+                shellLog("[shell] 已请求 LaunchServices 启动新实例（安全模式=\(safeMode)，独立实例）")
+            }
+        }
+        let deadline = Date().addingTimeInterval(5)
+        while !launched && !failed && Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+        }
+        if !launched {
+            shellLog("[shell] 重启未确认（LaunchServices 5s 内无成功回执）——按退出处理")
+        }
+        return launched
+    }
+
+    /// 致命启动失败：呈现三选恢复框（锁冲突由调用方传 twoWay），进程去向只由用户
+    /// 选择决定——绝不静默 exit(1)。重复 fatal：呈现门已置位，只 loud 记录并把本线程
+    /// 停住等待首个呈现者的决策结果（绝不自行为进程做决定，B1）。
+    private func fatalStartup(_ message: String, choices: RecoveryChoices = .threeWay) -> Never {
         // 致命启动错误是白屏/秒退的头号原因：stderr 已有一行，同时**只落盘**
         // （不重复打到 stdout）留档。
         ShellLog.shared.append("[shell] 致命错误：\(message)")
         fputs("[shell] 致命错误：\(message)\n", stderr)
-        if !Self.fatalAlertShown {
-            Self.fatalAlertShown = true
-            let alert = NSAlert()
-            alert.alertStyle = .critical
-            alert.messageText = NativeText.format(.fatalStartupFailedTitle, MainWindowController.displayName)
-            alert.informativeText = message
-            alert.runModal()
+        Self.enterRecoveryPresentation(message: message) {
+            Self.runThreeChoiceRecovery(message: message, phase: .startup, choices: choices) { safeMode in
+                self.performRecoveryRelaunch(safeMode: safeMode)
+            }
         }
-        exit(1)
+        while true {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(1))
+        }
     }
 
     /// 主菜单：App / 文件（Electron 默认 fileMenu 的 Close
