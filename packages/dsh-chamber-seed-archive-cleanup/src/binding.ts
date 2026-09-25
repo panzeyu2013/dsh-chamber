@@ -286,10 +286,11 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
         const wanted = new Set(ids)
         const next = current.filter(id => !wanted.has(id))
         if (next.length === current.length) return
-        const workspaceIds = reg.list!().map(workspace => String(workspace.id))
-        // ONE plain single-state write (instead of N per-tree fsyncs), mirroring
-        // the registry's own insertBefore mutation; runtime-guarded.
-        await reg.setState!({ initialized: true, workspaceIds, archivedSessionIds: next })
+        // ONE write, and a read-modify-write of the official live global: `setState`
+        // REPLACES the whole global, so spread it and own only `archivedSessionIds` —
+        // rebuilding a field list silently drops whatever the pin adds (design 24 §4 step 9).
+        const live = reg.state as Record<string, unknown>
+        await reg.setState!({ ...live, archivedSessionIds: next })
       }
       try {
         // Run INSIDE the official mutation chain — serialized against every
