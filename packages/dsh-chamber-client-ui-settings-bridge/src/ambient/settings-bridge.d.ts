@@ -12,6 +12,7 @@
  * never a subset.
  */
 import type {
+  ChamberDebugSettings,
   ChamberSettings,
   ChamberSettingsStatus,
   DshChamberBridge,
@@ -21,6 +22,7 @@ import type {
 } from '@dsh-chamber/renderer/global.d.ts'
 
 export type {
+  ChamberDebugSettings,
   ChamberSettings,
   ChamberSettingsStatus,
   NotificationRequest,

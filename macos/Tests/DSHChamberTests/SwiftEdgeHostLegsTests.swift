@@ -75,6 +75,113 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         XCTAssertFalse(legs.canHandleAsync(method: "showNativeNotification"))
     }
 
+    // MARK: - setDebugMode 叶（调试模式：WKWebView.isInspectable 运行时开关）
+
+    /// 无窗降级：canShowUI=true 但未接主窗 → **不是** edge 错误，而是「已应答、
+    /// 但事实是可检查态未达成」——sidecar 据此照常保存设置并显示原因（绝不假装
+    /// 已开启，也绝不把「用户想开」当成失败而不保存）。
+    func testDebugModeNoWindowReportsReadBackNotFakeSuccess() {
+        let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { true }))
+        let outcome = legs.respond(method: "setDebugMode", payload: .object(["enabled": .bool(true)]))
+        XCTAssertNil(outcome.error, "腿已应答；失败事实走 reason，不走 transport error")
+        guard case .object(let fields)? = outcome.result else {
+            return XCTFail("setDebugMode 应答应为对象")
+        }
+        XCTAssertEqual(fields["inspectable"], .bool(false))
+        XCTAssertEqual(fields["apiAvailable"], .bool(true))
+        guard case .string(let reason)? = fields["reason"] else {
+            return XCTFail("无窗必须带原因原文")
+        }
+        XCTAssertTrue(reason.contains("no-window"), reason)
+    }
+
+    /// UI 不可用（headless）→ performUI 先诚实降级为 edge 错误（sidecar 侧 catch
+    /// 后回 {inspectable:false, reason:detail}，设置照常保存）。
+    func testDebugModeHeadlessDegradesThroughUIUnavailable() {
+        let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { false }))
+        let outcome = legs.respond(method: "setDebugMode", payload: .object(["enabled": .bool(true)]))
+        XCTAssertEqual(outcome.error, "swift-edge-ui-unavailable:setDebugMode")
+    }
+
+    /// 载荷纪律：enabled 必须是真的布尔。缺键/非布尔是协议违例 → loud 拒绝，
+    /// **绝不** `?? false` 兜底（那会把「未知」执行成「强制关检查器」，而调用方
+    /// 会把 false 当合法回读记进投影）。
+    func testDebugModePayloadRequiresBooleanEnabled() {
+        let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { true }))
+        for payload: AnyCodable? in [.object([:]), .object(["enabled": .number(1)]),
+                                     .object(["enabled": .string("true")]), .null, nil] {
+            let outcome = legs.respond(method: "setDebugMode", payload: payload)
+            XCTAssertEqual(outcome.error, "swift-edge-unimplemented:setDebugMode:payload",
+                           "坏载荷必须 loud 拒绝：\(String(describing: payload))")
+            XCTAssertNil(outcome.result)
+        }
+    }
+
+    /// 决策核心（此前零覆盖：所有用例都走 no-window）：请求值必须交给宿主、回读必须
+    /// 原样上报。把实现写成取反或回声意图都会让这条红。（真实 NSWindow 在 xctest
+    /// 进程里无法构造——AppKit 未初始化会 SIGSEGV——故直接测注入施加体的核心。）
+    func testDebugModeApplyCorePassesRequestThroughAndReportsMeasuredReadBack() {
+        var calls: [Bool] = []
+        // 施加即达成：请求 true → 回读 true，无原因。
+        let achieved = SwiftEdgeHostLegs.applyDebugMode(
+            enabled: true, windowAvailable: true,
+            setInspectable: { calls.append($0); return $0 }, noWindowReason: "no-window")
+        XCTAssertNil(achieved.error)
+        XCTAssertEqual(calls, [true], "腿必须把请求值原样交给宿主")
+        XCTAssertEqual(achieved.result, .object(["inspectable": .bool(true), "apiAvailable": .bool(true)]))
+        // 施加未达成（宿主回读 false）→ 上报**回读**，绝不回显意图 true。
+        var stubbornCalls: [Bool] = []
+        let stubborn = SwiftEdgeHostLegs.applyDebugMode(
+            enabled: true, windowAvailable: true,
+            setInspectable: { stubbornCalls.append($0); return false }, noWindowReason: "no-window")
+        XCTAssertEqual(stubbornCalls, [true])
+        guard case .object(let fields)? = stubborn.result else { return XCTFail("应答应为对象") }
+        XCTAssertEqual(fields["inspectable"], .bool(false), "意图 true、实测 false → 上报实测")
+        XCTAssertNil(fields["reason"], "实测 false 不是失败")
+        // 无窗：不触碰宿主，走原因分支。
+        var untouched: [Bool] = []
+        let noWindow = SwiftEdgeHostLegs.applyDebugMode(
+            enabled: true, windowAvailable: false,
+            setInspectable: { untouched.append($0); return true },
+            noWindowReason: "swift-edge-ui-unavailable:setDebugMode:no-window")
+        XCTAssertEqual(untouched, [], "无窗绝不触碰施加体")
+        guard case .object(let degraded)? = noWindow.result else { return XCTFail("应答应为对象") }
+        XCTAssertEqual(degraded["inspectable"], .bool(false))
+        XCTAssertEqual(degraded["reason"], .string("swift-edge-ui-unavailable:setDebugMode:no-window"))
+        XCTAssertNil(noWindow.error, "无窗是「已应答但未达成」，不是 transport 错误")
+    }
+
+    /// 回读是权威、不是入参回声：readBack=true/false 原样上报；nil（无 webView /
+    /// API 不可用）→ inspectable=false + 原因。绝不按「意图」乐观上报。
+    func testDebugModeResultReportsMeasuredReadBackOnly() {
+        guard case .object(let on) = SwiftEdgeHostLegs.debugModeResult(readBack: true, reason: nil) else {
+            return XCTFail("应答应为对象")
+        }
+        XCTAssertEqual(on["inspectable"], .bool(true))
+        XCTAssertNil(on["reason"])
+        guard case .object(let off) = SwiftEdgeHostLegs.debugModeResult(readBack: false, reason: nil) else {
+            return XCTFail("应答应为对象")
+        }
+        XCTAssertEqual(off["inspectable"], .bool(false))
+        XCTAssertNil(off["reason"], "读回 false 是真实结果，不是失败")
+        guard case .object(let unknown) = SwiftEdgeHostLegs.debugModeResult(readBack: nil, reason: nil) else {
+            return XCTFail("应答应为对象")
+        }
+        XCTAssertEqual(unknown["inspectable"], .bool(false))
+        guard case .string(let reason)? = unknown["reason"] else {
+            return XCTFail("nil 读回必须带默认原因")
+        }
+        // 中性措辞：nil = 无 webView **或** API 缺失（本仓下限 14.4 使后者不可达），
+        // 默认原因不得谎称是 webView 缺失。
+        XCTAssertTrue(reason.contains("no-inspectable-fact"), reason)
+        // 空串也回落到默认原因（否则「有失败、无原因」）。
+        guard case .object(let emptyReason) = SwiftEdgeHostLegs.debugModeResult(readBack: nil, reason: ""),
+              case .string(let fallback)? = emptyReason["reason"] else {
+            return XCTFail("空串原因必须回落默认")
+        }
+        XCTAssertTrue(fallback.contains("no-inspectable-fact"), fallback)
+    }
+
     func testOpenExternalExtractsURLAndFailsWithoutPayload() throws {
         let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { true }))
         // 无窗口提供者 → no-window 诚实错误（不真正 open——headless 测试不得

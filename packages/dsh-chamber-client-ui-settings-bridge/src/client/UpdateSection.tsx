@@ -9,9 +9,11 @@
  */
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
-import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SettingsBridgeKey } from '../locales.ts'
 import type { UpdateState } from '../ambient/update-bridge.d.ts'
+import { applySettingsPatch, getSettingsStatus, subscribeSettings } from './settings-store.ts'
+import { debugFactsCard, debugFactsCardVisible, debugStatusKind, debugSupported, debugToggleDisabled } from './debug-mode-gate.ts'
 import {
   getUpdateState, subscribeUpdateState, requestUpdateCheck, requestUpdateDownload, requestUpdateRestart, requestOpenReleasePage,
 } from './update-store.ts'
@@ -221,6 +223,103 @@ function StatusRow({
   )
 }
 
+/**
+ * 「调试模式」行（放在「更新」section 内，用户裁决）：主 switch + 状态行。
+ *
+ * 状态来自 settings 投影的 `debugRuntime`（宿主实测回读），**不是** `enabled` 的
+ * 回声：缺省 = 本进程尚未应用过 → 「未知」；`inspectable:false` 且带 reason →
+ * 「未能开启 + 原因」。平台门 `supported.debugInspectable` 为假（Electron 本版
+ * 未接线）时禁用开关并给出原因——绝不呈现一个永远无效的开关。
+ * Safari 只能人工打开检查器（无法程序化），故这里只给路径与前置说明。
+ */
+function DebugModeRow({ t }: { t: UpdateTranslate }) {
+  const status = useSyncExternalStore(subscribeSettings, getSettingsStatus)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const enabled = status?.settings.debug?.enabled === true
+  const hydrated = status !== null
+  const supported = debugSupported(status?.supported)
+  const runtime = status?.debugRuntime
+  const kind = debugStatusKind(runtime, enabled)
+  const facts = debugFactsCard({ kind, saving, reason: runtime?.reason })
+  const factsVisible = debugFactsCardVisible({
+    supported,
+    enabled,
+    inspectable: runtime?.inspectable === true,
+    saveError: saveError !== null,
+  })
+  const disabled = debugToggleDisabled({ hydrated, supported, saving })
+
+  const onToggle = useCallback((next: boolean) => {
+    setSaveError(null)
+    setSaving(true)
+    void applySettingsPatch({ debug: { enabled: next } })
+      .then((result) => {
+        if (!result.ok) setSaveError(result.error)
+      })
+      .finally(() => setSaving(false))
+  }, [])
+
+  return (
+    <>
+      <label className={clsxRow(!hydrated || !supported)}>
+        <div className={css.generalCardText}>
+          <span className={css.generalFieldLabel}>{t('debugModeLabel')}</span>
+          {/* 未水合时能力事实未知：不得断言「当前壳不支持」（那是把未知说成已知）。 */}
+          <p className={css.generalHint}>
+            {!hydrated || supported ? t('debugModeDesc') : t('debugModeUnsupported')}
+          </p>
+        </div>
+        <span className={css.generalSwitchBox}>
+          <Switch
+            checked={enabled}
+            label={t('debugModeLabel')}
+            disabled={disabled}
+            onChange={onToggle}
+          />
+        </span>
+      </label>
+
+      {/* 事实面优先：设置说关但宿主仍可检查（撤销失败）= 必须显示，绝不按 enabled
+          推断而把「其实还开着」藏起来。不支持的壳不渲染事实卡（没有事实可言，原因
+          已在行内说明）。 */}
+      {factsVisible && (
+        <div className={css.generalNotifyCard}>
+          {facts.statusKey !== null && (
+            <p
+              className={facts.statusKey === 'debugModeStatusError' ? css.generalError : css.generalHint}
+              role="status"
+              aria-live="polite"
+            >
+              {facts.statusKey === 'debugModeStatusOn' ? t('debugModeStatusOn')
+                : facts.statusKey === 'debugModeStatusError'
+                  ? t('debugModeStatusError', { reason: facts.reason ?? t('generalUnavailable') })
+                  : t('debugModeStatusUnknown')}
+            </p>
+          )}
+          {facts.showEnableHints && (
+            <>
+              {/* 不做菜单路径的编造：WKWebView 在 Safari「开发」下的落点是 app 名（本页
+                  拿不到），精确路径与实测值写在宿主日志行（[shell] 调试模式已开启）。 */}
+              <p className={css.generalHint}>{t('debugModeSafariHint')}</p>
+              {/* 信任边界写在开关旁边：本机任意程序可读页面 + 注入 JS。 */}
+              <p className={css.generalHint}>{t('debugModeWarning')}</p>
+            </>
+          )}
+          {saveError !== null && (
+            <p className={css.generalError} aria-live="polite">{t('generalSaveFailed', { error: saveError })}</p>
+          )}
+        </div>
+      )}
+    </>
+  )
+}
+
+/** 行容器与 GeneralView 的披露行同词汇（未水合/不可用时整行变淡）。 */
+function clsxRow(disabled: boolean): string {
+  return disabled ? `${css.generalSwitchRow} ${css.generalDisabled}` : css.generalSwitchRow
+}
+
 /** The update group content (rendered inside the「通用」settings column). */
 export function UpdateSection({ t }: { t: UpdateTranslate }) {
   const update = useSyncExternalStore(subscribeUpdateState, getUpdateState)
@@ -289,6 +388,8 @@ export function UpdateSection({ t }: { t: UpdateTranslate }) {
       {update !== null && (
         <StatusRow update={update} busyKind={busyKind} onUpdate={onUpdate} onRestart={onRestart} t={t} />
       )}
+      {/* 调试模式：与更新同组（用户裁决落点）。开关默认关；开启 = 显式降低信任边界。 */}
+      <DebugModeRow t={t} />
     </div>
   )
 }

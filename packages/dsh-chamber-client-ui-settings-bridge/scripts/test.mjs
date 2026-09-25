@@ -28,6 +28,8 @@ const GROUPS = {
   settings: [
     'test/settings/settings-store.test.ts',
     'test/settings/settings-groups.test.ts',
+    // 调试模式行的呈现决策真值表（debug-mode-gate.ts）
+    'test/settings/debug-mode-gate.test.ts',
     // 测试通知失败原因映射（design 19 §3.3/§4）
     'test/settings/notify-test-result.test.ts',
   ],

@@ -1343,6 +1343,10 @@ if (!gotTheLock) {
       },
       setKeepAwake: enabled => setKeepAwakeActive(enabled),
       setLoginItem: enabled => applyLaunchAtLogin(enabled),
+      // 调试模式：Electron 腿本版未接线（外部调试端口 / DevTools 自动化推迟）。
+      // 回读诚实说明平台侧无此能力——绝不假装已开启；设置页据 supported
+      // .debugInspectable=false 禁用开关并给出原因。
+      setDebugMode: () => ({ inspectable: false, apiAvailable: false, reason: 'electron-debug-mode-unwired' }),
       isQuitting: () => quitRequested,
       markQuitting: () => { quitRequested = true; },
       hostFacts: { flavor: 'electron', trayPresent: () => tray !== null },

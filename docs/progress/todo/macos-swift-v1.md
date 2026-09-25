@@ -75,7 +75,7 @@ Swift产物出问题 ⇒ draft不publish、Electron照发（共存主通道，Sw
 - R10开发期双后端竞态：Electron dev（17520起探测）与Swift dev共享控制面起始端口族 ⇒ `DSH_CHAMBER_CP_PORT`/`DSH_CHAMBER_SHELL_PORT` 分别钉死 + 双userData（或先后启动）。
 - R11人手单点：壳 + 桥 + 护栏 ≈25–35个Swift文件长期维护；缓解 = 护栏集中单target、XCTest覆盖率门、Generated产物。
 - R12 manifest生成脚本解析脆弱性：新写法（模板串/别名）漏检 ⇒ 生成脚本复用mirror解析 + 「通道数守恒」断言（70=61+9）。
-- R13 devtools：debug才开 `developerExtrasEnabled`，发布态由build脚本关闭（inspector属信任边界）。
+- R13 devtools：默认关；发布态由设置页运行期开关显式开启（design 25 §5.1.1）。debug构建的默认开只在「无设置文件或文件级损坏（不动作）」时存活；合法文件（哪怕缺 debug 键，按 Electron 默认 false）会覆盖它。inspector属信任边界。
 
 ### 7.2 WKWebView 实测项 W1–W7 判定标准（M5 / W-29 用）
 

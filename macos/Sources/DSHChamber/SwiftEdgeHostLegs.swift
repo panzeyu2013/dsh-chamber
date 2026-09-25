@@ -17,7 +17,8 @@
 //    openExternal / openPath / showItemInFolder / setBadge（dockTile）/
 //    setKeepAwake / setLoginItem（E14：SMAppService.mainApp——
 //    swift run 无 bundle 时 guard 诚实报 no-bundle）/ showError /
-//    launchApp（E12：appId 最小映射 finder/vscode + 缺省 loud）。
+//    setDebugMode（调试模式：WKWebView.isInspectable 运行时开关，应答带实测
+//    回读）/ launchApp（E12：appId 最小映射 finder/vscode + 缺省 loud）。
 //  - 退役：edge 面 "retireNotifications" 不在本类（node-edges 以 notify 发送
 //    退役，不经 edge）——notify 消费路由在 MainWindowController：按
 //    sourceId→identifier 登记表调 UNUserNotificationCenter
@@ -193,6 +194,11 @@ public final class SwiftEdgeHostLegs {
         public var notificationCenter: () -> EdgeNotificationCenter
         /// add 的有界等待（默认 5s，测试可缩短）。
         public var notificationAddTimeout: TimeInterval
+        /// 调试模式宿主腿：把 WKWebView.isInspectable 置真/假并回**实测读值**。
+        /// Swift 侧必须在主线程执行（WKWebView 主线程语义）。返回 nil = 无主窗
+        /// （诚实降级，绝不假装已开启）。生产 = MainWindowController 注入；
+        /// 单测注入假体（headless 无 WKWebView）。
+        public var setInspectable: (Bool) -> Bool?
         public init(canShowUI: @escaping () -> Bool = { false },
                     isAppBundled: @escaping () -> Bool = {
                         Bundle.main.bundleIdentifier != nil
@@ -201,12 +207,14 @@ public final class SwiftEdgeHostLegs {
                     notificationCenter: @escaping () -> EdgeNotificationCenter = {
                         SystemUserNotificationCenter()
                     },
-                    notificationAddTimeout: TimeInterval = SwiftEdgeHostLegs.notificationAddTimeout) {
+                    notificationAddTimeout: TimeInterval = SwiftEdgeHostLegs.notificationAddTimeout,
+                    setInspectable: @escaping (Bool) -> Bool? = { _ in nil }) {
             self.canShowUI = canShowUI
             self.isAppBundled = isAppBundled
             self.uiLegBodyOverride = uiLegBodyOverride
             self.notificationCenter = notificationCenter
             self.notificationAddTimeout = notificationAddTimeout
+            self.setInspectable = setInspectable
         }
     }
 
@@ -284,6 +292,42 @@ public final class SwiftEdgeHostLegs {
     /// 未实现（集成点留待）与 UI 不可用文案前缀（BridgeClient 回落依据）。
     public static let unimplementedPrefix = "swift-edge-unimplemented:"
     public static let uiUnavailablePrefix = "swift-edge-ui-unavailable:"
+
+    /// setDebugMode 的决策核心（纯函数，注入施加体）：把**请求值**交给宿主、把**回读**
+    /// 原样上报；无窗时不触碰宿主并走原因分支。抽出来是因为真实 NSWindow 在 xctest 进程
+    /// 里无法构造（AppKit 未初始化 → SIGSEGV），否则「收请求值、报回读、不回声意图」这条
+    /// 主路径只有 no-window 分支能被覆盖。
+    static func applyDebugMode(enabled: Bool,
+                               windowAvailable: Bool,
+                               setInspectable: (Bool) -> Bool?,
+                               noWindowReason: String) -> (result: AnyCodable?, error: String?) {
+        guard windowAvailable else {
+            return (debugModeResult(readBack: nil, reason: noWindowReason), nil)
+        }
+        return (debugModeResult(readBack: setInspectable(enabled), reason: nil), nil)
+    }
+
+    /// setDebugMode 应答体（与 sidecar-ctx.setDebugMode 的回读形状逐字段同名——
+    /// node 侧只认 inspectable/apiAvailable/reason）。
+    ///
+    /// `readBack` 是宿主 setInspectable 的**实测读值**：true/false 原样上报，
+    /// nil = 无 webView（壳未装配/window 已拆）或 API 不可用 → inspectable=false
+    /// 并带上给用户看的原因。绝不把「意图」当成「事实」上报。
+    public static func debugModeResult(readBack: Bool?, reason: String?) -> AnyCodable {
+        var fields: [String: AnyCodable] = [
+            "inspectable": .bool(readBack ?? false),
+            "apiAvailable": .bool(true),
+        ]
+        // nil = 无事实可读（无 webView **或** API 缺失——本仓下限 14.4 使后者不可达）。
+        // 默认原因用中性措辞，不谎称是 webView 缺失；reason == "" 也回落到默认。
+        let effectiveReason = readBack == nil
+            ? (reason.flatMap { $0.isEmpty ? nil : $0 } ?? "swift-debug-mode-unavailable:no-inspectable-fact")
+            : nil
+        if let effectiveReason {
+            fields["reason"] = .string(effectiveReason)
+        }
+        return .object(fields)
+    }
 
     /// 非交互 UI 腿的有界等待：主线程可能正被 BridgeClient.stop() 的收尾轮询
     /// 占用，退出优先；超时 loud 失败（core 可重试），body 幂等。
@@ -537,6 +581,26 @@ public final class SwiftEdgeHostLegs {
                 let count = dict.flatMap { EdgePayload.int($0["count"]) } ?? 0
                 NSApp.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
                 return (nil, nil)
+            }
+        case "setDebugMode":
+            // 调试模式叶（设置 → 通用 → 更新区内）：payload {enabled: bool}。
+            // 宿主腿把 WKWebView.isInspectable 置真/假（Safari Web Inspector 据此
+            // 列出本 app），应答携带**实测回读**——enabled 只是意图，inspectable
+            // 才是事实；无主窗 → inspectable:false + reason（绝不假装已开启）。
+            // 载荷纪律：缺键/非布尔是协议违例 → loud 拒绝，**绝不用「?? false」兜底**
+            // （那会把「未知」执行成「强制关检查器」，而调用方会把 false 当合法回读
+            // 记进投影）。生产发送方恒发布尔，本门防的是异构/上游构造的坏帧
+            // （同 openExternal 的 :payload 前缀纪律）。
+            guard let enabled = dict.flatMap({ EdgePayload.bool($0["enabled"]) }) else {
+                return (nil, Self.unimplementedPrefix + method + ":payload")
+            }
+            // UI 上下文守卫：调试面挂在主窗上，无窗（headless/未接线）诚实降级。
+            return performUI(method: method, timeout: Self.uiLegTimeout) {
+                Self.applyDebugMode(
+                    enabled: enabled,
+                    windowAvailable: self.mainWindowProvider?() != nil,
+                    setInspectable: { self.config.setInspectable($0) },
+                    noWindowReason: Self.uiUnavailablePrefix + method + ":no-window")
             }
         case "setKeepAwake":
             // E5 keep-awake 叶：payload {on: bool}；ProcessInfo activity 防休眠

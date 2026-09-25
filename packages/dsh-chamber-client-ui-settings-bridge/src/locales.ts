@@ -67,6 +67,16 @@ export const zh = {
   generalNotificationsOpenSettingsFailed: '无法打开系统设置，请手动前往「系统设置 → 通知」。',
   generalUnavailable: '当前平台不支持',
   generalSaveFailed: '保存失败：{error}',
+  // 调试模式（放在「更新」section 内，见 UpdateSection.tsx）：开启后 Swift 原生壳
+  // 把 WKWebView 置为可检查，Safari「开发」菜单即可附着 Web Inspector。
+  debugModeLabel: '调试模式',
+  debugModeDesc: '允许 Safari Web Inspector 检查本应用界面；关闭时立即收回',
+  debugModeUnsupported: '当前壳不支持调试模式',
+  debugModeStatusOn: '已开启检查：Safari →「开发」菜单可附着本窗口',
+  debugModeStatusUnknown: '尚未收到宿主回读',
+  debugModeStatusError: '未能开启：{reason}',
+  debugModeSafariHint: '若「开发」菜单未出现，请在 Safari 设置 → 高级中勾选「显示网页开发者功能」。',
+  debugModeWarning: '开启后本机任何程序都能读取并操作本应用页面（含当前输入内容），仅在需要时开启。',
   updateTitle: '更新',
   updateCheckAction: '检查更新',
   updateCurrentVersion: '当前版本：{version}',
@@ -324,6 +334,16 @@ export const en: Record<keyof typeof zh, string> = {
   generalNotificationsOpenSettingsFailed: 'Could not open System Settings; open System Settings → Notifications manually.',
   generalUnavailable: 'Not supported on this platform',
   generalSaveFailed: 'Save failed: {error}',
+  // Debug mode (rendered inside the Update section — see UpdateSection.tsx): the Swift
+  // native shell makes its WKWebView inspectable so Safari Web Inspector can attach.
+  debugModeLabel: 'Debug mode',
+  debugModeDesc: 'Let Safari Web Inspector inspect this app\u2019s UI; turning it off revokes access immediately',
+  debugModeUnsupported: 'This shell does not support debug mode',
+  debugModeStatusOn: 'Inspection enabled: attach from Safari\u2019s Develop menu',
+  debugModeStatusUnknown: 'No host read-back yet',
+  debugModeStatusError: 'Could not enable: {reason}',
+  debugModeSafariHint: 'If the Develop menu is missing, enable "Show features for web developers" in Safari Settings \u2192 Advanced.',
+  debugModeWarning: 'Once on, any local program can read and drive this app\u2019s page (including what you type). Enable it only when needed.',
   updateTitle: 'Update',
   updateCheckAction: 'Check for updates',
   updateCurrentVersion: 'Current version: {version}',

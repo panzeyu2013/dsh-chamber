@@ -425,8 +425,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                                 configuration: configuration)
         webView.navigationDelegate = self
         webView.uiDelegate = self
-        // 开发者工具：只在 DEBUG 构建开放（参考独立 Swift 原生壳的通行做法：
-        // debug 默认开、release 默认关）。构建期常量，页面或环境变量都打不开。
+        // 开发者工具：#if DEBUG 构建仍默认开（开发便利，保持原行为）；**发布包
+        // 的运行期入口 = 设置 → 通用 → 更新区内的「调试模式」开关**（先前只有
+        // 构建期常量，已安装的 .app 完全没有检查器入口）。默认关闭，开启后
+        // Safari「开发」菜单即可附着本页面，关闭立即收回——见 setInspectable。
 #if DEBUG
         if #available(macOS 13.3, *) {
             webView.isInspectable = true
@@ -1105,6 +1107,64 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 主线程执行 JS（所有调用点都已收敛到主线程）
     private func evaluateJS(_ script: String) {
         webView.evaluateJavaScript(script, completionHandler: nil)
+    }
+
+    // MARK: - 调试模式（WKWebView.isInspectable 运行时开关）
+
+    /// 施加调试模式并回**实测读值**（设置 → 通用 → 更新区的开关经 __host 边
+    /// setDebugMode 到达）。
+    ///
+    /// 语义契约：
+    /// - 只有「设置/用户显式开启」才置真；关闭恒置假（dev 构建的 #if DEBUG 默认
+    ///   开会被显式关闭覆盖——可收回正是本开关的本义）。
+    /// - 返回值是 `webView.isInspectable` 的**读回值**，不是入参回声：宿主最终
+    ///   处于什么态以 WKWebView 为准（读回优先于推断）。
+    /// - macOS 13.3 以下无此 API → nil；无 webView（壳尚未装配出窗口）→ nil。
+    ///   两者都走同一条诚实降级：nil = 「无事实可读」，调用方回
+    ///   inspectable:false + 原因（no-webview），绝不假装成功。本仓下限 14.4，
+    ///   API 分支只为形态防御而留。
+    /// - WKWebView 主线程语义：非主线程调用时 hop 到主线程同步执行（调用点 =
+    ///   B 桥边线程；与 clearBadge 同款保留 hop 兜底）。
+    @discardableResult
+    func setInspectable(_ enabled: Bool) -> Bool? {
+        let apply: () -> Bool? = { [weak self] in
+            guard let webView = self?.webView else { return nil }
+            if #available(macOS 13.3, *) {
+                webView.isInspectable = enabled
+                return webView.isInspectable
+            }
+            return nil
+        }
+        if Thread.isMainThread {
+            let readBack = apply()
+            Self.logInspectableTransition(enabled: enabled, readBack: readBack)
+            return readBack
+        }
+        var readBack: Bool?
+        DispatchQueue.main.sync { readBack = apply() }
+        Self.logInspectableTransition(enabled: enabled, readBack: readBack)
+        return readBack
+    }
+
+    /// 当前检查器事实（只读，不施加）：无 webView / API 缺失 → nil。
+    /// 供 ready 重报使用——sidecar 重启后要拿**当下**的事实，而不是启动快照。
+    func currentInspectable() -> Bool? {
+        guard let webView = self.webView else { return nil }
+        if #available(macOS 13.3, *) { return webView.isInspectable }
+        return nil
+    }
+
+    /// 开关落盘一行（Safari 附着之前，用户就能在 <userData>/logs/shell.log 确认状态）。
+    static func logInspectableTransition(enabled: Bool, readBack: Bool?) {
+        guard let readBack else {
+            shellLog("[shell] 调试模式：请求 enabled=\(enabled)，本平台/本窗口无 isInspectable（诚实降级）")
+            return
+        }
+        // 请求值与实测值都记：只记实测会让「请求开、实测关」看起来像一次普通关闭，
+        // 而这行是用户事后核对（以及排查「开关点了没反应」）的唯一证据。
+        shellLog("[shell] 调试模式已\(readBack ? "开启" : "关闭")：请求 enabled=\(enabled)"
+                 + " → 实测 isInspectable=\(readBack)"
+                 + (readBack ? "（Safari → 开发 → 本机 → \(displayName)）" : ""))
     }
 
     // MARK: - notify 消费路由

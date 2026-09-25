@@ -31,7 +31,7 @@ import {
   writeSettingsFile,
   type ChamberSettings,
 } from '../../chamber-settings.ts';
-import { installIpcHandlers, type ShellAssemblyCtx } from '../../shell-core.ts';
+import { applyDebugRuntime, installIpcHandlers, type ShellAssemblyCtx } from '../../shell-core.ts';
 import { IPC_CHANNELS } from '../../ipc-events.ts';
 
 // ---------------------------------------------------------------------------
@@ -40,6 +40,8 @@ import { IPC_CHANNELS } from '../../ipc-events.ts';
 // ---------------------------------------------------------------------------
 
 type SettingsSetLeaves = Pick<ShellAssemblyCtx, 'setKeepAwake' | 'setLoginItem'>
+  // debug 叶对「不关心调试模式」的既有用例可省；省略即 loud（误触调试路径立刻红）。
+  & Partial<Pick<ShellAssemblyCtx, 'setDebugMode'>>
 
 /** 注册体装配面（installIpcHandlers 参数类型——不 export 也可用 Parameters）。 */
 type SettingsInstallDeps = Parameters<typeof installIpcHandlers>[0]
@@ -51,6 +53,7 @@ interface SettingsHarness {
   pushes: { channel: string; payload: unknown }[]
   keepAwakeCalls: boolean[]
   loginItemCalls: boolean[]
+  debugCalls: boolean[]
 }
 
 /** methodStub：调用即抛的 loud stub（sidecar-ctx 同款——fake ctx 缺键的兜底）。 */
@@ -86,6 +89,7 @@ function installSettingsHarness(
   const pushes: { channel: string; payload: unknown }[] = [];
   const keepAwakeCalls: boolean[] = [];
   const loginItemCalls: boolean[] = [];
+  const debugCalls: boolean[] = [];
   let holder: ChamberSettings = { ...(opts.initial ?? DEFAULT_CHAMBER_SETTINGS) };
   const registry = new Map<string, (payload: unknown) => Promise<unknown> | unknown>();
   const persistImpl = opts.persist ?? ((next: ChamberSettings) => { persistCalls.push(next); });
@@ -100,6 +104,7 @@ function installSettingsHarness(
     pushes,
     keepAwakeCalls,
     loginItemCalls,
+    debugCalls,
   };
 
   const ctxReal: Record<string, unknown> = {
@@ -120,6 +125,13 @@ function installSettingsHarness(
     isQuitting: () => false,
     setKeepAwake: leaves.setKeepAwake,
     setLoginItem: leaves.setLoginItem,
+    // 叶片注入即记录：debug 副作用路径（含「空块补丁不得驱动腿」）必须可观测。
+    setDebugMode: async (enabled: boolean) => {
+      debugCalls.push(enabled);
+      const leaf = leaves.setDebugMode;
+      if (leaf === undefined) throw new Error('fake-ctx-unavailable:setDebugMode');
+      return leaf(enabled);
+    },
     // 装配期订阅（先订阅后 start 契约）：空实现即可（sidecar-ctx 同款）。
     updateController: { subscribe: () => {} },
     // 嵌套解构的顶层键必须存在（空对象 = 子键 undefined）；settings 路径不触碰。
@@ -267,6 +279,155 @@ test('S-E settings-set: persist 失败 → 已应用副作用 await 反悔 + {er
   assert.equal(settingsOf(get).launchAtLogin, false);
   assert.deepEqual(harness.holder(), DEFAULT_CHAMBER_SETTINGS);
 });
+
+/** settings-get 结果里的调试回读（缺省 = 本进程未应用过）。 */
+function debugRuntimeOf(result: unknown): { inspectable: boolean; apiAvailable: boolean; reason?: string } | undefined {
+  return (result as { debugRuntime?: { inspectable: boolean; apiAvailable: boolean; reason?: string } }).debugRuntime;
+}
+
+test('S-E settings-set debug: 开启成功 → 腿收 true + 回读如实入投影（含推送）+ 持久化 intent', async () => {
+  const harness = installSettingsHarness({
+    setKeepAwake: async () => {},
+    setLoginItem: async () => ({ ok: true as const }),
+    setDebugMode: async () => ({ inspectable: true, apiAvailable: true }),
+  });
+  const resp = await harness.invoke(IPC_CHANNELS.SETTINGS_SET, { patch: { debug: { enabled: true } } });
+  assert.equal('error' in (resp as object), false, '成功路径无 error');
+  assert.deepEqual(harness.debugCalls, [true]);
+  assert.equal(harness.persistCalls.length, 1);
+  assert.equal(harness.persistCalls[0]!.debug.enabled, true);
+  const get = await harness.invoke(IPC_CHANNELS.SETTINGS_GET, null);
+  assert.equal(settingsOf(get).debug.enabled, true);
+  assert.deepEqual(debugRuntimeOf(get), { inspectable: true, apiAvailable: true });
+  // 推送同样携带回读（settings-changed 是页面事实面的另一条通道）。
+  const pushed = harness.pushes.at(-1)!.payload as Record<string, unknown>;
+  assert.deepEqual(pushed.debugRuntime, { inspectable: true, apiAvailable: true });
+});
+
+test('S-E settings-set debug: 回读不是入参回声——宿主报未达成时投影如实带 reason', async () => {
+  const harness = installSettingsHarness({
+    setKeepAwake: async () => {},
+    setLoginItem: async () => ({ ok: true as const }),
+    // 腿「成功」但实测未达成（无窗/撤销失败形态）：意图仍持久化，事实必须如实。
+    setDebugMode: async () => ({ inspectable: false, apiAvailable: true, reason: 'swift-edge-ui-unavailable:setDebugMode:no-window' }),
+  });
+  const resp = await harness.invoke(IPC_CHANNELS.SETTINGS_SET, { patch: { debug: { enabled: true } } });
+  assert.equal('error' in (resp as object), false, '成功路径无 error');
+  assert.equal(harness.persistCalls[0]!.debug.enabled, true, '意图照常持久化');
+  const get = await harness.invoke(IPC_CHANNELS.SETTINGS_GET, null);
+  assert.deepEqual(debugRuntimeOf(get), {
+    inspectable: false,
+    apiAvailable: true,
+    reason: 'swift-edge-ui-unavailable:setDebugMode:no-window',
+  });
+});
+
+test('S-E settings-set debug: 空块补丁 {debug:{}} 是 no-op——绝不驱动宿主腿（缺键载荷会被腿拒绝，意图丢失且记一次假失败）', async () => {
+  const harness = installSettingsHarness({
+    setKeepAwake: async () => {},
+    setLoginItem: async () => ({ ok: true as const }),
+    setDebugMode: async () => ({ inspectable: true, apiAvailable: true }),
+  });
+  // 先把调试模式打开（同一 harness 内：回读已存在）。
+  await harness.invoke(IPC_CHANNELS.SETTINGS_SET, { patch: { debug: { enabled: true } } });
+  const before = harness.debugCalls.length;
+  const resp = await harness.invoke(IPC_CHANNELS.SETTINGS_SET, { patch: { debug: {} } });
+  assert.equal('error' in (resp as object), false, '空块补丁是合法 no-op');
+  assert.equal(harness.debugCalls.length, before, '空块不得调用调试叶');
+  const get = await harness.invoke(IPC_CHANNELS.SETTINGS_GET, null);
+  assert.equal(settingsOf(get).debug.enabled, true, '持久值不变');
+  assert.deepEqual(debugRuntimeOf(get), { inspectable: true, apiAvailable: true }, '回读不得被静默刷成 false');
+});
+
+test('S-E settings-set debug: 叶 throw → 反悔回旧值 + 绝不持久化 + {error}', async () => {
+  const harness = installSettingsHarness({
+    setKeepAwake: async () => {},
+    setLoginItem: async () => ({ ok: true as const }),
+    setDebugMode: async (enabled: boolean) => {
+      if (enabled) throw new Error('swift-edge-unimplemented:setDebugMode');
+      return { inspectable: false, apiAvailable: true };
+    },
+  });
+  const resp = await harness.invoke(IPC_CHANNELS.SETTINGS_SET, { patch: { debug: { enabled: true } } });
+  assert.deepEqual(resp, { ok: false, error: 'settings apply failed' });
+  assert.deepEqual(harness.debugCalls, [true, false], '应用新值 + 反悔旧值');
+  assert.equal(harness.persistCalls.length, 0);
+  const get = await harness.invoke(IPC_CHANNELS.SETTINGS_GET, null);
+  assert.equal(settingsOf(get).debug.enabled, false);
+  // 反悔腿真的把宿主恢复成 false，所以回读是「关」这一**事实**（不是按 enabled 猜的
+  // 回声）；UI 的 off 分类不渲染状态行，不会假装开过。
+  assert.deepEqual(debugRuntimeOf(get), { inspectable: false, apiAvailable: true });
+});
+
+test('S-E settings-set debug: persist 失败 → 已应用副作用反悔 + holder 旧值', async () => {
+  const harness = installSettingsHarness(
+    {
+      setKeepAwake: async () => {},
+      setLoginItem: async () => ({ ok: true as const }),
+      setDebugMode: async (enabled: boolean) => ({ inspectable: enabled, apiAvailable: true }),
+    },
+    { persist: () => { throw new Error('disk full'); } },
+  );
+  const resp = await harness.invoke(IPC_CHANNELS.SETTINGS_SET, { patch: { debug: { enabled: true } } });
+  assert.deepEqual(resp, { ok: false, error: 'settings persist failed' });
+  assert.deepEqual(harness.debugCalls, [true, false]);
+  assert.equal(harness.holder().debug.enabled, false);
+});
+
+test('S-E debug 回读汇：只把**事实字段**写进投影并推一次；空串原因按无原因归一', async () => {
+  const harness = installSettingsHarness({
+    setKeepAwake: async () => {},
+    setLoginItem: async () => ({ ok: true as const }),
+  });
+  // true = 汇已装配（installIpcHandlers 恰一次的不变式）。
+  assert.equal(applyDebugRuntime({ enabled: false, inspectable: true, apiAvailable: true, reason: '' }), true);
+  const get = await harness.invoke(IPC_CHANNELS.SETTINGS_GET, null);
+  assert.deepEqual(debugRuntimeOf(get), { inspectable: true, apiAvailable: true },
+    'enabled 是意图：绝不进投影；空串原因归一为「无原因」');
+  const pushed = harness.pushes.at(-1)!.payload as Record<string, unknown>;
+  assert.deepEqual(pushed.debugRuntime, { inspectable: true, apiAvailable: true }, '推送携带同一事实面');
+  assert.equal('enabled' in (pushed.debugRuntime as object), false, '投影里出现 enabled 就是把意图混成事实');
+});
+
+test('S-E debug 回读汇：宿主意图与持久设置不一致 → 恰一次 loud 告警（一致则零告警）', async () => {
+  const harness = installSettingsHarness({
+    setKeepAwake: async () => {},
+    setLoginItem: async () => ({ ok: true as const }),
+  });
+  const warnings: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(' ')); };
+  try {
+    // 持久值默认 debug.enabled=false → 意图 false 一致，零告警。
+    assert.equal(applyDebugRuntime({ enabled: false, inspectable: false, apiAvailable: true }), true);
+    assert.deepEqual(warnings, [], '一致时不得告警（否则每次正常冷启都刷一行噪音）');
+    // 宿主说「按 true 应用」而文件是 false = 真分叉 → 恰一次 loud。
+    assert.equal(applyDebugRuntime({ enabled: true, inspectable: false, apiAvailable: true }), true);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0]!, /调试回读的意图与持久设置不一致/);
+  } finally {
+    console.warn = original;
+  }
+  assert.ok(harness.pushes.length >= 2, '每次回读都推一次设置变更');
+});
+
+test('S-E settings-set：组合补丁里更早的叶失败 → 绝不触碰调试腿，也不物化 debugRuntime', async () => {
+  const harness = installSettingsHarness({
+    setKeepAwake: async () => {
+      throw new Error('keep-awake leg failed');
+    },
+    setLoginItem: async () => ({ ok: true as const }),
+    setDebugMode: async (enabled: boolean) => ({ inspectable: enabled, apiAvailable: true }),
+  });
+  const resp = await harness.invoke(IPC_CHANNELS.SETTINGS_SET, {
+    patch: { keepAwake: true, debug: { enabled: true } },
+  });
+  assert.deepEqual(resp, { ok: false, error: 'settings apply failed' });
+  assert.deepEqual(harness.debugCalls, [], '调试副作用从未应用 → 回滚也不得调用宿主腿');
+  assert.equal(debugRuntimeOf(await harness.invoke(IPC_CHANNELS.SETTINGS_GET, null)), undefined,
+    '「未知」不得被一次无关失败的回滚物化');
+});
+
 test('normalizeSettings: defaults for null / non-object', () => {
   assert.deepEqual(normalizeSettings(null), DEFAULT_CHAMBER_SETTINGS);
   assert.deepEqual(normalizeSettings('nope'), DEFAULT_CHAMBER_SETTINGS);
@@ -279,6 +440,7 @@ test('normalizeSettings: accepts valid fields, rejects bad values, ignores unkno
     vscodeOpenInNewWindow: false,
     registryOrigin: 'https://registry.npmmirror.com', notifications: DEFAULT_CHAMBER_SETTINGS.notifications,
     sessionTodo: DEFAULT_CHAMBER_SETTINGS.sessionTodo,
+    debug: DEFAULT_CHAMBER_SETTINGS.debug,
   });
   // Bad enum / non-boolean values fall back to defaults silently (normalize is
   // the persistence read path; loud validation lives in validatePatch).
@@ -310,6 +472,51 @@ test('normalizeSettings: nested notifications — missing/invalid fields fall ba
   assert.equal(normalizeSettings({ notifications: { badgeEnabled: false } }).notifications.badgeEnabled, false);
   assert.equal(normalizeSettings({ notifications: { badgeEnabled: 'yes' } }).notifications.badgeEnabled, true);
 });
+test('normalizeSettings: nested debug (debug mode) — missing/invalid falls back to off, never a fake on', () => {
+  // 缺字段 / 非对象 → 整组默认（默认关：调试面绝不被一个读不懂的块打开）。
+  assert.deepEqual(normalizeSettings({ debug: {} }).debug, { enabled: false });
+  assert.deepEqual(normalizeSettings({ debug: null }).debug, { enabled: false });
+  assert.deepEqual(normalizeSettings({ debug: 'yes' }).debug, { enabled: false });
+  assert.deepEqual(normalizeSettings({ debug: ['x'] }).debug, { enabled: false });
+  assert.deepEqual(DEFAULT_CHAMBER_SETTINGS.debug, { enabled: false }, '调试模式默认关闭');
+  assert.equal(normalizeSettings({ debug: { enabled: true } }).debug.enabled, true);
+  assert.equal(normalizeSettings({ debug: { enabled: 'yes' } }).debug.enabled, false);
+  // 未知嵌套键忽略（前向兼容，persistence 读路径语义同 notifications/sessionTodo）。
+  assert.deepEqual(normalizeSettings({ debug: { enabled: true, futureNested: 42 } }).debug, { enabled: true });
+});
+
+test('validatePatch: debug accepts only a boolean enabled; unknown nested keys are rejected loudly', () => {
+  assert.deepEqual(validatePatch({ debug: { enabled: true } }), { ok: true, patch: { debug: { enabled: true } } });
+  assert.deepEqual(validatePatch({ debug: { enabled: false } }), { ok: true, patch: { debug: { enabled: false } } });
+  assert.deepEqual(validatePatch({ debug: {} }), { ok: true, patch: { debug: {} } }, '缺字段 = 不修改（deep-merge 兜底）');
+  assert.deepEqual(validatePatch({ debug: { nope: true } }), { ok: false, error: 'unknown debug key: nope' });
+  assert.deepEqual(validatePatch({ debug: { enabled: 'yes' } }), { ok: false, error: 'debug.enabled must be a boolean' });
+  assert.deepEqual(validatePatch({ debug: 7 }), { ok: false, error: 'debug must be an object' });
+});
+
+test('computeSupported: debugInspectable only on the Swift native shell (Electron leg is unwired)', () => {
+  // 只有 Swift 原生壳有 WKWebView.isInspectable；Electron 腿本版不接线 → 开关禁用
+  // （绝不呈现一个永远无效的开关，同 badgeSupported 纪律）。
+  assert.equal(computeSupported('darwin', true, 'swift').debugInspectable, true);
+  assert.equal(computeSupported('darwin', true, 'electron').debugInspectable, false);
+  assert.equal(computeSupported('darwin', true).debugInspectable, false, '缺省 flavor = electron');
+  assert.equal(computeSupported('linux', false, 'electron').debugInspectable, false);
+});
+
+test('readSettingsFile: malformed nested debug block is preserved as corrupt (never a silent default)', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-'));
+  const file = path.join(dir, 'chamber-settings.json');
+  for (const malformed of [{ debug: { enabled: 1 } }, { debug: null }, { debug: 'yes' }, { debug: ['x'] }]) {
+    writeFileSync(file, JSON.stringify(malformed), 'utf8');
+    const read = readSettingsFile(file);
+    assert.equal(read.state, 'corrupt', JSON.stringify(malformed) + ' 必须判损坏');
+    // 损坏 = 整文件不采信（normalize 的默认回落是内存兜底；文件里的 null 绝不是「默认关」）。
+    assert.deepEqual(read.settings.debug, { enabled: false });
+    assert.ok(existsSync(`${file}.corrupt`), '损坏文件保留为 *.corrupt（可逆取证）');
+    rmSync(`${file}.corrupt`, { force: true });
+  }
+});
+
 test('writeSettingsFile + readSettingsFile round-trip (atomic, 0600)', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-'));
   const file = path.join(dir, 'chamber-settings.json');
@@ -322,6 +529,7 @@ test('writeSettingsFile + readSettingsFile round-trip (atomic, 0600)', () => {
     registryOrigin: 'https://registry.npmjs.org',
     notifications: { enabled: true, mode: 'always' as const, onComplete: false, onAsk: true, onRequest: false, badgeEnabled: false },
     sessionTodo: { enabled: false, onComplete: false, onAsk: true, onRequest: false },
+    debug: { enabled: true },
   };
   writeSettingsFile(file, settings);
   const read = readSettingsFile(file);
@@ -615,12 +823,15 @@ test('P-12: a persisted strict-rejected origin is preserved as corrupt (read pat
   }
 })
 test('computeSupported: launchAtLogin on all shipping platforms; closeToTray follows tray availability, always on darwin', () => {
-  // design 21: win32 launchAtLogin is supported (HKCU Run key).
-  assert.deepEqual(computeSupported('win32', true), { launchAtLogin: true, closeToTray: true, badgeSupported: false });
-  assert.deepEqual(computeSupported('win32', false), { launchAtLogin: true, closeToTray: false, badgeSupported: false });
-  assert.deepEqual(computeSupported('darwin', false), { launchAtLogin: true, closeToTray: true, badgeSupported: true });
-  assert.deepEqual(computeSupported('linux', true), { launchAtLogin: true, closeToTray: true, badgeSupported: true });
-  assert.deepEqual(computeSupported('linux', false), { launchAtLogin: true, closeToTray: false, badgeSupported: true });
+  // design 21: win32 launchAtLogin is supported (HKCU Run key). debugInspectable
+  // 缺省 flavor = electron → false（Electron 腿本版不接线调试面）。
+  assert.deepEqual(computeSupported('win32', true), { launchAtLogin: true, closeToTray: true, badgeSupported: false, debugInspectable: false });
+  assert.deepEqual(computeSupported('win32', false), { launchAtLogin: true, closeToTray: false, badgeSupported: false, debugInspectable: false });
+  assert.deepEqual(computeSupported('darwin', false), { launchAtLogin: true, closeToTray: true, badgeSupported: true, debugInspectable: false });
+  assert.deepEqual(computeSupported('linux', true), { launchAtLogin: true, closeToTray: true, badgeSupported: true, debugInspectable: false });
+  assert.deepEqual(computeSupported('linux', false), { launchAtLogin: true, closeToTray: false, badgeSupported: true, debugInspectable: false });
+  // Swift 原生壳（WKWebView isInspectable）才把调试门打开。
+  assert.equal(computeSupported('darwin', true, 'swift').debugInspectable, true);
 });
 
 test('closeToTrayRecoveryAvailable: macOS Dock always recovers; elsewhere the tray is the gate', () => {

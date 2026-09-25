@@ -32,6 +32,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var bridge: BridgeClient?
     private var supervisor: SidecarSupervisor?
     private var mainWindowController: MainWindowController?
+    /// 启动期解析出的 userData 根（ready 重报调试事实时要重读设置文件，故须留存）。
+    private var shellUserDataDir: String?
+    /// 启动 reconcile 的调试回读（含失败原因）。投递被 ready 门推迟（invoke 只在
+    /// ready 帧后到达），且在「无活事实可读」时作为回落——见 reportDebugModeFactOnReady。
+    private var debugModeStartupFact: (enabled: Bool, inspectable: Bool, reason: String?)?
     /// 深链转发（E13：sidecar 未就绪先缓冲，ready 后按序转交）。
     private lazy var deepLinks = DeepLinkRelay { [weak self] url in
         self?.sendDeepLink(url)
@@ -117,6 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 对应文件（其唯一日志目录是控制面管理的 state/host-logs/<port>.log），
         // 完整路径核实见 ShellLog 头注释。配置点尽可能早——启动、sidecar、
         // 导航失败、更新相位、退出链的关键行都在其后。
+        shellUserDataDir = stateDir
         ShellLog.shared.configure(userDataDir: stateDir)
         shellLog("[shell] 原生壳日志落盘：\(ShellLog.shared.filePath ?? "未启用（仅 stdout）")")
         // 通知授权与 delegate 接线（前台展示 + click 回灌；授权结果与调度
@@ -413,6 +419,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // mainWindowProvider 守卫；headless（swift run 无 bundle）仍诚实降级。
         let legs = SwiftEdgeHostLegs(config: .init(canShowUI: {
             Bundle.main.bundleIdentifier != nil
+        }, setInspectable: { [weak controller] enabled in
+            // 调试模式宿主腿 = WKWebView.isInspectable 运行时开关（Safari Web
+            // Inspector 的发布态入口）。controller 未装配 → nil 诚实降级。
+            controller?.setInspectable(enabled)
         }))
         legs.mainWindowProvider = { [weak controller] in controller?.window }
         bridge.edgeHostLegs = legs
@@ -503,6 +513,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 默认。窗口对象此刻已存在，腿的 no-window 守卫可通过。
         StartupSettings.apply(StartupSettings.readKeepAwake(userDataDir: stateDir)) { on in
             legs.respond(method: "setKeepAwake", payload: .object(["on": .bool(on)]))
+        }
+        // 调试模式启动 reconcile：<userData>/chamber-settings.json 的 debug.enabled
+        // 经同一个 setDebugMode 宿主腿应用（不开设置页也已生效）。缺文件 = 默认关
+        // （不动作、无日志）；损坏 = loud + 不动作（绝不猜一个值去开检查器）。
+        // 实测回读经 __host.debugModeApplied 报给 sidecar，供 settings 投影在用户
+        // 打开设置页前就带 debugRuntime。
+        switch Self.reconcileDebugMode(
+            StartupSettings.readDebugEnabled(userDataDir: stateDir),
+            apply: { enabled in
+                legs.respond(method: "setDebugMode", payload: .object(["enabled": .bool(enabled)]))
+            }
+        ) {
+        case .settingsMissing:
+            break
+        case .settingsCorrupt(let reason):
+            shellLog("[shell] 调试模式设置不可读（损坏：\(reason)）——本次启动不改动检查器")
+        case .applied(let enabled, let inspectable, let reason):
+            // 只暂存，**不在此处投递**：invoke 有 ready 契约（sidecar 的
+            // installIpcHandlers 先于 ready 帧，装配前发出的入站会被 loud 拒绝并
+            // 永久丢失 debugRuntime）。投递统一走 handleSidecarReady。
+            debugModeStartupFact = (enabled: enabled, inspectable: inspectable, reason: reason)
+            // 无信息可报（用户本就关着、宿主也是关、腿无原因）→ 不写这条汇总行，
+            // 每次启动只留腿自己那一行施加证据（MainWindowController 的
+            // logInspectableTransition 恒写——它是实机门核对「启动到底施加了什么」的依据）。
+            if enabled || inspectable || reason != nil {
+                shellLog("[shell] 启动期应用调试模式：enabled=\(enabled) isInspectable=\(inspectable)"
+                         + (reason.map { "（\($0)）" } ?? ""))
+            }
         }
         // 登录自启每次启动重放：
         // Electron main.ts:1434-1440 每次都 applyLaunchAtLogin——系统移除登录项
@@ -951,6 +989,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if deepLinks.droppedCount > 0 {
             shellLog("[shell] 深链缓冲溢出丢弃 \(deepLinks.droppedCount) 条（core 侧队列另有有界语义）")
         }
+        // 调试事实重报（每次 ready，含 sidecar 崩溃重启后的新 ready）——见方法注释。
+        reportDebugModeFactOnReady()
+    }
+
+    /// ready（含 sidecar 重启后的新 ready）上报宿主**当前**检查器事实。
+    ///
+    /// debugRuntime 是 sidecar 进程内的内存投影，而检查器状态活在 Swift 进程里：新
+    /// sidecar 的 holder 恒空，只报「应用启动那一刻」会让重启后的投影把「其实还开着」
+    /// 低报成「尚未应用」。故每次 ready 都重报，且事实是**现读**的（不是启动快照）：
+    /// 用户中途开关过、或 sidecar 重启过，投影仍如实。
+    ///
+    /// 投递时机本身是契约：invoke 只在 ready 帧后到达（sidecar 的 installIpcHandlers
+    /// 先于 ready 帧），启动期直接发会被 loud 拒绝且永久丢失。
+    private func reportDebugModeFactOnReady() {
+        guard let bridge else { return }
+        let intent = shellUserDataDir
+            .flatMap { StartupSettings.readDebugEnabled(userDataDir: $0).enabledValue }
+        guard let fact = Self.debugFactForReady(inspectable: mainWindowController?.currentInspectable(),
+                                                intent: intent,
+                                                startupFact: debugModeStartupFact) else { return }
+        Self.reportDebugModeApplied(bridge: bridge, enabled: fact.enabled,
+                                    inspectable: fact.inspectable, reason: fact.reason)
+    }
+
+    /// ready 上报的事实选择（纯函数，单测直测三分支）：
+    /// - 有活事实（webView 可读）→ 活事实 + **尽力意图**：设置文件不可读（missing/corrupt
+    ///   本次读不到）时回落启动 reconcile 暂存的意图，再没有才 false——绝不把「这次读不懂」
+    ///   说成另一个意图（那会在 shell-core 的漂移比对里假报「宿主与文件不一致」）；
+    /// - 无活事实（无 webView / API 缺失）→ 回落启动 reconcile 的结果，它带着失败原因
+    ///   （no-window 等），比沉默有用；
+    /// - 两者都没有 → nil（无信息可报，绝不编造）。
+    static func debugFactForReady(inspectable: Bool?,
+                                  intent: Bool?,
+                                  startupFact: (enabled: Bool, inspectable: Bool, reason: String?)?)
+        -> (enabled: Bool, inspectable: Bool, reason: String?)? {
+        guard let inspectable else { return startupFact }
+        return (enabled: intent ?? startupFact?.enabled ?? false,
+                inspectable: inspectable,
+                reason: nil)
     }
 
     /// 深链转交 sidecar（fire-and-forget；失败 loud——core 侧队列不因单条
@@ -1330,8 +1407,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Help 组（macOS 标准菜单位置 = Window 之后）。
         // 最小且诚实的帮助项：打开项目页（仓库主页）——原生壳没有页面桥帮助面，
         // 这是唯一不依赖 sidecar/页面状态的帮助入口，且走既有外部打开路径。
-        // 明确不加 DevTools 项：isInspectable/菜单入口仅 DEBUG 可达，
-        // release 打包态菜单里绝不出现检查器入口。
+        // 明确不加 DevTools 项：运行期检查器入口是设置页里的调试模式开关
+        // （默认关、可撤销、带信任边界说明），菜单里绝不出现检查器入口
+        // （菜单项本身就是产品面）。
         let helpMenuItem = NSMenuItem()
         helpMenuItem.tag = Self.helpSectionTag
         mainMenu.addItem(helpMenuItem)
@@ -1735,6 +1813,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return nil
         }
         return value
+    }
+
+    /// 启动期调试模式重放的决策结果（纯值，单测直测）。
+    enum DebugModeReconcile: Equatable {
+        /// 设置文件不存在 → 默认关，不动作（无日志；与 keep-awake 的 .missing 同）。
+        case settingsMissing
+        /// 设置不可读（损坏）→ 不动作（绝不猜一个值去开检查器）且 loud。
+        case settingsCorrupt(reason: String)
+        /// 腿已应用：enabled = 持久意图，inspectable = 宿主实测回读，reason = 失败原文。
+        case applied(enabled: Bool, inspectable: Bool, reason: String?)
+    }
+
+    /// 启动期调试模式重放（纯函数，注入腿执行体）：读持久意图 → 走 setDebugMode
+    /// 宿主腿 → 取**实测回读**（绝不按 enabled 推断）。腿失败/无窗不 fatal——
+    /// 回 .applied(inspectable:false, reason:…) 让调用方 loud 并如实上报。
+    static func reconcileDebugMode(
+        _ settings: StartupSettings.DebugReadOutcome,
+        apply: (Bool) -> (result: AnyCodable?, error: String?)
+    ) -> DebugModeReconcile {
+        switch settings {
+        case .missing:
+            return .settingsMissing
+        case .corrupt(let reason):
+            return .settingsCorrupt(reason: reason)
+        case .ok(let enabled):
+            let outcome = apply(enabled)
+            if let error = outcome.error {
+                // 腿级失败（no-window 等）：inspectable 无事实可读 → false + 原文。
+                return .applied(enabled: enabled, inspectable: false, reason: error)
+            }
+            // 应答必须是「带布尔 inspectable 的对象」——缺字段的对象不算可用回读，
+            // 绝不乐观成已开启（宁可报 unusable，也不假装事实已知）。
+            guard case .object(let fields)? = outcome.result,
+                  case .bool(let inspectable)? = fields["inspectable"] else {
+                return .applied(enabled: enabled, inspectable: false,
+                                reason: "setDebugMode edge returned an unusable reply")
+            }
+            var reason: String?
+            if case .string(let text)? = fields["reason"], !text.isEmpty { reason = text }
+            return .applied(enabled: enabled, inspectable: inspectable, reason: reason)
+        }
+    }
+
+    /// 启动期调试回读上报 sidecar（__host.debugModeApplied）。失败 loud——丢掉它
+    /// 设置页整场只能显示「未知」，绝不能静默。
+    /// __host.debugModeApplied 的 wire 载荷（纯函数，单测直测）：字段集与
+    /// node-edges.ts 的入站校验逐字对应（三个必填布尔 + 可选非空 reason）。
+    static func debugModeAppliedPayload(enabled: Bool,
+                                        inspectable: Bool,
+                                        reason: String?) -> AnyCodable {
+        // apiAvailable 恒 true：本仓平台下限 macOS 14.4，13.3 才引入的 isInspectable
+        // 不可能缺席；字段留着是 wire 契约的一部分（node-edges 三布尔必填）。
+        var payload: [String: AnyCodable] = [
+            "enabled": .bool(enabled),
+            "inspectable": .bool(inspectable),
+            "apiAvailable": .bool(true),
+        ]
+        if let reason, !reason.isEmpty { payload["reason"] = .string(reason) }
+        return .object(payload)
+    }
+
+    static func reportDebugModeApplied(bridge: BridgeClient,
+                                       enabled: Bool,
+                                       inspectable: Bool,
+                                       reason: String?) {
+        let payload = debugModeAppliedPayload(enabled: enabled, inspectable: inspectable,
+                                              reason: reason)
+        Task { @MainActor in
+            do {
+                _ = try await bridge.invoke(method: HostInboundMethod.debugModeApplied,
+                                            payload: payload)
+            } catch {
+                shellLog("[shell] 调试模式回读上报失败（loud，不致命）：\(error.localizedDescription)")
+            }
+        }
     }
 
     /// 启动期登录自启重放（纯函数，注入腿执行体）。缺键/损坏 = 不动作；

@@ -34,6 +34,7 @@ import {
 import {
   drainDeepLinkLaunches,
   enqueueDeepLink,
+  applyDebugRuntime,
   installIpcHandlers,
   onRendererLifecycle,
   QUIT_CLEANUP_TIMEOUT_MS,
@@ -310,6 +311,13 @@ const nodeEdges = createNodeEdges({
       throw new Error('sidecar-edges:native-update-phase-before-ctx-ready')
     }
     controller.applyNativePhase(input)
+  },
+  // 调试模式启动期回读：Swift 在启动 reconcile 里按持久值应用 isInspectable 后报回。
+  // 装配前到达 = loud 拒绝（丢掉它设置页整场只显示「未知」）；装配后写入 core holder 并推一次设置。
+  debugModeApplied(input) {
+    if (!applyDebugRuntime(input)) {
+      throw new Error('sidecar-edges:debug-mode-before-ctx-ready')
+    }
   },
   hostFacts: {
     trayAvailable: true, // mac Dock 常驻（design 14 D1）

@@ -29,6 +29,10 @@ public enum HostInboundMethod {
     /// {phase, version, error} 报给 sidecar（sidecar 映射进页面的 update-state
     /// 投影）。payload 值域见 NativeUpdatePhase。
     public static let nativeUpdatePhase = "__host.nativeUpdatePhase"
+    /// 调试模式启动回读：Swift 启动 reconcile 应用 isInspectable 后，把实测回读
+    /// {enabled, inspectable, apiAvailable, reason?} 报给 sidecar（settings 投影的
+    /// debugRuntime）。锁步由 HostInboundMethodTests 断言。
+    public static let debugModeApplied = "__host.debugModeApplied"
 }
 
 /// renderer 崩溃重载决策（纯值逻辑，单测直测）。
