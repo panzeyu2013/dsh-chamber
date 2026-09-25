@@ -517,6 +517,23 @@ test('③ verifyPayload：错版本 dist-info / 缺 pythonPackages 都必须红�
     const exactCheck = verifyPayload(exact)
     assert.equal(exactCheck.ok, true, exactCheck.problems.join('；'))
 
+    // 反向精确集合：多出的发行版（夹带/被换过的 wheel）必须红——只查「锁 ⊆ 实装」
+    // 会让它静默放行。
+    const extra = buildPayload('extra-dist', manifestOf({ numpy: '2.3.5' }))
+    mkdirSync(path.join(extra, layout.sitePackages, 'numpy-2.3.5.dist-info'), { recursive: true })
+    mkdirSync(path.join(extra, layout.sitePackages, 'rogue-1.0.dist-info'), { recursive: true })
+    const extraCheck = verifyPayload(extra)
+    assert.equal(extraCheck.ok, false, '多出的发行版不得算过')
+    assert.ok(extraCheck.problems.some((problem) => problem.includes('多出未登记发行版 rogue-1.0.dist-info')),
+      extraCheck.problems.join('；'))
+
+    // 归一化对等：python-dateutil 的 dist-info 目录名是 python_dateutil-…，
+    // 必须被认成同一发行版（否则精确集合会把它误判成「多出」）。
+    const normalized = buildPayload('normalized', manifestOf({ 'python-dateutil': '2.9.0.post0' }))
+    mkdirSync(path.join(normalized, layout.sitePackages, 'python_dateutil-2.9.0.post0.dist-info'), { recursive: true })
+    const normalizedCheck = verifyPayload(normalized)
+    assert.equal(normalizedCheck.ok, true, normalizedCheck.problems.join('；'))
+
     // 缺 pythonPackages 键 / 空对象：无法核对 = 不完整，不得整段跳过。
     const missing = verifyPayload(buildPayload('missing-packages', manifestOf(undefined)))
     assert.equal(missing.ok, false, '缺 pythonPackages 不得凭空通过')

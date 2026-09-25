@@ -652,6 +652,17 @@ export function verifyPayload(dir) {
         problems.push('site-packages 缺 ' + name + ' ' + String(version) + '（期望 ' + (expected ?? '合法版本号') + '）')
       }
     }
+    // 反向（精确集合）：site-packages 里**多出**的发行版同样是「载荷与锁不一致」。
+    // 只查「锁 ⊆ 实装」会让一个被换过/夹带了额外 wheel 的载荷静默放行；上游
+    // prepare.ts 的 smoke.py 断言的正是精确集合（升级计划 §22.4.2-8）。
+    const locked = new Set(Object.keys(packages).map((name) => normalizeDistributionName(name)))
+    for (const directory of distributions) {
+      const match = /^(.+)-([0-9][^-]*)\.dist-info$/u.exec(directory)
+      if (match === null) continue
+      if (!locked.has(normalizeDistributionName(match[1]))) {
+        problems.push('site-packages 多出未登记发行版 ' + directory + '（载荷与锁不一致）')
+      }
+    }
   }
   return {
     ok: problems.length === 0,
