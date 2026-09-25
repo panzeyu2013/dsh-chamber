@@ -523,6 +523,31 @@
       "evidence": "人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验",
       "status": "accepted",
       "rationale": "goal wire 无自动化 vendor 源锁步：语义漂移只会保持 unknown（不误报），但白名单字段必须重锚；接受人工复验而非新增 C 编号门"
+    },
+    {
+      "id": "mirror.dsh-desktop-update-chain",
+      "type": "mirror",
+      "ours": "packages/desktop",
+      "upstream": "apps/desktop/src",
+      "authority": "upstream",
+      "criteria": [],
+      "deviations": [],
+      "relatedGates": [
+        "packages/desktop/test/desktop-shell/updater-main-wiring.test.ts",
+        "packages/desktop/test/desktop-shell/updater-watchdog.test.ts",
+        "packages/desktop/update-journal.test.ts",
+        "packages/desktop/update-schedule.test.ts",
+        "packages/desktop/upstream-seats.test.ts"
+      ],
+      "symbols": [
+        "packages/desktop/update-headless.ts#selectLatestReleaseVersion",
+        "packages/desktop/update-journal.ts#updateJournalState",
+        "packages/desktop/update-schedule.ts#UPDATE_SCHEDULE_DEFAULTS",
+        "packages/desktop/updater.ts#LINUX_UPDATE_UNSUPPORTED_REASON"
+      ],
+      "evidence": "人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验（上游 apps/desktop/src/update-{coordinator,journal,schedule,error,attention,http-executor}.ts 与 mandatory-update-*.ts）",
+      "status": "accepted",
+      "rationale": "上游 0.1.7 有完整 electron-updater 链；chamber 自建更新链按相位/注意力/journal 语义镜像其形状（§22.3.5）。两处明确不采用：update-http-executor 的「替换 electron-updater 传输」需要注入私有字段（Electron 升级即碎，chamber 用外部 watchdog + 忽略迟到事件），mandatory-update 家族是上游 Desktop 的产品面。另：T-04 —— 上游 apps/ 与 patches/ 均无 Sparkle，Swift 腿的更新链是 chamber 自建，本触点只覆盖 Electron 腿。"
     }
   ],
   "notes": "machine facts only; prose lives in docs/checklists/upstream-touchpoints.md"
