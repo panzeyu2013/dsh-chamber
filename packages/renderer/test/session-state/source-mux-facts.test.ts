@@ -26,6 +26,8 @@ import {
   rowFromListItem,
   type MuxSocket,
 } from '../../src/source-mux-facts.ts'
+// 可判性唯一家：退役快照必须以它判定（不得在测试里自造第二套规则）。
+import { isFactsDecisionUsable } from '../../src/session-facts-source.ts'
 
 const SOURCE = readFileSync(fileURLToPath(new URL('../../src/source-mux-facts.ts', import.meta.url)), 'utf8')
 
@@ -165,6 +167,32 @@ test('a socket ready frame cannot certify facts after a failed baseline', async 
     assert.equal(facts.status().ready, false)
     assert.equal(snapshots.at(-1)?.verdict, 'degraded')
   } finally { facts.stop() }
+})
+
+test('stop() retires a readable snapshot to degraded: dead-carrier rows never stay decisive', async () => {
+  // 缺陷（round-2 红队坐实）：观察者 stop() 之前不发任何快照、之后 emit 又被拦，store 里
+  // 会永久留着最后一份 readable 快照（stale:false / serviceable:true）——控制面状态抢先于
+  // mux socket 的 close/静默 时，死载体的行仍被判定面当证据。退役必须走成"保留行 + 标不可用"。
+  const socket = new FakeSocket()
+  const snapshots: Array<Record<string, unknown>> = []
+  const facts = createSourceMuxFacts({
+    sourceId: 'retire', origin: 'http://cp', onSnapshot: snapshot => snapshots.push(snapshot as never),
+    openSocket: () => socket,
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items: [{ sessionId: 's1', running: false, updatedAt: 7 }] }) }) as never,
+  })
+  facts.start()
+  socket.open()
+  socket.item({ type: 'ready', clientId: 'c' })
+  await waitFor(() => facts.status().ready, 'initial baseline did not settle')
+  const live = snapshots.at(-1)!
+  assert.equal(isFactsDecisionUsable(live as never), true, 'ready 观察者的快照必须可判（前置）')
+  facts.stop()
+  const retired = snapshots.at(-1)!
+  assert.equal(retired.stale, true, '退役快照必须标 stale')
+  assert.equal(retired.serviceable, false)
+  assert.equal(retired.verdict, 'degraded')
+  assert.equal(isFactsDecisionUsable(retired as never), false, '退役后判定面不得再把死载体的行当证据')
+  assert.deepEqual(Object.keys(retired.rows as object), ['s1'], '在场证据保留（不得清成权威空集）')
 })
 
 test('a malformed ready frame cannot certify facts or renew event liveness', async () => {

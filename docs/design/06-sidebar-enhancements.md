@@ -282,10 +282,20 @@
 
 ### 4.1 事实来源（每 ctx 运行时）
 
-- `ctx.sessions.list`（ObservableSnapshot）行字段：`running`、`completed?`、
-  `pendingInteraction?: 'approval'|'plan-review'|'question'`、`blank`、
-  `updatedAt`；快照含 `current?: string`（当前会话 id）。（「蓝点」= 这条完成未读
-  事实，渲染为 §4.3 的 chamber 品牌蓝点。）
+- **两个官方事实面，别混**（2026-01 校正）：
+  - `ctx.sessions.list`（ObservableSnapshot）行字段就是客户端 store 行
+    （`projectList()` 之后）：`id`、`displayTitle`、`running`、`blank`、
+    `updatedAt`、`retainedBy`，稀疏的 `title`/`cwd`/`parentId`/`origin`/
+    `projectionValues`。**没有 `completed`**，也没有 `pendingInteraction`。
+  - `ctx.uiSession.sessionStatus` 是实时投影（**只在内容变化时发布**：真源
+    `dsh-client-ui-session` 用 `sameSessionStatus` 去重后早退），行形状
+    `{ running?: boolean; pendingInteraction?: { kind: 'approval'|'plan-review'|'question' };
+    completionUnread: boolean }`；行 id 并集含「只因 pending 交互或完成提醒而存在」的
+    行，所以 `running` 可能是 `undefined`。
+  - 官方 nav 自己把两者合成一行：`running: status?.running ?? s.running`、
+    `completed: status?.completionUnread === true`。chamber 的运行位按同一规则在生产者里
+    解析（§4.3 第一条），**完成未读（蓝点）不取官方位**：chamber 自持账本判定「谁在阅读
+    什么」（App `completedBySource`，见下），官方 `completionUnread` 今日不消费。
 - **goal 三值事实**（design 19 §3.2.1，2026-12 落地）：行字段
   `goal?: GoalFact | null`——**字段缺席 = unknown**（投影还没给出 goal 键）、`null` =
   明确无 goal、对象 = 有 goal；
@@ -298,7 +308,8 @@
 - 每实例 boot = 独立 ctx、独立 store；侧边栏插件在每个 ctx 都挂载，即每个来源都有
   一个可订阅自身运行时的事实生产者。
 - **插件 = 投影**：上报端只做快照投影——`current` + 每列出会话的实时 `running`
-  位 + vendor 已武装的 `completed`/`pending`，除 design 24 §12 的**purged 墓碑
+  位（按官方 `status?.running ?? s.running` 解析）+ 官方 `sessionStatus` 的
+  `pendingInteraction`，除 design 24 §12 的**purged 墓碑
   抑制集 + 收敛链**（唯一自持状态：内容已删的 id 从上报中过滤）外**不自持
   状态**。官方 `completed` 提醒只在
   「运行→空闲」边沿且会话**非本 ctx selected** 时武装，而后台来源 shell 的
@@ -309,10 +320,11 @@
   vendor 提醒同构，仅把「正在阅读」从「本 ctx selected」换成「活动视图的
   current 会话」）。App 状态机见 §4.2；插件侧无重复状态、不碰任何来源
   selection（无竞态、会话保活不受影响）。
-- **运行中子 agent 计数**：插件另上报每父会话 `runningSubagents`——vendor 纯函数
-  `indexSubagentDescendants(byId)` 的 runningCount（经不间断 subagent 起源链统计
-  的后代 running 数，官方 ui-workspace tree 的 `runningSubagentCount` 同一
-  算法），动机与语义见 §4.5：父会话 running 位只反映「agent 回合进行中」，后台
+- **运行中子 agent 计数**：插件另上报每父会话 `runningSubagents`——chamber 纯函数
+  `indexSubagentDescendants(byId)` 的 runningCount（经不间断 subagent 起源链统计的
+  后代 running 数；与官方 tree.ts 的 `runningChildCount` **只同「子行运行位解析」这一条
+  规则**，行集不同：官方读该父的直接子目录，本函数把后代归给全部祖先——见 §4.5 与
+  STATUS ⑮），动机与语义见 §4.5：父会话 running 位只反映「agent 回合进行中」，后台
   子 agent 存活时父回合已结束（running=false）、子 agent 仍在工作——没有这条
   计数，完成蓝点会在子 agent 干活时提前亮起。
 
@@ -324,8 +336,9 @@
 
 - 每 ctx 插件 apply 内先为该来源注册一代 runtime producer，再由 effect 订阅
   `ctx.sessions.list`；订阅后立即 `report` 一次当前快照（subscribe 不即时触发），
-  其后每次变更继续上报投影（`{ current, sessions: { id: { running, completed?,
-  pending?, runningSubagents? } } }`，每列出会话都有 running 行，runningSubagents
+  其后每次变更继续上报投影（`{ current, sessions: { id: { running,
+  pending?, runningSubagents? } } }`——`completed` 由 App 账本在合并时注入，
+  channel 永不携带；每列出会话都有 running 行，runningSubagents
   仅 >0 时出现——vendor `indexSubagentDescendants` 的 runningCount，见 §4.5）；
   effect 清理时调同一 producer 的 `clear`。注册时的单调 token 使旧 ctx 的迟到
   `report/clear` 全部失效，不能覆盖或清除同 id replacement ctx 的事实。
@@ -336,8 +349,10 @@
   - 解除：重新运行（running=true）、会话从列表消失、或用户开始阅读（该来源为
     活动视图且会话为其 current；视图切换生效时另有一处 effect 兜底「激活但无
     新上报」路径，如点击来源头不打开会话）。
-  - `deriveServers` 把 `completedBySource` 与上报的 vendor `completed` 取并集
-    合并进 `ChamberServerAggregate.runtime?`（仅附加，不覆盖 polled 字段）；
+  - `deriveServers` 把 `completedBySource` 合并进
+    `ChamberServerAggregate.runtime?`（仅附加，不覆盖 polled 字段）。合并函数保留了
+    「账本 ∪ 通道 completed」的并集形状，但**通道侧永不携带该位**（store 行没有
+    `completed`）：完成未读只有一个来源——App 账本；
     `pollAggregates` 的 not-connected 分支清空该来源**上报事实**（断连即清，
     generation 级事实随断连失效）；App 自持蓝点与边沿记忆跨断连保留——重连后
     重新挂载，且能捕获断连期间完成的会话（prevRunning 持有断连前 running=true）。
@@ -354,6 +369,9 @@
   error、max-tokens、interrupted）抑制；全部比较都在 host 时间域，谓词不读账本、不读客户端墙钟。
   `mergeRuntimeFacts(runtime, completedBySource, overlay?, stale?)` 保留两参逐字节相容，第三/四参用于
   事实注入与 stale 附加；`todo-attention` 对断连来源只渲染 `runtime.stale === true` 的事实（R14 方案 A）。
+  **stale 只走渲染面**：overlay 的 `isFactsUsable` 保留 stale 行（读取只读事实 + 标 stale），而
+  未读账本 / 读水位推进 / 完成观测走更严的 `isFactsDecisionUsable`（额外 `!stale`）——载体已断的
+  行不得当证据；唯一谓词与「冻结的未知」规则见 design 19 §3.2。
 - **goal 事实过桥与身份签名**（v5 §2.1/§6 P2a；2026-12）：mounted 来源由插件生产者在
   `sync()` 里先回填最后已知值、再合并 activation 缓存（`applyGoalActivation`，门读它）；
   无壳来源的 goal 经 App 的 `factsOverlay` 走 `mergeRuntimeFacts` 的 overlay 行——通道行
@@ -415,8 +433,10 @@
     chamber 品牌蓝点（有意偏差 = 与来源头连接绿点同 token）。**配色**：运行 =
     `--dsw-static-deepseek-450`；completed = 同一品牌蓝 6px 实心点（**不取**官方
     `done` 的 success 绿）；pending 徽标用 business/warn 两个 state token 表达
-    "等待回答/决策"与"等待批准"（有意不取全蓝）。wire running 与通道事实并存：
-    running 点保留（wire 权威），completed/pending 仅通道提供。
+    "等待回答/决策"与"等待批准"（有意不取全蓝）。三档的**来源**：running 位按官方
+    规则在生产者里解析（`status?.running ?? s.running`，§4.3），pending 只来自官方
+    `sessionStatus.pendingInteraction`，completed 只来自 App 账本（官方
+    `completionUnread` 今日不消费）。
 - **悬停替换（真正替换，零占位）**：行/头操作静止时 `display:none`（不占布局
   空间），状态图标/徽标因此真正位于行/头末端；悬停时操作簇 `display:inline-flex`
   换入、状态槽 `display:none` 换出（session 行：状态环 ↔ **kebab 菜单**（重命名/
@@ -451,15 +471,43 @@
   可选落 `data-chamber-goal-active`；`suppressedBy` 区分 `'goal'`（activation 已知）与
   `'unknown'`（activation 未知，静默窗口与通知层 unknown-hold 同态）。pending 档不标
   suppressedBy（等待输入不是压制）。
+- **运行位解析：镜像官方规则、一处解析（2026-01，`resolveSessionRunning`）**：官方
+  `dsh-client-ui-workspace` 的会话节点自己就写着 `running: status?.running ?? s.running`
+  ——ui-session 实时 `sessionStatus` 投影优先、会话列表行兜底，且 `false` 是**真实观测**
+  （`??` 承重）。chamber 的每个运行位消费点因此走**同一个实现**
+  （`packages/dsh-chamber-client-core/src/session-row-state.ts resolveSessionRunning`）：
+  侧栏运行环（`projectInstanceSnapshot`）、搜索行（同树行）、runtime facts 通道
+  （`projectRuntimeFacts`；驱动完成账本/通知边沿/未读/徽标）、运行身份 mint
+  （`runningIds`）与子代理谱系计数（`indexSubagentDescendants`——其头注本就声明须与官方
+  ui-workspace 语义一致）。挂载来源在有观测时取 status 位；未挂载/unary
+  来源没有该投影，保持行自身位。**一次解析、两路同值**，所以下条的
+  `runningRingVisible` 仍只取 snapshot 位、不与 runtime facts 做 OR/优先合并——它禁的是
+  **渲染器**里再长出第二权威，而不是禁止生产者按官方规则解析。上游语义由 vendor 源
+  lockstep 钉住（`vendor-session-fact-contract.test.ts`：`status?.running ?? s.running`、
+  `completed: status?.completionUnread === true`、`publishStatus` 行形状、store 行无
+  `completed`、`visiblePendingKind` 三档）。
+- **显示面与修复面分工（同日）**：store 的**主张**读取保持原语义——
+  `readOfficialProjection`（权威梯的官方读数）、`correctAuthorityRunning` 的自校验与
+  `readAuthorityRunning`（独立 unary 传输）继续读 store 行，因为它们的职责是**修 store**
+  而不是描述真相。副作用是写回不可能再把一个真在跑的会话显示成空闲（status 位优先于被改写的
+  行位），而 store 仍会被修好；分歧只在渲染面按官方规则消解。取证：producer 在分歧集合
+  **变化**时向既有 authority-log 有界环写一条 `status-divergence`（两侧取值 + 时刻，
+  跨重载可回读）；DOM 仪表档位保持不变（新增档位要把标记穿过 snapshot/两条签名/侧栏行类型，
+  收益不足——被否）。
 - **运行环 snapshot 单一权威（`runningRingVisible`）**：运行环只取完整
-  aggregate snapshot 的 running 位，runtime facts 的 running 不参与渲染。已挂载
-  来源的 snapshot 由自身 ctx store 在 host-frame 事件上即时上报；未挂载或
-  reconnect baseline 未完成的 ready 来源走 30s unary 兜底。两条字段不做 OR/优先
-  合并，避免同一渲染事实双权威。`runtimeReportSignature(includeRunning=false)`
-  保证 runtime 通道的 running-only 变化不重复驱动同一环渲染；通道 running 位仍保留
-  在 `InstanceRuntimeReport` 中，供 App 完成蓝点状态机
-  （`reconcileCompletedFacts`）推导 running→idle 边沿（App 内部逻辑，非侧边栏
+  aggregate snapshot 的 running 位（该位即上条的解析结果），runtime facts 的 running
+  不参与渲染。已挂载来源的 snapshot 由自身 ctx store 在 host-frame 事件上即时上报；
+  未挂载或 reconnect baseline 未完成的 ready 来源走 30s unary 兜底。
+  `runtimeReportSignature(includeRunning=false)` 保证 runtime 通道的 running-only 变化
+  不重复驱动同一环渲染；通道 running 位仍保留在 `InstanceRuntimeReport` 中，供 App 完成
+  蓝点状态机（`reconcileCompletedFacts`）推导 running→idle 边沿（App 内部逻辑，非侧边栏
   渲染）。
+- **被否方案（运行位解析）**：①**扩大 tier-3 写回去写 `true`**——要检测分歧就得先读
+  `status.running`（读是必需的），却把 chamber 变成 running 的第二写入者（违反既有锁；
+  上游 `refreshList` 才是契约内的修复路径），还会把渲染事实绑到 N=2/60s 门槛上；
+  ②**只调阈值/频率**（90s 未验证丢弃、写回周期）——与官方 UI 的不一致窗口永远存在，治标；
+  ③**UI 层各自兜**（侧栏与 App 各写一次优先级）——同一事实两处解析正是本次缺陷的形态；
+  ④**只把 status 位并入事实通道、不动渲染面**——环与蓝点边沿会给出两个不同的运行位。
 - **搜索结果行状态点**：结果行经投影解析 running 位（命中会话必在投影可见集内，
   查得到即用投影位，查不到回落 false）——状态槽优先级与 running 环 snapshot 权威
   同树行（只取投影位，runtime facts 的 running 不参与，`runningRingVisible`）。
@@ -503,10 +551,15 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
 蓝点就亮了（且保持到用户阅读或父再次运行）。
 
 **修复**：
-- 插件（vendor 边界）在每次快照投影时调用 vendor 纯函数
-  `indexSubagentDescendants(snapshot.byId)`，把每父会话的 runningCount
-  （>0 稀疏）并入事实通道——与官方 tree.ts 的 `runningSubagentCount` 同一
-  算法同一输入，语义不可能漂移；`packages/dsh-chamber-client-core/src/derive.ts projectRuntimeFacts` 保持纯
+- 插件（vendor 边界）在每次快照投影时调用 chamber 纯函数
+  `indexSubagentDescendants(snapshot.byId)`，把每父会话的 runningCount（>0 稀疏）并入
+  事实通道。**镜像范围**：子行运行位与官方 tree.ts `runningChildCount` 同规则
+  （`status?.running ?? row.running`，经 `resolveSessionRunning` 一处解析）；**行集与归属
+  不同**——官方读 `list.projectionsBySession[parentId].values.subagentCatalog`（该父的**直接**
+  子行），本函数按 `parentId` 链把每个后代归给**全部**祖先，故嵌套委派（子代理再生子代理）
+  时祖辈也会被计入：这是比官方更宽的压制面（祖辈回合结束后、孙辈仍在跑时，官方 nav 已显示
+  completed 而侧栏仍显示运行环）。差异的裁决与失效判据见 STATUS ⑮；
+  `packages/dsh-chamber-client-core/src/derive.ts projectRuntimeFacts` 保持纯
   （计数经参数注入，import 图不引入未构建 vendor 包）。
 - 渲染优先级改为 **pending 徽标 > runningSubagents 运行环 > completed 点 >
   running 环**：子 agent 存活期间绝无完成蓝点（对齐官方 sessionStatuses）；

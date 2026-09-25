@@ -128,9 +128,22 @@ declare module '@deepseek-ai/dsh-client-store' {
 }
 
 declare module '@deepseek-ai/dsh-api-session-controller/client' {
+  /**
+   * One row of the CLIENT session store (`ctx.sessions.list`): what
+   * `ClientSessions.projectList()` publishes, NOT the host wire `SessionSummary`
+   * (the typert declaration carries `sessionId`/`parentSessionId`, and has no
+   * `id`, `displayTitle` or `retainedBy`). The store builder renames
+   * `sessionId→id`, `parentSessionId→parentId` and adds `displayTitle`/`retainedBy`.
+   *
+   * There is deliberately NO `completed` member: the store row has none. The
+   * official completion-unread fact is `uiSession.sessionStatus.completionUnread`
+   * (read by the official nav as `status?.completionUnread === true`), and chamber's
+   * completed-unread dot is its own ledger — a `completed` here would be a phantom
+   * field that reads `undefined` forever.
+   */
   export interface SessionSummary {
     id: string; title?: string; displayTitle: string; cwd?: string; parentId?: string
-    origin?: 'subagent'; running: boolean; completed?: boolean; blank: boolean; updatedAt: number
+    origin?: 'subagent'; running: boolean; blank: boolean; updatedAt: number
     projectionValues?: Readonly<Record<string, unknown>>
     /** Local ownership counts: the presented session is the mainView-retained row. */
     retainedBy?: Readonly<Record<string, number>>

@@ -25,8 +25,6 @@
 /** The official store's per-session projection - the bit that can go stale. */
 export interface AuthorityOfficialRow {
   readonly running: boolean
-  /** Vendor \`completed\` flag when the caller projects it. */
-  readonly completed?: boolean
   /** Subagent-origin rows are outside the fact channel: never reconciled, corrected or
    * notified - a parent's completion is the user-visible event. */
   readonly subagent?: boolean

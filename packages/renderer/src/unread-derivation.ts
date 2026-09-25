@@ -56,7 +56,12 @@ export interface UnreadDerivationInput {
   readMarks: Readonly<Record<string, number>>
   /** 正在阅读的会话（paintedView ∩ current ∩ hasFocus，由 App 计算）。 */
   readingSessionId: string | undefined
-  /** facts 快照是否可判（serviceable=false / 断连未知时 false ⇒ 原样保留 prevLedger）。 */
+  /**
+   * facts 快照是否可判。**只有快照缺席**（通道 withdrawn / 未观察）才是 true 的 channel-only
+   * 情形；快照在场但 `isFactsDecisionUsable` 为假（verdict≠ok / serviceable=false / **stale**）
+   * ⇒ false ⇒ 原样保留 prevLedger（「冻结的未知」，不剪枝、不 clobber）。谓词唯一家见
+   * `session-facts-source.ts`；接线锁 `test/wiring/session-authority-wiring.test.ts`。
+   */
   factsVerified: boolean
 }
 
@@ -100,8 +105,11 @@ export function deriveSourceUnread(
   input: UnreadDerivationInput,
   deps: UnreadDerivationDeps,
 ): UnreadDerivationResult {
-  // 规则 0（判定闸）：事实不可判 ⇒ 原样保留，不 clobber、不剪枝。
-  // 注意 stale（断连但事实仍在）**不**在此闸内——断连未读照常呈现。
+  // 规则 0（判定闸）：事实不可判 ⇒ 原样保留 prevLedger/prevRunning，不 clobber、不剪枝。
+  // 不可判 = 快照**在场**但 isFactsDecisionUsable 为假（verdict≠ok / serviceable=false /
+  // **stale**：载体已断、行仍在）。此时**冻结**是刻意的：断连未读照常呈现靠的是「不动」，
+  // 不是「按另一条通道重算」——重算会把已武装的完成点剪掉又在恢复时重新武装（闪）。
+  // 快照**缺席**（断连撤回首报、来源未观察）是另一支：factsVerified=true，channel-only 照常派生。
   if (!input.factsVerified) {
     return {
       unread: { ...input.prevLedger },

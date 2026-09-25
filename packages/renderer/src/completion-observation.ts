@@ -17,7 +17,7 @@
  *    unknown）；**facts-only 行的 subagentCount（在场子会话数）不作为 busy 证据**
  *    （对 06 §4.5 的有意修正：在场不等于在干活），按 idle/unknown 语义处理；
  *  - candidate：facts 候选要求 completedAtSource==='observed'、该来源本代已播种、
- *    水位严格前进；壳候选 = running true→idle 或 vendor completed 从无到有，且
+ *    水位严格前进；壳候选 = running true→idle 或合并事实行里（App 账本注入的）completed 从无到有，且
  *    **factsUsable（verdict ok && serviceable && !stale）为真时壳 complete 不是候选**
  *    （一完成一轨，归属过滤）；ask/request 是 candidate.kind，走同一 reconcile
  *    （v5 #12/INV4：只受 G2 基线播种约束，与 goal 状态无关）。**stale 壳快照不得作
@@ -49,7 +49,7 @@ import type {
 } from './notification-projection.ts'
 import { reconcile } from './notification-projection.ts'
 import type { CompleteLedger } from './complete-ledger.ts'
-import type { SessionFactsSnapshot } from './session-facts-source.ts'
+import { isFactsDecisionUsable, type SessionFactsSnapshot } from './session-facts-source.ts'
 import { completionWatermark, maxWatermarkValue } from './watermark.ts'
 
 /** 壳行 pending 种类（InstanceRuntimeReport 的结构子集）。 */
@@ -57,10 +57,10 @@ export type ShellObservationPending = 'approval' | 'plan-review' | 'question'
 /** 子代理活动三值（与 sidebar session-row-state 同词表）。 */
 export type ShellObservationActivity = 'none' | 'running' | 'unknown'
 
-/** 壳运行时行（InstanceRuntimeReport.sessions 的结构子集）。 */
+/** 壳运行时行（InstanceRuntimeReport.sessions 的结构子集）。
+ *  `completed` 刻意不在此声明：通道行从不携带它（账本位只在合并后的聚合行上）。 */
 export interface ShellObservationRow {
   running?: boolean
-  completed?: boolean
   pending?: ShellObservationPending
   runningSubagents?: number
   subagentActivity?: ShellObservationActivity
@@ -97,7 +97,6 @@ export interface FactsChannelInput {
  */
 interface SessionObservationMemory {
   shellRunning: RunningObservation
-  shellCompleted: boolean
   shellPending?: ShellObservationPending
   factsWatermark: number
   /**
@@ -214,13 +213,13 @@ export function completionIdentity(fingerprint: string | undefined, bootToken: s
   return (fingerprint ?? '') + '\u0000' + bootToken
 }
 
-/** facts 快照 → 通道输入（v5 §3.2 factsUsable = ok && serviceable && !stale）。 */
+/**
+ * facts 快照 → 通道输入（v5 §3.2）。`usable` 走 session-facts-source 拥有的唯一可判谓词
+ * （ok && serviceable!==false && !stale）——本文件不再内联第二份规则。
+ */
 export function factsChannelOf(snapshot: SessionFactsSnapshot | undefined): FactsChannelInput | undefined {
   if (snapshot === undefined) return undefined
-  return {
-    rows: snapshot.rows,
-    usable: snapshot.verdict === 'ok' && snapshot.serviceable !== false && snapshot.stale !== true,
-  }
+  return { rows: snapshot.rows, usable: isFactsDecisionUsable(snapshot) }
 }
 
 /** 完成水位的严格前进判定（factsWatermark 记忆只在 observed 行上推进）。 */
@@ -338,7 +337,6 @@ export function observeSource(input: {
     const reappearing = state.forgottenSessions.delete(sessionId)
     const memory: SessionObservationMemory = state.sessions[sessionId] ?? {
       shellRunning: 'unknown',
-      shellCompleted: false,
       factsWatermark: 0,
       factsSeedPending: false,
       shellNotifiedSinceFacts: false,
@@ -407,9 +405,13 @@ export function observeSource(input: {
     // （行记忆照常推进，stale true→false 的同一行不得凭旧位伪造边沿）。
     const shellEdgeEligible = !shellStale && !reappearing && input.shellReport === true && state.shellSeeded
     if (shellEdgeEligible && shellRow !== undefined && !factsUsable) {
+      // 唯一合法的壳完成边沿是运行位 true→false。壳行的 `completed` 不参与判定：
+      // 两条生产路径喂进来的都是**原始**通道报告（factsStore.runtime，见
+      // use-bridge-subscriptions / use-unread-notifications），而通道从不携带该位
+      // ——账本注入只发生在 mergeRuntimeFacts 之后的聚合行，观察面不读它。
+      // 该负向契约由 completion-observation.test.ts「壳 completed 位不产生边沿」钉住。
       const runningEdge = memory.shellRunning === 'running' && shellRunning === 'idle'
-      const completedEdge = memory.shellCompleted !== true && shellRow.completed === true
-      if (runningEdge || completedEdge) candidates.push({ evidence: 'shell-edge' })
+      if (runningEdge) candidates.push({ evidence: 'shell-edge' })
     }
     if (shellEdgeEligible && shellRow !== undefined && shellRow.pending !== undefined && memory.shellPending !== shellRow.pending) {
       candidates.push({
@@ -438,11 +440,9 @@ export function observeSource(input: {
     // 记忆推进（行消失的壳位清空：重新出现不得从旧位伪造完成边沿）。
     if (shellRow !== undefined) {
       memory.shellRunning = shellRunning
-      memory.shellCompleted = shellRow.completed === true
       memory.shellPending = shellRow.pending
     } else {
       memory.shellRunning = 'unknown'
-      memory.shellCompleted = false
       delete memory.shellPending
     }
     if (reappearing) {

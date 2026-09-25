@@ -25,7 +25,11 @@ import {
   retainGoalFacts,
   type RunIdentityObservation,
 } from '@dsh-chamber/dsh-chamber-client-core/derive'
-import type { GoalFact } from '@dsh-chamber/dsh-chamber-client-core/session-row-state'
+import {
+  resolveSessionRunning,
+  type GoalFact,
+  type SessionRunningStatus,
+} from '@dsh-chamber/dsh-chamber-client-core/session-row-state'
 import { createGoalActivationTracker } from './goal-activation.ts'
 import { createPanelSource, type SlotsReader } from './panel-source.ts'
 import { createPurgeTracker } from '@dsh-chamber/dsh-chamber-client-core/purged-tracker'
@@ -72,6 +76,16 @@ const NS = 'sidebar'
  */
 const PRODUCER_GENERATION_BASE = Date.now() * 1_000
 let producerGenerationCounter = 0
+
+/**
+ * Floor between two `status-divergence` writes for ONE source generation (see
+ * `recordRunningDivergence`). The authority log is a bounded ring SHARED with the
+ * authority ladder's own acts (32 entries per source, authority-log-store.ts), so an
+ * A/B-flapping status/list disagreement must not evict probe/correct evidence: at
+ * most one entry per floor, later changes fold into the next entry's suppression
+ * count. Same discipline (and shape) as the renderer's SOURCE_REFRESH_HINT_FLOOR_MS.
+ */
+export const RUNNING_DIVERGENCE_FLOOR_MS = 30_000
 
 /** Services required by the sidebar plugin. */
 export const inject = ['slots', 'layout', 'sessions', 'workspaces', 'uiSession', 'uiWorkspace', 'locale', 'shortcuts']
@@ -377,10 +391,77 @@ export function apply(ctx: ClientContext): void {
     // 指纹守卫前置只是防御纵深，非 chamber boot 在访问服务前已返回。
     const sessionStatus = (ctx.uiSession as unknown as {
       sessionStatus: {
-        getSnapshot(): ReadonlyMap<string, { pendingInteraction?: { kind?: string } }>
+        getSnapshot(): ReadonlyMap<string, {
+          /** 官方实时运行观测；缺席 = 该行尚无观测（见 resolveSessionRunning）。 */
+          running?: boolean
+          pendingInteraction?: { kind?: string }
+          /** 官方自己的「完成未读」；chamber 自持账本，只在取证时可读（今日不消费）。 */
+          completionUnread?: boolean
+        }>
         subscribe(listener: () => void): () => void
       }
     }).sessionStatus
+
+    /**
+     * 官方运行位投影的读——chamber 全部运行位消费点的**同一个**输入（侧栏环、搜索行、
+     * 运行时事实通道、运行身份、子代理计数）。id 并集含「只因 pending 交互或完成提醒而
+     * 存在」的行，故值为 `boolean | undefined`；解析规则见 {@link resolveSessionRunning}。
+     */
+    const readStatusRunning = (): SessionRunningStatus => {
+      const rows = new Map<string, boolean | undefined>()
+      for (const [sessionId, status] of sessionStatus.getSnapshot()) rows.set(sessionId, status.running)
+      return rows
+    }
+
+    /**
+     * 分歧取证：官方 status 投影与 store 行不一致时，把**变化后的分歧集合**记一条进既有的
+     * authority-log 有界环（并 console.warn 一次）。
+     * 「状态没反应到侧栏」这类报告的第一个问题永远是「这个位由哪条链给出」，而这条记录就是
+     * 那个答案（含两侧取值与时刻，跨重载可回读）。
+     *
+     * 预算纪律：该环是**权威动作（probe/correct/...）与分歧记录共用的、每来源 32 条**的有界
+     * 环（authority-log-store.ts）。因此写入门槛是「集合变化」**且**距上次写入
+     * ≥ {@link RUNNING_DIVERGENCE_FLOOR_MS}（30s，与 source-refresh-hint 的 floor 同规）：
+     * A/B 交替的抖动一次只留一条，被压制的次数带进下一条的 detail（`+N suppressed`），
+     * 抖动数十秒也只能占 1–2 格，不会把写回/探针证据挤出环外。
+     */
+    let loggedRunningDivergence = ''
+    let lastDivergenceWriteAt = 0
+    let suppressedDivergenceWrites = 0
+    const recordRunningDivergence = (
+      statusRunning: SessionRunningStatus,
+      byId: Readonly<Record<string, { running?: boolean } | undefined>>,
+    ): void => {
+      const diverged: string[] = []
+      for (const [sessionId, status] of statusRunning) {
+        if (status === undefined) continue
+        const row = byId[sessionId]
+        // 行不在 store = status 并集的旁支（pending/完成提醒侧），不是分歧。
+        if (row === undefined) continue
+        if ((row.running === true) === status) continue
+        diverged.push(sessionId + ':status=' + (status ? '1' : '0') + ':row=' + (row.running === true ? '1' : '0'))
+      }
+      const detail = diverged.sort().join(',')
+      if (detail === loggedRunningDivergence) return
+      loggedRunningDivergence = detail
+      if (detail === '') return
+      const now = Date.now()
+      if (now - lastDivergenceWriteAt < RUNNING_DIVERGENCE_FLOOR_MS) {
+        suppressedDivergenceWrites += 1
+        return
+      }
+      const suppressed = suppressedDivergenceWrites === 0 ? '' : ` +${suppressedDivergenceWrites} suppressed`
+      lastDivergenceWriteAt = now
+      suppressedDivergenceWrites = 0
+      console.warn(`[chamber] session status diverged from the list row (${chamberInstanceId}): ${detail}`)
+      const storage = authorityLogStorage()
+      if (storage === undefined) return
+      appendAuthorityLog(storage, chamberInstanceId, {
+        at: now,
+        kind: 'status-divergence',
+        detail: detail + suppressed,
+      })
+    }
     let snapshotSignature = ''
     let snapshotQueued = false
     let disposed = false
@@ -422,7 +503,7 @@ export function apply(ctx: ClientContext): void {
       if (disposed) return
       const workspacesSnapshot = workspacesList.getSnapshot()
       const sessionsSnapshot = sessionsList.getSnapshot()
-      const projected = projectInstanceSnapshot(workspacesSnapshot, sessionsSnapshot)
+      const projected = projectInstanceSnapshot(workspacesSnapshot, sessionsSnapshot, readStatusRunning())
       if (projected === undefined) {
         snapshotSignature = ''
         snapshotProducer.report(undefined)
@@ -461,8 +542,10 @@ export function apply(ctx: ClientContext): void {
     const sync = (): void => {
       const snapshot = sessionsList.getSnapshot()
       // per-parent RUNNING 子代理后代计数（稀疏：只出现至少一个运行中后代的父）。
+      const statusRunning = readStatusRunning()
+      recordRunningDivergence(statusRunning, snapshot.byId ?? {})
       const subagentRunning = new Map<string, number>()
-      for (const [parentId, summary] of indexSubagentDescendants(snapshot.byId)) {
+      for (const [parentId, summary] of indexSubagentDescendants(snapshot.byId, statusRunning)) {
         if (summary.runningCount > 0) subagentRunning.set(parentId, summary.runningCount)
       }
       // I1 运行身份：生产者是运行通道的唯一身份权威——每个「非运行 → 运行」的
@@ -475,7 +558,7 @@ export function apply(ctx: ClientContext): void {
         if (facts?.origin === 'subagent') continue
         liveIds.add(id)
         if (typeof facts?.updatedAt === 'number') activity.set(id, facts.updatedAt)
-        if (facts?.running === true) runningIds.add(id)
+        if (resolveSessionRunning(statusRunning, id, facts?.running)) runningIds.add(id)
       }
       const advancedIdentities = advanceRunIdentities({
         previous: runIdentities,
@@ -494,7 +577,7 @@ export function apply(ctx: ClientContext): void {
       for (const [sessionId, status] of sessionStatus.getSnapshot()) {
         if (status.pendingInteraction !== undefined) pendingBySession.set(sessionId, status.pendingInteraction)
       }
-      const baseReport = projectRuntimeFacts(snapshot, subagentRunning, pendingBySession, runIds)
+      const baseReport = projectRuntimeFacts(snapshot, subagentRunning, pendingBySession, runIds, statusRunning)
       // listComplete：官方列表的 arrival phase（'pending' → 首次成功 'ready'，此后出错不回退）
       // 就是「列表是否完整」的权威事实；只有 ready 才允许 App 把缺席当删除剪掉未读（pending
       // 恒 false ⇒ 不剪枝，否则一次未完成的列表会假清未读）。它是判定输入，不进侧边栏渲染。

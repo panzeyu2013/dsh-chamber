@@ -24,7 +24,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 /** pin 住的 vendor 链接树（ensure-harness-vendor 建链）。 */
@@ -33,6 +33,35 @@ const MISSING = !existsSync(VENDOR + 'dsh-api-session-controller/src/client/sess
 const OPT_OUT = process.env.DSH_CHAMBER_VENDOR_ABSENT === 'skip'
 
 const readVendor = (relative: string): string => readFileSync(VENDOR + relative, 'utf8')
+
+/**
+ * 按**符号**定位一个 vendor 包里的源文件（`.ts/.tsx`）：路径不是契约，符号才是——
+ * 上游挪文件不该让锁变红，符号消失才该。要求恰有一个文件命中（上游拆文件即红，
+ * 维护者重新指向，而不是让断言悄悄测到别的文件）。
+ */
+const vendorSourceCache = new Map<string, string>()
+const readVendorSourceProviding = (pkg: string, symbol: string): string => {
+  const cached = vendorSourceCache.get(pkg + '\u0000' + symbol)
+  if (cached !== undefined) return cached
+  const hits: string[] = []
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = dir + '/' + entry.name
+      if (entry.isDirectory()) {
+        walk(path)
+        continue
+      }
+      if (!/\.tsx?$/.test(entry.name)) continue
+      if (readFileSync(path, 'utf8').includes(symbol)) hits.push(path)
+    }
+  }
+  walk(VENDOR + pkg + '/src')
+  hits.sort()
+  assert.equal(hits.length, 1,
+    `vendor 源 ${pkg} 里应恰有一个文件包含 ${symbol}（找到 ${hits.length}: ${hits.join(', ')}）——`
+    + '上游若拆分/改名，维护者须重新指向并按 design 06 §4.3 重推运行位解析。')
+  return readFileSync(hits[0]!, 'utf8')
+}
 
 if (MISSING) {
   console.error(`[vendor-lockstep] vendor 树未物化：${VENDOR}`)
@@ -103,6 +132,63 @@ vendorTest('上游：mergeOrderedBaseline 移除权威基线里缺席的 id（�
     '缺席 id 被移除的语义变了 ⇒ STATUS ⑨ 的严重性须重估')
   assert.match(baseline, /const merged = current\s*\n?\s*\.map\(value => baselineByKey\.get\(keyOf\(value\)\)\)\s*\n?\s*\.filter\(\(value\): value is T => value !== undefined\)/,
     '实现必须仍是「按权威值取行、缺席即过滤」')
+})
+
+vendorTest('上游：官方运行位解析 = status?.running ?? s.running（chamber 唯一规则的来源）', () => {
+  const nav = readVendorSourceProviding('dsh-client-ui-workspace', 'visiblePendingKind')
+  assert.match(nav, /const status = statuses\.get\(s\.id\)/,
+    '该规则的前提是会话节点能取到自己的 status 行')
+  assert.match(nav, /running: status\?\.running \?\? s\.running/,
+    '官方 nav 的运行位必须仍是「status 投影优先、列表行兜底」；规则一变，resolveSessionRunning '
+    + '与它的全部消费点（环/事实通道/运行身份/子代理计数）必须按 design 06 §4.3 重推')
+  assert.match(nav, /completed: status\?\.completionUnread === true/,
+    '官方完成位读的是 sessionStatus.completionUnread；若上游改回 store 行字段，chamber 的账本归属须重审')
+  assert.match(nav, /statuses\.get\(child\.id\)\?\.running \?\? list\.byId\[child\.id\]\?\.running/,
+    '**子行**运行位走同一规则——chamber 的 indexSubagentDescendants 镜像的正是这条，'
+    + '改成单读 list 行会让子代理运行环与官方计数分歧')
+})
+
+vendorTest('上游：status 投影行形状（running 可为 undefined ⇒ 回落的 ?? 是承重的）', () => {
+  // 定位符用**复合表达式**而非裸标识符：裸标识符在真实多文件 src 树里可能多处命中
+  // （恰一命中的断言会因上游拆文件而假红），且它不能与下面的断言同义。
+  const status = readVendorSourceProviding('dsh-client-ui-session', 'this.completionUnread.has')
+  assert.match(status, /running: this\.running\.get\(id\)/,
+    'status 行的 running 直取观测表 ⇒ 可能是 undefined（不是布尔默认）')
+  assert.match(status, /completionUnread: this\.completionUnread\.has\(id\)/,
+    '完成未读与运行位同源同拍发布')
+  assert.match(status, /\.\.\.this\.pendingSnapshot\.keys\(\)/,
+    'id 并集含「只因 pending 交互而存在」的行 ⇒ 那些行的 running 必然 undefined，回落分支是必需的')
+  assert.match(status, /\$on\('api-session\/status', \(sessionId, running\) => \{[\s\S]{0,120}observeRunning/,
+    'status 由 frame 直驱——这正是它可能领先于 list 行、从而必须优先的根据')
+  assert.doesNotMatch(status, /running: this\.running\.get\(id\) \?\?/,
+    'status 行的 running 必须仍原样透出观测（可为 undefined）；上游若给它兜底成布尔，'
+    + 'chamber 侧「?? 承重」的回落语义就消失了')
+  assert.match(status, /sessions\.list\.subscribe\(\(\) => \{ this\.reconcileStatus\(\) \}\)/,
+    'list→status 回灌（reconcileStatus）仍在：这是 status 行通常有定义的根据，也是两链可分歧的根据')
+  assert.match(status, /if \(running\) this\.completionUnread\.delete\(sessionId\)/,
+    'true→false 的完成未读语义仍在（tier-3 写回的爆炸半径：写回会点亮官方完成位）')
+  assert.match(status, /else if \(\(previous === true \|\| \(previous === undefined && beforeBaseline\)\)/,
+    '未读只在「真观测过 running」之后武装——诊断性写回不得被误当作运行观测')
+})
+
+vendorTest('上游：客户端 store 行没有 completed（chamber 曾读的字段是幻影）', () => {
+  const list = readVendorSourceProviding('dsh-api-session-controller', 'id: entry.sessionId')
+  // 断言锚刻意不同于定位符（否则是自证）：parentId 的改名才是 ambient 模型的另一半依据。
+  assert.match(list, /parentId: entry\.parentSessionId/,
+    'store 行把 sessionId 改名为 id、parentSessionId 改名为 parentId（ambient 模型的依据）')
+  assert.match(list, /retainedBy: this\.retentionSnapshot\(entry\.sessionId\)\.retainedBy/,
+    "current 判定所依赖的 retainedBy 必须仍在 store 行上")
+  assert.doesNotMatch(list, /completed:/,
+    'store 行一旦出现 completed，chamber 的完成归属应改读它（今日它只能来自 App 账本）')
+})
+
+vendorTest('上游：visiblePendingKind 三档与 chamber pendingKindOf 逐字一致（词表缺口登记）', () => {
+  const nav = readVendorSourceProviding('dsh-client-ui-workspace', 'visiblePendingKind')
+  for (const kind of ['approval', 'plan-review', 'question']) {
+    // 引号不敏感：源里是单引号，构建产物里是双引号。
+    assert.match(nav, new RegExp('case [\'"]' + kind + '[\'"]'),
+      '待办词表必须仍含 ' + kind + '；词表一变，pendingKindOf 与琥珀点/等待分类须同步')
+  }
 })
 
 vendorTest('上游：handleSessionStatus 不在 ISessions 契约里（chamber 的能力守卫与上游诉求的依据）', () => {

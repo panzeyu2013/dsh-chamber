@@ -58,7 +58,7 @@ function run(
 
 function tick(
   now: number,
-  official: Record<string, { running: boolean; completed?: boolean; subagent?: boolean }>,
+  official: Record<string, { running: boolean; subagent?: boolean }>,
   listComplete = true,
   generation = 'g1',
 ): SessionAuthorityObservation {
