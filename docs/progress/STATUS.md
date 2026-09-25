@@ -55,8 +55,6 @@
 
 - ssh/http dsh目标无cookie注入（实例侧401）：五处同源**资源**URL（0.1.7 起上游为 document-relative）由vendor补丁集归一为本实例 `/api/i/<id>/` 前缀（design 09 §3.6）；cookie注入属既有认证面，未覆盖。
 
-- **上游 pnpm patch 通道未落地（待裁）**：本仓不存在被提交的 `patches/` 与 `patchedDependencies`，两处 lockfile 的 `patch_hash` 为 0（rc.2 上游子模块内 7 个补丁——pi-ai / osx-sign / fortune-sheet×2 / yao-pkg / exceljs / node-pty——已在 `vendor/harness-checkout/patches/` 物化）。落地需三步：拷补丁到被提交路径、声明映射、重生成根 dev lock 与嵌入 runtime lock（`bundle-dsh --refresh-lockfile`）；未落地前嵌入运行时的 `node-pty`/`pi-ai` 行为与上游工作区形态不同。
-
 - **gateway来源插件播种被拒（400 `invalid_input`实机）**：旧gateway只认 `dsh-host-*` ⇒ 现仓`dsh-chamber-seed-*`（`gateway/src/plugins.ts:49-56` 钉死）被拒；gateway回sanitized原因（`plugins.ts:144-147`/`:186`/`:221` → `routes.ts:1045-1057`，`sanitize-route-error.ts:20-26`），桌面侧并入失败（`gateway-provider.ts:1448-1460`/`:1487-1488` →`main.ts:3462-3464`）。剩余 = 就地重建旧gateway未排期（不做旧名回退播种）。
 
 - **`install` 就地重装不同步dsh锚基线（`.172` 实机，待裁）**：`install-gateway.sh` 的`--dsh-upgrade/--no-dsh-upgrade` 只对 `update` 生效（`:3674-3676`），install复用旧锚（`:1137`/`:2292`）⇒锚与托管dsh可能停旧代；壳升级自愈事务（F4，design 18 §3.5；`gateway/runtime-manager.ts:1049`）发`submittedAttachments`（`runtime-probes.ts:25-38`/`:483-495`）对旧代回 `gateway/arguments-invalid` ⇒探针必败、实例被停并留 `gatewayruntime startup blocked: swap-attempted; managed dsh left stopped`（`gateway/src/index.ts:486`）。就地收口 = 升锚后重跑该事务。待裁：`install` 是否该像 `update`一样校验/同步锚基线。

@@ -89,6 +89,12 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   与其他来源当前会话视觉的 06 §4.3 全局单选门控一致)，其余空白行不入列表。
 - 已连接来源的聚合拉取失败时以错误行呈现（不冒充"无工作区"）；全部来源
   断开时显示空态提示。
+- **顶带（`--dsh-frame-top-clearance` / 76px 拖拽带 / `data-animating`）不采用**（2026-12 裁决，
+  升级计划 §22.3.8）：上游这套规则服务的是「渲染在 `#root` 之外的系统级浮层 / 透明窗菜单」——
+  给它们留出可拖拽带并驱动进出动画。chamber 三处自有浮层都在 `#root` 内，窗口拖拽由 Electron 壳
+  自己的拖拽矩形与 `installWindowDragRecall`（boot 内核首挂时安装）负责，移植顶带只会与壳的拖拽
+  处理叠出一层没有消费面的留白；`leading` 侧的 `--dsh-frame-leading-clearance` 仍照上游计价（上条，
+  occupancy 是真实消费面）。
 - 保留官方侧边栏的：logo 行、New Session（作用于当前活动来源）、折叠（wide/rail）状态机、
   foot（footer.action + settings 孔位）。rc.2 起官方在 darwin 折叠态额外用窗口 chrome 的
   `shell.leading` 单席（官方 `ui-sidebar` 的 `HeaderLeadingControls`）承载展开/新建；

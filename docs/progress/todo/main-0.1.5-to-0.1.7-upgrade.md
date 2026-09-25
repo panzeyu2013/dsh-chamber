@@ -1175,7 +1175,7 @@ rc.1 对 §15/§16/§17 的修订（逐条执行）：
 | 机会 | 上游证据 | chamber 现状 | 动作 | 建议 |
 |---|---|---|---|---|
 | `shell.leading` 座（= 指南 §17-A 的 H2）与 `HeaderLeadingControls` 契约迁移 | `ui-layout/src/client/index.ts`；`HeaderLeadingControls.tsx` props 改 `PropsRuntime<shell.leading>` | layout fork 无该座；sidebar fork 仍注册已删除槽 | fork 新增声明+挂载点并迁移注册点 | **随 bump** |
-| `--dsh-frame-top-clearance` / 76px 拖拽带 / `data-animating` | `AppFrame.module.css`；`Menu/Modal.module.css`、`overlay-top-margin.ts` | fork 无这些规则；自有三浮层在 `#root` 内 | 与 H2 同批裁决：移植 clearance/带，或记录不采纳并给浮层留 no-drag 预案 | 下轮 |
+| `--dsh-frame-top-clearance` / 76px 拖拽带 / `data-animating` | `AppFrame.module.css`；`Menu/Modal.module.css`、`overlay-top-margin.ts` | fork 无这些规则；自有三浮层在 `#root` 内 | **已裁决：不采纳**（2026-12）——上游顶带服务 `#root` 之外的系统级浮层；chamber 三处自有浮层都在 `#root` 内、窗口拖拽由 Electron 壳的拖拽矩形 + `installWindowDragRecall` 负责，故顶带没有消费面（理由入 design 05 §2；`leading` 侧 `--dsh-frame-leading-clearance` 照旧计价） | **已裁决** |
 | base.css 新增 darwin 菜单填充（透明窗禁 backdrop-filter） | `packages/client/web/src/base.css` 新增 40 行 | 我方副本与 0.1.6 逐字节相同 | 随 bump 同步（含菜单填充段） | **随 bump** |
 | 上游 `patchedDependencies`/`patches/` 无移植路径（= §22.0-2 的 UI 面） | `patches/*` +1062 行 | 无 `patches/` | update-vendor/ensure-harness-vendor 增加 patches 记录与移植，或显式记录不移植理由 | **随 §22.0-2** |
 | 两条 120Hz sweep 补丁：`GenericCommandCard` 的 `dsh-command-row-sweep` 规则被上游删除（**组件本身仍在**）、`ReasoningRow` 规则保留 | 目标 pin `GenericCommandCard.module.css` grep sweep = 0 | `vendor-patches.mjs` 两条都登记 | 退役 GenericCommandCard 条目；ReasoningRow 随 C9 重锚 | **随 bump** |
