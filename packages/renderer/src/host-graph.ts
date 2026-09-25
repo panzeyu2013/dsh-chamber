@@ -152,21 +152,42 @@ export async function fetchHostGraph(basePath: string): Promise<HostGraphRow[] |
 }
 
 /**
+ * 归一一个宿主图行的 bundle url：0.1.7 起上游 client-modules 的 combo url 是
+ * **document-relative**（`comboReference = comboUrl().slice(1)`），0.1.6 及以前是
+ * root-relative。两种形态都接，统一接在实例前缀之后，combo 语法原样随行（实例
+ * 代理是透明的 path+query 直通）。
+ *
+ * 一律拒绝（毒化图绝不能把 module-script 引到外部 origin，也不能越出实例前缀）：
+ *  - 协议相对 `//host/...` 与任何带 scheme 的绝对 url（`http:` / `data:` / `file:` …）；
+ *  - 路径里任何一段是 `..` 的穿越，以及反斜杠与 NUL（Windows 风格绕过）。
+ * @param url - 图行给出的 url（root-relative 或 document-relative）。
+ * @param basePath - 实例代理前缀（如 `/api/i/<id>`）。
+ * @returns 归一后的 url；null = 拒绝。
+ */
+export function normalizeBundleUrl(url: string, basePath: string): string | null {
+  if (url.length === 0) return null
+  if (url.startsWith('//')) return null
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/u.test(url)) return null
+  if (url.includes('\\') || url.includes('\u0000')) return null
+  const pathOnly = url.split('?', 1)[0].split('#', 1)[0]
+  if (pathOnly.split('/').includes('..')) return null
+  return basePath + (url.startsWith('/') ? url : '/' + url)
+}
+
+/**
  * Turn kept rows into module-table rows, injecting the per-instance proxy
- * prefix into root-relative bundle urls so the script element fetches
- * same-origin through the instance proxy; the combo syntax travels inside the
- * url unchanged (the instance proxy is a transparent path+query passthrough).
- * Non-root-relative urls are dropped: a poisoned host graph must never steer
- * the module-script loader to an external origin.
+ * prefix into the row's bundle url so the script element fetches same-origin
+ * through the instance proxy. Absolute and traversal-shaped urls are dropped:
+ * a poisoned host graph must never steer the loader to an external origin.
  */
 export function toExtraRows(rows: readonly HostGraphRow[], basePath: string): ExtraModuleRow[] {
   const out: ExtraModuleRow[] = []
   for (const row of rows) {
-    if (!row.url.startsWith('/') || row.url.startsWith('//')) {
-      console.warn(`[host-graph] dropping non-root-relative bundle url for ${row.id}`)
+    const url = normalizeBundleUrl(row.url, basePath)
+    if (url === null) {
+      console.warn(`[host-graph] dropping unsafe bundle url for ${row.id}`)
       continue
     }
-    const url = `${basePath}${row.url}`
     out.push({
       id: row.id,
       url,

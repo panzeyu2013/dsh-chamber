@@ -1,11 +1,7 @@
 import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import {
-  collectExtraRows, fetchHostGraph,
-  findDeferredExternalDependencies, toExtraRows,
-  type ExtraModuleRow, type HostGraphRow,
-} from '../../src/host-graph.ts'
+import { collectExtraRows, fetchHostGraph, findDeferredExternalDependencies, normalizeBundleUrl, toExtraRows, type ExtraModuleRow, type HostGraphRow } from '../../src/host-graph.ts'
 import {
   BundleLoadTimeoutError, dedupeCoveredRows,
 } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
@@ -336,15 +332,33 @@ test('dedupeCoveredRows: covered set is O(1) per row and tolerates duplicate cov
   assert.deepEqual(dedupeCoveredRows([row('a'), row('b'), row('c')], covered).map(r => r.id), ['c'])
 })
 
-test('toExtraRows: injects the per-instance base path into root-relative urls and drops non-root-relative urls', () => {
+test('toExtraRows: normalizes root-relative and document-relative bundle urls, drops unsafe ones', () => {
   const rows = [
     row('@scope/pkg', { inject: ['x'], immediately: true }),
     row('pkg-absolute', { url: 'https://cdn.example/plugins/p/client.js?rev=r', rev: 'r' }),
     row('pkg-protocol-relative', { url: '//cdn.example/plugins/p/client.js?rev=r', rev: 'r' }),
     row('pkg-relative', { url: 'plugins/p/client.js?rev=r', rev: 'r' }),
+    row('pkg-traversal', { url: '../../outside/p.js', rev: 'r' }),
+    row('pkg-doc-combo', { url: 'plugins/??a.js,b.js&rev=r', rev: 'r' }),
   ]
   const out: ExtraModuleRow[] = toExtraRows(rows, '/api/i/ssh-42')
-  assert.deepEqual(out, [extra('@scope/pkg', '/api/i/ssh-42')])
+  assert.deepEqual(out.map((r) => r.id), ['@scope/pkg', 'pkg-relative', 'pkg-doc-combo'])
+  assert.equal(out[0].url, '/api/i/ssh-42/plugins/??@scope/pkg&rev=abc123')
+  // 0.1.7：document-relative 行必须归一进实例前缀（此前被整行丢弃 = 实例丢光 profile 插件）
+  assert.equal(out[1].url, '/api/i/ssh-42/plugins/p/client.js?rev=r')
+  assert.equal(out[2].url, '/api/i/ssh-42/plugins/??a.js,b.js&rev=r', 'combo 语法原样随行')
+})
+
+test('normalizeBundleUrl: 两种相对形态都接，scheme/协议相对/穿越/反斜杠一律拒', () => {
+  assert.equal(normalizeBundleUrl('/plugins/p/x.js?rev=r', '/api/i/one'), '/api/i/one/plugins/p/x.js?rev=r')
+  assert.equal(normalizeBundleUrl('plugins/p/x.js?rev=r', '/api/i/one'), '/api/i/one/plugins/p/x.js?rev=r')
+  assert.equal(normalizeBundleUrl('https://evil/x.js', '/api/i/one'), null)
+  assert.equal(normalizeBundleUrl('//evil/x.js', '/api/i/one'), null)
+  assert.equal(normalizeBundleUrl('data:text/javascript,1', '/api/i/one'), null)
+  assert.equal(normalizeBundleUrl('../../x.js', '/api/i/one'), null)
+  assert.equal(normalizeBundleUrl('a/../../x.js', '/api/i/one'), null)
+  assert.equal(normalizeBundleUrl('plugins\\p\\x.js', '/api/i/one'), null)
+  assert.equal(normalizeBundleUrl('', '/api/i/one'), null)
 })
 
 test('toExtraRows: passes `external` through to the kernel row (never dropped, never invented)', () => {
