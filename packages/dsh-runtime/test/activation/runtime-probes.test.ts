@@ -462,6 +462,41 @@ test('a malformed identity value and unreadable settings fail explicit probes', 
   }
 })
 
+test('0.1.7 settings probe accepts the active profile after legacy settings import', async () => {
+  const fx = fixture()
+  try {
+    rmSync(fx.settingsPath)
+    writeFileSync(`${fx.settingsPath}.imported`, 'locale:\n  preference: zh\n')
+    const call: RuntimeProbeCall = async (base, method, payload, options) => {
+      if (method === 'settings/describe') {
+        return { result: { value: { writable: true, hasDocument: true, namespaces: [] } } }
+      }
+      return successfulCall(fx)(base, method, payload, options)
+    }
+    const results = await probes(fx, call)
+    assert.equal(results.find(result => result.name === 'settings/describe')?.ok, true)
+    assert.equal(results.find(result => result.name === 'data.settings')?.ok, true)
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('a settings provider without an active document fails the data probe', async () => {
+  const fx = fixture()
+  try {
+    const call: RuntimeProbeCall = async (base, method, payload, options) => {
+      if (method === 'settings/describe') {
+        return { result: { value: { writable: true, hasDocument: false, namespaces: [] } } }
+      }
+      return successfulCall(fx)(base, method, payload, options)
+    }
+    const results = await probes(fx, call)
+    assert.equal(results.find(result => result.name === 'data.settings')?.ok, false)
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
 test('commands and git probes accept only their statically side-effect-free miss paths', async () => {
   const fx = fixture()
   try {

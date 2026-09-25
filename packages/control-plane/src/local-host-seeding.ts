@@ -25,12 +25,15 @@ import {
 /**
  * Seed first-run defaults into the managed dsh home. The dsh web UI derives its locale from
  * the settings document and otherwise falls back to the browser/OS language — seed `zh` so
- * the local instance defaults to Chinese. Absent file only: an existing document is never
- * touched.
+ * the local instance defaults to Chinese. Only an uninitialized home is seeded: dsh 0.1.7
+ * renames the legacy file to `.imported` after moving its value into the active profile.
  */
 export function seedDshHomeDefaults(dshHome: string): boolean {
   const documentPath = join(dshHome, 'settings.yaml')
   ensurePrivateDirectoryNoFollow(dshHome, 0o700)
+  // dsh >= 0.1.7 imports this legacy document into the profile and renames it.
+  // Recreating it on every spawn would reapply the default over a user's choice.
+  if (existsSync(join(dshHome, 'settings.yaml.imported'))) return false
   try {
     createPrivateFileExclusiveNoFollow(documentPath, 'locale:\n  preference: zh\n', { mode: 0o600 })
     return true

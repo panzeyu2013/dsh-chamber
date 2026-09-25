@@ -496,6 +496,13 @@ test('seedDshHomeDefaults writes a zh locale default once and never touches an e
     assert.equal(seedDshHomeDefaults(dshHome), false)
     assert.equal(readFileSync(join(dshHome, 'settings.yaml'), 'utf8'), 'locale:\n  preference: zh\n')
 
+    // dsh 0.1.7 moves the legacy document after importing it into the profile.
+    // A later spawn must not recreate it and overwrite the user's current locale.
+    rmSync(join(dshHome, 'settings.yaml'))
+    writeFileSync(join(dshHome, 'settings.yaml.imported'), 'locale:\n  preference: zh\n')
+    assert.equal(seedDshHomeDefaults(dshHome), false)
+    assert.equal(existsSync(join(dshHome, 'settings.yaml')), false)
+
     // A user's own document is never touched.
     const custom = join(root, 'custom-home')
     mkdirSync(custom, { recursive: true })
@@ -528,4 +535,3 @@ test('seedDshHomeDefaults refuses a symlinked home and never writes through an e
     rmSync(root, { recursive: true, force: true })
   }
 })
-

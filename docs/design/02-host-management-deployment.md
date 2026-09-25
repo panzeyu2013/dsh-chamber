@@ -211,12 +211,17 @@ rows，不改变官方 web profile 的其它组合层。
   目的。其余环境继承控制面；`DSH_HOME` **显式 pin 到 `<stateDir>/dsh-home`**（覆盖继承，
   控制面私有宿主 home，与系统用户 `~/.dsh` 不共享）；Electron 分支额外注入
   `ELECTRON_RUN_AS_NODE=1`。
-- **首启默认（seedDshHomeDefaults，index.ts）**：首次 start() 时 `<stateDir>/dsh-home` 无
-  `settings.yaml` 则写入 `locale.preference: zh`（0600）——本地实例 dsh UI 默认中文，不跟随
-  浏览器/系统语言；仅缺文件时写，用户显式选择（settings 页或手改文件）永不被覆盖。
+- **首启默认（seedDshHomeDefaults，index.ts）**：未初始化的 `<stateDir>/dsh-home` 同时无
+  `settings.yaml` 和 `settings.yaml.imported` 时，写入一次 `locale.preference: zh`（0600）。
+  dsh ≥0.1.7 首启把旧文件导入活跃 Profile 并改名为 `.imported`；后续 start() 不再重建旧文件，
+  避免再次导入默认值覆盖用户在设置页中的选择。
 - **日志**：stdout/stderr 管道接入控制面 host-logs 滚动日志（§3.8），同时是启动诊断与就绪失败
   的证据（登记字段：binary、args、cwd、env 键数、PATH 项数；spawn-dsh 以注册表字段承载，非独立
-   结构化 `lastSpawnDiagnostics` 对象）。
+  结构化 `lastSpawnDiagnostics` 对象）。
+
+#### Rejected alternatives（首启设置迁移）
+
+- **每次缺 `settings.yaml` 就重播种**：0.1.7 的正常导入会使该路径永久缺席；重播种导致每次启动重新导入默认中文，覆盖用户后续选择。
 
 ### 3.2 就绪探测与端口占用判定（TCP + 统一身份探针）
 

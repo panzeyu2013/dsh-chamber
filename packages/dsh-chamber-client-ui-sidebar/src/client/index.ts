@@ -363,17 +363,17 @@ export function apply(ctx: ClientContext): void {
       onRelease: () => { sync() },
       warn: (message) => { console.warn(`[chamber] ${message} (${chamberInstanceId})`) },
     })
-    // pending（审批/提问/plan-review）的权威源是官方 ui-session 的 pending-interaction
-    // 注册表（官方 ui-workspace 侧边栏同一来源）；此处经 uiSession 服务直接订阅，把每会话
-    // pending 状态并入运行时事实通道，驱动琥珀点/等待分类与 ask/request 通知边沿。
+    // pending（审批/提问/plan-review）的权威源是官方 ui-session 暴露的 sessionStatus
+    // 投影；内部 pending registry 是私有状态，不能从服务面直接读取。订阅公开投影并把
+    // pendingInteraction 并入运行时事实通道，驱动琥珀点/等待分类与 ask/request 通知边沿。
     // 真实不变量：ui-session 是 chamber 复合 boot 的 first-screen 服务，每个 boot 必然存在；
     // 指纹守卫前置只是防御纵深，非 chamber boot 在访问服务前已返回。
-    const pendingInteractions = (ctx.uiSession as unknown as {
-      pendingInteractions: {
-        getSnapshot(): ReadonlyMap<string, { kind?: string }>
+    const sessionStatus = (ctx.uiSession as unknown as {
+      sessionStatus: {
+        getSnapshot(): ReadonlyMap<string, { pendingInteraction?: { kind?: string } }>
         subscribe(listener: () => void): () => void
       }
-    }).pendingInteractions
+    }).sessionStatus
     let snapshotSignature = ''
     let snapshotQueued = false
     let disposed = false
@@ -483,7 +483,11 @@ export function apply(ctx: ClientContext): void {
       runEpisodes = advancedIdentities.episodes
       const runIds = new Map<string, string>()
       for (const [id, observed] of runIdentities) runIds.set(id, observed.runId)
-      const baseReport = projectRuntimeFacts(snapshot, subagentRunning, pendingInteractions.getSnapshot(), runIds)
+      const pendingBySession = new Map<string, { kind?: string }>()
+      for (const [sessionId, status] of sessionStatus.getSnapshot()) {
+        if (status.pendingInteraction !== undefined) pendingBySession.set(sessionId, status.pendingInteraction)
+      }
+      const baseReport = projectRuntimeFacts(snapshot, subagentRunning, pendingBySession, runIds)
       // listComplete：官方列表的 arrival phase（'pending' → 首次成功 'ready'，此后出错不回退）
       // 就是「列表是否完整」的权威事实；只有 ready 才允许 App 把缺席当删除剪掉未读（pending
       // 恒 false ⇒ 不剪枝，否则一次未完成的列表会假清未读）。它是判定输入，不进侧边栏渲染。
@@ -550,8 +554,8 @@ export function apply(ctx: ClientContext): void {
     queueSnapshot()
     const unsubscribeSessions = sessionsList.subscribe(sync)
     const unsubscribeWorkspaces = workspacesList.subscribe(queueSnapshot)
-    // pending 注册表变化只影响运行时事实（琥珀点/通知边沿）；sync() 内 queueSnapshot 有签名去重兜底，重复触发无副作用。
-    const unsubscribePending = pendingInteractions.subscribe(sync)
+    // sessionStatus 的 pendingInteraction 变化只影响运行时事实（琥珀点/通知边沿）；sync() 内 queueSnapshot 有签名去重兜底，重复触发无副作用。
+    const unsubscribePending = sessionStatus.subscribe(sync)
     return () => {
       disposed = true
       goalActivation.dispose()

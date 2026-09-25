@@ -6,7 +6,8 @@
  * host-capability role is the fixed-size identity probe `session/canOpenWorkspacePath` — a
  * zero-arg boolean Remote that never reads session data, never activates an Agent and performs
  * no IO. Pre-identity trees answer 404 and fall back to `session/list` (old-tree behavior
- * unchanged, the REQUIRED `warn` sink fires); `commands/execute`'s third wire argument is
+ * unchanged, the REQUIRED `warn` sink fires); 0.1.7 settings use the active profile's
+ * `hasDocument` fact while older trees retain a bounded legacy-file read; `commands/execute`'s third wire argument is
  * `submittedAttachments`, and drift is rejected loud with `gateway/arguments-invalid`.
  */
 import { constants, type Stats } from 'node:fs'
@@ -237,7 +238,7 @@ function graphValue(value: unknown): boolean {
   return objectValue(value) && Array.isArray((value as Record<string, unknown>).entries)
 }
 
-function settingsValue(value: unknown): boolean {
+function settingsValue(value: unknown): value is { namespaces: unknown[]; hasDocument?: unknown } {
   return objectValue(value) && Array.isArray((value as Record<string, unknown>).namespaces)
 }
 
@@ -329,6 +330,7 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
   }
 
   let settingsRpcOk = false
+  let settingsHasDocument: boolean | null = null
 
   const probe = async (
     name: string,
@@ -406,7 +408,11 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     (async () => {
       // Cap aligned with SETTINGS_FILE_MAX_BYTES: a legitimately large settings response
       // must never be misread as a misbehaving host.
-      const outcome = await probe('settings/describe', 'settings/describe', { args: {} }, settingsValue, SETTINGS_FILE_MAX_BYTES)
+      const outcome = await probe('settings/describe', 'settings/describe', { args: {} }, (value) => {
+        if (!settingsValue(value)) return false
+        settingsHasDocument = typeof value.hasDocument === 'boolean' ? value.hasDocument : null
+        return true
+      }, SETTINGS_FILE_MAX_BYTES)
       settingsRpcOk = outcome.ok
       return outcome
     })(),
@@ -489,8 +495,15 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
 
   let dataSettings: ProbeResult
   try {
-    await readBoundedRegularUtf8File(join(opts.dshHome, 'settings.yaml'), signal, opts.settingsNoFollowConstants)
     if (!settingsRpcOk) throw new Error('settings RPC could not parse the active profile')
+    if (settingsHasDocument === false) throw new Error('settings RPC reports no active document')
+    // New dsh imports settings.yaml into the active profile and renames the old
+    // file to settings.yaml.imported. Its settings RPC has already loaded that
+    // profile and explicitly reports a document. Older trees omit the flag and
+    // retain the legacy file, so keep the bounded read for those trees.
+    if (settingsHasDocument === null) {
+      await readBoundedRegularUtf8File(join(opts.dshHome, 'settings.yaml'), signal, opts.settingsNoFollowConstants)
+    }
     dataSettings = { name: 'data.settings', ok: true }
   } catch (error) {
     dataSettings = { name: 'data.settings', ok: false, error: resultError(error) }

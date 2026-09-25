@@ -951,11 +951,21 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
 
 待办区是对 chamberBridge 投影的**纯派生视图**（`packages/dsh-chamber-client-core/src/todo-attention.ts`），不持有
 任何条目记忆：输入 = 每来源每会话的**合并运行时事实**（App `completedBySource` 蓝点
-∪ vendor `completed` ∪ `pending` 注册表——与行尾指示同一事实源）；输出 =
+∪ vendor `completed` ∪ `uiSession.sessionStatus` 中的 `pendingInteraction`——与行尾指示同一事实源）；输出 =
 「此刻需要你注意」的条目（来源 + 会话 + kind：`approval / plan-review / question /
 completed`）；出现/消失 = 投影刷新后的重算：断连来源无 runtime → 不臆造条目（重连后按
-真实状态重现或不再出现）；会话重新 running / 已读解除 / pending 注册表清除 → 自动
+真实状态重现或不再出现）；会话重新 running / 已读解除 / `pendingInteraction` 清除 → 自动
 消失。**移除从来不是动作，而是重算。**
+
+pending 的客户端权威输入是官方 ui-session 服务公开的 `sessionStatus` observable；每个
+session status 的 `pendingInteraction` 进入运行时事实投影。不要读取 ui-session 内部的
+pending registry：它不属于服务接口，缺席时会让同步函数抛错，而 sidebar 插件 fiber 的
+错误回滚会同时撤销该来源的所有 sidebar slot。
+
+**Rejected alternatives**：直接访问 `uiSession.pendingInteractions` 可以复用内部 Map，代码
+看起来更短，但该字段不是公开服务契约，实际服务未暴露它，导致首次同步抛错并整棵侧栏卸载；
+改读公开 `sessionStatus` 并提取 `pendingInteraction` 保留官方投影语义，也让状态变化经服务的
+observable 显式传播。
 
 派生纪律（与 `sessionStateDot` 同优先级，待办区绝不声称行指示未呈现的注意）：
 
@@ -979,7 +989,7 @@ completed`）；出现/消失 = 投影刷新后的重算：断连来源无 runti
 - **completed 条目**：目标会话真正打开（成为活动来源 current）→ App 已读状态机解除
   → 条目随投影消失。打开失败（断连/来源移除）→ 条目保留、可重试，绝不丢提醒。
 - **pending 条目**：打开**不**移除——只有交互被真正处理（批了/答了/agent 继续，
-  ui-session pending 注册表清除）才消失；切走看别的会话条目仍在，直到处理完毕。
+  `uiSession.sessionStatus` 中的 `pendingInteraction` 清除）才消失；切走看别的会话条目仍在，直到处理完毕。
 
 **不做**自动展开/滚动定位：跳转目的地是会话正文；折叠/滚动是用户布局状态（跨 ctx
 共享持久偏好），跳转从不改写；方位感由条目上下文（tooltip 见 §8.5：完整标题 +

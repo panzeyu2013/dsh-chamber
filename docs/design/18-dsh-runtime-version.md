@@ -120,8 +120,10 @@ reaper（回收孤儿实例）→ 快照 DSH_HOME（§3.7，断言无存活写�
   chamber 域）零参执行，accept = 形态良好的 domain carrier（`ok:true` + 对象 value
   健康；形态良好
   的 `ok:false` = 在位但异常 → fail-closed；无 legacy 回退）；
-  `data.settings` **带既有 `$DSH_HOME` profile 数据 boot + 数据可读性探测**
-  （settings.yaml 可解析）。**`data.sessions` 已移出探针集**：会话存储健康不在激活契约内——`session/list` 与 `data.sessions` 双双退出。`host.describe`
+  `data.settings` **带既有 `$DSH_HOME` profile 数据 boot + 数据可读性探测**：
+  0.1.7 的 `settings/describe` 成功加载活跃 Profile 且报告 `hasDocument: true` 即通过；
+  旧树未提供该字段时，仍对 `settings.yaml` 做有界、不跟随符号链接的读取。
+  **`data.sessions` 已移出探针集**：会话存储健康不在激活契约内——`session/list` 与 `data.sessions` 双双退出。`host.describe`
   与 `workspace.list` 随上游删除、不在探针集内；三个 chamber 域在 `hostDomains=false`
   形态（见下）跳过，该形态期望集 = `PROBE_NAMES_WITHOUT_HOST_DOMAINS` 四项（上列四个
   非宿主域探针）。
@@ -463,8 +465,8 @@ chamber-settings.json，非秘密）：
   做**静止拷贝**（断言无存活写者）到 tmp → 原子发布到
   `snapshots/<源版本>-<时间戳>/`（**源版本 = 切换前活跃版**）。**不变量：无快照
   不切指针**——快照失败（ENOSPC/权限）→ 中止 + 快照失败标记（§3.6）；
-- **数据可读性探测**（§3.4）：新版本启动后校验 settings.yaml 可解析（`data.settings`
-  行）；会话数据可读性不在契约内（§3.4 已移出探针集）；
+- **数据可读性探测**（§3.4）：新版本启动后由 `data.settings` 行验证活跃 Profile 的设置
+  读面；无 `hasDocument` 字段的旧运行时继续校验 `settings.yaml`；会话数据可读性不在契约内（§3.4 已移出探针集）；
 - **失败回退 = 切回旧指针 + 恢复快照**。**恢复协议（两阶段 + 幂等补完）**：
   写 `restore-in-progress` 标记 → `DSH_HOME → DSH_HOME.old` → `snapshot →
   DSH_HOME` → 删标记。**补完只按持久 phase 与精确路径状态推进**，
@@ -951,6 +953,7 @@ S17–S20 的权威表格在 `design/17-server-side-gateway.md` §17，本节只
 
 ### Rejected alternatives（架构调整）
 
+- **继续要求所有版本的 `settings.yaml` 存在**：0.1.7 正常启动会把它改名为 `.imported`，因此该规则必然误判并停掉健康的本地实例；也不把 `.imported` 当活配置读取。
 - **保持 wholesale `export *` 入口**：否决——入口面看不出谁真正消费，死导出无从判定（审计实测该包曾有一批零消费者导出）；改为显式具名面（137 个 runtime 值 = 有生产消费者的名字），内部实现留在各模块供包内相对 import。
 - **为过死导出门而砍掉导出函数的签名类型**（`PnpmEntrySearch`/`DshCliEntryResolution` 等）：否决——导出函数的参数/返回类型是其 API 的一部分，宿主需可命名/标注；类型导出不参与 runtime 死面判定，故入口规则写明唯一例外：导出函数/类签名引用的具名类型随签名出口（共 112 个类型契约）。
 - **桌面/网关各自维护 pnpm 入口、内建版本、dsh CLI entry 解析**：否决——同一判定多份手抄，布局或上游变化需改多处；共享原语落本包（`pnpm-entry`/`anchor-version`/`dsh-cli-entry`/`registry-url`），gateway 已接入；desktop 接入受 Swift 文本锚点约束，见 STATUS 开放项。
