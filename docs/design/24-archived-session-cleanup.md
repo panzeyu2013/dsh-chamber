@@ -292,13 +292,30 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
    archived，前序已删成员不回滚，本树不进入最终集合移除——根会话记录位于其自身内容目录内，
    越过失败成员删根会让下次 purge 把根当孤儿清出集合、不再重枚举幸存成员（静默内容泄漏，故
    整条祖先链保留待重跑）；下次 purge 从根重新枚举收敛，一棵树的中止不阻断其它可删树。
-9. **集合成员移除**：官方**无公开裁剪原语**（registry 仅 `archiveSession`
-   增向；startup/任何路径均不透传裁剪）→ binding 以文档化结构 seam 执行
-   **一次纯 `workspaceRegistry.setState({initialized, workspaceIds,
-   archivedSessionIds: filtered})`**，且必须**在官方 `enqueueOperation` 链内**（与
-   create/delete/insertBefore 串行，防与
+9. **集合成员移除**：官方**无公开批量裁剪原语**（registry 只有单条
+   `unarchiveSession(id)`，见下方 alternatives；无 `unarchiveSessions(ids)`）→ 本域
+   需要**一次**写完成批量收敛，故 binding 以文档化结构 seam 执行
+   **一次纯 `workspaceRegistry.setState` 的 read-modify-write**：读取官方 live global
+   （`registry.state`）后只改本域**唯一拥有**的字段
+   `setState({...live, archivedSessionIds: filtered})`，且必须**在官方
+   `enqueueOperation` 链内**（与 create/delete/insertBefore 串行，防与
    两阶段删除交错抹掉 marker），官方持久化路径、进程内（todo 12 方案 B 的进程外覆盖
-   风险不适用）。seam 带 `typeof setState === 'function'` 运行时守卫并 pin 版本。
+   风险不适用）。seam 带结构守卫（`setState` + live global 为非数组对象）fail-loud
+   `registry-unreadable`，并 pin 版本；**boundary 类型对官方字段集合保持不透明**——
+   本域对 `WorkspaceDomainState` 的形状一无所知。
+   **字段归属铁律（事故锚点）**：官方 `setState` 是**整体替换**（`dsh-storage-domain`
+   的 `global.set` 只做 `unit.setGlobal` + 内存赋值，**不跑 `schema.parse`**，故 zod
+   `.default([])` 不兜底），因此**任何**在外部重建官方 global 字段表的写法都会在上游
+   新增字段时静默丢字段。0.1.7 新增 `pinnedSessionIds`/`defaultWorkspaceId` 即由此复发：
+   旧实现写 `{initialized, workspaceIds, archivedSessionIds}` 后，宿主内存态
+   `pinnedSessionIds === undefined`，下一次归档在官方
+   `archiveSession()` 的 `state.pinnedSessionIds.filter(...)` 抛
+   `TypeError: Cannot read properties of undefined (reading 'filter')`，被 api-gateway
+   兜成 `gateway/internal`（侧栏降级；Cmd+R 只换渲染进程，宿主内存态仍坏，重启实例才自愈
+   ——启动走 `schema.parse` 补默认值）。故 `archivedSessionIds` 之外的字段**一律 spread
+   透传**，不得枚举、不得重建。该 spread 同时修正了旧实现的第二个隐患：旧重建会**丢掉
+   `pendingMutation` marker**，若在链外执行即抹掉在飞 create/delete 的恢复标记；透传后
+   marker 原样保留（链内 `recoverPendingMutation` 仍先于本操作清它）。
    **最终批量写（常驻保留修正后）**：完成树根、完成树覆盖的已归档后代、孤儿
    在同一批官方 setState 写中清除（clearIds 去重；core.ts `purge()` + binding
    `removeArchivedSessionIds`，测试固化）——**唯一例外是常驻保留树**（§3）：该树根与它
@@ -311,6 +328,20 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
    浏览/反向操作；A-区（todo 12 方案 A，已归档浏览）若实现，其数据面即当前 archived
    集合（仅含未清理、运行中留存与常驻保留项）。上游 unarchive/delete wire 落地后本域
    退役并按官方语义收敛（§11）。
+
+   **Rejected alternatives（本域唯一官方 global 写入口）**
+   - **重建官方字段表**（旧实现：硬编码 `{initialized, workspaceIds, archivedSessionIds}` 再
+     `setState`）：`setState` 无 schema 兜底，上游加字段即静默污染宿主内存态（0.1.7
+     事故见上）；该写法与 `RegistryDomainState` 镜像类型均已移除。**当前测试即该写法的
+     回归闸**：`deepEqual(written, {...写前 live, archivedSessionIds})` 一旦有人重新枚举
+     字段就会红，故无需另设字段漂移门禁。
+   - **逐条调用官方单条裁剪 `unarchiveSession(id)`**（存在且经
+     `api-workspace-controller` 暴露 wire）：**可行**——不嵌在外层 `enqueueOperation` 里
+     就没有重入死锁（官方链自己负责串行），且能完全去掉三个私有面。**不采纳**的原因是
+     成本与窗口：`MAX_PURGE_SESSIONS`（65536）条 id 即 65536 次串行 durable 写，且失去
+     "单次写"对「最后一次 live 复检 → 写入」attach 竞争窗口的保护（§4 step 8）。
+   - **上游公开批量裁剪原语**（如 `unarchiveSessions(ids)`）：架构终点，本域届时彻底退役
+     私有写（§11）；受上游排期阻塞，作为提案登记，**不在本仓改上游代码**。
 10. **跨进程租约**：删除租约即放弃 jsonl 的跨进程互斥（vendor lease 明确警告
     forfeits exclusion），故本域契约要求调用方「**先停运行再清理**」；第二个 dsh
     进程同根写入不在本域可观测范围内（§13⑨）。
@@ -733,6 +764,13 @@ STATUS.md。
   review）；**protect 全套**（§3/§4 step 3b 每条规则各有 fixture：受保护根/受保护
   subagent 后代整棵跳过、优先分类、未知 id 无操作、受保护孤儿不清扫、畸形/超限在权威读取前
   拒绝、空集合逐字节等价、二次保护复查不产生前缀删除、binding 原语 `protected` 拒绝）；
+  **集合写字段归属不变量**（§4 step 9 铁律）：fake registry 的 live global 携带本域**不
+  拥有**的字段（pin 新增项 + 一个代表未来字段的占位），断言写入对象**除 `archivedSessionIds`
+  外逐字段等于写前 global**——该全对象 `deepEqual` 即事故回归闸（连"照着 0.1.7 字段表完整
+  重建"也会被未来字段占位抓到），取代历史上"写入键集 == 3 个"的固定形状断言（后者正是漏网
+  原因）；**注册表面守卫负向用例**：`state` 缺失 / `null` / 数组三态在**其余面完整**的 ctx 下
+  被拒（同 ctx 配合法 `state` 必须通过，作为正控制，使拒绝可归因于 `state` 本身而非别的缺面），
+  且写入口同样拒绝；
 - retention 不变量（逐条落于 `test/core.test.ts`，I4 于 :92、I1/I2/I3/I5 于 :88-236；原 fixed-seed xorshift32 × 2,000 轮组合生成未恢复，组合空间回归仅剩逐例）——I1 任何"删除瞬间仍常驻"
   的根绝不离集合（用户要求本体）、I2 上报的保留集不 phantom、I3 `forcedLoaded` 只计真的
   删了内容的保留根、I4 force 从不跳过 loaded 树、I5 重跑不删内容/不报 item 失败/**绝不摘
@@ -783,11 +821,18 @@ STATUS.md。
 
 ## 10. 宿主面事实（vendor 核对结论）
 
-vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.7-rc.2 477b4f4205；下列宿主面
-自 alpha.2 b2e3b2a0 审计以来未变）核对的宿主面事实，binding 与算法以此为准：
+vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.7-rc.2 477b4f4205）核对的宿主面
+事实，binding 与算法以此为准。§4 step 9 的字段归属铁律即由此得出：**面**（服务方法/属性）
+自 alpha.2 b2e3b2a0 审计以来未变，但**全局字段集合**在 0.1.7 长过（新增
+`pinnedSessionIds`/`defaultWorkspaceId`），故本域不再镜像字段：
 
-1. `workspaceRegistry` ctx 服务：`list()`/`archivedSessionIds`（public getter）/
-   `archiveSession`（仅增向）可用；**成员 `sessionIds` 是 header 索引派生的
+1. `workspaceRegistry` ctx 服务：`archivedSessionIds`（public getter）/ `archiveSession`
+   （仅增向）/ 单条 `unarchiveSession`（public，本域未用）可用；本域写集合另需三个
+   **私有**面——实例字段 `state`（官方 live global 本体，`setState` 换的就是它）、
+   `setState`（**整体替换**且 `dsh-storage-domain` 的 `global.set` **不跑 `schema.parse`**，
+   故 zod 默认值不兜底 → 只能 read-modify-write）、`enqueueOperation`（官方串行链，集合写
+   必须在其内）。`list()` 公开可用但**本域已不再使用**（不再重建 `workspaceIds`）。
+   **成员 `sessionIds` 是 header 索引派生的
    getter**（启动/实时按 `sessionPersistence.list()` 重建）——内容删除后
    成员账目自动自愈，无需也不可手工改账目；
 2. **归档顶层行可枚举**：官方 `sessionQuery.listSessions()`（live 优先 + 持久化
@@ -829,8 +874,18 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.7-rc.2 477b4f42
 - **上游未来落地 unarchive / sessions.delete**：收敛路径**机制化**——上游 wire 随 vendor
   bump 出现即登记为独立 STATUS 跟踪项：客户端 wrapper 单点切到官方 wire（批量编排），宿主
   包按发行周期从 seed 清单退役，双协议不永久并存；§3 命名空间与官方分离保证切换无碰撞；
-- **seam 退役**：上游 wire 落地即退役 `enqueueOperation`/`setState` seam + probe 端点 + seed
-  行，结构 seam 核对列入每次 harness pin 升级清单（STATUS 跟踪项）；
+- **seam 退役**：上游 wire 落地即退役 `state`/`setState`/`enqueueOperation` 三个私有面 +
+  probe 端点 + seed 行。该 seam 的漂移**不靠人工清单兜底**：缺失/改名的 `state`/`setState`
+  由激活探针（`assertHostSurface`）拒绝，缺失的 `enqueueOperation` 在写入口拒绝（§4 step 9，
+  注意**不在**激活期），两处都是 fail-loud `registry-unreadable`。**检测边界要说清**：守卫是
+  **存在性/形状**检查，只覆盖"面缺失或改名"，**不覆盖语义漂移**——若 `state` 保留了名字却
+  不再是 `setState` 所替换的那个对象，或 `enqueueOperation` 不再串行，两道守卫都会通过而
+  回到静默损坏（即 0.1.7 同类）。这正是 STATUS 保留"待上游批量原语后退役"这一开放项的理由：
+  语义漂移在运行时不可判，只能靠消费公开原语来根除。该 seam 对官方 global 的
+  **字段集合零知识**（§4 step 9 的字段归属铁律），不随上游加字段而更新。**代价要说清**：
+  本域因此从"公开 getter + 公开 `list()`"改为依赖一个**私有实例字段** `state`（公开面换私有
+  面，私有面 2→3）——换来的是对字段形状零知识、不再随上游 schema 漂移，这是有意为之的取舍；
+  单条公开 `unarchiveSession` 存在但需 N 次写，故不作为替代（§4 step 9 alternatives）；
 - **探针部分同步**（老桌面↔新 gateway 交替同步）：§7 C 的期望集派生消除静态错配，是第三域
   上线的必要条件；
 - **并发与漂移防护**：只经宿主 service / 持久化原语 + live agents 守卫 + 每会话复检，崩溃

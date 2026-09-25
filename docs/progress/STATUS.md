@@ -97,6 +97,7 @@
   实机验收（§5/§13，保护修正后待跑）：卡提问/等权限归档会话 → 归档即终止 → 管理器删除一次成功；无会话打开/来源壳回收时删除仍可用且顶部有降级说明行；vendor未清空选中前删除正查看的已归档树 → 报 `skippedProtected` 且内容未删（保护输入为活 `current`，不记忆），切换/稍后重试即成功；运行中子代理后代所在树一次删除收敛；3s未settle如实报 `skippedRunning`。
   常驻保留链（修正后的回归门，待跑）：归档本进程打开过的会话 → 删除（结果行给出常驻保留文案）→ 侧栏不再现该普通行、管理器仍带「内容已删除，待实例重启收敛」→ 重启dsh → 行消失、purge干净（tombstone由孤儿清扫收敛，仅当实例已产生至少一条会话记录；空语料时G1a永跳，属已知取舍）；反向判据：未打开过的归档会话删除后照旧立即消失。
   登记残余：事件发射no-op直至上游wire（域随 `sessions.delete` 落地退休）；维护期报 `idle`，force可能删到正追加的档（缓解：归档即终止 + 删除侧闭包全员cancel）；归档集合run起点快照；保护边界 = 活 `current`（多客户端正看的会话、掩码窗口内本页会话不在保护集，design 24 §13⑭）。可选增强：PluginDialog三态行、rowError本地化、已归档浏览区。
+  集合写 seam 残余（design 24 §4 step 9 / §11）：本域仍依赖官方**私有** `state` / `setState` / `enqueueOperation` 三面（上游无公开批量裁剪原语，只有单条 `unarchiveSession`）。退役条件 = 上游提供 `unarchiveSessions(ids)` 一类批量原语；存续期间面漂移由激活探针与写入口守卫 fail-loud 检测（design 24 §11），故不随上游 global 字段增删更新本域代码或测试。
   既有缺陷（未修，待裁）：run级 `archive-set` 提示与per-item failure共用 `errors` 通道，`archive-purge.ts` 对 `errors.length > 0` 一律 `kind:'error'` ⇒ 删除成功的run也现红字（证据 `core.ts recordError('', 'archive-set', …)` + `retention-properties.test.ts` I5）；修法未决（分通道字段vs客户端按code归类info）。
   清理残留（待裁两条）：① 单删成功后 `storages/session_projcache/sessions/<id>.json` 仍留4 KB档——是否回收未决（purge只处理 `binding.ts:483-488/:524-567` 代际/暂存/租约，对 `projcache` 零命中，上游无入口）；② 迁移在飞时purge可能留一代窗口：同目录并发write-open发布后继代际（`generation.ts:829` `link`），purge先 `readdir`（`binding.ts:524`）再 `rm`（`:544-554`），`link` 在枚举后落地则 `rmdir` ENOTEMPTY被吞（`:556-566`）却仍 `return 'deleted'`（`:567`）——成员关系清除、内容仍可读且后续purge不收敛。磁盘泄漏未裁决（守卫选项：写租约删除时机/二次枚举/rmdir失败不改判）。
 

@@ -24,22 +24,15 @@ export interface SessionRecordLike {
   readonly header: SessionHeaderLike
 }
 
-export interface RegistryWorkspaceLike {
-  readonly id: unknown
-}
-
-/** The durable workspace domain state shape setState persists (registry
- *  WorkspaceDomainState minus the optional pendingMutation marker). */
-export interface RegistryDomainState {
-  readonly initialized: boolean
-  readonly workspaceIds: readonly string[]
-  readonly archivedSessionIds: readonly string[]
-}
-
+/** Official registry global handle. `setState` REPLACES the whole global, so this stays
+ *  opaque on purpose: the binding spreads the live object and owns exactly one field
+ *  (`archivedSessionIds`). Mirroring the official field list here would silently drop
+ *  every field the pin adds (design 24 §4 step 9). */
 export interface RegistryLike {
   readonly archivedSessionIds?: readonly string[]
-  list?(): readonly RegistryWorkspaceLike[]
-  setState?(state: RegistryDomainState): Promise<unknown>
+  /** The registry-owned live global object — the same reference `setState` replaces. */
+  readonly state?: unknown
+  setState?(state: Record<string, unknown>): Promise<unknown>
   /** Official per-instance mutation chain (private in the pinned tree but
    *  runtime-guarded; running inside it serializes against every registry write). */
   enqueueOperation?<T>(operation: () => Promise<T>): Promise<T>
@@ -155,12 +148,14 @@ export function headerToState(header: SessionHeaderLike): ArchivedSessionState {
  * Zero-IO structural surface check used by the activation probe: a
  * mounted-but-corrupt/missing registry OR enumeration/storage surface fails
  * activation loudly instead of passing presence and failing at the first purge.
- * Mirrors requireRegistry's checks; throws `registry-unreadable`.
+ * Mirrors requireRegistry's checks; throws `registry-unreadable`. `state` is required
+ * because the archived-set write read-modify-writes the live global — a registry
+ * exposing `setState` without its live object cannot be written safely.
  */
-/** The registry surface the whole domain keys on: a missing/drifted shape refuses loudly. */
 export function requireRegistrySurface(registry: RegistryLike | undefined): RegistryLike {
   if (registry === undefined || typeof registry.setState !== 'function'
-    || !Array.isArray(registry.archivedSessionIds) || typeof registry.list !== 'function') {
+    || !Array.isArray(registry.archivedSessionIds)
+    || registry.state === null || typeof registry.state !== 'object' || Array.isArray(registry.state)) {
     throw new ArchiveCleanupError(
       'registry-unreadable',
       'archiveCleanup: the workspaceRegistry service is not mounted with the expected surface',

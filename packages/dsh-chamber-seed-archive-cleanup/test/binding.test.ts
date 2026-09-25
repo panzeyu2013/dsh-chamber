@@ -54,7 +54,9 @@ function header(id: string, extra: Partial<{ cwd: string; parentSession: string;
 
 interface RegistryFake {
   archived: string[]
-  workspaces: { id: string }[]
+  /** The official live global: fields this domain does NOT own (pin-added, plus a
+   *  stand-in for whatever the next pin adds) that the write must carry through. */
+  state: Record<string, unknown>
   setStateCalls: { state: unknown; chained: boolean }[]
   chainCalls: number
   failNextSetState?: boolean
@@ -62,7 +64,20 @@ interface RegistryFake {
 
 /** Fresh registry fake over `archived` ids with the standard single workspace. */
 function registryFake(archived: string[], extra: Partial<RegistryFake> = {}): RegistryFake {
-  return { archived: [...archived], workspaces: [{ id: 'w1' }], setStateCalls: [], chainCalls: 0, ...extra }
+  return {
+    archived: [...archived],
+    state: {
+      initialized: true,
+      workspaceIds: ['w1'],
+      archivedSessionIds: [...archived],
+      pinnedSessionIds: ['pinned-1'],
+      defaultWorkspaceId: 'w1',
+      futureField: 'keep',
+    },
+    setStateCalls: [],
+    chainCalls: 0,
+    ...extra,
+  }
 }
 
 /** A real temp dir, removed after `body` settles. */
@@ -100,15 +115,19 @@ function makeCtx(overrides: Partial<HostCtxServices> = {}, registry?: RegistryFa
     ...(registry === undefined ? {} : {
       workspaceRegistry: {
         get archivedSessionIds() { return registry.archived },
-        list: () => registry.workspaces,
-        setState: async (state: unknown) => {
+        get state() { return registry.state },
+        // Present because the REAL pinned registry exposes it: if someone ever restores a
+        // field-rebuilding write, it must fail on the field-drop assertion below — not on a
+        // missing method that merely happens to be unused by the fixed code.
+        list: () => [{ id: 'w1' }],
+        setState: async (state: Record<string, unknown>) => {
           if (registry.failNextSetState === true) {
             registry.failNextSetState = false
             throw new Error('fake: setState failed')
           }
           registry.setStateCalls.push({ state, chained: false })
-          const s = state as { workspaceIds: string[]; archivedSessionIds: string[] }
-          registry.archived = [...s.archivedSessionIds]
+          registry.state = state
+          registry.archived = [...state.archivedSessionIds as string[]]
         },
         enqueueOperation: async <T>(operation: () => Promise<T>): Promise<T> => {
           // Serialized like the official chain (await-tail semantics are the
@@ -122,15 +141,21 @@ function makeCtx(overrides: Partial<HostCtxServices> = {}, registry?: RegistryFa
   }
 }
 
-test('binding: batched archived-set removal runs one chained single-state write', async () => {
+test('binding: batched archived-set removal is ONE chained write that carries every field it does not own (0.1.7 archiveSession crash)', async () => {
   const registry = registryFake(['a', 'b', 'c'])
+  const before = { ...registry.state }
   const host = makeHostBinding(makeCtx({}, registry))
   await host.removeArchivedSessionIds(['a', 'c'])
   assert.equal(registry.setStateCalls.length, 1)
-  const state = registry.setStateCalls[0]!.state as { initialized: boolean; workspaceIds: string[]; archivedSessionIds: string[] }
-  assert.equal(state.initialized, true)
-  assert.deepEqual(state.workspaceIds, ['w1'])
-  assert.deepEqual(state.archivedSessionIds, ['b'])
+  const written = registry.setStateCalls[0]!.state as Record<string, unknown>
+  // `archivedSessionIds` is the ONLY field this domain owns, so every other field — including
+  // fields the pin grew (0.1.7 `pinnedSessionIds`/`defaultWorkspaceId`) and fields it may grow
+  // next — must survive byte-for-byte. Rebuilding a field list is exactly what dropped
+  // `pinnedSessionIds` and crashed the next official `archiveSession()` on
+  // `state.pinnedSessionIds.filter(...)` (`gateway/internal: ... reading 'filter'`); this
+  // whole-object compare is that crash's regression gate. It also implies the surviving field
+  // stays callable, so no separate assertion is needed.
+  assert.deepEqual(written, { ...before, archivedSessionIds: ['b'] })
   assert.deepEqual(registry.archived, ['b'])
   // Idempotent no-op when nothing to remove → no write.
   await host.removeArchivedSessionIds(['a'])
@@ -235,7 +260,7 @@ test('binding: a deletion refuses when the liveness face is missing, before any 
 })
 
 test('binding: assertHostSurface includes the agents/sessions liveness faces', () => {
-  const registrySurface = { archivedSessionIds: [], list: () => [], setState: async () => undefined }
+  const registrySurface = { archivedSessionIds: [], state: { archivedSessionIds: [] }, setState: async () => undefined }
   assert.throws(() => assertHostSurface({ workspaceRegistry: registrySurface, agents: {}, sessions: { list: () => [] } } as never), codeIs('registry-unreadable'))
   assert.throws(() => assertHostSurface({ workspaceRegistry: registrySurface, agents: { list: () => [] }, sessions: {} } as never), codeIs('registry-unreadable'))
   assert.doesNotThrow(() => assertHostSurface({ workspaceRegistry: registrySurface, sessionQuery: { listSessions: async () => [] }, sessionPersistence: { list: async () => [], locate: () => undefined, stat: async () => undefined }, agents: { list: () => [] }, sessions: { list: () => [] } } as never))
@@ -500,6 +525,40 @@ test('binding: registry surface guard refuses a missing setState surface', async
   await assert.rejects(() => host.listArchivedSessionIds(), codeIs('registry-unreadable'))
 })
 
+test('binding: the registry surface guard requires the live global (`state`), not just setState', async () => {
+  // `setState` REPLACES the whole global, so without a readable `state` the archived-set
+  // write could only rebuild a partial object — the exact corruption class this fix removed.
+  // Spreading a missing `state` silently writes a partial global (an array spreads to
+  // index-keyed garbage), so the write must be refused up front rather than guessed at.
+  // The REST of the host surface is complete here, so `state` is the ONLY variable: without
+  // that, a refusal could come from a different missing face and prove nothing.
+  const fullSurface = (workspaceRegistry: unknown): never => ({
+    workspaceRegistry,
+    sessionQuery: { listSessions: async () => [] },
+    sessionPersistence: { list: async () => [], locate: () => undefined, stat: async () => undefined },
+    agents: { list: () => [] },
+    sessions: { list: () => [] },
+  } as never)
+  const registryFor = (state: unknown) => ({
+    archivedSessionIds: [] as string[],
+    setState: async () => undefined,
+    enqueueOperation: async <T>(op: () => Promise<T>): Promise<T> => op(),
+    ...(state === undefined ? {} : { state }),
+  })
+  // Control: with the live global present and every other face complete, activation passes —
+  // which is what makes the bad-state refusals below attributable to `state` alone.
+  assert.doesNotThrow(() => assertHostSurface(fullSurface(registryFor({ archivedSessionIds: [] }))))
+  for (const badState of [undefined, null, ['not', 'an', 'object']]) {
+    assert.throws(
+      () => assertHostSurface(fullSurface(registryFor(badState))),
+      codeIs('registry-unreadable'),
+      `state=${JSON.stringify(badState)} must refuse`,
+    )
+    const host = makeHostBinding(fullSurface(registryFor(badState)))
+    await assert.rejects(() => host.removeArchivedSessionIds(['a']), codeIs('registry-unreadable'))
+  }
+})
+
 test('binding: listSessionStates carries cwd + lineage into snapshot states', async () => {
   const host = makeHostBinding({
     sessionQuery: {
@@ -610,7 +669,7 @@ test('binding: an absent official mutation chain refuses loudly (no out-of-chain
   const ctx = {
     workspaceRegistry: {
       archivedSessionIds: ['a'],
-      list: () => [{ id: 'w1' }],
+      state: { initialized: true, archivedSessionIds: ['a'] },
       setState: async () => { setStateCalls += 1 },
       // No enqueueOperation — an out-of-chain write must NOT happen.
     },
@@ -698,7 +757,7 @@ test('binding: assertHostSurface passes on the full surface and refuses otherwis
   // Full surface: registry + session enumeration + storage locate + the
   // `stat` existence probe the sweep depends on.
   assertHostSurface({
-    workspaceRegistry: { archivedSessionIds: [], list: () => [], setState: async () => {} },
+    workspaceRegistry: { archivedSessionIds: [], state: { archivedSessionIds: [] }, setState: async () => {} },
     sessionQuery: { listSessions: async () => [] },
     sessionPersistence: { list: async () => [], locate: () => undefined, stat: async () => undefined },
     agents: { list: () => [] },
@@ -709,21 +768,21 @@ test('binding: assertHostSurface passes on the full surface and refuses otherwis
   // loudly — presence without surface health would only registry-unreadable
   // on the first purge.
   assert.throws(() => assertHostSurface({
-    workspaceRegistry: { archivedSessionIds: [], list: () => [], setState: async () => {} },
+    workspaceRegistry: { archivedSessionIds: [], state: { archivedSessionIds: [] }, setState: async () => {} },
     agents: { list: () => [] },
     sessions: { list: () => [] },
   } as never), codeIs('registry-unreadable'))
   // Enumerating without the storage locate leg also refuses (content removal
   // would be impossible).
   assert.throws(() => assertHostSurface({
-    workspaceRegistry: { archivedSessionIds: [], list: () => [], setState: async () => {} },
+    workspaceRegistry: { archivedSessionIds: [], state: { archivedSessionIds: [] }, setState: async () => {} },
     sessionQuery: { listSessions: async () => [] },
     agents: { list: () => [] },
     sessions: { list: () => [] },
   } as never), codeIs('registry-unreadable'))
   // …and without the decisive `stat` probe (the sweep's existence gate).
   assert.throws(() => assertHostSurface({
-    workspaceRegistry: { archivedSessionIds: [], list: () => [], setState: async () => {} },
+    workspaceRegistry: { archivedSessionIds: [], state: { archivedSessionIds: [] }, setState: async () => {} },
     sessionQuery: { listSessions: async () => [] },
     sessionPersistence: { list: async () => [], locate: () => undefined },
     agents: { list: () => [] },
@@ -794,9 +853,7 @@ test('binding union: a record only sessionPersistence.list reports survives and 
     mkdirSync(join(projectDir, 'persisted-1'), { recursive: true })
     const artifact = join(projectDir, 'persisted-1', 'session.jsonl')
     writeFileSync(artifact, '{}')
-    const registry: RegistryFake = {
-      archived: ['persisted-1', 'ghost-1'], workspaces: [{ id: 'w1' }], setStateCalls: [], chainCalls: 0,
-    }
+    const registry: RegistryFake = registryFake(['persisted-1', 'ghost-1'])
     const host = makeHostBinding(makeCtx({
       // NARROWED live-only leg: knows nothing about persisted-1.
       sessionQuery: { listSessions: async () => [{ header: header('live-1') }] },
