@@ -74,6 +74,8 @@ export const GROUPS = {
     'scripts/lib/sidecar-launch.test.mjs',
     // Shared scripts-toolbox CLI epilogue (usage block / failure projection).
     'scripts/lib/cli.test.mjs',
+    // Shared bilingual document structure signature (docs pair skeleton parity).
+    'scripts/lib/i18n-structure.test.mjs',
   ],
   // Upstream pin and touchpoint tooling (pin preflight, lockfile repair,
   // registry/touchpoint gates, protected-set and anchor gates).

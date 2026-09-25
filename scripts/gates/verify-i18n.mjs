@@ -16,6 +16,7 @@ import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { compareStructures } from '../lib/i18n-structure.mjs'
 
 const ROOT = resolve(fileURLToPath(new URL('../../', import.meta.url)))
 const RECORD_FILE = 'docs/i18n-record.json'
@@ -73,6 +74,8 @@ try {
 record.files ??= {}
 
 let drifted = false
+// 结构不对等是「--write 修不了」的失败面：哈希重录改变不了「镜像少了一节」。
+let structuralFailure = false
 const seen = new Set()
 
 for (const pair of discoverDocPairs()) {
@@ -81,6 +84,11 @@ for (const pair of discoverDocPairs()) {
     console.error('DRIFTED      ' + pair.en + ' —— 缺中文主档：' + pair.zh)
     drifted = true
     continue
+  }
+  const structure = compareStructures(readFileSync(join(ROOT, pair.zh), 'utf8'), readFileSync(join(ROOT, pair.en), 'utf8'))
+  if (!structure.ok) {
+    console.error('DRIFTED      ' + pair.en + ' —— 结构不对等（--write 修不了，必须把缺的那侧补齐）：' + structure.problems.join('；'))
+    structuralFailure = true
   }
   const hashes = { en: sha256(pair.en), zh: sha256(pair.zh) }
   const prev = record.files[pair.en]
@@ -121,6 +129,10 @@ for (const sidecar of discoverSidecars()) {
 if (write) {
   writeFileSync(recordPath, JSON.stringify(record, undefined, 2) + '\n')
   console.log('record written: ' + RECORD_FILE + '（sidecar 哈希按实际内容重录）')
+  if (structuralFailure) {
+    console.error('\n结构不对等不能用 --write 抹平——把缺的段落补齐再重录')
+    process.exit(1)
+  }
 } else if (drifted) {
   console.error('\none or more pairs drifted — sync the other side, then run: npm run verify:i18n -- --write')
   process.exit(1)
