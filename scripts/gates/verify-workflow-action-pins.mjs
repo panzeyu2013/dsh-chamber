@@ -84,8 +84,13 @@ assert.match(
 
 assert.match(
   releaseWorkflow.text,
-  /create-release:\n(?:[ \t]+#[^\n]*\n)*[ \t]+needs:\s*validation\s*\n/,
-  'create-release must wait for validation before mutating GitHub Release state',
+  /create-release:\n(?:[ \t]+#[^\n]*\n)*[ \t]+needs:\s*validation-metadata\s*\n/,
+  'create-release must wait for the fast validation-metadata job before mutating GitHub Release state',
+)
+assert.match(
+  releaseWorkflow.text,
+  /finalize-release:\n(?:[ \t]+#[^\n]*\n)*[ \t]+needs:\s*\[[^\]]*\bvalidation\b[^\]]*\]/,
+  'finalize-release must wait for the full validation job: the split moves the heavy suite to the publish gate',
 )
 assert.match(
   releaseWorkflow.text,

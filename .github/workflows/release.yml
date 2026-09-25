@@ -68,7 +68,7 @@ jobs:
     # All GitHub Release mutations happen only after this commit passes the
     # release-local validation gate. A broken tag/manual run must not delete
     # or replace an existing release before tests finish.
-    needs: validation
+    needs: validation-metadata
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -263,6 +263,10 @@ jobs:
   # Release-path validation gate: the tag push runs ci.yml and
   # release.yml in PARALLEL, so the release must validate itself — finalize
   # must never publish an untested commit. Mirrors ci.yml's test job core.
+  # Deliberately OFF the build critical path: the build legs depend on
+  # create-release (hence on validation-metadata) and finalize-release requires
+  # this job, so the heavy suite and the CI proof gate the PUBLISH while the
+  # pack legs run in parallel instead of idling behind ~4 minutes of gates.
   validation:
     runs-on: ubuntu-latest
     # `actions: read` is for the CI proof below: it lists workflow runs/jobs
@@ -414,6 +418,38 @@ jobs:
         run: node scripts/release/gen-third-party-notices.mjs && git diff --exit-code -- THIRD_PARTY_NOTICES.md docs/THIRD_PARTY_NOTICES.en-US.md
 
 
+  # Fast release-authority checks that must pass BEFORE a draft release exists.
+  # Version/ref identity stays in create-release itself; this job carries the
+  # cheap repository-authority gates. It is deliberately a separate job from
+  # `validation`: the build legs need only this job + create-release, so packing
+  # starts while the heavy suite and the CI proof keep running in parallel, and
+  # finalize-release still refuses to publish unless `validation` passed.
+  validation-metadata:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          submodules: true
+      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Bootstrap vendor tree (verify pin + ensure links)
+        run: node scripts/dev/ensure-harness-vendor.mjs
+      - name: Verify workflow action pins
+        run: node scripts/gates/verify-workflow-action-pins.mjs
+      - name: Verify workflow YAML scalars
+        run: node scripts/gates/verify-workflow-yaml-scalars.mjs
+      - name: Assert lockfile not rewritten
+        run: |
+          pnpm install --frozen-lockfile
+          git diff --exit-code -- pnpm-lock.yaml
+
   build-gateway:
     # Gateway is distributed in this release only as a GitHub Release tarball
     # plus SHA256. Runs in PARALLEL with the desktop build legs:
@@ -424,7 +460,7 @@ jobs:
     # a failed leg keeps the release private, and the next run's create-release
     # stale-draft replacement clears any orphan assets. npm publication is
     # deliberately out of scope and has no dormant workflow step here.
-    needs: [create-release, validation]
+    needs: [create-release]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -507,7 +543,7 @@ jobs:
 
 
   build-macos:
-    needs: [create-release, validation]
+    needs: [create-release]
     permissions:
       contents: write
     # Public arm64 runner label only (OpenChamber 踩坑：非公开标签
@@ -774,7 +810,7 @@ jobs:
           VERSION: ${{ needs.create-release.outputs.version }}
 
   build-windows:
-    needs: [create-release, validation]
+    needs: [create-release]
     permissions:
       contents: write
     # windows-2022, not windows-latest: the node-gyp stack does not detect the
@@ -859,7 +895,7 @@ jobs:
           VERSION: ${{ needs.create-release.outputs.version }}
 
   build-linux:
-    needs: [create-release, validation]
+    needs: [create-release]
     permissions:
       contents: write
     # ubuntu-22.04, not ubuntu-latest: the AppImage's glibc floor equals the
@@ -943,7 +979,7 @@ jobs:
   # 缺失即失败（finalize 的 needs 因此挡住发布）。Apple 凭据类外部阻断登记在
   # STATUS。
   build-swift:
-    needs: [create-release, validation]
+    needs: [create-release]
     permissions:
       contents: write
     runs-on: macos-latest
@@ -1804,7 +1840,7 @@ jobs:
           echo "${APPCAST} uploaded to the draft release after the archives"
 
   finalize-release:
-    needs: [create-release, build-gateway, build-macos, build-windows, build-linux, build-swift]
+    needs: [validation, create-release, build-gateway, build-macos, build-windows, build-linux, build-swift]
     runs-on: ubuntu-latest
     permissions:
       contents: write

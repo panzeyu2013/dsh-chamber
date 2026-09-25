@@ -33,7 +33,7 @@ const prepare = between(
 const createJob = between('\n  create-release:', '\n  validation:')
 const create = between('      - name: Create GitHub Release (draft)', '\n  validation:')
 // 与 swiftBuild 同一纪律：整行注释必须先剥掉，否则被 `#` 注释掉的 release 步骤仍能满足 includes(gate) 断言。
-const validation = between('\n  validation:', '\n  build-gateway:')
+const validation = between('\n  validation:', '\n  validation-metadata:')
   .split('\n')
   .filter((line) => !/^[ \t]*#/.test(line))
   .join('\n')
@@ -56,7 +56,18 @@ assert.match(workflow, /release version must be canonical SemVer/)
 assert.doesNotMatch(workflow, /VERSION="\$\{\{[^\n]*outputs\.version/)
 assert.match(workflow, /group: release-publish/)
 assert.match(workflow, /cancel-in-progress: false/)
-assert.match(workflow, /create-release:\n(?:\s+#[^\n]*\n)*\s+needs: validation/)
+// The draft release needs only the fast metadata job; the heavy suite is
+// required by finalize-release instead, so the pack legs run in parallel with it
+// while publishing still cannot happen without a green validation.
+assert.match(workflow, /create-release:\n(?:\s+#[^\n]*\n)*\s+needs: validation-metadata/)
+assert.match(
+  workflow,
+  /finalize-release:\n(?:\s+#[^\n]*\n)*\s+needs: \[[^\]]*\bvalidation\b[^\]]*\]/,
+  'finalize-release must depend on validation: the split makes the publish gate, not the draft, the place the heavy suite is required')
+assert.doesNotMatch(
+  workflow,
+  /\n  build-gateway:\n(?:[^\n]*\n)*?\s+needs: \[create-release, validation\]/,
+  'build legs must not wait for validation any more (they would lose the parallelism the split exists for)')
 assert.match(prepare, /if: \$\{\{ github\.event\.inputs\.dry_run != 'true' \}\}/)
 assert.match(prepare, /gh api --paginate --slurp/)
 assert.match(prepare, /\.draft/)
@@ -731,7 +742,10 @@ assert.match(linuxBuild, /beta-linux\.yml/)
 assert.match(linuxBuild, /latest-linux\.yml/)
 assert.match(workflow, /make_latest=false/)
 assert.match(workflow, /make_latest=true/)
-assert.match(workflow, /needs: \[create-release, build-gateway, build-macos, build-windows, build-linux, build-swift\]/)
+// finalize-release carries BOTH: the draft (create-release) and the full
+// validation job — the split lets the build legs start early without letting the
+// publish path skip the heavy suite.
+assert.match(workflow, /needs: \[validation, create-release, build-gateway, build-macos, build-windows, build-linux, build-swift\]/)
 // The release path validates itself because a tag push runs ci.yml and release.yml in
 // PARALLEL — publishing an untested commit must be impossible. The list below must therefore
 // track ci.yml's gate set, including the gates only ci.yml runs (design-token conformance,
