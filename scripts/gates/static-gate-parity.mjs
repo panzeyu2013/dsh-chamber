@@ -28,6 +28,36 @@ export const STATIC_GATE_EXEMPTIONS = new Map([
     'push-path plumbing, not a gate: it only decides whether the expensive chain is worth running'],
   ['node scripts/dev/ensure-harness-vendor.mjs',
     'bootstrap, not a gate: it materializes the vendor link tree before pnpm install'],
+  // ---------------------------------------------------------------------------
+  // Code-quality auxiliary gates: LOCAL-ONLY by decision (2026-09-25).
+  //
+  // CI (push and release validation) carries what needs a platform, a clean
+  // checkout, a behavioural/integration contract or the release record. Style,
+  // documentation and architecture-hygiene ratchets are executed by
+  // `check:static` on the developing machine — they stay in MODES.static, so the
+  // local battery (and the release checklist's full run on the exact release
+  // commit) is their single executor. They only ever guarded drift for a
+  // developer who ran them; making that the deliberate boundary keeps the CI
+  // annotation surface about shipped behaviour instead of house style.
+  //
+  // Adding one of these back to ci.yml without deleting its entry here fails
+  // this gate in BOTH directions (exactly one side must carry a key).
+  ['node scripts/gates/verify-i18n.mjs',
+    'documentation pair consistency (CHANGELOG/README zh↔en) — local-only quality gate'],
+  ['node scripts/gates/verify-md-links.mjs',
+    'relative markdown link resolution — local-only quality gate'],
+  ['node scripts/gates/verify-test-wiring.mjs',
+    'every test file reachable from a running script — local-only quality gate'],
+  ['node scripts/gates/verify-no-dead-exports.mjs',
+    'dead-export scan over every package barrel — local-only quality gate'],
+  ['node scripts/gates/verify-import-cycles.mjs',
+    'zero value import cycles + allowlisted type cycles (ratchet) — local-only quality gate'],
+  ['node scripts/gates/verify-file-budgets.mjs',
+    'god-file line budget ratchet — local-only quality gate'],
+  ['node scripts/gates/verify-package-boundaries.mjs',
+    'cross-package relative import ban + exports allowlist — local-only quality gate'],
+  ['node scripts/gates/verify-style-tokens.mjs',
+    'upstream design-token conformance S1–S7 — local-only quality gate'],
 ])
 
 /**

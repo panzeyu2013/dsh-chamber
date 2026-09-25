@@ -278,17 +278,6 @@ jobs:
           # harness.commit); the gitlink pins an exact commit, so the submodule is
           # materialized at that commit regardless of depth.
           submodules: true
-      # Release CI proof: the release must PROVE its commit already passed the full
-      # chain on main, including the windows and macOS legs release.yml has no
-      # equivalent of.
-      # It needs only this checked-out script (no node_modules), so it stays
-      # before the install: a commit main never validated fails immediately, one
-      # still in flight is waited for (bounded).
-      - name: Release commit passed CI on main (linux + windows + macOS legs)
-        env:
-          RELEASE_SHA: ${{ github.sha }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/release/verify-release-ci-proof.mjs --sha "$RELEASE_SHA"
       - name: Verify workflow action pins
         run: node scripts/gates/verify-workflow-action-pins.mjs
       - name: Verify workflow YAML scalars
@@ -336,16 +325,6 @@ jobs:
           pnpm run typecheck:host-open-in
           pnpm run typecheck:gateway
           pnpm run typecheck:runtime
-      - name: i18n pair consistency
-        run: pnpm run verify:i18n
-      # File-only gates the push path runs (ci.yml) and the docs call
-      # CI-backed: every *.test.ts / *.test.mjs must be reachable from a script,
-      # and every relative markdown link must resolve. Same commands as ci.yml —
-      # the release-workflow policy derives that alignment from ci.yml.
-      - name: Test wiring gate
-        run: pnpm run verify:test-wiring
-      - name: Markdown link gate
-        run: pnpm run verify:md-links
       # Same two upstream-registry gates as ci.yml's push path (the policy test
       # derives the release chain from ci.yml, so a missing command here is a red).
       - name: Upstream registry integrity (schema/references/views)
@@ -362,26 +341,8 @@ jobs:
         run: pnpm run verify:stream-state-swift-parity
       - name: Ladder-table parity (B4 lockstep over the four recovery ladders)
         run: pnpm run verify:ladder-table-parity
-      - name: Dead-export gate (the stream-state surface has production consumers)
-        run: pnpm run verify:no-dead-exports
-      # 引用环门——与 ci.yml 的 push 路径同一条命令（policy 测试机械对齐门集合，
-      # 单侧缺失即红）：值 import 环必须为 0，类型环必须命中脚本内显式 allowance。
-      - name: Import-cycle gate (zero value cycles, allowlisted type cycles)
-        run: pnpm run verify:import-cycles
-      - name: God-file budget ratchet (budgeted files may only shrink)
-        run: pnpm run verify:file-budgets
       - name: Upstream lifecycle contract (first-frame bound retirement tripwire)
         run: pnpm run verify:upstream-lifecycle-contract
-      # 包边界门（R4 P7）——与 ci.yml 的 push 路径同一条命令；file-only（只读、离线、
-      # 自带 --self-test 负控），release-workflow policy 从 ci.yml 机械对齐门集合，
-      # 单侧缺失即红。生产面禁跨包相对 import（vendor 直穿按 registry 放行）+
-      # exports 面白名单。
-      - name: Package boundaries (cross-package relative imports + exports allowlist)
-        run: pnpm run verify:package-boundaries
-      # Upstream design-token conformance (S1–S7) — same gate as ci.yml's push
-      # path; needs the bootstrapped vendor tree above.
-      - name: Upstream design-token conformance (S1–S7)
-        run: pnpm run verify:styles
       # Every scripts/ suite through one entry (scripts/gates/run-script-tests.mjs;
       # manifest + naming rules in scripts/README.md §分类规则 3) — the same
       # command ci.yml runs, so a gate added to the push path cannot miss
@@ -433,6 +394,19 @@ jobs:
           pnpm --filter @dsh-chamber/desktop run build:control-plane
           pnpm --filter @dsh-chamber/desktop run build:preload
           pnpm --filter @dsh-chamber/desktop run build:host-graph-package
+      # Release CI proof: the release must PROVE its commit already passed the full
+      # chain on main, including the windows and macOS legs release.yml has no
+      # equivalent of. It runs at the END of the heavy chain on purpose: the proof
+      # polls the ci.yml run for this SHA (bounded), so doing the local validation
+      # first overlaps that wait with real work instead of idling on the API — the
+      # 2026-09 dry run spent 366s in this step while ci.yml was still running. A
+      # commit main never validated still fails here, and one still in flight is
+      # waited for; the step needs only this checked-out script (no node_modules).
+      - name: Release commit passed CI on main (linux + windows + macOS legs)
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/release/verify-release-ci-proof.mjs --sha "$RELEASE_SHA"
       # Third-party notices must track the installed dependency set; a stale
       # committed file blocks the release (ci.yml's "Third-party notices
       # current"). Regenerating alone is not a gate — the diff assertion is.

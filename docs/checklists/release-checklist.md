@@ -34,6 +34,7 @@ CI:   dry_run 先行 → 正式 tag push → 监控 → 发布后核对
 
 ## 4. 测试与构建（在精确发布提交上执行）
 
+- [ ] 质量辅助门由本地全量套件覆盖（CI 两侧 workflow 都不再跑，范围决策见 STATUS）：`verify:i18n` / `verify:md-links` / `verify:test-wiring` / `verify:no-dead-exports` / `verify:import-cycles` / `verify:file-budgets` / `verify:package-boundaries` / `verify:styles` 必须在下一条的本地绿色记录里出现，发布提交上不许漏跑。
 - [ ] 全量套件：`pnpm run check:full`（= `node scripts/gates/run-checks.mjs full`：static + typecheck + 全部包测试 + macOS/Swift腿 + 打包前冒烟）。上一提交的记录不算数；失败必须定位，不能用重跑代替结论。
 - [ ] full之外的发布项：`build:dsh-runtime`、`typecheck:host-graph` / `typecheck:host-git` / `typecheck:host-archive-cleanup` / `typecheck:host-open-in`；`test:win32` 只能由CI跑。
 - [ ] 旧版本号残留扫描：`grep -rn "<上一发布版本>" packages/*/test* packages/*/scripts/*.test.mjs` 为空（硬编码旧shellVersion会误触发壳升级路径）。

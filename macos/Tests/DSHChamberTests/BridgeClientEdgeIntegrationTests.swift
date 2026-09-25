@@ -320,7 +320,12 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
                                          line: UInt = #line) throws -> (port: Int, shellVersion: String) {
         let ready = expectation(description: "sidecar ready notify（port=\(expectedPort)）")
         let facts = SyncBox<(Int, String)>()
+        // 回调只能兑现一次：XCTest 默认 assertForOverFulfill，二次兑现会抛未捕获异常
+        // 直接崩掉整个测试进程（而不是让本用例失败）。
+        let readyFulfilled = SyncBox<Bool>()
         bridge.onReady = { port, shellVersion in
+            guard readyFulfilled.value != true else { return }
+            readyFulfilled.set(true)
             facts.set((port, shellVersion))
             ready.fulfill()
         }
@@ -592,10 +597,19 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
         defer { bridge.stop() }
 
         // onNotify 预挂（先于 invoke——push 与响应同 tick 写 stdout，可能先到）。
+        // 一次 settings-set 可能发多条 rendererPush（持久化 watcher 与响应投影各一条），
+        // 而 XCTest 默认 assertForOverFulfill：二次兑现是未捕获异常，会直接崩掉整个测试
+        // 进程（2026-09 CI 实测）。只认 settings-changed 的第一条，其余忽略。
         let push = expectation(description: "rendererPush notify（dsh-chamber:settings-changed）")
         let pushPayload = SyncBox<AnyCodable>()
+        let pushFulfilled = SyncBox<Bool>()
         bridge.onNotify = { event, payload in
             guard event == "rendererPush" else { return }
+            guard case .object(let fields)? = payload,
+                  case .string(let channel)? = fields["channel"],
+                  channel == "dsh-chamber:settings-changed" else { return }
+            guard pushFulfilled.value != true else { return }
+            pushFulfilled.set(true)
             pushPayload.set(payload ?? .null)
             push.fulfill()
         }

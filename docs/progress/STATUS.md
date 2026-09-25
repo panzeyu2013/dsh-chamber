@@ -456,6 +456,8 @@
 
 >双flavor专项登记（用户可感偏差S、有意结构差异T、Swift leg接入缺口P、门禁/覆盖缺口G与文档漂移D，外加可达性纪律与盘点）见[deviations.md](deviations.md)；开放工作见上文与deviations.md open条目。
 
+- **代码质量辅助门只本地跑；CI 只承载平台、干净检出、行为/集成契约与发布记录（2026-09-25 裁决）**：`verify:i18n`、`verify:md-links`、`verify:test-wiring`、`verify:no-dead-exports`、`verify:import-cycles`、`verify:file-budgets`、`verify:package-boundaries`、`verify:styles` 已从 ci.yml `test` 腿与 release.yml `validation` 移除（原先各自 ~1–3s；真实成本是发布验证把整套门重跑一遍的分钟级串行，外加把发布档期压在同一根关键路径上）。它们仍是 `check:static` 的成员：本地全量套件（发布清单 §4 在精确发布提交上执行）是其唯一执行者。单侧状态登记在 `scripts/gates/static-gate-parity.mjs` 的 `STATIC_GATE_EXEMPTIONS`，双向校验——加回 ci.yml 而不删登记即红。**代价明示**：CI 不再捕获「本地没跑」情形下的这几类漂移（文档对、链接、死导出、import 环、文件预算、包边界、样式 token），需要它们的场合一律走本地 `check:static`。
+
 - **seed 自检缺包维持「只报不阻断」（2026-12 裁决，计划 §21）**：design 09「本地实例的启动期自检」现状只报；要阻断的话落点是该 check 的 `gap` 判定。
 
 - **组件工厂 + local slots 推迟（计划 §21）**：`registerFactory`/`renderFactorySlot`/`useFactorySlot` + `SlotFactoryMap` 与 settings 桥/面板镜像目前手写的事重合，暂不引入。
