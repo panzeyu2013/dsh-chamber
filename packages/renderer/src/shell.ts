@@ -36,6 +36,7 @@ import {
 import type { GraphGapKind } from './source-readiness.ts'
 import { isChamberSourceId, rawInstanceIdFromSourceId } from './transport-source.ts'
 import { collectExtraRows, type CollectExtraRowsDeps, type ExtraModuleRow } from './host-graph.ts'
+import { readSafeModeFlag, SAFE_MODE_GLOBAL } from './safe-mode.ts'
 import { BundleLoadTimeoutError } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
 import { chamberBridge, describeThrown, type PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-core'
 // Page-level machine catalog + the page-level instance client it reads through: pure
@@ -265,6 +266,8 @@ const bootGenerations = new Map<string, number>()
 /** Page-monotonic boot serial (never per-id, never reused): the post-settle fact path
  * compares it, so a stale producer cannot pass by landing on a reused generation. */
 let bootSerialCounter = 0
+/** C4 安全模式的一次性提示（每次页面生命周期至多一条）。 */
+let safeModeAnnounced = false
 const cancelledBoots = new Map<string, number>()
 
 type DispatchCancel = (error: Error) => void
@@ -432,6 +435,9 @@ export function bootInstanceShell(
 ): Promise<ShellState> {
   // perf 埋点：boot 入口（含全局队列排队；注册表见 perf-marks.ts）。
   perfMark(PERF_MARKS.shellBootStart)
+  // C4 安全模式：控制面注入的页面级开关，本次页面全程有效（值在 index.html
+  // head 里、bundle 求值前写入）。
+  const safeMode = readSafeModeFlag()
   // Validate the source/base-path pair before installing module globals or starting the
   // host-graph request. 取序在入队前：dispose 阈值与 settle 检查都按本次 boot 的代；也在
   // configureContext 之前，因为上下文要携带本次代际事实。
@@ -503,6 +509,16 @@ export function bootInstanceShell(
   const startExtraRows = (): Promise<ExtraModuleRow[]> => {
     // chamber prefetch 与 host-graph 取图并行；collectExtraRows 装载 extra bundle 前 await 本门。
     fireChamberPrefetch()
+    // C4 安全模式：不装 extra rows（profile 客户端插件行）——不发 host-graph 图
+    // 请求、不执行任何 extra bundle；chamber composite 照常启动，用户可经设置
+    // 卸载坏插件后普通重启恢复（注入面见 safe-mode.ts）。
+    if (safeMode) {
+      if (!safeModeAnnounced) {
+        safeModeAnnounced = true
+        console.warn(`[chamber] 安全模式生效：跳过 extra rows 装载（${SAFE_MODE_GLOBAL}=true）；下次普通启动自动恢复`)
+      }
+      return Promise.resolve<ExtraModuleRow[]>([])
+    }
     const promise = moduleSystemError === null
       ? collectExtraRows(instanceId, basePath, {
         loadModuleBundle,

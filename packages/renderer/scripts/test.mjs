@@ -38,6 +38,8 @@ export const GROUPS = {
   // lifecycle: 实例启动生命周期 —— shell 引导与降级自愈、宿主图/必需行探测、首屏基线预热、page 读路
   lifecycle: [
     'test/lifecycle/boot-degradation.test.ts',
+    // C4 安全模式：控制面注入的页面级开关（只认布尔 true）与 extra rows 跳过
+    'test/lifecycle/safe-mode.test.ts',
     'test/lifecycle/baseline-harvest.test.ts',
     'test/lifecycle/host-graph.test.ts',
     'test/lifecycle/required-extra-rows.test.ts',

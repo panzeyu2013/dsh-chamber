@@ -14,6 +14,7 @@ import { extname, join, resolve, sep } from 'node:path'
 import { readFile, stat } from 'node:fs/promises'
 import { gzip } from 'node:zlib'
 import { isHashedStaticAssetPath } from './proxy-forward.ts'
+import { SAFE_MODE_GLOBAL } from './safe-mode.ts'
 import type { Logger } from './types.ts'
 import type { ApiRequest, ApiResponse } from './api.ts'
 
@@ -60,6 +61,12 @@ export interface StaticServingOptions {
   webDistDir: string
   /** Sink for gzip-failure warnings (optional; absent = silent). */
   logger?: Logger
+  /**
+   * 安全模式（C4）：true = index.html 头部额外注入
+   * `window.__DSH_CHAMBER_SAFE_MODE__ = true`（渲染端据此跳过 extra rows）。
+   * 缺省 false —— 普通启动的响应逐字节不变。
+   */
+  safeMode?: boolean
 }
 
 /** The assembled static-serve surface. */
@@ -73,7 +80,7 @@ export interface StaticServing {
 
 /** Assemble the static frontend service over one dist directory; returns the
  *  serve(req, res, pathname) dispatch. */
-export function createStaticServing({ webDistDir, logger }: StaticServingOptions): StaticServing {
+export function createStaticServing({ webDistDir, logger, safeMode = false }: StaticServingOptions): StaticServing {
   /**
    * Tiny on-the-fly gzip cache keyed by path+mtime: immutable hash-named assets
    * under /assets/ are gzipped once per build snapshot, and the FIFO cap bounds
@@ -209,16 +216,26 @@ export function createStaticServing({ webDistDir, logger }: StaticServingOptions
       // __DSH_BOOT__ injection: the manifest becomes window.__DSH_BOOT__ inline,
       // served from <dist>/manifest.json.
       const manifest = await readBootManifest()
-      if (manifest !== null) {
+      const scripts: string[] = []
+      if (manifest !== null || safeMode) {
         const nonce = res._cspNonce
         if (nonce === undefined) throw new Error('missing CSP nonce for static response')
-        // JSON embedded in an HTML script block: `<` must never form `</script>`,
-        // and JavaScript's two legacy line separators are escaped too.
-        const serializedManifest = JSON.stringify(manifest)
-          .replace(/</g, '\\u003c')
-          .replace(/\u2028/g, '\\u2028')
-          .replace(/\u2029/g, '\\u2029')
-        const script = `<script nonce="${nonce}">window.__DSH_BOOT__=${serializedManifest};</script>`
+        // C4 safe mode: the page reads this global before booting its shell and
+        // skips extra-row (profile client-plugin) loading. Injected BEFORE the
+        // __DSH_BOOT__ script; absent entirely on normal launches.
+        if (safeMode) scripts.push(`<script nonce="${nonce}">window.${SAFE_MODE_GLOBAL}=true;</script>`)
+        if (manifest !== null) {
+          // JSON embedded in an HTML script block: `<` must never form `</script>`,
+          // and JavaScript's two legacy line separators are escaped too.
+          const serializedManifest = JSON.stringify(manifest)
+            .replace(/</g, '\\u003c')
+            .replace(/\u2028/g, '\\u2028')
+            .replace(/\u2029/g, '\\u2029')
+          scripts.push(`<script nonce="${nonce}">window.__DSH_BOOT__=${serializedManifest};</script>`)
+        }
+      }
+      if (scripts.length > 0) {
+        const script = scripts.join('')
         const text = data.toString('utf8')
         if (text.includes('</head>')) data = Buffer.from(text.replace('</head>', `${script}</head>`))
         else data = Buffer.from(`${text}${script}`)

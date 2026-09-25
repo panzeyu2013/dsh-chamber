@@ -41,6 +41,7 @@ import {
 } from './state-root-lease.ts'
 import { hostLogs } from './host-logs.ts'
 import { createStaticServing } from './static-serving.ts'
+import { isSafeModeEnabled, SAFE_MODE_ENV } from './safe-mode.ts'
 import {
   assertHostSeedEntryNaming,
   CHAMBER_HOST_PACKAGES,
@@ -145,6 +146,12 @@ export interface ControlPlaneOptions {
   /** First port attempted for the managed dsh host (absent = BASE_DHSPORT 17510). */
   dshPortBase?: number
   webDistDir?: string
+  /**
+   * 安全模式（C4 启动与修复）：true = 本次启动跳过 chamber 宿主包 seeding，并向
+   * 页面注入 __DSH_CHAMBER_SAFE_MODE__（渲染端跳过 extra rows 装载）。缺省读进程
+   * 环境 `DSH_CHAMBER_SAFE_MODE=1`；只影响本次进程，下次普通启动自动恢复。
+   */
+  safeMode?: boolean
   logger?: Logger
   corsOrigins?: string[]
   /** Explicit request boundary for an authenticated external composer; its
@@ -304,6 +311,12 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   // also land in <stateDir>/logs/control-plane.log (bounded rotation) because
   // packaged stdout/stderr is not persisted; a write failure only degrades.
   const logger = withControlLogFile((options.logger ?? console) as Logger, stateDir)
+  // 安全模式（C4）：一行声明本次生效面（跳过 seeding / extra rows），并让静态
+  // 服务把同一事实注入页面。env 不落盘——下次普通启动自动恢复。
+  const safeMode = options.safeMode ?? isSafeModeEnabled(process.env)
+  if (safeMode) {
+    logger.log(`安全模式生效（${SAFE_MODE_ENV}=1）：跳过 chamber 宿主包 seeding 与 extra rows 装载；下次普通启动自动恢复`)
+  }
   // logger.reopen() 在 start() 里调用（stop 后重启必须重开句柄）。
   const reapManagedHosts = options.reaper ?? runReaper
   let localWritersQuiescent = false
@@ -503,6 +516,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       // The opt-in host-log bridge switch is read from the plane's own environment at
       // each spawn (the managed host inherits it); the resolver's default stays "off".
       env: process.env,
+      // C4 安全模式：显式传本 plane 解析出的开关（选项优先于 env，两个读点不分叉）。
+      safeMode,
       // 宿主期望集必须跟随本次实际 seed 的条目，否则 host 包缺失时 exact-set 裁决会误判激活失败。
       onSeededProbeDomains: domains => { seededProbeDomains = domains },
     })
@@ -741,7 +756,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
 
   const staticServing = webDistDir === undefined
     ? null
-    : createStaticServing({ webDistDir, logger })
+    : createStaticServing({ webDistDir, logger, safeMode })
 
   /** Close one candidate/active server without letting long-lived proxy streams strand stop(). */
   async function closeHttpServer(srv: Server, closeProxyStreams: boolean): Promise<void> {

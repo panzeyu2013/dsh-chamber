@@ -1094,3 +1094,67 @@ test('the seed registry refuses a non-canonical host entry before any profile wr
     await plane.stop()
   }
 })
+
+// ---------------------------------------------------------------------------
+// C4 安全模式：DSH_CHAMBER_SAFE_MODE=1 → 不 seed 任何 chamber 宿主包、不传
+// --patch、清遗留 overlay（「文件存在 ⟺ 本次 spawn 会传它」不变式）、期望集
+// 发空集，且 dsh profile 一个字节都不写。
+// ---------------------------------------------------------------------------
+
+test('resolveLocalHostGraphOverlay: 安全模式跳过全部 seeding、清遗留 overlay、期望集为空', t => {
+  const dir = tempDir(t)
+  const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  const sourceDir = writeBuiltSeedSource(dir, true)
+  const stale = join(dir, HOST_GRAPH_PATCH_FILENAME)
+  writeFileSync(stale, EXPECTED_OVERLAY)
+  const logs: string[] = []
+  let domains: readonly string[] | null = null
+  const overlay = resolveLocalHostGraphOverlay({
+    stateDir: dir,
+    dshHome,
+    entries: [{ insert: HOST_GRAPH_INSERT, kind: 'host', source: 'packaged', sourceDir, probeDomains: ['clientGraph/graph'] }],
+    env: { DSH_CHAMBER_SAFE_MODE: '1' },
+    log: message => logs.push(message),
+    warn() {},
+    onSeededProbeDomains: next => { domains = next },
+  })
+  assert.equal(overlay, null, '安全模式不传 --patch')
+  assert.equal(existsSync(stale), false, '遗留 overlay 必须清掉（存在 ⟺ 本次 spawn 会传它）')
+  assert.deepEqual(domains === null ? null : [...domains], [],
+    '期望集必须发空集（不得按上次的域做 exact-set 裁决）')
+  assert.equal(existsSync(join(seedTarget(dshHome), 'package.json')), false, '安全模式一条 seed 都不写')
+  assert.ok(logs.some(line => line.includes('安全模式')), '安全模式跳过必须 loud 一行')
+})
+
+test('resolveLocalHostGraphOverlay: 安全模式只认字面量 1（=0/缺省照常 seed，下次普通启动自动恢复）', t => {
+  const dir = tempDir(t)
+  const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  const sourceDir = writeBuiltSeedSource(dir, true)
+  const overlay = resolveLocalHostGraphOverlay({
+    stateDir: dir,
+    dshHome,
+    entries: [{ insert: HOST_GRAPH_INSERT, kind: 'host', source: 'packaged', sourceDir, probeDomains: [] }],
+    env: { DSH_CHAMBER_SAFE_MODE: '0' },
+    log() {},
+    warn() {},
+  })
+  assert.equal(overlay, join(dir, HOST_GRAPH_PATCH_FILENAME), '=0 不是安全模式：照常写 overlay')
+  assert.equal(existsSync(join(seedTarget(dshHome), 'dist', 'index.js')), true, '照常 seed')
+})
+
+test('hostGraphPlane({safeMode:true}).startLocal(): 宿主包 seeding 整体跳过（端到端开关）', async t => {
+  const dir = tempDir(t)
+  const source = stageSource(t, 'export const v = 1\n')
+  // 共享夹具 hostGraphPlane（main 的 test/support/utils.ts）已提供 stateDir/port/四个
+  // 缺省 sourceDir/logger/localConnectionDeps；这里只覆盖 seed 源与安全模式开关。
+  const plane = hostGraphPlane(dir, { hostGraphPackageSourceDir: source, safeMode: true })
+  try {
+    await plane.start()
+    await plane.startLocal()
+    assert.equal(existsSync(join(dir, HOST_GRAPH_PATCH_FILENAME)), false, '安全模式下没有 overlay')
+    assert.deepEqual([...plane.seededProbeDomains], [], '安全模式下期望集为空')
+    assert.equal(existsSync(seedTarget(join(dir, 'dsh-home'))), false, '安全模式下 dsh profile 不写 seed')
+  } finally {
+    await plane.stop()
+  }
+})

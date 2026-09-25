@@ -614,3 +614,52 @@ test('static module: concurrent gzip misses for one file all resolve with the co
     rmSync(fixture.dir, { recursive: true, force: true })
   }
 })
+
+// ---------------------------------------------------------------------------
+// C4 安全模式：index.html 头部注入 window.__DSH_CHAMBER_SAFE_MODE__（渲染端
+// 据此跳过 extra rows），且必须先于 __DSH_BOOT__；普通启动完全不注入。
+// ---------------------------------------------------------------------------
+
+test('static module: 安全模式注入 __DSH_CHAMBER_SAFE_MODE__ 且先于 __DSH_BOOT__；普通启动不注入', async () => {
+  const fixture = fixtureDist()
+  try {
+    const safeRes = new FakeRes() as unknown as ApiResponse
+    safeRes._cspNonce = 'dsh-nonce-safe'
+    await createStaticServing({ webDistDir: fixture.dir, safeMode: true }).serve(fakeReq(), safeRes, '/')
+    const safeText = (safeRes as unknown as FakeRes).body.toString('utf8')
+    assert.match(safeText, /<script nonce="dsh-nonce-safe">window\.__DSH_CHAMBER_SAFE_MODE__=true;<\/script>/)
+    assert.ok(
+      safeText.indexOf('__DSH_CHAMBER_SAFE_MODE__') < safeText.indexOf('window.__DSH_BOOT__='),
+      '安全模式全局必须先于 __DSH_BOOT__ 注入（bundle 求值前即可读）',
+    )
+
+    const normalRes = new FakeRes() as unknown as ApiResponse
+    normalRes._cspNonce = 'dsh-nonce-normal'
+    await createStaticServing({ webDistDir: fixture.dir }).serve(fakeReq(), normalRes, '/')
+    const normalText = (normalRes as unknown as FakeRes).body.toString('utf8')
+    assert.ok(!normalText.includes('__DSH_CHAMBER_SAFE_MODE__'), '普通启动不注入该全局（响应逐字节不变）')
+    assert.ok(normalText.includes('window.__DSH_BOOT__='), '普通启动照旧只注入 __DSH_BOOT__')
+  } finally {
+    rmSync(fixture.dir, { recursive: true, force: true })
+  }
+})
+
+test('createControlPlane 安全模式 env 缺省读点：DSH_CHAMBER_SAFE_MODE=1 → 页面收到注入', async () => {
+  const previous = process.env.DSH_CHAMBER_SAFE_MODE
+  process.env.DSH_CHAMBER_SAFE_MODE = '1'
+  try {
+    const holder = await makeStaticPlane()
+    try {
+      const html = await rawRequest(holder.plane.port!, 'GET', '/')
+      assert.ok(
+        html.body.toString('utf8').includes('window.__DSH_CHAMBER_SAFE_MODE__=true;'),
+        '未显式传 safeMode 时也必须从进程 env 读到（Electron 同进程 / Swift sidecar 同一读点）',
+      )
+    } finally {
+      await cleanup(holder)
+    }
+  } finally {
+    if (previous === undefined) delete process.env.DSH_CHAMBER_SAFE_MODE
+    else process.env.DSH_CHAMBER_SAFE_MODE = previous
+  }
+})

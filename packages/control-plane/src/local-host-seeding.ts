@@ -16,6 +16,7 @@ import {
   type SeedEntry,
 } from './host-graph-seed.ts'
 import { planHostLogBridge } from './host-log-bridge.ts'
+import { isSafeModeEnabled } from './safe-mode.ts'
 import {
   createPrivateFileExclusiveNoFollow,
   ensurePrivateDirectoryNoFollow,
@@ -73,6 +74,12 @@ export interface LocalHostGraphOverlayInput {
    */
   readonly env?: NodeJS.ProcessEnv
   /**
+   * 安全模式（C4）：true = 本次解析不 seed 任何条目不传 --patch。缺省按 `env` 里的
+   * DSH_CHAMBER_SAFE_MODE=1 判定；装配侧（createControlPlane）把自己解析出的
+   * safeMode 显式传进来，避免「选项 true 而 env 未设」时两处读点分叉。
+   */
+  readonly safeMode?: boolean
+  /**
    * Receives the probe domains backed by the host packages this resolution actually seeds,
    * so the desktop's activation expectation set follows the real seed set. Optional.
    */
@@ -99,6 +106,16 @@ export function resolveLocalHostGraphOverlay(input: LocalHostGraphOverlayInput):
   const log = input.log ?? (() => {})
   const warn = input.warn ?? (() => {})
   const error = input.error ?? warn
+  // 安全模式（C4）：本次启动一条 seed 都不写——不刷新 profile 包、不生成/传
+  // --patch overlay、期望集发空集（激活探针不得按上次的域做 exact-set 裁决）。
+  // 遗留 overlay 必须清掉：「文件存在 ⟺ 本次 spawn 会传它」是 desktop 探针读的
+  // 不变式，陈旧文件会把「没 seed」误读成「seed 了」。
+  if (input.safeMode ?? isSafeModeEnabled(input.env ?? {})) {
+    clearHostGraphPatchOverlay(stateDir)
+    input.onSeededProbeDomains?.([])
+    log(`安全模式：跳过 chamber 宿主包 seeding（${baseEntries.length} 条 seed 条目）；下次普通启动自动恢复`)
+    return null
+  }
   // Opt-in host-log bridge: ONE extra seed entry while DSH_CHAMBER_HOST_LOG_LEVEL is set for
   // this spawn. With the switch absent the entry list (and every overlay byte below) carries none.
   const bridgeEntry = planHostLogBridge({ stateDir, env: input.env ?? {}, warn })
