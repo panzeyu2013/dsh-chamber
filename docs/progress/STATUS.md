@@ -331,14 +331,14 @@
 
 - **0.1.6→0.1.7 升级线的取件移植（计划见 [todo/main-0.1.5-to-0.1.7-upgrade.md](todo/main-0.1.5-to-0.1.7-upgrade.md)）**：
   已落地 = 更新链看门狗（§12.1）、原生崩溃诊断（§12.2）、Electron 壳文案本地化（§12.3）、registry sidebar
-  条目与不变量放宽（§12.4）、安全模式（§12.5）、Windows caption／上游席位锁／`electronFuses.runAsNode`（§12.6 的一部分）、
+  条目与不变量放宽（§12.4）、安全模式（§12.5）、Windows caption／上游席位锁／`electronFuses.runAsNode`／
+  Swift 上游窗形（`hiddenInset` 等价形态 + `contentMinSize` 880×600；vibrancy 腿按计划不搬）（§12.6 的一部分）、
   python 载荷（§12.7、`prepare-python-payload` + `primary-runtime-lock.json` + extraResources／发布链）、读面能力门（§12.8）、
   会话流健康臂的 rc.2 重判（§12.9——臂已在 main 按 rc.2 口径重推导，分支 0.1.6 形态不取件；残余真机验收见本文件 ⑫）、
   §17-C 上游 patch 通道的**运行期腿**（`bundle-dsh` 逐字生成 `patchedDependencies` + 携带 `patches/`，runtime 锁由
   `--refresh-lockfile` 重生成并记录 patch_hash；registry 增 `patches` 字段 + pin 对拍用例；升级 checklist 增条目）。
-  **未落地**：① §12.6 的 Electron 腿 native theme seat（`data-ds-theme-source` → 新 invoke 通道
-  `dsh-chamber:native-theme-set`；需同批重锚桥面计数/manifest/Swift 白名单/shim 载荷）与 Swift 窗形
-  （`contentMinSize`/880×600）项；② §12.10 启动失败恢复（`startup-error.ts` 与 Swift 恢复框）；
+  **未落地**：① §12.6 仅剩 Electron 腿 native theme seat（`data-ds-theme-source` → 新 invoke 通道
+  `dsh-chamber:native-theme-set`；需同批重锚桥面计数/manifest/Swift 白名单/shim 载荷）；② §12.10 启动失败恢复（`startup-error.ts` 与 Swift 恢复框）；
   ③ §17-C 的 **dev/根安装腿**（本仓自己的 `pnpm-workspace.yaml` 仍无 `patchedDependencies`、仓内无 `patches/`，
   node-pty 在 dev 路径仍靠 env/解析 shim 替代；重生成根锁前需先核对 `ensure-harness-vendor` 的 importer 不变量）。
   逐项规格/验收/坑见计划 §8/§12/§13/§17。
