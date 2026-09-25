@@ -400,6 +400,17 @@ jobs:
       # owning package. The renderer/sidebar manifests are the boot-gap
       # mechanism's platform-neutral decision face (host-graph merge → required
       # row probe → degraded presentation / sidebar copy).
+      # electron-builder 工具链与 Electron 发行包缓存（2026-09 CI 计时：Windows 排练步
+      # 285-342s，大头是 nsis / nsis-resources 等工具链的每次冷下载）。键含
+      # packages/desktop/package.json 哈希：electron-builder/Electron 一升级即失效重下。
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/AppData/Local/electron-builder/Cache
+            ~/AppData/Local/electron/Cache
+          key: electron-toolchain-windows-${{ hashFiles('packages/desktop/package.json') }}
+          restore-keys: |
+            electron-toolchain-windows-
       - name: dsh-runtime test:win32 manifest
         if: steps.classify.outputs.code == 'true'
         run: pnpm --filter @dsh-chamber/dsh-runtime run test:win32
@@ -498,6 +509,24 @@ jobs:
       # This raw step stays the release proof's pinned anchor
       # (REQUIRED_JOB_STEPS in release-workflow-policy.test.mjs); the gated
       # release run below is the one that enforces the shipped configuration.
+      # electron-builder 工具链与 Electron 发行包缓存（同 Windows 排练）；macOS 排练步
+      # 133-188s 里 Electron 发行包与 dmg 工具链的下载占大头。
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/Library/Caches/electron-builder
+            ~/Library/Caches/electron
+          key: electron-toolchain-macos-${{ hashFiles('packages/desktop/package.json') }}
+          restore-keys: |
+            electron-toolchain-macos-
+      # SwiftPM 构建缓存：release 构建 62-81s 与测试编译的大头；键 = Package.resolved
+      # （依赖一变即失效，restore-keys 仍复用同族缓存）。
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: macos/.build
+          key: swift-build-${{ hashFiles('macos/Package.resolved') }}
+          restore-keys: |
+            swift-build-
       - name: Swift build (release)
         if: steps.classify.outputs.code == 'true'
         working-directory: macos

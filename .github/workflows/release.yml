@@ -572,6 +572,16 @@ jobs:
         # 下载失败或 sha256 不符即 job 红（绝不静默退回空载荷——extraResources 会把
         # 缺件或旧载荷原样打进 .app）。
         run: node packages/desktop/scripts/prepare-python-payload.mjs --target mac-arm64
+      # electron-builder 工具链与 Electron 发行包缓存（同 ci.yml 的两条排练腿）：发布腿
+      # 每平台都会冷下载 Electron 发行包与 dmg/nsis 工具链；键含 package.json 哈希。
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/Library/Caches/electron-builder
+            ~/Library/Caches/electron
+          key: electron-toolchain-macos-${ hashFiles('packages/desktop/package.json') }
+          restore-keys: |
+            electron-toolchain-macos-
       - name: Build and package macOS app (arm64)
         # electron-builder runs the afterPack hook
         # (packages/desktop/scripts/after-pack-adhoc-sign.mjs), which ad-hoc
@@ -821,6 +831,15 @@ jobs:
       - name: Assert lockfile not rewritten
         run: git diff --exit-code -- pnpm-lock.yaml
 
+      # electron-builder 工具链与 Electron 发行包缓存（同 ci.yml 的 Windows 排练腿）。
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/AppData/Local/electron-builder/Cache
+            ~/AppData/Local/electron/Cache
+          key: electron-toolchain-windows-${ hashFiles('packages/desktop/package.json') }
+          restore-keys: |
+            electron-toolchain-windows-
       - name: Build and package Windows app
         shell: bash
         run: |
@@ -985,6 +1004,13 @@ jobs:
       - name: Prepare python payload (mac-arm64 — sha256 from the lock)
         # C5：与 Electron 腿同一份锁与同一份落点内容（build:sidecar 拷进装配目录）。
         run: node packages/desktop/scripts/prepare-python-payload.mjs --target mac-arm64
+      # SwiftPM 构建缓存：原生壳 .app 装配前的 swift build 与测试编译共用 macos/.build。
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: macos/.build
+          key: swift-build-${ hashFiles('macos/Package.resolved') }
+          restore-keys: |
+            swift-build-
       - name: Build sidecar assembly + native .app
         run: |
           set -euo pipefail
