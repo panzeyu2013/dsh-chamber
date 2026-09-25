@@ -454,12 +454,24 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
         // 窗口
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: Self.windowSize),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable,
+                                          .fullSizeContentView],
                               backing: .buffered,
                               defer: false)
         // 可见标题 = dsh-chamber（功能对齐 Electron 的标题冻结行为；不可见
         // target/可执行名保持 DSHChamber）。
         window.title = Self.displayName
+        // 上游 macOS 窗口形态（官方 desktop titleBarStyle:'hiddenInset' 的 AppKit 等价物，
+        // 2026-09 跟随上游）：标题栏透明、内容延伸进标题栏，红绿灯浮在侧栏顶部——页面按
+        // data-platform=darwin 自行留出侧栏空白。vibrancy/材质腿不搬：窗底仍由
+        // applyThemedBackground 按页面事实上色（与 Electron 的 applyAppearance 同源）。
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        // WKWebView 不支持上游页面用的 -webkit-app-region: drag，等价面是「窗口背景可拖」；
+        // 缺了它，隐藏标题栏后整窗无法移动。
+        window.isMovableByWindowBackground = true
+        // 上游同款最小内容尺寸：没有它窗口会被缩到侧栏/composer 不可用的尺寸。
+        window.contentMinSize = NSSize(width: 880, height: 600)
         // 窗口底色 = 同一 #0f1115（缩放/全屏露底不白闪）。
         window.backgroundColor = Self.windowBackgroundColor
         window.contentView = webView
