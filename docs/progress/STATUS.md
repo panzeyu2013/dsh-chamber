@@ -26,6 +26,7 @@
   - **既有 flaky（非本重构引入）**：只在 `tests` 模式内出现的偶发（`test:gateway` / `test:control-plane`，单独均通过）未定位——`test:control-plane` 侧的表现是文件内一条 `✖` 后进程不退出、撞满按文件预算被 SIGTERM/SIGKILL 收尾（失败详情随进程被杀丢失；运行器已不再把该情形误报为「无法启动」），并留下一个占端口的假宿主。
 
 - 实机门禁（未验证；缺真实实例 / 打包态环境）：
+  - **调试模式（T-10）打包态实机门**：在已安装的 release 包上开启设置 → 通用 → 更新区开关后，Safari「开发」菜单应列出本 app 且 Web Inspector 可附着；关闭后立即消失/断连；带 `debug.enabled:true` 冷启应在设置页打开前已生效（`[shell]` 行 + `debugRuntime` 回读）；Safari 未开「显示网页开发者功能」时 UI 指引文案是否够用。自动化只覆盖到设置 schema / 边腿回读 / 启动 reconcile（Swift+TS 单测），Safari 侧附着**只能人工判**（无公开 API 查询「是否被检查」）。
   - 多来源sleep/wake与隐藏恢复、版本歪斜容忍、gateway形态回归；
   - 隐藏/遮挡态节流修订（design 14 §D1修订；S-10降级后的实机门）：Chromium默认节流需打包态实机复核：最小化/完全覆盖（未最小化）两工况rAF/定时器/`visibilityState` 与App Nap语义、隐藏 ≥60s时SSE/推送不断、唤醒后即时重连与首帧渲染、两条30s兜底轮询隐藏期跳过 + 恢复补偿一轮；见 [deviations.md](deviations.md) S-10。
   - vendor性能补丁可见态A/B：待真实app同环境复核；跨环境不可比见 `scripts/perf/README.md`。
@@ -41,7 +42,7 @@
 
   - **0.1.7-rc.2 pin 实机项（随本轮复判，计划 §21）**：①设置 → 内置插件页窗口内目检——低层事实已闭环（`clientGraph/graph` 含 `ui-plugin-manager`、`listBundles` 报 200），只差重建后应用内目检（与 §13 GUI 验收合并）；②跨代 profile 对账——真实 runtime 切换时执行，两个 agent-team profile 包在实例官方 Plugins 页「关→开」各重应用一次，由管理器按安装代际对账；③gateway 就地升级（`install-gateway.sh update`）未在真实 Linux 上验；④0.1.6 代移动端真机抽检 + 右栏终端 tab 目检（0.1.7 代随 bump 重做）。
 
-  - 遮罩层叠与揭幕修订的实机门（P0–P3，design 05 §2.2.1/§4；未真机判）：①遮罩层叠断言已就位但**未在真机 dev 实例上跑过**——gui-acceptance 新增 W-1b（探针 `VEIL_LAYERING_PROBE_INSTALL/READ` + 纯判据 `veilLayeringVerdict`，装/读接线在 `runWalkthrough` 的 ROOT_MOUNTED 之后与 4s boot 窗之后；判据与真表达式已由 `checks.test.mjs` 在 CI 覆盖），待 `--dev` 实例 + CDP 跑一次走查并确认本次真观察到遮罩帧（无遮罩帧按 INFO 记，不伪绿）；②冷切换的揭幕时延需实机判：会话面 `active` ⇒ ≤1 帧；`absent`（观察不到会话根，降级形态）⇒ 兜底 ≤2s；`hero/settling`（空白新会话 / 载入中）⇒ **保持遮罩**直到 App 释放（只留 70s 外层保险，正常路径不触发——两档上界见 `session-surface.ts` 的 `surfaceHoldBoundMs` 与 design 05 §2.2.1）；③Swift 打包态**无法自动做页面内测量**——release 构建 `isInspectable` 仅 `#if DEBUG`（`macos/Sources/DSHChamber/MainWindowController.swift#=literal:webView.isInspectable = true`），只能 DEBUG 构建 + Safari Web Inspector 人工抽检；两 flavor 共用目录锁，不能并跑。
+  - 遮罩层叠与揭幕修订的实机门（P0–P3，design 05 §2.2.1/§4；未真机判）：①遮罩层叠断言已就位但**未在真机 dev 实例上跑过**——gui-acceptance 新增 W-1b（探针 `VEIL_LAYERING_PROBE_INSTALL/READ` + 纯判据 `veilLayeringVerdict`，装/读接线在 `runWalkthrough` 的 ROOT_MOUNTED 之后与 4s boot 窗之后；判据与真表达式已由 `checks.test.mjs` 在 CI 覆盖），待 `--dev` 实例 + CDP 跑一次走查并确认本次真观察到遮罩帧（无遮罩帧按 INFO 记，不伪绿）；②冷切换的揭幕时延需实机判：会话面 `active` ⇒ ≤1 帧；`absent`（观察不到会话根，降级形态）⇒ 兜底 ≤2s；`hero/settling`（空白新会话 / 载入中）⇒ **保持遮罩**直到 App 释放（只留 70s 外层保险，正常路径不触发——两档上界见 `session-surface.ts` 的 `surfaceHoldBoundMs` 与 design 05 §2.2.1）；③Swift 打包态**无法自动做页面内测量**——release 构建的检查器现由 设置 → 通用 → 更新区内的「调试模式」开关运行期开启（见 T-10），因此可在**发布包**上用 Safari Web Inspector 人工抽检（先前只有 `#if DEBUG` 可达）；两 flavor 共用目录锁，不能并跑。
 
 - Swift原生运行期监督（未闭合）：① 控制面只首载前探一次 `/health`（S-45）；sidecar活而事件循环卡住无人发现（`SidecarSupervisor` 仅看退出码）。收口 = 前台周期探测 + 「重启sidecar / 重新加载」；无Electron对应面，差异由P-09/S-02覆盖。② 渲染器的前台 JS/rAF 探针只在 `didFinish` 后武装；窗口 `didCommit` 已呈现而首载卡在求值期仍无原生超时，需 `didCommit` 后的首载期限。rAF 前进也不证明像素合成；Swift 与 Electron 均需按 design 14 §8 分层真机取证。
 

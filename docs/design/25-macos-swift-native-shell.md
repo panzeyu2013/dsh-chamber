@@ -238,8 +238,12 @@ Apple 凭据（外部阻断）。
 1. Swift `applicationDidFinishLaunching`：解析 argv/深链 → 计算 userData dir
    （§6.1）→ **目录锁**（§6.3）→ 启动 SidecarSupervisor；启动链 reconcile
    `<userData>/chamber-settings.json` 的 `keepAwake`（缺文件 = off 且无日志、损坏 = loud + off、
-   合法 = 经与 settings UI 同一个 `setKeepAwake` 宿主腿应用；AppDelegate.swift:322-328 /
-   StartupSettings.swift）。
+   合法 = 经与 settings UI 同一个 `setKeepAwake` 宿主腿应用；
+   `macos/Sources/DSHChamber/AppDelegate.swift#=literal:StartupSettings.apply(StartupSettings.readKeepAwake` /
+   StartupSettings.swift）。同一处按持久值 reconcile `debug.enabled`（§5.1.1：**缺文件 = 不动作
+   且无日志；文件级损坏 = loud + 不动作**；合法文件——含缺 debug 键的——按文件值经同一个
+   `setDebugMode` 腿应用），回读**暂存**，等 sidecar ready 帧后再上报——一次汇总在 §5.1.1 的
+   ready 门里。
 2. Supervisor：spawn `node sidecar.js`；sidecar 完成今日 main.ts 的启动职责（目录锁在 sidecar 内复验
    但不二次 flock）→ `createControlPlane`
    （**端口由 Swift 解析后以 `--port` 注入**：打包态固定 17500、无退避
@@ -500,6 +504,50 @@ CVDisplayLink 名义周期、display link 初始化时只缓存一次，取不�
 
 **验收（未完成）**：插电 120fps、电池 + 低电量模式 60fps、60Hz 外接屏不回退；日志标「面板上限」或界面为 100Hz 类
 非整数倍屏时，判定以 `[shell-fps]` 实测为准。见 STATUS.md 与 deviations.md S-48。
+
+### 5.1.1 调试模式（发布态可开检查器，裁决）
+
+**问题**：WKWebView 无 CDP；原生检查器由 `WKWebView.isInspectable`（macOS 13.3+ 公开 API，可运行期改）
+经 Safari「开发」菜单暴露。原先只有 `#if DEBUG` 构建置真，**发布包对用户不可达**——本机调试
+（页面内测量、GUI 走查、真机取证）因此只能换 DEBUG 构建，而两 flavor 共用目录锁、不能并跑，实机
+复现成本直接落在用户身上。
+
+**决议**：release 默认仍关，新增**运行期、持久化、显式**的用户开关。
+
+- **落点**：设置 → 通用 → **「更新」组内**（用户裁决；组内不与更新行为耦合，只是同一低矮分组的
+  邻居）。标签「调试模式」，默认关。
+- **设置键**：`chamber-settings.json` 的嵌套块 `debug: { enabled: boolean }`（与
+  `notifications`/`sessionTodo` 同形：partial patch 深合并、未知嵌套键 loud 拒绝、损坏块整文件
+  不采信）。缺省 = 关：**读不懂的块绝不用来打开调试面**。
+- **宿主腿**：新 edge `setDebugMode`（Electron 腿本版不接线，`supported.debugInspectable=false` ⇒
+  UI 禁用开关并给出原因，绝不呈现一个永远无效的开关）。Swift 腿施加 `webView.isInspectable` 后
+  **回读实测值** `{inspectable, apiAvailable, reason?}`——回读优先于推断，腿失败/无窗 =
+  `inspectable:false` + 原因，绝不把「用户想开」上报成「已开」。
+- **状态可见性**（用户可能问「开了怎么确认」）：设置行状态 = settings 投影里的 `debugRuntime`（缺省
+  = 本次进程尚未应用过 → 「未知」，绝不按 `enabled` 回声）；宿主侧每次**施加**（切换或启动重放）
+  写一行
+  `[shell] 调试模式已开启：请求 enabled=true → 实测 isInspectable=true（Safari → 开发 → 本机 → dsh-chamber）`
+  （请求值与实测值都记：只记实测会让「请求开、实测关」看起来像一次普通关闭；用户可在
+  `<userData>/logs/shell.log` 事后核对）。程序化查询「是否已被附着」无公开 API，Safari 侧只能人工看。
+- **启动重放**：Swift 启动时按持久值经**同一条腿**应用（看门人只此一处）。回读经
+  `__host.debugModeApplied` 报给 sidecar，使用户打开设置页前投影已带事实。
+- **投递时机 = ready 门**：该上报只在 sidecar ready 帧之后发出（sidecar 侧 `installIpcHandlers`
+  先于 ready，装配前到达的入站会被 loud 拒绝），且**每次 ready 都重报**（含 sidecar 崩溃重启后的
+  新 ready）：`debugRuntime` 是 sidecar 进程内的内存投影，而检查器状态活在 Swift 进程里——只报
+  启动那一刻会让重启后的投影把「其实还开着」低报成「尚未应用」。重报读的是**当下**事实
+  （`MainWindowController.currentInspectable()` + 设置文件里的持久意图），不是启动快照。
+- **信任边界**：开启 = 本机任意程序可读页面内容并可注入 JS；默认关、只对本机、不涉网关/隧道/远程
+  实例，文案在开关旁明写。
+
+**Rejected alternatives**：
+
+1. **维持 `#if DEBUG` 单一入口**：正是用户报告的痛点（发布包无检查器，实机只能换构建）。
+2. **单独分发 debug 构建**：第二份签名/公证产物 + 用户手上永远不是 release，验证价值反降。
+3. **环境变量开关（`DSH_CHAMBER_SHELL_DEBUG` 一类）**：打包态被硬剥离（T-11 纪律），且对 GUI
+   用户不可达——GUI 设置是唯一不破坏该纪律的用户面。
+4. **默认开、允许关**：发布包默认降低信任边界，不可接受；默认关 + 显式开启才是本决策。
+5. **自建调试端口 / CDP 兼容面**（用户最初的设想）：WKWebView 无 CDP 实现，自造协议等于新增监听
+   端口与长期维护面，而 `isInspectable` 直接复用 Safari 官方检查器（零新端口）。
 
 ### 5.2 视口越界（根级弹性回弹）与壳侧策略
 
@@ -1031,7 +1079,8 @@ WKWebView parity 清单（W1 剪贴板、W2 菜单快捷键、W3 富文本粘贴
   退避 + 端口钉死 + 独立 .dev-user-data（companion）。
 - R11 Swift 侧人手单点：护栏规则集中 DSHChamber 单 target + Generated 产物减少手写面。
 - R12 manifest 解析脆弱性：正则扫字面量会漏新写法 → 复用 mirror 解析函数 + 通道数守恒断言（70=61+9）。
-- R13 WKWebView devtools：仅 debug 构建开启（inspector 属信任边界）。
+- R13 WKWebView devtools：默认关；发布态由设置页运行期开关显式开启（§5.1.1），`#if DEBUG`
+  构建仅在**无设置文件/文件级损坏**（不动作）时保留开发便利的默认开。inspector 属信任边界。
 
 ## 10. 外部决策清单（签核尚未完成；日程见 companion §八）
 

@@ -819,6 +819,15 @@ test('the apply-result and notification/sessionTodo settings shapes are type-ide
     sessionTodoSettings,
     'ChamberSessionTodoSettings preload/renderer drifted',
   )
+  // ChamberDebugSettings (nested under ChamberSettings.debug) + ChamberSettingsSupported
+  // (the supported capability gates): both were extracted from inline literals, which is
+  // exactly when a '?' marker or a field can drift unseen — the nested field names used to
+  // be swept as part of the enclosing literal, and are not any more.
+  for (const name of ['ChamberDebugSettings', 'ChamberSettingsSupported']) {
+    const authoritative = interfaceFieldSignatures(preload, name)
+    assert.deepEqual(interfaceFieldSignatures(renderer, name), authoritative,
+      name + ' preload/renderer drifted (optional markers included)')
+  }
 })
 
 test('flat shared interfaces are TYPE-identical across preload and renderer (L3 — not just field names)', () => {
@@ -835,21 +844,39 @@ test('flat shared interfaces are TYPE-identical across preload and renderer (L3 
 test('the desktop chamber-settings store mirrors preload\'s settings types (L3 — the manual-mirror leg)', () => {
   // preload ↔ renderer is guarded above; the desktop AUTHORITATIVE store mirrors the same
   // shapes as a documented MANUAL mirror with no guard of its own, so it gets the same
-  // type-sensitive signature comparison. ChamberSettingsStatus is excluded (nested literal;
-  // its flat top-level field names are covered below). */
+  // type-sensitive signature comparison. ChamberSettingsStatus is excluded from the SIGNATURE
+  // list (it carries a nested literal; a whole-block line signature would only capture "{"),
+  // but its flattened field names are compared below AND its nested debugRuntime member has a
+  // dedicated test further down. */
   const store = readFileSync(join(ROOT, 'packages/desktop/chamber-settings.ts'), 'utf8')
-  for (const typeName of ['ChamberSettings', 'ChamberNotificationSettings', 'ChamberSessionTodoSettings']) {
+  for (const typeName of ['ChamberSettings', 'ChamberNotificationSettings', 'ChamberSessionTodoSettings', 'ChamberDebugSettings', 'ChamberSettingsSupported']) {
     assert.deepEqual(
       interfaceFieldSignatures(store, typeName),
       interfaceFieldSignatures(preload, typeName),
       `chamber-settings.ts store drifted from preload: ${typeName}`,
     )
   }
+  // 注意这里是**摊平**后的名字集合（嵌套字面量的字段名也会进来），不是顶层名——所以它
+  // 能挡住「漏字段/改名」，挡不住类型与可选性漂移（那由下面的 debugRuntime 成员比较兜住）。
   assert.deepEqual(
     interfaceFieldNames(store, 'ChamberSettingsStatus'),
     interfaceFieldNames(preload, 'ChamberSettingsStatus'),
-    'chamber-settings.ts ChamberSettingsStatus top-level fields drifted from preload',
+    'chamber-settings.ts ChamberSettingsStatus fields drifted from preload',
   )
+})
+
+test('the nested debugRuntime read-back stays type-identical across all three mirrors', () => {
+  // 嵌套字面量在过去是「外围字面量的一部分」被顺带扫到；提为命名接口后，debugRuntime
+  // 的成员（含 reason? 的跨版本可选性）必须显式守卫——否则只改 renderer 那一份
+  // （删问号/改字段名/改类型）能全绿通过。
+  const store = readFileSync(join(ROOT, 'packages/desktop/chamber-settings.ts'), 'utf8')
+  const member = (source: string): string[] =>
+    blockFieldSignatures(source, interfaceBlock(source, 'ChamberSettingsStatus'))
+      .filter(signature => signature.startsWith('debugRuntime'))
+  const preloadMember = member(preload)
+  assert.equal(preloadMember.length, 1, 'debugRuntime 成员必须恰好一条（过滤器写错会假绿）')
+  assert.deepEqual(member(renderer), preloadMember, 'renderer debugRuntime drifted')
+  assert.deepEqual(member(store), preloadMember, 'store debugRuntime drifted')
 })
 
 test('settings-connections re-exports the whole IPC face from the renderer (single source of truth, L3)', () => {

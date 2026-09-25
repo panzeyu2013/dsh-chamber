@@ -461,6 +461,16 @@ export interface ChamberSettings {
   /** 侧边栏「会话待办区」（sidebar todo area）：嵌套键，默认值镜像 desktop
    *  chamber-settings.ts 的 DEFAULT_CHAMBER_SETTINGS.sessionTodo。 */
   sessionTodo: ChamberSessionTodoSettings
+  /** 调试模式（设置 → 通用 → 更新区内）：嵌套键，默认值镜像 desktop
+   *  chamber-settings.ts 的 DEFAULT_CHAMBER_SETTINGS.debug（默认关闭）。开启后
+   *  Swift 原生壳置 WKWebView.isInspectable，Safari Web Inspector 可附着。 */
+  debug: ChamberDebugSettings
+}
+
+/** 调试模式子块——结构与 desktop/chamber-settings.ts 的 ChamberDebugSettings
+ *  保持一致（镜像同步纪律）。 */
+export interface ChamberDebugSettings {
+  enabled: boolean
 }
 
 /** 桌面通知设置子块（design 19 §3.4 + §3.7）——结构与 desktop/chamber-settings.ts
@@ -497,16 +507,34 @@ export interface ChamberSessionTodoSettings {
 /** Non-secret status projection: current settings + platform capability gates. */
 export interface ChamberSettingsStatus {
   settings: ChamberSettings
-  supported: {
-    /** True on all shipping platforms (design 21 M4). */
-    launchAtLogin: boolean
-    /** false when no tray recovery surface exists (dev); macOS always safe. */
-    closeToTray: boolean
-    /** Unread-badge overlay capability (design 19 §3.7 / design 23 M3): false on win32.
-     *  Optional so a differently-versioned shell stays compatible (absent = legacy
-     *  shape; consumers default to "supported" when the field is absent). */
-    badgeSupported?: boolean
+  supported: ChamberSettingsSupported
+  /** 调试模式实测回读（非秘密）：宿主是否真的处于可检查态。缺省 = 本进程尚未
+   *  应用过（UI 呈现「未知」，绝不按 enabled 推断）。 */
+  debugRuntime?: {
+    inspectable: boolean
+    /** 平台/API 是否可用（macOS 13.3+；本仓下限 14.4 恒真）。 */
+    apiAvailable: boolean
+    /** 失败原因原文（可检查态未达成时）。 */
+    reason?: string
   }
+}
+
+/** ChamberSettingsStatus.supported 的平台能力门投影（与 chamber-settings.ts /
+ *  preload.cts 的 ChamberSettingsSupported 逐字段一致——镜像同步纪律）。 */
+export interface ChamberSettingsSupported {
+  /** True on all shipping platforms (design 21 M4). */
+  launchAtLogin: boolean
+  /** false when no tray recovery surface exists (dev); macOS always safe. */
+  closeToTray: boolean
+  /** Unread-badge overlay capability (design 19 §3.7 / design 23 M3): false on win32.
+   *  Optional so a differently-versioned shell stays compatible (absent = legacy
+   *  shape; consumers must default to "supported" when the field is absent). */
+  badgeSupported?: boolean
+  /** 调试模式平台能力：只有 Swift 原生壳（WKWebView isInspectable）可用；本版
+   *  Electron 腿未接线 → false（设置页禁用开关并给出原因）。
+   *  同样可选：缺字段 = 早于本门的主进程 → 消费端按「不支持」读（禁用 + 原因），
+   *  绝不呈现一个可能无效的开关（与 badgeSupported 的非对称读法有意不同）。 */
+  debugInspectable?: boolean
 }
 
 export interface SettingsSurface {

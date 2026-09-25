@@ -71,6 +71,151 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertNil(StartupSettings.decodeLaunchAtLogin(fromJSON: Data("{}".utf8)))
     }
 
+    /// 调试模式启动读取器：缺文件 = 默认关（不动作）；缺键 = false；显式 true/false
+    /// 逐字；非法/跨键损坏 = 整文件不采信（绝不因一个读不懂的块去开检查器）。
+    func testStartupSettingsDebugEnabledReader() throws {
+        let dir = try tempUserData()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let path = dir + "/" + StartupSettings.fileName
+        XCTAssertEqual(StartupSettings.readDebugEnabled(userDataDir: dir), .missing)
+        try "{\"keepAwake\": true}".write(toFile: path, atomically: true, encoding: .utf8)
+        XCTAssertEqual(StartupSettings.readDebugEnabled(userDataDir: dir), .ok(false),
+                       "键缺失 = Electron 默认 false")
+        try "{\"debug\": {\"enabled\": true}}".write(toFile: path, atomically: true, encoding: .utf8)
+        XCTAssertEqual(StartupSettings.readDebugEnabled(userDataDir: dir), .ok(true))
+        try "{\"debug\": {\"enabled\": false}}".write(toFile: path, atomically: true, encoding: .utf8)
+        XCTAssertEqual(StartupSettings.readDebugEnabled(userDataDir: dir), .ok(false))
+        // 非法嵌套值 → 整文件校验失败 → **损坏**（loud + 不动作），绝不静默折成
+        // 「按默认 false 真去关检查器」（那既是猜值，也会把 DEBUG 的 dev 默认开悄悄关掉）。
+        try "{\"debug\": {\"enabled\": 1}}".write(toFile: path, atomically: true, encoding: .utf8)
+        guard case .corrupt(let nestedReason) = StartupSettings.readDebugEnabled(userDataDir: dir) else {
+            return XCTFail("非法 debug 块必须判损坏")
+        }
+        XCTAssertTrue(nestedReason.contains("debug"), nestedReason)
+        // 跨键损坏（合法 debug + 非法 keepAwake）→ 整文件不可信（同一纪律）。
+        try "{\"debug\": {\"enabled\": true}, \"keepAwake\": \"on\"}"
+            .write(toFile: path, atomically: true, encoding: .utf8)
+        guard case .corrupt = StartupSettings.readDebugEnabled(userDataDir: dir) else {
+            return XCTFail("跨键损坏必须判损坏，不得采信其中的 debug=true")
+        }
+        // 非 JSON / 顶层非对象同样不动作。
+        try "not json".write(toFile: path, atomically: true, encoding: .utf8)
+        guard case .corrupt = StartupSettings.readDebugEnabled(userDataDir: dir) else {
+            return XCTFail("非 JSON 必须判损坏")
+        }
+        // enabledValue：只有合法文件才有持久意图（missing/corrupt 一律 nil）。
+        XCTAssertEqual(StartupSettings.DebugReadOutcome.ok(true).enabledValue, true)
+        XCTAssertEqual(StartupSettings.DebugReadOutcome.ok(false).enabledValue, false)
+        XCTAssertNil(StartupSettings.DebugReadOutcome.missing.enabledValue)
+        XCTAssertNil(StartupSettings.DebugReadOutcome.corrupt(reason: "x").enabledValue)
+        // 纯函数面：decodeDebugEnabled 只认真正的布尔（NSNumber 1/0 不是布尔）。
+        XCTAssertEqual(StartupSettings.decodeDebugEnabled(fromJSON: Data("{\"debug\": {\"enabled\": true}}".utf8)), true)
+        XCTAssertNil(StartupSettings.decodeDebugEnabled(fromJSON: Data("{}".utf8)))
+        XCTAssertNil(StartupSettings.decodeDebugEnabled(fromJSON: Data("{\"debug\": {\"enabled\": 1}}".utf8)))
+    }
+
+    /// 启动期调试模式重放决策（纯函数）：missing/corrupt 不动作；ok 走腿并取
+    /// **实测回读**——腿失败或应答形状不可用一律 inspectable=false + reason，
+    /// 绝不按 enabled 推断。
+    func testReconcileDebugModeReadsBackInsteadOfEchoingIntent() throws {
+        XCTAssertEqual(AppDelegate.reconcileDebugMode(.missing) { _ in (nil, nil) }, .settingsMissing)
+        XCTAssertEqual(AppDelegate.reconcileDebugMode(.corrupt(reason: "bad")) { _ in (nil, nil) },
+                       .settingsCorrupt(reason: "bad"))
+        // 腿应答带 inspectable=true → 采用回读。
+        let applied = AppDelegate.reconcileDebugMode(.ok(true)) { enabled in
+            XCTAssertTrue(enabled)
+            return (.object(["inspectable": .bool(true), "apiAvailable": .bool(true)]), nil)
+        }
+        XCTAssertEqual(applied, .applied(enabled: true, inspectable: true, reason: nil))
+        // 腿失败（无窗）：enabled 意图为真，但事实 inspectable=false + reason 原样。
+        let degraded = AppDelegate.reconcileDebugMode(.ok(true)) { _ in
+            (nil, "swift-edge-ui-unavailable:setDebugMode:no-window")
+        }
+        XCTAssertEqual(degraded, .applied(enabled: true, inspectable: false,
+                                         reason: "swift-edge-ui-unavailable:setDebugMode:no-window"))
+        // 形状不可用（缺 inspectable）：绝不乐观成已开启。
+        let unusable = AppDelegate.reconcileDebugMode(.ok(true)) { _ in (.object([:]), nil) }
+        XCTAssertEqual(unusable, .applied(enabled: true, inspectable: false,
+                                          reason: "setDebugMode edge returned an unusable reply"))
+    }
+
+    /// ready 上报的事实选择（纯函数）：活事实优先并带**尽力意图**；无活事实回落启动
+    /// reconcile 的结果（带失败原因）；两者都没有 → 不报（绝不编造）。
+    func testDebugFactForReadySelectsLiveFactThenStartupFallback() throws {
+        // 活事实 + 文件里的意图。
+        let live = try XCTUnwrap(AppDelegate.debugFactForReady(inspectable: true, intent: false, startupFact: nil))
+        XCTAssertEqual(live.enabled, false)
+        XCTAssertEqual(live.inspectable, true)
+        XCTAssertNil(live.reason)
+        // 活事实 + 本次读不到意图（文件 missing/corrupt）→ 回落启动暂存的意图，
+        // 绝不因为「这次读不懂」就把宿主说成另一个意图（会假报「宿主 vs 文件不一致」）。
+        let fallbackIntent = try XCTUnwrap(AppDelegate.debugFactForReady(
+            inspectable: true, intent: nil,
+            startupFact: (enabled: true, inspectable: true, reason: nil)))
+        XCTAssertEqual(fallbackIntent.enabled, true)
+        XCTAssertEqual(fallbackIntent.inspectable, true)
+        // 活事实 + 完全没有意图（启动时也无文件）→ 默认 false（与 sidecar 侧默认同值）。
+        let noIntent = try XCTUnwrap(AppDelegate.debugFactForReady(inspectable: false, intent: nil, startupFact: nil))
+        XCTAssertEqual(noIntent.enabled, false)
+        XCTAssertEqual(noIntent.inspectable, false)
+        // 无活事实（无 webView/API 缺失）→ 回落启动 reconcile 结果，失败原因必须保留。
+        let degraded = try XCTUnwrap(AppDelegate.debugFactForReady(
+            inspectable: nil, intent: true,
+            startupFact: (enabled: true, inspectable: false, reason: "no-window")))
+        XCTAssertEqual(degraded.enabled, true)
+        XCTAssertEqual(degraded.inspectable, false)
+        XCTAssertEqual(degraded.reason, "no-window")
+        // 两者都没有 → 不报（无信息可言）。
+        XCTAssertNil(AppDelegate.debugFactForReady(inspectable: nil, intent: true, startupFact: nil))
+    }
+
+    /// 调用点锁：ready 门是本次修复的核心（invoke 只在 ready 帧后到达；sidecar 崩溃重启后
+    /// 必须重报）。把调用挪回启动 reconcile、或在 ready 前补一次直报时，纯函数用例仍绿
+    /// ——故把调用点本身钉住（同 QuitCoordinatorTests 的失效点锁法）。
+    func testDebugFactReportCallSiteStaysBehindTheReadyGate() throws {
+        let macosDir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let raw = try XCTUnwrap(String(
+            data: Data(contentsOf: macosDir.appendingPathComponent("Sources/DSHChamber/AppDelegate.swift")),
+            encoding: .utf8))
+        // 只留代码行（// 与 /// 注释行不计），否则注释里提一次方法名就会误红。
+        let code = raw.split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+        let withoutDeclaration = code.replacingOccurrences(
+            of: "private func reportDebugModeFactOnReady()", with: "")
+        let sites = withoutDeclaration.components(separatedBy: "reportDebugModeFactOnReady()")
+        XCTAssertEqual(sites.count - 1, 1, "上报必须恰好一处调用（多一处 = ready 前补发又回来了）")
+        XCTAssertTrue(String(sites[0].suffix(1500)).contains("func handleSidecarReady()"),
+                      "唯一调用点必须在 handleSidecarReady 内（ready 帧之后才允许 invoke）")
+    }
+
+    /// 上报载荷（纯函数）：字段集与 node-edges 的入站校验逐字对应——三个必填布尔，
+    /// reason 仅在非空时出现（空串绝不发出去）。
+    func testDebugModeAppliedPayloadFieldSet() throws {
+        guard case .object(let full) = AppDelegate.debugModeAppliedPayload(
+            enabled: true, inspectable: false, reason: "why") else {
+            return XCTFail("载荷应为对象")
+        }
+        XCTAssertEqual(full["enabled"], .bool(true))
+        XCTAssertEqual(full["inspectable"], .bool(false))
+        XCTAssertEqual(full["apiAvailable"], .bool(true))
+        XCTAssertEqual(full["reason"], .string("why"))
+        guard case .object(let bare) = AppDelegate.debugModeAppliedPayload(
+            enabled: false, inspectable: true, reason: nil) else {
+            return XCTFail("载荷应为对象")
+        }
+        XCTAssertNil(bare["reason"], "无原因不得发空串/占位")
+        XCTAssertEqual(bare.count, 3)
+        guard case .object(let empty) = AppDelegate.debugModeAppliedPayload(
+            enabled: false, inspectable: false, reason: "") else {
+            return XCTFail("载荷应为对象")
+        }
+        XCTAssertNil(empty["reason"], "空串原因按无原因处理")
+    }
+
     /// 损坏状态是瞬态的——共享读取器
     /// （chamber-settings.ts；Electron main.ts 与 Swift flavor 的 sidecar-ctx.ts
     /// 同源）把损坏文件改名为 *.corrupt，下一次启动 live 文件缺失。若把
@@ -761,8 +906,9 @@ final class ShellStartupTests: XCTestCase {
                        "帮助入口必须指向项目页（唯一诚实目标，且经外部打开路径）")
     }
 
-    /// 打包态菜单绝不带 DevTools 入口（devtools 保持 #if DEBUG 可达，
-    /// release 无检查器面——菜单项同样是产品面）。
+    /// 菜单绝不带 DevTools 入口（运行期检查器入口 = 「设置 → 通用 → 更新」里的调试
+    /// 模式开关；菜单项本身就是产品面，任何构建都不呈现——这条测试恒真不是因为
+    /// 「release 关掉了它」）。
     func testMainMenuHasNoDevToolsEntry() {
         let menu = AppDelegate.makeMainMenu()
         let items = menu.items.flatMap { $0.submenu?.items ?? [] }

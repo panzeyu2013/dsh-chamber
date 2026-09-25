@@ -16,7 +16,7 @@ import path from 'node:path';
 import { findFreePort } from './free-port.ts';
 import { computeSupported } from './chamber-settings.ts';
 import { createKeyedMemo, lockfileIdentityKey } from './lockfile-facts-memo.ts';
-import type { ChamberSettings, ChamberSettingsStatus } from './chamber-settings.ts';
+import type { ChamberSettings, ChamberSettingsStatus, DebugRuntimeReadBack } from './chamber-settings.ts';
 
 import { attemptCommittedRegistryPush } from './transport-manager.ts';
 import { IPC_CHANNELS } from './ipc-events.ts';
@@ -819,6 +819,22 @@ export function openExternally(url: string): void {
   });
 }
 
+// 调试模式启动回读槽：Swift sidecar 的 __host.debugModeApplied 入站汇（装配前到达 =
+// 调用方 loud 拒绝，绝不静默丢弃——丢掉它设置页整场只显示「未知」）。装配时赋值。
+let debugRuntimeSink: ((readBack: DebugRuntimeInbound) => void) | null = null;
+
+/** 入站回读 = 宿主实测事实 + 宿主按持久值应用的**意图**（见 chamber-settings 的
+ *  DebugRuntimeReadBack；意图只用于与持久设置比对，绝不进投影）。 */
+type DebugRuntimeInbound = DebugRuntimeReadBack & { enabled: boolean }
+
+/** 灌入启动期调试回读（Swift 腿）：未装配 → 返回 false，调用方 loud 拒绝。 */
+export function applyDebugRuntime(readBack: DebugRuntimeInbound): boolean {
+  const sink = debugRuntimeSink;
+  if (sink === null) return false;
+  sink(readBack);
+  return true;
+}
+
 // runtime check cycle 槽：installIpcHandlers ② J 组段赋值（装配先于任何计时器 tick）。
 // main 侧首检/周期计时器与 RUNTIME_CHECK 注册体经同一实现与门；未装配时静默 no-op。
 let runtimeCheckRunner: (() => void) | null = null;
@@ -850,6 +866,7 @@ export function installIpcHandlers(deps: ShellIpcDeps): void {
     hostFacts,
     settingsIO,
     setKeepAwake,
+    setDebugMode,
     setLoginItem,
     // transportManager → sm（与 main 的 sm 同名，C–F 组共用）；updater/runtimeInstance
     // 为 ctx → 本地语义改名，注册体以原名调用。audit / gatewaySessions /
@@ -876,12 +893,20 @@ export function installIpcHandlers(deps: ShellIpcDeps): void {
     handleMainWindowShown();
   });
 
-  /** 非秘密 chamber 设置投影（design 14 D7）：当前值 + 平台能力门控。 */
+  /** 调试模式实测回读（非秘密，内存 holder）：宿主返回的 {inspectable, apiAvailable,
+   *  reason}。undefined = 本次进程尚未应用过任何值 → 投影省略 debugRuntime，UI 呈现
+   *  「未知」，绝不按 enabled 推断（回读优先于推断）。 */
+  let debugRuntime: DebugRuntimeReadBack | undefined;
+
+  /** 非秘密 chamber 设置投影（design 14 D7）：当前值 + 平台能力门控 + 调试回读。 */
   function chamberSettingsStatus(): ChamberSettingsStatus {
-    return {
+    const status: ChamberSettingsStatus = {
       settings: settingsIO.current(),
-      supported: computeSupported(hostFacts.platform, hostFacts.trayPresent()),
+      supported: computeSupported(hostFacts.platform, hostFacts.trayPresent(), hostFacts.flavor),
     };
+    if (debugRuntime !== undefined) status.debugRuntime = debugRuntime;
+
+    return status;
   }
 
   /** 设置变更推送：committed-push 包装 + rendererPush；false = 无存活主窗，折算为
@@ -914,7 +939,17 @@ export function installIpcHandlers(deps: ShellIpcDeps): void {
       sessionTodo: patch.sessionTodo !== undefined
         ? { ...current.sessionTodo, ...patch.sessionTodo }
         : current.sessionTodo,
+      debug: patch.debug !== undefined ? { ...current.debug, ...patch.debug } : current.debug,
     };
+    // 调试模式以**嵌套键**为门（与 keepAwake 同纪律）：空块补丁 { debug: {} } 是合法
+    // no-op（validatePatch「缺字段 = 不修改」），但 undefined 一旦流到腿上就会被
+    // JSON.stringify 丢掉 → 宿主收到缺键载荷，Swift 腿以 :payload 明确拒绝（绝不猜值），
+    // 用户这次意图既没生效、还会被记成一次失败（回读带 reason）。故只用真正的布尔值驱动。
+    const debugEnabled = patch.debug?.enabled;
+    // 是否**已经摸到**调试腿：组合补丁里若更早的叶先抛错，调试腿从未被调用，回滚也就
+    // 不该调用它——否则既多一次 B 桥往返，还会把 debugRuntime 从「未知」物化成一次
+    // 回滚读值（宿主残留可检查态时甚至被静默关掉）。
+    let debugReached = false;
     // 副作用叶抛异常/reject 时 loud 失败并 best-effort 回滚 keepAwake，绝不带病继续。
     try {
       if (patch.keepAwake !== undefined) await setKeepAwake(patch.keepAwake);
@@ -926,10 +961,18 @@ export function installIpcHandlers(deps: ShellIpcDeps): void {
           return result;
         }
       }
+      // 调试模式：宿主腿返回诚实回读（inspectable/apiAvailable/reason），记入内存
+      // holder 供每次 settings 投影与推送携带；腿失败（unimplemented/无窗）不阻断
+      // 设置本身——回读里带 reason，UI 据此显示错误行，绝不假装已开启。
+      if (debugEnabled !== undefined) {
+        debugReached = true;
+        debugRuntime = await setDebugMode(debugEnabled);
+      }
     } catch (error) {
       console.error('[dsh-chamber] 应用 chamber 设置副作用失败：', error);
       try {
         if (patch.keepAwake !== undefined) await setKeepAwake(current.keepAwake);
+        if (debugReached) debugRuntime = await setDebugMode(current.debug.enabled);
       } catch {
         // 回滚失败已记日志，不叠加异常。
       }
@@ -944,6 +987,14 @@ export function installIpcHandlers(deps: ShellIpcDeps): void {
       if (patch.launchAtLogin !== undefined) {
         const rollback = await setLoginItem(current.launchAtLogin);
         if (!rollback.ok) console.error(`[dsh-chamber] 登录自启回滚失败：${rollback.error}`);
+      }
+      // 调试模式回滚：恢复旧值并重新回读（失败只 loud，不叠加异常）。
+      if (debugEnabled !== undefined) {
+        try {
+          debugRuntime = await setDebugMode(current.debug.enabled);
+        } catch (rollbackError) {
+          console.error('[dsh-chamber] 调试模式回滚失败：', rollbackError);
+        }
       }
       return { ok: false, error: 'settings persist failed' };
     }
@@ -973,7 +1024,29 @@ export function installIpcHandlers(deps: ShellIpcDeps): void {
     return true;
   }
 
-/** 按当前设置重新裁决最近一次 renderer 计数意图（badgeEnabled 翻转的即时收敛点）。 */
+  /** 启动期调试回读灌入（Swift 腿专用）：宿主每次 ready 后按持久值/实测事实经
+   *  __host.debugModeApplied 报回。写入 holder 并推一次设置，使用户打开设置页前投影
+   *  就带 debugRuntime（否则首帧只能显示「未知」）。 */
+  debugRuntimeSink = (readBack: DebugRuntimeInbound): void => {
+    // 宿主上报的 enabled 是**意图**（它按持久值应用的），与 sidecar 侧的持久设置
+    // 比对：不一致 = 宿主与文件分叉（例如宿主读到了另一份/旧文件），必须可见。
+    // 投影只带事实字段，意图不参与（同一设置两种事实源会让 UI 自相矛盾）。
+    const persistedIntent = settingsIO.current().debug.enabled
+    if (readBack.enabled !== persistedIntent) {
+      console.warn('[dsh-chamber] 调试回读的意图与持久设置不一致（宿主 '
+        + String(readBack.enabled) + ' vs 文件 ' + String(persistedIntent) + '）——投影以回读为准')
+    }
+    debugRuntime = {
+      inspectable: readBack.inspectable,
+      apiAvailable: readBack.apiAvailable,
+      // 空串按「无原因」处理（wire 层已归一，这里兜住直调汇的路径——投影里出现
+      // reason:"" 会让 UI 显示一个空白原因）。
+      ...(readBack.reason === undefined || readBack.reason === '' ? {} : { reason: readBack.reason }),
+    }
+    pushSettingsChanged()
+  }
+
+  /** 按当前设置重新裁决最近一次 renderer 计数意图（badgeEnabled 翻转的即时收敛点）。 */
   function reconcileBadgeCount(): void {
     if (pendingBadgeCount === null) return;
     const count = adjudicateBadgeCount(

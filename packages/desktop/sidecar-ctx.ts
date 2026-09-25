@@ -15,7 +15,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DEFAULT_CHAMBER_SETTINGS, readSettingsFile } from './chamber-settings.ts'
-import type { ChamberSettings } from './chamber-settings.ts'
+import type { ChamberSettings, DebugRuntimeReadBack } from './chamber-settings.ts'
 import { describeError } from './describe-error.ts'
 import type { ChamberHostPackageDescriptor } from './control-plane-module.ts'
 import { createHostAssembly, type HostAssembly, type HostAssemblyEdges, type HostLocalSpawnGates } from './host-assembly.ts'
@@ -294,6 +294,28 @@ export async function buildHeadlessCtx(
         const detail = describeError(error)
         console.error(`[sidecar] keep-awake host leg failed: ${detail}`)
         throw error
+      }
+    },
+    // 调试模式叶：Swift 宿主把 WKWebView.isInspectable 置真/假，并把【实测回读】
+    // 放进应答回来了。腿失败（unimplemented/无窗）不 throw——设置本身照常保存，
+    // 回读带 reason，UI 显示错误行（绝不假装已开启）。
+    setDebugMode: async (enabled: boolean): Promise<DebugRuntimeReadBack> => {
+      try {
+        const answer = await edges.sendEdge('setDebugMode', { enabled })
+        if (answer !== null && typeof answer === 'object') {
+          const mapped = answer as { inspectable?: unknown; apiAvailable?: unknown; reason?: unknown }
+          const readBack: DebugRuntimeReadBack = {
+            inspectable: mapped.inspectable === true,
+            apiAvailable: mapped.apiAvailable !== false,
+          }
+          if (typeof mapped.reason === 'string' && mapped.reason !== '') readBack.reason = mapped.reason
+          return readBack
+        }
+        return { inspectable: false, apiAvailable: true, reason: 'setDebugMode edge returned an unusable reply' }
+      } catch (error) {
+        const detail = describeError(error)
+        console.error(`[sidecar] debug-mode host leg failed: ${detail}`)
+        return { inspectable: false, apiAvailable: true, reason: detail }
       }
     },
     setLoginItem: async (

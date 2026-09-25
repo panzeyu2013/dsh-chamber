@@ -7,6 +7,8 @@
  *  ② __host.deepLink 命中注入汇（url 原样透传）——core enqueueDeepLink 的
  *     归一化去重留在 core，本层只做传输层校验；
  *  ③ 缺 url / 未注入汇 → loud 拒绝（绝不静默丢弃用户可见动作）；
+ *  ③b __host.debugModeApplied 载荷三布尔 + 可选 reason（非字符串 loud、空串 = 无原因）
+ *     → 命中注入汇 / 未注入汇 loud；
  *  ④ __host.rendererLifecycle 命中注入汇，未知事件 → loud；
  *  ⑤ 未注入汇 → loud；
  *  ⑥ hostFacts 仍刷新同步门缓存（回归）；
@@ -39,6 +41,7 @@ import { createTrustedIpc } from './renderer-trust.ts'
 function makeEdges(overrides: {
   onDeepLink?: (url: string) => void
   onRendererLifecycle?: (event: HostRendererLifecycleEvent) => void
+  debugModeApplied?: (input: { enabled: boolean; inspectable: boolean; apiAvailable: boolean; reason?: string }) => void
   projectQuitFacts?: (input: { quitRequested: boolean; recoveryAvailable: boolean }) => {
     hideOnClose: boolean
     quitNeedsConfirm: boolean
@@ -62,6 +65,7 @@ test('① 保留 method 名与 core 拼写一致（含 E13/E19/E20 新增三条�
     rendererLifecycle: '__host.rendererLifecycle',
     quitFacts: '__host.quitFacts',
     nativeUpdatePhase: '__host.nativeUpdatePhase',
+    debugModeApplied: '__host.debugModeApplied',
   })
   assert.deepEqual([...HOST_RENDERER_LIFECYCLE_EVENTS], [
     'did-start-loading',
@@ -96,6 +100,77 @@ test('③ __host.deepLink 缺 url / 未注入汇 → loud 拒绝', () => {
     ok: false,
     error: 'sidecar-edges:deep-link-sink-unavailable',
   })
+})
+
+test('③b __host.debugModeApplied 命中注入汇；形状非法 / 未注入汇 → loud 拒绝', () => {
+  const seen: Array<{ enabled: boolean; inspectable: boolean; apiAvailable: boolean; reason?: string }> = []
+  const edges = makeEdges({ debugModeApplied: input => seen.push(input) })
+  assert.deepEqual(
+    edges.handleHostInbound(HOST_INBOUND.debugModeApplied, {
+      enabled: true,
+      inspectable: true,
+      apiAvailable: true,
+    }),
+    { ok: true },
+  )
+  assert.deepEqual(
+    edges.handleHostInbound(HOST_INBOUND.debugModeApplied, {
+      enabled: true,
+      inspectable: false,
+      apiAvailable: true,
+      reason: 'swift-edge-ui-unavailable:setDebugMode:no-window',
+    }),
+    { ok: true },
+  )
+  assert.deepEqual(seen, [
+    { enabled: true, inspectable: true, apiAvailable: true, reason: undefined },
+    {
+      enabled: true,
+      inspectable: false,
+      apiAvailable: true,
+      reason: 'swift-edge-ui-unavailable:setDebugMode:no-window',
+    },
+  ])
+  // 形状非法（缺 inspectable / 非布尔）一律 loud 拒绝，绝不默认成「已开启」。
+  assert.deepEqual(
+    edges.handleHostInbound(HOST_INBOUND.debugModeApplied, { enabled: true, apiAvailable: true }),
+    { ok: false, error: 'sidecar-edges:debug-mode-invalid-input' },
+  )
+  assert.deepEqual(
+    edges.handleHostInbound(HOST_INBOUND.debugModeApplied, {
+      enabled: 'yes',
+      inspectable: true,
+      apiAvailable: true,
+    }),
+    { ok: false, error: 'sidecar-edges:debug-mode-invalid-input' },
+  )
+  // reason 可选但必须真是字符串：非字符串是协议违例 → loud 拒绝（静默归一成 undefined
+  // 会让宿主失败原文无声消失，UI 只剩通用「不可用」文案）。空串 = 无原因（文档化）。
+  for (const bad of [42, null, {}, ['x'], true]) {
+    assert.deepEqual(
+      edges.handleHostInbound(HOST_INBOUND.debugModeApplied, {
+        enabled: true, inspectable: false, apiAvailable: true, reason: bad,
+      }),
+      { ok: false, error: 'sidecar-edges:debug-mode-invalid-reason' },
+      'reason=' + JSON.stringify(bad) + ' 必须 loud 拒绝',
+    )
+  }
+  assert.deepEqual(
+    edges.handleHostInbound(HOST_INBOUND.debugModeApplied, {
+      enabled: true, inspectable: false, apiAvailable: true, reason: '',
+    }),
+    { ok: true },
+  )
+  assert.equal(seen.at(-1)!.reason, undefined, '空串按「无原因」处理')
+  // 未注入汇（装配未完成）→ loud 拒绝，绝不静默丢弃（丢掉它设置页整场只显示「未知」）。
+  assert.deepEqual(
+    makeEdges().handleHostInbound(HOST_INBOUND.debugModeApplied, {
+      enabled: false,
+      inspectable: false,
+      apiAvailable: true,
+    }),
+    { ok: false, error: 'sidecar-edges:debug-mode-sink-unavailable' },
+  )
 })
 
 test('④ __host.rendererLifecycle 命中注入汇，未知事件 loud', () => {

@@ -53,6 +53,63 @@ public enum StartupSettings {
         }
     }
 
+    /// 读取 <userDataDir>/chamber-settings.json 的 debug.enabled（设置 → 通用 →
+    /// 更新区「调试模式」的启动对偶）。缺文件 → .missing（不动作、无日志）；损坏 →
+    /// .corrupt（loud + 不动作——绝不猜一个值去开检查器，也绝不静默关）；键缺失 =
+    /// false（Electron 默认同值）。文件级纪律与 readKeepAwake 完全同一套（含 no-follow、
+    /// inode 稳定性、重复键与编码拒绝）。
+    ///
+    /// S-41 辨析（为何不像 readStartupLaunchAtLogin 那样叠加 *.corrupt 副本判定）：
+    /// launchAtLogin 的 .missing 会被重放成「注销登录项」这一**进程外**副作用，所以
+    /// 必须区分「真缺失」与「损坏改名」；debug 的 .missing 是 no-op（不回写任何进程外
+    /// 状态，isInspectable 每进程重置），重放默认 false 与不动作在 release 下等价，
+    /// DEBUG 下保留 dev 默认开正是有意行为——故无需副本判定。
+    public static func readDebugEnabled(userDataDir: String) -> DebugReadOutcome {
+        switch readValidatedData(userDataDir: userDataDir) {
+        case .missing:
+            return .missing
+        case .corrupt(let reason):
+            return .corrupt(reason: reason)
+        case .ok(let data):
+            switch validatedSettingsRecord(fromJSON: data) {
+            case .corrupt(let reason):
+                // 整文件不可信 → **不动作**（与 readKeepAwake / readLaunchAtLogin 的
+                // .corrupt 同纪律，也与本文件注释「损坏 = loud + 不动作」一致）。绝不把
+                // 「读不懂」折成「按默认 false 真去关检查器」——那既是静默猜值，也会把
+                // DEBUG 构建的 dev 默认开悄悄关掉，还丢掉了 loud 告警。
+                return .corrupt(reason: reason)
+            case .ok:
+                return .ok(decodeDebugEnabled(fromJSON: data) ?? false)
+            }
+        }
+    }
+
+    /// 调试模式启动读取结果（与 keepAwake 的 ReadOutcome 同形，但值是嵌套键）。
+    public enum DebugReadOutcome: Equatable {
+        /// 文件不存在 → 默认关（不动作、无日志）。
+        case missing
+        /// 读取失败 / JSON / 形状损坏 → loud + 不动作。
+        case corrupt(reason: String)
+        /// 合法文件 → debug.enabled（缺键 = false）。
+        case ok(Bool)
+
+        /// 只有「合法文件」才有可用的持久意图；missing/corrupt 都读作「无意图」
+        /// （调用方按关处理，绝不猜值）。
+        public var enabledValue: Bool? {
+            if case .ok(let value) = self { return value }
+            return nil
+        }
+    }
+
+    /// 已校验字节 → debug.enabled（纯函数，单测直测；缺键/非布尔 → nil = 用默认 false）。
+    public static func decodeDebugEnabled(fromJSON data: Data) -> Bool? {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let record = object as? [String: Any] else { return nil }
+        guard let debug = record["debug"] as? [String: Any] else { return nil }
+        guard let raw = debug["enabled"] else { return nil }
+        return isBoolean(raw) ? ((raw as? NSNumber)?.boolValue ?? false) : nil
+    }
+
     /// 读取 <userDataDir>/chamber-settings.json 的 launchAtLogin（Electron
     /// main.ts:1434-1440 启动期重放的对偶）。键缺失 / 文件不可用 / 损坏 → nil（本层不动作，绝不猜一个值去
     /// 动登录项）；文件级纪律与 readKeepAwake 完全同一套（含 no-follow、inode
@@ -71,7 +128,7 @@ public enum StartupSettings {
         case .ok(let data):
             // 先跑整文件校验（编码/重复键/形状/已知键取值全规）再取键——与 keepAwake
             // 同一条纪律，绝不因为「只要一个键」就放行 Electron 判为损坏的文件。
-            guard case .ok = decodeKeepAwake(fromJSON: data) else { return nil }
+            guard case .ok = validatedSettingsRecord(fromJSON: data) else { return nil }
             return decodeLaunchAtLogin(fromJSON: data) ?? false
         }
     }
@@ -106,15 +163,18 @@ public enum StartupSettings {
         }
     }
 
-    /// JSON 数据 → keepAwake 决策（纯函数，单测直测）。
+    /// 整文件校验的公共出口（编码 / 重复键 / JSON / 顶层形状 / 已知键取值）。
     ///
-    /// **整文件形状**与 Electron readSettingsFile 的 isValidSettingsFile
-    /// （chamber-settings.ts:222-262）逐键同规：顶层非对象/非 JSON → corrupt；
-    /// 任一已知键类型或取值非法 → corrupt（跨键损坏同样意味着整个文件不可信，
-    /// 绝不因为 keepAwake 恰好合法就静默采信——只看 keepAwake 键会把
-    /// Electron 判为损坏的文件当合法读）；未知键容忍
-    /// （前瞻兼容）；keepAwake 缺省 = Electron 默认 false。
-    public static func decodeKeepAwake(fromJSON data: Data) -> ReadOutcome {
+    /// **为何单列**：keepAwake 与 debug 两条读取器都必须「先整文件判可信，再取自己的
+    /// 键」。此前 debug 读取器复用 decodeKeepAwake 当校验器——那是隐式耦合：哪天
+    /// invalidSettingsReason 从 decodeKeepAwake 挪走，debug 的整文件校验会**静默失效**
+    /// （它自己只查 debug.enabled 是不是布尔）。
+    enum ValidatedSettingsRecord {
+        case ok([String: Any])
+        case corrupt(reason: String)
+    }
+
+    static func validatedSettingsRecord(fromJSON data: Data) -> ValidatedSettingsRecord {
         // JSON.parse 只接受 UTF-8：任何 BOM（UTF-8/16/32）与裸 NUL 都必须判损坏，
         // 否则 JSONSerialization 的自动识别会把 Electron 判损坏的文件当合法
         // 读入（fail-open）。
@@ -136,8 +196,25 @@ public enum StartupSettings {
             return .corrupt(reason: "顶层不是 JSON 对象")
         }
         if let reason = invalidSettingsReason(record) { return .corrupt(reason: reason) }
-        guard let raw = record["keepAwake"] else { return .ok(keepAwake: false) }
-        return .ok(keepAwake: isBoolean(raw) ? (raw as? NSNumber)?.boolValue ?? false : false)
+        return .ok(record)
+    }
+
+    /// JSON 数据 → keepAwake 决策（纯函数，单测直测）。
+    ///
+    /// **整文件形状**与 Electron readSettingsFile 的 isValidSettingsFile
+    /// （chamber-settings.ts:222-262）逐键同规：顶层非对象/非 JSON → corrupt；
+    /// 任一已知键类型或取值非法 → corrupt（跨键损坏同样意味着整个文件不可信，
+    /// 绝不因为 keepAwake 恰好合法就静默采信——只看 keepAwake 键会把
+    /// Electron 判为损坏的文件当合法读）；未知键容忍
+    /// （前瞻兼容）；keepAwake 缺省 = Electron 默认 false。
+    public static func decodeKeepAwake(fromJSON data: Data) -> ReadOutcome {
+        switch validatedSettingsRecord(fromJSON: data) {
+        case .corrupt(let reason):
+            return .corrupt(reason: reason)
+        case .ok(let record):
+            guard let raw = record["keepAwake"] else { return .ok(keepAwake: false) }
+            return .ok(keepAwake: isBoolean(raw) ? (raw as? NSNumber)?.boolValue ?? false : false)
+        }
     }
 
     /// isValidSettingsFile 的逐键镜像；返回 nil = 合法（未知键一律容忍）。
@@ -171,6 +248,10 @@ public enum StartupSettings {
             for key in ["enabled", "onComplete", "onAsk", "onRequest"] {
                 if let value = nested[key], !isBoolean(value) { return "sessionTodo.\(key) 非布尔值" }
             }
+        }
+        if let debug = record["debug"] {
+            guard let nested = debug as? [String: Any] else { return "debug 非对象" }
+            if let value = nested["enabled"], !isBoolean(value) { return "debug.enabled 非布尔值" }
         }
         return nil
     }

@@ -73,6 +73,8 @@ export interface HostAssemblyDeps {
   settings: HostSettingsHolder
   setKeepAwake: ShellAssemblyCtx['setKeepAwake']
   setLoginItem: ShellAssemblyCtx['setLoginItem']
+  /** 调试模式副作用叶（解锁宿主原生检查器；回读见 ShellAssemblyCtx.setDebugMode）。 */
+  setDebugMode: ShellAssemblyCtx['setDebugMode']
   /** 退出在途事实（main：模块级 quitRequested；sidecar：本地 let）。 */
   isQuitting(): boolean
   /** 置位退出在途（dispose 第一步——与 flavor 自己的退出标志同源）。 */
@@ -906,6 +908,7 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     },
     setKeepAwake: enabled => deps.setKeepAwake(enabled),
     setLoginItem: enabled => deps.setLoginItem(enabled),
+    setDebugMode: enabled => deps.setDebugMode(enabled),
     isQuitting: () => deps.isQuitting(),
     transportManager: sm,
     audit,

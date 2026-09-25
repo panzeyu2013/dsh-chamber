@@ -33,8 +33,8 @@ let optimisticStatus: ChamberSettingsStatus | null = null
  *  and replaces the snapshot; an older save's result never flashes an intermediate value. */
 let saveSeq = 0
 
-/** Deep-merge a partial patch over a settings object (notifications and sessionTodo
- *  are nested blocks — a partial patch must never drop sibling keys). */
+/** Deep-merge a partial patch over a settings object (notifications, sessionTodo and
+ *  debug are nested blocks — a partial patch must never drop sibling keys). */
 function mergeSettings(base: ChamberSettings, patch: Partial<ChamberSettings>): ChamberSettings {
   return {
     ...base,
@@ -45,6 +45,7 @@ function mergeSettings(base: ChamberSettings, patch: Partial<ChamberSettings>): 
     sessionTodo: patch.sessionTodo !== undefined
       ? { ...base.sessionTodo, ...patch.sessionTodo }
       : base.sessionTodo,
+    debug: patch.debug !== undefined ? { ...base.debug, ...patch.debug } : base.debug,
   }
 }
 
@@ -104,8 +105,10 @@ export function subscribeSettings(listener: () => void): () => void {
  * (controls reflect the click in the same frame; no disabled/dimmed flash during the
  * IPC round-trip), then the main process validates, applies side effects (keep-awake /
  * login autostart), persists and pushes. Loud {error} on failure — never a silent fake
- * success; a failed patch is dropped from the overlay (the control snaps back). Only
- * the LATEST save's settle clears the overlay list and replaces the snapshot.
+ * success; a failed patch is dropped from the overlay (the control snaps back), and
+ * ONLY that patch: an older in-flight save may already have succeeded, so clearing the
+ * whole list on a newer failure would strand the UI on a value the host has changed.
+ * Only the LATEST save's SUCCESS clears the overlay list and replaces the snapshot.
  */
 export async function applySettingsPatch(
   patch: Partial<ChamberSettings>,
@@ -121,18 +124,22 @@ export async function applySettingsPatch(
   }
   try {
     const result = await api.set(patch)
+    if ('error' in result) {
+      // 失败：无论新旧，只丢**这一条** overlay。旧写法在「最新一次失败」时清空全表，
+      // 会连更早那条**已经成功**的在飞补丁一起清掉——它的结果不会再回写，外部 push
+      // 丢失时 UI 就停在已被宿主改掉的旧值上。失败也绝不假装成功。
+      dropOptimistic(seq)
+      return { ok: false, error: result.error, code: result.code }
+    }
     if (seq !== saveSeq) {
-      // An OLDER save settling: its authoritative value already landed via the push
+      // An OLDER save settling successfully: its authoritative value already landed via the push
       // (the newest save's settle replaces the snapshot) — keep the patch, no flash.
       return { ok: true, status: getSettingsStatus() as ChamberSettingsStatus }
     }
-    // The NEWEST save settles: every earlier in-flight patch was applied in order, so the result is final.
+    // The NEWEST save settles successfully: every earlier in-flight patch was applied in
+    // order, so the result is final — clear the overlay list and take the authoritative value.
     optimisticPatches = []
     recomputeOptimistic()
-    if ('error' in result) {
-      hydration.notify()
-      return { ok: false, error: result.error, code: result.code }
-    }
     hydration.replace(result)
     return { ok: true, status: result }
   } catch (error) {

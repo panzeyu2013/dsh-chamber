@@ -5,7 +5,7 @@
  */
 import type { AuditEvent } from './audit-log.ts';
 import type { ApplyNowGateInput } from './apply-now-gate.ts';
-import type { ChamberSettings } from './chamber-settings.ts';
+import type { ChamberSettings, DebugRuntimeReadBack } from './chamber-settings.ts';
 import type { ChamberHostPackageDescriptor } from './control-plane-module.ts';
 import type { ActivationJournalState, RuntimeAction, RuntimeOperationFence, StartupResult } from '@dsh-chamber/dsh-runtime';
 import type { DshRuntimeController, RuntimeLifecycleProjection } from './dsh-runtime-controller.ts';
@@ -104,6 +104,14 @@ export interface ShellAssemblyCtx {
    *  applySettingsPatch 的 catch 回滚（同步 throw 与异步 reject = 同一路径；
    *  await 吸收同步返回值，Electron 装配闭包无需 async 化）。 */
   setKeepAwake(enabled: boolean): void | Promise<void>
+  /** 调试模式副作用叶（解锁宿主原生检查器）：Swift = WKWebView.isInspectable
+   *  （Safari Web Inspector），Electron 本版未接线 → 回 {apiAvailable:false}。
+   *  返回【实测回读】——绝不按入参推断「已开启」：宿主腿失败也要把原因带回，
+   *  UI 据此显示错误行。双 flavor Promise 兼容（Swift await B 桥应答后回读；
+   *  Electron 同步返回）。 */
+  setDebugMode(enabled: boolean):
+    | DebugRuntimeReadBack
+    | Promise<DebugRuntimeReadBack>
   /** 登录自启副作用叶（装配侧注入现 applyLaunchAtLogin——HostEdges
    *  setLoginItem 的 main.ts 宿主腿；失败 {error} 返回，绝不 throw）。
    *  返回 `{ok:true}|{ok:false;error:string}` 或其 Promise（双 flavor

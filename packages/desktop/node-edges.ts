@@ -31,6 +31,10 @@ export const HOST_INBOUND = {
   rendererLifecycle: '__host.rendererLifecycle',
   quitFacts: '__host.quitFacts',
   nativeUpdatePhase: '__host.nativeUpdatePhase',
+  /** 调试模式启动期回读（shell→sidecar 单向事实）：Swift 在启动 reconcile 里按
+   *  持久值应用 isInspectable 后，把实测回读报给 sidecar，供 settings 投影在
+   *  用户打开设置页之前就带上 debugRuntime（否则首帧只能显示「未知」）。 */
+  debugModeApplied: '__host.debugModeApplied',
 } as const
 
 /** B 桥协议帧（行）字节上限，**双向**：与 Swift 侧 FrameCodec.maxFrameBytes /
@@ -106,6 +110,10 @@ export interface NodeEdgesDeps {
     quitRequested: boolean
     recoveryAvailable: boolean
   }) => { hideOnClose: boolean; quitNeedsConfirm: boolean; quitReasons: string[] }
+  /** 调试模式启动期回读汇（__host.debugModeApplied）：Swift 启动 reconcile 应用
+   *  isInspectable 后的实测回读 → core 的 debugRuntime holder。缺省未注入 →
+   *  loud 拒绝（绝不静默丢弃：丢掉它设置页整场只显示「未知」）。 */
+  debugModeApplied?: (input: { enabled: boolean; inspectable: boolean; apiAvailable: boolean; reason?: string }) => void
   /** 测试注入：非交互腿有界排队的重试间隔（缺省 5s）。 */
   nonInteractiveRetryDelayMs?: number
   /** 同步门缓存初始种子（可选；hostFacts 推送会覆盖）。 */
@@ -521,6 +529,29 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
           ok: true,
           result: deps.projectQuitFacts({ quitRequested, recoveryAvailable }),
         }
+      }
+      case HOST_INBOUND.debugModeApplied: {
+        const enabled = p.enabled
+        const inspectable = p.inspectable
+        const apiAvailable = p.apiAvailable
+        if (typeof enabled !== 'boolean' || typeof inspectable !== 'boolean' || typeof apiAvailable !== 'boolean') {
+          return { ok: false, error: 'sidecar-edges:debug-mode-invalid-input' }
+        }
+        // 可选 reason：缺省 = 无原因；**非字符串是协议违例 → loud 拒绝**（同文件
+        // nativeUpdatePhase 对 version/error 的纪律）。静默归一成 undefined 会让宿主
+        // 失败原文无声消失，UI 只剩通用「不可用」文案。载荷先验完再查汇，双坏帧时报
+        // 更具体的那个错。
+        if (p.reason !== undefined && typeof p.reason !== 'string') {
+          return { ok: false, error: 'sidecar-edges:debug-mode-invalid-reason' }
+        }
+        if (deps.debugModeApplied === undefined) {
+          // 生产装配恒注入该汇（sidecar-entry 的入站表）；本分支只在「装配未完成」
+          // 的异构/测试场景可达——保留为 loud 防御，绝不放行半装配的静默丢弃。
+          return { ok: false, error: 'sidecar-edges:debug-mode-sink-unavailable' }
+        }
+        const reason = typeof p.reason === 'string' && p.reason !== '' ? p.reason : undefined
+        deps.debugModeApplied({ enabled, inspectable, apiAvailable, reason })
+        return { ok: true }
       }
       case HOST_INBOUND.nativeUpdatePhase: {
         // 冻结接口校验：phase 必须八值枚举，version/error 必须 string/null（缺省 null）；非法形状 loud 拒绝。

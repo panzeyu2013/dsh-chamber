@@ -33,6 +33,14 @@ export interface ChamberNotificationSettings {
   badgeEnabled: boolean
 }
 
+/** 调试模式（设置 → 通用 → 更新区内）：开启后 Swift 原生壳把 WKWebView 的
+ *  isInspectable 置真，Safari「开发」菜单即可附着 Web Inspector；关闭立即收回。
+ *  默认关：开启 = 显式降低信任边界（本机可读写页面 DOM/console/网络、执行 JS）。
+ *  Electron 腿本版不接线（supported.debugInspectable=false 时 UI 禁用开关）。 */
+export interface ChamberDebugSettings {
+  enabled: boolean
+}
+
 /** 侧边栏「会话待办区」设置：顶部固定待办区（宽栏、空时零占用）的主开关与
  *  事件开关。默认全开——待办区是被动呈现，不是打扰型通知，默认值不同于
  *  notifications。 */
@@ -70,24 +78,48 @@ export interface ChamberSettings {
   notifications: ChamberNotificationSettings
   /** 侧边栏「会话待办区」（sidebar todo area）：侧边栏插件消费，主进程仅持久化。 */
   sessionTodo: ChamberSessionTodoSettings
+  /** 调试模式（见 ChamberDebugSettings）：宿主口（Swift isInspectable）副作用叶。 */
+  debug: ChamberDebugSettings
 }
 
 /** Non-secret status projection: current settings + platform capability gates. */
 export interface ChamberSettingsStatus {
   settings: ChamberSettings
-  supported: {
-    /** All shipping platforms support login autostart (design 14 D6; win32 =
-     *  HKCU Run key via setLoginItemSettings). */
-    launchAtLogin: boolean
-    /** false when no tray recovery surface exists (dev, no icons); darwin is
-     *  always safe (Dock icon recovery). */
-    closeToTray: boolean
-    /** 未读徽标平台能力（design 19 §3.7 / design 23 M3）：与 badge.ts 的
-     *  badgePlatformGate 同平台集合——win32 的任务栏 overlay 角标 v1 未接线，
-     *  设置页据此禁用开关并给出原因，绝不呈现一个永远无效的开关。 */
-    badgeSupported: boolean
+  supported: ChamberSettingsSupported
+  /** 调试模式的实测回读（非秘密）：宿主是否真的处于可检查态。缺省 = 本次进程
+   *  尚未应用过（UI 呈现「未知」，绝不按 enabled 推断）。嵌套字面量须与
+   *  preload/renderer 两份镜像逐字同形（守卫见 ipc-surface-mirror 的
+   *  debugRuntime 成员比较与本文件/镜像的顶层字段比较）。 */
+  debugRuntime?: {
+    inspectable: boolean
+    /** 平台/API 是否可用（macOS 13.3+；本仓下限 14.4 恒真）。 */
+    apiAvailable: boolean
+    /** 失败原因原文（可检查态未达成时）。 */
+    reason?: string
   }
 }
+
+/** 平台能力门的投影（ChamberSettingsStatus.supported 的形状；提为命名接口是为了
+ *  与 preload/renderer 的镜像面逐字段对齐——嵌套字面量在镜像守卫里会被摊平）。
+ *  后两个门是**可选**字段（跨版本契约，不是遗漏）：缺字段 = 主进程早于该门的版本。
+ *  消费端读法必须是不对称的——`badgeSupported` 缺失按「支持」，`debugInspectable`
+ *  缺失按「不支持」（禁用开关并给原因），因为呈现一个无效开关比少一个入口更糟。
+ *  生产端 computeSupported 恒发两个键。 */
+export interface ChamberSettingsSupported {
+  launchAtLogin: boolean
+  closeToTray: boolean
+  badgeSupported?: boolean
+  debugInspectable?: boolean
+}
+
+/** 调试模式的实测回读（宿主腿的诚实应答）：`inspectable` 是宿主真正处于可检查
+ *  态的事实（WKWebView.isInspectable 的回读），**不是**入参的回声；腿失败/无窗时
+ *  inspectable=false 且 `reason` 带原文。`apiAvailable` = 该平台有没有这条腿。
+ *
+ *  **单一来源** = ChamberSettingsStatus.debugRuntime 的内联字面量：镜像守卫会把嵌套
+ *  字段摊平比较，所以三份镜像那边必须保持内联文本；这里只做别名，避免同一形状出现
+ *  两份独立声明（改一处忘另一处 = 无守卫的静默漂移）。 */
+export type DebugRuntimeReadBack = NonNullable<ChamberSettingsStatus['debugRuntime']>
 
 export const DEFAULT_CHAMBER_SETTINGS: ChamberSettings = {
   windowCloseBehavior: 'hide-to-tray',
@@ -110,6 +142,9 @@ export const DEFAULT_CHAMBER_SETTINGS: ChamberSettings = {
     onAsk: true,
     onRequest: true,
   },
+  debug: {
+    enabled: false,
+  },
 };
 
 const SETTINGS_KEYS: ReadonlyArray<keyof ChamberSettings> = [
@@ -121,6 +156,7 @@ const SETTINGS_KEYS: ReadonlyArray<keyof ChamberSettings> = [
   'registryOrigin',
   'notifications',
   'sessionTodo',
+  'debug',
 ];
 
 /** Normalize a registry origin (design 18 M4): a valid https:// URL with no
@@ -367,6 +403,17 @@ function normalizeSessionTodoSettings(input: unknown): ChamberSessionTodoSetting
   return sessionTodo;
 }
 
+const DEBUG_SETTINGS_KEYS: ReadonlyArray<keyof ChamberDebugSettings> = ['enabled'];
+
+/** 嵌套 debug 归一：缺失/非法值回落默认（持久化读路径；响亮校验在 validatePatch）；非对象整组回落。 */
+function normalizeDebugSettings(input: unknown): ChamberDebugSettings {
+  const debug: ChamberDebugSettings = { ...DEFAULT_CHAMBER_SETTINGS.debug };
+  if (!isPlainRecord(input)) return debug;
+  const record = input as Record<string, unknown>;
+  if (typeof record.enabled === 'boolean') debug.enabled = record.enabled;
+  return debug;
+}
+
 /** Validate and normalize an unknown settings payload; unknown keys ignored. */
 export function normalizeSettings(input: unknown): ChamberSettings {
   const base: ChamberSettings = { ...DEFAULT_CHAMBER_SETTINGS };
@@ -386,6 +433,9 @@ export function normalizeSettings(input: unknown): ChamberSettings {
   }
   if (record.sessionTodo !== undefined) {
     base.sessionTodo = normalizeSessionTodoSettings(record.sessionTodo);
+  }
+  if (record.debug !== undefined) {
+    base.debug = normalizeDebugSettings(record.debug);
   }
   return base;
 }
@@ -429,6 +479,13 @@ function isValidSettingsFile(input: unknown): input is Record<string, unknown> {
     for (const key of ['enabled', 'onComplete', 'onAsk', 'onRequest'] as const) {
       if (nested[key] !== undefined && typeof nested[key] !== 'boolean') return false;
     }
+  }
+  // Nested debug shape: same discipline.
+  if (record.debug !== undefined) {
+    const debug = record.debug;
+    if (!isPlainRecord(debug)) return false;
+    const nested = debug as Record<string, unknown>;
+    if (nested.enabled !== undefined && typeof nested.enabled !== 'boolean') return false;
   }
   return true;
 }
@@ -541,15 +598,21 @@ export function closeToTrayRecoveryAvailable(
  *  win32 via the HKCU Run key). `badgeSupported` mirrors the badge.ts platform
  *  gate: the unread badge is wired on macOS (Dock) and Linux only, so the
  *  settings page must disable the switch instead of offering one that can never
+ *  take effect. `debugInspectable` is the debug-mode gate: the inspecting leg is
+ *  WKWebView.isInspectable (Safari Web Inspector), which only the Swift native
+ *  shell has — the Electron leg wires no debug surface in this version, so its
+ *  switch is disabled with a reason rather than offering a switch that can never
  *  take effect. */
 export function computeSupported(
   platform: NodeJS.Platform,
   trayAvailable: boolean,
-): ChamberSettingsStatus['supported'] {
+  flavor: 'electron' | 'swift' = 'electron',
+): ChamberSettingsSupported {
   return {
     launchAtLogin: true,
     closeToTray: closeToTrayRecoveryAvailable(platform, trayAvailable),
     badgeSupported: platform === 'darwin' || platform === 'linux',
+    debugInspectable: flavor === 'swift',
   };
 }
 
@@ -725,6 +788,10 @@ export function validatePatch(
       const validated = validateSessionTodoSettingsPatch(record[key]);
       if (!validated.ok) return validated;
       (result as Record<string, unknown>)[key] = validated.patch;
+    } else if (key === 'debug') {
+      const validated = validateDebugSettingsPatch(record[key]);
+      if (!validated.ok) return validated;
+      (result as Record<string, unknown>)[key] = validated.patch;
     } else if (typeof record[key] !== 'boolean') {
       return { ok: false, error: `${key} must be a boolean` };
     } else {
@@ -776,6 +843,27 @@ function validateSessionTodoSettingsPatch(
     }
     if (typeof record[key] !== 'boolean') {
       return { ok: false, error: `sessionTodo.${key} must be a boolean` };
+    }
+    (result as Record<string, unknown>)[key] = record[key];
+  }
+  return { ok: true, patch: result };
+}
+
+/** 嵌套 debug patch 校验：非数组对象，enabled 布尔；未知嵌套键拒绝（缺字段 = 不修改）。 */
+function validateDebugSettingsPatch(
+  input: unknown,
+): { ok: true; patch: Partial<ChamberDebugSettings> } | { ok: false; error: string } {
+  if (!isPlainRecord(input)) {
+    return { ok: false, error: 'debug must be an object' };
+  }
+  const record = input as Record<string, unknown>;
+  const result: Partial<ChamberDebugSettings> = {};
+  for (const key of Object.keys(record)) {
+    if (!(DEBUG_SETTINGS_KEYS as readonly string[]).includes(key)) {
+      return { ok: false, error: `unknown debug key: ${key}` };
+    }
+    if (typeof record[key] !== 'boolean') {
+      return { ok: false, error: `debug.${key} must be a boolean` };
     }
     (result as Record<string, unknown>)[key] = record[key];
   }

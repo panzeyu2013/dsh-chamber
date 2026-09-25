@@ -151,6 +151,8 @@ final class HostInboundMethodTests: XCTestCase {
             ("notifyClicked", HostInboundMethod.notifyClicked),
             ("systemResume", HostInboundMethod.systemResume),
             ("mainWindowShown", HostInboundMethod.mainWindowShown),
+            ("debugModeApplied", HostInboundMethod.debugModeApplied),
+            ("nativeUpdatePhase", HostInboundMethod.nativeUpdatePhase),
         ] {
             XCTAssertTrue(
                 source.contains("\(name): '\(literal)'"),

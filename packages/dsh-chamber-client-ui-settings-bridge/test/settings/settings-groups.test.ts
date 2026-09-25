@@ -187,3 +187,58 @@ test('badge capability: GeneralView disables the badge toggle and shows the reas
   assert.match(generalViewSource, /!badgeSupported && \(/);
   assert.match(generalViewSource, /t\('generalNotificationsBadgeUnsupported'\)/);
 });
+
+// --- 调试模式（T-10：Swift 原生壳的 WKWebView.isInspectable；落点在「更新」组内） ---
+
+const updateSectionSource = readFileSync(
+  join(import.meta.dirname, '..', '..', 'src', 'client', 'UpdateSection.tsx'),
+  'utf8',
+);
+
+test('debug capability: the row lives inside UpdateSection (the「更新」group, user ruling)', () => {
+  assert.match(updateSectionSource, /<DebugModeRow t=\{t\} \/>/);
+});
+
+test('debug capability: the row routes every decision through the pure gate module', () => {
+  // 结构锚（pin 函数调用与状态接线，不 pin 文案分支）：呈现决策 = 纯函数，组件只做
+  // t(statusKey) 与描边——行为面由 debug-mode-gate.test.ts 的真值表覆盖。
+  assert.match(updateSectionSource, /debugSupported\(status\?\.supported\)/);
+  assert.match(updateSectionSource, /debugStatusKind\(runtime, enabled\)/);
+  assert.match(updateSectionSource, /debugToggleDisabled\(\{ hydrated, supported, saving \}\)/);
+  assert.match(updateSectionSource, /debugFactsCard\(\{ kind, saving, reason: runtime\?\.reason \}\)/);
+  assert.match(updateSectionSource, /debugFactsCardVisible\(\{/);
+});
+
+test('debug capability: switch/card/state wiring is pinned (no reversed switch, no swallowed error)', () => {
+  // 这些是 JSX 侧接线：没有渲染测试框架（不新增依赖）时用文本锚挡住「开关反向 / 卡片
+  // 该藏不藏 / 错误被吞 / 在飞门失效」四类用户可见回归。
+  assert.match(updateSectionSource, /checked=\{enabled\}/);
+  assert.match(updateSectionSource, /\{factsVisible && \(/);
+  assert.match(updateSectionSource, /\{facts\.statusKey !== null && \(/);
+  assert.match(updateSectionSource, /\{facts\.showEnableHints && \(/);
+  assert.match(updateSectionSource, /\{saveError !== null && \(/);
+  assert.match(updateSectionSource, /setSaving\(true\)/);
+});
+
+test('debug capability: the unsupported copy is only claimed when the capability fact is known', () => {
+  // 未水合（supported 未知）不得断言「当前壳不支持」。
+  assert.match(updateSectionSource, /!hydrated \|\| supported \? t\('debugModeDesc'\) : t\('debugModeUnsupported'\)/);
+});
+
+test('debug capability: the patch rides as a partial nested block through applySettingsPatch', () => {
+  assert.match(updateSectionSource, /applySettingsPatch\(\{ debug: \{ enabled: next \} \}\)/);
+});
+
+test('debug capability: the in-flight save gate is wired to the switch', () => {
+  assert.match(updateSectionSource, /disabled=\{disabled\}/);
+  assert.match(updateSectionSource, /\.finally\(\(\) => setSaving\(false\)\)/);
+});
+
+test('debug capability: every dictionary key is consumed by the row (no dead key)', () => {
+  for (const key of [
+    'debugModeLabel', 'debugModeDesc', 'debugModeUnsupported', 'debugModeStatusOn',
+    'debugModeStatusUnknown', 'debugModeStatusError', 'debugModeSafariHint', 'debugModeWarning',
+  ]) {
+    assert.match(updateSectionSource, new RegExp("t\\('" + key + "'"), key + ' 未被 UpdateSection 消费')
+  }
+});
