@@ -3,8 +3,9 @@
 //
 //  覆盖：`__host.quitFacts` 决策解码（形状严格 / 非法 → nil 保守路径）、
 //  关窗动作映射、确认文案（main.ts before-quit 逐字）、退出单飞/确认门
-//  （QuitGate 状态迁移）、退出确认框的 Enter/Esc 按键语义（真实
-//  runModal + 合成按键，无需人工交互，5s 兜底防挂死）。其余 AppKit 执行面
+//  （QuitGate 状态迁移）、退出确认框的按键映射纯函数（36/76/53 → 取消，其余放行），
+//  以及真实 runModal 的 Enter/Esc 语义（合成按键，无需人工交互，5s 兜底防挂死；
+//  不投未处理键——那会触发 AppKit 的系统警告音）。其余 AppKit 执行面
 //  （orderOut / terminate 链）不在单测范围。
 import XCTest
 @testable import DSHChamber
@@ -174,14 +175,24 @@ final class QuitCoordinatorTests: XCTestCase {
         NSApplication.shared.postEvent(event, atStart: false)
     }
 
-    /// 跑真实 runModal（无人工交互）：先投一个中性键（x，必须原样放行、不结束
-    /// 模态），再投 Esc；5s 兜底 stopModal(third) 防回归挂死。Esc 必须返回第二
-    /// 按钮 = 安全项「取消」（Electron cancelId=1）。
+    /// 键映射纯函数：三个「取消」键（Return / 小键盘 Enter / Esc）映射到安全项，
+    /// 其余键必须原样放行（nil）。取代旧版往真实模态里投中性键的做法——AppKit 对
+    /// 未处理键会响系统警告音，测试不该制造它。
+    func testQuitConfirmationKeyMappingPassesOtherKeysThrough() {
+        for code: UInt16 in [36, 76, 53] {
+            XCTAssertEqual(AppDelegate.quitConfirmationResponse(forKeyCode: code), .alertSecondButtonReturn,
+                           "键码 \(code) 必须映射到安全项「取消」")
+        }
+        for code: UInt16 in [7, 48, 123, 255] {
+            XCTAssertNil(AppDelegate.quitConfirmationResponse(forKeyCode: code),
+                         "键码 \(code) 不在取消集，必须原样放行")
+        }
+    }
+
+    /// 跑真实 runModal（无人工交互）：投 Esc；5s 兜底 stopModal(third) 防回归挂死。
+    /// Esc 必须返回第二按钮 = 安全项「取消」（Electron cancelId=1）。
     func testQuitConfirmationEscapeReturnsCancelResponse() {
         let alert = Self.twoButtonQuitAlert()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            Self.postKey(code: 7, characters: "x", windowNumber: alert.window.windowNumber)
-        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             Self.postKey(code: 53, characters: "\u{1b}", windowNumber: alert.window.windowNumber)
         }

@@ -739,18 +739,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// 落到第一个按钮）。故两个键都由模态期一次性本地 keyDown 监视器映射为
     /// .alertSecondButtonReturn：stopModal(withCode:) 使 runModal() 以该响应返回，
     /// 事件被吞掉（不触发系统警告音）；其余键原样放行。
+    ///
+    /// 映射本身是纯函数（见 quitConfirmationResponse(forKeyCode:)），单测直接钉住它——
+    /// 往真实模态里投「未处理键」会触发 AppKit 的系统警告音，不该由测试来制造。
     static func runQuitConfirmationAlert(_ alert: NSAlert) -> NSApplication.ModalResponse {
-        // 36 = Return，76 = 小键盘 Enter，53 = Esc。
-        let cancelKeyCodes: Set<UInt16> = [36, 76, 53]
         let monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard cancelKeyCodes.contains(event.keyCode) else { return event }
-            NSApplication.shared.stopModal(withCode: .alertSecondButtonReturn)
+            guard let response = Self.quitConfirmationResponse(forKeyCode: event.keyCode) else { return event }
+            NSApplication.shared.stopModal(withCode: response)
             return nil
         }
         defer {
             if let monitor { NSEvent.removeMonitor(monitor) }
         }
         return alert.runModal()
+    }
+
+    /// 退出确认框的键映射（纯函数）：36 = Return，76 = 小键盘 Enter，53 = Esc
+    /// ⇒ 安全项「取消」（.alertSecondButtonReturn）；其余 nil = 原样放行。
+    static func quitConfirmationResponse(forKeyCode keyCode: UInt16) -> NSApplication.ModalResponse? {
+        let cancelKeyCodes: Set<UInt16> = [36, 76, 53]
+        return cancelKeyCodes.contains(keyCode) ? .alertSecondButtonReturn : nil
     }
 
     /// `__host.quitFacts` 不可得（超时/调用失败/解码失败）且 sidecar
