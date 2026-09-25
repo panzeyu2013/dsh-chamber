@@ -1,6 +1,6 @@
 {
   "name": "@dsh-chamber/renderer",
-  "version": "0.4.0-beta.1",
+  "version": "0.4.0-beta.2",
   "private": true,
   "type": "module",
   "exports": {
@@ -20,6 +20,7 @@
     "@dsh-chamber/dsh-chamber-client-ui-layout": "workspace:^",
     "@dsh-chamber/dsh-chamber-client-ui-open-in": "workspace:^",
     "@dsh-chamber/dsh-chamber-client-ui-sidebar": "workspace:^",
+    "@dsh-chamber/dsh-chamber-client-ui-settings-plugin-manager": "workspace:^",
     "@dsh-chamber/dsh-stream-state": "workspace:^",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

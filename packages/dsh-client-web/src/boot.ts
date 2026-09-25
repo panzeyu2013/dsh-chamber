@@ -23,6 +23,7 @@ import type {
 import * as UiRenderer from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { BootPage } from './boot-page.ts'
 import { MODULES_ID, UI_RENDERER_ID, composeBootRows } from './boot-rows.ts'
+import { registerExtraChunkOwners } from './extra-chunk-owners.ts'
 import { classifySweepEntry } from './boot-tolerance.ts'
 import { getStaticModules } from './seed.ts'
 import { STATE_LABELS } from './loader-status.ts'
@@ -126,6 +127,7 @@ export class AppWebEntry {
       // preloading any bundle, so run() adopts the parked instance (which also skips
       // the duplicate bootstrap registration).
       this.modules = ensureWebModuleSystem(this.seams)
+      registerExtraChunkOwners(this.modules, this.extraRows)
       this.manifest = this.modules.manifest
       perfMark('dsh:boot:run-start')
 

@@ -243,6 +243,7 @@ const AUDITED_DEFERRED_ONLY_SERVICES: readonly string[] = [
   'jobs', 'modules',
   'remote.goals', 'remote.skills', 'remote.messageFeedback', 'remote.sessionFeedback',
   'remote.agentPresets', 'remote.credentials', 'remote.llm', 'remote.pluginInventory',
+  'remote.pluginManager', 'remote.pluginRegistryProbe',
   'remote.permissionPresets', 'remote.fileReferences', 'remote.sessionReferenceResolver',
   'resources', 'sidebarRightTabs', 'settingsSchema',
 ]

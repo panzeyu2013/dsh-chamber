@@ -123,6 +123,7 @@ export const GROUPS = {
   'archive-purge': [
     'test/archive-purge/archive-purge.test.ts',
     'test/archive-purge/purged-tracker.test.ts',
+    'test/archive-purge/purged-session-store.test.ts',
   ],
   // leading: the frame's window-chrome seat occupant that keeps the reopen control
   // reachable while the macOS collapse hides the whole column (design 05 §2): the

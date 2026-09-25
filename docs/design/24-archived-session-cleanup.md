@@ -893,7 +893,8 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.7-rc.2 477b4f42
   （含 `current`）中过滤，直到原始 summaries 不再列出该 id、或它重新入集合（**无**「resolve
   即释放」阀，见 F2）。诚实性依据：宿主 `core.ts` 的 `clearIds` 只含**内容删除成功**的树与
   无记录孤儿（集合写失败时 id 留在集合 ⇒ 永不布防），故「离开归档集合 ⇔ 内容已不存在」；
-  首次观测永不布防（新 boot 的 summaries 本就干净）。过滤在签名计算**之前**完成；无过滤时
+  首次 archive-set 观测本身永不推断集合收缩；跨 renderer 重启或首次升级的 summaries 另由 F5 的
+  session.list 基线校验处理。过滤在签名计算**之前**完成；无过滤时
   返回同一数组引用。**与常驻保留的关系**：常驻保留的根**从不离开集合** ⇒ 不收缩、
   不布防墓碑；它们的行由归档过滤（`sessionVisible` / 官方导航同款）继续遮住。F1/F2 仍覆盖
   非常驻幽灵行（清标记 + 官方 summaries 滞留）。
@@ -919,6 +920,20 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.7-rc.2 477b4f42
   快照集合 ⇒ `archiveSetShrink` 恒为 []（F3(a) 死代码）。
 - **F4 宿主 registry-global 孤儿清扫**：见 §4 step 5（`clearedOrphanMembers?` 计数在管理器
   settle 文案呈现）。
+- **F5 跨重启与首升级幽灵行收敛**（`purged-tracker.ts` + sidebar 的
+  `purged-session-store.ts`）：mounted summaries 到达 `ready` 后，以来源自己的 unary
+  `session.list` 校验旧行；连接重置会重新校验，失败最多重试 4 次，仍失败只告警、不删除行，并等待
+  下次连接代。archive-shrink 墓碑与上次 host-authoritative session id 集合按
+  `(instanceId, sourceFingerprint)` 保存于 renderer 本地存储，id 数量有界、不存会话内容或凭据；墓碑在
+  官方 summaries 真正移除该行或归档集重新包含该 id 时才释放。首次升级尚无已保存 baseline 时，候选行取
+  官方当前 summaries 与 host `session.list` 的差集，但仅限非运行、非空白、且非最近 60 秒活跃的行；这能清掉
+  旧版本留下的已删除/已 purge 摘要，同时避开新建/活跃会话的短暂落盘竞态。被保护的差集行在最近活动宽限
+  结束后再做一次权威核验；运行中/空白行等官方 summary 状态变化后再核验，不做常驻轮询。识别出的幽灵行在
+  bridge 快照与 runtime facts 发布前过滤，并触发官方 `sessions.refresh()` 有界收敛；探测暂不可用时保留
+  可见行，下一次 connection/reset 再试。
+  **Rejected alternatives**：只用页内墓碑会在 renderer 重启后重现；直接改官方私有 summaries 会令官方
+  store 与 chamber 快照分裂；无条件隐藏首轮扫描差集会误伤正在创建的会话。选择来源隔离的有界 id 状态、
+  首升级候选保护与宿主权威 scan；对宽限保护项只做活动截止驱动的复核，不以常驻扫描换取收敛。
 - App 状态机与归档管理器触发点**全部保留**：正常 purge 路径下 F1 过滤后
   `planSessionListRefresh` 看不到行（`kept=[]` ⇒ 不再请求），但它与 F3 一起覆盖「生产端未
   布防 / 首次观测即 post-purge」的形态。
@@ -1025,7 +1040,7 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.7-rc.2 477b4f42
     （`archive.manager.empty`）而**不报错**——行与标注保持原样（幂等），但空态文案与列表里仍
     有的行同现，需打包版目检确认读起来不困惑；
     (b) **管理器标注只在对话框生命周期内**——`residentPurged` 是对话框本地状态（不持久化，
-    遵守"客户端不新增持久状态"纪律）：重开对话框后那行仍在列表里但没有标注（内容确已删除，
+    与 F5 独立的幽灵行 id 状态无关）：重开对话框后那行仍在列表里但没有标注（内容确已删除，
     只是少了说明）；跨开关持久须另行设计（方向：宿主把"内容已清理"做成可读事实，属本域"无
     读取面"边界之外的动议，需重新走 §2 例外评审）；
     (c) **多客户端各自为政（仅标注面）**——保留发生在宿主、对所有客户端一致（选宿主方案的

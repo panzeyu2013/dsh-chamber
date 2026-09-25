@@ -77,12 +77,13 @@ test('registry 值锁：分类桶形状 + 符号锚字符串（防"同计数下�
   // rc.2 触点漂移后的当前事实：connection patched 10 / dropped 2（tests/、tsdown.config.ts；
   // src/client/fixture.ts 不再单列），client-web dropped 5（apply-injections / boot-client /
   // mount / tests / tsdown.config.ts）。
-  // seed-open-in / client-web 的 own 含 scripts/test.mjs（测试清单统一委托共享 runner）。
+  // seed-open-in / client-web 的 own 含 scripts/test.mjs（测试清单统一委托共享 runner）；
+  // client-web 另以 own 登记 extra-chunk-owners.ts（design 09 动态 chunk 边界）。
   // layout（chamber-named 副本，seed.dsh-chamber-client-ui-layout）：patched 5 / own 4 /
   // ownPrefix 1 / dropped 11（frame 面深引 vendor 源、不镜像；死 tsdown.config.ts 由 P6 删除后归 dropped）。
   assert.equal(
     createHash('sha256').update(JSON.stringify(shape)).digest('hex').slice(0, 16),
-    '6c5284a6beff8edd',
+    '77efc2d34aeb7ec9',
     '分类桶形状变了（桶间搬家或增删文件）——必须同批改本断言的哈希；当前形状：' + JSON.stringify(shape),
   )
   assert.deepEqual(
@@ -137,7 +138,7 @@ test('verifierForks 与迁移前内嵌 FORKS 同形：顺序、路径、分类�
   ])
   assert.deepEqual(
     forks.map((fork) => [Object.keys(fork.patched).length, Object.keys(fork.own).length, fork.ownPrefix.length, fork.dropped.length]),
-    [[10, 4, 4, 2], [9, 3, 1, 5], [7, 7, 1, 9], [4, 4, 1, 6], [5, 5, 1, 11], [11, 1, 3, 4]],
+    [[10, 4, 4, 2], [9, 4, 1, 5], [7, 7, 1, 9], [4, 4, 1, 6], [5, 5, 1, 11], [11, 1, 3, 4]],
   )
   assert.equal(forks[3].versionAnchor, 'chamber')
   assert.equal(forks[4].versionAnchor, 'chamber')

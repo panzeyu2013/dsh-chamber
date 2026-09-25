@@ -105,6 +105,11 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   的图标簇节奏——「4px = G1-4 两个 24px 命中盒的下限」一说已随 的命中盒整体
   回退作废)；纵向（footer.action 行 ↔ settings 座）仍按官方契约由 occupant 自己的 margin
   承担（settings 触发器 `margin: 4px -2px` / rail `8px 0 10px` 即既有先例）。
+- **插件管理入口**：永久插件开关归入「设置 → 内置插件」的独立「插件管理」分页，复用上游
+  `dsh-client-ui-plugin-manager` 的页面、控制器和配置表单；该上游包只由 chamber 替换面承载，
+  不注册 `sidebar.panellist`，侧栏保持会话导航用途。
+  **Rejected alternatives**：保留侧栏插件行会把一个设置开关伪装成常驻导航功能；另写一套管理页会
+  分叉上游安装、启用和配置行为。两者都由复用原管理器并迁入内置插件分页取代。
 - 当前活动来源以视觉强调（如行高亮/侧边标记），与其余来源同列表呈现。
 - 来源分组头可**点击**（非当前来源）→ 切到该来源 shell（不打开会话；见 §2.2）。
 
@@ -242,6 +247,15 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 - **首屏基线收割（`packages/renderer/src/baseline-harvest.ts`）**：首启仅 local 挂载 + 1 个不轮转预热槽、被回收来源点击前禁预热 ⇒ N-1 个 ready 远程源稳态停留在 unary 兜底视图（合成 cwd 分组 + 空归档集），自愈臂均要求 `mounted===true`（至少推过一次快照）。收割把这类来源在同一后台预热槽挂一次，首个权威推送（真实分组 + 归档集，`archiveSetKnown:true`）后即回收，转入"已回收来源"态（保留权威聚合，会话行由 30s unary merge 刷新）。纪律：收割候选优先于普通预热且不受"回收后禁预热"抑制；每源尝试上限 2 次、失败退避 120s、挂载后 `BOOT_TIMEOUT_MS+15s` 无推送且壳已 settle 判失败并释放槽位（截止值由 `boot-budget.ts` 的 boot 预算推导且高于它）；`HARVEST_ABANDON_MS`（截止值 + boot 预算）为绝对放弃上限：壳始终不 settle（挂死的 loader/fetch）时回收并停用该源（`harvestParked`）。语义边界：回收只拆**已注册**壳；从未注册的 boot 只能自行 settle 时拆除（页面生命周期内可残留），同 id 后续挂载不受影响（shell.ts 对"上一代 boot"的等待有 boot 预算上限）。同一上限也独立看管"在途挂载"（按挂载时刻、仅未 settle 的挂载，不依赖收割意图；已 settle 者仍走截止臂）。同 id boot 尾从不提前释放（generation 记录持有者，提前释放会致同号注册覆盖）；改由 shell.ts 对"等待上一代 boot"设绝对上限（前代起始 + 两个 boot 预算，后继共享同一截止）；producer 注册表按代际栅栏（`chamberBootGeneration` 经 ctx 注入），迟到的老 boot 注册作废，teardown 不能清空健康后继通道。活动/待开视图不可回收——标记失败，让既有失败覆盖层与「重试」出现；在途壳不计入 retention 隐藏壳数。存在任一收割候选时，候选集独占后台槽（`prewarmCandidates` 只返回收割候选且返回全部候选，含排在退避候选之后的"退避已满"者）；尝试耗尽且从未拿到基线的源（`harvestParked`）不得退回普通预热；托管 dsh 终态停机或瞬态 starting/restarting 的 gateway 源（投影事实 `managedRuntimeUnusable`）不预热/不收割（boot 必然 503）；用户点开正在收割的视图 = 采用（撤销收割意图，绝不回收）；来源退役时账本同源收敛。稳态 ≤1 个后台壳（含预热）。**收割独立预算线**：温壳使普通预热槽位预算恒为 0（retention 只保 1 个隐藏壳），收割壳不受其约束；代价是最坏多一个隐藏壳（用户温壳 + 收割壳）在收割窗口内共存。**代价与已知取舍**：首启每个 ready 来源各付一次后台 boot（N 次，串行于全局 boot 链，最坏受 60s boot 预算约束）；最后收割的壳保留为温壳（不额外付预热 boot，挂载期状态事实 pending/完成点保持在线），但遇到新收割候选必须**让位**（`shouldReclaimHarvestedShell`）——否则它作为 `autoPrewarmed` 占住唯一槽位（`remaining` 恒 0）。
 - **未挂载来源的 unary 兜底表达不了"空工作区"**（修订，§2.2.1）：`fetchInstanceSnapshot` 只调 `session.list`，工作区分组由会话 cwd 反推（`__cwd__:` 合成行），刚建好、无会话的工作区在结构上不可见；已推送来源更彻底：聚合保留 pushed 工作区集（mounted merge），`planAggregateRefreshes` 只刷新"刚 ready"或"从未推送过"的来源，对它连 unary 轮询都不再发生。根因是**读通道缺失**：权威工作区集合只存在于挂载壳的 `workspace/follow` 基线（宿主把 `upsert` 广播给所有活跃 follower），chamber 补法是用户那次创建的回声（§2.2.1）——不新增 wire 读通道，也不把工作区事实搬进控制面。
 - **本修订的代码落点**：`packages/dsh-chamber-client-core/src/open-intent.ts`（意图槽 + 投影/揭示纯规则）、`packages/dsh-chamber-client-core/src/aggregate-store.ts`（桥接单例 + 回声事实通道：`WorkspaceCreatedFact`/`reportWorkspaceCreated` 等）、`packages/dsh-chamber-client-core/src/workspace-echo.ts`（回声账本 + union/去重/锚点插入纯规则）、`packages/dsh-chamber-client-core/src/workspace-mutations.ts`（**唯一事实出口**：create/delete/rename 的 wire 调用与回声事实 第二入口收口）、`.../src/client/early-open.ts`（boot 期早开臂）、`.../src/client/index.ts`（每个 ctx 挂一次早开臂）、`.../src/client/SidebarRoot.tsx`（三个变更点经唯一出口，自身不再直接上报）、`packages/dsh-chamber-client-ui-git/src/shared/coordinator.ts`（Git create / adopt / recovery 经唯一出口；create 带位置锚点，flag/未注册块由 beforePublish 装饰）、`packages/renderer/src/App.tsx`（arm/release、账本与退休含锚点、投影门、揭示门判定、holdVeil 传入）、`packages/renderer/src/components/InstanceView.tsx`（遮罩合成）、`packages/renderer/src/shell.ts`（被取代请求的丢弃：`lastRequestedSession`）。
+
+**归档/删除后的侧栏幽灵行**：生产端仍从来源自己的官方 summaries 投影，但每次 mounted 基线就绪及
+连接重置后会用独立 unary `session.list` 校验；归档收缩墓碑跨 renderer 重启保存在按
+`(instanceId, sourceFingerprint)` 隔离的有界本地状态中。首升级没有历史墓碑时，只清理宿主列表缺失且
+非运行、非空白、非近期活跃的旧摘要；运行中、新空白或近期活动会话不会因一次创建竞态被隐藏。过滤在
+侧栏快照与运行事实发布前完成，官方列表收敛后撤销墓碑。状态只含有界 session id，不含内容或凭据。
+**Rejected alternatives**：只保留页内归档墓碑会在 renderer 重启后复现幽灵行；直接改上游私有 summaries
+会和官方 store 分裂；无条件隐藏所有首轮 host scan 缺失项会误伤刚创建或未落盘的会话。选择持久化有界
+墓碑并对首次迁移候选做活跃态保护。
 
 ## 3. 桥接层（chamberBridge，renderer 共享单例）
 
@@ -644,6 +658,7 @@ settle 时拆除)，风险超窗，登记后续项；② 只下调 `HARVEST_ABAN
 ## 5. 连接设备页
 
 - chamber 自研插件包 `packages/dsh-chamber-client-ui-settings-connections`（`@dsh-chamber/dsh-chamber-client-ui-settings-connections`）：连接页是设置壳的**固定 nav 入口**（`__connections`，分隔线之下、不占 ledger order），**不是** `settings.section` 注册（该 host-ctx 注册已移除，无第二个连接页）；插件只提供该页字典命名空间与分节组件（`ConnectionsSection.tsx`）。
+- chamber 自研插件包 `packages/dsh-chamber-client-ui-settings-plugin-manager`：复用官方插件管理页面、控制器与配置 ledger，作为 `settings.plugins.tab` occupant 注册在「设置 → 内置插件」；不提供侧栏 panel。
 - 「dsh 运行时」段（design 18 §3.6/§9，per-server）：chamber 自研 `settings.section`（id `dsh-runtime`，order 31，由设置壳 settings-bridge 的 `registerRuntimeSection` 注册）挂在**该来源自己 boot ctx 的 ledger**（完整桥接修订；随 `chamberBridge` roster 投影 reconcile），紧随 agent-presets 渲染。local = 完整运行时管理面；gateway = 经反代触达该 gateway 的 `/chamber/runtime`；**dsh 直连（ssh/http）= 不挂载**（无 `/chamber` 面、无 ssh exec 管理通道，不渲染该分节；18 §3.6 / AGENTS / design 17 §3 同口径），也不再位于 chamber 全局「客户端」视图（design 15 的 `__general` 控制组不含运行时块）。
 - **「重启 dsh」动作只在本地与 gateway 两源**（design 18 §3.6 项 8，刷新插件挂载）：local = 控制面事务接口 `restartLocal()`（design 18 §9.3，与健康状态机重启单飞行串行化——**不是**连接页裸启动/停止的组合）；gateway = `POST /chamber/runtime/restart`（经 `/api/i/gateway-<id>/chamber/*` 反代，202 + status 轮询）+ `POST /chamber/runtime/start`（design 21 决策 12 停机恢复：stopped/error/restart-exhausted，卡片「启动实例」入口）。二次确认 + 状态行，与健康状态机 `restarting` 单飞行互斥、applying 期间禁用。**确认门只有一个**（upstream-alignment T2；accept 复验与时限见 review-fix F2/F4b）：本地重启与**全部** gateway 变更动作共用应用内官方 `Modal`(`RuntimeConfirmDialog` + 纯机器 `confirm-machine.ts`)——武装不跑任何东西，取消在 runner 调用前丢请求，**accept 先按 live 事实复验**（每个 request 带 `stillValid`，与武装同一谓词、读每次渲染重写的 `liveFacts`；失败即 `outcome:'dropped'`，由本段错误行如实报「已过期」而非静默，因对话框跨过 `~3s` 状态轮询）；**gateway 侧动作另有 12 分钟墙钟上限**（`REMOTE_ACTION_TIMEOUT_MS = REMOTE_STATUS_POLL_TIMEOUT_MS`(11 min) + 60s，与轮询预算同源），否则 pending 期忽略取消/Escape/遮罩的对话框会被永不 settle 的动作锁死；**本地腿（`restartLocal()` 经 IPC 到主进程事务）没有 abort 句柄**，缺口登记在 STATUS。ssh（dsh 直连）的 systemd `restart_service` 属**连接管理面**（重启 gateway/dsh 服务本身，非插件模型动词，design 21 §3 目标语境差异登记）；dsh（ssh/http）直连不挂载 dsh-runtime 段、无插件模型重启动作（http 直连来源无任何重启动作，design 17 §3）。
 - **写者静默通知与「清理并接管」（02 §3.4 / 04 §3.2）**：本地卡在 `GET /api/connections/local/writers` 报非静默时，卡片内点名阻塞写者（`pid <n> · <原因>`，附机器 token）并给「清理并接管」按钮（`POST …/reclaim`）：清除**本状态目录自己的**陈旧/孤儿托管写者记录后启动本地实例；owner 仍活的另一应用实例永不被影响（控制面拒 409，原因带 `detail` 返回、卡片原样呈现）。写入期终止失败（`sticky`）只提示重启应用、不给按钮（无证据可依）。判定是纯函数 `writer-diagnosis.ts`（有单测），卡片只渲染。
@@ -678,7 +693,7 @@ settle 时拆除)，风险超窗，登记后续项；② 只下调 `HARVEST_ABAN
 - **状态胶囊与告警条 = 官方 Tag tone 的淡底配方（batch 1 F1/F2 登记，含对比度实测）**：`.badgeOk/.badgeBad` 用 `color-mix(in srgb, var(--dsw-alias-state-{success,error}-primary) 10%, transparent)` + 同色字，`.pluginKindClient` 用 warn 12%，告警条（`.recoveryBanner`/`.writerBlocked`）用 warn 12% 淡底 + `state-warn-label` 字——与官方 `_tag_brmue_4[data-tone=success|danger|warning]` 逐字符同配方（此前是实心填充）。**代价（按 pin 的 token 值用 WCAG 公式算，非浏览器实测）**：`.badgeBad` light 4.50→3.80、dark 4.35→3.28；`.recoveryBanner` warn 字 dark 4.99→3.99、light 2.79→2.55（light 侧改前即低于 AA）；`.badgeOk` dark 4.53、`.pluginKindClient` dark 4.58。**本页表单字段同期对齐官方 Input 原子**（`.input`：32px / l4 / r8 / 14-22，15 处；与 git 对话框的 `.fieldSelect`/`.fieldInput` 同族 batch 1 G3 follow-up）：**dark 侧错误胶囊与告警条跌破 4.5:1**，官方自身同款同值——取"与官方一致"而接受该下降；若要 AA，把 light/dark 字色改走 `state-*-label`（或浅色主题下调深），属下一轮改动，勿当漏改收回。
 - 实例默认仍按注册表自动连接、本地自动启动；本页提供显式管理与诊断入口。
 
-## 6. 源码复用与构建链（拷贝补丁包 2 个 + 自研客户端插件 6 个 + 宿主包 4 个）
+## 6. 源码复用与构建链（拷贝补丁包 2 个 + 自研客户端插件 7 个 + 宿主包 4 个）
 
 - pnpm + `vendor/harness-packages` 符号链接（外部 dsh 源码，**永不修改**）；要改的包必须拷入本仓 `packages/`。
 - 拷贝补丁包（保持官方包名 `@deepseek-ai/*`，遮蔽 vendor workspace 条目）：
@@ -692,6 +707,7 @@ settle 时拆除)，风险超窗，登记后续项；② 只下调 `HARVEST_ABAN
   - `packages/dsh-chamber-client-ui-sidebar/`——**自研侧边栏插件**（包名 `@dsh-chamber/dsh-chamber-client-ui-sidebar`，照官方 ui-sidebar 结构改造：保留几何/折叠/孔位声明，会话区改多来源统一列表）+ `packages/dsh-chamber-client-core/src/aggregate-store.ts`(chamberBridge)+ `packages/dsh-chamber-client-core/src/instance-api.ts`（每实例 unary 客户端，App 层与插件共享一份，vite 共享 chunk）；
   - `packages/dsh-chamber-client-ui-settings-connections/`——自研连接设置插件（§5，连接页固定入口 `__connections` 的字典命名空间与分节组件）；
   - `packages/dsh-chamber-client-ui-settings-bridge/`——自研设置壳插件（§5）：注册进 `sidebar.settings` 槽，以 `SETTINGS_SHELL_SHADOW_PRIORITY = -1000` shadow 官方 SettingsRoot；服务器下拉渲染选中来源自己 boot ctx 的 `settings.section` 台账，条目用该 ctx 渲染器绑定的标准座。面所有权绑定 `(sourceId, sourceFingerprint)`：权威 roster 删除来源或同 id 换 proof 时旧面立即不可渲染（face 指纹与 roster 同字段相等才渲染），来源重 boot 由新 ctx 的 `apply` 重新发布；发布/撤除按 slots/locale 身份校验，迟到旧代撤除不清新代的面。
+  - `packages/dsh-chamber-client-ui-settings-plugin-manager/`——内置插件分页：在 `settings.plugins.tab` 注册上游完整管理器，不接回 `sidebar.panellist`，设置入口与会话导航分离。
   - `packages/dsh-chamber-client-ui-layout/`——官方 ui-layout 壳插件的 chamber fork：①替换 layout store，`sidebarWidth` 经侧边栏共享 view-prefs store 播种/回写并钳位 [264,420]、覆盖 id；②**文档级主题投影的唯一写入者**，全页单例 `ThemePresenter` + 按活动视图门控的 `document-theme.ts`（见设计 06 §4.6），替换官方 ui-layout 注册。
   - `packages/dsh-chamber-client-ui-git/`——设计 08 的内建 Git Worktree 插件：占 per-workspace 座位 `sidebar.workspace.git`，页面级 singleton 以 30s 单飞读各实例 topology，编排 create/workspace/session 与 Git-first remove saga；Git 事实不进 App aggregate，也不暴露任意 argv/path mutation。
   - `packages/dsh-chamber-client-ui-open-in/`——设计 16/20 的内建桌面打开插件（**用户裁决：fork & supersede**）：占 `conversation.session.header.utilities`，按当前 N-ctx 的 source 经 per-source 视图模型选入口——**本地**来源走**实例进程内的 chamber host 包**（`@dsh-chamber/dsh-chamber-seed-open-in`）+ 桌面主进程 VS Code 覆盖项；**远程 ssh** 来源只有主进程 VS Code Remote（trusted IPC + 来源代 proof）；http/未知来源无入口。官方客户端行沿用 page-own 跳过纪律（本 fork **替换**官方注册），官方宿主行保持挂载但永不被调用；无控制面执行面（主进程已收窄为 vscode-only，见设计 20 §2.2/§4）。
@@ -703,7 +719,7 @@ settle 时拆除)，风险超窗，登记后续项；② 只下调 `HARVEST_ABAN
 - 前端入口复用 `packages/renderer/`：vite 构建时把 workspace 包 alias 到源码；`chamber-entry.ts` 复合 entry 挂整棵 dsh 客户端树（connection→typert→
   gateway→remotes→runtime→locale→theme→**layout（chamber ui-layout fork 替换
   官方注册）**→**chamber 侧边栏（替换官方）**→**Git Worktree 插件**→
-  **open-in 插件**→settings×4→conversation→…→全量 ui-*）。
+  **open-in 插件**→settings cluster（general/models/plugins/inventory/chamber plugin manager）→conversation→…→全量 ui-*）。
 - **启动图清单 = 单 entry + 每实例宿主图额外 entry（设计 09）**：
   - 页面清单 `__DSH_BOOT__` = `{rev, entries:[{id, url, rev, immediately?}]}`（wire 契约以 vendor `dsh-client-modules/src/client/manifest.ts` 为权威）；构建期写死**单 entry**（`@dsh-chamber/app` chamber composite bundle），bundle = vite 产物 `/assets/chamber-<hash>.js?rev=<rev>`。构建链 =
     gen-typert-remotes → vite build → gen-boot-manifest。

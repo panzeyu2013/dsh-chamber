@@ -193,6 +193,7 @@ export const DEFERRED_EXTRA_ROW_IDS: readonly string[] = [
   '@deepseek-ai/dsh-client-ui-settings-models',
   '@deepseek-ai/dsh-client-ui-settings-plugins',
   '@deepseek-ai/dsh-client-ui-settings-plugin-inventory',
+  '@dsh-chamber/dsh-chamber-client-ui-settings-plugin-manager',
   '@dsh-chamber/dsh-chamber-client-ui-settings-connections',
   '@dsh-chamber/dsh-chamber-client-ui-settings-bridge',
 ]

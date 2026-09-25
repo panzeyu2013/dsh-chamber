@@ -185,7 +185,8 @@
         "own": {
           "scripts/test.mjs": "chamber 测试清单委托共享 runner（scripts/lib/test-manifest.mjs）：3 文件表 + configure-context 的 vendor register 参数",
           "src/boot-rows.ts": "chamber 每实例 boot-rows（design 09 module D）",
-          "src/boot-tolerance.ts": "chamber boot 容忍/恢复（design 09）"
+          "src/boot-tolerance.ts": "chamber boot 容忍/恢复（design 09）",
+          "src/extra-chunk-owners.ts": "chamber extra rows 的包内动态 chunk owner 登记（design 09）"
         },
         "ownPrefix": [
           "test/"

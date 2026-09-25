@@ -161,6 +161,15 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
   `immediately`/`inject` 边在激活时尊重（官方 system.ts 逻辑复用，不重写）。
 - 生效节奏：与官方一致，插件集变化在实例重启后生效（图来自宿主现成组合）。
 
+**extra row 的包内动态 chunk 所有权**：宿主额外行的主 bundle 可由 `ClientModuleSystem.load()` 预载，
+但 `require.async('./client.terminal.js')` 等相对 chunk 仍需 module system 的 boot-row 索引按包 id
+解析所有者。chamber 在安装模块表后、各实例 entry 开始请求异步 chunk 前，把该实例 extra-row 描述符
+合入索引；已存在的 boot 描述符保持权威，重复登记幂等。上游索引形状改变时在 shell 边界响亮失败，
+而不是让终端等功能落入空白 chunk 错误态。
+**Rejected alternatives**：把每个 extra row 强行并入复合 boot entry 会丢失按实例选择的插件集；修改
+vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成上游 fork/版本耦合。集中登记原有
+宿主行描述符，保留官方 bundle 与 N-ctx 实例隔离。
+
 ### 3.3 N-ctx 与去重
 
 - 额外 entry **按实例**加载：本地与远程宿主插件集不同，各自 ctx 只激活自己的

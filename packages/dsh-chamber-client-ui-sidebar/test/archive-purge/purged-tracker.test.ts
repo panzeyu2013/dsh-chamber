@@ -216,6 +216,54 @@ test('tracker: a probe-confirmed live id is released and re-published', async ()
   assert.deepEqual(t.handle.filter([{ sessionId: 'g' }]), [{ sessionId: 'g' }])
 })
 
+test('tracker: a restart restores purge tombstones and reconciles deleted summaries against the host list', () => {
+  let saved: { purgedIds: readonly string[]; knownSessionIds: readonly string[] } | undefined = {
+    purgedIds: ['purged'], knownSessionIds: ['purged', 'deleted', 'live'],
+  }
+  const handle = createPurgeTracker({
+    refresh: () => Promise.resolve(),
+    listedSummaryIds: () => new Set(['purged', 'deleted', 'live']),
+    warn: () => {},
+    schedule: () => 0,
+    cancel: () => {},
+    restore: () => saved,
+    persist: state => { saved = state },
+  })
+  assert.deepEqual(handle.filter([{ sessionId: 'purged' }, { sessionId: 'deleted' }, { sessionId: 'live' }]), [
+    { sessionId: 'deleted' }, { sessionId: 'live' },
+  ], 'tombstones survive a renderer restart before the upstream summaries refresh')
+  assert.deepEqual(handle.observeAuthoritativeList(
+    new Set(['purged', 'deleted', 'live']), new Set(['purged', 'live']),
+  ), ['deleted'])
+  assert.deepEqual([...handle.suppressed()].sort(), ['deleted', 'purged'])
+  assert.deepEqual([...(saved?.purgedIds ?? [])].sort(), ['deleted', 'purged'])
+  assert.deepEqual(saved?.knownSessionIds, ['live'])
+})
+
+test('tracker: first-upgrade reconciliation removes eligible legacy rows without a prior saved baseline', () => {
+  let saved: { purgedIds: readonly string[]; knownSessionIds: readonly string[] } | undefined
+  const handle = createPurgeTracker({
+    refresh: () => Promise.resolve(),
+    listedSummaryIds: () => new Set(['legacy-deleted', 'new-active', 'new-blank', 'live']),
+    warn: () => {},
+    restore: () => saved,
+    persist: state => { saved = state },
+  })
+  const summaryIds = new Set(['legacy-deleted', 'new-active', 'new-blank', 'live'])
+  const removed = handle.observeAuthoritativeList(
+    summaryIds,
+    new Set(['live']),
+    new Set(['legacy-deleted']),
+  )
+
+  assert.deepEqual(removed, ['legacy-deleted'])
+  assert.deepEqual([...handle.suppressed()], ['legacy-deleted'])
+  assert.deepEqual(saved?.knownSessionIds, ['live'])
+  assert.deepEqual(handle.filter([...summaryIds].map(sessionId => ({ sessionId }))), [
+    { sessionId: 'new-active' }, { sessionId: 'new-blank' }, { sessionId: 'live' },
+  ])
+})
+
 test('tracker: a probe that does not confirm the id keeps it suppressed', async () => {
   const t = tracker({
     listedSummaryIds: () => new Set(['g']), probe: () => Promise.resolve(new Set(['other'])),
@@ -444,4 +492,3 @@ test('round-3 restore: default watchdog, rejected-refresh retry and single-fligh
   await flush()
   assert.equal(joinClock.pending, 1, 'a second converge joins the in-flight chain instead of restarting the bound')
 })
-

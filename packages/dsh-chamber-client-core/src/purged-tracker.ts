@@ -29,12 +29,22 @@ export interface PurgeTrackerDeps {
   onRelease?: () => void
   /** Honest warn reporting. */
   warn: (message: string) => void
+  /** Restore bounded per-source facts across a renderer restart. */
+  restore?: () => PurgeTrackerState | undefined
+  /** Persist the current tombstones and last authoritative session ids. */
+  persist?: (state: PurgeTrackerState) => void
 /** Forwarded to the convergence chain. */
   schedule?: (run: () => void, ms: number) => unknown
   cancel?: (handle: unknown) => void
   maxAttempts?: number
   retryMs?: number
   attemptTimeoutMs?: number
+}
+
+/** Durable, content-free purge facts for one source incarnation. */
+export interface PurgeTrackerState {
+  readonly purgedIds: readonly string[]
+  readonly knownSessionIds: readonly string[]
 }
 
 export interface PurgeTracker {
@@ -44,6 +54,14 @@ export interface PurgeTracker {
   observeArchive(archivedField: unknown): readonly string[]
   /** Drop tombstones no longer needing suppression (id dropped by the official refresh, or re-entered the archive set). */
   reconcile(listedIds: ReadonlySet<string>): void
+  /** Compare summaries with a fresh host scan and tombstone stale rows. `legacyCandidates`
+   *  are rows eligible for first-upgrade cleanup before this tracker has a remembered
+   *  host-authoritative baseline; callers exclude active and just-created sessions. */
+  observeAuthoritativeList(
+    summaryIds: ReadonlySet<string>,
+    authoritativeIds: ReadonlySet<string>,
+    legacyCandidates?: ReadonlySet<string>,
+  ): readonly string[]
   suppressed(): ReadonlySet<string>
   /** Filter tombstoned rows out (identity-preserving when nothing matches). */
   filter<T extends { sessionId: string }>(rows: readonly T[]): readonly T[]
@@ -56,15 +74,35 @@ export interface PurgeTracker {
 const NO_IDS: readonly string[] = []
 
 export function createPurgeTracker(deps: PurgeTrackerDeps): PurgeTracker {
-  const purged = new Set<string>()
+  let restored: PurgeTrackerState | undefined
+  try {
+    restored = deps.restore?.()
+  } catch (error) {
+    deps.warn(`purge state restore failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  const cleanIds = (values: readonly string[] | undefined): string[] =>
+    (values ?? []).filter(id => typeof id === 'string' && id.length > 0 && id.length <= 512)
+  const purged = new Set(cleanIds(restored?.purgedIds))
+  let knownSessionIds = new Set(cleanIds(restored?.knownSessionIds))
   let archivedSeen: string[] | undefined
   let rawSeen: readonly unknown[] | undefined
+
+  const persist = (): void => {
+    if (deps.persist === undefined) return
+    try {
+      deps.persist({ purgedIds: [...purged], knownSessionIds: [...knownSessionIds] })
+    } catch (error) {
+      deps.warn(`purge state persist failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
 
   const chain: PurgedConvergenceChain = createPurgedConvergence({
     refresh: deps.refresh,
     lingering: () => lingeringPurgedIds([...purged], deps.listedSummaryIds()),
     release: (ids) => {
-      for (const id of ids) purged.delete(id)
+      let changed = false
+      for (const id of ids) changed = purged.delete(id) || changed
+      if (changed) persist()
       deps.onRelease?.()
     },
     ...(deps.probe === undefined ? {} : { probe: deps.probe }),
@@ -84,15 +122,39 @@ export function createPurgeTracker(deps: PurgeTrackerDeps): PurgeTracker {
       archivedSeen = step.archived
       if (step.removed.length === 0) return NO_IDS
       for (const id of step.removed) purged.add(id)
+      persist()
       chain.converge()
       return step.removed
     },
     reconcile(listedIds: ReadonlySet<string>): void {
       if (purged.size === 0) return
       const keep = new Set(reconcilePurgedRows([...purged], listedIds, new Set(archivedSeen ?? [])))
+      let changed = false
       for (const id of [...purged]) {
-        if (!keep.has(id)) purged.delete(id)
+        if (!keep.has(id)) changed = purged.delete(id) || changed
       }
+      if (changed) persist()
+    },
+    observeAuthoritativeList(summaryIds, authoritativeIds, legacyCandidates = new Set<string>()): readonly string[] {
+      const removed: string[] = []
+      const archived = new Set(archivedSeen ?? [])
+      const previouslyKnown = new Set(knownSessionIds)
+      for (const id of summaryIds) {
+        const wasKnown = previouslyKnown.has(id)
+        const isLegacyCandidate = legacyCandidates.has(id)
+        if ((wasKnown || isLegacyCandidate)
+          && !authoritativeIds.has(id) && !archived.has(id) && !purged.has(id)) {
+          purged.add(id)
+          removed.push(id)
+        }
+      }
+      // The host scan is the live-session baseline. First-upgrade cleanup may include
+      // legacy summaries predating this tracker, but only caller-vetted candidates;
+      // new/active rows are excluded to avoid turning a creation/write race into a tombstone.
+      knownSessionIds = new Set([...authoritativeIds].filter(id => !archived.has(id) && !purged.has(id)))
+      if (removed.length > 0) chain.converge()
+      persist()
+      return removed
     },
     suppressed(): ReadonlySet<string> {
       // Defensive copy: callers only read it, and the internal set must never become mutable from outside.

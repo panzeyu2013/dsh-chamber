@@ -98,6 +98,7 @@ CSS `packages/renderer/src/styles.css` 引入）+ client构面未列出的小项
 | `scripts/test.mjs` | [own] | chamber 测试清单委托共享 runner（scripts/lib/test-manifest.mjs）：3 文件表 + configure-context 的 vendor register 参数 |
 | `src/boot-rows.ts` | [own] | chamber 每实例 boot-rows（design 09 module D） |
 | `src/boot-tolerance.ts` | [own] | chamber boot 容忍/恢复（design 09） |
+| `src/extra-chunk-owners.ts` | [own] | chamber extra rows 的包内动态 chunk owner 登记（design 09） |
 | `test/` | [own] | chamber 自有测试（boot-tolerance/boot-rows/configure-context + fixtures） |
 | `src/apply-injections.ts` | [dropped] | rc.2 的 index 注入表解释器，服务 apps/web 的 __DSH_BOOT_READY__/Host rows；chamber 不消费（index.ts 刻意不导出 applyIndexInjections，package.json 也无 ./injections 子路径），注入面由 host boot graph + N-ctx kernel 接管 |
 | `src/boot-client.ts` | [dropped] | rc.2 抽出的 bootClient/assertEntriesActive 组合；chamber kernel 在 src/boot.ts 内联 boot 建 entry+await+audit 半边并叠加 extraRows 合并 + boot-tolerance 容忍；entries.start/sync 协调半边在 chamber 无消费者（其唯一消费者 HMR 行被覆盖集 skip，见 chamber-covered.ts） |

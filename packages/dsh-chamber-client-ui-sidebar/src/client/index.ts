@@ -29,6 +29,10 @@ import type { GoalFact } from '@dsh-chamber/dsh-chamber-client-core/session-row-
 import { createGoalActivationTracker } from './goal-activation.ts'
 import { createPanelSource, type SlotsReader } from './panel-source.ts'
 import { createPurgeTracker } from '@dsh-chamber/dsh-chamber-client-core/purged-tracker'
+import {
+  createPurgedSessionStore, legacySessionRecheckDelay, legacyStaleSessionCandidates,
+  legacyStaleSessionProtectedIds,
+} from './purged-session-store.ts'
 import { publishSessionCreationInstrument } from '@dsh-chamber/dsh-chamber-client-core/session-create-ledger'
 import {
   SessionAuthorityReconciler,
@@ -354,10 +358,13 @@ export function apply(ctx: ClientContext): void {
      * 归档集，给收缩移除的 id 立墓碑，滤出快照与运行时事实，并跑有界的官方 refresh 链。触发源
      * 含桥通道（App 收敛机/归档管理器）与生产端自己观察到的收缩——广播无人收到的请求仍被本地覆盖。
      */
+    const durablePurgeState = createPurgedSessionStore(chamberInstanceId, chamberSourceFingerprint)
     const purgedRows = createPurgeTracker({
       refresh: officialSessionRefresh,
       listedSummaryIds,
       probe: authoritativeListedIds,
+      restore: durablePurgeState.load,
+      persist: durablePurgeState.save,
       // 探针确认的释放必须重发两条通道：sync() 重报运行时事实（被抑制 id 的
       // running/pending/completed/current 事实已被丢弃）并排队快照。
       onRelease: () => { sync() },
@@ -546,13 +553,117 @@ export function apply(ctx: ClientContext): void {
       // L1 对账复用同一条广播通道（App 看不到官方 store，只能请求重跑官方 session.list）。
       sessionFacts?.request()
     })
+    // A renderer restart loses the page-lifetime archive-shrink edge. Compare the
+    // official summaries with a fresh disk-backed list once ready. Remembered host
+    // rows are always reconciled; on the first upgrade, old non-running summaries
+    // are also vetted so legacy stale rows do not survive merely because this
+    // tracker had never persisted a baseline before.
+    let verifiedSessionBaseline = false
+    let verificationExhausted = false
+    let verificationGeneration = 0
+    let verifyingGeneration: number | undefined
+    let verificationAttempts = 0
+    let verificationRetry: ReturnType<typeof setTimeout> | undefined
+    let legacyGraceRetry: ReturnType<typeof setTimeout> | undefined
+    let protectedLegacySessionIds = new Set<string>()
+    const readSessionSummaries = (): Record<string, {
+      running?: boolean
+      blank?: boolean
+      updatedAt?: number
+    }> => (sessionsList.getSnapshot() as {
+      byId?: Record<string, { running?: boolean; blank?: boolean; updatedAt?: number }>
+    }).byId ?? {}
+    const scheduleLegacyGraceRecheck = (): void => {
+      if (!verifiedSessionBaseline || disposed) return
+      const summaries = readSessionSummaries()
+      const suppressed = purgedRows.suppressed()
+      for (const id of protectedLegacySessionIds) {
+        if (summaries[id] === undefined || suppressed.has(id)) protectedLegacySessionIds.delete(id)
+      }
+      const delay = legacySessionRecheckDelay(summaries, protectedLegacySessionIds, Date.now())
+      if (delay === undefined) {
+        if (legacyGraceRetry !== undefined) clearTimeout(legacyGraceRetry)
+        legacyGraceRetry = undefined
+        return
+      }
+      if (legacyGraceRetry !== undefined) clearTimeout(legacyGraceRetry)
+      legacyGraceRetry = setTimeout(() => {
+        legacyGraceRetry = undefined
+        if (disposed || !verifiedSessionBaseline) return
+        // Re-run once the protected summary is no longer recent/active; this is
+        // a state-driven grace expiry, never a recurring session/list poll.
+        verifiedSessionBaseline = false
+        verificationAttempts = 0
+        verifySessionBaseline()
+      }, delay)
+    }
+    const verifySessionBaseline = (): void => {
+      if (verifiedSessionBaseline || verificationExhausted || disposed || sessionsList.getSnapshot().phase !== 'ready') return
+      const generation = verificationGeneration
+      if (verifyingGeneration === generation) return
+      verifyingGeneration = generation
+      verificationAttempts += 1
+      void authoritativeListedIds().then((authoritativeIds) => {
+        if (disposed || generation !== verificationGeneration) return
+        verifyingGeneration = undefined
+        if (authoritativeIds === undefined) {
+          if (verificationAttempts < 4) {
+            verificationRetry = setTimeout(() => {
+              verificationRetry = undefined
+              verifySessionBaseline()
+            }, 750)
+          } else {
+            verificationExhausted = true
+            console.warn(`[chamber] session baseline verification unavailable after ${verificationAttempts} attempts (${chamberInstanceId})`)
+          }
+          return
+        }
+        verifiedSessionBaseline = true
+        verificationAttempts = 0
+        const summaries = readSessionSummaries()
+        const summaryIds = new Set(Object.keys(summaries))
+        const removed = purgedRows.observeAuthoritativeList(
+          summaryIds, authoritativeIds, legacyStaleSessionCandidates(summaries, Date.now()),
+        )
+        const suppressed = purgedRows.suppressed()
+        const missingFromAuthority = new Set(
+          [...summaryIds].filter(id => !authoritativeIds.has(id) && !suppressed.has(id)),
+        )
+        protectedLegacySessionIds = new Set(legacyStaleSessionProtectedIds(
+          summaries, missingFromAuthority, Date.now(),
+        ))
+        scheduleLegacyGraceRecheck()
+        if (removed.length === 0) return
+        console.warn(`[chamber] suppressed ${removed.length} stale session summary row(s) after authoritative reconciliation (${chamberInstanceId})`)
+        sync()
+        queueSnapshot()
+      })
+    }
+    const unsubscribeBaselineVerification = ctx.on('connection/reset', () => {
+      verificationGeneration += 1
+      verifiedSessionBaseline = false
+      verificationExhausted = false
+      verifyingGeneration = undefined
+      verificationAttempts = 0
+      protectedLegacySessionIds.clear()
+      if (verificationRetry !== undefined) clearTimeout(verificationRetry)
+      verificationRetry = undefined
+      if (legacyGraceRetry !== undefined) clearTimeout(legacyGraceRetry)
+      legacyGraceRetry = undefined
+      verifySessionBaseline()
+    })
     // The subscription is started AFTER `sync` exists (a synchronous remote
     // service can deliver before the const initializes otherwise), and before
     // the first report so an already-armed event can land on the first pass.
     goalActivation.start()
     sync()
     queueSnapshot()
-    const unsubscribeSessions = sessionsList.subscribe(sync)
+    const unsubscribeSessions = sessionsList.subscribe(() => {
+      sync()
+      if (verifiedSessionBaseline) scheduleLegacyGraceRecheck()
+      else verifySessionBaseline()
+    })
+    verifySessionBaseline()
     const unsubscribeWorkspaces = workspacesList.subscribe(queueSnapshot)
     // sessionStatus 的 pendingInteraction 变化只影响运行时事实（琥珀点/通知边沿）；sync() 内 queueSnapshot 有签名去重兜底，重复触发无副作用。
     const unsubscribePending = sessionStatus.subscribe(sync)
@@ -565,6 +676,11 @@ export function apply(ctx: ClientContext): void {
       unsubscribeWorkspaces()
       unsubscribePending()
       unsubscribeSessionListRefresh()
+      unsubscribeBaselineVerification()
+      verificationGeneration += 1
+      if (verificationRetry !== undefined) clearTimeout(verificationRetry)
+      if (legacyGraceRetry !== undefined) clearTimeout(legacyGraceRetry)
+      protectedLegacySessionIds.clear()
       snapshotProducer.clear()
       runtimeProducer.clear()
     }

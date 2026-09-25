@@ -189,6 +189,7 @@ export const EXPORTS_ALLOWLIST = Object.freeze({
   'packages/dsh-chamber-client-ui-open-in': ['.', './client', './machine-catalog', './stream-health-probe'],
   'packages/dsh-chamber-client-ui-settings-bridge': ['.', './client'],
   'packages/dsh-chamber-client-ui-settings-connections': ['.', './client', './section'],
+  'packages/dsh-chamber-client-ui-settings-plugin-manager': ['./client'],
   'packages/dsh-chamber-client-ui-sidebar': ['.', './client', './invariant'],
   'packages/dsh-chamber-seed-archive-cleanup': ['.'],
   'packages/dsh-chamber-seed-client-graph': ['.'],

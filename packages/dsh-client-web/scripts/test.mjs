@@ -19,6 +19,7 @@ export const GROUPS = {
   boot: [
     'test/boot-tolerance.test.ts',
     'test/boot-rows.test.ts',
+    'test/extra-chunk-owners.test.ts',
   ],
   // configureContext resolves the upstream module surface through the vendor register.
   context: [
