@@ -75,16 +75,20 @@ final class CrashDiagnosticsTests: XCTestCase {
     func testRecordFormatCarriesTimeKindNamePidVersion() {
         let line = CrashDiagnostics.formatRecord(kind: "signal", name: "SIGSEGV", signo: 11,
                                                  bundleVersion: "0.16.0", pid: 4242,
-                                                 epoch: 1_700_000_000)
+                                                 epoch: 1_700_000_000,
+                                                 source: CrashDiagnostics.recordSource,
+                                                 phase: CrashDiagnostics.phaseRunningLabel)
         XCTAssertEqual(line,
-                       "[2023-11-14T22:13:20Z] kind=signal name=SIGSEGV signo=11 pid=4242 version=0.16.0")
+                       "[2023-11-14T22:13:20Z] kind=signal name=SIGSEGV signo=11 pid=4242 version=0.16.0 source=native-shell phase=running")
         XCTAssertEqual(line.components(separatedBy: "\n").count, 1, "记录必须是单行")
         let exception = CrashDiagnostics.formatRecord(kind: "exception",
                                                       name: "NSInternalInconsistencyException",
                                                       signo: nil, bundleVersion: "0.16.0",
-                                                      pid: 7, epoch: 1_700_000_000)
+                                                      pid: 7, epoch: 1_700_000_000,
+                                                      source: CrashDiagnostics.recordSource,
+                                                      phase: CrashDiagnostics.phaseStartupLabel)
         XCTAssertEqual(exception,
-                       "[2023-11-14T22:13:20Z] kind=exception name=NSInternalInconsistencyException pid=7 version=0.16.0")
+                       "[2023-11-14T22:13:20Z] kind=exception name=NSInternalInconsistencyException pid=7 version=0.16.0 source=native-shell phase=startup")
     }
 
     func testBundleVersionFallsBackToUnknown() {
@@ -151,7 +155,9 @@ final class CrashDiagnosticsTests: XCTestCase {
 
         let expected = CrashDiagnostics.formatRecord(kind: "signal", name: "SIGSEGV", signo: SIGSEGV,
                                                      bundleVersion: "0.16.0", pid: 4242,
-                                                     epoch: 1_700_000_000) + "\n"
+                                                     epoch: 1_700_000_000,
+                                                     source: CrashDiagnostics.recordSource,
+                                                     phase: CrashDiagnostics.phaseStartupLabel) + "\n"
         let log = try String(contentsOf: installation.crashLogURL, encoding: .utf8)
         XCTAssertEqual(log, expected, "处理器手写路径必须与纯函数 formatRecord 逐字节一致")
         let marker = try String(contentsOf: installation.markerURL, encoding: .utf8)
@@ -167,11 +173,30 @@ final class CrashDiagnosticsTests: XCTestCase {
         let expected = CrashDiagnostics.formatRecord(kind: "exception",
                                                      name: "NSInternalInconsistencyException\ninjected",
                                                      signo: nil, bundleVersion: "0.16.0",
-                                                     pid: 4242, epoch: 1_700_000_000) + "\n"
+                                                     pid: 4242, epoch: 1_700_000_000,
+                                                     source: CrashDiagnostics.recordSource,
+                                                     phase: CrashDiagnostics.phaseStartupLabel) + "\n"
         let log = try String(contentsOf: installation.crashLogURL, encoding: .utf8)
         XCTAssertEqual(log, expected, "异常路径同样与纯函数逐字节一致")
         XCTAssertEqual(log.components(separatedBy: "\n").count, 2, "只允许末尾一个换行（单行不变量）")
         XCTAssertTrue(log.contains("NSInternalInconsistencyException_injected"))
+    }
+
+    /// 相位：安装后写 startup，markPhaseRunning 之后写 running（同一份记录格式，
+    /// 只换相位标签；上游报告含 source/phase —— 「启动期崩」与「跑起来崩」可区分）。
+    func testPhaseFlipsFromStartupToRunning() throws {
+        let installation = installWithLiveLeaf()
+        XCTAssertTrue(CrashDiagnostics.emitForTesting(signal: SIGSEGV, epoch: 1_700_000_000))
+        var log = try String(contentsOf: installation.crashLogURL, encoding: .utf8)
+        XCTAssertTrue(log.contains("phase=startup"), log)
+        XCTAssertFalse(log.contains("phase=running"), log)
+        CrashDiagnostics.markPhaseRunning()
+        XCTAssertTrue(CrashDiagnostics.emitForTesting(signal: SIGSEGV, epoch: 1_700_000_001))
+        log = try String(contentsOf: installation.crashLogURL, encoding: .utf8)
+        XCTAssertTrue(log.contains("phase=running"), log)
+        XCTAssertTrue(log.contains("source=native-shell"), log)
+        let marker = try String(contentsOf: installation.markerURL, encoding: .utf8)
+        XCTAssertTrue(marker.contains("phase=running"), "标记里就是最近一条（相位已翻转）")
     }
 
     // MARK: - 上次异常退出（判定 / 消费 / 清除）
@@ -200,7 +225,9 @@ final class CrashDiagnosticsTests: XCTestCase {
                                                 withIntermediateDirectories: true)
         let record = CrashDiagnostics.formatRecord(kind: "signal", name: "SIGBUS", signo: 10,
                                                    bundleVersion: "0.16.0", pid: 42,
-                                                   epoch: 1_700_000_000)
+                                                   epoch: 1_700_000_000,
+                                                   source: CrashDiagnostics.recordSource,
+                                                   phase: CrashDiagnostics.phaseStartupLabel)
         try (record + "\n").write(to: logURL, atomically: true, encoding: .utf8)
         try "marker".write(to: markerURL, atomically: true, encoding: .utf8)
 
@@ -353,14 +380,18 @@ final class CrashDiagnosticsTests: XCTestCase {
         }
         let expected = epochs.map {
             CrashDiagnostics.formatRecord(kind: "signal", name: "SIGABRT", signo: SIGABRT,
-                                          bundleVersion: "0.16.0", pid: 4242, epoch: $0) + "\n"
+                                          bundleVersion: "0.16.0", pid: 4242, epoch: $0,
+                                          source: CrashDiagnostics.recordSource,
+                                          phase: CrashDiagnostics.phaseStartupLabel) + "\n"
         }.joined()
         XCTAssertEqual(try String(contentsOf: installation.crashLogURL, encoding: .utf8), expected,
                        "处理器路径必须与 formatRecord 逐字节一致（B3 后仍是同一 UTC 文本）")
         let last = try XCTUnwrap(epochs.last)
         XCTAssertEqual(try String(contentsOf: installation.markerURL, encoding: .utf8),
                        CrashDiagnostics.formatRecord(kind: "signal", name: "SIGABRT", signo: SIGABRT,
-                                                     bundleVersion: "0.16.0", pid: 4242, epoch: last) + "\n",
+                                                     bundleVersion: "0.16.0", pid: 4242, epoch: last,
+                                                     source: CrashDiagnostics.recordSource,
+                                                     phase: CrashDiagnostics.phaseStartupLabel) + "\n",
                        "标记文件里就是最近一条记录（O_TRUNC 单条语义不变）")
     }
 

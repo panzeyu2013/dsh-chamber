@@ -46,6 +46,11 @@ public enum CrashDiagnostics {
     public static let crashLogFileName = "shell-crash.log"
     /// 「上次异常退出」标记文件名（同目录；存在即异常，启动期消费后清除）。
     public static let markerFileName = "shell-crash.marker"
+    /// 记录体里的 source（跨语言同一字段名：Electron 侧写 electron-main）。
+    public static let recordSource = "native-shell"
+    /// 相位标签：安装后至 markPhaseRunning 之间写 startup，之后写 running（上游报告含 source/phase）。
+    public static let phaseStartupLabel = "startup"
+    public static let phaseRunningLabel = "running"
     /// 安装的致命信号集合（台账 §8.a「未捕获异常/信号」）。
     public static let defaultSignals: [Int32] = [SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGFPE, SIGTRAP]
     /// 单字段字节上限（白名单化之后；异常名/版本超长截断）。
@@ -103,19 +108,23 @@ public enum CrashDiagnostics {
     /// 记录体（不含时间戳前缀与换行）：
     /// kind=signal name=SIGSEGV signo=11 pid=4242 version=0.16.0
     public static func recordBody(kind: String, name: String, signo: Int32?,
-                                  bundleVersion: String, pid: Int32) -> String {
+                                  bundleVersion: String, pid: Int32,
+                                  source: String, phase: String) -> String {
         var body = "kind=\(kind) name=\(sanitizedField(name))"
         if let signo { body += " signo=\(signo)" }
         body += " pid=\(pid) version=\(sanitizedField(bundleVersion))"
+        body += " source=\(sanitizedField(source)) phase=\(sanitizedField(phase))"
         return body
     }
 
     /// 一条完整崩溃记录（纯函数；处理器的手写路径产出同一字节串 + 换行）。
     public static func formatRecord(kind: String, name: String, signo: Int32?,
-                                    bundleVersion: String, pid: Int32, epoch: Int64) -> String {
+                                    bundleVersion: String, pid: Int32, epoch: Int64,
+                                    source: String, phase: String) -> String {
         "[\(iso8601Timestamp(epoch: epoch))] "
             + recordBody(kind: kind, name: name, signo: signo,
-                         bundleVersion: bundleVersion, pid: pid)
+                         bundleVersion: bundleVersion, pid: pid,
+                         source: source, phase: phase)
     }
 
     /// epoch 秒 → 2026-12-01T08:30:00Z（纯路径；格式独立于处理器的手写路径，
@@ -264,6 +273,14 @@ public enum CrashDiagnostics {
                             exceptionHandlerInstalled: exceptionInstalled)
     }
 
+    /// 启动完成 → 之后的记录标 phase=running（上游报告含 source/phase；「上次异常退出」
+    /// 因此能区分「启动期崩的」与「跑起来之后崩的」）。信号安全：处理器只读一个对齐
+    /// Int32，这里只做一次普通写——两个变体在安装期已预格式化，绝不在这里做字符串工作。
+    public static func markPhaseRunning() {
+        guard let pointer = crashHandlerContextStorage else { return }
+        pointer.pointee.phaseIsRunning = 1
+    }
+
     // MARK: - 上次异常退出（启动消费 / 正常退出清除）
 
     /// 判定（纯函数）：标记存在 = 上次未走正常退出路径。
@@ -360,13 +377,22 @@ public enum CrashDiagnostics {
         var exceptionPrefixCount: Int
         var exceptionSuffix: UnsafeMutablePointer<UInt8>
         var exceptionSuffixCount: Int
+        /// 启动期相位的异常后缀（与运行期只差 phase= 字段，安装期一并预格式化）。
+        var exceptionSuffixStartup: UnsafeMutablePointer<UInt8>
+        var exceptionSuffixStartupCount: Int
+        /// 0 = 启动期（安装后默认），1 = 运行期（markPhaseRunning 置位）。
+        var phaseIsRunning: Int32
         var previousExceptionHandler: (@convention(c) (NSException) -> Void)?
     }
 
     struct SignalEntry {
         var signo: Int32
+        /// 运行期相位变体（markPhaseRunning 之后使用）。
         var body: UnsafeMutablePointer<UInt8>
         var bodyCount: Int
+        /// 启动期相位变体（安装后、markPhaseRunning 之前使用）。
+        var startupBody: UnsafeMutablePointer<UInt8>
+        var startupBodyCount: Int
     }
 
     /// 测试 seam：直调处理器核心（不真发信号、不真抛异常）。返回 false = 未安装。
@@ -414,10 +440,14 @@ public enum CrashDiagnostics {
         guard let entry = signalEntry(forSigno: signo, context: context), entry.bodyCount > 0 else {
             return
         }
+        // 相位变体在安装期就预格式化：处理器里只做一次对齐 Int32 读 + 选指针。
+        let phaseIsRunning = context.phaseIsRunning != 0
+        let body = phaseIsRunning ? entry.body : entry.startupBody
+        let bodyCount = phaseIsRunning ? entry.bodyCount : entry.startupBodyCount
         withUnsafeTemporaryAllocation(of: UInt8.self, capacity: stackRecordCapacity) { buffer in
             guard let base = buffer.baseAddress else { return }
             var written = renderTimestampPrefix(epoch: epoch, into: base, capacity: buffer.count)
-            written += copyBytes(entry.body, count: entry.bodyCount,
+            written += copyBytes(body, count: bodyCount,
                                  into: base, offset: written, capacity: buffer.count)
             writeRecord(base, count: written, context: context)
         }
@@ -433,7 +463,10 @@ public enum CrashDiagnostics {
                                  into: base, offset: written, capacity: buffer.count)
             written += copySanitized(name.utf8, limit: fieldByteLimit,
                                      into: base, offset: written, capacity: buffer.count)
-            written += copyBytes(context.exceptionSuffix, count: context.exceptionSuffixCount,
+            let phaseIsRunning = context.phaseIsRunning != 0
+            let suffix = phaseIsRunning ? context.exceptionSuffix : context.exceptionSuffixStartup
+            let suffixCount = phaseIsRunning ? context.exceptionSuffixCount : context.exceptionSuffixStartupCount
+            written += copyBytes(suffix, count: suffixCount,
                                  into: base, offset: written, capacity: buffer.count)
             writeRecord(base, count: written, context: context)
         }
@@ -574,20 +607,33 @@ public enum CrashDiagnostics {
         let entries = UnsafeMutablePointer<SignalEntry>.allocate(capacity: max(1, signals.count))
         var count = 0
         for signo in signals {
+            // 相位两套变体都在安装期预格式化（处理器里不做字符串工作）。
             let (body, bodyCount) = makeBytes(
                 recordBody(kind: "signal", name: signalName(signo), signo: signo,
-                           bundleVersion: bundleVersion, pid: pid) + "\n")
-            entries[count] = SignalEntry(signo: signo, body: body, bodyCount: bodyCount)
+                           bundleVersion: bundleVersion, pid: pid,
+                           source: recordSource, phase: phaseRunningLabel) + "\n")
+            let (startupBody, startupBodyCount) = makeBytes(
+                recordBody(kind: "signal", name: signalName(signo), signo: signo,
+                           bundleVersion: bundleVersion, pid: pid,
+                           source: recordSource, phase: phaseStartupLabel) + "\n")
+            entries[count] = SignalEntry(signo: signo, body: body, bodyCount: bodyCount,
+                                         startupBody: startupBody, startupBodyCount: startupBodyCount)
             count += 1
         }
         // 异常路径拆成前缀 + 前缀之后的后缀：异常名是崩溃时刻才知道的动态值，
         // 只把静态部分预格式化（前缀/suffix 由同一 recordBody 派生，格式不漂移）。
         let exceptionBody = recordBody(kind: "exception", name: "", signo: nil,
-                                       bundleVersion: bundleVersion, pid: pid)
+                                       bundleVersion: bundleVersion, pid: pid,
+                                       source: recordSource, phase: phaseRunningLabel)
+        let startupExceptionBody = recordBody(kind: "exception", name: "", signo: nil,
+                                              bundleVersion: bundleVersion, pid: pid,
+                                              source: recordSource, phase: phaseStartupLabel)
         let prefix = "kind=exception name="
         let suffix = String(exceptionBody.dropFirst(prefix.count)) + "\n"
+        let startupSuffix = String(startupExceptionBody.dropFirst(prefix.count)) + "\n"
         let (prefixBytes, prefixCount) = makeBytes(prefix)
         let (suffixBytes, suffixCount) = makeBytes(suffix)
+        let (startupSuffixBytes, startupSuffixCount) = makeBytes(startupSuffix)
         let context = UnsafeMutablePointer<HandlerContext>.allocate(capacity: 1)
         context.initialize(to: HandlerContext(
             logFD: logFD,
@@ -598,6 +644,9 @@ public enum CrashDiagnostics {
             exceptionPrefixCount: prefixCount,
             exceptionSuffix: suffixBytes,
             exceptionSuffixCount: suffixCount,
+            exceptionSuffixStartup: startupSuffixBytes,
+            exceptionSuffixStartupCount: startupSuffixCount,
+            phaseIsRunning: 0,
             previousExceptionHandler: previousExceptionHandler))
         return context
     }
@@ -613,10 +662,12 @@ public enum CrashDiagnostics {
         let value = context.pointee
         for index in 0..<value.signalEntryCount {
             value.signalEntries[index].body.deallocate()
+            value.signalEntries[index].startupBody.deallocate()
         }
         value.signalEntries.deallocate()
         value.exceptionPrefix.deallocate()
         value.exceptionSuffix.deallocate()
+        value.exceptionSuffixStartup.deallocate()
         if let marker = value.markerPath { free(marker) }
         context.deinitialize(count: 1)
         context.deallocate()

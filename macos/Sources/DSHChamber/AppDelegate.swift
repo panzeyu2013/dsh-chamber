@@ -378,6 +378,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             // E13：ready 后按序补发冷启动期间缓冲的深链（主线程收敛）；
             // 同时放开 A 桥 origin 门（ready 帧前一律拒绝）。
             DispatchQueue.main.async {
+                // 启动完成（sidecar ready + A 桥门放开）：之后的崩溃记录标 phase=running，
+                // 「上次异常退出」因此能区分启动期与运行期（§22.3.1 的 source/phase 字段）。
+                CrashDiagnostics.markPhaseRunning()
                 self.mainWindowController?.noteSidecarReady()
                 self.handleSidecarReady()
             }

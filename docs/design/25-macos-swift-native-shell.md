@@ -695,11 +695,14 @@ zh-Hant 显示；简繁混排是否可接受需实机判断，若要收口须先
 
 升级计划的 P0「原生崩溃最小诊断」（见 `docs/progress/todo/main-0.1.5-to-0.1.7-upgrade.md` §7.1/§12.2）：**不引入任何第三方依赖**（明确不做
 Crashpad），原生壳自己给出「闪退后可考古、可给出原因」的最小面。落点全在
-`<userData>/logs/`（与 `native-shell.log` 同目录同权限纪律）：
+`<userData>/logs/`（与 `shell.log` 同目录同权限纪律）：
 
 - **记录**：`shell-crash.log` 一行一条（UTC 时间 / `kind=signal|exception` /
-  信号或异常名 / bundle 短版本 / pid），例
-  `[2023-11-14T22:13:20Z] kind=signal name=SIGSEGV signo=11 pid=4242 version=0.16.0`。
+  信号或异常名 / bundle 短版本 / pid / `source=native-shell` / `phase=startup|running`），例
+  `[2023-11-14T22:13:20Z] kind=signal name=SIGSEGV signo=11 pid=4242 version=0.16.0 source=native-shell phase=running`。
+  `source`/`phase` 让「启动期崩的」与「跑起来之后崩的」在同一台账里可区分（上游报告同字段）；
+  `phase` 由 `markPhaseRunning()`（sidecar ready 后）翻转——处理器里只读一个对齐 `Int32`，
+  两个相位变体在安装期就预格式化好，绝不在信号上下文做字符串工作。
   `CrashDiagnostics.formatRecord` 是纯函数，处理器的手写路径与它逐字节锁步
   （用例以同一 epoch 断言两者相等）。处理器侧的 UTC 换算 = `utcCivilDate` 的
   **纯整数 civil-date**（B3）：不经任何 libc 时间函数，`gmtime_r` 不在
