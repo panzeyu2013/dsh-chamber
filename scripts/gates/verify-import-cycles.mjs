@@ -40,10 +40,28 @@ const TYPE_CYCLE_ALLOWANCE = []
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
-export function sourceFiles() {
+/**
+ * Directory names that never carry first-party source: build output, mirrors and
+ * test fixtures live under them.
+ */
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'test', 'tests', 'scripts', 'vendor', 'generated'])
+
+/**
+ * Every first-party `packages/*` source file (plus the desktop package's
+ * root-level production modules, which have no src/).
+ *
+ * Dot-directories are skipped: they hold tooling and dev state, never source.
+ * `packages/desktop/.dev-user-data/` is the live case — a gitignored dev root
+ * holding a full managed-dsh worktree (1440 reachable .ts files whose cycles
+ * belong to the upstream, not to this repository); scanning it turned a local
+ * `--dev` run into 20 bogus cycle findings. The parameter is injectable so the
+ * skip rule is a testable unit (see verify-import-cycles.test.mjs) instead of a
+ * claim in a comment.
+ * @param {string} [packagesDir] - the directory holding the workspace packages.
+ * @returns {string[]} absolute paths of the scanned source files.
+ */
+export function sourceFiles(packagesDir = join(ROOT, 'packages')) {
   const files = []
-  const packagesDir = join(ROOT, 'packages')
-  const SKIP_DIRS = new Set(['node_modules', 'dist', 'test', 'tests', 'scripts', 'vendor', 'generated'])
   for (const pkg of readdirSync(packagesDir)) {
     const pkgDir = join(packagesDir, pkg)
     const roots = []
@@ -55,7 +73,11 @@ export function sourceFiles() {
     const walk = (dir) => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const full = join(dir, entry.name)
-        if (entry.isDirectory()) { if (!SKIP_DIRS.has(entry.name)) walk(full); continue }
+        if (entry.isDirectory()) {
+          if (SKIP_DIRS.has(entry.name) || entry.name.startsWith('.')) continue
+          walk(full)
+          continue
+        }
         if (/\.(ts|tsx|mts|cts)$/.test(entry.name) && !entry.name.endsWith('.d.ts')) files.push(full)
       }
     }
