@@ -521,6 +521,22 @@ pnpm run test:swift     # UpdateStallWatchdogTests + UpdateAvailabilityTests
 > ③ 测试拆分：分支用例的 5 条 main.ts 接线锁 + `跨包/跨语言字面量锁步`（env 名 × 控制面/渲染端/
 > Swift `AppDelegate`/bridge-shim 四处一致）必须与 Swift 恢复框同批——Swift 壳现在还没有
 > `DSH_CHAMBER_SAFE_MODE` 声明（该锁的 Swift 断言本轮实测红）。
+> ④ **编辑计划（行号为 2026-12 侦察时的 main，动工时重核）**：
+>   1. `chamberLock`（main.ts:1006，函数内 `const`）→ 提为模块级 `chamberLockHandle`（保留 `ok`/`unsupported`
+>      判定与 1009 的错误分支），使重启腿能在 `app.exit(0)` 前显式 `release()`（app.exit 不保证 'quit' 事件）。
+>   2. main 的 `quitCleanupInProgress`（main.ts:214 布尔位，will-quit :931/#949-977 里用）→ 换成
+>      `quitCleanupPromise` 单飞 promise（保留布尔位语义：第二路继续 `preventDefault`），让 `will-quit` 与
+>      恢复重启腿共享同一份清理；`before-quit`(:863) / `quit`(:1032) 的既有语义不动。
+>   3. 五条 fatal 呈现点改走 `reportFatalStartupFailure`：:655（preload 缺失）、:797（前端加载失败）、
+>      :1024（host-root 租约失败）、:1230（控制面启动失败）= 三选 `'startup'`；:1009（目录锁冲突）= 两选
+>      `'already-running'`（默认/Esc 落「重启」而不是退出）。`fatalMainError`(:57) 的 uncaught 路径保持
+>      `app.exit(1)`（进程已不可信，不能弹框），但删掉单独的 `dialog.showErrorBox` 以免两套呈现门。
+>   4. `const safeModeActive = isSafeModeEnabled(process.env)`（装配期快照）+ 一行生效声明 + 建控制面时
+>      `safeMode: safeModeActive`（控制面自身也读 env，这里是显式化与日志单源）。
+>   5. `applyStartupRecoveryAction`：`'safe-mode-restart'` 必须先 `backupChamberStateForRecovery` 再
+>      `process.env[SAFE_MODE_ENV] = '1'`；`'restart'`/`'safe-mode-restart'` 都是 `app.relaunch()` →
+>      `await runQuitCleanupChain()` → `chamberLockHandle?.release()` → `app.exit(0)`（顺序即分支用例的
+>      4 条 index 断言）。
 
 **验收**：`pnpm run test:swift` 全绿（含重复 fatal 不 exit、spawn 失败先释放锁、两选/三选映射）；`node --test packages/desktop/test/desktop-shell/startup-recovery.test.ts`；`swift build` 干净。
 
