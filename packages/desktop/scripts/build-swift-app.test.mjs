@@ -24,7 +24,8 @@
  *  ④b Mach-O magic 全集（含 FAT_MAGIC_64）+ readdir 失败 fail closed；
  *  ⑪ 架构断言：同宿主通过、--arch 反向 loud、.app 与捆绑 node 无交集 loud；
  *  ⑫ lipo 输出解析（x86_64/arm64e/旧版 Non-fat 文案）；
- *  ⑬ DMG 卷内容（/Applications 快捷方式）与卷名来自 --app-name（纯 + 真实 hdiutil）；
+ *  ⑬ DMG 卷内容（/Applications 快捷方式）与卷名来自 --app-name（纯 + 真实 hdiutil
+ *    往返；不走 Finder 布局——那一步只在发布路径与实机里跑，见测试内注释）；
  *  ⑬a/⑬b/⑬c 资源包两形态归一、.DS_Store blob 提取、bplist 读取器（含符号整数）；
  *  ⑬d/⑬e/⑬f/⑬g 内容判据负例、Iloc 记录作用域、facts 分类、装配 shim 失败分支。
  *  ⑰ CFBundleVersion 映射：beta.N → X.Y.Z.N、final → X.Y.Z.final 标记，
@@ -1095,9 +1096,21 @@ test('⑬ 真实 DMG：卷内含 .app + /Applications 链接，卷名 = --app-na
     await runBuildSwiftApp(parseBuildSwiftAppArgs([
       '--out', out, '--app-name', 'dsh-chamber',
       '--artifact-basename', 'dsh-chamber-9.9.9-macos-arm64',
-      '--skip-build', '--skip-sidecar', '--skip-web-dist', '--no-sign', '--no-zip',
+      '--skip-build', '--skip-sidecar', '--skip-web-dist', '--no-sign', '--no-zip', '--no-dmg',
     ]), { log: () => {}, error: () => {} })
+    // 本测试只做真 hdiutil 往返：stage → UDRW → 挂载查内容/卷名 → UDZO 转换 → 再挂载。
+    // 不跑 createStyledDmg 的 Finder 布局步：它会把卷挂到 /Volumes 并驱动 Finder 弹出带
+    // 背景图的 DMG 窗口（测试没有理由占屏，且 stub 装配的窗口与真实产物并不一致）；布局的
+    // 内容级判据由发布路径（createStyledDmg → verifyDmgLayout，每次出 DMG 都跑）与纯测试
+    // ⑬/⑬d–⑬f 钉住，这里不再重复，也不再断言 .DS_Store。
     const dmg = path.join(out, 'dsh-chamber-9.9.9-macos-arm64.dmg')
+    const rw = path.join(out, 'dsh-chamber.rw.dmg')
+    const stage = path.join(out, 'stage')
+    stageDmgVolume(path.join(out, 'dsh-chamber.app'), stage, 'dsh-chamber')
+    const create = spawnSync('hdiutil', dmgCreateArgs('dsh-chamber', stage, rw), { encoding: 'utf8' })
+    assert.equal(create.status, 0, create.stderr + create.stdout)
+    const convert = spawnSync('hdiutil', dmgConvertArgs(rw, dmg), { encoding: 'utf8' })
+    assert.equal(convert.status, 0, convert.stderr + convert.stdout)
     assert.ok(existsSync(dmg), 'DMG 应产出')
     const mount = path.join(out, 'mnt')
     mkdirSync(mount)
@@ -1108,23 +1121,6 @@ test('⑬ 真实 DMG：卷内含 .app + /Applications 链接，卷名 = --app-na
       assert.ok(lstatSync(path.join(mount, 'Applications')).isSymbolicLink(), '挂载卷内应有 /Applications 链接')
       const info = spawnSync('diskutil', ['info', mount], { encoding: 'utf8' })
       assert.match(info.stdout, /Volume Name:\s+dsh-chamber/)
-      // 内容级：.DS_Store 必须真的写着背景=图像 + 指向卷内背景图的别名 + 窗口尺寸 + 两条坐标。
-      // 只查「文件在」会放过「设了但没落盘」的 DMG——那正是「没有拖拽提示」的形态。
-      const dsStoreBuffer = readFileSync(path.join(mount, '.DS_Store'))
-      const facts = dmgLayoutFacts(dsStoreBuffer)
-      assert.equal(facts.iconView?.backgroundType, 2, 'backgroundType=2（图像背景）必须落盘')
-      const alias = facts.iconView?.backgroundImageAlias
-      assert.ok(alias instanceof Uint8Array && alias.length > 0, 'backgroundImageAlias 必须非空')
-      const aliasText = Buffer.from(alias).toString('latin1')
-      assert.ok(aliasText.includes('.background') && aliasText.includes('background.tiff'),
-        '背景别名必须指向卷内 .background/background.tiff')
-      assert.equal(facts.iconView?.iconSize, DMG_ICON_SIZE)
-      const bounds = facts.window?.WindowBounds
-      assert.ok(typeof bounds === 'string' && bounds.startsWith('{{' + DMG_WINDOW_ORIGIN.x + ', ')
-        && bounds.endsWith(', {' + DMG_WINDOW.width + ', ' + DMG_WINDOW.height + '}}'),
-        `窗口尺寸必须落盘（y 随屏幕取整，不比），实际 ${bounds}`)
-      assert.ok(dsStoreHasIlocEntry(dsStoreBuffer, 'dsh-chamber.app'))
-      assert.ok(dsStoreHasIlocEntry(dsStoreBuffer, 'Applications'), 'Iloc 必须登记两个条目')
     } finally {
       spawnSync('hdiutil', ['detach', mount, '-force'], { encoding: 'utf8' })
     }
