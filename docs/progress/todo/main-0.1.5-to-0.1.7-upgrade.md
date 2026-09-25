@@ -886,8 +886,8 @@ pnpm run test:swift     # UpdateStallWatchdogTests + UpdateAvailabilityTests
 |---|---|---|
 | `01-overview.md` | §6 R1–R5 在位；**包拓扑权威表补三行**（`packages/dsh-chamber-client-core` / `dsh-chamber-wire` / `dsh-stream-state`，2026-12 补进 `AGENTS.md`「Runtime Boundaries」——设计 01 无独立拓扑表） | — |
 | `13-remote-plugin-management.md` | §8（wire 单源、能力门数据源、C 分层）在位 | 按 registry 的 C14 判据措辞复核（未做） |
-| `15-chamber-settings-page.md` | **§6 完整桥修订补写**（所选来源 ctx 的 `settings.section` 账本 + 渲染绑定座位 + staged 保存 + `settings.launcher` + 源模型，2026-12） | — |
-| `05-connection-manager.md` | 2026-12 更新块 + 路径重定位在位；**§5/§7 设置桥正文改写为完整桥口径**（2026-12） | — |
+| `15-chamber-settings-page.md` | **已在位（本轮复核）**：§6「完整桥修订（2026-12）」逐条覆盖所选来源 ctx 的 `settings.section` 账本、面注册表、源下拉、渲染绑定座位、staged 保存与权威分类、`settings.launcher` 座、与 §2 的关系 | — |
+| `05-connection-manager.md` | 2026-12 更新块 + 路径重定位在位；**§5 的「每来源设置面 = 该来源自己的设置面（权威口径 完整桥接修订）」逐条覆盖面注册表/渲染/座位矩阵/保留 shadow 优先级与看门狗/固定入口**（本轮复核） | §7.4 IPC 白名单是否需按完整桥口径补一句（现文已覆盖无新增控制面 API） |
 | `25-macos-swift-native-shell.md` | 2026-12 更新块 + `shell.leading` 席位名在位；崩溃记录/采集器口径已同步（§5.4） | 隐私/载体口径已复核（2026-12 裁决：载体保持现状、隐私只更新口径入 design 02）；上游重写段落的人工合未做 |
 | `06` / `14` / `20` / `24` | `sidebar/src/shared` → `dsh-chamber-client-core` 路径重定位已在位 | **已核实**：14 §D4 已是 `dsh-stream-state` 口径；06/20/24 均已含 `dsh-chamber-client-core` 落点（2026-12 核） |
 | `deviations.md` | §0 R1 对齐登记纪律在位 | 逐行复核「对齐类」行（未做） |
@@ -1066,6 +1066,13 @@ rc.1 对 §15/§16/§17 的修订（逐条执行）：
 | **P3** | 密钥存在性展示（`SettingsSecretSpec` 同形），补测试证明密钥值不可能经渲染端读回 | 1–2 人日 | 安全测试 + bridge 成员锁 |
 | **P4（2026-12 裁决：不做）** | 改走官方壳（方案 1/3c）的 dev-only 实验分支；用户裁决选 **A（壳保留 chamber、契约上游、内容原生）**，本行不执行；仅在放弃自持设置/多来源桥时重开 | 8–13 人日 | — |
 
+**2026-12 状态复核（照现状核实，剩余面据此重估）**：
+
+- **P0 已满足**（本节写于完整桥修订之前）：固定入口集合与纯函数在 `packages/dsh-chamber-client-ui-settings-bridge/src/client/nav-active.ts`（`FIXED_SECTION_IDS` / `resolveActiveSection` / `isFixedSectionId`，锁定测试 `test/navigation/nav-active.test.ts`，含「`__plugins` 不是固定入口」）；shadow 契约在 `packages/dsh-chamber-client-core/src/settings-shell.ts`（`SETTINGS_SHELL_ENTRY_ID` / `SETTINGS_SHELL_SHADOW_PRIORITY` / `classifySettingsSeatOccupant` / `settingsSeatTakeoverMessage`），注册点 `settings-bridge/src/client/index.ts`（LOWER priority 遮蔽官方 SettingsRoot、不删其台账条目）。因此**不再另建** `settings-source-model.ts`：源模型已由 `settings-bridge/src/client/settings-source-face.ts`（类型 + 发布/读取单一席位）承担；`settings-descriptors.ts` 属 P2。
+- **P1 部分已实现**：所选来源自己 boot-ctx 的 `settings.section` 账本 + 该 ctx 渲染绑定座位（`SettingsShell.tsx` + `settings-source-face.ts`，design 05 §5 完整桥修订）。**仍待**：`__connections`/`__general` 由台账/描述符驱动（现为固定入口常量 + `GeneralView` 组件）——余量约 1–2 人日。
+- **P2 未做**：字段描述符 + 上游字段套件渲染标量/密钥 + staged（含布尔 staged）——2–4 人日。
+- **P3 未做**：`SettingsSecretSpec` 同形密钥存在性展示 + 「密钥值不可能经渲染端读回」的安全证明——1–2 人日。
+- 结论：本节总成本按剩余面重估为 **4–8 人日**（原 7–12 人日含已完成的 P0 与 P1 主面）。
 #### 22.2.5 设置面明确不做
 
 1. 方案 4（并入 dsh 设置文档）；2. 方案 3a（真 namespace）；3. 方案 3b（控制面代答）；4. 方案 1（去 shadow）；5. schema 驱动通用渲染器；6. 把 `ChamberSource` 做成用户插件 API；7. 凭据进渲染端/日志/实例文档；8. 为保 shadow 而 fork `ui-settings-general`。
