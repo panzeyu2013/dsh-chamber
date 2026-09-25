@@ -886,7 +886,7 @@ pnpm run test:swift     # UpdateStallWatchdogTests + UpdateAvailabilityTests
 |---|---|---|
 | `01-overview.md` | §6 R1–R5 在位；**包拓扑权威表补三行**（`packages/dsh-chamber-client-core` / `dsh-chamber-wire` / `dsh-stream-state`，2026-12 补进 `AGENTS.md`「Runtime Boundaries」——设计 01 无独立拓扑表） | — |
 | `13-remote-plugin-management.md` | §8（wire 单源、能力门数据源、C 分层）在位 | 按 registry 的 C14 判据措辞复核（未做） |
-| `15-chamber-settings-page.md` | **已在位（本轮复核）**：§6「完整桥修订（2026-12）」逐条覆盖所选来源 ctx 的 `settings.section` 账本、面注册表、源下拉、渲染绑定座位、staged 保存与权威分类、`settings.launcher` 座、与 §2 的关系 | — |
+| `15-chamber-settings-page.md` | **本轮补写 §6「完整桥修订（2026-12）」**（所选来源 ctx 的 `settings.section` 账本 + 面注册表 + 源下拉 + 渲染绑定座位 + staged 保存与权威分类 + `settings.launcher` 座 + 与 §2 的关系）；事实逐条对照 `nav-active.ts`/`settings-source-face.ts`/`bridge-servers.ts`/`settings-shell.ts` 复核 | — |
 | `05-connection-manager.md` | 2026-12 更新块 + 路径重定位在位；**§5 的「每来源设置面 = 该来源自己的设置面（权威口径 完整桥接修订）」逐条覆盖面注册表/渲染/座位矩阵/保留 shadow 优先级与看门狗/固定入口**（本轮复核） | §7.4 IPC 白名单是否需按完整桥口径补一句（现文已覆盖无新增控制面 API） |
 | `25-macos-swift-native-shell.md` | 2026-12 更新块 + `shell.leading` 席位名在位；崩溃记录/采集器口径已同步（§5.4） | 隐私/载体口径已复核（2026-12 裁决：载体保持现状、隐私只更新口径入 design 02）；上游重写段落的人工合未做 |
 | `06` / `14` / `20` / `24` | `sidebar/src/shared` → `dsh-chamber-client-core` 路径重定位已在位 | **已核实**：14 §D4 已是 `dsh-stream-state` 口径；06/20/24 均已含 `dsh-chamber-client-core` 落点（2026-12 核） |

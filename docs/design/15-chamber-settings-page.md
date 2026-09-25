@@ -148,3 +148,16 @@ ChamberSettings.sessionTodo: {
 - 设计 06 §8（会话待办区交互/派生契约）、设计 19 §3.4（通知组并入通用的先例：事件类别 vocabulary 复用
   complete/ask/request）；
 - `docs/progress/STATUS.md`（进度唯一记录）。
+
+## 6. 完整桥修订（2026-12）
+
+> 本节补写选中来源设置面的实现契约；权威分类仍以 §2（D1 固定入口 / D3 两组不交叉 / D4 会话待办区）为准，
+> §1 的壳形态描述保持。落点均在 `packages/dsh-chamber-client-ui-settings-bridge/src/client/`。
+
+- **单一权威数据源 = 所选来源自己 boot ctx 的 `settings.section` 台账**：面板不持有第二套设置模型——它读该来源自己的 cordis ctx（`AppWebEntry` 的 boot ctx）的注册表，`section-rows.ts` 只把台账投影成 nav 行（id/order/label，不渲染 `registrant`：第三方分节与官方分节同形），条目的组件、`store`、`inject` 与生命周期都归该来源自己；官方 settings 全族、该来源第三方 extra rows 分节与 chamber 在该 ctx 注册的「dsh 运行时」（order 31）同台。
+- **面（face）注册表**：每个实例的桥接插件在该 ctx `apply` 发布 `{ slots, locale, chamberSourceFingerprint }`（`index.ts` / `settings-source-face.ts`），该实例的设置壳（`sidebar.settings` occupant，唯一被渲染器交付完整标准座的 chamber 条目）发布 `useSessions`/`useWorkspaces`/`usePanelInfo`/`useResource`/`useSessionPendingInteraction` 与 root `props`（`chamberFileApiBase`）。两半齐（`settingsSourceFaceReady`）且 face 的 `sourceFingerprint` 与权威 roster 同字段相等才渲染；半发布，以及同 id replacement / 传输身份变更后的旧 face，一帧都不渲染。
+- **源下拉（N 源切换）**：行集来自 `chamberBridge` 投影（`bridge-servers.ts`；渲染签名 `serverProjectionSignature` 含 `sourceFingerprint` 与连接页所渲染的诊断字段，时间戳刷新被抑制），可搜索（label + id）、离线来源可选（进入不可达占位 + 连接管理入口）；默认选中 hosting instance → 首个 connected → 首行。切换来源不改当前分节：chamber 全局 id 优先，服务端分节 id 离开新来源台账时回落首行（`nav-active.ts`）。面板打开期间 `chamberBridge.setSettingsTarget(selectedId)` 让 App 保证该来源壳挂载（未挂载则后台挂载、不切 active view）并排除出回收路径，关闭/卸载即撤除。
+- **渲染绑定座位**：条目 kit = 该 ctx 的标准座 + `t`（该来源 locale face 的命名空间绑定，按 revision 缓存）+ 条目自己的 `useStore`/`actions`（`store.create()` per entry 缓存）+ `renderSlot`（仅 root list/keyed；未声明或非 root 子座抛 `BridgeAssemblyError`）+ 条目 `inject` 面 + owner props；缺席的座保持缺席，绝不伪造空 observable。每个槽渲染点恒有 `[data-slot="<key>"]` 锚点（`display:contents`），胜出条目、fallback、占用但无胜出者的死单元与未声明槽都在内渲染，死单元给 `[data-slot-error]`（`cell-dispatch.ts`）；每个出口由 `BridgeEntryBoundary containAll` 收口，外来条目的渲染/装配错误永不 abdicate chamber shell。
+- **staged 保存与权威分类**：各分节的保存语义由条目自己的 store/组件持有（官方分节的草稿→校验→提交原样保留；桥只物化 `useStore`/`actions`/`inject`，不拦截、不重实现、不代持）。chamber 全局 `__general` 仍是主进程 `chamber-settings.json` 的乐观 overlay（`settings-store.ts`：同帧可见、失败回滚、最新保存替换在途）；`__connections` 为草稿（`connection-form.ts` 的 `HostDraft`，秘密字段仅瞬时）→ 渲染端校验 → 一次 `desktop_ssh_save_connection` 事务提交，失败以 `formError`/字段错误行如实呈现；凭据只以 `sshPasswordSet`/`tokenSet`/`passwordSet` 存在性投影回读、清除恒为 clear-only（`clear-credential.ts`，凭据值永不进 renderer）。三组权威（chamber 全局 / 选中实例自己 ctx / 连接注册表与凭据）互不交叉。
+- **`settings.launcher` 座（壳 chrome 渲染点）**：上游 `ui-settings` 声明的 single 座由官方 `SettingsRoot` 在触发行渲染（无注册者回落普通设置按钮），owner props `{ wide, settingsOpen, openSettings, openOnboarding, settingsShortcut? }`——`settingsOpen` 的 false→true 边沿 = 一次进入设置，`settingsShortcut` 未绑定即缺席，`openOnboarding(id)` 直达该 id 的注册步骤。chamber 壳遮蔽官方 shell 后，触发行由 `SettingsShell.tsx` 自绘 trigger（`aria-haspopup="dialog"`/`aria-expanded`，关闭后焦点还给触发器）；打开面板与 `settings.onboarding` 协调器（`onboarding.ts`）分别是 `openSettings`/`openOnboarding` 动作面的对应实现。
+- **与 §2 的关系**：本节不改写 D1/D2/D3/D4——固定入口 `__connections`/`__general`（`FIXED_SECTION_IDS`）、两组永不交叉、会话待办区设置契约继续以 §2 为准；本节只补写「选中来源设置面的数据来源、座位与写路径」。连接页自身仍是设置壳的固定 nav 入口（不经官方 host-ctx `settings.section` 注册，见 §3）。
