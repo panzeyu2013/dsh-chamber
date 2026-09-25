@@ -338,6 +338,11 @@
   （`ensure-harness-vendor` 解析 shim + `dsh-subprocess-local` 的 `ensure-spawn-helper` postinstall）尚未在真机安装后
   复核「补丁已生效、补偿可撤」——复核前保留（属**必要取舍**，不是未移植项）。
 
+- **隐私口径（2026-12 用户裁决：与上游行为一致）**：控制面只设 `DSH_TELEMETRY_DISABLED=1`——它只关
+  `session-telemetry-otel`，**不覆盖**上游 base profile 默认挂载的 `session-log-deepseek`（会话日志贡献者）；
+  chamber 不写 `disabled: true` patch 去拦它（该贡献者是上游行为，chamber 不干预）。后果面：托管实例按上游默认
+  记录会话日志到宿主 home（不出本机、不进控制面/渲染端、无任何上报）。口径正文见 design 02 §环境固定。
+
 - **测试运行器并发上限（未闭合）**：`run-checks tests` 的全局文件池默认 `min(8, 核数)`——同窗口实测 c12 文件总工作
   217s vs c8 141s（每文件膨胀），吞吐收益递减，默认不动。并发已暴露的两处测试自身缺陷（`manager-api` 候选端口占满、
   `sidecar-stdio.test.ts` 固定端口）均已根治。**仍未定位**：`carrier-assembly.test.ts` 的 c16 零汇总。
