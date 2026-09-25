@@ -1,0 +1,50 @@
+/* Containment for the upstream plugin manager page inside a settings TAB body
+   (design 05 §5: the manager occupies settings.plugins.tab, never a sidebar panel).
+   The page is written as a MAIN-panel entry page: its root is a full-height,
+   self-scrolling, centred column padded by clamp(24px, 4vw, 48px), its two chrome
+   rows (the page head and every detail head) reserve 28px plus the macOS window
+   strip, and it carries its own h1 + intro.
+
+   The official sibling tab is the contract to match: PluginInventorySettingsTab's
+   .section is a width:100%, max-width:760px, unpadded column with NO title of its
+   own (the Plugins section owns the h2 / intro / tab labels). Embedded unchanged,
+   the page instead reads as inset / centred — 4vw measures the WINDOW, not the
+   800px dialog, so it keeps its full 48px side padding at any window ≥ 1200px —
+   lands ~76px below the tab bar on macOS (28px inset + 48px strip), and repeats
+   the section title with its own h1 + intro.
+
+   Scope: the page's own attributes — data-plugin-panel (root) and data-window-drag
+   (both chrome rows) — because the upstream module class names are hashed. The
+   descendant scope also lifts specificity above the originals (0,2,0 / 0,3,0 vs
+   0,1,0 / 0,2,0), so nothing here depends on stylesheet order. */
+
+/* The page root: the tab body is not the full-bleed main panel, so the 4vw side
+   insets and the 48px bottom go. The other three are contract pins — inert under
+   today's composition (the 800px dialog is narrower than both the page's 960px
+   child cap and the sibling tab's 760px column, and every ancestor height is
+   auto) — so that a wider panel or a definite parent height cannot silently
+   re-centre the column or make the page a second scroller: .options scrolls the
+   dialog, the page stays content-sized. */
+.embedded [data-plugin-panel] {
+  padding: 0;
+  align-items: flex-start;
+  height: auto;
+  overflow: visible;
+}
+
+/* Both chrome rows reserve 28px plus the macOS strip; a tab body starts below the
+   dialog's own header, so the head starts at the tab bar. The override is
+   value-agnostic (padding-top: 0), and the marks themselves stay: the ui-theme
+   app-region manifest pins these rows as chrome, and under the shell's hidden
+   title bar they own the only window drag surface while the modal is up. */
+.embedded [data-plugin-panel] [data-window-drag] {
+  padding-top: 0;
+}
+
+/* The page head repeats the section's own title ("内置插件" + intro) with an h1 and
+   an intro paragraph no official tab body renders; drop the two text nodes — the
+   intro as the h1's adjacent sibling, never any other paragraph — and keep the
+   row: the head's space-between then pins its toolbar (refresh + add) right. */
+.embedded [data-plugin-panel] > [data-window-drag] :is(h1, h1 + p) {
+  display: none;
+}
