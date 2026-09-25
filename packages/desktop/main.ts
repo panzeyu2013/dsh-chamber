@@ -12,6 +12,15 @@
  */
 
 import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Tray, nativeImage, nativeTheme, powerMonitor, powerSaveBlocker, safeStorage, session } from 'electron';
+import {
+  SAFE_MODE_ENV,
+  backupChamberStateForRecovery,
+  formatStartupFailureDetail,
+  isSafeModeEnabled,
+  planStartupRecovery,
+  resolveStartupRecoveryAction,
+} from './startup-error.ts';
+import type { StartupFailureKind, StartupRecoveryAction } from './startup-error.ts';
 /** 上游 windows-layout.ts 的镜像值（Windows caption 高度，dip）——preload.cts 内另有
  *  同值副本（preload 运行时自带，不跨 CJS 边界导入）；两处相等由 upstream-seats 用例钉住。 */
 const WINDOWS_TITLEBAR_HEIGHT = 40;
@@ -54,6 +63,119 @@ import { RendererFrameWatchdog, RENDERER_FRAME_PROGRESS_SCRIPT, RENDERER_INPUT_B
 // privileged main process may be inconsistent and must fail closed rather than
 // keep serving IPC, transports and persistence from an indeterminate state.
 let fatalExceptionInProgress = false;
+/**
+ * 呈一次致命启动失败恢复框（上游 fatal-recovery.ts 的等价物；C4 启动与修复）。
+ * 按钮布局/按键语义全部由 startup-error.ts 的纯函数给定：三选 = 退出 / 重启 /
+ * 安全模式重启（默认与 Esc 都落安全项），锁冲突两选 = 退出 / 重启。
+ * 单次呈现门：同一 fatal 经多条腿上报时只弹一次；对话框不可用按退出 fail-closed。
+ * @param input - 标题与明细（明细经 formatStartupFailureDetail 截断）。
+ * @param kind - 'startup'（致命启动失败）或 'already-running'（目录锁冲突）。
+ */
+function reportFatalStartupFailure(input: { title: string; detail: string }, kind: StartupFailureKind): void {
+  console.error(`[dsh-chamber] ${input.title}：${input.detail}`);
+  if (startupRecoveryShown) return;
+  startupRecoveryShown = true;
+  const copy = shellStrings(app.getLocale());
+  const plan = planStartupRecovery(
+    { exit: copy.quitButton, restart: copy.restartButton, safeModeRestart: copy.safeModeRestartButton },
+    kind,
+  );
+  let response: number | null = null;
+  try {
+    response = dialog.showMessageBoxSync({
+      type: 'error',
+      title: input.title,
+      message: input.title,
+      detail: formatStartupFailureDetail(input.detail),
+      buttons: [...plan.buttons],
+      defaultId: plan.defaultId,
+      cancelId: plan.cancelId,
+      noLink: true,
+    });
+  } catch (error) {
+    console.error('[dsh-chamber] 启动失败恢复框不可用，按退出处理：', describeUnknownError(error));
+  }
+  applyStartupRecoveryAction(response === null ? 'exit' : resolveStartupRecoveryAction(plan, response));
+}
+
+/**
+ * 恢复动作的唯一执行出口（呈现后进程去向只能由用户选择决定，绝不静默 exit(1)）。
+ * @param action - 三选/两选决策结果。
+ */
+function applyStartupRecoveryAction(action: StartupRecoveryAction): void {
+  if (action === 'exit') {
+    console.log('[dsh-chamber] 恢复动作：退出（exit 1）');
+    app.exit(1);
+    return;
+  }
+  const safeMode = action === 'safe-mode-restart';
+  console.log(`[dsh-chamber] 恢复动作：${safeMode ? '安全模式重启' : '重启'}——先走既有退出清理链（传输层/控制面/本地 dsh），再重启`);
+  void relaunchForRecovery(safeMode);
+}
+
+/**
+ * 恢复重启腿：先排队 app.relaunch()（清理腿超时强退也不丢重启），再 await 既有
+ * 退出清理链（与 will-quit 同一份 runQuitCleanupChain），释放目录锁后才
+ * app.exit(0)。安全模式：先备份 chamber 自持文件（只备份、绝不改写 dsh profile），
+ * 再把 DSH_CHAMBER_SAFE_MODE=1 写进本进程 env——app.relaunch() 的新实例继承该环境，
+ * 下次普通启动自动恢复。
+ * @param safeMode - true = 安全模式重启（跳过 chamber 宿主包 seeding 与 extra rows）。
+ */
+async function relaunchForRecovery(safeMode: boolean): Promise<void> {
+  if (recoveryRelaunchInProgress) return;
+  recoveryRelaunchInProgress = true;
+  if (safeMode) {
+    process.env[SAFE_MODE_ENV] = '1';
+    const stamp = new Date().toISOString().replace(/[:.]/gu, '-');
+    for (const outcome of backupChamberStateForRecovery({ userDataDir: app.getPath('userData'), stamp })) {
+      const suffix = outcome.error === undefined ? '' : `（${outcome.error}）`;
+      console.log(`[dsh-chamber] 安全模式备份 ${outcome.id}：${outcome.status}${suffix} → ${outcome.destination}`);
+    }
+  }
+  app.relaunch();
+  await runQuitCleanupChain();
+  try {
+    chamberLockHandle?.release();
+    chamberLockHandle = null;
+  } catch (error) {
+    console.warn('[dsh-chamber] 目录锁释放失败（进程退出由内核兜底）：', describeUnknownError(error));
+  }
+  console.log(`[dsh-chamber] 清理完成：控制面已停止、目录锁已释放——重启新实例（安全模式=${safeMode}）`);
+  app.exit(0);
+}
+
+/**
+ * 退出清理链（will-quit 主体 + 恢复重启腿共享；单飞：重复调用返回同一份 promise）。
+ * 装配侧公共回收腿（dispose：quitting 门 + 事务 abort + transport/插件子进程/在飞
+ * 事务并行回收 + 会话清理）与控制面 stop 并行等待（互不依赖，总耗时 = max）；
+ * 兜底：清理链挂起则超时强制退出，绝不留下「窗口已关、进程仍在」的半退出态。
+ * @returns 清理链 settle 后的 promise。
+ */
+function runQuitCleanupChain(): Promise<void> {
+  if (quitCleanupPromise !== null) return quitCleanupPromise;
+  const cleanupTimer = setTimeout(() => {
+    // 超时强制退出走 app.exit()：quit 事件不触发，autoInstallOnAppQuit 不执行
+    // ——退出腿下「已下载」更新会被跳过；「重启并安装」腿不受影响。
+    console.error('[dsh-chamber] 退出清理超时，强制退出（可能有子进程残留；退出腿的已下载更新不会安装）');
+    app.exit(1);
+  }, QUIT_CLEANUP_TIMEOUT_MS);
+  const cp = controlPlane;
+  controlPlane = null;
+  const assembly = hostAssembly;
+  quitCleanupPromise = Promise.allSettled([
+    assembly === null ? Promise.resolve() : assembly.dispose(),
+    cp?.stop().catch((err) => console.error('[dsh-chamber] 控制面停止失败：', err)),
+  ]).then(() => undefined).finally(() => {
+    // Gateway 会话与 pre-expiry 刷新计时器已在 assembly.dispose() 内丢弃；
+    // 这里只剩计时器与退出簿记。
+    clearTimeout(cleanupTimer);
+    willQuitCleanupComplete = true;
+    console.log('[dsh-chamber] will-quit 清理完成，进程退出');
+  });
+  const pending = quitCleanupPromise;
+  return pending;
+}
+
 function fatalMainError(reason: unknown): void {
   if (fatalExceptionInProgress) {
     try { process.abort(); } catch { /* no further recovery is trustworthy */ }
@@ -211,7 +333,13 @@ let keepAwakeBlockerId: number | null = null;
 let quitRequested = false;
 let quitConfirmed = false;
 let confirmingQuit = false;
-let quitCleanupInProgress = false;
+// 启动失败恢复（C4，design 25 §6 / 计划 §12.10）：单次呈现门 + 重启腿单飞 +
+// 退出清理链单飞 promise + 目录锁句柄（重启腿要在 app.exit(0) 前显式释放：
+// app.exit() 不保证 'quit' 事件，而 chamber-lock 的 release() 幂等）。
+let startupRecoveryShown = false;
+let recoveryRelaunchInProgress = false;
+let quitCleanupPromise: Promise<void> | null = null;
+let chamberLockHandle: { release(): void } | null = null;
 
 // 「重启并安装」在途标志。quitAndInstall 在 macOS 上先关闭全部窗口再退出，
 // 而 hide-to-tray 只在 quitRequested 后才放行关窗——若被 hide 吞掉，窗口消失、
@@ -498,7 +626,10 @@ function installRendererRecovery(win: BrowserWindow): void {
       recoveryGaveUp = true;
       console.error('[dsh-chamber] 渲染器反复异常或无进度，停止自动恢复');
       const copy = shellStrings(app.getLocale());
-      dialog.showErrorBox(copy.rendererCrashedTitle, copy.rendererCrashedMessage);
+      reportFatalStartupFailure(
+        { title: copy.rendererCrashedTitle, detail: copy.rendererCrashedMessage },
+        'startup',
+      );
     }
   };
   win.webContents.on('did-start-loading', () => {
@@ -638,7 +769,7 @@ function handleUntrustedNavigation(event: { preventDefault(): void }, url: strin
 
 /** 创建主窗口（单 frame，控制面 origin）。启动期与 activate 重建共用：
  *  fatalOnLoadFailure=true 时加载失败 = 大声失败 + 退出；重建路径只记录。 */
-function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): BrowserWindow {
+function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): BrowserWindow | null {
   // Normalize a possibly-trailing-slash origin: appending unconditionally would
   // produce a `//`-leading path that `new URL('//', base)` rejects and crashes
   // the control plane's request handler.
@@ -652,8 +783,11 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
     // 对话框 + 退出（与 loadURL 失败同 UX）。
     const message = `preload 构建产物缺失：${preloadPath}（先运行 build:preload）`;
     console.error(`[dsh-chamber] ${message}`);
-    dialog.showErrorBox(shellStrings(app.getLocale()).startupFailedTitle, message);
-    app.exit(1);
+    reportFatalStartupFailure(
+      { title: shellStrings(app.getLocale()).startupFailedTitle, detail: message },
+      'startup',
+    );
+    return null;
   }
   const win = new BrowserWindow({
     width: 1280,
@@ -794,9 +928,10 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
     if (quitRequested || win.isDestroyed()) return;
     const detail = describeUnknownError(loadError);
     if (fatalOnLoadFailure) {
-      dialog.showErrorBox(shellStrings(app.getLocale()).startupFailedTitle, `前端加载失败：\n${detail}`);
-      void controlPlane?.stop().catch(err => console.error('[dsh-chamber] 控制面停止失败：', err));
-      app.exit(1);
+      reportFatalStartupFailure(
+        { title: shellStrings(app.getLocale()).startupFailedTitle, detail: `前端加载失败：\n${detail}` },
+        'startup',
+      );
     } else {
       console.error('[dsh-chamber] 重建窗口加载失败：', detail);
     }
@@ -946,38 +1081,9 @@ if (!gotTheLock) {
       } catch { /* already gone */ }
       tray = null;
     }
-    if (quitCleanupInProgress) {
-      event.preventDefault();
-      return;
-    }
     event.preventDefault();
-    quitCleanupInProgress = true;
-    // 装配侧公共回收腿（dispose：quitting 门 + 事务 abort + transport/插件子
-    // 进程/在飞事务并行回收 + 会话清理，与 Swift sidecar 同一实现）与控制面 stop
-    // 并行等待（互不依赖，总耗时 = max）；disposeAsync 仍 WAITS 每个 SIGKILL
-    // 升级，否则 SIGTERM 忽略的 ssh 子进程会随退出孤儿化。兜底：清理链挂起则
-    // 超时强制退出，绝不留下「窗口已关、进程仍在」的半退出态。
-    const cleanupTimer = setTimeout(() => {
-      // 超时强制退出走 app.exit()：quit 事件不触发，autoInstallOnAppQuit 不执行
-      // ——退出腿下「已下载」更新会被跳过；「重启并安装」腿不受影响（安装器已在
-      // quit 前 detached / AppImage 已原位替换）。
-      console.error('[dsh-chamber] 退出清理超时，强制退出（可能有子进程残留；退出腿的已下载更新不会安装）');
-      app.exit(1);
-    }, QUIT_CLEANUP_TIMEOUT_MS);
-    const cp = controlPlane;
-    controlPlane = null;
-    const assembly = hostAssembly;
-    void Promise.allSettled([
-      assembly === null ? Promise.resolve() : assembly.dispose(),
-      cp?.stop().catch((err) => console.error('[dsh-chamber] 控制面停止失败：', err)),
-    ]).finally(() => {
-      // Gateway 会话与 pre-expiry 刷新计时器已在 assembly.dispose() 内丢弃；
-      // 这里只剩计时器与退出簿记。
-      clearTimeout(cleanupTimer);
-      quitCleanupInProgress = false;
-      willQuitCleanupComplete = true;
-      // 该标记证明原生 Squirrel 终止确实走完了 Electron will-quit 清理。
-      console.log('[dsh-chamber] will-quit 清理完成，进程退出');
+    // 清理链与恢复重启腿共享（单飞 promise）；完成后再 app.quit() 收尾。
+    void runQuitCleanupChain().finally(() => {
       app.quit();
     });
   });
@@ -1006,10 +1112,14 @@ if (!gotTheLock) {
     const chamberLock = acquireChamberLock({ userDataDir: runtimeBaseDir, shell: 'electron' });
     if (!chamberLock.ok) {
       console.error(`[dsh-chamber] ${chamberLock.error}`);
-      dialog.showErrorBox(shellStrings(app.getLocale()).alreadyRunningTitle, chamberLock.error);
-      app.exit(1);
+      reportFatalStartupFailure(
+        { title: shellStrings(app.getLocale()).alreadyRunningTitle, detail: chamberLock.error },
+        'already-running',
+      );
       return;
     }
+    // 句柄供恢复重启腿在 app.exit(0) 前显式释放（app.exit 不保证 'quit' 事件）。
+    chamberLockHandle = chamberLock.handle;
     if (chamberLock.unsupported) {
       console.warn('[dsh-chamber] 目录锁：当前平台无 O_EXLOCK（Swift flavor 仅 macOS）——跨 flavor 互斥不适用');
     }
@@ -1021,8 +1131,10 @@ if (!gotTheLock) {
     } catch (error) {
       const detail = describeHostRootLeaseFailure(error);
       console.error(`[dsh-chamber] ${detail}`);
-      dialog.showErrorBox(shellStrings(app.getLocale()).startupFailedTitle, detail);
-      app.exit(1);
+      reportFatalStartupFailure(
+        { title: shellStrings(app.getLocale()).startupFailedTitle, detail },
+        'startup',
+      );
       return;
     }
     // Release ONLY after the async cleanup finishes (releasing in a will-quit
@@ -1186,6 +1298,12 @@ if (!gotTheLock) {
           ? 'dev 自动退避（17520 起，首个空闲端口）'
           : '打包默认';
       console.log(`[dsh-chamber] 控制面端口：${controlPlanePort}（${portSourceLabel}${controlPlanePort === 0 ? '；0 = 系统临时分配' : ''}）`);
+      // C4 安全模式（design 25 §6 / 计划 §12.5）：env 不落盘，只影响本次进程；
+      // 一行声明生效面，并显式传给控制面（选项优先于 env，两个读点不分叉）。
+      const safeModeActive = isSafeModeEnabled(process.env);
+      if (safeModeActive) {
+        console.log(`[dsh-chamber] 安全模式生效（${SAFE_MODE_ENV}=1）：跳过 chamber 宿主包 seeding 与 extra rows 装载；下次普通启动自动恢复`);
+      }
       controlPlane = createControlPlane({
         port: controlPlanePort,
         stateDir: stateRootDir(app.getPath('userData')),
@@ -1202,6 +1320,7 @@ if (!gotTheLock) {
         // dev and packaged alike (renderer owns dist/web only; preload and host
         // packages live beside it in dist/).
         webDistDir: path.join(pkgDir, 'dist', 'web'),
+        safeMode: safeModeActive,
         // Host-graph package source: seeded into the local web profile at start
         // (dev source tree; packaged copy in dist/). Missing → graceful
         // degradation (no --patch overlay, v4 baseline spawn).
@@ -1227,8 +1346,10 @@ if (!gotTheLock) {
       await controlPlane.start();
     } catch (err) {
       const detail = describeUnknownError(err);
-      dialog.showErrorBox(shellStrings(app.getLocale()).startupFailedTitle, `控制面启动失败：\n${detail}`);
-      app.exit(1);
+      reportFatalStartupFailure(
+        { title: shellStrings(app.getLocale()).startupFailedTitle, detail: `控制面启动失败：\n${detail}` },
+        'startup',
+      );
       return;
     }
 
@@ -1340,7 +1461,9 @@ if (!gotTheLock) {
     updater.start();
 
     // 启动期创建主窗口：加载失败 = 大声失败 + 退出；恢复路径共用同一创建函数。
-    createMainWindow(rendererOrigin, true);
+    // null = 致命失败已呈现恢复框（退出或重启在途）：启动尾部不得再跑。
+    const created = createMainWindow(rendererOrigin, true);
+    if (created === null) return;
     // 启动尾部（host-assembly.runStartupTail，与 Swift sidecar 同一实现）。
     void assembly.runStartupTail();
 
