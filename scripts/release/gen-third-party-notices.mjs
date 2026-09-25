@@ -12,6 +12,7 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { payloadNoticeSection } from './primary-runtime-notices.mjs'
 
 const ROOT = resolve(fileURLToPath(new URL('../../', import.meta.url)))
 const OUT = join(ROOT, 'THIRD_PARTY_NOTICES.md')
@@ -80,6 +81,8 @@ ${nativeRows.join('\n')}
 \`electron-builder\` 的 \`dmg-builder/templates/background.tiff\`（MIT，
 electron-userland/electron-builder；双 rep 540×380@72dpi + 1080×760@144dpi），
 目的是让原生 DMG 与 Electron 腿的拖拽引导完全同款（2026-09）。
+
+${payloadNoticeSection('zh')}
 `
 
 const bodyEn = `# Third-Party Notices
@@ -103,6 +106,8 @@ taken from \`electron-builder\`'s \`dmg-builder/templates/background.tiff\` (MIT
 electron-userland/electron-builder; dual representation 540×380@72dpi +
 1080×760@144dpi) so the native DMG ships the same drag-to-install cue as the
 Electron leg (2026-09).
+
+${payloadNoticeSection('en')}
 `
 
 const EN_OUT = join(ROOT, 'docs/THIRD_PARTY_NOTICES.en-US.md')

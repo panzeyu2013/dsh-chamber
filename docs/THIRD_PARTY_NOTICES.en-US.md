@@ -56,3 +56,25 @@ taken from `electron-builder`'s `dmg-builder/templates/background.tiff` (MIT,
 electron-userland/electron-builder; dual representation 540×380@72dpi +
 1080×760@144dpi) so the native DMG ships the same drag-to-install cue as the
 Electron leg (2026-09).
+
+## Bundled payload (primary runtime: CPython / python distributions / Node.js)
+
+| Component | Version | License |
+|---|---|---|
+| `CPython` (python-build-standalone) | 3.12.14 | PSF-2.0 |
+| `Node.js` | 24.18.1 | MIT |
+| `et_xmlfile` (python distribution) | 2.0.0 | see the wheel dist-info METADATA |
+| `lxml` (python distribution) | 6.1.3 | see the wheel dist-info METADATA |
+| `numpy` (python distribution) | 2.3.5 | see the wheel dist-info METADATA |
+| `openpyxl` (python distribution) | 3.1.5 | see the wheel dist-info METADATA |
+| `pandas` (python distribution) | 3.0.1 | see the wheel dist-info METADATA |
+| `Pillow` (python distribution) | 12.3.0 | see the wheel dist-info METADATA |
+| `python-dateutil` (python distribution) | 2.9.0.post0 | see the wheel dist-info METADATA |
+| `python-docx` (python distribution) | 1.2.0 | see the wheel dist-info METADATA |
+| `python-pptx` (python distribution) | 1.0.2 | see the wheel dist-info METADATA |
+| `six` (python distribution) | 1.17.0 | see the wheel dist-info METADATA |
+| `typing_extensions` (python distribution) | 4.16.0 | see the wheel dist-info METADATA |
+| `tzdata` (python distribution) | 2025.2 | see the wheel dist-info METADATA |
+| `XlsxWriter` (python distribution) | 3.2.9 | see the wheel dist-info METADATA |
+
+The full license text of CPython, Node.js and of every python distribution ships inside the payload (CPython LICENSE at the payload root, each distribution in its own `*.dist-info/METADATA`, Node.js with the node archive). Versions come from `packages/desktop/primary-runtime-lock.json` (single source).

@@ -89,12 +89,13 @@ export const GROUPS = {
     'scripts/upstream/verify-mobile-anchors.test.mjs',
   ],
   // Release chain: workflow safety policy, dual-flavor artifact清单, packaging
-  // manifest lockstep.
+  // manifest lockstep, bundled-payload notices (primary runtime).
   release: [
     'scripts/release/release-workflow-policy.test.mjs',
     'scripts/release/release-artifacts.test.mjs',
     'scripts/release/merge-native-feed.test.mjs',
     'scripts/release/packaging-manifest-lockstep.test.mjs',
+    'scripts/release/primary-runtime-notices.test.mjs',
   ],
   // GUI acceptance toolbox judgement layer (the driving layer needs a display
   // and a running app, so it stays a local gate).
