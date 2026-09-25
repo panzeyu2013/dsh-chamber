@@ -464,6 +464,9 @@ export interface UpdateControllerDeps {
   /** Windows 任务栏闪烁（上游 update-attention.ts 的 flashFrame 等价物）：窗口归
    *  宿主所有，故由宿主注入；缺省 = 不闪。 */
   flashFrame?: (on: boolean) => void
+  /** 主窗是否已聚焦（上游 DesktopUpdateAttention 的 parent.isFocused() 检查）：缺省 = 未知，
+   *  按「没聚焦」处理；聚焦时该版本只消费提醒闩锁、不打扰（窗口归宿主所有）。 */
+  isWindowFocused?: () => boolean
   /** electron-updater's `autoUpdater`; default: the real instance. */
   autoUpdater?: AutoUpdaterLike
   /** `process.platform`; default: the real platform. */
@@ -670,6 +673,9 @@ export interface UpdateControllerOptions {
    *  belongs to the host, so the host injects it here; absent = no flash. Off win32 the
    *  seam is a no-op — macOS keeps its own app.dock.bounce. */
   flashFrame?: (on: boolean) => void
+  /** Whether the host window is focused right now (upstream parent.isFocused()): the
+   *  host owns the window; absent = unknown, treated as not focused. */
+  isWindowFocused?: () => boolean
 }
 
 export function createUpdateController(options: UpdateControllerOptions, deps?: UpdateControllerDeps): UpdateController {
@@ -699,6 +705,7 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   // Host-injected attention seam: the options object is the public shape main.ts uses,
   // the deps object is the test/embedding seam — either may carry it.
   const flashFrame = options.flashFrame ?? deps?.flashFrame
+  const isWindowFocused = options.isWindowFocused ?? deps?.isWindowFocused
   // Late events from an abandoned (timed-out) check must not resurrect its
   // result; cleared when a new check starts. Download events are unaffected.
   let ignoreAbandonedCheckEvents = false
@@ -892,8 +899,8 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
     // download() 的 finally 兜底；此后相位 downloaded 本来就排除一切检查）。
     stalledDownloadGeneration = null
     setState({ phase: 'downloaded', latestVersion: info.version, downloadPercent: 100, error: null })
-    // 就绪注意力（上游 update-attention.ts）：仅一次，聚焦即清。
-    raiseUpdateAttention()
+    // 就绪注意力（上游 update-attention.ts）：每目标一次，聚焦即清。
+    raiseUpdateAttention(info.version)
   })
   // Single error path for check AND download failures. LatestVersion is kept: a check
   // error leaves it null, a download error keeps it (settings shows the retry kind).
@@ -983,6 +990,11 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   // cleared as soon as the window gains focus. Deliberately NO modal overlay —
   // design 11 §2 (no dialog / no system notification) still holds.
   let attentionBounceId: number | null = null
+  // 上游 DesktopUpdateAttention 的版本闩锁：每个「已下载的目标版本」只提醒一次；聚焦清除
+  // 只释放原生提醒、**不**重置闩锁（同一版本不会因为一次聚焦/失焦再打扰一遍）。
+  // 上游另有 reset() 供「新的下载世代」重开提醒——chamber 的相位机里不需要：相位
+  // downloaded 之后检查/下载都被门挡住，一个版本在本进程内只可能完成一次下载世代。
+  let attentionVersion: string | null = null
   // Download idle watchdog: the download phase must not stay 'downloading'
   // forever when the feed goes silent. electron-updater cannot be aborted, so a
   // late success is accepted (logged) instead of being hidden.
@@ -1023,7 +1035,15 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
     downloadWatchdogTimer.unref?.()
   }
 
-  const raiseUpdateAttention = (): void => {
+  const raiseUpdateAttention = (version: string): void => {
+    // 每目标一次：闩锁先落，聚焦分支也要消费它（上游同序：version 赋值在 isFocused 检查之前）。
+    if (attentionVersion === version) return
+    const superseding = attentionVersion !== null
+    attentionVersion = version
+    // 用户已经在这个窗口里看着：不打扰，但该版本已消费。
+    if (isWindowFocused?.() === true) return
+    // 更新的目标版本取代旧提醒：先撤掉旧的 Dock 弹跳/闪烁，再抬新的（否则旧弹跳会一直挂着）。
+    if (superseding) clearUpdateAttention()
     if (attentionBounceId === null) {
       try {
         attentionBounceId = app.dock?.bounce('critical') ?? null

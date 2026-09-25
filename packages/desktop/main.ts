@@ -1263,6 +1263,9 @@ if (!gotTheLock) {
       // Windows 任务栏注意力：seam 只在 win32 驱动当前主窗（macOS 继续走 app.dock.bounce，
       // 不双触发；无窗/已销毁静默）。每次调用实时读 mainWindow——窗口可能在检查期间重建/关闭。
       flashFrame: (on) => flashUpdateAttentionWindow(on, { window: mainWindow }),
+      // 上游 parent.isFocused() 检查的宿主半边：窗口已聚焦时控制器只消费该版本的提醒闩锁、
+      // 不打扰（无窗/已销毁 = 未聚焦）。
+      isWindowFocused: () => mainWindow !== null && !mainWindow.isDestroyed() && mainWindow.isFocused(),
     });
     // Gateway credentials store：token + password 镜像到 gateway-secrets.json
     // (schemaVersion 3, 0600, atomic write)，safeStorage 可用时加密（Keychain /

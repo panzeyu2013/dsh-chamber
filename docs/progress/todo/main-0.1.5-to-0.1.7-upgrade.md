@@ -1143,7 +1143,7 @@ rc.1 对 §15/§16/§17 的修订（逐条执行）：
 | 机会 | 上游证据 | chamber 现状 | 动作 | 建议 |
 |---|---|---|---|---|
 | **前提纠错**：上游 0.1.7 **有**完整 electron-updater 链（coordinator/journal/schedule/error/attention/http-executor），chamber 更新链自述镜像 | `apps/desktop/src/update-*.ts`；`apps/`、`patches/` 无 Sparkle | `updater.ts`/`update-journal.ts`/`update-schedule.ts` 头注自述镜像；registry 无镜像触点 | registry 加一条「上游更新链镜像触点」；T-04 补「上游无 Sparkle，S 腿为自建」 | **本轮做**（登记） |
-| 安装前准备被拒 = 可恢复（回 `ready`），失败分 `failedOperation`/准备三分类 | `apps/desktop/src/ipc.ts`、`update-coordinator.ts` | chamber 相位集无 verifying/ready，只有两分类 | 评估纳入两 flavor 投影（相位集合变更须同步锁定测试）；`technicalDetails` 留主进程 | 下轮 |
+| 安装前准备被拒 = 可恢复（回 `ready`），失败分 `failedOperation`/准备三分类 | `apps/desktop/src/ipc.ts`、`update-coordinator.ts` | chamber 相位集无 verifying/ready，只有两分类 | **评估结论：不纳入**（2026-12）——`downloaded` ≡ 上游 `ready`；`verifying` 在 electron-updater 内无独立行为面；`failureKind` 两分类 +「重启失败保持相位 + 一次性 `restartFailureText`」已覆盖 `failedOperation`/`preparationFailure` 的决策面。决策正文入 design 11 §3.2；`technicalDetails` 留主进程 | **已评估**（记录，不改代码） |
 | journal 文件卫生：schemaVersion/pid/0600/进程唯一文件名 | `apps/desktop/src/update-journal.ts` | 固定文件名、无 schemaVersion/pid | 加上三个字段与 0600/唯一名；保留自禁用 | **本轮做**（小） |
 | 上游用「替换 electron-updater 传输」实现有界静默连接 | `update-http-executor.ts`；同名 env | chamber 用外部 watchdog + 忽略迟到事件 | **不替换**（私有属性注入，Electron 升级即碎）；写成 accepted deviation | **本轮做**（登记） |
 | 注意力「每目标一次 + 焦点即清」的测试证据 | `update-attention.ts` | chamber 已有语义，缺测试证据 | 补测试；Notification 不接 | 下轮 |

@@ -64,6 +64,7 @@
   改名，避免与官方 `general.nav` 同名，见 design 15）；固定入口结构（`__connections` / `__general`）与并入决策以**设计 15** 为权威。「更新」控制组 = `UpdateSection` 组件（`update-store.ts` 模块单例
   订阅，N-ctx 共享）。内容小、只读一个 IPC 状态 → 无需
   新插件包，直接扩展 settings 壳。
+- **上游相位对比（2026-12 评估，不纳入）**：上游 Desktop 的相位集另有 `verifying`（进度 100% 到 `ready` 之间的核对窗）与 `ready`（= 本设计的 `downloaded`），失败面另有 `failedOperation`（check/download/install）与 `preparationFailure`。评估结论是**不纳入**：`downloaded` 已等价 `ready`；`verifying` 在 electron-updater 内没有独立行为面（进度 100% 直接落 `downloaded`）；chamber 的 `failureKind` 两分类加上「重启/安装失败保持 `downloaded` 相位 + 一次性 `restartFailureText`」已经保住了上游那条「准备/安装前被拒 = 可恢复」的性质（相位不回退、也不误报成下载失败），再引一套并行拼写只会让两 flavor 投影与锁定测试无谓翻新。
 - **状态机纪律**：`up-to-date`（已检查且无新版）与 `idle`（未检查）区分；`downloaded` 是终态，周期复查不得回退；检查失败与下载失败分别呈现——检查失败清空 `latestVersion`（状态行「无法检查更新」，不提供误导性重试），下载失败保留可见失败态；重试重新武装检查；状态推送优先于查询快照；`getSnapshot` 纯净（无副作用）；下载在途闸防重复下载。
 - **部分内容（低调状态行，不显眼）**：
   - 当前版本 vX（主进程投影 `currentVersion`，`dsh-chamber:info.version` 兜底）；

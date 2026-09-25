@@ -127,6 +127,8 @@ export const GROUPS = {
     'test/desktop-shell/updater-restart-install.test.ts',
     // 检查/下载的 idle 看门狗（P0-1 取件）
     'test/desktop-shell/updater-watchdog.test.ts',
+    // 就绪注意力语义（每目标一次 + 焦点即清 + 聚焦不打扰；§22.3.5）
+    'test/desktop-shell/updater-attention.test.ts',
     // main.ts 宿主的 resume nudge 与 win32 flashFrame seam（源码锁步 + seam 直测）
     'test/desktop-shell/updater-main-wiring.test.ts',
     // 两个 GitHub 发现面的锁步（共享 update-discovery.ts）
