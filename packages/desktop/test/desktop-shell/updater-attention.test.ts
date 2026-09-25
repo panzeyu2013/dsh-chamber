@@ -7,7 +7,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import type { UpdateControllerDeps } from '../../updater.ts'
 import { makeController } from '../support/updater-harness.ts'
 
 interface AttentionSpy {
