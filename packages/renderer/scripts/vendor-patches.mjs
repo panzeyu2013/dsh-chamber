@@ -36,6 +36,13 @@
  * as a correctness patch, so a pin bump re-derives it loudly instead of
  * silently dropping it. Never widen this class for a perf change that a chamber
  * package or a visibility gate can already express.
+ *
+ * THIRD ADMITTED CLASS (logic defect in a module-private state machine, admitted
+ * by maintainer ruling): an upstream behaviour that is observable in the shipped
+ * shell and that a chamber package cannot fix — from outside, a package can only
+ * compensate against the module's own state. Such an entry MUST state the
+ * measured symptom and the accepted behaviour trade-off in `reason`, is held to
+ * the same C9 anchor gate, and is deleted once the pin carries the upstream fix.
  */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -341,6 +348,22 @@ export const VENDOR_PATCHES = Object.freeze([
           + '    if (this.assembler.flush()) this.snapshot.set(this.currentSnapshot())\n'
           + '    this.openTurn.set(this.assembler.openTurn())\n'
           + '  }',
+      }),
+    ]),
+  }),
+  Object.freeze({
+    idSuffixes: Object.freeze([
+      'dsh-client-ui-chat/src/client/chat/use-chat-reading.ts',
+      'packages/client/ui-chat/src/client/chat/use-chat-reading.ts',
+    ]),
+    vendorFile: 'dsh-client-ui-chat/src/client/chat/use-chat-reading.ts',
+    reason: 'sampled-settle logic defect (observable scroll offset): the viewport attributes any position-only movement to the reader, so a delivery no reader input produced (correlated trigger, scroll-side step not yet identified: the preparing -> started row replacement of a direct bash call, which PTC subcalls never render) arms the 500 ms sample; content that grows inside that window is not followed, and when the sample settled inside the follow tolerance (FOLLOW_THRESHOLD = 24 px) the reading layer kept the residual offset instead of re-pinning, so the newest row stayed half-hidden above the composer with data-chat-following-tail still set and no back-to-bottom affordance until the next layout change. Measured in the live frontend against the chamber-built ui-chat: a 12 px non-reader offset persisted indefinitely (12 px = half of a 24 px row) and any later layout change re-pinned it. Attribution and settle both live in this module-private state machine, so a chamber package could only nudge the scrollport from outside against it; this edit makes a settled sample agree with what the onScroll first branch and onResize already do inside the same tolerance. Accepted trade-off: a deliberate reader nudge within 24 px is re-pinned at the settle instead of surviving until the next layout change. Delete this entry once upstream carries the fix (upstream-preferred form: intent-based attribution in use-chat-viewport.ts).',
+    edits: Object.freeze([
+      Object.freeze({
+        expect: '    if (!scroll.movedByReader && followingTail) this.followTail()',
+        replace: '    // chamber patch: while the follow owns the tail, a settled sample re-pins the floor\n'
+          + '    // instead of keeping the residual offset the tolerance band allows.\n'
+          + '    if (followingTail) this.followTail()',
       }),
     ]),
   }),

@@ -52,6 +52,7 @@ const FILES = {
   exportController: VENDOR + 'dsh-session-log-export/src/client/controller.ts',
   exportIndex: VENDOR + 'dsh-session-log-export/src/client/index.ts',
   assembly: VENDOR + 'dsh-client-ui-conversation/src/client/conversation/assembly.ts',
+  reading: VENDOR + 'dsh-client-ui-chat/src/client/chat/use-chat-reading.ts',
 }
 
 /** Module ids in both forms: the symlinked vendor path and the realpath'd submodule path. */
@@ -68,6 +69,7 @@ const IDS = {
   exportController: '/x/vendor/harness-checkout/packages/session-query/session-log-export/src/client/controller.ts',
   exportIndex: '/x/vendor/harness-checkout/packages/session-query/session-log-export/src/client/index.ts',
   assembly: '/x/vendor/harness-checkout/packages/client/ui-conversation/src/client/conversation/assembly.ts',
+  readingReal: '/x/vendor/harness-checkout/packages/client/ui-chat/src/client/chat/use-chat-reading.ts',
 }
 
 /** Strip a leading export keyword so a sliced declaration can run inline. */
@@ -555,6 +557,71 @@ test('the running-row sweep animates only compositor properties (parsed patched 
     undefined,
     'the retired command-row sweep patch is deleted',
   )
+})
+
+/**
+ * The follow sampler's settle path, driven through the PATCHED class: the
+ * viewport reports a reader-attributed offset (inside or beyond the follow
+ * tolerance) and the settle decides whether the tail is re-pinned.
+ */
+function readingHarness(code, { movedByReader, top, floor }) {
+  const metrics = { top, floor, height: 500 }
+  const calls = { scrollToBottom: 0, states: [] }
+  const follow = {
+    following: true,
+    animating: false,
+    nearBottom: (value) => value.floor - value.top <= 24,
+    sample(value, moved) {
+      if (!this.animating && moved) this.following = this.nearBottom(value)
+      return this.following
+    },
+    setFollowing(value) { this.following = value },
+  }
+  const viewport = {
+    readScroll: () => ({ metrics, movedByReader }),
+    scrollToBottom: () => { calls.scrollToBottom += 1; return { metrics, turn: 1, position: null } },
+    capturePosition: () => null,
+    acknowledge: () => {},
+    latestTurn: 1,
+    readVisibleTurn: () => 1,
+  }
+  const store = { read: () => null, save: () => {} }
+  const ChatReading = evaluateSlice(code, {
+    from: 'export class ChatReading {',
+    to: 'export function useChatReading',
+    binding: 'ChatReading',
+    params: { window: { setTimeout: () => 0, clearTimeout: () => {} } },
+  })
+  const reading = new ChatReading(viewport, store, { initialized: true, followingTail: true }, (state) => { calls.states.push(state) }, follow)
+  reading.sampleTimer = 1
+  return { reading, calls }
+}
+
+test('the follow sampler re-pins a residual offset inside the tolerance (executed patched class)', () => {
+  const source = readFileSync(FILES.reading, 'utf8')
+  const patched = applyVendorPatches(IDS.readingReal, source)
+  assert.notEqual(patched, undefined)
+  assert.deepEqual(patched.applied, ['dsh-client-ui-chat/src/client/chat/use-chat-reading.ts'])
+
+  // The reported defect: the settle arrives with the tail still owned and a
+  // 12 px residual offset (half of a 24 px row) — the tail must win.
+  const patchedInside = readingHarness(patched.code, { movedByReader: true, top: 988, floor: 1000 })
+  patchedInside.reading.flushSample()
+  assert.equal(patchedInside.calls.scrollToBottom, 1, 'a settled offset inside the tolerance re-pins the floor')
+  assert.equal(patchedInside.reading.followingTail, true, 'the tail stays owned inside the tolerance')
+
+  // Negative control: the SAME delivery against the upstream body keeps the
+  // offset — exactly the defect this patch removes.
+  const upstreamInside = readingHarness(source, { movedByReader: true, top: 988, floor: 1000 })
+  upstreamInside.reading.flushSample()
+  assert.equal(upstreamInside.calls.scrollToBottom, 0, 'upstream keeps the residual offset')
+
+  // A released follow (movement beyond the tolerance) is untouched: the reader
+  // position is preserved and nothing is re-pinned.
+  const released = readingHarness(patched.code, { movedByReader: true, top: 940, floor: 1000 })
+  released.reading.flushSample()
+  assert.equal(released.calls.scrollToBottom, 0, 'a released follow must not re-pin')
+  assert.equal(released.reading.followingTail, false, 'the reader position is kept')
 })
 
 test('an id without a registered patch is left untouched', () => {
