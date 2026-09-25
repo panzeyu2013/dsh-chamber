@@ -55,6 +55,16 @@ test('evaluateProject(): vendor diagnostics are filtered, everything owned is fa
   assert.equal(owned.owned.length, 1)
 })
 
+test('evaluateProject(): a non-crashed verdict carries diagnostics (red-path readers never TypeError)', () => {
+  // runTypecheckProgram prints outcome.diagnostics on the non-zero/no-diagnostic
+  // path; the non-crashed shape once omitted it, so a red gate crashed instead
+  // of printing the compiler output.
+  const vendorOnly = evaluateProject({ status: 1, stdout: 'vendor/harness-checkout/x.ts(1,1): error TS1: v\n', stderr: '' }, OWNED)
+  assert.equal(vendorOnly.diagnostics.length, 1)
+  const owned = evaluateProject({ status: 1, stdout: 'packages/dsh-client-connection/src/a.ts(1,1): error TS1: o\n', stderr: '' }, OWNED)
+  assert.equal(owned.diagnostics.length, 1)
+})
+
 test('evaluateProject(): an unrelated path, a global diagnostic and infrastructure lines all fail the gate', () => {
   const unrelated = evaluateProject({ status: 1, stdout: 'packages/dsh-api-gateway/src/a.ts(1,1): error TS1: x\n', stderr: '' }, OWNED)
   assert.equal(unrelated.ok, false)

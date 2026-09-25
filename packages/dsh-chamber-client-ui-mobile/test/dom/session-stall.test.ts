@@ -761,7 +761,7 @@ test('sessionStallFace is fail-closed on every drifted shape and resolves late s
   const faceOf = (session: Record<string, unknown> | undefined) => sessionStallFace({
     reflect: {
       get: (name: string) => (name === 'sessions'
-        ? { list: { getSnapshot: () => ({ current: 'a' }) }, resolve: () => (session === undefined ? undefined : { session }) }
+        ? { list: { getSnapshot: () => ({ byId: { a: { retainedBy: { mainView: 1 } } } }) }, binding: () => (session === undefined ? undefined : { session }) }
         : undefined),
     },
   })
@@ -782,7 +782,7 @@ test('sessionStallFace is fail-closed on every drifted shape and resolves late s
   assert.ok(late !== undefined, 'the arm is built from the ctx, not from the service being ready')
   assert.equal(late?.loading(), undefined)
   assert.equal(late?.openInFlight(), undefined)
-  service = { list: { getSnapshot: () => ({ current: 'a' }) }, resolve: () => ({ session: { resync: () => {}, openPromise: null, openState: 'loading' } }) }
+  service = { list: { getSnapshot: () => ({ byId: { a: { retainedBy: { mainView: 1 } } } }) }, binding: () => ({ session: { resync: () => {}, openPromise: null, openState: 'loading' } }) }
   assert.equal(late?.loading(), true, 'a service registered later is picked up')
   assert.equal(late?.openInFlight(), false)
   // A hostile service must neither throw at build time nor at call time.
@@ -871,7 +871,7 @@ test('parity: the notice threshold is the ONE documented deviation (mobile is DO
 test('parity: the loading arm is manual on desktop and automatic (in-flight-gated) on mobile', () => {
   const armed = planSessionStreamHealth(
     desktopLoadingHold(SESSION_STREAM_HEALTH_DEFAULTS.loadingStallMs),
-    { openState: 'loading', presented: true, neighborAvailable: false, resyncAvailable: true },
+    { openState: 'loading', presented: true, healRoute: true, resyncAvailable: true },
     PARITY_NOW,
   )
   assert.equal(armed.action, 'resync', 'desktop only ARMS the user control; the click executes it')
@@ -898,10 +898,49 @@ test('parity: the loading evidence is required on both tiers (the shape alone is
   }).resync, false, 'an unreadable loading state fails closed')
   const errorArm = planSessionStreamHealth(
     createSessionStreamHealthState(),
-    { openState: 'error', presented: true, neighborAvailable: true, resyncAvailable: true },
+    { openState: 'error', presented: true, healRoute: true, resyncAvailable: true },
     PARITY_NOW,
   )
   assert.notEqual(errorArm.action, 'resync',
     'an error state takes its own route/heal arm, never the loading rebuild')
+})
+
+test('sessionStallFace reads the presented session through rc.2 retention + binding only', () => {
+  const session = { resync: () => {}, openPromise: null, openState: 'loading' }
+  /** rc.2 service: `binding(id)` is the only accessor. */
+  const faceOf = (list: unknown) => sessionStallFace({
+    reflect: {
+      get: (name: string) => (name === 'sessions'
+        ? { list: { getSnapshot: () => list }, binding: () => ({ session }) }
+        : undefined),
+    },
+  })
+  // rc.2 real snapshot: byId rows whose retainedBy is always declared.
+  assert.equal(faceOf({ byId: { a: { retainedBy: { mainView: 1 } } } })?.loading(), true,
+    'rc.2 marks the presented row through the main-view retention count and binding(id)')
+  assert.equal(faceOf({ byId: { a: { retainedBy: { mainView: 0 } } } })?.loading(), undefined,
+    'a zero mainView count presents nothing')
+  assert.equal(faceOf({ byId: { a: { retainedBy: { mainView: 0 } } }, current: 'a' })?.loading(), undefined,
+    'the removed current field must not revive presentation')
+  assert.equal(faceOf({ byId: {} })?.loading(), undefined,
+    'an empty rc.2 snapshot presents nothing')
+  // No accessor at all: the arm degrades to unknown, never to a guess.
+  const noAccessor = sessionStallFace({
+    reflect: {
+      get: (name: string) => (name === 'sessions'
+        ? { list: { getSnapshot: () => ({ byId: { a: { retainedBy: { mainView: 1 } } } }) } }
+        : undefined),
+    },
+  })
+  assert.equal(noAccessor?.loading(), undefined, 'an accessor-less service has no concrete evidence')
+  // The removed pre-rc.2 private resolve(id) must not be consulted.
+  const legacyOnly = sessionStallFace({
+    reflect: {
+      get: (name: string) => (name === 'sessions'
+        ? { list: { getSnapshot: () => ({ byId: { a: { retainedBy: { mainView: 1 } } } }) }, resolve: () => ({ session }) }
+        : undefined),
+    },
+  })
+  assert.equal(legacyOnly?.loading(), undefined, 'a resolve-only service has no concrete evidence')
 })
 

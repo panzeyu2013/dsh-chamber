@@ -1,7 +1,7 @@
 /**
  * Plugin-inventory display helpers: pure, UI-free projections for PluginDialog's
- * inventory-backed zones, mirroring the SSH plugin row semantics (plugin-diff.ts
- * split). Kept free of .tsx so the plain-node test suite covers the projections.
+ * inventory-backed read zones (chamber rows, live-state chips, seed-cache drift).
+ * Kept free of .tsx so the plain-node test suite covers the projections.
  */
 
 import type { SettingsConnectionsKey } from '../locales.ts'

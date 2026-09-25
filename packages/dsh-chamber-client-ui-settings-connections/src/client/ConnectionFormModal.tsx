@@ -7,7 +7,7 @@ import type { SshConfigHost, SshInstanceSpec } from '../global.d.ts'
 import type { SettingsConnectionsKey } from '../locales.ts'
 import type { HostDraft } from './connection-form.ts'
 import clsx from 'clsx'
-import { Button, IconChevronDownOutline14, IconRefreshOutline16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconChevronDownOutlineRegular, IconRefreshOutlineRegular, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TransportKind, TransportMethod } from '../global.d.ts'
 import { GatewayAuthFields, GatewaySpkiField } from './ConnectionAuthFields.tsx'
 import { credentialReentryEdit } from './connection-helpers.ts'
@@ -98,7 +98,7 @@ export function ConnectionFormModal({
                     <option value="dsh">{t('kindDsh')}</option>
                     <option value="gateway">{t('kindGateway')}</option>
                   </select>
-                  <IconChevronDownOutline14 className={css.selectChevron} aria-hidden="true" />
+                  <IconChevronDownOutlineRegular className={css.selectChevron} aria-hidden="true" />
                 </span>
               </label>
               <label className={css.field}>
@@ -121,7 +121,7 @@ export function ConnectionFormModal({
                         </option>
                       ))}
                   </select>
-                  <IconChevronDownOutline14 className={css.selectChevron} aria-hidden="true" />
+                  <IconChevronDownOutlineRegular className={css.selectChevron} aria-hidden="true" />
                 </span>
               </label>
               {editing === 'new' && draft.transport === 'ssh'
@@ -137,7 +137,7 @@ export function ConnectionFormModal({
                         aria-label={t('logsRefresh')}
                         onClick={() => { void loadConfigHosts() }}
                       >
-                        <IconRefreshOutline16 />
+                        <IconRefreshOutlineRegular />
                       </button>
                     </div>
                     {configError !== null

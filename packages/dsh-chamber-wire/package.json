@@ -1,6 +1,6 @@
 {
   "name": "@dsh-chamber/dsh-chamber-wire",
-  "version": "0.3.2-beta.6",
+  "version": "0.4.0-beta.1",
   "private": true,
   "description": "Neutral host↔client wire contracts for the chamber host domains (design 24 archiveCleanup first): domain/method names and argument tables shared by the in-host seed bundles and the client packages. Zero runtime dependencies; source is inlined by the seed esbuild bundle and the client bundles.",
   "type": "module",

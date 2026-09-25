@@ -293,7 +293,7 @@ function main() {
   if (findings.violations.length > 0) {
     console.error('')
     for (const violation of findings.violations) console.error(`[FAIL] ${violation}`)
-    console.error(`\n移动锚点门：${findings.violations.length} 项硬失败（data-* / role / slot 零命中或最小断言集缺口）`)
+    console.error(`\n移动锚点门：${findings.violations.length} 项硬失败（data-* / role / slot / build-time 哈希 token 零命中或最小断言集缺口）`)
     process.exit(1)
   }
   console.log(`\n移动锚点门：全部通过（上游 ${corpus.length} 个产物文件；advisory ${findings.advisories.length} 项）`)

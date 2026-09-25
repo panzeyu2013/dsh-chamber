@@ -32,13 +32,12 @@ import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayPr
 import { createGatewaySessionManager, gatewayRegistrationAuthHeaders, gatewaySessionScopeForConnection, type GatewayRegistrationAuthProof } from './gateway-session.ts'
 import { createGatewaySessionRefresh, gatewaySessionOriginForUrl, gatewayTunnelAuthority, type GatewaySessionRefresh } from './gateway-session-refresh.ts'
 import { appendAuditEvent, type AuditEvent } from './audit-log.ts'
-import { createSshPluginJournal } from './ssh-plugin-journal.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 import { describeError } from './describe-error.ts'
 import { preserveFileAside } from './store-file-hygiene.ts'
 import type { ChamberHostPackageDescriptor } from './control-plane-module.ts'
-import type { ChamberHostPackageSeed, ExecFn, RemoteSpec, StatusFn } from './plugin-sync.ts'
-import { ExactOwnershipRegistry, ReadyPhaseEdges, builtChamberHostPackageSeeds, chamberHostPackageSeedsFrom, disposePluginSyncChildren, portableChamberHostPackageSeeds, reapStaleLocalPluginWriters, remoteHome, scopeExecToOwnership, seedRemoteChamberHostPackages } from './plugin-sync.ts'
+import type { ChamberHostPackageSeed, ExecFn, RemoteSpec } from './plugin-sync.ts'
+import { ExactOwnershipRegistry, ReadyPhaseEdges, builtChamberHostPackageSeeds, chamberHostPackageSeedsFrom, portableChamberHostPackageSeeds, remoteHome, scopeExecToOwnership, seedRemoteChamberHostPackages } from './plugin-sync.ts'
 import { setGatewaySyncRegistration } from './gateway-sync-registry.ts'
 import { RuntimeOperationFence, clearStorePruneRequest, detectRuntimeMetadataHealth, disposeRuntimeInstaller, invalidate, isSafeVersion, pruneRuntimeStore, readActivationJournalState, readStorePruneRequest, resetCandidateHealthWindow, writeActivationIntent, writeOverride, type RuntimeMetadataHealth, type StartupResult } from '@dsh-chamber/dsh-runtime'
 import { createRuntimeStartupHost, type RuntimeStartupHostState } from './runtime-startup-host.ts'
@@ -158,11 +157,7 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
   const runtimeManagementSupported = process.platform !== 'win32'
     || process.env.DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS === '1'
   const bundledVersion = readDshVersion(builtinDshWorkspace)
-  const stalePluginWriter = await reapStaleLocalPluginWriters(localDshHome)
-  const runtimeBootstrapWriterUnsafe = !stalePluginWriter.ok
-  let runtimeBootstrapFailure: string | null = stalePluginWriter.ok
-    ? null
-    : `无法证明旧的本地插件写进程已回收：${stalePluginWriter.error}`
+  let runtimeBootstrapFailure: string | null = null
 
   let startupMetadataHealth: RuntimeMetadataHealth | null = null
   try {
@@ -226,12 +221,6 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
   }
 
   // —— 装配序（与抽取前同向）——
-  // ssh plugin undo journal 现实例（文件 <userData>/ssh-plugin-journal.json；publish 叶的撤销清理与 undo/apply 共用同一实例）。
-  const sshPluginJournal = createSshPluginJournal(runtimeBaseDir, {
-    log: (...args) => console.log(logTag, ...args),
-    warn: (...args) => console.warn(logTag, ...args),
-  })
-
   // askpass 崩溃残留回收（清理 crash 遗留的密码载体助手；纯 Node 叶，同模块同参）。
   const askpassNotice = cleanupStaleAskpassHelpers()
   if (askpassNotice !== null) console.error(`${logTag} ${askpassNotice}`)
@@ -311,9 +300,8 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
   // 初始来源代际同步（installIpcHandlers 之前建立首代证明——先 sync 后 handler 注册）。
   syncNotificationSourceRegistry(projectNotificationSourceInstances(sm.listInstances()))
 
-  // Transport-manager 执行/状态投影面（plugin-sync 经结构等价收窄别名桥接）。
+  // Transport-manager 执行投影面（plugin-sync 经结构等价收窄别名桥接）。
   const execTransport = sm.exec as unknown as ExecFn
-  const statusTransport: StatusFn = (id) => sm.status(id)
   // 插件管理面实例级恒等指纹（registry 变更生命周期与 F 组目标闭包共用）。
   const transportIdentityFingerprint = (instance: TransportInstanceSpec): string => JSON.stringify([
     instance.kind,
@@ -433,8 +421,6 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     && findRemoteTarget(target.spec.id)?.fingerprint === target.fingerprint
   const scopedExecForTarget = (target: RemoteTarget, extraOwner: () => boolean = () => true): ExecFn =>
     scopeExecToOwnership(execTransport, target.spec.id, () => extraOwner() && ownsRemoteTarget(target))
-  const scopedStatusForTarget = (target: RemoteTarget): StatusFn => id =>
-    id === target.spec.id && ownsRemoteTarget(target) ? statusTransport(id) : null
   const scopedProbeForTarget = (
     target: RemoteTarget,
     probe: (descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>,
@@ -786,7 +772,6 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     // Manual gateway-sync re-entry dies with the instance：removed 行绝不保留后续还能同步的注册。
     for (const id of removedIds) {
       setGatewaySyncRegistration(id, null)
-      sshPluginJournal.clear(id)
     }
     const retiredIds = computeRetiredInstanceIds(before, after)
     const afterById = new Map(after.map(instance => [instance.id, instance]))
@@ -796,9 +781,6 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
       if (current === undefined || operationalFingerprint(previous) !== operationalFingerprint(current)) {
         readySeedEdges.forget(previous.id)
         hostPackageSeeding.revoke(previous.id)
-        // 插件 undo journal 绑定在 OPERATIONAL 目标上：id 稳定的 host/user/service/home 编辑
-        // 使旧目标上的每条 op 失效——这里与 undo 时（latestOkForTarget）都清。
-        sshPluginJournal.clear(previous.id)
         // service/home 编辑后仍是 dsh+ssh 目标的同 id 替换 → 若已完成即显式 reseed（普通重连由 ready 边缘拾取）。
         if (current?.kind === 'dsh' && current.transport === 'ssh') reseedIds.push(previous.id)
       }
@@ -886,7 +868,6 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     envOverrideActive,
     runtimeManagementSupported,
     runtimeBootstrapFailure,
-    runtimeBootstrapWriterUnsafe,
     bootstrapMetadataCorrupt,
     pnpmEntry: deps.pnpmEntry,
     runtimeNodeExecutor,
@@ -906,24 +887,6 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     readApplyNowGateInput,
     selectedJournalIntent,
   } = runtimeHost
-
-  // H 组本地插件执行叶（runtime writer fence 租约 + runtimeState.startBlocked 启动门 +
-  // resolveActiveRuntime 解析；workspace 只在 fence 租约内解析，绝不跨 runtime swap 保留）。
-  const runLocalPluginMutation = async <T>(
-    owner: string,
-    mutate: (dshWorkspace: string) => Promise<T>,
-  ): Promise<T | { ok: false; error: string }> => {
-    const lease = runtimeWriterFence.tryAcquire(owner)
-    if (lease === null) return { ok: false, error: 'dsh runtime/data operation in progress' }
-    try {
-      if (runtimeState.startBlocked) return { ok: false, error: runtimeState.startBlockedReason }
-      const resolved = resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspace)
-      if (resolved.path === null) return { ok: false, error: resolved.blockedReason ?? 'dsh workspace not found' }
-      return await mutate(resolved.path)
-    } finally {
-      lease.release()
-    }
-  }
 
   // —— ctx 完成形态（ShellAssemblyCtx 全字段真实；两 flavor 同形状）。——
   const ctx: ShellAssemblyCtx = {
@@ -971,19 +934,16 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
       }
     },
     localDshHome,
-    sshPluginJournal,
     hostPackageSeeding,
     chamberHostPackageSeeds,
     sshPluginTargets: {
       findRemoteTarget,
       ownsRemoteTarget,
       scopedExecForTarget,
-      scopedStatusForTarget,
       scopedProbeForTarget,
       liveProbeFor,
     },
     syncGatewayChamberPluginsFor,
-    runLocalPluginMutation,
     updateController: deps.updateController,
     runtimeController: runtimeInstance,
     runtimeOperationBusy: () => runtimeState.operation !== null,
@@ -1103,7 +1063,6 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     try {
       await Promise.allSettled([
         transportManager?.disposeAsync().catch((err) => console.error(`${logTag} 传输层关闭失败：`, err)),
-        disposePluginSyncChildren().catch((err) => console.error(`${logTag} 插件子进程关闭失败：`, err)),
         disposeRuntimeInstaller().catch((err) => console.error(`${logTag} 运行时安装器关闭失败：`, err)),
         runtimeState.operation?.catch((err) => console.error(`${logTag} 运行时事务关闭失败：`, err)),
       ])

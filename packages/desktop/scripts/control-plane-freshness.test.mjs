@@ -9,8 +9,10 @@
  * is invisible to every test yet silently ships the previous judgement.
  *
  * Two facts are pinned on the REAL artifact:
- *   - the bundle carries the CURRENT protected-set verifier copy (markers
- *     below; the esbuild bundle preserves the operator-facing strings);
+ *   - the bundle carries the CURRENT protected-set READ-face copy (markers
+ *     below; the esbuild bundle preserves the operator-facing strings); the
+ *     user plugin write-face verifier was retired with the 2026-09 C layering
+ *     ruling, so the markers pin the derivation/resolution facts only;
  *   - the bundle is SELF-CONTAINED: every import/export specifier is a `node:`
  *     builtin. A bare workspace specifier (`@dsh-chamber/dsh-chamber-wire`,
  *     whose source ships as .ts under node_modules) or a relative hop resolves
@@ -37,22 +39,22 @@ const packageDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const distFile = join(packageDir, 'dist', 'control-plane', 'index.js')
 
 const MARKERS = [
-  // §6.11.4 version arm: a family member is judged against the version this
-  // runtime line provides (rescoped vendored packages keep upstream versions
-  // and can never equal the generation string).
-  'is not the version this instance runtime provides',
-  // §6.11.4 per-name honesty: an arm that never ran is named, never folded
-  // into a silent aggregate pass.
-  'no runtime-provided version fact exists and the instance runtime version is unknown for',
   // §6.11.1 second trust criterion: a fact source whose name and version
   // parsers disagree about the same keys is refused, instead of silently
   // degrading every later comparison to the generation arm.
   'the name and version parsers disagree about the same keys',
-  // §6.11.4 closure walk (dependencies ∪ optionalDependencies).
-  'optionalDependencies',
+  // §6.11.1 the resolver's loud failure when no trustworthy family facts exist
+  // (never a silent "no protection").
+  'no trustworthy runtime family facts',
+  // §6.11 core-anchor judge (runtime-family leaf, re-used by the read face):
+  // a closure missing the core anchors is not F.
+  'runtime family closure is missing the core anchor',
+  // deriveProtectedSet fail-closed guard: an all-empty fact set is never
+  // answered as "nothing is protected".
+  'protected set derived empty (installation/seed/family facts all empty)',
 ]
 
-test('packaged dist/control-plane carries the CURRENT protected-set verifier', () => {
+test('packaged dist/control-plane carries the CURRENT protected-set read-face facts', () => {
   // A MISSING dist (clean checkout) is built on demand — that is not staleness.
   // An EXISTING dist without the current markers IS staleness and must fail
   // loudly: silently rebuilding it would let an operator (or a packaging run)

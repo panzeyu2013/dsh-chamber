@@ -17,7 +17,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import {
-  IconChevronDownOutline14, Menu, Tooltip, type MenuItem,
+  IconChevronDownOutlineRegular, Menu, Tooltip, type MenuItem,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useInstanceViewDismissal } from './instance-view-guard.ts'
 import type { Translate } from '../shared/coordinator.ts'
@@ -315,7 +315,7 @@ export function OpenInButton({
               }}
             >
               {/* The design system's own chevron at the official client's 11px size — no hand-drawn glyph and no invented animation. */}
-              <IconChevronDownOutline14 size={11} />
+              <IconChevronDownOutlineRegular size={11} />
             </button>
           </Tooltip>
         </span>

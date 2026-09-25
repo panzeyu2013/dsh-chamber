@@ -1,19 +1,19 @@
 /**
- * shell-ipc-plugins-gateway — domain IPC registrations
+ * shell-ipc-plugins-gateway — domain IPC registrations: the manual chamber
+ * host-package seed-cache sync fallback (`desktop_gateway_plugin_sync`). The
+ * gateway plugin WRITE bridge (apply/materialize/undo) was retired with the
+ * 2026-09 C layering ruling; seeding is chamber provisioning, not a
+ * plugin-model write (design 21 §6.11), so the sync handler stays.
  */
 import type { ShellIpcCtx } from './shell-ipc-ctx.ts'
 import { INSTANCE_ID_PATTERN } from './transport-manager.ts'
 import { IPC_CHANNELS } from './ipc-events.ts'
-import { buildApplyConfirmMessage, validateApplyPayload } from './gateway-ipc-shared.ts'
-import { buildPluginTarball, classifyPluginPick } from './plugin-tarball.ts'
 import { describeUnknownError } from './deep-link.ts'
-import { gatewayChamberApplyBatch, gatewayChamberMaterialize } from './gateway-provider.ts'
-import { gatewayTunnelAuthority } from './gateway-session-refresh.ts'
 import { getGatewaySyncRegistration } from './gateway-sync-registry.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 
 export function registerGatewayPluginHandlers(ctx: ShellIpcCtx): void {
-  const { deps, confirmPluginAction } = ctx
+  const { deps } = ctx
   const { transportManager: sm, syncGatewayChamberPluginsFor } = ctx.deps.ctx
   // Manual chamber-plugin sync (design 21 §6.5): re-runs the seed-cache sync
   // over the REGISTERED transport origin/headers/SPKI pin — never a
@@ -45,174 +45,4 @@ export function registerGatewayPluginHandlers(ctx: ShellIpcCtx): void {
       return { ok: false as const, error: `gateway plugin sync failed: ${sanitizeErrorText(describeUnknownError(error))}` };
     }
   });
-  // Gateway batch plugin apply (design 21 §6.5): registry add/remove over the
-  // REGISTERED transport origin/headers/SPKI pin, never a renderer-supplied
-  // URL or credential. Main-process confirmation because the batch changes the
-  // gateway's managed dsh profile — a persistent, globally-visible
-  // (multi-desktop) execution-surface change, never a silent script action.
-  // Cancelled → {ok:true, cancelled:true}; partial failures carry the executed
-  // installed/removed lists honestly.
-  deps.ipc.handle(IPC_CHANNELS.GATEWAY_PLUGIN_APPLY, async (payload: unknown) => {
-    const { id, add, remove, deferRestart } = payload as { id: unknown; add: unknown; remove: unknown; deferRestart: unknown };
-    if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id)) {
-      return { ok: false as const, error: 'invalid or unknown instance id' };
-    }
-    const validated = validateApplyPayload({ add, remove, deferRestart });
-    if (!validated.ok) return { ok: false as const, error: validated.error };
-    const reg = getGatewaySyncRegistration(id);
-    if (reg === undefined) return { ok: false as const, error: 'no active gateway registration' };
-    // Live-state re-check: same `sm.status(id)?.phase` access as the sync handler.
-    if (sm.status(id)?.phase !== 'ready') {
-      return { ok: false as const, error: 'gateway is not ready' };
-    }
-    const instance = sm.listInstances().find(candidate => candidate.id === id);
-    if (instance === undefined || instance.kind !== 'gateway') {
-      return { ok: false as const, error: 'gateway instance not found' };
-    }
-    // Batch confirmation with the restart/multi-desktop copy; default cancel.
-    const confirm = await confirmPluginAction(buildApplyConfirmMessage({
-      targetLabel: instance.label ?? null,
-      targetId: id,
-      add: validated.value.add,
-      remove: validated.value.remove,
-      deferRestart: validated.value.deferRestart,
-    }));
-    if ('cancelled' in confirm) return { ok: true as const, cancelled: true };
-    if (!confirm.ok) return { ok: false as const, error: confirm.error };
-    // Post-confirm re-check: the dialog may have stayed open across a
-    // disconnect/reconnect — the batch must execute on the CURRENT
-    // registration/ready state, never on the pre-dialog snapshot.
-    const liveReg = getGatewaySyncRegistration(id);
-    if (liveReg === undefined || sm.status(id)?.phase !== 'ready') {
-      return { ok: false as const, error: 'gateway connection changed while the confirmation was open; nothing was applied' };
-    }
-    const liveInstance = sm.listInstances().find(candidate => candidate.id === id);
-    if (liveInstance === undefined || liveInstance.kind !== 'gateway') {
-      return { ok: false as const, error: 'gateway connection changed while the confirmation was open; nothing was applied' };
-    }
-    try {
-      const result = await gatewayChamberApplyBatch({
-        id,
-        url: liveReg.url,
-        headers: liveReg.headers,
-        spkiPin: liveReg.spkiPin,
-        // Tunnel Host override: the same discipline as the sync path — an ssh
-        // transport presents the remote gateway authority, not the loopback tunnel.
-        authority: liveInstance.transport === 'ssh' ? gatewayTunnelAuthority(liveInstance.remotePort) : undefined,
-        options: {
-          add: validated.value.add,
-          remove: validated.value.remove,
-          deferRestart: validated.value.deferRestart,
-        },
-      });
-      if (!result.ok) {
-        const partial = result.outcome !== undefined && (result.outcome.installed.length > 0 || result.outcome.removed.length > 0)
-          ? { installed: result.outcome.installed, removed: result.outcome.removed }
-          : undefined;
-        return {
-          ok: false as const,
-          error: sanitizeErrorText(result.error),
-          ...(partial === undefined ? {} : { partial }),
-        };
-      }
-      const outcome = result.outcome;
-      return {
-        ok: true as const,
-        installed: outcome.installed,
-        removed: outcome.removed,
-        restarted: outcome.restarted,
-        ...(outcome.deferredOps.length > 0 ? { deferred: true } : {}),
-      };
-    } catch (error) {
-      return { ok: false as const, error: `gateway plugin apply failed: ${sanitizeErrorText(describeUnknownError(error))}` };
-    }
-  });
-  // Gateway local materialize (design 21 §6.5/§10 ⑧ archive-pick): PICK-ONLY —
-  // the picker runs in the main process, so a compromised renderer can never
-  // drive the pack/upload surface to an arbitrary local path (the same
-  // hardening as the ssh materialize_add_pick path). No separate confirmation
-  // is needed: choosing the local source IS the user intent. A picked source
-  // folder is packed into a plugin tgz in the main process (bounded caps); a
-  // picked .tgz uploads verbatim; either way the manifest name/version become
-  // the x-plugin-name/x-plugin-version headers and the upload rides the
-  // REGISTERED transport origin.
-  deps.ipc.handle(IPC_CHANNELS.GATEWAY_PLUGIN_MATERIALIZE, async (payload: unknown) => {
-    const { id } = payload as { id: unknown };
-    if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id)) {
-      return { ok: false as const, error: 'invalid or unknown instance id' };
-    }
-    const reg = getGatewaySyncRegistration(id);
-    if (reg === undefined) return { ok: false as const, error: 'no active gateway registration' };
-    if (sm.status(id)?.phase !== 'ready') {
-      return { ok: false as const, error: 'gateway is not ready' };
-    }
-    if (!deps.edges.mainWindowAlive()) return { ok: false as const, error: 'no main window' };
-    const instance = sm.listInstances().find(candidate => candidate.id === id);
-    if (instance === undefined || instance.kind !== 'gateway') {
-      return { ok: false as const, error: 'gateway instance not found' };
-    }
-    // Pick-only: the picker runs in the main process, so a compromised
-    // renderer can never drive the upload surface to an arbitrary local path.
-    const picked = await deps.edges.pickPluginSource();
-    if (picked.status === 'cancelled') return { ok: true as const, cancelled: true };
-    // Post-pick re-check: the registration and ready phase must still hold
-    // before any upload (the same discipline as the ssh picker).
-    const liveReg = getGatewaySyncRegistration(id);
-    if (liveReg === undefined || sm.status(id)?.phase !== 'ready') {
-      return { ok: false as const, error: 'gateway connection changed while the plugin picker was open' };
-    }
-    try {
-      const classified = classifyPluginPick(picked.path);
-      if (!classified.ok) {
-        return { ok: false as const, error: sanitizeErrorText(classified.error) };
-      }
-      let tarball: Buffer;
-      let name: string;
-      let version: string;
-      if (classified.source.kind === 'dir') {
-        const built = await buildPluginTarball(classified.source.path);
-        if (!built.manifest.ok) {
-          return { ok: false as const, error: sanitizeErrorText(built.manifest.error) };
-        }
-        tarball = built.buffer;
-        name = built.manifest.name;
-        version = built.manifest.version;
-      } else {
-        // A ready npm-pack archive uploads verbatim — no rebuild; its
-        // name/version come from the archive's own manifest and are
-        // re-validated by gatewayChamberMaterialize before any byte is sent.
-        tarball = classified.source.bytes;
-        name = classified.source.name;
-        version = classified.source.version;
-      }
-      const result = await gatewayChamberMaterialize({
-        id,
-        url: liveReg.url,
-        headers: liveReg.headers,
-        spkiPin: liveReg.spkiPin,
-        tarball,
-        name,
-        version,
-        authority: instance.transport === 'ssh' ? gatewayTunnelAuthority(instance.remotePort) : undefined,
-      });
-      // materialize 的 202/受控重启对账结果带 outcome{executed,restarted}：
-      // 成功与失败分支都透传（网关侧已脱敏），无 outcome 保持 deferred 语义。
-      if (result.ok && 'outcome' in result) {
-        return { ok: true as const, outcome: result.outcome };
-      }
-      if (result.ok) {
-        return { ok: true as const, deferred: true as const };
-      }
-      return {
-        ok: false as const,
-        error: sanitizeErrorText(result.error),
-        ...(result.outcome === undefined ? {} : { outcome: result.outcome }),
-      };
-    } catch (error) {
-      // Builder errors carry machine codes (path too long / cap exceeded /
-      // folder changed while packing / unreadable) — keep them loud and sanitized.
-      return { ok: false as const, error: `gateway plugin materialize failed: ${sanitizeErrorText(describeUnknownError(error))}` };
-    }
-  });
-
 }

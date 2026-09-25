@@ -3,7 +3,7 @@ import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { applyVendorPatches } from './scripts/vendor-patches.mjs'
+import { VENDOR_PATCHES, applyVendorPatches } from './scripts/vendor-patches.mjs'
 
 /**
  * dsh-chamber renderer build (design 05 §2/§3.6).
@@ -79,6 +79,10 @@ function npmFallback() {
  * fallback below.
  */
 function deepseekSource() {
+  // Registered vendor files whose patch already reached a transformed module.
+  // The patch transform is id-keyed, so an id-form mistake matches nothing and
+  // would silently ship an unpatched bundle; buildEnd below fails the build.
+  const patchedVendorFiles = new Set()
   return {
     name: 'dsh-chamber-deepseek-source',
     enforce: 'pre',
@@ -90,7 +94,27 @@ function deepseekSource() {
      * bundle. The vendor tree is never written to.
      */
     transform(code, id) {
-      return applyVendorPatches(id, code)
+      const patched = applyVendorPatches(id, code)
+      if (patched === undefined) return undefined
+      for (const vendorFile of patched.applied) patchedVendorFiles.add(vendorFile)
+      return { code: patched.code }
+    },
+    /**
+     * Coverage gate: every registered vendor file must have been patched into
+     * some transformed module. Without it a wrong id form (symlinked vs
+     * realpath resolution) is a silent no-op — the bundle just stays upstream.
+     */
+    buildEnd() {
+      const missed = VENDOR_PATCHES
+        .filter((patch) => !patchedVendorFiles.has(patch.vendorFile))
+        .map((patch) => patch.vendorFile)
+      if (missed.length > 0) {
+        throw new Error(
+          'vendor patch(es) never applied to any transformed module (module id did not match): '
+          + missed.join(', ')
+          + ' — re-derive the idSuffixes against the pinned resolution (design 09 §3.6)',
+        )
+      }
     },
     resolveId(specifier) {
       if (typeof specifier !== 'string' || !specifier.startsWith('@deepseek-ai/')) return undefined

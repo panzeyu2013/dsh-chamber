@@ -6,8 +6,12 @@
  * The REST transport + wire shapes are the SINGLE shared copy in the chamber sidebar
  * package (shared/control-plane-client.ts), consumed by both this plugin and the
  * renderer App layer, so the two cannot drift. This module keeps the plugin-side `cp`
- * method surface and the plugin-management IPC wrappers. Every value is non-secret:
- * tunnel URLs and SSH material never cross this module.
+ * method surface and the RETAINED plugin IPC wrappers: the plugin read face
+ * (plugin_list / local_plugin_list) and chamber host-package provisioning
+ * (seed_host_graph / gateway_plugin_sync). The user plugin write wrappers
+ * (apply/remove/materialize/undo/npm search) and the gateway admin write routes
+ * were retired (D1). Every value is non-secret: tunnel URLs and SSH material
+ * never cross this module.
  */
 
 import {
@@ -26,15 +30,14 @@ import {
   type HostLogsResponse,
 } from '@dsh-chamber/dsh-chamber-client-core'
 import { classifyGatewayReadFence } from './managed-restart.ts'
-import { errorMessage } from './error-text.ts'
 import type {
-  GatewayPluginApplyIpcResult, GatewayPluginApplyInput, GatewayPluginMaterializeIpcResult, GatewayPluginSyncIpcResult, LocalPluginManifest, NpmSearchPackage, PluginApplyInput, PluginApplyResult, RemotePluginManifest,
-  SshExecIpcResult, SshLocalPluginExecIpcResult, SshMaterializeResult, SshPluginUndoIpcResult, SshSeedHostGraphResult,
+  GatewayPluginSyncIpcResult, LocalPluginManifest, RemotePluginManifest,
+  SshExecIpcResult, SshSeedHostGraphResult,
 } from '../global.d.ts'
-// The manifest projection model (dependencies + bundles) and the refusal-code vocabulary
-// are THE single definition in the neutral wire package, reached through client-core's browser face.
-import type { PluginManifestModel, PluginProfileRefusalCode } from '@dsh-chamber/dsh-chamber-client-core/plugin-manifest'
-import type { GatewayTasksShape, PluginRowShape } from './plugin-model.ts'
+// The refusal-code vocabulary is THE single definition in the neutral wire package, reached
+// through client-core's browser face.
+import type { PluginProfileRefusalCode } from '@dsh-chamber/dsh-chamber-client-core/plugin-manifest'
+import type { PluginRowShape } from './plugin-model.ts'
 
 /** 统一错误形状（{error, code?}）+ HTTP 状态 + 响应体 + 限流提示。 */
 export type {
@@ -117,11 +120,13 @@ export const cp = {
 }
 
 /**
- * Plugin-management IPC wrappers: they ride the desktop SSH surface
- * (window.dshChamber.desktopSsh.*) — the main process is the only authority for
- * exec/whitelisting/materialization; the renderer computes the view and forwards
- * explicit user intents. The bridge appears after dsh-chamber:info; a null surface
- * is a loud error, never a silent no-op.
+ * Retained plugin IPC wrappers: the plugin READ face (plugin_list / local_plugin_list)
+ * and chamber host-package provisioning (seed_host_graph / gateway_plugin_sync), riding
+ * the desktop SSH surface (window.dshChamber.desktopSsh.*) — the main process is the only
+ * authority for exec/whitelisting/seed-cache upload; the renderer computes the view and
+ * forwards explicit user intents. The user plugin write wrappers were retired with the
+ * write surfaces. The bridge appears after dsh-chamber:info; a null surface is a loud
+ * error, never a silent no-op.
  */
 
 /** The desktop SSH surface, or a loud throw when the bridge is not yet up. */
@@ -134,11 +139,6 @@ function desktopSsh() {
 
 export type LocalPluginListResult = { ok: true; manifest: LocalPluginManifest } | { ok: false; error: string }
 export type RemotePluginListResult = { ok: true; manifest: RemotePluginManifest } | { ok: false; error: string }
-/** plugin_apply (ssh) result — exactly the main-process SSH_PLUGIN_APPLY union (renderer
- *  global.d.ts / preload SshPluginApplyIpcResult). NO `{ok:true,cancelled:true}` arm: the ssh
- *  apply handler has no confirmation dialog or picker to dismiss (the gateway union carries it). */
-export type PluginApplyResult2 = { ok: true; result: PluginApplyResult } | { ok: false; error: string }
-export type NpmSearchResult = { ok: true; packages: NpmSearchPackage[] } | { ok: false; error: string }
 
 /** GET /chamber/plugins seed-cache projection: name + version per synced chamber host
  *  package; version null = never synced onto the gateway yet. */
@@ -148,19 +148,21 @@ export interface ChamberSeedCacheProjection {
 }
 
 /** GET /chamber/plugins/installed projection: the managed web profile's (masked) dependency
- *  map + bundles + the additive row projection; HTTP 404/500 map to absent/corrupt codes, the
- *  read/write fence's 409 maps to the retryable busy arm, every other refusal stays a loud
- *  ApiError. The manifest half and refusal codes come from the wire single source; this module
- *  owns only the HTTP-status mapping.
- *  `rows` is OPTIONAL on purpose: an older in-place gateway answers without it, and the dialog
- *  then falls back to the legacy dependencies filter + the "gateway is older" hint. */
+ *  map + the row projection; HTTP 404/500 map to absent/corrupt codes, the read/write fence's
+ *  409 maps to the retryable busy arm, every other refusal stays a loud ApiError. The refusal
+ *  codes come from the wire single source; this module owns only the HTTP-status mapping.
+ *  `rows` is REQUIRED: gateway and frontend ship from the same release and every backend
+ *  projects it (design 21 §6.11.7 — the old-gateway fallback was deleted); a missing/malformed
+ *  payload still renders as an explicit empty projection in plugin-model.ts. */
 export type GatewayInstalledProjection =
-  | ({
+  | {
     ok: true
-    /** Additive row projection; absent on an OLDER gateway. */
-    rows?: readonly PluginRowShape[]
+    /** Masked dependency map (the manifest half this read face still projects). */
+    dependencies: Record<string, string>
+    /** Read-face row projection — one row per declared dependency. */
+    rows: readonly PluginRowShape[]
     profileExists: true
-  } & PluginManifestModel)
+  }
   | { ok: false; code: PluginProfileRefusalCode }
   /** The read/write fence: a plugin mutation held the managed-profile write lease, so the
    *  gateway withheld the projection with 409 `runtime_busy` rather than publishing a torn one.
@@ -178,52 +180,14 @@ export function pluginList(id: string): Promise<RemotePluginListResult> {
   return desktopSsh().plugin_list(id)
 }
 
-/** Apply plugin add/remove for one remote instance (main re-validates every spec). */
-export function pluginApply(id: string, input: PluginApplyInput): Promise<PluginApplyResult2> {
-  return desktopSsh().plugin_apply(id, input)
-}
-
-/** npm registry search (main-side, non-secret projection). */
-export function npmSearch(query: string): Promise<NpmSearchResult> {
-  return desktopSsh().npm_search(query)
-}
-
 /** systemd restart for one remote instance (exit-code honest). */
 export function restartService(id: string): Promise<SshExecIpcResult> {
   return desktopSsh().restart_service(id)
 }
 
-/** Seed module A onto a remote instance. */
+/** Seed module A onto a remote instance (chamber provisioning, not a user plugin write). */
 export function seedHostGraph(id: string): Promise<SshSeedHostGraphResult> {
   return desktopSsh().seed_host_graph(id)
-}
-
-/** Pack/upload a user-picked local plugin source (dir or .tgz archive) and install it remotely (pick-only). */
-export function pluginMaterializeAddPick(id: string): Promise<SshMaterializeResult> {
-  return desktopSsh().plugin_materialize_add_pick(id)
-}
-
-/** Install a spec into the LOCAL dsh profile. */
-export function localPluginAdd(spec: string): Promise<SshLocalPluginExecIpcResult> {
-  return desktopSsh().local_plugin_add(spec)
-}
-
-/** Pick a local plugin source (folder or .tgz archive) and install it into the LOCAL dsh profile (pick-only). */
-export function localPluginAddFile(): Promise<SshLocalPluginExecIpcResult> {
-  return desktopSsh().local_plugin_add_file()
-}
-
-/** Remove a plugin from the LOCAL dsh profile. */
-export function localPluginRemove(name: string): Promise<SshLocalPluginExecIpcResult> {
-  return desktopSsh().local_plugin_remove(name)
-}
-
-/** Undo the latest ok ssh plugin change: the MAIN process consults its ssh journal, confirms
- *  with the user (cancelled = dismissed), and re-executes the inverse row through the same ssh
- *  plugin_apply flow (restart-to-apply, journaled). The renderer never supplies a spec — the
- *  id-only intent keeps the journal authoritative. */
-export function sshPluginUndo(id: string): Promise<SshPluginUndoIpcResult> {
-  return desktopSsh().ssh_plugin_undo(id)
 }
 
 /* ---- Gateway A0 read side + manual chamber sync ----
@@ -298,85 +262,9 @@ export async function gatewayInstalled(
   }
 }
 
-/** GET /chamber/plugins/tasks: journal ops (newest first, retention-capped) + durable deferred
- *  intents + the executor busy flag — the read side of the 202 contract. The wire type is the model
- *  layer's structural twin (plugin-model.ts GatewayTasksShape). A non-2xx throws the shared ApiError,
- *  never a silent empty list. */
-export async function gatewayTasks(id: string): Promise<GatewayTasksShape> {
-  return request<GatewayTasksShape>(`/api/i/gateway-${id}/chamber/plugins/tasks`)
-}
-
 /** Re-run the chamber host-package seed-cache sync on a gateway instance: the ready
  *  registration's auto-sync on demand, over the main-process-owned registered transport —
  *  {uploaded, skipped} answers the awaited path; ok:false is loud (no registration / instance gone). */
 export function gatewayPluginSync(id: string): Promise<GatewayPluginSyncIpcResult> {
   return desktopSsh().gateway_plugin_sync(id)
-}
-
-/** Batch registry add/remove + restart-to-apply on a gateway instance: id-only (main validates
- *  every spec against the shared whitelist family), main-process confirmation first (cancelled = the
- *  user dismissed it), ok:true executed arm / ok:false loud with partial ops. Classified through the
- *  model layer by the callers. */
-export function gatewayPluginApply(id: string, input: GatewayPluginApplyInput): Promise<GatewayPluginApplyIpcResult> {
-  return desktopSsh().gateway_plugin_apply(id, input)
-}
-
-/** Pick a local plugin source (folder or .tgz) in MAIN and upload it to a gateway instance:
- *  cancelled = the picker was dismissed; ok:true deferred = the gateway cached the install intent
- *  for the next ready edge (false = accepted onto the executor queue). */
-export function gatewayPluginMaterialize(id: string): Promise<GatewayPluginMaterializeIpcResult> {
-  return desktopSsh().gateway_plugin_materialize(id)
-}
-
-/** POST /chamber/plugins/undo: the gateway-side 撤销=恢复 verb — RESTORE the latest ok op's
- *  preImage pair. Id-only by design (the durable journal picks the target under the backend's
- *  single-flight fence); a non-2xx {error, code} refusal is projected verbatim. */
-export type GatewayPluginUndoResult =
-  | { ok: true; opId: string }
-  | { ok: false; error: string; code: string | null }
-
-export async function gatewayPluginUndo(id: string): Promise<GatewayPluginUndoResult> {
-  try {
-    const body = await post<{ accepted?: unknown; opId?: unknown }>(`/api/i/gateway-${id}/chamber/plugins/undo`, {})
-    if (body?.accepted !== true || typeof body.opId !== 'string' || body.opId === '') {
-      return { ok: false, error: 'the gateway accepted the undo without an operation id', code: null }
-    }
-    return { ok: true, opId: body.opId }
-  } catch (error) {
-    const apiError = error as ApiError
-    return {
-      ok: false,
-      error: apiError?.body?.error ?? errorMessage(error),
-      code: apiError?.body?.code ?? null,
-    }
-  }
-}
-
-/** Terminal state of one gateway mutation op, as the renderer can see it through the task
- *  projection. `timeout` means the op was accepted but did not settle inside the bounded window —
- *  the caller must render the busy state, never a success claim. */
-export type GatewayOpTerminal =
-  | { status: 'ok' | 'failed' | 'blocked'; error: string | null }
-  | { status: 'timeout' }
-
-/** Wait for one accepted op to reach a terminal state by polling the SAME task projection the
- *  backend serves (1 s cadence, 120 s bound by default). Injectable sleep for the pure-node tests. */
-export async function waitForGatewayOpTerminal(
-  id: string,
-  opId: string,
-  deps: { pollMs?: number; timeoutMs?: number; sleep?: (ms: number) => Promise<void> } = {},
-): Promise<GatewayOpTerminal> {
-  const pollMs = deps.pollMs ?? 1000
-  const timeoutMs = deps.timeoutMs ?? 120_000
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>(resolve => { setTimeout(resolve, ms) }))
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    const projection = await gatewayTasks(id)
-    const op = projection.tasks.find(candidate => candidate.id === opId)
-    if (op !== undefined && op.status !== 'pending') {
-      return { status: op.status, error: op.error ?? null }
-    }
-    if (Date.now() >= deadline) return { status: 'timeout' }
-    await sleep(pollMs)
-  }
 }

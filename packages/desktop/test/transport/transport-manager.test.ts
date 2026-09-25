@@ -552,14 +552,14 @@ test('exec: missing service, timeout and auth failure settle loudly without a ne
   assert.equal(withService.manager.status('s2')!.phase, 'idle')
 })
 
-test('exec run passes the payload through and refuses a whitelist-invalid argv before spawning', async t => {
+test('exec run passes a whitelisted payload through and refuses a non-whitelisted argv before spawning', async t => {
   const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
   const resultPromise = manager.exec('s2', 'run', {
     op: 'exec',
-    command: 'dsh',
-    argv: ['plugin', '--profile', 'web', 'add', 'pkg@^1.0.0'],
+    command: 'cat',
+    argv: ['~/.dsh/profiles/web/package.json'],
   })
-  assert.deepEqual(spawnCalls[0].args, ['bob@lab.example.com', 'dsh', 'plugin', '--profile', 'web', 'add', 'pkg@^1.0.0'])
+  assert.deepEqual(spawnCalls[0].args, ['bob@lab.example.com', 'LC_ALL=C', 'cat', '~/.dsh/profiles/web/package.json'])
   spawnCalls[0].child.stdout.emit('data', Buffer.from('packed'))
   spawnCalls[0].child.simulateExit(0)
   const result = await resultPromise

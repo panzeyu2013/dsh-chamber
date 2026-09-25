@@ -7,11 +7,14 @@
  * the same reason `packages/dsh-client-connection/test/fixtures/
  * schemastery-stub.mjs` exists for the connection chain.
  *
- * The domain core under test never reaches these: `open()` is exercised with an
- * injected `launch` seam, and the hermetic catalog fixtures resolve through
- * `cli`/`desktop` locators, never through the OS open verb. A real call
- * therefore throws instead of silently doing nothing, so a test that starts
- * depending on the host adapter fails loudly and gets a real seam instead.
+ * The domain core under test never reaches the host ADAPTERS: `open()` is
+ * exercised with an injected `launch` seam, and the hermetic catalog fixtures
+ * resolve through `cli`/`desktop` locators, never through the OS open verb. A
+ * real call therefore throws instead of silently doing nothing, so a test that
+ * starts depending on the host adapter fails loudly and gets a real seam instead.
+ * The Linux desktop-entry helpers are pure file/string logic with no host
+ * command, so they are re-exported from the pinned vendor source below rather
+ * than stubbed — the Linux fixture exercises the logic the instance runs.
  */
 
 const MESSAGE = '@deepseek-ai/dsh-native-command is stubbed in this package\'s node unit tests; '
@@ -39,3 +42,12 @@ export function openNativePath() {
 export function canOpenNativePath() {
   return false
 }
+
+/**
+ * Linux desktop-entry/icon helpers (upstream `desktop-entry.ts`): pure
+ * string/path/file logic with no host command and no `lib/` import, re-exported
+ * from the pinned vendor source so the hermetic Linux fixture (temp XDG data
+ * dir plus a real tiny PNG) exercises the same reader the instance runs.
+ */
+export { desktopEntryFields, desktopDataDirectories, desktopApplicationIcon }
+  from '../../../../vendor/harness-packages/@deepseek-ai/dsh-native-command/src/desktop-entry.ts'

@@ -21,8 +21,13 @@
  * inflation); blur / visibilitychange-hidden. Never click/key/touch dispatch;
  * no timers; try/catch fail closed; one Symbol.for double-install guard.
  *
- * TOKENS are pinned-build CSS-module names: re-audit when the vendored dsh pin
- * moves — a stale token is a silent no-op (fail closed), never a misfire.
+ * TOKENS are pinned-build CSS-module names: re-anchor when the vendored dsh pin
+ * moves. The rc.2 served bundle
+ * (`@deepseek-ai/dsh-web-frontend/dist/assets/index-*.{js,css}`) emits
+ * `_root_38jqx_3` / `_card_38jqx_9`;
+ * `scripts/upstream/verify-mobile-anchors.mjs` hard-fails a zero-hit hash token,
+ * so a stale token is a red gate, never a silent no-op (the matcher itself stays
+ * fail-closed and can only ever no-op, never misfire).
  */
 
 /** The tier this watchdog may run on — byte-identical to the stylesheet's
@@ -31,10 +36,10 @@
 export const COARSE_NO_HOVER_QUERY = '(pointer: coarse) and (hover: none)'
 
 /** The official HoverCard module's root token (`_root_<hash>_<line>`). */
-export const OFFICIAL_CARD_ROOT_CLASS_TOKEN = '_root_1b2ny_'
+export const OFFICIAL_CARD_ROOT_CLASS_TOKEN = '_root_38jqx_'
 
 /** The official HoverCard module's card token (`_card_<hash>_<line>`). */
-export const OFFICIAL_CARD_CLASS_TOKEN = '_card_1b2ny_'
+export const OFFICIAL_CARD_CLASS_TOKEN = '_card_38jqx_'
 
 /** Candidate prefilter selectors (attribute substring), validated by token. */
 export const CARD_QUERY = `[class*="${OFFICIAL_CARD_CLASS_TOKEN}"]`
@@ -198,14 +203,9 @@ export interface DispatchFace {
 export function dispatchBoundaryLeave(wrapper: DispatchFace): boolean {
   try {
     const init: PointerEventInit = { bubbles: true, cancelable: false, composed: true, relatedTarget: null }
-    // PointerEvent everywhere pointer events exist; the fallbacks keep a
-    // plain-node harness (and any exotic engine) on the same code path.
-    const EventCtor: typeof PointerEvent = typeof PointerEvent === 'function'
-      ? PointerEvent
-      : typeof MouseEvent === 'function'
-        ? (MouseEvent as unknown as typeof PointerEvent)
-        : (Event as unknown as typeof PointerEvent)
-    return wrapper.dispatchEvent(new EventCtor('pointerout', init))
+    // The watchdog tier only runs where pointer events exist (the coarse/no-hover
+    // gate); a plain-node harness installs its own PointerEvent double instead.
+    return wrapper.dispatchEvent(new PointerEvent('pointerout', init))
   } catch {
     // Fail closed: a watchdog must never break the page it watches.
     return false

@@ -2,7 +2,7 @@
  * Managed-profile installed-plugin read projection tests (design 21 §6.2):
  * the pure gateway read module (plugins-installed.ts) plus the GET
  * /chamber/plugins/installed route (routes.ts) — absent/corrupt/mask/
- * profileExists/bundles submatrix plus the route method discipline.
+ * profileExists/rows submatrix plus the route method discipline.
  *
  * Run directly: node packages/gateway/test/chamber-surface/chamber-installed.test.ts
  */
@@ -29,7 +29,6 @@ import {
   type InstalledResult,
 } from '../../src/plugins-installed.ts'
 import { createChamberSurface } from '../../src/routes.ts'
-import { stubPluginTasks } from '../support/utils.ts'
 import { handleChamberSurface, makeChamberSurfaceHarness, surfaceSilentLogger } from '../support/chamber-surface-harness.ts'
 
 // Shared harness: only the logger default remains local.
@@ -59,10 +58,9 @@ function writeManifest(stateDir: string, text: string): void {
 function surface(
   _t: { after(fn: () => void): void },
   stateDir: string,
-  tasks: ReturnType<typeof stubPluginTasks> = stubPluginTasks(),
   loggerForSurface: typeof logger = logger,
 ): ReturnType<typeof createChamberSurface> {
-  return makeChamberSurfaceHarness(_t, { stateDir, tasks, logger: loggerForSurface }).surface
+  return makeChamberSurfaceHarness(_t, { stateDir, logger: loggerForSurface }).surface
 }
 
 const handle = handleChamberSurface
@@ -176,7 +174,7 @@ test('installed read: oversized manifest (> 1 MiB) → profile_corrupt; exact bo
   const atBound = readProjection(stateDir)
   assert.equal(atBound.ok, true)
   if (atBound.ok) {
-    assertProjection(atBound, { ok: true, dependencies: { a: '^1.0.0' }, bundles: [], profileExists: true }, ['a:third-party:false'])
+    assertProjection(atBound, { ok: true, dependencies: { a: '^1.0.0' }, profileExists: true }, ['a:third-party:false'])
   }
   const over = JSON.stringify({ dependencies: { a: '^1.0.0' }, pad: 'x'.repeat(INSTALLED_MANIFEST_MAX_BYTES - base.length + 1) })
   writeManifest(stateDir, over)
@@ -216,7 +214,6 @@ test('installed read: valid minimal manifest → masked passthrough projection',
     assertProjection(projection, {
       ok: true,
       dependencies: { a: '^1.0.0' },
-      bundles: ['b'],
       profileExists: true,
       // `b` is listed in the live bundles but is NOT a dependency ⇒ no row: the
       // installed list is the profile's own plugin set.
@@ -246,7 +243,6 @@ test('installed read: file: values are masked (case-insensitive) in dependencies
       'case-pkg': MATERIALIZED_VALUE_MASK,
       'file-tgz': MATERIALIZED_VALUE_MASK,
     })
-    assert.deepEqual(result.bundles, [])
     assert.equal(result.profileExists, true)
     // The row projection carries the SAME masking rule: no gateway-local path
     // may reach the renderer through `rows[].spec` either (design 21 §6.2).
@@ -261,7 +257,7 @@ test('installed read: file: values are masked (case-insensitive) in dependencies
   }
 })
 
-test('installed read: missing dsh block → bundles []; non-string dependency values dropped', t => {
+test('installed read: missing dsh block leaves plain rows; non-string dependency values dropped', t => {
   const stateDir = scratch(t)
   writeManifest(stateDir, JSON.stringify({
     dependencies: {
@@ -277,21 +273,22 @@ test('installed read: missing dsh block → bundles []; non-string dependency va
     assertProjection(projection, {
       ok: true,
       dependencies: { good: '^1.0.0' },
-      bundles: [],
       profileExists: true,
     }, ['good:third-party:false'])
   }
 })
 
-test('installed read: bundles keeps only string members', t => {
+test('installed read: the bundles walk keeps only string members (server-side role classifier)', t => {
   const stateDir = scratch(t)
   writeManifest(stateDir, JSON.stringify({
-    dependencies: {},
+    dependencies: { b: '^1.0.0', c: '^1.0.0', d: '^1.0.0' },
     dsh: { profile: { bundles: ['b', 5, null, 'c'] } },
   }))
-  const result = readProjection(stateDir)
-  assert.equal(result.ok, true)
-  if (result.ok) assert.deepEqual(result.bundles, ['b', 'c'])
+  const projection = readProjection(stateDir)
+  assert.equal(projection.ok, true)
+  if (projection.ok) {
+    assert.deepEqual(rowShape(projection.rows), ['b:layer:false', 'c:layer:false', 'd:third-party:false'].sort())
+  }
 })
 
 // ---------------------------------------------------------------------------
@@ -348,7 +345,6 @@ test('route: GET /chamber/plugins/installed → 200 ok projection (trailing slas
   assertProjection(plain.json() as never, {
     ok: true,
     dependencies: { a: '^1.0.0', 'local': MATERIALIZED_VALUE_MASK },
-    bundles: ['a'],
     profileExists: true,
   }, ['a:layer:false', 'local:materialized:false'])
   const slash = await handle(host, 'GET', '/chamber/plugins/installed/')
@@ -378,138 +374,4 @@ test('route: non-GET methods on /chamber/plugins/installed → 405', async t => 
     assert.equal(response.status, 405, method)
     assert.equal(response.json().code, 'method_not_allowed', method)
   }
-})
-
-// ---------------------------------------------------------------------------
-// Route level: the shared read/write fence (design 21 §6.2 读与写面共享栅栏)
-// — the read consults the A1 write surface's in-flight state and answers
-// the lease family's retryable 409 instead of publishing a stale/torn
-// projection.
-// ---------------------------------------------------------------------------
-
-/** One journal op as the tasks projection shapes it (the fence reads only
- * `status`; the rest keeps the projection structurally honest). */
-function journalOp(status: 'pending' | 'ok' | 'failed' | 'blocked'): Record<string, unknown> {
-  return { id: `op-${status}`, ts: Date.now(), kind: 'install', name: 'alpha', preImage: null, status }
-}
-
-function tasksProjection(overrides: {
-  busy?: boolean
-  ops?: Array<Record<string, unknown>>
-  deferred?: Array<Record<string, unknown>>
-  throws?: boolean
-}): ReturnType<typeof stubPluginTasks> {
-  return stubPluginTasks({
-    tasks: () => {
-      if (overrides.throws === true) throw new Error('journal store unavailable')
-      return {
-        tasks: (overrides.ops ?? []) as never,
-        deferred: (overrides.deferred ?? []) as never,
-        busy: overrides.busy ?? false,
-      }
-    },
-  })
-}
-
-test('route: a write in flight fences the read → 409 runtime_busy (retryable), never a projection', async t => {
-  const stateDir = scratch(t)
-  // No manifest at all: the fence must be consulted BEFORE the projection, so
-  // the answer is the fence 409 — not profile_absent (a 404 would tell the
-  // client "nothing is installed" while a write is mid-flight).
-  for (const inFlight of [
-    tasksProjection({ busy: true }),
-    // Queued-but-not-running window (the window a client reads in right after
-    // the 202): the executor is idle, yet the op holds the profile-write lease.
-    tasksProjection({ busy: false, ops: [journalOp('pending')] }),
-  ]) {
-    const host = surface(t, stateDir, inFlight)
-    const response = await handle(host, 'GET', '/chamber/plugins/installed')
-    assert.equal(response.status, 409)
-    const body = response.json()
-    assert.equal(body.code, 'runtime_busy', 'the lease family code, not a new one')
-    assert.match(body.error, /write in flight/)
-    assert.match(body.error, /retry/, 'the refusal must state its retryable contract')
-  }
-
-  // Same fence on the trailing-slash form.
-  writeManifest(stateDir, JSON.stringify({ dependencies: { a: '^1.0.0' } }))
-  const fenced = await handle(surface(t, stateDir, tasksProjection({ busy: true })), 'GET', '/chamber/plugins/installed/')
-  assert.equal(fenced.status, 409)
-})
-
-test('route: no write in flight → 200 unchanged (terminal ops, deferred intents, idle executor)', async t => {
-  const stateDir = scratch(t)
-  writeManifest(stateDir, JSON.stringify({
-    dependencies: { a: '^1.0.0', 'local': 'file:../thing' },
-    dsh: { profile: { bundles: ['a'] } },
-  }))
-  const expected = {
-    ok: true,
-    dependencies: { a: '^1.0.0', 'local': MATERIALIZED_VALUE_MASK },
-    bundles: ['a'],
-    profileExists: true,
-  }
-  const expectedRows = ['a:layer:false', 'local:materialized:false']
-  const idle = [
-    tasksProjection({}),
-    tasksProjection({ busy: false, ops: [journalOp('ok'), journalOp('failed'), journalOp('blocked')] }),
-    // A deferred intent holds NO lease and has NO writer (design 21 §6.8 r1
-    // keeps the installed read — "installed 纯文件读" — available while the
-    // instance is stopped): it must never fence the read.
-    tasksProjection({ deferred: [{ id: 'int-1', ts: Date.now(), kind: 'install', name: 'later' }] }),
-  ]
-  for (const tasks of idle) {
-    const response = await handle(surface(t, stateDir, tasks), 'GET', '/chamber/plugins/installed')
-    assert.equal(response.status, 200)
-    assertProjection(response.json() as never, expected, expectedRows)
-  }
-})
-
-test('route: a failing fence probe is LOUD → 503, never an unfenced projection', async t => {
-  const stateDir = scratch(t)
-  writeManifest(stateDir, JSON.stringify({ dependencies: { leaked: '^1.0.0' } }))
-  const warnings: string[] = []
-  const capturing = { log() {}, warn(message: string) { warnings.push(message) }, error() {} }
-  const host = surface(t, stateDir, tasksProjection({ throws: true }), capturing as never)
-  const response = await handle(host, 'GET', '/chamber/plugins/installed')
-  // The fence is unreadable ⇒ the writer state is UNKNOWN. The projection must
-  // be withheld loudly: no fail-open/unfenced read, no profile_absent claim,
-  // no dependencies leaking through any channel.
-  assert.equal(response.status, 503)
-  const body = response.json()
-  assert.equal(body.code, 'write_fence_unavailable')
-  assert.match(body.error, /unfenced/)
-  assert.equal('dependencies' in body, false, 'no projection body on the 503')
-  assert.equal('rows' in body, false, 'no projection body on the 503')
-  assert.equal(response.chunks.join('').includes('leaked'), false, 'the manifest content never leaks through the failure')
-  assert.equal(warnings.length, 1)
-  assert.match(warnings[0] ?? '', /write-fence probe failed/)
-  assert.equal(warnings[0]?.includes('reading unfenced'), false, 'the fail-open fallback is gone')
-
-  // The 503 is about the PROBE, not about profile state: the same broken fence
-  // over an ABSENT profile must not answer 404 (which would tell the client
-  // "nothing is installed" while the writer state is unknown).
-  const absentDir = scratch(t)
-  const absent = await handle(surface(t, absentDir, tasksProjection({ throws: true }), capturing as never), 'GET', '/chamber/plugins/installed')
-  assert.equal(absent.status, 503)
-  assert.equal(absent.json().code, 'write_fence_unavailable')
-})
-
-test('route: a healthy fence keeps the stopped-instance read available (200 / 404)', async t => {
-  // No writer in flight, terminal ops only + a deferred intent: the §6.8 r1
-  // recovery read is NOT fenced. Present profile → 200; absent → 404.
-  const present = scratch(t)
-  writeManifest(present, JSON.stringify({ dependencies: { a: '^1.0.0' } }))
-  const idle = tasksProjection({
-    ops: [journalOp('ok'), journalOp('failed'), journalOp('blocked')],
-    deferred: [{ id: 'int-1', ts: Date.now(), kind: 'install', name: 'later' }],
-  })
-  const ok = await handle(surface(t, present, idle), 'GET', '/chamber/plugins/installed')
-  assert.equal(ok.status, 200)
-  assert.equal(ok.json().dependencies.a, '^1.0.0')
-
-  const absentDir = scratch(t)
-  const absent = await handle(surface(t, absentDir, idle), 'GET', '/chamber/plugins/installed')
-  assert.equal(absent.status, 404)
-  assert.equal(absent.json().code, 'profile_absent')
 })

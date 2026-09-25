@@ -2,8 +2,8 @@
 
 A minimal chamber-owned fork of the official
 `@deepseek-ai/dsh-client-ui-layout` shell plugin (design 06 — sidebar width
-sharing). **The fork replaces the layout STORE, owns the document-level theme
-projection, and adds the `ctx.layoutFacts` face**; the frame itself —
+sharing). **The fork replaces the layout STORE and owns the document-level
+theme projection**; the frame itself —
 `AppFrame` (the three-column grid, drag handles, column solve), the
 `LayoutController` service / `ctx.layout` face, and the theme presenter — is
 imported from the vendor source through deep subpaths
@@ -49,17 +49,18 @@ one-declarer rule); it stays covered in
   declarations `sidebar` / keyed `main` / `rightbar` / `shell.overlay`, the
   `usePanelInfo` root-hook projection, `SidebarOwnerProps` /
   `RightbarOwnerProps` / `LayoutController` / `ILayout`,
-  `inject: ['slots', 'theme', 'locale']`, registration order and priority
-  unchanged), plus the per-ctx `layoutFacts` service.
+  `inject: ['slots', 'theme', 'locale', 'shortcuts']`, registration order and
+  priority unchanged).
 - `src/client/store-core.ts` — the pure, dependency-injected store factory
-  (alpha.2 nested `LayoutState`, eight actions, the shared `collapsedOf`
-  derivation) so the behavior is testable under plain node.
+  (alpha.2 nested `LayoutState`, eight actions) so the behavior is testable
+  under plain node.
 - `src/client/stores.ts` — the production wiring: the vendor column geometry +
   view-prefs seed/persist/subscribe environment and `trackLayoutInstance`.
 - `src/client/document-theme.ts` — the active-view-gated document theme
   projector (design 06 §4.6).
-- `src/vendor-modules.d.ts` — ambient faces for every dsh specifier this
-  package imports (vendor packages are excluded from the repository typecheck
+- `src/vendor-modules.d.ts` — a one-line `/// <reference>` stub to the repo-level
+  `types/vendor-modules.d.ts`, which carries the ambient faces for every dsh
+  specifier this package imports (vendor packages are excluded from the repository typecheck
   and their built type outputs do not exist in the source-only vendor tree;
   the renderer compiles the real vendor source via vite aliases, see
   `packages/renderer/vite.config.mjs`).

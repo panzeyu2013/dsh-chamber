@@ -150,7 +150,7 @@ useSyncExternalStore 的小 store（单源），事件回调读 store 的 getSna
 | 生产 LOC | 参考（原 −9,000 指标已由用户改判作废） | 176,296 → **176,395**（新增 5 个单源 store/hook 模块；删除面净减仍为正） | 不验收（仅参考） |
 | 值引用环 | 0 | **0**（3 个全断：host-logs⇄spawn-dsh、core-parse⇄core-validation、desktop gateway-provider⇄gateway-session） | 达成（门：verify:import-cycles） |
 | 类型环 | 命中显式 allowance | **1**（desktop shell-core ⇄ 8 个 shell-ipc-*，allowance 内写明"须先拆 shell-core"） | 达成（棘轮钉住） |
-| 死导出 | 零消费者即红 | **789 index + 796 entryless，0 dead**（5 条 seam 白名单；entryless 覆盖 desktop/renderer） | 达成（门：verify:no-dead-exports） |
+| 死导出 | 零消费者即红 | **783 index + 796 entryless，0 dead**（5 条 seam 白名单；entryless 覆盖 desktop/renderer） | 达成（门：verify:no-dead-exports） |
 | God 文件 | 只降不升 | 15 文件 **28,892**（基线 28,921+）；App 3,107 → **2,601** | 达成（棘轮；14,200 仅为目标值，非验收） |
 | 跨包逐字重复 | 与台账相比不增 | 见 §6.1 复核（口径修正：多行体 31 组，其中 24 组为 3–5 行守卫；≥8 行仅 4 组且全部 parity 锁） | 复核（见 §6.1） |
 | 补丁链 | 根因修复 + regression test，或登记退役条件与证据 | 已修并对锁 **10 条**：unread v1、healthErrorTick、roster 双权威、回声三镜像、facts 镜像、注册表投影镜像、watchdog runtimeFacts 镜像、mounted 来源表三副本、completed/edge 账本、视图对；**未收口已登记**：renderer 外三处（§3.1）与 legacy fold（缺支持窗口证据） | 达成 |

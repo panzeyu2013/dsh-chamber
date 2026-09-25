@@ -1,7 +1,7 @@
 /**
  * Remote plugin sync orchestration (design 13) unit tests — part 1:
  * localPluginList classification (bundle/client/plain/materialize/unsyncable +
- * path-traversal defense, registry-driven chamber projection, bundleLines) and
+ * path-traversal defense, registry-driven chamber projection) and
  * the spec/dependency classifiers.
  * Sibling part: plugin-sync-apply.test.ts. Part 1b carries the remote-read,
  * renderer-projection and seed fail-closed assertions.
@@ -9,11 +9,12 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, realpathSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { ARCHIVE_CLEANUP_PACKAGE_NAME, classifyDependencyValue, classifyLocalDependency, CLIENT_GRAPH_PACKAGE_NAME, computeCordisPatchUpdate, describeLocalPluginAddConfirmation, describeLocalPluginRemoveConfirmation, GIT_WORKTREE_PACKAGE_NAME, guardPluginMutation, hasXWildcardVersion, isAllowedLocalFileSpec, localPluginList, MATERIALIZED_VALUE_MASK, packageNameFromSpec, parseRemoteManifest, resolveLocalMaterializeDirectory, PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN, CHAMBER_HOST_PACKAGES, redactLocalPluginManifest, redactRemotePluginManifest, remotePluginList, runLocalDshPlugin, seedRemoteChamberHostPackages, shouldPreferPinnedRuntimeLockfile, sshProtectionFacts } from '../../plugin-sync.ts'
+import { ARCHIVE_CLEANUP_PACKAGE_NAME, classifyDependencyValue, classifyLocalDependency, CLIENT_GRAPH_PACKAGE_NAME, computeCordisPatchUpdate, GIT_WORKTREE_PACKAGE_NAME, localPluginList, MATERIALIZED_VALUE_MASK, parseRemoteManifest, PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN, CHAMBER_HOST_PACKAGES, redactLocalPluginManifest, redactRemotePluginManifest, remotePluginList, seedRemoteChamberHostPackages, shouldPreferPinnedRuntimeLockfile } from '../../plugin-sync.ts'
+import { hasXWildcard, HOST_GIT_WORKTREE_INSERT, HOST_GRAPH_INSERT, HOST_OPEN_IN_INSERT, isMaterializedValue, parsePluginManifest } from '../../control-plane-module.ts'
+import { hasXWildcard as wireHasXWildcard } from '../../../dsh-chamber-wire/src/plugin-manifest.ts'
 import type { ChamberHostPackageSeed, ExecFn } from '../../plugin-sync.ts'
-import { HOST_GIT_WORKTREE_INSERT, HOST_GRAPH_INSERT, HOST_OPEN_IN_INSERT, isMaterializedValue, parsePluginManifest } from '../../control-plane-module.ts'
 import { chamberPackageOf, chamberFacts, chamberProjection, chamberStateOf } from '../support/chamber-projection.ts'
 import { chamberFact, err, expectedChamberFacts, ok, okBytes, SEED_SPEC, tempDir } from './plugin-sync-fixtures.ts'
 
@@ -43,13 +44,6 @@ function writeDepManifest(profileDir: string, name: string, dsh?: unknown): void
 // dependency-value classification / packageNameFromSpec
 // ============================================================================
 
-test('hasXWildcardVersion rejects full name@spec x-wildcards (ranges) — the apply gate single source', () => {
-  for (const spec of ['foo@1.x', 'foo@1.2.x', 'foo@x', '@scope/foo@1.x', 'foo@^1.x']) {
-    assert.equal(hasXWildcardVersion(spec), true, `spec ${spec} is an x-wildcard range`)
-  }
-  assert.equal(hasXWildcardVersion('foo@1.2.3'), false)
-  assert.equal(hasXWildcardVersion('foo'), false, 'an unversioned spec cannot carry a wildcard')
-})
 test('classifyDependencyValue rejects semver x-wildcards (ranges), exact versions stay sync', () => {
   for (const value of ['1.x', '1.2.x', 'x', '^1.x', '~1.2.x']) {
     assert.equal(classifyDependencyValue(value).kind, 'unsyncable', `value ${value} is an x-wildcard range`)
@@ -64,12 +58,6 @@ test('PLUGIN_SPEC_PATTERN / PLUGIN_NAME_PATTERN reject shell metacharacters and 
   assert.equal(PLUGIN_NAME_PATTERN.test('../../etc/passwd'), false)
   assert.equal(PLUGIN_NAME_PATTERN.test('@scope/pkg'), true)
   assert.equal(PLUGIN_NAME_PATTERN.test('pkg'), true)
-})
-test('packageNameFromSpec strips the version suffix', () => {
-  assert.equal(packageNameFromSpec('foo'), 'foo')
-  assert.equal(packageNameFromSpec('foo@^1.2.3'), 'foo')
-  assert.equal(packageNameFromSpec('@scope/foo'), '@scope/foo')
-  assert.equal(packageNameFromSpec('@scope/foo@1.0.0'), '@scope/foo')
 })
 test('classifyDependencyValue: ordinary version VALUES are syncable, never unsyncable', () => {
   // Dependency values are synced as `<name>@<value>` — a bare `^1.0.0` must
@@ -151,6 +139,14 @@ test('classifyLocalDependency: bundle / client / plain', () => {
   assert.equal(classifyLocalDependency({}), 'plain')
   assert.equal(classifyLocalDependency(null), 'plain')
 })
+test('hasXWildcard: the desktop facade resolves the wire single source', () => {
+  // The private desktop copy was deleted; identity proves the facade is a
+  // pass-through of the wire single source, not a second implementation.
+  assert.equal(hasXWildcard, wireHasXWildcard, 'the desktop facade must not carry a private hasXWildcard')
+  for (const value of ['x', '1.x', '1.2.x', '^1.x', '~2.x', 'v1.x', '1.2.3', 'latest', 'lexical', '~1.2.0', '.foo', '']) {
+    assert.equal(hasXWildcard(value), wireHasXWildcard(value), value)
+  }
+})
 test('localPluginList: classifies bundle/client/plain/materialize/unsyncable', () => {
   const root = tempDir()
   const profileDir = writeLocalProfile(root, {
@@ -182,7 +178,7 @@ test('localPluginList: classifies bundle/client/plain/materialize/unsyncable', (
   assert.ok(workspaceEntry !== undefined)
   assert.match(workspaceEntry.reason, /workspace/)
 })
-test('localPluginList: rows are the dependency table itself — role/protected/owner classification', () => {
+test('localPluginList: rows are the dependency table itself — role/protected classification', () => {
   const root = tempDir()
   const profileDir = writeLocalProfile(root, {
     'third-party-pkg': '^1.0.0',
@@ -191,7 +187,7 @@ test('localPluginList: rows are the dependency table itself — role/protected/o
   }, ['third-party-pkg'])
   writeDepManifest(profileDir, 'third-party-pkg', { bundle: { patch: './p.js' } })
   const rows = new Map(localPluginList(root, {
-    familyNames: ['@deepseek-ai/dsh', '@deepseek-ai/dsh-session'], familyVersions: null, runtimeVersion: '0.1.5-rc.2', familySource: 'runtime',
+    familyNames: ['@deepseek-ai/dsh', '@deepseek-ai/dsh-session'], familySource: 'runtime',
   }).rows.map(row => [row.name, row]))
   assert.deepEqual([...rows.keys()].sort(), ['@deepseek-ai/dsh-base', 'materialized-pkg', 'third-party-pkg'].sort(),
     'rows come from the dependency table only (the baseline never creates rows)')
@@ -199,7 +195,6 @@ test('localPluginList: rows are the dependency table itself — role/protected/o
   assert.equal(rows.get('materialized-pkg')?.role, 'materialized')
   assert.equal(rows.get('third-party-pkg')?.protected, false)
   assert.equal(rows.get('@deepseek-ai/dsh-base')?.protected, true, 'a self-declared baseline row stays read-only')
-  assert.equal(rows.get('@deepseek-ai/dsh-base')?.owner, 'installation')
 })
 test('localPluginList: unsafe dependency name is refused (path traversal defense)', () => {
   const root = tempDir()
@@ -212,19 +207,6 @@ test('localPluginList: unsafe dependency name is refused (path traversal defense
 })
 test('localPluginList: throws on a missing profile manifest', () => {
   assert.throws(() => localPluginList(tempDir()), /cannot read local profile manifest/)
-})
-test('resolveLocalMaterializeDirectory: MAIN resolves the manifest entry and enforces package identity', () => {
-  const root = tempDir()
-  writeLocalProfile(root, { 'local-path-pkg': 'file:../local-pkg' }, [])
-  const packageDir = join(root, 'profiles', 'local-pkg')
-  mkdirSync(packageDir, { recursive: true })
-  writeFileSync(join(packageDir, 'package.json'), JSON.stringify({ name: 'local-path-pkg' }))
-  assert.deepEqual(resolveLocalMaterializeDirectory(root, 'local-path-pkg'), { ok: true, path: realpathSync(packageDir) })
-  assert.equal(resolveLocalMaterializeDirectory(root, 'not-in-manifest').ok, false)
-  writeFileSync(join(packageDir, 'package.json'), JSON.stringify({ name: 'different-package' }))
-  const mismatched = resolveLocalMaterializeDirectory(root, 'local-path-pkg')
-  assert.equal(mismatched.ok, false)
-  if (!mismatched.ok) assert.match(mismatched.error, /does not match/)
 })
 test('localPluginList: the chamber projection is REGISTRY-DRIVEN — one row per control-plane host package (never a hardcoded pair)', () => {
   // The projection maps the control-plane registry 1:1 — a new registry row
@@ -382,19 +364,6 @@ test('localPluginList: chamber patched covers the four mount-source combinations
 })
 
 // ============================================================================
-// localPluginList: bundleLines
-// ============================================================================
-
-test('localPluginList: bundleLines collects bundle-declaring dependency names', () => {
-  const root = tempDir()
-  const profileDir = writeLocalProfile(root, { 'bundle-pkg': '^1.0.0', 'plain-pkg': '1.0.0' }, ['bundle-pkg'])
-  writeDepManifest(profileDir, 'bundle-pkg', { bundle: { patch: './cordis.patch.yml' } })
-  writeDepManifest(profileDir, 'plain-pkg', {})
-  const manifest = localPluginList(root)
-  assert.deepEqual(manifest.bundleLines, ['bundle-pkg'])
-})
-
-// ============================================================================
 // part 1b — remote read face, renderer boundaries and the seed fail-closed
 // matrix (security / boundary / fail-closed assertions).
 // ============================================================================
@@ -467,7 +436,7 @@ test('remotePluginList: a redacted .ssh-home ENOENT is a probe miss, never a lou
   assert.ok(zh.ok, 'a redacted zh_CN ENOENT is a probe miss too')
 })
 
-test('remotePluginList: protected means name in P, and the write face refuses the official install (design 21 §6.11.5)', async () => {
+test('remotePluginList: protected means name in P — the read face never lies about removability (design 21 §6.11.5)', async () => {
   const exec: ExecFn = async (_id, action, payload) => {
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
       const path = payload.argv?.[0] ?? ''
@@ -487,85 +456,17 @@ test('remotePluginList: protected means name in P, and the write face refuses th
   const byName = new Map(result.manifest.rows.map(row => [row.name, row]))
   assert.equal(byName.get('third-party-pkg')?.protected, false)
   assert.equal(byName.get('@deepseek-ai/dsh-experimental-x')?.protected, false, 'the read face never lies about removability')
-  const install = guardPluginMutation({ op: 'install', name: '@deepseek-ai/dsh-experimental-x', version: '0.1.5-rc.2', facts: sshProtectionFacts() })
-  assert.equal(install.kind, 'refuse')
-  assert.equal(install.kind === 'refuse' ? install.code : null, 'protected')
-  const remove = guardPluginMutation({ op: 'remove', name: '@deepseek-ai/dsh-experimental-x', version: null, facts: sshProtectionFacts() })
-  assert.equal(remove.kind, 'allow', 'removing a stray official copy is restorative')
 })
 
-test('isAllowedLocalFileSpec: absolute POSIX/Windows/UNC only — relative and control-char input refused', () => {
-  assert.equal(isAllowedLocalFileSpec('file:/Users/x/plugin'), true)
-  assert.equal(isAllowedLocalFileSpec('file:C:\\Users\\x\\plugin'), true)
-  assert.equal(isAllowedLocalFileSpec('file:\\\\server\\share\\plugin'), true)
-  for (const bad of ['file:../relative', 'file:./relative', 'file:', 'file:/tmp/x' + String.fromCharCode(10) + 'rm -rf', 'plain-registry-spec']) {
-    assert.equal(isAllowedLocalFileSpec(bad), false, bad)
-  }
-})
 
-test('runLocalDshPlugin: protected / generation-mismatch / file-pick gates refuse before any CLI lookup', async () => {
-  const dir = tempDir()
-  // A deferred (profile-absent) judgement is NOT a refusal: the first add must
-  // fall through to the CLI lookup (regression guard, design 21 §6.11.3 R0).
-  const deferred = await runLocalDshPlugin(dir, dir, 'add', 'third-party-pkg@1.0.0', {
-    protection: { familyNames: ['@deepseek-ai/dsh-base'], runtimeVersion: '0.1.5-rc.2', profileState: 'absent' },
-  })
-  assert.equal(deferred.ok, false)
-  assert.match(deferred.error ?? '', /no dsh CLI entry found/, 'a defer reaches the CLI lookup, never a refusal')
-  const protection = { familyNames: ['@deepseek-ai/dsh-base'], runtimeVersion: '0.1.5-rc.2' }
-  const refused = await runLocalDshPlugin(dir, dir, 'remove', '@deepseek-ai/dsh-base', { protection })
-  assert.equal(refused.ok, false)
-  assert.match(refused.error ?? '', /\[protected\]/)
-  const crossGen = await runLocalDshPlugin(dir, dir, 'add', '@deepseek-ai/dsh-experimental-x@0.1.4', { protection })
-  assert.equal(crossGen.ok, false)
-  assert.match(crossGen.error ?? '', /\[generation-mismatch\]/)
-  const noFlag = await runLocalDshPlugin(dir, dir, 'add', 'file:/tmp/picked-folder')
-  assert.equal(noFlag.ok, false)
-  assert.match(noFlag.error ?? '', /invalid add spec/)
-  const gated = await runLocalDshPlugin(dir, dir, 'add', 'file:/tmp/picked-folder', { allowFileSpec: true })
-  assert.equal(gated.ok, false)
-  assert.match(gated.error ?? '', /no dsh CLI entry found/)
-})
 
-test('runLocalDshPlugin scrubs the child env: whitelist + pins only, credential carriers never cross (C-F12)', async () => {
-  const workspace = tempDir()
-  mkdirSync(join(workspace, 'node_modules', '@deepseek-ai', 'dsh', 'lib'), { recursive: true })
-  writeFileSync(join(workspace, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'), '#!/usr/bin/env node\n')
-  const home = tempDir()
-  const poisoned = ['NODE_AUTH_TOKEN', 'npm_config_registry', 'NPM_CONFIG_USERCONFIG', 'NPM_TOKEN', 'DSH_GATEWAY_TOKEN', 'GITHUB_TOKEN']
-  const previous = poisoned.map(key => [key, process.env[key]] as const)
-  for (const key of poisoned) process.env[key] = `poison-${key}`
-  try {
-    const seen: Array<Record<string, string>> = []
-    const result = await runLocalDshPlugin(workspace, home, 'add', 'third-party-pkg@1.0.0', {
-      childExecutor: async execution => {
-        seen.push(execution.env)
-        return { code: 0, signal: null, stdout: '', stderr: '' }
-      },
-    })
-    assert.deepEqual(result, { ok: true })
-    assert.equal(seen.length, 1)
-    const env = seen[0]!
-    for (const key of poisoned) assert.equal(Object.hasOwn(env, key), false, `${key} must never reach the child`)
-    // HOME is deliberately not re-added by the executor: pnpm then falls back
-    // to the passwd home store the profile was provisioned against.
-    assert.equal(Object.hasOwn(env, 'HOME'), false)
-    assert.equal(env.DSH_HOME, home, 'the DSH_HOME pin still applies')
-    assert.equal(typeof env.PATH, 'string')
-  } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) delete process.env[key]
-      else process.env[key] = value
-    }
-  }
-})
 
 test('redactLocalPluginManifest / redactRemotePluginManifest: local paths are masked on every channel, registry values untouched', () => {
   const local = redactLocalPluginManifest({
     dependencies: { 'file-dep': 'file:/Users/x/pkg', 'link-dep': 'link:../pkg', 'registry-dep': '^1.2.3', 'url-dep': 'https://example.com/pkg.tgz' },
     bundles: ['file-dep'],
-    rows: [{ name: 'file-dep', spec: 'file:/Users/x/pkg', version: null, role: 'materialized', protected: false, owner: 'user' }],
-    clientLines: ['link-dep'], bundleLines: ['file-dep'], unsyncable: [],
+    rows: [{ name: 'file-dep', spec: 'file:/Users/x/pkg', version: null, role: 'materialized', protected: false }],
+    clientLines: ['link-dep'], unsyncable: [],
     chamber: chamberProjection({ [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true, version: '1.0.0' } }),
   } as never)
   assert.equal(local.dependencies['file-dep'], MATERIALIZED_VALUE_MASK)
@@ -584,7 +485,7 @@ test('redactLocalPluginManifest / redactRemotePluginManifest: local paths are ma
   }
   const remote = {
     dependencies: remoteDependencies,
-    bundles: ['file-dep'], profileExists: true,
+    profileExists: true,
     chamber: chamberProjection({ [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true } }),
   } as never
   const remoteMasked = redactRemotePluginManifest(remote)
@@ -609,7 +510,7 @@ test('redactLocalPluginManifest / redactRemotePluginManifest: local paths are ma
   }
   assert.equal(classifyDependencyValue(remoteMasked.dependencies['file-dep']).kind, 'materialize')
   const remoteError = redactRemotePluginManifest({
-    dependencies: { broken: 'file:/srv/x' }, bundles: [], profileExists: true,
+    dependencies: { broken: 'file:/srv/x' }, profileExists: true,
     error: 'failed to parse remote package.json: boom', chamber: { ok: false, error: 'probe failed' },
   } as never)
   assert.equal(remoteError.dependencies.broken, MATERIALIZED_VALUE_MASK)
@@ -750,7 +651,6 @@ test('remotePluginList: parses dependencies/bundles and projects the registry ro
   assert.ok(result.ok)
   if (!result.ok) return
   assert.deepEqual(result.manifest.dependencies, { foo: '^1.0.0' })
-  assert.deepEqual(result.manifest.bundles, ['foo'])
   assert.equal(result.manifest.profileExists, true)
   assert.deepEqual(result.manifest.rows.map(row => row.name + ':' + row.role + ':' + row.protected), ['foo:layer:false'])
   assert.deepEqual(chamberFacts(result.manifest.chamber), expectedChamberFacts({
@@ -829,16 +729,6 @@ test('remotePluginList: the loader insert and each row live state are judged ind
   }
 })
 
-// Confirmation copy: every LIVE mutating path must name its target and effect
-// before the action runs. The retired direct ssh materialize/seed/apply copy
-// builders were removed with their (now unreachable) flows; the live gateway
-// and ssh-undo copy is pinned in their own suites.
-test('confirmation copy: the local mutating paths name their effect', () => {
-  const add = describeLocalPluginAddConfirmation('some-pkg@^1.2.3')
-  assert.match(add.message, /some-pkg@\^1\.2\.3/)
-  const remove = describeLocalPluginRemoveConfirmation('some-pkg')
-  assert.match(remove.message, /some-pkg/)
-})
 
 // cordis.patch.yml seed merge: template rewrite / dedup / append-without-clobber.
 test('seed: the init template is rewritten, an existing row deduped, and a pre-rename row refused loud', () => {

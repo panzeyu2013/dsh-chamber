@@ -6,10 +6,9 @@
  *  - the desktop main process consumes it through
  *    desktop/control-plane-module.ts (packaged → compiled dist, dev → this
  *    source), which ssh-provider.ts re-exports and plugin-sync.ts imports;
- *  - the gateway imports '@dsh-chamber/control-plane' directly;
- *  - the WEB/RENDERER chain must NOT import this Node-side module — the
- *    renderer's ADD_SPEC is a hand mirror that must stay in lockstep with
- *    PLUGIN_SPEC_PATTERN.
+ *  - the gateway imports '@dsh-chamber/control-plane' directly.
+ * The user plugin write surface was retired with the 2026-09 C layering ruling,
+ * so the constants here now serve the surviving read/protection paths alone.
  */
 
 /** Package-spec length cap: bounds add/remove inputs before any whitelist test or remote argv construction. */
@@ -31,19 +30,6 @@ export const PLUGIN_SPEC_PATTERN = /^(@[a-zA-Z0-9][a-zA-Z0-9._-]*\/)?[a-zA-Z0-9]
 export const PLUGIN_NAME_PATTERN = /^(@[a-zA-Z0-9][a-zA-Z0-9._-]*\/)?[a-zA-Z0-9][a-zA-Z0-9._-]*$/
 
 /**
- * The materialize-add `file:` spec whitelist: only the ABSOLUTE form of the
- * materialized-tarball stable dir may reach the remote `dsh plugin add` command
- * — `<remote-home>/.dsh-chamber/plugins/<name>-<hash>.tgz`. The path is
- * constrained to the `.dsh-chamber/plugins/` subtree (the same fixed surface
- * resolveWriteTarget allows writes into), shell-safe, and the argv is only ever
- * constructed by the main-process materialize orchestration (the renderer has no
- * channel forwarding a `file:` spec to a remote `run`; applyPlugins
- * re-validates against PLUGIN_SPEC_PATTERN, which refuses `file:`). `~` is never
- * accepted here: a word-middle `~` is not expanded by the remote shell/pnpm.
- */
-export const MATERIALIZE_FILE_SPEC_PATTERN = /^file:\/([a-zA-Z0-9._-]+\/)*\.dsh-chamber\/plugins\/[a-zA-Z0-9._-]+\.tgz$/
-
-/**
  * write-file content cap (50MiB suggested): bounds both the base64 payload
  * decoded in the main process and the materialize/seed payloads flowing
  * through write-file.
@@ -56,17 +42,4 @@ export const WRITE_FILE_MAX_BYTES = 50 * 1024 * 1024
  * largest write-file read-back exactly. */
 export const RUN_STDOUT_MAX_BYTES = WRITE_FILE_MAX_BYTES
 
-/**
- * The registry package NAME a spec/name value refers to — shared extraction core
- * for the sibling copies in gateway-ipc-shared.ts, gateway plugins-tasks.ts and
- * desktop ssh-apply-rows.ts (the guarded, null-returning variant).
- *
- * Rule: the whitelist has already guaranteed the shape (registry name +
- * optional scope, optional trailing @version); the name is everything before
- * the LAST `@`, and a bare `@scope/name` is returned whole. Inputs failing the
- * whitelist are NOT this helper's contract.
- */
-export function extractSpecName(spec: string): string {
-  const at = spec.lastIndexOf('@')
-  return at > 0 ? spec.slice(0, at) : spec
-}
+

@@ -9,7 +9,7 @@
 import type { DshChamberBridge } from '@dsh-chamber/renderer/global.d.ts'
 
 /**
- * The whole IPC/type face is RE-EXPORTED from the renderer's authoritative
+ * The retained IPC/type face is RE-EXPORTED from the renderer's authoritative
  * global.d.ts, consumed through its single declared face
  * (@dsh-chamber/renderer/global.d.ts) — the single source of truth
  * (settings-bridge pattern). A
@@ -25,6 +25,11 @@ import type { DshChamberBridge } from '@dsh-chamber/renderer/global.d.ts'
  * `delete_connection` results
  * (main.ts projects every registry return), so callers may rely on them in
  * every registry-returning path.
+ *
+ * The user plugin WRITE types (apply/materialize/undo/npm-search/local add) were
+ * retired with the write surfaces (D1); only the plugin READ face
+ * (LocalPluginManifest / RemotePluginManifest) and chamber provisioning
+ * (SshSeedHostGraphResult / GatewayPluginSyncIpcResult) are re-exported.
  */
 export type {
   // Registry-driven chamber projection (design 13 §6): the per-package state
@@ -32,19 +37,12 @@ export type {
   ChamberHostPackageState,
   ChamberInjectionState,
   ConnectionCredentialMutations,
-  GatewayPluginApplyIpcResult,
-  GatewayPluginApplyInput,
-  GatewayPluginMaterializeIpcResult,
   GatewayPluginSyncIpcResult,
   ChamberNotificationSettings,
   ChamberSettings,
   ChamberSettingsStatus,
   DesktopSshSurface,
   LocalPluginManifest,
-  NpmSearchPackage,
-  PluginApplyFailure,
-  PluginApplyInput,
-  PluginApplyResult,
   RemotePluginManifest,
   SaveConnectionResult,
   SettingsSurface,
@@ -53,12 +51,9 @@ export type {
   SshExecIpcResult,
   SshInstanceInput,
   SshInstanceSpec,
-  SshLocalPluginExecIpcResult,
   SshLogEntry,
-  SshMaterializeResult,
   SshPasswordSubmission,
   SshPhase,
-  SshPluginUndoIpcResult,
   SshSeedHostGraphResult,
   SshStatusChangedPayload,
   SshStatusProjection,

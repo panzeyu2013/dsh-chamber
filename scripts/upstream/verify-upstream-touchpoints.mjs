@@ -14,7 +14,8 @@
  *       的 seed-open-in）的重放差异报告（advisory）
  *   C3  完整性：fork 每文件有分类（pure/patched/own），上游每文件有裁决
  *       （mirrored/dropped）；漏分类/新文件漏裁决 = 硬失败
- *   C4  roster：typert remote 装配契约 == 15（集合与顺序）、covered/factory 存在性、
+ *   C4  roster：typert remote 挂载顺序 == 单表（`EXPECTED_MOUNT_PACKAGES`；
+ *       import 选择无顺序语义，按集合与该表相等）、covered/factory 存在性、
  *       删包 fail-loud（存在性哨兵列表）
  *   C5  过期锚扫描：shadow fork 的 package.json 版本 == 上游同文件版本
  *       （versionAnchor: "chamber" 的 fork 豁免——见 registry 的 seed 条目）；
@@ -38,14 +39,16 @@
  *       任何其他 dsh 版本字面量即红——历史叙述只能留在注释里
  *   C11 运行时线族集合（硬失败，design 21 §6.11）：受保护集合的 F 分量只有一个
  *       权威来源——**已提交**的运行时锁文件闭包（`@deepseek-ai/*` 名字集合）。
- *       必须含核心（dsh/dsh-base/dsh-web-app）、**不得**含官方 opt-in 层
- *       （`dsh-experimental-*`）与 dev/test 包；实例树物化时另做等价性交叉校验
- *       （允许差集 = 其他平台 `node-addon-system-*`）。命中即红：F 的来源选错
- *       （如误用源码线 vendor 树）会让「能装官方 opt-in 层」当场失效
+ *       必须含核心（dsh/dsh-base/dsh-web-app）、**不得**含 dev/test 与源码线 harness 段；
+ *       官方 opt-in（`dsh-experimental-*`）按**登记白名单**放行（运行时根包自己声明
+ *       的 opt-in 依赖确实属于 F）：未登记名字红（取错来源/上游新提升），已登记名字
+ *       不再出现也红（上游移除/改名）。实例树物化时另做等价性交叉校验（允许差集 =
+ *       其他平台 `node-addon-system-*` / `libreoffice-kit-*`）
  *   C12 profile 契约锚（硬失败）：上游源码仍以 `dsh.profile.bundles` 承载层列表、
  *       以 `dsh.bundle.patch` 声明层、web 模板默认组合不变、profile workspace 仍是
- *       hoisted + 不自动装 peer；任一漂移 ⇒ 停升级、改派生（B₀ 快照）。两个锚点文件都必须
- *       可读：树部分物化时缺文件 = 改名/搬移（违规），只有整体未物化才降级为 note
+ *       hoisted + 不自动装 peer；任一漂移 ⇒ 停升级、改派生（B₀ 快照）。三个锚点文件
+ *       （app-boot profile.ts / plugin-manager operations.ts / CLI plugin.ts）都必须可读：
+ *       树部分物化时缺文件 = 改名/搬移（违规），只有整体未物化才降级为 note
  *   C13 播种注册表结构（硬失败）：`HOST_*_PACKAGE_NAME` 常量 ↔ `HOST_*_INSERT` 行 ↔
  *       `CHAMBER_HOST_PACKAGES` 注册表三面一一对应（S 分量与播种机制脱节即红）
  *   C14 plugin-row 单源 + manifest 三方镜像（硬失败）：行形状的唯一声明在 wire 的
@@ -57,8 +60,13 @@
  *   C15 悬停卡自持移植的上游退役门（硬失败）：chamber 的
  *       `RowHoverCard` + client-core `src/hover-intent.ts` 取代 vendor `HoverCard`，退役
  *       条件是「上游修掉 leave 落在 dwell→commit 窗口就残留的竞态」。本门在**冻结
- *       pin** 上读 ① 该竞态形状仍在（HoverCard 组件内 onPointerLeave 的**每一个**
- *       arm 调用都由已提交 open 守卫；注释与字符串/模板先中和，诱饵无法伪证）与
+ *       pin** 上读 ① 竞态两侧形状仍在——CLOSE：HoverCard 组件内 onPointerLeave 的
+ *       **每一个** arm 调用的守卫必须是已提交 open 本身或含 open 的 `&&` 合取（顶层
+ *       `||` 析取即红：`open || intentRef.current` / `open || true` 是 ref-intent 修复，
+ *       不是已知形状）；OPEN：以 `openDelayMs` 为延迟的 dwell 定时器回调只把 phase
+ *       置为 `'open'`，至多把该 `setTimeout` 赋值目标的 ref 清成 `null`（其他成员写即
+ *       红）、不复查指针在场（同名 setter 的预览淡出关闭回调投影后同形，故定时器按
+ *       延迟而非回调识别）；注释与字符串/模板先中和，诱饵无法伪证——与
  *       ② 时间常数逐值锁步（POINTER_GRACE_MS == HOVER_CLOSE_GRACE_MS、
  *       openDelayMs 默认 == HOVER_OPEN_DELAY_MS，取值必须唯一——零命中/多值都红），
  *       任一不成立即红——上游修掉竞态那天必须做退役/再登记裁决（判定逻辑纯函数，
@@ -159,7 +167,9 @@ const COVERED_SENTINELS = [
   '@deepseek-ai/dsh-client-modules',
   '@deepseek-ai/dsh-client-ui-renderer',
   '@deepseek-ai/dsh-client-hmr',
-  '@deepseek-ai/dsh-client-ui-open-in-app',
+  // D2: the official open-in CLIENT row is deliberately UNCOVERED (it loads from
+  // the host graph for its file-level seats), so it must not be sentineled here —
+  // its chamber replacement below is the surface this sentinel protects.
   '@dsh-chamber/dsh-chamber-client-ui-open-in',
 ]
 
@@ -380,7 +390,7 @@ for (const fork of FORKS) {
     // data:/node: URLs, and a bare Windows path reads as the scheme 'd:' —
     // `import('D:\\a\\…')` crashed this gate instantly on the test-windows leg
     // (ERR_UNSUPPORTED_ESM_URL_SCHEME) while staying green on POSIX.
-    const { remotePackagesFromAssembly, remoteMountPackages, EXPECTED_REMOTE_PACKAGES } = await import(
+    const { remotePackagesFromAssembly, remoteMountPackages, EXPECTED_MOUNT_PACKAGES } = await import(
       pathToFileURL(join(ROOT, 'packages/renderer/scripts/typert-remote-contract.mjs')).href
     )
     let remotes
@@ -393,17 +403,19 @@ for (const fork of FORKS) {
       remotes = undefined
     }
     if (remotes !== undefined) {
-    // Exact set AND order: a same-length swap (a package added while another
-    // is removed, or a reordered assembly) must not pass silently. The
-    // expected list is single-sourced in typert-remote-contract.mjs (shared
-    // with the lockstep test) so an upstream change is one edit.
-    const expected = [...EXPECTED_REMOTE_PACKAGES]
-    if (remotes.length !== expected.length || remotes.some((name, index) => name !== expected[index])) {
-      fail(`C4 remotePackagesFromAssembly = ${JSON.stringify(remotes)}（期望 ${JSON.stringify(expected)}）——上游装配面变更需重审 typert 契约`)
-    } else if (mounted.length !== expected.length || mounted.some((name, index) => name !== expected[index])) {
-      fail(`C4 apply() 挂载数组 = ${JSON.stringify(mounted)} != import 选择 ${JSON.stringify(remotes)}——挂载面与选择面必须 1:1 同序`)
+    // Mount ORDER is runtime-significant and pinned by the single table
+    // (EXPECTED_MOUNT_PACKAGES). The import selection has no order semantics:
+    // it is judged as a SET against the same table, so an import added without
+    // a mount (漏挂载) is caught even when the mount array still matches.
+    const expected = [...EXPECTED_MOUNT_PACKAGES]
+    const selection = new Set(remotes)
+    const mountedSet = new Set(mounted)
+    if (mounted.length !== expected.length || mounted.some((name, index) => name !== expected[index])) {
+      fail(`C4 apply() 挂载数组 = ${JSON.stringify(mounted)}（期望 ${JSON.stringify(expected)}）——上游挂载序变更需重审 typert 契约`)
+    } else if (selection.size !== mountedSet.size || [...selection].some((name) => !mountedSet.has(name))) {
+      fail(`C4 选择面与挂载面集合不等：import=${JSON.stringify([...selection])} mounted=${JSON.stringify([...mountedSet])}`)
     } else {
-      console.log(`✓ C4 remote assembly 契约 = ${remotes.length}（import 选择 == apply 挂载，集合与顺序）`)
+      console.log(`✓ C4 remote assembly 契约 = ${mounted.length}（挂载顺序 == 表；import 选择集合 == 挂载集合）`)
     }
     }
   }
@@ -901,9 +913,8 @@ for (const fork of FORKS) {
   const runtimeLockPath = join(ROOT, 'packages', 'desktop', 'vendor', 'dsh', 'pnpm-lock.yaml')
   const runtimeTreePath = join(ROOT, 'packages', 'desktop', 'vendor', 'dsh', 'node_modules', '@deepseek-ai')
   const sourceTreePath = join(ROOT, 'vendor', 'harness-packages', '@deepseek-ai')
-  const familyNames = existsSync(runtimeLockPath)
-    ? runtimeFamilyNames(readFileSync(runtimeLockPath, 'utf8'))
-    : []
+  const runtimeLockText = existsSync(runtimeLockPath) ? readFileSync(runtimeLockPath, 'utf8') : null
+  const familyNames = runtimeLockText === null ? [] : runtimeFamilyNames(runtimeLockText)
   const listScope = (dir) => (existsSync(dir)
     ? readdirSync(dir).map((name) => `@deepseek-ai/${name}`).sort()
     : null)
@@ -911,14 +922,17 @@ for (const fork of FORKS) {
     names: familyNames,
     treeNames: listScope(runtimeTreePath),
     sourceTreeNames: listScope(sourceTreePath),
+    lockfileText: runtimeLockText,
   })
-  reportFindings('C11', `运行时线族集合 = ${familyNames.length} 个 @deepseek-ai/*（核心在场；opt-in/dev 包不在 F 内）`, c11)
+  reportFindings('C11', `运行时线族集合 = ${familyNames.length} 个 @deepseek-ai/*（核心在场；dev/test 包不在 F 内；官方 opt-in 按登记白名单）`, c11)
 
   // C12 —— profile 契约锚（上游源码；子模块未物化时由 C1/C3/C5 响亮失败）
   const profileSourcePath = join(SUBMODULE, 'packages', 'boot', 'app-boot', 'src', 'profile.ts')
+  const managerSourcePath = join(SUBMODULE, 'packages', 'boot', 'plugin-manager', 'src', 'operations.ts')
   const pluginSourcePath = join(SUBMODULE, 'apps', 'cli', 'src', 'plugin.ts')
   const c12 = profileContractFindings({
     profileSource: existsSync(profileSourcePath) ? readFileSync(profileSourcePath, 'utf8') : null,
+    managerSource: existsSync(managerSourcePath) ? readFileSync(managerSourcePath, 'utf8') : null,
     pluginSource: existsSync(pluginSourcePath) ? readFileSync(pluginSourcePath, 'utf8') : null,
   })
   reportFindings('C12', 'profile 契约锚（bundles 层列表 / dsh.bundle.patch 声明 / web 模板默认 / hoisted + 不自动装 peer）', c12)
@@ -967,9 +981,23 @@ for (const fork of FORKS) {
 // `clearTimer()` + `if (open) armClose()`），dwell 定时器触发到 React 提交之间
 // 落下的 pointerleave 什么都不 arm，卡片随后挂载而指针已经离开 ⇒ 再无事件能关掉
 // 它。vendor 只读，故修正落在本包；退役条件只有一个
-// ——「上游修掉该竞态」。本门把该条件变成机器判据，读的是**冻结 pin**：
-//   ① 竞态形状仍在（arm 仍由已提交的 open 守卫；换成 ref/无条件 arm = 上游可能已
-//      修，硬失败要求人工裁决，绝不自动放行）；
+// ——「上游修掉该竞态」。pin 的 preview/inline 相位机把开卡语句从 setOpen(true)
+// 换成 setPhase('open')，但既不复查指针在场、onPointerLeave 也逐字未变 ⇒ 竞态仍在，
+// 偏差继续保留，以下判据已按相位机形态重新裁决。本门把该条件变成机器判据，读的是
+// **冻结 pin**：
+//   ① 竞态两侧形状仍在——CLOSE：arm 的守卫必须是已提交 open 本身或含 open 的 `&&`
+//      合取（顶层 `||` 析取即红：`open || intentRef.current` / `open || true` 是修复
+//      而非已知形状；裸 arm 与 ref/其他标志守卫同样红）；OPEN：以 openDelayMs 为
+//      延迟的 dwell 定时器回调只 setPhase('open')（至多把该 setTimeout 赋值目标的
+//      ref 清成 null，其他成员写即红），回调里多出任何其他语句（最小修复
+//      `if (!insideRef.current) return` 就是一句）即红；
+//   ①c post-commit 关闭/相位（fail-closed）：组件体内的 useEffect/useLayoutEffect/
+//      useInsertionEffect 回调若调用 close()/setPhase(...)（宽限 arm 也算），就必须
+//      逐字命中白名单化的 pinned 形状（冻结 pin 的预览淡出 / owner-disable / Escape），
+//      其余一律判红——「提交后复查指针在场再关闭」可让 ①/①b 一字不改而竞态已消失，
+//      而把指针事实挪到模块作用域/helper 即可绕过按 `*.current` 读取的旧判据，故不再
+//      以 ref 读取为前提（见 verify-upstream-touchpoints-hover.mjs 的
+//      postCommitDismissalRecheck / PINNED_POST_COMMIT_DISMISSALS）；
 //   ② 两侧时间常数逐值锁步（POINTER_GRACE_MS == HOVER_CLOSE_GRACE_MS、
 //      openDelayMs 内联默认 == HOVER_OPEN_DELAY_MS）——移植声称行为等价，
 //      单侧改动即漂移；

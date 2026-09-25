@@ -28,5 +28,4 @@ export interface PluginRow {
   version: string | null
   role: PluginRowRole
   protected: boolean
-  owner?: 'installation' | 'chamber' | 'user'
 }

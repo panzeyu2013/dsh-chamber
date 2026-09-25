@@ -100,7 +100,7 @@ reaper（回收孤儿实例）→ 快照 DSH_HOME（§3.7，断言无存活写�
 ### 3.4 激活门控与回退（自由选择模型的唯一安全网）
 
 换树后、宣布生效前跑探针列表（全部复用现有设施，**全部只读、无副作用**；
-与钉住上游 0.1.5-rc.2 wire 对齐，`REQUIRED_ACTIVATION_PROBES` 七项
+与钉住上游 0.1.7-rc.2 wire 对齐，`REQUIRED_ACTIVATION_PROBES` 七项
 （4 项官方 + 3 项 chamber 宿主域，见 `activation-gate.ts`），slash
 端点；探针响应与**会话数据量彻底解耦**——会话面探针是固定小体积身份方法）：
 
@@ -184,7 +184,7 @@ override（未失效时）→ 内建锚（`--dsh-path` ?? `findDshWorkspace`）�
   而非删除——F4「自动恢复上一 override 树」依赖记录存活；「恢复内建」仅在
   内建锚探针通过后显式删除。
 - **回落保护（F4）**：回落内建树后跑数据可读性探测——用户曾用较新运行时并迁移
-  过数据、内建 pin（`bundle-dsh` 兜底常量，当前 0.1.5-rc.2，不随壳版本自动移动）可能读不了新格式数据；探测失败
+  过数据、内建 pin（`bundle-dsh` 兜底常量，当前 0.1.7-rc.2，不随壳版本自动移动）可能读不了新格式数据；探测失败
   → **自动恢复上一 override 树（受保护类，仍在）+ 响亮提示**。「单调向前」**仅对
   壳版本成立**（§7）。
   - **中断失效自愈（gateway/desktop 启动 F4 门）**：「durable 失效 = 回落裁决已
@@ -432,7 +432,7 @@ chamber-settings.json，非秘密）：
   min-height 34px，A-4 同批裁决改回 v0.2.4 `padding:7px 10px`
   + 13px、行框 18px（32px 高），保留 r10/列表 r20——见 design 06 §7「菜单密度 =
   chamber 档」），运行时/表单字段 12px/400 为紧凑行；只统一箭头词汇。
-- 下拉箭头统一 `IconChevronDownOutline14`（`.runtimeSelectChevron`，appearance:none +
+- 下拉箭头统一 `IconChevronDownOutlineRegular`（`.runtimeSelectChevron`，appearance:none +
   自定义 chevron，右缘与文字左缘对称；文字↔箭头净间隙 ≥6px）。
 - 动作按钮：主（更新到/切换到 vY）与次（恢复内建 / 重启 dsh / 清理版本 / 恢复回滚前
   数据等）**一律用官方 `ui-primitives` `Button`**：

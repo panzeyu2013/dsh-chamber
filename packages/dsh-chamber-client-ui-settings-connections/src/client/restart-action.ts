@@ -1,11 +1,11 @@
 /**
  * The ONE gateway managed-dsh restart action: POST /chamber/runtime/restart → 202 → PAGE-owned
- * readiness poll → reload. The connection card and the plugin dialog BOTH call this function and
- * map its outcome onto their own note/UI, so their refusal copy stays one source.
+ * readiness poll → reload. The connection card calls this function and maps its outcome onto its
+ * own per-card note, so every restart entry shares one refusal copy and one completion.
  *
  * Not in managed-restart.ts: that module is deliberately pure and import-free (its classifiers
  * are plain-node tested). This action owns the transport and the page-owned completion, hence it
- * imports fetch/poll/reload — exactly one implementation for both call sites.
+ * imports fetch/poll/reload — one implementation, one call site.
  */
 import {
   RESTART_RELOAD_BUDGET_MS,

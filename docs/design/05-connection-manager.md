@@ -90,7 +90,10 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 - 已连接来源的聚合拉取失败时以错误行呈现（不冒充"无工作区"）；全部来源
   断开时显示空态提示。
 - 保留官方侧边栏的：logo 行、New Session（作用于当前活动来源）、折叠（wide/rail）状态机、
-  foot（footer.action + settings 孔位）。foot 的座位契约（审计补记）：
+  foot（footer.action + settings 孔位）。rc.2 起官方在 darwin 折叠态额外用窗口 chrome 的
+  `shell.leading` 单席（官方 `ui-sidebar` 的 `HeaderLeadingControls`）承载展开/新建；
+  chamber fork 以同形 occupancy 复用该席（`SidebarLeadingControls.tsx`，28px 圆钮，
+  与 AppFrame 的 `--dsh-frame-leading-clearance` 计价锁步），不再是空席位。foot 的座位契约（审计补记）：
   `sidebar.footer.action` 是 **list 座**（`contract/slots.ts`），多个注册项共用同一行 ⇒
   该行由 chamber 补 4px 间距（官方块无 gap，两个 occupant 会零间距相接；该 4px 是侧栏/本表
   的图标簇节奏——「4px = G1-4 两个 24px 命中盒的下限」一说已随 的命中盒整体
@@ -130,7 +133,7 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   subagent 级联；只删不读、运行中整棵跳过、幂等；域缺失 404 给诚实文案；host binding 已按
   design 24 §10 的 vendor 核对结论落地，见
   `packages/dsh-chamber-seed-archive-cleanup/src/binding.ts`)。详见 design 24 与 §6 宿主包清单。
-- 已连接来源提供"添加工作区"（来源头部按钮，官方 project-add 字形 `IconProjectAddOutline16` upstream-alignment T7)：打开该来源的应用内目录浏览对话框（§4 同一 browse 表面，
+- 已连接来源提供"添加工作区"（来源头部按钮，官方 project-add 字形 `IconProjectAddOutlineRegular` upstream-alignment T7)：打开该来源的应用内目录浏览对话框（§4 同一 browse 表面，
   不做手敲路径表单)，确认的路径走该来源的 workspace.create（须为该实例宿主上已存在的目录；
   远程路径 = 远端服务器路径)。
 - 悬停操作与新建工作区成功后，经 chamberBridge.requestRefresh(sourceId)
@@ -150,8 +153,8 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 
 1. **投影门**：意图在途**且该来源的 current 不是请求的那个会话**时，该来源不投影 `runtimeFacts.current`(`projectableCurrent`)——否则冷 boot 期官方初始导航选中的 blank 会话会被投影成高亮"新会话"（本文件 §2.1 的 `(!blank || current)` 规则）再消失，即①的可见形态。**幂等重开不受影响**：`current` 已是要打开的会话时投影本就正确，摘掉再装回是纯闪烁（`pending !== current` 才抑制）。
 2. **揭示门**：壳体**显示的会话不是请求的那个**时，目标视图的 boot 遮罩在干净 settle 后继续保留（`shouldHoldViewVeil`，App 判定后把布尔值交给 `InstanceView`，与 P3 的会话面信号一起合成：`(!settled || (holdVeil === true && !surfaceRelease)) && !failureOverlayVisible`，见下面的 P3 段）；两个输入只有 App 有——壳状态镜像（settled/failed）与**原始** runtime current（投影门要隐藏的正是它，不能从投影结果反推）。三条边界：壳失败 ⇒ 永不持有（失败呈现归 App 覆盖层，也避免排在永不 settle 的 boot 后面的 open 把遮罩按 68s 队列预算钉住）；已显示请求会话 ⇒ 不遮（幂等重开；或 boot 期早开臂已抢先——此时 settle 即揭幕，比等 App 分发更快）；遮罩生命周期由 open 请求自身界定（dispatch 8s 预算 + App 的 `finally` 释放），无挂死加载层。持有判据（`shouldHoldViewVeil`）：①有在途 open ∧ 未失败 ∧ **屏上显示的会话 ≠ 请求的会话**；②**屏上没有正当内容**（该视图 current 未定或为 blank——未知按 blank 处理，冷 boot 因此照旧被遮）；已渲染正确内容的温壳不被盖，温壳正显示用户在读的真实会话时切换请求不再用不透明加载层盖它 8s（review：原判据缺第②条，会把温暖壳连现有会话一起遮）。
-3. **boot 期早开臂**：目标 ctx 内的侧栏插件读**活**意图，在 sessions 列表可寻址的瞬间调用本 ctx 的 `sessions.open`（`packages/dsh-chamber-client-ui-sidebar/src/client/early-open.ts`：预算 8s、50ms 节奏、按 id 探针（不物化 id 集合）、一次成功即退位、绝不自行上报终态——终态报告归 App 分发）。它抢官方 `UiWorkspaceService.watchNavigation()` 的初始导航策略：该策略需 workspace + session **两条**基线 ready 才"复用或新建（宿主侧 `session.create`！）blank 会话并打开"，本臂只需 session 列表。**诚实边界**：故它只在 workspace follow 基线晚于 session 列表时取胜（隧道下常见但**不保证**）；策略已先落地时 blank 会话已在宿主上存在，挡住可见性的是上面两道闸门而非本臂。
-4. **被取代的请求不得再开**（`packages/renderer/src/shell.ts` 的 `lastRequestedSession`）：同一来源的 open 是**最后意图胜出**流，而官方 `sessions.open` 只是一次普通 select——用户已离开的旧请求会把壳**翻回**旧会话（冷 boot 期 X 后 Y 两次点击都在队列里，settle 的 FIFO flush 先开 X，早开臂已把 Y 打开，于是可见 Y→X→Y 抖动）。分发器因此丢弃被更新的请求：静默 resolve（被放弃不是失败，行内错误面归最新那次），记录随来源退役清除；首请求永远照常分发（记录为空时不判定）。
+3. **boot 期早开臂**：目标 ctx 内的侧栏插件读**活**意图，在 sessions 列表可寻址的瞬间调用官方视图所有者的 `uiWorkspace.openSession(intent)`（`packages/dsh-chamber-client-ui-sidebar/src/client/early-open.ts`：预算 8s、50ms 节奏、按 id 探针（不物化 id 集合）、一次成功即退位、绝不自行上报终态——终态报告归 App 分发）。rc.2 起 presentation 归 ui-workspace：`openSession` 用 `retain(target,{source:'mainView'})` 持有目标并释放被替换的 reference，同时把 `mainReference` 立起来——官方 `UiWorkspaceService.watchNavigation()` 的初始导航策略只要看到 `mainReference !== undefined` 就跳过自己的 restore/新建（该策略需 workspace + session **两条**基线 ready 才会"复用或新建（宿主侧 `session.create`！）blank 会话并打开"），因此本臂胜出时宿主上**不再留 blank**，不再只是抢在两条基线之前的竞速。**诚实边界**：策略若已先进入 `restoreSelection` 的异步 `connectWorkspace`（宿主侧 `session.create` 已在飞），本臂无法取消它，blank 仍可能出现；此时挡住可见性的是上面两道闸门而非本臂。
+4. **被取代的请求不得再开**（`packages/renderer/src/shell.ts` 的 `lastRequestedSession`）：同一来源的 open 是**最后意图胜出**流，而官方 `uiWorkspace.openSession` 只是一次普通 select（换绑 mainView 的 retain/release）——用户已离开的旧请求会把壳**翻回**旧会话（冷 boot 期 X 后 Y 两次点击都在队列里，settle 的 FIFO flush 先开 X，早开臂已把 Y 打开，于是可见 Y→X→Y 抖动）。分发器因此丢弃被更新的请求：静默 resolve（被放弃不是失败，行内错误面归最新那次），记录随来源退役清除；首请求永远照常分发（记录为空时不判定）。
 
 **揭示门的会话面信号（P3 修订；"白屏 / 直接显示载入中"交替的真机反馈）**：上面第 2 条的持有判据完全建立在 App 侧两个**异步镜像事实**上——`runtimeFacts[viewId].current`（推送）与聚合里的 session `blank` 行（未知按 blank 处理）——两者迟到或抖动时，遮罩会挂在**已经渲染好的壳**上直到 open 预算烧完（单次 8s、排队 68s 后才失败），同一动作时快时慢。修订把它收敛到**壳自己暴露的 DOM 事实**：官方会话根 `div[data-phase]`（已登记的上游锚点，见 `docs/checklists/upstream-touchpoints.md` §4 与 `scripts/upstream/mobile-anchors.mjs` 的最小断言集）。语义按相位分档：
 
@@ -514,19 +517,21 @@ export const chamberBridge: {
 - `openInstanceSession(sourceId, sessionId)`（shell.ts）：boot 未就绪先入队，原调用 Promise
   保持 pending；enqueue 当刻固定 **68s absolute deadline**(60s boot queue 预算 + 最多 8s
   session-list 可见性轮询)，flush 不重置预算，只用剩余时间且上限 8s。settle 后经
-  `AppWebEntry.runtimeCtx.sessions`（拷贝包 seam，§6）分发，只有 runtime 接受才 resolve；
-  dispatch poller 归属精确 `ShellHolder`，每次 snapshot/重试/最终 `sessions.open()` 前复验
+  `AppWebEntry.runtimeCtx` 的 `sessions`（列表可见性）与官方 `uiWorkspace.openSession`（呈现；拷贝包 seam，§6）分发，只有 runtime 接受才 resolve；
+  dispatch poller 归属精确 `ShellHolder`，每次 snapshot/重试/最终 `openSession()` 前复验
   holder 身份，replacement/dispose/disposeAll 会同步清 timer 并 reject 全部 holder-owned
   在途 dispatch。boot/dispose/总截止时间到达同样 loud reject，旧 runtime 永不能在 teardown
   后迟到执行 open；runtimeCtx/list/open 的 getter/调用若抛任意 hostile value，也必须经同一
   never-throw 描述器 reject 并清理 timer/cancel handle，不能把 timer-driven open 永久挂起。
-  **sessions 服务就绪与列表可见性共用同一轮询预算**：boot settle(loader.await +
+  **sessions 服务、ui-workspace 视图所有者与列表可见性共用同一轮询预算**：boot settle(loader.await +
   assertEntriesActive)只等 entry **根** fiber，`ctx.sessions` 由 composite 的**子** fiber
-  提供（child 在异步 api-remotes 命名空间 mount 后才激活）——queued open 的 flush
-  （entries.set 同刻）或就绪窗内的点击可能落在 holder 已注册而 sessions 服务尚未注册的窗口。
-  该状态是**瞬态**：poller 按 400ms 节奏在 deadline 内等待服务就绪与目标会话可见，绝不
+  提供（child 在异步 api-remotes 命名空间 mount 后才激活），官方 `uiWorkspace` 服务又在其后
+  激活（ui-workspace 首屏行）——queued open 的 flush（entries.set 同刻）或就绪窗内的点击可能
+  落在 holder 已注册而两个服务尚未注册的窗口。
+  该状态是**瞬态**：poller 按 400ms 节奏在 deadline 内等待两服务就绪与目标会话可见，绝不
   fail-fast；deadline 到达才 loud reject，且区分
-  两种终态报告（服务从未就绪 → 「boot 未完全就绪」；服务就绪但会话始终未列出 →
+  三种终态报告（sessions 从未就绪 → 「boot 未完全就绪」；sessions 就绪但视图所有者未注册 →
+  「实例会话导航服务不可用」；两服务就绪但会话始终未列出 →
   「等待超时」）。终态失败文案经 `reportOpenSessionOutcome` 回报侧边栏并在
   目标会话行内呈现（§2.2），不再 console-only——fail-fast 会让跨服务器
   冷壳/回收重 boot 后的首次会话点击在视图已切换后瞬间失败，用户落在目标服务器
@@ -623,7 +628,7 @@ settle 时拆除)，风险超窗，登记后续项；② 只下调 `HARVEST_ABAN
 
 ### 4.2 文档级 SVG 资源 id 归属（N-ctx 失绘不变量）
 
-- **缺陷**（用户三张截图：设置导航「通用设置/客户端」齿轮、侧栏字标 whale 与 HARNESS 反白字、侧栏「设置」座席）：上游图标组件把 Figma 导出 id **写死**在组件里（`IconSettingsOutline16`/`-14`=`clip0_1450_63327`/`clip0_2580_121189`、`IconCordisPluginOutline14`=`clip0_1840_45990`、`IconAgentPresetOutline16`=`mask0_agent_preset_16`、`BrandWordmark`=`dsh-wordmark-whale-clip`/`-badge-clip`、附件拖拽浮层 `dshDropOverlayClip`），而 `url(#…)` 按**文档**解析；N-ctx 在同一文档里挂 N 个实例壳，同一 id 便被逐壳重复定义。装上 0.3.2-beta.4 真机（macOS WKWebView）单变量对照实测：文档内出现第二份带同名 id 的壳子树后，**新建**图标首次绘制若解析到未布局子树（`.instance-hidden` / `.instance-pending`）里的 clipper/mask，WebKit 会把该形状**整块丢绘并缓存结果**——属性回写、揭示壳、View Transition 都不自愈（只有重建元素自愈），于是同一 nav 里「通用设置/客户端」空白而「dsh 运行时」齿轮正常、同一张字标里直挂 `<path>`/`<rect>` 正常而两个 `<g clip-path>` 组空白。
+- **缺陷**（用户三张截图：设置导航「通用设置/客户端」齿轮、侧栏字标 whale 与 HARNESS 反白字、侧栏「设置」座席）：上游图标组件把 Figma 导出 id **写死**在组件里（`IconSettingsOutlineRegular`/`-14`=`clip0_1450_63327`/`clip0_2580_121189`、`IconCordisPluginOutlineRegular`=`clip0_1840_45990`、`IconAgentPresetOutlineRegular`=`mask0_agent_preset_16`、`BrandWordmark`=`dsh-wordmark-whale-clip`/`-badge-clip`、附件拖拽浮层 `dshDropOverlayClip`），而 `url(#…)` 按**文档**解析；N-ctx 在同一文档里挂 N 个实例壳，同一 id 便被逐壳重复定义。装上 0.3.2-beta.4 真机（macOS WKWebView）单变量对照实测：文档内出现第二份带同名 id 的壳子树后，**新建**图标首次绘制若解析到未布局子树（`.instance-hidden` / `.instance-pending`）里的 clipper/mask，WebKit 会把该形状**整块丢绘并缓存结果**——属性回写、揭示壳、View Transition 都不自愈（只有重建元素自愈），于是同一 nav 里「通用设置/客户端」空白而「dsh 运行时」齿轮正常、同一张字标里直挂 `<path>`/`<rect>` 正常而两个 `<g clip-path>` 组空白。
 - **契约**：**文档级 SVG 资源 id 归 chamber 所有，不归上游组件**——每个 `<svg>` 必须能只靠自己解析自己的资源引用。实现是 `packages/renderer/src/svg-resource-scope.ts`，由 `main.tsx` 在建 React root **之前**安装：观察 `document.body` 的新增子树（实例壳与 portal 到 body 的浮层都覆盖），对每个新 `<svg>` 把它「**本 svg 内定义 ∩ 本 svg 内被 `url(#…)`/`href="#…"` 引用**」的 id 改名为文档唯一 token（`chamber-csvg<n>-<原 id>`），引用同步改写；若它引用的定义在**别的** svg 里，把那份定义（连同它内部再引用的定义做传递闭包）复制进本 svg；被样式表或 a11y 引用到的 id 一律保留原名。四道刻意的边界：① 改名面只认资源引用——资源属性（`clip-path`/`mask`/`filter`/`fill`/`stroke`/`marker-*`）、内联 `style` 值，以及**资源解析元素**（`<use>`/`<textPath>`/`<mpath>`/`<feImage>`/`<image>`/`pattern`/渐变/`filter`/`clipPath`/`mask`/`marker`）上的 `href`/`xlink:href="#…"`；`<a href="#dom-id">` 是文档链接、**不属**资源面（不改写也不复制）；命中即**保留原名**（不改写任何文本）的有三类：svg 内嵌 `<style>` 里的 `url(#…)`、`aria-labelledby`/`aria-describedby`/`for` 三个 a11y 属性引用的 id、以及文档级样式表引用的 id（其余 `aria-*` 不在本模块读写面内）；② 定义者**自己不用**该 id 时不动它，引用它的别的 svg 会**把那份定义复制进来**（消费侧自足化，副本用本 svg 的 token）⇒ 外部引用不悬空、定义者保持原样；③ 嵌套 `<svg>` 自成作用域（安装器会下钻收集内层 svg，各自拿独立 token）；已 scoped 的 svg 里**后补**新 id/引用（innerHTML 替换、插件追加）会触发该 svg 重扫；④ 每个 `<svg>` 打 `data-chamber-svg-scope` 标记，重复插入与 React 重排幂等。
 - **批处理时机是契约的一部分**：flush 跑在**微任务检查点**（`queueMicrotask`），因为改名机会只有「插入后、首次绘制前」这一个窗口；**刻意不用 `requestAnimationFrame`**——它在被遮挡/后台的 WKWebView 里会被节流甚至不触发（宿主探针实测不触发），那等于先绘制再改名，而丢绘结果不可逆。一次 flush 处理完这一批插入的全部 `<svg>`（不分片：分片只能让位给同一检查点里的其它微任务，不会把余量让到下一帧，却把「全部改名完成」拆成不确定状态）。
 - **证据**：`packages/renderer/test/svg-resource/` 两个 spec（55 例：改名计划、边界规则、a11y/样式保留面、跨 svg 副本与传递闭包、嵌套、重扫稳定性与多跳解析、自产节点认领、同批重报、CSSOM、同批顺序、link load、安装器幂等与 disposer；以及接线锁 main.tsx 顺序 / body 观察 / 微任务 / 改名面无 aria）+ 根 `tsc --noEmit`（`tsconfig.json` 的 include 覆盖 renderer src+test）；**真机验收是一行命令**：`node scripts/dev/svg-resource-probe.mjs`（把本仓真实的 scoper 类型剥离后注入宿主 WKWebView，重放「插入第二份壳 + 开设置面板」触发序列，用不变量替代人眼看图）。判据：注入后每个 `<svg>` 都带标记、被资源属性引用到的 id 全部单定义、设置面板每行图标包围盒内都能测到绘制（ink ≥ 阈值）；对照组（不注入）必须复现「重复定义 + 至少一行 ink=0」，否则判据不可信——**例外**：服务页面已自带 scoper（注入前已有标记，= 产物已含本次修复）时对照组天然不适用，脚本只告警、不判失败，此时的交付判据是 `--expect-artifact` + fix 组不变量。脚本是**人工验收工具**、不进 CI（需要控制面在跑）。实测快照（`<svg>` 总数随页面内容浮动，故只钉不变量）：control = 0 个带标记 / 4 个重复定义 id / 面板 9 行里 1 行空白；fix = 全部带标记 / 0 重复定义 / 9 行全部有绘制（多轮重跑一致）；**重建产物**验收加 `--expect-artifact`：注入前页面应已自带标记（否则说明服务的是旧产物，此时 fix 组只验证算法本身）。
@@ -671,7 +676,7 @@ settle 时拆除)，风险超窗，登记后续项；② 只下调 `HARVEST_ABAN
 
 - pnpm + `vendor/harness-packages` 符号链接（外部 dsh 源码，**永不修改**）；要改的包必须拷入本仓 `packages/`。
 - 拷贝补丁包（保持官方包名 `@deepseek-ai/*`，遮蔽 vendor workspace 条目）：
-  - `packages/dsh-client-connection/`——base 路径参数化补丁：`apply(ctx)` 从每个 `AppWebEntry` 私有 Context 的 `chamberBasePath` 一次解析不可变 prefix，传给 HTTP unary、两条 WebSocket downlink 与 generic RPC/Typert carrier；页面 transport 覆盖 HTTP/WS 时 generic RPC 仍取同一 prefix 与该 transport 的 fetch。未配置时保持官方 web 兼容顺序（legacy `window.__DSH_BASE_PATH__`，再回落空 prefix 直连 `/api`），chamber 运行链不再写该全局。接缝由 `test:connection` 的 client-apply / carrier-assembly 行为门与独立 `typecheck:connection` 源码门固定，不能只靠字符串/AST 检查；**连接层职责边界**：
+  - `packages/dsh-client-connection/`——base 路径参数化补丁：`apply(ctx)` 从每个 `AppWebEntry` 私有 Context 的 `chamberBasePath` 一次解析不可变 prefix，传给 HTTP unary、两条 WebSocket downlink 与 generic RPC/Typert carrier；页面 transport 覆盖 HTTP/WS 时 generic RPC 仍取同一 prefix 与该 transport 的 fetch。未配置时回落空 prefix 直连 `/api`；basePath 只走 `installConnection` 的选项/每 entry Context 的 `chamberBasePath`，页面全局（`window.__DSH_BASE_PATH__` 一类）不参与解析也不被写入。接缝由 `test:connection` 的 client-apply / carrier-assembly 行为门与独立 `typecheck:connection` 源码门固定，不能只靠字符串/AST 检查；**连接层职责边界**：
     ① **连接层是 push 通道（`/api/remote.mux`）的唯一重开者**——控制面/桌面各层只「发现」（心跳/探针/相位/看门狗）与「撤销或重注册传输」，从不重开流；mux 客户端（`dsh-api-gateway`）无退避，重试节拍由连接循环的 `onReconnectRequested` 驱动。
     ② **禁止同实例 `stop()+start()`**：上游 `reconnect()` 已覆盖立即重连且无第二泵循环；若重新引入 stop+start，必须恢复代际守卫（`loopEpoch` 语义）。
     ③ **每来源恢复时序**由 `recovery-policy.ts` 决定，经上游支持的 `connection.start(sinks, config)` 传入（远端 ssh/http 45s 就绪期限 / 5s 告警；本地与未知来源保持上游 15s/3s）——页面拿不到宿主注入的 `__DSH_CONNECTION_RECOVERY__` 全局，故不依赖页面级配置。

@@ -8,14 +8,15 @@
  * (design 05 §7.4): 4 info scalars (controlPlaneUrl/dshVersion/version/
  * platform) + 9 namespaces (desktopSsh/update/settings/systemResume/openIn/
  * deepLink/runtime/notifications/badge)（全表面实现）：每个方法的通道、
- * payload 形状与返回映射逐字对齐 preload.cts（59 个 invoke-backed 方法 →
- * 61 manifest invoke 通道（含 info）+ 8 个 on* 订阅 → 8 manifest push
- * 通道），文件内零 poc-unimplemented 兜底。语义校验（payload schema、来源
+ * payload 形状与返回映射逐字对齐 preload.cts（50 个 invoke-backed 方法 →
+ * 51 manifest invoke 通道（含 info）+ 9 个 on* 订阅 → 9 manifest push
+ * 通道），文件内零 poc-unimplemented 兜底。用户插件写面（apply/undo/
+ * materialize/npm search/local add-remove）已随 2026-09 C 分层裁决退役。语义校验（payload schema、来源
  * 指纹、ACK 队列……）在 sidecar 原处理器（design 25 §4.4.1）；本文件是
  * 传输 + preload 逐字面。
  *
  * 方法→通道/载荷映射（与 preload.cts 逐字；payload 键即 preload 现形状）：
- *   desktopSsh（31 invoke + 2 订阅）
+ *   desktopSsh（22 invoke + 2 订阅）
  *     instances_get()            → desktop_ssh_instances_get（无载荷）
  *     delete_connection(id)      → desktop_ssh_delete_connection {id}
  *     save_connection(prevId,input,creds) → desktop_ssh_save_connection
@@ -24,21 +25,11 @@
  *     set_gateway_token(id,token)→ desktop_gateway_set_token {id,token}
  *     set_gateway_password(id,pw) → desktop_gateway_set_password {id,password}
  *     gateway_plugin_sync(id)    → desktop_gateway_plugin_sync {id}
- *     gateway_plugin_apply(id,input) → desktop_gateway_plugin_apply
- *                                 {id,add,remove,deferRestart}
- *     gateway_plugin_materialize(id) → desktop_gateway_plugin_materialize {id}
  *     config_list()              → desktop_ssh_config_list（无载荷）
  *     connect/disconnect/status/reverify/logs/logs_clear/start_service/
- *       stop_service/is_active/restart_service/plugin_list/ssh_plugin_undo/
- *       seed_host_graph/plugin_materialize_add_pick(id)
+ *       stop_service/is_active/restart_service/plugin_list/seed_host_graph(id)
  *                               → 各自 desktop_ssh_* 通道 {id}
- *     plugin_apply(id,input)     → desktop_ssh_plugin_apply {id,add,remove,restart}
  *     local_plugin_list()        → desktop_local_plugin_list（无载荷）
- *     npm_search(query)          → desktop_npm_search {query}
- *     plugin_materialize_add(id,name) → desktop_ssh_plugin_materialize_add {id,name}
- *     local_plugin_add(spec)     → desktop_local_plugin_add {spec}
- *     local_plugin_add_file()    → desktop_local_plugin_add_file（无载荷）
- *     local_plugin_remove(name)  → desktop_local_plugin_remove {name}
  *     onStatusChanged / onInstancesChanged → 订阅 desktop_ssh_status_changed /
  *                                 desktop_ssh_instances_changed
  *   update（5 invoke + 1 订阅）→ dsh-chamber:update-{state,check,download,
@@ -68,10 +59,6 @@
  *     installBlockedReason——与 Electron 的 quitAndInstall 用户可见流程等价。
  *     未声明时保持 v1 blocked-available 诚实形态：invoke 回显式拒绝文案
  *     （原生壳不支持自动安装），绝不假成功。
- *   - pick 类（gateway_plugin_materialize / plugin_materialize_add_pick /
- *     local_plugin_add_file）：picker 的弹出/取消语义在宿主侧（Electron dialog /
- *     Swift 侧 node-edges pickPluginSource → NSOpenPanel 腿）——
- *     shim 直接 invoke，pick 决策不属本文件。
  *   - desktop_ssh_* 载荷用官方 {id} schema（sidecar-entry/shell-core 同款）。
  *     sidecar-stub.ts 只读 {instanceId}，仅作 BridgeClient 集成测试 fixture
  *     （不是任何宿主路径的缺省回退，见下），故 shim 不为其改形。
@@ -100,6 +87,19 @@
  * still null (mirroring the preload.cts failure branch :923-940); it
  * is not defined before either point. Pushes only arrive after the matching
  * invoke, so there is no subscribe-before-info ordering hazard.
+ *
+ * dshDesktop carrier (rc.2 calibration): the official client families
+ * (shortcuts / ui-settings-general / ui-sidebar-browser) read
+ * globalThis.dshDesktop. This shim exposes protocolVersion + updates + keyboard
+ * + shortcuts. The keyboard arm is DOM-sourced: WKWebView has no Electron
+ * before-input-event, so window main-document keydown/keyup events are
+ * normalized into the upstream DesktopShortcutInput shape and delivered with
+ * the revision owned by the in-memory shortcuts adapter below. Boundary: only
+ * main-document key events (no embedded-frame or webview source, no native menu
+ * interception, no preventDefault — the page still sees the same key);
+ * preferences live in session memory only (edits apply until reload), and
+ * window close stays owned by the native menu (the A bridge has no close
+ * channel, so dshDesktop.keyboard.closeWindow rejects loudly).
  *
  * Trust note: page-world injection means page code can observe these globals
  * and forge resolve/emit frames. The Swift-side fences (main frame / origin /
@@ -195,14 +195,18 @@
   var nextRequestId = 1
   var pending = new Map() // id -> { resolve, reject }
   var warnedNoBridge = false
-  // A fresh identity for this document, echoed by Swift with every reply. A
-  // late result from a prior navigation can reuse request id 1 but never this id.
-  var documentId = (window.crypto && typeof window.crypto.randomUUID === 'function')
-    ? window.crypto.randomUUID()
-    : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (digit) {
+  /** Fresh RFC4122-shaped identity (revision/document ids share one source). */
+  function newUuid() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID()
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (digit) {
       var value = Math.floor(Math.random() * 16)
       return (digit === 'x' ? value : (value & 3) | 8).toString(16)
     })
+  }
+
+  // A fresh identity for this document, echoed by Swift with every reply. A
+  // late result from a prior navigation can reuse request id 1 but never this id.
+  var documentId = newUuid()
 
   /** Resolve the native bridge only while invoking (covers an inject-before-
    *  register ordering in either direction) and call through the handler
@@ -444,12 +448,13 @@
   // Every method below invokes its real manifest channel with the exact
   // preload.cts payload shape; no poc-unimplemented stub remains.
 
-  /** desktopSsh — 全 32 invoke 方法（含 instances_health）接真实通道；载荷键
+  /** desktopSsh — 全 22 invoke 方法（含 instances_health）接真实通道；载荷键
    *  逐字 preload（id 寻址通道一律 {id}）。instances_health 的应答
    *  {degraded, reason?, rosterIncomplete?, droppedCount?} 原样透传给 renderer
    *  （V5-A：行级丢弃的部分 roster 不得让 durable 剪枝门放行），shim 不加工。
    *  sidecar-stub.ts 读 {instanceId}（仅作集成测试 fixture，见文件头注记），
-   *  此处不迁就。 */
+   *  此处不迁就。用户插件写面（apply/undo/materialize/npm search/local
+   *  add-remove）已随 2026-09 C 分层裁决退役。 */
   var desktopSsh = {
     instances_get: function () { return invoke('desktop_ssh_instances_get', null) },
     instances_health: function () { return invoke('desktop_ssh_instances_health', null) },
@@ -461,10 +466,6 @@
     set_gateway_token: function (id, token) { return invoke('desktop_gateway_set_token', { id: id, token: token }) },
     set_gateway_password: function (id, password) { return invoke('desktop_gateway_set_password', { id: id, password: password }) },
     gateway_plugin_sync: function (id) { return invoke('desktop_gateway_plugin_sync', { id: id }) },
-    gateway_plugin_apply: function (id, input) {
-      return invoke('desktop_gateway_plugin_apply', { id: id, add: input.add, remove: input.remove, deferRestart: input.deferRestart })
-    },
-    gateway_plugin_materialize: function (id) { return invoke('desktop_gateway_plugin_materialize', { id: id }) },
     config_list: function () { return invoke('desktop_ssh_config_list', null) },
     connect: function (id) { return invoke('desktop_ssh_connect', { id: id }) },
     disconnect: function (id) { return invoke('desktop_ssh_disconnect', { id: id }) },
@@ -477,20 +478,8 @@
     is_active: function (id) { return invoke('desktop_ssh_is_active', { id: id }) },
     restart_service: function (id) { return invoke('desktop_ssh_restart_service', { id: id }) },
     plugin_list: function (id) { return invoke('desktop_ssh_plugin_list', { id: id }) },
-    plugin_apply: function (id, input) {
-      return invoke('desktop_ssh_plugin_apply', { id: id, add: input.add, remove: input.remove, restart: input.restart })
-    },
-    ssh_plugin_undo: function (id) { return invoke('desktop_ssh_plugin_undo', { id: id }) },
     local_plugin_list: function () { return invoke('desktop_local_plugin_list', null) },
-    npm_search: function (query) { return invoke('desktop_npm_search', { query: query }) },
     seed_host_graph: function (id) { return invoke('desktop_ssh_seed_host_graph', { id: id }) },
-    plugin_materialize_add: function (id, name) { return invoke('desktop_ssh_plugin_materialize_add', { id: id, name: name }) },
-    // pick 语义宿主侧（NSOpenPanel 腿）；shim 只 invoke。
-    plugin_materialize_add_pick: function (id) { return invoke('desktop_ssh_plugin_materialize_add_pick', { id: id }) },
-    local_plugin_add: function (spec) { return invoke('desktop_local_plugin_add', { spec: spec }) },
-    // pick 语义宿主侧（同上）。
-    local_plugin_add_file: function () { return invoke('desktop_local_plugin_add_file', null) },
-    local_plugin_remove: function (name) { return invoke('desktop_local_plugin_remove', { name: name }) },
     onStatusChanged: function (callback) {
       return subscribe(PUSH_EVENTS.SSH_STATUS_CHANGED, makePassthroughListener(callback))
     },
@@ -612,6 +601,284 @@
     set: function (count) { return invoke('dsh-chamber:badge-count', { count: count }) }
   }
 
+  // ---- dshDesktop carrier (rc.2 official desktop surface) -----------------
+  // The official shortcuts service constructs during boot and THROWS when the
+  // document is platform-marked but dshDesktop.keyboard is absent; the same
+  // service accepts native input only when its revision equals the accepted
+  // preference revision. keyboard + an in-memory shortcuts adapter therefore
+  // ship together: the adapter owns the revision this shim stamps on input.
+  // WKWebView has no before-input-event, so input is DOM-sourced (boundary and
+  // native-menu limits are stated in the file header).
+
+  /** navigator.platform as a defensive string (a document-less harness has no navigator). */
+  function hostNavigatorPlatform() {
+    return typeof navigator === 'undefined' ? '' : String(navigator.platform || '')
+  }
+
+  var SHORTCUT_PLATFORM = /win/i.test(hostNavigatorPlatform()) ? 'windows'
+    : /darwin|mac|iphone|ipad/i.test(hostNavigatorPlatform()) ? 'macos' : 'linux'
+  var SHORTCUT_PROFILE = 'desktop:' + SHORTCUT_PLATFORM
+
+  var shortcutsDocument = { schemaVersion: 1, profiles: {} }
+  var shortcutsUsingDefaults = true
+  var shortcutsSequence = 0
+  var shortcutsRevision = newUuid()
+  var shortcutsSubscribers = []
+
+  function shortcutsSnapshot() {
+    return {
+      revision: shortcutsRevision,
+      sequence: shortcutsSequence,
+      document: shortcutsDocument,
+      status: 'ready',
+      error: null,
+      usingDefaults: shortcutsUsingDefaults
+    }
+  }
+
+  /** preload ShortcutPersistence.accept parity: bump the version pair, then
+   *  publish the new snapshot to every live renderer subscriber. */
+  function shortcutsAccept() {
+    shortcutsSequence += 1
+    shortcutsRevision = newUuid()
+    var snapshot = shortcutsSnapshot()
+    var subscribers = shortcutsSubscribers.slice()
+    for (var i = 0; i < subscribers.length; i += 1) {
+      try {
+        subscribers[i](snapshot)
+      } catch (err) {
+        console.error('[dsh-chamber] desktop shortcuts subscriber threw:', err)
+        setTimeout(function () { throw err }, 0)
+      }
+    }
+  }
+
+  /** Apply one validated edit to the active desktop profile (upstream
+   *  editShortcutDocument subset: set / reset / reset-all, schemaVersion 2 for
+   *  the desktop macOS profile). Malformed input throws; callers classify. */
+  function shortcutsApplyEdit(edit) {
+    if (edit === null || typeof edit !== 'object') throw new Error('Invalid shortcut edit')
+    var profiles = {}
+    var key
+    for (key in shortcutsDocument.profiles) {
+      if (Object.prototype.hasOwnProperty.call(shortcutsDocument.profiles, key)) profiles[key] = shortcutsDocument.profiles[key]
+    }
+    var overrides = {}
+    var current = profiles[SHORTCUT_PROFILE]
+    if (current !== undefined) {
+      for (key in current) {
+        if (Object.prototype.hasOwnProperty.call(current, key)) overrides[key] = current[key]
+      }
+    }
+    if (edit.type === 'reset-all') {
+      overrides = {}
+    } else if (typeof edit.id !== 'string' || edit.id === '') {
+      throw new Error('Invalid shortcut command')
+    } else if (edit.type === 'reset') {
+      delete overrides[edit.id]
+    } else if (edit.type === 'set') {
+      overrides[edit.id] = edit.binding === undefined ? null : edit.binding
+    } else {
+      throw new Error('Invalid shortcut edit')
+    }
+    profiles[SHORTCUT_PROFILE] = overrides
+    shortcutsDocument = { schemaVersion: 2, profiles: profiles }
+  }
+
+  var desktopShortcuts = {
+    get: function () {
+      // Definitions only describe command ownership; this shim never matches
+      // input locally (the page registry does), so the catalog itself is not
+      // retained -- the accepted revision is what the renderer consumes here.
+      shortcutsAccept()
+      return Promise.resolve(shortcutsSnapshot())
+    },
+    edit: function (edit, revision) {
+      if (revision !== shortcutsRevision) return Promise.resolve({ status: 'stale', snapshot: shortcutsSnapshot() })
+      try {
+        shortcutsApplyEdit(edit)
+      } catch (err) {
+        return Promise.resolve({ status: 'write-failed', snapshot: shortcutsSnapshot() })
+      }
+      shortcutsUsingDefaults = false
+      shortcutsAccept()
+      return Promise.resolve({ status: 'saved', snapshot: shortcutsSnapshot() })
+    },
+    subscribe: function (listener) {
+      if (typeof listener !== 'function') return noopUnsubscribe
+      shortcutsSubscribers.push(listener)
+      return function unsubscribe() {
+        var index = shortcutsSubscribers.indexOf(listener)
+        if (index !== -1) shortcutsSubscribers.splice(index, 1)
+      }
+    },
+    recording: function () {
+      // The Swift shell has no menu accelerators to suppress while recording;
+      // the promise contract (and the settings UI's awaiting path) still holds.
+      return Promise.resolve()
+    }
+  }
+
+  var desktopInputListeners = []
+  var desktopHeldCodes = []
+  var desktopKeyListenersInstalled = false
+
+  function desktopDeliverInput(input) {
+    var snapshot = desktopInputListeners.slice()
+    for (var i = 0; i < snapshot.length; i += 1) {
+      try {
+        snapshot[i](input)
+      } catch (err) {
+        console.error('[dsh-chamber] desktop keyboard listener threw:', err)
+        setTimeout(function () { throw err }, 0)
+      }
+    }
+  }
+
+  /** Main-document keydown -> upstream DesktopShortcutInput. Held non-modifier
+   *  codes form the two-key chord; keyup only feeds that bookkeeping (upstream
+   *  never delivers keyups). */
+  function desktopKeyDown(event) {
+    if (event.defaultPrevented === true) return
+    if (event.isComposing === true || event.key === 'Dead') return
+    if (typeof event.getModifierState === 'function' && event.getModifierState('AltGraph')) return
+    var code = event.code
+    if (typeof code !== 'string' || code === '') return
+    if (/^(Control|Alt|Shift|Meta)(Left|Right)$/.test(code)) {
+      desktopHeldCodes = []
+      return
+    }
+    if (event.repeat !== true && desktopHeldCodes.indexOf(code) === -1) desktopHeldCodes.push(code)
+    var codes = desktopHeldCodes.slice().sort()
+    // An auto-repeat whose code left the held set (a modifier keydown clears it)
+    // has no key to deliver -- upstream's match gate drops it too.
+    if (codes.length === 0) return
+    var input = {
+      revision: shortcutsRevision,
+      kind: 'keyboard',
+      frameName: '',
+      code: codes[0],
+      control: event.ctrlKey === true,
+      alt: event.altKey === true,
+      shift: event.shiftKey === true,
+      meta: event.metaKey === true,
+      repeat: event.repeat === true
+    }
+    if (codes.length === 2) input.secondCode = codes[1]
+    desktopDeliverInput(input)
+  }
+
+  function desktopKeyUp(event) {
+    var index = desktopHeldCodes.indexOf(event.code)
+    if (index !== -1) desktopHeldCodes.splice(index, 1)
+  }
+
+  function desktopWindowBlur() {
+    desktopHeldCodes = []
+  }
+
+  function installDesktopKeyListeners() {
+    if (desktopKeyListenersInstalled) return
+    desktopKeyListenersInstalled = true
+    window.addEventListener('keydown', desktopKeyDown, true)
+    window.addEventListener('keyup', desktopKeyUp, true)
+    window.addEventListener('blur', desktopWindowBlur)
+  }
+
+  function removeDesktopKeyListeners() {
+    if (!desktopKeyListenersInstalled) return
+    desktopKeyListenersInstalled = false
+    window.removeEventListener('keydown', desktopKeyDown, true)
+    window.removeEventListener('keyup', desktopKeyUp, true)
+    window.removeEventListener('blur', desktopWindowBlur)
+    desktopHeldCodes = []
+  }
+
+  var desktopKeyboard = {
+    subscribe: function (listener) {
+      if (typeof listener !== 'function') return noopUnsubscribe
+      if (desktopInputListeners.length === 0) installDesktopKeyListeners()
+      desktopInputListeners.push(listener)
+      return function unsubscribe() {
+        var index = desktopInputListeners.indexOf(listener)
+        if (index !== -1) desktopInputListeners.splice(index, 1)
+        if (desktopInputListeners.length === 0) removeDesktopKeyListeners()
+      }
+    },
+    closeWindow: function (revision) {
+      // A stale revision is a silent no-op (upstream semantics). A current one
+      // cannot be honored: the native menu owns Cmd+W and the A bridge has no
+      // close channel, so window.close() would be a fake success.
+      if (revision !== shortcutsRevision) return Promise.resolve()
+      return Promise.reject(new Error('Swift desktop keyboard bridge: window close requires a native close channel (not wired)'))
+    }
+  }
+
+  var upstreamActiveOperation = 'check'
+  /** Chamber UpdateState -> upstream DesktopUpdatePresentation (verbatim port of
+   *  the Electron carrier mapping in preload.cts). */
+  function toUpstreamUpdatePresentation(state) {
+    var version = state !== null && state !== undefined && state.latestVersion !== null && state.latestVersion !== undefined
+      ? state.latestVersion : undefined
+    function withVersion(phase) {
+      return version === undefined ? { phase: phase } : { phase: phase, version: version }
+    }
+    if (state !== null && state !== undefined) {
+      if (state.phase === 'downloading') upstreamActiveOperation = 'download'
+      else if (state.phase === 'installing') upstreamActiveOperation = 'install'
+      else if (state.phase === 'checking') upstreamActiveOperation = 'check'
+    }
+    var phase = state === null || state === undefined ? undefined : state.phase
+    switch (phase) {
+      case 'checking': return { phase: 'checking' }
+      case 'available': return withVersion('available')
+      case 'downloading': {
+        var downloading = { phase: 'downloading' }
+        if (typeof state.downloadPercent === 'number') downloading.percent = state.downloadPercent
+        if (version !== undefined) downloading.version = version
+        return downloading
+      }
+      case 'downloaded': return withVersion('ready')
+      case 'installing': return withVersion('installing')
+      case 'error': {
+        var failed = withVersion('error')
+        failed.failure = upstreamActiveOperation
+        return failed
+      }
+      default: return { phase: 'idle' }
+    }
+  }
+
+  var desktopUpdates = {
+    status: function () { return update.state().then(toUpstreamUpdatePresentation) },
+    open: function () { return update.check().then(function () { return undefined }) },
+    subscribe: function (listener) {
+      if (typeof listener !== 'function') return noopUnsubscribe
+      return subscribe(PUSH_EVENTS.UPDATE_STATE_CHANGED, function (state) {
+        listener(toUpstreamUpdatePresentation(state))
+      })
+    }
+  }
+
+  /** 上游 markDocumentPlatform()：文档根带宿主平台，官方共享 UI（含 shortcuts
+   *  服务的 desktop 判定与 ui-layout 的 macOS 规则）据此走桌面默认。注入点为
+   *  documentStart，根节点可能尚未创建，故回退 DOMContentLoaded。 */
+  function markDocumentPlatform() {
+    if (typeof document === 'undefined' || document === null || document.documentElement === undefined) return
+    var platform = /win/i.test(hostNavigatorPlatform()) ? 'win32'
+      : /darwin|mac|iphone|ipad/i.test(hostNavigatorPlatform()) ? 'darwin' : 'linux'
+    var mark = function () { document.documentElement.dataset.platform = platform }
+    if (document.documentElement === null) document.addEventListener('DOMContentLoaded', mark, { once: true })
+    else mark()
+  }
+
+  var dshDesktopApi = {
+    protocolVersion: 1,
+    updates: desktopUpdates,
+    keyboard: desktopKeyboard,
+    shortcuts: desktopShortcuts
+  }
+
   var dshChamberApi = {
     controlPlaneUrl: null,
     dshVersion: null,
@@ -697,6 +964,12 @@
     // sidecar ready 后由 Swift 触发：重跑一次 info 水化（成功即暴露公开面）。
     fetchInfo(INFO_MAX_ATTEMPTS + 1)
   })
+
+  // dshDesktop 公开面不依赖 info 水化（协议版本/keyboard/shortcuts/updates 全部
+  // 本地可得），documentStart 即暴露：官方 shortcuts 服务构造时必然已存在；
+  // platform 标记同刻写入，保证 detectEnvironment 判 desktop。
+  markDocumentPlatform()
+  defineWindowGlobal('dshDesktop', dshDesktopApi)
 
   /** 公开面 dshChamber 的暴露门（只暴露一次；preload 语义）。
    *  暴露时机 = info 成功（真实标量）或 1+10 次全败（null 标量，与

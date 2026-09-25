@@ -94,7 +94,7 @@ export function writeLocalProfileFixture(dir: string, patchContent: string | nul
     name: 'dsh-profile-web',
     private: true,
     dependencies: {},
-    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'], patchReload: 'live' } },
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } },
   }))
   if (patchContent !== null) writeFileSync(join(profileDir, 'cordis.patch.yml'), patchContent)
   return dshHome

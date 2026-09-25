@@ -126,13 +126,13 @@ function claimScopeSequence(root: ParentNode): number {
 }
 
 /** 下一个文档唯一 token（前缀可注入，便于测试与日志辨认）。 */
-export function nextSvgScopeToken(prefix = 'csvg'): string {
+function nextSvgScopeToken(prefix = 'csvg'): string {
   scopeTokens.value += 1
   return prefix + scopeTokens.value
 }
 
 /** 纯函数：剥掉本模块自己（任一次安装）的旧 token 前缀，重扫/克隆时保持 id 形状稳定。 */
-export function stripOwnScopePrefix(id: string): string {
+function stripOwnScopePrefix(id: string): string {
   for (const prefix of activeTokenPrefixes) {
     const scoped = new RegExp('^' + escapeForRegExp(prefix) + '\\d+-')
     if (scoped.test(id)) return id.replace(scoped, '')

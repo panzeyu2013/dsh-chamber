@@ -11,7 +11,6 @@ import {
   runtimeServerProjectionKey,
 } from '../../src/client/runtime-source.ts'
 import {
-  RuntimeStateStore,
   compareSemver,
   formatRuntimeBytes,
   preferredRuntimeVersion,
@@ -26,6 +25,8 @@ import {
   type RuntimeState,
   type RuntimeSurface,
 } from '@dsh-chamber/dsh-chamber-client-core/runtime-management'
+// Test-only internal: a package-internal deep import keeps it off the public subpath face.
+import { RuntimeStateStore } from '../../../dsh-chamber-client-core/src/runtime-management.ts'
 
 function runtimeState(phase: RuntimePhase, overrides: Partial<RuntimeState> = {}): RuntimeState {
   return {

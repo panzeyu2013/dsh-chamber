@@ -5,10 +5,9 @@
  * Never a silent empty list: absent manifest → profile_absent; present but
  * unreadable/unsafe (permissions, symlinked leaf/dir, oversized) or
  * unparseable → profile_corrupt with evidence in `error` (a torn read lands
- * here too). The write fence lives one layer up — the route probes it and
- * answers a retryable 409 runtime_busy — so this module takes no lease and
- * never blocks; a tear reaching here means a writer OUTSIDE the gateway's
- * fence. Local-path values are masked by the shared ruler below.
+ * here too). The user plugin write surface was retired with the 2026-09 C
+ * layering ruling, so this module is a plain read: it takes no lease and never
+ * blocks. Local-path values are masked by the shared ruler below.
  */
 
 import { join } from 'node:path'
@@ -19,7 +18,7 @@ import {
   readInstalledVersion,
   resolveRuntimeFamily,
 } from '@dsh-chamber/control-plane'
-import type { FamilyVersions, PluginRow, ProtectedSet } from '@dsh-chamber/control-plane'
+import type { PluginRow, ProtectedSet } from '@dsh-chamber/control-plane'
 // The manifest read algorithm + mask ruler lives in the neutral wire package;
 // this module keeps only its byte read and the gateway-specific projection.
 import {
@@ -56,7 +55,6 @@ export type InstalledResult =
   | {
     ok: true
     dependencies: Record<string, string>
-    bundles: string[]
     /** Read-face row projection: one row per dependency with role + the
      *  SERVER-computed `protected` flag (the gateway is the authority — family
      *  facts live here, not in the desktop). */
@@ -87,46 +85,11 @@ function protectedSetFromFamily(family: ReturnType<typeof resolveRuntimeFamily> 
 }
 
 /** Server-side protected set from the ACTIVE runtime's lockfile closure. F
- * underivable ⇒ null (write faces fail closed; the read face then marks
- * official-scope rows read-only conservatively). */
+ * underivable ⇒ null (the read face then marks official-scope rows read-only
+ * conservatively). */
 export function gatewayProtectedSet(facts: GatewayRuntimeFacts | null): ProtectedSet | null {
   if (facts === null) return null
   return protectedSetFromFamily(resolveRuntimeFamily(facts.path))
-}
-
-/** The facts one protected-set judgement needs, resolved ONCE per judgement —
- * submit-time and execution-time judgements are DELIBERATELY different
- * snapshots, so this is returned, never cached. `resolve` must be a GUARDED
- * accessor returning null instead of throwing. */
-export interface JudgementInputs {
-  /** The resolved runtime workspace facts, or null when unavailable. */
-  facts: GatewayRuntimeFacts | null
-  /** `facts.version`, or null when unavailable. */
-  runtimeVersion: string | null
-  /** Never null: full P when derivable, B₀ ∪ S otherwise; `familySource` names the ladder used. */
-  derivation: { ok: true; set: ProtectedSet }
-  familySource: 'runtime' | 'unavailable'
-  /** Active family closure names; null when unavailable or untrusted. */
-  familyNames: readonly string[] | null
-  /** Version facts for the family names; null under the same conditions. */
-  familyVersions: FamilyVersions | null
-}
-
-/** Resolve the judgement inputs from one guarded facts accessor: the protected
- *  set and the family versions come from the SAME lockfile resolution. F
- *  underivable ⇒ B₀ ∪ S with `familySource:'unavailable'` (fail closed). */
-export function resolveJudgementInputs(resolve: () => GatewayRuntimeFacts | null): JudgementInputs {
-  const facts = resolve()
-  const family = facts === null ? null : resolveRuntimeFamily(facts.path)
-  const protectedSet = protectedSetFromFamily(family)
-  return {
-    facts,
-    runtimeVersion: facts === null ? null : facts.version,
-    derivation: { ok: true, set: protectedSet ?? deriveBootProtectedSet() },
-    familySource: protectedSet === null ? 'unavailable' : 'runtime',
-    familyNames: family === null ? null : (family.ok ? family.names : null),
-    familyVersions: family === null ? null : (family.ok ? family.versions : null),
-  }
 }
 
 export interface ChamberInstalled {
@@ -174,6 +137,8 @@ export function createChamberInstalled(
       }
       // Local-path values never leave this module — the shared mask ruler.
       const dependencies = maskMaterializedDependencies(parsed.dependencies)
+      // `dsh.profile.bundles` stays a SERVER-side role classifier only: the projection
+      // never carries it (no remote consumer; local row categories read the local manifest).
       const bundles = parsed.bundles
       // The accessor THROWS on corrupt override/pointer metadata; the read face
       // must survive that (a throwing projection would kill the recovery read
@@ -208,7 +173,7 @@ export function createChamberInstalled(
         // Same masking rule as above: local-path values never reach the renderer via `rows` either.
         maskSpec: spec => (isMaterializedValue(spec) ? MATERIALIZED_VALUE_MASK : spec),
       })
-      return { ok: true, dependencies, bundles, rows, profileExists: true }
+      return { ok: true, dependencies, rows, profileExists: true }
     },
   }
 }

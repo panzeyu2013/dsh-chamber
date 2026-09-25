@@ -6,7 +6,7 @@
  * opens a session (the empty worktree workspace appears immediately).
  */
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { Button, IconChevronRightOutline14, Input, Menu, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconChevronRightOutlineRegular, Input, Menu, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import { basenameOf } from '@dsh-chamber/dsh-chamber-client-core'
 import { createFromPreview, gitCoordinator, previewCreate } from '../shared/coordinator.ts'
 import { gitActionErrorText } from '../shared/action-error.ts'
@@ -124,7 +124,7 @@ function MenuSelect({ value, placeholder, options, disabled, onChange, ariaLabel
           <span className={value === '' ? css.fieldSelectPlaceholder : undefined}>
             {value === '' ? placeholder : value}
           </span>
-          <IconChevronRightOutline14 size={14} className={css.fieldSelectChevron} />
+          <IconChevronRightOutlineRegular size={14} className={css.fieldSelectChevron} />
         </button>
       )}
     />

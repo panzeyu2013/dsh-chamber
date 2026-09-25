@@ -2,7 +2,7 @@
  *  active-Schedule marker and the inline rename form shared by the workspace
  *  header and the session rows. */
 import clsx from 'clsx'
-import { IconAlarmClockOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconAlarmClockOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import { clearPendingClick } from '@dsh-chamber/dsh-chamber-client-core/pending-click'
 import { useSidebarSection } from './sidebar-context.ts'
 import cc from './sidebar-chamber.module.css'
@@ -17,7 +17,7 @@ import cc from './sidebar-chamber.module.css'
 export function SessionScheduleIndicator({ label }: { label: string }) {
   return (
     <span className={cc.scheduleIndicator} role="img" aria-label={label} title={label}>
-      <IconAlarmClockOutline16 size={16} />
+      <IconAlarmClockOutlineRegular size={16} />
     </span>
   )
 }

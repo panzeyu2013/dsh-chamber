@@ -16,21 +16,26 @@
  * running.
  *
  * THE LEVERS (and their hard boundaries). The `ISession` CONTRACT exposes no
- * `open()`/`resync()`, but two concrete levers exist:
+ * `open()`/`resync()`, but the rc.2 client opens a session in two ways, neither
+ * of them contract-visible:
  *
- *  - the stage move: `service.followCurrent()` re-opens a session only when
- *    `list.current !== watched` (vendor `.../client/sessions/service.ts`), and
- *    `Session.open()` re-runs `doOpen()` for every state except `'open'`
- *    itself. So opening ANOTHER listed session and then the target —
- *    synchronously, both in one tick — re-opens an `'error'` session, and does
- *    NOTHING for an `'open'` one (its open promise is not pending, but its
- *    state short-circuits) nor for a stuck `'loading'` one (its `openPromise`
- *    is pending and is returned as-is);
- *  - the concrete per-session `Session.resync()`: dispose the current
- *    event stream and `open()` again — exactly the re-subscribe a parked
- *    `'loading'` open needs, and the one thing the stage move cannot do for it.
+ *  - `ISessions.retain(target, { source })` presents a session by attaching that
+ *    generation's shared `Session.open()` attempt
+ *    (`reference.attachOpening(...)`, vendor `.../client/sessions/service.ts`),
+ *    and `Session.open()` re-runs `doOpen()` for every state except `'open'`
+ *    itself. This is the view-owner path: the official ui-workspace service
+ *    retains the presented target with source `'mainView'` and releases the
+ *    reference it replaced, which is why the probe reads "on stage" from the
+ *    row's `retainedBy.mainView` count instead of a chamber-side `current`
+ *    mirror.
+ *  - the concrete per-session `Session.resync()`: dispose the current event
+ *    stream and `open()` again — the re-subscribe an `'error'` session and a
+ *    parked `'loading'` open both need, and the lever this ladder executes.
  *    It is NOT on the contract, so the probe reaches it through a guarded
  *    structural slice (`session-stream-health-probe.ts`).
+ *
+ * A target the official main view does not retain has no lever here: the page's
+ * bounded delivery resync owns that shape (the `healRoute` evidence).
  *
  *  - The renderer's page-level recovery owner performs any evidence-gated
  *    automatic loading rebuild. This header policy only offers the manual
@@ -38,8 +43,9 @@
  *
  * That asymmetry is why this header policy has two actions:
  *
- *  - `openState === 'error'` held past the grace ⇒ `heal` (the stage move),
- *    retried on the cooldown while the rolling budget lasts;
+ *  - `openState === 'error'` held past the grace ⇒ `heal` (the automatic
+ *    per-session resync), retried on the cooldown while the rolling budget
+ *    lasts;
  *  - a heal judged failed (grace + settle) ⇒ the reload notice **latches**
  *    while the retries continue: waiting out the whole rolling budget (~296 s)
  *    would hide the one action that works, and the chip would show
@@ -58,9 +64,9 @@
  *    the session still has lever budget and the build exposes the concrete
  *    face, the armed `resync` control that rebuilds THIS session's stream
  *    without dropping the page;
- *  - a ladder that is OUT of levers (no neighbor session to move the stage
- *    through, or the budget spent) ⇒ the same notice, because for that state
- *    the reload really is the only remaining recovery.
+ *  - a ladder that is OUT of levers (no concrete resync face, or the budget
+ *    spent) ⇒ the same notice, because for that state the reload really is the
+ *    only remaining recovery.
  *
  * A stream that is `'open'` but silent is deliberately NOT guessed at: without
  * an applied-cursor watermark a long tool call is indistinguishable from a
@@ -106,10 +112,12 @@ export interface SessionStreamObservation {
    */
   readonly presented: boolean
   /**
-   * Another listed session exists to carry the stage move. Without one `heal` is
-   * never requested — the ladder degrades to the notice arm.
+   * The target is the currently PRESENTED session (the official main view
+   * retains it), so the header owns its automatic error heal. Without that
+   * positive fact `heal` is never requested — the page's bounded resync owns
+   * the error instead.
    */
-  readonly neighborAvailable: boolean
+  readonly healRoute: boolean
   /**
    * The build exposes the concrete `Session.resync()` (not on `ISession`), read
    * through the probe's guarded capability check: a missing or drifting face
@@ -182,10 +190,11 @@ export interface SessionStreamHealthConfig {
 export const SESSION_STREAM_HEALTH_DEFAULTS: SessionStreamHealthConfig = LADDER_TABLES.streamHealth
 
 /**
- * What the plan asks of the seat this tick. `'heal'` (stage move) is executed
- * by the seat and accounted against the ledger; `'resync'` only ARMS the user
- * control — the click is its sole invocation, never gated by the ledger (the
- * ledger bounds the AUTOMATIC arm; a human click is its own bound).
+ * What the plan asks of the seat this tick. `'heal'` (the automatic
+ * per-session resync) is executed by the seat and accounted against the ledger;
+ * `'resync'` only ARMS the user control — the click is its sole invocation,
+ * never gated by the ledger (the ledger bounds the AUTOMATIC arm; a human click
+ * is its own bound).
  */
 export type SessionStreamHealthAction = 'none' | 'heal' | 'resync'
 
@@ -298,8 +307,13 @@ export function planSessionStreamHealth(
         && sinceHeal !== undefined && sinceHeal >= config.healSettleMs) latched = true
 
     // One engine call answers grace + cooldown + budget + executability; its `exhausted` is what the notice projection reads.
-    const engine = planHealthEngine(state, now, config, since, !observation.neighborAvailable)
-    const inBudget = engine.exhausted.length === 0
+    // The automatic heal executes the concrete resync, so BOTH the presented target
+    // (`healRoute`) and the reachable face (`resyncAvailable`) are prerequisites;
+    // without them the tier is blocked and the page's delivery resync owns the error.
+    const engine = planHealthEngine(
+      state, now, config, since,
+      !observation.healRoute || observation.resyncAvailable !== true,
+    )
     if (engine.actions.some(action => action.tier === 'heal')) {
       // The seat executes the heal and marks it; 'since' restarts at execution.
       return {
@@ -315,21 +329,21 @@ export function planSessionStreamHealth(
       }
     }
 
-    // The stage move needs a CURRENT, LISTED target plus another listed session
-    // to carry the detour. A target it must refuse (an address-only subagent
-    // selection) still has the per-session resync, so ARM that user control
-    // instead of degrading to a bare reload. NOT ledger-gated, symmetric with the
-    // loading arm: the ledger bounds the AUTOMATIC arms, and gating the visible
-    // control on a spent budget would remove the only exit that keeps the page.
+    // The automatic arm is exhausted or cooling here. The same presented target
+    // still has the per-session resync, so ARM that user control instead of
+    // degrading to a bare reload. NOT ledger-gated, symmetric with the loading
+    // arm: the ledger bounds the AUTOMATIC arms, and gating the visible control
+    // on a spent budget would remove the only exit that keeps the page.
     // `resyncAvailable` still gates it.
     const resyncArmed = held >= config.errorGraceMs
       && observation.resyncAvailable === true
 
-    // No usable lever (no neighbor, no resync face, budget spent or cooling):
-    // report once the hold has outlived a repair attempt, never on the first frames.
+    // No usable lever (the presented face is unreadable or the build exposes no
+    // concrete resync): report once the hold has outlived a repair attempt, never
+    // on the first frames. A reachable face is NOT hopeless — `resyncArmed`
+    // already carries the manual exit.
     const hopeless = held >= config.errorGraceMs + config.healSettleMs
       && observation.resyncAvailable !== true
-      && (!inBudget || !observation.neighborAvailable)
     return {
       state: {
         phase,

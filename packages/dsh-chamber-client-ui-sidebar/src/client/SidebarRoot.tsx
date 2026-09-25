@@ -13,7 +13,7 @@
 import type { ReactNode } from 'react'
 import clsx from 'clsx'
 import {
-  BrandWordmark, FishLogo, IconNewChatOutline16, IconPanelLeftOutline16, Tooltip,
+  BrandWordmark, FishLogo, IconNewChatOutlineRegular, IconPanelLeftOutlineRegular, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarRootComponentProps } from './contract/slots.ts'
 import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
@@ -203,7 +203,7 @@ export function SidebarRoot({
               </span>
             )}
             {/* Rail icons render at 18 (figma rail spec); expanded keeps the glyph-native sizes. */}
-            <IconPanelLeftOutline16 className={css.panelIcon} size={wide ? 16 : 18} />
+            <IconPanelLeftOutlineRegular className={css.panelIcon} size={wide ? 16 : 18} />
           </button>
         </Tooltip>
       </div>
@@ -216,7 +216,7 @@ export function SidebarRoot({
           aria-label={t('session.new.label')}
           onClick={() => { startSession() }}
         >
-          <IconNewChatOutline16 size={wide ? 14 : 18} />
+          <IconNewChatOutlineRegular size={wide ? 14 : 18} />
           {wide && <span className={clsx(css.newSessionLabel, css.wide)}>{t('session.new')}</span>}
         </button>
       </Tooltip>

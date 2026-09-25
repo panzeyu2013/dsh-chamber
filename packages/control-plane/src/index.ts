@@ -1205,64 +1205,31 @@ export type { AuditTrailEvent } from './audit-trail.ts'
 // protected-plugins.ts) — single source for the desktop main and the gateway.
 // Renderer mirrors are hand-written and must stay in lockstep.
 export {
-  extractSpecName,
-  MATERIALIZE_FILE_SPEC_PATTERN,
   MAX_PLUGIN_SPEC_CHARS,
   PLUGIN_NAME_PATTERN,
   PLUGIN_SPEC_PATTERN,
   RUN_STDOUT_MAX_BYTES,
   WRITE_FILE_MAX_BYTES,
 } from './plugin-spec.ts'
-// The restricted plugin-mutation child executor: the single env-scrubbed /
-// bounded-output / timeout-killed child protocol shared by the gateway server and
-// the desktop main process. INSTALL_ENV_WHITELIST stays dsh-runtime's single source
-// and is passed in by each caller — this package deliberately does not depend on it.
-export { runPluginMutation, scrubMutationEnv, spawnMutationChild } from './plugin-mutation-executor.ts'
-export type {
-  MutationChild,
-  MutationChildExecutor,
-  MutationChildOutcome,
-  MutationProcessStream,
-  MutationSpawnFn,
-  PluginMutationParams,
-  PluginMutationResult,
-} from './plugin-mutation-executor.ts'
-// The protected-plugin set + generation coupling: P = B₀ ∪ S ∪ F derivation, the
-// op-phased write-face decision (install/remove judge P alike; remove never judges a
-// version; official-scope installs must pin the instance's exact generation) and the
-// read-face row projection — single source for the desktop main and the gateway.
+// The protected-plugin read face: P = B₀ ∪ S ∪ F derivation and the read-face row
+// projection — single source for the desktop main and the gateway. The user plugin
+// write face (install/remove/materialize) was retired with the 2026-09 C layering
+// ruling, so no write-face decision entry lives here anymore.
 export {
   CHAMBER_SCOPE,
-  decidePluginMutation,
   derivePluginRows,
   deriveProtectedSet,
   familyNamesFromLockfileClosure,
-  familyNamesFromRuntimeTree,
-  isExactVersion,
   OFFICIAL_SCOPE,
-  officialScope,
-  parseExactVersion,
   PLUGIN_MATERIALIZED_VALUE_MASK,
   PROFILE_BUNDLES_SNAPSHOT,
-  describeFamilyFindings,
   protectedReason,
   readInstalledVersion,
-  registrySpecVersion,
   resolveRuntimeFamily,
-  sameGeneration,
-  suggestExactSpec,
-  verifyProfileFamilyConsistency,
 } from './protected-plugins.ts'
 export type {
-  DecidePluginMutationInput,
-  FamilyConsistencyFinding,
-  FamilyConsistencyVerdict,
-  FamilyVersions,
   DerivePluginRowsInput,
-  ParsedVersion,
-  PluginMutationDecision,
-  PluginMutationOp,
-  PluginRefusalCode,
+  FamilyVersions,
   PluginRow,
   PluginRowRole,
   ProtectedDerivation,
@@ -1276,6 +1243,7 @@ export type {
 // desktop must consume them from the esbuild-bundled entry (bare wire specifiers are
 // not type-strippable), so dev source and packaged bundle resolve the same definitions.
 export {
+  hasXWildcard,
   isMaterializedValue,
   parsePluginManifest,
   readManifestVersion,

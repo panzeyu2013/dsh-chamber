@@ -72,7 +72,6 @@ export interface RuntimeStartupHostDeps {
   envOverrideActive: boolean
   runtimeManagementSupported: boolean
   runtimeBootstrapFailure: string | null
-  runtimeBootstrapWriterUnsafe: boolean
   bootstrapMetadataCorrupt: boolean
   pnpmEntry: string
   runtimeNodeExecutor: () => { file: string; args: string[]; env: Record<string, string> }
@@ -99,7 +98,6 @@ export function createRuntimeStartupHost(host: RuntimeStartupHostDeps) {
     envOverrideActive,
     runtimeManagementSupported,
     runtimeBootstrapFailure,
-    runtimeBootstrapWriterUnsafe,
     bootstrapMetadataCorrupt,
     pnpmEntry,
     runtimeNodeExecutor,
@@ -205,7 +203,6 @@ export function createRuntimeStartupHost(host: RuntimeStartupHostDeps) {
         && (permanentIncomplete || !canRetryRestore)
         && runtimeManagementSupported
         && !envOverrideActive
-        && !runtimeBootstrapWriterUnsafe
         && plane.localWritersQuiescent()
         && bundledVersion !== null
         && isSafeVersion(bundledVersion)
@@ -762,7 +759,7 @@ export function createRuntimeStartupHost(host: RuntimeStartupHostDeps) {
         // before the first probe of this transaction; a successful probe opens a fresh one.
         resetCandidateHealthWindow(runtimeBaseDir);
 
-                if (runtimeBootstrapFailure !== null && runtimeBootstrapWriterUnsafe) {
+                if (runtimeBootstrapFailure !== null) {
           await publishBlockedStartup(runtimeBootstrapFailure);
           return null;
         }
@@ -1128,7 +1125,6 @@ export function createRuntimeStartupHost(host: RuntimeStartupHostDeps) {
         || state.restoreOutcome === 'half'
         || state.source === 'env'
         || state.managementSupported === false
-        || runtimeBootstrapWriterUnsafe
         || !plane.localWritersQuiescent()
         || bundledVersion === null
         || !isSafeVersion(bundledVersion)

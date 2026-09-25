@@ -6,8 +6,9 @@
  * Why it exists: the repository moves files between `docs/design`,
  * `docs/checklists` and `docs/progress` often enough that a link left behind is
  * a silent loss — the reader follows a path that no longer exists and nothing
- * turns red. Two frozen upstream mirrors stay outside the checked set by design
- * (see {@link MIRRORED_DOCUMENTS}); the skip is printed on every run.
+ * turns red. Two chamber-frozen upstream-derived READMEs stay outside the
+ * checked set by design (see {@link MIRRORED_DOCUMENTS}); the skip is printed
+ * on every run.
  *
  * Usage:
  *   node scripts/gates/verify-md-links.mjs           # gate (exit 1 on a dead link)
@@ -41,16 +42,18 @@ export const LINK_SCAN_FILES = ['AGENTS.md', 'CONTRIBUTING.md', 'README.md', 'CH
 export { IGNORED_DIRECTORIES } from '../lib/walk.mjs'
 
 /**
- * Documents excluded from link checking because their contents are frozen
- * mirrors of upstream files: their internal links are upstream-relative by
- * construction, and C1 (`docs/checklists/upstream-touchpoints.md` §2.1, `pure`)
- * hard-fails if their bytes change. Editing them to satisfy this gate is not an
- * option; the exclusion is printed on every run so it stays visible.
+ * Documents excluded from link checking because their links are
+ * upstream-relative by construction: the chamber-frozen upstream-derived
+ * connection README pair (registry `[own-divergent]` — the bytes are ours,
+ * not an upstream-pure mirror, so C1 does NOT hard-fail them). Editing them to
+ * satisfy this gate is not an option; the exclusion is printed on every run so
+ * it stays visible. `README.i18n.yaml` is the hash record for the pair, not a
+ * Markdown target.
  * @type {ReadonlyMap<string, string>}
  */
 export const MIRRORED_DOCUMENTS = new Map([
-  ['packages/dsh-client-connection/README.md', 'upstream-pure mirror (C1): links are upstream-relative'],
-  ['packages/dsh-client-connection/README.zh.md', 'upstream-pure mirror (C1): links are upstream-relative'],
+  ['packages/dsh-client-connection/README.md', 'chamber-frozen upstream-derived README (own-divergent): links are upstream-relative'],
+  ['packages/dsh-client-connection/README.zh.md', 'chamber-frozen upstream-derived README (own-divergent): links are upstream-relative'],
 ])
 
 /** Link targets that are never filesystem paths. */
@@ -241,7 +244,7 @@ function main() {
   const listOnly = process.argv.includes('--list')
   const { documents, links, failures, mirrored } = collectLinkFailures(REPO_ROOT)
   if (mirrored.length > 0) {
-    console.log(`markdown links: ${mirrored.length} frozen upstream mirror(s) skipped by design:`)
+    console.log(`markdown links: ${mirrored.length} chamber-frozen upstream-derived document(s) skipped by design:`)
     for (const file of mirrored) console.log(`  - ${file} — ${MIRRORED_DOCUMENTS.get(file)}`)
   }
   if (documents === 0) {

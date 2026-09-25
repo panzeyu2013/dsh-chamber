@@ -228,8 +228,8 @@ function writeProtocolLine(frame: unknown): boolean {
 
 const pendingEdges = new Map<number, { resolve(v: unknown): void; reject(e: Error): void }>()
 let nextEdgeId = 1
-/** edge 往返超时：Swift 不应答时不得永久挂起。交互腿（showMessage / pickPluginSource
- * 是主线程模态 NSAlert/NSOpenPanel）按 11 分钟上限，非交互腿 30s。Swift 侧交互腿
+/** edge 往返超时：Swift 不应答时不得永久挂起。交互腿（showMessage
+ * 是主线程模态 NSAlert）按 11 分钟上限，非交互腿 30s。Swift 侧交互腿
  * 600s、起点是收到 edge；node 侧起点是发出 edge → 同值必然 node 先超时，用户此后点下的
  * 答案只会被记为迟到应答丢弃。故 node 取 Swift 上限 + 60s 缓冲，只在 Swift 腿整体失联
  * 时自行超时；两侧锁步由 macos CrossLanguageLockstepTests 断言
@@ -240,7 +240,7 @@ const EDGE_TIMEOUT_MS = 30_000
 const SWIFT_INTERACTIVE_LEG_TIMEOUT_MS = 600_000
 /** node 侧交互腿等待上限 = Swift 上限 + 60s 缓冲。 */
 const INTERACTIVE_EDGE_TIMEOUT_MS = SWIFT_INTERACTIVE_LEG_TIMEOUT_MS + 60_000
-const INTERACTIVE_EDGE_METHODS = new Set(['showMessage', 'pickPluginSource'])
+const INTERACTIVE_EDGE_METHODS = new Set(['showMessage'])
 
 const nodeEdges = createNodeEdges({
   sendEdge(method, payload) {
@@ -319,7 +319,7 @@ const nodeEdges = createNodeEdges({
   },
 })
 
-/** 入站分派：edge 应答 → host 保留 method → 61 invoke 通道注册表。 */
+/** 入站分派：edge 应答 → host 保留 method → 51 invoke 通道注册表。 */
 async function handleInboundLine(line: string): Promise<void> {
   let frame: Record<string, unknown>
   try {

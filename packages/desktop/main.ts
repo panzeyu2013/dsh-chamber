@@ -21,7 +21,8 @@ import type { PlaneHandle } from '@dsh-chamber/control-plane';
 import { applyWindowsAclTightening } from './win-acl.ts';
 import { verifyRuntimeClientClosure } from './runtime-tree-check.ts';
 import { createTrustedIpc, isChamberPermissionGranted, isExternalLinkUrl, isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
-import { createControlPlane } from './control-plane-module.ts';
+import type { TrustedIpc } from './renderer-trust.ts';
+import { atomicWritePrivateFileNoFollow, createControlPlane, ensurePrivateDirectoryNoFollow, readPrivateFileNoFollow } from './control-plane-module.ts';
 import { attemptDeepLinkProtocolRegistration, canRestoreMainWindow, decideDeepLinkProtocolRegistration, describeUnknownError, ensureLinuxProtocolDesktopFile, linuxAutostartDesktopEntry, linuxAutostartDirectory, resolveLinuxLaunchExecutable } from './deep-link.ts';
 import { createUpdateController } from './updater.ts';
 import { acquireChamberLock } from './chamber-lock.ts';
@@ -38,7 +39,9 @@ import { bundledPnpmEntryCandidates, firstExistingPnpmEntry } from './pnpm-launc
 // 深链 scheme 的单一来源（协议注册字面量）。
 import { DEEP_LINK_SCHEME } from './deep-link-scheme.ts';
 import { IPC_CHANNELS } from './ipc-events.ts';
-import { RENDERER_CRASH_RELOAD_DELAY_MS, RENDERER_HANG_RELOAD_DELAY_MS, RENDERER_RECOVERY_MAX_RELOADS, noteRendererReload, shouldReloadAfterChildProcessGone, auditLogFilePath, chamberSettingsFilePath, gatewaySecretsFilePath, QUIT_CLEANUP_TIMEOUT_MS, resolveControlPlanePort, scanDeepLinkUrls, sshPasswordsFilePath, stateRootDir, installIpcHandlers, clearBadgeIntentForQuit, drainDeepLinkLaunches, enqueueDeepLink, onRendererLifecycle, openExternally, resolveDevBuiltinDshWorkspace, shouldReloadAfterCrash, shouldScheduleHangReload } from './shell-core.ts';
+import { DESKTOP_SHORTCUTS_CHANNELS, DesktopShortcutsBridge, desktopKeyEvent, loadDesktopShortcutProtocol } from './shortcuts-bridge.ts';
+import type { ShortcutStorage } from './shortcuts-bridge.ts';
+import { RENDERER_CRASH_RELOAD_DELAY_MS, RENDERER_HANG_RELOAD_DELAY_MS, RENDERER_RECOVERY_MAX_RELOADS, noteRendererReload, shouldReloadAfterChildProcessGone, auditLogFilePath, chamberSettingsFilePath, gatewaySecretsFilePath, QUIT_CLEANUP_TIMEOUT_MS, resolveActiveRuntime, resolveControlPlanePort, scanDeepLinkUrls, sshPasswordsFilePath, stateRootDir, installIpcHandlers, clearBadgeIntentForQuit, drainDeepLinkLaunches, enqueueDeepLink, onRendererLifecycle, openExternally, resolveDevBuiltinDshWorkspace, shouldReloadAfterCrash, shouldScheduleHangReload } from './shell-core.ts';
 import type { RendererReloadBudgetState } from './shell-core.ts';
 import { createElectronEdges } from './electron-edges.ts';
 import { RendererFrameWatchdog, RENDERER_FRAME_PROGRESS_SCRIPT, RENDERER_INPUT_BLOCK_RTT_MS } from './renderer-frame-watchdog.ts';
@@ -114,6 +117,62 @@ function resolvePinnedRuntimeLockfile(): string | null {
   return existsSync(candidate) ? candidate : null;
 }
 
+/** userData/keybindings.json 存储（upstream keybindings.ts 的同位文件）：快捷键
+ *  偏好非凭证，仍走同一 no-follow/私有权限纪律（0600 + 原子替换），绝不静默读写
+ *  一个被替换/多链接的叶子。 */
+function createKeybindingsStorage(filePath: string): ShortcutStorage {
+  return {
+    read: () => {
+      try {
+        return readPrivateFileNoFollow(filePath, { tightenMode: 0o600 }).value;
+      } catch (error) {
+        // 缺文件 = 首次运行（upstream readFile ENOENT -> null）；其余错误如实上抛，
+        // 由 ShortcutPersistence 结算为 unreadable。
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw error;
+      }
+    },
+    write: (raw) => {
+      ensurePrivateDirectoryNoFollow(path.dirname(filePath), 0o700);
+      atomicWritePrivateFileNoFollow(filePath, raw, { mode: 0o600 });
+    },
+  };
+}
+
+/** dshDesktop 推送叶：只投给当前主窗口的存活 webContents，绝不 throw。 */
+function pushToMainWindow(channel: string, payload: unknown): boolean {
+  const win = mainWindow;
+  if (win === null || win.isDestroyed()) return false;
+  try {
+    win.webContents.send(channel, payload);
+    return true;
+  } catch (error) {
+    console.warn('[dsh-chamber] dshDesktop 推送失败：', describeUnknownError(error));
+    return false;
+  }
+}
+
+/**
+ * dshDesktop.shortcuts-* 的 main 处理器（rc.2 官方 preload 的 keyboard/shortcut
+ * 面）：get/edit 的语义与校验在 DesktopShortcutsBridge（upstream protocol），
+ * 此处只做 IPC 接线；trustedIpc 围栏由调用方包装（design 05 §7.4 sender fence
+ * 对 dshDesktop 面同样生效）。
+ */
+function registerDesktopShortcutsIpc(bridge: DesktopShortcutsBridge, trustedIpc: TrustedIpc): void {
+  ipcMain.handle(DESKTOP_SHORTCUTS_CHANNELS.GET, trustedIpc((input: unknown) => bridge.get(input)));
+  ipcMain.handle(DESKTOP_SHORTCUTS_CHANNELS.EDIT, trustedIpc((input: unknown, revision: unknown) => bridge.edit(input, revision)));
+  ipcMain.handle(DESKTOP_SHORTCUTS_CHANNELS.RECORDING, trustedIpc((active: unknown) => {
+    const ignore = bridge.recording(active);
+    const win = mainWindow;
+    if (win !== null && !win.isDestroyed()) win.webContents.setIgnoreMenuShortcuts(ignore);
+  }));
+  ipcMain.handle(DESKTOP_SHORTCUTS_CHANNELS.CLOSE_WINDOW, trustedIpc((expected: unknown) => {
+    const win = mainWindow;
+    if (win === null || win.isDestroyed()) return;
+    if (bridge.closeWindow(expected, { focused: win.isFocused(), enabled: win.isEnabled() })) win.close();
+  }));
+}
+
 const builtinDshWorkspace = resolveBuiltinDshWorkspace();
 if (builtinDshWorkspace === null) {
   console.warn(
@@ -122,6 +181,8 @@ if (builtinDshWorkspace === null) {
 }
 
 let mainWindow: BrowserWindow | null = null;
+// rc.2 官方 shortcuts 客户端的原生键盘桥（协议来自活动 runtime 树；null = 未接线）。
+let shortcutsBridge: DesktopShortcutsBridge | null = null;
 let controlPlane: PlaneHandle | null = null;
 // 共享宿主装配（与 Swift sidecar 同一份）：whenReady 装配后赋值；
 // will-quit/before-quit 经它读退出事实与回收腿。
@@ -629,6 +690,31 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   win.webContents.on('will-redirect', (event, url) => {
     handleUntrustedNavigation(event, url, rendererOrigin);
   });
+  // rc.2 原生键盘门（upstream keyboard.ts before-input-event 语义）：只有命中已
+  // 接受命令目录的组合才 preventDefault + 投递；其余键保持正常 DOM 交付。
+  const shortcuts = shortcutsBridge;
+  if (shortcuts !== null) {
+    shortcuts.resetInput();
+    win.webContents.on('before-input-event', (event, input) => {
+      const focused = win.webContents.focusedFrame;
+      const frameName = focused === null ? null
+        : focused === win.webContents.mainFrame ? '' : focused.name;
+      const decision = shortcuts.handleKeyEvent(desktopKeyEvent(input, frameName, win.isFocused() && win.isEnabled()));
+      win.webContents.setIgnoreMenuShortcuts(decision.ignoreMenuShortcuts);
+      if (decision.preventDefault) event.preventDefault();
+      if (decision.input !== null) win.webContents.send(DESKTOP_SHORTCUTS_CHANNELS.INPUT, decision.input);
+    });
+    win.webContents.on('blur', () => {
+      shortcuts.resetInput();
+      win.webContents.setIgnoreMenuShortcuts(false);
+    });
+    win.on('blur', () => { shortcuts.resetInput(); });
+    win.webContents.on('did-start-navigation', (navigation) => {
+      // 主 frame 导航（重载/换实例根）重建接受态：旧目录不得继续拦截新文档。
+      if (navigation.isMainFrame && !navigation.isSameDocument) shortcuts.clearCatalog();
+    });
+    win.on('closed', () => { shortcuts.resetInput(); });
+  }
   installRendererRecovery(win);
   // 通知点击的重建竞态兜底：点击时窗口若在重建/加载中，打开意图入队，renderer
   // 就绪后统一补发。就绪标志重置点选 did-start-loading（而非 did-finish-load）：
@@ -1136,6 +1222,31 @@ if (!gotTheLock) {
       },
       isQuitting: () => quitRequested,
     });
+
+    // rc.2 原生键盘桥装配：官方 shortcuts 服务从实例 client graph 挂载，构造期
+    // 要求 window.dshDesktop.keyboard；其 native input 又以
+    // userData/keybindings.json 事务（main 侧唯一 revision 源）为准。协议实现从
+    // 活动 runtime 树加载——页面加载的 client 半来自同一棵树，规范化/校验/revision
+    // 无双源。协议缺失只降级到「壳可挂载、快捷键走 DOM 默认」，绝不半接线拦截。
+    const activeRuntimePath = resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspace).path;
+    const shortcutProtocol = await loadDesktopShortcutProtocol([
+      activeRuntimePath ?? '',
+      builtinDshWorkspace ?? '',
+    ]);
+    if (shortcutProtocol === null) {
+      console.error('[dsh-chamber] 未找到 dsh-client-shortcuts/protocol：原生键盘桥未接线'
+        + '（dshDesktop.keyboard 仍存在，官方壳可挂载；快捷键停留在 DOM 默认）');
+    } else {
+      shortcutsBridge = new DesktopShortcutsBridge({
+        protocol: shortcutProtocol,
+        platform: process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux',
+        storage: createKeybindingsStorage(path.join(runtimeBaseDir, 'keybindings.json')),
+        send: pushToMainWindow,
+      });
+      registerDesktopShortcutsIpc(shortcutsBridge, trustedIpc);
+      console.log('[dsh-chamber] rc.2 原生键盘桥已接线（偏好文件 = '
+        + path.join(runtimeBaseDir, 'keybindings.json') + '）');
+    }
 
     // OS 唤醒即时重探（传输层腿）：对 error/degraded 实例立即重探，绝不触碰
     // idle；held lastResume 补发 + SYSTEM_RESUME 推送在 shell-core。

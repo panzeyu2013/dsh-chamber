@@ -60,12 +60,10 @@ const GROUPS = {
     'test/runtime/workspace-facts.test.ts',
     'test/runtime/registry-source.test.ts',
   ],
-  // plugins: the managed-profile plugin pipeline - journal, executor, tgz scan, orchestrator, spec lockstep.
+  // plugins: the managed-profile plugin READ face - spec whitelists lockstep only
+  // (the write pipeline journal/executor/tgz-scan/orchestrator retired with the
+  // 2026-09 C layering ruling).
   plugins: [
-    'test/plugins/plugins-journal.test.ts',
-    'test/plugins/plugins-exec.test.ts',
-    'test/plugins/tgz-scan.test.ts',
-    'test/plugins/plugins-tasks.test.ts',
     'test/plugins/plugin-spec-lockstep.test.ts',
   ],
   // session-state: the read-only watcher - store/state machine + persistence,
@@ -83,15 +81,11 @@ const GROUPS = {
     { file: 'test/session-state/session-state-old-desktop-matrix.test.ts', nodeArgs: ['--import', './test/session-state/workspace-loader.mjs'] },
     { file: 'test/session-state/session-state-diagnostics.test.ts', nodeArgs: ['--import', './test/session-state/workspace-loader.mjs'] },
   ],
-  // chamber-surface: the /chamber/* route surface - installed read projection, write mutations, dashboard assets.
+  // chamber-surface: the /chamber/* route surface - installed read projection, seed cache, dashboard assets.
   'chamber-surface': [
     'test/chamber-surface/chamber-installed.test.ts',
     // 跨后端 readManifest lockstep：gateway 投影 === wire parse+mask（design 21 §3）。
     'test/chamber-surface/plugin-manifest-lockstep.test.ts',
-    'test/chamber-surface/chamber-plugins-mutations.test.ts',
-    // 撤销=恢复（design 21 §3 undoJournal / §6.3 / §6.8 r2）：preImage 两文件
-    // 逐字节还原、受保护集合逆相位判定、无 op/在飞/损坏 journal 的码面。
-    'test/chamber-surface/chamber-undo.test.ts',
     'test/chamber-surface/feature-lifecycle.test.ts',
   ],
   // packaging: the shipped artifact surface - pnpm PATH shim, installer script, dist bundle smoke.

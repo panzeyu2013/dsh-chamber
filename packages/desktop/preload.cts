@@ -11,6 +11,22 @@ import type { RuntimeState } from './dsh-runtime-controller.ts'
 import type { PluginRow as PluginRowProjection } from '@dsh-chamber/dsh-chamber-client-core/plugin-row';
 const { contextBridge, ipcRenderer } = require('electron');
 
+/**
+ * Desktop-carrier IPC channels (upstream apps/desktop/src/ipc.ts DESKTOP_IPC
+ * subset). Duplicated literals are deliberate: the sandboxed preload build is a
+ * self-contained CJS file (build-preload.mjs) and cannot import the main-side
+ * single source DESKTOP_SHORTCUTS_CHANNELS (shortcuts-bridge.ts). The lockstep
+ * test is test/ipc/desktop-carrier-surface.test.ts.
+ */
+const DESKTOP_SHORTCUTS_CHANNELS = {
+  GET: 'dsh-desktop:shortcuts-get',
+  EDIT: 'dsh-desktop:shortcuts-edit',
+  RECORDING: 'dsh-desktop:shortcuts-recording',
+  CLOSE_WINDOW: 'dsh-desktop:shortcuts-close-window',
+  INPUT: 'dsh-desktop:shortcuts-input',
+  CHANGED: 'dsh-desktop:shortcuts-changed',
+} as const;
+
 // Keep preload runtime self-contained: importing a value from a TypeScript ESM
 // module crosses the emitted CommonJS preload boundary. This strict mirror is
 // intentionally local; main remains authoritative for the delta contents.
@@ -107,18 +123,6 @@ export interface DesktopSshSurface {
    * registration performs automatically; id-only, never a URL or credential.
    */
   gateway_plugin_sync(id: string): Promise<GatewayPluginSyncIpcResult>
-  /**
-   * Batch registry add/remove + restart-to-apply on a gateway instance's
-   * registered transport (design 21 §6.5): the main process confirms first
-   * (cancelled = the user dismissed the dialog) and re-validates every spec.
-   */
-  gateway_plugin_apply(id: string, input: GatewayPluginApplyInput): Promise<GatewayPluginApplyIpcResult>
-  /**
-   * Pick a local plugin-source FOLDER in the main process and upload it to a
-   * gateway instance (pick-only, design 21 §6.5): no renderer-supplied path
-   * is ever accepted.
-   */
-  gateway_plugin_materialize(id: string): Promise<GatewayPluginMaterializeIpcResult>
   /** ~/.ssh/config discovery: non-secret host projections or {error}. */
   config_list(): Promise<SshConfigDiscovery>
   connect(id: string): Promise<SshStatusProjection | null>
@@ -137,31 +141,10 @@ export interface DesktopSshSurface {
   restart_service(id: string): Promise<SshExecIpcResult>
   /** Read the remote instance's plugin manifest (design 13 §4.1). */
   plugin_list(id: string): Promise<SshRemotePluginListResult>
-  /** Apply a plugin-set change to a remote instance (design 13 §4.1/§3). */
-  plugin_apply(id: string, input: SshPluginApplyInput): Promise<SshPluginApplyIpcResult>
-  /** Undo the latest OK plugin change of a remote instance (design 21 §6.4):
-   *  main-process journal + confirm; id-only, no renderer-supplied spec. */
-  ssh_plugin_undo(id: string): Promise<SshPluginUndoIpcResult>
   /** Read the LOCAL instance's plugin manifest (design 13 §4.1). */
   local_plugin_list(): Promise<SshLocalPluginListResult>
-  /** Best-effort npm registry search (main-process fetch; design 13 §5). */
-  npm_search(query: string): Promise<SshNpmSearchResult>
   /** Seed module A onto a remote instance (design 13 §3, 09 遗留 1). */
   seed_host_graph(id: string): Promise<SshSeedHostGraphResult>
-  /** Pack a named local-manifest dependency and install it remotely. Main
-   *  resolves the directory; renderer paths are never accepted. */
-  plugin_materialize_add(id: string, name: string): Promise<SshMaterializeResult>
-  /** Install a user-PICKED local plugin source (folder or .tgz archive) and
-   *  materialize it remotely (pick-only; the main process opens the picker,
-   *  no renderer-supplied path, design 13 §5 / design 21 §6.5). */
-  plugin_materialize_add_pick(id: string): Promise<SshMaterializeResult>
-  /** Install a spec into the LOCAL dsh profile (design 13 §5). */
-  local_plugin_add(spec: string): Promise<SshLocalPluginExecIpcResult>
-  /** Pick a local plugin source (folder or .tgz archive) and install it into
-   *  the LOCAL dsh profile (pick-only, design 13 §5 / design 21 §6.5). */
-  local_plugin_add_file(): Promise<SshLocalPluginExecIpcResult>
-  /** Remove a plugin from the LOCAL dsh profile (design 13 §5). */
-  local_plugin_remove(name: string): Promise<SshLocalPluginExecIpcResult>
   onStatusChanged(callback: (payload: SshStatusChangedPayload) => void): () => void
   /** Registry changed via the main-owned save/delete transaction. The
    * synchronous delta retires exact source generations before async re-pull. */
@@ -228,7 +211,6 @@ export type { PluginRowProjection }
 /** Remote plugin manifest projection (design 13 §4.1). */
 export interface SshRemotePluginManifest {
   dependencies: Record<string, string>
-  bundles: string[]
   /** Read-face row projection (design 21 §6.11.5). */
   rows: PluginRowProjection[]
   profileExists: boolean
@@ -248,8 +230,6 @@ export interface SshLocalPluginManifest {
   bundles: string[]
   rows: PluginRowProjection[]
   clientLines: string[]
-  /** Deps whose own manifest declares a `dsh.bundle` (verifyApplied bundles half-assertion). */
-  bundleLines: string[]
   unsyncable: { name: string; reason: string }[]
   chamber: ChamberInjectionState
 }
@@ -257,78 +237,9 @@ export type SshLocalPluginListResult =
   | { ok: true; manifest: SshLocalPluginManifest }
   | { ok: false; error: string }
 
-/** Apply outcome (design 13 §3). */
-export interface SshPluginApplyResult {
-  applied: number
-  skipped: number
-  failed: { spec: string; error: string }[]
-  restarted: boolean
-  deferred: boolean
-  verified: boolean
-  ready: boolean | null
-  /** When ready is null because the instance was not connected before restart
-   *  (readiness not re-checked), this explains why. */
-  readyNote?: string
-}
-export type SshPluginApplyIpcResult =
-  | { ok: true; result: SshPluginApplyResult }
-  | { ok: false; error: string }
-
-/** Undo outcome of the ssh plugin journal (design 21 §6.4):
- *  the main process confirms the undo (cancelled = the user dismissed the
- *  dialog), re-executes the inverse op through the same ssh plugin_apply
- *  flow (restart-to-apply), and journals the undo op so further undos chain.
- *  ok:true undone.kind = the kind of the op that was undone ('add' — a
- *  fresh install was removed again, an in-place upgrade was restored to its
- *  previous spec; 'remove' — the name was re-added with its previous
- *  registry spec). undone carries NO further fields on a CLEAN undo (rows
- *  executed + restart ok + verified + no failed readiness re-check); when
- *  the change executed but is not fully effective (restart failed /
- *  verification failed / readiness failed) the arm carries {restarted,
- *  ready, readyNote?} — the presence of undone.restarted is the renderer's
- *  "executed but not fully effective" signal, never a fake clean success.
- *  ok:false carries unavailable: 'none' when there is no undoable op (or
- *  the previous spec cannot be restored) or 'file-backed' when the previous
- *  spec was a remote file: package that v1 cannot re-add. */
-export type SshPluginUndoIpcResult =
-  | { ok: true; cancelled: true }
-  | { ok: true; undone: { kind: 'add' | 'remove'; name: string; restarted?: boolean; ready?: boolean | null; readyNote?: string } }
-  | { ok: false; error: string; unavailable?: 'none' | 'file-backed' }
-
-/** Apply input (renderer → main; main re-validates every spec, design 13 §7.2). */
-export interface SshPluginApplyInput {
-  add: string[]
-  remove: string[]
-  restart?: boolean
-}
-
-/** Best-effort npm search package projection (design 13 §5). */
-export interface SshNpmSearchPackage {
-  name: string
-  version: string
-  description?: string
-}
-export type SshNpmSearchResult =
-  | { ok: true; packages: SshNpmSearchPackage[] }
-  | { ok: false; error: string }
-
 /** Host-graph seed outcome (design 13 §3). */
 export type SshSeedHostGraphResult =
   | { ok: true; wrote: boolean; patched: boolean }
-  | { ok: false; error: string }
-
-/** Materialize-and-add outcome (design 13 §3). `cancelled` = the user dismissed
- *  the local-source picker (a silent no-op, not an error). */
-export type SshMaterializeResult =
-  | { ok: true; spec: string; remotePath: string }
-  | { ok: true; cancelled: true }
-  | { ok: false; error: string }
-
-/** Local `dsh plugin` exec outcome (design 13 §5). `cancelled` = the user
- *  dismissed the local-source picker on the `local_plugin_add_file` path. */
-export type SshLocalPluginExecIpcResult =
-  | { ok: true }
-  | { ok: true; cancelled: true }
   | { ok: false; error: string }
 
 /** Manual chamber-plugin sync outcome (design 21 §6.5): the seed-cache sync
@@ -338,57 +249,6 @@ export type SshLocalPluginExecIpcResult =
 export type GatewayPluginSyncIpcResult =
   | { ok: true; uploaded: boolean; skipped: boolean }
   | { ok: false; error: string }
-
-/** Batch apply input (renderer → main; main re-validates every spec against
- *  the same shared whitelists the gateway routes use — defense in depth). */
-export interface GatewayPluginApplyInput {
-  add: string[]
-  remove: string[]
-  /** true = record the change only; the restart-to-apply is skipped. */
-  deferRestart?: boolean
-}
-
-/** Partial outcome of a failed batch: the ops already accepted by the
- *  gateway executor before the failure (restart refusal included) — never
- *  hidden behind the error text. */
-export interface GatewayPluginApplyPartial {
-  installed: string[]
-  removed: string[]
-}
-
-/** Batch apply outcome (design 21 §6.5): cancelled = the user dismissed the
- *  main-process confirmation; ok:true carries installed/removed (accepted
- *  ops), restarted (restart confirmed via the status poll) and deferred
- *  (true when some submissions were cached as ready-edge install intents);
- *  ok:false is loud and carries `partial` when ops executed before it. */
-export type GatewayPluginApplyIpcResult =
-  | { ok: true; cancelled: true }
-  | { ok: true; installed: string[]; removed: string[]; restarted: boolean; deferred?: boolean }
-  | { ok: false; error: string; partial?: GatewayPluginApplyPartial }
-
-/** Gateway materialize executed outcome (settle/restart parity with the
- *  apply batch): executed = the executor op terminally succeeded
- *  (the profile changed); restarted = the controlled managed-dsh restart
- *  was accepted AND settled, so the plugin is mounted on the running
- *  instance. ok:false may still carry the outcome when the profile change
- *  executed before a restart failure. */
-export interface GatewayPluginMaterializeOutcome {
-  executed: boolean
-  restarted: boolean
-}
-
-/** Local plugin materialize outcome (design 21 §6.5): cancelled = the
- *  user dismissed the picker; ok:true deferred = the gateway persisted the
- *  install intent for the next ready edge (it drains + restarts there);
- *  ok:true outcome = the executor ran the install AND the desktop asked for
- *  the controlled restart (outcome.restarted says whether the plugin is
- *  live now); ok:false is loud and carries outcome when the install
- *  executed before a restart failure. */
-export type GatewayPluginMaterializeIpcResult =
-  | { ok: true; cancelled: true }
-  | { ok: true; deferred: true }
-  | { ok: true; outcome: GatewayPluginMaterializeOutcome }
-  | { ok: false; error: string; outcome?: GatewayPluginMaterializeOutcome }
 
 /**
  * The dsh-chamber update surface (design 11) — non-secret only: versions,
@@ -669,8 +529,6 @@ function desktopSshApi(): DesktopSshSurface {
     set_gateway_token: (id, token) => ipcRenderer.invoke('desktop_gateway_set_token', { id, token }),
     set_gateway_password: (id, password) => ipcRenderer.invoke('desktop_gateway_set_password', { id, password }),
     gateway_plugin_sync: id => ipcRenderer.invoke('desktop_gateway_plugin_sync', { id }),
-    gateway_plugin_apply: (id, input) => ipcRenderer.invoke('desktop_gateway_plugin_apply', { id, add: input.add, remove: input.remove, deferRestart: input.deferRestart }),
-    gateway_plugin_materialize: id => ipcRenderer.invoke('desktop_gateway_plugin_materialize', { id }),
     config_list: () => ipcRenderer.invoke('desktop_ssh_config_list'),
     connect: id => ipcRenderer.invoke('desktop_ssh_connect', { id }),
     disconnect: id => ipcRenderer.invoke('desktop_ssh_disconnect', { id }),
@@ -683,16 +541,8 @@ function desktopSshApi(): DesktopSshSurface {
     is_active: id => ipcRenderer.invoke('desktop_ssh_is_active', { id }),
     restart_service: id => ipcRenderer.invoke('desktop_ssh_restart_service', { id }),
     plugin_list: id => ipcRenderer.invoke('desktop_ssh_plugin_list', { id }),
-    plugin_apply: (id, input) => ipcRenderer.invoke('desktop_ssh_plugin_apply', { id, add: input.add, remove: input.remove, restart: input.restart }),
-    ssh_plugin_undo: id => ipcRenderer.invoke('desktop_ssh_plugin_undo', { id }),
     local_plugin_list: () => ipcRenderer.invoke('desktop_local_plugin_list'),
-    npm_search: query => ipcRenderer.invoke('desktop_npm_search', { query }),
     seed_host_graph: id => ipcRenderer.invoke('desktop_ssh_seed_host_graph', { id }),
-    plugin_materialize_add: (id, name) => ipcRenderer.invoke('desktop_ssh_plugin_materialize_add', { id, name }),
-    plugin_materialize_add_pick: id => ipcRenderer.invoke('desktop_ssh_plugin_materialize_add_pick', { id }),
-    local_plugin_add: spec => ipcRenderer.invoke('desktop_local_plugin_add', { spec }),
-    local_plugin_add_file: () => ipcRenderer.invoke('desktop_local_plugin_add_file'),
-    local_plugin_remove: name => ipcRenderer.invoke('desktop_local_plugin_remove', { name }),
     onStatusChanged: callback => {
       if (typeof callback !== 'function') return () => {};
       const listener = (_event: IpcRendererEvent, payload: SshStatusChangedPayload) => callback(payload);
@@ -925,6 +775,194 @@ function badgeApi(): BadgeSurface {
   };
 }
 
+/** Normalized native input the official shortcuts service accepts (upstream
+ *  DesktopShortcutInput). revision must equal the renderer's accepted
+ *  preference revision or installNativeKeyboard drops the input. */
+export type DesktopShortcutInput = { readonly revision: string } & (
+  | { readonly kind: 'menu'; readonly commandId: string }
+  | {
+    readonly kind: 'keyboard' | 'iframe' | 'webview'
+    readonly frameName: string
+    readonly code: string
+    readonly secondCode?: string
+    readonly control: boolean
+    readonly alt: boolean
+    readonly shift: boolean
+    readonly meta: boolean
+    readonly repeat: boolean
+  }
+)
+
+/** Physical-key capability of the desktop carrier (upstream DesktopKeyboardApi). */
+export interface DesktopKeyboardApi {
+  /** Subscribe to verified native input. @param listener - current document consumer. @returns listener disposer. */
+  subscribe(listener: (input: DesktopShortcutInput) => void): () => void
+  /** Close the owning window if its configuration is still current. @param revision - accepted configuration identity. */
+  closeWindow(revision: string): Promise<void>
+}
+
+/** Revisioned preference snapshot (upstream ShortcutConfigSnapshot). */
+export interface DesktopShortcutsSnapshot {
+  readonly revision: string
+  readonly sequence: number
+  readonly document: unknown
+  readonly status: 'loading' | 'ready' | 'unreadable'
+  readonly error: 'read' | 'invalid' | 'future' | null
+  readonly usingDefaults: boolean
+}
+
+/** Classified save outcome (upstream ShortcutSaveResult). */
+export interface DesktopShortcutsSaveResult {
+  readonly status: 'saved' | 'stale' | 'unreadable' | 'write-failed' | 'not-ready' | 'conflict'
+  readonly snapshot: DesktopShortcutsSnapshot
+  readonly issue?: string
+  readonly conflicts?: readonly string[]
+}
+
+/** Preference transaction capability of the desktop carrier (upstream DesktopShortcutsApi). */
+export interface DesktopShortcutsApi {
+  /** Install the trusted catalog and read the current preferences. */
+  get(definitions: readonly unknown[]): Promise<DesktopShortcutsSnapshot>
+  /** Persist one revision-checked edit. */
+  edit(edit: unknown, revision: string): Promise<DesktopShortcutsSaveResult>
+  /** Subscribe to committed snapshots; returns the disposer. */
+  subscribe(listener: (snapshot: DesktopShortcutsSnapshot) => void): () => void
+  /** Toggle native recording capture. */
+  recording(active: boolean): Promise<void>
+}
+
+/** Upstream update presentation consumed by the official settings shell
+ *  (dshDesktop.updates), mapped from the chamber UpdateState. */
+export interface DesktopUpdatePresentation {
+  readonly phase: 'idle' | 'checking' | 'available' | 'downloading' | 'verifying' | 'installing' | 'ready' | 'error'
+  readonly version?: string
+  readonly percent?: number
+  readonly failure?: 'check' | 'download' | 'install'
+}
+
+/** The operation in flight, so an error receiver can name what failed (upstream
+ *  gets this from its coordinator's failedOperation). */
+let upstreamActiveOperation: 'check' | 'download' | 'install' = 'check'
+
+/** Map the chamber update projection onto the upstream presentation phases.
+ *  up-to-date has no upstream counterpart (the badge renders nothing when idle);
+ *  downloaded maps to ready (download finished, install armed). */
+function toUpstreamUpdatePresentation(state: UpdateState | null | undefined): DesktopUpdatePresentation {
+  const version = state?.latestVersion ?? undefined
+  const withVersion = (phase: DesktopUpdatePresentation['phase']): DesktopUpdatePresentation =>
+    version === undefined ? { phase } : { phase, version }
+  if (state?.phase === 'downloading') upstreamActiveOperation = 'download'
+  else if (state?.phase === 'installing') upstreamActiveOperation = 'install'
+  else if (state?.phase === 'checking') upstreamActiveOperation = 'check'
+  switch (state?.phase) {
+    case 'checking': return { phase: 'checking' }
+    case 'available': return withVersion('available')
+    case 'downloading': return { phase: 'downloading',
+      ...(state.downloadPercent === null ? {} : { percent: state.downloadPercent }),
+      ...(version === undefined ? {} : { version }) }
+    case 'downloaded': return withVersion('ready')
+    case 'installing': return withVersion('installing')
+    case 'error': return { ...withVersion('error'), failure: upstreamActiveOperation }
+    default: return { phase: 'idle' }
+  }
+}
+
+/** window.dshDesktop.updates -- the update presentation the official settings
+ *  shell consumes. */
+export interface DesktopUpdatesApi {
+  status(): Promise<DesktopUpdatePresentation>
+  open(): Promise<void>
+  subscribe(listener: (state: DesktopUpdatePresentation) => void): () => void
+}
+
+/** The dshDesktop.update-* capability: the official settings shell hangs its
+ *  OWN update badge into the sidebar seat from this carrier. open() follows the
+ *  upstream action semantics (bring the update presentation up) -- here the
+ *  update check, which on the native shell fronts the standard Sparkle window. */
+function desktopUpdatesApi(): DesktopUpdatesApi {
+  return {
+    status: () => (ipcRenderer.invoke('dsh-chamber:update-state') as Promise<UpdateState>).then(toUpstreamUpdatePresentation),
+    open: () => (ipcRenderer.invoke('dsh-chamber:update-check') as Promise<unknown>).then(() => undefined),
+    subscribe: (listener) => {
+      if (typeof listener !== 'function') return () => {};
+      const handle = (_event: IpcRendererEvent, state: UpdateState) => { listener(toUpstreamUpdatePresentation(state)); };
+      ipcRenderer.on('dsh-chamber:update-state-changed', handle);
+      return () => ipcRenderer.removeListener('dsh-chamber:update-state-changed', handle);
+    },
+  };
+}
+
+/** The dshDesktop.keyboard capability (upstream preload-app.ts createProductApi
+ *  keyboard arm): native inputs are re-checked against the live embedding
+ *  element before they reach the document consumer. */
+function keyboardApi(): DesktopKeyboardApi {
+  return {
+    closeWindow: revision => ipcRenderer.invoke(DESKTOP_SHORTCUTS_CHANNELS.CLOSE_WINDOW, revision),
+    subscribe: (listener) => {
+      const handle = (_event: IpcRendererEvent, input: DesktopShortcutInput): void => {
+        if (input.kind === 'iframe') {
+          const element = document.activeElement
+          if (!(element instanceof HTMLIFrameElement) || !element.isConnected
+            || !element.matches('iframe[data-sidebar-browser-frame], iframe[data-html-preview]')) return
+          if (input.frameName === '' || element.name !== input.frameName) return
+        }
+        if (input.kind === 'webview') {
+          const element = document.activeElement
+          if (element?.matches('webview[data-sidebar-browser-frame]') !== true || !element.isConnected
+            || input.frameName === '' || element.getAttribute('name') !== input.frameName) return
+        }
+        listener(input)
+      }
+      ipcRenderer.on(DESKTOP_SHORTCUTS_CHANNELS.INPUT, handle)
+      return () => { ipcRenderer.removeListener(DESKTOP_SHORTCUTS_CHANNELS.INPUT, handle) }
+    },
+  }
+}
+
+/** The dshDesktop.shortcuts capability: main owns userData/keybindings.json and
+ *  mints the revision the keyboard input is gated on. */
+function shortcutsApi(): DesktopShortcutsApi {
+  return {
+    get: definitions => ipcRenderer.invoke(DESKTOP_SHORTCUTS_CHANNELS.GET, definitions),
+    edit: (edit, revision) => ipcRenderer.invoke(DESKTOP_SHORTCUTS_CHANNELS.EDIT, edit, revision),
+    recording: active => ipcRenderer.invoke(DESKTOP_SHORTCUTS_CHANNELS.RECORDING, active),
+    subscribe(listener) {
+      const handle = (_event: IpcRendererEvent, snapshot: DesktopShortcutsSnapshot): void => { listener(snapshot) };
+      ipcRenderer.on(DESKTOP_SHORTCUTS_CHANNELS.CHANGED, handle);
+      return () => { ipcRenderer.removeListener(DESKTOP_SHORTCUTS_CHANNELS.CHANGED, handle) };
+    },
+  }
+}
+
+/** Expose the upstream desktop carrier (apps/desktop/src/preload-app.ts
+ *  createProductApi): rc.2 official client families read
+ *  globalThis.dshDesktop.keyboard/shortcuts/updates. Installed before the
+ *  bridge payload is requested because the official shell constructs its
+ *  shortcuts service during boot, not after info hydration. */
+function exposeDesktopCarrier(): void {
+  contextBridge.exposeInMainWorld('dshDesktop', {
+    protocolVersion: 1,
+    updates: desktopUpdatesApi(),
+    keyboard: keyboardApi(),
+    shortcuts: shortcutsApi(),
+  });
+}
+
+/** Upstream markDocumentPlatform() (apps/desktop/src/preload-platform.ts),
+ *  mirrored verbatim: the document root carries the host platform so the
+ *  shared Web UI -- including the shortcuts service's desktop detection --
+ *  sees a desktop runtime. Deferred to DOMContentLoaded when the preload runs
+ *  before the document root exists. */
+function markDocumentPlatform(): void {
+  // A host without a document (text-level test harnesses) skips: a real renderer
+  // always has the root, which is what upstream assumes too.
+  if (typeof document === 'undefined' || document === null || document.documentElement === undefined) return;
+  const mark = () => { document.documentElement.dataset.platform = process.platform; };
+  const root = document.documentElement;
+  if (root === null) window.addEventListener('DOMContentLoaded', mark);
+  else mark();
+}
+
 /**
  * Fetch the app-info payload for the bridge. The main-process IPC sender
  * fence (design 05 §7.4) may reject a bootstrap invoke fired before the main
@@ -952,6 +990,13 @@ function requestAppInfo(): Promise<Partial<DshChamberBridge>> {
     attempt();
   });
 }
+
+// Upstream parity bootstrap (the S-52 desktop carrier + the desktop platform
+// mark): independent of info hydration, so both are installed before the
+// bridge payload is requested -- the official shortcuts service reads
+// window.dshDesktop during boot, not after the info round-trip.
+markDocumentPlatform();
+exposeDesktopCarrier();
 
 requestAppInfo().then(
   (info: Partial<DshChamberBridge>) => {

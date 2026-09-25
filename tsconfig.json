@@ -23,6 +23,12 @@
       // The four chamber client-plugin entries are checked by their own package
       // programs (their loose vendor faces collide when merged into one program);
       // the renderer consumes them only through this narrow registration face.
+      // The module-loader contract is compiled by the client-web fork's own
+      // program (real vendor sources + its deps); the root program consumes only
+      // this program's loose face (0.1.7 moved FiberState/plugin-loader into it).
+      "@deepseek-ai/dsh-client-modules/client": [
+        "./packages/renderer/src/vendor-modules.d.ts"
+      ],
       "@dsh-chamber/dsh-chamber-client-ui-sidebar/client": [
         "./packages/renderer/src/ambient/chamber-client-plugins.d.ts"
       ],

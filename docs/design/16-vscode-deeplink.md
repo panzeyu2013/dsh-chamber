@@ -212,7 +212,7 @@ detectVscodeAvailability(platform): { available: boolean }
   `OpenInAppAction.module.css`）——`.split` 容器 28px 高、`0.5px solid
   var(--dsw-alias-border-l4)` 描边、`border-radius: 14px`、`overflow: hidden`；
   主按钮 15px mark（`padding: 5px 6px 5px 7px`），chevron 用设计系统
-  `IconChevronDownOutline14`（size 11，`padding: 5px 6px 5px 4px`），两半之间的
+  `IconChevronDownOutlineRegular`（size 11，`padding: 5px 6px 5px 4px`），两半之间的
   分隔线是 chevron 自己的 `border-left`（主按钮无边框）；hover 主题 tint 只在
   `:hover:not(:disabled)` 上生效，busy 态 `label-dimmed` + `cursor: wait`，error
   态 `inset 0 0 0 1px var(--dsw-alias-state-error-primary)`；不使用自造 focus 环
@@ -285,7 +285,7 @@ detectVscodeAvailability(platform): { available: boolean }
 4. `chamber-covered.ts` `CHAMBER_COVERED_IDS` 加 id；
 5. `chamber-covered.ts` `CHAMBER_COVERED_FACTORY_IDS` 加 id（三向锁步由 `assertCoveredFactoryLockstep` + CI host-graph.test.ts 强制）；
 6. `vite.config.mjs` alias 三行（`/`、`/client`、`/shared`）；
-7. 新包 `package.json`（`dsh.client` 声明 inject `['slots','locale']`）+ `tsconfig.json` + `vendor-modules.d.ts` ambient 面 +
+7. 新包 `package.json`（`dsh.client` 声明 inject `['slots','locale']`）+ `tsconfig.json` + 各包 `src/vendor-modules.d.ts` 存根（引用 repo 级 `types/vendor-modules.d.ts`）+
    `window.dshChamber.openIn/deepLink` ambient 镜像（参照 connections `global.d.ts` 模式）；
 8. 根 `package.json` 增专属 `typecheck:<插件>`（参照 `typecheck:git`）；
 9. `.github/workflows/ci.yml` typecheck 块增同一脚本；

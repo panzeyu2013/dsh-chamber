@@ -17,46 +17,21 @@ import { CHILD_LINE_MAX_CHARS } from '../../bounded-lines.ts'
 import { runDeps, spec, specWithHome } from '../support/ssh-provider-run-deps.ts'
 
 // --- design 13 §7.2 exec whitelist tests ---
-test('buildRemoteExecArgv accepts a whitelisted dsh plugin add/remove', () => {
-  assert.deepEqual(
-    buildRemoteExecArgv(spec('w1'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', '@scope/name@^1.2.3'] }),
-    ['dsh', 'plugin', '--profile', 'web', 'add', '@scope/name@^1.2.3'],
-  )
-  assert.deepEqual(
-    buildRemoteExecArgv(spec('w1'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'remove', 'name'] }),
-    ['dsh', 'plugin', '--profile', 'web', 'remove', 'name'],
-  )
-})
-test('buildRemoteExecArgv prepends DSH_HOME when remoteDshHome is set', () => {
-  assert.deepEqual(
-    buildRemoteExecArgv(specWithHome('w2', '/opt/dsh'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', 'name@1.2.3'] }),
-    ['DSH_HOME=/opt/dsh', 'dsh', 'plugin', '--profile', 'web', 'add', 'name@1.2.3'],
-  )
-})
-test('buildRemoteExecArgv refuses injection / non-registry specs', () => {
-  const bad = [
-    '-oProxyCommand=x',
-    'name;rm -rf /',
-    'name|cat /etc/passwd',
-    'name>out',
-    'name<in',
-    'name*',
-    "name'$(x)'",
-    'git+https://github.com/a/b',
-    'file:../pkg',
-    'name@>=1.0.0 <2.0.0',
-    'name@1.2.3 || 2.0.0',
-    'npm:alias@1.0.0',
+test('buildRemoteExecArgv refuses every dsh argv (the user plugin write surface is retired)', () => {
+  const dshArgvs: string[][] = [
+    ['plugin', '--profile', 'web', 'add', '@scope/name@^1.2.3'],
+    ['plugin', '--profile', 'web', 'remove', 'name'],
+    ['plugin', '--profile', 'web', 'update', 'name'],
+    ['--version'],
+    [],
   ]
-  for (const s of bad) {
-    assert.equal(buildRemoteExecArgv(spec('w3'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', s] }), null, `refuses ${JSON.stringify(s)}`)
+  for (const argv of dshArgvs) {
+    assert.equal(
+      buildRemoteExecArgv(spec('w1'), { op: 'exec', command: 'dsh', argv }),
+      null,
+      `refuses dsh ${JSON.stringify(argv)}`,
+    )
   }
-})
-test('buildRemoteExecArgv refuses wrong dsh argv structure', () => {
-  assert.equal(buildRemoteExecArgv(spec('w4'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'update', 'name'] }), null, 'refuses non-whitelisted action')
-  assert.equal(buildRemoteExecArgv(spec('w4'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add'] }), null, 'refuses missing spec')
-  assert.equal(buildRemoteExecArgv(spec('w4'), { op: 'exec', command: 'dsh', argv: ['other', '--profile', 'web', 'add', 'name'] }), null, 'refuses wrong subcommand')
-  assert.equal(buildRemoteExecArgv(spec('w4'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'remove', 'name@1.2.3'] }), null, 'remove refuses @version')
 })
 test('buildRemoteExecArgv allows only the two whitelisted cat paths (always under LC_ALL=C)', () => {
   // LC_ALL=C forces the REMOTE coreutils to English regardless of the remote
@@ -67,13 +42,12 @@ test('buildRemoteExecArgv allows only the two whitelisted cat paths (always unde
   assert.equal(buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: ['/etc/passwd'] }), null, 'refuses arbitrary cat path')
   assert.equal(buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: ['~/.dsh/profiles/web/package.json', 'extra'] }), null, 'refuses extra argv')
 })
-test('resolveWriteTarget allows the three prefixes and rejects traversal', () => {
-  assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh-chamber/plugins/pkg-abc123.tgz'), '~/.dsh-chamber/plugins/pkg-abc123.tgz')
+test('resolveWriteTarget allows the seed + patch prefixes and rejects traversal', () => {
   assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/package.json'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/package.json')
   assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')
   assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh/profiles/web/cordis.patch.yml'), '~/.dsh/profiles/web/cordis.patch.yml')
   assert.equal(resolveWriteTarget(spec('w6'), '/etc/passwd'), null, 'refuses arbitrary path')
-  assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh-chamber/plugins/../evil.tgz'), null, 'refuses dot-dot')
+  assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh-chamber/plugins/pkg-abc123.tgz'), null, 'the materialized-tarball dir is retired')
   assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh/profiles/web/package.json'), null, 'refuses non-whitelisted profile file')
 })
 test('resolveWriteTarget honors a custom remoteDshHome', () => {
@@ -94,11 +68,6 @@ test('resolveWriteTarget rejects traversal inside the seed subtree (shared SEED_
     'self-segment is refused too',
   )
 })
-test('buildRemoteExecArgv accepts the fixed printf $HOME lookup (materialize remote-home resolution)', () => {
-  assert.deepEqual(buildRemoteExecArgv(spec('w8'), { op: 'exec', command: 'printf', argv: ['%s', '$HOME'] }), ['printf', '%s', '$HOME'])
-  assert.equal(buildRemoteExecArgv(spec('w8'), { op: 'exec', command: 'printf', argv: ['%s', 'HOME'] }), null, 'refuses any argv other than the fixed form')
-  assert.equal(buildRemoteExecArgv(spec('w8'), { op: 'exec', command: 'printf', argv: ['$HOME', '%s'] }), null)
-})
 test('buildRemoteExecArgv allows the converged seed-subtree cat read (seed hash-skip)', () => {
   const seedPkg = '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/package.json'
   assert.deepEqual(buildRemoteExecArgv(spec('w9'), { op: 'exec', command: 'cat', argv: [seedPkg] }), ['LC_ALL=C', 'cat', seedPkg])
@@ -117,16 +86,21 @@ test('buildRemoteExecArgv allows the converged seed-subtree cat read (seed hash-
     'traversal beyond the seed subtree refused',
   )
 })
-test('buildRemoteExecArgv accepts the materialize file: add spec, constrained to the materialize dir', () => {
-  const ok = buildRemoteExecArgv(spec('w10'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', 'file:/home/u/.dsh-chamber/plugins/pkg-a1b2c3d4.tgz'] })
-  assert.deepEqual(ok, ['dsh', 'plugin', '--profile', 'web', 'add', 'file:/home/u/.dsh-chamber/plugins/pkg-a1b2c3d4.tgz'])
-  // the normalized scoped-name filename form
-  assert.ok(buildRemoteExecArgv(spec('w10'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', 'file:/home/u/.dsh-chamber/plugins/scope-name-a1b2.tgz'] }) !== null)
-  // everything else stays refused — plain registry add must still pass untouched
-  assert.ok(buildRemoteExecArgv(spec('w10'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', 'pkg@^1.0.0'] }) !== null)
-  assert.equal(buildRemoteExecArgv(spec('w10'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', 'file:/etc/passwd'] }), null, 'absolute path outside the materialize dir refused')
-  assert.equal(buildRemoteExecArgv(spec('w10'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', 'file:~/x.tgz'] }), null, '~ mid-word never accepted')
-  assert.equal(buildRemoteExecArgv(spec('w10'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', 'file:/tmp/evil.tgz'] }), null, 'outside .dsh-chamber/plugins refused')
+test('buildRemoteExecArgv refuses the retired materialize file: add spec (dsh argv is never whitelisted)', () => {
+  for (const specArg of [
+    'file:/home/u/.dsh-chamber/plugins/pkg-a1b2c3d4.tgz',
+    'file:/home/u/.dsh-chamber/plugins/scope-name-a1b2.tgz',
+    'pkg@^1.0.0',
+    'file:/etc/passwd',
+    'file:~/x.tgz',
+    'file:/tmp/evil.tgz',
+  ]) {
+    assert.equal(
+      buildRemoteExecArgv(spec('w10'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', specArg] }),
+      null,
+      `refuses dsh plugin add ${specArg}`,
+    )
+  }
 })
 
 // ============================================================================
@@ -196,7 +170,7 @@ test('a run timeout resolves without releasing askpass before the real child exi
     deps.runTimeoutMs = 5
     deps.disconnectGraceMs = 1_000
     const resultPromise = sshProvider.exec!(runSpec, 'run', deps, {
-      op: 'exec', command: 'printf', argv: ['%s', '$HOME'],
+      op: 'exec', command: 'cat', argv: ['~/.dsh/profiles/web/package.json'],
     })
     // Production timeout timers are intentionally unref'ed: wait on the
     // observable side effect (SIGTERM) instead of racing a fixed keep-alive
@@ -283,9 +257,10 @@ test('write-file: streams base64 over ssh stdin and verifies the read-back in th
   // corrupt this content with U+FFFD).
   const content = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xfe, 0x81, 0x82, 0x00, 0x01])
   const sha256 = createHash('sha256').update(content).digest('hex')
+  const target = '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/package.json'
   const result = await sshProvider.exec!(spec('wf1'), 'run', runDeps(remote.spawnFn), {
     op: 'write-file',
-    path: '~/.dsh-chamber/plugins/pkg-abc123.tgz',
+    path: target,
     contentBase64: content.toString('base64'),
     sha256,
   })
@@ -293,9 +268,9 @@ test('write-file: streams base64 over ssh stdin and verifies the read-back in th
   if (!result.ok) return
   // The fake host stored the decoded bytes verbatim; the write command was a
   // single fixed `mkdir -p … && base64 -d > …` shell template.
-  assert.ok(remote.files.get('~/.dsh-chamber/plugins/pkg-abc123.tgz')!.equals(content))
+  assert.ok(remote.files.get(target)!.equals(content))
   assert.equal(remote.spawns.length, 2, 'one write spawn + one cat read-back spawn')
-  assert.ok(remote.spawns[0].args[1].startsWith('mkdir -p ~/.dsh-chamber/plugins && base64 -d > '))
+  assert.ok(remote.spawns[0].args[1].startsWith('mkdir -p ~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph && base64 -d > '))
   // Verification is a streaming digest. Successful write-file calls return
   // status only instead of retaining/decoding a second copy of the payload.
   assert.equal(result.stdoutBytes, undefined)
@@ -304,7 +279,7 @@ test('write-file: streams base64 over ssh stdin and verifies the read-back in th
 test('write-file: a tampered read-back fails loud (never a fake success)', async () => {
   const remote = makeRemoteHost()
   const content = Buffer.from('hello')
-  const path = '~/.dsh-chamber/plugins/pkg-abc123.tgz'
+  const path = '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/package.json'
   remote.tamper.set(path, Buffer.from('tampered'))
   const result = await sshProvider.exec!(spec('wf2'), 'run', runDeps(remote.spawnFn), {
     op: 'write-file',
@@ -319,7 +294,7 @@ test('write-file: a payload sha256 mismatch is refused before any spawn', async 
   const remote = makeRemoteHost()
   const result = await sshProvider.exec!(spec('wf3'), 'run', runDeps(remote.spawnFn), {
     op: 'write-file',
-    path: '~/.dsh-chamber/plugins/pkg-abc123.tgz',
+    path: '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/package.json',
     contentBase64: Buffer.from('hello').toString('base64'),
     sha256: '0'.repeat(64),
   })
@@ -332,7 +307,7 @@ test('write-file: content over the 50MiB cap is refused before any spawn', async
   const big = Buffer.alloc(WRITE_FILE_MAX_BYTES + 1, 0x61)
   const result = await sshProvider.exec!(spec('wf4'), 'run', runDeps(remote.spawnFn), {
     op: 'write-file',
-    path: '~/.dsh-chamber/plugins/pkg-abc123.tgz',
+    path: '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/package.json',
     contentBase64: big.toString('base64'),
     sha256: createHash('sha256').update(big).digest('hex'),
   })

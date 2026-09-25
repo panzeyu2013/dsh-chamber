@@ -63,13 +63,16 @@
       "versionAnchor": "upstream",
       "classify": {
         "patched": {
+          "README.i18n.yaml": "[own-divergent] chamber 冻结说明面（不随 pin 追上游 README；当前字节是上游文本的 chamber 裁减/改写版，非逐字副本：en 删 installConnection 内部段、zh 另有数段改写；rc.2 文档更新有意不镜像）",
+          "README.md": "[own-divergent] chamber 冻结英文说明面（同 README.i18n.yaml；当前字节非上游逐字副本）",
+          "README.zh.md": "[own-divergent] chamber 冻结中文说明面（同 README.i18n.yaml；当前字节非上游逐字副本）",
           "package.json": "[patch-mod] 追加 chamber test 脚本 + 删除死发布面 files/main/types（本仓不构建 lib、无发布路径；exports 面保持上游 lib 目标供 renderer 按包名消费；版本行随上游推进）",
           "src/api-path.ts": "[patch-mod] 追加 resolveInstanceBasePath + 头部 chamber 说明（basePath 语义，design 05 §6）",
-          "src/client/connection.ts": "[patch-mod] 仅 erasableSyntaxOnly 显式字段改写（两个构造参数属性）+ 顶部 chamber 说明；其余逐字节上游（Batch 2 重锚：loopEpoch 守卫与 CONNECTION_BACKOFF_MAX_MS 导出退役，改由原生 reconnect/setNetworkAvailable）",
-          "src/client/index.ts": "[patch-mod] apply(ctx) 读 ctx.chamberBasePath → 载波装配（design 05 §6）+ SYSTEM_RESUME_EVENT/liveness 触发（design 14 D4）+ recovery-policy 转出（/client barrel）+ 移除上游 ?fixture 页面模式与夹具静态 import（src/client/fixture.ts 已 dropped）+ 头部 chamber 说明",
-          "src/client/rpc.ts": "[patch-mod] basePath 前缀拼装 + WebConnectionRpcOptions（chamber 选项对象）+ 头部 chamber 说明",
+          "src/client/connection.ts": "[patch-mod] erasableSyntaxOnly 显式字段改写（两个构造参数属性）+ 顶部 chamber 说明 + 若干上游 JSDoc 压缩删除；其余逐字节上游（Batch 2 重锚：loopEpoch 守卫与 CONNECTION_BACKOFF_MAX_MS 导出退役，改由原生 reconnect/setNetworkAvailable）",
+          "src/client/index.ts": "[patch-mod] rc.2 重锚：apply(ctx) 读 entry Context 的 chamberBasePath → installConnection({basePath}) → 载波装配（design 05 §6）+ SYSTEM_RESUME_EVENT/liveness 触发（design 14 D4）+ recovery-policy 转出；上游 rc.2 的 installConnection/ConnectionInstallOptions/transport.rpc 原样保留",
+          "src/client/rpc.ts": "[patch-mod] rc.2 重锚：WebConnectionRpcOptions + basePath 前缀拼装（stock 保持上游 document-relative 路由；rc.2 二进制响应/uplink 原样保留）",
           "tsconfig.client.json": "[patch-mod] chamber 构面：extends ../../tsconfig.json + vendor paths + files 列表（与上游 files 增量同步维护）",
-          "tsconfig.host.json": "[patch-mod] 同上（host 构面）"
+          "tsconfig.host.json": "[patch-mod] chamber 构面：extends ../../tsconfig.json + vendor paths + files 列表（随 rc.2 增补 src/operator-peer.ts、src/client/rpc.ts、src/client/random-uuid.ts）"
         },
         "own": {
           "scripts/test.mjs": "chamber 自有测试清单（按域分组的显式 manifest；verify:test-wiring 校验可达性）",
@@ -90,12 +93,10 @@
           "test/": "chamber 自有测试（api-path/carrier-assembly/liveness-triggers/client-apply + fixtures（含 schemastery/fixture/recovery-config 桩 loader））"
         },
         "dropped": [
-          "src/client/fixture.ts",
           "tests/",
           "tsdown.config.ts"
         ],
         "droppedNotes": {
-          "src/client/fixture.ts": "上游浏览器开发夹具（4037 行）：chamber 无 ?fixture 生产者，静态 import 会把夹具及其 dsh-llm 值导入拖进复合首屏 bundle",
           "tests/": "chamber 无 tsdown / 不镜像上游测试",
           "tsdown.config.ts": "chamber 无 tsdown / 不镜像上游测试"
         }
@@ -147,10 +148,17 @@
           "test/": "chamber 自有测试（boot-tolerance/boot-rows/configure-context + fixtures）"
         },
         "dropped": [
+          "src/apply-injections.ts",
+          "src/boot-client.ts",
+          "src/mount.ts",
           "tests/",
           "tsdown.config.ts"
         ],
-        "droppedNotes": {}
+        "droppedNotes": {
+          "src/apply-injections.ts": "rc.2 的 index 注入表解释器，服务 apps/web 的 __DSH_BOOT_READY__/Host rows；chamber 不消费（index.ts 刻意不导出 applyIndexInjections，package.json 也无 ./injections 子路径），注入面由 host boot graph + N-ctx kernel 接管",
+          "src/boot-client.ts": "rc.2 抽出的 bootClient/assertEntriesActive 组合；chamber kernel 在 src/boot.ts 内联 boot 建 entry+await+audit 半边并叠加 extraRows 合并 + boot-tolerance 容忍；entries.start/sync 协调半边在 chamber 无消费者（其唯一消费者 HMR 行被覆盖集 skip，见 chamber-covered.ts）",
+          "src/mount.ts": "rc.2 抽出的 mountClient；chamber kernel 的 mountApp 已含同一 uiRenderer inject 挂载并附 15s 超时兜底"
+        }
       },
       "authority": "upstream",
       "criteria": [
@@ -319,16 +327,16 @@
         "patched": {
           "README.md": "[own-divergent] chamber fork 说明（动机/形状/深引 frame 面），非上游镜像",
           "package.json": "[patch-mod] chamber 自有包名/版本/测试脚本/deps·peerDeps 面（上游发布面与类型入口不复制；版本行不随上游）",
-          "src/client/index.ts": "[patch-mod] 上游 client index 逐字副本上的 chamber 增量：store 换本包 stores.ts（共享+持久侧栏宽度，design 06）+ SIDEBAR_AUTO_COLLAPSE/collapsedOf 派生 + ctx.layoutFacts 服务面（design 17 §18）+ 根 standard prop chamberFileApiBase（design 09 §3.6）+ 活动视图门控的文档级 theme 投影；frame/service/columns/theme-presenter 深引 vendor 源，inject 面、注册顺序与 priority 不变",
+          "src/client/index.ts": "[patch-mod] 上游 client index 逐字副本上的 chamber 增量：store 换本包 stores.ts（共享+持久侧栏宽度，design 06）+ 根 standard prop chamberFileApiBase（design 09 §3.6）+ 活动视图门控的文档级 theme 投影；frame/service/columns/theme-presenter 深引 vendor 源，inject 面、注册顺序与 priority 不变",
           "src/client/stores.ts": "[patch-mod] vendor 每 boot 未持久 store → 本包共享/持久 store：view-prefs 播种与写回（150ms 尾随去抖）+ 跨 boot 订阅采纳（关闭态不回开/同值不循环）；右栏与窄屏覆盖保持 transient（design 06）",
           "tsconfig.json": "[patch-mod] chamber 构面：extends ../../tsconfig.json + rootDir ../.. + 排除 vendor；上游 project references 不镜像"
         },
         "own": {
           "scripts/test.mjs": "chamber 自有测试清单（按域分组的显式 manifest；verify:test-wiring 校验可达性）",
           "src/client/document-theme.ts": "chamber 活动视图门控的文档级主题投影（design 06 §4.6；teardown 不回撤、未知活动源 fail-open）",
-          "src/client/store-core.ts": "chamber 布局 store 纯核心工厂（注入式 env；八动作 + collapsedOf 派生，node 可直测）",
+          "src/client/store-core.ts": "chamber 布局 store 纯核心工厂（注入式 env；八动作，node 可直测）",
           "src/client/theme-cache.ts": "chamber 页面级按源主题快照缓存 + 冷切换 prime 决策（design 06 §4.6）",
-          "src/vendor-modules.d.ts": "chamber ambient vendor 面（本包全部 dsh specifier；vendor 源树无构建类型输出）"
+          "src/vendor-modules.d.ts": "repo 级共享 ambient vendor 面的 /// <reference> 存根；全部 dsh specifier 面已合并到 types/vendor-modules.d.ts（vendor 源树无构建类型输出）"
         },
         "ownPrefix": [
           "test/"
@@ -379,9 +387,7 @@
       ],
       "symbols": [
         "src/client/document-theme.ts#createDocumentThemeProjector",
-        "src/client/index.ts#LayoutFacts",
         "src/client/index.ts#apply",
-        "src/client/store-core.ts#collapsedOf",
         "src/client/store-core.ts#createLayoutStore",
         "src/client/stores.ts#trackLayoutInstance",
         "src/client/theme-cache.ts#resolveSourceThemeCache"

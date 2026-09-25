@@ -243,9 +243,10 @@ export default function InstanceView({
         openInFlight: observed.openInFlight,
         resyncInFlight: observed.resyncInFlight,
         resyncAvailable: observed.resyncAvailable,
-        // The header heals an error through the stage move; when that route is
-        // unusable (address-only target / masked gap), the page's own resync is
-        // the automatic lever the delivery owner may dispatch.
+        // The header heals an error through the concrete per-session resync;
+        // when that route is unusable (target not on the presented main view, or
+        // no reachable face), the page's own resync is the automatic lever the
+        // delivery owner may dispatch.
         healRoute: observed.healRoute,
       }
       const openStallActive = openStallSymptomActive(openEvidence)

@@ -61,6 +61,15 @@ import * as UiDockkit from '@deepseek-ai/dsh-client-ui-dockkit'
 import * as ApiSessionController from '@deepseek-ai/dsh-api-session-controller/client'
 import * as ApiWorkspaceController from '@deepseek-ai/dsh-api-workspace-controller/client'
 import * as Locale from '@deepseek-ai/dsh-client-locale/client'
+// First-screen since rc.2: the covered ui-layout/ui-workspace families inject
+// `shortcuts`, and this package is its only provider. UNIQUE export shape: the
+// client entry default-exports the service CLASS (no namespace-level `apply`),
+// so the composite mounts the default binding the way the official loader's
+// `exports.default ?? exports` normalization does, and the module-table factory
+// returns that same class (the official row's `module.exports`). Left on the
+// host graph it was a reverse dependency: a degraded graph channel stranded
+// those fibers PENDING while boot reported success (design 09 §3.2).
+import ShortcutsService from '@deepseek-ai/dsh-client-shortcuts/client'
 import * as UiTheme from '@deepseek-ai/dsh-client-ui-theme/client'
 // chamber ui-layout fork replaces the official layout: loading both would register a
 // second 'root' at priority 0 and throw the one-declarer rule. The fork shares and
@@ -69,8 +78,8 @@ import * as UiLayout from '@dsh-chamber/dsh-chamber-client-ui-layout/client'
 import * as UiSidebar from '@dsh-chamber/dsh-chamber-client-ui-sidebar/client'
 import * as UiGit from '@dsh-chamber/dsh-chamber-client-ui-git/client'
 import * as UiOpenIn from '@dsh-chamber/dsh-chamber-client-ui-open-in/client'
-// Official ui-settings (settingsScope / settingsSchema provider, SettingsRoot occupant)
-// stays FIRST-SCREEN: locale and ui-theme root-inject `settingsScope`, so deferring it
+// Official ui-settings (configForms / settingsSchema provider, SettingsRoot occupant)
+// stays FIRST-SCREEN: locale and ui-theme root-inject `configForms`, so deferring it
 // would strand their fibers and the whole shell. Its SECTION families and the chamber
 // settings shell are deferred instead (nothing first-screen injects them).
 import * as UiSettings from '@deepseek-ai/dsh-client-ui-settings/client'
@@ -383,12 +392,13 @@ export function apply(ctx: Context): void {
   // probes exactly that derived union (upstream reads the same declaration off `fiber.inject`);
   // the recorded id is the mount identity. The deferred cluster extends the same roster as
   // chunks mount and re-arms one pass.
-  // Deferred-only members (no first-screen declaration) — 11, each provided by first-screen
-  // composite plugins only, never by another deferred family: `remote.goals`, `remote.skills`,
-  // `remote.messageFeedback`, `remote.sessionFeedback`, `remote.agentPresets`,
-  // `remote.credentials`, `remote.llm`, `remote.pluginInventory`, `remote.fileReferences`,
-  // `remote.sessionReferenceResolver`, `settingsSchema`. Without the re-arm such a member
-  // would pend with no diagnostic, the silent gap this probe closes.
+  // Deferred-only members (no first-screen declaration) — 16, each provided by first-screen
+  // composite plugins only, never by another deferred family: `jobs`, `modules`, `remote.goals`,
+  // `remote.skills`, `remote.messageFeedback`, `remote.sessionFeedback`, `remote.agentPresets`,
+  // `remote.credentials`, `remote.llm`, `remote.pluginInventory`, `remote.permissionPresets`,
+  // `remote.fileReferences`, `remote.sessionReferenceResolver`, `resources`, `sidebarRightTabs`,
+  // `settingsSchema`. Without the re-arm such a member would pend with no diagnostic, the
+  // silent gap this probe closes.
   const registered: RegisteredPluginInject[] = []
   /** Probe re-arm hand-off; filled when the probe effect installs. */
   const probeRearm: ProbeRearmSlot = {}
@@ -428,6 +438,9 @@ export function apply(ctx: Context): void {
   // Covers the host-graph row: conversation + api-session-controller root-inject `fileUpload`.
   register('@deepseek-ai/dsh-client-file-upload', FileUpload)
   register('@deepseek-ai/dsh-client-locale', Locale)
+  // Provides ctx.shortcuts for the covered layout/workspace families; the
+  // default class carries the static inject face the roster reads.
+  register('@deepseek-ai/dsh-client-shortcuts', ShortcutsService)
   register('@deepseek-ai/dsh-client-ui-theme', UiTheme)
   register('@dsh-chamber/dsh-chamber-client-ui-layout', UiLayout)
   register('@dsh-chamber/dsh-chamber-client-ui-sidebar', UiSidebar)
@@ -598,6 +611,10 @@ const COVERED_FACTORIES: ReadonlyArray<readonly [id: string, factory: ClientPlug
   ['@deepseek-ai/dsh-api-session-controller', coveredFactory(ApiSessionController)],
   ['@deepseek-ai/dsh-api-workspace-controller', coveredFactory(ApiWorkspaceController)],
   ['@deepseek-ai/dsh-client-locale', coveredFactory(Locale)],
+  // The default class IS the official row's module.exports (tsdown emits
+  // `module.exports = ShortcutsService`), so the require edge gets that identity
+  // rather than a namespace wrapper.
+  ['@deepseek-ai/dsh-client-shortcuts', coveredFactory(ShortcutsService)],
   ['@deepseek-ai/dsh-client-ui-theme', coveredFactory(UiTheme)],
   ['@dsh-chamber/dsh-chamber-client-ui-layout', coveredFactory(UiLayout)],
   ['@dsh-chamber/dsh-chamber-client-ui-sidebar', coveredFactory(UiSidebar)],

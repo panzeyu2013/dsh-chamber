@@ -13,15 +13,25 @@ export class AppWebEntry {
   run(): Promise<void>
   dispose(): Promise<void>
   readonly bootError: string | undefined
-  // sessions is absent while the fixture models the pre-activation window
+  // Each face is absent while the fixture models its pre-activation window
   // (runtimeCtx present, child-fiber service not yet registered) — shell.ts
-  // treats that as a transient poll state.
+  // treats both as transient poll states.
   readonly runtimeCtx: undefined | {
     loader?: { entries(): ReadonlyArray<{ options: { name: string }; fiber?: { state: number } }> }
     sessions?: {
       list: { getSnapshot(): { byId: Record<string, unknown> } }
-      open(sessionId: string): void
+      /** rc.2 open path: an owned reference the caller must release. */
+      retain(target: string, options: { source: string }): {
+        readonly sessionId: string
+        release(): void
+      }
     }
+    /**
+     * The cordis service-lookup face: the shell reads the official view owner
+     * (ui-workspace) through `get('uiWorkspace', false)` only — never a direct
+     * property (the fixture's direct getter throws).
+     */
+    reflect?: { get(name: string, strict?: boolean): unknown }
   }
 }
 
@@ -54,8 +64,20 @@ export function __testQueueRunGate(label: string): { started: Promise<void>; rel
 export function __testQueueDisposeGate(): { started: Promise<string>; release(): void; fail(error: Error): void }
 export function __testEntryStates(): Array<{ label: string; disposed: boolean }>
 export function __testOpenedSessions(): Array<{ label: string; sessionId: string }>
+/** Every retain call with its source — the rc.2 open evidence. */
+export function __testRetainCalls(): Array<{ label: string; sessionId: string; source: string }>
+/** Released references in order (replaced reference on a switch, last on teardown). */
+export function __testReleasedSessions(): Array<{ label: string; sessionId: string }>
+/** The session one entry currently presents. */
+export function __testPresentedSession(label: string): string | undefined
 export function __testSetSessionsListed(value: boolean): void
 export function __testSetSessionsAvailable(value: boolean): void
+/** Simulate the ui-workspace view owner activating after the sessions face. */
+export function __testSetNavigationAvailable(value: boolean): void
+/** Make the view-owner reflect lookup itself throw (the hostile-proxy arm). */
+export function __testSetNavigationReadError(value: unknown | undefined): void
+/** Remove the whole reflect face from the runtimeCtx (a host without the lookup layer). */
+export function __testSetReflectAvailable(value: boolean): void
 export function __testSetSessionsReadError(value: unknown | undefined): void
 export function __testSetSessionsSnapshotError(value: unknown | undefined): void
 export function __testSetSessionsOpenError(value: unknown | undefined): void

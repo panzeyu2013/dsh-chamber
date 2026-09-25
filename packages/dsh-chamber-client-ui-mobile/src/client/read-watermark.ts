@@ -4,8 +4,9 @@
  * Reading a session on the gateway-hosted phone client must clear the desktop's
  * completed-unread dot for it. Both surfaces share ONE comparison domain — the
  * gateway's session-state mirror — which the phone never told the reader caught
- * up, so: the current session id comes from the OFFICIAL session list service
- * (the mobile DOM carries no session-id anchor); the watermark comes from the
+ * up, so: the current session id comes from the OFFICIAL session list service —
+ * the presented row's `retainedBy.mainView` (the mobile DOM carries no
+ * session-id anchor); the watermark comes from the
  * GATEWAY MIRROR row (GET /chamber/session-state, max(updatedAt, completedAt)),
  * NEVER the phone's wall clock (marks and the unread comparison live in the
  * host domain only); the mark is POSTed to /chamber/session-state/read with a
@@ -16,6 +17,7 @@
  * a dependency of this one; nothing here throws into the shell.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import { presentedSessionId, type SessionListSnapshotLoose } from './session-presentation.ts'
 
 /** Layout-independent slice of one mirror row we need (host domain). */
 export interface ReadWatermarkRow {
@@ -26,7 +28,8 @@ export interface ReadWatermarkRow {
 /** The official session list face (structural slice; no provider types needed). */
 export interface OfficialSessionsFace {
   list?: {
-    getSnapshot?: () => { current?: string; sessions?: Array<{ sessionId?: string } & ReadWatermarkRow> } | undefined
+    /** The list-store snapshot; presentation is read through the shared helper. */
+    getSnapshot?: () => SessionListSnapshotLoose | undefined
     subscribe?: (listener: () => void) => (() => void) | undefined
   }
 }
@@ -146,9 +149,8 @@ export interface ReadWatermarkDeps {
  * (gateway mirror) → mark. Returns the reported session id or null.
  */
 export async function reportCurrentSession(deps: ReadWatermarkDeps): Promise<string | null> {
-  const snapshot = deps.sessions?.list?.getSnapshot?.()
-  const current = snapshot?.current
-  if (typeof current !== 'string' || current === '') return null
+  const current = presentedSessionId(deps.sessions?.list?.getSnapshot?.())
+  if (current === undefined) return null
   let row: ReadWatermarkRow | undefined
   try {
     const response = await deps.fetchImpl((deps.base ?? '') + SNAPSHOT_PATH + '?clientId=' + encodeURIComponent(deps.getClientId()), { method: 'GET' })

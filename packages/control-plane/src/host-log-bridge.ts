@@ -14,11 +14,9 @@
  * can evict the readiness line from disk sooner — the token itself is captured in memory
  * by the scanner, never re-read from the log.
  *
- * The plugin is NOT mounted through `LoggerService.exporter()`: that helper's disposer
- * deletes the CURRENT counter, not its own id, so unloading any exporter's fiber removes
- * whichever registered last. It registers straight into the public `exporters` Map under
- * a Symbol key (counter keys are numbers) and removes exactly its own key on unload;
- * `ctx.logger.exporter()` remains the fallback without that Map.
+ * The plugin mounts through `LoggerService.exporter()`, the documented invite API:
+ * since 0.1.7 its disposer deletes the id it registered, so unloading any exporter's
+ * fiber no longer removes the newest registration (the pre-0.1.7 counter bug).
  *
  * `DSH_CHAMBER_HOST_LOG_LEVEL` switches it: unset/empty/off/0/false/no ⇒ no bridge row and
  * no generated file (the overlay stays byte-identical to the disabled shape); a level name
@@ -214,35 +212,25 @@ export default function chamberHostLogBridge(ctx) {
           } catch { /* diagnostics must never break the host */ }
         },
       }
-      const exporters = ctx.logger && ctx.logger.exporters
-      if (exporters !== null && exporters !== undefined && typeof exporters.set === 'function') {
-        // Register DIRECTLY: logger.exporter() would arm the counter disposer
-        // described above, which removes the newest registration whenever ANY
-        // exporter fiber unloads (including ours). A Symbol key never collides
-        // with the numeric counter keys, so the upstream bug cannot reach our
-        // entry and our removal cannot reach anyone else's.
-        const key = Symbol('chamber-host-log-bridge')
-        // Deliberately NOT wrapped: a throwing registration must propagate so the
-        // caller's mount mark stays unset and a later apply can retry (the outer
-        // try/catch keeps the host boot alive either way).
-        exporters.set(key, sink)
-        return function () {
-          try { exporters.delete(key) } catch { /* ignore */ }
-        }
-      }
-      // Host without the public exporter map: the documented API is all there is.
+      // The documented invite API owns registration and removal: since 0.1.7
+      // LoggerService.exporter() returns its own effect disposer, which deletes
+      // the id IT registered (the pre-0.1.7 counter bug is gone). That disposer
+      // is the whole cleanup path, so the returned function calls it directly.
+      // Deliberately NOT wrapped: a throwing registration must propagate so the
+      // caller's mount mark stays unset and a later apply can retry (the outer
+      // try/catch keeps the host boot alive either way).
       const returned = ctx.logger.exporter(sink)
-      return function () {
-        try { if (typeof returned === 'function') returned() } catch { /* ignore */ }
-      }
+      return function () { returned() }
     }
     // The registration is owned by THIS fiber's effect: a loader remount
-    // (patchReload: 'live') disposes the effect and re-runs the body, and the
-    // effect's disposer removes exactly our own exporter key, so no run can
+    // disposes the effect and re-runs the body, and the
+    // effect's disposer removes exactly our own exporter entry, so no run can
     // leave a second exporter behind. MOUNTED is cleared by that same disposer:
     // a same-fiber reload (Fiber.update re-runs the plugin with the SAME ctx)
     // disposes the effect first, so marking ownership outside the effect would
-    // suppress the re-mount and silently stop the bridge.
+    // suppress the re-mount and silently stop the bridge. Every cordis Context
+    // carries effect(), so the bridge registers through it unconditionally; the
+    // outer try/catch is the only containment a broken bridge needs.
     const run = function () {
       // Mark ONLY after a successful mount: effect() asserts the fiber is active
       // BEFORE it runs this callback (fiber.ts), so a throw here means nothing
@@ -255,8 +243,7 @@ export default function chamberHostLogBridge(ctx) {
         dispose()
       }
     }
-    if (typeof ctx.effect === 'function') ctx.effect(run, 'chamber host log bridge exporter')
-    else run()
+    ctx.effect(run, 'chamber host log bridge exporter')
     process.stderr.write('[chamber] host log bridge active (level=' + LEVEL_NAME + ')\\n')
   } catch { /* a broken bridge must never fail the host boot */ }
 }

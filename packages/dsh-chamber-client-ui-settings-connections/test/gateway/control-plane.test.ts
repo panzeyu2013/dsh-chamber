@@ -10,11 +10,7 @@ import {
   cp,
   gatewayChamberSeedCache,
   gatewayInstalled,
-  gatewayPluginApply,
   gatewayPluginSync,
-  gatewayPluginUndo,
-  gatewayTasks,
-  waitForGatewayOpTerminal,
   type GatewayInstalledProjection,
 } from '../../src/client/control-plane.ts'
 import { gatewayReadFenceText, type GatewayReadFenceKey } from '../../src/client/managed-restart.ts'
@@ -105,9 +101,14 @@ test('cp.gatewayHostLogs: a gateway refusal surfaces loud as an ApiError with st
  * projection and the readManifest (installed) wrapper over the per-instance
  * proxy, plus the gateway_plugin_sync IPC wrapper (design 21 §6.5). ---- */
 
-const installedOkBody = {
-  ok: true, dependencies: { '@deepseek-ai/dsh-demo': '^1.0.0', '@dsh-chamber/picked': 'file:<hidden>' },
-  bundles: ['@dsh-chamber/picked'], profileExists: true,
+const installedOkBody: GatewayInstalledProjection = {
+  ok: true,
+  dependencies: { '@deepseek-ai/dsh-demo': '^1.0.0', '@dsh-chamber/picked': 'file:<hidden>' },
+  rows: [
+    { name: '@deepseek-ai/dsh-demo', spec: '^1.0.0', version: null, role: 'third-party', protected: false },
+    { name: '@dsh-chamber/picked', spec: 'file:<hidden>', version: null, role: 'layer', protected: false },
+  ],
+  profileExists: true,
 }
 
 test('gatewayChamberSeedCache: GETs the seed cache through the instance proxy', async () => {
@@ -292,106 +293,6 @@ test('gatewayInstalled: an aborted read stays single-shot (an unmounted dialog f
   }
 })
 
-const tasksBody = {
-  ok: true, busy: false,
-  tasks: [
-    { id: 'op-1', ts: 1753000002000, kind: 'install', name: 'pkg-a', spec: 'pkg-a@^1.0.0', preImage: 'backups/op-1', initiator: 'my-desktop', status: 'ok', restarted: 'ok' },
-    { id: 'op-2', ts: 1753000001000, kind: 'remove', name: 'pkg-b', preImage: null, initiator: 'another-desktop', status: 'failed', error: 'pnpm refused' },
-  ],
-  deferred: [{ id: 'intent-1', ts: 1753000003000, kind: 'install', name: 'pkg-c', spec: 'pkg-c@^2.0.0', initiator: 'my-desktop' }],
-}
-
-test('gatewayTasks: GETs the task projection (journal + deferred + busy) through the instance proxy', async () => {
-  const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
-  const stub = stubFetch(200, tasksBody)
-  try {
-    const result = await gatewayTasks('gw-prod')
-    assert.equal(stub.calls.length, 1)
-    assert.equal(stub.calls[0]!.url, 'http://127.0.0.1:17500/api/i/gateway-gw-prod/chamber/plugins/tasks')
-    assert.deepEqual(result, tasksBody)
-  } finally {
-    stub.restore()
-    restoreOrigin()
-  }
-})
-
-/* ---- design 21 §3 undoJournal / §6.8 r2: POST /chamber/plugins/undo ---- */
-
-test('gatewayPluginUndo: POSTs the id-only undo through the instance proxy and returns the accepted opId', async () => {
-  const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
-  const stub = stubFetch(202, { accepted: true, opId: 'op-undo' })
-  try {
-    const result = await gatewayPluginUndo('gw-prod')
-    assert.deepEqual(result, { ok: true, opId: 'op-undo' })
-    assert.equal(stub.calls.length, 1)
-    assert.equal(stub.calls[0]!.url, 'http://127.0.0.1:17500/api/i/gateway-gw-prod/chamber/plugins/undo')
-    assert.equal(stub.calls[0]!.init.method, 'POST')
-  } finally {
-    stub.restore()
-    restoreOrigin()
-  }
-})
-
-test('gatewayPluginUndo: a refusal keeps the server {error, code} verbatim, never an ok shape', async () => {
-  const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
-  const stub = stubFetch(409, { error: 'no undoable plugin operation is recorded', code: 'no_undoable_op' })
-  try {
-    const result = await gatewayPluginUndo('gw-prod')
-    assert.equal(result.ok, false)
-    if (!result.ok) {
-      assert.equal(result.code, 'no_undoable_op')
-      assert.equal(result.error, 'no undoable plugin operation is recorded')
-    }
-  } finally {
-    stub.restore()
-    restoreOrigin()
-  }
-})
-
-test('waitForGatewayOpTerminal: polls the task projection until the op settles (ok/failed carry their own error)', async () => {
-  const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
-  const pendingBody = { ok: true, busy: true, tasks: [
-    { id: 'op-undo', ts: 2, kind: 'undo', name: 'pkg', preImage: 'op-undo', status: 'pending' },
-  ], deferred: [] }
-  const okBody = { ok: true, busy: false, tasks: [
-    { id: 'op-undo', ts: 2, kind: 'undo', name: 'pkg', preImage: 'op-undo', undoOf: 'op-1', status: 'ok' },
-  ], deferred: [] }
-  const stub = stubFetchSequence([{ status: 200, body: pendingBody }, { status: 200, body: okBody }])
-  try {
-    const terminal = await waitForGatewayOpTerminal('gw-prod', 'op-undo', { pollMs: 0, sleep: async () => {} })
-    assert.deepEqual(terminal, { status: 'ok', error: null })
-    assert.equal(stub.calls.length, 2, 'one pending read then the terminal read')
-  } finally {
-    stub.restore()
-    restoreOrigin()
-  }
-})
-
-test('waitForGatewayOpTerminal: an op that never settles inside the bound answers timeout (never a success claim)', async () => {
-  const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
-  const stub = stubFetchSequence([{ status: 200, body: { ok: true, busy: true, tasks: [
-    { id: 'op-undo', ts: 2, kind: 'undo', name: 'pkg', preImage: 'op-undo', status: 'pending' },
-  ], deferred: [] } }])
-  try {
-    const terminal = await waitForGatewayOpTerminal('gw-prod', 'op-undo', { pollMs: 0, timeoutMs: 0, sleep: async () => {} })
-    assert.deepEqual(terminal, { status: 'timeout' })
-  } finally {
-    stub.restore()
-    restoreOrigin()
-  }
-})
-
-test('gatewayTasks: a non-2xx refusal throws the shared ApiError, never a silent projection', async () => {
-  const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
-  const stub = stubFetch(503, { error: 'quarantined', code: 'quarantined' })
-  try {
-    await assert.rejects(gatewayTasks('gw-prod'), (err: unknown) => (err as { status?: number }).status === 503)
-  } finally {
-    stub.restore()
-    restoreOrigin()
-  }
-})
-
 /** Install a `window.dshChamber.desktopSsh` stub for the duration of `run`. */
 async function withDesktopSsh<T>(desktopSsh: Record<string, unknown>, run: () => Promise<T>): Promise<T> {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window')
@@ -405,29 +306,7 @@ async function withDesktopSsh<T>(desktopSsh: Record<string, unknown>, run: () =>
   }
 }
 
-test('gatewayPluginApply: forwards the RAW registry id and the add/remove/deferRestart input verbatim', async () => {
-  const seen: Array<{ id: string; input: unknown }> = []
-  const desktopSshStub = {
-    gateway_plugin_apply: async (id: string, input: unknown): Promise<unknown> => {
-      seen.push({ id, input })
-      return id === 'gw-prod'
-        ? { ok: true, installed: [], removed: ['pkg-a'], restarted: true }
-        : { ok: false, error: 'no active gateway registration' }
-    },
-  }
-  await withDesktopSsh(desktopSshStub, async () => {
-    const executed = await gatewayPluginApply('gw-prod', { add: [], remove: ['pkg-a'], deferRestart: false })
-    assert.deepEqual(executed, { ok: true, installed: [], removed: ['pkg-a'], restarted: true })
-    const refused = await gatewayPluginApply('gw-missing', { add: [], remove: ['pkg-a'] })
-    assert.deepEqual(refused, { ok: false, error: 'no active gateway registration' })
-    assert.deepEqual(seen, [
-      { id: 'gw-prod', input: { add: [], remove: ['pkg-a'], deferRestart: false } },
-      { id: 'gw-missing', input: { add: [], remove: ['pkg-a'] } },
-    ])
-  })
-})
-
-test('gatewayPluginSync: forwards the RAW registry id and passes the ok/error unions through', async () => {
+test('gatewayPluginSync (chamber provisioning): forwards the RAW registry id and passes the ok/error unions through', async () => {
   const seen: string[] = []
   const desktopSshStub = {
     gateway_plugin_sync: async (id: string): Promise<unknown> => {

@@ -14,8 +14,8 @@ import { Fragment, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { SESSION_SEARCH_RESULT_LIMIT } from '@deepseek-ai/dsh-api-session-controller/client'
 import {
-  IconBranchOutline16, IconChevronRightOutline14, IconEditOutline16, IconEllipsisOutline16,
-  IconFolderOpenOutline16, IconPlusOutline16, IconTrashOutline16, Menu,
+  IconBranchOutlineRegular, IconChevronRightOutlineRegular, IconEditOutlineRegular, IconEllipsisOutlineRegular,
+  IconFolderOpenOutlineRegular, IconPlusOutlineRegular, IconTrashOutlineRegular, Menu,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { RowHoverCard } from './RowHoverCard.tsx'
 import { chamberBridge, type ChamberServerAggregate, type ChamberServerWorkspace } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
@@ -612,12 +612,12 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                   toggleWorkspaceFold(server.id, workspace.id)
                                 }}
                               >
-                                <IconChevronRightOutline14 size={14} className={cc.foldChevron} />
+                                <IconChevronRightOutlineRegular size={14} className={cc.foldChevron} />
                                 {isWorktree && (
-                                  <IconBranchOutline16 size={14} className={cc.foldBranch} />
+                                  <IconBranchOutlineRegular size={14} className={cc.foldBranch} />
                                 )}
                                 {!isWorktree && workspace.ungrouped !== true && (
-                                  <IconFolderOpenOutline16 size={14} className={cc.foldFolder} />
+                                  <IconFolderOpenOutlineRegular size={14} className={cc.foldFolder} />
                                 )}
                               </button>
                               {renamingThisWorkspace ? (
@@ -682,7 +682,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                           onNewSession(server, workspace.id)
                                         }}
                                       >
-                                        <IconPlusOutline16 size={16} />
+                                        <IconPlusOutlineRegular size={16} />
                                       </button>
                                       {!isWorktree && (
                                       <Menu
@@ -712,14 +712,14 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                           {
                                             id: 'rename',
                                             label: t('action.rename'),
-                                            icon: <IconEditOutline16 size={14} />,
+                                            icon: <IconEditOutlineRegular size={14} />,
                                           },
                                           {
                                             id: 'delete',
                                             // Upstream's copy for the workspace delete entry.
                                             label: t('delete.workspace'),
                                             danger: true,
-                                            icon: <IconTrashOutline16 size={14} />,
+                                            icon: <IconTrashOutlineRegular size={14} />,
                                           },
                                         ]}
                                         anchor={(
@@ -736,7 +736,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                               toggleMenu(workspaceKey)
                                             }}
                                           >
-                                            <IconEllipsisOutline16 size={16} />
+                                            <IconEllipsisOutlineRegular size={16} />
                                           </button>
                                         )}
                                       />

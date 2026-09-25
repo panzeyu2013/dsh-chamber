@@ -1,11 +1,12 @@
 # 20 · open-in 打开面（chamber fork 取代官方两份 · 本地全量应用 + 远程 VS Code）
 
 > **契约（fork & supersede）**——本文是「统一打开面」的契约与形态。
-> 官方两份 **chamber 一份都不使用**：宿主半（`@deepseek-ai/dsh-host-open-in-app`）**fork 进本仓**
-> 成 seed 包在实例内服务本机目录/图标/拉起；客户端半（`@deepseek-ai/dsh-client-ui-open-in-app`）
-> 由 `@dsh-chamber/dsh-chamber-client-ui-open-in` 承接并做成**官方超集**（§7）。纪律与
-> sidebar（design 05 §2.2）、ui-layout fork（design 06）同款：**官方包在 vendor 保持原样、
-> 官方行不进启动图/永不被调用**。
+> 官方**宿主半**（`@deepseek-ai/dsh-host-open-in-app`）**fork 进本仓**成 seed 包在实例内服务本机
+> 目录/图标/拉起；官方**客户端半**（`@deepseek-ai/dsh-client-ui-open-in-app`）自 0.1.7 起随官方行
+> **加载**（D2：右栏文档文件级 open/reveal 与 deliverables 文件动作走 per-instance session Remote），
+> 但其 header 席位在本页 inert（apps/icon/open 探针是 document-relative，落在控制面 SPA origin）；
+> 目录打开入口仍由 `@dsh-chamber/dsh-chamber-client-ui-open-in` 承接并做成**官方超集**（§7）。
+> 纪律与 sidebar（design 05 §2.2）、ui-layout fork（design 06）同款：**官方包在 vendor 保持原样**。
 >
 > 本文是设计 16（VS Code 深链）的同族演进：把"会话头部 utilities 行的 vscode 按钮"升级为
 > **通用打开注册表**；vscode provider 与其深链/意图/IPC 纪律仍以 design 16 为准。
@@ -39,7 +40,7 @@
 
 - 不依赖官方的 SSH 启动休眠（`launchedThroughSsh`）——本地目录可用性**与启动标记解耦**，故
   `spawn` 环境变量、`webProfileArgs`、picker pin overlay **一行都不改**（§2.2）；
-- 不把官方客户端半拉进复合壳（不需 covered/factory、vendor 补丁、subpath seam）；
+- 不为目录打开拉进官方客户端半（不需要它的 covered 能力、vendor 补丁或 subpath seam；它随官方行加载只为文件级席位，见 §2.2）；
 - 控制面零执行面（逐字代理 + cookie 注入），主进程不持有本地启动面（无 `stat` / `openPath` /
   `showItemInFolder` / `shell.openPath`）；
 - v1 不做（分批见 §7.2 与 `docs/progress/todo/open-in-superset-batches.md`）：远端宿主侧打开（C 档
@@ -64,7 +65,7 @@
    `iconUrl` 是根相对路径（`src/client/index.ts:50`）——N-ctx 壳下页面 origin 是控制面 ⇒ 探针/图标
    404 ⇒ 只有拉进复合（covered + factory）+ 构建期 vendor 补丁与 subpath seam 才能修好。
 3. **效果依赖实例 runtime 的版本**：官方 open-in 行自 **dsh-v0.1.3-alpha.2** 才存在
-   （`packages/renderer/src/chamber-covered.ts:216`）；本仓**运行时锚与源码 pin 都已是 0.1.5-rc.2**
+   （`packages/renderer/src/chamber-covered.ts:216`）；本仓**运行时锚与源码 pin 都已是 0.1.7-rc.2**
    （单一来源 `packages/desktop/vendor/dsh/pnpm-lock.yaml`，`bundle-dsh.mjs:79` 兜底同值）⇒ 非主要理由，
    但**旧内置 runtime 仍缺该行**（`/Applications/dsh-chamber.app` v0.2.4 携带
    `@deepseek-ai/dsh@0.1.2-rc.1`）。fork & supersede 不依赖该行。
@@ -80,9 +81,10 @@
   §3.1/§3.9、design 05 §4）。本文不新增/不删除任何 spawn env、CLI 参数或 cordis overlay 行（seed 行
   除外，见 §6.2）；第三消费者（实例侧官方 open-in 目录）仍在，但**无人调用官方那一份**，不再是偏差。
 - **官方宿主行保持原样挂载但不被调用**（目录解析惰性，`resolutions ??=`，
-  `host/open-in-app/src/index.ts:155-157`，零成本；不引入 overlay `disabled:` 能力）；**官方客户端行
-  继续登记为 page-own 跳过**（`chamber-covered.ts:216-227`，理由改为"官方注册被 chamber fork 替换"，
-  同 `ui-sidebar`/`ui-layout`）。
+  `host/open-in-app/src/index.ts`，零成本；不引入 overlay `disabled:` 能力）；**官方客户端行自 0.1.7 起
+  加载**（D2）：文件级席位（右栏文档 open/reveal、deliverables 文件动作）生效；header 席位因
+  document-relative 路由落在控制面 SPA origin 而 inert，故 `chamber-covered.ts` 不再登记为 page-own；
+  目录打开入口仍是 chamber `open-in`（同座、同 order、异 id，允许并存）。
 
 ## 3. 形态与分层
 
@@ -196,9 +198,9 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
   `autoFocus` 焦点转移、方向键/Home/End 导航、`compact` 行（`dense`/34px → `compact`/26px/12px，随 `菜单密度 = chamber 档`
   的全仓口径，见 design 06 §7）、`selection="fill"` 填充、项 `icon` 真图标
   （`OpenInButton.tsx:316-401`；props 面与 pin 的 `Menu.tsx`/`Tooltip.tsx` 对齐见
-  `src/vendor-modules.d.ts:26-73`）。**呈现规格逐条等于官方 open-in
+  `types/vendor-modules.d.ts`（open-in 段））。**呈现规格逐条等于官方 open-in
   分体按钮**（清单见 §7.1；对照 design 16 §6.1 与 `OpenInButton.module.css`、
-  `IconChevronDownOutline14`）。提示用同一 pin 的设计系统 `Tooltip`（**不再用原生 `title`**）；chevron
+  `IconChevronDownOutlineRegular`）。提示用同一 pin 的设计系统 `Tooltip`（**不再用原生 `title`**）；chevron
   带 `aria-haspopup="menu"` / `aria-expanded`，每次打开重探目录（原 bespoke `onOpening` 语义搬到
   trigger，`OpenInButton.tsx:368-396`）。**插件内唯一的菜单逻辑是 N-ctx 归属**
   `instance-view-guard.ts`：打开期间观察 trigger 祖先链，`.instance-view` 带
@@ -229,7 +231,8 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
 - **记忆键 per-source**（`choice-store.ts` / `client/choice-store.ts`）：
   `dsh-chamber.open-in.choice.<sourceId>`，记忆值在本上下文不可用时降级到默认项（先按记忆找，找不到再用
   `defaultEntryId`）；旧全页键 `dsh.open-in-app.choice` 只被**读一次**作为
-  `local` 初值、任何一方都不再写它（官方客户端从不加载，故同页同 origin 无键冲突）——一页多来源不会
+  `local` 初值、任何一方都不再写它（官方客户端行虽加载，但其 header 探针落在控制面 SPA origin ⇒ apps 恒空、
+  不产生选择，该键无写入方）——一页多来源不会
   互相覆盖；
 - **标签表**：`app.*` 标签是**我们自己的表**（源自上游 pin，见 `src/locales.ts`），覆盖门
   `test/catalog/open-in-labels.test.ts` 读**我们 fork 的 `catalog.ts`**（34 个 id：finder/explorer/filemanager、terminal/iterm/warp/kitty/ghostty/gnometerminal/konsole/windowsterminal/gitbash、vscode(+insiders)/cursor/windsurf/zed/sublimetext/xcode/androidstudio、JetBrains 家族 7 个、git GUI 家族 6 个），断言"每个 catalog id 都有 zh+en 标签"且"标签表无多余行"；保鲜对象是"我们自己的
@@ -239,7 +242,8 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
 
 ### 6.1 fork 边界（复制什么、分歧什么）
 
-上游 `packages/host/open-in-app/src/`（pin `183f08e9…` = dsh-v0.1.5-rc.1，共 1714 行）：
+上游 `packages/host/open-in-app/src/`（rc.2 = `477b4f42`；rc.2 把 Linux desktop-entry/icon 的纯 helper 移入
+`@deepseek-ai/dsh-native-command`，本 fork 以 rc.2 为基线同步该委派）：
 `resolver.ts`(774) / `catalog.ts`(393) / `icons.ts`(205) / `index.ts`(311) / `shared.ts`(25) / `internals.ts`(6)。
 
 - **保留（本包价值）**：平台解析与目录常量、可执行/应用包探测、绝对路径与存在性校验、真实 bundle 图标
@@ -363,8 +367,8 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
 - `docs/checklists/upstream-touchpoints.md` §4 的 "dsh-host-open-in-app 契约镜像"行 → 改为 fork 行；
 - 原方案 vendor 补丁 / composite covered+factory / `--no-open` / spawn env 剥离 / picker pin overlay /
   按 transport 注册分流：**不再需要**（§2）；
-- `packages/renderer/src/chamber-covered.ts:216-227` 注释理由改写（page-own 原因从"官方自隐藏"改为
-  "我们的 fork 替换官方注册"）；
+- `packages/renderer/src/chamber-covered.ts`：官方客户端行**不再**登记 page-own（D2 已移除），注释改写为
+  "官方行加载只为文件级席位；header 席位读 document-relative 路由落在控制面 SPA origin ⇒ inert"；
 - **机器目录修正**：`src/client/vscode-icon.png`、`src/assets.d.ts`、组件内 `VscodeMark` 与
   `open-in-gates.ts` 的 `markKindFor`/`OpenInMarkKind`（`'vscode'` mark kind）都不在仓内——机器目录即图标
   来源，缺图回官方圆角方块。
@@ -417,7 +421,7 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
   `docs/checklists/upstream-touchpoints.md` §2.5），获三层保护：**C1** 未登记差异即硬失败、**C3** 每个上游
   文件必须有 pure/patched/own/dropped 分类（上游新增文件漏分类即红）、**C2** tag 重放差异报告自动纳入本
   fork 面（advisory）。**版本锚已豁免**：C5 规则是 `fork/package.json.version == 上游同文件版本`——三个
-  既有 copy 包即如此携带上游版本（实测 0.1.5-rc.2），seed 包随 chamber 发版 bump（实测 0.2.4，与
+  既有 copy 包即如此携带上游版本（实测随 pin，当前 0.1.7-rc.2），seed 包随 chamber 发版 bump（实测 0.2.4，与
   `dsh-runtime`/其他 seed 一致）；registry 每条登记 `versionAnchor: 'upstream' | 'chamber'`（既有三条 =
   upstream、本 fork = chamber），C5 只比对 `upstream`；脚本头注、C5 日志文案与触点表 §4 与之一致。实测：
   `✓ [seed-open-in] C1/C3: pure=3 patched=4 own=9 dropped=6`、`✓ C7 … openInApp/probe`、
@@ -431,12 +435,12 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
 - **权限模式**：本地托管实例以 `DSH_PERMISSION_MODE=workspace-write` 启动（`spawn-dsh.ts:595`）——该
   模式面向 agent 工具调用、不改变宿主插件拉起应用的既有行为（官方宿主半同），但需实机确认首次拉起不弹
   权限门；
-- **两代 runtime 的依赖面（留档）**：本 fork 需要 `@deepseek-ai/dsh-native-command`
-  （`canOpenNativePath` / `openNativePath` / `runNativeCommand` / `NativeCommandRunner`）与
-  `@deepseek-ai/dsh-subprocess`（`scrubbedParentEnv`）——在**内置 runtime 0.1.2-rc.1** 与**当前 pin
-  0.1.5-rc.2** 上都存在且导出名一致；`runNativeCommand` 是模块导入而非注入服务，故只需 `subprocess`
-  一个注入（供 `resolveExecutable`）。**未验证**：`ctx.subprocess` 在旧 runtime 的 web profile 中
-  是否挂载——本行加载失败会让该实例 boot 失败（loud，刻意不跳过），实施时须在两代 runtime 各跑一次装载探针；
+- **runtime 依赖面**：本 fork 需要 `@deepseek-ai/dsh-native-command`
+  （`canOpenNativePath` / `openNativePath` / `runNativeCommand` / `NativeCommandRunner`；rc.2 起还包括
+  Linux desktop-entry/icon helper `desktopEntryFields`/`desktopDataDirectories`/`desktopApplicationIcon`）
+  与 `@deepseek-ai/dsh-subprocess`（`scrubbedParentEnv`）；`runNativeCommand` 是模块导入而非注入服务，
+  故只需 `subprocess` 一个注入（供 `resolveExecutable`）。**最低 runtime = 本批 pin（0.1.7-rc.2）**：
+  旧内置 runtime 不再声明兼容（rc.2 新导出在旧 runtime 不存在，seed 装载期会 loud 失败——刻意不跳过）；
 - **未实机验证项**：真实 bundle 图标在四种前端（Finder/Terminal/iTerm/Cursor）下的一致性、无应用环境
   （Linux headless/容器）下的空目录表现、`localOnly` 行在插件管理页的呈现；
 - **实机验收剩余**：macOS Finder/VS Code 实际拉起、按钮 + 下拉在 vendor 头部 utilities 行的定位/层叠、

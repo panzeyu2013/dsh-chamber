@@ -56,7 +56,7 @@ test('menu owner guard fails closed for hidden, pending, or disconnected N-ctx s
 test('the official Menu primitive carries the chamber menu density', () => {
   assert.match(
     button,
-    /import \{\s*IconChevronDownOutline14, Menu, Tooltip, type MenuItem,\s*\} from '@deepseek-ai\/dsh-client-ui-primitives'/u,
+    /import \{\s*IconChevronDownOutlineRegular, Menu, Tooltip, type MenuItem,\s*\} from '@deepseek-ai\/dsh-client-ui-primitives'/u,
   )
   // Upstream's own menu composition (OpenInAppAction.tsx:181-198): fill
   // selection, end alignment, focus transfer + arrow navigation — with the
@@ -83,7 +83,7 @@ test('the control uses upstream geometry and the machine catalog as its only ico
   // Sizes and shapes are locked here as source text because the component (and
   // its CSS module) cannot be imported under the plain node runner.
   assert.ok(
-    button.includes('<IconChevronDownOutline14 size={11} />'),
+    button.includes('<IconChevronDownOutlineRegular size={11} />'),
     'the chevron must be the design-system icon at the official 11px size',
   )
   assert.match(button, /function appMark\(iconUrl: string \| null, size: number\)/u,
@@ -230,18 +230,22 @@ test('stream-health seat: registered before the open-in gates, ladder state in t
   assert.match(seat, /const storeLadder = \(sessionId: string, state: SessionStreamHealthState\): void => \{/,
     'per-session state must survive a chip remount through one shared store')
   assert.match(seat, /reflect\.get\('sessions', false\)/, 'an absent cordis service must not throw through the ctx proxy')
-  assert.match(seat, /previousOf = \(sessionId: string\): string \| undefined => previousPresented\(presented, sessionId\)/)
+  // rc.2: the stage-move detour (and its presented-recency memory) is gone; the
+  // automatic heal executes the concrete resync on the presented target.
+  assert.doesNotMatch(seat, /previousPresented|rememberPresented|healSessionStream|hasHealRoute/)
 })
 
 test('stream-health seat: the page delivery owner owns the automatic rebuild, header retains the manual exit', () => {
   assert.match(seat, /resyncAvailable: hasSessionStreamResync\(sessions, sessionId\)/)
+  assert.match(seat, /healRoute: hasSessionStreamResync\(sessions, sessionId\)/,
+    'the automatic heal executes resync on the presented target, so its gate is the same guarded probe read')
   const policy = stripComments(source('../../src/client/session-stream-health.ts'))
   assert.doesNotMatch(policy, /auto-resync/)
   assert.match(seat, /if \(plan\.action === 'heal'\) \{/)
   assert.doesNotMatch(seat, /plan\.action === 'auto-resync'/)
   assert.doesNotMatch(seat, /plan\.action === 'resync'/)
-  assert.equal([...seat.matchAll(/resyncSessionStream\(/gu)].length, 1,
-    'the header retains only its injected user action')
+  assert.equal([...seat.matchAll(/resyncSessionStream\(/gu)].length, 2,
+    'the header executes the automatic heal AND its injected user action — nothing else')
   const page = stripComments(source('../../../renderer/src/components/InstanceView.tsx'))
   // The automatic rebuild moved to the page-level delivery owner (one ladder, one
   // ledger); the retired planner must never return to the view.
@@ -269,8 +273,11 @@ test('stream-health seat: the page delivery owner owns the automatic rebuild, he
   // which is what lets the page's own bounded resync recover it automatically.
   assert.match(page, /healRoute: observed\.healRoute/)
   const shellSource = stripComments(source('../../../renderer/src/shell.ts'))
-  assert.match(shellSource, /healRoute: hasHealRoute\(sessions, sessionId\)/,
+  assert.match(shellSource, /const resyncAvailable = hasSessionStreamResync\(sessions, sessionId\)/)
+  assert.match(shellSource, /healRoute: resyncAvailable/,
     'the page health read must derive the route from the guarded probe, never infer it')
+  assert.doesNotMatch(shellSource, /hasHealRoute|healSessionStream/,
+    'the retired stage-move helpers must not return to the shell')
   assert.match(page, /decision\.action\?\.tier === 'resync'/)
   assert.match(page, /rebuildInstanceSessionStream\(instanceId, currentSessionId\)/)
   assert.doesNotMatch(seat, /if \(!sessionStreamLeversAvailable\(current, now\)\) return/,

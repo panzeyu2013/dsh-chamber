@@ -165,10 +165,14 @@ function clientEntrySource(id: string): string {
   throw new Error(`no client entry source found for ${id} — check the vendor/in-repo layout this test resolves against`)
 }
 
-/** The namespace's exported `inject` face, read from its client entry source.
+/** The module's inject face, read from its client entry source: the
+ *  namespace-level `export const inject` (function plugins) or the service
+ *  class's `static inject` (the default-class shortcuts provider).
  *  `undefined` when the source declares none — the silent-shrink hole. */
 function faceFromSource(id: string, file: string): unknown {
-  const match = /export const inject[^=]*=\s*(\[[\s\S]*?\]|\{[\s\S]*?\n\})/.exec(readSource(file))
+  const source = readSource(file)
+  const match = /export const inject[^=]*=\s*(\[[\s\S]*?\]|\{[\s\S]*?\n\})/.exec(source)
+    ?? /static inject[^=]*=\s*(\[[\s\S]*?\]|\{[\s\S]*?\n\})/.exec(source)
   if (match === null) return undefined
   try {
     return new Function(`return (${match[1]})`)() as unknown
@@ -192,24 +196,25 @@ const AUDITED_FIRST_SCREEN_FACES: ReadonlyArray<readonly [id: string, members: r
     ['connection', 'fileUpload', 'typert', 'remote', 'remote.commands', 'remote.session', 'remote.subagents']],
   ['@deepseek-ai/dsh-api-workspace-controller', ['remote', 'remote.workspace']],
   ['@deepseek-ai/dsh-client-file-upload', ['remote']],
-  ['@deepseek-ai/dsh-client-locale', ['slots', 'remote', 'settingsScope']],
-  ['@deepseek-ai/dsh-client-ui-theme', ['slots', 'locale', 'remote', 'settingsScope']],
-  ['@dsh-chamber/dsh-chamber-client-ui-layout', ['slots', 'theme', 'locale']],
+  ['@deepseek-ai/dsh-client-locale', ['slots', 'remote', 'configForms']],
+  ['@deepseek-ai/dsh-client-shortcuts', ['locale']],
+  ['@deepseek-ai/dsh-client-ui-theme', ['slots', 'locale', 'remote', 'configForms']],
+  ['@dsh-chamber/dsh-chamber-client-ui-layout', ['slots', 'theme', 'locale', 'shortcuts']],
   ['@dsh-chamber/dsh-chamber-client-ui-sidebar',
-    ['slots', 'layout', 'sessions', 'workspaces', 'uiSession', 'uiWorkspace', 'locale']],
+    ['slots', 'layout', 'sessions', 'workspaces', 'uiSession', 'uiWorkspace', 'locale', 'shortcuts']],
   ['@dsh-chamber/dsh-chamber-client-ui-git', ['slots', 'locale']],
   ['@dsh-chamber/dsh-chamber-client-ui-open-in', ['slots', 'locale']],
   ['@deepseek-ai/dsh-client-ui-settings', ['remote', 'remote.settings']],
   ['@deepseek-ai/dsh-client-ui-conversation',
-    ['slots', 'sessions', 'fileUpload', 'uiSession', 'uiWorkspace', 'locale', 'settingsScope']],
+    ['slots', 'sessions', 'fileUpload', 'uiSession', 'uiWorkspace', 'locale', 'configForms']],
   ['@deepseek-ai/dsh-client-ui-commands', ['inputTriggers', 'sessions', 'remote', 'remote.commands', 'locale']],
   ['@deepseek-ai/dsh-client-ui-input-trigger', ['sessions', 'locale']],
   ['@deepseek-ai/dsh-client-ui-workspace',
-    ['slots', 'sessions', 'workspaces', 'locale', 'remote', 'remote.directoryPicker', 'layout']],
+    ['slots', 'sessions', 'workspaces', 'locale', 'remote', 'remote.directoryPicker', 'layout', 'shortcuts']],
   ['@deepseek-ai/dsh-client-ui-model-selection', ['commandUi', 'locale', 'sessions', 'slots', 'remote', 'remote.session']],
-  ['@deepseek-ai/dsh-client-ui-session', ['sessions', 'slots']],
+  ['@deepseek-ai/dsh-client-ui-session', ['sessions', 'slots', 'remote']],
   ['@deepseek-ai/dsh-client-ui-chat',
-    ['slots', 'sessions', 'uiSession', 'uiConversation', 'locale', 'settingsScope', 'remote', 'remote.session', 'sidebarRight']],
+    ['slots', 'sessions', 'uiWorkspace', 'uiSession', 'uiConversation', 'locale', 'configForms', 'remote', 'remote.session', 'sidebarRight']],
   ['@deepseek-ai/dsh-client-ui-approval', ['sessions', 'remote', 'uiSession', 'slots', 'locale']],
   ['@deepseek-ai/dsh-client-ui-directory-picker-browse', ['slots', 'uiWorkspace', 'locale']],
 ]
@@ -223,8 +228,8 @@ const AUDITED_FIRST_SCREEN_FACES: ReadonlyArray<readonly [id: string, members: r
  */
 const AUDITED_REQUIRED_SERVICES: readonly string[] = [
   'slots', 'locale', 'sessions', 'workspaces', 'connection', 'remote', 'typert', 'fileUpload',
-  'uiSession', 'uiConversation', 'uiWorkspace', 'layout', 'theme', 'settingsScope',
-  'commandUi', 'inputTriggers', 'remote.session', 'sidebarRight',
+  'uiSession', 'uiConversation', 'uiWorkspace', 'layout', 'theme', 'configForms',
+  'commandUi', 'inputTriggers', 'remote.session', 'shortcuts', 'sidebarRight',
 ]
 
 /**
@@ -235,9 +240,11 @@ const AUDITED_REQUIRED_SERVICES: readonly string[] = [
  * extension audits.
  */
 const AUDITED_DEFERRED_ONLY_SERVICES: readonly string[] = [
+  'jobs', 'modules',
   'remote.goals', 'remote.skills', 'remote.messageFeedback', 'remote.sessionFeedback',
   'remote.agentPresets', 'remote.credentials', 'remote.llm', 'remote.pluginInventory',
-  'remote.fileReferences', 'remote.sessionReferenceResolver', 'settingsSchema',
+  'remote.permissionPresets', 'remote.fileReferences', 'remote.sessionReferenceResolver',
+  'resources', 'sidebarRightTabs', 'settingsSchema',
 ]
 
 /** The `register(...)` calls of chamber-entry.ts, in order: [id, local import name]. */
@@ -245,6 +252,12 @@ function registeredPlugins(): Array<[string, string]> {
   const entry = readSource('../../src/chamber-entry.ts')
   const imports = new Map<string, string>()
   for (const match of entry.matchAll(/^import \* as (\w+) from '([^']+)'$/gm)) {
+    imports.set(match[1]!, match[2]!)
+  }
+  // The default-import form: @deepseek-ai/dsh-client-shortcuts default-exports
+  // its service CLASS (no namespace-level `apply`), and the composite mounts
+  // that binding, so the local default name is the register() argument.
+  for (const match of entry.matchAll(/^import (\w+) from '([^']+)'$/gm)) {
     imports.set(match[1]!, match[2]!)
   }
   const out: Array<[string, string]> = []
@@ -412,7 +425,7 @@ test('DEFERRED_EXTRA_ROW_IDS: unique, legal package names, covered but factory-l
   assert.ok(DEFERRED_EXTRA_ROW_IDS.includes('@deepseek-ai/dsh-client-ui-tool'))
   assert.ok(DEFERRED_EXTRA_ROW_IDS.includes('@deepseek-ai/dsh-client-ui-trajectory'))
   assert.ok(DEFERRED_EXTRA_ROW_IDS.includes('@dsh-chamber/dsh-chamber-client-ui-settings-bridge'))
-  // ui-settings stays FIRST-SCREEN (locale/ui-theme root-inject settingsScope):
+  // ui-settings stays FIRST-SCREEN (locale/ui-theme root-inject configForms):
   // it has a factory and must never be listed as deferred.
   assert.ok(!DEFERRED_EXTRA_ROW_IDS.includes('@deepseek-ai/dsh-client-ui-settings'))
 })

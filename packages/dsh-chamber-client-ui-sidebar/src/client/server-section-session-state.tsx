@@ -8,7 +8,7 @@
  * "completed" while another suppresses it (R2-K/INV7).
  */
 import type { ReactNode } from 'react'
-import { IconChecklistOutline14, IconQuestionOutline14, IconWarningOutline16, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconChecklistOutlineRegular, IconQuestionOutlineRegular, IconWarningOutlineRegular, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { runningRingVisible } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import { sessionRowState, type SessionRowStateResult } from '@dsh-chamber/dsh-chamber-client-core/session-row-state'
@@ -70,11 +70,11 @@ export function useServerSectionSessionState() {
     const row = sessionRowStateOf(server, session)
     switch (row.state) {
       case 'pending:approval':
-        return <IconWarningOutline16 className={cc.statePendingApproval} />
+        return <IconWarningOutlineRegular className={cc.statePendingApproval} />
       case 'pending:plan-review':
-        return <IconChecklistOutline14 className={cc.statePendingPlan} />
+        return <IconChecklistOutlineRegular className={cc.statePendingPlan} />
       case 'pending:question':
-        return <IconQuestionOutline14 className={cc.statePendingQuestion} />
+        return <IconQuestionOutlineRegular className={cc.statePendingQuestion} />
       case 'completed':
         // 完成未读用 chamber 品牌蓝点（.stateCompleted，6px），而非官方 StateDot `done`：
         // 后者取色 `--dsw-alias-state-success-primary` 与来源头连接绿点（`.statusOk`）完全相同，

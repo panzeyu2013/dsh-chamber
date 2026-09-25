@@ -11,10 +11,10 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
 - `src/index.ts` —— 宿主半空入口（seed gate 需要 `dist/index.js`）；
 - `src/client/index.ts` —— 浏览器半：assets 注入（viewport/stylesheet/
   theme-color）、frame 打标（`ROLE_SLOT_KEYS` 把插件角色映射到 alpha.2 槽键
-  `sidebar` / `main` / `rightbar`）、layoutFacts 驱动的抽屉滚动锁、
+  `sidebar` / `main` / `rightbar`）、官方 `data-sidebar-collapsed` 驱动的抽屉滚动锁、
   composer 行为、抽屉点击自愈、设置 sheet 分区切换打磨、官方悬停卡片搁浅看护、
   `shell.overlay` 抽屉开关（官方面板图标）+ 遮罩。该开关**就是**官方控件而非
-  仿制品（2026-09-11 upstream-alignment T17a）：渲染 `IconPanelLeftOutline16`
+  仿制品（2026-09-11 upstream-alignment T17a）：渲染 `IconPanelLeftOutlineRegular`
   ——官方侧边栏开关所用的图标，取自 `ui-primitives` 客户端 baseline 模块，
   因此 bundle 无需为此声明依赖——可访问名沿用官方那对带状态的 `aria-label`，
   且无 `aria-haspopup`。其 ARIA 是**官方名称 + 一个属于自己的真实属性**，而非
@@ -284,7 +284,7 @@ Tooltip 用法中 27 处是带 aria-label 的按钮，标签命名同一动作�
 都保持官方行为）。它从不触碰官方包：对一张按官方自身锚定几何
 （`card.left = wrapper.right + 8`；`card.top = wrapper.top`，或底夹的
 `card.bottom = innerHeight − 8`）与两个 CSS-module 类名 token
-（`_card_1b2ny_*` / `_root_1b2ny_*`）唯一匹配到某个 wrapper 的卡片，它在该 wrapper
+（`_card_38jqx_*` / `_root_38jqx_*`）唯一匹配到某个 wrapper 的卡片，它在该 wrapper
 上派发**一次**冒泡 `pointerout`（无 related target）。React 的委托 enter/leave
 路径把它读作「指针离开了窗口」，执行 wrapper 的 `onPointerLeave`——卡片在 DOM 里
 即原子已提交的 `open` 为真——从而 arm 原子自己的宽限关闭；这 200ms 内真实的
@@ -302,8 +302,9 @@ Tooltip 用法中 27 处是带 aria-label 的按钮，标签命名同一动作�
    （与 chamber 为自己卡片在复合页做的是同一件事）。
 2. 在覆盖档内，两个页面状态触发也会关掉「指针在 blur/切标签页时物理停在行上」的
    卡片；卡片会在下一次离开再进入（或点按）后重开，全程不涉及 click、导航或焦点。
-3. 类名 token 与 vendor 构建绑定，和本包其他锚点一样，pin 升级时必须重审。token
-   过期只会把看护降级为静默 no-op（永远匹配不到卡片），而**不会**误伤。
+3. 类名 token 与 vendor 构建绑定，和本包其他锚点一样，pin 升级时必须重锚。token
+   过期现在会让 `verify-mobile-anchors.mjs` **硬失败（exit 1）**，而不是把看护静默降级为
+   no-op；匹配器本身仍是 fail-closed（永远匹配不到卡片），**不会**误伤。
 
 ## 抽屉点击与键盘（触屏档）
 
@@ -392,8 +393,11 @@ pnpm run test:mobile
 
 ## 锚点基线
 
-官方 dsh **v0.1.5-rc.2** DOM 实测（CDP 审计在 v0.1.5-alpha.2 完成，随 vendored pin
-迁移重锚）——下列锚点在 rc.2 树中仍全部成立；alpha.2 → rc.1 的客户端改动（`ui-sidebar-*`
+官方 dsh DOM 实测（CDP 审计在 **v0.1.5-alpha.2** 完成，并在 **v0.1.5-rc.2**
+重锚）——下列锚点在 rc.2 树中曾全部成立；当前 pin（v0.1.7-rc.2）下严格锚点门对 47 条属性
+锚点与两个 build-time CSS-module hash token 复验零命中 0
+（`verify-mobile-anchors.mjs --require-anchor-root`）；两个 hash token 已按被服务的 rc.2 产物
+重锚，零命中现为**硬失败**（见下）；alpha.2 → rc.1 的客户端改动（`ui-sidebar-*`
 的 guide/preview 行、`ui-primitives` 的 `CodeBlock` 包装层、`ui-chat` 统计对话框、
 `ui-dockkit` CSS 的两处 `z-index`、slot-catalog 文档指针）与 rc.1 → rc.2 的改动
 （`ui-{chat,deliverables,message-feedback,primitives}` 的反馈弹窗、交付卡与代码文件图标
@@ -405,8 +409,9 @@ pnpm run test:mobile
 设置对话框渲染在侧边栏 DOM 内（无 body portal），抽屉打开态必须用
 `transform: none`（identity transform 仍是 containing block）。
 
-当前 vendored 基线为 **v0.1.5-rc.2**（harness pin fb2c4b9e698e）；上述锚点已对
-alpha.2 源码复核（2026-09 重锚），并在 rc.2 上复验成立（rc.1 → rc.2 的客户端改动见上，
+当前 vendored 基线为 **v0.1.7-rc.2**（harness pin `477b4f4205`；单一来源
+`harness.commit`）。历史审计记录：上述锚点已对 alpha.2 源码复核（2026-09 重锚），
+并在 v0.1.5-rc.2 上复验成立（rc.1 → rc.2 的客户端改动见上，
 不触及这些锚点与本插件的叠层对位），复核同时确认：composer seat 是
 `[data-conversation-scroll]` 的流内子元素（仅内容溢出时才 sticky）、
 `[data-input-scroll]` 是 composer 的内部滚动器（`max-height: 336px`）、官方
@@ -483,17 +488,20 @@ client 半）；其余引用全是 CSS 规则（`body[data-ds-dark-theme]{…}`�
 而不只写在上面那一节）：** `official-hover-card.ts` 用三项事实匹配官方原子，pin 移动时
 一并重审：
 
-- `_root_1b2ny_3` 与 `_card_1b2ny_13`——**被服务的那份** bundle 里 ui-primitives
-  `HoverCard` 模块的 CSS-module class token。它们是 build-time 哈希：当前 pin
-  （0.1.5-rc.2）在 `@deepseek-ai/dsh-web-frontend/dist/assets/index-*.css` 里产出它们
-  （已对 `packages/desktop/vendor/dsh/` 下的随仓副本逐字节核对；该产物另有 251 个同形
-  `_<local>_<hash>_<idx>` 名字，且没有旧审计记录的 `[hash]_[local]` 形）。pin 一动哈希
-  即变，watchdog 退化为静默 no-op（fail closed，绝不误触发）——这是本包唯一没有属性形
-  兜底的锚点；
+- `_root_38jqx_3` 与 `_card_38jqx_9`——**被服务的那份** bundle 里 ui-primitives
+  `HoverCard` 模块的 CSS-module class token。它们是 build-time 哈希：rc.2 构建在
+  `@deepseek-ai/dsh-web-frontend/dist/assets/index-*.js` 里产出它们（已对
+  `packages/desktop/vendor/dsh/` 下的随仓副本逐字节核对，压缩变量名形如
+  `Pp="_root_38jqx_3"` / `Rp="_card_38jqx_9"` / `zp="_copyable_38jqx_21"`；同名 `index-*.css`
+  也带这两条类选择器）。rc.2 重锚替换了上一个 pin 的 `_root_1b2ny_*` / `_card_1b2ny_*`
+  对；`verify-mobile-anchors.mjs` 现在对零命中 hash token **硬失败**（此前为 advisory），
+  下一次 pin 前移因此强制重锚，而不是把 watchdog 静默降级为 no-op（fail closed，绝不
+  误触发）——这仍是本包唯一没有属性形兜底的锚点；
 - 锚定几何 `card.left = wrapper.right + 8`、`card.top = wrapper.top`（或贴底夹取的
   `card.bottom = innerHeight − 8`）；
-- 卡片盒是该 wrapper 内唯一的 `[class*="_card_1b2ny_"]` 元素。
+- 卡片盒是该 wrapper 内唯一的 `[class*="_card_38jqx_"]` 元素。
 
-`test/dom/official-hover-card.test.ts` 钉住常数与 src↔产物锁步，C8 钉住随包字节；
-**没有任何门能看到被服务 bundle 的哈希变化**（它是仓外的派生状态），这正是本条存在的
-理由。
+`test/dom/official-hover-card.test.ts` 钉住常数、被服务类名串与 src↔产物锁步，C8 钉住随包
+字节；`verify-mobile-anchors.mjs` 是能看到被服务 bundle 哈希变化的那道门（对照
+`packages/desktop/vendor/dsh/` 下的 `dsh-web-frontend` 产物；CI 无锚点树时仍 fail-soft），
+这正是本条存在的理由。

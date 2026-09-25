@@ -81,11 +81,14 @@ export const HOST_OPEN_IN_INSERT: HostPackageInsert = {
  * The official web bundle's open-in HOST row and the id-targeted disable patch that
  * supersedes it whenever chamber's own open-in host package is seeded.
  *
- * Chamber replaces BOTH halves (the renderer page-own-skips the official CLIENT row
- * and chamber's seed-open-in registers the host Remote), but the official HOST half
- * would still mount its open-in webServer routes with no caller, leaving a second
- * live wire authority. The disable row rides the same `--patch` overlay, which
- * composes AFTER every bundle layer and both user layers, so a user layer that
+ * The official CLIENT row now loads from the host graph (D2): its file-level
+ * surfaces register, while its HEADER entry renders null here (the document-relative
+ * open-in-app/* routes resolve to the control-plane origin, not the instance) and
+ * chamber's seed-open-in registers the host Remote that owns the effective header
+ * seat. The official HOST half would still mount its open-in webServer routes with
+ * no caller, leaving a second live wire authority. The disable row rides the same
+ * `--patch` overlay, which composes AFTER every bundle layer and both user layers,
+ * so a user layer that
  * re-enables the row is superseded too. `disabled: true` means "never init"; an
  * unmatched row warns and skips.
  */

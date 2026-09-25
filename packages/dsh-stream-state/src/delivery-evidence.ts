@@ -57,12 +57,13 @@ export interface DeliveryEvidence {
     readonly resyncInFlight?: boolean | undefined
     readonly resyncAvailable: boolean
     /**
-     * Whether the header's stage-move lever is usable for this session (current,
-     * listed, with a listed neighbour). `false` means the header arm is absent OR
-     * unreadable (the probe fails closed), so an `error` face would otherwise have
-     * no automatic rebuild (an address-only subagent selection, a masked target);
-     * the page then owns the bounded resync, whose worst case is one extra rebuild.
-     * `true`/`undefined` keep the error arm with the header.
+     * Whether the header's automatic heal is usable for this session: the target
+     * must be the presented main-view session and its concrete `resync()` must be
+     * reachable. `false` means the header arm is absent OR unreadable (the probe
+     * fails closed), so an `error` face would otherwise have no automatic rebuild
+     * (a target the main view does not retain, a masked face); the page then owns
+     * the bounded resync, whose worst case is one extra rebuild. `true`/`undefined`
+     * keep the error arm with the header.
      */
     readonly healRoute?: boolean | undefined
   }
@@ -96,10 +97,10 @@ export function classifyDeliverySymptoms(evidence: DeliveryEvidence): readonly D
     // A loading face with nothing pending can settle with no retry trigger at all,
     // and re-issuing is free (no open is being interrupted).
     const loadingStall = open.state === 'loading' && open.openInFlight === false
-    // The header heals an error through the stage move. When that route is
-    // explicitly unusable (an address-only subagent selection, a masked target,
-    // no listed neighbour), the page's own resync is the only automatic rebuild
-    // left: without this arm that shape has no automatic recovery at all.
+    // The header heals an error through the concrete per-session resync. When
+    // that route is explicitly unusable (a target the main view does not retain,
+    // a masked face), the page's own resync is the only automatic rebuild left:
+    // without this arm that shape has no automatic recovery at all.
     // `!== true` (not `=== false`): the vendor writes 'error' only after its open
     // settled or failed, so unknown liveness is not an in-flight open - only a
     // provably pending promise is protected.

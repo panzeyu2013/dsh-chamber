@@ -2,16 +2,16 @@
  * SESSION STREAM-HEALTH LADDER LOCKS (design 14 §D4).
  *
  * The defect (carrier losses latching `openState='error'` ⇒ a frozen transcript)
- * is recovered by exactly three effects, all pinned here: the automatic stage
- * move for an `'error'` session, the notice-plus-reload arm for a parked
- * `'loading'` open, and the USER-triggered per-session `resync` the
- * loading-stall arm ARMS (the concrete
- * `Session.resync()` the pinned controller ships off-contract, reached through
- * the guarded structural slice). Assertions live at the decision boundary (pure
- * module) and the effect boundary (a fake sessions face), including the edges
- * that must stay pinned: the settle window, a backwards wall clock,
- * the rolling-window edge, the cross-phase hold, both first-notice timestamps
- * and the hidden stretch that must NOT hand back a fresh storm budget.
+ * is recovered by the concrete per-session `Session.resync()` the pinned
+ * controller ships off-contract (reached through the guarded structural slice):
+ * the `'error'` arm runs it AUTOMATICALLY after its grace, the parked
+ * `'loading'` arm only ARMS the user's control, and the presented fact is the
+ * official main view's `retainedBy.mainView` retention — a chamber-side
+ * `current` mirror must never come back. Assertions live at the decision
+ * boundary (pure module) and the effect boundary (a fake sessions face),
+ * including the edges that must stay pinned: the settle window, a backwards wall
+ * clock, the rolling-window edge, the cross-phase hold, both first-notice
+ * timestamps and the hidden stretch that must NOT hand back a fresh storm budget.
  */
 
 import { test } from 'node:test'
@@ -28,14 +28,8 @@ import {
 } from '../../src/client/session-stream-health.ts'
 import { en, zh } from '../../src/locales.ts'
 import {
-  hasHealNeighbor,
-  hasHealRoute,
   hasSessionStreamResync,
-  healSessionStream,
   isConversationSurfacePresented,
-  pickHealNeighbor,
-  previousPresented,
-  rememberPresented,
   resyncSessionStream,
   sessionOpenState,
   sessionOpenInFlight,
@@ -56,8 +50,14 @@ function planAt(state: SessionStreamHealthState, observation: SessionStreamObser
   return planSessionStreamHealth(state, observation, at, CONFIG)
 }
 
+/**
+ * One shipped-shaped observation: a presented target with the concrete rc.2
+ * resync face live. Tests that model a missing/unreadable face override
+ * `resyncAvailable: false` explicitly; `undefined` stays the fail-closed
+ * "unknown" input a drifting build produces.
+ */
 function observe(openState: SessionStreamObservation['openState'], over: Partial<SessionStreamObservation> = {}): SessionStreamObservation {
-  return { openState, presented: true, neighborAvailable: true, ...over }
+  return { openState, presented: true, healRoute: true, resyncAvailable: true, ...over }
 }
 
 /** Drive the ladder over a timeline, advancing a virtual clock. */
@@ -173,8 +173,8 @@ test('stream-health: a backwards wall clock cannot latch the healing phase', () 
 test('stream-health: the loading arm restarts its hold after an error-phase detour', () => {
   const { actions, notices } = drive([
     { at: T0, observation: observe('error') },
-    { at: T0 + 1_000, observation: observe('loading') },
-    { at: T0 + 25_000, observation: observe('loading') },
+    { at: T0 + 1_000, observation: observe('loading', { resyncAvailable: false }) },
+    { at: T0 + 25_000, observation: observe('loading', { resyncAvailable: false }) },
     { at: T0 + 26_000, observation: observe('error') },
     { at: T0 + 33_999, observation: observe('error') },
     { at: T0 + 34_000, observation: observe('error') },
@@ -194,7 +194,7 @@ test('stream-health: the resync lever is armed only by a loading stall with a li
   assert.equal(stalled.notice, 'loading-stall', 'the reload arm keeps its own notice')
   // Fail-closed on a build without the concrete face: the SAME stall with no
   // observed availability arms nothing (and the reload arm is untouched).
-  const unavailable = planAt(hold.state, observe('loading'), T0 + L)
+  const unavailable = planAt(hold.state, observe('loading', { resyncAvailable: false }), T0 + L)
   assert.equal(unavailable.action, 'none')
   assert.equal(unavailable.notice, 'loading-stall')
   // Never in the error arm (that arm has its own automatic heal)…
@@ -211,30 +211,32 @@ test('stream-health: the resync lever is armed only by a loading stall with a li
   )
 })
 
-test('stream-health: an error state the stage move must refuse arms the user resync control instead', () => {
-  // An address-only subagent selection: current, absent from ids, so the seat
-  // reports no stage route (neighborAvailable false) while the concrete resync
-  // face is live. The arm is USER-executed and grace-aged exactly like the heal.
-  const hold = planAt(createSessionStreamHealthState(), observe('error', { neighborAvailable: false, resyncAvailable: true }), T0)
-  assert.equal(hold.action, 'none', 'an error is never made worse by acting on its first frame')
-  const armed = planAt(hold.state, observe('error', { neighborAvailable: false, resyncAvailable: true }), T0 + G)
+test('stream-health: the presented error heals automatically, and the manual control survives an exhausted budget', () => {
+  // Presented target + live concrete face: the automatic resync fires at the grace.
+  const routedHold = planAt(createSessionStreamHealthState(), observe('error', { resyncAvailable: true }), T0)
+  const routed = planAt(routedHold.state, observe('error', { resyncAvailable: true }), T0 + G)
+  assert.equal(routed.action, 'heal')
+  // With every automatic heal in the rolling window spent, the SAME observation
+  // must not dispatch another one — it ARMS the manual control instead, because
+  // the human click is its own bound and the chip is the only exit that keeps the
+  // page. NOT ledger-gated: the plan offers it even while the automatic lane is
+  // cooling.
+  const spent: SessionStreamHealthState = { phase: 'error-hold', since: T0, healStamps: [T0, T0 + C, T0 + 2 * C] }
+  const armed = planAt(spent, observe('error', { resyncAvailable: true }), T0 + C + S)
   assert.equal(armed.action, 'resync')
   // The chip renders controls only alongside a notice, so an armed rebuild MUST
   // carry one (action='resync' + notice=null would render neither the rebuild
   // button nor the reload fallback).
   assert.equal(armed.notice, 'heal-failed')
-  // Fail-closed without the concrete face: the same hold only reports the reload
-  // notice once it has outlived a repair attempt, and never invents an action.
-  const noFace = planAt(hold.state, observe('error', { neighborAvailable: false }), T0 + G)
+  // Fail-closed without the concrete face: no action is ever invented, and the
+  // reload notice only appears once the hold has outlived a repair attempt.
+  const noLever = planAt(createSessionStreamHealthState(), observe('error', { resyncAvailable: false }), T0)
+  const noFace = planAt(noLever.state, observe('error', { resyncAvailable: false }), T0 + G)
   assert.equal(noFace.action, 'none')
   assert.equal(noFace.notice, null)
-  const drained = planAt(noFace.state, observe('error', { neighborAvailable: false }), T0 + G + S)
+  const drained = planAt(noLever.state, observe('error', { resyncAvailable: false }), T0 + G + S)
   assert.equal(drained.action, 'none')
   assert.equal(drained.notice, 'heal-failed', 'no lever at all is reported, not hidden')
-  // With a route the automatic stage move keeps precedence over the manual control.
-  const routedHold = planAt(createSessionStreamHealthState(), observe('error', { resyncAvailable: true }), T0)
-  const routed = planAt(routedHold.state, observe('error', { resyncAvailable: true }), T0 + G)
-  assert.equal(routed.action, 'heal')
 })
 
 test('stream-health: loading only arms a manual rebuild, independent of the error-heal ledger', () => {
@@ -245,7 +247,7 @@ test('stream-health: loading only arms a manual rebuild, independent of the erro
   assert.equal(armed.notice, 'loading-stall')
   const spent: SessionStreamHealthState = { phase: 'loading-hold', since: T0, healStamps: [T0, T0 + 1_000, T0 + 2_000] }
   assert.equal(planAt(spent, observe('loading', { resyncAvailable: true }), T0 + L).action, 'resync')
-  const noFace = planAt(hold.state, observe('loading'), T0 + L)
+  const noFace = planAt(hold.state, observe('loading', { resyncAvailable: false }), T0 + L)
   assert.equal(noFace.action, 'none')
 })
 
@@ -274,7 +276,7 @@ test('stream-health: the rolling window edge is exclusive, and releases exactly 
   }
   const before = planAt(stamped, observe('error'), T0 + W - 1)
   assert.equal(before.state.healStamps.length, 3)
-  assert.equal(before.action, 'none')
+  assert.equal(before.action, 'resync', 'the automatic lane is spent inside the window; the manual control is armed')
   assert.equal(before.notice, 'heal-failed')
   const exactly = planAt(stamped, observe('error'), T0 + W)
   assert.equal(exactly.state.healStamps.length, 2)
@@ -282,11 +284,11 @@ test('stream-health: the rolling window edge is exclusive, and releases exactly 
 })
 
 test('stream-health: both arms report their reload notice at the exact tick the levers run out', () => {
-  // No neighbor: the notice lands at grace + settle.
+  // No reachable face: the notice lands at grace + settle.
   const { notices } = drive([
-    { at: T0, observation: observe('error', { neighborAvailable: false }) },
-    { at: T0 + G + S - 1, observation: observe('error', { neighborAvailable: false }) },
-    { at: T0 + G + S, observation: observe('error', { neighborAvailable: false }) },
+    { at: T0, observation: observe('error', { resyncAvailable: false }) },
+    { at: T0 + G + S - 1, observation: observe('error', { resyncAvailable: false }) },
+    { at: T0 + G + S, observation: observe('error', { resyncAvailable: false }) },
   ])
   assert.deepEqual(notices, [null, null, 'heal-failed'])
 
@@ -372,7 +374,11 @@ test('stream-health: the latch hangs off the settle clock, not off the healing p
     { at: healed + 2_000, observation: observe('error') },
     { at: healed + 10_000, observation: observe('error') },
   ])
-  assert.deepEqual(recovered.notices, [null, null, null, null, null])
+  // The final tick arms the MANUAL control (the cooldown still blocks the
+  // automatic lane, and a human click is its own bound); the latch marker is
+  // what must stay unset — a false latch would pin the notice on a fresh episode.
+  assert.deepEqual(recovered.notices, [null, null, null, null, 'heal-failed'])
+  assert.equal(recovered.state.healFailedLatched, undefined, 'a fresh episode must not inherit the settled heal clock')
   assert.equal(recovered.actions[4], 0, 'the cooldown still paces the new episode')
 
   // (e) …and the marker is not dropped by the next tick: even past the old settle
@@ -387,8 +393,12 @@ test('stream-health: the latch hangs off the settle clock, not off the healing p
     { at: healed + C, observation: observe('error') },
     { at: healed + C + S, observation: observe('error') },
   ])
+  // Indices 4-5 are the manual control armed while the cooldown blocks the
+  // automatic lane; index 6 is the new episode's own automatic heal (its notice
+  // stays null until the heal is judged), index 7 the latch after that heal's
+  // settle window. The point: the latch waits for THIS episode's own clock.
   assert.deepEqual(newEpisode.notices,
-                   [null, null, null, null, null, null, null, 'heal-failed'])
+                   [null, null, null, null, 'heal-failed', 'heal-failed', null, 'heal-failed'])
   assert.equal(newEpisode.actions[6], healed + C, 'the new episode still heals itself')
 })
 
@@ -417,7 +427,7 @@ test('stream-health: a recovery marker survives a loading dwell (no false latch)
   // The loading state must carry `recoveredSinceHeal`, otherwise the next error
   // latches off the PREVIOUS episode's settle clock.
   const healed = T0 + G
-  const { notices } = drive([
+  const { notices, state } = drive([
     { at: T0, observation: observe('error') },
     { at: healed, observation: observe('error') },
     { at: healed + 1_000, observation: observe('open') },
@@ -425,13 +435,16 @@ test('stream-health: a recovery marker survives a loading dwell (no false latch)
     { at: healed + 3_000, observation: observe('error') },
     { at: healed + S + 3_000, observation: observe('error') },
   ])
-  assert.deepEqual(notices, [null, null, null, null, null, null])
+  // The last tick arms the manual control (the automatic lane is still cooling);
+  // the LATCH marker is what must stay unset — a false latch is the bug here.
+  assert.deepEqual(notices, [null, null, null, null, null, 'heal-failed'])
+  assert.equal(state.healFailedLatched, undefined)
 })
 
 test('stream-health: a recovery marker survives a hidden tick (no false latch)', () => {
   // Same shape through `presented === false`.
   const healed = T0 + G
-  const { notices } = drive([
+  const { notices, state } = drive([
     { at: T0, observation: observe('error') },
     { at: healed, observation: observe('error') },
     { at: healed + 1_000, observation: observe('open') },
@@ -439,7 +452,8 @@ test('stream-health: a recovery marker survives a hidden tick (no false latch)',
     { at: healed + 3_000, observation: observe('error') },
     { at: healed + S + 3_000, observation: observe('error') },
   ])
-  assert.deepEqual(notices, [null, null, null, null, null, null])
+  assert.deepEqual(notices, [null, null, null, null, null, 'heal-failed'])
+  assert.equal(state.healFailedLatched, undefined)
 })
 
 test('stream-health: cold and open are inert, and recovery keeps the budget', () => {
@@ -472,146 +486,80 @@ test('stream-health: a hidden surface zeroes every clock (no accumulation while 
   assert.equal(shown.actions[1], T0 + G)
 })
 
-test('stream-health: the neighbour choice never picks the target and degrades predictably', () => {
-  assert.equal(pickHealNeighbor(['a', 'b', 'c'], 'b'), 'a')
-  assert.equal(pickHealNeighbor(['a', 'b', 'c'], 'b', 'c'), 'c')
-  // A preference that is gone, or that IS the target, falls back to the first
-  // other id — the heal must never lose its detour silently.
-  assert.equal(pickHealNeighbor(['a', 'b'], 'b', 'b'), 'a')
-  assert.equal(pickHealNeighbor(['a', 'b'], 'b', 'zz'), 'a')
-  assert.equal(pickHealNeighbor(['only'], 'only'), undefined)
-  assert.equal(pickHealNeighbor([], 'only'), undefined)
-  assert.equal(hasHealNeighbor(['only'], 'only'), false)
-  assert.equal(hasHealNeighbor(['only', 'other'], 'only'), true)
-})
-
-test('stream-health: the stage move visits a neighbour first, and only for a current, listed target', () => {
-  const calls: string[] = []
-  const sessions: SessionsLoose = {
-    list: { getSnapshot: () => ({ ids: ['a', 'b', 'c'], current: 'b' }) },
-    open: (id: string) => { calls.push(id) },
-  }
-  assert.equal(healSessionStream(sessions, 'b'), true)
-  assert.deepEqual(calls, ['a', 'b'])
-  // The preferred (previously presented) neighbour wins when it is still listed.
-  calls.length = 0
-  assert.equal(healSessionStream(sessions, 'b', 'c'), true)
-  assert.deepEqual(calls, ['c', 'b'])
-  // A preference that is gone or is the target itself degrades to any other id.
-  calls.length = 0
-  assert.equal(healSessionStream(sessions, 'b', 'b'), true)
-  assert.deepEqual(calls, ['a', 'b'])
-  // PRECONDITION: the detour is only reversible while the
-  // target is the CURRENT, LISTED session. Everything else refuses — an
-  // address-only child would lose its scope to pruneScopes(), and a masked gap
-  // would strand the user on the neighbour.
-  calls.length = 0
-  const onOther: SessionsLoose = { list: { getSnapshot: () => ({ ids: ['a', 'b'], current: 'a' }) }, open: id => { calls.push(id) } }
-  assert.equal(healSessionStream(onOther, 'b'), false)
-  const masked: SessionsLoose = { list: { getSnapshot: () => ({ ids: ['a', 'b'] }) }, open: id => { calls.push(id) } }
-  assert.equal(healSessionStream(masked, 'b'), false)
-  const addressOnly: SessionsLoose = { list: { getSnapshot: () => ({ ids: ['a'], current: 'child' }) }, open: id => { calls.push(id) } }
-  assert.equal(healSessionStream(addressOnly, 'child'), false)
-  assert.deepEqual(calls, [])
-})
-
-test('stream-health: the heal is a no-op without a face or a second session, and never throws', () => {
-  assert.equal(healSessionStream(undefined, 'only'), false)
-  const solo: SessionsLoose = {
-    list: { getSnapshot: () => ({ ids: ['only'], current: 'only' }) },
-    open: () => { throw new Error('must not open') },
-  }
-  assert.equal(healSessionStream(solo, 'only'), false)
-  const hostile: SessionsLoose = {
-    list: { getSnapshot: () => ({ ids: ['a', 'b'], current: 'b' }) },
-    open: () => { throw new Error('framework blew up') },
-  }
-  assert.equal(healSessionStream(hostile, 'b'), false)
-  const drifting: SessionsLoose = {
+test('stream-health: presentation is the official mainView retention, not a chamber current mirror', () => {
+  const list = (byId: Record<string, { retainedBy?: Readonly<Record<string, number>> }>): SessionsConcreteLoose => ({
+    list: { getSnapshot: () => ({ byId }) },
+    binding: () => ({ session: { resync: () => {} } }),
+  })
+  const main = list({ a: { retainedBy: { mainView: 1 } } })
+  assert.equal(hasSessionStreamResync(main, 'a'), true, 'the mainView-retained row is the presented target')
+  // An id the main view does not retain has no lever from this seat: a
+  // sidebar-only retention is not "on stage" for the conversation header.
+  const sidebar = list({ a: { retainedBy: { sidebarView: 1 } } })
+  assert.equal(hasSessionStreamResync(sidebar, 'a'), false)
+  // A zero/negative count is not retention.
+  assert.equal(hasSessionStreamResync(list({ a: { retainedBy: { mainView: 0 } } }), 'a'), false)
+  // Absent row / absent byId / hostile snapshot: fail closed, never throw.
+  assert.equal(hasSessionStreamResync(list({}), 'a'), false)
+  assert.equal(hasSessionStreamResync({ list: { getSnapshot: () => ({}) } }, 'a'), false)
+  assert.equal(hasSessionStreamResync({
     list: { getSnapshot: () => { throw new Error('shape drift') } },
-    open: () => { throw new Error('must not open') },
-  }
-  assert.equal(healSessionStream(drifting, 'b'), false)
-})
-
-test('stream-health: the stage move is only offered when its target is current, listed and has a neighbour', () => {
-  const currentListed: SessionsLoose = { list: { getSnapshot: () => ({ ids: ['a', 'b'], current: 'b' }) }, open: () => {} }
-  assert.equal(hasHealRoute(currentListed, 'b'), true)
-  // An address-only subagent selection: current but absent from ids. The move must
-  // refuse it, so it must not look like it has a route (otherwise the ledger is
-  // spent on guaranteed refusals).
-  const addressOnly: SessionsLoose = { list: { getSnapshot: () => ({ ids: ['a'], current: 'child' }) }, open: () => {} }
-  assert.equal(hasHealRoute(addressOnly, 'child'), false)
-  // Not current, no other listed session, or a throwing snapshot: no route.
-  const notCurrent: SessionsLoose = { list: { getSnapshot: () => ({ ids: ['a', 'b'], current: 'a' }) }, open: () => {} }
-  assert.equal(hasHealRoute(notCurrent, 'b'), false)
-  const solo: SessionsLoose = { list: { getSnapshot: () => ({ ids: ['only'], current: 'only' }) }, open: () => {} }
-  assert.equal(hasHealRoute(solo, 'only'), false)
-  const throwing: SessionsLoose = { list: { getSnapshot: () => { throw new Error('shape drift') } }, open: () => {} }
-  assert.equal(hasHealRoute(throwing, 'a'), false)
-  assert.equal(hasHealRoute(undefined, 'a'), false)
+  }, 'a'), false)
+  assert.equal(hasSessionStreamResync(undefined, 'a'), false)
 })
 
 test('stream-health: the resync probe reaches the concrete face behind guards and fails closed', async () => {
   let calls = 0
-  let opened = 0
   const resync = (): Promise<void> => { calls += 1; return Promise.resolve() }
-  const concrete: SessionsConcreteLoose = {
-    list: { getSnapshot: () => ({ ids: ['a', 'b'], current: 'a' }) },
-    open: () => { opened += 1; throw new Error('the resync lever must never move the stage') },
-    resolve: (sessionId: string) => (sessionId === 'a' ? { session: { resync } } : undefined),
+  const presented: SessionsConcreteLoose = {
+    list: { getSnapshot: () => ({ byId: { a: { retainedBy: { mainView: 1 } } } }) },
+    binding: (sessionId: string) => (sessionId === 'a' ? { session: { resync } } : undefined),
   }
-  assert.equal(hasSessionStreamResync(concrete, 'a'), true)
-  assert.equal(resyncSessionStream(concrete, 'a'), true)
+  assert.equal(hasSessionStreamResync(presented, 'a'), true)
+  assert.equal(resyncSessionStream(presented, 'a'), true)
   assert.equal(calls, 1)
-  assert.equal(opened, 0)
-  // A session that is not the CURRENT, LISTED one is refused by the same
-  // precondition the stage move uses, and its concrete face is never read.
+  // A session the main view does not retain is refused by the same presented
+  // precondition, and its concrete face is never read.
   const other: SessionsConcreteLoose = {
-    list: { getSnapshot: () => ({ ids: ['a', 'b'], current: 'a' }) },
-    open: () => {},
-    resolve: () => ({ session: { resync } }),
+    list: { getSnapshot: () => ({ byId: { a: { retainedBy: { mainView: 1 } }, b: { retainedBy: {} } } }) },
+    binding: () => ({ session: { resync } }),
   }
   assert.equal(hasSessionStreamResync(other, 'b'), false)
   assert.equal(resyncSessionStream(other, 'b'), false)
-  assert.equal(calls, 1, 'a non-current session must not be rebuilt')
-  // Address-only subagent selections are CURRENT but absent from ids; the stage
-  // move must refuse them, yet the concrete per-session resync is exactly their
-  // lever, so listedness must NOT gate this read.
-  const addressOnlyCurrent: SessionsConcreteLoose = {
-    list: { getSnapshot: () => ({ ids: ['a'], current: 'child' }) },
-    open: () => {},
-    resolve: id => (id === 'child' ? { session: { resync } } : undefined),
+  assert.equal(calls, 1, 'a non-presented session must not be rebuilt')
+  // Address-only subagent selections are presented exactly like catalogued rows:
+  // the mainView retention is the whole fact, so listedness gates nothing.
+  const addressOnly: SessionsConcreteLoose = {
+    list: { getSnapshot: () => ({ byId: { child: { retainedBy: { mainView: 1 } } } }) },
+    binding: id => (id === 'child' ? { session: { resync } } : undefined),
   }
-  assert.equal(hasSessionStreamResync(addressOnlyCurrent, 'child'), true)
-  assert.equal(resyncSessionStream(addressOnlyCurrent, 'child'), true, 'an address-only child must be rebuildable')
+  assert.equal(hasSessionStreamResync(addressOnly, 'child'), true)
+  assert.equal(resyncSessionStream(addressOnly, 'child'), true, 'an address-only child must be rebuildable')
   assert.equal(calls, 2, 'the address-only child resync must reach the vendor method')
   const masked: SessionsConcreteLoose = {
-    list: { getSnapshot: () => ({ ids: ['a', 'b'] }) },
-    open: () => {},
-    resolve: () => ({ session: { resync } }),
+    list: { getSnapshot: () => { throw new Error('shape drift') } },
+    binding: () => ({ session: { resync } }),
   }
   assert.equal(resyncSessionStream(masked, 'a'), false)
-  // A build without the concrete services method (a face that predates it).
-  const noResolve: SessionsLoose = {
-    list: { getSnapshot: () => ({ ids: ['a'], current: 'a' }) },
-    open: () => {},
+  // A face without the rc.2 binding accessor has no concrete entry.
+  const noBinding: SessionsLoose = {
+    list: { getSnapshot: () => ({ byId: { a: { retainedBy: { mainView: 1 } } } }) },
   }
-  assert.equal(hasSessionStreamResync(noResolve, 'a'), false)
-  assert.equal(resyncSessionStream(noResolve, 'a'), false)
+  assert.equal(hasSessionStreamResync(noBinding, 'a'), false)
+  assert.equal(resyncSessionStream(noBinding, 'a'), false)
   // The method's own absence on the Session object (a pin without resync()).
-  const noMethod: SessionsConcreteLoose = { ...concrete, resolve: () => ({ session: {} }) }
+  const noMethod: SessionsConcreteLoose = { ...presented, binding: () => ({ session: {} }) }
   assert.equal(hasSessionStreamResync(noMethod, 'a'), false)
   assert.equal(resyncSessionStream(noMethod, 'a'), false)
   // Wrong shapes and throws are "no lever", never an exception.
-  const wrongShape: SessionsConcreteLoose = { ...concrete, resolve: () => ({ session: null }) }
+  const wrongShape: SessionsConcreteLoose = { ...presented, binding: () => ({ session: null }) }
   assert.equal(hasSessionStreamResync(wrongShape, 'a'), false)
   assert.equal(resyncSessionStream(wrongShape, 'a'), false)
   // A hostile accessor must not escape the guard: the capability read itself can
   // throw, and the whole point is "no lever", never an exception into React.
   const hostileGetter: SessionsConcreteLoose = {
-    ...concrete,
-    resolve: () => ({
+    ...presented,
+    binding: () => ({
       session: new Proxy({}, {
         get: () => { throw new Error('hostile resync getter') },
       }) as never,
@@ -619,44 +567,81 @@ test('stream-health: the resync probe reaches the concrete face behind guards an
   }
   assert.doesNotThrow(() => { assert.equal(hasSessionStreamResync(hostileGetter, 'a'), false) })
   assert.doesNotThrow(() => { assert.equal(resyncSessionStream(hostileGetter, 'a'), false) })
-  const missingSession: SessionsConcreteLoose = { ...concrete, resolve: () => undefined }
+  const missingSession: SessionsConcreteLoose = { ...presented, binding: () => undefined }
   assert.equal(hasSessionStreamResync(missingSession, 'a'), false)
   assert.equal(resyncSessionStream(missingSession, 'a'), false)
-  const hostileResolve: SessionsConcreteLoose = { ...concrete, resolve: () => { throw new Error('shape drift') } }
-  assert.equal(hasSessionStreamResync(hostileResolve, 'a'), false)
-  assert.equal(resyncSessionStream(hostileResolve, 'a'), false)
+  const hostileBinding: SessionsConcreteLoose = { ...presented, binding: () => { throw new Error('shape drift') } }
+  assert.equal(hasSessionStreamResync(hostileBinding, 'a'), false)
+  assert.equal(resyncSessionStream(hostileBinding, 'a'), false)
   const throwingResync: SessionsConcreteLoose = {
-    ...concrete,
-    resolve: () => ({ session: { resync: (): unknown => { calls += 1; throw new Error('reopen blew up') } } }),
+    ...presented,
+    binding: () => ({ session: { resync: (): unknown => { calls += 1; throw new Error('reopen blew up') } } }),
   }
   assert.equal(hasSessionStreamResync(throwingResync, 'a'), true, 'the capability exists before the call')
   assert.equal(resyncSessionStream(throwingResync, 'a'), false, 'a synchronous throw degrades to not available')
   // An async rejection is settled by the probe's own catch; an unhandled
   // rejection here would fail this test file under the node runner.
   const rejecting: SessionsConcreteLoose = {
-    ...concrete,
-    resolve: () => ({ session: { resync: (): Promise<void> => { calls += 1; return Promise.reject(new Error('reopen rejected')) } } }),
+    ...presented,
+    binding: () => ({ session: { resync: (): Promise<void> => { calls += 1; return Promise.reject(new Error('reopen rejected')) } } }),
   }
   assert.equal(resyncSessionStream(rejecting, 'a'), true)
   await new Promise(resolve => { setTimeout(resolve, 0) })
   // No face at all is the same "no lever" answer.
   assert.equal(hasSessionStreamResync(undefined, 'a'), false)
   assert.equal(resyncSessionStream(undefined, 'a'), false)
-  assert.equal(calls, 4, 'only the ISSUED calls (concrete, address-only child, throwing, rejecting) ever reached the method')
+  assert.equal(calls, 4, 'only the ISSUED calls (presented, address-only child, throwing, rejecting) ever reached the method')
 })
 
-test('stream-health: the detour prefers the session the user came from, capped and deduped', () => {
-  let presented: readonly string[] = []
-  presented = rememberPresented(presented, 'a')
-  presented = rememberPresented(presented, 'b')
-  presented = rememberPresented(presented, 'a')
-  assert.deepEqual([...presented], ['a', 'b'])
-  assert.equal(previousPresented(presented, 'a'), 'b')
-  assert.equal(previousPresented(presented, 'b'), 'a')
-  assert.equal(previousPresented(['only'], 'only'), undefined)
-  let many: readonly string[] = []
-  for (const id of ['a', 'b', 'c', 'd', 'e']) many = rememberPresented(many, id, 3)
-  assert.deepEqual([...many], ['e', 'd', 'c'])
+test('stream-health: the rc.2 binding(id) accessor alone reaches the concrete face', () => {
+  // The REAL rc.2 service exposes `binding(id) -> SessionBinding` and no
+  // `resolve` at all, so this face has exactly one accessor; the resolve-only
+  // rejection is asserted in the accessor test below.
+  let calls = 0
+  const resync = (): Promise<void> => { calls += 1; return Promise.resolve() }
+  const rc2: SessionsConcreteLoose = {
+    list: { getSnapshot: () => ({ byId: { a: { retainedBy: { mainView: 1 } } } }) },
+    binding: id => (id === 'a'
+      ? { session: { resync, openPromise: null, getSnapshot: () => ({ openState: 'loading' }) } }
+      : undefined),
+  }
+  assert.equal(hasSessionStreamResync(rc2, 'a'), true, 'the binding-only rc.2 face must expose the lever')
+  assert.equal(sessionOpenState(rc2, 'a'), 'loading', 'the binding-only rc.2 face must expose the open state')
+  assert.equal(sessionOpenInFlight(rc2, 'a'), false, 'the binding-only rc.2 face must expose the open promise')
+  assert.equal(resyncSessionStream(rc2, 'a'), true)
+  assert.equal(calls, 1)
+  // A row the main view does not retain is refused BEFORE the accessor runs.
+  let consulted = 0
+  const notPresented: SessionsConcreteLoose = {
+    list: { getSnapshot: () => ({ byId: { b: { retainedBy: { sidebarView: 1 } } } }) },
+    binding: () => { consulted += 1; return { session: { resync } } },
+  }
+  assert.equal(hasSessionStreamResync(notPresented, 'b'), false)
+  assert.equal(consulted, 0, 'a non-presented target never reaches the concrete accessor')
+})
+
+test('stream-health: binding is the only accessor, and a throwing accessor fails closed', () => {
+  const consulted: string[] = []
+  const rc2: SessionsConcreteLoose = {
+    list: { getSnapshot: () => ({ byId: { a: { retainedBy: { mainView: 1 } } } }) },
+    binding: () => { consulted.push('binding'); return { session: { resync: () => {} } } },
+  }
+  assert.equal(hasSessionStreamResync(rc2, 'a'), true)
+  assert.deepEqual(consulted, ['binding'])
+  // A throwing binding is a drifted face: fail closed, never a fallback.
+  const broken: SessionsConcreteLoose = { ...rc2, binding: () => { throw new Error('drift') } }
+  assert.equal(hasSessionStreamResync(broken, 'a'), false)
+  assert.equal(sessionOpenInFlight(broken, 'a'), undefined)
+  assert.equal(resyncSessionStream(broken, 'a'), false)
+  // Reverse assertion: the removed pre-rc.2 private resolve(id) is NOT an
+  // accessor, so a fake carrying only it has no lever at all.
+  const legacyOnly = {
+    list: { getSnapshot: () => ({ byId: { a: { retainedBy: { mainView: 1 } } } }) },
+    resolve: () => ({ session: { resync: () => {} } }),
+  }
+  assert.equal(hasSessionStreamResync(legacyOnly, 'a'), false, 'a resolve-only fake is not a face')
+  assert.equal(sessionOpenState(legacyOnly, 'a'), undefined)
+  assert.equal(resyncSessionStream(legacyOnly, 'a'), false)
 })
 
 test('stream-health: a recent carrier-churn fact surfaces the reconnecting notice and expires on its own', () => {
@@ -680,10 +665,10 @@ test('stream-health: churn never overrides the error or loading arms', () => {
   // Both arms need their hold to AGE first (the notice is never handed out on the
   // first frame), so each case steps twice — churn must not shortcut either.
   const errorHold = planAt(
-    createSessionStreamHealthState(), observe('error', { neighborAvailable: false, carrierChurn: churn }), T0,
+    createSessionStreamHealthState(), observe('error', { resyncAvailable: false, carrierChurn: churn }), T0,
   )
   const errored = planAt(
-    errorHold.state, observe('error', { neighborAvailable: false, carrierChurn: churn }), T0 + G + CONFIG.healSettleMs,
+    errorHold.state, observe('error', { resyncAvailable: false, carrierChurn: churn }), T0 + G + CONFIG.healSettleMs,
   )
   assert.equal(errored.notice, 'heal-failed', 'the hopeless arm owns the notice while the open state is error')
   const loadingHold = planAt(createSessionStreamHealthState(), observe('loading', { carrierChurn: churn }), T0)
@@ -694,45 +679,43 @@ test('stream-health: churn never overrides the error or loading arms', () => {
 test('stream-health: open liveness is tri-state, and only "nothing pending" is true evidence', () => {
   const pending = Promise.resolve()
   const concrete: SessionsConcreteLoose = {
-    list: { getSnapshot: () => ({ ids: ['a', 'b'], current: 'a' }) },
-    open: () => {},
-    resolve: id => (id === 'a' ? { session: { resync: () => {}, openPromise: pending } } : undefined),
+    list: { getSnapshot: () => ({ byId: { a: { retainedBy: { mainView: 1 } } } }) },
+    binding: id => (id === 'a' ? { session: { resync: () => {}, openPromise: pending } } : undefined),
   }
   assert.equal(sessionOpenInFlight(concrete, 'a'), true, 'a pending open is in flight')
-  const idle: SessionsConcreteLoose = { ...concrete, resolve: () => ({ session: { resync: () => {}, openPromise: null } }) }
+  const idle: SessionsConcreteLoose = { ...concrete, binding: () => ({ session: { resync: () => {}, openPromise: null } }) }
   assert.equal(sessionOpenInFlight(idle, 'a'), false, 'a null openPromise with the state on loading is the parked window')
   // A missing member is UNKNOWN, never "nothing pending": a renamed field must not
   // let the ladder destroy an open that is still in flight.
-  const drifted: SessionsConcreteLoose = { ...concrete, resolve: () => ({ session: { resync: () => {} } }) }
+  const drifted: SessionsConcreteLoose = { ...concrete, binding: () => ({ session: { resync: () => {} } }) }
   assert.equal(sessionOpenInFlight(drifted, 'a'), undefined)
   // Not the current session, no concrete face, a hostile accessor: unknown.
-  const other: SessionsConcreteLoose = { ...concrete, resolve: () => ({ session: { openPromise: null } }) }
+  const other: SessionsConcreteLoose = { ...concrete, binding: () => ({ session: { openPromise: null } }) }
   assert.equal(sessionOpenInFlight(other, 'b'), undefined)
   assert.equal(sessionOpenInFlight(undefined, 'a'), undefined)
-  const noResolve: SessionsLoose = { list: { getSnapshot: () => ({ ids: ['a'], current: 'a' }) }, open: () => {} }
-  assert.equal(sessionOpenInFlight(noResolve, 'a'), undefined)
+  const noBinding: SessionsLoose = { list: { getSnapshot: () => ({ byId: { a: { retainedBy: { mainView: 1 } } } }) } }
+  assert.equal(sessionOpenInFlight(noBinding, 'a'), undefined)
   const hostile: SessionsConcreteLoose = {
     ...concrete,
-    resolve: () => ({ session: new Proxy({}, { get: () => { throw new Error('hostile openPromise getter') } }) as never }),
+    binding: () => ({ session: new Proxy({}, { get: () => { throw new Error('hostile openPromise getter') } }) as never }),
   }
   assert.doesNotThrow(() => { assert.equal(sessionOpenInFlight(hostile, 'a'), undefined) })
   // ONLY an exactly-null own member is positive evidence: an empty slot is
   // UNKNOWN and must fail closed, or a renamed slot would let the automatic arm
   // rebuild an in-flight open.
-  const undefinedMember: SessionsConcreteLoose = { ...concrete, resolve: () => ({ session: { openPromise: undefined } }) }
+  const undefinedMember: SessionsConcreteLoose = { ...concrete, binding: () => ({ session: { openPromise: undefined } }) }
   assert.equal(sessionOpenInFlight(undefinedMember, 'a'), undefined)
 })
 
-test('page recovery reads only the current concrete session and rejects unknown states', () => {
+test('page recovery reads only the presented concrete session and rejects unknown states', () => {
   const sessions: SessionsConcreteLoose = {
-    list: { getSnapshot: () => ({ ids: ['a', 'b'], current: 'a' }) },
-    open: () => {},
-    resolve: id => ({ session: { getSnapshot: () => ({ openState: id === 'a' ? 'loading' : 'open' }) } }),
+    list: { getSnapshot: () => ({ byId: { a: { retainedBy: { mainView: 1 } }, b: { retainedBy: {} } } }) },
+    binding: id => ({ session: { getSnapshot: () => ({ openState: id === 'a' ? 'loading' : 'open' }) } }),
   }
   assert.equal(sessionOpenState(sessions, 'a'), 'loading')
   assert.equal(sessionOpenState(sessions, 'b'), undefined, 'a hidden session must not drive the visible recovery surface')
-  const unknownState: SessionsConcreteLoose = { ...sessions, resolve: () => ({ session: { getSnapshot: () => ({ openState: 'invented' }) } }) }
-  const staleScope: SessionsConcreteLoose = { ...sessions, resolve: () => { throw new Error('stale scope') } }
+  const unknownState: SessionsConcreteLoose = { ...sessions, binding: () => ({ session: { getSnapshot: () => ({ openState: 'invented' }) } }) }
+  const staleScope: SessionsConcreteLoose = { ...sessions, binding: () => { throw new Error('stale scope') } }
   assert.equal(sessionOpenState(unknownState, 'a'), undefined)
   assert.equal(sessionOpenState(staleScope, 'a'), undefined)
 })

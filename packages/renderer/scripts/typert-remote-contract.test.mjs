@@ -4,23 +4,23 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import {
   assertRemotePackageContract,
-  EXPECTED_REMOTE_PACKAGES,
+  EXPECTED_MOUNT_PACKAGES,
   remoteMountPackages,
   remotePackagesFromAssembly,
 } from './typert-remote-contract.mjs'
 
 const VENDOR = fileURLToPath(new URL('../../../vendor/harness-packages/@deepseek-ai/', import.meta.url))
 
-test('rc.8 dsh-api-remotes assembly and renderer generation stay in lockstep', () => {
+test('0.1.7-rc.2 dsh-api-remotes assembly and renderer generation stay in lockstep', () => {
   const source = readFileSync(`${VENDOR}dsh-api-remotes/src/client/index.ts`, 'utf8')
-  const packages = remotePackagesFromAssembly(source)
-  // The expected list is single-sourced in typert-remote-contract.mjs (shared
-  // with the upgrade gate's C4) so an upstream assembly change is ONE edit.
-  assert.deepEqual(packages, [...EXPECTED_REMOTE_PACKAGES])
-  // Imports are only the SELECTION; the apply() mount array is what becomes
-  // ctx.remote. A same-length edit to the array alone must fail.
-  assert.deepEqual(remoteMountPackages(source), [...EXPECTED_REMOTE_PACKAGES])
-  for (const packageName of packages) {
+  const selected = remotePackagesFromAssembly(source)
+  // Mount ORDER is the runtime contract; the expected list is single-sourced
+  // in typert-remote-contract.mjs (shared with the upgrade gate's C4).
+  assert.deepEqual(remoteMountPackages(source), [...EXPECTED_MOUNT_PACKAGES])
+  // Imports are only the SELECTION and their order has no runtime semantics,
+  // so the selection face is judged as a SET against the same single table.
+  assert.deepEqual([...selected].sort(), [...EXPECTED_MOUNT_PACKAGES].sort())
+  for (const packageName of selected) {
     const shortName = packageName.slice('@deepseek-ai/'.length)
     const manifest = JSON.parse(readFileSync(`${VENDOR}${shortName}/package.json`, 'utf8'))
     assertRemotePackageContract(packageName, manifest)

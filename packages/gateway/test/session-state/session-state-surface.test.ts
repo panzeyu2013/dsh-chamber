@@ -17,7 +17,7 @@ import { createChamberPlugins } from '../../src/plugins.ts'
 import { createChamberInstalled } from '../../src/plugins-installed.ts'
 import { createChamberSurface, type ChamberSurfaceDeps } from '../../src/routes.ts'
 import { createSessionStateService } from '../../src/session-state.ts'
-import { FakeRequest, FakeResponse, stubPluginTasks } from '../support/utils.ts'
+import { FakeRequest, FakeResponse } from '../support/utils.ts'
 import { scratch, silentLogger } from './harness.ts'
 
 const STATE = '/tmp/dsh-gateway-state'
@@ -43,8 +43,6 @@ function surfaceWithSessionState(stateDir: string, withSessionState: boolean): R
     },
     plugins: createChamberPlugins(stateDir, silentLogger),
     installed: createChamberInstalled(stateDir),
-    tasks: stubPluginTasks(),
-    stateDir,
     ...(service === null ? {} : { sessionState: service.surface }),
   })
 }

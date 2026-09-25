@@ -50,7 +50,7 @@ import { createChamberInstalled } from '../../src/plugins-installed.ts'
 import { createChamberPlugins } from '../../src/plugins.ts'
 import { createChamberSurface } from '../../src/routes.ts'
 import { createSessionStateStore, featuresForMode } from '../../src/session-state.ts'
-import { FakeRequest, FakeResponse, stubPluginTasks } from '../support/utils.ts'
+import { FakeRequest, FakeResponse } from '../support/utils.ts'
 import { baselineItem, scratch, sessionSurfaceFor, silentLogger } from './harness.ts'
 import { surfaceStubChannels } from '../support/chamber-surface-harness.ts'
 
@@ -137,8 +137,6 @@ function gatewayFor(t: { after(fn: () => void): void }): GatewayHarness {
     channels: surfaceStubChannels,
     plugins: createChamberPlugins(stateDir, silentLogger),
     installed: createChamberInstalled(stateDir),
-    tasks: stubPluginTasks(),
-    stateDir,
     sessionState,
   })
   return { surface, store }

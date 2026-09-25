@@ -19,9 +19,9 @@ dsh-chamber 的 Electron 壳（v4 连接管理器形态）：单 frame 加载控
 - `chamber-settings.ts` — chamber 全局设置 holder（`chamber-settings.json`，原子写，`dsh-chamber:settings-*` 数据面）
 - `notifications.ts` — 通知决策纯逻辑（validateNotificationRequest / decideNotification / claimNotificationDetailed，electron-free）
 - `deep-link.ts` — 深链解析/VS Code 启动（electron-free 决策 + 主进程执行）；scheme 判定/大小写规范化的单源 = `deep-link-scheme.ts`（leaf：shell-core 与 deep-link 之间有既有 ESM 值依赖环，scheme 放任一侧都会命中 class TDZ）
-- `pnpm-launcher.ts` — pnpm 位置事实单源：直接 spawn 的 launcher 形态（win32 禁 `.cmd`）+ 入口候选集/顺序/选择（`bundledPnpmEntryCandidates` / `firstExistingPnpmEntry`）与 bin-dir 扫描候选（runtime 安装器、sidecar 装配、`pnpm pack`、PATH 前缀共用）
+- `pnpm-launcher.ts` — pnpm 入口候选集/顺序/选择（`bundledPnpmEntryCandidates` / `firstExistingPnpmEntry`）的单源（runtime 安装器与 sidecar 装配共用；绝不命名 win32 `.cmd`）
 - `open-in.ts` — OpenInApp 注册表 + 六步 loud 执行管线（electron-free 决策 + 主进程执行）
-- `plugin-sync.ts` — 插件编排纯逻辑：manifest 解析/spec 分类/远端 probe/apply/seed/materialize（cordis insert 渲染与 wire manifest 读算法/掩码判据均经 control-plane-module 共享实现——打包态不引裸包名）
+- `plugin-sync.ts` — 插件**读面 + chamber 宿主包 seed** 纯逻辑：manifest 解析/行投影/spec 分类/远端 probe/seed（cordis insert 渲染与 wire manifest 读算法/掩码判据均经 control-plane-module 共享实现——打包态不引裸包名）。用户插件写面（apply/materialize/undo）已随 2026-09 C 分层裁决退役
 - `scripts/bundle-dsh.mjs` — 将官方发布包 `@deepseek-ai/dsh` 安装为本地运行时（`vendor/dsh`）
 - `scripts/build-control-plane.mjs` — 打包态将 `@dsh-chamber/control-plane` esbuild 打包为**自包含 ESM 单文件**（`dist/control-plane/index.js`，依赖全部内联，见下）
 - `scripts/build-preload.mjs` — 将 `preload.cts` 编译为纯 CJS（`dist/preload.cjs`；沙箱 preload 无 TS 类型擦除，`import type` 直接 SyntaxError，dev/打包统一用编译产物）
@@ -63,7 +63,7 @@ pnpm run dist:desktop
 
 ### bundle-dsh：dsh 运行时封装（scripts/bundle-dsh.mjs）
 
-- **dsh 运行时 = 官方发布包**：脚本用 `pnpm add @deepseek-ai/dsh@0.1.5-rc.2`（默认精确 pin；`DSH_CHAMBER_DSH_VERSION` 只接受精确 semver 做显式升级验证，拒绝 `latest`/range/URL；`--force` 仅刷新当前精确版本）。这个 pin **只约束桌面应用内嵌的本地 runtime，不约束远程实例版本**；各远程可独立升级，连接时只检查所需协议能力是否兼容。发布包自带完整插件依赖图 + 已构建 lib，**不克隆源码、不 tsc/tsdown 构建、不需要 tsx**。
+- **dsh 运行时 = 官方发布包**：脚本用 `pnpm add @deepseek-ai/dsh@0.1.7-rc.2`（默认精确 pin；`DSH_CHAMBER_DSH_VERSION` 只接受精确 semver 做显式升级验证，拒绝 `latest`/range/URL；`--force` 仅刷新当前精确版本）。这个 pin **只约束桌面应用内嵌的本地 runtime，不约束远程实例版本**；各远程可独立升级，连接时只检查所需协议能力是否兼容。发布包自带完整插件依赖图 + 已构建 lib，**不克隆源码、不 tsc/tsdown 构建、不需要 tsx**。
 - 构建工具固定为 `pnpm@11.21.0`；PATH 不匹配时自动以
   `npx --yes pnpm@11.21.0` 兜底，不解析浮动 major tag。
 - pnpm 11 两个坑（bundle-dsh 已处理）：① 默认拦截依赖构建脚本 → 生成的 `pnpm-workspace.yaml` 用 `allowBuilds` 白名单放行 node-pty/koffi/protobufjs/@google/genai/@deepseek-ai/dsh-subprocess-local（原生模块）；② 默认发布年龄策略可能过滤指定版本 → 临时 workspace 使用 `minimumReleaseAge: 0`，但输入仍必须是精确 semver，不引入浮动解析。
@@ -137,15 +137,9 @@ pnpm run dist:desktop
 | `desktop_ssh_status` | invoke | 非秘密状态投影 `{kind, transport, phase, localPort, sshPort, remotePort, retryAttempt, requiresUserAction, serviceActive, logSummary}` |
 | `desktop_ssh_logs` / `desktop_ssh_logs_clear` | invoke | 环形日志读取/清空 |
 | `desktop_ssh_start_service` / `stop_service` / `is_active` / `restart_service` | invoke | 远端 systemctl 起停/查询/重启 |
-| `desktop_ssh_plugin_list` | invoke | 远端插件清单投影（cat 远端 manifest + 本地解析） |
-| `desktop_ssh_plugin_apply` | invoke | 远端插件增删（registry add/remove 经主进程白名单复核后执行；**plugin_apply 无取消路径**——`{ok,cancelled}` 只存在于 ssh undo、本地 add/remove 与 materialize pick 等带对话框的通道，2026 audit C-F5 勘误） |
-| `desktop_ssh_seed_host_graph` | invoke | 向远端注入 chamber host 包（idempotent，hash-skip） |
-| `desktop_ssh_plugin_materialize_add` | invoke | 本地 manifest 依赖打包上传远端（**主进程确认**；name-only，路径由主进程解析） |
-| `desktop_ssh_plugin_materialize_add_pick` | invoke | 文件夹选择器打包上传远端（pick-only） |
-| `desktop_local_plugin_list` | invoke | 本地插件清单（依赖值路径**脱敏**为 `file:<hidden>`） |
-| `desktop_local_plugin_add` / `local_plugin_remove` | invoke | 本地插件安装/卸载（**主进程确认**；`file:` 拒收，走 picker） |
-| `desktop_local_plugin_add_file` | invoke | 本地文件夹选择器安装（pick-only） |
-| `desktop_npm_search` | invoke | npm registry 搜索（主进程 fetch，best-effort） |
+| `desktop_ssh_plugin_list` | invoke | 远端插件清单投影（cat 远端 manifest + 本地解析；只读） |
+| `desktop_ssh_seed_host_graph` | invoke | 向远端注入 chamber host 包（idempotent，hash-skip；供给面，非插件模型写面） |
+| `desktop_local_plugin_list` | invoke | 本地插件清单（依赖值路径**脱敏**为 `file:<hidden>`；只读） |
 | `dsh-chamber:update-state` | invoke | 更新状态快照（设计 11）：`{phase, currentVersion, latestVersion, channel, downloadPercent, releaseUrl, installBlockedReason, error}`——非秘密投影 |
 | `dsh-chamber:update-check` | invoke | 用户主动检查；复用周期检查路径，只做 feed 发现、不下载 |
 | `dsh-chamber:update-download` | invoke | 用户确认的「更新」动作：触发后台下载（`autoDownload=false`，不点击永不下载）；`{ok}` 或 `{error}` |
@@ -168,7 +162,7 @@ preload 暴露 `window.dshChamber = {controlPlaneUrl, dshVersion, version, platf
 - **传输 URL 只在主进程**：`readyUrl()` 仅限内部使用，永不经过 `status()` 或 IPC 面；renderer 只见 phase/localPort 投影，自行用 localPort 构造访问 URL。
 - **systemctl 无 shell 拼接**：固定参数数组 `systemctl <action> -- <serviceName>`；serviceName 以 `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$` 校验，首字符必须为字母或数字。
 - **凭据由主进程拥有（表单瞬时 write-only 输入例外）**：默认 ssh key/agent；可选 SSH 密码与 gateway token/password 只由表单瞬时采集并经 write-only IPC 进入主进程及上述 owner-only 镜像，永不返回/回填或由 renderer 持久化；askpass 永不上命令行，Gateway 仅向 exact connection-target scope 对应的注册 transport 注入白名单头；generation/proof/refresh epoch 阻止撤销后的迟到认证结果。HTTPS pin 匹配前登录/探针/HTTP/WS 反代发送零应用层字节；日志只含非秘密存在性/主机端口。
-- **插件动作主进程确认（设计 09 §4 v1 缓解）**：materialize 外传、本地插件安装/卸载、远端 `plugin_apply` registry 增删均须用户确认对话框（取消 `{ok,cancelled}`；无窗口 fail-closed；单飞防堆叠）；`local_plugin_list` 依赖值路径脱敏。
+- **插件写面退役（2026-09 C 分层裁决）**：安装/卸载/物化/撤销/npm 搜索/tarball 应用及对应的 ssh/gateway 写 IPC 已全部删除；仅保留只读清单投影（`plugin_list` / `local_plugin_list`，依赖值路径脱敏）、行投影与 capability 探针。chamber 宿主包 seed 与其 gateway seed-cache 同步是供给面，保留。
 
 ## 桌面环境验收清单
 

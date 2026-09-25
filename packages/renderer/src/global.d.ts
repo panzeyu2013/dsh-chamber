@@ -248,7 +248,6 @@ export type { PluginRowProjection }
 
 export interface RemotePluginManifest {
   dependencies: Record<string, string>
-  bundles: string[]
   /** Read-face row projection (design 21 §6.11.5). */
   rows: PluginRowProjection[]
   profileExists: boolean
@@ -266,56 +265,15 @@ export interface LocalPluginManifest {
   bundles: string[]
   rows: PluginRowProjection[]
   clientLines: string[]
-  /** Deps whose own manifest declares a `dsh.bundle` (verifyApplied bundles half-assertion). */
-  bundleLines: string[]
   unsyncable: { name: string; reason: string }[]
   /** Chamber-injected component state (design 09), always readable locally. */
   chamber: ChamberInjectionState
-}
-
-/** One failed plugin_apply entry (single-item isolation; never blocks others). */
-export interface PluginApplyFailure {
-  spec: string
-  error: string
-}
-
-/** plugin_apply result projection (design 13 §3): the honest outcome. */
-export interface PluginApplyResult {
-  applied: number
-  skipped: number
-  failed: PluginApplyFailure[]
-  /** Whether a restart was executed and reported success. */
-  restarted: boolean
-  /** User chose "install only, don't restart" (restart === false). */
-  deferred: boolean
-  /** package.json assertion result (false = fail-loud, no rollback). */
-  verified: boolean
-  /** Post-restart readiness re-check; null = no restart attempted. */
-  ready: boolean | null
-  /** When ready is null because the instance was not connected before restart
-   *  (readiness not re-checked), this explains why — the result view displays
-   *  it verbatim when restarted && ready === null. */
-  readyNote?: string
-}
-
-/** plugin_apply input (renderer → main; main re-validates every spec, §7.2). */
-export interface PluginApplyInput {
-  add: string[]
-  remove: string[]
-  restart?: boolean
 }
 
 /** Transient replacement credential committed with one registry save. */
 export interface SshPasswordSubmission {
   id: string
   password: string
-}
-
-/** One npm registry search hit (non-secret projection). */
-export interface NpmSearchPackage {
-  name: string
-  version: string
-  description?: string
 }
 
 /**
@@ -366,13 +324,6 @@ export interface DesktopSshSurface {
   /** Re-run the chamber-plugin seed-cache sync on a gateway instance's
    *  registered transport (design 21 §6.5); id-only, never a URL/credential. */
   gateway_plugin_sync(id: string): Promise<GatewayPluginSyncIpcResult>
-  /** Batch registry add/remove + restart-to-apply on a gateway instance
-   *  (design 21 §6.5): main-process confirmation first (cancelled = the user
-   *  dismissed it) + per-spec re-validation. */
-  gateway_plugin_apply(id: string, input: GatewayPluginApplyInput): Promise<GatewayPluginApplyIpcResult>
-  /** Pick a local plugin source (folder or .tgz archive) in MAIN and upload
-   *  it to a gateway instance (pick-only, design 21 §6.5/§10 ⑧). */
-  gateway_plugin_materialize(id: string): Promise<GatewayPluginMaterializeIpcResult>
   /** ~/.ssh/config discovery: non-secret host projections or {error}. */
   config_list(): Promise<SshConfigDiscovery>
   connect(id: string): Promise<SshStatusProjection | null>
@@ -391,31 +342,11 @@ export interface DesktopSshSurface {
   restart_service(id: string): Promise<SshExecIpcResult>
   /** Remote plugin manifest (design 13 §4.1): cat → parse → projection. */
   plugin_list(id: string): Promise<{ ok: true; manifest: RemotePluginManifest } | { ok: false; error: string }>
-  /** Apply plugin add/remove (design 13 §3): main re-validates, execs serially,
-   *  restarts (unless deferred), asserts, and re-checks readiness. */
-  plugin_apply(id: string, input: PluginApplyInput): Promise<{ ok: true; result: PluginApplyResult } | { ok: false; error: string }>
-  /** Undo the latest OK plugin change of a remote instance (design 21 §6.4):
-   *  main-process journal + confirm; id-only, no renderer-supplied spec. */
-  ssh_plugin_undo(id: string): Promise<SshPluginUndoIpcResult>
   /** Local plugin manifest (design 13 §4.1): main reads the authoritative local
    *  profile path (never dsh-chamber:info.dshHome). */
   local_plugin_list(): Promise<{ ok: true; manifest: LocalPluginManifest } | { ok: false; error: string }>
-  /** npm registry search (design 13 §5): main-side, non-secret projection. */
-  npm_search(query: string): Promise<{ ok: true; packages: NpmSearchPackage[] } | { ok: false; error: string }>
   /** Seed module A onto a remote instance (design 13 §3, 09 遗留 1). */
   seed_host_graph(id: string): Promise<SshSeedHostGraphResult>
-  /** Materialize a named dependency; MAIN resolves its authoritative path. */
-  plugin_materialize_add(id: string, name: string): Promise<SshMaterializeResult>
-  /** Pick a local plugin source (folder or .tgz archive) in MAIN and
-   *  materialize it remotely (pick-only, design 13 §5 / design 21 §6.5). */
-  plugin_materialize_add_pick(id: string): Promise<SshMaterializeResult>
-  /** Install a spec into the LOCAL dsh profile (design 13 §5). */
-  local_plugin_add(spec: string): Promise<SshLocalPluginExecIpcResult>
-  /** Pick a local plugin source (folder or .tgz archive) and install it into
-   *  the LOCAL dsh profile (pick-only, design 13 §5 / design 21 §6.5). */
-  local_plugin_add_file(): Promise<SshLocalPluginExecIpcResult>
-  /** Remove a plugin from the LOCAL dsh profile (design 13 §5). */
-  local_plugin_remove(name: string): Promise<SshLocalPluginExecIpcResult>
   onStatusChanged(callback: (payload: SshStatusChangedPayload) => void): () => void
   /** Registry changed: retire trusted lifecycle deltas before re-pulling the roster. */
   onInstancesChanged(callback: (payload: SshInstancesChangedPayload) => void): () => void
@@ -444,98 +375,12 @@ export type SshSeedHostGraphResult =
   | { ok: true; wrote: boolean; patched: boolean }
   | { ok: false; error: string }
 
-/** Materialize-and-add outcome (design 13 §3). `cancelled` = the user dismissed
- *  the local-source picker (a silent no-op, not an error). */
-export type SshMaterializeResult =
-  | { ok: true; spec: string; remotePath: string }
-  | { ok: true; cancelled: true }
-  | { ok: false; error: string }
-
-/** Local `dsh plugin` exec outcome (design 13 §5). `cancelled` = the user
- *  dismissed the local-source picker on the `local_plugin_add_file` path. */
-export type SshLocalPluginExecIpcResult =
-  | { ok: true }
-  | { ok: true; cancelled: true }
-  | { ok: false; error: string }
-
 /** Manual chamber-plugin sync outcome (design 21 §6.5): the gateway ready
  *  registration's seed-cache sync re-run on demand. ok:true carries the same
  *  {uploaded, skipped} projection as the auto path; ok:false is loud. */
 export type GatewayPluginSyncIpcResult =
   | { ok: true; uploaded: boolean; skipped: boolean }
   | { ok: false; error: string }
-
-/** Batch apply input (renderer → main; main re-validates every spec against
- *  the same shared whitelists the gateway routes use — defense in depth). */
-export interface GatewayPluginApplyInput {
-  add: string[]
-  remove: string[]
-  /** true = record the change only; the restart-to-apply is skipped. */
-  deferRestart?: boolean
-}
-
-/** Partial outcome of a failed batch: the ops already accepted by the
- *  gateway executor before the failure (restart refusal included) — never
- *  hidden behind the error text. */
-export interface GatewayPluginApplyPartial {
-  installed: string[]
-  removed: string[]
-}
-
-/** Batch apply outcome (design 21 §6.5): cancelled = the user dismissed the
- *  main-process confirmation; ok:true carries installed/removed (accepted
- *  ops), restarted (restart confirmed via the status poll) and deferred
- *  (true when some submissions were cached as ready-edge install intents);
- *  ok:false is loud and carries `partial` when ops executed before it. */
-export type GatewayPluginApplyIpcResult =
-  | { ok: true; cancelled: true }
-  | { ok: true; installed: string[]; removed: string[]; restarted: boolean; deferred?: boolean }
-  | { ok: false; error: string; partial?: GatewayPluginApplyPartial }
-
-/** Gateway materialize executed outcome (settle/restart parity with the
- *  apply batch): executed = the executor op terminally succeeded
- *  (the profile changed); restarted = the controlled managed-dsh restart
- *  was accepted AND settled, so the plugin is mounted on the running
- *  instance. ok:false may still carry the outcome when the profile change
- *  executed before a restart failure. */
-export interface GatewayPluginMaterializeOutcome {
-  executed: boolean
-  restarted: boolean
-}
-
-/** Local plugin materialize outcome (design 21 §6.5/§10 ⑧): cancelled = the
- *  user dismissed the picker; ok:true deferred = the gateway persisted the
- *  install intent for the next ready edge (it drains + restarts there);
- *  ok:true outcome = the executor ran the install AND the desktop asked for
- *  the controlled restart (outcome.restarted says whether the plugin is
- *  live now); ok:false is loud and carries outcome when the install
- *  executed before a restart failure. */
-export type GatewayPluginMaterializeIpcResult =
-  | { ok: true; cancelled: true }
-  | { ok: true; deferred: true }
-  | { ok: true; outcome: GatewayPluginMaterializeOutcome }
-  | { ok: false; error: string; outcome?: GatewayPluginMaterializeOutcome }
-
-/** Undo outcome of the ssh plugin journal (design 21 §6.4):
- *  the main process confirms the undo (cancelled = the user dismissed the
- *  dialog), re-executes the inverse op through the same ssh plugin_apply
- *  flow (restart-to-apply), and journals the undo op so further undos chain.
- *  ok:true undone.kind = the kind of the op that was undone ('add' — a
- *  fresh install was removed again, an in-place upgrade was restored to its
- *  previous spec; 'remove' — the name was re-added with its previous
- *  registry spec). undone carries NO further fields on a CLEAN undo (rows
- *  executed + restart ok + verified + no failed readiness re-check); when
- *  the change executed but is not fully effective (restart failed /
- *  verification failed / readiness failed) the arm carries {restarted,
- *  ready, readyNote?} — the presence of undone.restarted is the renderer's
- *  "executed but not fully effective" signal, never a fake clean success.
- *  ok:false carries unavailable: 'none' when there is no undoable op (or
- *  the previous spec cannot be restored) or 'file-backed' when the previous
- *  spec was a remote file: package that v1 cannot re-add. */
-export type SshPluginUndoIpcResult =
-  | { ok: true; cancelled: true }
-  | { ok: true; undone: { kind: 'add' | 'remove'; name: string; restarted?: boolean; ready?: boolean | null; readyNote?: string } }
-  | { ok: false; error: string; unavailable?: 'none' | 'file-backed' }
 
 /**
  * The desktop update surface (design 11) — non-secret only: versions,
@@ -805,9 +650,80 @@ export interface DshChamberBridge {
   badge: BadgeSurface
 }
 
+/** rc.2 官方 desktop carrier（window.dshDesktop）：preload.cts 的
+ *  exposeDesktopCarrier 与 Swift shim 的 dshDesktopApi 同形。官方 shortcuts /
+ *  ui-settings-general / ui-sidebar-browser 客户端按结构读取；本仓的类型权威是
+ *  packages/desktop/preload.cts（此处为渲染端消费镜像）。 */
+export type DesktopShortcutInput = { readonly revision: string } & (
+  | { readonly kind: 'menu'; readonly commandId: string }
+  | {
+    readonly kind: 'keyboard' | 'iframe' | 'webview'
+    readonly frameName: string
+    readonly code: string
+    readonly secondCode?: string
+    readonly control: boolean
+    readonly alt: boolean
+    readonly shift: boolean
+    readonly meta: boolean
+    readonly repeat: boolean
+  }
+)
+
+/** window.dshDesktop.keyboard —— 原生键盘输入订阅与受 revision 门控的关窗。 */
+export interface DesktopKeyboardApi {
+  subscribe(listener: (input: DesktopShortcutInput) => void): () => void
+  closeWindow(revision: string): Promise<void>
+}
+
+/** 已接受偏好快照（revision 是 native input 的接受门）。 */
+export interface DesktopShortcutsSnapshot {
+  readonly revision: string
+  readonly sequence: number
+  readonly document: unknown
+  readonly status: 'loading' | 'ready' | 'unreadable'
+  readonly error: 'read' | 'invalid' | 'future' | null
+  readonly usingDefaults: boolean
+}
+
+/** 一次 revision 校验过的偏好保存结果。 */
+export interface DesktopShortcutsSaveResult {
+  readonly status: 'saved' | 'stale' | 'unreadable' | 'write-failed' | 'not-ready' | 'conflict'
+  readonly snapshot: DesktopShortcutsSnapshot
+  readonly issue?: string
+  readonly conflicts?: readonly string[]
+}
+
+/** window.dshDesktop.shortcuts —— main 侧 userData/keybindings.json 事务。 */
+export interface DesktopShortcutsApi {
+  get(definitions: readonly unknown[]): Promise<DesktopShortcutsSnapshot>
+  edit(edit: unknown, revision: string): Promise<DesktopShortcutsSaveResult>
+  subscribe(listener: (snapshot: DesktopShortcutsSnapshot) => void): () => void
+  recording(active: boolean): Promise<void>
+}
+
+/** window.dshDesktop.updates —— 官方设置壳自行挂载的更新呈现投影。 */
+export interface DesktopUpdatePresentation {
+  readonly phase: 'idle' | 'checking' | 'available' | 'downloading' | 'verifying' | 'installing' | 'ready' | 'error'
+  readonly version?: string
+  readonly percent?: number
+  readonly failure?: 'check' | 'download' | 'install'
+}
+
+export interface DshDesktopCarrier {
+  readonly protocolVersion: 1
+  readonly updates: {
+    status(): Promise<DesktopUpdatePresentation>
+    open(): Promise<void>
+    subscribe(listener: (state: DesktopUpdatePresentation) => void): () => void
+  }
+  readonly keyboard: DesktopKeyboardApi
+  readonly shortcuts: DesktopShortcutsApi
+}
+
 declare global {
   interface Window {
     dshChamber?: DshChamberBridge
+    dshDesktop?: DshDesktopCarrier
   }
 }
 

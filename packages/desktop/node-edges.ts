@@ -15,7 +15,6 @@ import type {
   NativeNotificationSpec,
   NotificationSourceToken,
   HostSetBadgeResult,
-  HostPluginSourcePick,
   HostMessageOptions,
 } from './shell-core.ts'
 import { describeError } from './describe-error.ts'
@@ -176,7 +175,7 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
   // 等待回 'swift-edge-ui-unavailable:<method>:main-thread-busy'，模态结束前重发仍
   // 撞同一忙态。只走 notify（无回执）或一发即弃会让用户操作静默丢失；本队列经
   // edge + 有界重试：同一状态型 method 只保留最新载荷（单飞 + 合流），窗口内仍忙则
-  // loud 失败一次。交互腿（showMessage/pickPluginSource）不走本队列。
+  // loud 失败一次。交互腿（showMessage）不走本队列。
   interface QueuedLeg {
     /** 待送载荷队列（状态型恒只留最新；事件型按到达顺序排队、上限内逐条投递）。 */
     pending: unknown[]
@@ -433,15 +432,7 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
       return result !== false
     },
 
-    async pickPluginSource(): Promise<HostPluginSourcePick> {
-      const result = await deps.sendEdge('pickPluginSource', {})
-      const r = result as { status?: unknown; path?: unknown }
-      if (r.status === 'cancelled') return { status: 'cancelled' }
-      if (r.status === 'picked' && typeof r.path === 'string') {
-        return { status: 'picked', path: r.path }
-      }
-      throw new Error('sidecar-edges:pickPluginSource-invalid-answer')
-    },
+    // 2026-09 C 分层：插件源 pick 叶随写面整族移除（Swift 侧同名宿主腿同批删除）。
 
     showError(title: string, detail: string) {
       // 错误框是深链/更新失败路径的可见面：只把 leg 失败 catch 成一行 stderr 会让主线程

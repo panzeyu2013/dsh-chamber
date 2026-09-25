@@ -103,18 +103,6 @@ interface LayoutStoreRuntime {
   writeTimer: ReturnType<typeof setTimeout> | undefined
 }
 
-/**
- * AppFrame's sidebar-collapsed rule: `narrow = viewportWidth < autoCollapse`,
- * then `narrow ? !narrowExpanded : sidebar === 0`. Exported for the layoutFacts
- * `getCollapsed()` projection; consumers call that method, never this function.
- * @param snapshot - the layout store snapshot.
- * @param autoCollapse - the sidebar auto-collapse breakpoint (vendor columns.ts).
- */
-export function collapsedOf(snapshot: LayoutState, autoCollapse: number): boolean {
-  const { sidebar, viewportWidth, narrowExpanded } = snapshot.layoutInfo
-  return viewportWidth < autoCollapse ? !narrowExpanded : sidebar === 0
-}
-
 /** Trailing debounce for the persistence write (drag → ONE updateViewPrefs). */
 export const SIDEBAR_WRITE_DEBOUNCE_MS = 150
 

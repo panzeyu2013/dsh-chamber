@@ -59,10 +59,9 @@ export const inject = ['slots', 'locale']
 
 /**
  * The「dsh 运行时」`settings.section` id this package registers on the source's own
- * boot ctx (order 31, right after agent-presets). Exported because it is the
- * section's cross-module identity.
+ * boot ctx (order 31, right after agent-presets).
  */
-export const RUNTIME_SECTION_ID = 'dsh-runtime'
+const RUNTIME_SECTION_ID = 'dsh-runtime'
 
 /** Register the chamber settings shell once the `sidebar.settings` declaration is on the ledger. */
 export function apply(ctx: ClientContext): void {

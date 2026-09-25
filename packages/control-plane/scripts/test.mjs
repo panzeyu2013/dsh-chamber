@@ -130,10 +130,6 @@ const GROUPS = {
     // plugin-manifest 单一定义（wire 共享面）的 parse/版本/掩码/版本门矩阵 +
     // control-plane 公开面的同源断言（design 21 §3 readManifest）。
     'test/plugins/plugin-manifest.test.ts',
-    // 受限 mutation 子进程执行器（design 21 §6.3）：env 白名单（dsh-runtime
-    // INSTALL_ENV_WHITELIST 单一来源 + 注入式 spawn 假体）、有界输出 tail、
-    // 超时 TERM→KILL、argvPrefix/cwd 与注入式 childExecutor 缝。
-    'test/plugins/plugin-mutation-executor.test.ts',
   ],
   // windows: Windows 探针解析/分类与 win32-only 生命周期集成
   'windows': [

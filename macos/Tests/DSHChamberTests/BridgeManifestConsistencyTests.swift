@@ -6,11 +6,11 @@
 //  由 packages/desktop/bridge-manifest.test.ts 保证；本测试钉 Swift 生成物
 //  （编译接线后的白名单真值）——防提交的 BridgeManifest.swift 被手工改坏/
 //  漂移后 swift test 仍静默全绿：
-//    1. 通道数守恒：invoke 61 / push 8；
+//    1. 通道数守恒：invoke 51 / push 9（D1 插件写面退役后 JSON/Swift 生成物计数）；
 //    2. 方向无交集：invoke ∩ push = ∅；
 //    3. invoke 方向抽样：dsh-chamber:info / desktop_ssh_instances_get /
 //       desktop_ssh_connect 属 invoke 面（main 侧 handle 注册事实）；
-//    4. push 精确 golden 8：逐条转录自提交物 packages/desktop/bridge-manifest.json
+//    4. push 精确 golden 9：逐条转录自提交物 packages/desktop/bridge-manifest.json
 //       的 push 数组（勿臆造）——通道增删必须同 PR 同步提交物与两侧测试
 //       （bridge-manifest.test.ts 同款「同步是故意为之」纪律）。
 //
@@ -24,8 +24,8 @@ final class BridgeManifestConsistencyTests: XCTestCase {
     func testCountsInvokeAndPush() {
         // 当前仓库事实（与 bridge-manifest.json 的 counts 及
         // bridge-manifest.test.ts ③ 同一批数字）；通道增删须同步更新。
-        XCTAssertEqual(BridgeManifest.invokeChannels.count, 61, "invoke 通道数应 == 提交物 counts.invoke（61）")
-        XCTAssertEqual(BridgeManifest.pushChannels.count, 8, "push 通道数应 == 提交物 counts.push（8）")
+        XCTAssertEqual(BridgeManifest.invokeChannels.count, 51, "invoke 通道数应 == 提交物 counts.invoke（51）")
+        XCTAssertEqual(BridgeManifest.pushChannels.count, 9, "push 通道数应 == 提交物 counts.push（9）")
     }
 
     func testInvokeAndPushDisjoint() {
@@ -50,22 +50,26 @@ final class BridgeManifestConsistencyTests: XCTestCase {
         }
     }
 
-    func testPushChannelsExactlyGoldenEight() {
+    func testPushChannelsExactlyGoldenNine() {
         // golden 精确集：转录自提交物 packages/desktop/bridge-manifest.json 的
-        // push 数组（8 条，按 JSON 定义序）——与 main 侧 8 处推送注册点一一对应。
+        // push 数组（9 条，按 JSON 定义序）——与 main 侧 9 处推送注册点一一对应
+        // （shell-core 5：SETTINGS_CHANGED / NOTIFICATION_OPEN / UPDATE_STATE_CHANGED /
+        //  DEEP_LINK_INTENT / SYSTEM_RESUME；main 4：RENDERER_STALL_EVIDENCE /
+        //  SSH_STATUS_CHANGED / SSH_INSTANCES_CHANGED / RUNTIME_STATE_CHANGED）。
         let golden: Set<String> = [
             "dsh-chamber:settings-changed",
             "dsh-chamber:notification-open",
             "dsh-chamber:update-state-changed",
             "dsh-chamber:deep-link-intent",
             "dsh-chamber:system-resume",
+            "dsh-chamber:renderer-stall-evidence",
             "desktop_ssh_status_changed",
             "desktop_ssh_instances_changed",
             "dsh-chamber:runtime-state-changed",
         ]
         XCTAssertEqual(
             BridgeManifest.pushChannels, golden,
-            "push 通道集必须 == 提交物 push 数组的精确 8 集（多/少/改名都算漂移）"
+            "push 通道集必须 == 提交物 push 数组的精确 9 集（多/少/改名都算漂移）"
         )
     }
 }

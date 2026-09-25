@@ -24,6 +24,10 @@ class ElementStub {
   parentElement: ElementStub | null = null
   children: ElementStub[] = []
   style = { setProperty() {} }
+  // A real container is an HTMLElement and therefore carries its document; the
+  // boot chain reads it for the window-drag watcher, which is a no-op on any
+  // platform other than darwin.
+  ownerDocument = { documentElement: { dataset: { platform: 'test' } } }
 
   append(...children: ElementStub[]): void {
     for (const child of children) child.parentElement = this

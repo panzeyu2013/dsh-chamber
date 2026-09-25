@@ -39,14 +39,7 @@ import {
 // The plugin spec/name whitelist family (control-plane plugin-spec.ts, design
 // 21 §6.2/§6.7 — the single source shared with the gateway; re-exported below
 // for this provider's consumers).
-import {
-  MATERIALIZE_FILE_SPEC_PATTERN,
-  MAX_PLUGIN_SPEC_CHARS,
-  PLUGIN_NAME_PATTERN,
-  PLUGIN_SPEC_PATTERN,
-  RUN_STDOUT_MAX_BYTES,
-  WRITE_FILE_MAX_BYTES,
-} from './control-plane-module.ts'
+import { RUN_STDOUT_MAX_BYTES, WRITE_FILE_MAX_BYTES } from './control-plane-module.ts'
 import { CHILD_LINE_MAX_CHARS, createBoundedLineProcessor } from './bounded-lines.ts'
 import { getGatewayPassword, getGatewaySessionHooks, getGatewayToken, verifyGatewayPasswordSession, verifyGatewayRuntimeIdentity } from './gateway-provider.ts'
 import { INSTANCE_ID_PATTERN, MAX_INSTANCE_LABEL_CHARS, signalChild } from './transport-provider.ts'
@@ -92,19 +85,12 @@ export const MAX_SSH_USER_CHARS = 64
 export const MAX_SERVICE_NAME_CHARS = 255
 export const MAX_REMOTE_DSH_HOME_CHARS = 1024
 export const MAX_SSH_PASSWORD_CHARS = 4096
-/** Package-spec whitelist family, SINGLE-SOURCED in control-plane `plugin-spec.ts` (shared with the
- *  gateway) and consumed through control-plane-module.ts (packaged → compiled dist, dev → workspace
- *  source), the same rule as the rpc-envelope primitives; re-exported here so this provider's
- *  consumers keep one unchanged import surface. The reserved-name judgement lives in
- *  `protected-plugins.ts`. */
-export {
-  MATERIALIZE_FILE_SPEC_PATTERN,
-  MAX_PLUGIN_SPEC_CHARS,
-  PLUGIN_NAME_PATTERN,
-  PLUGIN_SPEC_PATTERN,
-  RUN_STDOUT_MAX_BYTES,
-  WRITE_FILE_MAX_BYTES,
-}
+/** Content bounds SINGLE-SOURCED in control-plane `plugin-spec.ts` and consumed through
+ *  control-plane-module.ts (packaged → compiled dist, dev → workspace source), the same rule as
+ *  the rpc-envelope primitives; re-exported here so this provider's consumers keep one unchanged
+ *  import surface. The user plugin write surface (and with it the spec/name whitelist family)
+ *  was retired with the 2026-09 C layering ruling. */
+export { RUN_STDOUT_MAX_BYTES, WRITE_FILE_MAX_BYTES }
 
 /** Bound of the redacted stderr detail attached to failed `run` errors. */
 const RUN_STDERR_DETAIL_MAX_CHARS = 2048
@@ -1216,21 +1202,8 @@ export function buildRemoteExecArgv(spec: TransportInstanceSpec, payload: Transp
   const argv = payload.argv
   if (!Array.isArray(argv)) return null
   const prefix = spec.remoteDshHome !== null ? [`DSH_HOME=${spec.remoteDshHome}`] : []
-  if (payload.command === 'dsh') {
-    // argv = ['plugin', '--profile', 'web', 'add'|'remove', <spec>]
-    if (argv.length !== 5 || argv[0] !== 'plugin' || argv[1] !== '--profile' || argv[2] !== 'web') return null
-    if (argv[3] !== 'add' && argv[3] !== 'remove') return null
-    const specArg = argv[4]
-    if (typeof specArg !== 'string') return null
-    // `add` accepts the registry spec OR the main-process materialize `file:` absolute-tarball form
-    // (MATERIALIZE_FILE_SPEC_PATTERN; renderer input can never reach this branch — applyPlugins
-    // re-validates against PLUGIN_SPEC_PATTERN, which refuses `file:`); `remove` is name-only.
-    const ok = specArg.length <= MAX_PLUGIN_SPEC_CHARS && (argv[3] === 'add'
-      ? PLUGIN_SPEC_PATTERN.test(specArg) || MATERIALIZE_FILE_SPEC_PATTERN.test(specArg)
-      : PLUGIN_NAME_PATTERN.test(specArg))
-    if (!ok) return null
-    return [...prefix, 'dsh', ...argv]
-  }
+  // The retired user plugin write surface was the only `dsh plugin` caller: no `dsh` argv is
+  // ever whitelisted again (the seed/read faces use cat + write-file only).
   if (payload.command === 'cat') {
     if (argv.length !== 1 || typeof argv[0] !== 'string') return null
     const home = spec.remoteDshHome ?? '~/.dsh'
@@ -1248,13 +1221,6 @@ export function buildRemoteExecArgv(spec: TransportInstanceSpec, payload: Transp
     // as a loud ssh failure). Fixed literal env assignment; `DSH_HOME` rides the same prefix chain.
     return [...prefix, 'LC_ALL=C', 'cat', argv[0]]
   }
-  if (payload.command === 'printf') {
-    // Remote `$HOME` lookup for the materialize `file:` absolute path: a FIXED argv constructed here
-    // in the main process only (never renderer input); `$HOME` is a literal the REMOTE shell expands.
-    // (`$` is normally refused on the command line — this single constant is the sanctioned exception.)
-    if (argv.length !== 2 || argv[0] !== '%s' || argv[1] !== '$HOME') return null
-    return ['printf', '%s', '$HOME']
-  }
   return null
 }
 
@@ -1263,12 +1229,12 @@ export function buildRemoteExecArgv(spec: TransportInstanceSpec, payload: Transp
  *  rejected. Shared by the write-file target whitelist and the cat seed read-back. */
 const SEED_RELATIVE_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*(\/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$/
 
-/** Validate a write-file target against the fixed prefixes (materialized-tarball dir, seed dir,
- *  profile patch file); returns the target (`~` left for the remote shell) or null. */
+/** Validate a write-file target against the fixed prefixes (seed dir, profile patch file);
+ *  returns the target (`~` left for the remote shell) or null. The materialized-tarball dir was
+ *  removed with the retired materialize write surface. */
 export function resolveWriteTarget(spec: TransportInstanceSpec, path: string | undefined): string | null {
   if (typeof path !== 'string' || path === '') return null
   const home = spec.remoteDshHome ?? '~/.dsh'
-  if (/^~\/\.dsh-chamber\/plugins\/[a-zA-Z0-9._-]+\.tgz$/.test(path)) return path
   const seedPrefix = `${home}/profiles/node_modules/@dsh-chamber/`
   if (path.startsWith(seedPrefix) && path.length > seedPrefix.length && SEED_RELATIVE_PATTERN.test(path.slice(seedPrefix.length))) return path
   if (path === `${home}/profiles/web/cordis.patch.yml`) return path
@@ -1416,7 +1382,7 @@ async function runRemoteExec(
     if (typeof payload.contentBase64 !== 'string' || typeof payload.sha256 !== 'string') {
       return Promise.resolve({ ok: false, error: 'write-file requires contentBase64 and sha256' })
     }
-    // Size cap: bounds the decoded payload before any write, covering the seed and materialize
+    // Size cap: bounds the decoded payload before any write, covering the seed
     // payloads that flow through write-file. The base64 length is pre-checked so an oversized payload
     // is refused BEFORE allocating its decoded buffer (base64 of N bytes is ≤ ⌈N/3⌉·4 chars).
     const maxBase64Len = Math.ceil(WRITE_FILE_MAX_BYTES / 3) * 4 + 4

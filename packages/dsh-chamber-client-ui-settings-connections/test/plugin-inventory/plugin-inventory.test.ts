@@ -107,6 +107,52 @@ test('loadPluginInventory: malformed envelopes and invalid snapshots are loud Ty
   }
 })
 
+/**
+ * rc.2 re-anchor (RC-C1): the read view projects ONLY the Loader `entries`. Host display
+ * metadata (`meta`), `managementAvailable` and the per-preset `agentPresets` compositions
+ * have no consumer in this repo, so they are neither declared nor validated: a payload
+ * carrying them parses to exactly the entries projection.
+ */
+test('loadPluginInventory: the rc.2 real shape projects entries; meta/managementAvailable/agentPresets are ignored', async () => {
+  const rc2 = {
+    managementAvailable: true,
+    entries: [{
+      entryId: 'p1',
+      moduleName: '@deepseek-ai/dsh-demo',
+      meta: {
+        title: 'Demo',
+        description: { en: 'Demo plugin', zh: '演示' },
+        icon: 'data:image/png;base64,AA==',
+        error: 'icon unreadable',
+      },
+      enabled: true,
+      fiberPhase: 'active',
+    }],
+    agentPresets: [{
+      id: 'default',
+      name: '默认组合',
+      isDefault: true,
+      rows: [{
+        entryId: 'row-1',
+        moduleName: '@deepseek-ai/dsh-demo',
+        meta: { title: { en: 'Demo' } },
+        enabled: 'conditional',
+        condition: '!!js process.platform === "darwin"',
+        fiberPhase: null,
+      }],
+    }],
+  }
+  const stub = stubFetch(200, serverResponse('rpc-rc2', { ok: true, value: rc2 }))
+  try {
+    const snapshot = await loadPluginInventory('gateway-west')
+    assert.deepEqual(snapshot, {
+      entries: [{ entryId: 'p1', moduleName: '@deepseek-ai/dsh-demo', enabled: true, fiberPhase: 'active' }],
+    }, 'only entries is projected; meta/managementAvailable/agentPresets are dropped')
+  } finally {
+    stub.restore()
+  }
+})
+
 test('thirdPartyEntries: official and chamber packages are excluded, everything else stays', () => {
   const rows = thirdPartyEntries(okSnapshot)
   assert.deepEqual(rows.map(row => row.moduleName), ['@dsh-chamber/user-tool', 'my-third-party-plugin'])

@@ -991,6 +991,20 @@ test('Git worktree client is a first-screen covered factory (static composite lo
   assert.ok(CHAMBER_COVERED_FACTORY_IDS.includes(id))
 })
 
+test('D2: the official open-in client row stays uncovered; chamber open-in stays a covered factory', () => {
+  // D2: the official @deepseek-ai/dsh-client-ui-open-in-app row loads from the
+  // host graph so its file-level seats register (the right-sidebar document
+  // actions and the deliverables file actions, both over the per-instance
+  // session Remote). Its own header entry stays inert on this page — its
+  // document-relative `open-in-app/*` routes resolve to the control-plane origin
+  // and the official host half is disabled by the per-spawn overlay — so the
+  // effective directory-open entry remains chamber's own `open-in` family.
+  assert.ok(!CHAMBER_COVERED_IDS.includes('@deepseek-ai/dsh-client-ui-open-in-app'),
+    'the official open-in client row must stay uncovered so its file-level seats load')
+  assert.ok(CHAMBER_COVERED_IDS.includes('@dsh-chamber/dsh-chamber-client-ui-open-in'))
+  assert.ok(CHAMBER_COVERED_FACTORY_IDS.includes('@dsh-chamber/dsh-chamber-client-ui-open-in'))
+})
+
 // ── `awaitBeforeLoad` must settle before the
 // first extra-bundle load pass when rows exist, and be skipped entirely when
 // dedupe leaves nothing to load (an absent gate starts the load pass immediately).

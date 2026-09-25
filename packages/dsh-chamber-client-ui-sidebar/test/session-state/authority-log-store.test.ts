@@ -8,14 +8,17 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  appendAuthorityLog,
+  authorityLogStorage,
+  type AuthorityLogStorage,
+} from '@dsh-chamber/dsh-chamber-client-core/authority-log-store'
+// Test-only internals: package-internal deep imports keep them off the public subpath face.
+import {
   AUTHORITY_LOG_KEY,
   AUTHORITY_LOG_MAX_PER_SOURCE,
   AUTHORITY_LOG_MAX_SOURCES,
-  appendAuthorityLog,
-  authorityLogStorage,
   loadAuthorityLog,
-  type AuthorityLogStorage,
-} from '@dsh-chamber/dsh-chamber-client-core/authority-log-store'
+} from '../../../dsh-chamber-client-core/src/authority-log-store.ts'
 
 class MemoryStorage implements AuthorityLogStorage {
   readonly map = new Map<string, string>()

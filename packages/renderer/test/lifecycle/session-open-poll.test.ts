@@ -4,9 +4,12 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { AppWebEntry } from '../../test-fixtures/dsh-client-web.mjs'
 import {
-  __testEventLog, __testOpenedSessions, __testQueueRunGate, __testResetEventLog,
-  __testResetLifecycle, __testSetChamberPrefetchError, __testSetSessionsAvailable,
+  __testEventLog, __testOpenedSessions, __testPresentedSession, __testQueueRunGate,
+  __testReleasedSessions, __testResetEventLog, __testResetLifecycle, __testRetainCalls,
+  __testSetChamberPrefetchError, __testSetNavigationAvailable, __testSetNavigationReadError, __testSetReflectAvailable,
+  __testSetSessionsAvailable,
   __testSetSessionsListed, __testSetSessionsOpenError, __testSetSessionsReadError,
   __testSetSessionsSnapshotError,
   bootInstanceShell, disposeAllShells, disposeInstanceShell, hostileThrownValue,
@@ -415,4 +418,140 @@ test('openInstanceSession: the request record is dropped for a same-id re-add �
     ],
     'the re-added source’s first open must reach the runtime, never be judged against the previous incarnation',
   )
+})
+
+test('openInstanceSession: a click presents through the official view owner and retains the session (no silent no-op)', async (t) => {
+  // The rc.2 breakage this locks: ISessions.open no longer exists, so a
+  // dispatch still calling it would throw (the fixture face has no `open`) or
+  // silently do nothing. The fixture mirrors the vendor composition —
+  // uiWorkspace.openSession retains the target with source 'mainView' and
+  // releases the reference it replaced — so this is the click-really-opens lock,
+  // not a source-text proxy.
+  const instanceId = 'ssh-test-present-retain'
+  shellTestScope(t, { silentConsole: false }, instanceId)
+  const state = await bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
+  assert.equal(state.booted, true)
+
+  await openInstanceSession(instanceId, 'session-A')
+  assert.deepEqual(__testRetainCalls(), [
+    { label: 'entry-1', sessionId: 'session-A', source: 'mainView' },
+  ], 'the click must retain the requested session as the official main view')
+  assert.equal(__testPresentedSession('entry-1'), 'session-A')
+  assert.deepEqual(__testReleasedSessions(), [], 'the first presentation replaces no reference')
+
+  // A switch retains the new target FIRST and then releases the replaced
+  // reference (vendor replaceMain order), so presentation never loses every
+  // main-view reference even for one tick.
+  await openInstanceSession(instanceId, 'session-B')
+  assert.deepEqual(__testRetainCalls().slice(1), [
+    { label: 'entry-1', sessionId: 'session-B', source: 'mainView' },
+  ])
+  assert.deepEqual(__testReleasedSessions(), [{ label: 'entry-1', sessionId: 'session-A' }],
+    'the replaced reference must be released, or the old session stays the UI main binding')
+  assert.equal(__testPresentedSession('entry-1'), 'session-B')
+
+  // Instance destruction drops the presented reference with the ctx.
+  disposeInstanceShell(instanceId)
+  await Promise.resolve()
+  assert.deepEqual(__testReleasedSessions(), [
+    { label: 'entry-1', sessionId: 'session-A' },
+    { label: 'entry-1', sessionId: 'session-B' },
+  ], 'shell disposal must release the last presented reference')
+})
+
+test('openInstanceSession: a view owner that registers late still opens on the same poll', async (t) => {
+  const instanceId = 'ssh-test-view-late'
+  shellTestScope(t, { silentConsole: false }, instanceId)
+  __testSetNavigationAvailable(false)
+  const state = await bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
+  assert.equal(state.booted, true)
+  // The sessions face is live but the ui-workspace row has not activated: the
+  // dispatch must stay pending (transient), never fail on the first attempt.
+  const opening = openInstanceSession(instanceId, 'view-late-session')
+  let settled = false
+  void opening.then(() => { settled = true }, () => { settled = true })
+  await Promise.resolve()
+  assert.equal(settled, false)
+
+  __testSetNavigationAvailable(true)
+  t.mock.timers.tick(400)
+  await opening
+  assert.deepEqual(__testOpenedSessions(), [
+    { label: 'entry-1', sessionId: 'view-late-session' },
+  ])
+})
+
+test('openInstanceSession: a view owner that never registers fails loud with its own readiness report', async (t) => {
+  const instanceId = 'ssh-test-view-never'
+  shellTestScope(t, {}, instanceId)
+  __testSetNavigationAvailable(false)
+  const state = await bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
+  assert.equal(state.booted, true)
+  const opening = openInstanceSession(instanceId, 'view-never-session')
+  const rejected = assert.rejects(opening, /实例会话导航服务不可用/)
+  t.mock.timers.tick(8_001)
+  await rejected
+  assert.deepEqual(__testOpenedSessions(), [])
+})
+
+test('fixture reflect contract: only get(name, false) answers an absent service, and the direct property is a throwing alarm', () => {
+  // The production branch under test is shell.ts's reflect-only read. This pins
+  // the fixture half of that lock: the direct `uiWorkspace` property must stay
+  // hostile (a reinstated fallback in shell.ts explodes instead of silently
+  // passing), a typo'd service name must throw on the strict default (so the
+  // shell's explicit `false` argument is load-bearing), and the non-throwing
+  // form must answer undefined for the absent service (the transient arm).
+  const entry = new AppWebEntry({} as HTMLElement, {})
+  const ctx = entry.runtimeCtx as unknown as {
+    uiWorkspace?: unknown
+    reflect: { get(name: string, strict?: boolean): unknown }
+  }
+  assert.throws(() => ctx.uiWorkspace, /must not be read directly/,
+    'a direct uiWorkspace read must stay impossible: shell.ts reads the service through reflect only')
+  assert.notEqual(ctx.reflect.get('uiWorkspace', false), undefined, 'the live fixture answers the view owner through reflect')
+  assert.throws(() => ctx.reflect.get('uiWorksapce'), /is not registered/,
+    'the strict form throws like the real cordis proxy — a typo cannot be read as the service')
+  assert.equal(ctx.reflect.get('uiWorksapce', false), undefined,
+    'the non-throwing form answers undefined, which is the transient poll state')
+})
+
+test('openInstanceSession: a throwing reflect lookup fails loud instantly (the proxy arm, distinct from an absent service)', async (t) => {
+  const instanceId = 'ssh-test-view-reflect-hostile'
+  shellTestScope(t, {}, instanceId)
+  // The view owner is registered, but the LOOKUP itself throws (hostile proxy).
+  // Unlike the absent-service arm this is terminal on the first attempt: the
+  // dispatch must reject instead of polling until its deadline.
+  __testSetNavigationReadError(hostileThrownValue())
+  const state = await bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
+  assert.equal(state.booted, true)
+  const opening = openInstanceSession(instanceId, 'reflect-hostile-session')
+  const rejected = assert.rejects(opening, /unknown error/)
+  await Promise.resolve()
+  await rejected
+  t.mock.timers.tick(4_000)
+  await Promise.resolve()
+  assert.deepEqual(__testOpenedSessions(), [])
+})
+
+test('openInstanceSession: a ctx with no reflect face polls transiently — it never direct-reads the throwing property', async (t) => {
+  // The direct-property fallback the reflect-only read removed was reachable
+  // ONLY for a ctx without a reflect layer, which is why the fixture now models
+  // that host: the fixed read treats it as an absent service (transient, deadline
+  // report), while a reintroduced direct fallback would hit the fixture's
+  // throwing uiWorkspace getter and reject on the first attempt instead.
+  const instanceId = 'ssh-test-view-noreflect'
+  shellTestScope(t, {}, instanceId)
+  __testSetReflectAvailable(false)
+  const state = await bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
+  assert.equal(state.booted, true)
+  const opening = openInstanceSession(instanceId, 'no-reflect-session')
+  const rejected = assert.rejects(opening, /实例会话导航服务不可用/)
+  let settled = false
+  void opening.then(() => { settled = true }, () => { settled = true })
+  await Promise.resolve()
+  assert.equal(settled, false, 'no reflect face is the transient poll state, not an instantly thrown direct read')
+  t.mock.timers.tick(8_001)
+  await rejected
+  assert.equal(settled, true)
+  assert.deepEqual(__testOpenedSessions(), [])
 })

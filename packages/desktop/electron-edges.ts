@@ -53,7 +53,6 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
   | 'showItemInFolder'
   | 'showError'
   | 'showMessage'
-  | 'pickPluginSource'
 > {
   // 活跃原生通知登记：持有存活引用防 GC 吞 click（macOS 已知坑）；'close' 注销；
   // 满员按插入序淘汰最旧（由调用方 close 退役），来源退役由
@@ -285,23 +284,5 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
       return response;
     },
 
-    /** 插件源 picker 叶（folder|.tgz：darwin NSOpenPanel 一体 openFile+
-     *  openDirectory、扩展过滤只约束文件选择，非 mac 仅目录），父窗 = 当前主窗；
-     *  预检与调用间窗口销毁的竞态抛出，绝不折算为取消；分类留 core。 */
-    async pickPluginSource(): Promise<{ status: 'cancelled' } | { status: 'picked'; path: string }> {
-      const win = host.mainWindow();
-      if (win === null || win.isDestroyed()) throw new Error('no main window');
-      const combined = process.platform === 'darwin';
-      const picked = await dialog.showOpenDialog(win, {
-        properties: combined ? ['openFile', 'openDirectory'] : ['openDirectory'],
-        // The extension filter only governs FILE selection (folders stay
-        // selectable): on macOS it makes a non-.tgz file clearly unpickable.
-        filters: combined ? [{ name: 'dsh plugin archives', extensions: ['tgz'] }] : undefined,
-        buttonLabel: 'Import',
-        title: 'Import a dsh plugin — source folder or .tgz archive',
-      });
-      if (picked.canceled || picked.filePaths.length === 0) return { status: 'cancelled' };
-      return { status: 'picked', path: picked.filePaths[0] };
-    },
   };
 }

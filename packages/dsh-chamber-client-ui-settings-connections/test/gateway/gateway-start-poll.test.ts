@@ -109,7 +109,7 @@ test('restart keeps its own decision table (the start action must not leak into 
   )
 
   // The restart default is unchanged for callers that pass no action at all
-  // (PluginDialog, DshRuntimeSection).
+  // (restart-action.ts, DshRuntimeSection).
   await assert.rejects(
     pollGatewayReady('gateway-x', undefined, { fetchImpl: failedFetch, pollIntervalMs: 0, timeoutMs: 5_000 }),
     restartFailed,

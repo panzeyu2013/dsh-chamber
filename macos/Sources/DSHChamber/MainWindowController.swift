@@ -55,19 +55,16 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 只暴露其脚本内实现的方法，未暴露方法在页面层即 stub——两处均以 manifest
     /// 为准，全量 shim（chamber-bridge.stub.js）由生成物承载。
     private static let invokeWhitelist: Set<String> = BridgeManifest.invokeChannels
-    /// 窗口默认内容尺寸。
-    /// 双 flavor 几何折中：这里的尺寸是**内容区**尺寸
-    /// （NSWindow(contentRect:) + contentView = webView），而 Electron 侧
-    /// BrowserWindow 的 1280x800 是**窗口外框**（main.ts 未设 useContentSize；
-    /// Electron 43 只在 use_content_size 为真时才 SetContentSize），其 web 视口
-    /// 实为 1280x772——差的 ~28pt 是 macOS 标准标题栏。同一份前端因此在两端
-    /// 视口高度差 ~3.6%（侧栏会话列表 / 工作区列的可见高度同步差一档）。
-    /// 786 = (800 + 772) / 2：原生视口 1280x786（外框 ~814）对 Electron 的
-    /// 772（外框 800）两侧各偏 ~14pt，先收窄差异而不是单侧对齐；单侧对齐
-    /// （原生取 772，或 Electron 开 useContentSize 后两端都取 800）仍未裁决。
+    /// 窗口默认内容尺寸（2026-12 用户裁决：按官方形态单侧对齐）。
+    /// 这里的尺寸是**内容区**尺寸（NSWindow(contentRect:) + contentView =
+    /// webView）；Electron 侧 BrowserWindow 的 1280x800 是**窗口外框**
+    /// （main.ts 未设 useContentSize；Electron 43 只在 use_content_size 为真时
+    /// 才 SetContentSize），其 web 视口实为 1280x772——差的 ~28pt 是 macOS
+    /// 标准标题栏。裁决取官方视口 1280x772 为基准，放弃此前的 786 折中，
+    /// 两端视口高度一致（差异只剩外框，属 flavor 自身形态）。
     /// 本值只影响**高度**；内容列宽等宽度偏好是 per-flavor 页面存储
     /// 不随本值收敛。
-    private static let windowSize = NSSize(width: 1280, height: 786)
+    private static let windowSize = NSSize(width: 1280, height: 772)
 
     /// 原生壳**可见**产品名（dsh-chamber）：
     /// 窗口标题 / 失败说明页 / fatal 提示框共用。不可见名（SwiftPM target/module =
@@ -1000,9 +997,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// Interactive pickers and runtime installs may legitimately take minutes;
     /// every ordinary page invoke has a short deadline and all are bounded.
     private static func invokeDeadline(for method: String) -> TimeInterval {
-        if method.hasPrefix("dsh-chamber:runtime-") || method.hasPrefix("dsh-chamber:update-")
-            || method.contains("_pick") || method.contains("materialize")
-            || method == "desktop_local_plugin_add_file" {
+        // The retired user plugin write surface was the only pick/materialize
+        // caller; runtime installs and update downloads stay the long legs.
+        if method.hasPrefix("dsh-chamber:runtime-") || method.hasPrefix("dsh-chamber:update-") {
             return 720
         }
         return 45

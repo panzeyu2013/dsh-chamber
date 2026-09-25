@@ -8,7 +8,9 @@
  * closed catalog (never argv) and an absolute, non-empty existing directory — and no shell
  * string is ever constructed (`./core.ts` validates); only the catalog's own launcher argv can
  * run. `probe()` is the zero-cost probe; the others answer the explicit `{ok,value}|{ok:false,error}`
- * carrier (the generic gateway drops thrown fields); catalog/resolver/icons stay upstream copies.
+ * carrier (the generic gateway drops thrown fields); catalog, resolver and icons stay verbatim
+ * upstream copies, so no cross-runtime compatibility delta is recorded for them in the
+ * upstream-touchpoint registry.
  */
 
 import type { Context } from '@deepseek-ai/cordis'

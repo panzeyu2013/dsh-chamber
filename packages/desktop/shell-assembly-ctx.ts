@@ -11,9 +11,8 @@ import type { ActivationJournalState, RuntimeAction, RuntimeOperationFence, Star
 import type { DshRuntimeController, RuntimeLifecycleProjection } from './dsh-runtime-controller.ts';
 import type { GatewaySessionManager } from './gateway-session.ts';
 import type { NotificationSourceToken } from './notifications.ts';
-import type { ChamberHostPackageSeed, ExactOwnershipRegistry, ExecFn, RemoteSpec, StatusFn } from './plugin-sync.ts';
+import type { ChamberHostPackageSeed, ExactOwnershipRegistry, ExecFn, RemoteSpec } from './plugin-sync.ts';
 import type { ProjectedRegistryInstance } from './registry-projection.ts';
-import type { SshPluginJournal } from './ssh-plugin-journal.ts';
 import type { TransportManager } from './transport-manager.ts';
 import type { TransportInstanceSpec } from './transport-provider.ts';
 import type { UpdateController } from './updater.ts';
@@ -43,13 +42,12 @@ type RecoverableMetadataStatus = 'selection-corrupt' | 'recovery-in-progress' | 
 /** ShellAssemblyCtx — installIpcHandlers 装配上下文。最小集原则：只放注册体
  *  实际引用的字段。核心字段：transportManager / audit / gatewaySessions /
  *  publishRegistryTransition（宿主生命周期权威在 main，见字段注释）；
- *  localDshHome / sshPluginJournal /
+ *  localDshHome /
  *  hostPackageSeeding / chamberHostPackageSeeds / sshPluginTargets
- *  （F 组注册体的共享现实例/闭包束）+ transportManager Pick 扩 appendLog；
+ *  （F 组读面/seed 注册体的共享现实例/闭包束）+ transportManager Pick 扩 appendLog；
  *  syncGatewayChamberPluginsFor
  *  （G 组手动 sync 的执行闭包——main 装配侧 ready 自动 sync 共用同一执行路径，
- *  见字段注释）；runLocalPluginMutation（H 组本地插件
- *  注册体的宿主执行叶——main 装配侧 runtime writer fence/启动门编排，见字段注释）；
+ *  见字段注释）；
  *  runRuntimeStartup / publishBlockedStartup /
  *  setRuntimeGate / authoritativeMetadataRecoveryStatus / runUserMetadataRecovery /
  *  readApplyNowGateInput / selectedJournalIntent / stopLocalDsh / runtimeOperationSlot /
@@ -129,15 +127,15 @@ export interface ShellAssemblyCtx {
   // —— C 组注册体的装配依赖。registry
   // 读写/投影句柄（transportManager）为现实例注入；audit / gatewaySessions /
   // publishRegistryTransition 为宿主叶或宿主生命周期对象（定义在 main
-  // 装配侧——publishRegistryTransition 的插件 seed/journal 撤销与
+  // 装配侧——publishRegistryTransition 的插件 seed 撤销与
   // SSH_INSTANCES_CHANGED push 文本归装配侧）。D/E 组注册体复用
   // transportManager（Pick 扩
   // reverify/logs/clearLogs 与 exec，见字段注释）+ 纯模块 ssh-config.ts import。
   // F 组
-  // 6 注册体的装配依赖（编排纯模块直接 import）——localDshHome /
-  // sshPluginJournal / hostPackageSeeding / chamberHostPackageSeeds /
-  // sshPluginTargets（自动 seed/撤销路径与 F 组共用同一现实例/
-  // 闭包族：journal 单写者、seed 单飞、目标指纹同一实现，语义不分叉），
+  // 读面/seed 注册体的装配依赖（编排纯模块直接 import）——localDshHome /
+  // hostPackageSeeding / chamberHostPackageSeeds /
+  // sshPluginTargets（自动 seed 与手动补种共用同一现实例/
+  // 闭包族：seed 单飞、目标指纹同一实现，语义不分叉），
   // transportManager Pick 扩 appendLog（seed 结果入实例环形日志）与 loadFailure
   //（C 组注册表健康读面）。
   /** registry 读写 + transport 状态/生命周期投影句柄（C/D/E/F 组注册体直接
@@ -172,9 +170,9 @@ export interface ShellAssemblyCtx {
    *  同一 will-quit 竞态下直读闭包可见 null 而装配捕获不可见的路径不可达）。 */
   gatewaySessions: GatewaySessionManager | null
   /** registry 变更生命周期权威 sidecar（source-lifecycle
-   *  authority：来源证明/代际同步 + 插件 seed/journal 撤销 + 活跃通知退役驱逐
+   *  authority：来源证明/代际同步 + 插件 seed 撤销 + 活跃通知退役驱逐
    *  + SSH_INSTANCES_CHANGED committed push 编排）——main 装配侧经本叶
-   *  注入（其宿主对象 readySeedEdges/hostPackageSeeding/sshPluginJournal/
+   *  注入（其宿主对象 readySeedEdges/hostPackageSeeding/
    *  setGatewaySyncRegistration/startAutomaticHostSeed 归装配侧，push 文本被
    *  renderer-trust 锚定），C 组 save/delete 注册体经它发布 committed 结果。 */
   publishRegistryTransition(
@@ -182,18 +180,12 @@ export interface ShellAssemblyCtx {
     after: readonly TransportInstanceSpec[],
   ): ProjectedRegistryInstance[]
   // —— F 组 6 注册体的装配依赖。编排纯模块
-  // （plugin-sync / ssh-apply-rows / plugin-tarball）在 core 直接 import；下列
+  // （plugin-sync）在 core 直接 import；下列
   // 共享现实例与闭包为 main 装配侧所有物（自动 seed/ready 撤销路径与 F 组
-  // 注册体共用——journal 单写者、seed 单飞、目标指纹同一实现，语义不分叉）。
+  // 注册体共用——seed 单飞、目标指纹同一实现，语义不分叉）。
   /** 权威本地 dsh home 路径（<userData>/state/dsh-home——装配期解析值注入，
-   *  core 不碰 Electron paths；localPluginList / resolveLocalMaterializeDirectory
-   *  读它，与自动路径同一值）。 */
+   *  core 不碰 Electron paths；localPluginList 读它，与自动路径同一值）。 */
   localDshHome: string
-  /** ssh 插件 undo journal 现实例（main 装配侧 createSshPluginJournal
-   *  (<userData>)——main 的 publishRegistryTransition 撤销清理（clear）与
-   *  F 组 undo/apply 注册体共享同一实例；类型定义在 ssh-plugin-journal.ts，
-   *  record 永不 throw）。 */
-  sshPluginJournal: SshPluginJournal
   /** chamber host 包种子数组（main 装配侧构造——sourceDir 已按
    *  app.isPackaged/pkgDir/repoRoot 解析；自动 seed 路径与手动 seed 注册体
    *  共用同一数组）。 */
@@ -201,7 +193,7 @@ export interface ShellAssemblyCtx {
   /** host 包 seed 单飞注册表现实例（ExactOwnershipRegistry——main 自动 seed
    *  路径与手动 seed 注册体共用同一注册表，跨路径并发单飞语义不变）。 */
   hostPackageSeeding: ExactOwnershipRegistry
-  /** ssh 插件管理目标解析/所有权/执行/探针闭包束（main 装配侧定义——自动
+  /** ssh 插件读面/seed 目标解析/所有权/执行/探针闭包束（main 装配侧定义——自动
    *  seed 与 ready 边缘用同一族闭包；F 组注册体以原名
    *  调用 findRemoteTarget / ownsRemoteTarget / scoped* 等）。目标结构
    *  = SshPluginTarget（spec + operational fingerprint + 来源代际 token）。 */
@@ -209,19 +201,16 @@ export interface ShellAssemblyCtx {
     findRemoteTarget(id: string): SshPluginTarget | null
     ownsRemoteTarget(target: SshPluginTarget): boolean
     scopedExecForTarget(target: SshPluginTarget, extraOwner?: () => boolean): ExecFn
-    scopedStatusForTarget(target: SshPluginTarget): StatusFn
     scopedProbeForTarget(
       target: SshPluginTarget,
       probe: (descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>,
     ): (descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>
     liveProbeFor(id: string): (descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>
   }
-  // —— G 组 3 注册体的装配依赖。编排纯模块
-  // （gateway-ipc-shared / gateway-sync-registry / gateway-provider /
-  // plugin-tarball——classifyPluginPick/buildPluginTarball 亦 import）在
+  // —— G 组手动 sync 注册体的装配依赖。编排纯模块
+  // （gateway-sync-registry / gateway-provider）在
   // core 直接 import；注册参数读取（getGatewaySyncRegistration）与 ready 位复验
-  // 在注册体侧。确认对话框复用上方 edges 版 confirmPluginAction 助手、
-  // 无存活主窗预检 = edges.mainWindowAlive、插件源 pick = edges.pickPluginSource。
+  // 在注册体侧。无存活主窗预检 = edges.mainWindowAlive。
   /** 手动 gateway_plugin_sync 的上传执行闭包（main 装配侧定义——ready 注册自动
    *  sync（sm.onStatusChanged ready 边缘）与手动 re-entry 注册体共用同一执行
    *  路径与注册参数，语义不分叉）：把本地 chamber host 包种子缓存上传到注册
@@ -233,21 +222,6 @@ export interface ShellAssemblyCtx {
     headers: Record<string, string>,
     spkiPin: string | null,
   ): Promise<{ uploaded: boolean; skipped: boolean; failed?: boolean; error?: string } | null>
-  // —— H 组 3 个本地插件注册体（LOCAL_PLUGIN_ADD /
-  // LOCAL_PLUGIN_ADD_FILE / LOCAL_PLUGIN_REMOVE）的本地执行叶。编排纯模块
-  // （plugin-sync：runLocalDshPlugin 等）在 core 直接 import；本叶只承载宿主
-  // 编排——本体定义在 main 装配侧（runtime writer fence（RuntimeOperationFence）
-  // 租约 + runtimeStartBlocked/runtimeStartBlockedReason 启动门 +
-  // resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspace) workspace 解析均归
-  // 装配侧：fence/启动门是装配侧运行时事务状态，不是 core 状态；workspace 只在
-  // fence 租约内解析，绝不跨运行时 swap 保留）。注册体以原名
-  // 调用 runLocalPluginMutation（owner + mutate(dshWorkspace) 形状）；mutate 内
-  // 实际子进程执行 = plugin-sync runLocalDshPlugin（add
-  // 子进程 env 装配/白名单在纯模块内）。
-  runLocalPluginMutation<T>(
-    owner: string,
-    mutate: (dshWorkspace: string) => Promise<T>,
-  ): Promise<T | { ok: false; error: string }>
   // —— I 组 7 注册体的装配依赖。open-in
   // 面——wiredCtx/openInCtx 的宿主能力全部来自既有面（hostFacts.platform
   // / settingsIO.current()（vscodeOpenInNewWindow 惰性读）/ transportManager

@@ -33,17 +33,18 @@
  *     （2）在上游产物里有发射点。这样「插件把自己的锚点改名/删掉」同样会红，
  *     而不只是「上游改名」。
  *
- * 分级（task 要求）：`data-*` / `role` / `slot` 锚点零命中 ⇒ exit 1；build-time
- * 哈希 class token（`_root_1b2ny_` 这类，pin 一动必变、无属性形兜底）零命中 ⇒
- * advisory（打印警告，不失败）——它本来就是「pin 前移必须重锚」的登记项，不是
- * 本仓能修的漂移。
+ * 分级：`data-*` / `role` / `slot` 锚点零命中 ⇒ exit 1；build-time 哈希
+ * class token（`_root_38jqx_` 这类，pin 一动必变、无属性形兜底）零命中同样
+ * ⇒ exit 1——它只能由「pin 前移后重锚」修复，advisory 会让门在 pin bump 后继续
+ * 绿而插件静默 no-op，所以本门把它升为硬失败（重锚证据与产物路径见
+ * packages/dsh-chamber-client-ui-mobile/README.md「Anchor baseline」）。
  *
  * 防伪纪律（同 C15）：抽取读的是**去注释**投影（注释里写着的锚点不算声明），
  * 注释用一个**保留行号**的剥离器去掉，因此证据里的 `file:line` 指回原始文件。
  */
 
-/** 上游锚点零命中时的判定分级。 */
-export const HARD_KINDS = new Set(['attribute', 'role', 'slot'])
+/** 上游锚点零命中时的判定分级。哈希 token 同为硬失败：pin bump 后必须重锚。 */
+export const HARD_KINDS = new Set(['attribute', 'role', 'slot', 'hash'])
 
 /** 本插件自己打标的属性（上游不存在，不查上游）。 */
 const OWN_ATTRIBUTE_PATTERNS = [
@@ -77,7 +78,7 @@ const STRUCTURAL_ATTRIBUTE = 'data-slot'
  *
  * `declared: 'plugin'` ⇒ 必须先在本插件源码里被抽到，否则红线（插件侧改名/删除）；
  * `declared: 'external'` ⇒ 只断言上游发射侧（供「上游在用、插件尚未点名」的锚点
- * 预留；当前 19 项全部为 `plugin`——`data-chat-flow` / `data-chat-anchor-key`
+ * 预留；当前 21 项全部为 `plugin`——`data-chat-flow` / `data-chat-anchor-key`
  * 已由 `session-stall.ts` 点名，故同样按两向断言）。
  *
  * 这一份是**有意独立于插件源码**的最小目录：抽取器抽不到某个锚点时（插件把它
@@ -109,6 +110,9 @@ export const REQUIRED_ANCHORS = [
   { kind: 'attribute', token: 'data-sidebar-collapsed', declared: 'plugin', note: '轨道标志：存在=折叠、移除=展开' },
   { kind: 'attribute', token: 'data-rightbar-collapsed', declared: 'plugin', note: '轨道标志（右栏 shown 判定的一条臂）' },
   { kind: 'attribute', token: 'data-sidebar-right-panel', declared: 'plugin', note: '右栏面板自身状态（push|fullscreen）' },
+  // —— 悬停卡 watchdog 的 build-time CSS-module token（无属性形兜底，pin bump 必重锚） ——
+  { kind: 'hash', token: '_root_38jqx_', declared: 'plugin', note: 'official-hover-card.ts OFFICIAL_CARD_ROOT_CLASS_TOKEN；rc.2 产物 index-Q6zc2uHV.js 的 Pp="_root_38jqx_3"' },
+  { kind: 'hash', token: '_card_38jqx_', declared: 'plugin', note: 'official-hover-card.ts OFFICIAL_CARD_CLASS_TOKEN；rc.2 产物 index-Q6zc2uHV.js 的 Rp="_card_38jqx_9"' },
 ]
 
 /**
@@ -207,7 +211,7 @@ export function extractAnchorsFromSource(source) {
       push('slot', value[1], roleMap.index + value.index, 'ROLE_SLOT_KEYS')
     }
   }
-  // 6. build-time 哈希 class token（`_root_1b2ny_` / `_card_1b2ny_`）：advisory 族
+  // 6. build-time 哈希 class token（`_root_38jqx_` / `_card_38jqx_`）：硬失败族（pin bump 必重锚）
   for (const match of code.matchAll(/_[a-z][a-z0-9]*_[a-z0-9]{5,}_/g)) {
     push('hash', match[0], match.index, 'hash-token')
   }
@@ -549,7 +553,7 @@ export function anchorFindings({ anchors, upstream, chamber, required = REQUIRED
   const hashRows = rows.filter(row => row.kind === 'hash')
   notes.push(`方向 A：插件声明 ${declaredUpstream.length} 个上游锚点（去重后），零命中 ${declaredUpstream.filter(row => row.verdict === 'missing').length} 个；`
     + `chamber 自有 ${rows.filter(row => row.category === 'chamber-own').length} 个（不查上游）、跨包 ${rows.filter(row => row.category === 'chamber-cross-package').length} 个、`
-    + `哈希 token ${hashRows.length} 个（advisory：零命中 ${hashRows.filter(row => row.verdict !== 'ok').length} 个）`)
+    + `哈希 token ${hashRows.length} 个（硬失败：零命中 ${hashRows.filter(row => row.verdict !== 'ok').length} 个）`)
   notes.push(`方向 B：最小断言集 ${required.length} 项（external ${required.filter(item => item.declared === 'external').length} 项免声明侧检查）`)
   return { violations, advisories, notes, rows }
 }

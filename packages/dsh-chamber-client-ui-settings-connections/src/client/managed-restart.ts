@@ -1,7 +1,7 @@
 /**
  * Gateway managed-dsh runtime gates and result helpers (design 21 §5.1/§6.3/§6.8 r1): pure,
  * node-testable classification shared by the connection-card restart/start flows and the plugin
- * dialog's restart-to-apply action. Four projections, each mirroring a core gate the UI cannot
+ * dialog's read-side gateway fence. Four projections, each mirroring a core gate the UI cannot
  * import (the gateway route table and control plane are Node-side):
  * 1. RESTART gate — /chamber/runtime/restart accepts `ready`/`degraded` only; every other probed
  *    state is a guaranteed 409, so the button is disabled instead of offered.
@@ -101,11 +101,12 @@ export function runtimeRefusalText(
 }
 
 /* ---- Gateway READ-side fence ----
- * The A0 read `GET /chamber/plugins/installed` shares the A1 write fence: while a plugin mutation
- * holds the managed-profile write lease the route answers 409 `runtime_busy` rather than publishing
- * a torn projection. That 409 is a RETRYABLE BUSY STATE, never a read failure and never folded into
- * an ok shape; both helpers reuse the SAME 409 classifier as the runtime actions, and the copy
- * follows runtimeRefusalText's shape. */
+ * The retired A1 plugin write surface used to fence the read `GET /chamber/plugins/installed`
+ * (write in flight → 409 `runtime_busy`, never a torn projection). The write face is gone with
+ * the 2026-09 C layering ruling, so the current gateway never answers that 409 here; the
+ * classifier stays as a defensive read-side shape for older gateways. That 409 is a RETRYABLE
+ * BUSY STATE, never a read failure and never folded into an ok shape; both helpers reuse the
+ * SAME 409 classifier as the runtime actions, and the copy follows runtimeRefusalText's shape. */
 
 /** Locale keys the connections dictionary owns for a fenced gateway read. */
 export type GatewayReadFenceKey = 'gatewayReadFencedBusy'

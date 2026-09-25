@@ -104,41 +104,33 @@ export const CHAMBER_HOST_PACKAGES = controlPlaneModule.CHAMBER_HOST_PACKAGES
 export const HOST_PACKAGE_SEED_FILES = controlPlaneModule.HOST_PACKAGE_SEED_FILES
 export const HOST_GRAPH_PATCH_FILENAME = controlPlaneModule.HOST_GRAPH_PATCH_FILENAME
 
-// Plugin-manifest read algorithm + materialize ruler (wire plugin-manifest.ts is the single
-// source) — consumed by plugin-sync manifest reads, masking and materialize resolution.
-// Through THIS facade the packaged app reads the definitions inlined in
-// dist/control-plane/index.js instead of a bare wire specifier.
+// Plugin-manifest read algorithm + materialize ruler + x-wildcard semantic gate (wire
+// plugin-manifest.ts is the single source) — consumed by plugin-sync manifest reads,
+// masking, materialize resolution and the version-value classifier. Through THIS facade
+// the packaged app reads the definitions inlined in dist/control-plane/index.js instead
+// of a bare wire specifier.
+export const hasXWildcard = controlPlaneModule.hasXWildcard
 export const isMaterializedValue = controlPlaneModule.isMaterializedValue
 export const parsePluginManifest = controlPlaneModule.parsePluginManifest
 export const readManifestVersion = controlPlaneModule.readManifestVersion
 // Plugin spec/name whitelist family (plugin-spec.ts, shared by the desktop main and the
 // gateway executor) — consumed by ssh-provider and plugin-sync; reserved-name judgement
 // lives in protected-plugins.ts.
-export const extractSpecName = controlPlaneModule.extractSpecName
-export const MATERIALIZE_FILE_SPEC_PATTERN = controlPlaneModule.MATERIALIZE_FILE_SPEC_PATTERN
 export const MAX_PLUGIN_SPEC_CHARS = controlPlaneModule.MAX_PLUGIN_SPEC_CHARS
 export const PLUGIN_NAME_PATTERN = controlPlaneModule.PLUGIN_NAME_PATTERN
 export const PLUGIN_SPEC_PATTERN = controlPlaneModule.PLUGIN_SPEC_PATTERN
 export const RUN_STDOUT_MAX_BYTES = controlPlaneModule.RUN_STDOUT_MAX_BYTES
 export const WRITE_FILE_MAX_BYTES = controlPlaneModule.WRITE_FILE_MAX_BYTES
 
-// Protected-plugin set + generation coupling (protected-plugins.ts): the op-phased write-face
-// decision (remove never judges a version) and the read-face row projection, same single
-// source as the whitelist family.
-export const decidePluginMutation = controlPlaneModule.decidePluginMutation
+// Protected-plugin READ face (protected-plugins.ts): P = B₀ ∪ S ∪ F derivation and the
+// read-face row projection, same single source as the whitelist family. The user plugin
+// write face was retired with the 2026-09 C layering ruling, so no mutation-decision
+// re-export lives here anymore.
 export const derivePluginRows = controlPlaneModule.derivePluginRows
 export const deriveProtectedSet = controlPlaneModule.deriveProtectedSet
 export const PLUGIN_MATERIALIZED_VALUE_MASK = controlPlaneModule.PLUGIN_MATERIALIZED_VALUE_MASK
 export const readInstalledVersion = controlPlaneModule.readInstalledVersion
-export const registrySpecVersion = controlPlaneModule.registrySpecVersion
 export const resolveRuntimeFamily = controlPlaneModule.resolveRuntimeFamily
-export const verifyProfileFamilyConsistency = controlPlaneModule.verifyProfileFamilyConsistency
-export const describeFamilyFindings = controlPlaneModule.describeFamilyFindings
-
-// Restricted plugin-mutation child executor (plugin-mutation-executor.ts) — the single
-// env/bounds/timeout/kill protocol shared with the gateway; plugin-sync consumes it here.
-export const runPluginMutation = controlPlaneModule.runPluginMutation
-export const scrubMutationEnv = controlPlaneModule.scrubMutationEnv
 
 // Owner-private file primitives (private-file.ts): the single 0600 atomic-replace /
 // no-follow read mechanism for credential mirrors, settings store, undo journal and ledger.
@@ -173,31 +165,17 @@ export const attachSpkiPinVerifier = controlPlaneModule.attachSpkiPinVerifier
 export type {
   AuditTrailEvent,
   ChamberHostPackageDescriptor,
-  MutationChild,
-  MutationChildExecutor,
-  MutationChildOutcome,
-  MutationProcessStream,
-  MutationSpawnFn,
-  PluginMutationParams,
-  PluginMutationResult,
   ClientRequestEnvelope,
   CordisInsert,
-  DecidePluginMutationInput,
   DerivePluginRowsInput,
-  FamilyConsistencyFinding,
-  FamilyConsistencyVerdict,
   FamilyVersions,
   HostPackageInsert,
   HostPackageSeedFile,
   InsertConflictKind,
   ParsedInsertRow,
-  ParsedVersion,
   PluginManifestFault,
   PluginManifestModel,
   PluginManifestParseResult,
-  PluginMutationDecision,
-  PluginMutationOp,
-  PluginRefusalCode,
   PluginRow,
   PluginRowRole,
   ProtectedDerivation,

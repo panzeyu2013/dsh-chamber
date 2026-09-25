@@ -10,28 +10,53 @@
  * later can dismiss it. Vendor sources are read-only here, so the corrected
  * machine lives in the chamber package. That port is a DEVIATION with one
  * explicit retirement condition — "upstream fixes the race" — and before this
- * module nothing checked it.
+ * module nothing checked it. The pin's preview/inline phase machine moved the
+ * open statement from `setOpen(true)` to `setPhase('open')` without
+ * re-checking the pointer, so the condition is NOT met and the deviation
+ * stands; the shape rules below read the phase-machine form.
  *
  * The verdict turns the condition into a machine judgment over the PINNED
  * upstream tree:
  *   1. the racy close shape is still there: in the `HoverCard` component, every
  *      call to the `usePointerGrace` arm inside an `onPointerLeave` handler is
- *      reached only under the committed `open` condition (an `if`/`&&`/`?:`
- *      test). One bare or differently-guarded occurrence means the premise may
- *      be gone and a human must adjudicate — it is NOT auto-passed;
+ *      governed by a test that IS the committed `open` — exactly `open`, or an
+ *      `&&` conjunction with `open` as one operand. A top-level `||` widens
+ *      reachability past committed `open`, so a ref-intent repair such as
+ *      `open || intentRef.current` (and the degenerate `open || true`) is a
+ *      FIX, not the racy shape. One bare, ref-guarded or disjunctive occurrence
+ *      means the premise may be gone and a human must adjudicate — it is NOT
+ *      auto-passed;
  *   2. the racy OPEN shape is still there: the dwell timer that opens the card
- *      re-checks NOTHING about the pointer. The
+ *      re-checks NOTHING about the pointer, and its callback may hold only the
+ *      open call plus a `= null` cleanup of the very timer ref the dwell
+ *      assignment writes (any other member write — e.g. `intentRef.current =
+ *      true` — is a repair and reads as drift). The timer is identified by its
+ *      `openDelayMs` delay, because the pin's phase machine also closes through
+ *      the same setter (the preview fade's `setPhase('closed')`) and the
+ *      code-only projection neutralizes both literals to `setPhase('')`: a
+ *      shape-only match could not tell the two timers apart. The
  *      race has two ends, and the minimal upstream fix on the OPEN end —
  *      `if (!insideRef.current) return` inside the dwell callback — would leave
  *      `onPointerLeave` byte-identical, so a close-side-only gate would keep
  *      printing ✓ after the retirement condition was met. Zero dwell timers
  *      (the open path was rewritten) and several candidates are DRIFT too;
- *   3. the two timing constants stay in lockstep with the chamber port
+ *   3. NO post-commit dismissal outside the pinned set may appear: every
+ *      `useEffect`/`useLayoutEffect`/`useInsertionEffect` callback in the
+ *      component that closes or moves the phase must be one of the pinned
+ *      callbacks (preview fade, owner-disable, Escape) verbatim. The
+ *      commit-layer repair — record pointer presence in a ref, at module scope,
+ *      or behind a helper, then dismiss from a post-commit effect — leaves BOTH
+ *      pinned shapes byte-identical while the race is gone, and a rule that
+ *      requires a `.current` read INSIDE the callback is trivially bypassed by
+ *      moving the pointer fact out of it. The rule is therefore FAIL-CLOSED:
+ *      any other dismissal-capable post-commit callback is drift — see
+ *      {@link postCommitDismissalRecheck};
+ *   4. the two timing constants stay in lockstep with the chamber port
  *      (upstream `POINTER_GRACE_MS` == chamber `HOVER_CLOSE_GRACE_MS`, upstream
  *      `openDelayMs` default == chamber `HOVER_OPEN_DELAY_MS`), each read from a
  *      UNIQUE assignment: zero matches and several distinct values are both
  *      hard failures, so a decoy or a second assignment can never be picked;
- *   4. any check failing is a HARD failure, so the day upstream fixes the
+ *   5. any check failing is a HARD failure, so the day upstream fixes the
  *      race — from either end — the maintainer is forced to decide: retire the
  *      port or re-register the deviation, instead of discovering it by accident.
  *
@@ -397,11 +422,55 @@ export function pointerGraceArmName(code) {
 // ---------------------------------------------------------------------------
 
 /**
- * Whether a conditional test references the committed `open` state. A NEGATED
- * `open` (`!open`) does not count: it inverts the racy intent instead of
- * reproducing it, and treating it as the known shape would hide a rewrite.
+ * Split at top-level occurrences of `operator`, ignoring those nested inside
+ * `()[] {}`.
+ * @param {string} text - expression text.
+ * @param {string} operator - `&&` or `||`.
+ * @returns {string[]} one part per top-level occurrence (one part when absent).
  */
-const referencesOpen = (text) => /\bopen\b/.test(text) && !/!\s*open\b/.test(text)
+function splitTopLevel(text, operator) {
+  const parts = []
+  let depth = 0
+  let start = 0
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+    if (char === '(' || char === '[' || char === '{') { depth += 1; continue }
+    if (char === ')' || char === ']' || char === '}') { depth -= 1; continue }
+    if (depth === 0 && text.startsWith(operator, index)) {
+      parts.push(text.slice(start, index))
+      start = index + operator.length
+      index += operator.length - 1
+    }
+  }
+  parts.push(text.slice(start))
+  return parts
+}
+
+/** Strip every fully enclosing parenthesis pair around an expression. */
+function stripOuterParens(text) {
+  let inner = text.trim()
+  while (inner.startsWith('(') && matchingParen(inner, 0) === inner.length - 1) {
+    inner = inner.slice(1, -1).trim()
+  }
+  return inner
+}
+
+/**
+ * Whether a conditional test IS (or entails) the committed `open`: exactly
+ * `open`, or an `&&` conjunction with `open` as one operand. Any top-level
+ * `||` rejects — a disjunction can be true while committed `open` is false, so
+ * `open || intentRef.current` and `open || true` are the FIX this gate must not
+ * mistake for the racy shape — and so does every unrecognized spelling
+ * (`!open`, `openRef.current`, `open === true`): the gate auto-passes only the
+ * proven shape, everything else forces adjudication.
+ */
+const isCommittedOpenGuard = (text) => {
+  const inner = stripOuterParens(text)
+  if (inner === 'open') return true
+  if (splitTopLevel(inner, '||').length > 1) return false
+  const conjuncts = splitTopLevel(inner, '&&')
+  return conjuncts.length > 1 && conjuncts.some((conjunct) => stripOuterParens(conjunct) === 'open')
+}
 
 /** Index of the last ternary `?` (ignoring `?.` and `??`), or -1. */
 function lastTernaryQuestion(text) {
@@ -456,9 +525,10 @@ function enclosingBrace(body, from) {
 
 /**
  * Whether the tail of `text` is a conditional that governs a call placed right
- * after it: `if (…open…)`, `…open… &&`, `…open… ?`.
+ * after it: `if (<guard>)`, `<guard> &&`, `<guard> ?`.
  * @param {string} text - statement text ending where the call starts.
- * @returns {boolean} true when the call is guarded by the committed `open`.
+ * @returns {boolean} true when the call's test IS/entails the committed `open`
+ *   (see {@link isCommittedOpenGuard}); `||` disjunctions reject.
  */
 function regionGuardsOpen(text) {
   const tail = text.replace(/\s+$/, '')
@@ -468,14 +538,16 @@ function regionGuardsOpen(text) {
   if (lastIf !== null) {
     const open = lastIf.index + lastIf[0].lastIndexOf('(')
     const close = matchingParen(tail, open)
-    if (close !== -1 && /^[{(\s]*$/.test(tail.slice(close + 1)) && referencesOpen(tail.slice(open + 1, close))) {
+    if (close !== -1 && /^[{(\s]*$/.test(tail.slice(close + 1))
+      && isCommittedOpenGuard(tail.slice(open + 1, close))) {
       return true
     }
   }
   const andAt = tail.lastIndexOf('&&')
-  if (andAt !== -1 && /^[(\s]*$/.test(tail.slice(andAt + 2)) && referencesOpen(tail.slice(0, andAt))) return true
+  if (andAt !== -1 && /^[(\s]*$/.test(tail.slice(andAt + 2)) && isCommittedOpenGuard(tail.slice(0, andAt))) return true
   const questionAt = lastTernaryQuestion(tail)
-  if (questionAt !== -1 && /^[(\s]*$/.test(tail.slice(questionAt + 1)) && referencesOpen(tail.slice(0, questionAt))) {
+  if (questionAt !== -1 && /^[(\s]*$/.test(tail.slice(questionAt + 1))
+    && isCommittedOpenGuard(tail.slice(0, questionAt))) {
     return true
   }
   return false
@@ -517,8 +589,15 @@ function governedByCommittedOpen(body, at) {
 
 /**
  * The dwell callback may contain exactly two kinds of statement: opening the
- * card, and a plain write to a member slot (a callback clearing its OWN expired
- * timer ref). Anything else is drift.
+ * card, and a `= null` cleanup of the very timer ref the dwell assignment
+ * writes (`timerRef.current = setTimeout(…)` → `timerRef.current = null`).
+ * Anything else is drift.
+ *
+ * The cleanup arm is keyed to the ASSIGNMENT TARGET, never to "any member
+ * write": a repair such as `intentRef.current = true` is a member write too,
+ * and admitting every `x.y = …` would let the open-side fix through as the racy
+ * shape. `= null` only — a compound assignment (`+=`, `||=`) reads the old
+ * value and is not cleanup.
  *
  * Whitelist by SHAPE, never a blacklist of presence-looking words.
  * A word blacklist is wrong in both directions:
@@ -532,11 +611,10 @@ function governedByCommittedOpen(body, at) {
  * "the callback grew a statement", so it says precisely that and hands the
  * adjudication to a human (the failure tail spells out both outcomes).
  */
-const OPEN_CALL = /^setOpen\s*\(\s*true\s*\)$/
+const OPEN_CALL = /^setPhase\s*\(\s*''\s*\)$/
 
-/** A plain WRITE to a member path (`timerRef.current = null`). Compound
- *  assignments (`+=`, `||=`) read the old value, so they do not qualify. */
-const MEMBER_WRITE = /^(?:this|[A-Za-z_$][\w$]*)(?:\s*\.\s*[A-Za-z_$][\w$]*)*\s*=(?!=)/
+/** The member path of a `= null` cleanup, whitespace-normalized. */
+const cleanupWriteOf = (timerRef) => (timerRef === null ? null : `${timerRef}=null`)
 
 /**
  * Top-level statements of an arrow/function callback body (nesting-aware `;`
@@ -576,14 +654,20 @@ export function callbackStatements(callback) {
 
 /**
  * Whether a dwell callback contains a statement the port cannot account for.
+ * The only admitted cleanup is a `= null` write to `timerRef` (the LHS the
+ * dwell `setTimeout` is assigned to); with an unknown target this defaults to
+ * null, which admits no write at all — fail-closed.
  * @param {string} callback - the timer's first-argument region (code-only).
+ * @param {string | null} [timerRef] - member path from {@link dwellOpenTimers}.
  * @returns {{ drift: boolean, statement: string, detail: string }}
  */
-export function openCallbackDrift(callback) {
+export function openCallbackDrift(callback, timerRef = null) {
   const statements = callbackStatements(callback)
   if (statements.length === 0) return { drift: true, statement: '', detail: 'dwell 回调体为空' }
+  const cleanup = cleanupWriteOf(timerRef)
   for (const statement of statements) {
-    if (OPEN_CALL.test(statement) || MEMBER_WRITE.test(statement)) continue
+    if (OPEN_CALL.test(statement)) continue
+    if (cleanup !== null && statement.replace(/\s+/g, '') === cleanup) continue
     return { drift: true, statement, detail: `回调里多出了「${statement}」` }
   }
   return { drift: false, statement: '', detail: '' }
@@ -602,12 +686,31 @@ function topLevelComma(text) {
 }
 
 /**
- * Every `setTimeout(` call in `code` whose FIRST argument opens the card
- * (`setOpen(true)`), as `{ at, callback }` (callback = the first-argument
- * region). Selection is semantic, not positional, so reformatting is tolerated
- * while a rewritten open path (or a decoy timer that does not open) is not.
+ * The member path a `setTimeout(` at `at` is assigned to — `timerRef.current`
+ * in `timerRef.current = setTimeout(…)` — or null when the call is not the
+ * right-hand side of a plain member assignment. Whitespace is normalized away so
+ * the path can be compared against a callback statement.
  * @param {string} code - the `HoverCard` component body (code-only).
- * @returns {{ at: number, callback: string }[]} the dwell timers found.
+ * @param {number} at - index of the `setTimeout` token.
+ * @returns {string | null} the assignment target, or null when unknown.
+ */
+function assignedTimerRef(code, at) {
+  const match = /((?:this|[A-Za-z_$][\w$]*)(?:\s*\.\s*[A-Za-z_$][\w$]*)*)\s*=\s*$/.exec(code.slice(0, at))
+  return match === null ? null : match[1].replace(/\s+/g, '')
+}
+
+/**
+ * Every `setTimeout(` call in `code` that IS the dwell timer — the one delayed
+ * by the `openDelayMs` prop — as `{ at, callback, timerRef }` (callback = the
+ * first-argument region, timerRef = the member path the call is assigned to).
+ * The delay names the timer: the pin also closes through `setPhase('closed')` on
+ * the preview fade, whose code-only projection is the same `setPhase('')` as the
+ * dwell's open call, so a callback-shape match would read two candidates.
+ * Selection is semantic, not positional, so reformatting is tolerated while a
+ * rewritten open path (or a decoy timer) is not.
+ * @param {string} code - the `HoverCard` component body (code-only).
+ * @returns {{ at: number, callback: string, timerRef: string | null }[]} the dwell
+ *   timers found.
  */
 export function dwellOpenTimers(code) {
   const found = []
@@ -618,8 +721,13 @@ export function dwellOpenTimers(code) {
     if (close === -1) continue
     const args = code.slice(open + 1, close)
     const comma = topLevelComma(args)
-    const first = comma === -1 ? args : args.slice(0, comma)
-    if (/setOpen\s*\(\s*true\s*\)/.test(first)) found.push({ at: match.index, callback: first })
+    if (comma === -1) continue
+    const rest = args.slice(comma + 1)
+    const delayComma = topLevelComma(rest)
+    const delay = (delayComma === -1 ? rest : rest.slice(0, delayComma)).trim()
+    if (delay === 'openDelayMs') {
+      found.push({ at: match.index, callback: args.slice(0, comma), timerRef: assignedTimerRef(code, match.index) })
+    }
   }
   return found
 }
@@ -643,16 +751,16 @@ export function racyOpenPathShape(component) {
   if (timers.length === 0) {
     return {
       racy: false,
-      detail: '找不到「dwell 定时器里 setOpen(true)」这一 OPEN 路径（已改写/移除）',
+      detail: "找不到「openDelayMs dwell 定时器里 setPhase('open')」这一 OPEN 路径（已改写/移除）",
     }
   }
   if (timers.length > 1) {
     return {
       racy: false,
-      detail: `有 ${timers.length} 处 setTimeout 回调会 setOpen(true)，生效点不唯一`,
+      detail: `有 ${timers.length} 处以 openDelayMs 为延迟的 setTimeout 会开卡，生效点不唯一`,
     }
   }
-  const drift = openCallbackDrift(timers[0].callback)
+  const drift = openCallbackDrift(timers[0].callback, timers[0].timerRef)
   if (drift.drift) {
     return {
       racy: false,
@@ -660,7 +768,10 @@ export function racyOpenPathShape(component) {
         + '（竞态确已修）」与「回调只是长了一句（竞态仍在）」，故不自动放行：请贴回调原文人工裁决',
     }
   }
-  return { racy: true, detail: 'dwell 回调只做 setOpen(true)（至多清自己的 timer ref），OPEN 侧未复查指针在场' }
+  return {
+    racy: true,
+    detail: "dwell 回调只 setPhase('open')（至多把该定时器赋值的 timer ref 清成 null），OPEN 侧未复查指针在场",
+  }
 }
 
 /**
@@ -696,6 +807,96 @@ export function racyGraceArmShape(body, armName) {
     }
   }
   return { racy: true, detail: `onPointerLeave 的 ${occurrences.length} 处 ${armName}() 都在已提交的 open 条件内` }
+}
+
+// ---------------------------------------------------------------------------
+// Post-commit dismissal re-check — the third repair shape
+// ---------------------------------------------------------------------------
+
+/** The post-commit hook calls a repair can hide behind. */
+const POST_COMMIT_HOOKS = [`useEffect`, `useLayoutEffect`, `useInsertionEffect`]
+
+/** Read one `.current` ref token out of `text` (diagnostics + presence only). */
+const REF_READ = /[A-Za-z_$][\w$]*\s*\.\s*current\b/
+
+/**
+ * First-argument region of every post-commit hook call in `code`
+ * (`useEffect(…)` / `useLayoutEffect(…)` / `useInsertionEffect(…)`).
+ * @param {string} code - the `HoverCard` component body (code-only).
+ * @returns {string[]} one region per call (empty when the component has none).
+ */
+export function postCommitCallbacks(code) {
+  const found = []
+  for (const hook of POST_COMMIT_HOOKS) {
+    const pattern = new RegExp(`\\b${hook}\\s*\\(`, 'g')
+    for (let match = pattern.exec(code); match !== null; match = pattern.exec(code)) {
+      const open = match.index + match[0].length - 1
+      const close = matchingParen(code, open)
+      if (close === -1) continue
+      found.push(code.slice(open + 1, close))
+      pattern.lastIndex = close + 1
+    }
+  }
+  return found
+}
+
+/**
+ * The post-commit dismissal callbacks pinned in the frozen HoverCard, as
+ * whitespace-normalized code-only first-argument regions (the FULL argument
+ * list, deps array included; the code-only projection neutralizes every string
+ * literal, so 'preview'/'Escape' read as ''). These are the ONLY
+ * dismissal-capable post-commit callbacks the gate admits — preview fade,
+ * owner-disable, Escape. A pin upgrade that reformats or rewrites one reddens
+ * the gate with the drift message and forces re-adjudication; the list must
+ * only ever be regenerated from the PINNED source, never widened to admit a new
+ * shape (that would restore the fail-open hole this list closes).
+ */
+export const PINNED_POST_COMMIT_DISMISSALS = [
+  // Preview fade: closing -> closed through a nested timer.
+  "() => { if (!closing) return const timer = setTimeout(() => { setPhase('') }, PREVIEW_FADE_MS) return () => { clearTimeout(timer) } }, [closing]",
+  // Owner disabling mid-hover (menu opened, drag started).
+  '() => { if (!disabled) return clearTimer() cancelClose() close() }, [disabled, cancelClose, close]',
+  // Escape keydown: the dismissal rides a nested keydown listener.
+  "() => { if (!open || (variant !== '' && !inline)) return const dismiss = (event: KeyboardEvent): void => { if (event.key !== '') return if (inline) event.stopPropagation() clearTimer() cancelClose() close() } window.addEventListener('', dismiss, inline) return () => { window.removeEventListener('', dismiss, inline) } }, [open, variant, inline, cancelClose, close]",
+]
+
+/**
+ * Whether a POST-COMMIT callback performs a dismissal/phase action outside the
+ * pinned set — the commit-layer repair the CLOSE/OPEN shapes cannot see. The
+ * upstream fix this catches keeps onPointerLeave byte-identical and the dwell
+ * callback unchanged: it records pointer presence (in a ref, at module scope, or
+ * behind a helper) and adds a post-commit effect that closes when the pointer is
+ * gone, so both pinned shapes still read as "race present" while the race is
+ * gone.
+ *
+ * FAIL-CLOSED: every callback that mentions a dismissal token (close(,
+ * setPhase(''), the grace arm) must be one of
+ * {@link PINNED_POST_COMMIT_DISMISSALS} VERBATIM ({@link postCommitCallbacks}
+ * returns the whole argument list, deps included). The previous rule required a
+ * literal .current read inside the callback, so moving the pointer fact to
+ * module scope or behind a helper defeated it; here the drift is the dismissal
+ * itself. The pinned dismissal callbacks that do NOT read pointer state
+ * (owner-disable, Escape) are admitted by the whitelist; ref bookkeeping that
+ * never dismisses is not this shape and stays green.
+ * @param {string} component - the HoverCard component body (code-only).
+ * @param {string | null} armName - identifier from {@link pointerGraceArmName}.
+ * @returns {{ recheck: boolean, detail: string }} verdict + human-readable detail.
+ */
+export function postCommitDismissalRecheck(component, armName) {
+  const dismissalTokens = ["close(", "setPhase('')"]
+  if (armName !== null) dismissalTokens.push(armName + '(')
+  for (const callback of postCommitCallbacks(component)) {
+    if (!dismissalTokens.some((token) => callback.includes(token))) continue
+    if (PINNED_POST_COMMIT_DISMISSALS.includes(callback.replace(/\s+/g, ' ').trim())) continue
+    const ref = REF_READ.exec(callback)
+    return {
+      recheck: true,
+      detail: 'post-commit 回调（' + excerpt(callback) + '）' + (ref === null
+        ? '执行了关闭/相位动作，且不是白名单化的 pinned 形状'
+        : '里读 ' + ref[0].replace(/\s+/g, '') + ' 的同时执行了关闭/相位动作，且不是白名单化的 pinned 形状'),
+    }
+  }
+  return { recheck: false, detail: '' }
 }
 
 // ---------------------------------------------------------------------------
@@ -796,12 +997,26 @@ export function hoverPortVerdict({ upstreamHoverCard, upstreamPointerGrace, cham
         }
       }
       // ①b 竞态的另一半（OPEN 侧）：dwell 回调不得复查指针在场。只锁 CLOSE 侧
-      //     会漏掉「上游在 setOpen(true) 前加 inside 复查」这一最小修复——那时
+      //     会漏掉「上游在 setPhase('open') 前加 inside 复查」这一最小修复——那时
       //     onPointerLeave 一字不改，竞态其实已经没了，本门必须逼出退役裁决。
       const openShape = racyOpenPathShape(component.text)
       if (!openShape.racy) {
         failures.push(
           `C15 上游 HoverCard 的竞态 OPEN 形状已变：${openShape.detail}（${upstreamHoverCard.path}）——`
+          + RETIREMENT_TAIL,
+        )
+      }
+      // ①c 第三类修复：post-commit（useEffect 等提交后）执行关闭/相位动作。fail-closed：
+      //     白名单化 pinned 形状之外的任何 dismiss 回调都判漂移——把指针事实挪到 ref
+      //     之外（模块作用域/helper）无法绕过；这类修复既不动 ① 的 CLOSE 形状、也不动
+      //     ①b 的 dwell 回调，必须单独判，交人工裁决。
+      const postCommit = postCommitDismissalRecheck(component.text, pointerGraceArmName(component.text))
+      if (postCommit.recheck) {
+        failures.push(
+          'C15 上游 HoverCard 出现白名单外的 post-commit 关闭/相位回调：' + postCommit.detail + '（' + upstreamHoverCard.path + '）——'
+          + '任何提交后（useEffect/useLayoutEffect/useInsertionEffect）执行 close()/setPhase 关闭/宽限 arm 的回调'
+          + '都可能是「把指针在场事实放到 ref/模块作用域/helper 后复查」的竞态修复；被钉的 CLOSE/OPEN 两侧都能一字不改，'
+          + '本门对非白名单化 pinned 形状一律按漂移处理、无法区分修复与无关守卫，故不自动放行：请贴 effect 原文人工裁决。'
           + RETIREMENT_TAIL,
         )
       }
@@ -866,8 +1081,10 @@ export function hoverPortVerdict({ upstreamHoverCard, upstreamPointerGrace, cham
   return {
     ok: true,
     failures: [],
-    summary: '✓ C15 hover 移植保鲜: 上游竞态两侧形状仍在（OPEN: dwell 回调只 setOpen(true)、不复查指针在场；'
-      + 'CLOSE: onPointerLeave 以已提交的 open 守卫宽限）'
+    summary: "✓ C15 hover 移植保鲜: 上游竞态两侧形状仍在（OPEN: openDelayMs dwell 回调只 setPhase('open')"
+      + "（至多把该 timer ref 清成 null）、不复查指针在场；"
+      + 'CLOSE: onPointerLeave 的 arm 只在直接/合取含已提交 open 的守卫内、不接受 || 析取；'
+      + 'post-commit: 组件体内无白名单外的关闭/相位回调）'
       + `；常数锁步 grace=${grace.upstreamValue}ms dwell=${dwell.upstreamValue}ms`
       + `（${upstreamHoverCard.path} / ${upstreamPointerGrace.path} ↔ ${chamberHoverIntent.path}）`,
   }

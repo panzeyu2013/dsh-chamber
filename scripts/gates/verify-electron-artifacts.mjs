@@ -13,7 +13,8 @@
  *   - `dist/preload.cjs` is loaded into the sandbox preload world at window
  *     creation (main.ts:832-841 fails closed when it is absent; without this gate nothing
  *     executes the compiled file to prove it parses and exposes the frozen
- *     `window.dshChamber` surface).
+ *     `window.dshChamber` surface AND the upstream-parity `window.dshDesktop`
+ *     carrier the official rc.2 client families read during boot).
  *
  * This gate therefore:
  *   (a) spawns the COMPILED control-plane entry electron-free (plain Node, no
@@ -22,7 +23,16 @@
  *   (b) runs the COMPILED `dist/preload.cjs` inside node:vm with a stubbed
  *       `electron` module and asserts it parses and exposes the frozen
  *       surface: the 4 info scalars + the 9 namespace objects whose members
- *       are functions and whose subscribe members return an unsubscribe;
+ *       are functions and whose subscribe members return an unsubscribe, plus
+ *       the TOP-LEVEL `dshDesktop` carrier (present, protocolVersion === 1 and
+ *       every carrier member a function — a compiled preload that dropped it
+ *       leaves the official shortcuts service without its input source and
+ *       boots degraded). The carrier KEY SET is deliberately NOT re-derived
+ *       from preload.cts here: the frozen 4-key set is owned by
+ *       packages/desktop/test/ipc/desktop-carrier-surface.test.ts and the
+ *       compiled artifact is byte-compared with the source by
+ *       verify-artifact-freshness, so a third source-text comparison would only
+ *       duplicate (and break on preload refactors) without adding a fact;
  *   (c) when a real electron-builder mac product is staged
  *       (`packages/desktop/release/mac-arm64/dsh-chamber.app`, or the app named
  *       by `DSH_CHAMBER_ELECTRON_APP`), asserts the packaged `.lproj/locale.pak`
@@ -63,6 +73,13 @@ export const DEFAULT_RELEASE_DIR = join(REPO_ROOT, 'packages', 'desktop', 'relea
 export const BRIDGE_SCALAR_KEYS = ['controlPlaneUrl', 'dshVersion', 'version', 'platform']
 /** The 9 namespaces, single-sourced from the payload gate's factory mapping. */
 export const BRIDGE_NAMESPACE_KEYS = Object.values(FACTORY_TO_NAMESPACE).sort()
+
+/**
+ * The dshDesktop.protocolVersion of the upstream rc.2 desktop carrier
+ * (packages/desktop/preload.cts exposeDesktopCarrier(); the Swift shim pins
+ * the same value in bridge-shim-document.test.ts).
+ */
+export const DESKTOP_CARRIER_PROTOCOL_VERSION = 1
 
 /**
  * Resolve the desktop dist dir: env override (absolute or relative to cwd),
@@ -264,6 +281,10 @@ export function loadPreloadInVm(preloadSource, { info = {}, onInvoke } = {}) {
     console,
     setTimeout,
     clearTimeout,
+    // The compiled preload reads process.platform for the desktop platform mark
+    // (markDocumentPlatform) and process.isMainFrame for the carrier gate; the
+    // vm has no host process.
+    process: { platform: process.platform, isMainFrame: true },
     module: { exports: {} },
     require(specifier) {
       if (specifier === 'electron') {
@@ -329,11 +350,57 @@ export function assertFrozenPreloadSurface(bridge, { expectedScalars } = {}) {
 }
 
 /**
+ * Assert the TOP-LEVEL `dshDesktop` carrier the COMPILED preload exposes:
+ * present, protocolVersion pinned, and every carrier member an object of
+ * functions (or a function). The official rc.2 client families (the shortcuts
+ * service in particular) read this world global during boot, so a compiled
+ * preload that lost it boots degraded with no other gate seeing it (the
+ * dshChamber assertion does not look at a second world global). The KEY SET is
+ * NOT compared against a preload.cts re-parse: the frozen set is owned by
+ * desktop-carrier-surface.test.ts and the artifact's bytes are already compared
+ * with the source by verify-artifact-freshness, so a third, regex-fragile
+ * source comparison adds no fact.
+ * @param {unknown} carrier - `contextBridge.exposeInMainWorld('dshDesktop', carrier)` value.
+ * @param {{ protocolVersion?: number }} [contract] - the pinned protocol version.
+ * @returns {{ namespaces: number, members: number }} checked counts.
+ */
+export function assertFrozenDesktopCarrier(carrier, { protocolVersion = DESKTOP_CARRIER_PROTOCOL_VERSION } = {}) {
+  if (carrier === null || typeof carrier !== 'object') {
+    throw new Error(`preload exposed no dshDesktop carrier (got ${String(carrier)})`)
+  }
+  const actualKeys = Object.keys(carrier).sort()
+  if (!actualKeys.includes('protocolVersion')) {
+    throw new Error('dshDesktop carrier exposes no protocolVersion key: [' + actualKeys.join(', ') + ']')
+  }
+  if (carrier.protocolVersion !== protocolVersion) {
+    throw new Error(`dshDesktop.protocolVersion = ${JSON.stringify(carrier.protocolVersion)}, expected ${protocolVersion}`)
+  }
+  let members = 0
+  let namespaces = 0
+  for (const namespace of actualKeys) {
+    if (namespace === 'protocolVersion') continue
+    const value = carrier[namespace]
+    if (typeof value === 'function') continue
+    if (value === null || typeof value !== 'object') {
+      throw new Error(`dshDesktop.${namespace} is not an object (got ${String(value)})`)
+    }
+    namespaces += 1
+    for (const [name, member] of Object.entries(value)) {
+      if (typeof member !== 'function') {
+        throw new Error(`dshDesktop.${namespace}.${name} is not a function (got ${typeof member})`)
+      }
+      members += 1
+    }
+  }
+  return { namespaces, members }
+}
+
+/**
  * Run the gate. Returns a verdict instead of exiting so tests can call it.
  * @param {{ desktopDist?: string, nodeBinary?: string, log?: Function, packagedMacApp?: string | null }} [options] - inputs.
  * `packagedMacApp` (undefined = discover, null = assert none) is the staged
  * electron-builder mac product whose locale resources must be intact.
- * @returns {Promise<{ action: 'skip', reason: string } | { action: 'run', port: number, members: number, health: unknown, locales: string[] }>} verdict.
+ * @returns {Promise<{ action: 'skip', reason: string } | { action: 'run', port: number, members: number, carrierMembers: number, health: unknown, locales: string[] }>} verdict.
  */
 export async function runElectronArtifactSmoke({
   desktopDist = resolveDesktopDist(),
@@ -362,11 +429,16 @@ export async function runElectronArtifactSmoke({
     }
     const harness = await inspectPreloadSurface(readFileSync(preloadEntry, 'utf8'), { info })
     const surface = assertFrozenPreloadSurface(harness.exposed.dshChamber, { expectedScalars: info })
+    // The second world global: the upstream-parity dshDesktop carrier. The
+    // gate asserts presence + protocolVersion + function members only; the key
+    // set is owned by the desktop carrier surface test and the artifact bytes
+    // by verify-artifact-freshness (no third source-text lock).
+    const carrier = assertFrozenDesktopCarrier(harness.exposed.dshDesktop)
     const infoChannel = harness.invokes.find((call) => call.channel === 'dsh-chamber:info')
     if (infoChannel === undefined) {
       throw new Error('compiled preload never invoked dsh-chamber:info — the exposure branch was not exercised')
     }
-    log(`electron-artifacts: control-plane booted on port ${boot.port} and answered /health; preload exposed ${surface.namespaces} namespaces / ${surface.members} members`)
+    log(`electron-artifacts: control-plane booted on port ${boot.port} and answered /health; preload exposed ${surface.namespaces} namespaces / ${surface.members} members and the dshDesktop carrier (${carrier.namespaces} namespaces / ${carrier.members} members)`)
     // When a real electron-builder mac product is staged, the locale
     // resources Electron loads its UI strings from are part of the product
     // assertion — app-builder-lib's electronLanguages matcher can delete a
@@ -378,7 +450,7 @@ export async function runElectronArtifactSmoke({
       locales = verifyPackagedMacLocales(macApp).checked
       log(`electron-artifacts: packaged mac locale resources verified (${macApp})`)
     }
-    return { action: 'run', port: boot.port, members: surface.members, health: boot.health, locales }
+    return { action: 'run', port: boot.port, members: surface.members, carrierMembers: carrier.members, health: boot.health, locales }
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }
@@ -403,7 +475,7 @@ async function main() {
     console.error('electron compiled-artifact smoke: FAILED — ' + verdict.reason)
     return 1
   }
-  console.log(`ELECTRON ARTIFACTS SMOKE PASS: ${desktopDist} (control-plane boot + preload surface)`)
+  console.log(`ELECTRON ARTIFACTS SMOKE PASS: ${desktopDist} (control-plane boot + preload surface + dshDesktop carrier)`)
   return 0
 }
 

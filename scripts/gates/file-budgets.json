@@ -9,13 +9,13 @@
     },
     {
       "path": "packages/desktop/plugin-sync.ts",
-      "lines": 2146,
+      "lines": 1097,
       "target": 1200,
       "note": "plugin mutation pipeline (three surfaces share one file)"
     },
     {
       "path": "packages/desktop/shell-core.ts",
-      "lines": 1318,
+      "lines": 1245,
       "target": 1600,
       "note": "shell assembly + IPC ctx (blocks the shell-ipc type cycle)"
     },
@@ -27,25 +27,25 @@
     },
     {
       "path": "packages/dsh-chamber-client-ui-settings-connections/src/client/PluginDialog.tsx",
-      "lines": 2085,
+      "lines": 931,
       "target": 700,
       "note": "plugin dialog controller/render mix"
     },
     {
       "path": "packages/desktop/gateway-provider.ts",
-      "lines": 1683,
+      "lines": 1189,
       "target": 1400,
       "note": "gateway transport provider"
     },
     {
       "path": "packages/desktop/ssh-provider.ts",
-      "lines": 1454,
+      "lines": 1420,
       "target": 1500,
       "note": "ssh transport provider"
     },
     {
       "path": "packages/dsh-chamber-client-ui-settings-connections/src/client/ConnectionsSection.tsx",
-      "lines": 1725,
+      "lines": 1716,
       "target": 900,
       "note": "connections page + form flow"
     },
@@ -75,13 +75,13 @@
     },
     {
       "path": "packages/desktop/runtime-startup-host.ts",
-      "lines": 1294,
+      "lines": 1290,
       "target": 500,
       "note": "createRuntimeStartupHost function budget (file proxy)"
     },
     {
       "path": "packages/desktop/host-assembly.ts",
-      "lines": 1155,
+      "lines": 1114,
       "target": 400,
       "note": "createHostAssembly function budget (file proxy)"
     },

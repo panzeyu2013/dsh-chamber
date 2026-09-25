@@ -1,9 +1,9 @@
 /*
  * Localizable.strings —— dsh-chamber 原生壳英文文案（本地化资源）
  *
- * 键 = NativeTextKey.rawValue（macos/Sources/DSHChamber/NativeText.swift），逐字一致；键表以 NativeTextKey 为准（当前 121 键）。
+ * 键 = NativeTextKey.rawValue（macos/Sources/DSHChamber/NativeText.swift），逐字一致；键表以 NativeTextKey 为准（当前 119 键）。
  * 英文值按既有英文面措辞与 zh-Hans 逐条对译（同义、同结构）：正文来源
- * main.ts 的对话框/报错与 electron-edges 的 pickPluginSource。
+ * main.ts 的对话框/报错与 electron-edges 的宿主对话框腿。
  * 占位符 %@ / %d 与 zh-Hans 逐键一一对应（种类/顺序一致）；参数由调用方按
  * NativeText.format 传入，故两份文件的格式必须同步。动态部分（app 名、控制面
  * 地址、退出原因、次数/秒数、sidecar 失败原因）一律走 %@/%d，zh-Hans 侧格式化
@@ -156,10 +156,6 @@
 "failure.probeHTTPStatus" = "HTTP %d (expected 2xx)";
 "failure.probeNoResponse" = "No response";
 "failure.probeNSURLError" = "NSURLError %d: %@";
-
-/* ===== 插件源选择面板（英文原文即源码措辞；zh-Hans 侧为等效译文） ===== */
-"panel.pluginSourceTitle" = "Import a dsh plugin — source folder or .tgz archive";
-"panel.pluginSourcePrompt" = "Import";
 
 /* ===== 通用 ===== */
 "common.ok" = "OK";

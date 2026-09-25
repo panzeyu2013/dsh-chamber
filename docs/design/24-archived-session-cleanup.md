@@ -469,7 +469,7 @@ generic throw（无 status 透出）；503 `instance_unavailable` 有专类特�
 + `ArchiveManagerDialog.tsx`）：
 
 - 锚点：来源分组头（server 行）hover 操作簇——现状三枚（排序菜单 / add-workspace `+` /
-  搜索，`cc.sourceActions`）；在簇尾一枚删除图标按钮（`IconTrashOutline16`，size 14 与
+  搜索，`cc.sourceActions`）；在簇尾一枚删除图标按钮（`IconTrashOutlineRegular`，size 14 与
   workspace 删除一致），点击**打开归档管理器对话框**。簇宽 64→86px、header 28px 定高
   不变，「无 reflow（垂直）」声明成立。
 - 呈现/隐藏条件与同簇按钮**逐字一致**：`server.connected && (server.aggregateError ===
@@ -783,7 +783,7 @@ STATUS.md。
 
 ## 10. 宿主面事实（vendor 核对结论）
 
-vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.5-rc.2 fb2c4b9e698e；下列宿主面
+vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.7-rc.2 477b4f4205；下列宿主面
 自 alpha.2 b2e3b2a0 审计以来未变）核对的宿主面事实，binding 与算法以此为准：
 
 1. `workspaceRegistry` ctx 服务：`list()`/`archivedSessionIds`（public getter）/
@@ -970,7 +970,7 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.5-rc.2 fb2c4b9e
     激活探针里要求 `stat` ⇒ 旧宿主探针 `ok:false`（activation gate fail，走 §7 C 的回退/拒绝
     语义），`hasStoredContent` 在运行期对同一缺失返回 `true`（跳过清扫、不清成员）——**能力门
     响亮失败 + 运行期 fail-closed 降级**：域的正确性依赖 `stat`，但绝不因面缺失而误清成员。
-    当前支持基线（0.1.5-rc.2）与回滚目标（0.1.3-alpha.2）都满足该面；
+    当前支持基线（0.1.7-rc.2）与回滚目标（0.1.3-alpha.2）都满足该面；
 12. **force 路径与维护相位（不声称已解决）**：dsh 在**维护相位**期间对外仍报
     `status === 'idle'`（vendor `packages/core/agent-loop/src/agent.ts`），一次 `force` purge
     因此可能删掉**维护任务仍会继续追加写入**的档。`session/cancel` 能中止**活着的**维护相位，

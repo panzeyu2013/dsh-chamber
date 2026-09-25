@@ -13,7 +13,7 @@
  */
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import clsx from 'clsx'
-import { Button, IconChevronDownOutline14, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconChevronDownOutlineRegular, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
   compareSemver,
   currentRuntimeSurface,
@@ -983,7 +983,7 @@ function GatewayRuntimeSection({
                   </option>
                 ))}
             </select>
-            <IconChevronDownOutline14 className={css.runtimeSelectChevron} aria-hidden="true" />
+            <IconChevronDownOutlineRegular className={css.runtimeSelectChevron} aria-hidden="true" />
           </span>
           {/* 更新/切换到 vX 仅在选择版本 ≠ 当前版本时显示；忙碌期间保持可见但禁用
               （带「正在应用…」文案）。选中「内建版本」行且未装受管树时主按钮为「恢复内建」。 */}
@@ -1160,7 +1160,7 @@ function GatewayRuntimeSection({
                 <option value={NPMMIRROR}>{t('dshRuntimeRegistryNpmmirror')}</option>
                 <option value={CUSTOM_REGISTRY}>{t('dshRuntimeRegistryCustomLabel')}</option>
               </select>
-              <IconChevronDownOutline14 className={css.runtimeSelectChevron} aria-hidden="true" />
+              <IconChevronDownOutlineRegular className={css.runtimeSelectChevron} aria-hidden="true" />
             </span>
             {registrySelection === CUSTOM_REGISTRY && (
               <input
@@ -1960,7 +1960,7 @@ export function DshRuntimeSection({
                   </option>
                 ))}
             </select>
-            <IconChevronDownOutline14 className={css.runtimeSelectChevron} aria-hidden="true" />
+            <IconChevronDownOutlineRegular className={css.runtimeSelectChevron} aria-hidden="true" />
           </span>
           {/* 更新/切换到 vX 仅在选择版本 ≠ 当前版本时显示；相位门控期间
               canInstall 从动作集消失——按钮保留但禁用（忙碌副本「正在安装…」+
@@ -2126,7 +2126,7 @@ export function DshRuntimeSection({
                 <option value={NPMMIRROR}>{t('dshRuntimeRegistryNpmmirror')}</option>
                 <option value={CUSTOM_REGISTRY}>{t('dshRuntimeRegistryCustomLabel')}</option>
               </select>
-              <IconChevronDownOutline14 className={css.runtimeSelectChevron} aria-hidden="true" />
+              <IconChevronDownOutlineRegular className={css.runtimeSelectChevron} aria-hidden="true" />
             </span>
             {registrySelection === CUSTOM_REGISTRY && (
               <input

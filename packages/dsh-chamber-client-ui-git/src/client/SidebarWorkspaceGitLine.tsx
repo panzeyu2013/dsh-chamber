@@ -11,7 +11,7 @@
 import { useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import {
-  IconBranchOutline16, IconPlusOutline16, IconRefreshOutline16, IconTrashOutline16,
+  IconBranchOutlineRegular, IconPlusOutlineRegular, IconRefreshOutlineRegular, IconTrashOutlineRegular,
   RiskConfirmation, Tag,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { basenameOf, chamberBridge } from '@dsh-chamber/dsh-chamber-client-core'
@@ -160,7 +160,7 @@ export function SidebarWorkspaceGitLine({
           const rowName = basenameOf(worktree.path)
           return (
             <div className={css.unregisteredRow} key={worktree.worktreeId} role="group">
-              <IconBranchOutline16 size={14} className={css.unregisteredIcon} />
+              <IconBranchOutlineRegular size={14} className={css.unregisteredIcon} />
               <span className={css.unregisteredName} title={worktree.path}>
                 {worktree.branch ?? basenameOf(worktree.path)}
               </span>
@@ -182,7 +182,7 @@ export function SidebarWorkspaceGitLine({
                 aria-label={t('unregisteredAdopt')}
                 onClick={() => { void createSessionHere(context.sourceId, worktree.path).catch(() => {}) }}
               >
-                <IconPlusOutline16 size={14} />
+                <IconPlusOutlineRegular size={14} />
               </button>
               <button
                 type="button"
@@ -207,7 +207,7 @@ export function SidebarWorkspaceGitLine({
                   })
                 }}
               >
-                <IconTrashOutline16 size={14} />
+                <IconTrashOutlineRegular size={14} />
               </button>
             </div>
           )
@@ -275,7 +275,7 @@ export function SidebarWorkspaceGitLine({
             disabled={busy}
             onClick={() => { void retryRecovery(context.sourceId).catch(() => {}) }}
           >
-            <IconRefreshOutline16 size={12} />
+            <IconRefreshOutlineRegular size={12} />
             {t('retry')}
           </button>
         )}
@@ -335,7 +335,7 @@ export function SidebarWorkspaceGitLine({
             title={t('createBranchWorktree')}
             onClick={() => setCreateOpen(true)}
           >
-            <IconBranchOutline16 size={16} />
+            <IconBranchOutlineRegular size={16} />
           </button>
         )}
         {!primary.isMain && canOfferRemove && (
@@ -373,7 +373,7 @@ export function SidebarWorkspaceGitLine({
                 : { blockingRunningSessionIds: [...primary.blockingRunningSessionIds] }),
             })}
           >
-            <IconTrashOutline16 size={16} />
+            <IconTrashOutlineRegular size={16} />
           </button>
         )}
       </span>

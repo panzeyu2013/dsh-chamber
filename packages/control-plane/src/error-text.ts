@@ -4,8 +4,8 @@
  * packages/dsh-chamber-client-core/src/error-text.ts.
  *
  * The primitive is single-sourced here for every site inside this package
- * (local-connection / protected-plugins / state-root-lease /
- * plugin-mutation-executor / session-mux). The desktop main process keeps its own describe-error.ts
+ * (local-connection / protected-plugins / state-root-lease / session-mux).
+ * The desktop main process keeps its own describe-error.ts
  * (it additionally appends an Error cause chain) and the official copies stay
  * untouched: those are documented splits, not drift.
  */

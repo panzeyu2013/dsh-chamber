@@ -4,9 +4,12 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   READ_CLIENT_ID_KEY,
+  READ_PATH,
   MIN_REPORT_INTERVAL_MS,
+  SNAPSHOT_PATH,
   createReadWatermarkReporter,
   postReadMark,
   reportCurrentSession,
@@ -19,6 +22,20 @@ import type { ReadWatermarkRow } from '../../src/client/read-watermark.ts'
 function jsonFetch(body: unknown, ok = true): typeof fetch {
   return (async () => ({ ok, json: async () => body })) as unknown as typeof fetch
 }
+
+test('lockstep: mirror routes match the control-plane session-state protocol source', () => {
+  // The phone reads the gateway mirror through these two paths; this package
+  // cannot import control-plane, so the mirror literals are pinned against the
+  // authoritative source text (the renderer pins the same authority from its
+  // side in session-facts-source.test.ts).
+  const source = readFileSync(new URL('../../../control-plane/src/session-state-protocol.ts', import.meta.url), 'utf8')
+  assert.ok(source.includes("export const SESSION_STATE_PATH = '/chamber/session-state'"),
+    'control-plane must declare SESSION_STATE_PATH = /chamber/session-state')
+  assert.ok(source.includes('SESSION_STATE_READ_PATH = `${SESSION_STATE_PATH}/read`'),
+    'control-plane must derive SESSION_STATE_READ_PATH from SESSION_STATE_PATH')
+  assert.equal(SNAPSHOT_PATH, '/chamber/session-state')
+  assert.equal(READ_PATH, '/chamber/session-state/read')
+})
 
 test('rowWatermark is the host-domain max(updatedAt, completedAt); unknown is 0', () => {
   assert.equal(rowWatermark({ updatedAt: 1_000, completedAt: 2_000 }), 2_000)
@@ -92,32 +109,55 @@ function mirrorResponse(sessions: Record<string, ReadWatermarkRow & { running?: 
   return jsonFetch({ sessions })
 }
 
-test('reportCurrentSession reads the mirror row of the OFFICIAL current session', async () => {
+test('reportCurrentSession reads the mirror row of the presented rc.2 session', async () => {
   const posted: Array<[string, number]> = []
   const reporter = createReadWatermarkReporter({ post: (s, w) => posted.push([s, w]) })
-  const sessions = { list: { getSnapshot: () => ({ current: 'sess-2', sessions: [{ sessionId: 'sess-1' }] }) } }
+  // The real rc.2 anchor: byId rows carrying retainedBy. The watermark path
+  // must find the presented session (F3).
+  const sessions = {
+    list: {
+      getSnapshot: () => ({
+        byId: { 'sess-1': { retainedBy: {} }, 'sess-2': { retainedBy: { mainView: 1 } } },
+      }),
+    },
+  }
   const seen: string[] = []
   const fetchImpl = (async (url: string) => {
     seen.push(url)
     return mirrorResponse({ 'sess-2': { updatedAt: 100, completedAt: 400 } })(url)
   }) as unknown as typeof fetch
   const reported = await reportCurrentSession({ sessions, fetchImpl, getClientId: () => 'mobile-x', reporter, base: '' })
-  assert.equal(reported, 'sess-2')
+  assert.equal(reported, 'sess-2', 'the mainView-retained rc.2 row is the reported session')
   // The mark is the mirror row's max — never a client clock.
   assert.deepEqual(posted, [['sess-2', 400]])
   assert.match(seen[0], /^\/chamber\/session-state\?clientId=mobile-x$/)
 })
 
-test('reportCurrentSession is a silent no-op without a current session, a row, or a watermark', async () => {
+test('reportCurrentSession is a silent no-op without a presented session, a row, or a watermark', async () => {
   const posted: Array<[string, number]> = []
   const reporter = createReadWatermarkReporter({ post: (s, w) => posted.push([s, w]) })
   const base = { fetchImpl: mirrorResponse({}), getClientId: () => 'mobile-x', reporter, base: '' }
   assert.equal(await reportCurrentSession({ ...base, sessions: undefined }), null)
   assert.equal(await reportCurrentSession({ ...base, sessions: { list: { getSnapshot: () => ({}) } } }), null)
-  // Current session unknown to the mirror → nothing is invented.
-  assert.equal(await reportCurrentSession({ ...base, sessions: { list: { getSnapshot: () => ({ current: 'gone' }) } } }), null)
+  assert.equal(await reportCurrentSession({ ...base, sessions: { list: { getSnapshot: () => ({ byId: {} }) } } }), null)
+  // A zero-retention snapshot presents nothing: a pre-rc.2 `current` field on
+  // the same snapshot must not revive it.
+  const hybrid = { byId: { stale: { retainedBy: { mainView: 0 } } }, current: 'stale' }
+  assert.equal(await reportCurrentSession({
+    ...base,
+    sessions: { list: { getSnapshot: () => hybrid } },
+  }), null, 'a zero-retention snapshot presents nothing, with or without the removed current field')
+  // Presented session unknown to the mirror → nothing is invented.
+  assert.equal(await reportCurrentSession({
+    ...base,
+    sessions: { list: { getSnapshot: () => ({ byId: { gone: { retainedBy: { mainView: 1 } } } }) } },
+  }), null)
   // Row present but no host watermark yet → nothing is invented.
-  const zero = { ...base, fetchImpl: mirrorResponse({ cur: { running: true } }), sessions: { list: { getSnapshot: () => ({ current: 'cur' }) } } }
+  const zero = {
+    ...base,
+    fetchImpl: mirrorResponse({ cur: { running: true } }),
+    sessions: { list: { getSnapshot: () => ({ byId: { cur: { retainedBy: { mainView: 1 } } } }) } },
+  }
   assert.equal(await reportCurrentSession(zero), null)
   assert.deepEqual(posted, [])
 })
@@ -125,7 +165,9 @@ test('reportCurrentSession is a silent no-op without a current session, a row, o
 test('reportCurrentSession swallows a rejected fetch and a non-2xx mirror', async () => {
   const posted: Array<[string, number]> = []
   const reporter = createReadWatermarkReporter({ post: (s, w) => posted.push([s, w]) })
-  const sessions = { list: { getSnapshot: () => ({ current: 'cur' }) } }
+  const sessions = {
+    list: { getSnapshot: () => ({ byId: { cur: { retainedBy: { mainView: 1 } } } }) },
+  }
   const rejecting = async () => { throw new Error('offline') }
   assert.equal(await reportCurrentSession({ sessions, fetchImpl: rejecting, getClientId: () => 'c', reporter }), null)
   const notFound = jsonFetch({}, false)

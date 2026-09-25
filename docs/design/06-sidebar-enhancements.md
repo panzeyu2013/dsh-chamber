@@ -70,7 +70,7 @@
   （信号透传——现有 helper 不带 signal；复用 `resultError`）。
 - `SidebarRoot.tsx` + `sidebar-chamber.module.css` + `locales.ts`
   （`search.*` 键 zh/en 八组）。
-- `renderer/vendor-modules.d.ts`：ambient 镜像补新导出。
+- `types/vendor-modules.d.ts`（各包 `src/vendor-modules.d.ts` 为 /// reference 存根）：ambient 镜像补新导出。
 
 ## 2. 拖拽排序（来源内）
 
@@ -241,6 +241,10 @@
   `SIDEBAR_DEFAULT`），每次拖拽 `setSidebar` 经 `updateViewPrefs` 写回同键
   `dsh-chamber.sidebar.v1`，所有 live boot 的 store 订阅并即时采纳；替换官方
   ui-layout 注册（见 05 §6）。
+- **shell.leading 席位（rc.2）**：官方 AppFrame 在 `darwin && sidebarCollapsed` 时把窗口 chrome 的
+  `shell.leading` 单席作为唯一的可见重开入口（折叠列宽=0 且 `.sidebarCol{overflow:hidden}` 会裁掉
+  rail 内控件）。chamber sidebar fork 注册 `SidebarLeadingControls`（展开 + 新建，28px 圆钮；
+  宽度与 `--dsh-frame-leading-clearance` 计价锁步），layout fork 在 SlotMap 声明该 root-scoped 单席。
 - **orderBy**：每来源会话排序偏好 `'manual' | 'updated'`，默认 `manual`；
   v 保持 1 兼容旧数据（无此键即全 manual，不重播种），sanitize 丢弃非法值。
   **默认 `manual`**（保持既有 wire 序呈现）与官方默认 `updated` 不同——有意
@@ -418,7 +422,7 @@
   换入、状态槽 `display:none` 换出（session 行：状态环 ↔ **kebab 菜单**（重命名/
   分叉/归档——归档动词移入行菜单；归档只隐藏行、
   不触碰会话日志）；来源头：连接状态 ↔ 排序菜单 + 搜索 + 添加工作区（官方
-  project-add 字形，`IconProjectAddOutline16`）；workspace：会话数徽标 ↔ `+`（新建
+  project-add 字形，`IconProjectAddOutlineRegular`）；workspace：会话数徽标 ↔ `+`（新建
   会话）+ kebab（重命名/删除））。胶囊/菜单展开时操作簇保持显示
   （`.sourceActionsVisible`/`.rowActionsVisible`，`:has` 同步换出状态槽）。
 - **不再显示相对时间**：session 行不渲染"xx 前"时间单元格（`time.*` locale 键
@@ -579,8 +583,8 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
     语言**才成为页面语言——没有存过偏好时即其仍在用的浏览器兜底值）。
   - **机制**：`renderer/src/page-language.ts`（纯投影 + 页级 owner，带
     MutationObserver 兜底）＋ `renderer/src/locale-ownership.ts`（每 entry 上报
-    钩子：读 vendor LocaleFace 的 active，用 `ctx.settingsScope.bind({namespace:
-    'locale'})` 的 status 判「设置面已敲定」）＋ `chamber-entry.ts` 挂载装饰器
+    钩子：读 vendor LocaleFace 的 active，用 `ctx.configForms.get('locale')` 的
+    status 判「设置面已敲定」）＋ `chamber-entry.ts` 挂载装饰器
     （`decorateMount` 在 vendor `apply()` **之后同栈**运行，"vendor 写 →
     归属器回写"落在同一同步任务、中间不可能绘制；首屏 `register` 与 `registerDeferred`
     **两条挂载路径**都过装饰器）＋ `main.tsx` 在任何壳 boot 前安装 owner（served
@@ -835,7 +839,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   - **实现归属**：卡片由本包 `client/RowHoverCard.tsx` 渲染，
     不再直接用 vendor `ui-primitives HoverCard`；**开合状态机**在
     `packages/dsh-chamber-client-core/src/hover-intent.ts`。原因：vendor 版
-    （`ui-primitives/HoverCard.tsx:183-188`：`onPointerLeave` = `clearTimer()` +
+    （vendor `ui-primitives` 的 `HoverCard`：`onPointerLeave` = `clearTimer()` +
     `if (open) armClose()`，arm 宽限由**上一次已提交的 `open`** 决定）在 dwell
     到 React 提交之间落下的 pointerleave 什么都不 arm，卡片挂载后指针已离开，只能
     靠「再悬停该行并移开」清除（本仓每实例一个大 React root：侧栏 poll/`now` 轮询 +
@@ -844,8 +848,11 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
     store（`isOpen()`/`subscribe`），组件经 `useSyncExternalStore` 直接渲染。
     修正落在本包（vendor 只读）；**退役条件 = 上游修掉该竞态**，机器判据 =
     `scripts/upstream/verify-upstream-touchpoints.mjs` C15（断言竞态**两侧**形状
-    仍在：CLOSE 侧 `onPointerLeave` 的 arm 仍由已提交 `open` 守卫，OPEN 侧 dwell
-    回调仍不复查指针在场——只锁 CLOSE 侧会漏掉「上游在 `setOpen(true)` 前加 inside
+    仍在：CLOSE 侧 `onPointerLeave` 每个 arm 的守卫必须是已提交 `open` 本身或含
+    `open` 的 `&&` 合取（顶层 `||` 析取即红：`open || intentRef.current` 是 ref-intent
+    修复而非已知形状），OPEN 侧 dwell 回调只 `setPhase('open')`（至多把该定时器赋值
+    目标的 ref 清成 `null`）且仍不复查指针在场（rc.2 相位机后开卡语句为
+    `setPhase('open')`，判据已同步）——只锁 CLOSE 侧会漏掉「上游在开卡前加 inside
     复查」这一最小修复；外加时间常数逐值锁步），登记行见
     `docs/checklists/upstream-touchpoints.md` §4、偏差本体与剩余实机验收见
     `docs/progress/STATUS.md`。
@@ -859,13 +866,12 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
     故 renderer 的 view-hide 路径在同一 commit 显式调用
     `dismissVisibleRowCard()`（`packages/renderer/src/components/InstanceView.tsx:187-191`）；
     ④**两轴定位 + 越界即关**：水平仍夹取（卡 244 宽、侧栏贴左缘），垂直**不设**
-    官方「贴视口上缘钉住」的地板（上游只夹下缘：`ui-primitives/HoverCard.tsx:100`），
-    锚点整体滚出视口即关，位置由 `ResizeObserver` 重算（上游只有 scroll/resize，
-    `HoverCard.tsx:104-105`）；⑤**复制纪元与上游对齐**：关闭路径（唯一出口
+    官方「贴视口上缘钉住」的地板（上游只夹下缘），
+    锚点整体滚出视口即关，位置由 `ResizeObserver` 重算（上游只有 scroll/resize）；⑤**复制纪元与上游对齐**：关闭路径（唯一出口
     `open === false`，宽限关闭/按下即收/禁用三路都经过）先自增 copyEpoch 再清理，
     否则卡片关闭时仍在飞的剪贴板写入会在关闭→重开后在**新卡**上亮一瞬
     `copiedLabel`；
-    上游 `close()` 做同一件事（`HoverCard.tsx:54-58`），本包移植需补上这一步。两处
+    上游 `close()` 做同一件事，本包移植需补上这一步。两处
     **内容差异（有意保留）**：⑥workspace 卡是**只读卡**——投影不带 path/createdAt，
     上游「点卡片复制 cwd」入口（上游 `ui-workspace` `Rows.tsx:201-212`，
     `copyText={row.cwd}`）连同其 a11y/键盘复制一起没有（`role="button"`/

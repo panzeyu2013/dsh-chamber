@@ -4,8 +4,8 @@
  * request/response runner used by chamber-installed /
  * chamber-plugins-mutations / feature-lifecycle.
  *
- * The factory keeps every injection point (stateDir, tasks, logger, channels)
- * so the three suites express only their differences.
+ * The factory keeps every injection point (stateDir, logger, channels)
+ * so the suites express only their differences.
  */
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -14,7 +14,7 @@ import type { ApiRequest, ApiResponse, Logger } from '@dsh-chamber/control-plane
 import { createChamberPlugins } from '../../src/plugins.ts'
 import { createChamberInstalled } from '../../src/plugins-installed.ts'
 import { createChamberSurface, type ChamberSurfaceDeps } from '../../src/routes.ts'
-import { FakeRequest, FakeResponse, stubPluginTasks } from './utils.ts'
+import { FakeRequest, FakeResponse } from './utils.ts'
 
 /** The silent logger for every chamber-surface suite. */
 export const surfaceSilentLogger: Logger = { log() {}, warn() {}, error() {} }
@@ -34,7 +34,6 @@ export interface ChamberSurfaceHarnessOptions {
    *  a temp dir is created and removed via `t.after`. */
   stateDir?: string
   prefix?: string
-  tasks?: ChamberSurfaceDeps['tasks']
   logger?: Logger
   channels?: ChamberSurfaceDeps['channels']
 }
@@ -58,8 +57,6 @@ export function makeChamberSurfaceHarness(
     channels: options.channels ?? surfaceStubChannels,
     plugins: createChamberPlugins(stateDir, logger),
     installed: createChamberInstalled(stateDir),
-    tasks: options.tasks ?? stubPluginTasks(),
-    stateDir,
   })
   return { surface, stateDir }
 }

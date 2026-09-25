@@ -17,18 +17,18 @@ import type { ReactNode } from 'react'
 import clsx from 'clsx'
 import {
   Button,
-  IconChecklistOutline14,
-  IconChevronDownOutline14,
-  IconCloseOutline16,
-  IconDataOutline16,
-  IconEditOutline16,
-  IconLinkOutline16,
-  IconPlayOutline16,
-  IconPlusOutline16,
-  IconRefreshOutline16,
-  IconSearchOutline16,
-  IconStopFill16,
-  IconTrashOutline16,
+  IconChecklistOutlineRegular,
+  IconChevronDownOutlineRegular,
+  IconCloseOutlineRegular,
+  IconDataOutlineRegular,
+  IconEditOutlineRegular,
+  IconLinkOutlineRegular,
+  IconPlayOutlineRegular,
+  IconPlusOutlineRegular,
+  IconRefreshOutlineRegular,
+  IconSearchOutlineRegular,
+  IconStopFillRegular,
+  IconTrashOutlineRegular,
   Modal,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
@@ -237,8 +237,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const [gatewayHostLogs, setGatewayHostLogs] = useState<HostLogsResponse | null>(null)
   const [gatewayHostLogsError, setGatewayHostLogsError] = useState<string | null>(null)
   const [gatewayHostLogsBusy, setGatewayHostLogsBusy] = useState(false)
-  /** 插件管理对话框：四类卡片统一开 PluginDialog —— 分叉仅在 target 描述符（本地 /
-   *  ssh+dsh spec / gateway 源 / http 直连只读）；gateway 在 runtimeDown 时传停机标志。 */
+  /** 插件对话框：四类卡片统一开 PluginDialog —— 分叉仅在 target 描述符（本地 /
+   *  ssh+dsh spec / gateway 源 / http 直连只读）；对话框只读，无写面。 */
   const [pluginDialogFor, setPluginDialogFor] = useState<PluginDialogTarget | null>(null)
 
   /** 哪个 gateway 卡的「重启 dsh」确认 Modal 开着。 */
@@ -465,8 +465,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       setRestartNotes(prev => ({ ...prev, [spec.id]: value }))
     }
     try {
-      // 传输 + 202 门 + page-owned 就绪轮询只有一份实现（restart-action.ts，与 PluginDialog
-      // 共用）：409 走同一族本地化文案，超时/失败按 outcome 落到本卡结果行；POST 不自带 controller。
+      // 传输 + 202 门 + page-owned 就绪轮询只有一份实现（restart-action.ts）：409 走同一族
+      // 本地化文案，超时/失败按 outcome 落到本卡结果行；POST 不自带 controller。
       const outcome = await runManagedRestart(`gateway-${spec.id}`, t)
       if (outcome.kind === 'reloaded') {
         note({ tone: 'ok', text: t('restartManagedDshOk') })
@@ -1071,7 +1071,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   /** 虚线添加入口：有卡片时作为网格的最后一个单元格；空名单时独立通栏显示。 */
   const creatorButton = (
     <button type="button" className={css.creatorButton} onClick={openAdd}>
-      <IconPlusOutline16 size={14} />
+      <IconPlusOutlineRegular size={14} />
       {t('addHost')}
     </button>
   )
@@ -1146,7 +1146,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 aria-label={t('localRefresh')}
                 onClick={() => { void loadLocal() }}
               >
-                <IconRefreshOutline16 />
+                <IconRefreshOutlineRegular />
               </button>
             </div>
           </div>
@@ -1206,7 +1206,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 aria-expanded={hostLogsOpen}
                 onClick={toggleHostLogs}
               >
-                <IconChevronDownOutline14 className={clsx(css.logChevron, hostLogsOpen && css.logChevronOpen)} />
+                <IconChevronDownOutlineRegular className={clsx(css.logChevron, hostLogsOpen && css.logChevronOpen)} />
                 <span className={css.logTitle}>{t('hostLogs')}</span>
                 {hostLogs?.truncated === true ? <span className={css.logHint}>{t('logsTruncated')}</span> : null}
               </button>
@@ -1217,7 +1217,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 aria-label={t('logsRefresh')}
                 onClick={() => { void loadHostLogs() }}
               >
-                <IconRefreshOutline16 />
+                <IconRefreshOutlineRegular />
               </button>
             </div>
             {hostLogsOpen
@@ -1330,7 +1330,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                     {serviceConfigured
                       ? (
                         <span className={css.serviceLine}>
-                          <IconChecklistOutline14 />
+                          <IconChecklistOutlineRegular />
                           {spec.serviceName} · {serviceActive === true ? t('serviceOn') : serviceActive === false ? t('serviceOff') : t('serviceNone')}
                         </span>
                       )
@@ -1355,7 +1355,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       variant={connected ? 'outline' : 'primary'}
                       size="sm"
                       className={css.connectButton}
-                      icon={connected ? <IconCloseOutline16 /> : <IconLinkOutline16 />}
+                      icon={connected ? <IconCloseOutlineRegular /> : <IconLinkOutlineRegular />}
                       disabled={specBusy || phase === 'connecting'}
                       onClick={() => { void runTunnelOp(spec.id, connected ? 'disconnect' : 'connect') }}
                     >
@@ -1445,7 +1445,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                               aria-label={!serviceConfigured ? t('serviceUnconfigured') : serviceActive === true ? t('serviceStop') : t('serviceStart')}
                               onClick={() => { void runServiceOp(spec.id, serviceActive === true ? 'stop_service' : 'start_service') }}
                             >
-                              {serviceActive === true ? <IconStopFill16 /> : <IconPlayOutline16 />}
+                              {serviceActive === true ? <IconStopFillRegular /> : <IconPlayOutlineRegular />}
                             </button>
                             <button
                               type="button"
@@ -1455,7 +1455,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                               aria-label={`${t('serviceCheck')}: ${spec.label}`}
                               onClick={() => { void runServiceOp(spec.id, 'is_active') }}
                             >
-                              <IconRefreshOutline16 />
+                              <IconRefreshOutlineRegular />
                             </button>
                           </>
                         )
@@ -1470,7 +1470,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                             aria-label={`${t('gatewayHostLogs')}: ${spec.label}`}
                             onClick={() => { void openGatewayHostLogs(spec) }}
                           >
-                            <IconDataOutline16 />
+                            <IconDataOutlineRegular />
                           </button>
                         )
                         : null}
@@ -1482,7 +1482,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                         aria-label={`${t('logs')}: ${spec.label}`}
                         onClick={() => { void openLogs(spec) }}
                       >
-                        <IconSearchOutline16 />
+                        <IconSearchOutlineRegular />
                       </button>
                       <button
                         type="button"
@@ -1492,7 +1492,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                         aria-label={`${t('edit')}: ${spec.label}`}
                         onClick={() => { openEdit(spec) }}
                       >
-                        <IconEditOutline16 />
+                        <IconEditOutlineRegular />
                       </button>
                       <button
                         type="button"
@@ -1502,7 +1502,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                         aria-label={`${t('delete')}: ${spec.label}`}
                         onClick={() => { setPendingDelete(spec) }}
                       >
-                        <IconTrashOutline16 />
+                        <IconTrashOutlineRegular />
                       </button>
                     </div>
                   </li>
@@ -1616,7 +1616,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
         className={css.dialog}
         footer={(
           <>
-            <Button variant="ghost" icon={<IconRefreshOutline16 />} disabled={logsBusy} onClick={() => { void refreshLogs() }}>
+            <Button variant="ghost" icon={<IconRefreshOutlineRegular />} disabled={logsBusy} onClick={() => { void refreshLogs() }}>
               {t('logsRefresh')}
             </Button>
             <Button
@@ -1659,7 +1659,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
         className={css.dialog}
         footer={(
           <>
-            <Button variant="ghost" icon={<IconRefreshOutline16 />} disabled={gatewayHostLogsBusy} onClick={() => { void refreshGatewayHostLogs() }}>
+            <Button variant="ghost" icon={<IconRefreshOutlineRegular />} disabled={gatewayHostLogsBusy} onClick={() => { void refreshGatewayHostLogs() }}>
               {t('logsRefresh')}
             </Button>
             {/* Footer close clears the stale-guard ref exactly like onClose — a late gatewayHostLogs response must never repaint a closed modal. */}
@@ -1697,21 +1697,12 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
             : pluginDialogFor.kind === 'ssh'
               ? `${pluginDialogFor.spec.kind}-${pluginDialogFor.spec.id}`
               : pluginDialogFor.sourceId
-          // Gateway recovery gate: the card's runtime projection (stopped/error/restart-exhausted) becomes the dialog's runtimeDown signal.
-          const runtimeDown = pluginDialogFor.kind === 'gateway'
-            ? (() => {
-              const rawId = pluginDialogFor.sourceId.slice('gateway-'.length)
-              const state = runtimeConnectionById[rawId]
-              return state !== undefined && STARTABLE_RUNTIME_STATES.has(state)
-            })()
-            : undefined
           return (
             <PluginDialog
               t={t}
               target={pluginDialogFor}
               diagnostic={pluginDiagnostics?.[sourceKey]}
               bootGap={bootGaps?.[sourceKey]}
-              runtimeDown={runtimeDown}
               onClose={() => { setPluginDialogFor(null) }}
               onRecheckDiagnostic={onRecheckDiagnostic === undefined
                 ? undefined

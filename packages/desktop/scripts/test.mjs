@@ -53,27 +53,21 @@ export const GROUPS = {
     'test/transport/ssh-config.test.ts',
     'test/transport/free-port.test.ts',
   ],
-  // gateway: gateway provider/session and the manual gateway plugin sync apply path
+  // gateway: gateway provider/session and the manual gateway chamber seed sync path
   gateway: [
     // 凭据两维交叉矩阵（design 17 §2.3）。
     'test/gateway/gateway-credential-matrix.test.ts',
     'test/gateway/gateway-provider.test.ts',
     'test/gateway/gateway-session-spki.test.ts',
-    'test/gateway/gateway-chamber-apply-materialize.test.ts',
-    'test/gateway/gateway-ipc-shared.test.ts',
     'test/gateway/gateway-sync-registry.test.ts',
     'test/gateway/gateway-session.test.ts',
     'test/gateway/gateway-session-lifecycle.test.ts',
   ],
-  // plugins: remote plugin sync/tarball, the ssh apply increment rows + journal, and the main.ts plugin wiring gates
+  // plugins: the plugin READ face (manifest/rows/redaction) and the main.ts plugin wiring gates
   plugins: [
     'test/plugins/plugin-sync.test.ts',
-    'test/plugins/plugin-sync-apply.test.ts',
-    'test/plugins/plugin-tarball.test.ts',
-    'test/plugins/ssh-apply-rows.test.ts',
-    'test/plugins/ssh-plugin-journal.test.ts',
-    // pnpm 启动器解析（design 21 §6.3 / design 23 D2，win32 .cmd 拒绝）——
-    // 其他流的模块，清单归属本流维护。
+    // pnpm 入口候选解析（保留的 bundled entry + firstExisting 探针）——其他流的
+    // 模块，清单归属本流维护。
     'test/plugins/pnpm-launcher.test.ts',
   ],
   // runtime: managed dsh runtime controller, renderer<->main action lockstep, and the main.ts decision gates
@@ -108,6 +102,10 @@ export const GROUPS = {
     'bridge-shim.test.ts',
     'bridge-shim-surface.test.ts',
     'test/ipc/bridge-shim-document.test.ts',
+    // rc.2 dshDesktop 载体（官方 desktop preload 面）：字面量单源锁步 + 原生
+    // 键盘桥行为（真 protocol + 内存存储，无 Electron/GUI）。
+    'test/ipc/desktop-carrier-surface.test.ts',
+    'test/ipc/desktop-shortcuts-bridge.test.ts',
   ],
   // desktop-shell: OS-facing shell surfaces (deep links, open-in, notifications, badge) and the update lifecycle
   'desktop-shell': [

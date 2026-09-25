@@ -4,11 +4,12 @@
  * WHY THIS EXISTS: the chamber shell serves ONE page from the control-plane
  * origin and multiplexes every instance under a per-instance base path
  * (`/api/i/<id>/*`). The official client assumes it is served from the dsh
- * origin, so any same-origin absolute URL it builds hits the control plane
- * instead of the instance. Our in-repo forks (connection / web / api-gateway)
- * cover the transport carriers; the file-API URL built by `ui-chat` is not a
- * carrier, and forking the whole ui-chat client (82 files / ~11.3k lines) for
- * one line is not a proportionate maintenance cost.
+ * origin, so any app-owned URL it builds — origin absolute or, since 0.1.7,
+ * document-relative against the single page's `document.baseURI` — hits the
+ * control plane instead of the instance. Our in-repo forks (connection / web /
+ * api-gateway) cover the transport carriers; the file-API URL built by
+ * `ui-chat` is not a carrier, and forking the whole ui-chat client (82 files /
+ * ~11.3k lines) for one line is not a proportionate maintenance cost.
  *
  * HOW IT WORKS: this registry is applied by the renderer's vite plugin
  * (`vite.config.mjs` → `deepseekSource().transform`). It never writes to the
@@ -18,12 +19,12 @@
  * independently by `verify-upstream-touchpoints.mjs` C9 and by
  * `scripts/vendor-patches.test.mjs`.
  *
- * ADDING A PATCH: only for a same-origin absolute URL (or equally hard
- * upstream assumption) that the N-ctx shell breaks and that cannot be fixed in
- * a chamber package. Register the file, the reason, and one or more exact
- * `expect`→`replace` edits; prefer an optional chamber-provided standard prop
- * (see `chamberFileApiBase`) with upstream behaviour as the fallback, so an
- * official-layout deployment stays correct.
+ * ADDING A PATCH: only for a same-origin absolute or document-relative URL (or
+ * equally hard upstream assumption) that the N-ctx shell breaks and that cannot
+ * be fixed in a chamber package. Register the file, the reason, and one or more
+ * exact `expect`→`replace` edits; prefer an optional chamber-provided standard
+ * prop (see `chamberFileApiBase`) with upstream behaviour as the fallback, so
+ * an official-layout deployment stays correct.
  *
  * SECOND ADMITTED CLASS (measured shell CPU — correctness patches keep
  * priority): an upstream constant or CSS animation whose per-frame cost is
@@ -69,16 +70,8 @@ export const VENDOR_PATCHES = Object.freeze([
       'packages/client/ui-chat/src/client/chat/AssistantMarkdown.tsx',
     ]),
     vendorFile: 'dsh-client-ui-chat/src/client/chat/AssistantMarkdown.tsx',
-    reason: 'same-origin absolute file-API URL: `${origin}/api/file` resolves to the control plane in the N-ctx shell',
+    reason: 'document-relative file-API URL (upstream resolves it against `document.baseURI`) resolves to the control-plane root in the N-ctx shell: one page cannot carry a per-entry base URI',
     edits: Object.freeze([
-      Object.freeze({
-        expect: 'export function localPathMediaUrl(protocol: string, origin: string, value: string): string | undefined {',
-        replace: 'export function localPathMediaUrl(protocol: string, origin: string, value: string, basePath = \'\'): string | undefined {',
-      }),
-      Object.freeze({
-        expect: '  return `${origin}/api/file?path=${encodeURIComponent(value)}`',
-        replace: '  return `${origin}${basePath}/api/file?path=${encodeURIComponent(value)}`',
-      }),
       Object.freeze({
         expect: '  /** The owning view\'s locale seat, passed down as a plain prop. */\n  t: ChatViewSlotProps[\'t\']\n}',
         replace: '  /** The owning view\'s locale seat, passed down as a plain prop. */\n  t: ChatViewSlotProps[\'t\']\n'
@@ -90,19 +83,22 @@ export const VENDOR_PATCHES = Object.freeze([
           + '  chamberFileApiBase?: string | undefined\n}',
       }),
       Object.freeze({
-        expect: '  blocks, streaming, interrupted, renderMessageImages,\n  reasoningHidden = false, revealProcess, mentions, t,\n}: AssistantMarkdownProps) {',
-        replace: '  blocks, streaming, interrupted, renderMessageImages,\n  reasoningHidden = false, revealProcess, mentions, t, chamberFileApiBase,\n}: AssistantMarkdownProps) {',
+        expect: '  blocks, streaming, interrupted, renderMessageImages, groupPart, useDisclosure,\n'
+          + '  reasoningHidden = false, usePresentation, revealProcess, mentions, t,\n}: AssistantMarkdownProps) {',
+        replace: '  blocks, streaming, interrupted, renderMessageImages, groupPart, useDisclosure,\n'
+          + '  reasoningHidden = false, usePresentation, revealProcess, mentions, t, chamberFileApiBase,\n}: AssistantMarkdownProps) {',
       }),
       Object.freeze({
         expect: '  const pathImages = useMemo<MarkdownPathImages>(() => {\n'
-          + '    const { protocol, origin } = window.location\n'
-          + '    return { resolve: value => localPathMediaUrl(protocol, origin, value) }\n'
+          + '    return { resolve: value => localPathMediaUrl(document.baseURI, value) }\n'
           + '  }, [])',
         replace: '  const pathImages = useMemo<MarkdownPathImages>(() => {\n'
-          + '    const { protocol, origin } = window.location\n'
-          + '    // chamber patch: the page origin is the control plane in the N-ctx\n'
-          + '    // shell, so the file API must carry the per-entry base path.\n'
-          + '    return { resolve: value => localPathMediaUrl(protocol, origin, value, chamberFileApiBase ?? \'\') }\n'
+          + '    // chamber patch: the page base is the control plane in the N-ctx shell, so\n'
+          + '    // the file API must resolve from this entry\'s own base path.\n'
+          + '    const base = chamberFileApiBase === undefined\n'
+          + '      ? document.baseURI\n'
+          + '      : new URL(`${chamberFileApiBase}/`, document.baseURI).href\n'
+          + '    return { resolve: value => localPathMediaUrl(base, value) }\n'
           + '  }, [chamberFileApiBase])',
       }),
     ]),
@@ -113,15 +109,17 @@ export const VENDOR_PATCHES = Object.freeze([
       'packages/client/file-upload/src/client/runtime.ts',
     ]),
     vendorFile: 'dsh-client-file-upload/src/client/runtime.ts',
-    reason: 'same-origin absolute upload URL: `new URL("/api/session/uploadFileBinary", location.origin)` posts to the control plane in the N-ctx shell (composer attachments 404)',
+    reason: 'document-relative upload URL (upstream resolves it against `document.baseURI`) resolves to the control-plane root in the N-ctx shell (composer attachments 404)',
     edits: Object.freeze([
       Object.freeze({
         expect: '    this.transport = hook === undefined ? workerTransport() : customTransport(hook.fetch)',
-        replace: '    // chamber patch: the page origin is the control plane under the N-ctx\n'
-          + '    // shell, so every upload URL must carry this entry\'s API base path.\n'
-          + '    // ctx.get returns undefined when the chamber fact is absent (the cordis\n'
-          + '    // proxy THROWS on an unprovided service, so never read it as a property).\n'
-          + '    const chamberFileApiBase = (ctx.get(\'chamberBasePath\') as string | undefined) ?? \'\'\n'
+        replace: '    // chamber patch: the page base is the control plane under the N-ctx\n'
+          + '    // shell, so every upload URL must carry this entry\'s API base prefix\n'
+          + '    // (`/api/i/<id>/`; empty when the chamber fact is absent). ctx.get returns\n'
+          + '    // undefined for an unprovided service (the cordis proxy THROWS on a\n'
+          + '    // property read, so never read it as a property).\n'
+          + '    const chamberBasePath = (ctx.get(\'chamberBasePath\') as string | undefined) ?? \'\'\n'
+          + '    const chamberFileApiBase = chamberBasePath === \'\' ? \'\' : `${chamberBasePath}/`\n'
           + '    this.transport = hook === undefined ? workerTransport(chamberFileApiBase) : customTransport(hook.fetch, chamberFileApiBase)',
       }),
       Object.freeze({
@@ -129,24 +127,16 @@ export const VENDOR_PATCHES = Object.freeze([
         replace: 'function customTransport(customFetch: FileUploadFetch, basePath = \'\'): FileUploadTransport {',
       }),
       Object.freeze({
-        expect: '      const response = await customFetch(resolveUrl(request.path), init)',
-        replace: '      const response = await customFetch(resolveUrl(request.path, basePath), init)',
+        expect: '      const response = await customFetch(request.path, init)',
+        replace: '      const response = await customFetch(`${basePath}${request.path}`, init)',
       }),
       Object.freeze({
         expect: 'function workerTransport(): FileUploadTransport {',
         replace: 'function workerTransport(basePath = \'\'): FileUploadTransport {',
       }),
       Object.freeze({
-        expect: '          url: resolveUrl(request.path).href,',
-        replace: '          url: resolveUrl(request.path, basePath).href,',
-      }),
-      Object.freeze({
-        expect: 'function resolveUrl(path: string): URL {',
-        replace: 'function resolveUrl(path: string, basePath = \'\'): URL {',
-      }),
-      Object.freeze({
-        expect: "  return new URL(path, origin === undefined || origin === 'null' ? 'http://dsh.internal' : origin)",
-        replace: "  return new URL(`${basePath}${path}`, origin === undefined || origin === 'null' ? 'http://dsh.internal' : origin)",
+        expect: '          url: new URL(request.path, document.baseURI).href,',
+        replace: '          url: new URL(`${basePath}${request.path}`, document.baseURI).href,',
       }),
     ]),
   }),
@@ -156,7 +146,7 @@ export const VENDOR_PATCHES = Object.freeze([
       'packages/session-query/session-log-export/src/client/controller.ts',
     ]),
     vendorFile: 'dsh-session-log-export/src/client/controller.ts',
-    reason: 'same-origin absolute export URL: `new URL("/api/session.export", location.origin)` downloads from the control plane in the N-ctx shell (the /export dialog and header action 404)',
+    reason: 'document-relative export URL resolves to the control-plane root in the N-ctx shell (the /export dialog and header action 404)',
     edits: Object.freeze([
       Object.freeze({
         expect: '  readonly store: SnapshotStore<SessionLogDownloadState> = createSnapshotStore(INITIAL)\n'
@@ -164,14 +154,14 @@ export const VENDOR_PATCHES = Object.freeze([
           + '  private readonly active = new Map<SessionId, { readonly abort: AbortController; readonly done: Promise<void> }>()',
         replace: '  readonly store: SnapshotStore<SessionLogDownloadState> = createSnapshotStore(INITIAL)\n'
           + '\n'
-          + '  /** chamber patch: per-entry API base path for the export route. */\n'
+          + '  /** chamber patch: per-entry API base prefix (`/api/i/<id>/`; empty when absent). */\n'
           + '  chamberFileApiBase = \'\'\n'
           + '\n'
           + '  private readonly active = new Map<SessionId, { readonly abort: AbortController; readonly done: Promise<void> }>()',
       }),
       Object.freeze({
-        expect: "      const url = new URL('/api/session.export', hostBase())",
-        replace: "      const url = new URL(`${this.chamberFileApiBase}/api/session.export`, hostBase())",
+        expect: '      const route = `${SESSION_LOG_EXPORT_ROUTE}?${query.toString()}`',
+        replace: '      const route = `${this.chamberFileApiBase}${SESSION_LOG_EXPORT_ROUTE}?${query.toString()}`',
       }),
     ]),
   }),
@@ -181,13 +171,14 @@ export const VENDOR_PATCHES = Object.freeze([
       'packages/session-query/session-log-export/src/client/index.ts',
     ]),
     vendorFile: 'dsh-session-log-export/src/client/index.ts',
-    reason: 'hands the per-entry API base path to the export controller (apply owns the only ctx)',
+    reason: 'hands the per-entry API base prefix to the export controller (apply owns the only ctx)',
     edits: Object.freeze([
       Object.freeze({
         expect: '  const controller = new SessionLogDownloadController()',
         replace: '  const controller = new SessionLogDownloadController()\n'
-          + '  // chamber patch: the export URL must carry this entry\'s API base path.\n'
-          + '  controller.chamberFileApiBase = (ctx.get(\'chamberBasePath\') as string | undefined) ?? \'\'',
+          + '  // chamber patch: the export URL must carry this entry\'s API base prefix.\n'
+          + '  const chamberBasePath = ctx.get(\'chamberBasePath\') as string | undefined\n'
+          + '  controller.chamberFileApiBase = chamberBasePath === undefined ? \'\' : `${chamberBasePath}/`',
       }),
     ]),
   }),
@@ -197,29 +188,29 @@ export const VENDOR_PATCHES = Object.freeze([
       'packages/client/ui-deliverables/src/client/present-open.ts',
     ]),
     vendorFile: 'dsh-client-ui-deliverables/src/client/present-open.ts',
-    reason: 'same-origin absolute present URLs: `/api/present.host|open` hits the control plane in the N-ctx shell (delivery-card open/reveal 404)',
+    reason: 'document-relative present URLs resolve to the control-plane root in the N-ctx shell (delivery-card open/reveal 404)',
     edits: Object.freeze([
       Object.freeze({
         expect: 'export class PresentedOpenController {\n'
           + '  /** File action URLs key the state across Sessions, turns, and both clickable surfaces. */',
         replace: 'export class PresentedOpenController {\n'
-          + '  /** chamber patch: per-entry API base path for the present routes. */\n'
+          + '  /** chamber patch: per-entry API base prefix (`/api/i/<id>/`; empty when absent). */\n'
           + '  private readonly chamberFileApiBase: string\n'
           + '  /**\n'
           + '   * @param chamberFileApiBase - per-entry API base path (`/api/i/<id>`), \'\' when absent.\n'
           + '   */\n'
           + '  constructor(chamberFileApiBase = \'\') {\n'
-          + '    this.chamberFileApiBase = chamberFileApiBase\n'
+          + '    this.chamberFileApiBase = chamberFileApiBase === \'\' ? \'\' : `${chamberFileApiBase}/`\n'
           + '  }\n'
           + '  /** File action URLs key the state across Sessions, turns, and both clickable surfaces. */',
       }),
       Object.freeze({
-        expect: '      const response = await fetch(PRESENT_HOST_PATH, { signal })',
-        replace: '      const response = await fetch(`${this.chamberFileApiBase}${PRESENT_HOST_PATH}`, { signal })',
+        expect: '      const response = await fetch(PRESENT_HOST_ROUTE, { signal })',
+        replace: '      const response = await fetch(`${this.chamberFileApiBase}${PRESENT_HOST_ROUTE}`, { signal })',
       }),
       Object.freeze({
-        expect: '      const response = await fetch(action === \'open\' ? url : `${url}&action=reveal`, { method: \'POST\', signal: this.lifetime.signal })',
-        replace: '      const response = await fetch(`${this.chamberFileApiBase}${action === \'open\' ? url : `${url}&action=reveal`}`, { method: \'POST\', signal: this.lifetime.signal })',
+        expect: '      const response = await fetch(target, { method: \'POST\', signal: this.lifetime.signal })',
+        replace: '      const response = await fetch(`${this.chamberFileApiBase}${target}`, { method: \'POST\', signal: this.lifetime.signal })',
       }),
     ]),
   }),
@@ -246,9 +237,9 @@ export const VENDOR_PATCHES = Object.freeze([
     reason: 'forwards the chamberFileApiBase root standard prop into AssistantMarkdown (no chamber package can thread it)',
     edits: Object.freeze([
       Object.freeze({
-        expect: '  node, useTurnData, turnProcess, openFile, renderMessageImages, fileMentions, t,\n}: ChatNodeViewProps<\'assistant-step\'>) {',
-        replace: '  node, useTurnData, turnProcess, openFile, renderMessageImages, fileMentions, t,\n'
-          + '  chamberFileApiBase,\n}: ChatNodeViewProps<\'assistant-step\'>) {',
+        expect: '  node, groupPart, useDisclosure, useTurnData, turnProcess, openFile, renderMessageImages, fileMentions, usePresentation, t,\n}: AssistantNodeViewProps) {',
+        replace: '  node, groupPart, useDisclosure, useTurnData, turnProcess, openFile, renderMessageImages, fileMentions, usePresentation, t,\n'
+          + '  chamberFileApiBase,\n}: AssistantNodeViewProps) {',
       }),
       Object.freeze({
         expect: '      mentions={mentions}\n      t={t}\n    />',
@@ -262,7 +253,7 @@ export const VENDOR_PATCHES = Object.freeze([
       'packages/client/ui-chat/src/client/chat/ReasoningRow.module.css',
     ]),
     vendorFile: 'dsh-client-ui-chat/src/client/chat/ReasoningRow.module.css',
-    reason: 'measured 120 Hz frame cost: the running-row sweep animates `left` (-300px→100%), forcing layout+paint every frame. A/B of the REAL pinned CSS bytes with this registry applied (Electron 43.4.0 / Chromium 150 / M5 Pro 120 Hz, app.getAppMetrics cumulative deltas): 3 concurrent rows 12.3% renderer / 7.6% GPU before → 1.3% / 1.2% after; 1 row 15.4% / 9.2% → 1.0% / 1.0%. Hashed CSS-module class names make a chamber-side override unselectable from styles.css, and the sweep is upstream UX: retarget it, never delete it.',
+    reason: 'measured 120 Hz frame cost: the running-row sweep animates `left` (-300px→100%), forcing layout+paint every frame. A/B of the REAL pinned CSS bytes with this registry applied (Electron 43.4.0 / Chromium 150 / M5 Pro 120 Hz, app.getAppMetrics cumulative deltas): 3 concurrent rows 12.3% renderer / 7.6% GPU before → 1.3% / 1.2% after; 1 row 15.4% / 9.2% → 1.0% / 1.0%. Hashed CSS-module class names make a chamber-side override unselectable from styles.css, and the sweep is upstream UX: retarget it, never delete it. The sibling command-row sweep was retired upstream in the 0.1.7 line.',
     edits: Object.freeze([
       Object.freeze({
         expect: '  animation: dsh-reasoning-row-sweep 2.6s ease-out infinite;',
@@ -272,30 +263,6 @@ export const VENDOR_PATCHES = Object.freeze([
       Object.freeze({
         expect: '@keyframes dsh-reasoning-row-sweep {\n  0% { left: -300px; }\n  90%, 100% { left: 100%; }\n}',
         replace: '@keyframes dsh-reasoning-row-sweep-x {\n'
-          + '  0% { transform: translateX(-300px); }\n'
-          + "  /* 100vw exits any row width; the row's overflow:hidden clips the tail\n"
-          + '     exactly like the upstream left:100% end state. */\n'
-          + '  90%, 100% { transform: translateX(100vw); }\n'
-          + '}',
-      }),
-    ]),
-  }),
-  Object.freeze({
-    idSuffixes: Object.freeze([
-      'dsh-client-ui-chat/src/client/chat/GenericCommandCard.module.css',
-      'packages/client/ui-chat/src/client/chat/GenericCommandCard.module.css',
-    ]),
-    vendorFile: 'dsh-client-ui-chat/src/client/chat/GenericCommandCard.module.css',
-    reason: 'measured 120 Hz frame cost: the running-command-row sweep animates `left` (-300px→100%), forcing layout+paint every frame — structurally identical to the reasoning-row sweep and measured on the same rig (real pinned bytes + this registry): 12.3% renderer / 7.6% GPU at 3 rows → 1.3% / 1.2% after. Hashed class names block a chamber-side override.',
-    edits: Object.freeze([
-      Object.freeze({
-        expect: '  animation: dsh-command-row-sweep 2.6s ease-out infinite;',
-        replace: '  /* chamber patch: sweep on the compositor only (vendor-patches.mjs reason) */\n'
-          + '  animation: dsh-command-row-sweep-x 2.6s ease-out infinite;',
-      }),
-      Object.freeze({
-        expect: '@keyframes dsh-command-row-sweep {\n  0% { left: -300px; }\n  90%, 100% { left: 100%; }\n}',
-        replace: '@keyframes dsh-command-row-sweep-x {\n'
           + '  0% { transform: translateX(-300px); }\n'
           + "  /* 100vw exits any row width; the row's overflow:hidden clips the tail\n"
           + '     exactly like the upstream left:100% end state. */\n'
@@ -364,11 +331,15 @@ export const VENDOR_PATCHES = Object.freeze([
           + '      return',
       }),
       Object.freeze({
-        expect: '  private flush(): void {\n    if (this.assembler.flush()) this.snapshot.set(this.currentSnapshot())\n  }',
+        expect: '  private flush(): void {\n'
+          + '    if (this.assembler.flush()) this.snapshot.set(this.currentSnapshot())\n'
+          + '    this.openTurn.set(this.assembler.openTurn())\n'
+          + '  }',
         replace: '  private flush(): void {\n'
           + '    // chamber patch: the slice scheduler measures from the last flush.\n'
           + '    this.lastFlushAt = performance.now()\n'
           + '    if (this.assembler.flush()) this.snapshot.set(this.currentSnapshot())\n'
+          + '    this.openTurn.set(this.assembler.openTurn())\n'
           + '  }',
       }),
     ]),

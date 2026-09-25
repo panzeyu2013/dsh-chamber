@@ -11,7 +11,7 @@
 //
 //  降级语义（headless/无窗/self.config.canShowUI()==false → 一律诚实错误
 //  "swift-edge-ui-unavailable:<method>"，绝不静默假装成功）：
-//  - 已实现腿（全部带守卫）：focusMainWindow / pickPluginSource /
+//  - 已实现腿（全部带守卫）：focusMainWindow /
 //    showMessage（异步 NSAlert 消费）/ showNativeNotification
 //    （UNUserNotificationCenter + click 回灌 __host.notifyClicked）/
 //    openExternal / openPath / showItemInFolder / setBadge（dockTile）/
@@ -31,7 +31,6 @@ import Foundation
 import AppKit
 import ServiceManagement
 import UserNotifications
-import UniformTypeIdentifiers
 
 /// AnyCodable 载荷提取助手（直接对 enum case 做字典/标量投影）。
 enum EdgePayload {
@@ -293,7 +292,7 @@ public final class SwiftEdgeHostLegs {
     /// NATIVE_NOTIFICATION_OUTCOME_TIMEOUT_MS 同值）。超时回
     /// {shown:false,error:"..."}，core 据此释放 5s 去重 claim。
     public static let notificationAddTimeout: TimeInterval = 5.0
-    /// 交互腿（showMessage/pickPluginSource）上限：用户在模态上思考/浏览可能远超
+    /// 交互腿（showMessage）上限：用户在模态上思考可能远超
     /// 1s。node 侧现在是 SWIFT_INTERACTIVE_LEG_TIMEOUT_MS(600_000) + 60_000 缓冲
     /// （两侧同值时 node 恒先超时，用户 10 分钟后的答案被丢）——Swift 侧超时
     /// 点必须 ≤ node 侧且二者有明确缓冲。跨语言锁步见 CrossLanguageLockstepTests。
@@ -313,7 +312,7 @@ public final class SwiftEdgeHostLegs {
         switch method {
         case "showNativeNotification":
             scheduleNotification(payload: payload, completion: completion)
-        case "showMessage", "pickPluginSource":
+        case "showMessage":
             // 交互腿经异步入口应答——模态在主线程执行、完成才 reply，
             // 既不占住管道读取线程，也不在 1s 处丢弃模态结果。
             performInteractiveUI(method: method, payload: payload, completion: completion)
@@ -324,11 +323,11 @@ public final class SwiftEdgeHostLegs {
     }
 
     /// 异步腿面（canShowUI 为真时由本类真实接管，BridgeClient 默认应答器据此
-    /// 走 respondAsync）：showNativeNotification 调度 + showMessage/
-    /// pickPluginSource 两个交互模态（10 分钟上限，完成才 reply）。
+    /// 走 respondAsync）：showNativeNotification 调度 + showMessage 交互模态
+    /// （10 分钟上限，完成才 reply）。
     public func canHandleAsync(method: String) -> Bool {
         switch method {
-        case "showNativeNotification", "showMessage", "pickPluginSource":
+        case "showNativeNotification", "showMessage":
             return self.config.canShowUI()
         default:
             return false
@@ -563,14 +562,6 @@ public final class SwiftEdgeHostLegs {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: raw)])
                 return (nil, nil)
             }
-        case "pickPluginSource":
-            // E8/A10 一体化 picker（folder|.tgz；design 21 §10 ⑧，electron-edges
-            // 语义：darwin openFile+openDirectory 一体）。交互模态——同步
-            // 面按 node 侧 10 分钟上限等待、超时弃权；默认应答器经
-            // canHandleAsync 走 respondAsync（模态完成才 reply，不占管道线程）。
-            return performUI(method: method, timeout: Self.interactiveLegTimeout) {
-                self.pickPluginSourceBody()
-            }
         case "showError":
             // dialog.showErrorBox 对应腿：payload {title, detail}；主线程模态
             // alert（无窗守卫——深链消费等错误路径须有 UI 上下文才弹）。
@@ -678,8 +669,6 @@ public final class SwiftEdgeHostLegs {
             return override(method, payload)
         }
         switch method {
-        case "pickPluginSource":
-            return pickPluginSourceBody()
         case "showMessage":
             return showMessageBody(dict: EdgePayload.dictionary(payload) ?? [:])
         default:
@@ -803,45 +792,6 @@ public final class SwiftEdgeHostLegs {
         // NSAlert 按钮返回码：1000=第一个…；索引 = raw-1000（越界夹 0）。
         let index = max(0, min(buttons.count - 1, Int(modalResponse.rawValue) - 1000))
         return (.number(Double(index)), nil)
-    }
-
-    /// pickPluginSource 模态体（须主线程执行；同步与异步应答面共用）。应答
-    /// 形状 {status:'cancelled'} 或 {status:'picked', path}（node-edges 折算）。
-    private func pickPluginSourceBody() -> (result: AnyCodable?, error: String?) {
-        guard self.mainWindowProvider?() != nil else {
-            return (nil, Self.uiUnavailablePrefix + "pickPluginSource:no-window")
-        }
-        var pickedPath: String?
-        var cancelled = false
-        let run: () -> Void = {
-            let panel = NSOpenPanel()
-            // 文案与归属对齐 Electron（electron-edges.ts pickPluginSource：
-            // title 'Import a dsh plugin — source folder or .tgz archive'、
-            // buttonLabel 'Import'、扩展过滤器只约束文件、目录仍可选）。
-            // 本地化：panel.pluginSourceTitle（title 与 message 同一句）、
-            // panel.pluginSourcePrompt（按钮名）；英文原文由键表承载。
-            panel.title = NativeText.string(.panelPluginSourceTitle)
-            panel.prompt = NativeText.string(.panelPluginSourcePrompt)
-            panel.message = NativeText.string(.panelPluginSourceTitle)
-            panel.canChooseFiles = true
-            panel.canChooseDirectories = true
-            panel.allowsMultipleSelection = false
-            panel.allowedContentTypes = [UTType.folder, UTType(filenameExtension: "tgz") ?? UTType.data]
-            if panel.runModal() == .OK, let url = panel.urls.first {
-                pickedPath = url.path
-            } else {
-                cancelled = true
-            }
-        }
-        assert(Thread.isMainThread, "UI 腿 body 必须在主线程执行")
-        run()
-        if cancelled {
-            return (.object(["status": .string("cancelled")]), nil)
-        }
-        if let path = pickedPath {
-            return (.object(["status": .string("picked"), "path": .string(path)]), nil)
-        }
-        return (nil, Self.uiUnavailablePrefix + "pickPluginSource:no-selection")
     }
 
     // MARK: - open-in 本地拉起：无壳侧实现

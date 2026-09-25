@@ -1,37 +1,35 @@
 /**
- * PluginDialog.tsx — the unified plugin-management dialog (design 21 §3): one
- * component whose backend fork is confined to data sources + action dispatch.
- * Zones: ① diagnostic banner (bannerProjection); ② chamber built-in table (rows
- * DERIVED by the pure `deriveChamberRows`; `localOnly` registry rows apply to the
- * local target alone); ③ third-party (installed + per-row remove + add: spec / npm
- * search / local import — folder or .tgz); ④ recovery row (gateway: runtimeDown +
- * undoForLatest → 撤销=恢复, POST /chamber/plugins/undo, never remove-only).
- * Backends: local (`dsh plugin` exec), ssh (list/apply/materialize/restart/seed/
- * undo), gateway (Loader read + /chamber surfaces + controlled managed-dsh
- * restart), http (read-only Loader manifest — no /chamber, no add).
- * Journal task rows are NEVER rendered; the ssh undo stays in the installed tab,
- * the gateway undo is recovery-shaped (runtimeDown only).
+ * PluginDialog.tsx — the READ-ONLY plugin view (D1 plugin write-face retirement): one
+ * component whose backend fork is confined to data sources. Zones: ① diagnostic banner
+ * (bannerProjection) + the settled-boot gap; ② chamber built-in table (rows DERIVED by the
+ * pure `deriveChamberRows`) with the RETAINED chamber host-package provisioning actions
+ * (ssh 「注入」 seed_host_graph / gateway 「重新同步」 gateway_plugin_sync / the ssh
+ * restart-to-apply hint); ③ installed plugin rows, READ-ONLY (name, spec/version masked,
+ * role + protected badges, live state, unsyncable marker) and the official client-plugin
+ * inventory (loadPluginInventory + plugin-inventory-text projections); ④ http-direct stays a
+ * read-only Loader list.
+ *
+ * Backends: local (local manifest read), ssh (plugin_list / local_plugin_list reads),
+ * gateway (gatewayInstalled + seed-cache + Loader inventory reads), http (Loader inventory
+ * read only). Every USER plugin write surface (add/import/npm search/diff/apply/remove/undo/
+ * materialize/task journal) was retired; only chamber provisioning remains.
  */
 
-import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import clsx from 'clsx'
-import { chamberBadgeClass, categoryLabel, isActionable, kindLabel, manageStatusClass, remoteStatusClass, roleBadgeClass, roleLabel, type CategoryFilter, type ManageStatus, type PluginPhase, type RemoteListStatus, type RemoteListTone, type RestartNote, type StatusFilter, type ViewPhase } from './plugin-dialog-status.ts'
-import { Button, IconRefreshOutline16, IconTrashOutline16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
-// Page-owned restart→reload completion: a restart refreshes the host's plugin
-// mounts, but this window keeps the pre-restart client plugin set until it boots again.
+import { Button, IconRefreshOutlineRegular, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+// Page-owned restart→reload completion for the ssh chamber seed's restart-to-apply step:
+// a restart refreshes the host's plugin mounts, but this window keeps the pre-restart client
+// plugin set until it boots again.
 import {
   RESTART_RELOAD_BUDGET_MS,
   armWindowReloadWhenServed,
-  pollGatewayReady,
   waitForSourceServing,
 } from '@dsh-chamber/dsh-chamber-client-core'
 import type {
   ChamberHostPackageState,
   LocalPluginManifest,
-  NpmSearchPackage,
-  PluginApplyFailure,
-  PluginApplyResult,
   RemotePluginManifest,
   SshInstanceSpec,
 } from '../global.d.ts'
@@ -39,38 +37,25 @@ import type { SettingsConnectionsKey } from '../locales.ts'
 import {
   gatewayChamberSeedCache,
   gatewayInstalled,
-  gatewayPluginApply,
-  gatewayPluginMaterialize,
   gatewayPluginSync,
-  gatewayTasks,
-  localPluginAdd,
-  localPluginAddFile,
   localPluginList,
-  localPluginRemove,
-  npmSearch,
-  pluginApply,
   pluginList,
-  pluginMaterializeAddPick,
   restartService,
   seedHostGraph,
-  sshPluginUndo,
-  gatewayPluginUndo,
-  waitForGatewayOpTerminal,
   type GatewayInstalledProjection,
 } from './control-plane.ts'
 import { gatewayReadFenceText } from './managed-restart.ts'
 import { errorMessage } from './error-text.ts'
-import { runManagedRestart } from './restart-action.ts'
-import {
-  classifyGatewayApplyResult, classifySshApplyResult, partialCounts, partialTextOf, pluginRowsOf, projectInstalledRows, sshSyncableDependencies,
-  projectTasks, undoForLatest,
-  type InstalledRowView, type TaskRow,
-} from './plugin-model.ts'
+import { pluginRowsOf, projectInstalledRows, type InstalledRowView } from './plugin-model.ts'
 import { loadPluginInventory, type PluginInventorySnapshot } from './plugin-inventory-api.ts'
 import {
-  computePluginDiff, defaultChecked, isDifferenceRow, rowAddArg,
-  type PluginDiff, type PluginRow, 
-} from './plugin-diff.ts'
+  chamberBadgeClass,
+  categoryLabel,
+  roleBadgeClass,
+  roleLabel,
+  type InstalledCategory,
+  type ViewPhase,
+} from './plugin-dialog-status.ts'
 import {
   deriveChamberRows,
   installedRowLiveState,
@@ -83,9 +68,6 @@ import {
 import { bannerProjection, bootGapText, pluginDiagnosticTone, type PluginDiagnostic, type ServerBootGap } from './plugin-diagnostic.ts'
 import css from './ConnectionsSection.module.css'
 
-/** Add-spec whitelist: `name`, `@scope/name`, or `name@<safe version>`. */
-const ADD_SPEC = /^(@[a-zA-Z0-9][a-zA-Z0-9._-]*\/)?[a-zA-Z0-9][a-zA-Z0-9._-]*(@(\^|~)?([0-9A-Za-z][0-9A-Za-z._+-]*|latest|next))?$/
-
 export type PluginDialogTarget =
   | { kind: 'local' }
   | { kind: 'ssh'; spec: SshInstanceSpec }
@@ -93,19 +75,16 @@ export type PluginDialogTarget =
   | { kind: 'http'; sourceId: string; label: string }
 
 /**
- * The unified plugin dialog.
+ * The read-only plugin dialog.
  * @param props.diagnostic - this instance's client-plugin runtime diagnostic; the dialog is its detail surface.
- * @param props.runtimeDown - gateway only: true while the managed dsh is stopped/error/
- *   restart-exhausted — gates the recovery undo surface.
  */
-export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnostic, runtimeDown, onClose }: {
+export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnostic, onClose }: {
   t: (key: SettingsConnectionsKey) => string
   target: PluginDialogTarget
   diagnostic?: PluginDiagnostic | undefined
   /** The instance's settled-boot gap — a DIFFERENT fact from `diagnostic`. */
   bootGap?: ServerBootGap | undefined
   onRecheckDiagnostic?: () => void
-  runtimeDown?: boolean
   onClose: () => void
 }): ReactNode {
   const isLocal = target.kind === 'local'
@@ -113,30 +92,17 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   const isGateway = target.kind === 'gateway'
   const isHttp = target.kind === 'http'
   const sshSpec = target.kind === 'ssh' ? target.spec : null
-  /** Add-spec label/input pairing id — useId, never a static id: the same
-   *  plugin can render dialogs in multiple N-ctx panels in one document. */
-  const specInputId = useId()
   const sourceId = target.kind === 'gateway' || target.kind === 'http' ? target.sourceId : null
   /** The RAW registry instance id (no `gateway-` proxy prefix) — every /chamber
    *  REST wrapper and gateway IPC takes it; the wrappers own the /api/i/gateway-<id> prefix. */
   const gatewayId = target.kind === 'gateway' ? target.sourceId.slice('gateway-'.length) : null
 
-  const [diffOpen, setDiffOpen] = useState(false)
-
-  const [phase, setPhase] = useState<PluginPhase>('loading')
+  const [sshPhase, setSshPhase] = useState<ViewPhase>('loading')
   const [localManifest, setLocalManifest] = useState<LocalPluginManifest | null>(null)
   const [remoteManifest, setRemoteManifest] = useState<RemotePluginManifest | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [localFailed, setLocalFailed] = useState(false)
   const [profileNotInit, setProfileNotInit] = useState(false)
-  const [diff, setDiff] = useState<PluginDiff | null>(null)
-  const [checked, setChecked] = useState<Set<string>>(new Set())
-  const [restart, setRestart] = useState(true)
-  const [result, setResult] = useState<PluginApplyResult | null>(null)
-  const [resultError, setResultError] = useState<string | null>(null)
-  const [confirmRemove, setConfirmRemove] = useState(false)
-  const [confirmApply, setConfirmApply] = useState(false)
-  const applyingRef = useRef(false)
 
   // chamber-injected host-graph: manual seed fallback
   const [seedBusy, setSeedBusy] = useState(false)
@@ -149,22 +115,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
    *  by a successful restart. */
   const [pendingRestart, setPendingRestart] = useState(false)
 
-  const [query, setQuery] = useState('')
-  const [category, setCategory] = useState<CategoryFilter>('all')
-  const [status, setStatus] = useState<StatusFilter>('diff')
-
   const [localList, setLocalList] = useState<LocalPluginManifest | null>(null)
   const [localListError, setLocalListError] = useState<string | null>(null)
   const [localLoading, setLocalLoading] = useState(false)
-  const [localRemoveTarget, setLocalRemoveTarget] = useState<string | null>(null)
-  const [localRemoveBusy, setLocalRemoveBusy] = useState(false)
-  const [localRemoveError, setLocalRemoveError] = useState<string | null>(null)
-
-  const [remoteListStatus, setRemoteListStatus] = useState<RemoteListStatus | null>(null)
-  const [remoteRowErrors, setRemoteRowErrors] = useState<Record<string, string>>({})
-  const [remoteRemoveTarget, setRemoteRemoveTarget] = useState<string | null>(null)
-  const [remoteRemoveBusy, setRemoteRemoveBusy] = useState(false)
-  const [undoBusy, setUndoBusy] = useState(false)
 
   const [viewPhase, setViewPhase] = useState<ViewPhase>('loading')
   const [viewError, setViewError] = useState<string | null>(null)
@@ -183,10 +136,6 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   // same loud hint, never a silent "not injected". Re-runs on every reload.
   const [localChamberPackages, setLocalChamberPackages] = useState<ChamberHostPackageState[] | null>(null)
   const [localSideFailed, setLocalSideFailed] = useState(false)
-  // 「重启生效」: controlled managed-dsh restart — same POST + pollGatewayReady
-  // semantics as the connection card.
-  const [restarting, setRestarting] = useState(false)
-  const [restartNote, setRestartNote] = useState<RestartNote | null>(null)
   // Gateway chamber seed-cache projection (A0 read side).
   const [seedCache, setSeedCache] = useState<Record<string, string | null> | null>(null)
   const [seedCacheError, setSeedCacheError] = useState<string | null>(null)
@@ -194,32 +143,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   const [syncing, setSyncing] = useState(false)
   const [syncNote, setSyncNote] = useState<string | null>(null)
   const [syncError, setSyncError] = useState<string | null>(null)
-  // Gateway management projections: installed list + task journal (READ-ONLY undo
-  // derive — rows are never rendered).
+  // Gateway management projection: the installed list (READ-ONLY).
   const [installed, setInstalled] = useState<GatewayInstalledProjection | null>(null)
   const [installedError, setInstalledError] = useState<string | null>(null)
-  const [taskRows, setTaskRows] = useState<TaskRow[] | null>(null)
-  const [tasksError, setTasksError] = useState<string | null>(null)
-  /** Row-remove / undo apply in flight (profile-mutating — single-flight with syncing/restarting). */
-  const [removeBusy, setRemoveBusy] = useState(false)
-  /** Row awaiting its per-row remove/undo confirm modal. */
-  const [removeTarget, setRemoveTarget] = useState<string | null>(null)
-  /** Management-zone outcome line (remove/undo executed/refused). */
-  const [manageStatus, setManageStatus] = useState<ManageStatus | null>(null)
-
-  const [draft, setDraft] = useState('')
-  const [draftError, setDraftError] = useState<string | null>(null)
-  const [installing, setInstalling] = useState(false)
-  /** 本地导入（文件夹/.tgz）专用 busy（与 installing 并存）：导入中安装按钮不显示
-   *  「安装中…」，避免语义错位（同一 busy 也覆盖 .tgz 导入）。 */
-  const [folderBusy, setFolderBusy] = useState(false)
-  const [addResult, setAddResult] = useState<string | null>(null)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [searching, setSearching] = useState(false)
-  const [hits, setHits] = useState<NpmSearchPackage[]>([])
-  const [searchError, setSearchError] = useState<string | null>(null)
-  /** 最近一次成功完成的搜索词：hits 空且无错误时渲染零命中空态（改词即失配隐藏）。 */
-  const [searchDone, setSearchDone] = useState<string | null>(null)
 
   // Diagnostic self-heal: whenever the banner shows a problem, ask the host to
   // re-check — the host re-verifies CHANNEL-class states only and skips boot-fact
@@ -248,38 +174,14 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     }
   }, [])
 
-  /** Confirm-remove one plugin from the LOCAL dsh profile. */
-  const confirmLocalRemove = useCallback(async (): Promise<void> => {
-    if (localRemoveTarget === null || localRemoveBusy) return
-    setLocalRemoveBusy(true)
-    setLocalRemoveError(null)
-    try {
-      const res = await localPluginRemove(localRemoveTarget)
-      if ('error' in res) {
-        // 失败即关 Modal：错误落到 zone 顶部 alert 可见（否则被确认 Modal 叠层遮挡）。
-        setLocalRemoveError(res.error)
-        setLocalRemoveTarget(null)
-      } else {
-        // Main-process confirmation dismissed: silent no-op — nothing removed, no misleading refresh.
-        setLocalRemoveTarget(null)
-        if (!('cancelled' in res)) await loadLocalList()
-      }
-    } catch (err) {
-      setLocalRemoveError(errorMessage(err))
-      setLocalRemoveTarget(null)
-    } finally {
-      setLocalRemoveBusy(false)
-    }
-  }, [localRemoveTarget, localRemoveBusy, loadLocalList])
-
   /**
-   * Reload the ssh sync projection. `keepChecked` preserves the user's checked rows
-   * (a seed 注入 re-probe must not silently reset the selection — the chamber rows
-   * are not part of the third-party diff).
+   * Reload the ssh READ projection (local manifest + remote manifest). The chamber
+   * table reads the local projection as the 本地 column AND as the fallback row source
+   * when the remote read fails — a later failure must not discard it.
    */
-  const loadSync = useCallback(async (keepChecked = false): Promise<void> => {
+  const loadRemoteList = useCallback(async (): Promise<void> => {
     if (!isSsh || sshSpec === null) return
-    setPhase('loading')
+    setSshPhase('loading')
     setLoadError(null)
     setLocalFailed(false)
     setProfileNotInit(false)
@@ -288,59 +190,38 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       if ('error' in localRes) {
         setLoadError(localRes.error)
         setLocalFailed(true)
-        setPhase('error')
+        setSshPhase('error')
         return
       }
-      // Commit the desktop projection the moment it is read: the chamber table reads
-      // it as the 本地 column AND as the fallback row source when the remote read
-      // fails — a later failure must not discard it (the zone is phase-independent).
       setLocalManifest(localRes.manifest)
       const remoteRes = await pluginList(sshSpec.id)
       if ('error' in remoteRes) {
         setLoadError(remoteRes.error)
-        setPhase('error')
+        setSshPhase('error')
         return
       }
-      // Same for the remote answer: the chamber block is probed independently of
-      // package.json, so a corrupt remote manifest must not throw away rows the probe DID answer.
+      // The chamber block is probed independently of package.json, so a corrupt remote
+      // manifest must not throw away rows the probe DID answer.
       setRemoteManifest(remoteRes.manifest)
       // cat ok but package.json unparseable: the manifest carries a loud error with an
       // empty dependency set — surface it, never a silent "manifests match".
       if (remoteRes.manifest.error !== undefined && remoteRes.manifest.error !== '') {
         setLoadError(remoteRes.manifest.error)
-        setPhase('error')
+        setSshPhase('error')
         return
       }
       setProfileNotInit(!remoteRes.manifest.profileExists)
-      // diff/apply 边界（硬要求）：computePluginDiff 的输入只吃可操作行（后端判非 protected）——
-      // 受保护行进输入 ⇒ missing 行默认勾选，doApply 会把官方包当 add 提交、后端整批拒绝。
-      // ssh 面再排除官方 scope（装面保守，官方行让整批失效），是传输能力过滤而非保护判定；
-      // rows 缺失（旧 producer）走 legacyProtectedName 回退，回退路径同样排除官方 scope。
-      const d = computePluginDiff(
-        { ...localRes.manifest, dependencies: sshSyncableDependencies(localRes.manifest.dependencies, pluginRowsOf(localRes.manifest)) },
-        { ...remoteRes.manifest, dependencies: sshSyncableDependencies(remoteRes.manifest.dependencies, pluginRowsOf(remoteRes.manifest)) },
-      )
-      setDiff(d)
-      if (keepChecked) {
-        const rows = new Set(d.rows.map(row => row.name))
-        setChecked(prev => new Set([...prev].filter(name => rows.has(name))))
-      } else {
-        setChecked(new Set(d.rows.filter(row => defaultChecked(row.kind)).map(row => row.name)))
-      }
-      setResult(null)
-      setResultError(null)
-      setPhase('ready')
+      setSshPhase('ready')
     } catch (err) {
       setLoadError(errorMessage(err))
-      setPhase('error')
+      setSshPhase('error')
     }
   }, [isSsh, sshSpec])
 
   /** Manual host-graph seed fallback: writes module A onto the remote + ensures
-   *  the cordis.patch.yml insert, then re-probes. */
+   *  the cordis.patch.yml insert, then re-probes (chamber provisioning, not a user plugin write). */
   const doSeedHostGraph = useCallback(async (): Promise<void> => {
     if (!isSsh || sshSpec === null || seedBusy) return
-    if (applyingRef.current) return
     setSeedBusy(true)
     setSeedError(null)
     try {
@@ -357,43 +238,15 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       setPendingRestart(false)
     } finally {
       setSeedBusy(false)
-      await loadSync(true)
+      await loadRemoteList()
     }
-  }, [isSsh, sshSpec, seedBusy, loadSync])
-
-  /**
-   * Arm the page-owned restart→reload completion for this dialog's source. Every
-   * restart-to-apply path below ends here: the host refreshes its plugin mounts, but
-   * this window only picks the new client half up on a fresh boot. Page-owned so the
-   * completion survives dialog close; the page-level key dedupes paths for one source.
-   */
-  const armSourceReload = useCallback((kind: 'ssh' | 'gateway', rawId: string): void => {
-    if (kind === 'ssh') {
-      const sourceId = `dsh-${rawId}`
-      void armWindowReloadWhenServed(
-        sourceId,
-        () => waitForSourceServing(sourceId, { timeoutMs: 120_000 }),
-        { budgetMs: RESTART_RELOAD_BUDGET_MS },
-      )
-      return
-    }
-    const sourceId = `gateway-${rawId}`
-    void armWindowReloadWhenServed(sourceId, async signal => {
-      try {
-        await pollGatewayReady(sourceId, signal, { action: 'restart' })
-        return true
-      } catch {
-        return false
-      }
-    }, { budgetMs: RESTART_RELOAD_BUDGET_MS })
-  }, [])
+  }, [isSsh, sshSpec, seedBusy, loadRemoteList])
 
   /** One-click restart: the chamber host packages are seeded and the insert is in
    *  place, but the RUNNING instance has not loaded them — restarting makes them
    *  live. Re-probes after. */
   const doRestartNow = useCallback(async (): Promise<void> => {
     if (!isSsh || sshSpec === null || restartBusy || seedBusy) return
-    if (applyingRef.current) return
     setRestartBusy(true)
     setRestartError(null)
     try {
@@ -403,126 +256,27 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       } else {
         setPendingRestart(false)
         onRecheckDiagnostic?.()
-        armSourceReload('ssh', sshSpec.id)
+        // Page-owned restart→reload completion: the window only picks the new client half
+        // up on a fresh boot, and the completion must survive this dialog closing.
+        const reloadSourceId = `dsh-${sshSpec.id}`
+        void armWindowReloadWhenServed(
+          reloadSourceId,
+          () => waitForSourceServing(reloadSourceId, { timeoutMs: 120_000 }),
+          { budgetMs: RESTART_RELOAD_BUDGET_MS },
+        )
       }
     } catch (err) {
       setRestartError(errorMessage(err))
     } finally {
       setRestartBusy(false)
-      await loadSync(true)
+      await loadRemoteList()
     }
-  }, [isSsh, sshSpec, restartBusy, seedBusy, loadSync, onRecheckDiagnostic])
-
-  /**
-   * Row-level REMOVE on the ssh installed list: one-row remove batch through the same
-   * plugin_apply surface, classified through the model layer. A refused or executed-but-
-   * failed remove leaves the plugin installed — the failure is attached to the ROW
-   * (verbatim) and no reload runs (nothing changed).
-   */
-  const confirmRemoteRemove = useCallback(async (): Promise<void> => {
-    if (!isSsh || sshSpec === null || remoteRemoveTarget === null) return
-    if (remoteRemoveBusy || undoBusy) return
-    if (applyingRef.current || seedBusy || restartBusy) return
-    const name = remoteRemoveTarget
-    setRemoteRemoveBusy(true)
-    setRemoteListStatus(null)
-    setRemoteRowErrors(prev => {
-      const next = { ...prev }
-      delete next[name]
-      return next
-    })
-    try {
-      const res = await pluginApply(sshSpec.id, { add: [], remove: [name], restart })
-      if ('error' in res) {
-        setRemoteRowErrors(prev => ({ ...prev, [name]: res.error }))
-      } else {
-        const r = res.result
-        const failed = r.failed.find(item => item.spec === name)
-        if (failed !== undefined) {
-          setRemoteRowErrors(prev => ({ ...prev, [name]: failed.error }))
-        } else {
-          const outcome = classifySshApplyResult(res)
-          if ('failed' in outcome) {
-            setRemoteListStatus({ tone: 'error', text: outcome.failed.error })
-          } else {
-            const executed = outcome.executed
-            let tone: RemoteListTone
-            let text: string
-            if (executed.verified === false) {
-              tone = 'error'
-              text = `${t('pluginsVerifyFailed')}${executed.readyNote === undefined ? '' : ` ${executed.readyNote}`}`
-            } else if (executed.ready === false) {
-              tone = 'error'
-              text = t('pluginsReadyFailed')
-            } else if (executed.restarted) {
-              tone = 'ok'
-              text = `${t('pluginsApplied')}${executed.readyNote === undefined ? '' : ` · ${executed.readyNote}`}`
-              armSourceReload('ssh', sshSpec.id)
-            } else {
-              tone = 'warn'
-              text = t('restartNeededHint')
-            }
-            setRemoteListStatus({ tone, text })
-            await loadSync(true)
-          }
-        }
-      }
-    } catch (err) {
-      setRemoteRowErrors(prev => ({ ...prev, [name]: errorMessage(err) }))
-    } finally {
-      setRemoteRemoveBusy(false)
-      setRemoteRemoveTarget(null)
-      setRestart(true)
-    }
-  }, [isSsh, sshSpec, remoteRemoveTarget, remoteRemoveBusy, undoBusy, restart, loadSync, t])
-
-  /** 「撤销最近变更」on the ssh installed list: id-only intent into the main-process
-   *  undo — the journal is authoritative, the renderer never supplies a spec. */
-  const doUndo = useCallback(async (): Promise<void> => {
-    if (!isSsh || sshSpec === null) return
-    if (undoBusy || remoteRemoveBusy) return
-    if (applyingRef.current || seedBusy || restartBusy) return
-    setUndoBusy(true)
-    setRemoteListStatus(null)
-    setRemoteRowErrors({})
-    try {
-      const res = await sshPluginUndo(sshSpec.id)
-      if ('cancelled' in res) {
-        // User dismissed the main-process undo confirmation: silent no-op.
-      } else if (res.ok) {
-        const undone = res.undone
-        const clean = undone.restarted === undefined
-          || (undone.restarted === true && undone.ready !== false)
-        if (clean) {
-          setRemoteListStatus({ tone: 'ok', text: t('undoDone') })
-          // Only a real restart-to-apply needs the window reload; an undo that never restarted is already in effect.
-          if (undone.restarted === true) armSourceReload('ssh', sshSpec.id)
-        } else if (undone.restarted === false) {
-          const note = undone.readyNote === undefined ? '' : ` ${undone.readyNote}`
-          setRemoteListStatus({ tone: 'warn', text: `${t('undoDone')} · ${t('restartNeededHint')}${note}` })
-        } else {
-          const note = undone.readyNote === undefined ? '' : ` ${undone.readyNote}`
-          setRemoteListStatus({ tone: 'error', text: `${t('undoNotEffective')}${note}` })
-        }
-        await loadSync(true)
-      } else if (res.unavailable === 'none') {
-        setRemoteListStatus({ tone: 'ok', text: t('undoUnavailableNone') })
-      } else if (res.unavailable === 'file-backed') {
-        setRemoteListStatus({ tone: 'warn', text: t('undoUnavailableFileBacked') })
-      } else {
-        setRemoteListStatus({ tone: 'error', text: res.error })
-      }
-    } catch (err) {
-      setRemoteListStatus({ tone: 'error', text: errorMessage(err) })
-    } finally {
-      setUndoBusy(false)
-    }
-  }, [isSsh, sshSpec, undoBusy, remoteRemoveBusy, loadSync, t])
+  }, [isSsh, sshSpec, restartBusy, seedBusy, loadRemoteList, onRecheckDiagnostic])
 
   useEffect(() => {
-    if (isSsh) void loadSync()
+    if (isSsh) void loadRemoteList()
     else if (isLocal) void loadLocalList()
-  }, [isSsh, isLocal, loadSync, loadLocalList])
+  }, [isSsh, isLocal, loadRemoteList, loadLocalList])
 
   useEffect(() => {
     if (sourceId === null) return
@@ -618,11 +372,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     return () => { cancelled = true }
   }, [gatewayId, reloadNonce])
 
-  // Gateway-only management projections: installed list + task journal load on open and
-  // after every executed management op. The journal feeds ONLY the undo derive
-  // (undoForLatest) — task rows are never rendered. The installed read shares the write
-  // fence, so it is the one read that retries; a discarded read (reload/unmount) cannot
-  // issue another request.
+  // Gateway-only management projection: the installed list (READ-ONLY) loads on open and
+  // after every manual sync. The installed read shares the write fence, so it is the one
+  // read that retries; a discarded read (reload/unmount) cannot issue another request.
   useEffect(() => {
     if (gatewayId === null) return
     let cancelled = false
@@ -636,44 +388,13 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       setInstalled(null)
       setInstalledError(errorMessage(err))
     })
-    gatewayTasks(gatewayId).then(next => {
-      if (cancelled) return
-      setTaskRows(projectTasks(next).rows)
-      setTasksError(null)
-    }).catch(err => {
-      if (cancelled) return
-      setTaskRows(null)
-      setTasksError(errorMessage(err))
-    })
     return () => { cancelled = true; controller.abort() }
   }, [gatewayId, reloadNonce])
-
-  /** 受控重启托管 dsh：POST /api/i/<sourceId>/chamber/runtime/restart —— 仅 202 接受；
-   *  409/400 body.error 逐字。202 后按 shared pollGatewayReady 语义轮询；成功刷新清单。 */
-  const restartManagedDsh = async (): Promise<void> => {
-    if (sourceId === null || restarting) return
-    setRestarting(true)
-    setRestartNote(null)
-    try {
-      // Same single action layer as the connection card: POST + 202 gate + page-owned readiness poll, 409 localized through runtimeRefusalText.
-      const outcome = await runManagedRestart(sourceId, t)
-      if (outcome.kind === 'reloaded') {
-        setRestartNote({ tone: 'ok', text: t('restartManagedDshOk') })
-        setReloadNonce(n => n + 1)
-      } else if (outcome.kind === 'accepted-timeout') {
-        setRestartNote({ tone: 'ok', text: t('restartManagedDshAccepted') })
-      } else {
-        setRestartNote({ tone: 'error', text: outcome.kind === 'refused' ? outcome.text : outcome.detail })
-      }
-    } finally {
-      setRestarting(false)
-    }
-  }
 
   /** 手动 chamber 同步：把桌面本机 chamber 两包重新上传进 gateway 种子缓存——ready 自动
    *  同步失败或版本漂移时的兜底。失败显式投影为 ok:false + error；无论成败都重读两条投影。 */
   const chamberSyncNow = async (): Promise<void> => {
-    if (gatewayId === null || syncing || restarting || removeBusy) return
+    if (gatewayId === null || syncing) return
     setSyncing(true)
     setSyncNote(null)
     setSyncError(null)
@@ -696,323 +417,14 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     }
   }
 
-  /** 逐行移除：{remove:[name], deferRestart:false} 走 gateway_plugin_apply IPC（主进程
-   *  二次确认 + 白名单复核），结果经 classifyGatewayApplyResult + partialCounts 分类。 */
-  const applyRemove = async (name: string): Promise<void> => {
-    if (gatewayId === null || removeBusy || restarting || syncing) return
-    setRemoveBusy(true)
-    setManageStatus(null)
-    try {
-      const result = await gatewayPluginApply(gatewayId, { add: [], remove: [name], deferRestart: false })
-      const outcome = classifyGatewayApplyResult(result, 1)
-      if ('cancelled' in outcome) {
-        // User dismissed the main-process confirmation: silent no-op.
-        return
-      }
-      if ('failed' in outcome) {
-        const counts = partialCounts(outcome)
-        setManageStatus({ tone: 'error', text: `${partialTextOf(counts, t)}${outcome.failed.error}` })
-        if (counts !== null && counts.done > 0) setReloadNonce(n => n + 1)
-        return
-      }
-      const executed = outcome.executed
-      setManageStatus(executed.restarted
-        ? { tone: 'ok', text: `${name} · ${t('restartManagedDshOk')}` }
-        : { tone: 'warn', text: `${name} · ${t('restartNeededHint')}` })
-      if (executed.restarted) armSourceReload('gateway', gatewayId)
-      setReloadNonce(n => n + 1)
-    } catch (err) {
-      setManageStatus({ tone: 'error', text: errorMessage(err) })
-    } finally {
-      setRemoveBusy(false)
-      setRemoveTarget(null)
-    }
-  }
-
-  /** 恢复横幅的撤销动作：撤销=恢复。直发 POST /chamber/plugins/undo（后端在单飞栅栏下自选
-   *  最新可撤销 op 并还原其 preImage），随后按 tasks 投影等到终态——绝不把「已受理」谎报成功。 */
-  const applyUndo = async (): Promise<void> => {
-    if (gatewayId === null || removeBusy || restarting || syncing) return
-    setRemoveBusy(true)
-    setManageStatus(null)
-    try {
-      const accepted = await gatewayPluginUndo(gatewayId)
-      if (!accepted.ok) {
-        setManageStatus({ tone: 'error', text: accepted.error })
-        return
-      }
-      const terminal = await waitForGatewayOpTerminal(gatewayId, accepted.opId)
-      if (terminal.status === 'timeout') {
-        // 受理但未在窗口内终态：如实呈现忙态，交由既有刷新节奏。
-        setManageStatus({ tone: 'warn', text: t('busyTasks') })
-      } else if (terminal.status === 'ok') {
-        setManageStatus({ tone: 'ok', text: t('undoDone') })
-      } else {
-        setManageStatus({ tone: 'error', text: terminal.error ?? t('undoNotEffective') })
-      }
-    } catch (err) {
-      setManageStatus({ tone: 'error', text: errorMessage(err) })
-    } finally {
-      setRemoveBusy(false)
-      setReloadNonce(n => n + 1)
-    }
-  }
-
-  const reloadAfterAdd = useCallback((): void => {
-    if (isSsh) void loadSync()
-    else if (isLocal) void loadLocalList()
-    else setReloadNonce(n => n + 1)
-  }, [isSsh, isLocal, loadSync, loadLocalList])
-
-  const installSpec = useCallback(async (raw: string): Promise<void> => {
-    const value = raw.trim()
-    // 空词 = silent no-op（与搜索按钮空词禁用一致，不误报「格式非法」）。
-    if (value === '') return
-    if (!ADD_SPEC.test(value)) {
-      setDraftError(t('pluginsAddSpecInvalid'))
-      return
-    }
-    setInstalling(true)
-    setDraftError(null)
-    setAddResult(null)
-    try {
-      if (isSsh && sshSpec !== null) {
-        const res = await pluginApply(sshSpec.id, { add: [value], remove: [], restart: false })
-        if ('error' in res) setDraftError(res.error)
-        else if (res.result.failed.length > 0 || !res.result.verified) {
-          const first = res.result.failed[0]
-          setDraftError(first !== undefined ? `${value}${t('partialSep')}${first.error}` : t('pluginsVerifyFailed'))
-        } else {
-          setAddResult(t('pluginsDeferred'))
-          setDraft('')
-          reloadAfterAdd()
-        }
-      } else if (isGateway && gatewayId !== null) {
-        const res = await gatewayPluginApply(gatewayId, { add: [value], remove: [], deferRestart: false })
-        const outcome = classifyGatewayApplyResult(res, 1)
-        if ('cancelled' in outcome) { /* silent no-op */ }
-        else if ('failed' in outcome) {
-          const counts = partialCounts(outcome)
-          setDraftError(`${partialTextOf(counts, t)}${outcome.failed.error}`)
-        } else {
-          const executed = outcome.executed
-          setAddResult(executed.restarted
-            ? t('pluginsApplied')
-            : executed.deferred
-              ? t('pluginsDeferred')
-              : t('restartNeededHint'))
-          if (executed.restarted) armSourceReload('gateway', gatewayId)
-          setDraft('')
-          reloadAfterAdd()
-        }
-      } else {
-        const res = await localPluginAdd(value)
-        if ('error' in res) setDraftError(res.error)
-        else if ('cancelled' in res) { /* silent no-op (user dismissed the confirmation) */ }
-        else {
-          // LOCAL `dsh plugin add` writes the local profile only — the RUNNING instance
-          // mounts it at its next restart (「dsh 运行时」→「重启 dsh」, outside this dialog),
-          // so 「已应用」would overclaim: the honest note is deferred and names the entry point.
-          setAddResult(t('pluginsDeferredLocal'))
-          setDraft('')
-          reloadAfterAdd()
-        }
-      }
-    } catch (err) {
-      setDraftError(errorMessage(err))
-    } finally {
-      setInstalling(false)
-    }
-  }, [isSsh, sshSpec, isGateway, gatewayId, t, reloadAfterAdd])
-
-  const importFolder = useCallback(async (): Promise<void> => {
-    setInstalling(true)
-    setFolderBusy(true)
-    setDraftError(null)
-    setAddResult(null)
-    try {
-      if (isSsh && sshSpec !== null) {
-        const res = await pluginMaterializeAddPick(sshSpec.id)
-        if ('error' in res) setDraftError(res.error)
-        else if ('cancelled' in res) { /* silent no-op (picker dismissed) */ }
-        else { setAddResult(t('pluginsDeferred')); reloadAfterAdd() }
-      } else if (isGateway && gatewayId !== null) {
-        // gateway_plugin_materialize is TERMINAL on return: main settles the accepted
-        // executor op and asks for the controlled restart, so outcome.restarted answers
-        // whether the plugin is LIVE on the running instance.
-        const res = await gatewayPluginMaterialize(gatewayId)
-        if ('error' in res) {
-          if (res.outcome?.executed === true) {
-            // Executed before the restart was refused/failed: installed now, mounts at the next natural restart.
-            setAddResult(`${res.error} · ${t('restartNeededHint')}`)
-            reloadAfterAdd()
-          } else {
-            // Refused / failed / settle-timeout with nothing (or unknown) executed: a loud error, never a success claim.
-            setDraftError(res.error)
-          }
-        } else if ('cancelled' in res) { /* silent no-op (picker dismissed) */ }
-        else if ('deferred' in res) {
-          // The gateway persisted the install intent for the next ready edge (it drains +
-          // restarts there; may run after this desktop disconnects) — never an installed claim.
-          setAddResult(t('deferredOfflineNote'))
-          reloadAfterAdd()
-        } else {
-          // executed + restarted = installed AND live now; executed without restart = profile
-          // changed, mounts at the next restart (same restartNeededHint arm as the spec install).
-          if (res.outcome.restarted) {
-            setAddResult(t('materializeLive'))
-            armSourceReload('gateway', gatewayId)
-          } else if (res.outcome.executed) {
-            setAddResult(t('restartNeededHint'))
-          }
-          reloadAfterAdd()
-        }
-      } else {
-        const res = await localPluginAddFile()
-        if ('error' in res) setDraftError(res.error)
-        else if ('cancelled' in res) { /* silent no-op (picker dismissed) */ }
-        else {
-          // Same restart-honesty as the local spec install: 「dsh 运行时」→「重启 dsh」mounts it and reloads the window.
-          setAddResult(t('pluginsDeferredLocal'))
-          reloadAfterAdd()
-        }
-      }
-    } catch (err) {
-      setDraftError(errorMessage(err))
-    } finally {
-      setInstalling(false)
-      setFolderBusy(false)
-    }
-  }, [isSsh, sshSpec, isGateway, gatewayId, t, reloadAfterAdd])
-
-  const runSearch = useCallback(async (): Promise<void> => {
-    const value = searchQuery.trim()
-    if (value === '') return
-    setSearching(true)
-    setSearchError(null)
-    try {
-      const res = await npmSearch(value)
-      if ('error' in res) setSearchError(res.error)
-      else {
-        setHits(res.packages)
-        setSearchDone(value)
-      }
-    } catch (err) {
-      setSearchError(errorMessage(err))
-    } finally {
-      setSearching(false)
-    }
-  }, [searchQuery])
-
-  // ssh sync apply orchestration
-  const toggleRow = useCallback((name: string): void => {
-    if (applyingRef.current) return
-    setChecked(prev => {
-      const next = new Set(prev)
-      if (next.has(name)) next.delete(name)
-      else next.add(name)
-      return next
-    })
-  }, [])
-
-  const selected = diff?.rows.filter(row => checked.has(row.name)) ?? []
-  const removeRows = selected.filter(row => row.kind === 'extra')
-  const changeCount = selected.filter(row => isDifferenceRow(row.kind)).length
-  const willRestart = restart && changeCount > 0
-
-  const doApply = useCallback(async (): Promise<void> => {
-    if (!isSsh || sshSpec === null || diff === null || applyingRef.current) return
-    if (seedBusy || restartBusy || remoteRemoveBusy || undoBusy) return
-    const sel = diff.rows.filter(row => checked.has(row.name))
-    const materializeRows = sel.filter(row => row.kind === 'materialize')
-    const add = sel
-      .filter(row => row.kind === 'missing' || row.kind === 'update')
-      .map(rowAddArg)
-    const remove = sel.filter(row => row.kind === 'extra').map(row => row.name)
-    applyingRef.current = true
-    setPhase('applying')
-    setResult(null)
-    setResultError(null)
-    /** Anything actually executed (materialize picks landed or the registry batch ran —
-     *  per-row failures included) may have changed the remote profile, so the zone reloads
-     *  once doApply settles; refusals/cancellations leave the manifests as-is. */
-    let executed = false
-    try {
-      // Materialize rows: pack-and-transfer via desktop IPC — per-row isolation (one failed entity must not block the rest).
-      const failed: PluginApplyFailure[] = []
-      let applied = 0
-      for (const row of materializeRows) {
-        const res = await pluginMaterializeAddPick(sshSpec.id)
-        if ('error' in res) failed.push({ spec: row.name, error: res.error })
-        else if ('cancelled' in res) { /* user dismissed the confirmation: skipped, never counted as applied */ }
-        else { applied += 1; executed = true }
-      }
-
-      // Registry rows + removes ride pluginApply (remove-first, serial, restart unless deferred, assert, ready recheck).
-      if (add.length > 0 || remove.length > 0) {
-        const res = await pluginApply(sshSpec.id, { add, remove, restart })
-        if ('error' in res) {
-          setResultError(res.error)
-          setResult({ applied, failed, skipped: 0, restarted: false, deferred: true, verified: failed.length === 0, ready: null })
-        } else {
-          executed = true
-          setResult({
-            applied: applied + res.result.applied,
-            failed: [...failed, ...res.result.failed],
-            skipped: res.result.skipped,
-            restarted: res.result.restarted,
-            deferred: res.result.deferred,
-            verified: res.result.verified,
-            ready: res.result.ready,
-          })
-          if (res.result.restarted && !res.result.deferred) armSourceReload('ssh', sshSpec.id)
-        }
-      } else {
-        setResult({ applied, failed, skipped: 0, restarted: false, deferred: true, verified: failed.length === 0, ready: null })
-      }
-    } catch (err) {
-      setResultError(errorMessage(err))
-    } finally {
-      applyingRef.current = false
-      setRestart(true)
-      setPhase('done')
-      // doApply 自动重载：executed 后走与手动刷新相同的 loadSync，让已安装/移除行即时可见
-      // （否则 done 期间列表陈旧）；loadSync(true) 保留用户对剩余行的勾选。
-      if (executed) void loadSync(true)
-    }
-  }, [isSsh, sshSpec, diff, checked, restart, seedBusy, restartBusy, remoteRemoveBusy, undoBusy, loadSync, t])
-
-  const onApplyClick = useCallback((): void => {
-    if (applyingRef.current) return
-    if (removeRows.length > 0) { setConfirmRemove(true); return }
-    if (willRestart) { setConfirmApply(true); return }
-    void doApply()
-  }, [removeRows.length, willRestart, doApply])
-
-  const onRemoveConfirm = useCallback((): void => {
-    setConfirmRemove(false)
-    if (willRestart) { setConfirmApply(true); return }
-    void doApply()
-  }, [willRestart, doApply])
-
-  const onApplyConfirm = useCallback((): void => {
-    setConfirmApply(false)
-    void doApply()
-  }, [doApply])
-
   const close = useCallback((): void => {
-    if (applyingRef.current) return
-    if (confirmRemove || confirmApply || localRemoveTarget !== null || remoteRemoveTarget !== null) return
-    if (removeTarget !== null || removeBusy) return
-    // 非模态 busy 一并门控：安装/导入/撤销/seed/重启在跑时关框会让主进程操作继续而结果无处呈现。
-    if (installing || folderBusy || undoBusy || seedBusy || restartBusy || syncing) return
+    // 非模态 busy 门控：seed/重启/同步在跑时关框会让主进程操作继续而结果无处呈现。
+    if (seedBusy || restartBusy || syncing) return
     onClose()
-  }, [onClose, confirmRemove, confirmApply, localRemoveTarget, remoteRemoveTarget, removeTarget, removeBusy,
-    installing, folderBusy, undoBusy, seedBusy, restartBusy, syncing])
+  }, [onClose, seedBusy, restartBusy, syncing])
 
   const label = isLocal ? t('localTitle') : isSsh && sshSpec !== null ? sshSpec.label : target.kind === 'gateway' || target.kind === 'http' ? target.label : ''
   const title = `${t('pluginsTitle')} · ${label}`
-  const applying = phase === 'applying'
 
   // diagnostic banner (bannerProjection de-dup)
   const diagnosticBanner = diagnostic !== undefined && diagnostic.state !== 'ok'
@@ -1031,7 +443,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   const sshRemoteChamber = isSsh ? remoteManifest?.chamber : undefined
   /** The desktop's own chamber projection. The dedicated `localChamberPackages` read is
    *  gated on a gateway/http `sourceId`, so it never runs for ssh; that arm reads the same
-   *  projection from the local manifest loadSync fetched (本地 column must not sit on 未知,
+   *  projection from the local manifest loadRemoteList fetched (本地 column must not sit on 未知,
    *  and a failed probe must not leave the table empty). */
   const desktopChamberPackages = isSsh && localManifest !== null && localManifest.chamber.ok === true
     ? localManifest.chamber.packages
@@ -1127,7 +539,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
             <button
               type="button"
               className={css.chamberSeedButton}
-              disabled={syncing || restarting || removeBusy || installing || folderBusy}
+              disabled={syncing}
               onClick={() => { void chamberSyncNow() }}
             >
               {syncing ? t('chamberSyncBusy') : t('chamberSyncNow')}
@@ -1171,7 +583,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     </div>
   )
 
-  // ---- ③ third-party zone ----
+  // ---- ③ read-only installed rows ----
   /** One row's live-state cell (thirdPartyLiveState): a badge-family chip when the Loader
    *  snapshot answers, a neutral dash when it is unavailable — never a state claim from an
    *  unreadable snapshot. */
@@ -1216,116 +628,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     </>
   )
 
-  /** 逐行操作格：非受保护行保留既有移除按钮行为；受保护行只读（— + 提示），绝不给后端必然拒绝的动作。 */
-  const rowActionCell = (row: InstalledRowView, disabled: boolean, onRemove: () => void): ReactNode => (
-    row.removable
-      ? (
-        <Button
-          variant="outline"
-          size="sm"
-          icon={<IconTrashOutline16 />}
-          disabled={disabled}
-          aria-label={`${t('pluginsRemoveRow')}: ${row.name}`}
-          onClick={onRemove}
-        >
-          {t('pluginsRemoveRow')}
-        </Button>
-      )
-      : <span className={css.dim} title={t('pluginsProtectedHint')}>—</span>
-  )
-
-  /** The add section (spec + npm search + local import — source folder or ready .tgz)
-   *  for the three writable backends; http-direct renders no add surface. */
-  const addSection = isHttp
-    ? null
-    : (
-      <div className={css.pluginAdd}>
-        <div className={css.pluginAddSpec}>
-          <label className={css.fieldLabel} htmlFor={specInputId}>{t('pluginsAddSpec')}</label>
-          <div className={css.pluginAddRow}>
-            <input
-              id={specInputId}
-              className={clsx(css.input, css.pluginAddSpecInput)}
-              value={draft}
-              spellCheck={false}
-              disabled={installing || folderBusy}
-              placeholder={t('pluginsAddSpecPlaceholder')}
-              onChange={event => { setDraft(event.target.value); setDraftError(null); setAddResult(null) }}
-              onKeyDown={event => { if (event.key === 'Enter' && !installing && !folderBusy) void installSpec(draft) }}
-            />
-            {/* installing busy 用短文案 pluginsAddInstalling，避免 busyTasks 全宽文案使按钮宽度跳动（busyTasks 仍供 footer/应用态使用）。 */}
-            <Button
-              variant="primary"
-              size="sm"
-              className={css.pluginCtlButton}
-              disabled={installing || folderBusy || draft.trim() === ''}
-              onClick={() => { void installSpec(draft) }}
-            >
-              {installing && !folderBusy ? t('pluginsAddInstalling') : t('pluginsAddInstall')}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className={css.pluginCtlButton}
-              disabled={installing || folderBusy}
-              onClick={() => { void importFolder() }}
-            >
-              {folderBusy ? t('pluginsImporting') : t('pluginsAddFolder')}
-            </Button>
-          </div>
-          {draftError !== null ? <span className={css.error} role="alert">{draftError}</span> : null}
-          {addResult !== null && draftError === null ? <span className={css.hint}>{addResult}</span> : null}
-        </div>
-
-        <div className={css.pluginSearch}>
-          <span className={css.fieldLabel}>{t('pluginsAddSearch')}</span>
-          <div className={css.pluginSearchRow}>
-            <input
-              className={css.input}
-              value={searchQuery}
-              spellCheck={false}
-              disabled={searching}
-              placeholder={t('pluginsAddSearchPlaceholder')}
-              aria-label={t('pluginsAddSearch')}
-              onChange={event => { setSearchQuery(event.target.value) }}
-              onKeyDown={event => { if (event.key === 'Enter' && !searching) void runSearch() }}
-            />
-            <Button variant="outline" size="sm" className={css.pluginCtlButton} disabled={searching || searchQuery.trim() === ''} onClick={() => { void runSearch() }}>
-              {searching ? t('loading') : t('pluginsAddSearch')}
-            </Button>
-          </div>
-          {searchError !== null ? <p className={css.error} role="alert">{searchError}</p> : null}
-          {searchDone !== null && searchDone !== '' && searchDone === searchQuery.trim() && !searching && searchError === null && hits.length === 0
-            ? <p className={css.dim} role="status">{t('pluginsSearchNoMatch')}</p>
-            : null}
-          {hits.length > 0
-            ? (
-              <ul className={css.pluginHits}>
-                {hits.map(hit => (
-                  <li key={hit.name} className={css.pluginHit}>
-                    <code className={css.mono}>{hit.name}</code>
-                    <span className={css.pluginHitVersion}>{hit.version}</span>
-                    {hit.description !== undefined && hit.description !== '' ? <span className={css.dim}>{hit.description}</span> : null}
-                    <span className={css.footSpacer} />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className={css.pluginCtlButton}
-                      disabled={installing || folderBusy}
-                      onClick={() => { void installSpec(`${hit.name}@${hit.version}`) }}
-                    >
-                      {t('pluginsAddInstall')}
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            )
-            : null}
-        </div>
-      </div>
-    )
-
-  /** Local installed list + add (the converged local region: former list tab and add tab stacked in one zone). */
+  /** Local installed list (READ-ONLY: no add area, no per-row remove). */
   const localZone = isLocal
     ? ((): ReactNode => {
       if (localLoading) return <p className={css.dim}>{t('pluginsLoading')}</p>
@@ -1334,27 +637,20 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
           <div className={css.pluginStack}>
             <p className={css.error} role="alert">{localListError}</p>
             <div>
-              <Button variant="ghost" icon={<IconRefreshOutline16 />} onClick={() => { void loadLocalList() }}>{t('pluginsRetry')}</Button>
+              <Button variant="ghost" icon={<IconRefreshOutlineRegular />} onClick={() => { void loadLocalList() }}>{t('pluginsRetry')}</Button>
             </div>
           </div>
         )
       }
       if (localList === null) return null
       // 已安装 = 本 profile 的依赖表，后端投影只做 role/protected 标注——安装自带组合（B₀）
-      // 与 chamber 播种物（S）不造行（官方组合是运行时基线）。受保护名若在依赖表里仍只读可见；
-      // 旧 producer 无 rows 时回退到 dependencies 的过滤。
-      const installedRows = projectInstalledRows(localList.dependencies, pluginRowsOf(localList)).rows
+      // 与 chamber 播种物（S）不造行（官方组合是运行时基线）。受保护名若在依赖表里仍只读可见。
+      const installedRows = projectInstalledRows(localList.dependencies, pluginRowsOf(localList))
       return (
         <div className={css.pluginStack}>
           <p className={css.pluginChamberTitle}>{t('installedTab')}</p>
-          {localRemoveError !== null ? <p className={css.error} role="alert">{localRemoveError}</p> : null}
           {installedRows.length === 0 && localList.unsyncable.length === 0
-            ? (
-              <>
-                <p className={css.pluginEmptyLead}>{t('pluginsNoLocalPlugins')}</p>
-                <p className={css.dim}>{t('installedAddHint')}</p>
-              </>
-            )
+            ? <p className={css.pluginEmptyLead}>{t('pluginsNoLocalPlugins')}</p>
             : (
               <div className={clsx(css.pluginRows, css.pluginRowsColsLocalLive)}>
                 <div className={clsx(css.pluginRow, css.pluginRowHead)}>
@@ -1362,26 +658,25 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
                   <span className={css.pluginCellCat}>{t('pluginsColCategory')}</span>
                   <span className={css.pluginCellSpec}>{t('pluginsLocalCol')}</span>
                   <span className={css.pluginCellKind}>{t('pluginsColLiveState')}</span>
-                  <span className={css.pluginCellAction}>{t('pluginsColAction')}</span>
                 </div>
-                <div className={css.pluginRowsBody} aria-busy={localRemoveBusy || applying}>
+                <div className={css.pluginRowsBody}>
                   {installedRows.map(row => {
-                    const rowCategory = localList.bundles.includes(row.name) ? 'bundle' : localList.clientLines.includes(row.name) ? 'client' : 'plain'
+                    const rowCategory: InstalledCategory = localList.bundles.includes(row.name) ? 'bundle' : localList.clientLines.includes(row.name) ? 'client' : 'plain'
                     const unsync = localList.unsyncable.find(item => item.name === row.name)
                     return (
                       <div key={row.name} className={clsx(css.pluginRow, unsync !== undefined && css.pluginRowGray)}>
-                        <label className={clsx(css.pluginCell, css.pluginCellName)}>
+                        <span className={clsx(css.pluginCell, css.pluginCellName)}>
                           <code className={css.pluginName}>{row.name}</code>
                           {roleBadge(row)}
                           {protectedHint(row)}
-                        </label>
+                        </span>
                         <span className={clsx(css.pluginCell, css.pluginCellCat)}>
                           <span className={clsx(css.pluginKindBadge, rowCategory === 'bundle' && css.pluginKindBundle, rowCategory === 'client' && css.pluginKindClient, rowCategory === 'plain' && css.pluginKindPlain)}>
                             {t(categoryLabel(rowCategory))}
                           </span>
                         </span>
                         <span className={clsx(css.pluginCell, css.pluginCellSpec)}>
-                          {/* 与 ssh/gateway 列表对称：file: 掩码芯片化，不直显本地路径。 */}
+                          {/* 与 gateway 列表对称：file: 掩码芯片化，不直显本地路径。 */}
                           {installedSpecCell(row, unsync?.reason)}
                           {unsync !== undefined && !(row.spec ?? '').startsWith('file:') ? <span className={css.pluginKindUnsync}> · {t('pluginsRowUnsyncable')}</span> : null}
                         </span>
@@ -1390,92 +685,63 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
                               Loader 行；受保护行是宿主 boot 基线）——无同名行即中性，绝不承诺「重启后生效」。 */}
                           {liveStateCell(installedRowLiveState(localSnapshot, row))}
                         </span>
-                        {rowActionCell(row, localRemoveBusy || applying || installing || folderBusy, () => {
-                          setLocalRemoveTarget(row.name)
-                          setLocalRemoveError(null)
-                        })}
                       </div>
                     )
                   })}
                 </div>
               </div>
             )}
-          {addSection}
         </div>
       )
     })()
     : null
 
-  /** The gateway third-party zone (installed list + per-row remove + add). */
+  /** The gateway third-party zone: the installed list, READ-ONLY (no per-row remove, no add area). */
   const gatewayZone = isGateway
     ? ((): ReactNode => {
-      const opsBlocked = removeBusy || restarting || syncing || installing || folderBusy
       // 行集 = 服务端投影的依赖行（受保护判定权威在服务端，渲染端只消费；B₀/S 不造行）。
-      // 旧 gateway 无 rows ⇒ 回退到 dependencies 过滤并置 legacy 标记，只给出服务端仍会接受的动作。
-      const projected: { rows: InstalledRowView[]; legacy: boolean } = installed !== null && installed.ok === true
+      const installedRows = installed !== null && installed.ok === true
         ? projectInstalledRows(installed.dependencies, pluginRowsOf(installed))
-        : { rows: [], legacy: false }
-      const installedRows = projected.rows
-      const legacyRows = projected.legacy
-      const statusTone = manageStatus?.tone
+        : []
       return (
         <div className={css.pluginStack}>
           <p className={css.pluginChamberTitle}>{t('installedTab')}</p>
-          {manageStatus !== null
-            ? (
-              <p className={manageStatusClass(statusTone ?? 'ok')} role={statusTone === 'error' ? 'alert' : 'status'}>
-                {manageStatus.text}
-              </p>
-            )
-            : null}
           {installedError !== null
             ? <p className={css.error} role="alert">{installedError}</p>
             : installed === null
               ? <p className={css.dim}>{t('pluginsLoading')}</p>
               : installed.ok
                 ? (
-                  <>
-                    {installedRows.length === 0
-                      ? (
-                        <>
-                          <p className={css.pluginEmptyLead}>{t('installedEmpty')}</p>
-                          <p className={css.dim}>{t('installedAddHint')}</p>
-                        </>
-                      )
-                      : (
-                        <div className={clsx(css.pluginRows, css.pluginRowsColsRemoteLive)}>
-                          <div className={clsx(css.pluginRow, css.pluginRowHead)}>
-                            <span className={css.pluginCellName}>{t('pluginsColName')}</span>
-                            <span className={css.pluginCellSpec}>{t('pluginsRemoteCol')}</span>
-                            <span className={css.pluginCellKind}>{t('pluginsColLiveState')}</span>
-                            <span className={css.pluginCellAction}>{t('pluginsColAction')}</span>
-                          </div>
-                          <div className={css.pluginRowsBody} aria-busy={opsBlocked}>
-                            {installedRows.map(row => (
-                              <div key={row.name} className={css.pluginRow}>
-                                <label className={clsx(css.pluginCell, css.pluginCellName)}>
-                                  <code className={css.pluginName}>{row.name}</code>
-                                  {roleBadge(row)}
-                                  {protectedHint(row)}
-                                </label>
-                                <span className={clsx(css.pluginCell, css.pluginCellSpec)}>
-                                  {/* file: values are the server-side mask of materialized copies (ssh-modal mirror). */}
-                                  {installedSpecCell(row)}
-                                </span>
-                                <span className={clsx(css.pluginCell, css.pluginCellKind)}>
-                                  {/* 与 local 同一判据（installedRowLiveState）：同名 Loader 行才给状态，无同名行即中性——绝不承诺「重启后生效」。 */}
-                                  {liveStateCell(installedRowLiveState(snapshot, row))}
-                                </span>
-                                {rowActionCell(row, opsBlocked, () => {
-                                  setManageStatus(null)
-                                  setRemoveTarget(row.name)
-                                })}
-                              </div>
-                            ))}
-                          </div>
+                  installedRows.length === 0
+                    ? <p className={css.pluginEmptyLead}>{t('installedEmpty')}</p>
+                    : (
+                      <div className={clsx(css.pluginRows, css.pluginRowsColsRemoteLive)}>
+                        <div className={clsx(css.pluginRow, css.pluginRowHead)}>
+                          <span className={css.pluginCellName}>{t('pluginsColName')}</span>
+                          <span className={css.pluginCellSpec}>{t('pluginsRemoteCol')}</span>
+                          <span className={css.pluginCellKind}>{t('pluginsColLiveState')}</span>
                         </div>
-                      )}
-                  </>
+                        <div className={css.pluginRowsBody}>
+                          {installedRows.map(row => (
+                            <div key={row.name} className={css.pluginRow}>
+                              <span className={clsx(css.pluginCell, css.pluginCellName)}>
+                                <code className={css.pluginName}>{row.name}</code>
+                                {roleBadge(row)}
+                                {protectedHint(row)}
+                              </span>
+                              <span className={clsx(css.pluginCell, css.pluginCellSpec)}>
+                                {/* file: values are the server-side mask of materialized copies. */}
+                                {installedSpecCell(row)}
+                              </span>
+                              <span className={clsx(css.pluginCell, css.pluginCellKind)}>
+                                {/* 与 local 同一判据（installedRowLiveState）：同名 Loader 行才给状态，无同名行即中性——绝不承诺「重启后生效」。 */}
+                                {liveStateCell(installedRowLiveState(snapshot, row))}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )
                 )
                 : installed.code === 'runtime_busy'
                   ? (
@@ -1493,9 +759,6 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
                       {installed.code === 'profile_absent' ? t('profileAbsentBanner') : t('profileCorruptBanner')}
                     </p>
                   )}
-          {/* 版本歪斜：旧 gateway 不返回 rows，回退只列第三方行——理由如实上屏。 */}
-          {legacyRows ? <p className={css.hint} role="status">{t('pluginsLegacyGatewayHint')}</p> : null}
-          {addSection}
         </div>
       )
     })()
@@ -1527,46 +790,11 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     })()
     : null
 
-  // ---- ④ recovery row (gateway only, runtimeDown-gated) ----
-  /** The recovery undo affordance: only while the managed dsh is down AND the journal's
-   *  newest ok op is undoable (must carry a preImage backup). The tasks read is the ONLY
-   *  journal consumer — no task rows render; the action is the 撤销=恢复 route. */
-  const recoveryUndo = useMemo(() => {
-    if (!isGateway || runtimeDown !== true || taskRows === null) return null
-    const undo = undoForLatest(taskRows)
-    return undo.action === null ? null : undo.action
-  }, [isGateway, runtimeDown, taskRows])
-
-  const recoveryZone = isGateway && runtimeDown === true
-    ? ((): ReactNode => {
-      // Journal unreadable while the instance is down: say so — the undo affordance must never silently vanish.
-      if (recoveryUndo === null) {
-        return taskRows === null && tasksError !== null
-          ? <p className={css.error} role="alert">{tasksError}</p>
-          : null
-      }
-      return (
-        <div className={css.recoveryBanner} role="status">
-          <span>{t('recoveryUndoBanner')}</span>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={removeBusy || restarting || syncing}
-            onClick={() => { setManageStatus(null); void applyUndo() }}
-          >
-            {t('recoveryUninstallRestart')}
-          </Button>
-        </div>
-      )
-    })()
-    : null
-
-  // ssh views (sync-modal semantics preserved)
-  function renderSyncView(): ReactNode {
-    if (phase === 'loading') {
-      return <p className={css.dim}>{t('pluginsLoading')}</p>
-    }
-    if (phase === 'error') {
+  /** ssh: the remote installed list (READ-ONLY) beside the chamber table. No diff/apply
+   *  entry, no add area — the ssh write surface is retired; only chamber provisioning remains. */
+  const renderRemoteList = (): ReactNode => {
+    if (sshPhase === 'loading') return <p className={css.dim}>{t('pluginsLoading')}</p>
+    if (sshPhase === 'error') {
       return (
         <div className={css.pluginStack}>
           {localFailed ? <p className={css.hint}>{t('pluginsStartLocalFirst')}</p> : null}
@@ -1574,248 +802,34 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         </div>
       )
     }
-    if (phase === 'applying') {
-      return (
-        <div className={css.pluginStack}>
-          <p className={css.dim}>{t('busyTasks')}</p>
-          <p className={css.hint}>{t('pluginsApply')} {changeCount}</p>
-        </div>
-      )
-    }
-    if (phase === 'done') {
-      return renderResult()
-    }
-    // ready
-    return renderTable()
-  }
-
-  function renderTable(): ReactNode {
-    if (diff === null) return null
-    const total = diff.rows.length
-    const differenceCount = diff.rows.filter(row => isDifferenceRow(row.kind)).length
-    // 计数只看可操作（第三方/物化）行——受保护行不进对账面，「本地无插件」提示随之修正。
-    const hasLocal = localManifest !== null
-      && Object.keys(sshSyncableDependencies(localManifest.dependencies, pluginRowsOf(localManifest))).length > 0
-    const visibleRows = diff.rows.filter(row => {
-      if (query !== '' && !row.name.toLowerCase().includes(query.trim().toLowerCase())) return false
-      if (category !== 'all' && row.category !== category) return false
-      if (status === 'diff' && !isDifferenceRow(row.kind)) return false
-      return true
-    })
-    return (
-      <div className={css.pluginStack}>
-        {profileNotInit ? <p className={css.pluginBanner} role="status">{t('pluginsProfileNotInitialized')}</p> : null}
-        {total === 0
-          ? <p className={css.dim}>{t('pluginsNoThirdParty')}</p>
-          : (
-            <>
-              {!hasLocal ? <p className={css.hint}>{t('pluginsNoLocalPlugins')}</p> : null}
-              {differenceCount === 0 ? <p className={css.dim}>{t('pluginsNoDiff')}</p> : null}
-
-              <div className={css.pluginToolbar}>
-                <input
-                  className={clsx(css.input, css.pluginSearchInput)}
-                  value={query}
-                  spellCheck={false}
-                  placeholder={t('pluginsSearchPlaceholder')}
-                  aria-label={t('pluginsSearchPlaceholder')}
-                  onChange={event => { setQuery(event.target.value) }}
-                />
-                <div className={css.pluginFilterGroup}>
-                  <span className={css.pluginFilterLabel}>{t('pluginsCatAll')}</span>
-                  {(['all', 'bundle', 'plain', 'client'] as const).map(c => (
-                    <button
-                      key={c}
-                      type="button"
-                      aria-pressed={category === c}
-                      className={clsx(css.pluginPill, category === c && css.pluginPillActive)}
-                      onClick={() => { setCategory(c) }}
-                    >
-                      {c === 'all' ? t('pluginsFilterAll') : t(categoryLabel(c))}
-                    </button>
-                  ))}
-                </div>
-                <div className={css.pluginFilterGroup}>
-                  <span className={css.pluginFilterLabel}>{t('pluginsFilterDiff')}</span>
-                  {(['diff', 'all'] as const).map(s => (
-                    <button
-                      key={s}
-                      type="button"
-                      aria-pressed={status === s}
-                      className={clsx(css.pluginPill, status === s && css.pluginPillActive)}
-                      onClick={() => { setStatus(s) }}
-                    >
-                      {t(s === 'diff' ? 'pluginsFilterDiff' : 'pluginsFilterAll')}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {visibleRows.length === 0
-                ? <p className={css.dim} role="status">{t('pluginsNoMatch')}</p>
-                : (
-                  <div className={clsx(css.pluginRows, css.pluginRowsColsDiff)}>
-                    <div className={clsx(css.pluginRow, css.pluginRowHead)}>
-                      <span className={css.pluginCellName}>{t('pluginsColName')}</span>
-                      <span className={css.pluginCellCat}>{t('pluginsColCategory')}</span>
-                      <span className={css.pluginCellKind}>{t('pluginsColStatus')}</span>
-                      <span className={css.pluginCellSpec}>{t('pluginsLocalCol')}</span>
-                      <span className={css.pluginCellSpec}>{t('pluginsRemoteCol')}</span>
-                    </div>
-                    <div className={css.pluginRowsBody}>
-                      {visibleRows.map(row => renderRow(row))}
-                    </div>
-                  </div>
-                )}
-            </>
-          )}
-      </div>
-    )
-  }
-
-  function renderRow(row: PluginRow): ReactNode {
-    const actionable = isActionable(row.kind)
-    const isExtra = row.kind === 'extra'
-    const isUnsync = row.kind === 'unsyncable'
-    const isChecked = checked.has(row.name)
-    const isUpdate = row.kind === 'update'
-
-    return (
-      <div
-        key={row.name}
-        className={clsx(css.pluginRow, isUnsync && css.pluginRowGray)}
-      >
-        <label className={clsx(css.pluginCell, css.pluginCellName)}>
-          {actionable
-            ? <input type="checkbox" className={css.pluginCheckbox} checked={isChecked} disabled={applying} onChange={() => { toggleRow(row.name) }} />
-            : null}
-          <code className={css.pluginName} title={row.reason ?? row.name}>{row.name}</code>
-        </label>
-        <span className={clsx(css.pluginCell, css.pluginCellCat)}>
-          <span className={clsx(css.pluginKindBadge, row.category === 'bundle' && css.pluginKindBundle, row.category === 'client' && css.pluginKindClient, row.category === 'plain' && css.pluginKindPlain)}>
-            {t(categoryLabel(row.category))}
-          </span>
-        </span>
-        <span className={clsx(css.pluginCell, css.pluginCellKind)}>
-          <span className={clsx(css.pluginKind, isUnsync && css.pluginKindUnsync)}>{t(kindLabel(row.kind))}</span>
-        </span>
-        <span className={clsx(css.pluginCell, css.pluginCellSpec)}>
-          <code className={css.pluginSpec}>{row.localSpec ?? '—'}</code>
-          {row.unlocked ? <span className={css.dim}> {t('pluginsUnlockedLatest')}</span> : null}
-        </span>
-        <span className={clsx(css.pluginCell, css.pluginCellSpec)}>
-          {isUpdate ? <span className={css.pluginArrow}>→</span> : null}
-          <code className={css.pluginSpec}>{row.remoteSpec ?? '—'}</code>
-        </span>
-        {isExtra && isChecked ? <p className={css.pluginRisk}>{t('pluginsRemoveRisk')}</p> : null}
-      </div>
-    )
-  }
-
-  function renderResult(): ReactNode {
-    const r = result
-    return (
-      <div className={css.pluginStack}>
-        {resultError !== null ? <p className={css.error} role="alert">{resultError}</p> : null}
-        {r === null
-          ? null
-          : (
-            <>
-              <p className={css.pluginSummary}>
-                {t('pluginsApplied')} {r.applied} · {t('pluginsFailed')} {r.failed.length} · {t('pluginsSkipped')} {r.skipped}
-              </p>
-              {r.failed.length > 0
-                ? (
-                  <ul className={css.pluginFailedList}>
-                    {r.failed.map(item => (
-                      <li key={item.spec} className={css.pluginFailedItem}>
-                        <code className={css.mono}>{item.spec}</code>
-                        <span className={css.error}>{item.error}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )
-                : null}
-              {r.restarted ? <p className={css.hint}>{t('pluginsRestarted')}</p> : null}
-              {r.deferred ? <p className={css.hint}>{t('pluginsDeferred')}</p> : null}
-              {!r.deferred && !r.restarted && r.applied > 0
-                ? (
-                  <p className={css.pluginWarn}>
-                    {sshSpec !== null && sshSpec.serviceName === null ? t('pluginsRestartUnconfigured') : t('pluginsRestartFailed')}
-                  </p>
-                )
-                : null}
-              {!r.verified ? <p className={css.error} role="alert">{t('pluginsVerifyFailed')}</p> : null}
-              {r.ready === false ? <p className={css.error} role="alert">{t('pluginsReadyFailed')}</p> : null}
-              {r.restarted && r.ready === null && r.readyNote !== undefined
-                ? <p className={css.hint}>{r.readyNote}</p>
-                : null}
-            </>
-          )}
-      </div>
-    )
-  }
-
-  /** The ssh installed-plugins list (semantics preserved from the sync modal:
-   *  per-row remove + the「撤销最近变更」toolbar entry). */
-  function renderRemoteList(): ReactNode {
-    if (phase === 'loading' || phase === 'error') return renderSyncView()
     if (remoteManifest === null) return <p className={css.dim}>{t('pluginsLoading')}</p>
-    // 远端行集同样来自 desktop main 的投影，但只覆盖远端 profile 自己的依赖（B₀/S 不造行）。
-    // ssh 的 F 无远端来源 ⇒ 集合退到 B₀ ∪ S，官方 scope 的装面由写面保守拒绝，不是读面标 protected。
-    const rows = projectInstalledRows(remoteManifest.dependencies, pluginRowsOf(remoteManifest)).rows
-    const opBusy = remoteRemoveBusy || undoBusy
-    const opsBlocked = opBusy || applying || seedBusy || restartBusy || installing || folderBusy
-    const statusTone = remoteListStatus?.tone
+    // 远端行集来自 desktop main 的投影，只覆盖远端 profile 自己的依赖（B₀/S 不造行）。
+    const rows = projectInstalledRows(remoteManifest.dependencies, pluginRowsOf(remoteManifest))
     return (
       <div className={css.pluginStack}>
         {profileNotInit ? <p className={css.pluginBanner} role="status">{t('pluginsProfileNotInitialized')}</p> : null}
-        <div className={css.pluginToolbar}>
-          <Button variant="ghost" size="sm" disabled={opsBlocked} onClick={() => { void doUndo() }}>
-            {t('undoAvailable')}
-          </Button>
-        </div>
-        {remoteListStatus !== null
-          ? (
-            <p className={remoteStatusClass(statusTone ?? 'ok')} role={statusTone === 'error' ? 'alert' : 'status'}>
-              {remoteListStatus.text}
-            </p>
-          )
-          : null}
         {profileNotInit
           ? null
           : rows.length === 0
-            ? (
-              <>
-                <p className={css.pluginEmptyLead}>{t('installedEmpty')}</p>
-                <p className={css.dim}>{t('installedAddHint')}</p>
-              </>
-            )
+            ? <p className={css.pluginEmptyLead}>{t('installedEmpty')}</p>
             : (
               <div className={clsx(css.pluginRows, css.pluginRowsColsRemote)}>
                 <div className={clsx(css.pluginRow, css.pluginRowHead)}>
                   <span className={css.pluginCellName}>{t('pluginsColName')}</span>
                   <span className={css.pluginCellSpec}>{t('pluginsRemoteCol')}</span>
-                  <span className={css.pluginCellAction}>{t('pluginsColAction')}</span>
                 </div>
-                <div className={css.pluginRowsBody} aria-busy={opsBlocked}>
+                <div className={css.pluginRowsBody}>
                   {rows.map(row => (
-                    <Fragment key={row.name}>
-                      <div className={css.pluginRow}>
-                        <label className={clsx(css.pluginCell, css.pluginCellName)}>
-                          <code className={css.pluginName}>{row.name}</code>
-                          {roleBadge(row)}
-                          {protectedHint(row)}
-                        </label>
-                        <span className={clsx(css.pluginCell, css.pluginCellSpec)}>
-                          {installedSpecCell(row)}
-                        </span>
-                        {rowActionCell(row, opsBlocked, () => { setRemoteRemoveTarget(row.name) })}
-                      </div>
-                      {remoteRowErrors[row.name] !== undefined
-                        ? <p className={css.error} role="alert">{remoteRowErrors[row.name]}</p>
-                        : null}
-                    </Fragment>
+                    <div key={row.name} className={css.pluginRow}>
+                      <span className={clsx(css.pluginCell, css.pluginCellName)}>
+                        <code className={css.pluginName}>{row.name}</code>
+                        {roleBadge(row)}
+                        {protectedHint(row)}
+                      </span>
+                      <span className={clsx(css.pluginCell, css.pluginCellSpec)}>
+                        {installedSpecCell(row)}
+                      </span>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -1824,262 +838,94 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     )
   }
 
-  /** ssh 统一主视图：已安装列表 + 添加区，与 gateway/local 骨架同构；legacy 整盘 diff
-   *  折叠为「对账」次级入口（rows/filter/apply/undo 语义逐字保留，仅默认收起）。 */
   const sshZone = isSsh
-    ? ((): ReactNode => {
-      const diffCount = diff === null ? 0 : diff.rows.filter(row => isDifferenceRow(row.kind)).length
-      // 收起时若处于 done（应用成功但 diff/清单尚未重载），先重载再折叠，主视图不陈旧。
-      const toggleDiff = (): void => {
-        if (diffOpen) {
-          setDiffOpen(false)
-          if (phase === 'done') void loadSync(true)
-        } else {
-          setDiffOpen(true)
-        }
-      }
-      return (
-        <div className={css.pluginStack}>
-          <p className={css.pluginChamberTitle}>{t('installedTab')}</p>
-          {diffCount > 0 || diffOpen ? (
-            <div className={css.pluginToolbar}>
-              <button
-                type="button"
-                className={clsx(css.pluginPill, diffOpen && css.pluginPillActive)}
-                disabled={applying || (phase !== 'ready' && phase !== 'done')}
-                aria-expanded={diffOpen}
-                onClick={toggleDiff}
-              >
-                {diffOpen ? t('pluginsDiffCollapse') : t('pluginsDiffSummary').replace('{n}', String(diffCount))}
-              </button>
-            </div>
-          ) : null}
-          {diffOpen && phase !== 'loading' && phase !== 'error' ? renderSyncView() : null}
-          {renderRemoteList()}
-          {addSection}
-        </div>
-      )
-    })()
+    ? (
+      <div className={css.pluginStack}>
+        <p className={css.pluginChamberTitle}>{t('installedTab')}</p>
+        {renderRemoteList()}
+      </div>
+    )
     : null
 
   const footer = ((): ReactNode => {
     if (isLocal) return undefined
     if (isSsh) {
-      if (phase === 'loading') return undefined
-      if (phase === 'error') {
-        return <Button variant="ghost" icon={<IconRefreshOutline16 />} onClick={() => { void loadSync(); onRecheckDiagnostic?.() }}>{t('pluginsRetry')}</Button>
-      }
-      if (phase === 'applying') {
-        return <Button variant="outline" disabled>{t('busyTasks')}</Button>
-      }
-      if (phase === 'done') {
-        return <Button variant="ghost" icon={<IconRefreshOutline16 />} onClick={() => { void loadSync(); onRecheckDiagnostic?.() }}>{t('pluginsRefresh')}</Button>
-      }
-      if (!diffOpen) return undefined
+      if (sshPhase === 'loading') return undefined
       return (
-        <>
-          <Button variant="outline" onClick={close}>{t('cancel')}</Button>
-          <Button variant="primary" disabled={changeCount === 0 || seedBusy || restartBusy || undoBusy || remoteRemoveBusy || installing || folderBusy} onClick={onApplyClick}>
-            {t('pluginsApply')} {changeCount > 0 ? `${changeCount}` : ''}
-          </Button>
-        </>
+        <Button variant="ghost" icon={<IconRefreshOutlineRegular />} onClick={() => { void loadRemoteList(); onRecheckDiagnostic?.() }}>
+          {sshPhase === 'error' ? t('pluginsRetry') : t('pluginsRefresh')}
+        </Button>
       )
     }
-    // gateway / http-direct
+    // gateway / http-direct: a read refresh only.
     if (viewPhase === 'loading') return undefined
     return (
-      <>
-        <Button
-          variant="ghost"
-          icon={<IconRefreshOutline16 />}
-          disabled={reloading || installing || folderBusy || restarting || syncing || removeBusy}
-          onClick={() => { setReloadNonce(n => n + 1) }}
-        >
-          {viewPhase === 'error' ? t('pluginsRetry') : t('pluginsRefresh')}
-        </Button>
-        {isGateway
-          ? (
-            <Button variant="outline" disabled={restarting || syncing || removeBusy || installing || folderBusy} onClick={() => { void restartManagedDsh() }}>
-              {restarting ? t('restartManagedDshBusy') : t('restartApplyInPanel')}
-            </Button>
-          )
-          : null}
-      </>
+      <Button
+        variant="ghost"
+        icon={<IconRefreshOutlineRegular />}
+        disabled={reloading}
+        onClick={() => { setReloadNonce(n => n + 1) }}
+      >
+        {viewPhase === 'error' ? t('pluginsRetry') : t('pluginsRefresh')}
+      </Button>
     )
   })()
 
   return (
-    <>
-      <Modal
-        open
-        onClose={close}
-        title={title}
-        closeLabel={t('close')}
-        className={css.dialog}
-        contentClassName={css.dialogContent}
-        footer={footer}
-      >
-        {diagnosticBanner !== null
-          ? (
-            <p
-              className={clsx(
-                css.pluginDiagnostic,
-                css.pluginDiagnosticDetail,
-                diagnostic !== undefined && pluginDiagnosticTone(diagnostic.state) === 'problem' ? css.pluginDiagnosticProblem : css.pluginDiagnosticInfo,
-              )}
-              role="status"
-            >
-              <strong>{diagnosticBanner.title}</strong>
-              {diagnosticBanner.detail !== null ? <span>{t('partialSep')}{diagnosticBanner.detail}</span> : null}
-            </p>
-          )
-          : null}
-        {bootGap !== undefined
-          ? (
-            <>
-              <p className={clsx(css.pluginDiagnostic, css.pluginDiagnosticDetail, css.pluginDiagnosticWarn)} role="status">
-                <strong>{t('bootGapLabel')}：{bootGapText(bootGap, t)}</strong>
-                {/* Services already ride the sentence; only the failed-id list is appended (sentence = count, span = ids). */}
-                {(bootGap.failedIds ?? []).length > 0 ? <span>{t('partialSep')}{(bootGap.failedIds ?? []).join(', ')}</span> : null}
-              </p>
-              <p className={css.hint}>{t('bootGapHint')}</p>
-            </>
-          )
-          : null}
-        {diagnostic !== undefined && diagnostic.state === 'instance-version-conflict' && (isLocal || isGateway)
-          ? <p className={css.hint}>{t('pluginDiagnosticVersionConflictHint')}</p>
-          : null}
-        {(isGateway || isHttp) && restartNote !== null
-          ? restartNote.tone === 'error'
-            ? <p className={css.error} role="alert">{restartNote.text}</p>
-            : <p className={css.hint} role="status">{restartNote.text}</p>
-          : null}
-        {/* Loader 读失败横幅：gateway 任何非 loading 相位都显示；http 直连仅 reload 失败
-            （首载错误已在 httpZone 内渲染，避免重复）。 */}
-        {isGateway && viewError !== null && viewPhase !== 'loading'
-          ? <p className={css.error} role="alert">{viewError}</p>
-          : isHttp && viewError !== null && viewPhase === 'ready'
-            ? <p className={css.error} role="alert">{viewError}</p>
-            : null}
-
-        <div className={css.pluginManageSections}>
-          {/* 恢复面置顶：实例停机时打开对话框的主目标是恢复。 */}
-          {recoveryZone}
-
-          {chamberZone}
-
-          {isSsh ? sshZone : null}
-          {isLocal ? localZone : null}
-          {isGateway ? gatewayZone : null}
-          {isHttp ? httpZone : null}
-        </div>
-      </Modal>
-
-      <Modal
-        open={confirmRemove}
-        onClose={() => { setConfirmRemove(false) }}
-        title={t('pluginsApplyTitle')}
-        closeLabel={t('close')}
-        description={removeRows.length === 1 ? t('pluginsRemoveRisk') : t('pluginsRemoveRiskN').replace('{n}', String(removeRows.length))}
-        className={css.deleteDialog}
-        footer={(
-          <>
-            <Button variant="outline" autoFocus onClick={() => { setConfirmRemove(false) }}>{t('cancel')}</Button>
-            <Button variant="outline" className={css.deleteConfirm} onClick={onRemoveConfirm}>{t('pluginsConfirmRemove')}</Button>
-          </>
-        )}
-      />
-
-      <Modal
-        open={confirmApply}
-        onClose={() => { setConfirmApply(false) }}
-        title={t('pluginsApplyTitle')}
-        closeLabel={t('close')}
-        description={isSsh && sshSpec !== null && sshSpec.serviceName === null ? t('pluginsRestartUnconfiguredHint') : t('pluginsRestartWarning')}
-        className={css.dialog}
-        footer={(
-          <>
-            <Button variant="outline" autoFocus onClick={() => { setConfirmApply(false) }}>{t('cancel')}</Button>
-            <Button variant="primary" onClick={onApplyConfirm}>{t('pluginsApply')}</Button>
-          </>
-        )}
-      >
-        <label className={css.pluginDeferRow}>
-          <input type="checkbox" checked={!restart} onChange={event => { setRestart(!event.target.checked) }} />
-          <span>{t('pluginsDeferRestart')}</span>
-        </label>
-      </Modal>
-
-      <Modal
-        open={localRemoveTarget !== null}
-        onClose={() => { if (!localRemoveBusy) setLocalRemoveTarget(null) }}
-        title={t('pluginsLocalRemoveTitle')}
-        closeLabel={t('close')}
-        description={t('pluginsLocalRemoveDescription')}
-        className={css.deleteDialog}
-        footer={(
-          <>
-            <Button variant="outline" autoFocus disabled={localRemoveBusy} onClick={() => { setLocalRemoveTarget(null) }}>{t('cancel')}</Button>
-            <Button variant="outline" className={css.deleteConfirm} disabled={localRemoveBusy} onClick={() => { void confirmLocalRemove() }}>
-              {localRemoveBusy ? t('pluginsRemoving') : t('pluginsConfirmRemove')}
-            </Button>
-          </>
-        )}
-      />
-
-      {/* Per-row remove confirm on the ssh installed list: mirrors the local-remove pattern; the same 重启生效 checkbox state as the sync apply flow governs the restart. */}
-      <Modal
-        open={remoteRemoveTarget !== null}
-        onClose={() => { if (!remoteRemoveBusy) setRemoteRemoveTarget(null) }}
-        title={t('removeRowConfirmTitle')}
-        closeLabel={t('close')}
-        description={isSsh && sshSpec !== null && sshSpec.serviceName === null
-          ? t('removeRowConfirmUnconfiguredDescription').replace('{name}', remoteRemoveTarget ?? '')
-          : t('removeRowConfirmDescription').replace('{name}', remoteRemoveTarget ?? '')}
-        className={css.deleteDialog}
-        footer={(
-          <>
-            <Button variant="outline" autoFocus disabled={remoteRemoveBusy} onClick={() => { setRemoteRemoveTarget(null) }}>{t('cancel')}</Button>
-            <Button variant="outline" className={css.deleteConfirm} disabled={remoteRemoveBusy} onClick={() => { void confirmRemoteRemove() }}>
-              {remoteRemoveBusy ? t('pluginsRemoving') : t('pluginsConfirmRemove')}
-            </Button>
-          </>
-        )}
-      >
-        <label className={css.pluginDeferRow}>
-          <input type="checkbox" checked={!restart} disabled={remoteRemoveBusy} onChange={event => { setRestart(!event.target.checked) }} />
-          <span>{t('pluginsDeferRestart')}</span>
-        </label>
-      </Modal>
-
-      {/* Row-remove confirm (gateway): the per-row remove keeps its main-process confirm; the recovery undo does NOT ride this modal — it is a RESTORE posted to /chamber/plugins/undo. */}
-      {isGateway
+    <Modal
+      open
+      onClose={close}
+      title={title}
+      closeLabel={t('close')}
+      className={css.dialog}
+      contentClassName={css.dialogContent}
+      footer={footer}
+    >
+      {diagnosticBanner !== null
         ? (
-          <Modal
-            open={removeTarget !== null}
-            onClose={() => { if (!removeBusy) setRemoveTarget(null) }}
-            title={t('removeRowConfirmTitle')}
-            closeLabel={t('close')}
-            description={t('removeRowConfirmDescription').replace('{name}', removeTarget ?? '')}
-            className={css.deleteDialog}
-            footer={(
-              <>
-                <Button variant="outline" autoFocus disabled={removeBusy} onClick={() => { setRemoveTarget(null) }}>
-                  {t('cancel')}
-                </Button>
-                <Button
-                  variant="outline"
-                  className={css.deleteConfirm}
-                  disabled={removeBusy}
-                  onClick={() => { if (removeTarget !== null) void applyRemove(removeTarget) }}
-                >
-                  {removeBusy ? t('pluginsRemoving') : t('pluginsConfirmRemove')}
-                </Button>
-              </>
+          <p
+            className={clsx(
+              css.pluginDiagnostic,
+              css.pluginDiagnosticDetail,
+              diagnostic !== undefined && pluginDiagnosticTone(diagnostic.state) === 'problem' ? css.pluginDiagnosticProblem : css.pluginDiagnosticInfo,
             )}
-          />
+            role="status"
+          >
+            <strong>{diagnosticBanner.title}</strong>
+            {diagnosticBanner.detail !== null ? <span>{t('partialSep')}{diagnosticBanner.detail}</span> : null}
+          </p>
         )
         : null}
-    </>
+      {bootGap !== undefined
+        ? (
+          <>
+            <p className={clsx(css.pluginDiagnostic, css.pluginDiagnosticDetail, css.pluginDiagnosticWarn)} role="status">
+              <strong>{t('bootGapLabel')}：{bootGapText(bootGap, t)}</strong>
+              {/* Services already ride the sentence; only the failed-id list is appended (sentence = count, span = ids). */}
+              {(bootGap.failedIds ?? []).length > 0 ? <span>{t('partialSep')}{(bootGap.failedIds ?? []).join(', ')}</span> : null}
+            </p>
+            <p className={css.hint}>{t('bootGapHint')}</p>
+          </>
+        )
+        : null}
+      {diagnostic !== undefined && diagnostic.state === 'instance-version-conflict' && (isLocal || isGateway)
+        ? <p className={css.hint}>{t('pluginDiagnosticVersionConflictHint')}</p>
+        : null}
+      {/* Loader 读失败横幅：gateway 任何非 loading 相位都显示；http 直连仅 reload 失败
+          （首载错误已在 httpZone 内渲染，避免重复）。 */}
+      {isGateway && viewError !== null && viewPhase !== 'loading'
+        ? <p className={css.error} role="alert">{viewError}</p>
+        : isHttp && viewError !== null && viewPhase === 'ready'
+          ? <p className={css.error} role="alert">{viewError}</p>
+          : null}
+
+      <div className={css.pluginManageSections}>
+        {chamberZone}
+        {sshZone}
+        {localZone}
+        {gatewayZone}
+        {httpZone}
+      </div>
+    </Modal>
   )
 }
