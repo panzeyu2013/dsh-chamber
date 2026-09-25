@@ -396,6 +396,22 @@ test('runEntries: an unanswered child is killed at timeoutMs and fails as ETIMED
   }
 })
 
+test('evaluateChildRun names the real failure mode: timeout/overflow are not 无法启动', () => {
+  const timedOut = evaluateChildRun('x.test.ts', { error: Object.assign(new Error('ETIMEDOUT'), { code: 'ETIMEDOUT' }) })
+  assert.equal(timedOut.ok, false)
+  assert.match(timedOut.reason, /按文件超时/u)
+  assert.doesNotMatch(timedOut.reason, /无法启动/u, 'a killed-but-started child is not a launch failure')
+
+  const overflowed = evaluateChildRun('x.test.ts', { error: Object.assign(new Error('maxBuffer exceeded'), { code: 'ENOBUFS' }) })
+  assert.equal(overflowed.ok, false)
+  assert.match(overflowed.reason, /输出超限/u)
+  assert.doesNotMatch(overflowed.reason, /无法启动/u)
+
+  const notSpawned = evaluateChildRun('x.test.ts', { error: Object.assign(new Error('spawn node ENOENT'), { code: 'ENOENT' }) })
+  assert.equal(notSpawned.ok, false)
+  assert.match(notSpawned.reason, /无法启动/u, 'only a genuine launch error keeps that wording')
+})
+
 test('manifestLockstepProblems: a whole manifest passes and every defect is named', () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-manifest-lockstep-'))
   try {

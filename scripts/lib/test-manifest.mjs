@@ -368,6 +368,21 @@ export function parseReportedTotals(output) {
  */
 export function evaluateChildRun(file, result, allowlist = [], { requireNoSkips = false, guard = 'executed' } = {}) {
   if (result.error !== undefined && result.error !== null) {
+    // Name the real failure mode. A per-file timeout and an output overflow both
+    // kill a child that DID start (its transcript is right above); reporting them
+    // as 无法启动 sent the host-lifecycle flake investigation after a spawn bug
+    // that did not exist. Only a genuine launch error keeps that wording.
+    const code = typeof result.error.code === 'string' ? result.error.code : ''
+    if (code === 'ETIMEDOUT') {
+      return {
+        ok: false,
+        reason: '按文件超时（ETIMEDOUT）：文件在预算内未退出，子进程已被 SIGTERM/SIGKILL 收尾'
+          + '——上方的 ✖ 可能无详情（node:test 的失败详情随进程被杀而丢失），先查泄漏的句柄/子进程',
+      }
+    }
+    if (code === 'ENOBUFS') {
+      return { ok: false, reason: '输出超限（ENOBUFS）：子进程输出溢出，已被 SIGKILL' }
+    }
     return { ok: false, reason: '无法启动：' + String(result.error.message ?? result.error) }
   }
   if (result.status !== 0) {
