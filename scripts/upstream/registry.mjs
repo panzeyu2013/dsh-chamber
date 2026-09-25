@@ -312,7 +312,14 @@ export function validateRegistry(registry) {
   for (const path of named) if (!chamberEntries.includes(path)) push(`chamberNamedForks 列出的 ${path} 不是 versionAnchor=chamber 的条目`)
   for (const path of chamberEntries) if (!named.includes(path)) push(`versionAnchor=chamber 的条目 ${path} 未登记进 chamberNamedForks`)
   for (const entry of registry.entries) {
-    if (named.includes(entry.ours) && entry.type !== 'seed') push(`chamberNamedForks 的 ${entry.ours} 必须是 type=seed（升级预检按 type 过滤 fork 面）`)
+    // chamber-named fork 面 = 不覆盖上游包名的分类条目；type 描述它是哪一种：
+    // fork（上游派生的 chamber 名 fork，如两个 UI fork）或 seed（播种进实例的宿主包，
+    // 如 seed-open-in）。两者都必须是分类条目，否则 C1/C3 不遍历它（覆盖面静默消失）。
+    // 升级预检的 shadow fork 面过滤条件是 `type === 'fork' && versionAnchor !== 'chamber'`，
+    // 故 versionAnchor=chamber 的条目（两种 type 都是）不会被误当 shadow 副本对拍。
+    if (named.includes(entry.ours) && !CLASSIFIED_TYPES.includes(entry.type)) {
+      push(`chamberNamedForks 的 ${entry.ours} 必须是分类条目（type=fork|seed——否则 C1/C3 覆盖不到）`)
+    }
   }
 
   return findings

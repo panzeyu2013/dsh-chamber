@@ -41,6 +41,16 @@ test('新增不变量：shadow/chamber-named 二选一、判据下限、退役�
   retyped.chamberNamedForks = []
   assert.ok(validateRegistry(retyped).some((message) => message.includes('恰好属于一类')), 'seed 改型 + 清空 chamberNamedForks 必须红')
 
+  // 触点补登：chamber-named fork 可以是 type=fork（两个 UI fork），合法；
+  // 但不得借未分类类型（seam/mirror/artifact/seat）绕过 C1/C3 —— 那等于覆盖静默消失。
+  assert.deepEqual(validateRegistry(clone()), [], 'chamber-named 的 fork 条目（UI 两项）必须合法')
+  const namedSeat = clone()
+  namedSeat.entries[5].type = 'seat'
+  assert.ok(
+    validateRegistry(namedSeat).some((message) => message.includes('分类条目')),
+    'chamberNamedForks 里的条目改成未分类类型必须红',
+  )
+
   const emptied = clone()
   emptied.criteriaCodeOnly = [...new Set([...emptied.criteriaCodeOnly, ...emptied.entries[0].criteria])]
   emptied.entries[0].criteria = []
@@ -72,7 +82,7 @@ test('registry 值锁：分类桶形状 + 符号锚字符串（防"同计数下�
   // ownPrefix 1 / dropped 11（frame 面深引 vendor 源、不镜像；死 tsdown.config.ts 由 P6 删除后归 dropped）。
   assert.equal(
     createHash('sha256').update(JSON.stringify(shape)).digest('hex').slice(0, 16),
-    '71684da74a7a0fa8',
+    '6c5284a6beff8edd',
     '分类桶形状变了（桶间搬家或增删文件）——必须同批改本断言的哈希；当前形状：' + JSON.stringify(shape),
   )
   assert.deepEqual(
@@ -95,6 +105,7 @@ test('registry 值锁：分类桶形状 + 符号锚字符串（防"同计数下�
       'src/client/store-core.ts#createLayoutStore',
       'src/client/stores.ts#trackLayoutInstance',
       'src/client/theme-cache.ts#resolveSourceThemeCache',
+      'src/client/SidebarRoot.tsx#SidebarRoot',
       'packages/renderer/src/source-mux-facts.ts#parseProjectedGoalFact',
       'src/session-state-protocol.ts#SessionStateGoalActivationEvent',
       'src/session-state-protocol.ts#SessionStateGoalFact',
@@ -111,20 +122,22 @@ test('判据分区：entries.criteria ∪ criteriaCodeOnly == C1–C16，不重�
 
 test('verifierForks 与迁移前内嵌 FORKS 同形：顺序、路径、分类计数、版本锚', () => {
   const forks = verifierForks(registry)
-  assert.deepEqual(forks.map((fork) => fork.name), ['connection', 'client-web', 'api-gateway', 'seed-open-in', 'layout'])
+  assert.deepEqual(forks.map((fork) => fork.name), ['connection', 'client-web', 'api-gateway', 'seed-open-in', 'layout', 'ui-sidebar'])
   assert.deepEqual(forks.map((fork) => fork.rel), [
     'packages/dsh-client-connection',
     'packages/dsh-client-web',
     'packages/dsh-api-gateway',
     'packages/dsh-chamber-seed-open-in',
     'packages/dsh-chamber-client-ui-layout',
+    'packages/dsh-chamber-client-ui-sidebar',
   ])
   assert.deepEqual(
     forks.map((fork) => [Object.keys(fork.patched).length, Object.keys(fork.own).length, fork.ownPrefix.length, fork.dropped.length]),
-    [[10, 4, 4, 2], [9, 3, 1, 5], [7, 7, 1, 9], [4, 4, 1, 6], [5, 5, 1, 11]],
+    [[10, 4, 4, 2], [9, 3, 1, 5], [7, 7, 1, 9], [4, 4, 1, 6], [5, 5, 1, 11], [11, 1, 3, 4]],
   )
   assert.equal(forks[3].versionAnchor, 'chamber')
   assert.equal(forks[4].versionAnchor, 'chamber')
+  assert.equal(forks[5].versionAnchor, 'chamber')
   for (const fork of forks.slice(0, 3)) assert.equal(fork.versionAnchor, undefined)
 })
 
@@ -171,7 +184,7 @@ test('校验器抓退化：未知判据 / 分区缺口 / accepted 缺理由 / up
 
 test('符号锚下限：每个 fork/seed 至少一条，且总数被 pin（清空探针 = 测试红）', () => {
   const total = registry.entries.reduce((sum, entry) => sum + (entry.symbols ?? []).length, 0)
-  assert.equal(total, 20, '符号锚总数是 golden：增删锚点必须同批改本断言（D15 机械化方向不可被清空）')
+  assert.equal(total, 21, '符号锚总数是 golden：增删锚点必须同批改本断言（D15 机械化方向不可被清空）')
   for (const entry of registry.entries) {
     if (entry.type === 'fork' || entry.type === 'seed') assert.ok(entry.symbols.length >= 1, entry.id + ' 缺符号锚')
   }
