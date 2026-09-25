@@ -691,6 +691,75 @@ API（或 NSView 回调对网页菜单确实生效）时，重评「覆写项集
 规则一致：`packages/renderer/src/locales.ts` 的 zh 字典即简体），未覆盖的系统框架/Sparkle 则按系统
 zh-Hant 显示；简繁混排是否可接受需实机判断，若要收口须先决定是否随包 zh-Hant。
 
+### 5.4 原生崩溃最小诊断（替代 Crashpad）
+
+升级计划的 P0「原生崩溃最小诊断」（见 `docs/progress/todo/main-0.1.5-to-0.1.7-upgrade.md` §7.1/§12.2）：**不引入任何第三方依赖**（明确不做
+Crashpad），原生壳自己给出「闪退后可考古、可给出原因」的最小面。落点全在
+`<userData>/logs/`（与 `native-shell.log` 同目录同权限纪律）：
+
+- **记录**：`shell-crash.log` 一行一条（UTC 时间 / `kind=signal|exception` /
+  信号或异常名 / bundle 短版本 / pid），例
+  `[2023-11-14T22:13:20Z] kind=signal name=SIGSEGV signo=11 pid=4242 version=0.16.0`。
+  `CrashDiagnostics.formatRecord` 是纯函数，处理器的手写路径与它逐字节锁步
+  （用例以同一 epoch 断言两者相等）。处理器侧的 UTC 换算 = `utcCivilDate` 的
+  **纯整数 civil-date**（B3）：不经任何 libc 时间函数，`gmtime_r` 不在
+  async-signal-safe 名单里。
+- **标记**：`shell-crash.marker` 存在 ⇒ 上次进程未走正常退出路径。启动期消费 =
+  一行 `shellLog`（含记录路径与最近一条记录行 ⇒ 「闪退后日志能给出原因」），随后
+  清除；`applicationWillTerminate`（正常退出）也清除。标记写入与记录叶子共用同一
+  纪律：`open(O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW|O_NONBLOCK)` 后 `fstat` 判
+  `S_IFREG && nlink == 1`（B5；`lstat`/`ftruncate` 不在安全名单，故顺序是
+  open→fstat，O_TRUNC 的残余已登记在 `openMarkerLeaf`）。启动期清除失败必须
+  **loud** 一行（路径 + 后果 + 手动删除动作，B6），否则标记清不掉时每次启动都会
+  重复报告同一条旧崩溃而无人能分辨。
+- **覆盖**：`NSSetUncaughtExceptionHandler` + SIGSEGV/SIGABRT/SIGBUS/SIGILL/
+  SIGFPE/SIGTRAP。
+- **信号上下文纪律**（本节硬约束）：处理器内只做 async-signal-safe 的事——记录 body
+  在**安装期**预格式化为字节，崩溃时刻只把 epoch 用 `time(2)` + **纯整数 civil-date
+  换算**（`utcCivilDate`，B3：`gmtime_r` 不在 `man 2 sigaction` 名单内）+
+  手写定宽十进制写进定长栈缓冲，随后 `write(2)` 直写日志叶子、
+  `open`+`fstat`+`write`+`close` 建标记；绝不做 Swift 分配 / String 插值 / 锁 /
+  FileManager / ObjC 消息。
+  写完记录恢复 `SIG_DFL` 并重发信号——**绝不吞信号**，系统 DiagnosticReports 的
+  原生报告面保持不变。异常处理器链回安装前的处理器；异常路径已写过记录时信号
+  处理器不再写第二条（否则标记里只剩 SIGABRT）。release 反汇编可验：`emitSignal` /
+  `handleSignal` 只调 `renderTimestampPrefix`（纯整数换算）/ `write`/`open`/
+  `fstat`/`close`/`time`/`signal`/`raise`，无任何分配/retain/ObjC 调用。**未捕获异常处理器是另一类上下文**（ObjC
+  异常展开路径）：读 `NSException.name` 必然经 ObjC 属性桥接，无法零分配；它同样
+  不做 String 插值/Formatter/锁，写路径与信号处理器共用（`writeRecord`）。
+- **叶子复用**：`ShellLog.openSignalSafeLeaf` 与实例写路径共用同一套纪律
+  （目录 0700、叶子 0600、目录与叶子符号链接拒绝、lstat + `open(O_NOFOLLOW|
+  O_NONBLOCK|O_APPEND)` + fstat 三段常规文件判据），但返回裸 fd 供信号上下文使用。
+  唯一差异 = 轮转：信号上下文不做 rename 轮转，改为安装期按上限清零——单份有界
+  日志保留最近一次崩溃。
+- **可测性**：安装注入 seam（打开器 / 异常处理器安装器 / sigaction 安装器 / 上一
+  处理器），标记读写注入 IO；处理器核心以固定 epoch 直调（不真发信号——真发会杀掉
+  测试进程）。
+- **不做**（页面面不变）：Crashpad、任何上报（网络）、设置页展示——把「上次异常
+  退出」投影到页面需要新的页面/桥面契约（C 分层），本项只写 `shellLog` 与日志文件。
+- **已知边界**：SIGKILL/断电等不可捕获路径不写标记（下次启动不会报告）；诊断写
+  失败一律静默降级（绝不成为新的致命面）。
+
+**已否决的替代方案**：
+
+- **Crashpad / 任一第三方崩溃 SDK**（§8.c 已裁）：新增运行时依赖 + 自带上报面，
+  与「不新增依赖」红线冲突；最小诊断已满足「闪退后日志能给出原因」的收口判据。
+- **在处理器里用 Swift String/Array/Formatter 格式化记录**：崩溃时分配器与锁状态
+  未知，可能死锁或二次崩溃；改为安装期预格式化 + 定长栈缓冲手写时间戳。
+- **处理器内做 `native-shell.log` 式 rename 轮转**：会把记录搬去 `.1`，启动期读
+  「最近一条」就落空，且徒增信号上下文里的文件系统操作；改为安装期清零。
+- **处理器写完就 `_exit`（或吞掉信号）**：会丢掉系统 DiagnosticReports 的原生崩溃
+  报告（§5 E17 依赖它）；改为恢复 `SIG_DFL` + `raise`。
+- **设置页展示「上次异常退出」**：需要新桥面/页面契约（C 分层：页面面不变），本期
+  不做；展示内容先由 `shellLog` 与日志文件承载。
+- **在处理器里继续用 `gmtime_r`（或任何不在 `man 2 sigaction` 名单里的 libc 调用）**：
+  与文件头/本节的「只做 async-signal-safe」声明矛盾，release 反汇编也不再是那串
+  白名单调用；改为纯整数 civil-date 换算（逐字节锁步用例保留）。未来若要新增
+  处理器调用，先核对名单再更新本节与文件头的调用清单。
+- **启动期清除标记失败保持静默**：标记清不掉时每次启动都会重复报告同一条旧崩溃，
+  用户与日志无法区分「又崩了一次」和「上次标记没删掉」；改为 loud 一行失败
+  （路径 + 后果 + 手动删除），崩溃报告行本身照常返回。
+
 ## 6. 数据、状态兼容与共存
 
 ### 6.1 userData 目录

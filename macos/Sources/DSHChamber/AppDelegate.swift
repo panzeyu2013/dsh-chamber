@@ -47,6 +47,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var awaitingTerminateReply = false
     /// SIGTERM/SIGINT 的 DispatchSource（必须常驻持有，否则信号监听失效）。
     private var signalSources: [DispatchSourceSignal] = []
+    /// 原生崩溃最小诊断的安装结果（正常退出时据此清「上次异常退出」标记）。
+    private var crashDiagnostics: CrashDiagnostics.Installation?
     /// 托盘状态项（Electron Tray 对偶：显示窗口 / 退出）。
     private var statusItem: NSStatusItem?
     /// 托盘菜单中需要随运行期语言切换的两个文案项（installStatusItem 保存；
@@ -147,6 +149,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 时间点只能靠外部测量，NSApplication 之前的时段不可测）。顺序契约：sidecar.log
         // 必须先配置，这条 boot 时间线才会落进它。
         shellLog(ShellPerf.bootLine("logConfigured"))
+        // 原生崩溃最小诊断（替代 Crashpad，不引入依赖）：
+        // ① 先消费上次的「异常退出」标记（存在 → 一行 shellLog 含记录路径与最近一条
+        //    记录，随后清除）——必须在安装之前，否则本次安装会把上次的标记当成自己的；
+        // ② 再安装未捕获异常/信号处理器（记录与标记都落 <userData>/logs/，叶子走
+        //    ShellLog.openSignalSafeLeaf 的同一套目录/权限/常规文件判据）。
+        // 失败静默（install 不抛错）：诊断绝不成为新的致命面。
+        CrashDiagnostics.reportPreviousCrashIfNeeded(userDataDir: stateDir)
+        crashDiagnostics = CrashDiagnostics.install(userDataDir: stateDir)
         // ① Node 路径：DSH_CHAMBER_SHELL_NODE_BIN（须可执行）→ 装配态自带
         //    <Resources>/sidecar/node（须可执行）→ dev PATH node。皆无 →
         //    fatal（绝不 spawn 裸 node，也绝不拿另一个 app 的 Electron 二进制顶替）。
@@ -598,6 +608,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationWillTerminate(_ notification: Notification) {
         shellLog("[shell] applicationWillTerminate：停止 bridge（Supervisor 回收进程 + 释放目录锁）")
+        // 正常退出清除「上次异常退出」标记（崩溃处理器只在异常路径写它；
+        // SIGKILL/断电这类不可捕获路径不会写标记，见 CrashDiagnostics 头注释）。
+        crashDiagnostics?.clearMarker()
         if let supervisor {
             supervisor.stop()
         } else {

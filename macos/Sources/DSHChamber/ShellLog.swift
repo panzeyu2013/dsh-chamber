@@ -36,7 +36,7 @@ public final class ShellLog {
     ///
     /// `[sidecar] <line>` 只透传到 app 的 stderr 不够：打包态从 Finder/Dock
     /// 启动时 stdout/stderr 不落盘（`log show --predicate
-    /// 'process == "dsh-chamber"'` 无输出），控制面最有价值的归因行
+    /// 'process == "DSHChamber"'` 无输出），控制面最有价值的归因行
     /// （`WebSocket stream <id> closed (<cause>, Nms)`、`heartbeat lost after N
     /// unanswered ping(s)`）会丢失，事故只能靠猜。
     ///
@@ -81,18 +81,23 @@ public final class ShellLog {
         return formatter
     }()
 
-    /// 日志文件路径规则：<userData>/logs/shell.log（纯函数，单测直测）。
-    public static func fileURL(userDataDir: String) -> URL {
+    /// 日志叶子路径规则：<userData>/logs/<fileName>（纯函数，单测直测）。
+    /// 崩溃诊断（CrashDiagnostics 的 shell-crash.log 与标记文件）复用本规则——
+    /// 同目录同权限，绝不另立一套目录树。
+    public static func fileURL(userDataDir: String, fileName: String) -> URL {
         URL(fileURLWithPath: userDataDir, isDirectory: true)
             .appendingPathComponent(directoryName, isDirectory: true)
             .appendingPathComponent(fileName)
     }
 
+    /// 日志文件路径规则：<userData>/logs/shell.log（纯函数，单测直测）。
+    public static func fileURL(userDataDir: String) -> URL {
+        fileURL(userDataDir: userDataDir, fileName: fileName)
+    }
+
     /// sidecar 日志路径规则：<userData>/logs/sidecar.log（纯函数，单测直测）。
     public static func sidecarFileURL(userDataDir: String) -> URL {
-        URL(fileURLWithPath: userDataDir, isDirectory: true)
-            .appendingPathComponent(directoryName, isDirectory: true)
-            .appendingPathComponent(sidecarFileName)
+        fileURL(userDataDir: userDataDir, fileName: sidecarFileName)
     }
 
     /// - Parameters:
@@ -282,18 +287,66 @@ public final class ShellLog {
     /// 进去绝不能成为新的致命面"被直接推翻）。
     /// lstat → open(O_NOFOLLOW|O_NONBLOCK) → fstat 三段判据：FIFO/socket/设备/目录/
     /// 链接一律拒绝，lstat 与 open 之间被换掉也由 fstat 兜住。
+    /// 判据本体在 `openRegularLeafFD`（实例写路径与崩溃诊断共用的唯一实现）。
     private func openLeafLocked(_ url: URL) -> FileHandle? {
-        // 判据并集单源 = PrivateFS：lstat（FIFO/socket/设备/目录/
-        // 链接一律拒绝，且在 open 之前判掉——open 一个无读者的 FIFO 会永久阻塞）→
-        // open(O_NOFOLLOW|O_NONBLOCK) → fstat（常规文件 + 单硬链接 + inode 稳定性）。
-        // 失败一律 nil → 调用方降级只写 stderr（日志绝不成为新的致命面）。
+        let descriptor = Self.openRegularLeafFD(url)
+        guard descriptor >= 0 else { return nil }
+        return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    }
+
+    /// 打开叶子常规文件的**唯一**实现（实例写路径与 CrashDiagnostics 共用）：
+    /// 判据并集单源 = PrivateFS：lstat（FIFO/socket/设备/目录/
+    /// 链接一律拒绝，且在 open 之前判掉——open 一个无读者的 FIFO 会永久阻塞）→
+    /// open(O_NOFOLLOW|O_NONBLOCK) → fstat（常规文件 + 单硬链接 + inode 稳定性）。
+    /// 返回裸 fd（调用方负责 close/包 FileHandle），-1 = 拒绝/失败
+    /// （调用方降级只写 stderr：日志绝不成为新的致命面）。
+    private static func openRegularLeafFD(_ url: URL) -> Int32 {
         switch PrivateFS.openLeaf(path: url.path,
                                   flags: O_WRONLY | O_APPEND | O_CREAT | O_NONBLOCK) {
         case .failure:
-            return nil
+            return -1
         case .success(let (descriptor, _)):
-            return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+            return descriptor
         }
+    }
+
+    /// 崩溃处理器专用叶子（CrashDiagnostics 安装期调用）：与实例写路径**同一套**
+    /// 纪律——目录 0700（创建参数 + 每次收紧）、目录与叶子符号链接拒绝、叶子
+    /// 0600、`openRegularLeafFD` 的常规文件判据——但返回**裸 fd**：信号处理器里
+    /// 只能 write(2)，不许碰 FileHandle/Swift 运行时。打开发生在安装期（非信号上下文）。
+    ///
+    /// 与实例写路径的唯一差异 = 轮转：信号上下文不做 rename 轮转（崩溃进程写一半
+    /// 就死，把记录搬去 .1 只会让启动期读不到"最近一次"），改为**安装期按上限整体
+    /// 清零**——单份有界日志保留最近一次崩溃（崩溃必终止进程，故一轮至多一条）。
+    /// 返回 -1 = 不可用（崩溃诊断静默降级，绝不成为新的致命面）。
+    public static func openSignalSafeLeaf(url: URL, maxBytes: Int = defaultMaxBytes) -> Int32 {
+        let directory = url.deletingLastPathComponent()
+        do {
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+        } catch {
+            return -1
+        }
+        // 目录不得是符号链接（createDirectory 会接受已存在的链接，写入就落到壳外）；
+        // 叶子同理（O_NOFOLLOW 也会挡，但先在安装期判掉，读侧报错更直接）。
+        if (try? FileManager.default.destinationOfSymbolicLink(atPath: directory.path)) != nil {
+            return -1
+        }
+        if (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil {
+            return -1
+        }
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let size = attributes[.size] as? NSNumber, size.intValue >= max(1, maxBytes) {
+            try? FileManager.default.removeItem(at: url)
+        }
+        let descriptor = openRegularLeafFD(url)
+        guard descriptor >= 0 else { return -1 }
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o600], ofItemAtPath: url.path)
+        return descriptor
     }
 
     /// 轮转：关闭当前 → 现文件搬到 .rotating → 删旧 .1 → .rotating 改名为 .1 →
