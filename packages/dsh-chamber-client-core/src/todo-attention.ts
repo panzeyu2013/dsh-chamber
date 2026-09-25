@@ -4,8 +4,8 @@
  * (completed-but-unread, or an agent interaction waiting: approval /
  * plan-review / question). No state of its own, no memory, no DOM — a plain
  * node:test-runnable derivation over the SAME merged runtime facts the
- * row-level state indicators render (06 §4; mergeRuntimeFacts union of the
- * App's completed-unread dots and the vendor-armed `completed`).
+ * row-level state indicators render (06 §4; the merged `completed` bit is written
+ * by the App's completed-unread ledger alone — the channel never carries one).
  *
  * Mirror-of-the-mirror discipline: an entry appears/disappears exactly when
  * the corresponding row indicator would — the rules below replicate the
@@ -116,8 +116,8 @@ export function deriveTodoAttention(
           waiting.push(entry)
           continue
         }
-        // completed 与行尾蓝点同一条件：pending 无、子代理不存活、合并 completed 为真；vendor-completed
-        // 与 wire running 错位窗口内不得漏报。只有**确证在跑**的子代理压制未读；unknown（stale/索引缺席）不压制。
+        // completed 与行尾蓝点同一条件：pending 无、子代理不存活、合并 completed 为真（该位来自
+        // App 账本）。只有**确证在跑**的子代理压制未读；unknown（stale/索引缺席）不压制。
         if (subagentActivityOf(facts, factsStale) === 'running') continue
         // goal 呈现门（v5 §4）：相位 active（含 activation unknown）压制「完成未读」
         // 条目——与行尾点/文案/仪表/搜索同一单源派生（INV7），否则待办区会为一条

@@ -167,9 +167,63 @@ export interface SessionFactsSnapshot {
  * sidebar overlay suppressed them. The overlay demanded both; the notification
  * and unread consumers checked only `verdict` — one rule, three sites, two
  * answers.
+ *
+ * RENDER vs DECISION. This predicate answers "may these rows be RENDERED as
+ * read-only facts?" and it deliberately keeps a `stale` snapshot usable: the
+ * sidebar overlay renders a disconnected source's residual rows and labels them
+ * (`mergeRuntimeFacts` ORs the stale bit in). The DECISION surfaces — the unread
+ * ledger, the read-watermark advance and the completion observation — must not
+ * act on a snapshot whose live carrier is gone, so they use
+ * {@link isFactsDecisionUsable} instead. Both predicates live here so the chain
+ * has one owner; a consumer must never re-spell either rule (the historical
+ * defect: an always-true copy of the decision rule in the unread wiring).
  */
 export function isFactsUsable(snapshot: SessionFactsSnapshot): boolean {
   return snapshot.verdict === 'ok' && snapshot.serviceable !== false
+}
+
+/**
+ * The decision gate: may this snapshot's rows be treated as authoritative
+ * EVIDENCE (arm/disarm the unread ledger, advance a read watermark, drive the
+ * completion observation)? Strictly narrower than {@link isFactsUsable} by
+ * `!stale`.
+ *
+ * Why `stale`: `markStale()` is a pass-through that flips only the `stale` bit,
+ * so every "carrier is gone / silent / rejected" window (stream close, silence
+ * watchdog, connect deadline, disconnect) reaches consumers WITHOUT touching
+ * `verdict` or `serviceable`. Treating such a snapshot as evidence let the
+ * UNREAD consumer fall back to a channel-only recomputation while the very same
+ * tick's snapshot still carried rows: the armed "completed" dot was pruned by
+ * the channel-only pass and re-armed when the carrier returned — the Dock badge
+ * and the row dot flickered once per carrier flap. The frozen-unknown rule is
+ * the fix: `entries present but not decidable ⇒ keep prevLedger untouched` (the
+ * `factsVerified === false` branch of `deriveSourceUnread`).
+ */
+export function isFactsDecisionUsable(snapshot: SessionFactsSnapshot): boolean {
+  return snapshot.verdict === 'ok' && snapshot.serviceable !== false && snapshot.stale !== true
+}
+
+/**
+ * The ONE decision tuple the unread/badge chain consumes. Returns the two values
+ * TOGETHER so they can never be derived from different predicates — the
+ * historical defect shipped an always-true `verified` next to rows taken from the
+ * strict predicate, which is exactly the mismatch this shape forbids:
+ *
+ *   snapshot absent            → { rows: undefined, verified: true  }  (channel-only)
+ *   snapshot present, decidable → { rows: snapshot.rows, verified: true }
+ *   snapshot present, undecidable → { rows: undefined, verified: false } (frozen: rule 0)
+ *
+ * Callers (the unread wiring, the read-watermark advance, `markSourceAllRead`)
+ * must take BOTH values from this call; never compute either by hand.
+ */
+export function factsDecisionInput(snapshot: SessionFactsSnapshot | undefined): {
+  rows: SessionFactsSnapshot['rows'] | undefined
+  verified: boolean
+} {
+  if (snapshot === undefined) return { rows: undefined, verified: true }
+  return isFactsDecisionUsable(snapshot)
+    ? { rows: snapshot.rows, verified: true }
+    : { rows: undefined, verified: false }
 }
 
 /** 探测观测（只交事实，HTTP carrier 由本模块拥有）。 */

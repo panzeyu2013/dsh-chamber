@@ -13,7 +13,12 @@
  */
 import { chamberRunId } from '@dsh-chamber/dsh-stream-state'
 import type { InstanceSnapshot, SearchRow, SessionRow, WorkspaceRow } from './instance-api.ts'
-import type { GoalFact, SubagentActivity } from './session-row-state.ts'
+import {
+  resolveSessionRunning,
+  type GoalFact,
+  type SessionRunningStatus,
+  type SubagentActivity,
+} from './session-row-state.ts'
 import type { ChamberServerAggregate, ChamberServerWorkspace, InstanceRuntimeReport, ServerBootGap } from './aggregate-store.ts'
 import { forgetMapSources } from './ledger.ts'
 import { assertSingletonModule } from './singleton.ts'
@@ -476,34 +481,27 @@ export function deriveUnread(
 }
 
 /**
- * Project one ctx's sessions snapshot into the chamber runtime-facts report.
- * Pure pass-through: every listed session carries its live `running` bit;
- * `completed`/`pending` ride the vendor runtime's armed state as sparse extras.
- * The App derives the completed-but-unread dot from running→idle edges itself —
- * it owns the active view, so it alone knows what "being read" means.
+ * Project one ctx's sessions snapshot into the chamber runtime-facts report:
+ * every listed session carries its live `running` bit (via
+ * {@link resolveSessionRunning}), `pending` rides the official sessionStatus
+ * projection, and `completed` is injected later by {@link mergeRuntimeFacts} —
+ * the channel never carries it. The App owns the completed-but-unread dot
+ * (running→idle edges: it alone knows what "being read" means).
  * `subagentRunning` (running descendant count per parent) and
- * `pendingInteractions` are INJECTED by the plugin — this module stays free of
- * unbuilt vendor packages. The pending kind mapping mirrors the official
- * `visiblePendingKind`: unknown kinds stay undefined. The loose ReadonlyMap
- * avoids importing runtime store types.
- *
- * The goal fact (design 19 §3.2.1) is parsed HERE from the row's
- * projection bag and rides SPARSELY: a row whose `projectionValues.goal` parsed
- * (object or explicit null) carries `goal`; an absent key means UNKNOWN and
- * carries nothing — the PRODUCER (client/index.ts) restores the last known fact
- * per source generation and merges the event-cached activation there.
+ * `pendingInteractions` are INJECTED by the plugin (the pending vocabulary
+ * mirrors the official `visiblePendingKind`, unknown kinds stay undefined) so
+ * this module imports no unbuilt vendor packages. The goal fact (design 19
+ * §3.2.1) is parsed HERE from the row's projection bag and rides SPARSELY
+ * (absent key = UNKNOWN); the PRODUCER (client/index.ts) restores the last known
+ * value per generation and merges the event-cached activation there.
  */
 export function projectRuntimeFacts(
   snapshot: {
     byId?: Record<string, {
       running?: boolean
-      completed?: boolean
       origin?: 'subagent'
       updatedAt?: number
-      /**
-       * The mounted store's `SessionSummary.projectionValues` — read for the
-       * `goal` projection value (and, on the snapshot path above, schedule).
-       */
+      /** The store row's `projectionValues` — read for `goal` (and schedule above). */
       projectionValues?: Readonly<Record<string, unknown>>
       retainedBy?: Readonly<Record<string, number>> /** rc.2 row ownership counts: `mainView` = presented. */
     }>
@@ -511,6 +509,10 @@ export function projectRuntimeFacts(
   subagentRunning?: ReadonlyMap<string, number>,
   pendingInteractions?: ReadonlyMap<string, { kind?: string }>,
   runIds?: ReadonlyMap<string, string>,
+  /** The official live status projection; the running bit goes through
+   *  {@link resolveSessionRunning} — the vendor's own rule. Omitted = unmounted
+   *  source (no status projection): the row keeps its own bit. */
+  statusRunning?: SessionRunningStatus,
 ): InstanceRuntimeReport {
   const sessions: InstanceRuntimeReport['sessions'] = {}
   for (const [id, facts] of Object.entries(snapshot.byId ?? {})) {
@@ -520,7 +522,6 @@ export function projectRuntimeFacts(
     if (facts?.origin === 'subagent') continue
     const row: {
       running?: boolean
-      completed?: boolean
       pending?: 'approval' | 'plan-review' | 'question'
       runningSubagents?: number
       subagentActivity?: SubagentActivity
@@ -528,12 +529,11 @@ export function projectRuntimeFacts(
       updatedAt?: number
       goal?: GoalFact | null
     } = {
-      running: facts?.running === true,
+      running: resolveSessionRunning(statusRunning, id, facts?.running),
     }
     if (typeof facts?.updatedAt === 'number' && Number.isSafeInteger(facts.updatedAt) && facts.updatedAt >= 0) {
       row.updatedAt = facts.updatedAt
     }
-    if (facts?.completed === true) row.completed = true
     // v5 §2.1 三值事实：解析成功（对象/null）才写字段；键缺席/形状不符 = unknown，
     // 保持稀疏（生产者按来源代回填最后已知值）。
     const goal = parseGoalFact(facts?.projectionValues)
@@ -692,13 +692,10 @@ function pendingKindOf(kind: string | undefined): 'approval' | 'plan-review' | '
   }
 }
 
-/**
- * Project the two already-live ctx stores into the same chamber snapshot shape
- * as the unary fallback. `undefined` means either reconnect baseline is
- * incomplete; callers must invalidate the push snapshot and let the bounded
- * fallback pull take over. Subagent rows are deliberately excluded because
- * chamber navigation never renders them.
- */
+/** Project the two already-live ctx stores into the same chamber snapshot shape as
+ *  the unary fallback. `undefined` means either baseline is incomplete: callers must
+ *  invalidate the push snapshot and let the bounded fallback pull take over; subagent
+ *  rows are excluded (navigation never renders them). */
 export function projectInstanceSnapshot(
   workspaces: {
     items?: readonly {
@@ -733,16 +730,17 @@ export function projectInstanceSnapshot(
     }>
     phase?: string
   },
+  /** See {@link projectRuntimeFacts}: the SAME resolved bit feeds the ring, so one
+   *  rendered fact keeps the vendor's authority. Omitted = the row's own bit. */
+  statusRunning?: SessionRunningStatus,
 ): InstanceSnapshot | undefined {
-  // Both arrival phases are sticky after their first success. The workspace
-  // store also projects its pull-activity `state` (loading/error during a
-  // reconnect while `phase` stays ready), so a loading/error workspace
-  // withdraws here — clearing the producer's content signature so an identical
-  // recovered baseline is emitted again instead of being suppressed forever.
-  // The session store projects only `phase`; its baseline refreshes with the
-  // workspace baseline on reconnect, so the workspace `state` is the single
-  // completeness authority there (arrival = state 'idle' + both phases ready;
-  // upstream has no `baselinesReady` field).
+  // Both arrival phases are sticky after their first success. The workspace store
+  // also projects its pull-activity `state` (loading/error while `phase` stays
+  // ready), so a loading/error workspace withdraws here — clearing the producer's
+  // content signature so an identical recovered baseline is emitted again instead
+  // of being suppressed forever. The session store projects only `phase`, and its
+  // baseline refreshes with the workspace one, so the workspace `state` is the
+  // single completeness authority (upstream has no `baselinesReady` field).
   if (workspaces.state !== 'idle'
     || workspaces.phase !== 'ready' || sessions.phase !== 'ready') return undefined
   const byId = sessions.byId ?? {}
@@ -798,10 +796,11 @@ export function projectInstanceSnapshot(
     sessions: (sessions.ids ?? []).flatMap(id => {
       const row = byId[id]
       if (row === undefined || row.origin === 'subagent') return []
+      const sessionId = String(row.id)
       return [{
-        sessionId: String(row.id),
+        sessionId,
         ...(typeof row.updatedAt === 'number' ? { updatedAt: row.updatedAt } : {}),
-        running: row.running === true,
+        running: resolveSessionRunning(statusRunning, sessionId, row.running),
         blank: row.blank === true,
         // Sparse — the fact rides the row only when the session actually owns
         // an active schedule, so every other row's snapshot bytes stay untouched.
@@ -812,7 +811,7 @@ export function projectInstanceSnapshot(
           displayTitle: row.displayTitle,
           title: row.title,
           ...(row.cwd === undefined ? {} : { cwdBasename: basenameOf(row.cwd) }),
-          sessionId: String(row.id),
+          sessionId,
         }),
         ...(row.cwd !== undefined ? { cwd: row.cwd } : {}),
         ...(row.title !== undefined ? { title: row.title } : {}),
@@ -851,20 +850,18 @@ export type RuntimeFactsOverlay = Readonly<Record<string, RuntimeFactsOverlayRow
 
 /**
  * Merge one source's live runtime-facts report with the App-owned
- * completed-but-unread dots: the UNION of the channel's vendor-armed completed
- * rows and the App-derived dots (the App's running→idle edge machine is
- * authoritative for background sources; the vendor's completed is a fallback),
- * preserving the current session and every other live row. PURE; returns
- * undefined when there is nothing to attach.
+ * completed-but-unread dots, preserving the current session and every other live
+ * row. The App's running→idle edge ledger (`completedBySource`) is the ONLY
+ * writer of `completed` — the channel never carries it (the official client store
+ * row has no such field; its `sessionStatus.completionUnread` is not consumed).
+ * PURE; returns undefined when there is nothing to attach.
  *
- * `overlay` supplies render fields when the shell channel is absent: pending —
- * channel wins, overlay fills an absent kind; runningSubagents — channel ??
- * overlay; `current` and the running bit never come from the overlay. `stale`
- * marks a DISCONNECTED source's rows (consumers label, never present them as
- * live); it needs attachable content, so stale alone returns undefined.
- * The input report's own `stale` bit is OR-ed in (callers forward it on the
- * channel); dropping it would let the six-face guards read a disconnected
- * source's retained facts as live.
+ * `overlay` supplies render fields when the shell channel is absent (pending:
+ * channel wins, overlay fills an absent kind; runningSubagents: channel ?? overlay;
+ * `current` and the running bit never come from it). `stale` marks a DISCONNECTED
+ * source's rows (consumers label, never present them as live) and needs attachable
+ * content, so stale alone returns undefined; the input report's own `stale` bit is
+ * OR-ed in, or the six-face guards would read retained facts as live.
  */
 export function mergeRuntimeFacts(
   runtime: InstanceRuntimeReport | undefined,
@@ -1020,20 +1017,19 @@ export function instanceSnapshotSignature(
 }
 
 /**
- * Sidebar running-ring visibility: the ring shows ONLY from the complete
- * aggregate snapshot field; the channel's running bit is deliberately IGNORED
- * (`channelRunning` is accepted so the contract stays testable).
- * Runtime facts and the structural snapshot are never OR/precedence merged:
- * one rendered field has one authority.
+ * Sidebar running-ring visibility: the ring shows ONLY from the aggregate snapshot
+ * field; the channel's bit is IGNORED (`channelRunning` is accepted so the
+ * contract stays testable) — the renderer never OR/precedence merges the two
+ * faces. That field is the PRODUCER's resolved bit (both faces go through
+ * {@link resolveSessionRunning}, agreeing within one commit); the rule lives in
+ * ONE place, and this predicate only forbids a second one here.
  */
 export function runningRingVisible(_channelRunning: boolean | undefined, polledRunning: boolean | undefined): boolean {
   return polledRunning === true
 }
 
-/**
- * Content signature of one runtime-facts report (current + per-session facts;
- * every listed session carries its live `running` bit, with `completed`/
- * `pending`/`runningSubagents` as sparse extras).
+/** Content signature of one runtime-facts report (current + per-session facts;
+ *  `running` always, `completed`/`pending`/`runningSubagents` as sparse extras).
  *
  * `onlyIds` restricts the signature to the sessions actually rendered: a
  * hidden session flipping its bits must NOT re-render the list, while the
@@ -1045,12 +1041,10 @@ export function runningRingVisible(_channelRunning: boolean | undefined, polledR
  * pruning gate freezes.
  *
  * GOAL RIDES THE ROW ENCODING — OUTSIDE the `includeRunning` branch: every goal
- * field (goalId/revision/phase/activation/updatedAt) is encoded by
- * `goalFactSignature` for BOTH consumers — the projection path must re-publish on
- * a goal move (the row suppresses its completed dot from it), and the App
- * identity path must see every activation transition, including a
- * durable-state-free `armed` landing. Unknown (absent), explicit `null` and an
- * object are three DISTINCT encodings.
+ * field is encoded by `goalFactSignature` for BOTH consumers (the projection path
+ * must re-publish on a goal move, the App identity path must see every activation
+ * transition, including a durable-state-free `armed` landing). Unknown (absent),
+ * explicit `null` and an object are three DISTINCT encodings.
  */
 export function runtimeReportSignature(
   report: InstanceRuntimeReport | undefined,
@@ -1063,7 +1057,12 @@ export function runtimeReportSignature(
     .filter(([id]) => onlyIds === undefined || onlyIds.has(id))
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([id, facts]) =>
-      `${id}:${includeRunning && facts.running === true ? 'r' : ''}${facts.completed === true ? 'c' : ''}${facts.pending ?? ''}:${facts.runningSubagents ?? 0}:${facts.subagentActivity ?? ''}${goalFactSignature(facts.goal)}`)
+      // factAt is RENDERED (the row's `data-chamber-fact-at` evidence anchor) and it
+      // is the only clock a facts-only source can advance: leaving it out of the
+      // signature let the App's report dedupe freeze the anchor at its first-seen
+      // value, so every freshness readout lied. Sparse on purpose: 0 and absent
+      // both mean "no observer fact", so the encoding invents no churn for them.
+      `${id}:${includeRunning && facts.running === true ? 'r' : ''}${facts.completed === true ? 'c' : ''}${facts.pending ?? ''}:${facts.runningSubagents ?? 0}:${facts.subagentActivity ?? ''}:${(facts.factAt ?? 0) > 0 ? facts.factAt : ''}${goalFactSignature(facts.goal)}`)
   // L1 对账回执也是事实内容的一部分，必须进签名——App 的运行时事实提交按本签名
   // 去重：回执若不入签名，一次「事实没变、只有回执结算」的上报会被整个丢弃，守卫
   // 随后误判「对账通道无回执」并升级 reconnect/L3。只签在 `includeRunning` 路径；

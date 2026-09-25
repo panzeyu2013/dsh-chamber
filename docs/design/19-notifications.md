@@ -18,7 +18,7 @@
 
 | 项 | 事实 | 证据 |
 |---|---|---|
-| 会话状态检测 | **已有事实源**：06 §4 运行时事实通道——每个已挂载 ctx 的侧边栏插件注册 generation-safe runtime producer，上报每会话 `{running, completed, pending}`（`pending = 'approval' \| 'plan-review' \| 'question'`，来自 vendor sessions store 的实时 mux 交互状态）；App 层另有 running→idle「完成未读」蓝点边沿机（`reconcileCompletedFacts`） | `packages/dsh-chamber-client-ui-sidebar/src/client/index.ts`；`packages/renderer/src/App.tsx` |
+| 会话状态检测 | **已有事实源**：06 §4 运行时事实通道——每个已挂载 ctx 的侧边栏插件注册 generation-safe runtime producer，上报每会话 `{running, pending}`（运行位按官方 `status?.running ?? row.running` 解析；`completed` **不在上报里**——官方 store 行没有该字段、官方完成位 `sessionStatus.completionUnread` chamber 今日不消费，该位由 App 账本在 `mergeRuntimeFacts` 合并时注入）（`pending = 'approval' \| 'plan-review' \| 'question'`，来自 vendor sessions store 的实时 mux 交互状态）；App 层另有 running→idle「完成未读」蓝点边沿机（`reconcileCompletedFacts`） | `packages/dsh-chamber-client-ui-sidebar/src/client/index.ts`；`packages/renderer/src/App.tsx` |
 | 会话标题/来源 label | App 聚合已持有（`aggregates[sourceId].sessions[].title`、`server.label`） | `App.tsx` `deriveServers` |
 | goal 活性事实 | 运行时事实行 `goal?: GoalFact \| null`（三值：缺席 = unknown / `null` = 明确无 goal / 对象 = 有 goal；`{goalId, revision, phase, activation?, updatedAt?}`）。P1 来自挂载壳的会话投影 `projectionValues.goal`，P2a/P2b 来自只读 `session/list` 投影 + `$events` 的 activation 事件 | `packages/dsh-chamber-client-core/src/derive.ts`、`packages/control-plane/src/session-state-protocol.ts`（06 §4.1、17 §10.7） |
 | 窗口隐藏场景 | 设计 14：关窗 hide 到托盘 / macOS 无窗常驻——**窗口不可见时用户对会话完成与等待输入一无所知**（蓝点/pending 徽标只在窗口内） | 设计 14 |
@@ -28,7 +28,7 @@
 §3.1）；检测端**复用现成事实通道**（06 §4）。
 
 **术语映射**（与需求对齐）：`complete` = 会话回合结束（running→idle 边沿，
-或 vendor `completed` 武装）；`ask` = pending `'question'`（代理提问、等待回答）；
+或合并事实行上 App 账本武装的 `completed` 边沿）；`ask` = pending `'question'`（代理提问、等待回答）；
 `request` = pending `'approval' | 'plan-review'`（工具调用/计划审批请求）。
 
 ---
@@ -131,7 +131,7 @@ function detectNotificationEdges(
 
 | 事件 | 边沿定义 | 说明 |
 |---|---|---|
-| `complete` | `running: true → false`，或 vendor `completed` 从无到有 | 同一 tick 两者同时成立只发一次；`completed` 只在「该会话先前未武装 completed」时补一次边沿（**不是**断连窗口内完成的补发通道：撤回后的首份上报是纯播种，见下条与 §3.5）；**父会话回合结束但子代理仍在运行（`runningSubagents > 0`）时不视为完成**（与官方 Rows / 侧边栏呈现优先级一致，抑制在去重之前、不记账） |
+| `complete` | `running: true → false`，或合并事实行上的 `completed` 从无到有（该位由 App 账本注入，见 §3.7） | 同一 tick 两者同时成立只发一次；`completed` 只在「该会话先前未武装 completed」时补一次边沿（**不是**断连窗口内完成的补发通道：撤回后的首份上报是纯播种，见下条与 §3.5）；**父会话回合结束但子代理仍在运行（`runningSubagents > 0`）时不视为完成**（与官方 Rows / 侧边栏呈现优先级一致，抑制在去重之前、不记账） |
 | `ask` | `pending` **值变化到 `'question'`** | 代理提问等待回答；含直切（question→approval 等不经 undefined 的切换——vendor 组合选择器会正常产生，每个新值都通知一次）；同值重放与清除（→undefined）不发 |
 | `request` | `pending` **值变化到 `'approval' \| 'plan-review'`** | 工具/计划审批请求；直切/重放/清除语义同上 |
 
@@ -146,8 +146,7 @@ function detectNotificationEdges(
   `use-bridge-subscriptions.ts`（壳 report 轨）都只经 `observeSource` + `applyObservationBatch` 进入
   （接线锁 `test/wiring/session-authority-wiring.test.ts`），通知组装与 IPC 仍是 App 的单一
   `emitSessionNotification` 出口。`planRuntimeNotifications` / `planFactsNotifications` 只保留导出面给
-  既有语义用例（生产调用点已全部迁走）；通知路径的 `usableFacts` 抑制分支与 App 内的第二完成循环已删除
-  （`App.tsx` 仍保留同名局部量 `usableFacts`，只服务未读派生，不参与通知裁决）。
+  既有语义用例（生产调用点已全部迁走）；通知路径的 `usableFacts` 抑制分支与 App 内的第二完成循环已删除。
 
 #### 3.2.1 goal 三值事实与两个门（P1/P2a/P2b）
 
@@ -268,7 +267,8 @@ identity）；`CompleteLedgerOptions.bootToken` 只是 App 调用点继续按原
 'shell-edge' | 'facts-watermark' }`；`kind` 缺省 = complete，承载 #12 的 ask/request）、
 `baseline`、`boot: 'same' | 'fresh'`、可选 `factsMemory`（已吸收水位）。边沿所需的
 prev 位不在观测里（F26 已删 `prevRunning`/`prevGoalPhase`），由观测层 per-session
-转移记忆（`shellRunning`/`shellCompleted`/`shellPending`）承担。running 权威：同代
+转移记忆（`shellRunning`/`shellPending`；壳行的 `completed` 位**不参与**——通道行从不携带它，
+完成证据只有运行位 true→false 边沿与 facts 水位）承担。running 权威：同代
 **新鲜壳行**优先；否则非 stale 且 serviceable 的 facts 行；否则 unknown（不作废、
 不产生候选）。
 **stale 壳批（C4-X3）**：壳通道标记 `stale` 时，该批的整体观测在**候选生成层**关闭
@@ -869,6 +869,45 @@ interface ChamberSettings {
   404→ok 恢复为权威行集。**被否决的替代**：404 一律清成空权威集——它把无壳来源唯一的在场
   证据清成「会话消失」（触发遗忘结算、清 held pending），而「路由不存在」只证明镜像协议
   不权威，不能证明会话不存在。
+- **可判性唯一谓词（渲染 vs 判定两支）**：一份 facts 快照的可判性由 `session-facts-source.ts`
+  拥有，**不得**被任何消费点重写：
+  - `isFactsUsable(snapshot) = verdict==='ok' && serviceable!==false`——**渲染**面（侧栏
+    overlay）用；stale 仍可渲染只读事实并明确标注（`mergeRuntimeFacts` 的 stale OR）。
+  - `isFactsDecisionUsable(snapshot) = verdict==='ok' && serviceable!==false && !stale`——
+    **判定**面（未读账本、读水位推进、完成观测的 `factsChannelOf(...).usable`）用；stale
+    快照的行不得当证据。
+  未读接线的 `facts` 行键与 `factsVerified` 必须**同源同拍**，取自同一函数
+  `factsDecisionInput(snapshot)`（`session-facts-source.ts` 拥有，返回 `{ rows, verified }`）：
+  `{undefined, true}`（快照缺席）/ `{rows, true}`（可判）/ `{undefined, false}`（在场但不可判）。
+  **快照缺席**（断连/未观察）
+  ⇒ channel-only 照常派生；**快照在场但不可判** ⇒ 走 `deriveSourceUnread` 的规则 0
+  （`prevLedger` 原样保留，不剪枝、不 clobber）——「冻结的未知」。
+  **冻结窗口的读水位纪律（fail-closed，明确接受）**：判定不可用时，`factsDecisionInput` 不返回
+  行，`markSourceAllRead` 与「正在阅读」两处读水位推进都拿不到输入 ⇒ **不推进**。后果：断连期间
+  点开会话不会立刻清掉它的未读。载体恢复后，首个可判批会对**仍被查看**的会话照常推进并清点，
+  已切走的会话在再次打开时清。代价是断连窗口的未读多挂一会儿；收益是**绝不**用载体已断的行推进
+  只升不降的 durable 水位（那正是旧的恒真 gate 干的事）。来源退役时账本按既有 durable
+  剪枝/遗忘路径移除，不留永久残留。
+  **缺陷史（2026-12）**：该接线曾写成 `factsVerified: usableFacts!==undefined ?
+  usableFacts.serviceable!==false : true`——两支恒真，规则 0 在生产是死代码；于是不可判窗口
+  改用通道-only 重算，已武装的完成点被 `listComplete` 唯一剪枝门删掉、载体恢复时又武装，
+  Dock 徽标与行点随每次载体抖动闪一次。**被否决的替代**：①继续按通道重算（现状缺陷）；
+  ②把 stale 排除在判定面之外（只能渲染）——载体已断的行仍被当证据，旧完成被反复判未读（假亮）。
+  **载体终结纪律**：观察者退役（`stop()`/指纹换代/来源拆除）必须让 store 里**不再存在**
+  可判快照——要么发布一份「保留最后一批行 + `degraded/unavailable/stale:true`」的退役快照
+  （无壳观察者 `source-mux-facts.ts` 的 `stop()`），要么清掉该来源的快照（gateway 生命周期
+  teardown 的 `factsStore.dropSession`）。否则最后一份 readable 快照会被判定面继续当证据：
+  `emit()` 在 `stopped` 后拦下所有后续刷新，死载体的行就永久「可判」了（round-2 红队坐实的
+  半死载体竞态）。退役快照只在 `ready()` 时发（其余时刻 store 里本就是 degraded，不发噪音）。
+  接线锁 `test/wiring/session-authority-wiring.test.ts` 钉住「不得再出现第二个可用性表达式」。
+- **`factAt` 是渲染字段，必须骑运行时上报签名**：`runtimeReportSignature` 是 App 提交运行时
+  事实前的去重键，漏签一个渲染字段即该字段单独变化被整个丢弃（行的 `data-chamber-fact-at`
+  证据锚冻结在首见值）。`factAt` 编码为稀疏（0/缺席同为空串，不制造 churn），两条签名路径
+  （身份与投影）都签。**被否决的替代**：①不签 `factAt`、把证据锚改成不渲染的诊断字段——
+  代价是失去「这一行事实有多新」的机内取证面，而它正是 06 §4.3 行状态的排障入口；
+  ②把 `factAt` 量化成粗粒度桶（如秒级）再签——省下的重发布（网关轮询 ≤1 次/30s，无壳
+  观察者只随真实状态边沿，见 `source-mux-facts.ts` 的 `handleStatus`）远小于「锚点被吞」的
+  代价，且引入第二个时间语义，不值得。
 - **断连/重连：撤回即播种，窗口内完成/提问不补发**（设计取舍，与实现一致）：通道撤回
   （shell 重连/重 boot，来源移除的 clear 由 liveServerIds/指纹检查挡在前面）时，`App.tsx`
   的 report 撤回分支删除该来源的 `runtimeFactsRef`/`prevRunningRef`/观测状态
@@ -886,9 +925,9 @@ interface ChamberSettings {
   隐藏不会重新触发——与「仅窗口隐藏时打扰」语义一致，侧边栏蓝点仍覆盖。
 - **子代理运行期不视为完成**：父会话回合结束但 `runningSubagents > 0` 时抑制
   complete 通知（与官方 Rows / 侧边栏优先级一致；抑制在去重之前、不记账）。补发语义依赖
-  vendor 武装 completed 的时序，均为文档化行为：vendor **晚武装**（子代理全部结束后才武装）→ completed 边沿届时正常补发横幅；vendor **早武装**（官方 manager 在父 idle 边沿武装，子代理存活
+  **账本武装 `completed` 的时序**（账本在 running→idle 边沿武装，与子代理存活无关），均为文档化行为：边沿 **晚到**（子代理全部结束后父会话才回到 idle）→ completed 边沿届时正常补发横幅；边沿 **早到**（父会话先 idle、子代理仍在跑，
   期间 completed 已为 true）→ 滤除的边沿不记账、子代理结束后无新 completed 边沿，该完成不再有
-  横幅补发（窗口内完成点与未读徽标不受影响）。未读徽标（§3.7）应用同一压制——蓝点账本保持武装（与官方「completed 保持武装、subagents 分支优先呈现」同构），徽标投影同一并集（App 账本武装 ∪ vendor 自武装，且未被运行环压制；收口为单一权威——此前「点/待办有、徽标无」的分工已消除）；呈现边界见
+  横幅补发（窗口内完成点与未读徽标不受影响）。未读徽标（§3.7）应用同一压制——蓝点账本保持武装（与官方「completed 保持武装、subagents 分支优先呈现」同构），徽标投影同一并集（App 账本武装 ∪ 合并事实行的 `completed`——同一个来源，通道永不携带，见 §2；且未被运行环压制；收口为单一权威——此前「点/待办有、徽标无」的分工已消除）；呈现边界见
   §3.7 计数语义。
 - 通知失败（isSupported false / 系统权限拒绝）按永久或可重试结果保留在待投递账本，
   不推进已通知水位；会话业务不受影响，蓝点照常。
@@ -917,7 +956,7 @@ OpenChamber 参考实现：`packages/electron/main.mjs` 的 `desktop_tray_update
 ```
 completedBySource（App 完成未读蓝点集，06 §4.1，只读复用——徽标与窗口内蓝点
 同源同规则，并同样应用子代理运行环压制（06 §4.5）与 goal 呈现门（§3.2.5）；对 App 账本驱动的完成
-两面永不分叉，vendor completed 兜底并入同一并集（`ledger || vendor completed`），断连窗口的呈现边界见「计数语义」）
+两面永不分叉；合并事实行的 `completed` 与账本是同一来源（通道永不携带），故并集 `ledger || row.completed` 只是注入后的读取形态，断连窗口的呈现边界见「计数语义」）
   → projectBadgeCount(completedBySource, runtimeFacts)（renderer 纯函数，跨来源
     求「用户实际可见」的未读会话数——最新事实行 runningSubagents > 0（后台子
     代理存活）的武装蓝点不计入；0 = 清除）
@@ -928,9 +967,9 @@ completedBySource（App 完成未读蓝点集，06 §4.1，只读复用——徽
 
 - **计数语义**：一个未读会话 = 1（同 OpenChamber「chats with unseen activity」，非通知条数）；
   pending（ask/request）不计数（窗口内提醒仍由侧边栏 pending 徽标承担）。
-- **呈现边界（既有窗口，徽标投影同一并集）**：窗口内完成点 = App 账本 ∪ vendor
-  `completed` 兜底行（`mergeRuntimeFacts`），徽标投影**同一并集**——`badge-count.ts` 的
-  `armed = ledger || row.completed`（`projectBadgeCount`）——vendor-only 完成的会话
+- **呈现边界（既有窗口，徽标投影同一并集）**：窗口内完成点 = App 账本经
+  `mergeRuntimeFacts` 注入行后的 `completed`，徽标投影**同一读取形态**——`badge-count.ts` 的
+  `armed = ledger || row.completed`（`projectBadgeCount`）——账本武装而窗口内行尚未出现的会话
   （首观察/撤回窗口内完成、从未被 App 观察到 running→idle 边沿）同样计入，不再是「窗口内
   有点而徽标恒为 0」；断连（来源 not-ready）清空运行时事实而蓝点账本跨断连保留（06 §4.2），
   徽标按保留账本计数、窗口内该来源无行可显示——这是既有取舍的诚实边界，非分叉缺陷

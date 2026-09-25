@@ -1,4 +1,11 @@
-/** 每会话事实（运行时事实通道 report.sessions 的行）。 */
+/**
+ * 每会话事实（运行时事实通道 report.sessions 的行，合并后）。
+ *
+ * `running` 已由生产者按官方 `status?.running ?? row.running` 解析；`completed` 由
+ * App 账本在 `mergeRuntimeFacts` 注入——通道自身永不携带该位（官方 store 行没有
+ * `completed`，官方完成位 `sessionStatus.completionUnread` chamber 今日不消费，
+ * design 19 §2）。
+ */
 export interface SessionFacts {
   running?: boolean
   completed?: boolean
@@ -17,7 +24,7 @@ export interface NotificationEdge { sessionId: string; kind: NotificationKind }
 /**
  * 边沿检测：prev 事实 → next 事实 的事件集。
  * - prev 为 undefined（首份上报）：只播种记忆，返回 []（boot 时已 pending/completed 的会话不得轰炸用户）。
- * - complete：running true→false，或 vendor completed 从无到有（后者只在**边沿记忆已武装**时
+ * - complete：running true→false，或合并事实行上（App 账本注入的）completed 从无到有（后者只在**边沿记忆已武装**时
  *   有意义——不是断连补发通道：重连首份上报按 prev undefined 纯播种）；同 tick 两者同时成立只发一次。
  * - ask：pending 变化到 'question'（含不经 undefined 的直切）；request：pending 变化到
  *   'approval' 或 'plan-review'。同值重放与清回 undefined 都不发。
@@ -36,9 +43,11 @@ export function detectNotificationEdges(
     const before = prev[sessionId]
     const after = next[sessionId]
 
-    // complete: explicit running true→false, or vendor completed false/absent→true.
+    // complete: explicit running true→false, or the ledger-injected completed false/absent→true.
     // Missing running is not "false" (only an explicit false closes the edge).
     const runningEdge = before?.running === true && after.running === false
+    // `completed` is ledger-injected into the MERGED row; on the raw channel report
+    // this edge can never fire. Kept for the merged-row caller.
     const completedEdge = before?.completed !== true && after.completed === true
     const complete = runningEdge || completedEdge
 
@@ -58,7 +67,7 @@ export function detectNotificationEdges(
 
 /**
  * Complete 跨上报去重：同一会话的 complete 只发一次，直到会话重新 running（running=true 清除记忆）。
- * 解决「正被查看的会话完成 → running 边沿先发 → 切走后 vendor 延迟武装 completed → 第二条边沿」的双发。
+ * 解决「正被查看的会话完成 → running 边沿先发 → 切走后账本注入的 completed 迟到 → 第二条边沿」的双发。
  * PURE：返回过滤后的边沿与更新后的 notified 集合，由调用方持有。
  */
 export function dedupeCompleteEdges(

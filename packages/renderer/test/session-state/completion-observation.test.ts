@@ -166,7 +166,7 @@ test('observeSource: the first shell report only seeds (G2); the next true→idl
   assert.equal(third.observations[0].candidate, undefined)
 })
 
-test('observeSource: an empty first report still establishes the baseline; a later first-seen online completion is not suppressed', () => {
+test('observeSource: an empty first report still establishes the baseline; a shell row first seen idle never fabricates a completion', () => {
   const first = observeSource({
     sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
     shell: { rows: {} },
@@ -174,22 +174,25 @@ test('observeSource: an empty first report still establishes the baseline; a lat
   assert.equal(first.observations.length, 0)
   assert.equal(first.state.baselineDone, true, 'the baseline is the first batch, rows or not')
 
+  // 首份之后的一行 first-seen idle：没有运行 true→false 边沿就**不得**产生完成边沿。
+  // 壳行类型 ShellObservationRow 已不声明 `completed`——通道行从不携带该位（这是结构级保证），
+  // 唯一合法的壳完成边沿是运行位 true→false。这条负向锁取代了原先钉住幻影的正向用例。
   const second = observeSource({
     state: first.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s9: { running: false, completed: true } } },
+    shell: { rows: { s9: { running: false } } },
   })
-  assert.equal(second.observations.length, 1)
-  assert.equal(second.observations[0].baseline, false)
-  assert.deepEqual(second.observations[0].candidate, { evidence: 'shell-edge' })
+  assert.equal(second.observations.length, 1, '非基线批照常产出一条观测（否则下面的断言空转）')
+  assert.equal(second.observations[0].candidate, undefined, '首见即 idle、无运行边沿 ⇒ 不得产完成候选')
+  assert.equal(second.observations[0].baseline, false, '非基线批')
 
-  // 断言强度（评审 D）：候选层断言不够——经 applyObservationBatch+reconcile 证明
-  // 「最终确实发出一通知」。
+  // 端到端强度（评审 D）：候选层断言不够——经 applyObservationBatch+reconcile 证明
+  // 「首见即 idle、且没有运行 true→false 边沿的会话不得凭空发完成」（完成证据只来自
+  // 运行边沿或 facts 水位，通道行本身不携带完成位）。
   const ledger = createCompleteLedger()
   const { calls, sink } = makeSink()
   applyObservationBatch({ ledger, sourceId: 'src', sink, batch: first })
   applyObservationBatch({ ledger, sourceId: 'src', sink, batch: second })
-  assert.equal(calls.notifications.length, 1, '空首帧之后的在线完成必须最终发出一通知')
-  assert.equal(calls.notifications[0].kind, 'complete')
+  assert.equal(calls.notifications.length, 0, '无运行边沿 ⇒ 不得发完成')
 })
 
 test('observeSource: facts-first skew keeps the completion eligible while the shell still reports running (I1)', () => {
@@ -569,7 +572,7 @@ test('REGRESSION(forgotten 方向 A): a reappearing session seeds its first obse
   applyObservationBatch({ ledger, sourceId: 'src', batch: first, sink })
   const completed = observeSource({
     state: first.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch: completed, sink })
   assert.equal(calls.notifications.length, 1, '在线完成发一次')
@@ -587,7 +590,7 @@ test('REGRESSION(forgotten 方向 A): a reappearing session seeds its first obse
   // 重现（同一 completed 状态）：首观测只播种 ⇒ 同一完成不得双发。
   const back = observeSource({
     state: gone.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
   })
   assert.equal(back.observations[0].candidate, undefined, '重现首观测只播种')
   applyObservationBatch({ ledger, sourceId: 'src', batch: back, sink })
@@ -660,7 +663,7 @@ test('forgottenSessions FIFO: >limit churn evicts the oldest key, whose reappear
   // 「极端 churn 一次重复」的实际行为钉住（不要求消除；有界性优先，不做无界水位缓存）。
   const total = FORGOTTEN_SESSION_LIMIT + 1
   const ids = Array.from({ length: total }, (_, index) => 's' + String(index).padStart(4, '0'))
-  const shellRows = Object.fromEntries(ids.map(id => [id, { running: false, completed: true, goal: null }]))
+  const shellRows = Object.fromEntries(ids.map(id => [id, { running: false, goal: null }]))
   const factsRows = Object.fromEntries(ids.map(id => [id, factsRow()]))
   const first = observeSource({
     sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
@@ -682,7 +685,7 @@ test('forgottenSessions FIFO: >limit churn evicts the oldest key, whose reappear
   // 保留键重现：首观测只播种（不产候选）——消失前已通知的同一完成不得双发。
   const retained = observeSource({
     state: gone.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { [ids[total - 1]]: { running: false, completed: true, goal: null } } },
+    shell: { rows: { [ids[total - 1]]: { running: false, goal: null } } },
     facts: { usable: true, rows: { [ids[total - 1]]: factsRow({ completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) } },
   })
   assert.equal(retained.observations[0].candidate, undefined, '保留键重现只播种')
@@ -690,7 +693,7 @@ test('forgottenSessions FIFO: >limit churn evicts the oldest key, whose reappear
   // 淘汰键重现：没有播种门 ⇒ 同一完成重新成为 facts 候选（已登记的极端取舍）。
   const evicted = observeSource({
     state: retained.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { [ids[0]]: { running: false, completed: true, goal: null } } },
+    shell: { rows: { [ids[0]]: { running: false, goal: null } } },
     facts: { usable: true, rows: { [ids[0]]: factsRow({ completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) } },
   })
   assert.deepEqual(
@@ -925,7 +928,7 @@ function forgetAndReappearWithoutFactsRow(): {
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: false, rows: { s1: factsRow() } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -940,7 +943,7 @@ function forgetAndReappearWithoutFactsRow(): {
   assert.equal(ledger.armed('src').has('s1'), false, '遗忘清 armed')
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: false, rows: {} },
   })
   assert.equal(batch.state.sessions.s1.factsSeedPending, true, '重现无可用 facts 水位行 ⇒ 挂播种待决位')
@@ -952,7 +955,7 @@ test('REGRESSION(F5 重要项 4 方向 A): the deferred facts seeding absorbs th
   const { ledger, calls, sink, batch } = forgetAndReappearWithoutFactsRow()
   const seeded = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same',
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: { ...factsRow({ completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }), goal: null } } },
   })
   assert.deepEqual(seeded.observations[0].candidate, undefined, '首个可用 facts 行只播种，不产候选')
@@ -965,14 +968,14 @@ test('REGRESSION(F5 重要项 4 方向 B): after the deferred seeding, a strictl
   const { ledger, calls, sink, batch } = forgetAndReappearWithoutFactsRow()
   let next = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same',
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: { ...factsRow({ completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }), goal: null } } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch: next, sink })
   assert.equal(calls.notifications.length, 1)
   next = observeSource({
     state: next.state, sourceId: 'src', identity: 'fp', pageBoot: 'same',
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: { ...factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }), goal: null } } },
   })
   assert.deepEqual(next.observations[0].candidate, { kind: 'complete', watermark: 200, evidence: 'facts-watermark' })
@@ -987,7 +990,7 @@ test('REGRESSION(A3-1): a usable facts row without an observed watermark never c
   const { ledger, calls, sink, batch } = forgetAndReappearWithoutFactsRow()
   const nullRow = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same',
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: { ...factsRow(), goal: null } } },
   })
   assert.equal(nullRow.state.sessions.s1.factsSeedPending, true, '无 observed 水位不得清待决位')
@@ -997,7 +1000,7 @@ test('REGRESSION(A3-1): a usable facts row without an observed watermark never c
 
   const seeded = observeSource({
     state: nullRow.state, sourceId: 'src', identity: 'fp', pageBoot: 'same',
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: { ...factsRow({ completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }), goal: null } } },
   })
   assert.equal(seeded.state.sessions.s1.factsSeedPending, false, '真正吸收 observed 水位后才清待决位')
@@ -1022,7 +1025,7 @@ test('REGRESSION(B3-2): an unusable facts batch re-seeds the next usable snapsho
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: false, rows: { s1: factsRow() } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1031,7 +1034,7 @@ test('REGRESSION(B3-2): an unusable facts batch re-seeds the next usable snapsho
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
   assert.equal(batch.observations[0].candidate, undefined, '恢复批只播种，不产候选')
@@ -1096,7 +1099,7 @@ test('REGRESSION(COR-1): after a shell withdrawal the restarted facts-only track
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: false, rows: { s1: factsRow() } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1158,7 +1161,7 @@ test('REGRESSION(COR-1 精度①): the shell first report landing between stale 
   // 3) 壳轨首报恰落在 stale 窗口与恢复之间：首报只播种，绝不 emit。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: false, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
   assert.equal(batch.state.factsSeeded, true, '首报只播种壳位：不得把壳轨在场当通知证据（回退即复位吞发）')
@@ -1168,7 +1171,7 @@ test('REGRESSION(COR-1 精度①): the shell first report landing between stale 
   // 4) 恢复批：200 是窗口内唯一事实，必须恰 1 条。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
   assert.deepEqual(
@@ -1182,14 +1185,14 @@ test('REGRESSION(COR-1 精度①): the shell first report landing between stale 
   // 5) 同水位重放 0；严格更高的新完成照常。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
   assert.equal(calls.notifications.length, 1, '同水位重放 0')
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 300, completedAtSource: 'observed', updatedAt: 300 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1208,7 +1211,7 @@ test('REGRESSION(COR-1 精度②): a stale-only shell track cannot swallow the s
   // 壳轨只有 stale 输入（C4-X3：complete/ask 边沿整体关闭）＋ facts 不可用。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { stale: true, rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { stale: true, rows: { s1: { running: false, goal: null } } },
     facts: { usable: false, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
   assert.equal(batch.state.factsSeeded, true, '仅 stale 的壳轨没有通知可吞（回退即复位吞发）')
@@ -1218,7 +1221,7 @@ test('REGRESSION(COR-1 精度②): a stale-only shell track cannot swallow the s
   // 恢复（壳仍 stale）：200 恰 1 条。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { stale: true, rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { stale: true, rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
   assert.deepEqual(
@@ -1231,7 +1234,7 @@ test('REGRESSION(COR-1 精度②): a stale-only shell track cannot swallow the s
   // 同水位重放 0；stale→fresh 的同一行不得伪造边沿（factsUsable 下壳 complete 本就不作候选）。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1292,7 +1295,7 @@ test('REGRESSION(COR-1 精度③b): another shell session notifying must not swa
   // 不可用窗口内 other 确实 emit（壳边沿）：来源级复位会发生，但 s1 从未通知。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { other: { running: false, completed: true, goal: null } } },
+    shell: { rows: { other: { running: false, goal: null } } },
     facts: { usable: false, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1301,7 +1304,7 @@ test('REGRESSION(COR-1 精度③b): another shell session notifying must not swa
   // 恢复批：other 重新播种（per-session 旗标），s1 从未通知 ⇒ 照常产候选。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { other: { running: false, completed: true, goal: null } } },
+    shell: { rows: { other: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1310,7 +1313,7 @@ test('REGRESSION(COR-1 精度③b): another shell session notifying must not swa
   // 同水位重放 0。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { other: { running: false, completed: true, goal: null } } },
+    shell: { rows: { other: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1331,7 +1334,7 @@ test('REGRESSION(COR-1 精度④): a never-seeded source keeps the first usable 
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: false, rows: {} },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1341,7 +1344,7 @@ test('REGRESSION(COR-1 精度④): a never-seeded source keeps the first usable 
   // 首份可用 facts 批：s1 与从未见过壳的 s2 都必须只播种（G2）。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: {
       usable: true,
       rows: {
@@ -1360,7 +1363,7 @@ test('REGRESSION(COR-1 精度④): a never-seeded source keeps the first usable 
   // 播种之后 s2 的新完成照常通知。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: {
       usable: true,
       rows: {
@@ -1388,7 +1391,7 @@ test('REGRESSION(FINAL-C): deleting the observation state withdraws the old gene
   // 不可用窗口内 s2 壳边沿 emit：armed + armedFloor + settleFence（s2）。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: true, goal: active }, s2: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: true, goal: active }, s2: { running: false, goal: null } } },
     facts: { usable: false, rows: {} },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1396,7 +1399,7 @@ test('REGRESSION(FINAL-C): deleting the observation state withdraws the old gene
   // facts 恢复批：s1 的 observed 700 在 active armed 目标下进 pending（armedFloor/goalKnown 就位）。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, goal: active }, s2: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: active }, s2: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 700, completedAtSource: 'observed', updatedAt: 700 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1455,14 +1458,14 @@ test('R1【A2 不得回归】: a boundary-0 release fence is cleared by the fact
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, subagentActivity: 'running', goal: null } } },
+    shell: { rows: { s1: { running: false, subagentActivity: 'running', goal: null } } },
     facts: { usable: false, rows: { s1: factsRow() } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
   assert.equal(ledger.pendingEntry('src', 's1')?.deferred, 'subagent-busy', 'busy 延迟无水位 pending')
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, subagentActivity: 'none', goal: null } } },
+    shell: { rows: { s1: { running: false, subagentActivity: 'none', goal: null } } },
     facts: { usable: false, rows: { s1: factsRow() } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1471,7 +1474,7 @@ test('R1【A2 不得回归】: a boundary-0 release fence is cleared by the fact
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, subagentActivity: 'none', goal: null } } },
+    shell: { rows: { s1: { running: false, subagentActivity: 'none', goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 1000, completedAtSource: 'observed', updatedAt: 1000 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1480,7 +1483,7 @@ test('R1【A2 不得回归】: a boundary-0 release fence is cleared by the fact
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, subagentActivity: 'none', goal: null } } },
+    shell: { rows: { s1: { running: false, subagentActivity: 'none', goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 2000, completedAtSource: 'observed', updatedAt: 2000 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1506,9 +1509,15 @@ test('R3【B3-1】: seeding only to the boundary keeps the fence and eats the ne
   assert.equal(calls.notifications.length, 0, '首份可用 facts 快照只播种')
   assert.equal(batch.state.sessions.s1.factsWatermark, 100, '播种吸收水位（running 权威为 idle）')
 
+  // 合法的壳完成边沿 = 运行位 true→false（通道行不带 completed 位）。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: true, goal: null } } },
+    facts: { usable: false, rows: { s1: factsRow({ completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) } },
+  })
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: false, rows: { s1: factsRow({ completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1517,7 +1526,7 @@ test('R3【B3-1】: seeding only to the boundary keeps the fence and eats the ne
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) } },
   })
   assert.equal(batch.observations[0].candidate, undefined, '恢复批重新播种，不产候选')
@@ -1530,7 +1539,7 @@ test('R3【B3-1】: seeding only to the boundary keeps the fence and eats the ne
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1566,7 +1575,7 @@ test('REGRESSION(C4-X2): a facts recovery batch with the row but no observed wat
   const { calls, sink } = makeSink()
   let batch = observeSource({
     sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, goal: null } } },
+    shell: { rows: { s1: { running: true, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow() } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1574,7 +1583,7 @@ test('REGRESSION(C4-X2): a facts recovery batch with the row but no observed wat
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: false, rows: { s1: factsRow() } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1585,7 +1594,7 @@ test('REGRESSION(C4-X2): a facts recovery batch with the row but no observed wat
   // （本批之前的 memory.factsWatermark = 0）登记给围栏。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow() } },
   })
   assert.equal(batch.observations[0].candidate, undefined, '恢复批无 observed 水位 ⇒ 不产候选')
@@ -1599,7 +1608,7 @@ test('REGRESSION(C4-X2): a facts recovery batch with the row but no observed wat
   // 同一完成的水位 100 到达：候选照常提出，但必须被围栏 seededSince 规则吞一次。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) } },
   })
   assert.deepEqual(
@@ -1664,7 +1673,7 @@ test('REGRESSION(C4-X3): a stale shell snapshot produces no complete/ask/request
   const stale = observeSource({
     state: first.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
     shell: {
-      rows: { s1: { running: false, completed: true, pending: 'approval', goal: null } },
+      rows: { s1: { running: false, pending: 'approval', goal: null } },
       stale: true,
     },
     facts: { usable: false, rows: { s1: factsRow() } },
@@ -1681,7 +1690,7 @@ test('REGRESSION(C4-X3): a stale shell snapshot produces no complete/ask/request
   // 不得借旧位补发一次边沿。
   const fresh = observeSource({
     state: stale.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, pending: 'approval', goal: null } } },
+    shell: { rows: { s1: { running: false, pending: 'approval', goal: null } } },
     facts: { usable: false, rows: { s1: factsRow() } },
   })
   assert.equal(fresh.observations[0].candidate, undefined, 'stale true→false 不得补发边沿')
@@ -1689,20 +1698,20 @@ test('REGRESSION(C4-X3): a stale shell snapshot produces no complete/ask/request
   // 非 stale 行为不变：pending 值真正变化照常产 ask/request 边沿，新回合照常产 complete。
   const pendingChange = observeSource({
     state: fresh.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, pending: 'question', goal: null } } },
+    shell: { rows: { s1: { running: false, pending: 'question', goal: null } } },
     facts: { usable: false, rows: { s1: factsRow() } },
   })
   assert.deepEqual(pendingChange.observations[0].candidate, { kind: 'ask', evidence: 'shell-edge' })
 
   const runningAgain = observeSource({
     state: pendingChange.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: true, completed: false, goal: null } } },
+    shell: { rows: { s1: { running: true, goal: null } } },
     facts: { usable: false, rows: { s1: factsRow() } },
   })
   assert.equal(runningAgain.observations[0].candidate, undefined, '重新 running 本身不是完成边沿')
   const idleAgain = observeSource({
     state: runningAgain.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: false, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: false, rows: { s1: factsRow() } },
   })
   assert.deepEqual(idleAgain.observations[0].candidate, { evidence: 'shell-edge' }, '非 stale 的 true→idle 完成边沿不变')
@@ -1729,7 +1738,7 @@ test('REGRESSION(I1 same-batch fence): the held old observed watermark keeps the
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: false, rows: { s1: factsRow({ completedAt: 50, completedAtSource: 'observed', updatedAt: 50 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1740,7 +1749,7 @@ test('REGRESSION(I1 same-batch fence): the held old observed watermark keeps the
   // 且必须活过同一批的 #1 running 清栏。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: true, completed: false, goal: null } } },
+    shell: { rows: { s1: { running: true, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) } },
   })
   assert.deepEqual(batch.fenceSeeds, [{ sessionId: 's1', watermark: 0 }], 'I1 挡下的水位也登记播种补偿')
@@ -1756,7 +1765,7 @@ test('REGRESSION(I1 same-batch fence): the held old observed watermark keeps the
   // （1 个物理完成 C1：壳边沿 1 条，facts 侧首次上报被吞）。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: false, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) } },
   })
   assert.deepEqual(
@@ -1772,7 +1781,7 @@ test('REGRESSION(I1 same-batch fence): the held old observed watermark keeps the
   // 反吞对照：栏只吞一次，其后严格更高的新完成照常通知（不得把真实新完成吞掉）。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: false, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1793,7 +1802,7 @@ test('REGRESSION(C4-X2 same-batch): a recovery batch that also reports a new run
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: false, rows: { s1: factsRow() } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1803,7 +1812,7 @@ test('REGRESSION(C4-X2 same-batch): a recovery batch that also reports a new run
   // 恢复批（行 null）+ 新回合 running 同批。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: true, completed: false, goal: null } } },
+    shell: { rows: { s1: { running: true, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow() } },
   })
   assert.deepEqual(batch.fenceSeeds, [{ sessionId: 's1', watermark: 0 }], 'C4-X2 播种登记')
@@ -1817,7 +1826,7 @@ test('REGRESSION(C4-X2 same-batch): a recovery batch that also reports a new run
   // 回合结束（壳 idle，facts 行仍 null）→ 水位 100 到达被吞一次，200 照常通知：2 完成 2 条。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: false, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow() } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1825,7 +1834,7 @@ test('REGRESSION(C4-X2 same-batch): a recovery batch that also reports a new run
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: false, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1833,7 +1842,7 @@ test('REGRESSION(C4-X2 same-batch): a recovery batch that also reports a new run
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: false, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1860,7 +1869,7 @@ test('KNOWN-BOUNDARY(C4-X2 cross-batch): a running round in a SEPARATE earlier b
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: false, rows: { s1: factsRow() } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1869,7 +1878,7 @@ test('KNOWN-BOUNDARY(C4-X2 cross-batch): a running round in a SEPARATE earlier b
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: true, completed: false, goal: null } } },
+    shell: { rows: { s1: { running: true, goal: null } } },
     facts: { usable: false, rows: { s1: factsRow() } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1877,7 +1886,7 @@ test('KNOWN-BOUNDARY(C4-X2 cross-batch): a running round in a SEPARATE earlier b
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: true, completed: false, goal: null } } },
+    shell: { rows: { s1: { running: true, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow() } },
   })
   assert.deepEqual(batch.fenceSeeds, [{ sessionId: 's1', watermark: 0 }], '恢复批仍登记播种，但栏已被上一批清掉')
@@ -1886,7 +1895,7 @@ test('KNOWN-BOUNDARY(C4-X2 cross-batch): a running round in a SEPARATE earlier b
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow() } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1894,7 +1903,7 @@ test('KNOWN-BOUNDARY(C4-X2 cross-batch): a running round in a SEPARATE earlier b
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1902,7 +1911,7 @@ test('KNOWN-BOUNDARY(C4-X2 cross-batch): a running round in a SEPARATE earlier b
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1930,7 +1939,7 @@ test('KNOWN-BOUNDARY(I1 fence cross-batch): a held old observed watermark re-emi
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: false, rows: { s1: factsRow({ completedAt: 50, completedAtSource: 'observed', updatedAt: 50 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1939,7 +1948,7 @@ test('KNOWN-BOUNDARY(I1 fence cross-batch): a held old observed watermark re-emi
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: true, completed: false, goal: null } } },
+    shell: { rows: { s1: { running: true, goal: null } } },
     facts: { usable: false, rows: { s1: factsRow() } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1947,7 +1956,7 @@ test('KNOWN-BOUNDARY(I1 fence cross-batch): a held old observed watermark re-emi
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: true, completed: false, goal: null } } },
+    shell: { rows: { s1: { running: true, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) } },
   })
   assert.equal(batch.observations[0].candidate, undefined, '恢复批水位被 I1 挡下（不吸收、不产候选）')
@@ -1957,7 +1966,7 @@ test('KNOWN-BOUNDARY(I1 fence cross-batch): a held old observed watermark re-emi
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1965,7 +1974,7 @@ test('KNOWN-BOUNDARY(I1 fence cross-batch): a held old observed watermark re-emi
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -1994,7 +2003,7 @@ test('REGRESSION(C4-X2 行缺席): a shell-only session also seeds the recovery 
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: false, rows: {} },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -2003,7 +2012,7 @@ test('REGRESSION(C4-X2 行缺席): a shell-only session also seeds the recovery 
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: {} },
   })
   assert.deepEqual(batch.fenceSeeds, [{ sessionId: 's1', watermark: 0 }], '行完全缺席也登记播种（实现口径）')
@@ -2016,7 +2025,7 @@ test('REGRESSION(C4-X2 行缺席): a shell-only session also seeds the recovery 
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) } },
   })
   assert.deepEqual(
@@ -2030,7 +2039,7 @@ test('REGRESSION(C4-X2 行缺席): a shell-only session also seeds the recovery 
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: true, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -2052,7 +2061,7 @@ test('CONTROL(C4-X2 行缺席): without a fence the shell-only recovery seeding 
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: true, completed: false, goal: null } } },
+    shell: { rows: { s1: { running: true, goal: null } } },
     facts: { usable: false, rows: {} },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
@@ -2060,7 +2069,7 @@ test('CONTROL(C4-X2 行缺席): without a fence the shell-only recovery seeding 
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: true, completed: false, goal: null } } },
+    shell: { rows: { s1: { running: true, goal: null } } },
     facts: { usable: true, rows: {} },
   })
   // COR-1 精度：不可用窗口内壳轨从未 emit（只有 running=true 的在场行）⇒ 不复位
@@ -2073,7 +2082,7 @@ test('CONTROL(C4-X2 行缺席): without a fence the shell-only recovery seeding 
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
-    shell: { rows: { s1: { running: false, completed: false, goal: null } } },
+    shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })

@@ -59,8 +59,8 @@ import { withdrawObservationState, type SourceObservationState } from './complet
 import { browserBootTokenStorage, loadBootToken } from './boot-token.ts'
 // 预热命中率仪表（attempt/hit/cancelled）。
 import { recordPrewarm } from './prewarm-ledger.ts'
-// gateway session-state 只读事实源的快照/实例类型；浏览器安全、无 Node import。
-import type { SessionFactsSource } from './session-facts-source.ts'
+// gateway session-state 只读事实源的快照/实例类型 + 唯一可判谓词（读水位推进门）。
+import { factsDecisionInput, type SessionFactsSource } from './session-facts-source.ts'
 // probe 判定 → 侧栏档位：无快照即缺席 = 未知。
 import {
   advanceReadMark,
@@ -2104,8 +2104,8 @@ export default function App() {
    */
   const markSourceAllRead = useCallback((sourceId: string): void => {
     if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
-    const snapshot = factsStore.getSnapshot().session[sourceId]
-    const rows = snapshot !== undefined && snapshot.verdict === 'ok' ? snapshot.rows : undefined
+    // 唯一判据元组（只升不降的读水位绝不允许从冻结/降级的行推进）。
+    const rows = factsDecisionInput(factsStore.getSnapshot().session[sourceId]).rows
     if (rows === undefined) return
     const through = maxWatermark(rows)
     // 没有可用水位（全是 0）时什么都不做：绝不写一个凭空的"已读"读数。

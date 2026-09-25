@@ -44,8 +44,10 @@
  * Structural slice of one source's runtime-facts report (InstanceRuntimeReport
  * sessions rows) as the badge consumes it: the suppression dimensions are the
  * subagent activity tri-state (stale-guarded) plus the precomputed goal gate.
- * The sibling fields real rows carry (\`running\`, \`completed\`, \`pending\`) are
- * part of the shape so realistic row literals typecheck without casts.
+ * The sibling fields merged rows carry (\`running\`, \`completed\`, \`pending\`) are part
+ * of the shape so realistic row literals typecheck without casts. Note: \`completed\`
+ * is injected by the App ledger at merge time (the channel never carries it) and
+ * \`running\` is producer-resolved through the vendor rule \`status?.running ?? row.running\`.
  * Deliberately NOT imported from the sidebar shared module so this module
  * keeps zero imports and stays runnable anywhere.
  */
@@ -84,11 +86,10 @@ function subagentSuppressesBadge(
 
 /**
  * 跨来源求「完成未读」会话数——输入是 App 的**合并投影**，不是账本本身：
- * 一个会话计入当且仅当 \`completedBySource[source][session] === true\`（chamber
- * 边沿账本）**或** \`runtimeFacts[source].sessions[session].completed === true\`
- * （vendor 自武装）。这与侧栏行尾蓝点/待办区的权威完全一致（\`derive.ts\` 的
- * \`mergeRuntimeFacts\` 就是这两者的并集），因此不会出现「点/待办有、徽标无」
- * 的诚实分叉。
+ * 一个会话计入当且仅当 \`completedBySource[source][session] === true\`（chamber 边沿
+ * 账本）；这里的 \`row.completed\` 是 \`mergeRuntimeFacts\` 从**同一个账本**注入的
+ * （通道从不携带该位），故两个析取恒等价。这与侧栏行尾蓝点/待办区的权威完全一致，
+ * 因此不会出现「点/待办有、徽标无」的诚实分叉。
  *
  * 仍排除：①当前事实行确认在跑的子代理（06 §4.5 与窗口内运行环压制、complete
  * 通知抑制同规——子代理干活中的会话不是完成；stale 来源不算确认）；②goal 相位

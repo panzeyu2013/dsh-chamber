@@ -4,7 +4,7 @@
  * `ok` 但事实已 stale（流断/静默/断连）或 `serviceable === false` ⇒ `degraded`：陈旧事实不得说成完整能力。
  * 只做映射，判定权威在事实源/protocol 模块。
  */
-import type { SessionFactsSnapshot } from './session-facts-source.ts'
+import { isFactsDecisionUsable, type SessionFactsSnapshot } from './session-facts-source.ts'
 
 /** 与侧栏 `SourceSessionFactsMode` 同词汇（结构性重复，避免 renderer → sidebar 反向依赖）。 */
 export type SourceSessionFactsMode = 'full' | 'degraded' | 'legacy' | 'disabled'
@@ -19,7 +19,7 @@ export function sourceSessionFactsMode(
   if (snapshot.verdict === 'legacy-gateway' || snapshot.degradation === 'legacy-gateway') return 'legacy'
   // 任何非空 degradation = 能力受限（与 verdict 矛盾时按更保守一侧呈现）。
   if (snapshot.degradation !== null && snapshot.degradation !== undefined) return 'degraded'
-  if (snapshot.verdict !== 'ok' || snapshot.serviceable === false) return 'degraded'
-  // ok 且可用但事实陈旧 ⇒ degraded（读数仍在，只是不再新鲜）。
-  return snapshot.stale === true ? 'degraded' : 'full'
+  // ok 但判定不可用（serviceable=false 或 stale：读数仍在、只是不再新鲜/载体已断）
+  // ⇒ degraded。可判性唯一家是 session-facts-source，本文件不再内联第二份规则。
+  return isFactsDecisionUsable(snapshot) ? 'full' : 'degraded'
 }

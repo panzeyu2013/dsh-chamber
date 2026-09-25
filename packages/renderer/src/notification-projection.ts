@@ -9,7 +9,7 @@
  *
  *  - 有可用 facts 的来源：完成事实由 facts 证据拥有（host 域水位，可跨端收敛）；
  *    壳 running 边沿只贡献 ask/request，不再发 complete（这就是原先的 useFacts 抑制）；
- *  - 无 facts 的来源：完成由壳 running true→false / vendor completed 边沿给出，
+ *  - 无 facts 的来源：完成由壳 running true→false / 合并事实行上（App 账本注入的）completed 边沿给出，
  *    以「武装位」去重（重新 running 即解除）；
  *  - facts 证据：`completedAtSource === 'observed'` 且水位严格前进才通知
  *    （reconstructed 只出未读）；首份快照只播种水位（design 19 §3.5），两轨共用

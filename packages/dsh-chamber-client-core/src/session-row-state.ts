@@ -16,10 +16,12 @@
  * 的事实"还是"断连后残留的旧事实"）：
  *   - stale   断连来源上仍附加的只读事实——**最优先报出**，因为它是"这一个
  *             读数可能过期"的唯一机器信号；
- *   - channel vendor 经 chamberBridge 运行时通道武装的位（pending/completed）；
+ *   - channel chamberBridge 运行时通道提供的位：pending 来自官方 sessionStatus，
+ *             completed 只来自 App 账本（通道自身永不携带 completed，见 mergeRuntimeFacts）；
  *   - derived chamber 自己的派生量（子代理后代计数，来自 vendor 谱系索引）；
- *   - wire    直读 wire 的运行位（调用方按 `runningRingVisible` 解决快照/通道之争后
- *             传入的布尔）。
+ *   - wire    运行位：调用方传入的布尔——它已由生产者按官方规则
+ *             `status?.running ?? row.running` 解析（resolveSessionRunning），
+ *             `runningRingVisible` 只负责拒绝渲染面再长出第二个权威。
  * 纯函数、零依赖：node 直跑。
  *
  * goal 呈现门（design 19 §3.2.1/§3.2.5，2026-12）：本模块同时是 goal
@@ -85,7 +87,7 @@ export function goalHoldsCompletion(goal: GoalFact | null | undefined): boolean 
 export interface SessionRowStateFacts {
   /** 已解析的运行位（调用方用与圆点相同的规则解决快照/通道之争）。 */
   running?: boolean
-  /** vendor 武装的完成位（运行时通道）。 */
+  /** App 账本注入的完成位（经 `mergeRuntimeFacts` 合并后的事实行；通道自身永不携带）。 */
   completed?: boolean
   /** 等待输入的种类（运行时通道）。 */
   pending?: 'approval' | 'plan-review' | 'question'
@@ -124,6 +126,36 @@ export function subagentActivityOf(
   if (declared !== undefined) return guarded && declared === 'running' ? 'unknown' : declared
   if ((facts?.runningSubagents ?? 0) <= 0) return 'none'
   return guarded ? 'unknown' : 'running'
+}
+
+/**
+ * 官方 `ctx.uiSession.sessionStatus` 投影收敛成运行位后的形状：`undefined` = 该会话
+ * **尚无运行观测**（`publishStatus` 的 id 并集含「只因 pending 交互或完成提醒而存在」的
+ * 行，且直接写 `this.running.get(id)`）。每来源每代一份。
+ */
+export type SessionRunningStatus = ReadonlyMap<string, boolean | undefined>
+
+/**
+ * 官方自己那条运行位解析规则的**唯一实现**
+ * （`dsh-client-ui-workspace` 的 `sessionNode`：`running: status?.running ?? s.running`）：
+ * ui-session 的实时 status 投影有观测就以它为准，会话列表行只是兜底。
+ *
+ * `false` 是一次**真实观测**，因此 `??` 是承重的：写成 `status || row` 会让一个
+ * status=false 的行回落到陈旧行值（假运行环）。
+ *
+ * chamber 的每个运行位消费点都走这里——侧栏运行环、搜索行、驱动完成账本/通知边沿/未读/
+ * 徽标的运行时事实通道、运行身份 mint、子代理谱系计数——一个渲染事实只有一条解析规则，
+ * 且这条规则是**官方的**。
+ *
+ * 例外（**刻意**）：store 修复面（`readOfficialProjection` 与写回的自校验）读 store 自己
+ * 的主张，因为它的职责是修 store，不是描述真相；两者分工在设计文档写明。
+ */
+export function resolveSessionRunning(
+  statusRunning: SessionRunningStatus | undefined,
+  sessionId: string,
+  rowRunning: boolean | undefined,
+): boolean {
+  return statusRunning?.get(sessionId) ?? rowRunning === true
 }
 
 /**

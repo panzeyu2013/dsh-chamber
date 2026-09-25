@@ -43,6 +43,9 @@ export const GROUPS = {
     'test/session-rows/session-row-state.test.ts',
     // goal 三值事实：解析/最后已知/activation 合并/身份签名（design 19 §3.2.1）。
     'test/session-rows/goal-facts.test.ts',
+    // 运行位唯一解析规则（官方 status?.running ?? row.running）的真值表 + 三处消费者
+    // 行为（design 06 §4.3）：?? 与 || 的差别在这里承重，禁止静默改名/删除。
+    'test/session-rows/running-resolution.test.ts',
     'test/session-rows/session-row-window.test.ts',
     'test/session-rows/todo-attention.test.ts',
     'test/session-rows/hover-intent.test.ts',
@@ -87,6 +90,9 @@ export const GROUPS = {
   ],
   // source-runtime: the instance wire/API, runtime management and the source serving/boot gates
   'source-runtime': [
+    // 生产者接线锁（源码文本）：一处 status 读必须喂到四处消费点，且不得漏进 store
+    // 修复面（design 06 §4.3「显示面与修复面分工」）——纯源码断言，无运行时依赖。
+    'test/source-runtime/mounted-running-resolution-wiring.test.ts',
     'test/source-runtime/instance-api.test.ts',
     'test/source-runtime/instance-mutation-values.test.ts',
     'test/source-runtime/control-plane-client.test.ts',

@@ -1297,6 +1297,23 @@ const clearConnectDeadline = (): void => {
       if (!stopped) void baseline()
     },
     stop(): void {
+      // 退役前的最后一次发布（唯一出口）：观察者停掉后**不再有任何载体刷新**，而
+      // `emit()` 也会被 stopped 拦下——若把最后一份 readable 快照留在 store 里，判定面
+      // 会继续把死载体的行当证据（`isFactsDecisionUsable` 仍是 true：读水位推进、完成
+      // 观测、未读账本都还在用它）。保留最后一批行（在场证据不得清空，design 19 §3.2.4）+
+      // 标不可用，与 gateway 事实源「保留既有行 + 标不可用」的两条出口同规。
+      // 只在 `ready()` 时发：其余时刻 store 里最后一份快照本就是 degraded（每条降级
+      // 出口都 emit 过），再发一份只是噪音。
+      if (ready()) {
+        deps.onSnapshot({
+          ...snapshot(),
+          verdict: 'degraded',
+          degradation: 'unavailable',
+          hostState: 'unknown',
+          serviceable: false,
+          stale: true,
+        })
+      }
       stopped = true
       lifetime += 1
       socketReady = false

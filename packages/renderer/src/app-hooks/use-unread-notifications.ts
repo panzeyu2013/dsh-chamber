@@ -35,7 +35,7 @@ import { notificationLedger, publishNotificationInstrument } from '../notificati
 import type { DeliveryOutcome, NotificationOutbox, PendingNotification } from '../notification-outbox.ts'
 import type { NotificationTitleId } from '../notification-projection.ts'
 import { completionWatermark } from '../watermark.ts'
-import { isFactsUsable, type SessionFactsSnapshot, type SessionFactsSource } from '../session-facts-source.ts'
+import { factsDecisionInput, isFactsDecisionUsable, type SessionFactsSnapshot, type SessionFactsSource } from '../session-facts-source.ts'
 import {
   advanceReadMark,
   createUnreadSaveCoalescer,
@@ -190,8 +190,10 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
   const recomputeSourceUnread = useCallback((sourceId: string): void => {
     if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
     const factsSnapshot = factsStore.getSnapshot().session[sourceId]
-    const usableFacts = factsSnapshot !== undefined && isFactsUsable(factsSnapshot) ? factsSnapshot : undefined
-    const factsRows = usableFacts?.rows
+    // 可判 facts = 唯一判据元组（session-facts-source 拥有）：行键与 verified 同源同拍。
+    // 渲染用 isFactsUsable 更宽（含 stale）；判定面必须用这一支（stale 快照的行不得当证据）。
+    const factsDecision = factsDecisionInput(factsSnapshot)
+    const factsRows = factsDecision.rows
     const report = factsStore.getSnapshot().runtime[sourceId]
     // 唯一「正在阅读」谓词：paintedView（屏上是谁，不是选择）
     // ∩ 该来源 current ∩ document.hasFocus()。失焦即视为未读。
@@ -219,9 +221,11 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
       prevLedger: completedStore.getSnapshot()[sourceId] ?? {},
       readMarks: readMarksRef.current[sourceId] ?? {},
       readingSessionId: readingCurrent,
-      // 无 facts = channel-only 照常派生；有 facts 但 serviceable=false ⇒ 原样保留。
-      // 注意 stale 不在此闸内：断连未读照常呈现。
-      factsVerified: usableFacts !== undefined ? usableFacts.serviceable !== false : true,
+      // 冻结的未知（rule 0）：快照**缺席**（断连/未观察，无载体）⇒ channel-only 照常派生；
+      // 快照**在场但不可判**（verdict≠ok / serviceable=false / stale）⇒ 保留 prevLedger，不剪枝、
+      // 不 clobber。旧写法把这一支折叠成恒 true，于是不可判窗口改用另一条通道重算，已武装的完成点
+      // 被剪掉又在恢复时重新武装——Dock 徽标与行点每次载体抖动闪一次。
+      factsVerified: factsDecision.verified,
     }, { deriveUnread, reconcileCompletedFacts })
     prevRunningRef.current[sourceId] = result.nextRunning
     completedStore.setSource(sourceId, result.unread)
@@ -426,6 +430,10 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
             const settled = completeLedgerRef.current.runtimeSettled(sourceId)
             if (settled.has(notification.sessionId)) {
               const anchor = settled.get(notification.sessionId)
+              // 刻意的**原始行**读（不经 factsDecisionInput）：这一处只做「同一次完成的抑制」，
+              // 既不能武装也不能推进任何账本，可判性门对它没有语义（缺行/不可判时 factsRow
+              // undefined ⇒ 早退条件为假 ⇒ 让行，与 suppress-only 的方向一致）。任何会**武装**
+              // 分叉的读必须走 session-facts-source 的判据元组。
               const factsRow = snapshot.session[sourceId]?.rows[notification.sessionId]
               // 锚点缺失（无 host 时间）或 facts 行不晚于锚点 = 同一次完成：认领不重发。
               // 行严格更新 ⇒ 属于下一轮运行，照常通知。
@@ -464,7 +472,8 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
       recomputeSourceUnread(sourceId)
       return
     }
-    const usable = isFactsUsable(snapshot)
+    // 同一可判谓词：read 水位合并与完成证据关联都只认可判快照（stale 的 read 是旧读数）。
+    const usable = isFactsDecisionUsable(snapshot)
     if (usable && snapshot.read !== null) {
       const local = readMarksRef.current[sourceId] ?? {}
       const merged = mergeReadMarks(local, snapshot.read.marks)

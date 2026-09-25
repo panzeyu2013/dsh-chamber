@@ -51,7 +51,7 @@
     },
     {
       "path": "packages/dsh-chamber-client-core/src/derive.ts",
-      "lines": 1808,
+      "lines": 1807,
       "target": 1200,
       "note": "aggregate/session derive"
     },

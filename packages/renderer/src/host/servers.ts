@@ -51,8 +51,9 @@ export type HostFacts = { dshVersion?: string }
  * facts 行 → 侧栏渲染字段 overlay：
  * 只过**渲染字段**（pending / runningSubagents / factAt / goal），判定字段
  * （updatedAt / completedAt / lastTurnEnd）刻意不过桥（derive.ts 的反 churn 纪律）。
- * 只有 verdict ok 且 serviceable 的未读事实才参与——forward-skew / 停机 /
- * legacy 一律返回 undefined，回到 channel-only（不静默假装有事实）。
+ * 只有 `isFactsUsable` 的渲染档才参与（含 stale：断连来源的残留事实照常渲染并在
+ * 投影里标 stale）——forward-skew / 停机 / legacy 一律返回 undefined，回到
+ * channel-only（不静默假装有事实）。判定面用更严的 isFactsDecisionUsable，见该模块。
  * goal（v5 §6 P2a）：无壳来源的 goal 行事实经 overlay 进投影（通道行优先，
  * overlay 只在通道 Unknown 时填补，含显式 null）；字段缺席 = unknown，不写行。
  */
@@ -224,9 +225,9 @@ export function deriveServers(
     // 但**未读事实与 facts overlay 破例**——断连来源仍附只读事实并标
     // stale:true，消费者（todo-attention）按 stale 出「离线未读」条目；没有
     // 事实时合并结果不变（mergeRuntimeFacts 兼容锁）。
-    // App 自持的完成未读点（completedBySource）与通道上报并集：蓝点以派生
-    // 投影为准（deriveSourceUnread；它无视后台来源 shell 的陈旧 selected），
-    // vendor 的 completed 作兜底保留。合并为纯函数 mergeRuntimeFacts（shared/
+    // 完成未读点只有 App 账本（completedBySource）一个来源：蓝点以派生投影为准
+    // （deriveSourceUnread；它无视后台来源 shell 的陈旧 selected），通道永不携带
+    // completed（官方 store 行没有该字段）。合并为纯函数 mergeRuntimeFacts（shared/
     // derive.ts，单测覆盖）。
     // 能力一览：把该来源事实的 probe 判定投影进聚合条目。无快照时
     // 保持缺席（侧栏把缺席读作未知；臆造 full 会让能力说明在未知状态下撒谎）。

@@ -685,17 +685,21 @@ test('reconciledSessionOrder/orderUngroupedSessions keep stored-known ids first 
 })
 
 test('projectRuntimeFacts: live bits, pending kinds, subagent and sparse lineage discipline', () => {
+  // The real client store row (post-`projectList`) carries NO `completed` field — the
+  // official completion-unread fact is `sessionStatus.completionUnread`, which the
+  // mounted store never mirrors. A fixture with `completed` would model a field that
+  // cannot exist, so the completed bit here can only come from the App ledger.
   const report = projectRuntimeFacts({
     // rc.2: `current` is the official main view's retained row, not a list field.
-    byId: { s1: { running: true, completed: true, retainedBy: { mainView: 1 } }, sub1: { running: false, origin: 'subagent' }, s2: { running: false, completed: true }, c: {} },
+    byId: { s1: { running: true, retainedBy: { mainView: 1 } }, sub1: { running: false, origin: 'subagent' }, s2: { running: false }, c: {} },
   }, new Map([['s1', 2], ['c', 0]]), new Map([
     ['s1', { kind: 'question' }], ['sub1', { kind: 'approval' }], ['c', { kind: 'unknown-future-kind' }],
   ]))
   assert.deepEqual(report, {
     current: 's1',
     sessions: {
-      s1: { running: true, completed: true, pending: 'question', runningSubagents: 2, subagentActivity: 'running' },
-      s2: { running: false, completed: true, subagentActivity: 'none' },
+      s1: { running: true, pending: 'question', runningSubagents: 2, subagentActivity: 'running' },
+      s2: { running: false, subagentActivity: 'none' },
       c: { running: false, subagentActivity: 'none' },
     },
   }, 'subagent rows and unknown kinds never enter the report; zero counts stay sparse')
@@ -1265,6 +1269,23 @@ test('round-3 restore: reconcile composition, replaced receipt variants and repo
   assert.equal(runtimeReportSignature({ current: 's1', sessions: { s1: { running: true } } }, undefined, false), runtimeReportSignature({ current: 's1', sessions: { s1: { running: false } } }, undefined, false), 'the projection path drops the running bit')
   assert.notEqual(runtimeReportSignature({ sessions: { s1: { completed: true } } }, undefined, false), runtimeReportSignature({ sessions: { s1: {} } }, undefined, false), 'rendered facts still matter in the projection path')
   assert.notEqual(runtimeReportSignature(a, new Set(['s1'])), runtimeReportSignature(a, new Set(['s2'])), 'different visible subsets differ')
+  // factAt 是渲染字段（行的 data-chamber-fact-at 证据锚），必须像其他渲染字段一样动签名：
+  // 漏签时「行不变、只有观察者时钟前进」的上报被去重丢弃，锚点冻结在首见值。
+  assert.notEqual(
+    runtimeReportSignature({ sessions: { s1: { running: false, factAt: 1_000 } } }),
+    runtimeReportSignature({ sessions: { s1: { running: false, factAt: 2_000 } } }),
+    'factAt-only change must republish on the identity path',
+  )
+  assert.notEqual(
+    runtimeReportSignature({ sessions: { s1: { running: false, factAt: 1_000 } } }, undefined, false),
+    runtimeReportSignature({ sessions: { s1: { running: false, factAt: 2_000 } } }, undefined, false),
+    'factAt is rendered, so the projection path signs it too',
+  )
+  assert.equal(
+    runtimeReportSignature({ sessions: { s1: { running: false } } }),
+    runtimeReportSignature({ sessions: { s1: { running: false, factAt: 0 } } }),
+    '0/absent both mean "no observer fact" — no churn invented',
+  )
 })
 
 test('F6 regression: report.stale is signed on BOTH paths so a stale-only flip is never deduped away', () => {

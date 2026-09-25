@@ -25,6 +25,14 @@ const hook = stripComments(readFileSync(
 // （presence/absence 都不放松）。
 const unreadHook = stripComments(readFileSync(
   fileURLToPath(new URL('../../src/app-hooks/use-unread-notifications.ts', import.meta.url)), 'utf8'))
+const factsSource = stripComments(readFileSync(
+  fileURLToPath(new URL('../../src/session-facts-source.ts', import.meta.url)), 'utf8'))
+const completionObservation = stripComments(readFileSync(
+  fileURLToPath(new URL('../../src/completion-observation.ts', import.meta.url)), 'utf8'))
+const factsMode = stripComments(readFileSync(
+  fileURLToPath(new URL('../../src/session-facts-mode.ts', import.meta.url)), 'utf8'))
+const clientCore = stripComments(readFileSync(
+  fileURLToPath(new URL('../../../dsh-chamber-client-core/src/derive.ts', import.meta.url)), 'utf8'))
 const aggregateHook = stripComments(readFileSync(
   fileURLToPath(new URL('../../src/app-hooks/use-aggregate-refresh.ts', import.meta.url)), 'utf8'))
 const factsHook = stripComments(readFileSync(
@@ -178,4 +186,45 @@ test('the retained-view unverified-running arm stays wired (design 05)', () => {
 test('the escalation ladder gates both levers on stuck evidence', () => {
   assert.match(frame, /stuckEvidence: authority\?\.stuckSince !== undefined/)
   assert.match(frame, /escalationBlocked:/)
+})
+
+test('facts decidability has ONE owner: no consumer may re-spell the rule', () => {
+  // 缺陷史：判定面曾有三份各写一遍的可用性规则——overlay 的 isFactsUsable、未读接线的
+  // 恒真 factsVerified、completion-observation 内联的 !stale 变体。前者渲染用（含 stale），
+  // 后两者判定用；一条规则三个写法两个答案，载体抖动时账本在两条通道间来回重算。
+  // 现在 owner 唯一（session-facts-source 导出两支谓词），本锁保证没有第四份。
+  assert.match(factsSource, /export function isFactsUsable\(/)
+  assert.match(factsSource, /export function isFactsDecisionUsable\(/)
+  assert.match(factsSource, /verdict === 'ok' && snapshot\.serviceable !== false && snapshot\.stale !== true/)
+  // 判定面必须引用 owner，不得内联重写（stale 检查只能出现在 owner 里）。
+  for (const [label, text] of [
+    ['unread hook', unreadHook],
+    ['completion observation', completionObservation],
+    ['App read-watermark', app],
+  ] as const) {
+    assert.match(text, /isFactsDecisionUsable\(|factsDecisionInput\(/, label + ' 必须用唯一判据')
+    assert.doesNotMatch(text, /stale !== true/, label + ' 不得内联可判性规则')
+    // 判定面**不得**触及渲染支谓词：留着它就能用 isFactsUsable(x) && x.stale === false
+    // 越过「唯一判据」的命名锁（审计 B 的已验证逃逸路径）。
+    assert.doesNotMatch(text, /isFactsUsable/, label + ' 是判定面，不得引用渲染支谓词')
+  }
+  // 未读接线的两个消费点必须**同源**：facts 键与 factsVerified 取自同一个判据元组。
+  assert.match(unreadHook, /const factsDecision = factsDecisionInput\(factsSnapshot\)/)
+  assert.match(unreadHook, /const factsRows = factsDecision\.rows/)
+  assert.match(unreadHook, /factsVerified: factsDecision\.verified/)
+  // 回归锁：曾经那一行是「可用 ? serviceable!==false : true」——恒真，规则 0 成了死代码。
+  assert.doesNotMatch(unreadHook, /\?\s*\w+\.serviceable !== false\s*:\s*true/)
+  assert.doesNotMatch(unreadHook, /usableFacts/)
+  // 只升不降的读水位不得从冻结/降级的行推进（读水位也走同一个判据元组）。
+  assert.match(app, /const rows = factsDecisionInput\(factsStore\.getSnapshot\(\)\.session\[sourceId\]\)\.rows/)
+  assert.doesNotMatch(app, /snapshot\.verdict === 'ok' \? snapshot\.rows/)
+  // 能力一览（session-facts-mode）也不得内联重写可判性规则。
+  assert.match(factsMode, /return isFactsDecisionUsable\(snapshot\) \? 'full' : 'degraded'/)
+  assert.doesNotMatch(factsMode, /snapshot\.stale === true \? 'degraded'/)
+})
+
+test('every RENDERED runtime row field rides the report signature (factAt)', () => {
+  // runtimeReportSignature 是 App 提交运行时事实前的去重键：漏签一个渲染字段，
+  // 该字段的单独变化就被整个丢弃（factAt 冻结 ⇒ data-chamber-fact-at 永远首见值）。
+  assert.match(clientCore, /\(facts\.factAt \?\? 0\) > 0 \? facts\.factAt : ''/, 'factAt 必须进行编码（0/缺席同为「无观察者事实」，不制造 churn）')
 })

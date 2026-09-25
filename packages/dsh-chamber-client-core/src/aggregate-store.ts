@@ -370,22 +370,22 @@ export interface SessionRemovedFact {
  * own ctx (design 06 §4): current session id plus per-session live rows. The
  * plugin projects the source's session-list snapshot (minus the ids it has
  * tombstoned as purged — design 24 §12) —
- * every listed session carries its live `running` bit (the App layer derives
- * the completed-but-unread dot from running→idle edges itself, see App.tsx),
- * completed/pending ride the vendor armed state as sparse extras, and
- * `runningSubagents` carries the vendor lineage index's RUNNING subagent
+ * every listed session carries its live `running` bit — the producer's
+ * resolveSessionRunning result — the App layer derives the completed-but-unread dot
+ * from running→idle edges itself (App.tsx), `pending` rides the official
+ * `sessionStatus` projection, `completed` is injected by the App ledger at merge
+ * time and never by the channel, and `runningSubagents` carries the lineage index's RUNNING subagent
  * descendant count per parent (06 §4.5 — a parent whose round ended while
- * background subagents still work must not render its completed dot; the
- * renderer shows the subagent-live ring instead). Attached to
- * ChamberServerAggregate.runtime as a separate channel — never polled by the
- * App layer.
+ * background subagents still work must not render its completed dot). Attached to
+ * ChamberServerAggregate.runtime as a separate channel — never polled by the App.
  */
 export interface InstanceRuntimeReport {
   current?: string
   /**
-   * Every listed session (edge memory for the App's completed-dot
-   * derivation), carrying the live running bit; completed/pending appear only
-   * when the vendor runtime armed them, runningSubagents only when non-zero.
+   * Every listed session (edge memory for the App's completed-dot derivation):
+   * the live running bit, a sparse `pending` from the official sessionStatus
+   * projection, `completed` injected at merge time by the App ledger only, and a
+   * non-zero `runningSubagents`.
    */
   sessions: Record<string, {
     running?: boolean

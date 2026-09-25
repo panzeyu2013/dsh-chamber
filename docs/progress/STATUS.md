@@ -137,7 +137,9 @@
     ⑥ 阈值（L1 门槛 60s / 等回执 190s / L2 退避 300s / L3 120s）与 新增的 N=2 确认、
     写回链**未经实机校准**（60s 门槛的语义已由 `packages/dsh-chamber-client-ui-sidebar/test/session-state/session-authority-escalation.test.ts` 钉住，但
     真机抖动/慢宿主下的误报率未测）；L1 配额为滚动窗口（10 分钟 ≤3 次）；
-    ⑦ 上游语义依赖（refresh 回灌 / emit 无重传 / 失败也 resolve / `mergeOrderedBaseline` 缺席即移除，
+    ⑦ 上游语义依赖（refresh 回灌 / emit 无重传 / 失败也 resolve / `mergeOrderedBaseline` 缺席即移除 /
+    官方运行位解析 `status?.running ?? s.running` 与官方完成位 `status?.completionUnread` /
+    客户端 store 行**没有** `completed` / `visiblePendingKind` 三档，
     以及 `ClientSessions.handleSessionStatus` 公开且一次写 summaries、物化 Session 与 catalog
     activity）由 `packages/dsh-chamber-client-ui-sidebar/test/session-state/vendor-session-fact-contract.test.ts`
     读 pin 住的 vendor 源逐条钉住（语义一变即红，守卫/写回须重推）；该文件在 vendor 树未物化的检出里
@@ -145,8 +147,9 @@
     `docs/checklists/upstream-touchpoints.md` §7 人工复验；
     ⑧ 控制面 `<stateDir>/logs/control-plane.log` 与原生壳 `<userData>/logs/sidecar.log` 取证价值未在一次真机事故验证（失效判据 = 事故后能从这两处检索到 `WebSocket stream … closed` / `heartbeat lost …` 行）；
     ⑨ **宿主 unary `session.list` 的全量性仍缺可验证水位**：客户端将成功结果按全量列表处理，缺席经两次独立读可作否定证据；如果宿主两次都返回同一不完整列表，N=2 仍可能误纠偏。失效判据 = 宿主提供完整性标记或 `asOfSeq`/游标，并将其接入权威读；在此之前真机故障注入必须覆盖该边界；
-    ⑩ 动作取证（收口）：每个动作（probe/read-failed/correct/correct-failed/complete/recovered）
-    落 renderer console + 机内 Local Storage 有界环（`dsh-chamber.authority-log.v1`，每来源 32 条、
+    ⑩ 动作取证（收口）：每个动作（probe/read-failed/correct/correct-failed/complete/recovered）与
+    运行位分歧记录（`status-divergence`，仅在分歧集合变化且距上次写入 ≥30s；被压制的次数带在
+    下一条 detail 里）落 renderer console + 机内 Local Storage 有界环（`dsh-chamber.authority-log.v1`，每来源 32 条、
     最多 16 个来源，跨重载/重启可回读）；**控制面集中日志面**（renderer 可写 verb 或经 notify 通道落
     sidecar/native 日志）未做——可选增强，真机取证已可按上方环回读；
     ⑪ **两处「更省形态」候选未落地**（下轮首选；三轮复核把论据改写成硬约束，免得照旧方案重做踩同一个 race）：(a) 挂到 App 每 30s 兜底 unary pull 的提交点——
@@ -195,6 +198,22 @@
     移除靠事件）——仓内无纠正入口（缺失行不作证），登记待上游或真机。
     ⑧ 保留视图的 90s 界限只清**聚合**的 running 位，不触碰 producer 的 runtimeFacts（蓝点/
     通知边沿仍可能读到 running）：语义由守卫横幅与对话流健康臂覆盖，但两者口径不同，真机未判。
+
+    ⑮ **运行位改走官方解析规则后的实机校准未做**（2026-01）：生产者现按官方 nav 的
+    `running: status?.running ?? row.running` 一处解析（`session-row-state.ts resolveSessionRunning`），
+    喂运行环/搜索行/事实通道/运行身份/子代理计数；status 与 store 行分歧时只向 ⑩ 的环写一条
+    `status-divergence`。真机未验：分歧窗口在慢宿主/断连重连下的实际占比，以及 status 位领先而
+    store 行滞后时侧栏与官方 nav 是否逐帧一致（失效判据 = 实机分歧样本 + 两侧位一致）。
+
+    ⑯ **子代理运行环的「行集」仍与官方不同源**（2026-01 复核确认；先于本次运行位修复）：官方
+    tree.ts `runningChildCount` 读 `list.projectionsBySession[parentId].values.subagentCatalog`
+    （该父的**直接**子行），chamber `indexSubagentDescendants` 走 `parentId` 链把每个后代归给
+    **全部**祖先 ⇒ 嵌套委派（子代理再生子代理、中间层已结束而孙辈仍在跑）时祖辈仍显示运行环/压制
+    完成点，而官方 nav 已显示 completed。**运行位解析已对齐、行集未对齐**（本次只修了解析，并更正了
+    旧文档「同一算法同一输入、语义不可能漂移」的错误声明）。两条候选未裁：(a) 收紧为官方直接子行
+    （会改压制/完成点语义，须连同通知边沿评估）；(b) 保留更宽的压制面并把它写进契约（须真机判断
+    「祖辈回合已结束、孙辈仍在跑」时哪种呈现对用户更诚实）。失效判据 = 该差异被裁决并落入 design 06
+    §4.5 的契约（任一方向）。
 
 - 渲染进程在 JavaScriptCore 崩溃 → 静默整页重载（实证）：JSC 引擎缺陷（WebKit 22625；EXC_BREAKPOINT/EXC_BAD_ACCESS
   落在 rAF 热函数 OSR 与嵌套 async generator 驱动链，10 份 WebContent 报告仅 2 份在 shell 侧留下 `crashed` 痕迹）。
