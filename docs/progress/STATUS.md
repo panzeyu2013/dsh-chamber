@@ -498,6 +498,8 @@
 
 - **api-gateway fork 未重放 rc.2 uplink 客户端半边（G43 补记）**：`ClientUplinkQueue`/`ClientStreamHandle`/`isRemoteUplinkItem`/`requireStrictCodec` 均未移植；`descriptor.uplink !== undefined` 的 generated stream 在 `invokeSelected()` 调用即同步抛错（不静默、不送达、不重放可靠性面；触发条件 = 上游生成的 invocation descriptor 带 uplink）。证据：`packages/dsh-api-gateway/src/client/index.ts#=literal:descriptor.uplink !== undefined`、`packages/dsh-api-gateway/test/behavior/client-uplink-rejection.test.ts`（拒绝路径断言同步抛错且 `connection.rpc.open` 零调用）。
 
+- **插件管理 tab 的容纳层钉在上游页结构上（design 05 §5，偏差）**：`EmbeddedPluginManagerPage.module.css` 用上游自有钩子 `data-plugin-panel`（根）与 `data-window-drag`（页头/详情头两行）把主面板整页覆盖成 tab 体，并隐去与 section 重复的 h1+intro（依据与四条被拒方案见 design 05 §5）。上游改名或改头部结构即**静默回归**；C16 `vendorSourceConsumers` 只登记相对 import（符号须为 ECMAScript 标识符），属性缝无法入表 ⇒ 结构登记在 `docs/checklists/upstream-touchpoints.md` §3、pin 升级按 §7 复核。失效判据：上游给出 embed/tab 变体，或页根/两条头行的属性改名、头行移入容器、标题不再是 `h1`、导语不再是其后邻 `<p>`。两处有意保留：`data-window-drag` 不摘（`ui-theme` app-region 清单把 `.pageHead`/`.detailTop` 定为 chrome 行，`titleBarStyle:'hidden'` 下它是设置弹窗打开时唯一的窗口拖拽面）；工具栏行保留。列宽仍沿用上游 `960px`（兄弟 tab 为 `760px`，当前 800px 对话框下都不触底）。
+
 - git客户端与宿主错误码重叠是有意的显式例外（design 08）：`path-unavailable`/`workspace-path-unavailable`同时是宿主可重试码与客户端确定性拒绝码——客户端把它们从宿主`RETRYABLE_CODES`（`git-worktree/src/core.ts:392,400`）提升为确定性（`client-ui-git/src/shared/git-api.ts:95-98`，理由`:79-94`）：两者均出自宿主`existingPath`探针，重放只会再跑同一失败探针；宿主保留可重试因同一码亦会在已提交删除后的`reconcileBoundRemove`出现（`core.ts:2504-2595`）。重叠由`host-client-lockstep.test.ts:286-296`钉死⇒取舍非缺陷。
 
 - 移出项（P3硬纪律）：匿名control-plane的认证/审计、薄壳聊天/会话列表/审批弹窗、控制面会话runtime/统一索引、连接broker/绑定、walkthrough、通知中心/历史、MCP、文件夹/笔记、web预览、目标/终端等不得回流。设计17/18/19/08/20/24的独立边界例外不得泄入匿名control-plane、引入session消费者/通知历史或变成第二套执行面（design 24例外不作他域先例）。

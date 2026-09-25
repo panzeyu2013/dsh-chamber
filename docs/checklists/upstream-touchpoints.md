@@ -263,6 +263,8 @@ host插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游README（api
 - vendor源码补丁集（构建期改写，design 09 §3.6）：`packages/renderer/scripts/vendor-patches.mjs` 登记两类补丁（rc.2 = 9 文件 / 22 处锚点），由renderer的 `deepseekSource().transform` 在构建期按精确上游文本改写，vendor文件零写入。① 同源资源URL类（N-ctx壳必须改写）：`ui-chat` 的 `api/file`、`client-file-upload` 的 `api/session/uploadFileBinary`、`ui-deliverables` 的 `api/present.host|open`、`session-log-export` 的 `api/session.export`——上游0.1.7起这些路由是**document-relative**（单一 `document.baseURI`，per-entry前缀无处承载），一律经 `ctx.get('chamberBasePath')` 归一为 `/api/i/<id>/` 前缀前置（markdown图片URL以 `new URL(basePath + '/', document.baseURI)` 作解析基准），并保留「缺base path → 回落上游document-relative」的形状（cordis代理对未provide的服务是抛错而非undefined），相关包按covered / covered-deferred登记。② 实测帧成本类（正确性优先）：`ui-chat` 的 `ReasoningRow` 行sweep、`ui-conversation` 的三层rAF发布链（`GenericCommandCard` 行sweep已在0.1.7上游删除，补丁同步退役）——条目必须把A/B实测写进 `reason`（同一Electron/显示器、`app.getAppMetrics` 累积差）。门：C9（锚点**唯一命中**）+ `vendor-patches.test.mjs`（锚点/行为/id形态）+ vite `buildEnd` 的 applied 覆盖（9/9，未 apply 即构建失败）+ `verify-vendor-patch-applied`（产物侧每补丁 present 标记）。新增补丁前先问「能否在chamber自己的包里修」；性能类还须先证明成本是每帧的、且chamber侧门控覆盖不到它。
 - 复合首屏 ← 未覆盖官方行（反向依赖，集合为派生）：`ui-chat` ← `sidebarRight`（`ui-sidebar-right` 行提供）；集合由 `packages/renderer/src/chamber-entry.ts` 的 `register(id, plugin)` 记录（`chamber-entry.ts` 的 `registerDeferred` 覆盖首屏与延迟）、经 `required-extra-rows.ts` 的 `injectedServices`/`missingInjectedServices` 取并集探测（上游同fact：`Object.keys(entry.fiber.inject)`），不手写；`client-file-upload` 为covered（消除extra row依赖，也让构建期补丁覆盖它的同源绝对URL），`client-shortcuts` 亦为covered（rc.2 起 `ui-layout`/`ui-workspace` 的 `shortcuts` inject 依赖由此消除；唯一 default-export class 的官方行：复合入口挂默认绑定、factory 回同一 class），`resources`（渲染期 `useResource` 座，非inject）不成立。漂移（命名空间不再导出 `inject`）由 `packages/renderer/src/required-extra-rows.ts` 的 `registeredInjectMembers` 与 `required-extra-rows.test.ts`（`packages/renderer/test/lifecycle/required-extra-rows.test.ts`）的逐id表钉住。上游新增/改名首屏inject成员时，两侧（`host-graph.ts` 降级注释 + 本行）按design 09 §3.2复核即可——探针自动覆盖新的未覆盖provider。
 
+- 插件管理页源深引与 DOM 缝（chamber `dsh-chamber-client-ui-settings-plugin-manager` → `@deepseek-ai/dsh-client-ui-plugin-manager/src/client/*`：页面/controller/config ledger/locales/navigation/slot-contract 类型）：走包说明符 + vite src 别名与 `paths`（本节第 1 条规则），无相对 import ⇒ C16 不适用；容纳层 `EmbeddedPluginManagerPage.module.css` 另钉该页的 `data-plugin-panel` 根、页头/详情头两条 `data-window-drag`、页头 `h1` + 其后邻 `<p>` 形状——改名/改结构即静默回归（升级按 §7 第 6 步复核；宽容层裁决与有意保留项见 STATUS）。
+
 ## 4. contract-mirror 登记（按上游属主分组）
 
 > 「怎么判」在各自脚本/测试头注；本表只写**契约**镜像点 + 保鲜门 + 细节在哪。
@@ -339,7 +341,7 @@ host插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游README（api
    `node scripts/upstream/verify-mobile-anchors.mjs --require-anchor-root`（严格模式：无锚点树、
    无client产物、插件源码抽不到、pin身份不可判定、或锚点树 `dsh-web-frontend` 版本与pin不一致都exit 1，见 §4登记行）——
    build-time 哈希 class token 与 attribute/role/slot 同列**硬失败**：pin bump 后零命中即 exit 1，
-   按移动包 README「Anchor baseline」逐条重锚（含 `official-hover-card.ts` 的两个 CSS-module token）；
+   按移动包 README「Anchor baseline」逐条重锚（含 `official-hover-card.ts` 的两个 CSS-module token）；插件管理页容纳层的 DOM 缝按 §3 末条 grep 复核（`data-plugin-panel`、页头/详情头两条 `data-window-drag`、页头 `h1` + 后邻 `<p>`）：零命中或形状变化 ⇒ 按 STATUS 偏差条裁决。
 7. 运行时线单独提交（bundle-dsh刷新 + 四锚 + bin.js冒烟）；
 8. 文档回写：CHANGELOG/STATUS + registry刷新后重生成本表 §2/§9（`registry-views.mjs --write`，
    `verify-registry.mjs` 绿；版本值不进checklist）+ i18n重录。

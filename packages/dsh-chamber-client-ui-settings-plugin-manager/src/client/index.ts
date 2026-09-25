@@ -6,7 +6,6 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
-import { PluginManagerPage } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/PluginManagerPage.tsx'
 import { configLedgerSource } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/config-ledger.ts'
 import { en, zh } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/locales.ts'
 import { PluginManagerController } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/manager-store.ts'
@@ -14,6 +13,7 @@ import { createNavigationStore } from '@deepseek-ai/dsh-client-ui-plugin-manager
 import type { PluginManagerFace } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/manager-store.ts'
 import type { PluginManagerLocaleKey } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/locales.ts'
 import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/slot-contract.ts'
+import { EmbeddedPluginManagerPage } from './EmbeddedPluginManagerPage.tsx'
 import { tabLocales, type PluginManagerTabLocaleKey } from './tab-locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -91,6 +91,6 @@ export function apply(ctx: ClientContext): void {
       store,
       inject: () => controller.inject(configLedger, resolveText) as PluginManagerFace,
       children: MANAGER_CHILDREN,
-    }, PluginManagerPage as never)
+    }, EmbeddedPluginManagerPage as never)
   })
 }
