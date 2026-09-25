@@ -11,7 +11,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { evaluateProject, inside, parseTypecheckOutput } from './typecheck-sdk-copy.mjs'
+import { defuseDiagnosticLine, evaluateProject, inside, parseTypecheckOutput } from './typecheck-sdk-copy.mjs'
 
 const ROOT = resolve(fileURLToPath(new URL('../../', import.meta.url)))
 const OWNED = join(ROOT, 'packages', 'dsh-client-connection')
@@ -77,6 +77,18 @@ test('evaluateProject(): an unrelated path, a global diagnostic and infrastructu
   const infrastructure = evaluateProject({ status: 0, stdout: 'not a diagnostic\n', stderr: '' }, OWNED)
   assert.equal(infrastructure.ok, false)
   assert.deepEqual(infrastructure.infrastructure, ['not a diagnostic'])
+})
+
+test('defuseDiagnosticLine(): filtered vendor diagnostics stop looking like CI errors', () => {
+  // The runner annotates `<path>(l,c): error TS####: …` verbatim; a tolerated vendor
+  // diagnostic must stay readable without turning the annotation panel red.
+  const raw = "vendor/harness-packages/@deepseek-ai/dsh-client-modules/src/client/manifest.ts(33,40): error TS2307: Cannot find module '@deepseek-ai/dsh-package-manifest'."
+  const defused = defuseDiagnosticLine(raw)
+  assert.ok(!/\(\d+,\d+\): (error|warning) TS\d+:/u.test(defused), 'the annotatable prefix must be gone: ' + defused)
+  assert.match(defused, /Cannot find module '@deepseek-ai\/dsh-package-manifest'/u, 'the content stays visible')
+  assert.match(defused, /manifest\.ts · \(33,40\) error TS2307 —/u)
+  // Continuation lines (no prefix) pass through untouched.
+  assert.equal(defuseDiagnosticLine('  33   export type X = 1'), '  33   export type X = 1')
 })
 
 test('evaluateProject(): a non-zero exit with no parsed diagnostic and a spawn crash both fail', () => {

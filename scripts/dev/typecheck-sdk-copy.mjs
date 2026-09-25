@@ -101,6 +101,21 @@ export function evaluateProject(result, ownedRoot) {
 }
 
 /**
+ * Defuse one **tolerated** vendor-source diagnostic line for the log. The runner
+ * annotates a verbatim `<path>(<line>,<col>): error TS####: …` line as a red
+ * error, so printing filtered vendor diagnostics in their raw shape keeps a
+ * by-design tolerance looking like a failure in the CI annotation panel. The
+ * content stays visible (the root gate prints it on purpose); only the
+ * machine-readable prefix is re-spaced. Chamber-owned diagnostics are printed
+ * raw — a real failure must stay annotatable.
+ * @param line - one raw diagnostic line.
+ * @returns the line with `(l,c): error TS####:` rewritten to ` · (l,c) error TS#### —`.
+ */
+export function defuseDiagnosticLine(line) {
+  return line.replace(/\((\d+),(\d+)\): (error|warning) (TS\d+):/u, ' · ($1,$2) $3 $4 —')
+}
+
+/**
  * Run one tsc program and report it under the shared owned/vendor/unexpected
  * classification. This is the primitive every filtered gate uses, so a new
  * gate with vendor sources in its program is a config argument, not a copy of
@@ -130,7 +145,7 @@ export function runTypecheckProgram({ config, ownedRoot, label, showFiltered = f
     }
     if (showFiltered && outcome.vendor.length > 0) {
       console.error(label + ': ' + String(outcome.vendor.length) + ' vendor-source diagnostic(s) filtered (not chamber-owned):')
-      for (const item of outcome.vendor) console.error(item.lines.join('\n'))
+      for (const item of outcome.vendor) console.error(item.lines.map(defuseDiagnosticLine).join('\n'))
     }
     console.error(
       label + ' FAILED — ' + String(outcome.owned.length) + ' owned, '
@@ -141,7 +156,7 @@ export function runTypecheckProgram({ config, ownedRoot, label, showFiltered = f
   }
   if (showFiltered && outcome.vendor.length > 0) {
     console.log(label + ': ' + String(outcome.vendor.length) + ' vendor-source diagnostic(s) filtered (not chamber-owned):')
-    for (const item of outcome.vendor) console.log(item.lines.join('\n'))
+    for (const item of outcome.vendor) console.log(item.lines.map(defuseDiagnosticLine).join('\n'))
   }
   console.log(
     label + ' OK (owned files clean; '
