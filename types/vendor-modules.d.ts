@@ -365,6 +365,10 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
     disabled?: boolean; portal?: boolean; maxWidth?: number; children: ReactElement
   }
   export function Tooltip(props: TooltipProps): JSX.Element | null
+  /** macOS desktop detection for hiddenInset-titlebar layout variants (vendor
+   *  darwin-desktop.ts): both desktop shells mark `<html>` with
+   *  `data-platform="darwin"`; plain web never sets it. Read at render time. */
+  export function isDarwinDesktop(): boolean
   /** Host clipboard write; resolves true only when the host accepted the write. */
   export function writeClipboard(text: string): Promise<boolean>
   export const BrandWordmark: (props: any) => JSX.Element | null

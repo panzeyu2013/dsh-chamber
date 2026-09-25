@@ -234,6 +234,10 @@ vite shared 单例纪律，因为目标实例自己的 ctx 也要读它）及其
 - logo 行（wide/rail）、New Session（走本 ctx 的运行时动作——恒为当前来源）、
   wide/rail 折叠状态机（滑动 + 交叉淡化、rail-in 动画）、跟随指针的滚动条
   纪律、foot（`sidebar.footer.action` + `sidebar.settings`）。
+- macOS 顶部带（`.topStrip`）：隐藏标题栏下红绿灯浮在列顶，故该带预留这一条并
+  把面板开关停在带内（上游 ui-sidebar 同形：52px 带、负 margin 抵消 root 内距，
+  logo 行上提 12px 钻回带下沿；开关中心与折叠态 `shell.leading` 座同高，收展
+  不跳位）。非 macOS 上开关仍停在 logo 行右端。
 - 框架的 `shell.leading` 窗口 chrome 座（`SidebarLeadingControls.tsx`）：macOS 下
   收起的侧边栏整列隐藏，框架在红绿灯旁挂载该座，占用者把「展开侧边栏」与
   New Session 放回那里，两者各自展示页面快捷键目录（`ctx.shortcuts.catalog`）

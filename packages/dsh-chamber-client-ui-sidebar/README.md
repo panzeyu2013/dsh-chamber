@@ -315,6 +315,13 @@ session-echo ledger (`shared/session-echo.ts`) and its own single funnel
   the current source), the wide/rail fold state machine (slide + crossfade,
   rail-in animation), the pointer-followed scrollbar discipline, the foot
   (`sidebar.footer.action` + `sidebar.settings`), i18n namespace `sidebar` (zh key source; `src/client/locales.ts`).
+- The macOS top strip (`.topStrip`): the hiddenInset titlebar floats the traffic
+  lights over the column's top edge, so the strip reserves that band and carries
+  the panel toggle (upstream ui-sidebar geometry: a 52px band whose negative
+  margins cancel the root padding, the logo row tucking 12px back under it; the
+  toggle's centre stays level with the collapsed `shell.leading` seat, so
+  collapse/expand never shifts it vertically). Off macOS the toggle stays at the
+  logo row's right edge.
 - The frame's `shell.leading` window-chrome seat (`SidebarLeadingControls.tsx`):
   on macOS the collapsed sidebar hides the whole column, so the frame mounts
   this seat beside the traffic lights and the occupant restores the reopen

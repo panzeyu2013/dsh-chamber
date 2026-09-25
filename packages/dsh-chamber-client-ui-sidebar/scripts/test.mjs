@@ -132,6 +132,9 @@ export const GROUPS = {
   leading: [
     'test/leading/leading-controls.test.ts',
     'test/leading/leading-seat-wiring.test.ts',
+    // Expanded-state window chrome: the darwin top strip (traffic-light band)
+    // and the panel toggle it carries — geometry + wiring lock.
+    'test/leading/macos-top-strip.test.ts',
   ],
   // visual-lock: source locks over the sidebar's visual rules. No entrance animation may
   // start invisible (a frozen timeline pins it at opacity 0 while staying hit-testable),
