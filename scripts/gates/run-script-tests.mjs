@@ -87,6 +87,7 @@ export const GROUPS = {
     'scripts/upstream/plugin-protection-gate.test.mjs',
     'scripts/upstream/lockfile-store-path-mappings.test.mjs',
     'scripts/upstream/verify-mobile-anchors.test.mjs',
+    'scripts/upstream/roster-parity.test.mjs',
   ],
   // Release chain: workflow safety policy, dual-flavor artifact清单, packaging
   // manifest lockstep, bundled-payload notices (primary runtime).
@@ -123,6 +124,10 @@ export const SUBJECT_TESTS = [
   {
     path: 'scripts/release/release-workflow-policy.test.mjs',
     reason: 'derives the release/push gate alignment from .github/workflows/ci.yml; the subject is the workflow pair, not one module',
+  },
+  {
+    path: 'scripts/upstream/roster-parity.test.mjs',
+    reason: 'reconciles the pin bundle roster (vendor bundle cordis.patch.yml name set) with packages/renderer/src/chamber-covered.ts; the subject is the agreement between the two, not one module',
   },
   {
     path: 'scripts/gates/install-gateway-pure.test.mjs',
