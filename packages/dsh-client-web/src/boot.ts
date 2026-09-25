@@ -278,6 +278,9 @@ export class AppWebEntry {
         fiberLabel === 'pending' && fiber !== undefined
           ? Object.keys(fiber.inject).filter(service => ctx.get(service) === undefined)
           : [],
+        // 无 fiber = import/apply 失败：模块系统记录了原因就用它，没有才回落「看 console」
+        //（上游 boot-client.ts 的 assertEntriesActive 同口径，§22.4.2-1）。
+        fiberLabel === undefined ? this.modules.importError(name)?.message : undefined,
       )
       if (verdict.kind === 'ok') continue
       if (verdict.kind === 'degraded') {

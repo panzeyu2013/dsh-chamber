@@ -35,6 +35,17 @@ test('sweep: a manifest row without a fiber fails the boot (import failed)', () 
     { kind: 'fatal', reason: '@deepseek-ai/dsh-client-ui-tool: import failed (see console for the import error)' })
 })
 
+test('sweep: a recorded import error names the real reason (upstream boot audit parity)', () => {
+  assert.deepEqual(
+    classifySweepEntry('@deepseek-ai/dsh-client-ui-tool', undefined, new Set(), [], 'Failed to fetch dynamically imported module'),
+    { kind: 'fatal', reason: '@deepseek-ai/dsh-client-ui-tool: import failed: Failed to fetch dynamically imported module' })
+  assert.deepEqual(
+    classifySweepEntry('row', undefined, new Set(), [], ''),
+    { kind: 'fatal', reason: 'row: import failed: ' },
+    // 空串也照用：空串 ≠ 无记录（有记录就报真实原因）。
+  )
+})
+
 test('sweep: an active manifest row is ok', () => {
   assert.deepEqual(classifySweepEntry('@deepseek-ai/dsh-client-ui-tool', 'active', new Set(), []), { kind: 'ok' })
 })

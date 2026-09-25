@@ -32,12 +32,20 @@ export function classifySweepEntry(
   fiberLabel: SweepFiberLabel,
   toleratedIds: ReadonlySet<string>,
   pendingMissing: readonly string[],
+  importErrorMessage?: string,
 ): SweepVerdict {
   if (toleratedIds.has(name)) {
     return fiberLabel === 'active' ? { kind: 'ok' } : { kind: 'degraded' }
   }
   if (fiberLabel === undefined) {
-    return { kind: 'fatal', reason: `${name}: import failed (see console for the import error)` }
+    // 上游 boot audit 口径（packages/client/web/src/boot-client.ts）：import 失败的真实
+    // 原因由 module system 的 importError(id) 记录；只有它没记录时才回落「看 console」。
+    return {
+      kind: 'fatal',
+      reason: importErrorMessage === undefined
+        ? `${name}: import failed (see console for the import error)`
+        : `${name}: import failed: ${importErrorMessage}`,
+    }
   }
   if (fiberLabel === 'active') return { kind: 'ok' }
   if (fiberLabel === 'pending') {
