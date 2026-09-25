@@ -1,6 +1,6 @@
 # DIVERGENCE：新旧行为差异登记（重构期）
 
-> 归属：`session-chain-refactor-plan.md` §4.1。差分回放器（`scripts/refactor/equivalence.mjs`）
+> 归属：差分回放门（`scripts/refactor/equivalence.mjs`，`run-checks.mjs` 的等价性步）。差分回放器
 > 允许的差异**只有**三类：① 措辞/日志文本；② 同一拍内动作的顺序；③ 新增观测面。
 > 除这三类外的任何差异都属于**行为变更**，必须在本文件有一条具名记录，否则差分门判红。
 

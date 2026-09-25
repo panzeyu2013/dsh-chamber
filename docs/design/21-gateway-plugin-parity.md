@@ -397,7 +397,7 @@ R2 只看**直接 spec**；官方层的**依赖闭包**同样进入实例树（�
  清单单一来源 `scripts/lib/build-artifacts.mjs`）独占，
   `verify-electron-artifacts.mjs`（macOS 腿/CI）执行编译产物冒烟。仍无守卫：`dist/web/**`、`dist/host-*-package/**`、
   vendor `allowBuilds` 锁步；CI 也从未真跑出 `SMOKE PASS`（smoke 恒 SKIP）。仍未落地的最小守卫建议（G2/G3/G5/G7/G8；
-  G1 `verify:test-wiring`）见 `docs/progress/todo/product-freshness-guards.md`，开放状态与失效判据见 STATUS；
+  G1 `verify:test-wiring`）见 `docs/progress/todo/refactor-plan.md` §8，开放状态与失效判据见 STATUS；
 - gateway 拒绝码→本地化文案映射未做（登记接受），范围是**全部**服务端拒绝码：409 族与
   §6.11 的 400 判定码（`protected`/`needs-version`/`needs-exact-version`/`generation-mismatch`/
   `runtime-version-unknown`/`invalid-name`）以及 503 `protected-set-unavailable`；新增的 `no_undoable_op`（409）/`journal_unavailable`（503）/`write_fence_unavailable`（503）同样逐字显示服务端英文 `error`；

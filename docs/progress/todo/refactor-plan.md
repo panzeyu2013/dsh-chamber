@@ -143,22 +143,7 @@ useSyncExternalStore 的小 store（单源），事件回调读 store 的 getSna
   vendor）、Swift 业务面与已移出项（design 01 §4/§5）。
 - 不把"再导出/转发"当成减量；不把格式化折叠当减量（LOC 对账以基线脚本口径为准）。
 
-## 6. 终局对账（第 16 轮，本 worktree；核心指标 = 反补丁）
-
-| 验收指标 | 目标 | 终局实测 | 状态 |
-|---|---|---|---|
-| 生产 LOC | 参考（原 −9,000 指标已由用户改判作废） | 176,296 → **176,395**（新增 5 个单源 store/hook 模块；删除面净减仍为正） | 不验收（仅参考） |
-| 值引用环 | 0 | **0**（3 个全断：host-logs⇄spawn-dsh、core-parse⇄core-validation、desktop gateway-provider⇄gateway-session） | 达成（门：verify:import-cycles） |
-| 类型环 | 命中显式 allowance | **1**（desktop shell-core ⇄ 8 个 shell-ipc-*，allowance 内写明"须先拆 shell-core"） | 达成（棘轮钉住） |
-| 死导出 | 零消费者即红 | **789 index + 796 entryless，0 dead**（5 条 seam 白名单；entryless 覆盖 desktop/renderer） | 达成（门：verify:no-dead-exports） |
-| God 文件 | 只降不升 | 15 文件 **28,892**（基线 28,921+）；App 3,107 → **2,601** | 达成（棘轮；14,200 仅为目标值，非验收） |
-| 跨包逐字重复 | 与台账相比不增 | 见 §6.1 复核（口径修正：多行体 31 组，其中 24 组为 3–5 行守卫；≥8 行仅 4 组且全部 parity 锁） | 复核（见 §6.1） |
-| 补丁链 | 根因修复 + regression test，或登记退役条件与证据 | 已修并对锁 **10 条**：unread v1、healthErrorTick、roster 双权威、回声三镜像、facts 镜像、注册表投影镜像、watchdog runtimeFacts 镜像、mounted 来源表三副本、completed/edge 账本、视图对；**未收口已登记**：renderer 外三处（§3.1）与 legacy fold（缺支持窗口证据） | 达成 |
-| 一条规则一处实现 | 单源 | shutdown / isPidAlive / jsonResponse / basenameOf 单源；11 对 state/ref 镜像**全部收口** | 达成 |
-| static / tests / full / typecheck | 恒绿 | static **20/20**、tests **21/21**、full **54/54**、typecheck **0 错误** | 达成 |
-| 不新增 utils/抽象包 | 约束 | 遵守：新增均为既有包内叶子/hook/store（echo/facts/remotes/roster/deadline） | 达成 |
-
-### 6.1 跨包逐字重复复核（第 16 轮口径）
+## 6. 跨包逐字重复复核（口径修正）
 
 - 多行函数体（≥3 行）逐字相同且跨包：**31 组**；其中 **24 组是 3–5 行**的类型守卫/错误串助手
   （isRecord / isPlainRecord / isWatermark / errorMessage 家族，分布在 control-plane、
@@ -169,25 +154,9 @@ useSyncExternalStore 的小 store（单源），事件回调读 store 的 getSna
   暴露真实分布。3–5 行守卫若合并需要跨包共享叶子（引入反向依赖）或新增抽象包（违反约束），
   故登记而非强改；parity 锁组由既有测试钉住，删除即红。
 
-**新增的机械化守卫**（防止已达成分项回退）：verify:import-cycles（值环 0 + 类型环 allowance 棘轮）、
-verify:file-budgets（15 文件只降不升）、verify:no-dead-exports（20 个 index 包 + desktop/renderer
-796 个 entryless 导出、5 条 seam）。三者均登记于 package.json / run-checks / ci.yml / release.yml。
-
 ## 7. 审计轮增补（本 worktree 实测）
 
-### 7.1 已落地
-
-- **最后一个类型环解除**：`ShellIpcCtx` / `ShellAssemblyCtx` / `HostEdges` / `ProjectedRegistryInstance`
-  迁往四个叶子模块（`host-edges.ts` 151 / `shell-assembly-ctx.ts` 396 / `shell-ipc-ctx.ts` 102 /
-  `registry-projection.ts` 20）；8 个 `shell-ipc-*.ts` 只依赖 `shell-ipc-ctx.ts`。
-  `verify-import-cycles.mjs` 的 `TYPE_CYCLE_ALLOWANCE` 清空（无环可匹配即失败），自测负控绿。
-- **God 文件棘轮**：`shell-core.ts` 2,492 → **1,821**（`file-budgets.json` 随之下调；target 1,600 未达，
-  剩余值面为投递状态机 / 路径模板 / 运行时解析 / renderer 深链队列）。
-- **验证**：`tsc --noEmit` 0 错误；desktop 套件绿；`run-checks.mjs static` 20/20、`tests` 21/21；
-  `verify:no-dead-exports` / `verify:package-boundaries` / `verify:file-budgets` 绿。回滚备份：
-  `.tmp/audit-backup/shell-core.ts.bak`（`.tmp/` 已 gitignore）。
-
-### 7.2 新一轮审计新增开放项（未动；供下一轮排期）
+### 7.1 新一轮审计新增开放项（未动；供下一轮排期）
 
 - **renderer usable-facts 三处判定分叉**：`host/servers.ts`（要求 serviceable）vs
   `use-bridge-subscriptions.ts` / `use-unread-notifications.ts/:261`（只看 verdict）；
@@ -234,25 +203,7 @@ verify:file-budgets（15 文件只降不升）、verify:no-dead-exports（20 个
     `session-stall.ts` 与 open-in `session-stream-health-probe.ts` 逐字复制；
     `safeStorage` 访问器手写 5 份。收口优先：openPromise → client-core；spec 分类 → 单一 verdict。
 
-### 7.3 §4/§5 清理落点（本轮，均以门禁/套件验证）
-
-**已删 / 已收口：**
-
-- 死代码：`SESSION_STATE_PROBE_TIMEOUT_MS`（假单源；renderer 的 5s 才是唯一现实）、
-  `sourceFingerprintIsCurrent` / `staleOwnedSessionIds` / `orderApplyOps`（含 `ApplyInput`/`OrderedApplyOps`）/
-  `BATCH_FAILURE_POLICY` 与其单测（零生产消费者；活的面判定在 `SettingsShell` 内联，apply 路径不产计划）；
-  `isFixedSectionId` 由内联改为接线（`resolveActiveSection` 复用同一谓词）。
-- 重复：`openPromise` 三态证据 → `client-core/src/session-open.ts` 单源（mobile/open-in 共用，删两段逐字复制）；
-  test-runner 清单锁步 → `scripts/lib/test-manifest.mjs` 的 `manifestLockstepProblems`（renderer/sidebar/desktop
-  三份本地 walk+ignore 删除；引擎自测 26/26 含新负控）；`switch-frame-verdict.ts` 移出生产 `src/` 到
-  `packages/renderer/scripts/`（perf 专用，脚本/测试为唯一消费者）。
-- 缺陷单源：renderer usable-facts → `isFactsUsable(snapshot)`；`host/servers.ts` /
-  `use-bridge-subscriptions.ts` / `use-unread-notifications.ts` 三处两答归一
-  （回归锁：`test/session-state/session-facts-source.test.ts`）。
-- 死字段：`TransportProvider.kind` 删除（ssh/gateway 字面量、接口文档与 `transport-manager` 的
-  过时 legacy-kind 注释同步修正）。
-- 判面覆盖：`verify-no-dead-exports` 的 entryless 扫描补 `.cts`，`preload.cts` 进入判面
-  （0 运行时导出，现绿）；`ENTRYLESS_PACKAGES` 里失效的 `preload.ts` 条目删除。
+### 7.2 未删项与判面/锁步依据（非漏做）
 
 **未删（有判面或锁步依据，非漏做）：**
 
@@ -266,3 +217,50 @@ verify:file-budgets（15 文件只降不升）、verify:no-dead-exports（20 个
   客户端半 seam，独立一轮。
 - `safeStorage` 访问器 5 份 / spec 分类两套 / session-row 三转换 / reconnect 第四臂：属 §3 单源条目，
   需各自先补跨端锁步测试。
+
+## 8. 产物新鲜度守卫（剩余 G2/G3/G5/G7/G8；未排期）
+
+> 产物新鲜度：`desktop/dist/control-plane/**`（标记守卫）、`gateway/dist/**`（标记守卫）、
+> `gateway/host-packages/dsh-chamber-client-ui-mobile/**`、`desktop/dist/preload.cjs`、
+> `renderer/src/generated/**` 与 `gateway/dist/index.js`（用包自身 build.mjs 重建-比对）已有「陈旧/缺失 ⇒ 红」的比对门
+> （`scripts/gates/verify-artifact-freshness.mjs` 的 tests/full，经 `ci.yml:179` 进 CI；seed `dist/index.js` ×4 +
+> `dsh-runtime/dist/index.js` + mobile `dist`/`lib` 的新鲜度归 C8（`scripts/upstream/verify-upstream-touchpoints.mjs`
+> 重建-比对，清单单一来源 `scripts/lib/build-artifacts.mjs`）；`scripts/gates/verify-electron-artifacts.mjs`
+> 的 macOS 腿/CI 另执行编译产物冒烟。G1=`verify:test-wiring`、G4/G6 同属该门）。本文只留仍无守卫的产物与最小守卫建议；开放状态与失效判据见
+> `docs/progress/STATUS.md`「产物新鲜度守卫」条，design 21 §7 登记。想法清单非承诺；落地后按
+> `docs/progress/README.md` 移出。
+
+### 1. 仍无守卫的产物
+
+|产物|生成者|提交？|当前守卫|陈旧后果|
+|---|---|---|---|---|
+|`packages/desktop/dist/web/**`|renderer `build`（vite `build.outDir = ../desktop/dist/web`，三处路径契约见 `packages/desktop/scripts/electron-shared.mjs`）|忽略|只有路径契约文本断言（`scripts/electron-shared.test.mjs`）与 CI 的 scoper 标记断言|打包发行旧前端壳（IPC名/槽位可能漂移）|
+|`packages/desktop/dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**`|`scripts/build-host-graph-package.mjs`（各seed包 `dist` cpSync）|忽略|只有行序/outDir断言（`scripts/release/packaging-manifest-lockstep.test.mjs`）|打包seed旧宿主包|
+|vendor `allowBuilds` 锁步（根 `pnpm-workspace.yaml` ↔ `packages/dsh-runtime/src/allow-builds.mjs`）|人工同步|提交|无|新增原生依赖漏登或漏deny会静默漂移|
+
+`dist/` 整族在 `.gitignore`：干净checkout的"缺失"是正常态——首批 host/dsh-runtime/mobile 产物须先由 `pnpm run build:artifacts` 自举，其余按需构建；要防的是本地/打包态的"存在但陈旧"——CI每次全新构建，看不到这一类。
+
+> 表中 `scripts/*` 指 `packages/desktop/scripts/*`（Electron构建脚本；gateway侧 `packages/gateway/scripts/*`），非仓库根 `scripts/`。
+
+### 2. 最小守卫建议
+
+#### P0（成本低、把"没有守卫"变成显式登记）
+
+- **G2产物新鲜度登记表**：产物 ↔ 生成者 ↔ 守卫或豁免一张表，门禁断言每个产物都有守卫或显式豁免（§1全部）。成本低–中（表 + 纯函数）；收益：杜绝静默。
+- **G8豁免表**：不需要守卫的产物（每次构建全新、或由C8/门禁覆盖）显式记理由（§1全部）。成本低；收益：防止G2表被"全部豁免"掏空——豁免也要有人签。
+
+#### P1（补强，覆盖剩余产物）
+
+- **G3 `.build-manifest.json` 输入摘要**：构建时写 `{inputsHash, toolVersion, outputs[]}`，测试比对；比标记串强——无文案产物（web/host-package）也能判。适用全部忽略态产物。成本中（每构建脚本一处 + 比对函数）；收益：不依赖"改文案时手工搬标记串"。
+- **G5 `before-pack` 打包前兜底**：既有 `scripts/before-pack.mjs` 断言 `dist/web`、`preload.cjs`、`host-*-package`、`control-plane` 存在且不早于其输入（mtime兜底；fresh checkout缺失另判）。适用打包闭包。成本低；收益：开发机没跑测试也不把陈旧产物打进包。
+
+#### P2（纪律/长尾）
+
+- **G7 vendor allowBuilds锁步**：断言根 `pnpm-workspace.yaml` 的 `allowBuilds` 与 `packages/dsh-runtime/src/allow-builds.mjs` 的 `ALLOW_BUILDS`/`DENY_BUILDS` 镜像关系。成本低；收益：AGENTS把它列为硬事实、当前只靠人工同步——新增原生依赖漏登或漏deny会静默漂移。
+
+### 3. 开放问题
+
+- 标记串（现状）vs输入摘要（G3）：标记串便宜可读，但每次改文案要同步移动；两者并存是否值得。
+- 失败信息**必须**给重建命令（现有比对门即如此），否则操作者只看到红、不知下一步。
+- CI腿的边界：CI每次全新构建，"陈旧"只在本地/打包态出现——要真覆盖得在打包作业跑G5，而非push腿追加构建。
+- smoke无PASS腿（见STATUS单列条）：是否在release作业装一次真实dsh运行时跑冒烟；不在本清单范围内。

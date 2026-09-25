@@ -22,10 +22,8 @@
   - **mobile `session-stall.ts` 的行数验收需重新表述**（范围决策）：原定 ≤150，实测拆分后仍 835，其构成约 9 成为 DOM 与提示运行壳、决策核心约 95 行且已表驱动；继续压行只能把 DOM/运行壳搬到兄弟文件（总行数不变）。待裁决 = 接受「值与规则单源」为判据，或明确接受搬家式收口。
   - **Swift 壳**：`RendererHangWatchdog` 与 `RendererRecoveryPolicy` 承担原生恢复判定；仍开放 `RendererRecovery.swift`（181→≤90）与 `RendererHangWatchdog.swift`（105→≤60）的结构收口及 `ShellRecoveryPolicy` 判定/记账分离。原生行为判据 `pnpm run test:macos` + `test:swift` 只能在 macOS 腿完成。
   - **等待原语**：`withDeadline` / `waitForCondition` 已替换 5 处手写期限（stream 开帧/握手/重试道、排队期限、serving 轮询）与 shell 的两处手写记账；`host-graph` 的异步探测重试环不适用（同步谓词表达不了 `await`），`journal-stream` 按设计保留 `AbortSignal.timeout`。未完成：`withBootTimeout` / `boundedTailWait` 两个名字是否字面删除（记账已归零）。
-  - **收口跑未做**：`run-checks.mjs full` 与 `remote-state-acceptance` 需在当前集成分支上复跑；`pnpm run test:macos`（macOS 腿）。
   - **反补丁波次（门禁先行）**：不变量契约（I1–I7）与门禁映射见 design 14 §D4。未闭合：①阶梯决策边界：`planLadder` 持调度半，open-in 的 stage 迁移/具象 `resync()` 与 producer 的权威执行端仍在宿主（phase 机不进引擎）；②子代理完整性信号仍是上游依赖（本地已三值化：索引缺席/stale 降 `unknown` 中性呈现，见 upstream-proposals §7）；③载波身份边界仍是请求键（加宽账本/期限装载已归 reducer；per-stream episode token 需上游在 `open` 回调给出或由宿主承担首帧期限，见 upstream-proposals §3/§8）；④P6：上游 `session/follow` 首帧期限/`doOpen` 错误契约仍待落，退役条件由 `verify:upstream-lifecycle-contract`（pin 源两半 + 负控）钉住，落地即删客户端加宽阶梯；移动端 JSC/rAF 与真机语义仍只有实机门禁；G-H 面仍有 23 个聚合/镜像/差分面各自带退役条件登记。
-  - **既有 flaky（非本重构引入）**：`packages/gateway/test/session-state/session-state-observer.test.ts` 的 `the grace window is honoured`（单独重跑可复现，断言 `the mux grace timer delegates after the window`）；另一类只在 `tests` 模式内出现的偶发（`test:gateway` / `test:control-plane`，单独均通过）未定位。
-- 结构精简后的平台腿（未验证）：本轮新增/改动的 Swift 单测（RollingWindowLimiter/StrictJSONNumber/PrivateFS/JSLiteralEscaping）与编译态 sidecar/native 走查需 macOS 腿复验（`pnpm run test:swift`；`build:sidecar` + `DSH_CHAMBER_SIDECAR_COMPILED=1 pnpm run test:sidecar:compiled`；`acceptance:gui --flavor native --require-assembly`）。Linux 本机只 loud skip，不得当绿。
+  - **既有 flaky（非本重构引入）**：只在 `tests` 模式内出现的偶发（`test:gateway` / `test:control-plane`，单独均通过）未定位——`test:control-plane` 侧的表现是文件内一条 `✖` 后进程不退出、撞满按文件预算被 SIGTERM/SIGKILL 收尾（失败详情随进程被杀丢失；运行器已不再把该情形误报为「无法启动」），并留下一个占端口的假宿主。
 
 - 实机门禁（未验证；缺真实实例 / 打包态环境）：
   - 多来源sleep/wake与隐藏恢复、版本歪斜容忍、gateway形态回归；
@@ -79,7 +77,7 @@
 
 - 设计21网关插件能力对齐：剩余 §9实机E2E矩阵（真实gateway×desktop双通道门禁、registry传递依赖/lifecycle、故障注入、journal中断对账；发布前执行；.172升级因凭据轮换暂停待恢复）；UI余留：who/when tooltip未渲染、拒绝码→本地化映射未做（409逐字英文）、pollGatewayReady英文串未本地化；archive-pick双模式对话框为macOS-v1。
 
-- 产物新鲜度守卫（§6.11 / design 21 §7）：`desktop/dist/control-plane/**`（`packages/desktop/scripts/control-plane-freshness.test.mjs`）与 `gateway/dist/**`（`packages/gateway/test/packaging/build-smoke.test.ts`）是「存在但缺当前标记 ⇒失败」的标记守卫；起「陈旧 ⇒红」分两层：**C8（`scripts/upstream/verify-upstream-touchpoints.mjs`）** 对构建期生成物做重建-比对（6 组：`dsh-runtime/dist`、4 个 seed `dist/index.js`、mobile `dist+lib`；清单单源 `scripts/lib/build-artifacts.mjs`，`ensure-artifacts`/freshness 门均 import 它）；**`scripts/gates/verify-artifact-freshness.mjs`**（`scripts/gates/run-checks.mjs` 的 tests/full，经 `ci.yml` 进 CI）覆盖其余四类：`gateway/host-packages/dsh-chamber-client-ui-mobile/**`（与源逐字节）、`desktop/dist/preload.cjs`（tsc 重编比对；`scripts/gates/verify-electron-artifacts.mjs` 另在 macOS 腿/CI 执行编译产物冒烟）、`renderer/src/generated/**`（重跑生成器比对）、`gateway/dist/index.js`（用包自身 `scripts/build.mjs` 在临时副本重建后逐字节比对 新增第 4 类）。仍未守卫：`desktop/dist/web/**`（`packages/desktop/scripts/electron-shared.test.mjs` 只断路径文本；仅 scoper 标记由 `packages/dsh-chamber-client-ui-mobile/scripts/assert-scoper-artifact.mjs` 在 CI 断言）、`dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**`（只断言行序/outDir）、vendor `allowBuilds` 锁步（G7）。未落地的最小守卫建议 G2/G3/G5/G7/G8（G1 已落地 `verify:test-wiring`）见 `todo/product-freshness-guards.md`，design 21 §7 登记。失效判据：每个产物有「陈旧 ⇒ 红」守卫或进入豁免表（G8）。（scoper 收窄：mobile committed `lib/client.js` 由 `packages/dsh-chamber-client-ui-mobile/scripts/artifact-scope-marker.test.mjs` 守卫；`desktop/dist/web/assets/*.js` 由 `build:renderer` 之后的 `assert-scoper-artifact.mjs` 在 ci.yml 断言——本仓无 node_modules 时该步骤只在 CI 生效。）
+- 产物新鲜度守卫（§6.11 / design 21 §7）：`desktop/dist/control-plane/**`（`packages/desktop/scripts/control-plane-freshness.test.mjs`）与 `gateway/dist/**`（`packages/gateway/test/packaging/build-smoke.test.ts`）是标记守卫，`scripts/gates/verify-artifact-freshness.mjs`（tests/full，经 `ci.yml`）另做重建-比对，C8 覆盖构建期生成物 6 组（清单单源 `scripts/lib/build-artifacts.mjs`）——已落地门的清单不在本记录复述。**仍无守卫**：`desktop/dist/web/**`（仅 scoper 标记由 `packages/dsh-chamber-client-ui-mobile/scripts/assert-scoper-artifact.mjs` 在 CI 断言）、`dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**`（只断言行序/outDir）、vendor `allowBuilds` 锁步（G7）。未落地的最小守卫建议 G2/G3/G5/G7/G8（G1 已落地 `verify:test-wiring`）见 `todo/refactor-plan.md` §8）不在本记录复述。失效判据 = 每个产物有「陈旧 ⇒ 红」守卫或进入豁免表（G8）；G1=`verify:test-wiring` 已落地（`desktop/dist/web/assets/*.js` 的 scoper 标记由 `assert-scoper-artifact.mjs` 在 ci.yml 断言，本仓无 node_modules 时该步只在 CI 生效）。
 
 - CI无任何腿能证明SMOKE PASS：`control-plane/test/smoke.test.ts` 在CI恒SKIP（不设 `DSH_CHAMBER_DSH_PATH`、无`ref-dsh`/vendor运行时），release.yml同样没有smoke；`ci.yml` 只接受显式 `SMOKE PASS` 或显式 `SKIP: …`（静默exit0会红），绿灯从未代表真跑过安装链。失效判据：至少一条CI/发布腿真跑出 `SMOKE PASS`（或明确改判「不做」并登记缺席理由）时删除本条。
 
@@ -195,11 +193,26 @@
     ⑧ 保留视图的 90s 界限只清**聚合**的 running 位，不触碰 producer 的 runtimeFacts（蓝点/
     通知边沿仍可能读到 running）：语义由守卫横幅与对话流健康臂覆盖，但两者口径不同，真机未判。
 
-- 渲染进程在 JavaScriptCore 崩溃 → 静默整页重载（实证）：WebContent 在代码块替换/JIT tier-up 路径 trap 或空指针（EXC_BREAKPOINT `WTFCrashWithInfoImpl ← CodeBlock::setOptimizationThresholdBasedOnCompilationResult`；EXC_BAD_ACCESS 0x78 `ScriptExecutable::newReplacementCodeBlockFor`），入口为 **rAF 回调内被 OSR 编译的热函数**（当前构建 2 份报告，分别在页面加载完成后 **21.0s / 33.9s**）与 **嵌套 async generator 驱动链**（更早构建 8 份）。崩溃后 shell 秒级重载（`渲染恢复（crashed），0.50s 后重载（1/3）`）→ 页面重新 boot → 用户看到「载入历史…」+ 20s 健康 chip；10 份 WebContent 报告里只有 2 份留下 shell 侧 `crashed` 痕迹，其余静默——这是「有概率一直加载历史」的第二个独立机制，前几轮流层兜底修不到。**未闭合**：①JSC 崩溃是引擎缺陷（WebKit 22625），仓内只能收敛触发面与可见化，**不能消除**（收敛项见 design 14 §D4「第三次排查」；壳侧归因见 design 25 §5 E19）；②vendor 侧自身 rAF 循环（chat/conversation/layout/trajectory）未收敛；③崩溃恢复的窗口标题提示待打包 Swift 真机验证；目前仍缺页面内恢复过程与结果；④页面事实的持久消费面仍缺（见下方「会话打开停滞」残余项 ⑥），本次仍靠 Apple 崩溃报告 + `shell.log` 事后对齐；⑤ 10:19 那次**没有**崩溃报告的流层卡死与本次是两个独立机制（见下条），各自未闭合。
+- 渲染进程在 JavaScriptCore 崩溃 → 静默整页重载（实证）：JSC 引擎缺陷（WebKit 22625；EXC_BREAKPOINT/EXC_BAD_ACCESS
+  落在 rAF 热函数 OSR 与嵌套 async generator 驱动链，10 份 WebContent 报告仅 2 份在 shell 侧留下 `crashed` 痕迹）。
+  仓内只能收敛触发面与可见化，不能消除（收敛项 design 14 §D4「第三次排查」、壳侧归因 design 25 §5 E19）。**未闭合**：
+  ① vendor 侧自身 rAF 循环（chat/conversation/layout/trajectory）未收敛；② 崩溃恢复的窗口标题提示与页面内恢复
+  过程/结果缺真机验证；③ 页面事实的持久消费面仍缺（见下条残余 ⑥）。
 
-- 会话打开停滞（「载入历史…」永久停留实机）：大会话（`session-28e9eb86`）经gateway打开只显示 `chat.loadingHistory`。根因未证实（宿主侧实测健康：经代理 `$events` 就绪 25ms、普通快照 57ms、已结束子代理快照 73ms）；唯一同构状态 = mux socket正常而 `session/follow` 逻辑流永久无首帧，客户端侧已有 fork 首帧期限（30s 起，连续超时 30→60→120→240→300s）+ 开帧发送前校验（design 14 §D4），宿主侧仍无；收口需设备侧帧证据（CDP WS Frames/抓包），入口 `mobile-walkthrough.mjs`（`mobile-ws-frames.json` 落盘前脱敏）。插件侧「停滞提示 + 主动重载」兜底（`session-stall.ts`）判据全为属性锚点，45s阈值未经真机校准；桌面侧页面级 `InstanceView` 承担 `loading` 的自动重建与 20s/90s 提示（阈值未经真机校准），header 的 `session-stream-health.ts` 仅保留 `error` 臂自动stage迁移重开和手动动作（见 ⑫）；形态取值/误报边界见 `session-stall.ts` 头注与 `README.md`「Anchor baseline」。客户端侧已有开帧校验 + 首帧期限（30s 起，连续超时 30→60→120→240→300s；design 14 §D4）；追加**静默载波升级**（首帧期限到期而当前 socket 一帧未收 ⇒ 走 `replaceSocket()` 换掉物理 socket；teardown 分支：任意逻辑流在其整个生命期内该 socket 零帧且生命期 ≥ 共享表 `SILENT_TEARDOWN_MIN_MS`=15s ⇒ 同一条 `replaceSocket()`，覆盖「20s 探针 abort 早于 30s 预算」的已开启会话形态；第二个入口：同一请求连续第 2 次超时（socket 仍在供帧 ⇒ 零帧判据不成立）也走同一条 `replaceSocket()` 重建载波，由 `shouldEscalateOpeningStall` 以 60s 冷却限速。专治「浏览器视角 OPEN 而载波静默」这一类——判定阈值未经真机校准，误报代价 = 多一次载波重启 + 基线重放；`socket-silent` 事实的持久消费面仍缺，宿主「socket 活着但 follow 永不回答」仍只能靠座席出口）；另有一条**同症状的 vendor 窄缝**（仓内不可修，仅登记）：`Session.doOpen()` 只把 `isRemoteFailure` 的错误写成 `error`，非 RemoteFailure 抛出、或 `events.open()` 成功返回时 `openGeneration`/`events` 已被推进（dispose/resync 竞争），都会**静默 return 且把 `openState` 留在 `loading`**，而 `followCurrent()` 只在 stage 移动时才再次调用 `open()`——恢复面因此仍只有座席出口（真机未观测到该分支，判据 = 事故后能在 renderer console 里把「loading 驻留」与「open 抛错」对上）。页面级**证据门自动重建**：`loading` 且 probe 读到具象 `openPromise` 为空（无在途 open）⇒ 自动 `resync()`（页面级独立有界账本），在途 open **绝不打断**（慢宿主）；`loadingFailedMs`=90s 后提示改为「会话内容未载入」并保留重建/重新加载，手动出口不再受账本约束（design 14 §D4「进入会话必须收敛」）。**仍未 100% 的残余 = 宿主侧**：`session/follow` 无首帧期限、`doOpen` 可把 `loading` 静默留下，两条均已登记 `docs/progress/todo/upstream-proposals.md` §4.3/§4.7；阈值 90s/20s 与载波升级阈值（零帧、连续 2 次超时 / 60s 冷却）未经真机校准；移动端 `session-stall.ts` 已接同一证据门自动臂（`sessionStallFace` 读具象 `openPromise`；触屏档无 chamber fork ⇒ 载波层升级不覆盖该档，其恢复面 = 该自动臂 + 手动重载）。`loading` 卡死另有座席「重建对话通道」用户出口，不再只有 ⌘R。（同族见上方「会话运行位卡死」与design 14 §D4；本首帧期限与之同缺口——上游提案见 `docs/progress/todo/upstream-proposals.md` §4。）
-
-  **仍未闭合（复核后）**：① **触屏档无载波层**：桌面「已开启会话的载波半死」已由 teardown 升级收口（任意逻辑流在 socket 全程零帧且生命期 ≥15s ⇒ `replaceSocket()`，design 14 §D4），但移动档跑实例自带客户端栈、没有 chamber fork ⇒ 首帧期限与该升级都不存在，其载波半死仍无页面级恢复；桌面 `open` 臂在那 ~20s 窗口内也没有任何按钮（静默 socket 不发 carrier-churn 事实）。② `session.blank && phase==='blank'` 时 header 不渲染；页面级恢复入口在该子形态的实际可见性、按钮操作及 90s 窗口仍待真机判定。③ 移动端产物缺 source↔artifact lockstep 断言（先例见 `official-hover-card.test.ts`）：C8 门抓到一次真实过期（`lib/client.js` 未随 src 重建）并已由重建提交修复，断言本身仍缺。④ 开帧预算键是 32 位 FNV（约 16 万次抽样一次跨会话碰撞，只共享预算不等价）。⑤ 不可 JSON 序列化的 payload 让 `open()` 抛 TypeError 而非 carrier 类（「载波永不终局」的例外，生产不可达存疑）。⑥ `socket-silent` 事实的持久消费面仍缺。⑦ `presented` 是 document 级近似（renderer 非活动来源靠 CSS visibility 保活 ⇒ 隐藏实例的 chip 仍满足 presented，可能对用户没在看的会话执行 auto-resync/stage 迁移，账本有界 1–3 次/10min）。⑧ **设计未决**：unary 引导通道（`session/control` baseline `asOfSeq` 作合法 `throughSeq` + 冷读 `session/page`）是否新写成兜底内容引导——本轮未采纳（救不了宿主卡死、属非契约窗口写入面），见 design 14 §D4 与 `docs/progress/todo/upstream-proposals.md` §4.3。
+- 会话打开停滞（「载入历史…」永久停留，实机 `session-28e9eb86` 经 gateway）：根因未证实（宿主侧经代理实测健康）；
+  同构状态 = mux socket 正常而 `session/follow` 逻辑流永久无首帧。客户端侧已有三层防护（开帧发送前校验、首帧期限
+  30s 起、静默载波升级 `replaceSocket()` 含 teardown 分支与 60s 冷却限速），机制与阈值口径见 design 14 §D4 与
+  `session-stall.ts` 头注；宿主侧仍无首帧期限。收口需设备侧帧证据（CDP WS Frames/抓包，入口 `mobile-walkthrough.mjs`）。
+  **仍未闭合（复核后）**：① 触屏档无载波层（移动档跑实例自带栈、无 chamber fork ⇒ 首帧期限与升级都不存在）；桌面
+  `open` 臂在 ~20s 窗口内无按钮（静默 socket 不发 carrier-churn 事实）。② `session.blank && phase=='blank'` 时
+  header 不渲染，页面级恢复入口在该子形态的可见性/操作/90s 窗口待真机判定。③ 移动端产物缺 source↔artifact
+  lockstep 断言。④ 开帧预算键是 32 位 FNV（跨会话碰撞约 1/16 万，只共享预算不等价）。⑤ 不可 JSON 序列化的 payload
+  让 `open()` 抛 TypeError 而非 carrier 类（生产不可达存疑）。⑥ `socket-silent` 事实的持久消费面仍缺。
+  ⑦ `presented` 是 document 级近似（隐藏实例可能被执行 auto-resync/stage 迁移，账本有界 1–3 次/10min）。
+  ⑧ 各处阈值（20s/90s、45s、零帧与连续 2 次超时 / 60s 冷却）未经真机校准，`session-stall.ts` 判据全为属性锚点。
+  ⑨ 设计未决：unary 引导通道是否新写成兜底内容引导——本轮未采纳（design 14 §D4、todo/upstream-proposals.md §4.3）。
+  宿主侧两条（`session/follow` 无首帧期限、`doOpen` 可把 `loading` 静默留下）已登记 `todo/upstream-proposals.md`
+  §4.3/§4.7。
 
 - **本地实例 mux 周期性抖动（实测，触发源未钉死）**：
   `<stateDir>/logs/control-plane.log` 3 天 233 次 `WebSocket stream local closed`；09:04:44–09:10:56 七分钟内 15 次 `browser close`、寿命 17.4–21.1 s（远端实例同时段 socket 活数分钟），且 09:03:48 WKWebView WebContent 崩溃自动重载后进入该节奏。同一宿主经控制面代理实测：`$events` 就绪 25 ms、普通会话快照 57 ms、已结束子代理快照 73 ms ⇒ 抖动既不是握手慢、也不是宿主不答，而是页面侧每次 generation 结束后 `RemoteStreamMuxClient.reconnect()` 关掉该 socket 上全部逻辑流（本地 15s readiness 期限 vs 远端 45s override 的差异与之相符；触发源仍需 `dsh-chamber:stream-forensics` 真机回读钉死）。
@@ -229,7 +242,7 @@
 
 - 会话待办区（design 06 §8）：剩余实机门禁——通用页开关即时生效、同源/跨来源/未常驻跳转与权威移除、折叠来源中目标、断连→重连重现、rail不渲染、「还有N项」展开/收起与自动收起、展开内滚动（8行上限）、拖拽尾随点击不误开、同会话内联重命名不打断、打包态。
 
-- open-in超集分批口径（复核裁决，design 20 §7.2）：裁决：S3收窄为「复制路径」（侧栏悬停卡复制：`ServerSection.tsx:2088`/`copyText:2107` 复制会话标题而非路径；`SessionRow.cwd` ⇒ 零新IPC、纯渲染层）；**复制 `ssh user@host` / VS Code深链与S4（侧栏入口、快捷键）不做**——header按钮与目标会话同排、会话行动作已全在kebab菜单（`ServerSection.tsx:1952-1977`；无kebab的是worktree派生workspace行，`:1288-1290`）、快捷键缺vendor keybinding基建；完整形态留档 `docs/progress/todo/open-in-superset-batches.md` §3附录A/B。
+- open-in超集分批口径（复核裁决，design 20 §7.2）：裁决：S3收窄为「复制路径」（侧栏悬停卡复制：`ServerSection.tsx:2088`/`copyText:2107` 复制会话标题而非路径；`SessionRow.cwd` ⇒ 零新IPC、纯渲染层）；**复制 `ssh user@host` / VS Code深链与S4（侧栏入口、快捷键）不做**——header按钮与目标会话同排、会话行动作已全在kebab菜单（`ServerSection.tsx:1952-1977`；无kebab的是worktree派生workspace行，`:1288-1290`）、快捷键缺vendor keybinding基建；完整形态留档 `docs/progress/todo/deferred-features.md` §2 附录。
 
 - VS Code深链 + open-in（designs 16/20）：剩余macOS实机验收——深链冷/热启动、打包态、托盘/退出在途、N-ctx、VS
   Code缺失、`sshPort != 22`、本地应用下拉在vendor会话头部定位/层叠、远程来源仅VS Code（新窗口/复用两态打包态确认）。
@@ -287,8 +300,7 @@
   `node scripts/perf/switch-measure.mjs 2 --require-switch`（未绘制目标实例即失败）与白屏/切换目检序列，需打包态 Electron + ≥2 可切换来源；
   **实测的精确阻断点**：没有带 CDP 的 Electron 实例——`curl http://127.0.0.1:9333/json/version` → 000，
   安装态 `/Applications/dsh-chamber.app` 为 Swift 原生壳（无 Electron/asar，结构上无 CDP）；`ws` 经
-  `NODE_PATH=<sidecar>/vendor/dsh/node_modules` 已可解析，不再是阻断。同一实测下**已跑绿**的只读腿：
-  `node scripts/gui-acceptance/run.mjs --live --out /tmp/gui-live` → 25 pass / 0 fail / 26 checks；
+  `NODE_PATH=<sidecar>/vendor/dsh/node_modules` 已可解析，不再是阻断。
   ② W6 无壳观察者实机：真实 SSH 远端 + 关闭该来源的壳后，完成仍落蓝点/todo（无壳可观测）；
   ③ W8 双版本实机门：旧版 gateway + 新版桌面同跑，验证 404 / 503 `session_state_disabled` / 无 `protocol` 三种降级形态。
   **已实测一半**：本机 6 个真实 gateway 来源 `/chamber/runtime/status` → 200（进程活着）而
@@ -308,36 +320,31 @@
 
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
-- **结构性重构与清理（未闭合；计划与实测证据见 [todo/refactor-plan.md](todo/refactor-plan.md)）**：
+- **结构性重构与清理（未闭合；计划与开放项见 [todo/refactor-plan.md](todo/refactor-plan.md)）**：
   核心指标 = 消除补丁式修改；行数删减经用户裁决**不强制**（仅参考，原 −9,000 指标作废）。
-  机械化三门已落地：`verify:import-cycles`（值环 0；类型环 **0**——审计轮把 seam 类型下沉到
-  host-edges / shell-assembly-ctx / shell-ipc-ctx / registry-projection 后 allowance 已清空，
-  持续为 0 是本轮后的新不变量）、`verify:file-budgets`（15 个 God 文件
-  只降不升）、`verify:no-dead-exports`（零消费者导出即红，含 desktop/renderer 的 entryless 面）。
-  顶层 11 对 state/ref 镜像**全部收口**（roster/facts/echo/remotes/mounted/completed/view
-  各为单源 store + 回归锁）；第 16 轮独立审计补掉 `watchdogRuntimeFactsRef`（第三个
-  runtimeFacts 权威）并加固了 `verify-file-budgets` 的 schema/负控与 `use-deadline` 的
-  stale/null 语义。旧版本兼容清理（第 18 轮，用户裁决「不保留」）：ssh 凭据 v1/v2 迁移、
-  gateway-tokens v1/v2 + 旧兄弟文件迁移、catalog schema-less v1 迁移、json-store 的就地迁移机件
-  （`migrated`/`backupDoc`）、`foldLegacyHostInserts`、`canonicalizeTransportInstanceInput`
-  的 pre-v2 输入映射与 `resolveProvider` 的 legacy kind 键全部删除——非当前 schema 的
-  凭据/catalog 文件 fail closed（保留 `*.corrupt`、响亮、要求重录），旧 `gateway-tokens.json`
-  不再读取，registry 载入/保存要求条目自带当前 `kind`+`transport`（旧行响亮丢弃）。
-  **未收口**：① renderer 外三处同类镜像（`sidebar-root-projection` / `InstanceView` /
-  `DshRuntimeSection`）；② `ssh-<id>`/`ssh:<id>` 别名（design 17 §2.2 深链契约）与旧
-  dsh/gateway 上游版本探测——经用户裁决明确保留。
-  跨包逐字重复复核口径见计划 §6.1（31 组多行体，24 组为 3–5 行守卫、≥8 行 4 组全为
-  win-probes parity 锁；既有约束下可删 0 组）。
+  常驻三门 = `verify:import-cycles`（值环 0；类型环 allowance 棘轮，当前 0）、`verify:file-budgets`
+  （15 个 God 文件只降不升）、`verify:no-dead-exports`（零消费者导出即红，含 desktop/renderer
+  entryless 面）——登记与用法见计划 §4，机制与已落地清单不在本记录复述。**未收口**：① renderer 外三处
+  同类 state/ref 镜像（`sidebar-root-projection` / `InstanceView` / `DshRuntimeSection`）；② `ssh-<id>`/
+  `ssh:<id>` 别名（design 17 §2.2 深链契约）与旧 dsh/gateway 上游版本探测——经用户裁决明确保留。
+  跨包逐字重复口径见计划 §6（31 组多行体中 24 组为 3–5 行守卫、≥8 行 4 组全为 win-probes parity
+  锁；既有约束下可删 0 组）。
 
 
-- **测试运行器并发上限（未闭合）**：`run-checks tests` 的全局文件池默认 `min(8, 核数)`——同窗口实测 c12 文件总工作 217s vs c8 141s（每文件膨胀），吞吐收益递减，默认不动。并发暴露的两处**测试自身缺陷已根治**：`manager-api` 的「占满候选端口」改为整段区间重试；`sidecar-stdio.test.ts` 的固定端口（17910/17921/17922/17924/17926/17931）全部改为 `--port 0`（OS 分配 + ready 帧回传真实端口）——固定端口是跨进程共享资源，并发下 EADDRINUSE 会在 ready 前 exit 70（4 路同端口必现、6 路并行套件可复现；修复后 24 轮并行 0 失败）。仍未定位：`carrier-assembly.test.ts` 的 c16 零汇总。失效判据 = c12/c16 连续跑绿（或端口/资源隔离落地）。
+- **测试运行器并发上限（未闭合）**：`run-checks tests` 的全局文件池默认 `min(8, 核数)`——同窗口实测 c12 文件总工作
+  217s vs c8 141s（每文件膨胀），吞吐收益递减，默认不动。并发已暴露的两处测试自身缺陷（`manager-api` 候选端口占满、
+  `sidecar-stdio.test.ts` 固定端口）均已根治。**仍未定位**：`carrier-assembly.test.ts` 的 c16 零汇总。
+  失效判据 = c12/c16 连续跑绿（或端口/资源隔离落地）。
 
 - **消息来源判定依赖 `isMainFrame`：`parent.`/`top.` 上的 handler 会把子 frame 消息归属成主 frame（第三轮审查；真实 WKWebView 实测）**：
   同源 `blob:`/`about:srcdoc` 子 frame 调 `parent.webkit.messageHandlers.<name>.postMessage(...)` 时，WebKit 投递的 `frameInfo.isMainFrame=true` 且 `frameInfo.request.url` 为主 frame URL（归属随 `parent.` 取到的 handler 对象而非调用脚本；走 `self.` 时归属正确）——`macos/Sources/DSHChamber/MessageHandler.swift#ChamberMessageHandler`（A 桥）与 `macos/Sources/DSHChamber/MainWindowController.swift#ShellPageFactsMessageHandler`（事实通道）都受影响；加 `sandbox="allow-scripts"`（不含 `allow-same-origin`）后 `parent.`/`top.` 抛 SecurityError。
   同路子 frame 还可用 `parent.document.write(...)` 改写主 frame 文档，此后 `frameInfo.request.url` 保持**过期的旧主 frame URL**（读 frameInfo 的门据此被绕过），而 `message.webView.url`/`location.href` 变为 `blob:`——A 桥读 `message.webView.url` 故仍拒；事实通道的三个门（`#isSameOriginDocument`、`#acceptsReconcile`、handler `accepts`）按同一更严来源取值。
   可达性取决于「同源子 frame 内能否执行脚本」：`blob:` 非主 frame 正是 S-35 放行的预览形态、控制面 CSP 只补最窄 `frame-src blob:`；逐字 CSP 复现中 blob 子 frame 的内联/`'self'`/复制 nonce 脚本**均未执行**（机制未查清）⇒ 需真实壳（真实 CSP + 预览文档）复验；若能执行，根治 = 预览文档必须 sandbox（不含 `allow-same-origin`，opaque origin）或换源，登记并入 S-35 残余实机项。
 
-- docs证据锚点过期（D15实测；低–中，未排期）：`docs/**` 的 `文件:行` 证据锚点实测743处（`check-anchors --report` 口径；666不可复现），分布deviations.md 493 / STATUS.md 117 / design 20 40 / design 25 37（**二轮 review 复测**：本树合计 **690**、deviations.md **443**——即历史快照与本 worktree 之间另有既存漂移；anchors-budget.json 的基线已按「只降不升」同步收到 690，见其 note 的对账口径。**整合后复测**：合计 **669**（deviations.md 429 / STATUS.md 109 / design 20 40 / design 25 38）；remote-status 分支并入 7 份计划/蓝图后实测 1275，预算同步上调。**progress 清理**：该 7 份已实施计划/蓝图删除后本树实测 **665**（deviations.md 421 / STATUS.md 111），预算按「只降不升」收到 665、零余量；收预算到实测值留给 D15 的批量语义化重锚那一批）；位移后大面积错位、偏移不均（同一文件净增128行，偏移 +5…+128）。工具：`check-anchors.mjs`（`anchors-budget.json` 棘轮，基线743只降不升；两次整合实测main 788c6d55 +4 / ui-chat-render-fix +8；`--report`/`--fix`）+ `verify-registry.mjs` 已进 `check:static` 与CI。测试面45处注释 + 4处非注释（3处runtime-lockstep标题 + 1处真实断言：`WebPermissionPolicyTests.swift#testMediaCaptureIsDeniedLikeElectronsPermissionPolicy`（D13）；夹具另7处命中（5个示例字面量）不计入；`--report` 打印 注释45 / 字符串10 / 断言或其它1）；需同步的测试锚点只有这1处。退役动作 = 待合并分支（timeout-loading / ui-chat-not-render / windows-slide / swift-sidebar-update等）落地后按符号grep分批语义化重锚、逐批调低预算；登记见 [deviations.md](deviations.md) D15。
+- docs 证据锚点过期（D15；低–中，未排期）：`docs/**` 的 `文件:行` 锚点写死、位移不均；工具 `check-anchors.mjs`
+  （`anchors-budget.json` 只降不升棘轮 + `--report`/`--fix`）已进 `check:static` 与 CI，当前预算与实测口径见
+  D15 与 `anchors-budget.json` 的 note（不在本记录复述快照）。退役动作 = 合并分支落地后按符号 grep 分批语义化重锚、
+  逐批调低预算。见 [deviations.md](deviations.md) D15。
 
 - 设置面残余登记（design 05 §5完整桥接修订后剩余项）：壳渲染选中来源自己boot ctx的 `settings.section`
   台账与绑定标准座（`settings-source-face.ts`）。剩余：①面板要求该来源壳挂载中（`setSettingsTarget` 保证后台挂载/不被回收；代价 = 一次该来源boot，失败只显示不可达/启动中，无独立降级面）；②

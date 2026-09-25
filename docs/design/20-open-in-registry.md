@@ -42,7 +42,7 @@
 - 不把官方客户端半拉进复合壳（不需 covered/factory、vendor 补丁、subpath seam）；
 - 控制面零执行面（逐字代理 + cookie 注入），主进程不持有本地启动面（无 `stat` / `openPath` /
   `showItemInFolder` / `shell.openPath`）；
-- v1 不做（分批见 §7.2 与 `docs/progress/todo/open-in-superset-batches.md`）：远端宿主侧打开（C 档
+- v1 不做（分批见 §7.2 与 `docs/progress/todo/deferred-features.md`）：远端宿主侧打开（C 档
   候选）、远程 provider 家族与远程文件级打开（S1/S2）；非启动出口收窄为「复制路径」（侧栏，零新 IPC），
   多入口（侧栏入口/快捷键）不做。
 
@@ -452,7 +452,7 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
 - `docs/design/05-connection-manager.md` §2.2/§7（自研插件替换官方注册纪律、trustedIpc 围栏）
 - `docs/design/24-archived-session-cleanup.md`（第二个 seed host 包先例：Remote 域 + 探针）
 - `docs/checklists/upstream-touchpoints.md` §4（fork 行）
-- `docs/progress/todo/open-in-superset-batches.md`（超集分批与降级留档）
+- `docs/progress/todo/deferred-features.md`（超集分批与降级留档）
 - `docs/progress/STATUS.md`（唯一进度记录）
 
 ## 被否方案（单源化：open-in 错误文本 + 失败路径健壮性）
