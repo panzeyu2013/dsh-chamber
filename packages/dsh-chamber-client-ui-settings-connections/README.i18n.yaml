@@ -1,12 +1,12 @@
 # Bilingual-pair consistency record: the sha-256 file content hash of each
 # side as of the last confirmed-consistent state. Both languages carry equal
 # authority; after editing either side, bring the other along and update both
-# hashes here (manually verified with `shasum -a 256`).
+# hashes here (重录由 `pnpm run verify:i18n -- --write`；该门禁现在会校验这里的哈希).
 # Chamber package (design 05 §5): descriptions of the self-built connections
 # settings section (zh = key source).
 # The recorded pair is verified section by section before the hashes are
 # recomputed: same section list (Content / Data discipline / Styling / i18n),
 # same 7 bullets, same claims in the same order, the zh side spelling out
 # what "the exact unchanged normalized current roster" means.
-README.md: a1bbb75eda17e030bab5d0ebe8d0323338d7009294972108a327efc4ba260827
-README.zh.md: 94ceedf825ac02bb20cd6114a1a21347fab0da55a7321383162a3a8aeb44e02c
+README.md: 0292080b4c6ad55d7d0b5594585f48d8ea56ddf64b4dc7bca3d1c875e53a7be2
+README.zh.md: 1b85b3d7826e602339d8d14af95086573bdf536368801c306bfd8a058a9f8497

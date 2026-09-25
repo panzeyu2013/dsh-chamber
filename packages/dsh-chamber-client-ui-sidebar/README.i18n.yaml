@@ -1,7 +1,7 @@
 # Bilingual-pair consistency record: the sha-256 file content hash of each
 # side as of the last confirmed-consistent state. Both languages carry equal
 # authority; after editing either side, bring the other along and update both
-# hashes here (manually verified with `shasum -a 256`).
+# hashes here (重录由 `pnpm run verify:i18n -- --write`；该门禁现在会校验这里的哈希).
 # Chamber package (design 05 §2): the READMEs describe the self-built multi-source sidebar plugin (zh = key source).
-README.md: 04cda08e29c1b5e5d235924fdda085a551d9d863ed952f45da37085cd583c6fc
-README.zh.md: 211147455dd5732f915b39a316fd35cda9b1db3c0777aef80f9c588bce07b6cb
+README.md: 7de24fdb25c3d562ee12a3a07f22766a94de853cdbfb06a37a33246ffae05c05
+README.zh.md: 112f4d2ca92978da94acdc83d7d651db486cc4f0cafa1492c2f37cf6667de57f

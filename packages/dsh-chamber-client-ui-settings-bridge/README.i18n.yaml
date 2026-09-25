@@ -1,6 +1,6 @@
 # Bilingual-pair consistency record: the sha-256 file content hash of each
 # side as of the last confirmed-consistent state. Both languages carry equal
 # authority; after editing either side, bring the other along and update both
-# hashes here (manually verified with `shasum -a 256`).
-README.md: 66257f3fabc5c048f2240432f84e27ef95ec337de3d2f557b3f195c65fe127f1
-README.zh.md: b7224331228672924f0c05184ad1129ff442e48297f16a40e4cd1e50cd37aaaa
+# hashes here (重录由 `pnpm run verify:i18n -- --write`；该门禁现在会校验这里的哈希).
+README.md: 0de016f02ccc2b3194aaf20bf6765ae7524cf609fbb7c7f96256ed575fb50957
+README.zh.md: 54d5ddf9e2f916bb8b129ff5457f3fc6d024c51aaa6b94150a1bafb3aa4489ea
