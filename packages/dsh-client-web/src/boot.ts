@@ -26,6 +26,7 @@ import { MODULES_ID, UI_RENDERER_ID, composeBootRows } from './boot-rows.ts'
 import { classifySweepEntry } from './boot-tolerance.ts'
 import { getStaticModules } from './seed.ts'
 import { STATE_LABELS } from './loader-status.ts'
+import { installWindowDragRecall } from './window-drag/recall.ts'
 import './base.css'
 
 /** Module transport hook replaced by jsdom tests. */
@@ -96,6 +97,13 @@ export class AppWebEntry {
   private readonly page: BootPage
   // Assigned by run(); dispose() nulls ctx, so reads handle pre-run/post-dispose state.
   private ctx: Context | undefined
+  // The shell owns the one document watcher that keeps Electron's window drag rects
+  // in step with the rows that own them (electron#32341); the first mount must
+  // measure the surface the renderer draws, so run() installs it before mountApp().
+  // N-ctx overlap is safe: each boot stops its own watcher in dispose(), and the
+  // watcher ignores its own RECALL_MARK mutation, so concurrent boots only repeat
+  // an idempotent pulse.
+  private stopDragRecall: (() => void) | undefined
   private modules!: ClientModuleSystem
   private manifest!: BootManifest
   private bootFailure: string | undefined
@@ -128,6 +136,10 @@ export class AppWebEntry {
       // earlier boot that settles late keeps its own immutable closure values.
       this.configureContext?.(ctx)
       await this.runPluginBoot(ctx, prefetching)
+      // Install before the first mount, so the surface the renderer draws is the
+      // one the first frame measures (the rc.2 shell seam, design-aligned with the
+      // window-drag contract in src/window-drag/).
+      this.stopDragRecall = installWindowDragRecall({ document: this.container.ownerDocument })
       await this.mountApp(ctx)
       perfMark('dsh:boot:settled')
     } catch (reason) {
@@ -142,6 +154,8 @@ export class AppWebEntry {
   /** Dispose the client plugin tree and the page owning the mount point. Never
    *  rejects (teardown errors are logged); shell lifecycle paths may await it. */
   async dispose(): Promise<void> {
+    this.stopDragRecall?.()
+    this.stopDragRecall = undefined
     const ctx = this.ctx
     // Drop the handle so a second dispose is a no-op and late runtimeCtx reads see a dead ctx.
     this.ctx = undefined
@@ -358,6 +372,29 @@ interface ChamberWindow extends DshWindow {
   __DSH_MODULES__?: ClientModuleSystem
 }
 
+/** The require shape a factory receives (rc.2 adds the async chunk loader; the
+ *  client face does not re-export the named type). */
+type BundleRequire = Parameters<ClientBundleRegistration['factory']>[0]
+
+/**
+ * The require handed to the bootstrap registration before the module system exists.
+ * Both shapes refuse — rc.2 `ClientBundleRequire` carries the async chunk loader
+ * beside the call — because the shell-static modules client half must resolve
+ * nothing external.
+ */
+function refusingBootstrapRequire(): BundleRequire {
+  const message = (specifier: string, shape: string): string =>
+    `client-modules: ${MODULES_ID}/client.js requested ${shape}external "${specifier}" before the module system existed`
+  const refuse = (specifier: string): never => {
+    throw new Error(message(specifier, ''))
+  }
+  return Object.assign(refuse, {
+    async: async (specifier: string): Promise<never> => {
+      throw new Error(message(specifier, 'async '))
+    },
+  })
+}
+
 /**
  * Install the queue-mode `window.__ModuleLoader__` facade: a pending registration
  * queue that `create()` drains by materializing the modules bootstrap and delegating
@@ -383,9 +420,7 @@ function installModuleLoaderFacade(win: ChamberWindow): ClientModuleLoaderTarget
       }
       pendingQueue.splice(index, 1)
       // Materialize the bootstrap registration, then delegate construction.
-      const exports = registration.factory((specifier) => {
-        throw new Error(`client-modules: ${MODULES_ID}/client.js requested external "${specifier}" before the module system existed`)
-      })
+      const exports = registration.factory(refusingBootstrapRequire())
       if (typeof exports !== 'object' || exports === null
         || typeof (exports as Record<string, unknown>).createClientModuleSystem !== 'function'
         || typeof (exports as Record<string, unknown>).apply !== 'function') {

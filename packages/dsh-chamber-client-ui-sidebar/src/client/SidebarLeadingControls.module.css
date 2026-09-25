@@ -1,0 +1,32 @@
+/* The frame's leadingSeat owns placement (absolute top-left beside the traffic
+   lights, no-drag) and prices this band as two 28px controls with an 8px gap
+   (`--dsh-frame-leading-clearance`, AppFrame.module.css); this box only lays
+   the controls out. The button recipe mirrors the rail's `.iconButton`
+   (SidebarRoot.module.css) at its 28px base: the seat sits outside
+   `.root.collapsed`, so the rail's 36px override never applies and the
+   frame-priced geometry holds. */
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.iconButton {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  corner-shape: round;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.iconButton:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}

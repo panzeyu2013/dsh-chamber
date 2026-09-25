@@ -52,7 +52,9 @@ test('gateway projection === wire parse + wire mask, byte for byte', t => {
   assert.equal(parsed.ok, true)
   if (!parsed.ok) return
   assert.deepEqual(projection.dependencies, maskMaterializedDependencies(parsed.dependencies))
-  assert.deepEqual(projection.bundles, parsed.bundles)
+  // `bundles` is not projected; it feeds the SERVER-side role classifier — the wire
+  // walk still decides the row role (a drop here would show up as third-party).
+  assert.equal(projection.rows.find(row => row.name === 'registry-pkg')?.role, 'layer')
   // Spot-check the matrix through the shared ruler, not just by equality with
   // itself: registry values stay verbatim, every path form is masked.
   for (const name of ['registry-pkg', 'tilde-range', 'dot-name']) {

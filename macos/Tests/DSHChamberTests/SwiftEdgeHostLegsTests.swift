@@ -55,7 +55,7 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         // canShowUI=true 但未接主窗：窗口守卫腿一律 no-window 诚实降级
         // （headless 测试绝不触发 NSWorkspace/NSApp/ProcessInfo 副作用）。
         let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { true }))
-        for method in ["setBadge", "setKeepAwake", "showItemInFolder", "pickPluginSource", "showError", "showMessage"] {
+        for method in ["setBadge", "setKeepAwake", "showItemInFolder", "showError", "showMessage"] {
             let outcome = legs.respond(method: method, payload: nil)
             XCTAssertTrue(
                 outcome.error?.hasPrefix(SwiftEdgeHostLegs.uiUnavailablePrefix) ?? false,
@@ -395,6 +395,9 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         let deniedReply = deliverNotification(deniedLegs, payload: notificationPayload())
         XCTAssertEqual(deniedCenter.requestAuthorizationCount, 1)
         XCTAssertTrue(deniedCenter.addRequests.isEmpty, "未授权不得 add")
+        // 失败回执携带 failureClass（notifications.ts 的
+        // interpretNativeNotificationReply 据 permanent/retryable 决定去重
+        // claim 的释放/重试语义）；denied 是终态 → permanent。
         XCTAssertEqual(deniedReply.result,
                        .object(["shown": .bool(false),
                                 "error": .string("swift-edge-notification-not-authorized:denied"),

@@ -899,92 +899,31 @@
   cursor: default;
 }
 
-.pluginToolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 0;
-}
-
-.pluginSearchInput {
-  flex: 1;
-  min-width: 160px;
-}
-
-.pluginFilterGroup {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.pluginFilterLabel {
-  font-size: 11px;
-  color: var(--dsw-alias-label-dimmed);
-}
-
-.pluginPill {
-  appearance: none;
-  border: 0.5px solid var(--dsw-alias-border-l2);
-  border-radius: 999px;
-  corner-shape: round;
-  background: none;
-  padding: 1px 8px;
-  font: inherit;
-  font-size: 11px;
-  line-height: 17px;
-  color: var(--dsw-alias-label-tertiary);
-  cursor: pointer;
-}
-
-.pluginPill:hover {
-  color: var(--dsw-alias-label-primary);
-}
-
-/* 选中的筛选胶囊：dsh 业务蓝填充 + 反白文字（与设置页复选框/
-   分段滑块/开关的"开/选中"色统一到 `--dsw-alias-state-business-primary`，而不是
-   官方中性 `--dsw-alias-brand-primary`——后者浅色主题下是近黑，选中态会发黑）。
-   文字取 `--dsw-alias-bg-layer-3`（浅色即近白、深色为深灰），在蓝底上两档都可读。 */
-.pluginPillActive {
-  border-color: transparent;
-  background: var(--dsw-alias-state-business-primary);
-  color: var(--dsw-alias-bg-layer-3);
-}
-
-.pluginPillActive:hover {
-  color: var(--dsw-alias-bg-layer-3);
-}
-
-/* 表外层网格：默认 5 列 = 对账表；local/remote 容器由 pluginRowsCols* 覆盖。
-   表头（pluginRowHead）与数据滚动体（pluginRowsBody）共享同一组轨道——
-   表头常驻、数据行在滚动体内 subgrid，任何内容宽度下列都对齐。 */
+/* 表外层网格：默认 2 列 = ssh 只读已安装列表（包名 / spec 或掩码 chip）；
+   local/gateway 容器由 pluginRowsCols* 覆盖。表头（pluginRowHead）与数据滚动体
+   （pluginRowsBody）共享同一组轨道——表头常驻、数据行在滚动体内 subgrid，
+   任何内容宽度下列都对齐。 */
 .pluginRows {
   display: grid;
-  grid-template-columns: minmax(180px, 1.4fr) auto auto minmax(64px, 1fr) minmax(64px, 1fr);
+  grid-template-columns: minmax(180px, 1.4fr) minmax(0, 1fr);
   column-gap: 10px;
   row-gap: 6px;
 }
 
-/* 本地列表 + 生效状态列（Loader 快照派生 chips；ssh/对账表无此列）：
-   包名 / 类别 / 本地 spec / 生效状态 / 移除操作。 */
+/* 本地只读列表（Loader 快照派生 chips）：包名 / 类别 / 本地 spec / 生效状态。 */
 .pluginRowsColsLocalLive {
-  grid-template-columns: minmax(180px, 1.4fr) auto minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(180px, 1.4fr) auto minmax(0, 1fr) auto;
 }
 
-/* 远端已安装列表（ssh / gateway）：包名 / spec 或掩码 chip / 移除操作。 */
+/* 远端只读已安装列表（ssh）：包名 / spec 或掩码 chip。 */
 .pluginRowsColsRemote {
-  grid-template-columns: minmax(180px, 1.4fr) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(180px, 1.4fr) minmax(0, 1fr);
 }
 
-/* 远端已安装列表 + 生效状态列（gateway：包名 / spec 或掩码 chip /
-   生效状态 / 移除操作；ssh 无 Loader 快照可达 → 保持三列 pluginRowsColsRemote）。 */
+/* 远端只读已安装列表 + 生效状态列（gateway：包名 / spec 或掩码 chip / 生效状态；
+   ssh 无 Loader 快照可达 → 保持两列 pluginRowsColsRemote）。 */
 .pluginRowsColsRemoteLive {
-  grid-template-columns: minmax(180px, 1.4fr) minmax(0, 1fr) auto auto;
-}
-
-/* 对账差异表：包名 / 类别 / 状态 / 本地 / 远端。 */
-.pluginRowsColsDiff {
-  grid-template-columns: minmax(180px, 1.4fr) auto auto minmax(64px, 1fr) minmax(64px, 1fr);
+  grid-template-columns: minmax(180px, 1.4fr) minmax(0, 1fr) auto;
 }
 
 /* 数据行滚动体：subgrid 链让数据行与上方表头共享外层轨道（表头不随内容
@@ -1058,13 +997,6 @@
   flex: none;
 }
 
-/* 操作列表头：轨道宽由行内按钮（同宽）决定，表头文字居中于按钮上方，
-   避免左对齐错位 ~14-23px。 */
-.pluginCellAction {
-  flex: none;
-  text-align: center;
-}
-
 .pluginCellSpec {
   min-width: 0;
   overflow-wrap: anywhere;
@@ -1080,11 +1012,6 @@
   font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 12px;
   color: var(--dsw-alias-label-secondary);
-}
-
-.pluginArrow {
-  flex: none;
-  color: var(--dsw-alias-label-dimmed);
 }
 
 .pluginKind {
@@ -1130,52 +1057,10 @@
   color: var(--dsw-alias-label-secondary);
 }
 
-.pluginCheckbox {
-  flex: none;
-  margin: 0;
-}
-
-/* 单 grid 化后行内无纵向 gap：风险提示与上一行内容保持 6px 间距。 */
-.pluginRisk {
-  grid-column: 1 / -1;
-  margin: 6px 0 0;
-  padding: 4px 6px;
-  border-radius: 6px;
-  background: var(--dsw-alias-interactive-bg-hover-danger);
-  font-size: 12px;
-  color: var(--dsw-alias-state-error-primary);
-}
-
-.pluginSummary {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--dsw-alias-label-primary);
-}
-
 .pluginWarn {
   margin: 0;
   font-size: 12px;
   color: var(--dsw-alias-state-warn-label);
-}
-
-.pluginFailedList {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.pluginFailedItem {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px 8px;
-  border: 0.5px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
-  font-size: 12px;
 }
 
 /* 管理分区共用容器（local/ssh/gateway/http 各 zone 均渲染在内；「变更记录」
@@ -1186,114 +1071,6 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-}
-
-.pluginDeferRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 0;
-  font-size: 12px;
-  color: var(--dsw-alias-label-secondary);
-  cursor: pointer;
-}
-
-/* ---- plugin add view (design 21 §6.6 add zone) ----
-   spec 输入与安装同排；「从本地导入」（插件源码文件夹或 .tgz 包）outline
-   并与安装同排（无分隔线）；添加区输入与 sm 按钮统一定高（--chamber-ctl-h）。 */
-
-.pluginAdd {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  --chamber-ctl-h: 28px;
-}
-
-.pluginAddSpec {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-/* 安装排（spec 输入 + 安装 + 从本地导入）与搜索排共用的行容器。 */
-.pluginAddRow,
-.pluginSearchRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-/* spec 输入固定宽度，不占满整行。 */
-.pluginAddSpecInput {
-  flex: none;
-  width: 260px;
-  max-width: 100%;
-}
-
-.pluginSearchRow .input {
-  flex: 1 1 180px;
-  min-width: 150px;
-}
-
-/* 按钮以 className 显式限高（primitives sm 默认高度不齐）；输入框用
-   padding-block: 0 + 显式 height，两条控制排完全等高。 */
-.pluginCtlButton {
-  box-sizing: border-box;
-  height: var(--chamber-ctl-h);
-}
-
-.pluginAdd .input {
-  box-sizing: border-box;
-  height: var(--chamber-ctl-h);
-  padding-block: 0;
-}
-
-/* 键盘焦点可见：添加区输入框补 focus-visible ring
-   （iconButton 同款 2px brand 词汇；.input:focus 只有边框变色，键盘用户
-   不可辨）。 */
-.pluginAdd .input:focus-visible {
-  outline: 2px solid var(--dsw-alias-brand-primary);
-  outline-offset: -1px;
-}
-
-/* 对账过滤输入（.pluginToolbar 内）同款键盘焦点环（终审 cb7b1555 建议②）。 */
-.pluginSearchInput:focus-visible {
-  outline: 2px solid var(--dsw-alias-brand-primary);
-  outline-offset: -1px;
-}
-
-.pluginSearch {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.pluginHits {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  max-height: 220px;
-  overflow: auto;
-}
-
-.pluginHit {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 10px;
-  border: 0.5px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
-  font-size: 12px;
-}
-
-.pluginHitVersion {
-  flex: none;
-  font-size: 11px;
-  color: var(--dsw-alias-label-tertiary);
 }
 
 /* file: 掩码 chip 防越列：芯片不超 spec 轨道宽，超宽时省略号 + title 兜底
@@ -1351,35 +1128,13 @@
   color: var(--dsw-alias-label-secondary);
 }
 
-/* ---- gateway recovery banner (plan 24 B1.6 / design 21 §6.8 r1) ----
-   The runtimeDown-gated undo affordance: the copy plus the
-   recoveryUninstallRestart action in one warning-tone row. */
-
-.recoveryBanner {
-  margin: 0;
-  padding: 8px 10px;
-  /* Official notice language: a tinted note, no border —
-     official warning surfaces never draw a 1px state-coloured outline.
-     NOTE: padding-block is unchanged, so removing the border costs 2px of
-     height; the block sits in a flex column that absorbs it. */
-  border: 0;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
-  font-size: 12px;
-  color: var(--dsw-alias-state-warn-label);
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
 /* Writer-quiescence notice (design 02 §3.4 / 04 §3.2): the local
    card's reason line when a managed-dsh record keeps the instance from
    starting, plus the explicit 清理并接管 action. */
 .writerBlocked {
   margin-top: 8px;
   padding: 8px 10px;
-  /* Same official tinted-note language as .recoveryBanner. */
+  /* Same official tinted-note language as the chamber warning rows. */
   border: 0;
   border-radius: 8px;
   background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);

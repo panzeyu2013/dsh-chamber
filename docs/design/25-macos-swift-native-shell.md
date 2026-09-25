@@ -48,7 +48,7 @@
 | A8 | Electron 从未 setApplicationMenu（Cmd+C/V 靠默认菜单） | §5 E3 现状列改正，Swift 结论不变（W2 必修） |
 | A9 | §6.1/§6.4 验证项编号 E1/E2 与 §5 边沿表撞车 | 更名 **U1**（userData 实根）/ **S1**（safeStorage 判别单测） |
 | A10 | E8 对话框归属错引 design 24；desktop_pick_directory 已不存在 | E8 = 插件源 folder\|.tgz 一体化 picker（design 21 §10 ⑧ / 13 §5.8）；**删除无消费方的 pickDirectory()** |
-| A13 | userData 清单漏 ssh-plugin-journal 与 *.corrupt | §6.1 补全 |
+| A13 | userData 清单漏 ssh-plugin-journal 与 *.corrupt | §6.1 补全（ssh-plugin-journal 已随写面退役删除，见 design 13 实现状态） |
 | B1/B13 | 资源/打包路径 seam 缺失；sidecar 打包双路径解析未写 | §4.1 HostEdges 补 `resolveResource`/`isPackaged` 能力位（≈15 处直拼点 P1 参数化）；§3.2 补 sidecar 打包布局同构（tsc 产物 + dist/web + host 包 + node/pnpm） |
 | B2 | §6.3 互斥锁设计缺陷（pidfile stale 模式正是 STATUS 判死刑的；未提 Electron 侧同落地；二次 flock 自锁） | §6.3 改 **flock(LOCK_EX\|LOCK_NB)** + 双 flavor 同实现 + fd 常驻 + 复验不二次 flock |
 | B3 | HostEdges 缺渲染器可用性门 | §4.1 补 `webViewLoading()`/`webViewContentAlive()`（或事件状态机进 core）；就绪握手"返回 false → 渲染端有界重试"语义保留 |
@@ -139,7 +139,7 @@ Node 侧。移植条件因此罕见：**把壳换掉，业务与测试资产原�
 │  + control-plane（createControlPlane，loopback HTTP/WS）      │
 │  + dsh-runtime / pnpm（运行时版本管理、安装）                 │
 │  + 数据面：userData/{state, ssh-instances.json,              │
-│    ssh-plugin-journal.json, ssh-passwords.json,              │
+│    ssh-passwords.json,              │
 │    gateway-secrets.json, chamber-settings.json, audit-log.jsonl, │
 │    dsh-runtime trees, 日志}                                  │
 └───────────────┬─────────────────────────────────────────────┘
@@ -287,7 +287,7 @@ Apple 凭据（外部阻断）。
 HostEdges 落定契约（字段语义与今日一一对应；v2 较 v1 的补全见 §0.1）：
 
 ```ts
-// 落定契约（packages/desktop/shell-core.ts:679-762，逐成员 doc 注释）
+// 落定契约（packages/desktop/host-edges.ts:62，逐成员 doc 注释）
 interface HostEdges {
   // 渲染器投递（W-10 S0 新增；单窗身份，返回 false = 当前无存活主窗）
   rendererPush(channel: string, payload: unknown): boolean
@@ -297,7 +297,6 @@ interface HostEdges {
     shown: Promise<{shown:true} | {shown:false; error:string}>
   }
   notificationSupported(): boolean
-  notifyClicked(openIntent: NotificationOpenIntent): void
   setBadge(count: number): HostSetBadgeResult                  // 判别形态，替代草案 boolean
   badgeCountApiAvailable(): boolean
   trayAvailable(): boolean
@@ -315,25 +314,25 @@ interface HostEdges {
   openPath(p: string): Promise<void>
   showItemInFolder(p: string): void
   launchApp(appId: string, path: string): Promise<boolean>    // 契约保留；**两 flavor 均无实现**（S-05 复裁决：等第一个消费者，§5 E12）
-  // 对话框（E8：仅插件源 folder|.tgz 一体化 picker，design 21 §10 ⑧/13 §5.8）
-  pickPluginSource(): Promise<HostPluginSourcePick>           // {status:'cancelled'}|{status:'picked';path}
+  // 插件源 picker（E8）已随 2026-09「C 分层」写面退役删除：不再有 plugin 写面消费者
   showError(title: string, detail: string): void
   showMessage(opts: HostMessageOptions): Promise<number>      // buttonId 收敛为 number
   // 系统/身份/资源
   setLoginItem(enabled: boolean): void
   isPackaged: boolean                                         // 能力位（B1）
-  resolveResource(kind: HostResourceKind): string
 }
 ```
 
 > 注：与 v2 草案差异 = 新增 `rendererPush`/`mainWindowAlive`/`badgeCountApiAvailable`/
 > `retireNotificationsForSources`；`showNativeNotification` 带 `clickRoute` 并返回 `{dispose, shown}`；
-> `setBadge` 判别形态、`showMessage` 归 number、`pickPluginSource` 归 `HostPluginSourcePick`；v1 草案的
-> `pickDirectory()` 已删除——`desktop_pick_directory` 在 IPC_CHANNELS（69 键）与 preload 中均已不存在
-> （仅 05 §7.4 旧文残留，A10）。宿主对象登记/淘汰（BoundedActiveNotifications 持 Electron Notification、
-> 淘汰=evicted.close()）留 electron-edges，core 只持有界 ACK 队列/去重/限速（B4）。零 core 消费者的保留面
-> （`resolveResource`、`isPackaged`、`notifyClicked`、`trayAvailable`、`focusMainWindow`、`launchApp`、
-> 同步 `setKeepAwake`/`setLoginItem`——settings 路径走装配 ctx 的 async 叶）在 STATUS 登记为有意保留。
+> `setBadge` 判别形态、`showMessage` 归 number（原 `pickPluginSource` 随写面退役删除）；v1 草案的
+> `pickDirectory()` 已删除——`desktop_pick_directory` 在 IPC_CHANNELS（60 键 = 51 invoke + 9 push）与 preload
+> 中均已不存在（仅 05 §7.4 旧文残留，A10）。宿主对象登记/淘汰（BoundedActiveNotifications 持 Electron
+> Notification、淘汰=evicted.close()）留 electron-edges，core 只持有界 ACK 队列/去重/限速（B4）。
+> **`notifyClicked` 与 `resolveResource` 已作为零消费者死契约删除**（`host-edges.ts` 头注：Swift 对经 `notify`
+> 到达的 clicked 判 unexpected 并 loud 忽略；resources 推送无人消费，未知事实键按前向兼容忽略）。零 core
+> 消费者的保留面（`isPackaged`、`trayAvailable`、`focusMainWindow`、`launchApp`、同步
+> `setKeepAwake`/`setLoginItem`——settings 路径走装配 ctx 的 async 叶）在 STATUS 登记为有意保留。
 
 ### 4.2 复用清单（现状核实）
 
@@ -341,7 +340,7 @@ interface HostEdges {
 |---|---|---|---|
 | control-plane（含 proxy/ws/静态伺服/seed/reaper） | ≈14.2k | 无 | sidecar 原样（编译产物复用 build-control-plane 模式） |
 | dsh-runtime | ≈11.5k | 无 | sidecar 原样 |
-| transport-manager / ssh-provider / gateway-provider / gateway-session(+refresh) / plugin-sync / connection-save / ssh-config / plugin-tarball / notifications(裁决) / deep-link(解析) / audit-log / badge(裁决) / chamber-settings / dsh-runtime-controller / apply-now / disk-evidence / 凭据文件事务族 / sidecar-ctx / shell-core | 零 Electron import（electron-free-gate.test.ts 传递闭包断言） | 无 | core 原样 |
+| transport-manager / ssh-provider / gateway-provider / gateway-session(+refresh) / plugin-sync / connection-save / ssh-config / notifications(裁决) / deep-link(解析) / audit-log / badge(裁决) / chamber-settings / dsh-runtime-controller / apply-now / disk-evidence / 凭据文件事务族 / sidecar-ctx / shell-core | 零 Electron import（electron-free-gate.test.ts 传递闭包断言） | 无 | core 原样 |
 | open-in（分类/校验）+ 本地拉起 | 纯逻辑 | 拉起点在 edges | 决策全在 core；**本地拉起由实例内 host 包 `openInApp/*` 负责，壳不实现 launchApp**（S-05 复裁决） |
 | main.ts 编排 + electron-edges + preload + updater | ≈6.7k（3,982+367+941+1,413） | **4 文件，全部** | P1 拆分；updater 走 §7 |
 | ipc-events.ts IPC_CHANNELS + ipc-surface-mirror 测试 | — | — | **manifest 单源**（§4.4.3），不动 |
@@ -704,7 +703,7 @@ zh-Hant 显示；简繁混排是否可接受需实机判断，若要收口须先
   （`PackagedLayout.userDataDir`，由 `packages/desktop/chamber-lock.test.ts` ⑦ lockstep 断言钉住：Swift 常量
   必须等于 `顶层 productName ?? name` 推导；改 identity 同步两侧）；sidecar 以 `--user-data-dir` 接收。
 - 直拼点全集（P1 参数化收口）：chamber-settings.json；runtime 基目录 = userData 本体（dsh-runtime 树在
-  <userData>/dsh-runtime/…）；stateDir = userData/state（localDshHome=state/dsh-home）；ssh-plugin-journal.json；
+  <userData>/dsh-runtime/…）；stateDir = userData/state（localDshHome=state/dsh-home）；
   ssh-passwords.json；gateway-secrets.json；audit-log.jsonl；ssh-instances.json（引用前 grep 现取）。
 - 旧版 Electron 保留物 `*.corrupt`（A13）在 Swift 首启前决定处置（预期：保留禁用，不主动清理）。
 - 验证项 **U1**（实机）：Swift 计算的根与 Electron 打包实根一致（编号避开 §5 E 表，A9）。**实施现状**：`PackagedLayout`
@@ -921,7 +920,9 @@ loopback-http-test-server.ts 同款思路）**未实施——需 GUI 会话，�
 ### 8.5 P4 实机门禁矩阵（1–2 人周）
 
 逐项走查：打包态全链（控制面起动/本地实例预启动/连接/网关凭据重录/运行时版本管理与回退/插件同步/归档清理入口（无
-对话框）/通知点击/深链/隐藏恢复/唤醒补发/退出确认）；WKWebView parity 清单（W1 剪贴板、W2 菜单快捷键、W3 富文本粘贴
+对话框）/通知点击/深链/隐藏恢复/唤醒补发/退出确认）；**键盘快捷键桥（rc.2）**：官方 `dsh-client-shortcuts` provider 在 desktop 运行时要求 `window.dshDesktop.keyboard`（缺即构造期 `Desktop keyboard bridge unavailable`）。Electron 腿由主进程 `before-input-event` 产出规范化 input（命中组合才投递、`setIgnoreMenuShortcuts`、blur/导航复位），偏好经 `ShortcutPersistence` 落 `<userData>/keybindings.json`（0600 原子写）；Swift 腿在 documentStart 注入的 `dshDesktop` 里以主文档 keydown/keyup 归一化投递，revision 由会话内适配器持有。Swift 边界（accepted，登记 deviations S-54）：不能 `preventDefault`（页面同样收到该键）、无子 frame/webview 与原生菜单源、偏好仅会话内存、`closeWindow` loud reject（Cmd+W 由原生菜单承担）。
+
+WKWebView parity 清单（W1 剪贴板、W2 菜单快捷键、W3 富文本粘贴
 与拖拽、W4 打印/查找、W5 字体/滚动/IME、W6 后台节流对 SSE/WS——**无 backgroundThrottling 等价物（C1）**、W7 刷新率
 三工况（插电 120fps / 电池 + 低电量模式 60fps / 60Hz 外接屏不回退；判据见 §5.1、登记 deviations S-48；100Hz 类非
 整数倍屏以 `[shell-fps]` 实测为准），判定标准见 companion §七）。性能与同环境 A/B 纪律见

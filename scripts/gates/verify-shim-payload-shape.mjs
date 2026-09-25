@@ -18,10 +18,12 @@
  * method channel must be in the manifest, and every manifest invoke channel
  * must be exposed by a method (except the internal hydration channel).
  *
- * Count semantics: EXPECTED_SURFACE's 60 invoke is the namespace-exposed
+ * Count semantics: EXPECTED_SURFACE's 50 invoke is the namespace-exposed
  * surface (the internal `dsh-chamber:info` hydration channel is not counted);
- * bridge-manifest.json counts.invoke=61 (info included) + 9 push = 70, and the
- * desktopSsh namespace alone is 32 invoke + 2 push.
+ * bridge-manifest.json counts.invoke=51 (info included) + 9 push = 60, and the
+ * desktopSsh namespace alone is 22 invoke + 2 push. The user plugin write
+ * surface (apply / undo / materialize / npm search / local add-remove) was
+ * retired with the 2026-09 C layering ruling.
  *
  * It is static text parsing on purpose: no runtime dependency, no surface
  * execution, the same discipline as bridge-shim-surface.test.ts. Changing a
@@ -53,13 +55,13 @@ export const INTERNAL_INVOKE_CHANNELS = new Set(['dsh-chamber:info'])
  */
 export const EXPECTED_SURFACE = {
   namespaces: 10,
-  members: 69,
-  invoke: 60,
+  members: 59,
+  invoke: 50,
   push: 9,
   perNamespace: {
     badge: 1,
     deepLink: 3,
-    desktopSsh: 34,
+    desktopSsh: 24,
     notifications: 5,
     openIn: 2,
     rendererStall: 1,
@@ -101,6 +103,22 @@ export function assertSurfaceCounts(observed, expected = EXPECTED_SURFACE) {
   }
   return observed
 }
+
+/**
+ * rc.2 desktop-carrier functions in preload.cts. They are NOT dshChamber
+ * namespaces (no shim namespace counterpart): the dshDesktop carrier is the
+ * official desktop preload surface, owned by packages/desktop/preload.cts with
+ * channel constants in shortcuts-bridge.ts. Listed here so the fail-closed
+ * factory check below still fails when a namespace function appears without a
+ * mapping entry while these intentional exclusions stay visible and asserted.
+ */
+export const DESKTOP_CARRIER_FUNCTIONS = new Set([
+  'keyboardApi',
+  'shortcutsApi',
+  'desktopUpdatesApi',
+  'exposeDesktopCarrier',
+  'markDocumentPlatform',
+])
 
 /** preload factory → exposed namespace name (the mapping that cannot be guessed
  *  from the surface type: NotificationSurface → notifications). */
@@ -412,7 +430,12 @@ export function describeShape(shape) {
  * @returns {{ checked: number, mismatches: string[], missingFromManifest: string[], unexposedManifestChannels: string[], namespaces: number, perNamespace: Record<string, number> }} verdict.
  */
 export function comparePayloadShapes({ preloadText, shimText, manifest }) {
-  const factories = extractFactoryNames(preloadText)
+  const declared = extractFactoryNames(preloadText)
+  const missingCarrier = [...DESKTOP_CARRIER_FUNCTIONS].filter(name => !declared.includes(name))
+  if (missingCarrier.length > 0) {
+    throw new Error('preload.cts lost its dshDesktop carrier functions: ' + missingCarrier.join(', '))
+  }
+  const factories = declared.filter(name => !DESKTOP_CARRIER_FUNCTIONS.has(name))
   const expectedFactories = Object.keys(FACTORY_TO_NAMESPACE).sort()
   if (JSON.stringify([...factories].sort()) !== JSON.stringify(expectedFactories)) {
     throw new Error(
@@ -559,13 +582,10 @@ export const PUSH_PAYLOAD_FIXTURES = {
 }
 
 /** Arguments for one invoke member: enough for the shim's payload literals. */
-function argsForMember(name, fn, shape) {
+function argsForMember(fn, shape) {
   if (shape.kind === 'direct') return [['gate-instance']]
   const arity = typeof fn.length === 'number' && fn.length > 0 ? fn.length : 1
-  const args = Array.from({ length: arity }, (_value, index) => 'arg' + index)
-  if (name === 'gateway_plugin_apply') return [args[0], { add: [], remove: [], deferRestart: true }]
-  if (name === 'plugin_apply') return [args[0], { add: [], remove: [], restart: true }]
-  return args
+  return Array.from({ length: arity }, (_value, index) => 'arg' + index)
 }
 
 /**
@@ -625,7 +645,7 @@ export async function compareRuntimePayloads({ preloadText, shimText, token = ma
       const before = harness.envelopes.length
       let pending
       try {
-        pending = member(...argsForMember(name, member, call.shape))
+        pending = member(...argsForMember(member, call.shape))
       } catch (error) {
         mismatches.push(key + ': threw before posting — ' + String(error instanceof Error ? error.message : error))
         continue

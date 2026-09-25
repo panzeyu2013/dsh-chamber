@@ -37,11 +37,13 @@ function fakeContext(chamberBasePath: string | undefined): { ctx: never; handle:
 async function recordedCallPath(handle: FakeHandle): Promise<string> {
   const originalFetch = globalThis.fetch
   let url = ''
-  globalThis.fetch = (async (input: URL, init: RequestInit): Promise<Response> => {
+  globalThis.fetch = (async (input: string | URL, init: RequestInit): Promise<Response> => {
     url = String(input)
     const request = JSON.parse(String(init.body)) as { rpcId: string }
     return {
       ok: true,
+      // rc.2 reads the response media type before choosing the JSON envelope path.
+      headers: { get: () => 'application/json' },
       json: async () => ({ type: 'server-response', rpcId: request.rpcId, result: { ok: true, value: null } }),
     } as unknown as Response
   }) as unknown as typeof globalThis.fetch
@@ -50,7 +52,8 @@ async function recordedCallPath(handle: FakeHandle): Promise<string> {
   } finally {
     globalThis.fetch = originalFetch
   }
-  return new URL(url).pathname
+  // rc.2 sends the document-relative route for the stock base; resolve it the way a page would.
+  return new URL(url, 'http://dsh.internal').pathname
 }
 
 test('apply reads ctx.chamberBasePath into the generic RPC carrier prefix', async () => {
@@ -65,6 +68,23 @@ test('apply without a ctx base path keeps the stock no-prefix surface', async ()
   const { ctx, handle } = fakeContext(undefined)
   apply(ctx)
   assert.equal(await recordedCallPath(handle()), '/api/session/follow')
+})
+
+test('an explicit transport rpc keeps upstream precedence over the base-path carrier', () => {
+  // rc.2's ClientTransportHooks.rpc replaces the HTTP caller outright; the
+  // per-entry prefix must not be assembled on top of a decoded carrier.
+  const globals = globalThis as { __DSH_TRANSPORT__?: unknown }
+  const previous = globals.__DSH_TRANSPORT__
+  const explicit = { call: async () => ({ ok: true as const, value: null }) }
+  globals.__DSH_TRANSPORT__ = { rpc: explicit }
+  try {
+    const { ctx, handle } = fakeContext('/api/i/ssh-right')
+    apply(ctx)
+    assert.equal(handle().rpc, explicit)
+  } finally {
+    if (previous === undefined) delete globals.__DSH_TRANSPORT__
+    else globals.__DSH_TRANSPORT__ = previous
+  }
 })
 
 test('the wake-event name is the canonical chamber export', () => {

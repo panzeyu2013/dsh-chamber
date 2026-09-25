@@ -33,10 +33,19 @@
  * the reason a reviewer accepted and where the consumer lands. A stale exemption
  * (the export is imported or gone) is red: the list may not lie.
  *
+ * RETIRED PLUGIN WRITE SURFACE. The 2026-09 C layering ruling (D1) deleted every
+ * user-reachable plugin write IPC method; RETIRED_PLUGIN_WRITE_FACE_NAMES is the
+ * single owner of that set, and this gate scans the shipped surfaces (package
+ * sources incl. the renderer type face, the desktop sidecar stub and the native
+ * shell's shim/manifest sources) so a write method cannot quietly reappear in a
+ * surface the read-face lockstep suite does not walk. Tests, generated output,
+ * vendor trees and docs are not scanned: the names legitimately live there.
+ *
  * NEGATIVE CONTROL: --self-test drives the pure resolver with a fabricated
  * module list whose one export has no importer and asserts it is reported, an
- * exemption silences it, a stale exemption is flagged, and the index parser does
- * not mistake comment text for an export name.
+ * exemption silences it, a stale exemption is flagged, the index parser does
+ * not mistake comment text for an export name, and the retired write-face
+ * scanner detects a reappearance in a fabricated shim source.
  *
  * Usage:
  *   node scripts/gates/verify-no-dead-exports.mjs            # gate
@@ -130,7 +139,7 @@ export const PENDING_PACKAGES = {}
  * configuration, not by an import.
  */
 export const ENTRYLESS_PACKAGES = [
-  { name: 'desktop', spec: '@dsh-chamber/desktop', ignoreFiles: ['main.ts', 'sidecar-entry.ts', 'gateway-ipc-shared.ts'] },
+  { name: 'desktop', spec: '@dsh-chamber/desktop', ignoreFiles: ['main.ts', 'sidecar-entry.ts'] },
   { name: 'renderer', spec: '@dsh-chamber/renderer', ignoreFiles: ['chamber-entry.ts', 'main.tsx'] },
 ]
 
@@ -147,9 +156,61 @@ export const ENTRYLESS_SEAMS = [
   { package: 'renderer', name: '__resetSessionFactsGoalWarningForTests', reason: 'session-facts-source suite re-arms the one-shot goal-shape warning; the suite owns the seam' },
   { package: 'renderer', name: 'resetRendererStallEvidence', reason: 'renderer-stall-evidence suite resets the module singleton between cases; the suite owns the seam' },
   { package: 'desktop', name: 'clearGatewaySyncRegistrations', reason: 'gateway-sync-registry suite resets module state between cases' },
-  { package: 'desktop', name: 'pluginNameFromFolder', reason: 'plugin-tarball suite pins the NAME-ONLY read bound (64 KiB) against the real reader' },
-  { package: 'desktop', name: 'listTgzManifest', reason: 'plugin-tarball suite pins the tgz listing shape against the real parser' },
 ]
+
+/**
+ * The retired user plugin WRITE face (2026-09 C layering ruling / D1): IPC
+ * method and channel names that must not reappear in any shipped surface. The
+ * settings-connections read-face lockstep suite imports this constant, so the
+ * set has one owner; the gate scans the surfaces in retiredWriteFaceScanFiles().
+ * @type {readonly string[]}
+ */
+export const RETIRED_PLUGIN_WRITE_FACE_NAMES = Object.freeze([
+  'gateway_plugin_apply',
+  'gateway_plugin_materialize',
+  'plugin_apply',
+  'ssh_plugin_undo',
+  'npm_search',
+  'plugin_materialize_add',
+  'local_plugin_add',
+  'local_plugin_remove',
+])
+
+/**
+ * Production files of the shipped surfaces the retired write-face scan covers:
+ * every package source (renderer type face, desktop preload/sidecar stub,
+ * gateway, settings plugins) plus the native shell sources (bridge shim,
+ * generated manifest). Tests, build output, generated trees and vendor trees
+ * are excluded - the names legitimately live in suites and docs, never in a
+ * shipped surface.
+ * @param {string} [repoRoot] - repository root.
+ * @returns {string[]} absolute paths, sorted.
+ */
+export function retiredWriteFaceScanFiles(repoRoot = REPO_ROOT) {
+  const sourceFile = (path) => /\.(?:ts|tsx|mts|cts|mjs|cjs|js|jsx|swift|json)$/u.test(path)
+  const options = { extraIgnored: ['test', 'tests', 'lib', 'generated', '.tmp'] }
+  return [
+    ...walkFiles(join(repoRoot, 'packages'), sourceFile, options),
+    ...walkFiles(join(repoRoot, 'macos', 'Sources'), sourceFile, options),
+  ].sort()
+}
+
+/**
+ * Pure verdict: the first retired name found in each scanned source. A plain
+ * substring match, not a word boundary: desktop_ssh_plugin_apply contains the
+ * retired plugin_apply and must count as a reappearance.
+ * @param {{ file: string, text: string }[]} sources - scanned file/text pairs.
+ * @param {readonly string[]} [names] - the retired set.
+ * @returns {{ file: string, name: string }[]} one entry per offending file.
+ */
+export function retiredWriteFaceViolations(sources, names = RETIRED_PLUGIN_WRITE_FACE_NAMES) {
+  const violations = []
+  for (const source of sources) {
+    const name = names.find((candidate) => source.text.includes(candidate))
+    if (name !== undefined) violations.push({ file: source.file, name })
+  }
+  return violations
+}
 
 /** Strip comments so an import/export parser never reads prose as code. */
 export function stripComments(sourceText) {
@@ -455,14 +516,20 @@ function selfTest() {
   const entrylessDetected = entrylessVerdict.checked === 3 && entrylessVerdict.dead.length === 1 && entrylessVerdict.dead[0].name === 'orphan'
   const entrylessStale = staleEntrylessSeams(entrylessModules, new Set(['used', 'seamOnly', 'orphan']), [{ name: 'seamOnly', reason: 'suite seam' }])
   const entrylessStaleDetected = entrylessStale.length === 1
-  if (detected && exemptionWorks && staleDetected && commentsIgnored && entrylessDetected && entrylessStaleDetected) {
-    console.log('no-dead-exports self-test: ok (an orphan is reported, an exemption silences it, a stale exemption is flagged, comments are not code)')
+  const retiredVerdict = retiredWriteFaceViolations([
+    { file: 'packages/x/src/clean.ts', text: 'const listPlugins = () => []' },
+    { file: 'macos/Sources/X/Resources/bridge-shim.js', text: "invoke('desktop_local_plugin_add', {})" },
+  ])
+  const retiredDetected = retiredVerdict.length === 1 && retiredVerdict[0].name === 'local_plugin_add'
+  if (detected && exemptionWorks && staleDetected && commentsIgnored && entrylessDetected && entrylessStaleDetected && retiredDetected) {
+    console.log('no-dead-exports self-test: ok (an orphan is reported, an exemption silences it, a stale exemption is flagged, comments are not code, a retired write-face name reappearing is caught)')
     return
   }
   console.error(
     'no-dead-exports self-test: FAIL (detected=' + String(detected) +
     ', exemptionWorks=' + String(exemptionWorks) + ', staleDetected=' + String(staleDetected) +
-    ', commentsIgnored=' + String(commentsIgnored) + ', entryless=' + String(entrylessDetected) + '/' + String(entrylessStaleDetected) + ')',
+    ', commentsIgnored=' + String(commentsIgnored) + ', entryless=' + String(entrylessDetected) + '/' + String(entrylessStaleDetected) +
+    ', retiredWriteFace=' + String(retiredDetected) + ')',
   )
   process.exit(1)
 }
@@ -542,6 +609,18 @@ function main() {
   }
   if (entrylessChecked < 100) {
     failures.push('the entryless scan parsed only ' + String(entrylessChecked) + ' runtime export(s) - below the sanity floor (100); refusing to read a parse failure as a clean surface')
+  }
+  const retiredFiles = retiredWriteFaceScanFiles()
+  const retiredViolations = retiredWriteFaceViolations(retiredFiles.map((file) => ({
+    file: relative(REPO_ROOT, file).split(sep).join('/'),
+    text: readFileSync(file, 'utf8'),
+  })))
+  if (retiredFiles.length < 100) {
+    failures.push('the retired write-face scan read only ' + String(retiredFiles.length) + ' file(s) - below the sanity floor (100); refusing to read a walk failure as a clean surface')
+  }
+  if (retiredViolations.length > 0) {
+    failures.push('retired plugin write-face names reappeared in shipped surfaces: '
+      + retiredViolations.map((entry) => entry.name + ' (' + entry.file + ')').join(', '))
   }
   if (totalChecked < 100) {
     failures.push('the workspace parsed only ' + String(totalChecked) + ' runtime export(s) - below the sanity floor (100); refusing to read a parse failure as a clean surface')

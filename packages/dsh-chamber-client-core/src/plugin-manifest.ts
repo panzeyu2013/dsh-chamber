@@ -9,14 +9,8 @@
 export {
   hasXWildcard,
   isMaterializedValue,
-  maskMaterializedDependencies,
-  parsePluginManifest,
-  PLUGIN_MATERIALIZED_VALUE_MASK,
-  readManifestVersion,
 } from '@dsh-chamber/dsh-chamber-wire/plugin-manifest'
 export type {
-  PluginManifestFault,
   PluginManifestModel,
-  PluginManifestParseResult,
   PluginProfileRefusalCode,
 } from '@dsh-chamber/dsh-chamber-wire/plugin-manifest'

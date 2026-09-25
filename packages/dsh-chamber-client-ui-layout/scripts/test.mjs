@@ -23,6 +23,11 @@ export const GROUPS = {
   theme: [
     'test/document-theme.test.ts',
   ],
+  // frame: the frame's declared child seats (the chamber sidebar's window-chrome
+  // occupant depends on 'shell.leading' being declared here).
+  frame: [
+    'test/frame-slots.test.ts',
+  ],
 }
 
 function main() {

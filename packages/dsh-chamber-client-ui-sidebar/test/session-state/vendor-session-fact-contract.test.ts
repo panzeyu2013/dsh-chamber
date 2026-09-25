@@ -8,8 +8,9 @@
  *  2. 客户端半 `ctx.remote.$on('api-session/status')` → `sessions.handleSessionStatus(...)`；
  *  3. `ClientSessions.handleSessionStatus` 是**公开**方法（且不在 `ISessions` 契约里 ——
  *     写回因此是「上游公开但非契约」的面，pin 升级必须在此处见红而不是静默降级）；
- *  4. 它一次写三处：list summaries（`recordMutation` 的 `status` mutation）、物化
- *     Session（`handleRunning`，聊天面）与 catalog activity；
+ *  4. 它一次写三处：list summaries（`recordMutation` 的 `status` mutation，rc.2 起
+ *     同时落 `agentAvailable: true`）、物化 Session（`handleRunning`，聊天面）与子代理
+ *     父可用性（`updateParentAvailability`，rc.2 取代旧 catalog activity）；
  *  5. `refreshList()` 对 remote 失败**照常 resolve**（只置 `listState='error'`）并把权威
  *     running 下推已物化会话；
  *  6. `mergeOrderedBaseline` **移除**权威基线里缺席的 id（⑨ 缺席行不会永久留存）。
@@ -78,12 +79,12 @@ vendorTest('上游：handleSessionStatus 是公开方法、且一次写 summarie
   const manager = readVendor('dsh-api-session-controller/src/client/sessions/manager.ts')
   assert.match(manager, /handleSessionStatus\(sessionId: SessionId, running: boolean\): void \{/,
     'manager 侧的签名变了 ⇒ 写回的语义前提变了')
-  assert.match(manager, /this\.recordMutation\(\{ kind: 'status', sessionId, running \}\)/,
-    '必须仍写 list summaries（侧栏行）')
+  assert.match(manager, /this\.recordMutation\(\{ kind: 'status', sessionId, running, agentAvailable: true \}\)/,
+    '必须仍写 list summaries（侧栏行）并落 agentAvailable 事实（rc.2 的行可用性语义；写回因此不能让行变成不可用）')
   assert.match(manager, /this\.sessions\.get\(sessionId\)\?\.handleRunning\(running\)/,
     '必须仍写物化 Session（聊天面 running）')
-  assert.match(manager, /this\.updateCatalogActivity\(sessionId, running\)/,
-    '必须仍写子代理 catalog activity')
+  assert.match(manager, /this\.updateParentAvailability\(\)/,
+    '必须仍刷新子代理父可用性（rc.2 取代旧 updateCatalogActivity；语义变了 ⇒ 写回的副作用须重推）')
 })
 
 vendorTest('上游：refreshList 对 remote 失败照常 resolve（回执必须自带权威判定）且把 running 下推', () => {

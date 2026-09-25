@@ -38,8 +38,9 @@ export function enqueueBoundedRosterIntent<T>(
 
 /**
  * Page-local serial tail for payload-bearing notification opens: queue order must cover the
- * asynchronous `sessions.list` wait and the eventual `sessions.open`, not merely promise-start
- * order (otherwise a later visible session opens before an earlier delayed one and is overwritten).
+ * asynchronous `sessions.list` wait and the eventual official `openSession` dispatch, not merely
+ * promise-start order (otherwise a later visible session opens before an earlier delayed one and
+ * is overwritten).
  * One failed item is settled locally so it cannot poison the tail for subsequent clicks.
  */
 export class SerialIntentRunner<T> {

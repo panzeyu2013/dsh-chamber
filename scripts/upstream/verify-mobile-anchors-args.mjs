@@ -51,7 +51,8 @@ export const VERIFY_MOBILE_ANCHORS_USAGE = `verify-mobile-anchors — 移动插�
 
 退出码：
   0  全部通过（或非严格模式下的 fail-soft 跳过 / --help）
-  1  data-* / role / slot 锚点没有**写入形**发射点、最小断言集缺口，或严格模式下的
+  1  data-* / role / slot / build-time 哈希 token 锚点零命中（没有**写入形**
+     发射点）、最小断言集缺口，或严格模式下的
      四条「什么都没查」路径 + 版本不符
   2  用法错误（未知参数 / --simulate-rename 缺 '=' / 它与 --require-anchor-root 同用等）
 `

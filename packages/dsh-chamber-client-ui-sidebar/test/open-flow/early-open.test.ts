@@ -270,9 +270,10 @@ test('the plugin starts the arm inside a ctx.effect, bound to its own instance i
 })
 
 test('the arm proves the source identity before it opens on that host (2026-09-11 review F3)', () => {
-  // Deleting this guard re-opens the hole: the arm MUTATES
-  // (`sessions.open`) on a page-wide, sourceId-keyed intent, so a same-id boot of
-  // another incarnation could be driven by a previous one's intent.
+  // Deleting this guard re-opens the hole: the arm MUTATES the presented
+  // session (`uiWorkspace.openSession`) on a page-wide, sourceId-keyed intent, so
+  // a same-id boot of another incarnation could be driven by a previous one's
+  // intent.
   const body = armEffectBody(read('../../src/client/index.ts'))
   assert.match(
     body,
@@ -289,14 +290,18 @@ test('the arm proves the source identity before it opens on that host (2026-09-1
   assert.ok(guardAt !== -1 && armAt > guardAt, 'the identity proof must precede the arm')
 })
 
-test('the arm reads the LIVE intent and opens through this ctx own sessions service', () => {
+test('the arm reads the LIVE intent and presents through this ctx own official view owner', () => {
   const body = armEffectBody(read('../../src/client/index.ts'))
   assert.match(body, /readIntent: \(\) => getOpenIntent\(chamberInstanceId\)/, 'read at attempt time — a captured value opens a stale request')
   assert.match(
     body,
-    /open: \(sessionId\) => \{ ctx\.sessions\.open\(sessionId\) \}/,
-    'the open must be a method call on THIS ctx sessions service (never a detached reference)',
+    /open: \(sessionId\) => \{ workspaceNavigation\.openSession\(sessionId\) \}/,
+    'the open must be a method call on THIS ctx official view owner (never a detached '
+      + 'reference): only ui-workspace.openSession sets mainReference and preempts the '
+      + 'official initial-navigation blank',
   )
+  assert.doesNotMatch(body, /ctx\.sessions\.open/,
+    'the removed rc.1 sessions.open must never return to the arm')
   assert.match(body, /isAddressable: \(sessionId\) => \{/, 'the addressability probe must live at the ctx seam, where a hostile face is caught')
   assert.match(
     body,

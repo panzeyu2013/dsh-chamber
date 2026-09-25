@@ -24,7 +24,7 @@
 //                7. payload → AnyCodable（失败 = 信封不合法）
 //             全过 → onInvoke(id, method, payload)
 //         └→ onInvoke → controller → BridgeClient.invoke(method:payload:)
-//              → sidecar（61 invoke 处理器语义校验原样，design 25 §3.1）
+//              → sidecar（51 invoke 处理器语义校验原样，design 25 §3.1）
 //             任一不过 → evaluateJavaScript
 //             "__dshChamberResolve(id, null, <错误码>)"（错误码与
 //             renderer-trust / design 25 §4.4.1 同族：Electron 侧投
@@ -65,7 +65,7 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
     // MARK: - 构造参数（共享契约，MainWindowController 按此构造，勿改名）
 
     /// 方法白名单：MainWindowController 实传 BridgeManifest.invokeChannels
-    /// （生成物，61 invoke 通道；design 25 §4.4.3），其余通道一律
+    /// （生成物，51 invoke 通道；design 25 §4.4.3），其余通道一律
     /// method_not_allowed。事件订阅面（8 push 通道）属 shim 侧 PUSH_EVENTS，
     /// 不经本白名单。
     private let whitelist: Set<String>

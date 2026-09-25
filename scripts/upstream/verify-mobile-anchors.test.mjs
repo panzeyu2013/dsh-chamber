@@ -48,8 +48,8 @@ const UPSTREAM_TEXT = [
   'jsx("div", { "role": "dialog" }); jsx("div", { "role": "tooltip" })',
   'jsx("div", { "role": "menu" }); jsx("div", { "role": "menuitem" }); jsx("div", { "role": "listbox" }); jsx("div", { "role": "option" })',
   'const stamped = { "data-slot": slotKey }',
-  'const cls = "_root_1b2ny_3"',
-  'const cls2 = "_card_1b2ny_4"',
+  'const cls = "_root_38jqx_3"',
+  'const cls2 = "_card_38jqx_9"',
 ].join('\n')
 
 const PLUGIN_TEXT = [
@@ -70,7 +70,8 @@ const PLUGIN_TEXT = [
   "const m = '[data-sidebar-right-panel]'",
   "const n = '[data-mobile-role=\"sidebar\"]'",
   "const o = '[role=\"tablist\"]'",
-  "export const CARD = '_root_1b2ny_'",
+  "export const CARD = '_root_38jqx_'",
+  "export const CARD_BODY = '_card_38jqx_'",
 ].join('\n')
 
 const CHAMBER_TEXT = 'jsx("span", { "data-git-action": "" })'
@@ -107,11 +108,19 @@ test('负例 2：上游把 data-* 属性改名 ⇒ 硬失败', () => {
   assert.ok(findings.violations.some(v => v.includes('data-conversation-scroll')), findings.violations.join('\n'))
 })
 
-test('负例 3：上游把 build-time 哈希 token 改名 ⇒ advisory，不失败', () => {
-  const renamed = UPSTREAM_TEXT.replaceAll('_root_1b2ny_', '_root_zzzzz_')
+test('负例 3：上游把 build-time 哈希 token 改名 ⇒ 硬失败（pin bump 必须重锚）', () => {
+  const renamed = UPSTREAM_TEXT.replaceAll('_root_38jqx_', '_root_zzzzz_')
   const findings = run({ text: renamed })
-  assert.deepEqual(findings.violations, [])
-  assert.ok(findings.advisories.some(a => a.includes('_root_1b2ny_')), findings.advisories.join('\n'))
+  assert.ok(findings.violations.some(v => v.includes('_root_38jqx_')), findings.violations.join('\n'))
+  assert.ok(findings.advisories.every(a => !a.includes('_root_38jqx_')),
+    'hash 零命中不得再降为 advisory: ' + findings.advisories.join('\n'))
+})
+
+test('负例 3b（方向 B）：插件把哈希 token 从源码里删掉 ⇒ 最小断言集硬失败', () => {
+  const pluginText = PLUGIN_TEXT.replace("export const CARD = '_root_38jqx_'", '')
+  const findings = run({ pluginText })
+  assert.ok(findings.violations.some(v => v.includes('_root_38jqx_') && v.includes('插件')),
+    findings.violations.join('\n'))
 })
 
 test('负例 4（方向 B）：插件把锚点从源码里删掉 ⇒ 最小断言集硬失败', () => {
@@ -463,7 +472,7 @@ test('严格模式的 pin 一致性：树版本与仓内 pin 不符 ⇒ exit 1',
 })
 
 test('最小断言集本身：无重复、kind 合法，且与 §4 登记行逐项对得上', () => {
-  assert.equal(REQUIRED_ANCHORS.length, 19)
+  assert.equal(REQUIRED_ANCHORS.length, 21)
   const keys = REQUIRED_ANCHORS.map(item => `${item.kind}:${item.token}`)
   assert.equal(new Set(keys).size, keys.length)
   for (const item of REQUIRED_ANCHORS) {

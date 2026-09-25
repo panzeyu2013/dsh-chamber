@@ -4,9 +4,8 @@
  * Loading any of these again from the host graph would register the same plugin
  * twice on one cordis ctx (duplicate provide / slot), so they are skipped, never
  * loaded — mostly the client plugin packages the composite registers, plus the
- * page-own rows (ui-sidebar / ui-modules / ui-renderer / ui-layout / ui-open-in-app
- * / hmr / mobile / directory-picker-native) and the PLATFORM_MODULES words the
- * composite answers.
+ * page-own rows (ui-sidebar / ui-modules / ui-renderer / ui-layout / hmr / mobile
+ * / directory-picker-native) and the PLATFORM_MODULES words the composite answers.
  *
  * Maintenance: a plugin import added to chamber-entry.ts must append its package
  * name here in the same batch (missing ids fail LOUD at boot; extra ids are
@@ -38,13 +37,20 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   '@deepseek-ai/dsh-api-session-controller',
   '@deepseek-ai/dsh-api-workspace-controller',
   '@deepseek-ai/dsh-client-locale',
+  // rc.2: the official ui-layout/ui-workspace inject faces name `shortcuts`,
+  // whose ONLY provider is @deepseek-ai/dsh-client-shortcuts (inject: ['locale']).
+  // Uncovered it was a second reverse dependency on a host-graph row: a degraded
+  // or failed graph channel left the layout/workspace fibers PENDING and the
+  // whole shell unregistered while boot still reported success; the covered
+  // locale already satisfies its inject face, so the provider is first-screen now.
+  '@deepseek-ai/dsh-client-shortcuts',
   '@deepseek-ai/dsh-client-ui-theme',
   '@dsh-chamber/dsh-chamber-client-ui-layout',
   '@dsh-chamber/dsh-chamber-client-ui-sidebar',
   '@dsh-chamber/dsh-chamber-client-ui-git',
   '@dsh-chamber/dsh-chamber-client-ui-open-in',
   // ui-settings stays FIRST-SCREEN (C4): locale/ui-theme root-inject its
-  // settingsScope; its section families + the chamber settings shell/connections
+  // configForms service; its section families + the chamber settings shell/connections
   // are deferred (ids stay covered).
   '@deepseek-ai/dsh-client-ui-settings',
   '@deepseek-ai/dsh-client-ui-conversation',
@@ -122,11 +128,19 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // profile has no usable hmr client channel, so the row is skipped, never loaded
   // (page-own, no factory).
   '@deepseek-ai/dsh-client-hmr',
-  // The official open-in client row: our dsh-chamber-client-ui-open-in is a
-  // SUPERSET of it and REPLACES its registration at the same conversation
-  // utility slot, so an official row from the host graph would add a second
-  // entry. Skipped like the other page-own official rows. Page-own, no factory.
-  '@deepseek-ai/dsh-client-ui-open-in-app',
+  // The official open-in client row is NOT skipped any more (D2): it loads from
+  // the host graph so its file-level surfaces register — the right-sidebar
+  // document actions (sidebar.right.tab.document.actions / .unpreviewable) and
+  // the deliverables file actions (deliverables[.review].file.actions), all fed
+  // by the per-instance session Remote, not by its own host half. Its HEADER
+  // entry (id open-in-app at conversation.session.header.utilities) reads the
+  // document-relative open-in-app/* routes, which resolve to the control-plane
+  // origin this composite page is served from (only host-graph bundle urls get
+  // the per-instance prefix — host-graph.ts toExtraRows), and the official HOST
+  // half is disabled by the per-spawn overlay while dsh-chamber-seed-open-in is
+  // seeded — so that header entry renders null here. The effective directory-open
+  // entry is @dsh-chamber/dsh-chamber-client-ui-open-in (id open-in, same slot,
+  // same order -10); the ids differ, so both list entries coexist.
 ]
 
 /**
@@ -158,13 +172,20 @@ export const CHAMBER_COVERED_FACTORY_IDS: readonly string[] = [
   '@deepseek-ai/dsh-api-session-controller',
   '@deepseek-ai/dsh-api-workspace-controller',
   '@deepseek-ai/dsh-client-locale',
+  // rc.2: the official ui-layout/ui-workspace inject faces name `shortcuts`,
+  // whose ONLY provider is @deepseek-ai/dsh-client-shortcuts (inject: ['locale']).
+  // Uncovered it was a second reverse dependency on a host-graph row: a degraded
+  // or failed graph channel left the layout/workspace fibers PENDING and the
+  // whole shell unregistered while boot still reported success; the covered
+  // locale already satisfies its inject face, so the provider is first-screen now.
+  '@deepseek-ai/dsh-client-shortcuts',
   '@deepseek-ai/dsh-client-ui-theme',
   '@dsh-chamber/dsh-chamber-client-ui-layout',
   '@dsh-chamber/dsh-chamber-client-ui-sidebar',
   '@dsh-chamber/dsh-chamber-client-ui-git',
   '@dsh-chamber/dsh-chamber-client-ui-open-in',
   // ui-settings stays FIRST-SCREEN (C4 — locale/ui-theme root-inject its
-  // settingsScope); the deferred settings sections + chamber settings shell/
+  // configForms service); the deferred settings sections + chamber settings shell/
   // connections have NO static factory (see CHAMBER_COVERED_IDS).
   '@deepseek-ai/dsh-client-ui-settings',
   '@deepseek-ai/dsh-client-ui-conversation',

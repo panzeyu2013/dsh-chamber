@@ -26,6 +26,18 @@
 > 故装面保守；卸面的事实（B₀ 与 S）都是本仓常量/注册表，可离线判定，因此照常放行。放开装面
 > 的前提 = 给 ssh 增加远端 family 读（扩 exec 面），须按 §7.2 的 exec 白名单纪律单独评审。
 
+> **实现状态（2026-09 C 分层裁决，已落地为本仓基线）**：chamber 无用户插件写面——
+> 本文的**写面半边已退役并从代码删除**：远端/本地插件的安装（apply add）、卸载（apply
+> remove）、物化（materialize / `file:` 导入）、撤销（undo journal）、npm 搜索、gateway
+> 的 install/remove/undo/tasks/materialize 路由与桌面 `gateway_plugin_apply` /
+> `gateway_plugin_materialize` IPC、`plugin_mutation_executor` 子执行器、plugin-tarball /
+> ssh-apply-rows / ssh-plugin-journal 模块。**保留**只读面：`desktop_ssh_plugin_list` /
+> `desktop_local_plugin_list` 清单读取、`rows[]` 行投影（role/protected，由后端计算）、
+> `pluginInventory/list` 官方只读清单、capability 探针（chamber 宿主包 installed/patched/
+> live）。chamber 宿主包 seed 与 gateway seed-cache 同步是**供给面、不是插件模型写面**
+> （design 21 §6.11），保留 ready 自动 + 手动补种/同步兜底。**写面归属（rc.2）**：用户插件写面由上游承载——宿主包 `@deepseek-ai/dsh-plugin-manager`（上游 `packages/boot/plugin-manager`）与官方客户端行 `@deepseek-ai/dsh-client-ui-plugin-manager` 提供 install/remove；chamber 保护集（`control-plane/src/protected-plugins.ts`）不再覆盖该写面路径，只服务已装行读面投影（role/protected）。下述 §3/§5/§6 的写面条目为
+> 历史契约记录，不再有对应实现；读面条目（§4.1/§4.2、§6 的清单与注入态投影）仍有效。
+
 ## 1. 动机与范围
 
 - 远程 dsh 实例（`dsh-<id>`，`ssh-<id>` legacy）的远端 `dsh plugin` CLI 无法从 chamber 前端

@@ -234,6 +234,12 @@ vite shared 单例纪律，因为目标实例自己的 ctx 也要读它）及其
 - logo 行（wide/rail）、New Session（走本 ctx 的运行时动作——恒为当前来源）、
   wide/rail 折叠状态机（滑动 + 交叉淡化、rail-in 动画）、跟随指针的滚动条
   纪律、foot（`sidebar.footer.action` + `sidebar.settings`）。
+- 框架的 `shell.leading` 窗口 chrome 座（`SidebarLeadingControls.tsx`）：macOS 下
+  收起的侧边栏整列隐藏，框架在红绿灯旁挂载该座，占用者把「展开侧边栏」与
+  New Session 放回那里，两者各自展示页面快捷键目录（`ctx.shortcuts.catalog`）
+  的有效键帽与 `aria-keyshortcuts`（未注册时缺席）。复用侧栏的 inject 面与
+  `sidebar` 命名空间（不写 id/order/priority——与官方 ui-sidebar 同形）；
+  控件带宽保持框架计价的 28 + 8 + 28 几何。
 - i18n 命名空间 `sidebar`（zh 键源；见 `src/client/locales.ts`）。
 
 ## 共享 gateway-runtime 面（design 21 §5.2）

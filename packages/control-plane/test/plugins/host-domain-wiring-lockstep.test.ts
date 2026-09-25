@@ -381,9 +381,14 @@ test('⑥b the vendored web bundle still mounts the official open-in host row th
       + '（显式 DSH_CHAMBER_VENDOR_ABSENT=skip 才跳过）。')
   }
   const shared = readFileSync(join(VENDOR_PACKAGES, 'dsh-host-open-in-app', 'src', 'shared.ts'), 'utf8')
-  assert.match(shared, /OPEN_IN_APP_APPS_ROUTE = '\/open-in-app\/apps'/, 'the official apps route must still exist')
-  assert.match(shared, /OPEN_IN_APP_ICON_PREFIX = '\/open-in-app\/icon'/, 'the official icon route must still exist')
-  assert.match(shared, /OPEN_IN_APP_OPEN_ROUTE = '\/open-in-app\/open'/, 'the official open route must still exist')
+  // 0.1.7 renamed the route constants: the PATH carries the leading slash and the
+  // ROUTE is the browser-relative slice(1) form. Both must stay paired.
+  assert.match(shared, /OPEN_IN_APP_APPS_PATH = '\/open-in-app\/apps'/, 'the official apps path must still exist')
+  assert.match(shared, /OPEN_IN_APP_APPS_ROUTE = OPEN_IN_APP_APPS_PATH\.slice\(1\)/, 'the apps route must stay derived from the path')
+  assert.match(shared, /OPEN_IN_APP_ICON_PREFIX_PATH = '\/open-in-app\/icon'/, 'the official icon path must still exist')
+  assert.match(shared, /OPEN_IN_APP_ICON_PREFIX_ROUTE = OPEN_IN_APP_ICON_PREFIX_PATH\.slice\(1\)/, 'the icon route must stay derived from the path')
+  assert.match(shared, /OPEN_IN_APP_OPEN_PATH = '\/open-in-app\/open'/, 'the official open path must still exist')
+  assert.match(shared, /OPEN_IN_APP_OPEN_ROUTE = OPEN_IN_APP_OPEN_PATH\.slice\(1\)/, 'the open route must stay derived from the path')
   const bundle = readFileSync(join(VENDOR_PACKAGES, 'dsh-web-app', 'cordis.patch.yml'), 'utf8')
   assert.match(bundle, /- id: open-in-app\n\s+name: '@deepseek-ai\/dsh-host-open-in-app'/,
     'the web bundle must still insert the row this overlay disables (a rename would silently resurrect the dead face)')

@@ -7,14 +7,17 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  __resetGoalProjectionWarningForTests,
   applyGoalActivation,
   mergeRuntimeFacts,
-  parseGoalFact,
   projectRuntimeFacts,
   retainGoalFacts,
   runtimeReportSignature,
 } from '@dsh-chamber/dsh-chamber-client-core/derive'
+// Test-only internals: package-internal deep imports keep them off the public subpath face.
+import {
+  __resetGoalProjectionWarningForTests,
+  parseGoalFact,
+} from '../../../dsh-chamber-client-core/src/derive.ts'
 /** One projection value as the wire carries it (nested, with updatedAt). */
 const wireGoal = (over: { id?: unknown; revision?: unknown; phase?: unknown; updatedAt?: unknown } = {}) => ({
   goal: {
@@ -97,7 +100,6 @@ test('parseGoalFact: malformed shapes stay unknown and warn exactly once per pag
 
 test('projectRuntimeFacts carries the goal fact sparsely and keeps rows without a goal key byte-compatible', () => {
   const report = projectRuntimeFacts({
-    current: 's1',
     byId: {
       s1: { running: true, projectionValues: { goal: wireGoal({ updatedAt: 9 }) } },
       s2: { running: false, projectionValues: { goal: null } },

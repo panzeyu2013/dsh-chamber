@@ -16,12 +16,11 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-theme/client'
 import type { HostObservable, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
+import type { ShortcutCommandId } from '@deepseek-ai/dsh-client-shortcuts/client'
+import { en, zh } from './shortcut-locales.ts'
 import type { PanelInfo } from '@deepseek-ai/dsh-client-ui-layout/src/client/service.ts'
 import { AppFrame } from '@deepseek-ai/dsh-client-ui-layout/src/client/AppFrame.tsx'
-import { SIDEBAR_AUTO_COLLAPSE } from '@deepseek-ai/dsh-client-ui-layout/src/client/columns.ts'
 import { createLayoutStore, trackLayoutInstance } from './stores.ts'
-import { collapsedOf } from './store-core.ts'
-import type { LayoutState } from './store-core.ts'
 import { LayoutController } from '@deepseek-ai/dsh-client-ui-layout/src/client/service.ts'
 import { ThemePresenter } from '@deepseek-ai/dsh-client-ui-layout/src/client/theme-presenter.ts'
 import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core'
@@ -49,28 +48,10 @@ export type { LayoutState } from './store-core.ts'
 /** Selector hook over root-scoped panel selection (the `usePanelInfo` seat). */
 export type UsePanelInfo = SnapshotSelectorHook<PanelInfo>
 
-/**
- * CHAMBER FORK (design 17 — mobile surface): layout facts for cross-plugin
- * consumers (`ctx.layoutFacts`), bound to the one root instance this plugin's
- * apply mints eagerly. `getCollapsed()` mirrors AppFrame's derivation, so
- * consumers never restate the vendor breakpoint constant.
- */
-export interface LayoutFacts {
-  /** Current store snapshot (panel selection + frame/panel geometry). */
-  getLayoutSnapshot(): LayoutState
-  /** AppFrame's derived sidebar-collapsed flag for the current snapshot. */
-  getCollapsed(): boolean
-  /** Subscribe to snapshot changes; fires once immediately on subscribe. */
-  subscribeLayout(listener: () => void): () => void
-}
-
 declare module '@deepseek-ai/cordis' {
   interface Context {
     /** The outward face only; the concrete service stays inside this plugin. */
     layout: import('@deepseek-ai/dsh-client-ui-layout/src/client/service.ts').ILayout
-    /** Design 17 mobile surface: OPTIONAL — only the chamber fork provides it,
-     *  so consumers must probe and cannot declare it in `inject`. */
-    layoutFacts?: LayoutFacts
   }
 }
 
@@ -107,6 +88,13 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      * back into pointer events). Additive: a fresh `id` joins the shipped entries.
      */
     'shell.overlay': { kind: 'list'; scope: 'root' }
+    /**
+     * Frame top-left window-chrome seat, mounted only while the darwin collapse
+     * hides the sidebar column entirely (the column is width 0 then). The frame
+     * owns placement and the `--dsh-frame-leading-clearance` band; the chamber
+     * sidebar fork occupies it with the reopen / New Session controls.
+     */
+    'shell.leading': { kind: 'single'; scope: 'root' }
   }
 }
 
@@ -134,7 +122,7 @@ export interface RightbarOwnerProps {
 }
 
 /** Required services (cordis fiber inject). */
-export const inject = ['slots', 'theme', 'locale']
+export const inject = ['slots', 'theme', 'locale', 'shortcuts']
 
 /**
  * Client plugin body: provide ctx.layout, then one register() call seating
@@ -142,6 +130,9 @@ export const inject = ['slots', 'theme', 'locale']
  * @param ctx - client root context.
  */
 export function apply(ctx: ClientContext): void {
+  ctx.effect(() => ctx.locale.register('shortcuts.layout', { zh, en }), 'layout: command labels')
+  const t = ctx.locale.bind('shortcuts.layout')
+
   ctx.effect(() => {
     // Minted EAGERLY and shared with the registration: AppFrame reads it through
     // PropsStore, ctx.layout wraps its bound actions, usePanelInfo projects panelInfo.
@@ -150,8 +141,6 @@ export function apply(ctx: ClientContext): void {
     const store: typeof handle = { ...handle, create: () => instance }
     // Register the instance so the shared view-prefs subscription adopts cross-shell width changes.
     trackLayoutInstance(instance)
-    const layout = new LayoutController(instance.actions, id =>
-      ctx.slots.entries('main').some(entry => entry.options.key === id))
     const retainMainPanels = (): void => {
       instance.actions.retainMainPanels(ctx.slots.entries('main').flatMap(entry =>
         entry.options.key === undefined ? [] : [entry.options.key]))
@@ -160,6 +149,8 @@ export function apply(ctx: ClientContext): void {
       getSnapshot: () => instance.getSnapshot().panelInfo,
       subscribe: listener => instance.subscribe(listener),
     }
+    const layout = new LayoutController(instance.actions, id =>
+      ctx.slots.entries('main').some(entry => entry.options.key === id), panelInfo)
     // chamber patch (design 09): the per-entry API base as an immutable root
     // standard prop for the ui-chat vendor patch. The ctx proxy THROWS for an
     // absent member; unguarded, this read before the 'root' registration below
@@ -171,33 +162,10 @@ export function apply(ctx: ClientContext): void {
       chamberFileApiBase = undefined
     }
     const disposePanelInfo = ctx.slots.provideRoot({
-      hooks: { panelInfo },
+      hooks: { panelInfo: layout.panelInfo },
       props: chamberFileApiBase === undefined ? {} : { chamberFileApiBase },
     })
     const disposeService = ctx.reflect.provide('layout', layout)
-    // Layout facts bound to this ctx's root instance: subscribers get the current
-    // snapshot immediately, then changes (per-listener isolation).
-    const listeners = new Set<() => void>()
-    const notifyLayout = (): void => {
-      for (const listener of listeners) {
-        try {
-          listener()
-        } catch (error) {
-          console.error('[dsh-chamber] layoutFacts subscriber threw:', error)
-        }
-      }
-    }
-    const layoutFacts: LayoutFacts = {
-      getLayoutSnapshot: () => instance.getSnapshot(),
-      getCollapsed: () => collapsedOf(instance.getSnapshot(), SIDEBAR_AUTO_COLLAPSE),
-      subscribeLayout: listener => {
-        listeners.add(listener)
-        listener()
-        return () => { listeners.delete(listener) }
-      },
-    }
-    const disposeFacts = ctx.reflect.provide('layoutFacts', layoutFacts)
-    const unsubscribeInstance = instance.subscribe(notifyLayout)
     const disposeRegistration = ctx.slots.register({
       name: 'root',
       locale: 'common',
@@ -206,20 +174,32 @@ export function apply(ctx: ClientContext): void {
         'main': { kind: 'keyed', scope: 'root' },
         'rightbar': { kind: 'single', scope: 'root' },
         'shell.overlay': { kind: 'list', scope: 'root' },
+        'shell.leading': { kind: 'single', scope: 'root' },
       },
       // Exclusive store: the shared root instance (delivered to AppFrame as standard props).
       store,
     }, AppFrame)
+    const disposeShortcut = ctx.shortcuts.register({
+      id: 'sidebar.left.toggle' as ShortcutCommandId, label: () => t('toggle'), aliases: ['sidebar', 'toggle left sidebar'],
+      defaults: {
+        'desktop:macos': { code: 'KeyB', modifiers: ['primary'] },
+        'desktop:windows': { code: 'KeyB', modifiers: ['primary'] },
+        'desktop:linux': { code: 'KeyB', modifiers: ['primary'] },
+        'web:macos': { code: 'KeyB', modifiers: ['primary', 'alt'] },
+        'web:windows': { code: 'KeyB', modifiers: ['primary', 'alt'] },
+      },
+      regions: ['page', 'editable'], modals: [],
+      resolve: () => ({ status: 'handled', run: () => { layout.toggleSidebar() } }),
+    })
     const disposePanels = ctx.slots.subscribe('main', retainMainPanels)
     retainMainPanels()
     return () => {
+      disposeShortcut()
       layout.dispose()
       disposePanels()
       disposeRegistration()
-      unsubscribeInstance()
       // provide()'s disposer settles asynchronously; teardown is synchronous fire-and-forget.
       void disposeService()
-      void disposeFacts()
       disposePanelInfo()
     }
   }, 'ui-layout: service + root registration')

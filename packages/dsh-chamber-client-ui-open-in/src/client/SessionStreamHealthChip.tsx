@@ -33,11 +33,6 @@ import styles from './SessionStreamHealthChip.module.css'
 export interface SessionStreamHealthInjected {
   /** Bound translator for the open-in namespace (the chip's copy lives there). */
   t: Translate
-  /**
-   * Remember the session this seat is showing; the heal reuses the most recent
-   * OTHER entry as its cheapest detour (an already-materialized scope).
-   */
-  note(sessionId: string): void
   /** One ladder step: plans, executes a requested heal and accounts it. The seat
    *  owns the state, so a remount cannot reset the cooldown or rolling budget. */
   step(sessionId: string, openState: SessionOpenState, presented: boolean, now: number): SessionStreamHealthPlan
@@ -75,7 +70,7 @@ function idlePlan(): SessionStreamHealthPlan {
 }
 
 export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactElement | null {
-  const { t, note, step, subscribe, reload, resync, sessionId, useSession } = props
+  const { t, step, subscribe, reload, resync, sessionId, useSession } = props
   const openState = useSession(snapshot => snapshot.openState)
   const [plan, setPlan] = useState<SessionStreamHealthPlan>(idlePlan)
   const [tick, setTick] = useState(0)
@@ -93,12 +88,6 @@ export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactE
     return () => { document.removeEventListener('visibilitychange', onVisibility) }
   }, [])
 
-  // Tell the seat which session is on screen (the heal’s cheapest detour is the
-  // session the user came from); keyed on the id, so a header remount still records it.
-  useEffect(() => {
-    note(sessionId)
-  }, [note, sessionId])
-
   // Carrier-churn facts arrive as EVENTS — the seat’s closure owns the fact, so a
   // prop would never change. Bump the tick to re-plan (the notice appears), and a
   // visible notice keeps the ticker alive so it expires on its own.
@@ -111,7 +100,7 @@ export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactE
     const presented = visible && isConversationSurfacePresented(typeof document === 'undefined' ? null : document)
     const next = step(sessionId, openState, presented, Date.now())
     setPlan(previous => (sameSessionStreamHealthPlan(previous, next) ? previous : next))
-  }, [openState, sessionId, tick, visible, note, step])
+  }, [openState, sessionId, tick, visible, step])
 
   // Age the ladder only while an arm is holding and the page is visible: an idle
   // session, an open stream, or a hidden page carries no timer. A visible NOTICE

@@ -686,8 +686,8 @@ test('reconciledSessionOrder/orderUngroupedSessions keep stored-known ids first 
 
 test('projectRuntimeFacts: live bits, pending kinds, subagent and sparse lineage discipline', () => {
   const report = projectRuntimeFacts({
-    current: 's1',
-    byId: { s1: { running: true, completed: true }, sub1: { running: false, origin: 'subagent' }, s2: { running: false, completed: true }, c: {} },
+    // rc.2: `current` is the official main view's retained row, not a list field.
+    byId: { s1: { running: true, completed: true, retainedBy: { mainView: 1 } }, sub1: { running: false, origin: 'subagent' }, s2: { running: false, completed: true }, c: {} },
   }, new Map([['s1', 2], ['c', 0]]), new Map([
     ['s1', { kind: 'question' }], ['sub1', { kind: 'approval' }], ['c', { kind: 'unknown-future-kind' }],
   ]))
@@ -700,6 +700,10 @@ test('projectRuntimeFacts: live bits, pending kinds, subagent and sparse lineage
     },
   }, 'subagent rows and unknown kinds never enter the report; zero counts stay sparse')
   assert.deepEqual(projectRuntimeFacts({}), { sessions: {} })
+  // Only the row the OFFICIAL main view retains is current: a sidebar-only or
+  // subagent-only retention must not become the source's current session.
+  assert.equal(projectRuntimeFacts({ byId: { s1: { retainedBy: { sidebarView: 1 } } } }).current, undefined)
+  assert.equal(projectRuntimeFacts({ byId: { s1: { retainedBy: { mainView: 0 } } } }).current, undefined)
 })
 
 test('run identity: the producer mints one chamber id per observed COMPLETION', () => {

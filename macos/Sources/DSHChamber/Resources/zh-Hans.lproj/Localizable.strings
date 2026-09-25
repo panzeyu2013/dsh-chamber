@@ -1,7 +1,7 @@
 /*
  * Localizable.strings —— dsh-chamber 原生壳简体中文文案（本地化资源）
  *
- * 键 = NativeTextKey.rawValue（macos/Sources/DSHChamber/NativeText.swift），逐字一致；键表以 NativeTextKey 为准（当前 121 键）。
+ * 键 = NativeTextKey.rawValue（macos/Sources/DSHChamber/NativeText.swift），逐字一致；键表以 NativeTextKey 为准（当前 119 键）。
  * zh-Hans 值逐条对照 Swift 源码字面量（不新造文案）：
  *   - AppDelegate.makeMainMenu / presentQuitConfirmation / presentQuitUnavailableAlert /
  *     presentFatalAlert / installStatusItem（菜单、退出框、致命标题、托盘）
@@ -10,7 +10,6 @@
  *   - SidecarSupervisor（启动期退出 / 目录锁 / 崩溃循环 / 生命周期过渡）
  *   - BridgeClient（bridge.* 进程状态与未决请求作废文案）
  *   - AppUpdater（updater.* 装配期配置不可用原因）
- *   - SwiftEdgeHostLegs.pickPluginSourceBody（NSOpenPanel title/prompt）
  *   - MainWindowController（渲染恢复放弃提示、首载失败说明页）
  *
  * 占位符：%@ = 字符串参数，%d = 整数参数（String(format:) 语义）；与 en.lproj 逐键一一对应，
@@ -165,10 +164,6 @@
 "failure.probeHTTPStatus" = "HTTP %d（期望 2xx）";
 "failure.probeNoResponse" = "无响应";
 "failure.probeNSURLError" = "NSURLError %d：%@";
-
-/* ===== 插件源选择面板（当前源码为英文原文，此处为等效中文译文） ===== */
-"panel.pluginSourceTitle" = "导入 dsh 插件——源文件夹或 .tgz 归档";
-"panel.pluginSourcePrompt" = "导入";
 
 /* ===== 通用 ===== */
 "common.ok" = "好";

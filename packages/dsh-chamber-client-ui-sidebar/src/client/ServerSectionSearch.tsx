@@ -7,7 +7,7 @@ import { Fragment } from 'react'
 import type { RefObject } from 'react'
 import clsx from 'clsx'
 import { SESSION_SEARCH_RESULT_LIMIT } from '@deepseek-ai/dsh-api-session-controller/client'
-import { IconCloseOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconCloseOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import type { SearchRow } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 import { openErrorKey } from '@dsh-chamber/dsh-chamber-client-core/open-outcome'
@@ -60,7 +60,7 @@ export function ServerSectionSearchCapsule({ server, search, searchRoot, searchI
                         clearSearch(server.id)
                       }}
                     >
-                      <IconCloseOutline16 size={12} />
+                      <IconCloseOutlineRegular size={12} />
                     </button>
                   </div>
   )

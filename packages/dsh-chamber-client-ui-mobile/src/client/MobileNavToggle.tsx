@@ -8,14 +8,14 @@
  * observer; the stylesheet drives the visuals, the component only mirrors state
  * for the accessible name.
  *
- * The control draws the OFFICIAL glyph (IconPanelLeftOutline16) and its
+ * The control draws the OFFICIAL glyph (IconPanelLeftOutlineRegular) and its
  * accessible name is the official toggle.open/toggle.collapse pair. It adds
  * one truthful attribute of its own, aria-expanded; aria-haspopup is omitted
  * (the drawer is the sidebar itself rendered off-canvas, not a popup). The
  * touch tier adds only the 44px floating box and the tap-absorbing backdrop.
  */
 import { useEffect, useState } from 'react'
-import { IconPanelLeftOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconPanelLeftOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 
 export interface MobileNavToggleInjected {
@@ -61,7 +61,7 @@ export function MobileNavToggle({ toggleSidebar, t }: MobileNavToggleProps) {
       >
         {/* The official panel glyph (18 = the official rail size; the box is
             the 44px touch floor, styles.ts). */}
-        <IconPanelLeftOutline16 size={18} />
+        <IconPanelLeftOutlineRegular size={18} />
       </button>
       <button
         type="button"

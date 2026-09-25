@@ -44,14 +44,6 @@ export interface HostMessageOptions {
   noLink?: boolean
 }
 
-/** 插件源一体化 picker 结果（E8/A10：插件源 folder|.tgz，无 pickDirectory）。
- *  与 §4.1 草案 {kind:'folder'|'tgz';path}|null 的偏差：v2 以 status 判别
- *  cancelled/picked（path 非空即 picked；folder|tgz 的 kind 归实现/调用侧按
- *  design 21 §10 ⑧ 判定）。 */
-export type HostPluginSourcePick =
-  | { status: 'cancelled' }
-  | { status: 'picked'; path: string };
-
 /** badge 应用结果。与 §4.1 草案 setBadge(count): boolean 的偏差：v2 用判别
  *  形态区分「已应用」与「未应用 + 原因」（reason 取 string）。 */
 export type HostSetBadgeResult =
@@ -135,9 +127,7 @@ export interface HostEdges {
   showItemInFolder(p: string): void
   /** open-in 原生拉起（design 25 §5 E12）。 */
   launchApp(appId: string, path: string): Promise<boolean>
-  // —— 对话框 ——
-  /** 插件源一体化 picker（E8/A10：folder|.tgz；design 21 §10 ⑧）。 */
-  pickPluginSource(): Promise<HostPluginSourcePick>
+  // —— 对话框 ——（2026-09 C 分层：插件源 picker 随插件写面整族移除）
   /** dialog.showErrorBox 包装。 */
   showError(title: string, detail: string): void
   /** dialog.showMessageBox 包装（与草案 Promise<buttonId> 的偏差：buttonId

@@ -838,9 +838,9 @@ test('S2·F4 交互腿超时锁步：node 侧 = Swift 600s + 60s 缓冲（node �
   assert.equal(swiftMs, 600_000, 'Swift 侧保持 600s（SwiftEdgeHostLegs.interactiveLegTimeout）')
   assert.equal(swiftMs + bufferMs, 660_000, 'node 侧 660s = Swift 600s + 60s（裁决 D4 选项 B）')
   assert.ok(swiftMs + bufferMs > swiftMs, 'node 侧必须严格大于 Swift 侧（node 起点更早，同值必然先超时丢答案）')
-  // 只有交互腿上限放宽；非交互预算与交互腿集合都不变。
+  // 只有交互腿上限放宽；非交互预算不变，交互腿集合只剩 showMessage（picker 随写面移除）。
   assert.match(entry, /const EDGE_TIMEOUT_MS = 30_000/)
-  assert.match(entry, /const INTERACTIVE_EDGE_METHODS = new Set\(\['showMessage', 'pickPluginSource'\]\)/)
+  assert.match(entry, /const INTERACTIVE_EDGE_METHODS = new Set\(\['showMessage'\]\)/)
 })
 
 // ---------------------------------------------------------------------------

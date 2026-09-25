@@ -28,7 +28,7 @@
  * generated artifact (src/remote/index.ts does not exist upstream).
  */
 import { createRequire } from 'node:module'
-import { cpSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { assertRemotePackageContract, remotePackagesFromAssembly } from './typert-remote-contract.mjs'
@@ -401,6 +401,12 @@ async function main() {
     packages: REMOTE_PACKAGES,
   })
   const workspace = analyzer.analyze()
+  // The output tree is generator-owned: WIPE it before emitting so a remote
+  // dropped from the assembly (or the current REMOTE_PACKAGES set) can never
+  // leave its previous artifact behind — an orphan would keep resolving for
+  // consumers and make the freshness gate blind to it. Done after a successful
+  // analysis, so a failed analysis never empties the tree.
+  rmSync(OUT_ROOT, { recursive: true, force: true })
   let emitted = 0
   for (const face of workspace.faces) {
     const emitter = new FaceModelEmitter(face)

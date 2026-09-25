@@ -1,6 +1,7 @@
 /**
- * Shared engine for the two chamber-owned SDK-copy typecheck gates
- * (`typecheck-connection`, `typecheck-api-gateway`).
+ * Shared engine for the chamber-owned filtered typecheck gates
+ * (`typecheck-connection`, `typecheck-api-gateway`, and the root
+ * `typecheck` wrapper in typecheck-root.mjs).
  *
  * Why the gate is shaped this way: the pinned dsh workspace is source-only, so
  * resolving a copied package's real imports necessarily pulls vendor source into
@@ -16,7 +17,7 @@ import { spawnSync } from 'node:child_process'
 import { isAbsolute, join, normalize, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const ROOT = resolve(fileURLToPath(new URL('../../', import.meta.url)))
+export const ROOT = resolve(fileURLToPath(new URL('../../', import.meta.url)))
 const TSC = join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc')
 const VENDOR_ROOTS = [
   join(ROOT, 'vendor', 'harness-checkout'),
@@ -87,7 +88,66 @@ export function evaluateProject(result, ownedRoot) {
       && !VENDOR_ROOTS.some(root => inside(item.path, root))))
   const ok = owned.length === 0 && unexpected.length === 0 && infrastructure.length === 0
     && !(result.status !== 0 && diagnostics.length === 0)
-  return { crashed: false, ok, owned, vendor, unexpected, infrastructure, lines: String(result.stdout ?? '') + String(result.stderr ?? '') }
+  return {
+    crashed: false,
+    ok,
+    owned,
+    vendor,
+    unexpected,
+    infrastructure,
+    diagnostics,
+    lines: String(result.stdout ?? '') + String(result.stderr ?? ''),
+  }
+}
+
+/**
+ * Run one tsc program and report it under the shared owned/vendor/unexpected
+ * classification. This is the primitive every filtered gate uses, so a new
+ * gate with vendor sources in its program is a config argument, not a copy of
+ * the filter (a wrong copy is exactly how a real failure goes green).
+ * @param options.config - the tsconfig.json to compile.
+ * @param options.ownedRoot - absolute directory whose diagnostics are fatal.
+ * @param options.label - the gate's log label (e.g. 'typecheck:connection client').
+ * @param options.showFiltered - also print the filtered vendor diagnostics' content
+ *   (the root gate does: their number and content stay visible instead of silent).
+ * @returns true when the program is clean apart from vendor-source diagnostics.
+ */
+export function runTypecheckProgram({ config, ownedRoot, label, showFiltered = false }) {
+  const result = spawnSync(process.execPath, [TSC, '-p', config, '--noEmit', '--pretty', 'false'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+  })
+  const outcome = evaluateProject(result, ownedRoot)
+  if (outcome.crashed) {
+    console.error(outcome.reason)
+    return false
+  }
+  if (!outcome.ok) {
+    for (const item of [...outcome.owned, ...outcome.unexpected]) console.error(item.lines.join('\n'))
+    for (const line of outcome.infrastructure) console.error(line)
+    if (result.status !== 0 && outcome.diagnostics.length === 0) {
+      console.error(outcome.lines.split('\n').filter(Boolean).join('\n'))
+    }
+    if (showFiltered && outcome.vendor.length > 0) {
+      console.error(label + ': ' + String(outcome.vendor.length) + ' vendor-source diagnostic(s) filtered (not chamber-owned):')
+      for (const item of outcome.vendor) console.error(item.lines.join('\n'))
+    }
+    console.error(
+      label + ' FAILED — ' + String(outcome.owned.length) + ' owned, '
+      + String(outcome.unexpected.length) + ' unexpected diagnostic(s), '
+      + String(outcome.infrastructure.length) + ' compiler output line(s)',
+    )
+    return false
+  }
+  if (showFiltered && outcome.vendor.length > 0) {
+    console.log(label + ': ' + String(outcome.vendor.length) + ' vendor-source diagnostic(s) filtered (not chamber-owned):')
+    for (const item of outcome.vendor) console.log(item.lines.join('\n'))
+  }
+  console.log(
+    label + ' OK (owned files clean; '
+    + String(outcome.vendor.length) + ' vendor-source diagnostic(s) filtered)',
+  )
+  return true
 }
 
 /**
@@ -102,34 +162,7 @@ export function runTypecheckCopy({ packageDir, label, projects = ['client', 'hos
   let failed = false
   for (const role of projects) {
     const config = join(ownedRoot, 'tsconfig.check-' + role + '.json')
-    const result = spawnSync(process.execPath, [TSC, '-p', config, '--noEmit', '--pretty', 'false'], {
-      cwd: ROOT,
-      encoding: 'utf8',
-    })
-    const outcome = evaluateProject(result, ownedRoot)
-    if (outcome.crashed) {
-      console.error(outcome.reason)
-      failed = true
-      continue
-    }
-    if (!outcome.ok) {
-      for (const item of [...outcome.owned, ...outcome.unexpected]) console.error(item.lines.join('\n'))
-      for (const line of outcome.infrastructure) console.error(line)
-      if (result.status !== 0 && outcome.diagnostics.length === 0) {
-        console.error(outcome.lines.split('\n').filter(Boolean).join('\n'))
-      }
-      console.error(
-        label + ' ' + role + ' FAILED — ' + String(outcome.owned.length) + ' owned, '
-        + String(outcome.unexpected.length) + ' unexpected diagnostic(s), '
-        + String(outcome.infrastructure.length) + ' compiler output line(s)',
-      )
-      failed = true
-      continue
-    }
-    console.log(
-      label + ' ' + role + ' OK (owned files clean; '
-      + String(outcome.vendor.length) + ' vendor-source diagnostic(s) filtered)',
-    )
+    if (!runTypecheckProgram({ config, ownedRoot, label: label + ' ' + role })) failed = true
   }
   return !failed
 }

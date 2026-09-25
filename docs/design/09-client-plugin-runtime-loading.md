@@ -77,7 +77,9 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
 - **反向依赖（现行仅 1 条；名单为派生）**：覆盖集解决「复合行不需要宿主图」，但复合内
   首屏家族的 cordis inject 成员里仍有反向依赖：只有 `ui-chat` ← `sidebarRight`（`ui-sidebar-right` 行
   提供）来自**未覆盖**行（`ui-conversation`/`api-session-controller` 的 `fileUpload` 依赖已随
-  `client-file-upload` **转为 covered** 消除，见 §3.6；渲染期 `useResource` 座 `resources` 因
+  `client-file-upload` **转为 covered** 消除，见 §3.6；rc.2 起 `ui-layout`/`ui-workspace` 的 inject 新增
+  `shortcuts`——provider 仅 `dsh-client-shortcuts`——随该包 **转为 covered** 消除（它是唯一 default-export
+  class 的客户端行：复合入口挂默认绑定、factory 回同一 class）；渲染期 `useResource` 座 `resources` 因
   「非任何复合插件的 inject、且不可能单独缺失」不再登记）。宿主图通道降级（返回 `[]`）或该行 apply
   失败时，`ui-chat` 的 fiber 停在 PENDING、整个 apply 被跳过、会话视图不注册，而 boot 仍报成功。
   **两级自愈**：① 取图撞上 `503 instance_unavailable`（实例仍在启动）时，shell 经 App
@@ -231,12 +233,18 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
   语义运行（无额外插件，不报错）。
 - **CHAMBER_COVERED_IDS（模块 C 去重集）**：`packages/renderer/src/chamber-covered.ts` 维护两族——① 复合
   bundle 静态注册的全部客户端插件包名（chamber-entry.ts import 清单：connection/typert/gateway/remotes/
-  runtime/locale/theme/layout/settings 族/conversation/ui-* 全量/自研插件等；加插件时**同批**追加）；
+  runtime/locale/shortcuts/theme/layout/settings 族/conversation/ui-* 全量/自研插件等；加插件时**同批**追加）；
   ② 页面自有 id：`@deepseek-ai/dsh-client-ui-sidebar`（官方注册被 chamber 侧边栏替换，加载会撞 sidebar
   槽）与 `@deepseek-ai/dsh-client-modules`（shell 内核收编该 entry，二次 provide `modules` 冲突）。独立成
   叶模块（chamber-entry.ts 仅 re-export）以免 shell.ts 把模块表交接与整棵复合插件图拉进主 chunk。与 §3.2
   的 union-table 修复锁步：`COVERED_FACTORIES`（首屏静态导入族的 factory 注册）中每个 id 必须在覆盖集内
   （执行期断言）。
+- **有意跳过名单（覆盖集/复合入口的显式例外）**：①官方 dev-only HMR 行
+  `@deepseek-ai/dsh-client-hmr` 在覆盖集内但**永不加载**——它的 client fiber 对实例 origin 相对路径
+  `new EventSource('/plugins/events')` 开通道，控制面 SPA 回退把该路径答成 `text/html`，chamber web
+  profile 没有可用的 hmr 客户端通道（`chamber-covered.ts:118-123`，page-own 无 factory）；②
+  `@deepseek-ai/dsh-client-ui-cordis` **有意不由复合入口注册、也不进覆盖集**——它按宿主图 extra row
+  加载（`chamber-entry.ts:81-82`；`host-graph.test.ts` 固定「未覆盖 ⇒ extra」）。
 - **extraRows seam（模块 D）**：`AppWebEntryOptions.extraRows`（`boot.ts`，可选、向后兼容）——chamber 侧
   已预加载全部额外 bundle（执行时经 `window.__ModuleLoader__.load({id, factory})` 自注册进共享模块表），
   seam 只把其 id 合并进 boot rows（`loader.create` 经 `ClientModuleSystem.import()` 的 factories 分支命中，
@@ -258,7 +266,7 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
   只有源码、无上游 tsdown 生成的 `lib/typert.remote-client.js`；`gen-typert-remotes.mjs` 以该官方 client
   汇编的 **value import 集合为唯一选择源**，逐包校验上游标准 `./remote` exports/files 契约，把 Host face
   产物写入 chamber-owned `renderer/src/generated/typert/`，Vite 的通用 `/remote` resolver 只消费这些产物。
-  当前 15 个 contribution（`EXPECTED_REMOTE_PACKAGES`，含 file/session/workspace reference）由独立锁步测试
+  当前 23 个 contribution（`EXPECTED_MOUNT_PACKAGES` 挂载序表 + import 选择集合，含 file/session/workspace reference）由独立锁步测试
   固定，避免手抄包表滞后到 Rollup 才报缺模块；vendor 始终只读。
 - **失败降级与诊断语义（模块 C）**：图**通道**失败（fetch 网络错 / 非 2xx / 图畸形 / 行缺 id/url/rev）→ 降级为无额外插件继续 boot + console.error，并经 renderer-local chamberBridge 上报用户可见诊断（404/方法缺失 = `not-injected`，其余 = `graph-unreachable`；复合 bundle 仍提供完整官方壳，仅丢失 profile 新装插件；畸形图响亮报错，不做猜测式合并）；503 `instance_unavailable` 是未就绪预期态，静默。**（W3）**：**除 404 外的通道失败同样上浮 `ShellState.degraded`**（kind `graph-unavailable`，判定在 `renderer/src/source-readiness.ts` 的 `graphGapKindFor`），由 App 的非阻断 boot-gap 横幅说明并沿用「每个 ready 世代自动重挂一次」；`not-injected`（HTTP 404 或通道答 method 缺失）仍是 gateway/mobile 的合法无图形态。**bundle 加载**失败**不降级**——响亮失败、该实例 boot 报错呈现（§4 fail-loud）。**实例重启跨代恢复（一轮有界恢复）**：上游 bundle rev 是**每进程随机 nonce + 行序号**（`dsh-client-modules` `allocateInitialRevision`，非内容哈希），重启即令上一代 URL 全失效、跨重启 boot 全部 404；故 `collectExtraRows` 对普通失败行重拉一次宿主图（同一 503 预算）并按 fresh URL 重载，仍失败才响亮失败（DOM script **超时**不进恢复轮：迟到 load 收敛成功、迟到 error 允许重试）；恢复成功的行以 fresh url/rev 返回（旧代 URL 已死，不得作为可加载源下发）。**根治在上游（vendor 只读，登记不修）**：`allocateInitialRevision` 改用内容哈希即可让 rev 跨重启稳定（激活扫描本就经 `initialBundleSnapshot` 读入内存），chamber 恢复轮只是缓解（§5）。**分层**：`loadModuleBundle` 失败即 throw → 该实例 boot 响亮失败；预加载成功后内核不再为额外行发起新加载，只剩 materialize/apply 失败，按下一条降级。
 - **额外行 apply 失败降级（模块 D）**：额外行**加载成功但 entry 未能 apply**（materialize 出非插件对象——如壳种子词表把某包静态注册、后端新增其 client half 后 seed 遮蔽 factory 导致的 "invalid plugin"；注册进本壳未声明的槽；重复安装壳已提供的服务）→ **降级不致命**：
@@ -293,34 +301,42 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
 ### 3.6 vendor 源码补丁集（构建期改写）
 
 N-ctx 同源壳要求每个实例的 API 走自己的反代前缀 `/api/i/<id>/*`。传输载波已由三个 fork 副本覆盖
-（connection / web / api-gateway）；**非载波**的官方绝对 URL 没有接缝——`ui-chat` 的 `AssistantMarkdown`
-用 `${window.location.origin}/api/file?path=…` 取 Markdown 里的本地图片，同源壳里 origin 是控制面 ⇒ 404
-（用户可见的坏图）。裁决（以上游为准 + 最小侵入）：**不为一行 URL 去 fork 整个 `ui-chat`（82 文件 /
-~11.3k 行）**，改为登记式 vendor 补丁集。**本集合不含 open-in**：本地目录改由实例进程内的 chamber host 包提供
-（`dsh-chamber-seed-open-in`，设计 20 §2.2/§6 fork & supersede），不读官方路由、无需同源 URL 补丁；客户端半
-是我们自己的插件，base path 取自各 entry 的私有 ctx。
+（connection / web / api-gateway）；**非载波**的官方资源路由没有接缝——上游 0.1.7 起这些路由一律
+**document-relative**（`new URL('api/file?…', document.baseURI)`、`*_ROUTE = *_PATH.slice(1)`），而单一
+N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀无处承载 ⇒ 404（用户可见的坏图）。
+裁决（以上游为准 + 最小侵入）：**不为一行 URL 去 fork 整个 `ui-chat`（82 文件 / ~11.3k 行）**，改为
+登记式 vendor 补丁集。**本集合不含 open-in**：本地目录改由实例进程内的 chamber host 包提供
+（`dsh-chamber-seed-open-in`，设计 20 §2.2/§6 fork & supersede），不读官方路由、无需同源 URL 补丁；
+客户端半是我们自己的插件，base path 取自各 entry 的私有 ctx。
 
 - 注册表 `packages/renderer/scripts/vendor-patches.mjs`：每条补丁 = 文件 + 理由 + 一到多处
   `expect`→`replace`，`expect` 必须**恰好命中一次**（0 次或多次 = 构建期抛错，绝不静默发出未打补丁的
   bundle）。应用点 = renderer 的 `deepseekSource().transform`（我们的 vite 配置），vendor 文件**零写入**；
   模块 id 并接受软链形式与 `realpathSync` 后的子模块形式（vite 实际给后者）。
-- 落点（共 7 个文件 / 21 处锚点，逐锚点由触点表 C9 与 `packages/renderer/scripts/vendor-patches.test.mjs`
-  校验）：① `ui-chat` 的 `chat/AssistantMarkdown.tsx` + `chat/AssistantNodeView.tsx` 读取新增 root 标准
-  **prop** `chamberFileApiBase`（chamber layout fork 经 `ctx.slots.provideRoot({ props })` 提供，值 =
-  本 entry 的 `ctx.chamberBasePath`；vendor scoped-slots 把 root 标准源合并进**每个**作用域，故 session
-  作用域的 chat 节点也能拿到）；② `client-file-upload` 的 `client/runtime.ts`
-  （`/api/session/uploadFileBinary`）改从服务自身 `ctx` 读 `chamberBasePath`——**该包已转为 composite
-  covered**（extra-row bundle 由实例提供、永不经过我们的构建）；③④ `ui-deliverables` 的
-  `client/present-open.ts` + `client/index.ts`（`/api/present.host|open`），控制器由 `apply(ctx)` 构造时
-  接收 base path；⑤⑥ `session-log-export` 的 `client/controller.ts` + `client/index.ts`
-  （`/api/session.export`，控制器字段；该包转 **covered-deferred**，否则 extra-row bundle 不经过构建）。
-  全部保留「base path 缺失 → 回落上游行为」的形状，读取一律用 `ctx.get('chamberBasePath')`（cordis 代理对
-  未 provide 的服务**抛错**，属性读取会炸）。
+- 落点（rc.2：9 个文件 / 22 处锚点，逐锚点由触点表 C9 与 `packages/renderer/scripts/vendor-patches.test.mjs`
+  校验）：① `ui-chat` 的 `chat/AssistantMarkdown.tsx` 读取新增 root 标准 **prop**
+  `chamberFileApiBase`（chamber layout fork 经 `ctx.slots.provideRoot({ props })` 提供，值 = 本 entry 的
+  `ctx.chamberBasePath`），`pathImages` 以 `new URL(chamberFileApiBase + '/', document.baseURI)` 作为上游
+  `fileMediaUrl` 的解析基准；`chat/AssistantNodeView.tsx` 只把该 prop 转发进组件（vendor scoped-slots 把
+  root 标准源合并进**每个**作用域，故 session 作用域的 chat 节点也能拿到）；② `client-file-upload` 的
+  `client/runtime.ts`（`api/session/uploadFileBinary`）改从服务自身 `ctx` 读 `chamberBasePath`、归一为
+  `/api/i/<id>/` 前缀前置到上游 document-relative 路由——**该包已转为 composite covered**（extra-row
+  bundle 由实例提供、永不经过我们的构建）；③④ `ui-deliverables` 的 `client/present-open.ts` +
+  `client/index.ts`（`api/present.host|open`），控制器由 `apply(ctx)` 构造时接收归一前缀；⑤⑥
+  `session-log-export` 的 `client/controller.ts` + `client/index.ts`（`api/session.export`，控制器字段；
+  该包转 **covered-deferred**，否则 extra-row bundle 不经过构建）。全部保留「base path 缺失 → 回落上游
+  document-relative 行为」的形状，读取一律用 `ctx.get('chamberBasePath')`（cordis 代理对未 provide 的
+  服务**抛错**，属性读取会炸）。
+- 另一类补丁：**实测帧成本（正确性优先）**——`ui-chat` 的 `ReasoningRow.module.css` 行 sweep（`left`
+  动画改为合成器 `transform`）、`ui-conversation` 的三层 rAF 发布链；每条 `reason` 必须带同一 Electron/
+  显示器上的 A/B 实测（`app.getAppMetrics` 累积差）。`GenericCommandCard` 行 sweep 已随 0.1.7 上游删除，
+  对应补丁同步退役。
 - 保鲜门：`verify-upstream-touchpoints.mjs` **C9** 对 pin 住的 vendor 文件逐锚点校验（硬失败）；
   `packages/renderer/scripts/vendor-patches.test.mjs` 在 CI 侧验证锚点唯一、改写后函数行为（含上游回落
   分支）与 id 形态匹配。
 
-登记纪律：新增补丁前先问「能否在 chamber 自己的包里修」；只有同源绝对 URL 一类硬假设才登记，并优先采用
+登记纪律：新增补丁前先问「能否在 chamber 自己的包里修」；只有同源绝对或 document-relative URL 一类硬假设
+才登记，并优先采用
 「可选的 chamber 标准 prop + 上游回落」的形状，使官方布局部署保持正确。
 
 ## 4. 信任模型与边界（写进设计即写进契约；已同步进代码注释）
@@ -347,7 +363,7 @@ N-ctx 同源壳要求每个实例的 API 走自己的反代前缀 `/api/i/<id>/*
 - 版本漂移：宿主图 rev 与复合 bundle 的合并是 union 语义，不要求两图同 rev（复合由 chamber 构建管、宿主图由
   实例插件集管）；壳版本落后/超前时多出的核心行以"特性缺席"运行（§3.5 apply 降级），绝不使实例 boot 失败。
 - **壳与后端必须同代（当前基线）**：受管 vendor 源以 `harness.commit` 的 pin 为单一事实来源——当前 pin =
-  dsh `0.1.5-rc.2`（`packages/desktop/vendor/dsh/
+  dsh `0.1.7-rc.2` / `477b4f4205`（`packages/desktop/vendor/dsh/
   pnpm-lock.yaml` 的 `@deepseek-ai/dsh` specifier 同值），三个 fork 副本与
   `release-preflight.mjs` 的 `FORK_VERSION` 同步；vendor 树是仓库内 git
   submodule（gitlink = pin，升级走 `scripts/upstream/update-vendor.mjs <tag>`）。宿主 wire 只增不改——

@@ -49,27 +49,26 @@ glob即闭包：`packages/desktop/package.json` 的 `build.files` 用包根三�
 1. 新增根级运行模块不得命中下面的9条negate。测试的常规位置是 `packages/desktop/test/<domain>/`（包根三条glob不收取）；例外：9个Swift/POC专属测试（bridge-manifest / bridge-shim / bridge-shim-surface / chamber-lock / chamber-lock-wiring / electron-free-gate / node-edges / sidecar-stdio / update-headless）留在包根——由 `scripts/test.mjs` 清单显式接线、`ci.yml` 的 `test-macos` 桥面锁步步骤按包根路径调用，故 `!*.test.ts` negate载荷相关（勿删）；
 2. `main.ts` / `preload.cts` 的传递import闭包不得指到 `scripts/`、`vendor/` 或未编译的 `node_modules/@dsh-chamber/control-plane/**`（见 §1、§2）。
 
-被收取的根级模块（清理：`registry-password-commit.ts` 已删除、`gateway-session-test-hooks.ts` 移入 `test/support/`、`sidecar-stub.ts` 移入 negate 不随包；`credential-identity.ts` / `describe-error.ts` / `lockfile-facts-memo.ts` / `transport-reconnect.ts` / `update-discovery.ts` 为后续批次新增运行模块，计数 51 → 54；`runtime-startup-host.ts`（运行时启动事务宿主抽取）与 `shell-ipc-*.ts`（shell-core 域拆分）为 结构批次新增运行模块，计数 54 → 63；`host-assembly.ts`（双 flavor 共享装配）、`host-root-lease.ts`（host-root 租约）、`deep-link-scheme.ts`（深链 scheme 叶）、`gateway-http-core.ts` 与 `clear-only-credentials.ts` 为架构单源化批次新增运行模块，计数 63 → 68）：
+被收取的根级模块（清理：`registry-password-commit.ts` 已删除、`gateway-session-test-hooks.ts` 移入 `test/support/`、`sidecar-stub.ts` 移入 negate 不随包；`credential-identity.ts` / `describe-error.ts` / `lockfile-facts-memo.ts` / `transport-reconnect.ts` / `update-discovery.ts` 为后续批次新增运行模块，计数 51 → 54；`runtime-startup-host.ts`（运行时启动事务宿主抽取）与 `shell-ipc-*.ts`（shell-core 域拆分）为 结构批次新增运行模块，计数 54 → 63；`host-assembly.ts`（双 flavor 共享装配）、`host-root-lease.ts`（host-root 租约）、`deep-link-scheme.ts`（深链 scheme 叶）、`gateway-http-core.ts` 与 `clear-only-credentials.ts` 为架构单源化批次新增运行模块，计数 63 → 68；rc.2 升级轮增删后计数 68 → 70（新增 `host-edges.ts`、`registry-projection.ts`、`renderer-frame-watchdog.ts`、`shell-assembly-ctx.ts`、`shell-ipc-ctx.ts`、`shortcuts-bridge.ts`；移除已退役的 `gateway-ipc-shared.ts`、`plugin-tarball.ts`、`ssh-apply-rows.ts`、`ssh-plugin-journal.ts`））：
 
-`main.ts`、`preload.cts`、`control-plane-module.ts`、`ipc-events.ts`、
-`apply-now-gate.ts`、`audit-log.ts`、`badge.ts`、`bounded-lines.ts`、
-`chamber-lock.ts`、`chamber-settings.ts`、`clear-only-credentials.ts`、`connection-save.ts`、
-`credential-binding.ts`、`credential-identity.ts`、`deep-link-scheme.ts`、`deep-link.ts`、`describe-error.ts`、`disk-evidence-gate.ts`、
-`dsh-runtime-controller.ts`、`electron-edges.ts`、`free-port.ts`、
-`gateway-http-core.ts`、`gateway-ipc-shared.ts`、`gateway-provider.ts`、`gateway-session-refresh.ts`、
-`gateway-session.ts`、`gateway-sync-registry.ts`、`host-assembly.ts`、`host-package-dirs.ts`、`host-root-lease.ts`、
-`lockfile-facts-memo.ts`、`node-edges.ts`、
+`main.ts`、`preload.cts`、`apply-now-gate.ts`、`audit-log.ts`、
+`badge.ts`、`bounded-lines.ts`、`chamber-lock.ts`、`chamber-settings.ts`、
+`clear-only-credentials.ts`、`connection-save.ts`、`control-plane-module.ts`、`credential-binding.ts`、
+`credential-identity.ts`、`deep-link-scheme.ts`、`deep-link.ts`、`describe-error.ts`、
+`disk-evidence-gate.ts`、`dsh-runtime-controller.ts`、`electron-edges.ts`、`free-port.ts`、
+`gateway-http-core.ts`、`gateway-provider.ts`、`gateway-session-refresh.ts`、`gateway-session.ts`、
+`gateway-sync-registry.ts`、`host-assembly.ts`、`host-edges.ts`、`host-package-dirs.ts`、
+`host-root-lease.ts`、`ipc-events.ts`、`lockfile-facts-memo.ts`、`node-edges.ts`、
 `notifications.ts`、`open-in.ts`、`owner-only-secret-file.ts`、`plugin-sync.ts`、
-`plugin-tarball.ts`、`pnpm-launcher.ts`、
-`renderer-trust.ts`、`runtime-probe-detail.ts`、`runtime-startup-host.ts`、`runtime-tree-check.ts`、`sanitize-error.ts`、
-`shell-core.ts`、`shell-ipc-connections.ts`、`shell-ipc-open-in.ts`、`shell-ipc-plugins-gateway.ts`、
-`shell-ipc-plugins-local.ts`、`shell-ipc-plugins-ssh.ts`、`shell-ipc-runtime.ts`、`shell-ipc-settings.ts`、
-`shell-ipc-update.ts`、`sidecar-console-redirect.ts`、`sidecar-ctx.ts`、
-`sidecar-entry.ts`、`sidecar-exit-codes.ts`、`ssh-apply-rows.ts`、`ssh-config.ts`、
-`ssh-plugin-journal.ts`、`ssh-provider.ts`、`store-file-hygiene.ts`、
-`transport-manager.ts`、`transport-provider.ts`、`transport-reconnect.ts`、
-`update-discovery.ts`、`update-headless.ts`、`updater.ts`、
-`win-acl.ts`
+`pnpm-launcher.ts`、`registry-projection.ts`、`renderer-frame-watchdog.ts`、`renderer-trust.ts`、
+`runtime-probe-detail.ts`、`runtime-startup-host.ts`、`runtime-tree-check.ts`、`sanitize-error.ts`、
+`shell-assembly-ctx.ts`、`shell-core.ts`、`shell-ipc-connections.ts`、`shell-ipc-ctx.ts`、
+`shell-ipc-open-in.ts`、`shell-ipc-plugins-gateway.ts`、`shell-ipc-plugins-local.ts`、`shell-ipc-plugins-ssh.ts`、
+`shell-ipc-runtime.ts`、`shell-ipc-settings.ts`、`shell-ipc-update.ts`、`shortcuts-bridge.ts`、
+`sidecar-console-redirect.ts`、`sidecar-ctx.ts`、`sidecar-entry.ts`、`sidecar-exit-codes.ts`、
+`ssh-config.ts`、`ssh-provider.ts`、`store-file-hygiene.ts`、`transport-manager.ts`、
+`transport-provider.ts`、`transport-reconnect.ts`、`update-discovery.ts`、`update-headless.ts`、
+`updater.ts`、`win-acl.ts`
 
 复核命令（与glob同义，扣除测试夹具 negate 与包根 `.test.ts`；自检式：输出必须等于上方名单的模块数，名单与计数同改，任一漂移即红）：
 
@@ -78,7 +77,7 @@ count=$(ls -1 packages/desktop/*.ts packages/desktop/*.cts packages/desktop/*.mj
   | grep -vE '/(loopback-http-test-server|sidecar-stub)\.ts$' \
   | grep -vc '\.test\.ts$')
 echo "root-level collected modules: $count"
-test "$count" = 68 || { echo "STALE: 名单/计数需同步（见上方 68 个）"; exit 1; }
+test "$count" = 70 || { echo "STALE: 名单/计数需同步（见上方 70 个）"; exit 1; }
 ```
 
 **例外名单 = `build.files` 的9条negate（勿删；顺序同package.json）**：

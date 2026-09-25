@@ -64,13 +64,15 @@ test('registry 值锁：分类桶形状 + 符号锚字符串（防"同计数下�
   ])
   // 值锁：api-gateway 桶按合并后的 registry 重算（载波重试纯函数 / 页面事实 / 静默看门狗策略 /
   // 生命周期取证事实 / journal 补丁 / 仓内测试清单）；形状变化必须同批改本哈希。
-  // connection 的 dropped 含 src/client/fixture.ts（浏览器夹具不镜像）。
+  // rc.2 触点漂移后的当前事实：connection patched 10 / dropped 2（tests/、tsdown.config.ts；
+  // src/client/fixture.ts 不再单列），client-web dropped 5（apply-injections / boot-client /
+  // mount / tests / tsdown.config.ts）。
   // seed-open-in / client-web 的 own 含 scripts/test.mjs（测试清单统一委托共享 runner）。
   // layout（chamber-named 副本，seed.dsh-chamber-client-ui-layout）：patched 5 / own 4 /
   // ownPrefix 1 / dropped 11（frame 面深引 vendor 源、不镜像；死 tsdown.config.ts 由 P6 删除后归 dropped）。
   assert.equal(
     createHash('sha256').update(JSON.stringify(shape)).digest('hex').slice(0, 16),
-    '0699458ce8d8ede9',
+    '71684da74a7a0fa8',
     '分类桶形状变了（桶间搬家或增删文件）——必须同批改本断言的哈希；当前形状：' + JSON.stringify(shape),
   )
   assert.deepEqual(
@@ -89,9 +91,7 @@ test('registry 值锁：分类桶形状 + 符号锚字符串（防"同计数下�
       'src/client/stream-stall-policy.ts#decideStreamStallAction',
       'src/core.ts#OpenInAppError',
       'src/client/document-theme.ts#createDocumentThemeProjector',
-      'src/client/index.ts#LayoutFacts',
       'src/client/index.ts#apply',
-      'src/client/store-core.ts#collapsedOf',
       'src/client/store-core.ts#createLayoutStore',
       'src/client/stores.ts#trackLayoutInstance',
       'src/client/theme-cache.ts#resolveSourceThemeCache',
@@ -121,7 +121,7 @@ test('verifierForks 与迁移前内嵌 FORKS 同形：顺序、路径、分类�
   ])
   assert.deepEqual(
     forks.map((fork) => [Object.keys(fork.patched).length, Object.keys(fork.own).length, fork.ownPrefix.length, fork.dropped.length]),
-    [[7, 4, 4, 3], [9, 3, 1, 2], [7, 7, 1, 9], [4, 4, 1, 6], [5, 5, 1, 11]],
+    [[10, 4, 4, 2], [9, 3, 1, 5], [7, 7, 1, 9], [4, 4, 1, 6], [5, 5, 1, 11]],
   )
   assert.equal(forks[3].versionAnchor, 'chamber')
   assert.equal(forks[4].versionAnchor, 'chamber')
@@ -171,7 +171,7 @@ test('校验器抓退化：未知判据 / 分区缺口 / accepted 缺理由 / up
 
 test('符号锚下限：每个 fork/seed 至少一条，且总数被 pin（清空探针 = 测试红）', () => {
   const total = registry.entries.reduce((sum, entry) => sum + (entry.symbols ?? []).length, 0)
-  assert.equal(total, 22, '符号锚总数是 golden：增删锚点必须同批改本断言（D15 机械化方向不可被清空）')
+  assert.equal(total, 20, '符号锚总数是 golden：增删锚点必须同批改本断言（D15 机械化方向不可被清空）')
   for (const entry of registry.entries) {
     if (entry.type === 'fork' || entry.type === 'seed') assert.ok(entry.symbols.length >= 1, entry.id + ' 缺符号锚')
   }

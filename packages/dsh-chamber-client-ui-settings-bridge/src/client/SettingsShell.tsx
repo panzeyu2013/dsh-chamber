@@ -15,11 +15,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import type { FocusEvent as ReactFocusEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import clsx from 'clsx'
-import {
-  Button,
-  IconAgentPresetOutline16, IconChevronDownOutline14, IconCloseOutline16, IconDataOutline16, IconLinkOutline16,
-  IconLoadingOutline16, IconPersonalizationOutline16, IconSettingsOutline14, IconSettingsOutline16,
-} from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconAgentPresetOutlineRegular, IconChevronDownOutlineRegular, IconCloseOutlineRegular, IconDataOutlineRegular, IconLinkOutlineRegular, IconLoadingOutlineRegular, IconPersonalizationOutlineRegular, IconSettingsOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsBridgeKey } from '../locales.ts'
 import { ConnectionsSection } from '@dsh-chamber/dsh-chamber-client-ui-settings-connections/section'
@@ -73,10 +69,10 @@ const LOCAL_INSTANCE_ID = 'local'
 
 /** Nav glyph by section id; unknown ids fall back to the settings gear (official mirror). */
 function navIcon(id: string): ReactNode {
-  if (id === 'models') return <IconDataOutline16 className={css.navIcon} size={16} />
-  if (id === 'agent-presets') return <IconAgentPresetOutline16 className={css.navIcon} size={16} />
-  if (id === 'plugins') return <IconPersonalizationOutline16 className={css.navIcon} size={16} />
-  return <IconSettingsOutline16 className={css.navIcon} size={16} />
+  if (id === 'models') return <IconDataOutlineRegular className={css.navIcon} size={16} />
+  if (id === 'agent-presets') return <IconAgentPresetOutlineRegular className={css.navIcon} size={16} />
+  if (id === 'plugins') return <IconPersonalizationOutlineRegular className={css.navIcon} size={16} />
+  return <IconSettingsOutlineRegular className={css.navIcon} size={16} />
 }
 
 /**
@@ -228,9 +224,9 @@ function ServerDropdown({
         <span className={clsx(css.dot, selected?.connected === true ? css.dotOk : css.dotErr)} />
         <span className={css.dropdownValue}>{selected?.label ?? t('noServers')}</span>
         {/* 统一下拉箭头：与运行时 select / 连接表单下拉同一图标词汇
-            （IconChevronDownOutline14）；右缘 inset 由 trigger padding 决定（10px）。 */}
+            （IconChevronDownOutlineRegular）；右缘 inset 由 trigger padding 决定（10px）。 */}
         <span className={css.dropdownArrow} aria-hidden="true">
-          <IconChevronDownOutline14 />
+          <IconChevronDownOutlineRegular />
         </span>
       </button>
       {open && servers.length > 0 ? (createPortal(
@@ -443,7 +439,7 @@ function SettingsPanel({
               aria-current={active === CONNECTIONS_SECTION_ID ? 'true' : undefined}
               onClick={() => onSelectSection(CONNECTIONS_SECTION_ID)}
             >
-              <IconLinkOutline16 className={css.navIcon} size={16} />
+              <IconLinkOutlineRegular className={css.navIcon} size={16} />
               <span className={css.navLabel}>{t('connectionsNav')}</span>
             </button>
             <button
@@ -453,7 +449,7 @@ function SettingsPanel({
               aria-current={active === GENERAL_SECTION_ID ? 'true' : undefined}
               onClick={() => onSelectSection(GENERAL_SECTION_ID)}
             >
-              <IconSettingsOutline16 className={css.navIcon} size={16} />
+              <IconSettingsOutlineRegular className={css.navIcon} size={16} />
               <span className={css.navLabel}>{t('clientNav')}</span>
             </button>
           </div>
@@ -481,7 +477,7 @@ function SettingsPanel({
               )}
             </div>
             <button ref={closeButton} type="button" className={css.close} onClick={onClose}>
-              <IconCloseOutline16 size={14} />
+              <IconCloseOutlineRegular size={14} />
               <span className={css.hiddenLabel}>{t('close')}</span>
             </button>
           </div>
@@ -569,7 +565,7 @@ function SettingsPanel({
                  remounts the wrapper so the ready content replays its fade-in. */
               <div key={`loading-${selectedId}`} className={css.contentFade}>
                 <div className={css.loadingView}>
-                  <IconLoadingOutline16 className={css.loadingSpinner} size={16} aria-hidden="true" />
+                  <IconLoadingOutlineRegular className={css.loadingSpinner} size={16} aria-hidden="true" />
                   <p className={css.placeholder}>{faceStarting ? t('sourceStarting') : t('loadingServers')}</p>
                 </div>
               </div>
@@ -747,7 +743,7 @@ export function SettingsShell(props: SettingsShellProps) {
         aria-expanded={open}
         onClick={() => { setOpen(true) }}
       >
-        {wide ? <IconSettingsOutline16 size={16} /> : <IconSettingsOutline14 size={18} />}
+        {wide ? <IconSettingsOutlineRegular size={16} /> : <IconSettingsOutlineRegular size={18} />}
         {wide && <span className={css.triggerLabel}>{t('trigger')}</span>}
       </button>
       {open && (

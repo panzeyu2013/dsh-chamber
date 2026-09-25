@@ -1,8 +1,17 @@
 /**
  * The imperative half of the stream-health ladder: the effects the seat may
- * perform — read the presented shape and the session's open LIVENESS, move the
- * stage across a neighbor and back (an `'error'` session), and rebuild THIS
- * session's event stream through the concrete per-session `resync()`.
+ * perform — read the PRESENTED session's open shape and liveness, and rebuild
+ * THIS session's event stream through the concrete per-session `resync()`.
+ *
+ * PRESENTATION (rc.2). Navigation belongs to view owners: the official
+ * ui-workspace service retains the presented session with source
+ * `'mainView'` and releases the reference it replaced, and the official
+ * ui-session binds the centre column to the row whose `retainedBy.mainView`
+ * count is positive. The chamber drives that same retention through
+ * `uiWorkspace.openSession()` (the shell's dispatch and the sidebar's
+ * boot-time arm), so "is this target the presented session?" is answered from
+ * the official retain result in the sessions list snapshot — never from a
+ * chamber-side `current` mirror.
  *
  * `resync()` has two entry points: the user's click (available while the stall
  * holds) and the ladder's automatic arm, which may fire only on POSITIVE
@@ -17,12 +26,18 @@
  */
 import { sessionOpenPromiseInFlight } from '@dsh-chamber/dsh-chamber-client-core'
 
+/** One session row slice of the official list snapshot the probe reads. */
+export interface SessionRowLoose {
+  /** Local ownership counts, including the main view's reference count. */
+  readonly retainedBy?: Readonly<Record<string, number>> | undefined
+}
+
 /** Structural slice of the official `ISessions` face this module calls. */
 export interface SessionsLoose {
-  /** The official list store: ids AND the current selection are the lever. */
-  readonly list: { getSnapshot(): { readonly ids: readonly string[]; readonly current?: string | undefined } }
-  /** Stage the given session (`ISessions.open`). */
-  open(sessionId: string): void
+  /** The official list store: the presented session is the mainView-retained row. */
+  readonly list: {
+    getSnapshot(): { readonly byId?: Readonly<Record<string, SessionRowLoose>> | undefined }
+  }
 }
 
 /**
@@ -44,90 +59,34 @@ export interface SessionResyncLoose {
 
 /**
  * Structural slice of the concrete sessions service members that reach a
- * `Session`. `resolve(id)` is the framework accessor the stage follower calls
- * on every stage move. Optional for the same fail-closed reason as `resync`.
+ * `Session`. rc.2's contract entry is `binding(id)`: it returns the retained
+ * `SessionBinding`, whose `.session` is the concrete face. Optional for the
+ * same fail-closed reason as `resync`.
  */
 export interface SessionsConcreteLoose extends SessionsLoose {
-  resolve?(sessionId: string): { readonly session?: SessionResyncLoose | null | undefined } | undefined
+  binding?(sessionId: string): { readonly session?: SessionResyncLoose | null | undefined } | undefined
 }
 
 /**
- * Pick the session whose stage visit carries a re-open of `targetId`: a
- * previously presented id when still listed (its scope is materialized, so the
- * detour costs a state read), else any other listed id. Never returns `targetId`.
+ * Is this id the session the official main view presents? The row's
+ * `retainedBy.mainView` count is the fact ui-session binds the centre column
+ * from, so a zero/absent count means the target is not on stage (a stale React
+ * effect, an address the view never retained) and its scope must not be rebuilt.
  */
-export function pickHealNeighbor(
-  ids: readonly string[],
-  targetId: string,
-  preferredId?: string,
-): string | undefined {
-  if (preferredId !== undefined && preferredId !== targetId && ids.includes(preferredId)) return preferredId
-  return ids.find(id => id !== targetId)
-}
-
-/**
- * Is the stage move usable for this target at all? It needs all three: the
- * target must still be the CURRENT session, must be LISTED, and another listed
- * session must exist to carry the detour. Without this gate an address-only
- * target looks like it has a neighbour even though the executed move refuses it
- * — spending the whole heal ledger on guaranteed-refused attempts.
- */
-export function hasHealRoute(sessions: SessionsLoose | undefined, targetId: string): boolean {
-  if (sessions === undefined) return false
+function isMainViewRetained(sessions: SessionsLoose, sessionId: string): boolean {
   try {
-    const snapshot = sessions.list.getSnapshot()
-    if (snapshot.current !== targetId || !snapshot.ids.includes(targetId)) return false
-    return hasHealNeighbor(snapshot.ids, targetId)
+    const count = sessions.list.getSnapshot().byId?.[sessionId]?.retainedBy?.mainView
+    return typeof count === 'number' && count > 0
   } catch {
     return false
   }
 }
 
-/** True when some OTHER listed session can carry the stage move. */
-export function hasHealNeighbor(ids: readonly string[], targetId: string): boolean {
-  return pickHealNeighbor(ids, targetId) !== undefined
-}
-
 /**
- * Re-open one `'error'` session by moving the stage across a neighbor and back,
- * both calls in the SAME synchronous tick (list notifications flush
- * synchronously, React 19 commits as a microtask, so the commit sees only the
- * final binding — no visible detour). NO `await` may ever sit between them.
- *
- * Refuses unless the target is the CURRENT, LISTED session right now: an
- * address-only subagent session would lose eligibility and have its scope
- * pruned, a session that left the list would strand the user on the NEIGHBOR
- * (the first leg cannot be undone), and a stale passive effect must not drag
- * the stage back. `clear()` does not move the stage and a generation reconnect
- * keeps every ctx mounted, so neither is a lever either.
- */
-export function healSessionStream(
-  sessions: SessionsLoose | undefined,
-  targetId: string,
-  preferredId?: string,
-): boolean {
-  if (sessions === undefined) return false
-  try {
-    const snapshot = sessions.list.getSnapshot()
-    const ids = snapshot.ids
-    if (snapshot.current !== targetId || !ids.includes(targetId)) return false
-    const neighbor = pickHealNeighbor(ids, targetId, preferredId)
-    if (neighbor === undefined) return false
-    sessions.open(neighbor)
-    sessions.open(targetId)
-    return true
-  } catch {
-    // Fail closed, and silently: this package's client sources are under a
-    // source lock that forbids console beyond nothing at all (the ui-lock
-    // test), and a heal must never surface as an app error of its own.
-    return false
-  }
-}
-
-/**
- * The concrete resync face of the CURRENT target, or undefined when this
- * build/service exposes none. Listedness is NOT required — that is what makes
- * address-only subagent selections reachable (current, absent from `ids`).
+ * The concrete resync face of the CURRENT presented target, or undefined when
+ * this build/service exposes none. Listedness is NOT required — the mainView
+ * retention is the whole presentation fact, so an address-only subagent
+ * selection is reachable exactly like a catalogued row.
  * Every access is guarded; any drift yields undefined, read as "no lever".
  */
 function readCurrentSession(
@@ -136,11 +95,13 @@ function readCurrentSession(
 ): SessionResyncLoose | undefined {
   if (sessions === undefined) return undefined
   try {
+    if (!isMainViewRetained(sessions, sessionId)) return undefined
     const concrete = sessions as SessionsConcreteLoose
-    if (typeof concrete.resolve !== 'function') return undefined
-    const snapshot = sessions.list.getSnapshot()
-    if (snapshot.current !== sessionId) return undefined
-    const session = concrete.resolve(sessionId)?.session
+    // ONE accessor: the rc.2 contract entry. A throwing accessor is a drift —
+    // fail closed, never a fallback to another member.
+    const binding = concrete.binding
+    if (typeof binding !== 'function') return undefined
+    const session = binding.call(concrete, sessionId)?.session
     if (session === null || session === undefined || typeof session !== 'object') return undefined
     return session
   } catch {
@@ -149,9 +110,9 @@ function readCurrentSession(
 }
 
 /**
- * The concrete Session face of the CURRENT session, or undefined (guarded). The
- * property RESYNC READ can throw on a hostile proxy, so the capability check
- * lives inside the guard too.
+ * The concrete Session face of the CURRENT presented session, or undefined
+ * (guarded). The property RESYNC READ can throw on a hostile proxy, so the
+ * capability check lives inside the guard too.
  */
 function readSessionResyncFace(
   sessions: SessionsLoose | undefined,
@@ -168,14 +129,14 @@ function readSessionResyncFace(
 }
 
 /**
- * Is the official open still in flight for the CURRENT session? `true` = an
- * open is pending (a slow Host may legitimately be working; nothing automatic
- * may touch it); `false` = `loading` with NOTHING pending (the pinned `doOpen()`
- * can settle there with no retry trigger, and re-issuing is then the cure and
- * free); `undefined` = this face cannot say — fail closed exactly like a missing
- * capability. The member MUST exist on the object for `false`: a build that
- * renamed or removed `openPromise` degrades to "unknown", never to "nothing
- * pending" (which would let the ladder destroy an in-flight open).
+ * Is the official open still in flight for the CURRENT presented session?
+ * `true` = an open is pending (a slow Host may legitimately be working; nothing
+ * automatic may touch it); `false` = `loading` with NOTHING pending (the pinned
+ * `doOpen()` can settle there with no retry trigger, and re-issuing is then the
+ * cure and free); `undefined` = this face cannot say — fail closed exactly like
+ * a missing capability. The member MUST exist on the object for `false`: a
+ * build that renamed or removed `openPromise` degrades to "unknown", never to
+ * "nothing pending" (which would let the ladder destroy an in-flight open).
  */
 export function sessionOpenInFlight(sessions: SessionsLoose | undefined, sessionId: string): boolean | undefined {
   const session = readCurrentSession(sessions, sessionId)
@@ -198,9 +159,12 @@ export function sessionOpenState(
 }
 
 /**
- * Does this build expose the per-session stream rebuild for the target? The
- * ladder's `resyncAvailable` observation comes from here, so a build without
- * the concrete method never arms (or renders) the control.
+ * Is the concrete per-session stream rebuild reachable for the presented
+ * target, and is that target on stage at all? This is the ONE header-arm
+ * capability read: the ladder's `resyncAvailable` observation and the page's
+ * `healRoute` evidence both come from here, so a build without the concrete
+ * method (or a target the main view does not retain) never arms the control and
+ * never looks healable to the page.
  */
 export function hasSessionStreamResync(sessions: SessionsLoose | undefined, targetId: string): boolean {
   return readSessionResyncFace(sessions, targetId) !== undefined
@@ -224,12 +188,11 @@ export function sessionStreamResyncInFlight(sessions: SessionsLoose | undefined,
 }
 
 /**
- * Rebuild one session’s stream through the concrete vendor method. Called from
- * the automatic `'auto-resync'` arm (only after the plan proved no open is in
- * flight) and from the user's control; the seat accounts each attempt against
- * the session ledger. The async `resync()` may reject and is settled with a
- * no-op catch — the chip is a status surface, not an error channel, and this
- * file never touches the transport.
+ * Rebuild one session's stream through the concrete vendor method. Called from
+ * the error arm's automatic heal and from the user's control; the seat accounts
+ * each attempt against the session ledger. The async `resync()` may reject and
+ * is settled with a no-op catch — the chip is a status surface, not an error
+ * channel, and this file never touches the transport.
  */
 export function resyncSessionStream(sessions: SessionsLoose | undefined, targetId: string): boolean {
   let session: SessionResyncLoose | undefined
@@ -251,31 +214,9 @@ export function resyncSessionStream(sessions: SessionsLoose | undefined, targetI
     return true
   } catch {
     if (session !== undefined) resyncingSessions.delete(session)
-    // Fail closed, and silently: see the module header (ui-lock) and the
-    // stage-move heal it mirrors.
+    // Fail closed, and silently: see the module header (ui-lock).
     return false
   }
-}
-
-/** How many recently presented sessions a seat remembers for the heal detour. */
-export const PRESENTED_MEMORY = 4
-
-/** Move one presented session to the front of the recency list (immutable). */
-export function rememberPresented(
-  presented: readonly string[],
-  sessionId: string,
-  limit: number = PRESENTED_MEMORY,
-): string[] {
-  return [sessionId, ...presented.filter(id => id !== sessionId)].slice(0, limit)
-}
-
-/**
- * The cheapest detour target: the most recently presented session other than
- * the one being healed (its scope is normally still materialized, so the move
- * costs a state read instead of a fresh window load).
- */
-export function previousPresented(presented: readonly string[], targetId: string): string | undefined {
-  return presented.find(id => id !== targetId)
 }
 
 /**

@@ -6,7 +6,7 @@
 //  由 packages/desktop/bridge-manifest.test.ts 保证；本测试钉 Swift 生成物
 //  （编译接线后的白名单真值）——防提交的 BridgeManifest.swift 被手工改坏/
 //  漂移后 swift test 仍静默全绿：
-//    1. 通道数守恒：invoke 61 / push 9；
+//    1. 通道数守恒：invoke 51 / push 9（D1 插件写面退役后 JSON/Swift 生成物计数）；
 //    2. 方向无交集：invoke ∩ push = ∅；
 //    3. invoke 方向抽样：dsh-chamber:info / desktop_ssh_instances_get /
 //       desktop_ssh_connect 属 invoke 面（main 侧 handle 注册事实）；
@@ -24,7 +24,7 @@ final class BridgeManifestConsistencyTests: XCTestCase {
     func testCountsInvokeAndPush() {
         // 当前仓库事实（与 bridge-manifest.json 的 counts 及
         // bridge-manifest.test.ts ③ 同一批数字）；通道增删须同步更新。
-        XCTAssertEqual(BridgeManifest.invokeChannels.count, 61, "invoke 通道数应 == 提交物 counts.invoke（61）")
+        XCTAssertEqual(BridgeManifest.invokeChannels.count, 51, "invoke 通道数应 == 提交物 counts.invoke（51）")
         XCTAssertEqual(BridgeManifest.pushChannels.count, 9, "push 通道数应 == 提交物 counts.push（9）")
     }
 
@@ -53,8 +53,9 @@ final class BridgeManifestConsistencyTests: XCTestCase {
     func testPushChannelsExactlyGoldenNine() {
         // golden 精确集：转录自提交物 packages/desktop/bridge-manifest.json 的
         // push 数组（9 条，按 JSON 定义序）——与 main 侧 9 处推送注册点一一对应
-        // （renderer-stall-evidence 是渲染器卡死取证通道，随 manifest 的
-        // rendererStall invoke 成员一并进入推送面）。
+        // （shell-core 5：SETTINGS_CHANGED / NOTIFICATION_OPEN / UPDATE_STATE_CHANGED /
+        //  DEEP_LINK_INTENT / SYSTEM_RESUME；main 4：RENDERER_STALL_EVIDENCE /
+        //  SSH_STATUS_CHANGED / SSH_INSTANCES_CHANGED / RUNTIME_STATE_CHANGED）。
         let golden: Set<String> = [
             "dsh-chamber:settings-changed",
             "dsh-chamber:notification-open",

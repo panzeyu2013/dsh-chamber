@@ -12,32 +12,43 @@
 import { stripComments } from '../../../scripts/dev/test-support/source-text.ts'
 
 /**
- * The pinned assembly contract: every remote package the official
- * `dsh-api-remotes` client half VALUE-imports, in assembly order
- * (15 rows). SINGLE SOURCE for both consumers — the
- * lockstep test (`typert-remote-contract.test.mjs`) and the upgrade touchpoint
- * gate (`scripts/upstream/verify-upstream-touchpoints.mjs` C4). A same-length swap
+ * The pinned assembly contract: the package list `dsh-api-remotes`' client
+ * half mounts into `ctx.remote()`, in apply() mount order (23 rows). Mount
+ * order is runtime-significant, so it is the ONE ordered table. The `/remote`
+ * import selection has no runtime order semantics: callers compare its SET
+ * against this same table (single source — the lockstep test
+ * `typert-remote-contract.test.mjs` and the upgrade touchpoint gate
+ * `scripts/upstream/verify-upstream-touchpoints.mjs` C4). A same-length swap
  * (one package added while another is removed, or a reorder) must not pass
- * silently, so both compare the parsed assembly against this exact list; an
- * upstream change is one edit here plus the package contract assertions.
+ * silently; an upstream change is one edit here plus the package contract
+ * assertions.
  */
-export const EXPECTED_REMOTE_PACKAGES = Object.freeze([
-  '@deepseek-ai/dsh-agent-presets',
+export const EXPECTED_MOUNT_PACKAGES = Object.freeze([
+  '@deepseek-ai/dsh-agent-preset-registry',
   '@deepseek-ai/dsh-commands',
   '@deepseek-ai/dsh-api-settings-controller',
+  '@deepseek-ai/dsh-api-account-controller',
   '@deepseek-ai/dsh-goal',
   '@deepseek-ai/dsh-llm',
   '@deepseek-ai/dsh-cordis-host-runner',
+  '@deepseek-ai/dsh-schedule',
   '@deepseek-ai/dsh-host-plugin-inventory',
+  '@deepseek-ai/dsh-plugin-manager',
+  '@deepseek-ai/dsh-client-ui-plugin-manager',
   '@deepseek-ai/dsh-message-feedback',
   '@deepseek-ai/dsh-command-feedback',
   '@deepseek-ai/dsh-client-file-upload',
   '@deepseek-ai/dsh-session-reference',
+  '@deepseek-ai/dsh-permission-presets',
   '@deepseek-ai/dsh-subagent',
   '@deepseek-ai/dsh-api-session-controller',
+  '@deepseek-ai/dsh-api-job-controller',
   '@deepseek-ai/dsh-api-workspace-controller',
   '@deepseek-ai/dsh-api-workspace-files',
+  '@deepseek-ai/dsh-api-terminal-controller',
+  '@deepseek-ai/dsh-office-to-pdf',
 ])
+
 
 const REMOTE_SPECIFIER = '@deepseek-ai/(dsh-[a-z0-9]+(?:-[a-z0-9]+)*)/remote'
 const REMOTE_SUFFIX = /@deepseek-ai\/(dsh-[a-z0-9]+(?:-[a-z0-9]+)*)\/remote/g

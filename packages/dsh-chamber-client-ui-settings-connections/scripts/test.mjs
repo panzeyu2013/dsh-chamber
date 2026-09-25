@@ -22,11 +22,10 @@ const GROUPS = {
     'test/plugin-inventory/plugin-inventory.test.ts',
     'test/plugin-inventory/plugin-inventory-text.test.ts',
   ],
-  // plugin-management: 统一插件模型、diff/apply 边界与 PluginDialog 源码级接线锁
+  // plugin-management: 只读行模型、PluginDialog 源码级接线锁与浏览器侧单一定义锁步
   'plugin-management': [
     'test/plugin-management/plugin-model.test.ts',
-    'test/plugin-management/plugin-diff.test.ts',
-    // 浏览器侧单一定义锁步：client-core 面就是 wire 源、classifySpec 就是共享路径判据。
+    // 浏览器侧单一定义锁步：client-core 面就是 wire 源（写出面已退役，路径判据不再消费）。
     'test/plugin-management/plugin-manifest-lockstep.test.ts',
   ],
   // connection-form: 连接表单输入契约（桌面权威常量对齐 + draft/schema 行为）

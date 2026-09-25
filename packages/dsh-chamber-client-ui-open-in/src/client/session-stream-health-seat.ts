@@ -10,12 +10,13 @@
  * reset grace/cooldown/budget per visit, while this per-entry closure survives
  * remounts, keyed by sessionId.
  *
- * EXECUTION DISCIPLINE: `step` executes the stage-move heal for an error face.
- * The renderer's page-level recovery seat owns the loading-state automatic
- * rebuild, so it also runs when the conversation header never mounts. The plan's
- * `'resync'` action merely ARMS the chip's control; the click reaches `resync()`
- * below, which is deliberately NOT ledger-gated (the header ledger bounds the
- * automatic error heal; a human click is its own bound).
+ * EXECUTION DISCIPLINE: `step` executes the automatic per-session `resync()`
+ * for an error face (rc.2; the stage-move lever died with its `sessions.open`
+ * API). The renderer's page-level recovery seat owns the automatic rebuild for
+ * a face the header cannot heal, so it also runs when the conversation header
+ * never mounts. The plan's `'resync'` action merely ARMS the chip's control; the
+ * click reaches `resync()` below, which is deliberately NOT ledger-gated (the
+ * header ledger bounds the automatic error heal; a human click is its own bound).
  *
  * Registered BEFORE the open-in gates: a source whose open-in id does not parse
  * still gets the recovery chip.
@@ -32,8 +33,7 @@ import {
   type SessionStreamHealthState,
 } from './session-stream-health.ts'
 import {
-  hasHealRoute, hasSessionStreamResync, healSessionStream, previousPresented, rememberPresented,
-  resyncSessionStream, sessionStreamResyncInFlight, type SessionsLoose,
+  hasSessionStreamResync, resyncSessionStream, sessionStreamResyncInFlight, type SessionsLoose,
 } from './session-stream-health-probe.ts'
 import { SessionStreamHealthChip, type SessionStreamHealthInjected } from './SessionStreamHealthChip.tsx'
 
@@ -82,11 +82,6 @@ function readSessions(ctx: ClientContext): SessionsLoose | undefined {
 }
 
 export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate): void {
-  // Per-entry recency of the sessions this seat has shown, most recent first:
-  // the detour is cheapest through a scope that is already materialized.
-  let presented: readonly string[] = []
-  const note = (sessionId: string): void => { presented = rememberPresented(presented, sessionId) }
-
   /**
    * Latest carrier-churn fact for THIS source. The page hosts every boot ctx, so
    * the fact is attributed and filtered here; an unattributed fact is fail-open.
@@ -118,7 +113,6 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
       churnListeners.clear()
     }
   }, 'dsh-chamber: stream carrier churn fact')
-  const previousOf = (sessionId: string): string | undefined => previousPresented(presented, sessionId)
 
   /** Per-session ladder state, keyed the way the budget is defined. */
   const ladders = new Map<string, SessionStreamHealthState>()
@@ -160,9 +154,9 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
         {
           openState,
           presented: surfacePresented,
-          // The stage move needs a CURRENT, LISTED target, so a neighbour in the
-          // list is not enough — hasHealRoute() gates all three at once.
-          neighborAvailable: hasHealRoute(sessions, sessionId),
+          // The automatic heal executes the concrete resync on the PRESENTED
+          // target, so both facts come from the same guarded probe read.
+          healRoute: hasSessionStreamResync(sessions, sessionId),
           resyncAvailable: hasSessionStreamResync(sessions, sessionId),
           ...(carrierChurn === undefined ? {} : { carrierChurn }),
         },
@@ -174,7 +168,7 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
         // The ATTEMPT is accounted whether or not the lever reported success: a
         // refusing lever must not retry once per tick — the cooldown and rolling
         // budget already bound the attempts.
-        healSessionStream(sessions, sessionId, previousOf(sessionId))
+        resyncSessionStream(sessions, sessionId)
         state = markSessionStreamHeal(state, now)
       }
       storeLadder(sessionId, state)
@@ -186,7 +180,6 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
 
   const face: SessionStreamHealthInjected = {
     t,
-    note,
     step,
     // Carrier-churn wake-up for the renderer: the chip bumps its tick so
     // the ladder re-plans and the "reconnecting…" notice can appear and expire.

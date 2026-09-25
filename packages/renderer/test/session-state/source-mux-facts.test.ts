@@ -16,7 +16,9 @@ import { fileURLToPath } from 'node:url'
 import {
   classifyTurnEndWire,
   createSourceMuxFacts,
+  EVENTS_ENDPOINT,
   isMuxObservableSourceKind,
+  MUX_PATH,
   muxUrlFor,
   openEventsFrame,
   parseMuxFrame,
@@ -26,6 +28,28 @@ import {
 } from '../../src/source-mux-facts.ts'
 
 const SOURCE = readFileSync(fileURLToPath(new URL('../../src/source-mux-facts.ts', import.meta.url)), 'utf8')
+
+test('lockstep: the mux route and $events literals match the control-plane and api-gateway sources', () => {
+  // This package cannot import either server package; the literals are pinned
+  // against both source texts so a vendor rename or a fork-side edit fails loud
+  // (control-plane pins the api-gateway copy in its own suite; this closes the
+  // renderer leg of the triangle).
+  assert.equal(MUX_PATH, '/api/remote.mux')
+  assert.equal(EVENTS_ENDPOINT, '$events')
+  const sources = {
+    'control-plane/src/session-mux.ts': readFileSync(
+      new URL('../../../control-plane/src/session-mux.ts', import.meta.url), 'utf8'),
+    'dsh-api-gateway/src/stream-protocol.ts': readFileSync(
+      new URL('../../../dsh-api-gateway/src/stream-protocol.ts', import.meta.url), 'utf8'),
+  }
+  for (const [label, source] of Object.entries(sources)) {
+    assert.ok(source.includes(`export const REMOTE_STREAM_MUX_PATH = '${MUX_PATH}'`),
+      label + ' must declare REMOTE_STREAM_MUX_PATH = ' + JSON.stringify(MUX_PATH))
+    assert.ok(source.includes(`export const REMOTE_EVENT_STREAM_ENDPOINT = '${EVENTS_ENDPOINT}'`),
+      label + ' must declare REMOTE_EVENT_STREAM_ENDPOINT = ' + JSON.stringify(EVENTS_ENDPOINT))
+  }
+  assert.match(sources['control-plane/src/session-mux.ts'], /REMOTE_EVENT_RESULT_ENDPOINT = '\$events\/result'/)
+})
 
 test('the observer covers every dsh-protocol source: local profile and remote instances, never gateway', () => {
   // The hook filter once said kind === 'dsh' only: the LOCAL session then had no

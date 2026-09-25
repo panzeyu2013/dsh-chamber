@@ -43,8 +43,8 @@
 //   failure.title / failure.heading / failure.cpLabel / failure.sidecarLabel /
 //   failure.retryExhausted / failure.shimMissing / failure.probe*
 //     → MainWindowController 失败说明页与探测诊断
-//   panel.pluginSourceTitle / panel.pluginSourcePrompt / common.ok
-//     → SwiftEdgeHostLegs（插件源面板、showMessage 缺省按钮）
+//   common.ok
+//     → SwiftEdgeHostLegs（showMessage 缺省按钮）
 //   panel.openFileTitle / panel.openFileOrDirectoryTitle / panel.openFilePrompt
 //     → FileOpenPanel（SystemFileOpenPanelPresenter 的 NSOpenPanel 标题与确认
 //     按钮；目录请求用 *OrDirectoryTitle）
@@ -170,8 +170,6 @@ public enum NativeTextKey: String, CaseIterable {
     case failureProbeHTTPStatus = "failure.probeHTTPStatus"
     case failureProbeNoResponse = "failure.probeNoResponse"
     case failureProbeNSURLError = "failure.probeNSURLError"
-    case panelPluginSourceTitle = "panel.pluginSourceTitle"
-    case panelPluginSourcePrompt = "panel.pluginSourcePrompt"
     case commonOk = "common.ok"
     case commonListSeparator = "common.listSeparator"
     case panelOpenFileTitle = "panel.openFileTitle"

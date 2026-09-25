@@ -129,10 +129,7 @@ function interfaceFieldSignatures(source: string, typeName: string): string[] {
   for (const raw of stripComments(interfaceBlock(source, typeName)).split('\n')) {
     const match = /^([a-zA-Z_][a-zA-Z0-9_]*)(\??):\s*(.+)$/.exec(raw.trim())
     if (match === null) continue
-    let type = match[3].replace(/[,;]\s*$/, '').replace(/\s+/g, ' ').trim()
-    // preload names PluginApplyFailure inline; the client mirrors name it —
-    // structurally equivalent, normalize for the text comparison.
-    type = type.replace(/\bPluginApplyFailure\[\]/g, '{ spec: string; error: string }[]')
+    const type = match[3].replace(/[,;]\s*$/, '').replace(/\s+/g, ' ').trim()
     signatures.push(`${match[1]}${match[2]}:${type}`)
   }
   return signatures.sort()
@@ -461,13 +458,12 @@ test('DesktopSshSurface matches the GOLDEN baseline — a method deleted from AL
   // method is genuinely removed; a synchronized three-way deletion otherwise
   // stays green in the pairwise comparison above).
   const golden = [
-    'config_list', 'connect', 'delete_connection', 'disconnect', 'gateway_plugin_apply', 'gateway_plugin_materialize', 'gateway_plugin_sync', 'instances_get',
-    'instances_health', 'is_active', 'local_plugin_add', 'local_plugin_add_file', 'local_plugin_list',
-    'local_plugin_remove', 'logs', 'logs_clear', 'npm_search', 'onInstancesChanged',
-    'onStatusChanged', 'plugin_apply', 'plugin_list', 'plugin_materialize_add',
-    'plugin_materialize_add_pick', 'restart_service', 'reverify', 'seed_host_graph',
+    'config_list', 'connect', 'delete_connection', 'disconnect', 'gateway_plugin_sync', 'instances_get',
+    'instances_health', 'is_active', 'local_plugin_list',
+    'logs', 'logs_clear', 'onInstancesChanged',
+    'onStatusChanged', 'plugin_list', 'restart_service', 'reverify', 'seed_host_graph',
     'save_connection', 'set_gateway_password', 'set_gateway_token', 'set_password', 'start_service',
-    'status', 'stop_service', 'ssh_plugin_undo',
+    'status', 'stop_service',
   ].sort()
   assert.deepEqual(interfaceMethodNames(preload, 'DesktopSshSurface'), golden, 'DesktopSshSurface drifted from the golden baseline')
 })
@@ -788,16 +784,11 @@ test('the plugin-manifest projections carry identical FIELD SETS across all thre
 test('the IPC result unions carry identical FIELD SETS across the mirrors that name them (L3 — union shape drift guard)', () => {
   // Named aliases exist on both sides: preload Ssh* vs client mirrors.
   const aliasPairs: Array<[string, string, string]> = [
-    ['SshMaterializeResult', 'SshMaterializeResult', 'SshMaterializeResult'],
     // SshSeedHostGraphResult carries NO cancelled arm: the main-process seed
     // handler has no confirmation dialog or picker to dismiss (design 21 §7
     // open item) — included here so a cancelled widening drifts loudly.
     ['SshSeedHostGraphResult', 'SshSeedHostGraphResult', 'SshSeedHostGraphResult'],
-    ['SshLocalPluginExecIpcResult', 'SshLocalPluginExecIpcResult', 'SshLocalPluginExecIpcResult'],
     ['GatewayPluginSyncIpcResult', 'GatewayPluginSyncIpcResult', 'GatewayPluginSyncIpcResult'],
-    ['GatewayPluginApplyIpcResult', 'GatewayPluginApplyIpcResult', 'GatewayPluginApplyIpcResult'],
-    ['GatewayPluginMaterializeIpcResult', 'GatewayPluginMaterializeIpcResult', 'GatewayPluginMaterializeIpcResult'],
-    ['SshPluginUndoIpcResult', 'SshPluginUndoIpcResult', 'SshPluginUndoIpcResult'],
   ]
   for (const [preloadName, rendererName] of aliasPairs) {
     const fields = interfaceFieldNames(preload, preloadName)
@@ -811,60 +802,9 @@ test('the IPC result unions carry identical FIELD SETS across the mirrors that n
     ['error', 'ok', 'skipped', 'uploaded'],
     'gateway_plugin_sync result union must remain exact',
   )
-  // GatewayPluginApplyIpcResult (design 21 §6.5): cancelled ONLY on the
-  // ok:true/cancelled member, installed/removed/restarted/deferred ONLY on the completed
-  // member, partial/error ONLY on ok:false — a dropped or widened member must fail here. */
-  assert.deepEqual(
-    interfaceFieldNames(preload, 'GatewayPluginApplyIpcResult'),
-    ['cancelled', 'deferred', 'error', 'installed', 'ok', 'partial', 'removed', 'restarted'],
-    'gateway_plugin_apply result union must remain exact',
-  )
-  assert.deepEqual(
-    interfaceFieldNames(preload, 'GatewayPluginMaterializeIpcResult'),
-    ['cancelled', 'deferred', 'error', 'ok', 'outcome'],
-    'gateway_plugin_materialize result union must remain exact',
-  )
-  // The materialize executed-outcome shape is exact too: executed/restarted
-  // only — the 202-settle parity fields the main handler projects.
-  assert.deepEqual(
-    interfaceFieldNames(preload, 'GatewayPluginMaterializeOutcome'),
-    ['executed', 'restarted'],
-    'gateway_plugin_materialize outcome must remain exact',
-  )
-  // The partial-outcome summary shape is itself exact: installed/removed
-  // only, matching the main-handler projection.
-  assert.deepEqual(
-    interfaceFieldNames(preload, 'GatewayPluginApplyPartial'),
-    ['installed', 'removed'],
-    'gateway_plugin_apply partial summary must remain exact',
-  )
-  // The apply input shape is exact too (deferRestart optional; main
-  // re-validates the boolean-ness).
-  assert.deepEqual(
-    interfaceFieldNames(preload, 'GatewayPluginApplyInput'),
-    ['add', 'deferRestart', 'remove'],
-    'gateway_plugin_apply input must remain exact',
-  )
-  // SshPluginApplyIpcResult is a NAMED alias in preload only; the client
-  // mirrors inline it into the plugin_apply signature. plugin_apply has no
-  // picker or other cancellation path; widening it with a cancelled member
-  // would hide a producer/consumer contract mistake.
-  const applyFields = interfaceFieldNames(preload, 'SshPluginApplyIpcResult')
-  assert.deepEqual(applyFields, ['error', 'ok', 'result'], 'plugin_apply result union must remain exact')
-  // SshPluginUndoIpcResult (design 21 §6.4 ssh undo journal IPC): cancelled only on its own ok:true
-  // member, undone/kind/name + the optional restarted/ready/readyNote projection only on the completed
-  // member, unavailable only on ok:false — widening any arm (or leaking a remote file: path) must fail.
-  assert.deepEqual(
-    interfaceFieldNames(preload, 'SshPluginUndoIpcResult'),
-    ['cancelled', 'error', 'kind', 'name', 'ok', 'ready', 'readyNote', 'restarted', 'unavailable', 'undone'],
-    'ssh_plugin_undo result union must remain exact',
-  )
 })
 
 test('the apply-result and notification/sessionTodo settings shapes are type-identical across mirrors (L3 — type-sensitive drift guard)', () => {
-  // PluginApplyResult: preload names it SshPluginApplyResult; clients drop the prefix.
-  const applyResult = interfaceFieldSignatures(preload, 'SshPluginApplyResult')
-  assert.deepEqual(interfaceFieldSignatures(renderer, 'PluginApplyResult'), applyResult, 'renderer PluginApplyResult drifted')
   // ChamberNotificationSettings (nested under ChamberSettings.notifications).
   const notificationSettings = interfaceFieldSignatures(preload, 'ChamberNotificationSettings')
   assert.deepEqual(
@@ -924,7 +864,7 @@ test('settings-connections re-exports the whole IPC face from the renderer (sing
   const exportEnd = settings.indexOf("} from '@dsh-chamber/renderer/global.d.ts'", start)
   assert.ok(exportEnd !== -1, 'settings-connections must re-export the IPC face from @dsh-chamber/renderer/global.d.ts')
   const exportBlock = settings.slice(start, exportEnd)
-  for (const name of ['ConnectionCredentialMutations', 'DesktopSshSurface', 'SaveConnectionResult', 'SshInstanceSpec', 'SshStatusProjection', 'ChamberSettings', 'PluginApplyResult']) {
+  for (const name of ['ConnectionCredentialMutations', 'DesktopSshSurface', 'SaveConnectionResult', 'SshInstanceSpec', 'SshStatusProjection', 'ChamberSettings']) {
     assert.ok(exportBlock.includes(name), `settings-connections must re-export ${name}`)
   }
 })

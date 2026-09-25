@@ -495,7 +495,6 @@ export function deriveUnread(
  */
 export function projectRuntimeFacts(
   snapshot: {
-    current?: string
     byId?: Record<string, {
       running?: boolean
       completed?: boolean
@@ -506,6 +505,7 @@ export function projectRuntimeFacts(
        * `goal` projection value (and, on the snapshot path above, schedule).
        */
       projectionValues?: Readonly<Record<string, unknown>>
+      retainedBy?: Readonly<Record<string, number>> /** rc.2 row ownership counts: `mainView` = presented. */
     }>
   },
   subagentRunning?: ReadonlyMap<string, number>,
@@ -553,9 +553,9 @@ export function projectRuntimeFacts(
     if (runId !== undefined) row.runId = runId
     sessions[id] = row
   }
-  const report: InstanceRuntimeReport = { sessions }
-  if (snapshot.current !== undefined) report.current = snapshot.current
-  return report
+  // rc.2: `current` is the official main view's retained row (ui-session's own binding).
+  const current = Object.keys(snapshot.byId ?? {}).find(id => (snapshot.byId?.[id]?.retainedBy?.mainView ?? 0) > 0)
+  return { sessions, ...(current === undefined ? {} : { current }) }
 }
 
 /** One observed run episode of a session (the producer's identity memory). */

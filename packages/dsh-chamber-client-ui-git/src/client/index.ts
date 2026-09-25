@@ -18,7 +18,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   }
 }
 
-export const GIT_WORKSPACE_SLOT = 'sidebar.workspace.git' as const
+const GIT_WORKSPACE_SLOT = 'sidebar.workspace.git' as const
 const NS = 'dsh-chamber.sidebar.git'
 
 export const inject = ['slots', 'locale']

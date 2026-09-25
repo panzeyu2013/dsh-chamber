@@ -27,6 +27,7 @@ import { judgeSwiftTestReport, parseSwiftTestReport, swiftTestArgs, swiftTestEnv
 import { smokeDecision } from './compiled-sidecar-smoke.mjs'
 import { DEFAULT_SIDECAR_DIR, resolveNodeBinary, resolveSidecarDir } from '../lib/sidecar-assembly.mjs'
 import {
+  DESKTOP_CARRIER_FUNCTIONS,
   EXPECTED_SURFACE,
   FACTORY_TO_NAMESPACE,
   assertShimReinjectionNoop,
@@ -45,6 +46,7 @@ import {
   BRIDGE_SCALAR_KEYS,
   DEFAULT_DESKTOP_DIST,
   artifactDecision,
+  assertFrozenDesktopCarrier,
   assertFrozenPreloadSurface,
   inspectPreloadSurface,
   resolveDesktopDist,
@@ -102,10 +104,11 @@ test('static/typecheck steps are command entries on the gate pool with a bounded
   const clientWebEntry = seen.find(entry => entry.file === 'typecheck:client-web')
   assert.equal(clientWebEntry.command, process.execPath, 'a plain node step runs without a pnpm startup')
   assert.ok(clientWebEntry.env.PATH.includes('node_modules'), 'the direct route keeps node_modules/.bin on PATH')
-  const tscEntry = seen.find(entry => entry.file === 'typecheck')
-  assert.equal(tscEntry.command, process.execPath, 'a tsc step runs the local compiler without a pnpm startup')
-  assert.match(tscEntry.args[0], /typescript[\\/]bin[\\/]tsc$/, 'and it executes the pinned compiler entry')
-  assert.equal(tscEntry.cwd, REPO_ROOT, 'root-relative tsc projects need the repository root as cwd')
+  const typecheckEntry = seen.find(entry => entry.file === 'typecheck')
+  assert.equal(typecheckEntry.command, process.execPath, 'the root gate runs without a pnpm startup')
+  assert.deepEqual(typecheckEntry.args, ['scripts/dev/typecheck-root.mjs'],
+    'the root program goes through its vendor-filtering wrapper (a raw tsc step would reintroduce the vendor diagnostics)')
+  assert.equal(typecheckEntry.cwd, REPO_ROOT, 'root-relative projects need the repository root as cwd')
 })
 test('directNodeInvocation resolves plain node root scripts and refuses flags/others', () => {
   const facts = {
@@ -471,7 +474,9 @@ test('parseMemberCall distinguishes invoke from push on both surfaces', () => {
 })
 test('comparePayloadShapes catches an invoke payload-key drift', () => {
   const factories = Object.keys(FACTORY_TO_NAMESPACE)
-  const preloadText = factories
+  // 夹具必须带 dshDesktop 载体函数：载体函数不计入命名空间映射，但缺失会被
+  // 「carrier functions lost」fail-closed 检查拒绝（本测试锁 payload 漂移）。
+  const preloadText = [...factories, ...DESKTOP_CARRIER_FUNCTIONS]
     .map(factory => `function ${factory}(): SomeSurface {\n  return {\n    ping: () => ipcRenderer.invoke('ch:ping', { id }),\n  };\n}`)
     .join('\n')
   const shimBlock = payload => 'var PUSH_EVENTS = {\n  }\n' + Object.values(FACTORY_TO_NAMESPACE)
@@ -660,8 +665,23 @@ test('resolveDesktopDist honors the override, default points at packages/desktop
   assert.equal(resolveDesktopDist({ DSH_CHAMBER_DESKTOP_DIST: 'rel/dist' }, '/repo'), resolve('/repo', 'rel/dist'))
 })
 /** A synthetic compiled-preload fixture with the frozen surface shape. */
-function preloadFixture({ dropNamespace = null, badMember = false, scalar = 'value' } = {}) {
+function preloadFixture({
+  dropNamespace = null, badMember = false, scalar = 'value',
+  carrierProtocol = 1, carrierDropKey = null, carrierBadMember = false,
+} = {}) {
   const namespaces = BRIDGE_NAMESPACE_KEYS.filter((namespace) => namespace !== dropNamespace)
+  // The dshDesktop carrier the F7 negative controls tamper with. The member
+  // shape mirrors preload.cts exposeDesktopCarrier() (updates 3 / keyboard 2 /
+  // shortcuts 4 functions).
+  const carrierEntries = {
+    protocolVersion: String(carrierProtocol),
+    updates: carrierBadMember
+      ? '{ status: 42, open: () => 0, subscribe: () => () => {} }'
+      : '{ status: () => 0, open: () => 0, subscribe: () => () => {} }',
+    keyboard: '{ subscribe: () => () => {}, closeWindow: () => 0 }',
+    shortcuts: '{ get: () => 0, edit: () => 0, recording: () => 0, subscribe: () => () => {} }',
+  }
+  delete carrierEntries[carrierDropKey]
   const lines = [
     "const { contextBridge, ipcRenderer } = require('electron')",
     'contextBridge.exposeInMainWorld("dshChamber", {',
@@ -669,6 +689,9 @@ function preloadFixture({ dropNamespace = null, badMember = false, scalar = 'val
     ...namespaces.map((namespace) => badMember
       ? '  ' + namespace + ': { member: 42 },'
       : '  ' + namespace + ': { member: () => ipcRenderer.invoke("ch:' + namespace + '") },'),
+    '})',
+    'contextBridge.exposeInMainWorld("dshDesktop", {',
+    ...Object.entries(carrierEntries).map(([key, value]) => '  ' + key + ': ' + value + ','),
     '})',
   ]
   return lines.join('\n')
@@ -706,6 +729,29 @@ test('frozen preload surface assertion fails closed on a missing namespace, a no
   )
   assert.throws(() => assertFrozenPreloadSurface(null), /exposed no dshChamber/)
 })
+test('the dshDesktop carrier assertion fails closed on absence/protocol/member drift (F7)', async () => {
+  // The gate asserts presence + protocolVersion === 1 + function members only.
+  // The frozen 4-key set is owned by desktop-carrier-surface.test.ts and the
+  // artifact bytes by verify-artifact-freshness — no third source-text lock.
+  const good = await inspectPreloadSurface(preloadFixture(), { info: {} })
+  assert.deepEqual(assertFrozenDesktopCarrier(good.exposed.dshDesktop), { namespaces: 3, members: 9 })
+  // Negative control: a compiled preload that never exposed the carrier must
+  // fail, not pass silently.
+  assert.throws(() => assertFrozenDesktopCarrier(undefined), /exposed no dshDesktop/)
+  assert.throws(() => assertFrozenDesktopCarrier(null), /exposed no dshDesktop/)
+  const noVersion = await inspectPreloadSurface(preloadFixture({ carrierDropKey: 'protocolVersion' }), { info: {} })
+  assert.throws(() => assertFrozenDesktopCarrier(noVersion.exposed.dshDesktop), /no protocolVersion key/)
+  const protocolDrift = await inspectPreloadSurface(preloadFixture({ carrierProtocol: 2 }), { info: {} })
+  assert.throws(
+    () => assertFrozenDesktopCarrier(protocolDrift.exposed.dshDesktop),
+    /protocolVersion = 2, expected 1/,
+  )
+  const badCarrierMember = await inspectPreloadSurface(preloadFixture({ carrierBadMember: true }), { info: {} })
+  assert.throws(
+    () => assertFrozenDesktopCarrier(badCarrierMember.exposed.dshDesktop),
+    /dshDesktop\.updates\.status is not a function/,
+  )
+})
 test('the REAL compiled Electron artifacts execute when present (loud skip otherwise) (G4)', async (t) => {
   const controlPlaneEntry = join(DEFAULT_DESKTOP_DIST, 'control-plane', 'index.js')
   const preloadEntry = join(DEFAULT_DESKTOP_DIST, 'preload.cjs')
@@ -722,6 +768,10 @@ test('the REAL compiled Electron artifacts execute when present (loud skip other
   assert.equal(verdict.members, EXPECTED_SURFACE.members,
     'the COMPILED preload must equal the pinned member total（陈旧 dist 先跑 '
     + 'pnpm --filter @dsh-chamber/desktop run build:preload）')
+  // F7 产物臂：dshDesktop 载体也必须真的在编译产物里（protocolVersion 1 +
+  // updates 3 / keyboard 2 / shortcuts 4 个函数，由 preload.cts 单源声明）。
+  assert.equal(verdict.carrierMembers, 9,
+    'the COMPILED preload must expose the 9 dshDesktop carrier members')
 })
 
 // G35: the real-repository parity assertion (MODES.static ↔ ci.yml's

@@ -478,6 +478,18 @@ class ClientRemoteService extends Service implements ClientRemote {
     boundIdentity?: BoundContextIdentity,
   ): Promise<RemoteResult<unknown>> | AsyncIterable<unknown> {
     if (descriptor.mode === 'stream') {
+      if (descriptor.uplink !== undefined) {
+        // chamber (G43): upstream returns a ClientStreamHandle whose send/end
+        // half is the ClientUplinkQueue for descriptor.uplink; this fork never
+        // copied that half, so the generated method has no send path here.
+        // Throw synchronously (invokeStream is an async generator and would only
+        // run its body on the first next()) rather than silently opening a
+        // downlink-only stream and dropping the caller's items.
+        throw new Error(
+          `client api: ${endpointOf(descriptor)} is a generated stream with descriptor.uplink, and the chamber api-gateway fork does not replay the uplink client half (deviation G43): `
+          + 'ClientUplinkQueue / ClientStreamHandle / isRemoteUplinkItem / requireStrictCodec are absent, so the call is refused instead of silently dropping the client send/end side',
+        )
+      }
       return this.invokeStream(descriptor, projection, token, callerCtx, values, boundIdentity)
     }
     return this.invoke(descriptor, projection, token, callerCtx, values, boundIdentity)
@@ -771,7 +783,10 @@ function parseInput(codec: TypertCodec, value: unknown, endpoint: string, field:
     throw new Error(`client api: generated Remote ${endpoint} field ${JSON.stringify(field)} has no strict codec`)
   }
   try {
-    return codec.schema.parse(value)
+    // rc.2 removed the eagerly materialized `schema` property; create() returns the
+    // same strict schema, memoized on first boundary use. The client-side input
+    // gate is the chamber fork's (upstream rc.2 only decodes results).
+    return codec.create().parse(value)
   } catch (cause) {
     throw new Error(`client api: ${endpoint} rejected ${JSON.stringify(field)}`, { cause })
   }

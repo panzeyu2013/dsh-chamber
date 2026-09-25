@@ -44,7 +44,7 @@ import {
   createMachineCatalog, type MachineCatalog,
 } from '@dsh-chamber/dsh-chamber-client-ui-open-in/machine-catalog'
 import {
-  hasHealRoute, hasSessionStreamResync, resyncSessionStream, sessionOpenInFlight, sessionOpenState,
+  hasSessionStreamResync, resyncSessionStream, sessionOpenInFlight, sessionOpenState,
   sessionStreamResyncInFlight,
   type SessionsLoose,
 } from '@dsh-chamber/dsh-chamber-client-ui-open-in/stream-health-probe'
@@ -270,7 +270,7 @@ const cancelledBoots = new Map<string, number>()
 type DispatchCancel = (error: Error) => void
 
 /** One exact live generation. Pollers belong to the holder, so replacement/teardown can
- * cancel them before an old runtime ever reaches sessions.open(). */
+ * cancel them before an old runtime ever reaches the official openSession(). */
 interface ShellHolder {
   entry: AppWebEntry
   activeDispatchCancels: Set<DispatchCancel>
@@ -772,9 +772,9 @@ export function tailWaitRemainingMs(deadlineAt: number | undefined, now: number)
 
 /**
  * Request opening one session: dispatch when the shell already booted, else queue for the
- * boot-settle flush. Resolves once the runtime accepted the open (sessions may still be
- * activating after settle; dispatch polls up to 8s, and a pre-boot request keeps its
- * original 68s total deadline across the flush).
+ * boot-settle flush. Resolves once the runtime accepted the open (the sessions face and
+ * the official view owner may still be activating after settle; dispatch polls up to 8s,
+ * and a pre-boot request keeps its original 68s total deadline across the flush).
  */
 export function openInstanceSession(instanceId: string, sessionId: string): Promise<void> {
   // Record the request stream BEFORE dispatching: the dispatcher drops requests a newer
@@ -796,18 +796,24 @@ export function readInstanceSessionStreamHealth(instanceId: string, sessionId: s
   openInFlight: boolean | undefined
   resyncInFlight: boolean
   resyncAvailable: boolean
-  /** The header's stage move is usable: current, listed, and a listed neighbour. */
+  /**
+   * The header's automatic heal is usable for this target. rc.2: the header
+   * executes the concrete per-session `resync()`, so this is the same presented
+   * target + reachable-face read as `resyncAvailable`; `false` leaves the error
+   * to the page's bounded delivery resync.
+   */
   healRoute: boolean
 } | null {
   const sessions = currentSessionFace(instanceId)
   const openState = sessionOpenState(sessions, sessionId)
   if (openState === undefined) return null
+  const resyncAvailable = hasSessionStreamResync(sessions, sessionId)
   return {
     openState,
     openInFlight: sessionOpenInFlight(sessions, sessionId),
     resyncInFlight: sessionStreamResyncInFlight(sessions, sessionId),
-    resyncAvailable: hasSessionStreamResync(sessions, sessionId),
-    healRoute: hasHealRoute(sessions, sessionId),
+    resyncAvailable,
+    healRoute: resyncAvailable,
   }
 }
 
@@ -830,12 +836,44 @@ function rejectPendingOpens(instanceId: string, message: string): void {
   if (count > 0) console.error(`[shell] instance ${instanceId} failed to boot; ${count} queued session open(s) dropped: ${message}`)
 }
 
+/** The official view owner's navigation entry point (the ui-workspace service). */
+interface SessionViewNavigation {
+  /** Present `target`: retain it as the main view and release the replaced reference. */
+  openSession(target: string): void
+}
+
+/**
+ * Read the instance ctx's official view-owner service without tripping a
+ * not-yet-registered Cordis proxy: a missing service must stay on the transient
+ * poll path (the ui-workspace first-screen row activates after the session
+ * controller, so the face can be absent while ctx.sessions already reads).
+ */
+function readSessionViewNavigation(ctx: object): SessionViewNavigation | undefined {
+  // REFLECT-ONLY, never the direct property: the real cordis service lookup is a
+  // throwing proxy for an absent service, so a direct `ctx.uiWorkspace` read can
+  // blow up while the ui-workspace row is still activating. The non-throwing
+  // `reflect.get(name, false)` form is the one supported read; a ctx that exposes
+  // no reflect face has no readable service and stays on the transient poll path.
+  const reflect = (ctx as { reflect?: { get?(name: string, strict?: boolean): unknown } }).reflect
+  if (reflect?.get === undefined) return undefined
+  const found = reflect.get('uiWorkspace', false)
+  if (found === null || found === undefined || typeof found !== 'object') return undefined
+  const candidate = found as { openSession?: unknown }
+  return typeof candidate.openSession === 'function' ? candidate as SessionViewNavigation : undefined
+}
+
 /**
  * Dispatch one open through one EXACT settled holder/runtime ctx. The boot settle waits
  * only on entry ROOT fibers, so ctx.sessions (a child fiber behind async api-remotes
- * mounts) can register after the holder exists; the poll covers service readiness and
- * list visibility within the same deadline, with distinct terminal reports. Every retry
- * and the final sessions.open re-check holder identity; teardown cancels the poller.
+ * mounts) and the ui-workspace view owner can register after the holder exists; the poll
+ * covers both faces plus list visibility within the same deadline, with distinct terminal
+ * reports. Every retry and the final openSession call re-check holder identity; teardown
+ * cancels the poller.
+ *
+ * Presentation itself stays with the OFFICIAL view owner: ui-workspace retains the
+ * presented session with source 'mainView' and releases the reference it replaced — that
+ * is what the UI renders and what the health probe reads. The chamber shell only routes
+ * the request; it holds no second main-view reference and mirrors no "current".
  */
 function dispatchOpen(
   instanceId: string,
@@ -873,21 +911,28 @@ function dispatchOpen(
     const cancel: DispatchCancel = error => fail(error)
     holder.activeDispatchCancels.add(cancel)
 
-    // Whether the runtime sessions service was EVER observed, to pick the terminal report.
+    // Whether each runtime face was EVER observed, to pick the terminal report.
     let serviceSeen = false
+    let viewSeen = false
 
     const timeout = (): void => {
-      // One last guarded read: the service may have registered inside the final
-      // OPEN_RETRY_MS window — never blame boot readiness for a service present by deadline.
-      if (!serviceSeen) {
+      // One last guarded read: a face may have registered inside the final
+      // OPEN_RETRY_MS window — never blame boot readiness for one present by deadline.
+      if (!serviceSeen || !viewSeen) {
         try {
-          serviceSeen = holder.entry.runtimeCtx?.sessions !== undefined
+          const runtimeCtx = holder.entry.runtimeCtx
+          if (!serviceSeen) serviceSeen = runtimeCtx?.sessions !== undefined
+          if (!viewSeen && runtimeCtx !== undefined) {
+            viewSeen = readSessionViewNavigation(runtimeCtx) !== undefined
+          }
         } catch {
           // Swallow: the deadline report stands on the observed attempts.
         }
       }
       fail(new Error(serviceSeen
-        ? `会话 ${sessionId} 未出现在实例会话列表中（等待超时）`
+        ? (viewSeen
+          ? `会话 ${sessionId} 未出现在实例会话列表中（等待超时）`
+          : `实例会话导航服务不可用（boot 未完全就绪）：会话 ${sessionId} 未打开`)
         : `实例会话服务不可用（boot 未完全就绪）：会话 ${sessionId} 未打开`))
     }
 
@@ -909,8 +954,9 @@ function dispatchOpen(
         fail(new Error(`实例 ${instanceId} shell 已失效，会话 ${sessionId} 未打开`))
         return
       }
-      // 被取代的请求不得再开：同一来源的 open 是「最后意图胜出」流，官方 sessions.open
-      // 只是普通 select，一个已离开的旧请求会把壳翻回旧会话（连点两个会话可见抖动）。
+      // 被取代的请求不得再开：同一来源的 open 是「最后意图胜出」流，官方
+      // ui-workspace.openSession 只是普通 select，一个已离开的旧请求会把壳翻回旧会话
+      //（连点两个会话可见抖动）。
       // 静默 resolve：被放弃的请求不是失败，失败面归最新那次请求。
       if (lastRequestedSession.get(instanceId) !== undefined
         && lastRequestedSession.get(instanceId) !== sessionId) {
@@ -922,9 +968,12 @@ function dispatchOpen(
         return
       }
       let sessions: NonNullable<AppWebEntry['runtimeCtx']>['sessions'] | undefined
+      let navigation: SessionViewNavigation | undefined
       try {
         // runtimeCtx is shell-owned, but Cordis lookup may be a throwing proxy: same boundary.
-        sessions = holder.entry.runtimeCtx?.sessions
+        const runtimeCtx = holder.entry.runtimeCtx
+        sessions = runtimeCtx?.sessions
+        navigation = runtimeCtx === undefined ? undefined : readSessionViewNavigation(runtimeCtx)
       } catch (err) {
         fail(new Error(describeShellError(err)))
         return
@@ -937,6 +986,13 @@ function dispatchOpen(
         return
       }
       serviceSeen = true
+      if (navigation === undefined) {
+        // TRANSIENT too: the official ui-workspace row activates after the controller;
+        // the same poll covers its Service registration.
+        scheduleRetry()
+        return
+      }
+      viewSeen = true
       let listed = false
       try {
         listed = sessions.list?.getSnapshot()?.byId?.[sessionId] !== undefined
@@ -955,7 +1011,10 @@ function dispatchOpen(
           return
         }
         try {
-          sessions.open(sessionId)
+          // Presentation belongs to the OFFICIAL view owner: it retains the target as
+          // 'mainView' (starting its shared open) and releases the reference it replaced,
+          // so the chamber keeps no second main-view reference and no "current" mirror.
+          navigation.openSession(sessionId)
           succeed()
         } catch (err) {
           fail(new Error(describeShellError(err)))

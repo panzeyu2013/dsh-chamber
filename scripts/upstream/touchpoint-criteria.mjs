@@ -15,7 +15,7 @@ export const CRITERIA = Object.freeze({
   C1: 'fork 纯文件字节恒等：未登记补丁的文件必须与上游锚逐字节一致',
   C2: '--tags <old> <new>：已登记 fork 面的重放差异报告（advisory）',
   C3: '完整性：fork 每文件有分类、上游每文件有裁决（漏分类/漏裁决 = 硬失败）',
-  C4: 'roster：typert remote 装配契约 15（集合与顺序）、covered/factory 存在性、删包 fail-loud',
+  C4: 'roster：typert remote 装配契约 23（集合与顺序）、covered/factory 存在性、删包 fail-loud',
   C5: '过期锚扫描：shadow fork package.json 版本 == 上游；submodule HEAD == harness.commit',
   C6: 'EXCLUDED 上游存在性：ensure-harness-vendor 排除的 shadow fork 源目录仍在',
   C7: '种子域锁步：gateway HOST_PACKAGE_PROBE_DOMAINS == dsh-runtime HOST_DOMAIN_PROBE_NAMES',

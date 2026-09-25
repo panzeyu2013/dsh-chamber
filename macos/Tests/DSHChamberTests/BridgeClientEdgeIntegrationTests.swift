@@ -13,17 +13,12 @@
 //  出站帧** {"edge":…,"edgeId":N} 发给 Swift 并 await 应答（node-edges 的
 //  pendingEdges 无超时——Swift 不应答 = sidecar 永久挂起），UI push 面经
 //  **notify 出站帧** {"notify":…}（ready/rendererPush）。本文件验证：
-//    1. 61 通道逐个 invoke 全量冒烟：每通道 ≤5s 应答且 (ok==true) 或
+//    1. invoke 通道逐个全量冒烟（集合 = 生成的 BridgeManifest.invokeChannels，
+//       用户插件写面退役后为 51）：每通道 ≤5s 应答且 (ok==true) 或
 //       (ok=false 带 error 文案)——绝无挂起（Swift v1 默认 edge 应答策略兜底）；
 //       记录 ok/error 计数与任何超时；不止二值判定——按命名空间
 //       对代表通道断言具体 wire 形状（与 sidecar-stdio.test.ts 同形状），
 //       「对每个调用都回泛化错误」的通道不能再静默通过；
-//    2. edge 应答的端到端证据：desktop_local_plugin_add_file 通道必然走到
-//       node-edges 的 pickPluginSource edge——默认策略回
-//       {ok:false,error:"swift-edge-unimplemented:pickPluginSource"}，文案应
-//       原路回到 invoke 错误里；自定义应答器改回 {status:'cancelled'} 时同一
-//       通道应变成 ok/cancelled:true（自定义覆盖），未处理 edge 经
-//       defaultEdgeResponse 回落默认（自定义+回落均不挂起）；
 //    3. ready notify：onReady(port, shellVersion)，port == 传入的 --port；
 //    4. 反向验证：settings-set(合法最小 patch) → pushSettingsChanged →
 //       node-edges rendererPush → notify rendererPush（channel
@@ -197,10 +192,6 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
             // destructure 型噪声错误，钉不出真实形状）；空 registry 的
             // 「invalid or unknown instance id」才是这两条通道的确定投影。
             return .object(["id": .string("local")])
-        case "desktop_npm_search":
-            // 空 query → 确定性 {ok:false,error:"empty search query"}（绝不发
-            // 真实 registry 网络请求；形状锚点）。
-            return .object(["query": .string("")])
         default:
             return nil
         }
@@ -541,13 +532,6 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
             }
         }
 
-        // —— desktop_npm_search 命名空间 ——
-        if let search = object("desktop_npm_search") {
-            XCTAssertEqual(search["ok"], .bool(false), "空 query 应回 ok:false", file: file, line: line)
-            XCTAssertEqual(search["error"], .string("empty search query"),
-                           "空 query 必须回确定文案（绝不静默空成功/真实网络）",
-                           file: file, line: line)
-        }
     }
 
     // MARK: - 用例
@@ -591,95 +575,11 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
         // 代表通道的具体 wire 形状（每个命名空间至少一条）。
         await assertRepresentativeShapes(bridge, report: report)
 
-        // 默认 edge 应答的端到端证据：LOCAL_PLUGIN_ADD_FILE 处理器在
-        // 任何 ctx stub 之前先经 node-edges 发 pickPluginSource edge 并 await
-        // ——Swift 默认策略回 {ok:false,error:"swift-edge-unimplemented:
-        // pickPluginSource"}，node-edges 抛错 → sidecar 回 loud 错误帧，文案
-        // 应原路出现在 invoke 错误里（不应答 = 本通道挂起，上面早已失败）。
-        let addFile = report.byChannel["desktop_local_plugin_add_file"] ?? "<未执行>"
-        XCTAssertTrue(addFile.contains("swift-edge-unimplemented:pickPluginSource"),
-                      "desktop_local_plugin_add_file 应经 pickPluginSource edge 拿到默认 loud 拒绝，实际：\(addFile)")
-
         // 冒烟内含 settings-set（第 3 通道）：真实 push 面 → rendererPush notify。
         XCTAssertTrue(notifyRecorder.entries.contains("rendererPush"),
                       "settings-set 应触发 rendererPush notify（记录：\(notifyRecorder.entries)）")
     }
 
-    /// 自定义 edge 应答器：覆盖 pickPluginSource（回 {status:'cancelled'}）
-    /// 的宿主腿形态 + 未处理 edge 回落 defaultEdgeResponse（两路都不挂起）。
-    /// 同一通道 desktop_local_plugin_add_file 在自定义下应变成 ok/cancelled:true
-    /// （对照默认策略用例的 loud 拒绝）；纯回落应答器下应与默认逐字等价。
-    func testCustomEdgeResponderOverrideAndFallback() async throws {
-        // —— spawn 1：自定义应答器（pickPluginSource 覆盖 + 默认回落）——
-        let userDataDir = try Self.makeTempUserDataDir()
-        defer { try? FileManager.default.removeItem(atPath: userDataDir) }
-        let bridge = try makeBridge(userDataDir: userDataDir, port: 17920)
-        defer { bridge.stop() }
-
-        let edgeRecorder = Recorder()
-        bridge.onEdgeRequest = { [weak bridge] method, payload, reply in
-            edgeRecorder.record(method)
-            guard let bridge else { return }
-            if method == "pickPluginSource" {
-                // 自定义宿主腿：取消插件源选择（真实实现以 NSAlert/NSPanel
-                // 形态落地后替换本分支）。
-                reply(.object(["status": .string("cancelled")]), nil)
-                return
-            }
-            // 未处理方法：回落 v1 默认策略（绝不挂起）。
-            let outcome = bridge.defaultEdgeResponse(method: method, payload: payload)
-            reply(outcome.result, outcome.error)
-        }
-        _ = try startBridgeAndWaitReady(bridge, expectedPort: 17920)
-
-        let outcome = await invokeWithTimeout(bridge, method: "desktop_local_plugin_add_file", payload: nil)
-        guard case .ok(let result) = outcome else {
-            XCTFail("自定义 pickPluginSource 应答 {status:'cancelled'} 应使通道 ok 返回，实际：\(outcome.summary)")
-            return
-        }
-        guard case .object(let fields) = result else {
-            XCTFail("desktop_local_plugin_add_file 结果应为对象，实际：\(result)")
-            return
-        }
-        XCTAssertEqual(fields["cancelled"], .bool(true),
-                       "自定义 cancelled 应答应驱动通道返回 cancelled:true")
-        XCTAssertTrue(edgeRecorder.entries.contains("pickPluginSource"),
-                      "自定义应答器应收到 pickPluginSource edge（记录：\(edgeRecorder.entries)）")
-
-        // 自定义应答器下 61 通道全量冒烟同样无挂起（回落覆盖未处理 edge）。
-        let report = await runSmokeLoop(bridge, channels: Self.invokeChannels)
-        if let timedOut = report.timedOut {
-            XCTFail("自定义应答器冒烟存在挂起：第 \(timedOut.index + 1)/61「\(timedOut.channel)」；"
-                    + "循环已中止，余下 \(Self.invokeChannels.count - timedOut.index - 1) 未跑")
-            return
-        }
-        XCTAssertEqual(report.okCount + report.errorCount, Self.invokeChannels.count, report.summary)
-        XCTAssertEqual(report.anomalies, [], "\(report.summary)；异常：\(report.anomalies)")
-
-        // 自定义应答器下代表通道形状与默认路径一致（边腿差异已单独断言）。
-        await assertRepresentativeShapes(bridge, report: report)
-
-        // —— spawn 2：纯回落应答器（每个方法都经 defaultEdgeResponse）——
-        // 与默认策略 wire 等价：pickPluginSource → swift-edge-unimplemented。
-        let userDataDir2 = try Self.makeTempUserDataDir()
-        defer { try? FileManager.default.removeItem(atPath: userDataDir2) }
-        let fallbackBridge = try makeBridge(userDataDir: userDataDir2, port: 17921)
-        defer { fallbackBridge.stop() }
-        fallbackBridge.onEdgeRequest = { [weak fallbackBridge] method, payload, reply in
-            guard let fallbackBridge else { return }
-            let outcome = fallbackBridge.defaultEdgeResponse(method: method, payload: payload)
-            reply(outcome.result, outcome.error)
-        }
-        _ = try startBridgeAndWaitReady(fallbackBridge, expectedPort: 17921)
-
-        let fallbackOutcome = await invokeWithTimeout(fallbackBridge, method: "desktop_local_plugin_add_file", payload: nil)
-        if case .loudError(let error) = fallbackOutcome {
-            XCTAssertTrue(error.localizedDescription.contains("swift-edge-unimplemented:pickPluginSource"),
-                          "纯回落应答器应给默认 loud 拒绝，实际：\(error.localizedDescription)")
-        } else {
-            XCTFail("纯回落应答器下 desktop_local_plugin_add_file 应 loud 拒绝，实际：\(fallbackOutcome.summary)")
-        }
-    }
 
     /// 反向验证 + SIGTERM 优雅退出：settings-set（合法最小 patch）→
     /// onNotify 收到 rendererPush（channel 'dsh-chamber:settings-changed'，

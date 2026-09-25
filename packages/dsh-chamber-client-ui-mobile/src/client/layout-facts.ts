@@ -1,14 +1,12 @@
 /**
- * Layout fact source: the drawer/collapsed state must drive the mobile
- * behaviors, but the gateway-hosted instance runs the OFFICIAL ui-layout — the
- * chamber fork's ctx.layoutFacts service exists only in the desktop renderer.
- * So the source is two-tier: (1) ctx.layoutFacts when present (the fork's store
- * exposes the AppFrame derivation directly), else (2) the official frame
- * attribute data-sidebar-collapsed observed directly. The inject list stays
- * official-services-only, so the plugin never stalls on an unmet chamber-only
- * service.
+ * Layout fact source: the drawer/collapsed state drives the mobile behaviors on
+ * the gateway-hosted instance, which runs the OFFICIAL ui-layout. The only
+ * source is the official frame attribute `data-sidebar-collapsed` observed
+ * directly: the chamber layout fork has no cross-plugin layout service (the
+ * retired `ctx.layoutFacts` face), and this plugin never mounts on the desktop
+ * renderer anyway. The inject list stays official-services-only, so the plugin
+ * never stalls on an unmet chamber-only service.
  */
-import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { TOUCH_TIER_QUERY } from './composer.ts'
 
 export interface LayoutFactSource {
@@ -33,50 +31,12 @@ function findFrame(): Element | null {
 }
 
 /**
- * Build the two-tier source for a ctx. The narrow flag comes from the touch
- * tier matchMedia (the store carries viewportWidth, not a narrow bit, and no
- * pointer guard): the tier query is the plugin's own activation contract.
+ * Build the DOM-observation source. The narrow flag comes from the touch tier
+ * matchMedia (the store carries viewportWidth, not a narrow bit, and no pointer
+ * guard): the tier query is the plugin's own activation contract.
  */
-export function createLayoutFactSource(ctx: ClientContext): LayoutFactSource {
-  // The official ctx is a cordis proxy: touching an un-provided property
-  // THROWS. layoutFacts is chamber-only, so the probe must be exception-safe
-  // (the gateway-hosted official ui-layout is the PRIMARY deployment target).
-  interface LayoutFactsFace {
-    /** AppFrame's derived sidebar-collapsed flag (the fork's own derivation). */
-    getCollapsed(): boolean
-    subscribeLayout(fn: () => void): () => void
-  }
-  let facts: LayoutFactsFace | undefined
-  try {
-    facts = (ctx as { layoutFacts?: LayoutFactsFace }).layoutFacts
-  } catch {
-    facts = undefined
-  }
+export function createLayoutFactSource(): LayoutFactSource {
   const tier = window.matchMedia(TOUCH_TIER_QUERY)
-
-  if (facts !== undefined) {
-    // Tier 1: chamber fork store subscription.
-    const listeners = new Set<() => void>()
-    const notify = (): void => { for (const listener of listeners) listener() }
-    const unsubscribeStore = facts.subscribeLayout(notify)
-    const onTierChange = (): void => notify()
-    tier.addEventListener('change', onTierChange)
-    return {
-      getCollapsed: () => facts.getCollapsed(),
-      getNarrow: () => tier.matches,
-      subscribe: listener => {
-        listeners.add(listener)
-        listener()
-        return () => { listeners.delete(listener) }
-      },
-      dispose: () => {
-        unsubscribeStore()
-        tier.removeEventListener('change', onTierChange)
-      },
-    }
-  }
-
-  // Tier 2: official DOM attribute observation (gateway-hosted instance).
   const listeners = new Set<() => void>()
   const notify = (): void => { for (const listener of listeners) listener() }
   let frame: Element | null = findFrame()

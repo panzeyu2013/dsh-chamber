@@ -3,5 +3,5 @@
 # authority; after editing either side, bring the other along and update both
 # hashes here (manually verified with `shasum -a 256`).
 # Chamber package (design 05 §2): the READMEs describe the self-built multi-source sidebar plugin (zh = key source).
-README.md: ff71e0c765f972c8f94faa90485ad5672614723b667a9c8c6dbcc93375fed1d3
-README.zh.md: dd27bede2a66722f814f273be5aa95c83cc378b3c7c188aa408af18e61381a59
+README.md: 04cda08e29c1b5e5d235924fdda085a551d9d863ed952f45da37085cd583c6fc
+README.zh.md: 211147455dd5732f915b39a316fd35cda9b1db3c0777aef80f9c588bce07b6cb

@@ -18,7 +18,6 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  MATERIALIZE_FILE_SPEC_PATTERN,
   MAX_PLUGIN_SPEC_CHARS,
   PLUGIN_NAME_PATTERN,
   PLUGIN_SPEC_PATTERN,
@@ -27,14 +26,6 @@ import {
 } from '@dsh-chamber/control-plane'
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..')
-const pluginSpecSource = () => readFileSync(
-  join(REPO_ROOT, 'packages', 'control-plane', 'src', 'plugin-spec.ts'),
-  'utf8',
-)
-const pluginAddViewSource = () => readFileSync(
-  join(REPO_ROOT, 'packages', 'dsh-chamber-client-ui-settings-connections', 'src', 'client', 'PluginDialog.tsx'),
-  'utf8',
-)
 const sshProviderSource = () => readFileSync(
   join(REPO_ROOT, 'packages', 'desktop', 'ssh-provider.ts'),
   'utf8',
@@ -44,31 +35,6 @@ const pluginSyncSource = () => readFileSync(
   'utf8',
 )
 
-/** The whole `/…/` regex literal from one single-line declaration. */
-function regexLiteral(source: string, declaration: string): string {
-  const match = new RegExp(`^${declaration}\\s*=\\s*(/.*/)$`, 'm').exec(source)
-  if (match === null) {
-    assert.fail(`expected a single-line literal declaration: ${declaration} = /…/`)
-  }
-  return match[1]
-}
-
-// ---------------------------------------------------------------------------
-// Renderer ADD_SPEC ↔ control-plane PLUGIN_SPEC_PATTERN mirror (textual)
-// ---------------------------------------------------------------------------
-
-test('the renderer ADD_SPEC literal is byte-identical to the shared PLUGIN_SPEC_PATTERN', () => {
-  const renderer = regexLiteral(pluginAddViewSource(), 'const ADD_SPEC')
-  const shared = regexLiteral(pluginSpecSource(), 'export const PLUGIN_SPEC_PATTERN')
-  assert.equal(renderer, shared,
-    'PluginDialog ADD_SPEC must stay a byte-identical hand mirror of control-plane PLUGIN_SPEC_PATTERN (the renderer cannot import the Node-side module; change both sides together)')
-  // The extracted literal must also be the live constant the gateway and the
-  // desktop consume through the package export — guards a stale copy surviving
-  // next to the real declaration.
-  assert.equal(shared.slice(1, -1), PLUGIN_SPEC_PATTERN.source,
-    'the shared literal must be the exported PLUGIN_SPEC_PATTERN (no duplicate copy in plugin-spec.ts)')
-})
-
 // ---------------------------------------------------------------------------
 // Desktop: re-export only, no re-declaration
 // ---------------------------------------------------------------------------
@@ -77,7 +43,6 @@ const MOVED_DECLARATIONS = [
   'MAX_PLUGIN_SPEC_CHARS',
   'PLUGIN_SPEC_PATTERN',
   'PLUGIN_NAME_PATTERN',
-  'MATERIALIZE_FILE_SPEC_PATTERN',
   'WRITE_FILE_MAX_BYTES',
   'RUN_STDOUT_MAX_BYTES',
 ]
@@ -90,14 +55,12 @@ test('ssh-provider.ts no longer declares the moved constants (single source live
   }
 })
 
-test('ssh-provider.ts re-exports the family through the control-plane-module facade', () => {
+test('ssh-provider.ts consumes the content bounds through the control-plane-module facade', () => {
   const source = sshProviderSource()
-  assert.match(source, /from '\.\/control-plane-module\.ts'/,
-    'ssh-provider.ts must consume the family through the dual-path facade')
-  for (const name of MOVED_DECLARATIONS) {
-    assert.match(source, new RegExp(`^\\s*${name},?$`, 'm'),
-      `ssh-provider.ts must re-export ${name} from the facade`)
-  }
+  assert.match(source, /import \{ RUN_STDOUT_MAX_BYTES, WRITE_FILE_MAX_BYTES \} from '\.\/control-plane-module\.ts'/,
+    'ssh-provider.ts must consume the content bounds through the dual-path facade')
+  assert.match(source, /export \{ RUN_STDOUT_MAX_BYTES, WRITE_FILE_MAX_BYTES \}/,
+    'ssh-provider.ts must keep re-exporting the content bounds')
 })
 
 test('plugin-sync.ts keeps re-exporting the shared spec/name patterns (no ssh-provider middleman)', () => {
@@ -128,7 +91,5 @@ test('the shared whitelist values ride the @dsh-chamber/control-plane export', (
   assert.equal(MAX_PLUGIN_SPEC_CHARS, 512)
   assert.equal(WRITE_FILE_MAX_BYTES, 50 * 1024 * 1024)
   assert.equal(RUN_STDOUT_MAX_BYTES, WRITE_FILE_MAX_BYTES)
-  assert.equal(MATERIALIZE_FILE_SPEC_PATTERN.test('file:/home/u/.dsh-chamber/plugins/scope-name-abc123.tgz'), true)
-  assert.equal(MATERIALIZE_FILE_SPEC_PATTERN.test('file:relative.tgz'), false)
 })
 

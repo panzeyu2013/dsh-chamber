@@ -90,8 +90,11 @@ Thumbs.db
 # Temporary files
 .tmp/
 /tmp/
-# Scratch workspace (upstream mirror + audit reports; never committed)
+# Scratch workspace (upstream mirror + audit reports; never committed).
+# .audit/ is this upgrade round's audit scratch (old-pin snapshots + npm cache);
+# keep it out of Git like .analysis/ — delete it manually when its evidence is no longer needed.
 .analysis/
+.audit/
 
 *.local
 *.swp

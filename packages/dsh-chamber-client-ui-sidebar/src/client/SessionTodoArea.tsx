@@ -13,7 +13,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import clsx from 'clsx'
 import {
-  IconChecklistOutline14, IconQuestionOutline14, IconWarningOutline16, Tooltip,
+  IconChecklistOutlineRegular, IconQuestionOutlineRegular, IconWarningOutlineRegular, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { sourceAccentColor } from '@dsh-chamber/dsh-chamber-client-core/derive'
@@ -180,9 +180,9 @@ function TodoRow({
           className={clsx(cc.sessionStateSlot, entry.kind !== 'completed' && cc.sessionStateSlotPending)}
           aria-hidden="true"
         >
-          {entry.kind === 'approval' && <IconWarningOutline16 className={cc.statePendingApproval} />}
-          {entry.kind === 'plan-review' && <IconChecklistOutline14 className={cc.statePendingPlan} />}
-          {entry.kind === 'question' && <IconQuestionOutline14 className={cc.statePendingQuestion} />}
+          {entry.kind === 'approval' && <IconWarningOutlineRegular className={cc.statePendingApproval} />}
+          {entry.kind === 'plan-review' && <IconChecklistOutlineRegular className={cc.statePendingPlan} />}
+          {entry.kind === 'question' && <IconQuestionOutlineRegular className={cc.statePendingQuestion} />}
           {/* 复用列表行的状态标记：completed 用 chamber 品牌蓝
               .stateCompleted（官方的 done 绿与 source header 的连接点同色）。 */}
           {entry.kind === 'completed' && <span className={cc.stateCompleted} />}

@@ -15,8 +15,10 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
-  goalHoldsCompletion, goalSuppressesPresentation, sessionRowState, subagentActivityOf,
+  goalSuppressesPresentation, sessionRowState, subagentActivityOf,
 } from '@dsh-chamber/dsh-chamber-client-core/session-row-state'
+// Test-only internal: a package-internal deep import keeps it off the public subpath face.
+import { goalHoldsCompletion } from '../../../dsh-chamber-client-core/src/session-row-state.ts'
 import type { GoalFact } from '@dsh-chamber/dsh-chamber-client-core/session-row-state'
 
 const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')

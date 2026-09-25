@@ -107,26 +107,24 @@ test('host-packages carries the mobile seed set, aligned with exports and seedFi
 
 // ---- protected-set verifier freshness (design 21 §6.11) ----
 
-test('dist carries the CURRENT protected-set verifier (a stale bundle silently re-enables the composition-split false positives)', async () => {
+test('dist carries the CURRENT protected-set READ projection (a stale bundle silently ships an outdated row classification)', async () => {
   // Every other check in this file survives a stale dist: the banner, the
   // bundled pnpm pin and the public API all look identical in an OLD build —
   // and the gateway's behaviour tests import `src/`, never this bundle — so a
   // stale dist stays invisible until an operator runs the packaged gateway.
   // These markers are operator-facing copy,
   // which minification preserves; reword the copy ⇒ move the marker with it.
+  // The user plugin write surface (and with it the post-install verifier's copy)
+  // was retired with the 2026-09 C layering ruling; the read projection still
+  // derives the protected set from the runtime family facts, so its copy is the
+  // freshness marker now.
   const markers = [
-    // §6.11.4 version arm: a family member is judged against the version this
-    // runtime line provides (rescoped vendored packages keep upstream versions
-    // and can never equal the generation string).
-    'is not the version this instance runtime provides',
-    // §6.11.4 per-name honesty: a name that entered no arm is named, never
-    // folded into a silent aggregate pass.
-    'no runtime-provided version fact exists and the instance runtime version is unknown for',
     // §6.11.1 second trust criterion: a fact source whose name and version
     // parsers disagree about the same keys is refused.
     'the name and version parsers disagree about the same keys',
-    // §6.11.4 closure walk (dependencies ∪ optionalDependencies).
-    'optionalDependencies',
+    // The gateway's own B₀ ∪ S fallback: an underivable family closure must
+    // never be published as an empty protected set.
+    'chamber seed registry cannot form a protected set',
   ]
   // A MISSING dist (clean checkout) is built on demand — that is not staleness.
   // An EXISTING dist without the current markers IS staleness and must fail

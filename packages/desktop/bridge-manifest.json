@@ -101,14 +101,6 @@
       "key": "GATEWAY_PLUGIN_SYNC"
     },
     {
-      "channel": "desktop_gateway_plugin_apply",
-      "key": "GATEWAY_PLUGIN_APPLY"
-    },
-    {
-      "channel": "desktop_gateway_plugin_materialize",
-      "key": "GATEWAY_PLUGIN_MATERIALIZE"
-    },
-    {
       "channel": "desktop_ssh_config_list",
       "key": "SSH_CONFIG_LIST"
     },
@@ -157,44 +149,12 @@
       "key": "SSH_PLUGIN_LIST"
     },
     {
-      "channel": "desktop_ssh_plugin_apply",
-      "key": "SSH_PLUGIN_APPLY"
-    },
-    {
-      "channel": "desktop_ssh_plugin_undo",
-      "key": "SSH_PLUGIN_UNDO"
-    },
-    {
       "channel": "desktop_local_plugin_list",
       "key": "LOCAL_PLUGIN_LIST"
     },
     {
-      "channel": "desktop_npm_search",
-      "key": "NPM_SEARCH"
-    },
-    {
       "channel": "desktop_ssh_seed_host_graph",
       "key": "SSH_SEED_HOST_GRAPH"
-    },
-    {
-      "channel": "desktop_ssh_plugin_materialize_add",
-      "key": "SSH_PLUGIN_MATERIALIZE_ADD"
-    },
-    {
-      "channel": "desktop_ssh_plugin_materialize_add_pick",
-      "key": "SSH_PLUGIN_MATERIALIZE_ADD_PICK"
-    },
-    {
-      "channel": "desktop_local_plugin_add_file",
-      "key": "LOCAL_PLUGIN_ADD_FILE"
-    },
-    {
-      "channel": "desktop_local_plugin_add",
-      "key": "LOCAL_PLUGIN_ADD"
-    },
-    {
-      "channel": "desktop_local_plugin_remove",
-      "key": "LOCAL_PLUGIN_REMOVE"
     },
     {
       "channel": "dsh-chamber:runtime-state",
@@ -284,8 +244,8 @@
     }
   ],
   "counts": {
-    "invoke": 61,
+    "invoke": 51,
     "push": 9,
-    "total": 70
+    "total": 60
   }
 }

@@ -1,7 +1,9 @@
 /**
  * Copy owned by the chamber open-in plugin: the official `open-in-app` client’s
  * dictionaries and product-label table, owned here rather than mirrored (the
- * official client never loads). `app.*` labels must cover exactly the catalog
+ * official client loads only for its file-level seats and renders no directory
+ * button on this page, so its `open-in-app` namespace is not this button's copy
+ * source). `app.*` labels must cover exactly the catalog
  * ids our host domain can answer (a label test pins that); product names track
  * upstream’s spelling where an id is shared.
  */
@@ -10,7 +12,7 @@ export const zh = {
   titleOpen: '在应用中打开当前工作区',
   /** Session stream-health chip (diagnostics label — not user-facing). */
   'streamHealth.label': '对话通道状态',
-  /** Automatic stage-move re-open is in flight. */
+  /** An automatic resync/heal is in flight for this session's stream. */
   'streamHealth.healing': '正在恢复对话…',
   /** The official open state has been `loading` past its stall threshold. */
   'streamHealth.loadingStall': '对话载入停滞',

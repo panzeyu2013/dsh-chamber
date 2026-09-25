@@ -10,8 +10,10 @@ import { isChannelClassDiagnostic, recheckPluginGraphDiagnostic } from '@dsh-cha
 // The classifier single source (audit arch-03 P2-2): the pinned HTTP literal and
 // the lockstep expectations below come FROM it, never from a second copy here.
 import {
-  classifyPluginGraphOutcome, graphHttpFailureMessage,
+  classifyPluginGraphOutcome,
 } from '@dsh-chamber/dsh-chamber-client-core/plugin-graph-classify'
+// Test-only internal: a package-internal deep import keeps it off the public subpath face.
+import { graphHttpFailureMessage } from '../../../dsh-chamber-client-core/src/plugin-graph-classify.ts'
 import type { UnaryPostOutcome } from '@dsh-chamber/dsh-chamber-client-core/wire-common'
 
 const CP = 'http://cp'

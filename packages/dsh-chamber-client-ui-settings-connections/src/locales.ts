@@ -89,7 +89,7 @@ export const zh = {
   delete: '删除',
   deleteTitle: '删除该连接？',
   deleteDescription: '连接将从注册表移除，当前传输随之断开，且本机保存的密码或令牌会被清除；远端内容不受影响。',
-  // 「删除」词族专用连接删除域；插件管理域统一为 移除（动作层）/卸载（技术后果或复合恢复语境层）。
+  // 「删除」词族专用连接删除域。
   deleteConfirm: '删除',
   deleting: '删除中…',
   deleteNotEffective: '删除未生效：主进程拒绝了该变更（连接状态变化或状态目录不可写？）',
@@ -203,35 +203,11 @@ export const zh = {
   pluginsLoading: '正在读取插件清单…',
   pluginsLocalCol: '本地',
   pluginsRemoteCol: '远端',
-  pluginsRowAdd: '新增',
-  pluginsRowUpdate: '更新',
-  pluginsRowRemove: '移除',
   pluginsRowUnsyncable: '不可同步',
-  pluginsRowMaterialize: '本地路径',
-  pluginsUnlockedLatest: '远端将安装最新版（latest）',
-  pluginsRemoveRisk: '将从远端移除该插件（破坏性操作）。',
-  pluginsRemoveRiskN: '将从远端移除选中的 {n} 个插件（破坏性操作）。',
-  pluginsRestartWarning: '重启将中断该远端实例的活跃会话。',
-  pluginsDeferRestart: '只应用变更，不重启（下次重启生效）',
-  pluginsProfileNotInitialized: '远端 profile 尚未初始化，首次应用时将自动创建。',
+  pluginsProfileNotInitialized: '远端 profile 尚未初始化。',
   pluginsStartLocalFirst: '本地实例尚未启动，请先启动本地实例。',
-  pluginsApply: '应用',
-  pluginsApplied: '已应用',
-  pluginsFailed: '失败',
-  pluginsSkipped: '跳过',
-  pluginsRestarted: '已重启',
-  pluginsRestartFailed: '插件已安装，但重启失败，需手动重启。',
-  pluginsDeferred: '已安装，下次重启生效。',
-  pluginsDeferredLocal: '已安装；在「dsh 运行时」点「重启 dsh」后生效（窗口会重新加载一次，需重新打开设置）。',
-  pluginsVerifyFailed: '安装完成但校验失败。',
-  pluginsReadyFailed: '已重启但实例未恢复，疑似插件集损坏。',
   pluginsRefresh: '刷新',
-  pluginsNoDiff: '清单一致',
   pluginsNoLocalPlugins: '本地实例未安装第三方插件',
-  pluginsNoThirdParty: '没有可同步的第三方插件',
-  pluginsNoMatch: '没有匹配的插件',
-  // npm 搜索零命中（与列表过滤的 pluginsNoMatch 区分语境）。
-  pluginsSearchNoMatch: '没有匹配的 npm 包',
   chamberInjectedTitle: 'chamber 受管组件',
   chamberInjectedHint: 'chamber 自带组件；自动同步失败或版本漂移时可手动重推',
   chamberRemoteLive: '远端：已注入并已生效',
@@ -244,41 +220,14 @@ export const zh = {
   // 移动端入口行（design 21 §6.2 唯一打包例外）：仅 gateway 源显示，网关随发行物注入。
   chamberMobileRow: '移动端入口',
   chamberMobileHint: '网关随发行物注入',
-  pluginsSearchPlaceholder: '按包名搜索…',
   pluginsColName: '包名',
   pluginsColCategory: '类别',
-  pluginsColStatus: '状态',
-  // 第三方已安装行的「生效状态」列头（Loader 快照派生；与 diff 表的行类别列区分）。
+  // 第三方已安装行的「生效状态」列头（Loader 快照派生）。
   pluginsColLiveState: '生效状态',
-  pluginsColAction: '操作',
-  pluginsFilterAll: '全部',
-  pluginsFilterDiff: '仅差异',
-  pluginsCatAll: '全部类别',
   pluginsCatBundle: 'bundle',
   pluginsCatPlain: 'plain',
   pluginsCatClient: 'client',
-  pluginsConsistent: '一致',
   pluginsRetry: '重试',
-  pluginsApplyTitle: '应用插件变更？',
-  pluginsAddSpec: '包名或 name@version',
-  pluginsAddSpecPlaceholder: '如 pkg 或 pkg@^1.2.3',
-  pluginsAddSpecInvalid: '请输入合法的包名或 name@version（仅 registry 名 + 安全版本）。',
-  pluginsAddInstall: '安装',
-  // 安装中短文案：busyTasks 全宽文案作按钮 busy 会导致宽度跳动，专用短文案避免（busyTasks 保留给 footer/应用态）。
-  pluginsAddInstalling: '安装中…',
-  pluginsAddSearch: '搜索',
-  pluginsAddSearchPlaceholder: '搜索 npm registry…',
-  pluginsAddFolder: '从本地导入',
-  // 本地导入 busy 短文案（与 pluginsAddInstalling 同族）：导入中按钮显示「导入中…」，避免「安装」按钮误显
-  // 「安装中…」。导入源 = 插件源码文件夹或现成 .tgz 插件包（macOS 选择器两者皆可）。
-  pluginsImporting: '导入中…',
-  pluginsRemoveRow: '移除',
-  // 行级移除确认键：与共享键 deleteConfirm（「删除」，连接删除沿用）区分，busy 用 pluginsRemoving。
-  pluginsConfirmRemove: '移除',
-  pluginsRemoving: '移除中…',
-  pluginsLocalRemoveTitle: '移除本地插件？',
-  pluginsLocalRemoveDescription: '将从本地 dsh 实例卸载该插件及其依赖；如需恢复请重新添加。',
-  pluginsRestartUnconfigured: '未配置 systemd 服务，无法自动重启；插件已安装，将在下次重启后生效。',
   inventoryError: '无法读取插件清单',
   inventoryNoThirdParty: '没有第三方插件',
   chamberRemoteFailed: '远端：已注入（加载失败）',
@@ -288,11 +237,9 @@ export const zh = {
   //（无「重启后生效」承诺——bundle 层的挂载行不带包名，无从判定）。
   thirdPartyLiveActive: '生效中',
   thirdPartyLiveStarting: '加载中',
-  // gateway 本地导入（文件夹/.tgz）成功且受控重启已生效：插件已挂载在运行实例上。
-  materializeLive: '已安装并已重启生效',
   chamberSyncNow: '重新同步 chamber 组件',
   chamberSyncBusy: '同步中…',
-  chamberSyncUploaded: '已同步并已触发重启',
+  chamberSyncUploaded: '已同步并已请求重启',
   chamberSyncSkipped: '本机无 chamber 构建产物，已跳过同步',
   chamberSyncUpToDate: '已是最新，无需同步',
   chamberSyncFailed: '同步失败：',
@@ -307,14 +254,8 @@ export const zh = {
   chamberBadgeFailed: '加载失败',
   // 内建表「版本」列表头。
   pluginsColVersion: '版本',
-  // 单一模型视图（已安装列表/恢复面）文案。
-  partialNofM: '已完成 {done}/{total}',
-  // 与 partialNofM 拼接的「部分结果」前缀分隔符（zh 全角冒号；en 冒号 + 空格）。
+  // 横幅 title/detail 的拼接分隔符（zh 全角冒号；en 冒号 + 空格）。
   partialSep: '：',
-  // 恢复横幅（gateway 恢复面）：实例停机/错误/重启耗尽且 journal 有可撤销的最近成功变更时渲染。
-  recoveryUndoBanner: '实例当前未运行；最近一次成功的插件变更可能是原因——可撤销该变更，恢复到变更前的插件清单。',
-  busyTasks: '正在执行变更…',
-  deferredOfflineNote: '将缓存并在实例就绪后自动安装；可能在你断开后执行',
   profileAbsentBanner: '实例尚未初始化，将缓存安装意图，实例就绪后自动安装',
   profileCorruptBanner: '托管实例的插件清单损坏（profile_corrupt）。请在网关侧恢复或重试',
   // 读/写面共享栅栏：读面 409 是「实例正在变更插件」的可重试忙态——单独成键，既不与
@@ -324,7 +265,6 @@ export const zh = {
   installedFromMask: '本地副本',
   installedTab: '已安装',
   installedEmpty: '尚未安装第三方插件',
-  installedAddHint: '在下方添加区按包名搜索安装，或从本地文件夹 / .tgz 插件包导入。',
   // 受保护行投影（后端 rows 驱动，渲染端只渲染不推导）：五个角色徽标 + 只读提示 + 旧 gateway 无 rows 的回退提示。
   pluginsRoleComposition: '安装组合',
   pluginsRoleSeed: 'chamber 播种',
@@ -332,27 +272,13 @@ export const zh = {
   pluginsRoleThirdParty: '第三方',
   pluginsRoleMaterialized: '本地物化',
   pluginsProtectedHint: '受保护：实例组合 / chamber 播种 / 运行时线族，只读',
-  pluginsLegacyGatewayHint: '该 Gateway 版本较低（未提供受保护行投影）：仅第三方行可操作，官方与 chamber 行不在此列出。',
-  removeRowConfirmTitle: '移除插件？',
-  removeRowConfirmDescription: '将移除 {name} 并在需要时重启实例生效。',
-  removeRowConfirmUnconfiguredDescription: '将移除 {name}；该实例未配置 systemd 服务，不会自动重启——需手动重启远端后变更才生效。',
-  undoAvailable: '撤销最近变更',
-  recoveryUninstallRestart: '撤销最近变更（恢复）',
-  undoUnavailableNone: '没有可撤销的最近成功变更',
-  undoUnavailableFileBacked: '该变更由本地导入（文件夹或 .tgz 包）推送，v1 不支持回退',
-  undoDone: '已撤销最近变更',
-  undoNotEffective: '已执行但实例未恢复就绪——见状态行',
   startManagedDsh: '启动实例',
   startManagedDshBusy: '启动中…',
   startManagedDshOk: '已启动并恢复就绪',
   startManagedDshAccepted: '启动已接受，实例仍在恢复中…',
   startManagedDshFailed: '启动失败：{error}',
   startManagedDshRefused: '启动被拒绝：当前状态不可启动或运行时正忙（409 {code}），请刷新后重试',
-  restartNeededHint: '变更已应用，重启实例后生效',
-  // 对账入口 / 事前警告 / 横幅指引 / 服务提示。
-  pluginsDiffSummary: '与本地插件组合存在 {n} 处差异——展开对账',
-  pluginsDiffCollapse: '收起对账',
-  pluginsRestartUnconfiguredHint: '该实例未配置 systemd 服务：变更将只应用、不自动重启，需手动重启远端后才生效。',
+  // 版本冲突指引 / 服务提示。
   pluginDiagnosticVersionConflictHint: '对齐两个实例的 dsh 运行时（或插件）版本后此提示消失：在「本地实例」或该 gateway 连接的设置中打开 dsh 运行时 分节，切换/升级到一致版本。',
   serviceUnconfiguredHint: '未配置 systemd 服务：启动/停止/重启与「重启生效」不可用（编辑连接填写服务名后可启用）。',
 } satisfies Record<string, string>
@@ -451,8 +377,7 @@ export const en: Record<SettingsConnectionsKey, string> = {
   delete: 'Delete',
   deleteTitle: 'Delete this connection?',
   deleteDescription: 'The connection is removed from the registry, its transport disconnects, and its locally stored password or token is cleared; remote content is not touched.',
-  // The "Delete" word family is reserved for connection deletion; the plugin domain uses Remove
-  // (action layer) / Uninstall (consequence or composite recovery layer).
+  // The "Delete" word family is reserved for connection deletion.
   deleteConfirm: 'Delete',
   deleting: 'Deleting…',
   deleteNotEffective: 'Delete did not land: the main process refused the change (the connection state changed or the state directory is unwritable?)',
@@ -562,35 +487,11 @@ export const en: Record<SettingsConnectionsKey, string> = {
   pluginsLoading: 'Reading plugin manifests…',
   pluginsLocalCol: 'Local',
   pluginsRemoteCol: 'Remote',
-  pluginsRowAdd: 'Add',
-  pluginsRowUpdate: 'Update',
-  pluginsRowRemove: 'Remove',
   pluginsRowUnsyncable: 'Unsyncable',
-  pluginsRowMaterialize: 'Local path',
-  pluginsUnlockedLatest: 'The remote will install latest.',
-  pluginsRemoveRisk: 'This plugin will be removed from the remote (destructive).',
-  pluginsRemoveRiskN: 'These {n} plugins will be removed from the remote (destructive).',
-  pluginsRestartWarning: 'Restarting will interrupt the active sessions on that remote instance.',
-  pluginsDeferRestart: 'Apply changes only, don\u2019t restart (takes effect next restart)',
-  pluginsProfileNotInitialized: 'The remote profile is not initialized yet; it will be created on first apply.',
+  pluginsProfileNotInitialized: 'The remote profile is not initialized yet.',
   pluginsStartLocalFirst: 'The local instance is not started yet — start it first.',
-  pluginsApply: 'Apply',
-  pluginsApplied: 'Applied',
-  pluginsFailed: 'Failed',
-  pluginsSkipped: 'Skipped',
-  pluginsRestarted: 'Restarted',
-  pluginsRestartFailed: 'Plugins installed, but the restart failed — restart manually.',
-  pluginsDeferred: 'Installed; takes effect on the next restart.',
-  pluginsDeferredLocal: 'Installed. Activate it with “Restart dsh” in the dsh runtime section; the window reloads once (reopen Settings).',
-  pluginsVerifyFailed: 'Install completed but verification failed.',
-  pluginsReadyFailed: 'Restarted but the instance did not recover; the plugin set may be broken.',
   pluginsRefresh: 'Refresh',
-  pluginsNoDiff: 'Manifests match',
   pluginsNoLocalPlugins: 'No third-party plugins installed locally',
-  pluginsNoThirdParty: 'No third-party plugins to sync',
-  pluginsNoMatch: 'No matching plugins',
-  // npm search zero hits (distinct context from the list-filter pluginsNoMatch).
-  pluginsSearchNoMatch: 'No matching npm packages',
   chamberInjectedTitle: 'Chamber-managed components',
   chamberInjectedHint: 'Chamber-bundled components; re-push manually if auto-sync fails or versions drift',
   chamberRemoteLive: 'Remote: injected and live',
@@ -603,44 +504,14 @@ export const en: Record<SettingsConnectionsKey, string> = {
   // Mobile entry row (design 21 §6.2, the single packaged exception): gateway sources only, injected with the gateway release.
   chamberMobileRow: 'Mobile entry',
   chamberMobileHint: 'Injected with the gateway release',
-  pluginsSearchPlaceholder: 'Search by package name…',
   pluginsColName: 'Name',
   pluginsColCategory: 'Category',
-  pluginsColStatus: 'Status',
-  // Live-state column header for the third-party installed lists (Loader-derived; distinct from the diff table's row-kind column).
+  // Live-state column header for the third-party installed lists (Loader-derived).
   pluginsColLiveState: 'Live state',
-  pluginsColAction: 'Actions',
-  pluginsFilterAll: 'All',
-  pluginsFilterDiff: 'Differences',
-  pluginsCatAll: 'All categories',
   pluginsCatBundle: 'bundle',
   pluginsCatPlain: 'plain',
   pluginsCatClient: 'client',
-  pluginsConsistent: 'Consistent',
   pluginsRetry: 'Retry',
-  pluginsApplyTitle: 'Apply plugin changes?',
-  pluginsAddSpec: 'Package name or name@version',
-  pluginsAddSpecPlaceholder: 'e.g. pkg or pkg@^1.2.3',
-  pluginsAddSpecInvalid: 'Enter a valid package name or name@version (registry name + safe version only).',
-  pluginsAddInstall: 'Install',
-  // Short busy copy: busyTasks ("A change is running…") would make the install button jump wide while
-  // busy; this caps the jump (busyTasks stays for footer/apply states).
-  pluginsAddInstalling: 'Installing…',
-  pluginsAddSearch: 'Search',
-  pluginsAddSearchPlaceholder: 'Search npm registry…',
-  pluginsAddFolder: 'Import from local',
-  // Local-import busy copy (same family as pluginsAddInstalling): the import button shows
-  // "Importing…" while busy. The import source is a plugin source folder OR a ready .tgz archive
-  // (macOS picker offers both; the label says "local" to cover both).
-  pluginsImporting: 'Importing…',
-  pluginsRemoveRow: 'Remove',
-  // Row-remove confirm keys: distinct from the shared deleteConfirm ("Delete", kept for connection
-  // deletion) so the remove flow keeps one verb across button/title/description.
-  pluginsConfirmRemove: 'Remove',
-  pluginsRemoving: 'Removing…',
-  pluginsLocalRemoveTitle: 'Remove this local plugin?',
-  pluginsLocalRemoveDescription: 'The plugin and its dependencies are uninstalled from the local dsh instance; re-add it to restore.',
-  pluginsRestartUnconfigured: 'No systemd service is configured, so no automatic restart; the plugin is installed and takes effect on the next restart.',
   inventoryError: 'Could not read the plugin list',
   inventoryNoThirdParty: 'No third-party plugins',
   chamberRemoteFailed: 'Remote: injected (failed to load)',
@@ -650,11 +521,9 @@ export const en: Record<SettingsConnectionsKey, string> = {
   // neutral — no "activates on restart" promise is derivable for a bundle layer.
   thirdPartyLiveActive: 'Active',
   thirdPartyLiveStarting: 'Starting',
-  // Gateway local import (folder / .tgz) success with the controlled restart settled: the plugin is mounted on the running instance.
-  materializeLive: 'Installed and live (restarted)',
   chamberSyncNow: 'Re-sync chamber components',
   chamberSyncBusy: 'Syncing…',
-  chamberSyncUploaded: 'Synced; restart triggered',
+  chamberSyncUploaded: 'Synced; restart requested',
   chamberSyncSkipped: 'No chamber build artifacts on this desktop — sync skipped',
   chamberSyncUpToDate: 'Already up to date',
   chamberSyncFailed: 'Sync failed: ',
@@ -669,14 +538,8 @@ export const en: Record<SettingsConnectionsKey, string> = {
   chamberBadgeFailed: 'Failed to load',
   // Built-in table "version" column header (plan 24 B1.5).
   pluginsColVersion: 'Version',
-  // Unified model view (installed list / recovery surface) copy.
-  partialNofM: 'Completed {done} of {total}',
-  // Concatenated after partialNofM as the partial-result prefix separator (en: colon + space; zh: full-width colon).
+  // Banner title/detail separator (en: colon + space; zh: full-width colon).
   partialSep: ': ',
-  // Recovery banner (gateway recovery surface): the instance is down AND the journal holds an undoable latest success.
-  recoveryUndoBanner: 'The instance is not running; the most recent successful plugin change may be the cause \u2014 undo that change to restore the previous plugin set.',
-  busyTasks: 'A change is running…',
-  deferredOfflineNote: 'Will be cached and installed once the instance is ready \u2014 may run after you disconnect.',
   profileAbsentBanner: 'The instance is not initialized yet; the install intent will be cached and applied when it becomes ready.',
   profileCorruptBanner: 'The managed profile is corrupted (profile_corrupt). Restore or retry on the gateway.',
   // Read/write fence: a 409 on a read is the retryable "the instance is changing plugins" busy state — its own key,
@@ -686,7 +549,6 @@ export const en: Record<SettingsConnectionsKey, string> = {
   installedFromMask: 'Local copy',
   installedTab: 'Installed',
   installedEmpty: 'No third-party plugins installed yet',
-  installedAddHint: 'Install by package name in the add area below, or import a local source folder / .tgz plugin archive.',
   // Protected-row projection (backend rows drive it; the renderer only renders): five role badges + the
   // protected-row read-only hint + the old-gateway no-rows fallback hint.
   pluginsRoleComposition: 'Composition',
@@ -695,27 +557,13 @@ export const en: Record<SettingsConnectionsKey, string> = {
   pluginsRoleThirdParty: 'Third-party',
   pluginsRoleMaterialized: 'Materialized',
   pluginsProtectedHint: 'Protected: composition / chamber seed / runtime family \u2014 read-only',
-  pluginsLegacyGatewayHint: 'This gateway is older and provides no protected-row projection: only third-party rows are actionable; official and chamber rows are not listed here.',
-  removeRowConfirmTitle: 'Remove this plugin?',
-  removeRowConfirmDescription: 'Removing {name}; a restart applies the change when required.',
-  removeRowConfirmUnconfiguredDescription: 'Removing {name}; no systemd service is configured on this instance, so nothing restarts automatically \u2014 restart the remote manually for the change to take effect.',
-  undoAvailable: 'Undo latest change',
-  recoveryUninstallRestart: 'Undo latest change (restore)',
-  undoUnavailableNone: 'No recent successful change to undo',
-  undoUnavailableFileBacked: 'This change came from a local import (folder or .tgz archive); undo is unavailable in v1.',
-  undoDone: 'Undo complete',
-  undoNotEffective: 'Executed, but the instance did not recover \u2014 see status',
   startManagedDsh: 'Start instance',
   startManagedDshBusy: 'Starting…',
   startManagedDshOk: 'Started and ready',
   startManagedDshAccepted: 'Start accepted; the instance is still recovering…',
   startManagedDshFailed: 'Start failed: {error}',
   startManagedDshRefused: 'Start refused: the current state is not startable or the runtime is busy (409 {code}); refresh and retry',
-  restartNeededHint: 'Applied; restart the instance to activate',
-  // reconcile entry / pre-warning / banner guidance / service hint.
-  pluginsDiffSummary: 'There are {n} differences vs the local plugin set \u2014 expand reconcile',
-  pluginsDiffCollapse: 'Collapse reconcile',
-  pluginsRestartUnconfiguredHint: 'No systemd service is configured on this instance: changes will be applied without an automatic restart \u2014 restart the remote manually for them to take effect.',
+  // Version-conflict guidance / service hint.
   pluginDiagnosticVersionConflictHint: 'This notice clears once both instances share a dsh runtime (or plugin) version: open the dsh runtime section in the settings of the local instance or of the involved gateway connection and switch/upgrade to a matching version.',
   serviceUnconfiguredHint: 'No systemd service is configured: start/stop/restart and \u201cRestart to apply\u201d are unavailable (fill in the service name when editing the connection to enable them).',
 }

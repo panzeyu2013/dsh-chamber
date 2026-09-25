@@ -44,7 +44,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 /** The official conversation header utilities slot (beside "Session log"). */
-export const OPEN_IN_HEADER_SLOT = 'conversation.session.header.utilities' as const
+const OPEN_IN_HEADER_SLOT = 'conversation.session.header.utilities' as const
 const NS = 'dsh-chamber.open-in'
 
 export const inject = ['slots', 'locale']
@@ -115,9 +115,12 @@ export function apply(ctx: ClientContext): void {
 
   ctx.slots.inject(OPEN_IN_HEADER_SLOT, () => ctx.slots.register({
     name: OPEN_IN_HEADER_SLOT,
-    // Our own id, deliberately NOT the official row's `open-in-app`: the registry
-    // THROWS on a duplicate list id at the same priority, so a future boot graph
-    // with the official row would break this surface instead of duplicating it.
+    // Our own id, deliberately NOT the official row's `open-in-app`. The official
+    // client row now loads from the host graph (chamber-covered.ts no longer skips
+    // it) for its file-level seats; its own header entry stays inert on this page
+    // because it reads document-relative `open-in-app/*` routes that resolve to
+    // the control-plane origin. Distinct list ids are what let both entries
+    // coexist: the registry THROWS on a duplicate id at one priority.
     id: 'open-in',
     // Row order ascends by `order` (default 0). -10 is the official `open-in-app`
     // row's own value, which keeps the vendor "Session log" entry (0) at the far

@@ -7,7 +7,7 @@
 import { Fragment } from 'react'
 import clsx from 'clsx'
 import {
-  IconArchiveOutline20, IconBranchOutline16, IconEditOutline16, IconEllipsisOutline16, Menu,
+  IconArchiveOutlineRegular, IconBranchOutlineRegular, IconEditOutlineRegular, IconEllipsisOutlineRegular, Menu,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChamberServerAggregate, ChamberServerWorkspace } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { relativeTimeBucket } from '@dsh-chamber/dsh-chamber-client-core/derive'
@@ -210,12 +210,12 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
                                           {
                                             id: 'rename',
                                             label: t('action.rename'),
-                                            icon: <IconEditOutline16 size={14} />,
+                                            icon: <IconEditOutlineRegular size={14} />,
                                           },
                                           {
                                             id: 'fork',
                                             label: t('menu.fork'),
-                                            icon: <IconBranchOutline16 size={14} />,
+                                            icon: <IconBranchOutlineRegular size={14} />,
                                           },
                                           {
                                           // 归档动词只在这里的行菜单：归档只隐藏行（不触碰会话日志），
@@ -224,7 +224,7 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
                                           // 16，才与旁边按 14 画的 16 原生字形同视觉重量（flex 槽容忍 +2px）。
                                             id: 'archive',
                                             label: t('menu.archiveSession'),
-                                            icon: <IconArchiveOutline20 size={16} />,
+                                            icon: <IconArchiveOutlineRegular size={16} />,
                                           },
                                         ]}
                                         anchor={(
@@ -242,7 +242,7 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
                                               toggleMenu(sessionKey)
                                             }}
                                           >
-                                            <IconEllipsisOutline16 size={16} />
+                                            <IconEllipsisOutlineRegular size={16} />
                                           </button>
                                         )}
                                       />

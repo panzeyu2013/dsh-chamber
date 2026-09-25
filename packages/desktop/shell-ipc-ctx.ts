@@ -54,7 +54,6 @@ export interface ShellIpcDeps {
     | 'webViewLoading'
     | 'webViewContentAlive'
     | 'showMessage'
-    | 'pickPluginSource'
     | 'openExternal'
     | 'openPath'
     | 'showItemInFolder'
@@ -68,12 +67,10 @@ export interface ShellIpcDeps {
 export interface ShellIpcCtx {
   deps: ShellIpcDeps
   MACOS_NOTIFICATION_SETTINGS_URL: string
-  NPM_SEARCH_MAX_BODY_BYTES: number
   applyBadgePresentation: (count: number) => boolean
   applySettingsPatch: (patch: Partial<ChamberSettings>) => Promise<{ ok: true } | { ok: false; error: string }>
   captureVscodeSource: (instanceId: string) => NotificationSourceToken | null
   chamberSettingsStatus: () => ChamberSettingsStatus
-  confirmPluginAction: (copy: { message: string; detail: string }) => Promise<{ ok: true } | { ok: false; error: string } | { cancelled: true }>
   confirmRuntimeMutation: (message: string, detail: string, confirmLabel: string) => Promise<boolean>
   deepLinkRendererReady: boolean
   drainPendingNotificationOpens: () => boolean
@@ -97,7 +94,6 @@ export interface ShellIpcCtx {
   quittingLeaf: () => boolean
   reconcileBadgeCount: () => void
   runRuntimeCheck: () => Promise<ReturnType<DshRuntimeController['getState']>>
-  verifyLocalProfileFamily: (facts: PluginProtectionFacts) => { ok: true } | { ok: false; error: string }
   portableHostSeeds: () => readonly ChamberHostPackageSeed[]
   version: string
   state: ShellMutableState

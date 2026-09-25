@@ -14,12 +14,12 @@ drawer layout, touch targets, safe areas, PWA phased.
 - `src/client/index.ts` — browser half: asset injection (viewport/stylesheet/
   theme-color), frame stamping (`ROLE_SLOT_KEYS` maps the plugin's roles onto
   the alpha.2 slot keys `sidebar` / `main` / `rightbar`),
-  layout-source-driven drawer scroll lock, composer behavior, drawer tap
+  official-frame-attribute-driven drawer scroll lock, composer behavior, drawer tap
   self-heal, settings-sheet section-switch polish, the stranded official
   hover-card watchdog, `shell.overlay` drawer
   toggle (the official panel glyph) + backdrop. The toggle IS the official
   control, not a look-alike (2026-09-11 upstream-alignment T17a): it renders
-  `IconPanelLeftOutline16` — the glyph the official sidebar toggle draws, from
+  `IconPanelLeftOutlineRegular` — the glyph the official sidebar toggle draws, from
   the `ui-primitives` client baseline module, so the bundle needs no package
   dependency for it — and it carries the official state-carrying `aria-label`
   pair with no `aria-haspopup`. Its ARIA is the official NAME plus one
@@ -388,7 +388,7 @@ hover-capable pointer, and every desktop, keeps official behavior). It never
 touches the official package: for a card matched to exactly one wrapper by the
 atom's own anchoring geometry (`card.left = wrapper.right + 8`; `card.top =
 wrapper.top`, or the bottom-clamped `card.bottom = innerHeight − 8`) and the
-two CSS-module class tokens (`_card_1b2ny_*` / `_root_1b2ny_*`), it dispatches
+two CSS-module class tokens (`_card_38jqx_*` / `_root_38jqx_*`), it dispatches
 ONE bubbling `pointerout` on the wrapper with no related target. React's
 delegated enter/leave path reads that as "the pointer left the window" and runs
 the wrapper's `onPointerLeave`, which — with the card in the DOM, i.e. the
@@ -414,9 +414,10 @@ idempotent, and is installed/uninstalled by `ctx.effect` behind one
    reopens on the next leave-and-re-enter (or tap). No click, navigation or
    focus change is involved.
 3. The class tokens are pinned to the vendored build, like every other anchor
-   in this package, and must be re-audited when the pin moves. A stale token
-   degrades the watchdog to a silent no-op (no card ever matches) — never to a
-   misfire.
+   in this package, and must be re-anchored when the pin moves. A stale token
+   now fails `verify-mobile-anchors.mjs` hard (exit 1) instead of silently
+   no-op'ing the watchdog; the matcher itself stays fail-closed (no card ever
+   matches) — never a misfire.
 
 ## Drawer taps & keyboard (touch tier)
 
@@ -531,9 +532,13 @@ pnpm run test:mobile
 
 ## Anchor baseline
 
-Official dsh **v0.1.5-rc.2** DOM, empirically audited via CDP (at v0.1.5-alpha.2) and
-re-anchored when the vendored pin moved — every anchor below still resolves in the
-rc.2 tree. The alpha.2 → rc.1 delta (the `ui-sidebar-*` guide/preview rows, the
+Official dsh DOM, empirically audited via CDP at **v0.1.5-alpha.2** and re-anchored
+at **v0.1.5-rc.2** — every anchor below resolved in the rc.2 tree. Under the current
+pin (v0.1.7-rc.2) the strict anchor gate resolves all 47 property anchors and the
+two build-time CSS-module hash tokens with 0 misses
+(`verify-mobile-anchors.mjs --require-anchor-root`); the hash tokens were re-anchored
+to the served rc.2 bundle and a zero-hit token is now a hard failure (see below). The
+alpha.2 → rc.1 delta (the `ui-sidebar-*` guide/preview rows, the
 `ui-primitives` `CodeBlock` wrapper, the `ui-chat` stats dialog, two `z-index`
 additions in `ui-dockkit`'s CSS and a slot-catalog doc pointer) and the rc.1 → rc.2
 delta (feedback-dialog, delivery-card and code-file-icon refinements in
@@ -550,9 +555,10 @@ dialog renders INSIDE the sidebar DOM (no body portal; the drawer open state
 must use `transform: none` — an identity transform still creates a containing
 block).
 
-The vendored base is now **v0.1.5-rc.2** (harness pin fb2c4b9e698e); the anchors
-above were re-verified against the alpha.2 source (2026-09 re-anchor) and hold at
-rc.2 (whose client deltas are listed above and leave those anchors, and the
+The vendored base is now **v0.1.7-rc.2** (harness pin `477b4f4205`; single source
+`harness.commit`). Historical audit record: the anchors above were re-verified
+against the alpha.2 source (2026-09 re-anchor) and held at v0.1.5-rc.2 (whose
+client deltas are listed above and left those anchors, and the
 z-index layers this plugin stacks against, untouched), which also
 established: the composer seat is a flow child of `[data-conversation-scroll]`
 (sticky only while the content overflows), `[data-input-scroll]` is the
@@ -655,21 +661,26 @@ too, so they are listed here rather than only in the feature section above):**
 `official-hover-card.ts` matches the official atom by three facts, all re-audited
 when the pin moves:
 
-- `_root_1b2ny_3` and `_card_1b2ny_13` — the ui-primitives `HoverCard` module's
+- `_root_38jqx_3` and `_card_38jqx_9` — the ui-primitives `HoverCard` module's
   CSS-module class tokens in the SERVED bundle. They are build-time hashes: the
-  current pin (0.1.5-rc.2) emits them in
-  `@deepseek-ai/dsh-web-frontend/dist/assets/index-*.css` (verified byte-for-byte
-  on the bundled copy under `packages/desktop/vendor/dsh/`, which also carries
-  251 unique names of the same `_<local>_<hash>_<idx>` shape and none of the
-  `[hash]_[local]` shape the older audit recorded). A pin move changes the hash
-  and the watchdog degrades to a silent no-op (fail closed, never a misfire), so
-  this is the one anchor in the package with no attribute-shaped fallback;
+  rc.2 build emits them in `@deepseek-ai/dsh-web-frontend/dist/assets/index-*.js`
+  (verified byte-for-byte on the bundled copy under `packages/desktop/vendor/dsh/`,
+  where minified `Pp="_root_38jqx_3"` / `Rp="_card_38jqx_9"` /
+  `zp="_copyable_38jqx_21"`; the matching `index-*.css` carries the same two class
+  selectors). The rc.2 re-anchor replaced the previous pin's `_root_1b2ny_*` /
+  `_card_1b2ny_*` pair; `verify-mobile-anchors.mjs` now **hard-fails** a zero-hit
+  hash token (it was advisory before), so the next pin move forces the re-anchor
+  instead of degrading the watchdog to a silent no-op (fail closed, never a
+  misfire), and this remains the one anchor in the package with no
+  attribute-shaped fallback;
 - the anchoring geometry `card.left = wrapper.right + 8`, `card.top =
   wrapper.top` (or the bottom-clamped `card.bottom = innerHeight − 8`);
-- the card box being the only `[class*="_card_1b2ny_"]` element inside that
+- the card box being the only `[class*="_card_38jqx_"]` element inside that
   wrapper.
 
-`test/dom/official-hover-card.test.ts` pins the constants and the src↔artifact
-lockstep, and C8 pins the shipped bytes; **no gate can see the served bundle's
-hash change** (it is derived state outside the repo), which is exactly why this
-entry exists.
+`test/dom/official-hover-card.test.ts` pins the constants, the served class
+strings and the src↔artifact lockstep, and C8 pins the shipped bytes;
+`verify-mobile-anchors.mjs` is the gate that sees the served bundle's hash move
+(against the vendored `dsh-web-frontend` artifact under
+`packages/desktop/vendor/dsh/`; CI without an anchor tree still fail-softs), which
+is exactly why this entry exists.

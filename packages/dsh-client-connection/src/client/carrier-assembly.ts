@@ -8,7 +8,8 @@ import { resolveInstanceBasePath } from '../api-path.ts'
 import type { RpcFetch, RpcStreamOpen } from './rpc.ts'
 
 export interface CarrierTransport {
-  fetch: RpcFetch
+  /** Page transport fetch hook; absent when the transport supplies an explicit decoded RPC. */
+  fetch?: RpcFetch
   openStream?: RpcStreamOpen
 }
 
@@ -34,10 +35,8 @@ export function assembleConnectionCarriers<Rpc>(
   const basePath = resolveInstanceBasePath(explicitBasePath)
   const rpc = factories.createRpc({
     basePath,
-    ...(transport === undefined ? {} : {
-      doFetch: transport.fetch,
-      ...(transport.openStream === undefined ? {} : { openStream: transport.openStream }),
-    }),
+    ...(transport?.fetch === undefined ? {} : { doFetch: transport.fetch }),
+    ...(transport?.openStream === undefined ? {} : { openStream: transport.openStream }),
   })
   return { basePath, rpc }
 }

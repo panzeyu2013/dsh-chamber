@@ -4,8 +4,7 @@
  * search (`/-/v1/search`) from these origins, so the trust anchor stays explicit
  * (切换源即切换信任边界): a custom registry origin only becomes reachable after it passes
  * this same validation. The structure mirrors main.ts `isAllowedReleaseUrl` (new URL +
- * origin whitelist + userinfo rejection + decode-then-re-normalize); `desktop_npm_search`
- * folds onto the same gate. Pure logic, no IPC.
+ * origin whitelist + userinfo rejection + decode-then-re-normalize). Pure logic, no IPC.
  */
 /** npm 官方 registry origin —— 默认源与白名单首项的单一来源（gateway 也消费它）。 */
 export const DEFAULT_REGISTRY_ORIGIN = 'https://registry.npmjs.org'

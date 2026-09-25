@@ -12,8 +12,10 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
   classifyPluginGraphOutcome, graphEntryImmediatelyMessage, graphEntryLabel,
-  graphHttpFailureMessage, wrapGraphTransportFailure,
+  wrapGraphTransportFailure,
 } from '@dsh-chamber/dsh-chamber-client-core/plugin-graph-classify'
+// Test-only internal: a package-internal deep import keeps it off the public subpath face.
+import { graphHttpFailureMessage } from '../../../dsh-chamber-client-core/src/plugin-graph-classify.ts'
 import type { UnaryPostOutcome } from '@dsh-chamber/dsh-chamber-client-core/wire-common'
 import { normalize, stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 

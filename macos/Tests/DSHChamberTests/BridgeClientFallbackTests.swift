@@ -28,9 +28,9 @@ final class BridgeClientFallbackTests: XCTestCase {
                            "\(method) 必须 loud 拒绝")
         }
         // 未实现方法保持既有 loud 形态。
-        let unknown = bridge.defaultEdgeResponse(method: "pickPluginSource", payload: nil)
+        let unknown = bridge.defaultEdgeResponse(method: "unknown-edge-method", payload: nil)
         XCTAssertNil(unknown.result)
-        XCTAssertEqual(unknown.error, "swift-edge-unimplemented:pickPluginSource")
+        XCTAssertEqual(unknown.error, "swift-edge-unimplemented:unknown-edge-method")
     }
 
     /// 打包态 DSH_CHAMBER_SHELL_* 从基底与 overlay 都剔除；DSH_* / PATH 等照常保留。

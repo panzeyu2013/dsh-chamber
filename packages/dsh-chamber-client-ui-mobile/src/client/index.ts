@@ -4,10 +4,10 @@
  * enter-to-newline, editability recovery, layout-source-driven drawer) are
  * re-implemented against the dsh DOM on the chamber base (centre column =
  * keyed main slot, right column = rightbar; see markup.ts ROLE_SLOT_KEYS).
- *  - panel state comes from the two-tier layout source (layout-facts.ts): the
- *    chamber layout fork's layoutFacts service when present, else the official
- *    data-sidebar-collapsed attribute (the gateway-hosted instance runs the
- *    OFFICIAL ui-layout).
+ *  - panel state comes from the layout source (layout-facts.ts): the official
+ *    frame's data-sidebar-collapsed attribute (the gateway-hosted instance runs
+ *    the OFFICIAL ui-layout; the chamber layout fork has no cross-plugin layout
+ *    service, and this plugin never mounts on the desktop renderer).
  *  - frame stamping is per instance root and remount-safe; the behavior
  *    effects are document-level single-instance BY DESIGN (the gateway
  *    deployment is single-shell; a future multi-shell renderer mount must
@@ -66,8 +66,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 const NS = 'dsh-chamber.mobile'
 
 // Official services only — the gateway-hosted instance has NO chamber layout
-// fork, so layoutFacts must NOT be a hard inject (the layout source probes it
-// at runtime; layout-facts.ts). sessions is the OFFICIAL session-list service:
+// fork, and the layout source observes the official frame attribute directly
+// (layout-facts.ts). sessions is the OFFICIAL session-list service:
 // the mobile DOM carries no session-id anchor, so it is the only authoritative
 // "which session is the reader on" source.
 export const inject = ['slots', 'locale', 'layout', 'sessions']
@@ -188,7 +188,7 @@ export function apply(ctx: ClientContext): void {
   // so locking document.body alone does not stop iOS background scrolling: lock
   // the scroll containers, body as an overscroll backstop. The drawer state
   // comes from the shared layout source (created ONCE per apply). ----
-  const layoutSource = createLayoutFactSource(ctx)
+  const layoutSource = createLayoutFactSource()
   ctx.effect(() => {
     let lastLocked = false
     const lockScroll = (locked: boolean): void => {

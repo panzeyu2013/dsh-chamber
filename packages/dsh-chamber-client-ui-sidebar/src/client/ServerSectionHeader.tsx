@@ -7,8 +7,8 @@
 import type { RefObject } from 'react'
 import clsx from 'clsx'
 import {
-  IconChevronRightOutline14, IconLoadingOutline16, IconPersonalizationOutline16,
-  IconProjectAddOutline16, IconSearchOutline16, IconTrashOutline16, Menu, Tooltip,
+  IconChevronRightOutlineRegular, IconLoadingOutlineRegular, IconPersonalizationOutlineRegular,
+  IconProjectAddOutlineRegular, IconSearchOutlineRegular, IconTrashOutlineRegular, Menu, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
@@ -202,7 +202,7 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                       toggleSourceFold(server.id)
                     }}
                   >
-                    <IconChevronRightOutline14 size={15} className={cc.sourceFoldChevron} />
+                    <IconChevronRightOutlineRegular size={15} className={cc.sourceFoldChevron} />
                     <IconMonitorOutline16 size={15} className={cc.sourceFoldGlyph} />
                   </button>
                   <span className={cc.sourceLabel}>{server.label}</span>
@@ -217,7 +217,7 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                     role={sourceNote === '' ? 'status' : undefined}
                   >
                     {sourceStatusKind(server) === 'busy' ? (
-                      <IconLoadingOutline16 className={cc.statusSpinner} size={12} />
+                      <IconLoadingOutlineRegular className={cc.statusSpinner} size={12} />
                     ) : (
                       <span
                         className={clsx(
@@ -286,7 +286,7 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                                 setSortMenuOpen(prev => (prev === server.id ? null : server.id))
                               }}
                             >
-                              <IconPersonalizationOutline16 size={14} />
+                              <IconPersonalizationOutlineRegular size={14} />
                             </button>
                           </Tooltip>
                         )}
@@ -307,7 +307,7 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                         >
                           {/* 加的是 WORKSPACE 不是会话：用官方 project-add 字形，
                               不用通用 `+`。 */}
-                          <IconProjectAddOutline16 size={14} />
+                          <IconProjectAddOutlineRegular size={14} />
                         </button>
                       </Tooltip>
                     )}
@@ -337,7 +337,7 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                             }
                           }}
                         >
-                          <IconSearchOutline16 size={14} />
+                          <IconSearchOutlineRegular size={14} />
                         </button>
                       </Tooltip>
                     )}
@@ -357,7 +357,7 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                             onOpenArchiveCleanup(server)
                           }}
                         >
-                          <IconTrashOutline16 size={14} />
+                          <IconTrashOutlineRegular size={14} />
                         </button>
                       </Tooltip>
                     )}

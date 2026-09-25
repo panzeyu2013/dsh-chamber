@@ -315,6 +315,14 @@ session-echo ledger (`shared/session-echo.ts`) and its own single funnel
   the current source), the wide/rail fold state machine (slide + crossfade,
   rail-in animation), the pointer-followed scrollbar discipline, the foot
   (`sidebar.footer.action` + `sidebar.settings`), i18n namespace `sidebar` (zh key source; `src/client/locales.ts`).
+- The frame's `shell.leading` window-chrome seat (`SidebarLeadingControls.tsx`):
+  on macOS the collapsed sidebar hides the whole column, so the frame mounts
+  this seat beside the traffic lights and the occupant restores the reopen
+  toggle + New Session there, each carrying its effective keycap and
+  `aria-keyshortcuts` from the page shortcut catalog (`ctx.shortcuts.catalog`;
+  absent while the command is unbound). It reuses the shell's inject face and
+  `sidebar` locale (no id/order/priority — official ui-sidebar parity); the
+  control band keeps the frame-priced 28 + 8 + 28 geometry.
 
 ## Shared gateway-runtime face (design 21 §5.2)
 

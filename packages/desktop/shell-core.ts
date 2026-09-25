@@ -57,23 +57,19 @@ export const MACOS_NOTIFICATION_SETTINGS_URL =
   'x-apple.systempreferences:com.apple.Notifications-Settings.extension';
 import { BoundedRateLimiter, MAX_PENDING_NOTIFICATION_OPENS, NotificationSourceIncarnations, NotificationSourceProofs, advanceNotificationClaimGeneration } from './notifications.ts';
 import { readCurrentPointerState, readOverrideState, shouldInvalidate, validateVersionTree } from '@dsh-chamber/dsh-runtime';
-// F 组编排纯模块（plugin-sync / ssh-apply-rows / plugin-tarball）直接 import；
-// ssh-plugin-journal / plugin-sync 的现实例与目标闭包束经 ctx 注入——自动
-// seed/撤销路径与 F 组注册体必须共享同一实例（单写者/单飞语义不分叉）。
-import { portableChamberHostPackageSeeds, shouldPreferPinnedRuntimeLockfile, WEB_PROFILE } from './plugin-sync.ts';
+// F 组编排纯模块（plugin-sync）直接 import；plugin-sync 的现实例与目标闭包束经
+// ctx 注入——自动 seed 路径与 F 组 seed 注册体必须共享同一实例（单飞语义不分叉）。
+import { portableChamberHostPackageSeeds, shouldPreferPinnedRuntimeLockfile } from './plugin-sync.ts';
 import type { ChamberHostPackageSeed, PluginProtectionFacts } from './plugin-sync.ts';
 // 插件受保护集合判定（design 21 §6.11）：control-plane-module 纯函数直接 import，
-// 事实输入经 ctx。localProtectionFacts / verifyLocalProfileFamily 为 core 内助手
-// （F/H 组注册体共用同一实现）。
+// 事实输入经 ctx。localProtectionFacts 为 core 内助手（本地清单读面用）。
 import {
-  describeFamilyFindings,
   resolveRuntimeFamily,
-  verifyProfileFamilyConsistency,
 } from './control-plane-module.ts';
 
 // —— Extracted seam types (R4 P7 type-cycle break; leaf headers carry the contract).
 import type { HostEdges } from './host-edges.ts';
-export type { HostEdges, HostMessageOptions, HostPluginSourcePick, HostSetBadgeResult, NativeNotificationSpec } from './host-edges.ts';
+export type { HostEdges, HostMessageOptions, HostSetBadgeResult, NativeNotificationSpec } from './host-edges.ts';
 export type { NotificationOpenIntent, NotificationSourceToken } from './notifications.ts';
 export type { IpcRegistrar, ShellAssemblyCtx, SshPluginTarget } from './shell-assembly-ctx.ts';
 import type { ShellIpcCtx, ShellIpcDeps } from './shell-ipc-ctx.ts';
@@ -340,8 +336,6 @@ export function scanDeepLinkUrls(argv: readonly string[]): string[] {
  *  「窗口已关、主进程永久滞留」。正常约 1–2s（子进程短窗口 + 并行化），5s 只为
  *  异常路径兜底。 */
 export const QUIT_CLEANUP_TIMEOUT_MS = 5_000;
-/** npm search JSON body 上限（256 KiB，约束恶意/异常 registry）。 */
-export const NPM_SEARCH_MAX_BODY_BYTES = 256 * 1024;
 
 // userData 作用域路径模板：<userData> 下每个持久文件/state 根只在此拼写一次。
 /** <userData>/chamber-settings.json。 */
@@ -862,7 +856,6 @@ export function installIpcHandlers(deps: ShellIpcDeps): void {
     // publishRegistryTransition 为装配侧宿主叶。F/H/G/I/J/K 组字段语义见 ShellAssemblyCtx
     // 与各字段注释；K 组共享闭包与事务槽的替换规则见 K 组段注释。
     transportManager: sm,
-    localDshHome,
     chamberHostPackageSeeds,
     runtimeController: runtimeInstance,
     runtimeOperationBusy,
@@ -1013,9 +1006,7 @@ export function installIpcHandlers(deps: ShellIpcDeps): void {
     applySettingsPatch,
     reconcileBadgeCount,
     get MACOS_NOTIFICATION_SETTINGS_URL() { return MACOS_NOTIFICATION_SETTINGS_URL },
-    get NPM_SEARCH_MAX_BODY_BYTES() { return NPM_SEARCH_MAX_BODY_BYTES },
     get captureVscodeSource() { return captureVscodeSource },
-    get confirmPluginAction() { return confirmPluginAction },
     get confirmRuntimeMutation() { return confirmRuntimeMutation },
     get deepLinkRendererReady() { return deepLinkRendererReady },
     get drainPendingNotificationOpens() { return drainPendingNotificationOpens },
@@ -1035,7 +1026,6 @@ export function installIpcHandlers(deps: ShellIpcDeps): void {
     get pendingRendererIntents() { return pendingRendererIntents },
     get projectInstances() { return projectInstances },
     get runRuntimeCheck() { return runRuntimeCheck },
-    get verifyLocalProfileFamily() { return verifyLocalProfileFamily },
     get portableHostSeeds() { return portableHostSeeds },
     version,
     state: shellMutableState,
@@ -1048,25 +1038,19 @@ export function installIpcHandlers(deps: ShellIpcDeps): void {
 
   registerConnectionHandlers(shellIpcCtx);
 
-  // 插件受保护集合判定：F 事实解析与装后族一致性复验（F/H 组共用）。事实输入全部
-  // 来自 ctx：活动树解析 + 内建线世代 + 锚锁文件 + profile 目录。①「同版优先锚」：
-  // 用户选装/env 树不得用内建锚判跨代（仅活动世代 == 内建世代时用锚），env 树有内建
-  // 锚兜底；② familySource 恒 'runtime'，解析失败 → 保守降级（官方 scope install 一律拒）。
+  // 插件受保护集合判定：F 事实解析（F/H 组共用）。事实输入全部来自 ctx：活动树解析 +
+  // 内建线世代 + 锚锁文件。①「同版优先锚」：用户选装/env 树不得用内建锚判跨代（仅活动
+  // 世代 == 内建世代时用锚），env 树有内建锚兜底；② familySource 恒 'runtime'，解析失败
+  // → 读面退到 B₀ ∪ S。
   /** 本 profile 的保护事实：F 从活动运行时的锁文件闭包解析（平台无关，绝不用源线
-   *  vendor 树）+ 有效运行时版本 + profile manifest 是否已存在（缺失 ⇒ 写面推迟，
-   *  首次安装才创建它）。 */
+   *  vendor 树）；读面据此派生 P，缺 F 时退到 B₀ ∪ S。 */
   /** 锁文件族事实的单条 memo（key 见 memoKey）。 */
   const familyFactsMemo = createKeyedMemo<{
     names: readonly string[] | null;
-    versions: PluginProtectionFacts['familyVersions'];
   }>();
   const localProtectionFacts = (): PluginProtectionFacts => {
     const resolved = resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspacePath);
     let familyNames: readonly string[] | null = null;
-    // 同一解析的版本半边：装后复验用运行时实际提供的版本来判定已装族成员
-    // （重定 scope 的 vendored 包保留上游版本，而非世代字符串）；缺 key = 无版本
-    // 事实 ⇒ 走世代分支。
-    let familyVersions: PluginProtectionFacts['familyVersions'] = null;
     const activePath = resolved.path;
     if (activePath !== null) {
       // 内建锚只描述内建运行时线。用户选装/env 树是另一条线，其自己的锁文件才是
@@ -1074,10 +1058,9 @@ export function installIpcHandlers(deps: ShellIpcDeps): void {
       // 优先锚（源线锁文件带 opt-in 段，会被 trust criterion 拒绝）。
       const usePinned = shouldPreferPinnedRuntimeLockfile(resolved.version, bundledVersion);
       const pinnedPath = pinnedRuntimeLockfilePath();
-      // 本函数在每次本地插件 IPC 读/判定时运行，最大 512 KiB 的锁文件解析由本 memo
+      // 本函数在每次本地插件清单 IPC 读取时运行，最大 512 KiB 的锁文件解析由本 memo
       // 挡住；memo key 为完整输入身份（活动树 + 版本 + 来源、锚选择、两个候选锁文件
-      // 的 mtime+size），文件变化或运行时切换即重载。profileState 故意不 memo：首次
-      // 安装才创建 profile manifest。
+      // 的 mtime+size），文件变化或运行时切换即重载。
       const memoKey = [
         activePath, resolved.version ?? '', resolved.source ?? '',
         usePinned ? 'pinned' : 'tree', bundledVersion ?? '', pinnedPath ?? '',
@@ -1088,83 +1071,27 @@ export function installIpcHandlers(deps: ShellIpcDeps): void {
           pinnedLockfilePath: usePinned ? pinnedPath : null,
         });
         // dev/env 树（DSH_CHAMBER_DSH_PATH）在另一世代通常带源线锁文件与源线树，
-        // 会解析不出族事实并让写面降级为「官方安装一律拒」。显式开发 override 仍可用
-        // 内建锚兜底；用户选装的已发布运行时绝不用这个替身（那正是本门修复的跨线误判）。
+        // 会解析不出族事实并让读面退到 B₀ ∪ S。显式开发 override 仍可用内建锚兜底；
+        // 用户选装的已发布运行时绝不用这个替身（那正是本门修复的跨线误判）。
         if (!resolvedFamily.ok && !usePinned && resolved.source === 'env') {
           resolvedFamily = resolveRuntimeFamily(activePath, { pinnedLockfilePath: pinnedPath });
         }
         return {
           names: resolvedFamily.ok ? resolvedFamily.names : null,
-          versions: resolvedFamily.ok ? resolvedFamily.versions : null,
         };
       });
       familyNames = family.names;
-      familyVersions = family.versions;
     }
-    const profileManifest = path.join(localDshHome, 'profiles', WEB_PROFILE, 'package.json');
     return {
       familyNames,
-      familyVersions,
-      runtimeVersion: resolved.version,
-      profileState: existsSync(profileManifest) ? 'ready' : 'absent',
       familySource: 'runtime',
     };
   };
 /** 可移植（非 localOnly）chamber host 包种子（另一台主机上「应该有什么」只读本列表；localOnly 空 sourceDir 不算缺件）。 */
   const portableHostSeeds = (): readonly ChamberHostPackageSeed[] =>
     portableChamberHostPackageSeeds(chamberHostPackageSeeds);
-  /** 装后族一致性复验：安装成功还不算成功，直到 profile 树被证明一致——被提升的
-   *  传递依赖若内建发布不提供（outside-family）或位于另一世代（generation-mismatch），
-   *  正是单看直接 spec 看不到的组合拆分。发现即 loud 且操作报失败，不做自动回滚。 */
-  const verifyLocalProfileFamily = (facts: PluginProtectionFacts): { ok: true } | { ok: false; error: string } => {
-    if (!Array.isArray(facts.familyNames) || facts.familyNames.length === 0) return { ok: true };
-    const familyVersions = facts.familyVersions ?? null;
-    const verdict = verifyProfileFamilyConsistency({
-      profileDir: path.join(localDshHome, 'profiles', WEB_PROFILE),
-      familyNames: facts.familyNames,
-      runtimeVersion: facts.runtimeVersion ?? null,
-      familyVersions,
-    });
-    if (verdict.ok) {
-      // A skip is NOT a pass: record it loudly (the install itself succeeded,
-      // skip 不是通过：loud 记录（安装成功但 profile 树未被证明一致）。
-      if (verdict.skipped !== undefined) {
-        console.warn(`[dsh-chamber] 插件族一致性复验被跳过：${verdict.skipped}`);
-      }
-      return { ok: true };
-    }
-    return {
-      ok: false,
-      error: `installed, but the profile tree no longer matches the instance runtime: ${describeFamilyFindings(verdict.findings, facts.runtimeVersion ?? null, familyVersions)}`,
-    };
-  };
-
-  // —— F 组：ssh plugin 6 注册体（全零 Electron）。编排纯模块直接 import；共享现
-  // 实例/目标闭包束经 ctx（自动 seed/撤销与 F 组共用同一实例）。宿主对话框腿 =
-  // edges.showMessage / pickPluginSource；无存活主窗预检 = edges.mainWindowAlive。
-  // confirmPluginAction 语义：无窗 → 'native confirmation unavailable'；response===1
-  // （'继续'）→ ok；否则 cancelled；异常 → loud 'native confirmation failed: …'。
-  const confirmPluginAction = async (
-    copy: { message: string; detail: string },
-  ): Promise<{ ok: true } | { ok: false; error: string } | { cancelled: true }> => {
-    if (!deps.edges.mainWindowAlive()) return { ok: false, error: 'native confirmation unavailable' };
-    try {
-      const response = await deps.edges.showMessage({
-        type: 'warning',
-        title: copy.message,
-        message: copy.message,
-        detail: copy.detail,
-        buttons: ['取消', '继续'],
-        defaultId: 0,
-        cancelId: 0,
-        noLink: true,
-      });
-      return response === 1 ? { ok: true } : { cancelled: true };
-    } catch (error) {
-      return { ok: false, error: `native confirmation failed: ${describeUnknownError(error)}` };
-    }
-  };
-
+  // —— F 组：ssh plugin 读面 + seed 注册体（全零 Electron）。编排纯模块直接 import；
+  // 共享现实例/目标闭包束经 ctx（自动 seed 与手动补种共用同一实例）。
   registerSshPluginHandlers(shellIpcCtx);
 
   registerGatewayPluginHandlers(shellIpcCtx);

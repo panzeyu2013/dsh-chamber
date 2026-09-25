@@ -6,6 +6,7 @@ import {
   type LadderRecord,
 } from '@dsh-chamber/dsh-stream-state'
 import type { MobileKey } from './locales.ts'
+import { presentedConcreteSession, type SessionsConcreteLoose } from './session-presentation.ts'
 
 //  This module does not OWN its six ladder thresholds: they are read from the
 // shared table (@dsh-chamber/dsh-stream-state, LADDER_TABLES.mobile), their
@@ -301,24 +302,10 @@ export interface StallSessionFace {
   resync(): void
 }
 
-/** Loose structural slice of the instance's session face (never trusted). */
-interface SessionsStallLoose {
-  readonly list?: { getSnapshot?(): { readonly current?: string | undefined } }
-  resolve?(id: string): { readonly session?: unknown } | undefined
-}
-
-/** The CURRENT concrete Session object, or undefined (guarded, fail-closed). */
-function currentStallSession(sessions: SessionsStallLoose | undefined): Record<string, unknown> | undefined {
-  try {
-    const current = sessions?.list?.getSnapshot?.().current
-    if (current === undefined || typeof sessions?.resolve !== 'function') return undefined
-    const session = sessions.resolve(current)?.session
-    if (session === null || session === undefined || typeof session !== 'object') return undefined
-    return session as Record<string, unknown>
-  } catch {
-    return undefined
-  }
-}
+//  Presentation and concrete-Session access are single-sourced in
+//  session-presentation.ts (presentedSessionId + presentedConcreteSession) so the
+//  stall arm and the read-watermark reporter cannot drift into two readings of
+//  the same official face.
 
 /**
  * Build the automatic arm's face from the plugin context, or undefined when
@@ -333,15 +320,17 @@ export function sessionStallFace(
   if (reflect?.get === undefined) return undefined
   // Bound once: the property is optional, so call sites would each need narrowing.
   const get = reflect.get.bind(reflect)
-  /** Re-resolve the service on EVERY call: the mobile plugin does not inject
+  /** Re-read the service on EVERY call: the mobile plugin does not inject
    *  sessions, so apply order is not guaranteed — resolving once at install
-   *  time would silently disable the arm. */
-  const resolve = (): SessionsStallLoose | undefined => {
+   *  time would silently disable the arm. rc.2 `binding` is the ONE accessor
+   *  (presentedConcreteSession reads it). */
+  const readSessions = (): SessionsConcreteLoose | undefined => {
     try {
       const found = get('sessions', false)
       if (found === null || typeof found !== 'object') return undefined
-      const candidate = found as SessionsStallLoose
-      if (typeof candidate.list?.getSnapshot !== 'function' || typeof candidate.resolve !== 'function') return undefined
+      const candidate = found as SessionsConcreteLoose
+      if (typeof candidate.list?.getSnapshot !== 'function') return undefined
+      if (typeof candidate.binding !== 'function') return undefined
       return candidate
     } catch {
       return undefined
@@ -349,14 +338,14 @@ export function sessionStallFace(
   }
   return {
     openInFlight: (): boolean | undefined => {
-      const session = currentStallSession(resolve())
+      const session = presentedConcreteSession(readSessions())
       if (session === undefined) return undefined
       // Tri-state evidence is single-sourced in client-core (the open-in probe
       // reads the same function); fail-closed semantics live there.
       return sessionOpenPromiseInFlight(session)
     },
     loading: (): boolean | undefined => {
-      const session = currentStallSession(resolve())
+      const session = presentedConcreteSession(readSessions())
       if (session === undefined) return undefined
       try {
         if (!Object.hasOwn(session, 'openState')) return undefined
@@ -367,7 +356,7 @@ export function sessionStallFace(
       }
     },
     resync: (): void => {
-      const session = currentStallSession(resolve())
+      const session = presentedConcreteSession(readSessions())
       if (session === undefined) return
       try {
         const method = session.resync

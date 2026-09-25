@@ -8,6 +8,7 @@ import type { WorkspaceSnapshot } from '@deepseek-ai/dsh-api-workspace-controlle
 import { indexSubagentDescendants } from '@dsh-chamber/dsh-chamber-client-core/subagent-lineage'
 import type { SidebarRootInjected } from './contract/slots.ts'
 import { SidebarRoot } from './SidebarRoot.tsx'
+import { SidebarLeadingControls } from './SidebarLeadingControls.tsx'
 import { resolveInstanceListFace } from './instance-list-face.ts'
 import {
   getOpenIntent,
@@ -26,7 +27,7 @@ import {
 } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import type { GoalFact } from '@dsh-chamber/dsh-chamber-client-core/session-row-state'
 import { createGoalActivationTracker } from './goal-activation.ts'
-import { createPanelSource } from './panel-source.ts'
+import { createPanelSource, type SlotsReader } from './panel-source.ts'
 import { createPurgeTracker } from '@dsh-chamber/dsh-chamber-client-core/purged-tracker'
 import { publishSessionCreationInstrument } from '@dsh-chamber/dsh-chamber-client-core/session-create-ledger'
 import {
@@ -69,7 +70,7 @@ const PRODUCER_GENERATION_BASE = Date.now() * 1_000
 let producerGenerationCounter = 0
 
 /** Services required by the sidebar plugin. */
-export const inject = ['slots', 'layout', 'sessions', 'workspaces', 'uiSession', 'uiWorkspace', 'locale']
+export const inject = ['slots', 'layout', 'sessions', 'workspaces', 'uiSession', 'uiWorkspace', 'locale', 'shortcuts']
 
 /**
  * Registers the sidebar shell and its service callbacks. `sidebar.workspaces` stays
@@ -82,16 +83,21 @@ export function apply(ctx: ClientContext): void {
   // 会话创建归因的只读仪表：挂到页面全局一次（幂等）；无 IPC 即可按标签读取 blank 计数。
   ctx.effect(() => { publishSessionCreationInstrument() }, 'dsh-chamber: session-creation instrument')
 
-  // startSession 在 ui-workspace 的跨 Controller 导航服务上（官方侧边栏形态）。
+  // 导航都在 ui-workspace 的跨 Controller 视图所有者服务上（官方侧边栏形态）。
+  // rc.2：presentation 归视图所有者——`openSession` 用 `mainView` retain 目标并释放被替换
+  // 的 reference（另写持久选择）；chamber 自己不再持有第二个 mainView reference。
   const workspaceNavigation = ctx.get('uiWorkspace') as unknown as {
     startSession(workspaceId?: Parameters<SidebarRootInjected['startSession']>[0]): void
+    openSession(target: string): void
   }
   // 全局面板轴：把 `sidebar.panellist` 注册镜像成可序列化快照供壳渲染，
   // 行点击转发到 `ctx.layout.selectPanel`（两种受支持布局都声明了它）。
   const panels = createPanelSource()
-  const syncPanels = (): void => { panels.sync(ctx.slots as Parameters<typeof panels.sync>[0]) }
+  const syncPanels = (): void => { panels.sync(ctx.slots as unknown as SlotsReader) }
   ctx.effect(() => ctx.slots.subscribe('sidebar.panellist', syncPanels), 'dsh-chamber: sidebar panel entries')
-  ctx.effect(() => ctx.locale.subscribe(syncPanels), 'dsh-chamber: sidebar panel labels')
+  // The loose vendor Context face declares only register/bind; the real locale face is observable.
+  const localeFace = ctx.locale as unknown as { subscribe(listener: () => void): () => void }
+  ctx.effect(() => localeFace.subscribe(syncPanels), 'dsh-chamber: sidebar panel labels')
 
   const injectProps = (): SidebarRootInjected => ({
     // New Session 走本 ctx 的 Workspace UI 共享动作（当前会话工作区 → 最近工作区），始终作用于当前来源。
@@ -100,7 +106,14 @@ export function apply(ctx: ClientContext): void {
     // 直调：没有 `selectPanel` 的布局属配置错误（本壳只与声明了该方法的布局同载），
     // 必须响亮失败而不是静默丢点击。
     selectPanel: (id) => { ctx.layout.selectPanel(id) },
-    hooks: { panels: panels.source },
+    hooks: {
+      panels: panels.source,
+      // Page shortcut catalog: the layout fork registers `sidebar.left.toggle`,
+      // ui-workspace registers `session.new`; the seat shows each effective binding.
+      shortcuts: (ctx as ClientContext & {
+        shortcuts: { catalog: SidebarRootInjected['hooks']['shortcuts'] }
+      }).shortcuts.catalog,
+    },
     // renderer 壳在任何插件物化前装好的不可变 per-entry 事实。
     chamberInstanceId: (ctx as any).chamberInstanceId as string | undefined,
     // 应用内目录浏览器对话框文案：由 directory-picker 包（每次 boot 都挂载）拥有该命名空间。
@@ -148,6 +161,21 @@ export function apply(ctx: ClientContext): void {
   // 顺序：在注册存在后发布（可能已填充的）面板列表，首帧即可见。
   syncPanels()
 
+  // macOS 折叠（darwin + layout collapsed）下框架整列隐藏（宽 0 + `overflow:hidden`），
+  // rail 的展开开关与 New Session 一起被裁掉，鼠标失去重开控件；rc.2 AppFrame 仅在该状态
+  // 挂载 `shell.leading` 窗口 chrome 座（vendor AppFrame.tsx `darwin && sidebarCollapsed`）。
+  // 官方 ui-sidebar 以同一 inject 面占座（HeaderLeadingControls），本 fork 走同形注册：
+  // 等 `shell.leading` 声明（layout 的 root 注册提供），复用侧栏的 injectProps 与 `sidebar`
+  // 命名空间，不写 id/order/priority（单席默认值，与官方一致）。
+  ctx.effect(
+    () => ctx.slots.inject('shell.leading', () => ctx.slots.register({
+      name: 'shell.leading',
+      locale: NS,
+      inject: injectProps,
+    }, SidebarLeadingControls)),
+    'dsh-chamber: leading seat controls',
+  )
+
   // chamber settings 壳以 RESERVED shadow 优先级占据 `sidebar.settings`；slot 规则渲染
   // 最低优先级胜者，低于该区间的注册者会静默替换整个设置面（它是连接/通用页与所有
   // per-source 插件设置段的唯一渲染者）。这里只检测（console.error）：sidebar 无法安全
@@ -155,7 +183,7 @@ export function apply(ctx: ClientContext): void {
   // classifySettingsSeatOccupant 只上报低于保留区间的注册者。
   ctx.effect(() => {
     const check = (): void => {
-      const winner = ctx.slots.entriesOfSlot('sidebar.settings')[0]
+      const winner = (ctx.slots as unknown as SlotsReader).entriesOfSlot('sidebar.settings')[0]
       if (classifySettingsSeatOccupant(winner) !== 'taken-over') return
       console.error(settingsSeatTakeoverMessage(winner?.options.id ?? 'unknown'))
     }
@@ -543,9 +571,10 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => {
     const chamberInstanceId = (ctx as any).chamberInstanceId as string | undefined
     if (typeof chamberInstanceId !== 'string' || chamberInstanceId === '') return () => {}
-    // 本 arm 在页面级、按 sourceId 键控的 intent 上**改动宿主**（`sessions.open`），因此必须与
-    // 上面的 runtime-facts producer 一样证明来源身份（同一个不可变 Context 证明）：否则旧化身、
-    // 或恰好同 id 的另一 boot 的 intent，会在当前挂载的壳里被打开。
+    // 本 arm 在页面级、按 sourceId 键控的 intent 上**改动宿主**（官方视图所有者
+    // `uiWorkspace.openSession`），因此必须与上面的 runtime-facts producer 一样证明来源身份
+    //（同一个不可变 Context 证明）：否则旧化身、或恰好同 id 的另一 boot 的 intent，会在当前
+    // 挂载的壳里被打开。
     const chamberSourceFingerprint = (ctx as any).chamberSourceFingerprint as string | undefined
     if (!isValidProducerSourceFingerprint(chamberInstanceId, chamberSourceFingerprint)) return () => {}
     return startEarlyOpenArm({
@@ -566,7 +595,9 @@ export function apply(ctx: ClientContext): void {
         }
       },
       // 服务对象上的方法调用，绝不用分离引用（同官方 refresh() seam 的纪律）。
-      open: (sessionId) => { ctx.sessions.open(sessionId) },
+      // rc.2：走官方视图所有者而不是裸 retain——只有 ui-workspace.openSession 会把
+      // mainReference 立起来，官方初始导航策略因此看到「已有当前会话」并放弃新建 blank。
+      open: (sessionId) => { workspaceNavigation.openSession(sessionId) },
       warn: (message) => { console.warn(`[chamber] ${message}`) },
     })
   }, 'dsh-chamber: boot-time session open intent')

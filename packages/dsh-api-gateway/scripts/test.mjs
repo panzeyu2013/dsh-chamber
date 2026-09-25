@@ -27,6 +27,12 @@ const GROUPS = {
   // arm a source lock cannot see.
   behavior: [
     {
+      // client/index.ts is upstream-shaped and resolves the cordis Service seam
+      // plus the client-connection barrel, so this suite runs with the stubs.
+      file: 'test/behavior/client-uplink-rejection.test.ts',
+      nodeArgs: ['--experimental-transform-types', '--import', './test/support/register-vendor-stubs.mjs'],
+    },
+    {
       file: 'test/behavior/journal-stall-probe.test.ts',
       // --experimental-transform-types: journal-stream.ts is the upstream file and
       // keeps upstream's constructor parameter properties, which strip-only mode
@@ -61,6 +67,13 @@ const GROUPS = {
   'patch-lock': [
     'test/patch-lock/remote-stream-carrier-retry-lock.test.ts',
     'test/patch-lock/journal-stall-watchdog-lock.test.ts',
+    // The per-entry base-path normalization is locked against the connection
+    // package's resolveInstanceBasePath (source text + runtime table); loading
+    // stream-client needs the vendor stubs + the upstream parameter properties.
+    {
+      file: 'test/patch-lock/base-path-normalization-lock.test.ts',
+      nodeArgs: ['--experimental-transform-types', '--import', './test/support/register-vendor-stubs.mjs'],
+    },
   ],
 }
 

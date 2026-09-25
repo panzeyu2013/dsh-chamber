@@ -15,7 +15,7 @@
  *  ③ 顶层面：preload exposeInMainWorld('dshChamber', {…}) 的 13 个键
  *     （4 标量 + 10 命名空间）== shim dshChamberApi 键；
  *  ④ invoke 通道集：preload 全部 invoke 字面量 == shim 全部 invoke 字面量
- *     == manifest invoke 集（61）；push 通道集：preload 全部
+ *     == manifest invoke 集（51）；push 通道集：preload 全部
  *     ipcRenderer.on 字面量 == shim PUSH_EVENTS 值 == manifest push 集（9）；
  *  ⑤ 无 poc-unimplemented 兜底残留：shim 不含 pocUnimplemented/rejectMethods
  *     代码形态（头部注记文本仅描述 sidecar 桩，不属于兜底代码）。
@@ -218,7 +218,7 @@ test('③ 顶层面：preload expose 键 == shim dshChamberApi 键（4 标量 + 
   assert.deepEqual(shimKeys, expected, 'shim dshChamberApi 键应为 4 标量 + 10 命名空间')
 })
 
-test('④ invoke/push 通道集：preload == shim == manifest（61 invoke / 9 push）', () => {
+test('④ invoke/push 通道集：preload == shim == manifest（51 invoke / 9 push）', () => {
   const preloadInvoke = new Set<string>()
   const preloadPush = new Set<string>()
   for (const namespace of NAMESPACES) {

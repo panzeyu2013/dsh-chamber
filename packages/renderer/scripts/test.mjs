@@ -58,6 +58,8 @@ export const GROUPS = {
     { file: 'test/lifecycle/shell-tail-wait-teardown.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-shell-register.mjs'] },
     { file: 'test/lifecycle/session-open-poll.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-shell-register.mjs'] },
     'test/lifecycle/page-read-path-lockstep.test.ts',
+    // 呈现事实的 vendor 源文本锁：shell 的 openSession 路由 + rc.2 retainedBy 计数。
+    'test/lifecycle/vendor-presented-fact-contract.test.ts',
     'test/lifecycle/source-readiness.test.ts',
     // The App's hidden-window ledger pinned against the
     // shared source reducer, including the measured painted/suppression divergence.

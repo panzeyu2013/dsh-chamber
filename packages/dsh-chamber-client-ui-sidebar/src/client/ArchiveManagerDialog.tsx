@@ -15,11 +15,11 @@ import type { MouseEvent as ReactMouseEvent } from 'react'
 import clsx from 'clsx'
 import {
   Button,
-  IconChevronRightOutline14,
-  IconFolderOpenOutline16,
-  IconLoadingOutline16,
-  IconTrashOutline16,
-  IconWarningOutline16,
+  IconChevronRightOutlineRegular,
+  IconFolderOpenOutlineRegular,
+  IconLoadingOutlineRegular,
+  IconTrashOutlineRegular,
+  IconWarningOutlineRegular,
   Modal,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import cc from './sidebar-chamber.module.css'
@@ -420,7 +420,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
           <span className={cc.archiveManagerFootStatus} role={busy ? 'status' : undefined}>
             {busy && (
               <>
-                <IconLoadingOutline16 className={cc.statusSpinner} size={13} />
+                <IconLoadingOutlineRegular className={cc.statusSpinner} size={13} />
                 {t('archive.manager.deleting')}
               </>
             )}
@@ -441,7 +441,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
       <div ref={panelRef} tabIndex={-1} className={cc.archiveManagerPanel}>
         {confirming !== null && (
           <div ref={confirmBarRef} className={cc.archiveManagerConfirmBar}>
-            <IconWarningOutline16 size={16} className={cc.archiveManagerConfirmIcon} />
+            <IconWarningOutlineRegular size={16} className={cc.archiveManagerConfirmIcon} />
             {/* role="alert" lives on the TEXT span, not the bar container: the
                 bar's first button takes focus in the same commit, and an alert
                 on the container races that move (AT may hear only 取消 or only
@@ -552,8 +552,8 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
                       aria-label={isGroupCollapsed ? t('workspace.expand') : t('workspace.collapse')}
                       onClick={() => { toggleGroupFold(group.key) }}
                     >
-                      <IconChevronRightOutline14 size={14} className={cc.foldChevron} />
-                      {realWorkspace && <IconFolderOpenOutline16 size={14} className={cc.foldFolder} />}
+                      <IconChevronRightOutlineRegular size={14} className={cc.foldChevron} />
+                      {realWorkspace && <IconFolderOpenOutlineRegular size={14} className={cc.foldFolder} />}
                     </button>
                     <span className={cc.archiveManagerGroupTitle} title={groupTitle}>
                       {groupTitle}
@@ -602,7 +602,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
                               deleteSingle(event.currentTarget, row.sessionId, titleText(row.title))
                             }}
                           >
-                            <IconTrashOutline16 size={14} />
+                            <IconTrashOutlineRegular size={14} />
                           </button>
                         </div>
                       ))}

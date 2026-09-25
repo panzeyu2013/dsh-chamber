@@ -94,6 +94,16 @@ export interface SidebarPanelMetadata {
   label: string
 }
 
+/** The effective-binding fields of one registered command this shell reads. */
+export interface SidebarShortcutEntry {
+  /** Registered command id; the shell binds `sidebar.left.toggle` and `session.new`. */
+  readonly id: string
+  /** Effective keycap sequence; empty when the command is unbound. */
+  readonly keys: readonly string[]
+  /** `aria-keyshortcuts` spelling of the effective binding; undefined when unbound. */
+  readonly aria: string | undefined
+}
+
 /** Owner share of the settings seat: the column display state the trigger row renders against. */
 export interface SidebarSettingsOwnerProps {
   /** Whether the sidebar renders wide content (false = 56px rail). */
@@ -124,7 +134,11 @@ export type SidebarRootInjected = {
   /** Select the global panel addressed by a sidebar row. */
   selectPanel: (id: MainPanelId) => void
   /** Private reactive sources bound to framework selector hooks. */
-  hooks: { panels: HostObservable<readonly SidebarPanelMetadata[]> }
+  hooks: {
+    panels: HostObservable<readonly SidebarPanelMetadata[]>
+    /** The page shortcut catalog (`ctx.shortcuts.catalog`): effective keycap/aria per registered command. */
+    shortcuts: HostObservable<readonly SidebarShortcutEntry[]>
+  }
   /** chamber: the immutable per-entry instance id this ctx's shell belongs to
    *  (installed by AppWebEntry.configureContext); the list highlights it. */
   chamberInstanceId?: string

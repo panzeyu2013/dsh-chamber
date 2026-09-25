@@ -24,7 +24,15 @@ const allRunGates = new Set()
 const disposeGates = []
 const allDisposeGates = new Set()
 const entryStates = []
-const openedSessions = []
+// rc.2 presentation records. The shell routes every open through the official
+// view owner (uiWorkspace.openSession), which retains the target with source
+// 'mainView' and releases the reference it replaced — the vendor replaceMain
+// composition. Retain calls are the "the click really opened it" evidence;
+// releases pin the reference lifetime across switches and entry disposal.
+const retainedSessions = []
+const releasedSessions = []
+/** label -> { sessionId, reference }: what each entry's view owner presents now. */
+const presentedByEntry = new Map()
 let entrySequence = 0
 let sessionsListed = true
 // Models the window between boot settle (root fibers active) and the runtime
@@ -32,11 +40,78 @@ let sessionsListed = true
 // entry's runtimeCtx carries no sessions face yet. Module-global: every entry
 // runtimeCtx read reflects the CURRENT value (like the real per-boot state).
 let sessionsAvailable = true
+// Models the ui-workspace service activating after the session controller:
+// while false the entry has a sessions face but no view owner yet.
+let navigationAvailable = true
+// Thrown by reflect.get itself — the throwing cordis proxy arm, distinct from an
+// absent service (which the non-throwing `reflect.get(name, false)` form answers
+// as undefined). Mirrors sessionsReadError one level down the lookup.
+let navigationReadError = undefined
+// While false the runtimeCtx exposes NO reflect face at all (a ctx without the
+// lookup layer). The readSessionViewNavigation contract then stays transient;
+// the direct uiWorkspace getter below is the tripwire that catches a
+// reintroduced direct-property fallback.
+let reflectAvailable = true
 // Thrown by the runtimeCtx getter itself (distinct from sessionsSnapshotError,
 // which throws from list.getSnapshot): pins the shell's hostile-read arm.
 let sessionsReadError = undefined
 let sessionsSnapshotError = undefined
+// Thrown by sessions.retain — the rc.2 open path the view owner calls through.
 let sessionsOpenError = undefined
+
+/**
+ * The rc.2 per-entry sessions face: `retain` returns an owned reference (there
+ * is no `open` any more); `list.byId` carries each row's `retainedBy` counts,
+ * which is how the probe reads the presented main-view session.
+ */
+function sessionsFace(label) {
+  return {
+    list: {
+      getSnapshot() {
+        if (sessionsSnapshotError !== undefined) throw sessionsSnapshotError
+        // Every id is visible immediately: shell lifecycle tests exercise which
+        // entry receives the dispatch. Tests that exercise polling can
+        // temporarily make every id absent through the fixture knob.
+        return {
+          byId: new Proxy({}, {
+            get(_target, id) {
+              if (!sessionsListed) return undefined
+              const presented = presentedByEntry.get(label)
+              return { id, retainedBy: presented?.sessionId === id ? { mainView: 1 } : {} }
+            },
+          }),
+        }
+      },
+    },
+    retain(target, options) {
+      if (sessionsOpenError !== undefined) throw sessionsOpenError
+      const reference = {
+        sessionId: target,
+        released: false,
+        release() {
+          if (this.released) return
+          this.released = true
+          releasedSessions.push({ label, sessionId: target })
+        },
+      }
+      retainedSessions.push({ label, sessionId: target, source: options?.source })
+      return reference
+    },
+  }
+}
+
+/** The official view owner: vendor `replaceMain` — retain the new target, release the replaced reference. */
+function viewOwnerFace(label) {
+  const sessions = sessionsFace(label)
+  return {
+    openSession(target) {
+      const reference = sessions.retain(target, { source: 'mainView' })
+      const previous = presentedByEntry.get(label)
+      presentedByEntry.set(label, { sessionId: target, reference })
+      previous?.reference.release()
+    },
+  }
+}
 
 /** Fiber-state mirror (loader-status.ts): the sweep compares against ACTIVE. */
 export const FIBER_STATE = {
@@ -88,6 +163,11 @@ export class AppWebEntry {
     this.disposed = true
     this.state.disposed = true
     disposedCount += 1
+    // The official view owner's ctx-effect releases the presented reference on
+    // disposal; the fixture models the same lifetime.
+    const presented = presentedByEntry.get(this.label)
+    presentedByEntry.delete(this.label)
+    presented?.reference.release()
     const gate = disposeGates.shift()
     if (gate !== undefined) {
       gate.markStarted(this.label)
@@ -106,26 +186,34 @@ export class AppWebEntry {
   get runtimeCtx() {
     if (this.disposed) return undefined
     if (sessionsReadError !== undefined) throw sessionsReadError
-    if (!sessionsAvailable) return { sessions: undefined, loader: { entries: () => loaderEntries } }
     const label = this.label
-    return {
+    const ctx = {
       loader: { entries: () => loaderEntries },
-      sessions: {
-        list: {
-          getSnapshot() {
-            if (sessionsSnapshotError !== undefined) throw sessionsSnapshotError
-            // Every id is visible immediately: shell lifecycle tests exercise
-            // which entry receives the dispatch. Tests that exercise polling
-            // can temporarily make every id absent through the fixture knob.
-            return { byId: new Proxy({}, { get: () => sessionsListed ? {} : undefined }) }
-          },
-        },
-        open(sessionId) {
-          if (sessionsOpenError !== undefined) throw sessionsOpenError
-          openedSessions.push({ label, sessionId })
-        },
+      sessions: sessionsAvailable ? sessionsFace(label) : undefined,
+      // Deliberately NOT a direct service property: production reads the view
+      // owner through reflect only. A reinstated direct fallback hits this getter
+      // and fails loud in every open test (the fixture's own mutation alarm).
+      get uiWorkspace() {
+        throw new Error('fixture: runtimeCtx.uiWorkspace must not be read directly (use reflect.get)')
       },
     }
+    if (reflectAvailable) {
+      // The real cordis service lookup face. `reflect.get(name, false)` is the
+      // non-throwing form the shell must use for an absent service; the strict
+      // default throws on a miss like the real proxy, so dropping the `false`
+      // argument (or asking for another name) turns the absent-service tests red.
+      ctx.reflect = {
+        get(name, strict = true) {
+          if (navigationReadError !== undefined) throw navigationReadError
+          if (name !== 'uiWorkspace' || !navigationAvailable) {
+            if (strict) throw new Error(`fixture: service ${String(name)} is not registered`)
+            return undefined
+          }
+          return viewOwnerFace(label)
+        },
+      }
+    }
+    return ctx
   }
 }
 
@@ -233,8 +321,24 @@ export function __testEntryStates() {
   return entryStates.map(state => ({ ...state }))
 }
 
+/** Presented sessions: in rc.2 a presentation IS a mainView retain. */
 export function __testOpenedSessions() {
-  return openedSessions.map(open => ({ ...open }))
+  return retainedSessions.map(({ label, sessionId }) => ({ label, sessionId }))
+}
+
+/** Every retain call with its source — the "the click really opened it" evidence. */
+export function __testRetainCalls() {
+  return retainedSessions.map(record => ({ ...record }))
+}
+
+/** Released references in order: the replaced reference on a switch, the last on teardown. */
+export function __testReleasedSessions() {
+  return releasedSessions.map(record => ({ ...record }))
+}
+
+/** The session one entry currently presents (the fixture's mainView retention). */
+export function __testPresentedSession(label) {
+  return presentedByEntry.get(label)?.sessionId
 }
 
 export function __testSetSessionsListed(value) {
@@ -244,6 +348,21 @@ export function __testSetSessionsListed(value) {
 /** Simulate the runtime sessions service being (un)available at read time. */
 export function __testSetSessionsAvailable(value) {
   sessionsAvailable = value
+}
+
+/** Simulate the ui-workspace view owner activating after the sessions face. */
+export function __testSetNavigationAvailable(value) {
+  navigationAvailable = value
+}
+
+/** Make the view-owner reflect lookup itself throw (the hostile-proxy arm). */
+export function __testSetNavigationReadError(value) {
+  navigationReadError = value
+}
+
+/** Remove the whole reflect face from the runtimeCtx (a host without the lookup layer). */
+export function __testSetReflectAvailable(value) {
+  reflectAvailable = value
 }
 
 /** Make the runtimeCtx read itself throw (hostile-boundary arm). */
@@ -272,10 +391,15 @@ export function __testResetLifecycle() {
   runGates.length = 0
   disposeGates.length = 0
   entryStates.length = 0
-  openedSessions.length = 0
+  retainedSessions.length = 0
+  releasedSessions.length = 0
+  presentedByEntry.clear()
   entrySequence = 0
   sessionsListed = true
   sessionsAvailable = true
+  navigationAvailable = true
+  navigationReadError = undefined
+  reflectAvailable = true
   sessionsReadError = undefined
   sessionsSnapshotError = undefined
   sessionsOpenError = undefined

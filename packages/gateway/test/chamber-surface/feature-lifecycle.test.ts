@@ -32,7 +32,7 @@ import { createChamberInstalled } from '../../src/plugins-installed.ts'
 import { createChamberSurface } from '../../src/routes.ts'
 import { createDashboardHarness, type DashboardHarness, type DashboardRequest } from '../support/dashboard-harness.ts'
 import { seedCacheProjection } from '../support/chamber-surface-fixtures.ts'
-import { FakeResponse, stubPluginTasks } from '../support/utils.ts'
+import { FakeResponse } from '../support/utils.ts'
 import { handleChamberSurface, makeChamberSurfaceHarness, surfaceSilentLogger, surfaceStubChannels } from '../support/chamber-surface-harness.ts'
 
 // Shared harness: one logger, channel stub, surface factory and transport
@@ -712,8 +712,6 @@ test('chamber plugins upload maps persistence failures to a coded 500, not 400',
     channels,
     plugins: failing,
     installed: createChamberInstalled(stateDir),
-    tasks: stubPluginTasks(),
-    stateDir,
   })
   const response = new FakeResponse()
   const request = new UploadRequest()

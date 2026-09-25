@@ -1,7 +1,10 @@
 import {
   RUNTIME_FAMILY_CORE,
   RUNTIME_FAMILY_FORBIDDEN,
+  RUNTIME_FAMILY_OPT_IN_ALLOWED,
+  RUNTIME_FAMILY_OPT_IN_PATTERN,
   familyNamesFromLockfileClosure,
+  runtimeFamilyNameFindings,
 } from '../../packages/control-plane/src/runtime-family.ts'
 
 /**
@@ -22,11 +25,17 @@ import {
  * 四门的语义（design 21 §6.11）：
  * - C11 运行时线族集合：受保护集合的 F 分量只有一个权威来源——**已提交**的
  *   `packages/desktop/vendor/dsh/pnpm-lock.yaml` 闭包；实例树枚举只作等价性
- *   交叉校验。opt-in 层（`@deepseek-ai/dsh-experimental-*`）与 dev/test 包
- *   **绝不**属于 F，否则能装官方 opt-in 层的能力当场失效。
+ *   交叉校验。dev/test 包与源码线 harness 段**绝不**属于 F。官方 opt-in 段自
+ *   dsh 0.1.6-alpha.2 起不再是无条件禁名（运行时根包自己声明了这些依赖），判据
+ *   收窄为**登记白名单**（`RUNTIME_FAMILY_OPT_IN_ALLOWED`）：未登记的
+ *   experimental 名字仍红（取错来源 / 上游新提升），已登记名字不再出现在闭包里
+ *   也红（上游移除/改名）——两条都逼出「重新从锁文件 derive 并显式登记」。锁文件
+ *   原文出现 `@dsh-chamber/` 引用也红（F 的唯一来源被污染；解析器只取
+ *   `@deepseek-ai/*`，故只能按原文判定）。
  * - C12 profile 契约锚：上游仍以 `dsh.profile.bundles` 承载层列表、以
  *   `dsh.bundle.patch` 声明层、web 模板默认组合不变、profile workspace 仍是
- *   hoisted + 不自动装 peer。任一漂移 ⇒ 停升级、改派生（B₀ 快照）。
+ *   hoisted + 不自动装 peer。三个锚点文件（profile 读取/初始化、plugin-manager
+ *   的 reconcile、CLI 的 init 入口）都必须可读。任一漂移 ⇒ 停升级、改派生（B₀ 快照）。
  * - C13 播种注册表结构：`HOST_*_PACKAGE_NAME` 常量 ↔ `HOST_*_INSERT` 行 ↔
  *   `CHAMBER_HOST_PACKAGES` 注册表三面一一对应（漏登记即 S 分量失真）。
  * - C14 plugin-row 单源 + manifest 三方镜像：行形状的唯一声明在 wire 的
@@ -46,10 +55,14 @@ export const FAMILY_CORE = RUNTIME_FAMILY_CORE
 /** 绝不属于 F 的名字形态（同源，label 也在模块里，避免两套文案）。 */
 export const FAMILY_FORBIDDEN = RUNTIME_FAMILY_FORBIDDEN
 
-/** node-addon-system 平台分包：允许「闭包有、本平台树无」。 */
-const PLATFORM_NATIVE_RE = /^@deepseek-ai\/node-addon-system-/
+/** 官方 opt-in 段：只允许登记白名单内的名字（同源）。 */
+export const FAMILY_OPT_IN_ALLOWED = RUNTIME_FAMILY_OPT_IN_ALLOWED
 
-/** 闭包解析的健全性下限（当前运行时线 ≈ 244；解析坏了必须响亮）。 */
+/** 平台分包：允许「闭包有、本平台树无」——`node-addon-system-*`（原生插件）与
+ *  `libreoffice-kit-*`（office-to-pdf 带的办公套件运行时，含一个 `-wasm` 包）。 */
+const PLATFORM_PACK_RE = /^@deepseek-ai\/(?:node-addon-system-|libreoffice-kit-)/
+
+/** 闭包解析的健全性下限（当前运行时线 ≈ 291；解析坏了必须响亮）。 */
 const MIN_FAMILY_SIZE = 200
 
 /**
@@ -68,14 +81,16 @@ export function runtimeFamilyNames(lockfileText) {
 /**
  * C11 判据。
  *
- * @param {{ names: string[], treeNames: string[] | null, sourceTreeNames?: string[] | null }} input
+ * @param {{ names: string[], treeNames: string[] | null, sourceTreeNames?: string[] | null, lockfileText?: string | null }} input
  *   `names` = `runtimeFamilyNames()` 结果；`treeNames` = 活动运行时树
  *   `node_modules/@deepseek-ai/*` 的枚举（未物化传 null ⇒ 只跳过等价性校验）；
  *   `sourceTreeNames` = 可选：源码线 `vendor/harness-packages/@deepseek-ai/*` 枚举，
- *   仅用于产出一条提醒性 note（源码线不是 F 的来源）。
+ *   仅用于产出一条提醒性 note（源码线不是 F 的来源）；`lockfileText` = 可选：
+ *   产生 `names` 的锁文件原文，传了就扫描 `@dsh-chamber/` 引用（F 来源污染），
+ *   不传（合成夹具）则跳过。
  * @returns {{ violations: string[], notes: string[] }}
  */
-export function familyFindings({ names, treeNames, sourceTreeNames = null }) {
+export function familyFindings({ names, treeNames, sourceTreeNames = null, lockfileText = null }) {
   const violations = []
   const notes = []
 
@@ -85,35 +100,53 @@ export function familyFindings({ names, treeNames, sourceTreeNames = null }) {
   }
 
   const nameSet = new Set(names)
-  for (const core of FAMILY_CORE) {
-    if (!nameSet.has(core)) violations.push(`运行时线闭包缺少核心包 ${core}`)
-  }
-  for (const name of names) {
-    if (name.startsWith('@dsh-chamber/')) violations.push(`运行时线闭包混入 chamber 包 ${name}`)
-    for (const rule of FAMILY_FORBIDDEN) {
-      if (rule.pattern.test(name)) violations.push(`运行时线闭包混入${rule.label}：${name}（opt-in 层必须不在 F 内，否则装不上）`)
+  // 名字集合判据的唯一实现在运行时 leaf 模块（核心锚 / 禁名 / opt-in 登记白名单），这里
+  // 只把它映射成门禁文案——门禁与运行时不可能再各自漂移。
+  for (const finding of runtimeFamilyNameFindings(names)) {
+    if (finding.kind === 'missing-core') {
+      violations.push(`运行时线闭包缺少核心包 ${finding.name}`)
+    } else if (finding.kind === 'forbidden') {
+      violations.push(`运行时线闭包混入${finding.label}：${finding.name}（dev/test 与源码线 harness 段必须不在 F 内）`)
+    } else {
+      violations.push(`运行时线闭包混入未登记的官方 opt-in 包：${finding.name}（要么取错来源，要么上游把新 opt-in 层提成了运行时依赖——必须重新裁决后登记）`)
     }
+  }
+  // 白名单保鲜的第二臂：已登记名字必须仍出现在闭包里（上游移除/改名 ⇒ 删登记，不静默留白名单）。
+  for (const allowed of FAMILY_OPT_IN_ALLOWED) {
+    if (!nameSet.has(allowed)) {
+      violations.push(`运行时线闭包不再包含已登记的官方 opt-in 包 ${allowed}——上游已移除/改名；重新从锁文件 derive 并删除本登记（白名单只登记实测在闭包里的名字）`)
+    }
+  }
+  // F 的来源本身必须是上游锁文件。解析器按 scope 只取 `@deepseek-ai/*`，所以
+  // 「chamber 包混进 names」按构造不可能；能真实发生的污染形态是锁文件**文本**里出现
+  // `@dsh-chamber/` 引用（取错锁文件 / 被 chamber workspace 锁文件覆盖），故这里扫原文。
+  // 不传文本（合成夹具）即跳过：没有原文就无法区分「干净」与「没检查」以外的结论。
+  if (lockfileText !== null && lockfileText.includes('@dsh-chamber/')) {
+    violations.push('运行时线锁文件的文本里出现 @dsh-chamber/ 引用——F 的唯一来源被污染（取错锁文件/混入 chamber workspace 条目）；恢复上游运行时锁文件后重跑')
   }
 
   if (treeNames !== null) {
     const treeSet = new Set(treeNames)
     const missing = names.filter((name) => !treeSet.has(name))
     const extra = treeNames.filter((name) => !nameSet.has(name))
-    const unexpectedMissing = missing.filter((name) => !PLATFORM_NATIVE_RE.test(name))
+    const unexpectedMissing = missing.filter((name) => !PLATFORM_PACK_RE.test(name))
     if (unexpectedMissing.length > 0) {
       violations.push(`运行时树缺少闭包中的非平台分包：${unexpectedMissing.join(', ')}（枚举派生与锁文件派生不等价）`)
     }
     if (extra.length > 0) {
       violations.push(`运行时树出现闭包外的 @deepseek-ai/*：${extra.join(', ')}`)
     }
-    const platformOnly = missing.filter((name) => PLATFORM_NATIVE_RE.test(name))
+    const platformOnly = missing.filter((name) => PLATFORM_PACK_RE.test(name))
     notes.push(`C11 等价性校验：闭包 ${names.length} / 树 ${treeNames.length}（允许的平台分包差：${platformOnly.length}）`)
   } else {
     notes.push('C11 等价性校验跳过：活动运行时树未物化（仅校验锁文件闭包；CI 打包腿会交叉校验）')
   }
 
   if (sourceTreeNames !== null) {
-    const optIn = sourceTreeNames.filter((name) => FAMILY_FORBIDDEN.some((rule) => rule.pattern.test(name)))
+    // 源码线是 opt-in 层的家，也是 dev/test 包的家——两者都算进这条提醒（运行时闭包侧
+    // 才需要白名单判定）。
+    const optIn = sourceTreeNames.filter((name) => RUNTIME_FAMILY_OPT_IN_PATTERN.test(name)
+      || FAMILY_FORBIDDEN.some((rule) => rule.pattern.test(name)))
     if (optIn.length > 0) {
       notes.push(`C11 提醒：源码线 vendor 树含 ${optIn.length} 个 opt-in/dev 包（${optIn.slice(0, 3).join(', ')}…）——**它绝不是 F 的来源**`)
     }
@@ -129,8 +162,11 @@ export function familyFindings({ names, treeNames, sourceTreeNames = null }) {
 /**
  * 上游 profile 契约的锚点集合。每条 = 一个概念 + 命中任一候选即算通过。
  * 空白归一（连续空白 → 单空格）后再匹配，因此只对**词法**漂移敏感，不对缩进/换行敏感。
- * 全部锚点在 pin 住的上游源码上实测命中：
- * `packages/boot/app-boot/src/profile.ts`、`apps/cli/src/plugin.ts`。
+ * 全部锚点在 pin 住的上游源码上实测命中，三个来源：
+ * - `profile` = `packages/boot/app-boot/src/profile.ts`（manifest 模型、init 与加载）；
+ * - `manager` = `packages/boot/plugin-manager/src/operations.ts`（rc.2 起 `dsh plugin`
+ *   的 pnpm 转发与 reconcile 落在这里，apps/cli/src/plugin.ts 只剩入口壳）；
+ * - `plugin` = `apps/cli/src/plugin.ts`（CLI 入口：init 走模板组合）。
  */
 export const PROFILE_CONTRACT_ANCHORS = [
   { file: 'profile', label: 'web 模板默认组合（B₀ 快照的对拍对象）', needles: ["web: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']"] },
@@ -139,10 +175,11 @@ export const PROFILE_CONTRACT_ANCHORS = [
   { file: 'profile', label: 'profile workspace 链接器', needles: ['nodeLinker: hoisted'] },
   { file: 'profile', label: 'profile workspace 不自动装 peer', needles: ['autoInstallPeers: false'] },
   { file: 'profile', label: '层列表落盘键 dsh.profile.bundles', needles: ['dsh: { profile: { bundles:'] },
-  { file: 'plugin', label: '层由 dsh.bundle.patch 声明', needles: ['dsh?.bundle?.patch'] },
-  { file: 'plugin', label: '层列表按已安装状态 reconcile', needles: ['dsh?.profile?.bundles'] },
+  { file: 'profile', label: 'bundle 的层声明键 dsh.bundle.patch（profile 加载侧）', needles: ['dsh?.bundle', 'dsh.bundle.patch must be a file path or a list of file paths'] },
+  { file: 'manager', label: '层由 dsh.bundle.patch 声明', needles: ['dsh?.bundle?.patch'] },
+  { file: 'manager', label: '层列表按已安装状态 reconcile', needles: ['dsh?.profile?.bundles'] },
+  { file: 'manager', label: '非层依赖的既有告警语义', needles: ['declares no dsh.bundle'] },
   { file: 'plugin', label: 'init 走模板组合', needles: ['DEFAULT_PROFILE_BUNDLES'] },
-  { file: 'plugin', label: '非层依赖的既有告警语义', needles: ['declares no dsh.bundle'] },
 ]
 
 /** 空白归一：只压空白，不改字符。 */
@@ -153,17 +190,18 @@ function normalizeWhitespace(text) {
 /**
  * C12 判据。
  *
- * @param {{ profileSource: string | null, pluginSource: string | null }} input
- *   两个上游源码文本；null = 该文件读不到。**全部**读不到 = 子模块未物化
- *   （调用方给出 note，不当违规——C1/C3/C5 已经会对缺失子模块响亮失败）；
- *   **部分**读不到 = 改名/搬移，是违规（`plugin.ts`
- *   搬走而 `profile.ts` 仍可读时，10 条锚点里的 4 条会被静默丢掉且连 note 都没有）。
+ * @param {{ profileSource: string | null, pluginSource: string | null,
+ *   managerSource: string | null }} input
+ *   三个上游源码文本（profile / plugin-manager / CLI 入口）；null = 该文件读不到。
+ *   **全部**读不到 = 子模块未物化（调用方给出 note，不当违规——C1/C3/C5 已经会对缺失
+ *   子模块响亮失败）；**部分**读不到 = 改名/搬移，是违规（任一文件搬走时，它所属的锚点
+ *   会被静默丢掉且连 note 都没有）。
  * @returns {{ violations: string[], notes: string[] }}
  */
-export function profileContractFindings({ profileSource, pluginSource }) {
+export function profileContractFindings({ profileSource, pluginSource, managerSource }) {
   const violations = []
   const notes = []
-  const sources = { profile: profileSource, plugin: pluginSource }
+  const sources = { profile: profileSource, plugin: pluginSource, manager: managerSource }
   const owners = new Map()
   for (const anchor of PROFILE_CONTRACT_ANCHORS) {
     owners.set(anchor.file, (owners.get(anchor.file) ?? 0) + 1)
@@ -427,7 +465,6 @@ export const PLUGIN_ROW_SINGLE_SOURCE = Object.freeze({
     'version: string | null',
     'role: PluginRowRole',
     'protected: boolean',
-    "owner?: 'installation' | 'chamber' | 'user'",
   ],
   role: ['composition', 'seed', 'layer', 'third-party', 'materialized', 'unknown'],
 })

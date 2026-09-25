@@ -95,12 +95,12 @@ interface FakeEntryOptions {
   chamberInstanceId?: string
   /** The locale face's starting value (the browser-derived provisional at activation). */
   active: string
-  /** The settings scope's starting status ('loading' = the host has not answered). */
+  /** The config form's starting status ('loading' = the host has not answered). */
   status: string
-  /** Make `ctx.settingsScope.bind` throw (service activation failure). */
-  bindThrows?: boolean
-  /** Bind a scope without the getSnapshot/subscribe pair the hook needs. */
-  scopeShapeBroken?: boolean
+  /** Make `ctx.configForms.get` throw (service activation failure). */
+  getThrows?: boolean
+  /** Answer `get` with an object missing the getSnapshot/subscribe pair the hook needs. */
+  formShapeBroken?: boolean
   /** Hide the face from the service door so the slot door must answer. */
   serviceMissesFace?: boolean
 }
@@ -108,8 +108,9 @@ interface FakeEntryOptions {
 /** One fake entry ctx plus the levers a test drives it with. */
 function fakeEntry(options: FakeEntryOptions) {
   const faceListeners = new Set<() => void>()
-  const scopeListeners = new Set<() => void>()
+  const formListeners = new Set<() => void>()
   const disposers: Array<() => void> = []
+  const requestedNamespaces: string[] = []
   let active = options.active
   let status = options.status
   const face = {
@@ -119,21 +120,23 @@ function fakeEntry(options: FakeEntryOptions) {
       return () => { faceListeners.delete(listener) }
     },
   }
+  const form = {
+    getSnapshot: () => ({ status }),
+    subscribe: (listener: () => void) => {
+      formListeners.add(listener)
+      return () => { formListeners.delete(listener) }
+    },
+  }
   const ctx = {
     chamberInstanceId: options.chamberInstanceId ?? 'local',
     get: (name: string): unknown => (name === 'locale' && options.serviceMissesFace !== true ? face : undefined),
     slots: { hostFace: () => ({ locale: face }) },
-    settingsScope: {
-      bind: (): unknown => {
-        if (options.bindThrows === true) throw new Error('settings scope unavailable')
-        if (options.scopeShapeBroken === true) return { status }
-        return {
-          getSnapshot: () => ({ status }),
-          subscribe: (listener: () => void) => {
-            scopeListeners.add(listener)
-            return () => { scopeListeners.delete(listener) }
-          },
-        }
+    configForms: {
+      get: (namespace: string): unknown => {
+        requestedNamespaces.push(namespace)
+        if (options.getThrows === true) throw new Error('config form unavailable')
+        if (options.formShapeBroken === true) return { status }
+        return form
       },
     },
     effect: (fn: () => (() => void) | void): void => {
@@ -153,17 +156,19 @@ function fakeEntry(options: FakeEntryOptions) {
     /** The settings mirror landing. */
     settle: (next: string): void => {
       status = next
-      for (const listener of [...scopeListeners]) listener()
+      for (const listener of [...formListeners]) listener()
     },
     dispose: (): void => { for (const dispose of disposers.splice(0)) dispose() },
-    listenerCounts: () => ({ face: faceListeners.size, scope: scopeListeners.size }),
+    listenerCounts: () => ({ face: faceListeners.size, form: formListeners.size }),
+    /** The namespaces the hook asked the configForms service for. */
+    requestedNamespaces: () => [...requestedNamespaces],
   }
 }
 
 /** Mount one fake shell through the real decorator, stand-in vendor write included. */
 function mountShell(entry: ReturnType<typeof fakeEntry>, write: string): void {
   const plugin = {
-    inject: ['slots', 'remote', 'settingsScope'],
+    inject: ['slots', 'remote', 'configForms'],
     apply: (): void => { doc.write(write) },
   }
   const decorated = withLocaleOwnership(plugin) as { inject?: unknown; apply: (ctx: unknown) => void }
@@ -191,7 +196,8 @@ test('the decorator keeps the provisional from owning the page while the host ha
   const entry = fakeEntry({ chamberInstanceId: 'local', active: 'en', status: 'loading' })
   mountShell(entry, 'en')
   assert.equal(documentLanguage(doc), 'zh-CN', 'the provisional must never own the page')
-  assert.deepEqual(entry.listenerCounts(), { face: 1, scope: 1 }, 'the hook must subscribe to both faces')
+  assert.deepEqual(entry.listenerCounts(), { face: 1, form: 1 }, 'the hook must subscribe to both faces')
+  assert.deepEqual(entry.requestedNamespaces(), ['locale'], 'the hook must ask configForms for the locale namespace')
 
   // The host answers Chinese: the vendor adopts and the page is already there —
   // no write, no flicker.
@@ -205,11 +211,11 @@ test('the decorator keeps the provisional from owning the page while the host ha
 
   // The entry retires: facts are released, the page keeps its language.
   entry.dispose()
-  assert.deepEqual(entry.listenerCounts(), { face: 0, scope: 0 })
+  assert.deepEqual(entry.listenerCounts(), { face: 0, form: 0 })
   local.dispose()
 })
 
-test('the settings scope settling at "unavailable" is still this instance\u2019s own language', () => {
+test('the config form settling at "unavailable" is still this instance\u2019s own language', () => {
   const local = resetPageToChinese()
   setPageActiveSource('gateway-u')
   const entry = fakeEntry({ chamberInstanceId: 'gateway-u', active: 'en', status: 'loading' })
@@ -294,7 +300,7 @@ test('an unowned shell is reverted by the page backstop, but its language is nev
   const local = resetPageToChinese()
   const entry = fakeEntry({ chamberInstanceId: '', active: 'en', status: 'loading' })
   mountShell(entry, 'en')
-  assert.deepEqual(entry.listenerCounts(), { face: 0, scope: 0 }, 'no ownership hook without a chamber entry')
+  assert.deepEqual(entry.listenerCounts(), { face: 0, form: 0 }, 'no ownership hook without a chamber entry')
   assert.equal(documentLanguage(doc), 'en', 'without the hook the vendor write lands…')
   await Promise.resolve()
   assert.equal(documentLanguage(doc), 'zh-CN', '…and the page backstop reverts it before paint')
@@ -302,24 +308,24 @@ test('an unowned shell is reverted by the page backstop, but its language is nev
   entry.dispose()
 })
 
-test('a settings scope that cannot be bound disables the hook instead of guessing', async () => {
+test('a config form that cannot be fetched disables the hook instead of guessing', async () => {
   const local = resetPageToChinese()
-  const entry = fakeEntry({ chamberInstanceId: 'local', active: 'en', status: 'loading', bindThrows: true })
+  const entry = fakeEntry({ chamberInstanceId: 'local', active: 'en', status: 'loading', getThrows: true })
   mountShell(entry, 'en')
-  assert.deepEqual(entry.listenerCounts(), { face: 0, scope: 0 })
+  assert.deepEqual(entry.listenerCounts(), { face: 0, form: 0 })
   await Promise.resolve()
   assert.equal(documentLanguage(doc), 'zh-CN', 'fail-open = unowned (never adopted), still reverted')
   local.dispose()
   entry.dispose()
 })
 
-test('a settings scope with a broken shape disables the hook instead of throwing', async () => {
+test('a config form with a broken shape disables the hook instead of throwing', async () => {
   const local = resetPageToChinese()
-  const entry = fakeEntry({ chamberInstanceId: 'local', active: 'en', status: 'loading', scopeShapeBroken: true })
+  const entry = fakeEntry({ chamberInstanceId: 'local', active: 'en', status: 'loading', formShapeBroken: true })
   // The whole point: no throw escapes the decorated vendor apply (which would
   // fail the locale fibre and surface a degraded-boot notice).
   mountShell(entry, 'en')
-  assert.deepEqual(entry.listenerCounts(), { face: 0, scope: 0 })
+  assert.deepEqual(entry.listenerCounts(), { face: 0, form: 0 })
   await Promise.resolve()
   assert.equal(documentLanguage(doc), 'zh-CN')
   local.dispose()
@@ -330,7 +336,7 @@ test('the hook also reads the face through the slot service when the service rea
   const local = resetPageToChinese()
   const entry = fakeEntry({ chamberInstanceId: 'local', active: 'en', status: 'loading', serviceMissesFace: true })
   mountShell(entry, 'en')
-  assert.deepEqual(entry.listenerCounts(), { face: 1, scope: 1 }, 'the slot-installed face must be found')
+  assert.deepEqual(entry.listenerCounts(), { face: 1, form: 1 }, 'the slot-installed face must be found')
   assert.equal(documentLanguage(doc), 'zh-CN', 'and the hook still owns the write')
   local.dispose()
   entry.dispose()

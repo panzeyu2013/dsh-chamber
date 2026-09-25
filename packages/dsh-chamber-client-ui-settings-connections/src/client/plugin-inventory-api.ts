@@ -12,8 +12,12 @@
  * shared kernel postUnary; the envelope/server-response classification stays local, while the
  * wrapWireError fold + 503 instance_unavailable classifier come from the shared wire-error module
  * (the shared kernel itself performs no classification).
- * Self-contained on purpose: the wire types below are structural mirrors of the vendored
- * `@deepseek-ai/dsh-host-plugin-inventory` types; no dsh package import.
+ * Self-contained on purpose: the wire types below are structural mirrors of the rc.2 vendored
+ * `@deepseek-ai/dsh-host-plugin-inventory` result type (its `src/types.ts`); no dsh package
+ * import. Only the members this read-only view projects are declared: the Loader `entries`
+ * (entryId / moduleName / enabled / fiberPhase). Host display metadata (`meta`),
+ * `managementAvailable` and the per-agent-preset `agentPresets` compositions have no consumer in
+ * this repo and are dropped at parse.
  */
 
 import {
@@ -34,37 +38,9 @@ export interface PluginInventoryEntry {
   readonly fiberPhase: PluginFiberPhase
 }
 
-/** Effective enablement of one preset composition row. */
-export type PresetPluginEnablement = boolean | 'conditional'
-
-/** One plugin row an agent preset's composition names. */
-export interface AgentPresetPluginRow {
-  /** Composition row id, or null when the row declares none. */
-  readonly entryId: string | null
-  /** Module specifier the row names. */
-  readonly moduleName: string
-  readonly enabled: PresetPluginEnablement
-  /** The row's own `!!js` disabled expression, when it carries one. */
-  readonly condition?: string
-  readonly fiberPhase: PluginFiberPhase
-}
-
-/** One agent preset's identity and flattened composition in the inventory. */
-export interface AgentPresetPluginGroup {
-  readonly id: string
-  readonly trust: 'system' | 'user'
-  readonly name?: string
-  readonly isDefault: boolean
-  /** Why this preset's composition cannot be read; absent when rows answer. */
-  readonly broken?: string
-  readonly rows: readonly AgentPresetPluginRow[]
-}
-
-/** Point-in-time inventory returned by the plugin inventory Remote. */
+/** Point-in-time inventory returned by the plugin inventory Remote; only the Loader entries. */
 export interface PluginInventorySnapshot {
   readonly entries: readonly PluginInventoryEntry[]
-  /** Per-preset compositions, present only when an agent-preset roster is composed in this deployment. */
-  readonly agentPresets?: readonly AgentPresetPluginGroup[]
 }
 
 /** The Remote failure union's error member (bridge wire mirror). */
@@ -96,38 +72,6 @@ function parseEntry(value: unknown): PluginInventoryEntry {
   }
 }
 
-function parsePresetRow(value: unknown): AgentPresetPluginRow {
-  if (!isRecord(value) || (value.entryId !== null && !isString(value.entryId))
-    || !isString(value.moduleName)
-    || (value.enabled !== true && value.enabled !== false && value.enabled !== 'conditional')
-    || !isPluginFiberPhase(value.fiberPhase)) {
-    throw new TypeError('plugin-inventory: invalid preset composition row')
-  }
-  return {
-    entryId: value.entryId,
-    moduleName: value.moduleName,
-    enabled: value.enabled,
-    ...(value.condition === undefined || !isString(value.condition) ? {} : { condition: value.condition }),
-    fiberPhase: value.fiberPhase,
-  }
-}
-
-function parsePresetGroup(value: unknown): AgentPresetPluginGroup {
-  if (!isRecord(value) || !isString(value.id)
-    || (value.trust !== 'system' && value.trust !== 'user')
-    || typeof value.isDefault !== 'boolean' || !Array.isArray(value.rows)) {
-    throw new TypeError('plugin-inventory: invalid preset group')
-  }
-  return {
-    id: value.id,
-    trust: value.trust,
-    ...(value.name === undefined || !isString(value.name) ? {} : { name: value.name }),
-    isDefault: value.isDefault,
-    ...(value.broken === undefined || !isString(value.broken) ? {} : { broken: value.broken }),
-    rows: value.rows.map(parsePresetRow),
-  }
-}
-
 /** Validate the server-response envelope and project its `result` (mirror of the official parseConnectionResponse). */
 function parseRemoteResult(value: unknown): { ok: true; value: PluginInventorySnapshot } | { ok: false; error: PluginInventoryRpcFailure } {
   if (!isRecord(value) || value.type !== 'server-response' || !isString(value.rpcId)) {
@@ -140,15 +84,9 @@ function parseRemoteResult(value: unknown): { ok: true; value: PluginInventorySn
     if (!isRecord(snapshot) || !Array.isArray(snapshot.entries)) {
       throw new TypeError('plugin-inventory: invalid snapshot')
     }
-    let value: PluginInventorySnapshot = { entries: snapshot.entries.map(parseEntry) }
-    const agentPresets = snapshot.agentPresets
-    if (agentPresets !== undefined) {
-      if (!Array.isArray(agentPresets)) {
-        throw new TypeError('plugin-inventory: invalid preset list')
-      }
-      value = { ...value, agentPresets: agentPresets.map(parsePresetGroup) }
-    }
-    return { ok: true, value }
+    // `meta` / `managementAvailable` / `agentPresets` carry no consumer here and are not read:
+    // projecting only `entries` keeps the snapshot = exactly what this view renders.
+    return { ok: true, value: { entries: snapshot.entries.map(parseEntry) } }
   }
   const error = result.error
   if (result.ok !== false || !isRecord(error) || !isString(error.code) || !isString(error.message)) {

@@ -124,6 +124,14 @@ export const GROUPS = {
     'test/archive-purge/archive-purge.test.ts',
     'test/archive-purge/purged-tracker.test.ts',
   ],
+  // leading: the frame's window-chrome seat occupant that keeps the reopen control
+  // reachable while the macOS collapse hides the whole column (design 05 §2): the
+  // control-binding contract plus the client/index.ts wiring lock a cordis plugin
+  // body cannot be imported for.
+  leading: [
+    'test/leading/leading-controls.test.ts',
+    'test/leading/leading-seat-wiring.test.ts',
+  ],
   // visual-lock: source locks over the sidebar's visual rules. No entrance animation may
   // start invisible (a frozen timeline pins it at opacity 0 while staying hit-testable),
   // and the renderer must refuse to create animations inside a shell nobody renders.

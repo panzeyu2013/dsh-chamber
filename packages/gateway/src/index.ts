@@ -36,7 +36,6 @@ import { createChamberSurface, type ChamberSurface } from './routes.ts'
 import { createSessionStateService, type SessionStateService } from './session-state.ts'
 import { createChamberPlugins, syncedSourceDir } from './plugins.ts'
 import { createChamberInstalled } from './plugins-installed.ts'
-import { createChamberPluginTasks, type ChamberPluginTasks } from './plugins-tasks.ts'
 import { createGatewayStore, type GatewayStore } from './store.ts'
 import { createChannelRegistry } from './channels.ts'
 import { createGatewayRuntimeManager, type GatewayRuntimeManager } from './runtime-manager.ts'
@@ -135,10 +134,6 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
   let chamberSurface!: ChamberSurface
   // Read-only session-state watcher built below; getters dereference createdPlane/proxy lazily like the proxy.
   let sessionState!: SessionStateService
-  // A1 mutation orchestrator: journal + serial executor + deferred intents
-  // behind the runtime-manager profile-write lease; the executor spawns only under
-  // a granted lease and disposes AFTER the manager in both shutdown paths.
-  let pluginTasks!: ChamberPluginTasks
   let dispatch!: ReturnType<typeof createGatewayDispatch>
   let started = false
   let startPromise: Promise<void> | null = null
@@ -194,40 +189,6 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         return { path: workspace.path, version: workspace.version }
       },
     )
-    // A1 mutation orchestrator: journal + serial executor + deferred install
-    // intents behind the runtime-manager profile-write lease. Boot reconciliation
-    // marks pending ops from a previous run failed, preImage retained.
-    pluginTasks = createChamberPluginTasks({
-      stateDir: options.config.plane.stateDir,
-      manager: () => runtimeManager,
-      statusProbe: () => createdPlane.connectionState,
-      logger,
-      installed,
-      // "装完自动受控 restart 一次": after drained installs ran to ok, one controlled
-      // restart mounts them on the running instance. Every gate below mirrors
-      // /chamber/runtime/restart's synchronous refusals; a closed gate is a SKIP.
-      restartManaged: async () => {
-        const manager = runtimeManager
-        if (manager === null || stopping) return
-        try {
-          const status = await manager.status()
-          if (typeof status.startupBlockedReason === 'string' && status.startupBlockedReason !== '') return
-          if (status.pending !== null) return
-          if (status.phase === 'pending' || status.phase === 'applying' || status.phase === 'installing'
-            || status.phase === 'snapshot-failed' || status.phase === 'swap-attempted' || status.phase === 'restore-blocked') return
-          if (status.connectionState !== 'ready' && status.connectionState !== 'degraded') return
-          if (manager.profileWriteInFlight() || manager.restartInFlight()) return
-          await manager.restart()
-        } catch (error) {
-          logger.warn(`gateway plugin drain restart failed: ${error instanceof Error ? error.message : String(error)}`)
-        }
-      },
-    })
-    pluginTasks.reconcileJournal()
-    // Staged-archive orphan sweep: terminal materialize ops RETAIN their staged
-    // archive (the manifest keeps its file: spec), so re-materialize/remove
-    // cycles would leak archives — reclaim them while the executor is idle.
-    pluginTasks.sweepOrphanedStagedArchives()
     // The read-only session-state watcher: lazy getters like the proxy/chamber
     // surface, started only on the ready/degraded host edge and gated by the same
     // exposure quarantine (never a quarantined candidate tree). The waterfall
@@ -242,16 +203,14 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       canExposeLocal: () => !stopping && !runtimeExposureQuarantined(),
       otherMuxClientsConnected: () => (proxy?.getDiagnostics().activeStreams ?? 0) > 0,
     })
-    // The chamber surface: channels + dashboard assets + plugin-sync cache + the
-    // installed projection + the A1 write routes + read-only session-state routes —
-    // no feature host, no readiness coupling; with auth.ts one of its two writers.
+    // The chamber surface: channels + dashboard assets + plugin-sync cache +
+    // the installed read projection + read-only session-state routes — no
+    // feature host, no readiness coupling; with auth.ts one of its two writers.
     chamberSurface = (options.deps?.createChamberSurface ?? createChamberSurface)({
       logger,
       channels,
       plugins,
       installed,
-      tasks: pluginTasks,
-      stateDir: options.config.plane.stateDir,
       sessionState: sessionState.surface,
     })
     // The runtime controller is gateway-owned and NOT ready-gated: its manager dereference stays lazy so dsh-down windows stay pollable.
@@ -374,20 +333,10 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     throw error
   }
   function syncFeatures(status: string): void {
-    // Readiness coupling is real: that surface carries the A1 plugin MANAGEMENT writes
-    // and the /chamber/runtime controller, so this subscription forwards the
-    // authoritative state, then drains deferred plugin intents on the ready/degraded
-    // edge — the execution window.
+    // Readiness coupling is real: that surface carries the /chamber/runtime
+    // controller and the seed-cache reads, so this subscription forwards the
+    // authoritative state to the runtime manager.
     runtimeManager?.observeLocalState?.(status)
-    // Deferred-intent drain: intents persisted while the runtime was busy, the manager
-    // unbuilt or the profile missing are re-submitted on the next ready/degraded edge,
-    // once the spawn has seeded the profile. The lease refusal matrix is the real gate;
-    // drainDeferred is single-flight.
-    if ((status === 'ready' || status === 'degraded') && runtimeManager !== null && !stopping) {
-      void pluginTasks.drainDeferred().catch(error => {
-        logger.warn(`gateway plugin deferred-intent drain failed: ${String(error)}`)
-      })
-    }
     // Session-state watcher edge: observe only while the managed host is exposed
     // and ready/degraded; every other edge pauses the observer, the routes keeping
     // the last snapshot with host.serviceable=false. start/stop are idempotent.
@@ -485,8 +434,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       } catch (error) {
         // The HTTP server is opened before the runtime startup transaction: fence
         // credential writers and break requests still waiting for body bytes; mutations
-        // stay tracked until their route tail settles. /chamber plugin writes answer 202
-        // BEFORE their mutation runs — the A1 executor children die in dispose() below.
+        // stay tracked until their route tail settles.
         const dispatchQuiescence = dispatch.quiesce()
         syncFeatures('error')
         unsubscribeLocalState?.()
@@ -499,13 +447,6 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
           logger.warn(`gateway runtime disposal failed; state-root lease retained: ${String(stopError)}`)
         }
         if (runtimeDisposalError === null) runtimeManager = null
-        let pluginTasksDisposalError: unknown = null
-        try {
-          await pluginTasks.dispose()
-        } catch (stopError) {
-          pluginTasksDisposalError = stopError
-          logger.warn(`gateway plugin executor disposal failed; state-root lease retained: ${String(stopError)}`)
-        }
         let dispatchQuiescenceError: unknown = null
         try {
           await dispatchQuiescence
@@ -518,16 +459,16 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         // process) can take over the root. A failed runtime disposal retains it: letting
         // another gateway in would turn a cleanup failure into concurrent mutation.
         let leaseReleaseError: unknown = null
-        if (runtimeDisposalError === null && pluginTasksDisposalError === null && dispatchQuiescenceError === null) {
+        if (runtimeDisposalError === null && dispatchQuiescenceError === null) {
           try {
             stateLease.release()
           } catch (releaseError) {
             leaseReleaseError = releaseError
           }
         }
-        if (runtimeDisposalError !== null || pluginTasksDisposalError !== null || dispatchQuiescenceError !== null || leaseReleaseError !== null) {
+        if (runtimeDisposalError !== null || dispatchQuiescenceError !== null || leaseReleaseError !== null) {
           throw new AggregateError(
-            [error, runtimeDisposalError, pluginTasksDisposalError, dispatchQuiescenceError, leaseReleaseError].filter(reason => reason !== null),
+            [error, runtimeDisposalError, dispatchQuiescenceError, leaseReleaseError].filter(reason => reason !== null),
             'gateway startup rollback could not prove all state writers quiescent; state-root lease retained',
           )
         }
@@ -550,8 +491,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     lifecycleEpoch += 1
     // Admission closes synchronously inside quiesce(), before any async teardown can
     // release the state-root lease or stop the dsh dependency of an already-entered
-    // saga. Credential/runtime writers stay behind the dispatch fence; /chamber plugin
-    // mutations answer 202 before their executor children run, killed AFTER the manager.
+    // saga. Credential/runtime writers stay behind the dispatch fence.
     const dispatchQuiescence = dispatch.quiesce()
     const pendingStart = startPromise
     const managerAtStop = runtimeManager
@@ -564,11 +504,10 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
 
     // Start quiescing immediately instead of waiting for startPromise: with a real
     // manager this is the lifecycle-abort + writer barrier, and the async IIFE invokes
-    // dispose() synchronously up to its first await. The plugin executor follows it.
+    // dispose() synchronously up to its first await.
     const runtimeDisposal = (async (): Promise<unknown> => {
       try {
         await managerAtStop?.dispose()
-        await pluginTasks.dispose()
         return null
       } catch (stopError) {
         logger.warn(`gateway runtime disposal failed; state-root lease retained: ${String(stopError)}`)

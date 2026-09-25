@@ -11,7 +11,9 @@
  *   2. packages/desktop/dist/preload.cjs —— tsc 编译产物，成员面由
  *      preload.cts 决定（G4 只比成员数，不比内容）；
  *   3. packages/renderer/src/generated/typert/<remote>/ —— gen-typert-remotes 的
- *      生成产物，remote 装配契约（C4）读的就是它；
+ *      生成产物，remote 装配契约（C4）读的就是它；生成器 emit 前清空输出树，
+ *      本门按「重跑前后相对补集为空 + 目录键集 == C4 roster」判集合，再逐字节
+ *      比对同名文件——单看交集内容会漏掉旧 remote 留下的孤儿产物；
  *   4. packages/gateway/dist/index.js —— build:gateway 的 esbuild 产物（包 exports
  *      的落点）；用包自己的 build.mjs 在临时副本里重建后逐字节比对（模块路径按
  *      packages/gateway cwd 归一），dist 不在场时 loud SKIP。
@@ -29,6 +31,10 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+// The C4 mount-order table is the single source for the generated artifact set
+// (shared with the upgrade touchpoint gate); the freshness gate never re-types
+// the 23 names.
+import { EXPECTED_MOUNT_PACKAGES } from '../../packages/renderer/scripts/typert-remote-contract.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const results = []
@@ -82,33 +88,74 @@ function checkPreload() {
   }
 }
 
-/** 3. renderer/src/generated：快照 → 重跑生成器 → 比对 → 还原（C8 同款纪律）。 */
+/**
+ * Pure set verdict for the generated tree:
+ *  - the relative complements BOTH ways must be empty (a stale artifact the
+ *    rerun did not produce is a removal; an artifact the snapshot never had is
+ *    an addition),
+ *  - the emitted directory set must equal the C4 roster (no wrong-named extra
+ *    can hide behind a matching count),
+ *  - the file count must equal the roster (one artifact per remote).
+ * @param {readonly string[]} before - relative paths in the pre-rerun snapshot.
+ * @param {readonly string[]} after - relative paths after the rerun.
+ * @param {readonly string[]} roster - package names of the C4 contract.
+ * @returns {{ added: string[], removed: string[], dirs: string[], expectedDirs: string[], countMismatch: boolean, stale: boolean }}
+ */
+export function generatedTreeVerdict(before, after, roster = EXPECTED_MOUNT_PACKAGES) {
+  const beforeSet = new Set(before)
+  const afterSet = new Set(after)
+  const added = after.filter((file) => !beforeSet.has(file))
+  const removed = before.filter((file) => !afterSet.has(file))
+  const dirs = [...new Set(after.map((file) => file.split('/')[0]))].sort()
+  const expectedDirs = [...new Set(roster.map((name) => name.slice('@deepseek-ai/'.length)))].sort()
+  const countMismatch = after.length !== roster.length
+  const stale = added.length > 0 || removed.length > 0 || countMismatch
+    || JSON.stringify(dirs) !== JSON.stringify(expectedDirs)
+  return { added, removed, dirs, expectedDirs, countMismatch, stale }
+}
+
+/** 3. renderer/src/generated/typert：快照 → 重跑生成器 → 集合+字节比对 → 还原（C8 同款纪律）。 */
 function checkGenerated() {
-  const tree = join(ROOT, 'packages', 'renderer', 'src', 'generated')
+  const tree = join(ROOT, 'packages', 'renderer', 'src', 'generated', 'typert')
   const backup = tree + '.freshness-backup'
-  if (!existsSync(tree)) { note('renderer/src/generated', 'skip', '未生成（无 src/generated）'); return }
+  if (!existsSync(tree)) { note('renderer/src/generated/typert', 'skip', '未生成（无 src/generated/typert）'); return }
   try {
     rmSync(backup, { recursive: true, force: true })
     cpSync(tree, backup, { recursive: true })
     execFileSync(process.execPath, [join(ROOT, 'packages', 'renderer', 'scripts', 'gen-typert-remotes.mjs')], { cwd: ROOT, stdio: 'pipe' })
-    const walk = (dir, out = []) => {
+    // Paths are relative to the walk ROOT on both sides: the snapshot lives in
+    // a sibling directory, so a hardcoded `tree` base would spell every backup
+    // file as '../typert.freshness-backup/...' and defeat the set comparison.
+    const walk = (dir, base, out = []) => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const full = join(dir, entry.name)
-        if (entry.isDirectory()) walk(full, out)
-        else out.push(relative(tree, full))
+        if (entry.isDirectory()) walk(full, base, out)
+        else out.push(relative(base, full))
       }
       return out
     }
-    const now = walk(tree).sort()
-    const before = walk(backup).sort()
+    const now = walk(tree, tree).sort()
+    const before = walk(backup, backup).sort()
+    const verdict = generatedTreeVerdict(before, now)
     const changed = []
-    for (const file of new Set([...now, ...before])) {
+    for (const file of now) {
       if (!sameBytes(join(tree, file), join(backup, file))) changed.push(file)
     }
-    if (changed.length > 0) note('renderer/src/generated', 'stale', '重跑生成器后不一致：' + changed.slice(0, 5).join(', ') + '（重建：pnpm run build:renderer）')
-    else note('renderer/src/generated', 'ok', before.length + ' 个生成文件与重跑结果一致')
+    const details = []
+    if (verdict.added.length > 0) details.push('重跑多出：' + verdict.added.slice(0, 5).join(', '))
+    if (verdict.removed.length > 0) details.push('重跑未产出（旧残留）：' + verdict.removed.slice(0, 5).join(', '))
+    if (verdict.countMismatch) details.push('数量 ' + now.length + ' != C4 roster ' + EXPECTED_MOUNT_PACKAGES.length)
+    if (JSON.stringify(verdict.dirs) !== JSON.stringify(verdict.expectedDirs)) {
+      details.push('目录集 != C4 roster：[' + verdict.dirs.join(', ') + '] vs [' + verdict.expectedDirs.join(', ') + ']')
+    }
+    if (changed.length > 0) details.push('内容不一致：' + changed.slice(0, 5).join(', '))
+    if (verdict.stale || changed.length > 0) {
+      note('renderer/src/generated/typert', 'stale', details.join('；') + '（重建：pnpm run build:renderer）')
+    } else {
+      note('renderer/src/generated/typert', 'ok', before.length + ' 个生成文件与重跑结果一致（集合与 C4 roster 一致）')
+    }
   } catch (error) {
-    note('renderer/src/generated', 'skip', '无法重跑 gen-typert-remotes：' + String(error.message ?? error).split('\n')[0])
+    note('renderer/src/generated/typert', 'skip', '无法重跑 gen-typert-remotes：' + String(error.message ?? error).split('\n')[0])
   } finally {
     if (existsSync(backup)) { rmSync(tree, { recursive: true, force: true }); cpSync(backup, tree, { recursive: true }); rmSync(backup, { recursive: true, force: true }) }
   }
@@ -195,8 +242,21 @@ function main() {
     execFileSync(process.execPath, ['-e', 'require("node:fs").appendFileSync(process.argv[1], String.fromCharCode(10))', b])
     const detected = !sameBytes(a, b)
     rmSync(a, { force: true }); rmSync(b, { force: true })
-    console.log('artifact-freshness self-test: ' + (identical && detected ? 'ok（同内容=一致，追加一字节=陈旧）' : 'FAIL'))
-    process.exit(identical && detected ? 0 : 1)
+    // Set arm (the checkGenerated instrument): an EXTRA artifact the rerun does
+    // not emit must read as stale (removed), a missing one as stale too, and the
+    // roster directory set must be judged, not just the count.
+    const roster = ['@deepseek-ai/dsh-a', '@deepseek-ai/dsh-b']
+    const emitted = ['dsh-a/f.js', 'dsh-b/f.js']
+    const clean = generatedTreeVerdict(emitted, emitted, roster)
+    const extra = generatedTreeVerdict([...emitted, 'dsh-stale/f.js'], emitted, roster)
+    const missing = generatedTreeVerdict(emitted, ['dsh-a/f.js'], roster)
+    const wrongDir = generatedTreeVerdict(['dsh-c/f.js', 'dsh-a/f.js'], ['dsh-c/f.js', 'dsh-a/f.js'], roster)
+    const setArm = clean.stale === false
+      && extra.stale && extra.removed.length === 1 && extra.added.length === 0
+      && missing.stale && missing.countMismatch
+      && wrongDir.stale
+    console.log('artifact-freshness self-test: ' + (identical && detected && setArm ? 'ok（同内容=一致，追加一字节=陈旧，多余/缺失/错名产物=陈旧）' : 'FAIL'))
+    process.exit(identical && detected && setArm ? 0 : 1)
   }
   checkHostPackages()
   checkPreload()

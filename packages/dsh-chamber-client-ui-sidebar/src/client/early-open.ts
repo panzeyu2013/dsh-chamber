@@ -6,9 +6,10 @@
  * this arm polls the page-wide open-intent slot (`App.openSession` owns
  * arm/release) in the target ctx and preempts the policy as soon as the
  * requested session is addressable. Contract: never reports an outcome (the
- * App owns the terminal report and row-level error surface; `sessions.open`
- * is idempotent); one open per arm; live-intent read (absent slot = "not
- * yet"); a missing/throwing list face retires silently.
+ * App owns the terminal report and row-level error surface; the official
+ * `uiWorkspace.openSession` is idempotent — it retains the target again and
+ * releases the reference it replaced); one open per arm; live-intent read
+ * (absent slot = "not yet"); a missing/throwing list face retires silently.
  */
 import {
   EARLY_OPEN_BUDGET_MS,
@@ -26,7 +27,11 @@ export interface EarlyOpenArmDeps {
    * probe rather than an id set: 50ms cadence, lists can hold thousands of rows.
    */
   isAddressable: (sessionId: string) => boolean | undefined
-  /** Open on this ctx's OWN sessions service (method call, never a detached reference). */
+  /**
+   * Present on this ctx's OWN official view owner (method call, never a
+   * detached reference): `uiWorkspace.openSession` retains the target as the
+   * main view and releases the reference it replaced.
+   */
   open: (sessionId: string) => void
   /** One loud line for a refused open (an unexpected state: the id was listed). */
   warn: (message: string) => void

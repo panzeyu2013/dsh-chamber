@@ -4,6 +4,18 @@
 >
 > 相关设计：13（ssh 远端插件管理）、17（gateway 形态与 /chamber 面）、18（runtime 管理）、05（连接设备页）、02（seed 与 spawn 语义）；与 13/17/18/05 的关系见 §8，02 的 seed/spawn 语义关系见 §2.4。
 
+> **实现状态（2026-09 C 分层裁决，已落地为本仓基线）**：**gateway 插件写路由已退役**——
+> `PUT /chamber/plugins/install`、`POST /chamber/plugins/remove`、`POST /chamber/plugins/undo`、
+> `GET /chamber/plugins/tasks`、`PUT /chamber/plugins/materialize` 与 `plugins-exec.ts` /
+> `plugins-journal.ts` / `plugins-tasks.ts` / `plugins-undo.ts` / `pnpm-entry` 的 exec 接线全部
+> 删除；桌面侧 `gateway_plugin_apply` / `gateway_plugin_materialize` IPC 与 ssh 的
+> `plugin_apply` / `ssh_plugin_undo` / materialize / npm search / local add-remove 同步退役。
+> **保留**：`GET /chamber/plugins`（seed-cache 读）、`PUT /chamber/plugins`（桌面同步
+> chamber 宿主包的供给面）、`GET /chamber/plugins/installed`（服务端 protected 行投影）、
+> `/chamber/runtime/*` 控制器与移动端/PWA 面。§2.2/§2.3/§2.5/§6.2-§6.6/§6.11.3 中描述
+> install/remove/undo/tasks/materialize 的段落为历史契约，不再有实现；§6.11.5 读面投影、
+> §2.4 seed 与 §6.11 的播种豁免仍有效。
+
 ## 1. 目标与决策
 
 三个用户诉求（来自 connections 连接设备页）：**A** gateway 连接缺 ssh+dsh 那样的第三方插件「添加/同步/移除」闭环（“使用 gateway 功能反而退化”）；**B** gateway 卡上「日志 / 主机日志」两个入口无法区分；**C** connections 页缺 gateway「重启 dsh」按钮（runtime 受控重启机制已就绪，连接页无入口）。
@@ -38,13 +50,13 @@
 ### 2.1 本地 profile 插件管理
 `desktop_local_plugin_list / add / add_file / remove`；主进程 `runLocalDshPlugin`（desktop/plugin-sync.ts）固定 argv 执行 `dsh plugin add <spec>` / `add file:<path>` / `remove <name>`，showMessageBox 确认，取消 = `{ok:true, cancelled:true}`（design 13 §5/§7.0）。本地清单 = 读本地 `<home>/profiles/web/package.json` 依赖投影 + 分类 + chamber 注入态版本。
 
-### 2.2 ssh 远端插件管理
+### 2.2 ssh 远端插件管理（写面已退役，见开篇；下述写条目为历史契约）
 `desktop_ssh_plugin_list / plugin_apply / seed_host_graph / plugin_materialize_add(_pick)`、`restart_service`——插件 exec 面（list/apply/seed/materialize）仅服务 `{kind:'dsh', transport:'ssh'}`（main.ts 门控、design 13 §1）；systemd exec（含 restart_service）**只按 ssh transport 门控**、gateway-over-ssh 亦可用（§3）。远端清单 = ssh cat 远端 profile
 package.json → `parseRemoteManifest` 投影（**原始 spec 值**，plugin-sync.ts）；差异由 `computePluginDiff`
 计算；apply = 主进程二次白名单 → 远端 `dsh plugin add/remove`（registry spec 或 materialize `add file:`），
 remove 先于 add、可 defer 重启；write-file 上限 50 MiB；spec/name 白名单常量单一来源 = control-plane 共享纯模块 `plugin-spec.ts`（desktop 经双路径 facade 消费），渲染端 ADD_SPEC 为**锁步测试守护的手写镜像**（§6.2）；受保护集合 `P` 的判定与投影见 §6.11（单一来源 = control-plane `protected-plugins.ts`，与 `plugin-spec.ts` 同族）。
 
-### 2.3 插件管理 UI
+### 2.3 插件管理 UI（写面按钮/对话框已退役，只读行保留）
 四个来源（本地 / ssh+dsh / gateway / http 直连）共用 `PluginDialog`（`PluginDialog.tsx`，§6.6；旧 `PluginSyncModal`/`PluginInventoryView` 已删），卡片按 `target.kind` 把数据源喂给同一对话框；gateway/http 直连区**非只读**：含已安装行/移除/撤销/restart 面板/tasks 投影/sync 状态（http 直连无可执行后端，只读）。`plugin-diff.ts` 纯函数族（missing/update/extra/materialize/unsyncable/consistent——**无 scope 逻辑**；受保护行过滤在**输入侧**，见 §6.11：`computePluginDiff` 只吃第三方/materialize 行）、plugin-inventory-text/plugin-diagnostic 纯投影（thirdPartyEntries 过滤 @deepseek-ai/* + chamber 注册表包（含 archive-cleanup），并排除调用方传入的注册表派生 expected 名单（仅 Loader 已加载事实层）——**这两个前缀分类器是 Loader 清单的展示分类，不是安装门，随 §6.11 落地后继续保留**）。测试 = connections 纯模块文件，**无组件级测试**。「chamber 内置（注入）」表行集不写死包名，由控制面 `CHAMBER_HOST_PACKAGES` 经 desktop IPC 投影（`chamber.packages[]`）驱动，UI 逐行映射；`remoteNeedsSeed`/重启提示/seed-cache 漂移/同步包表同样逐包派生（design 13 §6）。行派生收敛为纯函数 `deriveChamberRows`
 （plugin-inventory-text.ts，只回 label KEY 与版本 STRING，组件只做 descriptor→JSX 映射），
 由 `test/plugin-inventory/chamber-rows.test.ts` 表驱动测试覆盖（含 LOCAL 目标读自身清单、空 expected 不谎报 seed-cache、gateway 客户端行由 Loader inventory 分类派生、inventory 不可用时 unknown 行而非写死包名）。
@@ -86,8 +98,8 @@ gateway 卡「主机日志」与「日志」并列、插件入口同形、Modal 
 方案：环形缓冲入口与 Modal 标题「日志」→「连接日志」（说明行：本机侧连接通道事件：隧道/探针/握手验证等
 连接过程记录，用于诊断连接问题——覆盖 http 直连）；gateway 卡「主机日志」→「网关主机日志」（服务器侧
 gateway 进程与托管 dsh spawn 日志）；本地卡折叠区「主机日志」不改名；service 行 Checklist（状态行）保留，但与两个日志入口视觉上明确区分（插件入口改图标后 Checklist 仅剩 service 行与日志入口——日志入口一并换图标）。
-图标：插件入口（本地+远端）→ IconFolderOpenOutline16；连接日志入口 → IconSearchOutline16；网关主机日志保留
-IconDataOutline16；service 行保留 IconChecklistOutline14（状态行）。图标取仓内既有 primitives 导出（IconFolderOpenOutline16/IconSearchOutline16，先例 sidebar vendor-modules.d.ts）；换点：import + 按钮 + ambient 一行。键名稳定（logs/hostLogs 改值不改键），新增 gatewayHostLogs/logsModalHint/gatewayHostLogsModalHint；zh 源 + en 镜像，词典一致性由 typecheck（`Record<keyof typeof zh>`）保证；README 双语变更需重录 README.i18n.yaml 哈希。B 以键名 + 文案 + 图标三重区分交付。
+图标：插件入口（本地+远端）→ IconFolderOpenOutlineRegular；连接日志入口 → IconSearchOutlineRegular；网关主机日志保留
+IconDataOutlineRegular；service 行保留 IconChecklistOutlineRegular（状态行）。图标取仓内既有 primitives 导出（IconFolderOpenOutlineRegular/IconSearchOutlineRegular，先例 sidebar vendor-modules.d.ts）；换点：import + 按钮 + ambient 一行。键名稳定（logs/hostLogs 改值不改键），新增 gatewayHostLogs/logsModalHint/gatewayHostLogsModalHint；zh 源 + en 镜像，词典一致性由 typecheck（`Record<keyof typeof zh>`）保证；README 双语变更需重录 README.i18n.yaml 哈希。B 以键名 + 文案 + 图标三重区分交付。
 
 ## 5. C · gateway「重启 dsh」入口
 
@@ -124,11 +136,11 @@ http+dsh 直连无按钮。
 - 边界口径取决策表 1/3/4/13/14/20（自动同步仅 chamber 宿主包）；写面互斥与生命周期集成（决策 6/17）见 §6.3。
 - 「已安装」列表、**受保护集合判定**、undo/恢复 = 模型统一功能，ssh 与 gateway 后端同权（决策 10/11/19，§6.4）；「同权」指**动词与投影同权**：判定规则逐后端可不同（gateway/local 全功能；ssh 装面保守），但规则本身是同一份 `P` 的定义与同一条 op 分相矩阵（§6.11），不得各自发明拒绝集。
 
-### 6.2 gateway 后端路由契约
+### 6.2 gateway 后端路由契约（install/remove/undo/tasks/materialize 行已退役；installed 读面行仍有效）
 | 路由 | 语义 |
 |---|---|
 | `GET /chamber/plugins` | chamber 宿主包种子缓存投影（§2.4） |
-| `GET /chamber/plugins/installed` | 模型 readManifest 的 gateway 实现（packages/gateway/src/plugins-installed.ts）：`{dependencies: name→spec（路径类值以 wire 单源的 MATERIALIZED_VALUE_MASK / isMaterializedValue 掩码，保留 file: 前缀供 name 基 diff；gateway 本地路径不进 renderer）, bundles, rows: PluginRow[], profileExists, error?}`（**加性**：`dependencies` 语义不变，`rows` = §6.11 的读面投影 `{name, spec\|null, version\|null, role, protected, owner?}`）；受保护集合由**服务端**计算并投影（服务端是 gateway 目标的判定权威，§6.11）。语义：profile 缺失 → **404** `{error:'managed profile is not initialized', code:'profile_absent'}`；解析失败 → **500** `{error:'managed profile is corrupted', code:'profile_corrupt'}`（细节仅宿主日志）；method GET-only 405；**读与写面共享栅栏**：写面在飞（执行器忙或有 journal `pending` op = profile-write 租约持有期间）→ **409 `runtime_busy`**（可重试，与 /chamber/runtime 的租约拒绝同码；deferred 意图无写者、不算在飞，停机态 read 照常 200/404；**栅栏探针不可用 → 503 `write_fence_unavailable`**，绝不退回裸读：投影与 `dependencies`/`rows` 都不下发） |
+| `GET /chamber/plugins/installed` | 模型 readManifest 的 gateway 实现（packages/gateway/src/plugins-installed.ts）：`{dependencies: name→spec（路径类值以 wire 单源的 MATERIALIZED_VALUE_MASK / isMaterializedValue 掩码，保留 file: 前缀供 name 基 diff；gateway 本地路径不进 renderer）, rows: PluginRow[], profileExists, error?}`（**加性**：`dependencies` 语义不变，`rows` = §6.11 的读面投影 `{name, spec\|null, version\|null, role, protected}`；`dsh.profile.bundles` 只作服务端 role 分类器，**不再随投影下发**——远端无读点）；受保护集合由**服务端**计算并投影（服务端是 gateway 目标的判定权威，§6.11）。语义：profile 缺失 → **404** `{error:'managed profile is not initialized', code:'profile_absent'}`；解析失败 → **500** `{error:'managed profile is corrupted', code:'profile_corrupt'}`（细节仅宿主日志）；method GET-only 405；**读与写面共享栅栏**：写面在飞（执行器忙或有 journal `pending` op = profile-write 租约持有期间）→ **409 `runtime_busy`**（可重试，与 /chamber/runtime 的租约拒绝同码；deferred 意图无写者、不算在飞，停机态 read 照常 200/404；**栅栏探针不可用 → 503 `write_fence_unavailable`**，绝不退回裸读：投影与 `dependencies`/`rows` 都不下发） |
 | `PUT /chamber/plugins/install` | body `{name, spec}`：spec 白名单族（**模型层常量单一来源在 control-plane 共享纯模块** `plugin-spec.ts`：desktop 经双路径 facade control-plane-module.ts 与打包产物同源、gateway 直接引用；渲染端 ADD_SPEC 手写镜像由**锁步测试**守护）；判定码的**本地化文案未做**：渲染端逐字显示服务端 `error`（§7 已登记）；**受保护集合判定 + 代耦合**（§6.11：`name ∈ P` → 400 `protected`；官方 scope 无版本 / `^`·`~`·dist-tag → 400 `needs-version`/`needs-exact-version`（回填建议 `@<runtimeVersion>`）；版本与实例运行时跨代（预发布必须全等）→ 400 `generation-mismatch`；F 读不到 → 503 `protected-set-unavailable`）；202 异步、队列串行 + 单写者栅栏；队列忙 → 409（code 见表）；输入错 → 400；profile 缺失 → deferred；执行失败 → 任务面持久投影；**装后复验**（§6.11.4 两段：先版本——F 名字按运行时提供的版本集合判，后闭包——非 F 名字在用户层闭包内则豁免；违例 = op 响亮失败 + preImage 保留；v1 自动回滚见 STATUS） |
 | `PUT /chamber/plugins/materialize` | 文件夹或 `.tgz` 直推：**独立流式上传读体**（不复用 8 MiB readUploadJsonBody；≤32 MiB、413+destroy、解包大小/文件数上限防膨胀）；**归档身份绑定**（扫描时**有界捕获**包内 `package/package.json`，要求与 `x-plugin-name`/`x-plugin-version` **逐字相等**，否则 400 `identity_mismatch`；无 manifest/超大/不可解析 → 400 `tgz_invalid`）——否则"自称第三方的包，真名是官方受保护名"会作为**直接依赖**落地，绕过装后复验的直接依赖豁免；name/version 形状校验 + **受保护集合判定与官方 scope 代校验**（§6.11：判定用 header 的 `name` + `version`，registry 路径的 spec 语法在这里不适用）；落 `chamber-plugins/third-party/<escaped>/<name>-<hash>.tgz`（0700/0600/原子 no-follow）；idle → `add file:`；否则 **deferred（意图持久化 name/spec/version，drain 时重投）** |
 | `POST /chamber/plugins/remove` | body `{name}`：installed 投影内名字 + **受保护集合判定（只判 `name ∈ P`，remove 永不判版本）**（§6.11）；202 异步；**停机态可用**；不在 installed 名单内 → 409 `not_installed`/`no_manifest` |
@@ -138,7 +150,7 @@ http+dsh 直连无按钮。
 
 错误码总表（`{error, code}` 蛇形约定；客户端按 status + code 组合判别）：`invalid_input`/`invalid_name`/`invalid_spec` 400、`body_too_large` 413、`invalid-name` 400（名字形状守卫，与 `invalid_name` 同义）、`protected`/`needs-version`/`needs-exact-version`/`generation-mismatch` 400（§6.11 判定码；**降级码 `protected-set-unavailable`：400（local/ssh）或 503（gateway，可重试）；`runtime-version-unknown` 400**；**旧码 `reserved` 退役**——新服务端不再产生，客户端解读**旧 gateway** 响应时仍须接受并映射同一组文案）、`not_installed`/`no_manifest` 409（`submitRefusalStatus` 默认族）、`profile_absent` = install 路径 deferred（202）/ `GET installed` 404、`profile_corrupt` = `GET installed` 500、`queue_busy`/`queue_full`/`runtime_busy`/`runtime_pending`/`runtime_recovery_required` 409、`too_large` 双档（执行体上传 413 / tgz 扫描 400）、`tgz_invalid`/`too_many_entries`/`identity_mismatch` 400（materialize 归档）、`install_failed`/`remove_failed`/`start_failed`（任务面 code）、`persistence_failed` 500。per-route 验收标准挂在 §9 矩阵的 §6.2 路由行上。
 
-### 6.3 gateway 后端执行器与互斥
+### 6.3 gateway 后端执行器与互斥（已退役）
 - 执行：spawn active runtime dsh CLI（resolveWorkspace）+ env `DSH_HOME=<stateDir>/dsh-home`；**安装子进程 env 纪律**：白名单 env（PATH+代理族，`INSTALL_ENV_WHITELIST` 由 dsh-runtime 导出共享、与 runtime-installer 同源），一切其它环境变量（`DSH_GATEWAY_*`、所有 npm_config_*/NPM_*、NODE_AUTH_TOKEN 等凭据载体）都不得进入安装子进程；XDG_CACHE_HOME/XDG_CONFIG_HOME 钉 stateDir 内私有目录（0700）+ 空 `NPM_CONFIG_USERCONFIG`/`npm_config_userconfig`（双大小写同指 0600 空文件——pnpm 11 config reader 精确读两 casing，不应放行操作者真实 ~/.npmrc；runtime-installer 先例仅钉 HOME/XDG_CACHE_HOME + 显式 `--store-dir` argv，其语境是**版本树安装**、无 profile 跨 store 问题）；**HOME 不钉**（钉 HOME 会把 pnpm store 移离 profile 物化所用 store，pnpm 11 以 store 不一致拒绝变更；executor 与 profile 引导同回落 passwd home 即天然同 store；`store-dir` 对任何 .npmrc（含 userconfig）均为死键，不得用 .npmrc 覆盖 store）。**部署形态约束（由此隐式成立）**：服务环境 HOME 须缺席或等于服务用户 passwd home；不得设置 `PNPM_HOME`/`XDG_DATA_HOME`（pnpm getDataDir 优先读
   之，物化子进程继承而变更子进程被白名单剥离 → 分叉）；操作者全局 `~/.config/pnpm/config.yaml`
   storeDir 不被变更子进程读取（XDG_CONFIG_HOME 已钉私有）而物化时可能被读 → 部署勿配全局
@@ -161,7 +173,7 @@ http+dsh 直连无按钮。
   门闭时 skip 不报错并登记；
 - 安装后自动「重启生效」：apply 默认 defer=false → 队列尾自动 restart（受 C 轮询语义）；defer=true 仅落盘不重启。
 
-### 6.4 ssh 后端收敛
+### 6.4 ssh 后端收敛（写面已退役；读面收敛仍有效）
 ssh 后端动词映射到既有 IPC（readManifest=plugin_list、apply=plugin_apply、materialize=plugin_materialize_add_pick、chamberProvision=seed_host_graph、restartToApply/startFromStopped=restart_service）；模型统一要求（ssh/gateway 同权，决策 10/11/19）：
 - 「已安装」列表逐行移除（consistent 行缺口修复）：ssh 后端的 remove 走 plugin_apply remove；
 - **受保护集合判定的 ssh 形态（修订，§6.11）**：`F` 无远端来源 ⇒ **装面保守**（官方 scope 一律拒，理由 = 无法用事实界定「会不会 shadow 远端锚点 release 包」）、**卸面按 `B₀ ∪ S` 事实判**（F 缺失只收紧不放松；B₀ 与 S 都可离线判定）；判定在主进程 `ssh-apply-rows` + `applyPlugins` 双侧落地（整批拒绝语义不变）+ 测试。
@@ -173,9 +185,9 @@ ssh 后端动词映射到既有 IPC（readManifest=plugin_list、apply=plugin_ap
 - 恢复引导 UI 与 gateway 一致（r0-r4 通用文案，后端差异仅在“启动/重启”动作映射）。
 改动均落在主进程/纯函数层，ssh 路径行为由既有纯测试 + 模型层测试守护。
 
-### 6.5 桌面 IPC / 渲染层
+### 6.5 桌面 IPC / 渲染层（写面 IPC 已退役；读面 IPC 保留）
 - 模型动词经渲染层统一调用点（主进程按目标解析后端）：`gateway_plugin_sync(id)`（手动同步兜底）——desktop 维护 gateway-sync-registry.ts、main.ts handler（id 白名单 + ready 复核 + `{ok:true,uploaded,skipped}|{ok:false,error}`）、preload/renderer 双镜像 + mirror golden（`GatewayPluginSyncIpcResult`，区别于 gateway-provider 同名 interface）；同步失败必须显式化：GET/PUT 非 200 与网络异常返回 `{failed:true,error}` 并映射 `ok:false`（「已是最新」不得吞失败）；网关 `PUT /chamber/plugins` 的校验拒绝回显脱敏原因（sanitizeRouteError，≤300B，不落裸 HTTP 400）；读侧经实例代理 GET `/chamber/plugins` 与 `/chamber/plugins/installed`（§6.2）驱动 chamber 区版本漂移显示与「立即同步」（gatewaySource 门控、http+dsh 只读不变）；seed-cache 键由 wrapper 统一加前缀一次（禁双前缀）；`gateway_plugin_apply(id, {add[], remove[], defer})` / `gateway_plugin_materialize(id)`（pick-only，取消 = {ok:true, cancelled:true}）——全部主进程执行 + showMessageBox 确认 + 经注册 origin（SPKI/隧道 Host 纪律同 syncGatewayChamberPlugins）；apply = remove 先于 add + settle-then-restart + partial 诚实（GatewayPluginApplyIpcResult）；materialize =
-  本机 `.tgz` 归档或文件夹 → tarball（plugin-tarball.ts `classifyPluginPick`，容量与 gateway 路由锁步）→ 202/deferred；
+  本机 `.tgz` 归档或文件夹 → tarball（**该 materialize 写面与 `plugin-tarball.ts`/`classifyPluginPick` 已退役**，见文首实现状态；原契约：容量与 gateway 路由锁步）→ 202/deferred；
         **直连 202（opId）后在桌面侧等 op 终态（tasks 轮询，1s×120s，复用 apply 的 waitForOpsToSettle）+ 请求受控重启并轮询 status**（与 apply 同一 settle 纪律），返回 `{ok:true,outcome:{executed,restarted}} | {ok:true,deferred:true} | {ok:false,error,outcome?}`（outcome 仅在「已执行但重启失败」类部分失败携带）；deferred 意图即时返回（网关就绪边沿排空并自动重启一次）。settle/status 轮询必须用纯 auth 头——误带 materialize 上传的 content-length 会让网关等待不存在的 body；确认后、执行前重读注册态与 ready/实例，漂移即 `ok:false`「连接在确认期间变化」，绝不按确认前快照执行；ssh 后端沿用既有 IPC 方法名，含 ssh undo journal/IPC（ssh_plugin_undo）与 SSH_PLUGIN_LIST 掩码挂接（§6.4）；归档导入选择器：local/ssh/gateway 三通道都接受**现成 `.tgz`**（npm-pack 布局）与插件源码文件夹
   （macOS NSOpenPanel 单对话框 file+folder 双模式；Windows FOS_PICKFOLDERS / GTK 无法混用 → 非 macOS 保持
     文件夹对话框，archive-pick 为 macOS-v1，Windows/Linux 腿随 design 22/23 排期）；local = `file:<归档绝对路径>`（allowFileSpec 通道），ssh = `materializeArchiveAndAdd`（免本地 pnpm pack，复用
@@ -185,7 +197,7 @@ ssh 后端动词映射到既有 IPC（readManifest=plugin_list、apply=plugin_ap
 - **镜像面（IPC 新增写方法时的真实编辑集）**：preload.cts（方法+invoke 字面量）+ ipc-events.ts（3 通道）+ main.ts（3 个 trustedIpc handler）+ renderer global.d.ts + test/ipc/ipc-surface-mirror.test.ts（golden 方法/字段清单 + 结果联合形状；apply 的 batch+cancelled 联合需形状守卫）+ connections global.d.ts（**re-export 型**，仅新命名类型落新文件时改动）。
 - 读侧（installed/tasks/status/Loader）全经实例代理 GET。
 
-### 6.6 UI：单一模型视图
+### 6.6 UI：单一模型视图（写面按钮已退役，只读行/诊断保留）
 `PluginDialog.tsx`（connections 包）是唯一插件对话框：local / ssh+dsh / gateway / http 直连四来源共用同一组件，
 后端分叉仅在数据源与动作分发；区域顺序 = 诊断横幅（bannerProjection 去重）→
 chamber 内建表（registry 驱动的宿主包行——注册表现有四行 client-graph / git-worktree / archive-cleanup /
@@ -204,7 +216,7 @@ http 直连只读。
 - **变更记录区不渲染 task 行**（后端 journal/备份保留，journal 仅供 undoForLatest 派生）；撤销恢复化
   **仅 gateway**（runtimeDown（stopped/error/restart-exhausted）且最新 ok op 有 `preImage` 时在恢复横幅显示
   恢复撤销入口；起该入口**直发 `POST /chamber/plugins/undo`** 并按 tasks 轮询到终态，不再经 remove 路由，文案为「撤销最近变更（恢复）」）；ssh list tab 的「撤销最近变更」按钮保留原样——登记为范围偏差（见 §7）；
-- **第三方行生效状态**：local/gateway/http 已安装列表含「生效状态」chips（Loader pluginInventory 快照按 moduleName===包名**精确匹配**：生效中/加载中/加载失败/已停用；本地实例经 /api/i/local 读快照，读失败静默置中性——清单文件永远不作 live 断言）。**无同名 entry 一律中性**：bundle 层行（localList.bundles / installed.bundles）也不例外——bundle 包名**从不是 Loader 行**，树由各 bundle 的 `dsh.bundle.patch`（`cordis.patch.yml`）叠在空 entry 根上，行是 `insert:` 名字而非 bundle 自己（如 `@deepseek-ai/dsh-experimental-agent-team-profile` 插入 `@deepseek-ai/dsh-experimental-agent-team` 与 `@deepseek-ai/dsh-experimental-tool-agent-team`），故「查无同名行」不携带「重启后生效」信息；plain/client-only 依赖同样中性。bundle 层行「是否已生效」没有可判事实，**中性是当前上限**（闭合路径见 §7 与 STATUS）；
+- **第三方行生效状态**：local/gateway/http 已安装列表含「生效状态」chips（Loader pluginInventory 快照按 moduleName===包名**精确匹配**：生效中/加载中/加载失败/已停用；本地实例经 /api/i/local 读快照，读失败静默置中性——清单文件永远不作 live 断言）。**无同名 entry 一律中性**：bundle 层行（本地 localList.bundles / 服务端 rows[].role 分类的行）也不例外——bundle 包名**从不是 Loader 行**，树由各 bundle 的 `dsh.bundle.patch`（`cordis.patch.yml`）叠在空 entry 根上，行是 `insert:` 名字而非 bundle 自己（如 `@deepseek-ai/dsh-experimental-agent-team-profile` 插入 `@deepseek-ai/dsh-experimental-agent-team` 与 `@deepseek-ai/dsh-experimental-tool-agent-team`），故「查无同名行」不携带「重启后生效」信息；plain/client-only 依赖同样中性。bundle 层行「是否已生效」没有可判事实，**中性是当前上限**（闭合路径见 §7 与 STATUS）；
   gateway 导入成功文案按 outcome 区分（materializeLive / restartNeededHint / deferredOfflineNote）；
   local add/import 成功不谎报「已应用」（只改本地 profile，重启后挂载）；ssh doApply 成功后自动重载已安装列表；
 - ssh 分支默认不呈现整盘 diff 表：与 gateway/local 同骨架的主视图（已安装列表 + 添加区 + 范围注），
@@ -212,7 +224,7 @@ http 直连只读。
   语义与按钮逐字保留，应用动作仅在展开态出现在 footer（纯模型层与后端行为不变，仅默认呈现与入口层级改变）；
 - A 键表（zh/en；代码↔键覆盖靠实现清单）：partial/blocked/queue_busy 文案、多桌面移除确认、他人会话中断（C 复用）、deferred 离线执行确认（「将缓存并在实例就绪后自动安装，可能在你断开后执行」）、task 行（pending/running/blocked/failed + 上次失败）、preImage 恢复（撤销最近变更）文案、journal 横幅、停机态动作文案、startFromStopped 文案、profile_corrupt 恢复引导、**受保护行的只读呈现**
   （角色徽标 + 受保护提示 + 无移除按钮；判定码→本地化文案映射**未做**，服务端 `error` 逐字显示——§7 已登记）、
-  「gateway 版本较低」回退提示、who/when
+  who/when
   归因 tooltip（「由 <连接 label> 于 <时间> 安装/移除」，未知时「另一桌面」）。
   **已知余留**：who/when 归因 tooltip 尚未渲染（TaskRow 未投影 initiator）；预置未用键
   （blockedTask/queueBusy/lastFailedHint/**reservedNameRefused（随旧码 `reserved` 退役一并删除）**/opAttribution*/startManagedDshConfirmTitle）
@@ -282,7 +294,7 @@ pin 多个版本；锁文件来源按 `name@version(peer 依赖后缀)` 取版�
 故：**live bundles 只用于渲染 `role`**（`∈ B₀ → composition`；`∈ liveBundles \ B₀ → layer`），
 保护判定用 B₀。即「不许拆组合」只保护**安装自带的基线组合**，不保护用户自己加的层。
 
-#### 6.11.3 判定规则（写面唯一入口；op 分相）
+#### 6.11.3 判定规则（写面入口已退役；读面 role/protected 投影仍按此判定）
 
 ```
 decide({op, name, version, runtimeVersion, P, profileState, source}):
@@ -326,6 +338,9 @@ decide({op, name, version, runtimeVersion, P, profileState, source}):
 
 #### 6.11.4 代耦合的完整兑现：装后复验（覆盖传递闭包）
 
+> **已退役（2026-09「C 分层」）**：插件写面入口已全部删除，本节的强制装后复验实现随之移除；
+> 保留为历史契约，若将来重新引入写面，本节判据仍是前提。
+
 R2 只看**直接 spec**；官方层的**依赖闭包**同样进入实例树（实测 `…-profile` 闭包含 `@deepseek-ai/dsh-brand@^…`、`@deepseek-ai/schemastery@^…` 等 range 族成员）；闭包里也会出现**不在 F 内**的官方 scope 名（官方 opt-in 层 `@deepseek-ai/dsh-experimental-agent-team` / `-tool-agent-team` / `-client-ui-agent-team` 的传递依赖；F 按 C11 不含 `dsh-experimental-*`），由用户显式安装的层带来，正是闭包豁免对象。官方 scope 的 install 因此必须：
 
 1. **装前**：精确版本（R2）；
@@ -343,20 +358,25 @@ R2 只看**直接 spec**；官方层的**依赖闭包**同样进入实例树（�
 
 #### 6.11.5 读面投影契约（读写分离）
 
-- 三端各新增 **`rows: PluginRow[]`**（加性；**`dependencies` 语义不变**，避免污染 name 基 diff）：
-  `{ name, spec: string|null, version: string|null, role: 'composition'|'seed'|'layer'|'third-party'|'materialized'|'unknown', protected: boolean, owner?: 'installation'|'chamber'|'user' }`。
+> **写面已退役（2026-09「C 分层」）**：本节中依赖写面判定/差异计算的条目（`computePluginDiff`、
+> `sshSyncableDependencies` 等）已无生产实现与消费者；保留为读面投影与历史契约的记录。
+
+- 三端各新增 **`rows: PluginRow[]`**（加性；**`dependencies` 语义不变**，避免污染 name 基 diff；**远端 manifest 不再下发 `bundles`**——gateway/ssh 只把它当服务端 role 分类器，本地 `localPluginList.bundles` 仍作本地行分类输入）：
+  `{ name, spec: string|null, version: string|null, role: 'composition'|'seed'|'layer'|'third-party'|'materialized'|'unknown', protected: boolean }`。
 - **谁能算 P 谁投影 `protected`**：local = desktop main；gateway = **服务端**（判定权威；desktop 侧只做形状校验 + 消费投影，提交前重取一次投影，不自行重算 P——F 在服务端）；ssh = desktop main（P = B₀ ∪ S，F 无远端来源）。
 - **`protected` 的唯一含义是「name ∈ P」**（install 与 remove 都被写面拒），**不是**"这个后端装不了它"：ssh/降级态对官方 scope 的**装面**保守是**写面/传输能力**事实——写面用 `protected`（ssh）/`protected-set-unavailable`（降级）拒绝 install，**不在读面撒谎**。因此 ssh 上不在 P 内的官方行仍 `protected: false`（remove 只判 B₀ ∪ S ⇒ **可卸**），对账批次由 UI 的 ssh 传输过滤 `sshSyncableDependencies` 排除官方 scope 保证安全；三端因此对同一份事实投影**同一组** `protected` 值。
 - 渲染端**只渲染**：删除 `plugin-model.ts` 的 `isDeniedPluginName` 手镜像、`filterDeniedRows` 与其锁步测试；**保留** `plugin-inventory-text.ts` 的 `OFFICIAL_SCOPE` / `CHAMBER_CLIENT_PREFIX`（Loader 清单展示分类，非安装门）。
-- **受保护行只读可见**（当它确实在依赖表里时）：无移除按钮（`—` + 提示文案）+ 角色徽标；
-  `owner`（installation / chamber / user）已随行投影但 v1 **未渲染**，来源 tooltip 与"代"提示未做（§7 登记）。
-- **行集 = profile 的依赖表，一行一条**（取代原「并集投影」口径）：`bundles` / B₀ / S 只作为 `role`/`owner` 分类器与保护判定输入，**不再凭空造行**。「已安装」= 我们装进去的插件；chamber 播种物在**「chamber 受管组件」表**里已有自己的行（探针状态 + 版本 + 手动重推），官方组合是运行时基线而非插件行——组合成员在 profile 目录里不存在（官方族 hoist 到 `profiles/node_modules`），版本列只能显示 `—`；空 `dependencies` 的 profile 也曾凭空列出 B₀ ∪ S 整组「自带」包（本机实测 6 行）。受保护名若**确实**在依赖表里仍是行且只读可见——保护判定与写面拒绝不受本条影响。只存在于 live `bundles` 而不在依赖表里的条目不成行、页内也不给移除入口：上游 `reconcilePlugins`（`apps/cli/src/plugin.ts`，C12 同源）**只把依赖表里的包按 `dsh.bundle.patch` 并入 `dsh.profile.bundles`**，且明说模板自带组合「are not dependencies and are never touched」——「用户装的层一定在依赖表里、自带组合一定不在」正是本条依据。
+- **受保护行只读可见**（当它确实在依赖表里时）：无移除按钮（`—` + 提示文案）+ 角色徽标。
+- **行集 = profile 的依赖表，一行一条**（取代原「并集投影」口径）：`bundles` / B₀ / S 只作为 `role` 分类器与保护判定输入，**不再凭空造行**。「已安装」= 我们装进去的插件；chamber 播种物在**「chamber 受管组件」表**里已有自己的行（探针状态 + 版本 + 手动重推），官方组合是运行时基线而非插件行——组合成员在 profile 目录里不存在（官方族 hoist 到 `profiles/node_modules`），版本列只能显示 `—`；空 `dependencies` 的 profile 也曾凭空列出 B₀ ∪ S 整组「自带」包（本机实测 6 行）。受保护名若**确实**在依赖表里仍是行且只读可见——保护判定与写面拒绝不受本条影响。只存在于 live `bundles` 而不在依赖表里的条目不成行、页内也不给移除入口：上游 `reconcilePlugins`（`apps/cli/src/plugin.ts`，C12 同源）**只把依赖表里的包按 `dsh.bundle.patch` 并入 `dsh.profile.bundles`**，且明说模板自带组合「are not dependencies and are never touched」——「用户装的层一定在依赖表里、自带组合一定不在」正是本条依据。
 - **diff/apply 边界（硬要求）**：`computePluginDiff` 的输入只吃**后端判非 `protected`** 的行（`protected === false`）。若把受保护行并进 diff 输入，`missing` 行默认勾选 ⇒ 一次普通第三方对账会把 `@deepseek-ai/dsh-base@…` 当 add 提交、后端整批拒绝——普通对账失效；必须有单测断言受保护名字**不出现在 `diff.rows`**，`hasLocal` 与对账 pill 计数随之修正。
   - **角色不参与该判据**：`layer`（用户自己加的层）同样必须可同步；按角色收窄只留 `{third-party, materialized}` 会把用户后加的层从对账视图里静默抹掉（**修正的功能回归**）。
   - **ssh 面另加传输能力过滤**（`sshSyncableDependencies`）：**官方 scope 行不得进 ssh 对账批次**（否则整次对账失效）——这是传输能力而非保护判定，保护判定唯一来源始终是后端投影的 `rows[].protected`。
 - **undo 也是写面**：ssh `doUndo` → `applyPlugins` → `buildSshApplyRows` → `decide`；gateway 为服务端 **preImage 恢复 + 逆相位 `decide`**（`plugins-undo.ts`：undo install/materialize → remove 判定，undo remove → install 判定，含受保护集合与官方同代校验）——两条链路都必须在提交前过同一条 `decide`（或后端拒绝该 op），否则它们是绕过保护判定的旁路。
 
 #### 6.11.6 抗漂移门禁（把「担心」变成会红的东西）
+
+> **写面已退役（2026-09「C 分层」）**：涉及 undo / 装后回滚 / 写面拒绝码的门禁条目已随实现删除；
+> 现行门禁 = C11–C16 与 `registry.json` 的判据（见 §6.11.4 退役注）。
 
 挂在既有 C 门家族（`scripts/upstream/verify-upstream-touchpoints.mjs`，判据纯函数 `scripts/upstream/plugin-protection-gate.mjs`，负例测试随 `pnpm run test:upgrade-tools`；登记表镜像在 `docs/checklists/upstream-touchpoints.md` §6）：
 
@@ -371,18 +391,17 @@ R2 只看**直接 spec**；官方层的**依赖闭包**同样进入实例树（�
 
 #### 6.11.7 兼容与版本歪斜
 
-- 新字段**加性**：新 desktop + 旧 gateway ⇒ 无 `rows` ⇒ 渲染端走旧过滤回退路径：**官方/chamber 行整行不列出**，只列第三方行并提示「gateway 版本较低」——绝不给一个必然 400 的按钮；旧 desktop + 新 gateway ⇒ 忽略新字段。与 §6.11.5 新口径的差异：新 gateway 的依赖行里若确实含受保护名，它**会**作为只读行出现；回退路径按前缀整行不列，属只收紧的保守差异，随 gateway 全量升级消失。
+- **同版本发行裁决（2026-09）**：gateway 与前端（桌面渲染端）同源发行，当前 control-plane `derivePluginRows` 恒投影 `rows`；旧就地 gateway 无 `rows` 的回退分支**已删除**，渲染端把缺失/非数组的 `rows` 读作**显式空投影**（绝不回落到 `dependencies` 过滤——那会让渲染端重新持有保护判定镜像）。旧 desktop + 新 gateway 忽略未知的加性字段。
 - 就地部署需先把 gateway 更新到本版；兼容声明写在 `CHANGELOG.md` 发布时（版本歪斜窗口属发布说明，STATUS 口径）。
 
 #### 6.11.8 注册在案的偏差（与 6.11 同源）
 
 - **ssh 装面保守**（6.11.3 的 ssh 行）：相对决策 19 旧口径是显式不对称；放开需先给 ssh 加远端 family 读（扩 exec 面，design 13 §7.2 纪律）。
-- **代不匹配默认阻断**（跨代试验需显式 override 入口，v1 未提供）、**闭包豁免只从官方 scope 的直接依赖起步且 walk 只展开官方节点**（复核收紧；第三方夹带官方名、官方层经第三方中介（真实闭包含 `zod`/`react`）均报 `outside-family`）、**旧 gateway 无 `rows` 的回退路径**见 §7。
-- **行投影 `owner` 未渲染**见 §6.6。
+- **代不匹配默认阻断**（跨代试验需显式 override 入口，v1 未提供）、**闭包豁免只从官方 scope 的直接依赖起步且 walk 只展开官方节点**（复核收紧；第三方夹带官方名、官方层经第三方中介（真实闭包含 `zod`/`react`）均报 `outside-family`）。
 - **bundles-only 层只走 CLI**（行集修订的必然结果，§6.11.5）：只在 live `dsh.profile.bundles` 而不在依赖表里的层**不成行**，页内无移除入口（CLI `dsh plugin remove` 照旧可用），但仍会被 Loader 挂载；上游 `reconcilePlugins` 只从依赖表补层、模板自带组合 "never touched"，故只可能命中手工编辑过 profile 的历史条目（本机 profile 带 3 个上一代 `@dsh-chamber/dsh-host-*` 遗留目录）。放开条件 = 页内补一条只读的 bundles-only 行。
 
 ## 7. 决策遗留 / 开放项
-- **受保护集合与代耦合的剩余开放项**（§6.11；**权威清单在 `docs/progress/STATUS.md`「受保护集合与代耦合」条，共五项**）：ssh 装面放开（需先给 ssh 增加远端 family 读——扩 exec 面，design 13 §7.2 纪律，届时单独评审）、跨代 override 入口（v1 默认阻断且**不提供**；若确需跨代试验另开显式入口（含审计与行级「已知跨代」标记），不得把阻断降级为静默警告）、旧 gateway 无 `rows` 的回退分支（gateway 全量升级到本版后删除，失效判据写入 STATUS）、**装后复验违例的自动回滚**（v1 只做强制复验 + 响亮失败：gateway preImage 保留、op 记 failed；local 无 profile 备份；起 gateway 的手工恢复路径已可用 = `POST /chamber/plugins/undo`，**自动**回滚与 local 的 `package.json` + lockfile 备份还原仍未实现）、**`owner` 未渲染 / 来源 tooltip 与「代」提示未做**。原第⑤项「本地清单原样返回」已接线（`shell-ipc-plugins-local.ts` 经 `redactLocalPluginManifest` 掩 `dependencies` 与 `rows[].spec` 两通道，STATUS 条目退役）；**snapshot restore** 路由仍二期，r2 的 preImage 回滚已落地（见 §6.8 r2），开放状态与失效判据见 STATUS。
+- **受保护集合与代耦合的剩余开放项**（§6.11；**权威开放清单在 `docs/progress/STATUS.md`**）：ssh 装面放开（需先给 ssh 增加远端 family 读——扩 exec 面，design 13 §7.2 纪律，届时单独评审）、跨代 override 入口（v1 默认阻断且**不提供**；若确需跨代试验另开显式入口（含审计与行级「已知跨代」标记），不得把阻断降级为静默警告）、**装后复验违例的自动回滚**（v1 只做强制复验 + 响亮失败：gateway preImage 保留、op 记 failed；local 无 profile 备份；起 gateway 的手工恢复路径已可用 = `POST /chamber/plugins/undo`，**自动**回滚与 local 的 `package.json` + lockfile 备份还原仍未实现）。旧 gateway 无 `rows` 的回退分支与 `owner` 行投影已按同版本发行裁决删除（§6.11.7）；原「本地清单原样返回」项已接线（`shell-ipc-plugins-local.ts` 经 `redactLocalPluginManifest` 掩 `dependencies` 与 `rows[].spec` 两通道，STATUS 条目退役）；**snapshot restore** 路由仍二期，r2 的 preImage 回滚已落地（见 §6.8 r2），开放状态与失效判据见 STATUS。
 - scripts 默认允许下的 env 最小化实测：`dsh plugin add` 的 pnpm 是否读取 profile/.npmrc、是否向子进程暴露 npm 令牌环境——据实收紧 §6.3 纪律（实测结果可回调，不允许扩大暴露）。
 - `GET /chamber/plugins/installed` 的写面在飞 409 `runtime_busy`（§6.2）：栅栏与客户端消费方均已接线；栅栏**探针不可用 → 503 `write_fence_unavailable`**（起不再有裸读回退）（readManifest 对该 409 短退避有界重试、仍忙时专用本地化忙态，不谎报成功；桌面 apply 路径另等 op 终态 `gateway-provider.ts waitForOpsToSettle`）。仍开放**长时栅栏**不在前端轮询，只交给既有「刷新」节奏——是否需要轮询面未决。
 - ssh 端 `plugin_apply` / `seed_host_graph` / `materialize_add(_pick)` 的主进程确认对话框缺口（design 13 §7.0 设计意图；确认链只覆盖 gateway apply/undo 与 ssh undo）——补齐并登记。
@@ -426,7 +445,7 @@ R2 只看**直接 spec**；官方层的**依赖闭包**同样进入实例树（�
   （闭包种子只取官方直接依赖、walk 只展开官方节点；官方层 → 官方层 → 非 F 官方名仍豁免）；
     闭包内 F 名字版本歪斜 ⇒ 仍 `generation-mismatch`（判序）；v1 **无自动回滚**，见 §6.11.4 与 STATUS）、B₀ 与 live bundles 分离（**装完仍可卸**：声明 `dsh.bundle.patch` 的层进 liveBundles 但不进 P）；**判序**（`B₀ ∪ S` 判名先于降级阶梯：降级态组合成员答 `protected`、官方非 P 答 `protected-set-unavailable`）、**降级态与 `runtime-version-unknown` 的码面**、**路径/registry 值判据**（`file:`/`link:`/相对/绝对/`~/`/`C:\` = materialize；`~1.2.0`/`^`/`>=`/`1.x`/dist-tag/workspace/npm 别名/git·url = registry）；**入口覆盖**：local add/remove/file、gateway install/materialize/remove、ssh apply 各一条负例；
   **undo 走同一条判定**（ssh `doUndo` → `applyPlugins` → `buildSshApplyRows` → `decide`；gateway 为 `plugins-undo.judgeUndo` 逆相位判定）——两条链路既有单测覆盖，且 gateway 侧已单列"受保护名 undo"负例（`chamber-undo.test.ts`：受保护名逆相位判定 → op 响亮 failed `[protected]`，profile 未被写）；
-- **读面投影**：`rows` 三端形状（role/protected/owner）+ 本地 `localPluginList` **行集 = 依赖表**（§6.11.5：`dependencies: {}` ⇒ 空行集；自己声明的组合/播种名仍是行，role/owner/保护位逐一断言）+ **掩码在 `dependencies` 与 `rows[].spec` 两通道一致**（本地红actor + gateway 投影同判据）+ wire 孪生字段集与**行类型**（producer↔preload↔renderer，C14 判据含字段名 + role/owner 字面量并集负例）+ **`diff.rows` 不含受保护名** + 旧后端无 `rows` 回退路径（golden 缺字段载荷不抛错、**官方/chamber 行整行不列出**）+ 受保护行与 bundle 层行均保持状态格中性；
+- **读面投影**：`rows` 三端形状（role/protected）+ 本地 `localPluginList` **行集 = 依赖表**（§6.11.5：`dependencies: {}` ⇒ 空行集；自己声明的组合/播种名仍是行，role/保护位逐一断言）+ **掩码在 `dependencies` 与 `rows[].spec` 两通道一致**（本地红actor + gateway 投影同判据）+ wire 孪生字段集与**行类型**（producer↔preload↔renderer，C14 判据含字段名 + role 字面量并集负例）+ **`diff.rows` 不含受保护名** + rows 缺失按显式空投影（不回退、不列行）+ 受保护行与 bundle 层行均保持状态格中性；
 - **上游保鲜门 C11–C14**：`scripts/upstream/plugin-protection-gate.test.mjs`（真实仓库正向断言 + 改坏派生来源/契约/注册表/镜像的负例），随 `pnpm run test:upgrade-tools` 进 CI；
 - A gateway 子矩阵：spec 白名单族/**受保护集合判定（§6.11 的判定码 `protected`/`needs-version`/
   `needs-exact-version`/`generation-mismatch`/`protected-set-unavailable`/`runtime-version-unknown`；

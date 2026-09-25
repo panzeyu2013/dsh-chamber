@@ -20,7 +20,7 @@
  *     lives INSIDE the coarse/no-hover media block — a rule that drifted to
  *     the top level would leak onto desktop.
  */
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
@@ -43,6 +43,12 @@ import {
   type RectLike,
 } from '../../src/client/official-hover-card.ts'
 import { MOBILE_CSS } from '../../src/client/styles.ts'
+import { PointerEventDouble, installPointerEventDouble } from '../support/pointer-event-double.ts'
+
+// This Node process has no DOM globals and the watchdog constructs the real
+// PointerEvent, so the bench installs its double for the whole file.
+const restorePointerEvent = installPointerEventDouble()
+after(() => { restorePointerEvent() })
 
 const SOURCE = readFileSync(new URL('../../src/client/official-hover-card.ts', import.meta.url), 'utf8')
 /** Comment-stripped: a rule assertion must be satisfied (or broken) by CODE,
@@ -52,10 +58,11 @@ const INDEX_CODE = readFileSync(new URL('../../src/client/index.ts', import.meta
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .replace(/^\s*\/\/.*$/gm, '')
 
-// The pinned build's real class strings (served bundle:
-// `zu="_root_1b2ny_3"`, `Du="_card_1b2ny_13"`).
-const REAL_WRAPPER_CLASS = '_root_1b2ny_3'
-const REAL_CARD_CLASS = '_card_1b2ny_13 _copyable_1b2ny_25'
+// The pinned build's real class strings (rc.2 served bundle
+// `@deepseek-ai/dsh-web-frontend/dist/assets/index-Q6zc2uHV.js`:
+// `Pp="_root_38jqx_3"`, `Rp="_card_38jqx_9"`, `zp="_copyable_38jqx_21"`).
+const REAL_WRAPPER_CLASS = '_root_38jqx_3'
+const REAL_CARD_CLASS = '_card_38jqx_9 _copyable_38jqx_21'
 /** A Tooltip bubble's own module (foreign hash) — never a card. */
 const TOOLTIP_CLASS = '_bubble_9zq1k_5'
 
@@ -77,8 +84,8 @@ test('the class token matches the pinned build only, as a whole token', () => {
   assert.equal(hasModuleClassToken(TOOLTIP_CLASS, OFFICIAL_CARD_CLASS_TOKEN), false)
   assert.equal(hasModuleClassToken('_card_aa11b_13', OFFICIAL_CARD_CLASS_TOKEN), false)
   // The token must be a whole class: not a longer word, not a substring of one.
-  assert.equal(hasModuleClassToken('_card_1b2ny_x', OFFICIAL_CARD_CLASS_TOKEN), false)
-  assert.equal(hasModuleClassToken('foo_card_1b2ny_13', OFFICIAL_CARD_CLASS_TOKEN), false)
+  assert.equal(hasModuleClassToken('_card_38jqx_x', OFFICIAL_CARD_CLASS_TOKEN), false)
+  assert.equal(hasModuleClassToken('foo_card_38jqx_13', OFFICIAL_CARD_CLASS_TOKEN), false)
   assert.equal(hasModuleClassToken('', OFFICIAL_CARD_CLASS_TOKEN), false)
   assert.equal(hasModuleClassToken(null, OFFICIAL_CARD_CLASS_TOKEN), false)
   assert.equal(hasModuleClassToken(undefined, OFFICIAL_CARD_CLASS_TOKEN), false)
@@ -241,6 +248,7 @@ test('the dismissal dispatches exactly one bubbling pointerout with no related t
   assert.equal(seen.length, 1)
   const event = seen[0]
   assert.ok(event !== undefined)
+  assert.ok(event instanceof PointerEventDouble, 'the direct PointerEvent constructor must use the installed double')
   assert.equal(event.type, 'pointerout', 'the atom listens for React\'s delegated pointerout')
   assert.equal(event.bubbles, true, 'React listens at the root container: the event must bubble')
   assert.equal(event.cancelable, false)
@@ -271,6 +279,23 @@ test('in a browser the dispatch uses PointerEvent with relatedTarget null', () =
   }
 })
 
+test('without a PointerEvent global the dispatch fails closed instead of falling back', () => {
+  const globals = globalThis as { PointerEvent?: unknown }
+  const previous = globals.PointerEvent
+  delete globals.PointerEvent
+  try {
+    const seen: Event[] = []
+    assert.equal(
+      dispatchBoundaryLeave({ dispatchEvent: (event) => { seen.push(event); return true } }),
+      false,
+      'a missing PointerEvent must fail closed, never stand in a MouseEvent/Event lookalike',
+    )
+    assert.deepEqual(seen, [], 'no fallback constructor may dispatch anything')
+  } finally {
+    globals.PointerEvent = previous
+  }
+})
+
 test('a throwing host fails closed: the watchdog never propagates', () => {
   assert.equal(dispatchBoundaryLeave({ dispatchEvent: () => { throw new Error('boom') } }), false)
 })
@@ -287,6 +312,8 @@ test('without a DOM the installer is a harmless no-op (plain node harness)', () 
 test('the watchdog owns exactly one event kind and no timer', () => {
   const constructed = [...CODE.matchAll(/new\s+[A-Za-z_$][\w$]*\(\s*'([a-z]+)'/g)].map(match => match[1])
   assert.deepEqual(constructed, ['pointerout'], 'only the boundary event may ever be constructed')
+  assert.match(CODE, /new PointerEvent\('pointerout', init\)/, 'the boundary event must come from PointerEvent directly')
+  assert.doesNotMatch(CODE, /MouseEvent|typeof PointerEvent/, 'the fallback constructor chain must stay retired')
   assert.equal(/setTimeout|setInterval/.test(CODE), false, 'the watchdog arms no timer of its own')
   // One dispatch call site, inside dispatchBoundaryLeave: no click, no
   // pointerdown, no key event can ever leave this module.
