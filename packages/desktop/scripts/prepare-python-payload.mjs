@@ -46,6 +46,10 @@ export const DEFAULT_OUT_DIR = path.join(DESKTOP_DIR, 'resources', 'primary-runt
 export const DEFAULT_CACHE_DIR = path.join(DESKTOP_DIR, 'release', 'primary-runtime-cache')
 /** 载荷清单格式（布局语义改变时递增）。 */
 export const PAYLOAD_FORMAT = 1
+/** 桌面应用版本：runtime.json 的 `desktopVersion`（上游 parsePrimaryRuntime 必填）。 */
+export const DESKTOP_VERSION = JSON.parse(
+  readFileSync(path.join(DESKTOP_DIR, 'package.json'), 'utf8'),
+).version
 /** runtime.json 的两种状态：complete = 真实载荷；absent = 未准备（只有说明文件）。 */
 export const PAYLOAD_COMPLETE = 'complete'
 export const PAYLOAD_ABSENT = 'absent'
@@ -236,7 +240,12 @@ export function payloadPlan(lock, target, options = {}) {
     target,
     platform: REGISTERED_TARGETS[target].platform,
     arch: REGISTERED_TARGETS[target].arch,
-    components: { python: lock.pythonVersion, ...(options.includeNode === true ? { node: lock.nodeVersion } : {}) },
+    components: {
+      python: lock.pythonVersion,
+      ...(options.includeNode === true ? { node: lock.nodeVersion } : {}),
+      // legacy 形态必需：值只从 pythonPackages 派生（见 legacyDistributionVersions）。
+      ...legacyDistributionVersions(lock.pythonPackages),
+    },
     pythonPackages: lock.pythonPackages,
     payloadDigest: payloadDigest(lock, target),
     sitePackages: sitePackagesRelative(lock),
@@ -245,7 +254,31 @@ export function payloadPlan(lock, target, options = {}) {
   }
 }
 
-/** 载荷清单对象（写进 runtime.json；与 payloadPlan 的事实同源）。 */
+/**
+ * legacy 形态要求的发行版版本键（上游 parsePrimaryRuntime 的 components.numpy /
+ * components.pandas）：只从 pythonPackages 派生——两个来源各写一份就会在下游解析时
+ * 按「inconsistent legacy metadata」拒绝。
+ * @param pythonPackages - 锁里的发行版映射。
+ * @returns 归一后命中的 { numpy?, pandas? }（缺项不写，由上游按缺失拒绝）。
+ */
+function legacyDistributionVersions(pythonPackages) {
+  const normalized = new Map(
+    Object.entries(pythonPackages).map(([name, version]) => [name.toLowerCase().replace(/[-_.]+/gu, '-'), version]),
+  )
+  const out = {}
+  for (const key of ['numpy', 'pandas']) {
+    const version = normalized.get(key)
+    if (typeof version === 'string') out[key] = version
+  }
+  return out
+}
+
+/**
+ * 载荷清单对象（写进 runtime.json；与 payloadPlan 的事实同源，并可被上游唯一消费者
+ * `parsePrimaryRuntime` 直接解析：`desktopVersion` + `platform`(win32|darwin|linux) +
+ * `arch`(x64|arm64) + legacy `components.numpy/pandas`）。我方额外字段
+ * （format/payload/target/layout）供本仓 --verify 使用，上游解析器不读它们。
+ */
 export function payloadManifest(lock, target, options = {}) {
   const plan = payloadPlan(lock, target, options)
   return {
@@ -254,6 +287,7 @@ export function payloadManifest(lock, target, options = {}) {
     target: plan.target,
     platform: plan.platform,
     arch: plan.arch,
+    desktopVersion: options.desktopVersion ?? DESKTOP_VERSION,
     components: plan.components,
     pythonPackages: plan.pythonPackages,
     payloadDigest: plan.payloadDigest,

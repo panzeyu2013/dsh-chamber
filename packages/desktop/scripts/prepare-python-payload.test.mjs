@@ -27,6 +27,7 @@ import {
   LOCK_PATH,
   PAYLOAD_FORMAT,
   REGISTERED_TARGETS,
+  DESKTOP_VERSION,
   assertLock,
   crc32,
   extractTarGz,
@@ -37,6 +38,7 @@ import {
   nodeArchiveName,
   parseArgs,
   parseLock,
+  payloadManifest,
   payloadPlan,
   pythonArchiveName,
   pythonArchiveUrl,
@@ -558,4 +560,80 @@ test('⑤ CLI（main 级）：不带 --target 时按宿主解析，显式未登�
   const unregistered = runCli(['--dry-run', '--target', 'mac-x64'])
   assert.equal(unregistered.status, 1)
   assert.match(unregistered.stderr, /未登记的 --target mac-x64/u)
+})
+
+/**
+ * 上游唯一消费者 `@deepseek-ai/dsh-tool-workspace-dependencies` 的
+ * `parsePrimaryRuntime`（pin 477b4f42；vendor/harness-checkout/packages/skill/
+ * tool-workspace-dependencies/src/index.ts）**在本仓不能直接 import**：子模块自身的
+ * node_modules 链接指向未构建的 lib。这里按同一份源码镜像出接受规则，并由下面的源锁
+ * 用例钉住那几行——上游改规则时这条锁先红，再决定要不要跟。
+ */
+const UPSTREAM_PLATFORMS = ['win32', 'darwin', 'linux']
+const isUpstreamVersion = (value) => typeof value === 'string' && /^\d+\.\d+\.\d+/u.test(value)
+
+function upstreamAccepts(value) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const legacy = value.components !== undefined
+  const versions = legacy ? value.components : value
+  if (typeof versions !== 'object' || versions === null) return false
+  if (legacy && ['python', 'node', 'pnpm'].some((key) => value[key] !== undefined)) return false
+  const { desktopVersion, platform, arch } = value
+  const { python, node } = versions
+  if (typeof desktopVersion !== 'string' || desktopVersion.length === 0) return false
+  if (typeof platform !== 'string' || !UPSTREAM_PLATFORMS.includes(platform)) return false
+  if (typeof arch !== 'string' || !['x64', 'arm64'].includes(arch)) return false
+  if (!isUpstreamVersion(python)) return false
+  if (node !== undefined && !isUpstreamVersion(node)) return false
+  const pythonPackages = value.pythonPackages
+  if (typeof pythonPackages !== 'object' || pythonPackages === null) return false
+  if (legacy) {
+    for (const name of ['numpy', 'pandas']) {
+      if (!isUpstreamVersion(versions[name])) return false
+      const entry = Object.entries(pythonPackages)
+        .find(([key]) => key.toLowerCase().replace(/[-_.]+/gu, '-') === name)
+      if (entry !== undefined && entry[1] !== versions[name]) return false
+    }
+  }
+  return true
+}
+
+test('⑥ 载荷 manifest 可被上游 parsePrimaryRuntime 解析（四个变体）', () => {
+  const withNode = payloadManifest(LOCK, 'mac-arm64', { includeNode: true })
+  assert.equal(upstreamAccepts(withNode), true, '真实 manifest（legacy 形态）必须解析通过')
+  assert.equal(withNode.desktopVersion, DESKTOP_VERSION)
+  assert.equal(withNode.platform, 'darwin')
+  assert.equal(withNode.arch, 'arm64')
+  assert.equal(withNode.components.numpy, LOCK.pythonPackages.numpy.replace(/[-_.]+/gu, '-') === 'numpy' ? LOCK.pythonPackages.numpy : withNode.components.numpy)
+  assert.equal(withNode.components.pandas, LOCK.pythonPackages.pandas)
+
+  const legacyConsistent = JSON.parse(JSON.stringify(withNode))
+  assert.equal(upstreamAccepts(legacyConsistent), true, '变体 1：legacy + numpy/pandas 同源 → 通过')
+
+  const noDesktopVersion = JSON.parse(JSON.stringify(withNode))
+  delete noDesktopVersion.desktopVersion
+  assert.equal(upstreamAccepts(noDesktopVersion), false, '变体 2：缺 desktopVersion → 拒绝')
+
+  const mismatched = JSON.parse(JSON.stringify(withNode))
+  mismatched.components.pandas = '0.0.1'
+  assert.equal(upstreamAccepts(mismatched), false, '变体 3：components 与 pythonPackages 不一致 → 拒绝')
+
+  const newShape = JSON.parse(JSON.stringify(withNode))
+  newShape.python = newShape.components.python
+  newShape.node = newShape.components.node
+  delete newShape.components
+  assert.equal(upstreamAccepts(newShape), true, '变体 4：新形态（顶层 python/node，无 components）→ 通过')
+
+  const badPlatform = JSON.parse(JSON.stringify(withNode))
+  badPlatform.platform = 'ios'
+  assert.equal(upstreamAccepts(badPlatform), false, '变体 4b：platform 不在 win32|darwin|linux → 拒绝')
+})
+
+test('⑥ 源锁：上游 parsePrimaryRuntime 的接受规则行仍在（改了先红再决定跟不跟）', () => {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+  const source = readFileSync(path.join(
+    repoRoot, 'vendor/harness-checkout/packages/skill/tool-workspace-dependencies/src/index.ts'), 'utf8')
+  for (const marker of ["const PLATFORMS = ['win32', 'darwin', 'linux']", "['x64', 'arm64']", 'desktopVersion', "['numpy', 'pandas']"]) {
+    assert.ok(source.includes(marker), '上游解析器不再含：' + marker)
+  }
 })
