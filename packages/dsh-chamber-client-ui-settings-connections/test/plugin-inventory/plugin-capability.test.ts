@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs'
 import {
   PLUGIN_MANAGER_ROW_ID,
   capabilityFromGraph,
+  capabilityProbeKey,
   officialPluginsPageSourceId,
   probeOfficialPluginsPage,
 } from '../../src/client/plugin-capability.ts'
@@ -113,4 +114,42 @@ test('dialog wiring: the capability gate renders the unsupported note only on an
   // probe is not a claim).
   assert.match(source, /officialPage === 'available'/, 'the official-page hint must be gated on the verdict')
   assert.match(source, /officialPage === 'unavailable'/, 'the unsupported note must be gated on the verdict')
+})
+test('能力门重探键：相态转移即换键，其余不变', () => {
+  // 启动窗口：探针首跑在实例 serving 之前，判词落在 unknown。
+  const before = capabilityProbeKey('dsh-7', undefined)
+  // 同相态重复渲染不得重探（否则每次渲染都会打一次 graph 请求）。
+  assert.equal(capabilityProbeKey('dsh-7', undefined), before)
+  // 相态从「无」走到 ok = 实例已 serving：键必须变，effect 重探一次。
+  assert.notEqual(capabilityProbeKey('dsh-7', 'ok'), before)
+  // 其它相态也各自成键（not-injected → ok 的转移同样重探）。
+  assert.notEqual(capabilityProbeKey('dsh-7', 'not-injected'), capabilityProbeKey('dsh-7', 'ok'))
+  // 空串与 undefined 同义（都表示「还没有相态」）。
+  assert.equal(capabilityProbeKey('dsh-7', ''), before)
+  // source 不同即不同键（同一对话框切换目标必须重探）。
+  assert.notEqual(capabilityProbeKey('local', 'ok'), capabilityProbeKey('dsh-7', 'ok'))
+})
+
+test('能力门重探：PluginDialog 的 effect 依赖含相态键（源码锁，防回退成裸 sourceId）', () => {
+  const source = readFileSync(new URL('../../src/client/PluginDialog.tsx', import.meta.url), 'utf8')
+  assert.ok(source.includes('capabilityProbeKey(officialPageSourceId, diagnostic?.state)'),
+    'effect 必须按 source phase 派生重探键')
+  assert.ok(source.includes('}, [officialPageProbeKey, officialPageSourceId])'),
+    '重探键必须在 effect 依赖里')
+})
+
+test('SSH live 判词：对 dsh-<id> 读 pluginInventory/list 合并展示（源码锁）', () => {
+  const source = readFileSync(new URL('../../src/client/PluginDialog.tsx', import.meta.url), 'utf8')
+  // SSH 也走同一控制面代理 id（officialPluginsPageSourceId = spec.kind + '-' + spec.id = dsh-<id>），
+  // 不再只有 gateway/http 有 sourceId。
+  assert.ok(source.includes('const sshLiveSourceId = isSsh ? officialPluginsPageSourceId(target) : null'),
+    'SSH live 源 id 必须由 officialPluginsPageSourceId 派生')
+  assert.ok(source.includes('loadPluginInventory(sshLiveSourceId)'),
+    'SSH live 必须读 pluginInventory/list（loadPluginInventory）')
+  // 读失败 = 不展示状态（不臆造判词）：catch 分支只能落 null。
+  const catchBlock = source.slice(source.indexOf('loadPluginInventory(sshLiveSourceId)'))
+  assert.match(catchBlock.slice(0, 420), /catch\(\(\) => \{\s*if \(!cancelled\) setSshLive\(null\)/u,
+    'SSH live 读失败必须落 null（不得合成状态）')
+  assert.ok(source.includes('sshLive === null ? null : liveStateCell(installedRowLiveState(sshLive, row))'),
+    '远端行必须按 live 快照展示状态（快照缺失则什么都不显示）')
 })

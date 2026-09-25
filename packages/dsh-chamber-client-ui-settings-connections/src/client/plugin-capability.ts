@@ -80,6 +80,19 @@ export function capabilityFromGraph(value: unknown): OfficialPluginsPageCapabili
   return 'unavailable'
 }
 
+/**
+ * 能力探针的重探触发键：source id + source phase（对话框里 = client-plugin runtime
+ * 诊断的 state）。effect 直接依赖它而不是裸 sourceId —— 启动窗口里相态会从
+ * undefined/'not-injected' 走到 'ok'（实例已 serving），正是能力门必须重探的时刻；
+ * 只依赖 sourceId 会让判词在该窗口内永久停在 unknown（升级计划 §22.4.3）。
+ * @param sourceId - 控制面代理 source id（{@link officialPluginsPageSourceId}）。
+ * @param sourcePhase - 该 source 的相态；undefined = 尚无相态。
+ * @returns 相态变化即变化、其余不变的不透明键。
+ */
+export function capabilityProbeKey(sourceId: string, sourcePhase: string | undefined): string {
+  return sourceId + '|' + (sourcePhase === undefined || sourcePhase === '' ? 'unknown' : sourcePhase)
+}
+
 /** Test seams for the transport (production passes neither). */
 export interface OfficialPluginsCapabilityDeps {
   fetchImpl?: typeof fetch

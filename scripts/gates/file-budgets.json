@@ -27,9 +27,9 @@
     },
     {
       "path": "packages/dsh-chamber-client-ui-settings-connections/src/client/PluginDialog.tsx",
-      "lines": 958,
+      "lines": 986,
       "target": 700,
-      "note": "plugin dialog controller/render mix（2026-12 P1-6 上游 parity 取件：官方 Plugins 页能力门 +27 行，实现形体与 backup/v016-alpha1-pre-reset 逐字一致；重构目标 700 不变）"
+      "note": "plugin dialog controller/render mix（2026-12 P1-6 上游 parity 取件：官方 Plugins 页能力门 +27 行，实现形体与 backup/v016-alpha1-pre-reset 逐字一致；+28（2026-12 §22.4.3）能力门按 source phase 重探 + SSH live 判词（对 dsh-<id> 读 pluginInventory/list 合并展示）；重构目标 700 不变）"
     },
     {
       "path": "packages/desktop/gateway-provider.ts",

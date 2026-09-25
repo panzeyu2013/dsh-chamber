@@ -49,6 +49,7 @@ import { errorMessage } from './error-text.ts'
 import { pluginRowsOf, projectInstalledRows, type InstalledRowView } from './plugin-model.ts'
 import { loadPluginInventory, type PluginInventorySnapshot } from './plugin-inventory-api.ts'
 import {
+  capabilityProbeKey,
   officialPluginsPageSourceId,
   probeOfficialPluginsPage,
   type OfficialPluginsPageCapability,
@@ -108,6 +109,10 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   // ui-plugin-manager row. `unknown` renders NOTHING — a failed probe must never be
   // presented as "this instance cannot manage plugins".
   const officialPageSourceId = officialPluginsPageSourceId(target)
+  // 重探触发：source phase 的转移（诊断 state 是对话框手里最直接的相态面）。
+  // 只按 sourceId 重探会让判词在启动窗口里永久停在 unknown：首探落在实例 serving
+  // 之前，reload 后也不会再试（升级计划 §22.4.3「能力门重探」）。
+  const officialPageProbeKey = capabilityProbeKey(officialPageSourceId, diagnostic?.state)
   useEffect(() => {
     let cancelled = false
     setOfficialPage('probing')
@@ -115,11 +120,14 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       if (!cancelled) setOfficialPage(verdict)
     })
     return () => { cancelled = true }
-  }, [officialPageSourceId])
+  }, [officialPageProbeKey, officialPageSourceId])
 
   const [sshPhase, setSshPhase] = useState<ViewPhase>('loading')
   const [localManifest, setLocalManifest] = useState<LocalPluginManifest | null>(null)
   const [remoteManifest, setRemoteManifest] = useState<RemotePluginManifest | null>(null)
+  /** SSH 目标的 live Loader 快照（同一代理对 `dsh-<id>` 的 pluginInventory/list 读面）。
+   *  只做展示：读不到就保持 null —— 行不显示状态，更不把「读不到」当成「未注入」。 */
+  const [sshLive, setSshLive] = useState<PluginInventorySnapshot | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [localFailed, setLocalFailed] = useState(false)
   const [profileNotInit, setProfileNotInit] = useState(false)
@@ -297,6 +305,24 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     if (isSsh) void loadRemoteList()
     else if (isLocal) void loadLocalList()
   }, [isSsh, isLocal, loadRemoteList, loadLocalList])
+
+  /**
+   * SSH live Loader 快照（只做展示）：实例的 loader 行状态此前只有 gateway/http 拿得到，
+   * SSH 行只有 profile manifest；同一控制面代理对 canonical `dsh-<id>` 同样能读上游
+   * `pluginInventory/list`（升级计划 §22.4.3「SSH live 判词」）。读失败 = 不显示状态，
+   * 不产生任何「未注入」类判词。
+   */
+  const sshLiveSourceId = isSsh ? officialPluginsPageSourceId(target) : null
+  useEffect(() => {
+    if (sshLiveSourceId === null) return
+    let cancelled = false
+    loadPluginInventory(sshLiveSourceId).then((next) => {
+      if (!cancelled) setSshLive(next)
+    }).catch(() => {
+      if (!cancelled) setSshLive(null)
+    })
+    return () => { cancelled = true }
+  }, [sshLiveSourceId, reloadNonce])
 
   useEffect(() => {
     if (sourceId === null) return
@@ -855,6 +881,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
                       </span>
                       <span className={clsx(css.pluginCell, css.pluginCellSpec)}>
                         {installedSpecCell(row)}
+                        {/* live 状态来自实例自己的 Loader 快照（读不到就不显示，不臆造判词）。 */}
+                        {sshLive === null ? null : liveStateCell(installedRowLiveState(sshLive, row))}
                       </span>
                     </div>
                   ))}
