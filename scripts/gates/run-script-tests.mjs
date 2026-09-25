@@ -102,6 +102,10 @@ export const GROUPS = {
     'scripts/gui-acceptance/checks.test.mjs',
     'scripts/gui-acceptance/mobile-checks.test.mjs',
     'scripts/gui-acceptance/mobile-walkthrough.test.mjs',
+    // The --live probe's registry resolution (MX sweep source): an explicit
+    // --registry must win over the Electron userData convention, and the
+    // id/kind-only reader must stay the only thing that touches the file.
+    'scripts/gui-acceptance/probe.test.mjs',
   ],
 }
 

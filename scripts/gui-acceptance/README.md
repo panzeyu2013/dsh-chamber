@@ -35,6 +35,7 @@ pnpm run acceptance:gui -- --attach          # 对已带 CDP 的 dev 实例做�
 pnpm run acceptance:gui -- --dev             # 自起 dev 实例 → 走查 → 自动关闭
 pnpm run acceptance:gui -- --dev --require-hover   # 悬停腿必须真实执行：未执行（INFO）计为 FAIL
 pnpm run acceptance:gui -- --live --sources gateway-a,gateway-b   # 显式指定要扫的远程来源
+pnpm run acceptance:gui -- --live --plane http://127.0.0.1:17540 --registry <isolated-userData>/ssh-instances.json  # MX 来源与该平面同源
 pnpm run acceptance:gui -- --flavor native   # 原生 flavor：自起 sidecar 装配 → 走查 → SIGTERM 关闭
 pnpm run acceptance:gui -- --flavor native --attach --plane http://127.0.0.1:17500   # 探测运行中的原生壳控制面
 node scripts/gui-acceptance/run.mjs --flavor native --require-assembly             # 机器门：装配缺失即 FAIL（ci.yml 用同一条命令）
@@ -114,7 +115,11 @@ Electron 那样驱动它的 DOM。`--flavor native` 因此驱动**打包 .app �
 ## 前置条件
 
 - **`--live`**：应用已在跑（打包态或 dev 均可）。只发 GET/HEAD、读一帧 SSE、做原始
-  upgrade 握手；**不发任何写请求**，可安全用于有真实会话的安装态。
+  upgrade 握手；**不发任何写请求**，可安全用于有真实会话的安装态。MX-1/MX-2 默认读**本机
+  Electron userData 约定**的桌面注册表（`~/Library/Application Support/@dsh-chamber/desktop/ssh-instances.json`）；
+  当 `--plane` 指向的不是该注册表所属的实例（`--dev` 一次性实例、被替换的打包载荷等）时，用
+  `--registry <该实例 userData>/ssh-instances.json` 或 `--sources` 显式给出——否则 MX-2 会把
+  「注册表有、该平面没有」如实记为 FAIL（环境错配，不是缺陷）。
 - **`--attach`**：dev 实例已带 `--remote-debugging-port=9333`（与 `scripts/perf` 同一约定）。
 - **`--dev`**：需要构建产物就位——`packages/desktop/dist/{web,preload.cjs,control-plane}` 与
   `packages/desktop/vendor/dsh/node_modules`（缺哪一项会**直接报出该跑哪条命令**，不隐式构建）。

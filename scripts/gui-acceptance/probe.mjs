@@ -83,6 +83,21 @@ export function configuredSourceIds(file = registryPath()) {
   try { return deriveSourceIds(JSON.parse(readFileSync(file, 'utf8'))) } catch { return [] }
 }
 
+/**
+ * The registry file one `--live` run reads: an explicit `--registry` wins,
+ * otherwise the platform's Electron userData convention. The override exists
+ * because `--plane` may point at an instance whose registry is NOT that file
+ * (the toolbox's own `--dev` instance, a packaged payload under test): the MX
+ * sweep would then report the registry's sources as unavailable on a plane that
+ * never had them. Exported and pure so the rule is a lockable unit
+ * (probe.test.mjs) rather than a claim in the CLI help.
+ * @param {{ registryFile?: string, env?: NodeJS.ProcessEnv, home?: string }} [input] - resolution inputs.
+ * @returns {string} the registry file to read.
+ */
+export function resolveRegistryFile({ registryFile, env = process.env, home = homedir() } = {}) {
+  return typeof registryFile === 'string' && registryFile !== '' ? registryFile : registryPath(env, home)
+}
+
 async function get(origin, target, init) {
   const response = await fetch(`${origin}${target}`, { redirect: 'manual', ...init })
   const body = await response.text()
@@ -96,12 +111,15 @@ const headerList = headers => headers['content-type'] ?? ''
  * @param opts.planeOrigin control-plane origin (default http://127.0.0.1:17500)
  * @param opts.instanceOrigin the managed dsh instance port (optional, for the credential fence)
  * @param opts.sourceIds remote source ids; defaults to the desktop registry
+ * @param opts.registryFile registry file to read when sourceIds is absent (default: the Electron
+ *   userData convention — pass the probed instance's own file when --plane is not that instance)
  * @param opts.outDir artifact directory (default .tmp/gui-acceptance)
  */
 export async function runLiveAcceptance({
   planeOrigin = 'http://127.0.0.1:17500',
   instanceOrigin = 'http://127.0.0.1:17510',
   sourceIds,
+  registryFile,
   outDir = '.tmp/gui-acceptance',
   localInstanceId = 'local',
 } = {}) {
@@ -242,7 +260,7 @@ export async function runLiveAcceptance({
   instanceCheck('IP-7', '升级请求自身 Origin 被接受（101）', ownUpgrade.status === 101, `status=${ownUpgrade.status}`)
 
   // ------------------------------------------------------------------ remote sources
-  const sources = sourceIds ?? configuredSourceIds()
+  const sources = sourceIds ?? configuredSourceIds(resolveRegistryFile({ registryFile }))
   rec.add('MX-1', '桌面注册表中的来源（只读 id/kind）', null,
     sources.length === 0 ? '未读到注册表（可用 --sources 显式给出）' : `count=${sources.length} ids=${sources.join(',')}`)
 

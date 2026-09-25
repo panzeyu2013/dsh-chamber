@@ -38,6 +38,10 @@ const { values } = parseArgs({
     plane: { type: 'string', default: 'http://127.0.0.1:17500' },
     instance: { type: 'string', default: 'http://127.0.0.1:17510' },
     sources: { type: 'string' },
+    // MX sweep source: the desktop registry file. Defaults to the Electron
+    // userData convention; point it at the probed instance's own file when
+    // --plane is not that instance (dev/isolated/under-test payloads).
+    registry: { type: 'string' },
     'cdp-port': { type: 'string', default: '9333' },
     'cp-port': { type: 'string', default: '17530' },
     'electron-arg': { type: 'string', multiple: true, default: [] },
@@ -63,6 +67,8 @@ if (values.help) {
   --plane <origin>           控制面 origin（默认 http://127.0.0.1:17500）
   --instance <origin>        本地 dsh 实例 origin（默认 http://127.0.0.1:17510，用于凭据围栏项）
   --sources a,b,c            显式来源 id（默认只读桌面注册表的 id/kind）
+  --registry <path>          桌面连接注册表（默认 Electron userData 约定；--plane 指向隔离实例时
+                             给出该实例自己的 ssh-instances.json）
   --cdp-port <port>          CDP 端口（默认 9333）
   --cp-port <port>           --dev 的控制面端口（默认 17530）
   --electron-arg <arg>       追加 Electron 开关（可重复；沙箱内需 --electron-arg=--no-sandbox）
@@ -117,6 +123,7 @@ try {
         planeOrigin: values.plane,
         instanceOrigin: values.instance,
         sourceIds,
+        registryFile: values.registry,
         outDir,
       })
       failed += live.failed
