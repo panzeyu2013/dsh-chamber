@@ -320,7 +320,7 @@
 
 - **结构性重构与清理（未闭合；计划与开放项见 [todo/refactor-plan.md](todo/refactor-plan.md)）**：
   核心指标 = 消除补丁式修改；行数删减经用户裁决**不强制**（仅参考，原 −9,000 指标作废）。
-  常驻三门 = `verify:import-cycles`（值环 0；类型环 allowance 棘轮，当前 0）、`verify:file-budgets`
+  常驻三门（**现已只本地跑**，见上文「范围决策」）= `verify:import-cycles`（值环 0；类型环 allowance 棘轮，当前 0）、`verify:file-budgets`
   （15 个 God 文件只降不升）、`verify:no-dead-exports`（零消费者导出即红，含 desktop/renderer
   entryless 面）——登记与用法见计划 §4，机制与已落地清单不在本记录复述。**未收口**：① renderer 外三处
   同类 state/ref 镜像（`sidebar-root-projection` / `InstanceView` / `DshRuntimeSection`）；② `ssh-<id>`/
@@ -328,6 +328,16 @@
   跨包逐字重复口径见计划 §6（31 组多行体中 24 组为 3–5 行守卫、≥8 行 4 组全为 win-probes parity
   锁；既有约束下可删 0 组）。
 
+
+- **本地 `pnpm run smoke` 不能与在跑的实例并存（未排期）**：smoke 用控制面默认起始端口
+  `DEFAULT_DSH_START_PORT = 17510`（`packages/control-plane/src/spawn-dsh.ts`，重试 +1 至 17514）拉起受管 dsh，
+  桌面实例会占满这一段，本地因此表现为 `dsh_not_ready` 而不是 SKIP（CI test 腿因未物化运行时树而 SKIP：见 ci.yml 的
+  smoke 步与 release-workflow policy 的 EXEMPT）。要消除该摩擦需要给控制面/smoke 一个端口基址覆盖开关（仅测试注入）；
+  在那之前，发布清单 §4 的 smoke 项在 CI 之外按「端口空闲时通过 / 否则 SKIP 同源记录」处理。
+
+- **CI `test-windows` 的打包排练是 CPU bound（未排期优化）**：2026-09 实测 285–342s，且 electron 工具链与发行包
+  缓存落地后仍为 289s（CI #170 无缓存 → #175 有缓存逐腿对比），大头是 NSIS/7z 压缩而非下载；同一轮里 macOS 排练
+  133s → 115s、Swift build 62s → 42s，说明缓存对下载/编译型步骤有效。继续压缩只能动排练范围或打包参数（属验证面取舍）。
 
 - **0.1.6→0.1.7 升级线取件移植的残余（计划见 [todo/main-0.1.5-to-0.1.7-upgrade.md](todo/main-0.1.5-to-0.1.7-upgrade.md)）**：
   ① **fatal 恢复框的真机键位走查**仍开放（计划 §12.10 坑④ / runbook §8）：Return / 小键盘 Enter / Esc 在真实焦点下
