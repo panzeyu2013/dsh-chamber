@@ -359,7 +359,7 @@
   逐批调低预算。见 [deviations.md](deviations.md) D15。
 
 - 设置面残余登记（design 05 §5完整桥接修订后剩余项）：壳渲染选中来源自己boot ctx的 `settings.section`
-  台账与绑定标准座（`settings-source-face.ts`）。剩余：①面板要求该来源壳挂载中（`setSettingsTarget` 保证后台挂载/不被回收；代价 = 一次该来源boot，失败只显示不可达/启动中，无独立降级面）；②
+  台账与绑定标准座（`settings-source-face.ts`）。写路径余量（计划 §22.2.4 的 2026-12 重估，P0 已满足、P1 主面已实现，余 4–8 人日）：P1 余 = `__connections`/`__general` 改台账驱动（现为 `FIXED_SECTION_IDS` 常量 + `GeneralView`）；P2 = 字段描述符 + 上游字段套件渲染 + staged（含布尔）；P3 = `SettingsSecretSpec` 同形密钥存在性展示与「值不可能读回」证明。剩余：①面板要求该来源壳挂载中（`setSettingsTarget` 保证后台挂载/不被回收；代价 = 一次该来源boot，失败只显示不可达/启动中，无独立降级面）；②
   `settings.trigger/header/close` 属壳chrome、`settings.action` 仅本地；`settings.onboarding` 不再缺失；③ 组装诊断块退役（`toAssemblyReport` 已删；诊断在连接页
   `pluginDiagnostic`）；④ `contributes.settings` 等仍为上游提案（未排期，不再是前置），见
   `todo/upstream-proposals.md`；⑤ 完整桥接与首启阶段只经单测 + 源码锁 + `build:renderer`
