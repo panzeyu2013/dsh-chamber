@@ -38,6 +38,19 @@ import { skipSymlinksUnavailable, tempDir } from '../support/utils.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 
+/**
+ * Bootstrap budget for the tests whose fake host ANSWERS: the readiness line and
+ * the 303 exchange complete in milliseconds, so this value only bounds a wedged
+ * child. A tight budget (200–500 ms) made those tests machine-speed dependent —
+ * a slow runner can outrun it while spawning the child, so the spawn failed with
+ * the browser-auth error and (before the finally-reap below) left the fake host
+ * running: that is how CI's `test:control-plane` went red (spawn-dsh.test.ts
+ * reported as ETIMEDOUT with the real assertion detail lost to the per-file kill).
+ * Tests that EXPECT the bootstrap to expire (failure/legacy-fallback paths) keep
+ * their own short budget.
+ */
+const ANSWERING_AUTH_BOOTSTRAP_MS = 10_000
+
 
 /**
  * The upstream browser-auth cookie NAME for one request authority
@@ -444,8 +457,9 @@ test('spawnDsh: the 0.1.2 browser-auth bootstrap mints the cookie and the host-i
     '',
   ].join('\n'))
   const controller = new AbortController()
+  let spawned: Awaited<ReturnType<typeof spawnDsh>> | undefined
   try {
-    const spawned = await spawnHost(stateDir, dshWorkspacePath, controller.signal)
+    spawned = await spawnHost(stateDir, dshWorkspacePath, controller.signal)
     assert.equal(spawned.port > 0, true)
     const cookie = authCookieFor(`http://127.0.0.1:${spawned.port}`)
     // The name is the authority-bound upstream name for THIS instance, not an
@@ -456,6 +470,10 @@ test('spawnDsh: the 0.1.2 browser-auth bootstrap mints the cookie and the host-i
     await reapSpawned(spawned)
   } finally {
     controller.abort()
+    // A failed assertion must not leave the detached fake host running: the
+    // child's pipes keep this test process alive, so the file would hang until
+    // the manifest's per-file SIGKILL — and the failure detail dies with it.
+    spawned?.child.kill()
     clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
     rmSync(stateDir, { recursive: true, force: true })
   }
@@ -532,8 +550,9 @@ test('spawnDsh: a 401 that arrives before the launch-token line re-arms the boun
     '',
   ].join('\n'))
   const controller = new AbortController()
+  let spawned: Awaited<ReturnType<typeof spawnDsh>> | undefined
   try {
-    const spawned = await spawnHost(stateDir, dshWorkspacePath, controller.signal, { authBootstrapWaitMs })
+    spawned = await spawnHost(stateDir, dshWorkspacePath, controller.signal, { authBootstrapWaitMs })
     assert.equal(
       authCookieFor(`http://127.0.0.1:${spawned.port}`),
       `${browserAuthCookieName(`127.0.0.1:${spawned.port}`)}=sess`,
@@ -542,6 +561,10 @@ test('spawnDsh: a 401 that arrives before the launch-token line re-arms the boun
     await reapSpawned(spawned)
   } finally {
     controller.abort()
+    // A failed assertion must not leave the detached fake host running: the
+    // child's pipes keep this test process alive, so the file would hang until
+    // the manifest's per-file SIGKILL — and the failure detail dies with it.
+    spawned?.child.kill()
     clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
     rmSync(stateDir, { recursive: true, force: true })
   }
@@ -571,11 +594,13 @@ test('spawnDsh: a readiness line split across chunks is still fully redacted and
     '',
   ].join('\n'))
   const controller = new AbortController()
+  // Hoisted out of the try: the finally below must be able to reap the child
+  // even when an assertion threw (otherwise the file hangs to the per-file kill).
+  let spawned: Awaited<ReturnType<typeof spawnDsh>> | undefined
   try {
-    let spawned: Awaited<ReturnType<typeof spawnDsh>>
     try {
       spawned = await spawnHost(stateDir, dshWorkspacePath, controller.signal, {
-        authBootstrapWaitMs: 200,
+        authBootstrapWaitMs: ANSWERING_AUTH_BOOTSTRAP_MS,
         logger: { log(line: string) { logged.push(String(line)) }, warn(line: string) { logged.push('WARN:' + String(line)) }, error(line: string) { logged.push('ERR:' + String(line)) } },
       })
     } catch (error) {
@@ -589,6 +614,10 @@ test('spawnDsh: a readiness line split across chunks is still fully redacted and
     await reapSpawned(spawned)
   } finally {
     controller.abort()
+    // A failed assertion must not leave the detached fake host running: the
+    // child's pipes keep this test process alive, so the file would hang until
+    // the manifest's per-file SIGKILL — and the failure detail dies with it.
+    spawned?.child.kill()
     clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
     rmSync(stateDir, { recursive: true, force: true })
   }
@@ -638,7 +667,7 @@ test('spawnDsh: an oversized unterminated child chunk is bounded on the REAL for
   try {
     try {
       spawned = await spawnHost(stateDir, dshWorkspacePath, controller.signal, {
-        authBootstrapWaitMs: 500,
+        authBootstrapWaitMs: ANSWERING_AUTH_BOOTSTRAP_MS,
         logger: {
           log(line: string) { logged.push(String(line)) },
           warn(_line: string) {},
@@ -691,9 +720,10 @@ test('spawnDsh: the launch token never reaches the control-plane log or host-log
     '',
   ].join('\n'))
   const controller = new AbortController()
+  let spawned: Awaited<ReturnType<typeof spawnDsh>> | undefined
   try {
-    const spawned = await spawnDsh({ dshPortBase: await freeDshPortBase(),
-      stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, signal: controller.signal, authBootstrapWaitMs: 200,
+    spawned = await spawnDsh({ dshPortBase: await freeDshPortBase(),
+      stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, signal: controller.signal, authBootstrapWaitMs: ANSWERING_AUTH_BOOTSTRAP_MS,
       logger: { log(line) { logged.push(String(line)) }, warn() {}, error() {} },
     })
     const logLines = logged.join('\n')
@@ -712,6 +742,10 @@ test('spawnDsh: the launch token never reaches the control-plane log or host-log
     await reapSpawned(spawned)
   } finally {
     controller.abort()
+    // A failed assertion must not leave the detached fake host running: the
+    // child's pipes keep this test process alive, so the file would hang until
+    // the manifest's per-file SIGKILL — and the failure detail dies with it.
+    spawned?.child.kill()
     clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
     rmSync(stateDir, { recursive: true, force: true })
   }
@@ -770,12 +804,17 @@ test('spawnDsh: an old runtime tree (only session/list, no launch token) spawns 
     '',
   ].join('\n'))
   const controller = new AbortController()
+  let spawned: Awaited<ReturnType<typeof spawnDsh>> | undefined
   try {
-    const spawned = await spawnHost(stateDir, dshWorkspacePath, controller.signal, { authBootstrapWaitMs: 50 })
+    spawned = await spawnHost(stateDir, dshWorkspacePath, controller.signal, { authBootstrapWaitMs: 50 })
     assert.equal(authCookieFor(`http://127.0.0.1:${spawned.port}`), undefined)
     await reapSpawned(spawned)
   } finally {
     controller.abort()
+    // A failed assertion must not leave the detached fake host running: the
+    // child's pipes keep this test process alive, so the file would hang until
+    // the manifest's per-file SIGKILL — and the failure detail dies with it.
+    spawned?.child.kill()
     clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
     rmSync(stateDir, { recursive: true, force: true })
   }
