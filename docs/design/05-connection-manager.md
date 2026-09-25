@@ -94,7 +94,10 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   给它们留出可拖拽带并驱动进出动画。chamber 三处自有浮层都在 `#root` 内，窗口拖拽由 Electron 壳
   自己的拖拽矩形与 `installWindowDragRecall`（boot 内核首挂时安装）负责，移植顶带只会与壳的拖拽
   处理叠出一层没有消费面的留白；`leading` 侧的 `--dsh-frame-leading-clearance` 仍照上游计价（上条，
-  occupancy 是真实消费面）。
+  occupancy 是真实消费面）。**不含侧栏自己的顶部带**（ui-sidebar 的 `.topStrip`，52px、负 margin
+  抵消 root 内距、开关停在带内）：它是侧栏列内的排布，消费面就是红绿灯让位与开关本身（与
+  `shell.leading` 座同高，收展不跳位）；2026-09 随 macOS 隐藏标题栏实机补齐（此前 fork 整块缺失，
+  字标贴在红绿灯下沿）。
 - 保留官方侧边栏的：logo 行、New Session（作用于当前活动来源）、折叠（wide/rail）状态机、
   foot（footer.action + settings 孔位）。rc.2 起官方在 darwin 折叠态额外用窗口 chrome 的
   `shell.leading` 单席（官方 `ui-sidebar` 的 `HeaderLeadingControls`）承载展开/新建；

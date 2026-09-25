@@ -13,7 +13,7 @@
 import type { ReactNode } from 'react'
 import clsx from 'clsx'
 import {
-  BrandWordmark, FishLogo, IconNewChatOutlineRegular, IconPanelLeftOutlineRegular, Tooltip,
+  BrandWordmark, FishLogo, IconNewChatOutlineRegular, IconPanelLeftOutlineRegular, Tooltip, isDarwinDesktop,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarRootComponentProps } from './contract/slots.ts'
 import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
@@ -154,6 +154,34 @@ export function SidebarRoot({
     onDeleteWorkspace,
   }
 
+  // macOS 隐藏标题栏（红绿灯浮在侧栏顶，Swift 壳 titlebarAppearsTransparent；上游官方
+  // 桌面 titleBarStyle:'hiddenInset' 同形）：该带与红绿灯同一行，展开/折叠两态都把面板
+  // 开关停在这一行——上游同一块（ui-sidebar SidebarRoot.tsx 的 darwin 分支）；chamber
+  // fork 此前整块缺失，字标因此直接贴在红绿灯下沿（web 无窗控件，同一布局看着正常）。
+  // 判定读壳写的 <html data-platform>（Electron preload / Swift bridge-shim 的
+  // markDocumentPlatform，documentStart 注入 + DOMContentLoaded 兜底）；侧栏经 client-plugin
+  // 图加载后才挂载，此刻标记必已就位，故渲染期直读即可（上游同款读法）。
+  const darwinDesktop = isDarwinDesktop()
+  // rail 静息态是鲸鱼标；悬停换成面板图标（展开入口）。
+  const toggle = (
+    <Tooltip label={collapsed ? t('toggle.open') : t('toggle.collapse')} delayMs={500}>
+      <button
+        type="button"
+        className={clsx(css.iconButton, css.toggle)}
+        aria-label={collapsed ? t('toggle.open') : t('toggle.collapse')}
+        onClick={() => { toggleSidebar() }}
+      >
+        {!wide && (
+          <span className={css.railMark} aria-hidden="true">
+            {renderSlot('sidebar.brand.mark', { size: 24 }, { fallback: <FishLogo className={css.railFish} size={24} /> })}
+          </span>
+        )}
+        {/* Rail icons render at 18 (figma rail spec); expanded keeps the glyph-native sizes. */}
+        <IconPanelLeftOutlineRegular className={css.panelIcon} size={wide ? 16 : 18} />
+      </button>
+    </Tooltip>
+  )
+
   return (
     <div
       ref={column}
@@ -168,8 +196,11 @@ export function SidebarRoot({
       }}
       onPointerLeave={() => { armLinger() }}
     >
+      {/* macOS 隐藏标题栏：带内只有面板开关（红绿灯由原生窗画在同一行的左端）。 */}
+      {darwinDesktop && <div className={css.topStrip}>{toggle}</div>}
+
       <div className={css.logoRow}>
-        {/* 展开时 wordmark 兼作 New Session 快捷方式；折叠 rail 的 logo 是下方展开开关。 */}
+        {/* 展开时 wordmark 兼作 New Session 快捷方式（rail 的展开入口在 toggle 内）。 */}
         {wide && (
           <button
             type="button"
@@ -189,23 +220,8 @@ export function SidebarRoot({
             </span>
           </button>
         )}
-        {/* rail 静息态是鲸鱼标；悬停换成面板图标（展开入口）。 */}
-        <Tooltip label={collapsed ? t('toggle.open') : t('toggle.collapse')} delayMs={500}>
-          <button
-            type="button"
-            className={clsx(css.iconButton, css.toggle)}
-            aria-label={collapsed ? t('toggle.open') : t('toggle.collapse')}
-            onClick={() => { toggleSidebar() }}
-          >
-            {!wide && (
-              <span className={css.railMark} aria-hidden="true">
-                {renderSlot('sidebar.brand.mark', { size: 24 }, { fallback: <FishLogo className={css.railFish} size={24} /> })}
-              </span>
-            )}
-            {/* Rail icons render at 18 (figma rail spec); expanded keeps the glyph-native sizes. */}
-            <IconPanelLeftOutlineRegular className={css.panelIcon} size={wide ? 16 : 18} />
-          </button>
-        </Tooltip>
+        {/* macOS 已把开关停在顶部带内；其余平台仍停在 logo 行右端。 */}
+        {!darwinDesktop && toggle}
       </div>
 
       {/* Expanded, the button carries its own label — tooltip only on the rail. */}

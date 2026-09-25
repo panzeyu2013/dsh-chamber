@@ -59,9 +59,51 @@
    而 `.fading` 保留——它是**类驱动**且被 settle 定时器界定，不是时间线动画。
    `.wide` / `.railIn` 仅作为布局/接线钩子由组件挂载。 */
 
+/* macOS 隐藏标题栏（Swift 壳 titlebarAppearsTransparent；上游官方桌面
+   titleBarStyle:'hiddenInset' 同形）：红绿灯浮在侧栏顶部，该带横跨列顶
+   （负 margin 抵消 root 内距）与红绿灯同一行，面板开关停在带内——展开与折叠
+   两态同一行（28px 控件 11–39，中心 y 25：与折叠态 shell.leading 座、会话标题
+   行同高，收展不跳位）。上游同一块（ui-sidebar SidebarRoot.module.css 的
+   `.topStrip` / `.topStrip + .logoRow`）；chamber fork 此前整块缺失，字标因此
+   直接贴在红绿灯下沿（web 无窗控件，同一布局看起来正常——2026-09 用户截图）。
+   两处与上游刻意的差异：
+   ① 不加 `data-window-drag`：上游靠 ui-web base.css 的 app-region 规则做窗口
+   拖拽，Swift 壳忽略该属性（整窗由 isMovableByWindowBackground 拖动），Electron
+   macOS 腿又仍是系统标准标题栏（hiddenInset 属未落地计划，见
+   docs/progress/todo/main-0.1.5-to-0.1.7-upgrade.md），此刻加标记只是一层无
+   消费面的死面；hiddenInset 落地时按上游把标记加回本带与 logo 行。
+   ② `[data-fullscreen]` 分支照上游保留但今天不生效：两 flavor 都还没把窗口
+   全屏状态镜像到 html（vendor AppFrame 的 `[data-fullscreen]` 座位规则同样
+   待命），接入全屏时与本带一起开启。 */
+.topStrip {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: 52px;
+  box-sizing: border-box;
+  margin: -6px calc(-1 * var(--dsh-sidebar-inline-padding)) 0;
+  /* 2px 下沿把 28px 开关的中心压在 y=25，与折叠态 shell.leading 座（top 11，
+     28px 控件中心同为 25）同高：收展不跳位。 */
+  padding: 0 12px 2px;
+}
+
+/* 全屏时红绿灯消失，开关让位到带左；上游由 preload 打 html[data-fullscreen]，
+   本仓今天不生效（见上）。 */
+:global([data-fullscreen]) .topStrip {
+  justify-content: flex-start;
+}
+
+/* 满高 52px 会把字标推得过低：logo 行上提 12px 钻回带下沿，仍让开开关
+   （28px 控件止于 y=40）。 */
+.topStrip + .logoRow {
+  margin-top: -12px;
+}
+
 /* Logo row (figma pad (4,8,4,8)): expanded keeps the panel toggle at the
-   right edge; the rail gives every control the same base left anchor before
-   the shared entry translation is applied. */
+   right edge (macOS moves it into `.topStrip` above); the rail gives every
+   control the same base left anchor before the shared entry translation is
+   applied. */
 .logoRow {
   flex: none;
   display: flex;
