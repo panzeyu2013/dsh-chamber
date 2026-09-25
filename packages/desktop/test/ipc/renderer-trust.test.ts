@@ -154,7 +154,9 @@ test('fatal main-process boundary claims ownership before every hostile host cal
   const body = source.slice(start, end)
   const claim = body.indexOf('fatalExceptionInProgress = true;')
   assert.ok(claim >= 0, 'fatal ownership is claimed')
-  for (const boundary of ['describeUnknownError(reason)', 'console.error(', 'app.exit(1)']) {
+  // 描述器升级为有界致命描述 describeFatalError（含 code/syscall/path/cause，
+  // §22.3.1）；**顺序纪律不变**：任何 hostile host 调用都必须在 ownership 之后。
+  for (const boundary of ['describeFatalError(reason)', 'noteFatalReport(', 'console.error(', 'app.exit(1)']) {
     assert.ok(body.indexOf(boundary) > claim, `${boundary} runs only after terminal ownership is claimed`)
   }
   assert.match(body, /if \(fatalExceptionInProgress\) \{[\s\S]*?try \{ process\.abort\(\); \} catch/)

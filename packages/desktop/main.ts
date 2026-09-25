@@ -57,12 +57,48 @@ import type { ShortcutStorage } from './shortcuts-bridge.ts';
 import { RENDERER_CRASH_RELOAD_DELAY_MS, RENDERER_HANG_RELOAD_DELAY_MS, RENDERER_RECOVERY_MAX_RELOADS, noteRendererReload, shouldReloadAfterChildProcessGone, auditLogFilePath, chamberSettingsFilePath, gatewaySecretsFilePath, QUIT_CLEANUP_TIMEOUT_MS, resolveActiveRuntime, resolveControlPlanePort, scanDeepLinkUrls, sshPasswordsFilePath, stateRootDir, installIpcHandlers, clearBadgeIntentForQuit, drainDeepLinkLaunches, enqueueDeepLink, onRendererLifecycle, openExternally, resolveDevBuiltinDshWorkspace, shouldReloadAfterCrash, shouldScheduleHangReload } from './shell-core.ts';
 import type { RendererReloadBudgetState } from './shell-core.ts';
 import { createElectronEdges } from './electron-edges.ts';
+import { describeFatalError } from './describe-error.ts';
+import { ConsoleRing, pushConsoleMessage, recordFatalReport } from './fatal-report.ts';
 import { RendererFrameWatchdog, RENDERER_FRAME_PROGRESS_SCRIPT, RENDERER_INPUT_BLOCK_RTT_MS } from './renderer-frame-watchdog.ts';
 
 // Last-resort crash boundary: an unknown uncaught exception means the
 // privileged main process may be inconsistent and must fail closed rather than
 // keep serving IPC, transports and persistence from an indeterminate state.
 let fatalExceptionInProgress = false;
+// 渲染端 console 错误的**有界环**（64KiB，只留尾部）：主进程此前零 hook，
+// 打包态 renderer 白屏只剩系统考古；环只进本地 fatal 报告，绝不外发、不转发。
+const rendererConsoleRing = new ConsoleRing();
+
+/**
+ * 把一条致命事件落进本地报告，并返回可拼进对话框的「报告：<path>」行。
+ * 只落盘、不外发；写入失败时如实说明（绝不给用户一个不存在的路径）。
+ * @param input - 事件种类/阶段/正文与附加事实。
+ * @returns 面向对话框的一行 + 写入结果。
+ */
+function noteFatalReport(input: {
+  event: string
+  phase: 'startup' | 'running'
+  detail: string
+  extras?: readonly string[]
+}): string {
+  const consoleTail = rendererConsoleRing.snapshot();
+  const extras = [...(input.extras ?? [])];
+  if (consoleTail !== '') extras.push('renderer-console-tail=' + consoleTail);
+  const { line } = recordFatalReport({
+    userDataDir: app.getPath('userData'),
+    record: {
+      at: new Date().toISOString(),
+      version: app.getVersion(),
+      source: 'electron-main',
+      phase: input.phase,
+      event: input.event,
+      detail: input.detail,
+      extras,
+    },
+  });
+  console.log('[dsh-chamber] ' + line);
+  return line;
+}
 /**
  * 呈一次致命启动失败恢复框（上游 fatal-recovery.ts 的等价物；C4 启动与修复）。
  * 按钮布局/按键语义全部由 startup-error.ts 的纯函数给定：三选 = 退出 / 重启 /
@@ -75,6 +111,13 @@ function reportFatalStartupFailure(input: { title: string; detail: string }, kin
   console.error(`[dsh-chamber] ${input.title}：${input.detail}`);
   if (startupRecoveryShown) return;
   startupRecoveryShown = true;
+  // 本地报告（§18 行 1）：完整现场落盘，对话框只给截断文案 + **报告路径**——
+  // 用户不必再猜「日志在哪」，也不必把整段 stderr 抄进截图。
+  const reportLine = noteFatalReport({
+    event: kind === 'already-running' ? 'lock-conflict' : 'startup-failure',
+    phase: kind === 'already-running' ? 'startup' : (mainWindow === null || mainWindow.isDestroyed() ? 'startup' : 'running'),
+    detail: input.detail,
+  });
   const copy = shellStrings(app.getLocale());
   const plan = planStartupRecovery(
     { exit: copy.quitButton, restart: copy.restartButton, safeModeRestart: copy.safeModeRestartButton },
@@ -86,7 +129,7 @@ function reportFatalStartupFailure(input: { title: string; detail: string }, kin
       type: 'error',
       title: input.title,
       message: input.title,
-      detail: formatStartupFailureDetail(input.detail),
+      detail: formatStartupFailureDetail(input.detail) + '\n\n' + reportLine,
       buttons: [...plan.buttons],
       defaultId: plan.defaultId,
       cancelId: plan.cancelId,
@@ -185,7 +228,9 @@ function fatalMainError(reason: unknown): void {
   // boundaries can themselves throw and must not recurse through this path.
   fatalExceptionInProgress = true;
   let detail = 'unknown error';
-  try { detail = describeUnknownError(reason); } catch { /* formatter is intended safe; retain belt-and-suspenders fallback */ }
+  // 有界致命描述（含 code/syscall/path/cause）：只进本地报告与 stderr，不进任何外发面。
+  try { detail = describeFatalError(reason); } catch { detail = 'unknown error'; }
+  try { noteFatalReport({ event: 'uncaught-exception', phase: 'running', detail }); } catch { /* 报告失败不阻断 fail-closed */ }
   try { console.error('[dsh-chamber] fatal main-process error:', detail); } catch { /* console host boundary */ }
   try {
     app.exit(1);
@@ -213,9 +258,17 @@ crashReporter.start({
 // 诊断留痕：GPU/Utility 子进程异常退出（渲染进程由窗口级恢复覆盖）。
 app.on('child-process-gone', (_event, details) => {
   if (details.type === 'GPU' || details.type === 'Utility') {
-    console.error(
-      `[dsh-chamber] 子进程退出：type=${details.type} reason=${details.reason} exitCode=${details.exitCode} name=${details.name ?? ''}`,
-    );
+    const summary = `子进程退出：type=${details.type} reason=${details.reason} exitCode=${details.exitCode} name=${details.name ?? ''}`;
+    console.error('[dsh-chamber] ' + summary);
+    // 同一份报告：GPU/Utility 消失是「白屏/黑屏」的常见根因，此前只进 console。
+    try {
+      noteFatalReport({
+        event: 'child-process-gone',
+        phase: 'running',
+        detail: summary,
+        extras: ['serviceName=' + (details.serviceName ?? ''), 'reason=' + String(details.reason ?? '')],
+      });
+    } catch { /* 报告失败不改子进程语义 */ }
   }
 });
 
@@ -652,10 +705,24 @@ function installRendererRecovery(win: BrowserWindow): void {
       onRendererLifecycle('did-finish-load');
     }
   });
+  // 渲染端 console 证据通道：只收 error 级、只进有界环（64KiB），绝不转发/外发。
+  // Electron 43 的 console-message 既有旧式位置参数也有 details 对象，两种都收。
+  win.webContents.on('console-message', (...args: unknown[]) => {
+    pushConsoleMessage(rendererConsoleRing, args);
+  });
   win.webContents.on('render-process-gone', (_event, details) => {
     frameWatchdog.reset();
     clearUnresponsiveTimer();
     clearCrashReloadTimer();
+    // 终止原因进同一份报告（此前只进 console，退出码/reason 随进程消失）。
+    try {
+      noteFatalReport({
+        event: 'renderer-gone',
+        phase: 'running',
+        detail: '渲染进程终止：reason=' + details.reason + ' exitCode=' + details.exitCode,
+        extras: ['reason=' + details.reason, 'exitCode=' + String(details.exitCode)],
+      });
+    } catch { /* 报告失败不改恢复语义 */ }
     // 用户关窗/退出等正常路径（判定单源 = shouldReloadAfterCrash）。
     if (!shouldReloadAfterCrash(details.reason, quitRequested)) return;
     // 通知就绪标志立即失效：崩溃到 reload 之间没有导航事件，不重置则向死

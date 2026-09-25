@@ -107,6 +107,9 @@ export const GROUPS = {
     'upstream-seats.test.ts',
     // C4 启动与修复：三选恢复决策 + chamber 自持状态备份 + main.ts 接线锁步
     'test/desktop-shell/startup-recovery.test.ts',
+    // 致命诊断本地报告（§18 行 1 / §22.3.1）：describeFatalError + 报告落盘诚实性 +
+    // 渲染端 console 有界环
+    'test/desktop-shell/fatal-report.test.ts',
     'test/ipc/bridge-shim-document.test.ts',
     // rc.2 dshDesktop 载体（官方 desktop preload 面）：字面量单源锁步 + 原生
     // 键盘桥行为（真 protocol + 内存存储，无 Electron/GUI）。
