@@ -338,7 +338,10 @@ export function collectDocAnchors(root = ROOT) {
   // 符号段允许 `.`：`src/a.ts#Type.method` 必须整段采集——只吃到 `#Type` 时，
   // 恰好存在导出 `Type` 会让 `method` 零校验。点号形态的处置见
   // checkDocAnchors（显式报不支持，不做静默截断）。
-  const pattern = /[A-Za-z0-9_/.@-]+\.(?:ts|tsx|mts|cts|mjs|js|swift|css|json|ya?ml)(?:#=literal:[^`\n]+|#[A-Za-z_$][A-Za-z0-9_$.]*)/gu
+  // 路径字符集含 "+"：Swift 约定把同一类型的功能拆进 `Type+Feature.swift`，
+  // 少一个字符就会把锚点路径截成裸 basename（registry 侧的 SYMBOL_PATTERN 用
+  // [^#]+，本就接受 "+"）。
+  const pattern = /[A-Za-z0-9_/.@+-]+\.(?:ts|tsx|mts|cts|mjs|js|swift|css|json|ya?ml)(?:#=literal:[^`\n]+|#[A-Za-z_$][A-Za-z0-9_$.]*)/gu
   const found = []
   for (const file of collectFiles(join(root, 'docs'), '.md')) {
     const text = readFileSync(file, 'utf8')
