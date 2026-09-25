@@ -7,7 +7,7 @@
  *  1. ready 帧（最小化 {port, shellVersion}）；
  *  2. info 真实载荷（controlPlaneUrl/platform/flavor 面）；
  *  3. settings-set → notify rendererPush{channel:'dsh-chamber:settings-changed'}
- *     —— 8 push 事件面的代表采样（真实处理器 → node-edges → 协议 notify）；
+ *     —— 9 push 事件面的代表采样（真实处理器 → node-edges → 协议 notify）；
  *  4. 代表通道均应答（ok 或 loud 'sidecar-ctx-unavailable:*'，绝无挂起）；
  *  5. 未知通道 loud；
  *  6. SIGTERM 优雅退出（exit 0）。

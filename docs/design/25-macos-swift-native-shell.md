@@ -135,7 +135,7 @@ Node 侧。移植条件因此罕见：**把壳换掉，业务与测试资产原�
 │ sidecar 子进程（打包的 Node + JS bundle，纯 Node 无 Electron）│
 │  = main.ts 拆分出的 core（§4.1）                             │
 │    transport-manager / ssh-provider / gateway-provider/…     │
-│    61 invoke 处理器（含 info）+ 8 push 事件源（语义校验原样）│
+│    61 invoke 处理器（含 info）+ 9 push 事件源（语义校验原样）│
 │  + control-plane（createControlPlane，loopback HTTP/WS）      │
 │  + dsh-runtime / pnpm（运行时版本管理、安装）                 │
 │  + 数据面：userData/{state, ssh-instances.json,              │
@@ -361,16 +361,16 @@ interface HostEdges {
 
 #### 4.4.1 A 桥（web ↔ Swift，preload 等价物）
 
-- preload 职责：`contextBridge.exposeInMainWorld('dshChamber', {…})` = **4 个 info 标量（controlPlaneUrl/dshVersion/version/platform）+ 9 个命名空间面（desktopSsh/update/settings/systemResume/openIn/deepLink/runtime/notifications/badge）**（preload.cts:929-965；命名空间成员口径合计 **60 invoke + 8 订阅**，不含顶层 `dsh-chamber:info`；manifest 全量 = 61 invoke + 8 push = 69，其中 `desktopSsh` 面 32 invoke（含 `instances_health`））。Swift 注入 `bridge-shim.js`（WKUserScript、.page world、documentStart；资源名 = MainWindowController.swift:42）定义同形 API：
+- preload 职责：`contextBridge.exposeInMainWorld('dshChamber', {…})` = **4 个 info 标量（controlPlaneUrl/dshVersion/version/platform）+ 10 个命名空间面（desktopSsh/update/settings/systemResume/openIn/deepLink/runtime/notifications/badge/rendererStall）**（preload.cts:929-965；命名空间成员口径合计 **60 invoke + 9 订阅**，不含顶层 `dsh-chamber:info`；manifest 全量 = 61 invoke + 8 push = 69，其中 `desktopSsh` 面 32 invoke（含 `instances_health`））。Swift 注入 `bridge-shim.js`（WKUserScript、.page world、documentStart；资源名 = MainWindowController.swift:42）定义同形 API：
   - **挂出时机（D1）**：documentStart 定义内部管路（resolve/emit/rehydrate，带窗口随机令牌），**`dsh-chamber:info` 成功后**才暴露 `dshChamber`；info 未就绪/失败期 invoke 回 `ipc_not_ready`（1 次 + 10 次 50ms 重试），渲染端走既有 surface 缺失链自愈；全败分支与 preload 同形（surface 在、标量 null）（bridge-shim.js、BridgeShimInjector.swift；G22/T-12 有门禁与登记）。
-  - 方法面：按 manifest 生成 `dshChamber.<ns>.<method>(args)` → postMessage({id, method, payload})，以 id 关联 Promise（info 的 10×50ms 重试照搬——仅 reject 时重试）。事件面：8 个 push → shim 订阅表，Swift `evaluateJavaScript` ("__dshChamberEmit(event,payload)") 派发（通道名/载荷以 IPC_CHANNELS/05 §7.4 为权威）。防护：Object.defineProperty 非可配置挂载防页面覆盖。
+  - 方法面：按 manifest 生成 `dshChamber.<ns>.<method>(args)` → postMessage({id, method, payload})，以 id 关联 Promise（info 的 10×50ms 重试照搬——仅 reject 时重试）。事件面：9 个 push → shim 订阅表，Swift `evaluateJavaScript` ("__dshChamberEmit(event,payload)") 派发（通道名/载荷以 IPC_CHANNELS/05 §7.4 为权威）。防护：Object.defineProperty 非可配置挂载防页面覆盖。
 - Swift `WKScriptMessageHandler` 护栏（只做传输层，语义校验在 sidecar）：1. 主 frame；2. **壳文档判定**（origin === 当前控制面 origin **且** pathname == "/" 且无 query——与 Electron `isTrustedRendererUrl` 对齐；port 只在 ready 帧后放开）；3. 信封结构/尺寸上限（≤4 MiB）、method ∈ manifest 白名单；4. 不响应"新窗口/导航"（WKUIDelegate 建窗返回 nil + decidePolicyFor 阻断离开 origin；外链交 NSWorkspace——含 **mailto:/vscode:// 等非 http(s) scheme 导航策略实测**，C6）。语义校验（payload schema、来源指纹、generation、ACK 队列……）全部留在 sidecar 原处理器。
 
 #### 4.4.2 B 桥（Swift ↔ sidecar，本机受信通道）
 
 - 传输：sidecar stdin/stdout 行式 JSON-RPC（NDJSON）；stderr 独立为日志。**sidecar-entry 入口必须把存量 console.* 重定向到 stderr**——main.ts 端口行（:1787）、will-quit 完成串（:1673，实机门禁断言该串）等遍布代码，否则"业务原样复用"与协议纪律冲突（D2）。
 - 信封：{id, method, payload} / {id, ok, result|error} / {event, payload} / edge:*（sidecar→Swift 的 HostEdge 请求，Swift 执行后回响应）；id 单调。
-- **保留入站 method（Swift → sidecar，不在 69 通道 manifest 内；单源 = `packages/desktop/node-edges.ts` `HOST_INBOUND`）**：`__host.hostFacts`、`__host.notifyClicked`、`__host.systemResume`、`__host.mainWindowShown`、`__host.deepLink {url}`（§4.5：`application(_:open:)` 冷/热启动统一入口 → core `enqueueDeepLink`）、`__host.rendererLifecycle {event}`（§5 E19 三事件映射：did-start-loading / did-finish-load / crashed / closed → core `onRendererLifecycle` 复位 ready 位 + in-flight requeue/drain）、`__host.quitFacts {quitRequested, recoveryAvailable}` → **决策投影**（§5 E1/E9/E20：core 依 chamber settings 的 `windowCloseBehavior`/`quitConfirmation` + `LOCAL_RUNNING_STATES × localProcessAlive` 用既有纯函数 `shouldHideToTray`/`computeQuitRisk` 合成，返回 `{hideOnClose, quitNeedsConfirm, quitReasons}`——判据单源在 core，Swift 只执行隐藏/退出链，绝不复制决策）。Swift 拼写单源 = `HostInboundMethod`，与 TS 表锁步由 `HostInboundMethodTests` 断言。
+- **保留入站 method（Swift → sidecar，不在 70 通道 manifest 内；单源 = `packages/desktop/node-edges.ts` `HOST_INBOUND`）**：`__host.hostFacts`、`__host.notifyClicked`、`__host.systemResume`、`__host.mainWindowShown`、`__host.deepLink {url}`（§4.5：`application(_:open:)` 冷/热启动统一入口 → core `enqueueDeepLink`）、`__host.rendererLifecycle {event}`（§5 E19 三事件映射：did-start-loading / did-finish-load / crashed / closed → core `onRendererLifecycle` 复位 ready 位 + in-flight requeue/drain）、`__host.quitFacts {quitRequested, recoveryAvailable}` → **决策投影**（§5 E1/E9/E20：core 依 chamber settings 的 `windowCloseBehavior`/`quitConfirmation` + `LOCAL_RUNNING_STATES × localProcessAlive` 用既有纯函数 `shouldHideToTray`/`computeQuitRisk` 合成，返回 `{hideOnClose, quitNeedsConfirm, quitReasons}`——判据单源在 core，Swift 只执行隐藏/退出链，绝不复制决策）。Swift 拼写单源 = `HostInboundMethod`，与 TS 表锁步由 `HostInboundMethodTests` 断言。
 - 退出纪律：清理后入站 invoke 一律回 `{error:'app is quitting', code:'app_quitting'}`（sidecar-entry.ts:396-400；与 renderer-trust 的 `createTrustedIpc` 同码同语义）；清理自身 4.5s 硬顶（`QUIT_CLEANUP_TIMEOUT_MS=5_000` − 500，早于宿主 5s SIGKILL grace 留 500ms 余量；shell-core.ts:691 / sidecar-entry.ts:691）。
 - 护栏：Swift 只接受自己 spawn 的进程 fd；帧长上限与超时；非协议帧 fail-loud。事件推送经 B 桥到 Swift → A 桥 emit，事件名清单 = manifest。
 - **出站写与期限**：Swift 的 invoke 和 edge 应答共用每个 sidecar 会话独立的串行写器；排队上限为 64 帧 / 16 MiB（另有正在写的单帧 ≤4 MiB）。edge 应答越过尚未写出的普通请求，满队列时可淘汰排队请求并将其明确结算为写失败。invoke 在登记 pending 时启动全程期限（缺省 60s，页面普通 45s、长交互 720s），涵盖排队、管道背压、sidecar 执行与响应读取；过期排队帧在真正写入前丢弃。单次物理写超过 20s 时重建 sidecar；stop / 自然退出立即作废旧写器，重启使用新写器。写抛错可能留下半帧，因此同样作废整条出站传输并终止本代 sidecar，由 Supervisor 建立新协议会话。已经进入内核的写不能撤回，超时后的远端副作用须靠宿主事实对账；sidecar 对未收到 edge 应答另设普通 30s / 交互 660s 期限。
@@ -386,7 +386,7 @@ interface HostEdges {
   BridgeManifest.swift`（提交物）与 `Resources/chamber-bridge.stub.js`（提交物；**不进 Swift target、
   不随 .app 打包**，仅锁步样本，见 `Package.swift` 的 `exclude`）。**命名空间归属不由 manifest 承载**：
   preload/shim 暴露面是唯一单源，`bridge-shim-surface.test.ts` 逐命名空间断言 shim 方法集与 preload 一一对应。
-- 三件锁步测试：`bridge-manifest.test.ts`（重生成 == 提交物 + **通道数守恒 69 = 61+8 + 无死键断言**（61 == 60 命名空间成员 + `info`），
+- 三件锁步测试：`bridge-manifest.test.ts`（重生成 == 提交物 + **通道数守恒 70 = 61+9 + 无死键断言**（61 == 60 命名空间成员 + `info`），
   B12/E8）、`bridge-shim.test.ts`（`chamber-bridge.stub.js` 重生成逐字节 == 提交物 + invoke/push 数组与
   计数）、`BridgeManifestConsistencyTests`（Swift 白名单 == JSON）；Swift 产品代码禁止手写通道字符串。
 - `ipc-surface-mirror.test.ts` 的 `MAIN_SIDE_FILES = ['main.ts', 'shell-core.ts', 'electron-edges.ts']`
@@ -957,7 +957,7 @@ loopback-http-test-server.ts 同款思路）**未实施——需 GUI 会话，�
 - R10 开发期双后端竞态：Electron dev 与 sidecar dev 共享 cp 端口族 → 各自
   退避 + 端口钉死 + 独立 .dev-user-data（companion）。
 - R11 Swift 侧人手单点：护栏规则集中 DSHChamber 单 target + Generated 产物减少手写面。
-- R12 manifest 解析脆弱性：正则扫字面量会漏新写法 → 复用 mirror 解析函数 + 通道数守恒断言（69=61+8）。
+- R12 manifest 解析脆弱性：正则扫字面量会漏新写法 → 复用 mirror 解析函数 + 通道数守恒断言（70=61+9）。
 - R13 WKWebView devtools：仅 debug 构建开启（inspector 属信任边界）。
 
 ## 10. 外部决策清单（签核尚未完成；日程见 companion §八）

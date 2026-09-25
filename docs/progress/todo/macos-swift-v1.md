@@ -52,11 +52,11 @@
 |门禁|落点|断言什么|
 |---|---|---|
 |IPC面镜像锁步|`packages/desktop/test/ipc/ipc-surface-mirror.test.ts`|main handle/send集合 == preload invoke/on集合；无裸字面量；preload/renderer global.d.ts/settings-connections结构镜像|
-|bridge-manifest一致|`bridge-manifest.test.ts` + `scripts/emit-bridge-manifest.mjs` + 提交物JSON/Swift/stub|重生成 == 提交物；通道数守恒68=60+8；manifest只承载通道 + 方向|
+|bridge-manifest一致|`bridge-manifest.test.ts` + `scripts/emit-bridge-manifest.mjs` + 提交物JSON/Swift/stub|重生成 == 提交物；通道数守恒70=61+9；manifest只承载通道 + 方向|
 |A桥shim表面|`bridge-shim-surface.test.ts`|shim每个命名空间方法集 == preload；method→channel映射一致；无W-04别名残留|
 |A桥stub锁步|`bridge-shim.test.ts`|重生成逐字节 == 提交物；invoke/push计数；信封 `{id,method,payload}`|
 |core禁electron|`electron-free-gate.test.ts`|fail-closed传递闭包：core家族无electron import；白名单四文件有|
-|sidecar全通道冒烟|`sidecar-stdio.test.ts`|假Swift驱动60 invoke回包 + 8 push采样（真处理器）|
+|sidecar全通道冒烟|`sidecar-stdio.test.ts`|假Swift驱动60 invoke回包 + 9 push 面的代表采样（真处理器）|
 |release腿策略/打包清单同源|`scripts/release/release-workflow-policy.test.mjs`、`packaging-manifest-lockstep.test.mjs`|staple先于归档；`ARTIFACT_ARGS` 展开恰2次；产物名 `dsh-chamber-<ver>-macos-arm64`；host包清单五处一致|
 |Swift负例护栏|`macos/Tests`（XCTest，ci.yml `test-macos`）|伪造frame/超大帧/非协议流/伪造事件名/越origin全拒|
 |双端harness|`swift-harness-driver.test.ts`（未实施）|真实窗口/桥/通知/深链（需mac + GUI，见 §一）|
@@ -74,7 +74,7 @@ Swift产物出问题 ⇒ draft不publish、Electron照发（共存主通道，Sw
 
 - R10开发期双后端竞态：Electron dev（17520起探测）与Swift dev共享控制面起始端口族 ⇒ `DSH_CHAMBER_CP_PORT`/`DSH_CHAMBER_SHELL_PORT` 分别钉死 + 双userData（或先后启动）。
 - R11人手单点：壳 + 桥 + 护栏 ≈25–35个Swift文件长期维护；缓解 = 护栏集中单target、XCTest覆盖率门、Generated产物。
-- R12 manifest生成脚本解析脆弱性：新写法（模板串/别名）漏检 ⇒ 生成脚本复用mirror解析 + 「通道数守恒」断言（68=60+8）。
+- R12 manifest生成脚本解析脆弱性：新写法（模板串/别名）漏检 ⇒ 生成脚本复用mirror解析 + 「通道数守恒」断言（70=61+9）。
 - R13 devtools：debug才开 `developerExtrasEnabled`，发布态由build脚本关闭（inspector属信任边界）。
 
 ### 7.2 WKWebView 实测项 W1–W7 判定标准（M5 / W-29 用）

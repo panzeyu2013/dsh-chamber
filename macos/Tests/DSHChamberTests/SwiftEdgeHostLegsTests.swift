@@ -385,7 +385,7 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         XCTAssertEqual(legs.notificationRegistry.trackedCount, 0, "失败撤下登记")
     }
 
-    /// notDetermined：先申请一次；拒绝 → {shown:false,error}；批准 → add 并 shown:true。
+    /// notDetermined：先申请一次；拒绝 → {shown:false,error,failureClass:permanent}；批准 → add 并 shown:true。
     func testNotificationNotDeterminedRequestsAuthorizationFirst() {
         let deniedCenter = FakeNotificationCenter()
         deniedCenter.status = .notDetermined
@@ -397,7 +397,8 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         XCTAssertTrue(deniedCenter.addRequests.isEmpty, "未授权不得 add")
         XCTAssertEqual(deniedReply.result,
                        .object(["shown": .bool(false),
-                                "error": .string("swift-edge-notification-not-authorized:denied")]))
+                                "error": .string("swift-edge-notification-not-authorized:denied"),
+                                "failureClass": .string("permanent")]))
 
         let grantedCenter = FakeNotificationCenter()
         grantedCenter.status = .notDetermined
