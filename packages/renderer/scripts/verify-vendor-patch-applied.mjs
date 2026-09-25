@@ -98,6 +98,14 @@ export const VENDOR_PATCH_MARKERS = [
     present: /lastFlushAt/,
   },
   {
+    vendorFile: 'dsh-client-ui-chat/src/client/chat/use-chat-reading.ts',
+    what: 'the sampled settle re-pins the tail while the follow is still owned',
+    // Patched: the settle calls `this.followTail()` under the bare result of
+    // `this.follow.sample(...)`, where upstream guards it with
+    // `!scroll.movedByReader &&`. The backreference tolerates minified locals.
+    present: /this\.follow\.sample\([^)]*\)[\s\S]{0,200}?if\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*this\.followTail\s*\(\)/,
+  },
+  {
     what: 'layout fork publishes the chamberFileApiBase root standard prop',
     // Chamber-package half of the ui-chat patch (not a vendor file): without
     // the prop the patched resolver falls back to document.baseURI, which is

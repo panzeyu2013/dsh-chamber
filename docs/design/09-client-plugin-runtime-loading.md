@@ -322,7 +322,7 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   `expect`→`replace`，`expect` 必须**恰好命中一次**（0 次或多次 = 构建期抛错，绝不静默发出未打补丁的
   bundle）。应用点 = renderer 的 `deepseekSource().transform`（我们的 vite 配置），vendor 文件**零写入**；
   模块 id 并接受软链形式与 `realpathSync` 后的子模块形式（vite 实际给后者）。
-- 落点（rc.2：9 个文件 / 22 处锚点，逐锚点由触点表 C9 与 `packages/renderer/scripts/vendor-patches.test.mjs`
+- 落点（rc.2：10 个文件 / 23 处锚点，逐锚点由触点表 C9 与 `packages/renderer/scripts/vendor-patches.test.mjs`
   校验）：① `ui-chat` 的 `chat/AssistantMarkdown.tsx` 读取新增 root 标准 **prop**
   `chamberFileApiBase`（chamber layout fork 经 `ctx.slots.provideRoot({ props })` 提供，值 = 本 entry 的
   `ctx.chamberBasePath`），`pathImages` 以 `new URL(chamberFileApiBase + '/', document.baseURI)` 作为上游
@@ -340,13 +340,26 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   动画改为合成器 `transform`）、`ui-conversation` 的三层 rAF 发布链；每条 `reason` 必须带同一 Electron/
   显示器上的 A/B 实测（`app.getAppMetrics` 累积差）。`GenericCommandCard` 行 sweep 已随 0.1.7 上游删除，
   对应补丁同步退役。
+- 第三类补丁：**模块私有状态机的逻辑缺陷（维护者裁决纳入）**——`ui-chat` 的 `chat/use-chat-reading.ts`
+  采样 settle：viewport 把「仅位置变化」记为 reader 移动，位移落在跟随容差（`FOLLOW_THRESHOLD` = 24px）内时
+  旧代码保留残余偏移 ⇒ 最新一行半遮在输入框上方、且不出现「回到最新」，直到下一次布局变化（实测：真实前端 12px
+  非 reader 偏移在 `data-chat-following-tail` 保持的情况下永久残留；触发侧为直接 bash 调用的
+  preparing→started 整行替换，scroll 侧成因未定，PTC 子调用不渲染准备行故不复现）。`reason` 必须写明实测症状
+  与接受的取舍；上游带上修复后删除该条（首选形状 = `use-chat-viewport.ts` 按意图归因）。
 - 保鲜门：`verify-upstream-touchpoints.mjs` **C9** 对 pin 住的 vendor 文件逐锚点校验（硬失败）；
   `packages/renderer/scripts/vendor-patches.test.mjs` 在 CI 侧验证锚点唯一、改写后函数行为（含上游回落
   分支）与 id 形态匹配。
 
-登记纪律：新增补丁前先问「能否在 chamber 自己的包里修」；只有同源绝对或 document-relative URL 一类硬假设
-才登记，并优先采用
-「可选的 chamber 标准 prop + 上游回落」的形状，使官方布局部署保持正确。
+登记纪律：新增补丁前先问「能否在 chamber 自己的包里修」；同源绝对或 document-relative URL 一类硬假设优先
+采用「可选的 chamber 标准 prop + 上游回落」的形状，使官方布局部署保持正确。实测帧成本类必须附 A/B；模块私有
+状态机的逻辑缺陷类（第三类）必须写明实测症状、接受的取舍与删除条件，并在上游携带修复后删除条目。
+
+**Rejected alternatives**：① 在 chamber 侧加运行时护栏（包一层滚动位置重贴/监听渲染）——被否：读策略属于
+模块私有状态机（`ChatReading` 不导出、viewport 不表达意图），chamber 侧护栏会成为尾随策略的第二个所有者，
+可能静默分叉；② 放大 `FOLLOW_THRESHOLD`——被否：那是全局的「阅读者释放」判据，放大会让真实阅读者在更远处
+失去回贴；③ 只记成上游缺陷、本仓不改——被否：标准模式下每次直接 bash 调用都可见（最新一行半遮 + 无「回到最新」，
+只能等下一次布局变化自愈）；④ 按意图归因（`use-chat-viewport.ts` 用 wheel/touch/pointer/key 判定 reader
+移动）——**首选但不在本仓做**：viewport 是上游面且属行为契约级改动，应作为上游补丁提交，上游带上后删除本条。
 
 ## 4. 信任模型与边界（写进设计即写进契约；已同步进代码注释）
 
