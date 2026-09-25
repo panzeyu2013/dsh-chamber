@@ -491,6 +491,12 @@ pnpm run test:swift     # UpdateStallWatchdogTests + UpdateAvailabilityTests
 
 **坑**：不要为过测试而 skip/删除契约断言；上游仍无 `followCurrent`/`watched`/`ISessions.open(id)`（§15.5 已核）。
 
+> **重判结论（rc.2 锚，已执行）**：本臂在 main 已按 rc.2 口径重推导——唯一自动杠杆 = 具象
+> `Session.resync()`（rc.2 的契约入口 `ISessions.binding(id)`，只对 main view 呈现的会话生效），
+> 0.1.6 的 stage-move 杠杆随 vendor 会话控制器重写消失。`vendor-heal-contract.test.ts` 同时锁
+> CURRENT（rc.2）与 LEGACY（回滚 pin）两形体，验收命令全绿。**分支的 0.1.6 形态不要取件**（会回退
+> 已重推导的臂）；残余只是真机抽检，登记在 STATUS ⑫。
+
 ### 12.10 P2-1 · 启动失败恢复（最大冲突面）
 
 **步骤**
