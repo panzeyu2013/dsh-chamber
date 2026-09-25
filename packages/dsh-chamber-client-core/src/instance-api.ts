@@ -75,6 +75,18 @@ export interface SessionRow {
    * byte-identical for schedule-less sessions.
    */
   hasActiveSchedule?: boolean
+  /**
+   * 投影块的序列空间（上游 `SessionProjectionHints.kind`）。`sequenced` = 宿主 live
+   * registry 为已连接会话产出，`asOfSeq` 可与同一连接的 baseline/帧比较；`cached` =
+   * 纯列表从**持久化投影缓存**读到的块，`asOfSeq` 是那条存储记录自己的水位，
+   * **不得**与已连接会话的值比较。缺省 = 线上没给（老宿主/自定义形状）。
+   */
+  projectionKind?: 'cached' | 'sequenced'
+  /**
+   * 该块在 `projectionKind` 序列空间里的水位（上游 `SessionProjectionHints.asOfSeq`）。
+   * 单独读没有意义：比较前必须先看 `projectionKind === 'sequenced'`。
+   */
+  projectionAsOfSeq?: number
   /** Coarse durable origin (wire: absent or 'subagent'); subagent rows never surface in navigation. */
   origin?: 'subagent'
   cwd?: string
@@ -578,6 +590,13 @@ export async function fetchInstanceSnapshot(client: InstanceApiClient): Promise<
       sessionId: row.sessionId,
     })
     if (typeof summary.parentSessionId === 'string') row.parentSessionId = summary.parentSessionId
+    // 投影块水印（上游 SessionProjectionHints）：探针此前收到就丢。两个字段一起带走，
+    // 消费方按 kind 决定能不能比较（cached 的 asOfSeq 属缓存记录自己的空间）。
+    const hints = summary?.projections
+    if (hints?.kind === 'cached' || hints?.kind === 'sequenced') row.projectionKind = hints.kind
+    if (typeof hints?.asOfSeq === 'number' && Number.isFinite(hints.asOfSeq)) {
+      row.projectionAsOfSeq = hints.asOfSeq
+    }
     // The unary row publishes registered projections (`projections.values`), so
     // the schedule fact rides exactly as in the mounted-store path.
     if (hasActiveScheduleOf(summary?.projections?.values)) row.hasActiveSchedule = true

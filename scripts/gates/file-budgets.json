@@ -69,9 +69,9 @@
     },
     {
       "path": "packages/dsh-chamber-client-core/src/instance-api.ts",
-      "lines": 1366,
+      "lines": 1385,
       "target": 900,
-      "note": "per-instance unary api surface"
+      "note": "per-instance unary api surface; +19 (2026-12) carries the upstream SessionProjectionHints watermark (projectionKind/projectionAsOfSeq) so cached blocks are never compared with a connected session's values"
     },
     {
       "path": "packages/desktop/runtime-startup-host.ts",

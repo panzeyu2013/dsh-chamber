@@ -12,6 +12,32 @@ function listClient(items: readonly unknown[]) {
   return { session: { list: async () => ({ ok: true as const, value: { items } }) } }
 }
 
+test('fetchInstanceSnapshot 带走投影块水印（kind/asOfSeq），坏形状不硬塞', async () => {
+  const client = listClient([
+    summary({ sessionId: 'live', projections: { kind: 'sequenced', asOfSeq: 42, values: {} } }),
+    summary({ sessionId: 'cached', projections: { kind: 'cached', asOfSeq: 7, values: {} } }),
+    // 老宿主/自定义形状：没有水印字段——必须保持 undefined（消费方据此拒绝对比）。
+    summary({ sessionId: 'no-hints', projections: { values: {} } }),
+    // 坏形状：未知 kind、非数字/非有限 asOfSeq 一律不落。
+    summary({ sessionId: 'bad-kind', projections: { kind: 'weird', asOfSeq: 1, values: {} } }),
+    summary({ sessionId: 'bad-seq', projections: { kind: 'sequenced', asOfSeq: 'x', values: {} } }),
+    summary({ sessionId: 'nan-seq', projections: { kind: 'sequenced', asOfSeq: Number.NaN, values: {} } }),
+  ])
+  const snapshot = await fetchInstanceSnapshot(client as never)
+  const byId = new Map(snapshot.sessions.map(row => [row.sessionId, row]))
+  assert.deepEqual(
+    { kind: byId.get('live')?.projectionKind, seq: byId.get('live')?.projectionAsOfSeq },
+    { kind: 'sequenced', seq: 42 })
+  assert.deepEqual(
+    { kind: byId.get('cached')?.projectionKind, seq: byId.get('cached')?.projectionAsOfSeq },
+    { kind: 'cached', seq: 7 })
+  assert.equal(byId.get('no-hints')?.projectionKind, undefined)
+  assert.equal(byId.get('no-hints')?.projectionAsOfSeq, undefined)
+  assert.equal(byId.get('bad-kind')?.projectionKind, undefined)
+  assert.equal(byId.get('bad-seq')?.projectionAsOfSeq, undefined)
+  assert.equal(byId.get('nan-seq')?.projectionAsOfSeq, undefined)
+})
+
 test('fetchInstanceSnapshot derives workspace groups from session cwd facts', async () => {
   const client = listClient([
     summary({ sessionId: 's1', cwd: '/work/a', updatedAt: 300, running: true }),
