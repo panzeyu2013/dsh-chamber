@@ -56,13 +56,13 @@ final class AppUpdaterTests: XCTestCase {
             "SUFeedURL": "https://example.com/appcast-swift.xml",
             "SUPublicEDKey": "abc=",
             "SUEnableAutomaticChecks": true,
-            "SUScheduledCheckInterval": NSNumber(value: 21600),
+            "SUScheduledCheckInterval": NSNumber(value: 600),
         ])
         XCTAssertEqual(config?.feedURL, "https://example.com/appcast-swift.xml")
         XCTAssertEqual(config?.publicKey, "abc=")
         XCTAssertEqual(config?.automaticChecks, true)
-        XCTAssertEqual(config?.checkInterval, 21600)
-        // 解析缺省仍是 false（键缺失时的防御缺省）；正式装配模板显式声明 true。
+        XCTAssertEqual(config?.checkInterval, 600)
+        // 解析缺省仍是 false（键缺失时的防御缺省）；正式装配模板显式声明 true（D9）。
         let bare = AppUpdater.configuration(from: [
             "SUFeedURL": "https://example.com/appcast-swift.xml",
             "SUPublicEDKey": "abc=",
@@ -130,7 +130,7 @@ final class AppUpdaterTests: XCTestCase {
         let goodKey = Data(repeating: 0, count: 32).base64EncodedString()
         func config(_ feed: String, _ key: String) -> AppUpdater.Configuration {
             AppUpdater.Configuration(feedURL: feed, publicKey: key,
-                                     automaticChecks: true, checkInterval: 21600)
+                                     automaticChecks: true, checkInterval: 600)
         }
         XCTAssertNil(AppUpdater.configurationError(
             for: config("https://example.com/appcast-swift.xml", goodKey)))
@@ -307,11 +307,11 @@ final class AppUpdaterTests: XCTestCase {
         let xml = try XCTUnwrap(String(data: data, encoding: .utf8))
         let compact = xml.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
         XCTAssertTrue(compact.contains("<key>SUEnableAutomaticChecks</key> <true/>"),
-                      "自动检查必须是模板常量 true（与 Electron 的 6h 静默后台检查对齐）")
+                      "自动检查必须是模板常量 true（与 Electron 的 600s 基准静默检查对齐）")
         XCTAssertFalse(compact.contains("<key>SUEnableAutomaticChecks</key> <false/>"),
                        "D9 修正后不得回退到「只手动检查」")
-        XCTAssertTrue(compact.contains("<key>SUScheduledCheckInterval</key> <integer>21600</integer>"),
-                      "6h = 21600s，与 Electron CHECK_INTERVAL_MS 同节奏")
+        XCTAssertTrue(compact.contains("<key>SUScheduledCheckInterval</key> <integer>600</integer>"),
+                      "600s = update-schedule.ts 的基准，与 Electron 同节奏")
     }
 
     /// scheduled vs user-initiated 展示决策（fake seam，不构造真实 SUAppcastItem、
@@ -361,5 +361,16 @@ final class AppUpdaterTests: XCTestCase {
                                                      version: "9.9.9"),
                        .standardWindow)
         XCTAssertEqual(received.count, 1, "用户发起路径不追加阶段")
+    }
+
+    /// 就绪注意力判据（上游 update-attention.ts 的等价物，2026-09 跟随上游）：
+    /// 只有「已下载待安装」抬注意力（Dock 跳动），其余相位一律不打扰。
+    func testUpdateAttentionDecision() {
+        XCTAssertTrue(MainWindowController.shouldRaiseUpdateAttention(phase: .downloaded))
+        let quiet: [NativeUpdatePhase] = [.idle, .checking, .upToDate, .available, .downloading, .installing, .failed]
+        for phase in quiet {
+            XCTAssertFalse(MainWindowController.shouldRaiseUpdateAttention(phase: phase),
+                           phase.rawValue + " 不得抬注意力")
+        }
     }
 }

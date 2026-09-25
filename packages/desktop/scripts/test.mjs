@@ -116,10 +116,17 @@ export const GROUPS = {
     'test/desktop-shell/open-in.test.ts',
     'test/desktop-shell/updater.test.ts',
     'test/desktop-shell/updater-restart-install.test.ts',
+    // 检查/下载的 idle 看门狗（P0-1 取件）
+    'test/desktop-shell/updater-watchdog.test.ts',
+    // main.ts 宿主的 resume nudge 与 win32 flashFrame seam（源码锁步 + seam 直测）
+    'test/desktop-shell/updater-main-wiring.test.ts',
     // 两个 GitHub 发现面的锁步（共享 update-discovery.ts）
     'test/desktop-shell/update-discovery.test.ts',
     // swift-side headless update controller (design 25 §7)
     'update-headless.test.ts',
+    // 上游节奏单源 + 可选取证 JSONL（2026-09 对齐）
+    'update-schedule.test.ts',
+    'update-journal.test.ts',
   ],
   // local-state: durable local files — settings, audit log, owner-private ACLs and
   // the installed-runtime closure sample

@@ -127,9 +127,9 @@
          禁用「检查更新…」菜单项，绝不假装能更新。
          SUEnableAutomaticChecks 是模板常量 true（D9 修正：renderInfoPlist 只替换
          __VERSION__/__BUNDLE_VERSION__/__SPARKLE_*，**不写**该键）——自动检查开：
-         原生腿启动即检、之后每 SUScheduledCheckInterval=21600s（6h）一次，与
-         Electron 侧 CHECK_INTERVAL_MS 的 6h 节奏对齐（Sparkle 默认 24h，这里显式
-         写 21600 保持双 flavor 同节奏）。scheduled 更新的弹窗在代码里抑制
+         原生腿启动即检、之后每 SUScheduledCheckInterval=600s（10min）一次，与
+         Electron 侧 update-schedule.ts 的 600s 基准对齐（Sparkle 默认 24h，这里显式
+         写 600 保持双 flavor 同节奏；Electron 侧另有 ±20% 抖动与失败退避）。scheduled 更新的弹窗在代码里抑制
          （SPUStandardUserDriverDelegate 把展示权收回壳，见 AppUpdater.swift），
          展示面是设置页（nativeUpdatePhase）；用户手动的「检查更新…」仍走 Sparkle
          标准窗口——这两条都是代码行为，模板只声明自动检查与检查间隔。 -->
@@ -140,7 +140,7 @@
     <key>SUEnableAutomaticChecks</key>
     <true/>
     <key>SUScheduledCheckInterval</key>
-    <integer>21600</integer>
+    <integer>600</integer>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>

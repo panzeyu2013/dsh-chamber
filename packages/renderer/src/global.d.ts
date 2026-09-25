@@ -404,6 +404,11 @@ export interface UpdateState {
    *  = no restart failure. Clearing rule: every subsequent push resets it
    *  unless that push itself carries the field. */
   restartFailureText?: string
+  /** Classified failure (upstream DesktopUpdateFailureKind subset): the two
+   *  network classes the idle watchdogs can detect. `error` keeps the
+   *  sanitized raw text; this field names the failure. Absent = none, and every
+   *  subsequent push resets it unless that push carries the field. */
+  failureKind?: 'check-network' | 'download-network'
 }
 
 /** window.dshChamber.update — query / subscribe / user-initiated check /

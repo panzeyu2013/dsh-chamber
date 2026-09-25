@@ -537,6 +537,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // available/downloading/downloaded/installing/failed 行）。失败 loud 不
         // 重试：下一次阶段变化会再报。
         AppUpdater.shared.onPhase = { [weak self] report in
+            // 就绪注意力（上游 update-attention.ts）：下载完成时抬一次 Dock 注意力，
+            // 应用激活即清（MainWindowController.appDidBecomeActive）。
+            if MainWindowController.shouldRaiseUpdateAttention(phase: report.phase) {
+                self?.mainWindowController?.raiseUpdateAttention()
+            }
             guard let bridge = self?.bridge else { return }
             Task { @MainActor in
                 do {

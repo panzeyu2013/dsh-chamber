@@ -9,6 +9,14 @@
  * CLOSES EVERY WINDOW FIRST, so main.ts arms its close-to-tray exception via
  * onQuitAndInstallArmed/onNativeUpdaterQuitting. macOS install needs a Developer ID signature;
  * Linux is SHAPE-gated (only a writable AppImage updates). State projection is non-secret only.
+ * upstream-shaped cadence owned by update-schedule.ts (single source for both flavors:
+ * 600s base ±20% jitter + exponential failure backoff capped at 1h, env-tunable via
+ * DSH_DESKTOP_UPDATE_CHECK_*), plus a coalesced foreground/resume nudge (noteActivity).
+ * The self-rescheduling chain is WEDGE-PROOF: idle watchdogs abandon a check/download that
+ * never settles (check 60s / download 30min) so the next round is armed, a round that could
+ * not run re-arms at once, and an abandoned download keeps its check-exclusion latch until
+ * its promise settles; the two network classes surface as failureKind, and the optional
+ * forensic journal (DSH_DESKTOP_UPDATE_JOURNAL_DIR) writes allowlisted fields only.
  */
 import { execFile } from 'node:child_process'
 import { describeError } from './describe-error.ts'
@@ -19,6 +27,13 @@ import { basename, dirname, isAbsolute, join, posix as posixPath, win32 as win32
 import { createRequire } from 'node:module'
 import type { UpdateInfo } from 'electron-updater'
 import { sanitizeErrorText } from './sanitize-error.ts'
+import {
+  nextCheckDelay,
+  resolveUpdateIdleTimeout,
+  resolveUpdateScheduleConfig,
+  UPDATE_FIRST_CHECK_DELAY_MS,
+} from './update-schedule.ts'
+import { createUpdateJournal, resolveUpdateJournalDir } from './update-journal.ts'
 export { sanitizeErrorText } from './sanitize-error.ts'
 import {
   fetchGithubReleases,
@@ -57,7 +72,9 @@ let realApp: ElectronAppLike | null = null
 function getRealApp(): ElectronAppLike {
   if (realApp === null) {
     if (process.versions.electron === undefined) throw realElectronUnavailable('electron app')
-    realApp = (require('electron') as typeof import('electron')).app
+    // The surface is read defensively (`dock`/`on` optional): Electron's App
+    // overloads are wider than this module's narrow read face, hence the cast.
+    realApp = (require('electron') as typeof import('electron')).app as unknown as ElectronAppLike
   }
   return realApp
 }
@@ -112,6 +129,11 @@ export interface UpdateState {
   installBlockedReason: string | null
   /** Non-secret error text (check/download failure); null = none. */
   error: string | null
+  /** Classified failure (upstream DesktopUpdateFailureKind subset): the two
+   *  network classes this mode can actually detect (idle-timeout watchdog).
+   *  The renderer keeps showing `error`; this field exists so the failure is a
+   *  named phase instead of a vague stall. Absent = none. */
+  failureKind?: 'check-network' | 'download-network'
   /** ONE-SHOT carry: a RESTART failure surfaced while the phase stayed `downloaded` —
    *  refused arming, an 'error' event after an armed restart, or the stall watchdog.
    *  Sanitized like `error`; absent = none. Clearing rule: every subsequent push resets
@@ -119,9 +141,18 @@ export interface UpdateState {
   restartFailureText?: string
 }
 
-/** The subset of electron's `App` the controller reads (test-injectable). */
+/** The subset of electron's `App` the controller reads (test-injectable).
+ *  `on`/`removeListener` are the optional foreground hook (window focus); a
+ *  test double without them simply never receives the focus nudge. */
 export interface ElectronAppLike {
   isPackaged: boolean
+  on?(event: string, listener: (...args: any[]) => void): void
+  removeListener?(event: string, listener: (...args: any[]) => void): void
+  /** macOS Dock 注意力（上游 update-attention.ts 的等价物；可选）。 */
+  dock?: {
+    bounce(kind: 'critical' | 'informational'): number
+    cancel(id: number): void
+  }
 }
 
 /** Linux blocked reason: any non-AppImage Linux shape keeps this exact string — the
@@ -413,8 +444,26 @@ export interface AutoUpdaterLike {
 /** Test-injection seam: each member falls back to the real value, resolved LAZILY inside
  *  the factory only when the member is absent (the module stays loadable under plain node). */
 export interface UpdateControllerDeps {
-  /** Electron `app` (only `isPackaged` is read); default: the real app. */
-  app?: { isPackaged: boolean }
+  /** Electron `app` (`isPackaged` + the optional focus subscription); default:
+   *  the real app. Tests inject `{ isPackaged: false }` — no focus wiring. */
+  app?: {
+    isPackaged: boolean
+    on?(event: string, listener: (...args: any[]) => void): void
+    removeListener?(event: string, listener: (...args: any[]) => void): void
+    dock?: {
+      bounce(kind: 'critical' | 'informational'): number
+      cancel(id: number): void
+    }
+  }
+  /** Schedule/journal environment (default: process.env; tests inject). */
+  env?: Record<string, string | undefined>
+  /** Jitter source for the backoff (default Math.random; tests inject). */
+  random?: () => number
+  /** Check/download idle deadline override (default: env, then 60s; tests inject ms). */
+  updateIdleTimeoutMs?: number
+  /** Windows 任务栏闪烁（上游 update-attention.ts 的 flashFrame 等价物）：窗口归
+   *  宿主所有，故由宿主注入；缺省 = 不闪。 */
+  flashFrame?: (on: boolean) => void
   /** electron-updater's `autoUpdater`; default: the real instance. */
   autoUpdater?: AutoUpdaterLike
   /** `process.platform`; default: the real platform. */
@@ -443,8 +492,10 @@ export interface UpdateControllerDeps {
 export interface UpdateController {
   state(): UpdateState
   subscribe(listener: (state: UpdateState) => void): () => void
-  /** Schedule the silent periodic checks (startup delay + 6h interval). */
+  /** Schedule the silent checks (startup delay + upstream-shaped cadence). */
   start(): void
+  /** Foreground/resume nudge (window focus / powerMonitor resume). */
+  noteActivity(reason: 'focus' | 'resume'): void
   /** User-confirmed download (the「更新」button): resolve {ok} or {error}. */
   download(): Promise<{ ok: true } | { ok: false; error: string }>
   /** User-initiated check (the「检查更新」button): the SAME check path as the silent check (autoDownload stays off). */
@@ -460,11 +511,36 @@ export interface UpdateController {
 
 /** The update feed repository (single source: update-discovery.ts). */
 export { GITHUB_OWNER, GITHUB_REPO } from './update-discovery.ts'
+/** Windows 任务栏注意力（2026-12 复审方向 E F8）：`UpdateControllerDeps.flashFrame`
+ *  的宿主 seam。窗口归宿主所有（updater.ts 不 import electron），宿主在
+ *  createUpdateController 的构造对象里接上它，注意力路径只负责调用（调用点已有
+ *  try/catch，宿主 seam 自身绝不把异常反噬进更新状态机）。
+ *
+ *  - 只在 win32 驱动窗口：macOS 的注意力由既有的 app.dock.bounce 承担，
+ *    BrowserWindow.flashFrame 在 darwin 同样会弹 Dock——再调用一次就是双触发；
+ *  - 无窗口 / 窗口已销毁：静默（绝不抛）——更新检查在窗口生命周期之外照常运行；
+ *  - platform 与 window 都是注入参数，故 win32 / darwin / 无窗三分支可直测。 */
+export interface FlashFrameWindowLike {
+  flashFrame(on: boolean): void
+  isDestroyed?(): boolean
+}
 
-/** Startup delay before the first silent check (let the app settle). */
-const CHECK_DELAY_MS = 15_000
-/** Periodic silent re-check. */
-const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
+export function flashUpdateAttentionWindow(
+  on: boolean,
+  deps: { platform?: NodeJS.Platform; window?: FlashFrameWindowLike | null } = {},
+): void {
+  const platform = deps.platform ?? process.platform
+  if (platform !== 'win32') return
+  const window = deps.window ?? null
+  if (window === null) return
+  if (window.isDestroyed?.() === true) return
+  window.flashFrame(on)
+}
+
+
+/** The silent re-check cadence (first delay / interval / jitter / failure
+ *  backoff) is owned by update-schedule.ts (upstream DSH_DESKTOP_UPDATE_CHECK_*
+ *  envs) so the Electron and Swift flavors cannot drift apart. */
 /** Restart stall-watchdog grace: the armed quit (win: setImmediate app.quit; mac: native
  *  staging) is normally imminent; after this window the single-flight must not stay armed. */
 const RESTART_WATCHDOG_DEFAULT_MS = 60_000
@@ -590,6 +666,10 @@ export interface UpdateControllerOptions {
    *  once Squirrel has the update STAGED, so terminating installs it. Called every
    *  occurrence, never gated on a prior click. */
   onNativeUpdaterQuitting?: () => void
+  /** Windows taskbar attention seam (upstream update-attention.ts flashFrame): the window
+   *  belongs to the host, so the host injects it here; absent = no flash. Off win32 the
+   *  seam is a no-op — macOS keeps its own app.dock.bounce. */
+  flashFrame?: (on: boolean) => void
 }
 
 export function createUpdateController(options: UpdateControllerOptions, deps?: UpdateControllerDeps): UpdateController {
@@ -601,6 +681,35 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   const platform = deps?.platform ?? process.platform
   const linuxAppImage = deps?.linuxAppImage !== undefined ? deps.linuxAppImage : probeLinuxAppImage()
   const channel = resolveChannel(version)
+  // Upstream-shaped cadence + opt-in evidence journal (both env-tunable; see the
+  // module headers). Invalid env never throws at boot: loud warning + defaults.
+  const scheduleEnv = deps?.env ?? process.env
+  const scheduleResolution = resolveUpdateScheduleConfig(scheduleEnv)
+  for (const problem of scheduleResolution.problems) {
+    logger.warn('[updater] ' + problem + '（已回退默认检查节奏）')
+  }
+  const schedule = scheduleResolution.config
+  const journalDir = resolveUpdateJournalDir(scheduleEnv)
+  if (journalDir.problem !== null) logger.warn('[updater] ' + journalDir.problem + '（更新取证关闭）')
+  const journal = createUpdateJournal({ dir: journalDir.dir, version, logger })
+  const random = deps?.random ?? Math.random
+  const idleResolution = resolveUpdateIdleTimeout(scheduleEnv)
+  if (idleResolution.problem !== null) logger.warn('[updater] ' + idleResolution.problem + '（已回退默认 60s）')
+  const idleTimeoutMs = deps?.updateIdleTimeoutMs ?? idleResolution.timeoutMs
+  // Host-injected attention seam: the options object is the public shape main.ts uses,
+  // the deps object is the test/embedding seam — either may carry it.
+  const flashFrame = options.flashFrame ?? deps?.flashFrame
+  // Late events from an abandoned (timed-out) check must not resurrect its
+  // result; cleared when a new check starts. Download events are unaffected.
+  let ignoreAbandonedCheckEvents = false
+  const checkScoped = <A extends unknown[]>(handler: (...args: A) => void): ((...args: A) => void) =>
+    (...args: A) => {
+      if (ignoreAbandonedCheckEvents) {
+        logger.warn('[updater] 忽略超时检查的迟到事件')
+        return
+      }
+      handler(...args)
+    }
   const resolveBetaFeed = deps?.resolveBetaFeed ?? resolveRuntimeBetaFeed
   const probeMacSignature = deps?.probeMacSignature ?? probeMacDeveloperIdSignature
   // Resolved ONLY when the host asked for the native quit bridge: a controller without
@@ -650,8 +759,12 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
     // never leak into a later phase's projection.
     const next = { ...state, ...patch }
     if (!('restartFailureText' in patch)) next.restartFailureText = undefined
+    // Same one-shot rule for the classified failure: every push clears it
+    // unless that push itself carries failureKind (the watchdog failures).
+    if (!('failureKind' in patch)) next.failureKind = undefined
     state = next
     for (const listener of listeners) listener(state)
+    journal?.record(state)
   }
   // macOS packaged: probe asynchronously without blocking startup, but keep download fail-closed until a valid Developer ID verdict.
   if (platform === 'darwin' && app.isPackaged) {
@@ -718,8 +831,23 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
     restartWatchdog.unref?.()
   }
 
-  autoUpdater.on('checking-for-update', () => setState({ phase: 'checking', error: null }))
-  autoUpdater.on('update-available', (info: UpdateInfo) => {
+  // C2 residual race (2026-12 复审方向 C): a check that was already in flight
+  // BEFORE the download finished — the post-stall latch cannot stop it, it
+  // started earlier — may still deliver its result. A check RESULT must never
+  // clobber the terminal download phases (exactly the two phases runCheck gates
+  // on: `downloaded` is final for this version, `downloading` is
+  // mid-transition). Without this guard a late `update-not-available` after a
+  // late `update-downloaded` regresses `downloaded` to `up-to-date` and wipes
+  // latestVersion — losing the「重启并安装」row and the before-quit exemption,
+  // the exact regression the 2026-08 downloadInFlight flag exists to prevent.
+  // The result is dropped (loud), never projected.
+  const downloadPhaseIsFinal = (): boolean => state.phase === 'downloaded' || state.phase === 'downloading'
+  autoUpdater.on('checking-for-update', checkScoped(() => setState({ phase: 'checking', error: null })))
+  autoUpdater.on('update-available', checkScoped((info: UpdateInfo) => {
+    if (downloadPhaseIsFinal()) {
+      logger.warn('[updater] 忽略迟到的检查结果：下载相位 ' + state.phase + ' 已是终局')
+      return
+    }
     setState({
       phase: 'available',
       latestVersion: info.version,
@@ -727,18 +855,45 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
       releaseUrl: releaseUrlFor(info.version),
       error: null,
     })
-  })
-  autoUpdater.on('update-not-available', () => {
+  }))
+  autoUpdater.on('update-not-available', checkScoped(() => {
+    if (downloadPhaseIsFinal()) {
+      logger.warn('[updater] 忽略迟到的检查结果：下载相位 ' + state.phase + ' 已是终局')
+      return
+    }
     setState({ phase: 'up-to-date', latestVersion: null, downloadPercent: null, releaseUrl: null, error: null })
-  })
+  }))
   autoUpdater.on('download-progress', (progress) => {
-    // `downloaded` is terminal (the phase gates rely on it): a progress event racing
-    // AFTER update-downloaded must not regress the phase back to `downloading`.
+    lastDownloadProgressAt = Date.now()
+    // 停滞判定之后又来了分片：如实撤回判定（setState 不带 failureKind 即清掉它），
+    // 并且不重排计时器也仍然受保护——计时器在判定时没有停表。
+    if (downloadTimedOut) {
+      logger.warn('[updater] 判定停滞之后下载恢复——撤回失败判定并继续观察')
+      downloadTimedOut = false
+      // 判定时放开了单飞（允许用户重试）；恢复意味着下载确实还在跑，收回单飞语义。
+      downloadInFlight = true
+      // C2: 下载确实活着 → 停滞待决撤销（检查排除交回给在飞单飞）。
+      stalledDownloadGeneration = null
+    }
+    // `downloaded` is terminal (the checkNow/download phase gates rely on
+    // it): a progress event racing AFTER update-downloaded (electron-updater
+    // normally never emits one, but an out-of-order delivery costs nothing to
+    // guard) must not regress the phase back to `downloading`.
     if (state.phase === 'downloaded') return
     setState({ phase: 'downloading', downloadPercent: progress.percent })
   })
   autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
+    if (downloadTimedOut) {
+      logger.warn('[updater] 看门狗判定停滞之后仍收到下载完成——接受这次成功（不隐藏真实结果）')
+    }
+    stopDownloadWatchdog()
+    downloadTimedOut = false
+    // C2: 下载已真实完成 → 该代际的停滞待决终结（底层 promise 的结算由
+    // download() 的 finally 兜底；此后相位 downloaded 本来就排除一切检查）。
+    stalledDownloadGeneration = null
     setState({ phase: 'downloaded', latestVersion: info.version, downloadPercent: 100, error: null })
+    // 就绪注意力（上游 update-attention.ts）：仅一次，聚焦即清。
+    raiseUpdateAttention()
   })
   // Single error path for check AND download failures. LatestVersion is kept: a check
   // error leaves it null, a download error keeps it (settings shows the retry kind).
@@ -797,13 +952,202 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   // periodic re-check started in that window would pass the phase gate and, resolving
   // after the download, clobber `downloaded` back (losing the row AND the quit exemption).
   let downloadInFlight = false
-  // The single check path shared by the silent checks (start / 6h interval) and the
-  // user-initiated「检查更新」: the phase gates make it idempotent.
-  async function runCheck(): Promise<void> {
-    if (checking || downloadInFlight) return
-    // The「已下载，退出时安装」state is final for this version, and an in-flight download is mid-transition — a re-check must not clobber either.
+  // C2 (2026-12 复审方向 C): a stalled download's underlying electron-updater
+  // promise CANNOT be aborted. The stall judgment must release `downloadInFlight`
+  // (the user has to be able to retry) — but it must NOT release the
+  // check-exclusion: a check started in the post-stall window races the
+  // abandoned download, and its late `update-not-available` would clobber the
+  // `downloaded` phase that a late `update-downloaded` legitimately produced
+  // (losing the「重启并安装」row and the before-quit exemption — exactly the
+  // regression the 2026-08 downloadInFlight flag exists to prevent).
+  // `stalledDownloadGeneration` names the abandoned attempt whose promise is
+  // still pending; checks stay excluded until that promise settles (success or
+  // failure), until the download demonstrably resumes (a progress event), or
+  // until the user explicitly retries download() (which clears the latch and
+  // re-arms the watchdog). `downloadGeneration` stamps every attempt so a
+  // settling OLD promise can never release a NEW retry's flight/watchdog.
+  let downloadGeneration = 0
+  let stalledDownloadGeneration: number | null = null
+  const downloadStallPending = (): boolean => stalledDownloadGeneration !== null
+  // Upstream-shaped scheduling (update-schedule.ts owns the policy): a
+  // self-rescheduling timer whose delay grows on consecutive failures and is
+  // jittered, plus a coalesced foreground/resume nudge. Replaces the fixed
+  // 6h setInterval (2026-09 parity batch).
+  let started = false
+  let scheduleTimer: ReturnType<typeof setTimeout> | null = null
+  let lastCheckCompletedAt: number | null = null
+  let checkAttempt = 0
+
+  // Update attention (upstream update-attention.ts): an update that finished
+  // downloading bounces the Dock / flashes the taskbar once, and the signal is
+  // cleared as soon as the window gains focus. Deliberately NO modal overlay —
+  // design 11 §2 (no dialog / no system notification) still holds.
+  let attentionBounceId: number | null = null
+  // Download idle watchdog: the download phase must not stay 'downloading'
+  // forever when the feed goes silent. electron-updater cannot be aborted, so a
+  // late success is accepted (logged) instead of being hidden.
+  let downloadWatchdogTimer: ReturnType<typeof setInterval> | null = null
+  let lastDownloadProgressAt: number | null = null
+  let downloadTimedOut = false
+  const stopDownloadWatchdog = (): void => {
+    if (downloadWatchdogTimer !== null) {
+      clearInterval(downloadWatchdogTimer)
+      downloadWatchdogTimer = null
+    }
+    lastDownloadProgressAt = null
+  }
+  const startDownloadWatchdog = (): void => {
+    stopDownloadWatchdog()
+    downloadTimedOut = false
+    lastDownloadProgressAt = Date.now()
+    const tickMs = Math.max(250, Math.min(Math.floor(idleTimeoutMs / 4), 15_000))
+    downloadWatchdogTimer = setInterval(() => {
+      // 判定已经给过就不再重复推送；但计时器继续留着，以便抓「停滞之后又恢复」的
+      // 分片（electron-updater 无法中止，下载可能还在后台跑）。
+      if (downloadTimedOut || !downloadInFlight || lastDownloadProgressAt === null) return
+      if (Date.now() - lastDownloadProgressAt < idleTimeoutMs) return
+      downloadInFlight = false
+      downloadTimedOut = true
+      // C2: 只放开「用户可重试」的单飞，不放开检查排除——底层 downloadUpdate()
+      // 仍在飞（无法中止），并发检查的迟到事件会覆盖它随后真实落下的 downloaded。
+      stalledDownloadGeneration = downloadGeneration
+      logger.warn('[updater] 下载停滞（' + Math.round(idleTimeoutMs / 1000) + 's 无进展）')
+      setState({
+        phase: 'error',
+        downloadPercent: null,
+        error: 'the update download stalled for ' + Math.round(idleTimeoutMs / 1000)
+          + 's with no progress from the update feed',
+        failureKind: 'download-network',
+      })
+    }, tickMs)
+    downloadWatchdogTimer.unref?.()
+  }
+
+  const raiseUpdateAttention = (): void => {
+    if (attentionBounceId === null) {
+      try {
+        attentionBounceId = app.dock?.bounce('critical') ?? null
+      } catch (error) {
+        logger.warn('[updater] Dock 注意力失败（忽略）：', error instanceof Error ? error.message : String(error))
+      }
+    }
+    try {
+      flashFrame?.(true)
+    } catch (error) {
+      logger.warn('[updater] 任务栏闪烁失败（忽略）：', error instanceof Error ? error.message : String(error))
+    }
+  }
+  const clearUpdateAttention = (): void => {
+    if (attentionBounceId !== null) {
+      try {
+        app.dock?.cancel(attentionBounceId)
+      } catch { /* 注意力清除失败绝不反噬 */ }
+      attentionBounceId = null
+    }
+    try {
+      flashFrame?.(false)
+    } catch { /* 同上 */ }
+  }
+
+  const arm = (delayMs: number): void => {
+    if (scheduleTimer !== null) clearTimeout(scheduleTimer)
+    scheduleTimer = setTimeout(() => {
+      scheduleTimer = null
+      void runScheduledCheck()
+    }, delayMs)
+    scheduleTimer.unref?.()
+  }
+
+  const runScheduledCheck = async (): Promise<void> => {
+    const checkRan = await runCheck()
+    if (!checkRan) {
+      // A3 (2026-12 复审方向 A): 本轮「没跑成」（在飞检查 / 在飞下载 / 停滞待决）
+      // 不是静默链的终点——旧实现只看相位，撞上在飞下载时直接 return 且不 arm，
+      // 一次碰撞就整条静默链死掉。这里按当前退避档位重排一轮（本轮既非成功也非
+      // 失败，不退避也不重置）；downloaded 是终局（退出时安装），不再排。
+      if (state.phase === 'downloaded') return
+      arm(nextCheckDelay({ attempt: checkAttempt, config: schedule, random }))
+      return
+    }
+    lastCheckCompletedAt = Date.now()
+    if (state.phase === 'error') checkAttempt += 1
+    else checkAttempt = 0
+    // A completed download is final for this version and an in-flight download
+    // is mid-transition: neither is rescheduled (same gates as runCheck).
     if (state.phase === 'downloaded' || state.phase === 'downloading') return
+    arm(nextCheckDelay({ attempt: checkAttempt, config: schedule, random }))
+  }
+
+  /** Coalesced foreground/resume nudge: only when the last completed check is
+   *  older than the configured interval and nothing is final/in flight. */
+  const noteActivity = (reason: 'focus' | 'resume'): void => {
+    if (!started) return
+    if (state.phase === 'downloaded' || state.phase === 'downloading'
+      || checking || downloadInFlight || downloadStallPending()) return
+    if (lastCheckCompletedAt !== null && Date.now() - lastCheckCompletedAt < schedule.intervalMs) return
+    logger.log('[updater] 前台/唤醒触发静默检查（' + reason + '）')
+    void runScheduledCheck()
+  }
+
+  /** Electron's window-focus event is the foreground half of upstream's check
+   *  triggers; resume is wired by the host through noteActivity('resume'). */
+  const attachFocusListener = (): void => {
+    if (typeof app.on !== 'function') return
+    try {
+      app.on('browser-window-focus', () => {
+        clearUpdateAttention()
+        noteActivity('focus')
+      })
+    } catch (error) {
+      logger.warn('[updater] 焦点订阅失败（忽略）：', error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  // The single check path shared by the silent scheduled checks (start /
+  // focus / resume) and the user-initiated「检查更新」action (checkNow()). The phase
+  // gates make it idempotent: an in-flight check/download or a completed
+  // download is never clobbered. Returns false when the round was SKIPPED by
+  // one of those gates (nothing attempted — runScheduledCheck's A3 leg uses
+  // this to keep the silent chain alive), true when a check really ran
+  // (success, named failure, or timeout).
+  async function runCheck(): Promise<boolean> {
+    if (checking || downloadInFlight || downloadStallPending()) return false
+    // The「已下载，退出时安装」state is final for this version, and an
+    // in-flight download is mid-transition — a re-check must not clobber
+    // either back to `available`.
+    if (state.phase === 'downloaded' || state.phase === 'downloading') return false
     checking = true
+    ignoreAbandonedCheckEvents = false
+    // Idle watchdog (upstream DSH_DESKTOP_UPDATE_HTTP_IDLE_TIMEOUT_MS): a check
+    // that produces no response within the deadline becomes a NAMED failure
+    // instead of an endless 'checking'. electron-updater cannot be aborted, so
+    // the abandoned attempt's late events are ignored until the next check.
+    // A2 (2026-12 复审方向 A): the watchdog ALSO unblocks runCheck through
+    // `watchdogFired` — electron-updater dedupes an in-flight check (a user
+    // retry just re-awaits the same promise), so without the race a
+    // checkForUpdates() that never settles would park runScheduledCheck on
+    // `await runCheck()` forever: no next arm, the silent chain dies, and
+    // checkNow() never resolves either. The abandoned promise gets a no-op
+    // catch so its late rejection can never surface as unhandled.
+    let settleWatchdog: (() => void) | null = null
+    const watchdogFired = new Promise<void>((resolve) => { settleWatchdog = resolve })
+    const checkWatchdog = setTimeout(() => {
+      settleWatchdog?.()
+      if (!checking) return
+      checking = false
+      ignoreAbandonedCheckEvents = true
+      logger.warn('[updater] 检查超时（' + Math.round(idleTimeoutMs / 1000) + 's 无响应）')
+      setState({
+        phase: 'error',
+        latestVersion: null,
+        downloadPercent: null,
+        releaseUrl: null,
+        error: 'the update check timed out after ' + Math.round(idleTimeoutMs / 1000)
+          + 's with no response from the update feed',
+        failureKind: 'check-network',
+      })
+    }, idleTimeoutMs)
+    checkWatchdog.unref?.()
     try {
       setState({ phase: 'checking', error: null })
       if (channel === 'beta') {
@@ -816,7 +1160,11 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
         // Both channel and provider mutation may reset this; preserve the no-silent-downgrade invariant.
         autoUpdater.allowDowngrade = false
       }
-      await autoUpdater.checkForUpdates()
+      const pending = autoUpdater.checkForUpdates()
+      // A2: 被放弃的 promise 的迟到 reject 必须被消费（绝不产生未处理拒绝）；
+      // 它的迟到事件由 checkScoped 抑制。
+      void pending.catch(() => { /* abandoned by the idle watchdog */ })
+      await Promise.race([pending, watchdogFired])
     } catch (error) {
       // A CHECK failure must NOT keep the stale latestVersion: the settings section infers
       // the failure kind from it (null →「无法检查更新」, set →「更新下载失败」+ retry), and a
@@ -825,8 +1173,10 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
       logger.warn('[updater] check failed:', message)
       setState({ phase: 'error', latestVersion: null, downloadPercent: null, releaseUrl: null, error: sanitizeErrorText(message) })
     } finally {
+      clearTimeout(checkWatchdog)
       checking = false
     }
+    return true
   }
 
   return {
@@ -836,19 +1186,28 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
       return () => listeners.delete(listener)
     },
     start() {
-      // Linux shape gate: a packaged writable AppImage may schedule checks; every other
-      // Linux shape stays inert (no timers) — the renderer gate keys on the same
-      // installBlockedReason string.
+      // A6 (2026-12 复审方向 A): 幂等门。重复 start() 曾重复 attach focus 监听
+      // 并把 15s 首检重新计时（整条静默节奏被推后），故第二次起一律空操作。
+      if (started) return
+      // Linux shape gate (design 21): a packaged writable AppImage may
+      // schedule checks; every other Linux shape stays inert (no timers) —
+      // the renderer gate keys on the same installBlockedReason string, so
+      // nothing is offered that could not install.
       if (platform === 'linux' && state.installBlockedReason !== null) {
         logger.log('[updater] 跳过更新检查：当前 Linux 运行形态不支持自动更新（需从可写 AppImage 启动）');
         return
       }
-      const initial = setTimeout(() => void runCheck(), CHECK_DELAY_MS)
-      initial.unref?.()
-      const interval = setInterval(() => void runCheck(), CHECK_INTERVAL_MS)
-      interval.unref?.()
-      logger.log(`[updater] 更新检查已启动（channel=${channel}，${CHECK_DELAY_MS / 1000}s 后首次检查，之后每 ${CHECK_INTERVAL_MS / 3_600_000}h）`);
+      started = true
+      attachFocusListener()
+      arm(UPDATE_FIRST_CHECK_DELAY_MS)
+      logger.log(
+        '[updater] 更新检查已启动（channel=' + channel + '，' + UPDATE_FIRST_CHECK_DELAY_MS / 1000
+        + 's 后首次检查，之后每 ' + Math.round(schedule.intervalMs / 60_000) + 'min ±'
+        + Math.round(schedule.jitter * 100) + '%，失败退避封顶 '
+        + Math.round(schedule.maxBackoffMs / 60_000) + 'min）',
+      )
     },
+    noteActivity,
     async checkNow() {
       // Linux shape gate: refuse loudly for non-AppImage shapes instead of letting the
       // feed lookup fail obscurely; AppImage falls through to the shared check path.
@@ -863,6 +1222,8 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
       return { ok: true }
     },
     async download() {
+      // 用户已在处理更新：Dock/任务栏注意力立即清除。
+      clearUpdateAttention()
       // Only an update actually found (or a retry of a DOWNLOAD failure, which keeps
       // latestVersion) may start a download; a check failure must never download stale info.
       if (state.latestVersion === null || (state.phase !== 'available' && state.phase !== 'error')) {
@@ -878,7 +1239,15 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
       if (downloadInFlight) {
         return { ok: false, error: 'download already in progress' }
       }
+      // C2: 每次尝试一个代际号——被停滞判定放弃的旧 promise 结算时，不得释放
+      // 新一次重试的单飞/看门狗。
+      downloadGeneration += 1
+      const generation = downloadGeneration
+      // C2: 用户显式重试就是停滞待决的终点——检查排除交回给在飞单飞，看门狗由
+      // startDownloadWatchdog 重新武装（lastDownloadProgressAt 重新锚定）。
+      stalledDownloadGeneration = null
       downloadInFlight = true
+      startDownloadWatchdog()
       try {
         await autoUpdater.downloadUpdate()
         return { ok: true }
@@ -888,7 +1257,13 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
         setState({ phase: 'error', error: sanitizeErrorText(message) })
         return { ok: false, error: sanitizeErrorText(message) }
       } finally {
-        downloadInFlight = false
+        // 只有当前代际能清算：旧代际的迟到结算不得关掉新代际的保护。
+        if (generation === downloadGeneration) {
+          stopDownloadWatchdog()
+          downloadInFlight = false
+        }
+        // C2: 底层 download promise 结算（成功/失败都算）→ 该代际的停滞待决终结。
+        if (stalledDownloadGeneration === generation) stalledDownloadGeneration = null
       }
     },
     restartAndInstall() {

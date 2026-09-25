@@ -24,7 +24,7 @@ import { createTrustedIpc, isChamberPermissionGranted, isExternalLinkUrl, isTrus
 import type { TrustedIpc } from './renderer-trust.ts';
 import { atomicWritePrivateFileNoFollow, createControlPlane, ensurePrivateDirectoryNoFollow, readPrivateFileNoFollow } from './control-plane-module.ts';
 import { attemptDeepLinkProtocolRegistration, canRestoreMainWindow, decideDeepLinkProtocolRegistration, describeUnknownError, ensureLinuxProtocolDesktopFile, linuxAutostartDesktopEntry, linuxAutostartDirectory, resolveLinuxLaunchExecutable } from './deep-link.ts';
-import { createUpdateController } from './updater.ts';
+import { createUpdateController, flashUpdateAttentionWindow } from './updater.ts';
 import { acquireChamberLock } from './chamber-lock.ts';
 import { acquireHostRootLease, describeHostRootLeaseFailure } from './host-root-lease.ts';
 import { DEFAULT_CHAMBER_SETTINGS, computeQuitRisk, decideMainWindowClose, launchAtLoginReconcileDecision, readSettingsFile, shouldUpdaterQuitTakeOver, verifyLaunchAtLoginReadBack } from './chamber-settings.ts';
@@ -1060,6 +1060,9 @@ if (!gotTheLock) {
       onQuitAndInstallArmed: armUpdaterQuit,
       // 原生更新器开始关窗退出：关窗豁免 + 兜底自退。
       onNativeUpdaterQuitting: armNativeUpdaterQuit,
+      // Windows 任务栏注意力：seam 只在 win32 驱动当前主窗（macOS 继续走 app.dock.bounce，
+      // 不双触发；无窗/已销毁静默）。每次调用实时读 mainWindow——窗口可能在检查期间重建/关闭。
+      flashFrame: (on) => flashUpdateAttentionWindow(on, { window: mainWindow }),
     });
     // Gateway credentials store：token + password 镜像到 gateway-secrets.json
     // (schemaVersion 3, 0600, atomic write)，safeStorage 可用时加密（Keychain /
@@ -1252,6 +1255,9 @@ if (!gotTheLock) {
     // idle；held lastResume 补发 + SYSTEM_RESUME 推送在 shell-core。
     powerMonitor.on('resume', () => {
       assembly.reconnectStaleTransports();
+      // 系统唤醒同时驱动更新检查的 resume 腿：闭包读到的是已构造的实例；未构造
+      // （启动早期/极晚期唤醒）时静默跳过。
+      updater.noteActivity('resume');
     });
 
     maybeCreateTray(cp);

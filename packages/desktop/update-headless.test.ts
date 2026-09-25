@@ -287,15 +287,18 @@ test('⑨ 订阅者抛错不反噬控制器：check 不卡死、二次检查仍�
   assert.deepEqual(seen, ['checking', 'available', 'checking', 'available'], 'checking 必须复位')
 })
 
-test('⑩ start()：15s 静默首检 + 6h 周期（与 Electron 同参数），unref/幂等/stop 可停；失败轮不抛穿', async () => {
-  // 与 Electron updater.ts 同值（那边常量未导出——这里同时断自身字面量与**源锚点**，
-  // 只断自身字面量时 updater.ts 漂移不会红）。
-  const updaterSource = readFileSync(
-    path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'updater.ts'), 'utf8')
-  assert.match(updaterSource, /const CHECK_DELAY_MS = 15_000/, 'updater.ts 首检延迟必须仍是 15s')
-  assert.match(updaterSource, /const CHECK_INTERVAL_MS = 6 \* 60 \* 60 \* 1000/, 'updater.ts 周期必须仍是 6h')
+test('⑩ start()：15s 静默首检 + 上游节奏（update-schedule 单一来源），unref/幂等/stop 可停；失败轮退避且不抛穿', async () => {
+  // 2026-09 跟随上游：节奏收敛到 update-schedule.ts（600s 基准 ±20% 抖动 + 失败退避
+  // 封顶 1h + DSH_DESKTOP_UPDATE_CHECK_* env）。两侧都必须从那里取，写死周期即红。
+  const here = path.resolve(path.dirname(fileURLToPath(import.meta.url)))
+  const updaterSource = readFileSync(path.join(here, 'updater.ts'), 'utf8')
+  const headlessSource = readFileSync(path.join(here, 'update-headless.ts'), 'utf8')
+  for (const source of [updaterSource, headlessSource]) {
+    assert.ok(source.includes("from './update-schedule.ts'"), '两边都必须用共享节奏模块')
+    assert.ok(!/CHECK_INTERVAL_MS = \d/.test(source), '不得再写死周期常量')
+  }
   assert.equal(HEADLESS_CHECK_DELAY_MS, 15_000)
-  assert.equal(HEADLESS_CHECK_INTERVAL_MS, 6 * 60 * 60 * 1000)
+  assert.equal(HEADLESS_CHECK_INTERVAL_MS, 600_000, '周期基准 = 上游默认 600s')
   interface TimerCall { fn: () => void; ms: number; unref: boolean }
   const timeouts: TimerCall[] = []
   const intervals: TimerCall[] = []
@@ -341,33 +344,35 @@ test('⑩ start()：15s 静默首检 + 6h 周期（与 Electron 同参数），u
     assert.equal(timeouts.length, 1, 'start() 恰排一枚 15s 静默首检')
     assert.equal(timeouts[0]?.ms, HEADLESS_CHECK_DELAY_MS, '首检延迟必须与 Electron CHECK_DELAY_MS 同值')
     assert.equal(timeouts[0]?.unref, true, '首检定时器必须 unref（不阻止进程退出）')
-    assert.equal(intervals.length, 1, 'start() 恰排一枚周期定时器')
-    assert.equal(intervals[0]?.ms, HEADLESS_CHECK_INTERVAL_MS, '周期间隔必须与 Electron CHECK_INTERVAL_MS 同值')
-    assert.equal(intervals[0]?.unref, true, '周期定时器必须 unref')
+    assert.equal(intervals.length, 0, '自排程：不再 setInterval')
     assert.equal(requests, 0, 'start() 本身不出网（首检在 15s 定时器上）')
     assert.equal(stopped.state().phase, 'idle')
     stopped.start()
     assert.equal(timeouts.length, 1, 'start() 幂等：不叠加首检定时器')
-    assert.equal(intervals.length, 1, 'start() 幂等：不叠加周期定时器')
     stopped.stop()
     assert.ok(clearedTimeouts.includes(timeoutHandles[0]), 'stop() 必须 clearTimeout 首检句柄')
-    assert.ok(clearedIntervals.includes(intervalHandles[0]), 'stop() 必须 clearInterval 周期句柄')
 
     // B：定时器到点走真实受控检查路径——首检成功、周期失败折 error（绝不抛穿）。
     const controller = createHeadlessUpdateController({ version: '0.2.2', logger, request })
     controller.start()
     const initial = timeouts[1]!
-    const periodic = intervals[1]!
     initial.fn()
     await new Promise<void>((resolve) => setImmediate(resolve))
     await new Promise<void>((resolve) => setImmediate(resolve))
     assert.equal(requests, 1, '首检在 15s 到点后才出网')
     assert.equal(controller.state().phase, 'available')
-    periodic.fn()
+    // 最后一次排程 = 首检完成后的静默检查（检查内部的请求超时定时器在它之前）。
+    const firstSchedule = timeouts[timeouts.length - 1]!
+    assert.ok(firstSchedule.ms >= 600_000 * 0.8 - 1 && firstSchedule.ms <= 600_000 * 1.2 + 1,
+      '成功后延迟必须是 600s 基准 ±20% 抖动（实际 ' + firstSchedule.ms + '）')
+    firstSchedule.fn()
     await new Promise<void>((resolve) => setImmediate(resolve))
     await new Promise<void>((resolve) => setImmediate(resolve))
     assert.equal(requests, 2)
     assert.equal(controller.state().phase, 'error', '失败轮折叠为 error 态（绝不 reject/抛穿定时器）')
+    const backoffSchedule = timeouts[timeouts.length - 1]!
+    assert.ok(backoffSchedule.ms >= 1_200_000 * 0.8 - 1 && backoffSchedule.ms <= 1_200_000 * 1.2 + 1,
+      '失败后退避必须 ×2（1200s 基准 ±20%，实际 ' + backoffSchedule.ms + '）')
     controller.stop()
     controller.stop() // 幂等：再次 stop 不抛
   } finally {
@@ -647,3 +652,141 @@ test('⑰ S-38 坏配置：能力探测原因必须记录、保持 blocked，che
   controller.stop()
 })
 
+
+// --- 2026-12 复审方向 A：headless nudge 门反 / stop 终局 / 启动日志（A4/A7/A9） ---
+
+/** 捕获 setTimeout 调用（不真正排程）：用例按记录的 ms/fn 手动驱动。 */
+function captureHeadlessTimeouts(): { calls: { fn: () => void; ms: number }[]; restore: () => void } {
+  const calls: { fn: () => void; ms: number }[] = []
+  const real = globalThis.setTimeout
+  globalThis.setTimeout = ((fn: () => void, ms?: number) => {
+    calls.push({ fn, ms: ms ?? 0 })
+    return { unref() {} } as unknown as ReturnType<typeof setTimeout>
+  }) as unknown as typeof setTimeout
+  return { calls, restore: () => { globalThis.setTimeout = real } }
+}
+
+async function flushHeadlessAsync(times = 3): Promise<void> {
+  for (let index = 0; index < times; index += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+}
+
+/** 记录日志行的最小 logger（warn/error 也被收进同一条流便于断言）。 */
+function recordingLogger(lines: string[]): {
+  log: (...args: unknown[]) => void
+  warn: (...args: unknown[]) => void
+  error: (...args: unknown[]) => void
+} {
+  const push = (...args: unknown[]): void => { lines.push(args.map((value) => String(value)).join(' ')) }
+  return { log: push, warn: push, error: push }
+}
+
+test('A4 回归：noteActivity 到点后必须触发检查（与 Electron 同语义：elapsed < interval 才 return）', async () => {
+  const lines: string[] = []
+  let requests = 0
+  const request = (async () => {
+    requests += 1
+    return { ok: true, status: 200, json: async () => [] }
+  }) as unknown as typeof fetch
+  const controller = createHeadlessUpdateController({
+    version: '0.2.2',
+    logger: recordingLogger(lines),
+    request,
+    // 1s 周期（env 下限）：本用例真的等一次「到点」。
+    env: { DSH_DESKTOP_UPDATE_CHECK_INTERVAL_MS: '1000' },
+    random: () => 0.5,
+  })
+  controller.start()
+  try {
+    // 首检定时器（15s）仍挂着；「最后一次完成检查」为空 → nudge 必须立刻检查。
+    // 修复前门是写反的（scheduleTimer === null && elapsed < interval 才查），
+    // 定时器在挂 → 永不触发，headless nudge 形同虚设。
+    controller.noteActivity('resume')
+    await flushHeadlessAsync()
+    assert.equal(requests, 1, 'resume nudge 必须触发一次静默检查（修复前 requests 停在 0）')
+    assert.ok(lines.some((line) => line.includes('前台/唤醒触发静默检查（resume）')),
+      'nudge 必须留日志')
+    assert.equal(controller.state().phase, 'up-to-date')
+
+    // 刚查完（elapsed < interval）→ nudge 必须被合并，不重复检查。
+    controller.noteActivity('focus')
+    await flushHeadlessAsync()
+    assert.equal(requests, 1, 'elapsed < interval 的 nudge 必须合并')
+
+    // 超过一个 interval → nudge 必须再次检查（假时钟推 elapsed，不真等 15s 首检/周期）。
+    const realNow = Date.now
+    Date.now = () => realNow() + 5_000
+    try {
+      controller.noteActivity('focus')
+      await flushHeadlessAsync()
+    } finally {
+      Date.now = realNow
+    }
+    assert.equal(requests, 2, 'elapsed >= interval 后 nudge 必须再次检查')
+  } finally {
+    controller.stop()
+  }
+})
+
+test('A7 回归：stop() 是终局——在飞的 runScheduledCheck 结算后不得再 arm，start() 不得复活', async () => {
+  const timers = captureHeadlessTimeouts()
+  try {
+    let settleRequest = null as ((value: unknown) => void) | null
+    let requests = 0
+    const request = (() => {
+      requests += 1
+      return new Promise((resolve) => { settleRequest = resolve })
+    }) as unknown as typeof fetch
+    const controller = createHeadlessUpdateController({ version: '0.2.2', logger, request })
+    controller.start()
+    assert.equal(timers.calls.filter((call) => call.ms === 15_000).length, 1, 'start() 恰排一枚 15s 首检')
+    timers.calls[0]!.fn() // 首检到点：runScheduledCheck 在飞（fetch 未结算）
+    await flushHeadlessAsync()
+    assert.equal(requests, 1)
+    controller.stop() // sidecar 退出路径：停表 + 终局
+    settleRequest?.({ ok: true, status: 200, json: async () => [] })
+    await flushHeadlessAsync()
+    // 修复前：stop() 只清了当前 timer，在飞的检查完成后仍 arm 下一轮（≈600s）。
+    // 只数 >60s 的排程：检查内部的 fetch 超时定时器（10s）不是排程。
+    assert.equal(timers.calls.filter((call) => call.ms > 60_000).length, 0,
+      'stop() 后结算的检查不得再 arm（修复前这里会排下一轮）')
+    assert.equal(controller.state().phase, 'up-to-date', '结算本身照常落相位')
+    controller.start()
+    assert.equal(timers.calls.filter((call) => call.ms > 60_000).length, 0, 'stop() 终局：start() 不得复活定时器')
+  } finally {
+    timers.restore()
+  }
+})
+
+test('A9 回归：启动日志用分钟表述（±jitter% + 退避封顶），不再打印小时分数', () => {
+  const logs: string[] = []
+  const controller = createHeadlessUpdateController({
+    version: '0.2.2',
+    logger: recordingLogger(logs),
+    request: fakeFetch([]),
+    env: {},
+  })
+  controller.start()
+  controller.stop()
+  const line = logs.find((entry) => entry.includes('更新检查已启动'))
+  assert.ok(line, 'start() 必须打印启动日志')
+  // 修复前打印 HEADLESS_CHECK_INTERVAL_MS / 3_600_000 = 0.16666666666666666h。
+  assert.match(line!, /15s 后首次检查，之后每 10min ±20%，失败退避封顶 60min/,
+    '启动日志必须与 Electron 同款分钟表述（实际：' + line + '）')
+  assert.ok(!line!.includes('h）'), '不得再打印小时分数：' + line)
+
+  // env 覆盖后同样按分钟表述。
+  const overriddenLogs: string[] = []
+  const overridden = createHeadlessUpdateController({
+    version: '0.2.2',
+    logger: recordingLogger(overriddenLogs),
+    request: fakeFetch([]),
+    env: { DSH_DESKTOP_UPDATE_CHECK_INTERVAL_MS: '120000' },
+  })
+  overridden.start()
+  overridden.stop()
+  const overriddenLine = overriddenLogs.find((entry) => entry.includes('更新检查已启动'))
+  assert.match(overriddenLine!, /之后每 2min ±20%，失败退避封顶 60min/,
+    'env 覆盖的周期同样按分钟表述（实际：' + overriddenLine + '）')
+})

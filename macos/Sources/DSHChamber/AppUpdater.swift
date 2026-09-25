@@ -14,15 +14,15 @@ import Sparkle
 ///   dry-run / 未配密钥）→ 不可用：「检查更新…」菜单项禁用，也绝不向 sidecar
 ///   谎称能自动安装。
 /// - 自动检查开（模板常量 SUEnableAutomaticChecks=true + SUScheduledCheckInterval
-///   =21600s，见 Info.plist.template）：每次启动强制一次**后台**检查
+///   =600s，见 Info.plist.template）：每次启动强制一次**后台**检查
 ///   （checkForUpdatesInBackground，Sparkle 官方推荐的每启动一次补充检查），之后
-///   由 Sparkle 的调度器按 6h 间隔（updater.ts CHECK_INTERVAL_MS 同值）继续；
+///   由 Sparkle 的调度器按 600s 基准间隔（update-schedule.ts 同源）继续；
 ///   ad-hoc / 未配 feed 的装配仍因缺配置而完全不可用，不存在启动即弹窗的竞争。
 ///   残余（有意记录，不静默）：Sparkle 把 lastUpdateCheckDate 持久化在
 ///   user defaults，并在「scheduled 找到更新、展示权归壳（页面投影）」期间保持
 ///   会话打开——这段会话里 Sparkle 与壳都不再发起新的后台检查，直到用户在
 ///   Sparkle 标准窗内作出选择或应用重启；下次启动的强制检查因此是唯一保证的
-///   恢复点。Electron 的进程内 6h setInterval 没有会话依赖，这是两端节奏语义的
+///   恢复点。Electron 的进程内自排程（update-schedule.ts）没有会话依赖，这是两端节奏语义的
 ///   唯一剩余差异。
 /// - scheduled 更新不弹 Sparkle 标准窗：SPUStandardUserDriverDelegate 把展示权
 ///   收回本类（supportsGentleScheduledUpdateReminders=true +
@@ -130,11 +130,29 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
         case refused(reason: String)
     }
 
-    /// 不可用原因（能力面与动作拒绝共用）。已启动的更新器为 nil。
+    /// 更新可用性的**单一显式判据**（P1.3，台账 §8.a）——上游 `isPackaged && app-update.yml`
+    /// 的等价物：装配期事实按顺序判定，任一不过就返回**具体**原因词；能力面、动作拒绝与
+    /// 页面显示共用这一份判断，绝不各自判断。腿与上游的对应：`configuration` 非空 ≡
+    /// app-update.yml 存在；形状校验 ≡ yml 可读；`started` ≡ updater 真的完成启动
+    /// （Sparkle 特有；上游在读了 yml 之后才暴露失败，我们把它提前成显式一律失败）。
+    /// 返回值沿用既有词表，消费面（sidecar capability / 动作拒绝 / 页面）零改动。
+    static func availabilityRefusal(configuration: Configuration?,
+                                    startError: String?,
+                                    started: Bool) -> String? {
+        if let startError { return "native-updater-misconfigured:\(startError)" }
+        guard let configuration else { return "native-updater-unavailable" }
+        if let shapeError = configurationError(for: configuration) {
+            return "native-updater-misconfigured:\(shapeError)"
+        }
+        if !started { return "native-updater-unavailable" }
+        return nil
+    }
+
+    /// 不可用原因（能力面与动作拒绝共用；S-38）。可用时为 nil。
     var unavailableReason: String {
-        if let availabilityError { return "native-updater-misconfigured:\(availabilityError)" }
-        if controller == nil { return "native-updater-unavailable" }
-        return "native-updater-not-started"
+        Self.availabilityRefusal(configuration: configuration,
+                                 startError: availabilityError,
+                                 started: controller != nil) ?? "native-updater-unavailable"
     }
 
     /// 能力面：available=false 时携带诚实原因（配置错误/未装配），sidecar
@@ -161,7 +179,11 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
     /// 更新是否已装配**并真的启动**（配置齐 + 形状合法 + startUpdater 成功）。
     /// 只看 controller != nil 会漏掉 startUpdater 失败（或坏 EdDSA 公钥）：那种情况下
     /// 仍报 available=true，页面 check 被忙门静默吞掉后停在 checking。
-    var isAvailable: Bool { controller != nil && availabilityError == nil }
+    var isAvailable: Bool {
+        Self.availabilityRefusal(configuration: configuration,
+                                 startError: availabilityError,
+                                 started: controller != nil) == nil
+    }
 
     /// Sparkle 自己的可用性门（检查中/安装中为 false）——菜单项据此 enable。
     var canCheckForUpdates: Bool { controller?.updater.canCheckForUpdates ?? false }
@@ -212,7 +234,7 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
         if Self.shouldForceLaunchBackgroundCheck(configuration: configuration, startUpdater: startUpdater) {
             // 每启动一次的后台检查（不弹窗）。放在下一个 runloop 周期，让
             // startUpdater 排定的 startUpdateCycle 先跑：它按持久化的
-            // lastUpdateCheckDate 可能已经发起检查或排了 6h 定时器，这里再补一次
+            // lastUpdateCheckDate 可能已经发起检查或排了 600s 定时器，这里再补一次
             // 显式后台检查（Sparkle 自带 session/driver 门，重复调用只会响亮跳过）。
             DispatchQueue.main.async { [weak controller] in
                 controller?.updater.checkForUpdatesInBackground()
@@ -265,17 +287,94 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
     // MARK: - 阶段投影（fake-delegate 单测入口）
 
     /// SPUUpdaterDelegate 回调（或单测假事件）→ 页面同款阶段。
+    ///
+    /// B4 迟到事件对齐 E：检查被停滞判定之后，被放弃的那次检查的迟到结果
+    /// （available / up-to-date / failed）一律抑制到下一次 `.checkStarted`——
+    /// 否则页面刚看到的 failed 会被后台仍在飞的旧检查改回去。迟到**下载完成**
+    /// 不被抑制：E 的语义是「接受这次成功，不隐藏真实结果」（updater.ts
+    /// `update-downloaded` 分支），S 保持同向并 loud 记录。
     func note(_ event: NativeUpdateEvent) {
+        if suppressAbandonedCheckResults {
+            switch event {
+            case .checkStarted:
+                suppressAbandonedCheckResults = false
+            case .validUpdate, .noUpdate, .checkFailed:
+                shellLog("[shell] 已判定停滞的检查的迟到结果被抑制（B4，对齐 E）：\(event)")
+                return
+            default:
+                break
+            }
+        }
         guard let report = phaseProjector.apply(event) else { return }
+        if let stalled = stalledVerdictPhase {
+            stalledVerdictPhase = nil
+            shellLog("[shell] 更新停滞判定（\(stalled.rawValue)）之后收到迟到相位 "
+                + "\(report.phase.rawValue)——接受真实结果（E 同向：不隐藏真实成功）")
+        }
         let version = report.version ?? "nil"
         let error = report.error ?? "nil"
         shellLog("[shell] nativeUpdatePhase \(report.phase.rawValue) version=\(version) error=\(error)")
         onPhase?(report)
+        armStallWatchdog(phase: report.phase)
     }
 
-    /// 单测复位投影器（@testable 可见；生产无调用点）。
+    /// 静默看门狗（P0.1，台账 §8.a）：Sparkle 的检查/下载若长时间不产生任何相位
+    /// 变化，页面不再无限停在 checking/downloading——超时投一次 failed（原因词与
+    /// S-38 同表）。每次相位变化都重置；deadline 可注入供单测。
+    ///
+    /// B4（2026-12 审查方向 B）：下载与检查用**不同**的 deadline。Sparkle 没有
+    /// 下载进度回调（SPUUpdaterDelegate 只有 willDownloadUpdate / didDownloadUpdate /
+    /// 失败），进入 `.downloading` 之后到落地前不再有任何相位变化，共用 60s 会把
+    /// 任何稍慢的正常下载误杀成 `native-update-stalled:downloading`。E 的 60s 是
+    /// **字节 idle**（download-progress 每次抵达都重置 lastDownloadProgressAt，用例
+    /// 钉「有进展不误杀」）；S 看不到字节，下载侧只能给「最大完成期限」。
+    var stallWatchdogMs: Int = 60_000
+
+    /// 下载相位的独立 deadline（B4）：30min 只兜住「永远不落地」的悬挂下载，不参与
+    /// E 式 idle 判定——「S 看不到下载进度」是登记在案的语义差异（design 25 §7、
+    /// STATUS「更新链的节奏/取证/注意力」）。
+    var downloadStallWatchdogMs: Int = 30 * 60_000
+
+    private var stallWatchdog: DispatchWorkItem?
+
+    /// 已投过停滞判定的相位（B4）：迟到的真实相位据此 loud 记录并撤回判定（见 note）。
+    private var stalledVerdictPhase: NativeUpdatePhase?
+
+    /// 检查被判定停滞之后，这一次检查的迟到结果一律抑制（B4，对齐 E 的
+    /// `ignoreAbandonedCheckEvents`：超时检查的迟到事件不得把终局 failed 改回去）；
+    /// 新一次 `.checkStarted` 复位。迟到**下载完成**不属于此列（E 明确接受真实成功）。
+    private var suppressAbandonedCheckResults = false
+
+    private func armStallWatchdog(phase: NativeUpdatePhase) {
+        stallWatchdog?.cancel()
+        stallWatchdog = nil
+        let deadlineMs: Int
+        switch phase {
+        case .checking: deadlineMs = stallWatchdogMs
+        case .downloading: deadlineMs = downloadStallWatchdogMs
+        default: return
+        }
+        let stalledPhase = phase
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.phaseProjector.lastReport?.phase == stalledPhase else { return }
+            shellLog("[shell] 更新相位停滞：\(stalledPhase.rawValue) 超过 \(deadlineMs)ms 无变化——投 failed")
+            let reason = "native-update-stalled:\(stalledPhase.rawValue)"
+            self.note(stalledPhase == .checking ? .checkFailed(error: reason) : .downloadFailed(error: reason))
+            // 判定投递之后才登记：note() 里那次 failed 上报不算「迟到相位」。
+            self.stalledVerdictPhase = stalledPhase
+            if stalledPhase == .checking { self.suppressAbandonedCheckResults = true }
+        }
+        stallWatchdog = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(deadlineMs), execute: work)
+    }
+
+    /// 单测复位投影器/看门狗状态（@testable 可见；生产无调用点）。
     func resetPhaseProjectionForTesting() {
         phaseProjector = NativeUpdatePhaseProjector()
+        stalledVerdictPhase = nil
+        suppressAbandonedCheckResults = false
+        stallWatchdog?.cancel()
+        stallWatchdog = nil
     }
 
     // MARK: - SPUStandardUserDriverDelegate（scheduled 展示归原生壳）

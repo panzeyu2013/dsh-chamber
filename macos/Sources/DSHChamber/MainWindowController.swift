@@ -596,7 +596,32 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
     }
 
+    /// 更新就绪的原生注意力（上游 update-attention.ts 的 AppKit 等价物）：Dock
+    /// 图标持续跳动直到用户回到应用（critical = 一直跳），激活即取消。
+    private var updateAttentionRequest: Int = 0
+
+    /// 下载完成（相位 downloaded）时请求一次注意力；重复调用只计一次。
+    func raiseUpdateAttention() {
+        guard Self.shouldRaiseUpdateAttention(phase: .downloaded) else { return }
+        guard updateAttentionRequest == 0 else { return }
+        updateAttentionRequest = NSApp.requestUserAttention(.criticalRequest)
+        shellLog("[shell] 更新就绪：已请求 Dock 注意力（request=\(updateAttentionRequest)）")
+    }
+
+    /// 用户回到应用（激活）时取消注意力请求。
+    func clearUpdateAttention() {
+        guard updateAttentionRequest != 0 else { return }
+        NSApp.cancelUserAttentionRequest(updateAttentionRequest)
+        updateAttentionRequest = 0
+    }
+
+    /// 纯判据（单测直测）：只有「已下载待安装」才值得打断用户。
+    static func shouldRaiseUpdateAttention(phase: NativeUpdatePhase) -> Bool {
+        phase == .downloaded
+    }
+
     @objc private func appDidBecomeActive(_ note: Notification) {
+        clearUpdateAttention()
         // 同样落盘——这是 core held-resume 的补发点，真机取证靠它。
         shellLog("[shell] 应用激活——发送 __host.mainWindowShown")
         Task { @MainActor in

@@ -7,8 +7,11 @@
  *   Sparkle（相位经 __host.nativeUpdatePhase 回推），声明后任何失败都不回退。
  * - installBlockedReason 缺省 NATIVE_SHELL_INSTALL_BLOCKED_REASON，能力可用或任何原生
  *   阶段入站后清空（绝不把已配置的 Sparkle 降级为 unavailable）；壳拒绝 check 落 error。
- * - 原生腿在场不排静默定时器；无腿时 start() 与 Electron 同节奏（15s 首检 + 6h 周期、
- *   unref、stop() 停表、幂等）；download()/restartAndInstall() 无腿显式拒绝、有腿按相位门转发。
+ * - 原生腿在场不排静默定时器；无腿时 start() 与 Electron **同源节奏**（节奏常量只在
+ *   update-schedule.ts 一处：15s 首检 + 600s 基准 ±20% 抖动 + 失败退避封顶 1h；单枚自排
+ *   程定时器 unref、stop() 终局、start() 幂等、noteActivity 与 Electron 同一语义）；
+ *   download()/restartAndInstall() 无腿显式拒绝、有腿按相位门转发。检查/下载静默挂起由
+ *   idle 看门狗收敛，可选取证日志见 update-journal.ts。
  * - Electron-free：只 import updater.ts 的纯函数。
  */
 import {
@@ -27,6 +30,13 @@ import {
   isParseableReleaseTag,
   selectReleaseCandidate,
 } from './update-discovery.ts'
+import {
+  nextCheckDelay,
+  resolveUpdateScheduleConfig,
+  UPDATE_FIRST_CHECK_DELAY_MS,
+  UPDATE_SCHEDULE_DEFAULTS,
+} from './update-schedule.ts'
+import { createUpdateJournal, resolveUpdateJournalDir } from './update-journal.ts'
 
 /** blocked 原因（Swift 壳不支持自动安装）；UI 对已知 reason 有本地化映射。 */
 export const NATIVE_SHELL_INSTALL_BLOCKED_REASON = '原生壳不支持自动安装'
@@ -44,10 +54,12 @@ export const NATIVE_SHELL_DOWNLOAD_REFUSAL = '原生壳不支持自动安装（�
 /** 重启并安装拒绝文案。 */
 export const NATIVE_SHELL_RESTART_REFUSAL = '原生壳不支持自动更新安装（请手动下载新版本）'
 
-/** 静默首检延迟（与 Electron 侧同值——两端节奏由单测锁步）。 */
-export const HEADLESS_CHECK_DELAY_MS = 15_000
-/** 周期静默检查间隔（与 Electron updater.ts:653 的 CHECK_INTERVAL_MS 同值 6h）。 */
-export const HEADLESS_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
+/** 静默首检延迟（= update-schedule.ts 的 UPDATE_FIRST_CHECK_DELAY_MS——两 flavor
+ *  同源；单测锁步见 update-headless.test.ts ⑩）。 */
+export const HEADLESS_CHECK_DELAY_MS = UPDATE_FIRST_CHECK_DELAY_MS
+/** 周期静默检查间隔基准（= update-schedule.ts 的默认 600s；实际延迟含 ±20% 抖动
+ *  与失败退避，由 nextCheckDelay 计算）。 */
+export const HEADLESS_CHECK_INTERVAL_MS = UPDATE_SCHEDULE_DEFAULTS.intervalMs
 
 /**
  * 从 GitHub releases 列表选最新版本（纯函数；feed 不可信）：与 updater.ts 共用
@@ -96,6 +108,10 @@ export interface HeadlessUpdateControllerDeps {
   timeoutMs?: number
   /** 原生更新器桥（缺省 = 无原生安装腿：保持 blocked-available，见类型注释）。 */
   nativeUpdater?: NativeUpdaterBridge
+  /** 节奏/取证环境（默认 process.env；测试注入）。 */
+  env?: Record<string, string | undefined>
+  /** 退避抖动随机源（默认 Math.random；测试注入固定值）。 */
+  random?: () => number
 }
 
 /** headless 控制器的附加停表面：stop() 清除 start() 排定的静默定时器（sidecar 退出
@@ -111,6 +127,18 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
   const request = deps.request ?? globalThis.fetch
   const channel = deps.channel ?? resolveHeadlessChannel(deps.version)
   const timeoutMs = deps.timeoutMs ?? 10_000
+  // 与 Electron 同源的上游节奏策略（update-schedule.ts）+ 可选取证日志
+  // （DSH_DESKTOP_UPDATE_JOURNAL_DIR）：两个 flavor 的节奏常量自此只有一处。
+  const scheduleEnv = deps.env ?? process.env
+  const scheduleResolution = resolveUpdateScheduleConfig(scheduleEnv)
+  for (const problem of scheduleResolution.problems) {
+    deps.logger.warn('[updater-headless] ' + problem + '（已回退默认检查节奏）')
+  }
+  const schedule = scheduleResolution.config
+  const journalDir = resolveUpdateJournalDir(scheduleEnv)
+  if (journalDir.problem !== null) deps.logger.warn('[updater-headless] ' + journalDir.problem + '（更新取证关闭）')
+  const journal = createUpdateJournal({ dir: journalDir.dir, version: deps.version, logger: deps.logger })
+  const random = deps.random ?? Math.random
   const listeners = new Set<(state: UpdateState) => void>()
   let checking = false
   let state: UpdateState = {
@@ -124,22 +152,43 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
     error: null,
   }
 
-  // start() 排定的两枚定时器（stop()/首检到点清引用；句柄本身上了 unref）。
-  let initialTimer: ReturnType<typeof setTimeout> | null = null
-  let intervalTimer: ReturnType<typeof setInterval> | null = null
+  // start() 排定的自排程定时器（stop() 清引用；句柄 unref）。节奏由
+  // update-schedule.ts 统一持有（与 Electron 同一策略：600s 基准 ±抖动 +
+  // 失败退避封顶），退避按连续失败次数递进。
+  let scheduleTimer: ReturnType<typeof setTimeout> | null = null
+  let lastCheckCompletedAt: number | null = null
+  let checkAttempt = 0
+  // A7 (2026-12 复审方向 A): stop() 必须终局。旧实现只清「当前」timer；若 stop 时有
+  // runScheduledCheck 卡在 await（fetch 未结算），它完成后仍会 arm ⇒ sidecar 退出
+  // 路径停不干净。stopped 之后 arm() 一律空操作，start() 也不复活定时器。
+  let started = false
+  let stopped = false
   function stopTimers(): void {
-    if (initialTimer !== null) {
-      clearTimeout(initialTimer)
-      initialTimer = null
+    if (scheduleTimer !== null) {
+      clearTimeout(scheduleTimer)
+      scheduleTimer = null
     }
-    if (intervalTimer !== null) {
-      clearInterval(intervalTimer)
-      intervalTimer = null
-    }
+  }
+  function arm(delayMs: number): void {
+    if (stopped) return
+    if (scheduleTimer !== null) clearTimeout(scheduleTimer)
+    scheduleTimer = setTimeout(() => {
+      scheduleTimer = null
+      void runScheduledCheck()
+    }, delayMs)
+    scheduleTimer.unref?.()
+  }
+  async function runScheduledCheck(): Promise<void> {
+    await runCheck()
+    lastCheckCompletedAt = Date.now()
+    checkAttempt = state.phase === 'error' ? checkAttempt + 1 : 0
+    if (state.phase === 'downloaded' || state.phase === 'downloading') return
+    arm(nextCheckDelay({ attempt: checkAttempt, config: schedule, random }))
   }
 
   function setState(patch: Partial<UpdateState>): void {
     state = { ...state, ...patch }
+    journal?.record(state)
     for (const listener of listeners) {
       // 推送腿（宿主 subscribe 回调）抛错绝不能反噬控制器：既不能让 checking 卡死，
       // 也不能把 IPC 变成 reject（缺失成员 stub 会在该路径抛出）。失败记日志，继续。
@@ -332,23 +381,40 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
         deps.logger.log('[updater-headless] 原生更新器已声明：sidecar 不排静默检查（发现单源 = 壳内 Sparkle appcast）')
         return
       }
-      // 与 Electron 同节奏：15s 静默首检 + 每 6h 周期检查；幂等不叠加定时器；
-      // unref 保证不阻止进程退出（sidecar 退出路径另有显式 stop()）。
-      if (initialTimer !== null || intervalTimer !== null) return
-      initialTimer = setTimeout(() => {
-        initialTimer = null
-        // runCheck 内部 catch 全部失败并落 error 态（绝不 reject）——void 安全。
-        void runCheck()
-      }, HEADLESS_CHECK_DELAY_MS)
-      initialTimer.unref?.()
-      intervalTimer = setInterval(() => void runCheck(), HEADLESS_CHECK_INTERVAL_MS)
-      intervalTimer.unref?.()
+      // 与 Electron 同源节奏（update-schedule.ts：600s 基准 ±20% 抖动 + 失败退避
+      // 封顶 1h；15s 静默首检）。幂等：重复调用不叠加定时器；unref 保证定时器
+      // 绝不阻止进程退出（sidecar 退出路径另有显式 stop()）。
+      if (stopped || scheduleTimer !== null) return
+      started = true
+      arm(UPDATE_FIRST_CHECK_DELAY_MS)
+      // A9: 与 Electron 同款分钟表述（±jitter% + 退避封顶）；旧实现打印
+      // HEADLESS_CHECK_INTERVAL_MS / 3_600_000 = 0.16666666666666666h。
       deps.logger.log(
-        `[updater-headless] 更新检查已启动（channel=${channel}，${HEADLESS_CHECK_DELAY_MS / 1000}s 后首次检查，之后每 ${HEADLESS_CHECK_INTERVAL_MS / 3_600_000}h）`,
+        '[updater-headless] 更新检查已启动（channel=' + channel + '，' + HEADLESS_CHECK_DELAY_MS / 1000
+        + 's 后首次检查，之后每 ' + Math.round(schedule.intervalMs / 60_000) + 'min ±'
+        + Math.round(schedule.jitter * 100) + '%，失败退避封顶 '
+        + Math.round(schedule.maxBackoffMs / 60_000) + 'min）',
       )
     },
     stop() {
+      // A7: 终局——在飞的 runScheduledCheck 完成后也不得再 arm（arm 的 stopped 门）。
+      stopped = true
       stopTimers()
+    },
+    /** 前台/唤醒 nudge（与 Electron 同契约）。原生腿在场时发现归 Sparkle
+     *  自己的调度器（S-21），这里保持无定时器语义 = 空操作。 */
+    noteActivity(reason) {
+      if (deps.nativeUpdater !== undefined) return
+      // A4: 与 Electron(updater.ts 的 noteActivity) 同一语义——最后一次完成检查
+      // 早于 interval（或从未完成）才触发，此前只做合并。旧实现把门写反
+      // （scheduleTimer === null && elapsed < interval 才查）⇒ 首检定时器在挂时
+      // 永不触发，headless 的 focus/resume nudge 形同虚设。
+      if (!started || stopped) return
+      if (state.phase === 'downloaded' || state.phase === 'downloading'
+        || state.phase === 'installing' || checking) return
+      if (lastCheckCompletedAt !== null && Date.now() - lastCheckCompletedAt < schedule.intervalMs) return
+      deps.logger.log('[updater-headless] 前台/唤醒触发静默检查（' + reason + '）')
+      void runScheduledCheck()
     },
     applyNativePhase,
     async checkNow() {
