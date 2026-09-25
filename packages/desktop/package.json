@@ -10,6 +10,9 @@
     "build:host-graph-package": "node scripts/build-host-graph-package.mjs",
     "build:preload": "node scripts/build-preload.mjs",
     "build:sidecar": "node scripts/build-sidecar.mjs",
+    "prepare:python-payload": "node scripts/prepare-python-payload.mjs",
+    "prepare:python-payload:dry-run": "node scripts/prepare-python-payload.mjs --dry-run",
+    "verify:python-payload": "node scripts/prepare-python-payload.mjs --verify resources/primary-runtime",
     "dist": "node ./node_modules/electron-builder/cli.js",
     "dist:mac": "node ./node_modules/electron-builder/cli.js --mac",
     "dist:win": "node ./node_modules/electron-builder/cli.js --win --x64",
@@ -94,8 +97,15 @@
       {
         "from": "resources/icon.png",
         "to": "icon.png"
+      },
+      {
+        "from": "resources/primary-runtime",
+        "to": "primary-runtime"
       }
     ],
+    "electronFuses": {
+      "runAsNode": true
+    },
     "electronLanguages": [
       "en-US",
       "zh-CN"

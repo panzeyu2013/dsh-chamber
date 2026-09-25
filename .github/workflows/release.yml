@@ -567,6 +567,11 @@ jobs:
       - name: Assert lockfile not rewritten
         run: git diff --exit-code -- pnpm-lock.yaml
 
+      - name: Prepare python payload (mac-arm64 — sha256 from the lock)
+        # C5：版本与摘要的唯一来源是 packages/desktop/primary-runtime-lock.json；
+        # 下载失败或 sha256 不符即 job 红（绝不静默退回空载荷——extraResources 会把
+        # 缺件或旧载荷原样打进 .app）。
+        run: node packages/desktop/scripts/prepare-python-payload.mjs --target mac-arm64
       - name: Build and package macOS app (arm64)
         # electron-builder runs the afterPack hook
         # (packages/desktop/scripts/after-pack-adhoc-sign.mjs), which ad-hoc
@@ -670,6 +675,14 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
+      - name: Verify python payload inside the packaged Electron app (mac-arm64)
+        # C5：extraResources 的载荷必须真的进包且完整（runtime.json=complete +
+        # 解释器 + 每个锁定发行版的 dist-info）；占位 README 通过 extraResources
+        # 让缺零件的构建仍能打包，这条断言就是「占位/半载荷不得出货」的闸门。
+        run: |
+          set -euo pipefail
+          node packages/desktop/scripts/prepare-python-payload.mjs --verify \
+            "packages/desktop/release/mac-arm64/dsh-chamber-electron.app/Contents/Resources/primary-runtime"
       - name: Verify macOS app — Developer ID + notarization (fail-closed on release)
         # Structural checks run for every build (ad-hoc dry runs included): the
         # .app bundle exists, its signature verifies, and the darwin dsh
@@ -969,6 +982,9 @@ jobs:
       - name: Assert lockfile not rewritten
         run: git diff --exit-code -- pnpm-lock.yaml
 
+      - name: Prepare python payload (mac-arm64 — sha256 from the lock)
+        # C5：与 Electron 腿同一份锁与同一份落点内容（build:sidecar 拷进装配目录）。
+        run: node packages/desktop/scripts/prepare-python-payload.mjs --target mac-arm64
       - name: Build sidecar assembly + native .app
         run: |
           set -euo pipefail
@@ -1030,7 +1046,9 @@ jobs:
           # 只 warn、下面 verify 的 test -f 直接失败）。
           pnpm --filter @dsh-chamber/desktop run bundle:dsh
           # 真实 Node 捆绑（官方 tar.gz + SHA-256 校验；命名必须是 node）。
-          pnpm run build:sidecar
+          # C5：显式 --arch arm64（架构是参数而非 runner 宿主架构）；--require-python 让
+          # python 载荷缺件 fail-closed（缺件时默认只 warn，发布腿不允许）。
+          pnpm run build:sidecar --arch arm64 --require-python
           if [[ -n "${KEYCHAIN_FILE:-}" ]]; then
             security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_FILE"
           fi
@@ -1081,6 +1099,12 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
+      - name: Verify python payload inside the native app (mac-arm64)
+        # C5：python 载荷随 sidecar 装配进 Contents/Resources/sidecar/primary-runtime。
+        run: |
+          set -euo pipefail
+          node packages/desktop/scripts/prepare-python-payload.mjs --verify \
+            "macos/release/dsh-chamber.app/Contents/Resources/sidecar/primary-runtime"
       - name: Notarize + staple native app and dmg (release only)
         if: ${{ github.event.inputs.dry_run != 'true' }}
         env:

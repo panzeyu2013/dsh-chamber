@@ -154,6 +154,8 @@ export const GROUPS = {
     'scripts/before-pack.test.mjs',
     'scripts/electron-shared.test.mjs',
     'scripts/control-plane-freshness.test.mjs',
+    // python 载荷 machinery（C5：锁校验 / 解包器 / dry-run 离线保证 / 摘要纪律）
+    'scripts/prepare-python-payload.test.mjs',
     // lockstep of this manifest + the zero-test guard
     'scripts/test-runner-lockstep.test.mjs',
   ],

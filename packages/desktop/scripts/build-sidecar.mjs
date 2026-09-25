@@ -66,6 +66,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { verifyPayload } from './prepare-python-payload.mjs'
 import { isCliEntry, runCliTool } from '../../../scripts/lib/cli.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -219,6 +220,9 @@ export function sidecarLayout(outDir) {
     vendorDsh: path.join(outDir, 'vendor', 'dsh'),
     pnpm: path.join(outDir, 'pnpm'),
     pnpmEntry: path.join(outDir, 'pnpm', 'bin', 'pnpm.cjs'),
+    // python 载荷（C5）：与 Electron 侧 extraResources 同布局同内容——
+    // <out>/primary-runtime 随 build-swift-app 拷进 Contents/Resources/sidecar。
+    primaryRuntime: path.join(outDir, 'primary-runtime'),
   }
 }
 
@@ -557,6 +561,9 @@ export function parseBuildSidecarArgs(argv) {
     skipBundle: false,
     skipHostPackages: false,
     skipVendor: false,
+    skipPython: false,
+    requirePython: false,
+    pythonPayloadDir: path.join(desktopDir, 'resources', 'primary-runtime'),
     vendorDshDir: path.join(desktopDir, 'vendor', 'dsh'),
     pnpmDir: path.join(desktopDir, 'node_modules', 'pnpm'),
     // 仅当调用方**显式**传入源目录时才在 dry-run 里严格校验：默认路径在
@@ -582,6 +589,9 @@ export function parseBuildSidecarArgs(argv) {
     else if (arg === '--skip-bundle') options.skipBundle = true
     else if (arg === '--skip-host-packages') options.skipHostPackages = true
     else if (arg === '--skip-vendor') options.skipVendor = true
+    else if (arg === '--skip-python') options.skipPython = true
+    else if (arg === '--require-python') options.requirePython = true
+    else if (arg === '--python-payload') options.pythonPayloadDir = path.resolve(next())
     else if (arg === '--vendor-dsh') {
       options.vendorDshDir = path.resolve(next())
       options.vendorDshExplicit = true
@@ -630,6 +640,11 @@ export function buildPlan(options) {
         ? `[4] Node 捆绑：本地 ${options.nodeArchive} → SHA-256 校验 → ${layout.node}`
         : `[4] Node 捆绑：${nodeDistUrl(options.nodeVersion, archive)} → SHA-256 校验 → ${layout.node}`,
     )
+  }
+  if (options.skipPython) steps.push('[4b] 跳过 python 载荷（--skip-python）')
+  else {
+    steps.push(`[4b] python 载荷：${options.pythonPayloadDir} → ${layout.primaryRuntime}`
+      + (options.requirePython ? '（--require-python：缺件 fail-closed）' : '（未准备则跳过；发布腿用 --require-python）'))
   }
   steps.push(`[5] 断言：${path.basename(layout.node)} 基名 + 产物存在`)
   return steps
@@ -814,6 +829,15 @@ export async function runBuildSidecar(options, io = {}) {
     // 正常形态 → warn（release 腿在 build:sidecar 之前跑 bundle:dsh）。
     const vendorPresent = existsSync(path.join(options.vendorDshDir, 'package.json'))
     const pnpmPresent = existsSync(path.join(options.pnpmDir, 'bin', 'pnpm.cjs'))
+    if (!options.skipPython) {
+      const payload = verifyPayload(options.pythonPayloadDir)
+      if (!payload.ok && options.requirePython) {
+        throw new Error(`--require-python 但 python 载荷不可用（${options.pythonPayloadDir}）：${payload.problems.join('；')}`)
+      }
+      if (!payload.ok) {
+        io.warn(`[build-sidecar] 警告：python 载荷未准备（${payload.problems[0]}）——发布腿必须 --require-python`)
+      }
+    }
     if (!options.skipVendor) {
       if (!vendorPresent && options.vendorDshExplicit) {
         throw new Error(`--vendor-dsh 源不存在：${options.vendorDshDir}`)
@@ -872,6 +896,9 @@ export async function runBuildSidecar(options, io = {}) {
     rmSync(layout.pnpm, { recursive: true, force: true })
   }
   if (options.skipNode) rmSync(layout.node, { force: true })
+  // python 载荷与 node 同款诚实语义：跳过 = 清空缺位（持久 <out> 里的旧载荷会被
+  // build-swift-app 原样拷进 .app 一起签名发布）。
+  if (options.skipPython) rmSync(layout.primaryRuntime, { recursive: true, force: true })
   // tsc emit 遗留：本脚本的 tsc 步是 noEmit，不生成它；该目录必须消失（否则
   // electron-builder 的 dist/** glob 会把无人消费的编译产物打进 Electron 包）。
   clearLegacySidecarEmit(path.join(desktopDir, 'dist', 'sidecar'))
@@ -961,6 +988,23 @@ export async function runBuildSidecar(options, io = {}) {
     await bundleNode(options, layout, io.log)
   }
 
+  // 4b. python 载荷（可选；发布腿用 --require-python 让缺件变红）。
+  if (options.skipPython) {
+    io.log('[build-sidecar] 跳过 python 载荷（--skip-python）')
+  } else {
+    const payload = verifyPayload(options.pythonPayloadDir)
+    if (!payload.ok && options.requirePython) {
+      throw new Error(`--require-python 但 python 载荷不可用（${options.pythonPayloadDir}）：${payload.problems.join('；')}`)
+    }
+    rmSync(layout.primaryRuntime, { recursive: true, force: true })
+    if (!payload.ok) {
+      io.log(`[build-sidecar] python 载荷未准备，跳过（${payload.problems[0]}）——发布腿必须 --require-python`)
+    } else {
+      copyTree(options.pythonPayloadDir, layout.primaryRuntime)
+      io.log(`[build-sidecar] python 载荷（target=${String(payload.target)}）→ ${layout.primaryRuntime}`)
+    }
+  }
+
   // 5. 终态断言。
   if (existsSync(layout.node)) {
     assertBundledNodeBasename(layout.node)
@@ -976,10 +1020,10 @@ if (isCliEntry(import.meta.url)) {
     label: 'build-sidecar',
     usage: [
       '用法：build-sidecar.mjs [--out <dir>] [--dry-run] [--arch <arm64|x64>]',
-      '       [--skip-node] [--skip-bundle] [--skip-host-packages] [--skip-vendor]',
+      '       [--skip-node] [--skip-bundle] [--skip-host-packages] [--skip-vendor] [--skip-python]',
       '       [--vendor-dsh <dir>] [--pnpm-dir <dir>]',
       '       [--node-version <v>] [--node-sha256 <hex>（覆盖仓库固定摘要，冲突即拒绝）]',
-      '       [--node-archive <tar.gz>] [--help]',
+      '       [--node-archive <tar.gz>] [--python-payload <dir>] [--require-python] [--help]',
     ],
     parse: parseBuildSidecarArgs,
     run: runBuildSidecar,

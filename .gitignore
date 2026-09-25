@@ -101,3 +101,11 @@ Thumbs.db
 # Gateway build output: host packages are copied in by scripts/build.mjs
 # (the seed sources' dist artifacts are build-time generated (pnpm run build:artifacts)).
 packages/gateway/host-packages/
+
+# Primary-runtime (python) payload: downloaded at build time, never committed
+packages/desktop/resources/primary-runtime/**
+!packages/desktop/resources/primary-runtime/README.md
+release/primary-runtime-cache/**
+
+# Scratch audit reports (read-only review output; never committed)
+.audit/
