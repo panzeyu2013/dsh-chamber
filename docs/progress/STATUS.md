@@ -329,25 +329,14 @@
   锁；既有约束下可删 0 组）。
 
 
-- **0.1.6→0.1.7 升级线的取件移植（计划见 [todo/main-0.1.5-to-0.1.7-upgrade.md](todo/main-0.1.5-to-0.1.7-upgrade.md)）**：
-  已落地 = 更新链看门狗（§12.1）、原生崩溃诊断（§12.2）、Electron 壳文案本地化（§12.3）、registry sidebar
-  条目与不变量放宽（§12.4）、安全模式（§12.5）、§12.6 全项（Windows caption／上游席位锁／`electronFuses.runAsNode`／
-  Swift 上游窗形——`hiddenInset` 等价形态 + `contentMinSize` 880×600，vibrancy 腿按计划不搬／Electron 腿 native theme seat——
-  `data-ds-theme-source` → `dsh-chamber:native-theme-set` → `nativeTheme.themeSource`，桥面 52 invoke + 9 push）、
-  python 载荷（§12.7、`prepare-python-payload` + `primary-runtime-lock.json` + extraResources／发布链）、读面能力门（§12.8）、
-  会话流健康臂的 rc.2 重判（§12.9——臂已在 main 按 rc.2 口径重推导，分支 0.1.6 形态不取件；残余真机验收见本文件 ⑫）、
-  §17-C 上游 patch 通道的**两条腿**（运行期：`bundle-dsh` 逐字生成 `patchedDependencies` + 携带 `patches/`，
-  runtime 锁由 `--refresh-lockfile` 重生成并记录 patch_hash；dev/根：本仓 `pnpm-workspace.yaml` 同集合 +
-  仓内 `patches/` 副本 + 根锁重生成；registry 增 `patches` 字段 + 三条对拍用例；升级 checklist 增条目）。
-  §12.10 启动失败恢复的 **TypeScript 半边**（`startup-error.ts` 三选/两选纯决策 + chamber 自持状态备份 +
-  main.ts 接线：五条 fatal 呈现点走恢复框、`runQuitCleanupChain` 单飞共享、目录锁句柄化、安全模式声明与显式传参；
-  12 条用例含 4 条 main.ts 接线锁）。
-  **未落地**：① §12.10 的 **Swift 半边**（`AppDelegate` 以 `NativeText` 为文案源叠 `RecoveryChoices`/
-  `runThreeChoiceRecovery`/`RecoveryPresentationGate`、`SidecarSupervisor` 先 `stop()` 释放 flock 再呈现、
-  三条 Swift 用例，以及随之恢复的跨语言字面量锁——Swift 壳还未声明 `DSH_CHAMBER_SAFE_MODE`）；② §17-C 收尾裁决：两条安装腿都已带 patch，但 node-pty 的 chamber 侧补偿
+- **0.1.6→0.1.7 升级线取件移植的残余（计划见 [todo/main-0.1.5-to-0.1.7-upgrade.md](todo/main-0.1.5-to-0.1.7-upgrade.md)）**：
+  ① **fatal 恢复框的真机键位走查**仍开放（计划 §12.10 坑④ / runbook §8）：Return / 小键盘 Enter / Esc 在真实焦点下
+  必须都落安全项（三选 = 安全模式重启、锁冲突两选 = 重启）。自动化面只到单测 + 源码锁——Swift
+  `RecoveryChoicesTests`/`StartupRecoveryTests`/`RuntimeRecoveryTests` 与 desktop `startup-recovery.test.ts`
+  （含 env 名与页面全局名的跨语言字面量锁步），对话框在真实窗口/sheet 下的按键行为需人工走一遍；
+  ② §17-C 收尾裁决：两条安装腿（runtime + dev/根）都已带 patch，但 node-pty 的 chamber 侧补偿
   （`ensure-harness-vendor` 解析 shim + `dsh-subprocess-local` 的 `ensure-spawn-helper` postinstall）尚未在真机安装后
   复核「补丁已生效、补偿可撤」——复核前保留（属**必要取舍**，不是未移植项）。
-  逐项规格/验收/坑见计划 §8/§12/§13/§17。
 
 - **测试运行器并发上限（未闭合）**：`run-checks tests` 的全局文件池默认 `min(8, 核数)`——同窗口实测 c12 文件总工作
   217s vs c8 141s（每文件膨胀），吞吐收益递减，默认不动。并发已暴露的两处测试自身缺陷（`manager-api` 候选端口占满、
