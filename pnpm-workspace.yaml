@@ -65,3 +65,17 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/libreoffice-kit-win32-arm64@0.1.1'
   - '@deepseek-ai/libreoffice-kit-win32-x64@0.1.1'
   - '@deepseek-ai/libreoffice-kit@0.1.1'
+
+# 上游 pnpm patch channel（§17-C，与 vendor pin 逐字一致）：集合与字节来自
+# vendor/harness-checkout/{pnpm-workspace.yaml,patches/}，仓内 patches/ 为其副本；
+# registry 的 patches 字段是单一登记面，scripts/upstream/registry.test.mjs 对拍。
+# allowUnusedPatches：本仓 dev 安装图只用其中一部分（其余属上游 dev/build 图）。
+patchedDependencies:
+  '@earendil-works/pi-ai@0.85.1': patches/@earendil-works__pi-ai@0.85.1.patch
+  '@electron/osx-sign@1.3.3': patches/@electron__osx-sign@1.3.3.patch
+  '@fortune-sheet/core@1.0.4': patches/@fortune-sheet__core@1.0.4.patch
+  '@fortune-sheet/react@1.0.4': patches/@fortune-sheet__react@1.0.4.patch
+  '@yao-pkg/pkg@6.21.0': patches/@yao-pkg__pkg@6.21.0.patch
+  exceljs@4.4.0: patches/exceljs@4.4.0.patch
+  node-pty@1.2.0-beta.15: patches/node-pty@1.2.0-beta.15.patch
+allowUnusedPatches: true

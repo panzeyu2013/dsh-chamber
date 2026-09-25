@@ -87,7 +87,7 @@
       "spec": "node-pty@1.2.0-beta.15",
       "file": "patches/node-pty@1.2.0-beta.15.patch",
       "runtimeClosure": true,
-      "note": "DSH_NODE_PTY_SPAWN_HELPER；运行期闭包内的依赖（runtime lock 记录 patch_hash）；dev/根安装腿仍待纳入"
+      "note": "DSH_NODE_PTY_SPAWN_HELPER；运行期与 dev/根两条安装腿都已记录 patch_hash（根 workspace 副本在仓内 patches/）"
     }
   ],
   "generatedBlocks": [

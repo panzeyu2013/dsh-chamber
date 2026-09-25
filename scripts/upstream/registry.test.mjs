@@ -247,3 +247,22 @@ test('patches 抓退化：坏 specifier / 坏文件路径 / 重复 spec 一律�
   const wrongClosure = clone(); wrongClosure.patches[0].runtimeClosure = 'yes'
   assert.ok(validateRegistry(wrongClosure).some((item) => item.includes('runtimeClosure')))
 })
+
+test('根安装腿 patch 通道：本仓 pnpm-workspace.yaml 与 registry.patches 一致，字节同 vendor pin', () => {
+  const rootWs = readFileSync(join(HERE, '..', '..', 'pnpm-workspace.yaml'), 'utf8')
+  const block = /^patchedDependencies:\n(?: {2}.*\n)+/mu.exec(rootWs)?.[0]
+  assert.ok(block !== undefined, '根 workspace 必须带 patchedDependencies（§17-C dev 腿）')
+  const rootSet = [...block.matchAll(/^ {2}'?([^':\n]+)'?: (patches\/[^\n]+)$/gmu)]
+    .map((match) => match[1] + ' -> ' + match[2])
+    .sort()
+  assert.deepEqual(rootSet, registry.patches.map((patch) => patch.spec + ' -> ' + patch.file).sort(),
+    '根安装腿的 patch 集合必须与 registry.patches 逐条一致')
+  assert.match(rootWs, /^allowUnusedPatches: true$/mu, '图外条目由 allowUnusedPatches 豁免（不被 pnpm 拒绝）')
+  for (const patch of registry.patches) {
+    assert.deepEqual(
+      readFileSync(join(HERE, '..', '..', patch.file)),
+      readFileSync(join(HERE, '..', '..', 'vendor', 'harness-checkout', patch.file)),
+      patch.file + ' 必须与 vendor pin 逐字节一致',
+    )
+  }
+})

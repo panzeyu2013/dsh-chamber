@@ -336,11 +336,13 @@
   `data-ds-theme-source` → `dsh-chamber:native-theme-set` → `nativeTheme.themeSource`，桥面 52 invoke + 9 push）、
   python 载荷（§12.7、`prepare-python-payload` + `primary-runtime-lock.json` + extraResources／发布链）、读面能力门（§12.8）、
   会话流健康臂的 rc.2 重判（§12.9——臂已在 main 按 rc.2 口径重推导，分支 0.1.6 形态不取件；残余真机验收见本文件 ⑫）、
-  §17-C 上游 patch 通道的**运行期腿**（`bundle-dsh` 逐字生成 `patchedDependencies` + 携带 `patches/`，runtime 锁由
-  `--refresh-lockfile` 重生成并记录 patch_hash；registry 增 `patches` 字段 + pin 对拍用例；升级 checklist 增条目）。
-  **未落地**：① §12.10 启动失败恢复（`startup-error.ts` 与 Swift 恢复框）；
-  ② §17-C 的 **dev/根安装腿**（本仓自己的 `pnpm-workspace.yaml` 仍无 `patchedDependencies`、仓内无 `patches/`，
-  node-pty 在 dev 路径仍靠 env/解析 shim 替代；重生成根锁前需先核对 `ensure-harness-vendor` 的 importer 不变量）。
+  §17-C 上游 patch 通道的**两条腿**（运行期：`bundle-dsh` 逐字生成 `patchedDependencies` + 携带 `patches/`，
+  runtime 锁由 `--refresh-lockfile` 重生成并记录 patch_hash；dev/根：本仓 `pnpm-workspace.yaml` 同集合 +
+  仓内 `patches/` 副本 + 根锁重生成；registry 增 `patches` 字段 + 三条对拍用例；升级 checklist 增条目）。
+  **未落地**：① §12.10 启动失败恢复（`startup-error.ts` 接线 + Swift 恢复框；提交顺序与 main 侧接线面见计划
+  §12.10 执行注记）；② §17-C 收尾裁决：两条安装腿都已带 patch，但 node-pty 的 chamber 侧补偿
+  （`ensure-harness-vendor` 解析 shim + `dsh-subprocess-local` 的 `ensure-spawn-helper` postinstall）尚未在真机安装后
+  复核「补丁已生效、补偿可撤」——复核前保留（属**必要取舍**，不是未移植项）。
   逐项规格/验收/坑见计划 §8/§12/§13/§17。
 
 - **测试运行器并发上限（未闭合）**：`run-checks tests` 的全局文件池默认 `min(8, 核数)`——同窗口实测 c12 文件总工作
