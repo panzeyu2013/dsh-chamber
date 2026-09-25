@@ -31,6 +31,27 @@ const DESKTOP_SHORTCUTS_CHANNELS = {
 // module crosses the emitted CommonJS preload boundary. This strict mirror is
 // intentionally local; main remains authoritative for the delta contents.
 const INSTANCE_ID_PATTERN = /^(?!local$)[a-zA-Z0-9_-]{1,64}$/;
+
+/**
+ * Windows caption seat (upstream preload-windows.ts + windows-layout.ts): the
+ * official Windows branch of the Web UI keys off html[data-windows-titlebar]
+ * and this height variable, while the main process hides the system titlebar
+ * and draws its own overlay. Mirrored value, not imported: the preload runtime
+ * stays self-contained; upstream-seats.test.ts pins both copies equal.
+ */
+const WINDOWS_TITLEBAR_HEIGHT = 40;
+function markWindowsTitlebar(): void {
+  if (process.platform !== 'win32') return;
+  if (typeof document === 'undefined' || document === null || document.documentElement === undefined) return;
+  const mark = (): void => {
+    const root = document.documentElement;
+    root.dataset.windowsTitlebar = '';
+    root.style.setProperty('--dsh-windows-titlebar-height', WINDOWS_TITLEBAR_HEIGHT + 'px');
+  };
+  const root = document.documentElement as HTMLElement | null;
+  if (root === null) window.addEventListener('DOMContentLoaded', mark);
+  else mark();
+}
 const REMOTE_SOURCE_FINGERPRINT_PATTERN = /^[a-f0-9]{64}$/;
 
 function validSourceFingerprint(sourceId: string, value: unknown): value is string {
@@ -996,6 +1017,7 @@ function requestAppInfo(): Promise<Partial<DshChamberBridge>> {
 // bridge payload is requested -- the official shortcuts service reads
 // window.dshDesktop during boot, not after the info round-trip.
 markDocumentPlatform();
+markWindowsTitlebar();
 exposeDesktopCarrier();
 
 requestAppInfo().then(

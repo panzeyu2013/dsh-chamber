@@ -103,6 +103,8 @@ export const GROUPS = {
     'bridge-shim-surface.test.ts',
     // 原生 chrome 文案（tray / 对话框）的语言裁决与词典
     'shell-locale.test.ts',
+    // 上游席位锁：platform 标记 / dshDesktop 载体 / 失败分类 / Windows caption
+    'upstream-seats.test.ts',
     'test/ipc/bridge-shim-document.test.ts',
     // rc.2 dshDesktop 载体（官方 desktop preload 面）：字面量单源锁步 + 原生
     // 键盘桥行为（真 protocol + 内存存储，无 Electron/GUI）。

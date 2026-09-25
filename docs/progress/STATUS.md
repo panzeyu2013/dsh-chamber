@@ -329,9 +329,15 @@
   锁；既有约束下可删 0 组）。
 
 
-- **0.1.6→0.1.7 升级线的取件移植未执行（计划见 [todo/main-0.1.5-to-0.1.7-upgrade.md](todo/main-0.1.5-to-0.1.7-upgrade.md)）**：
-  rc.2 锚点与写面退役已落地，但计划 §7/§12 的 P0–P2 移植（更新链看门狗、原生崩溃诊断、安全模式、
-  python 载荷、启动失败恢复）与 §17-C 的 patch 通道仍未实现——逐项规格/验收/坑与必做清单见该文件 §8/§12/§13/§17。
+- **0.1.6→0.1.7 升级线的取件移植（计划见 [todo/main-0.1.5-to-0.1.7-upgrade.md](todo/main-0.1.5-to-0.1.7-upgrade.md)）**：
+  已落地 = 更新链看门狗（§12.1）、原生崩溃诊断（§12.2）、Electron 壳文案本地化（§12.3）、registry sidebar
+  条目与不变量放宽（§12.4）、安全模式（§12.5）、Windows caption 与上游席位锁（§12.6 的一部分）。
+  **未落地**：① §12.6 的 Electron 腿 native theme seat（`data-ds-theme-source` → 新 invoke 通道
+  `dsh-chamber:native-theme-set`；需同批重锚桥面计数/manifest/Swift 白名单/shim 载荷）与
+  `electronFuses`／Swift 窗形（`contentMinSize`/880×600）项；② §12.7 python 载荷
+  （`prepare-python-payload` + `primary-runtime-lock.json` + extraResources/发布链）；③ §12.8 读面能力门
+  （`plugin-capability.ts`）；④ §12.9 会话流健康臂的 rc.2 重判；⑤ §12.10 启动失败恢复（`startup-error.ts` 与 Swift 恢复框）；
+  ⑥ §17-C 上游 patch 通道（`patches/` + `patchedDependencies`）。逐项规格/验收/坑见计划 §8/§12/§13/§17。
 
 - **测试运行器并发上限（未闭合）**：`run-checks tests` 的全局文件池默认 `min(8, 核数)`——同窗口实测 c12 文件总工作
   217s vs c8 141s（每文件膨胀），吞吐收益递减，默认不动。并发已暴露的两处测试自身缺陷（`manager-api` 候选端口占满、

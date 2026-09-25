@@ -11,7 +11,10 @@
  * webContents.send calls (handlers live in shell-core.ts, pushes in electron-edges.ts).
  */
 
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Tray, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, session } from 'electron';
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Tray, nativeImage, nativeTheme, powerMonitor, powerSaveBlocker, safeStorage, session } from 'electron';
+/** 上游 windows-layout.ts 的镜像值（Windows caption 高度，dip）——preload.cts 内另有
+ *  同值副本（preload 运行时自带，不跨 CJS 边界导入）；两处相等由 upstream-seats 用例钉住。 */
+const WINDOWS_TITLEBAR_HEIGHT = 40;
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -655,8 +658,20 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
-    // 首帧前的窗口底色：与 dsh 前端深色主题一致，消除白屏闪烁。
-    backgroundColor: '#0f1115',
+    // Windows：上游形态（官方 desktop main 的 win32 分支）——隐藏系统标题栏，
+    // 由 titleBarOverlay 提供 caption 区；页面按 preload 打的 [data-windows-titlebar]
+    // 与 --dsh-windows-titlebar-height 布局（无该标记时仍是普通标题栏）。
+    // 其余平台保持首帧底色（与 dsh 前端深色主题一致，消除白屏闪烁）。
+    ...(process.platform === 'win32'
+      ? {
+          titleBarStyle: 'hidden' as const,
+          titleBarOverlay: {
+            height: WINDOWS_TITLEBAR_HEIGHT,
+            color: nativeTheme.shouldUseDarkColors ? '#1b1b1c' : '#f9fafb',
+            symbolColor: nativeTheme.shouldUseDarkColors ? '#f9fafb' : '#0f1115',
+          },
+        }
+      : { backgroundColor: '#0f1115' }),
     // 固定窗口标题：官方前端会把当前会话名投影到 document.title，不拦截
     // page-title-updated 则原生标题栏随选中会话变化。
     title: 'dsh-chamber-electron',

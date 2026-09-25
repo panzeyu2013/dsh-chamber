@@ -118,6 +118,9 @@ export const DESKTOP_CARRIER_FUNCTIONS = new Set([
   'desktopUpdatesApi',
   'exposeDesktopCarrier',
   'markDocumentPlatform',
+  // Windows caption seat: the win32-only DOM mark the Web UI's Windows branch keys
+  // off (upstream preload-windows.ts); not a dshChamber namespace.
+  'markWindowsTitlebar',
 ])
 
 /** preload factory → exposed namespace name (the mapping that cannot be guessed
