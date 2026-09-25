@@ -29,7 +29,6 @@ import {
 } from '../../startup-error.ts'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const repoRoot = path.join(here, '..', '..', '..', '..')
 const mainSource = readFileSync(path.join(here, '..', '..', 'main.ts'), 'utf8')
 const COPY = { exit: '退出', restart: '重启', safeModeRestart: '安全模式重启' }
 

@@ -339,8 +339,12 @@
   §17-C 上游 patch 通道的**两条腿**（运行期：`bundle-dsh` 逐字生成 `patchedDependencies` + 携带 `patches/`，
   runtime 锁由 `--refresh-lockfile` 重生成并记录 patch_hash；dev/根：本仓 `pnpm-workspace.yaml` 同集合 +
   仓内 `patches/` 副本 + 根锁重生成；registry 增 `patches` 字段 + 三条对拍用例；升级 checklist 增条目）。
-  **未落地**：① §12.10 启动失败恢复（`startup-error.ts` 接线 + Swift 恢复框；提交顺序与 main 侧接线面见计划
-  §12.10 执行注记）；② §17-C 收尾裁决：两条安装腿都已带 patch，但 node-pty 的 chamber 侧补偿
+  §12.10 启动失败恢复的 **TypeScript 半边**（`startup-error.ts` 三选/两选纯决策 + chamber 自持状态备份 +
+  main.ts 接线：五条 fatal 呈现点走恢复框、`runQuitCleanupChain` 单飞共享、目录锁句柄化、安全模式声明与显式传参；
+  12 条用例含 4 条 main.ts 接线锁）。
+  **未落地**：① §12.10 的 **Swift 半边**（`AppDelegate` 以 `NativeText` 为文案源叠 `RecoveryChoices`/
+  `runThreeChoiceRecovery`/`RecoveryPresentationGate`、`SidecarSupervisor` 先 `stop()` 释放 flock 再呈现、
+  三条 Swift 用例，以及随之恢复的跨语言字面量锁——Swift 壳还未声明 `DSH_CHAMBER_SAFE_MODE`）；② §17-C 收尾裁决：两条安装腿都已带 patch，但 node-pty 的 chamber 侧补偿
   （`ensure-harness-vendor` 解析 shim + `dsh-subprocess-local` 的 `ensure-spawn-helper` postinstall）尚未在真机安装后
   复核「补丁已生效、补偿可撤」——复核前保留（属**必要取舍**，不是未移植项）。
   逐项规格/验收/坑见计划 §8/§12/§13/§17。
