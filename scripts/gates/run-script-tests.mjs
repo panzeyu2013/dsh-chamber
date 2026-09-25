@@ -90,6 +90,7 @@ export const GROUPS = {
     'scripts/upstream/lockfile-store-path-mappings.test.mjs',
     'scripts/upstream/verify-mobile-anchors.test.mjs',
     'scripts/upstream/roster-parity.test.mjs',
+    'scripts/upstream/workspace-range-ratchet.test.mjs',
   ],
   // Release chain: workflow safety policy, dual-flavor artifact清单, packaging
   // manifest lockstep, bundled-payload notices (primary runtime).
@@ -130,6 +131,10 @@ export const SUBJECT_TESTS = [
   {
     path: 'scripts/upstream/roster-parity.test.mjs',
     reason: 'reconciles the pin bundle roster (vendor bundle cordis.patch.yml name set) with packages/renderer/src/chamber-covered.ts; the subject is the agreement between the two, not one module',
+  },
+  {
+    path: 'scripts/upstream/workspace-range-ratchet.test.mjs',
+    reason: 'locks the internal dependency ranges of the registry fork/seed packages against the upstream workspace-range policy; the subject is the registry-wide agreement, not one module',
   },
   {
     path: 'scripts/gates/install-gateway-pure.test.mjs',
