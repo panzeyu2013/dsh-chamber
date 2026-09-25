@@ -506,6 +506,22 @@ pnpm run test:swift     # UpdateStallWatchdogTests + UpdateAvailabilityTests
 4. `SidecarSupervisor.swift`：确认 `self.supervisor` 在 `start()` 前赋值、catch 里 `recoverFailedStartup` 先停后弹。
 5. 三个 Swift 用例（`StartupRecoveryTests`/`RecoveryChoicesTests`/`RuntimeRecoveryTests`）全部取件并适配 main 的 `NativeText` API。
 
+
+> **执行注记（2026-12 轮次侦察，动工前必读）**：
+> ① 本项的**提交顺序约束**：`startup-error.ts` 的三个运行时导出（`isSafeModeEnabled`、
+> `resolveStartupRecoveryAction`、`formatStartupFailureDetail`）只有 `main.ts` 接线才会消费——
+> 先落模块会被 `verify:no-dead-exports` 判死代码（本轮实测红：3 个导出无生产消费者）。
+> 因此 **接线与模块必须同一提交**；纯决策/备份用例可以先跑（去掉 ③ 接线锁与跨语言字面量锁后 8/8 绿）。
+> ② main 侧的接线面与分支不同名：main 的 `fatalMainError`（main.ts:57）当前**直接 `app.exit(1)`**
+> （计划坑②要的正是把它换成用户三选）；目录锁是 `const chamberLock = acquireChamberLock(...)`
+> （main.ts:1006，非模块级句柄，锁冲突点在 :1009 用单键 `showErrorBox`）——重启腿需要先把它提为
+> 可释放句柄；main **没有**分支的 `quitCleanupPromise`/`recoveryRelaunchInProgress`，退出清理在
+> `before-quit → will-quit`（main.ts:305 注释 + host-assembly 的 quitting 门）——恢复重启腿要复用
+> 同一条清理链并做单飞，不能新造第二条。
+> ③ 测试拆分：分支用例的 5 条 main.ts 接线锁 + `跨包/跨语言字面量锁步`（env 名 × 控制面/渲染端/
+> Swift `AppDelegate`/bridge-shim 四处一致）必须与 Swift 恢复框同批——Swift 壳现在还没有
+> `DSH_CHAMBER_SAFE_MODE` 声明（该锁的 Swift 断言本轮实测红）。
+
 **验收**：`pnpm run test:swift` 全绿（含重复 fatal 不 exit、spawn 失败先释放锁、两选/三选映射）；`node --test packages/desktop/test/desktop-shell/startup-recovery.test.ts`；`swift build` 干净。
 
 **坑**：① 绝不留两套呈现门；② 呈现后进程去向只能由用户选择决定（绝不静默 `exit(1)`）；③ `.app` relaunch 的清理判据必须真的 `state == .stopped`；④ 真机键位走查仍开放（runbook §8）。
