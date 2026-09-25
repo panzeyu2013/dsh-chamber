@@ -25,6 +25,7 @@ import type { TrustedIpc } from './renderer-trust.ts';
 import { atomicWritePrivateFileNoFollow, createControlPlane, ensurePrivateDirectoryNoFollow, readPrivateFileNoFollow } from './control-plane-module.ts';
 import { attemptDeepLinkProtocolRegistration, canRestoreMainWindow, decideDeepLinkProtocolRegistration, describeUnknownError, ensureLinuxProtocolDesktopFile, linuxAutostartDesktopEntry, linuxAutostartDirectory, resolveLinuxLaunchExecutable } from './deep-link.ts';
 import { createUpdateController, flashUpdateAttentionWindow } from './updater.ts';
+import { shellStrings } from './shell-locale.ts';
 import { acquireChamberLock } from './chamber-lock.ts';
 import { acquireHostRootLease, describeHostRootLeaseFailure } from './host-root-lease.ts';
 import { DEFAULT_CHAMBER_SETTINGS, computeQuitRisk, decideMainWindowClose, launchAtLoginReconcileDecision, readSettingsFile, shouldUpdaterQuitTakeOver, verifyLaunchAtLoginReadBack } from './chamber-settings.ts';
@@ -287,16 +288,19 @@ function maybeCreateTray(cp: PlaneHandle) {
     const image = nativeImage.createFromPath(iconPath);
     if (image.isEmpty()) throw new Error('icon image is empty');
     tray = new Tray(image);
-    tray.setToolTip(`dsh-chamber · 控制面 http://127.0.0.1:${cp.port} · ${cp.connectionState}`);
+    // 原生 chrome 文案走 shell-locale（上游 locale.ts 的等价物）：tray/对话框
+    // 由壳自己渲染，页面 i18n 管不到它们。
+    const copy = shellStrings(app.getLocale());
+    tray.setToolTip(`dsh-chamber · ${copy.controlPlane} http://127.0.0.1:${cp.port} · ${cp.connectionState}`);
     tray.setContextMenu(
       Menu.buildFromTemplate([
         {
-          label: '显示窗口',
+          label: copy.trayShowWindow,
           click: () => showMainWindow(),
         },
         { type: 'separator' },
         // Quit goes through before-quit → will-quit cleanup.
-        { label: '退出 dsh-chamber', click: () => app.quit() },
+        { label: copy.trayQuit, click: () => app.quit() },
       ]),
     );
     console.log('[dsh-chamber] 托盘已创建');
@@ -490,7 +494,8 @@ function installRendererRecovery(win: BrowserWindow): void {
     } else {
       recoveryGaveUp = true;
       console.error('[dsh-chamber] 渲染器反复异常或无进度，停止自动恢复');
-      dialog.showErrorBox('dsh-chamber 前端异常', '前端渲染器反复异常或无进度，已停止自动恢复。请重新启动应用。');
+      const copy = shellStrings(app.getLocale());
+      dialog.showErrorBox(copy.rendererCrashedTitle, copy.rendererCrashedMessage);
     }
   };
   win.webContents.on('did-start-loading', () => {
@@ -644,7 +649,7 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
     // 对话框 + 退出（与 loadURL 失败同 UX）。
     const message = `preload 构建产物缺失：${preloadPath}（先运行 build:preload）`;
     console.error(`[dsh-chamber] ${message}`);
-    dialog.showErrorBox('dsh-chamber 启动失败', message);
+    dialog.showErrorBox(shellStrings(app.getLocale()).startupFailedTitle, message);
     app.exit(1);
   }
   const win = new BrowserWindow({
@@ -774,7 +779,7 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
     if (quitRequested || win.isDestroyed()) return;
     const detail = describeUnknownError(loadError);
     if (fatalOnLoadFailure) {
-      dialog.showErrorBox('dsh-chamber 启动失败', `前端加载失败：\n${detail}`);
+      dialog.showErrorBox(shellStrings(app.getLocale()).startupFailedTitle, `前端加载失败：\n${detail}`);
       void controlPlane?.stop().catch(err => console.error('[dsh-chamber] 控制面停止失败：', err));
       app.exit(1);
     } else {
@@ -873,14 +878,15 @@ if (!gotTheLock) {
     // 需确认：在关窗前拦截（风险计算在前，异常不会静默吞掉退出）。
     event.preventDefault();
     confirmingQuit = true;
-    const detail = `退出将停止${risk.reasons.join('与')}。确定退出？`;
+    const copy = shellStrings(app.getLocale());
+    const detail = `${copy.quitDetailPrefix}${risk.reasons.join(copy.quitDetailJoin)}${copy.quitDetailSuffix}`;
     try {
       await dialog.showMessageBox({
         type: 'warning',
-        title: '退出 dsh-chamber？',
-        message: '退出 dsh-chamber？',
+        title: copy.quitConfirmTitle,
+        message: copy.quitConfirmTitle,
         detail,
-        buttons: ['退出', '取消'],
+        buttons: [copy.quitButton, copy.cancelButton],
         defaultId: 1,
         cancelId: 1,
         noLink: true,
@@ -985,7 +991,7 @@ if (!gotTheLock) {
     const chamberLock = acquireChamberLock({ userDataDir: runtimeBaseDir, shell: 'electron' });
     if (!chamberLock.ok) {
       console.error(`[dsh-chamber] ${chamberLock.error}`);
-      dialog.showErrorBox('dsh-chamber 已在运行', chamberLock.error);
+      dialog.showErrorBox(shellStrings(app.getLocale()).alreadyRunningTitle, chamberLock.error);
       app.exit(1);
       return;
     }
@@ -1000,7 +1006,7 @@ if (!gotTheLock) {
     } catch (error) {
       const detail = describeHostRootLeaseFailure(error);
       console.error(`[dsh-chamber] ${detail}`);
-      dialog.showErrorBox('dsh-chamber 启动失败', detail);
+      dialog.showErrorBox(shellStrings(app.getLocale()).startupFailedTitle, detail);
       app.exit(1);
       return;
     }
@@ -1206,7 +1212,7 @@ if (!gotTheLock) {
       await controlPlane.start();
     } catch (err) {
       const detail = describeUnknownError(err);
-      dialog.showErrorBox('dsh-chamber 启动失败', `控制面启动失败：\n${detail}`);
+      dialog.showErrorBox(shellStrings(app.getLocale()).startupFailedTitle, `控制面启动失败：\n${detail}`);
       app.exit(1);
       return;
     }

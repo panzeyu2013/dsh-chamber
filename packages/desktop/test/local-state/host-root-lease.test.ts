@@ -127,8 +127,8 @@ test('desktop main：flock → host-root 租约 → plane，quit 先放 L2 再�
   assert.ok(lockAt >= 0, 'main 必须取 L1 目录锁（acquireChamberLock）')
   assert.ok(leaseAt > lockAt, 'host-root 租约必须在 flock 成功之后取得')
   assert.ok(planeAt > leaseAt, 'host-root 租约必须早于 control-plane 构造（state-root 租约在构造期自取）')
-  assert.ok(main.includes("dialog.showErrorBox('dsh-chamber 启动失败', detail)"),
-    '租约冲突必须 loud 到原生对话框')
+  assert.ok(main.includes('dialog.showErrorBox(shellStrings(app.getLocale()).startupFailedTitle, detail)'),
+    '租约冲突必须 loud 到原生对话框（标题经 shell-locale，不写死语言）')
   assert.ok(main.includes('app.exit(1)'), '租约冲突必须 exit 1（fail-closed，不继续装配）')
   assert.match(main, /hostRootLease\?\.release\(\);([\s\S]{0,300}?)chamberLock\.handle\.release\(\);/u,
     'quit 必须按 L2→L1 逆序释放（反序会制造瞬时假冲突）')
