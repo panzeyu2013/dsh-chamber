@@ -538,6 +538,30 @@ pnpm run test:swift     # UpdateStallWatchdogTests + UpdateAvailabilityTests
 >      `await runQuitCleanupChain()` → `chamberLockHandle?.release()` → `app.exit(0)`（顺序即分支用例的
 >      4 条 index 断言）。
 
+> ⑤ **Swift 半边编辑计划（2026-12 侦察；TS 半边已落地，生产基线见 `790d2e64`）**：
+>   1. 分支 API 面（`AppDelegate` 静态成员，须整体取件并适配）：`RecoveryChoices`（三选/两选）、
+>      `RecoveryPhase`（startup/runtime，只改标题后缀）、`startupRecoveryKeyIsSafe`（Return 36 / keypad 76 /
+>      Esc 53 都命中安全项）、`recoverySafeButtonIndex = 2`、`startupRecoveryAction(for:choices:)`（未知响应
+>      同样落安全项）、`makeStartupRecoveryAlert`（纯构造，按钮序 + `\r` 默认高亮在安全项）、
+>      `runThreeChoiceRecovery`、`runStartupRecoveryAlert`/`runRuntimeRecoveryAlert`、`RecoveryPresentationGate`
+>      （NSLock 抢单次呈现权）+ `enterRecoveryPresentation`（gate 已置位时只 loud、不 present、不 exit）、
+>      `recoverFailedStartup`、`canRelaunchAfterCleanup`/`recoveryCleanupSummary`/`recoveryRelaunchBundleURL`/
+>      `recoveryRelaunchEnvironment`、`safeModeEnvironmentKey`/`isSafeModeEnabled`。
+>   2. main 侧**替换点**：`fatalAlertShown` + `presentFatalAlert(_:)`（AppDelegate.swift:973-987，单键 +
+>      sheet/runModal 后 `exit(1)`）与 `fatalStartup(_:) -> Never`（:1071-1084，单键 runModal + `exit(1)`）
+>      全部改走三选；呈现门由静态 bool 收敛到 `RecoveryPresentationGate`（绝不留两套门，计划坑①）。
+>   3. **文案源映射**：分支用 `ShellStrings`/`ShellLocaleResolver`（按 design 25 §5.1 不取件），main 用
+>      `NativeText`——标题复用既有 `fatal.startupFailedTitle` / `fatal.sidecarAbnormalTitle`，按钮需新增键
+>      （退出/重启/安全模式重启；退出可复用 `quit.*`，重启与安全模式重启是本项新增）。
+>   4. **relaunch 是新代码**：main 没有 bundle 自重启助手（分支的 `recoveryRelaunchBundleURL` 用 `Process` +
+>      `open` 语义重建同 bundle 并注入 `DSH_CHAMBER_SAFE_MODE=1`）；`canRelaunchAfterCleanup` 的判据必须真的
+>      看到 `state == .stopped`（计划坑③）。
+>   5. `SidecarSupervisor.swift`：确认 `self.supervisor` 在 `start()` 前赋值；spawn 失败的 catch 先
+>      `stop()`（释放 flock）再呈现恢复框，绝不持锁弹框。
+>   6. 用例：`StartupRecoveryTests`（251 行）/ `RecoveryChoicesTests`（69）/ `RuntimeRecoveryTests`（215）
+>      三条整体取件并适配 `NativeText`；随后恢复 TS 侧 `startup-recovery.test.ts` 尾注里的**跨语言字面量锁步**
+>      （env 名与页面全局名四处一致——Swift 声明 `DSH_CHAMBER_SAFE_MODE` 后该断言即可转绿）。
+
 **验收**：`pnpm run test:swift` 全绿（含重复 fatal 不 exit、spawn 失败先释放锁、两选/三选映射）；`node --test packages/desktop/test/desktop-shell/startup-recovery.test.ts`；`swift build` 干净。
 
 **坑**：① 绝不留两套呈现门；② 呈现后进程去向只能由用户选择决定（绝不静默 `exit(1)`）；③ `.app` relaunch 的清理判据必须真的 `state == .stopped`；④ 真机键位走查仍开放（runbook §8）。
