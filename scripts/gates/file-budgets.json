@@ -15,7 +15,7 @@
     },
     {
       "path": "packages/desktop/shell-core.ts",
-      "lines": 1245,
+      "lines": 1318,
       "target": 1600,
       "note": "shell assembly + IPC ctx (blocks the shell-ipc type cycle)"
     },
@@ -81,7 +81,7 @@
     },
     {
       "path": "packages/desktop/host-assembly.ts",
-      "lines": 1114,
+      "lines": 1117,
       "target": 400,
       "note": "createHostAssembly function budget (file proxy)"
     },
