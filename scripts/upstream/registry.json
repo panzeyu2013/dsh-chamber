@@ -46,6 +46,50 @@
       "retiresWhen": "dsh-client-modules exports optionalStringArray on its public ./client face"
     }
   ],
+  "patches": [
+    {
+      "spec": "@earendil-works/pi-ai@0.85.1",
+      "file": "patches/@earendil-works__pi-ai@0.85.1.patch",
+      "runtimeClosure": true,
+      "note": "pi-ai 流式修复；运行期闭包内的依赖（runtime lock 记录 patch_hash）"
+    },
+    {
+      "spec": "@electron/osx-sign@1.3.3",
+      "file": "patches/@electron__osx-sign@1.3.3.patch",
+      "runtimeClosure": false,
+      "note": "打包签名工具面；不在运行期闭包（allowUnusedPatches 豁免）"
+    },
+    {
+      "spec": "@fortune-sheet/core@1.0.4",
+      "file": "patches/@fortune-sheet__core@1.0.4.patch",
+      "runtimeClosure": false,
+      "note": "excel 预览依赖；不在运行期闭包（allowUnusedPatches 豁免）"
+    },
+    {
+      "spec": "@fortune-sheet/react@1.0.4",
+      "file": "patches/@fortune-sheet__react@1.0.4.patch",
+      "runtimeClosure": false,
+      "note": "excel 预览依赖；不在运行期闭包（allowUnusedPatches 豁免）"
+    },
+    {
+      "spec": "@yao-pkg/pkg@6.21.0",
+      "file": "patches/@yao-pkg__pkg@6.21.0.patch",
+      "runtimeClosure": false,
+      "note": "打包工具面；不在运行期闭包（allowUnusedPatches 豁免）"
+    },
+    {
+      "spec": "exceljs@4.4.0",
+      "file": "patches/exceljs@4.4.0.patch",
+      "runtimeClosure": false,
+      "note": "excel 载荷依赖；不在运行期闭包（allowUnusedPatches 豁免）"
+    },
+    {
+      "spec": "node-pty@1.2.0-beta.15",
+      "file": "patches/node-pty@1.2.0-beta.15.patch",
+      "runtimeClosure": true,
+      "note": "DSH_NODE_PTY_SPAWN_HELPER；运行期闭包内的依赖（runtime lock 记录 patch_hash）；dev/根安装腿仍待纳入"
+    }
+  ],
   "generatedBlocks": [
     "touchpoints.fork-mirror.api-gateway",
     "touchpoints.fork-mirror.client-web",

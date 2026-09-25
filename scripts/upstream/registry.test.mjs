@@ -222,3 +222,28 @@ test('生成块：声明与渲染面一一对应、往返、缺标记/未声明�
   assert.notEqual(applyBlocks(bogus, fixture).error, null, '--write 不得在存在未声明标记时静默成功')
   assert.notEqual(applyBlocks(doc, emptied).error, null, '--write 不得在未声明全部视图时静默成功')
 })
+
+test('patches 登记与 vendor pin 的 patchedDependencies 逐条一致（上游 patch 集合变化必须同批改）', () => {
+  const vendorWs = readFileSync(join(HERE, '..', '..', 'vendor', 'harness-checkout', 'pnpm-workspace.yaml'), 'utf8')
+  const block = /^patchedDependencies:\n(?: {2}.*\n)+/mu.exec(vendorWs)?.[0]
+  assert.ok(block !== undefined, 'vendor pin 的 pnpm-workspace.yaml 必须带 patchedDependencies')
+  const vendorSet = [...block.matchAll(/^ {2}'?([^':\n]+)'?: (patches\/[^\n]+)$/gmu)]
+    .map((match) => match[1] + ' -> ' + match[2])
+    .sort()
+  const registrySet = registry.patches.map((patch) => patch.spec + ' -> ' + patch.file).sort()
+  assert.deepEqual(registrySet, vendorSet, 'registry.patches 必须逐条镜像 vendor pin 的 patch 集合')
+  assert.ok(registry.patches.some((patch) => patch.runtimeClosure), '至少一条落在运行期闭包（否则 patch 通道没接上）')
+})
+
+test('patches 抓退化：坏 specifier / 坏文件路径 / 重复 spec 一律红', () => {
+  const badSpec = clone(); badSpec.patches[0].spec = 'not-a-spec'
+  assert.ok(validateRegistry(badSpec).some((item) => item.includes('patches[0].spec')))
+  const badFile = clone(); badFile.patches[0].file = 'patches/../escape.patch'
+  assert.ok(validateRegistry(badFile).some((item) => item.includes('patches[0].file')))
+  const duplicate = clone(); duplicate.patches[1].spec = duplicate.patches[0].spec
+  assert.ok(validateRegistry(duplicate).some((item) => item.includes('重复')))
+  const empty = clone(); empty.patches = []
+  assert.ok(validateRegistry(empty).some((item) => item.includes('patches 必须是非空数组')))
+  const wrongClosure = clone(); wrongClosure.patches[0].runtimeClosure = 'yes'
+  assert.ok(validateRegistry(wrongClosure).some((item) => item.includes('runtimeClosure')))
+})

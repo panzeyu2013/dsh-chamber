@@ -33,11 +33,17 @@ export const ENTRY_STATUSES = Object.freeze(['aligned', 'open', 'accepted', 'not
 /** 需要 `classify` 块（文件级分类）的类型。 */
 export const CLASSIFIED_TYPES = Object.freeze(['fork', 'seed'])
 
-const TOP_KEYS = ['schema', 'pins', 'authorityEnum', 'chamberNamedForks', 'excludedUpstreamDirs', 'criteriaCodeOnly', 'vendorSourceConsumers', 'generatedBlocks', 'entries', 'notes']
+const TOP_KEYS = ['schema', 'pins', 'authorityEnum', 'chamberNamedForks', 'excludedUpstreamDirs', 'criteriaCodeOnly', 'vendorSourceConsumers', 'patches', 'generatedBlocks', 'entries', 'notes']
 const ENTRY_KEYS = ['id', 'type', 'name', 'ours', 'upstream', 'upstreamFormer', 'versionAnchor', 'classify', 'authority', 'criteria', 'deviations', 'relatedGates', 'symbols', 'evidence', 'status', 'rationale']
 const CLASSIFY_KEYS = ['patched', 'own', 'ownPrefix', 'ownNotes', 'dropped', 'droppedNotes']
 /** `vendorSourceConsumers[]` 的字段集（C16：登记一条 vendor 源直穿的最小机械事实）。 */
 const VENDOR_CONSUMER_KEYS = ['consumer', 'vendorFile', 'symbols', 'reason', 'retiresWhen']
+/** `patches[]` 的字段集（§17-C：上游 pnpm patch 集合的登记面）。 */
+const PATCH_KEYS = ['spec', 'file', 'runtimeClosure', 'note']
+/** `name@version`（scoped 或裸名）。 */
+const PATCH_SPEC_PATTERN = /^(?:@[^/@\s]+\/)?[^@/\s]+@[^@\s]+$/u
+/** patch 文件必须落在仓内 patches/ 目录。 */
+const PATCH_FILE_PATTERN = /^patches\/[^/]+\.patch$/u
 /** `vendorSourceConsumers[].symbols[]` 的允许形态（一个 ECMAScript 标识符）。 */
 const VENDOR_SYMBOL_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/u
 const ID_PATTERN = /^(fork|seed|seam|mirror|artifact|seat)\.[a-z0-9][a-z0-9-]*$/
@@ -225,6 +231,29 @@ export function validateRegistry(registry) {
     }
   }
 
+  // patches（§17-C / §17-D）：上游 pnpm patch 集合的登记面。集合与字节由 vendor pin 拥有
+  // （vendor/harness-checkout/{pnpm-workspace.yaml,patches/}），这里登记「我方运行期安装已纳入」
+  // 的机械事实：specifier ↔ patch 文件 ↔ 是否落在运行期闭包。集合漂移由 registry.test.mjs
+  // 对 vendor pin 的 patchedDependencies 直接对拍（可重锚触点）。
+  if (registry.patches !== undefined) {
+    if (!Array.isArray(registry.patches) || registry.patches.length === 0) push('patches 必须是非空数组')
+    else {
+      const seenSpecs = new Set()
+      for (const [index, patch] of registry.patches.entries()) {
+        const at = `patches[${index}]`
+        if (!isPlainObject(patch)) { push(`${at} 不是对象`); continue }
+        for (const key of Object.keys(patch)) if (!PATCH_KEYS.includes(key)) push(`${at} 未知字段: ${key}`)
+        if (typeof patch.spec !== 'string' || !PATCH_SPEC_PATTERN.test(patch.spec)) push(`${at}.spec 非法: ${JSON.stringify(patch.spec)}`)
+        if (typeof patch.file !== 'string' || !PATCH_FILE_PATTERN.test(patch.file)) push(`${at}.file 必须是 patches/*.patch: ${JSON.stringify(patch.file)}`)
+        if (typeof patch.runtimeClosure !== 'boolean') push(`${at}.runtimeClosure 必须是布尔（运行期锁是否记录该 patch）`)
+        if (patch.note !== undefined && (typeof patch.note !== 'string' || patch.note === '')) push(`${at}.note 必须是非空字符串`)
+        if (typeof patch.spec === 'string') {
+          if (seenSpecs.has(patch.spec)) push(`${at}.spec 重复: ${patch.spec}`)
+          seenSpecs.add(patch.spec)
+        }
+      }
+    }
+  }
   if (!Array.isArray(registry.entries) || registry.entries.length === 0) {
     push('entries 必须是非空数组')
     return findings

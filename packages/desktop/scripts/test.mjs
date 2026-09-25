@@ -156,6 +156,8 @@ export const GROUPS = {
     'scripts/control-plane-freshness.test.mjs',
     // python 载荷 machinery（C5：锁校验 / 解包器 / dry-run 离线保证 / 摘要纪律）
     'scripts/prepare-python-payload.test.mjs',
+    // 上游 pnpm patch 通道（§17-C）：pin 集合 → 运行期 workspace → runtime lock 的锁步
+    'scripts/upstream-patches.test.mjs',
     // lockstep of this manifest + the zero-test guard
     'scripts/test-runner-lockstep.test.mjs',
   ],

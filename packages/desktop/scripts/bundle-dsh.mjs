@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { commitBundleSwap, recoverBundleSwap } from './bundle-swap.mjs';
 import { bundlePnpmLaunch } from './bundle-pnpm-launcher.mjs';
 import { renderAllowBuildsBlock, pruneRuntimeArtifacts } from '@dsh-chamber/dsh-runtime';
+import { renderRuntimeWorkspace, stageUpstreamPatches, upstreamPatchedDependencies } from './upstream-patches.mjs';
 
 /**
  * 将 dsh 官方发布包 @deepseek-ai/dsh 安装为本地运行时（方案 B）。
@@ -123,10 +124,18 @@ writeFileSync(
   path.join(work, 'package.json'),
   `${JSON.stringify({ name: 'dsh-embedded-runtime', version: '0.0.0', private: true, dependencies: { '@deepseek-ai/dsh': VERSION } }, undefined, 2)}\n`,
 );
+// 上游 pnpm patch channel（§17-C）：运行期安装必须携带 pin 的 patch 集合——
+// patchedDependencies 逐字来自 vendor 树的 pnpm-workspace.yaml，patch 文件拷进
+// work 目录（随交换落进 vendor/dsh/patches/）。allowUnusedPatches：运行期图只用
+// 上游集合的子集，pnpm 默认会对图外条目报 ERR_PNPM_UNUSED_PATCH。
 writeFileSync(
   path.join(work, 'pnpm-workspace.yaml'),
-  `minimumReleaseAge: 0\nallowBuilds:\n${renderAllowBuildsBlock()}\n`,
+  renderRuntimeWorkspace(renderAllowBuildsBlock(), upstreamPatchedDependencies()),
 );
+{
+  const staged = stageUpstreamPatches(work);
+  console.log(`[bundle-dsh] 上游 patch 通道：${staged.files} 个 patch 文件 + ${staged.entries} 条 patchedDependencies（图外条目由 allowUnusedPatches 忽略）`);
+}
 
 /**
  * 解析 pnpm 命令：只复用 PATH 上精确匹配的版本；否则以同一精确版本的

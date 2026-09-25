@@ -52,6 +52,7 @@
 - [ ] `pnpm --filter @dsh-chamber/desktop run bundle:dsh -- --force --refresh-lockfile`（runtime锁文件版本变化时必须 `--refresh-lockfile`，否则 `ERR_PNPM_OUTDATED_LOCKFILE`）。
 - [ ] 冒烟：`node packages/desktop/vendor/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js --version` = 目标版本。
 - [ ] `allowBuilds` / `DENY_BUILDS` 复核：上游新增原生依赖时显式裁决（单源生成点 + 测试钉住），不留沉默的ignored builds。
+- [ ] 上游 patch 集合变化（§17-C）：`vendor/harness-checkout/{pnpm-workspace.yaml,patches/}` 的 `patchedDependencies` 与 registry 的 `patches` 逐条对拍（`node --test scripts/upstream/registry.test.mjs`），再跑 `pnpm --filter @dsh-chamber/desktop run bundle:dsh -- --force --refresh-lockfile` 让 runtime lock 记录 patch set；`node --test packages/desktop/scripts/upstream-patches.test.mjs` 在集合漂移时红（`allowUnusedPatches` 只豁免图外条目，图内条目必须有 patch_hash）。
 
 ## 6. 回归
 
