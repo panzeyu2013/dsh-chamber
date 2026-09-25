@@ -49,6 +49,11 @@ import { errorMessage } from './error-text.ts'
 import { pluginRowsOf, projectInstalledRows, type InstalledRowView } from './plugin-model.ts'
 import { loadPluginInventory, type PluginInventorySnapshot } from './plugin-inventory-api.ts'
 import {
+  officialPluginsPageSourceId,
+  probeOfficialPluginsPage,
+  type OfficialPluginsPageCapability,
+} from './plugin-capability.ts'
+import {
   chamberBadgeClass,
   categoryLabel,
   roleBadgeClass,
@@ -96,6 +101,21 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   /** The RAW registry instance id (no `gateway-` proxy prefix) — every /chamber
    *  REST wrapper and gateway IPC takes it; the wrappers own the /api/i/gateway-<id> prefix. */
   const gatewayId = target.kind === 'gateway' ? target.sourceId.slice('gateway-'.length) : null
+  /** Official Plugins page verdict for THIS instance ('probing' = no claim yet). */
+  const [officialPage, setOfficialPage] = useState<OfficialPluginsPageCapability | 'probing'>('probing')
+  // Official Plugins page capability (design 05 §5, C 分层 2026-09): the instance's
+  // own page is reachable exactly when its client boot graph carries the
+  // ui-plugin-manager row. `unknown` renders NOTHING — a failed probe must never be
+  // presented as "this instance cannot manage plugins".
+  const officialPageSourceId = officialPluginsPageSourceId(target)
+  useEffect(() => {
+    let cancelled = false
+    setOfficialPage('probing')
+    void probeOfficialPluginsPage(officialPageSourceId).then((verdict) => {
+      if (!cancelled) setOfficialPage(verdict)
+    })
+    return () => { cancelled = true }
+  }, [officialPageSourceId])
 
   const [sshPhase, setSshPhase] = useState<ViewPhase>('loading')
   const [localManifest, setLocalManifest] = useState<LocalPluginManifest | null>(null)
@@ -504,6 +524,13 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       </p>
       {isGateway && seedCacheError !== null ? <p className={css.error} role="alert">{seedCacheError}</p> : null}
       {isGateway && chamberCacheAbsent ? <p className={css.hint} role="status">{t('chamberSeedCacheAbsent')}</p> : null}
+      {/* C 分层：用户插件管理交还实例内官方 Plugins 页（2026-09 裁决）。能力门：
+          该页只在实例启动图带 ui-plugin-manager 行时存在；不可用就只提示（绝不恢复
+          chamber 写面），探测失败不表态。 */}
+      {officialPage === 'available' ? <p className={css.hint}>{t('pluginsOfficialPageHint')}</p> : null}
+      {officialPage === 'unavailable'
+        ? <p className={css.hint} role="status">{t('pluginsOfficialPageUnsupported')}</p>
+        : null}
       <div className={css.chamberTable}>
         <div className={clsx(css.chamberTableRow, css.chamberTableHead)}>
           <span>{t('pluginsColName')}</span>

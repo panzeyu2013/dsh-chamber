@@ -20,6 +20,8 @@ const GROUPS = {
     'test/plugin-inventory/chamber-rows.test.ts',
     'test/plugin-inventory/plugin-diagnostic.test.ts',
     'test/plugin-inventory/plugin-inventory.test.ts',
+    // 官方 Plugins 页能力门：图裁决 / 目标→代理源 id / 探测的分类纪律
+    'test/plugin-inventory/plugin-capability.test.ts',
     'test/plugin-inventory/plugin-inventory-text.test.ts',
   ],
   // plugin-management: 只读行模型、PluginDialog 源码级接线锁与浏览器侧单一定义锁步

@@ -244,6 +244,8 @@ export const zh = {
   chamberSyncUpToDate: '已是最新，无需同步',
   chamberSyncFailed: '同步失败：',
   chamberSeedCacheAbsent: '网关尚未同步 chamber 组件',
+  pluginsOfficialPageHint: '插件安装 / 卸载 / 启停请在实例内的官方 Plugins 页面进行——chamber 只显示自己播种的宿主包状态。',
+  pluginsOfficialPageUnsupported: '该实例的运行时早于官方插件页（启动图没有 ui-plugin-manager 行）：chamber 不提供用户插件管理，也不为它恢复写面——请先在实例侧升级运行时。',
   chamberVersionDrift: '版本漂移',
   chamberNotSynced: '未同步',
   // chamber 内建表 badge 标签：短标签 + 色调由渲染层映射。
@@ -528,6 +530,8 @@ export const en: Record<SettingsConnectionsKey, string> = {
   chamberSyncUpToDate: 'Already up to date',
   chamberSyncFailed: 'Sync failed: ',
   chamberSeedCacheAbsent: 'The gateway has no chamber packages synced yet',
+  pluginsOfficialPageHint: 'Install, remove or enable plugins on the instance’s own Plugins page — chamber only shows the host packages it seeds.',
+  pluginsOfficialPageUnsupported: 'This instance predates the official Plugins page (its boot graph has no ui-plugin-manager row): chamber does not manage user plugins and will not grow a second writer — update the instance runtime first.',
   chamberVersionDrift: 'Version drift',
   chamberNotSynced: 'Not synced',
   // Chamber built-in table badge labels (plan 24 B1.5): short label + tone mapped by the renderer.
