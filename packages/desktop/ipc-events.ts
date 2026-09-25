@@ -22,6 +22,11 @@ export const IPC_CHANNELS = {
   SETTINGS_SET: 'dsh-chamber:settings-set',
   SETTINGS_CHANGED: 'dsh-chamber:settings-changed',
 
+  /** 原生外观跟随页面主题源（上游 desktop 的 `dsh-desktop:native-theme-set`）：
+   *  页面 bootstrap 观察 html[data-ds-theme-source]，值经白名单（light|dark|system）
+   *  落到宿主外观。 */
+  NATIVE_THEME_SET: 'dsh-chamber:native-theme-set',
+
   NOTIFY: 'dsh-chamber:notify',
   NOTIFICATIONS_READY: 'dsh-chamber:notifications-ready',
   NOTIFICATION_OPEN_ACK: 'dsh-chamber:notification-open-ack',

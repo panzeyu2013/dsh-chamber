@@ -10,7 +10,7 @@
  * focus / launchApp / login item / isPackaged) are declared on the contract
  * but NOT implemented here — their Electron actions live in main.ts.
  */
-import { Notification, app, dialog, powerMonitor, shell } from 'electron';
+import { Notification, app, dialog, nativeTheme, powerMonitor, shell } from 'electron';
 import type { BrowserWindow } from 'electron';
 import { rendererPushDelivered, type HostEdges, type HostMessageOptions } from './shell-core.ts';
 import { describeUnknownError } from './deep-link.ts';
@@ -40,6 +40,7 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
   | 'showNativeNotification'
   | 'notificationSupported'
   | 'setBadge'
+  | 'nativeThemeSet'
   | 'badgeCountApiAvailable'
   | 'isFocused'
   | 'onSystemResume'
@@ -171,6 +172,17 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
     },
 
     /** BADGE_COUNT 宿主腿 apply 叶：异常安全绝不 throw；平台门与裁决留 core（badge.ts）。 */
+    /** 原生外观随应用主题（上游 desktop main 设 nativeTheme.themeSource；页面
+     *  bootstrap 观察 html[data-ds-theme-source]）。取值已由 core 白名单校验，
+     *  这里异常安全、绝不 throw。 */
+    nativeThemeSet(source: 'light' | 'dark' | 'system') {
+      try {
+        nativeTheme.themeSource = source;
+      } catch (error) {
+        console.error('[electron-edges] nativeThemeSet 失败：' + describeUnknownError(error));
+      }
+    },
+
     setBadge(count: number) {
       try {
         app.setBadgeCount(count);

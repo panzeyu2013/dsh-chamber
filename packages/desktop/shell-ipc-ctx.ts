@@ -46,6 +46,7 @@ export interface ShellIpcDeps {
     | 'showNativeNotification'
     | 'notificationSupported'
     | 'setBadge'
+    | 'nativeThemeSet'
     | 'badgeCountApiAvailable'
     | 'isFocused'
     | 'onSystemResume'

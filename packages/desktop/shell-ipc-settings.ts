@@ -104,6 +104,18 @@ export function registerSettingsHandlers(ctx: ShellIpcCtx): void {
     flavor: hostFacts.flavor,
   }));
 
+  // 原生外观跟随页面主题（上游 dsh-desktop:native-theme-set）：来源是页面 bootstrap
+  // 观察到的 html[data-ds-theme-source]，不是页面 API ⇒ 白名单只放三个合法值；非法值
+  // loud 回错而不猜（绝不把任意串塞进 nativeTheme.themeSource）。宿主叶异常安全。
+  deps.ipc.handle(IPC_CHANNELS.NATIVE_THEME_SET, (payload: unknown) => {
+    const source = (payload as { source?: unknown } | null)?.source;
+    if (source !== 'light' && source !== 'dark' && source !== 'system') {
+      return { error: 'native-theme-set:invalid-source' };
+    }
+    deps.edges.nativeThemeSet(source);
+    return { ok: true };
+  });
+
   // Chamber settings 查询：非秘密投影（当前值 + 平台能力门控）。
   deps.ipc.handle(IPC_CHANNELS.SETTINGS_GET, () => chamberSettingsStatus());
 

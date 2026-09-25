@@ -19,7 +19,7 @@
  * 断言面（生成物 == 提交物绿 + 通道数守恒）：
  *   ① 重生成 JSON == 提交物 packages/desktop/bridge-manifest.json（文本级）；
  *   ② 重生成 Swift == 提交物 macos/Sources/DSHChamber/Generated/BridgeManifest.swift；
- *   ③ 通道数守恒：counts {invoke:51, push:9, total:60} 与两列表长度自洽；
+ *   ③ 通道数守恒：counts {invoke:52, push:9, total:61} 与两列表长度自洽；
  *   ④ 无死键：manifest 键集 == ipc-events.ts IPC_CHANNELS 表键集（60 全覆盖、
  *      键/通道无重复、invoke/push 无交集 —— 生成器内部同样校验并 loud
  *      失败，此处以测试侧复刻解析把该事实变成可见断言）；
@@ -126,19 +126,19 @@ test('② 重生成 Swift 与提交物 BridgeManifest.swift 逐字节一致', ()
   )
 })
 
-test('③ 通道数守恒：counts {invoke:51, push:9, total:60} 与两列表长度自洽', () => {
+test('③ 通道数守恒：counts {invoke:52, push:9, total:61} 与两列表长度自洽', () => {
   const { manifest } = regenerated()
   // 当前仓库事实（60 = 51 + 9，与 ipc-surface-mirror.test.ts 的集合断言
   // 同一批事实）；通道增删时须与两提交物同步更新。
-  assert.deepEqual(manifest.counts, { invoke: 51, push: 9, total: 60 })
+  assert.deepEqual(manifest.counts, { invoke: 52, push: 9, total: 61 })
   assert.equal(manifest.invoke.length, manifest.counts.invoke)
   assert.equal(manifest.push.length, manifest.counts.push)
   assert.equal(manifest.invoke.length + manifest.push.length, manifest.counts.total)
 })
 
-test('④ 无死键：manifest 键/通道集 == ipc-events.ts IPC_CHANNELS 表（60 全覆盖、无重复、无交集）', () => {
+test('④ 无死键：manifest 键/通道集 == ipc-events.ts IPC_CHANNELS 表（61 全覆盖、无重复、无交集）', () => {
   const table = ipcChannelTable()
-  assert.equal(table.length, 60, 'IPC_CHANNELS 应恰为 60 键（当前事实）')
+  assert.equal(table.length, 61, 'IPC_CHANNELS 应恰为 61 键（当前事实）')
   const { manifest } = regenerated()
   const covered = [...manifest.invoke, ...manifest.push]
   assert.equal(covered.length, table.length, '两向条目总数必须 == 常量表键数（无死键/无幻影键）')

@@ -46,12 +46,30 @@ test('S-52: both flavors expose the upstream dshDesktop carrier', () => {
   }
 })
 
-// native theme seat（上游 apps/desktop/src/preload-theme.ts + main.ts 的 syncNativeTheme）
-// 尚未移植：Electron 腿需要一条新的 invoke 通道（dsh-chamber:native-theme-set）——
-// 它同时改桥面计数（manifest / Swift 白名单 / shim 载荷锁步），属跨面包改动；Swift
-// 腿已由 ShellPageFacts → applyAppearance 承担（design 25 §5.3，本文件不再需要该臂）。
-// 开放项登记在 STATUS「取件移植」条；接线后把原断言补回本文件（原文见 git 历史：
-// backup/v016-alpha1-pre-reset:packages/desktop/upstream-seats.test.ts）。
+test('native theme seat: the Electron arm observes data-ds-theme-source like upstream', () => {
+  // Upstream syncNativeTheme() (apps/desktop/src/preload-theme.ts): the Web UI writes
+  // html[data-ds-theme-source]; the bootstrap mirrors it to the host so window chrome
+  // follows the APP palette instead of the OS appearance. Only the Electron arm
+  // carries the observer — the Swift shell already follows page facts
+  // (ShellPageFacts → applyAppearance, design 25 §5.3) — so the shared channel keeps
+  // its member on both faces while the node edge is a documented no-op.
+  assert.match(preload, /'data-ds-theme-source'/, 'the observer reads the theme-source attribute')
+  assert.match(preload, /'dsh-chamber:native-theme-set'/, 'the observer invokes the theme channel')
+  assert.match(preload, /typeof MutationObserver === 'undefined'\) return/, 'DOM-less hosts skip')
+  assert.match(preload, /function syncNativeTheme\(\): void \{/, 'bootstrap-internal observer')
+  assert.match(preload, /if \(process\.platform !== 'darwin'\) return/, 'macOS-only like upstream')
+  assert.match(preload, /MutationObserver\(send\)\.observe\(document\.documentElement/,
+    'the observer watches the root attribute')
+  const shellSettings = readFileSync(join(DESKTOP, 'shell-ipc-settings.ts'), 'utf8')
+  assert.match(shellSettings, /IPC_CHANNELS\.NATIVE_THEME_SET/, 'core handles the channel')
+  assert.match(shellSettings, /deps\.edges\.nativeThemeSet\(source\)/, 'core routes it through the host edge')
+  const electronEdges = readFileSync(join(DESKTOP, 'electron-edges.ts'), 'utf8')
+  assert.match(electronEdges, /nativeTheme\.themeSource = source/, 'Electron sets nativeTheme.themeSource')
+  const nodeEdges = readFileSync(join(DESKTOP, 'node-edges.ts'), 'utf8')
+  assert.match(nodeEdges, /nativeThemeSet\(_source: 'light' \| 'dark' \| 'system'\)/,
+    'the Swift face keeps the member for the shared edge type')
+  assert.match(nodeEdges, /显式 no-op/, 'the Swift arm documents why it does not forward the edge')
+})
 
 test('S-52: the carrier classifies the failed operation like upstream', () => {
   // Upstream DesktopUpdateFailureKind: the official error copy is chosen from

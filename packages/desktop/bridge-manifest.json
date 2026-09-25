@@ -13,6 +13,10 @@
       "key": "SETTINGS_SET"
     },
     {
+      "channel": "dsh-chamber:native-theme-set",
+      "key": "NATIVE_THEME_SET"
+    },
+    {
       "channel": "dsh-chamber:notify",
       "key": "NOTIFY"
     },
@@ -244,8 +248,8 @@
     }
   ],
   "counts": {
-    "invoke": 51,
+    "invoke": 52,
     "push": 9,
-    "total": 60
+    "total": 61
   }
 }

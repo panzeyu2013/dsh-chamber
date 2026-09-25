@@ -42,8 +42,14 @@ import vm from 'node:vm'
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
-/** The internal hydration channel: no namespace method exposes it. */
-export const INTERNAL_INVOKE_CHANNELS = new Set(['dsh-chamber:info'])
+/**
+ * Internal bootstrap channels: no namespace method exposes them, so they are not
+ * part of the preload↔shim member comparison but must still be in the manifest.
+ *   - info: the hydrated scalars (requestAppInfo);
+ *   - native-theme-set: the macOS theme-source observer (upstream
+ *     preload-theme.ts; Electron arm only, the Swift shell follows page facts).
+ */
+export const INTERNAL_INVOKE_CHANNELS = new Set(['dsh-chamber:info', 'dsh-chamber:native-theme-set'])
 
 /**
  * The frozen surface totals. The per-member comparison only proves that
@@ -121,6 +127,9 @@ export const DESKTOP_CARRIER_FUNCTIONS = new Set([
   // Windows caption seat: the win32-only DOM mark the Web UI's Windows branch keys
   // off (upstream preload-windows.ts); not a dshChamber namespace.
   'markWindowsTitlebar',
+  // Native theme seat: the macOS-only data-ds-theme-source observer (upstream
+  // preload-theme.ts); it invokes the internal channel, not a namespace method.
+  'syncNativeTheme',
 ])
 
 /** preload factory → exposed namespace name (the mapping that cannot be guessed

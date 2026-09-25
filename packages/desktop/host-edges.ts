@@ -97,6 +97,12 @@ export interface HostEdges {
   /** keep-awake（design 14 D5）：powerSaveBlocker prevent-app-suspension
    *  start/stop（blocker id 属实现侧宿主态）。 */
   setKeepAwake(on: boolean): void
+  /**
+   * 原生外观跟随页面主题源（上游 `dsh-desktop:native-theme-set`）：core 侧已做
+   * 白名单校验（light|dark|system），实现侧异常安全、绝不 throw。Electron =
+   * `nativeTheme.themeSource`；Swift = 页面事实（ShellPageFacts → applyAppearance）
+   * 已承担同一职责，该边为显式 no-op（见 node-edges.ts）。 */
+  nativeThemeSet(source: 'light' | 'dark' | 'system'): void
   /** 系统 resume 事件订阅（design 14 D4；held-resume 补发点在 core）。 */
   onSystemResume(cb: (timestamp: number) => void): void
   /** 主窗口 'show' 事件订阅（B9：held-resume/通知补发点）。 */

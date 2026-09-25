@@ -15,7 +15,7 @@
  *  ③ 顶层面：preload exposeInMainWorld('dshChamber', {…}) 的 13 个键
  *     （4 标量 + 10 命名空间）== shim dshChamberApi 键；
  *  ④ invoke 通道集：preload 全部 invoke 字面量 == shim 全部 invoke 字面量
- *     == manifest invoke 集（51）；push 通道集：preload 全部
+ *     == manifest invoke 集（52）；push 通道集：preload 全部
  *     ipcRenderer.on 字面量 == shim PUSH_EVENTS 值 == manifest push 集（9）；
  *  ⑤ 无 poc-unimplemented 兜底残留：shim 不含 pocUnimplemented/rejectMethods
  *     代码形态（头部注记文本仅描述 sidecar 桩，不属于兜底代码）。
@@ -218,7 +218,10 @@ test('③ 顶层面：preload expose 键 == shim dshChamberApi 键（4 标量 + 
   assert.deepEqual(shimKeys, expected, 'shim dshChamberApi 键应为 4 标量 + 10 命名空间')
 })
 
-test('④ invoke/push 通道集：preload == shim == manifest（51 invoke / 9 push）', () => {
+test('④ invoke/push 通道集：preload == shim == manifest（52 invoke / 9 push）', () => {
+  // 内部 bootstrap 通道（无命名空间方法暴露）：与 verify-shim-payload-shape 的
+  // INTERNAL_INVOKE_CHANNELS 同集——info hydration + macOS 主题源 observer。
+  const INTERNAL_INVOKE = ['dsh-chamber:info', 'dsh-chamber:native-theme-set']
   const preloadInvoke = new Set<string>()
   const preloadPush = new Set<string>()
   for (const namespace of NAMESPACES) {
@@ -231,7 +234,7 @@ test('④ invoke/push 通道集：preload == shim == manifest（51 invoke / 9 pu
       else preloadInvoke.add(channel)
     }
   }
-  preloadInvoke.add('dsh-chamber:info') // info 是 shim/preload 内部 hydration 通道（无暴露方法）
+  for (const channel of INTERNAL_INVOKE) preloadInvoke.add(channel)
   const shimInvoke = new Set<string>()
   const shimUsedPush = new Set<string>()
   const pushEvents = shimPushEvents()
@@ -243,7 +246,7 @@ test('④ invoke/push 通道集：preload == shim == manifest（51 invoke / 9 pu
       else shimInvoke.add(channel)
     }
   }
-  shimInvoke.add('dsh-chamber:info')
+  for (const channel of INTERNAL_INVOKE) shimInvoke.add(channel)
   // 集相等：shim 未遗漏/未发明任何 preload 用过的通道。
   assert.deepEqual(shimInvoke, preloadInvoke, 'shim invoke 通道集应与 preload 一致')
   assert.equal(shimInvoke.size, manifest.counts.invoke, `invoke 通道应覆盖 manifest 的 ${manifest.counts.invoke} 条`)

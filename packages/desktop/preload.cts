@@ -974,6 +974,28 @@ function exposeDesktopCarrier(): void {
  *  shared Web UI -- including the shortcuts service's desktop detection --
  *  sees a desktop runtime. Deferred to DOMContentLoaded when the preload runs
  *  before the document root exists. */
+function syncNativeTheme(): void {
+  // Upstream syncNativeTheme() (apps/desktop/src/preload-theme.ts): the Web UI writes
+  // html[data-ds-theme-source]; the bootstrap mirrors it to the host so window chrome
+  // follows the APP palette instead of the OS appearance ('system' keeps following the
+  // OS). Bootstrap-internal: not part of the page's dshChamber surface.
+  if (process.platform !== 'darwin') return;
+  if (typeof document === 'undefined' || document === null || document.documentElement === undefined) return;
+  if (typeof MutationObserver === 'undefined') return;
+  const attribute = 'data-ds-theme-source';
+  let sent: string | null = null;
+  const send = (): void => {
+    const value = document.documentElement.getAttribute(attribute);
+    if (value === null || value === sent) return;
+    sent = value;
+    // Fire-and-forget: a rejected host invoke must never break the bootstrap (the
+    // host edge is exceptionally safe; the channel name is pinned by upstream-seats).
+    void ipcRenderer.invoke('dsh-chamber:native-theme-set', { source: value }).catch(() => undefined);
+  };
+  new MutationObserver(send).observe(document.documentElement, { attributes: true, attributeFilter: [attribute] });
+  send();
+}
+
 function markDocumentPlatform(): void {
   // A host without a document (text-level test harnesses) skips: a real renderer
   // always has the root, which is what upstream assumes too.
@@ -1018,6 +1040,7 @@ function requestAppInfo(): Promise<Partial<DshChamberBridge>> {
 // window.dshDesktop during boot, not after the info round-trip.
 markDocumentPlatform();
 markWindowsTitlebar();
+syncNativeTheme();
 exposeDesktopCarrier();
 
 requestAppInfo().then(

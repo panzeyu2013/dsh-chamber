@@ -326,7 +326,7 @@ interface HostEdges {
 > 注：与 v2 草案差异 = 新增 `rendererPush`/`mainWindowAlive`/`badgeCountApiAvailable`/
 > `retireNotificationsForSources`；`showNativeNotification` 带 `clickRoute` 并返回 `{dispose, shown}`；
 > `setBadge` 判别形态、`showMessage` 归 number（原 `pickPluginSource` 随写面退役删除）；v1 草案的
-> `pickDirectory()` 已删除——`desktop_pick_directory` 在 IPC_CHANNELS（60 键 = 51 invoke + 9 push）与 preload
+> `pickDirectory()` 已删除——`desktop_pick_directory` 在 IPC_CHANNELS（61 键 = 52 invoke + 9 push）与 preload
 > 中均已不存在（仅 05 §7.4 旧文残留，A10）。宿主对象登记/淘汰（BoundedActiveNotifications 持 Electron
 > Notification、淘汰=evicted.close()）留 electron-edges，core 只持有界 ACK 队列/去重/限速（B4）。
 > **`notifyClicked` 与 `resolveResource` 已作为零消费者死契约删除**（`host-edges.ts` 头注：Swift 对经 `notify`
