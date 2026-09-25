@@ -639,7 +639,7 @@ pnpm run test:swift     # UpdateStallWatchdogTests + UpdateAvailabilityTests
 - [ ] `pnpm run check:full`（新 main：static 18 + typecheck 13 + tests 28 = 59 步）；`pnpm run build:renderer`；`test:sidecar:compiled`；`test:release-workflow`。
 - [ ] 三条只读门禁复绿（registry/anchors/touchpoints，含 C16）；新增门全绿（`verify:package-boundaries`、`verify:no-dead-exports`、`verify:upstream-lifecycle-contract`、`verify:ladder-table-parity`、`verify-artifact-freshness`…以 `--list` 为准）；`python 载荷 --dry-run`；`swift build` + `test:swift`。
 - [ ] 旧 pin 字面量全仓 grep，仅剩历史注释/夹具。
-- [ ] 实机项（runbook）与 GUI 验收按清单走查，未做项如实登记。
+- [x] 实机项（runbook）与 GUI 验收按清单走查；**未做项已于 2026-12 登记进 `docs/progress/STATUS.md`**（「实机门禁」清单含本轮从 §21 折入的四项）。
 
 ### 13.6 写面退役（既有裁决，独立提交，§2.2-A）
 
@@ -652,7 +652,7 @@ pnpm run test:swift     # UpdateStallWatchdogTests + UpdateAvailabilityTests
 - [ ] `STATUS.md`：只留开放项（C 分层残余、实机门、x64 前置、会话流重 derive、载荷消费者、C9/C11 重锚残余）。
 - [ ] `deviations.md` 按 main 现值校准；`upstream-touchpoints.md` 只由生成器写。
 - [ ] CHANGELOG 等发布时写（不加 `[Unreleased]`）。
-- [ ] 删除本指南（或把残余项并入 STATUS）；PR 按 §14 证据模板填。
+- [x] 残余项并入 STATUS：§21 的开放面（真机四项 + 两条裁决 + 已裁决不做的 5 项）2026-12 已折进 `STATUS.md`；本指南保留为升级计划的细节来源（不再单独持有开放状态）。PR 按 §14 证据模板填。
 
 ## 14. 验收证据模板（填 PR / 交付说明）
 
@@ -882,16 +882,16 @@ pnpm run test:swift     # UpdateStallWatchdogTests + UpdateAvailabilityTests
 
 设计语料的规则基准是 `docs/design/01-overview.md` **§6（R1–R5）**。本分支已完成/仍待如下：
 
-| 文档 | 本分支已完成 | 仍待（在**新分支**上以 main 版本为基线做） |
+| 文档 | 本轮已完成 | 仍待 |
 |---|---|---|
-| `01-overview.md` | 新增 **§6 R1–R5**（对齐/重定位/落点/边界/0.1.7 契约） | 包拓扑表补 `dsh-chamber-client-core`/`-wire`/`dsh-stream-state`（若 main 版本未含） |
-| `13-remote-plugin-management.md` | 新增 §8（wire 单源、能力门数据源、C 分层） | 按 main 的 C14 措辞复核 |
-| `15-chamber-settings-page.md` | 新增 §6（staged 保存、权威分类、`settings.launcher`、源模型） | 与 main 改写过的版本合并 |
-| `05-connection-manager.md` | 追加 2026-12 更新块；`sidebar/src/shared` 路径重定位 | §5/§7 设置桥正文改写 + 与 main 的改动合并 |
-| `25-macos-swift-native-shell.md` | 追加 2026-12 更新块 + 席位名改 `shell.leading` | main 重写过的段落人工合；隐私/载体口径复核 |
-| `06` / `14` / `20` / `24` | `sidebar/src/shared` → `dsh-chamber-client-core` 路径重定位 | 14 的 §D4 已由 main 改为 `dsh-stream-state` 口径（重判自研臂）；06/20/24 按 main 版本重做 |
-| `deviations.md` | §0 增 R1 对齐登记纪律 | 逐行复核「对齐类」行（不再登记为偏差） |
-| `02` / `09` / `11` / `17` / `18` / `19` / `21` / `22` / `23` | —（本轮未改） | R1（隐私/补丁/更新相位）、R3（落点/深引）、R5（图标/remote/双向流）逐条对齐；17/21 与 main 差异较大 |
+| `01-overview.md` | §6 R1–R5 在位；**包拓扑权威表补三行**（`packages/dsh-chamber-client-core` / `dsh-chamber-wire` / `dsh-stream-state`，2026-12 补进 `AGENTS.md`「Runtime Boundaries」——设计 01 无独立拓扑表） | — |
+| `13-remote-plugin-management.md` | §8（wire 单源、能力门数据源、C 分层）在位 | 按 registry 的 C14 判据措辞复核（未做） |
+| `15-chamber-settings-page.md` | **§6 完整桥修订补写**（所选来源 ctx 的 `settings.section` 账本 + 渲染绑定座位 + staged 保存 + `settings.launcher` + 源模型，2026-12） | — |
+| `05-connection-manager.md` | 2026-12 更新块 + 路径重定位在位；**§5/§7 设置桥正文改写为完整桥口径**（2026-12） | — |
+| `25-macos-swift-native-shell.md` | 2026-12 更新块 + `shell.leading` 席位名在位；崩溃记录/采集器口径已同步（§5.4） | 隐私/载体口径已复核（2026-12 裁决：载体保持现状、隐私只更新口径入 design 02）；上游重写段落的人工合未做 |
+| `06` / `14` / `20` / `24` | `sidebar/src/shared` → `dsh-chamber-client-core` 路径重定位已在位 | **已核实**：14 §D4 已是 `dsh-stream-state` 口径；06/20/24 均已含 `dsh-chamber-client-core` 落点（2026-12 核） |
+| `deviations.md` | §0 R1 对齐登记纪律在位 | 逐行复核「对齐类」行（未做） |
+| `02` / `09` / `11` / `17` / `18` / `19` / `21` / `22` / `23` | 02 隐私口径、11 更新相位对比已按 R1/R5 落笔（2026-12） | R3（落点/深引）与 R5（图标/remote/双向流）逐条对齐；09/17/18/19/21/22/23 未逐条复核 |
 
 **执行口径**：上表「仍待」必须在**新分支**上、以 main 的当前版本为基线做——**不要**把本分支的旧版本文档整文件覆盖过去；只有 main 未改过的段落才可直接取本分支版本（判据：`git diff 695f67c8 origin/main -- <doc>` 为空或仅无关改动；695f67c8 = 迁移台账基线，非当前 main `745274e7`）。
 
@@ -964,7 +964,9 @@ rc.1 对 §15/§16/§17 的修订（逐条执行）：
 
 ## 21. 0.1.6-alpha.2 自身的残留项（并入自 todo 9，2026-12）
 
-> 原 `docs/progress/todo/upstream-0.1.6-alpha.2-upgrade.md`（todo 9）的已完成记录已按 README 纪律移出（基线在 git 历史）；其**仍未做**的项并入本节。0.1.7 bump 时这些项要一并复判：有的被 0.1.7 取代，有的随 bump 自然重做。
+> 原 `docs/progress/todo/upstream-0.1.6-alpha.2-upgrade.md`（todo 9）的已完成记录已按 README 纪律移出（基线在 git 历史）；其**仍未做**的项并入本节。0.1.7 bump 时这些项要一并复判。
+>
+> **2026-12 收尾**：本节的开放面已折进 `docs/progress/STATUS.md`（真机/目检四项入「实机门禁」；两条裁决与已裁决不做的 5 项入「范围决策与必要取舍」）——本节保留为细节来源，状态以 STATUS 为准。：有的被 0.1.7 取代，有的随 bump 自然重做。
 
 - **seed 自检缺包是否阻断实例（2026-12 裁决：维持只报不阻断）**：现状「只报不阻断」（design 09「本地实例的启动期自检」）；要阻断的话落点是该 check 的 `gap` 判定。0.1.7 复判：rc.1 的 `compatibility-preflight`/`profile-compatibility`（`packages/boot/app-boot`）成型后，同类判定是否由上游承担。
 - **组件工厂 + local slots（推迟）**：`registerFactory`/`renderFactorySlot`/`useFactorySlot` + `SlotFactoryMap`——正是 settings 桥/面板镜像目前手写的事（用来源 ctx 的座位渲染外来组件）。触发条件：下次动 settings 桥或 `panel-source.ts`，或上游弃用现有座位约定；本轮设置面 P0–P4（§22.2）就是该触发点的候选载体。

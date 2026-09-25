@@ -39,6 +39,8 @@
 
   - idle来源点会话排队到68s才失败（05 §4.1推迟boot的代价）：`open` 在 `QUEUED_OPEN_TIMEOUT_MS`(68s) 内等不到壳即失败；窗口内点「连接」可在settle后补发，但无"连接成功后自动打开"这条腿。候选收口 = App记下推迟open意图、来源ready时重放（须与既有pending-open队列语义对齐）。
 
+  - **0.1.6 代实机项（随本轮复判，计划 §21）**：①官方 Plugins 页窗口内目检——低层事实已闭环（`clientGraph/graph` 含 `ui-plugin-manager`、`listBundles` 报 200），只差重建后应用内目检（与 §13 GUI 验收合并）；②跨代 profile 对账——真实 runtime 切换时执行，两个 agent-team profile 包在实例官方 Plugins 页「关→开」各重应用一次，由管理器按安装代际对账；③gateway 就地升级（`install-gateway.sh update`）未在真实 Linux 上验；④0.1.6 代移动端真机抽检 + 右栏终端 tab 目检（0.1.7 代随 bump 重做）。
+
   - 遮罩层叠与揭幕修订的实机门（P0–P3，design 05 §2.2.1/§4；未真机判）：①遮罩层叠断言已就位但**未在真机 dev 实例上跑过**——gui-acceptance 新增 W-1b（探针 `VEIL_LAYERING_PROBE_INSTALL/READ` + 纯判据 `veilLayeringVerdict`，装/读接线在 `runWalkthrough` 的 ROOT_MOUNTED 之后与 4s boot 窗之后；判据与真表达式已由 `checks.test.mjs` 在 CI 覆盖），待 `--dev` 实例 + CDP 跑一次走查并确认本次真观察到遮罩帧（无遮罩帧按 INFO 记，不伪绿）；②冷切换的揭幕时延需实机判：会话面 `active` ⇒ ≤1 帧；`absent`（观察不到会话根，降级形态）⇒ 兜底 ≤2s；`hero/settling`（空白新会话 / 载入中）⇒ **保持遮罩**直到 App 释放（只留 70s 外层保险，正常路径不触发——两档上界见 `session-surface.ts` 的 `surfaceHoldBoundMs` 与 design 05 §2.2.1）；③Swift 打包态**无法自动做页面内测量**——release 构建 `isInspectable` 仅 `#if DEBUG`（`macos/Sources/DSHChamber/MainWindowController.swift#=literal:webView.isInspectable = true`），只能 DEBUG 构建 + Safari Web Inspector 人工抽检；两 flavor 共用目录锁，不能并跑。
 
 - Swift原生运行期监督（未闭合）：① 控制面只首载前探一次 `/health`（S-45）；sidecar活而事件循环卡住无人发现（`SidecarSupervisor` 仅看退出码）。收口 = 前台周期探测 + 「重启sidecar / 重新加载」；无Electron对应面，差异由P-09/S-02覆盖。② 渲染器的前台 JS/rAF 探针只在 `didFinish` 后武装；窗口 `didCommit` 已呈现而首载卡在求值期仍无原生超时，需 `didCommit` 后的首载期限。rAF 前进也不证明像素合成；Swift 与 Electron 均需按 design 14 §8 分层真机取证。
@@ -454,6 +456,11 @@
 
 >双flavor专项登记（用户可感偏差S、有意结构差异T、Swift leg接入缺口P、门禁/覆盖缺口G与文档漂移D，外加可达性纪律与盘点）见[deviations.md](deviations.md)；开放工作见上文与deviations.md open条目。
 
+- **seed 自检缺包维持「只报不阻断」（2026-12 裁决，计划 §21）**：design 09「本地实例的启动期自检」现状只报；要阻断的话落点是该 check 的 `gap` 判定。
+
+- **组件工厂 + local slots 推迟（计划 §21）**：`registerFactory`/`renderFactorySlot`/`useFactorySlot` + `SlotFactoryMap` 与 settings 桥/面板镜像目前手写的事重合，暂不引入。
+
+- **0.1.6 代已裁决不做的 5 项（计划 §21）**：`session/writer-held` 承接、`sidebar.toggle.badge` 重放、`workspace-tree` 分组认领、`.dsh-module-fallback` 自动删除、外部仓 `dsh-chamber-mcp` 的 `plugins.bundle.config`。
 - 依赖声明补齐与跨包原语合并暂缓：renderer→6 个 client-ui 包、layout→sidebar 的 devDeps 缺口已确认；linux 上 `pnpm install --lockfile-only` 会剥离跨平台 optional 解析（296 删/31 增，pnpm 以本机平台规范化），本机无法自证 → 待平台正确的 lockfile 重生成 + 人工审 optional churn；在此之前 private-fs/windows-process/semver 的跨包单一实现以 parity/lockstep 门（已常驻测试）代替。
 
 - 目标通知压制的覆盖/偏差边界（design 19 §3.2.5/§3.5）：①P1 只覆盖有挂载壳的来源，无壳/被回收来源靠 P2a/P2b；②gateway web 直连的 mobile 形态无 chamber 侧栏/渲染器，不存在该压制面；chamber renderer 被浏览器/dev 直开时渲染器与 durable 剪枝门仍在（无桥按 §3.2.4 F11 视同已结算放行）、只是没有远程来源，两者分述；③facts-only 来源的 `subagentCount` 不作为 busy 证据（对 design 06 §4.5 的有意修正，待上游 running 计数收敛）；④paused 目标通知 drop 而呈现不压制（刻意分叉）；⑤目标结束通知复用 `onComplete` 与 kind `complete`，不新增 kind/设置开关；⑥schedule/job 等非 goal 自动续跑本期不覆盖（收敛器输入可扩展）；⑦侧栏不新增独立 goal 视觉元素（goal 只经压制/标题/六面状态呈现），扩展面留待后续。
