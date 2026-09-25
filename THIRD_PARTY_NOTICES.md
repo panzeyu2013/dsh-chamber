@@ -60,6 +60,7 @@ electron-userland/electron-builder；双 rep 540×380@72dpi + 1080×760@144dpi�
 | 构件 | 版本 | 许可证 |
 |---|---|---|
 | `CPython`（python-build-standalone） | 3.12.14 | PSF-2.0 |
+| `pip`（解释器基线，随 CPython 分发） | 随 CPython | MIT |
 | `Node.js` | 24.18.1 | MIT |
 | `et_xmlfile`（python 发行版） | 2.0.0 | 见随包 wheel 的 dist-info METADATA |
 | `lxml`（python 发行版） | 6.1.3 | 见随包 wheel 的 dist-info METADATA |
@@ -75,4 +76,4 @@ electron-userland/electron-builder；双 rep 540×380@72dpi + 1080×760@144dpi�
 | `tzdata`（python 发行版） | 2025.2 | 见随包 wheel 的 dist-info METADATA |
 | `XlsxWriter`（python 发行版） | 3.2.9 | 见随包 wheel 的 dist-info METADATA |
 
-CPython、Node.js 与每个 python 发行版的完整许可证文本随载荷分发（CPython 的 LICENSE 在载荷根、各发行版在自己的 `*.dist-info/METADATA`、Node.js 随 node 归档）。版本来自 `packages/desktop/primary-runtime-lock.json`（唯一来源）。
+CPython、Node.js 与每个 python 发行版的完整许可证文本随载荷分发（CPython 的 LICENSE 在载荷根、各发行版（含解释器基线的 pip）在自己的 `*.dist-info/METADATA`、Node.js 随 node 归档）。版本来自 `packages/desktop/primary-runtime-lock.json`（唯一来源）。

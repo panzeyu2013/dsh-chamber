@@ -34,6 +34,9 @@ export function payloadNoticeSection(language, lockPath = LOCK_PATH) {
       ? '| `CPython`（python-build-standalone） | ' + lock.pythonVersion + ' | PSF-2.0 |'
       : '| `CPython` (python-build-standalone) | ' + lock.pythonVersion + ' | PSF-2.0 |',
     zh
+      ? '| `pip`（解释器基线，随 CPython 分发） | 随 CPython | MIT |'
+      : '| `pip` (interpreter baseline, ships with CPython) | with CPython | MIT |',
+    zh
       ? '| `Node.js` | ' + lock.nodeVersion + ' | MIT |'
       : '| `Node.js` | ' + lock.nodeVersion + ' | MIT |',
     ...packages.map(([name, version]) => (zh
@@ -41,7 +44,7 @@ export function payloadNoticeSection(language, lockPath = LOCK_PATH) {
       : '| `' + name + '` (python distribution) | ' + version + ' | see the wheel dist-info METADATA |')),
   ]
   const note = zh
-    ? ['', 'CPython、Node.js 与每个 python 发行版的完整许可证文本随载荷分发（CPython 的 LICENSE 在载荷根、各发行版在自己的 `*.dist-info/METADATA`、Node.js 随 node 归档）。版本来自 `packages/desktop/primary-runtime-lock.json`（唯一来源）。']
-    : ['', 'The full license text of CPython, Node.js and of every python distribution ships inside the payload (CPython LICENSE at the payload root, each distribution in its own `*.dist-info/METADATA`, Node.js with the node archive). Versions come from `packages/desktop/primary-runtime-lock.json` (single source).']
+    ? ['', 'CPython、Node.js 与每个 python 发行版的完整许可证文本随载荷分发（CPython 的 LICENSE 在载荷根、各发行版（含解释器基线的 pip）在自己的 `*.dist-info/METADATA`、Node.js 随 node 归档）。版本来自 `packages/desktop/primary-runtime-lock.json`（唯一来源）。']
+    : ['', 'The full license text of CPython, Node.js and of every python distribution ships inside the payload (CPython LICENSE at the payload root, each distribution (including the interpreter-baseline pip) in its own `*.dist-info/METADATA`, Node.js with the node archive). Versions come from `packages/desktop/primary-runtime-lock.json` (single source).']
   return [...header, ...rows, ...note].join('\n')
 }

@@ -23,7 +23,9 @@ test('载荷声明小节：CPython/node/每个 python 发行版都在，中英�
   const zhRows = zh.split('\n').filter((line) => line.startsWith('| `'))
   const enRows = en.split('\n').filter((line) => line.startsWith('| `'))
   assert.equal(zhRows.length, enRows.length, '中英行数必须相同')
-  assert.equal(zhRows.length, Object.keys(LOCK.pythonPackages).length + 2, '每个发行版一行 + CPython + Node.js')
+  assert.equal(zhRows.length, Object.keys(LOCK.pythonPackages).length + 3,
+    '每个发行版一行 + CPython + Node.js + 解释器基线的 pip')
+  assert.ok(zh.includes('| `pip`'), 'pip 基线行必须在（随 CPython 分发的 MIT 基座）')
 })
 
 test('载荷声明小节：锁缺失必须抛（声明不能悄悄缺一段）', () => {

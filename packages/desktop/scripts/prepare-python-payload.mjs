@@ -589,6 +589,15 @@ export function extractNodePayload(buffer, destination) {
   return written
 }
 
+/**
+ * 解释器基线发行版：python-build-standalone 的 install_only 载荷自带 pip，而上游
+ * `scripts/primary-runtime/smoke.py`（第 28–30 行）把期望集合定义为
+ * 「声明的发行版 ∪ {pip}」——pip 属于**解释器基座**，不是载荷锁的成员（版本随
+ * 解释器构建变化，上游也只按名字放行）。反向精确集合因此必须按名字放行它；其余
+ * 任何未登记发行版依然红。2026-09 release dry run 正是因为漏掉这条基线而假红。
+ */
+export const INTERPRETER_BASELINE_DISTRIBUTIONS = new Set(['pip'])
+
 /** PEP 503 归一化（dist-info 目录名比较用；只做大小写与分隔符折叠）。 */
 export function normalizeDistributionName(name) {
   return name.toLowerCase().replace(/[-_.]+/gu, '-')
@@ -659,9 +668,9 @@ export function verifyPayload(dir) {
     for (const directory of distributions) {
       const match = /^(.+)-([0-9][^-]*)\.dist-info$/u.exec(directory)
       if (match === null) continue
-      if (!locked.has(normalizeDistributionName(match[1]))) {
-        problems.push('site-packages 多出未登记发行版 ' + directory + '（载荷与锁不一致）')
-      }
+      const normalized = normalizeDistributionName(match[1])
+      if (INTERPRETER_BASELINE_DISTRIBUTIONS.has(normalized) || locked.has(normalized)) continue
+      problems.push('site-packages 多出未登记发行版 ' + directory + '（载荷与锁不一致）')
     }
   }
   return {

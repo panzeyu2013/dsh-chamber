@@ -527,6 +527,15 @@ test('③ verifyPayload：错版本 dist-info / 缺 pythonPackages 都必须红�
     assert.ok(extraCheck.problems.some((problem) => problem.includes('多出未登记发行版 rogue-1.0.dist-info')),
       extraCheck.problems.join('；'))
 
+    // 解释器基线：CPython 的 install_only 载荷自带 pip（版本随解释器构建变化），
+    // 上游 smoke.py 的期望集合是「声明的发行版 ∪ {pip}」——pip 必须按名字放行，
+    // 其余未登记发行版仍然红（release dry run 曾因漏掉这条基线而假红）。
+    const baseline = buildPayload('interpreter-baseline', manifestOf({ numpy: '2.3.5' }))
+    mkdirSync(path.join(baseline, layout.sitePackages, 'numpy-2.3.5.dist-info'), { recursive: true })
+    mkdirSync(path.join(baseline, layout.sitePackages, 'pip-26.2.1.dist-info'), { recursive: true })
+    const baselineCheck = verifyPayload(baseline)
+    assert.equal(baselineCheck.ok, true, baselineCheck.problems.join('；'))
+
     // 归一化对等：python-dateutil 的 dist-info 目录名是 python_dateutil-…，
     // 必须被认成同一发行版（否则精确集合会把它误判成「多出」）。
     const normalized = buildPayload('normalized', manifestOf({ 'python-dateutil': '2.9.0.post0' }))

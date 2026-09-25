@@ -62,6 +62,7 @@ Electron leg (2026-09).
 | Component | Version | License |
 |---|---|---|
 | `CPython` (python-build-standalone) | 3.12.14 | PSF-2.0 |
+| `pip` (interpreter baseline, ships with CPython) | with CPython | MIT |
 | `Node.js` | 24.18.1 | MIT |
 | `et_xmlfile` (python distribution) | 2.0.0 | see the wheel dist-info METADATA |
 | `lxml` (python distribution) | 6.1.3 | see the wheel dist-info METADATA |
@@ -77,4 +78,4 @@ Electron leg (2026-09).
 | `tzdata` (python distribution) | 2025.2 | see the wheel dist-info METADATA |
 | `XlsxWriter` (python distribution) | 3.2.9 | see the wheel dist-info METADATA |
 
-The full license text of CPython, Node.js and of every python distribution ships inside the payload (CPython LICENSE at the payload root, each distribution in its own `*.dist-info/METADATA`, Node.js with the node archive). Versions come from `packages/desktop/primary-runtime-lock.json` (single source).
+The full license text of CPython, Node.js and of every python distribution ships inside the payload (CPython LICENSE at the payload root, each distribution (including the interpreter-baseline pip) in its own `*.dist-info/METADATA`, Node.js with the node archive). Versions come from `packages/desktop/primary-runtime-lock.json` (single source).
