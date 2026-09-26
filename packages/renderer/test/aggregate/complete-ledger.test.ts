@@ -1,7 +1,7 @@
 /**
  * complete 通知账本内核契约：武装轨的「直到重新 running」
  * 规则、水位轨的单调与 kind 隔离、撤回只清武装轨、forget/prune 的两轨收敛。
- * 两轨的裁定规则本体仍在 watermark.ts / notification-edges.ts，这里钉的是账本容器。
+ * 两轨的裁定规则本体在 watermark.ts / notification-projection.reconcile，这里钉的是账本容器。
  *
  * goal-aware v5 §3.1 增量：pending（被压制完成结算位）与 outcomes（标题一次性身份）
  * 两张 durable 表 + boot/年龄卫生 + 撤回清 pending（notified/outcomes 保留）。
@@ -13,18 +13,25 @@ import {
   createCompleteLedger,
   type PendingCompletionTable,
 } from '../../src/complete-ledger.ts'
-import { dedupeCompleteEdges } from '../../src/notification-edges.ts'
+import { reconcile, type CompletionObservation } from '../../src/notification-projection.ts'
 
 test('the armed track drops a repeated complete until the session runs again', () => {
+  // 规则本体在现役唯一入口 reconcile：壳候选首见放行并武装、重放被挡、
+  // 重新 running 解除武装后再次放行；账本容器只用 state()/armed 读回。
   const ledger = createCompleteLedger()
-  const edges = [{ sessionId: 's1', kind: 'complete' as const }]
-  const first = dedupeCompleteEdges(edges, ledger.armed('src'), [])
-  assert.deepEqual(first.edges, edges, '首见放行并记账')
-  ledger.setArmed('src', first.notified)
-  assert.deepEqual(dedupeCompleteEdges(edges, ledger.armed('src'), []).edges, [], '未重新 running 的重复边沿被丢弃')
-  const rerun = dedupeCompleteEdges([], ledger.armed('src'), ['s1'])
-  ledger.setArmed('src', rerun.notified)
-  assert.deepEqual(dedupeCompleteEdges(edges, ledger.armed('src'), []).edges, edges, '重新 running 清记忆后重新放行')
+  const shellEdge: CompletionObservation = {
+    sourceId: 'src', sessionId: 's1', generation: 1, running: 'idle', subagents: 'idle',
+    goal: 'unknown', candidate: { evidence: 'shell-edge' }, baseline: false, boot: 'same',
+  }
+  const first = reconcile(ledger.state(), shellEdge, 1)
+  assert.equal(first.notification?.kind, 'complete', '首见放行并记账')
+  assert.equal(ledger.armed('src').has('s1'), true)
+  const replay = reconcile(ledger.state(), shellEdge, 2)
+  assert.equal(replay.notification, undefined, '未重新 running 的重复边沿被丢弃')
+  reconcile(ledger.state(), { ...shellEdge, running: 'running', candidate: undefined }, 3)
+  assert.equal(ledger.armed('src').has('s1'), false, '重新 running 清记忆')
+  const again = reconcile(ledger.state(), shellEdge, 4)
+  assert.equal(again.notification?.kind, 'complete', '重新 running 清记忆后重新放行')
 })
 
 test('the identity track is keyed by (source, session) and survives a withdrawal', () => {

@@ -63,11 +63,11 @@ import { recordPrewarm } from './prewarm-ledger.ts'
 import { factsDecisionInput, type SessionFactsSource } from './session-facts-source.ts'
 // probe 判定 → 侧栏档位：无快照即缺席 = 未知。
 import {
-  advanceReadMark,
   browserUnreadStorage,
   loadClientInstallId,
   loadUnread,
   maxWatermark,
+  seedReadFloor,
   unreadOutcomeTable,
   unreadPendingTable,
   type UnreadStorageLike,
@@ -1771,7 +1771,7 @@ export default function App() {
   // （use-unread-notifications.ts）；App 只传状态容器与 setter（pagehide flush 经 flushUnreadRef，ref 由 hook 写入）。
   const {
     schedulePersistUnread, recomputeSourceUnread, emitSessionNotification, applySessionFacts,
-    persistCompletionLedger, unreadImmediateSave,
+    persistCompletionLedger, unreadImmediateSave, guardUnreadStep,
   } = useUnreadNotifications({
     aggregates, serverLabels, viewStore, factsStore, liveServerIdsRef,
     sessionFactsSourcesRef, sourceLifecyclesRef, prevRunningRef,
@@ -2099,7 +2099,7 @@ export default function App() {
 
   /**
    * 「全部已读」：读水位与落盘都在 App 手里，所以侧栏只发意图、动作在此执行——一次性把该来源的
-   * 读标记抬到**源级上界**（maxWatermark = max(updatedAt, completedAt) 的全表最大值），落盘并通知
+   * 读标记抬到**源级上界**（maxWatermark = 逐行 **host 域**水位（updatedAt + host 域 completedAt）的全表最大值），落盘并
    * 镜像（ackAllRead 的 read-all 地板），再重算派生（蓝点/todo 立即清空，单调提升绝不回退）。
    */
   const markSourceAllRead = useCallback((sourceId: string): void => {
@@ -2110,11 +2110,7 @@ export default function App() {
     const through = maxWatermark(rows)
     // 没有可用水位（全是 0）时什么都不做：绝不写一个凭空的"已读"读数。
     if (through <= 0) return
-    const table = readMarksRef.current[sourceId] ?? {}
-    const next: Record<string, number> = { ...table }
-    for (const sessionId of Object.keys(rows)) {
-      next[sessionId] = advanceReadMark(next[sessionId], through) ?? through
-    }
+    const next = seedReadFloor(readMarksRef.current[sourceId] ?? {}, rows, through)
     readMarksRef.current = { ...readMarksRef.current, [sourceId]: next }
     schedulePersistUnread()
     sessionFactsSourcesRef.current.get(sourceId)?.ackAllRead(clientInstallIdRef.current, through)
@@ -2124,7 +2120,7 @@ export default function App() {
   // 桥订阅簇（全部已读 / 深链 / 回声 / 挂载快照 / 运行时上报…）是命名 hook；App 只传当前 ref/state/回调与预算常量。
   useBridgeSubscriptions({
     acknowledgeDeepLink, emitSessionNotification, markSourceAllRead, openSession,
-    recomputeSourceUnread, refreshAggregate, reportDeepLinkAckFailure, selectView,
+    recomputeSourceUnread, guardUnreadStep, refreshAggregate, reportDeepLinkAckFailure, selectView,
     updateSessionArchive, updateSessionEcho, updateWorkspaceEcho, aggregatePollSeqRef,
     aggregateRequestOwnersRef, authoritativeArchiveSetRef, autoPrewarmedRef, completeLedgerRef,
     drainPrewarmRef, factsAtRef, harvestCandidatesRef, harvestIntentRef,

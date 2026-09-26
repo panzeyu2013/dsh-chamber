@@ -20,9 +20,8 @@ const executor = stripComments(readFileSync(
   fileURLToPath(new URL('../../../dsh-chamber-client-core/src/session-fact-reconcile.ts', import.meta.url)), 'utf8'))
 const hook = stripComments(readFileSync(
   fileURLToPath(new URL('../../src/app-hooks/use-bridge-subscriptions.ts', import.meta.url)), 'utf8'))
-// 事实第二入口（planFactsNotifications）与升级 ladder 的执行端已随
-// 通知/未读投影簇、聚合刷新簇抽到命名 hook；锁跨 App + 两个 hook 取并集
-// （presence/absence 都不放松）。
+// 事实/壳两条通道与升级 ladder 的执行端已随通知/未读投影簇、聚合刷新簇抽到
+// 命名 hook；锁跨 App + 两个 hook 取并集（presence/absence 都不放松）。
 const unreadHook = stripComments(readFileSync(
   fileURLToPath(new URL('../../src/app-hooks/use-unread-notifications.ts', import.meta.url)), 'utf8'))
 const factsSource = stripComments(readFileSync(
@@ -73,7 +72,7 @@ test('authority actions persist to the machine-local ring (P5)', () => {
   assert.match(logStore, /AUTHORITY_LOG_MAX_PER_SOURCE = 32/)
 })
 
-test('completion notifications have one policy entry (P3, goal-aware v5 migration)', () => {
+test('completion notifications have one policy entry and one edge implementation (P3, goal-aware v5 migration)', () => {
   // Wave3 迁移后：壳 report 与 facts 快照都经 observeSource → applyObservationBatch
   // 喂**唯一**的 reconcile（notification-projection）；App 与两个接线 hook 都不得再建
   // 第二 planner，也不得在接线层重实现水位原语（nextNotifiedWatermark/shouldNotifyWatermark）。
@@ -82,14 +81,29 @@ test('completion notifications have one policy entry (P3, goal-aware v5 migratio
   assert.match(unreadHook, /observeSource\(/)
   assert.match(unreadHook, /applyObservationBatch\(/)
   assert.doesNotMatch(
-    frame,
-    /planRuntimeNotifications|planFactsNotifications|detectNotificationEdges|dedupeCompleteEdges|shouldNotifyWatermark|nextNotifiedWatermark/,
+    frame + '\n' + hook,
+    /planRuntimeNotifications|planFactsNotifications|detectNotificationEdges|dedupeCompleteEdges|isStaleRunIdentity|shouldNotifyWatermark|nextNotifiedWatermark/,
   )
   assert.match(projection, /export function reconcile\(/)
-  // 旧 planner 只为既有语义测试保留导出面（两个用例集仍直接测它们）；
-  // 生产接线锁保证没有调用点（上面的 doesNotMatch）。
-  assert.match(projection, /export function planRuntimeNotifications/)
-  assert.match(projection, /export function planFactsNotifications/)
+  // 边沿判定的唯一现役实现在 completion-observation（壳候选 + 每会话转移记忆）；
+  // 旧 planner 与纯函数边沿检测/去重的测试专有孤岛已删除，不得再出现第二套。
+  assert.match(completionObservation, /memory\.shellRunning === 'running' && shellRunning === 'idle'/)
+  assert.match(completionObservation, /memory\.shellPending !== shellRow\.pending/)
+  assert.doesNotMatch(
+    frame + '\n' + hook + '\n' + completionObservation + '\n' + projection,
+    /planRuntimeNotifications|planFactsNotifications|detectNotificationEdges|dedupeCompleteEdges|isStaleRunIdentity/,
+  )
+})
+
+test('both run-start sites use the ordering rule, never an unconditional clear (A3)', () => {
+  // 迁移自 notification-run-scope（旧 planner 直测已删）：run-start 不得有无条件清
+  // 结算标记的第二权威；认领同一完成前必须有「facts 行不晚于 host 锚点」的同域序。
+  for (const [label, text] of [['use-bridge-subscriptions', hook], ['use-unread-notifications', unreadHook]] as const) {
+    assert.doesNotMatch(text, /observeRunStart\(|markRunStarted\(/, label + ' 不得有无条件 run-start 权威')
+    assert.doesNotMatch(text, /clearRuntimeSettled\(sourceId, (row\.sessionId|sessionId)\)/, label + ' 不得为迟到的 running 快照丢结算标记')
+  }
+  assert.match(unreadHook, /factsRow\.updatedAt <= anchor/, '锚点序：行严格更新才属于下一轮运行')
+  assert.match(unreadHook, /pendingClaims\.has\(notification\.sessionId\)/, '在途原生投递必须让行，不被 facts 吸附')
 })
 
 test('the notification association uses the facts host anchor, never the content watermark', () => {

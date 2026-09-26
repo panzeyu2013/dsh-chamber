@@ -2,7 +2,7 @@
  * The ONE notification-run identity resolver (D1/I1).
  *
  * Every consumer that needs to say "this delivery belongs to run X" - the outbox
- * key, the complete ledger, the facts projection - calls this function, so a run
+ * key, the complete ledger, the runtime hooks - calls this function, so a run
  * cannot acquire two ids. Precedence: an explicit run id > the host's turn seq
  * (host family) > the chamber namespace keyed by the observed watermark episode.
  * The two families never compare or merge (see dsh-stream-state/run-id).
@@ -25,21 +25,11 @@ function hostKey(runId: SessionRunId): string | null {
   }
 }
 
-/** The numeric turn of a `host:turn/<n>` identity, or undefined for another shape. */
-function hostTurnNumber(runId: SessionRunId): number | undefined {
-  const key = hostKey(runId)
-  if (key === null) return undefined
-  const match = /^turn\/(\d+)$/u.exec(key)
-  if (match === null) return undefined
-  const value = Number(match[1])
-  return Number.isSafeInteger(value) ? value : undefined
-}
-
 /**
  * The restore boundary for a persisted run identity: a chamber id must parse, a
  * host id must decode canonically, and the v4 sentinel is the one allowed
  * non-run value. Anything else (truncated JSON survivor, hand-edited storage) is
- * rejected at load time so a corrupt string cannot reach the projection.
+ * rejected at load time so a corrupt string cannot reach the identity table.
  */
 export function isSessionRunId(value: unknown): value is SessionRunId {
   if (typeof value !== 'string' || value.length === 0 || value.length > 256) return false
@@ -62,37 +52,12 @@ export function isSessionRunId(value: unknown): value is SessionRunId {
 }
 
 /**
- * True when `next` cannot be a NEWER run than `previous` inside the same family
- * (identity equality, a chamber episode that did not advance, or a host turn that
- * did not advance). A stale/regressed observation must not mint a fresh identity
- * and notify again - the monotonicity the old watermark table used to provide,
- * now derived from the persisted identity itself.
- */
-export function isStaleRunIdentity(previous: SessionRunId, next: SessionRunId): boolean {
-  if (previous === next) return true
-  const previousParts = parseChamberRunId(previous)
-  const nextParts = parseChamberRunId(next)
-  // Only the SAME producer lifetime has ordered episodes. A different generation
-  // is a remount: its episode 1 is a genuinely new run, not a regression - folding
-  // generations together here would silently suppress that run's notification.
-  if (previousParts !== null && nextParts !== null
-      && previousParts.generation === nextParts.generation
-      && previousParts.sourceFingerprint === nextParts.sourceFingerprint
-      && previousParts.sessionId === nextParts.sessionId) {
-    return nextParts.episode <= previousParts.episode
-  }
-  const previousTurn = hostTurnNumber(previous)
-  const nextTurn = hostTurnNumber(next)
-  if (previousTurn !== undefined && nextTurn !== undefined) return nextTurn <= previousTurn
-  return false
-}
-
-/**
  * The v4 migration sentinel stored in the identity table for a session that was
- * already notified before the identity spine existed. The projection ADOPTS the
- * live run id without notifying when it sees the sentinel, so it exists only
- * until that session's first facts snapshot (or its prune when it leaves the
- * list). It is never compared as a run id.
+ * already notified before the identity spine existed. It never equals a live run
+ * id, so the live identity gate (notifiedRun === runId) lets such a session
+ * deliver exactly one notification after the upgrade instead of silently
+ * suppressing it; the sentinel is replaced by the live id on that write (or
+ * dropped when the session leaves the list).
  */
 export const LEGACY_NOTIFIED_RUN_ID = 'legacy:notified'
 

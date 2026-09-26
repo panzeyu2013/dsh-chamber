@@ -79,11 +79,9 @@ export const GROUPS = {
   // aggregate: 多来源聚合状态与通知投影（聚合拉取/重连、通知边、角标计数）
   aggregate: [
     'test/aggregate/aggregate-refresh.test.ts',
-    'test/aggregate/notification-edges.test.ts',
     // 单通知投影：两条证据、一个策略、一个账本键空间。
     'test/aggregate/notification-projection.test.ts',
-    // 运行结算的 run 级归属（锚点 vs 后一轮完成）。
-    'test/aggregate/notification-run-scope.test.ts',
+    // 投递账本：run 级归属锚点 + 原生去重（旧 planner 直测的现役等价面）。
     'test/aggregate/notification-outbox.test.ts',
     // 水位原语单一来源（同一完成不重发、坏值不臆造、max/完成水位负例）。
     'test/aggregate/watermark.test.ts',

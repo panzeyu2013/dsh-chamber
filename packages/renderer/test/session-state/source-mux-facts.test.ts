@@ -130,9 +130,11 @@ function followSnapshot(reason: unknown, time?: number) {
 }
 
 async function waitFor(predicate: () => boolean, message: string): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  // 预算 ≈1.6s：宽限类用例的 carrierGraceMs=300（真实计时器）必须能在预算内被观察到到期，
+  // 否则用例会以「产品没降级」的假象失败（100×2ms 只有 ~270ms，一比三都不够）。
+  for (let attempt = 0; attempt < 400; attempt += 1) {
     if (predicate()) return
-    await new Promise(resolve => setTimeout(resolve, 2))
+    await new Promise(resolve => setTimeout(resolve, 4))
   }
   assert.fail(message)
 }
@@ -151,7 +153,7 @@ function deferredRpc() {
   return { lists, fetchImpl }
 }
 
-test('a socket ready frame cannot certify facts after a failed baseline', async () => {
+test('a socket ready frame cannot certify facts after a failed first baseline', async () => {
   const socket = new FakeSocket()
   const snapshots: Array<{ verdict: string }> = []
   const facts = createSourceMuxFacts({
@@ -216,11 +218,11 @@ test('a malformed ready frame cannot certify facts or renew event liveness', asy
   } finally { facts.stop() }
 })
 
-test('replacing a live socket degrades facts before the successor opens', async () => {
+test('replacing a live socket holds decidability through the grace, then degrades if no successor lands', async () => {
   const sockets: FakeSocket[] = []
   const verdicts: string[] = []
   const facts = createSourceMuxFacts({
-    sourceId: 'replacing', origin: 'http://cp', silenceTimeoutMs: 20,
+    sourceId: 'replacing', origin: 'http://cp', silenceTimeoutMs: 20, carrierGraceMs: 300,
     onSnapshot: snapshot => verdicts.push(snapshot.verdict),
     openSocket: () => { const socket = new FakeSocket(); sockets.push(socket); return socket },
     fetchImpl: rpcFetch({ 'session/list': () => ({ items: [] }) }) as never,
@@ -231,16 +233,98 @@ test('replacing a live socket degrades facts before the successor opens', async 
     sockets[0]!.item({ type: 'ready', clientId: 'c' })
     await waitFor(() => facts.status().ready, 'initial socket did not become ready')
     await waitFor(() => sockets.length === 2, 'silence did not replace the socket')
-    assert.equal(facts.status().ready, false)
+    // 换载体本身不是「不可判」：旧基线在宽限内仍是可判事实（宿主的空闲关流不该让判定面闪烁）。
+    assert.equal(facts.status().ready, true)
+    assert.equal(facts.status().carrierLostAt !== null, true, 'the grace must be timed from the loss')
+    assert.equal(verdicts.at(-1), 'ok')
+    // 宽限内没有新基线 ⇒ 必须诚实降级，且退化为「不可判」而不是继续声称在场。
+    await waitFor(() => facts.status().ready === false, 'no successor baseline must end the grace')
     assert.equal(verdicts.at(-1), 'degraded')
+    assert.equal(facts.status().carrierLostAt, null)
+    assert.equal(facts.status().staleSince !== null, true, 'unusable start must be readable')
   } finally { facts.stop() }
 })
 
-test('an ended $events stream degrades immediately even when its socket stays open', async () => {
+test('a late ready frame does not end the carrier grace (only a baseline or expiry does)', async () => {
+  const sockets: FakeSocket[] = []
+  let calls = 0
+  const facts = createSourceMuxFacts({
+    sourceId: 'late-ready', origin: 'http://cp', silenceTimeoutMs: 20, carrierGraceMs: 300,
+    onSnapshot: () => {},
+    openSocket: () => { const socket = new FakeSocket(); sockets.push(socket); return socket },
+    // 首条基线成功（建立可信基线），之后永不落地：宽限必须由到期结束，而不是被 ready 帧取消。
+    fetchImpl: rpcFetch({ 'session/list': () => { calls += 1; return calls === 1 ? { items: [] } : new Promise(() => {}) } }) as never,
+  })
+  try {
+    facts.start()
+    sockets[0]!.open()
+    sockets[0]!.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().ready, 'initial baseline did not make the carrier decidable')
+    await waitFor(() => sockets.length === 2, 'silence did not replace the carrier')
+    await waitFor(() => facts.status().carrierLostAt !== null, 'carrier loss did not start the grace')
+    // 新代际的 ready 帧到了，但基线没有落地：它只证明套接字腿，不许结束宽限。
+    sockets[1]!.open()
+    sockets[1]!.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().ready === false, 'a ready frame extended the grace past its deadline')
+    assert.equal(facts.status().staleSince !== null, true, 'the degrade must be readable')
+  } finally { facts.stop() }
+})
+
+test('a failed first baseline does not poison the socket leg: the next successful baseline is decidable', async () => {
+  const sockets: FakeSocket[] = []
+  let calls = 0
+  const facts = createSourceMuxFacts({
+    sourceId: 'first-fail', origin: 'http://cp', silenceTimeoutMs: 1_000,
+    onSnapshot: () => {},
+    openSocket: () => { const socket = new FakeSocket(); sockets.push(socket); return socket },
+    fetchImpl: rpcFetch({ 'session/list': () => { calls += 1; if (calls === 1) throw new Error('boom'); return { items: [] } } }) as never,
+  })
+  try {
+    facts.start()
+    sockets[0]!.open()
+    sockets[0]!.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().baselineFailures >= 1, 'the first baseline failure was not recorded')
+    // 基线腿失败不得清掉套接字腿：下一次基线成功必须立刻可判（否则等于换条路径重现「在场但不可判」）。
+    facts.reconcile()
+    await waitFor(() => facts.status().ready, 'a successful baseline after a failure must be decidable')
+  } finally { facts.stop() }
+})
+
+test('a reconnected carrier that re-baselines inside the grace never degrades the face', async () => {
+  const sockets: FakeSocket[] = []
+  const verdicts: string[] = []
+  const facts = createSourceMuxFacts({
+    sourceId: 'flap', origin: 'http://cp', silenceTimeoutMs: 20, carrierGraceMs: 2_000,
+    onSnapshot: snapshot => verdicts.push(snapshot.verdict),
+    openSocket: () => { const socket = new FakeSocket(); sockets.push(socket); return socket },
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items: [{ sessionId: 's1', running: false, updatedAt: 1 }] }) }) as never,
+  })
+  try {
+    facts.start()
+    sockets[0]!.open()
+    sockets[0]!.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().ready, 'initial socket did not become ready')
+    // 首连之前的那次 degraded 是诚实的（还没真相）；宽限语义说的是「有真相之后不得再逐次降级」。
+    const okBefore = verdicts.lastIndexOf('ok')
+    assert.notEqual(okBefore, -1, 'the initial baseline never published an ok snapshot')
+    await waitFor(() => sockets.length === 2, 'silence did not replace the socket')
+    // 继任者在宽限内完成握手 + 基线：对判定面是零变化（一次降级快照都不许出现）。
+    sockets[1]!.open()
+    sockets[1]!.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().baselines >= 2, 'successor baseline missing')
+    assert.equal(facts.status().ready, true)
+    assert.equal(facts.status().carrierLostAt, null)
+    assert.equal(verdicts.slice(okBefore + 1).includes('degraded'), false,
+      'an idle-close flap must not publish a degraded snapshot once a baseline was trusted')
+  } finally { facts.stop() }
+})
+
+test('an ended $events stream fails the carrier immediately and degrades after the grace', async () => {
   const socket = new FakeSocket()
   const verdicts: string[] = []
   const facts = createSourceMuxFacts({
-    sourceId: 'ended-events', origin: 'http://cp', onSnapshot: snapshot => verdicts.push(snapshot.verdict),
+    sourceId: 'ended-events', origin: 'http://cp', carrierGraceMs: 40,
+    onSnapshot: snapshot => verdicts.push(snapshot.verdict),
     openSocket: () => socket,
     fetchImpl: rpcFetch({ 'session/list': () => ({ items: [] }) }) as never,
   })
@@ -250,10 +334,40 @@ test('an ended $events stream degrades immediately even when its socket stays op
     socket.item({ type: 'ready', clientId: 'c' })
     await waitFor(() => facts.status().ready, 'initial facts did not become ready')
     socket.onmessage?.({ data: JSON.stringify({ type: 'end', streamId: 'events' }) })
-    assert.equal(facts.status().ready, false)
-    assert.equal(verdicts.at(-1), 'degraded')
+    // 逻辑流结束 = 载体立刻失败（换 socket + 退避重连），但「可判」只在宽限用尽后消失。
     assert.equal(socket.closed, true)
     assert.equal(facts.status().reconnects, 0, 'reconnect must use the scheduled backoff')
+    await waitFor(() => facts.status().ready === false, 'ended stream must not hold decidability past the grace')
+    assert.equal(verdicts.at(-1), 'degraded')
+  } finally { facts.stop() }
+})
+
+test('continuous baseline failures never renew the carrier grace', async () => {
+  const socket = new FakeSocket()
+  let calls = 0
+  const facts = createSourceMuxFacts({
+    sourceId: 'grace-no-renew', origin: 'http://cp', carrierGraceMs: 300,
+    onSnapshot: () => {},
+    openSocket: () => socket,
+    // 首条基线建立可信真相；此后每次 reconcile 都失败——连续失败不得把到期翻转无限推迟。
+    fetchImpl: rpcFetch({ 'session/list': () => { calls += 1; return calls === 1 ? { items: [] } : 'FAIL' } }) as never,
+  })
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().ready, 'initial trusted baseline missing')
+    // 12×25ms ≈ 300ms 宽限：失败一直继续，到期必须在失败仍在进行时生效（删除「只在第一次丢失时
+    // 起表」的守卫时，每次失败都会重排计时器，下面两断言必红）。
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      facts.reconcile()
+      await new Promise(resolve => setTimeout(resolve, 25))
+    }
+    await new Promise(resolve => setTimeout(resolve, 40))
+    assert.ok(facts.status().baselineFailures >= 8, 'the loop must have driven continuous baseline failures')
+    assert.equal(facts.status().carrierLostAt, null, 'the grace expired and was not renewed by later failures')
+    assert.equal(facts.status().ready, false, 'continuous failures must not hold decidability past the grace')
+    assert.equal(facts.status().staleSince !== null, true, 'the degrade must be readable')
   } finally { facts.stop() }
 })
 
@@ -550,6 +664,9 @@ test('a partial or malformed baseline cannot forge a completion or certify facts
     sourceId: 'malformed-row', origin: 'http://cp', onSnapshot: snapshot => snapshots.push(snapshot),
     openSocket: () => socket,
     fetchImpl: rpcFetch({ 'session/list': () => listValue }) as never,
+    // 宽限缩短到可测但仍留足断言余量（纯负载下 40ms 会被测试自身拖过界）：一次拒绝不得让
+    // 「可判」立刻消失，也不能撑过宽限。
+    carrierGraceMs: 300,
   })
   try {
     socket.onFollowOpen = () => { follows += 1 }
@@ -563,9 +680,13 @@ test('a partial or malformed baseline cannot forge a completion or certify facts
     ] }
     facts.reconcile()
     await waitFor(() => facts.status().baselineFailures === 1, 'partial list was accepted')
-    assert.equal(facts.status().ready, false)
-    assert.equal(snapshots.at(-1)?.verdict, 'degraded')
+    // 被拒的基线一行都没应用（上面），所以旧基线在宽限内仍是最可信的事实——但失败必须可读。
+    assert.equal(facts.status().baselineFailureReason !== null, true, 'a rejected baseline must leave a readable reason')
+    assert.equal(facts.status().ready, true, 'one rejected re-baseline holds the grace, not the whole face')
+    assert.equal(snapshots.at(-1)?.verdict, 'ok')
     assert.equal(snapshots.at(-1)?.rows.s1?.running, true, 'a partial baseline must apply no rows')
+    await waitFor(() => facts.status().ready === false, 'a rejected baseline must not hold decidability past the grace')
+    assert.equal(snapshots.at(-1)?.verdict, 'degraded')
     socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', 'false'] })
     assert.equal(facts.status().edges, 0, 'a malformed status must not close a running edge')
     assert.equal(follows, 0)
@@ -771,7 +892,12 @@ test('reconnect uses an exponential backoff instead of a fixed 1s hammer', async
 /** 仪器：每个来源的状态可由外部读取（函数视图，不产生周期性对象）。 */
 test('the per-source instrument exposes the live status', () => {
   const host: Record<string, unknown> = {}
-  publishSourceMuxInstrument('ssh-d', () => ({ ready: true, edges: 2, lastEventAt: 5, pendingReads: 0, pendingClassifications: 0, reconnects: 0, baselines: 1, baselineFailures: 0, followFailures: 0, socketErrors: 0 }), host)
+  publishSourceMuxInstrument('ssh-d', () => ({
+    ready: true, edges: 2, lastEventAt: 5, pendingReads: 0, pendingClassifications: 0,
+    reconnects: 0, baselines: 1, baselineFailures: 0, followFailures: 0, socketErrors: 0,
+    carrierLostAt: null, staleSince: null, baselineFailureReason: null, baselineResamples: 0,
+    lastTrustedBaselineAt: 5, rows: 3,
+  }), host)
   const registry = host.__dshChamberSourceMux as Record<string, () => { edges: number }>
   assert.equal(registry['ssh-d']().edges, 2)
 })

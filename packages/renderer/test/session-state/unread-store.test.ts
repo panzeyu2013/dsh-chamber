@@ -20,6 +20,7 @@ import {
   loadUnread,
   maxWatermark,
   mergeReadMarks,
+  seedReadFloor,
   pruneEmptyUnreadTables,
   pruneUnreadPayload,
   sanitizeUnreadPayload,
@@ -661,5 +662,28 @@ test('boot token: absent/corrupt/throwing storage degrades to fresh and never th
   assert.deepEqual(loadBootToken(throwing, () => 't3'), { token: 't3', verdict: 'fresh' })
   assert.deepEqual(loadBootToken(undefined, () => 't4'), { token: 't4', verdict: 'fresh' })
   assert.match(createBootToken(), /^[0-9a-f-]{8,}$/i, 'randomUUID/hex 形态，never-throw')
+})
+
+test('seedReadFloor: the source-level floor mirrors monotonically and never absorbs an armed dot', () => {
+  // read-all 与首见基线播种用的唯一地板实现（分开写就会出现两套地板规则）。
+  const table = { s1: 50, s3: 999 }
+  const rows = { s1: {}, s2: {}, s3: {} }
+  assert.deepEqual(seedReadFloor(table, rows, 120), { s1: 120, s2: 120, s3: 999 }, '只升不降')
+  // 已武装的完成点是未读账本的事实：地板跳过它，重载后恢复的点必须留。
+  assert.deepEqual(seedReadFloor(table, rows, 120, { s2: true }), { s1: 120, s3: 999 })
+  // 0 / 非水位不臆造：不写这一行（绝不写入 0/NaN 这类假水位）。
+  assert.deepEqual(seedReadFloor({}, { s1: {} }, 0), {})
+  assert.deepEqual(seedReadFloor({}, { s1: {} }, Number.NaN), {})
+})
+
+test('maxWatermark 是 host 域的：observer 域完成戳绝不抬升源级地板', () => {
+  const rows: Record<string, { updatedAt?: number; completedAt?: number | null
+    completedAtDomain?: 'host' | 'observer' | null }> = {
+    s1: { updatedAt: 100, completedAt: 9_000_000_000_000, completedAtDomain: 'observer' },
+    s2: { updatedAt: 200, completedAt: 300, completedAtDomain: 'host' },
+  }
+  // 域盲 max 会取 9e12（客户端墙钟）：整源地板被抬到「现在」，之后 host 真完成被判已读、点永久不出。
+  assert.equal(maxWatermark(rows), 300)
+  assert.deepEqual(seedReadFloor({}, rows, maxWatermark(rows)), { s1: 300, s2: 300 })
 })
 

@@ -9,6 +9,7 @@ import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-cor
 import type { FactsStore } from '../host/facts-store.ts'
 import { createSessionFactsSource, type SessionFactsSnapshot, type SessionFactsSource } from '../session-facts-source.ts'
 import { createSourceMuxFacts, isMuxObservableSourceKind, type SourceMuxFacts } from '../source-mux-facts.ts'
+import { createFactsHealthRecorder, createFactsStepGuard, type FactsHealthRecorder, type FactsStepGuard } from '../facts-health.ts'
 import { shouldDispatchRefreshHint } from '../source-refresh-hint.ts'
 import type { UnreadSaveCoalescer } from '../unread-store.ts'
 
@@ -51,6 +52,17 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
   const serversRef = useRef(servers)
   serversRef.current = servers
   const sourceMuxObserversRef = useRef(new Map<string, SourceMuxFacts>())
+  /**
+   * 事实健康面包屑（本 hook 的记录点：与 use-unread-notifications 各自一个 recorder 实例、
+   * 同一权威日志环、记录点不同）：观察者每次快照后采样一次，状态不变不写环。它给「观察者
+   * 一直不可判」这类形状留下盘上时间线——没有它，画面外的人只能看到空账本。
+   */
+  const factsHealthRef = useRef<FactsHealthRecorder | null>(null)
+  factsHealthRef.current ??= createFactsHealthRecorder()
+  /** 步骤级 never-throw 包装：每个 listener 注册边界（emit 环看不到 chamber listener 抛错）。 */
+  const factsStepGuardRef = useRef<FactsStepGuard | null>(null)
+  factsStepGuardRef.current ??= createFactsStepGuard(factsHealthRef.current)
+  const factsStepGuard = factsStepGuardRef.current
 
   useEffect(() => {
     const reconcile = (): void => {
@@ -109,8 +121,10 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
           onDiagnostic: (message, error) => console.warn(message, error ?? ''),
         })
         source = created
+        // Single boundary: applySessionFacts IS the 'apply-session-facts' never-throw register boundary.
         const unsubscribeFacts = created.subscribe(snapshot => applySessionFacts(sourceId, snapshot))
-        const unsubscribeHint = created.onRowHint(() => requestFactsRefresh(sourceId))
+        const unsubscribeHint = created.onRowHint(() =>
+          factsStepGuard.guard(sourceId, 'facts-row-hint', () => requestFactsRefresh(sourceId)))
         sessionFactsSourcesRef.current.set(sourceId, created)
         sessionFactsTeardownRef.current.set(sourceId, () => {
           unsubscribeFacts()
@@ -120,7 +134,7 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
       }
       source.update(input)
     }
-  }, [gatewayFactsSpec, applySessionFacts, requestFactsRefresh])
+  }, [gatewayFactsSpec, applySessionFacts, requestFactsRefresh, factsStepGuard])
 
   /**
    * SSH / 其它 dsh 远端来源的**无壳观察者**：这些来源没有只读镜像，关壳期间没有事实
@@ -150,11 +164,35 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
     }
     for (const [sourceId, fingerprint] of wanted) {
       if (sourceMuxTeardownRef.current.has(sourceId)) continue
+      // 观察者实例要先有才能采样（onSnapshot 闭包在构造时就存在，只能经 created 拿实例）：
+      // createSourceMuxFacts 构造期不 emit，且赋值在 start() 之前 ⇒ 这里必定已赋值，无需恒真守卫。
+      let created: SourceMuxFacts | null = null
+      const sampleFactsHealth = (): void => {
+        const status = created!.status()
+        factsHealthRef.current?.record(sourceId, {
+          ready: status.ready,
+          staleSince: status.staleSince,
+          baselines: status.baselines,
+          baselineFailures: status.baselineFailures,
+          baselineResamples: status.baselineResamples,
+          baselineFailureReason: status.baselineFailureReason,
+          reconnects: status.reconnects,
+          socketErrors: status.socketErrors,
+          rows: status.rows,
+          lastTrustedBaselineAt: status.lastTrustedBaselineAt,
+        })
+      }
       const observer = createSourceMuxFacts({
         sourceId,
         origin: window.location.origin,
-        onSnapshot: snapshot => applySessionFacts(sourceId, snapshot),
+        onSnapshot: snapshot => {
+          factsStepGuard.guard(sourceId, 'mux-snapshot', () => {
+            applySessionFacts(sourceId, snapshot)
+            sampleFactsHealth()
+          })
+        },
       })
+      created = observer
       observer.start()
       sourceMuxObserversRef.current.set(sourceId, observer)
       // The mux observer registers NO content-stall evidence: source-level $events
@@ -165,7 +203,7 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
       })
       sourceMuxIdentityRef.current.set(sourceId, fingerprint)
     }
-  }, [sourceMuxSpec, applySessionFacts])
+  }, [sourceMuxSpec, applySessionFacts, factsStepGuard])
 
   // 焦点参与「正在阅读」谓词：focus/blur 只重算账本，不回退读标记（已读单向）。
   useEffect(() => {
