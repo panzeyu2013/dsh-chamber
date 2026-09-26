@@ -398,109 +398,73 @@ running 批之后重放更早的批，其 `keepFence` 早已随原批过去、�
 
 #### 3.2.4 交付契约（重载存活、离线不补发）
 
-- **页代 token**：`sessionStorage` 键 `dsh-chamber.boot-token.v1`（`boot-token.ts`）
-  ——读到同 token = reload（保留 pending/outcomes），缺失/坏值/新进程/新窗口 = fresh
-  （丢弃 pending 并 loud；`notified/outcomes` 仍 durable）；storage 不可用降级为内存
-  token 并判 fresh（宁可多丢一次 pending，不打断启动）。
-- **结算点**：每 (source, session) 本代**第一份带已知 goal 事实**的观测是结算点（首份
-  批次，含空首帧，同样是基线 G2）：若此时结论已定（complete/blocked ⇒ 静默结清并记
-  outcomes；null/paused/goalId 变化 ⇒ 静默 drop），一律**不通知**。goal 仍 active 时按
-  activation 分出口：armed / unknown ⇒ pending 继续 keep（§3.2.3 #5/#6，等激活事件或相位
-  变化）；**例外（#4）**：该观测**不是本代基线**（`baseline === false`）且 activation 已是
-  disarmed、且已有 pending ⇒ 立即 flush 中性「目标未继续运行」**一次**（该 goalId 首见 ⇒
-  goal-stopped；已见 ⇒「会话已完成」），消费 pending 并 arm——这不是 keep。分界在
-  `notification-projection.ts` 的 #4 分支条件 `activation === 'disarmed' && !baseline`：
-  基线观测即使 disarmed 也走 #5/#6 keep（G2 更高优先，等下一份非基线观测结算）。
-  离线「完成 + outcome 均已发生」⇒ 首份已知 goal 事实即 outcome/null ⇒ 静默结清，**不补发**。
-  **例外（G4 deferred 释放）**：`pending.deferred === 'subagent-busy'` 的释放不受本结算点
-  与基线门约束（§3.2.3 G4/#13）——延迟位是 durable 身份、boot=fresh 已在账本构造期丢弃
-  pending，基线观测同样按 #10/#11 中性释放一次；否则同页 reload 后延迟完成永久滞留。
-- **落盘**：pending 的每次变更（hold / 吸收 / 结清 / 清）都经 unread v2 的 `pending`/
-  `outcomes` 增量持久化，与 `notified` 同一次写；flush、撤回与会话消失**立即**排盘
-  （`persist(immediate=true)`），`voided`/`dropped`（#1 作废、#3 静默结清/结算守卫）同样立即
-  （TL3：1s 节流窗口内崩溃重放不得复活已作废的 pending）；变更检测按三张 durable 表的
-  写时复制引用，而不是只按 disposition（纯水位吸收也必须落盘）。**immediate 落盘经微任务
-  合并（F28，`unread-store.createUnreadSaveCoalescer`）**：同一 tick 的多次 immediate 合并成
-  一次全量落盘（`request()` 只排一次微任务，落盘时读当时最新内存权威——合并只推迟写、
-  不改变写内容），避免一波 `voided`/`dropped`/`flushed` 各做一次全量 prune + stringify 阻塞主线程。
-  **关键路径同步 flush**：`pagehide`、`visibilitychange`（hidden）与 unmount 调 `flush()`——
-  取消待办微任务并同步落最新状态（不丢也不重复；无待办也照常落一次）；flush/voided/dropped 的
-  关键路径语义不因合并被跳过。**`deferred` 是 pending
-  的 durable 身份**（G4）：unread v2 的 `pending` 段逐字段持久化，`sanitizeUnreadPayload`
-  接受合法值 `'subagent-busy'`、非法值只丢该字段而**绝不整条丢弃**（`at` 才是条目成立
-  条件）；reload（boot same）后延迟待释放的完成仍能按 #10/#11/#13 中性释放——丢了它会在
-  同页 reload 后既无法释放、又可能被 #3 静默 drop。
-- **重载存活纪律（disk-seeded 剪枝门）**：App 首帧**同步**载入 v2 的 read/edge
-  （unread-store）与 complete 账本的 notified/pending/outcomes，而权威远端 roster 是异步
-  事实（桥就绪 + `instances_get` 往返）。四类 disk-seeded 剪枝——`completedBySource`、
-  completeLedger 的三张 durable 表（`prune`）、`readMarks`、`edgeLedger`——必须门控
-  在**权威 roster 已结算**（`remoteRosterSettled`：refreshRemotes 成功结算且桥已就绪）
-  之后；未结算不得剪枝、不得落盘——否则依据只含 local 的 live 集合，会把远端来源的
-  durable 未读在首帧写盘删除（pending/outcomes/notified/read/edge 全部不可恢复）。结算
-  那一拍的 state 变化重跑剪枝 effect，届时再按完整 live 收敛；易失轨（prevRunning /
-  观测状态 / 水位记账）不在此门内。**无桥形态（F11）**：`durableUnreadPruneAllowed` 把
-  桥面判定 `'absent'`（500ms 探测预算耗尽仍无 `desktopSsh`，浏览器/dev 直开）**视同已
-  结算**放行——该形态没有远程来源，`live={local}` 即完整权威集合；预算内缺席
-  （`'pending'`，桥可能迟到）与有桥未结算同样关门。**注册表加载降级（F13）**：
-  `refreshRemotes` 在 roster 读取前先 invoke 只读健康通道 `desktop_ssh_instances_health`
-  （载荷终态 `{degraded, reason?, rosterIncomplete, droppedCount?}`，非秘密；主进程记录
-  最后一次注册表加载失败与行级丢弃，契约见 05 §7.4）：degraded 时空 roster 不是权威——
-  **不安装、不置 `remoteRosterSettled`、warn-once**，保持「有桥但未结算」，且
-  `durableUnreadPruneAllowed(settled, bridgeVerdict, registryDegraded, rosterIncomplete)`
-  把 degraded / rosterIncomplete 作**同档优先否决**维：无论结算位与桥面判定为何（含
-  `'absent'` 的防御性组合）一律关门，durable 键不剪、不落盘；注册表成功加载或权威
-  `save_connection`（authoritative）原子重建后健康位清零，再按正常结算收敛——事务回滚
-  （compensation）不清零、降级期间的回滚写只改内存不落盘、重启仍 degraded，直至一次
-  authoritative 保存治愈（F16/A4/F19，契约见 05 §7.4）。**roster 行级丢弃（V5-A）**：
-  JSON 数组解析成功但条目被丢弃——`validateSpec` 拒绝、null/非对象行、重复 id 首胜——
-  时合法行**照常安装**（连接可见、结算照常），但 roster 只是磁盘内容的子集，健康位报
-  `{degraded:false, rosterIncomplete:true, droppedCount:N}`（健康完整为
-  `{degraded:false, rosterIncomplete:false}`，旧生产者缺字段按 false/0 读）；该维同样
-  关死四类 durable 剪枝（与 degraded 同档、含 `'absent'` 防御性组合），且 incomplete
-  期间 `compensation` 回滚也**跳过落盘**（部分快照写回会让下次启动把「部分」读成
-  「完整」并重新放行剪枝）；一次**无丢弃**的成功 load 或 **authoritative** 重建后
-  `rosterIncomplete=false`，剪枝 effect 在下一拍重跑收敛。诊断由
-  `rosterIncompleteDiagnostic(droppedCount)` 单源、warn-once，与 degraded /
-  health-unavailable 三角可区分。**健康探针不可用**（旧桥缺
-  `instances_health` / invoke 抛错）同走 fail-closed：不安装、不置结算位、不折叠成
-  degraded，按可区分诊断 warn-once（F16/A4）。**已知边界**：
-  同页 reload 后观测状态为空表，`forgotten` 只对本代**观测过**的会话产生——两通道皆缺席的历史会话不会触发
-  `forgetSession`，其 durable pending 留到下次 boot 的年龄卫生或来源级 `prune`
-  （§3.2.7 ③）。
-- **卫生上界**：加载时丢弃 `at` 超过 7 天的 pending 并 loud（`PENDING_MAX_AGE_MS`；
-  卫生上界，不是判定计时器）；unread-store 剪枝与 read 同界（每来源 500），outcomes 按
-  水位 LRU 同界。
-- **撤回与遗忘语义**：通道撤回（壳重连/重 boot）清该来源 armed + armedFloor + pending +
-  settleFence + goalKnown（B4-2：结算点记忆与会话身份同拍作废，撤回后恢复的首份已知
-  goal 事实重新成为结算点；恢复后首份观测不补发窗口内完成，围栏也不得跨撤回存活；水位界与 armed 同拍
-  清理，见 §3.2.3 G5），`notified/outcomes` 保持 durable；reload 不清；
-  `forget/prune/归档/removed` 按既有作用域收敛账本（来源退役 `forget` 连 durable 表
-  一并删除）。**会话级遗忘**：某会话从**在场集**消失时同拍清 armed + armedFloor +
-  settleFence + pending + goalKnown（notified/outcomes durable；B4-2），并进入 `forgottenSessions` 重现
-  播种集（FIFO 上界 500，`FORGOTTEN_SESSION_LIMIT`，重现即消费该记忆）。**重现播种完整
-  规则**：重现批**不产候选**、facts 水位记为已见，避免消失前已通知的同一完成经壳
-  completed 边沿或 facts 水位二次通知；重现批**无可用 facts 水位行**（通道不可用 / 行
-  缺席 / 非 `observed`）的会话挂 per-session `factsSeedPending`，其**首个真正吸收
-  observed 水位的 facts 行只播种**（不产候选、水位入 memory）后清除——行已可用但
-  `completedAt=null` / 非 `observed`（暂无可判水位）**不清待决位**（A3-1：否则下一行会
-  以「已播种 + 水位前进」把消失前已通知的同一完成二次通知）；之后严格前进的水位/新壳
-  边沿照常通知。**已知边界（有界优先）**：同一来源在记忆窗口内
-  遗忘超过 500 个不同会话时 FIFO 淘汰最旧键，被淘汰的会话重现不再播种；若是「先壳边沿
-  通知、facts 后到同一完成」，极端 churn 下可能重复一次壳边沿通知——不做无界水位缓存，
-  登记为已接受边界。
-- **观测状态删除 = scoped withdraw（FINAL-C，F30 登记）**：App 从观测表删除一个来源
-  （该来源不在 `live`）时同拍 `withdrawObservationState` 做 scoped withdraw——观测状态是
-  易失轨，不随 durable 剪枝门（`durableUnreadPruneAllowed`）关门；若不同拍清账本，重建的
-  新代（`freshState`，代际从 1 重算）首个 outcome 会拿旧 watermark flush 旧 pending。
-  **取舍**：门关窗口（未结算 / degraded / rosterIncomplete）里 `live` 可能只是磁盘内容的
-  子集，被剪来源的 durable pending 会被删掉且不补发（与通道撤回同语义；`notified/outcomes`
-  保持 durable）；若该来源只是 roster 缺口、会话仍活跃，重新纳入 `live` 后由新代重新观测，
-  其后的完成按 goal 状态重新 hold。有 pending 被清时必须排一次落盘，否则旧 pending 会从
-  磁盘复活（页重载后以旧水位 flush）。相邻的 facts 输入缺席边界见 §3.2.7 ⑦。
-- **在场集定义（原始通道行键）**：在场 = 壳行键 ∪ facts **原始**行键（不是可用/过滤后的
-  facts 行）。通道不可用/stale/degraded 只降该维度为 unknown，**不得当作会话缺席**——
-  否则断连会把 held pending / armed / settleFence 当成遗忘清掉（`factsChannelRows` 与
-  `factsRows` 的分界；2xx unversioned / 404 legacy 的通道判定见 §3.5）。
+- **页代 token**：`sessionStorage` 键 `dsh-chamber.boot-token.v1`（`boot-token.ts`）——同 token = reload
+  （保留 pending/outcomes），缺失/坏值/新进程/新窗口 = fresh（丢 pending 并 loud，`notified/outcomes` 仍
+  durable）；storage 不可用降级内存 token 并判 fresh（宁多丢一次 pending，不打断启动）。
+- **结算点**：每 (source, session) 本代**第一份带已知 goal 事实**的观测（首份批次、含空首帧，即基线
+  G2）：结论已定（complete/blocked ⇒ 静默结清并记 outcomes；null/paused/goalId 变化 ⇒ 静默 drop）一律
+  **不通知**；goal 仍 active 时按 activation 分出口——armed/unknown ⇒ pending 继续 keep（#5/#6），
+  例外 #4：**非本代基线**且 activation 已 disarmed 且已有 pending ⇒ 立即 flush 中性「目标未继续运行」
+  一次（该 goalId 首见 ⇒ goal-stopped，已见 ⇒ 会话已完成）并 arm。离线「完成 + outcome 已发生」⇒ 首份
+  已知 goal 事实即 outcome/null ⇒ 静默结清、**不补发**。G4 deferred 释放不受结算点与基线门约束
+  （§3.2.3 G4/#13）——延迟位是 durable 身份、boot=fresh 已在构造期丢 pending，否则同页 reload 后永久滞留。
+- **落盘**：pending 每次变更（hold/吸收/结清/清）经 unread v2 的 `pending`/`outcomes` 增量持久化，
+  与 `notified` 同一次写；flush、撤回、会话消失与 `voided`/`dropped` **立即**排盘
+  （`persist(immediate=true)`；TL3：1s 节流窗口内崩溃重放不得复活已作废 pending）。变更检测按三张
+  durable 表的写时复制引用，而非只按 disposition（纯水位吸收也必须落盘）。**immediate 经微任务合并**
+  （F28，`unread-store.createUnreadSaveCoalescer`）：同 tick 多次 immediate 合并成一次全量落盘
+  （`request()` 只排一次微任务，落盘时读最新内存权威——只推迟写、不改内容），避免一波
+  `voided`/`dropped`/`flushed` 各做一次全量 prune + stringify 阻塞主线程。**关键路径同步 flush**：
+  `pagehide`/`visibilitychange(hidden)`/unmount 调 `flush()`（取消待办微任务并同步落最新状态，无待办也
+  落一次）。**`deferred` 是 pending 的 durable 身份**：unread v2 逐字段持久化，
+  `sanitizeUnreadPayload` 接受 `'subagent-busy'`、非法值只丢该字段而**绝不整条丢弃**（`at` 才是条目
+  成立条件）——丢了它同页 reload 后既无法释放、又可能被 #3 静默 drop。
+- **重载存活纪律（disk-seeded 剪枝门）**：App 首帧**同步**载入 v2 read/edge 与账本三表，而权威远端
+  roster 是异步事实（桥就绪 + `instances_get` 往返）。四类 disk-seeded 剪枝（`completedBySource`、
+  账本三表 `prune`、`readMarks`、`edgeLedger`）必须门控在**权威 roster 已结算**
+  （`remoteRosterSettled`）之后；未结算不得剪枝、不得落盘，否则会按只含 local 的 live 集合把远端
+  durable 未读在首帧写盘删除（不可恢复）；结算那一拍重跑剪枝 effect，易失轨不在此门内。
+  **无桥形态（F11）**：`durableUnreadPruneAllowed` 把桥面 `'absent'`（500ms 探测预算耗尽仍无
+  `desktopSsh`，浏览器/dev 直开）**视同已结算**放行（无远程来源，`live={local}` 即完整权威集合）；
+  预算内缺席（`'pending'`）与有桥未结算同样关门。**注册表加载降级（F13）**：`refreshRemotes` 先 invoke
+  只读健康通道 `desktop_ssh_instances_health`（载荷 `{degraded, reason?, rosterIncomplete, droppedCount?}`，
+  契约见 05 §7.4）：degraded 时空 roster 不是权威——**不安装、不置结算位、warn-once**，且
+  `durableUnreadPruneAllowed` 把 degraded/rosterIncomplete 作**同档优先否决**维（含 `'absent'` 防御性
+  组合）一律关门；注册表成功加载或 authoritative `save_connection` 原子重建后健康位清零再正常收敛
+  （compensation 回滚不清零、降级期回滚写只改内存不落盘、重启仍 degraded，直至 authoritative 保存治愈；
+  F16/A4/F19）。**roster 行级丢弃（V5-A）**：解析成功但条目被丢（`validateSpec` 拒绝、null/非对象、
+  重复 id 首胜）⇒ 合法行照常安装，健康位报 `{degraded:false, rosterIncomplete:true, droppedCount:N}`
+  （旧生产者缺字段按 false/0 读），该维同样关死四类剪枝且 incomplete 期间 compensation 回滚**跳过落盘**
+  （部分快照会让下次启动把「部分」读成「完整」）；一次无丢弃成功 load 或 authoritative 重建后清零，
+  剪枝 effect 下一拍收敛；诊断单源 `rosterIncompleteDiagnostic`、warn-once。**健康探针不可用**（旧桥缺
+  `instances_health`/invoke 抛错）同走 fail-closed：不安装、不置结算位、不折叠成 degraded，按可区分诊断
+  warn-once。**已知边界**：同页 reload 后观测状态为空表，`forgotten` 只对本代观测过的会话产生，
+  两通道皆缺席的历史会话不触发 `forgetSession`，其 durable pending 留到下次 boot 年龄卫生或来源级
+  `prune`（§3.2.7 ③）。
+- **卫生上界**：加载时丢弃 `at` 超 7 天的 pending 并 loud（`PENDING_MAX_AGE_MS`，是卫生上界而非判定
+  计时器）；unread 剪枝与 read 同界（每来源 500），outcomes 按水位 LRU 同界。
+- **撤回与遗忘**：通道撤回（壳重连/重 boot）清该来源 armed + armedFloor + pending + settleFence +
+  goalKnown（B4-2：结算点记忆与会话身份同拍作废，恢复后首份已知 goal 事实重新成为结算点；恢复后首份
+  观测不补发窗口内完成；水位界与 armed 同拍清理），`notified/outcomes` 保持 durable，reload 不清；
+  `forget/prune/归档/removed` 按既有作用域收敛（来源退役 `forget` 连 durable 表一并删）。**会话级遗忘**：
+  会话从**在场集**消失时同拍清 armed + armedFloor + settleFence + pending + goalKnown 并进入
+  `forgottenSessions` 重现播种集（FIFO 上界 500，`FORGOTTEN_SESSION_LIMIT`）。**重现播种完整规则**：
+  重现批**不产候选**、facts 水位记为已见；重现批**无可用 facts 水位行**（通道不可用/行缺席/非
+  `observed`）的会话挂 per-session `factsSeedPending`，其**首个真正吸收 observed 水位的 facts 行只播种**
+  后清除——行已可用但 `completedAt=null`/非 `observed` **不清待决位**（A3-1：否则下一行会以「已播种 +
+  水位前进」二次通知）；之后严格前进的水位/新壳边沿照常通知。**已知边界（有界优先）**：同来源在记忆
+  窗口内遗忘超 500 个会话时 FIFO 淘汰最旧键，被淘汰者重现不再播种，极端 churn 下「先壳边沿、facts
+  后到同一完成」可能重复一次壳边沿通知——不做无界水位缓存，已接受登记。
+- **观测状态删除 = scoped withdraw（FINAL-C/F30）**：App 从观测表删来源（不在 `live`）时同拍
+  `withdrawObservationState`（易失轨，不随 durable 剪枝门关门）；若不同拍清账本，重建新代
+  （`freshState`，代际从 1 重算）首个 outcome 会拿旧 watermark flush 旧 pending。**取舍**：门关窗口
+  （未结算/degraded/rosterIncomplete）里 `live` 可能只是磁盘子集，被剪来源的 durable pending 会被删且
+  不补发（与通道撤回同语义；`notified/outcomes` 保持 durable）；若只是 roster 缺口、会话仍活跃，重新
+  纳入后由新代重新观测。有 pending 被清时必须排一次落盘（否则旧 pending 从磁盘复活，页重载后以旧水位
+  flush）。相邻的 facts 输入缺席边界见 §3.2.7 ⑦。
+- **在场集定义（原始通道行键）**：在场 = 壳行键 ∪ facts **原始**行键（非可用/过滤后的 facts 行）。
+  通道不可用/stale/degraded 只降该维度为 unknown，**不得当作会话缺席**——否则断连会把 held pending /
+  armed / settleFence 当遗忘清掉（`factsChannelRows` 与 `factsRows` 的分界；通道判定见 §3.5）。
 
 #### 3.2.5 消费面（通知唯一出口 + 六面单源）
 
@@ -540,91 +504,57 @@ running 批之后重放更早的批，其 `keepFence` 早已随原批过去、�
 #### 3.2.6 Rejected alternatives（goal 层）
 
 1. **`goals/get` 播种 activation**：冷会话 resume = 写面，且错误码前提不成立（§3.2.2）。
-2. **常驻 `session/control` 流**：基线只含 attached 会话、全投影隐私/流量越界——改走
-   既有只读 `session/list` + `$events`。
-3. **unknown 重试耗尽后自动判 disarmed**：会假报「目标未继续运行」；unknown 的唯一出口
-   是事件或相位变化。
-4. **目标标题随相位长期重放**：目标投影 complete/blocked 会持久保留，每次普通完成都会
-   重播目标标题——由 outcomes 一次性身份闭合（R2-A/TL1）。
-5. **通用 debounce 作主机制**：goal 活跃驱动的续跑不是频域问题，压制需要相位/身份而非
-   时间窗。
-6. **只修通知或只修呈现**：两门刻意不同（呈现门更宽），只修一侧会留下假完成或假通知。
-7. **让 `session-state.goal` 成为 required capability**：旧 gateway/旧桌面须保持现状可用，
-   只能可选宣告（design 17 §10.7）。
-8. **为 goal 通知新增 kind/设置开关**：沿用 `complete` 与 `onComplete`，避免设置面无谓
-   扩张。
-9. **改上游 status 位或复用 `completed`**：上游事实的权威不可由 chamber 改写。
-10. **pending 延迟全部完成通知**：那会让普通来源/普通回合也失去即时性；压制必须由 goal
-    身份/相位触发，而不是延迟所有完成。
-11. **蓝点不武装（只在通知层压制）**：呈现/待办/徽标会与通知分叉；本设计让蓝点账本照常
-    武装，由六面同一个呈现谓词压制（§3.2.5）。
+2. **常驻 `session/control` 流**：基线只含 attached 会话、全投影隐私/流量越界——改走只读 `session/list` + `$events`。
+3. **unknown 重试耗尽后自动判 disarmed**：会假报「目标未继续运行」；unknown 唯一出口是事件或相位变化。
+4. **目标标题随相位长期重放**：complete/blocked 投影会持久保留、每次普通完成都重播目标标题——由 outcomes 一次性身份闭合。
+5. **通用 debounce 作主机制**：goal 续跑不是频域问题，压制需相位/身份而非时间窗。
+6. **只修通知或只修呈现**：两门刻意不同（呈现门更宽），只修一侧留假完成或假通知。
+7. **让 `session-state.goal` 成 required capability**：旧 gateway/桌面须保持可用，只能可选宣告（design 17 §10.7）。
+8. **为 goal 通知新增 kind/设置开关**：沿用 `complete` 与 `onComplete`，避免设置面扩张。
+9. **改上游 status 位或复用 `completed`**：上游事实权威不可由 chamber 改写。
+10. **pending 延迟全部完成通知**：会让普通来源失去即时性；压制须由 goal 身份/相位触发。
+11. **蓝点不武装（只在通知层压制）**：呈现/待办/徽标会与通知分叉；改为蓝点照常武装、六面同一呈现谓词压制（§3.2.5）。
 
 #### 3.2.7 开放项
 
-1. **只读 activation 读**：上游提案或 chamber seed 插件（替换 §3.2.2 的 unknown-hold
-   静默窗口）。
-2. **实机验收与上游读**：打包态实机走查（同 §4）与「只读 activation 读」上游提案
-   （本项第 1 条）仍是剩余面。
-3. **侧边栏 goal 指示与 schedule/job 续跑扩展**：本期只做压制/标题/六面一致（goal 不新增
-   独立视觉元素）；续跑类来源（schedule/job）不在收敛器输入内，扩展面留待后续（范围决策
-   登记见 `docs/progress/STATUS.md`）。
+1. **只读 activation 读**：上游提案或 chamber seed 插件（替换 §3.2.2 的 unknown-hold 静默窗口）。
+2. **实机验收与上游读**：打包态实机走查（§4）与本项第 1 条仍是剩余面。
+3. **侧边栏 goal 指示与 schedule/job 续跑扩展**：本期只做压制/标题/六面一致；续跑类来源（schedule/job）不在收敛器输入内（范围决策见 `docs/progress/STATUS.md`）。
 
-**已知边界/取舍（2026-12 第三/四轮同步登记，逐条与实现核对；原第②条「ssh-instances 注册表损坏剪远端 durable 键」已随 F13/F16/A4/F19 闭合注销——degraded 期间不剪不落盘、补偿写不落空表、重启仍 degraded，契约见 05 §7.4 与本节 §3.2.4）**：
+**已知边界/取舍（2026-12 同步登记、逐条与实现核对；原第②条「ssh-instances 注册表损坏剪远端 durable 键」已随 F13/F16/A4/F19 闭合注销——degraded 期间不剪不落盘、补偿写不落空表、重启仍 degraded，契约见 05 §7.4 与 §3.2.4）**：
 
-- ① **无桥形态的剪枝门视为已结算（F11 已修）**：500ms 探测预算耗尽仍无
-  `desktopSsh` ⇒ `bridgeVerdict='absent'`，`durableUnreadPruneAllowed` 视同已结算放行
-  （无远程来源，`live={local}` 即完整权威集合）；预算内缺席（`'pending'`，桥可能迟到）与
-  有桥未结算同样关门。实现口径见 §3.2.4。
-- ③ **reload 时两通道皆缺席的会话无 forget 事件**：`forgotten` 只对本代**观测过**的
-  会话在两条通道都不再列出时产生；同页 reload 后观测状态是空表，历史缺席不会触发
-  `forgetSession`——其 durable pending 留到下次 boot 的 7 天年龄卫生或来源级 `prune`
-  （会话重现则按重现播种消费）。有界且不产生错误通知，登记为实现口径。
-- ④ **silent-settle 无水位 pending 仍置栏（保守，保留旧行为）**：基线/首见 outcome 的
-  静默结清在 `pending.watermark` 缺席时同样走无水位路径置栏（boundary = 当时已吸收
-  水位）；该栏只吞掉同一次完成的下一条 facts 候选，不改变「离线不补发」语义。
-- ⑤ **P1/P2a/P2b 保留边纪律统一（F14 已收口）**：三路一律「绑定 id 与当前投影/基线不符
-  时保留待匹配」——P1（挂载壳，`goal-activation.ts`）的边每会话至多一条、新事件覆盖，
-  只在会话/行离开、显式 no-goal、`reset()`/`dispose()` 时清除，绑定守卫（`activationOf`
-  仅在投影 id 匹配时合并）保证绝不落到别的 goal 上；P2a（design 17 §10.7）与 P2b
-  （§3.5）的行事实面同规。第三 goalId drop 出口与 `awaitingBaselineOf` 已删，P1 不再是
-  刻意差异。
-- ⑥ **跨批围栏重复（V5-B 已登记边界，2026-12）**：触发链——facts 不可用期间壳边沿
-  通知 C1 并置栏（boundary=0）→ 新回合 running 观测在**另一批**先到，该批没有
-  `fenceSeed`，围栏按 #1 原语义清掉 → facts 恢复批的 C4-X2 播种登记**无栏可依**
-  （`seedSettleFence` 无栏即 no-op）→ facts 侧迟到的被守卫完成水位（旧 observed 水位，
-  或行完成后补齐）按 rule ③ 判成新完成再通知一次。用例：
-  `completion-observation.test.ts` 的 `KNOWN-BOUNDARY(C4-X2 cross-batch)` 与
-  `KNOWN-BOUNDARY(I1 fence cross-batch)` 各钉住 2 个物理完成 / 3 条通知（水位序列
-  `[undefined, 100, 200]`）；主进程 5s 去重 claim 键为五元组
-  `[sourceId, sourceFingerprint, sessionId, kind, eventKey]`（§3.3），首条壳边沿
-  与重复的 facts 完成各自持有独立的投递身份（eventKey）⇒ 键不同，因此不被其吞掉。**为何不做跨批
-  围栏存活、计数式启发为何被否决**：见 §3.2.8；当前以有界重复接受，跨批时序/吞栏判定由
-  上述 KNOWN-BOUNDARY 用例钉住。
-- ⑦ **facts 输入缺席（纯壳批）不触发复位补偿（F30 登记，开放边界）**：触发链——来源
-  已有可用 facts 批（`factsSeeded=true`）→ 某批 facts 输入**缺席**（`input.facts ===
-  undefined`，与 §3.2.4 的显式不可用不同）→ 壳轨在该批 emit 无水位 complete 并置栏
-  （`shellCompleteSinceFacts=true`，但没有可复位的「不可用窗口」）→ 随后恢复的第一个
-  可用 facts 批因 `factsSeeded` 仍为真而是**非播种批**，不登记 `fenceSeed`/`seededSince`
-  → facts 侧同一完成的水位严格高于栏 boundary，围栏 rule ③ 放行 ⇒ 同一物理完成双发
-  （壳 1 条 + facts 1 条，TOTAL=2；两条 claim 键各带自己的投递身份 eventKey，
-  主进程 5s 去重不吞）。与 ⑥ 的差别：⑥ 的栏被跨批 running 清掉，本项的栏还在，
-  只是恢复批无从补种。**建议修法**（当前按 spec 边界未实施）：把「facts 缺席 → 可用」
-  并入非可用窗口，触发 per-session 再次播种补偿（恢复批按 `shellNotifiedSinceFacts` 对
-  确实通知过的会话登记 `fenceSeed`）；影响面 = 该窗口内恰发生一次壳轨通知的来源会话，
-  每条重复一条横幅（会话事实与蓝点不受影响）。
+- ① **无桥形态剪枝门视为已结算（F11 已修）**：500ms 预算耗尽仍无 `desktopSsh` ⇒ `bridgeVerdict='absent'`
+  视同已结算放行（`live={local}` 完整）；预算内缺席与有桥未结算关门。实现见 §3.2.4。
+- ③ **reload 时两通道皆缺席的会话无 forget 事件**：`forgotten` 只对本代**观测过**的会话产生；历史缺席
+  留到下次 boot 的 7 天年龄卫生或来源级 `prune`（重现则按播种消费）。有界、不产生错误通知。
+- ④ **silent-settle 无水位 pending 仍置栏（保守）**：基线/首见 outcome 静默结清在 `pending.watermark`
+  缺席时同样置栏（boundary = 当时已吸收水位）；只吞同一次完成的下一条 facts 候选，不改「离线不补发」。
+- ⑤ **P1/P2a/P2b 保留边纪律统一（F14 已收口）**：三路一律「绑定 id 与投影/基线不符时保留待匹配」；
+  P1 边每会话至多一条、新事件覆盖，只在会话/行离开、显式 no-goal、`reset()`/`dispose()` 清除，
+  绑定守卫保证不落到别的 goal；P2a（design 17 §10.7）/P2b（§3.5）同规。第三 goalId drop 出口与
+  `awaitingBaselineOf` 已删。
+- ⑥ **跨批围栏重复（V5-B 已登记边界）**：触发链——facts 不可用期壳边沿通知 C1 并置栏（boundary=0）→
+  新回合 running 观测在**另一批**先到、该批无 `fenceSeed`，围栏按 #1 清掉 → facts 恢复批的 C4-X2 播种
+  登记无栏可依（no-op）→ facts 侧迟到的被守卫完成水位按 rule ③ 判成新完成再通知一次。用例
+  `completion-observation.test.ts` 的 `KNOWN-BOUNDARY(C4-X2 cross-batch)` / `(I1 fence cross-batch)`
+  各钉 2 个物理完成 / 3 条通知；主进程 5s 去重 claim 键为五元组（§3.3），两条投递身份 eventKey 不同
+  故不被吞。为何不做跨批围栏存活、计数式启发为何被否决见 §3.2.8；当前以有界重复接受。
+- ⑦ **facts 输入缺席（纯壳批）不触发复位补偿（F30 登记，开放边界）**：触发链——来源已有可用 facts 批
+  （`factsSeeded=true`）→ 某批 facts 输入**缺席**（与显式不可用不同）→ 壳轨 emit 无水位 complete 置栏
+  （`shellCompleteSinceFacts=true`，但无「不可用窗口」可复位）→ 恢复的首个可用批因 `factsSeeded` 仍真
+  而是非播种批、不登记 `fenceSeed`/`seededSince` → facts 侧同一完成水位高于栏 boundary，rule ③ 放行 ⇒
+  同一物理完成双发（壳 1 + facts 1；claim 键各带 eventKey，5s 去重不吞）。与 ⑥ 差别：⑥ 的栏被跨批
+  running 清掉，本项栏还在、只是恢复批无从补种。**建议修法**（未实施）：把「facts 缺席 → 可用」并入
+  非可用窗口，按 `shellNotifiedSinceFacts` 对确实通知过的会话再次播种补偿；影响面 = 该窗口内恰有一次
+  壳轨通知的来源会话，每条重复一条横幅（会话事实与蓝点不受影响）。
 
 #### 3.2.8 Rejected alternatives（完成身份与跨批围栏）
 
-1. **跨批围栏存活**（让 `settleFence` 跨过中间的 running 批，等 facts 恢复后再裁决）：
-   被否决。`boundary` 只有水位、没有完成身份——facts 恢复若直接报出严格更高的水位，
-   这恰是「被守卫的完成从未在 facts 侧出现、这是一个真实新完成」，同一栏会把它吞掉
-   （丢发）。
-2. **计数式启发**（按「被守卫的完成必然后到」保留围栏 N 次、或等到下一个候选）：同样会
-   误吞真实新完成，且把丢发概率换成可调猜测参数；不得为消例引入。
-3. **本地伪造完成身份**（按水位区间/会话时间窗给围栏补一个本地身份，避开上游依赖）：
-   被否决——本地输入只有水位，任何身份都是猜测，重复与丢发只会在两种误判间搬家；正确
-   出口是上游只读「完成身份」面，在其落地前接受有界重复（§3.2.7 ⑥ 用例钉住时序与吞栏
-   边界）。
+1. **跨批围栏存活**（`settleFence` 跨 running 批等 facts 恢复）：否决——`boundary` 只有水位、没有完成
+   身份，facts 恢复若报严格更高水位恰是「真实新完成」，同一栏会吞掉它（丢发）。
+2. **计数式启发**（保留 N 次/等下一候选）：同样误吞真实新完成，且把丢发概率换成可调猜测参数。
+3. **本地伪造完成身份**（按水位区间/时间窗）：否决——本地输入只有水位，任何身份都是猜测；正确出口是
+   上游只读「完成身份」面，落地前接受有界重复（§3.2.7 ⑥ 用例钉住时序与吞栏边界）。
 
 ### 3.3 通知事件与 IPC
 

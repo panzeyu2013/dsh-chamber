@@ -29,7 +29,7 @@ GitHub Releases全部可用版本**（稳定/预发布标记、发布日期、ga
 |对外端口|30801（dsh内部端口30800一并说明，可改）|
 |安装方式|local（`~/.dsh-chamber`，gateway自管程序与dsh；可选npm全局）|
 |服务形态|root + systemd；非root + `systemctl --user`；无systemd自动前台|
-|dsh版本|与发布绑定的 `DSH_CHAMBER_DSH_VERSION`（当前 0.1.7-rc.2，单一来源 `packages/desktop/vendor/dsh/pnpm-lock.yaml`；可改；运行期 `/chamber/runtime` 可切换）|
+|dsh版本|与发布绑定的 `DSH_CHAMBER_DSH_VERSION`（单一来源 `packages/desktop/vendor/dsh/pnpm-lock.yaml`；可改；运行期 `/chamber/runtime` 可切换）|
 |npm镜像|国内镜像registry.npmmirror.com（可选官方源 / 跟随系统）。仅用于dsh内建锚安装；运行期 `/chamber/runtime` 安装源独立（默认npmjs，安装器不播种，可在设置页改）|
 
 ## 2. 安装流程（脚本自动完成）

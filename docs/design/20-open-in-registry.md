@@ -65,10 +65,8 @@
    `iconUrl` 是根相对路径（`src/client/index.ts:50`）——N-ctx 壳下页面 origin 是控制面 ⇒ 探针/图标
    404 ⇒ 只有拉进复合（covered + factory）+ 构建期 vendor 补丁与 subpath seam 才能修好。
 3. **效果依赖实例 runtime 的版本**：官方 open-in 行自 **dsh-v0.1.3-alpha.2** 才存在
-   （`packages/renderer/src/chamber-covered.ts:216`）；本仓**运行时锚与源码 pin 都已是 0.1.7-rc.2**
-   （单一来源 `packages/desktop/vendor/dsh/pnpm-lock.yaml`，`bundle-dsh.mjs:79` 兜底同值）⇒ 非主要理由，
-   但**旧内置 runtime 仍缺该行**（`/Applications/dsh-chamber.app` v0.2.4 携带
-   `@deepseek-ai/dsh@0.1.2-rc.1`）。fork & supersede 不依赖该行。
+   （`packages/renderer/src/chamber-covered.ts:135`）；本仓**运行时锚与源码 pin 都已是 0.1.7-rc.2**
+   （单一来源 `packages/desktop/vendor/dsh/pnpm-lock.yaml`，`bundle-dsh.mjs:79` 兜底同值）⇒ 非主要理由。fork & supersede 不依赖该行。
 
 **补注（第 2 条的机器级复活）**：上游那条"目录/图标由承载页面的 host 回答"的不变量，在**机器级**上仍然是对的——只是本壳有 N 个 host，需要点名"哪一个是机器 host"。答案是把页面上的机器 host 钉为**本地实例**：
 渲染壳建唯一一份 `chamberMachineCatalog` 注入每个 entry（§4.2）。不新增传输面（本地 entry 的
@@ -202,7 +200,7 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
   分体按钮**（清单见 §7.1；对照 design 16 §6.1 与 `OpenInButton.module.css`、
   `IconChevronDownOutlineRegular`）。提示用同一 pin 的设计系统 `Tooltip`（**不再用原生 `title`**）；chevron
   带 `aria-haspopup="menu"` / `aria-expanded`，每次打开重探目录（原 bespoke `onOpening` 语义搬到
-  trigger，`OpenInButton.tsx:368-396`）。**插件内唯一的菜单逻辑是 N-ctx 归属**
+  trigger，`OpenInButton.tsx:174`）。**插件内唯一的菜单逻辑是 N-ctx 归属**
   `instance-view-guard.ts`：打开期间观察 trigger 祖先链，`.instance-view` 带
   `instance-hidden`/`instance-pending`/`hidden`/`aria-hidden` 或断开即关闭菜单
   （`instance-view-guard.ts:49-58,164-181`）——隐藏视图的残留打开态不得随视图复活，击键不得落到隐藏视图；
@@ -288,7 +286,7 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
    **C2** tag 重放自动纳入（按 registry 的 `upstream` 集合，advisory）；**C6 排除表不动**：本 fork
    **不 shadow vendor 包名**，上游 `packages/host/open-in-app` 必须留在 vendor 树作 diff 锚（加进
    `EXCLUDED_UPSTREAM_DIRS` 会让 C1 失去上游对照）；
-6. 桌面侧与**插件管理页的客户端投影**：`packages/desktop/main.ts:2325-2334` 的 `chamberHostSourceDirs`
+6. 桌面侧与**插件管理页的客户端投影**：`packages/desktop/main.ts:1301` 的 `chamberHostSourceDirs`
    （不进远端 seed）与 `plugin-sync.ts:965` 的远端同步循环——**本包标 `localOnly`**：远端不 seed/不 probe。
    `localOnly?: true` 加到 `ChamberHostPackageDescriptor` 并**透出到 `ChamberHostPackageState`**
    （`plugin-sync.ts:427-441` 投影），页面据此把该行**只列在本地目标**（远端/gateway/http

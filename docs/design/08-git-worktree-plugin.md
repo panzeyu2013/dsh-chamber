@@ -489,14 +489,14 @@ pre-remove 归档**不**停止，仍由归档管理器的删除前停止兜底�
   分支」（§5.3）。
 - **dirty**：删除图标不再禁用（仅 dirty），点击进对话框显示醒目警示（"该工作树有未提交的更改，将被
   永久丢弃"）；授权由**官方 `RiskConfirmation`** 收集
-  （`RemoveWorktreeDialog.tsx:411`，单手势与撤销语义按 
+  （`RemoveWorktreeDialog.tsx`，单手势与撤销语义按 
    F1 校正）：对话框内无勾选框，点「移除」时尚缺授权则先弹官方风险确认（警示图标 + 同上
   说明 + 自动聚焦勾选框「我了解这些更改将被丢弃」，主按钮勾选前不可用），
   **该门自己的 Confirm 就地执行这次删除**——一次手势即 `移除 → 勾选 → 确认`，确认后以
   `discardChanges: true` 跑同一删除路径，无需第二次「移除」。门开关由点击「移除」时选定的**授权
   种类**持有（`discard-gate.ts` 的 `nextDiscardGate`：先 dirty、后 submodule），`onConfirm`/
-  `onCancel` 才释放（`RemoveWorktreeDialog.tsx:411-439`）。**取消即撤销**：Cancel / 关闭 / 遮罩 /
-  Escape 都把这次门收集的授权复位为未授权（`onCancel`，`RemoveWorktreeDialog.tsx:425-434`），因此退出确认
+  `onCancel` 才释放（`RemoveWorktreeDialog.tsx:358`）。**取消即撤销**：Cancel / 关闭 / 遮罩 /
+  Escape 都把这次门收集的授权复位为未授权（`onCancel`，`RemoveWorktreeDialog.tsx:358`），因此退出确认
   绝不会留下一个"已授权但没删"的脏状态——下次「移除」重新打开同一门，用户不会在事后被静默丢弃文件；授权对话框打开期间删除对话框忽略关闭（两对话框各自在 document 上监听
   Escape，`RemoveWorktreeDialog.tsx:215-222`）。
 - **含子模块**：行事实不含子模块信息；首次删除被 host 确定性拒绝（`worktree-submodules`，变更前、

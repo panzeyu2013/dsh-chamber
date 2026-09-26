@@ -741,7 +741,7 @@ textarea **一次性展示**（成功复制后即清空，60 秒未复制自动�
   `aria-describedby="confirm-description"`）= 标题 + 正文 + `#confirm-pending`（`role="status"
   `aria-live="polite"`）+ 动作行 `#confirm-actions`（Cancel + 危险色 Confirm）。两个背景地标
   `<header id="page-header">` / `<main id="page-main">` 带 id，专供脚本施加 `inert`。
-- **控制器**（`routes.ts:723-866`，`confirmArmed` 单飞）：`armConfirmDialog` 填充文案——**全部经
+- **控制器**（`chamber-assets.ts:556`，`confirmArmed` 单飞）：`armConfirmDialog` 填充文案——**全部经
   `textContent` 写入**（插值不会被当作 HTML 解析）并把焦点移入对话框（Cancel，最不破坏性的控件）；
   `acceptConfirmDialog` 恰好启动一次 runner，随后对话框变成不可取消的进度面；`dismissConfirmDialog`
   （Cancel / Escape / 遮罩点击）**什么都不做**：runner 在被调用前就被丢弃，不会有请求离开页面。
@@ -752,7 +752,7 @@ textarea **一次性展示**（成功复制后即清空，60 秒未复制自动�
   门，以及运行时的全部控件）。
 - **`aria-busy` 挂在动作行而非对话框**（F2）：`#confirm-pending` 是对话框的后代，辅助技术可能不播报 busy
   子树内的变化，把忙碌标记挂在祖先会吞掉它本该伴随的那条播报。
-- **使用面 = 凭据移除的两处**（`removePassword` / `removeToken`，`routes.ts:868`/`:923`）；本页其余动作
+- **使用面 = 凭据移除的两处**（`removePassword` / `removeToken`，`chamber-assets.ts:701`/`:756`）；本页其余动作
   （apply-now / restart / registry…）仍由各自控件直接触发，没有确认对话框。
 
 ### 10.4 桌面连接卡的 gateway 主机日志
@@ -1347,331 +1347,87 @@ chamber 客户端插件）见 §3 装配矩阵与 §10.2。
 
 ### 18.4 社区实现借鉴
 
-调研基线（源码级复核：GitHub API + 本地克隆 + 现场抓取）：
-`dsh-client-ui-mobile-adapt`（Hotsteel2901）、`dsh-mobile-shell`（Yui-Little，派生自
-mexiaosqwq/dsh-web-mobile）、`dsh-ui-mobile`（jasondu，npm 已发布）、
-`dsh-web-ui-mobile`（whoamihappyhacking）、`dsh-mobile-pwa`（zylzyqzz）；另加
-`dsh-meow-smooth`（Phant0Meow，41★，唯一仍在活跃开发、键盘/IME 机制最完整）。
-前五者均 MIT、均已停更，宜作**架构参考而非上游依赖**。
+调研基线（源码级复核）：`dsh-client-ui-mobile-adapt`、`dsh-mobile-shell`（派生自
+dsh-web-mobile）、`dsh-ui-mobile`（npm 已发布）、`dsh-web-ui-mobile`、`dsh-mobile-pwa`
+（五者 MIT、均已停更）与 `dsh-meow-smooth`（唯一活跃、键盘/IME 机制最完整）。
+**实现纪律：零代码复制、完整重写**——只吸收设计决策，不 fork/搬运社区文件。重写输入：
+① dsh 基线 `v0.1.7-rc.2`（`harness.commit`），走 chamber 现有模板与构建体系；② N-ctx 多实例：
+打标/样式按实例根作用域化，行为层 effect 为 document 级单实例设计（多 shell renderer 挂载时
+必须作用域化）；③ layout 事实源在 `dsh-chamber-client-ui-layout`，不注入 gateway 托管实例
+（mobile 的唯一部署），只观察官方 `data-sidebar-collapsed`；④ 选择器锚自研 DOM + fork 内
+`data-*` 钩子，不猜官方哈希类名；⑤ 断点带触屏守卫 `(max-width:1023px) and (pointer: coarse)`
++ 768px 手机档（社区 "PC leak" 教训）；⑥ 能力取舍：行为层必做，社区宿主路由（删除/推理等级/
+插件市场/GitHub token）v1 不做。
 
-**社区形态复核（源码级）**：
-- **设置页**：主流形态与 chamber 同构——`mobile-adapt/lib/client.js` 的
-  `.VOzbGW_panel{position:fixed;inset:0;flex-direction:column}` +
-  `.VOzbGW_nav{flex-direction:row}` + `.VOzbGW_navList`/`.VOzbGW_navCell` 横向 chips +
-  `.VOzbGW_options{flex:1;overflow-y:auto}`，与 §18.4.3 的 chamber 版逐条对应（chamber 版另有
-  44px 触控底线、chips 横向滚动与安全区）。**第三种形态**：`dsh-mobile-shell/src/client/mobile.css.ts`
-  用左侧 72px 图标导航栏 + 右侧内容列（navCell 竖排 icon+label、rail 自身 `overflow-y:auto`、
-  Close 变返回箭头、无遮罩全页）；4 个官方分区在 375px 宽度上，72px 侧栏比顶部 chips 更费宽度，
-  故 chamber 取 chips 形态——**取舍**而非「社区没有该做法」。
-- **tooltip 粘滞**：`dsh-ui-mobile/src/client/mobile.module.css` 与 chamber 同款全局隐藏
-  （`[role='tooltip']{display:none!important}`，并带单测），注释同以「标签仍可由 aria-label 取得」
-  为据——两者共享「信息型气泡被一并隐藏」的盲区；chamber 已精化为
-  `(pointer: coarse) and (hover: none)` 下的 `button[aria-label] + [role="tooltip"][data-side]`。
-- **键盘**：`dsh-mobile-shell` 与 chamber 同为 `interactive-widget=resizes-content` +
-  `innerHeight - visualViewport.height` 探测；`dsh-meow-smooth` 更进一步（动态 vv 基线替代
-  `screen.height`，注释记录折叠屏/分屏恒误报事故、**可编辑焦点信号**、`offsetTop` 补偿 fixed 元素）。
-  chamber 吸收「收缩不是充分条件」但**未照搬**其"缩放一票否决"（会让 iOS 聚焦缩放永久否决），
-  缩放策略取「只服务 composer」（见 §18.4.4）。
+**18.4.1 挂载机制（社区已证明零成本）**：标准三件套 = `package.json` 的 `dsh.bundle.patch`
+→ `cordis.patch.yml` 单行 insert → `dsh.client.inject`；产物为
+`window.__ModuleLoader__.load({id, factory})` + 运行时注入 `<style data-plugin-css>`。
+chamber 已有完全同构先例（design 09 方案 A + host-graph-seed `--patch` overlay），**无需新机制**；
+宿主侧能力走 dsh 实例自己的 host 插件，不越控制面边界（v1 不引入删除类）。选择器三条路线中
+chamber 走第三条：已 fork `dsh-client-web`/`ui-layout`，在 fork 内加 `data-*` 钩子；唯一
+类名例外是**局部名后缀契约**（实例 bundle 为 `[hash]_[local]`，只能用
+`:is([class$="_<local>"], [class*="_<local> "])` 形态；`_<local>_<hash>_<idx>` 是 chamber 自建壳
+命名、不属于实例 bundle）。
 
-> **实现纪律：零代码复制，完整重写。** 本节仅为架构与机制参照——
-> `dsh-chamber-client-ui-mobile` **不 fork、不搬运任何社区文件**（MIT 仅保证可阅读，
-> 不作为代码来源），只吸收以下设计决策后按 chamber 基座重写。**重写输入（社区单实例插件均未处理）**：
-> 1. **dsh 基线 v0.1.7-rc.2**（harness pin 477b4f4205；`dsh-client-web` fork 提供
->    `__ModuleLoader__`、`extraRows`、异步 dispose 缝）：按 chamber 现有
->    `dsh-chamber-client-ui-*` 模板与构建体系写，不采用社区构建形态（tsdown/内联 CSS 等）；
-> 2. **N-ctx 多实例**：document 级 effect 按实例根作用域化（`[data-shell-overlay]` 的
->    parentElement）并做 generation 隔离。**实现边界**：
->    打标/样式按实例根作用域化；行为层 effect（IME/回车换行/自愈/Esc）为 document 级单实例
->    设计——gateway 单 shell 下成立，未来多 shell renderer 挂载时必须作用域化；
-> 3. **layout 事实源**：chamber 的 `dsh-chamber-client-ui-layout` 持有
->    `viewportWidth`/`narrowExpanded`（store 不再有 `narrow` 字段，窄屏标记由
->    `viewportWidth < SIDEBAR_AUTO_COLLAPSE` 派生，collapsed 推导由官方 `AppFrame` 内联完成——
->    fork 不再持有 `collapsedOf` 投影函数）。**不再有跨插件 `layoutFacts` 服务**（零消费者的
->    `ctx.layoutFacts` 已随本次退役删除）。**部署矩阵裁定**：§18.2/§3 明确 layout 不注入
->    gateway 托管实例——mobile 的唯一部署——故 `src/client/layout-facts.ts` 只观察官方
->    `data-sidebar-collapsed` 属性（含触屏档 matchMedia 的 narrow 判定），不保留任何
->    chamber layout 服务分支；
-> 4. **自研 DOM**：chamber 替换了官方 sidebar/layout/settings-bridge 注册，移动适配的选择器与
->    打标以自研 DOM + fork 内新增 `data-*` 钩子为锚，不猜官方哈希类名；
-> 5. **断点带触屏守卫**：`(max-width: 1023px) and (pointer: coarse)` 主断点 + 768px 手机档
->    （社区 "PC leak" 教训——桌面窄窗口不得误启移动 UI，`dsh-mobile-shell` 即缺此守卫）；
-> 6. **能力取舍**：行为层（IME 恢复、composer 自愈、回车换行、打标替代 `:has()`、WAAPI 抽屉动画）
->    为必做；社区宿主路由（会话删除/推理等级/插件市场/GitHub token）v1 不做；
->    Web Push 仅保留端点解耦架构。
+**18.4.3 布局覆盖要点（实证坑）**：
+- 三栏→单栏：`@media` 内 Grid 覆盖 `0 minmax(0,1fr) 0` + 侧栏 `position:fixed` 脱离流；
+- 抽屉 containing-block 陷阱：官方设置面板 portal 挂在 fixed 侧栏内，任何 `transform`/
+  `will-change`/`contain` 都会把它裁进抽屉 ⇒ **ui-layout fork 把设置对话框移出该 portal 即根除**；
+- 弹层不统一限宽：曾对所有非设置 `aria-modal` 加 `max-width`，把全幅 `ImageLightbox` 限出未变暗的
+  可点穿条带；树里三个 `role="dialog" aria-modal` 生产者各自已带视口适配 ⇒ 已删除；
+- 设置面板全屏：`fixed inset:0` + 纵向滚动 + safe-area；粘滞行按官方
+  `[data-slot="settings.header"]`/`settings.action`/`settings.close` 缝定位，不用位置索引；
+  手机档 nav 变横向 chips（44px）；分区网格只剩 Models provider 一处 4 列→2×2（后缀契约例外锚点，
+  fail-soft 回官方网格）；plugin-inventory / agent-preset 两张卡片网格几何归上游，chamber 不覆盖；
+- 会话头部：抽屉开关（官方 `IconPanelLeftOutlineRegular` + 官方 label 对，自写 `aria-expanded`、
+  无 `aria-haspopup`）与头部内容重叠 ⇒ 头部预留左 gutter；crumbs 行改换行不裁切；
+  「Session 日志」胶囊上游已改 more-actions 28×28 图标，插件不再按文案打标；
+- 安全区一次做全：`viewport-fit=cover` + `env(safe-area-inset-*)` + `100dvh` + `theme-color`
+  跟随主题 + `interactive-widget=resizes-content`；textarea 恢复 `touch-action:auto`；
+- 右栏/轨迹：769–1023px 档上游不全屏且第三轨钉 0 ⇒ 触屏档给面板全屏呈现
+  （`[data-mobile-role="details"] [data-sidebar-right-panel]` → `fixed inset:0; z-index:40`），
+  网格锁不变、**刻意不加「已展开」门控**（动画同刻 `shown:false` 会让全屏盒中途失效）；抽屉/
+  遮罩/开关挂官方 `shell.overlay`（独立栈上下文），面板展开期显式让位，需轨道臂 +
+  `data-rightbar-fullscreen` 两条臂；锚点注意 slot 出口是 `display:contents`，对「列的子元素」
+  定位是静默 no-op；跨栈真正解需 body portal（未做）。
 
-**18.4.1 挂载机制（社区已证明零成本）**
+**18.4.4 行为层（移动端复杂度核心）**：IME 恢复（focus 丢弃循环 / editability 翻转 / pointerup
+refocus / visualViewport 判定 / 键盘补偿五层）、回车=换行、composer 自愈（30s busy 强解锁 +
+遮挡中和 + 44px 触控下限）、包装官方方法必须保持 Promise 链（返回 `originalSink()`，否则输入框
+永久卡死）、`:has()` 每 DOM 变更重算是卡顿源（改 MutationObserver + microtask）；这些补丁的
+合法落点是 `dsh-client-web` fork。
+- **composer 可见性守卫**（390×844 真机台架实测两处硬缺陷）：① 双倍抬升——sticky `bottom` 与
+  滚动器 `padding-bottom` 两臂叠加（滚动器同时是 seat 的 sticky 包含块）⇒ 只保留 seat 的
+  sticky `bottom`，余量用流内 spacer；② 不 arm——按 `isKeyboardOpen` 推断在事件缺失时不动作 ⇒
+  改为**只测量遮挡**（`covered = scrollport.bottom − (vv.offsetTop + vv.height)`，同布局坐标系）；
+- 守卫取舍：可编辑焦点打点（收缩不是充分条件）；缩放策略只服务 composer（一刀切否决会让 iOS
+  聚焦缩放永久留在后面）；量化 16px；arm 期间归零 seat 安全区；按 frame 元素幂等；滞回 96/72；
+  有界验证（写后复测 ≤2 步、容差 24px，不达标只报 `still-covered` 不追）；自推锁存防空转；
+  诊断面 `data-mobile-kbd`/`data-mobile-kbd-state`；触达 = vv/window resize + focusin
+  （1200ms 宽限）+ visibilitychange + pointerdown + `[data-phase]` observer + 250ms 有界轮询；
+  editability 恢复只吃目标为 composer 自身的 record；
+- 被否决：滚动器 padding + seat inset 两臂、调阈值/延迟重试仍走推断、`html[data-mobile-kbd]`
+  第二 CSS 载体、任何可编辑焦点都抬升、插件层禁用 PDF.js、懒加载重客户端包（改上游 ⇒ 上游提案）；
+- tooltip 粘滞：官方 `Tooltip` 只有 mouseenter/leave/focus/blur，粗指针 tap 无配对 leave ⇒
+  `(pointer: coarse) and (hover: none)` 门控、只隐藏 `button[aria-label] + [role="tooltip"][data-side]`
+  （官方 31 处用法中 27 处匹配；4 处信息型气泡保留，第 5 处无 `data-side` 结构性排除）；
+  原生 `title` 长按气泡不抑制（登记 STATUS）；
+- 抽屉点击自愈：iOS 抑制抽屉内点击的合成 click ⇒ 稳定 tap 后 120ms 内无真实 click 时从 pointerup
+  目标重发非受信 bubbling click，迟到真实 click 被抑制（防双激活）；平移/滚动/表单控件/抽屉外
+  不触发（`drawer-taps.ts`）。导航后不弹键盘：IME layer-1 gesture 改按**导航区语义**丢弃程序化
+  回焦（抽屉与会话头起始的手势），composer 内/发送键/硬键盘/portal 选择器保留。
 
-标准 dsh 客户端插件三件套：`package.json` 声明 `dsh.bundle.patch` →
-`cordis.patch.yml` 单行 `- insert: - id: <名> name: '<名>'` 向 browser roster 追加
-一行；`dsh.client.inject` 声明依赖包（官方 runtime/slots/layout/locale）；浏览器
-产物为 `window.__ModuleLoader__.load({id, factory})` 形态，CSS 运行时注入
-`<style data-plugin-css>` 标签（防重注入）。chamber 已有完全同构的先例
-（design 09 方案 A + host-graph-seed `--patch` overlay），**移动插件挂载无需新机制**。
-宿主半区如需补浏览器 RPC 面缺失的能力（如会话删除——官方 append-only 无删除方法），走 dsh
-实例自身 host 插件（`ctx.inject(['webServer',
-…])` 注册 `/api/*` 路由），属 dsh 实例域，不越控制面边界；v1 不引入删除类宿主能力。
-
-社区两条路线：哈希类名全覆盖（上游构建一改即碎）vs 稳定属性 + 类名后缀
-（`data-mobile-nav="…"` 自有标记 + `[class$="_…"]`）。**chamber 走第三条路且更稳**：
-已 fork `dsh-client-web` 与 `ui-layout`（AGENTS.md 允许改源码的 chamber 包），可在 fork 内
-直接加 `data-*` 钩子，不猜选择器；版本随 dsh 基线（v0.1.7-rc.2，harness pin 477b4f4205；单一来源 `harness.commit`）
-对齐 + 回归测试。断点锚定官方 `SIDEBAR_AUTO_COLLAPSE`（<1024px）为主断点（mobile-shell 同款），
-768px 为手机档（mobile-adapt 同款），420/359px 微调可选。**档位表第三条**：宽度无关的
-**chrome 档** `(pointer: coarse) and (hover: none)` 只承载「粘滞 tooltip 气泡抑制」这一条
-装饰性规则——它是粗指针产物而非窄视口产物（iPad 横屏 1024px+ 同样点按），且与两个宽度档一起
-被「所有规则都在媒体查询内」的回归测试覆盖。**「不猜官方哈希类名」是原则，唯一的类名例外是
-后缀契约**（§18.4.3 的 Models provider 行一条；此后只剩这一条）：
-实例 bundle 的 CSS Modules 生产命名是 `[hash]_[local]`（上游
-`vendor/harness-checkout/packages/client/tsdown.client.ts:517` 的
-`cssModules: { pattern: '[hash]_[local]' }`；0.1.5-rc.1 实测 `JObwrW_row`/`zGbnIq_modelRow`），
-局部名只在**末尾或后随空格**出现，故只能用
-`:is([class$="_<local>"], [class*="_<local> "])`；`_<local>_<hash>_<idx>` 是 **chamber 自建壳
-（Vite 默认 `generateScopedName`）**命名，mobile 插件只加载上游产物，该形态永不出现。
-
-**18.4.3 布局覆盖要点（实证验证过的坑）**
-
-- **三栏 → 单栏**：`@media` 内覆盖 Grid 为 `0 minmax(0,1fr) 0`；侧边栏 `position:fixed` 脱离流后
-  Grid 才不会把中栏挤进 0 宽轨道；
-- **抽屉动画的 containing-block 陷阱**：官方侧边栏 portal 着 fixed 设置面板；`transform` 非 none
-  （含 identity）/`will-change`/`contain` 都会把它裁进抽屉（mobile-adapt 弃 transform 用 left 位移；
-  mobile-shell 用合成器动画且故意不写 will-change）。**ui-layout fork 把设置对话框移出侧边栏 portal
-  即可根除**——fork 路线优于外部插件的直接收益；
-- **弹层限宽：不做统一 blanket 限宽**。手机档曾对**所有**非设置
-  `aria-modal` 弹层加 `max-width: calc(100vw - 24px)`，已删除：官方全幅图像 lightbox（ui-attachment
-  `ImageLightbox`，`role="dialog"` 的 backdrop 为 `position:fixed; inset:0` + 内部 `inset-0` 遮罩）
-  被限成 `100vw-24px` 且左对齐，右侧留 24px 未变暗、可点穿的条带。树里三个
-  `role="dialog" aria-modal="true"` 生产者各自自带视口适配：设置面板（本插件全屏）、ui-primitives
-  `Modal`（root 钉 `inset:0`、24px 内边距、dialog 上限 `min(380px, 100%)`）、`ImageLightbox`（全幅）
-  ——官方几何本身即适配；
-- **设置面板全屏**：`fixed inset:0` + 内容纵向滚动 + safe-area 补边（P1 的 nav 未做横向滚动，官方
-  条目窄屏可接受，需补时追加 `overflow-x`）；结构识别不靠位置索引：判定锚是官方
-  `[data-slot="settings.header"]`，粘滞行锚是文档化的 `[data-slot="settings.action"]` +
-  `[data-slot="settings.close"]` 两缝（详见下条），chamber 在 fork/插件里直接打标；
-- **输入工具行单行**：`flex-wrap: nowrap` + 触发器限宽 112px + 字号 12px；
-- **设置整页适配（手机档 ≤768px；平板 >768 保留桌面弹窗几何；实机门禁 §18.6）**：取代上条
-  **chamber P1** 取舍（只全屏 + 整列滚动、nav 不横向滚动）。官方壳是 800px `flex-row`（188px 竖排 nav
-  rail + 内容列），手机档把 panel 改 `flex-direction: column` 全屏堆叠：nav rail 变顶部横条（标题 +
-  **横向滚动分区 chips**，44px 触控，顶部安全区）；内容列 header（actions+Close）以 `position: sticky`
-  固定（P1 的"整个 content 滚动"会让 Close 滚出屏），**该行选择器锚在文档化的两条缝上**：
-  `… > div:last-child > div:has([data-slot="settings.action"]):has([data-slot="settings.close"])`
-  ——官方形状为 content > header >（actions > action 出口、close 按钮 > close 出口），只有这一行同时带两
-  条缝，actions 格单独持 action 缝、options 格只持 `settings.section`，故位置无关、绝不误中 options 格；
-  内容列保留**兜底纵向滚动**（官方 header+options 精确匹配时仅 options 内滚，永不双重滚动；结构漂移时
-  兜底滚动 + sticky header，杜绝硬锁死），options 区纵向滚动并补底部安全区；导航条与 options 的左右
-  padding 带 `env(safe-area-inset-left/right)`（刘海横屏）；分区内网格降级只剩**一条**：Models provider
-  行 4 列 grid → 2×2。官方内部格子无稳定属性，这一处使用文档化的
-  **局部名后缀**匹配 `:is([class$="_<local>"], [class*="_<local> "])`——实例 bundle 的 CSS Modules
-  生产命名是 `[hash]_[local]`（上游 `tsdown.client.ts:517`；产物实测 `JObwrW_row`/`zGbnIq_modelRow`），
-  局部名可能不在末位，故后缀 + 后随空格两臂并用；`_<local>_<hash>_<idx>` 是 chamber 自建壳（Vite）的
-  命名，不属于实例 bundle——曾用的 `[class*="_<local>_"]` infix 因此命中不到任何东西。
-  命名翻转时 fail-soft 回官方网格，属记录在案的例外锚点族，后缀契约见 §18.4.2。
-  **卡片网格不再由 chamber 降级（影响面按 
-  F3 校正为两张网格）**：该手机档设置分区下有**两张各由上游拥有、规则却不同**的卡片网格——
-  - `ui-settings-plugin-inventory/PluginInventorySettingsTab.module.css` 自带折叠断点
-    （`@media (max-width: 680px)` 把 `.cards` 收成单列），chamber 原先那条强制单列只在该网格的
-    **681–768px** 窗口里与上游自己的两列几何相矛盾；
-  - `ui-agent-preset/AgentPresetSection.module.css` **完全不带断点**：`.cards` 是
-    `repeat(auto-fill, minmax(268px, 1fr))`、外层 `.section` 上限 720px，故约 **580px** 视口宽起上游即
-    渲染两列（两张 268px 卡 + 12px gap 需 548px options 内宽 = 视口 − 2×(16px + safe-area)）；被删的
-    强制单列改的是它**整个两列区间**（手机档约 **580–768px**），不只是 681–768px。
-  两条都已删除（T17b）：每张网格的几何由上游拥有，chamber 不覆盖（Agent-presets 本无断点、靠
-  `auto-fill` 自身；inventory 那条才是断点）。
-  弹窗内可编辑字段套用 composer 同款 16px 聚焦缩放底线；
-- **会话头部（会话页顶部标题/面包屑行）**：官方 header 为桌面宽度 chrome，移动面三轴冲突全部以
-  结构化锚点覆盖（不依赖哈希类名）——
-  (a) 浮动抽屉开关（左上 44px，官方 `IconPanelLeftOutlineRegular` 字形——不再是自绘 CSS 汉堡；
-  **可访问名**即官方名（`aria-label` 随状态切换，官方 toggle 的
-  `toggle.open`/`toggle.collapse` 对）；但其 ARIA **不是官方属性表**——官方控件只带那一个 label，
-  画外替身另写自身为真的 `aria-expanded`；校正了"ARIA 也是官方形状"多算的
-  一个属性。**`aria-haspopup` 已删**——抽屉是侧栏本体被移出画外、无类型弹层；官方只在真有弹层时写
-  类型，如设置触发器 `aria-haspopup="dialog"`）与头部内容重叠 → 头部预留左
-  gutter（`[data-slot="conversation.session.header"] > header` 直接子结构，`padding-left` 同步让出 tab 行）；
-  (b) 官方 crumbs 行 nowrap + overflow hidden 会静默截断长标题链/谱系 chip（如「N 个子代理」目录触发器） → 换行不裁切（单段省略号保留）；
-  (c) 官方 session-log-export 的「Session 日志」胶囊（header utilities，min-width 111px+
-  药丸）在手机上吃满标题行而移动端几乎不导出 → 上游已把该
-  控件改为会话头 more-actions 菜单里的 28×28 图标按钮（`HeaderAction.tsx`），插件不再按文案打标
-  （旧 `data-mobile-dismiss` 机制与 CSS 一并删除）。
-- **安全区一次做全**：`viewport-fit=cover` + `env(safe-area-inset-*)` 全表面 + `100dvh`/`dvh` +
-  `theme-color` 跟随主题 + `interactive-widget=resizes-content`；`touch-action` 需给 textarea 恢复
-  `auto`（否则吞光标）；
-- **轨迹详情**：移动端改底部悬浮卡（`bottom` 抬到输入区上方，`min(52vh,460px)`），或新增 Status
-  标签页承载统计（mobile-shell 思路）。右侧覆盖层形态（`data-details-collapsed` 移除时 details 列
-  `position:fixed; right:0`）**已退役**；「只保留第三轨网格锁、右栏呈现全交官方」经复审
-  判定不足以覆盖 769–1023px：上游只在 `<768px` 自动全屏（`ui-sidebar-right` 的
-  `autoFullscreen = viewportWidth < 768`、`track = shown && !autoFullscreen`），该档却把第三轨钉成 0 ⇒
-  展开的面板以常规宽度（视口 769–1023 时 313–460px，约正文列 40–45%）直接盖在会话上，既不占轨道也不
-  全屏。**现决策**：触屏档自己给官方面板全屏呈现
-  （`[data-mobile-role="details"] [data-sidebar-right-panel]` → `position:fixed; inset:0; z-index:40`；
-  z-40 即上游自己的全屏层），网格锁（`[data-mobile-role="details"] { grid-column: 3 }`）不变。该规则
-  **刻意不加「已展开」门控**：座席在滑出动画同一 commit 上报 `shown:false`，门控会让全屏盒在动画中途
-  失效；隐藏态由上游自己的 `translateX(100%) + visibility:hidden` 承担。安全区
-  （`env(safe-area-inset-*)`）与 `box-sizing:border-box` 写在同一规则里：面板自身与全树都非 border-box，
-  content-box 的 `inset:0 + width:100%` 会连 inset 一起撑宽。**锚点注记**：面板不是该列的直接子节点——
-  每个 slot 渲染点都把输出包在 `[data-slot="<key>"]` 出口里，而出口是 `display:contents`（ui-renderer
-  `scoped-slots.tsx` 的 `ANCHOR_STYLE`），故对「列的子元素」施加定位是**静默 no-op**；规则瞄准面板
-  自己的上游状态属性并以 details 列限定作用域。**层级范围与抽屉让位**：插件的抽屉/遮罩/抽屉开关
-  （z-74/75/76）挂在官方 `shell.overlay` 层内，该层是 `position:absolute; z-index:20` 的**独立栈
-  上下文**——三者压在框架内容与普通右栏列（z-10）之上，但**低于官方全屏右栏（z-40）与浮动面板宿主
-  （z-60）**；面板展开期间抽屉**显式让位**：开关与遮罩 `display:none`、已打开的抽屉
-  `visibility:hidden`（与关闭态同一机制，同时移出 Tab 序），不留可聚焦的面板后内容。**让位需要两条
-  臂**：`data-rightbar-collapsed` 是上游的**轨道**标志（`cols.rightbar === 0`），而
-  `track = shown && !autoFullscreen` ⇒ 手机档（<768，上游自动全屏）已展开的面板照样上报 track=false，
-  只用轨道臂会让手机完全不让位；第二条臂用座的 `data-rightbar-fullscreen`（`openRightbar`/
-  `closeRightbar` 成对读写）。768–1023 档内面板自带的**模式控件隐藏**（该档呈现已钉死 ⇒
-  push↔fullscreen 翻转成为 no-op；<768 保留，因上游把它当「收起」用），面板子树声明
-  `overscroll-behavior: contain`。要跨栈仍须把节点移到 body 级 portal，未做。
-
-**18.4.4 行为层（移动端复杂度的真正核心）**
-
-社区经验（IME/键盘/合成器是主战场）：IME 恢复（focus 丢弃循环、readOnly 翻转 blur、
-pointerup refocus、visualViewport 高度差 >20% 且 >120px 判键盘开）、回车 = 换行、composer 自愈（30s busy
-强解锁、遮罩 pointer-events 中和、44px 触控下限）、包装官方方法必须保持 Promise 链（返回 `originalSink()`
-否则输入框永久卡死，社区 v0.1.6 踩坑）、`:has()` 每 DOM 变更重算是切标签卡顿源（改用 MutationObserver +
-microtask 合并）。**dsh-client-web fork 是这些补丁的合法落点**（补丁面已含 boot/context 类改动）；行为层已按
-五层落地 IME 恢复（程序化 focus 丢弃循环 / editability 翻转 / pointerup 手势 refocus / visualViewport 键盘
-判定 / 键盘补偿）+ 30s busy 自愈 + 键盘遮挡兜底（实现见
-`packages/dsh-chamber-client-ui-mobile/src/client/composer.ts`）。
-
-**composer 可见性守卫（layer-5，实测修订）**：原「键盘钉住」（`installKeyboardPinning`，对 seat 做
-`scrollIntoView`）在 iOS 上**恒为空转**——官方 composer seat 是 `position: sticky` 且是会话滚动器
-`[data-conversation-scroll]` 的**流内子元素**，滚动它只会被 sticky 钉回 layout 底部。
-
-其后的「键盘补偿」（旧导出 `installKeyboardCompensation`，已由 `installComposerVisibilityGuard` 取代；配套的
-`kbdCoveredHeight`/`shouldCompensateKeyboard` 一并删除）在 390×844 真机引擎台架（Chrome 152 + 从用户网关实抓的
-上游 CSS/DOM + 本插件真实产物）上实测暴露两处硬缺陷，均修复：
-
-1. **双倍抬升（几何）**：旧实现把抬升**同时**写成 seat 的 sticky `bottom` 与滚动器的 `padding-bottom`；
-   而滚动器**同时是 seat 的 sticky 包含块**，其自身 padding 把 sticky 阈值一并垫高 ⇒ 两臂叠加。实测：键盘
-   顶在 508 时 seat 被抬到 `[40..140]`（意图 `[392..492]`）——**超出键盘顶 368px**，输入框飞到屏幕上方。
-   现在执行器**只有一个**：seat 的 sticky `bottom`；会话滚动余量由守卫插在 seat 之前的**流内 spacer**
-   （`data-mobile-kbd-spacer`）提供，绝不再给滚动器加 padding。
-2. **不 arm（触达）**：旧实现以 `isKeyboardOpen(innerHeight vs vv)` 推断键盘，输入是引擎事件驱动的启发式；
-   事件缺失/迟到（Android WebView 盲区）时整条补偿不动。实测：键盘打开但无 vv 事件 ⇒ `kbd=false`、
-   `covered=+336`，**composer 被键盘整块盖住**（症状）。现在**不推断键盘、只测量遮挡**：
-   `covered = scrollport.getBoundingClientRect().bottom − (vv.offsetTop + vv.height)`，两个量同处 layout 坐标系、
-   平移/缩放自洽；滚动器盒高由 flex 决定（`height:100%` + `flex:1;min-height:0`），是我们的写入**改不动**的量
-   ⇒ 闭环有不动点、不会振荡。
-
-守卫与取舍：
-- **可编辑焦点**（focusin + focusout 打点 + composer 选区兜底）：收缩不是充分条件；focusout 打点让「提交期
-  editability 翻转」和「blur → 收起动画」都在正确
-  的时刻起算，选区兜底覆盖官方 `contenteditable` 在
-  `adjudicating|submitting` 期间翻 false 的窗口。
-- **缩放策略 = 只服务 composer**：一刀切 `scale > 1.01` 否决错误——iOS 会对抽屉 13px 搜索框
-  （`ui-workspace:1187`）聚焦缩放且页面**保持缩放**，否决会让 composer 在键盘开着时永久留在后面。现在缩放 +
-  焦点在 `[data-composer-seat]` 内照常补偿（把 seat 拉到可视视口底边），非 composer 字段在缩放态仍否决
-  （缩放页面的平移不得驱动偏移）；并从源头消除聚焦缩放——抽屉内输入框补 16px 底线。
-- **量化 16px**（原 48px）：死区从 8–55px 收窄到 8–23px；vv 事件按帧合并，步进增多的写入可忽略。「移动中
-  量化 + 静止吸附精确值」留作实机观察后的备选。
-- **arm 期间归零 seat 底部安全区 padding**：键盘弹起时该 inset 位于键盘之后，不归零会多出 0–34px 死区；
-  抬升量来自键盘几何，归零不会造成遮挡。
-- **arm 以 frame 元素为单位幂等**：renderer 重挂替换 AppFrame 时按元素重打标（并清理旧 frame 的插件属性），
-  而非依赖数值 `applied` 短路（否则新 frame 无属性、composer 停在键盘后）。
-- **滞回 96/72**：≥96px 才视为键盘级遮挡（浏览器底栏/60px 级小重叠实测保持 idle），armed 后 <72px 才释放，
-  滑动的键盘不会让 seat 抖动。
-- **有界验证**：写后复测 ≤2 步、容差 24px，且只修正**写入期间增长**的需求（需求不变时 `extra > 0` 不可达，
-  部分兑现由下一次 sync 收敛）；不达标只写 `data-mobile-kbd-state=still-covered` 上报，**绝不连续爬升**——
-  引擎若忽略 sticky inset，是"报告"而不是"追"。
-- **前提与自推锁存**：测量值依赖「滚动器边框盒由 flex 决定」这一上游 CSS 契约
-  （`.root{height:100%}`→`.body{flex:1}`→`.scrollBody{flex:1}`）；该前提不是守卫能强制的，故 `applyLift` 在
-  **同一次写入的前后**读被测边：载体若以自己的增长回应本次增量（合成模型 20 tick 爬到 5984px），锁存后不再
-  抬升、只报 `still-covered`（viewport 驱动的位移落在写入窗口之外，不会误锁）。
-- **诊断面**：`data-mobile-kbd`（生效 px）+ `data-mobile-kbd-state`（armed | idle | no-seat | no-frame |
-  still-covered）落在 frame 上并镜像到 `<html>`，真机可即时读取；`idle` 覆盖「低于阈值 / 无可编辑焦点 / 焦点
-  不在 composer」三因；"静默不生效"这一失效模式不再可能。
-- **触达完整**：vv resize/scroll + window resize + focusin（focusout 只打 1.2s 宽限窗）+ visibilitychange + document pointerdown（任意
-  点击后重同步一次）+ `[data-phase]` observer（sticky seat 只在 active 相位存在）+ 可编辑焦点后 250ms 有界轮询
-  （4s 预算）。实测无事件场景 8 帧内收敛。
-- **宽限窗口 1200ms（`KBD_EDITABLE_FOCUS_GRACE_MS`）**：自 focusout 起算，覆盖「提交期 editability 翻转」与
-  「blur → 键盘收起动画」；量化前的 headroom 固定 8px（`KBD_OFFSET_HEADROOM_PX`），故实测死区为 8–23px。
-- **editability 恢复的调用契约（实测/评审修正）**：observer 监听整棵 document 子树，
-  `isEditabilityFlipToEditable` 必须只吃**目标为 composer 自身**的 record——嵌套 Lexical 装饰器翻转自己的
-  `contenteditable` 曾满足谓词，导致输入中途 blur+refocus（已按 record target 收窄并加源文本锁）。
-
-**被否决的备选（Rejected alternatives，layer-5）**：
-- **滚动器 padding + seat inset 两臂并用**（旧实现）：实测双倍抬升（见上第 1 条），已删除 padding 臂；
-  回归由 `packages/dsh-chamber-client-ui-mobile/test/behavior/composer-guard.test.ts` 的"该规则必须不存在"断言钉住。
-- **调阈值 / 加延迟重试仍走推断**：`isKeyboardOpen` 类启发式在事件缺失时不 arm，改测量后该失效类别整体消失。
-- **`html[data-mobile-kbd]` 作第二 CSS 载体兜底**：实抓包证明 frame 打标成立，第二载体只增加状态面（否决）。
-- **放宽为"任何可编辑焦点都抬升"**：会让设置页/提问卡片的键盘把 composer 抬起（只服务 composer 的既有策略保留）。
-- **插件层禁用 PDF.js 预览包以降首屏字节**：裁剪功能，用户明确否决；首屏字节改走登录期后台预热（本文件 §10.6）。
-- **懒加载重客户端包**：需改上游 `dsh-client-modules`（host 组装 + shell 引导循环），不在本仓 fork 范围
-  （`scripts/upstream/registry.json` 的 `excludedUpstreamDirs` 仅三处镜像），登记为上游提案而非本仓改动。
-
-Enter 换行路径另补 `[data-input-scroll]` 内光标揭示——官方 `revealSelection` 的依赖数组是布尔
-`[draft !== ""]`，非空 draft 插入换行不触发它。
-
-**tooltip 粘滞**：官方 ui-primitives `Tooltip` 只有 mouseenter/mouseleave/focus/blur，粗指针上 tap 合成
-mouseenter 而无配对 mouseleave ⇒ 延迟气泡常驻。规则以 `(pointer: coarse) and (hover: none)` 门控（宽屏触控
-设备同样点按；接鼠标时 hover 翻转让位）且只隐藏 `button[aria-label] + [role="tooltip"][data-side]`（官方 31 处用法中 27 处为带 aria-label 的按钮，其中 3 处措辞略有差异、语义相同）；四处
-信息型气泡（聊天统计行、代理预设卡片描述、轨迹时间轴 span、≤620px 轨迹 kind 标签）保留，第五处
-`role="tooltip"`（轨迹 turn-rail 预览）无 `data-side` 被结构性排除。原生 `title` 长按气泡**不抑制**（刻意
-手势，且部分 title 是截断行的唯一全文入口，登记于 STATUS）。
-移动导航机制两条（实机门禁见 §18.6）：
-- **抽屉点击自愈**：iOS Safari 抑制抽屉内点击的合成 click（行 hover 展开使命中元素在 touchstart/touchend 间
-  位移；社区实测合成 click 可整体缺失、与 DOM 变更时序无关） → 单击会话行无反应、双击才生效。机制：
-  稳定 tap（位移 ≤ slop、touch/pen、touch 档）的 pointerup 后 120ms 宽限内真实 click 未到达时，从 pointerup
-  目标重发非受信 bubbling click——React 委托的行 onClick 照常执行导航；真实 click 到达则零干预；自愈后
-  150ms 内同坐标的受信 click 视为迟到真实 click 被抑制（防双重激活）。起点按 pointerId 跟踪；平移/滚动意图
-  （位移超 slop）、表单控件（含任意非 false 态 contenteditable）、抽屉之外一律不触发（`drawer-taps.ts`，纯
-  判定单测覆盖；桌面不受影响）；
-- **导航后不弹键盘**：官方 InputBar 在会话切换/解锁时把焦点还给 composer（桌面惯例）——从抽屉点会话行切换
-  后 iOS 会立刻弹键盘。IME 阶梯 layer-1 的 gesture 判定改为**导航区语义**：仅当手势起始于导航区（抽屉
-  `[data-mobile-role="sidebar"]` 或会话头 `[data-slot="conversation.session.header"]`）时丢弃程序化回焦；
-  composer seat 内手势、发送键、鼠标/硬键盘聚焦与 portal 型选择器流程（工作区/代理预设菜单）均视为输入
-  意图保留（键盘已开时不丢；粗指针配硬键盘不受影响）。
-
-**18.4.5 官方机制确认与 PWA**
-
-官方插件机制（deepseek-ai/deepseek-harness master 树源码级确认）：
-
-- **官方不存在 ui-mobile 插件**（全树 grep `mobile` 零路径命中）；其对窄视口的策略是**流内换行而非断点
-  布局**（`.row { flex-wrap: wrap }`），"按构造在所有视口宽度下成立"——官方把移动端布局**有意留给第三
-  方**，与 §18.1 实证（桌面范式 UI）一致；
-- **两 manifest 体系**（chamber 插件走的就是该规范，与上游逐字段吻合）：
-  `dsh.bundle.patch` → `cordis.patch.yml`（YAML 数组，按 `id` 整行替换
-  `config`，非深合并）+ `dsh.client`（`exports["./client"]` → 宿主
-  `clientModules` 扫描 → `window.__DSH_BOOT__` WebBootGraph → `GET
-  /plugins/??<pkg>/client.js&rev=<rev>` 不可变缓存组合脚本）；加载顺序
-  bundles 列表 → profile patch → 机器级 patch → `--patch` argv（后层覆盖前层）。
-  纯 client 包（无 `dsh.bundle`）不可被 `dsh plugin` 安装（awesome-dsh-plugin 准入规则原话）；
-- **官方 Web Shell 的 PWA 现状**：viewport meta 无 `viewport-fit=cover`、无 safe-area 处理；仅有
-  `apps/web/public/manifest.webmanifest`（`display: fullscreen`，无 theme_color/background_color）；
-  **官方刻意不提供 service worker**——实现 note 明言"不添加 service worker、缓存策略或离线回退……会形成
-  **误导性的不完整离线约定**"。离线能力要么不做、要么做完整，**gateway 现有空 `sw.js` 占位不得演变为
-  "假离线"承诺**（§18.5）。
-
-PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，三天密集开发后停更；其 API
-面与 chamber 基线（停更时 v0.1.5-alpha.2）已漂移，只能作机制参照）：
-
-- **双半部架构**：node host 半部（`webServer.tapIndex` 注入 PWA 头，`stripHostPwa` 先剥离宿主声明再注入
-  自己的；`/pwa/manifest.webmanifest` 路由 + `/pwa/icons/*` 图标 + 启动骨架 `<div id="root">` 替换）＋
-  浏览器 client 半部（`__ModuleLoader__` + **data-attribute stamping**：`data-mobile-frame`/
-  `data-mobile-role` 自打标，开合由宿主 `data-sidebar-collapsed` 驱动 CSS transform，零 React 状态；
-  body 级 MutationObserver 支持重载重挂——**chamber N-ctx 多实例可直接复用该 stamping 策略**）；
-- **断点 767px**（CSS/JS 共用常量，768–1024 故意不干预、交给宿主让步链；**chamber 采用 §18.4.2 的
-  1023+768 策略**，实现以 §18.4.2 为准）；
-  三栏→单栏用 `grid-template-columns: minmax(0,1fr) !important`（宿主内联样式写 grid，`!important` 必须，
-  每个覆盖都注释对抗目标）；
-- **composer 固定底部双保险**：`position:fixed; bottom:0`（对抗官方 0,3,0 特异性）+
-  `overscroll-behavior-y: contain` + 滚动器 `padding-bottom: var(--dsh-composer-height)` 占位；防 iOS 缩放
-  三件套（`maximum-scale=1,user-scalable=no,viewport-fit=cover` + gesturestart preventDefault + 输入 16px
-  字号）——`user-scalable=no` 是 WCAG 1.4.4 反模式，chamber 版宜只防聚焦缩放；
-- **SW 分档缓存**：`/assets/*`（hashed）cache-first 不可变；`/` 与 `index.html` network-first + 离线回退
-  （`__DSH_BOOT__` rev 随部署变）；其余 cache-first lazy fill；`skipWaiting()` + activate 清旧缓存 +
-  `clients.claim()`。**关键坑：SW 是 origin 级（`/sw.js` scope `/`）——chamber 多实例同源代理
-  （`/api/i/<id>/*`）与 gateway 单目标反代下必须 per-instance 路径（如 `/api/i/<id>/sw.js`），否则缓存互
-  相污染**；
-- **Web Push**：standalone 探测 → GET 配置 → `pushManager.
-  subscribe({userVisibleOnly, applicationServerKey})` → POST 幂等对账；服务端 VAPID env/0600、订阅 0600
-  原子写；宿主事件流 `session/event turn/end completed` 触发 `webpush.sendNotification`（TTL 3600，404/410
-  清订阅）；SW `notificationclick` → 已有窗口 focus +
-  `postMessage('dsh-push-open')` → 当前入口 `uiWorkspace.openSession(sessionId)`（旧 `ctx.sessions.open` 已随 rc.2 退役），无窗口
-  `openWindow('/')`；chamber 网关/远程场景需要自己的移动端通知投影（design 19 思路延伸），不消费会话内容；
-- **工程习惯**：单文件全局 CSS + `!important` 注释对抗目标；手机微补丁（`enterkeyhint="send"`、
-  `-webkit-tap-highlight-color:
-  transparent`、`touch-action: manipulation`、`100dvh`、
-  `prefers-reduced-motion` 关抽屉动画）；`stripHostPwa` 式"插件声明优先"注入纪律。
+**18.4.5 官方机制确认与 PWA**：官方**不存在 ui-mobile 插件**（窄视口策略是流内换行，移动布局
+有意留给第三方）；官方两 manifest 体系即 chamber 走的规范（`dsh.bundle.patch` 的 YAML 数组按
+`id` 整行替换 + `dsh.client` → `clientModules` → `__DSH_BOOT__` → 不可变缓存组合脚本；加载
+顺序 bundles → profile patch → 机器级 patch → `--patch`）；纯 client 包不可被 `dsh plugin` 安装。
+官方 Web Shell 无 `viewport-fit=cover`/safe-area，只有 `manifest.webmanifest`（fullscreen），且
+**刻意不提供 service worker**（避免"误导性的不完整离线约定"）⇒ gateway 的空 `sw.js` 占位不得
+演变为假离线承诺。社区 PWA 机制（`dsh-ui-mobile`，API 面已随基线漂移，仅作参照）：node host 半
+`webServer.tapIndex` 注入 + 浏览器半 data-attribute stamping（可复用于 N-ctx）；三栏→单栏用
+`!important` 对抗宿主内联；SW 是 origin 级、N-ctx/gateway 必须 per-instance 路径（否则缓存互相
+污染）；Web Push 走 `pushManager` + 幂等对账 + 404/410 清订阅，chamber 需要自己的移动端通知投影
+（design 19 延伸），不消费会话内容。
 
 ### 18.5 安全与边界
 

@@ -7,12 +7,6 @@
 
 行数口径：`packages/*` 下非 test/scripts/dist/generated 的 .ts/.tsx/.cts/.mjs 行数合计。
 
-| 时点 | 生产 LOC | 备注 |
-|---|---|---|
-| 基线（HEAD 9c5c8493，本轮开工） | 176,296 | 审计口径 |
-| 第 1–10 轮（结构拆分/单源/删除） | 176,168 | 唯一一次真实净减（unread v1 兼容层）；App 3,107→2,630 |
-| 第 11–15 轮（截止原语 + 5 个单源 store/hook） | 176,395 | 新增模块 ~220 行，同轮删除面净减为正 |
-
 > 用户裁决（第 11 轮）：**行数删减不强制**，行数只作参考；原 −9,000 指标作废。
 > 核心指标 = 消除补丁式修改（根因、单源、先锁后删），见 §6。
 
@@ -37,11 +31,14 @@
 | 5 | shell-core 拆分 → 解掉最后一个类型环 | **类型面已收口**（seam 类型迁往 host-edges / shell-assembly-ctx / shell-ipc-ctx / registry-projection；shell-core 2,492→1,821，棘轮已下调）；值面（投递状态机/路径解析/运行时解析，至 target 1,600）未动 | allowance 条目已删除；`verify:import-cycles` 类型环 0（已达成）；棘轮继续下降 |
 | 6 | 逐包收尾：derive/instance-api/aggregate-store/plugin-sync/gateway-provider/ssh-provider/transport-manager/session-state | 未动 | 见 `scripts/gates/file-budgets.json`；棘轮逐轮下降，`check:static`/`check:tests` 恒绿 |
 
-### 3.1 state/ref 同步镜像清单（11 对全部收口 + 第 16 轮审计补充项）
+### 3.1 state/ref 同步镜像清单（已收口对不再列出；下列为仍开放与备查项）
 
 "一个状态两个权威源 + 手写同步"就是补丁式修改的典型形态。收口方向：**渲染值走
 useSyncExternalStore 的小 store（单源），事件回调读 store 的 getSnapshot()，删掉 ref 镜像**；
 不引入状态库、不新增包。
+
+> 已收口的 11 对不再列出（状态与迁移以各 host store 的代码注释与 git 历史为准）；下表只留仍开放
+> 与备查项。
 
 | 对 | 状态 | 迁移顺序 |
 |---|---|---|
@@ -68,59 +65,11 @@ useSyncExternalStore 的小 store（单源），事件回调读 store 的 getSna
   `aggregatesRef`/`serverLabelsRef`、`serversRef`、`prewarmEligibleRef`、
   `harvestCandidatesRef`、`deferredBootRef`。
 
-### 3.2 已修的补丁臂（regression test 已落）
+### 3.2 已收口的补丁臂（不在此复述）
 
-- `healthErrorTick`（1 Hz 计数强制重渲染）→ `host/use-deadline.ts` 截止时刻原语；
-  锁：`test/view-runtime/deadline.test.ts`（纯判定 + "tick 不得复活"）。
-- unread v1 防御性导入（HEAD 无写入者）→ 删除；锁：`unread-store.test.ts` 的
-  "v2 是唯一读取键，v1 载荷即使存在也必须被忽略"。
-- 注册表闸门的 state/ref 双权威（`remoteRosterSettled`+`ref`、`rosterListenerReady`+`ref`、
-  `canReplayRosterIntents(committed, latest)`）→ `host/roster-gate.ts` 单源 generation 语义；
-  锁：`test/lifecycle/roster-gate.test.ts`。
-- 三本回声账本的 state/ref 镜像（workspace/session/archive）→ `host/echo-store.ts` 单快照；
-  锁：`test/session-state/echo-store.test.ts`。
-- facts 两张表的渲染期 ref 镜像（`sessionFacts`/`runtimeFacts`，含两处"setState 后再改 ref"
-  与两处 `delete ref.current`）→ `host/facts-store.ts`（App + 四个 hook 单一 store，
-  退役收敛到唯一 `dropSession`）；锁：`test/session-state/facts-store.test.ts`。
-- 注册表投影的"写 ref 再 setState"成对写（`remoteStatus` 3 处、`remoteInstances` 1 处）
-  与渲染期镜像 → `host/remotes-store.ts` 单快照；锁：`test/lifecycle/remotes-store.test.ts`。
-- 第 16 轮审计修复：`watchdogRuntimeFactsRef`（第三个 runtimeFacts 权威）删除改读 store；
-  `use-deadline` 的 deadline→null 残留 true 与 >2^31ms 提前触发两个洞修复
-  （纯判定 `deadlineFired` + 重新武装；锁扩到 stale/null/溢出三例）。
-- 门禁负控补线：`verify-file-budgets` 增加 schema 校验（缺 `lines` 等不再静默放行）、
-  未知参数判错、`--self-test`；新增 `verify-file-budgets.test.mjs` 与
-  `verify-import-cycles.test.mjs`（解析/构图负控 + 真实仓库值环 0）并接入
-  `scripts/gates/run-script-tests.mjs` 的 gates 组。
-- mounted 来源表的三副本（App state + ledger ref 盒 + reducer lifecycle 字段）→
-  `host/mounted-sources-store.ts`（mark/withdraw/retire/prune；reducer 不再携带该字段）；
-  锁：`test/lifecycle/mounted-sources-store.test.ts`。
-- 完成未读账本的三处读（completedBySource state、edgeLedger ref、落盘闭包）→
-  `host/completed-store.ts`（相等表静默、退役/prune 领域操作）；锁：
-  `test/session-state/completed-store.test.ts`。
-- 视图对的两条渲染期 ref 镜像与"退役写 ref 再 setState"（含 §3.1 第 4 序位）→
-  `host/view-store.ts`（select/paint/retire；retire 同一快照改两字段，先于提交可见）；
-  锁：`test/view-runtime/view-store.test.ts`；`veil-layering-invariants` 的 8 条文本锁同步改写。
-- 兼容审计（第 17 轮）结论登记：5 处旧格式读取器（ssh v2 凭据、无 binding v1、gateway-tokens v1/v2、
-  catalog 无版本 v1、ssh-instances 缺 kind/transport）与 `ssh-<id>`/`ssh:<id>` 别名
-  （design 17 §2.2 明确保留深链兼容 + 有测试）均有支持窗口/设计理由 → 保留；
-  `removeLegacyTmpResidue`/`LEGACY_ASKPASS_DIR_NAME`/旧 autostart 清理为安全卫生项保留；
-  `foldLegacyHostInserts` 去掉多余 export（函数本体保留）。
-- §4/§5 清理（第 18 轮，删除优先）：5 处悬空 `session-authority-refactor.md` 引用删除；
-  control-plane `escapeRegExp` 2→1（`src/regex-escape.ts`）；dsh-runtime `sameIdentity` 3→1
-  （`src/file-identity.ts`；private-fs 导出面保持与 control-plane 的 parity 锁不动）；错误文本
-  包内单源（control-plane 3→1、client-core 2→1、desktop 去掉 describeError 包装）；
-  listener-set 原语（`client-core/src/listener-set.ts`，含 clear）在 9 处 adopt
-  （renderer 7 个 host store + git coordinator + open-in choice-store）。
-- 已核约束、明确不合并（非漏删）：`isRecord`/`isPlainRecord`/`isWatermark` 与 error text 的
-  跨包副本——client-core `wire-common.ts` 明文「零 import、纯浏览器可达」、control-plane
-  `session-mux.ts`/`session-state-protocol.ts` 明文「plain node type-strip (no node_modules)
-  可加载」、上游 fork 两处禁改；gateway 是唯一无约束的消费者，单为它建 wire 守卫不构成单源。
-  client-core 其余 store 的 listener 模式带 hydrate/size/clear 语义，gateway session-state 无
-  client-core 依赖，均保留。desktop `pnpm-launcher` 的 pathFor/joinFor/dirnameFor 与
-  dsh-runtime 同名件保留（导出它们会打破该模块自述的纯模块面）。
-- `README.i18n.yaml` 的 `docs/i18n/README.md` 头由 vendor `translation-pairing-record.ts`
-  生成、`dsh-client-connection/README(.zh).md` 的 `docs/config-catalog` 链接是上游 copy 继承
-  ——均非本仓可控内容（改后会被覆盖），登记不删。
+> 已落地的收口（roster-gate / echo-store / facts-store / remotes-store / view-store /
+> mounted-sources-store / completed-store / `use-deadline` 原语 / 三门负控等）与其 regression 锁以
+> git 历史、代码注释与测试为准；本文只记仍开放项。
 
 ## 4. 门禁与用法
 
@@ -172,36 +121,32 @@ useSyncExternalStore 的小 store（单源），事件回调读 store 的 getSna
 - **插件三链路流水线**：local/ssh/gateway 各自 validate→confirm→remove/add→restart→verify；
   `parseSpec*`×3、x-wildcard 门×2、ssh/gateway 凭据镜像两套手写、dsh CLI 入口解析×3
   （`dsh-runtime/src/dsh-cli-entry.ts` 已是声明单源）。收口 = 一个 `PluginMutationPlan` + 三个薄执行器。
-- **未纳棘轮的 god 文件**：control-plane `index.ts`(1577)/`proxy-forward.ts`(1471)/
-  `spawn-dsh.ts`(1354)、gateway `plugins-tasks.ts`(1166)/`dispatch.ts`(1139)、dsh-runtime 5 文件
-  （合计 7,267）、desktop `updater.ts`(1399)/`main.ts`(1391)、Swift `MainWindowController`(2341)/
-  `AppDelegate`(1760)/`BridgeClient`(1676)、`install-gateway.sh`(3804)。下一轮按包逐个纳入棘轮。
-- **未判面的死面**：`TransportProvider.kind` 零读且两处注释过时；`ENTRYLESS_PACKAGES` 的
-  `ignoreFiles: ['preload.ts']` 应为 `preload.cts`（且 `.cts` 不在扫描面）；gateway
-  `plugins-tasks.ts` `deferredIntentsFilePath`、`dsh-client.ts` `pendingStats` 仅测试消费。
+- **未纳棘轮的 god 文件**：control-plane `index.ts`/`proxy-forward.ts`/`spawn-dsh.ts`、gateway
+  `plugins-tasks.ts`/`dispatch.ts`、dsh-runtime 五文件、desktop `updater.ts`/`main.ts`、Swift
+  `MainWindowController`/`AppDelegate`/`BridgeClient`、`install-gateway.sh`。下一轮按包逐个纳入棘轮；
+  行数单一来源 = `scripts/gates/file-budgets.json`，本文不写数。
+- **未判面的死面**：gateway `plugins-tasks.ts` `deferredIntentsFilePath`、`dsh-client.ts`
+  `pendingStats` 仅测试消费（seam 而非未接线泄漏，见 §7.2）；`ENTRYLESS_PACKAGES` 的 ignoreFiles 已无
+  `preload` 残留（原登记项已消）。
 - **load-state 镜像簇**：`packages/dsh-stream-state/swift/LoadState.swift` + 4 条 exemption
   无 app 消费者（Swift 壳不编译该文件）。裁决「接线」或「删除镜像 + 门的一半」。
-- **STATUS 锚点漂移（复核后修）**：A1 F6 疑已实现（recheck 已用共享 `plugin-graph-classify`）、
-  S4 行号、Swift `RendererRecovery` 183 / `RendererHangWatchdog` 111 已超 `181→90`/`105→60` 且无门、
-  gateway runtime-manager「2,380 行单闭包」描述已不实。
 - **client UI / seed 面（同一轮审计）**：
-  - `DshRuntimeSection.tsx` 两分支可量化重复：gateway JSX 1006-1425 vs local 2024-2449，108 行逐字相同、
-    最长 19 行；`onApplyRegistry`/`onRetryApply`/`onRetryRestore` 成对手抄 —— 对应 §3 第 2 项，
-    收口 = 两个 hook + 一份共享行面板。
-  - `PluginDialog.tsx` 66 useState / 5 个各自手写 cancelled 位的加载 effect；`ConnectionsSection.tsx`
-    三份近似日志加载器（:330 / :658-699 / :722-754）；`ServerSection.tsx` 是 180 行缩进
-    14 空格的"JSX 内派生状态"机械搬迁残留，且顶格 useEffect 落在 hook 块之后。均已在棘轮内，按序做。
-  - **未纳棘轮的 client/seed god 文件**：`dsh-chamber-seed-git-worktree/src/core.ts` 2104（单类 60+ 方法、
-    4 条删除路径）、`seed-archive-cleanup/src/core.ts` 1178、`mobile/composer.ts` 1187、
-    `mobile/styles.ts` 1010、`sidebar/ServerSection.tsx` 1048。
-  - **死导出门的覆盖洞**：7 个 client-ui 包全在 `RUNTIME_LOADED_PACKAGES`（整包跳过），而
-    `src/index.ts` 只是 4 行 `apply()` 桩 ⇒ `./client/**` 从不受判。已知零消费者导出 6 个：
-    `isFixedSectionId`、`sourceFingerprintIsCurrent`、`staleOwnedSessionIds`、`orderApplyOps`、
-    `BATCH_FAILURE_POLICY`、`transportTargetChangedSpec`（另 `__resetOpenInChoiceForTests` 为显式测试缝）。
-  - **真实第二实现（无锁步）**：client `plugin-diff.ts` 的 spec 分类 vs desktop
-    `plugin-sync.ts`，两套语法/两套 reason 表；`openPromise` 三态证据在 mobile
-    `session-stall.ts` 与 open-in `session-stream-health-probe.ts` 逐字复制；
-    `safeStorage` 访问器手写 5 份。收口优先：openPromise → client-core；spec 分类 → 单一 verdict。
+  - `DshRuntimeSection.tsx` 两分支可量化重复（gateway JSX 段 vs local 段，含
+    `onApplyRegistry`/`onRetryApply`/`onRetryRestore` 成对手抄）——对应 §3 第 2 项，收口 = 两个 hook
+    + 一份共享行面板；行数以 `file-budgets.json` 为准。
+  - `PluginDialog.tsx` 66 个 useState / 5 个各自手写 cancelled 位的加载 effect；`ConnectionsSection.tsx`
+    三份近似日志加载器；`ServerSection.tsx` 是「JSX 内派生状态」机械搬迁残留（顶格 useEffect 落在
+    hook 块之后）。均已在棘轮内，按序做。
+  - **未纳棘轮的 client/seed god 文件**：`dsh-chamber-seed-git-worktree/src/core.ts`（单类 60+ 方法、
+    4 条删除路径）、`seed-archive-cleanup/src/core.ts`、`mobile/composer.ts`、`mobile/styles.ts`、
+    `sidebar/ServerSection.tsx`。
+  - **死导出门的覆盖洞**：7 个 client-ui 包全在 `RUNTIME_LOADED_PACKAGES`（整包跳过），而 `src/index.ts`
+    只是 4 行 `apply()` 桩 ⇒ `./client/**` 从不受判。已知零消费者导出 6 个：`isFixedSectionId`、
+    `sourceFingerprintIsCurrent`、`staleOwnedSessionIds`、`orderApplyOps`、`BATCH_FAILURE_POLICY`、
+    `transportTargetChangedSpec`（另 `__resetOpenInChoiceForTests` 为显式测试缝）。
+  - **真实第二实现（无锁步）**：client `plugin-diff.ts` 的 spec 分类 vs desktop `plugin-sync.ts`；
+    `openPromise` 三态证据在 mobile `session-stall.ts` 与 open-in `session-stream-health-probe.ts`
+    逐字复制；`safeStorage` 访问器手写 5 份。收口优先：openPromise → client-core；spec 分类 → 单一 verdict。
 
 ### 7.2 未删项与判面/锁步依据（非漏做）
 
