@@ -6,6 +6,30 @@
 
 ## 未完成 / 部分完成（剩余验收）
 
+- 通知 / 未读 / Dock 角标 结构整改（方案与删除清单：`docs/progress/todo/notify-unread-badge-remediation.md`；**部分落地**——W0 仪表、W2 完成候选证据门、W2 身份读数面与生产（含 `Date.now()` 时钟族删除、跨通道别名表删除与其存量键清理）、W3 影子写与等价性先锁（含启动期对账）、W5 三条只读结构门、W4 呈现电平化的 desktop/renderer 侧已落。**未落**：未读面 W1 的实机定案、v5 权威切换与「记录创建时一次性决定 `unread`」语义、旗标/围栏/剩余回退身份删除、Swift 腿与四项实机读数。**环境阻塞已解除（2026-09-26 轮 28）**：vendor 树经本地克隆物化（pin 校验通过），`pnpm install --frozen-lockfile`（`CI=true`）成功，新产物 = `macos/release/dsh-chamber.app`（装配 + web dist 齐备）；`run-checks full --continue` 两次 **61/61 全绿**（其间一次 60/61 的红步 `spawn-dsh.test.ts:738` 经单跑 606 例全过 + 空载重跑全绿，判定为负载时序竞态，非本改动引入）。证据：`docs/progress/todo/notify-unread-badge-remediation.md` §8 第 38–41 条；已确认的数据面：本地 mux `session/follow` 的 `turn/end` 记录恒带宿主 `seq`（同上 §8 第 33 条）：
+  **开放项（轮 27 四路评审登记）**：壳 sink 缺 `runtimeSettled` 锚点检查（facts sink 有 `use-unread-notifications.ts` 的锚点判定；壳 sink `use-bridge-subscriptions.ts` 没有）⇒ 残余重复窗口 =「同页、非首批、producer 状态被重置的壳完成重放」双发。配方：把锚点判定搬进壳 sink（~10 行，fail-open ⇒ 只影响抑制、不影响投递）；**不要恢复别名表**（它对该场景从未生效——生产 facts intent 不带 `hostObservedAt`，两族键从不相等）。证据：方案 §8 第 36 条。
+  本机实测三项现缺陷 —— (a) **未读面全表武装**（实机定案 2026-09-26，原「行水位为 0」的推断已证伪：
+  mux `session/list` 123/123 项都带真实 `updatedAt`；`unread.v4` 实测 `{readSources:[], edgeSources:[], localRuns:35}`）
+  ⇒ **抛出点已定位**：实机权威日志有 `unread-derive-error: derive-unread: Minified React error #185`
+  （Maximum update depth exceeded，步骤守卫吞掉后**整拍中止**）⇒ `read`/`edge` 从未落过一拍（9 天 18 份存储全空）；
+  **已打断（重入闸）**：派生体永不嵌套（`createUnreadStepGate`，重入请求去重后补微任务）；
+  **待实机复核**：重建后 `read`/`edge` 首次落盘、环里不再出现 `unread-derive-error`（读数：`__dshChamberUnread.last()` 的
+  `gate={runs,coalesced,deferrals}`——`coalesced > 0` = 环真实存在且被吸收；`readMarks > 0` = 未读面首次落盘）；
+  **隔离实机（轮 28，新构建、非安装态）已读到的**：`branch=facts rows=2 maxWatermark=1790430804219(>0) unread=1`、`shadow={written:true,ok:true,differences:[]}`（v5 影子等价实测）；
+  同一轮修掉仪表语义缺陷（`consumed` 原本只在播种那一拍为真 ⇒ 健康稳态被误判 `m2-seed-not-consumed`，改为「本化身基线镜像是否已落地」）——读该判词时按新语义；
+  仍缺的实机一步 = 安装态（真壳 + 真 Dock）重启后 `read/edge` 首次落盘 + 关窗推 0 的 `label=nil` 回执：本工作树**无法重启**运行中的安装态（进程树是本会话祖先），新产物在 `macos/release/dsh-chamber.app`，安装态 `/Applications/dsh-chamber.app` 仍是旧构建（`Resources/sidecar/sidecar.js` mtime 09-26 01:34）。
+  守侧已修：0/无可用水位不再当「内容位置 0」的证据（`unread-derivation.ts`）；(b) 假完成通知的生产者是候选水位规则（`completionWatermark = max(completedAt, updatedAt)`：同一老完成 + 新活动 / 运行位抖动
+  被重提成新完成）——**已修**（`factsCompletionOf`：只认 host 域 observed 的 `completedAt`，补 2 条回归）；
+  同一形状还出现在 facts 载体降级窗口：壳 running→idle 边沿在原始 facts 行仍说 running 时被反证守卫拦下（`factsContradictsIdle`，已落）；
+  原判断的 `episodeEnded('official-stop')` 经读链核实**只写权威日志、不进通知链**（`session-fact-reconcile.ts:205-207`），已改判；
+  (c) 角标呈现的 Swift 腿**已按其语义定案**（W4 四片，代码已落）：去无窗守卫（dockTile 是应用级——旧守卫在关窗时会拒收清 0 写，源码/测试已钉住该行为；
+  实机日志未捕获 `no-window` 实例，**实机主因是缺少纠正链**，取证见方案 RC-3）、同值不写、写后真读回 `{count, applied}`；
+  节点侧同批删除按 `mainWindowAlive` 预判拒写的短路口，并转达宿主读回；`resetHostFactsBookkeeping`/`didBecomeKey` 经核实**已是真实窗口状态**（无需改动）。
+  **代码面已验证**：Swift release 套件 582 例 0 失败 0 跳过（可复现命令 `node scripts/gates/run-swift-tests.mjs`；scratch 日志不入库）；
+  **仍待实机**（需 `pnpm run build:swift-app` 后回归）：关窗后推 0，Dock 数字必须消失；
+  renderer 侧 `pushedCountRef` 提交闸与桥迟到 interval **改判为保留**（删闸会拿回实测 4.8 Hz 冗余 IPC；其唯一缺陷「按派发而非按应用提交」已由真实回执链修掉，见方案 §8 第 14 条）。观测面缺口：打包态 `ShellDebug` 恒 false（`ShellDebug.swift:29-33`）、
+  `facts-health` 曾被 `status-divergence` 挤出 32 条环——已修：环淘汰保底 8 个 `facts-health` 名额（`authority-log-store.ts`），未超限时逐字不变。
+
 - 目标活跃期间的完成通知/未读压制（design 19 §3.2）：剩余验收 =
   - 打包态实机：N 轮 `held≥1 && sent==0`、outcome 后恰一条且标题正确、六面同拍、reload/冷启、撤回、local/gateway/SSH 各一组；
   - activation unknown 静默窗口：`goals/get` 会 resume 冷会话（写面）不可用，事件制重连后无重放；闭合需向 dsh 提只读 activation 读（或 seed 插件）上游提案。
