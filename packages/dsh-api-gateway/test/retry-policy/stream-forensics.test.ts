@@ -145,4 +145,3 @@ test('the fork reports the transitions the investigation needed', () => {
   assert.match(service, /new RemoteStreamMuxClient\(basePath, forensics\)/u)
   assert.match(service, /unsubscribeForensics\(\)/u, 'the generation subscription must be released on dispose')
 })
-

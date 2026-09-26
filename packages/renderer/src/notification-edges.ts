@@ -21,5 +21,3 @@ export interface SessionFacts {
 }
 export type NotificationKind = 'complete' | 'ask' | 'request'
 export interface NotificationEdge { sessionId: string; kind: NotificationKind }
-
-

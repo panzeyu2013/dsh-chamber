@@ -704,4 +704,3 @@ test('facts step guard: a throwing step lands in the ring and warns once per sou
   assert.equal(warnings.length, 3, '已 loud 过的来源+步骤不再喊')
   assert.equal(ring.at(-1)?.message, 'derive-unread: boom')
 })
-

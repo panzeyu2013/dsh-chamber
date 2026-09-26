@@ -524,6 +524,7 @@ carrier 故障页面事实（`stream-carrier-fact.ts` 的 `dsh-chamber:stream-ca
   守卫（会被当作新运行通知一次）；投递侧只做 runId 等值去重
   （`packages/renderer/src/notification-outbox.ts`）。出现该异形的实时证据时优先在观测层收口，
   不恢复第二套边沿实现。
+
 ## 设计未决
 
 - C15 hover 触发降级（提案，待CI/产品裁决）：把 hover 判据从每次 push 4 次调用降为 pin 变更 / workflow_dispatch / 升级清单触发；同批需改 `AGENTS.md:77-78`、`docs/checklists/upstream-touchpoints.md:4/§7`、`release-workflow-policy.test.mjs`（release 恰好两次 gate 调用的锁）、`static-gate-parity.mjs` 豁免表与 `verify-release-ci-proof.mjs` REQUIRED_JOB_STEPS。判据代码 0 删除。

@@ -459,5 +459,3 @@ test('B6: the first-sight seeding memo follows the incarnation token, not the fi
   assert.deepEqual(tick(100).unread, { s1: true },
     'fingerprint-keyed memo（旧实现）在本语料下整表武装：这就是本测试锁掉的回归')
 })
-
-
