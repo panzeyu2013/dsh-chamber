@@ -225,7 +225,7 @@ test('withPnpmShim: a directory named pnpm is not a usable host pnpm', t => {
   const env = withPnpmShim({ PATH: bindir }, {
     stateDir: join(root, 'state'), pnpmEntry: writeFakePnpmEntry(root), nodeFile: process.execPath, log: quiet,
   })
-  assert.equal(env.PATH.startsWith(join(root, 'state', PNPM_SHIM_DIR) + delimiter), true)
+  assert.equal(env.PATH?.startsWith(join(root, 'state', PNPM_SHIM_DIR) + delimiter), true)
 })
 
 test('withPnpmShim: keeps the Windows PATH key spelling and its delimiter', t => {
@@ -241,7 +241,10 @@ test('withPnpmShim: keeps the Windows PATH key spelling and its delimiter', t =>
 test('withPnpmShim: an unusable bundled entry or node leaves PATH alone and says why', t => {
   const root = tempDir(t)
   const entry = writeFakePnpmEntry(root)
-  const cases: { label: string; options: Record<string, unknown>; pattern: RegExp }[] = [
+  type ShimOptions = Parameters<typeof withPnpmShim>[1]
+  // Every case overrides the entry; the other options stay partial so the table reads as "what differs".
+  type ShimOverrides = Pick<ShimOptions, 'pnpmEntry'> & Partial<Omit<ShimOptions, 'pnpmEntry'>>
+  const cases: { label: string; options: ShimOverrides; pattern: RegExp }[] = [
     { label: 'missing entry', options: { pnpmEntry: join(root, 'absent.cjs') }, pattern: /unavailable/u },
     { label: 'empty entry', options: { pnpmEntry: '' }, pattern: /unavailable/u },
     { label: 'relative node', options: { pnpmEntry: entry, nodeFile: 'node' }, pattern: /unavailable/u },
