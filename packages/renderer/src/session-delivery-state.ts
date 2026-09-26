@@ -68,7 +68,7 @@ export interface SessionDeliveryOwner {
    * actually ran, so a no-op attempt never authorizes a stronger tier.
    */
   observe(input: DeliveryObservationInput, now: number, options?: { readonly commit?: boolean }): DeliveryDecision
-  /** Account a user-initiated action in the same ledger the automatic arm reads. */
+  /** Account a dispatched action in the same ledger the automatic arm reads. */
   markDispatched(sessionId: string, tier: DeliveryAction['tier'], now: number): void
   /** Drop every ladder memory for a session that left the stage. */
   forget(sessionId: string): void
@@ -131,7 +131,7 @@ export function createSessionDeliveryOwner(): SessionDeliveryOwner {
         runIdConflict: conflict,
       }
     },
-    /** Account a user-initiated action in the same ledger the automatic arm reads. */
+    /** Account a dispatched action in the same ledger the automatic arm reads. */
     markDispatched(sessionId, tier, now) {
       const record = records.get(sessionId) ?? { symptomSinceMs: now, progressStamp: 0, dispatches: {} }
       const stamps = (record.dispatches[tier] ?? []).filter(at => now - at < LADDER_TABLES.delivery.rebootWindowMs)

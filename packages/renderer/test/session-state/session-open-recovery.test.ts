@@ -16,7 +16,7 @@ test('a transiently missing probe cannot reset the loading deadline', () => {
   const loading = advanceSessionOpenHealth(null, 's1', { openState: 'loading', resyncAvailable: true }, 0)
   assert.ok(loading !== null)
   const missing = advanceSessionOpenHealth(loading, 's1', null, 90_000)
-  assert.equal(missing?.resyncAvailable, false)
+  assert.equal(missing?.openInFlight, undefined, 'a missing face claims no in-flight resync')
   assert.equal(missing?.since, 0)
   assert.equal(sessionOpenRecoveryPhase(missing?.state, (missing?.now ?? 0) - (missing?.since ?? 0)), 'failed')
   const open = advanceSessionOpenHealth(missing, 's1', { openState: 'open', resyncAvailable: true }, 90_001)

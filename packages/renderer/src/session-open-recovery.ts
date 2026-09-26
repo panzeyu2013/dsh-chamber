@@ -13,11 +13,8 @@ export interface SessionOpenHealth {
   state: 'cold' | 'loading' | 'open' | 'error' | 'missing'
   since: number
   now: number
-  resyncAvailable: boolean
   /** Only `false` proves that the concrete session has no pending open. */
   openInFlight?: boolean | undefined
-  /** A previous resync may still be disposing its old stream. */
-  resyncInFlight?: boolean | undefined
 }
 
 /** An unmounted session is an observable missing face, not an infinite spinner. */
@@ -29,11 +26,11 @@ export function advanceSessionOpenHealth(
 ): SessionOpenHealth | null {
   if (observed === null) {
     if (previous?.sessionId === sessionId && previous.state === 'error') {
-      return { ...previous, now: at, resyncAvailable: false, openInFlight: undefined, resyncInFlight: undefined }
+      return { ...previous, now: at, openInFlight: undefined }
     }
     const since = previous?.sessionId === sessionId && previous.state !== 'open'
       ? previous.since : at
-    return { sessionId, state: 'missing', since, now: at, resyncAvailable: false, openInFlight: undefined, resyncInFlight: undefined }
+    return { sessionId, state: 'missing', since, now: at, openInFlight: undefined }
   }
   // Missing → loading is the same unresolved open. A short probe gap cannot
   // restart the deadline, while a genuinely open face resets it.
@@ -41,9 +38,7 @@ export function advanceSessionOpenHealth(
     && observed.openState !== 'open' ? previous.since : at
   return {
     sessionId, state: observed.openState, since, now: at,
-    resyncAvailable: observed.resyncAvailable,
     openInFlight: observed.openInFlight,
-    resyncInFlight: observed.resyncInFlight,
   }
 }
 
