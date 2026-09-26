@@ -649,7 +649,8 @@ darkAqua/aqua（`macos/Sources/DSHChamber/ShellPageFacts.swift#ShellAppearancePo
 恒 false，不再作门）。
 ③ 页面事实到达后按主题换 `underPageBackgroundColor` 与窗口底色
 （`macos/Sources/DSHChamber/MainWindowController.swift#themedBackgroundColor`：light → 浅色内容底、
-dark/无事实 → 骨架常量），缩放/全屏/重载的露底因此与页面一致。
+dark/无事实 → 骨架常量；**装材质后窗口底转 clear、露底色在 WebKit 真能透明时也转 clear**，
+见 §5.6），缩放/全屏/重载的露底因此与页面一致。
 
 **右键菜单不可定制的取舍**：WKWebView（macOS）公开面无右键菜单定制 API——`contextMenu*` 修饰符属
 UIKit/SwiftUI 控件层、不作用于网页右键菜单（`macos/Sources/DSHChamber/MainWindowController.swift#setupWindow`
@@ -765,9 +766,9 @@ Crashpad），原生壳自己给出「闪退后可考古、可给出原因」的
 
 ### 5.5 窗口拖拽（`-webkit-app-region` 的等价面）
 
-窗口形态是「隐藏标题栏 + 内容延伸进标题栏」（`titlebarAppearsTransparent` + `fullSizeContentView`），红绿灯浮在侧栏顶部、
+窗口形态是「隐藏标题栏 + 内容延伸进标题栏」（`titlebarAppearsTransparent` + `fullSizeContentView`），红绿灯**内缩到页面 chrome 行**（§5.6）、
 页面按 `data-platform=darwin` 自己留白——整窗因此**没有原生可拖区域**：`isMovableByWindowBackground` 判的是**命中视图**的
-`mouseDownCanMoveWindow`，而 WKWebView 恒 `false`（本机实测：900×600 窗 + WKWebView 作 `contentView` + 该开关为 true，
+`mouseDownCanMoveWindow`，而 WKWebView 恒 `false`（本机实测：900×600 窗 + WKWebView 作 `contentView` + 该开关为 true（容器化后 `contentView` 是材质容器、WKWebView 是其子视图；命中仍落 WKWebView——探针：容器四角 hitTest → WKWebView、`web.mouseDownCanMoveWindow == false`），
 `hitTest` 命中 WKWebView、`canMove=false`，合成 `leftMouseDown` 后窗口不动；只有命中 AppKit 自有视图（标题栏层）的位置才吃该开关）。
 页面用 `data-window-drag` 标记窗口 chrome 行（单一真源 `packages/dsh-client-web/src/window-drag/regions.ts#DRAG_MARK`；必带行清单 =
 `vendor/harness-packages/@deepseek-ai/dsh-client-ui-theme/tests/app-region-styles.client.spec.ts` 的 `CHROME_ROWS`；chamber 侧栏的顶部带与
@@ -802,6 +803,35 @@ WKWebView 不认，故壳自建等价面（`macos/Sources/DSHChamber/ShellWindow
 - **在 ui-web 副本里加 Swift 专用分支**：本方案零页面改动（标记是上游本来就有的属性），拒。
 - **把 `-webkit-app-region: drag` 留在页面上等 WKWebView 支持**：无此计划，且窗口整场不能移动，拒。
 
+
+### 5.6 窗口 chrome 面（hiddenInset / 全屏标记 / 侧栏材质的等价面）
+
+§5.5 的窗口形态还需要三个上游等价面，否则页面按 `data-platform=darwin` 画的顶部带与真实窗口不成一条带。上游的量取自官方 desktop 主进程的 darwin 分支（`vendor/harness-checkout/apps/desktop/src/main.ts`：`titleBarStyle:'hiddenInset'`、`trafficLightPosition:{x:16,y:18}`、`vibrancy:'sidebar'`、`visualEffectState:'active'`、`backgroundColor:'#00000000'`）与 preload（`preload-platform.ts` 的 `dataset.fullscreen`）；本壳的量全部由本机同形窗探针实测：
+
+| 面 | 上游 | 本壳等价物 |
+|---|---|---|
+| 红绿灯行 | `hiddenInset` + `trafficLightPosition:{x:16, y:18}`：灯组左上角钉在 (16,18)（ui-sidebar 侧注释同写 "(16, 18)"；ui-layout 把 `--dsh-frame-leading-clearance: 160px` 拆成「灯到 x 68，控件自 88 起（28+8+28），尾留 8px」） | `macos/Sources/DSHChamber/ShellTrafficLightInset.swift`：建窗后把三灯**整组平移**到首灯目标中心 **(23,25)** = 上游 pin (16,18) + 本机灯盒半宽/半高（本机灯盒 14×14、中心距 23；y 与页面 chrome 行 25 同值，第三灯右沿 76 < 88 不压控件），保持 AppKit 自己的灯距/尺寸。AppKit 默认中心 (16,16)（实测：标题栏带 32pt、`NSTitlebarView` 非 flipped、frame (9,9,14,14)）比页面那条带高 9pt ⇒ 整条顶部带不成一行。**重排时机**都会让按钮回默认位：缩放（`setFrame`/`zoom(_:)`，实测）、跨屏 / backing 变化 / 最小化恢复（单屏开发机不可复现，防御性订阅）与进出全屏都进 `reapplyNotifications`（进场时 AppKit 在 `didEnterFullScreen` **之前**还会再静默排一次——本机真全屏探针：该通知同一轮读到的仍是默认位，故处理器在下一轮主循环再补一次，那一轮才是进场真正落位的一次；出全屏时同步那次已落位，补做是幂等 no-op）；**标题换值**同样重排且不发任何窗口通知（实测），由 `MainWindowController.setWindowTitle` 在写标题后**无条件**重做（`apply` 幂等、~1µs，顺带自愈任何一次错位；`translatesAutoresizingMaskIntoConstraints = true` 实测挡不住重排） |
+| 全屏状态 | preload 的 `syncWindowFullscreen` 在每次切换与每次装载后把状态写到 `html`（`dataset.fullscreen = 'true'` / `delete`）；ui-layout / ui-sidebar 的全屏规则据此把灯带让给座位（leading 160→84、`.leadingSeat` 12px、`.topStrip` 左对齐） | `macos/Sources/DSHChamber/ShellWindowFullscreenMark.swift`：`didEnter/didExitFullScreen` 两侧通知各写一次，`didFinish` 按窗口 `styleMask` 重放（导航会重置 document）；写入与上游同形——`document.documentElement.dataset.fullscreen = 'true'` / `delete document.documentElement.dataset.fullscreen` |
+| 侧栏材质 | Electron `vibrancy:'sidebar'` + `visualEffectState:'active'`（vendor 注释明确拒用 followWindow："'followWindow' washes the sidebar out behind an unfocused window"）+ `backgroundColor:'#00000000'`；页面在 darwin 下把自己的底设为透明（ui-web `base.css`："the window's sidebar vibrancy shows only through a transparent page background"） | `macos/Sources/DSHChamber/ShellWindowMaterial.swift`：内容视图换成「材质 + 页面」容器，`material = .sidebar`、`blendingMode = .behindWindow`（采样窗后桌面 = 真 vibrancy）、`state = .active`（对齐上游：AppKit 默认**正是** `followsWindowActiveState`＝上游拒用的那个形态，故必须显式写出）；窗口 `isOpaque = false` + 底色 clear。露底色按 `underPageColor(usesTransparentPage:themed:)`：只在 `drawsBackground` 私有键**真生效**时 clear（建窗收尾即转 `clear`——窗口在首个 didCommit 前不呈现、页面骨架不透明，故不白闪）；键不可用时 WebKit 不透明绘制，露底色必须留主题色。窗口底归材质面独家：`install` 置 clear，`applyBackdrop` 在最小化/隐藏期置兜底色。**最小化/隐藏兜底**（上游 darwin `main.ts:250-269` 对 minimize/hide/restore/show 切 `setVibrancy(null)` + `chromeFallbackFill()` 的等价面，成因 electron#25368 的 deminiaturize 材质重挂间隙）：本壳材质是 contentView 的常驻子视图（探针：最小化后仍在层级里、`hidden=false`），仍按上游同形面防御——抑制期 `effect.isHidden = true` + 窗口转兜底色 `#1b1b1c`/`#f9fafb`（＝上游 `chromeFallbackFill()`，与侧栏填充同 token），恢复期切回 clear + `isHidden = false`（等价于上游 null→'sidebar' 的强制重挂），四个时机 = `didMiniaturize`/`didDeminiaturize` + 应用 `didHide`/`didUnhide`。**Reduce Transparency**：系统把 vibrancy 层压平成实色，页面侧 vendor `AppFrame` 的 `prefers-reduced-transparency` 规则把 `.sidebarCol` 换成同 token 的 90% 不透明填充（双主题各一条），壳侧无需另作处理 |
+
+**材质可见面的前提（2026-09 收口）**：材质只在页面存在透明区域时才可见，上游的形态是「侧栏列透明、中列不透明」。完整链是四层：ui-web `base.css` 的 `html/body` → AppFrame 的 `.frame` 与半透明 `.sidebarCol` tint → 侧栏 `.root`（ui-sidebar 在 darwin 下 transparent，vendor 注释："an opaque fill here would sit on top of it and block the window vibrancy"）→ renderer 的 `.app`/`.instance-view` 两个 chamber 容器（`packages/renderer/src/styles.css`，此前唯一漏掉的一层：它们不透明时整视口盖住材质）。自建侧栏 fork 此前缺的三组 darwin 规则（`.root` 透明、`.newSession` 白色洗染、`.brand` `cursor: default`）已与上游**逐字补齐**（`packages/dsh-chamber-client-ui-sidebar/src/client/SidebarRoot.module.css`，规则体与 vendor 同名文件逐条一致，由测试比对）。**四层统一按 `data-window-vibrancy` 门控**（Swift 壳的 `bridge-shim.js` 在 documentStart 落；Electron 腿的 preload 不落）：只有本壳的窗口背后真有材质，Electron darwin 腿窗口不透明（无 hiddenInset/vibrancy，`backgroundColor:'#0f1115'`），只按 `data-platform` 跟着透明会把侧栏 tint 与中列一起压到窗口底色上（浅色主题下侧栏≈rgb(107,109,113) 对白中列）。中列在 darwin 下保持不透明 `--dsw-alias-bg-base`；骨架 `.dsh-boot` 铺满 #0f1115 只在 React 挂载前可见（不白闪），失败说明页自带不透明底。故实机判据 = 侧栏列可见窗后模糊、中列仍是不透明底。
+
+- **行为锁**：`macos/Tests/DSHChamberTests/ShellWindowChromeTests.swift`（目标值、位移折返、通知真值表与写入表达式、露底色真值表）+ `ShellIdentityTests#testWindowChromeUpstreamFacesAreWired`（建窗/重排/标题/材质接线与属性的非注释源码锁，含标题写入的**计数锁**：非注释源码 `window?.title =` 0 次、`window.title =` 恰 2 次）+ `CrossLanguageLockstepTests#testWindowVibrancyMarkerLockstep`（shim 的 `data-window-vibrancy` ↔ renderer/侧栏 CSS 的门控）+ `packages/dsh-chamber-client-ui-sidebar/test/leading/macos-top-strip.test.ts`（三组 darwin 规则体与 vendor 同名文件逐条比对）。本机同形窗探针实测：应用后三灯中心 = (23,25)/(46,25)/(69,25)（距窗口上沿），二次应用 `false`（幂等）；缩放/zoom/标题换值后的重做与幂等同样由探针覆盖。实机验收口径见 `docs/progress/STATUS.md`（灯与开关同一水平线且缩放/标题变更后仍在、进出全屏座位不跳位、材质不回归）。
+
+**Rejected alternatives**（本节三个面的选择依据）：
+
+- **只应用一次（或把按钮的 `translatesAutoresizingMaskIntoConstraints` 置 true 顶住重排）**：实测两者都被 AppKit 的重排覆盖——`setFrame`/`zoom(_:)` 后三灯回 (16,16)；改为在缩放与进出全屏的通知上重做（探针：连续 resize、二次 resize 与 zoom 后三灯恒在 (23,25)，且纠正与 `setFrame` 同步、同一轮布局内完成）。**标题换值**是第四个时机、没有任何可接的通知，单独由 `setWindowTitle` 在写标题后兜住（KVO 未采用：NSWindow.h 未把 `title` 列为 KVO compliant）。
+- **红绿灯写死偏移 (+9,+9)**：AppKit 的灯距/尺寸随系统版本可动，写死会在别的版本上叠错；改为「整组平移到首灯目标中心」，只锁两个数（首灯中心 = 上游 pin (16,18) + 本机灯盒半宽/半高 = (23,25)）。
+- **材质用 `.followsWindowActiveState`（Electron 的 followWindow 默认）**：上游试过并明确拒用（失焦时把侧栏冲淡，vendor `main.ts` 注释），且它正是 AppKit 默认值——写成它等于没有等价面，拒。
+- **全屏标记写 `toggleAttribute`（属性值空串）**：CSS 今天只判存在、行为等价，但上游 preload 写的是 `dataset.fullscreen = 'true'`；值形状照抄可避免将来任何值比较/快照断言分叉，拒空串形态。
+- **自绘窗口按钮或隐藏系统红绿灯**：丢掉系统全屏/最小化/关闭语义与辅助功能，拒。
+- **全屏标记走 A 桥或新消息通道**：状态源在壳（窗口），而 A 桥是页面→壳的白名单/就绪门，方向相反且要过 sidecar-ready 门；一行幂等属性写入 + `didFinish` 重放已覆盖导航重置，拒。
+- **材质用 `.withinWindow`，或只把窗口底设成半透明色**：`.withinWindow` 采样的是窗内背板，得不到窗后桌面的模糊，等于没有 vibrancy，拒。
+- **保留不透明窗底当作材质**：页面在 darwin 下的透明区域就会露出那层色（本仓此前的形态），与上游观感不是一回事，拒。
+- **透明规则完全照抄 vendor 选择器（只按 `data-platform='darwin'`）**：Electron darwin 腿同样命中，但该腿窗口不透明且无 vibrancy——侧栏 tint 与中列会一起压到窗口底色上（浅色主题≈rgb(107,109,113) 对白中列），与「Electron 腿不动」的既有取舍冲突；改挂 `data-window-vibrancy`（只有真材质的窗口命中），代价是选择器与 vendor 不再逐字（规则体仍逐字，由测试锁住），拒照抄。
+- **用 6 条 Auto Layout 约束把三灯钉在 titlebar 上**（探针可行：位置在缩放/改标题/最小化/全屏下全保持，零重排开销，~8 行 vs ~60 行）：会让 AppKit 自带的 12 条按钮约束消失、依赖私有 `NSTitlebarView` 的约束可被系统重建顶掉且没有任何通知可补救，标题换值时也要等下一轮布局才纠正；事件驱动自愈没有这些前提，拒。
+- **`setWindowTitle` 保留「同值早退」**：只省一次 ~1µs 的幂等 `apply`，却让任何绕过接缝的写入永久留在默认位（`didFail` 曾如此）；改为无条件 apply 后，写标题本身即自愈点，拒早退。
+- **最小化/隐藏不做材质兜底**：上游 darwin 明确做了（electron#25368 的材质重挂间隙）；本壳材质是常驻子视图、本机探针未见间隙，但兜底只是四个幂等通知 + 一次底色切换，且与上游同形，拒不做。
 
 ## 6. 数据、状态兼容与共存
 

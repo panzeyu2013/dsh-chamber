@@ -371,11 +371,17 @@ final class ShellIdentityTests: XCTestCase {
         // 只认**非注释代码**：注释里的旧字面量不算机制（否则只剩注释的
         // `setDrawsBackground:` 会假绿）。
         let source = try uncommentedSource("Sources/DSHChamber/MainWindowController.swift")
-        XCTAssertTrue(source.contains("window.backgroundColor = Self.windowBackgroundColor"),
-                      "窗口底色必须设（T-4）")
+        // 露底色的唯一判定在 ShellWindowMaterial.underPageColor（WebKit 真能透明才 clear，
+        // 否则主题色）；窗口底归材质面（install 置 clear、applyBackdrop 抑制期置兜底色）。
+        XCTAssertTrue(source.contains("ShellWindowMaterial.underPageColor("),
+                      "露底色必须经 WebKit 透明判定")
+        XCTAssertEqual(source.components(separatedBy: "window?.backgroundColor =").count - 1, 0,
+                       "窗口底不得在材质面之外被改写（install/applyBackdrop 独家）")
+        XCTAssertTrue(source.contains("webViewIsTransparent = drawsBackgroundOutcome == .applied"),
+                      "WebKit 能否透明必须取自异常安全包装的真实结果，不得假设")
         // 上游 macOS 窗口形态（2026-09 跟随上游，升级计划 §12.6）：内容延伸进标题栏 +
-        // 透明标题栏 + 最小内容尺寸。vibrancy/材质腿不搬——窗底仍由
-        // applyThemedBackground 按页面事实上色（与 Electron 的 applyAppearance 同源）。
+        // 透明标题栏 + 最小内容尺寸 + hiddenInset 灯位 + `.sidebar` 材质
+        // （ShellWindowMaterial；上游 = vibrancy:'sidebar' + visualEffectState:'active'）。
         // 「背景可拖」不在其中：命中视图恒为 WKWebView 而它的 mouseDownCanMoveWindow
         // 恒 false（实测），该开关对页面内容无效；拖动面是 ShellWindowDrag（design 25 §5.5），
         // 本行保留只是让 AppKit 自有命中视图（标题栏层）仍吃原生路径。
@@ -388,7 +394,7 @@ final class ShellIdentityTests: XCTestCase {
         XCTAssertTrue(source.contains("window.isMovableByWindowBackground = true"),
                       "保留的原生兜底（只对 AppKit 自有命中视图生效；页面内容的拖动面见 ShellWindowDrag）")
         XCTAssertTrue(source.contains("window.contentMinSize = NSSize(width: 880, height: 600)"),
-                      "上游同款最小内容尺寸（官方 desktop main 的 880×600）")
+                      "chamber 自有最小内容尺寸（上游 desktop main 是 520×600，三栏布局装不下）")
         XCTAssertTrue(source.contains(
             "webView.underPageBackgroundColor = Self.windowBackgroundColor"))
         // 真实生效路径 = DSHChamberWebKitSupport 的异常安全包装
@@ -431,5 +437,79 @@ final class ShellIdentityTests: XCTestCase {
                       "rendererLifecycle 上报必须落盘")
         XCTAssertFalse(source.contains("print(\"[shell] hostFacts 推送"), "不得退回 print-only")
         XCTAssertFalse(source.contains("print(\"[shell] rendererLifecycle 上报"), "不得退回 print-only")
+    }
+
+    /// 上游窗口面的三个等价物必须真的接上（纯函数面见 ShellWindowChromeTests）：
+    /// ① 红绿灯内缩（建窗后 + `reapplyNotifications` 的每个重排时机 + 标题换值后）；
+    /// ② 全屏标记（两侧通知 + 装载重放，否则页面 darwin 全屏座位规则永远拿不到
+    /// `html[data-fullscreen]`）；③ 侧栏材质（`vibrancy:'sidebar'` 等价物：非不透明窗 +
+    /// 清空底色，露底色按 WebKit 是否真能透明分流）。
+    func testWindowChromeUpstreamFacesAreWired() throws {
+        let controller = try uncommentedSource("Sources/DSHChamber/MainWindowController.swift")
+        XCTAssertTrue(controller.contains(
+            "ShellWindowMaterial.install(in: window, webView: webView)"),
+            "建窗必须装入侧栏材质面")
+        XCTAssertTrue(controller.contains(
+            "windowMaterial = ShellWindowMaterial.install(in: window, webView: webView)"),
+            "必须留下材质句柄（最小化/隐藏兜底要切它的 isHidden）")
+        XCTAssertTrue(controller.contains("ShellWindowMaterial.applyBackdrop("),
+                      "最小化/隐藏期间的材质兜底必须接线（上游 applyBackdrop 的等价面）")
+        XCTAssertTrue(controller.contains("NSApplication.didHideNotification"),
+                      "应用隐藏/恢复也要走材质兜底")
+        XCTAssertTrue(controller.contains("if !ShellTrafficLightInset.apply(to: window) {"),
+                      "建窗必须做红绿灯内缩（失败要 loud；这条 needle 只属于建窗点）")
+        XCTAssertTrue(controller.contains(
+            "for name in ShellTrafficLightInset.reapplyNotifications {"),
+            "缩放/全屏的重排通知必须整体接线（AppKit 每次重排都把灯放回默认位）")
+        XCTAssertTrue(controller.contains(
+            "center.addObserver(self, selector: #selector(windowChromeLayoutDidChange(_:)),"),
+            "注册必须真的指向该处理器（换掉 selector 会让处理器悬空而套件仍绿）")
+        XCTAssertTrue(controller.contains(
+            "if let window { ShellTrafficLightInset.apply(to: window) }"),
+            "重排处理函数必须重做内缩（这条 needle 只属于处理函数）")
+        XCTAssertTrue(controller.contains(
+            "guard let fullscreen = ShellWindowFullscreenMark.markValue(for: note.name)"),
+            "全屏通知必须写 html[data-fullscreen]")
+        // 标题换值同样重排 titlebar（实测：换值即回 (16,16)，且不发任何窗口通知）：
+        // 标题必须收敛到 setWindowTitle（写后重做内缩），恢复流的两处换值不得裸写。
+        XCTAssertTrue(controller.contains("private func setWindowTitle(_ title: String)"),
+                      "标题写入必须收敛到 setWindowTitle（写后重做内缩）")
+        XCTAssertTrue(controller.contains(
+            "        DispatchQueue.main.async { [weak self] in\n"
+            + "            guard let window = self?.window else { return }"),
+            "进出全屏要在下一轮主循环补一次内缩（space 收尾可能再排一次）")
+        XCTAssertTrue(controller.contains(
+            "webView.underPageBackgroundColor = ShellWindowMaterial.underPageColor("),
+            "建窗收尾必须立刻按 WebKit 透明判定露底色（不等首份页面事实）")
+        XCTAssertTrue(controller.contains(
+            "        window.title = title\n        ShellTrafficLightInset.apply(to: window)"),
+            "写标题后必须无条件重做内缩（apply 幂等，可自愈历史错位）")
+        XCTAssertTrue(controller.contains(
+            "setWindowTitle(Self.displayName + \" — \" + NativeText.string(.rendererCrashTitle))"),
+            "崩溃放弃标题必须走 setWindowTitle")
+        // 裸写窗口标题会静默丢掉灯位（换值重排且不发通知）；计数锁能拦下所有字面形态，
+        // 包括曾经漏掉的 didFail 分支（design 25 §5.6）。
+        XCTAssertEqual(controller.components(separatedBy: "window?.title =").count - 1, 0,
+                       "不得裸写窗口标题（didFail/恢复路径都必须走 setWindowTitle）")
+        XCTAssertEqual(controller.components(separatedBy: "window.title =").count - 1, 2,
+                       "窗口标题只允许建窗初始写入与 setWindowTitle 内部各一次")
+        XCTAssertTrue(controller.contains(
+            "applyFullscreenMark(ShellWindowFullscreenMark.isFullscreen(window?.styleMask ?? []))"),
+            "装载完成必须按窗口状态重放全屏标记（导航重置 document）")
+        XCTAssertTrue(controller.contains(
+            "webView?.underPageBackgroundColor = ShellWindowMaterial.underPageColor("),
+            "露底色必须经 WebKit 透明判定（窗口底归材质面，见上）")
+
+        let material = try uncommentedSource("Sources/DSHChamber/ShellWindowMaterial.swift")
+        XCTAssertTrue(material.contains("effect.material = .sidebar"),
+                      "材质必须是 .sidebar（Chromium 的 sidebar vibrancy 同物）")
+        XCTAssertTrue(material.contains("effect.blendingMode = .behindWindow"),
+                      "必须采样窗后桌面（.behindWindow 才是真 vibrancy）")
+        XCTAssertTrue(material.contains("effect.state = .active"),
+                      "对齐上游 visualEffectState:'active'（followWindow 会在失焦时冲淡侧栏，上游明确拒用）")
+        XCTAssertTrue(material.contains("window.isOpaque = false"),
+                      "非不透明，否则材质采样到的是窗口自己的色")
+        XCTAssertTrue(material.contains("window.backgroundColor = .clear"),
+                      "窗口底色必须清空")
     }
 }

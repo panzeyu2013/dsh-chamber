@@ -244,7 +244,8 @@
 - **shell.leading 席位（rc.2）**：官方 AppFrame 在 `darwin && sidebarCollapsed` 时把窗口 chrome 的
   `shell.leading` 单席作为唯一的可见重开入口（折叠列宽=0 且 `.sidebarCol{overflow:hidden}` 会裁掉
   rail 内控件）。chamber sidebar fork 注册 `SidebarLeadingControls`（展开 + 新建，28px 圆钮；
-  宽度与 `--dsh-frame-leading-clearance` 计价锁步），layout fork 在 SlotMap 声明该 root-scoped 单席。
+  宽度与 `--dsh-frame-leading-clearance` 计价锁步），layout fork 在 SlotMap 声明该 root-scoped 单席。窗口侧的红绿灯行、材质与全屏让位（leading 160→84、`.leadingSeat` 12px）见 design 25 §5.6。
+- **darwin 透明与窗口 vibrancy**：侧栏列 `.root` 在 darwin 下透明（规则体与上游 ui-sidebar 逐字同形：`.root` transparent + `.newSession` 白色洗染 + `.brand` cursor: default），让窗口材质从侧栏列透出；中列保持不透明 `--dsw-alias-bg-base`（同上游）。整条透明链（ui-web `html/body`、AppFrame `.frame`/`.sidebarCol`、本侧栏 `.root`、renderer 的 `.app`/`.instance-view`）统一按 `data-window-vibrancy` 门控——只有 Swift 壳的窗口背后真有材质，Electron darwin 腿窗口不透明，跟着透明会把它压到窗口底色上。窗口侧材质/灯位见 design 25 §5.6。
 - **orderBy**：每来源会话排序偏好 `'manual' | 'updated'`，默认 `manual`；
   v 保持 1 兼容旧数据（无此键即全 manual，不重播种），sanitize 丢弃非法值。
   **默认 `manual`**（保持既有 wire 序呈现）与官方默认 `updated` 不同——有意

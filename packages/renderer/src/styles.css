@@ -89,6 +89,17 @@ body {
   background: var(--bg);
 }
 
+/* macOS 原生壳（窗口有 material vibrancy）时，两处 chamber 容器必须让出底色，材质才能
+   经侧栏列透出；否则整视口被 --bg / --dsw-alias-bg-base 盖住，isOpaque=false 与材质都是
+   无效面。按 data-window-vibrancy（Swift 壳的 bridge-shim 落的标记）门控而非
+   data-platform：Electron 腿同为 darwin 但没有 vibrancy、窗口是不透明的 #0f1115，
+   让出底色会让 .instance-view 的中列直接露窗口底。.dsh-boot 骨架、.instance-loading
+   与 .fatal* 都自带不透明底，首帧/加载/失败态不白闪。 */
+html[data-platform='darwin'][data-window-vibrancy] .app,
+html[data-platform='darwin'][data-window-vibrancy] .instance-view {
+  background: transparent;
+}
+
 /* ---------- 实例视图（每实例一个 dsh shell） ---------- */
 
 .instance-view {
