@@ -931,7 +931,8 @@ function reconcile(
 ) {
   const nextRunning: Record<string, boolean> = {}
   for (const [id, row] of Object.entries(sessions)) nextRunning[id] = row?.running === true
-  return reconcileCompletedFacts({ sessions, nextRunning, prevRunning, prevCompleted, readingCurrent })
+  // 本语料的 sessions 就是完整权威列表：缺席当删除（键空间 prevRunning ∪ prevCompleted）。
+  return reconcileCompletedFacts({ sessions, nextRunning, prevRunning, prevCompleted, readingCurrent, authoritativeList: true })
 }
 
 test('reconcileCompletedFacts: a background edge arms, the read session never arms, a re-run disarms', () => {

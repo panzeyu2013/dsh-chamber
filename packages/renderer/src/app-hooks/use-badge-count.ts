@@ -36,7 +36,8 @@ export interface BadgeCountDeps {
  *    activation unknown）——badge-count.ts 保持零 import，只消费这个布尔；
  *  - `subagentActivity` = `subagentActivityOf(row, stale)`（stale 的 running 降
  *    unknown：断连来源的残留计数不是「正在干活」）。
- * 行只带渲染/压制相关的布尔与三值，判定字段（updatedAt/completedAt）不过桥。
+ * 行只带渲染/压制相关的布尔与三值，判定字段（updatedAt/completedAt）不过桥；stale
+ * 不单独过桥——它只在上面这一步把残留 running 降为 unknown。
  */
 function badgeSuppressionFacts(
   runtimeFacts: Record<string, InstanceRuntimeReport | undefined>,
@@ -55,7 +56,7 @@ function badgeSuppressionFacts(
         subagentActivity: subagentActivityOf(row, stale),
       }
     }
-    facts[sourceId] = { sessions, ...(stale ? { stale: true } : {}) }
+    facts[sourceId] = { sessions }
   }
   return facts
 }
@@ -78,9 +79,10 @@ export interface BadgePushRetry {
   /**
    * 立即推送一次；reject 时按 `retryMs` 重推，最多再试 `attemptsLeft` 次。
    * 每次调度前清掉上一条 pending timer（任意时刻至多一条），且新一次 start
-   * 取代整条旧链——旧链在途 reject 迟到时不得再排 timer。
+   * 取代整条旧链——旧链在途 reject 迟到时不得再排 timer。返回**是否真的派发**（badge 面缺失/
+   * 版本偏斜时 false）：调用方的「计数变化才推」闸据此决定是否提交。
    */
-  start(count: number, attemptsLeft: number, retryMs: number): void
+  start(count: number, attemptsLeft: number, retryMs: number): boolean
   /** 卸载/拆除：清掉 pending timer，并让在途 reject 不再续链。 */
   cancel(): void
 }
@@ -99,10 +101,11 @@ export function createBadgePushRetry(options: BadgePushRetryOptions): BadgePushR
     options.clearTimer(pending)
     pending = null
   }
-  const attempt = (token: number, count: number, attemptsLeft: number, retryMs: number): void => {
-    if (token !== generation) return
+  /** 返回**是否真的派发**（badge 面缺失/版本偏斜返回 false）：调用方的计数变化闸据此提交。 */
+  const attempt = (token: number, count: number, attemptsLeft: number, retryMs: number): boolean => {
+    if (token !== generation) return false
     const result = options.push(count)
-    if (result === undefined) return
+    if (result === undefined) return false
     void result.catch(error => {
       if (token !== generation) return
       if (attemptsLeft <= 0) {
@@ -115,12 +118,13 @@ export function createBadgePushRetry(options: BadgePushRetryOptions): BadgePushR
         attempt(token, count, attemptsLeft - 1, retryMs)
       }, retryMs)
     })
+    return true
   }
   return {
-    start(count, attemptsLeft, retryMs) {
+    start(count, attemptsLeft, retryMs): boolean {
       generation += 1
       clearPending()
-      attempt(generation, count, attemptsLeft, retryMs)
+      return attempt(generation, count, attemptsLeft, retryMs)
     },
     cancel() {
       generation += 1
@@ -144,13 +148,21 @@ export function useBadgeCount(deps: BadgeCountDeps): void {
   // goal 相位 active 的已武装完成不计入——否则 Dock 会为一个用户看不到的蓝点亮红气泡。
   // runtimeFacts
   // 在依赖里：子代理计数归零（事实行变化）时无需蓝点变化也要重推当前计数。
-  // 通道-only 变化可能重推相同计数值——主进程 setBadgeCount 幂等，无副作用。
+  // 通道-only 变化会重算但不再重推相同计数值（见 pushedCountRef 的计数变化闸）。
   // 桥未就绪（window.dshChamber 异步 expose）时静默跳过
   // ——计数变化发生在运行时上报之后（远晚于桥暴露），首个真实计数不会丢；
   // 重载后复位为 0 的兜底推送由下方挂载 effect 负责。reject 兜底：
   // 同进程 IPC 偶发拒绝不得让徽标停滞到下一次计数变化——按 LISTENER_READY 预算
   // 有界重推当前计数（badgeCountRef 始终最新），预算耗尽 loud 一次。
   const badgeCountRef = useRef(0)
+  /**
+   * 上一次真正推给主进程的计数。**只有计数变化才推 IPC**：runtimeFacts/completedBySource
+   * 换身份（别的来源账本变化、子代理计数归零、goal 压制翻转）会把同一个计数重复推上去——
+   * 实测 Swift 包里 4.8 Hz 的冗余 IPC，而 Dock 视觉完全没变。
+   * 首个计数（含重载后复位为 0）必须推；被拒后的有界重推链在 badgeRetry.start 内部，
+   * 与本闸无关（预算耗尽仍以「下一次计数变化」为自愈点，loud 一次）。
+   */
+  const pushedCountRef = useRef<number | null>(null)
   const badgeRetryRef = useRef<BadgePushRetry | null>(null)
   if (badgeRetryRef.current === null) {
     badgeRetryRef.current = createBadgePushRetry({
@@ -173,7 +185,10 @@ export function useBadgeCount(deps: BadgeCountDeps): void {
     // 把 renderer 派发的计数发布成只读回读值，可在测试中比对
     // 「徽标数 == 蓝点集合大小」，无需 IPC 或读主进程状态。
     publishBadgeCount(count)
-    badgeRetry.start(count, retryLimit, retryMs)
+    if (pushedCountRef.current === count) return
+    // 只有真的派发出去才提交闸：没推出去（桥缺失/版本偏斜）时不提交，下一次 effect 提交
+    // 同一计数还会再试（首个计数含重载复位的 0 永不丢）。
+    if (badgeRetry.start(count, retryLimit, retryMs)) pushedCountRef.current = count
   }, [completedBySource, runtimeFacts, badgeRetry, retryLimit, retryMs])
 
   // 桥迟到的兜底（同 LISTENER_READY 重试纪律，见通知就绪 handshake）：窗口重载/
@@ -183,7 +198,7 @@ export function useBadgeCount(deps: BadgeCountDeps): void {
   // 直至桥出现，推一次当前计数（0）后停止；预算耗尽静默放弃（dev 无桥场景的
   // 正常路径）。
   useEffect(() => {
-    if (window.dshChamber?.badge !== undefined) return
+    // 判据是 set 是否真的在（版本偏斜时 badge 面可能已存在但还没有 set）：否则首推/重载复位
     let attempts = 0
     const timer = setInterval(() => {
       attempts += 1

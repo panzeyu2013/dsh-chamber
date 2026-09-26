@@ -193,8 +193,8 @@ export interface CompleteLedger {
    *
    * **仅测试面（F14 标注）**：生产的水平收敛器 `reconcile` 直接读写
    * `state().armed`，从不经过本入口；`armed`/`setArmed` 保留给用例构造/直读武装位
-   * （`planRuntimeNotifications` 的既有语义用例与撤回/遗忘测试）。新的生产代码不得
-   * 以它们为接线面——需要武装位请走 `state()`（与 reconcile 同纪律）。
+   * （撤回/遗忘测试）。新的生产代码不得以它们为接线面——需要武装位请走 `state()`
+   * （与 reconcile 同纪律）。
    */
   armed(sourceId: string): ReadonlySet<string>
   /** 武装轨：写回集合（空集 = 删除该来源的表项）；**仅测试面**，语义同 {@link armed}。 */

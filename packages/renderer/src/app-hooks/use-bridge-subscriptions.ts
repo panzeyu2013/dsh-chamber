@@ -26,6 +26,7 @@ import { notificationRunId } from '../notification-identity.ts'
 import { notificationLedger } from '../notification-ledger.ts'
 import type { NotificationTitleId } from '../notification-projection.ts'
 import type { CompleteLedger } from '../complete-ledger.ts'
+import type { FactsStepGuard } from '../facts-health.ts'
 import {
   chamberBridge,
   instanceSnapshotSignature,
@@ -180,6 +181,8 @@ export interface BridgeSubscriptionsDeps {
   markSourceAllRead: (sourceId: string) => void
   openSession: (instanceId: string, sessionId: string) => Promise<unknown>
   recomputeSourceUnread: (sourceId: string) => void
+  /** 步骤级 never-throw 包装（未读 hook 的唯一失败面）：runtime 上报的 body 同环同 loud 纪律。 */
+  guardUnreadStep: FactsStepGuard
   refreshAggregate: (instanceId: string, mutationTag?: number) => Promise<unknown>
   reportDeepLinkAckFailure: (delivery: RendererDeliveryCoordinates, error: unknown) => void
   selectView: (viewId: string, onApply?: (applied: boolean) => void) => boolean
@@ -241,7 +244,7 @@ export interface BridgeSubscriptionsDeps {
 export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
   const {
     acknowledgeDeepLink, emitSessionNotification, markSourceAllRead, openSession,
-    recomputeSourceUnread, refreshAggregate, reportDeepLinkAckFailure, selectView,
+    recomputeSourceUnread, guardUnreadStep, refreshAggregate, reportDeepLinkAckFailure, selectView,
     updateSessionArchive, updateSessionEcho, updateWorkspaceEcho,
     aggregatePollSeqRef, aggregateRequestOwnersRef, authoritativeArchiveSetRef, autoPrewarmedRef,
     completeLedgerRef, drainPrewarmRef, factsAtRef, harvestCandidatesRef, harvestIntentRef,
@@ -717,7 +720,8 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
 
   /** 每来源 ctx 的运行时事实上报：report 覆盖、clear 删除；同时重算该来源完成未读。 */
   useEffect(() => {
-    return chamberBridge.onRuntimeReport((sourceId, report, sourceFingerprint) => {
+    type RuntimeReportListener = Parameters<typeof chamberBridge.onRuntimeReport>[0]
+    const handleRuntimeReport: RuntimeReportListener = (sourceId, report, sourceFingerprint) => {
       if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
       const currentSource = sourceLifecyclesRef.current!.capture(sourceId)
       if (currentSource === null || currentSource.fingerprint !== sourceFingerprint) return
@@ -799,6 +803,9 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
       // 派生账本重算：规则全在纯模块 unread-derivation.ts；「正在阅读」谓词 =
       // paintedView ∩ 该来源 current ∩ hasFocus，listComplete 是唯一剪枝门。
       recomputeSourceUnread(sourceId)
+    }
+    return chamberBridge.onRuntimeReport((sourceId, report, sourceFingerprint) => {
+      guardUnreadStep.guard(sourceId, 'runtime-report', () => handleRuntimeReport(sourceId, report, sourceFingerprint))
     })
   }, [])
 }

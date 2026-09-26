@@ -273,6 +273,15 @@ carrier 故障页面事实（`stream-carrier-fact.ts` 的 `dsh-chamber:stream-ca
   CHROME_DESKTOP/xdg-mime路由及升级后重注册、托盘/通知点击、safeStorage keyring、SSH密码全链、运行时打包态全链、自动更新端到端、AppImage沙箱与Wayland焦点；另复核before-quit无头挂住）；release.yml dry_run全链（需GitHub可达）；deb/arm64后续；未动项见design 22 §5。
 
 - 桌面通知 / 未读徽标（design 19）：通知剩余macOS权限/拒绝行为的打包态实机走查（见design 19 §3.3/§4.1）、点击打开、关窗/托盘/后台三形态；徽标剩余macOS Dock打包态三态（武装/解除/退役 + 重载与退出清零）实机；Linux仅Unity launcher家族可见；Windows任务栏overlay已接线能力位（`supported.badgeSupported` 在 win32 为 false，设置页据此禁用并给出原因），其实机可见性随 design 23 M3 矩阵复核。
+- 完成未读面（蓝点 / 会话待办完成条目 / Dock 计数）的 **Swift 包四步实机验收**（design 19 §3.7.1）：①冷启动一次性播种读水位（`edge` 空、Dock 无数字且稳定）；②一次后台完成出点 +1（三面同源）；③经历一次 45s 空闲关流与一次切源后数字与点不变；④重载后账本保持且不出现批量数字。异常形状读 `dsh-chamber.authority-log.v1` 的 `facts-health` 条目（含 `baselineFailureReason`）。
+
+- 事实健康环的**覆盖与读面**（design 19 §3.7.1 诊断）：① 采样只在**无壳 mux 观察者**的快照上跑
+  （`packages/renderer/src/app-hooks/use-session-facts-lifecycle.ts` 的 `sampleFactsHealth` 只在
+  `createSourceMuxFacts` 的 `onSnapshot` 里调用）——gateway 事实源不可判时环里没有 `facts-health`
+  时间线，只有 `session-facts-source` 的 console 诊断；② 环**没有 in-app 读面**，只能手工读
+  `dsh-chamber.authority-log.v1`。触发链：gateway 源载体坏 → 判定面冻结（规则 0）→ 派生异常经
+  统一包装写 `unread-derive-error`，但「观察者一直不可判」这一形状没有盘上时间线。收口 = 给
+  gateway 事实源接同一路采样 + 一个只读的环读面（范围与形态待定）。
 
 - 桌面通知 / 未读徽标的行为测试缺口（design 19 §3.3/§3.4，2026-12完整评审）：①通知点击的 renderer
   二级门（proof + 当前代权威 roster 的 hold/replay + 精确 attempt ACK）只有纯函数/源码锁级覆盖，
@@ -503,11 +512,17 @@ carrier 故障页面事实（`stream-carrier-fact.ts` 的 `dsh-chamber:stream-ca
   （无 pending 且已 armed 时的 `candidate.watermark <= armedFloor`）落在 `notified` 单调门之后，
   近乎不可达——待验证简化：先加不变量 gate（该形态下 `armedFloor ≤ notified`）再考虑删掉该比较，
   现保留；②`keepFence`是批级关切却经 `ReconcileOptions` 进入单观测 `reconcile`（由
-  `applyObservationBatch` 逐观测传递），待重构：可上移到批次层统一裁决；③`planRuntimeNotifications`/
-  `planFactsNotifications` 与 `notification-edges.ts`（仅经前两者间接）生产零调用、
-  `complete-ledger.setArmed` 为测试专用写入口，收窄/删除须与既有语义用例及
-  `session-authority-wiring` 锁同批迁移。触发 = 收敛器下一次重构或上述用例迁移时；未迁移前不得按死代码删除。
+  `applyObservationBatch` 逐观测传递），待重构：可上移到批次层统一裁决；③`complete-ledger.setArmed`
+  为测试专用写入口。触发 = 收敛器下一次重构时。
 
+- **旧边沿孤岛删除后的无主语义（取舍，仍成立）**：通知边沿的旧 planner 导出面与其纯函数
+  检测/去重、运行身份排序守卫整套已删除（生产消费者为零；用例按现役等价物迁移或随删，
+  对照证据见 PR）。残留暴露：旧守卫「同一身份族内回退的观测不铸新身份」现只由观测层的
+  facts 水位严格前进承担（`packages/renderer/src/completion-observation.ts` 的
+  `watermark > memory.factsWatermark`），**host 事件序回退而水位前进**的异形上报不再有排序
+  守卫（会被当作新运行通知一次）；投递侧只做 runId 等值去重
+  （`packages/renderer/src/notification-outbox.ts`）。出现该异形的实时证据时优先在观测层收口，
+  不恢复第二套边沿实现。
 ## 设计未决
 
 - C15 hover 触发降级（提案，待CI/产品裁决）：把 hover 判据从每次 push 4 次调用降为 pin 变更 / workflow_dispatch / 升级清单触发；同批需改 `AGENTS.md:77-78`、`docs/checklists/upstream-touchpoints.md:4/§7`、`release-workflow-policy.test.mjs`（release 恰好两次 gate 调用的锁）、`static-gate-parity.mjs` 豁免表与 `verify-release-ci-proof.mjs` REQUIRED_JOB_STEPS。判据代码 0 删除。
@@ -549,9 +564,11 @@ carrier 故障页面事实（`stream-carrier-fact.ts` 的 `dsh-chamber:stream-ca
 
 - 注册表降级期间的未读收敛取舍（design 05 §7.4、design 19 §3.2.4）：ssh 实例注册表损坏时 `desktop_ssh_instances_health` 报 degraded，renderer 不把空 roster 当权威 ⇒ 四类 durable 未读/通知账本键**不剪不落盘**（数据安全优先，陈旧键留到恢复后收敛）；降级态下事务补偿写跳过落盘、重启仍判 degraded，直到一次 authoritative 保存治愈。旧桥缺 health 方法或 invoke 抛错时同样 fail-closed（roster 不结算、深链排队等待），有与 degraded/无桥可区分的诊断。
 
+- 未读账本的四条既有取舍（design 19 §3.7.1，2026-09-26）：①local/dsh 来源的无壳观察者**没有读通道**（快照 `read: null`），首见播种与读水位只在本端 durable、不 ack 宿主（与 gateway 的 host 域镜像不对称）；②facts 不可判窗口内通道边沿照常武装，副作用是「用户手动停止」在窗口内会短暂武装一个完成点，之后由读水位追平（而非 aborted 分类本身）结算解除——宁可短暂多一个点，不可长期没有点。③每源未读点 LRU 上限 500：被上限丢掉的点在重载后不由播种恢复（旧路径会再武装它们，而那正是 mass-arm）；④地板与读水位只认 host 域戳，observer 域完成戳只武装、不能把点清掉。
+
 - 构建产物移出 git（；原「提交进仓产物维持现状」登记已不成立）：clean checkout 首次 typecheck/static/test/打包前需 `pnpm run build:artifacts`（`run-checks` 与相关包测试自动前置）；产物不再入库。设计契约与取舍见 design 05 §6 Rejected alternatives 与 design 08 §7 / 09 §3.1 / 17 §15 / 18 §9.6 / 20 §6.1 / 24 §7；`renderer/src/generated` 维持只在本地生成、不提交。
 
-- 测试面精简已到证据化上限：已完成逐删除覆盖复核与最小恢复（恢复落在存活文件）；继续压缩须删除安全/fail-closed、跨包 parity、golden/pin 或 CI 显式引用类测试，属保护面取舍，需显式裁决。
+- 测试面精简上限的判据：继续压缩必然落进安全/fail-closed、跨包 parity、golden/pin 或 CI 显式引用类测试；删除这些用例属保护面取舍，需显式裁决，不按「冗余」处理。
 
 - 统一名称的保留面（用户指令；逐条登记以免被当成漏改再翻一遍）：身份字样（bundle内可执行名、SwiftPM模块/目录/资源包、shim资源名、`DSH_CHAMBER_SHELL_*`环境变量、dev数据根、日志文件/标签、调试通道）对齐`dsh-chamber`（deviations T-17）。以下有意不改：① bundle id `com.dshchamber.native`（Swift壳）/ `com.dshchamber.desktop`（Electron腿）——改动=通知授权重来+打包身份返工（T-14）；②跨进程协议串`--native-updater`、`__host.nativeUpdatePhase`、`no-native-bridge`/`nativeChannelToken`——Swift↔sidecar ↔渲染端shim三侧锁步，改名须协变；③持久化键前缀`native-shell.page-zoom.<origin>`（`macos/Sources/DSHChamber/ZoomPersistence.swift:22`）——改键会静默重置用户缩放偏好（T-22）；④测试夹具loud标记`poc-stub`/`poc: true`/`poc-no-registry`/`poc-unimplemented`（`packages/desktop/sidecar-stub.ts`）与settings-bridge的`'native-shell'`阻塞原因分类id（`packages/dsh-chamber-client-ui-settings-bridge/src/client/blocked-reason.ts:12`；文案跨包锁步、不属改名面）。免改面：`CHANGELOG*`段、`.tmp/**`（含旧`POC_*`脚本与旧名.app，临时区）。失效判据：上述任一被改名须同步T-14/T-17/T-22与两侧测试。
 

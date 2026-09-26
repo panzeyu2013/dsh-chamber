@@ -22,9 +22,8 @@
  *    The caller that owns the merged runtime (use-badge-count) passes the
  *    tri-state \`subagentActivity\` it computed through the sidebar's
  *    \`subagentActivityOf\` (the stale guard included: a stale source's residual
- *    count is NOT "still working"). Legacy callers may still pass the sparse
- *    \`runningSubagents\` count; the same stale guard applies here, so a stale
- *    report never suppresses.
+ *    count is NOT "still working"). Only \`running\` suppresses here; \`unknown\`
+ *    stays neutral, so this module never re-checks staleness itself.
  *
  *  - ACTIVE-GOAL SUPPRESSION (design 19 §3.2.1/§3.2.5): an armed
  *    completion whose session has an ACTIVE goal is not presented as a
@@ -43,26 +42,19 @@
 /**
  * Structural slice of one source's runtime-facts report (InstanceRuntimeReport
  * sessions rows) as the badge consumes it: the suppression dimensions are the
- * subagent activity tri-state (stale-guarded) plus the precomputed goal gate.
- * The sibling fields merged rows carry (\`running\`, \`completed\`, \`pending\`) are part
- * of the shape so realistic row literals typecheck without casts. Note: \`completed\`
- * is injected by the App ledger at merge time (the channel never carries it) and
- * \`running\` is producer-resolved through the vendor rule \`status?.running ?? row.running\`.
- * Deliberately NOT imported from the sidebar shared module so this module
- * keeps zero imports and stays runnable anywhere.
+ * subagent activity tri-state (stale-guarded by the caller) plus the
+ * precomputed goal gate. The sibling field merged rows carry (\`completed\`) is
+ * injected by the App ledger at merge time (the channel never carries it), so
+ * the same shape accepts ledger-armed integration rows. Deliberately NOT
+ * imported from the sidebar shared module so this module keeps zero imports and
+ * stays runnable anywhere.
  */
 export interface BadgeSuppressionFacts {
-  /** 断连来源的只读事实：其中的 runningSubagents 不是「正在干活」的证据。 */
-  stale?: boolean
   sessions?: Record<string, {
-    running?: boolean
     completed?: boolean
-    pending?: 'approval' | 'plan-review' | 'question'
-    /** Running subagent descendants; absent = 0 (sparse count shape). */
-    runningSubagents?: number
     /**
      * 归一后的子代理活动（sidebar subagentActivityOf 的输出；stale 的 running
-     * 已降 unknown）。给出时优先于 sparse count。
+     * 已降 unknown）。只有 running 压制；unknown/none 中性。
      */
     subagentActivity?: 'none' | 'running' | 'unknown'
     /**
@@ -73,15 +65,11 @@ export interface BadgeSuppressionFacts {
   }>
 }
 
-/** 子代理压制：declared 三值优先；sparse count 带 stale 守卫（与 sessionRowState 同拍）。 */
+/** 子代理压制：只有归一后的 running 压制（unknown/none 中性；stale 已在调用方降为 unknown）。 */
 function subagentSuppressesBadge(
   row: NonNullable<BadgeSuppressionFacts['sessions']>[string] | undefined,
-  stale: boolean,
 ): boolean {
-  const activity = row?.subagentActivity
-  if (activity !== undefined) return activity === 'running'
-  if ((row?.runningSubagents ?? 0) <= 0) return false
-  return stale !== true
+  return row?.subagentActivity === 'running'
 }
 
 /**
@@ -91,9 +79,9 @@ function subagentSuppressesBadge(
  * （通道从不携带该位），故两个析取恒等价。这与侧栏行尾蓝点/待办区的权威完全一致，
  * 因此不会出现「点/待办有、徽标无」的诚实分叉。
  *
- * 仍排除：①当前事实行确认在跑的子代理（06 §4.5 与窗口内运行环压制、complete
- * 通知抑制同规——子代理干活中的会话不是完成；stale 来源不算确认）；②goal 相位
- * active 的已武装完成（v5 §4 的呈现门）。0 = 无未读（主进程清除徽标）。
+ * 仍排除：①当前事实行归一为在跑的子代理（三值 running；06 §4.5 与窗口内运行环压制、
+ * complete 通知抑制同规——子代理干活中的会话不是完成；stale/unknown 已由调用方降级、
+ * 中性不压制）；②goal 相位 active 的已武装完成（v5 §4 的呈现门）。0 = 无未读（主进程清除徽标）。
  * 空集/缺来源/undefined 均安全返回 0（纯投影对全域 total，任何调用点都不需要
  * 自行判空）。
  */
@@ -110,7 +98,6 @@ export function projectBadgeCount(
   for (const sourceId of sources) {
     const ledger = completedBySource?.[sourceId]
     const facts = runtimeFacts?.[sourceId]
-    const stale = facts?.stale === true
     const sessions = new Set<string>([
       ...Object.keys(ledger ?? {}),
       ...Object.keys(facts?.sessions ?? {}),
@@ -120,7 +107,7 @@ export function projectBadgeCount(
       const armed = ledger?.[sessionId] === true || row?.completed === true
       if (!armed) continue
       if (row?.goalActive === true) continue
-      if (subagentSuppressesBadge(row, stale)) continue
+      if (subagentSuppressesBadge(row)) continue
       count += 1
     }
   }

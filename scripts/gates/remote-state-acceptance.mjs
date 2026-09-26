@@ -85,11 +85,8 @@ const GROUPS = [
   { id: 'renderer-state', cwd: 'packages/renderer', files: [
     ...requiredEntries('renderer-state', [
       'packages/renderer/test/aggregate/badge-count.test.ts',
-      'packages/renderer/test/aggregate/notification-edges.test.ts',
       'packages/renderer/test/aggregate/notification-projection.test.ts',
-      // notification-dedupe.test.ts 已退役：完成边沿去重的等价覆盖在
-      // notification-edges（dedupe 用例）与 notification-projection 里，
-      // 去重账本/目标套件由 complete-ledger + goal-unknown-arm 承接。
+      // 通知边沿/去重的现役覆盖：completion-observation、notification-projection（reconcile）、complete-ledger、notification-outbox。
       'packages/renderer/test/aggregate/complete-ledger.test.ts',
       'packages/renderer/test/aggregate/goal-unknown-arm.test.ts',
       'packages/renderer/test/view-runtime/retention.test.ts',
