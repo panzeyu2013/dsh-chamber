@@ -476,11 +476,13 @@ export default function InstanceView({
   // 兜底时钟（与判定窗同基准 = 本次持有起点）：absent 2s 即揭；hero/settling 保持，
   // 只留 70s 外层保险（> 68s 排队预算）。延时扣除已走过部分，避免把持有拖长。
   // The frame's releaseAtMonoMs is ABSOLUTE: the timer delay is the distance from
-  // frameNowMs; planVeilTimer refuses a 0 ms held timer and a non-finite delay means
-  // "hold until the next state change". The tick only re-renders at the deadline.
+  // frameNowMs. `null` means "arm nothing" and MUST return here: frameNowMs is a
+  // per-render clock read while surfaceFallbackTick is this effect's own output, so
+  // arming 0 ms would re-enter this effect forever (contract + measurement live on
+  // planVeilTimer).
   useEffect(() => {
     const delay = planVeilTimer(presentation, frameNowMs)
-    if (!Number.isFinite(delay)) return
+    if (delay === null) return
     const handle = setTimeout(
       () => setSurfaceFallbackTick(tick => tick + 1),
       delay,

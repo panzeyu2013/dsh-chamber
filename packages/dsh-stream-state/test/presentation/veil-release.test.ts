@@ -76,7 +76,7 @@ test('every held frame carries a finite absolute release deadline', () => {
 test('planVeilTimer refuses to arm a zero-delay timer for a held frame', () => {
   for (const scenario of heldScenarios()) {
     const delay = planVeilTimer(scenario.frame, scenario.now)
-    assert.ok(delay > 0, scenario.name + ': a held frame must not produce a 0 ms timer')
+    assert.ok(typeof delay === 'number' && delay > 0, scenario.name + ': a held frame must arm a positive timer, never a 0 ms one')
     assert.equal(delay, scenario.frame.releaseAtMonoMs - scenario.now, scenario.name + ': the delay must be the distance to the deadline')
   }
   const held = heldScenarios()[1].frame
@@ -93,7 +93,7 @@ test('hero and settling past the outer bound become actionable, not silently hel
     assert.equal(frame.veil, 'actionable', phase + ' at its bound must offer an exit')
     assert.equal(frame.actions, true, phase + ' at its bound must expose actions')
     assert.ok(Number.isFinite(frame.releaseAtMonoMs))
-    assert.equal(planVeilTimer(frame, frame.releaseAtMonoMs), 0, 'an actionable frame may reveal immediately')
+    assert.equal(planVeilTimer(frame, frame.releaseAtMonoMs), null, 'an actionable frame arms no timer')
   }
 })
 

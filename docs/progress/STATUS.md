@@ -74,8 +74,8 @@
 - 会话创建/fork/归档侧栏收敛：四项实机验收 + 整源降级面。
 - 打开意图/工作区回声：四项实机验收 + 阶段 0 插桩判定 `early-open.ts` 去留。
 - 发布/CI 基础设施：reusable workflow、vendor submodule 验收、Gateway npm 分发未决、打包闭包自检。
-- 性能遗留（P0–P2）：五条实机复测 + 第二阶段 A/B 目标（全视图 DOM ≤13,000 等）；已知取舍 = 回收壳蓝点/通知暂停至该源重开。
-- Swift 壳性能 A/B：启动/大载荷 invoke p95/空闲 wakeups 需打包态。
+- 性能遗留（P0–P2）：五条实机复测 + 第二阶段 A/B 目标（全视图 DOM ≤13,000；实测 `document.querySelectorAll('*')`=15,805 含壳 chrome，需按 `scripts/perf/measure-ui.mjs` 口径复测）；已知取舍 = 回收壳蓝点/通知暂停至该源重开。
+- Swift 壳性能 A/B：启动/大载荷 invoke p95/空闲 wakeups 需打包态；`[shell-fps]`/控制台转发在打包态被编译掉（`ShellDebug.isEnabled` 的 `!isPackaged` 守卫），打包态仲裁暂只有 Safari inspect 三角测量；0 延时定时器自激修复后的打包态判据 = 空闲安装率 <200/s、静默可见态 CPU <10%。
 - B 桥协议写端验证面：`sidecar-stdio.test.ts` 已有真实协议行为用例；出站帧门/有界缓冲仍是源码正则 + 本机真解析门（行为用例需可暂停 stdout 消费的夹具）。
 - SSH 密码一键免密与钥匙串（design 05 §8）：未实现。
 - 模型额外参数 + 默认推理等级（design 07）：待上游解锁；回显/设置入口未排期。

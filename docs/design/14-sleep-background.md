@@ -186,8 +186,8 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 > 上游宿主携带首帧期限后，才轮到重新评估**客户端期限本身**是否退役。
 > ② **页面生命周期**：六个账本由**单世代注册表**（`sourceId → {epoch, incarnation, state}`，`packages/dsh-stream-state`）的投影持有——指纹变化只在权威 roster 刷新处 `reincarnate` 换代，事件携带捕获的 epoch（错代丢弃），退役经 `retainSourceIds` 出表；App 侧只剩活视图（P4：删 `incarnationKey`/`retainSources` 键式记录面）；
 > ③ **露屏**：遮罩分类与会话面持有合为一次 `decidePresentation`；帧带 `veil`（released/held/actionable）与绝对 `releaseAtMonoMs`，
->    只有 `planVeilTimer` 能把期限换算成定时器（held 必 >0ms），hero/settling 越 70s 外层保险即 `actionable` 揭示租客、
->    absent/unknown 走 2s 兜底、未 settle 过了反馈窗给可操作面（P2：删除「越界后 0ms 重臂仍不出租客」的旧形态；`unknown` 不再折进 hero）；
+>    只有 `planVeilTimer` 能把期限换算成定时器（held 必 >0ms；非 held/坏钟 = `null` = 不挂），hero/settling 越 70s 外层保险即 `actionable` 揭示租客、
+>    absent/unknown 走 2s 兜底、未 settle 过了反馈窗给可操作面（P2：删除「越界后 0ms 重臂仍不出租客」的旧形态；`unknown` 不再折进 hero）。**Rejected alternatives（遮罩定时器形状）**：曾保留数值哨兵表达"不挂"（`0`=非 held、`Infinity`=坏钟）——`0` 是有限数，调用方的 `!Number.isFinite` 守卫放它过去并挂出 0ms 定时器，在"每次渲染读钟 + tick 是本 effect 自身依赖"的形状下自激（实测 3.4e4 次/秒安装、等量清理、主线程 48% 在 WebKit 定时器堆），且两个哨兵是同一操作语义的两种写法；故改为 `number | null` 单义出口，由类型系统强制调用方处理"不挂"。
 > ④ **等待形状**：`withDeadline` / `waitForCondition` / `retryDelayMs` / `createSingleFlight` 四个原语替换手写计时器记账
 > （B6 七站点中 W1/W2/W3/W5/W6 已迁；W4 不做，W7 因异步探测不适用）；
 > ⑤ **阈值**：四条阶梯的值集中于 `tables.json` 的 `ladders`（`mobile` / `authority` / `streamHealth`），

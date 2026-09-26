@@ -135,7 +135,7 @@ test('hero past the outer bound becomes actionable and reveals the tenant', () =
   assert.equal(frame.actions, true)
   assert.equal(frame.veil, 'actionable', 'the b73bce74 70s reveal: the exit is offered, the tenant is not left covered')
   assert.equal(frame.releaseAtMonoMs, 70000)
-  assert.equal(planVeilTimer(frame, 70000), 0, 'an actionable frame needs no timer')
+  assert.equal(planVeilTimer(frame, 70000), null, 'an actionable frame needs no timer')
 })
 
 test('absent uses its own streak start, so a one-frame disappearance cannot reset the hold', () => {
@@ -232,7 +232,7 @@ test('planVeilTimer refuses a fabricated held frame at or before now', () => {
   assert.equal(held.veil, 'held')
   assert.throws(() => planVeilTimer({ ...held, releaseAtMonoMs: 1 }, 1), /held/i)
   assert.throws(() => planVeilTimer({ ...held, releaseAtMonoMs: Number.NaN }, 1), /finite/i)
-  assert.equal(planVeilTimer(held, Number.NaN), Number.POSITIVE_INFINITY, 'a broken clock holds, it never arms 0 ms')
+  assert.equal(planVeilTimer(held, Number.NaN), null, 'a broken clock arms nothing (the veil holds until the next state change)')
 })
 
 test('every frame has a finite release moment, and every held frame releases in the future', () => {
@@ -253,8 +253,9 @@ test('every frame has a finite release moment, and every held frame releases in 
           'release moment is not finite: settled=' + String(settled) + ' phase=' + String(phase) + ' hold=' + String(hold),
         )
         if (frame.veil === 'held') {
+          const holdDelay = planVeilTimer(frame, 1)
           assert.ok(
-            planVeilTimer(frame, 1) > 0,
+            typeof holdDelay === 'number' && holdDelay > 0,
             'held frame with a 0 ms re-arm: settled=' + String(settled) + ' phase=' + String(phase) + ' hold=' + String(hold),
           )
           assert.ok(frame.releaseAtMonoMs > 1, 'held frames must release in the future')
