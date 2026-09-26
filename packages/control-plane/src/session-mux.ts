@@ -546,6 +546,9 @@ interface PendingFollow {
   last: SessionTurnEnd | null
   timer: ReturnType<typeof setTimeout> | null
   settle: (value: SessionTurnEnd | null) => void
+  /** The socket this follow was opened on: a settle after a carrier replacement must
+   *  not cancel a streamId the successor socket never carried (review finding F3-CANCEL). */
+  carrier: MuxSocket
 }
 
 const TURN_END_KINDS: ReadonlySet<string> = new Set<SessionTurnEndKind>([
@@ -909,7 +912,15 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
         buildEventResultNextPayload(status.clientId, held.eventId),
         { timeoutMs: baselineTimeoutMs })
         .then(() => {
-          held.delegated = true
+          // Answering settles the host-side waterfall: the host removes this client from the
+          // delivery set, so no cancel ever arrives and the entry would stay here forever -
+          // scanned by every later emit while its pending mirror stays alive. Release it
+          // exactly as a real cancel would (the host handler is a get/delete, so a later
+          // real cancel stays harmless) - review finding O-A.
+          clearTimer(held.timer)
+          heldWaterfalls.delete(held.eventId)
+          if (held.kind !== null) deps.onCancel?.(held.eventId, now())
+          status.heldWaterfalls = heldWaterfalls.size
           emitStatus()
         })
         .catch((error: unknown) => {
@@ -1041,15 +1052,18 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
     if (pending === undefined) return
     follows.delete(streamId)
     clearTimer(pending.timer)
-    sendFrame({ type: 'cancel', streamId })
+    // The cancel is addressed to the carrier that owns the stream: after a replacement the
+    // successor never carried this streamId, so the frame would be noise (F3-CANCEL).
+    if (socket === pending.carrier) sendFrame({ type: 'cancel', streamId })
     pending.settle(value)
   }
   const followTurnEndOnce = (sessionId: string): Promise<SessionTurnEnd | null> => {
     if (stopped || !status.ready || socket === null || socket.readyState !== 'open') return Promise.resolve(null)
+    const carrier = socket
     followSeq += 1
     const streamId = `follow-${followSeq}`
     return new Promise<SessionTurnEnd | null>((resolve) => {
-      const pending: PendingFollow = { streamId, last: null, timer: null, settle: resolve }
+      const pending: PendingFollow = { streamId, last: null, timer: null, settle: resolve, carrier }
       pending.timer = setTimeout(() => {
         if (status.ready) warn('session-mux: session/follow timed out before a turn/end tail')
         settleFollow(streamId, null)

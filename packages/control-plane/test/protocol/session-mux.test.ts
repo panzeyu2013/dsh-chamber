@@ -569,6 +569,25 @@ test('waterfall: delegates exactly once only when attached AND past the grace wi
   assert.equal(h.results.length, 1)
   h.mux.stop()
 })
+test('waterfall: a successful delegation releases the hold and its pending mirror exactly once', async () => {
+  let clock = 1_000
+  const h = makeHarness({ attached: true, graceMs: 10, now: () => clock })
+  await startSession(h)
+  h.sockets[0].deliver(waterfallFrame())
+  await flush()
+  assert.equal(h.mux.status().heldWaterfalls, 1)
+  clock += 10
+  h.mux.kick('tick')
+  await until(() => h.results.length === 1)
+  await flush()
+  // The host removes this client from the delivery set the moment it answers, so no cancel
+  // can arrive for this eventId: the entry must leave the ledger (every later emit scans it)
+  // and the local pending mirror must be released right here (review finding O-A).
+  assert.equal(h.mux.status().heldWaterfalls, 0, 'an answered hold must not stay in the ledger')
+  assert.deepEqual(h.cancels, ['e1'])
+  h.mux.stop()
+  assert.deepEqual(h.cancels, ['e1'], 'stop() must not release an already released hold twice')
+})
 
 test('waterfall: user-questions/request maps to the question kind', async () => {
   const h = makeHarness({ attached: false })
@@ -775,6 +794,29 @@ test('followTurnEndOnce: null before ready and null on timeout (no resident foll
   const fact = await late
   assert.equal(fact, null)
   assert.equal(h.sockets[0].frames().filter(frame => frame.type === 'open' && frame.streamId === 'follow-1').length, 1)
+  h.mux.stop()
+})
+test('followTurnEndOnce: a settle after a carrier replacement never cancels on the successor socket', async () => {
+  // The follow stream lives on ONE socket. When that socket dies before the follow settles,
+  // the successor never carried the streamId, so the timeout must not emit a cancel frame at
+  // it (review finding F3-CANCEL).
+  const h = makeHarness({ followTimeoutMs: 120, reconnectMinMs: 5, reconnectMaxMs: 5 })
+  await startSession(h)
+  const late = h.mux.followTurnEndOnce('s1')
+  assert.equal(h.sockets[0].frames().at(-1)?.type, 'open')
+  h.sockets[0].serverClose(1006, 'network')
+  // Bring the successor up and READY before the follow times out: the frame the guard
+  // suppresses is the one an unguarded settle would send at a live, open socket.
+  await until(() => h.sockets.length >= 2)
+  h.sockets[1].open()
+  h.sockets[1].deliver({ type: 'ready', clientId: 'client-2' })
+  await flush()
+  assert.equal(await late, null)
+  assert.equal(
+    h.sockets[1].frames().filter(frame => frame.type === 'cancel').length,
+    0,
+    'a stream the successor never carried must not be cancelled on it',
+  )
   h.mux.stop()
 })
 
