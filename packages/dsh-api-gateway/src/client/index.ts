@@ -30,6 +30,9 @@ import type {
 import {
   RemoteStreamCarrierError,
   RemoteStreamMuxClient,
+  attachOpeningTicket,
+  openingTicketOf,
+  type OpeningAcceptance,
 } from './stream-client.ts'
 import { ClientRemoteEvents } from './remote-events.ts'
 import {
@@ -87,6 +90,8 @@ interface PreparedClientInvocation {
   readonly endpoint: string
   readonly args: Readonly<Record<string, unknown>>
   readonly signal: AbortSignal
+  /** F1: the logical generation's opening ticket, when the caller's signal carries one. */
+  readonly opening: OpeningAcceptance | undefined
 }
 
 interface RemoteNamespaceHandle {
@@ -152,7 +157,7 @@ class ClientRemoteService extends Service implements ClientRemote {
   private hostFacts: RemoteHostFacts | undefined
   private readonly streams: RemoteStreamMuxClient
   private readonly events: ClientRemoteEvents
-  /** chamber (design 14 §D4): page-level carrier-churn fact for the active source. */
+  /** chamber (design 14 §D4): page-level carrier-failure fact for the active source (diagnostics only). */
   private readonly reportCarrierFailure: (error: unknown) => void
   private mutations = Promise.resolve()
 
@@ -275,13 +280,17 @@ class ClientRemoteService extends Service implements ClientRemote {
     endpoint: string,
     payload: unknown,
     signal: AbortSignal,
+    opening?: OpeningAcceptance,
     noConnection = `client api: ${endpoint} has no active Connection`,
   ): AsyncIterable<unknown> {
     const connection = this.ownerCtx.get('connection') as ConnectionHandle | undefined
     if (connection === undefined) throw new Error(noConnection)
+    // F1: the ticket is looked up on the signal too, so a call site that only forwards
+    // the signal (the forwarded-event opener) still reaches the same channel.
+    const resolved = opening ?? openingTicketOf(signal)
     const local = connection.rpc.open?.('/api', endpoint, payload, signal)
     const source = local === undefined
-      ? this.streams.open(endpoint, payload, signal)
+      ? this.streams.open(endpoint, payload, signal, resolved)
       : normalizeConnectionStream(local)
     return reportStreamCarrierFailures(
       source,
@@ -533,7 +542,7 @@ class ClientRemoteService extends Service implements ClientRemote {
     const endpoint = endpointOf(descriptor)
     if (!token.active) throw new Error(withdrawn(endpoint).error.message)
     const prepared = this.prepareInvocation(descriptor, projection, token, callerCtx, values, boundIdentity)
-    const stream = this.openRemoteStream(endpoint, { args: prepared.args }, prepared.signal)
+    const stream = this.openRemoteStream(endpoint, { args: prepared.args }, prepared.signal, prepared.opening)
     for await (const value of stream) {
       if (!mountActive(token)) throw new Error(withdrawn(endpoint).error.message)
       yield value
@@ -586,7 +595,12 @@ class ClientRemoteService extends Service implements ClientRemote {
     const signal = callerSignal === undefined
       ? token.abort.signal
       : AbortSignal.any([token.abort.signal, callerSignal])
-    return { endpoint, args, signal }
+    // F1: carry the generation's opening ticket across THIS composition (the only
+    // signal wrapping on the path): the mux must see the ticket the RemoteStream
+    // attached, without depending on the vendor forwarding the object identity.
+    const opening = openingTicketOf(callerSignal)
+    if (opening !== undefined) attachOpeningTicket(signal, opening)
+    return { endpoint, args, signal, opening }
   }
 }
 

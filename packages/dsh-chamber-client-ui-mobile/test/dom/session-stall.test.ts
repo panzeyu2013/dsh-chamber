@@ -868,13 +868,13 @@ test('parity: the notice threshold is the ONE documented deviation (mobile is DO
   assert.ok(mobileTable.thresholdMs < mobileTable.failedMs, 'the failure wording must not precede the notice')
 })
 
-test('parity: the loading arm is manual on desktop and automatic (in-flight-gated) on mobile', () => {
+test('parity: the loading arm reports on desktop and rebuilds automatically (in-flight-gated) on mobile', () => {
   const armed = planSessionStreamHealth(
     desktopLoadingHold(SESSION_STREAM_HEALTH_DEFAULTS.loadingStallMs),
     { openState: 'loading', presented: true, healRoute: true, resyncAvailable: true },
     PARITY_NOW,
   )
-  assert.equal(armed.action, 'resync', 'desktop only ARMS the user control; the click executes it')
+  assert.equal(armed.action, 'none', 'the desktop header only reports; the mobile tier owns the automatic rebuild')
   assert.equal(armed.notice, 'loading-stall', 'the arm keeps its own notice')
   const parked = {
     shape: true, pageVisible: true, since: PARITY_NOW - mobileTable.thresholdMs, now: PARITY_NOW,

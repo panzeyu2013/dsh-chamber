@@ -1,11 +1,10 @@
 /**
  * The stream-health chip’s VISIBLE surface as pure decisions.
  *
- * The package has no React/DOM test environment, so these three functions ARE
- * the whole visible surface and can be pinned behaviourally; the component is a
- * thin projection of them. A flipped action branch, a notice that renders no
- * button, or a ticker that stops re-planning would otherwise be invisible to
- * every test.
+ * The package has no React/DOM test environment, so these functions ARE the
+ * whole visible surface and can be pinned behaviourally; the component is a thin
+ * projection of them. A notice that renders nothing, or a ticker that stops
+ * re-planning, would otherwise be invisible to every test.
  */
 import type {
   SessionOpenState,
@@ -17,10 +16,6 @@ import type {
 export interface SessionStreamHealthChipFace {
   /** The live-region label: `'healing'` while an arm is running, else the notice. */
   readonly label: 'healing' | SessionStreamNotice | null
-  /** The page-reload control (never offered for the informational churn notice). */
-  readonly reload: boolean
-  /** The user-triggered per-session rebuild control. */
-  readonly resync: boolean
   /** The `data-chamber-stream-health` marker the chip publishes. */
   readonly marker: 'recovering' | SessionStreamNotice
 }
@@ -35,23 +30,15 @@ export function sessionStreamHealthChipFace(
 ): SessionStreamHealthChipFace {
   const recovering = plan.state.phase === 'healing'
     || (plan.state.phase === 'error-hold' && openState === 'error')
-  if (plan.notice === null && !recovering) {
-    return { label: null, reload: false, resync: false, marker: 'recovering' }
-  }
-  // Churn is informational: no action that would interrupt a recovery in flight.
-  const actionable = plan.notice !== null && plan.notice !== 'carrier-churn'
-  return {
-    label: plan.notice ?? 'healing',
-    reload: actionable,
-    resync: actionable && plan.action === 'resync',
-    marker: plan.notice ?? 'recovering',
-  }
+  // The chip reports; it offers no control (the manual lever is retired).
+  if (plan.notice === null && !recovering) return { label: null, marker: 'recovering' }
+  return { label: plan.notice ?? 'healing', marker: plan.notice ?? 'recovering' }
 }
 
 /**
- * Whether the chip must keep its 1 s ticker armed: an idle session, an open
- * stream and a hidden page carry no timer; a holding arm or a visible notice
- * (which expires from its own fact timestamp) does.
+ * Whether the chip must keep its 1 s ticker armed: an idle session and an open
+ * stream carry no timer; a holding arm or a non-open state (whose stall/failure
+ * deadline still needs ageing) does.
  */
 export function sessionStreamHealthChipHoldsTick(
   plan: SessionStreamHealthPlan,
@@ -61,18 +48,18 @@ export function sessionStreamHealthChipHoldsTick(
   if (!visible) return false
   return plan.state.phase !== 'idle'
     || (openState !== 'open' && openState !== 'cold')
-    || plan.notice !== null
 }
 
 /**
  * The `setPlan` identity rule: a plan whose visible surface is unchanged keeps
- * its previous object, or every tick would re-run the effects for nothing.
+ * its previous object, or every tick would re-run the effects for nothing. The
+ * rendered surface is the label/marker pair, which reads only the phase and the
+ * notice; `action` is executed by the seat, never rendered here.
  */
 export function sameSessionStreamHealthPlan(
   previous: SessionStreamHealthPlan,
   next: SessionStreamHealthPlan,
 ): boolean {
-  return previous.action === next.action
-    && previous.notice === next.notice
+  return previous.notice === next.notice
     && previous.state.phase === next.state.phase
 }

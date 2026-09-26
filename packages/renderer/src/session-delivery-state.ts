@@ -68,7 +68,7 @@ export interface SessionDeliveryOwner {
    * actually ran, so a no-op attempt never authorizes a stronger tier.
    */
   observe(input: DeliveryObservationInput, now: number, options?: { readonly commit?: boolean }): DeliveryDecision
-  /** Account a user-initiated action in the same ledger the automatic arm reads. */
+  /** Account a dispatched action in the same ledger the automatic arm reads. */
   markDispatched(sessionId: string, tier: DeliveryAction['tier'], now: number): void
   /** Drop every ladder memory for a session that left the stage. */
   forget(sessionId: string): void
@@ -89,15 +89,27 @@ export function createSessionDeliveryOwner(): SessionDeliveryOwner {
       )
       if (runId !== undefined) lastRuns.set(input.sessionId, runId)
       else lastRuns.delete(input.sessionId)
+      // A `loading` face is NOT an automatic-recovery symptom: an open still in
+      // flight is the host's to finish, and a parked one is the user's decision
+      // (the stream-forensics evidence surfaces it; the page never re-issues an
+      // open on a timer). The face is dropped BEFORE the shared classifier, and
+      // its in-flight bits still block every other tier, so "an automatic action
+      // never crosses a pending open" is unchanged.
+      const loadingFace = input.evidence.open?.state === 'loading' ? input.evidence.open : undefined
+      const evidence = loadingFace === undefined
+        ? input.evidence
+        : { ...input.evidence, open: undefined }
       const outcome = planDeliveryRecovery({
         evidence: {
           sessionId: input.sessionId,
           ...(runId === undefined ? {} : { runId }),
-          ...input.evidence,
+          ...evidence,
         },
         records: records.has(input.sessionId) ? { [input.sessionId]: records.get(input.sessionId) as LadderRecord } : {},
         now,
-        ...(input.escalationBlocked === undefined ? {} : { escalationBlocked: input.escalationBlocked }),
+        escalationBlocked: input.escalationBlocked === true
+          || (loadingFace !== undefined
+            && (loadingFace.openInFlight === true || loadingFace.resyncInFlight === true)),
       })
       if (options?.commit !== false) {
         const nextRecord = outcome.plan.records[input.sessionId]
@@ -119,7 +131,7 @@ export function createSessionDeliveryOwner(): SessionDeliveryOwner {
         runIdConflict: conflict,
       }
     },
-    /** Account a user-initiated action in the same ledger the automatic arm reads. */
+    /** Account a dispatched action in the same ledger the automatic arm reads. */
     markDispatched(sessionId, tier, now) {
       const record = records.get(sessionId) ?? { symptomSinceMs: now, progressStamp: 0, dispatches: {} }
       const stamps = (record.dispatches[tier] ?? []).filter(at => now - at < LADDER_TABLES.delivery.rebootWindowMs)

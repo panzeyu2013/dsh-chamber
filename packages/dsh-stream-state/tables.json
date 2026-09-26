@@ -15,6 +15,7 @@
     "silentTeardownMinMs": 15000,
     "openingStallStreak": 2,
     "openingEpisodeKeysMax": 256,
+    "openingBudgetMaxMisses": 5,
     "handshakeTimeoutMs": 30000,
     "presentation": {
       "veilActionsAfterMs": 10000,
@@ -47,8 +48,7 @@
         "healCooldownMs": 120000,
         "healBudgetWindowMs": 600000,
         "healBudgetMax": 3,
-        "healSettleMs": 20000,
-        "carrierChurnMs": 10000
+        "healSettleMs": 20000
       },
       "delivery": {
         "resyncGraceMs": 2000,

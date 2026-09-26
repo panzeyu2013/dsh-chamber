@@ -16,6 +16,10 @@
  * live={local} 执行四类 durable 剪枝，会把远端来源的 durable 键当退役来源写盘
  * 删除（全部不可恢复）。
  *
+ * 本文件另承载 design 19 §3.7.1 的两组新增锁：事实健康环（recorder 本体 + 采样接线）与首见
+ * 基线播种的源级顺序锁（`through > 0` 那一刻才消费一次性标记）。它们与 F6/F11/F13/V5-A 同属
+ * 「durable 未读/诊断接线」面，故未另开文件。
+ *
  * 双重证据：
  *   ① wiring 源码锁：四类 durable 剪枝都落在
  *      `if (durableUnreadPruneAllowed(rosterGate.isSettled(), bridgeVerdict,
@@ -34,6 +38,8 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { durableUnreadPruneAllowed, healthProbeUnavailableDiagnostic, rosterIncompleteDiagnostic } from '../../src/app-hooks/use-bridge-subscriptions.ts'
 import { createCompleteLedger } from '../../src/complete-ledger.ts'
+import { AUTHORITY_LOG_KEY } from '@dsh-chamber/dsh-chamber-client-core/authority-log-store'
+import { createFactsHealthRecorder, createFactsStepGuard, type FactsHealthSample } from '../../src/facts-health.ts'
 import { LOCAL_INSTANCE_ID } from '../../src/local-instance.ts'
 import { pruneSourceRecord } from '../../src/source-registry.ts'
 import {
@@ -517,3 +523,185 @@ test('F6 storage fake: the ungated first frame is the documented disk-loss regre
   assert.equal(persisted.pending?.[REMOTE_SOURCE], undefined)
   assert.equal(persisted.outcomes?.[REMOTE_SOURCE], undefined)
 })
+
+test('facts-health: one breadcrumb per signature change, never-throw on hostile storage', () => {
+  const writes: Array<{ key: string; value: string }> = []
+  const storage = { getItem: () => null, setItem: (key: string, value: string) => { writes.push({ key, value }) } }
+  let at = 1_000
+  const recorder = createFactsHealthRecorder(() => (at += 1), storage)
+  const sample: FactsHealthSample = {
+    ready: false, staleSince: 5, baselines: 0, baselineFailures: 3, baselineResamples: 1,
+    baselineFailureReason: 'session/list: timeout after 5000ms',
+    reconnects: 2, socketErrors: 0, rows: 0, lastTrustedBaselineAt: null,
+  }
+  assert.equal(recorder.record('local', sample), true)
+  assert.equal(recorder.record('local', { ...sample }), false, '等价状态只留一条证据，不刷环')
+  assert.equal(recorder.record('local', { ...sample, ready: true, staleSince: null }), true,
+    '可判性变化必须落新条（读环即可还原时间线）')
+  assert.equal(writes.length, 2)
+  assert.equal(writes[0]!.key, AUTHORITY_LOG_KEY)
+  assert.match(writes[0]!.value, /facts-health/)
+  assert.match(writes[0]!.value, /timeout after 5000ms/)
+  assert.match(writes[1]!.value, /ready=1/)
+  // 敌意 storage（getItem/setItem 都抛）：诊断绝不打破账本链。
+  const hostile = {
+    getItem: () => { throw new Error('denied') },
+    setItem: () => { throw new Error('quota') },
+  }
+  const hostileRecorder = createFactsHealthRecorder(() => 1, hostile)
+  assert.equal(hostileRecorder.record('local', sample), true)
+  hostileRecorder.error('local', 'boom')
+})
+
+test('first-sight seeding wiring: the floor is mirrored once per incarnation token, before the derivation', () => {
+  const hook = readFileSync(
+    fileURLToPath(new URL('../../src/app-hooks/use-unread-notifications.ts', import.meta.url)), 'utf8')
+  const policy = readFileSync(
+    fileURLToPath(new URL('../../src/unread-derivation.ts', import.meta.url)), 'utf8')
+  // 派生实体（never-throw 包装内的那一份）：播种必须在它里面、且在派生调用之前。
+  const compute = bracedBlockFrom(hook, 'const deriveSourceUnreadNow = useCallback(')
+  const seedAt = compute.indexOf('factsBaselineSeed({')
+  const deriveAt = compute.indexOf('deriveSourceUnread({')
+  assert.notEqual(seedAt, -1, 'the seeding lives in the ONE derivation entry (App owns read marks)')
+  assert.ok(seedAt < deriveAt, '播种必须发生在派生之前：否则首拍已经整表武装，历史成了 148 个点')
+  const seedBlock = compute.slice(compute.lastIndexOf('if (factsRows !== undefined)', seedAt), deriveAt)
+  assert.match(seedBlock, /factsRows !== undefined/, '只有可判批次才播种（冻结/降级的行绝不推进读水位）')
+  // 化身判据 = owner token 的对象身份（capture），不是传输指纹（same-id 删后重现会复用指纹）。
+  assert.match(seedBlock, /incarnation:\s*sourceLifecyclesRef\.current\?\.capture\(sourceId\)\s*\?\?\s*bootToken/,
+    '每来源**化身**只播一次：键必须是 SourceOwnershipRegistry 的 token 身份')
+  assert.doesNotMatch(seedBlock, /\.fingerprint/, '指纹会被 same-id 删后重现复用，不得当化身身份')
+  assert.match(seedBlock, /completedStore\.getSnapshot\(\)\s*\[\s*sourceId\s*\]\s*\?\?\s*\{\s*\}/,
+    '已武装的完成点由 keepUnread 排除：重载后恢复的点必须留')
+  assert.doesNotMatch(seedBlock, /ack(?:All)?Read\(/,
+    '播种是本端呈现决定，不对宿主声明跨端已读')
+  // 标记只在 seed.seeded 时消费（真的播了才写回）；策略本体在纯模块（地板唯一实现 + 零水位不消费）。
+  assert.match(compute, /if \(seed\.seeded\) \{[\s\S]*factsBaselineSeedRef\.current\[sourceId\] = seed\.incarnation/,
+    '标记与地板同拍消费')
+  // 标记有界：清理只在播种那一拍（seed.seeded）执行，真实上界 = 曾播种来源数。
+  assert.match(compute, /if \(!liveServerIdsRef\.current\.has\(id\)\)[\s\S]{0,12}delete factsBaselineSeedRef\.current\[id\]/,
+    '标记随挂载输入有界化：已退役来源的标记不得留下')
+  const plan = bracedBlockFrom(policy, 'export function factsBaselineSeed(')
+  assert.match(plan, /maxWatermark\(\s*input\.factsRows\s*\)/, '地板 = 源级上界（与「全部已读」同一语义）')
+  assert.match(plan, /seedReadFloor\(\s*input\.readMarks,\s*input\.factsRows,\s*through,\s*input\.keepUnread,?\s*\)/,
+    '一份地板实现：与「全部已读」同一条语义')
+  assert.match(plan, /if \(through\s*<=\s*0\)\s*return unchanged/, '零水位/空批次不得消费这一代的机会')
+  assert.match(plan, /input\.seededIncarnation\s*===\s*input\.incarnation/, '化身身份相等才跳过播种')
+  // 一份地板实现：App 的「全部已读」也走它，没有第二套镜像循环。
+  const readAll = bracedBlockFrom(APP, 'const markSourceAllRead = useCallback(')
+  assert.match(readAll, /seedReadFloor\(/)
+  assert.doesNotMatch(readAll, /next\[sessionId\] = advanceReadMark/)
+})
+
+test('facts-health sampling wiring: every observer snapshot reaches the ring recorder', () => {
+  const hook = readFileSync(
+    fileURLToPath(new URL('../../src/app-hooks/use-session-facts-lifecycle.ts', import.meta.url)), 'utf8')
+  // 唯一取样点：观察者快照 → sampleFactsHealth → recorder。删掉/断链任一环，这条锁必须红
+  // （它是「观察者一直不可判」落成盘上时间线的唯一通路）。
+  const observer = bracedBlockFrom(hook, 'createSourceMuxFacts({')
+  assert.match(observer, /onSnapshot: snapshot => \{[\s\S]*sampleFactsHealth\(\)/)
+  const sample = bracedBlockFrom(hook, 'const sampleFactsHealth = (): void =>')
+  assert.match(sample, /created!\s*\.status\(\)/)
+  assert.match(sample, /factsHealthRef\.current\?\.record\(\s*sourceId,\s*\{/)
+  // 采样字段与 FactsHealthSample 对齐：时点进 detail（状态进签名由 recorder 负责）。
+  assert.match(sample, /lastTrustedBaselineAt:\s*status\.lastTrustedBaselineAt/)
+  assert.doesNotMatch(sample, /edges:\s*status\.edges/)
+})
+
+test('never-throw wiring: derive / reconcile / apply / runtime report and every facts listener boundary is guarded', () => {
+  const hook = readFileSync(
+    fileURLToPath(new URL('../../src/app-hooks/use-unread-notifications.ts', import.meta.url)), 'utf8')
+  const bridge = readFileSync(
+    fileURLToPath(new URL('../../src/app-hooks/use-bridge-subscriptions.ts', import.meta.url)), 'utf8')
+  const lifecycle = readFileSync(
+    fileURLToPath(new URL('../../src/app-hooks/use-session-facts-lifecycle.ts', import.meta.url)), 'utf8')
+  const health = readFileSync(
+    fileURLToPath(new URL('../../src/facts-health.ts', import.meta.url)), 'utf8')
+
+  // ① 派生入口：唯一失败面是统一包装（异常落环 + loud 一次，绝不静默）。
+  const deriveEntry = bracedBlockFrom(hook, 'const recomputeSourceUnread = useCallback(')
+  assert.match(deriveEntry, /factsStepGuard\.guard\(sourceId, 'derive-unread', \(\) => deriveSourceUnreadNow\(sourceId\)\)/)
+  // ② 收敛与 facts 应用：实体与 never-throw 出口分离，对外（listener）只暴露出口。
+  assert.match(hook, /const reconcileCompletionsNow = useCallback\(/)
+  assert.match(bracedBlockFrom(hook, 'const reconcileCompletions = useCallback('),
+    /factsStepGuard\.guard\(sourceId, 'reconcile-completions'/)
+  assert.match(hook, /const applySessionFactsNow = useCallback\(/)
+  assert.match(bracedBlockFrom(hook, 'const applySessionFacts = useCallback('),
+    /factsStepGuard\.guard\(sourceId, 'apply-session-facts'/)
+  assert.match(hook, /guardUnreadStep: factsStepGuard/)
+  // ③ runtime 上报：桥的 listener body 是 guarded 的本地实现。
+  assert.match(bridge, /const handleRuntimeReport: RuntimeReportListener =/)
+  assert.match(bridge,
+    /guardUnreadStep\.guard\(sourceId, 'runtime-report', \(\) => handleRuntimeReport\(sourceId, report, sourceFingerprint\)\)/)
+  // ④ 事实源 listener 注册边界：emit 环看不到 chamber listener 抛错（SSE/WS 泵不被 listener 打死）。
+  //    gateway 事实源 listener 的唯一边界是它调用的 apply-session-facts（②，同一 recorder）；
+  //    facts-row-hint 与 mux-snapshot 各自包住裸实现（后者还含无第二道 guard 的 sampleFactsHealth）。
+  assert.match(lifecycle, /factsStepGuardRef\.current \?\?= createFactsStepGuard\(factsHealthRef\.current\)/)
+  assert.doesNotMatch(lifecycle, /'facts-snapshot'/,
+    'gateway 事实源 listener 不得再叠第二道 guard：apply-session-facts 已是它的边界')
+  for (const step of ['facts-row-hint', 'mux-snapshot']) {
+    assert.match(lifecycle, new RegExp("factsStepGuard\\.guard\\(sourceId, '" + step + "'"),
+      'guarded listener boundary: ' + step)
+  }
+  // ⑤ 策略本体：try/catch → 环 + loud 一次/来源/步骤（错误记账只有这一条出口）。
+  const guardFactory = bracedBlockFrom(health, 'export function createFactsStepGuard(')
+  assert.match(guardFactory, /try \{\s*return run\(\)/)
+  assert.match(guardFactory, /catch \(error\) \{[\s\S]*report\(sourceId, step, error\)/)
+  assert.match(guardFactory, /recorder\.error\(\s*sourceId,\s*step\s*\+\s*': '\s*\+\s*message\s*\)/)
+  assert.match(guardFactory, /const key = sourceId \+ '\|' \+ step/)
+  assert.match(guardFactory, /warn\('\[unread\]/)
+  // ⑥ 每步骤恰好一个包装：同一异常路径不得有两层。包装入口自身不带 try/catch（死层），
+  //    实体（…Now / handler）裸奔且不包第二道 guard；绑定 sourceId 的 .guard() 调用点每步骤恰好一个。
+  const stepOwners = [
+    ['derive-unread', hook], ['reconcile-completions', hook], ['apply-session-facts', hook],
+    ['runtime-report', bridge],
+    ['facts-row-hint', lifecycle], ['mux-snapshot', lifecycle],
+  ]
+  for (const [step, text] of stepOwners) {
+    // 语义计数：绑定 sourceId 与步骤名的 .guard() 调用点恰好一个（不数注释/文案里的字面量）。
+    const calls = text.match(new RegExp("\\.guard\\(\\s*sourceId,\\s*'" + step + "'", 'g')) ?? []
+    assert.equal(calls.length, 1, '每步骤恰好一个 guard 调用点: ' + step)
+  }
+  for (const marker of [
+    'const recomputeSourceUnread = useCallback(',
+    'const reconcileCompletions = useCallback(',
+    'const applySessionFacts = useCallback(',
+  ]) {
+    assert.doesNotMatch(bracedBlockFrom(hook, marker), /try\s*\{/, '包装入口不得自带 try/catch 死层: ' + marker)
+  }
+  for (const marker of [
+    'const deriveSourceUnreadNow = useCallback(',
+    'const reconcileCompletionsNow = useCallback(',
+    'const applySessionFactsNow = useCallback(',
+  ]) {
+    const entity = bracedBlockFrom(hook, marker)
+    assert.doesNotMatch(entity, /try\s*\{/, '实体不得自带 try/catch 死层: ' + marker)
+    assert.doesNotMatch(entity, /\.guard\(/, '实体不得再包一层 guard: ' + marker)
+  }
+  const runtimeReportHandler = bracedBlockFrom(bridge, 'const handleRuntimeReport: RuntimeReportListener =')
+  assert.doesNotMatch(runtimeReportHandler, /try\s*\{/, 'handler 裸奔：包装只在注册边界')
+  assert.doesNotMatch(runtimeReportHandler, /\.guard\(/, 'handler 自身不得再包一层 guard')
+})
+
+test('facts step guard: a throwing step lands in the ring and warns once per source+step (never-throw)', () => {
+  const ring: Array<{ sourceId: string; message: string }> = []
+  const warnings: string[] = []
+  const guard = createFactsStepGuard(
+    { error: (sourceId, message) => { ring.push({ sourceId, message }) } },
+    message => { warnings.push(message) },
+  )
+  const boom = (): void => { throw new Error('boom') }
+  assert.equal(guard.guard('dsh-a', 'derive-unread', boom), undefined)
+  assert.equal(guard.guard('dsh-a', 'derive-unread', boom), undefined)
+  assert.deepEqual(ring.map(entry => entry.message), ['derive-unread: boom', 'derive-unread: boom'],
+    '每次异常都记账（环内去重由 recorder 负责）')
+  assert.deepEqual(warnings, ['[unread] derive-unread 失败（保持上一拍）：'], 'console 每来源+步骤只 loud 一次')
+  guard.guard('dsh-a', 'apply-session-facts', boom)
+  guard.guard('dsh-b', 'derive-unread', boom)
+  assert.equal(warnings.length, 3, '不同来源/步骤各有一次 loud')
+  // 成功步骤原样返回；同一来源+步骤的再次异常复用同一条 loud 与环写入路径。
+  assert.equal(guard.guard('dsh-a', 'derive-unread', () => 7), 7)
+  assert.equal(guard.guard('dsh-a', 'derive-unread', boom), undefined)
+  assert.equal(warnings.length, 3, '已 loud 过的来源+步骤不再喊')
+  assert.equal(ring.at(-1)?.message, 'derive-unread: boom')
+})
+

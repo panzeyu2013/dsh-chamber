@@ -528,6 +528,8 @@ export async function runEntries(entries, {
   let stopped = false
   let flushPointer = 0
   let failed = null
+  let failedIndex = -1
+  let failedPrinted = false
   let resolveDone
   const done = new Promise((resolvePromise) => { resolveDone = resolvePromise })
   const limit = Math.max(1, Math.min(jobs, Math.max(1, entries.length)))
@@ -542,8 +544,12 @@ export async function runEntries(entries, {
   const killRest = () => {
     for (const handle of handles.values()) handle.kill()
   }
+  // The transcript is ordered by declaration, never by completion: the walk is
+  // contiguous and stops at the first failure (or at an entry a stop left
+  // unlaunched, which leaves a permanent hole). Failure ACCOUNTING does not ride
+  // on this walk — see the completion handler.
   const flush = () => {
-    if (!keepGoing && failed !== null) return
+    if (!keepGoing && failedPrinted) return
     while (flushPointer < entries.length) {
       const outcome = results[flushPointer]
       if (outcome === undefined) return
@@ -552,17 +558,13 @@ export async function runEntries(entries, {
       if (previous === undefined || sectionOf(previous) !== sectionOf(entry)) log('\n=== ' + sectionOf(entry) + ' ===')
       if (outcome.result.stdout !== '') writeStdout(outcome.result.stdout)
       if (outcome.result.stderr !== '') writeStderr(outcome.result.stderr)
-      if (!outcome.verdict.ok) {
-        const record = { entry, reason: outcome.verdict.reason }
-        failures.push(record)
-        if (failed === null) failed = record
-        if (!keepGoing) {
-          stopped = true
-          killRest()
-          return
-        }
-      }
       flushPointer += 1
+      if (!outcome.verdict.ok && !keepGoing) {
+        failedPrinted = true
+        stopped = true
+        killRest()
+        return
+      }
     }
   }
   const pump = () => {
@@ -609,7 +611,19 @@ export async function runEntries(entries, {
             guard: entry.guard ?? guard,
           })
         results[index] = { entry, result, verdict }
-        if (!verdict.ok && !keepGoing) stopped = true
+        if (!verdict.ok) {
+          if (!keepGoing) stopped = true
+          // Record at COMPLETION, not inside the ordered walk: a round-robin
+          // schedule launches later-declared steps' files first, so the stop can
+          // leave holes before this entry and the walk may never reach it — the
+          // failure used to vanish from `failures` and the run reported success.
+          // Every failure under --continue; exactly the first one without it.
+          if (keepGoing || failed === null) {
+            const record = { entry, reason: verdict.reason }
+            failures.push(record)
+            if (failed === null) { failed = record; failedIndex = index }
+          }
+        }
         flush()
         pump()
       })
@@ -618,6 +632,18 @@ export async function runEntries(entries, {
   }
   pump()
   await done
+  if (!keepGoing && failed !== null && !failedPrinted && failedIndex >= 0) {
+    // The ordered walk could not reach the failure: the stop-on-failure kill
+    // leaves holes at lower declaration indices (round-robin), and a hole never
+    // resolves. Print the failing entry's own transcript once, so the reason is
+    // never only the exit code.
+    const outcome = results[failedIndex]
+    if (outcome !== undefined) {
+      log('\n=== ' + sectionOf(outcome.entry) + ' ===')
+      if (outcome.result.stdout !== '') writeStdout(outcome.result.stdout)
+      if (outcome.result.stderr !== '') writeStderr(outcome.result.stderr)
+    }
+  }
   if (process.env[TIMING_ENV] !== undefined && process.env[TIMING_ENV] !== '') {
     process.stderr.write('[timing] ' + JSON.stringify({
       jobs: limit,

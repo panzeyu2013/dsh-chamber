@@ -57,24 +57,34 @@ export interface SourceMuxDeps {
   now?: () => number
   /** 快照/增量到达（与 gateway 事实源同形）。 */
   onSnapshot: (snapshot: SessionFactsSnapshot) => void
-  /** 事件静默窗口（默认 45s，与 watcher 一致）。 */
-  silenceTimeoutMs?: number
   /** session/list 基线 deadline（默认 5s；半死隧道下不得永久挂起）。 */
   baselineTimeoutMs?: number
   /** 每条边沿 session/follow 的 deadline（默认 2s，与 control-plane/session-mux.ts 同预算）。 */
   followTimeoutMs?: number
-  /** 与事件静默重连独立的低频对账；即使 socket 持续有帧也能修复丢失的 status。 */
+  /** 基线因期间事件失效后的重取样最小间隔（默认 250ms）：合并 + 节拍上限。 */
+  baselineResampleMinMs?: number
+  /** 与载波换代独立的低频对账；即使 socket 持续有帧也能修复丢失的 status。 */
   reconcileIntervalMs?: number
+  /** 载波掉线/基线失败后的可判性宽限（默认 3s）：旧基线仍在宽限内即保持可判。 */
+  carrierGraceMs?: number
 }
 
 export const MUX_PATH = '/api/remote.mux'
 export const EVENTS_ENDPOINT = '$events'
-export const DEFAULT_FACTS_SILENCE_MS = 45_000
 /** 基线 unary deadline——半死隧道下「挂起」必须在预算内变成可数的失败。 */
 export const DEFAULT_BASELINE_TIMEOUT_MS = 5_000
 /** 完成边沿读尾 deadline（对齐 control-plane/session-mux.ts 的 2s 预算）。 */
 export const DEFAULT_FOLLOW_TIMEOUT_MS = 2_000
+/** 失效基线的重取样节拍（事件密集源上把「事件率 > RPC 周期」变成有界节奏；仲裁者不变）。 */
+export const DEFAULT_BASELINE_RESAMPLE_MIN_MS = 250
 export const DEFAULT_RECONCILE_INTERVAL_MS = 30_000
+/**
+ * 空闲关流的恢复宽限：宿主会回收空闲的 `$events` 套接字（实测约 45s 一次），而「可判」表达的是
+ * **事实是否可信**，不是**套接字此刻是否连着**。掉线/单次基线失败后在宽限内保持可判，重连成功
+ * 时对上层是零变化；宽限内拿不到新基线才降级（真断连仍在 3s 内诚实降级）。没有旧基线可宽限时
+ * 一律立即降级——「从来没取到过真相」不是抖动，是故障。
+ */
+export const DEFAULT_CARRIER_GRACE_MS = 3_000
 /** 可用 host 时间（epoch ms）的下界；小于它的数字不是 host 域观测，绝不臆造。 */
 export const HOST_EPOCH_MS_FLOOR = 1e12
 
@@ -527,6 +537,7 @@ export interface SourceMuxStatus {
   pendingReads: number
   /** 已观察到停止、但仍缺可归属 turn/end 的会话数。 */
   pendingClassifications: number
+  /** 真实载波换代次数（onclose/onerror、$events 的 end/error 帧、handshakeTimeout）；静默不换代。 */
   reconnects: number
   /** 成功取到基线的次数（每次 (re)connect 都必须重新对账）。 */
   baselines: number
@@ -536,6 +547,18 @@ export interface SourceMuxStatus {
   followFailures: number
   /** 套接字层错误次数（与 close 分开计数，便于区分「服务器拒绝」与「网络抖」）。 */
   socketErrors: number
+  /** 载波丢失时刻（宽限计时起点）；null = 载波在场，或从未有过可信基线。 */
+  carrierLostAt: number | null
+  /** 不可判起点；null = 当前可判。生命周期自愈按它判定「多久没有可信事实」。 */
+  staleSince: number | null
+  /** 最近一次基线失败的原因文本（诊断：静默 catch 变成可读证据）；null = 从未失败。 */
+  baselineFailureReason: string | null
+  /** 因取样点漂移而主动重取的基线次数（不是失败，但同样推迟可信）。 */
+  baselineResamples: number
+  /** 最近一次成功基线时刻（诊断：区分「从没有过基线」与「基线正在变旧」）。 */
+  lastTrustedBaselineAt: number | null
+  /** 当前在册行数（诊断：确认基线真的落过行，而不是只有握手）。 */
+  rows: number
 }
 
 export interface SourceMuxFacts {
@@ -551,10 +574,11 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   const fetchImpl = deps.fetchImpl ?? ((...args: Parameters<typeof fetch>) => fetch(...args))
   const openSocket = deps.openSocket ?? ((url: string) => new WebSocket(url) as unknown as MuxSocket)
   const base = muxBaseFor(deps.origin, deps.sourceId)
-  const silenceMs = deps.silenceTimeoutMs ?? DEFAULT_FACTS_SILENCE_MS
   const baselineTimeoutMs = deps.baselineTimeoutMs ?? DEFAULT_BASELINE_TIMEOUT_MS
   const followTimeoutMs = deps.followTimeoutMs ?? DEFAULT_FOLLOW_TIMEOUT_MS
+  const baselineResampleMinMs = deps.baselineResampleMinMs ?? DEFAULT_BASELINE_RESAMPLE_MIN_MS
   const reconcileIntervalMs = deps.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_MS
+  const carrierGraceMs = deps.carrierGraceMs ?? DEFAULT_CARRIER_GRACE_MS
   const rows = new Map<string, SourceMuxRow>()
   const runningBefore = new Map<string, boolean>()
   // 同一会话的运行轮次。读尾仅能结算它观察到的那次 true→false。
@@ -579,6 +603,12 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   let lifetime = 0
   let socketReady = false
   let baselineTrusted = false
+  let carrierLostAt: number | null = null
+  let carrierGraceTimer: ReturnType<typeof setTimeout> | null = null
+  let staleSince: number | null = null
+  let baselineFailureReason: string | null = null
+  let baselineResamples = 0
+  let lastTrustedBaselineAt: number | null = null
   let eventRevision = 0
   let baselineRequest = 0
   let runVersion = 0
@@ -591,20 +621,47 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   let followFailures = 0
   let socketErrors = 0
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-let connectDeadlineTimer: ReturnType<typeof setTimeout> | null = null
-/** A carrier that never opens, errors or closes would leave the observer with no
- *  silence evidence and no retry: the missing handshake is itself a carrier failure. */
-const clearConnectDeadline = (): void => {
-  if (connectDeadlineTimer !== null) clearTimeout(connectDeadlineTimer)
-  connectDeadlineTimer = null
-}
-  let silenceTimer: ReturnType<typeof setTimeout> | null = null
+  let connectDeadlineTimer: ReturnType<typeof setTimeout> | null = null
   let reconcileTimer: ReturnType<typeof setTimeout> | null = null
   let stableTimer: ReturnType<typeof setTimeout> | null = null
+  let baselineResampleTimer: ReturnType<typeof setTimeout> | null = null
+  /** A carrier that never opens, errors or closes would leave the observer with no
+   *  failure evidence and no retry: the missing handshake is itself a carrier failure. */
+  const clearConnectDeadline = (): void => {
+    if (connectDeadlineTimer !== null) clearTimeout(connectDeadlineTimer)
+    connectDeadlineTimer = null
+  }
+  /**
+   * One pending baseline re-sample (review O1). The list's sampling point is unknown, so an
+   * event that arrived while it was in flight makes it stale - re-sample rather than let the old
+   * list overwrite newer events. That retry is COALESCED and PACED: one pending re-sample absorbs
+   * every invalidation in the window and runs no sooner than `baselineResampleMinMs`, so an
+   * event-dense source cannot turn "event rate > list RPC period" into an unbounded stream of
+   * full-table fetches. The arbiter is unchanged: a stale sample still never overwrites a newer event.
+   */
+  const scheduleBaselineResample = (): void => {
+    if (stopped || baselineResampleTimer !== null) return
+    // The pending re-sample belongs to the generation that invalidated the sample: a
+    // carrier turnover re-baselines on its own ready frame, so a stale retry must not
+    // fetch a second time (the reconcile timer captures its generation the same way).
+    const atGeneration = generation
+    baselineResampleTimer = setTimeout(() => {
+      baselineResampleTimer = null
+      if (stopped || atGeneration !== generation) return
+      // 重取不是失败，但持续重取同样意味着「还没有可信基线」⇒ 计数供诊断区分。
+      baselineResamples += 1
+      void baseline()
+    }, baselineResampleMinMs)
+  }
+  const clearBaselineResample = (): void => {
+    if (baselineResampleTimer === null) return
+    clearTimeout(baselineResampleTimer)
+    baselineResampleTimer = null
+  }
   /**
    * 连接代际：connect() 换掉旧 socket / onclose 确认死亡时代际 +1；旧代际的一切回调
-   * （含在途基线）不得再改状态或调度重连——否则旧 socket 的 onclose 会在每次静默
-   * 重订阅后再排一次 1s 重连（自激洪泛）。
+   * （含在途基线）不得再改状态或调度重连——否则旧 socket 的 onclose 会在每次真实
+   * 换代后再排一次 1s 重连（自激洪泛）。
    */
   let generation = 0
   // 重连指数退避（1s 起、30s 封顶）：源长时间不可达时不得变成每秒一次的重试洪流。
@@ -612,10 +669,86 @@ const clearConnectDeadline = (): void => {
   const MAX_RECONNECT_DELAY_MS = 30_000
   const RECONNECT_STABLE_MS = 30_000
   const instrument = (): SourceMuxStatus => currentStatus()
-  const ready = (): boolean => socketReady && baselineTrusted
+  /** 载波宽限是否仍然成立（掉线后的一小段「旧真相仍然可用」窗口）。 */
+  const carrierGraceActive = (): boolean =>
+    carrierLostAt !== null && now() - carrierLostAt <= carrierGraceMs
+  /**
+   * 可判唯一谓词：**不再要求套接字此刻连着**。旧基线 + 掉线宽限内仍可判（宿主的空闲关流不该
+   * 变成每个来源每 45s 一次的「既不可判又不可恢复」）；从来没有基线时宽限不成立；退役（stopped）
+   * 之后没有任何载体，恒不可判——否则退役快照的采样会一直读到 ready=1，环里看不到这一转折。
+   */
+  const ready = (): boolean => !stopped && baselineTrusted && (socketReady || carrierGraceActive())
+
+  /**
+   * 不可判起点的唯一记账处：任何路径都只经这一个函数同步（snapshot/status 两个出口与
+   * carrierOrBaselineLost 的两条降级路径都调它），绝不手写 staleSince，
+   * 也从不由「套接字掉了」这类瞬时相位决定。
+   */
+  function syncStaleSince(): void {
+    if (stopped || ready()) {
+      staleSince = null
+      return
+    }
+    if (staleSince === null) staleSince = now()
+  }
+
+  function clearCarrierGrace(): void {
+    if (carrierGraceTimer !== null) clearTimeout(carrierGraceTimer)
+    carrierGraceTimer = null
+  }
+
+  /** 失败原因文本：诊断面包屑要的是「为什么」，不是「又失败了」。 */
+  function failureText(error: unknown): string {
+    const text = error instanceof Error ? error.message : String(error)
+    return text.length > 160 ? text.slice(0, 160) : text
+  }
+
+  /**
+   * 载波掉线 / 单次基线失败后的**唯一**可判性策略：
+   *   - 手上有旧基线 ⇒ 记一次宽限（重连与重取常在同一拍成功，逐次立刻降级会把宿主的
+   *     空闲关流变成每个来源每 45s 一次「可判↔不可判」的闪烁）；起点只记一次，连续掉线
+   *     不得无限续期；
+   *   - 从来没有基线 ⇒ 立即降级：没有旧真相可宽限，「从未取到」是故障不是抖动；
+   *   - 宽限到期仍无新基线 ⇒ 清 baselineTrusted 并发布降级（真断连仍在宽限内诚实降级）。
+   */
+  function carrierOrBaselineLost(): void {
+    if (!baselineTrusted) {
+      // 没有可信基线时只有基线腿能作判；socketReady 属于套接字腿，只由 connect()/failCarrier()
+      // 的换代决定。在这里顺手清掉它，之后成功基线也永远 ready()=false（ready 帧只在换 socket
+      // 时来）——那是换条路径重现「在场但不可判」，正是本规则要消灭的形状。
+      carrierLostAt = null
+      clearCarrierGrace()
+      syncStaleSince()
+      emit()
+      return
+    }
+    // 只在**第一次**丢失时起表：每次失败都重排会把到期翻转无限推迟（探测：每 100ms 一次
+    // reconcile ⇒ t=4s 仍判可判），正是本函数注释与 design 19 都禁止的「无限续期」。
+    // 换代（connect/failCarrier）会清 carrierLostAt，新一代的第一次丢失仍会重新起表。
+    if (carrierLostAt !== null) return
+    carrierLostAt = now()
+    clearCarrierGrace()
+    const atGeneration = generation
+    carrierGraceTimer = setTimeout(() => {
+      carrierGraceTimer = null
+      if (stopped || generation !== atGeneration) return
+      // 宽限内恢复的证据只有一种：**成功基线**（它清 carrierLostAt 并取消本计时器）。计时器
+      // 仍挂着（且未恢复）⇒ 这段时间没有任何新证据 ⇒ 必须停止声称可判（socketReady 单独为
+      // true 不算证据：unary 可能一直是坏的；ready 帧按设计也不结束宽限）。
+      if (carrierLostAt === null) return
+      carrierLostAt = null
+      baselineTrusted = false
+      syncStaleSince()
+      emit()
+    }, carrierGraceMs)
+  }
 
   /** **与 gateway 事实源同形**的快照（同一套字段，App 因此走同一条管线）。 */
   function snapshot(): SessionFactsSnapshot {
+    syncStaleSince()
+    // 只算一次：ready() 每次都读 now()，跨宽限边界时多次调用会产出 verdict='ok' + stale=true
+    // 的撕裂快照。
+    const usable = ready()
     const record: Record<string, SessionFactsRow> = {}
     for (const [sessionId, row] of rows) record[sessionId] = row
     return {
@@ -626,12 +759,12 @@ const clearConnectDeadline = (): void => {
       // （2026-12 审计 §6.1.3）。快照的 mode 因此诚实报 null，而不是照抄一个
       // 它并不使用的传输档（唯一消费 mode 的 session-facts-source.startDelivery
       // 只读自己 payload 的 mode，不读这里）。
-      verdict: ready() ? 'ok' : 'degraded',
-      degradation: ready() ? null : 'unavailable',
+      verdict: usable ? 'ok' : 'degraded',
+      degradation: usable ? null : 'unavailable',
       mode: null,
-      hostState: ready() ? 'ready' : 'unknown',
-      serviceable: ready(),
-      stale: !ready(),
+      hostState: usable ? 'ready' : 'unknown',
+      serviceable: usable,
+      stale: !usable,
       cursor: 0,
       rows: record,
       read: null,
@@ -645,7 +778,6 @@ const clearConnectDeadline = (): void => {
     deps.onSnapshot(snapshot())
   }
 
-  /**
   /**
    * 进程内 activation 与（基线/added 建出的）行合并：identity 命中即消费；绑定 id 与基线
    * 不同时**保留**这条边，待后续 projection 携带匹配 identity（P2a applyRetainedGoalActivation
@@ -692,7 +824,7 @@ const clearConnectDeadline = (): void => {
   }
 
   /**
-   * 新的 $events 代际（ready 假→真；含重连与静默重订）：emit 型帧无重放 ⇒ 进程内 activation
+   * 新的 $events 代际（ready 假→真；含换代重连）：emit 型帧无重放 ⇒ 进程内 activation
    * 不再可信，表与行上残留值一并清回 unknown（防陈旧 armed/disarmed）。
    */
   function clearGoalActivations(): void {
@@ -751,13 +883,6 @@ const clearConnectDeadline = (): void => {
     }
   }
 
-  function clearSilence(): void {
-    if (silenceTimer !== null) {
-      clearTimeout(silenceTimer)
-      silenceTimer = null
-    }
-  }
-
   function clearReconcile(): void {
     if (reconcileTimer !== null) clearTimeout(reconcileTimer)
     reconcileTimer = null
@@ -783,7 +908,7 @@ const clearConnectDeadline = (): void => {
     reconcileTimer = setTimeout(() => {
       reconcileTimer = null
       if (stopped || generation !== atGeneration) return
-      void baseline()
+      runBaseline()
       armReconcile()
     }, reconcileIntervalMs)
   }
@@ -852,10 +977,9 @@ const clearConnectDeadline = (): void => {
   }
 
   /**
-  /**
    * 基线对账：只合 running/updatedAt(max)/factAt 与 goal 三值事实，保留既有完成字段；
    * host 的新提示水位撤销旧完成。
-   * previous.running===true && row.running===false 是重订阅后跨缺口完成的**唯一证据**
+   * previous.running===true && row.running===false 是换代重连后跨缺口完成的**唯一证据**
    * （$events 开场不重放 status）⇒ 与 status 边沿同一条 readTail 路径；基线也播种
    * runningBefore（缺口边沿的另一半证据）。
    */
@@ -866,20 +990,21 @@ const clearConnectDeadline = (): void => {
     let value: unknown
     try {
       value = await rpc('session/list', { args: { _request: {} } }, baselineTimeoutMs)
-    } catch {
+    } catch (error) {
       // 失败 = 本次连接事实不可信（不能静默：必须能区分「没完成」与「观察者坏了」）。
       if (!stopped && atGeneration === generation && request === baselineRequest) {
         baselineFailures += 1
-        baselineTrusted = false
+        baselineFailureReason = failureText(error)
         clearStable()
-        emit()
+        carrierOrBaselineLost()
       }
       return
     }
     if (stopped || atGeneration !== generation || request !== baselineRequest) return
     if (atRevision !== eventRevision) {
-      // 列表的取样点未知；其间收到的事件可能比列表新。重新取样，不用旧列表覆写事件。
-      void baseline()
+      // 列表的取样点未知；其间收到的事件可能比列表新。重新取样，不用旧列表覆写事件——
+      // 但经 scheduleBaselineResample 合并 + 限速（review O1），不做无间隔递归。
+      scheduleBaselineResample()
       return
     }
     const envelope = value as { items?: unknown } | null | undefined
@@ -889,9 +1014,9 @@ const clearConnectDeadline = (): void => {
       // required items list is absent. Treating null as [] would certify an
       // unobserved source and suppress the runtime completion fallback.
       baselineFailures += 1
-      baselineTrusted = false
+      baselineFailureReason = 'session/list: items missing or not an array'
       clearStable()
-      emit()
+      carrierOrBaselineLost()
       return
     }
     const items = rawItems.map(rowFromListItem)
@@ -899,9 +1024,10 @@ const clearConnectDeadline = (): void => {
       // A partial list is not a trustworthy baseline. Reject it atomically so
       // no earlier row in this response can change running state or start a tail.
       baselineFailures += 1
-      baselineTrusted = false
+      baselineFailureReason = 'session/list: row shape rejected (' + String(items.filter(row => row === null).length)
+        + ' of ' + String(items.length) + ')'
       clearStable()
-      emit()
+      carrierOrBaselineLost()
       return
     }
     baselines += 1
@@ -937,11 +1063,13 @@ const clearConnectDeadline = (): void => {
       else retireSession(sessionId)
     }
     baselineTrusted = true
+    lastTrustedBaselineAt = at
+    carrierLostAt = null
+    clearCarrierGrace()
     armStableReconnectReset()
     emit()
   }
 
-  /**
   /**
    * 对已观察到的 true→false 边沿和可能丢失两帧的提示水位读尾，然后分类。每条
    * true→false 边沿（status 或基线）恰好一次 follow 读尾再分类。completedAt
@@ -1132,20 +1260,23 @@ const clearConnectDeadline = (): void => {
     else if (event === 'goal/activation-changed') handleGoalActivation(args)
   }
 
-  function armSilence(): void {
-    clearSilence()
-    const armedGeneration = generation
-    silenceTimer = setTimeout(() => {
-      silenceTimer = null
-      if (stopped || armedGeneration !== generation) return
-      // 连接在、事件停 ⇒ 载波恢复：重订阅 + 重取基线。**不**发布内容停顿证据：
-      // 来源级 $events 静默不是本会话的内容进度（assistant 文本走独立 session/follow），
-      // 长生成与别的会话的事件都会让这个信号说谎。页面内容证据只来自真正观测会话
-      // 内容的观察者（gateway facts cursor），见 session-content-stall.ts 注册表。
-      reconnects += 1
-      connect()
-    }, silenceMs)
-  }
+  /**
+   * 这里曾有一条 45s 静默换代看门狗（armSilence）。**已删除**，且不得复活：
+   *
+   * ① 静默不是内容证据——来源级 $events 静默不是本会话的内容进度（assistant 文本走
+   *    独立 session/follow），长生成与别的会话的事件都会让这个信号说谎。页面内容证据
+   *    只来自真正观测会话内容的观察者（gateway facts cursor），
+   *    见 session-content-stall.ts 注册表。
+   * ② 静默也不是载波证据——本机实测：观察者的 $events 逻辑流在整条 socket 的生命期
+   *    只收到一帧 ready，**没有任何 emit**，而事实（行/字段）全部来自 30s 一次的 unary
+   *    基线 session/list。也就是说这条逻辑流的边沿事实当前不可用，静默只反映"这个
+   *    能力没有被实现/没有事件"，而非承载它的 socket 坏了；据此换代等于把唯一可用的
+   *    载波周期性换掉（旧行为：9 次/8 分钟、寿命精确 45.0s、被换掉的 socket 每条命
+   *    只收到 1 帧 147B = ready）。
+   *
+   * 结论：socket 活到来源退役为止。换代只由真失败驱动——$events 的 end/error 帧、
+   * onclose/onerror、handshakeTimeout——并统一走 scheduleReconnect 的 1s→30s 有界退避。
+   */
 
   function scheduleReconnect(): void {
     if (stopped || reconnectTimer !== null) return
@@ -1162,19 +1293,16 @@ const clearConnectDeadline = (): void => {
 
   function connect(): void {
     if (stopped) return
-    // Replacing the carrier invalidates its facts immediately. Waiting for the
-    // next onopen leaves a window where callers trust a dead connection.
+    // 换代即丢套接字，但**不丢真相**：可判性由 carrierOrBaselineLost 在本次代际上裁定
+    // （有旧基线 → 宽限；从来没有 → 立即降级），等待下一个 onopen 之前绝不宣称新连接可用。
     socketReady = false
-    baselineTrusted = false
     clearStable()
-    emit()
     if (socket !== null) {
       // 换代。先 +1 再 close——close 可能同步触发旧 socket 的 onclose。
       generation += 1
       const previous = socket
       cancelFollows()
       socket = null
-      clearSilence()
       clearReconcile()
       clearStable()
       try {
@@ -1183,6 +1311,7 @@ const clearConnectDeadline = (): void => {
         // 关旧连接失败不影响重连。
       }
     }
+    carrierOrBaselineLost()
     const connectGeneration = generation
     let next: MuxSocket
     try {
@@ -1208,11 +1337,11 @@ const clearConnectDeadline = (): void => {
       cancelFollows()
       socket = null
       socketReady = false
-      baselineTrusted = false
-      clearSilence()
+      // 不得在此清 baselineTrusted：手上有旧基线时策略是「记一次宽限」，清掉它会让
+      // carrierOrBaselineLost 走「从来没有基线 ⇒ 立即降级」的臂，宽限形同不存在。
       clearReconcile()
       clearStable()
-      emit()
+      carrierOrBaselineLost()
       try { next.close() } catch { /* Already closed or broken. */ }
       scheduleReconnect()
     }
@@ -1225,9 +1354,8 @@ const clearConnectDeadline = (): void => {
         failCarrier()
         return
       }
-      armSilence()
       armReconcile()
-      void baseline()
+      runBaseline()
     }
     next.onmessage = event => {
       if (stopped || connectGeneration !== generation) return
@@ -1252,14 +1380,16 @@ const clearConnectDeadline = (): void => {
       }
       if (frame.kind === 'other') return
       lastEventAt = now()
-      armSilence()
       if (frame.kind === 'ready') {
         const freshGeneration = !socketReady
         socketReady = true
+        // ready 帧只证明**套接字腿**回来了，不证明 unary 基线还能成功：宽限只由成功基线或
+        // 到期结束（否则一个迟到的 ready 帧就能无限续期「旧基线仍可用」，而 rows 早已停更）。
+        // 旧基线是否仍可用由 baseline() 的结果说话，不由握手说话。
         // A single ready frame is not a stable connection. Repeated logical
         // stream failures must retain exponential backoff.
         armStableReconnectReset()
-        // 新的 $events 代际（首连/重连/静默重订；onopen 与 onclose 都置 socketReady=false）：
+        // 新的 $events 代际（首连/换代重连；onopen 与 onclose 都置 socketReady=false）：
         // emit 型帧无重放 ⇒ 进程内 activation 不再可信，表与行一并清回 unknown。
         if (freshGeneration) clearGoalActivations()
         // 握手只证明载波可用；事实基线成功前仍必须让运行时边沿负责完成。
@@ -1279,22 +1409,42 @@ const clearConnectDeadline = (): void => {
     }
   }
 
+  /**
+   * 基线失败必须留证：baseline() 只覆盖预期失败，意外抛错若被 `void` 掉就是静默的
+   * unhandled rejection（本缺陷的原始形状）。所有调用点都经这里：按失败记账并按
+   * 「有旧基线则进宽限、没有则立刻降级」的同一策略重新判定可判性。
+   */
+  function runBaseline(): void {
+    // 只保证「不静默」+ 重新判定可判性：不做失败记账——内部失败路径已经记过，消费者抛错再记
+    // 一次会把一次失败计成两次、并用消费者错误覆盖真正的原因（探针实测 baselineFailures=2）。
+    void baseline().catch(() => {
+      carrierOrBaselineLost()
+    })
+  }
+
   function currentStatus(): SourceMuxStatus {
+    syncStaleSince()
     return { ready: ready(), edges, lastEventAt, pendingReads,
       pendingClassifications: pendingTails.size, reconnects, baselines,
-      baselineFailures, followFailures, socketErrors }
+      baselineFailures, followFailures, socketErrors,
+      carrierLostAt, staleSince, baselineFailureReason, baselineResamples, lastTrustedBaselineAt,
+      rows: rows.size }
   }
 
   return {
     start(): void {
       if (!stopped) return
       stopped = false
+      // 新订阅寿命：可判性相位清零（失败/基线计数按观察者对象累计，属于诊断不重置）。
+      carrierLostAt = null
+      clearCarrierGrace()
+      staleSince = null
       publishSourceMuxInstrument(deps.sourceId, instrument)
       // 基线从连接 open 后取；连接失败时不得宣称已有可信事实。
       connect()
     },
     reconcile(): void {
-      if (!stopped) void baseline()
+      if (!stopped) runBaseline()
     },
     stop(): void {
       // 退役前的最后一次发布（唯一出口）：观察者停掉后**不再有任何载体刷新**，而
@@ -1304,7 +1454,11 @@ const clearConnectDeadline = (): void => {
       // 标不可用，与 gateway 事实源「保留既有行 + 标不可用」的两条出口同规。
       // 只在 `ready()` 时发：其余时刻 store 里最后一份快照本就是 degraded（每条降级
       // 出口都 emit 过），再发一份只是噪音。
-      if (ready()) {
+      // 先记下退役前的可判性、再翻相位：退役快照发布后 status() 必须也报不可判，
+      // 否则采样器读到的仍是 ready=1，环里永远不会出现「退役」这一转折。
+      const wasReady = ready()
+      stopped = true
+      if (wasReady) {
         deps.onSnapshot({
           ...snapshot(),
           verdict: 'degraded',
@@ -1314,19 +1468,21 @@ const clearConnectDeadline = (): void => {
           stale: true,
         })
       }
-      stopped = true
       lifetime += 1
       socketReady = false
       baselineTrusted = false
+      carrierLostAt = null
+      clearCarrierGrace()
+      staleSince = null
       // 退役即代际终结：进程内 activation 绝不越过一次 stop/start。
       clearGoalActivations()
       // 代际 +1 作废在途回调；在途 baseline/readTail 的 emit 被 stopped 守卫拦下。
       generation += 1
       if (reconnectTimer !== null) clearTimeout(reconnectTimer)
       clearConnectDeadline()
-      clearSilence()
       clearReconcile()
       clearStable()
+      clearBaselineResample()
       reconnectTimer = null
       const current = socket
       cancelFollows()

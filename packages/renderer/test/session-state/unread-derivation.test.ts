@@ -4,12 +4,15 @@
  * 判定函数来自 client-core 的导出（与 App 接线喂进去的是同一对函数，
  * 反作弊：不得自造第二套）。覆盖：facts 水位、读水位解除、aborted+user
  * 抑制、ABSENT turn-end 武装、channel-only 边沿、listComplete
- * 唯一剪枝门、factsVerified=false 不 clobber、阅读抑制、水位推进。
+ * 唯一剪枝门、不可判且无通道时不 clobber（有通道则按通道边沿照常）、阅读抑制、水位推进。
+ * 另两组：规则 0 冻结支的「离开权威列表」清扫键空间（prevRunning ∪ prevCompleted），
+ * 以及首见播种标记的化身判据（owner token 身份，不是传输指纹）。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { deriveUnread, reconcileCompletedFacts } from '@dsh-chamber/dsh-chamber-client-core/derive'
-import { deriveSourceUnread, sameBooleanMap, viewingReadWatermark } from '../../src/unread-derivation.ts'
+import { SourceOwnershipRegistry } from '../../src/deep-link-activation.ts'
+import { deriveSourceUnread, factsBaselineSeed, sameBooleanMap, viewingReadWatermark } from '../../src/unread-derivation.ts'
 import type { UnreadDerivationInput, UnreadDerivationFactsRow } from '../../src/unread-derivation.ts'
 // 唯一判据元组的**生产实现**（测试不得自造第二套规则）：接线层喂给 deriveSourceUnread 的两值
 // 必须由它派生，所以这份语料直接以它为准——revert 生产接线时本语料必须变红。
@@ -142,7 +145,7 @@ test('reading suppresses the facts arm without touching the stored watermark', (
   assert.deepEqual(result.unread, {})
 })
 
-test('factsVerified=false keeps prevLedger untouched (no clobber, no prune)', () => {
+test('factsVerified=false without a channel keeps prevLedger untouched (no clobber, no prune)', () => {
   const result = deriveSourceUnread(input({
     facts: { s1: fact({ completedAt: 100 }) },
     prevLedger: { s1: true },
@@ -195,7 +198,9 @@ test('a carrier flap keeps the armed dot armed through the undecidable window (n
   // 抖动序列：可判 → legacy-after-history 404（行保留、不可判）→ 恢复。
   const readable = gatewayFacts()
   const legacy = gatewayFacts({ verdict: 'legacy-gateway', serviceable: false, stale: true })
-  const channel = {}
+  // 通道在场且 s1 **仍在权威列表里**（running=false）：载体抖动不会把会话从侧栏列表里删掉。
+  // 缺席（真的离开列表）是同一道门下的正面解除，由下面的离表清扫语料单独覆盖。
+  const channel = { s1: { running: false } }
   let prevLedger: Record<string, boolean> = {}
   let prevRunning: Record<string, boolean> = {}
   const badges: number[] = []
@@ -219,17 +224,18 @@ test('a carrier flap keeps the armed dot armed through the undecidable window (n
   assert.deepEqual(badges, [1, 1, 1, 1, 1], '不可判窗口不得剪掉已武装的完成点')
 })
 
-test('a stale-only snapshot (carrier gone, rows kept) is the SAME frozen case — not a second rule', () => {
-  // 这是最常见的断连形状：verdict 仍 ok、serviceable 仍 true，只有 stale 翻 true
-  // （markStale 是 pass-through）。它必须与 legacy/unversioned 走同一条规则 0；
-  // 曾经判定面按 isFactsUsable（不含 stale）把它当可用，于是断连窗口改用 stale 行重算。
+test('a stale-only snapshot (carrier gone, rows kept) freezes facts but still arms the channel edge', () => {
+  // 最常见的断连形状：verdict 仍 ok、serviceable 仍 true，只有 stale 翻 true（markStale 是
+  // pass-through）。它必须与 legacy/unversioned 走同一条规则 0；曾经判定面按 isFactsUsable
+  // （不含 stale）把它当可用，于是断连窗口改用 stale 行重算（既假亮又假清）。
   const staleOnly = gatewayFacts({ stale: true })
   const w = wire(staleOnly)
   assert.equal(w.facts, undefined, 'stale 行不得作为判定输入')
   assert.equal(w.factsVerified, false, 'stale 必须落进冻结支')
   const result = deriveSourceUnread(input({
     facts: w.facts,
-    // 通道边沿：上一拍 running、这一拍 idle。若按 stale 行重算，这个边沿会被结算掉。
+    // 通道边沿：上一拍 running、这一拍 idle —— 真完成必须能在 facts 冻结时武装
+    // （通知轨一直用的就是这条证据；生产缺陷正是这里恒空导致整面停摆）。
     channel: { s1: { running: false } },
     listComplete: true,
     prevRunning: { s1: true },
@@ -237,27 +243,61 @@ test('a stale-only snapshot (carrier gone, rows kept) is the SAME frozen case �
     readMarks: {},
     factsVerified: w.factsVerified,
   }), deps)
-  assert.deepEqual(result.unread, {}, '冻结 = 不动（既不用 stale 行武装，也不结算通道边沿）')
-  assert.equal(result.changed, false)
+  assert.deepEqual(result.unread, { s1: true }, '冻结的是 facts 的结论，不是未读面')
+  assert.equal(result.changed, true)
 })
 
-test('the undecidable window does not re-arm an old completion either (frozen, not recomputed)', () => {
-  // 反方向的破法：不可判快照的行仍带旧 completedAt，若被当证据，legacy 拍会把
-  // 「上次已完成」重新判成未读 —— 假亮。冻结档必须是「不动」，不是「重算」。
+test('facts freeze never uses stale rows as evidence in either direction', () => {
+  // 反方向的破法：不可判快照的行仍带旧 completedAt。若被当证据，legacy 拍会把它重新判成
+  // 未读 —— 假亮。冻结支必须一行 facts 都不用。
   const legacy = gatewayFacts({ verdict: 'legacy-gateway', serviceable: false, stale: true })
   const w = wire(legacy)
   const result = deriveSourceUnread(input({
     facts: w.facts,
-    channel: {},
+    channel: { s1: { running: false } },
     listComplete: true,
     prevLedger: {},
-    prevRunning: {},
+    prevRunning: { s1: false },
     readMarks: { s1: 0 },
     factsVerified: w.factsVerified,
   }), deps)
-  assert.deepEqual(result.unread, {}, '不可判行不得作为武装证据')
+  assert.deepEqual(result.unread, {}, '没有通道边沿就没有武装：不可判行不得作为证据')
   assert.equal(result.changed, false)
 })
+
+test('facts freeze still applies the channel positive evidence: re-run and reading disarm', () => {
+  const frozen = { facts: undefined, factsVerified: false }
+  const rerunning = deriveSourceUnread(input({
+    ...frozen,
+    channel: { s1: { running: true } },
+    listComplete: true,
+    prevLedger: { s1: true },
+    prevRunning: { s1: false },
+  }), deps)
+  assert.deepEqual(rerunning.unread, {}, 'running=true 是通道的正面证据：重跑必须解除完成点')
+  const reading = deriveSourceUnread(input({
+    ...frozen,
+    channel: { s1: { running: false } },
+    listComplete: true,
+    prevLedger: { s1: true },
+    prevRunning: { s1: false },
+    readingSessionId: 's1',
+  }), deps)
+  assert.deepEqual(reading.unread, {}, '正在阅读是通道的正面证据：读掉必须解除完成点')
+})
+
+test('the prune gate needs the channel too: listComplete without a channel never prunes', () => {
+  const result = deriveSourceUnread(input({
+    facts: {},
+    channel: undefined,
+    listComplete: true,
+    prevLedger: { s1: true },
+    prevRunning: { s1: true },
+  }), deps)
+  assert.deepEqual(result.unread, { s1: true }, '没收到列表不等于「列表为空」')
+  assert.deepEqual(result.nextRunning, { s1: true })
+})
+
 
 test('an ABSENT snapshot (no carrier) still derives channel-only — frozen applies to in-place decay only', () => {
   // 缺席 ≠ 不可判：来源未挂载/已退役时通道仍可判，账本必须继续跟随（否则旧未读永久粘住）。
@@ -312,4 +352,112 @@ test('B5: an observer-domain completion arms but never advances the host read ma
   }), deps)
   assert.deepEqual(armed.unread, { s1: true })
 })
+
+test('rule 0: a channel withdrawal must not strand the armed balance (authoritative sweep over prevRunning ∪ prevCompleted)', () => {
+  // 生产链路：壳重连窗口里通道撤回会 delete prevRunningRef[sourceId]（易失 running 记忆清零），
+  // durable 账本保留；随后通道带着**完整列表**回来而 facts 仍不可判——已武装会话只剩 prevLedger
+  // 一条记忆。旧清扫键空间 = Object.keys(prevRunning) 为空 ⇒ 该会话永不被剪（粘点）。
+  const frozen = { facts: undefined, factsVerified: false }
+  const sticky = deriveSourceUnread(input({
+    ...frozen,
+    channel: { alive: { running: false } },
+    listComplete: true,
+    prevRunning: {},
+    prevLedger: { gone: true },
+  }), deps)
+  assert.deepEqual(sticky.unread, {}, '权威列表说它离表，结余必须同拍剪掉')
+  assert.equal(sticky.changed, true)
+  // 对照（旧清扫本就命中的形状）：running 记忆里还留着该会话。
+  const inMemory = deriveSourceUnread(input({
+    ...frozen,
+    channel: { alive: { running: false } },
+    listComplete: true,
+    prevRunning: { gone: false },
+    prevLedger: { gone: true },
+  }), deps)
+  assert.deepEqual(inMemory.unread, {})
+  // 非权威列表（listComplete=false）：缺席不是删除，结余原样保留（唯一的剪枝门仍是 listComplete ∧ 通道）。
+  const retained = deriveSourceUnread(input({
+    ...frozen,
+    channel: {},
+    listComplete: false,
+    prevRunning: {},
+    prevLedger: { gone: true },
+  }), deps)
+  assert.deepEqual(retained.unread, { gone: true })
+  // 非权威且无通道：原样冻结（不剪也不 clobber）。
+  const noChannel = deriveSourceUnread(input({
+    ...frozen,
+    channel: undefined,
+    listComplete: true,
+    prevRunning: {},
+    prevLedger: { gone: true },
+  }), deps)
+  assert.deepEqual(noChannel.unread, { gone: true })
+  assert.equal(noChannel.changed, false)
+})
+
+test('B6: the first-sight seeding memo follows the incarnation token, not the fingerprint', () => {
+  const registry = new SourceOwnershipRegistry()
+  const boot = 'boot-1'
+  /** 旧实现把标记挂在传输指纹上；本测试的负控用它复现回归形状。 */
+  let keyByFingerprint = false
+  const incarnation = (): unknown => {
+    const token = registry.capture('dsh-a')
+    if (token === null) return boot
+    return keyByFingerprint ? token.fingerprint : token
+  }
+  let seededIncarnation: unknown
+  let readMarks: Record<string, number> = {}
+  let ledger: Record<string, boolean> = {}
+  let prevRunning: Record<string, boolean> = {}
+  let seeds = 0
+  /** hook 的每拍流水线（种子步 → 写回 → 派生），与 use-unread-notifications 同序。 */
+  const tick = (completedAt: number) => {
+    const rows = { s1: fact({ completedAt, updatedAt: completedAt }) }
+    const seed = factsBaselineSeed({
+      factsRows: rows, incarnation: incarnation(), seededIncarnation, readMarks, keepUnread: ledger,
+    })
+    if (seed.seeded) {
+      seeds += 1
+      seededIncarnation = seed.incarnation
+      readMarks = { ...seed.readMarks }
+    }
+    const result = deriveSourceUnread(input({
+      facts: rows, prevRunning, prevLedger: ledger, readMarks, listComplete: false,
+    }), deps)
+    prevRunning = result.nextRunning
+    ledger = result.unread
+    return result
+  }
+
+  const born = registry.activate('dsh-a', 'fp-1')
+  assert.deepEqual(tick(100).unread, {}, '首拍播种地板：历史完成不出点')
+  assert.equal(seeds, 1)
+  assert.deepEqual(tick(200).unread, { s1: true }, '同一化身不重复播种：水位前进的真完成照常出点')
+  assert.equal(seeds, 1)
+
+  // 退役：retireSources 同拍清 readMarks/账本/running 记忆，registry.retire 删 owner。
+  registry.retire(['dsh-a'])
+  readMarks = {}
+  ledger = {}
+  prevRunning = {}
+  const reborn = registry.activate('dsh-a', 'fp-1')
+  assert.equal(reborn.fingerprint, born.fingerprint, '同指纹重挂正是缺陷场景')
+  assert.notEqual(reborn, born, 'retire 后的 activate 必然 mint 新 token：对象身份即化身身份')
+  assert.deepEqual(tick(100).unread, {}, '同指纹重挂的首拍必须重新播种，不得整表武装历史完成')
+  assert.equal(seeds, 2)
+
+  // 负控（语料确实能红）：标记若仍挂在传输指纹上，同一时序会整表武装——旧实现正是此形。
+  registry.retire(['dsh-a'])
+  readMarks = {}
+  ledger = {}
+  prevRunning = {}
+  keyByFingerprint = true
+  seededIncarnation = born.fingerprint
+  registry.activate('dsh-a', 'fp-1')
+  assert.deepEqual(tick(100).unread, { s1: true },
+    'fingerprint-keyed memo（旧实现）在本语料下整表武装：这就是本测试锁掉的回归')
+})
+
 

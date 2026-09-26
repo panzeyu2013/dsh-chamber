@@ -210,8 +210,7 @@ test('the aligned launch semantics are unchanged (250ms busy dress, 2s error, in
  * The React seat and chip are not importable under plain node, so their wiring
  * is pinned as source text. Covered: the registration order behind the open-in
  * gates, the per-session ladder ownership, the evidence-gated execution
- * discipline, the inert chip, and the cross-package churn constant shared with
- * the api-gateway fork.
+ * discipline, the inert chip, and the retired churn notice's absence.
  */
 const seat = stripComments(source('../../src/client/session-stream-health-seat.ts'))
 const chip = stripComments(source('../../src/client/SessionStreamHealthChip.tsx'))
@@ -235,21 +234,27 @@ test('stream-health seat: registered before the open-in gates, ladder state in t
   assert.doesNotMatch(seat, /previousPresented|rememberPresented|healSessionStream|hasHealRoute/)
 })
 
-test('stream-health seat: the page delivery owner owns the automatic rebuild, header retains the manual exit', () => {
-  assert.match(seat, /resyncAvailable: hasSessionStreamResync\(sessions, sessionId\)/)
-  assert.match(seat, /healRoute: hasSessionStreamResync\(sessions, sessionId\)/,
+test('stream-health seat: the page delivery owner owns every rebuild, the header has no manual exit', () => {
+  assert.match(seat, /const resyncAvailable = hasSessionStreamResync\(sessions, sessionId\)/)
+  assert.match(seat, /healRoute: resyncAvailable/,
     'the automatic heal executes resync on the presented target, so its gate is the same guarded probe read')
+  assert.match(seat, /resyncAvailable,$/mu,
+    'the heal route answers the same capability question as the presented face: ONE guarded read, never two that can disagree')
   const policy = stripComments(source('../../src/client/session-stream-health.ts'))
   assert.doesNotMatch(policy, /auto-resync/)
   assert.match(seat, /if \(plan\.action === 'heal'\) \{/)
   assert.doesNotMatch(seat, /plan\.action === 'auto-resync'/)
   assert.doesNotMatch(seat, /plan\.action === 'resync'/)
-  assert.equal([...seat.matchAll(/resyncSessionStream\(/gu)].length, 2,
-    'the header executes the automatic heal AND its injected user action — nothing else')
+  assert.equal([...seat.matchAll(/resyncSessionStream\(/gu)].length, 1,
+    'the header executes ONLY the automatic heal')
   const page = stripComments(source('../../../renderer/src/components/InstanceView.tsx'))
   // The automatic rebuild moved to the page-level delivery owner (one ladder, one
   // ledger); the retired planner must never return to the view.
   assert.doesNotMatch(page, /planSessionOpenAutoRebuild\(/)
+  // The failure overlay is text-only now (user ruling): the manual rebuild/reload
+  // buttons must not come back to the view.
+  assert.doesNotMatch(page, /sessionOpen\.rebuild|sessionOpen\.reload/)
+  assert.doesNotMatch(page, /instance-session-open-actions/)
   // Pin the FULL call, arguments included: dropping the monotonic `at` argument
   // makes the streak NaN, which disables every afterMs gate while name-only locks
   // and the pure-module tests stay green.
@@ -280,41 +285,62 @@ test('stream-health seat: the page delivery owner owns the automatic rebuild, he
     'the retired stage-move helpers must not return to the shell')
   assert.match(page, /decision\.action\?\.tier === 'resync'/)
   assert.match(page, /rebuildInstanceSessionStream\(instanceId, currentSessionId\)/)
-  assert.doesNotMatch(seat, /if \(!sessionStreamLeversAvailable\(current, now\)\) return/,
-    'the manual exit must survive an exhausted automatic budget')
-  assert.match(seat, /resync: \(sessionId\) => \{/)
-  assert.match(seat, /storeLadder\(sessionId, markSessionStreamHeal\(current, now\)\)/)
+  // The manual lever is retired (user ruling: upstream has no such control): the
+  // header must not expose a reload, a rebuild, or the stamp that used to pace it.
+  assert.doesNotMatch(seat, /lastManualResyncAt|MANUAL_RESYNC_GUARD_MS|sessionStreamResyncInFlight/)
+  assert.doesNotMatch(stripComments(seat), /reload:|resync:/)
 })
 
-test('stream-health chip: only the injected action reloads, idle renders nothing, controls match the plan', () => {
+test('stream-health chip: no control is rendered and the chip never acts on its own', () => {
   assert.equal([...chip.matchAll(/location\.reload\(\)/gu)].length, 0, 'the chip must not reload on its own')
-  assert.equal([...seat.matchAll(/location\.reload\(\)/gu)].length, 1, 'exactly one reload path: the injected user action')
+  assert.equal([...seat.matchAll(/location\.reload\(\)/gu)].length, 0, 'the seat never reloads the page either')
   assert.doesNotMatch(chip, /useRef/, 'the ladder state must not live in a component ref')
   assert.match(chip, /if \(face\.label === null\) return null/)
   assert.match(chip, /<span role="status" aria-live="polite">\{label\}<\/span>/, 'the live region is the label alone')
   assert.doesNotMatch(chip, /<div[^>]*role="status"/)
-  assert.match(chip, /face\.reload \? \(/)
-  assert.match(chip, /face\.resync \? \(/)
-  assert.match(chip, /<button type="button" className=\{styles\.action\} onClick=\{\(\) => \{ resync\(sessionId\) \}\}>/)
-  assert.equal([...chip.matchAll(/resync\(sessionId\)/gu)].length, 1, 'the click is the only resync invocation in the chip')
-  assert.doesNotMatch(chip, /useEffect\(\(\) => \{ resync/, 'resync must not ride an effect')
+  // The manual controls are retired: the chip has no button, no control fields and
+  // no resync invocation at all.
+  assert.doesNotMatch(chip, /<button/)
+  assert.doesNotMatch(stripComments(chip), /face\.reload|face\.resync|resync\(sessionId\)/)
+  assert.doesNotMatch(chip, /reload\(/)
+  assert.doesNotMatch(stripComments(chip), /onClick/)
 })
 
-test('stream-health churn: the seat mirrors the api-gateway literal and wakes the renderer', () => {
-  const fork = stripComments(readFileSync(
-    new URL('../../../dsh-api-gateway/src/client/stream-carrier-fact.ts', import.meta.url), 'utf8'))
-  const forkEvent = /export const STREAM_CARRIER_FAILED_EVENT = '([^']+)'/u.exec(fork)
-  assert.ok(forkEvent !== null, 'the fork must export the page event name')
-  const seatEvent = /const CARRIER_CHURN_EVENT = '([^']+)'/u.exec(seat)
-  assert.equal(seatEvent?.[1], forkEvent[1], 'the seat must listen on the fork event, spelled identically')
-  assert.match(seat, /window\.addEventListener\(CARRIER_CHURN_EVENT, onChurn\)/u)
-  assert.match(seat, /window\.removeEventListener\(CARRIER_CHURN_EVENT, onChurn\)/u, 'the listener must be torn down')
-  assert.match(seat, /\.\.\.\(carrierChurn === undefined \? \{\} : \{ carrierChurn \}\)/u, 'the fact must reach the decision observation')
-  assert.match(seat, /const churnListeners = new Set<\(\) => void>\(\)/u)
-  assert.match(seat, /subscribe: \(listener\) => \{\n\s*churnListeners\.add\(listener\)/u)
-  assert.match(seat, /carrierChurn = \{ at, count \}\n\s*for \(const listener of \[\.\.\.churnListeners\]\) listener\(\)/u,
-    'the broadcast must follow the stored fact in the same handler')
-  assert.match(seat, /const onChurn = \(event: Event\): void => \{(?:(?!\n\s*return\b)[\s\S])*?for \(const listener/u,
-    'no unconditional return may precede the broadcast')
+test('stream-health evidence: the page notice is fact-driven and the automatic arm ignores loading', () => {
+  const owner = stripComments(source('../../../renderer/src/session-delivery-state.ts'))
+  const view = stripComments(source('../../../renderer/src/components/InstanceView.tsx'))
+  // The automatic arm drops the loading face BEFORE the shared classifier...
+  assert.match(owner, /const loadingFace = input\.evidence\.open\?\.state === 'loading' \? input\.evidence\.open : undefined/,
+    'a loading face must never reach the delivery classifier')
+  // ...while its in-flight bits still block every tier: "no automatic action
+  // crosses a pending open" is unchanged.
+  assert.match(owner, /loadingFace\.openInFlight === true \|\| loadingFace\.resyncInFlight === true/)
+  // The page-level notice consumes the terminal fact (the header may be absent),
+  // and hands it to the phase decision so the evidence IS the failure.
+  assert.match(view, /readInstanceOpeningFailure\(instanceId, currentSessionId\)/)
+  assert.match(view, /const openSymptomEvidence = observed\?\.openState === 'loading' \? undefined : openEvidence/)
+  // The phase is derived in the 1 Hz sampler from the same inputs (the terminal
+  // fact included) and only its RESULT is state: storing the fresh per-second
+  // health object would re-render the whole view on every sample.
+  assert.match(view, /presentedSessionOpenRecoveryPhase\(\s*health, currentSessionId, currentSessionKnownBlank === true, nextOpeningFailure,/)
+  assert.doesNotMatch(view, /useState<SessionOpenHealth|setSessionOpenHealth/,
+    'the per-second health object must stay in the ref, never in state')
+  assert.match(view, /setSessionOpenPhase\(previous => \(previous === nextPhase \? previous : nextPhase\)\)/)
+  assert.match(view, /escalationBlocked: observed\?\.resyncInFlight === true \|\| observed\?\.openInFlight === true/)
+})
+
+test('stream-health churn: the reconnecting notice and its page listener are retired', () => {
+  // User ruling: the chamber-only reconnecting notice goes, and with it the seat's
+  // page-fact listener. The fork keeps EMITTING the fact for page diagnostics, so
+  // this lock also pins that nothing in the package reads it any more.
+  const policy = stripComments(source('../../src/client/session-stream-health.ts'))
+  assert.doesNotMatch(seat, /carrierChurn|CARRIER_CHURN_EVENT|stream-carrier-failed/u)
+  assert.doesNotMatch(seat, /window\.addEventListener/u, 'this seat observes no page event (the ledger owns its own listener)')
+  assert.doesNotMatch(policy, /carrier-churn|carrierChurn|carrierChurnMs/u)
+  assert.doesNotMatch(chip, /carrierChurn|carrier-churn/u)
+  // The wake-up seam STAYS: a terminal opening fact must reach the chip at once
+  // (no page timer decides a proven-dead opening), not on its next 1 s tick.
+  assert.match(seat, /wakeListeners\.add\(listener\)/u)
+  assert.match(seat, /for \(const listener of \[\.\.\.wakeListeners\]\) listener\(\)/u)
   assert.match(chip, /useEffect\(\(\) => subscribe\(\(\) => setTick\(value => value \+ 1\)\), \[subscribe\]\)/u)
 })

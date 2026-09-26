@@ -391,12 +391,12 @@ export function nextServerOrder(
  * One reconcile step of the App-owned "completed but unread" dot state
  * machine. PURE — called inside a functional state updater so batched reports
  * compose without losing earlier arms.
- *
  * "Being read" is the ACTIVE view's current session (the App's fact), not this
  * ctx's possibly-stale `selected`: a running→idle edge arms unless the session
  * is being read; re-running, leaving the list, or starting to read disarms.
  * `prevRunning` is the source's last-observed bits — a per-report snapshot,
- * never a shared ref. @returns the next armed set (identity when unchanged).
+ * never a shared ref. `authoritativeList` gates absent = deleted (see deriveSourceUnread).
+ * @returns the next armed set (identity when unchanged).
  */
 export function reconcileCompletedFacts(params: {
   sessions: Record<string, { running?: boolean }>
@@ -404,6 +404,7 @@ export function reconcileCompletedFacts(params: {
   prevRunning: Record<string, boolean>
   prevCompleted: Record<string, boolean>
   readingCurrent: string | undefined
+  authoritativeList: boolean
 }): { completed: Record<string, boolean>; changed: boolean } {
   const next = { ...params.prevCompleted }
   let changed = false
@@ -427,12 +428,11 @@ export function reconcileCompletedFacts(params: {
       changed = true
     }
   }
-  // Sessions that left the list: drop their armed dots and edge memory.
-  for (const sessionId of Object.keys(params.prevRunning)) {
-    if (params.nextRunning[sessionId] !== undefined) continue
-    if (next[sessionId] === true) {
-      delete next[sessionId]
-      changed = true
+  // Left the list: drop armed dots + edge memory (authoritative-only sweep; off-list has no target).
+  if (params.authoritativeList) {
+    for (const sessionId of [...Object.keys(params.prevRunning), ...Object.keys(params.prevCompleted)]) {
+      if (params.nextRunning[sessionId] !== undefined) continue
+      if (next[sessionId] === true) { delete next[sessionId]; changed = true }
     }
   }
   return { completed: changed ? next : params.prevCompleted, changed }
@@ -911,7 +911,6 @@ export function mergeRuntimeFacts(
   }
   // 断连来源上残留的子代理计数不是「正在干活」的证据——running 降为 unknown（计数本身
   // 保留给诊断）；overlay 合并后通道补进来的计数同样受守卫，不留旁路。
-  // 的计数同样受守卫，不留旁路。
   if (hasStale) {
     for (const [sessionId, row] of Object.entries(sessions)) {
       if (row.subagentActivity === 'running' || (row.subagentActivity === undefined && (row.runningSubagents ?? 0) > 0)) {
@@ -921,7 +920,6 @@ export function mergeRuntimeFacts(
   }
   // 刻意的形状收敛：`sessionAuthority` 不进投影（侧边栏不渲染、投影签名按此去重）；
   // 升级 ladder 读 App 原始 runtimeFacts，不是 server.runtime。
-  // 读原始事实，不要以为投影里有。
   const report: InstanceRuntimeReport = { current: runtime?.current, sessions }
   if (hasStale) report.stale = true
   return report
@@ -1555,7 +1553,6 @@ export function increasedForkTitle(title: string): string {
   }
   return `${title} (1)`
 }
-
 
 /**
  * Archived-session metadata for the archive manager. The archived SET is the

@@ -1,5 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { projectBadgeCount } from '../../src/badge-count.ts'
 // 徽标推送的有界重推链：hook 本体是 React 效果簇（node 测试不可渲染），链的调度
 // 语义由 use-badge-count.ts 的 createBadgePushRetry 承载（纯注入缝，fake timer 直驱）。
@@ -80,19 +82,21 @@ test('projectBadgeCount: a retired source drops its dots from the count', () => 
 })
 
 // ---- 子代理压制（design 06 §4.5 / design 19 §3.7）：父回合结束但后台子代理
-// 仍存活（runningSubagents > 0）的会话不是完成未读——窗口内蓝点被运行环压制、
-// complete 通知被过滤，徽标必须同样不计（否则主分支闲置等子代理时 Dock 误亮）。
-// 压制信息来自最新运行时事实行；子代理全部结束后 armed 蓝点正常浮现计入。
+// 仍存活（调用方归一的 subagentActivity === 'running'）的会话不是完成未读——
+// 窗口内蓝点被运行环压制、complete 通知被过滤，徽标必须同样不计（否则主分支闲置
+// 等子代理时 Dock 误亮）。归一在 use-badge-count（subagentActivityOf：stale 的残留
+// running 降 unknown、无子代理为 none）；子代理全部结束（none）后 armed 蓝点正常浮现。
 
 test('projectBadgeCount: an armed session whose background subagents still run is not counted', () => {
   const completed = { local: { a: true, b: true } }
-  // a 的父回合已结束但 2 个后台子代理仍在干活（06 §4.5 后台模式，running=false
-  // + runningSubagents 稀疏行）；b 真完成。只计 b。
+  // a 的父回合已结束但 2 个后台子代理仍在干活（06 §4.5 后台模式的源行
+  // running=false + runningSubagents=2，经 subagentActivityOf 归一为 running）；
+  // b 真完成（none）。只计 b。
   const facts = {
     local: {
       sessions: {
-        a: { running: false, runningSubagents: 2 },
-        b: { running: false },
+        a: { subagentActivity: subagentActivityOf({ running: false, runningSubagents: 2 }, false) },
+        b: { subagentActivity: subagentActivityOf({ running: false }, false) },
       },
     },
   }
@@ -106,24 +110,24 @@ test('projectBadgeCount: suppression is per session and per source', () => {
     'dsh-abc123': { x: true, y: true },
   }
   const facts = {
-    local: { sessions: { a: { runningSubagents: 1 } } },
+    local: { sessions: { a: { subagentActivity: subagentActivityOf({ runningSubagents: 1 }, false) } } },
     // x 有事实行且子代理存活 → 压制；y 无事实行 → 无压制信息不臆测，照计。
-    'dsh-abc123': { sessions: { x: { runningSubagents: 1 } } },
+    'dsh-abc123': { sessions: { x: { subagentActivity: subagentActivityOf({ runningSubagents: 1 }, false) } } },
     // 无运行时事实通道快照的来源（gateway-xyz789）整体照常计入。
   }
   assert.equal(projectBadgeCount(completed, facts), 2) // b + y
   assert.equal(
-    projectBadgeCount(completed, { ...facts, 'gateway-xyz789': { sessions: { z: { runningSubagents: 3 } } } }),
+    projectBadgeCount(completed, { ...facts, 'gateway-xyz789': { sessions: { z: { subagentActivity: subagentActivityOf({ runningSubagents: 3 }, false) } } } }),
     2, // b + y（z 未武装，无关）
   )
 })
 
 test('projectBadgeCount: armed dot counts again once all subagents finished (or the arg is omitted)', () => {
   const completed = { local: { a: true } }
-  const whileRunning = { local: { sessions: { a: { runningSubagents: 1 } } } }
+  const whileRunning = { local: { sessions: { a: { subagentActivity: subagentActivityOf({ runningSubagents: 1 }, false) } } } }
   assert.equal(projectBadgeCount(completed, whileRunning), 0)
-  // 子代理全部结束：runningSubagents 从行上消失（稀疏）→ 蓝点正常浮现。
-  const finished = { local: { sessions: { a: { running: false } } } }
+  // 子代理全部结束：稀疏计数归零 → 归一为 none → 蓝点正常浮现。
+  const finished = { local: { sessions: { a: { subagentActivity: subagentActivityOf({ running: false }, false) } } } }
   assert.equal(projectBadgeCount(completed, finished), 1)
   // 无运行时事实参数 = 不压制（无压制通道的调用点不臆测）。
   assert.equal(projectBadgeCount(completed), 1)
@@ -134,9 +138,9 @@ test('projectBadgeCount: suppressed rows are still armed (count returns without 
   // 纯投影在行事实变化时自行收敛。
   const completed = { local: { a: true } }
   const reports = [
-    { local: { sessions: { a: { runningSubagents: 3 } } } },
-    { local: { sessions: { a: { runningSubagents: 1 } } } },
-    { local: { sessions: { a: {} } } },
+    { local: { sessions: { a: { subagentActivity: subagentActivityOf({ runningSubagents: 3 }, false) } } } },
+    { local: { sessions: { a: { subagentActivity: subagentActivityOf({ runningSubagents: 1 }, false) } } } },
+    { local: { sessions: { a: { subagentActivity: subagentActivityOf({}, false) } } } },
   ]
   assert.deepEqual(reports.map(report => projectBadgeCount(completed, report)), [0, 0, 1])
 })
@@ -146,34 +150,37 @@ test('projectBadgeCount: an explicit zero runningSubagents row is NOT suppressed
   // 不可达；但实现的 `?? 0` 兜底把 0 语义定为「无子代理存活 = 不压制」，此
   // 用例钉住该文档语义，防未来改判（0 必须照常计入）。
   const completed = { local: { a: true } }
-  const explicitZero = { local: { sessions: { a: { runningSubagents: 0 } } } }
-  assert.equal(projectBadgeCount(completed, explicitZero), 1)
+  const none = { local: { sessions: { a: { subagentActivity: subagentActivityOf({ runningSubagents: 0 }, false) } } } }
+  assert.equal(subagentActivityOf({ runningSubagents: 0 }, false), 'none')
+  assert.equal(projectBadgeCount(completed, none), 1)
+  const unknown = { local: { sessions: { a: { subagentActivity: 'unknown' as const } } } }
+  assert.equal(projectBadgeCount(completed, unknown), 1)
 })
 
 // ---- 合并投影（裁决 14）：vendor-only completed 必须计入，
 // 否则会出现「侧栏蓝点/待办有、Dock 徽标无」的诚实分叉。
 
 test('projectBadgeCount: a vendor-armed completion counts even with no ledger entry', () => {
-  const facts = { local: { sessions: { a: { running: false, completed: true } } } }
+  const facts = { local: { sessions: { a: { completed: true } } } }
   assert.equal(projectBadgeCount(undefined, facts), 1)
   assert.equal(projectBadgeCount({}, facts), 1)
 })
 
 test('projectBadgeCount: the union never double-counts one session', () => {
   const ledger = { local: { a: true } }
-  const facts = { local: { sessions: { a: { running: false, completed: true } } } }
+  const facts = { local: { sessions: { a: { completed: true } } } }
   assert.equal(projectBadgeCount(ledger, facts), 1)
 })
 
 test('projectBadgeCount: vendor-only rows obey the same subagent suppression', () => {
   const facts = {
-    local: { sessions: { a: { completed: true, runningSubagents: 2 }, b: { completed: true } } },
+    local: { sessions: { a: { completed: true, subagentActivity: subagentActivityOf({ runningSubagents: 2 }, false) }, b: { completed: true } } },
   }
   assert.equal(projectBadgeCount({}, facts), 1, 'only b is a finished completion')
 })
 
 test('projectBadgeCount: an explicit false vendor flag does not arm', () => {
-  const facts = { local: { sessions: { a: { running: false, completed: false } } } }
+  const facts = { local: { sessions: { a: { completed: false } } } }
   assert.equal(projectBadgeCount({ local: {} }, facts), 0)
 })
 
@@ -187,8 +194,8 @@ test('projectBadgeCount: an active goal suppresses the armed completion (v5 §4)
   const facts = {
     local: {
       sessions: {
-        a: { running: false, goalActive: true },
-        b: { running: false, goalActive: false },
+        a: { goalActive: true },
+        b: { goalActive: false },
       },
     },
   }
@@ -197,7 +204,7 @@ test('projectBadgeCount: an active goal suppresses the armed completion (v5 §4)
   // vendor-only 完成（无蓝点账本条目）同样受 goal 门压制。
   assert.equal(projectBadgeCount({}, { local: { sessions: { a: { completed: true, goalActive: true } } } }), 0)
   // goalActive 缺席（该来源没有 goal 通路 / goal unknown）= 无压制信息，照常计入。
-  assert.equal(projectBadgeCount({ local: { a: true } }, { local: { sessions: { a: { running: false } } } }), 1)
+  assert.equal(projectBadgeCount({ local: { a: true } }, { local: { sessions: { a: {} } } }), 1)
 })
 
 test('projectBadgeCount: goal suppression is per session and per source', () => {
@@ -211,19 +218,26 @@ test('projectBadgeCount: goal suppression is per session and per source', () => 
 
 test('projectBadgeCount: a stale source never suppresses through the sparse count (stale guard)', () => {
   const completed = { local: { a: true } }
-  // 断连来源的残留计数不是「正在干活」的证据：与 subagentActivityOf 同拍，照常计入。
-  const stale = { local: { stale: true, sessions: { a: { running: false, runningSubagents: 2 } } } }
+  // 断连来源的残留计数不是「正在干活」的证据：归一（subagentActivityOf）把同一源行
+  // 在 stale 下报成 unknown，徽标只对 running 压制 → unknown 照常计入。
+  const staleRow = { running: false, runningSubagents: 2 }
+  assert.equal(subagentActivityOf(staleRow, true), 'unknown')
+  const stale = { local: { sessions: { a: { subagentActivity: subagentActivityOf(staleRow, true) } } } }
   assert.equal(projectBadgeCount(completed, stale), 1)
-  // 在线来源的同一残留计数仍压制。
-  const live = { local: { sessions: { a: { running: false, runningSubagents: 2 } } } }
+  // 在线来源的同一残留计数归一为 running，仍压制。
+  assert.equal(subagentActivityOf(staleRow, false), 'running')
+  const live = { local: { sessions: { a: { subagentActivity: subagentActivityOf(staleRow, false) } } } }
   assert.equal(projectBadgeCount(completed, live), 0)
 })
 
 test('projectBadgeCount: a stale source keeps the goal presentation gate', () => {
-  // stale 只降子代理运行证据；goal 呈现门按相位（active 即压制），断连不自愈。
-  const staleActive = { local: { stale: true, sessions: { a: { completed: true, goalActive: true } } } }
+  // stale 只把子代理残留计数降为 unknown；goal 呈现门按相位（active 即压制），
+  // 断连不自愈——归一后的 stale 行仍带 goalActive: true，不因 unknown 而重现。
+  const staleActivity = subagentActivityOf({ runningSubagents: 2 }, true)
+  assert.equal(staleActivity, 'unknown')
+  const staleActive = { local: { sessions: { a: { completed: true, goalActive: true, subagentActivity: staleActivity } } } }
   assert.equal(projectBadgeCount({ local: { a: true } }, staleActive), 0)
-  const staleGoalFree = { local: { stale: true, sessions: { a: { completed: true, goalActive: false } } } }
+  const staleGoalFree = { local: { sessions: { a: { completed: true, goalActive: false, subagentActivity: staleActivity } } } }
   assert.equal(projectBadgeCount({ local: { a: true } }, staleGoalFree), 1)
 })
 
@@ -242,9 +256,14 @@ test('F6: a stale-only flip survives the runtime-report dedupe and keeps the bad
   const merged = mergeRuntimeFacts(staleChannel, { a: true })
   assert.equal(merged?.stale, true)
   assert.equal(merged?.sessions.a?.subagentActivity, 'unknown')
-  assert.equal(projectBadgeCount({ local: { a: true } }, { local: merged }), 1)
+  // 徽标侧只消费归一三值（use-badge-count 的 subagentActivityOf(row, stale)），
+  // 这里用同一映射把 merge 后的报告折成压制输入；不再直传 stale/稀疏计数本身。
+  const badgeFacts = (report: InstanceRuntimeReport) => ({
+    local: { sessions: { a: { subagentActivity: subagentActivityOf(report.sessions.a, report.stale) } } },
+  })
+  assert.equal(projectBadgeCount({ local: { a: true } }, badgeFacts(merged!)), 1)
   // ③对照：未提交新 report（App 仍持 live）时同一账本被错误压制 —— F6 的可见后果。
-  assert.equal(projectBadgeCount({ local: { a: true } }, { local: liveChannel }), 0)
+  assert.equal(projectBadgeCount({ local: { a: true } }, badgeFacts(liveChannel)), 0)
 })
 
 test('projectBadgeCount agrees with sessionRowState on the completed row across goal/subagent/stale (INV7)', () => {
@@ -270,7 +289,6 @@ test('projectBadgeCount agrees with sessionRowState on the completed row across 
         const row = sessionRowState(rowFacts)
         const badge = projectBadgeCount({ src: { s1: true } }, {
           src: {
-            ...(stale === undefined ? {} : { stale }),
             sessions: {
               s1: {
                 completed: true,
@@ -450,4 +468,47 @@ test('badge retry chain: an absent bridge face never schedules a retry and never
   chain.start(0, 3, 40)
   await settle()
   assert.equal(timers.pendingCount(), 0)
+})
+
+test('badge retry chain: start reports whether it dispatched (the count-change gate may only commit on true)', async () => {
+  const timers = createBadgeTimers()
+  const calls: number[] = []
+  const live = createChain({ timers, push: count => { calls.push(count); return Promise.resolve() } })
+  assert.equal(live.start(0, 3, 40), true,
+    'a dispatched push returns true — the hook commits pushedCountRef only on this value')
+  assert.deepEqual(calls, [0])
+  // 缺桥 / 版本偏斜（window.dshChamber.badge 缺失或没有 set）：push 返回 undefined，
+  // 没有可重试的调用 ⇒ start 必须返回 false（调用方不得提交计数，下一次 effect 用同一计数重试）。
+  const absent = createChain({ timers, push: () => undefined })
+  assert.equal(absent.start(0, 3, 40), false, 'an absent bridge must not be reported as dispatched')
+  assert.equal(absent.start(0, 3, 40), false, 'and the same count may be re-attempted until it dispatches')
+  await settle()
+  assert.equal(timers.pendingCount(), 0, 'nothing dispatched = no retry timer to arm')
+})
+
+/**
+ * (h) 计数变化闸是 effect 内联逻辑，本包没有 React 渲染 harness（不为此引入第二套运行时）：
+ * 用源码语义锁钉住「同计数不得二次 push」与「缺桥/版本偏斜时首推不被闸吞」。变异删掉
+ * `pushedCountRef.current === count` 闸、或把提交改成无条件，本用例即红。
+ */
+test('badge count-change gate: same-count effects never re-push and a failed dispatch never commits', () => {
+  const hook = readFileSync(
+    fileURLToPath(new URL('../../src/app-hooks/use-badge-count.ts', import.meta.url)), 'utf8')
+  const effect = hook.slice(hook.indexOf('const count = projectBadgeCount('), hook.indexOf('// 桥迟到的兜底'))
+  assert.ok(effect.length > 0, 'the count projection effect must exist')
+  const publishAt = effect.indexOf('publishBadgeCount(count)')
+  // ① 闸：与上次真正推出去的计数相同 ⇒ 直接返回（runtimeFacts/completedBySource 换身份 4.8Hz 重推）。
+  const gateAt = effect.indexOf('if (pushedCountRef.current === count) return')
+  assert.notEqual(gateAt, -1, 'the count-change gate must exist (same count must not re-push)')
+  // ② 提交：只有 start 真的派发（true）才提交；缺桥/版本偏斜（push 返回 undefined ⇒ start false）不提交，
+  //    下一次 effect 用同一计数重试 —— 首个计数（含重载复位的 0）永不丢。
+  const startAt = effect.indexOf('if (badgeRetry.start(count, retryLimit, retryMs)) pushedCountRef.current = count')
+  assert.notEqual(startAt, -1, 'the commit must be conditional on start() returning true')
+  assert.ok(publishAt !== -1 && publishAt < gateAt && gateAt < startAt,
+    'order: publish the readback value, gate the duplicate, then dispatch')
+  const commits = effect.match(/pushedCountRef\.current = count/g) ?? []
+  assert.equal(commits.length, 1, 'the gate is committed exactly once, only behind the dispatched boolean')
+  // ③ 桥面缺失/版本偏斜的 push 实现返回 undefined（typeof 守卫），start 因此对首推返回 false。
+  assert.match(hook, /if \(badge === undefined \|\| typeof badge\.set !== 'function'\) return undefined/,
+    'the push seam must degrade an absent/skewed bridge face to undefined, never throw')
 })

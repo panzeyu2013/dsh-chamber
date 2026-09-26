@@ -314,6 +314,50 @@ test('observeSource: usable facts own the completion; ask/request still pass thr
     'the shell complete is suppressed while the question passes')
 })
 
+test('observeSource: shell edges keep the retired detector semantics (order, replay, direct switch, explicit false)', () => {
+  // 旧纯函数边沿检测（连同其测试专有孤岛）已删除；这些语义由现役唯一实现承载：
+  // 同拍 complete+ask 的顺序、同值重放不重发、不经 undefined 的直切、以及
+  // 「缺 running 位不是显式 false」。
+  const seeded = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: true } } },
+    facts: { usable: false, rows: {} },
+  })
+  const mixed = observeSource({
+    state: seeded.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, pending: 'question' } } },
+    facts: { usable: false, rows: {} },
+  })
+  assert.deepEqual(mixed.observations.map(o => o.candidate), [
+    { evidence: 'shell-edge' },
+    { kind: 'ask', evidence: 'shell-edge' },
+  ], '同拍 complete 先、ask 后；一个都不丢')
+  const replay = observeSource({
+    state: mixed.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, pending: 'question' } } },
+    facts: { usable: false, rows: {} },
+  })
+  assert.equal(replay.observations[0].candidate, undefined, '同值 pending 重放不再发')
+  const switched = observeSource({
+    state: replay.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, pending: 'approval' } } },
+    facts: { usable: false, rows: {} },
+  })
+  assert.deepEqual(switched.observations[0].candidate, { kind: 'request', evidence: 'shell-edge' },
+    '不经 undefined 的直切对新值照发')
+  const running = observeSource({
+    state: switched.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: true } } },
+    facts: { usable: false, rows: {} },
+  })
+  const missingRunning = observeSource({
+    state: running.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: {} } },
+    facts: { usable: false, rows: {} },
+  })
+  assert.equal(missingRunning.observations[0].candidate, undefined, '缺 running 位不是显式 false，不产完成边沿')
+})
+
 test('observeSource: a session leaving both channels is forgotten; pageBoot only reaches the first batch', () => {
   const first = observeSource({
     sourceId: 'src', identity: 'fp', pageBoot: 'fresh', shellReport: true,

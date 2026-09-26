@@ -5,7 +5,7 @@
  * is recovered by the concrete per-session `Session.resync()` the pinned
  * controller ships off-contract (reached through the guarded structural slice):
  * the `'error'` arm runs it AUTOMATICALLY after its grace, the parked
- * `'loading'` arm only ARMS the user's control, and the presented fact is the
+ * `'loading'` arm only REPORTS (its manual control was retired), and the fact is the
  * official main view's `retainedBy.mainView` retention — a chamber-side
  * `current` mirror must never come back. Assertions live at the decision
  * boundary (pure module) and the effect boundary (a fake sessions face),
@@ -16,6 +16,8 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 import {
   createSessionStreamHealthState,
   markSessionStreamHeal,
@@ -26,13 +28,16 @@ import {
   type SessionStreamHealthState,
   type SessionStreamObservation,
 } from '../../src/client/session-stream-health.ts'
+import { OPENING_TIMEOUT_LADDER_MS } from '@dsh-chamber/dsh-stream-state'
 import { en, zh } from '../../src/locales.ts'
 import {
   hasSessionStreamResync,
   isConversationSurfacePresented,
+  parseSessionOpeningOutcome,
   resyncSessionStream,
   sessionOpenState,
   sessionOpenInFlight,
+  sessionOpeningFailureLedger,
   type SessionsConcreteLoose,
   type SessionsLoose,
 } from '../../src/client/session-stream-health-probe.ts'
@@ -44,6 +49,8 @@ const C = CONFIG.healCooldownMs
 const S = CONFIG.healSettleMs
 const W = CONFIG.healBudgetWindowMs
 const T0 = 1_700_000_000_000
+/** The whole opening ladder: the page's freshness bound for a terminal fact. */
+const LADDER_TOTAL = OPENING_TIMEOUT_LADDER_MS.reduce((sum, ms) => sum + ms, 0)
 
 /** planSessionStreamHealth bound to the pinned case-invariant config. */
 function planAt(state: SessionStreamHealthState, observation: SessionStreamObservation, at: number) {
@@ -101,7 +108,7 @@ test('stream-health: the settle window is never sampled as "failed" and never re
   // Inside the settle window: no notice, no second heal.
   assert.equal(actions[2], 0)
   assert.equal(actions[3], 0)
-  // The judged failure latches the reload notice, and it stays up
+  // The judged failure latches the failure notice, and it stays up
   // while the cooldown-paced retry runs — no "recovering…" over a dead repair.
   assert.deepEqual(notices, [null, null, null, null, 'heal-failed', 'heal-failed'])
   // The window closes into the hold, and the cooldown (not the settle) paces
@@ -110,7 +117,7 @@ test('stream-health: the settle window is never sampled as "failed" and never re
   assert.equal(state.healStamps.length, 2)
 })
 
-test('stream-health: the cooldown paces the retries and the rolling budget ends the storm with a reload notice', () => {
+test('stream-health: the cooldown paces the retries and the rolling budget ends the storm with a failure notice', () => {
   const t1 = T0 + G
   const t2 = t1 + S
   const t3 = t1 + C
@@ -183,17 +190,17 @@ test('stream-health: the loading arm restarts its hold after an error-phase deto
   assert.deepEqual(notices, [null, null, 'loading-stall', null, null, null])
 })
 
-test('stream-health: the resync lever is armed only by a loading stall with a live concrete face', () => {
-  // The hold must AGE first, exactly like the stall notice it rides with: the
-  // control is never offered on the first frame of a load.
+test('stream-health: a loading stall is reported, never acted on, and only with the observed face', () => {
+  // The hold must AGE first, exactly like the stall notice it rides with:
+  // nothing is reported on the first frame of a load.
   const hold = planAt(createSessionStreamHealthState(), observe('loading', { resyncAvailable: true }), T0)
   assert.equal(hold.action, 'none')
   assert.equal(hold.notice, null)
   const stalled = planAt(hold.state, observe('loading', { resyncAvailable: true }), T0 + L)
-  assert.equal(stalled.action, 'resync')
-  assert.equal(stalled.notice, 'loading-stall', 'the reload arm keeps its own notice')
+  assert.equal(stalled.action, 'none', 'the header never rebuilds on its own')
+  assert.equal(stalled.notice, 'loading-stall', 'the stall notice keeps its own timing')
   // Fail-closed on a build without the concrete face: the SAME stall with no
-  // observed availability arms nothing (and the reload arm is untouched).
+  // observed availability reports the same notice.
   const unavailable = planAt(hold.state, observe('loading', { resyncAvailable: false }), T0 + L)
   assert.equal(unavailable.action, 'none')
   assert.equal(unavailable.notice, 'loading-stall')
@@ -204,32 +211,28 @@ test('stream-health: the resync lever is armed only by a loading stall with a li
   // …and never for a cold or healthy stream, even with the face present.
   assert.equal(planAt(createSessionStreamHealthState(), observe('cold', { resyncAvailable: true }), T0 + L).action, 'none')
   assert.equal(planAt(createSessionStreamHealthState(), observe('open', { resyncAvailable: true }), T0 + L).action, 'none')
-  // A churn fact on an open stream is informational: still no rebuild arm.
-  assert.equal(
-    planAt(createSessionStreamHealthState(), observe('open', { resyncAvailable: true, carrierChurn: { at: T0, count: 1 } }), T0).action,
-    'none',
-  )
+
 })
 
-test('stream-health: the presented error heals automatically, and the manual control survives an exhausted budget', () => {
+test('stream-health: the presented error heals automatically, and an exhausted budget only reports', () => {
   // Presented target + live concrete face: the automatic resync fires at the grace.
   const routedHold = planAt(createSessionStreamHealthState(), observe('error', { resyncAvailable: true }), T0)
   const routed = planAt(routedHold.state, observe('error', { resyncAvailable: true }), T0 + G)
   assert.equal(routed.action, 'heal')
   // With every automatic heal in the rolling window spent, the SAME observation
-  // must not dispatch another one — it ARMS the manual control instead, because
-  // the human click is its own bound and the chip is the only exit that keeps the
-  // page. NOT ledger-gated: the plan offers it even while the automatic lane is
-  // cooling.
+  // must not dispatch another one, and the notice now has no control to open:
+  // the page's own bounded ladder owns the escalation (the manual lever was
+  // retired by user ruling). The threshold still times the notice exactly as it
+  // did when it also opened the control.
   const spent: SessionStreamHealthState = { phase: 'error-hold', since: T0, healStamps: [T0, T0 + C, T0 + 2 * C] }
-  const armed = planAt(spent, observe('error', { resyncAvailable: true }), T0 + C + S)
-  assert.equal(armed.action, 'resync')
-  // The chip renders controls only alongside a notice, so an armed rebuild MUST
-  // carry one (action='resync' + notice=null would render neither the rebuild
-  // button nor the reload fallback).
-  assert.equal(armed.notice, 'heal-failed')
+  const spentNotice = planAt(spent, observe('error', { resyncAvailable: true }), T0 + C + S)
+  assert.equal(spentNotice.action, 'none')
+  // The chip reports the state: a spent automatic lane with a reachable face still
+  // shows the failure notice (the timing the arm used to share), it just has no
+  // control to offer.
+  assert.equal(spentNotice.notice, 'heal-failed')
   // Fail-closed without the concrete face: no action is ever invented, and the
-  // reload notice only appears once the hold has outlived a repair attempt.
+  // failure notice only appears once the hold has outlived a repair attempt.
   const noLever = planAt(createSessionStreamHealthState(), observe('error', { resyncAvailable: false }), T0)
   const noFace = planAt(noLever.state, observe('error', { resyncAvailable: false }), T0 + G)
   assert.equal(noFace.action, 'none')
@@ -239,14 +242,14 @@ test('stream-health: the presented error heals automatically, and the manual con
   assert.equal(drained.notice, 'heal-failed', 'no lever at all is reported, not hidden')
 })
 
-test('stream-health: loading only arms a manual rebuild, independent of the error-heal ledger', () => {
+test('stream-health: loading never acts, independent of the error-heal ledger', () => {
   const hold = planAt(createSessionStreamHealthState(), observe('loading', { resyncAvailable: true }), T0)
   assert.equal(hold.action, 'none', 'the hold must age first, exactly like the stall notice')
-  const armed = planAt(hold.state, observe('loading', { resyncAvailable: true }), T0 + L)
-  assert.equal(armed.action, 'resync')
-  assert.equal(armed.notice, 'loading-stall')
+  const stalled = planAt(hold.state, observe('loading', { resyncAvailable: true }), T0 + L)
+  assert.equal(stalled.action, 'none')
+  assert.equal(stalled.notice, 'loading-stall')
   const spent: SessionStreamHealthState = { phase: 'loading-hold', since: T0, healStamps: [T0, T0 + 1_000, T0 + 2_000] }
-  assert.equal(planAt(spent, observe('loading', { resyncAvailable: true }), T0 + L).action, 'resync')
+  assert.equal(planAt(spent, observe('loading', { resyncAvailable: true }), T0 + L).action, 'none')
   const noFace = planAt(hold.state, observe('loading', { resyncAvailable: false }), T0 + L)
   assert.equal(noFace.action, 'none')
 })
@@ -276,14 +279,14 @@ test('stream-health: the rolling window edge is exclusive, and releases exactly 
   }
   const before = planAt(stamped, observe('error'), T0 + W - 1)
   assert.equal(before.state.healStamps.length, 3)
-  assert.equal(before.action, 'resync', 'the automatic lane is spent inside the window; the manual control is armed')
+  assert.equal(before.action, 'none', 'the automatic lane is spent inside the window and nothing replaces it')
   assert.equal(before.notice, 'heal-failed')
   const exactly = planAt(stamped, observe('error'), T0 + W)
   assert.equal(exactly.state.healStamps.length, 2)
   assert.equal(exactly.action, 'heal')
 })
 
-test('stream-health: both arms report their reload notice at the exact tick the levers run out', () => {
+test('stream-health: both arms report their failure notice at the exact tick the levers run out', () => {
   // No reachable face: the notice lands at grace + settle.
   const { notices } = drive([
     { at: T0, observation: observe('error', { resyncAvailable: false }) },
@@ -310,7 +313,25 @@ test('stream-health: both arms report their reload notice at the exact tick the 
   assert.equal(lastNotice, T0 + 320_000)
 })
 
-test('stream-health: a judged-failed heal latches the reload notice while the retries continue', () => {
+test('stream-health: the reached arm threshold reports at its exact grace tick', () => {
+  // A heal runs at the grace, the stream recovers, and a fresh error starts a new
+  // hold while the heal cooldown still blocks the automatic lane: the notice is
+  // then the ARM threshold's own edge (held >= errorGraceMs), not the settle
+  // latch. Pin the exact tick — the suite's other samples sit at G+S, C+S and W-1.
+  const healed = T0 + G
+  const { actions, notices } = drive([
+    { at: T0, observation: observe('error') },
+    { at: healed, observation: observe('error') },
+    { at: healed + 1_000, observation: observe('open') },
+    { at: healed + 2_000, observation: observe('error') },
+    { at: healed + 2_000 + G - 1, observation: observe('error') },
+    { at: healed + 2_000 + G, observation: observe('error') },
+  ])
+  assert.deepEqual(notices, [null, null, null, null, null, 'heal-failed'])
+  assert.equal(actions[5], 0, 'the cooldown still blocks the automatic lane')
+})
+
+test('stream-health: a judged-failed heal latches the failure notice while the retries continue', () => {
   const healed = T0 + G
   const judged = healed + S
   const retry = healed + C
@@ -346,7 +367,7 @@ test('stream-health: the latch hangs off the settle clock, not off the healing p
   assert.deepEqual(flap.actions, [0, healed, 0, 0, 0, retry])
   assert.deepEqual(flap.notices, [null, null, null, null, 'heal-failed', 'heal-failed'])
 
-  // (b) once latched, a later loading dwell never takes the button back.
+  // (b) once latched, a later loading dwell never takes the notice back.
   const dwell = drive([
     { at: T0, observation: observe('error') },
     { at: healed, observation: observe('error') },
@@ -374,8 +395,8 @@ test('stream-health: the latch hangs off the settle clock, not off the healing p
     { at: healed + 2_000, observation: observe('error') },
     { at: healed + 10_000, observation: observe('error') },
   ])
-  // The final tick arms the MANUAL control (the cooldown still blocks the
-  // automatic lane, and a human click is its own bound); the latch marker is
+  // The final tick is back past the grace while the cooldown still blocks the
+  // automatic lane, so the chip reports the failure notice; the latch marker is
   // what must stay unset — a false latch would pin the notice on a fresh episode.
   assert.deepEqual(recovered.notices, [null, null, null, null, 'heal-failed'])
   assert.equal(recovered.state.healFailedLatched, undefined, 'a fresh episode must not inherit the settled heal clock')
@@ -393,17 +414,17 @@ test('stream-health: the latch hangs off the settle clock, not off the healing p
     { at: healed + C, observation: observe('error') },
     { at: healed + C + S, observation: observe('error') },
   ])
-  // Indices 4-5 are the manual control armed while the cooldown blocks the
-  // automatic lane; index 6 is the new episode's own automatic heal (its notice
-  // stays null until the heal is judged), index 7 the latch after that heal's
-  // settle window. The point: the latch waits for THIS episode's own clock.
+  // Indices 4-5 report the spent/cooling automatic lane (no control exists any
+  // more); index 6 is the new episode's own automatic heal (its notice stays null
+  // until the heal is judged), index 7 the latch after that heal's settle window.
+  // The point: the latch waits for THIS episode's own clock.
   assert.deepEqual(newEpisode.notices,
                    [null, null, null, null, 'heal-failed', 'heal-failed', null, 'heal-failed'])
   assert.equal(newEpisode.actions[6], healed + C, 'the new episode still heals itself')
 })
 
 test('stream-health: the latch survives the retry heal\'s own settle window', () => {
-  // If the loading state or `markSessionStreamHeal` dropped the latch, the button
+  // If the loading state or `markSessionStreamHeal` dropped the latch, the notice
   // would go out for the retry's whole 20s judging window. One tick after the
   // retry must still carry it.
   const healed = T0 + G
@@ -435,8 +456,8 @@ test('stream-health: a recovery marker survives a loading dwell (no false latch)
     { at: healed + 3_000, observation: observe('error') },
     { at: healed + S + 3_000, observation: observe('error') },
   ])
-  // The last tick arms the manual control (the automatic lane is still cooling);
-  // the LATCH marker is what must stay unset — a false latch is the bug here.
+  // The last tick reports the cooling automatic lane (no control exists any
+  // more); the LATCH marker is what must stay unset — a false latch is the bug.
   assert.deepEqual(notices, [null, null, null, null, null, 'heal-failed'])
   assert.equal(state.healFailedLatched, undefined)
 })
@@ -644,37 +665,6 @@ test('stream-health: binding is the only accessor, and a throwing accessor fails
   assert.equal(resyncSessionStream(legacyOnly, 'a'), false)
 })
 
-test('stream-health: a recent carrier-churn fact surfaces the reconnecting notice and expires on its own', () => {
-  const state = createSessionStreamHealthState()
-  const fresh = planAt(state, observe('open', { carrierChurn: { at: T0, count: 2 } }), T0)
-  assert.equal(fresh.notice, 'carrier-churn')
-  assert.equal(fresh.action, 'none', 'churn must never be answered with a heal')
-  assert.equal(fresh.state.phase, 'idle', 'the notice must not age a ladder phase')
-  assert.equal(sessionStreamNoticeKey('carrier-churn'), 'streamHealth.carrierChurn')
-  assert.equal(planAt(state, observe('open', { carrierChurn: { at: T0, count: 2 } }), T0 + CONFIG.carrierChurnMs).notice,
-    'carrier-churn', 'the window is inclusive at its edge')
-  assert.equal(planAt(state, observe('open', { carrierChurn: { at: T0, count: 2 } }), T0 + CONFIG.carrierChurnMs + 1).notice,
-    null, 'the notice must expire without another fact')
-  assert.equal(planAt(state, observe('open', { carrierChurn: { at: T0, count: 0 } }), T0).notice, null,
-    'a zero count is not churn')
-  assert.equal(planAt(state, observe('open'), T0).notice, null, 'no fact, no notice')
-})
-
-test('stream-health: churn never overrides the error or loading arms', () => {
-  const churn = { at: T0, count: 3 }
-  // Both arms need their hold to AGE first (the notice is never handed out on the
-  // first frame), so each case steps twice — churn must not shortcut either.
-  const errorHold = planAt(
-    createSessionStreamHealthState(), observe('error', { resyncAvailable: false, carrierChurn: churn }), T0,
-  )
-  const errored = planAt(
-    errorHold.state, observe('error', { resyncAvailable: false, carrierChurn: churn }), T0 + G + CONFIG.healSettleMs,
-  )
-  assert.equal(errored.notice, 'heal-failed', 'the hopeless arm owns the notice while the open state is error')
-  const loadingHold = planAt(createSessionStreamHealthState(), observe('loading', { carrierChurn: churn }), T0)
-  const loading = planAt(loadingHold.state, observe('loading', { carrierChurn: churn }), T0 + CONFIG.loadingStallMs)
-  assert.equal(loading.notice, 'loading-stall', 'the stall arm owns the notice while the open state is loading')
-})
 
 test('stream-health: open liveness is tri-state, and only "nothing pending" is true evidence', () => {
   const pending = Promise.resolve()
@@ -735,9 +725,136 @@ test('stream-health: every notice key exists in both dictionaries', () => {
   // that the mapped key RESOLVES, so a helper rename can never ship a raw key.
   for (const key of [
     'streamHealth.label', 'streamHealth.healing', 'streamHealth.loadingStall', 'streamHealth.loadingFailed',
-    'streamHealth.healFailed', 'streamHealth.reload', 'streamHealth.resync', 'streamHealth.carrierChurn',
+    'streamHealth.healFailed',
   ]) {
     assert.equal(typeof (zh as Record<string, string>)[key], 'string', 'zh is missing ' + key)
     assert.equal(typeof (en as Record<string, string>)[key], 'string', 'en is missing ' + key)
   }
+})
+
+test('stream-health: a terminal opening fact fails the load now, with no action to take', () => {
+  // The evidence outranks the stall timer: the notice lands on the FIRST tick,
+  // and no control is offered — a loading face has no
+  // automatic arm here (this seat never re-issues an open on its own).
+  const budget = planAt(createSessionStreamHealthState(), observe('loading', { openingFailure: 'budget-exhausted' }), T0)
+  assert.equal(budget.notice, 'loading-failed', 'the terminal outcome IS the failure notice')
+  assert.equal(budget.action, 'none')
+  assert.notEqual(budget.action, 'heal', 'a proven-dead opening is never re-issued automatically')
+  assert.equal(sessionStreamNoticeKey('loading-failed'), 'streamHealth.loadingFailed')
+  const orphaned = planAt(createSessionStreamHealthState(), observe('loading', { openingFailure: 'orphaned' }), T0)
+  assert.equal(orphaned.notice, 'loading-failed')
+  assert.equal(orphaned.action, 'none')
+  // No reachable concrete face: the failure is still shown; nothing is invented.
+  const noFace = planAt(
+    createSessionStreamHealthState(),
+    observe('loading', { openingFailure: 'budget-exhausted', resyncAvailable: false }), T0,
+  )
+  assert.equal(noFace.notice, 'loading-failed')
+  assert.equal(noFace.action, 'none')
+})
+
+test('stream-health: loading without opening evidence keeps the pinned timer behaviour', () => {
+  // (b) no evidence: exactly today's arm — no notice, no action, until the
+  // stall hold ages; the in-flight shape stays protected by the same silence.
+  const hold = planAt(createSessionStreamHealthState(), observe('loading'), T0)
+  assert.equal(hold.notice, null, 'no notice on the first frame')
+  assert.equal(hold.action, 'none', 'no action before the stall hold ages')
+  const beforeStall = planAt(hold.state, observe('loading'), T0 + L - 1)
+  assert.equal(beforeStall.notice, null)
+  assert.equal(beforeStall.action, 'none')
+  // The concurrency/multi-instance shape the seat passes: a live concrete face
+  // and no evidence is still "wait", never an automatic rebuild.
+  assert.equal(planAt(createSessionStreamHealthState(), observe('loading', { resyncAvailable: true }), T0).action, 'none')
+})
+
+test('stream-health: opening evidence never touches the error arm', () => {
+  // (c) the error path is untouched by the new evidence field: the automatic
+  // heal still fires on its own grace.
+  const hold = planAt(createSessionStreamHealthState(), observe('error', { openingFailure: 'orphaned' }), T0)
+  assert.equal(hold.action, 'none')
+  const healed = planAt(hold.state, observe('error', { openingFailure: 'orphaned' }), T0 + G)
+  assert.equal(healed.action, 'heal')
+  assert.equal(healed.notice, null)
+})
+
+test('response forensics: unknown kinds and drifted shapes are ignored, never recorded', () => {
+  // (d) an old bundle (no opening kinds) or a drifted fact must never throw and
+  // must never change behaviour: the ledger simply stays empty.
+  const ledger = sessionOpeningFailureLedger()
+  for (const detail of [
+    null, undefined, 0, 'opening-budget-exhausted', {},
+    { kind: 'opening-timeout', instanceId: 'ignored', sessionId: 's', at: T0 },
+    // The fork's non-terminal rung diagnostic: it must never fail a loading seat.
+    { kind: 'opening-miss', instanceId: 'ignored', sessionId: 's', at: T0 },
+    { kind: 'socket-lost', instanceId: 'ignored', at: T0 },
+    { kind: 'invented-kind', instanceId: 'ignored', at: T0 },
+  ]) {
+    assert.doesNotThrow(() => { ledger.record(detail) })
+    assert.equal(parseSessionOpeningOutcome(detail), null)
+  }
+  assert.equal(ledger.failureFor('ignored', 's'), undefined, 'an unknown kind records no evidence')
+})
+
+test('response forensics: ANY acceptance retires the unattributed instance fallback', () => {
+  // The fallback is a guess at which session an unattributed fact belonged to. Once
+  // the carrier demonstrably answers again (some session accepted), keeping the guess
+  // would fail an unrelated session that is merely loading (review finding 5/O4).
+  const ledger = sessionOpeningFailureLedger()
+  ledger.record({ kind: 'opening-budget-exhausted', instanceId: 'inst-fallback', at: T0 })
+  assert.equal(ledger.failureFor('inst-fallback', 'unrelated', T0 + 1)?.failure, 'budget-exhausted')
+  ledger.record({ kind: 'opening-accepted', instanceId: 'inst-fallback', sessionId: 'somebody', at: T0 + 2 })
+  assert.equal(ledger.failureFor('inst-fallback', 'unrelated', T0 + 3), undefined,
+    'an attributed acceptance retires the coarse instance fallback too')
+})
+
+test('response forensics: the probe listens on the fork event name, spelled identically', () => {
+  // The probe cannot import the fork at bundle time (a client plugin must not
+  // deepen a path into it), so the literal is duplicated on purpose and pinned
+  // here against the fork's own export — a silent rename must not disable the
+  // whole evidence channel.
+  const fork = stripComments(readFileSync(
+    new URL('../../../dsh-api-gateway/src/client/stream-forensics.ts', import.meta.url), 'utf8'))
+  const probe = stripComments(readFileSync(
+    new URL('../../src/client/session-stream-health-probe.ts', import.meta.url), 'utf8'))
+  const forkEvent = /export const STREAM_FORENSICS_EVENT = '([^']+)'/u.exec(fork)
+  const probeEvent = /const STREAM_FORENSICS_EVENT = '([^']+)'/u.exec(probe)
+  assert.ok(forkEvent !== null, 'the fork must export the page event name')
+  assert.equal(probeEvent?.[1], forkEvent[1], 'the probe must listen on the fork event, spelled identically')
+})
+
+test('response forensics: a terminal fact is read per session and retired by accepted', () => {
+  const ledger = sessionOpeningFailureLedger()
+  let woke = 0
+  const unsubscribe = ledger.subscribe(() => { woke += 1 })
+  assert.equal(
+    parseSessionOpeningOutcome({ kind: 'opening-budget-exhausted', instanceId: 'inst', sessionId: 's1', at: T0 })?.outcome,
+    'budget-exhausted',
+  )
+  ledger.record({ kind: 'opening-budget-exhausted', instanceId: 'inst', sessionId: 's1', at: T0 })
+  assert.equal(ledger.failureFor('inst', 's1', T0 + 3)?.failure, 'budget-exhausted')
+  assert.equal(ledger.failureFor('inst', 's2', T0 + 3), undefined, 'an attributed fact covers only its session')
+  assert.equal(ledger.failureFor('other', 's1', T0 + 3), undefined, 'another instance is never covered')
+  // A fact older than the whole ladder describes an episode that is over: a seat
+  // that starts loading now must not inherit it (no accepted fact ever arrived).
+  assert.equal(ledger.failureFor('inst', 's1', T0 + LADDER_TOTAL + 1), undefined,
+    'a terminal fact expires with the ladder that produced it')
+  assert.ok(woke >= 1, 'a recorded fact wakes the visible seats')
+  // An unattributed fact is instance-wide: the presented loading session is the
+  // only page-visible candidate.
+  ledger.record({ kind: 'opening-orphaned', instanceId: 'inst', at: T0 + 1 })
+  assert.equal(ledger.failureFor('inst', 's2', T0 + 3)?.failure, 'orphaned')
+  // An accepted opening retires the instance-level fallback; the attributed
+  // session's own fact is retired by an attributed acceptance.
+  ledger.record({ kind: 'opening-accepted', instanceId: 'inst', at: T0 + 2 })
+  assert.equal(ledger.failureFor('inst', 's2', T0 + 3), undefined, 'accepted retires the instance fallback')
+  assert.equal(ledger.failureFor('inst', 's1', T0 + 3)?.failure, 'budget-exhausted', 'the exact fact survives an unattributed acceptance')
+  ledger.record({ kind: 'opening-accepted', instanceId: 'inst', sessionId: 's1', at: T0 + 3 })
+  assert.equal(ledger.failureFor('inst', 's1', T0 + 4), undefined)
+  unsubscribe()
+  assert.equal(parseSessionOpeningOutcome({ kind: 'opening-accepted', instanceId: 'inst' })?.at, 0,
+    'a fact without a time is accepted with a zero stamp')
+  // ...and an UNDATED failure fact is taken at face value: the freshness window may only
+  // expire evidence it can actually date (an older/channel-lite bundle keeps its meaning).
+  ledger.record({ kind: 'opening-budget-exhausted', instanceId: 'inst-undated', sessionId: 's', at: 0 })
+  assert.equal(ledger.failureFor('inst-undated', 's', T0)?.failure, 'budget-exhausted')
 })

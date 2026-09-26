@@ -3,7 +3,7 @@
   "files": [
     {
       "path": "packages/renderer/src/App.tsx",
-      "lines": 2450,
+      "lines": 2446,
       "target": 400,
       "note": "renderer container (function-of-state mixes; stores/budgets/servers/ledger extracted)"
     },
@@ -51,7 +51,7 @@
     },
     {
       "path": "packages/dsh-chamber-client-core/src/derive.ts",
-      "lines": 1807,
+      "lines": 1804,
       "target": 1200,
       "note": "aggregate/session derive"
     },

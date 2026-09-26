@@ -1,6 +1,6 @@
 /**
  * The completed-unread ledger ("blue dots"): sourceId → sessionId → completed
- * flag, seeded from the persisted unread v2 payload on the first frame. ONE
+ * flag, seeded from the persisted unread v4 payload on the first frame. ONE
  * authority: the rendered table, the persisted \`edge\` table and the event-side
  * prevLedger read all come from this snapshot (they used to be a useState plus
  * a ledger ref written together, plus a third read in the persistence closure).
@@ -20,7 +20,7 @@ export interface CompletedStore {
   subscribe(listener: () => void): () => void
   /** Synchronous latest table for event callbacks and persistence. */
   getSnapshot(): CompletedTable
-  /** Install the persisted v2 edge table (first frame, before any effect). */
+  /** Install the persisted v4 edge table (first frame, before any effect). */
   seed(table: CompletedTable): void
   setSource(sourceId: string, table: Record<string, boolean>): void
   dropSource(sourceId: string): void

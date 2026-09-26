@@ -44,6 +44,13 @@ const GROUPS = {
       file: 'test/behavior/mux-self-heal.test.ts',
       nodeArgs: ['--experimental-transform-types', '--import', './test/support/register-vendor-stubs.mjs'],
     },
+    {
+      // F1 opening phase machine: the mux/RemoteStream pair over a fake socket and
+      // clock - orphaned openings, terminal budget exhaustion, generations that keep
+      // their widening across replacement, and the domain face's own bound.
+      file: 'test/behavior/opening-phase-machine.test.ts',
+      nodeArgs: ['--experimental-transform-types', '--import', './test/support/register-vendor-stubs.mjs'],
+    },
   ],
   // retry-policy: chamber carrier-retry pacing (design 14 §D4).
   'retry-policy': [

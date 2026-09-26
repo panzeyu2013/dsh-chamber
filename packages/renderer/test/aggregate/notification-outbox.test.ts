@@ -149,6 +149,16 @@ test('regression: completedAt newer than the runtime updatedAt anchor still clai
     { watermark: 3_000, hostUpdatedAt: 2_000 }), false)
 })
 
+test('a host-time-less runtime anchor still owns the next facts completion', () => {
+  // 旧 planner 的 legacy 兜底（runtimeSettled 无 host 时间）：没有可比较的锚点时，
+  // 结算标记仍认领下一条 facts 完成，不得因此二次发横幅。
+  const outbox = createNotificationOutbox(undefined, () => 1_000)
+  const entry = outbox.enqueue({ ...completion, watermark: undefined })!
+  assert.equal(outbox.associateCompletion('ssh-a', 'host-1', 's1', { watermark: 2_000, hostUpdatedAt: 2_000 }), true,
+    'a runtime edge without host time is still a marker')
+  assert.equal(outbox.entries()[0]?.key, entry.key, 'claiming must not re-key the durable native event')
+})
+
 test('a disagreeing host sequence never claims the edge, whatever the times say', () => {
   const outbox = createNotificationOutbox(undefined, () => 1_000)
   const runtime = {

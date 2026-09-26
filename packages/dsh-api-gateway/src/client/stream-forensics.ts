@@ -34,14 +34,37 @@ export type StreamForensicsKind =
   | 'socket-disposed'
   | 'socket-silent'
   | 'opening-timeout'
+  /** F1: one widening rung expired while the retry lane continues - a diagnostic, never a verdict. */
+  | 'opening-miss'
+  /** F1: the consumer accepted the opening item (the only transition that settles an opening). */
+  | 'opening-accepted'
+  /** F1 terminal: frames arrived but the consumer never accepted across the WHOLE ladder. */
+  | 'opening-orphaned'
+  /** F1 terminal: every rung of the opening ladder was spent without acceptance. */
+  | 'opening-budget-exhausted'
   | 'opening-stall-escalation'
-  | 'carrier-forensic'
   | 'generation-ready'
   | 'generation-lost'
   /** The reducer authorized a physical replacement. */
   | 'carrier-rebuild'
   /** The reducer denied a replacement and paired it with a reopen (never a silent drop). */
   | 'carrier-throttled'
+
+/**
+ * Structured attribution carried by the opening facts (F1). Every field is optional
+ * and only present when the opener actually derived it; a fact's `cause` keeps the
+ * same values in bounded prose for readers that only persist strings.
+ */
+export interface StreamForensicsDetail {
+  /** The logical stream's endpoint (e.g. session/follow). */
+  readonly endpoint?: string | undefined
+  /** The carrier attempt's stream id (one per open frame, not one per logical stream). */
+  readonly streamId?: string | undefined
+  /** Milliseconds the opening waited on the carrier when the fact was emitted. */
+  readonly waitedMs?: number | undefined
+  /** Best-effort session attribution read from the request payload; absent otherwise. */
+  readonly sessionId?: string | undefined
+}
 
 /** One bounded, non-secret lifecycle fact. */
 export interface StreamForensicsFact {
@@ -54,6 +77,11 @@ export interface StreamForensicsFact {
   /** 1-based counts this page has observed: all kinds / this kind. */
   readonly count: number
   readonly kindCount: number
+  /** F1 attribution, present only when the opening fact carried it. */
+  readonly endpoint?: string | undefined
+  readonly streamId?: string | undefined
+  readonly waitedMs?: number | undefined
+  readonly sessionId?: string | undefined
 }
 
 /** Environment seams for {@link createStreamForensicsReporter}. */
@@ -71,7 +99,7 @@ export const STREAM_FORENSICS_CAUSE_MAX = FORENSICS_DETAIL_MAX
 /** Publish one bounded lifecycle fact and retain it: the callable half is the hot
  *  path; `snapshot`/`flush` are the export half. */
 export interface StreamForensicsReporter {
-  (kind: StreamForensicsKind, cause: string): void
+  (kind: StreamForensicsKind, cause: string, detail?: StreamForensicsDetail): void
   /** Non-destructive copy of the retained tail, oldest first. */
   snapshot(): readonly ForensicsEntry[]
   /** Transfer the retained tail to a sink (the only export port). */
@@ -85,7 +113,7 @@ export function createStreamForensicsReporter(env: StreamForensicsEnvironment = 
   const ring = env.ring ?? createForensicsRing()
   const kindCounts = new Map<StreamForensicsKind, number>()
   let count = 0
-  const report = ((kind: StreamForensicsKind, cause: string): void => {
+  const report = ((kind: StreamForensicsKind, cause: string, detail?: StreamForensicsDetail): void => {
     count += 1
     const kindCount = (kindCounts.get(kind) ?? 0) + 1
     kindCounts.set(kind, kindCount)
@@ -96,6 +124,12 @@ export function createStreamForensicsReporter(env: StreamForensicsEnvironment = 
       at: now(),
       count,
       kindCount,
+      // Optional keys are OMITTED when absent (not set to undefined): a fact that
+      // could not derive an attribution must keep the exact shape it always had.
+      ...(detail?.endpoint === undefined ? {} : { endpoint: detail.endpoint }),
+      ...(detail?.streamId === undefined ? {} : { streamId: detail.streamId }),
+      ...(detail?.waitedMs === undefined ? {} : { waitedMs: detail.waitedMs }),
+      ...(detail?.sessionId === undefined ? {} : { sessionId: detail.sessionId }),
     }
     // Retain BEFORE the live dispatch: a throwing listener must not erase the fact
     // from the resident tail. The ring owns the bound and redaction (no-throw).
@@ -110,6 +144,20 @@ export function createStreamForensicsReporter(env: StreamForensicsEnvironment = 
   report.snapshot = (): readonly ForensicsEntry[] => ring.snapshot()
   report.flush = (sink: ForensicsSink): number => ring.flush(sink)
   return report
+}
+
+/**
+ * Best-effort session attribution for one opening fact. The request payload belongs to
+ * the DOMAIN call (its `args.request.address.sessionId` path is the session
+ * controller's own shape), NOT to this carrier's protocol, so every access is guarded,
+ * a missing/renamed path yields `undefined`, and this never throws: attribution is a
+ * diagnostic nicety, never a reason for a stream to fail.
+ */
+export function sessionIdOfPayload(payload: unknown): string | undefined {
+  if (typeof payload !== 'object' || payload === null) return undefined
+  const request = (payload as { args?: { request?: { address?: { sessionId?: unknown } } } }).args?.request
+  const sessionId = request?.address?.sessionId
+  return typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : undefined
 }
 
 /** Install the probe bridge: a page dispatch of {@link STREAM_FORENSICS_REQUEST_EVENT}

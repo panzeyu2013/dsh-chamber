@@ -180,7 +180,7 @@
 | **Swift 原生壳 = 权威与上游**（2026-09 裁决） | `docs/progress/deviations.md` §0 权威方向 | 推论：复用 main 更新的 `NativeText`（121 键 + 两 lproj）/`ShellPageFacts`/`RendererRecovery`；我们的 `ShellLocale` 字典与 `native-theme-set` Swift 腿是同一席位的较早形态 → 不搬；Electron 腿照搬 |
 | **macOS x64 暂时移除**（2026-12 用户决定） | design 25 §11 决策 B；design 11 §6.1 | 升级期间维持 arm64-only；三个重新引入前置满足前不重提 |
 | **P0/P1 清单**（更新链看门狗 / 原生崩溃诊断 / 可用性门 / 运行期恢复框 / 实机 runbook） | 台账 §8.a；你当时回复「按你的执行 P0/P1」 | 全部按 §7 移植，不是新决策 |
-| **会话流健康臂保持 fail-closed 降级**（2026-12 处理，含重 derive 条件） | STATUS ⑮ | 默认沿用现状（不抛错、不导航，落到「重新加载」提示臂） |
+| **会话流健康臂保持 fail-closed 降级**（2026-12 处理，含重 derive 条件） | STATUS ⑮ | 默认沿用现状（不抛错、不导航，落到「对话通道未恢复」提示臂；手动重载按钮已退役，见 design 14 §D4） |
 
 ### 2.2 已按推荐定案（2026-12，都是过程/时机，不是方向）
 
@@ -1142,7 +1142,7 @@ rc.1 对 §15/§16/§17 的修订（逐条执行）：
 | L1 对账臂上游未覆盖 | `connection.generation`→`refreshList` 仍下推 running | chamber 自持 `session-liveness.ts` + `session-fact-reconcile.ts` | 不改 | **保留** |
 | 单飞悬挂仍是缺口 | `manager.ts` 清除点有限 | L2 不依赖 store 收敛 | 不改；维持 STATUS | **保留** |
 | L2 reconnect 杠杆在，但 0.1.7 让 connection fork 必须重推 | `connection.admit()` 取代 `requestRejection`、`client/rpc.ts` +89、二进制 multipart | fork 的 `api-path.ts`/`client/rpc.ts` 等 | 按上游 diff 重推 + lockstep | **随 bump** |
-| 对话流健康臂 error/churn 子臂仍必需（上游 stream carrier 逐字节相同） | `remote-stream.ts` 0.1.7 未治因 | fork patch 2 + chip churn | 保留；`stream-client.ts` 补丁重推 | **保留 + 随 bump** |
+| 载波故障诊断事实仍保留（无仓内消费者；chip churn 提示已退役，用户裁决） | `remote-stream.ts` 0.1.7 未治因 | fork patch 2 + `stream-client.ts` 补丁 | 保留（诊断面）；`stream-client.ts` 补丁重推 | **保留 + 随 bump** |
 | heal 子臂在 0.1.7 仍恒不成立；发现非契约替代杠杆 `Session.resync()` | `ISessions` 仍无 `open(id)`；`resync()` 公开非契约、唯一调用者是 `configureSubagent` | probe 仍带 `FIXME(upstream-pin)` | 二选一：(a) 用 `resync()` 重推 error/loading 臂（加深非契约依赖）；(b) 删 heal 只留提示 | 下轮 |
 | loading 子臂、重启窗口 reload、pending-open-queue 均无上游替代 | `openState` 仍在；无运行时客户端插件装载；无 durable 客户端队列 | chamber 三条自持 | 不改（合并登记） | **保留** |
 | 控制面 jobs 面整体消失，chamber 不消费 | 0.1.7 删 `SessionControlBaseline.jobs` | 仅测试假面引用 | 升级时清测试假面 | **随 bump** |

@@ -98,7 +98,6 @@ function warn(message: string, error?: unknown): void {
   console.warn('[unread] ' + message, error ?? '')
 }
 
-
 /** 宽松清洗：只留下合法键值，剥掉坏项（不整包丢弃）。 */
 export function sanitizeUnreadPayload(value: unknown): UnreadV4Payload {
   const payload = emptyUnreadPayload()
@@ -467,16 +466,56 @@ export function advanceReadMark(current: number | undefined, watermark: number |
   return current
 }
 
-/** 每会话内容水位 = max(updatedAt, completedAt)；返回全表最大（read-all 的 through）。 */
+/**
+ * 每会话 host 域内容水位 = max(updatedAt, completedAt)，completedAt **只在非 observer 域参与**。
+ *
+ * 唯一实现：observer 域的降级戳是客户端墙钟，只武装未读、绝不推进 durable 读水位。域盲的 max
+ * 会让一次 observer 戳把源级地板抬到客户端「现在」，之后 host 时间 ≤ 它的真完成被判已读、
+ * 点永久不出（读水位只升不降且落盘）。逐行 `viewingReadWatermark`（unread-derivation）与源级
+ * `maxWatermark` 共用本函数；非法/缺失值按 watermark 契约回落 0，绝不臆造。
+ */
+export function hostWatermark(
+  updatedAt: number | undefined,
+  completedAt: number | null | undefined,
+  completedAtDomain: 'host' | 'observer' | null | undefined,
+): number {
+  const hostCompletion = completedAtDomain === 'observer' ? null : completedAt
+  return maxWatermarkValue(updatedAt, hostCompletion)
+}
+
+/** 源级内容水位 = 全表逐行 host 域水位的最大（源级地板 / read-all 的 through）。逐行规则见 hostWatermark。 */
 export function maxWatermark(
-  rows: Readonly<Record<string, { updatedAt?: number; completedAt?: number | null }>>,
+  rows: Readonly<Record<string, { updatedAt?: number; completedAt?: number | null; completedAtDomain?: 'host' | 'observer' | null }>>,
 ): number {
   let max = 0
   for (const row of Object.values(rows)) {
-    const watermark = maxWatermarkValue(row.updatedAt, row.completedAt)
+    const watermark = hostWatermark(row.updatedAt, row.completedAt, row.completedAtDomain)
     if (watermark > max) max = watermark
   }
   return max
+}
+
+/**
+ * 源级读水位地板镜像：把 through 抬到 rows 里每个会话（单调、只升不降），返回新表。
+ * 「全部已读」动作与**首见基线播种**共用这一份实现——两者是同一条语义（把源级上界
+ * 认作已读），分开写就会出现两套地板规则。
+ */
+export function seedReadFloor(
+  table: Readonly<Record<string, number>>,
+  rows: Readonly<Record<string, unknown>>,
+  through: number,
+  keepUnread: Readonly<Record<string, boolean>> = {},
+): Record<string, number> {
+  const next: Record<string, number> = { ...table }
+  for (const sessionId of Object.keys(rows)) {
+    // 已武装的完成点是**未读账本**的事实，地板不得把它吸收掉（重载后恢复的点必须留）。
+    if (keepUnread[sessionId] === true) continue
+    // through 不可用（0/NaN/undefined）时 advanceReadMark 返回 undefined：该行保持原值或缺席，
+    // 绝不写入坏值（调用方另有 through > 0 守卫）。
+    const mark = advanceReadMark(next[sessionId], through)
+    if (mark !== undefined) next[sessionId] = mark
+  }
+  return next
 }
 
 

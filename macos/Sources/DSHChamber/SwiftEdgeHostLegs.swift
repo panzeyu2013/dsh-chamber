@@ -23,7 +23,7 @@
 //    退役，不经 edge）——notify 消费路由在 MainWindowController：按
 //    sourceId→identifier 登记表调 UNUserNotificationCenter
 //    .removeDeliveredNotifications(withIdentifiers:) 清除已展示横幅。
-//  GUI 分支实机验收属硬门禁（集成点见各腿注释 TODO；setLoginItem 的
+//  GUI 分支实机验收属硬门禁（setLoginItem 的
 //  register/unregister 真机调用、launchApp 的 Finder/vscode 真实拉起均须
 //  实机/签名环境）。
 //

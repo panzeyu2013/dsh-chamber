@@ -13,10 +13,17 @@
  * the official retain result in the sessions list snapshot — never from a
  * chamber-side `current` mirror.
  *
- * `resync()` has two entry points: the user's click (available while the stall
- * holds) and the ladder's automatic arm, which may fire only on POSITIVE
- * evidence that no open is in flight — an in-flight open is a slow Host being
- * waited on, never interrupted.
+ * `resync()` has ONE entry point: the ladder's automatic arm (the manual
+ * control was retired), which may fire only on POSITIVE evidence that no open
+ * is in flight — an in-flight open is a slow Host being waited on, never
+ * interrupted.
+ *
+ * The page stream-forensics channel (`dsh-chamber:stream-forensics`) is read
+ * here too: a terminal opening fact (`opening-budget-exhausted` /
+ * `opening-orphaned`) is retained in a page-level ledger and surfaced by the
+ * seats, so an opening that died while its promise stayed pending becomes
+ * visible instead of parking the page at "loading history".
+ * Unknown kinds, drifted shapes and an absent channel change nothing.
  *
  * The vendor face is read through a loose structural slice (no d.ts tree is
  * published for these runtime objects) and EVERY access is guarded here: an
@@ -25,6 +32,16 @@
  * and a `resync()` promise is settled with a no-op catch.
  */
 import { sessionOpenPromiseInFlight } from '@dsh-chamber/dsh-chamber-client-core'
+import { OPENING_TIMEOUT_LADDER_MS } from '@dsh-chamber/dsh-stream-state'
+
+/**
+ * How long a terminal fact may still describe the stall the page is looking at.
+ * A ladder must be spent before one is published, so a fact older than the whole
+ * ladder belongs to an episode the user has already left (or one that recovered
+ * without an `opening-accepted` retirement) and must not fail a fresh loading seat.
+ * Derived from the single-sourced ladder table, never a second magic number.
+ */
+const OPENING_FAILURE_FRESH_MS = OPENING_TIMEOUT_LADDER_MS.reduce((sum, ms) => sum + ms, 0)
 
 /** One session row slice of the official list snapshot the probe reads. */
 export interface SessionRowLoose {
@@ -163,11 +180,216 @@ export function sessionOpenState(
  * target, and is that target on stage at all? This is the ONE header-arm
  * capability read: the ladder's `resyncAvailable` observation and the page's
  * `healRoute` evidence both come from here, so a build without the concrete
- * method (or a target the main view does not retain) never arms the control and
- * never looks healable to the page.
+ * method (or a target the main view does not retain) never arms the automatic
+ * heal and never looks healable to the page.
  */
 export function hasSessionStreamResync(sessions: SessionsLoose | undefined, targetId: string): boolean {
   return readSessionResyncFace(sessions, targetId) !== undefined
+}
+
+/**
+ * Page-level terminal-opening evidence, read back from the in-repo api-gateway
+ * fork's stream-forensics channel (design 14 §D4). The fork publishes one
+ * bounded fact per lifecycle transition. ONLY the ladder's end is a verdict:
+ * `opening-budget-exhausted` (always, at the cap) and `opening-orphaned` (the
+ * cap was reached with frames delivered but never accepted) say the logical
+ * stream's opening will never settle. A widening miss is a DIAGNOSTIC (`opening-miss`), and a terminal
+ * `opening-timeout` (no frame ever arrived) ships ALONGSIDE the always-published
+ * `opening-budget-exhausted`, so this ledger needs only the budget fact;
+ * both are deliberately ignored here - a healthy-but-slow Host on rung 1 of 5
+ * must never be shown as failed. `opening-accepted` retires the evidence for
+ * the opening it belongs to. Facts carry no payload, prompt or credential.
+ *
+ * TOLERANCE: unknown kinds and drifted shapes are IGNORED. A fact names the
+ * instance it happened in and, when the publisher can attribute one, the
+ * session; an unattributed fact counts for whichever session is presented and
+ * loading, which is the only page-visible candidate. A page whose bundle
+ * predates these kinds (or that carries no plugin publishing them) leaves the
+ * ledger empty, and every reader then behaves exactly as before.
+ */
+
+/** Window event the in-repo api-gateway fork publishes one bounded stream fact on. */
+const STREAM_FORENSICS_EVENT = 'dsh-chamber:stream-forensics'
+
+/** The two terminal opening outcomes a stream fact can carry. */
+export type SessionOpeningFailure = 'budget-exhausted' | 'orphaned'
+
+/** One parsed opening outcome; `accepted` retires a recorded failure. */
+export interface SessionOpeningOutcome {
+  readonly outcome: 'accepted' | SessionOpeningFailure
+  readonly instanceId: string | undefined
+  /** The session the publisher attributed the opening to, when it could. */
+  readonly sessionId: string | undefined
+  /** The fact's own publish time (0 when the channel carried none). */
+  readonly at: number
+}
+
+/**
+ * Parse one `dsh-chamber:stream-forensics` detail. Unknown kinds, absent
+ * fields and hostile shapes yield null — the channel is data, never a command.
+ */
+export function parseSessionOpeningOutcome(detail: unknown): SessionOpeningOutcome | null {
+  if (detail === null || typeof detail !== 'object') return null
+  const record = detail as {
+    readonly kind?: unknown
+    readonly instanceId?: unknown
+    readonly sessionId?: unknown
+    readonly at?: unknown
+  }
+  const outcome = record.kind === 'opening-accepted'
+    ? 'accepted'
+    : record.kind === 'opening-budget-exhausted'
+      ? 'budget-exhausted'
+      : record.kind === 'opening-orphaned'
+        ? 'orphaned'
+        : null
+  if (outcome === null) return null
+  return {
+    outcome,
+    instanceId: typeof record.instanceId === 'string' ? record.instanceId : undefined,
+    sessionId: typeof record.sessionId === 'string' ? record.sessionId : undefined,
+    at: typeof record.at === 'number' && Number.isFinite(record.at) ? record.at : 0,
+  }
+}
+
+/** One retained terminal-opening fact. */
+export interface SessionOpeningFailureFact {
+  readonly instanceId: string | undefined
+  readonly sessionId: string | undefined
+  readonly failure: SessionOpeningFailure
+  /** The fact's own publish time (0 when the channel carried none). */
+  readonly at: number
+}
+
+/** Reader face every seat consumes; the store itself is page-global. */
+export interface SessionOpeningFailureLedger {
+  /** Record one page fact; unknown kinds/shapes are ignored, never thrown. */
+  record(detail: unknown): void
+  /**
+   * The latest FRESH failure for this instance/session (an exact session match
+   * first, then an unattributed instance-level fact), or undefined = no evidence.
+   * `now` is the reader's clock; a fact older than the whole opening ladder is
+   * stale evidence about an episode that is over.
+   */
+  failureFor(instanceId: string | undefined, sessionId: string, now?: number): SessionOpeningFailureFact | undefined
+  /** Wake-up for fact arrivals, so a visible seat re-plans immediately. */
+  subscribe(listener: () => void): () => void
+}
+
+/** Memory bound: sessions whose opening failed since this page loaded. */
+const OPENING_FAILURE_MEMORY = 64
+
+interface OpeningFailureState {
+  /** Keyed `instance\0session`; a fact that named its session. */
+  readonly bySession: Map<string, SessionOpeningFailureFact>
+  /** Keyed `instance`; an unattributed fact covers every session of it. */
+  readonly byInstance: Map<string, SessionOpeningFailureFact>
+  readonly listeners: Set<() => void>
+  listening: boolean
+}
+
+const OPENING_FAILURE_KEY = Symbol.for('dsh-chamber:session-opening-failures')
+const openingFailureRealm = globalThis as unknown as Record<symbol, OpeningFailureState | undefined>
+
+function openingFailureState(): OpeningFailureState {
+  const existing = openingFailureRealm[OPENING_FAILURE_KEY]
+  if (existing !== undefined) return existing
+  const created: OpeningFailureState = {
+    bySession: new Map(),
+    byInstance: new Map(),
+    listeners: new Set(),
+    listening: false,
+  }
+  openingFailureRealm[OPENING_FAILURE_KEY] = created
+  return created
+}
+
+function openingFailureKey(instanceId: string | undefined, sessionId: string): string {
+  return (instanceId ?? '') + '\u0000' + sessionId
+}
+
+/** Insert with recency ordering and the memory bound (oldest-first eviction). */
+function retainOpeningFailure(
+  map: Map<string, SessionOpeningFailureFact>,
+  key: string,
+  fact: SessionOpeningFailureFact,
+): void {
+  map.delete(key)
+  map.set(key, fact)
+  if (map.size <= OPENING_FAILURE_MEMORY) return
+  const oldest = map.keys().next().value
+  if (oldest !== undefined) map.delete(oldest)
+}
+
+/** One listener's failure must never break the page (or the other listeners). */
+function notifyOpeningFailure(state: OpeningFailureState): void {
+  for (const listener of [...state.listeners]) {
+    try { listener() } catch { /* swallowed by contract */ }
+  }
+}
+
+/**
+ * The page's ONE opening-failure ledger. The renderer shell and the host-loaded
+ * client plugin bundle this module separately, so the store and its forensics
+ * listener are shared through the page realm, never module identity. Without a
+ * DOM (tests) the in-memory face stays and callers drive `record` directly.
+ */
+export function sessionOpeningFailureLedger(): SessionOpeningFailureLedger {
+  const state = openingFailureState()
+  const ledger: SessionOpeningFailureLedger = {
+    record(detail) {
+      const parsed = parseSessionOpeningOutcome(detail)
+      if (parsed === null) return
+      if (parsed.outcome === 'accepted') {
+        // Retire what this accepted opening proves: its own session's fact, and the
+        // instance-level fallback - an accept proves the carrier answers for that
+        // INSTANCE now, and the fallback was only ever a coarse guess at which
+        // session an unattributed fact belonged to (a wrong guess must not outlive
+        // the evidence that contradicts it).
+        if (parsed.sessionId !== undefined) {
+          state.bySession.delete(openingFailureKey(parsed.instanceId, parsed.sessionId))
+        }
+        state.byInstance.delete(parsed.instanceId ?? '')
+        notifyOpeningFailure(state)
+        return
+      }
+      const fact: SessionOpeningFailureFact = {
+        instanceId: parsed.instanceId,
+        sessionId: parsed.sessionId,
+        failure: parsed.outcome,
+        at: parsed.at,
+      }
+      if (parsed.sessionId === undefined) {
+        retainOpeningFailure(state.byInstance, parsed.instanceId ?? '', fact)
+      } else {
+        retainOpeningFailure(state.bySession, openingFailureKey(parsed.instanceId, parsed.sessionId), fact)
+      }
+      notifyOpeningFailure(state)
+    },
+    failureFor(instanceId, sessionId, now) {
+      const clock = now ?? Date.now()
+      // A fact that carries no time (an older/channel-lite bundle) is taken at face
+      // value, exactly as before this window existed; a stamped one expires with the
+      // ladder that produced it.
+      const fresh = (fact: SessionOpeningFailureFact | undefined): SessionOpeningFailureFact | undefined =>
+        fact === undefined || fact.at === 0 || clock - fact.at <= OPENING_FAILURE_FRESH_MS ? fact : undefined
+      return fresh(state.bySession.get(openingFailureKey(instanceId, sessionId)))
+        ?? fresh(state.byInstance.get(instanceId ?? ''))
+    },
+    subscribe(listener) {
+      state.listeners.add(listener)
+      return () => { state.listeners.delete(listener) }
+    },
+  }
+  if (!state.listening && typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    state.listening = true
+    window.addEventListener(STREAM_FORENSICS_EVENT, (event: Event): void => {
+      try {
+        ledger.record((event as CustomEvent<unknown>).detail)
+      } catch { /* a page listener must never break the lifecycle it observes */ }
+    })
+  }
+  return ledger
 }
 
 // Session.resync() waits for the old stream's dispose before starting open().
@@ -189,8 +411,9 @@ export function sessionStreamResyncInFlight(sessions: SessionsLoose | undefined,
 
 /**
  * Rebuild one session's stream through the concrete vendor method. Called from
- * the error arm's automatic heal and from the user's control; the seat accounts
- * each attempt against the session ledger. The async `resync()` may reject and
+ * the error arm's automatic heal only (the manual control was retired); the seat
+ * accounts each attempt against the session ledger. The async `resync()` may
+ * reject and
  * is settled with a no-op catch — the chip is a status surface, not an error
  * channel, and this file never touches the transport.
  */

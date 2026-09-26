@@ -14,9 +14,9 @@
  * for an error face (rc.2; the stage-move lever died with its `sessions.open`
  * API). The renderer's page-level recovery seat owns the automatic rebuild for
  * a face the header cannot heal, so it also runs when the conversation header
- * never mounts. The plan's `'resync'` action merely ARMS the chip's control; the
- * click reaches `resync()` below, which is deliberately NOT ledger-gated (the
- * header ledger bounds the automatic error heal; a human click is its own bound).
+ * never mounts. The plan has no user-triggered action (the manual reload/rebuild
+ * controls were retired); the chip only reports, and every escalation is
+ * automatic.
  *
  * Registered BEFORE the open-in gates: a source whose open-in id does not parse
  * still gets the recovery chip.
@@ -33,7 +33,8 @@ import {
   type SessionStreamHealthState,
 } from './session-stream-health.ts'
 import {
-  hasSessionStreamResync, resyncSessionStream, sessionStreamResyncInFlight, type SessionsLoose,
+  hasSessionStreamResync, resyncSessionStream, sessionOpeningFailureLedger,
+  type SessionsLoose,
 } from './session-stream-health-probe.ts'
 import { SessionStreamHealthChip, type SessionStreamHealthInjected } from './SessionStreamHealthChip.tsx'
 
@@ -45,20 +46,6 @@ const SLOT_ID = 'chamber-stream-health'
 
 /** How many per-session ladder states the entry keeps (recency-capped). */
 const LADDER_MEMORY = 64
-
-/**
- * Manual-rebuild double-click window: the click is not ledger-gated, so this
- * guard is the only thing pacing it — the pinned `Session.resync()` awaits
- * `events.dispose()` before bumping the generation, so two clicks could start two opens.
- */
-const MANUAL_RESYNC_GUARD_MS = 1_000
-
-/**
- * Page-level carrier-churn event published by the in-repo api-gateway fork.
- * Duplicated as a literal on purpose: a client plugin must not deepen an import
- * path into the fork at bundle time (a lockstep test pins the two spellings).
- */
-const CARRIER_CHURN_EVENT = 'dsh-chamber:stream-carrier-failed'
 
 /**
  * Resolve the instance's session face LAZILY, one call at a time. This plugin
@@ -83,51 +70,37 @@ function readSessions(ctx: ClientContext): SessionsLoose | undefined {
 
 export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate): void {
   /**
-   * Latest carrier-churn fact for THIS source. The page hosts every boot ctx, so
-   * the fact is attributed and filtered here; an unattributed fact is fail-open.
+   * Render-side wake-up subscribers (the chip). Announced, not passed as a value:
+   * the terminal opening fact must surface the moment it lands instead of waiting
+   * for the chip's next 1 s tick.
    */
-  let carrierChurn: { at: number; count: number } | undefined
-  /**
-   * Render-side subscribers (the chip). The fact stays in this closure and a new
-   * observation is announced, not passed as a value: while the session stays
-   * `open` the chip’s ticker is off, so an unannounced event is never planned.
-   */
-  const churnListeners = new Set<() => void>()
+  const wakeListeners = new Set<() => void>()
   const ownInstanceId = (ctx as { readonly chamberInstanceId?: string }).chamberInstanceId
+  /**
+   * Terminal opening evidence published by the in-repo api-gateway fork. The
+   * fact lives in the page-level ledger (shared with the renderer's page seat
+   * through the one page realm); this seat only wakes the chip, so the failure
+   * notice appears the moment the evidence lands. Reading the ledger ALSO
+   * installs its one page listener; an absent/or drifted channel changes nothing.
+   */
+  const openingFailures = sessionOpeningFailureLedger()
   ctx.effect(() => {
-    if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return
-    const onChurn = (event: Event): void => {
-      const detail = (event as CustomEvent<{ instanceId?: unknown; at?: unknown; count?: unknown }>).detail
-      if (detail === null || typeof detail !== 'object') return
-      if (ownInstanceId !== undefined && typeof detail.instanceId === 'string' && detail.instanceId !== ownInstanceId) return
-      const at = typeof detail.at === 'number' && Number.isFinite(detail.at) ? detail.at : Date.now()
-      const count = typeof detail.count === 'number' && Number.isFinite(detail.count)
-        ? detail.count
-        : (carrierChurn?.count ?? 0) + 1
-      carrierChurn = { at, count }
-      for (const listener of [...churnListeners]) listener()
-    }
-    window.addEventListener(CARRIER_CHURN_EVENT, onChurn)
+    const unsubscribe = openingFailures.subscribe(() => {
+      for (const listener of [...wakeListeners]) listener()
+    })
+    // Disposal drops the ledger subscription AND the chip callbacks: a disposed
+    // seat must not keep firing render-side wake-ups (the retired churn effect
+    // used to clear them).
     return () => {
-      window.removeEventListener(CARRIER_CHURN_EVENT, onChurn)
-      churnListeners.clear()
+      unsubscribe()
+      wakeListeners.clear()
     }
-  }, 'dsh-chamber: stream carrier churn fact')
+  }, 'dsh-chamber: stream opening failure wake-up')
 
   /** Per-session ladder state, keyed the way the budget is defined. */
   const ladders = new Map<string, SessionStreamHealthState>()
-  /**
-   * Last manual rebuild per session: the click is deliberately NOT ledger-gated,
-   * so this is the only thing pacing it (two clicks inside one window could
-   * start two opens).
-   */
-  const lastManualResyncAt = new Map<string, number>()
 
-  /**
-   * Re-insert a session’s ladder state to refresh its recency, then cap the map.
-   * Shared by the automatic heal and the user-clicked resync so both spend the
-   * same per-session ledger.
-   */
+  /** Re-insert a session’s ladder state to refresh its recency, then cap the map. */
   const storeLadder = (sessionId: string, state: SessionStreamHealthState): void => {
     ladders.delete(sessionId)
     ladders.set(sessionId, state)
@@ -149,6 +122,15 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
   ): SessionStreamHealthPlan => {
     try {
       const sessions = readSessions(ctx)
+      // Evidence is read for a loading target only: that is the one arm it
+      // speaks to, and a proven-dead opening must be visible NOW — while the
+      // seat still never re-issues it automatically (it only reports).
+      const openingFailure = openState === 'loading'
+        ? openingFailures.failureFor(ownInstanceId, sessionId, now)
+        : undefined
+      // One guarded capability read: the automatic heal's route and the reachable
+      // face answer the same question, so they must not be able to disagree.
+      const resyncAvailable = hasSessionStreamResync(sessions, sessionId)
       const plan = planSessionStreamHealth(
         ladders.get(sessionId) ?? createSessionStreamHealthState(),
         {
@@ -156,9 +138,9 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
           presented: surfacePresented,
           // The automatic heal executes the concrete resync on the PRESENTED
           // target, so both facts come from the same guarded probe read.
-          healRoute: hasSessionStreamResync(sessions, sessionId),
-          resyncAvailable: hasSessionStreamResync(sessions, sessionId),
-          ...(carrierChurn === undefined ? {} : { carrierChurn }),
+          healRoute: resyncAvailable,
+          resyncAvailable,
+          ...(openingFailure === undefined ? {} : { openingFailure: openingFailure.failure }),
         },
         now,
         SESSION_STREAM_HEALTH_DEFAULTS,
@@ -181,37 +163,14 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
   const face: SessionStreamHealthInjected = {
     t,
     step,
-    // Carrier-churn wake-up for the renderer: the chip bumps its tick so
-    // the ladder re-plans and the "reconnecting…" notice can appear and expire.
+    // Wake-up for the renderer: the chip bumps its tick so a terminal opening
+    // fact is planned immediately instead of on its next 1 s tick.
     subscribe: (listener) => {
-      churnListeners.add(listener)
-      return () => { churnListeners.delete(listener) }
+      wakeListeners.add(listener)
+      return () => { wakeListeners.delete(listener) }
     },
-    // The user's own action — never taken automatically (design 14 discipline).
-    reload: () => { window.location.reload() },
-    // The user’s own per-session rebuild through the probe’s guarded slice. NOT
-    // ledger-gated on purpose: the ledger bounds the AUTOMATIC arm, while the
-    // manual exit must survive an exhausted automatic budget — but the attempt is
-    // still stamped so it paces the automatic arm.
-    resync: (sessionId) => {
-      try {
-        const sessions = readSessions(ctx)
-        if (sessionStreamResyncInFlight(sessions, sessionId)) return
-        const now = Date.now()
-        // Double-click guard: a manual click is NOT ledger-gated, so two clicks in
-        // the same second would call `resync()` twice — two generations, two streams.
-        const previousManual = lastManualResyncAt.get(sessionId)
-        if (previousManual !== undefined && now - previousManual < MANUAL_RESYNC_GUARD_MS) return
-        lastManualResyncAt.set(sessionId, now)
-        const current = ladders.get(sessionId) ?? createSessionStreamHealthState()
-        // Account the attempt whether or not this build exposes the method (the
-        // one-stamp-per-attempt rule): a face that vanished must not stay armed for a retry loop.
-        resyncSessionStream(sessions, sessionId)
-        storeLadder(sessionId, markSessionStreamHeal(current, now))
-      } catch {
-        // Never throws into React, and this package's client sources may not log.
-      }
-    },
+    // No user-triggered action exists (retired by user ruling); the face's only
+    // side effect is the automatic heal executed by `step`.
   }
 
   ctx.slots.inject(STREAM_HEALTH_HEADER_SLOT, () => ctx.slots.register({

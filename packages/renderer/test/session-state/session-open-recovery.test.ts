@@ -16,7 +16,7 @@ test('a transiently missing probe cannot reset the loading deadline', () => {
   const loading = advanceSessionOpenHealth(null, 's1', { openState: 'loading', resyncAvailable: true }, 0)
   assert.ok(loading !== null)
   const missing = advanceSessionOpenHealth(loading, 's1', null, 90_000)
-  assert.equal(missing?.resyncAvailable, false)
+  assert.equal(missing?.openInFlight, undefined, 'a missing face claims no in-flight resync')
   assert.equal(missing?.since, 0)
   assert.equal(sessionOpenRecoveryPhase(missing?.state, (missing?.now ?? 0) - (missing?.since ?? 0)), 'failed')
   const open = advanceSessionOpenHealth(missing, 's1', { openState: 'open', resyncAvailable: true }, 90_001)
@@ -39,4 +39,18 @@ test('an absent session face has a deadline while a genuinely blank face does no
   assert.equal(presentedSessionOpenRecoveryPhase(open, 's1', false), 'quiet')
   const disappeared = advanceSessionOpenHealth(open, 's1', null, 90_002)
   assert.equal(disappeared?.since, 90_002, 'a face disappearing after a real open starts a new incident')
+})
+
+test('terminal opening evidence shows the failure now, without waiting for the timer', () => {
+  const loading = advanceSessionOpenHealth(null, 's1', { openState: 'loading', resyncAvailable: true }, 0)
+  assert.equal(presentedSessionOpenRecoveryPhase(loading, 's1', false), 'quiet', 'no evidence: today\'s timer stays quiet this early')
+  assert.equal(presentedSessionOpenRecoveryPhase(loading, 's1', false, true), 'failed',
+    'the fact is the failure, not the 20s/90s page timer')
+  assert.equal(presentedSessionOpenRecoveryPhase(loading, 's2', false, true), 'quiet',
+    'another session never inherits the evidence')
+  assert.equal(presentedSessionOpenRecoveryPhase(loading, 's1', true, true), 'failed',
+    'a known blank row is still a real loading failure candidate')
+  const open = advanceSessionOpenHealth(loading, 's1', { openState: 'open', resyncAvailable: true }, 1_000)
+  assert.equal(presentedSessionOpenRecoveryPhase(open, 's1', false, true), 'quiet',
+    'a settled open retires the notice')
 })

@@ -154,7 +154,8 @@ test('every remote-stream path reaches the one client reporter (source lock)', (
   assert.match(body, /reportStreamCarrierFailures\(/u, 'the non-$stream opener must publish the fact')
   assert.match(body, /error instanceof RemoteStreamCarrierError/u, 'it reports only already-classified carrier failures')
   assert.match(body, /this\.reportCarrierFailure/u, 'it uses the client one reporter')
-  assert.match(body, /this\.streams\.open\(endpoint, payload, signal\)/u, 'the mux logical-stream path is covered')
+  assert.match(body, /this\.streams\.open\(endpoint, payload, signal, resolved\)/u, 'the mux logical-stream path is covered')
+  assert.match(body, /const resolved = opening \?\? openingTicketOf\(signal\)/u, 'the generation ticket (F1) reaches the mux on this same path')
   assert.match(body, /normalizeConnectionStream\(local\)/u, 'the worker-local path is covered')
   assert.match(index, /carrierFailed: \(error: RemoteStreamCarrierError\): void => \{[\s\S]*?this\.reportCarrierFailure\(error\)/u,
     '$stream composition still reports through the same instance')
@@ -162,8 +163,8 @@ test('every remote-stream path reaches the one client reporter (source lock)', (
 
 test('every non-$stream consumer opens through openRemoteStream (source lock)', () => {
   const index = sourceText('src/client/index.ts')
-  assert.match(index, /this\.openRemoteStream\(endpoint, \{ args: prepared\.args \}, prepared\.signal\)/u,
-    'generated endpoint streams (invokeStream)')
+  assert.match(index, /this\.openRemoteStream\(endpoint, \{ args: prepared\.args \}, prepared\.signal, prepared\.opening\)/u,
+    'generated endpoint streams (invokeStream), with the F1 opening ticket')
   assert.match(index, /\(endpoint, payload, signal\) => this\.openRemoteStream\(endpoint, payload, signal\)/u,
     'the forwarded Remote event stream (ClientRemoteEvents)')
 })

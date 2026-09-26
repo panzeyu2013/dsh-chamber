@@ -195,9 +195,11 @@ export function isFactsUsable(snapshot: SessionFactsSnapshot): boolean {
  * UNREAD consumer fall back to a channel-only recomputation while the very same
  * tick's snapshot still carried rows: the armed "completed" dot was pruned by
  * the channel-only pass and re-armed when the carrier returned — the Dock badge
- * and the row dot flickered once per carrier flap. The frozen-unknown rule is
- * the fix: `entries present but not decidable ⇒ keep prevLedger untouched` (the
- * `factsVerified === false` branch of `deriveSourceUnread`).
+ * and the row dot flickered once per carrier flap. Rule 0 is the fix, and its
+ * scope is the *facts conclusion* only: with a channel present the derivation
+ * still settles by channel edges (arming is never frozen), and `prevLedger` is
+ * returned untouched only when facts AND channel are both absent (design 19
+ * §3.7.1; `factsVerified === false` with `channel === undefined`).
  */
 export function isFactsDecisionUsable(snapshot: SessionFactsSnapshot): boolean {
   return snapshot.verdict === 'ok' && snapshot.serviceable !== false && snapshot.stale !== true
@@ -211,7 +213,8 @@ export function isFactsDecisionUsable(snapshot: SessionFactsSnapshot): boolean {
  *
  *   snapshot absent            → { rows: undefined, verified: true  }  (channel-only)
  *   snapshot present, decidable → { rows: snapshot.rows, verified: true }
- *   snapshot present, undecidable → { rows: undefined, verified: false } (frozen: rule 0)
+ *   snapshot present, undecidable → { rows: undefined, verified: false } (rule 0:
+ *                                  no facts evidence; channel edges still arm)
  *
  * Callers (the unread wiring, the read-watermark advance, `markSourceAllRead`)
  * must take BOTH values from this call; never compute either by hand.

@@ -301,7 +301,9 @@ test('a silent socket is REPLACED when an opening item times out on it', async (
   assert.equal(FakeSocket.instances[0].readyState, FakeSocket.CLOSED)
   // P5/P3: the executor records the reducer's decision when it executes it, and the
   // caller labels the evidence afterwards — so `carrier-rebuild` precedes the label.
-  assert.deepEqual(facts.map(fact => fact.kind), ['opening-timeout', 'carrier-rebuild', 'socket-silent'])
+  // F1: a non-terminal rung is a MISS diagnostic; the verdict names (opening-timeout /
+  // opening-orphaned + opening-budget-exhausted) are published only at the ladder's end.
+  assert.deepEqual(facts.map(fact => fact.kind), ['opening-miss', 'carrier-rebuild', 'socket-silent'])
   await client.close()
   t.mock.timers.reset()
 })
@@ -576,7 +578,11 @@ test('a teardown on a socket that delivered a frame in the meantime leaves it al
   t.mock.timers.reset()
 })
 
-test('a stream answered with its opening item clears the opening budget key', async (t) => {
+test('a TICKET-LESS stream answered by its opening item clears the opening budget key', async (t) => {
+  // This is the delivery-as-acceptance equivalence for a direct mux consumer (no ticket
+  // crosses in): the delivered opening IS the acceptance, so the key is released. A
+  // ticket-managed stream (RemoteStream + prepareInvocation) keeps its budget until the
+  // consumer calls accept() — pinned by opening-phase-machine's F1/a and F1/f.
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
   const client = new RemoteStreamMuxClient()
