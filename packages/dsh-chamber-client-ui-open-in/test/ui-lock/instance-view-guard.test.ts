@@ -210,8 +210,7 @@ test('the aligned launch semantics are unchanged (250ms busy dress, 2s error, in
  * The React seat and chip are not importable under plain node, so their wiring
  * is pinned as source text. Covered: the registration order behind the open-in
  * gates, the per-session ladder ownership, the evidence-gated execution
- * discipline, the inert chip, and the cross-package churn constant shared with
- * the api-gateway fork.
+ * discipline, the inert chip, and the retired churn notice's absence.
  */
 const seat = stripComments(source('../../src/client/session-stream-health-seat.ts'))
 const chip = stripComments(source('../../src/client/SessionStreamHealthChip.tsx'))
@@ -240,7 +239,7 @@ test('stream-health seat: the page delivery owner owns every rebuild, the header
   assert.match(seat, /healRoute: resyncAvailable/,
     'the automatic heal executes resync on the presented target, so its gate is the same guarded probe read')
   assert.match(seat, /resyncAvailable,$/mu,
-    'the user control answers the same capability question: ONE guarded read, never two that can disagree')
+    'the heal route answers the same capability question as the presented face: ONE guarded read, never two that can disagree')
   const policy = stripComments(source('../../src/client/session-stream-health.ts'))
   assert.doesNotMatch(policy, /auto-resync/)
   assert.match(seat, /if \(plan\.action === 'heal'\) \{/)
@@ -252,6 +251,10 @@ test('stream-health seat: the page delivery owner owns every rebuild, the header
   // The automatic rebuild moved to the page-level delivery owner (one ladder, one
   // ledger); the retired planner must never return to the view.
   assert.doesNotMatch(page, /planSessionOpenAutoRebuild\(/)
+  // The failure overlay is text-only now (user ruling): the manual rebuild/reload
+  // buttons must not come back to the view.
+  assert.doesNotMatch(page, /sessionOpen\.rebuild|sessionOpen\.reload/)
+  assert.doesNotMatch(page, /instance-session-open-actions/)
   // Pin the FULL call, arguments included: dropping the monotonic `at` argument
   // makes the streak NaN, which disables every afterMs gate while name-only locks
   // and the pure-module tests stay green.
@@ -284,8 +287,6 @@ test('stream-health seat: the page delivery owner owns every rebuild, the header
   assert.match(page, /rebuildInstanceSessionStream\(instanceId, currentSessionId\)/)
   // The manual lever is retired (user ruling: upstream has no such control): the
   // header must not expose a reload, a rebuild, or the stamp that used to pace it.
-  assert.doesNotMatch(seat, /location\.reload\(\)/)
-  assert.doesNotMatch(seat, /resync: \(sessionId\) =>/)
   assert.doesNotMatch(seat, /lastManualResyncAt|MANUAL_RESYNC_GUARD_MS|sessionStreamResyncInFlight/)
   assert.doesNotMatch(stripComments(seat), /reload:|resync:/)
 })
@@ -301,7 +302,7 @@ test('stream-health chip: no control is rendered and the chip never acts on its 
   // no resync invocation at all.
   assert.doesNotMatch(chip, /<button/)
   assert.doesNotMatch(stripComments(chip), /face\.reload|face\.resync|resync\(sessionId\)/)
-  assert.doesNotMatch(chip, /reload\(|location\.reload/)
+  assert.doesNotMatch(chip, /reload\(/)
   assert.doesNotMatch(stripComments(chip), /onClick/)
 })
 
@@ -328,11 +329,11 @@ test('stream-health churn: the reconnecting notice and its page listener are ret
   // this lock also pins that nothing in the package reads it any more.
   const policy = stripComments(source('../../src/client/session-stream-health.ts'))
   assert.doesNotMatch(seat, /carrierChurn|CARRIER_CHURN_EVENT|stream-carrier-failed/u)
-  assert.doesNotMatch(seat, /window\.addEventListener/u, 'this seat must observe no page fact')
+  assert.doesNotMatch(seat, /window\.addEventListener/u, 'this seat observes no page event (the ledger owns its own listener)')
   assert.doesNotMatch(policy, /carrier-churn|carrierChurn|carrierChurnMs/u)
   assert.doesNotMatch(chip, /carrierChurn|carrier-churn/u)
   // The wake-up seam STAYS: a terminal opening fact must reach the chip at once
-  // instead of waiting for its next 1 s tick.
+  // (no page timer decides a proven-dead opening), not on its next 1 s tick.
   assert.match(seat, /wakeListeners\.add\(listener\)/u)
   assert.match(seat, /for \(const listener of \[\.\.\.wakeListeners\]\) listener\(\)/u)
   assert.match(chip, /useEffect\(\(\) => subscribe\(\(\) => setTick\(value => value \+ 1\)\), \[subscribe\]\)/u)

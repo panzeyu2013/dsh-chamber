@@ -43,7 +43,7 @@ const GROUPS = {
     'test/ui-lock/instance-view-guard.test.ts',
   ],
   // session-health: the conversation stream-health ladder (error ⇒ stage-move
-  // heal, parked loading ⇒ reload notice) and its imperative half
+  // heal, parked loading ⇒ stall notice) and its imperative half
   'session-health': [
     'test/session-health/session-stream-health.test.ts',
     'test/session-health/stream-health-chip-face.test.ts',

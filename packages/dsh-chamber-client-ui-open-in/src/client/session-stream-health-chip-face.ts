@@ -36,9 +36,9 @@ export function sessionStreamHealthChipFace(
 }
 
 /**
- * Whether the chip must keep its 1 s ticker armed: an idle session, an open
- * stream and a hidden page carry no timer; a holding arm or a visible notice
- * (whose threshold or clear condition still needs re-evaluating) does.
+ * Whether the chip must keep its 1 s ticker armed: an idle session and an open
+ * stream carry no timer; a holding arm or a non-open state (whose stall/failure
+ * deadline still needs ageing) does.
  */
 export function sessionStreamHealthChipHoldsTick(
   plan: SessionStreamHealthPlan,
@@ -48,18 +48,18 @@ export function sessionStreamHealthChipHoldsTick(
   if (!visible) return false
   return plan.state.phase !== 'idle'
     || (openState !== 'open' && openState !== 'cold')
-    || plan.notice !== null
 }
 
 /**
  * The `setPlan` identity rule: a plan whose visible surface is unchanged keeps
- * its previous object, or every tick would re-run the effects for nothing.
+ * its previous object, or every tick would re-run the effects for nothing. The
+ * rendered surface is the label/marker pair, which reads only the phase and the
+ * notice; `action` is executed by the seat, never rendered here.
  */
 export function sameSessionStreamHealthPlan(
   previous: SessionStreamHealthPlan,
   next: SessionStreamHealthPlan,
 ): boolean {
-  return previous.action === next.action
-    && previous.notice === next.notice
+  return previous.notice === next.notice
     && previous.state.phase === next.state.phase
 }

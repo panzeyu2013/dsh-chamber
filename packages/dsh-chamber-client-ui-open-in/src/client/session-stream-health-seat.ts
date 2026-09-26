@@ -84,18 +84,23 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
    * installs its one page listener; an absent/or drifted channel changes nothing.
    */
   const openingFailures = sessionOpeningFailureLedger()
-  ctx.effect(() => openingFailures.subscribe(() => {
-    for (const listener of [...wakeListeners]) listener()
-  }), 'dsh-chamber: stream opening failure wake-up')
+  ctx.effect(() => {
+    const unsubscribe = openingFailures.subscribe(() => {
+      for (const listener of [...wakeListeners]) listener()
+    })
+    // Disposal drops the ledger subscription AND the chip callbacks: a disposed
+    // seat must not keep firing render-side wake-ups (the retired churn effect
+    // used to clear them).
+    return () => {
+      unsubscribe()
+      wakeListeners.clear()
+    }
+  }, 'dsh-chamber: stream opening failure wake-up')
 
   /** Per-session ladder state, keyed the way the budget is defined. */
   const ladders = new Map<string, SessionStreamHealthState>()
 
-  /**
-   * Re-insert a session’s ladder state to refresh its recency, then cap the map.
-   * The automatic heal is the only writer, so the ledger it spends is the same
-   * one the cooldown and rolling budget are accounted against.
-   */
+  /** Re-insert a session’s ladder state to refresh its recency, then cap the map. */
   const storeLadder = (sessionId: string, state: SessionStreamHealthState): void => {
     ladders.delete(sessionId)
     ladders.set(sessionId, state)
@@ -164,8 +169,8 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
       wakeListeners.add(listener)
       return () => { wakeListeners.delete(listener) }
     },
-    // No user-triggered action exists (retired by user ruling): the only side
-    // effect of this face is the automatic heal executed by `step`.
+    // No user-triggered action exists (retired by user ruling); the face's only
+    // side effect is the automatic heal executed by `step`.
   }
 
   ctx.slots.inject(STREAM_HEALTH_HEADER_SLOT, () => ctx.slots.register({

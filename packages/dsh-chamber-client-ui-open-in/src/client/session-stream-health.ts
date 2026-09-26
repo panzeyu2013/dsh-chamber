@@ -47,12 +47,11 @@
  *  - `openState === 'error'` held past the grace ⇒ `heal` (the automatic
  *    per-session resync), retried on the cooldown while the rolling budget
  *    lasts;
- *  - a heal judged failed (grace + settle) ⇒ the reload notice **latches**
+ *  - a heal judged failed (grace + settle) ⇒ the 'heal-failed' notice **latches**
  *    while the retries continue: waiting out the whole rolling budget (~296 s)
- *    would hide the one action that works, and the chip would show
- *    "recovering…" over a repair that has already been judged. The judgment is
- *    taken from the **settle clock**
- *    (`lastHealAt + healSettleMs`), not from the 'healing' phase: the re-open
+ *    would show "recovering…" over a repair that has already been judged. The
+ *    judgment is taken from the **settle clock** (`lastHealAt + healSettleMs`),
+ *    not from the 'healing' phase: the re-open
  *    itself reports `loading` synchronously (vendor `doOpen()`) and a hidden
  *    stretch zeroes the phase, so a phase-gated latch would miss the notice in
  *    the common interleavings; the latch then rides through loading dwells and is
@@ -132,8 +131,8 @@ export interface SessionStreamObservation {
   /**
    * Terminal opening evidence for the PRESENTED session, read from the page
    * stream-forensics ledger. PRESENCE is the whole fact: the fork already judged
-   * this opening dead, so the loading arm shows the failure notice NOW and only
-   * arms the user's rebuild control — the automatic arm is not for this state.
+   * this opening dead, so the loading arm shows the failure notice NOW and never
+   * re-issues the open — the automatic arm is not for this state.
    */
   readonly openingFailure?: SessionOpeningFailure | undefined
 }
@@ -148,8 +147,8 @@ export interface SessionStreamHealthState {
   /** Epoch ms of the last EXECUTED heal (repair-settle clock). */
   readonly lastHealAt?: number
   /**
-   * A heal was executed AND judged failed without settling the error: the notice
-   * carries the reload action while automatic retries keep running. Cleared ONLY
+   * A heal was executed AND judged failed without settling the error: the failure
+   * notice latches while automatic retries keep running. Cleared ONLY
    * by an observed recovery (`open`/`cold`) — a `loading` dwell deliberately
    * retains the latch, because the re-open reports `loading` synchronously and a
    * hidden stretch zeroes the phase.
@@ -168,7 +167,7 @@ export interface SessionStreamHealthState {
 export interface SessionStreamHealthConfig {
   /** An `error` state must hold this long before the automatic re-open fires. */
   readonly errorGraceMs: number
-  /** A `loading` state must hold this long before the reload notice appears. */
+  /** A `loading` state must hold this long before the stall notice appears. */
   readonly loadingStallMs: number
   /**
    * A `loading` dwell past this bound is announced as a FAILURE ("content not
@@ -275,8 +274,8 @@ export function planSessionStreamHealth(
     let phase: SessionStreamPhase = continued ? state.phase : 'error-hold'
     let since = continued ? state.since : now
     let held = now - since
-    // Once a heal has been judged failed, the notice carrying the
-    // ONE action that works stays up while the automatic retries continue.
+    // Once a heal has been judged failed, the failure notice stays up
+    // while the automatic retries continue.
     let latched = state.healFailedLatched === true
 
     // A wall clock that jumped BACKWARDS (NTP step, VM resume) must never latch
@@ -369,7 +368,7 @@ export function planSessionStreamHealth(
     // timer thresholds keep ageing underneath if the evidence is retired.
     const failed = observation.openingFailure !== undefined
     const stalled = failed || now - since >= config.loadingStallMs
-    // The re-open's loading dwell must not take back an action the user was already offered (same rule as `markSessionStreamHeal`); the latch rides along.
+    // The re-open's loading dwell must not clear a failure already shown (same rule as `markSessionStreamHeal`); the latch rides along.
     const latched = state.healFailedLatched === true
     // The host's opening machine and the page's own bounded ladder own every
     // loading rebuild; this plan only reports the dwell (and the terminal fact).
@@ -416,8 +415,8 @@ export function planSessionStreamHealth(
 }
 
 /**
- * Account one EXECUTED lever — the automatic stage move or the user-clicked
- * resync: stamp it and move the settle clock, so the same session cannot spend
+ * Account one EXECUTED lever — the automatic stage-move heal: stamp it and
+ * move the settle clock, so the same session cannot spend
  * the ledger again inside {@link SessionStreamHealthConfig.healCooldownMs}.
  */
 export function markSessionStreamHeal(state: SessionStreamHealthState, now: number): SessionStreamHealthState {
@@ -426,7 +425,7 @@ export function markSessionStreamHeal(state: SessionStreamHealthState, now: numb
     since: now,
     healStamps: [...state.healStamps, now],
     lastHealAt: now,
-    // The latch is a user-visible contract, not a phase: a retry in flight must not hide the action the user was already offered.
+    // The latch is a user-visible contract, not a phase: a retry in flight must not clear the failure already shown.
     ...(state.healFailedLatched === undefined ? {} : { healFailedLatched: state.healFailedLatched }),
   }
 }

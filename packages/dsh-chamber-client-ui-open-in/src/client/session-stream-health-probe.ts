@@ -13,16 +13,16 @@
  * the official retain result in the sessions list snapshot — never from a
  * chamber-side `current` mirror.
  *
- * `resync()` has two entry points: the user's click (available while the stall
- * holds) and the ladder's automatic arm, which may fire only on POSITIVE
- * evidence that no open is in flight — an in-flight open is a slow Host being
- * waited on, never interrupted.
+ * `resync()` has ONE entry point: the ladder's automatic arm (the manual
+ * control was retired), which may fire only on POSITIVE evidence that no open
+ * is in flight — an in-flight open is a slow Host being waited on, never
+ * interrupted.
  *
  * The page stream-forensics channel (`dsh-chamber:stream-forensics`) is read
  * here too: a terminal opening fact (`opening-budget-exhausted` /
  * `opening-orphaned`) is retained in a page-level ledger and surfaced by the
  * seats, so an opening that died while its promise stayed pending becomes
- * visible and actionable instead of parking the page at "loading history".
+ * visible instead of parking the page at "loading history".
  * Unknown kinds, drifted shapes and an absent channel change nothing.
  *
  * The vendor face is read through a loose structural slice (no d.ts tree is
@@ -180,8 +180,8 @@ export function sessionOpenState(
  * target, and is that target on stage at all? This is the ONE header-arm
  * capability read: the ladder's `resyncAvailable` observation and the page's
  * `healRoute` evidence both come from here, so a build without the concrete
- * method (or a target the main view does not retain) never arms the control and
- * never looks healable to the page.
+ * method (or a target the main view does not retain) never arms the automatic
+ * heal and never looks healable to the page.
  */
 export function hasSessionStreamResync(sessions: SessionsLoose | undefined, targetId: string): boolean {
   return readSessionResyncFace(sessions, targetId) !== undefined
@@ -411,8 +411,9 @@ export function sessionStreamResyncInFlight(sessions: SessionsLoose | undefined,
 
 /**
  * Rebuild one session's stream through the concrete vendor method. Called from
- * the error arm's automatic heal and from the user's control; the seat accounts
- * each attempt against the session ledger. The async `resync()` may reject and
+ * the error arm's automatic heal only (the manual control was retired); the seat
+ * accounts each attempt against the session ledger. The async `resync()` may
+ * reject and
  * is settled with a no-op catch — the chip is a status surface, not an error
  * channel, and this file never touches the transport.
  */

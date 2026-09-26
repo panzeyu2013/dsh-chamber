@@ -88,7 +88,6 @@ test('the ticker holds while an arm, a non-open stream or a notice needs re-plan
   assert.equal(holds(planOf('idle', 'none', null), 'cold'), false, 'a cold session is quiet')
   assert.equal(holds(planOf('idle', 'none', null), 'loading'), true, 'a waiting open must keep planning')
   assert.equal(holds(planOf('idle', 'none', null), 'error'), true, 'an error must keep planning')
-  assert.equal(holds(planOf('idle', 'none', 'heal-failed'), 'open'), true, 'a visible notice keeps re-planning while the stream is open')
   assert.equal(holds(planOf('healing', 'heal', null), 'open'), true, 'an executed arm must settle on the clock')
   assert.equal(holds(planOf('idle', 'none', 'loading-stall'), 'open', false), false, 'a hidden page stops the clock')
 })
@@ -100,7 +99,8 @@ test('a re-plan is skipped exactly when the visible surface is unchanged', () =>
     true,
     'the clock alone must not re-render the same surface',
   )
-  assert.equal(sameSessionStreamHealthPlan(base, planOf('loading-hold', 'heal', 'loading-stall')), false)
+  assert.equal(sameSessionStreamHealthPlan(base, planOf('loading-hold', 'heal', 'loading-stall')), true,
+    'an action change the chip never renders must not re-render it')
   assert.equal(sameSessionStreamHealthPlan(base, planOf('loading-hold', 'none', 'loading-failed')), false)
   assert.equal(sameSessionStreamHealthPlan(base, planOf('healing', 'none', 'loading-stall')), false)
 })

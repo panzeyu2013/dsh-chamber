@@ -5,7 +5,7 @@
  * is recovered by the concrete per-session `Session.resync()` the pinned
  * controller ships off-contract (reached through the guarded structural slice):
  * the `'error'` arm runs it AUTOMATICALLY after its grace, the parked
- * `'loading'` arm only ARMS the user's control, and the presented fact is the
+ * `'loading'` arm only REPORTS (its manual control was retired), and the fact is the
  * official main view's `retainedBy.mainView` retention — a chamber-side
  * `current` mirror must never come back. Assertions live at the decision
  * boundary (pure module) and the effect boundary (a fake sessions face),
@@ -108,7 +108,7 @@ test('stream-health: the settle window is never sampled as "failed" and never re
   // Inside the settle window: no notice, no second heal.
   assert.equal(actions[2], 0)
   assert.equal(actions[3], 0)
-  // The judged failure latches the reload notice, and it stays up
+  // The judged failure latches the failure notice, and it stays up
   // while the cooldown-paced retry runs — no "recovering…" over a dead repair.
   assert.deepEqual(notices, [null, null, null, null, 'heal-failed', 'heal-failed'])
   // The window closes into the hold, and the cooldown (not the settle) paces
@@ -117,7 +117,7 @@ test('stream-health: the settle window is never sampled as "failed" and never re
   assert.equal(state.healStamps.length, 2)
 })
 
-test('stream-health: the cooldown paces the retries and the rolling budget ends the storm with a reload notice', () => {
+test('stream-health: the cooldown paces the retries and the rolling budget ends the storm with a failure notice', () => {
   const t1 = T0 + G
   const t2 = t1 + S
   const t3 = t1 + C
@@ -191,8 +191,8 @@ test('stream-health: the loading arm restarts its hold after an error-phase deto
 })
 
 test('stream-health: a loading stall is reported, never acted on, and only with the observed face', () => {
-  // The hold must AGE first, exactly like the stall notice it rides with: the
-  // control is never offered on the first frame of a load.
+  // The hold must AGE first, exactly like the stall notice it rides with:
+  // nothing is reported on the first frame of a load.
   const hold = planAt(createSessionStreamHealthState(), observe('loading', { resyncAvailable: true }), T0)
   assert.equal(hold.action, 'none')
   assert.equal(hold.notice, null)
@@ -200,7 +200,7 @@ test('stream-health: a loading stall is reported, never acted on, and only with 
   assert.equal(stalled.action, 'none', 'the header never rebuilds on its own')
   assert.equal(stalled.notice, 'loading-stall', 'the stall notice keeps its own timing')
   // Fail-closed on a build without the concrete face: the SAME stall with no
-  // observed availability arms nothing (and the reload arm is untouched).
+  // observed availability reports the same notice.
   const unavailable = planAt(hold.state, observe('loading', { resyncAvailable: false }), T0 + L)
   assert.equal(unavailable.action, 'none')
   assert.equal(unavailable.notice, 'loading-stall')
@@ -232,7 +232,7 @@ test('stream-health: the presented error heals automatically, and an exhausted b
   // control to offer.
   assert.equal(spentNotice.notice, 'heal-failed')
   // Fail-closed without the concrete face: no action is ever invented, and the
-  // reload notice only appears once the hold has outlived a repair attempt.
+  // failure notice only appears once the hold has outlived a repair attempt.
   const noLever = planAt(createSessionStreamHealthState(), observe('error', { resyncAvailable: false }), T0)
   const noFace = planAt(noLever.state, observe('error', { resyncAvailable: false }), T0 + G)
   assert.equal(noFace.action, 'none')
@@ -313,7 +313,7 @@ test('stream-health: both arms report their failure notice at the exact tick the
   assert.equal(lastNotice, T0 + 320_000)
 })
 
-test('stream-health: a judged-failed heal latches the reload notice while the retries continue', () => {
+test('stream-health: a judged-failed heal latches the failure notice while the retries continue', () => {
   const healed = T0 + G
   const judged = healed + S
   const retry = healed + C
@@ -377,8 +377,8 @@ test('stream-health: the latch hangs off the settle clock, not off the healing p
     { at: healed + 2_000, observation: observe('error') },
     { at: healed + 10_000, observation: observe('error') },
   ])
-  // The final tick arms the MANUAL control (the cooldown still blocks the
-  // automatic lane, and a human click is its own bound); the latch marker is
+  // The final tick is back past the grace while the cooldown still blocks the
+  // automatic lane, so the chip reports the failure notice; the latch marker is
   // what must stay unset — a false latch would pin the notice on a fresh episode.
   assert.deepEqual(recovered.notices, [null, null, null, null, 'heal-failed'])
   assert.equal(recovered.state.healFailedLatched, undefined, 'a fresh episode must not inherit the settled heal clock')
