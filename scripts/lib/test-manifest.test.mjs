@@ -17,6 +17,7 @@ import {
   manifestLockstepProblems, parseExecutedTestCount, parseManifestDump, parseReportedTotals, resolveJobs,
   runEntries, selectManifest, spawnCaptured,
 } from './test-manifest.mjs'
+import { roundRobinSchedule } from '../gates/run-checks.mjs'
 
 test('parseExecutedTestCount: spec summary counts executed bodies (pass + fail)', () => {
   const output = '\nℹ tests 7\nℹ suites 0\nℹ pass 6\nℹ fail 1\nℹ skipped 0\n'
@@ -217,6 +218,48 @@ test('runEntries: a failure stops new launches at the pool bound (fail-fast surv
     })
     assert.equal(failed?.entry.file, 'a-fail.test.mjs', 'the first failing entry in manifest order is reported')
     assert.equal(existsSync(join(root, 'started-c')), false, 'no new child may start after a failure is recorded')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('runEntries: a failure declared after a round-robin hole is still reported and printed', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-manifest-hole-'))
+  try {
+    writeFileSync(join(root, 'a-slow.test.mjs'), passingFixture('A', 400))
+    writeFileSync(join(root, 'a-never.test.mjs'), passingFixture('A2'))
+    writeFileSync(join(root, 'b-fail.test.mjs'), [
+      "console.log('ℹ tests 1')",
+      "console.log('ℹ pass 0')",
+      "console.log('ℹ fail 1')",
+      "console.log('FAIL-OUT-b')",
+      'process.exit(1)',
+      '',
+    ].join('\n'))
+    // Two entries for step A, one for step B: the round-robin schedule starts
+    // A#0 and B (index 1) first, so the stop-on-failure kill leaves A#1
+    // (index 1) unlaunched — a hole BEFORE the failing entry at index 2. An
+    // ordered-only failure record would never reach index 2 and the run would
+    // report success (the false green this pins).
+    const entries = [
+      { label: 'A', group: 'g', file: 'a-slow.test.mjs', nodeArgs: [] },
+      { label: 'A', group: 'g', file: 'a-never.test.mjs', nodeArgs: [] },
+      { label: 'B', group: 'g', file: 'b-fail.test.mjs', nodeArgs: [] },
+    ]
+    const printed = []
+    const { failed, failures } = await runEntries(entries, {
+      packageRoot: root,
+      jobs: 2,
+      log: line => printed.push(line),
+      writeStdout: text => printed.push(text),
+      writeStderr: () => {},
+      schedule: roundRobinSchedule(entries),
+    })
+    assert.equal(failed?.entry.file, 'b-fail.test.mjs',
+      'a failure after an unlaunched hole must still be reported')
+    assert.equal(failures.length, 1, 'without --continue exactly the first failure is recorded')
+    assert.ok(printed.join('').includes('FAIL-OUT-b'),
+      'the failing entry’s own transcript is printed even when the ordered flush cannot reach it')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
