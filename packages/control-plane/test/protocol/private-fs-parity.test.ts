@@ -801,6 +801,9 @@ test('the shared primitive surface and the one-sided extras are exactly as regis
     'rotatePrivateFileRingNoFollow',
     'samePrivateIdentity',
     'writePrivateFdAll',
+    // 命令候选探针（regular + executable）：托管宿主 node 解析与随包 pnpm PATH
+    // 探测共用；dsh-runtime 无同名副本，故登记为 control-plane 单侧项。
+    'isExecutableFile',
   ] as const
   const rtOnly = [
     'PRIVATE_RUNTIME_DIR_MODE',
