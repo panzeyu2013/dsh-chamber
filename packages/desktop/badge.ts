@@ -36,7 +36,7 @@ export function validateBadgeRequest(
 }
 
 /** 设置裁决：badgeEnabled 关闭时强制按 0 处理（清除）——renderer 始终推真实计数，
-  * 主进程裁决归零；重新开启时 pendingBadgeCount 经本函数（main.ts 的 reconcileBadge）恢复。 */
+  * 主进程裁决归零；重新开启时 badgeTarget 经本函数（shell-core 的 reconcileBadgeCount）恢复。 */
 export function adjudicateBadgeCount(
   settings: { badgeEnabled: boolean },
   count: number,

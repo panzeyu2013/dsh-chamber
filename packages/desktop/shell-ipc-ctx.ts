@@ -27,7 +27,8 @@ import type { TransportInstanceSpec } from './transport-provider.ts';
 export interface ShellMutableState {
   notificationOpenDrainReady: boolean
   deepLinkRendererReady: boolean
-  pendingBadgeCount: number | null
+  /** W4：最近一次 renderer 计数**意图**（电平），由 core 按当前设置裁决后重放。 */
+  badgeTarget: number | null
 }
 
 /** 渲染器深链 intent 的队列载荷（成功启动 VS Code 后的来源代际快照）。 */
@@ -46,6 +47,7 @@ export interface ShellIpcDeps {
     | 'showNativeNotification'
     | 'notificationSupported'
     | 'setBadge'
+    | 'setBadgeAndWait'
     | 'nativeThemeSet'
     | 'badgeCountApiAvailable'
     | 'isFocused'
@@ -68,7 +70,7 @@ export interface ShellIpcDeps {
 export interface ShellIpcCtx {
   deps: ShellIpcDeps
   MACOS_NOTIFICATION_SETTINGS_URL: string
-  applyBadgePresentation: (count: number) => boolean
+  applyBadgePresentation: (count: number) => Promise<boolean>
   applySettingsPatch: (patch: Partial<ChamberSettings>) => Promise<{ ok: true } | { ok: false; error: string }>
   captureVscodeSource: (instanceId: string) => NotificationSourceToken | null
   chamberSettingsStatus: () => ChamberSettingsStatus
@@ -87,7 +89,7 @@ export interface ShellIpcCtx {
   notificationSourceIncarnations: NotificationSourceIncarnations
   openInCtx: OpenInLaunchContext
   ownsNotificationSource: (token: NotificationSourceToken) => boolean
-  pendingBadgeCount: number | null
+  badgeTarget: number | null
   pendingNotificationOpens: BoundedAckDeliveryQueue<NotificationOpenIntent>
   pendingRendererIntents: BoundedAckDeliveryQueue<RendererVscodeIntent>
   projectInstances: (instances: readonly TransportInstanceSpec[]) => ProjectedRegistryInstance[]

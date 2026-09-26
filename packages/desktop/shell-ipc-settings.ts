@@ -164,18 +164,19 @@ export function registerSettingsHandlers(ctx: ShellIpcCtx): void {
   });
   // 未读徽标计数：renderer 推真实计数（0 = 清除）→ 白名单校验 → 记录意图 → 设置裁决
   // （badgeEnabled）→ 平台门 + edges.setBadge；返回是否实际应用，渲染端静默容忍 false。
-  deps.ipc.handle(IPC_CHANNELS.BADGE_COUNT, (payload: unknown) => {
+  deps.ipc.handle(IPC_CHANNELS.BADGE_COUNT, async (payload: unknown) => {
     const validated = validateBadgeRequest(payload);
     if (!validated.ok) {
       console.error(`[dsh-chamber] 徽标计数请求校验失败：${validated.error}`);
       return false;
     }
-    state.pendingBadgeCount = validated.count;
+    state.badgeTarget = validated.count;
     const count = adjudicateBadgeCount(
       { badgeEnabled: settingsIO.current().notifications.badgeEnabled },
       validated.count,
     );
-    return applyBadgePresentation(count);
+    // W4：返回**真实投递结果**（Swift 形态等腿回执），渲染端据此提交/重试而非被乐观值锁死。
+    return await applyBadgePresentation(count);
   });
   // Deep-link renderer readiness (hold/replay): App invokes this only after installing
   // deepLink.onIntent; cold-start launches held before that point replay now, navigation/crash resets the bit.

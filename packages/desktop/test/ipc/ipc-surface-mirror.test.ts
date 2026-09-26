@@ -1016,10 +1016,11 @@ test('no IPC_CHANNELS constant is dead or duplicated across the main-side files 
 
 test('badge wiring is pinned: handler registration + toggle-gated reconcile + quit clear (design 19 §3.7)', () => {
   const mainSource = mainSideSource()
-  assert.match(mainSource, /deps\.ipc\.handle\(IPC_CHANNELS\.BADGE_COUNT, \(payload: unknown\) => \{/, 'BADGE_COUNT handler must stay registered through the shell-core registrar (trustedIpc is applied by the assembly-side wrapper)')
+  // W4：处理器必须是 async——它等宿主的**真实腿回执**（setBadgeAndWait）才返回。
+  assert.match(mainSource, /deps\.ipc\.handle\(IPC_CHANNELS\.BADGE_COUNT, async \(payload: unknown\) => \{/, 'BADGE_COUNT handler must stay registered through the shell-core registrar (trustedIpc is applied by the assembly-side wrapper)')
   // 设置切换收敛仅在实际携带 badgeEnabled 键时执行（无关设置变更不重发）。
   assert.match(mainSource, /validated\.patch\.notifications\?\.badgeEnabled !== undefined/, 'reconcile must stay gated on badgeEnabled flips only')
   assert.match(mainSource, /reconcileBadgeCount\(\)/, 'toggle reconcile call must stay wired')
-  assert.match(mainSource, /if \(pendingBadgeCount !== null\)/, 'quit-time clear guard must stay')
+  assert.match(mainSource, /if \(badgeTarget !== null\)/, 'quit-time clear guard must stay')
   assert.match(mainSource, /app\.setBadgeCount\(0\)/, 'quit-time clear must stay a real native call')
 })

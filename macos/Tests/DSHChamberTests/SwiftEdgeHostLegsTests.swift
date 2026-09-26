@@ -55,7 +55,9 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         // canShowUI=true 但未接主窗：窗口守卫腿一律 no-window 诚实降级
         // （headless 测试绝不触发 NSWorkspace/NSApp/ProcessInfo 副作用）。
         let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { true }))
-        for method in ["setBadge", "setKeepAwake", "showItemInFolder", "showError", "showMessage"] {
+        // setBadge 不在此列：Dock 角标是**应用级**状态，不需要主窗（W4；清 0 写必须能在主窗
+        // 关闭后落地，否则 Dock 陈旧数字永远清不掉）。
+        for method in ["setKeepAwake", "showItemInFolder", "showError", "showMessage"] {
             let outcome = legs.respond(method: method, payload: nil)
             XCTAssertTrue(
                 outcome.error?.hasPrefix(SwiftEdgeHostLegs.uiUnavailablePrefix) ?? false,
@@ -63,6 +65,97 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
             )
             XCTAssertTrue(outcome.error?.contains("no-window") ?? false, method)
         }
+    }
+
+
+    /// W4：Dock 角标叶——不需要主窗、同值跳过、写后真读回。
+    func testSetBadgeNeedsNoWindowSkipsSameValueAndReportsReadback() {
+        var label: String?
+        var writes = 0
+        let legs = SwiftEdgeHostLegs(config: .init(
+            canShowUI: { true },
+            badgeLabel: { label },
+            setBadgeLabel: { next in
+                writes += 1
+                label = next
+            }
+        ))
+        // 未接 mainWindowProvider（无主窗）：写仍必须落地。
+        let count3: AnyCodable = .object(["count": .number(3)])
+        let first = legs.respond(method: "setBadge", payload: count3)
+        XCTAssertNil(first.error, "无主窗不得拒绝角标写（实际 \(first.error ?? "nil")）")
+        XCTAssertEqual(label, "3")
+        XCTAssertEqual(writes, 1)
+        guard case .object(let readback)? = first.result,
+              case .number(let reported)? = readback["count"],
+              case .bool(let applied)? = readback["applied"] else {
+            return XCTFail("读回应为 {count, applied} 对象（实际 \(String(describing: first.result))）")
+        }
+        XCTAssertEqual(reported, 3)
+        XCTAssertTrue(applied, "写后读回等于意图 ⇒ applied:true")
+        // 同值跳过：重复上报不再写 Dock，但读回仍一致（applied:true）。
+        let second = legs.respond(method: "setBadge", payload: count3)
+        XCTAssertEqual(writes, 1, "同值不得重复写 dockTile")
+        guard case .object(let again)? = second.result, case .bool(let stillApplied)? = again["applied"] else {
+            return XCTFail("读回缺失")
+        }
+        XCTAssertTrue(stillApplied)
+        // 清 0：写 nil（Dock 无角标）——「陈旧大数字清不掉」的直因必须走通。
+        let cleared = legs.respond(method: "setBadge", payload: .object(["count": .number(0)]))
+        XCTAssertNil(cleared.error)
+        XCTAssertNil(label)
+        XCTAssertEqual(writes, 2)
+    }
+
+    /// W4：宿主写后读不一致（别处改了角标）⇒ applied:false 如实回，不得谎报。
+    func testSetBadgeReadbackMismatchIsReported() {
+        let legs = SwiftEdgeHostLegs(config: .init(
+            canShowUI: { true },
+            badgeLabel: { "999" },
+            setBadgeLabel: { _ in }
+        ))
+        let outcome = legs.respond(method: "setBadge", payload: .object(["count": .number(4)]))
+        XCTAssertNil(outcome.error)
+        guard case .object(let payload)? = outcome.result,
+              case .bool(let applied)? = payload["applied"] else { return XCTFail("读回缺失") }
+        XCTAssertFalse(applied, "写后读不一致必须如实回未应用（调用方据此重试）")
+    }
+
+    /// W4：坏载荷绝不「兜底成 0」——缺 count 是协议违例，必须 loud 拒绝且**不碰 Dock**
+    /// （旧实现 `?? 0` 会把未知清成 0；清 0 是用户可见的破坏）。
+    func testSetBadgeRejectsMalformedPayloadWithoutClearing() {
+        var label: String? = "5"
+        var writes = 0
+        let legs = SwiftEdgeHostLegs(config: .init(
+            canShowUI: { true },
+            badgeLabel: { label },
+            setBadgeLabel: { next in
+                writes += 1
+                label = next
+            }
+        ))
+        let missing = legs.respond(method: "setBadge", payload: .object([:]))
+        XCTAssertEqual(missing.error, "swift-edge-unimplemented:setBadge:payload")
+        let wrong = legs.respond(method: "setBadge", payload: .object(["count": .string("3")]))
+        XCTAssertEqual(wrong.error, "swift-edge-unimplemented:setBadge:payload")
+        XCTAssertEqual(label, "5", "坏载荷绝不得把角标清成 0")
+        XCTAssertEqual(writes, 0, "坏载荷不得写 dockTile")
+    }
+
+    /// W4：同值跳过必须**按读回值**判定，不得按本地记忆——否则记忆与真实 dockTile 分叉后
+    /// 「跳过」会把写永久锁死（每次读回不一致、却每次都不写 ⇒ applied:false 死循环）。
+    func testSetBadgeSkipsByReadbackNotByMemory() {
+        var label: String? = "7"
+        let legs = SwiftEdgeHostLegs(config: .init(
+            canShowUI: { true },
+            badgeLabel: { label },
+            setBadgeLabel: { label = $0 }
+        ))
+        let outcome = legs.respond(method: "setBadge", payload: .object(["count": .number(4)]))
+        XCTAssertEqual(label, "4", "读回分叉时必须真的改写（不得因本地记忆相同而跳过）")
+        guard case .object(let payload)? = outcome.result,
+              case .bool(let applied)? = payload["applied"] else { return XCTFail("读回缺失") }
+        XCTAssertTrue(applied)
     }
 
     func testNotificationSyncPathDegradesWhenUIUnavailable() {

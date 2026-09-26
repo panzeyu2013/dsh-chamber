@@ -110,12 +110,48 @@ test('badge input is the renderer merged projection — the desktop never re-der
     'badge.ts must stay a pure intake/adjudication leaf; the count is the renderer merged projection',
   );
   const handler = badgeCountHandlerSource();
-  assert.match(handler, /pendingBadgeCount = validated\.count/, 'the holder records exactly the renderer-pushed count');
+  assert.match(handler, /badgeTarget = validated\.count/, 'the holder records exactly the renderer-pushed count');
   assert.match(handler, /adjudicateBadgeCount\(/, 'settings adjudication stays the only transform');
   assert.doesNotMatch(
     handler,
     /completedBySource|runtimeFacts|projectBadgeCount|\.sessions\b/,
     'the BADGE_COUNT handler must not tally sessions itself (single authority)',
+  );
+});
+
+// ---- 退出清 0 + 窗口恢复重放（W4；§5 验收矩阵第 3/9 行） ----
+
+/** main.ts 是退出清 0 的调用方：will-quit 必须走 shell-core 的同一入口（注释已剥离）。 */
+function mainSource(): string {
+  return stripComments(readFileSync(new URL('../../main.ts', import.meta.url), 'utf8'));
+}
+
+test('quit clear: guarded by an existing intent, resets the holder, and is wired from will-quit', () => {
+  const clear = shellCoreSource.slice(shellCoreSource.indexOf('export function clearBadgeIntentForQuit'));
+  assert.notEqual(clear, shellCoreSource, 'clearBadgeIntentForQuit must stay exported from shell-core');
+  assert.match(clear, /if \(badgeTarget !== null\)/, '曾有意图才触碰——无意图时不得写原生面（避免无谓日志）');
+  assert.match(clear, /badgeTarget = null/, '清除后必须复位意图（第二次退出/重放不得再触碰）');
+  assert.match(clear, /applyNativeClear\(\); \} catch/, '退出路径 best-effort：清失败不得阻断退出');
+  assert.match(mainSource(), /clearBadgeIntentForQuit\(/, 'main.ts 的 will-quit 必须调用它（退出在途不留 Dock 残留）');
+});
+
+test('main-window show is a badge replay edge, bound to the count reconcile at assembly', () => {
+  // W4：窗口恢复可见 / renderer finish 是「意图重放」边沿——无窗期或腿失败期丢弃的值
+  // 不必等下一次计数变化才恢复。
+  assert.match(
+    shellCoreSource,
+    /function handleMainWindowShown\(\): void \{[\s\S]*?replayBadgeIntent\?\.\(\)/,
+    'show 必须重放徽标意图',
+  );
+  assert.match(
+    shellCoreSource,
+    /replayBadgeIntent = reconcileBadgeCount/,
+    '重放钩子在装配期绑定到唯一裁决入口 reconcileBadgeCount',
+  );
+  assert.match(
+    shellCoreSource,
+    /let replayBadgeIntent: \(\(\) => void\) \| null = null/,
+    '钩子初值 null：未装配时重放是 no-op（幂等）',
   );
 });
 
@@ -128,7 +164,7 @@ test('badge intake keeps the renderer retry/reload-zero semantics (design 19 §3
   assert.doesNotMatch(handler, /Math\.max\(/, 'the holder must be replace-on-push, never a max/merge');
   // 主进程不做值去重：renderer 的有界 retry 会重推同值（IPC 拒绝后重试），
   // 「值相同即跳过」会把 retry 变成空转（app.setBadgeCount 本身幂等）。
-  assert.doesNotMatch(handler, /validated\.count === pendingBadgeCount/);
+  assert.doesNotMatch(handler, /validated\.count === badgeTarget/);
   // 平台门 + 设置裁决：重载 0 也走同一条呈现链（badgeEnabled 关时本就 0）。
   assert.match(handler, /applyBadgePresentation\(count\)/);
 });

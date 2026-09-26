@@ -437,12 +437,14 @@ let drainingRendererDeepLinkIntents = false;
 // 最近一次 OS 唤醒时间戳：无窗口常驻期间 held，窗口 show 时一次性补发（push 成功后清空）。
 let lastResume: number | null = null;
 
-// 未读徽标：core 持「最近一次意图」并按当前设置裁决（badgeEnabled 关闭 → 强制 0
-// 清除；重新开启 → reconcileBadgeCount 恢复）。quit 在途兜底清除；平台不支持与持续
-// 抛错的 loud 日志各压成一次，防重复推送刷屏。
-let pendingBadgeCount: number | null = null;
+// 未读徽标：core 持「最近一次意图」并按当前设置裁决（badgeEnabled 关闭 → 强制 0 清除；重开 →
+// reconcileBadgeCount 恢复）；quit 在途兜底清除，平台不支持与持续抛错的 loud 日志各压成一次。
+let badgeTarget: number | null = null;
 let badgeUnsupportedLogged = false;
 let badgeApplyErrorLogged = false;
+/** W4 徽标意图重放钩子（IPC 层注册）：show / did-finish-load 是模块级边沿，无窗期或腿失败期
+ *  丢弃的值不必等下一次计数变化才恢复。 */
+let replayBadgeIntent: (() => void) | null = null;
 
 /** shell-ipc-settings.ts 经 ctx.state 读写这三个模块级 let（单一权威；解构拷贝会使就绪位失联）。 */
 const shellMutableState = {
@@ -450,8 +452,8 @@ const shellMutableState = {
   set notificationOpenDrainReady(value: boolean) { notificationOpenDrainReady = value },
   get deepLinkRendererReady(): boolean { return deepLinkRendererReady },
   set deepLinkRendererReady(value: boolean) { deepLinkRendererReady = value },
-  get pendingBadgeCount(): number | null { return pendingBadgeCount },
-  set pendingBadgeCount(value: number | null) { pendingBadgeCount = value },
+  get badgeTarget(): number | null { return badgeTarget },
+  set badgeTarget(value: number | null) { badgeTarget = value },
 };
 
 
@@ -490,6 +492,8 @@ function handleMainWindowShown(): void {
   if (heldResume !== null && pushHeldSystemResume(heldResume)) {
     if (lastResume === heldResume) lastResume = null;
   }
+  // W4：窗口恢复 / renderer finish 是徽标意图的重放边沿（幂等：无意图时 no-op）。
+  replayBadgeIntent?.();
 }
 
 /** 通知点击入队：quit 在途 ignore；来源代际校验（旧代际 click 不回灌新 shell）；
@@ -739,9 +743,9 @@ export function syncNotificationSourceRegistry(
 
 /** will-quit 兜底清除：退出在途不留 Dock 残留；曾有意图才触碰（避免无谓日志）。 */
 export function clearBadgeIntentForQuit(applyNativeClear: () => void): void {
-  if (pendingBadgeCount !== null) {
+  if (badgeTarget !== null) {
     try { applyNativeClear(); } catch { /* best-effort on the way out */ }
-    pendingBadgeCount = null;
+    badgeTarget = null;
   }
 }
 
@@ -1002,23 +1006,20 @@ export function installIpcHandlers(deps: ShellIpcDeps): void {
     return { ok: true };
   }
 
-  /** 平台门 + 宿主 apply 的编排：badgePlatformGate 先裁决（win32 专属原因在此区分），
-   *  supported 后才经 edges.setBadge apply；unsupported 与 apply 失败各压成一次 loud。 */
-  function applyBadgePresentation(count: number): boolean {
+  /** 平台门 + 宿主 apply 编排：unsupported 与 apply 失败各压成一次 loud；W4 起，宿主有
+   *  `setBadgeAndWait`（Swift）时**等真实回执**（渲染端的变化闸与重试链据此工作），Electron
+   *  形态走同步叶（本身即真实结果）。 */
+  async function applyBadgePresentation(count: number): Promise<boolean> {
     const gate = badgePlatformGate(hostFacts.platform, deps.edges.badgeCountApiAvailable());
     if (!gate.supported) {
-      if (!badgeUnsupportedLogged) {
-        badgeUnsupportedLogged = true;
-        console.warn(`[dsh-chamber] 应用图标未读徽标不可用：${gate.reason}`);
-      }
+      if (!badgeUnsupportedLogged) { badgeUnsupportedLogged = true; console.warn(`[dsh-chamber] 应用图标未读徽标不可用：${gate.reason}`); }
       return false;
     }
-    const applied = deps.edges.setBadge(count);
+    const applied = deps.edges.setBadgeAndWait === undefined
+      ? deps.edges.setBadge(count)
+      : await deps.edges.setBadgeAndWait(count);
     if (!applied.applied) {
-      if (!badgeApplyErrorLogged) {
-        badgeApplyErrorLogged = true;
-        console.warn(`[dsh-chamber] 应用图标未读徽标设置失败：${applied.reason}`);
-      }
+      if (!badgeApplyErrorLogged) { badgeApplyErrorLogged = true; console.warn(`[dsh-chamber] 应用图标未读徽标设置失败：${applied.reason}`); }
       return false;
     }
     return true;
@@ -1048,13 +1049,12 @@ export function installIpcHandlers(deps: ShellIpcDeps): void {
 
   /** 按当前设置重新裁决最近一次 renderer 计数意图（badgeEnabled 翻转的即时收敛点）。 */
   function reconcileBadgeCount(): void {
-    if (pendingBadgeCount === null) return;
-    const count = adjudicateBadgeCount(
-      { badgeEnabled: settingsIO.current().notifications.badgeEnabled },
-      pendingBadgeCount,
-    );
-    applyBadgePresentation(count);
+    if (badgeTarget === null) return;
+    const count = adjudicateBadgeCount({ badgeEnabled: settingsIO.current().notifications.badgeEnabled }, badgeTarget);
+    void applyBadgePresentation(count);
   }
+  // W4：注册重放钩子（模块级 show / finish 边沿调用；幂等，无意图时 no-op）。
+  replayBadgeIntent = reconcileBadgeCount;
 
   /** 桌面原生通知主链路契约（宿主腿全在 electron-edges）：payload 白名单 → 平台支持
    *  → 设置裁决 → 有界 claim / 全局速率 → 显示。shown=false 时 error 区分裁决侧抑制
@@ -1094,7 +1094,7 @@ export function installIpcHandlers(deps: ShellIpcDeps): void {
     get notificationSourceIncarnations() { return notificationSourceIncarnations },
     get openInCtx() { return openInCtx },
     get ownsNotificationSource() { return ownsNotificationSource },
-    get pendingBadgeCount() { return pendingBadgeCount },
+    get badgeTarget() { return badgeTarget },
     get pendingNotificationOpens() { return pendingNotificationOpens },
     get pendingRendererIntents() { return pendingRendererIntents },
     get projectInstances() { return projectInstances },
