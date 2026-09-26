@@ -64,6 +64,11 @@
  *    the session still has lever budget and the build exposes the concrete
  *    face, the armed `resync` control that rebuilds THIS session's stream
  *    without dropping the page;
+ *  - the SAME loading notice lands the moment the stream-forensics evidence
+ *    says this opening is terminal (`openingFailure`): the fact proves the
+ *    opening died, so no page timer may decide when it is shown. It only ARMS
+ *    the user's control — an evidence-proven dead opening is still never
+ *    re-issued automatically;
  *  - a ladder that is OUT of levers (no concrete resync face, or the budget
  *    spent) ⇒ the same notice, because for that state the reload really is the
  *    only remaining recovery.
@@ -92,6 +97,7 @@
  */
 
 import { LADDER_TABLES, planLadder, streamHealthLadder } from '@dsh-chamber/dsh-stream-state'
+import type { SessionOpeningFailure } from './session-stream-health-probe.ts'
 
 /** Official session lifecycle state (`SessionSnapshot.openState`). */
 export type SessionOpenState = 'cold' | 'loading' | 'open' | 'error'
@@ -130,6 +136,13 @@ export interface SessionStreamObservation {
    * reopens silently and this is the only honest "stream is being reopened" signal.
    */
   readonly carrierChurn?: { readonly at: number; readonly count: number } | undefined
+  /**
+   * Terminal opening evidence for the PRESENTED session, read from the page
+   * stream-forensics ledger. PRESENCE is the whole fact: the fork already judged
+   * this opening dead, so the loading arm shows the failure notice NOW and only
+   * arms the user's rebuild control — the automatic arm is not for this state.
+   */
+  readonly openingFailure?: SessionOpeningFailure | undefined
 }
 
 /** Rolling state the seat keeps in a ref and hands back on the next tick. */
@@ -367,7 +380,11 @@ export function planSessionStreamHealth(
   if (observation.openState === 'loading') {
     const continued = state.phase === 'loading-hold'
     const since = continued ? state.since : now
-    const stalled = now - since >= config.loadingStallMs
+    // Evidence first: a terminal opening outcome is a failure the moment it is
+    // observed, never after a page timer. It does not restart the hold, so the
+    // timer thresholds keep ageing underneath if the evidence is retired.
+    const failed = observation.openingFailure !== undefined
+    const stalled = failed || now - since >= config.loadingStallMs
     // The re-open's loading dwell must not take back an action the user was already offered (same rule as `markSessionStreamHeal`); the latch rides along.
     const latched = state.healFailedLatched === true
     // The page owns automatic loading rebuilds even when this header is absent.
@@ -384,11 +401,14 @@ export function planSessionStreamHealth(
         ...(state.recoveredSinceHeal === undefined ? {} : { recoveredSinceHeal: state.recoveredSinceHeal }),
       },
       action: armed ? 'resync' : 'none',
-      // A dwell that outlived every recovery attempt reads as a FAILURE, not as a
-      // load in progress. A latched 'heal-failed' still wins before the threshold.
-      notice: stalled
-        ? (now - since >= config.loadingFailedMs ? 'loading-failed' : 'loading-stall')
-        : (latched ? 'heal-failed' : null),
+      // A proven-dead opening reads as a FAILURE immediately; otherwise a dwell
+      // that outlived every recovery attempt does. A latched 'heal-failed' still
+      // wins before the threshold.
+      notice: failed
+        ? 'loading-failed'
+        : stalled
+          ? (now - since >= config.loadingFailedMs ? 'loading-failed' : 'loading-stall')
+          : (latched ? 'heal-failed' : null),
     }
   }
 

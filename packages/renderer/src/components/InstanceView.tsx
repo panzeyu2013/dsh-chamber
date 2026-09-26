@@ -17,7 +17,7 @@ import { Button } from '@deepseek-ai/dsh-client-ui-primitives/src/Button.tsx'
 import { dismissVisibleRowCard } from '@dsh-chamber/dsh-chamber-client-core'
 import {
   bootInstanceShell, INSTANCE_TAIL_WAIT_CAP_MS, shellStateIdle,
-  readInstanceSessionStreamHealth, rebuildInstanceSessionStream,
+  readInstanceSessionStreamHealth, readInstanceOpeningFailure, rebuildInstanceSessionStream,
   type ChamberTransport, type ShellState,
   isSettledShellState,
 } from '../shell.ts'
@@ -146,6 +146,8 @@ export default function InstanceView({
   /** 兜底释放窗到期后的重渲染触发器；决策本身仍是纯函数（可测）。 */
   const [surfaceFallbackTick, setSurfaceFallbackTick] = useState(0)
   const [sessionOpenHealth, setSessionOpenHealth] = useState<SessionOpenHealth | null>(null)
+  /** Terminal opening evidence for the presented session (the forensics ledger). */
+  const [openingFailure, setOpeningFailure] = useState(false)
   // Sessions the ladder reports as host-stall exhausted. The map is a Set: the page
   // has NO content-stall producer (the gateway facts cursor is not assistant
   // content), so exhaustion over an open face is always a host-responsiveness fact
@@ -195,6 +197,7 @@ export default function InstanceView({
       // banner for one commit when returning to that session.
       setHostStallSessions(previous => (previous.size === 0 ? previous : new Set()))
       setSessionOpenHealth(null)
+      setOpeningFailure(false)
       return
     }
     const sample = (): void => {
@@ -203,6 +206,10 @@ export default function InstanceView({
       const health = advanceSessionOpenHealth(sessionOpenHealthRef.current, currentSessionId, observed, at)
       sessionOpenHealthRef.current = health
       setSessionOpenHealth(health)
+      // Terminal opening evidence is a page fact independent of the concrete
+      // session face: read for the presented target only, and only while it is
+      // loading — the one state the fact speaks about.
+      setOpeningFailure(observed?.openState === 'loading' && readInstanceOpeningFailure(instanceId, currentSessionId))
       if (document.visibilityState === 'hidden') {
         // Hidden is a gap like a seat switch: evidence sampled before an arbitrary
         // hidden period is not usable after resume, or the first visible sample can
@@ -249,7 +256,13 @@ export default function InstanceView({
         // delivery owner may dispatch.
         healRoute: observed.healRoute,
       }
-      const openStallActive = openStallSymptomActive(openEvidence)
+      // The page's automatic ladder no longer treats a `loading` face as a
+      // symptom: an opening still in flight is the host's to finish and a parked
+      // one is the user's decision (the evidence-backed notice below), never a
+      // timer's. The face's in-flight bits still block every automatic tier
+      // through the `escalationBlocked` input below.
+      const openSymptomEvidence = observed?.openState === 'loading' ? undefined : openEvidence
+      const openStallActive = openStallSymptomActive(openSymptomEvidence)
       const symptomSinceMs = activeSymptomSinceMs({
         openSince: health.since,
         openStallActive,
@@ -277,9 +290,11 @@ export default function InstanceView({
           ...(scheduleStallStart === undefined ? {} : { scheduleStalled: true }),
           ...(inputBlockStart === undefined ? {} : { inputBlocked: true }),
           ...(stuckEvidence ? { stuckEvidence: true } : {}),
-          ...(openEvidence === undefined ? {} : { open: openEvidence }),
+          ...(openSymptomEvidence === undefined ? {} : { open: openSymptomEvidence }),
         },
-        escalationBlocked: observed?.resyncInFlight === true,
+        // An in-flight open OR a disposing rebuild blocks every automatic tier,
+        // exactly as the ladder derived before the loading face was dropped.
+        escalationBlocked: observed?.resyncInFlight === true || observed?.openInFlight === true,
       }, at, { commit: false })
       setHostStallSessions(previous => {
         const present = previous.has(currentSessionId)
@@ -483,7 +498,7 @@ export default function InstanceView({
   const openRecovery = currentSessionId !== undefined && hostStallSessions.has(currentSessionId)
     ? 'failed'
     : presentedSessionOpenRecoveryPhase(
-      sessionOpenHealth, currentSessionId, currentSessionKnownBlank === true,
+      sessionOpenHealth, currentSessionId, currentSessionKnownBlank === true, openingFailure,
     )
   const sourceFailed = isTerminalUnreadyPhase(sourcePhase)
   // 遮罩在已 settle 的壳上仍可见，就是揭示门在持有它；隐藏判定耦合的是**合成后**的

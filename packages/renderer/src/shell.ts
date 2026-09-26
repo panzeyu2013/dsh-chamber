@@ -46,7 +46,7 @@ import {
 } from '@dsh-chamber/dsh-chamber-client-ui-open-in/machine-catalog'
 import {
   hasSessionStreamResync, resyncSessionStream, sessionOpenInFlight, sessionOpenState,
-  sessionStreamResyncInFlight,
+  sessionOpeningFailureLedger, sessionStreamResyncInFlight,
   type SessionsLoose,
 } from '@dsh-chamber/dsh-chamber-client-ui-open-in/stream-health-probe'
 import { getInstanceClient } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
@@ -831,6 +831,16 @@ export function readInstanceSessionStreamHealth(instanceId: string, sessionId: s
     resyncAvailable,
     healRoute: resyncAvailable,
   }
+}
+
+/**
+ * Terminal opening evidence for one presented session (the page-level
+ * stream-forensics ledger shared with the open-in seat). Reading the ledger also
+ * installs its one page listener; an absent channel keeps every reader on
+ * today's timer behaviour.
+ */
+export function readInstanceOpeningFailure(instanceId: string, sessionId: string): boolean {
+  return sessionOpeningFailureLedger().failureFor(instanceId, sessionId) !== undefined
 }
 
 export function rebuildInstanceSessionStream(instanceId: string, sessionId: string): boolean {

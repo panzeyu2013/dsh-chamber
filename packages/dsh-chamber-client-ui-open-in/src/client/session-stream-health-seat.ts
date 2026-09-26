@@ -33,7 +33,8 @@ import {
   type SessionStreamHealthState,
 } from './session-stream-health.ts'
 import {
-  hasSessionStreamResync, resyncSessionStream, sessionStreamResyncInFlight, type SessionsLoose,
+  hasSessionStreamResync, resyncSessionStream, sessionOpeningFailureLedger,
+  sessionStreamResyncInFlight, type SessionsLoose,
 } from './session-stream-health-probe.ts'
 import { SessionStreamHealthChip, type SessionStreamHealthInjected } from './SessionStreamHealthChip.tsx'
 
@@ -114,6 +115,18 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
     }
   }, 'dsh-chamber: stream carrier churn fact')
 
+  /**
+   * Terminal opening evidence published by the in-repo api-gateway fork. The
+   * fact lives in the page-level ledger (shared with the renderer's page seat
+   * through the one page realm); this seat only wakes the chip, so the failure
+   * notice appears the moment the evidence lands. Reading the ledger ALSO
+   * installs its one page listener; an absent/or drifted channel changes nothing.
+   */
+  const openingFailures = sessionOpeningFailureLedger()
+  ctx.effect(() => openingFailures.subscribe(() => {
+    for (const listener of [...churnListeners]) listener()
+  }), 'dsh-chamber: stream opening failure wake-up')
+
   /** Per-session ladder state, keyed the way the budget is defined. */
   const ladders = new Map<string, SessionStreamHealthState>()
   /**
@@ -149,6 +162,15 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
   ): SessionStreamHealthPlan => {
     try {
       const sessions = readSessions(ctx)
+      // Evidence is read for a loading target only: that is the one arm it
+      // speaks to, and a proven-dead opening must be visible NOW — while the
+      // seat still never re-issues it automatically (only arms the user control).
+      const openingFailure = openState === 'loading'
+        ? openingFailures.failureFor(ownInstanceId, sessionId, now)
+        : undefined
+      // One guarded capability read: the heal route and the user control answer the
+      // same question, so they must not be able to disagree.
+      const resyncAvailable = hasSessionStreamResync(sessions, sessionId)
       const plan = planSessionStreamHealth(
         ladders.get(sessionId) ?? createSessionStreamHealthState(),
         {
@@ -156,8 +178,9 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
           presented: surfacePresented,
           // The automatic heal executes the concrete resync on the PRESENTED
           // target, so both facts come from the same guarded probe read.
-          healRoute: hasSessionStreamResync(sessions, sessionId),
-          resyncAvailable: hasSessionStreamResync(sessions, sessionId),
+          healRoute: resyncAvailable,
+          resyncAvailable,
+          ...(openingFailure === undefined ? {} : { openingFailure: openingFailure.failure }),
           ...(carrierChurn === undefined ? {} : { carrierChurn }),
         },
         now,
@@ -203,6 +226,12 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
         const previousManual = lastManualResyncAt.get(sessionId)
         if (previousManual !== undefined && now - previousManual < MANUAL_RESYNC_GUARD_MS) return
         lastManualResyncAt.set(sessionId, now)
+        // Bounded like every other per-session ledger: an entry older than the guard window
+        // can never suppress another click, so it is dropped instead of accumulating for the
+        // whole page lifetime (review finding O-E / S7).
+        for (const [id, at] of lastManualResyncAt) {
+          if (now - at >= MANUAL_RESYNC_GUARD_MS) lastManualResyncAt.delete(id)
+        }
         const current = ladders.get(sessionId) ?? createSessionStreamHealthState()
         // Account the attempt whether or not this build exposes the method (the
         // one-stamp-per-attempt rule): a face that vanished must not stay armed for a retry loop.

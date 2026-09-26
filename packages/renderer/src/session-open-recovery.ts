@@ -57,15 +57,22 @@ export function sessionOpenRecoveryPhase(
   return elapsedMs >= SESSION_OPEN_FEEDBACK_MS ? 'waiting' : 'quiet'
 }
 
-/** The page owns this decision even when the vendor conversation header is absent. */
+/**
+ * The page owns this decision even when the vendor conversation header is absent.
+ * `openingFailure` is the stream-forensics evidence for THIS loading episode: a
+ * terminal opening fact is the failure itself, so the notice must not wait for
+ * the page timer.
+ */
 export function presentedSessionOpenRecoveryPhase(
   health: SessionOpenHealth | null,
   currentSessionId: string | undefined,
   knownBlank: boolean,
+  openingFailure = false,
 ): SessionOpenRecoveryPhase {
   if (health === null || health.sessionId !== currentSessionId) return 'quiet'
   // A blank session may legitimately have no materialized Session object.
   // Its actual loading/error face is still a failure candidate.
   if (knownBlank && health.state === 'missing') return 'quiet'
+  if (openingFailure && health.state === 'loading') return 'failed'
   return sessionOpenRecoveryPhase(health.state, health.now - health.since)
 }

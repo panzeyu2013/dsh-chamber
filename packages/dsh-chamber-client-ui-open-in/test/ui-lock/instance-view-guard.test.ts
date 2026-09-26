@@ -236,9 +236,11 @@ test('stream-health seat: registered before the open-in gates, ladder state in t
 })
 
 test('stream-health seat: the page delivery owner owns the automatic rebuild, header retains the manual exit', () => {
-  assert.match(seat, /resyncAvailable: hasSessionStreamResync\(sessions, sessionId\)/)
-  assert.match(seat, /healRoute: hasSessionStreamResync\(sessions, sessionId\)/,
+  assert.match(seat, /const resyncAvailable = hasSessionStreamResync\(sessions, sessionId\)/)
+  assert.match(seat, /healRoute: resyncAvailable/,
     'the automatic heal executes resync on the presented target, so its gate is the same guarded probe read')
+  assert.match(seat, /resyncAvailable,$/mu,
+    'the user control answers the same capability question: ONE guarded read, never two that can disagree')
   const policy = stripComments(source('../../src/client/session-stream-health.ts'))
   assert.doesNotMatch(policy, /auto-resync/)
   assert.match(seat, /if \(plan\.action === 'heal'\) \{/)
@@ -298,6 +300,23 @@ test('stream-health chip: only the injected action reloads, idle renders nothing
   assert.match(chip, /<button type="button" className=\{styles\.action\} onClick=\{\(\) => \{ resync\(sessionId\) \}\}>/)
   assert.equal([...chip.matchAll(/resync\(sessionId\)/gu)].length, 1, 'the click is the only resync invocation in the chip')
   assert.doesNotMatch(chip, /useEffect\(\(\) => \{ resync/, 'resync must not ride an effect')
+})
+
+test('stream-health evidence: the page notice is fact-driven and the automatic arm ignores loading', () => {
+  const owner = stripComments(source('../../../renderer/src/session-delivery-state.ts'))
+  const view = stripComments(source('../../../renderer/src/components/InstanceView.tsx'))
+  // The automatic arm drops the loading face BEFORE the shared classifier...
+  assert.match(owner, /const loadingFace = input\.evidence\.open\?\.state === 'loading' \? input\.evidence\.open : undefined/,
+    'a loading face must never reach the delivery classifier')
+  // ...while its in-flight bits still block every tier: "no automatic action
+  // crosses a pending open" is unchanged.
+  assert.match(owner, /loadingFace\.openInFlight === true \|\| loadingFace\.resyncInFlight === true/)
+  // The page-level notice consumes the terminal fact (the header may be absent),
+  // and hands it to the phase decision so the evidence IS the failure.
+  assert.match(view, /readInstanceOpeningFailure\(instanceId, currentSessionId\)/)
+  assert.match(view, /const openSymptomEvidence = observed\?\.openState === 'loading' \? undefined : openEvidence/)
+  assert.match(view, /currentSessionKnownBlank === true, openingFailure,/)
+  assert.match(view, /escalationBlocked: observed\?\.resyncInFlight === true \|\| observed\?\.openInFlight === true/)
 })
 
 test('stream-health churn: the seat mirrors the api-gateway literal and wakes the renderer', () => {
