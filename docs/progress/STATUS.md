@@ -363,13 +363,14 @@ carrier 故障页面事实（`stream-carrier-fact.ts` 的 `dsh-chamber:stream-ca
 
 - **F2 座席（`session-stream-health-seat.ts`）无行为测试（开放）**：step、fact wake-up 的渲染广播、64 条 ladder 内存界只被 `test/ui-lock/instance-view-guard.test.ts` 的源码正则锁定。出口判据 = 可注入测试缝（或抽出纯 `seat-model.ts`）后补四条行为用例（`heal` 每次只派发一次、仅 loading 读 opening failure、65 会话淘汰最旧）。
 
+- **`spawn-dsh.test.ts` 在 8 并发池下偶发失败（开放，1 次观测）**：一次 `run-checks full` 的 `DSH_TEST_TIMING` 记录为 `ok:false`（`ms=8854`），池随即停止（454 项中 162 项 `ms=null` 未启动）；同文件单跑 20/20、`DSH_TEST_JOBS=8` 包套件与整门各 2 次、8 路自竞争 8/8 均绿，故非稳定失败。失败原文当时被门禁「记录丢失败」的 bug 吞掉（已修：记录改在完成回调，且有序 flush 到不了时补印失败项原文），下次出现即可归因——先不做无据的超时放宽。
 - **F1 行为矩阵与 cancel 腿的测试缺口（开放）**：① `stream-client.ts` deadline 的 no-socket 兜底分支（:517-521）无用例，且它有意不推进加宽阶梯——该语义需一条行为用例钉住；② snapshot/wiring 两个入口只有 accept/miss 单格，缺跨世代与终局格；③ design 14:564 的期限到点 cancel 与 `session-mux.ts` timeout 腿的 cancel 无断言；④ F1→F2 的 window 事件 seam（`stream-forensics.ts:185` → `session-stream-health-probe.ts:386`）无端到端用例；⑤ 页面账本 64 条淘汰路径无用例。
 
 - **载波 reducer 的 socket 生命周期半边无生产发射者（开放；既有条目升级）**：`carrierConnecting`/`carrierOpened`/`carrierClosed`/`streamFrame`/`streamClosed` 五类事件在生产零发射（仅测试夹具），`framesOnSocket` 无读取者、`phase:'silent'` 不可达、`decideRebuild` 的 closed 守卫不可达；`test/wiring/emission-coverage.test.ts` 把 `case 'x'` 当生产覆盖，故永绿。出口判据 = 删除或接线（裁决项），门禁改为按生产 emit 点判定。
 
 - **结构性重复与死分支待裁决（开放）**：① `healRoute` 在生产两处恒等于 `resyncAvailable`（`shell.ts:832`、`session-stream-health-seat.ts:181`），使 `delivery-evidence.ts:107` 的 `unhealableError` 臂不可达、两条测试用不可达组合钉绿——要么删字段与臂，要么给它独立来源；② `turn/end`/goal/follow 的解析在 `session-mux.ts:1001-1061` 与 `source-mux-facts.ts:359-439` 双份，且扁平 `reason.cause` 一侧收一侧不收（已漂移），待收敛为一个纯 wire 模块；③ carrier 的 `streamRequestKeys`/`openingPhases`/`openingLatest` 三张同域账本可并为一张；④ `session-stream-health.ts` 手抄的 `carry` 五处可抽一个函数；⑤ `source-mux-facts.ts` 的 baseline 失败三连块可抽局部函数、`connect()` 内 `clearStable()` 同路径重复调用，测试侧另有两处弱断言与一条与 soak 重复的用例可并。
 
-- **页面侧限速与身份 churn（开放；P2b 收口后转热）**：① 失效基线的 250ms 重取样地板可自持（RPC 窗口内持续有事件时最坏约 4 次/秒全表 `session/list`，无连续 stale 上限/退避）；② `advanceSessionOpenHealth` 每秒返回新对象导致 `InstanceView` 每秒 setState（收口须保留时钟推进）；③ 载波换代后 ≤60s 内的 lane reconnect 被重建窗口限速为「只发事实、不换 socket」，`stream-client.ts:204` 注释「the guard cannot suppress it」与窗口行为不符（改注释或显式豁免）；④ 加宽账本在容量上限处的整表重建成本悬崖（需 ≥256 个并发 episode 才可达，属界的健壮性）。
+- **页面侧限速（开放；P2b 收口后转热）**：① 失效基线的 250ms 重取样地板可自持（RPC 窗口内持续有事件时最坏约 4 次/秒全表 `session/list`，无连续 stale 上限/退避）；② 载波换代后 ≤60s 内的 lane reconnect 被重建窗口限速为「只发事实、不换 socket」，`stream-client.ts:204` 注释「the guard cannot suppress it」与窗口行为不符（改注释或显式豁免）；③ 加宽账本在容量上限处的整表重建成本悬崖（需 ≥256 个并发 episode 才可达，属界的健壮性）。
 
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
