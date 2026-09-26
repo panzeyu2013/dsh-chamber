@@ -33,6 +33,19 @@ name: Release
 # anywhere"). The Windows exe goes out unsigned — its auto-install proceeds
 # with a SmartScreen warning (documented tradeoff, design 11 §7); the macOS
 # INSTALL step is blocked without a Developer ID signature (design 11 §3.1).
+#
+# ---------------------------------------------------------------- TEMPORARY SCOPE
+# Native-only publication (temporary): of the platform legs, ONLY build-swift
+# publishes right now. The four other publishing legs — build-gateway,
+# build-macos, build-windows and build-linux — carry a job-level
+# `if: ${{ false }}` and are skipped; finalize-release tolerates that skipped
+# state while still refusing to publish after a failure, a cancellation or a red
+# validation. A v* tag (or a manual dispatch) therefore produces a release whose
+# assets are the native ones only (zip / dmg / delta / signed appcast): no
+# Electron/gateway artifact and no Electron update feed is built, uploaded or
+# published. Restore the full platform release by deleting the four job-level
+# `if: ${{ false }}` lines and the `if:` on finalize-release — every site
+# carries the same TEMPORARY marker pointing back here.
 
 on:
   push:
@@ -451,6 +464,9 @@ jobs:
           git diff --exit-code -- pnpm-lock.yaml
 
   build-gateway:
+    # TEMPORARY native-only publication (see the header note): the gateway
+    # tarball does not publish right now. Delete this condition to re-enable.
+    if: ${{ false }}
     # Gateway is distributed in this release only as a GitHub Release tarball
     # plus SHA256. Runs in PARALLEL with the desktop build legs:
     # it packs from the same tag-bound SHA and downloads no
@@ -543,6 +559,10 @@ jobs:
 
 
   build-macos:
+    # TEMPORARY native-only publication (see the header note): the Electron mac
+    # zip/dmg and its update feed do not publish right now. Delete this
+    # condition to re-enable.
+    if: ${{ false }}
     needs: [create-release]
     permissions:
       contents: write
@@ -810,6 +830,10 @@ jobs:
           VERSION: ${{ needs.create-release.outputs.version }}
 
   build-windows:
+    # TEMPORARY native-only publication (see the header note): the unsigned
+    # Windows exe and its update feed do not publish right now. Delete this
+    # condition to re-enable.
+    if: ${{ false }}
     needs: [create-release]
     permissions:
       contents: write
@@ -895,6 +919,10 @@ jobs:
           VERSION: ${{ needs.create-release.outputs.version }}
 
   build-linux:
+    # TEMPORARY native-only publication (see the header note): the AppImage and
+    # its update feed do not publish right now. Delete this condition to
+    # re-enable.
+    if: ${{ false }}
     needs: [create-release]
     permissions:
       contents: write
@@ -1840,7 +1868,19 @@ jobs:
           echo "${APPCAST} uploaded to the draft release after the archives"
 
   finalize-release:
+    # needs keeps the full leg set (the publish contract): the four non-Swift
+    # legs are currently skipped by their own `if: ${{ false }}` — temporary
+    # native-only publication, see the header note.
     needs: [validation, create-release, build-gateway, build-macos, build-windows, build-linux, build-swift]
+    # TEMPORARY: a skipped dependency would normally skip this job too, which
+    # would also drop the native publication. `always()` is what bypasses that
+    # dependency gate (the documented way to run a job whose needs were skipped);
+    # `!cancelled()` keeps a cancelled run from publishing, and the explicit
+    # needs checks keep the gate fail-closed — the three load-bearing jobs must
+    # have succeeded and no leg may have failed, so a red validation (or a leg
+    # that fails once it is re-enabled) cannot publish. Deleting this line
+    # restores the default skip semantics.
+    if: ${{ always() && !cancelled() && needs.validation.result == 'success' && needs.create-release.result == 'success' && needs.build-swift.result == 'success' && needs.build-gateway.result != 'failure' && needs.build-macos.result != 'failure' && needs.build-windows.result != 'failure' && needs.build-linux.result != 'failure' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
