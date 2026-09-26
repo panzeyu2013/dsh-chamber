@@ -9,6 +9,7 @@
  * 计数与 id，不存正文；发布为**函数视图**的只读全局，供仪器/CDP 直接读。
  */
 import { createBoundedList } from './bounded-ledger.ts'
+import { reconcileUnreadShadowOnLoad, type UnreadStorageLike, type UnreadV4Payload } from './unread-store.ts'
 
 /** 行样本：只留水位相关字段，用于在页面里直接确认「水位为什么是 0」。 */
 export interface UnreadRowSample {
@@ -139,6 +140,22 @@ export function recordUnreadShadowReport(report: Omit<UnreadShadowReport, 'at'>)
 export function unreadShadowReport(): UnreadShadowReport | null {
   return shadowReport
 }
+
+/**
+ * 启动期影子对账的组合入口（W3）：载入时读盘比对 v4/v5，**只报告、不改判定**（权威仍是 v4），
+ * 差异文本有界（≤8 条，见 `reconcileUnreadShadowOnLoad`）；无影子可对账时静默。行为与原内联块
+ * 逐字等价——下沉只为不让容器文件（god-file 棘轮）继续长行。
+ */
+export function reportUnreadShadowParityOnLoad(
+  storage: UnreadStorageLike | undefined,
+  v4: UnreadV4Payload,
+): void {
+  const parity = reconcileUnreadShadowOnLoad(storage, v4)
+  if (parity === null) return
+  recordUnreadShadowReport({ phase: 'startup', written: true, ok: parity.ok, differences: parity.differences })
+  if (!parity.ok) console.warn('[renderer] unread v5 shadow drifted from v4 (authority stays v4):', parity.differences)
+}
+
 export function createUnreadInstrument(limit = 12): UnreadInstrument {
   const ring = createBoundedList<UnreadDeriveRecord>(limit)
   return {

@@ -63,10 +63,10 @@ import { recordPrewarm } from './prewarm-ledger.ts'
 import { factsDecisionInput, type SessionFactsSource } from './session-facts-source.ts'
 // probe 判定 → 侧栏档位：无快照即缺席 = 未知。
 import {
-  browserUnreadStorage, loadClientInstallId, loadUnread, maxWatermark, reconcileUnreadShadowOnLoad,
+  browserUnreadStorage, loadClientInstallId, loadUnread, maxWatermark,
   seedReadFloor, unreadOutcomeTable, unreadPendingTable, type UnreadStorageLike,
 } from './unread-store.ts'
-import { recordUnreadShadowReport } from './unread-instrument.ts'
+import { reportUnreadShadowParityOnLoad } from './unread-instrument.ts'
 import { pruneSourceList, pruneSourceRecord } from './source-registry.ts'
 import { LOCAL_INSTANCE_ID } from './local-instance.ts'
 import {
@@ -611,13 +611,8 @@ export default function App() {
   const [unreadBoot] = useState(() => {
     const storage = browserUnreadStorage()
     const payload = loadUnread(storage)
-    // W3 启动期影子对账：差异只报告 + loud 一次，**绝不改判定**（权威仍是 v4）；写时对账抓不到
-    // 「某条 v4 写路径没走 flushUnread」的漂移。差异文本本身有界（≤8 条）。
-    const shadowParity = reconcileUnreadShadowOnLoad(storage, payload)
-    if (shadowParity !== null) {
-      recordUnreadShadowReport({ phase: 'startup', written: true, ok: shadowParity.ok, differences: shadowParity.differences })
-      if (!shadowParity.ok) console.warn('[renderer] unread v5 shadow drifted from v4 (authority stays v4):', shadowParity.differences)
-    }
+    // W3 启动期影子对账：只报告不改判定（权威仍是 v4，差异文本有界 ≤8 条）。
+    reportUnreadShadowParityOnLoad(storage, payload)
     // 页代 token（v5 §3.5）：同 tab reload = same（保留 pending/outcomes），新进程/新窗口 =
     // fresh（丢弃 pending 并 loud；notified/outcomes 仍 durable）。
     const boot = loadBootToken(browserBootTokenStorage())
