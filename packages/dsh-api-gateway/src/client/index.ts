@@ -157,7 +157,7 @@ class ClientRemoteService extends Service implements ClientRemote {
   private hostFacts: RemoteHostFacts | undefined
   private readonly streams: RemoteStreamMuxClient
   private readonly events: ClientRemoteEvents
-  /** chamber (design 14 §D4): page-level carrier-churn fact for the active source. */
+  /** chamber (design 14 §D4): page-level carrier-failure fact for the active source (diagnostics only). */
   private readonly reportCarrierFailure: (error: unknown) => void
   private mutations = Promise.resolve()
 

@@ -174,7 +174,7 @@
      DOM 后改为按实例判定）；自动 heal 的前置条件改为 target 必须仍是 **main view 呈现的会话**
      （`retainedBy.mainView>0`）且具象 `resync()` 经 rc.2 契约入口 `ISessions.binding(id)` 可达：address-only 子代理经官方 retain 呈现、可走自动 resync，只有不呈现的 masked gap 不可达；两个入口都只剩自动面——手动「重新加载 / 重建对话通道」控制已整体退役（用户裁决，见 design 14 §D4「手动出口退役」），`loading` 停滞与自动 heal 被 blocked 的 `error` 两臂都只报告提示；观测字段 `healRoute` 只认 main view 呈现。失效判据 = 真机拆链后自查恢复
      且判据写回 design 14 §D4。
-     ⑬ **静默半死（`openState === 'open'` 而事件不再投递）**：起有 fork 级杠杆——静默 ≥45s 开旁路 sibling follow（20s 期限）只比对 opening cursor，**仅当宿主确已前进**才替换物理世代（design 14 §D4）；不设形状超时（合法长静默 TTFT 75s 起、工具可数分钟，盲超时必然误报）。治因（fork 载波重试不再终局）与信号面（`dsh-chamber:stream-carrier-failed` 页面事实 → 健康臂 chip「对话流正在重新连接…」）属已实现基线，契约（含拒绝替代）见 design 14 §D4。**仍未闭合**：①宿主侧流级 keepalive+游标未做；⑤首帧期限（30s 起，连续超时 30→60→120→240→300s）与探针阈值（45s/20s）未经真机校准；②真机抖动验收（判据 = 拆链后 `openState` 不落 `error`，且 churn 提示在真实 mux 抖动下出现并自行消退）；③churn 提示窗口（10s）与「按来源而非按会话」的粗粒度归属均未经真机校准（多会话同源时提示会同时出现在该源各会话上——刻意接受）；④`ended(false)`（正常结束而未收下 opening item）仍是终局，由健康臂兜底。失效判据 = ②③任一校准或裁决落地并写回 design 14 §D4。
+     ⑬ **静默半死（`openState === 'open'` 而事件不再投递）**：起有 fork 级杠杆——静默 ≥45s 开旁路 sibling follow（20s 期限）只比对 opening cursor，**仅当宿主确已前进**才替换物理世代（design 14 §D4）；不设形状超时（合法长静默 TTFT 75s 起、工具可数分钟，盲超时必然误报）。治因（fork 载波重试不再终局）属已实现基线，契约（含拒绝替代）见 design 14 §D4；chip 的「对话流正在重新连接…」提示与其 `carrierChurnMs` 窗口已整体退役（用户裁决，同 §D4），该页面事实只剩诊断面（⑩）。**仍未闭合**：①宿主侧流级 keepalive+游标未做；⑤首帧期限（30s 起，连续超时 30→60→120→240→300s）与探针阈值（45s/20s）未经真机校准；②真机抖动验收（判据 = 拆链后 `openState` 不落 `error`，重开发生在秒级且页面上无提示）；④`ended(false)`（正常结束而未收下 opening item）仍是终局，由健康臂兜底。失效判据 = ②校准落地并写回 design 14 §D4。
     ⑭ **彻底修复链（tier-1.5 本地判定 + 权威相位 + tier-3 写回，design 14 §D4 ①b）的未闭合项**：
     ① 写回押在**非 `ISessions` 契约**的 `ClientSessions.handleSessionStatus` 上（运行时能力守卫 +
     接线锁已就位；pin 升级移除/改名即降级为 WARN + 升级阶梯）；两个上游诉求（store 快照暴露
@@ -235,6 +235,7 @@
   ⑨ 设计未决：unary 引导通道是否新写成兜底内容引导——本轮未采纳（design 14 §D4、todo/upstream-proposals.md §4.3）。
   ⑩ 保留但无生产消费/发射面的小面（登记而非删除）：fork 的取证 retention/snapshot 桥（`stream-forensics.ts` 的 REQUEST/SNAPSHOT 事件与 ring 记录、`index.ts` 的 bridge 安装）仓内无人
   dispatch/监听（design 14 §198/§267 把「request → 逐条 snapshot 导出」定为诊断面本身，缺的是 dispatcher 而不是设计，删它即与设计冲突）；
+carrier 故障页面事实（`stream-carrier-fact.ts` 的 `dsh-chamber:stream-carrier-failed`：chip 提示退役后仓内无消费者，保留为 DevTools/取证面，design 14 §D4）；
   页面解析器也读不了 `{instanceId, entry}` 快照包装 ⇒ 监听器安装前发布的终局事实不可恢复（同 ⑥ 缺口；
   另一条路是把它接起来：账本安装时请求一次快照并兼容包装形状——未做，属独立变更）；
   reducer 的 `forensic` 效果里与宿主事实同名的三项（opening-orphaned/timeout + opening-budget-exhausted + opening-accepted）

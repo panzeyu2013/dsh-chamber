@@ -1,13 +1,13 @@
 /**
- * Page-level carrier-churn fact. Upstream plumbs `carrierFailed` through the
+ * Page-level carrier-failure fact. Upstream plumbs `carrierFailed` through the
  * gateway and the session controller but nothing consumes it, so a sustained
  * carrier fault inside a live generation is otherwise silent. This turns that seam
  * into an addressable page fact (zero imports: dispatch is injected; the browser
  * default only touches globals the page already owns).
  *
  * DIAGNOSTICS ONLY since the chamber chip's reconnecting notice was retired (user
- * ruling, design 14 §D4): no in-repo UI reads this event; DevTools and the soak
- * scripts are its consumers.
+ * ruling, design 14 §D4): no in-repo consumer reads this event (the zero-consumer
+ * register is STATUS ⑩); DevTools is its only reader.
  */
 
 /** Document-level event name carrying one {@link CarrierFailureFact}. */
