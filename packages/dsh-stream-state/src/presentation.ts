@@ -6,7 +6,8 @@
  * THE FRAME IS AN ABSOLUTE DEADLINE, NOT A DELAY: a delay cannot answer when the veil will
  * be lifted. A frame carries mode, tenant coverage `veil` (held/actionable/released),
  * whether recovery `actions` belong on screen, and `releaseAtMonoMs` - finite for every
- * frame. {@link planVeilTimer} is the only translator to a timer delay.
+ * frame. {@link planVeilTimer} is the only translator to a timer plan: a positive
+ * delay, or `null` = arm nothing.
  *
  * PURITY: no clock reads, no DOM; facts and thresholds arrive as inputs.
  */
@@ -126,18 +127,25 @@ function heldFrame(mode: PresentationMode, actions: boolean, releaseAtMonoMs: nu
 }
 
 /**
- * Translate the frame's absolute deadline into the timer delay the caller arms: a
- * non-held frame needs no timer (0); a held frame with a non-finite clock returns
- * Infinity (the veil holds until the next state change, and a broken clock can never
- * arm an immediate re-arm); a held frame with a finite clock must release in the
- * FUTURE, so a fabricated or stale frame is rejected loudly.
+ * Translate the frame's absolute deadline into the timer delay the caller arms, or
+ * `null` when NO timer may be armed at all. `null` is the only "arm nothing" answer:
+ * a non-held frame needs no timer, and a held frame on a non-finite clock holds until
+ * the next state change (an armed timer there is a re-arm, not a deadline); a held
+ * frame with a finite clock must release in the FUTURE, so a fabricated or stale frame
+ * is rejected loudly.
+ *
+ * NO NUMERIC SENTINEL: `0` is finite, so a caller guard of `!Number.isFinite(delay)`
+ * lets it through and arms a 0 ms timer; with a per-render clock read and the tick in
+ * that effect's own dependency list the timer re-enters its own effect forever
+ * (measured: 3.4e4 installs/s with matching clears). `Infinity` carried the same
+ * "arm nothing" meaning under a second spelling.
  */
-export function planVeilTimer(frame: PresentationFrame, nowMonoMs: number): number {
-  if (frame.veil !== 'held') return 0
+export function planVeilTimer(frame: PresentationFrame, nowMonoMs: number): number | null {
+  if (frame.veil !== 'held') return null
   if (!Number.isFinite(frame.releaseAtMonoMs)) {
     throw new Error('planVeilTimer: a held frame must carry a finite releaseAtMonoMs')
   }
-  if (!Number.isFinite(nowMonoMs)) return Number.POSITIVE_INFINITY
+  if (!Number.isFinite(nowMonoMs)) return null
   const delay = frame.releaseAtMonoMs - nowMonoMs
   if (!(delay > 0)) {
     throw new Error(

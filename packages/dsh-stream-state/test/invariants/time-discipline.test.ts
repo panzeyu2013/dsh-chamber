@@ -94,7 +94,8 @@ test('a non-finite presentation clock holds the veil with a finite deadline', ()
   const nanWait = decidePresentation(facts({ settled: false, waitedMs: Number.NaN }), THRESHOLDS)
   assert.equal(nanWait.veil, 'held')
   assert.ok(Number.isFinite(nanWait.releaseAtMonoMs), 'a held frame must carry a finite release deadline')
-  assert.ok(planVeilTimer(nanWait, 0) > 0, 'a held frame must never arm a 0 ms timer')
+  const holdDelay = planVeilTimer(nanWait, 0)
+  assert.ok(typeof holdDelay === 'number' && holdDelay > 0, 'a held frame must never arm a 0 ms timer')
 })
 
 test('withDeadline never arms a timer for a non-finite or negative bound', async () => {

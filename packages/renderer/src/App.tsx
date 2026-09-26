@@ -1880,9 +1880,13 @@ export default function App() {
     })
     if (!verdict.reveal) {
       if (verdict.reason !== 'painted') return
+      // revealTick is this effect's own dependency and revealHoldRemainingMs clamps to
+      // [0, REVEAL_HOLD_MAX_MS]: a clamped 0 means "nothing to wait for", never a 0 ms arm.
+      const remainingMs = revealHoldRemainingMs(revealHoldStartedAtRef.current, nowMs)
+      if (!(remainingMs > 0)) return
       const handle = setTimeout(
         () => setRevealTick(tick => tick + 1),
-        revealHoldRemainingMs(revealHoldStartedAtRef.current, nowMs),
+        remainingMs,
       )
       return () => { clearTimeout(handle) }
     }
