@@ -67,14 +67,24 @@ test('the observer covers every dsh-protocol source: local profile and remote in
   assert.doesNotMatch(hook, /server\.kind === 'dsh'|server\.kind !== 'dsh'/)
 })
 
-test('the mux silence watchdog is carrier recovery only, never content evidence', () => {
+test('silence is neither content nor carrier evidence: no watchdog, long-lived socket', () => {
   const source = SOURCE.replace(/\/\*[\s\S]*?\*\//gu, '')
-  // Source-level $events silence is NOT this session's content progress (assistant
+  // ① Source-level $events silence is NOT this session's content progress (assistant
   // text travels its own session/follow stream), so the observer publishes no
   // content-stall signal at all; page evidence comes from session-content-stall.ts.
   assert.doesNotMatch(source, /contentSilenceSinceMs|contentStallElapsedMs|lastContentAt/)
-  assert.match(source, /reconnects \+= 1/, 'the watchdog still performs carrier recovery')
   assert.doesNotMatch(source, /registerSourceContentStall/)
+  // ② Nor is it carrier evidence: the measured $events logical stream delivered
+  // only its ready frame for a whole socket lifetime (facts come from the unary
+  // baseline), so a silence-driven replacement was pure churn — 9 replacements in
+  // 8 idle minutes, each successor socket dying at exactly 45.0s. The whole
+  // mechanism (dep, constant, timer, arm/clear) must stay deleted.
+  for (const symbol of ['DEFAULT_FACTS_SILENCE_MS', 'silenceTimeoutMs', 'silenceTimer', 'armSilence', 'clearSilence']) {
+    assert.equal(source.includes(symbol), false, symbol + ' must stay deleted')
+  }
+  // reconnects counts real carrier replacements only (scheduleReconnect's backoff).
+  assert.equal((source.match(/reconnects \+= 1/g) ?? []).length, 1,
+    'reconnects += 1 may exist only in the real-failure backoff path')
 })
 
 
@@ -137,6 +147,12 @@ async function waitFor(predicate: () => boolean, message: string): Promise<void>
   assert.fail(message)
 }
 
+/** Drain microtasks while setTimeout is mocked (setImmediate stays real). */
+async function settleMicrotasks(): Promise<void> {
+  for (let i = 0; i < 10; i += 1) await Promise.resolve()
+  await new Promise<void>(resolve => { setImmediate(resolve) })
+}
+
 function deferredRpc() {
   const lists: Array<(value: unknown) => void> = []
   const fetchImpl = async (_url: string, init?: { body?: unknown }) => {
@@ -195,10 +211,10 @@ test('stop() retires a readable snapshot to degraded: dead-carrier rows never st
   assert.deepEqual(Object.keys(retired.rows as object), ['s1'], '在场证据保留（不得清成权威空集）')
 })
 
-test('a malformed ready frame cannot certify facts or renew event liveness', async () => {
+test('a malformed ready frame cannot certify facts and never churns the socket', async () => {
   const sockets: FakeSocket[] = []
   const facts = createSourceMuxFacts({
-    sourceId: 'bad-ready', origin: 'http://cp', onSnapshot: () => {}, silenceTimeoutMs: 20,
+    sourceId: 'bad-ready', origin: 'http://cp', onSnapshot: () => {}, reconcileIntervalMs: 20,
     openSocket: () => { const socket = new FakeSocket(); sockets.push(socket); return socket },
     fetchImpl: rpcFetch({ 'session/list': () => ({ items: [] }) }) as never,
   })
@@ -208,19 +224,26 @@ test('a malformed ready frame cannot certify facts or renew event liveness', asy
     sockets[0]!.item({ type: 'ready' })
     await waitFor(() => facts.status().baselines === 1, 'baseline missing')
     assert.equal(facts.status().ready, false, 'ready requires a nonempty clientId')
+    const baselines = facts.status().baselines
     for (let i = 0; i < 4; i += 1) {
       sockets[0]!.item({ type: 'emit', event: '' })
       await new Promise(resolve => setTimeout(resolve, 6))
     }
-    await waitFor(() => sockets.length === 2, 'malformed event frames renewed a dead subscription')
+    // A frame that carries no event must not renew the subscription (and, with no
+    // watchdog left, must not replace the carrier either): only the periodic
+    // baseline keeps running on the same socket.
+    await waitFor(() => facts.status().baselines >= baselines + 3, 'periodic reconcile did not continue')
+    assert.equal(sockets.length, 1, 'malformed frames must not churn the socket')
+    assert.equal(sockets[0]!.closed, false)
+    assert.equal(facts.status().reconnects, 0)
   } finally { facts.stop() }
 })
 
-test('replacing a live socket degrades facts before the successor opens', async () => {
+test('a silent live socket is never replaced, degraded or reconnected (long-lived carrier)', async () => {
   const sockets: FakeSocket[] = []
   const verdicts: string[] = []
   const facts = createSourceMuxFacts({
-    sourceId: 'replacing', origin: 'http://cp', silenceTimeoutMs: 20,
+    sourceId: 'idle', origin: 'http://cp', reconcileIntervalMs: 20,
     onSnapshot: snapshot => verdicts.push(snapshot.verdict),
     openSocket: () => { const socket = new FakeSocket(); sockets.push(socket); return socket },
     fetchImpl: rpcFetch({ 'session/list': () => ({ items: [] }) }) as never,
@@ -230,12 +253,56 @@ test('replacing a live socket degrades facts before the successor opens', async 
     sockets[0]!.open()
     sockets[0]!.item({ type: 'ready', clientId: 'c' })
     await waitFor(() => facts.status().ready, 'initial socket did not become ready')
-    await waitFor(() => sockets.length === 2, 'silence did not replace the socket')
-    assert.equal(facts.status().ready, false)
-    assert.equal(verdicts.at(-1), 'degraded')
+    const verdictsAtReady = verdicts.length
+    // Three full reconcile ticks with ZERO $events frames: the old watchdog
+    // replaced the socket at 45s of silence (and degraded the facts meanwhile);
+    // the carrier must now live until the source retires.
+    await waitFor(() => facts.status().baselines >= 4, 'three idle reconcile ticks did not run')
+    assert.equal(sockets.length, 1, 'silence must not replace the socket')
+    assert.equal(sockets[0]!.closed, false)
+    assert.equal(facts.status().reconnects, 0, 'silence is not a reconnect')
+    assert.equal(facts.status().ready, true)
+    assert.equal(verdicts.slice(verdictsAtReady).includes('degraded'), false,
+      'a live socket must not publish a degraded snapshot on silence')
+    assert.equal(verdicts.at(-1), 'ok')
   } finally { facts.stop() }
 })
 
+test('three minutes of silence on a live socket change nothing (the retired 45s swap, soak)', async (t) => {
+  // Behavioral counterpart of the harness record: the removed watchdog replaced the
+  // socket at exactly 45.0s of $events silence (run13: 9 replacements in 8 idle
+  // minutes). The short test above only spans ~3 reconcile ticks; this one advances
+  // three MINUTES of mocked time over a socket that stays silent after `ready`.
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  t.after(() => t.mock.timers.reset())
+  const sockets: FakeSocket[] = []
+  const verdicts: string[] = []
+  const facts = createSourceMuxFacts({
+    sourceId: 'soak', origin: 'http://cp',
+    onSnapshot: snapshot => verdicts.push(snapshot.verdict),
+    openSocket: () => { const socket = new FakeSocket(); sockets.push(socket); return socket },
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items: [] }) }) as never,
+  })
+  try {
+    facts.start()
+    sockets[0]!.open()
+    sockets[0]!.item({ type: 'ready', clientId: 'c' })
+    await settleMicrotasks()
+    assert.equal(facts.status().ready, true, 'the socket must be ready before the soak')
+    const verdictsAtReady = verdicts.length
+    for (let minute = 0; minute < 3; minute += 1) {
+      t.mock.timers.tick(60_000)
+      await settleMicrotasks()
+    }
+    assert.equal(sockets.length, 1, 'silence must not replace the socket - not even past 45s')
+    assert.equal(sockets[0]!.closed, false, 'the long-lived socket stays open')
+    assert.equal(facts.status().reconnects, 0, 'silence is never a reconnect')
+    assert.equal(facts.status().ready, true)
+    assert.equal(facts.status().baselines >= 4, true, 'the unary baseline keeps certifying facts over silence')
+    assert.equal(verdicts.slice(verdictsAtReady).includes('degraded'), false,
+      'a silent live socket must never degrade the facts')
+  } finally { facts.stop() }
+})
 test('an ended $events stream degrades immediately even when its socket stays open', async () => {
   const socket = new FakeSocket()
   const verdicts: string[] = []
@@ -290,6 +357,9 @@ test('status observed during a baseline forces a new reconciliation', async () =
   const snapshots: Array<{ rows: Record<string, { running: boolean }> }> = []
   const facts = createSourceMuxFacts({
     sourceId: 'revision', origin: 'http://cp', onSnapshot: snapshot => snapshots.push(snapshot),
+    // This test pins the MECHANISM (a stale sample is re-taken, never used to overwrite);
+    // its cadence is bounded by design and covered by the O1 test below.
+    baselineResampleMinMs: 5,
     openSocket: () => socket, fetchImpl: rpc.fetchImpl as never,
   })
   try {
@@ -306,6 +376,62 @@ test('status observed during a baseline forces a new reconciliation', async () =
   } finally { facts.stop() }
 })
 
+test('a stale baseline is re-sampled on a bounded cadence, never recursively (O1)', async () => {
+  const socket = new FakeSocket()
+  const rpc = deferredRpc()
+  const facts = createSourceMuxFacts({
+    sourceId: 'cadence', origin: 'http://cp', onSnapshot: () => {},
+    baselineResampleMinMs: 40,
+    openSocket: () => socket, fetchImpl: rpc.fetchImpl as never,
+  })
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => rpc.lists.length === 1, 'initial list not requested')
+    // An event during the in-flight sample makes that sample stale. Bounded re-sampling
+    // waits one cadence instead of recursing in the same tick (the old behavior fetched
+    // the whole table again immediately, so an event-dense source could loop).
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', true] })
+    rpc.lists[0]!({ items: [{ sessionId: 's1', running: false, updatedAt: 1 }] })
+    await new Promise(resolve => setTimeout(resolve, 10))
+    assert.equal(rpc.lists.length, 1, 'the stale baseline must not re-sample before its cadence')
+    await waitFor(() => rpc.lists.length === 2, 'the stale baseline never re-sampled')
+    rpc.lists[1]!({ items: [{ sessionId: 's1', running: true, updatedAt: 2 }] })
+    await waitFor(() => facts.status().ready, 'reconciled list did not certify facts')
+  } finally { facts.stop() }
+})
+test('a stale re-sample dies with its generation (a carrier turnover re-baselines on ready)', async () => {
+  const sockets: FakeSocket[] = []
+  const rpc = deferredRpc()
+  const facts = createSourceMuxFacts({
+    sourceId: 'stale-gen', origin: 'http://cp', onSnapshot: () => {},
+    reconcileIntervalMs: 20, baselineResampleMinMs: 40,
+    openSocket: () => { const socket = new FakeSocket(); sockets.push(socket); return socket },
+    fetchImpl: rpc.fetchImpl as never,
+  })
+  try {
+    facts.start()
+    sockets[0]!.open()
+    sockets[0]!.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => rpc.lists.length === 1, 'initial list not requested')
+    rpc.lists[0]!({ items: [{ sessionId: 's1', running: true, updatedAt: 1 }] })
+    await waitFor(() => facts.status().baselines === 1, 'initial baseline did not certify facts')
+    // A later sample goes stale while it is in flight: a bounded re-sample is scheduled...
+    await waitFor(() => rpc.lists.length === 2, 'reconcile did not sample again')
+    sockets[0]!.item({ type: 'emit', event: 'api-session/status', args: ['s1', false] })
+    rpc.lists[1]!({ items: [{ sessionId: 's1', running: true, updatedAt: 1 }] })
+    await settleMicrotasks()
+    const callsWithPendingResample = rpc.lists.length
+    // ...then that generation dies before the cadence elapses. The pending retry must not
+    // fetch for the dead generation; the successor's ready frame owns the baseline.
+    sockets[0]!.onclose?.({})
+    await new Promise(resolve => setTimeout(resolve, 60))
+    assert.equal(rpc.lists.length, callsWithPendingResample,
+      'a stale re-sample must not fetch after its generation died')
+    assert.equal(facts.status().ready, false, 'the dead generation is not ready')
+  } finally { facts.stop() }
+})
 test('a tail from an earlier run cannot arm a newly running session', async () => {
   const socket = new FakeSocket()
   const rpc = deferredRpc()
@@ -374,7 +500,7 @@ test('periodic reconciliation finds a dropped status while the socket stays acti
   let running = true
   const facts = createSourceMuxFacts({
     sourceId: 'dropped', origin: 'http://cp', now: () => 1_700_000_000_000,
-    reconcileIntervalMs: 20, silenceTimeoutMs: 1_000,
+    reconcileIntervalMs: 20,
     onSnapshot: snapshot => snapshots.push(snapshot), openSocket: () => socket,
     fetchImpl: rpcFetch({ 'session/list': () => ({ items: [{ sessionId: 's1', running, updatedAt: 1 }] }) }) as never,
   })
@@ -750,21 +876,59 @@ test('baseline, follow and socket failures are counted, not swallowed', async ()
   }
 })
 
-/** 重连退避：源长时间不可达时不得变成每秒一次的重试洪流（首次延迟即为 1s）。 */
-test('reconnect uses an exponential backoff instead of a fixed 1s hammer', async () => {
-  const sockets: FakeSocket[] = []
-  const facts = createSourceMuxFacts({
-    sourceId: 'ssh-c', origin: 'http://cp', onSnapshot: () => {},
-    openSocket: () => { const s = new FakeSocket(); sockets.push(s); return s },
-    fetchImpl: rpcFetch({ 'session/list': () => ({ items: [] }) }) as never,
-  })
+/** 重连退避：源长时间不可达时不得变成每秒一次的重试洪流（1s 起、翻倍、封顶 30s、稳定 30s 复位）。 */
+test('a real carrier failure reconnects through the bounded exponential backoff', async () => {
+  mock.timers.enable({ apis: ['setTimeout'] })
   try {
-    facts.start()
-    sockets[0].onclose?.({})
-    await new Promise(resolve => setTimeout(resolve, 250))
-    assert.equal(facts.status().reconnects, 0, '首次重连延迟 1s，250ms 内不得重连（固定 100ms 轮询会在此暴露）')
+    const sockets: FakeSocket[] = []
+    let listOk = false
+    const facts = createSourceMuxFacts({
+      sourceId: 'ssh-c', origin: 'http://cp', onSnapshot: () => {},
+      openSocket: () => { const s = new FakeSocket(); sockets.push(s); return s },
+      // 无值列表 ⇒ 来源不可信（ready() 为假）：退避只由真失败驱动，断言测的就是退避本身。
+      fetchImpl: rpcFetch({ 'session/list': () => (listOk ? { items: [] } : null) }) as never,
+    })
+    try {
+      facts.start()
+      // ① 首次失败等 1s 基线（固定 100ms 轮询会在此暴露）。
+      sockets[0].onclose?.({})
+      mock.timers.tick(250)
+      assert.equal(facts.status().reconnects, 0, '首次重连延迟 1s，250ms 内不得重连（固定 100ms 轮询会在此暴露）')
+      assert.equal(sockets.length, 1)
+      mock.timers.tick(800)
+      assert.equal(sockets.length, 2, 'a dead carrier must still be replaced (real failure, not silence)')
+      assert.equal(facts.status().reconnects, 1)
+      assert.equal(sockets[0].closed, true)
+      // ② 每次真失败翻倍，封顶 30s：不多不少在延迟点换代。
+      const delays = [2_000, 4_000, 8_000, 16_000, 30_000, 30_000]
+      for (const delay of delays) {
+        const before: number = sockets.length
+        sockets[before - 1].open() // 清掉连接期限；不送 ready ⇒ 稳定复位不参与本段
+        sockets[before - 1].onclose?.({})
+        mock.timers.tick(delay - 1)
+        assert.equal(sockets.length, before, `${delay}ms 退避内不得提前重连`)
+        mock.timers.tick(1)
+        assert.equal(sockets.length, before + 1, `${delay}ms 到点必须换掉死载波`)
+        assert.equal(facts.status().reconnects, before, '每次换代恰记一次重连')
+      }
+      // ③ 可信且连续 ready 满 30s ⇒ 退避复位到 1s（而不是停在封顶值）。
+      listOk = true
+      const stable = sockets[sockets.length - 1]
+      stable.open()
+      stable.item({ type: 'ready', clientId: 'c' })
+      await new Promise(resolve => setImmediate(resolve))
+      mock.timers.tick(30_000)
+      const beforeReset = sockets.length
+      stable.onclose?.({})
+      mock.timers.tick(999)
+      assert.equal(sockets.length, beforeReset, '稳定 30s 后退避复位为 1s：999ms 内不得重连')
+      mock.timers.tick(1)
+      assert.equal(sockets.length, beforeReset + 1, '复位后的真失败等 1s 基线')
+    } finally {
+      facts.stop()
+    }
   } finally {
-    facts.stop()
+    mock.timers.reset()
   }
 })
 
@@ -801,7 +965,7 @@ test('two complete baseline absences retire a row without forging a completion',
   let items: unknown[] = [{ sessionId: 's1', running: true, updatedAt: 1 }]
   const facts = createSourceMuxFacts({
     sourceId: 'baseline-removal', origin: 'http://cp', onSnapshot: snapshot => snapshots.push(snapshot),
-    openSocket: () => socket, reconcileIntervalMs: 1_000, silenceTimeoutMs: 1_000,
+    openSocket: () => socket, reconcileIntervalMs: 1_000,
     fetchImpl: rpcFetch({ 'session/list': () => ({ items }) }) as never,
   })
   try {
@@ -828,7 +992,7 @@ test('a live session event resets the baseline absence count', async () => {
   let items: unknown[] = [{ sessionId: 's1', running: true, updatedAt: 1 }]
   const facts = createSourceMuxFacts({
     sourceId: 'absence-reset', origin: 'http://cp', onSnapshot: snapshot => snapshots.push(snapshot),
-    openSocket: () => socket, reconcileIntervalMs: 1_000, silenceTimeoutMs: 1_000,
+    openSocket: () => socket, reconcileIntervalMs: 1_000,
     fetchImpl: rpcFetch({ 'session/list': () => ({ items }) }) as never,
   })
   try {
@@ -853,7 +1017,7 @@ test('stop/start discards an old follow reply before the new subscription can us
   const facts = createSourceMuxFacts({
     sourceId: 'restart', origin: 'http://cp', onSnapshot: snapshot => snapshots.push(snapshot),
     openSocket: () => { const socket = new FakeSocket(); sockets.push(socket); return socket },
-    fetchImpl: rpc.fetchImpl as never, reconcileIntervalMs: 1_000, silenceTimeoutMs: 1_000,
+    fetchImpl: rpc.fetchImpl as never, reconcileIntervalMs: 1_000,
   })
   try {
     facts.start()
@@ -887,7 +1051,7 @@ test('a tail arriving during baseline-confirmed absence cannot turn deletion int
   const facts = createSourceMuxFacts({
     sourceId: 'absence-tail', origin: 'http://cp', onSnapshot: snapshot => snapshots.push(snapshot),
     openSocket: () => socket, fetchImpl: rpc.fetchImpl as never,
-    reconcileIntervalMs: 1_000, silenceTimeoutMs: 1_000,
+    reconcileIntervalMs: 1_000,
   })
   try {
     facts.start()
@@ -918,15 +1082,15 @@ test('a tail arriving during baseline-confirmed absence cannot turn deletion int
  * 形状以当前冻结协议 (control-plane/src/session-mux.ts) 为准。
  */
 
-/** $events 开场不重放 status ⇒ 重订阅后的基线是跨缺口完成的唯一证据。 */
-test('B1: a true->false baseline edge after resubscription reads the tail and arms', async () => {
+/** $events 开场不重放 status ⇒ 换代/静默缺口后的基线是跨缺口完成的唯一证据。 */
+test('B1: a true->false baseline edge after a silent gap reads the tail and arms', async () => {
   const sockets: FakeSocket[] = []
   const snapshots: unknown[] = []
   const follows: unknown[] = []
   let running = true
   const facts = createSourceMuxFacts({
     sourceId: 'ssh-b1', origin: 'http://cp', now: () => 2_000, onSnapshot: s => snapshots.push(s),
-    silenceTimeoutMs: 25,
+    reconcileIntervalMs: 20,
     openSocket: () => { const s = new FakeSocket(); sockets.push(s); return s },
     fetchImpl: rpcFetch({ 'session/list': () => ({ items: [{ sessionId: 's1', running, updatedAt: 100 }] }) }) as never,
   })
@@ -937,15 +1101,12 @@ test('B1: a true->false baseline edge after resubscription reads the tail and ar
     answer(sockets[0])
     await new Promise(resolve => setTimeout(resolve, 5))
     sockets[0].item({ type: 'ready', clientId: 'c' })
-    // 缺口：静默窗内会话完成；$events 不重放 status，只有下一次基线能看见。
+    // 缺口：会话完成，但 $events 不重放 status（本机实测连 emit 都没有），只有
+    // 下一次周期基线能看见——修复来自基线，不是换代。
     running = false
-    await new Promise(resolve => setTimeout(resolve, 60))
-    assert.ok(sockets.length >= 2, 'silence must resubscribe (R21)')
-    sockets.at(-1)!.open()
-    answer(sockets.at(-1)!)
-    await new Promise(resolve => setTimeout(resolve, 10))
+    await waitFor(() => facts.status().edges === 1, 'the periodic baseline never saw the completion')
     assert.equal(follows.length, 1, 'a baseline true->false edge must open exactly one follow')
-    assert.equal(facts.status().edges, 1, 'the baseline edge must count like a status edge')
+    assert.equal(sockets.length, 1, 'the gap must be healed by the baseline, not by replacing the carrier')
     const last = snapshots.at(-1) as { rows: Record<string, Record<string, unknown>> }
     assert.notEqual(last.rows['s1']?.completedAt ?? null, null, 'the gap completion must arm completedAt')
   } finally {
@@ -953,14 +1114,14 @@ test('B1: a true->false baseline edge after resubscription reads the tail and ar
   }
 })
 
-/** 重连/静默重基线不得用空完成字段覆盖已武装的完成。 */
+/** 周期重基线不得用空完成字段覆盖已武装的完成。 */
 test('B2: a re-baseline never clobbers an armed completion', async () => {
   const sockets: FakeSocket[] = []
   const snapshots: unknown[] = []
   let listCall = 0
   const facts = createSourceMuxFacts({
     sourceId: 'ssh-b2', origin: 'http://cp', now: () => 900, onSnapshot: s => snapshots.push(s),
-    silenceTimeoutMs: 25,
+    reconcileIntervalMs: 20,
     openSocket: () => { const s = new FakeSocket(); sockets.push(s); return s },
     fetchImpl: rpcFetch({
       // 第二次基线带更旧的 updatedAt 与 rowFromListItem 的空完成字段。
@@ -979,56 +1140,65 @@ test('B2: a re-baseline never clobbers an armed completion', async () => {
     const armed = (snapshots.at(-1) as { rows: Record<string, Record<string, unknown>> }).rows['s1']
     const armedAt = armed?.completedAt
     assert.notEqual(armedAt ?? null, null, 'precondition: the status edge armed the completion')
-    await new Promise(resolve => setTimeout(resolve, 60))
-    assert.ok(sockets.length >= 2, 'silence must resubscribe (the re-baseline path)')
-    sockets.at(-1)!.open()
-    await new Promise(resolve => setTimeout(resolve, 10))
+    // 静默窗内发生周期重基线（updatedAt 更旧）：空完成字段不得覆盖已武装的完成。
+    await waitFor(() => listCall >= 3, 'the periodic re-baseline never ran')
     const after = (snapshots.at(-1) as { rows: Record<string, Record<string, unknown>> }).rows['s1']
     assert.equal(after?.completedAt, armedAt, 'the baseline must not wipe the armed completion')
     assert.equal(after?.completedAtSource, armed?.completedAtSource)
     assert.deepEqual(after?.lastTurnEnd, armed?.lastTurnEnd)
     assert.equal(after?.updatedAt, 5, 'updatedAt merges by max, never backwards')
+    assert.equal(sockets.length, 1, 'the re-baseline must not replace the carrier')
   } finally {
     facts.stop()
   }
 })
 
 
-/** connect() 换代后，旧 socket 的 onclose 不得再改状态或调度重连。 */
+/** 真失败换代后，被换掉的旧 socket 的 onclose 不得再改状态或调度重连。 */
 test('B3: a superseded socket cannot reschedule or mutate state', async () => {
-  const sockets: FakeSocket[] = []
-  const snapshots: unknown[] = []
-  const facts = createSourceMuxFacts({
-    sourceId: 'ssh-b3', origin: 'http://cp', onSnapshot: s => snapshots.push(s),
-    silenceTimeoutMs: 200,
-    openSocket: () => { const s = new FakeSocket(); sockets.push(s); return s },
-    fetchImpl: rpcFetch({ 'session/list': () => ({ items: [] }) }) as never,
-  })
+  mock.timers.enable({ apis: ['setTimeout'] })
   try {
-    facts.start()
-    sockets[0].open()
-    sockets[0].item({ type: 'ready', clientId: 'c' })
-    await new Promise(resolve => setTimeout(resolve, 260))
-    // 静默重订阅：connect() 换掉旧 socket（旧 socket 仍会收到自己的 close）。
-    assert.equal(sockets.length, 2, 'the silence window must have resubscribed')
-    const superseded = sockets[0]
-    const fresh = sockets[1]
-    fresh.open()
-    fresh.item({ type: 'ready', clientId: 'c' })
-    await new Promise(resolve => setTimeout(resolve, 5))
-    superseded.onclose?.({})
-    await new Promise(resolve => setTimeout(resolve, 5))
-    assert.equal((snapshots.at(-1) as { verdict: string }).verdict, 'ok', 'a superseded close must not degrade the live generation')
-    assert.equal(facts.status().reconnects, 1, 'only the silence resubscribe happened so far')
-    // 自激窗：若旧 close 调度了 1s 重连，1.2s 内会再建一条 socket（喂帧保持本代际静默窗不触发）。
-    for (let i = 0; i < 30; i += 1) {
-      await new Promise(resolve => setTimeout(resolve, 40))
-      sockets.at(-1)?.item({ type: 'cancel', eventId: 'keep-alive' })
+    const sockets: FakeSocket[] = []
+    const snapshots: unknown[] = []
+    const facts = createSourceMuxFacts({
+      sourceId: 'ssh-b3', origin: 'http://cp', onSnapshot: s => snapshots.push(s),
+      openSocket: () => { const s = new FakeSocket(); sockets.push(s); return s },
+      fetchImpl: rpcFetch({ 'session/list': () => ({ items: [] }) }) as never,
+    })
+    try {
+      facts.start()
+      sockets[0].open()
+      sockets[0].item({ type: 'ready', clientId: 'c' })
+      await settleMicrotasks()
+      assert.equal(facts.status().ready, true)
+
+      // 真失败（onerror）仍换代：1s 有界退避后建新 socket。
+      sockets[0].onerror?.({})
+      assert.equal(sockets[0].closed, true, 'the failed carrier is closed')
+      mock.timers.tick(1_001)
+      assert.equal(sockets.length, 2, 'a real failure still replaces the carrier')
+      const superseded = sockets[0]
+      const fresh = sockets[1]
+      fresh.open()
+      fresh.item({ type: 'ready', clientId: 'c' })
+      await settleMicrotasks()
+      assert.equal(facts.status().ready, true)
+      assert.equal(facts.status().reconnects, 1)
+
+      // 旧 socket 的 close 属于旧代际：不得降级、不得再排一次重连。
+      superseded.onclose?.({})
+      await settleMicrotasks()
+      assert.equal((snapshots.at(-1) as { verdict: string }).verdict, 'ok', 'a superseded close must not degrade the live generation')
+      // 自激窗：若旧 close 调度了换代（退避已翻倍到 2s），5s 内会出现第三条 socket。
+      mock.timers.tick(5_000)
+      assert.equal(sockets.length, 2, 'no self-excited reconnect loop')
+      assert.equal(facts.status().reconnects, 1, 'only the real failure replaced the carrier')
+      assert.equal((snapshots.at(-1) as { verdict: string }).verdict, 'ok')
+    } finally {
+      facts.stop()
     }
-    assert.equal(sockets.length, 2, 'no self-excited reconnect loop')
-    assert.equal((snapshots.at(-1) as { verdict: string }).verdict, 'ok')
   } finally {
-    facts.stop()
+    mock.timers.reset()
   }
 })
 

@@ -57,23 +57,24 @@ export interface SourceMuxDeps {
   now?: () => number
   /** 快照/增量到达（与 gateway 事实源同形）。 */
   onSnapshot: (snapshot: SessionFactsSnapshot) => void
-  /** 事件静默窗口（默认 45s，与 watcher 一致）。 */
-  silenceTimeoutMs?: number
   /** session/list 基线 deadline（默认 5s；半死隧道下不得永久挂起）。 */
   baselineTimeoutMs?: number
   /** 每条边沿 session/follow 的 deadline（默认 2s，与 control-plane/session-mux.ts 同预算）。 */
   followTimeoutMs?: number
-  /** 与事件静默重连独立的低频对账；即使 socket 持续有帧也能修复丢失的 status。 */
+  /** 基线因期间事件失效后的重取样最小间隔（默认 250ms）：合并 + 节拍上限。 */
+  baselineResampleMinMs?: number
+  /** 与载波换代独立的低频对账；即使 socket 持续有帧也能修复丢失的 status。 */
   reconcileIntervalMs?: number
 }
 
 export const MUX_PATH = '/api/remote.mux'
 export const EVENTS_ENDPOINT = '$events'
-export const DEFAULT_FACTS_SILENCE_MS = 45_000
 /** 基线 unary deadline——半死隧道下「挂起」必须在预算内变成可数的失败。 */
 export const DEFAULT_BASELINE_TIMEOUT_MS = 5_000
 /** 完成边沿读尾 deadline（对齐 control-plane/session-mux.ts 的 2s 预算）。 */
 export const DEFAULT_FOLLOW_TIMEOUT_MS = 2_000
+/** 失效基线的重取样节拍（事件密集源上把「事件率 > RPC 周期」变成有界节奏；仲裁者不变）。 */
+export const DEFAULT_BASELINE_RESAMPLE_MIN_MS = 250
 export const DEFAULT_RECONCILE_INTERVAL_MS = 30_000
 /** 可用 host 时间（epoch ms）的下界；小于它的数字不是 host 域观测，绝不臆造。 */
 export const HOST_EPOCH_MS_FLOOR = 1e12
@@ -527,6 +528,7 @@ export interface SourceMuxStatus {
   pendingReads: number
   /** 已观察到停止、但仍缺可归属 turn/end 的会话数。 */
   pendingClassifications: number
+  /** 真实载波换代次数（onclose/onerror、$events 的 end/error 帧、handshakeTimeout）；静默不换代。 */
   reconnects: number
   /** 成功取到基线的次数（每次 (re)connect 都必须重新对账）。 */
   baselines: number
@@ -551,9 +553,9 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   const fetchImpl = deps.fetchImpl ?? ((...args: Parameters<typeof fetch>) => fetch(...args))
   const openSocket = deps.openSocket ?? ((url: string) => new WebSocket(url) as unknown as MuxSocket)
   const base = muxBaseFor(deps.origin, deps.sourceId)
-  const silenceMs = deps.silenceTimeoutMs ?? DEFAULT_FACTS_SILENCE_MS
   const baselineTimeoutMs = deps.baselineTimeoutMs ?? DEFAULT_BASELINE_TIMEOUT_MS
   const followTimeoutMs = deps.followTimeoutMs ?? DEFAULT_FOLLOW_TIMEOUT_MS
+  const baselineResampleMinMs = deps.baselineResampleMinMs ?? DEFAULT_BASELINE_RESAMPLE_MIN_MS
   const reconcileIntervalMs = deps.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_MS
   const rows = new Map<string, SourceMuxRow>()
   const runningBefore = new Map<string, boolean>()
@@ -591,20 +593,45 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   let followFailures = 0
   let socketErrors = 0
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-let connectDeadlineTimer: ReturnType<typeof setTimeout> | null = null
-/** A carrier that never opens, errors or closes would leave the observer with no
- *  silence evidence and no retry: the missing handshake is itself a carrier failure. */
-const clearConnectDeadline = (): void => {
-  if (connectDeadlineTimer !== null) clearTimeout(connectDeadlineTimer)
-  connectDeadlineTimer = null
-}
-  let silenceTimer: ReturnType<typeof setTimeout> | null = null
+  let connectDeadlineTimer: ReturnType<typeof setTimeout> | null = null
   let reconcileTimer: ReturnType<typeof setTimeout> | null = null
   let stableTimer: ReturnType<typeof setTimeout> | null = null
+  let baselineResampleTimer: ReturnType<typeof setTimeout> | null = null
+  /** A carrier that never opens, errors or closes would leave the observer with no
+   *  failure evidence and no retry: the missing handshake is itself a carrier failure. */
+  const clearConnectDeadline = (): void => {
+    if (connectDeadlineTimer !== null) clearTimeout(connectDeadlineTimer)
+    connectDeadlineTimer = null
+  }
+  /**
+   * One pending baseline re-sample (review O1). The list's sampling point is unknown, so an
+   * event that arrived while it was in flight makes it stale - re-sample rather than let the old
+   * list overwrite newer events. That retry is COALESCED and PACED: one pending re-sample absorbs
+   * every invalidation in the window and runs no sooner than `baselineResampleMinMs`, so an
+   * event-dense source cannot turn "event rate > list RPC period" into an unbounded stream of
+   * full-table fetches. The arbiter is unchanged: a stale sample still never overwrites a newer event.
+   */
+  const scheduleBaselineResample = (): void => {
+    if (stopped || baselineResampleTimer !== null) return
+    // The pending re-sample belongs to the generation that invalidated the sample: a
+    // carrier turnover re-baselines on its own ready frame, so a stale retry must not
+    // fetch a second time (the reconcile timer captures its generation the same way).
+    const atGeneration = generation
+    baselineResampleTimer = setTimeout(() => {
+      baselineResampleTimer = null
+      if (stopped || atGeneration !== generation) return
+      void baseline()
+    }, baselineResampleMinMs)
+  }
+  const clearBaselineResample = (): void => {
+    if (baselineResampleTimer === null) return
+    clearTimeout(baselineResampleTimer)
+    baselineResampleTimer = null
+  }
   /**
    * 连接代际：connect() 换掉旧 socket / onclose 确认死亡时代际 +1；旧代际的一切回调
-   * （含在途基线）不得再改状态或调度重连——否则旧 socket 的 onclose 会在每次静默
-   * 重订阅后再排一次 1s 重连（自激洪泛）。
+   * （含在途基线）不得再改状态或调度重连——否则旧 socket 的 onclose 会在每次真实
+   * 换代后再排一次 1s 重连（自激洪泛）。
    */
   let generation = 0
   // 重连指数退避（1s 起、30s 封顶）：源长时间不可达时不得变成每秒一次的重试洪流。
@@ -645,7 +672,6 @@ const clearConnectDeadline = (): void => {
     deps.onSnapshot(snapshot())
   }
 
-  /**
   /**
    * 进程内 activation 与（基线/added 建出的）行合并：identity 命中即消费；绑定 id 与基线
    * 不同时**保留**这条边，待后续 projection 携带匹配 identity（P2a applyRetainedGoalActivation
@@ -692,7 +718,7 @@ const clearConnectDeadline = (): void => {
   }
 
   /**
-   * 新的 $events 代际（ready 假→真；含重连与静默重订）：emit 型帧无重放 ⇒ 进程内 activation
+   * 新的 $events 代际（ready 假→真；含换代重连）：emit 型帧无重放 ⇒ 进程内 activation
    * 不再可信，表与行上残留值一并清回 unknown（防陈旧 armed/disarmed）。
    */
   function clearGoalActivations(): void {
@@ -748,13 +774,6 @@ const clearConnectDeadline = (): void => {
       return body.result.value
     } finally {
       if (timer !== null) clearTimeout(timer)
-    }
-  }
-
-  function clearSilence(): void {
-    if (silenceTimer !== null) {
-      clearTimeout(silenceTimer)
-      silenceTimer = null
     }
   }
 
@@ -852,10 +871,9 @@ const clearConnectDeadline = (): void => {
   }
 
   /**
-  /**
    * 基线对账：只合 running/updatedAt(max)/factAt 与 goal 三值事实，保留既有完成字段；
    * host 的新提示水位撤销旧完成。
-   * previous.running===true && row.running===false 是重订阅后跨缺口完成的**唯一证据**
+   * previous.running===true && row.running===false 是换代重连后跨缺口完成的**唯一证据**
    * （$events 开场不重放 status）⇒ 与 status 边沿同一条 readTail 路径；基线也播种
    * runningBefore（缺口边沿的另一半证据）。
    */
@@ -878,8 +896,9 @@ const clearConnectDeadline = (): void => {
     }
     if (stopped || atGeneration !== generation || request !== baselineRequest) return
     if (atRevision !== eventRevision) {
-      // 列表的取样点未知；其间收到的事件可能比列表新。重新取样，不用旧列表覆写事件。
-      void baseline()
+      // 列表的取样点未知；其间收到的事件可能比列表新。重新取样，不用旧列表覆写事件——
+      // 但经 scheduleBaselineResample 合并 + 限速（review O1），不做无间隔递归。
+      scheduleBaselineResample()
       return
     }
     const envelope = value as { items?: unknown } | null | undefined
@@ -941,7 +960,6 @@ const clearConnectDeadline = (): void => {
     emit()
   }
 
-  /**
   /**
    * 对已观察到的 true→false 边沿和可能丢失两帧的提示水位读尾，然后分类。每条
    * true→false 边沿（status 或基线）恰好一次 follow 读尾再分类。completedAt
@@ -1132,20 +1150,23 @@ const clearConnectDeadline = (): void => {
     else if (event === 'goal/activation-changed') handleGoalActivation(args)
   }
 
-  function armSilence(): void {
-    clearSilence()
-    const armedGeneration = generation
-    silenceTimer = setTimeout(() => {
-      silenceTimer = null
-      if (stopped || armedGeneration !== generation) return
-      // 连接在、事件停 ⇒ 载波恢复：重订阅 + 重取基线。**不**发布内容停顿证据：
-      // 来源级 $events 静默不是本会话的内容进度（assistant 文本走独立 session/follow），
-      // 长生成与别的会话的事件都会让这个信号说谎。页面内容证据只来自真正观测会话
-      // 内容的观察者（gateway facts cursor），见 session-content-stall.ts 注册表。
-      reconnects += 1
-      connect()
-    }, silenceMs)
-  }
+  /**
+   * 这里曾有一条 45s 静默换代看门狗（armSilence）。**已删除**，且不得复活：
+   *
+   * ① 静默不是内容证据——来源级 $events 静默不是本会话的内容进度（assistant 文本走
+   *    独立 session/follow），长生成与别的会话的事件都会让这个信号说谎。页面内容证据
+   *    只来自真正观测会话内容的观察者（gateway facts cursor），
+   *    见 session-content-stall.ts 注册表。
+   * ② 静默也不是载波证据——本机实测：观察者的 $events 逻辑流在整条 socket 的生命期
+   *    只收到一帧 ready，**没有任何 emit**，而事实（行/字段）全部来自 30s 一次的 unary
+   *    基线 session/list。也就是说这条逻辑流的边沿事实当前不可用，静默只反映"这个
+   *    能力没有被实现/没有事件"，而非承载它的 socket 坏了；据此换代等于把唯一可用的
+   *    载波周期性换掉（旧行为：9 次/8 分钟、寿命精确 45.0s、被换掉的 socket 每条命
+   *    只收到 1 帧 147B = ready）。
+   *
+   * 结论：socket 活到来源退役为止。换代只由真失败驱动——$events 的 end/error 帧、
+   * onclose/onerror、handshakeTimeout——并统一走 scheduleReconnect 的 1s→30s 有界退避。
+   */
 
   function scheduleReconnect(): void {
     if (stopped || reconnectTimer !== null) return
@@ -1174,7 +1195,6 @@ const clearConnectDeadline = (): void => {
       const previous = socket
       cancelFollows()
       socket = null
-      clearSilence()
       clearReconcile()
       clearStable()
       try {
@@ -1209,7 +1229,6 @@ const clearConnectDeadline = (): void => {
       socket = null
       socketReady = false
       baselineTrusted = false
-      clearSilence()
       clearReconcile()
       clearStable()
       emit()
@@ -1225,7 +1244,6 @@ const clearConnectDeadline = (): void => {
         failCarrier()
         return
       }
-      armSilence()
       armReconcile()
       void baseline()
     }
@@ -1252,14 +1270,13 @@ const clearConnectDeadline = (): void => {
       }
       if (frame.kind === 'other') return
       lastEventAt = now()
-      armSilence()
       if (frame.kind === 'ready') {
         const freshGeneration = !socketReady
         socketReady = true
         // A single ready frame is not a stable connection. Repeated logical
         // stream failures must retain exponential backoff.
         armStableReconnectReset()
-        // 新的 $events 代际（首连/重连/静默重订；onopen 与 onclose 都置 socketReady=false）：
+        // 新的 $events 代际（首连/换代重连；onopen 与 onclose 都置 socketReady=false）：
         // emit 型帧无重放 ⇒ 进程内 activation 不再可信，表与行一并清回 unknown。
         if (freshGeneration) clearGoalActivations()
         // 握手只证明载波可用；事实基线成功前仍必须让运行时边沿负责完成。
@@ -1324,9 +1341,9 @@ const clearConnectDeadline = (): void => {
       generation += 1
       if (reconnectTimer !== null) clearTimeout(reconnectTimer)
       clearConnectDeadline()
-      clearSilence()
       clearReconcile()
       clearStable()
+      clearBaselineResample()
       reconnectTimer = null
       const current = socket
       cancelFollows()

@@ -9,7 +9,7 @@
  *
  * Run directly: node test/session-state/source-mux-facts-goal.test.ts
  */
-import { test } from 'node:test'
+import { mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -67,6 +67,12 @@ function rpcFetch(handlers: Record<string, (payload: unknown) => unknown>) {
 
 function hasKey(value: unknown, key: string): boolean {
   return value !== null && value !== undefined && Object.hasOwn(value as object, key)
+}
+
+/** Drain microtasks while setTimeout is mocked (setImmediate stays real). */
+async function settleMicrotasks(): Promise<void> {
+  for (let i = 0; i < 10; i += 1) await Promise.resolve()
+  await new Promise<void>(resolve => { setImmediate(resolve) })
 }
 
 /** 隐私诱饵：解析器一旦读它们，下面的行/源码断言就会抓到。 */
@@ -300,41 +306,46 @@ test('P2b: activation is bound to the goal identity — a stale edge never arms 
 })
 
 test('P2b: a fresh ready generation clears the in-memory activation but keeps the durable fact', async () => {
-  const sockets: FakeSocket[] = []
-  const snapshots: unknown[] = []
-  const facts = createSourceMuxFacts({
-    sourceId: 'ssh-goal-2', origin: 'http://cp', now: () => 600, onSnapshot: s => snapshots.push(s),
-    silenceTimeoutMs: 25,
-    openSocket: () => { const s = new FakeSocket(); sockets.push(s); return s },
-    fetchImpl: rpcFetch({
-      'session/list': () => ({ items: [leakyItem({ goal: goalProjection({ id: 'g1', revision: 2, phase: 'active', updatedAt: 9 }) })] }),
-    }) as never,
-  })
+  mock.timers.enable({ apis: ['setTimeout'] })
   try {
-    facts.start()
-    sockets[0].open()
-    await new Promise(resolve => setTimeout(resolve, 5))
-    sockets[0].item({ type: 'ready', clientId: 'c' })
-    sockets[0].item({ type: 'emit', event: 'goal/activation-changed', args: [{ sessionId: 's1', goal: { id: 'g1', revision: 2, activation: 'armed' } }] })
-    let last = snapshots.at(-1) as { rows: Record<string, Record<string, unknown>> }
-    assert.equal((last.rows['s1']?.goal as Record<string, unknown>)?.activation, 'armed')
-    // 静默重订 ⇒ 新 socket + 新 ready 代际。
-    await new Promise(resolve => setTimeout(resolve, 60))
-    assert.ok(sockets.length >= 2, 'silence must resubscribe')
-    sockets.at(-1)!.open()
-    sockets.at(-1)!.item({ type: 'ready', clientId: 'c' })
-    await new Promise(resolve => setTimeout(resolve, 10))
-    last = snapshots.at(-1) as { rows: Record<string, Record<string, unknown>> }
-    const goal = last.rows['s1']?.goal as Record<string, unknown>
-    assert.equal(goal?.goalId, 'g1', 'the durable goal fact survives the generation change')
-    assert.equal(goal?.revision, 2)
-    assert.equal(hasKey(goal, 'activation'), false, 'activation is cleared back to unknown')
-    // 表也被清空：后继 added 携带同 goalId 时不得复活旧 armed。
-    sockets.at(-1)!.item({ type: 'emit', event: 'api-session/added', args: [{ sessionId: 's1', running: false, updatedAt: 100, projections: { values: { goal: goalProjection({ id: 'g1', revision: 2, phase: 'active', updatedAt: 9 }) } } }] })
-    last = snapshots.at(-1) as { rows: Record<string, Record<string, unknown>> }
-    assert.equal(hasKey(last.rows['s1']?.goal, 'activation'), false, 'the cleared map must not re-apply the old activation')
+    const sockets: FakeSocket[] = []
+    const snapshots: unknown[] = []
+    const facts = createSourceMuxFacts({
+      sourceId: 'ssh-goal-2', origin: 'http://cp', now: () => 600, onSnapshot: s => snapshots.push(s),
+      openSocket: () => { const s = new FakeSocket(); sockets.push(s); return s },
+      fetchImpl: rpcFetch({
+        'session/list': () => ({ items: [leakyItem({ goal: goalProjection({ id: 'g1', revision: 2, phase: 'active', updatedAt: 9 }) })] }),
+      }) as never,
+    })
+    try {
+      facts.start()
+      sockets[0].open()
+      await settleMicrotasks()
+      sockets[0].item({ type: 'ready', clientId: 'c' })
+      sockets[0].item({ type: 'emit', event: 'goal/activation-changed', args: [{ sessionId: 's1', goal: { id: 'g1', revision: 2, activation: 'armed' } }] })
+      let last = snapshots.at(-1) as { rows: Record<string, Record<string, unknown>> }
+      assert.equal((last.rows['s1']?.goal as Record<string, unknown>)?.activation, 'armed')
+      // 真失败换代 ⇒ 新 socket + 新 ready 代际（静默看门狗已删除：静默不换代）。
+      sockets[0].onerror?.({})
+      mock.timers.tick(1_001)
+      assert.equal(sockets.length, 2, 'a real carrier failure must replace the socket')
+      sockets[1].open()
+      sockets[1].item({ type: 'ready', clientId: 'c' })
+      await settleMicrotasks()
+      last = snapshots.at(-1) as { rows: Record<string, Record<string, unknown>> }
+      const goal = last.rows['s1']?.goal as Record<string, unknown>
+      assert.equal(goal?.goalId, 'g1', 'the durable goal fact survives the generation change')
+      assert.equal(goal?.revision, 2)
+      assert.equal(hasKey(goal, 'activation'), false, 'activation is cleared back to unknown')
+      // 表也被清空：后继 added 携带同 goalId 时不得复活旧 armed。
+      sockets[1].item({ type: 'emit', event: 'api-session/added', args: [{ sessionId: 's1', running: false, updatedAt: 100, projections: { values: { goal: goalProjection({ id: 'g1', revision: 2, phase: 'active', updatedAt: 9 }) } } }] })
+      last = snapshots.at(-1) as { rows: Record<string, Record<string, unknown>> }
+      assert.equal(hasKey(last.rows['s1']?.goal, 'activation'), false, 'the cleared map must not re-apply the old activation')
+    } finally {
+      facts.stop()
+    }
   } finally {
-    facts.stop()
+    mock.timers.reset()
   }
 })
 
