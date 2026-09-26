@@ -190,15 +190,15 @@ test('stream-health: the loading arm restarts its hold after an error-phase deto
   assert.deepEqual(notices, [null, null, 'loading-stall', null, null, null])
 })
 
-test('stream-health: the resync lever is armed only by a loading stall with a live concrete face', () => {
+test('stream-health: a loading stall is reported, never acted on, and only with the observed face', () => {
   // The hold must AGE first, exactly like the stall notice it rides with: the
   // control is never offered on the first frame of a load.
   const hold = planAt(createSessionStreamHealthState(), observe('loading', { resyncAvailable: true }), T0)
   assert.equal(hold.action, 'none')
   assert.equal(hold.notice, null)
   const stalled = planAt(hold.state, observe('loading', { resyncAvailable: true }), T0 + L)
-  assert.equal(stalled.action, 'resync')
-  assert.equal(stalled.notice, 'loading-stall', 'the reload arm keeps its own notice')
+  assert.equal(stalled.action, 'none', 'the header never rebuilds on its own')
+  assert.equal(stalled.notice, 'loading-stall', 'the stall notice keeps its own timing')
   // Fail-closed on a build without the concrete face: the SAME stall with no
   // observed availability arms nothing (and the reload arm is untouched).
   const unavailable = planAt(hold.state, observe('loading', { resyncAvailable: false }), T0 + L)
@@ -218,23 +218,23 @@ test('stream-health: the resync lever is armed only by a loading stall with a li
   )
 })
 
-test('stream-health: the presented error heals automatically, and the manual control survives an exhausted budget', () => {
+test('stream-health: the presented error heals automatically, and an exhausted budget only reports', () => {
   // Presented target + live concrete face: the automatic resync fires at the grace.
   const routedHold = planAt(createSessionStreamHealthState(), observe('error', { resyncAvailable: true }), T0)
   const routed = planAt(routedHold.state, observe('error', { resyncAvailable: true }), T0 + G)
   assert.equal(routed.action, 'heal')
   // With every automatic heal in the rolling window spent, the SAME observation
-  // must not dispatch another one — it ARMS the manual control instead, because
-  // the human click is its own bound and the chip is the only exit that keeps the
-  // page. NOT ledger-gated: the plan offers it even while the automatic lane is
-  // cooling.
+  // must not dispatch another one, and the notice now has no control to open:
+  // the page's own bounded ladder owns the escalation (the manual lever was
+  // retired by user ruling). The threshold still times the notice exactly as it
+  // did when it also opened the control.
   const spent: SessionStreamHealthState = { phase: 'error-hold', since: T0, healStamps: [T0, T0 + C, T0 + 2 * C] }
-  const armed = planAt(spent, observe('error', { resyncAvailable: true }), T0 + C + S)
-  assert.equal(armed.action, 'resync')
-  // The chip renders controls only alongside a notice, so an armed rebuild MUST
-  // carry one (action='resync' + notice=null would render neither the rebuild
-  // button nor the reload fallback).
-  assert.equal(armed.notice, 'heal-failed')
+  const spentNotice = planAt(spent, observe('error', { resyncAvailable: true }), T0 + C + S)
+  assert.equal(spentNotice.action, 'none')
+  // The chip reports the state: a spent automatic lane with a reachable face still
+  // shows the failure notice (the timing the arm used to share), it just has no
+  // control to offer.
+  assert.equal(spentNotice.notice, 'heal-failed')
   // Fail-closed without the concrete face: no action is ever invented, and the
   // reload notice only appears once the hold has outlived a repair attempt.
   const noLever = planAt(createSessionStreamHealthState(), observe('error', { resyncAvailable: false }), T0)
@@ -246,14 +246,14 @@ test('stream-health: the presented error heals automatically, and the manual con
   assert.equal(drained.notice, 'heal-failed', 'no lever at all is reported, not hidden')
 })
 
-test('stream-health: loading only arms a manual rebuild, independent of the error-heal ledger', () => {
+test('stream-health: loading never acts, independent of the error-heal ledger', () => {
   const hold = planAt(createSessionStreamHealthState(), observe('loading', { resyncAvailable: true }), T0)
   assert.equal(hold.action, 'none', 'the hold must age first, exactly like the stall notice')
-  const armed = planAt(hold.state, observe('loading', { resyncAvailable: true }), T0 + L)
-  assert.equal(armed.action, 'resync')
-  assert.equal(armed.notice, 'loading-stall')
+  const stalled = planAt(hold.state, observe('loading', { resyncAvailable: true }), T0 + L)
+  assert.equal(stalled.action, 'none')
+  assert.equal(stalled.notice, 'loading-stall')
   const spent: SessionStreamHealthState = { phase: 'loading-hold', since: T0, healStamps: [T0, T0 + 1_000, T0 + 2_000] }
-  assert.equal(planAt(spent, observe('loading', { resyncAvailable: true }), T0 + L).action, 'resync')
+  assert.equal(planAt(spent, observe('loading', { resyncAvailable: true }), T0 + L).action, 'none')
   const noFace = planAt(hold.state, observe('loading', { resyncAvailable: false }), T0 + L)
   assert.equal(noFace.action, 'none')
 })
@@ -283,14 +283,14 @@ test('stream-health: the rolling window edge is exclusive, and releases exactly 
   }
   const before = planAt(stamped, observe('error'), T0 + W - 1)
   assert.equal(before.state.healStamps.length, 3)
-  assert.equal(before.action, 'resync', 'the automatic lane is spent inside the window; the manual control is armed')
+  assert.equal(before.action, 'none', 'the automatic lane is spent inside the window and nothing replaces it')
   assert.equal(before.notice, 'heal-failed')
   const exactly = planAt(stamped, observe('error'), T0 + W)
   assert.equal(exactly.state.healStamps.length, 2)
   assert.equal(exactly.action, 'heal')
 })
 
-test('stream-health: both arms report their reload notice at the exact tick the levers run out', () => {
+test('stream-health: both arms report their failure notice at the exact tick the levers run out', () => {
   // No reachable face: the notice lands at grace + settle.
   const { notices } = drive([
     { at: T0, observation: observe('error', { resyncAvailable: false }) },
@@ -353,7 +353,7 @@ test('stream-health: the latch hangs off the settle clock, not off the healing p
   assert.deepEqual(flap.actions, [0, healed, 0, 0, 0, retry])
   assert.deepEqual(flap.notices, [null, null, null, null, 'heal-failed', 'heal-failed'])
 
-  // (b) once latched, a later loading dwell never takes the button back.
+  // (b) once latched, a later loading dwell never takes the notice back.
   const dwell = drive([
     { at: T0, observation: observe('error') },
     { at: healed, observation: observe('error') },
@@ -400,17 +400,17 @@ test('stream-health: the latch hangs off the settle clock, not off the healing p
     { at: healed + C, observation: observe('error') },
     { at: healed + C + S, observation: observe('error') },
   ])
-  // Indices 4-5 are the manual control armed while the cooldown blocks the
-  // automatic lane; index 6 is the new episode's own automatic heal (its notice
-  // stays null until the heal is judged), index 7 the latch after that heal's
-  // settle window. The point: the latch waits for THIS episode's own clock.
+  // Indices 4-5 report the spent/cooling automatic lane (no control exists any
+  // more); index 6 is the new episode's own automatic heal (its notice stays null
+  // until the heal is judged), index 7 the latch after that heal's settle window.
+  // The point: the latch waits for THIS episode's own clock.
   assert.deepEqual(newEpisode.notices,
                    [null, null, null, null, 'heal-failed', 'heal-failed', null, 'heal-failed'])
   assert.equal(newEpisode.actions[6], healed + C, 'the new episode still heals itself')
 })
 
 test('stream-health: the latch survives the retry heal\'s own settle window', () => {
-  // If the loading state or `markSessionStreamHeal` dropped the latch, the button
+  // If the loading state or `markSessionStreamHeal` dropped the latch, the notice
   // would go out for the retry's whole 20s judging window. One tick after the
   // retry must still carry it.
   const healed = T0 + G
@@ -442,8 +442,8 @@ test('stream-health: a recovery marker survives a loading dwell (no false latch)
     { at: healed + 3_000, observation: observe('error') },
     { at: healed + S + 3_000, observation: observe('error') },
   ])
-  // The last tick arms the manual control (the automatic lane is still cooling);
-  // the LATCH marker is what must stay unset — a false latch is the bug here.
+  // The last tick reports the cooling automatic lane (no control exists any
+  // more); the LATCH marker is what must stay unset — a false latch is the bug.
   assert.deepEqual(notices, [null, null, null, null, null, 'heal-failed'])
   assert.equal(state.healFailedLatched, undefined)
 })
@@ -742,25 +742,25 @@ test('stream-health: every notice key exists in both dictionaries', () => {
   // that the mapped key RESOLVES, so a helper rename can never ship a raw key.
   for (const key of [
     'streamHealth.label', 'streamHealth.healing', 'streamHealth.loadingStall', 'streamHealth.loadingFailed',
-    'streamHealth.healFailed', 'streamHealth.reload', 'streamHealth.resync', 'streamHealth.carrierChurn',
+    'streamHealth.healFailed', 'streamHealth.carrierChurn',
   ]) {
     assert.equal(typeof (zh as Record<string, string>)[key], 'string', 'zh is missing ' + key)
     assert.equal(typeof (en as Record<string, string>)[key], 'string', 'en is missing ' + key)
   }
 })
 
-test('stream-health: a terminal opening fact fails the load now and arms only the user control', () => {
+test('stream-health: a terminal opening fact fails the load now, with no action to take', () => {
   // The evidence outranks the stall timer: the notice lands on the FIRST tick,
-  // and the only action is the armed manual control — a loading face has no
+  // and no control is offered — a loading face has no
   // automatic arm here (this seat never re-issues an open on its own).
   const budget = planAt(createSessionStreamHealthState(), observe('loading', { openingFailure: 'budget-exhausted' }), T0)
   assert.equal(budget.notice, 'loading-failed', 'the terminal outcome IS the failure notice')
-  assert.equal(budget.action, 'resync')
+  assert.equal(budget.action, 'none')
   assert.notEqual(budget.action, 'heal', 'a proven-dead opening is never re-issued automatically')
   assert.equal(sessionStreamNoticeKey('loading-failed'), 'streamHealth.loadingFailed')
   const orphaned = planAt(createSessionStreamHealthState(), observe('loading', { openingFailure: 'orphaned' }), T0)
   assert.equal(orphaned.notice, 'loading-failed')
-  assert.equal(orphaned.action, 'resync')
+  assert.equal(orphaned.action, 'none')
   // No reachable concrete face: the failure is still shown; nothing is invented.
   const noFace = planAt(
     createSessionStreamHealthState(),

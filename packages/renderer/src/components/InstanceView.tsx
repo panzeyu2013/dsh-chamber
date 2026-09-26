@@ -531,22 +531,6 @@ export default function InstanceView({
         <div className="instance-session-open-recovery" data-chamber-session-open-recovery={openRecovery}
           role={openRecovery === 'waiting' ? 'status' : 'alert'}>
           <span>{frameText(locale, openRecovery === 'failed' ? 'sessionOpen.failed' : 'sessionOpen.waiting')}</span>
-          {openRecovery === 'failed' && currentSessionId !== undefined && (
-            <div className="instance-session-open-actions">
-              {sessionOpenHealth?.resyncAvailable === true && sessionOpenHealth.resyncInFlight !== true && (
-                <Button variant="primary" onClick={() => {
-                  const current = readInstanceSessionStreamHealth(instanceId, currentSessionId)
-                  if (current?.resyncInFlight === true || current?.resyncAvailable !== true) return
-                  const now = monotonicNow()
-                  deliveryOwnerRef.current.markDispatched(currentSessionId, 'resync', now)
-                  rebuildInstanceSessionStream(instanceId, currentSessionId)
-                }}>{frameText(locale, 'sessionOpen.rebuild')}</Button>
-              )}
-              <Button variant="outline" onClick={() => window.location.reload()}>
-                {frameText(locale, 'sessionOpen.reload')}
-              </Button>
-            </div>
-          )}
         </div>
       )}
       {/* a11y：动作出现后遮罩不是"纯忙"区域——aria-busy 会把区域的更新播报压后，

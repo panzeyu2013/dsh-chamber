@@ -235,7 +235,7 @@ test('stream-health seat: registered before the open-in gates, ladder state in t
   assert.doesNotMatch(seat, /previousPresented|rememberPresented|healSessionStream|hasHealRoute/)
 })
 
-test('stream-health seat: the page delivery owner owns the automatic rebuild, header retains the manual exit', () => {
+test('stream-health seat: the page delivery owner owns every rebuild, the header has no manual exit', () => {
   assert.match(seat, /const resyncAvailable = hasSessionStreamResync\(sessions, sessionId\)/)
   assert.match(seat, /healRoute: resyncAvailable/,
     'the automatic heal executes resync on the presented target, so its gate is the same guarded probe read')
@@ -246,8 +246,8 @@ test('stream-health seat: the page delivery owner owns the automatic rebuild, he
   assert.match(seat, /if \(plan\.action === 'heal'\) \{/)
   assert.doesNotMatch(seat, /plan\.action === 'auto-resync'/)
   assert.doesNotMatch(seat, /plan\.action === 'resync'/)
-  assert.equal([...seat.matchAll(/resyncSessionStream\(/gu)].length, 2,
-    'the header executes the automatic heal AND its injected user action — nothing else')
+  assert.equal([...seat.matchAll(/resyncSessionStream\(/gu)].length, 1,
+    'the header executes ONLY the automatic heal')
   const page = stripComments(source('../../../renderer/src/components/InstanceView.tsx'))
   // The automatic rebuild moved to the page-level delivery owner (one ladder, one
   // ledger); the retired planner must never return to the view.
@@ -282,24 +282,27 @@ test('stream-health seat: the page delivery owner owns the automatic rebuild, he
     'the retired stage-move helpers must not return to the shell')
   assert.match(page, /decision\.action\?\.tier === 'resync'/)
   assert.match(page, /rebuildInstanceSessionStream\(instanceId, currentSessionId\)/)
-  assert.doesNotMatch(seat, /if \(!sessionStreamLeversAvailable\(current, now\)\) return/,
-    'the manual exit must survive an exhausted automatic budget')
-  assert.match(seat, /resync: \(sessionId\) => \{/)
-  assert.match(seat, /storeLadder\(sessionId, markSessionStreamHeal\(current, now\)\)/)
+  // The manual lever is retired (user ruling: upstream has no such control): the
+  // header must not expose a reload, a rebuild, or the stamp that used to pace it.
+  assert.doesNotMatch(seat, /location\.reload\(\)/)
+  assert.doesNotMatch(seat, /resync: \(sessionId\) =>/)
+  assert.doesNotMatch(seat, /lastManualResyncAt|MANUAL_RESYNC_GUARD_MS|sessionStreamResyncInFlight/)
+  assert.doesNotMatch(stripComments(seat), /reload:|resync:/)
 })
 
-test('stream-health chip: only the injected action reloads, idle renders nothing, controls match the plan', () => {
+test('stream-health chip: no control is rendered and the chip never acts on its own', () => {
   assert.equal([...chip.matchAll(/location\.reload\(\)/gu)].length, 0, 'the chip must not reload on its own')
-  assert.equal([...seat.matchAll(/location\.reload\(\)/gu)].length, 1, 'exactly one reload path: the injected user action')
+  assert.equal([...seat.matchAll(/location\.reload\(\)/gu)].length, 0, 'the seat never reloads the page either')
   assert.doesNotMatch(chip, /useRef/, 'the ladder state must not live in a component ref')
   assert.match(chip, /if \(face\.label === null\) return null/)
   assert.match(chip, /<span role="status" aria-live="polite">\{label\}<\/span>/, 'the live region is the label alone')
   assert.doesNotMatch(chip, /<div[^>]*role="status"/)
-  assert.match(chip, /face\.reload \? \(/)
-  assert.match(chip, /face\.resync \? \(/)
-  assert.match(chip, /<button type="button" className=\{styles\.action\} onClick=\{\(\) => \{ resync\(sessionId\) \}\}>/)
-  assert.equal([...chip.matchAll(/resync\(sessionId\)/gu)].length, 1, 'the click is the only resync invocation in the chip')
-  assert.doesNotMatch(chip, /useEffect\(\(\) => \{ resync/, 'resync must not ride an effect')
+  // The manual controls are retired: the chip has no button, no control fields and
+  // no resync invocation at all.
+  assert.doesNotMatch(chip, /<button/)
+  assert.doesNotMatch(stripComments(chip), /face\.reload|face\.resync|resync\(sessionId\)/)
+  assert.doesNotMatch(chip, /reload\(|location\.reload/)
+  assert.doesNotMatch(stripComments(chip), /onClick/)
 })
 
 test('stream-health evidence: the page notice is fact-driven and the automatic arm ignores loading', () => {

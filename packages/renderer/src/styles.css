@@ -190,8 +190,6 @@ body {
   box-shadow: 0 8px 30px rgba(0, 0, 0, .18);
 }
 
-.instance-session-open-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-
 /* ---------- 骨架屏（加载中间态，design 05 §4） ----------
    盖在 shell 之上（shell 内部 dsh 启动页被骨架完全覆盖，无需 opacity 隐藏
    技巧）。骨架不模仿 dsh 布局几何（rail +

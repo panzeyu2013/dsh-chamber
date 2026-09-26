@@ -128,7 +128,7 @@
     旧 planner / 190s 回执链 / `authority-decision` / 双通知入口已删除，见 design 14 §D4「会话事实单一权威」）。
     下列子项按新形态复核后仍开放；全量 unary 读缺席须 N=2 一致才可写回，宿主返回列表的完整性仍没有水位证明（⑨）。未闭合：
     ① 实机/浏览器lane端到端复现未跑——fixture的 `__fxTiming.appendSilent` 与 `breakStreams` 两个timing hook可确定性回归，未接CI（失效判据 = 该场景进CI）；
-    ② HTTP通路健康而WS逻辑流半盲时运行位收敛但transcript不收敛（已落 fork 级杠杆：`RemoteJournalStream` 静默 ≥45s 时开旁路 sibling follow 只比对 opening cursor、仅当前进才重订阅，见 design 14 §D4「逻辑流开帧丢失与首帧期限」；宿主 `session/list` `projections.asOfSeq` 对账仍为可选收紧路径（未做）；`Session.resync()` 已作为**用户触发**的座席控制落地（见 ⑫），自动重放仍不做——失效判据 = `appendSilent` 场景进 CI 车道 + 真机校准）。`openState='error'` 与 `'loading'` 两个可观测变体已由健康臂收口（见 ⑫），「流仍open而静默」未闭合（见 ⑬）；
+    ② HTTP通路健康而WS逻辑流半盲时运行位收敛但transcript不收敛（已落 fork 级杠杆：`RemoteJournalStream` 静默 ≥45s 时开旁路 sibling follow 只比对 opening cursor、仅当前进才重订阅，见 design 14 §D4「逻辑流开帧丢失与首帧期限」；宿主 `session/list` `projections.asOfSeq` 对账仍为可选收紧路径（未做）；`Session.resync()` 已作为座席的**自动** heal 落地（用户触发档已退役，见 ⑫），自动重放仍不做——失效判据 = `appendSilent` 场景进 CI 车道 + 真机校准）。`openState='error'` 与 `'loading'` 两个可观测变体已由健康臂收口（见 ⑫），「流仍open而静默」未闭合（见 ⑬）；
     ③ 官方 `session.list` **单飞悬挂**时 L2 无效、store 的 `listState` 永久 loading；tier-3 写回已能纠正**事实**（侧栏/聊天面立即脱离陈旧位），但 store 级悬挂仍只能靠
     「重新加载」收口（需上游给 fetch 超时或客户端可清除 in-flight——失效判据 = 悬挂后重连能恢复，
     且写回路径在真机上被验证为「不依赖 store 收敛」）；
@@ -161,18 +161,18 @@
     失效判据 = 任一形态落地并删掉相应生产端通道（并补上被删面的等价证据），或复核确认现形态更优并写回 design 14 §D4。
      ⑫ **对话流健康臂（design 14 §D4）的实机验收未做**（治因已由 ⑬ 的 fork 补丁承担，本臂只兜 `ended(false)` 等剩余终局）：自动 resync 重开
      （`error` 满 8s、冷却 120s、滚动窗口 10 分钟 ≤3 次；已执行的 heal 过 settle 窗仍
-     `error` 即 latch「对话通道未恢复 + 重新加载」按钮——判据是 settle 时钟而非相位，
+     `error` 即 latch「对话通道未恢复」提示（按钮已退役，见 design 14 §D4）——判据是 settle 时钟而非相位，
      `loading` 驻留不清 latch）与 `loading` 20s 提示阈值均只在
      headless 复现与单测里验过，未在真机抖动下校准（杠杆所依赖的三条 vendor 事实已由
      `test/session-health/vendor-heal-contract.test.ts` 锁住：pin 升级若改了 retain/resync/open/error
      语义，该测试即红，届时恢复臂须重推而不是静默失效）；`error` 的自动重开还会让聊天面重挂载
      （滚动回尾）——是否需要「保持滚动位置」取决于实机观感。失效判据 = 真机拆链后自查恢复
-     header 健康臂之外的页面级打开恢复入口**不再对 `loading` 自动重建**（F2：`loading` 面在进入分类器前被摘除，在飞保护折进 `escalationBlocked`），它只把终局 opening 事实翻成 `loading-failed` 并 arm 用户控制；`error` 臂的自动 heal 仍按具象 `openPromise` 明确为空才执行（2s 后启动、15s 冷却、5 分钟至多 2 次），header 保留 `error` 自动 heal 与手动重建，两入口共用具象 Session 的 resync 在途互斥。两处在真机的可见性与恢复结果仍待验证：包内既有 ui-lock 源文本锁禁止 `src/client/**` 出现任何
+     header 健康臂之外的页面级打开恢复入口**不再对 `loading` 自动重建**（F2：`loading` 面在进入分类器前被摘除，在飞保护折进 `escalationBlocked`），它只把终局 opening 事实翻成 `loading-failed` 并给出提示（不再 arm 任何控制）；`error` 臂的自动 heal 仍按具象 `openPromise` 明确为空才执行（2s 后启动、15s 冷却、5 分钟至多 2 次），header 只保留 `error` 自动 heal（手动重建已退役），两入口共用具象 Session 的 resync 在途互斥。两处在真机的可见性与恢复结果仍待验证：包内既有 ui-lock 源文本锁禁止 `src/client/**` 出现任何
      `console.*`，所以它与 ⑩ 同源、仍无落盘面；`presented` 判据是 document 级 `[data-chat-flow]`
      **存在性**（非「实际可见」，多实例壳下可能把隐藏实例的 ChatView 也算作已呈现——放宽只让动作多
      发生一次，收窄会静默废掉恢复臂，故刻意取宽；失效判据 = 确认隐藏实例的 conversation 树是否常驻
      DOM 后改为按实例判定）；自动 heal 的前置条件改为 target 必须仍是 **main view 呈现的会话**
-     （`retainedBy.mainView>0`）且具象 `resync()` 经 rc.2 契约入口 `ISessions.binding(id)` 可达：address-only 子代理经官方 retain 呈现、可走自动 resync，只有不呈现的 masked gap 不可达；两者都保留「重新加载」，另有下述用户触发的 resync 兜底；新增**用户触发**的「重建对话通道」控制（具象 `Session.resync()` 能力守卫、计划只 arm、点击唯一执行、与自动 heal 共用 cooldown + 滚动预算），在 `loading` 停滞与自动 heal 被 blocked 的 `error` 两臂都可用（error 臂 armed 时同时给出 `heal-failed` 提示，chip 的动作区才渲染），不再只剩「重新加载」；观测字段 `healRoute` 只认 main view 呈现。失效判据 = 真机拆链后自查恢复
+     （`retainedBy.mainView>0`）且具象 `resync()` 经 rc.2 契约入口 `ISessions.binding(id)` 可达：address-only 子代理经官方 retain 呈现、可走自动 resync，只有不呈现的 masked gap 不可达；两个入口都只剩自动面——手动「重新加载 / 重建对话通道」控制已整体退役（用户裁决，见 design 14 §D4「手动出口退役」），`loading` 停滞与自动 heal 被 blocked 的 `error` 两臂都只报告提示；观测字段 `healRoute` 只认 main view 呈现。失效判据 = 真机拆链后自查恢复
      且判据写回 design 14 §D4。
      ⑬ **静默半死（`openState === 'open'` 而事件不再投递）**：起有 fork 级杠杆——静默 ≥45s 开旁路 sibling follow（20s 期限）只比对 opening cursor，**仅当宿主确已前进**才替换物理世代（design 14 §D4）；不设形状超时（合法长静默 TTFT 75s 起、工具可数分钟，盲超时必然误报）。治因（fork 载波重试不再终局）与信号面（`dsh-chamber:stream-carrier-failed` 页面事实 → 健康臂 chip「对话流正在重新连接…」）属已实现基线，契约（含拒绝替代）见 design 14 §D4。**仍未闭合**：①宿主侧流级 keepalive+游标未做；⑤首帧期限（30s 起，连续超时 30→60→120→240→300s）与探针阈值（45s/20s）未经真机校准；②真机抖动验收（判据 = 拆链后 `openState` 不落 `error`，且 churn 提示在真实 mux 抖动下出现并自行消退）；③churn 提示窗口（10s）与「按来源而非按会话」的粗粒度归属均未经真机校准（多会话同源时提示会同时出现在该源各会话上——刻意接受）；④`ended(false)`（正常结束而未收下 opening item）仍是终局，由健康臂兜底。失效判据 = ②③任一校准或裁决落地并写回 design 14 §D4。
     ⑭ **彻底修复链（tier-1.5 本地判定 + 权威相位 + tier-3 写回，design 14 §D4 ①b）的未闭合项**：
@@ -360,7 +360,7 @@
 
 - **流级预算仍是表外多副本（开放）**：`tables.ts`/`tables.json` 锁住的只有生命周期一族 10 个常量，`DEFAULT_FOLLOW_TIMEOUT_MS = 2_000` 与 `FOLLOW_MAX_MESSAGES = 8` 在 `packages/control-plane/src/session-mux.ts:63,65` 与 `packages/renderer/src/source-mux-facts.ts:75,359` 各一份（后者注释声称同预算但无锁），另有 `session-mux.ts:53-69`、`source-mux-facts.ts:73-80`、`remote-retry-policy.ts`、`stream-stall-policy.ts` 四族表外数字；`verify:ladder-table-parity` 的 CONSUMERS 不含这四个文件。出口判据 = 该族并入 tables 并进 parity 门，或给 2s/8 重复对加锁步断言。
 
-- **F2 座席（`session-stream-health-seat.ts`）无行为测试（开放）**：step、手动 1s 守卫、churn 的实例归属过滤、64 条 ladder 内存界只被 `test/ui-lock/instance-view-guard.test.ts` 的源码正则锁定。出口判据 = 可注入测试缝（或抽出纯 `seat-model.ts`）后补四条行为用例（连点只执行一次、异实例 churn 不改本实例、仅 loading 读 opening failure、65 会话淘汰最旧）。
+- **F2 座席（`session-stream-health-seat.ts`）无行为测试（开放）**：step、churn 的实例归属过滤、64 条 ladder 内存界只被 `test/ui-lock/instance-view-guard.test.ts` 的源码正则锁定。出口判据 = 可注入测试缝（或抽出纯 `seat-model.ts`）后补四条行为用例（`heal` 每次只派发一次、异实例 churn 不改本实例、仅 loading 读 opening failure、65 会话淘汰最旧）。
 
 - **F1 行为矩阵与 cancel 腿的测试缺口（开放）**：① `stream-client.ts` deadline 的 no-socket 兜底分支（:517-521）无用例，且它有意不推进加宽阶梯——该语义需一条行为用例钉住；② snapshot/wiring 两个入口只有 accept/miss 单格，缺跨世代与终局格；③ design 14:564 的期限到点 cancel 与 `session-mux.ts` timeout 腿的 cancel 无断言；④ F1→F2 的 window 事件 seam（`stream-forensics.ts:185` → `session-stream-health-probe.ts:386`）无端到端用例；⑤ 页面账本 64 条淘汰路径无用例。
 

@@ -131,10 +131,7 @@ export const zh = {
   /** Session title fallback used by the notification body. */
   'session.untitled': '未命名会话',
   'sessionOpen.waiting': '仍在载入会话内容。若主机迟迟没有响应，可继续等待。',
-  'sessionOpen.failed': '会话内容未载入。可以重建对话通道；若主机无响应，重建也无法生成缺失的历史内容。',
-  /** The conversation face is open; the content channel itself stopped updating. */
-  'sessionOpen.rebuild': '重建对话通道',
-  'sessionOpen.reload': '重新加载页面',
+  'sessionOpen.failed': '会话内容未载入。页面会按有界阶梯自动重试；若主机无响应，重试也无法生成缺失的历史内容。',
   /** Notification title: a session finished its turn. */
   'notification.sessionComplete': '会话已完成',
   /** Notification title: a held completion was flushed by its goal's outcome
@@ -200,9 +197,7 @@ export const en: Record<FrameKey, string> = {
   'source.local': 'Local instance',
   'session.untitled': 'Untitled session',
   'sessionOpen.waiting': 'Still loading this conversation. You can keep waiting for the host.',
-  'sessionOpen.failed': 'Conversation content did not load. Rebuild the stream, or reload the page. If the host is unresponsive, neither action can recreate missing history.',
-  'sessionOpen.rebuild': 'Rebuild conversation stream',
-  'sessionOpen.reload': 'Reload page',
+  'sessionOpen.failed': 'Conversation content did not load. The page retries on a bounded ladder; if the host is unresponsive, retries cannot recreate missing history either.',
   'notification.sessionComplete': 'Session complete',
   'notification.goalCompleted': 'Goal completed',
   'notification.goalBlocked': 'Goal blocked',

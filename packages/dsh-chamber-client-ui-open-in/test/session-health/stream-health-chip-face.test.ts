@@ -5,9 +5,13 @@
  * React/DOM test environment, so the component cannot be driven here; its
  * decisions live in the pure `session-stream-health-chip-face.ts` the component
  * projects, and this suite drives that module directly — source-text locks alone
- * would leave behaviour-reversing mutations (a notice rendered without its
- * reload control, an armed rebuild rendered with no button, a ticker that stops
- * re-planning, a `setPlan` that never de-duplicates) green.
+ * would leave behaviour-reversing mutations (a notice rendered as nothing, a
+ * label that ignores the notice, a ticker that stops re-planning, a `setPlan`
+ * that never de-duplicates) green.
+ *
+ * The manual reload/rebuild controls were retired (user ruling: upstream has no
+ * such control), so the face is a two-field REPORT (label + marker) and this
+ * suite pins that it has no action surface at all.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -39,46 +43,36 @@ const NOTICES: readonly SessionStreamNotice[] = ['loading-stall', 'loading-faile
 test('an idle ladder renders nothing, whatever the open state', () => {
   for (const openState of OPEN_STATES) {
     const face = sessionStreamHealthChipFace(planOf('idle', 'none', null), openState)
-    assert.equal(face.label, null, openState)
-    assert.equal(face.reload, false, openState)
-    assert.equal(face.resync, false, openState)
+    assert.deepEqual(face, { label: null, marker: 'recovering' }, openState)
   }
 })
 
-test('every notice renders its own label, marker and action set', () => {
+test('every notice IS the label and the marker, and nothing else is rendered', () => {
   const faceOf = (notice: SessionStreamNotice, action: SessionStreamHealthPlan['action']) =>
     sessionStreamHealthChipFace(planOf('loading-hold', action, notice), 'loading')
   for (const notice of NOTICES) {
-    assert.equal(faceOf(notice, 'none').label, notice, 'the notice IS the label')
-    assert.equal(faceOf(notice, 'none').marker, notice, 'and the published marker')
-  }
-  assert.deepEqual(faceOf('loading-stall', 'resync'), {
-    label: 'loading-stall', reload: true, resync: true, marker: 'loading-stall',
-  })
-  assert.deepEqual(faceOf('loading-failed', 'resync'), {
-    label: 'loading-failed', reload: true, resync: true, marker: 'loading-failed',
-  })
-  assert.deepEqual(faceOf('heal-failed', 'none'), {
-    label: 'heal-failed', reload: true, resync: false, marker: 'heal-failed',
-  })
-  // Churn is informational: no control may interrupt the reopen in flight.
-  assert.deepEqual(faceOf('carrier-churn', 'none'), {
-    label: 'carrier-churn', reload: false, resync: false, marker: 'carrier-churn',
-  })
-})
-
-test('the rebuild control follows only the manual resync action', () => {
-  for (const action of ['none', 'heal', 'resync'] as const) {
-    const face = sessionStreamHealthChipFace(planOf('loading-hold', action, 'loading-stall'), 'loading')
-    assert.equal(face.resync, action === 'resync', action)
-    assert.equal(face.reload, true, action)
+    assert.deepEqual(
+      faceOf(notice, 'none'),
+      { label: notice, marker: notice },
+      'the visible surface is exactly the notice',
+    )
   }
 })
 
-test('a recovery in flight shows the healing label with no controls', () => {
+test('the face never depends on the plan action (no user control exists)', () => {
+  for (const action of ['none', 'heal'] as const) {
+    assert.deepEqual(
+      sessionStreamHealthChipFace(planOf('loading-hold', action, 'loading-stall'), 'loading'),
+      { label: 'loading-stall', marker: 'loading-stall' },
+      action,
+    )
+  }
+})
+
+test('a recovery in flight shows the healing label', () => {
   assert.deepEqual(
     sessionStreamHealthChipFace(planOf('healing', 'heal', null), 'open'),
-    { label: 'healing', reload: false, resync: false, marker: 'recovering' },
+    { label: 'healing', marker: 'recovering' },
   )
   // The error arm's grace/retry hold is the same visible state ...
   assert.equal(sessionStreamHealthChipFace(planOf('error-hold', 'heal', null), 'error').label, 'healing')
@@ -100,13 +94,13 @@ test('the ticker holds while an arm, a non-open stream or a notice needs re-plan
 })
 
 test('a re-plan is skipped exactly when the visible surface is unchanged', () => {
-  const base = planOf('loading-hold', 'resync', 'loading-stall')
+  const base = planOf('loading-hold', 'none', 'loading-stall')
   assert.equal(
     sameSessionStreamHealthPlan(base, { ...base, state: { ...base.state, since: 99_999 } }),
     true,
     'the clock alone must not re-render the same surface',
   )
-  assert.equal(sameSessionStreamHealthPlan(base, planOf('loading-hold', 'none', 'loading-stall')), false)
-  assert.equal(sameSessionStreamHealthPlan(base, planOf('loading-hold', 'resync', 'loading-failed')), false)
-  assert.equal(sameSessionStreamHealthPlan(base, planOf('healing', 'resync', 'loading-stall')), false)
+  assert.equal(sameSessionStreamHealthPlan(base, planOf('loading-hold', 'heal', 'loading-stall')), false)
+  assert.equal(sameSessionStreamHealthPlan(base, planOf('loading-hold', 'none', 'loading-failed')), false)
+  assert.equal(sameSessionStreamHealthPlan(base, planOf('healing', 'none', 'loading-stall')), false)
 })

@@ -38,10 +38,11 @@
  * bounded delivery resync owns that shape (the `healRoute` evidence).
  *
  *  - The renderer's page-level recovery owner performs any evidence-gated
- *    automatic loading rebuild. This header policy only offers the manual
- *    control, because the header may be absent in a blank loading surface.
+ *    automatic rebuild and escalates through its own bounded tiers (resync →
+ *    instance reboot → document reload); the host's opening machine owns the
+ *    hanging-opening verdict. This header policy only REPORTS.
  *
- * That asymmetry is why this header policy has two actions:
+ * That asymmetry is why this header policy has ONE action (the automatic heal):
  *
  *  - `openState === 'error'` held past the grace ⇒ `heal` (the automatic
  *    per-session resync), retried on the cooldown while the rolling budget
@@ -53,30 +54,28 @@
  *    taken from the **settle clock**
  *    (`lastHealAt + healSettleMs`), not from the 'healing' phase: the re-open
  *    itself reports `loading` synchronously (vendor `doOpen()`) and a hidden
- *    stretch zeroes the phase, so a phase-gated latch would miss the button in
+ *    stretch zeroes the phase, so a phase-gated latch would miss the notice in
  *    the common interleavings; the latch then rides through loading dwells and is
  *    cleared only by recovery (which also ends the episode: the next error gets
  *    its own grace instead of inheriting this heal's settle clock);
- *  - `openState === 'loading'` held past the stall threshold ⇒ a notice with a
- *    reload action (never an automatic reload: design 14 discipline, and the
- *    mobile tier's `session-stall.ts` ruling — an observer may offer the
- *    user the one action that works, it may not take it for them) AND, while
- *    the session still has lever budget and the build exposes the concrete
- *    face, the armed `resync` control that rebuilds THIS session's stream
- *    without dropping the page;
+ *  - `openState === 'loading'` held past the stall threshold ⇒ the
+ *    'loading-stall' notice, then 'loading-failed': visibility only. The manual
+ *    rebuild/reload controls were retired (user ruling): upstream has no such
+ *    control and every recovery is automatic (the host's opening machine; the
+ *    page's bounded tiers; the error arm's heal below);
  *  - the SAME loading notice lands the moment the stream-forensics evidence
  *    says this opening is terminal (`openingFailure`): the fact proves the
- *    opening died, so no page timer may decide when it is shown. It only ARMS
- *    the user's control — an evidence-proven dead opening is still never
- *    re-issued automatically;
+ *    opening died, so no page timer may decide when it is shown. It only
+ *    REPORTS: an evidence-proven dead opening is still never re-issued
+ *    automatically;
  *  - a ladder that is OUT of levers (no concrete resync face, or the budget
- *    spent) ⇒ the same notice, because for that state the reload really is the
- *    only remaining recovery.
+ *    spent) ⇒ the same notice, so the state is named even though this header
+ *    has no action to offer.
  *
  * A stream that is `'open'` but silent is deliberately NOT guessed at: without
  * an applied-cursor watermark a long tool call is indistinguishable from a
  * halted carrier, so a shape-only notice would fire on legitimate work. The
- * `resync` control is deliberately scoped out of that arm for the same reason:
+ * loading/error notices are deliberately scoped out of that arm for the same reason:
  * this module has no observable "no progress" signal to condition it on, and a
  * timer here would be a blind timeout, not a decision. That residual is
  * recorded in `docs/progress/STATUS.md` together with the two paths that can
@@ -92,8 +91,8 @@
  * surface was hidden is announced by the first visible `error` tick (callers
  * must not read "hidden never counts" as "hidden time never decides").
  *
- * The plan ARMS the manual resync control; the seat's click is the only
- * header path that executes it, paced by the seat's double-click guard.
+ * The seat executes the plan's single action (`heal`); nothing here is
+ * user-triggered.
  */
 
 import { LADDER_TABLES, planLadder, streamHealthLadder } from '@dsh-chamber/dsh-stream-state'
@@ -127,7 +126,7 @@ export interface SessionStreamObservation {
   /**
    * The build exposes the concrete `Session.resync()` (not on `ISession`), read
    * through the probe's guarded capability check: a missing or drifting face
-   * yields false, so no control is armed for a lever that cannot be seen.
+   * yields false, so the automatic engine is blocked for a lever that cannot be seen.
    */
   readonly resyncAvailable?: boolean | undefined
   /**
@@ -205,11 +204,11 @@ export const SESSION_STREAM_HEALTH_DEFAULTS: SessionStreamHealthConfig = LADDER_
 /**
  * What the plan asks of the seat this tick. `'heal'` (the automatic
  * per-session resync) is executed by the seat and accounted against the ledger;
- * `'resync'` only ARMS the user control — the click is its sole invocation,
- * never gated by the ledger (the ledger bounds the AUTOMATIC arm; a human click
- * is its own bound).
+ * `'none'` means the plan only reports a notice. There is deliberately no
+ * user-triggered action: upstream has no such control, and every escalation
+ * (host opening machine, page-level tiers) is automatic.
  */
-export type SessionStreamHealthAction = 'none' | 'heal' | 'resync'
+export type SessionStreamHealthAction = 'none' | 'heal'
 
 /** What the seat must DO this tick, and what it may SHOW. */
 export interface SessionStreamHealthPlan {
@@ -312,7 +311,7 @@ export function planSessionStreamHealth(
     // `doOpen()` writes `openState = 'loading'` SYNCHRONOUSLY before its first
     // await, so a loading observation (or a hidden stretch, which zeroes the
     // phase) routinely interrupts the error hold — a phase-gated latch would
-    // silently drop the button exactly then. `sinceHeal >= healSettleMs` while
+    // silently drop the notice exactly then. `sinceHeal >= healSettleMs` while
     // still in `error` proves the executed heal did not settle; recovery marks
     // the episode (`recoveredSinceHeal`) so a fresh error cannot inherit this
     // clock, and a negative delta (clock step) must NOT latch.
@@ -342,19 +341,13 @@ export function planSessionStreamHealth(
       }
     }
 
-    // The automatic arm is exhausted or cooling here. The same presented target
-    // still has the per-session resync, so ARM that user control instead of
-    // degrading to a bare reload. NOT ledger-gated, symmetric with the loading
-    // arm: the ledger bounds the AUTOMATIC arms, and gating the visible control
-    // on a spent budget would remove the only exit that keeps the page.
-    // `resyncAvailable` still gates it.
-    const resyncArmed = held >= config.errorGraceMs
+    // The automatic arm is exhausted or cooling here. No manual lever replaces
+    // it (user ruling): the page's own bounded ladder escalates (resync →
+    // instance reboot → document reload) while this notice reports the state.
+    // The arm threshold still times the notice exactly as it did when it also
+    // opened the control; only the control is gone.
+    const armReached = held >= config.errorGraceMs
       && observation.resyncAvailable === true
-
-    // No usable lever (the presented face is unreadable or the build exposes no
-    // concrete resync): report once the hold has outlived a repair attempt, never
-    // on the first frames. A reachable face is NOT hopeless — `resyncArmed`
-    // already carries the manual exit.
     const hopeless = held >= config.errorGraceMs + config.healSettleMs
       && observation.resyncAvailable !== true
     return {
@@ -369,11 +362,10 @@ export function planSessionStreamHealth(
         // settle clock. `markSessionStreamHeal` clears it when a fresh heal runs.
         ...(state.recoveredSinceHeal === undefined ? {} : { recoveredSinceHeal: state.recoveredSinceHeal }),
       },
-      action: resyncArmed ? 'resync' : 'none',
-      // The chip renders its action row only when a notice is present, so an
-      // armed-but-silent resync would never be clickable and the reload fallback
-      // would never appear — hence the same notice as the exhausted-levers path.
-      notice: latched || hopeless || resyncArmed ? 'heal-failed' : null,
+      action: 'none',
+      // The latch, the no-lever state and the reached arm threshold all report;
+      // only an arm still inside its grace stays silent (the ladder retries it).
+      notice: latched || hopeless || armReached ? 'heal-failed' : null,
     }
   }
 
@@ -387,10 +379,8 @@ export function planSessionStreamHealth(
     const stalled = failed || now - since >= config.loadingStallMs
     // The re-open's loading dwell must not take back an action the user was already offered (same rule as `markSessionStreamHeal`); the latch rides along.
     const latched = state.healFailedLatched === true
-    // The page owns automatic loading rebuilds even when this header is absent.
-    // This plan only offers the user's own per-session control. Its visibility
-    // does not depend on the error-heal budget.
-    const armed = stalled && observation.resyncAvailable === true
+    // The host's opening machine and the page's own bounded ladder own every
+    // loading rebuild; this plan only reports the dwell (and the terminal fact).
     return {
       state: {
         phase: 'loading-hold',
@@ -400,7 +390,7 @@ export function planSessionStreamHealth(
         ...(latched ? { healFailedLatched: true } : {}),
         ...(state.recoveredSinceHeal === undefined ? {} : { recoveredSinceHeal: state.recoveredSinceHeal }),
       },
-      action: armed ? 'resync' : 'none',
+      action: 'none',
       // A proven-dead opening reads as a FAILURE immediately; otherwise a dwell
       // that outlived every recovery attempt does. A latched 'heal-failed' still
       // wins before the threshold.

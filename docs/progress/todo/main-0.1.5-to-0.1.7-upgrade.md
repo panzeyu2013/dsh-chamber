@@ -180,7 +180,7 @@
 | **Swift 原生壳 = 权威与上游**（2026-09 裁决） | `docs/progress/deviations.md` §0 权威方向 | 推论：复用 main 更新的 `NativeText`（121 键 + 两 lproj）/`ShellPageFacts`/`RendererRecovery`；我们的 `ShellLocale` 字典与 `native-theme-set` Swift 腿是同一席位的较早形态 → 不搬；Electron 腿照搬 |
 | **macOS x64 暂时移除**（2026-12 用户决定） | design 25 §11 决策 B；design 11 §6.1 | 升级期间维持 arm64-only；三个重新引入前置满足前不重提 |
 | **P0/P1 清单**（更新链看门狗 / 原生崩溃诊断 / 可用性门 / 运行期恢复框 / 实机 runbook） | 台账 §8.a；你当时回复「按你的执行 P0/P1」 | 全部按 §7 移植，不是新决策 |
-| **会话流健康臂保持 fail-closed 降级**（2026-12 处理，含重 derive 条件） | STATUS ⑮ | 默认沿用现状（不抛错、不导航，落到「重新加载」提示臂） |
+| **会话流健康臂保持 fail-closed 降级**（2026-12 处理，含重 derive 条件） | STATUS ⑮ | 默认沿用现状（不抛错、不导航，落到「对话通道未恢复」提示臂；手动重载按钮已退役，见 design 14 §D4） |
 
 ### 2.2 已按推荐定案（2026-12，都是过程/时机，不是方向）
 

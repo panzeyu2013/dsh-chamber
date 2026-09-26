@@ -1,11 +1,10 @@
 /**
  * The stream-health chip’s VISIBLE surface as pure decisions.
  *
- * The package has no React/DOM test environment, so these three functions ARE
- * the whole visible surface and can be pinned behaviourally; the component is a
- * thin projection of them. A flipped action branch, a notice that renders no
- * button, or a ticker that stops re-planning would otherwise be invisible to
- * every test.
+ * The package has no React/DOM test environment, so these functions ARE the
+ * whole visible surface and can be pinned behaviourally; the component is a thin
+ * projection of them. A notice that renders nothing, or a ticker that stops
+ * re-planning, would otherwise be invisible to every test.
  */
 import type {
   SessionOpenState,
@@ -17,10 +16,6 @@ import type {
 export interface SessionStreamHealthChipFace {
   /** The live-region label: `'healing'` while an arm is running, else the notice. */
   readonly label: 'healing' | SessionStreamNotice | null
-  /** The page-reload control (never offered for the informational churn notice). */
-  readonly reload: boolean
-  /** The user-triggered per-session rebuild control. */
-  readonly resync: boolean
   /** The `data-chamber-stream-health` marker the chip publishes. */
   readonly marker: 'recovering' | SessionStreamNotice
 }
@@ -35,17 +30,9 @@ export function sessionStreamHealthChipFace(
 ): SessionStreamHealthChipFace {
   const recovering = plan.state.phase === 'healing'
     || (plan.state.phase === 'error-hold' && openState === 'error')
-  if (plan.notice === null && !recovering) {
-    return { label: null, reload: false, resync: false, marker: 'recovering' }
-  }
-  // Churn is informational: no action that would interrupt a recovery in flight.
-  const actionable = plan.notice !== null && plan.notice !== 'carrier-churn'
-  return {
-    label: plan.notice ?? 'healing',
-    reload: actionable,
-    resync: actionable && plan.action === 'resync',
-    marker: plan.notice ?? 'recovering',
-  }
+  // The chip reports; it offers no control (the manual lever is retired).
+  if (plan.notice === null && !recovering) return { label: null, marker: 'recovering' }
+  return { label: plan.notice ?? 'healing', marker: plan.notice ?? 'recovering' }
 }
 
 /**

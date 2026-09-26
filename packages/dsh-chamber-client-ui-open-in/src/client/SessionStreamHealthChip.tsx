@@ -6,13 +6,12 @@
  * Deliberately thin: every decision and the whole ladder state live in the seat
  * (a session-scoped subtree is unmounted on every switch, so a component ref
  * would reset cooldown/budget). This file owns the visibility re-check, the
- * React wiring and the markup; the visible surface (notice, controls, whether to
- * keep ticking) is the pure projection in `session-stream-health-chip-face.ts`,
- * so it can be behaviour-tested without a DOM. It renders at most one line of
- * text plus up to two user actions: the page reload every non-churn notice
- * offers, and — while the pure plan arms it — the per-session stream rebuild.
- * Nothing here reloads, re-opens, rebuilds or navigates on its own: the plan's
- * `'resync'` action only decides whether the second control is rendered.
+ * React wiring and the markup; the visible surface (notice, whether to keep
+ * ticking) is the pure projection in `session-stream-health-chip-face.ts`, so it
+ * can be behaviour-tested without a DOM. It renders at most one line of status
+ * text and NO control: the manual reload/rebuild lever was retired (user
+ * ruling — upstream has no such control), and nothing here reloads, re-opens,
+ * rebuilds or navigates on its own.
  */
 import { useEffect, useState, type ReactElement } from 'react'
 import type { Translate } from '../shared/coordinator.ts'
@@ -29,7 +28,7 @@ import {
 } from './session-stream-health-chip-face.ts'
 import styles from './SessionStreamHealthChip.module.css'
 
-/** Injected face the seat supplies (bound translator + the ladder entry point). */
+/** Injected face the seat supplies: bound translator, one ladder step, churn subscription. */
 export interface SessionStreamHealthInjected {
   /** Bound translator for the open-in namespace (the chip's copy lives there). */
   t: Translate
@@ -43,13 +42,6 @@ export interface SessionStreamHealthInjected {
    * @returns unsubscribe for the effect cleanup.
    */
   subscribe(listener: () => void): () => void
-  /** The user's own reload action. */
-  reload(): void
-  /**
-   * The user’s own per-session rebuild, invoked only from the armed control; the
-   * seat stamps the ledger and the probe re-checks the concrete face.
-   */
-  resync(sessionId: string): void
 }
 
 /**
@@ -70,7 +62,7 @@ function idlePlan(): SessionStreamHealthPlan {
 }
 
 export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactElement | null {
-  const { t, step, subscribe, reload, resync, sessionId, useSession } = props
+  const { t, step, subscribe, sessionId, useSession } = props
   const openState = useSession(snapshot => snapshot.openState)
   const [plan, setPlan] = useState<SessionStreamHealthPlan>(idlePlan)
   const [tick, setTick] = useState(0)
@@ -93,9 +85,8 @@ export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactE
   // visible notice keeps the ticker alive so it expires on its own.
   useEffect(() => subscribe(() => setTick(value => value + 1)), [subscribe])
 
-  // One ladder step per render-relevant change. The seat is where the state and
-  // the only side effects live (executing a heal, and the user’s resync click —
-  // which no effect here ever issues).
+  // One ladder step per render-relevant change. The seat owns the state and the
+  // only side effect (executing the automatic heal); this component issues none.
   useEffect(() => {
     const presented = visible && isConversationSurfacePresented(typeof document === 'undefined' ? null : document)
     const next = step(sessionId, openState, presented, Date.now())
@@ -120,24 +111,9 @@ export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactE
   const label = face.label === 'healing' ? t('streamHealth.healing') : t(sessionStreamNoticeKey(face.label))
   return (
     <div className={styles.chip} data-chamber-stream-health={face.marker}>
-      {/* The live region is the LABEL only: it must not contain the interactive
-          control, which assistive tech would announce as part of every update. */}
+      {/* The live region is the LABEL only: an interactive control must not be
+          announced as part of every update (and the manual lever is retired). */}
       <span role="status" aria-live="polite">{label}</span>
-      {/* Churn is informational: the stream reopens on its own; no interrupting action. */}
-      {face.reload ? (
-        <>
-          <button type="button" className={styles.action} onClick={reload}>
-            {t('streamHealth.reload')}
-          </button>
-          {/* The per-session manual lever remains available after the page-level
-              seat has spent its bounded automatic rebuild attempts. */}
-          {face.resync ? (
-            <button type="button" className={styles.action} onClick={() => { resync(sessionId) }}>
-              {t('streamHealth.resync')}
-            </button>
-          ) : null}
-        </>
-      ) : null}
     </div>
   )
 }
