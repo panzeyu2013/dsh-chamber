@@ -81,6 +81,31 @@ test('INV1/#7: an armed goal holds the candidate with zero notification and abso
   assert.notEqual(ledger.pendingEntry('src', 's1'), undefined)
 })
 
+test('W2 身份：completionSeq 进 durable pending，随释放进入通知；已有 pending 身份不被改写', () => {
+  const ledger = createCompleteLedger()
+  const held = reconcile(ledger.state(), observation({
+    goal: goal(),
+    candidate: { evidence: 'facts-watermark', watermark: 40, completionSeq: 4242 },
+  }), 10)
+  assert.equal(held.disposition, 'held')
+  assert.equal(ledger.pendingEntry('src', 's1')?.completionSeq, 4242, 'seq 进 pending——否则延迟释放时身份就丢了')
+
+  // 同一 pending 的后续候选（无 seq）不得抹掉已有身份。
+  const absorbed = reconcile(ledger.state(), observation({ goal: goal(), candidate: facts(60) }), 15)
+  assert.equal(absorbed.notification, undefined)
+  assert.equal(ledger.pendingEntry('src', 's1')?.completionSeq, 4242, '已有 pending 保持自己的身份（与 goalId 同规）')
+
+  const flush = reconcile(ledger.state(), observation({ goal: goal({ phase: 'complete', updatedAt: 700 }) }), 20)
+  assert.equal(flush.disposition, 'flushed')
+  assert.equal(flush.notification?.completionSeq, 4242, '释放出的通知带同一身份')
+
+  // 直接路径（goal 未知）：候选的 seq 直达通知。
+  const direct = reconcile(createCompleteLedger().state(), observation({
+    candidate: { evidence: 'facts-watermark', watermark: 50, completionSeq: 7 },
+  }), 10)
+  assert.equal(direct.notification?.completionSeq, 7)
+})
+
 test('#2/TL1: the goal title fires once per goal identity, later completions fall back to generic', () => {
   const ledger = createCompleteLedger()
   reconcile(ledger.state(), observation({ goal: goal(), candidate: shell() }), 10)

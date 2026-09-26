@@ -12,10 +12,13 @@ import {
   UNREAD_PENDING_MAX,
   UNREAD_V2_KEY,
   UNREAD_V4_KEY,
+  UNREAD_V5_KEY,
   advanceReadMark,
   createClientInstallId,
   createUnreadAckOutbox,
   createUnreadSaveCoalescer,
+  emptyUnreadPayload,
+  emptyUnreadV5Payload,
   loadClientInstallId,
   loadUnread,
   maxWatermark,
@@ -23,11 +26,19 @@ import {
   seedReadFloor,
   pruneEmptyUnreadTables,
   pruneUnreadPayload,
+  pruneUnreadV5Payload,
+  projectUnreadV5,
   sanitizeUnreadPayload,
+  sanitizeUnreadV5Payload,
   saveUnread,
+  saveUnreadShadow,
   sendUnreadRequest,
+  createUnreadStepGate,
+  reconcileUnreadShadowOnLoad,
+  unreadV5Parity,
   type UnreadStorageLike,
   type UnreadV4Payload,
+  type UnreadV5Payload,
 } from '../../src/unread-store.ts'
 import { LEGACY_NOTIFIED_RUN_ID } from '../../src/notification-identity.ts'
 import { createCompleteLedger, type PendingCompletionTable } from '../../src/complete-ledger.ts'
@@ -44,8 +55,9 @@ function fakeStorage(initial: Record<string, string> = {}) {
   return { storage, calls, data }
 }
 
-test('keys are the frozen localStorage names (v4 is the only written key; v2 is the sole migration source)', () => {
+test('keys are the frozen localStorage names (v4 authoritative; v5 shadow-written; v2 the sole migration source)', () => {
   assert.equal(UNREAD_V4_KEY, 'dsh-chamber.unread.v4')
+  assert.equal(UNREAD_V5_KEY, 'dsh-chamber.unread.v5')
   assert.equal(UNREAD_V2_KEY, 'dsh-chamber.unread.v2')
   assert.equal(CLIENT_INSTALL_ID_KEY, 'dsh-chamber.client-install-id.v1')
   assert.equal(UNREAD_MAX_SESSIONS_PER_SOURCE, 500)
@@ -70,6 +82,26 @@ test('sanitize is lenient field-wise: bad entries are dropped, good ones survive
   assert.deepEqual(loaded.notifiedRuns, { a: { s1: 'host:turn%2F7' } })
   assert.deepEqual(loaded.pending, { a: { s1: { watermark: 5, goalId: 'g1', at: 100 } } })
   assert.deepEqual(loaded.outcomes, { a: { g1: 10 } })
+})
+
+test('pending.completionSeq（W2 身份）按数值域保留，非法只丢字段', () => {
+  const loaded = loadUnread(fakeStorage({
+    [UNREAD_V4_KEY]: JSON.stringify({
+      v: 4, read: {}, edge: {}, notifiedRuns: {}, outcomes: {},
+      pending: {
+        a: {
+          s1: { at: 100, watermark: 5, completionSeq: 4242 },
+          s2: { at: 100, completionSeq: -1 },
+          s3: { at: 100, completionSeq: 1.5 },
+          s4: { at: 100 },
+        },
+      },
+    }),
+  }).storage)
+  assert.equal(loaded.pending.a.s1.completionSeq, 4242, '合法 seq 往返不丢（durable——释放时才不丢身份）')
+  assert.equal(loaded.pending.a.s2.completionSeq, undefined, '负数丢弃')
+  assert.equal(loaded.pending.a.s3.completionSeq, undefined, '非整数丢弃')
+  assert.equal(loaded.pending.a.s4.completionSeq, undefined, '缺席保持缺席')
 })
 
 test('corrupt persisted identities are rejected at the restore boundary', () => {
@@ -687,3 +719,154 @@ test('maxWatermark 是 host 域的：observer 域完成戳绝不抬升源级地�
   assert.deepEqual(seedReadFloor({}, rows, maxWatermark(rows)), { s1: 300, s2: 300 })
 })
 
+test('v5 shadow: projectUnreadV5 maps edge/read/notifiedRuns with the v4 semantics (W3)', () => {
+  const payload: UnreadV4Payload = {
+    v: 4,
+    read: { a: { s1: 9 } },
+    edge: { a: { s1: true, s2: true }, b: { s9: true } },
+    notifiedRuns: { a: { s2: 'host:turn%2F7' } },
+    pending: {},
+    outcomes: {},
+  }
+  const v5 = projectUnreadV5(payload)
+  assert.equal(v5.v, 5)
+  assert.deepEqual(v5.records.a, {
+    s1: { watermark: 9, unread: false, read: true, notifiedRun: '' },
+    s2: { watermark: 0, unread: true, read: false, notifiedRun: 'host:turn%2F7' },
+  }, '显式读是不可逆的赢家；未读记录带自己的通知身份')
+  assert.deepEqual(v5.records.b, { s9: { watermark: 0, unread: true, read: false, notifiedRun: '' } })
+  const pruned = pruneUnreadV5Payload({ v: 5, records: { a: {
+    old: { watermark: 1, unread: true, read: false, notifiedRun: '' },
+    mid: { watermark: 5, unread: true, read: false, notifiedRun: '' },
+    fresh: { watermark: 9, unread: true, read: false, notifiedRun: '' },
+  } } }, 2)
+  assert.deepEqual(Object.keys(pruned.records.a!).sort(), ['fresh', 'mid'], '有界化按水位 LRU 保最新')
+})
+
+test('v5 shadow: saveUnreadShadow writes the second key and never becomes the read path (W3)', () => {
+  const { storage, calls, data } = fakeStorage()
+  const payload: UnreadV4Payload = {
+    v: 4, read: {}, edge: { a: { s1: true } }, notifiedRuns: {}, pending: {}, outcomes: {},
+  }
+  assert.equal(saveUnread(storage, payload), true)
+  const shadowWrite = saveUnreadShadow(storage, payload)
+  assert.equal(shadowWrite.written, true)
+  assert.deepEqual(shadowWrite.parity, { ok: true, differences: [] }, '读回净化后必须与 v4 等价（先锁）')
+  assert.deepEqual(calls, ['set:' + UNREAD_V4_KEY, 'set:' + UNREAD_V5_KEY], '影子写不改变 v4 的写序')
+  const shadow = JSON.parse(data.get(UNREAD_V5_KEY)!) as { v: number; records: Record<string, Record<string, { unread: boolean }>> }
+  assert.equal(shadow.v, 5)
+  assert.equal(shadow.records.a?.s1?.unread, true)
+  const onlyShadow = fakeStorage({ [UNREAD_V5_KEY]: JSON.stringify(shadow) })
+  assert.deepEqual(loadUnread(onlyShadow.storage), emptyUnreadPayload(), '回退 = 忽略 v5：v5 不是读路径')
+})
+
+test('v5 shadow: hostile payloads are whitelisted away and a failing shadow write never throws (W3)', () => {
+  const sanitized = sanitizeUnreadV5Payload({
+    v: 5,
+    records: {
+      a: {
+        s1: { watermark: 3, unread: true, read: true, notifiedRun: 'host:turn%2F7', title: 'secret', cwd: '/x' },
+        s2: { watermark: 'x', unread: true, read: false, notifiedRun: '' },
+        s3: { watermark: 4, unread: 'yes', read: false },
+        s4: { watermark: 4, unread: true, read: false, notifiedRun: 'host:%' },
+      },
+    },
+  })
+  assert.deepEqual(sanitized.records.a, {
+    s1: { watermark: 3, unread: false, read: true, notifiedRun: 'host:turn%2F7' },
+    s4: { watermark: 4, unread: true, read: false, notifiedRun: '' },
+  }, '白名单外键（title/cwd）不得进入记录面；坏身份回空')
+  assert.deepEqual(sanitizeUnreadV5Payload({ v: 4, records: {} }), emptyUnreadV5Payload(), '版本不符整包空')
+  const failing: UnreadStorageLike = {
+    getItem: () => null,
+    setItem: key => { if (key === UNREAD_V5_KEY) throw new Error('quota') },
+    removeItem: () => {},
+  }
+  const failed = saveUnreadShadow(failing, emptyUnreadPayload())
+  assert.equal(failed.written, false, '影子写失败只回 written=false')
+  assert.equal(failed.parity, null, '没写就没有可判定的等价性')
+  assert.equal(saveUnread(failing, emptyUnreadPayload()), true, 'v4 权威不受影子写失败影响')
+})
+
+test('v5 equivalence guard: parity reports the session-level truth and is bounded (W3 先锁)', () => {
+  const v4: UnreadV4Payload = {
+    v: 4,
+    read: { a: { readme: 7 } },
+    edge: { a: { live: true, readme: true } },
+    notifiedRuns: { a: { live: 'host:turn%2F1' } },
+    pending: {},
+    outcomes: {},
+  }
+  assert.deepEqual(unreadV5Parity(v4, projectUnreadV5(v4)), { ok: true, differences: [] }, '投影自洽 ⇒ 零差异')
+  const pruned: UnreadV5Payload = { v: 5, records: { a: {} } }
+  const diff = unreadV5Parity(v4, pruned)
+  assert.equal(diff.ok, false)
+  assert.ok(diff.differences.some(item => item.startsWith('unread:a/live')), JSON.stringify(diff.differences))
+  const flipped: UnreadV5Payload = { v: 5, records: { a: {
+    live: { watermark: 0, unread: false, read: true, notifiedRun: 'host:turn%2F1' },
+  } } }
+  assert.deepEqual(unreadV5Parity({
+    ...v4,
+    read: {},
+    edge: { a: { live: true } },
+    notifiedRuns: { a: { live: 'host:turn%2F1' } },
+  }, flipped), { ok: false, differences: ['unread:a/live v4=true v5=false'] }, '未读位差异点名到会话（未读优先于读位）')
+  // 只翻读位（未读位一致）：差异必须落在读位上。
+  const readShifted: UnreadV5Payload = { v: 5, records: { a: { live: { watermark: 0, unread: false, read: true, notifiedRun: 'host:turn%2F1' } } } }
+  assert.deepEqual(unreadV5Parity({ ...v4, read: {}, edge: {}, notifiedRuns: { a: { live: 'host:turn%2F1' } } }, readShifted),
+    { ok: false, differences: ['read:a/live v4=false v5=true'] }, '未读位一致时差异落在读位')
+})
+
+test('v5 shadow: load-time reconciliation reports absence, agreement and drift (W3 先锁读面)', () => {
+  const v4: UnreadV4Payload = {
+    v: 4, read: {}, edge: { a: { s1: true } }, notifiedRuns: {}, pending: {}, outcomes: {},
+  }
+  assert.equal(reconcileUnreadShadowOnLoad(undefined, v4), null, '无 storage 无可对账')
+  assert.equal(reconcileUnreadShadowOnLoad(fakeStorage().storage, v4), null, '盘上没有 v5 = 影子还没写过')
+  const consistent = fakeStorage()
+  saveUnread(consistent.storage, v4)
+  saveUnreadShadow(consistent.storage, v4)
+  assert.deepEqual(reconcileUnreadShadowOnLoad(consistent.storage, v4), { ok: true, differences: [] })
+  delete v4.edge.a!.s1
+  const drift = reconcileUnreadShadowOnLoad(consistent.storage, v4)
+  assert.equal(drift?.ok, false, 'v4 与 v5 不一致必须报告（不改判定）')
+  assert.ok(drift?.differences.some(item => item.startsWith('unread:a/s1')), JSON.stringify(drift?.differences))
+  const hostile = fakeStorage({ [UNREAD_V5_KEY]: '{not json' })
+  assert.equal(reconcileUnreadShadowOnLoad(hostile.storage, { ...v4, edge: { a: { s1: true } } }), null)
+})
+
+test('step gate: the derivation body never nests — re-entrant requests are coalesced into a microtask (W1 M2)', () => {
+  const deferred: Array<() => void> = []
+  const runs: string[] = []
+  let nested = false
+  const gate = createUnreadStepGate(id => {
+    runs.push(id)
+    if (id === 'a' && !nested) {
+      nested = true
+      // 模仿实机环：派生写 completedStore → useSyncExternalStore 同步回调 → 再请求派生。
+      gate.request('a')
+      gate.request('b')
+      gate.request('b')
+    }
+  }, run => { deferred.push(run) })
+  gate.request('a')
+  assert.deepEqual(runs, ['a'], '首次请求同步执行，重入请求不得嵌套进当前这次')
+  assert.equal(gate.running(), false, '结束后必须释放 running')
+  assert.deepEqual(gate.pending(), ['a', 'b'], '重入请求按 id 去重并保序')
+  assert.deepEqual(gate.stats(), { runs: 1, coalesced: 3, deferrals: 1 },
+    '读数面：3 次重入被吸收（含去重前计数）、1 次补跑（实机复核 coalesced > 0 即证明更新环存在）')
+  assert.equal(deferred.length, 1, '补跑只排一次微任务')
+  deferred[0]!()
+  assert.deepEqual(runs, ['a', 'a', 'b'], '补跑按请求序执行（b 去重成一次）')
+  assert.deepEqual(gate.pending(), [])
+  const boom: string[] = []
+  const throwing = createUnreadStepGate(id => {
+    boom.push(id)
+    if (id === 'x') throw new Error('redacted')
+  }, run => { deferred.push(run) })
+  assert.throws(() => { throwing.request('x') })
+  assert.equal(throwing.running(), false, '抛出的 step 也必须释放闸')
+  throwing.request('y')
+  assert.deepEqual(boom, ['x', 'y'], '闸释放后下一个请求照常同步执行')
+  assert.deepEqual(throwing.stats(), { runs: 2, coalesced: 0, deferrals: 0 })
+})

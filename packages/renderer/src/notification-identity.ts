@@ -71,19 +71,40 @@ export interface NotificationIdentityInput {
   readonly watermark?: number
 }
 
-/**
- * Page-lifetime nonce for events that carry no host-domain discriminator (an ask
- * or request observed while facts are unusable). The ms clock makes it distinct
- * across page loads, and the counter distinguishes events inside one page.
- */
-const LOCAL_EVENT_GENERATION = Date.now() * 1_000
+/** 页代判别符：53 位安全整数（21 高位 + 32 低位；`chamberRunId` 以十进制存、`isSessionRunId` 要求
+ *  安全非负整数），跨页必不同、页内稳定。墙钟两条都不满足（同毫秒两次加载会撞、NTP 会回拨），故取自
+ *  CSPRNG 一次抽取——消费方都在有 `globalThis.crypto` 的宿主（renderer / Node 24 测试），缺失即模块加载
+ *  期失败，不做事后兜底。 */
+function createPageGeneration(): number {
+  const words = new Uint32Array(2)
+  globalThis.crypto.getRandomValues(words)
+  const high = words[0] ?? 0
+  const low = words[1] ?? 0
+  const raw = (high % 0x20_0000) * 0x1_0000_0000 + low
+  // 0 是水位族与常量族的**保留** generation（`isSessionRunId` 只要求安全非负整数）：抽到 0 的概率是
+  // 2⁻⁵³，但归一到 1 让「页代 ≥ 1」成为精确性质，而不是一条概率性断言。
+  return raw === 0 ? 1 : raw
+}
+
+const PAGE_GENERATION = createPageGeneration()
+/** 页内事件计数：与页代一起保证同页两次 ask 是两个身份。 */
 let localEventSequence = 0
 
-export function notificationRunId(input: NotificationIdentityInput): SessionRunId {
-  if (input.runId !== undefined && input.runId.length > 0) return input.runId
+/**
+ * 身份**来源**（只读诊断，W2 读数面）：identity 由哪条分支产出，便于把「幻影通知 / 静默漏发」
+ * 直接归因到分支——`host-turn` = 宿主事件 id（目标形态）；`event-nonce` = ask/request 的页内
+ * 事件计数 + CSPRNG 页代（时钟已移除）；`watermark` = 用提示水位当 episode；`constant` = 无任何
+ * host 域判别符的兜底（同一会话的所有此类完成共享一个 identity，最可疑）。
+ */
+export type NotificationIdentitySource = 'run-id' | 'host-turn' | 'event-nonce' | 'watermark' | 'constant'
+
+export function notificationIdentityOf(
+  input: NotificationIdentityInput,
+): { runId: SessionRunId; source: NotificationIdentitySource } {
+  if (input.runId !== undefined && input.runId.length > 0) return { runId: input.runId, source: 'run-id' }
   if (typeof input.completionSeq === 'number' && Number.isSafeInteger(input.completionSeq)
       && input.completionSeq >= 0) {
-    return hostRunId('turn/' + String(input.completionSeq))
+    return { runId: hostRunId('turn/' + String(input.completionSeq)), source: 'host-turn' }
   }
   // A question/approval is a NEW event every time, never a re-observation. The
   // content watermark (last user prompt) does NOT advance for a second approval or
@@ -92,25 +113,39 @@ export function notificationRunId(input: NotificationIdentityInput): SessionRunI
   // request therefore get the per-event nonce unconditionally.
   if (input.kind === 'ask' || input.kind === 'request') {
     localEventSequence += 1
-    return chamberRunId({
-      sourceFingerprint: input.sourceFingerprint,
-      generation: LOCAL_EVENT_GENERATION,
-      sessionId: input.sessionId,
-      episode: localEventSequence,
-    })
+    return {
+      runId: chamberRunId({
+        sourceFingerprint: input.sourceFingerprint,
+        generation: PAGE_GENERATION,
+        sessionId: input.sessionId,
+        episode: localEventSequence,
+      }),
+      source: 'event-nonce',
+    }
   }
   if (isWatermark(input.watermark)) {
-    return chamberRunId({
+    return {
+      runId: chamberRunId({
+        sourceFingerprint: input.sourceFingerprint,
+        generation: 0,
+        sessionId: input.sessionId,
+        episode: input.watermark,
+      }),
+      source: 'watermark',
+    }
+  }
+  return {
+    runId: chamberRunId({
       sourceFingerprint: input.sourceFingerprint,
       generation: 0,
       sessionId: input.sessionId,
-      episode: input.watermark,
-    })
+      episode: 0,
+    }),
+    source: 'constant',
   }
-  return chamberRunId({
-    sourceFingerprint: input.sourceFingerprint,
-    generation: 0,
-    sessionId: input.sessionId,
-    episode: 0,
-  })
+}
+
+/** 兼容包装：只取身份字符串（行为与分支顺序与 {@link notificationIdentityOf} 逐字一致）。 */
+export function notificationRunId(input: NotificationIdentityInput): SessionRunId {
+  return notificationIdentityOf(input).runId
 }

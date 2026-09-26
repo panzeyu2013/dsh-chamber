@@ -150,6 +150,8 @@ function jsonSafe(value: unknown): unknown {
 }
 
 export type NodeEdges = HostEdges & {
+  /** W4：等真实腿回执的徽标写入（HostEdges.setBadge 的同步契约保持不变）。 */
+  setBadgeAndWait(count: number): Promise<HostSetBadgeResult>
   handleHostInbound(method: string, payload: unknown): { ok: boolean; result?: unknown; error?: string }
   /** 公开 edge 转发（NodeEdges 附加成员，不改 HostEdges 契约）：resolve = Swift
    *  leg 应答 ok；reject = transport {ok:false} / leg 错误；edgeId 关联由
@@ -184,9 +186,14 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
   // 撞同一忙态。只走 notify（无回执）或一发即弃会让用户操作静默丢失；本队列经
   // edge + 有界重试：同一状态型 method 只保留最新载荷（单飞 + 合流），窗口内仍忙则
   // loud 失败一次。交互腿（showMessage）不走本队列。
+  interface QueuedLegItem {
+    payload: unknown
+    /** W4：等真实回执的调用方（setBadgeAndWait）；不等回执的腿缺省无 waiter。 */
+    settle?: (result: HostSetBadgeResult) => void
+  }
   interface QueuedLeg {
     /** 待送载荷队列（状态型恒只留最新；事件型按到达顺序排队、上限内逐条投递）。 */
-    pending: unknown[]
+    pending: QueuedLegItem[]
     /** true = 状态型（只保留最新）；false = 事件型（逐条投递）。 */
     coalesce: boolean
     attemptsLeft: number
@@ -207,23 +214,41 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
   /** 事件型腿的排队上限（超出只 loud 丢弃并记账，绝不无限增长）。 */
   const NON_INTERACTIVE_LEG_PENDING_MAX = 8
 
-  function queueNonInteractiveLeg(method: string, payload: unknown): void {
+  function queueNonInteractiveLeg(
+    method: string,
+    payload: unknown,
+    settle?: (result: HostSetBadgeResult) => void,
+  ): void {
     const coalesce = !LEG_EVENT_METHODS.has(method)
     const existing = queuedLegs.get(method)
     if (existing !== undefined) {
       if (coalesce) {
-        existing.pending[0] = payload
+        // W4 合流修复：队首 = 正在飞行中的载荷，覆盖它会让成功后的 shift() 把**新值**当旧值丢掉
+        // （旧值已送达、新值从未派发）。在飞 ⇒ 新值落第 2 槽（同槽覆盖保持「只保最新」）；空闲 ⇒ 替换队首。
+        // 被替换的载荷不再派发时，对等回执的调用方如实回「被更新值取代」。
+        if (existing.inFlight) {
+          if (existing.pending.length > 1) {
+            existing.pending[1]?.settle?.({ applied: false, reason: 'superseded-by-newer-count' })
+            existing.pending[1] = { payload, settle }
+          } else {
+            existing.pending.push({ payload, settle })
+          }
+        } else {
+          existing.pending[0]?.settle?.({ applied: false, reason: 'superseded-by-newer-count' })
+          existing.pending[0] = { payload, settle }
+        }
       } else if (existing.pending.length < NON_INTERACTIVE_LEG_PENDING_MAX) {
-        existing.pending.push(payload)
+        existing.pending.push({ payload, settle })
       } else {
         console.error(
           `[node-edges] ${method} 排队已满（${NON_INTERACTIVE_LEG_PENDING_MAX}）——本次调用未能排队（S2·V1）`,
         )
+        settle?.({ applied: false, reason: 'queue-full' })
       }
       return
     }
     const entry: QueuedLeg = {
-      pending: [payload],
+      pending: [{ payload, settle }],
       coalesce,
       attemptsLeft: NON_INTERACTIVE_LEG_ATTEMPTS,
       inFlight: false,
@@ -236,11 +261,14 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
   async function flushNonInteractiveLeg(method: string, entry: QueuedLeg): Promise<void> {
     entry.inFlight = true
     for (;;) {
-      const payload = entry.pending[0]
+      const item = entry.pending[0]!
       try {
-        await deps.sendEdge(method, payload)
+        const answer = await deps.sendEdge(method, item.payload)
         // 只弹出刚送出的这一条：在飞期间到达的新载荷留在队首，下一轮继续送。
         entry.pending.shift()
+        // W4 真实回执：腿应答 ok 才算已派发（等回执的调用方拿到的是**投递结果**，不是入队乐观值）。
+        // setBadge 若带宿主实测读回（{applied}），如实转达——写后读不一致即「未应用」，不回谎报 ok。
+        item.settle?.(badgeReadbackReceipt(answer) ?? { applied: true })
         if (entry.pending.length > 0) continue
         queuedLegs.delete(method)
         entry.inFlight = false
@@ -248,6 +276,14 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
       } catch (error) {
         entry.attemptsLeft -= 1
         const message = describeError(error)
+        // W4 合流：状态型腿的**失败头已过时**且后面排着更新值 ⇒ 丢弃过时头、给最新值一次机会
+        // （旧口径靠覆盖在飞队首实现同一效果，成功路径会把新值当旧值吞掉；现在只在失败路径丢弃）。
+        if (entry.coalesce && entry.pending.length > 1) {
+          entry.pending.shift()
+          item.settle?.({ applied: false, reason: 'superseded-by-newer-count' })
+          entry.attemptsLeft = Math.max(entry.attemptsLeft, 1)
+          continue
+        }
         if (entry.attemptsLeft > 0 && isRetryableLegError(message)) {
           await new Promise<void>((resolve) => {
             entry.timer = setTimeout(resolve, deps.nonInteractiveRetryDelayMs ?? NON_INTERACTIVE_LEG_RETRY_DELAY_MS)
@@ -259,13 +295,18 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
         }
         // 队首没送达就放弃时绝不静默丢掉队列里的更新值：队首可能已被更新过
         // （状态型）或后面还排着别的调用（事件型）——补发一次队首，再记账放弃。
-        if (entry.pending[0] !== payload) {
+        if (entry.pending[0] !== item) {
           entry.attemptsLeft = Math.max(entry.attemptsLeft, 1)
           continue
         }
         const dropped = entry.pending.length - 1
         queuedLegs.delete(method)
         entry.inFlight = false
+        // W4 真实回执：放弃时对等回执的调用方如实回 applied:false + 原因（含被丢弃的排队载荷）。
+        item.settle?.({ applied: false, reason: message })
+        for (const queuedItem of entry.pending.slice(1)) {
+          queuedItem.settle?.({ applied: false, reason: 'dropped-after-leg-failure: ' + message })
+        }
         console.error(
           `[node-edges] ${method} 宿主腿失败（S2·V1 有界排队 ${NON_INTERACTIVE_LEG_ATTEMPTS - entry.attemptsLeft}/${NON_INTERACTIVE_LEG_ATTEMPTS} 次后放弃）：${message}`
           + (dropped > 0 ? `；另有 ${dropped} 条排队载荷未能投递` : ''),
@@ -275,7 +316,20 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     }
   }
 
-  const edges: HostEdges = {
+  /**
+   * Swift `setBadge` 腿的**实测回读**（{applied:boolean} 来自宿主写后读 `dockTile.badgeLabel`）。
+   * 旧宿主/异形应答 ⇒ undefined = 保持入队乐观值（向后兼容：契约只保证成功路径不带错误）。
+   */
+  function badgeReadbackReceipt(answer: unknown): HostSetBadgeResult | undefined {
+    if (typeof answer !== 'object' || answer === null) return undefined
+    const applied = (answer as { applied?: unknown }).applied
+    if (applied === true) return { applied: true }
+    if (applied === false) return { applied: false, reason: 'swift-setBadge-readback-mismatch' }
+    return undefined
+  }
+
+  // 字面量按附加成员面标注，Object.assign 后即满足 NodeEdges 返回类型（setBadgeAndWait 可选成员在此实装）。
+  const edges: HostEdges & Pick<NodeEdges, 'setBadgeAndWait'> = {
     rendererPush(channel, payload) {
       // 交付信号必须诚实：无窗时必须返回 false，core 据此 hold/rollback/复位
       // ready 位；恒 true 会让通知打开/深链/唤醒事件静默丢失。
@@ -341,15 +395,26 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
 
     setBadge(count: number): HostSetBadgeResult {
       // HostEdges.setBadge 是**同步**契约，而 Swift setBadge 是 edge 可应答腿（写失败/
-      // 无窗/主线程忙都回 ok:false）——跨进程应答无法同步取回。因此只能走 edge + 有界
-      // 排队让真实失败 loud 落 stderr，返回值保持 {applied:true} 的乐观值（不是伪造成功：
-      // 回 {applied:false} 同样不诚实，且会误导 core 的 badge 状态机降级）。
-      // 例外：**已确证无主窗**时如实回 applied:false，让 core 走失败降级。
-      if (!facts.mainWindowAlive) {
-        return { applied: false, reason: 'swift-edge-ui-unavailable:setBadge:no-window' }
-      }
+      // 无窗/主线程忙都回 ok:false）——跨进程应答无法同步取回。同步入口只能走 edge + 有界
+      // 排队（真实失败 loud 落 stderr），返回值保持 {applied:true} 的入队乐观值；
+      // **等真实回执**的调用方走 setBadgeAndWait（W4）。例外：已确证无主窗时两者都如实回 false。
+      // Dock 角标是**应用级**状态（`NSApp.dockTile`），不需要窗口：主窗关闭后 app 仍在运行、
+      // Dock 图标仍在——此时若按「无主窗」丢弃清 0 写，Dock 上的陈旧大数字就永远清不掉
+      // （实机症状）。故本入口不看 `mainWindowAlive`；宿主腿诚实应答（UI 不可用/主线程忙才失败）。
       queueNonInteractiveLeg('setBadge', { count })
       return { applied: true }
+    },
+
+    /**
+     * W4：等真实回执的徽标写入（NodeEdges 附加成员，不改 HostEdges 同步契约）。
+     * 与 setBadge 共用同一队列/合流/重试预算，但返回**投递结果**：腿应答 ok = 已写入；
+     * 放弃 / 无窗 / 被更新值取代如实回 applied:false + 原因——调用方据此重试或释放变化闸，
+     * 而不是被入队乐观值锁死。
+     */
+    setBadgeAndWait(count: number): Promise<HostSetBadgeResult> {
+      return new Promise<HostSetBadgeResult>(resolve => {
+        queueNonInteractiveLeg('setBadge', { count }, resolve)
+      })
     },
 
     badgeCountApiAvailable() {
@@ -588,6 +653,8 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
           facts.webViewContentAlive = p.webViewContentAlive
         }
         if (typeof p.trayAvailable === 'boolean') facts.trayAvailable = p.trayAvailable
+        // W4：徽标 API 可用性不是启动期常量——宿主事实推送即刷新缓存（旧口径只认创建时种子）。
+        if (typeof p.badgeCountApiAvailable === 'boolean') facts.badgeCountApiAvailable = p.badgeCountApiAvailable
         // resources 事实键（resolveResource 死契约）不消费；未知事实键按前向兼容忽略。
         return { ok: true }
       }
@@ -601,5 +668,6 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     return deps.sendEdge(method, payload)
   }
 
+  // setBadgeAndWait 已是 edges 字面量成员（HostEdges 可选成员）；此处只补 NodeEdges 附加转发面。
   return Object.assign(edges, { handleHostInbound, sendEdge })
 }

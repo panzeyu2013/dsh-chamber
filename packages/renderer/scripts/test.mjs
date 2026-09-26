@@ -106,6 +106,10 @@ export const GROUPS = {
     'test/session-state/completed-store.test.ts',
     // 派生投影行为（deriveUnread + 通道边沿机 + listComplete 唯一剪枝门）。
     'test/session-state/unread-derivation.test.ts',
+    // W0 未读派生仪表：行样本 top-N / 有界环 / 幂等挂全局（只读诊断面，不参与判定）。
+    'test/session-state/unread-instrument.test.ts',
+    // W2：通知身份分支顺序 + identitySource 归因读数。
+    'test/session-state/notification-identity.test.ts',
     // 仪器：徽标回读 + 通知决定账本（含「没有桥」这一次）与单组装点锁。
     'test/session-state/notification-ledger.test.ts',
     // SSH/dsh 远端的无壳观察者（$events + 每边沿一次 session/follow）。
@@ -143,6 +147,8 @@ export const GROUPS = {
     // F6 回归：durable 未读四类剪枝必须门控在权威 roster 水合后（源码锁 +
     // 纯谓词/假存储双证据）。
     'test/wiring/unread-prune-roster-gate.test.ts',
+    // W5 前置结构护栏：未读单一实现 / 页面代身份预算 / v5 权威锁。
+    'test/wiring/unread-single-authority.test.ts',
   ],
   // view-runtime: 视图运行时 —— 隐藏视图回收、视图过渡队列、侧栏滚动恢复、切源揭示
   'view-runtime': [

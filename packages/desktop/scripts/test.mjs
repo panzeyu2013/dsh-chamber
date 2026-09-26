@@ -121,6 +121,8 @@ export const GROUPS = {
     'test/desktop-shell/renderer-frame-watchdog.test.ts',
     'test/desktop-shell/notifications.test.ts',
     'test/desktop-shell/badge.test.ts',
+    // W4：非交互腿有界队列的合流语义（在飞期间的新值不得被 shift 吞掉）。
+    'test/desktop-shell/node-edges-queue.test.ts',
     'test/desktop-shell/deep-link.test.ts',
     'test/desktop-shell/open-in.test.ts',
     'test/desktop-shell/updater.test.ts',

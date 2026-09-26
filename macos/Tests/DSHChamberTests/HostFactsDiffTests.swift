@@ -180,5 +180,9 @@ final class HostFactsDiffTests: XCTestCase {
         XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: true),
                        ["mainWindowAlive": true, "webViewContentAlive": true, "focused": true])
         XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: false)["focused"], false)
+        // 关窗期间的重启快照不得谎报 alive=true：那会让新 sidecar 在窗口关着的整个时段
+        // 「可投递」（willClose 的语义是同步门一律不过；重开由 didBecomeKey 恢复）。
+        XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: false, mainWindowAlive: false),
+                       ["mainWindowAlive": false, "webViewContentAlive": true, "focused": false])
     }
 }

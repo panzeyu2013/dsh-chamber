@@ -532,7 +532,7 @@ test('facts-health: one breadcrumb per signature change, never-throw on hostile 
   const sample: FactsHealthSample = {
     ready: false, staleSince: 5, baselines: 0, baselineFailures: 3, baselineResamples: 1,
     baselineFailureReason: 'session/list: timeout after 5000ms',
-    reconnects: 2, socketErrors: 0, rows: 0, lastTrustedBaselineAt: null,
+    reconnects: 2, socketErrors: 0, rows: 0, maxWatermark: 0, lastTrustedBaselineAt: null,
   }
   assert.equal(recorder.record('local', sample), true)
   assert.equal(recorder.record('local', { ...sample }), false, '等价状态只留一条证据，不刷环')
@@ -542,6 +542,8 @@ test('facts-health: one breadcrumb per signature change, never-throw on hostile 
   assert.equal(writes[0]!.key, AUTHORITY_LOG_KEY)
   assert.match(writes[0]!.value, /facts-health/)
   assert.match(writes[0]!.value, /timeout after 5000ms/)
+  // W0：行水位读数进 detail（0 = 全部行都没有 host 水位；"播种不消费"的第一现场）。
+  assert.match(writes[0]!.value, /maxWatermark=0/)
   assert.match(writes[1]!.value, /ready=1/)
   // 敌意 storage（getItem/setItem 都抛）：诊断绝不打破账本链。
   const hostile = {
@@ -598,12 +600,15 @@ test('facts-health sampling wiring: every observer snapshot reaches the ring rec
   // 唯一取样点：观察者快照 → sampleFactsHealth → recorder。删掉/断链任一环，这条锁必须红
   // （它是「观察者一直不可判」落成盘上时间线的唯一通路）。
   const observer = bracedBlockFrom(hook, 'createSourceMuxFacts({')
-  assert.match(observer, /onSnapshot: snapshot => \{[\s\S]*sampleFactsHealth\(\)/)
-  const sample = bracedBlockFrom(hook, 'const sampleFactsHealth = (): void =>')
+  // 同一拍既进判定（applySessionFacts）也进取样（sampleFactsHealth）：水位读数必须来自这一拍快照。
+  assert.match(observer, /onSnapshot: snapshot => \{[\s\S]*applySessionFacts\(sourceId, snapshot\)[\s\S]*sampleFactsHealth\(snapshot\)/)
+  const sample = bracedBlockFrom(hook, 'const sampleFactsHealth = (snapshot: SessionFactsSnapshot): void =>')
   assert.match(sample, /created!\s*\.status\(\)/)
   assert.match(sample, /factsHealthRef\.current\?\.record\(\s*sourceId,\s*\{/)
   // 采样字段与 FactsHealthSample 对齐：时点进 detail（状态进签名由 recorder 负责）。
   assert.match(sample, /lastTrustedBaselineAt:\s*status\.lastTrustedBaselineAt/)
+  // W0：同一拍的行水位随采样进环（"播种不消费"的第一现场）。
+  assert.match(sample, /maxWatermark:\s*maxWatermark\(snapshot\.rows\)/)
   assert.doesNotMatch(sample, /edges:\s*status\.edges/)
 })
 
@@ -617,9 +622,13 @@ test('never-throw wiring: derive / reconcile / apply / runtime report and every 
   const health = readFileSync(
     fileURLToPath(new URL('../../src/facts-health.ts', import.meta.url)), 'utf8')
 
-  // ① 派生入口：唯一失败面是统一包装（异常落环 + loud 一次，绝不静默）。
+  // ① 派生入口：唯一失败面是统一包装（异常落环 + loud 一次，绝不静默），且入口必须**过重入闸**——
+  //    实机 #185（嵌套派生 → 整拍作废 ⇒ read/edge 永不落盘）就是绕过闸直接同步调用派生体的形状。
   const deriveEntry = bracedBlockFrom(hook, 'const recomputeSourceUnread = useCallback(')
-  assert.match(deriveEntry, /factsStepGuard\.guard\(sourceId, 'derive-unread', \(\) => deriveSourceUnreadNow\(sourceId\)\)/)
+  assert.match(deriveEntry, /unreadStepGateRef\.current\?\.request\(sourceId\)/,
+    '派生入口必须经重入闸（createUnreadStepGate），不得直接同步调用派生体')
+  assert.match(hook, /factsStepGuard\.guard\(sourceId, 'derive-unread', \(\) => deriveSourceUnreadNow\(sourceId\)\)/,
+    '闸的 step 内仍是统一的 never-throw 包装')
   // ② 收敛与 facts 应用：实体与 never-throw 出口分离，对外（listener）只暴露出口。
   assert.match(hook, /const reconcileCompletionsNow = useCallback\(/)
   assert.match(bracedBlockFrom(hook, 'const reconcileCompletions = useCallback('),

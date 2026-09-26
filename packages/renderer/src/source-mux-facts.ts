@@ -494,8 +494,10 @@ export function mergeBaselineRow(previous: SourceMuxRow | undefined, row: Source
     ...goalPatch,
     running: false,
     updatedAt: Math.max(previous.updatedAt, row.updatedAt),
-    // updatedAt is the host's lastPromptAt. A later prompt invalidates the
-    // previous completion even if both list samples say running=false.
+    // updatedAt 是宿主列表项的派生水位（vendor list.js: max(header.createdAt,
+    // projections.values.sessionListMetadata.lastPromptAt ?? 0)），即**最近一次用户内容的时间戳**
+    // （本机实测：`session/list` 123/123 行都带真实值）。它证明「有更新」，但**不**证明「有一轮结束」——
+    // 故仅当水位推进且此前不在运行时，作废上一次完成声明（活动 ≠ 完成）。
     ...(row.updatedAt > previous.updatedAt && !previous.running
       ? { completedAt: null, completedAtSource: null, completedAtDomain: undefined, lastTurnEnd: null }
       : {}),

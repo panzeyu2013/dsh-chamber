@@ -154,6 +154,19 @@ export function deriveSourceUnread(
       if (edge[sessionId] === true) unread[sessionId] = true
       continue
     }
+    // W1（M1）：无可用 host 水位 = 「不知道内容在哪」，不是「内容位置是 0」。0 水位在协议里
+    // 不是极小值——host 的 updatedAt = max(header.createdAt, lastPromptAt ?? 0)，合法来源永远 > 0
+    // （watermark.ts 同判：completionWatermark 对 0/0 返回 undefined）。因此这种行**不得**产出
+    // unread=false，也**不得**清通道臂：否则一个 0 水位的 facts 行会把刚武装的点抹掉（实测症状）。
+    // 方向是 fail-closed 向未读：保留已武装的边沿，但不假武装（无证据不产新点）。
+    if (hostWatermark(fact.updatedAt, fact.completedAt, fact.completedAtDomain) === 0) {
+      // 保留**已武装**或**上一拍已判未读**的会话：既不清通道臂，也不产 unread=false。
+      // 取舍（已登记）：源侧水位坏着时这些点只能靠「阅读」之外的证据清除（viewingReadWatermark
+      // 同样要求可用水位）——即水位没恢复前它们是钉子户；这是 fail-closed 的一侧，
+      // 源侧修好后行一有可用水位即恢复常规结算（W3 记录语义将替换这一族）。
+      if (edge[sessionId] === true || input.prevLedger[sessionId] === true) unread[sessionId] = true
+      continue
+    }
     // 事实是该会话的完成权威（含 aborted+user 的抑制）；通道边沿在此结算，
     // 避免「用户停止被通道 running→idle 假武装」。
     delete edge[sessionId]
@@ -224,6 +237,8 @@ export interface FactsBaselineSeedInput {
 export interface FactsBaselineSeedResult {
   /** true = 本次真的镜像了地板（调用方写回 readMarks 并落盘）。 */
   seeded: boolean
+  /** true = 本化身此前已经播过种（标记命中）：稳态读数用它区分「已消费」与「从未消费」。 */
+  alreadySeeded: boolean
   /** 应写回的化身标记（未播种 = 入参原值）。 */
   incarnation: unknown
   /** 播种后的读水位表（未播种 = 入参原值）。 */
@@ -233,6 +248,7 @@ export interface FactsBaselineSeedResult {
 export function factsBaselineSeed(input: FactsBaselineSeedInput): FactsBaselineSeedResult {
   const unchanged: FactsBaselineSeedResult = {
     seeded: false,
+    alreadySeeded: input.seededIncarnation !== undefined && input.seededIncarnation === input.incarnation,
     incarnation: input.seededIncarnation,
     readMarks: input.readMarks,
   }
@@ -244,6 +260,7 @@ export function factsBaselineSeed(input: FactsBaselineSeedInput): FactsBaselineS
   if (through <= 0) return unchanged
   return {
     seeded: true,
+    alreadySeeded: false,
     incarnation: input.incarnation,
     readMarks: seedReadFloor(input.readMarks, input.factsRows, through, input.keepUnread),
   }

@@ -300,6 +300,11 @@ boot 值闩锁的**合并字段**（原独立 `bootReported` 已删，二者机�
   `pending.deferred:'subagent-busy'`
   只在**新建** pending 时采纳——已有 pending 保持自己的身份（目标 hold 不得被一次 busy
   改写为可释放的延迟）。
+- **候选的完成证据（RC-2 收窄）**：facts 候选只认 **host 域、`observed` 的 `completedAt`**
+  （`completion-observation.ts` 的 `factsCompletionOf`）——`completionWatermark = max(completedAt, updatedAt)`
+  是**内容水位**（记忆/围栏用），把 `updatedAt` 的活动前进也算成更高水位；候选若用它，
+  「一条老完成 + 新活动」或权威运行位抖动就会被重提成一次新完成（实测假通知的形状）。
+  observer 域的 `reconstructed` 时刻不在 host 域（§3.7：只出未读、不发通知），同样不作证据。
 - **G5** facts 候选的水位必须相对 pending 吸收位与已通知位**严格前进**；壳候选已被
   armed ⇒ 无候选（同一次完成的延迟 completed 边沿不得再出）。无 pending 且壳已 armed 的
   facts 候选**按 `armedFloor` 分界**（armSession 在 arm 时记下该次消费的 candidate/notified
@@ -548,6 +553,22 @@ running 批之后重放更早的批，其 `keepFence` 早已随原批过去、�
   非可用窗口，按 `shellNotifiedSinceFacts` 对确实通知过的会话再次播种补偿；影响面 = 该窗口内恰有一次
   壳轨通知的来源会话，每条重复一条横幅（会话事实与蓝点不受影响）。
 
+- ⑧ **运行身份的生产者（W2，2026-09 已落）**：facts 完成候选现在携带宿主 `turn/end.seq`
+  （`completion-observation.ts` 取 `factsRow.lastTurnEnd.seq`，非负安全整数才带），运行身份因此可产出
+  `host:turn/<seq>`（`notificationIdentityOf` 的 `host-turn` 分支——此前**只有消费没有生产者**，
+  所有完成都落回水位族）。seq 随候选进 durable `pending`（`PendingCompletion.completionSeq`，
+  `sanitizeUnreadPayload` 逐字段保留）并在释放时进入通知 ⇒ 延迟/被压制的完成也不会丢身份。
+  缺席（宿主不带 seq / 非法值）时形状与修复前**逐字一致**（水位族回退，无回归）。
+  **残留边界**：壳边沿完成没有 host 事件 id（它本就没有 facts 证据），因此 §3.2.7 ⑥/⑦ 的
+  跨批重复不受本项影响——本项只是把 facts 侧的重复判定从水位改成真实事件序，
+  为将来「壳完成对齐到同一 host id」留下唯一入口；v5 载荷（`{v:5,records}`）不含 pending 段，
+  故本次不动影子面。
+  **实机已证实（2026-09）**：本地 mux `session/follow` 快照的 `turn/end` 记录恒带宿主 `seq`——生产者的数据面
+  是线上现实，`notifiedRuns` 的 `host:turn%2F` 前缀只是它的下游读数（逐值证据见方案 §8）。
+- ⑨ **页内非事件的页代判别符（ask/request）**：`PAGE_GENERATION` 取自 CSPRNG 的 53 位安全整数（跨页必不同、
+  页内稳定），页内事件由 `localEventSequence` 区分。墙钟两条性质都不满足（同毫秒两次加载会撞、NTP 会回拨），
+  故身份模块的 `Date.now()` 预算为 **0**，由 W5 源码门（`unread-single-authority.test.ts`）钉住。
+
 #### 3.2.8 Rejected alternatives（完成身份与跨批围栏）
 
 1. **跨批围栏存活**（`settleFence` 跨 running 批等 facts 恢复）：否决——`boundary` 只有水位、没有完成
@@ -555,6 +576,13 @@ running 批之后重放更早的批，其 `keepFence` 早已随原批过去、�
 2. **计数式启发**（保留 N 次/等下一候选）：同样误吞真实新完成，且把丢发概率换成可调猜测参数。
 3. **本地伪造完成身份**（按水位区间/时间窗）：否决——本地输入只有水位，任何身份都是猜测；正确出口是
    上游只读「完成身份」面，落地前接受有界重复（§3.2.7 ⑥ 用例钉住时序与吞栏边界）。
+   **已改判并改（W2，2026-09）**：宿主事件序是**上游只读面**、不是本地伪造——`turn/end.seq`
+   本就是 host 域判别符，候选带上它（§3.2.7 ⑧），身份 = `host:turn/<seq>`；
+   壳边沿仍无此判别符，跨批重复照 §3.2.7 ⑥/⑦ 有界接受。
+4. **用内容水位当候选**（`completionWatermark = max(completedAt, updatedAt)`）：**已改判并改**。
+   内容水位把「用户内容更新」与「运行位抖动」都算成更高水位，于是同一次老完成被反复重提
+   （实测假通知的生产者）；候选只认 host 域 observed 的 `completedAt`（§3.2.3 候选证据门），
+   `updatedAt` 只保留「活动 ⇒ 作废完成声明」的记忆语义。
 
 ### 3.3 通知事件与 IPC
 
@@ -901,9 +929,12 @@ completedBySource（App 完成未读蓝点集，06 §4.1，只读复用——徽
   → projectBadgeCount(completedBySource, runtimeFacts)（renderer 纯函数，跨来源
     求「用户实际可见」的未读会话数——最新事实行 runningSubagents > 0（后台子
     代理存活）的武装蓝点不计入；0 = 清除）
-  → window.dshChamber.badge.set(count)                 ← 新 IPC（invoke）
-  → 主进程：白名单校验 → 记录意图 → 设置裁决（badgeEnabled 关 → 强制 0）
-    → 平台门（app.setBadgeCount：darwin/linux；win32 overlay 门控）→ 呈现
+  → window.dshChamber.badge.set(count)                 ← 新 IPC（invoke，**等真实回执**）
+  → 主进程：白名单校验 → 记录意图（电平；quit 清理也由它守护）→ 设置裁决（badgeEnabled 关 → 强制 0）
+    → 平台门（app.setBadgeCount：darwin/linux；win32 overlay 门控）
+    → 宿主腿：Electron 同步叶即真实结果；Swift 腿写 `NSApp.dockTile` 后**真读回** {count, applied}
+      （Dock 写是**应用级**状态：不看窗口；同值跳过按读回值判定；失败 loud 且经回执上抛）
+  → 呈现（窗口恢复 / 重载有重放钩子；`applied:false` = 未派发 → 与 rejection 同一条有界重试链）
 ```
 
 - **计数语义**：一个未读会话 = 1（同 OpenChamber「chats with unseen activity」，非通知条数）；
@@ -949,8 +980,11 @@ completedBySource（App 完成未读蓝点集，06 §4.1，只读复用——徽
   计数（含 0）必推：窗口重载后蓝点复位为 {}，主进程遗留徽标必须清除；桥迟到兜底与 reject
   有界重推链不变（预算是硬上限，自愈点是下一次计数变化）。桥缺失（web/dev）静默跳过。
 - **校验**：`{ count }` 必须为有限数（结构化克隆可携带 NaN/Infinity，显式拒绝）、非负、
-  ≤ 9999（超上限响亮拒绝不静默截断）；小数 `Math.floor` 归一（OpenChamber 同款容忍）。返回
-  boolean = 是否实际应用；渲染端静默容忍 false（主进程已 loud 记平台/失败原因，重复推送不刷屏）。
+  ≤ 9999（超上限响亮拒绝不静默截断）；小数 `Math.floor` 归一（OpenChamber 同款容忍）。
+- **回执（W4）**：处理器是 **async**，返回**真实投递结果**——Swift 宿主提供 `setBadgeAndWait`
+  （写后读回；放弃 / 主线程忙 / 读回不一致 ⇒ `applied:false` + 原因），Electron 缺省走同步叶
+  （它本身就是真实结果）。渲染端把 `applied:false` 当**未派发**，与 IPC rejection 走同一条有界
+  重试链，预算耗尽才释放计数变化闸并 loud——不再是「乐观 success + 静默容忍 false」。
 - **纪律**：同 §3.1；计数是瞬时投影，绝不持久化。
 
 #### 3.7.1 未读账本的可判性规则（判定面）
@@ -968,8 +1002,9 @@ completedBySource（App 完成未读蓝点集，06 §4.1，只读复用——徽
   通道里的会话照常保留。非权威列表时**不执行清扫**：`channelRunning` 已把缺席的 running 记忆
   全部保留在 `nextRunning`，清扫没有目标；缺席不是删除，结余照旧保留。
   冻结点冻的是「facts 的结论」，不是未读面本身——通知轨一直用的是通道边沿，账本必须与它同源；
-  没有这条，facts 载体一坏，整个未读面就停在初始空态（实机：8 小时 182 个持久化版本 `edge`/`read`
-  恒空，而通知回执照常产出）。通道与 facts **都**缺席时才原样冻结。
+  没有这条，facts 载体一坏，整个未读面就停在初始空态（实机 2026-09-26：9 天 18 份 localStorage
+  的 `read`/`edge` 全空、`localRuns=35`，而通知回执照常产出；根因是派生重入环被步骤守卫吞掉，
+  见下条 rejected）。通道与 facts **都**缺席时才原样冻结。
 - **权威列表门**：缺席当删除**只**在 `listComplete === true` **且**通道在场时成立；没收到列表
   不等于「列表为空」，否则一次未完成的列表就会假清未读。这道门也是离表清扫的**唯一**开关
   （`prevRunning ∪ prevCompleted` 键空间）；非权威列表时不清扫（缺席不是删除）。
@@ -1030,6 +1065,30 @@ STATUS）。退役时先翻相位再发布，环里因此能看到「退役」�
   重现复用）。
 - *「按基线年龄做新鲜度」*：需要第二个时钟与第二个常量，且「套接字活着但 unary 坏」的形状
   仍会谎报在场；现在的规则只认「有可信基线 + 载波在场/宽限内」两个事实。
+- *「按窗口状态门控 Dock 角标写」*（节点侧 `badgeBlockedResult` + Swift 腿的 `no-window` 守卫）：
+  **已删除**。`NSApp.dockTile` 是**应用级**状态——主窗关闭后 app 仍在运行、Dock 图标仍在，
+  按窗口状态丢弃清 0 写会让陈旧数字**无法被纠正**（源码与测试钉住该行为；实机日志未捕获
+  `no-window` 实例——实机主因是**缺少纠正链**：电平 target + 重放 + 真读回，见方案 RC-3）；
+  窗口守卫只保留给真正需要窗口的腿（focusMainWindow/showMessage…）。回执不再乐观：宿主写后
+  **真读回** `{count, applied}`，节点侧如实转达（读回不一致 ⇒ `applied:false`，不回谎报 ok）。
+- *「按本地记忆跳过同值写」*：被否决。记忆一旦与真实 `dockTile` 分叉（别处改过角标），
+  「跳过」会把写**永久锁死**（每次都读回不一致、却每次都不写 ⇒ `applied:false` 死循环）；
+  同值判定必须取**写后读回**值，`applied = readback == intent`。
+- *「跨通道别名表」*（`notification-outbox` 的 `{hostKey → canonical run id}` 关联窗）：**已删除**（2026-09）。
+  它存在的理由是「facts 完成没有宿主域判别符、只能按 host 时间关联」；W2 把 `completionSeq`
+  （宿主 `turn/end.seq`，实机 `session/follow` 快照证实恒在）接进身份之后，带序的完成各**有自己的
+  身份**，别名既不需要也不该赢（旧规则「第二身份族解析回首报 id」会把真事件并进旧键）。跨族关联
+  由候选阶段的一次 `absorbCandidate` 与 outbox 的 `associateCompletion` 完成；残留的存量键
+  （`…outbox.aliases.v1`）在 outbox 构造时一次性 `removeItem`，失败方向仍是**重复而非丢失**
+  （§3.2.7 ⑥/⑦ 的有界重复边界）。**删除时的复核结论**：生产 facts intent 从不携带 `hostObservedAt`
+  （只有壳边写它），旧 `hostKeyOf(facts)` 只能是 `seq:<seq>`、壳边是 `at:<updatedAt>`——两族键**从不
+  相等**，即这张表对 facts↔壳跨通道去重**从未生效**（旧测试之所以「通过」，是测试自己展开继承了
+  `hostObservedAt`）。因此删除不是「拿掉一层保护」，而是删掉一个从未兑现的承诺。
+- *「允许派生在 React 更新相位内重入」*：被否决。派生体末尾写 `completedStore`
+  （`useSyncExternalStore` 的订阅面）；若这次写入触发的同步渲染再回调派生，就是嵌套更新环
+  （实测 `derive-unread: Minified React error #185`），被步骤守卫吞掉后**整拍作废** ⇒
+  `read`/`edge` 从未落盘（9 天 18 份存储全空）。派生体**永不嵌套**：重入请求按 id 去重、
+  排到微任务补跑（`createUnreadStepGate`），非重入路径行为不变。
 - *「给 gateway 事实源的 `dropSession` 也加一层过门」*（方案里的 P0-3 后半）：它的触发条件是
   **源整个离开连接 roster**（`use-session-facts-lifecycle.ts` 只处理 `kind === 'gateway'` 且不再
   出现在 roster 项；断连但仍在 roster 的源保留在 `wanted` 里不拆），此时丢弃该源的快照是

@@ -685,25 +685,48 @@ test('⑱ P-07：>16 淘汰逐条按 identifier 清横幅（retire payload 携�
   assert.deepEqual(activated, ['src-17'], '新通知照常可点击')
 })
 
-test('⑲ P-06：已确证无主窗时 setBadge 同步回 applied:false（不再乐观假成功）', async () => {
+test('⑲ W4 改判：Dock 角标是应用级状态——无主窗也必须送出（清 0 写不得被丢弃）', async () => {
   const attempts: Array<{ method: string; payload: unknown }> = []
   const edges = createNodeEdges({
     sendEdge: async (method, payload) => {
       attempts.push({ method, payload })
-      return null
+      return { applied: true }
     },
     sendNotify: () => {},
   })
-  // 默认 hostFacts（未声明主窗）→ Swift 腿必以 no-window 拒绝：同步失败且绝不
-  // 发起注定失败的 edge。
-  assert.deepEqual(edges.setBadge(4), {
-    applied: false,
-    reason: 'swift-edge-ui-unavailable:setBadge:no-window',
-  })
-  assert.deepEqual(attempts, [], '无窗失败不得入队/发 edge')
-  // hostFacts 声明主窗存活（sidecar-entry 装配种子同值）→ 恢复乐观回执 + 排队。
-  assert.deepEqual(edges.handleHostInbound(HOST_INBOUND.hostFacts, { mainWindowAlive: true }), { ok: true })
+  // 默认 hostFacts（未声明主窗）也必须入队：主窗关闭后 app 仍在运行、Dock 图标仍在，
+  // 此时丢弃清 0 写会让 Dock 上的陈旧大数字永远清不掉（实机症状）。
   assert.deepEqual(edges.setBadge(4), { applied: true })
   await new Promise<void>((resolve) => setTimeout(resolve, 20))
-  assert.deepEqual(attempts, [{ method: 'setBadge', payload: { count: 4 } }])
+  assert.deepEqual(attempts, [{ method: 'setBadge', payload: { count: 4 } }],
+    '无主窗声明也必须发 edge（宿主腿诚实应答，不再由本侧替它预判窗口）')
+  // hostFacts 声明主窗存活：同一应用级语义，不因窗口状态而分叉。
+  assert.deepEqual(edges.handleHostInbound(HOST_INBOUND.hostFacts, { mainWindowAlive: true }), { ok: true })
+  assert.deepEqual(edges.setBadge(0), { applied: true })
+  await new Promise<void>((resolve) => setTimeout(resolve, 20))
+  assert.deepEqual(attempts.at(-1), { method: 'setBadge', payload: { count: 0 } })
+})
+
+test('⑲b W4 读回：宿主写后读不一致 ⇒ 如实回未应用；旧宿主无读回 ⇒ 保持乐观', async () => {
+  const mismatched = createNodeEdges({
+    sendEdge: async () => ({ applied: false, count: 9 }),
+    sendNotify: () => {},
+  })
+  assert.deepEqual(await mismatched.setBadgeAndWait(9),
+    { applied: false, reason: 'swift-setBadge-readback-mismatch' },
+    '宿主说写后读不一致 ⇒ 不得谎报 ok（调用方的重试链据此继续）')
+  const legacy = createNodeEdges({ sendEdge: async () => null, sendNotify: () => {} })
+  assert.deepEqual(await legacy.setBadgeAndWait(3), { applied: true },
+    '旧宿主应答无读回字段 ⇒ 保持入队乐观（向后兼容）')
+})
+
+test('⑳ W4 源码锁：角标路径不看窗口状态，且宿主读回必须被转达', () => {
+  const node = readFileSync(new URL('./node-edges.ts', import.meta.url), 'utf8')
+  // 旧行为 = 按 `mainWindowAlive` 预判拒写（`badgeBlockedResult` → `setBadge:no-window`）。
+  // 那正是「主窗关闭后清 0 写被丢弃 ⇒ Dock 陈旧大数字永远清不掉」的直因；删掉后不得有同形短路复活。
+  assert.doesNotMatch(node, /badgeBlockedResult|badgeNoWindowLogged/, '无窗预判短路必须保持删除')
+  assert.doesNotMatch(node, /setBadge:no-window/, '角标不再有 no-window 失败面（Dock 是应用级状态）')
+  // 读回转达：吞掉宿主读回再乐观回 true = 回到「谎报已应用」。
+  assert.match(node, /badgeReadbackReceipt\(answer\) \?\? \{ applied: true \}/)
+  assert.match(node, /swift-setBadge-readback-mismatch/)
 })

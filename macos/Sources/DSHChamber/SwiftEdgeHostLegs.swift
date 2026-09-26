@@ -194,6 +194,10 @@ public final class SwiftEdgeHostLegs {
         public var notificationCenter: () -> EdgeNotificationCenter
         /// add 的有界等待（默认 5s，测试可缩短）。
         public var notificationAddTimeout: TimeInterval
+        /// Dock 角标叶的 AppKit seam（读写 `dockTile.badgeLabel`）。生产 = 真 dockTile（写后真读回）；
+        /// 单测注入内存假体（headless 绝不触碰 NSApp）。nil = 无角标。
+        public var badgeLabel: () -> String?
+        public var setBadgeLabel: (String?) -> Void
         /// 调试模式宿主腿：把 WKWebView.isInspectable 置真/假并回**实测读值**。
         /// Swift 侧必须在主线程执行（WKWebView 主线程语义）。返回 nil = 无主窗
         /// （诚实降级，绝不假装已开启）。生产 = MainWindowController 注入；
@@ -208,12 +212,18 @@ public final class SwiftEdgeHostLegs {
                         SystemUserNotificationCenter()
                     },
                     notificationAddTimeout: TimeInterval = SwiftEdgeHostLegs.notificationAddTimeout,
+                    badgeLabel: @escaping () -> String? = { NSApp.dockTile.badgeLabel },
+                    setBadgeLabel: @escaping (String?) -> Void = { label in
+                        NSApp.dockTile.badgeLabel = label
+                    },
                     setInspectable: @escaping (Bool) -> Bool? = { _ in nil }) {
             self.canShowUI = canShowUI
             self.isAppBundled = isAppBundled
             self.uiLegBodyOverride = uiLegBodyOverride
             self.notificationCenter = notificationCenter
             self.notificationAddTimeout = notificationAddTimeout
+            self.badgeLabel = badgeLabel
+            self.setBadgeLabel = setBadgeLabel
             self.setInspectable = setInspectable
         }
     }
@@ -563,24 +573,34 @@ public final class SwiftEdgeHostLegs {
         case "setBadge":
             // E5 dock 角标叶：payload {count: number}；UI 上下文守卫（headless
             // 绝不触碰 NSApp 状态）。badgePlatformGate 裁决在 core（sidecar），
-            // 本腿只执行 dockTile 写。notify 消费（sidecar setBadge notify →
-            // MainWindowController 路由）复用本腿——守卫语义与 edge 面一致
-            // （canShowUI/主窗），失败在消费侧 loud。
-            // 精度对照：electron-edges setBadge = try app.setBadgeCount → catch
-            // 折算 {applied:false, reason}——core applyBadgePresentation 把失败
-            // 压成一次 loud 日志，**不向 renderer 回执**（renderer 保持自己的
-            // 计数投影）。Swift flavor node-edges.setBadge 因同步契约无法跨进程
-            // 往返而乐观 {applied:true}（fire-and-forget notify）——dock 写失败
-            // 只能在本侧 loud（notify 消费打印 / edge 面 ok:false 上抛）。差异 =
-            // 通知瞬间的失败窗口（尽力面）+ 失败日志落点；对 renderer 的可见性
-            // 两边一致（均无失败回执）→ parity 成立。
+            // 本腿只执行 dockTile 写 + 真读回。
+            //
+            // **不要求主窗**（W4 改判）：`NSApp.dockTile` 是**应用级**状态——主窗关闭后 app
+            // 仍在运行、Dock 图标仍在，此时若按「无主窗」拒绝清 0 写，Dock 上的陈旧数字就永远
+            // 清不掉（实机症状）。窗口守卫只在真正需要窗口的腿（focusMainWindow/showMessage…）。
+            //
+            // 写后读回：返回 {count, applied}——applied = 写后 `dockTile.badgeLabel` 是否等于意图。
+            // 同值跳过：以**读回值**（而非本地记忆）判同值——本地记忆一旦与真实 dockTile 分叉
+            // （别处改过角标），「跳过」会把写永久锁死：每次都读回不一致、却每次都不写。
             return performUI(method: method) {
-                guard self.mainWindowProvider?() != nil else {
-                    return (nil, Self.uiUnavailablePrefix + method + ":no-window")
+                // 载荷纪律（同 setDebugMode/openExternal）：缺键/非整值 = 协议违例 → loud 拒绝，
+                // **绝不用「?? 0」兜底**——那会把「未知」执行成「清空 Dock」（用户可见的破坏）。
+                guard let count = dict.flatMap({ EdgePayload.int($0["count"]) }) else {
+                    return (nil, Self.unimplementedPrefix + method + ":payload")
                 }
-                let count = dict.flatMap { EdgePayload.int($0["count"]) } ?? 0
-                NSApp.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
-                return (nil, nil)
+                let intent: String? = count > 0 ? "\(count)" : nil
+                let needsWrite = self.config.badgeLabel() != intent
+                if needsWrite {
+                    self.config.setBadgeLabel(intent)
+                }
+                let readback = self.config.badgeLabel()
+                let applied = readback == intent
+                // W4 验收读数：期望值在 renderer（`__dshChamberBadgeCount`），**实际应用值**只有这里知道
+                // ——「期望 == Dock 实际」的比对就靠这一行（只在真写时记，同值跳过不刷日志）。
+                if needsWrite {
+                    shellLog("[shell] badge write count=\(count) applied=\(applied) label=\(readback ?? "nil")")
+                }
+                return (.object(["count": .number(Double(count)), "applied": .bool(applied)]), nil)
             }
         case "setDebugMode":
             // 调试模式叶（设置 → 通用 → 更新区内）：payload {enabled: bool}。

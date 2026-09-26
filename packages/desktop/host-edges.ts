@@ -89,6 +89,9 @@ export interface HostEdges {
    *  badge.ts：core 以 badgePlatformGate(platform, badgeCountApiAvailable())
    *  先裁决、supported 后才调用本叶）：异常安全，绝不 throw。 */
   setBadge(count: number): HostSetBadgeResult
+  /** W4（可选）：等**真实腿回执**的徽标写入。Swift 形态实现（NodeEdges 附加成员），
+   *  跨进程应答无法同步取回；Electron 形态缺省 ⇒ core 走同步 setBadge（真实结果本来同步可得）。 */
+  setBadgeAndWait?(count: number): Promise<HostSetBadgeResult>
   /** app.setBadgeCount API 可用性事实（badgePlatformGate 第二参；win32 的平台
    *  原因由 core 侧平台门区分）。 */
   badgeCountApiAvailable(): boolean

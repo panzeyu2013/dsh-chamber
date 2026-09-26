@@ -1014,12 +1014,17 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 的 focused=false 会粘滞到下一次 key 事件，窗口明明是 key 却推 false。
     func resetHostFactsBookkeeping() {
         lastHostFacts = [:]
-        pushHostFacts(Self.resetFacts(isKeyWindow: window?.isKeyWindow ?? false))
+        pushHostFacts(Self.resetFacts(isKeyWindow: window?.isKeyWindow ?? false,
+                                      mainWindowAlive: mainWindowDeliverable))
     }
 
     /// sidecar 重启后的全量事实快照（纯逻辑，单测直测）。
-    static func resetFacts(isKeyWindow: Bool) -> [String: Bool] {
-        ["mainWindowAlive": true, "webViewContentAlive": true, "focused": isKeyWindow]
+    ///
+    /// `mainWindowAlive` 取**投递门语义的真实状态**（`willClose` → false / `didBecomeKey` + 建窗 → true），
+    /// 不硬编码：关窗期间（窗口对象不销毁但同步门一律不过）若在重启快照里谎报 true，
+    /// 新 sidecar 会以为可投递 ⇒ 开通知/深链在窗口关着的整个时段被静默丢。
+    static func resetFacts(isKeyWindow: Bool, mainWindowAlive: Bool = true) -> [String: Bool] {
+        ["mainWindowAlive": mainWindowAlive, "webViewContentAlive": true, "focused": isKeyWindow]
     }
 
     private func pushHostFacts(_ changes: [String: Bool]) {
@@ -1044,6 +1049,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
     }
 
+    /// 投递门语义下的「主窗可用」真实状态（建窗/`didBecomeKey` → true；`willClose` → false）。
+    /// 单列一份而不读 `lastHostFacts`：后者在 sidecar 重启时被清空，而重启快照要推的是**当前事实**。
+    private var mainWindowDeliverable = true
+
     /// NSWindow.didBecomeKeyNotification：窗口成为 key（启动首显 / 隐藏、
     /// 最小化后恢复 / Dock 重开都会触发）→ focused:true。附带
     /// mainWindowAlive:true：POC 关窗不销毁窗口对象（willClose 已推 false，
@@ -1051,6 +1060,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// activate 重建窗口后 mainWindowAlive 恢复 true 同刻收敛；正常 key
     /// 往返（alive 未变）时去重后不产生额外推送。
     @objc private func hostFactsWindowDidBecomeKey(_ notification: Notification) {
+        mainWindowDeliverable = true
         pushHostFacts(["mainWindowAlive": true, "focused": true])
         // 上屏兜底一拍——若首次记录时窗口还不在屏上（screen == nil），
         // 这里补进真实上限；正常路径被整行去重吞掉，不产生重复行。
@@ -1070,6 +1080,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// hostFactsWindowDidBecomeKey 推回 true）。同时上报 closed 生命周期
     /// （design 25 §5 E19 三事件映射之一：core 复位 ready 位 + in-flight 重排）。
     @objc private func hostFactsWindowWillClose(_ notification: Notification) {
+        mainWindowDeliverable = false
         pushHostFacts(["mainWindowAlive": false])
         sendRendererLifecycle("closed")
     }

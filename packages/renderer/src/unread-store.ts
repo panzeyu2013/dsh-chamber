@@ -162,6 +162,12 @@ function sanitizePendingTables(value: Record<string, unknown>, payload: UnreadV4
         else if (entry.watermark !== undefined) warn('unread payload.pending entry ' + sourceId + '/' + sessionId + ' has an invalid watermark; field dropped')
         if (typeof entry.goalId === 'string' && entry.goalId.length > 0) sanitized.goalId = entry.goalId
         else if (entry.goalId !== undefined) warn('unread payload.pending entry ' + sourceId + '/' + sessionId + ' has an invalid goalId; field dropped')
+        // W2 身份：turn/end.seq 的数值域与水位同（非负安全整数）；非法只丢字段，绝不整条丢弃。
+        if (typeof entry.completionSeq === 'number' && Number.isSafeInteger(entry.completionSeq) && entry.completionSeq >= 0) {
+          sanitized.completionSeq = entry.completionSeq
+        } else if (entry.completionSeq !== undefined) {
+          warn('unread payload.pending entry ' + sourceId + '/' + sessionId + ' has an invalid completionSeq; field dropped')
+        }
         // G4 延迟来源（评审 F5 阻断项 1）：deferred 是 pending 的 durable 身份，丢了它
         // 同页 reload 后 busy 延迟的完成既不会中性释放、又可能被 #3 静默 drop——严格按
         // 合法值拷贝；非法值只丢该字段，绝不整条丢弃（at 才是条目的成立条件）。
@@ -329,6 +335,214 @@ export function pruneUnreadPayload(payload: UnreadV4Payload, maxPerSource = UNRE
   return next
 }
 
+// ── v5 影子写（W3：只写不读，回退 = 忽略整键） ───────────────────────────────
+
+/**
+ * v5 落盘键。**影子期只写不读**：v4 仍是唯一被读取的权威缓存，回退 = 删掉/忽略本键；
+ * 权威切换与 importer 的读取路径另批（本批只保证形状可往返、语义与 v4 逐字对齐）。
+ */
+export const UNREAD_V5_KEY = 'dsh-chamber.unread.v5'
+
+/**
+ * v5 记录（每来源每会话一条）：未读位在**记录创建时**一次性决定，此后只有显式读
+ * （read / read-all ⇒ read=true）能改；`forgetSession`/`withdraw` 只清易失 pending，
+ * 绝不重算这条记录——这正是治「点被抹/复活」的结构面。
+ */
+export interface UnreadV5Record {
+  /** 记录创建时的那一拍水位（展示/排序用；不参与判定）。 */
+  watermark: number
+  /** 创建时一次性决定的未读位（read=true 时恒 false）。 */
+  unread: boolean
+  /** 显式已读标记：v5 里唯一能改 `unread` 的入口。 */
+  read: boolean
+  /** 最后一次已通知的运行身份；'' = 尚无（等价于 v4 表缺键）。 */
+  notifiedRun: string
+}
+
+export interface UnreadV5Payload {
+  v: 5
+  records: Record<string, Record<string, UnreadV5Record>>
+}
+
+export function emptyUnreadV5Payload(): UnreadV5Payload {
+  return { v: 5, records: {} }
+}
+
+/**
+ * v4 → v5 投影（importer 的对照面，W3）：旧 `edge=true` ⇒ 一条未读记录；旧 `readMarks` ⇒ 已读
+ * （v4 的读水位只升，存在即「已读到该水位」，同时充当记录水位）；旧 `notifiedRuns` ⇒ 通知身份。
+ * 三张表都不认识的空壳不落盘。影子写与迁移测试共用本函数，保证两侧语义只有一处定义。
+ */
+export function projectUnreadV5(payload: UnreadV4Payload): UnreadV5Payload {
+  const records: Record<string, Record<string, UnreadV5Record>> = {}
+  const sourceIds = new Set([
+    ...Object.keys(payload.edge),
+    ...Object.keys(payload.read),
+    ...Object.keys(payload.notifiedRuns),
+  ])
+  for (const sourceId of sourceIds) {
+    const table: Record<string, UnreadV5Record> = {}
+    const sessions = new Set([
+      ...Object.keys(payload.edge[sourceId] ?? {}),
+      ...Object.keys(payload.read[sourceId] ?? {}),
+      ...Object.keys(payload.notifiedRuns[sourceId] ?? {}),
+    ])
+    for (const sessionId of sessions) {
+      const mark = payload.read[sourceId]?.[sessionId]
+      const read = isWatermark(mark)
+      const unread = payload.edge[sourceId]?.[sessionId] === true && !read
+      const notifiedRun = payload.notifiedRuns[sourceId]?.[sessionId] ?? ''
+      if (!unread && !read && notifiedRun === '') continue
+      table[sessionId] = { watermark: read ? mark : 0, unread, read, notifiedRun }
+    }
+    if (Object.keys(table).length > 0) records[sourceId] = table
+  }
+  return { v: 5, records }
+}
+
+/** v5 有界化：每来源按水位 LRU 保留上限条（与 v4 的 outcomes 同序，确定性）。 */
+export function pruneUnreadV5Payload(
+  payload: UnreadV5Payload,
+  maxPerSource = UNREAD_MAX_SESSIONS_PER_SOURCE,
+): UnreadV5Payload {
+  const records: Record<string, Record<string, UnreadV5Record>> = {}
+  for (const [sourceId, table] of Object.entries(payload.records)) {
+    const entries = Object.entries(table)
+    if (entries.length <= maxPerSource) {
+      records[sourceId] = { ...table }
+      continue
+    }
+    entries.sort((a, b) => b[1].watermark - a[1].watermark
+      || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    const kept: Record<string, UnreadV5Record> = {}
+    for (const [sessionId, record] of entries.slice(0, maxPerSource)) kept[sessionId] = record
+    records[sourceId] = kept
+  }
+  return { v: 5, records }
+}
+
+/**
+ * v5 读回净化（唯一读面门）：坏项剥掉；记录面**只认白名单键**（隐私条同 v4——title/cwd/
+ * 消息内容永远进不来）；`unread && read` 的坏状态折算为已读（显式读是不可逆的赢家）。
+ */
+export function sanitizeUnreadV5Payload(value: unknown): UnreadV5Payload {
+  const payload = emptyUnreadV5Payload()
+  if (!isPlainRecord(value) || value.v !== 5) return payload
+  const records = isPlainRecord(value.records) ? value.records : {}
+  for (const [sourceId, sessions] of Object.entries(records)) {
+    if (!isPlainRecord(sessions)) continue
+    const table: Record<string, UnreadV5Record> = {}
+    for (const [sessionId, record] of Object.entries(sessions)) {
+      if (!isPlainRecord(record)) continue
+      if (!isWatermark(record.watermark)) continue
+      if (typeof record.unread !== 'boolean' || typeof record.read !== 'boolean') continue
+      const notifiedRun = typeof record.notifiedRun === 'string' && isSessionRunId(record.notifiedRun)
+        ? record.notifiedRun
+        : ''
+      table[sessionId] = {
+        watermark: record.watermark,
+        unread: record.unread && !record.read,
+        read: record.read,
+        notifiedRun,
+      }
+    }
+    if (Object.keys(table).length > 0) payload.records[sourceId] = table
+  }
+  return payload
+}
+
+/**
+ * 等价性守卫（W3「先锁」）：比较 v4 载荷的**未读/已读/通知身份**与 v5 记录面（读回净化后）是否
+ * 逐会话一致。差异 = v5 形状丢信息（净化拒绝 / 有界裁剪 / 版本不符）⇒ 此刻**不得切换权威**。
+ * 纯函数、只读，不参与任何判定；差异文本有界（最多 8 条）。
+ */
+export function unreadV5Parity(
+  v4: UnreadV4Payload,
+  v5: UnreadV5Payload,
+): { ok: boolean; differences: string[] } {
+  const differences: string[] = []
+  const maxDifferences = 8
+  const sourceIds = new Set([
+    ...Object.keys(v4.edge),
+    ...Object.keys(v4.read),
+    ...Object.keys(v4.notifiedRuns),
+    ...Object.keys(v5.records),
+  ])
+  for (const sourceId of sourceIds) {
+    const sessions = new Set([
+      ...Object.keys(v4.edge[sourceId] ?? {}),
+      ...Object.keys(v4.read[sourceId] ?? {}),
+      ...Object.keys(v4.notifiedRuns[sourceId] ?? {}),
+      ...Object.keys(v5.records[sourceId] ?? {}),
+    ])
+    for (const sessionId of sessions) {
+      const readMark = v4.read[sourceId]?.[sessionId]
+      const v4Read = isWatermark(readMark)
+      const v4Unread = v4.edge[sourceId]?.[sessionId] === true && !v4Read
+      const v4Run = v4.notifiedRuns[sourceId]?.[sessionId] ?? ''
+      const record = v5.records[sourceId]?.[sessionId]
+      const v5Unread = record !== undefined && record.unread && !record.read
+      const v5Read = record?.read === true
+      const v5Run = record?.notifiedRun ?? ''
+      if (v4Unread !== v5Unread) {
+        differences.push('unread:' + sourceId + '/' + sessionId + ' v4=' + String(v4Unread) + ' v5=' + String(v5Unread))
+      } else if (v4Read !== v5Read) {
+        differences.push('read:' + sourceId + '/' + sessionId + ' v4=' + String(v4Read) + ' v5=' + String(v5Read))
+      } else if (v4Run !== v5Run) {
+        differences.push('run:' + sourceId + '/' + sessionId + ' v4=' + (v4Run || '-') + ' v5=' + (v5Run || '-'))
+      }
+      if (differences.length >= maxDifferences) return { ok: false, differences }
+    }
+  }
+  return { ok: differences.length === 0, differences }
+}
+
+/** 影子写结果：written = 键是否真的写了；parity = 读回净化后与 v4 的等价性（未写 = null）。 */
+export interface UnreadShadowWrite {
+  written: boolean
+  parity: { ok: boolean; differences: string[] } | null
+}
+
+/**
+ * 启动期影子对账（W3 先锁的读面）：盘上同时有 v4 与 v5 时比对二者；返回 null = 没有可对账的
+ * 影子（键缺失/解析失败/无 storage）。**只报告，不改判定**（权威仍是 v4）——它捕捉的是
+ * 「影子漂移」（例如某条 v4 写路径没走 flushUnread），写时对账捕捉不到。
+ */
+export function reconcileUnreadShadowOnLoad(
+  storage: UnreadStorageLike | undefined,
+  v4: UnreadV4Payload,
+): { ok: boolean; differences: string[] } | null {
+  if (storage === undefined) return null
+  try {
+    const raw = storage.getItem(UNREAD_V5_KEY)
+    if (raw === null || raw === '') return null
+    return unreadV5Parity(v4, sanitizeUnreadV5Payload(JSON.parse(raw)))
+  } catch (error) {
+    warn('cannot reconcile the unread v5 shadow on load', error)
+    return null
+  }
+}
+
+/**
+ * 影子写（W3）：v4 落盘之后调用，把同一意图投影成 v5 写另一个键。**只写不读**；
+ * 写成功后立刻按读面路径读回（JSON 往返 + 净化）做等价性守卫——差异只报告，不改判定
+ * （权威仍是 v4）。任何失败（无 storage / 配额 / 序列化）只 loud，绝不 throw。
+ */
+export function saveUnreadShadow(
+  storage: UnreadStorageLike | undefined,
+  payload: UnreadV4Payload,
+): UnreadShadowWrite {
+  if (storage === undefined) return { written: false, parity: null }
+  try {
+    const json = JSON.stringify(pruneUnreadV5Payload(projectUnreadV5(payload)))
+    storage.setItem(UNREAD_V5_KEY, json)
+    return { written: true, parity: unreadV5Parity(payload, sanitizeUnreadV5Payload(JSON.parse(json))) }
+  } catch (error) {
+    warn('cannot shadow-write unread v5 (v4 remains authoritative)', error)
+    return { written: false, parity: null }
+  }
+}
+
 // ── 载入 / 保存 ────────────────────────────────────────────────────────────
 
 /**
@@ -435,6 +649,85 @@ export function createUnreadSaveCoalescer(
     pending(): boolean {
       return scheduled
     },
+  }
+}
+
+/** 步骤重入闸的补跑调度器（默认微任务；测试注入手动队列）。 */
+export type UnreadStepDefer = (run: () => void) => void
+
+export interface UnreadStepGateStats {
+  /** 真正执行过的 step 次数。 */
+  runs: number
+  /** 被闸挡下、改为补跑的请求数（> 0 = 实机存在派生重入）。 */
+  coalesced: number
+  /** 排过的补跑微任务次数。 */
+  deferrals: number
+}
+
+export interface UnreadStepGate {
+  /** 请求跑一次 step(id)。正在跑时只登记，当前这次结束后在微任务里补跑。 */
+  request(id: string): void
+  /** 是否正在执行（诊断/测试）。 */
+  running(): boolean
+  /** 待补跑的 id（诊断/测试）。 */
+  pending(): readonly string[]
+  /** 读数面（W1 M2 实机复核：coalesced > 0 证明更新环真实存在且被闸吸收）。 */
+  stats(): UnreadStepGateStats
+}
+
+/**
+ * 派生步骤的**重入闸**（W1 M2：打断 React #185 更新环）。
+ *
+ * WHY：派生体末尾写 `completedStore`（`useSyncExternalStore` 的订阅面）。若这次写入触发的 React
+ * 更新在**同一次调用栈**里再回调派生（`flushSync` / 同步 lane），就形成「派生 → 写 store → 同步渲染
+ * → 派生」的嵌套更新环；React 以 #185（Maximum update depth exceeded）中止，被步骤守卫吞掉后
+ * **整拍作废** ⇒ `read`/`edge` 永不落盘（2026-09-26 实机：9 天 18 份存储全空 + `unread-derive-error`）。
+ *
+ * 契约：派生体**永不嵌套执行**；重入请求按 id 去重、按请求序在微任务里补跑（同一 tick 不丢请求）。
+ * 非重入调用（正常桥事件/effect）保持同步执行，行为不变。
+ */
+export function createUnreadStepGate(
+  step: (id: string) => void,
+  defer: UnreadStepDefer = queueMicrotask,
+): UnreadStepGate {
+  let active = false
+  const queued: string[] = []
+  const queuedSet = new Set<string>()
+  let runs = 0
+  let coalesced = 0
+  let deferrals = 0
+  const drain = (): void => {
+    const ids = [...queued]
+    queued.length = 0
+    queuedSet.clear()
+    for (const id of ids) request(id)
+  }
+  const request = (id: string): void => {
+    if (active) {
+      coalesced += 1
+      if (!queuedSet.has(id)) {
+        queuedSet.add(id)
+        queued.push(id)
+      }
+      return
+    }
+    active = true
+    runs += 1
+    try {
+      step(id)
+    } finally {
+      active = false
+      if (queued.length > 0) {
+        deferrals += 1
+        defer(drain)
+      }
+    }
+  }
+  return {
+    request,
+    running: () => active,
+    pending: () => [...queued],
+    stats: () => ({ runs, coalesced, deferrals }),
   }
 }
 

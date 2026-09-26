@@ -311,16 +311,16 @@ test('projectBadgeCount agrees with sessionRowState on the completed row across 
 
 // ---- 有界重推链（design 19 §3.7 / M4）：连续失败、取代与卸载 -----------------
 
-interface Deferred {
-  promise: Promise<void>
-  resolve: () => void
+interface Deferred<T = void> {
+  promise: Promise<T>
+  resolve: (value: T) => void
   reject: (error: unknown) => void
 }
 
-function deferred(): Deferred {
-  let resolve!: () => void
+function deferred<T = void>(): Deferred<T> {
+  let resolve!: (value: T) => void
   let reject!: (error: unknown) => void
-  const promise = new Promise<void>((res, rej) => {
+  const promise = new Promise<T>((res, rej) => {
     resolve = res
     reject = rej
   })
@@ -400,6 +400,60 @@ test('badge retry chain: consecutive rejections retry once each, then warn at ex
   assert.equal(timers.pendingCount(), 0, 'attemptsLeft 0 = exhausted, no further timer')
   assert.equal(errors.length, 1, 'exhaustion warns exactly once')
   assert.equal(timers.runNext(), false)
+})
+
+test('badge retry chain: an honest applied:false receipt retries like a rejection, then warns (W4)', async () => {
+  const timers = createBadgeTimers()
+  const calls: Array<{ count: number; pending: Deferred<unknown> }> = []
+  const errors: unknown[] = []
+  const chain = createChain({
+    timers,
+    errors,
+    push: count => {
+      const pending = deferred<unknown>()
+      calls.push({ count, pending })
+      return pending.promise
+    },
+  })
+  chain.start(5, 1, 40)
+  calls[0]!.pending.resolve(false) // Electron 腿的显式未应用
+  await settle()
+  assert.equal(timers.pendingCount(), 1, '回执未应用 = 未派发 ⇒ 排一次重试')
+  assert.equal(timers.runNext(), true)
+  assert.deepEqual(calls.map(call => call.count), [5, 5])
+  calls[1]!.pending.resolve({ applied: false, reason: 'swift-edge-ui-unavailable:setBadge:no-window' })
+  await settle()
+  assert.equal(timers.pendingCount(), 0, '预算耗尽不再排')
+  assert.equal(errors.length, 1, '耗尽时 loud 一次')
+  assert.match(String((errors[0] as Error).message), /badge not applied/)
+})
+
+test('badge retry chain: an applied receipt (or an absent verdict) never retries (W4)', async () => {
+  const timers = createBadgeTimers()
+  const calls: Array<{ count: number; pending: Deferred<unknown> }> = []
+  const errors: unknown[] = []
+  const chain = createChain({
+    timers,
+    errors,
+    push: count => {
+      const pending = deferred<unknown>()
+      calls.push({ count, pending })
+      return pending.promise
+    },
+  })
+  chain.start(3, 2, 40)
+  calls[0]!.pending.resolve(true)
+  await settle()
+  assert.equal(timers.pendingCount(), 0, '已应用不重试')
+  chain.start(4, 2, 40)
+  calls[1]!.pending.resolve({ applied: true })
+  await settle()
+  assert.equal(timers.pendingCount(), 0, 'applied:true 不重试')
+  chain.start(5, 2, 40)
+  calls[2]!.pending.resolve(undefined)
+  await settle()
+  assert.equal(timers.pendingCount(), 0, '缺省视为已应用（绝不误重试）')
+  assert.equal(errors.length, 0)
 })
 
 test('badge retry chain: a newer start clears the pending timer and supersedes the in-flight chain', async () => {
@@ -511,4 +565,23 @@ test('badge count-change gate: same-count effects never re-push and a failed dis
   // ③ 桥面缺失/版本偏斜的 push 实现返回 undefined（typeof 守卫），start 因此对首推返回 false。
   assert.match(hook, /if \(badge === undefined \|\| typeof badge\.set !== 'function'\) return undefined/,
     'the push seam must degrade an absent/skewed bridge face to undefined, never throw')
+})
+
+/**
+ * (h2) 桥迟到兜底的收窄（W4）：桥正常时兜底 interval 不得重复推同一计数（绕过闸的冗余 IPC），
+ * 但桥缺席/版本偏斜时仍必须有界探测到桥出现、经**同一闸**推当前计数（重载复位 0 永不丢）。
+ */
+test('badge bridge-late fallback: only for a bridge that was absent at mount, and it goes through the gate', () => {
+  const hook = readFileSync(
+    fileURLToPath(new URL('../../src/app-hooks/use-badge-count.ts', import.meta.url)), 'utf8')
+  const fallback = hook.slice(hook.indexOf('W4：只在**挂载时桥确实缺席**'))
+  assert.ok(fallback.length > 0, 'the bridge-late fallback must exist')
+  const mountCheckAt = fallback.indexOf("if (badgeAtMount !== undefined && typeof badgeAtMount.set === 'function') return")
+  const probeAt = fallback.indexOf('const badge = window.dshChamber?.badge')
+  const gateAt = fallback.indexOf('if (pushedCountRef.current === badgeCountRef.current) return')
+  const commitAt = fallback.indexOf('if (badgeRetry.start(badgeCountRef.current, retryLimit, retryMs)) {')
+  assert.notEqual(mountCheckAt, -1, 'bridge present at mount ⇒ the fallback must not arm an interval at all')
+  assert.ok(probeAt !== -1 && probeAt > mountCheckAt, 'the fallback only runs when the mount-time bridge was missing')
+  assert.ok(gateAt !== -1 && gateAt > probeAt, 'the late push must consult the same count-change gate')
+  assert.ok(commitAt !== -1 && commitAt > gateAt, 'the late push must commit the gate only on a real dispatch')
 })
