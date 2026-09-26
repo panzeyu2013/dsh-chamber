@@ -34,7 +34,7 @@ import {
 import { readPidRecord, writePidRecord } from '../../src/pid-record.ts'
 import { authCookieFor, clearAuthCookie, exchangeLaunchToken } from '../../src/browser-auth-cookie.ts'
 import { FAKE_DSH_PREAMBLE, freeDshPortBase, reapSpawned, spawnHost } from '../support/spawn-fixtures.ts'
-import { skipSymlinksUnavailable, tempDir } from '../support/utils.ts'
+import { skipSymlinksUnavailable, tempDir, waitFor } from '../support/utils.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 
@@ -679,9 +679,12 @@ test('spawnDsh: a readiness line split across chunks is still fully redacted and
     "createServer((req, res) => {",
     "  if (req.url === '/?token=launch-secret') { res.writeHead(303, { location: '/', 'set-cookie': authCookieName(req.headers.host) + '=sess; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict' }); res.end(); return }",
     "  if (req.url === '/api/session/canOpenWorkspacePath') {",
-    "    let body = ''; req.on('data', c => { body += c }); req.on('end', () => {",
-    "      res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'server-response', rpcId: JSON.parse(body).rpcId, result: { ok: true, value: true } })) })",
-    "    return",
+    "    if ((req.headers.cookie || '').includes(authCookieName(req.headers.host) + '=sess')) {",
+    "      let body = ''; req.on('data', c => { body += c }); req.on('end', () => {",
+    "        res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'server-response', rpcId: JSON.parse(body).rpcId, result: { ok: true, value: true } })) })",
+    "      return",
+    "    }",
+    "    res.writeHead(401); res.end('unauthorized'); return",
     "  }",
     "  res.writeHead(404); res.end()",
     "}).listen(port, '127.0.0.1')",
@@ -746,10 +749,18 @@ test('spawnDsh: an oversized unterminated child chunk is bounded on the REAL for
     "  process.stdout.write('dsh web: http://127.0.0.1:' + port + '/?token=launch-secret (LAN: http://10.0.0.5:' + port + '/?token=launch-secret)\\n')",
     "  createServer((req, res) => {",
     "    if (req.url === '/?token=launch-secret') { res.writeHead(303, { location: '/', 'set-cookie': authCookieName(req.headers.host) + '=sess; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict' }); res.end(); return }",
+    // The /api gate is modelled here too (401 without the minted cookie), exactly like the
+    // shared answering fixture: readiness can then only be declared AFTER the token
+    // exchange, so the cookie assertion below cannot race the concurrently running
+    // bootstrap — an ungated 200 let spawnDsh return mid-bootstrap, and CI's loaded
+    // runner lost that race.
     "    if (req.url === '/api/session/canOpenWorkspacePath') {",
-    "      let body = ''; req.on('data', c => { body += c }); req.on('end', () => {",
-    "        res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'server-response', rpcId: JSON.parse(body).rpcId, result: { ok: true, value: true } })) })",
-    "      return",
+    "      if ((req.headers.cookie || '').includes(authCookieName(req.headers.host) + '=sess')) {",
+    "        let body = ''; req.on('data', c => { body += c }); req.on('end', () => {",
+    "          res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'server-response', rpcId: JSON.parse(body).rpcId, result: { ok: true, value: true } })) })",
+    "        return",
+    "      }",
+    "      res.writeHead(401); res.end('unauthorized'); return",
     "    }",
     "    res.writeHead(404); res.end()",
     "  }).listen(port, '127.0.0.1')",
@@ -805,9 +816,12 @@ test('spawnDsh: the launch token never reaches the control-plane log or host-log
     "createServer((req, res) => {",
     "  if (req.url === '/?token=launch-secret') { res.writeHead(303, { location: '/', 'set-cookie': authCookieName(req.headers.host) + '=sess; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict' }); res.end(); return }",
     "  if (req.url === '/api/session/canOpenWorkspacePath') {",
-    "    let body = ''; req.on('data', c => { body += c }); req.on('end', () => {",
-    "      res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'server-response', rpcId: JSON.parse(body).rpcId, result: { ok: true, value: true } })) })",
-    "    return",
+    "    if ((req.headers.cookie || '').includes(authCookieName(req.headers.host) + '=sess')) {",
+    "      let body = ''; req.on('data', c => { body += c }); req.on('end', () => {",
+    "        res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'server-response', rpcId: JSON.parse(body).rpcId, result: { ok: true, value: true } })) })",
+    "      return",
+    "    }",
+    "    res.writeHead(401); res.end('unauthorized'); return",
     "  }",
     "  res.writeHead(404); res.end()",
     "}).listen(port, '127.0.0.1')",
@@ -826,13 +840,20 @@ test('spawnDsh: the launch token never reaches the control-plane log or host-log
     assert.equal(logLines.includes('launch-secret'), false, 'the token value must not reach the control-plane log')
     assert.equal(/token=[^\s]*launch-secret/.test(logLines), false)
     assert.equal(logLines.includes('***'), true, 'the redacted form is visible')
-    // host-logs JSONL: same guarantee on the persisted ring.
+    // host-logs JSONL: same guarantee on the persisted ring. The lane is an ASYNC
+    // queued writer (host-logs.ts), so the file and its lines appear only after a
+    // drain: waiting for the readiness line is the flush witness, and it also removes
+    // the vacuous pass that reading an empty file would give.
     const hostLogDir = join(stateDir, 'host-logs')
-    const files = existsSync(hostLogDir) ? readdirSync(hostLogDir).filter(f => f.endsWith('.log')) : []
-    assert.equal(files.length > 0, true)
-    const persisted = readFileSync(join(hostLogDir, files[0]), 'utf8')
+    const ringFiles = () => (existsSync(hostLogDir) ? readdirSync(hostLogDir).filter(f => f.endsWith('.log')) : [])
+    await waitFor(() => {
+      const files = ringFiles()
+      return files.length > 0 && readFileSync(join(hostLogDir, files[0]), 'utf8').includes('dsh web:')
+    }, 10_000, 'the readiness line in the host-log ring')
+    const persisted = readFileSync(join(hostLogDir, ringFiles()[0]), 'utf8')
     assert.equal(persisted.includes('launch-secret'), false)
     assert.equal(/token=[^\s]*launch-secret/.test(persisted), false)
+    assert.equal(persisted.includes('***'), true, 'the persisted ring carries the redacted form')
     await reapSpawned(spawned)
   } finally {
     controller.abort()
