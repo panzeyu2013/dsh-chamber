@@ -32,9 +32,9 @@
 |S-13|目录锁获取晚于窗口构建（二次启动有极短空窗闪现）|accepted：重排收益过低；深链转发修复。更正：`activateExistingInstance`的`NSRunningApplication.activate`本身不带出隐藏/最小化窗口——该缺口由S-40的私有显窗通知补齐（先post恢复请求再activate）；本条只余取锁晚于建窗的空窗|E `main.ts:1011-1015`（取锁）先于`:4043`（建窗）↔S `AppDelegate.swift:336-339`（建窗）先于`:379-381`（supervisor.start取锁）|accepted|
 |S-15|就绪门（ipc_not_ready）先于origin判定|accepted：expectedOrigin == nil时无可比较的可信origin，且该分支不授予能力；渲染端据码重试|E `main.ts:1388-1397`（窗口创建即固定expectedOrigin，无就绪码）↔S `MessageHandler.swift:192-203`、`MainWindowController.swift:163-166`、`bridge-hydration.ts:102`|accepted|
 |S-17|sidecar起不来/宿主决策不可得/装配态host包缺失时，关窗与退出方向与Electron相反|accepted（fast-fail姿态）：Swift终态 = NSAlert（含原因）+ exit(1)，非静默崩溃。挂死子项：sidecar挂死致quitFacts 2s超时不再静默取消Cmd+Q——弹「dsh sidecar未响应退出请求」框，「继续等待」（默认/Enter）取消该次退出并恢复窗口，「强制退出」走既有 ≤5s清理链；动作映射单源见证据列|E `main.ts:1041-1113`（同步判据 + 确认框；will-quit 5s硬顶）↔S `AppDelegate.swift:528-575,652-679`、`QuitCoordinator.swift:83-96`、`:249-252`（host包缺失fatal）|accepted（挂死子项处理）；退役判据满足（loud提示 + 强制退出分支）|
-|S-18|入站信封 >4MiB被frame_too_large拒绝；深度512/NaN归一化亦拒（Electron结构化克隆无）|accepted（防管道内存放大）；影响面仅极端行/载荷|E `preload.cts`无长度检查、结构化克隆无上限↔S `TrustGuard.swift:32,132-134`、`MessageHandler.swift:234,303-345`（frame_too_large拒绝 + 深度/NaN预扫描）、`sidecar-entry.ts:754-762`（入站上限在JSON.parse之前）|accepted|
+|S-18|入站信封 >4MiB被frame_too_large拒绝；深度512/NaN归一化亦拒（Electron结构化克隆无）|accepted（防管道内存放大）；影响面仅极端行/载荷|E `preload.cts`无长度检查、结构化克隆无上限↔S `TrustGuard.swift:32,132-134`、`MessageHandler.swift:234,303-345`（frame_too_large拒绝 + 深度/NaN预扫描）、`sidecar-entry.ts:47,331`（入站上限在JSON.parse之前）|accepted|
 |S-20|下载/安装的二次确认与窗口形态|accepted（可用、交互更重）：Swift需在Sparkle窗内再确认（下载/安装/跳过版本），Electron点击即下载；updateNativeAction现按kind分派（S-39），忙/不可用/未知kind诚实拒绝、不再回假ok:true；页面按钮始终只是入口，实际下载/安装在标准窗内二次确认（P-15 resolved）|E `updater.ts:1208-1269`↔S `SwiftEdgeHostLegs.swift:476-497`、`AppUpdater.swift:111-126,227-248`、design 25:715-720|accepted|
-|S-28|凭据静态保护降级：Swift恒0600明文，无OS加密|accepted（Electron-free sidecar降级）：Electron safeStorage可用则加密、否则loud明文 + 渲染器secretStorage:plaintext；Swift无适配器（传undefined）⇒ 恒明文 + loud，macos全树Keychain/SecItem引用 = 0（仅 .build的Sparkle工具含），设置页恒显示明文存储；SSH密码两端同为0600明文|E `main.ts:1485-1499,1509-1540`、`shell-core.ts:1265-1281`↔S `sidecar-ctx.ts:683,686-701`、`gateway-provider.ts:783`、`ConnectionsSection.tsx:1457-1460`|accepted；退役判据 = 原生侧经壳Keychain提供crypto adapter，或维持accepted|
+|S-28|凭据静态保护降级：Swift恒0600明文，无OS加密|accepted（Electron-free sidecar降级）：Electron safeStorage可用则加密、否则loud明文 + 渲染器secretStorage:plaintext；Swift无适配器（传undefined）⇒ 恒明文 + loud，macos全树Keychain/SecItem引用 = 0（仅 .build的Sparkle工具含），设置页恒显示明文存储；SSH密码两端同为0600明文|E `main.ts:1485-1499,1509-1540`、`shell-core.ts:1265-1281`↔S `sidecar-ctx.ts:346`、`gateway-provider.ts:783`、`ConnectionsSection.tsx:1457-1460`|accepted；退役判据 = 原生侧经壳Keychain提供crypto adapter，或维持accepted|
 |S-33|首次关窗隐藏最多延迟2s（sidecar忙/挂死时）|accepted（健康路径ms级不可感）。机制更正：Swift并非「无缓存→每次B桥往返」——`cachedQuitFacts`命中时即时决策并顺手后台刷新（`AppDelegate.swift:586-597`）；无缓存/失效时才2s等待，超时保守隐藏|E `main.ts:927-933`（同步判定无往返）↔S `AppDelegate.swift:580-617,649-687`、`sidecar-entry.ts:250-264`|accepted|
 |S-40|同bundle二次启动的恢复动作不同：Electron second-instance显式show/restore/focus；Swift flock失败后只`activate`，隐藏/最小化窗口可能不现身（深链本身不丢）|resolved：`activateExistingInstance`在activate前先post本壳私有显窗通知（`com.dshchamber.native.show-window`），已运行实例回`restoreMainWindow()`（makeKeyAndOrderFront + deminiaturize + activate）；显窗通知与深链通知仍只接受本壳格式，不扩大能力面|E `main.ts:1015-1027`（enqueueDeepLink + showMainWindow）↔S `AppDelegate.swift:82-92,914-953`|resolved；残余（实机）= 打包态`open -n`二次启动把隐藏/最小化窗口带出的实机观察|
 |S-44|通知授权不对称：Swift首次投递显式requestAuthorization、denied诚实回错；Electron路径无授权查询/申请面|收窄为运行时**不可**达的残余（open）：Electron的诚实拒绝面在位——OS明确拒绝（failed）或限时无回执（timeout）被`describeNativeNotificationFailure`表述为「可能未授权/可能被系统抑制」并保留OS原文（`notifications.ts:467-530,532-559`、`electron-edges.ts:215-228`）。但Electron 43.4.0主进程确实无法预检查询/申请：`Notification`只有`isSupported/show`等、`getMediaAccessStatus`只接受microphone/camera/screen，typings无`requestAuthorization`/授权查询成员，其macOS实现`cocoa_notification.mm`的ScheduleNotification也从不requestAuthorization（`notifications.ts:532-543`引证）——授权状态只能由`addNotificationRequest`的completion handler回话（非nil error → failed事件）。Swift侧保持denied→fail、notDetermined→首次投递请求一次|E `electron-edges.ts:180-238`、`notifications.ts:467-559`、`electron.d.ts:10279,10534,14102`↔S `SwiftEdgeHostLegs.swift:107-110,427-457`、`AppDelegate.swift:93-103`|open（残余 = Electron预检查询/申请不可达）；退役判据 = Electron上游给出授权查询/申请API（或在实机证明系统弹框/拒绝面与Swift等价后记录为accepted）|
@@ -134,8 +134,8 @@
 > 判据 = core调用点/消费者（全仓grep，排除 .test.ts）；逐成员证据原文留存git历史。
 
 - 可达15（parity必对齐面）：rendererPush、showNativeNotification、notificationSupported、setBadge、badgeCountApiAvailable、onSystemResume、onMainWindowShown、isFocused、webViewLoading、webViewContentAlive、mainWindowAlive、retireNotificationsForSources、openExternal、showError、showMessage。（pickPluginSource 随 2026-09 C 分层插件写面退役删除：宿主腿、edge 契约、Swift picker body 与相关用例同批移除。）
-- 潜伏8（零消费者，不进修复队列）：trayAvailable、isPackaged、focusMainWindow、openPath、showItemInFolder、launchApp（对称缺席，S-05）、setKeepAwake、setLoginItem（成员潜伏；能力经ctx `sidecar-ctx.ts:2634-2648`可达）。原notifyClicked/resolveResource随P-03删除。
-- 附注：模态阻塞源见T-09；宿主事实时效见P-08；trayPresent事实 = `main.ts:3861`的`tray !== null`对照`sidecar-ctx.ts:2585`恒true，`chamber-settings.ts:532-536` darwin短路true。
+- 潜伏8（零消费者，不进修复队列）：trayAvailable、isPackaged、focusMainWindow、openPath、showItemInFolder、launchApp（对称缺席，S-05）、setKeepAwake、setLoginItem（成员潜伏；能力经ctx `sidecar-ctx.ts:283`可达）。原notifyClicked/resolveResource随P-03删除。
+- 附注：模态阻塞源见T-09；宿主事实时效见P-08；trayPresent事实 = `main.ts:1352`的`tray !== null`对照`sidecar-ctx.ts:345`恒true，`chamber-settings.ts:594` darwin短路true。
 
 ### 6.3 A 桥面（页面 → 壳）可达性（结论修正）
 
@@ -206,35 +206,35 @@
 - P-19 重复注入守卫只在已暴露态惰性
 - P-20 登录自启失败面的镜像缺口
 - G1 Swift测试为一等门禁
-- G2 `run-swift-tests.mjs:102-111,130-131`的
+- G2 `run-swift-tests.mjs:102-111,130-131`
 - G3 60通道冒烟按命名空间对代表通道断言wire形状
-- G4 产物门`
-- G5 `build-sidecar.test.mjs:76-111,132-136`按
+- G4 产物门
+- G5 `build-sidecar.test.mjs:76-111,132-136`
 - G6 非dry-run的vendor/dsh与pnpm缺源在任何写盘前fail
-- G7 `SidecarExitCodeLockstepTests.swift:
+- G7 SidecarExitCodeLockstepTests.swift
 - G8 `SidecarSupervisor.swift:386-441`先做退出码分级
 - G9 `BridgeClientLineReadTests.swift:45-158`
 - G10 `BridgeClient.stop`注释给出与实现一致的5s宽限
-- G11 `SidecarSupervisorTests.swift:400-439`改用
-- G12 `CrossLanguageLockstepTests.swift:
+- G11 `SidecarSupervisorTests.swift:400-439`
+- G12 CrossLanguageLockstepTests.swift
 - G13 design 25 §3.1与实现形状一致
-- G14 投递门单源为`rendererPushDelivered(
-- G15 `RUNTIME_ABORT_REASON`单源在`shell-core.ts:
+- G14 投递门单源为rendererPushDelivered
+- G15 `RUNTIME_ABORT_REASON`单源在shell-core.ts
 - G16 appcast步移到notarize/staple之后并签最终zip
-- G17 POC桩例更名`
+- G17 POC桩例更名
 - G18 `assertNodePinTable()`在动网络前执行
-- G20 新增`scripts/gui-acceptance/native.mjs`与`
+- G20 新增`scripts/gui-acceptance/native.mjs`
 - G21 渲染器自愈策略抽成共享纯函数并行为测试
 - G22 `verify-shim-payload-shape.mjs`增运行时臂
 - G23 Swift门禁跑release配置
-- G24 `verify-test-wiring.mjs:61,344-369`覆盖`
-- G25 `
+- G24 `verify-test-wiring.mjs:61,344-369`覆盖
+- G25（细节见 git 历史）
 - G26 packaging闭包checklist增原生壳节
-- G27 `after-pack-adhoc-sign.mjs`的`
+- G27 `after-pack-adhoc-sign.mjs`
 - G28 Electron腿加release-only步
 - G29 Swift上传用精确产物路径
 - G30 `--dry-run`校验并打印已解析计划
-- G31 默认回退改为loud `{ok:false,error:"
+- G31 默认回退改为loud {ok:false,error:"
 - G32 G4的产物冒烟
 - G33 native装配验收有CI机器门
 - G34 shim载荷面总数为断言
@@ -243,10 +243,10 @@
 - G37 `ELECTRON_NODE_PINS`固定表把映射变成无条件断言
 - G38 图标缺件与electron-builder同姿态fail-closed
 - G39 `build-sidecar`的`copyVendorDsh`在拷贝前与落盘后各
-- G40 Swift装配的dist/web拷贝按`
+- G40 Swift装配的dist/web拷贝
 - G41 Electron mac打包演练进push门禁
 - G42 Sparkle密钥与发布物fail-closed门禁
-- D1 `bridge-shim.js`头部改述sidecar在`
+- D1 `bridge-shim.js`头部改述sidecar
 - D2 `BridgeShimInjector.swift:6-8`注释按实现改写
 - D3 `preload.cts:394,705`注释与实现一致写`onChanged`
 - D4 design 25的`sidecar-ctx.ts`锚点刷成当前值
@@ -256,7 +256,7 @@
 - D8 锚点校正：行为属实但旧锚点错
 - D9 模板注释/取值与出货行为一致
 - D10 design 25:467-472与实现语义一致
-- D11 `scripts/release/release-artifacts.mjs:
+- D11 scripts/release/release-artifacts.mjs
 - D12 锚点校正：行为属实（`copyTree`无返回值，直调、无恒假判断）但旧锚点错
 - D13 权限锚点刷成当前值
 - D14 `Info.plist.template:10-18`的共存注释按S-04

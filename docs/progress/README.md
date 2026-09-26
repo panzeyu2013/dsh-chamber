@@ -36,11 +36,10 @@ docs/progress/
 |[windows-v1.md](todo/windows-v1.md)|Windows v1剩余外部门禁（M0–M6）+ 基线登记口径（原windows-baseline.md）+ 取舍指针（权威在design 23 §5/STATUS）|待真实Windows runner/实机/产物|
 |[deferred-features.md](todo/deferred-features.md)|延后功能（未排期想法）：侧边栏 subagents 显示；open-in 超集分批 S1/S2/S3（S4 不做）与 S3/S4 降级留档形态|未排期（open-in 实机验收清单在STATUS）|
 |[macos-swift-v1.md](todo/macos-swift-v1.md)|macOS Swift原生壳：双端验收协议（W1–W7判定/性能A/B/中止点A1–A8）+ WBS W-01…W-32编号索引|代码面已落地；外部门禁状态在STATUS|
-|[main-0.1.5-to-0.1.7-upgrade.md](todo/main-0.1.5-to-0.1.7-upgrade.md)|0.1.6→0.1.7 升级线：rc.2 锚点与写面退役已落地；仍开放 §7/§12 的 P0–P2 取件移植与 §17-C 的 patch 通道|未排期；实机/门禁项在STATUS|
 |[refactor-plan.md](todo/refactor-plan.md)|结构性重构与清理计划：开放工作（按优先级）、门禁与用法、边界与不做、跨包重复普查口径、未删项与判面/锁步依据、产物新鲜度守卫（§8：G2/G3/G5/G7/G8）|未闭合（开放项与判据在STATUS「结构性重构与清理」条）|
 
 > 历史：`performance-baseline.md`、`windows-baseline.md`、`todo/electron-swift-parity-audit.md`（211 KB）与 `todo/audit-2026-12-findings.md`
-> 等执行台账已按「已执行计划不留在工作文档」删除；仍开放内容并入 `STATUS.md` 与 `deviations.md`，原文存git历史。
+> 等执行台账与 `todo/main-0.1.5-to-0.1.7-upgrade.md`（0.1.7 升级线，已执行；残余在 `STATUS.md`）已按「已执行计划不留在工作文档」删除；仍开放内容并入 `STATUS.md` 与 `deviations.md`，原文存git历史。
 > 另：`todo/remote-session-state-and-switch.md`（已实施计划）与 `todo/notes/` 六份蓝图（remote-state
 > 实现蓝图的执行记录）按同一纪律删除——契约由 design 17 §10.7/§20、design 06 §4.2、design 19 §3.3/§3.7
 > 与 `packages/*` 源码/测试承接，仍开放的实机/CI 验收项并入 `STATUS.md`「远端完成未读 / 切源体验」条。

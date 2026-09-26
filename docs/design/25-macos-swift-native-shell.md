@@ -70,7 +70,7 @@
 | D4/D6 | 退出链三分支 + 5s 硬顶 + LOCAL_RUNNING_STATES 判据 | §3.3/§5 E9 补 |
 | D8 | ready 帧与 INFO 双源漂移 | ready 帧最小化（port + shellVersion），其余全走既有 dsh-chamber:info |
 | E1 | §7 v1 降级用 idle\|error 会让 UI 永不出现入口且显示失败态 | 改用现成 **blocked-available 形态**：真实 check（对比 GitHub Releases，复用 updater.ts 纯函数）→ phase='available' + releaseUrl + installBlockedReason='原生壳不支持自动安装'；update-restart 显式错误 |
-| E2 | 共享 renderer 缺 shell-flavor 判别字段（platform 同为 darwin） | 字段存在（`main.ts:3858` 载荷带 `flavor`，镜像面仍 4 标量）；**UI 能力门最终由 `installBlockedReason`/原生能力位驱动，renderer 未消费 flavor**（零消费者，保留字段不加条件） |
+| E2 | 共享 renderer 缺 shell-flavor 判别字段（platform 同为 darwin） | 字段存在（`main.ts:1352` 载荷带 `flavor`，镜像面仍 4 标量）；**UI 能力门最终由 `installBlockedReason`/原生能力位驱动，renderer 未消费 flavor**（零消费者，保留字段不加条件） |
 | E7 | W6 应注明无 backgroundThrottling 等价物 | §8.5 W6 注（同 C1） |
 | E8 | shim 是第三处通道面，手写会漂移 | manifest 产出 Swift 枚举 + `Resources/chamber-bridge.stub.js` 锁步样本（不随 .app 打包）；真正注入的 `bridge-shim.js` 由 `bridge-shim-surface.test.ts` 对 preload 面逐命名空间锁步 |
 
@@ -355,7 +355,7 @@ interface HostEdges {
 - **捆绑**：fetch 固定版本官方 Node（arm64 + x86_64，或按 §10 决策 6 单一架构/universal），SHA-256 校验后进
   `.app/Contents/Resources/sidecar/
   node`。**摘要的信任基座在仓库内**（`build-sidecar.mjs` 的
-  `PINNED_NODE_SHA256`，逐字取自官方 `SHASUMS256.txt`）：默认版本两个 darwin 归档必须在表内，`--node-sha256` 与固定值冲突即拒绝；未固定版本（`--node-version`）回退联网 SHASUMS256.txt 并响亮说明——「没固定」不得呈现为「已校验」；升级默认版本 = 同一提交更新该表（`build-sidecar.test.mjs` 会红）。**基名必须叫 `node`**：`resolveNodeExecutable`（spawn-dsh.ts:435-447）的纯 Node 分支只在 `basename(execPath) ∈ {node,node.exe}` 时直用 process.execPath，否则回落 PATH/knownNodeLocations（nvm 等）→ 裸 'node'（系统版本不可控）；P1 加解析断言测试钉死该前提（A5；`build-sidecar.test.mjs` 断言归档成员名 + 解包后基名 + `resolveNodeExecutable` 直用分支）。Electron 分支 = execPath + ELECTRON_RUN_AS_NODE=1 + `--expose-internals`（dsh loader 的 node-addon-require-builtin 需要；updater 的 runtimeNodeExecutor 同构，main.ts:4034-4037）。
+  `PINNED_NODE_SHA256`，逐字取自官方 `SHASUMS256.txt`）：默认版本两个 darwin 归档必须在表内，`--node-sha256` 与固定值冲突即拒绝；未固定版本（`--node-version`）回退联网 SHASUMS256.txt 并响亮说明——「没固定」不得呈现为「已校验」；升级默认版本 = 同一提交更新该表（`build-sidecar.test.mjs` 会红）。**基名必须叫 `node`**：`resolveNodeExecutable`（spawn-dsh.ts:435-447）的纯 Node 分支只在 `basename(execPath) ∈ {node,node.exe}` 时直用 process.execPath，否则回落 PATH/knownNodeLocations（nvm 等）→ 裸 'node'（系统版本不可控）；P1 加解析断言测试钉死该前提（A5；`build-sidecar.test.mjs` 断言归档成员名 + 解包后基名 + `resolveNodeExecutable` 直用分支）。Electron 分支 = execPath + ELECTRON_RUN_AS_NODE=1 + `--expose-internals`（dsh loader 的 node-addon-require-builtin 需要；updater 的 runtimeNodeExecutor 同构，`host-assembly.ts:824`）。
 - **必须绑 Node**：dsh 实例本身是 Node 进程（vendor dsh 由 pnpm 安装），控制面 spawn 它、dsh-runtime 安装它；pnpm 11.21.0 已随 desktop 依赖，改由 sidecar 目录内嵌 + 注入（**plugin-sync resolvePnpmBinDir 不感知 bundled pnpm**，需 PATH 前置或 env 注入，plugin-sync.ts:41）。
 - **dsh-runtime 默认执行器恒纯 Node**（{file: process.execPath}，runtime-installer.ts:777）。
 - Node 版本策略：与 desktop 的 Electron 内置 Node 大版本对齐或取 LTS（决策 6）。
@@ -594,155 +594,142 @@ macOS WebKit 在**视口层**实现弹性越界：指针停在不可滚动 chrom
 
 ### 5.3 原生席位：语言与外观跟随
 
-**控件与事实源**：语言与主题的**唯一权威是页面 document 事实**（控件 = 页面设置面，壳不是事实源）；
-语言 = `documentElement.lang`（zh 族 → zh，其它非空 → en，空 = 无事实），主题 =
-`body[data-ds-dark-theme]` 存在或 html 内联 `color-scheme` 以 dark 开头（`macos/Sources/DSHChamber/ShellPageFacts.swift#ShellPageLanguage`、`macos/Sources/DSHChamber/ShellPageFacts.swift#ShellPageFacts`）。
-壳**只读、不回写页面**：事实单向 DOM → 壳，页面自身语言/主题仍由页面决定；无事实（首次安装/从未记录）
-时壳不猜测、保持系统默认。
+**控件与事实源**：语言与主题的**唯一权威是页面 document 事实**（控件 = 页面设置面，壳不是事实源）；语言 =
+`documentElement.lang`（zh 族 → zh，其它非空 → en，空 = 无事实），主题 = `body[data-ds-dark-theme]`
+存在或 html 内联 `color-scheme` 以 dark 开头（`macos/Sources/DSHChamber/ShellPageFacts.swift#ShellPageLanguage`、
+`macos/Sources/DSHChamber/ShellPageFacts.swift#ShellPageFacts`）。壳**只读、不回写页面**；无事实
+（首次安装/从未记录）时保持系统默认。
 
 **载波（脚本 + 独立 handler + 对账 + last-known）**：
-- **脚本**：`macos/Sources/DSHChamber/ShellPageFacts.swift#ShellPageFactsScript` 以 WKUserScript
-  （documentStart、仅主 frame、page world）安装 MutationObserver，观察 html[lang]、html 内联 style
-  （color-scheme）、body[data-ds-dark-theme]、meta[theme-color]（后者只是变化触发面，不参与 dark 判定）；
-  同文档一次性安装 + (lang, dark) 快照去重，全部 try/catch，异常退化为不上报；只在 document 上留一次性安装标记 `__dshChamberFactsState__`，不改任何 DOM 事实、不读页面变量、绝不回写语言/主题；
-  装配点 = `macos/Sources/DSHChamber/MainWindowController.swift#setupWindow`。
-- **独立 handler**：上报走独立消息名 `ShellPageFactsScript.messageName`（dshChamberFacts），由
+- **脚本** `macos/Sources/DSHChamber/ShellPageFacts.swift#ShellPageFactsScript`（WKUserScript、
+  documentStart、仅主 frame、page world）观察 html[lang]、html 内联 style（color-scheme）、
+  body[data-ds-dark-theme]、meta[theme-color]（仅变化触发面，不参与 dark 判定）；同文档一次性安装 +
+  (lang,dark) 快照去重，全部 try/catch（异常退化为不上报）；只留一次性安装标记
+  `__dshChamberFactsState__`，不改 DOM、不读页面变量、绝不回写；装配点
+  `macos/Sources/DSHChamber/MainWindowController.swift#setupWindow`。
+- **独立 handler**：消息名 `ShellPageFactsScript.messageName`（dshChamberFacts），由
   `macos/Sources/DSHChamber/MainWindowController.swift#ShellPageFactsMessageHandler` 消费——**不**进 A 桥
-  白名单/就绪门链路（事实必须在 sidecar ready 前可用）；护栏 = 名称 + 主 frame（该 handler 的 `accepts`）
-  + 同源文档面 `macos/Sources/DSHChamber/MainWindowController.swift#isSameOriginDocument`（委托
+  白名单/就绪门（事实须在 sidecar ready 前可用）；护栏 = 名称 + 主 frame（`accepts`）+ 同源
+  `macos/Sources/DSHChamber/MainWindowController.swift#isSameOriginDocument`（委托
   `macos/Sources/DSHChamber/TrustGuard.swift#isTrustedOrigin`：仅 scheme/host/port 全等，**不**限定
   pathname=`/`、**不**限定无 query）。严格壳文档判定 `macos/Sources/DSHChamber/TrustGuard.swift#isTrustedDocument`
-  只留给 A 桥（首载 URL 归一化 `macos/Sources/DSHChamber/AppDelegate.swift#applicationDidFinishLaunching`
-  与 A 桥消息门）。理由：本通道只带 lang/dark 两个非敏感事实、且与 A 桥白名单/
-  就绪门完全解耦；页面一旦用 history.pushState/replaceState（SPA 路由、`/api/i/*`），WKWebView 的
-  frameInfo.request.url 随之变化，严格壳文档门会把同一文档判成不可信 ⇒ 事实通道静默断链到下一次 didFinish
-  才靠对账恢复。主 frame + 同源 + 导航护栏（同源非壳文档的主 frame 导航仍被 cancel）足以挡住失败页/about:blank
-  与异源文档。
+  只留给 A 桥（首载归一化 `macos/Sources/DSHChamber/AppDelegate.swift#applicationDidFinishLaunching` 与
+  A 桥消息门）：本通道只带 lang/dark 两个非敏感事实，且 SPA 路由 pushState/replaceState 会让
+  frameInfo.request.url 变化、严格门会把同一文档判成不可信 ⇒ 事实通道静默断链到下次 didFinish 才对账恢复。
+  主 frame + 同源 + 导航护栏足以挡住失败页/about:blank 与异源文档。
 - **对账**：`macos/Sources/DSHChamber/MainWindowController.swift#reconcilePageFacts` 在 didFinish 以
-  `snapshotSource()` 再读一次（与脚本同一 dark 判定），覆盖首次上报窗口；回调先过
+  `snapshotSource()` 再读（同 dark 判定），覆盖首次上报窗口；回调先过
   `macos/Sources/DSHChamber/MainWindowController.swift#acceptsReconcile`（与观察器路径共用
-  `isSameOriginDocument`）才 ingest，失败页/about:blank 静默丢弃（不误报成「对账失败」）；
-  **loud 只针对 `evaluateJavaScript` 错误**（错误不致命，观察器路径仍在，不报警）。
+  `isSameOriginDocument`）才 ingest，失败页/about:blank 静默丢弃；**loud 只针对 `evaluateJavaScript`
+  错误**（不致命，观察器路径仍在）。
 - **last-known**：`macos/Sources/DSHChamber/ShellPageFacts.swift#ShellPageFactsStore` 合并上报并持久化
-  （lang 空/dark 缺失 = 保留旧值；不变则幂等；revision = max(夹紧后的上报值, 旧值 + 1)，
-  取值夹在 [0, \`maxRevision\`=1_000_000]——上报值由页面 postMessage 提供，可构造出
-  \`Int.max\`，未夹紧时下一次 \`旧值 + 1\` 就是整型溢出**陷阱**（审计实证 SIGTRAP），
-  且该值会被持久化，故落盘载入同样夹紧），键
+  （lang 空/dark 缺失 = 保留旧值；不变即幂等；revision = max(夹紧后的上报值, 旧值 + 1) 且夹在
+  [0, `maxRevision`=1_000_000]——上报值由页面 postMessage 提供，可构造 `Int.max`，未夹紧时
+  `旧值 + 1` 即整型溢出**陷阱**（审计实证 SIGTRAP），落盘载入同样夹紧），键
   `native-shell.page-facts`；启动早期只读入口 =
   `macos/Sources/DSHChamber/MainWindowController.swift#lastKnownPageFacts`。
 
-**本地化资源与装配**：壳内建文案走 `macos/Sources/DSHChamber/NativeText.swift#NativeTextKey`（键表以 NativeTextKey 为准，当前 121 键）
-与 `macos/Sources/DSHChamber/NativeText.swift#NativeText`（取值链**优先语言覆盖包**：语言覆盖包 → Bundle.main → SwiftPM 资源包 → rawValue；
-缺资源显示键名，不谎报翻译）。两份 `Localizable.strings` 在
+**本地化资源与装配**：壳内建文案走 `macos/Sources/DSHChamber/NativeText.swift#NativeTextKey`（键表，
+当前 121 键）与 `macos/Sources/DSHChamber/NativeText.swift#NativeText`（取值链优先语言覆盖包 →
+Bundle.main → SwiftPM 资源包 → rawValue；缺资源显示键名、不谎报翻译）。两份 `Localizable.strings` 在
 `macos/Sources/DSHChamber/Resources/{en,zh-Hans}.lproj/`，经
 `macos/Package.swift#=literal:defaultLocalization: "en"` 与两个 `.process("…lproj")` 进资源包；装配腿
-`macos/scripts/build-swift-app.mjs#LOCALIZATIONS` 机械校验的**三处同源** = 该常量、Info.plist.template 的
-`CFBundleLocalizations`（dry-run 逐字比对）、以及 Package.swift 两个 `.process` 的产物（装配期断言 SwiftPM
-资源包内两个 `.lproj` 都在；不做 Package.swift 文本解析）；装配腿据此把 `.lproj` **平移到 `<App>.app/Contents/Resources`**
-——Bundle.main 与系统框架的 preferredLocalizations 只看这一层，资源包内那份只服务 Bundle.module；
-`macos/scripts/build-swift-app.mjs#assertLocalizationsPresent` 在装配期缺席即 fail，
-`macos/scripts/build-swift-app.mjs#plistLocalizations` 让 dry-run 的声明面与资源面同源。
-壳内标识符以 `macos/Sources/DSHChamber/ShellPageFacts.swift#ShellPageLanguage` 的 `localizationIdentifier`
-为**唯一入口**（zh 用 Apple 拼写 `zh-Hans`，不再散落字面量）；Y1 起该集合由
+`macos/scripts/build-swift-app.mjs#LOCALIZATIONS` 的**三处同源** = 该常量、Info.plist.template 的
+`CFBundleLocalizations`（dry-run 逐字比对）、Package.swift 两个 `.process` 的产物（装配期断言两个
+`.lproj` 都在，不做文本解析）；装配腿把 `.lproj` **平移到 `<App>.app/Contents/Resources`**（Bundle.main
+与系统框架的 preferredLocalizations 只看这一层，资源包内那份只服务 Bundle.module）；
+`macos/scripts/build-swift-app.mjs#assertLocalizationsPresent` 缺席即 fail，
+`macos/scripts/build-swift-app.mjs#plistLocalizations` 让 dry-run 声明面与资源面同源。壳内标识符以
+`macos/Sources/DSHChamber/ShellPageFacts.swift#ShellPageLanguage` 的 `localizationIdentifier` 为**唯一
+入口**（zh 用 Apple 拼写 `zh-Hans`）；该集合由
 `macos/Tests/DSHChamberTests/ShellIdentityTests.swift#testLocalizationIdentifiersLockstepAcrossBuildInputs`
-机械锁步——读源码逐集合比对上述三处 + `macos/scripts/build-swift-app.mjs#LOCALIZATIONS`，少一项/多一项/
-拼写变体即红；`NativeTextLanguageOverrideTests` 只再作「两个方向都能解析到随包 `.lproj`」的隐式兜底。
-**`CFBundleLocalizations` 是「进程偏好集合的声明面」**（不是翻译清单）：它是 Bundle/系统框架解析
-preferredLocalizations 时允许的本地化全集；盘上的 `.lproj` 本身也参与 Foundation 的 localizations/
-preferredLocalizations 解析，两者叠加会让 localizations 出现重复项（无功能影响），真正的文案来自
-随包的 `.lproj`。
+机械锁步（读源码比对上述三处 + `LOCALIZATIONS`，少/多/拼写变体即红）；`NativeTextLanguageOverrideTests`
+只作「两个方向都能解析到随包 `.lproj`」的隐式兜底。**`CFBundleLocalizations` 是进程偏好集合的声明面**
+（不是翻译清单）：它决定 preferredLocalizations 允许的本地化全集；盘上 `.lproj` 也参与 Foundation 解析，
+两者叠加会让 localizations 出现重复项（无功能影响），真正文案来自随包 `.lproj`。
 
-**应用点与生效时机**（两个入口：启动期 `macos/Sources/DSHChamber/AppDelegate.swift#applicationWillFinishLaunching`（last-known）与事实变化 `macos/Sources/DSHChamber/AppDelegate.swift#pageFactsDidChange`）：
-- **自建文案即时**：页面语言变化 → `macos/Sources/DSHChamber/NativeText.swift#setLanguageOverride`
-  先换**运行期语言覆盖**（显式加载目标语言 `.lproj`；因 CFBundle 的 preferredLocalizations 是**进程启动期**
-  解析并缓存的，只写 `AppleLanguages` 不会让运行期取串换语言——这是「重建菜单」真正换文案的前提），
-  再由 `macos/Sources/DSHChamber/AppDelegate.swift#installMainMenu` 重建主菜单
-  （接线一律按 tag：appSectionTag…helpSectionTag/servicesItemTag，绝不按本地化后的标题查找）；托盘标题同由
-  `macos/Sources/DSHChamber/AppDelegate.swift#refreshStatusItemTitles` 在事实变化时按 key 重取，对话框/
-  失败页在下一次取串时跟随。启动期同样先设覆盖（`macos/Sources/DSHChamber/AppDelegate.swift#applicationWillFinishLaunching`），
-  早于 didFinishLaunching 的主菜单构造。
-- **进程级 = 下次启动生效**：框架与 Sparkle 标准窗的本地化在进程启动时按 bundle 偏好集合解析，运行期不可变；
-  `macos/Sources/DSHChamber/AppDelegate.swift#applyLanguage` 把页面语言写进本 app 域的 `AppleLanguages`，
-  **仅当页面语言族与系统语言族不同**才写，且所有权以**本壳写入的确切值**为准
-  （记录键 \`native-shell.appleLanguagesWritten\`）：app 域已有值且 ≠ 记录 ⇒ 视为用户/系统设置的语言，
-  **不覆盖**；回收仅当"当前值 == 记录"才删，值被外部改过就作废记录、绝不删值；旧布尔标记
-  \`native-shell.appleLanguagesOwned\` 只清理、不作依据。
-  系统设置「语言与地区 → 应用程序」写的是**同一个 app 域键**；**已知边界**：用户显式设置的语言恰好等于
-  我们上次写入的值时，无法与"我们自己的覆盖"区分（同键双写者的固有歧义，代码注释已登记）；启动期应用点 =
-  `macos/Sources/DSHChamber/AppDelegate.swift#applicationWillFinishLaunching`（last-known，早于
-  didFinishLaunching 的主菜单构造）；系统语言读取显式排除本 app 自己写过的覆盖
-  （`macos/Sources/DSHChamber/AppDelegate.swift#systemLanguageIdentifiers`）。
+**应用点与生效时机**（入口：启动期
+`macos/Sources/DSHChamber/AppDelegate.swift#applicationWillFinishLaunching`（last-known，早于
+didFinishLaunching 的主菜单构造）与事实变化 `macos/Sources/DSHChamber/AppDelegate.swift#pageFactsDidChange`）：
+- **自建文案即时**：页面语言变化 → `macos/Sources/DSHChamber/NativeText.swift#setLanguageOverride` 先换
+  **运行期语言覆盖**（显式加载目标语言 `.lproj`；CFBundle 的 preferredLocalizations 是**进程启动期**解析
+  并缓存的，只写 `AppleLanguages` 不会让运行期取串换语言——这是「重建菜单」真正换文案的前提），再由
+  `macos/Sources/DSHChamber/AppDelegate.swift#installMainMenu` 重建主菜单（接线一律按 tag：
+  appSectionTag…helpSectionTag/servicesItemTag，绝不按本地化后的标题查找）；托盘标题由
+  `macos/Sources/DSHChamber/AppDelegate.swift#refreshStatusItemTitles` 在事实变化时按 key 重取；对话框/
+  失败页在下一次取串时跟随。
+- **进程级 = 下次启动生效**：框架与 Sparkle 标准窗的本地化在进程启动时按 bundle 偏好集合解析、运行期
+  不可变；`macos/Sources/DSHChamber/AppDelegate.swift#applyLanguage` 把页面语言写进本 app 域的
+  `AppleLanguages`，**仅当页面语言族与系统语言族不同**才写，且所有权以**本壳写入的确切值**为准
+  （记录键 `native-shell.appleLanguagesWritten`）：app 域已有值且 ≠ 记录 ⇒ 视为用户/系统设置，**不覆盖**；
+  回收仅当「当前值 == 记录」才删，值被外部改过就作废记录、绝不删值；旧布尔标记
+  `native-shell.appleLanguagesOwned` 只清理。系统设置「语言与地区 → 应用程序」写的是**同一个 app 域键**；
+  **已知边界**：用户显式设置的语言恰等于上次写入值时无法区分（同键双写者固有歧义，代码注释已登记）；
+  系统语言读取显式排除本 app 写过的覆盖（`macos/Sources/DSHChamber/AppDelegate.swift#systemLanguageIdentifiers`）。
 - **右键菜单同属进程级**（语言随 `AppleLanguages`；平台默认项集不可定制，见下）。
 
-**两层语义（不再重开）**：**壳自建文案跟随应用内设置**（页面语言，切换即生效——
-菜单/托盘/对话框/失败页/面板；托盘标题的运行期重取 = `macos/Sources/DSHChamber/AppDelegate.swift#refreshStatusItemTitles`）；**系统与框架面默认跟随系统语言**（Sparkle 标准窗与其提示、AppKit 内建
-按钮与 About 标签、WebKit 右键菜单、Services 子项与帮助搜索框）。只有**语言族不同**（中文 ↔ 非中文）
-时，本壳才写 `AppleLanguages` 把这些面一起切到应用内语言（下次启动生效）；**同族不覆盖是有意选择**——
-系统语言优先服务系统面（例：日/韩/法/德系统 + 英文页面 ⇒ 框架面保持系统语言，不强制英文；zh-Hant 系统 +
-简体页面 ⇒ 框架面保持繁体）。该链路的**语言匹配已本机实测**（`Bundle.preferredLocalizations`）：
-`["zh-Hans"]→zh_CN`、`["zh-Hans-CN"]→zh_CN`、`["en"]→en`、`["ja-JP"]→ja`、`["zh-Hant-TW"]→zh_TW`。
+**两层语义（不再重开）**：**壳自建文案跟随应用内设置**（页面语言，切换即生效：菜单/托盘/对话框/失败页/
+面板）；**系统与框架面默认跟随系统语言**（Sparkle 标准窗与其提示、AppKit 内建按钮与 About 标签、WebKit
+右键菜单、Services 子项与帮助搜索框）。只有**语言族不同**（中文 ↔ 非中文）时才写 `AppleLanguages` 把这些面
+一起切到应用内语言（下次启动生效）；**同族不覆盖是有意选择**（例：日/韩/法/德系统 + 英文页面 ⇒ 框架面
+保持系统语言；zh-Hant 系统 + 简体页面 ⇒ 框架面保持繁体）。语言匹配已本机实测
+（`Bundle.preferredLocalizations`）：`["zh-Hans"]→zh_CN`、`["zh-Hans-CN"]→zh_CN`、`["en"]→en`、
+`["ja-JP"]→ja`、`["zh-Hant-TW"]→zh_TW`。
 
 **外观**：默认 nil（跟系统；HIG 不鼓励 app 专属外观开关）；仅页面显式主题与系统主题不同才覆盖为
-darkAqua/aqua（`macos/Sources/DSHChamber/ShellPageFacts.swift#ShellAppearancePolicy` 的 appearanceName，
-应用点 `macos/Sources/DSHChamber/AppDelegate.swift#applyAppearance`）；页面回到「跟随系统」即重置 nil。
-系统深浅读 `AppleInterfaceStyle`，不读被覆盖后的 effectiveAppearance。
+darkAqua/aqua（`macos/Sources/DSHChamber/ShellPageFacts.swift#ShellAppearancePolicy`，应用点
+`macos/Sources/DSHChamber/AppDelegate.swift#applyAppearance`），页面回到「跟随系统」即重置 nil；系统
+深浅读 `AppleInterfaceStyle`，不读被覆盖后的 effectiveAppearance。
 **露底色的两段语义（W4a；F1/X2 修正）**：
-① **建窗即按 last-known 对账**：`macos/Sources/DSHChamber/MainWindowController.swift#setupWindow` 末尾调
-`macos/Sources/DSHChamber/MainWindowController.swift#reconcileThemedBackground`（读 `ShellPageFactsStore.lastKnown`
-并幂等收敛），其后启动起首帧不再是骨架常量而是上次页面主题色；只有**无事实**时才用骨架常量 `#0f1115`
-——页面自身骨架与主题无关（`packages/renderer/index.html` 明示「不跟随 prefers-color-scheme：dsh 主题按实例
-投影、骨架期不可知」），此时跟着骨架走才不会首帧反向闪色。
-② **透明露底经异常安全包装**：WKWebView 缺省白底会首帧/重载白闪，故经**异常安全包装**置 `drawsBackground` = false，
-让页面透明区露出窗口底色；包装设置失败仅降级为 WebKit 默认白底 + 日志，**绝不崩**（`responds(to:)` 探测实测
-恒 false，不再作门）。
-③ 页面事实到达后按主题换 `underPageBackgroundColor` 与窗口底色
+① **建窗即按 last-known 对账**：`#setupWindow` 末尾调
+`macos/Sources/DSHChamber/MainWindowController.swift#reconcileThemedBackground`（读
+`ShellPageFactsStore.lastKnown` 幂等收敛），首帧不再是骨架常量；只有**无事实**时才用骨架常量
+`#0f1115`——页面骨架与主题无关（`packages/renderer/index.html` 明示「不跟随
+prefers-color-scheme」），跟骨架走才不会首帧反向闪色。
+② **透明露底经异常安全包装**：WKWebView 缺省白底会首帧/重载白闪，故经包装置 `drawsBackground` = false；
+包装失败仅降级 WebKit 白底 + 日志，**绝不崩**（`responds(to:)` 探测实测恒 false，不再作门）。
+③ 事实到达后按主题换 `underPageBackgroundColor` 与窗口底色
 （`macos/Sources/DSHChamber/MainWindowController.swift#themedBackgroundColor`：light → 浅色内容底、
-dark/无事实 → 骨架常量；**装材质后窗口底转 clear、露底色在 WebKit 真能透明时也转 clear**，
-见 §5.6），缩放/全屏/重载的露底因此与页面一致。
+dark/无事实 → 骨架常量；**装材质后窗口底转 clear、露底色在 WebKit 真能透明时也转 clear**，见 §5.6），
+缩放/全屏/重载的露底与页面一致。
 
-**右键菜单不可定制的取舍**：WKWebView（macOS）公开面无右键菜单定制 API——`contextMenu*` 修饰符属
-UIKit/SwiftUI 控件层、不作用于网页右键菜单（`macos/Sources/DSHChamber/MainWindowController.swift#setupWindow`
-无任何 menu/contextmenu 覆写）；AppKit `NSView` 的同名回调 `willOpenMenu:withEvent:`/`didCloseMenu:withEvent:`
-（macOS 10.11+）属视图自有 NSMenu，对网页内部菜单是否生效未验证（实机待确认）；故保持
-平台默认项集（剪切/拷贝/粘贴/查询/翻译/服务…），不改项、不禁用。语义命令（Cmd+C/V/全选等）由
-`macos/Sources/DSHChamber/AppDelegate.swift#installMainMenu` 的 Edit 主菜单承担，不依赖右键菜单存在；
-语言随进程、外观随 `NSApp.appearance`。**退役判据** = Apple 在 macOS 侧为 WKWebView 放出右键菜单
-API（或 NSView 回调对网页菜单确实生效）时，重评「覆写项集」并回写本节与 [deviations.md](../progress/deviations.md) S-11。
+**右键菜单不可定制的取舍**：WKWebView（macOS）公开面无右键菜单定制 API（`contextMenu*` 属 UIKit/SwiftUI
+控件层；`#setupWindow` 无任何 menu/contextmenu 覆写）；AppKit `willOpenMenu:withEvent:`/`didCloseMenu:`
+属视图自有 NSMenu，对网页内部菜单是否生效未验证（实机待确认）；故保持平台默认项集，不改项、不禁用。
+语义命令（Cmd+C/V/全选等）由 `#installMainMenu` 的 Edit 主菜单承担，不依赖右键菜单；语言随进程、外观随
+`NSApp.appearance`。**退役判据** = Apple 放出 WKWebView 右键菜单 API（或 NSView 回调对网页菜单确实
+生效）时重评并回写本节与 [deviations.md](../progress/deviations.md) S-11。
 
-**Rejected alternatives**（本节的选择依据）：
+**Rejected alternatives**：
+- **在 `chamber-settings.json` 加全局 `language`/`theme` 键**：页面语言/主题是**按实例投影**的，全局键与
+  「页面 document 是唯一事实源」冲突（同窗口切换实例即失配），且会与布局 store 的文档级投影互写。拒。
+- **壳写回页面**：制造第二个事实源，页面重载即被自身投影覆盖，且与 active view 的主题所有权打架。拒。
+- **语言只靠 `AppleLanguages`（不设运行期覆盖）**：preferredLocalizations 进程启动期解析并缓存（实测写后
+  同进程取串不变），等于"语言下次启动才跟随"；故自建文案另加显式 `.lproj` 覆盖，框架/Sparkle/右键菜单
+  保持进程级。拒前者单用。
+- **框架面一律强制应用内语言（跨族也写覆盖）**：会把日/韩/法/德系统的 Sparkle 与 AppKit 内建串强制成
+  英文，也会给"页面是 ja/ko"的情形制造错误覆盖。拒。
+- **首帧就按系统外观解析动态露底色**：页面骨架恒 `#0f1115` 且与主题无关，浅色系统上会在深色骨架前
+  **反向闪色**。拒「一次解析」。
+- **暴露 app 专属外观开关（含 `NSApp.appearance` 常驻值）**：HIG 不鼓励，且让"页面说了算"变成"壳说了算"。拒。
+- **覆写 WKWebView 右键菜单项集**：无公开 API，任何实现都是私有 SPI 或重做上下文菜单，发行风险与逐系统
+  复核成本不成比例。拒（退役判据见上）。
 
-- **在 `chamber-settings.json` 加 chamber-global 的 `language`/`theme` 键**：页面语言/主题是**按实例投影**的，
-  全局键与「页面 document 是唯一事实源」直接冲突（同一窗口切换实例即失配），且会与布局 store 的文档级投影互写。拒。
-- **壳写回页面**（把壳解析出的语言/主题写进 `documentElement`）：制造第二个事实源，页面重载即被自身投影覆盖，
-  还会跟 active view 的主题所有权打架。壳只读、不回写。拒。
-- **语言只靠 `AppleLanguages`（不设运行期覆盖）**：CFBundle 的 preferredLocalizations 在**进程启动期**解析并缓存
-  （实测：写 AppleLanguages 后同进程取串不变），主菜单重建也不会换文案——那等于"语言下次启动才跟随"。
-  故自建文案另加显式 `.lproj` 覆盖（`NativeText.setLanguageOverride`），框架/Sparkle/右键菜单保持进程级。拒前者单用。
-- **把框架面也一律强制成应用内语言（跨"族"也写覆盖）**：会让日/韩/法/德系统的 Sparkle 与 AppKit 内建串
-  被强制成英文，也会给"页面是 ja/ko（远端实例注册的语言）"的情形制造错误覆盖（系统本已能正确服务它）。
-"族比较 + 同族不覆盖"的两层语义保留：**应用内面跟随设置、系统面跟随系统**。拒。
-- **首帧就按系统外观解析动态露底色**：页面骨架恒为 `#0f1115` 且与主题无关，浅色系统上会在页面深色骨架前
-  **反向闪色**；故取两段语义（先按 last-known 收敛、无事实才骨架常量，事实到达后换主题色）。拒"一次解析"。
-- **暴露 app 专属外观开关（含 `NSApp.appearance` 常驻值）**：HIG 不鼓励，且会让"页面说了算"变成"壳说了算"；
-  默认 nil 跟系统，只在页面显式主题与系统不同才覆盖。拒。
-- **覆写 WKWebView 右键菜单项集**：WKWebView（macOS）公开面无右键菜单 API（NSView 同名回调对网页菜单是否生效未验证，见上"取舍"），任何实现都是私有 SPI 或重做上下文菜单，
-  发行风险与逐系统复核成本不成比例。拒（退役判据见上）。
-
-**相关契约**：`macos/Sources/DSHChamber/NativeText.swift#NativeTextKey`（键表）与 `macos/Sources/DSHChamber/NativeText.swift#NativeText`（取值链，优先语言覆盖包）、
+**相关契约**：`macos/Sources/DSHChamber/NativeText.swift#NativeTextKey`（键表）与
+`macos/Sources/DSHChamber/NativeText.swift#NativeText`（取值链）、
 `macos/Sources/DSHChamber/ShellPageFacts.swift#ShellPageFacts`（事实定义）、
 `macos/Sources/DSHChamber/ShellPageFacts.swift#ShellPageFactsScript`（注入/对账脚本）、
 `macos/scripts/build-swift-app.mjs#assertLocalizationsPresent`（装配 fail-closed）。
 
-**待完成的实机门禁**（只记仍开放项）：右键菜单语言、Sparkle 标准窗语言与外观、`zh-Hans.lproj` 与 `zh_CN` 的**匹配已本机实测确认**（`Bundle.preferredLocalizations` → `zh_CN`；
-剩余为打包态实机目视）、页面内切主题的即时性——判定以打包态实机为准（STATUS 登记）。
-另有一条**已知边界**：本壳只随包 en/zh-Hans，而 `ShellPageLanguage.resolve` 把
-`zh-*`（含 zh-Hant）折叠为 zh ⇒ zh-Hant 页面/系统下，壳自建文案按简体渲染（与页面 frame 自身的折叠
-规则一致：`packages/renderer/src/locales.ts` 的 zh 字典即简体），未覆盖的系统框架/Sparkle 则按系统
-zh-Hant 显示；简繁混排是否可接受需实机判断，若要收口须先决定是否随包 zh-Hant。
-
+**待完成的实机门禁**：右键菜单语言、Sparkle 标准窗语言与外观、打包态实机目视（`zh-Hans.lproj` 与
+`zh_CN` 的匹配已本机实测确认）、页面内切主题的即时性——判定以打包态实机为准（STATUS 登记）。
+**已知边界**：本壳只随包 en/zh-Hans，而 `ShellPageLanguage.resolve` 把 `zh-*`（含 zh-Hant）折叠为 zh ⇒
+zh-Hant 页面/系统下壳自建文案按简体渲染（与页面 frame 自身的折叠规则一致：
+`packages/renderer/src/locales.ts` 的 zh 字典即简体），未覆盖的系统框架/Sparkle 则按系统 zh-Hant 显示；
+简繁混排是否可接受需实机判断，若要收口须先决定是否随包 zh-Hant。
 ### 5.4 原生崩溃最小诊断（替代 Crashpad）
 
-升级计划的 P0「原生崩溃最小诊断」（见 `docs/progress/todo/main-0.1.5-to-0.1.7-upgrade.md` §7.1/§12.2）：**不引入任何第三方依赖**（明确不做
+「原生崩溃最小诊断」（落点 `macos/Sources/DSHChamber/CrashDiagnostics.swift`）：**不引入任何第三方依赖**（明确不做
 Crashpad），原生壳自己给出「闪退后可考古、可给出原因」的最小面。落点全在
 `<userData>/logs/`（与 `shell.log` 同目录同权限纪律）：
 
@@ -1015,13 +1002,13 @@ WKWebView 不认，故壳自建等价面（`macos/Sources/DSHChamber/ShellWindow
     **同版本重跑**：滚动 release 是公开面，重跑时先比对同名 zip 的字节——一致才允许覆盖（幂等重跑），
     不一致直接 FAIL 并提示提升 beta 号（否则已发布 feed 的签名指向的字节变了，客户端先验签失败）。
     **draft 面顺序**：appcast 在 zip/delta 之后才上传到 draft（S-36 的「归档先于 feed」不再依赖「draft 不可见」）。
-- **shell-flavor 判别字段（§0.1-E2）**：`dsh-chamber:info` 载荷带 `flavor`（`main.ts:3892` 的 `hostFacts`；镜像面仍 4 标量），
+- **shell-flavor 判别字段（§0.1-E2）**：`dsh-chamber:info` 载荷带 `flavor`（`main.ts:1352` 的 `hostFacts`；镜像面仍 4 标量），
   但**共享 renderer 至今无消费者**——UI 能力门（更新文案/重启安装按钮）实际由 `installBlockedReason` 与原生能力
   位驱动；字段保留备查（用前须补消费者与 preload.cts/global.d.ts 镜像测试）。
 - **检查腿的宿主叶**：headless 控制器 `setState` 时逐个 listener 走 try/catch，推送腿抛错绝不反噬控制器
   （`update-headless.ts:212-224`）；sidecar-ctx 的 HostEdges 必须**显式**提供惰性 `disarmUpdaterQuit: () => {}`
-  （`sidecar-ctx.ts:2768`）——methodStub 把「缺失成员」变成调用即抛的 `sidecar-ctx-unavailable:*` 递归 stub
-  （`sidecar-ctx.ts:2774-2784`，抛错点 `:2777`），省略会让首次「检查更新」抛错、checking 卡死；这是有意的惰性
+  （`sidecar-ctx.ts:376`）——methodStub 把「缺失成员」变成调用即抛的 `sidecar-ctx-unavailable:*` 递归 stub
+  （`sidecar-ctx.ts:376-397`，抛错点在 `methodStub` 内），省略会让首次「检查更新」抛错、checking 卡死；这是有意的惰性
   契约叶，不是死代码。
 - v2（P3 末，决策 3）：Sparkle 独立 EdDSA appcast 由发布 CI 生成。
 

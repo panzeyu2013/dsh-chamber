@@ -66,7 +66,7 @@
 **F8** win32 无 `O_NOFOLLOW`/`O_DIRECTORY`:dsh-runtime 私有状态读写退化为**身份校验回退**
 (open 前后 `lstat` 拒符号链接 + dev/ino 复验,任一步不可证即 fail-closed),不再直接抛错
 (`packages/dsh-runtime/src/private-fs.ts` `resolveNoFollowFlags`/`openPrivateNoFollowSync`;
-与 gateway 的 win32 旁路 `runtime-manager.ts:632-648` 及 control-plane `private-file.ts:85-107` 同构)。
+与 gateway 的 win32 旁路 `runtime-manager.ts:189,208` 及 control-plane `private-file.ts:85-107` 同构)。
 残余:非写路径在 `lstat` 与 `open` 之间存在 TOCTOU 窗口(无内核旗标可消除);打开后复验失败即拒绝,
 故只影响并发替换攻击面,不影响普通读写与只读投影。
 
