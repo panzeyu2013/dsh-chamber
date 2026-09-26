@@ -74,7 +74,6 @@ export const DEAD_EXPORT_EXEMPTIONS = [
   { package: 'dsh-stream-state', name: 'MAX_REBUILDS_PER_WINDOW', reason: 'table value consumed via CARRIER_ENV + parity gate' },
   { package: 'dsh-stream-state', name: 'MIN_REBUILD_SPACING_MS', reason: 'table value consumed via CARRIER_ENV + parity gate' },
   { package: 'dsh-stream-state', name: 'IN_FLIGHT_GRACE_MS', reason: 'table value consumed via CARRIER_ENV + parity gate' },
-  { package: 'dsh-stream-state', name: 'OPENING_TIMEOUT_LADDER_MS', reason: 'table value consumed via openingBudgetMs + parity gate' },
   { package: 'dsh-stream-state', name: 'OPENING_STALL_STREAK', reason: 'table value consumed via CARRIER_ENV + parity gate' },
   // Differential-harness surface: imported by test/equivalence and
   // scripts/refactor/equivalence.mjs, not by a production module.

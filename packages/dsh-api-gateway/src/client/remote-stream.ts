@@ -13,7 +13,7 @@ import {
   remoteStreamRetryDelayMs,
   REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS,
 } from './remote-retry-policy.ts'
-import { RemoteStreamCarrierError } from './stream-client.ts'
+import { RemoteStreamCarrierError, RemoteStreamGenerationRestart, OpeningTicket, attachOpeningTicket } from './stream-client.ts'
 import { withDeadline } from '@dsh-chamber/dsh-stream-state'
 
 /** Real clock, injected: the bound's SCHEDULING lives in the primitive; its VALUE stays local. */
@@ -78,7 +78,8 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
   restart(): void {
     if (this.lifetime.signal.aborted) return
     this.revision++
-    this.generationAbort?.abort(new Error(`${this.options.name} generation restarted`))
+    // A carrier-side teardown, not a consumer departure: the opening budget survives it.
+    this.generationAbort?.abort(new RemoteStreamGenerationRestart(`${this.options.name} generation restarted`))
   }
 
   /** Permanently stop this stream and wait for its iterator to close. */
@@ -119,6 +120,12 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
         const generationAbort = new AbortController()
         this.generationAbort = generationAbort
         const signal = AbortSignal.any([this.lifetime.signal, generationAbort.signal])
+        // F1: this generation's opening ticket travels on the exact signal the source
+        // opens with. The carrier layer binds its per-attempt accept handler when it
+        // sends this generation's open frame, so the consumer's accept() reaches
+        // exactly the attempt that delivered the item - never a successor's.
+        const opening = new OpeningTicket()
+        attachOpeningTicket(signal, opening)
         const generationId = ++generation
         let accepted = false
         let source: AsyncIterator<Item> | undefined
@@ -143,9 +150,13 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
               value: next.value,
               signal,
               accept: () => {
+                // The generation/revision fence is the ONLY guard that matters here: an
+                // accept from a superseded generation is dropped before it can reach the
+                // carrier, so it can never settle a live attempt (F1, test e).
                 if (this.generationAbort !== generationAbort || revision !== this.revision) return
                 accepted = true
                 attempt = 0
+                opening.accepted()
               },
             }
           }

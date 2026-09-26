@@ -1,11 +1,16 @@
 /**
  * The carrier lifecycle reducer.
  *
- * Three levers can replace the same physical socket (open-frame silent-socket escalation,
- * opening-stall escalation, the lane's reconnect), each with its own throttle. Here the
- * rule owns it: every replacement passes through {@link decideRebuild}, which permits
- * exactly one at a time, and an allowed request during an in-flight rebuild yields a
- * `throttled` effect and NO second rebuild.
+ * Four levers can replace the same physical socket (open-frame silent-socket escalation,
+ * opening-stall escalation, the teardown-no-frame escalation, the lane's reconnect), each
+ * with its own throttle. Here the rule owns it: every replacement passes through
+ * {@link decideRebuild}, which permits exactly one at a time, and an allowed request
+ * during an in-flight rebuild yields a `throttled` effect and NO second rebuild.
+ *
+ * The opening phase machine (F1) is the fifth lever's counterpart: it never replaces a
+ * socket, it ENDS the opening. `openingSent` arms the deadline, `openingAnswered` only
+ * marks the phase, `openingAccepted` is the single settling transition, and exhausting
+ * the widening ladder yields the terminal `failLogicalOpening`.
  *
  * Clockless (all times arrive on events) and total (any (state, event) pair returns a
  * state); the executor owns sockets, the Swift mirror owns its own copy of these tables.
@@ -17,6 +22,7 @@ import type {
   CarrierEvent,
   CarrierReduction,
   CarrierState,
+  OpeningPhase,
   RebuildReason,
   RecoveryEffect,
 } from './state.ts'
@@ -70,6 +76,23 @@ function boundOpeningKeys<T>(record: Readonly<Record<string, T>>, max: number): 
   return next
 }
 
+/** Write one key as the MOST RECENT entry before bounding. Re-writing an existing key
+ * must move it to the back: a key that keeps expiring while new keys arrive would age
+ * out of the ledger, and its widening would silently restart from rung 0 - the terminal
+ * rung could then never be reached (review finding F1-LEDGER). The cap still bounds the
+ * ledger absolutely: a key survives only while fewer than `max` fresh keys arrive
+ * between two of its own writes (one key per opening attempt in practice). */
+function touchOpeningKey<T>(
+  record: Readonly<Record<string, T>>,
+  key: string,
+  value: T,
+  max: number,
+): Readonly<Record<string, T>> {
+  const next: Record<string, T> = { ...record }
+  delete next[key]
+  next[key] = value
+  return boundOpeningKeys(next, max)
+}
 /**
  * One reduction step. Total function; unmatched kinds add no effects. The rebuild ledger
  * is pruned against EVERY event's timestamp (not only when an entry is admitted), so a
@@ -95,15 +118,15 @@ function reduceCarrierStep(state: CarrierState, event: CarrierEvent, env: Carrie
       // A live socket restarts the frame counter and clears the in-flight marker.
       return { state: { ...state, phase: 'open', framesOnSocket: 0, pendingRebuild: null }, effects: [] }
 
-    case 'carrierClosed': {
+    case 'carrierClosed':
       // Replacing a carrier fails EVERY logical stream on it, not only the one that
       // noticed; that socket-level semantics lives in the single owner, not a call site.
-      const effects: RecoveryEffect[] = [{ e: 'forensic', name: 'carrier-closed', detail: String(event.at) }]
+      // No forensic effect: the host publishes the fact with the socket/stream detail,
+      // and this reducer's `carrier-closed` name reached no executor in production.
       return {
         state: { ...state, phase: 'closed', framesOnSocket: 0, pendingRebuild: null, openStreams: [] },
-        effects,
+        effects: [],
       }
-    }
 
     case 'streamOpened': {
       const id = event.streamId
@@ -135,10 +158,11 @@ function reduceCarrierStep(state: CarrierState, event: CarrierEvent, env: Carrie
       return {
         state: {
           ...state,
-          streamRequestKeys: boundOpeningKeys(
-            { ...state.streamRequestKeys, [streamId]: key },
-            env.openingEpisodeKeysMax,
-          ) as Readonly<Record<string, string>>,
+          streamRequestKeys: touchOpeningKey(state.streamRequestKeys, streamId, key, env.openingEpisodeKeysMax) as Readonly<Record<string, string>>,
+          // F1: the phase and the latest-episode fence are what keep an accept from a
+          // superseded generation from clearing a live one's budget.
+          openingPhases: touchOpeningKey(state.openingPhases, streamId, 'sent', env.openingEpisodeKeysMax) as Readonly<Record<string, OpeningPhase>>,
+          openingLatest: touchOpeningKey(state.openingLatest, key, streamId, env.openingEpisodeKeysMax) as Readonly<Record<string, string>>,
         },
         effects: [{ e: 'armOpeningDeadline', streamId, budgetMs: openingBudgetMs(streak), streak }],
       }
@@ -152,21 +176,75 @@ function reduceCarrierStep(state: CarrierState, event: CarrierEvent, env: Carrie
       const streak = (state.openingStreaks[key] ?? 0) + 1
       const withStreak: CarrierState = {
         ...state,
-        openingStreaks: boundOpeningKeys(
-          { ...state.openingStreaks, [key]: streak },
-          env.openingEpisodeKeysMax,
-        ) as Readonly<Record<string, number>>,
+        openingStreaks: touchOpeningKey(state.openingStreaks, key, streak, env.openingEpisodeKeysMax) as Readonly<Record<string, number>>,
+      }
+      // F1: the ladder IS the budget. Every rung spent without acceptance means
+      // re-issuing can only extend a hang the consumer has already proved it cannot
+      // settle, so the phase machine reports a TERMINAL instead of another reopen.
+      const max = env.openingBudgetMaxMisses
+      if (Number.isFinite(max) && streak >= max) {
+        // The reducer owns the VERDICT; the host owns the FACT. It publishes the
+        // terminal names (opening-orphaned when the item arrived but was never
+        // accepted / opening-timeout when nothing arrived, plus opening-budget-
+        // exhausted) with endpoint, streamId, waitedMs and the best-effort session -
+        // strictly richer than the request key this clockless reducer could carry, and
+        // an unconsumed forensic effect would only be a second, weaker definition.
+        return {
+          state: withStreak,
+          effects: event.streamId === undefined
+            ? []
+            : [{ e: 'failLogicalOpening' as const, streamId: event.streamId, reason: key }],
+        }
       }
       return reduceCarrierStep(withStreak, { ...event, kind: 'rebuildRequested', reason: 'openingStall', streak }, env)
     }
 
     case 'openingAnswered': {
-      // The frame reset is the host's evidence, the ledger change is ours.
-      const key = event.requestKey
-      if (key === undefined || state.openingStreaks[key] === undefined) return { state, effects: [] }
+      // The transport delivered this stream's first frame: that is evidence the socket
+      // is alive, NOT that the consumer settled its opening. The widening ledger stays
+      // untouched here (F1) - only `openingAccepted` may clear it.
+      const id = event.streamId
+      if (id === undefined || state.openingPhases[id] === undefined) return { state, effects: [] }
+      if (state.openingPhases[id] === 'itemReceived') return { state, effects: [] }
+      return {
+        // Bounded like every other opening-ledger write: a bare spread could re-insert
+        // an id the capacity bound had already evicted (review finding 9).
+        state: {
+          ...state,
+          openingPhases: touchOpeningKey(state.openingPhases, id, 'itemReceived', env.openingEpisodeKeysMax) as Readonly<Record<string, OpeningPhase>>,
+        },
+        effects: [],
+      }
+    }
+
+    case 'openingAccepted': {
+      // The ONE transition that settles an opening (F1). Accepted only when this
+      // episode is still the newest attempt for its request key: an accept that
+      // crossed a carrier generation must not clear its successor's widening.
+      const id = event.streamId
+      const key = event.requestKey ?? (id === undefined ? undefined : state.streamRequestKeys[id])
+      if (id === undefined || key === undefined) return { state, effects: [] }
+      // Two independent rejections: an accept for an episode this ledger no longer
+      // tracks (its phase was released), and an accept from a SUPERSEDED episode whose
+      // successor already claimed the key. The second test must not require the
+      // successor to have closed the predecessor first - a live old episode (a journal
+      // sibling probe, a second generation) still passes `openingPhases[id]`, and letting
+      // it through would clear the successor's widening.
+      const latest = state.openingLatest[key]
+      if (state.openingPhases[id] === undefined) return { state, effects: [] }
+      if (latest !== undefined && latest !== id) return { state, effects: [] }
       const openingStreaks = { ...state.openingStreaks }
       delete openingStreaks[key]
-      return { state: { ...state, openingStreaks }, effects: [] }
+      const openingPhases = { ...state.openingPhases }
+      delete openingPhases[id]
+      const openingLatest = { ...state.openingLatest }
+      if (openingLatest[key] === id) delete openingLatest[key]
+      // No forensic effect: the host publishes the acceptance fact with its timing and
+      // best-effort session attribution right where the consumer called accept().
+      return {
+        state: { ...state, openingStreaks, openingPhases, openingLatest },
+        effects: [],
+      }
     }
 
     case 'rebuildRequested': {
@@ -235,13 +313,45 @@ function reduceCarrierStep(state: CarrierState, event: CarrierEvent, env: Carrie
       const id = event.episodeId
       if (id === undefined) return { state, effects: [] }
       const key = state.streamRequestKeys[id] ?? event.requestKey
+      // Value-free early exit (review O2): an episode this ledger never recorded - the
+      // common close of a refused open or an unarmed sibling - must not expand three
+      // bounded tables (V8 dictionary mode from ~64 keys: measured 13-61us at 64/256)
+      // to answer "nothing changed". This conjunction is exactly the no-change test
+      // below, evaluated before the copies.
+      if (state.streamRequestKeys[id] === undefined
+        && state.openingPhases[id] === undefined
+        && (key === undefined || state.openingLatest[key] !== id)
+        && (key === undefined || state.openingStreaks[key] === undefined)
+        && state.pendingRebuildBy !== id
+        && !state.openStreams.includes(id)) {
+        return { state, effects: [] }
+      }
       const streamRequestKeys = { ...state.streamRequestKeys }
       const hadKey = streamRequestKeys[id] !== undefined
       delete streamRequestKeys[id]
+      const openingPhases = { ...state.openingPhases }
+      const hadPhase = openingPhases[id] !== undefined
+      delete openingPhases[id]
+      const openingLatest = { ...state.openingLatest }
+      const hadLatest = key !== undefined && openingLatest[key] === id
+      if (hadLatest && key !== undefined) delete openingLatest[key]
       let openingStreaks: Readonly<Record<string, number>> = state.openingStreaks
-      if (event.timedOut !== true && key !== undefined && openingStreaks[key] !== undefined) {
+      if (event.terminal === true && key !== undefined && openingStreaks[key] !== undefined) {
+        // F1: a TERMINAL verdict releases the spent widening whatever `timedOut` says. A
+        // non-terminal timeout must keep it (that is the retry lane's inheritance), but
+        // the terminal verdict ends the episode: the next open of the same request arms
+        // rung 0 again instead of expiring immediately on a maxed-out ladder.
+        const next = { ...openingStreaks }
+        delete next[key]
+        openingStreaks = next
+      } else if (event.timedOut !== true && key !== undefined && openingStreaks[key] !== undefined) {
         const shared = Object.values(streamRequestKeys).some((other) => other === key)
-        if (!shared) {
+        // F1: a CARRIER-ended episode that never reached acceptance keeps its budget and
+        // widening - a replaced socket, a lost carrier or a denied reopen may not reset
+        // what the retry lane already spent. A consumer-ended (or accepted) episode
+        // releases the key, as does the terminal budget-exhausted verdict.
+        const keep = event.accepted !== true && event.carrierInitiated === true
+        if (!shared && !keep) {
           const next = { ...openingStreaks }
           delete next[key]
           openingStreaks = next
@@ -249,7 +359,8 @@ function reduceCarrierStep(state: CarrierState, event: CarrierEvent, env: Carrie
       }
       const owned = state.pendingRebuildBy === id
       const nextStreams = state.openStreams.filter((s) => s !== id)
-      if (!owned && nextStreams.length === state.openStreams.length && !hadKey && openingStreaks === state.openingStreaks) {
+      if (!owned && nextStreams.length === state.openStreams.length && !hadKey
+        && !hadPhase && !hadLatest && openingStreaks === state.openingStreaks) {
         return { state, effects: [] }
       }
       return {
@@ -258,6 +369,8 @@ function reduceCarrierStep(state: CarrierState, event: CarrierEvent, env: Carrie
           openStreams: nextStreams,
           streamRequestKeys,
           openingStreaks,
+          openingPhases,
+          openingLatest,
           pendingRebuild: owned ? null : state.pendingRebuild,
           pendingRebuildBy: owned ? null : state.pendingRebuildBy,
         },

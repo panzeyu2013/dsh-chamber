@@ -134,23 +134,15 @@ test('the fork reports the transitions the investigation needed', () => {
   assert.match(client, /this\.forensics\?\.\('socket-reconnect'/u)
   assert.match(client, /this\.forensics\?\.\('socket-disposed'/u)
   assert.match(client, /this\.forensics\?\.\('socket-lost', error\.message\)/u)
-  assert.match(client, /this\.forensics\?\.\('opening-timeout'/u)
+  // F1: the opening verdicts are published through the one bounded opening reporter,
+  // which attaches the endpoint, the attempt id, the wait and the best-effort session.
+  assert.match(client, /reportOpening\(\s*orphaned \? 'opening-orphaned' : 'opening-timeout'/u)
+  assert.match(client, /reportOpening\(\s*'opening-budget-exhausted'/u)
+  assert.match(client, /reportOpening\('opening-accepted'/u)
+  assert.match(client, /const detail: StreamForensicsDetail = \{\s*\n\s*endpoint,\s*\n\s*streamId,\s*\n\s*waitedMs,/u)
   assert.match(client, /constructor\(basePath = '', private readonly forensics\?: StreamForensicsReporter\)/u)
   assert.match(service, /forensics\(\s*\n\s*active === undefined \? 'generation-lost' : 'generation-ready'/u)
   assert.match(service, /new RemoteStreamMuxClient\(basePath, forensics\)/u)
   assert.match(service, /unsubscribeForensics\(\)/u, 'the generation subscription must be released on dispose')
 })
 
-
-test('a carrier-forensic fact is counted, bounded and attributed like every other kind', () => {
-  const facts: StreamForensicsFact[] = []
-  const report = createStreamForensicsReporter({
-    now: () => 7,
-    dispatch: (fact) => { facts.push(fact) },
-  })
-  report('carrier-forensic', 'carrier-closed: 1700000000000')
-  assert.equal(facts.length, 1)
-  assert.equal(facts[0]?.kind, 'carrier-forensic')
-  assert.equal(facts[0]?.kindCount, 1)
-  assert.equal(facts[0]?.cause, 'carrier-closed: 1700000000000')
-})

@@ -29,10 +29,17 @@ export const OPENING_TIMEOUT_LADDER_MS: readonly number[] = [30_000, 60_000, 120
  * the socket silent. */
 export const SILENT_TEARDOWN_MIN_MS = 15_000
 
+/** Consecutive unanswered opening deadlines for ONE logical stream at which its
+ * opening budget is EXHAUSTED: every rung of {@link OPENING_TIMEOUT_LADDER_MS} was
+ * spent without the consumer ever accepting, so the phase machine reports a
+ * terminal instead of re-issuing forever (the ladder total is the budget). Consumed
+ * through {@link CARRIER_ENV}/`TABLE_SNAPSHOT`, never imported as a bare constant. */
+const OPENING_BUDGET_MAX_MISSES = OPENING_TIMEOUT_LADDER_MS.length
+
 /** Consecutive unanswered opening deadlines for ONE episode before the carrier is
- * rebuilt while frames ARE arriving (mirrors
- * REMOTE_STREAM_OPENING_ESCALATION_STREAK = 2). A frame-answering socket is left
- * alone on the first timeout because a slow-but-working Host must keep its
+ * rebuilt while frames ARE arriving (the single-sourced sibling of the ladder above;
+ * the retired host-side constant it used to mirror is gone). A frame-answering socket
+ * is left alone on the first timeout because a slow-but-working Host must keep its
  * in-flight answer; only a second consecutive miss proves the request - not the
  * socket - is stuck. */
 export const OPENING_STALL_STREAK = 2
@@ -75,6 +82,7 @@ export const CARRIER_ENV = {
   inFlightGraceMs: IN_FLIGHT_GRACE_MS,
   openingStallStreak: OPENING_STALL_STREAK,
   openingEpisodeKeysMax: OPENING_EPISODE_KEYS_MAX,
+  openingBudgetMaxMisses: OPENING_BUDGET_MAX_MISSES,
 } as const
 
 /** Opening deadline for an episode that has already timed out `streak` times. */
@@ -187,6 +195,7 @@ export const TABLE_SNAPSHOT = {
   silentTeardownMinMs: SILENT_TEARDOWN_MIN_MS,
   openingStallStreak: OPENING_STALL_STREAK,
   openingEpisodeKeysMax: OPENING_EPISODE_KEYS_MAX,
+  openingBudgetMaxMisses: OPENING_BUDGET_MAX_MISSES,
   handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
   presentation: PRESENTATION_THRESHOLDS,
   ladders: LADDER_TABLES,
