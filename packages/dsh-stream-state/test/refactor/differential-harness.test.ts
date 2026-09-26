@@ -23,8 +23,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { evaluate } from '../../../../scripts/refactor/equivalence.mjs'
-import { legacyTrace, legacyOpeningTimeoutMs } from './reference-adapter.ts'
-import { openingBudgetMs } from '../../src/tables.ts'
+import { legacyTrace } from './reference-adapter.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 /** Repo root, derived from this file's location (test/refactor/ -> repo root). */
@@ -103,13 +102,4 @@ test('the reference adapter reproduces the MEASURED legacy trace for two zero-fr
   assert.deepEqual(trace.map((action) => action.reason), ['silent', 'silent'])
 })
 
-test('the reference widening formula matches the recorded ladder', () => {
-  const ladder = [30000, 60000, 120000, 240000, 300000]
-  for (let streak = 0; streak <= 8; streak += 1) {
-    const expected = streak >= 4 ? 300000 : ladder[streak]
-    assert.equal(openingBudgetMs(streak), expected, 'new table at streak ' + String(streak))
-    if (streak < 4) {
-      assert.equal(legacyOpeningTimeoutMs(streak), expected, 'legacy formula at streak ' + String(streak))
-    }
-  }
-})
+

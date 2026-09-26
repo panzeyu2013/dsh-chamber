@@ -28,20 +28,13 @@ import {
 } from './session-stream-health-chip-face.ts'
 import styles from './SessionStreamHealthChip.module.css'
 
-/** Injected face the seat supplies: bound translator, one ladder step, wake-up subscription. */
+/** Injected face the seat supplies: bound translator and one ladder step. */
 export interface SessionStreamHealthInjected {
   /** Bound translator for the open-in namespace (the chip's copy lives there). */
   t: Translate
   /** One ladder step: plans, executes a requested heal and accounts it. The seat
    *  owns the state, so a remount cannot reset the cooldown or rolling budget. */
   step(sessionId: string, openState: SessionOpenState, presented: boolean, now: number): SessionStreamHealthPlan
-  /**
-   * Subscribe to seat-side fact wake-ups; the facts stay in the seat, the chip
-   * only learns a new observation is due (a terminal opening fact must be planned
-   * the moment it lands, not on the next tick).
-   * @returns unsubscribe for the effect cleanup.
-   */
-  subscribe(listener: () => void): () => void
 }
 
 /**
@@ -62,7 +55,7 @@ function idlePlan(): SessionStreamHealthPlan {
 }
 
 export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactElement | null {
-  const { t, step, subscribe, sessionId, useSession } = props
+  const { t, step, sessionId, useSession } = props
   const openState = useSession(snapshot => snapshot.openState)
   const [plan, setPlan] = useState<SessionStreamHealthPlan>(idlePlan)
   const [tick, setTick] = useState(0)
@@ -79,10 +72,6 @@ export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactE
     document.addEventListener('visibilitychange', onVisibility)
     return () => { document.removeEventListener('visibilitychange', onVisibility) }
   }, [])
-
-  // Seat-side facts arrive as EVENTS — the seat’s closure owns them, so a prop
-  // would never change. Bump the tick to re-plan (the notice appears now).
-  useEffect(() => subscribe(() => setTick(value => value + 1)), [subscribe])
 
   // One ladder step per render-relevant change. The seat owns the state and the
   // only side effect (executing the automatic heal); this component issues none.

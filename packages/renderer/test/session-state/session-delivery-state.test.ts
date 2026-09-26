@@ -18,27 +18,81 @@ function unhealableError() {
   }
 }
 
-test('a loading face is never an automatic symptom, however parked it looks', () => {
-  // Requirement: the automatic resync arm no longer acts on openState=loading.
-  // A pending open is never crossed, an unknown liveness is never trusted, and
-  // the recovery of a loading face belongs to the user (the stream-forensics
-  // evidence surfaces it) — never to this ladder.
+/** The one parked-loading shape the shared classifier accepts as an open-stall. */
+function parkedLoading() {
+  return {
+    evidence: {
+      symptomSinceMs: 0,
+      open: {
+        state: 'loading' as const, openInFlight: false, resyncInFlight: false, resyncAvailable: true,
+      },
+    },
+  }
+}
+
+test('a parked loading face resyncs through the shared ladder, on its grace and cooldown', () => {
+  // B1: `openInFlight === false` is the shared proof that a loading face is
+  // parked (the vendor clears openPromise while staying 'loading'), so the same
+  // owner, grace, cooldown and quota as the error arm now cover it.
   const owner = createSessionDeliveryOwner()
-  const cases = [
-    { openInFlight: false, resyncInFlight: false },
-    { openInFlight: true, resyncInFlight: false },
-    { openInFlight: undefined, resyncInFlight: false },
-    { openInFlight: false, resyncInFlight: true },
-  ]
-  for (const open of cases) {
+  const early = owner.observe({ sessionId: 's1', ...parkedLoading() }, TABLE.resyncGraceMs - 1)
+  assert.deepEqual(early.symptoms, ['open-stall'], 'a parked load is an open-stall')
+  assert.equal(early.action, undefined, 'the grace must elapse before the resync')
+  const due = owner.observe({ sessionId: 's1', ...parkedLoading() }, TABLE.resyncGraceMs)
+  assert.equal(due.action?.tier, 'resync', 'a parked loading is the ladder\'s to re-issue')
+  const cooldown = owner.observe({ sessionId: 's1', ...parkedLoading() }, TABLE.resyncGraceMs + 1_000)
+  assert.equal(cooldown.action, undefined, 'the existing cooldown paces the retry')
+})
+
+test('a loading face without the parked proof never dispatches (in-flight or unknown)', () => {
+  // Invariant: an open still in flight is the host's to finish, and an unknown
+  // liveness bit fails closed exactly like a missing capability — neither may be
+  // crossed by an automatic action, and neither spends the lever.
+  for (const openInFlight of [true, undefined] as const) {
+    const owner = createSessionDeliveryOwner()
     const decision = owner.observe({
       sessionId: 's1',
-      evidence: { symptomSinceMs: 0, open: { state: 'loading', resyncAvailable: true, ...open } },
+      evidence: { symptomSinceMs: 0, open: { state: 'loading', openInFlight, resyncInFlight: false, resyncAvailable: true } },
     }, TABLE.resyncGraceMs * 10)
-    assert.deepEqual(decision.symptoms, [], 'loading is not an open-stall for the page ladder')
-    assert.equal(decision.action, undefined, 'no automatic rebuild may cross a load')
-    assert.equal(decision.hostStall, false, 'a parked load is not a host stall')
+    assert.deepEqual(decision.symptoms, [], String(openInFlight) + ' is not a parked-loading proof')
+    assert.equal(decision.action, undefined, 'no automatic rebuild may cross an in-flight/unknown open')
+    assert.equal(decision.hostStall, false, 'no lever was spent, so no stall fact')
   }
+  // A disposing rebuild IS still a stall (the ledger must survive it) but never a
+  // second dispatch.
+  const owner = createSessionDeliveryOwner()
+  const disposing = owner.observe({
+    sessionId: 's1',
+    evidence: { symptomSinceMs: 0, open: { state: 'loading', openInFlight: false, resyncInFlight: true, resyncAvailable: true } },
+  }, TABLE.resyncGraceMs * 10)
+  assert.deepEqual(disposing.symptoms, ['open-stall'])
+  assert.equal(disposing.action, undefined)
+})
+
+test('an unknown liveness bit never spends the quota, so the parked proof can still act', () => {
+  const owner = createSessionDeliveryOwner()
+  const unknown = owner.observe({
+    sessionId: 's1',
+    evidence: { symptomSinceMs: 0, open: { state: 'loading', openInFlight: undefined, resyncInFlight: false, resyncAvailable: true } },
+  }, TABLE.resyncGraceMs * 5)
+  assert.deepEqual(unknown.symptoms, [])
+  const parked = owner.observe({ sessionId: 's1', ...parkedLoading() }, TABLE.resyncGraceMs * 5)
+  assert.equal(parked.action?.tier, 'resync', 'the untrusted tick did not consume the lever')
+})
+
+test('an open-stall alone never reaches the stronger tiers', () => {
+  // Invariant: the ladder's `requiresStuckEvidence` gate keeps instance-reboot
+  // and document-reload out of reach without the caller's stuck report, so an
+  // open face can only ever ascend to `resync` on time alone.
+  const owner = createSessionDeliveryOwner()
+  const parked = (at: number) => owner.observe({ sessionId: 's1', ...parkedLoading() }, at)
+  const first = parked(TABLE.resyncGraceMs)
+  assert.equal(first.action?.tier, 'resync')
+  const second = parked(TABLE.resyncGraceMs + TABLE.resyncCooldownMs)
+  assert.equal(second.action?.tier, 'resync')
+  const late = parked(TABLE.resyncWindowMs - 1)
+  assert.equal(late.action, undefined, 'no stuck evidence: the stronger tiers stay shut')
+  assert.equal(late.hostStall, true, 'the exhausted resync arm is the host-stall fact')
 })
 
 test('the error face the header cannot heal keeps the bounded automatic resync', () => {

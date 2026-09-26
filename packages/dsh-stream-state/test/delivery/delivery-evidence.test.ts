@@ -91,6 +91,12 @@ test('symptoms: an error the header cannot heal is the page\'s open-stall', () =
   assert.deepEqual(classifyDeliverySymptoms({ ...base, open: {
     state: 'error', openInFlight: false, resyncInFlight: false, resyncAvailable: true,
   } }), [])
+  // Unknown LIVENESS is not an in-flight open: the vendor writes 'error' only after
+  // its open settled or failed (openPromise cleared), so an unreadable bit keeps the
+  // page resync reachable instead of failing closed forever.
+  assert.deepEqual(classifyDeliverySymptoms({ ...base, open: {
+    state: 'error', resyncInFlight: false, resyncAvailable: true, healRoute: false,
+  } }), ['open-stall'])
 })
 
 test('recovery: an error with no header route dispatches the bounded page resync', () => {

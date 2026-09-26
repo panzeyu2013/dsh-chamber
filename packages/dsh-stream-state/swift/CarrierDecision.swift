@@ -29,7 +29,7 @@ struct CarrierTables: Equatable {
     let maxRebuildsPerWindow: Int
     let minRebuildSpacingMs: Double
     let inFlightGraceMs: Double
-    let openingTimeoutLadderMs: [Double]
+    let openingTimeoutMs: Double
     let silentTeardownMinMs: Double
     let openingStallStreak: Int
     /// The visible-page frame probe shared by both shells (delivery.scheduleProbe).
@@ -70,9 +70,6 @@ struct CarrierTables: Equatable {
             guard let value = tables[key] as? NSNumber else { throw CarrierTableError.missingField(key) }
             return value.intValue
         }
-        guard let ladder = tables["openingTimeoutLadderMs"] as? [NSNumber], !ladder.isEmpty else {
-            throw CarrierTableError.missingField("openingTimeoutLadderMs")
-        }
         guard let ladders = tables["ladders"] as? [String: Any],
               let delivery = ladders["delivery"] as? [String: Any],
               let scheduleProbe = delivery["scheduleProbe"] as? [String: Any] else {
@@ -89,7 +86,7 @@ struct CarrierTables: Equatable {
             maxRebuildsPerWindow: try integer("maxRebuildsPerWindow"),
             minRebuildSpacingMs: try number("minRebuildSpacingMs"),
             inFlightGraceMs: try number("inFlightGraceMs"),
-            openingTimeoutLadderMs: ladder.map(\.doubleValue),
+            openingTimeoutMs: try number("openingTimeoutMs"),
             silentTeardownMinMs: try number("silentTeardownMinMs"),
             openingStallStreak: try integer("openingStallStreak"),
             scheduleProbeIntervalMs: try nestedNumber(scheduleProbe, "intervalMs"),
@@ -118,14 +115,6 @@ enum CarrierTableError: Error, Equatable {
 
 /// The three carrier decisions, mirroring `packages/dsh-stream-state/src/carrier.ts`.
 enum CarrierDecision {
-    /// Opening deadline for an episode that has already timed out `streak` times.
-    /// Mirrors `openingBudgetMs` (clamped index into the ladder).
-    static func openingBudgetMs(streak: Int, tables: CarrierTables) -> Double {
-        let index = streak > 0 ? streak : 0
-        let capped = Swift.min(index, tables.openingTimeoutLadderMs.count - 1)
-        return tables.openingTimeoutLadderMs[capped]
-    }
-
     /// May the physical carrier be replaced now?
     /// Mirrors `decideRebuild`: closed carriers never rebuild; an in-flight rebuild
     /// inside its grace window blocks; the rolling window and the spacing are

@@ -29,9 +29,10 @@
  *    row's `retainedBy.mainView` count instead of a chamber-side `current`
  *    mirror.
  *  - the concrete per-session `Session.resync()`: dispose the current event
- *    stream and `open()` again — the re-subscribe an `'error'` session and a
- *    parked `'loading'` open both need, and the lever this ladder executes.
- *    It is NOT on the contract, so the probe reaches it through a guarded
+ *    stream and `open()` again — the re-subscribe an `'error'` session needs,
+ *    and the lever this ladder executes. A parked `'loading'` open is re-issued
+ *    by the page's bounded delivery ladder instead, through the same concrete
+ *    face. It is NOT on the contract, so the probe reaches it through a guarded
  *    structural slice (`session-stream-health-probe.ts`).
  *
  * A target the official main view does not retain has no lever here: the page's
@@ -39,8 +40,11 @@
  *
  *  - The renderer's page-level recovery owner performs any evidence-gated
  *    automatic rebuild and escalates through its own bounded tiers (resync →
- *    instance reboot → document reload); the host's opening machine owns the
- *    hanging-opening verdict. This header policy only REPORTS.
+ *    instance reboot → document reload); an open-stall (a parked `loading`, or
+ *    an error the header cannot heal) stops at its resync tier, because the
+ *    upper tiers require independent frame/input stall evidence. The host has no
+ *    first-frame deadline at all (upstream §4.3 is still open). This header
+ *    policy only REPORTS.
  *
  * That asymmetry is why this header policy has ONE action (the automatic heal):
  *
@@ -58,15 +62,11 @@
  *    cleared only by recovery (which also ends the episode: the next error gets
  *    its own grace instead of inheriting this heal's settle clock);
  *  - `openState === 'loading'` held past the stall threshold ⇒ the
- *    'loading-stall' notice, then 'loading-failed': visibility only. The manual
- *    rebuild/reload controls were retired (user ruling): upstream has no such
- *    control and every recovery is automatic (the host's opening machine; the
- *    page's bounded tiers; the error arm's heal below);
- *  - the SAME loading notice lands the moment the stream-forensics evidence
- *    says this opening is terminal (`openingFailure`): the fact proves the
- *    opening died, so no page timer may decide when it is shown. It only
- *    REPORTS: an evidence-proven dead opening is still never re-issued
- *    automatically;
+ *    'loading-stall' notice, then 'loading-failed': visibility only, on two
+ *    pure timers. The manual rebuild/reload controls were retired (user ruling):
+ *    upstream has no such control and every recovery is automatic (the host's
+ *    opening machine; the page's bounded delivery ladder; the error arm's heal
+ *    below);
  *  - a ladder that is OUT of levers (no concrete resync face, or the budget
  *    spent) ⇒ the same notice, so the state is named even though this header
  *    has no action to offer.
@@ -95,7 +95,6 @@
  */
 
 import { LADDER_TABLES, planLadder, streamHealthLadder } from '@dsh-chamber/dsh-stream-state'
-import type { SessionOpeningFailure } from './session-stream-health-probe.ts'
 
 /** Official session lifecycle state (`SessionSnapshot.openState`). */
 export type SessionOpenState = 'cold' | 'loading' | 'open' | 'error'
@@ -128,13 +127,6 @@ export interface SessionStreamObservation {
    * yields false, so the automatic engine is blocked for a lever that cannot be seen.
    */
   readonly resyncAvailable?: boolean | undefined
-  /**
-   * Terminal opening evidence for the PRESENTED session, read from the page
-   * stream-forensics ledger. PRESENCE is the whole fact: the fork already judged
-   * this opening dead, so the loading arm shows the failure notice NOW and never
-   * re-issues the open — the automatic arm is not for this state.
-   */
-  readonly openingFailure?: SessionOpeningFailure | undefined
 }
 
 /** Rolling state the seat keeps in a ref and hands back on the next tick. */
@@ -363,15 +355,12 @@ export function planSessionStreamHealth(
   if (observation.openState === 'loading') {
     const continued = state.phase === 'loading-hold'
     const since = continued ? state.since : now
-    // Evidence first: a terminal opening outcome is a failure the moment it is
-    // observed, never after a page timer. It does not restart the hold, so the
-    // timer thresholds keep ageing underneath if the evidence is retired.
-    const failed = observation.openingFailure !== undefined
-    const stalled = failed || now - since >= config.loadingStallMs
-    // The re-open's loading dwell must not clear a failure already shown (same rule as `markSessionStreamHeal`); the latch rides along.
+    // Pure timers: the page's own bounded delivery ladder owns every loading
+    // rebuild (the host has no first-frame deadline), so this plan only reports
+    // the dwell. A re-open's loading stretch must not clear a failure already shown
+    // (same rule as `markSessionStreamHeal`); the latch rides along.
+    const stalled = now - since >= config.loadingStallMs
     const latched = state.healFailedLatched === true
-    // The host's opening machine and the page's own bounded ladder own every
-    // loading rebuild; this plan only reports the dwell (and the terminal fact).
     return {
       state: {
         phase: 'loading-hold',
@@ -382,14 +371,11 @@ export function planSessionStreamHealth(
         ...(state.recoveredSinceHeal === undefined ? {} : { recoveredSinceHeal: state.recoveredSinceHeal }),
       },
       action: 'none',
-      // A proven-dead opening reads as a FAILURE immediately; otherwise a dwell
-      // that outlived every recovery attempt does. A latched 'heal-failed' still
-      // wins before the threshold.
-      notice: failed
-        ? 'loading-failed'
-        : stalled
-          ? (now - since >= config.loadingFailedMs ? 'loading-failed' : 'loading-stall')
-          : (latched ? 'heal-failed' : null),
+      // A dwell that outlived every recovery attempt reads as a failure; a
+      // latched 'heal-failed' still wins before the threshold.
+      notice: stalled
+        ? (now - since >= config.loadingFailedMs ? 'loading-failed' : 'loading-stall')
+        : (latched ? 'heal-failed' : null),
     }
   }
 
@@ -415,7 +401,7 @@ export function planSessionStreamHealth(
 }
 
 /**
- * Account one EXECUTED lever — the automatic stage-move heal: stamp it and
+ * Account one EXECUTED lever — the automatic heal: stamp it and
  * move the settle clock, so the same session cannot spend
  * the ledger again inside {@link SessionStreamHealthConfig.healCooldownMs}.
  */

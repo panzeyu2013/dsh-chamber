@@ -73,6 +73,27 @@ export function stuckEvidenceForStreak(input: {
 }
 
 /**
+ * The upper-tier evidence gate for instance-reboot/document-reload. A resync the
+ * page dispatched for its OWN open-stall is not enough: an OPEN stall proves the
+ * document's frame counter is still advancing, while DELIVERY_EFFICACY budgets
+ * those tiers against an independently observed stall (schedule frame counter,
+ * input-block RTT). Without one, an open-stall escalates no further than resync:
+ * a parked session's open is re-issued, never a whole instance reboot or reload.
+ */
+export function upperTierStallEvidence(input: {
+  readonly scheduleStallStart?: number | undefined
+  readonly inputBlockStart?: number | undefined
+  readonly streakStart: number | undefined
+  readonly resyncDispatchedFor: number | undefined
+}): boolean {
+  if (input.scheduleStallStart === undefined && input.inputBlockStart === undefined) return false
+  return stuckEvidenceForStreak({
+    streakStart: input.streakStart,
+    resyncDispatchedFor: input.resyncDispatchedFor,
+  })
+}
+
+/**
  * The open-stall shape the shared classifier uses (loading with no open in flight,
  * or an error the header cannot heal, with resync available). An in-flight RECOVERY
  * is still a stall, so it does not clear the shape. Kept here so the streak and the

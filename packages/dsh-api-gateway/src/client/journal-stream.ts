@@ -96,7 +96,7 @@ export interface RemoteJournalStreamOptions<Page, Entry, Cursor, Notification = 
   readonly stall?: Partial<StreamStallTiming>
   /**
    * chamber patch (design 14 §D4): total deadline for ONE `open()` across every
-   * physical generation it retries. The carrier's per-episode opening budget bounds
+   * physical generation it retries. The carrier's per-episode opening deadline bounds
    * a single attempt only; a host that never answers would otherwise leave the
    * logical open pending forever and the vendor Session latched at `loading`.
    * Expiry rejects with a RemoteError, so the domain face reaches its own `error`
@@ -204,7 +204,7 @@ export abstract class RemoteJournalStream<
     const iterator = this.stream[Symbol.asyncIterator]()
     const firstFrame = this.takeNext(iterator)
     try {
-      // chamber patch (design 14 §D4): the carrier's opening budget bounds ONE
+      // chamber patch (design 14 §D4): the carrier's opening deadline bounds ONE
       // physical attempt, while the logical open retries generations. Without this
       // total bound a host that never answers leaves this promise pending and the
       // vendor Session latched at 'loading' with no retry lever. Expiry rejects with

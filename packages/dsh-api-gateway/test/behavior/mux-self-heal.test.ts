@@ -19,9 +19,9 @@ import {
   REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS,
   REMOTE_STREAM_RETRY_BASE_MS,
 } from '../../src/client/remote-retry-policy.ts'
-// P3: the opening budget and the teardown floor are table values now (the fork
+// P3: the opening deadline and the teardown floor are table values now (the fork
 // copies were retired with their G-G lockstep entries).
-import { SILENT_TEARDOWN_MIN_MS, openingBudgetMs } from '@dsh-chamber/dsh-stream-state'
+import { OPENING_TIMEOUT_MS, SILENT_TEARDOWN_MIN_MS } from '@dsh-chamber/dsh-stream-state'
 
 class FakeSocket {
   static readonly CONNECTING = 0
@@ -301,9 +301,9 @@ test('a silent socket is REPLACED when an opening item times out on it', async (
   assert.equal(FakeSocket.instances[0].readyState, FakeSocket.CLOSED)
   // P5/P3: the executor records the reducer's decision when it executes it, and the
   // caller labels the evidence afterwards — so `carrier-rebuild` precedes the label.
-  // F1: a non-terminal rung is a MISS diagnostic; the verdict names (opening-timeout /
-  // opening-orphaned + opening-budget-exhausted) are published only at the ladder's end.
-  assert.deepEqual(facts.map(fact => fact.kind), ['opening-miss', 'carrier-rebuild', 'socket-silent'])
+  // R2: every expiry publishes the ONE non-terminal `opening-timeout` diagnostic; the
+  // retired F1 verdict names have no successor.
+  assert.deepEqual(facts.map(fact => fact.kind), ['opening-timeout', 'carrier-rebuild', 'socket-silent'])
   await client.close()
   t.mock.timers.reset()
 })
@@ -326,7 +326,7 @@ test('a logical stream torn down on a socket that never delivered a frame replac
   await flushMicrotasks()
   assert.equal(FakeSocket.instances.length, 1, 'nothing is replaced while the stream is live')
   // The journal watchdog aborts its sibling follow at 20 s — BEFORE the 30 s opening
-  // budget can fire — so that abort is the only teardown signal this attempt gets.
+  // deadline can fire — so that abort is the only teardown signal this attempt gets.
   // A socket that delivered nothing for the whole life of the stream is dead even
   // though no opening deadline ever expired; the teardown must escalate it exactly
   // like the deadline path does, or an already-open session keeps a dead carrier
@@ -369,7 +369,7 @@ test('a socket that delivered a frame keeps the request retry instead of being r
   assert.equal(
     FakeSocket.instances.length,
     1,
-    'a live socket is retried (and keeps its widening) — a slow Host is never interrupted',
+    'a live socket is retried (and keeps its streak) — a slow Host is never interrupted',
   )
   await client.close()
   t.mock.timers.reset()
@@ -403,12 +403,12 @@ test('an opening that is never answered rebuilds the physical carrier and recove
   assert.equal(FakeSocket.instances.length, 1, 'a live socket is not replaced by the FIRST unanswered opening')
   const second = client.open('session/follow', payload, signal).next()
   await flushMicrotasks()
-  // Deadline #2 (60 s, the widened budget) with the socket still delivering: the
-  // retry lane can only re-issue the same request on the same physical generation,
-  // so without the escalation this loop repeats forever with no error edge.
-  t.mock.timers.tick(30_000)
+  // Deadline #2 (30 s again - the budget is a single tier) with the socket still
+  // delivering: the retry lane can only re-issue the same request on the same physical
+  // generation, so the streak threshold is what ends this loop with an error edge.
+  t.mock.timers.tick(15_000)
   socket.deliverNow()
-  t.mock.timers.tick(30_000)
+  t.mock.timers.tick(15_000)
   await assert.rejects(second, isCarrierError)
   assert.equal(FakeSocket.instances.length, 2, 'the second consecutive timeout must rebuild the physical carrier')
   assert.equal(
@@ -449,8 +449,8 @@ test('a slow-but-answering Host keeps its carrier', async (t) => {
   await assert.rejects(first, isCarrierError)
   const pending = client.open('session/follow', payload, signal).next()
   await flushMicrotasks()
-  // The Host answers the reopened request inside its widened budget: the streak is
-  // cleared and the physical carrier is never rebuilt.
+  // The Host answers the reopened request inside its second deadline: delivery clears
+  // the streak and the physical carrier is never rebuilt.
   socket.messageNow(JSON.stringify({
     type: 'item',
     streamId: socket.lastOpenStreamId(),
@@ -513,8 +513,8 @@ function asError(outcome: unknown): Error {
   return outcome
 }
 
-/** The carrier-error message must name the budget the stream was actually given. */
-function budgetError(ms: number): (error: unknown) => boolean {
+/** The carrier-error message must name the single-tier deadline the stream was given. */
+function deadlineError(ms: number): (error: unknown) => boolean {
   return (error: unknown): boolean => error instanceof Error
     && error.name === 'RemoteStreamCarrierError'
     && error.message.includes('within ' + String(ms) + 'ms')
@@ -523,7 +523,7 @@ function budgetError(ms: number): (error: unknown) => boolean {
 // ---------------------------------------------------------------------------
 // The teardown escalation's TWO bounds (design 14 §D4). The positive case
 // — the journal watchdog's sibling probe aborting at 20 s, before the 30 s opening
-// budget — is the test above; these pin the guards that keep the same evidence from
+// deadline — is the test above; these pin the guards that keep the same evidence from
 // churning a healthy carrier: a minimum life, and zero frames on the socket.
 // ---------------------------------------------------------------------------
 
@@ -578,11 +578,11 @@ test('a teardown on a socket that delivered a frame in the meantime leaves it al
   t.mock.timers.reset()
 })
 
-test('a TICKET-LESS stream answered by its opening item clears the opening budget key', async (t) => {
-  // This is the delivery-as-acceptance equivalence for a direct mux consumer (no ticket
-  // crosses in): the delivered opening IS the acceptance, so the key is released. A
-  // ticket-managed stream (RemoteStream + prepareInvocation) keeps its budget until the
-  // consumer calls accept() — pinned by opening-phase-machine's F1/a and F1/f.
+test('a stream answered by its opening item clears the request miss streak', async (t) => {
+  // Delivery IS the opening's success (R2): the delivered opening clears the request
+  // key's consecutive-miss count, so the NEXT timeout of the same request is a FIRST
+  // miss again - below the escalation threshold - instead of inheriting a count the
+  // answered sibling no longer deserves.
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
   const client = new RemoteStreamMuxClient()
@@ -592,8 +592,8 @@ test('a TICKET-LESS stream answered by its opening item clears the opening budge
   socket.openNow()
   await flushMicrotasks()
 
-  // 1) The first episode earns one widening step (30 s → 60 s) while the socket
-  //    stays alive: a frame lands inside the window, so no replacement fires.
+  // 1) The first episode misses once while the socket stays alive: a frame lands inside
+  //    the window, so the request is reopened and no replacement fires.
   const first = client.open('session/follow', { args: { same: true } }, new AbortController().signal)
   const firstSeen = observe(first.next())
   await flushMicrotasks()
@@ -601,11 +601,15 @@ test('a TICKET-LESS stream answered by its opening item clears the opening budge
   socket.deliverNow()
   t.mock.timers.tick(20_000)
   await flushMicrotasks()
-  assert.ok(budgetError(openingBudgetMs(0))(firstSeen.read()), 'the first episode must time out on the base budget')
+  assert.ok(
+    deadlineError(OPENING_TIMEOUT_MS)(firstSeen.read()),
+    'the first episode must time out on the single-tier deadline',
+  )
+  assert.equal(FakeSocket.instances.length, 1, 'one miss on a live socket is not a replacement')
 
   // 2) The SAME request re-issued and answered. The answered stream stays LIVE: a
-  //    teardown would clear the key too, so only a live sibling can prove that the
-  //    DELIVERED FRAME is what reset it.
+  //    teardown would release the key too, so only a live sibling can prove that the
+  //    DELIVERED FRAME is what cleared the count.
   const answered = client.open('session/follow', { args: { same: true } }, new AbortController().signal)
   const answeredSeen = observe(answered.next())
   await flushMicrotasks()
@@ -617,8 +621,9 @@ test('a TICKET-LESS stream answered by its opening item clears the opening budge
     "the opening item is the stream's first yield",
   )
 
-  // 3) A further stream for that request (a rebuild) starts at the tight base budget
-  //    while the answered sibling is STILL live: the widening died with the frame.
+  // 3) A further stream for that request starts a FRESH count while the answered sibling
+  //    is STILL live: its single miss stays below the escalation threshold, so the
+  //    physical carrier is never rebuilt.
   const next = client.open('session/follow', { args: { same: true } }, new AbortController().signal)
   const nextSeen = observe(next.next())
   await flushMicrotasks()
@@ -627,16 +632,17 @@ test('a TICKET-LESS stream answered by its opening item clears the opening budge
   t.mock.timers.tick(20_000)
   await flushMicrotasks()
   assert.ok(
-    budgetError(openingBudgetMs(0))(nextSeen.read()),
-    'a stream opened beside the answered one must start at the base budget',
+    deadlineError(OPENING_TIMEOUT_MS)(nextSeen.read()),
+    'a stream opened beside the answered one times out on the same single-tier deadline',
   )
+  assert.equal(FakeSocket.instances.length, 1, 'the delivered opening cleared the miss streak')
   await answered.return(undefined)
   await next.return(undefined)
   await client.close()
   t.mock.timers.reset()
 })
 
-test('the retry chain for one request keeps the widening its timed-out predecessor earned', async (t) => {
+test('the retry chain inherits the miss streak its timed-out predecessor earned', async (t) => {
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
   const client = new RemoteStreamMuxClient()
@@ -653,21 +659,28 @@ test('the retry chain for one request keeps the widening its timed-out predecess
   socket.deliverNow()
   t.mock.timers.tick(20_000)
   await flushMicrotasks()
-  assert.ok(budgetError(openingBudgetMs(0))(firstSeen.read()), 'the predecessor times out on the base rung')
+  assert.ok(
+    deadlineError(OPENING_TIMEOUT_MS)(firstSeen.read()),
+    'the predecessor times out on the single-tier deadline',
+  )
+  assert.equal(FakeSocket.instances.length, 1, 'the first miss is below the escalation threshold')
   // The predecessor has left `streams` by now (its finally ran), so its ledger entry
   // hands the streak to the retry-lane successor (B2): the SAME request re-issued
-  // immediately must get the widened 60 s budget instead of restarting at 30 s.
+  // immediately inherits count 1, and its own miss is the SECOND consecutive one - the
+  // reducer escalates and the physical carrier is replaced. The deadline itself never
+  // widens, so its failure still names the same single-tier budget.
   const second = client.open('session/follow', payload, new AbortController().signal)
   const secondSeen = observe(second.next())
   await flushMicrotasks()
-  t.mock.timers.tick(15_000)
+  t.mock.timers.tick(10_000)
   socket.deliverNow()
-  t.mock.timers.tick(44_000)
+  t.mock.timers.tick(20_000)
   await flushMicrotasks()
-  assert.equal(secondSeen.read(), PENDING, 'the successor must still be waiting at 59 s')
-  t.mock.timers.tick(1_000)
-  await flushMicrotasks()
-  assert.ok(budgetError(openingBudgetMs(1))(secondSeen.read()), 'the successor times out on the inherited rung')
+  assert.ok(
+    deadlineError(OPENING_TIMEOUT_MS)(secondSeen.read()),
+    'the successor times out on the same single-tier deadline',
+  )
+  assert.equal(FakeSocket.instances.length, 2, 'the second consecutive miss escalates and replaces the carrier')
   await client.close()
   t.mock.timers.reset()
 })
@@ -692,7 +705,7 @@ test('replacing a silent socket fails EVERY logical stream, not only the timed-o
   t.mock.timers.tick(5_000)
   await flushMicrotasks()
   assert.ok(
-    budgetError(openingBudgetMs(0))(firstSeen.read()),
+    deadlineError(OPENING_TIMEOUT_MS)(firstSeen.read()),
     'the timed-out stream reaches its retry lane',
   )
   const secondError = asError(secondSeen.read())

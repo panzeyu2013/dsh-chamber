@@ -2,12 +2,12 @@
 /**
  * Upstream lifecycle-contract gate (P6, design 14 §D4).
  *
- * WHY. The fork's opening deadline and its 30 → 300 s widening ladder exist only
- * because the pinned host `session/follow` has no first-frame bound and the client
- * `doOpen` awaits it without one: a lost opening frame parks `openState='loading'`
- * forever. This gate pins both halves of that contract against the pinned vendor
- * tree, so the day upstream lands a bound the retirement is loud: delete the client
- * ladder (design 14 §D4 ①/③) and update this gate.
+ * WHY. The fork's single-tier 30 s opening deadline exists only because the pinned
+ * host `session/follow` has no first-frame bound and the client `doOpen` awaits it
+ * without one: a lost opening frame parks `openState='loading'` forever. This gate
+ * pins both halves of that contract against the pinned vendor tree, so the day
+ * upstream lands a bound the retirement is loud: re-evaluate retiring the client
+ * deadline (design 14 §D4 ①/③) and update this gate.
  *
  * Source text only (no build, no imports), like verify:anchors, so it runs in any
  * checkout with the vendor tree present.
@@ -88,14 +88,14 @@ export function evaluate(read = (path) => readFileSync(path, 'utf8')) {
     failures.push('the host session/follow no longer yields an opening snapshot first')
   }
   if (host.hasBound) {
-    failures.push('UPSTREAM LANDED A FIRST-FRAME BOUND: retire the client widening ladder (design 14 §D4, STATUS) and update this gate')
+    failures.push('UPSTREAM LANDED A FIRST-FRAME BOUND: re-evaluate retiring the client opening deadline (design 14 §D4, STATUS) and update this gate')
   }
   const client = clientOpenContract(read(FILES.clientSession))
   if (!client.hasDoOpen || !client.awaitsOpen) {
     failures.push('the client doOpen no longer awaits events.open (the client ladder may have moved)')
   }
   if (client.hasBound) {
-    failures.push('the client doOpen gained a bound: the fork ladder is no longer the only owner')
+    failures.push('the client doOpen gained a bound: the fork opening deadline is no longer the only owner')
   }
   const fork = forkRetirementPins(read(FILES.forkOpening), read(FILES.proposals))
   if (!fork.armsDeadline) failures.push('the fork no longer arms its opening deadline (openingSent/armOpeningDeadline)')
@@ -120,7 +120,7 @@ function main() {
   }
   const { failures } = evaluate()
   if (failures.length === 0) {
-    console.log('upstream lifecycle contract: host follow yields an opening snapshot with no first-frame bound; the fork ladder is the only owner')
+    console.log('upstream lifecycle contract: host follow yields an opening snapshot with no first-frame bound; the fork opening deadline is the only owner')
     process.exit(0)
   }
   for (const failure of failures) console.error('upstream lifecycle contract: ' + failure)

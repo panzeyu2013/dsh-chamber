@@ -18,13 +18,13 @@ import {
   streamOpeningKey,
 } from '../../src/client/remote-retry-policy.ts'
 import { DEFAULT_STREAM_STALL_TIMING } from '../../src/client/stream-stall-policy.ts'
-import { OPENING_TIMEOUT_LADDER_MS, SILENT_TEARDOWN_MIN_MS, openingBudgetMs } from '@dsh-chamber/dsh-stream-state'
+import { OPENING_TIMEOUT_MS, SILENT_TEARDOWN_MIN_MS } from '@dsh-chamber/dsh-stream-state'
 import { setTimeout as delay } from 'node:timers/promises'
 
 /**
  * Single-source tie: this module must stay IMPORT-FREE at runtime, so it cannot
- * read the shared table itself - the opening budget and the teardown floor are
- * owned by the package table (the reducer arms the budget, the host consumes the
+ * read the shared table itself - the opening deadline and the teardown floor are
+ * owned by the package table (the reducer arms the deadline, the host consumes the
  * floor), and this source-text tie keeps a second derivation from creeping back in.
  */
 test('the opening ladder is the shared table, and this module no longer re-derives it (B4/P3 tie)', () => {
@@ -110,39 +110,15 @@ test('degenerate attempt counts fail safe to the immediate branch', () => {
   }
 })
 
-test('the opening-item budget starts tight and widens only while timeouts stay consecutive', () => {
-  // P3: the budget function is the package table's now; this keeps the widening
-  // contract visible from the host side (the fork re-derivation is retired).
-  const ladder = [...OPENING_TIMEOUT_LADDER_MS]
-  assert.equal(ladder[0], 30_000)
-  assert.deepEqual(ladder.map((_, streak) => openingBudgetMs(streak)), ladder)
-  assert.equal(openingBudgetMs(ladder.length + 5), ladder[ladder.length - 1])
-})
-
-test('the opening budget is monotone and never leaves its bounds', () => {
-  const base = OPENING_TIMEOUT_LADDER_MS[0] as number
-  const cap = OPENING_TIMEOUT_LADDER_MS[OPENING_TIMEOUT_LADDER_MS.length - 1] as number
-  let previous = 0
-  for (let streak = 0; streak <= 40; streak++) {
-    const budget = openingBudgetMs(streak)
-    assert.ok(budget >= base, 'streak ' + String(streak) + ' stays above the base')
-    assert.ok(budget <= cap, 'streak ' + String(streak) + ' stays capped')
-    assert.ok(budget >= previous, 'streak ' + String(streak) + ' must not shrink the budget')
-    assert.ok(Number.isInteger(budget), 'streak ' + String(streak) + ' must be whole milliseconds')
-    previous = budget
-  }
-})
-
-test('the opening budget clears the measured healthy Host answer by orders of magnitude', () => {
-  // Measured
-  // session snapshot 57 ms, subagent snapshot 73 ms. The base must be far above
-  // those while remaining a bound a user would still call "stuck for a moment".
-  const ladder = [...OPENING_TIMEOUT_LADDER_MS]
-  const base = ladder[0] as number
-  const cap = ladder[ladder.length - 1] as number
-  assert.ok(base >= 10_000)
-  assert.ok(cap >= 240_000, 'the ceiling is the widest single Host load the retry ladder can ever complete')
-  assert.ok(cap <= 600_000)
+test('the opening deadline is the single table tier, and this module no longer re-derives it (B4/P3 tie)', () => {
+  // P3/R2: the budget function is retired - the reducer arms the package table's ONE
+  // tier and the host executes it, so the streak can never widen the wait.
+  assert.equal(OPENING_TIMEOUT_MS, 30_000)
+  // Measured healthy Host answers: session snapshot 57 ms, subagent snapshot 73 ms. The
+  // single tier must clear those while remaining a bound a user would still call
+  // "stuck for a moment".
+  assert.ok(OPENING_TIMEOUT_MS >= 10_000)
+  assert.ok(OPENING_TIMEOUT_MS <= 600_000)
 })
 
 test('the opening episode key is stable per stream and separates endpoints and payloads', () => {
@@ -181,14 +157,14 @@ test('the silent-carrier verdict belongs to the reducer, not this module (P3)', 
 
 test('the teardown evidence window stays inside every window it must serve', () => {
   // The teardown escalation exists for the journal watchdog's sibling probe, which
-  // aborts at probeTimeoutMs — before the mux opening budget can fire — so the
+  // aborts at probeTimeoutMs — before the mux opening deadline can fire — so the
   // minimum life must sit BELOW that probe window (or the probe teardown it exists
-  // for would always be judged too young) and below the opening budget (anything
+  // for would always be judged too young) and below the opening deadline (anything
   // that waits longer is the deadline path's verdict).
   assert.equal(SILENT_TEARDOWN_MIN_MS, 15_000)
   assert.ok(SILENT_TEARDOWN_MIN_MS < DEFAULT_STREAM_STALL_TIMING.probeTimeoutMs,
     'the watchdog probe window must be able to reach the bound')
-  assert.ok(SILENT_TEARDOWN_MIN_MS < (OPENING_TIMEOUT_LADDER_MS[0] as number),
+  assert.ok(SILENT_TEARDOWN_MIN_MS < OPENING_TIMEOUT_MS,
     'a stream that outlives this bound is judged by the opening deadline instead')
 })
 

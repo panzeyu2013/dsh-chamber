@@ -5,8 +5,9 @@
  *
  * This file ports the THREE independent replacement entries and their
  * predicates verbatim. It deliberately does NOT import the fork: the oracle
- * must be able to run in a tree without node_modules, and the values it models
- * are pinned against the fork by test/refactor/reference-parity.test.ts.
+ * must be able to run in a tree without node_modules. These are FROZEN pre-R2
+ * references — their behaviour checks live in differential-harness.test.ts, and
+ * the widening formula they once mirrored was retired (single-tier 30 s).
  *
  * The old design's defining property is that deciding to replace is spread over
  * three call sites with three different bounds:
@@ -20,17 +21,6 @@
  */
 import type { CarrierEvent, RecoveryEffect } from '../../src/state.ts'
 
-/** Port of REMOTE_STREAM_OPENING_TIMEOUT_MS=30_000 with `min(streak,4)` steps.
- * Kept byte-identical in behavior to remote-retry-policy.ts:267-271; the parity
- * test fails if the formula or the constants drift. */
-export function legacyOpeningTimeoutMs(streak: number): number {
-  const BASE = 30_000
-  const MAX = 300_000
-  if (!Number.isFinite(streak) || streak <= 0) return BASE
-  const step = Math.min(Math.floor(streak), 4)
-  return Math.min(BASE * 2 ** step, MAX)
-}
-
 /** Port of shouldReplaceSilentSocket (remote-retry-policy.ts:309-313). */
 export function legacyShouldReplaceSilentSocket(framesReceivedSinceSend: number): boolean {
   if (!Number.isFinite(framesReceivedSinceSend)) return false
@@ -39,7 +29,7 @@ export function legacyShouldReplaceSilentSocket(framesReceivedSinceSend: number)
 
 /** Port of shouldEscalateOpeningStall (remote-retry-policy.ts:210-218). The
  * cooldown marker is MUX-GLOBAL in the fork while the streak is per request -
- * a cross-request interference the new reducer removes (see DIVERGENCE.md 2). */
+ * a cross-request interference the new reducer removes (recorded in DIVERGENCE.md). */
 export const LEGACY_ESCALATION_STREAK = 2
 export const LEGACY_ESCALATION_COOLDOWN_MS = 60_000
 export const LEGACY_SILENT_TEARDOWN_MIN_MS = 15_000
@@ -108,7 +98,7 @@ export function legacyTrace(events: readonly LegacyTraceEvent[]): LegacyReplaceA
       // The legacy else-branch is reached ONLY when frames arrived (the silent
       // branch above owns the zero-frame case) and still requires N=2. Dropping
       // this threshold would make the reference escalate on a single miss - the
-      // defect the new reducer refuses to reproduce (DIVERGENCE D-5).
+      // defect the new reducer refuses to reproduce (recorded in DIVERGENCE.md).
       if (legacyShouldEscalateOpeningStall(streak, lastEscalationAt, event.at)) {
         trace.push({ reason: 'stall', at: event.at, request })
         lastEscalationAt = event.at

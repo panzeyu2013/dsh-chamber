@@ -116,27 +116,28 @@ test('the opening ledger is bounded by its key cap across repeated expiry rounds
     'every retained streak is a live count, not a placeholder',
   )
 })
-test('an ACTIVE widening survives ledger pressure and still reaches the terminal rung', () => {
-  // Reproduces review finding F1-LEDGER: the widened opening ledger evicts oldest-first,
-  // and re-writing an existing key kept its original position. A key that kept expiring
-  // while fresh keys arrived therefore aged out, its streak read back as 0, and the
-  // terminal verdict (opening budget exhausted) could never be produced - the exact
-  // hang F1 exists to end. Every round admits half a cap of fresh keys while the active
-  // key keeps expiring: far beyond any real client (one key per opening attempt), yet
-  // comfortably inside the refresh margin that keeps a live key recent.
+test('an ACTIVE streak survives ledger pressure instead of aging out', () => {
+  // Reproduces review finding F1-LEDGER: the opening ledger evicts oldest-first, and
+  // re-writing an existing key must move it to the back. A key that kept expiring while
+  // fresh keys arrived would otherwise age out, its streak read back as 0, and the
+  // stall-escalation threshold could never be reached. Every round admits half a cap of
+  // fresh keys while the active key keeps expiring: far beyond any real client (one key
+  // per opening attempt), yet comfortably inside the refresh margin that keeps a live
+  // key recent.
   const ROUNDS = 12
   let state = initialCarrierState()
-  let terminalRound = -1
-  for (let round = 0; round < ROUNDS && terminalRound < 0; round++) {
+  const streaks: number[] = []
+  for (let round = 0; round < ROUNDS; round++) {
     const at = round * 1_000_000
-    state = reduceCarrier(state, { kind: 'openingSent', at, streamId: 's', requestKey: 'active' }, CARRIER_ENV).state
-    const expired = reduceCarrier(
+    const armed = reduceCarrier(state, { kind: 'openingSent', at, streamId: 's', requestKey: 'active' }, CARRIER_ENV)
+    state = armed.state
+    const deadline = armed.effects.find((effect) => effect.e === 'armOpeningDeadline')
+    streaks.push(deadline === undefined ? -1 : deadline.streak)
+    state = reduceCarrier(
       state,
       { kind: 'openingExpired', at: at + 1, streamId: 's', requestKey: 'active', framesSinceSend: 1 },
       CARRIER_ENV,
-    )
-    state = expired.state
-    if (expired.effects.some((effect) => effect.e === 'failLogicalOpening')) terminalRound = round
+    ).state
     for (let filler = 0; filler < Math.floor(CARRIER_ENV.openingEpisodeKeysMax / 2); filler++) {
       state = reduceCarrier(
         state,
@@ -145,10 +146,10 @@ test('an ACTIVE widening survives ledger pressure and still reaches the terminal
       ).state
     }
   }
-  assert.equal(
-    terminalRound,
-    CARRIER_ENV.openingBudgetMaxMisses - 1,
-    'the active widening must reach the terminal rung instead of restarting under ledger pressure',
+  assert.deepEqual(
+    streaks,
+    Array.from({ length: ROUNDS }, (_, round) => round),
+    'the active key keeps counting instead of restarting under ledger pressure',
   )
   assert.ok(
     Object.keys(state.openingStreaks).length <= CARRIER_ENV.openingEpisodeKeysMax,

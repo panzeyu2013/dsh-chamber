@@ -17,7 +17,7 @@ import { Button } from '@deepseek-ai/dsh-client-ui-primitives/src/Button.tsx'
 import { dismissVisibleRowCard } from '@dsh-chamber/dsh-chamber-client-core'
 import {
   bootInstanceShell, INSTANCE_TAIL_WAIT_CAP_MS, shellStateIdle,
-  readInstanceSessionStreamHealth, readInstanceOpeningFailure, rebuildInstanceSessionStream,
+  readInstanceSessionStreamHealth, rebuildInstanceSessionStream,
   type ChamberTransport, type ShellState,
   isSettledShellState,
 } from '../shell.ts'
@@ -39,7 +39,7 @@ import {
   type SessionOpenHealth, type SessionOpenRecoveryPhase,
 } from '../session-open-recovery.ts'
 import { createSessionDeliveryOwner } from '../session-delivery-state.ts'
-import { activeSymptomSinceMs, advanceContentStallStreak, openStallSymptomActive, stuckEvidenceForStreak, type ContentStallStreak } from '../session-content-stall.ts'
+import { activeSymptomSinceMs, advanceContentStallStreak, openStallSymptomActive, upperTierStallEvidence, type ContentStallStreak } from '../session-content-stall.ts'
 import { documentReloadBudgetStorage, shouldReloadDocument } from '../document-reload-budget.ts'
 import { readRendererStallStrikes } from '../renderer-stall-evidence.ts'
 
@@ -205,16 +205,11 @@ export default function InstanceView({
       const at = monotonicNow()
       const health = advanceSessionOpenHealth(sessionOpenHealthRef.current, currentSessionId, observed, at)
       sessionOpenHealthRef.current = health
-      // Terminal opening evidence is a page fact independent of the concrete
-      // session face: read for the presented target only, and only while it is
-      // loading — the one state the fact speaks about.
-      const nextOpeningFailure = observed?.openState === 'loading'
-        && readInstanceOpeningFailure(instanceId, currentSessionId)
       // The phase is derived HERE, from the same inputs the render used to
       // recompute it from: storing it (and not the fresh per-second object) keeps
       // every sample inside a threshold window render-free.
       const nextPhase = presentedSessionOpenRecoveryPhase(
-        health, currentSessionId, currentSessionKnownBlank === true, nextOpeningFailure,
+        health, currentSessionId, currentSessionKnownBlank === true,
       )
       setSessionOpenPhase(previous => (previous === nextPhase ? previous : nextPhase))
       if (document.visibilityState === 'hidden') {
@@ -263,13 +258,15 @@ export default function InstanceView({
         // delivery owner may dispatch.
         healRoute: observed.healRoute,
       }
-      // The page's automatic ladder no longer treats a `loading` face as a
-      // symptom: an opening still in flight is the host's to finish and a parked
-      // one is the user's decision (the evidence-backed notice below), never a
-      // timer's. The face's in-flight bits still block every automatic tier
-      // through the `escalationBlocked` input below.
-      const openSymptomEvidence = observed?.openState === 'loading' ? undefined : openEvidence
-      const openStallActive = openStallSymptomActive(openSymptomEvidence)
+      // A parked `loading` face IS an automatic-recovery symptom now: the shared
+      // classifier proves it with `openInFlight === false`, so the face reaches
+      // the ladder unchanged and a resync may re-issue a parked open. An open in
+      // flight, or an unreadable liveness bit, never dispatches — the in-flight
+      // bits still block every automatic tier through `escalationBlocked` below.
+      // An IMPORTANT carve-out follows: an open-stall never satisfies the upper
+      // tiers' stuck-evidence gate on its own, so it escalates no further than
+      // `resync` no matter how long it holds (see `upperTierStallEvidence`).
+      const openStallActive = openStallSymptomActive(openEvidence)
       const symptomSinceMs = activeSymptomSinceMs({
         openSince: health.since,
         openStallActive,
@@ -277,18 +274,19 @@ export default function InstanceView({
         inputBlockStart,
       })
       // The page tried a resync for this exact streak and the symptom survived it:
-      // that is the caller-owned conclusion the upper tiers require. The tiers'
-      // own afterMs gates (reboot 90s / reload 120s) still decide when they are due.
-      // DELIVERY_EFFICACY: instance-reboot requires "the instance is stalled while
-      // the frame counter still advances" and document-reload requires a stalled
-      // frame counter - a content-channel stall is not that evidence. Content-only
-      // stalls therefore stay at resync + the visible host-stall notice, while an
-      // unresolvable OPEN stall (loading, nothing in flight) may escalate.
-      const stuckEvidence = (openStallActive || scheduleStallStart !== undefined || inputBlockStart !== undefined)
-        && stuckEvidenceForStreak({
-          streakStart: symptomSinceMs,
-          resyncDispatchedFor: resyncDispatchedForRef.current,
-        })
+      // that is the caller-owned conclusion the upper tiers require, ON TOP of an
+      // independently observed stall (schedule frame counter or input-block RTT).
+      // An open-stall never supplies that independent half: DELIVERY_EFFICACY
+      // budgets instance-reboot/document-reload against a stalled frame counter,
+      // and a parked OPEN proves the counter is still advancing. Without one the
+      // ladder exhausts at resync + the visible host-stall notice, never a reboot
+      // or a reload of the whole document.
+      const stuckEvidence = upperTierStallEvidence({
+        scheduleStallStart,
+        inputBlockStart,
+        streakStart: symptomSinceMs,
+        resyncDispatchedFor: resyncDispatchedForRef.current,
+      })
       const decision = deliveryOwnerRef.current.observe({
         sessionId: currentSessionId,
         chamberRun: { sourceFingerprint, generation: retryToken ?? 0, sessionId: currentSessionId, episode: tracked.episode },
@@ -297,10 +295,11 @@ export default function InstanceView({
           ...(scheduleStallStart === undefined ? {} : { scheduleStalled: true }),
           ...(inputBlockStart === undefined ? {} : { inputBlocked: true }),
           ...(stuckEvidence ? { stuckEvidence: true } : {}),
-          ...(openSymptomEvidence === undefined ? {} : { open: openSymptomEvidence }),
+          ...(openEvidence === undefined ? {} : { open: openEvidence }),
         },
-        // An in-flight open OR a disposing rebuild blocks every automatic tier,
-        // exactly as the ladder derived before the loading face was dropped.
+        // An in-flight open OR a disposing rebuild blocks every automatic tier:
+        // the parked-loading proof is `openInFlight === false`, so nothing
+        // automatic may cross a pending open or a second rebuild over one.
         escalationBlocked: observed?.resyncInFlight === true || observed?.openInFlight === true,
       }, at, { commit: false })
       setHostStallSessions(previous => {

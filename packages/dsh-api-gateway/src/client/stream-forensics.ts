@@ -33,15 +33,9 @@ export type StreamForensicsKind =
   | 'socket-attempt-failed'
   | 'socket-disposed'
   | 'socket-silent'
+  /** The single-tier opening deadline expired: ALWAYS non-terminal — the episode is
+   *  failed and the retry lane re-issues (no verdict names exist any more). */
   | 'opening-timeout'
-  /** F1: one widening rung expired while the retry lane continues - a diagnostic, never a verdict. */
-  | 'opening-miss'
-  /** F1: the consumer accepted the opening item (the only transition that settles an opening). */
-  | 'opening-accepted'
-  /** F1 terminal: frames arrived but the consumer never accepted across the WHOLE ladder. */
-  | 'opening-orphaned'
-  /** F1 terminal: every rung of the opening ladder was spent without acceptance. */
-  | 'opening-budget-exhausted'
   | 'opening-stall-escalation'
   | 'generation-ready'
   | 'generation-lost'
@@ -51,7 +45,7 @@ export type StreamForensicsKind =
   | 'carrier-throttled'
 
 /**
- * Structured attribution carried by the opening facts (F1). Every field is optional
+ * Structured attribution carried by the opening facts. Every field is optional
  * and only present when the opener actually derived it; a fact's `cause` keeps the
  * same values in bounded prose for readers that only persist strings.
  */
@@ -77,7 +71,7 @@ export interface StreamForensicsFact {
   /** 1-based counts this page has observed: all kinds / this kind. */
   readonly count: number
   readonly kindCount: number
-  /** F1 attribution, present only when the opening fact carried it. */
+  /** Opening-fact attribution, present only when the opening fact carried it. */
   readonly endpoint?: string | undefined
   readonly streamId?: string | undefined
   readonly waitedMs?: number | undefined

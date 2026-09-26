@@ -134,11 +134,12 @@ test('the fork reports the transitions the investigation needed', () => {
   assert.match(client, /this\.forensics\?\.\('socket-reconnect'/u)
   assert.match(client, /this\.forensics\?\.\('socket-disposed'/u)
   assert.match(client, /this\.forensics\?\.\('socket-lost', error\.message\)/u)
-  // F1: the opening verdicts are published through the one bounded opening reporter,
-  // which attaches the endpoint, the attempt id, the wait and the best-effort session.
-  assert.match(client, /reportOpening\(\s*orphaned \? 'opening-orphaned' : 'opening-timeout'/u)
-  assert.match(client, /reportOpening\(\s*'opening-budget-exhausted'/u)
-  assert.match(client, /reportOpening\('opening-accepted'/u)
+  // R2: the ONE opening diagnostic is the non-terminal `opening-timeout`, published
+  // through the bounded opening reporter (endpoint, attempt id, wait); the retired
+  // verdict/acceptance names must not reappear in the source.
+  assert.match(client, /reportOpening\(\s*'opening-timeout'/u)
+  const retiredOpeningNames = ['orphaned', 'budget-exhausted', 'accepted', 'miss'].map(name => 'opening-' + name)
+  assert.doesNotMatch(client, new RegExp(retiredOpeningNames.join('|'), 'u'))
   assert.match(client, /const detail: StreamForensicsDetail = \{\s*\n\s*endpoint,\s*\n\s*streamId,\s*\n\s*waitedMs,/u)
   assert.match(client, /constructor\(basePath = '', private readonly forensics\?: StreamForensicsReporter\)/u)
   assert.match(service, /forensics\(\s*\n\s*active === undefined \? 'generation-lost' : 'generation-ready'/u)

@@ -12,7 +12,7 @@
 
 - 实机门禁（缺真实实例 / 打包态环境）：
   - 调试模式 T-10 打包态（Web Inspector 附着**只能人工判**）。
-  - 多来源 sleep/wake 与隐藏恢复、版本歪斜容忍、gateway 形态回归。
+  - 多来源 sleep/wake 与隐藏恢复、版本歪斜容忍、gateway 形态回归（含 WebKit 原生源码归一注入的真机复验）。
   - 隐藏/遮挡态节流（design 14 §D1；S-10）：最小化/完全覆盖两工况的 rAF/定时器/`visibilityState`/App Nap、隐藏 ≥60s SSE/推送不断、唤醒即时重连、30s 兜底轮询跳过 + 补偿。
   - vendor 性能补丁可见态 A/B（真实 app 同环境）。
   - 右侧栏栈真实 profile 装载时序、session v3 迁移真实存储。
@@ -54,8 +54,9 @@
 - 移动端 Web（design 17 §18）：未实施 = 移动中量化/滚动记忆/宽屏触控/长按气泡；composer 守卫 WebKit 未验（真机读 `[data-mobile-kbd-state]`）；复审①–⑪（右栏全屏让位、44px 底线、官方浮面未适配、`touch-action:none` 冲突、真机抽检、回到底部控件被键盘遮、caret reveal、layer-2 不可达、iPad 指针档假设、档位边界、模态叠加）；§18.6 实机门禁清单；登录页预热三项（真机链路/滥用度量/边界复核）；git 侧栏与 P2/P3 排期；DOM 锚点审计三项（details 打标仅实机可验、composer 锚点 fixture 化、Android 键盘盲区）。
 - 连接稳定性：`/api/remote.mux` 实例侧 2s×2 心跳 ⇒ 4–6s terminate；下一步抓 close code（1006/4000），若为实例心跳则调宽 `websocketHeartbeatIntervalMs`；pong 代答已回退；桌面 idle 看门狗 gateway 目标也吃 ~2min bounce。
 - JSC 崩溃 → 静默整页重载：vendor rAF 循环未收敛、恢复提示与过程缺真机验证、页面事实持久消费面缺。
-- 会话打开停滞：根因证一支；客户端三层防护已落、宿主无首帧期限；①触屏档无载波层；②blank 子形态恢复入口待真机；③移动端 source↔artifact 缺锁；④FNV 预算键碰撞；⑤TypeError 路径；⑥`socket-silent` 消费面缺；⑦`presented` document 级近似；⑧阈值未校准；⑨unary 引导未采纳；⑩无消费的取证小面；⑪实例级回退粗粒度；⑫ticket 丢失不可检出；⑬未完成补读面待接线或退役。宿主两条已登记 `todo/upstream-proposals.md` §4.3/§4.7。
-- 本地 mux 周期性抖动（触发源未钉死）：页面侧 generation 结束 `reconnect()` 关掉全部逻辑流；失效 = 真机回读定位到调用路径且修复后不再周期性出现；静默口径未统一（`$events` 已停换代 vs `session-facts-source` 60s 重订阅）。
+- 会话打开停滞（仅余开放项；根因归 design 14 §D4 的引擎判定第三类 vendor 补丁，不复述）：宿主无首帧期限；①触屏档无载波层；②blank 子形态恢复入口待真机；③移动端 source↔artifact 缺锁；④FNV 预算键碰撞；⑤`socket-silent` 消费面缺；⑥`presented` document 级近似；⑦阈值未校准；⑧unary 引导未采纳；⑨无消费的取证小面；⑩实例级回退粗粒度；⑪未完成补读面待接线或退役。宿主两条已登记 `todo/upstream-proposals.md` §4.3/§4.7。
+- 本地 mux 周期性抖动（触发源未钉死）：页面侧 generation 结束 `reconnect()` 关掉全部逻辑流；失效 = 真机回读定位到调用路径且修复后不再周期性出现；静默口径未统一（`$events` 已停换代 vs `session-facts-source` 60s 重订阅）；页面侧卡死已独立归因（引擎判定补丁，design 14 §D4），本条只留 mux 抖动/静默 socket 本身。
+- **实机验收 + soak 未执行**：Swift 壳流式中点开 ×20、soak 采集 mux churn 与 JSC 崩溃率基线；证据路径 = `~/Library/Logs/DiagnosticReports` WebContent 报告、`control-plane.log` 的 `browser close` 频率、`dsh-chamber:stream-forensics`/`dsh-chamber:stream-carrier-failed` 页面事实；design 14 §D4 末条。
 - 上游装载面三项：`compose()` 首批 ~10.65 MiB（PDF.js 6.57 MiB）、`SubagentHeaderLineage` 缺 `count` class、会话打开流缺首帧超时。
 - 会话可靠性六项：跨 Electron/Swift 注入矩阵、Swift 真机隐藏/遮挡/唤醒、无独立绘制游标、通知显示与落盘无原子事务、缺共同轮次键、Swift 有界写器注入。
 - 双帧 status 全丢的证据边界：需宿主轮次键/可信 host 尾时间；无壳观察者 `session/follow` 已走 remote.mux，须真实宿主核对。
@@ -82,14 +83,12 @@
 - 变更文件覆盖率门未接：需 devDependency 或单进程 runner（待裁）。
 - 根级弹性回弹（S-50）：打包态实机 + macOS 14.4 复验。
 - 远端完成未读 / 切源体验（design 17 §10.7）：实机矩阵（无 CDP Electron 阻断）、W6、W8 三形态（仅 404 已验）、W7 提交需凭据、R12 abort 样本、W5 双客户端 E2E、场景级时序、DOM 断言、性能基线。
-- P2b `$events` 无投递：本地只收 `ready`；出口 = 抓到真实 `api-session/*` 帧或确认宿主不发；gateway 镜像仍用 45s 静默降级（两侧不一致）。
-- 开帧相位机：真机校准 + 信号组合负向单测；`$events` 型流无 accept 通道。
+- P2b `$events` 无投递：本地只收 `ready`；出口 = 抓到真实 `api-session/*` 帧或确认宿主不发；gateway 镜像仍用 45s 静默降级（两侧不一致）；页面侧卡死已独立归因，本条仍开放。
 - 流级预算表外多副本：2s/8 两份未锁；出口 = 并入 tables + parity 或加锁步。
-- F2 座席无行为测试：出口 = 测试缝 + 四条用例。
-- F1 行为矩阵与 cancel 腿缺口五项：no-socket 兜底分支、snapshot/wiring 缺跨世代与终局格、期限到点 cancel 无断言、F1→F2 seam 无端到端、64 条淘汰路径无用例。
-- 载波 reducer socket 生命周期无生产发射者：出口 = 删除或接线，门禁按生产 emit 判定。
+- 取证 request/snapshot 半条通道无生产消费者：页面终局账本退役后 `dsh-chamber:stream-forensics-request` 无 dispatcher、snapshot 无 listener（`stream-forensics.test.ts` 仍覆盖往返）；live `dsh-chamber:stream-forensics` + ring 不变。出口 = 删除或按探针用途接线。
+- 载波 reducer socket 生命周期无生产发射者：F1 的 accept 通道（`OpeningTicket`/`openingAccepted`）已退役，`openingAnswered` 保留为「交付即结算」（生产发射者 = `stream-client.ts` 首帧交付处）；余下事件出口 = 删除或接线，门禁按生产 emit 判定。
 - 结构性重复与死分支五条：`healRoute` 恒等、解析双份漂移、三账本可并、`carry` 五处、baseline 三连块。
-- 页面侧限速三条：250ms 重取样无退避、lane reconnect 注释与行为不符、加宽账本整表重建悬崖。
+- 页面侧限速两条：250ms 重取样无退避、lane reconnect 注释与行为不符。
 
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 

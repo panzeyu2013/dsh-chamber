@@ -306,41 +306,45 @@ test('stream-health chip: no control is rendered and the chip never acts on its 
   assert.doesNotMatch(stripComments(chip), /onClick/)
 })
 
-test('stream-health evidence: the page notice is fact-driven and the automatic arm ignores loading', () => {
+test('stream-health evidence: the page notice is timer-driven and the parked-loading arm is tri-state', () => {
   const owner = stripComments(source('../../../renderer/src/session-delivery-state.ts'))
   const view = stripComments(source('../../../renderer/src/components/InstanceView.tsx'))
-  // The automatic arm drops the loading face BEFORE the shared classifier...
-  assert.match(owner, /const loadingFace = input\.evidence\.open\?\.state === 'loading' \? input\.evidence\.open : undefined/,
-    'a loading face must never reach the delivery classifier')
-  // ...while its in-flight bits still block every tier: "no automatic action
+  // The loading face reaches the shared classifier unchanged: a parked open is
+  // the shared proof (`openInFlight === false`), so nothing may strip the face
+  // before the classifier again.
+  assert.doesNotMatch(owner, /loadingFace/)
+  assert.match(owner, /const open = input\.evidence\.open/)
+  // ...while the in-flight bits still block every tier: "no automatic action
   // crosses a pending open" is unchanged.
-  assert.match(owner, /loadingFace\.openInFlight === true \|\| loadingFace\.resyncInFlight === true/)
-  // The page-level notice consumes the terminal fact (the header may be absent),
-  // and hands it to the phase decision so the evidence IS the failure.
-  assert.match(view, /readInstanceOpeningFailure\(instanceId, currentSessionId\)/)
-  assert.match(view, /const openSymptomEvidence = observed\?\.openState === 'loading' \? undefined : openEvidence/)
-  // The phase is derived in the 1 Hz sampler from the same inputs (the terminal
-  // fact included) and only its RESULT is state: storing the fresh per-second
-  // health object would re-render the whole view on every sample.
-  assert.match(view, /presentedSessionOpenRecoveryPhase\(\s*health, currentSessionId, currentSessionKnownBlank === true, nextOpeningFailure,/)
+  assert.match(owner, /open\?\.openInFlight === true/)
+  assert.match(owner, /open\?\.resyncInFlight === true/)
+  // The page-level notice no longer consumes a terminal fact (retired with the
+  // forensics ledger); the health phase is derived in the 1 Hz sampler and only
+  // its RESULT is state: storing the fresh per-second health object would
+  // re-render the whole view on every sample.
+  assert.match(view, /presentedSessionOpenRecoveryPhase\(\s*health, currentSessionId, currentSessionKnownBlank === true,?\s*\)/)
+  assert.doesNotMatch(view, /OpeningFailure/)
+  // The real open evidence (in-flight bit included) reaches the delivery ladder;
+  // no loading special-case may drop it again.
+  assert.match(view, /openStallSymptomActive\(openEvidence\)/)
+  assert.match(view, /\.\.\.\(openEvidence === undefined \? \{\} : \{ open: openEvidence \}\)/)
+  assert.doesNotMatch(view, /openSymptomEvidence/)
   assert.doesNotMatch(view, /useState<SessionOpenHealth|setSessionOpenHealth/,
     'the per-second health object must stay in the ref, never in state')
   assert.match(view, /setSessionOpenPhase\(previous => \(previous === nextPhase \? previous : nextPhase\)\)/)
   assert.match(view, /escalationBlocked: observed\?\.resyncInFlight === true \|\| observed\?\.openInFlight === true/)
 })
 
-test('stream-health churn: the reconnecting notice and its page listener are retired', () => {
+test('stream-health churn: the reconnecting notice and the forensics ledger are retired', () => {
   // User ruling: the chamber-only reconnecting notice goes, and with it the seat's
-  // page-fact listener. The fork keeps EMITTING the fact for page diagnostics, so
-  // this lock also pins that nothing in the package reads it any more.
+  // page-fact listener. R3: the terminal-opening ledger and its render-side
+  // wake-up seam retired together — the seat observes no page event and the chip
+  // has no seat-side fact subscription any more.
   const policy = stripComments(source('../../src/client/session-stream-health.ts'))
   assert.doesNotMatch(seat, /carrierChurn|CARRIER_CHURN_EVENT|stream-carrier-failed/u)
-  assert.doesNotMatch(seat, /window\.addEventListener/u, 'this seat observes no page event (the ledger owns its own listener)')
+  assert.doesNotMatch(seat, /window\.addEventListener|wakeListeners|opening-?failures|sessionOpening\w*/iu,
+    'this seat observes no page event and carries no terminal-fact ledger')
   assert.doesNotMatch(policy, /carrier-churn|carrierChurn|carrierChurnMs/u)
   assert.doesNotMatch(chip, /carrierChurn|carrier-churn/u)
-  // The wake-up seam STAYS: a terminal opening fact must reach the chip at once
-  // (no page timer decides a proven-dead opening), not on its next 1 s tick.
-  assert.match(seat, /wakeListeners\.add\(listener\)/u)
-  assert.match(seat, /for \(const listener of \[\.\.\.wakeListeners\]\) listener\(\)/u)
-  assert.match(chip, /useEffect\(\(\) => subscribe\(\(\) => setTick\(value => value \+ 1\)\), \[subscribe\]\)/u)
+  assert.doesNotMatch(chip, /subscribe/u, 'the chip has no seat-side fact subscription any more')
 })

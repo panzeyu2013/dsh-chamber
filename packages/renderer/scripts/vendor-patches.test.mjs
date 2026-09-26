@@ -53,6 +53,7 @@ const FILES = {
   exportIndex: VENDOR + 'dsh-session-log-export/src/client/index.ts',
   assembly: VENDOR + 'dsh-client-ui-conversation/src/client/conversation/assembly.ts',
   reading: VENDOR + 'dsh-client-ui-chat/src/client/chat/use-chat-reading.ts',
+  values: VENDOR + 'dsh-util-values/src/index.ts',
 }
 
 /** Module ids in both forms: the symlinked vendor path and the realpath'd submodule path. */
@@ -70,6 +71,8 @@ const IDS = {
   exportIndex: '/x/vendor/harness-checkout/packages/session-query/session-log-export/src/client/index.ts',
   assembly: '/x/vendor/harness-checkout/packages/client/ui-conversation/src/client/conversation/assembly.ts',
   readingReal: '/x/vendor/harness-checkout/packages/client/ui-chat/src/client/chat/use-chat-reading.ts',
+  valuesVendor: '/x/node_modules/@deepseek-ai/dsh-util-values/src/index.ts',
+  valuesReal: '/x/vendor/harness-checkout/packages/util/values/src/index.ts',
 }
 
 /** Strip a leading export keyword so a sliced declaration can run inline. */
@@ -677,4 +680,39 @@ test('a route-bound marker is judged inside the chunk declaring its route (cross
   // Marker and route in the SAME chunk: present.
   const patched = 'const o="/api/present.host",d=o.slice(1);async function f(t){return fetch(' + BT + '${this.chamberFileApiBase}${d}' + BT + ',{signal:t})}'
   assert.deepEqual(failures([patched]), [])
+})
+
+test('the intrinsic-prototype patch accepts plain JSON under a multi-line Function.prototype.toString', () => {
+  const source = readFileSync(FILES.values, 'utf8')
+  const viaVendorPath = applyVendorPatches(IDS.valuesVendor, source)
+  const patched = applyVendorPatches(IDS.valuesReal, source)
+  assert.notEqual(viaVendorPath, undefined, 'the @deepseek-ai id form must match')
+  assert.notEqual(patched, undefined, 'the realpath id form must match')
+  assert.equal(viaVendorPath.code, patched.code, 'both id forms produce the same patch')
+  assert.deepEqual(patched.applied, ['dsh-util-values/src/index.ts'])
+  assert.ok(patched.code.includes('.replace(/\\s+/g'), 'the anchor was rewritten in place')
+  // The exported snapshot API is the observable face: it returns undefined for every
+  // plain object/array while the engine prints multi-line native source.
+  const slice = { from: 'function hasIntrinsicConstructor', to: 'export function isJsonValue' }
+  const upstream = evaluateSlice(source, { ...slice, binding: 'snapshotJsonValue' })
+  const fixed = evaluateSlice(patched.code, { ...slice, binding: 'snapshotJsonValue' })
+  const nativeToString = Function.prototype.toString
+  Function.prototype.toString = function toString() {
+    return String(nativeToString.call(this)).replace('{ [native code] }', '{' + NL + '    [native code]' + NL + '}')
+  }
+  let upstreamValue
+  let patchedValue
+  try {
+    upstreamValue = upstream({ a: [1, 2], b: 'x' })
+    patchedValue = fixed({ a: [1, 2], b: 'x' })
+  } finally {
+    Function.prototype.toString = nativeToString
+  }
+  // Negative control: the unpatched predicate rejects a plain value under the
+  // multi-line form - the exact defect this entry exists for.
+  assert.equal(upstreamValue, undefined)
+  assert.deepEqual(patchedValue, { a: [1, 2], b: 'x' })
+  // V8's canonical single-line form keeps working, and non-plain objects stay out.
+  assert.deepEqual(fixed({ a: [1, 2] }), { a: [1, 2] })
+  assert.equal(fixed(new Date()), undefined)
 })

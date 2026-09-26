@@ -21,7 +21,7 @@ import {
   REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
   streamOpeningKey,
 } from './remote-retry-policy.ts'
-// The opening-budget ladder, silent-teardown floor and opening-stall rule are the
+// The opening deadline, silent-teardown floor and opening-stall rule are the
 // shared stream-state table's/reducer's; this driver reads them, never copies.
 import { sessionIdOfPayload, type StreamForensicsDetail, type StreamForensicsKind, type StreamForensicsReporter } from './stream-forensics.ts'
 import {
@@ -66,71 +66,14 @@ export class RemoteStreamCarrierError extends Error {
 /**
  * The DOMAIN replaced this generation (a journal stall-watchdog restart, a snapshot
  * restart): a carrier-side teardown, not a consumer departure. The mux marks that
- * episode carrier-initiated so its opening budget and widening survive - a restart
- * must not silently reset the ladder the terminal verdict depends on (F1).
+ * episode carrier-initiated so its consecutive-timeout streak survives - a restart
+ * must not silently reset the count the stall-escalation threshold reads.
  */
 export class RemoteStreamGenerationRestart extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'RemoteStreamGenerationRestart'
   }
-}
-
-
-/**
- * Terminal opening verdict (F1): every rung of the opening ladder was spent without the
- * consumer accepting. Deliberately NOT a {@link RemoteStreamCarrierError} - the retry
- * lane must not reopen it; the domain face reports the failure instead of hanging.
- */
-export class RemoteStreamOpeningBudgetError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options)
-    this.name = 'RemoteStreamOpeningBudgetError'
-  }
-}
-
-/** One logical-stream generation's opening-acceptance channel (F1). */
-export interface OpeningAcceptance {
-  /** The carrier binds the attempt that sends this generation's open frame. */
-  bind(accepted: () => void): void
-}
-
-/**
- * Consumer-owned ticket for ONE logical-stream generation. The carrier side binds its
- * per-attempt handler when that generation's open frame is sent; the consumer's
- * `accept()` invokes it. Because a ticket belongs to one generation, a late accept can
- * only ever notify the attempt that delivered it - never a successor's.
- */
-export class OpeningTicket implements OpeningAcceptance {
-  private handler: (() => void) | undefined
-
-  bind(handler: () => void): void {
-    this.handler = handler
-  }
-
-  /** The consumer accepted the opening item; an unbound ticket is inert. */
-  accepted(): void {
-    this.handler?.()
-  }
-}
-
-/**
- * Generation AbortSignal -> its opening ticket. RemoteStream attaches a ticket to the
- * signal it hands to `options.open`; the gateway copies that attachment onto the
- * composed signal the mux receives (index.ts `prepareInvocation`). A WeakMap keeps the
- * channel scoped to signals this fork created - nothing else can attach or read it, and
- * a superseded generation's signal is collected with its ticket.
- */
-const OPENING_TICKETS = new WeakMap<AbortSignal, OpeningAcceptance>()
-
-/** Publish one generation's ticket on the exact signal that generation opens with. */
-export function attachOpeningTicket(signal: AbortSignal, ticket: OpeningAcceptance): void {
-  OPENING_TICKETS.set(signal, ticket)
-}
-
-/** Recover the ticket a signal (or one this fork composed from it) carries. */
-export function openingTicketOf(signal: AbortSignal | undefined): OpeningAcceptance | undefined {
-  return signal === undefined ? undefined : OPENING_TICKETS.get(signal)
 }
 
 /**
@@ -158,7 +101,7 @@ export class RemoteStreamMuxClient {
    *  without disturbing teardown order. */
   private readonly pendingOpens = new Map<string, (reason: unknown) => void>()
   private readonly waiters = new Set<SocketWaiter>()
-  // The opening widening ledger and stream→request-key registry live in the shared reducer.
+  // The opening streak ledger and stream→request-key registry live in the shared reducer.
   /** chamber patch: frames received on the CURRENT socket — the silent-socket escalation's evidence. Reset when the socket changes. */
   private socketFrames = 0
   /** Carrier lifecycle state, owned by the shared reducer. */
@@ -303,15 +246,13 @@ export class RemoteStreamMuxClient {
   }
 
   /** Open one logical stream on the persistent physical connection; without an active
-   *  attempt it waits for Connection to request one or for the signal to abort.
-   *  `opening` is that generation's acceptance ticket (F1): when present, the opening
-   *  stays `itemReceived` until the consumer accepts it, so a delivered-but-never-
-   *  accepted stream still reaches a bounded verdict instead of parking. */
+   *  attempt it waits for Connection to request one or for the signal to abort. The
+   *  opening deadline is armed at send and DISARMED the moment the opening item is
+   *  delivered to this consumer: transport delivery is the opening's success. */
   async *open(
     endpoint: string,
     payload: unknown,
     signal: AbortSignal,
-    opening?: OpeningAcceptance,
   ): AsyncGenerator {
     signal.throwIfAborted()
     const streamId = randomUUID()
@@ -321,32 +262,27 @@ export class RemoteStreamMuxClient {
     const sessionId = sessionIdOfPayload(payload)
     const inbox = new StreamInbox()
     // Publish this episode's release handle for the reducer's `reopenLogicalStream`.
-    // A denied reopen is a carrier decision, so the episode's budget survives it (F1).
+    // A denied reopen is a carrier decision, so the episode's miss streak survives it.
     this.pendingOpens.set(streamId, (reason: unknown) => { inbox.fail(reason, true) })
     let carrier: WebSocket | undefined
     let opened = false
     let terminal = false
     // Set by the opening-item deadline, read by the finally block.
     let timedOut = false
-    // Set when the deadline's verdict was TERMINAL (F1 budget exhausted): the episode
-    // close then releases the spent widening instead of bequeathing it.
-    let budgetExhausted = false
-    // F1: the consumer accepted this episode's opening item. Only this settles the
-    // opening; a ticket-less opening (no accept channel exists) accepts on delivery.
-    let accepted = false
-    // The rung this attempt was granted, for the terminal wording and the escalation.
+    // Consecutive unanswered deadlines for this request-episode key: the escalation
+    // threshold and the diagnostic wording read it; it never widens the next budget.
     let attemptStreak = 0
     let budgetMs = 0
     // Frames on the socket when THIS stream's open frame was sent; the finally block
     // and the opening deadline share this baseline.
     let framesAtSend = 0
     let sentAt = 0
-    // F1: the opening deadline is an ARMED TIMER from send until acceptance, not a race
-    // around the first next(): a delivered-but-unaccepted opening leaves this generator
-    // suspended at `yield`, where only a timer can still reach the verdict. The clock
-    // starts when the consumer's FIRST pull runs this body (an async generator is lazy);
-    // every in-repo consumer iterates immediately, and a caller that only holds the
-    // stream without pulling owns no deadline (registered boundary).
+    // The opening deadline is an ARMED TIMER from send until the opening item is
+    // DELIVERED, not a race around the first next(): a lost opening frame leaves this
+    // generator suspended at `yield`, where only a timer can still reach the failure.
+    // The clock starts when the consumer's FIRST pull runs this body (an async generator
+    // is lazy); every in-repo consumer iterates immediately, and a caller that only
+    // holds the stream without pulling owns no deadline (registered boundary).
     // Opaque to this module: the scheduler's handle type is its own (unknown).
     let deadlineTimer: unknown
     const clearOpeningDeadline = (): void => {
@@ -364,29 +300,9 @@ export class RemoteStreamMuxClient {
       }
       this.forensics?.(kind, cause, detail)
     }
-    /** F1: the ONLY transition that settles this opening (guarded by its generation). */
-    const acceptOpening = (): void => {
-      if (accepted) return
-      // A late accept from an episode that already ended (its inbox was deregistered) is
-      // inert: it can neither settle the reducer nor publish an acceptance fact.
-      if (this.streams.get(streamId) !== inbox) return
-      if (timedOut) return
-      // A deadline that already fired settled this opening (its verdict - orphan, timeout
-      // or budget exhausted - was published and the consumer failed). The generator is
-      // parked at `yield`, not on the inbox, so an accept can still arrive in this tick;
-      // letting it through would clear the successor widening and publish an
-      // opening-accepted fact contradicting the verdict already on the page.
-      accepted = true
-      clearOpeningDeadline()
-      if (!opened) return
-      const waitedMs = Date.now() - sentAt
-      this.observeCarrier({ kind: 'openingAccepted', at: Date.now(), streamId, requestKey })
-      reportOpening('opening-accepted', waitedMs, `${endpoint} streamId=${streamId} waitedMs=${String(waitedMs)}`)
-    }
-    opening?.bind(acceptOpening)
     const abort = (): void => {
       // A domain-driven generation restart is a carrier teardown: the episode keeps its
-      // budget (only a consumer departure releases it before acceptance).
+      // streak (only a consumer departure releases it).
       inbox.fail(signal.reason, signal.reason instanceof RemoteStreamGenerationRestart)
     }
     signal.addEventListener('abort', abort, { once: true })
@@ -398,7 +314,7 @@ export class RemoteStreamMuxClient {
       // CLOSING/CLOSED drops the payload), so the guard closes that interleaving
       // window right before the synchronous send.
       if (socket !== this.socket || socket.readyState !== WebSocket.OPEN) {
-        // F1: even a refused send fails this stream's consumer with a carrier error -
+        // Even a refused send fails this stream's consumer with a carrier error -
         // nothing may leave the logical opening silently pending.
         const refusal = new RemoteStreamCarrierError(
           'api gateway: Remote stream socket was replaced before its open frame could be sent',
@@ -413,7 +329,7 @@ export class RemoteStreamMuxClient {
       // chamber patch: the Host MUST answer an open with its opening item, and nothing
       // below has a deadline, so a lost opening frame is indistinguishable from a silent
       // stream. Fail the INBOX (never the generation signal, which would settle the retry
-      // lane terminally) so the paced reopen re-issues; the reducer returns the budget.
+      // lane terminally) so the paced reopen re-issues; that deadline fails the inbox.
       this.observeCarrier({ kind: 'streamOpened', at: Date.now(), streamId })
       const armed = this.observeCarrier({ kind: 'openingSent', at: Date.now(), streamId, requestKey })
       const deadline = armed.find((effect) => effect.e === 'armOpeningDeadline')
@@ -427,12 +343,12 @@ export class RemoteStreamMuxClient {
       framesAtSend = this.socketFrames
       sentAt = Date.now()
       const deadlineCycle = this.nextDecisionCycle()
-      // The deadline verdict. It runs from send time, so it also reaches a stream whose
-      // opening item WAS delivered but whose consumer never accepted (F1); the escalating
-      // teardown is the reducer's decision, one per decision cycle.
+      // The deadline verdict. It runs from send time and reaches a stream whose opening
+      // item never arrived; the escalating teardown is the reducer's decision, one per
+      // decision cycle.
       const onOpeningExpire = (): void => {
         deadlineTimer = undefined
-        if (accepted || !opened) return
+        if (!opened) return
         // A carrier teardown (socket replacement or loss) already failed this inbox: the
         // episode is on the retry lane, not unanswered, so an opening verdict here would
         // contradict the carrier error it carries (review finding 2).
@@ -442,8 +358,16 @@ export class RemoteStreamMuxClient {
         const openingFailure = new RemoteStreamCarrierError(
           `api gateway: Remote stream ${JSON.stringify(endpoint)} delivered no opening item within ${String(budgetMs)}ms`,
         )
+        // ONE non-terminal diagnostic per expiry: the episode is failed and the retry lane
+        // re-issues; the retired F1 verdict names (orphan / budget exhausted / accepted)
+        // have no successor.
+        reportOpening(
+          'opening-timeout',
+          waitedMs,
+          `${endpoint} streamId=${streamId} waitedMs=${String(waitedMs)} streak=${String(attemptStreak)}`,
+        )
         // TWO evidence paths, ONE teardown: zero frames on this socket across the whole
-        // budget window means the carrier itself is dead (re-issuing can never succeed),
+        // deadline window means the carrier itself is dead (re-issuing can never succeed),
         // while frames arriving for other streams but not this request means the retry lane
         // can only re-issue on the same generation. Both escalate through replaceSocket()
         // on the socket this attempt sent on (one verdict per decision cycle).
@@ -461,40 +385,7 @@ export class RemoteStreamMuxClient {
           const replacementFailure = new RemoteStreamCarrierError(
             'api gateway: Remote stream carrier rebuilt after an unanswered opening item',
           )
-          if (effects.some((effect) => effect.e === 'failLogicalOpening')) {
-            // F1 TERMINAL: the whole ladder was spent without acceptance. The VERDICT facts
-            // are published here and only here: a widening miss is a diagnostic, not an
-            // opening that failed, so the page can never brand a still-retrying attempt as
-            // dead (review finding 1). A stream whose frames arrived but was never accepted
-            // is ORPHANED; one that never saw a frame is a plain timeout.
-            budgetExhausted = true
-            const orphaned = inbox.itemReceived
-            const cause = `${endpoint} streamId=${streamId} waitedMs=${String(waitedMs)} streak=${String(attemptStreak)}`
-            reportOpening(orphaned ? 'opening-orphaned' : 'opening-timeout', waitedMs, cause)
-            reportOpening('opening-budget-exhausted', waitedMs, cause)
-            // The TERMINAL failure goes to the inbox FIRST: replaceSocket() fails every
-            // stream it owns, and a carrier error there would silently downgrade the
-            // terminal into a retryable one (invariant IV).
-            inbox.fail(new RemoteStreamOpeningBudgetError(
-              `api gateway: Remote stream ${JSON.stringify(endpoint)} opening budget exhausted after ${String(attemptStreak)} failed attempts`,
-            ))
-            // A socket that delivered nothing across the whole ladder is proven dead: the
-            // terminal verdict must still replace it, or every sibling burns a fresh rung
-            // on a carrier that cannot answer (review finding 3).
-            if (this.socketFrames - framesAtSend <= 0) {
-              this.replaceSocket(replacementFailure, 'opening budget exhausted on a silent socket')
-            }
-            this.applyRecoveryEffects(effects, replacementFailure)
-            return
-          }
-          // A non-terminal miss keeps the retry lane: one MISS diagnostic (ignored by the
-          // page), a failed consumer, and the reducer's escalation when it decided one.
-          reportOpening(
-            'opening-miss',
-            waitedMs,
-            `${endpoint} streamId=${streamId} waitedMs=${String(waitedMs)} streak=${String(attemptStreak)}${inbox.itemReceived ? ' itemReceived' : ''}`,
-          )
-          // The timed-out stream keeps its own budget error (it was failed first);
+          // The timed-out stream keeps its own deadline error (it was failed first);
           // the sibling must see the REPLACEMENT, so `failAll` gets its own wording.
           inbox.fail(openingFailure)
           if (effects.some((effect) => effect.e === 'rebuildCarrier')) {
@@ -514,13 +405,11 @@ export class RemoteStreamMuxClient {
           }
           return
         }
-        // No usable socket to escalate on, but the opening still fails its consumer - and
-        // the miss is still a diagnostic, not a verdict.
-        reportOpening('opening-miss', waitedMs, `${endpoint} streamId=${streamId} waitedMs=${String(waitedMs)} streak=${String(attemptStreak)} no-socket`)
+        // No usable socket to escalate on, but the opening still fails its consumer.
         inbox.fail(openingFailure)
       }
-      // F1: arm the deadline at send time. It is cleared ONLY by acceptance (or by the
-      // episode ending), so a delivered-but-unaccepted opening cannot park here.
+      // Arm the deadline at send time; the first DELIVERED item clears it (the episode
+      // ending clears it too), so a stream that never sees its opening item cannot park.
       deadlineTimer = DEADLINE_SCHEDULER.setTimeout(onOpeningExpire, budgetMs)
       let openingSeen = false
       while (true) {
@@ -529,15 +418,10 @@ export class RemoteStreamMuxClient {
         if (frame.type === 'item') {
           if (!openingSeen) {
             openingSeen = true
-            // Transport evidence only: the phase moves to itemReceived and the widening
-            // ledger stays put until the consumer accepts (F1) - delivery is not acceptance.
+            // DELIVERY is the opening's success: disarm the deadline BEFORE the consumer
+            // sees the item, and tell the reducer to clear the request's miss streak.
+            clearOpeningDeadline()
             this.observeCarrier({ kind: 'openingAnswered', at: Date.now(), streamId, requestKey })
-            if (opening === undefined) {
-              // No accept channel exists on this opening (a direct mux consumer), so
-              // delivery is the only acceptance there is: the legacy equivalence stands
-              // and the deadline is disarmed here exactly as it always was.
-              acceptOpening()
-            }
           }
           yield frame.value
           continue
@@ -554,7 +438,7 @@ export class RemoteStreamMuxClient {
       this.streams.delete(streamId)
       this.pendingOpens.delete(streamId)
       // chamber patch: the opening deadline is not the only place a silent carrier can
-      // be proved — the journal watchdog aborts its probe before the opening budget can
+      // be proved — the journal watchdog aborts its probe before the opening deadline can
       // fire. A stream torn down without ever seeing a frame on its socket during a life
       // of at least SILENT_TEARDOWN_MIN_MS is the same evidence, so it escalates here; the
       // lifetime bound keeps a healthy but not-yet-answered socket safe, and `!timedOut`
@@ -576,19 +460,16 @@ export class RemoteStreamMuxClient {
       if (opened && !terminal && carrier?.readyState === WebSocket.OPEN) {
         this.send(carrier, { type: 'cancel', streamId })
       }
-      // Close the episode LAST, after the teardown escalation could claim it. The four
-      // F1 fields tell the reducer which teardown this was: a carrier-ended, unaccepted
-      // episode keeps its budget and widening; a consumer-ended or accepted one releases
-      // them; and a terminal verdict releases them whatever the other three say.
+      // Close the episode LAST, after the teardown escalation could claim it. The two
+      // fields tell the reducer which teardown this was: a carrier-ended or timed-out
+      // episode keeps its miss streak for the retry lane; a consumer-ended one releases it.
       this.observeCarrier({
         kind: 'episodeClosed',
         at: Date.now(),
         episodeId: streamId,
         requestKey,
         timedOut,
-        accepted,
         carrierInitiated: inbox.carrierInitiated,
-        terminal: budgetExhausted,
       })
     }
   }
@@ -834,8 +715,8 @@ export class RemoteStreamMuxClient {
     })
   }
 
-  /** Fail every live logical stream: carrier-initiated, so an unaccepted opening keeps
-   *  its budget across the replacement instead of restarting its ladder (F1). */
+  /** Fail every live logical stream: carrier-initiated, so an unanswered opening keeps
+   *  its streak across the replacement instead of restarting its count. */
   private failAll(error: unknown): void {
     for (const stream of this.streams.values()) stream.fail(error, true)
   }
@@ -849,15 +730,11 @@ class StreamInbox {
   private readonly frames = new Deque<RemoteStreamServerMessage>()
   private wake: (() => void) | undefined
   private failure: Error | undefined
-  /** F1: at least one `item` frame for THIS stream arrived (the orphan criterion's
-   *  only evidence - never the whole socket's frame counter). */
-  itemReceived = false
-  /** F1: a carrier teardown failed this inbox, so the opening budget survives it. */
+  /** A carrier teardown failed this inbox, so the opening streak survives it. */
   carrierInitiated = false
 
   push(frame: RemoteStreamServerMessage): void {
     if (this.failure !== undefined) return
-    if (frame.type === 'item') this.itemReceived = true
     this.frames.pushBack(frame)
     this.wake?.()
     this.wake = undefined

@@ -18,8 +18,9 @@
  *     connection-generation reconnect (which keeps every ctx object mounted, so
  *     nothing is re-presented) is not;
  *  2. `Session.open()` short-circuits on `openState === 'open'` and otherwise
- *     returns the in-flight promise: only `'error'` / `'cold'` are healable, a
- *     parked `'loading'` open is not — the boundary the ladder's two arms rest on;
+ *     returns the in-flight promise (`openPromise !== null`): a parked `'loading'`
+ *     with `openPromise === null` is therefore re-openable — the boundary B1's
+ *     open-stall arm rests on (a heal sets `'cold'` and re-enters `open()`);
  *  3. `Session.failEventStream()` lattices `openState = 'error'` and clears the
  *     in-flight promise: the state the ladder keys on, and why a heal can be
  *     re-entered at all (a surviving promise would return the dead open forever).

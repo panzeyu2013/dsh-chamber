@@ -106,6 +106,14 @@ export const VENDOR_PATCH_MARKERS = [
     present: /this\.follow\.sample\([^)]*\)[\s\S]{0,200}?if\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*this\.followTail\s*\(\)/,
   },
   {
+    vendorFile: 'dsh-util-values/src/index.ts',
+    what: 'the intrinsic-prototype check normalizes engine whitespace before comparing native source',
+    // Patched: `…toString.call(constructor).replace(/\s+/g, " ") === \`function ${name}() { [native code] }\``
+    // — the normalize sits between the call and the compare, so the marker binds the
+    // regex token to the `native code` template the compare still uses.
+    present: /\.replace\(\/\\s\+\/g,\s*["']\s["']\)\s*===[^;]{0,80}native code/,
+  },
+  {
     what: 'layout fork publishes the chamberFileApiBase root standard prop',
     // Chamber-package half of the ui-chat patch (not a vendor file): without
     // the prop the patched resolver falls back to document.baseURI, which is

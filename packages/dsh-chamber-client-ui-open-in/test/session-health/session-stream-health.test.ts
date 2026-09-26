@@ -16,8 +16,6 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 import {
   createSessionStreamHealthState,
   markSessionStreamHeal,
@@ -28,16 +26,13 @@ import {
   type SessionStreamHealthState,
   type SessionStreamObservation,
 } from '../../src/client/session-stream-health.ts'
-import { OPENING_TIMEOUT_LADDER_MS } from '@dsh-chamber/dsh-stream-state'
 import { en, zh } from '../../src/locales.ts'
 import {
   hasSessionStreamResync,
   isConversationSurfacePresented,
-  parseSessionOpeningOutcome,
   resyncSessionStream,
   sessionOpenState,
   sessionOpenInFlight,
-  sessionOpeningFailureLedger,
   type SessionsConcreteLoose,
   type SessionsLoose,
 } from '../../src/client/session-stream-health-probe.ts'
@@ -49,8 +44,6 @@ const C = CONFIG.healCooldownMs
 const S = CONFIG.healSettleMs
 const W = CONFIG.healBudgetWindowMs
 const T0 = 1_700_000_000_000
-/** The whole opening ladder: the page's freshness bound for a terminal fact. */
-const LADDER_TOTAL = OPENING_TIMEOUT_LADDER_MS.reduce((sum, ms) => sum + ms, 0)
 
 /** planSessionStreamHealth bound to the pinned case-invariant config. */
 function planAt(state: SessionStreamHealthState, observation: SessionStreamObservation, at: number) {
@@ -732,129 +725,19 @@ test('stream-health: every notice key exists in both dictionaries', () => {
   }
 })
 
-test('stream-health: a terminal opening fact fails the load now, with no action to take', () => {
-  // The evidence outranks the stall timer: the notice lands on the FIRST tick,
-  // and no control is offered — a loading face has no
-  // automatic arm here (this seat never re-issues an open on its own).
-  const budget = planAt(createSessionStreamHealthState(), observe('loading', { openingFailure: 'budget-exhausted' }), T0)
-  assert.equal(budget.notice, 'loading-failed', 'the terminal outcome IS the failure notice')
-  assert.equal(budget.action, 'none')
-  assert.notEqual(budget.action, 'heal', 'a proven-dead opening is never re-issued automatically')
-  assert.equal(sessionStreamNoticeKey('loading-failed'), 'streamHealth.loadingFailed')
-  const orphaned = planAt(createSessionStreamHealthState(), observe('loading', { openingFailure: 'orphaned' }), T0)
-  assert.equal(orphaned.notice, 'loading-failed')
-  assert.equal(orphaned.action, 'none')
-  // No reachable concrete face: the failure is still shown; nothing is invented.
-  const noFace = planAt(
-    createSessionStreamHealthState(),
-    observe('loading', { openingFailure: 'budget-exhausted', resyncAvailable: false }), T0,
-  )
-  assert.equal(noFace.notice, 'loading-failed')
-  assert.equal(noFace.action, 'none')
-})
-
-test('stream-health: loading without opening evidence keeps the pinned timer behaviour', () => {
-  // (b) no evidence: exactly today's arm — no notice, no action, until the
-  // stall hold ages; the in-flight shape stays protected by the same silence.
+test('stream-health: a loading dwell is pure timer behaviour with no action', () => {
+  // The loading arm has no evidence input and no automatic lever: it reports
+  // the 20s stall / 90s failure and nothing else.
   const hold = planAt(createSessionStreamHealthState(), observe('loading'), T0)
   assert.equal(hold.notice, null, 'no notice on the first frame')
   assert.equal(hold.action, 'none', 'no action before the stall hold ages')
   const beforeStall = planAt(hold.state, observe('loading'), T0 + L - 1)
   assert.equal(beforeStall.notice, null)
   assert.equal(beforeStall.action, 'none')
+  const stalled = planAt(hold.state, observe('loading'), T0 + L)
+  assert.equal(stalled.notice, 'loading-stall', 'the stall notice keeps its own timing')
+  assert.equal(stalled.action, 'none', 'the header never rebuilds on its own')
   // The concurrency/multi-instance shape the seat passes: a live concrete face
-  // and no evidence is still "wait", never an automatic rebuild.
+  // is still "wait", never an automatic rebuild.
   assert.equal(planAt(createSessionStreamHealthState(), observe('loading', { resyncAvailable: true }), T0).action, 'none')
-})
-
-test('stream-health: opening evidence never touches the error arm', () => {
-  // (c) the error path is untouched by the new evidence field: the automatic
-  // heal still fires on its own grace.
-  const hold = planAt(createSessionStreamHealthState(), observe('error', { openingFailure: 'orphaned' }), T0)
-  assert.equal(hold.action, 'none')
-  const healed = planAt(hold.state, observe('error', { openingFailure: 'orphaned' }), T0 + G)
-  assert.equal(healed.action, 'heal')
-  assert.equal(healed.notice, null)
-})
-
-test('response forensics: unknown kinds and drifted shapes are ignored, never recorded', () => {
-  // (d) an old bundle (no opening kinds) or a drifted fact must never throw and
-  // must never change behaviour: the ledger simply stays empty.
-  const ledger = sessionOpeningFailureLedger()
-  for (const detail of [
-    null, undefined, 0, 'opening-budget-exhausted', {},
-    { kind: 'opening-timeout', instanceId: 'ignored', sessionId: 's', at: T0 },
-    // The fork's non-terminal rung diagnostic: it must never fail a loading seat.
-    { kind: 'opening-miss', instanceId: 'ignored', sessionId: 's', at: T0 },
-    { kind: 'socket-lost', instanceId: 'ignored', at: T0 },
-    { kind: 'invented-kind', instanceId: 'ignored', at: T0 },
-  ]) {
-    assert.doesNotThrow(() => { ledger.record(detail) })
-    assert.equal(parseSessionOpeningOutcome(detail), null)
-  }
-  assert.equal(ledger.failureFor('ignored', 's'), undefined, 'an unknown kind records no evidence')
-})
-
-test('response forensics: ANY acceptance retires the unattributed instance fallback', () => {
-  // The fallback is a guess at which session an unattributed fact belonged to. Once
-  // the carrier demonstrably answers again (some session accepted), keeping the guess
-  // would fail an unrelated session that is merely loading (review finding 5/O4).
-  const ledger = sessionOpeningFailureLedger()
-  ledger.record({ kind: 'opening-budget-exhausted', instanceId: 'inst-fallback', at: T0 })
-  assert.equal(ledger.failureFor('inst-fallback', 'unrelated', T0 + 1)?.failure, 'budget-exhausted')
-  ledger.record({ kind: 'opening-accepted', instanceId: 'inst-fallback', sessionId: 'somebody', at: T0 + 2 })
-  assert.equal(ledger.failureFor('inst-fallback', 'unrelated', T0 + 3), undefined,
-    'an attributed acceptance retires the coarse instance fallback too')
-})
-
-test('response forensics: the probe listens on the fork event name, spelled identically', () => {
-  // The probe cannot import the fork at bundle time (a client plugin must not
-  // deepen a path into it), so the literal is duplicated on purpose and pinned
-  // here against the fork's own export — a silent rename must not disable the
-  // whole evidence channel.
-  const fork = stripComments(readFileSync(
-    new URL('../../../dsh-api-gateway/src/client/stream-forensics.ts', import.meta.url), 'utf8'))
-  const probe = stripComments(readFileSync(
-    new URL('../../src/client/session-stream-health-probe.ts', import.meta.url), 'utf8'))
-  const forkEvent = /export const STREAM_FORENSICS_EVENT = '([^']+)'/u.exec(fork)
-  const probeEvent = /const STREAM_FORENSICS_EVENT = '([^']+)'/u.exec(probe)
-  assert.ok(forkEvent !== null, 'the fork must export the page event name')
-  assert.equal(probeEvent?.[1], forkEvent[1], 'the probe must listen on the fork event, spelled identically')
-})
-
-test('response forensics: a terminal fact is read per session and retired by accepted', () => {
-  const ledger = sessionOpeningFailureLedger()
-  let woke = 0
-  const unsubscribe = ledger.subscribe(() => { woke += 1 })
-  assert.equal(
-    parseSessionOpeningOutcome({ kind: 'opening-budget-exhausted', instanceId: 'inst', sessionId: 's1', at: T0 })?.outcome,
-    'budget-exhausted',
-  )
-  ledger.record({ kind: 'opening-budget-exhausted', instanceId: 'inst', sessionId: 's1', at: T0 })
-  assert.equal(ledger.failureFor('inst', 's1', T0 + 3)?.failure, 'budget-exhausted')
-  assert.equal(ledger.failureFor('inst', 's2', T0 + 3), undefined, 'an attributed fact covers only its session')
-  assert.equal(ledger.failureFor('other', 's1', T0 + 3), undefined, 'another instance is never covered')
-  // A fact older than the whole ladder describes an episode that is over: a seat
-  // that starts loading now must not inherit it (no accepted fact ever arrived).
-  assert.equal(ledger.failureFor('inst', 's1', T0 + LADDER_TOTAL + 1), undefined,
-    'a terminal fact expires with the ladder that produced it')
-  assert.ok(woke >= 1, 'a recorded fact wakes the visible seats')
-  // An unattributed fact is instance-wide: the presented loading session is the
-  // only page-visible candidate.
-  ledger.record({ kind: 'opening-orphaned', instanceId: 'inst', at: T0 + 1 })
-  assert.equal(ledger.failureFor('inst', 's2', T0 + 3)?.failure, 'orphaned')
-  // An accepted opening retires the instance-level fallback; the attributed
-  // session's own fact is retired by an attributed acceptance.
-  ledger.record({ kind: 'opening-accepted', instanceId: 'inst', at: T0 + 2 })
-  assert.equal(ledger.failureFor('inst', 's2', T0 + 3), undefined, 'accepted retires the instance fallback')
-  assert.equal(ledger.failureFor('inst', 's1', T0 + 3)?.failure, 'budget-exhausted', 'the exact fact survives an unattributed acceptance')
-  ledger.record({ kind: 'opening-accepted', instanceId: 'inst', sessionId: 's1', at: T0 + 3 })
-  assert.equal(ledger.failureFor('inst', 's1', T0 + 4), undefined)
-  unsubscribe()
-  assert.equal(parseSessionOpeningOutcome({ kind: 'opening-accepted', instanceId: 'inst' })?.at, 0,
-    'a fact without a time is accepted with a zero stamp')
-  // ...and an UNDATED failure fact is taken at face value: the freshness window may only
-  // expire evidence it can actually date (an older/channel-lite bundle keeps its meaning).
-  ledger.record({ kind: 'opening-budget-exhausted', instanceId: 'inst-undated', sessionId: 's', at: 0 })
-  assert.equal(ledger.failureFor('inst-undated', 's', T0)?.failure, 'budget-exhausted')
 })

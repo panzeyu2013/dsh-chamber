@@ -11,10 +11,11 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { createServer } from 'node:http'
 import { PassThrough } from 'node:stream'
+import { createContext, runInContext } from 'node:vm'
 import type { HttpRequestFactory, ProxyRequest, ProxyResponse, ProxySocket } from '@dsh-chamber/control-plane'
 import { clearAuthCookie, MAX_HTML_INJECTION_BYTES, registerAuthCookie } from '@dsh-chamber/control-plane'
 import { createGatewayProxy } from '../../src/gateway-proxy.ts'
-import { injectTrustDeclaration, TRUST_DECLARATION_SCRIPT } from '../../src/html-inject.ts'
+import { injectDocumentHeadPatches, NATIVE_STRING_NORMALIZER_SCRIPT, TRUST_DECLARATION_SCRIPT } from '../../src/html-inject.ts'
 import { FakeRequest, FakeResponse } from '../support/utils.ts'
 
 const quietLogger = { log() {}, warn() {}, error() {} }
@@ -348,10 +349,15 @@ test('S0: a text/html upstream document is trust-injected and content-length is 
   assert.equal(res.statusCode, 200)
   assert.equal(res.headers['content-type'], 'text/html; charset=utf-8')
   assert.ok(res.body.includes(TRUST_DECLARATION_SCRIPT), 'the trust declaration is present')
+  assert.ok(res.body.includes(NATIVE_STRING_NORMALIZER_SCRIPT), 'the WebKit native-source normalizer is present')
   assert.ok(res.body.indexOf(TRUST_DECLARATION_SCRIPT) < res.body.indexOf('</head>'),
     'the declaration is inserted before </head>')
+  assert.ok(res.body.indexOf(NATIVE_STRING_NORMALIZER_SCRIPT) < res.body.indexOf('</head>'),
+    'the normalizer is inserted before </head>')
   assert.equal(res.body.split('__DSH_TRANSPORT__').length, 2, 'injected exactly once')
-  assert.equal(Buffer.byteLength(res.body), declared + Buffer.byteLength(TRUST_DECLARATION_SCRIPT))
+  assert.equal(res.body.split(NATIVE_STRING_NORMALIZER_SCRIPT).length, 2, 'the normalizer is injected exactly once')
+  assert.equal(Buffer.byteLength(res.body),
+    declared + Buffer.byteLength(TRUST_DECLARATION_SCRIPT) + Buffer.byteLength(NATIVE_STRING_NORMALIZER_SCRIPT))
   assert.equal(res.headers['content-length'], String(Buffer.byteLength(res.body)),
     'content-length reflects the injected document')
   assert.equal(res.endCalls, 1)
@@ -436,32 +442,88 @@ test('S0: an html body over the 64KiB injection budget is flushed and streamed u
   assert.equal(res.endCalls, 1)
 })
 
-test('S0 injector edges: case-insensitive </head>, idempotency and the exact 64KiB cap', () => {
+test('S0 injector edges: case-insensitive </head>, per-patch idempotency and the exact 64KiB cap', () => {
   // The proxy-level S0 tests above pin the insertion point, the
   // missing-</head> passthrough and the over-budget stream; these are the
   // injector's remaining fail-soft edges.
   const upper = '<html><head><title>t</title></HEAD><body>ok</body></html>'
-  const injected = injectTrustDeclaration(upper)
+  const injected = injectDocumentHeadPatches(upper)
   assert.equal(injected.injected, true)
-  assert.equal(injected.html, '<html><head><title>t</title>' + TRUST_DECLARATION_SCRIPT + '</HEAD><body>ok</body></html>')
+  assert.equal(injected.html, '<html><head><title>t</title>' + TRUST_DECLARATION_SCRIPT + NATIVE_STRING_NORMALIZER_SCRIPT + '</HEAD><body>ok</body></html>')
 
-  // Idempotent: the marker anywhere (even a comment) suppresses injection.
-  const already = '<html><head></head><body>' + TRUST_DECLARATION_SCRIPT + '</body></html>'
-  assert.deepEqual(injectTrustDeclaration(already), { injected: false, html: already })
+  // Each patch is independently idempotent: a document that already declares the
+  // transport hook still receives the WebKit normalization, and neither script is
+  // ever duplicated.
+  const trustOnly = '<html><head></head><body>' + TRUST_DECLARATION_SCRIPT + '</body></html>'
+  const trustOnlyResult = injectDocumentHeadPatches(trustOnly)
+  assert.equal(trustOnlyResult.injected, true)
+  assert.equal(trustOnlyResult.html.split(TRUST_DECLARATION_SCRIPT).length, 2, 'the declaration is not duplicated')
+  assert.equal(trustOnlyResult.html.includes(NATIVE_STRING_NORMALIZER_SCRIPT), true)
+  const both = trustOnlyResult.html
+  assert.deepEqual(injectDocumentHeadPatches(both), { injected: false, html: both })
+
+  // A documented hook mention (even a comment) suppresses ONLY the declaration.
   const commented = '<html><head><!-- __DSH_TRANSPORT__ documented hook --></head><body>ok</body></html>'
-  assert.equal(injectTrustDeclaration(commented).injected, false)
+  const commentedResult = injectDocumentHeadPatches(commented)
+  assert.equal(commentedResult.injected, true)
+  assert.equal(commentedResult.html.includes(TRUST_DECLARATION_SCRIPT), false)
+  assert.equal(commentedResult.html.includes(NATIVE_STRING_NORMALIZER_SCRIPT), true)
 
   // Exactly at the cap is still injectable (one byte over is not, per the
   // over-budget proxy test above).
+  const scripts = TRUST_DECLARATION_SCRIPT.length + NATIVE_STRING_NORMALIZER_SCRIPT.length
   const padding = 'x'.repeat(MAX_HTML_INJECTION_BYTES - '<html><head></head><body></body></html>'.length)
   const boundary = '<html><head></head><body>' + padding + '</body></html>'
   assert.equal(boundary.length, MAX_HTML_INJECTION_BYTES)
-  const atCap = injectTrustDeclaration(boundary)
+  const atCap = injectDocumentHeadPatches(boundary)
   assert.equal(atCap.injected, true)
-  assert.equal(atCap.html.length, boundary.length + TRUST_DECLARATION_SCRIPT.length)
+  assert.equal(atCap.html.length, boundary.length + scripts)
 
   // One byte over the cap stays untouched, and an empty body is not injectable.
   const over = '<html><head></head><body>' + 'x'.repeat(MAX_HTML_INJECTION_BYTES) + '</body></html>'
-  assert.deepEqual(injectTrustDeclaration(over), { injected: false, html: over })
-  assert.deepEqual(injectTrustDeclaration(''), { injected: false, html: '' })
+  assert.deepEqual(injectDocumentHeadPatches(over), { injected: false, html: over })
+  assert.deepEqual(injectDocumentHeadPatches(''), { injected: false, html: '' })
+})
+
+test('the WebKit normalizer restores the strict intrinsic check without touching user sources', () => {
+  // Pure ASCII keeps the injected byte delta exact; the HTML-parser invariants
+  // keep the inline script from ending early or opening a comment.
+  for (const script of [TRUST_DECLARATION_SCRIPT, NATIVE_STRING_NORMALIZER_SCRIPT]) {
+    assert.equal(Buffer.byteLength(script), script.length, 'the injected scripts stay ASCII')
+    assert.equal(script.split('</script>').length, 2, 'exactly one closing tag')
+    assert.equal(script.includes('<!--'), false, 'no HTML comment opener inside the script')
+  }
+  const context = createContext({})
+  // Simulate JavaScriptCore: BUILT-INS print their source across lines while every
+  // other function keeps the engine's real source. The comparator is upstream's
+  // exact shape (name + prototype identity + the single-line template).
+  runInContext(`
+    var dshOriginal = Function.prototype.toString
+    Function.prototype.toString = function () {
+      if (this === Object || this === Array) {
+        return 'function ' + this.name + '() {\\n    [native code]\\n}'
+      }
+      return dshOriginal.call(this)
+    }
+    var dshStrict = function (constructor, name, prototype) {
+      return constructor.name === name && constructor.prototype === prototype
+        && Function.prototype.toString.call(constructor) === 'function ' + name + '() { [native code] }'
+    }
+  `, context)
+  assert.equal(runInContext("dshStrict(Object, 'Object', Object.prototype)", context), false,
+    'negative control: the multi-line native source fails the strict one-line template')
+  const shimBody = NATIVE_STRING_NORMALIZER_SCRIPT.slice('<script>'.length, -'</script>'.length)
+  runInContext(shimBody, context)
+  assert.equal(runInContext("dshStrict(Object, 'Object', Object.prototype)", context), true)
+  assert.equal(runInContext("dshStrict(Array, 'Array', Array.prototype)", context), true)
+  // Running it twice (two documents, one page) is a no-op, not a double wrap.
+  runInContext(shimBody, context)
+  assert.equal(runInContext("dshStrict(Object, 'Object', Object.prototype)", context), true)
+  // A user function keeps its real source, including one whose body merely spells
+  // the marker next to something else.
+  assert.equal(runInContext('Function.prototype.toString.call(function userFunction() { return 1 })', context),
+    'function userFunction() { return 1 }')
+  assert.equal(
+    runInContext("Function.prototype.toString.call(function userFunction() { return '[native code]' })", context),
+    "function userFunction() { return '[native code]' }")
 })

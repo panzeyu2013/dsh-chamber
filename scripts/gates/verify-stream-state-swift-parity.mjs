@@ -50,6 +50,7 @@ export function swiftAssertions(tablesPath) {
     ['deliveryReloadMax', delivery.reloadMax],
     ['handshakeTimeoutMs', tables.handshakeTimeoutMs],
     ['openingEpisodeKeysMax', tables.openingEpisodeKeysMax],
+    ['openingTimeoutMs', tables.openingTimeoutMs],
   ]
   const decodedChecks = decodedLeaves.map(([property, expected]) => {
     if (typeof expected !== 'number') {
@@ -78,13 +79,6 @@ export function swiftAssertions(tablesPath) {
     'check("delivery resync max 2", tables.deliveryResyncMax == 2)',
     'check("delivery unresolved retry max 5", tables.deliveryUnresolvedRetryMax == 5)',
     ...decodedChecks,
-    'check("ladder[0]=30s", CarrierDecision.openingBudgetMs(streak: 0, tables: tables) == 30000)',
-    'check("ladder[1]=60s", CarrierDecision.openingBudgetMs(streak: 1, tables: tables) == 60000)',
-    'check("ladder[2]=120s", CarrierDecision.openingBudgetMs(streak: 2, tables: tables) == 120000)',
-    'check("ladder[3]=240s", CarrierDecision.openingBudgetMs(streak: 3, tables: tables) == 240000)',
-    'check("ladder[4]=300s", CarrierDecision.openingBudgetMs(streak: 4, tables: tables) == 300000)',
-    'check("ladder capped", CarrierDecision.openingBudgetMs(streak: 99, tables: tables) == 300000)',
-    'check("ladder degenerate", CarrierDecision.openingBudgetMs(streak: -1, tables: tables) == 30000)',
     'check("rebuild admitted at t=0", CarrierDecision.shouldRebuild(phaseClosed: false, pendingRebuildInFlight: false, rebuildsAt: [], at: 0, tables: tables))',
     'check("rebuild denied inside spacing", !CarrierDecision.shouldRebuild(phaseClosed: false, pendingRebuildInFlight: true, rebuildsAt: [0], at: 500, tables: tables))',
     'check("rebuild denied in same window", !CarrierDecision.shouldRebuild(phaseClosed: false, pendingRebuildInFlight: false, rebuildsAt: [0], at: 30000, tables: tables))',

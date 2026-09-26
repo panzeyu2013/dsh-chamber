@@ -33,7 +33,7 @@ import {
   type SessionStreamHealthState,
 } from './session-stream-health.ts'
 import {
-  hasSessionStreamResync, resyncSessionStream, sessionOpeningFailureLedger,
+  hasSessionStreamResync, resyncSessionStream,
   type SessionsLoose,
 } from './session-stream-health-probe.ts'
 import { SessionStreamHealthChip, type SessionStreamHealthInjected } from './SessionStreamHealthChip.tsx'
@@ -69,34 +69,6 @@ function readSessions(ctx: ClientContext): SessionsLoose | undefined {
 }
 
 export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate): void {
-  /**
-   * Render-side wake-up subscribers (the chip). Announced, not passed as a value:
-   * the terminal opening fact must surface the moment it lands instead of waiting
-   * for the chip's next 1 s tick.
-   */
-  const wakeListeners = new Set<() => void>()
-  const ownInstanceId = (ctx as { readonly chamberInstanceId?: string }).chamberInstanceId
-  /**
-   * Terminal opening evidence published by the in-repo api-gateway fork. The
-   * fact lives in the page-level ledger (shared with the renderer's page seat
-   * through the one page realm); this seat only wakes the chip, so the failure
-   * notice appears the moment the evidence lands. Reading the ledger ALSO
-   * installs its one page listener; an absent/or drifted channel changes nothing.
-   */
-  const openingFailures = sessionOpeningFailureLedger()
-  ctx.effect(() => {
-    const unsubscribe = openingFailures.subscribe(() => {
-      for (const listener of [...wakeListeners]) listener()
-    })
-    // Disposal drops the ledger subscription AND the chip callbacks: a disposed
-    // seat must not keep firing render-side wake-ups (the retired churn effect
-    // used to clear them).
-    return () => {
-      unsubscribe()
-      wakeListeners.clear()
-    }
-  }, 'dsh-chamber: stream opening failure wake-up')
-
   /** Per-session ladder state, keyed the way the budget is defined. */
   const ladders = new Map<string, SessionStreamHealthState>()
 
@@ -122,12 +94,6 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
   ): SessionStreamHealthPlan => {
     try {
       const sessions = readSessions(ctx)
-      // Evidence is read for a loading target only: that is the one arm it
-      // speaks to, and a proven-dead opening must be visible NOW — while the
-      // seat still never re-issues it automatically (it only reports).
-      const openingFailure = openState === 'loading'
-        ? openingFailures.failureFor(ownInstanceId, sessionId, now)
-        : undefined
       // One guarded capability read: the automatic heal's route and the reachable
       // face answer the same question, so they must not be able to disagree.
       const resyncAvailable = hasSessionStreamResync(sessions, sessionId)
@@ -140,7 +106,6 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
           // target, so both facts come from the same guarded probe read.
           healRoute: resyncAvailable,
           resyncAvailable,
-          ...(openingFailure === undefined ? {} : { openingFailure: openingFailure.failure }),
         },
         now,
         SESSION_STREAM_HEALTH_DEFAULTS,
@@ -163,12 +128,6 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
   const face: SessionStreamHealthInjected = {
     t,
     step,
-    // Wake-up for the renderer: the chip bumps its tick so a terminal opening
-    // fact is planned immediately instead of on its next 1 s tick.
-    subscribe: (listener) => {
-      wakeListeners.add(listener)
-      return () => { wakeListeners.delete(listener) }
-    },
     // No user-triggered action exists (retired by user ruling); the face's only
     // side effect is the automatic heal executed by `step`.
   }

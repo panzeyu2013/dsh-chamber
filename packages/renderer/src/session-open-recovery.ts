@@ -3,8 +3,8 @@ import { LADDER_TABLES } from '@dsh-chamber/dsh-stream-state'
 /** Page-level opening outcome independent of the conversation header tree.
  *  Every window comes from the one ladder table: a local numeric copy again
  *  turns `verify-ladder-table-parity` red. */
-export const SESSION_OPEN_FEEDBACK_MS = LADDER_TABLES.streamHealth.loadingStallMs
-export const SESSION_OPEN_FAILED_MS = LADDER_TABLES.streamHealth.loadingFailedMs
+const SESSION_OPEN_FEEDBACK_MS = LADDER_TABLES.streamHealth.loadingStallMs
+const SESSION_OPEN_FAILED_MS = LADDER_TABLES.streamHealth.loadingFailedMs
 
 export type SessionOpenRecoveryPhase = 'quiet' | 'waiting' | 'failed'
 
@@ -13,33 +13,28 @@ export interface SessionOpenHealth {
   state: 'cold' | 'loading' | 'open' | 'error' | 'missing'
   since: number
   now: number
-  /** Only `false` proves that the concrete session has no pending open. */
-  openInFlight?: boolean | undefined
 }
 
 /** An unmounted session is an observable missing face, not an infinite spinner. */
 export function advanceSessionOpenHealth(
   previous: SessionOpenHealth | null,
   sessionId: string,
-  observed: { openState: SessionOpenHealth['state']; resyncAvailable: boolean; openInFlight?: boolean | undefined; resyncInFlight?: boolean | undefined } | null,
+  observed: { openState: SessionOpenHealth['state'] } | null,
   at: number,
 ): SessionOpenHealth | null {
   if (observed === null) {
     if (previous?.sessionId === sessionId && previous.state === 'error') {
-      return { ...previous, now: at, openInFlight: undefined }
+      return { ...previous, now: at }
     }
     const since = previous?.sessionId === sessionId && previous.state !== 'open'
       ? previous.since : at
-    return { sessionId, state: 'missing', since, now: at, openInFlight: undefined }
+    return { sessionId, state: 'missing', since, now: at }
   }
   // Missing → loading is the same unresolved open. A short probe gap cannot
   // restart the deadline, while a genuinely open face resets it.
   const since = previous?.sessionId === sessionId && previous.state !== 'open'
     && observed.openState !== 'open' ? previous.since : at
-  return {
-    sessionId, state: observed.openState, since, now: at,
-    openInFlight: observed.openInFlight,
-  }
+  return { sessionId, state: observed.openState, since, now: at }
 }
 
 export function sessionOpenRecoveryPhase(
@@ -54,20 +49,18 @@ export function sessionOpenRecoveryPhase(
 
 /**
  * The page owns this decision even when the vendor conversation header is absent.
- * `openingFailure` is the stream-forensics evidence for THIS loading episode: a
- * terminal opening fact is the failure itself, so the notice must not wait for
- * the page timer.
+ * The loading failure is this module's own timer: the terminal-opening evidence
+ * that used to short-circuit it was retired with the api-gateway opening phase
+ * machine, so no outer fact decides.
  */
 export function presentedSessionOpenRecoveryPhase(
   health: SessionOpenHealth | null,
   currentSessionId: string | undefined,
   knownBlank: boolean,
-  openingFailure = false,
 ): SessionOpenRecoveryPhase {
   if (health === null || health.sessionId !== currentSessionId) return 'quiet'
   // A blank session may legitimately have no materialized Session object.
   // Its actual loading/error face is still a failure candidate.
   if (knownBlank && health.state === 'missing') return 'quiet'
-  if (openingFailure && health.state === 'loading') return 'failed'
   return sessionOpenRecoveryPhase(health.state, health.now - health.since)
 }

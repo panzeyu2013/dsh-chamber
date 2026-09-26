@@ -24,7 +24,7 @@
 
 | # | 现象 | Proof（钉住它的用例） | 为何是修复 | 退役条件 |
 |---|---|---|---|---|
-| **D-4** | 加宽预算的**归属**从「endpoint+payload 键」改为「逻辑流 episode」（2026-12 落地为 stream-client 的 owner 账本：每 open 以本地 `baseStreak` 认领、仅 owner 可发布、live 兄弟不继承、仅死前驱传递；digest 保留为请求身份）：预算所有权变化，替换次数与时刻都不变，因此差分器看不到 | `Proof: packages/dsh-stream-state/test/carrier/carrier-lifecycle.test.ts`（`openingBudgetMs` 阶梯真值表，含 `-1`/`99` 退化输入） | 旧键在消费者 dispose 后无人清除，重进同一会话从 60–300s 起步（审计 §4.3 的加宽存活洞） | 已按逻辑流所有权收紧，键的存活期等于逻辑流存活期；**彻底删除 digest 仅剩的上游条件** = 领域 opener 转发 episode 参数（vendor 触点，提案见 `docs/progress/todo/upstream-proposals.md`） |
+| **D-4** | 开帧期限的**加宽预算**整体退役（R2）：预算恒为单档 30s，`streak` 仅剩「连续未应答」计数（升级门 + 事实文案）；计数**归属**沿用逻辑流 episode 账本（`openingSent` 登记 requestKey、only-latest 防旧代际串扰、live 兄弟不继承、消费者离场释放、载波拆链保留）——替换次数与时刻都不变，因此差分器看不到 | `Proof: packages/dsh-stream-state/test/carrier/carrier-lifecycle.test.ts`（单档预算真值表 + episode 归属用例） | 加宽只延长静默载波的等待（design 14 §D4）；旧键在消费者 dispose 后无人清除，重进同一会话从宽档起步（审计 §4.3 的加宽存活洞） | 加宽已删除（R2，tables 单点即可恢复）；计数归属按逻辑流收紧，键的存活期等于逻辑流存活期 |
 
 ## C. 实测撤销的记录（防止重造差异）
 

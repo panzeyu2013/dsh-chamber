@@ -39,7 +39,7 @@ test('the watchdog is armed only after the opening window is published and disar
 })
 
 test('the logical open carries a total deadline across physical reopens', () => {
-  // The per-episode opening budget bounds ONE physical attempt; the logical open
+  // The per-episode opening deadline bounds ONE physical attempt; the logical open
   // retries generations. Without this bound the vendor's openPromise stayed pending
   // forever with openState 'loading' and no lever could conclude the open.
   assert.match(open, /const firstFrame = this\.takeNext\(iterator\)/u)

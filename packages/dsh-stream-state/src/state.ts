@@ -8,10 +8,10 @@
 export type CarrierPhase = 'connecting' | 'open' | 'silent' | 'replacing' | 'closed'
 
 /**
- * One logical stream's opening phase (F1). A stream whose open frame was sent is
- * `sent`; one whose first frame arrived is `itemReceived`. Acceptance is NOT a phase
- * stored here - it is the `openingAccepted` event, the only transition that clears
- * the widening ledger, and a phase record simply disappears with its episode.
+ * One logical stream's opening phase: transport evidence only. A stream whose open
+ * frame was sent is `sent`; one whose first frame arrived is `itemReceived` - and
+ * that DELIVERY is the opening's success (the mux disarms its deadline there and the
+ * reducer clears the request's miss streak). A phase record disappears with its episode.
  */
 export type OpeningPhase = 'sent' | 'itemReceived'
 
@@ -30,15 +30,12 @@ export type RecoveryEffect =
   | { readonly e: 'rebuildCarrier'; readonly reason: RebuildReason; readonly at: number }
   /** Reopen one logical stream on the current carrier. */
   | { readonly e: 'reopenLogicalStream'; readonly streamId: string; readonly reason: string }
-  /** Arm one episode's opening deadline at the widening ladder's rung for its current
-   * streak; the host never derives the budget. */
+  /** Arm one episode's opening deadline at the table's SINGLE tier; the host never
+   * derives the budget. `streak` rides along for the escalation threshold and the
+   * diagnostic wording only. */
   | { readonly e: 'armOpeningDeadline'; readonly streamId: string; readonly budgetMs: number; readonly streak: number }
   /** An allowed event arrived while a rebuild was in flight. */
   | { readonly e: 'throttled'; readonly reason: RebuildReason; readonly at: number }
-  /** The opening budget is exhausted: the logical stream's opening is TERMINAL. The
-   * executor fails that stream's consumer with a non-carrier error (the retry lane
-   * must not reopen it) and publishes the `opening-budget-exhausted` fact. */
-  | { readonly e: 'failLogicalOpening'; readonly streamId: string; readonly reason: string }
   /** Bounded observability, never a behavior switch. */
   | { readonly e: 'forensic'; readonly name: string; readonly detail: string }
 
@@ -54,18 +51,13 @@ export type CarrierEventKind =
   | 'rebuildRequested'
   /** An open frame was sent; the reducer arms this episode's opening deadline. */
   | 'openingSent'
-  /** That deadline expired; the reducer advances the episode's widening streak
-   * and decides (silent carrier vs threshold-gated stall) in one step, or declares
-   * the budget exhausted when every rung of the ladder was spent. */
+  /** That deadline expired; the reducer advances the episode's consecutive-miss
+   * streak and decides (silent carrier vs threshold-gated stall) in one step. */
   | 'openingExpired'
-  /** The logical stream's first frame arrived (transport evidence only). It marks the
-   * episode `itemReceived` and NEVER clears the widening: delivery is not acceptance. */
+  /** The logical stream's first frame was DELIVERED to its consumer: this settles the
+   * opening, so the reducer marks the episode `itemReceived` and clears the request
+   * key's consecutive-miss streak. */
   | 'openingAnswered'
-  /** The consumer ACCEPTED the opening item: the only transition that resets the
-   * episode's widening budget (F1). Emitted by RemoteStream from the item's
-   * `accept()`, behind the generation/revision guard, so a superseded generation's
-   * accept can never settle a live one. */
-  | 'openingAccepted'
   /** The logical stream's consumer is gone (dispose / abort / normal end): the
    * episode's claims on the carrier end here. */
   | 'episodeClosed'
@@ -99,21 +91,14 @@ export interface CarrierEvent {
    * registered key). */
   readonly requestKey?: string | undefined
   /** For `episodeClosed` - true when this stream ended BECAUSE its opening deadline
-   * expired: a timed-out episode keeps its widening for the retry lane's next attempt;
-   * any other departure releases the key when no live sibling owns it. */
+   * expired: a timed-out episode keeps its miss streak for the retry lane's next
+   * attempt; any other departure releases the key when no live sibling owns it. */
   readonly timedOut?: boolean | undefined
   /** For `episodeClosed` - true when the CARRIER ended this episode (socket
-   * replacement, loss, client disposal, a denied reopen). The opening budget and its
-   * widening must SURVIVE that while the item was never accepted (F1): a replaced
-   * socket may not reset what a slow Host already earned. Absent = consumer-ended. */
+   * replacement, loss, client disposal, a denied reopen). The opening streak must
+   * SURVIVE that: a replaced socket may not reset what a slow Host already earned.
+   * Absent = consumer-ended. */
   readonly carrierInitiated?: boolean | undefined
-  /** For `episodeClosed` - whether the consumer accepted this episode's opening
-   * item before it ended. An accepted opening releases its widening budget. */
-  readonly accepted?: boolean | undefined
-  /** For `episodeClosed` - true when this departure WAS the terminal budget-exhausted
-   * verdict: the spent widening is released whatever `timedOut` says, so a later open of
-   * the same request starts a fresh ladder instead of inheriting a maxed-out one. */
-  readonly terminal?: boolean | undefined
 }
 
 export interface CarrierState {
@@ -129,18 +114,20 @@ export interface CarrierState {
    * cannot hold the carrier hostage. */
   readonly pendingRebuildBy: string | null
   /** Consecutive opening-deadline misses per REQUEST-EPISODE key (the host's
-   * `streamOpeningKey`). The LEDGER lives here; its lifetime is bounded by
-   * {@link CarrierEnv.openingEpisodeKeysMax} with oldest-first eviction. */
+   * `streamOpeningKey`). It drives the stall-escalation threshold and the diagnostic
+   * wording; the deadline itself is a single table tier. The LEDGER lives here; its
+   * lifetime is bounded by {@link CarrierEnv.openingEpisodeKeysMax} with oldest-first
+   * eviction. */
   readonly openingStreaks: Readonly<Record<string, number>>
   /** Which request-episode key each live logical stream belongs to, so an episode that
-   * ends without an answer can release its widening (a timed-out one keeps it). */
+   * ends without an answer can release its streak (a timed-out one keeps it). */
   readonly streamRequestKeys: Readonly<Record<string, string>>
-  /** Per-episode opening phase (F1), keyed by the episode's streamId. Bounded and
-   * cleared when its episode closes. An episode seen by `openingSent` is `sent`; one
-   * whose first frame arrived is `itemReceived`. */
+  /** Per-episode opening phase, keyed by the episode's streamId. Bounded and cleared
+   * when its episode closes. An episode seen by `openingSent` is `sent`; one whose
+   * first frame was delivered is `itemReceived`. */
   readonly openingPhases: Readonly<Record<string, OpeningPhase>>
-  /** Newest episode per request-episode key (F1): an accept arriving from a
-   * superseded episode must not clear the widening its successor inherited. */
+  /** Newest episode per request-episode key: a delivery arriving from a superseded
+   * episode must not clear the streak a successor inherited. */
   readonly openingLatest: Readonly<Record<string, string>>
 }
 
@@ -158,9 +145,6 @@ export interface CarrierEnv {
   readonly openingStallStreak: number
   /** Bound on the opening-ledger maps (table: OPENING_EPISODE_KEYS_MAX). */
   readonly openingEpisodeKeysMax: number
-  /** Consecutive opening-deadline misses at which the budget is exhausted and the
-   * opening becomes terminal (table: OPENING_BUDGET_MAX_MISSES). */
-  readonly openingBudgetMaxMisses: number
 }
 
 export interface CarrierReduction {

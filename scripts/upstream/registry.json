@@ -233,18 +233,18 @@
       "classify": {
         "patched": {
           "package.json": "[patch-mod] description/peer 集裁剪（host 依赖 dropped）+ chamber test 脚本 + 删除死发布面 files/main/types（本仓不构建 lib、无发布路径；exports 面保持上游 lib 目标供 renderer 按包名消费；版本行随上游推进）",
-          "src/client/index.ts": "[patch-mod] apply(ctx) 读 ctx.chamberBasePath → /api/remote.mux 落到实例前缀 + start(sinks, recoveryOverridesForTransport(transport))（design 05 §6）+ $stream 工厂组合 carrierFailed 发布 dsh-chamber:stream-carrier-failed 页面事实（design 14 §D4）+ 生命周期取证通道 dsh-chamber:stream-forensics（generation 就绪/丢失；卡死排查）+ 开帧接受通道（F1）：prepareInvocation 把 RemoteStream 的 OpeningTicket 复制到组合 signal、openRemoteStream 取回并显式交给 mux.open，vendor 层不参与对象身份",
+          "src/client/index.ts": "[patch-mod] apply(ctx) 读 ctx.chamberBasePath → /api/remote.mux 落到实例前缀 + start(sinks, recoveryOverridesForTransport(transport))（design 05 §6）+ $stream 工厂组合 carrierFailed 发布 dsh-chamber:stream-carrier-failed 页面事实（design 14 §D4）+ 生命周期取证通道 dsh-chamber:stream-forensics（generation 就绪/丢失；卡死排查）",
           "src/client/journal-stream.ts": "[patch-mod] 静默看门狗（design 14 §D4 卡死排查）：已开启的 journal 静默 ≥45s 时开一条旁路 sibling follow、只比对 opening cursor，仅当宿主确已前进才替换物理世代（新 opening 以 replace 全窗口收敛）；不设盲空闲重启；探针节奏按无进展次数放宽至 90s 上限（探针自身失败/超时同样放宽）；prepend 用户读带 60s 期限",
-          "src/client/remote-stream.ts": "[patch-mod] 载波重试策略：活连接世代下的后续载波失败改走有界退避重开，不再逃逸为终局 gateway/internal（design 14 §D4；退避纯函数在同包 own 文件 remote-retry-policy.ts，patch 形状由 test/patch-lock 钉住）+ 开帧相位机（F1）：每个世代创建 OpeningTicket 并挂在世代 signal 上，消费者 accept() 是唯一打开进度；非 RemoteStreamCarrierError 的终局（RemoteStreamOpeningBudgetError）不得进入重试道",
-          "src/client/stream-client.ts": "[patch-mod] per-entry basePath（流载波 URL 拼装）+ 开帧发送前校验（socket 已被替换/正在关闭 ⇒ 载波失败，杜绝 RFC 6455 静默丢弃）+ 逻辑流首帧期限（30s 起、按 endpoint+payload 摘要识别请求、加宽 rung 归逻辑流（同键 live 兄弟不继承）、连续超时放宽至 300s（30→60→120→240→300），失败 inbox 走既有退避重开）+ 静默 socket 升级（首帧期限到期而当前 socket 本次尝试期间一帧未收 ⇒ replaceSocket() 换掉物理 socket，与连接泵 reconnect() 共用拆除道，不再在同一条静默载波上重发；放宽预算保留）+ socket 丢失后自行重排重连（1s 起、连接泵下令的重连不计失败、真实失败翻倍封顶 10s、成功即复位）+ WebSocket 握手期限 30s + socket 生命周期取证（lost/reconnect/attempt-failed/disposed/opening-timeout/socket-silent）+ teardown 分支：逻辑流在其整个生命期内该 socket 零帧且生命期 ≥ 表值 SILENT_TEARDOWN_MIN_MS（15s）⇒ 同一条换 socket 升级（覆盖 20s 探针 abort 早于 30s 预算的已开启会话形态）+ 开帧相位机（F1，2026-09「载入历史」永久停驻的根因修复）：openingAnswered 只把相位推进到 itemReceived，唯一结算转移是消费者 accept() 的 openingAccepted（按世代守卫，旧代际 accept 不得清后继者账本）；期限是发送时装载的定时器（不是 next() 竞速），交付但未接受的 opening 也能到点；预算跨世代总计（openingBudgetMaxMisses = 阶梯长度），耗尽即终局——用非载波 RemoteStreamOpeningBudgetError 失败消费者（重试道不得重开它）、socket 留给兄弟流，判词只在终局发布（opening-budget-exhausted 必发 + opening-orphaned 有帧但从未接受 / opening-timeout 真无帧），非终局的每一级只是 opening-miss 诊断；终局若落在整窗零帧的 socket 上仍 replaceSocket()（且终局失败先落 inbox 再换 socket），期限到期而 inbox 已被载波失败时不发任何 opening 事实；被拒绝的 send 与任何无法结算的 opening 都失败 inbox，绝不留下静默 pending",
+          "src/client/remote-stream.ts": "[patch-mod] 载波重试策略：活连接世代下的后续载波失败改走有界退避重开，不再逃逸为终局 gateway/internal（design 14 §D4；退避纯函数在同包 own 文件 remote-retry-policy.ts，patch 形状由 test/patch-lock 钉住）",
+          "src/client/stream-client.ts": "[patch-mod] per-entry basePath（流载波 URL 拼装）+ 开帧发送前校验（socket 已被替换/正在关闭 ⇒ 载波失败，杜绝 RFC 6455 静默丢弃）+ 逻辑流首帧期限（单档 30s，按 endpoint+payload 摘要识别请求与连续超时计数，失败 inbox 走既有退避重开）+ 静默 socket 升级（首帧期限到期而当前 socket 本次尝试期间一帧未收 ⇒ replaceSocket() 换掉物理 socket，与连接泵 reconnect() 共用拆除道，不再在同一条静默载波上重发）+ socket 丢失后自行重排重连（1s 起、连接泵下令的重连不计失败、真实失败翻倍封顶 10s、成功即复位）+ WebSocket 握手期限 30s + socket 生命周期取证（lost/reconnect/attempt-failed/disposed/opening-timeout/socket-silent）+ teardown 分支：逻辑流在其整个生命期内该 socket 零帧且生命期 ≥ 表值 SILENT_TEARDOWN_MIN_MS（15s）⇒ 同一条换 socket 升级（覆盖 20s 探针 abort 早于 30s 预算的已开启会话形态）",
           "tsconfig.client.json": "[patch-mod] chamber client 构面（files 表随新增 client 文件同步）",
           "tsconfig.json": "[patch-mod] chamber 构面（files 表随新增 client 文件同步）"
         },
         "own": {
           "scripts/test.mjs": "chamber 自有测试清单（按域分组的显式 manifest；verify:test-wiring 校验可达性）",
-          "src/client/remote-retry-policy.ts": "chamber 载波退避纯函数（retry first/base/max 与无世代等待上限）+ 可中止等待 + 开帧身份键 streamOpeningKey + mux 自查重连重排区间 1s/10s（零 import，可脱离 vendor 图行为单测）；首帧期限阶梯、静默 teardown 下限与 WebSocket 握手期限均已单源于 @dsh-chamber/dsh-stream-state 的 tables.ts，本文件不再持有副本",
+          "src/client/remote-retry-policy.ts": "chamber 载波退避纯函数（retry first/base/max 与无世代等待上限）+ 可中止等待 + 开帧身份键 streamOpeningKey + mux 自查重连重排区间 1s/10s（零 import，可脱离 vendor 图行为单测）；首帧期限、静默 teardown 下限与 WebSocket 握手期限均已单源于 @dsh-chamber/dsh-stream-state 的 tables.ts，本文件不再持有副本",
           "src/client/stream-carrier-fact.ts": "chamber 载波故障页面事实（有界计数 + dsh-chamber:stream-carrier-failed；零 import，可注入 dispatch 单测）",
-          "src/client/stream-forensics.ts": "chamber 流生命周期取证事实（有界计数 + dsh-chamber:stream-forensics：socket lost/reconnect/disposed/silent、opening-timeout、generation ready/lost、opening-accepted / opening-orphaned / opening-budget-exhausted / opening-miss（F1 相位终局与诊断；detail 带 endpoint、streamId、waitedMs、best-effort sessionId）；零 import，可注入 dispatch 单测）",
+          "src/client/stream-forensics.ts": "chamber 流生命周期取证事实（有界计数 + dsh-chamber:stream-forensics：socket lost/reconnect/disposed/silent、opening-timeout、generation ready/lost（detail 带 endpoint、streamId、waitedMs、best-effort sessionId）；零 import，可注入 dispatch 单测）",
           "src/client/stream-stall-policy.ts": "chamber 静默看门狗纯决策（阈值 + probe/wait 判定；零 import，可脱离 vendor 图行为单测）",
           "tsconfig.check-base.json": "chamber erasable-only 校验构面（files 与 client 同步）",
           "tsconfig.check-client.json": "chamber erasable-only 校验构面（files 与 client 同步）"
@@ -253,7 +253,7 @@
           "test/"
         ],
         "ownNotes": {
-          "test/": "chamber 自有测试（退避真值表 + 可中止等待 + 载波事实契约 + patch 源文本锁 + opening 相位机行为用例 test/behavior/opening-phase-machine.test.ts）"
+          "test/": "chamber 自有测试（退避真值表 + 可中止等待 + 载波事实契约 + patch 源文本锁 + 载波自救行为用例 test/behavior/mux-self-heal.test.ts）"
         },
         "dropped": [
           "README.i18n.yaml",

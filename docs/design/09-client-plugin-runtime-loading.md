@@ -322,7 +322,7 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   `expect`→`replace`，`expect` 必须**恰好命中一次**（0 次或多次 = 构建期抛错，绝不静默发出未打补丁的
   bundle）。应用点 = renderer 的 `deepseekSource().transform`（我们的 vite 配置），vendor 文件**零写入**；
   模块 id 并接受软链形式与 `realpathSync` 后的子模块形式（vite 实际给后者）。
-- 落点（rc.2：10 个文件 / 23 处锚点，逐锚点由触点表 C9 与 `packages/renderer/scripts/vendor-patches.test.mjs`
+- 落点（rc.2：11 个文件 / 24 处锚点，逐锚点由触点表 C9 与 `packages/renderer/scripts/vendor-patches.test.mjs`
   校验）：① `ui-chat` 的 `chat/AssistantMarkdown.tsx` 读取新增 root 标准 **prop**
   `chamberFileApiBase`（chamber layout fork 经 `ctx.slots.provideRoot({ props })` 提供，值 = 本 entry 的
   `ctx.chamberBasePath`），`pathImages` 以 `new URL(chamberFileApiBase + '/', document.baseURI)` 作为上游
@@ -346,6 +346,13 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   非 reader 偏移在 `data-chat-following-tail` 保持的情况下永久残留；触发侧为直接 bash 调用的
   preparing→started 整行替换，scroll 侧成因未定，PTC 子调用不渲染准备行故不复现）。`reason` 必须写明实测症状
   与接受的取舍；上游带上修复后删除该条（首选形状 = `use-chat-viewport.ts` 按意图归因）。
+- 同类第二个实例：**`dsh-util-values/src/index.ts` 的 `hasIntrinsicConstructor`**——该判定把 `Function.prototype.toString`
+  的结果与**单行模板**严格比较，而 JavaScriptCore/WKWebView 对**内建函数**打印多行文本（`{ [native code] }` 带换行/缩进）
+  ⇒ 判定在 WebKit 里恒假、`snapshotJsonValue` 对普通对象/数组返回 `undefined`，流式会话在 raw chunk 校验处抛普通
+  `TypeError`；pin 住的 `doOpen` 只对 `isRemoteFailure` 写 `error`、其余原样 rethrow ⇒ 页面永久停驻 `loading`
+  （间歇性：raw chunk 只对 block-start/block-end/usage/finish 出现）。修法 = 同一次调用加 `.replace(/\s+/g, ' ')`
+  空白归一（V8 行为不变、WebKit 恢复）；`reason` 写明症状、接受的取舍（仅空白差异的伪造函数会通过，名字与原型身份
+  检查仍在）与删除条件（上游改为引擎无关判定）。该条同样由 C9 + `vendor-patches.test.mjs` 的**执行用例与负对照**钉住。
 - 保鲜门：`verify-upstream-touchpoints.mjs` **C9** 对 pin 住的 vendor 文件逐锚点校验（硬失败）；
   `packages/renderer/scripts/vendor-patches.test.mjs` 在 CI 侧验证锚点唯一、改写后函数行为（含上游回落
   分支）与 id 形态匹配。

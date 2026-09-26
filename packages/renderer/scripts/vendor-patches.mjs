@@ -367,6 +367,22 @@ export const VENDOR_PATCHES = Object.freeze([
       }),
     ]),
   }),
+  Object.freeze({
+    idSuffixes: Object.freeze([
+      'dsh-util-values/src/index.ts',
+      'packages/util/values/src/index.ts',
+    ]),
+    vendorFile: 'dsh-util-values/src/index.ts',
+    reason: 'engine-dependent intrinsic check (measured in the shipped Swift/WKWebView shell): JavaScriptCore prints the native form as a MULTI-LINE string (`function Object() {\n    [native code]\n}`), so the strict one-line template compare is false for EVERY realm intrinsic. snapshotJsonValue then returns undefined for every plain object and array, and opening a streaming session throws a plain TypeError in the session controller raw-chunk validation; the pinned doOpen writes openState = error only for a remote failure and rethrows everything else, so the page parks on loading forever (raw chunk records appear only for block-start/block-end/usage/finish, which is why it is intermittent). The predicate is module-private, so no chamber package can reach it; whitespace-normalizing the same call was validated against the shipped bytes under JavaScriptCore (the unpatched control still fails) and leaves V8 unchanged. Accepted trade-off: a forged function whose printed source differs from the native form only by whitespace would now pass; the name and prototype identity checks still hold. Delete this entry once upstream compares engine-independently.',
+    edits: Object.freeze([
+      Object.freeze({
+        expect: '      && Function.prototype.toString.call(constructor) === `function ${name}() { [native code] }`',
+        replace: '      // chamber patch: JavaScriptCore prints multi-line native source; compare a\n'
+          + '      // whitespace-normalized form so the intrinsic check is engine-independent.\n'
+          + '      && Function.prototype.toString.call(constructor).replace(/\\s+/g, \' \') === `function ${name}() { [native code] }`',
+      }),
+    ]),
+  }),
 ])
 
 /** Normalize a module id: drop vite query/hash and force POSIX separators. */

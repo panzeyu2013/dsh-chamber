@@ -12,14 +12,12 @@
  */
 import { recordIncident } from './incident.ts'
 import {
-  DELIVERY_EFFICACY,
   LADDER_TABLES,
   chamberRunId,
-  classifyDeliverySymptoms,
   deliveryLadder,
+  describeRunId,
   hostRunId,
   runIdFamily,
-  describeRunId,
   planDeliveryRecovery,
   preferRunId,
   unresolvedRetryDelayMs,
@@ -30,7 +28,12 @@ import {
   type SessionRunId,
 } from '@dsh-chamber/dsh-stream-state'
 
-export { DELIVERY_EFFICACY, classifyDeliverySymptoms, deliveryLadder, describeRunId, unresolvedRetryDelayMs }
+// The production-import face of these three stream-state exports: their only other
+// consumers are stream-state's own suites, so dropping this re-export turns
+// `verify:no-dead-exports` (check:static) red. Whether to delete the underlying
+// exports, wire them into a real consumer, or exempt them is an open owner call
+// (docs/progress/STATUS.md) - do not silently drop the face.
+export { deliveryLadder, describeRunId, unresolvedRetryDelayMs }
 export type { DeliverySymptom, SessionRunId }
 
 /** What the owner asks the shell to do this tick (at most one action per tick). */
@@ -89,27 +92,26 @@ export function createSessionDeliveryOwner(): SessionDeliveryOwner {
       )
       if (runId !== undefined) lastRuns.set(input.sessionId, runId)
       else lastRuns.delete(input.sessionId)
-      // A `loading` face is NOT an automatic-recovery symptom: an open still in
-      // flight is the host's to finish, and a parked one is the user's decision
-      // (the stream-forensics evidence surfaces it; the page never re-issues an
-      // open on a timer). The face is dropped BEFORE the shared classifier, and
-      // its in-flight bits still block every other tier, so "an automatic action
-      // never crosses a pending open" is unchanged.
-      const loadingFace = input.evidence.open?.state === 'loading' ? input.evidence.open : undefined
-      const evidence = loadingFace === undefined
-        ? input.evidence
-        : { ...input.evidence, open: undefined }
+      // A parked `loading` face IS an automatic-recovery symptom: the shared
+      // classifier proves it with `openInFlight === false` (an open still in
+      // flight is the host's to finish, and an unreadable liveness bit fails
+      // closed), so a parked open is re-issued through this page's bounded ladder
+      // — the SAME owner, grace, cooldown and quota as the error arm. The face
+      // reaches the classifier unchanged; a pending open or a disposing rebuild
+      // still blocks every tier through `escalationBlocked`, so "an automatic
+      // action never crosses a pending open" is unchanged.
+      const open = input.evidence.open
       const outcome = planDeliveryRecovery({
         evidence: {
           sessionId: input.sessionId,
           ...(runId === undefined ? {} : { runId }),
-          ...evidence,
+          ...input.evidence,
         },
         records: records.has(input.sessionId) ? { [input.sessionId]: records.get(input.sessionId) as LadderRecord } : {},
         now,
         escalationBlocked: input.escalationBlocked === true
-          || (loadingFace !== undefined
-            && (loadingFace.openInFlight === true || loadingFace.resyncInFlight === true)),
+          || open?.openInFlight === true
+          || open?.resyncInFlight === true,
       })
       if (options?.commit !== false) {
         const nextRecord = outcome.plan.records[input.sessionId]

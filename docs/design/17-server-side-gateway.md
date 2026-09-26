@@ -366,7 +366,7 @@ trusted proxy 缺失、重复、含逗号或非法的 XFF 时，client identity 
   change 路由同纪律）；凭据和内部错误不进入日志或响应。
 - 代理到 dsh 前端的响应头取自 `packages/gateway/src/dispatch.ts` 的
   `GATEWAY_PROXY_CSP`（gateway-only 放宽）：`script-src` 放开 inline（被代理的文档是
-  上游自己的内联 `__DSH_BOOT__`/loader 脚本不带 nonce，本进程只插入 S0 信任声明、不为不属于
+  上游自己的内联 `__DSH_BOOT__`/loader 脚本不带 nonce，本进程只插入 S0 头补丁（信任声明与 WebKit 原生源码归一）、不为不属于
   自己的脚本回填 nonce）；`base-uri` 取 `'self'` 而非 `'none'`——上游
   `@deepseek-ai/dsh-host-frontend-static` 每个 renderIndex 文档都注入 `<base href="/">`，
   `'none'` 会让浏览器拒绝该元素。该放宽按「元素必须生效」记账：固定 pin 下 `serveStatic`
@@ -490,9 +490,9 @@ Gateway proxy 与 per-instance proxy 共用 `proxy-forward.ts`，协议行为相
 - `accept-encoding` 只对**必须 identity 的两类请求**剥离（判定 `proxy-forward.ts`
   `requiresIdentityUpstreamEncoding` = `isHtmlDocumentNavigation` ∨ `acceptsEventStream`）：
   ① HTML 文档导航（GET/HEAD + `Accept` 含 `text/html`，路径不在 `/api`、`/plugins`、`/auth/…`、
-  `/chamber/<subpath>`，且不是内容寻址的 `/assets/<name>-<hash>.<ext>`）——S0 注入的前提：
+  `/chamber/<subpath>`，且不是内容寻址的 `/assets/<name>-<hash>.<ext>`）——S0 头补丁注入的前提：
   `htmlInjectable` 要求上游 `text/html` 未被编码，`html-inject.ts` 依赖它写入
-  `__DSH_TRANSPORT__`；② `Accept` 含 `text/event-stream` 的 SSE 请求——**不是文档导航，而是传输层
+  `__DSH_TRANSPORT__` 与原生源码归一脚本；② `Accept` 含 `text/event-stream` 的 SSE 请求——**不是文档导航，而是传输层
   保险**（远端/旧版实例未必带 pinned gzip filter，长流被压缩即被缓冲）。其余请求把压缩协商交给
   上游 gzip 中间件（dsh-host-webserver `createGzipMiddleware` 自身拒绝 `text/event-stream` 与
   `content-range`），回程 `content-encoding`/`vary` 已在响应白名单内——该取舍修订 2026 audit M3b
@@ -782,6 +782,15 @@ chamber 代码。chamber 插件（sidebar/layout/settings-bridge/git/open-in 等
   能登录即受信（`--no-auth` 可信网络部署同语义）——非鉴权绕过（服务端 RPC 不区分来源，该门是纯
   客户端 UI 策略）；上游移除钩子/改压缩行为则注入静默失效（fail-soft，设置退回受限态，升级 dsh 版本需
   复验）。实现与验收见 STATUS.md「http 连接链路修复（S0/S2）」。
+- **WebKit 原生源码归一（S0 头补丁之二，design 14 §D4）**：同一个 `html-inject.ts` 出口还把**只作用于内建函数**的
+   `Function.prototype.toString` 空白归一脚本插进同一批文档（与信任声明**各自幂等**：已声明 transport 钩子的文档仍会得到它）。
+   JavaScriptCore 对**内建函数**打印多行 `{ [native code] }`，而 pin 住的 `@deepseek-ai/dsh-util-values`
+   `hasIntrinsicConstructor` 与单行模板严格比较 ⇒ 判定恒假 ⇒ `snapshotJsonValue` 对普通对象/数组返回 `undefined`
+   ⇒ 官方前端的会话 raw-chunk 校验抛普通 TypeError，`doOpen` 只对远程失败写 `error`，页面永停 `loading`。
+   chamber 自建前端由 renderer 构建期的第三类 vendor 补丁覆盖（design 14 §D4）；**代理的官方前端无法在这里重建**，
+   故在出口做等价归一（V8 无变化；只有整段源码就是原生标记的函数被改写，用户函数原样返回）。
+   **取舍**：该页面的原生函数源码文本变为规范单行；**删除条件** = 上游携带引擎无关判定
+   （`docs/progress/todo/upstream-proposals.md` §9）或支持的 WebKit 基线已打印单行形式。
 - **`/chamber/` 运维仪表盘**是浏览器侧的运维面（§10）：同源 cookie 会话、Credentials 面板与 dsh
   运行时管理（版本 / 选择 / apply / rollback / restore / retry / restart / registry）；它是 gateway
   自有的运维入口，与托管前端并列，不依赖桌面插件，且**不随 ready detach**（dsh 停机窗口可轮询恢复）。
@@ -1294,7 +1303,7 @@ chamber 客户端插件）见 §3 装配矩阵与 §10.2。
 | 层 | 承担者 | 职责 | 与仓库纪律的关系 |
 |---|---|---|---|
 | 移动适配（覆盖层） | chamber 自研 dsh 客户端插件（`packages/dsh-chamber-client-ui-mobile-*`） | 窄屏下对官方前端做布局/触控/PWA 适配 | 复用 dsh 官方插件机制（design 09 方案 A `--patch` seed / bundle），**不改官方源码**；不写第二套聊天 UI、不消费会话内容（P1/P2/P3 均不触碰） |
-| 暴露与入口（路由层） | gateway | UA 体验分流（可选）、认证边界（§7）、PWA 资产、反代 | 保持流式透传（**无 HTML 改写**——S0 信任声明注入除外，§10.5，非布局改写）；UA 只是体验分流，**不是安全边界**（认证仍是唯一边界，S1/S2） |
+| 暴露与入口（路由层） | gateway | UA 体验分流（可选）、认证边界（§7）、PWA 资产、反代 | 保持流式透传（**无 HTML 改写**——S0 头补丁注入除外，§10.5，非布局改写）；UA 只是体验分流，**不是安全边界**（认证仍是唯一边界，S1/S2） |
 
 **移动例外（契约）**：`dsh-chamber-client-ui-mobile` 是唯一随 gateway 发行物打包 seed 的 chamber 客户端插件（§10.5、§3 矩阵、§10.2「不参与桌面同步」）；桌面侧 chamber 插件（sidebar/layout/settings-bridge/git/open-in）依旧不注入。机制同 host-graph-seed `--patch` overlay（design 09 §3.1 方案 A），与两个宿主 seed 包同构，区别只在**分发来源**：宿主包经桌面 `PUT /chamber/plugins` 同步（版本锁定到连接桌面），移动插件随 gateway 打包（链路无桌面在场）。
 
@@ -1308,14 +1317,14 @@ chamber 客户端插件）见 §3 装配矩阵与 §10.2。
 | 登录流转（未认证移动访问 → 登录页 → 回移动入口） | **gateway 独占**（dispatch `shouldRedirectToLogin`，与桌面浏览器同流转） | 插件不注入、不重定向、不感知认证状态 |
 | UA 体验分流 | **gateway 独占**（dispatch step 4.5，认证门后，仅体验分流） | 插件不读 UA |
 | PWA 资产挂载与 SW 纪律 | gateway 占位 + 插件 P2 期 node 半部（§18.7） | SW 不缓存认证响应（§18.5） |
-| 布局/触控/行为层/视觉 | **插件独占** | gateway 不注入样式、不改写 HTML（流式透传；S0 信任声明注入除外，§10.5） |
+| 布局/触控/行为层/视觉 | **插件独占** | gateway 不注入样式、不改写 HTML（流式透传；S0 头补丁注入除外，§10.5） |
 | dsh 运行时版本管理、seed registry、`/chamber/*` 运维面 | **gateway 独占**（§10.2/§10.3、design 18 §9） | 插件不感知运行时状态 |
 
 ### 18.3 方案结构
 
 ```
 手机浏览器 ──(UA 路由，可选)──▶ gateway 认证边界（§7，唯一安全边界）
-                                   │ 反代（流式透传，无改写；S0 信任声明注入除外，§10.5）
+                                   │ 反代（流式透传，无改写；S0 头补丁注入除外，§10.5）
                                    ▼
                           gateway 托管的本地 dsh（web profile）
                                    │ 打包 seed（§3 矩阵移动例外：插件随

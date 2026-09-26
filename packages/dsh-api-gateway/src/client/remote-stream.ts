@@ -13,7 +13,7 @@ import {
   remoteStreamRetryDelayMs,
   REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS,
 } from './remote-retry-policy.ts'
-import { RemoteStreamCarrierError, RemoteStreamGenerationRestart, OpeningTicket, attachOpeningTicket } from './stream-client.ts'
+import { RemoteStreamCarrierError, RemoteStreamGenerationRestart } from './stream-client.ts'
 import { withDeadline } from '@dsh-chamber/dsh-stream-state'
 
 /** Real clock, injected: the bound's SCHEDULING lives in the primitive; its VALUE stays local. */
@@ -35,7 +35,8 @@ export interface RemoteStreamItem<Item> {
   readonly value: Item
   /** Cancellation lifetime of the generation that delivered this item. */
   readonly signal: AbortSignal
-  /** Mark this generation's opening baseline or cursor as accepted. */
+  /** The domain VALIDATED this generation's opening baseline or cursor: reset the
+   *  episode's reopen pacing (the carrier's own delivery deadline is already cleared). */
   accept(): void
 }
 
@@ -78,7 +79,7 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
   restart(): void {
     if (this.lifetime.signal.aborted) return
     this.revision++
-    // A carrier-side teardown, not a consumer departure: the opening budget survives it.
+    // A carrier-side teardown, not a consumer departure: the opening streak survives it.
     this.generationAbort?.abort(new RemoteStreamGenerationRestart(`${this.options.name} generation restarted`))
   }
 
@@ -120,12 +121,6 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
         const generationAbort = new AbortController()
         this.generationAbort = generationAbort
         const signal = AbortSignal.any([this.lifetime.signal, generationAbort.signal])
-        // F1: this generation's opening ticket travels on the exact signal the source
-        // opens with. The carrier layer binds its per-attempt accept handler when it
-        // sends this generation's open frame, so the consumer's accept() reaches
-        // exactly the attempt that delivered the item - never a successor's.
-        const opening = new OpeningTicket()
-        attachOpeningTicket(signal, opening)
         const generationId = ++generation
         let accepted = false
         let source: AsyncIterator<Item> | undefined
@@ -151,12 +146,11 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
               signal,
               accept: () => {
                 // The generation/revision fence is the ONLY guard that matters here: an
-                // accept from a superseded generation is dropped before it can reach the
-                // carrier, so it can never settle a live attempt (F1, test e).
+                // accept from a superseded generation is dropped before it can reset a
+                // live attempt's pacing.
                 if (this.generationAbort !== generationAbort || revision !== this.revision) return
                 accepted = true
                 attempt = 0
-                opening.accepted()
               },
             }
           }

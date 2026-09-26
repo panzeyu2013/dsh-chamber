@@ -20,33 +20,25 @@ export const MIN_REBUILD_SPACING_MS = 1_000
  * connect attempt. */
 export const IN_FLIGHT_GRACE_MS = 1_000
 
-/** Opening-item deadline per logical-stream episode, and its widening ladder. Ladder
- * index = consecutive timeouts for ONE episode; the episode, not an endpoint digest,
- * owns the widening. Sole owner for TS and the fork. */
-export const OPENING_TIMEOUT_LADDER_MS: readonly number[] = [30_000, 60_000, 120_000, 240_000, 300_000]
+/** Opening-item deadline per logical-stream episode: ONE tier (delivery clears it,
+ * expiry fails the episode into the retry lane). Consecutive unanswered deadlines
+ * raise the episode's streak, which gates the stall escalation - the streak never
+ * widens this budget. Sole owner for TS and the fork. */
+export const OPENING_TIMEOUT_MS = 30_000
 
 /** A logical stream must have lived at least this long before its teardown may judge
  * the socket silent. */
 export const SILENT_TEARDOWN_MIN_MS = 15_000
 
-/** Consecutive unanswered opening deadlines for ONE logical stream at which its
- * opening budget is EXHAUSTED: every rung of {@link OPENING_TIMEOUT_LADDER_MS} was
- * spent without the consumer ever accepting, so the phase machine reports a
- * terminal instead of re-issuing forever (the ladder total is the budget). Consumed
- * through {@link CARRIER_ENV}/`TABLE_SNAPSHOT`, never imported as a bare constant. */
-const OPENING_BUDGET_MAX_MISSES = OPENING_TIMEOUT_LADDER_MS.length
-
 /** Consecutive unanswered opening deadlines for ONE episode before the carrier is
- * rebuilt while frames ARE arriving (the single-sourced sibling of the ladder above;
- * the retired host-side constant it used to mirror is gone). A frame-answering socket
- * is left alone on the first timeout because a slow-but-working Host must keep its
- * in-flight answer; only a second consecutive miss proves the request - not the
- * socket - is stuck. */
+ * rebuilt while frames ARE arriving. A frame-answering socket is left alone on the
+ * first timeout because a slow-but-working Host must keep its in-flight answer;
+ * only a second consecutive miss proves the request - not the socket - is stuck. */
 export const OPENING_STALL_STREAK = 2
 
 /** Bound on the reducer's opening-ledger maps: a page that times out on many sessions
  * must not grow the ledger without a limit. Oldest-first eviction only resets a key's
- * widening; it never changes a decision already made. */
+ * consecutive-miss count; it never changes a decision already made. */
 const OPENING_EPISODE_KEYS_MAX = 256
 
 /** Deadline for one WebSocket handshake: a socket that never fires open/error/close
@@ -82,15 +74,7 @@ export const CARRIER_ENV = {
   inFlightGraceMs: IN_FLIGHT_GRACE_MS,
   openingStallStreak: OPENING_STALL_STREAK,
   openingEpisodeKeysMax: OPENING_EPISODE_KEYS_MAX,
-  openingBudgetMaxMisses: OPENING_BUDGET_MAX_MISSES,
 } as const
-
-/** Opening deadline for an episode that has already timed out `streak` times. */
-export function openingBudgetMs(streak: number): number {
-  const index = Number.isFinite(streak) && streak > 0 ? Math.floor(streak) : 0
-  const capped = Math.min(index, OPENING_TIMEOUT_LADDER_MS.length - 1)
-  return OPENING_TIMEOUT_LADDER_MS[capped] as number
-}
 
 /**
  * The FOUR recovery ladders' thresholds, recorded here as the single table.
@@ -190,11 +174,10 @@ export const TABLE_SNAPSHOT = {
   maxRebuildsPerWindow: MAX_REBUILDS_PER_WINDOW,
   minRebuildSpacingMs: MIN_REBUILD_SPACING_MS,
   inFlightGraceMs: IN_FLIGHT_GRACE_MS,
-  openingTimeoutLadderMs: OPENING_TIMEOUT_LADDER_MS,
+  openingTimeoutMs: OPENING_TIMEOUT_MS,
   silentTeardownMinMs: SILENT_TEARDOWN_MIN_MS,
   openingStallStreak: OPENING_STALL_STREAK,
   openingEpisodeKeysMax: OPENING_EPISODE_KEYS_MAX,
-  openingBudgetMaxMisses: OPENING_BUDGET_MAX_MISSES,
   handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
   presentation: PRESENTATION_THRESHOLDS,
   ladders: LADDER_TABLES,

@@ -84,7 +84,7 @@ chamber侧缓解（不动上游事实面）：design 05 §2.2.1的open意图本�
 3. **流期限**：`session/follow` 加首帧/空闲期限（现永久无首帧即永久 loading，见
    `STATUS.md`「会话打开停滞」）；**并把失败写成状态**：宿主/客户端任一环的首帧期限到期都应让
    `Session.openState` 落到 `'error'`（带原因），而不是停留在 `'loading'`。chamber 侧用「证据门自动重建 + 90 s 硬失败面」收敛客户端可修的部分（design 14 §D4），但宿主侧期限
-   仍是「进入必有内容」的最后一块。
+   仍是「进入必有内容」的最后一块。**（已由发行版与真机证据复核：宿主仍无期限；客户端加宽阶梯已主动退役为单档 30 s，故本条仍是唯一根治。）**
    - **客户端可自修的最后一公里 = unary 引导通道**：宿主 `session/page` 是冷读，且 `session/control` baseline 的 `projections[sid].asOfSeq`（= `session.seq - 1`）是合法 `throughSeq` ⇒ 协议层存在不依赖 `session/follow` 开帧的引导路径，当前 pinned 客户端没有 unary→窗口写入者。chamber **未采纳**（与 follow 共用宿主 `sourceFor`，救不了宿主卡死；且属非契约窗口写入面），作为无 fork 档（触屏档）的候选兜底保留在此。（上面的 1/2 条同理）。
 4. **让 `refresh()` 可判成败**（最便宜、且不新增 API 面）：`SessionManager.refreshList()`
    现在对「拉取失败」照常 resolve，只把 `listState` 置 `'error'`（`listError` 同存）。
@@ -112,10 +112,10 @@ chamber侧缓解（不动上游事实面）：design 05 §2.2.1的open意图本�
 7. **把「打开是否在途」暴露到契约/快照**（新增诉求）：`Session.doOpen()` 有三条
    静默留在 `loading` 的路径（非 `isRemoteFailure` 抛错；`events.open()` 返回前
    `openGeneration`/`events` 推进），而重开只有 `followCurrent()` 的 stage 移动一条**外部**
-   触发。chamber 现在以具象成员 `Session.openPromise`（`null` = 无在途、缺失 = unknown）作证据门
-   自动重开，属「上游公开但非契约」的读取；把 `openState` + 在途标志（或 `open(): Promise<…>` 的
+   触发。chamber 现在以共享引擎的 `open-stall = loading && openInFlight === false`（读具象成员 `Session.openPromise`：`null` = 无在途、
+   缺失 = unknown）作证据门自动重开，属「上游公开但非契约」的读取；把 `openState` + 在途标志（或 `open(): Promise<…>` 的
    显式结果）写进 `SessionSnapshot`/契约后，这条自动臂即可去掉 structural slice，且上游自己也能
-   在 `doOpen` 收敛时优先补一次 `open()`。
+   在 `doOpen` 收敛时优先补一次 `open()`。**（已由发行版与真机证据复核：`doOpen` 仍只对 `isRemoteFailure` 写 `error`、其余原样 rethrow；该形态在真机与发行版均产生过永久 `loading`。）**
 
 > **chamber 侧现状**：在**不改上游、不新增 fork**的前提下，
 > chamber 用两条仓内杠杆把「丢帧 → 纠正」做成确定性收敛——① tier-1.5 本地判定（refresh 后
@@ -188,14 +188,27 @@ fallback 与 `test/session-rows/session-row-state.test.ts` 里钉住它的契约
 
 ## 8. 载波 open 的稳定 episode 身份（P3）
 
-背景：chamber 的开帧预算按「请求 episode」放宽（30 → 60 → 120 → 240 → 300 s），跨重试道
+背景：chamber 曾按「请求 episode」放宽开帧预算（30 → 60 → 120 → 240 → 300 s；现已主动退役为单档 30 s），跨重试道
 （`RemoteStream` 重发 → mux 新 streamId）必须保持同一身份。vendor 的 `$stream({ open: signal => … })`
 回调只传一个 `AbortSignal`，generated invocation 也不接受额外参数，因此本地唯一稳定的身份是
 `streamOpeningKey`（endpoint + payload 的 FNV 摘要）。后果：① 同一 endpoint+payload 的两个不同
-逻辑流会共享放宽预算（只影响节奏，不影响行为）；② 客户端无法把「同一条逻辑流的重试」与
+逻辑流会共享连续超时计数（只影响节奏，不影响行为）；② 客户端无法把「同一条逻辑流的重试」与
 「新的一次请求」从调用面上区分开，只能靠摘要与生命周期清理近似。
 
 请求：给 stream 打开一个可携带的稳定身份（例如 `open(signal, { episodeId })`，或宿主为每次逻辑流
-分配并在重发间保持的 token）；或直接由宿主承担首帧期限（见 §3 的首帧期限诉求）——后者落地后
-客户端整条放宽阶梯即可退役。
+分配并在重发间保持的 token）；或直接由宿主承担首帧期限（见 §4.3 的首帧期限诉求）——客户端加宽阶梯已主动退役（单档 30 s），
+上游落地后只剩客户端期限本身可再评估是否退役。
+
+## 9. `dsh-util-values` 的内建判定不得依赖引擎的源码文本
+
+现象：`hasIntrinsicConstructor`（`src/index.ts`）把 `Function.prototype.toString.call(constructor)` 的结果与单行模板
+`` `function ${name}() { [native code] }` `` 严格比较。JavaScriptCore/WKWebView 对**内建函数**打印多行文本
+（`function Object() {` + 换行 + `    [native code]` + 换行 + `}`）⇒ 该判定在 WebKit 里恒假 ⇒ `snapshotJsonValue` 对
+普通对象/数组返回 `undefined` ⇒ 流式会话在 raw chunk 校验处抛普通 `TypeError`，页面永久停驻 `loading`（间歇性：raw chunk
+只对 block-start/block-end/usage/finish 出现）。V8/Chromium 打印单行，故 Electron flavor 不受影响——这是引擎相关的宿主假设。
+
+一行修法：把同一比较改为空白归一后再比，例如
+``Function.prototype.toString.call(constructor).replace(/\s+/g, ' ') === `function ${name}() { [native code] }` ``；
+或改为不受引擎文本形态影响的判定（构造器名 + 原型身份 + 不可构造性）。本仓的两条临时载体（上游落地后一并删除）：① renderer 构建期的第三类 vendor 补丁覆盖 chamber 自建前端；② gateway 出口的 S0 头补丁之二（`packages/gateway/src/html-inject.ts`，design 17 §10.5）覆盖**代理的官方前端**（WebKit 浏览器 / 移动档）——两者都只做空白归一，语义一致。① 的登记：本仓已按前者落临时 vendor 补丁（design 09 §3.6 第三类；
+删除条件 = 上游携带引擎无关判定）。接受的取舍：仅空白差异的伪造函数会通过空白归一，名字与原型身份检查仍在。
 

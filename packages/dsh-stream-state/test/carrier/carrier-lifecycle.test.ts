@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 
 import { reduceCarrier, reduceCarrierSequence, decideRebuild } from '../../src/carrier.ts'
 import { initialCarrierState } from '../../src/state.ts'
-import { CARRIER_ENV, openingBudgetMs, OPENING_TIMEOUT_LADDER_MS, SILENT_TEARDOWN_MIN_MS } from '../../src/tables.ts'
+import { CARRIER_ENV, OPENING_TIMEOUT_MS, SILENT_TEARDOWN_MIN_MS } from '../../src/tables.ts'
 import type { CarrierEvent } from '../../src/state.ts'
 
 const env = CARRIER_ENV
@@ -139,15 +139,9 @@ test('decideRebuild is a pure predicate over the same tables', () => {
   assert.equal(decideRebuild(replaced.state, env, 59500), false)
 })
 
-test('the opening-budget ladder is the recorded widening', () => {
-  assert.deepEqual(OPENING_TIMEOUT_LADDER_MS, [30000, 60000, 120000, 240000, 300000])
-  assert.equal(openingBudgetMs(0), 30000)
-  assert.equal(openingBudgetMs(1), 60000)
-  assert.equal(openingBudgetMs(2), 120000)
-  assert.equal(openingBudgetMs(3), 240000)
-  assert.equal(openingBudgetMs(4), 300000)
-  assert.equal(openingBudgetMs(99), 300000)
-  assert.equal(openingBudgetMs(-1), 30000)
+test('the opening deadline is the recorded single tier', () => {
+  // R2: the widening ladder is retired - every streak gets the same deadline.
+  assert.equal(OPENING_TIMEOUT_MS, 30_000)
 })
 
 test('the silent-teardown floor is the recorded value', () => {
@@ -265,161 +259,97 @@ test('P3: an unusable frame delta is never proof of silence', () => {
   assert.ok(nan.effects.some((effect) => effect.e === 'reopenLogicalStream'))
 })
 
-test('P3: an opening is armed with the widening budget for its own episode', () => {
+test('P3: an opening is armed with the SINGLE-tier budget and its episode streak', () => {
   const first = reduceCarrier(initialCarrierState(), { kind: 'openingSent', at: 1000, streamId: 's1', requestKey: 'k1' }, env)
-  assert.deepEqual(first.effects, [{ e: 'armOpeningDeadline', streamId: 's1', budgetMs: 30_000, streak: 0 }])
+  assert.deepEqual(first.effects, [{ e: 'armOpeningDeadline', streamId: 's1', budgetMs: OPENING_TIMEOUT_MS, streak: 0 }])
   assert.equal(first.state.streamRequestKeys.s1, 'k1')
-  // First expiry widens the NEXT attempt; a frame-answering socket is below the
-  // stall threshold, so nothing rebuilds yet.
+  // The expiry only advances the streak (a frame-answering socket is below the stall
+  // threshold, so nothing rebuilds yet); the budget itself never widens.
   const expired = reduceCarrier(first.state, { kind: 'openingExpired', at: 2000, streamId: 's1', requestKey: 'k1', framesSinceSend: 3 }, env)
   assert.equal(expired.state.openingStreaks.k1, 1)
   assert.ok(!expired.effects.some((effect) => effect.e === 'rebuildCarrier'), 'first miss is below the stall threshold')
   const second = reduceCarrier(expired.state, { kind: 'openingSent', at: 3000, streamId: 's2', requestKey: 'k1' }, env)
-  assert.deepEqual(second.effects, [{ e: 'armOpeningDeadline', streamId: 's2', budgetMs: 60_000, streak: 1 }])
+  assert.deepEqual(second.effects, [{ e: 'armOpeningDeadline', streamId: 's2', budgetMs: OPENING_TIMEOUT_MS, streak: 1 }],
+    'the streak rides along but the budget stays the single tier')
 })
 
-test('P3: only an ACCEPTED opening resets its own episode widening', () => {
+test('D4: a DELIVERED opening clears its request streak', () => {
   let state = initialCarrierState()
   state = reduceCarrier(state, { kind: 'openingSent', at: 1000, streamId: 's1', requestKey: 'k1' }, env).state
   state = reduceCarrier(state, { kind: 'openingExpired', at: 2000, streamId: 's1', requestKey: 'k1', framesSinceSend: 1 }, env).state
   state = reduceCarrier(state, { kind: 'openingSent', at: 3000, streamId: 's2', requestKey: 'k2' }, env).state
   assert.equal(state.openingStreaks.k1, 1)
-  // F1: ACCEPTANCE is what resets the widening; mere delivery (openingAnswered) does not.
+  // Delivery IS the opening's success (the mux disarms its deadline there): the
+  // consecutive-miss count for that request key is cleared.
   const answered = reduceCarrier(state, { kind: 'openingAnswered', at: 3500, streamId: 's1', requestKey: 'k1' }, env)
   assert.equal(answered.state.openingPhases.s1, 'itemReceived')
-  assert.equal(answered.state.openingStreaks.k1, 1, 'a delivered item is not an acceptance')
-  const accepted = reduceCarrier(answered.state, { kind: 'openingAccepted', at: 4000, streamId: 's1', requestKey: 'k1' }, env)
-  assert.equal(accepted.state.openingStreaks.k1, undefined)
-  assert.equal(accepted.state.openingStreaks.k2, undefined, 'an unrelated episode is untouched')
+  assert.equal(answered.state.openingStreaks.k1, undefined, 'the delivered item clears the count')
+  assert.deepEqual(answered.effects, [])
 })
 
-test('F1: a carrier-ended unaccepted episode keeps its budget and streak', () => {
+test('a carrier-ended episode keeps its streak; a consumer-ended one releases it (D-4)', () => {
   let state = reduceCarrier(initialCarrierState(), { kind: 'openingSent', at: 1000, streamId: 's1', requestKey: 'k1' }, env).state
   state = reduceCarrier(state, { kind: 'openingExpired', at: 2000, streamId: 's1', requestKey: 'k1', framesSinceSend: 1 }, env).state
   assert.equal(state.openingStreaks.k1, 1)
-  // The socket is replaced before the consumer ever accepted: the successor must
-  // inherit the 60 s rung, not restart at 30 s.
+  // The socket is replaced before this episode was answered: the successor must
+  // inherit the count (not restart below the escalation threshold).
   const replaced = reduceCarrier(state, {
-    kind: 'episodeClosed', at: 3000, episodeId: 's1', requestKey: 'k1', carrierInitiated: true, accepted: false,
+    kind: 'episodeClosed', at: 3000, episodeId: 's1', requestKey: 'k1', carrierInitiated: true,
   }, env)
-  assert.equal(replaced.state.openingStreaks.k1, 1, 'a replaced socket may not reset the budget')
+  assert.equal(replaced.state.openingStreaks.k1, 1, 'a replaced socket may not reset the count')
   const successor = reduceCarrier(replaced.state, { kind: 'openingSent', at: 4000, streamId: 's2', requestKey: 'k1' }, env)
-  assert.deepEqual(successor.effects, [{ e: 'armOpeningDeadline', streamId: 's2', budgetMs: 60_000, streak: 1 }])
-  // A consumer-ended episode still releases it (D-4)...
+  assert.deepEqual(successor.effects, [{ e: 'armOpeningDeadline', streamId: 's2', budgetMs: OPENING_TIMEOUT_MS, streak: 1 }])
   const abandoned = reduceCarrier(replaced.state, {
-    kind: 'episodeClosed', at: 5000, episodeId: 's2', requestKey: 'k1', carrierInitiated: false, accepted: false,
+    kind: 'episodeClosed', at: 5000, episodeId: 's2', requestKey: 'k1', carrierInitiated: false,
   }, env)
   assert.equal(abandoned.state.openingStreaks.k1, undefined, 'the consumer leaving releases the key')
-  // ...and so does an accepted carrier-ended episode.
-  const accepted = reduceCarrier(replaced.state, {
-    kind: 'episodeClosed', at: 6000, episodeId: 's2', requestKey: 'k1', carrierInitiated: true, accepted: true,
-  }, env)
-  assert.equal(accepted.state.openingStreaks.k1, undefined, 'an accepted opening releases the key')
 })
 
-test('F1: spending every ladder rung is a TERMINAL verdict, never another reopen', () => {
-  const max = env.openingBudgetMaxMisses
-  assert.equal(max, OPENING_TIMEOUT_LADDER_MS.length)
+test('R2: no streak produces a terminal opening verdict - every expiry has a path forward', () => {
   let state = initialCarrierState()
-  for (let miss = 1; miss < max; miss += 1) {
+  for (let miss = 1; miss <= 12; miss += 1) {
     const streamId = 's' + String(miss)
     state = reduceCarrier(state, { kind: 'openingSent', at: miss * 1000, streamId, requestKey: 'k1' }, env).state
-    state = reduceCarrier(state, {
+    const expired = reduceCarrier(state, {
       kind: 'openingExpired', at: miss * 1000 + 1, streamId, requestKey: 'k1', framesSinceSend: 1,
-    }, env).state
-    assert.equal(state.openingStreaks.k1, miss)
-    // Below the cap the episode still gets its retry path (a rebuild or a throttle).
-    const decisions = reduceCarrier(state, {
-      kind: 'rebuildRequested', at: miss * 1000 + 2, reason: 'openingStall', streak: miss, streamId: 'sx', episodeId: 'sx',
     }, env)
-    assert.ok(decisions.effects.some((effect) => effect.e === 'reopenLogicalStream' || effect.e === 'rebuildCarrier'))
+    state = expired.state
+    assert.equal(state.openingStreaks.k1, miss, 'every expiry only advances the consecutive count')
+    assert.ok(
+      expired.effects.some((effect) => effect.e === 'rebuildCarrier'
+        || effect.e === 'reopenLogicalStream' || effect.e === 'throttled'),
+      'the retry path is the only outcome - the ladder has no exhausted state',
+    )
   }
-  // The last rung: streak reaches the ladder length, the budget is spent, and the
-  // verdict is FINAL - a failLogicalOpening with no reopen and no rebuild.
-  const final = reduceCarrier(state, {
-    kind: 'openingExpired', at: 99_000, streamId: 's-last', requestKey: 'k1', framesSinceSend: 1,
-  }, env)
-  assert.equal(final.state.openingStreaks.k1, max)
-  // ONE effect: the verdict. The FACT names (opening-timeout/opening-orphaned +
-  // opening-budget-exhausted) belong to the host, which publishes them with the
-  // endpoint/stream/timing detail this clockless reducer does not carry.
-  assert.deepEqual(final.effects, [{ e: 'failLogicalOpening', streamId: 's-last', reason: 'k1' }])
-  assert.ok(!final.effects.some((effect) => effect.e === 'rebuildCarrier'
-    || effect.e === 'reopenLogicalStream' || effect.e === 'throttled'), 'the terminal verdict reopens nothing')
 })
 
-test('F1: a terminal verdict releases the spent widening so a manual reopen gets rung 0', () => {
-  const max = env.openingBudgetMaxMisses
-  let state = initialCarrierState()
-  let at = 1000
-  for (let miss = 1; miss <= max; miss += 1) {
-    const streamId = 's' + String(miss)
-    state = reduceCarrier(state, { kind: 'openingSent', at, streamId, requestKey: 'k1' }, env).state
-    at += 10
-    state = reduceCarrier(state, { kind: 'openingExpired', at, streamId, requestKey: 'k1', framesSinceSend: 1 }, env).state
-  }
-  assert.equal(state.openingStreaks.k1, max, 'the ladder is fully spent')
-  // The terminal episode closes with timedOut=true AND terminal=true: the spent widening
-  // must be released, not bequeathed to the next logical opening of the same request.
-  const closed = reduceCarrier(state, {
-    kind: 'episodeClosed', at: at + 1, episodeId: 's' + String(max), requestKey: 'k1', timedOut: true, terminal: true,
-  }, env)
-  assert.equal(closed.state.openingStreaks.k1, undefined, 'a terminal verdict releases the spent widening')
-  const reopened = reduceCarrier(closed.state, { kind: 'openingSent', at: at + 2, streamId: 'fresh', requestKey: 'k1' }, env)
-  assert.deepEqual(reopened.effects, [{ e: 'armOpeningDeadline', streamId: 'fresh', budgetMs: openingBudgetMs(0), streak: 0 }],
-    'a manual reopen starts a fresh ladder')
-})
-
-test('F1: an orphaned opening (item received, never accepted) names itself', () => {
-  let state = reduceCarrier(initialCarrierState(), { kind: 'openingSent', at: 1000, streamId: 's1', requestKey: 'k1' }, env).state
-  state = reduceCarrier(state, { kind: 'openingAnswered', at: 1100, streamId: 's1', requestKey: 'k1' }, env).state
-  const max = env.openingBudgetMaxMisses
-  state = reduceCarrier(state, {
-    kind: 'openingExpired', at: 2000, streamId: 's1', requestKey: 'k1', framesSinceSend: 0,
-  }, env).state
-  // Below the cap the miss is still an episode reopen (no terminal); the final miss ends
-  // it. The reducer reports the VERDICT only - an item that arrived but was never accepted
-  // is named `opening-orphaned` by the host, which alone sees the acceptance channel.
-  const final = reduceCarrier(
-    { ...state, openingStreaks: { k1: max - 1 } },
-    { kind: 'openingExpired', at: 3000, streamId: 's1', requestKey: 'k1', framesSinceSend: 0 },
-    env,
-  )
-  assert.deepEqual(final.effects, [{ e: 'failLogicalOpening', streamId: 's1', reason: 'k1' }])
-})
-
-test('F1: a superseded episode accept cannot clear its successor widening', () => {
+test('a delivery after its episode closed is inert (the phase is released)', () => {
   let state = reduceCarrier(initialCarrierState(), { kind: 'openingSent', at: 1000, streamId: 's1', requestKey: 'k1' }, env).state
   state = reduceCarrier(state, { kind: 'openingExpired', at: 2000, streamId: 's1', requestKey: 'k1', framesSinceSend: 1 }, env).state
-  // s1 is replaced by s2 for the SAME request; a late accept for s1 arrives afterwards.
-  state = reduceCarrier(state, { kind: 'episodeClosed', at: 2500, episodeId: 's1', requestKey: 'k1', carrierInitiated: true }, env).state
-  state = reduceCarrier(state, { kind: 'openingSent', at: 3000, streamId: 's2', requestKey: 'k1' }, env).state
-  const late = reduceCarrier(state, { kind: 'openingAccepted', at: 4000, streamId: 's1', requestKey: 'k1' }, env)
-  assert.equal(late.state.openingStreaks.k1, 1, "an old generation's accept must not settle the live attempt")
-  const current = reduceCarrier(late.state, { kind: 'openingAccepted', at: 5000, streamId: 's2', requestKey: 'k1' }, env)
-  assert.equal(current.state.openingStreaks.k1, undefined, 'the live attempt still settles itself')
+  state = reduceCarrier(state, {
+    kind: 'episodeClosed', at: 2500, episodeId: 's1', requestKey: 'k1', timedOut: true,
+  }, env).state
+  const late = reduceCarrier(state, { kind: 'openingAnswered', at: 3000, streamId: 's1', requestKey: 'k1' }, env)
+  assert.equal(late.state.openingStreaks.k1, 1, 'a retired episode cannot clear the retry lane count')
 })
 
-test('F1: an accept from a still-live superseded episode never clears the successor widening', () => {
-  // The AND-shaped guard this pins used to pass exactly here: the superseded episode
-  // still HAD an opening phase (it was live - a journal sibling probe on the same
-  // request, or a second generation), so only the latest-claim test can reject its
-  // accept. Letting it through cleared the successor's widening and published a bogus
-  // opening-accepted fact (reducer-script repro from review).
+test('R2: a live superseded episode delivery cannot clear its successor streak', () => {
+  // The generation fence this pins: a delivery that crossed a carrier generation must
+  // not clear the count the live successor inherited.
   let state = reduceCarrier(initialCarrierState(), { kind: 'openingSent', at: 1000, streamId: 's1', requestKey: 'k1' }, env).state
   state = reduceCarrier(state, { kind: 'openingExpired', at: 2000, streamId: 's1', requestKey: 'k1', framesSinceSend: 1 }, env).state
   assert.equal(state.openingStreaks.k1, 1)
   // s2 claims the same key while s1 is STILL live: no episodeClosed in between.
   state = reduceCarrier(state, { kind: 'openingSent', at: 3000, streamId: 's2', requestKey: 'k1' }, env).state
-  const late = reduceCarrier(state, { kind: 'openingAccepted', at: 4000, streamId: 's1', requestKey: 'k1' }, env)
-  assert.equal(late.state.openingStreaks.k1, 1, "a live predecessor's accept must not clear the successor ladder")
-  assert.deepEqual(late.effects, [], 'no opening-accepted fact for a superseded episode')
+  const late = reduceCarrier(state, { kind: 'openingAnswered', at: 4000, streamId: 's1', requestKey: 'k1' }, env)
+  assert.equal(late.state.openingStreaks.k1, 1, "a live predecessor's delivery must not clear the successor's count")
   assert.equal(late.state.openingPhases.s1, 'sent', 'the superseded episode keeps its own phase untouched')
-  const current = reduceCarrier(late.state, { kind: 'openingAccepted', at: 5000, streamId: 's2', requestKey: 'k1' }, env)
+  const current = reduceCarrier(late.state, { kind: 'openingAnswered', at: 5000, streamId: 's2', requestKey: 'k1' }, env)
   assert.equal(current.state.openingStreaks.k1, undefined, 'the newest attempt still settles itself')
+  assert.equal(current.state.openingPhases.s2, 'itemReceived')
 })
 
-test('P3: a closing episode releases its widening unless it timed out or a sibling owns it', () => {
+test('P3: a closing episode releases its streak unless it timed out or a sibling owns it', () => {
   const expire = (state: ReturnType<typeof initialCarrierState>, streamId: string, requestKey: string) =>
     reduceCarrier(state, { kind: 'openingExpired', at: 2000, streamId, requestKey, framesSinceSend: 1 }, env).state
   let unshared = reduceCarrier(initialCarrierState(), { kind: 'openingSent', at: 1000, streamId: 's1', requestKey: 'k1' }, env).state
@@ -430,7 +360,7 @@ test('P3: a closing episode releases its widening unless it timed out or a sibli
   let timedOut = reduceCarrier(initialCarrierState(), { kind: 'openingSent', at: 1000, streamId: 's1', requestKey: 'k1' }, env).state
   timedOut = expire(timedOut, 's1', 'k1')
   const kept = reduceCarrier(timedOut, { kind: 'episodeClosed', at: 3000, episodeId: 's1', timedOut: true }, env)
-  assert.equal(kept.state.openingStreaks.k1, 1, 'the retry lane inherits the widening it earned')
+  assert.equal(kept.state.openingStreaks.k1, 1, 'the retry lane inherits the count it earned')
   let shared = reduceCarrier(initialCarrierState(), { kind: 'openingSent', at: 1000, streamId: 's1', requestKey: 'k1' }, env).state
   shared = expire(shared, 's1', 'k1')
   shared = reduceCarrier(shared, { kind: 'openingSent', at: 2500, streamId: 's2', requestKey: 'k1' }, env).state

@@ -35,10 +35,10 @@ test('the projection carries every field the Swift mirror reads', () => {
     'maxRebuildsPerWindow',
     'minRebuildSpacingMs',
     'inFlightGraceMs',
-    'openingTimeoutLadderMs',
+    'openingTimeoutMs',
     'silentTeardownMinMs',
     'openingStallStreak',
-    'openingBudgetMaxMisses',
+    'openingEpisodeKeysMax',
   ]
   for (const field of required) {
     assert.ok(field in (TABLE_SNAPSHOT as unknown as Record<string, unknown>), 'missing table field ' + field)

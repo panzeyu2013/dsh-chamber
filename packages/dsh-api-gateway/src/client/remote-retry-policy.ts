@@ -5,8 +5,8 @@
  * times per generation, so this lane paces and reopens instead of escaping (delay
  * math only, pure). Ceiling = the connection lane's own `backoffMaxMs` default
  * (10_000); base 250 is half its `backoffBaseMs` (500), since a stream reopen is
- * cheaper than a transport restart. The opening-budget ladder and silent-teardown
- * floor live in the shared stream-state tables, read by the mux client.
+ * cheaper than a transport restart. The single-tier opening deadline and the
+ * silent-teardown floor live in the shared stream-state tables, read by the mux client.
  */
 
 /** First carrier failure of an episode reopens immediately. */
@@ -65,10 +65,10 @@ export const REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS = 1_000
  *  ceiling while the mux still never parks permanently. */
 export const REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS = 10_000
 
-/** Stable key for one logical stream's opening-budget episode: endpoint plus a
+/** Stable key for one logical stream's opening-streak episode: endpoint plus a
  *  bounded FNV-1a digest of the request payload. Keying by endpoint alone would let
- *  one slow session reset another's widening budget (follows share the endpoint),
- *  and a global key let any stream reset it; collisions only share a budget. */
+ *  one slow session reset another's consecutive-miss count (follows share the
+ *  endpoint), and a global key let any stream reset it; collisions only share it. */
 export function streamOpeningKey(endpoint: string, payload: unknown): string {
   let text: string
   try {

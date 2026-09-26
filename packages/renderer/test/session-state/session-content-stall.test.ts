@@ -15,6 +15,7 @@ import {
   advanceContentStallStreak,
   openStallSymptomActive,
   stuckEvidenceForStreak,
+  upperTierStallEvidence,
 } from '../../src/session-content-stall.ts'
 
 test('a streak anchors the observer duration in the page monotonic clock', () => {
@@ -45,10 +46,26 @@ test('tried evidence is keyed by the streak start, not by time alone', () => {
     'a new streak cannot inherit the previous conclusion')
 })
 
+test('an open-stall alone never authorizes the upper delivery tiers', () => {
+  // A page-dispatched resync for an open streak is NOT independent evidence:
+  // DELIVERY_EFFICACY budgets instance-reboot/document-reload against a stalled
+  // frame counter, and a parked OPEN proves the counter is still advancing. Without
+  // one, the ladder exhausts at resync and the visible host-stall notice.
+  assert.equal(upperTierStallEvidence({ streakStart: 5, resyncDispatchedFor: 5 }), false)
+  assert.equal(upperTierStallEvidence({ scheduleStallStart: 1, streakStart: 5, resyncDispatchedFor: 5 }), true)
+  assert.equal(upperTierStallEvidence({ inputBlockStart: 1, streakStart: 5, resyncDispatchedFor: 5 }), true)
+  assert.equal(upperTierStallEvidence({ scheduleStallStart: 1, streakStart: 6, resyncDispatchedFor: 5 }), false,
+    'independent evidence without a survived resync for this streak is not enough either')
+})
+
 test('the open-stall shape agrees with the shared classifier', () => {
   const loading = { state: 'loading' as const, openInFlight: false, resyncInFlight: false, resyncAvailable: true }
   assert.equal(openStallSymptomActive(loading), true)
   assert.ok(classifyDeliverySymptoms({ sessionId: '', open: loading, symptomSinceMs: 0 }).includes('open-stall'))
+  assert.equal(openStallSymptomActive({ ...loading, openInFlight: true }), false,
+    'an open still in flight is never a parked-loading symptom')
+  assert.equal(openStallSymptomActive({ ...loading, openInFlight: undefined }), false,
+    'an unreadable liveness bit fails closed')
   assert.equal(openStallSymptomActive({ ...loading, resyncInFlight: true }), true,
     'an in-flight recovery is still a stall: the shape must not clear on it')
   assert.equal(openStallSymptomActive({ ...loading, state: 'open' }), false)

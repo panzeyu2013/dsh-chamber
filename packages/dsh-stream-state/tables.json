@@ -5,17 +5,10 @@
     "maxRebuildsPerWindow": 1,
     "minRebuildSpacingMs": 1000,
     "inFlightGraceMs": 1000,
-    "openingTimeoutLadderMs": [
-      30000,
-      60000,
-      120000,
-      240000,
-      300000
-    ],
+    "openingTimeoutMs": 30000,
     "silentTeardownMinMs": 15000,
     "openingStallStreak": 2,
     "openingEpisodeKeysMax": 256,
-    "openingBudgetMaxMisses": 5,
     "handshakeTimeoutMs": 30000,
     "presentation": {
       "veilActionsAfterMs": 10000,

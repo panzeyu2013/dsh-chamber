@@ -171,7 +171,7 @@ test('opening publishes the window and arms the watchdog', async () => {
 })
 
 test('a logical open with no opening frame fails at its total deadline and disposes', async () => {
-  // The carrier's per-episode opening budget bounds ONE physical attempt; the
+  // The carrier's per-episode opening deadline bounds ONE physical attempt; the
   // logical open retries generations. Without a total bound this promise stayed
   // pending forever and the vendor Session stayed latched at 'loading'.
   const stream = silentLogicalStream()

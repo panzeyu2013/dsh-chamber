@@ -42,8 +42,9 @@ const GROUPS = {
     'test/ui-lock/hostile-error-text.test.ts',
     'test/ui-lock/instance-view-guard.test.ts',
   ],
-  // session-health: the conversation stream-health ladder (error ⇒ stage-move
-  // heal, parked loading ⇒ stall notice) and its imperative half
+  // session-health: the conversation stream-health ladder (error ⇒ automatic
+  // heal; parked loading ⇒ stall notice — the page delivery ladder re-issues it)
+  // and its imperative half
   'session-health': [
     'test/session-health/session-stream-health.test.ts',
     'test/session-health/stream-health-chip-face.test.ts',

@@ -1,20 +1,20 @@
 {
   "$comment": "B7 closure baseline. Regenerate with: node scripts/refactor/stream-state-metrics.mjs --write",
   "modules": {
-    "packages/dsh-api-gateway/src/client/stream-client.ts": 882,
+    "packages/dsh-api-gateway/src/client/stream-client.ts": 759,
     "packages/dsh-api-gateway/src/client/remote-retry-policy.ts": 88,
     "packages/dsh-api-gateway/src/client/journal-stream.ts": 787,
-    "packages/dsh-api-gateway/src/client/remote-stream.ts": 323,
+    "packages/dsh-api-gateway/src/client/remote-stream.ts": 317,
     "packages/dsh-stream-state/src/session-authority.ts": 322,
     "packages/dsh-chamber-client-core/src/session-fact-reconcile.ts": 323,
-    "packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health.ts": 449,
-    "packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health-probe.ts": 461,
-    "packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health-seat.ts": 184,
+    "packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health.ts": 435,
+    "packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health-probe.ts": 244,
+    "packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health-seat.ts": 143,
     "packages/dsh-chamber-client-ui-mobile/src/client/session-stall.ts": 584,
-    "packages/renderer/src/components/InstanceView.tsx": 610
+    "packages/renderer/src/components/InstanceView.tsx": 609
   },
   "moduleCount": 11,
-  "moduleLinesTotal": 5013,
+  "moduleLinesTotal": 4611,
   "thresholdNames": [
     "BUSY_DRESS_DELAY_MS",
     "ERROR_DECAY_MS",
@@ -23,8 +23,7 @@
     "IN_FLIGHT_GRACE_MS",
     "MAX_STREAM_STALL_PROBE_INTERVAL_MS",
     "MIN_REBUILD_SPACING_MS",
-    "OPENING_FAILURE_FRESH_MS",
-    "OPENING_TIMEOUT_LADDER_MS",
+    "OPENING_TIMEOUT_MS",
     "REBUILD_WINDOW_MS",
     "REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS",
     "REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS",
@@ -41,7 +40,7 @@
     "VIEW_RECLAIM_GRACE_MS",
     "VIEW_RECLAIM_TICK_MS"
   ],
-  "thresholdCount": 24,
+  "thresholdCount": 23,
   "dependantFileCount": 22,
   "appLifecycleMarkerHits": 97,
   "swiftShellMarkerHits": 39
