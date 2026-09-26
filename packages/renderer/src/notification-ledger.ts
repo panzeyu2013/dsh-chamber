@@ -47,6 +47,10 @@ export interface NotificationLedgerEntry {
   error?: string
   /** ¤origin¤ 投影诊断（可选；不参与三值计数）。 */
   origin?: string
+  /** W2 身份诊断：本条通知（或回执）用的运行身份字符串。 */
+  identity?: string
+  /** W2 身份来源：`host-turn` = 宿主事件 id（目标形态）；`constant` = 无 host 域判别符的兜底。 */
+  identitySource?: string
   /** pending 存续毫秒数诊断（可选；flush/drop 时由投影回执带出）。 */
   pendingAge?: number
 }
@@ -76,8 +80,13 @@ export function createNotificationLedger(options: { limit?: number } = {}) {
         sourceId: entry.sourceId,
         symptom: entry.kind,
         action: entry.decision,
-        detail: [entry.error, entry.watermark === undefined ? undefined : 'watermark=' + String(entry.watermark)]
-          .filter((part): part is string => part !== undefined).join(' '),
+        detail: [
+          entry.error,
+          entry.watermark === undefined ? undefined : 'watermark=' + String(entry.watermark),
+          entry.identity === undefined
+            ? undefined
+            : 'identity=' + entry.identity + ' (' + String(entry.identitySource ?? '?') + ')',
+        ].filter((part): part is string => part !== undefined).join(' '),
       })
     },
     /**

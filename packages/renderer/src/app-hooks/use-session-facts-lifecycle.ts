@@ -11,7 +11,7 @@ import { createSessionFactsSource, type SessionFactsSnapshot, type SessionFactsS
 import { createSourceMuxFacts, isMuxObservableSourceKind, type SourceMuxFacts } from '../source-mux-facts.ts'
 import { createFactsHealthRecorder, createFactsStepGuard, type FactsHealthRecorder, type FactsStepGuard } from '../facts-health.ts'
 import { shouldDispatchRefreshHint } from '../source-refresh-hint.ts'
-import type { UnreadSaveCoalescer } from '../unread-store.ts'
+import { maxWatermark, type UnreadSaveCoalescer } from '../unread-store.ts'
 
 export interface SessionFactsLifecycleDeps {
   /** deriveServers 的当前投影（签名与收敛都从最新 servers 读）。 */
@@ -167,7 +167,7 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
       // 观察者实例要先有才能采样（onSnapshot 闭包在构造时就存在，只能经 created 拿实例）：
       // createSourceMuxFacts 构造期不 emit，且赋值在 start() 之前 ⇒ 这里必定已赋值，无需恒真守卫。
       let created: SourceMuxFacts | null = null
-      const sampleFactsHealth = (): void => {
+      const sampleFactsHealth = (snapshot: SessionFactsSnapshot): void => {
         const status = created!.status()
         factsHealthRef.current?.record(sourceId, {
           ready: status.ready,
@@ -179,6 +179,8 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
           reconnects: status.reconnects,
           socketErrors: status.socketErrors,
           rows: status.rows,
+          // 同一拍的行水位：未读面空账时，第一现场就是这里（0 = 行没有 host 水位）。
+          maxWatermark: maxWatermark(snapshot.rows),
           lastTrustedBaselineAt: status.lastTrustedBaselineAt,
         })
       }
@@ -188,7 +190,7 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
         onSnapshot: snapshot => {
           factsStepGuard.guard(sourceId, 'mux-snapshot', () => {
             applySessionFacts(sourceId, snapshot)
-            sampleFactsHealth()
+            sampleFactsHealth(snapshot)
           })
         },
       })

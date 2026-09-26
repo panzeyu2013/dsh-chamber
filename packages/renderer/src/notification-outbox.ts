@@ -12,11 +12,13 @@ export const NOTIFICATION_OUTBOX_KEY = 'dsh-chamber.notification-outbox.v2'
 /** The pre-spine journal: drained once into v2, never written again (D1 migration). */
 const LEGACY_NOTIFICATION_OUTBOX_KEY = 'dsh-chamber.notification-outbox.v1'
 export const NOTIFICATION_OUTBOX_LIMIT = 500
-/** Independent additive key: { hostKey -> canonical run id } for completion aliases. */
-const COMPLETION_ALIAS_KEY = 'dsh-chamber.notification-outbox.aliases.v1'
-/** Two channels may report one completion a little apart; outside this it is a new event. */
-const COMPLETION_ALIAS_WINDOW_MS = 60_000
-const COMPLETION_ALIAS_LIMIT = 200
+/**
+ * W2 删除批：跨通道别名表（`{hostKey -> canonical run id}` 关联窗）已出局。facts 完成现在携带
+ * 宿主事件序（`completionSeq`），`enqueue` 直接用 `notificationRunId` 的身份，不再做「第二个身份族
+ * 解析回首报 id」的改写。存量键只在这里一次性删除——旧行不会自己消失，留着会让下一次普查误以为
+ * 别名表仍在写。
+ */
+const LEGACY_COMPLETION_ALIAS_KEY = 'dsh-chamber.notification-outbox.aliases.v1'
 const MAX_RETRY_DELAY_MS = 60_000
 export type DeliveryOutcome = 'shown' | 'suppressed' | 'retryable' | 'permanent'
 
@@ -94,36 +96,6 @@ function validStoredRow(value: unknown): value is StoredRow {
     && typeof row.blocked === 'boolean'
 }
 
-/**
- * The host-domain completion key shared by every channel that can observe the same
- * completion. The completion sequence is the strongest discriminator; the host
- * `updatedAt` is the fallback when the facts channel never carried a sequence.
- * Returns undefined when the intent carries neither (no correlation possible).
- */
-function hostKeyOf(intent: NotificationIntent): string | undefined {
-  if (intent.kind !== 'complete') return undefined
-  const discriminator = intent.completionSeq !== undefined ? 'seq:' + String(intent.completionSeq)
-    : intent.hostObservedAt !== undefined ? 'at:' + String(intent.hostObservedAt)
-      : undefined
-  if (discriminator === undefined) return undefined
-  return JSON.stringify([intent.sourceId, intent.sourceFingerprint, intent.sessionId, discriminator])
-}
-
-interface CompletionAlias { readonly hostKey: string; readonly runId: SessionRunId; readonly at: number }
-
-function readAliases(storage: UnreadStorageLike | undefined): CompletionAlias[] {
-  try {
-    const raw = storage?.getItem(COMPLETION_ALIAS_KEY)
-    if (raw === null || raw === undefined) return []
-    const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    return parsed.filter((row): row is CompletionAlias => row !== null && typeof row === 'object'
-      && typeof (row as CompletionAlias).hostKey === 'string'
-      && typeof (row as CompletionAlias).at === 'number' && Number.isSafeInteger((row as CompletionAlias).at)
-      && isSessionRunId((row as CompletionAlias).runId)).slice(-COMPLETION_ALIAS_LIMIT)
-  } catch { return [] }
-}
-
 function keyFor(intent: NotificationIntent & { runId: SessionRunId }): string {
   // JSON array encoding prevents separator collisions between arbitrary ids; the
   // run identity replaces the old (watermark | host-seq) discriminator.
@@ -173,34 +145,8 @@ export function createNotificationOutbox(storage?: UnreadStorageLike, now: () =>
       storage?.removeItem(LEGACY_NOTIFICATION_OUTBOX_KEY)
     } catch { /* v1 stays for the next boot; the adopted entries still deliver */ }
   }
-  const aliases = new Map<string, CompletionAlias>(
-    readAliases(storage).map(alias => [alias.hostKey, alias]),
-  )
-  const persistAliases = (): void => {
-    try {
-      const rows = [...aliases.values()].sort((a, b) => a.at - b.at).slice(-COMPLETION_ALIAS_LIMIT)
-      storage?.setItem(COMPLETION_ALIAS_KEY, JSON.stringify(rows))
-    } catch { /* the alias table is an optimization; delivery continues in memory */ }
-  }
-  /** The canonical id for a host completion already delivered, while the window holds. */
-  const aliasFor = (hostKey: string): SessionRunId | undefined => {
-    const alias = aliases.get(hostKey)
-    if (alias === undefined) return undefined
-    if (now() - alias.at > COMPLETION_ALIAS_WINDOW_MS) {
-      // Out of the correlation window: the same host key is a NEW event. Dropping the
-      // stale mapping keeps the failure direction duplication, never loss.
-      aliases.delete(hostKey)
-      persistAliases()
-      return undefined
-    }
-    return alias.runId
-  }
-  /** First notified id wins and never churns while the window holds. */
-  const rememberAlias = (hostKey: string | undefined, runId: SessionRunId): void => {
-    if (hostKey === undefined || aliases.has(hostKey)) return
-    aliases.set(hostKey, { hostKey, runId, at: now() })
-    persistAliases()
-  }
+  // 存量别名键一次性清理（见 LEGACY_COMPLETION_ALIAS_KEY）。
+  try { storage?.removeItem(LEGACY_COMPLETION_ALIAS_KEY) } catch { /* storage is best-effort */ }
   const inFlight = new Map<string, number>()
   let nextAttemptId = 1
   const dueAt = (entry: PendingNotification, at: number): number =>
@@ -210,20 +156,11 @@ export function createNotificationOutbox(storage?: UnreadStorageLike, now: () =>
   }
   return {
     enqueue(intent: NotificationIntent): PendingNotification | null {
-      const hostKey = hostKeyOf(intent)
-      // Alias rewrite BEFORE key derivation: one completion seen through another
-      // identity family resolves to the first-notified run id, so the existing key
-      // and the durable native receipt suppress the second banner by themselves.
-      // The host completion SEQUENCE is a strong identity: an intent carrying it (and
-      // any explicit id next to it) keeps its own key by notificationRunId precedence.
-      // The fallback host-time key is channel-agnostic, so a recorded alias must win
-      // there: the runtime edge carries its own producer id for the SAME completion.
-      const canonical = hostKey === undefined || intent.completionSeq !== undefined
-        ? undefined
-        : aliasFor(hostKey)
+      // 身份只有一条来源：`notificationRunId`（宿主事件序 → 页内事件 → 提示水位）；重复抑制由身份
+      // + durable `notifiedRuns` 承担（别名改写见 LEGACY_COMPLETION_ALIAS_KEY 的删除批说明）。
       const resolved: NotificationIntent & { runId: SessionRunId } = {
         ...intent,
-        runId: canonical ?? notificationRunId(intent),
+        runId: notificationRunId(intent),
       }
       if (resolved.watermark === undefined && resolved.completionSeq === undefined) {
         // Replayed runtime edges after a renderer reload resolve to the journal's ORIGINAL
@@ -240,11 +177,11 @@ export function createNotificationOutbox(storage?: UnreadStorageLike, now: () =>
           // own id and must create its own event/key (sharing one let the durable
           // receipt drop the real second event).
           && entry.runId === resolved.runId)
-        if (prior !== undefined) { rememberAlias(hostKey, prior.runId); return prior }
+        if (prior !== undefined) return prior
       }
       const key = keyFor(resolved)
       const existing = pending.get(key)
-      if (existing !== undefined) { rememberAlias(hostKey, existing.runId); return existing }
+      if (existing !== undefined) return existing
       if (pending.size >= NOTIFICATION_OUTBOX_LIMIT) {
         // A permanent failure is terminal diagnostic history, not a retrying
         // delivery. Keep recent failures but let a later completion enter the
@@ -256,7 +193,6 @@ export function createNotificationOutbox(storage?: UnreadStorageLike, now: () =>
       const entry: PendingNotification = { ...resolved, key, attempts: 0, nextAttemptAt: now(), blocked: false }
       pending.set(key, entry)
       persist()
-      rememberAlias(hostKey, entry.runId)
       return entry
     },
     /**

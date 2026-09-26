@@ -15,6 +15,14 @@ function storage() {
 
 const completion = { sourceId: 'ssh-a', sourceFingerprint: 'host-1', sessionId: 's1', kind: 'complete' as const, watermark: 100 }
 
+/** 同一个宿主完成在 outbox 层的两种身份族：无 seq 的壳边（显式 runId）与带序的 facts 边（`completionSeq`）。 */
+function edgeOf(options: { runId?: string; hostObservedAt?: number; completionSeq?: number }) {
+  return {
+    sourceId: 'ssh-a', sourceFingerprint: 'host-1', sessionId: 's1', kind: 'complete' as const,
+    ...options,
+  }
+}
+
 test('pending completion survives reload; only shown or policy suppression settles it', () => {
   const disk = storage()
   let now = 1_000
@@ -55,57 +63,40 @@ test('runtime completion can acquire the observed watermark while awaiting the h
   assert.deepEqual(outbox.entries(), [])
 })
 
-test('a settled completion seen through another identity family reuses the first event', () => {
+test('删除批替代锁：身份是唯一 run key，第二身份族不再被别名改写（关联归投影）', () => {
   const outbox = createNotificationOutbox(undefined, () => 10_000)
-  const runtime = {
-    sourceId: 'ssh-a', sourceFingerprint: 'host-1', sessionId: 's1', kind: 'complete' as const,
-    runId: 'chamber:fp:0:s1:7' as const, hostObservedAt: 1_000,
-  }
+  const runtime = edgeOf({ runId: 'chamber:fp:0:s1:7', hostObservedAt: 1_000 })
   const first = outbox.enqueue(runtime)!
   outbox.settle(outbox.begin(first.key)!, 'shown')
-  // The facts channel reports the SAME host completion under its own identity family.
-  // The alias must resolve it to the first event so the durable receipt suppresses it.
+  // facts 完成现在携带宿主事件序（实机复核：turn/end 记录 seq=106/2877 就在线上），所以
+  // 「第二个身份族解析回首报 id」的改写已出局：同一完成的两个身份族在 outbox 层是两个事件，
+  // 关联由投影的 absorbCandidate 在候选阶段完成（design 19 §3.2.7 ⑥/⑦；失败方向是重复，不是丢失）。
   const replay = outbox.enqueue({ ...runtime, runId: 'host:turn%2F9' as const })!
-  assert.equal(replay.runId, first.runId, 'the alias resolves to the first-notified id')
-  assert.equal(replay.key, first.key, 'the same event key lets the durable receipt suppress it')
+  assert.equal(replay.runId, 'host:turn%2F9', '身份按 notificationRunId 派生，不再改写成首报 id')
+  assert.notEqual(replay.key, first.key, '两个身份族在 outbox 层是两个事件（跨族关联不属于 outbox）')
 })
 
-test('outside the alias window the same host time is a new event (loss-safe)', () => {
-  let clock = 10_000
-  const outbox = createNotificationOutbox(undefined, () => clock)
-  const runtime = {
-    sourceId: 'ssh-a', sourceFingerprint: 'host-1', sessionId: 's1', kind: 'complete' as const,
-    runId: 'chamber:fp:0:s1:7' as const, hostObservedAt: 1_000,
-  }
-  const first = outbox.enqueue(runtime)!
-  clock = 10_000 + 61_000
-  const later = outbox.enqueue({ ...runtime, runId: 'host:turn%2F11' as const })!
-  assert.notEqual(later.key, first.key, 'an expired alias must not swallow a later completion')
-})
-
-test('a distinct completion sequence never aliases', () => {
+test('a distinct completion sequence is a distinct identity and event key', () => {
   const outbox = createNotificationOutbox(undefined, () => 10_000)
-  const base = {
-    sourceId: 'ssh-a', sourceFingerprint: 'host-1', sessionId: 's1', kind: 'complete' as const,
-    hostObservedAt: 1_000,
-  }
-  const first = outbox.enqueue({ ...base, completionSeq: 5 })!
-  const second = outbox.enqueue({ ...base, completionSeq: 6, hostObservedAt: 2_000 })!
-  assert.notEqual(first.runId, second.runId)
-  assert.notEqual(first.key, second.key)
+  const first = outbox.enqueue(edgeOf({ completionSeq: 5, hostObservedAt: 1_000 }))!
+  const second = outbox.enqueue(edgeOf({ completionSeq: 6, hostObservedAt: 2_000 }))!
+  assert.notEqual(first.runId, second.runId, '每个宿主事件序都是自己的身份')
+  assert.notEqual(first.key, second.key, '身份不同 ⇒ 交付键不同（不得被水位的等价窗吞掉）')
 })
 
-test('the completion alias survives a journal reload', () => {
+test('删除批：存量别名键在构造时被清掉，且不再写入', () => {
   const disk = storage()
+  const aliasKey = 'dsh-chamber.notification-outbox.aliases.v1'
+  disk.setItem(aliasKey, JSON.stringify([{ hostKey: '["ssh-a","host-1","s1","at:1000"]', runId: 'chamber:fp:0:s1:7', at: 1_000 }]))
   const outbox = createNotificationOutbox(disk, () => 10_000)
-  const runtime = {
+  const entry = outbox.enqueue({
     sourceId: 'ssh-a', sourceFingerprint: 'host-1', sessionId: 's1', kind: 'complete' as const,
     runId: 'chamber:fp:0:s1:7' as const, hostObservedAt: 1_000,
-  }
-  const entry = outbox.enqueue(runtime)!
-  const rebuilt = createNotificationOutbox(disk, () => 10_000)
-  const replay = rebuilt.enqueue({ ...runtime, runId: 'host:turn%2F9' as const })!
-  assert.equal(replay.key, entry.key, 'the alias table is durable')
+  })!
+  assert.ok(entry)
+  assert.equal(disk.getItem(aliasKey), null, '旧别名行不会自己消失：构造时一次性删除')
+  createNotificationOutbox(disk, () => 10_000)
+  assert.equal(disk.getItem(aliasKey), null, '重建后也不回写')
 })
 
 test('a new run never claims the previous run\'s pending edge', () => {

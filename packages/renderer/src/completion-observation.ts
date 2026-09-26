@@ -49,7 +49,7 @@ import type {
 } from './notification-projection.ts'
 import { reconcile } from './notification-projection.ts'
 import type { CompleteLedger } from './complete-ledger.ts'
-import { isFactsDecisionUsable, type SessionFactsSnapshot } from './session-facts-source.ts'
+import { isFactsDecisionUsable, type SessionFactsSnapshot, type SessionFactsTurnEnd } from './session-facts-source.ts'
 import { completionWatermark, maxWatermarkValue } from './watermark.ts'
 
 /** 壳行 pending 种类（InstanceRuntimeReport 的结构子集）。 */
@@ -73,9 +73,16 @@ export interface FactsObservationRow {
   running: boolean
   completedAt: number | null
   completedAtSource: 'observed' | 'reconstructed' | null
+  /** 时钟域（可缺省 = host）：'observer' 的 observed 时刻不在 host 域，不具备通知资格（W2）。 */
+  completedAtDomain?: 'host' | 'observer' | null
   updatedAt: number
   subagentCount: number
   goal?: GoalFact | null
+  /**
+   * 宿主 `turn/end`（W2 身份）：**只读判别符**——`seq` 产出运行身份 `host:turn/<seq>`；
+   * 不参与可判性、水位或完成证据判定（那些只看 completedAt/updatedAt/completedAtSource）。
+   */
+  lastTurnEnd?: SessionFactsTurnEnd | null
 }
 
 /** 壳通道输入；stale = 断连来源上仍附加的只读事实（不得作运行证据）。 */
@@ -229,6 +236,20 @@ function factsWatermarkOf(row: FactsObservationRow): number | undefined {
 }
 
 /**
+ * W2 完成证据（候选专用）：只有 **host 域、observed 的 turn/end 时刻**才算一次完成。
+ *
+ * WHY：`factsWatermarkOf` 取 `completionWatermark(row) = max(completedAt, updatedAt)`——它是
+ * **内容水位**（记忆/围栏用），把 updatedAt 的活动前进也算成"更高水位"。候选若用它，一条
+ * 老完成 + 新活动（或权威运行位抖动）就会重提一次"完成"，实测正是假通知的形状。
+ * observer 域的 `reconstructed` 时刻不在 host 域（design 19：只出未读、不发通知），同样不是证据。
+ */
+function factsCompletionOf(row: FactsObservationRow): number | undefined {
+  if (row.completedAtSource !== 'observed' || row.completedAt === null) return undefined
+  if (row.completedAtDomain === 'observer') return undefined
+  return row.completedAt > 0 ? row.completedAt : undefined
+}
+
+/**
  * 记一个已遗忘会话（同键移到队尾；超限 FIFO 淘汰最旧键）。
  *
  * 有界性优先（F5 次要项 5）：极端 churn（同一来源在记忆窗口内遗忘超过 500 个不同
@@ -333,6 +354,8 @@ export function observeSource(input: {
   for (const sessionId of [...present].sort()) {
     const shellRow = shellRows[sessionId]
     const factsRow = factsRows[sessionId]
+    // 原始 facts 行（不可用时仍在场，评审 B2 的键空间）：反证守卫读最后已知的 host 内容。
+    const factsChannelRow = factsChannelRows[sessionId]
     // 重现会话：本批只播种（候选生成见下）；删除条目即消费这条重现记忆。
     const reappearing = state.forgottenSessions.delete(sessionId)
     const memory: SessionObservationMemory = state.sessions[sessionId] ?? {
@@ -394,17 +417,34 @@ export function observeSource(input: {
     // 通知过**的会话重新播种（per-session 旗标）；其余会话从未有壳通知可吞，照常按
     // 水位严格前进产候选——复位不得株连它们（facts-only 会话的完成不得被永久丢发）。
     if (!reappearing && !memory.factsSeedPending && factsUsable && factsRow !== undefined) {
-      const watermark = factsWatermarkOf(factsRow)
+      // W2：候选水位 = host 域 turn/end 时刻；记忆/围栏仍用内容水位（activities 只推记忆）。
+      const watermark = factsCompletionOf(factsRow)
+      // W2 身份：宿主 `turn/end.seq` 与完成时刻同为 host 域判别符——带上它，运行身份即可用
+      // `host:turn/<seq>`（稳定、可去重）；缺席时回退水位族（现状，无回归）。
+      // 顺序：seq 属于「完成边沿」本身，比内容水位更贴近「同一次完成」的身份。
+      const turnSeq = factsRow.lastTurnEnd?.seq
+      const completionSeq = typeof turnSeq === 'number' && Number.isSafeInteger(turnSeq) && turnSeq >= 0
+        ? turnSeq
+        : undefined
       const candidateEligible = state.factsSeeded
         || (state.factsReseedPending && !memory.shellNotifiedSinceFacts)
       if (candidateEligible && watermark !== undefined && watermark > memory.factsWatermark) {
-        candidates.push({ kind: 'complete', watermark, evidence: 'facts-watermark' })
+        candidates.push({
+          kind: 'complete',
+          watermark,
+          ...(completionSeq === undefined ? {} : { completionSeq }),
+          evidence: 'facts-watermark',
+        })
       }
     }
     // C4-X3：stale 壳快照不得作运行证据——complete 与 ask/request 边沿整体关闭
     // （行记忆照常推进，stale true→false 的同一行不得凭旧位伪造边沿）。
     const shellEdgeEligible = !shellStale && !reappearing && input.shellReport === true && state.shellSeeded
-    if (shellEdgeEligible && shellRow !== undefined && !factsUsable) {
+    // W2 反证守卫：在场的 facts 行是最后已知的 host 内容——它说仍在 running 时，壳的 idle
+    // 读数不构成完成证据（实测假通知形状：运行位抖动 + facts 载体降级窗口）。facts 行说 idle
+    // 或该行不存在（无 facts 通道）时，降级窗口的壳完成语义保持不变（B3-2/COR-1 继续钉住）。
+    const factsContradictsIdle = factsChannelRow !== undefined && factsChannelRow.running === true
+    if (shellEdgeEligible && shellRow !== undefined && !factsUsable && !factsContradictsIdle) {
       // 唯一合法的壳完成边沿是运行位 true→false。壳行的 `completed` 不参与判定：
       // 两条生产路径喂进来的都是**原始**通道报告（factsStore.runtime，见
       // use-bridge-subscriptions / use-unread-notifications），而通道从不携带该位

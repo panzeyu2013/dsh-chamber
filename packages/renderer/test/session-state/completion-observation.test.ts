@@ -195,6 +195,79 @@ test('observeSource: an empty first report still establishes the baseline; a she
   assert.equal(calls.notifications.length, 0, '无运行边沿 ⇒ 不得发完成')
 })
 
+test('长活会话：running 不变 + 内容水位连推 12 拍 + 无 turn/end ⇒ 零完成候选（验收矩阵第 2 行）', () => {
+  const seeded = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: true } } },
+    facts: { usable: true, rows: { s1: factsRow({ running: true, updatedAt: 1000 }) } },
+  })
+  assert.equal(seeded.observations[0].candidate, undefined, '首份只播种')
+  let state = seeded.state
+  // 「30 分钟」的等价压力：12 次内容水位前进、运行位恒 true、没有任何 turn/end。
+  for (let i = 1; i <= 12; i += 1) {
+    const step = observeSource({
+      state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+      shell: { rows: { s1: { running: true } } },
+      facts: { usable: true, rows: { s1: factsRow({ running: true, updatedAt: 1000 + i * 1000 }) } },
+    })
+    state = step.state
+    assert.equal(step.observations[0].running, 'running')
+    assert.equal(step.observations[0].candidate, undefined, `第 ${i} 拍内容水位前进不得产完成候选`)
+  }
+  // 反向对照：真正的 turn/end（host 域 observed completedAt + seq）必须成候选——
+  // 「没有候选」必须是候选规则的效果，不是因为这一路根本没跑。
+  const done = observeSource({
+    state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false } } },
+    facts: { usable: true, rows: { s1: factsRow({
+      completedAt: 30_000, completedAtSource: 'observed', updatedAt: 30_000,
+      lastTurnEnd: { kind: 'completed', seq: 9, at: 30_000 },
+    }) } },
+  })
+  assert.equal(done.observations.length, 1, 'facts 可用时壳边沿不产第二候选')
+  assert.equal(done.observations[0].candidate?.evidence, 'facts-watermark')
+  assert.equal(done.observations[0].candidate?.completionSeq, 9)
+})
+
+test('W2 身份：候选带上宿主 turn/end.seq；缺席/非法值不带（回退水位族，无回归）', () => {
+  const seeded = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same',
+    facts: { usable: true, rows: { s1: factsRow({
+      completedAt: 1000, completedAtSource: 'observed', updatedAt: 1000,
+      lastTurnEnd: { kind: 'completed', seq: 4242, at: 1000 },
+    }) } },
+  })
+  assert.equal(seeded.observations[0].candidate, undefined, '首份只播种')
+
+  const next = observeSource({
+    state: seeded.state, sourceId: 'src', identity: 'fp', pageBoot: 'same',
+    facts: { usable: true, rows: { s1: factsRow({
+      completedAt: 2000, completedAtSource: 'observed', updatedAt: 2000,
+      lastTurnEnd: { kind: 'completed', seq: 4243, at: 2000 },
+    }) } },
+  })
+  assert.deepEqual(next.observations[0].candidate, {
+    kind: 'complete', watermark: 2000, completionSeq: 4243, evidence: 'facts-watermark',
+  }, '宿主事件序是 host 域判别符 ⇒ 身份可用 host:turn/<seq>')
+
+  // 无 lastTurnEnd：候选形状与修复前逐字一致（身份回退水位族）。
+  const noSeq = observeSource({
+    state: next.state, sourceId: 'src', identity: 'fp', pageBoot: 'same',
+    facts: { usable: true, rows: { s1: factsRow({ completedAt: 3000, completedAtSource: 'observed', updatedAt: 3000 }) } },
+  })
+  assert.deepEqual(noSeq.observations[0].candidate, { kind: 'complete', watermark: 3000, evidence: 'facts-watermark' })
+
+  // 非法 seq（负数/非整数）：同样不带，绝不臆造身份。
+  const badSeq = observeSource({
+    state: noSeq.state, sourceId: 'src', identity: 'fp', pageBoot: 'same',
+    facts: { usable: true, rows: { s1: factsRow({
+      completedAt: 4000, completedAtSource: 'observed', updatedAt: 4000,
+      lastTurnEnd: { kind: 'completed', seq: -1, at: 4000 },
+    }) } },
+  })
+  assert.deepEqual(badSeq.observations[0].candidate, { kind: 'complete', watermark: 4000, evidence: 'facts-watermark' })
+})
+
 test('observeSource: facts-first skew keeps the completion eligible while the shell still reports running (I1)', () => {
   const first = observeSource({
     sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
@@ -255,6 +328,60 @@ test('observeSource: facts candidates require seeding plus a strictly advancing 
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 3000, completedAtSource: 'reconstructed', updatedAt: 3000 }) } },
   })
   assert.equal(fourth.observations[0].candidate, undefined, 'reconstructed completions only arm unread')
+})
+
+test('observeSource: a shell idle edge contradicted by a present facts row never fabricates a completion (W2)', () => {
+  // 播种态（observeSource 会就地推进 state/memory，每个场景都要一份新的）。
+  const shellSeededState = (): ReturnType<typeof observeSource>['state'] => observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: true } } },
+    facts: { usable: true, rows: { s1: factsRow({ running: true, updatedAt: 100 }) } },
+  }).state
+  assert.equal(shellSeededState().shellSeeded, true)
+
+  // 反证：facts 载体降级（不可用），但原始行仍说 running=true；壳位报 idle ⇒ 不得产完成候选。
+  const contradicted = observeSource({
+    state: shellSeededState(), sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false } } },
+    facts: { usable: false, rows: { s1: factsRow({ running: true, updatedAt: 100 }) } },
+  })
+  assert.equal(contradicted.observations[0].candidate, undefined, 'facts 行说仍在跑 ⇒ 壳 idle 不是完成证据')
+
+  // 对照：同一降级窗口、原始行确认 idle（或行不存在）⇒ 壳边沿照常成候选（降级窗口的通知语义保留）。
+  const confirmed = observeSource({
+    state: shellSeededState(), sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false } } },
+    facts: { usable: false, rows: { s1: factsRow({ running: false, updatedAt: 100 }) } },
+  })
+  assert.deepEqual(confirmed.observations[0].candidate, { evidence: 'shell-edge' })
+})
+
+test('observeSource: a candidate needs the host turn/end watermark, not an activity-inflated one (W2)', () => {
+  // 播种：host 域完成 1000。
+  const first = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same',
+    facts: { usable: true, rows: { s1: factsRow({ completedAt: 1000, completedAtSource: 'observed', completedAtDomain: 'host', updatedAt: 1000 }) } },
+  })
+  assert.equal(first.state.factsSeeded, true)
+  // 同一完成 + 更高的活动水位（updatedAt 5000）：内容水位（记忆）会推到 5000，
+  // 但候选水位必须是 host 域的 1000 ⇒ 不得把「有新活动」重提成「完成」。
+  const activity = observeSource({
+    state: first.state, sourceId: 'src', identity: 'fp', pageBoot: 'same',
+    facts: { usable: true, rows: { s1: factsRow({ completedAt: 1000, completedAtSource: 'observed', completedAtDomain: 'host', updatedAt: 5000 }) } },
+  })
+  assert.equal(activity.observations[0].candidate, undefined, '活动水位前进不是完成证据')
+  // observer 域的 observed 时刻（tail 拿不到 host 时间）：只出未读，不发通知。
+  const observerDomain = observeSource({
+    state: activity.state, sourceId: 'src', identity: 'fp', pageBoot: 'same',
+    facts: { usable: true, rows: { s1: factsRow({ completedAt: 9000, completedAtSource: 'observed', completedAtDomain: 'observer', updatedAt: 9000 }) } },
+  })
+  assert.equal(observerDomain.observations[0].candidate, undefined, 'observer 域时刻不具备通知资格')
+  // 真正的新一轮 host 完成（严格高于记忆）照常成候选。
+  const next = observeSource({
+    state: observerDomain.state, sourceId: 'src', identity: 'fp', pageBoot: 'same',
+    facts: { usable: true, rows: { s1: factsRow({ completedAt: 12_000, completedAtSource: 'observed', completedAtDomain: 'host', updatedAt: 12_000 }) } },
+  })
+  assert.deepEqual(next.observations[0].candidate, { kind: 'complete', watermark: 12_000, evidence: 'facts-watermark' })
 })
 
 test('observeSource: a stale shell row cannot outrank usable facts (running authority + R2-G)', () => {

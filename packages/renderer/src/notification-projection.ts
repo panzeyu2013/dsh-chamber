@@ -89,6 +89,11 @@ export interface CompletionCandidate {
   kind?: NotificationKind
   /** host 域水位（facts 证据必填；壳边沿缺席）。 */
   watermark?: number
+  /**
+   * host 域 `turn/end.seq`（W2 身份）：有它时运行身份 = `host:turn/<seq>`（稳定、可去重），
+   * 缺席时回退水位族（现状，无回归）。候选与 pending 都必须透传，否则延迟释放会丢身份。
+   */
+  completionSeq?: number
   evidence: 'shell-edge' | 'facts-watermark'
 }
 
@@ -423,9 +428,13 @@ function absorbCandidate(
   const existing = pendingOf(state, sourceId, sessionId)
   const watermark = maxWatermarkValue(existing?.watermark, candidate.watermark)
   const deferredMark = existing !== undefined ? existing.deferred : deferred
+  // W2 身份：已有 pending 保持自己的身份（与 goalId 同规）——同一次完成的 seq 不得被
+  // 后到的观测改写；只有新建时才采纳候选的 seq。
+  const completionSeq = existing?.completionSeq ?? candidate.completionSeq
   const entry: PendingCompletion = {
     at: existing?.at ?? now,
     ...(watermark > 0 ? { watermark } : {}),
+    ...(completionSeq === undefined ? {} : { completionSeq }),
     ...((existing?.goalId ?? goalId) === undefined ? {} : { goalId: (existing?.goalId ?? goalId) as string }),
     ...(deferredMark === undefined ? {} : { deferred: deferredMark }),
   }
@@ -459,11 +468,13 @@ function completeNotification(
   watermark: number | undefined,
   title: NotificationTitleId,
   origin: string,
+  completionSeq?: number,
 ): PlannedNotification {
   return {
     sessionId,
     kind: 'complete',
     ...(watermark === undefined ? {} : { watermark }),
+    ...(completionSeq === undefined ? {} : { completionSeq }),
     title,
     origin,
   }
@@ -496,7 +507,7 @@ function releaseDeferred(
   armSession(state, sourceId, sessionId, maxWatermarkValue(watermark, notifiedComplete(state, sourceId, sessionId)))
   if (watermark === undefined) setFence(state, sourceId, sessionId, factsMemory ?? 0)
   return {
-    notification: completeNotification(sessionId, watermark, 'session-completed', origin),
+    notification: completeNotification(sessionId, watermark, 'session-completed', origin, pending.completionSeq),
     disposition: 'flushed',
     origin,
     pendingAge,
@@ -583,6 +594,7 @@ export function reconcile(
     sessionId: observation.sessionId,
     kind,
     ...(candidate.watermark === undefined ? {} : { watermark: candidate.watermark }),
+    ...(candidate.completionSeq === undefined ? {} : { completionSeq: candidate.completionSeq }),
     origin: candidate.evidence,
   }
   const settledNotifications = settled.notifications
@@ -684,6 +696,7 @@ function reconcileCore(
         candidate.watermark,
         'session-completed',
         'goal-unknown',
+        candidate.completionSeq,
       ),
       origin: 'goal-unknown',
     }
@@ -755,6 +768,7 @@ function reconcileCore(
           flushWatermark > 0 ? flushWatermark : undefined,
           first ? goalTitle(knownGoal.phase) : 'session-completed',
           'goal-outcome',
+          pending.completionSeq,
         ),
         disposition: 'flushed',
         origin: 'goal-outcome',
@@ -777,6 +791,7 @@ function reconcileCore(
           flushWatermark > 0 ? flushWatermark : undefined,
           first ? 'goal-stopped' : 'session-completed',
           'goal-disarmed',
+          pending.completionSeq,
         ),
         disposition: 'flushed',
         origin: 'goal-disarmed',
@@ -796,6 +811,7 @@ function reconcileCore(
     // #7/#8 hold（水位吸收）+ arm；activation unknown 与 armed 同出口。
     writePending(state, sourceId, sessionId, {
       ...(candidate.watermark === undefined ? {} : { watermark: candidate.watermark }),
+      ...(candidate.completionSeq === undefined ? {} : { completionSeq: candidate.completionSeq }),
       goalId: knownGoal.goalId,
       at: now,
     })
@@ -819,6 +835,7 @@ function reconcileCore(
         candidate.watermark,
         first ? goalTitle(knownGoal.phase) : 'session-completed',
         'goal-outcome-direct',
+        candidate.completionSeq,
       ),
       origin: 'goal-outcome-direct',
     }
@@ -828,7 +845,8 @@ function reconcileCore(
   consumeCompleteCandidate(state, sourceId, sessionId, candidate, undefined)
   setFenceForNoWatermarkConsumption(state, observation, candidate.watermark)
   return {
-    notification: completeNotification(sessionId, candidate.watermark, 'session-completed', 'session-completed'),
+    notification: completeNotification(
+      sessionId, candidate.watermark, 'session-completed', 'session-completed', candidate.completionSeq),
     origin: 'session-completed',
   }
 }

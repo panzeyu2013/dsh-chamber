@@ -33,6 +33,8 @@ export interface FactsHealthSample {
   readonly reconnects: number
   readonly socketErrors: number
   readonly rows: number
+  /** 输入行的最大内容水位（0 = 全部行都没有 host 水位）：未读面「播种不消费」的现场读数。 */
+  readonly maxWatermark: number
   /** 最近一次可信基线的时刻（null = 从未取到过）：区分「从没基线」与「基线变旧」。 */
   readonly lastTrustedBaselineAt: number | null
 }
@@ -50,6 +52,7 @@ function factsHealthSignature(sample: FactsHealthSample): string {
 function factsHealthDetail(sample: FactsHealthSample): string {
   return 'ready=' + (sample.ready ? '1' : '0')
     + ' rows=' + String(sample.rows)
+    + ' maxWatermark=' + String(sample.maxWatermark)
     + ' baselines=' + String(sample.baselines)
     + ' baselineFailures=' + String(sample.baselineFailures)
     + ' resamples=' + String(sample.baselineResamples)

@@ -8,6 +8,7 @@
  */
 import { useEffect, useRef } from 'react'
 import { projectBadgeCount, type BadgeSuppressionFacts } from '../badge-count.ts'
+import { recordIncident } from '../incident.ts'
 import { publishBadgeCount } from '../notification-ledger.ts'
 import {
   sessionRowState,
@@ -93,6 +94,47 @@ export interface BadgePushRetry {
  * 最后一条，漏下的 timer 在卸载后仍会推送；这里用 generation token 让「取代」与
  * 「卸载」都作废整条旧链，pending timer 先清后排。
  */
+/**
+ * W0 读数（只读）：主进程的**诚实回执**此前被整个丢弃——Electron 腿的 \`false\`（未应用 /
+ * 被裁决归零）与 Swift 腿的 \`{applied:false, reason}\` 都被当作成功，提交闸随即锁死、
+ * 不再重推，Dock 就停在上一次的旧值上。这里只按原因去重落一条 incident
+ * （进 \`__dshChamberIncident\` 环，仪器片段可读）。
+ * W4：回执显式未应用 = 未派发 ⇒ 走与 rejection 同一条有界重试链（预算耗尽时释放计数变化闸）。
+ */
+const reportedBadgeLegFailures = new Set<string>()
+
+/** 回执判定：只有**显式** false / applied:false 才算未派发（缺省 = 已应用，绝不误重试）。 */
+export function badgeLegApplied(value: unknown): boolean {
+  const record = typeof value === 'object' && value !== null ? value as { applied?: unknown } : undefined
+  const applied = typeof value === 'boolean' ? value : record?.applied
+  return applied !== false
+}
+
+/** 未派发回执折成的可诊断错误（与 rejection 共用同一条 warn 出口）。 */
+export function badgeLegFailure(value: unknown): Error {
+  const record = typeof value === 'object' && value !== null ? value as { reason?: unknown } : undefined
+  const reason = typeof record?.reason === 'string' && record.reason.length > 0 ? record.reason : 'applied:false'
+  return new Error('badge not applied: ' + reason)
+}
+
+export function reportBadgeLegResult(value: unknown): void {
+  const record = typeof value === 'object' && value !== null
+    ? value as { applied?: unknown; reason?: unknown }
+    : undefined
+  const applied = typeof value === 'boolean' ? value : record?.applied
+  if (applied !== false) return
+  const reason = typeof record?.reason === 'string' ? record.reason : 'applied:false'
+  if (reportedBadgeLegFailures.has(reason)) return
+  reportedBadgeLegFailures.add(reason)
+  recordIncident({
+    source: 'renderer',
+    kind: 'badge-not-applied',
+    symptom: 'dock-badge-stale',
+    action: 'retry-scheduled',
+    detail: reason.slice(0, 200),
+  })
+}
+
 export function createBadgePushRetry(options: BadgePushRetryOptions): BadgePushRetry {
   let pending: unknown = null
   let generation = 0
@@ -101,23 +143,34 @@ export function createBadgePushRetry(options: BadgePushRetryOptions): BadgePushR
     options.clearTimer(pending)
     pending = null
   }
+  /** 有界重试链（rejection 与「回执未应用」共用）：预算耗尽 ⇒ 交 warn（hook 侧同时释放变化闸）。 */
+  const retryAfter = (token: number, count: number, attemptsLeft: number, retryMs: number, error: unknown): void => {
+    if (token !== generation) return
+    if (attemptsLeft <= 0) {
+      options.warn(error)
+      return
+    }
+    clearPending()
+    pending = options.setTimer(() => {
+      pending = null
+      attempt(token, count, attemptsLeft - 1, retryMs)
+    }, retryMs)
+  }
   /** 返回**是否真的派发**（badge 面缺失/版本偏斜返回 false）：调用方的计数变化闸据此提交。 */
   const attempt = (token: number, count: number, attemptsLeft: number, retryMs: number): boolean => {
     if (token !== generation) return false
     const result = options.push(count)
     if (result === undefined) return false
-    void result.catch(error => {
-      if (token !== generation) return
-      if (attemptsLeft <= 0) {
-        options.warn(error)
-        return
-      }
-      clearPending()
-      pending = options.setTimer(() => {
-        pending = null
-        attempt(token, count, attemptsLeft - 1, retryMs)
-      }, retryMs)
-    })
+    void result.then(
+      value => {
+        if (token !== generation) return
+        if (badgeLegApplied(value)) return
+        // W4：诚实回执 applied:false = 未派发 ⇒ 与 rejection 同链重试（不再被吞成成功）。
+        reportBadgeLegResult(value)
+        retryAfter(token, count, attemptsLeft, retryMs, badgeLegFailure(value))
+      },
+      error => { retryAfter(token, count, attemptsLeft, retryMs, error) },
+    )
     return true
   }
   return {
@@ -175,7 +228,11 @@ export function useBadgeCount(deps: BadgeCountDeps): void {
       },
       setTimer: (callback, ms) => setTimeout(callback, ms),
       clearTimer: handle => { clearTimeout(handle as ReturnType<typeof setTimeout>) },
-      warn: error => { console.warn('[badge] 徽标计数推送失败：', error) },
+      warn: error => {
+        // W4：预算耗尽 ⇒ 释放计数变化闸（下一次 effect 重推同一计数）；主进程 show/finish 重放是第二条恢复路径。
+        pushedCountRef.current = null
+        console.warn('[badge] 徽标计数推送失败：', error)
+      },
     })
   }
   const badgeRetry = badgeRetryRef.current
@@ -198,14 +255,22 @@ export function useBadgeCount(deps: BadgeCountDeps): void {
   // 直至桥出现，推一次当前计数（0）后停止；预算耗尽静默放弃（dev 无桥场景的
   // 正常路径）。
   useEffect(() => {
-    // 判据是 set 是否真的在（版本偏斜时 badge 面可能已存在但还没有 set）：否则首推/重载复位
+    // W4：只在**挂载时桥确实缺席**（首推没派发出去）才需要本兜底——桥正常时它会在
+    // 一个周期后重复推同一计数（一次绕过闸的冗余 IPC）。判据同 push 缝：set 是否真的在
+    // （版本偏斜时 badge 面可能已存在但还没有 set）。
+    const badgeAtMount = window.dshChamber?.badge
+    if (badgeAtMount !== undefined && typeof badgeAtMount.set === 'function') return
     let attempts = 0
     const timer = setInterval(() => {
       attempts += 1
       const badge = window.dshChamber?.badge
       if (badge !== undefined && typeof badge.set === 'function') {
         clearInterval(timer)
-        badgeRetry.start(badgeCountRef.current, retryLimit, retryMs)
+        // 走同一计数闸：effect 若已派发同一计数则不再重复推；派发成功才提交。
+        if (pushedCountRef.current === badgeCountRef.current) return
+        if (badgeRetry.start(badgeCountRef.current, retryLimit, retryMs)) {
+          pushedCountRef.current = badgeCountRef.current
+        }
         return
       }
       if (attempts >= retryLimit) clearInterval(timer)

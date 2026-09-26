@@ -20,6 +20,15 @@ export interface AuthorityLogEntry {
 export const AUTHORITY_LOG_KEY = 'dsh-chamber.authority-log.v1'
 export const AUTHORITY_LOG_MAX_PER_SOURCE = 32
 export const AUTHORITY_LOG_MAX_SOURCES = 16
+/**
+ * facts-health 保底名额（W0 诊断保底）：高频 kinds（probe / status-divergence）会把低频但关键的
+ * 状态时间线挤出环（实测 facts-health 被挤出后「观察者其实一直失败」在盘上不可见）。
+ * 淘汰时先保最新 (MAX-RESERVE) 条任意 kind，再用剩余名额保最新 RESERVE 条 facts-health；
+ * 环未超限时逐字不变（零行为变化）。
+ */
+export const AUTHORITY_LOG_FACTS_HEALTH_RESERVE = 8
+/** 保底 kind 字面量：持久化契约（renderer facts-health.ts 的 FACTS_HEALTH_KIND 与之同源）。 */
+const AUTHORITY_LOG_RESERVED_KIND = 'facts-health'
 
 /** The browser seam; undefined when localStorage is absent or hostile (fail soft). */
 export function authorityLogStorage(): AuthorityLogStorage | undefined {
@@ -72,9 +81,27 @@ export function loadAuthorityLog(
       const entry = parseEntry(item)
       if (entry !== undefined) entries.push(entry)
     }
-    if (entries.length > 0) result[sourceId] = entries.slice(-AUTHORITY_LOG_MAX_PER_SOURCE)
+    if (entries.length > 0) result[sourceId] = trimEntries(entries)
   }
   return result
+}
+
+/**
+ * 每来源淘汰：超限时保留「最新 MAX-RESERVE 条（任意 kind）+ 最新 RESERVE 条保底 kind」，
+ * 输出保持原时序（调用方只 append，顺序即时间线）。
+ */
+export function trimEntries(entries: readonly AuthorityLogEntry[]): AuthorityLogEntry[] {
+  const max = AUTHORITY_LOG_MAX_PER_SOURCE
+  if (entries.length <= max) return [...entries]
+  const reserve = Math.min(AUTHORITY_LOG_FACTS_HEALTH_RESERVE, max)
+  const keep = new Set<number>()
+  for (let index = entries.length - 1; index >= 0 && keep.size < max - reserve; index -= 1) keep.add(index)
+  for (let index = entries.length - 1; index >= 0 && keep.size < max; index -= 1) {
+    if (entries[index]?.kind === AUTHORITY_LOG_RESERVED_KIND) keep.add(index)
+  }
+  // 保底 kind 不足 reserve 条时按 recency 补齐（不空转名额）。
+  for (let index = entries.length - 1; index >= 0 && keep.size < max; index -= 1) keep.add(index)
+  return entries.filter((_, index) => keep.has(index))
 }
 
 /** Keep the newest last-entry sources when the table exceeds the source bound. */
@@ -102,7 +129,7 @@ export function appendAuthorityLog(
     const table = loadAuthorityLog(storage)
     const entries = table[sourceId] ?? []
     entries.push(entry)
-    table[sourceId] = entries.slice(-AUTHORITY_LOG_MAX_PER_SOURCE)
+    table[sourceId] = trimEntries(entries)
     storage.setItem(AUTHORITY_LOG_KEY, JSON.stringify(boundSources(table)))
   } catch {
     // Diagnostics never break the chain.

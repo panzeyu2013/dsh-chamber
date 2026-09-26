@@ -122,14 +122,53 @@ test('listComplete is the ONLY prune gate: absent sessions survive an unfinished
   assert.deepEqual(pruned.nextRunning, {})
 })
 
+test('列表抖动不收敛（89 行形状，验收矩阵行 7）：已结算集合不被抹、已武装点不闪', () => {
+  const rows: Record<string, UnreadDerivationFactsRow> = {}
+  for (let index = 0; index < 89; index += 1) {
+    rows['s' + String(index)] = fact({ sessionId: 's' + String(index), updatedAt: 1_000 + index })
+  }
+  const seed = factsBaselineSeed({
+    factsRows: rows,
+    incarnation: 'token-a',
+    seededIncarnation: undefined,
+    readMarks: {},
+    keepUnread: {},
+  })
+  let ledger = deriveSourceUnread(input({ facts: rows, readMarks: seed.readMarks }), deps)
+  assert.deepEqual(ledger.unread, {}, '首见批结算后 89 行全已读')
+  const withNew: Record<string, UnreadDerivationFactsRow> = {
+    ...rows,
+    s7: fact({ sessionId: 's7', updatedAt: 1_007, completedAt: 5_000 }),
+  }
+  ledger = deriveSourceUnread(input({ facts: withNew, readMarks: seed.readMarks, prevLedger: ledger.unread }), deps)
+  assert.deepEqual(ledger.unread, { s7: true }, '新完成（host observed completedAt 高于地板）武装')
+  // 归档清理不收敛 / 载波扇动：非权威列表反复换窗口、甚至丢掉已武装会话 ⇒ 缺席不是删除。
+  for (let round = 0; round < 3; round += 1) {
+    const partial: Record<string, UnreadDerivationFactsRow> = {}
+    Object.keys(withNew).slice(round, 40 + round).forEach(id => {
+      const row = withNew[id]
+      if (row !== undefined) partial[id] = row
+    })
+    if (round === 2) delete partial['s7']
+    const next = deriveSourceUnread(input({
+      facts: partial,
+      readMarks: seed.readMarks,
+      prevLedger: ledger.unread,
+      listComplete: false,
+    }), deps)
+    assert.deepEqual(next.unread, { s7: true }, '第 ' + String(round) + ' 拍：不得抹掉已武装点、不得闪')
+    ledger = next
+  }
+})
+
 test('facts take over a channel-edged session; a settled read mark disarms it', () => {
   const armed = deriveSourceUnread(input({
     channel: { s1: { running: false } },
     prevRunning: { s1: true },
     facts: { s1: fact({ completedAt: 0, updatedAt: 0 }) },
   }), deps)
-  // facts 结算了通道边沿（无水位 = 无法确认完成）⇒ 不假武装。
-  assert.deepEqual(armed.unread, {})
+  // W1 M1：0 水位 = 「不知道内容在哪」≠「内容位置 0」⇒ 不结算通道边沿、不假武装（保留已武装的点）。
+  assert.deepEqual(armed.unread, { s1: true })
   const read = deriveSourceUnread(input({
     facts: { s1: fact({ completedAt: 100 }) },
     readMarks: { s1: 100 },
@@ -458,4 +497,59 @@ test('B6: the first-sight seeding memo follows the incarnation token, not the fi
   registry.activate('dsh-a', 'fp-1')
   assert.deepEqual(tick(100).unread, { s1: true },
     'fingerprint-keyed memo（旧实现）在本语料下整表武装：这就是本测试锁掉的回归')
+})
+
+test('W1 M2 目标形状（实机 123 行）：首见可判批写回地板 ⇒ 不是全表武装；新完成仍武装', () => {
+  const rows: Record<string, UnreadDerivationFactsRow> = {}
+  for (let index = 0; index < 123; index += 1) {
+    rows['s' + String(index)] = fact({ sessionId: 's' + String(index), updatedAt: 1_000 + index })
+  }
+  // 播种前（实机形状）：水位可用而 read 为空 ⇒ 全表武装。
+  const before = deriveSourceUnread(input({ facts: rows }), deps)
+  assert.equal(Object.keys(before.unread).length, 123, 'read 为空时水位可用 = 全表武装（Dock 大数字的形状）')
+  const seed = factsBaselineSeed({
+    factsRows: rows,
+    incarnation: 'token-a',
+    seededIncarnation: undefined,
+    readMarks: {},
+    keepUnread: {},
+  })
+  assert.equal(seed.seeded, true, '首见可判批必须消费这一代播种机会')
+  assert.equal(Object.keys(seed.readMarks).length, 123, '地板必须镜像到全表')
+  const after = deriveSourceUnread(input({ facts: rows, readMarks: seed.readMarks }), deps)
+  assert.deepEqual(after.unread, {}, '地板写回后历史会话一律已读')
+  // 一次新完成（host 域 completedAt 高于地板）必须重新武装。
+  const next = { ...rows, s0: fact({ sessionId: 's0', updatedAt: 1_000, completedAt: 9_000 }) }
+  const armed = deriveSourceUnread(input({ facts: next, readMarks: seed.readMarks }), deps)
+  assert.deepEqual(armed.unread, { s0: true })
+})
+
+test('W1 M1: a zero-watermark facts row neither erases an armed edge nor arms by itself', () => {
+  const zero = () => fact({ completedAt: 0, updatedAt: 0 })
+  // 已武装 + 0 水位 ⇒ 保留（fail-closed 向未读）。
+  const preserved = deriveSourceUnread(input({
+    channel: { s1: { running: false } },
+    prevRunning: { s1: true },
+    facts: { s1: zero() },
+  }), deps)
+  assert.deepEqual(preserved.unread, { s1: true })
+  // 未武装 + 0 水位 ⇒ 不假武装。
+  const quiet = deriveSourceUnread(input({ facts: { s1: zero() } }), deps)
+  assert.deepEqual(quiet.unread, {})
+  // 0 updatedAt 但有 host 域 completedAt ⇒ 水位可用，正常判定（证据不只靠 updatedAt）。
+  const viaCompletion = deriveSourceUnread(input({ facts: { s1: fact({ updatedAt: 0, completedAt: 7 }) } }), deps)
+  assert.deepEqual(viaCompletion.unread, { s1: true })
+  // 上一拍已判未读（prevLedger）+ 0 水位 ⇒ 也不得被抹（不产 unread=false）。
+  const carried = deriveSourceUnread(input({
+    facts: { s1: zero() },
+    prevLedger: { s1: true },
+  }), deps)
+  assert.deepEqual(carried.unread, { s1: true })
+  // observer 域完成被 host 水位规则忽略 ⇒ 仍是「无证据」：保留手臂、不假武装。
+  const observerOnly = deriveSourceUnread(input({
+    channel: { s1: { running: false } },
+    prevRunning: { s1: true },
+    facts: { s1: fact({ updatedAt: 0, completedAt: 7, completedAtDomain: 'observer' }) },
+  }), deps)
+  assert.deepEqual(observerOnly.unread, { s1: true })
 })

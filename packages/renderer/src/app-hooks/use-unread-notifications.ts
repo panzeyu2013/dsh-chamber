@@ -31,7 +31,7 @@ import {
 import type { SourceOwnershipRegistry } from '../deep-link-activation.ts'
 import { LOCAL_INSTANCE_ID } from '../local-instance.ts'
 import { frameText, readDocumentLocale } from '../locales.ts'
-import { notificationRunId } from '../notification-identity.ts'
+import { notificationIdentityOf, notificationRunId } from '../notification-identity.ts'
 import { notificationLedger, publishNotificationInstrument } from '../notification-ledger.ts'
 import type { DeliveryOutcome, NotificationOutbox, PendingNotification } from '../notification-outbox.ts'
 import type { NotificationTitleId } from '../notification-projection.ts'
@@ -40,12 +40,19 @@ import { factsDecisionInput, isFactsDecisionUsable, type SessionFactsSnapshot, t
 import {
   advanceReadMark,
   createUnreadSaveCoalescer,
+  maxWatermark,
   mergeReadMarks,
   saveUnread,
+  saveUnreadShadow,
   type UnreadSaveCoalescer,
   type UnreadStorageLike,
+  type UnreadV4Payload,
+  createUnreadStepGate,
+  type UnreadStepGate,
 } from '../unread-store.ts'
 import { createFactsHealthRecorder, createFactsStepGuard, type FactsHealthRecorder, type FactsStepGuard } from '../facts-health.ts'
+import { recordUnreadShadowReport } from '../unread-instrument.ts'
+import { publishUnreadInstrument, sampleUnreadRows, unreadInstrument } from '../unread-instrument.ts'
 import { deriveSourceUnread, factsBaselineSeed, viewingReadWatermark } from '../unread-derivation.ts'
 
 /**
@@ -169,13 +176,23 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
       clearTimeout(unreadSaveTimerRef.current)
       unreadSaveTimerRef.current = null
     }
-    saveUnread(unreadStorageRef.current, {
+    const payload: UnreadV4Payload = {
       v: 4,
       read: readMarksRef.current,
       edge: completedStore.getSnapshot(),
       notifiedRuns: completeLedgerRef.current.notifiedRunTable(),
       pending: completeLedgerRef.current.pendingTable(),
       outcomes: completeLedgerRef.current.outcomesTable(),
+    }
+    saveUnread(unreadStorageRef.current, payload)
+    // W3 影子写：同一意图投影成 v5 写另一个键（只写不读；失败绝不影响 v4 权威），
+    // 并记录读回净化后的等价性报告（`__dshChamberUnread.shadow()`）——ok=false 时不得切权威。
+    const shadow = saveUnreadShadow(unreadStorageRef.current, payload)
+    recordUnreadShadowReport({
+      phase: 'write',
+      written: shadow.written,
+      ok: shadow.parity?.ok ?? false,
+      differences: shadow.parity?.differences ?? (shadow.written ? [] : ['shadow-not-written']),
     })
   }, [])
   flushUnreadRef.current = flushUnread
@@ -232,7 +249,11 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
         }
       }
     }
+    // W0 读数（只读旁路）：播种输入水位与保护集规模——「read 为空」的第一现场。
+    const factsRead = { through: 0, consumed: false, keepUnread: 0 }
     if (factsRows !== undefined) {
+      factsRead.through = maxWatermark(factsRows)
+      factsRead.keepUnread = Object.keys(completedStore.getSnapshot()[sourceId] ?? {}).length
       const seed = factsBaselineSeed({
         factsRows,
         // 化身身份 = owner token 的**对象身份**（SourceOwnershipRegistry 的唯一权威）；
@@ -243,6 +264,7 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
         keepUnread: completedStore.getSnapshot()[sourceId] ?? {},
       })
       if (seed.seeded) {
+        factsRead.consumed = true
         // 有界化：清理**只在播种那一拍**（seed.seeded）执行，真实上界 = 曾播种来源数，下一次播种拍
         // 才收敛到当时的 roster（liveServerIdsRef 是既有的挂载输入，不引入第二套身份判据）。
         for (const id of Object.keys(factsBaselineSeedRef.current)) {
@@ -252,6 +274,10 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
         readMarksRef.current = { ...readMarksRef.current, [sourceId]: seed.readMarks }
         schedulePersistUnread()
       }
+      // W0 判词语义：consumed = **本化身的基线镜像是否已落地**（本拍播种，或此前拍已播种且化身未换）。
+      // 只在「刚播种那一拍」置 true 会把健康稳态误判成 M2：实测（隔离实例 + 真实 renderer）在播种后的
+      // 每一拍都报 m2-seed-not-consumed，而水位与 unread 都已就位。判据下沉到纯模块的 alreadySeeded。
+      factsRead.consumed = seed.seeded || seed.alreadySeeded
     }
     const result = deriveSourceUnread({
       facts: factsRows,
@@ -268,6 +294,24 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
     }, { deriveUnread, reconcileCompletedFacts })
     prevRunningRef.current[sourceId] = result.nextRunning
     completedStore.setSource(sourceId, result.unread)
+    // W0 仪表（只读；unread-instrument.ts）：每次派生留一条——分支 / 行数 / 最大水位 / 行样本 /
+    // 读表规模 / 播种读数 / 结果计数。使「read 为空」当场可判：M1 = 水位为 0；M2 = 水位可用而写入未发生。
+    publishUnreadInstrument()
+    unreadInstrument.record({
+      at: Date.now(),
+      sourceId,
+      branch: factsRows !== undefined ? 'facts' : report?.sessions !== undefined ? 'channel' : 'freeze',
+      factsVerified: factsDecision.verified,
+      rows: factsRows === undefined ? 0 : Object.keys(factsRows).length,
+      maxWatermark: factsRead.through,
+      sample: sampleUnreadRows(factsRows),
+      readMarks: Object.keys(readMarksRef.current[sourceId] ?? {}).length,
+      seed: factsRead,
+      ...(unreadStepGateRef.current === null ? {} : { gate: unreadStepGateRef.current.stats() }),
+      unread: Object.keys(result.unread).length,
+      running: Object.values(result.nextRunning).filter(Boolean).length,
+      changed: result.changed,
+    })
     if (!result.changed) return
     schedulePersistUnread()
   }, [schedulePersistUnread])
@@ -277,9 +321,23 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
    * （保持上一拍状态），loud 一次并落进事实健康环（createFactsStepGuard）：诊断不破账本链，
    * 异常也不许静默（静默异常正是「账本 8 小时为空而外面什么都看不到」的成因形状）。
    */
-  const recomputeSourceUnread = useCallback((sourceId: string): void => {
+  /**
+   * 派生步骤的**重入闸**（W1 M2，见 `createUnreadStepGate`）：派生体末尾写 `completedStore`
+   * （`useSyncExternalStore` 订阅面）。实机证据：该写入触发的 React 同步更新再回调派生 ⇒
+   * 「派生 → 写 store → 同步渲染 → 派生」嵌套环，React 以 #185 中止、被步骤守卫吞掉后**整拍作废**
+   * ⇒ `read`/`edge` 永不落盘（9 天 18 份存储全空 + `unread-derive-error`）。闸把重入请求按 id 去重、
+   * 排到微任务：派生体永不嵌套，非重入路径（桥事件/effect）保持同步执行、行为不变。
+   */
+  const unreadStepGateRef = useRef<UnreadStepGate | null>(null)
+  // 经 ref 转发，闸始终调用最新的派生闭包（useCallback 依赖变化时不持有旧状态）。
+  const deriveGuardedRef = useRef<(sourceId: string) => void>(() => {})
+  deriveGuardedRef.current = (sourceId: string): void => {
     factsStepGuard.guard(sourceId, 'derive-unread', () => deriveSourceUnreadNow(sourceId))
-  }, [deriveSourceUnreadNow, factsStepGuard])
+  }
+  unreadStepGateRef.current ??= createUnreadStepGate(sourceId => { deriveGuardedRef.current(sourceId) })
+  const recomputeSourceUnread = useCallback((sourceId: string): void => {
+    unreadStepGateRef.current?.request(sourceId)
+  }, [])
 
   const pumpNotificationsRef = useRef<() => void>(() => {})
   const notificationRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -310,6 +368,8 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
       ...(entry.origin === undefined ? {} : { origin: entry.origin }),
       ...(entry.pendingAge === undefined ? {} : { pendingAge: entry.pendingAge }),
     } as const
+    /** W2 身份诊断：本条 complete 回执所用的身份与来源（无回执载荷时 undefined）。 */
+    let identityDiagnostic: { runId: string; source: string } | undefined
     const settle = (outcome: DeliveryOutcome, error?: string): void => {
       const result = notificationOutboxRef.current.settle(attempt, outcome)
       if (!result.accepted) return
@@ -319,14 +379,17 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
         // this completion. A runtime edge without any host-domain evidence has no
         // identity yet - mark it pending so the next facts snapshot adopts its run
         // id through the runtimeSettled branch without notifying again.
+        // W2 身份诊断：同一次计算既用于持久写，也进台账（identitySource 让「哪条分支产出的身份」可读）。
+        const diagnosed = notificationIdentityOf({
+          sourceFingerprint: delivered.sourceFingerprint,
+          sessionId: delivered.sessionId,
+          ...(delivered.completionSeq === undefined ? {} : { completionSeq: delivered.completionSeq }),
+          ...(delivered.watermark === undefined ? {} : { watermark: delivered.watermark }),
+        })
+        identityDiagnostic = diagnosed
         const identity = delivered.watermark === undefined && delivered.completionSeq === undefined
           ? undefined
-          : notificationRunId({
-            sourceFingerprint: delivered.sourceFingerprint,
-            sessionId: delivered.sessionId,
-            ...(delivered.completionSeq === undefined ? {} : { completionSeq: delivered.completionSeq }),
-            ...(delivered.watermark === undefined ? {} : { watermark: delivered.watermark }),
-          })
+          : diagnosed.runId
         if (identity === undefined) {
           completeLedgerRef.current.markRuntimeSettled(delivered.sourceId, delivered.sessionId, delivered.hostObservedAt)
         } else {
@@ -338,6 +401,9 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
         ...ledgerBase,
         decision: outcome === 'shown' ? 'sent' : outcome === 'suppressed' ? 'suppressed' : 'skipped',
         ...(error === undefined ? {} : { error }),
+        ...(identityDiagnostic === undefined
+          ? {}
+          : { identity: identityDiagnostic.runId, identitySource: identityDiagnostic.source }),
       })
       publishNotificationInstrument()
       pumpNotificationsRef.current()
@@ -498,6 +564,7 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
             sessionId: notification.sessionId,
             kind: notification.kind,
             ...(notification.watermark === undefined ? {} : { watermark: notification.watermark }),
+            ...(notification.completionSeq === undefined ? {} : { completionSeq: notification.completionSeq }),
             ...(notification.title === undefined ? {} : { title: notification.title }),
             ...(notification.origin === undefined ? {} : { origin: notification.origin }),
             ...(result.pendingAge === undefined ? {} : { pendingAge: result.pendingAge }),

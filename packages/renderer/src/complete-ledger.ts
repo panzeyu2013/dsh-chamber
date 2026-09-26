@@ -49,6 +49,11 @@ export type NotifiedRunTable = Record<string, Record<string, SessionRunId>>
 export interface PendingCompletion {
   /** facts 入口的内容水位；壳证据入场时缺席（缺席 ⇒ 结算时置 settleFence）。 */
   watermark?: number
+  /**
+   * host 域 `turn/end.seq`（W2 身份）：durable——被压制/延迟的完成在释放时仍须能取回
+   * `host:turn/<seq>` 身份；缺席 ⇒ 释放沿用水位族（现状）。
+   */
+  completionSeq?: number
   /** 压制时该会话的 goal 身份；goalId 变化 ⇒ drop（§3.4 #3）。 */
   goalId?: string
   /**
