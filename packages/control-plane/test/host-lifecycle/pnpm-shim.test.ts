@@ -7,9 +7,9 @@
  */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdtempSync, mkdirSync, openSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { delimiter, join, resolve } from 'node:path'
 import { test, type TestContext } from 'node:test'
 import {
   PNPM_SHIM_DIR,
@@ -77,22 +77,29 @@ test('pnpmShimScript: the Windows wrapper forwards %* and escapes percent signs'
 })
 
 test('pathProvidesPnpm: first hit wins, entries resolve against the child cwd, PATHEXT drives Windows names', () => {
+  // Entries are resolved with the HOST's path rules (in production the probed platform
+  // IS the host: the managed host is local), so the expectations are built the same
+  // way — a literal '/child' would gain the runner's drive letter on Windows.
+  const cwd = resolve(tmpdir(), 'pnpm-probe-child')
+  const first = join(cwd, 'a')
+  const second = join(cwd, 'b')
   const probed: string[] = []
   const executable = (file: string) => {
     probed.push(file)
-    return file === join('/child', 'a', 'pnpm') || file === join('/child', 'b', 'pnpm')
+    return file === join(first, 'pnpm') || file === join(second, 'pnpm')
   }
-  assert.equal(pathProvidesPnpm('a:b', 'darwin', executable, { cwd: '/child' }), join('/child', 'a', 'pnpm'))
-  assert.equal(probed.includes(join('/child', 'b', 'pnpm')), false, 'the scan stops at the first hit')
+  assert.equal(pathProvidesPnpm('a:b', 'darwin', executable, { cwd }), join(first, 'pnpm'))
+  assert.equal(probed.includes(join(second, 'pnpm')), false, 'the scan stops at the first hit')
   probed.length = 0
   // An empty entry means the child cwd; an unset PATH contributes nothing at all.
-  assert.equal(pathProvidesPnpm('', 'darwin', executable, { cwd: '/child' }), null)
-  assert.equal(probed[0], join('/child', 'pnpm'))
+  assert.equal(pathProvidesPnpm('', 'darwin', executable, { cwd }), null)
+  assert.equal(probed[0], join(cwd, 'pnpm'))
   assert.equal(pathProvidesPnpm(undefined, 'darwin', executable), null)
   assert.equal(probed.length, 1, 'an unset PATH probes nothing')
   probed.length = 0
   // Windows: PATHEXT order, quoted entries unwrapped.
-  assert.equal(pathProvidesPnpm('"/opt/tools"', 'win32', file => file === join('/opt/tools', 'pnpm.CMD'), { pathExt: '.EXE;.CMD', cwd: '/' }), join('/opt/tools', 'pnpm.CMD'))
+  const tools = resolve(tmpdir(), 'pnpm-probe-tools')
+  assert.equal(pathProvidesPnpm(`"${tools}"`, 'win32', file => file === join(tools, 'pnpm.CMD'), { pathExt: '.EXE;.CMD', cwd }), join(tools, 'pnpm.CMD'))
   assert.equal(probed.length, 0)
 })
 
@@ -120,19 +127,28 @@ test('ensurePnpmShim: materializes an executable wrapper and rewrites it only wh
   assert.equal(readFileSync(file, 'utf8').includes(entry), true)
   if (process.platform !== 'win32') {
     assert.equal(statSync(file).mode & 0o777, 0o755)
-    // The inode is the witness: an atomic rewrite publishes a NEW file, so an
-    // unchanged inode proves the identical wrapper was not rewritten.
-    const inode = statSync(file).ino
+    // The mtime is the witness: an identical content+mode pair must not be written at
+    // all, so a pinned stamp survives. (An inode comparison cannot carry this proof —
+    // Linux reuses the just-freed inode number for the replacement file.)
+    const pinned = new Date(2001, 0, 1)
+    utimesSync(file, pinned, pinned)
     ensurePnpmShim({ root, pnpmEntry: entry, nodeFile: process.execPath })
-    assert.equal(statSync(file).ino, inode, 'identical content+mode is not rewritten')
+    assert.equal(statSync(file).mtimeMs, pinned.getTime(), 'identical content+mode is not rewritten')
     // A wrapper whose content survived but whose mode drifted is repaired.
     chmodSync(file, 0o644)
     ensurePnpmShim({ root, pnpmEntry: entry, nodeFile: process.execPath })
     assert.equal(statSync(file).mode & 0o777, 0o755)
-    // A changed node/pnpm pair yields new content (the app may move between runs).
-    ensurePnpmShim({ root, pnpmEntry: entry, nodeFile: join(root, 'other-node') })
-    assert.equal(readFileSync(file, 'utf8').includes('other-node'), true)
-    assert.notEqual(statSync(file).ino, inode)
+    // A changed node/pnpm pair yields new content (the app may move between runs),
+    // published as a NEW file: the handle opened before the rewrite keeps reading the
+    // old inode, which an in-place rewrite would have mutated under it.
+    const before = openSync(file, 'r')
+    try {
+      ensurePnpmShim({ root, pnpmEntry: entry, nodeFile: join(root, 'other-node') })
+      assert.equal(readFileSync(file, 'utf8').includes('other-node'), true)
+      assert.equal(readFileSync(before, 'utf8').includes('other-node'), false, 'a changed pair publishes a new wrapper file')
+    } finally {
+      closeSync(before)
+    }
   }
 })
 
@@ -185,7 +201,9 @@ test('withPnpmShim: the Windows probe reads PATHEXT from the patched env, not fr
   const root = tempDir(t)
   const bindir = join(root, 'user-bin')
   mkdirSync(bindir)
-  writeFileSync(join(bindir, 'pnpm.cmd'), '@echo off\r\n', { mode: 0o755 })
+  // The fixture's case must match the PATHEXT below: the probe is honest about
+  // PATHEXT, so on a case-SENSITIVE host a lowercase name is correctly missed.
+  writeFileSync(join(bindir, 'pnpm.CMD'), '@echo off\r\n', { mode: 0o755 })
   const originalPathExt = process.env.PATHEXT
   process.env.PATHEXT = '.CMD'
   try {
@@ -207,7 +225,10 @@ test('withPnpmShim: the Windows probe reads PATHEXT from the patched env, not fr
   }
 })
 
-test('withPnpmShim: a POSIX stray Path never masks the real PATH', t => {
+// Windows treats Path and PATH as ONE environment variable, so a second spelling as
+// a decoy is a POSIX-only scenario (the platform-simulated win32 cases are covered by
+// the PATH-key-spelling test below).
+test('withPnpmShim: a POSIX stray Path never masks the real PATH', { skip: process.platform === 'win32' }, t => {
   const root = tempDir(t)
   const entry = writeFakePnpmEntry(root)
   const before = { Path: join(root, 'decoy'), PATH: '/usr/bin' }
