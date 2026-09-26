@@ -322,21 +322,18 @@ test('stream-health evidence: the page notice is fact-driven and the automatic a
   assert.match(view, /escalationBlocked: observed\?\.resyncInFlight === true \|\| observed\?\.openInFlight === true/)
 })
 
-test('stream-health churn: the seat mirrors the api-gateway literal and wakes the renderer', () => {
-  const fork = stripComments(readFileSync(
-    new URL('../../../dsh-api-gateway/src/client/stream-carrier-fact.ts', import.meta.url), 'utf8'))
-  const forkEvent = /export const STREAM_CARRIER_FAILED_EVENT = '([^']+)'/u.exec(fork)
-  assert.ok(forkEvent !== null, 'the fork must export the page event name')
-  const seatEvent = /const CARRIER_CHURN_EVENT = '([^']+)'/u.exec(seat)
-  assert.equal(seatEvent?.[1], forkEvent[1], 'the seat must listen on the fork event, spelled identically')
-  assert.match(seat, /window\.addEventListener\(CARRIER_CHURN_EVENT, onChurn\)/u)
-  assert.match(seat, /window\.removeEventListener\(CARRIER_CHURN_EVENT, onChurn\)/u, 'the listener must be torn down')
-  assert.match(seat, /\.\.\.\(carrierChurn === undefined \? \{\} : \{ carrierChurn \}\)/u, 'the fact must reach the decision observation')
-  assert.match(seat, /const churnListeners = new Set<\(\) => void>\(\)/u)
-  assert.match(seat, /subscribe: \(listener\) => \{\n\s*churnListeners\.add\(listener\)/u)
-  assert.match(seat, /carrierChurn = \{ at, count \}\n\s*for \(const listener of \[\.\.\.churnListeners\]\) listener\(\)/u,
-    'the broadcast must follow the stored fact in the same handler')
-  assert.match(seat, /const onChurn = \(event: Event\): void => \{(?:(?!\n\s*return\b)[\s\S])*?for \(const listener/u,
-    'no unconditional return may precede the broadcast')
+test('stream-health churn: the reconnecting notice and its page listener are retired', () => {
+  // User ruling: the chamber-only reconnecting notice goes, and with it the seat's
+  // page-fact listener. The fork keeps EMITTING the fact for page diagnostics, so
+  // this lock also pins that nothing in the package reads it any more.
+  const policy = stripComments(source('../../src/client/session-stream-health.ts'))
+  assert.doesNotMatch(seat, /carrierChurn|CARRIER_CHURN_EVENT|stream-carrier-failed/u)
+  assert.doesNotMatch(seat, /window\.addEventListener/u, 'this seat must observe no page fact')
+  assert.doesNotMatch(policy, /carrier-churn|carrierChurn|carrierChurnMs/u)
+  assert.doesNotMatch(chip, /carrierChurn|carrier-churn/u)
+  // The wake-up seam STAYS: a terminal opening fact must reach the chip at once
+  // instead of waiting for its next 1 s tick.
+  assert.match(seat, /wakeListeners\.add\(listener\)/u)
+  assert.match(seat, /for \(const listener of \[\.\.\.wakeListeners\]\) listener\(\)/u)
   assert.match(chip, /useEffect\(\(\) => subscribe\(\(\) => setTick\(value => value \+ 1\)\), \[subscribe\]\)/u)
 })

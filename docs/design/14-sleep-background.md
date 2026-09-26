@@ -537,9 +537,10 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
   - **未闭合**：`openState === 'open'` 但静默的半死形态仍无自动杠杆（无 applied cursor
     水位时与合法长静默不可区分），收口两条：宿主侧流级 keepalive 仍未做；「让 carrier 失败永不终局」已落地（见下条）；自动重开的**实机验收未做**（判据 = 真机抖动后自查恢复，且 `local closed (upstream close, …)` 的频率不再随浏览器卡顿波动），阶梯阈值（8s/20s/120s/≤3）与 `presented` 判据的近似（document 级 `[data-chat-flow]` 存在性，非「实际可见」）同样待真机校准
 
-- **载体故障的用户可见面**：治因 = `packages/dsh-api-gateway/src/client/remote-stream.ts` 在活世代下用有界退避（250ms 起翻倍、10s 封顶，与连接车道自身 `backoffMaxMs` 同值）重开而不逃逸为 `gateway/internal`；信号面 = 该包 `$stream` 工厂组合 `carrierFailed` 成有界页面事实
-  `dsh-chamber:stream-carrier-failed`（`stream-carrier-fact.ts`：计数 + 时间 + 实例 id + 截断消息，dispatch 抛错被吞，绝不打断重连），由 open-in 的健康臂座席按实例过滤后喂进纯决策模块，chip 以 `role="status"` 显示「对话流正在重新连接…」（信息性、不给「重新加载」按钮，超过 `carrierChurnMs` 自行消退）。**接线要求（修复，C1）**：事实落在座席闭包而非 props，座席必须把每次落地的 churn 广播给渲染侧（`subscribe(listener)`），chip 订阅后 bump tick 重规划——否则 `openState === 'open'` 时 ticker 停摆，提示既不出现也不会过期（原实现只有「事实进决策」没有「通知渲染」）。
-  - **拒绝替代**：（a）不做可见面——拒：去掉终局逃逸后，用户再也分不清「流在重连」与「会话本来就安静」，这是本补丁引入的静默窗口；（b）客户端插件在打包期 import 该 fork 的事件常量——拒：client plugin 不应加深进 fork 的 import 路径，故字面量复制并由 `packages/dsh-chamber-client-ui-open-in/test/ui-lock/instance-view-guard.test.ts` 把两处拼写钉在一起（vendor-lockstep 先例）；（c）ctx service seam（fork 消费 chamber 提供的服务）——拒：fork 的探针面会被 chamber 插件的存在绑住，而页面事实在座席缺席时也无害；（d）让 carrier 失败重新终局——拒：正是本次要修的根因。
+- **载体故障的可见面（提示已退役，用户裁决）**：治因 = `packages/dsh-api-gateway/src/client/remote-stream.ts` 在活世代下用有界退避（250ms 起翻倍、10s 封顶，与连接车道自身 `backoffMaxMs` 同值）重开而不逃逸为 `gateway/internal`——**不变**；事实面 = 该包 `$stream` 工厂组合 `carrierFailed` 成有界页面事实
+  `dsh-chamber:stream-carrier-failed`（`stream-carrier-fact.ts`：计数 + 时间 + 实例 id + 截断消息，dispatch 抛错被吞，绝不打断重连）——**保留，诊断用**；**已退役 = open-in 的用户提示**：座席不再监听该页面事实，纯决策不再有 `carrier-churn` 通知与 `carrierChurnMs` 窗口，chip 不再以 `role="status"` 显示「对话流正在重新连接…」，`streamHealth.carrierChurn` 文案与 `LADDER_TABLES.streamHealth.carrierChurnMs` 一并删除。
+  - **代价（接受，用户裁决）**：重开窗口回到「静默」——用户无法再从页面区分「流在重连」与「会话本来就安静」。这正是本补丁当初要做可见面的理由；接受它，因为重试道把重开收敛在秒级，且 `error` 面的自动 heal 与页面级阶梯仍在兜底。事实仍落在页面上（无仓内消费者），DevTools/取证可读。
+  - **拒绝替代**：（a）保留提示——拒（用户裁决：上游没有这条提示，chamber 的边界是自动恢复 + 显式失败面）；（b）让 carrier 失败重新终局——拒：正是本次要修的根因；（c）把事实本身也删掉——拒：它已是**无消费者的诊断面**（页面事件），删除会连带改 G43 registry/anchors 并丢掉载波故障现场信息；退役只针对可见提示。
   - **未闭合**：churn 提示窗口（10s）与按来源归属的粗粒度未在真机校准（STATUS ⑬）。
 
 - **逻辑流开帧丢失与首帧期限（ui-chat 卡死排查的根因修复，chamber fork）**：
@@ -577,14 +578,14 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 chamber 的边界是「自动升级 + 显式失败面」；页面级阶梯的自动档（resync → 实例重启 → 文档重载，
 全部有界且记账）已覆盖用户原本用按钮做的三件事，退役只删控制、不改任何提示判据。
   - **unary 引导通道（评审证伪修正）**：此前「内容只有一个来源 = 宿主对 `session/follow` 的开帧快照，不存在 unary 引导通道」的论断**是错的**：`session/page` 在宿主是**冷读**（`sourceFor(..., false)`，不激活 Agent），而 `session/control` baseline 为每个 listed 会话给出 `projections[sid].asOfSeq`（= `cursorBefore(session.seq)` = `session.seq - 1`），是**合法 `throughSeq`**；`session/list` 行也带 `asOfSeq`（仅缓存行水位）。当前 pinned 客户端**没有** unary→窗口写入者（`eventSource` 只由 journal 变更管线写，`page` 只在已开启后的 `prepend` 里用）。**裁决：本轮未采纳**（收益 = 不依赖 follow 开帧，是触屏档唯一可能的自动内容引导；代价 = 与 follow 共用同一个宿主 `sourceFor`、**救不了宿主卡死**，只救「开帧在宿主→页面之间丢失」类，且属**非契约窗口写入面**），作为候选登记在上游提案 §4.3。
-  - **已知近似（评审 B5/B6）**：① 桌面 `open` 臂一律 `action='none'`/`notice=null`（静默 socket 不发 carrier-churn 事实）⇒ 已开启会话的静默截断在页面上**没有任何信号/按钮**（teardown 升级让恢复在 ~20 s 内发生，但那段窗口无信号；全仓已无手动按钮，本条不再有例外差别）；② header chip 的 `presented` 是 document 级 `[data-chat-flow]` 近似，renderer 的非活动来源靠 CSS visibility 保活 ⇒ 隐藏实例可能对用户没在看的 `error` 会话执行自动 `resync()`（rc.2 唯一自动杠杆）；`loading` 已无自动重建臂（F2：该面在 classifier 前被摘除），隐藏 header 因此也不可能对 `loading` 执行任何自动动作。
+  - **已知近似（评审 B5/B6）**：① 桌面 `open` 臂一律 `action='none'`/`notice=null`（静默 socket 不发任何页面事实，提示已退役）⇒ 已开启会话的静默截断在页面上**没有任何信号/按钮**（teardown 升级让恢复在 ~20 s 内发生，但那段窗口无信号；全仓已无手动按钮，本条不再有例外差别）；② header chip 的 `presented` 是 document 级 `[data-chat-flow]` 近似，renderer 的非活动来源靠 CSS visibility 保活 ⇒ 隐藏实例可能对用户没在看的 `error` 会话执行自动 `resync()`（rc.2 唯一自动杠杆）；`loading` 已无自动重建臂（F2：该面在 classifier 前被摘除），隐藏 header 因此也不可能对 `loading` 执行任何自动动作。
   - **手动出口退役（用户裁决）**：chip 的「重新加载 / 重建对话通道」与失败遮罩上的同名
     按钮（`SessionStreamHealthChip.tsx`、`components/InstanceView.tsx`）整体移除，纯决策的
     `SessionStreamHealthAction` 随之只剩 `'none' | 'heal'`，座席的手动 1 s 守卫与 ledger 一并删除。
     保留的是**全部自动面**：header 的 error 自动 heal、页面级 delivery 阶梯的
     `resync → instance-reboot → document-reload`（有界、记账、预算内；见「当前所有权」）、以及
-    F1 相位机。**提示时机一字未改**（`heal-failed` / `loading-stall` / `loading-failed` /
-    `carrier-churn` 的判据与阈值仍是原样），退役只删控制；行为锁在
+    F1 相位机。**其余提示时机一字未改**（`heal-failed` / `loading-stall` / `loading-failed` 的
+    判据与阈值仍是原样；`carrier-churn` 提示按同批裁决整体退役，见上条），退役只删控制；行为锁在
     `test/session-health/*` 与 `test/ui-lock/instance-view-guard.test.ts`（后者同时锁「没有按钮」
     与「自动档仍在」）。
   - **未闭合**：① 90 s 失败阈值与 20 s 停滞阈值未经真机校准（误报代价 = 一次自动重建）；② **宿主永不回答**（socket 正常、宿主侧 `session/follow` 卡死）仍只能落到显式失败提示（手动重建已退役；页面级阶梯的自动档是仅剩的动作面），根治在上游（首帧期限 + `doOpen` 必须写 `error`，见上游提案 §4.3/§4.7）；③ 移动端 `session-stall.ts` 已接同一证据门自动臂（：`sessionStallFace` 读具象 `openPromise`，`false` 才自动调 pinned `resync()`，共用同类 cooldown/预算账本，`STALL_FAILED_MS` 后文案转「会话内容未能载入」），呈现读取经 `presentedSessionId()`（只认 `byId` 里 `retainedBy.mainView>0`），但触屏档跑的是实例自带客户端栈、**没有 chamber fork** ⇒ 载波层（开帧校验/首帧期限/静默 socket 升级）在该档不存在，其恢复面只有该自动臂 + 手动重载（移动档另行处理，本轮退役只动桌面 chip/失败遮罩）；阈值同样未经真机校准。**注（评审 B4）**：`openPromise` 恒非空（在途 open：载波静默 / 宿主不答）时该自动臂按设计**不可达**，该形态的恢复面实际**只有手动重载** —— 真机验收不要指望自动臂兜住静默载波。

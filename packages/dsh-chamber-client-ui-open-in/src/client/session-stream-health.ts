@@ -102,7 +102,7 @@ import type { SessionOpeningFailure } from './session-stream-health-probe.ts'
 export type SessionOpenState = 'cold' | 'loading' | 'open' | 'error'
 
 /** What the seat can surface to the user (never an action taken for them). */
-export type SessionStreamNotice = 'loading-stall' | 'loading-failed' | 'heal-failed' | 'carrier-churn'
+export type SessionStreamNotice = 'loading-stall' | 'loading-failed' | 'heal-failed'
 
 /** Ladder phase held across ticks (the only state that ages). */
 export type SessionStreamPhase = 'idle' | 'error-hold' | 'loading-hold' | 'healing'
@@ -129,12 +129,6 @@ export interface SessionStreamObservation {
    * yields false, so the automatic engine is blocked for a lever that cannot be seen.
    */
   readonly resyncAvailable?: boolean | undefined
-  /**
-   * Latest page-level carrier-churn fact for this source, or undefined. With the
-   * retry patch the carrier has no terminal escape left, so a keep-failing mux
-   * reopens silently and this is the only honest "stream is being reopened" signal.
-   */
-  readonly carrierChurn?: { readonly at: number; readonly count: number } | undefined
   /**
    * Terminal opening evidence for the PRESENTED session, read from the page
    * stream-forensics ledger. PRESENCE is the whole fact: the fork already judged
@@ -190,8 +184,6 @@ export interface SessionStreamHealthConfig {
   readonly healBudgetMax: number
   /** How long a heal is given to change the state before it counts as failed. */
   readonly healSettleMs: number
-  /** How long a carrier-churn fact keeps the "reconnecting" notice visible. */
-  readonly carrierChurnMs: number
 }
 
 /**
@@ -405,10 +397,8 @@ export function planSessionStreamHealth(
   // 'open'/'cold': the stream is alive (or never asked for a window) — clear
   // every clock and the notice. The heal budget survives recovery so a flapping
   // source cannot be healed once per recovery forever. 'open' is NOT proof that
-  // events flow: with the fork pacing carrier failures, a recent churn fact is
-  // the user's only signal that the stream is reopening.
-  const churn = observation.carrierChurn
-  const churning = churn !== undefined && churn.count > 0 && now - churn.at <= config.carrierChurnMs
+  // events flow, but with the retry patch pacing carrier failures the reopening
+  // is silent by design (the reconnecting notice was retired).
   return {
     state: {
       phase: 'idle',
@@ -421,7 +411,7 @@ export function planSessionStreamHealth(
         : { lastHealAt: state.lastHealAt, recoveredSinceHeal: true }),
     },
     action: 'none',
-    notice: churning ? 'carrier-churn' : null,
+    notice: null,
   }
 }
 
@@ -446,13 +436,11 @@ type SessionStreamNoticeKey =
   | 'streamHealth.loadingStall'
   | 'streamHealth.loadingFailed'
   | 'streamHealth.healFailed'
-  | 'streamHealth.carrierChurn'
 
 const SESSION_STREAM_NOTICE_KEYS: Record<SessionStreamNotice, SessionStreamNoticeKey> = {
   'loading-stall': 'streamHealth.loadingStall',
   'loading-failed': 'streamHealth.loadingFailed',
   'heal-failed': 'streamHealth.healFailed',
-  'carrier-churn': 'streamHealth.carrierChurn',
 }
 
 export function sessionStreamNoticeKey(notice: SessionStreamNotice): SessionStreamNoticeKey {

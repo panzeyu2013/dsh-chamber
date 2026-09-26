@@ -226,7 +226,7 @@
   30s 起、静默载波升级 `replaceSocket()` 含 teardown 分支与 60s 冷却限速），机制与阈值口径见 design 14 §D4 与
   `session-stall.ts` 头注；宿主侧仍无首帧期限。收口需设备侧帧证据（CDP WS Frames/抓包，入口 `mobile-walkthrough.mjs`）。
   **仍未闭合（复核后）**：① 触屏档无载波层（移动档跑实例自带栈、无 chamber fork ⇒ 首帧期限与升级都不存在）；桌面
-  `open` 臂在 ~20s 窗口内无按钮（静默 socket 不发 carrier-churn 事实）。② `session.blank && phase=='blank'` 时
+  `open` 臂在 ~20s 窗口内无任何信号（静默 socket 不发事实，且 carrier-churn 提示与手动按钮均已退役）。② `session.blank && phase=='blank'` 时
   header 不渲染，页面级恢复入口在该子形态的可见性/操作/90s 窗口待真机判定。③ 移动端产物缺 source↔artifact
   lockstep 断言。④ 开帧预算键是 32 位 FNV（跨会话碰撞约 1/16 万，只共享预算不等价）。⑤ 不可 JSON 序列化的 payload
   让 `open()` 抛 TypeError 而非 carrier 类（生产不可达存疑）。⑥ `socket-silent` 事实的持久消费面仍缺。
@@ -360,7 +360,7 @@
 
 - **流级预算仍是表外多副本（开放）**：`tables.ts`/`tables.json` 锁住的只有生命周期一族 10 个常量，`DEFAULT_FOLLOW_TIMEOUT_MS = 2_000` 与 `FOLLOW_MAX_MESSAGES = 8` 在 `packages/control-plane/src/session-mux.ts:63,65` 与 `packages/renderer/src/source-mux-facts.ts:75,359` 各一份（后者注释声称同预算但无锁），另有 `session-mux.ts:53-69`、`source-mux-facts.ts:73-80`、`remote-retry-policy.ts`、`stream-stall-policy.ts` 四族表外数字；`verify:ladder-table-parity` 的 CONSUMERS 不含这四个文件。出口判据 = 该族并入 tables 并进 parity 门，或给 2s/8 重复对加锁步断言。
 
-- **F2 座席（`session-stream-health-seat.ts`）无行为测试（开放）**：step、churn 的实例归属过滤、64 条 ladder 内存界只被 `test/ui-lock/instance-view-guard.test.ts` 的源码正则锁定。出口判据 = 可注入测试缝（或抽出纯 `seat-model.ts`）后补四条行为用例（`heal` 每次只派发一次、异实例 churn 不改本实例、仅 loading 读 opening failure、65 会话淘汰最旧）。
+- **F2 座席（`session-stream-health-seat.ts`）无行为测试（开放）**：step、fact wake-up 的渲染广播、64 条 ladder 内存界只被 `test/ui-lock/instance-view-guard.test.ts` 的源码正则锁定。出口判据 = 可注入测试缝（或抽出纯 `seat-model.ts`）后补四条行为用例（`heal` 每次只派发一次、仅 loading 读 opening failure、65 会话淘汰最旧）。
 
 - **F1 行为矩阵与 cancel 腿的测试缺口（开放）**：① `stream-client.ts` deadline 的 no-socket 兜底分支（:517-521）无用例，且它有意不推进加宽阶梯——该语义需一条行为用例钉住；② snapshot/wiring 两个入口只有 accept/miss 单格，缺跨世代与终局格；③ design 14:564 的期限到点 cancel 与 `session-mux.ts` timeout 腿的 cancel 无断言；④ F1→F2 的 window 事件 seam（`stream-forensics.ts:185` → `session-stream-health-probe.ts:386`）无端到端用例；⑤ 页面账本 64 条淘汰路径无用例。
 

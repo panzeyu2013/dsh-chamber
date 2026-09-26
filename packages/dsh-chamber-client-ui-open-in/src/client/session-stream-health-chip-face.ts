@@ -38,7 +38,7 @@ export function sessionStreamHealthChipFace(
 /**
  * Whether the chip must keep its 1 s ticker armed: an idle session, an open
  * stream and a hidden page carry no timer; a holding arm or a visible notice
- * (which expires from its own fact timestamp) does.
+ * (whose threshold or clear condition still needs re-evaluating) does.
  */
 export function sessionStreamHealthChipHoldsTick(
   plan: SessionStreamHealthPlan,

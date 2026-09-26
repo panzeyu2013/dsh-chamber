@@ -211,11 +211,7 @@ test('stream-health: a loading stall is reported, never acted on, and only with 
   // …and never for a cold or healthy stream, even with the face present.
   assert.equal(planAt(createSessionStreamHealthState(), observe('cold', { resyncAvailable: true }), T0 + L).action, 'none')
   assert.equal(planAt(createSessionStreamHealthState(), observe('open', { resyncAvailable: true }), T0 + L).action, 'none')
-  // A churn fact on an open stream is informational: still no rebuild arm.
-  assert.equal(
-    planAt(createSessionStreamHealthState(), observe('open', { resyncAvailable: true, carrierChurn: { at: T0, count: 1 } }), T0).action,
-    'none',
-  )
+
 })
 
 test('stream-health: the presented error heals automatically, and an exhausted budget only reports', () => {
@@ -651,37 +647,6 @@ test('stream-health: binding is the only accessor, and a throwing accessor fails
   assert.equal(resyncSessionStream(legacyOnly, 'a'), false)
 })
 
-test('stream-health: a recent carrier-churn fact surfaces the reconnecting notice and expires on its own', () => {
-  const state = createSessionStreamHealthState()
-  const fresh = planAt(state, observe('open', { carrierChurn: { at: T0, count: 2 } }), T0)
-  assert.equal(fresh.notice, 'carrier-churn')
-  assert.equal(fresh.action, 'none', 'churn must never be answered with a heal')
-  assert.equal(fresh.state.phase, 'idle', 'the notice must not age a ladder phase')
-  assert.equal(sessionStreamNoticeKey('carrier-churn'), 'streamHealth.carrierChurn')
-  assert.equal(planAt(state, observe('open', { carrierChurn: { at: T0, count: 2 } }), T0 + CONFIG.carrierChurnMs).notice,
-    'carrier-churn', 'the window is inclusive at its edge')
-  assert.equal(planAt(state, observe('open', { carrierChurn: { at: T0, count: 2 } }), T0 + CONFIG.carrierChurnMs + 1).notice,
-    null, 'the notice must expire without another fact')
-  assert.equal(planAt(state, observe('open', { carrierChurn: { at: T0, count: 0 } }), T0).notice, null,
-    'a zero count is not churn')
-  assert.equal(planAt(state, observe('open'), T0).notice, null, 'no fact, no notice')
-})
-
-test('stream-health: churn never overrides the error or loading arms', () => {
-  const churn = { at: T0, count: 3 }
-  // Both arms need their hold to AGE first (the notice is never handed out on the
-  // first frame), so each case steps twice — churn must not shortcut either.
-  const errorHold = planAt(
-    createSessionStreamHealthState(), observe('error', { resyncAvailable: false, carrierChurn: churn }), T0,
-  )
-  const errored = planAt(
-    errorHold.state, observe('error', { resyncAvailable: false, carrierChurn: churn }), T0 + G + CONFIG.healSettleMs,
-  )
-  assert.equal(errored.notice, 'heal-failed', 'the hopeless arm owns the notice while the open state is error')
-  const loadingHold = planAt(createSessionStreamHealthState(), observe('loading', { carrierChurn: churn }), T0)
-  const loading = planAt(loadingHold.state, observe('loading', { carrierChurn: churn }), T0 + CONFIG.loadingStallMs)
-  assert.equal(loading.notice, 'loading-stall', 'the stall arm owns the notice while the open state is loading')
-})
 
 test('stream-health: open liveness is tri-state, and only "nothing pending" is true evidence', () => {
   const pending = Promise.resolve()
@@ -742,7 +707,7 @@ test('stream-health: every notice key exists in both dictionaries', () => {
   // that the mapped key RESOLVES, so a helper rename can never ship a raw key.
   for (const key of [
     'streamHealth.label', 'streamHealth.healing', 'streamHealth.loadingStall', 'streamHealth.loadingFailed',
-    'streamHealth.healFailed', 'streamHealth.carrierChurn',
+    'streamHealth.healFailed',
   ]) {
     assert.equal(typeof (zh as Record<string, string>)[key], 'string', 'zh is missing ' + key)
     assert.equal(typeof (en as Record<string, string>)[key], 'string', 'en is missing ' + key)

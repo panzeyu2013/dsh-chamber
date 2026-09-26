@@ -4,6 +4,10 @@
  * carrier fault inside a live generation is otherwise silent. This turns that seam
  * into an addressable page fact (zero imports: dispatch is injected; the browser
  * default only touches globals the page already owns).
+ *
+ * DIAGNOSTICS ONLY since the chamber chip's reconnecting notice was retired (user
+ * ruling, design 14 §D4): no in-repo UI reads this event; DevTools and the soak
+ * scripts are its consumers.
  */
 
 /** Document-level event name carrying one {@link CarrierFailureFact}. */

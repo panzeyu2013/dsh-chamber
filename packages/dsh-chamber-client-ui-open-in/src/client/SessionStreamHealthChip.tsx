@@ -28,7 +28,7 @@ import {
 } from './session-stream-health-chip-face.ts'
 import styles from './SessionStreamHealthChip.module.css'
 
-/** Injected face the seat supplies: bound translator, one ladder step, churn subscription. */
+/** Injected face the seat supplies: bound translator, one ladder step, wake-up subscription. */
 export interface SessionStreamHealthInjected {
   /** Bound translator for the open-in namespace (the chip's copy lives there). */
   t: Translate
@@ -36,9 +36,9 @@ export interface SessionStreamHealthInjected {
    *  owns the state, so a remount cannot reset the cooldown or rolling budget. */
   step(sessionId: string, openState: SessionOpenState, presented: boolean, now: number): SessionStreamHealthPlan
   /**
-   * Subscribe to carrier-churn facts for this source; the fact itself stays in
-   * the seat, the chip only learns a new observation is due. Without this the
-   * churn notice could never be planned while `openState === 'open'` (no ticker).
+   * Subscribe to seat-side fact wake-ups; the facts stay in the seat, the chip
+   * only learns a new observation is due (a terminal opening fact must be planned
+   * the moment it lands, not on the next tick).
    * @returns unsubscribe for the effect cleanup.
    */
   subscribe(listener: () => void): () => void
@@ -80,9 +80,8 @@ export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactE
     return () => { document.removeEventListener('visibilitychange', onVisibility) }
   }, [])
 
-  // Carrier-churn facts arrive as EVENTS — the seat’s closure owns the fact, so a
-  // prop would never change. Bump the tick to re-plan (the notice appears), and a
-  // visible notice keeps the ticker alive so it expires on its own.
+  // Seat-side facts arrive as EVENTS — the seat’s closure owns them, so a prop
+  // would never change. Bump the tick to re-plan (the notice appears now).
   useEffect(() => subscribe(() => setTick(value => value + 1)), [subscribe])
 
   // One ladder step per render-relevant change. The seat owns the state and the
@@ -95,7 +94,7 @@ export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactE
 
   // Age the ladder only while an arm is holding and the page is visible: an idle
   // session, an open stream, or a hidden page carries no timer. A visible NOTICE
-  // also ticks — the churn notice is derived from a fact timestamp and must expire.
+  // also ticks — its threshold (or its clear condition) must be re-evaluated.
   useEffect(() => {
     if (!sessionStreamHealthChipHoldsTick(plan, openState, visible)) return
     const timer = window.setInterval(() => setTick(value => value + 1), TICK_MS)

@@ -147,7 +147,6 @@ export const LADDER_TABLES = {
     healBudgetWindowMs: 600_000,
     healBudgetMax: 3,
     healSettleMs: 20_000,
-    carrierChurnMs: 10_000,
   },
   /**
    * The delivery owner: ONE ladder for every stall family (content / schedule /

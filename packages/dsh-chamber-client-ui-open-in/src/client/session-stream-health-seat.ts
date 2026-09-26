@@ -48,13 +48,6 @@ const SLOT_ID = 'chamber-stream-health'
 const LADDER_MEMORY = 64
 
 /**
- * Page-level carrier-churn event published by the in-repo api-gateway fork.
- * Duplicated as a literal on purpose: a client plugin must not deepen an import
- * path into the fork at bundle time (a lockstep test pins the two spellings).
- */
-const CARRIER_CHURN_EVENT = 'dsh-chamber:stream-carrier-failed'
-
-/**
  * Resolve the instance's session face LAZILY, one call at a time. This plugin
  * deliberately does not inject `sessions`, so the service can be absent; reading
  * an ABSENT service off the ctx PROXY throws in cordis, which would escape into
@@ -77,37 +70,12 @@ function readSessions(ctx: ClientContext): SessionsLoose | undefined {
 
 export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate): void {
   /**
-   * Latest carrier-churn fact for THIS source. The page hosts every boot ctx, so
-   * the fact is attributed and filtered here; an unattributed fact is fail-open.
+   * Render-side wake-up subscribers (the chip). Announced, not passed as a value:
+   * the terminal opening fact must surface the moment it lands instead of waiting
+   * for the chip's next 1 s tick.
    */
-  let carrierChurn: { at: number; count: number } | undefined
-  /**
-   * Render-side subscribers (the chip). The fact stays in this closure and a new
-   * observation is announced, not passed as a value: while the session stays
-   * `open` the chip’s ticker is off, so an unannounced event is never planned.
-   */
-  const churnListeners = new Set<() => void>()
+  const wakeListeners = new Set<() => void>()
   const ownInstanceId = (ctx as { readonly chamberInstanceId?: string }).chamberInstanceId
-  ctx.effect(() => {
-    if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return
-    const onChurn = (event: Event): void => {
-      const detail = (event as CustomEvent<{ instanceId?: unknown; at?: unknown; count?: unknown }>).detail
-      if (detail === null || typeof detail !== 'object') return
-      if (ownInstanceId !== undefined && typeof detail.instanceId === 'string' && detail.instanceId !== ownInstanceId) return
-      const at = typeof detail.at === 'number' && Number.isFinite(detail.at) ? detail.at : Date.now()
-      const count = typeof detail.count === 'number' && Number.isFinite(detail.count)
-        ? detail.count
-        : (carrierChurn?.count ?? 0) + 1
-      carrierChurn = { at, count }
-      for (const listener of [...churnListeners]) listener()
-    }
-    window.addEventListener(CARRIER_CHURN_EVENT, onChurn)
-    return () => {
-      window.removeEventListener(CARRIER_CHURN_EVENT, onChurn)
-      churnListeners.clear()
-    }
-  }, 'dsh-chamber: stream carrier churn fact')
-
   /**
    * Terminal opening evidence published by the in-repo api-gateway fork. The
    * fact lives in the page-level ledger (shared with the renderer's page seat
@@ -117,7 +85,7 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
    */
   const openingFailures = sessionOpeningFailureLedger()
   ctx.effect(() => openingFailures.subscribe(() => {
-    for (const listener of [...churnListeners]) listener()
+    for (const listener of [...wakeListeners]) listener()
   }), 'dsh-chamber: stream opening failure wake-up')
 
   /** Per-session ladder state, keyed the way the budget is defined. */
@@ -151,12 +119,12 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
       const sessions = readSessions(ctx)
       // Evidence is read for a loading target only: that is the one arm it
       // speaks to, and a proven-dead opening must be visible NOW — while the
-      // seat still never re-issues it automatically (only arms the user control).
+      // seat still never re-issues it automatically (it only reports).
       const openingFailure = openState === 'loading'
         ? openingFailures.failureFor(ownInstanceId, sessionId, now)
         : undefined
-      // One guarded capability read: the heal route and the user control answer the
-      // same question, so they must not be able to disagree.
+      // One guarded capability read: the automatic heal's route and the reachable
+      // face answer the same question, so they must not be able to disagree.
       const resyncAvailable = hasSessionStreamResync(sessions, sessionId)
       const plan = planSessionStreamHealth(
         ladders.get(sessionId) ?? createSessionStreamHealthState(),
@@ -168,7 +136,6 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
           healRoute: resyncAvailable,
           resyncAvailable,
           ...(openingFailure === undefined ? {} : { openingFailure: openingFailure.failure }),
-          ...(carrierChurn === undefined ? {} : { carrierChurn }),
         },
         now,
         SESSION_STREAM_HEALTH_DEFAULTS,
@@ -191,11 +158,11 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
   const face: SessionStreamHealthInjected = {
     t,
     step,
-    // Carrier-churn wake-up for the renderer: the chip bumps its tick so
-    // the ladder re-plans and the "reconnecting…" notice can appear and expire.
+    // Wake-up for the renderer: the chip bumps its tick so a terminal opening
+    // fact is planned immediately instead of on its next 1 s tick.
     subscribe: (listener) => {
-      churnListeners.add(listener)
-      return () => { churnListeners.delete(listener) }
+      wakeListeners.add(listener)
+      return () => { wakeListeners.delete(listener) }
     },
     // No user-triggered action exists (retired by user ruling): the only side
     // effect of this face is the automatic heal executed by `step`.

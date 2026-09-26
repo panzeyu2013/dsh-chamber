@@ -38,7 +38,7 @@ function planOf(
 }
 
 const OPEN_STATES: readonly SessionOpenState[] = ['cold', 'loading', 'open', 'error']
-const NOTICES: readonly SessionStreamNotice[] = ['loading-stall', 'loading-failed', 'heal-failed', 'carrier-churn']
+const NOTICES: readonly SessionStreamNotice[] = ['loading-stall', 'loading-failed', 'heal-failed']
 
 test('an idle ladder renders nothing, whatever the open state', () => {
   for (const openState of OPEN_STATES) {
@@ -88,7 +88,7 @@ test('the ticker holds while an arm, a non-open stream or a notice needs re-plan
   assert.equal(holds(planOf('idle', 'none', null), 'cold'), false, 'a cold session is quiet')
   assert.equal(holds(planOf('idle', 'none', null), 'loading'), true, 'a waiting open must keep planning')
   assert.equal(holds(planOf('idle', 'none', null), 'error'), true, 'an error must keep planning')
-  assert.equal(holds(planOf('idle', 'none', 'carrier-churn'), 'open'), true, 'the churn notice expires from its own timestamp')
+  assert.equal(holds(planOf('idle', 'none', 'heal-failed'), 'open'), true, 'a visible notice keeps re-planning while the stream is open')
   assert.equal(holds(planOf('healing', 'heal', null), 'open'), true, 'an executed arm must settle on the clock')
   assert.equal(holds(planOf('idle', 'none', 'loading-stall'), 'open', false), false, 'a hidden page stops the clock')
 })
