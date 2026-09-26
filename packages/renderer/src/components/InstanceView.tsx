@@ -36,7 +36,7 @@ import { frameText, type FrameLocale } from '../locales.ts'
 import { monotonicNow } from '../monotonic-now.ts'
 import {
   advanceSessionOpenHealth, presentedSessionOpenRecoveryPhase,
-  type SessionOpenHealth,
+  type SessionOpenHealth, type SessionOpenRecoveryPhase,
 } from '../session-open-recovery.ts'
 import { createSessionDeliveryOwner } from '../session-delivery-state.ts'
 import { activeSymptomSinceMs, advanceContentStallStreak, openStallSymptomActive, stuckEvidenceForStreak, type ContentStallStreak } from '../session-content-stall.ts'
@@ -145,9 +145,10 @@ export default function InstanceView({
   const [absentSince, setAbsentSince] = useState<number | null>(null)
   /** 兜底释放窗到期后的重渲染触发器；决策本身仍是纯函数（可测）。 */
   const [surfaceFallbackTick, setSurfaceFallbackTick] = useState(0)
-  const [sessionOpenHealth, setSessionOpenHealth] = useState<SessionOpenHealth | null>(null)
-  /** Terminal opening evidence for the presented session (the forensics ledger). */
-  const [openingFailure, setOpeningFailure] = useState(false)
+  /** The mask's only visible fact: the phase the 1 Hz sample derives. The fresh
+   *  health object itself stays in the ref, so a sample inside a threshold window
+   *  cannot re-render the view. */
+  const [sessionOpenPhase, setSessionOpenPhase] = useState<SessionOpenRecoveryPhase>('quiet')
   // Sessions the ladder reports as host-stall exhausted. The map is a Set: the page
   // has NO content-stall producer (the gateway facts cursor is not assistant
   // content), so exhaustion over an open face is always a host-responsiveness fact
@@ -196,8 +197,7 @@ export default function InstanceView({
       // The exhaustion map is per sampled seat: a stale entry would render a false
       // banner for one commit when returning to that session.
       setHostStallSessions(previous => (previous.size === 0 ? previous : new Set()))
-      setSessionOpenHealth(null)
-      setOpeningFailure(false)
+      setSessionOpenPhase('quiet')
       return
     }
     const sample = (): void => {
@@ -205,11 +205,18 @@ export default function InstanceView({
       const at = monotonicNow()
       const health = advanceSessionOpenHealth(sessionOpenHealthRef.current, currentSessionId, observed, at)
       sessionOpenHealthRef.current = health
-      setSessionOpenHealth(health)
       // Terminal opening evidence is a page fact independent of the concrete
       // session face: read for the presented target only, and only while it is
       // loading — the one state the fact speaks about.
-      setOpeningFailure(observed?.openState === 'loading' && readInstanceOpeningFailure(instanceId, currentSessionId))
+      const nextOpeningFailure = observed?.openState === 'loading'
+        && readInstanceOpeningFailure(instanceId, currentSessionId)
+      // The phase is derived HERE, from the same inputs the render used to
+      // recompute it from: storing it (and not the fresh per-second object) keeps
+      // every sample inside a threshold window render-free.
+      const nextPhase = presentedSessionOpenRecoveryPhase(
+        health, currentSessionId, currentSessionKnownBlank === true, nextOpeningFailure,
+      )
+      setSessionOpenPhase(previous => (previous === nextPhase ? previous : nextPhase))
       if (document.visibilityState === 'hidden') {
         // Hidden is a gap like a seat switch: evidence sampled before an arbitrary
         // hidden period is not usable after resume, or the first visible sample can
@@ -495,11 +502,9 @@ export default function InstanceView({
   // out of levers over an open, healthy face (schedule/input stalls are host
   // responsiveness, not content): the generic failed copy is the correct one, and
   // with no content producer there is no content-copy case at all.
-  const openRecovery = currentSessionId !== undefined && hostStallSessions.has(currentSessionId)
+  const openRecovery: SessionOpenRecoveryPhase = currentSessionId !== undefined && hostStallSessions.has(currentSessionId)
     ? 'failed'
-    : presentedSessionOpenRecoveryPhase(
-      sessionOpenHealth, currentSessionId, currentSessionKnownBlank === true, openingFailure,
-    )
+    : sessionOpenPhase
   const sourceFailed = isTerminalUnreadyPhase(sourcePhase)
   // 遮罩在已 settle 的壳上仍可见，就是揭示门在持有它；隐藏判定耦合的是**合成后**的
   // veilHeld：帧 actionable/released 时同一 commit 里壳也恢复可见，绝不"遮罩没了壳还藏着"。

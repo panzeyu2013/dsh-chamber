@@ -319,7 +319,13 @@ test('stream-health evidence: the page notice is fact-driven and the automatic a
   // and hands it to the phase decision so the evidence IS the failure.
   assert.match(view, /readInstanceOpeningFailure\(instanceId, currentSessionId\)/)
   assert.match(view, /const openSymptomEvidence = observed\?\.openState === 'loading' \? undefined : openEvidence/)
-  assert.match(view, /currentSessionKnownBlank === true, openingFailure,/)
+  // The phase is derived in the 1 Hz sampler from the same inputs (the terminal
+  // fact included) and only its RESULT is state: storing the fresh per-second
+  // health object would re-render the whole view on every sample.
+  assert.match(view, /presentedSessionOpenRecoveryPhase\(\s*health, currentSessionId, currentSessionKnownBlank === true, nextOpeningFailure,/)
+  assert.doesNotMatch(view, /useState<SessionOpenHealth|setSessionOpenHealth/,
+    'the per-second health object must stay in the ref, never in state')
+  assert.match(view, /setSessionOpenPhase\(previous => \(previous === nextPhase \? previous : nextPhase\)\)/)
   assert.match(view, /escalationBlocked: observed\?\.resyncInFlight === true \|\| observed\?\.openInFlight === true/)
 })
 
