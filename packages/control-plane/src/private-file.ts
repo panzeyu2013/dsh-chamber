@@ -6,6 +6,7 @@
  */
 
 import {
+  accessSync,
   closeSync,
   constants,
   fchmodSync,
@@ -16,6 +17,7 @@ import {
   openSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeSync,
   type Stats,
@@ -60,6 +62,18 @@ export function samePrivateIdentity(left: PrivateFileIdentity, right: PrivateFil
 /** The shared (dev, ino) identity pair every private-file consumer compares. */
 export function privateIdentityOf(stat: Stats): PrivateFileIdentity {
   return { dev: stat.dev, ino: stat.ino }
+}
+
+/** Only a regular executable file counts as a command candidate (a same-named
+ *  directory must not shadow a later valid PATH entry). Shared by the managed-host
+ *  node resolution and the bundled-pnpm PATH probe. */
+export function isExecutableFile(target: string): boolean {
+  try {
+    accessSync(target, constants.X_OK)
+    return statSync(target).isFile()
+  } catch {
+    return false
+  }
 }
 
 /** The platform O_NOFOLLOW flag, or 0 where the platform does not expose it (win32):

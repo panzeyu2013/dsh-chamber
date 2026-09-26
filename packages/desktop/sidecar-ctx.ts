@@ -168,8 +168,9 @@ export function chamberHostSourceDirsFor(
 /** 本地 dsh spawn 门（装配体 HostLocalSpawnGates 同一形状——main 三闭包语义）。 */
 export type HeadlessLocalSpawnGates = HostLocalSpawnGates
 
-/** buildHeadlessCtx 装配结果（ctx + 回收腿 + plane 晚绑定面 + 启动尾部；与 Electron main 共用同一形状）。 */
-export type HeadlessCtxAssembly = HostAssembly
+/** buildHeadlessCtx 装配结果（ctx + 回收腿 + plane 晚绑定面 + 启动尾部；装配体与 Electron main 同形，
+ *  额外带随包 pnpm 入口供控制面在宿主 PATH 无 pnpm 时供给；design 02 §3.1）。 */
+export type HeadlessCtxAssembly = HostAssembly & { pnpmEntry: string }
 
 /**
  * 退出清理并行编排：dispose 与 cp.stop 两条腿同时启动、一起等待（allSettled——任一腿
@@ -398,5 +399,5 @@ export async function buildHeadlessCtx(
     },
   }) as unknown as ShellAssemblyCtx
 
-  return { ...assembly, ctx }
+  return { ...assembly, ctx, pnpmEntry }
 }

@@ -52,6 +52,8 @@ export interface LocalConnectionDeps {
     logger: Logger
     /** Optional `--patch` overlay for the dsh launcher (design 09 module B); null/absent when none. */
     patchPath?: string | null
+    /** Bundled pnpm entry for the host PATH provision (design 02 §3.1); absent = no provisioning. */
+    pnpmEntry?: string | null
     /** First port attempted (design 17 §3 server override); absent = BASE_DHSPORT. */
     dshPortBase?: number
     /** Aborted by stop() so a readiness wait cannot outlive writer quiescence. */
@@ -99,6 +101,12 @@ export interface LocalConnectionOptions {
    * then-current profile safely.
    */
   patchPath?: string | (() => string | null)
+  /**
+   * Bundled pnpm entry made reachable to every managed host whose own PATH resolves
+   * no pnpm (design 02 §3.1). Static for the process lifetime: the packaged layout
+   * cannot move under a running shell.
+   */
+  pnpmEntry?: string | null
 }
 
 /** The local connection adapter surface (the createLocalConnection return). */
@@ -193,6 +201,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
   const maxRestartsInWindow = options.maxRestartsInWindow ?? MAX_RESTARTS_IN_WINDOW
   const dshPortBase = options.dshPortBase
   const ownerInstanceId = options.ownerInstanceId
+  const pnpmEntry = options.pnpmEntry ?? null
   const spawnDshFn = (deps.spawnDsh ?? spawnDsh) as NonNullable<LocalConnectionDeps['spawnDsh']>
   const probeHostIdentity = deps.probeHostIdentity ?? probeHostIdentityFn
 
@@ -301,6 +310,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
     dshWorkspacePath: string
     logger: Logger
     patchPath: string | null
+    pnpmEntry: string | null
   }): Promise<SpawnedDsh> {
     const controller = new AbortController()
     if (spawnAbortController !== null) {
@@ -560,6 +570,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
             dshWorkspacePath: resolvedWorkspacePath,
             logger,
             patchPath: resolvedPatchPath,
+            pnpmEntry,
           })
           if (stopping || epoch !== restartEpoch) {
             await spawned.stop()
@@ -672,6 +683,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
           dshWorkspacePath: resolvedWorkspacePath,
           logger,
           patchPath: resolvedPatchPath,
+          pnpmEntry,
         })
         if (stopping || epoch !== startEpoch) {
           await spawned.stop()

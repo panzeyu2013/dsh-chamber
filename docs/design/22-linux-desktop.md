@@ -87,7 +87,8 @@ ubuntu-22.04 runner 退役窗口（26.04 GA 后）需预登记迁移方案（24.
   目录 fsync）。`packages/control-plane` 的 `private-file.ts` syncParent、`host-logs.ts` syncDirectory，以及
   **`packages/dsh-runtime` 共享核心**（desktop 与 gateway 双 owner）的 `runtime-metadata-recovery.ts`
   fsyncRealDirectory，一律平台无关地只吞这两个错误码，身份复验保留，EIO 等仍 loud。
-- `plugin-sync.ts` resolvePnpmBinDir：含 Linux 官方安装根 `~/.local/share/pnpm`、`~/.local/bin`。
+- 插件/宿主 pnpm 入口：`pnpm-launcher.ts` 的候选集按目标平台拼接（`<resourcesPath>/pnpm/bin/pnpm.cjs`
+  等），Linux 不再有额外的 pnpm home 扫描；托管宿主 PATH 无 pnpm 时由控制面供给随包 wrapper（02 §3.1）。
 - **已知未动项（STATUS 指向本节）**：托盘图标候选两死路径（跨平台既有 P2）；pnpm home 的 XDG_DATA_HOME
   偏移未覆盖（低优；macOS `~/Library/pnpm` 超出 Linux 范围）；`private-fs.ts` syncPinnedDirectory
   （private-file 的兄弟站点）保持严格无容错、未并入；gateway 裸 CLI 默认 stateDir 与 control-plane standalone

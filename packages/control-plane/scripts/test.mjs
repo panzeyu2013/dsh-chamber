@@ -82,6 +82,9 @@ const GROUPS = {
     'test/host-lifecycle/lifecycle.test.ts',
     'test/host-lifecycle/local-connection.test.ts',
     'test/host-lifecycle/spawn-dsh.test.ts',
+    // 随包 pnpm 的 PATH 供给（design 02 §3.1）：wrapper 两种平台形状、宿主 PATH
+    // 探测、幂等落盘与 withPnpmShim 判定；真实执行的断言由平台分支自行 skip。
+    'test/host-lifecycle/pnpm-shim.test.ts',
     'test/host-lifecycle/reaper.test.ts',
     'test/host-lifecycle/restart-local.test.ts',
   ],
@@ -169,6 +172,9 @@ const WIN32_FILES = [
   // 孪生探针的纯解析对拍：平台中性（win32-gated exec 段自行 skip），
   // 与 test/windows/win-probes.test.ts 同批在 Windows 腿再跑一遍。
   'test/protocol/win-probes-parity.test.ts',
+  // 随包 pnpm 供给的单元面：两种平台的 wrapper 文本 + PATH 探测（PATHEXT）都是
+  // 纯函数，落盘用 mkdtemp；POSIX 才执行 wrapper，Windows 腿只跳过那一段。
+  'test/host-lifecycle/pnpm-shim.test.ts',
 ]
 
 function main() {

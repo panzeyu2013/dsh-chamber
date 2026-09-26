@@ -88,7 +88,7 @@ const GROUPS = {
     'test/chamber-surface/plugin-manifest-lockstep.test.ts',
     'test/chamber-surface/feature-lifecycle.test.ts',
   ],
-  // packaging: the shipped artifact surface - pnpm PATH shim, installer script, dist bundle smoke.
+  // packaging: the shipped artifact surface - pnpm entry binding, installer script, dist bundle smoke.
   packaging: [
     'test/packaging/pnpm-entry.test.ts',
     'test/packaging/install-script.test.ts',

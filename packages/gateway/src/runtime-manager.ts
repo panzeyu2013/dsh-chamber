@@ -258,7 +258,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     metadataStatus.invalidate()
   }
 
-  // Single source with the executor's PATH shim: pnpm-entry.ts owns the resolution.
+  // Single source for the entry path: pnpm-entry.ts owns the resolution (the PATH provision itself lives in the control plane; design 02 §3.1).
   const pnpmEntry = (): string => resolvePnpmEntry()
 
   // /chamber/runtime actions

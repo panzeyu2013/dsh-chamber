@@ -15,7 +15,7 @@
 
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
-import { accessSync, constants, existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { createConnection } from 'node:net'
@@ -28,8 +28,9 @@ import {
   registerAuthCookie,
 } from './browser-auth-cookie.ts'
 import { createHostLogWriter } from './host-logs.ts'
-import { ensurePrivateDirectoryNoFollow } from './private-file.ts'
+import { ensurePrivateDirectoryNoFollow, isExecutableFile } from './private-file.ts'
 import { removePidRecord, writePidRecord } from './pid-record.ts'
+import { withPnpmShim } from './pnpm-shim.ts'
 import type { Logger } from './types.ts'
 import { ensureInstanceId, isValidInstanceId } from './instance-id.ts'
 import { cimPidLiveness, hasWindowsResidualTree, treeKillWindows } from './win-probes.ts'
@@ -239,6 +240,7 @@ interface SpawnAttemptOptions {
   port: number
   logger: Logger
   patchPath?: string | null
+  pnpmEntry?: string | null
   dshPortBase?: number
   authBootstrapWaitMs?: number
   signal?: AbortSignal
@@ -458,16 +460,6 @@ export function resolveNodeExecutable(): { file: string; args: string[]; env: Re
   return { file: 'node', args: [], env: {} }
 }
 
-/** Only a regular executable file counts as a node candidate (a same-named directory must not shadow a later valid entry). */
-function isExecutableFile(target: string): boolean {
-  try {
-    accessSync(target, constants.X_OK)
-    return statSync(target).isFile()
-  } catch {
-    return false
-  }
-}
-
 /** Locate a `node` executable by scanning PATH (first match wins). */
 function searchPathForNode(): string | null {
   const isWin = process.platform === 'win32'
@@ -557,6 +549,7 @@ async function spawnAttempt({
   port,
   logger,
   patchPath,
+  pnpmEntry,
   signal,
   pidRecordWriter,
   terminateChildFn,
@@ -587,20 +580,35 @@ async function spawnAttempt({
   // The node executable is resolved, never assumed on PATH: under the Electron main
   // process a GUI-launched app has a minimal PATH (resolveNodeExecutable).
   const nodeExec = resolveNodeExecutable()
+  // Deterministic, privacy-pinned environment; the Electron branch also injects
+  // ELECTRON_RUN_AS_NODE=1. SSH_CONNECTION is the browse-interaction pin: under an
+  // SSH-launch marker directory-picker-auto serves directoryPicker.list /
+  // createDirectory, so every instance gets the same in-app dialog.
+  const hostEnv = sanitizeManagedDshEnv({
+    ...process.env,
+    ...nodeExec.env,
+    DSH_HOME: dshHome,
+    DSH_TELEMETRY_DISABLED: '1',
+    DSH_PERMISSION_MODE: 'workspace-write',
+    SSH_CONNECTION: '127.0.0.1 0 127.0.0.1 0',
+  })
+  // Upstream's plugin manager spawns a literal `pnpm` out of this child's PATH, and
+  // the packaged pnpm artifact is a node script no PATH lookup can find; the bundled
+  // launcher is made reachable here — only when the host PATH resolves no pnpm of its
+  // own, and never fatally (design 02 §3.1).
+  const childEnv = withPnpmShim(hostEnv, {
+    stateDir,
+    pnpmEntry,
+    nodeFile: nodeExec.file,
+    nodeArgs: nodeExec.args,
+    nodeEnv: nodeExec.env,
+    // Relative/empty PATH entries resolve against the child's own cwd.
+    cwd: spawnCwd,
+    log,
+  })
   const child = spawn(nodeExec.file, [...nodeExec.args, ...entry.args], {
     cwd: spawnCwd,
-    // Deterministic, privacy-pinned environment; the Electron branch also injects
-    // ELECTRON_RUN_AS_NODE=1. SSH_CONNECTION is the browse-interaction pin: under an
-    // SSH-launch marker directory-picker-auto serves directoryPicker.list /
-    // createDirectory, so every instance gets the same in-app dialog.
-    env: sanitizeManagedDshEnv({
-      ...process.env,
-      ...nodeExec.env,
-      DSH_HOME: dshHome,
-      DSH_TELEMETRY_DISABLED: '1',
-      DSH_PERMISSION_MODE: 'workspace-write',
-      SSH_CONNECTION: '127.0.0.1 0 127.0.0.1 0',
-    }),
+    env: childEnv,
     stdio: ['ignore', 'pipe', 'pipe'],
     // Own process group: the host outlives a control-plane crash and the orphan
     // reaper reclaims it; windowsHide keeps a detached Windows child headless.
@@ -1063,6 +1071,9 @@ export interface SpawnDshOptions {
   logger: Logger
   /** Optional `--patch` overlay passed to the dsh launcher (design 09 module B). */
   patchPath?: string | null
+  /** Bundled pnpm entry made reachable to the host when its own PATH resolves no
+   *  pnpm (design 02 §3.1). Omitted by direct/standalone callers. */
+  pnpmEntry?: string | null
   /** First port attempted (default BASE_DHSPORT). Server gateway deployments
    *  set this via DSH_GATEWAY_DSH_PORT (design 17 §3). */
   dshPortBase?: number
@@ -1091,6 +1102,7 @@ export async function spawnDsh({
   dshWorkspacePath,
   logger,
   patchPath,
+  pnpmEntry,
   signal,
   dshPortBase,
   authBootstrapWaitMs,
@@ -1142,6 +1154,7 @@ export async function spawnDsh({
         port,
         logger,
         patchPath,
+        pnpmEntry,
         signal,
         pidRecordWriter,
         terminateChildFn,

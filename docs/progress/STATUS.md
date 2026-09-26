@@ -696,6 +696,8 @@
 
 - desktop 跨包接入受 Swift 锚点约束（R11 余量）：desktop 的 pnpm 入口/内建版本读取/dsh CLI entry 仍为包内单源，未改指 `@dsh-chamber/dsh-runtime` 的共享原语；`macos/Tests/DSHChamberTests/PackagedLayoutTests.swift:156-205` 以源文本锁 `sidecar-ctx.ts` 的七个布局助手与 `resolvePnpmEntry` 候选顺序（packaged > legacy > dev + dev 回落），锚点迁移属 macOS 门（当前断言集已被父代理静态复核 17/17 满足，XCTest 待 darwin 实跑）。
 
+- 宿主插件管理器的随包 pnpm 供给待打包实机验收：控制面在托管宿主 PATH 解析不出可执行 pnpm 时，于 `<stateDir>/pnpm-shim/` 生成 wrapper 并只前置到该次 spawn 的 PATH（02 §3.1，`withPnpmShim`）；宿主已有 pnpm 时按设计逐字不动（此时不保证 11.21.0）。单测与穿线已覆盖（`pnpm-shim.test.ts`、`spawn-dsh.test.ts`、`manager-api.test.ts` 的 plane→spawn、gateway `lifecycle.test.ts` 的 gateway→plane），但「Finder 双击打包 App → 设置里安装/卸载插件成功 + 同一宿主会话 `pnpm --version` = 11.21.0」仍需一次实机确认；判定面 = 实机 + `<stateDir>/logs/control-plane.log` 的 `[dsh:<port>] pnpm: ...` 供给行。
+
 - state 根租约的 legacy 退役时点（R2）：`retireLegacyStateLocks`（旧 `.gateway.lock` / `dsh-runtime/owner.json` 的死记录清理）为独立函数 + `acquireStateRootLease` 内单一调用点，``（一个 minor 后）删除该函数、调用点、常量与对应单测条目；证据命令 `grep -rnE "gateway[.]lock|dsh-runtime/owner.json" packages/*/src` + `node scripts/gates/run-checks.mjs static`。
 
 - Windows 覆盖缺口（R2/R14）：`control-plane/test/state/state-root-lease.test.ts` 的 T4/T5/T6（spawn 生产入口、双 scope）与 `host-domain-wiring-lockstep.test.ts` 未登记进 WIN32_FILES；实现只用 `node:child_process` + O_EXCL 语义，理论跨平台，Windows CI 当前不执行，待实机后再进清单。

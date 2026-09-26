@@ -20,9 +20,10 @@ function joinFor(platform: NodeJS.Platform, ...parts: string[]): string {
 
 
 /**
- * Absolute `pnpm.cjs` entries for the desktop's OWN bundled/dev launcher, in preference
- * order — the ONE candidate set every desktop consumer reads (runtime installer pnpmEntry,
- * Swift sidecar assembly, `pnpm pack`, PATH bin-dir scan):
+ * Absolute `pnpm.cjs` entries for the chamber's OWN bundled/dev launcher, in preference
+ * order — the ONE candidate set the desktop main and the Swift sidecar assembly read
+ * (`HostAssemblyDeps.pnpmEntry` for the runtime store prune, plus the entry handed to the
+ * control plane for the managed-host PATH provision, design 02 §3.1):
  *   1. `<resourcesPath>/pnpm/bin/pnpm.cjs`             packaged Electron extraResources
  *   2. `assemblyEntry`                                 Swift sidecar assembly entry
  *   3. `legacyAssemblyEntry`                           legacy sidecar assembly dir

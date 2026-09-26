@@ -1381,6 +1381,8 @@ if (!gotTheLock) {
       controlPlane = createControlPlane({
         port: controlPlanePort,
         stateDir: stateRootDir(app.getPath('userData')),
+        // 宿主 PATH 无 pnpm 时供给随包 launcher（design 02 §3.1）；与 sidecar-entry 同参。
+        pnpmEntry,
         // 租约记录的诊断 flavor（冲突方读到「desktop」而不是笼统的 control-plane）。
         stateWriter: 'desktop',
         // 本地 dsh spawn 门 = 共享装配的 localSpawnGates（与 Swift sidecar 同一语义）。

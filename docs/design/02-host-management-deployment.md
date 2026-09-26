@@ -190,6 +190,26 @@ rows，不改变官方 web profile 的其它组合层。
     GetAlignedPointerFromEmbedderData symbol"），`--expose-internals` 的官方 require 路径可用；
   - 兜底 → PATH 搜索 `node` → 常见安装位置（homebrew、`/usr/local/bin`、
     nvm/volta/fnm） → 最终退回裸名 `node`（仅作诊断兜底）。
+- **随包 pnpm 供给**（`withPnpmShim`，pnpm-shim.ts）：上游插件管理器在**托管宿主进程**里
+  spawn 字面量 `pnpm`（execa 默认命令；shipped CLI 侧没有 `packageManager` 入口），而打包自带的
+  pnpm 是 node 脚本（0644、shebang `#!/usr/bin/env node`），宿主 PATH 上既没有 node 也没有它，
+  PATH 查找永远命中不了。控制面因此在 `<stateDir>/pnpm-shim/` 生成可执行的 `pnpm`（win32
+  `pnpm.cmd`）wrapper：exec 上面解析出的 node + 随包 pnpm 入口，**每次 spawn 校对、必要时重写**
+  （内容与权限幂等；App 迁移/运行树更新后自愈），**仅当该次 spawn 的宿主 PATH 解析不出可执行
+  pnpm 时**前置；用户 PATH 上已有的 pnpm（含项目 corepack 语义）逐字不动、永不被遮蔽。探测镜像
+  子进程自己的解析（PATH 顺序、win32 PATHEXT、空/相对项按宿主 cwd 解析、win32 引号与 App
+  Execution Alias、只认常规可执行文件）。wrapper 准备失败只响亮记一行、PATH 原样保留（上游的
+  ENOENT/127 保持诚实）；供给面是宿主进程树（插件管理器与会话 shell），用户自己的终端不受影响，
+  且只覆盖打包形态（desktop 两 flavor、gateway）：standalone/CLI 运行在有依赖树的 node 安装里，
+  不接此面（`ControlPlaneOptions.pnpmEntry` 缺省即不做供给）。
+  被否：① 只靠 `plugin-manager.config.pnpmCommand`/`--patch` 指定 wrapper——只覆盖服务面，
+  `dsh plugin` CLI 与脚本递归仍走字面量 `pnpm`，且把供给耦合到上游行 id；② 无条件前置——
+  遮蔽用户工具链；③ 构建期生成 wrapper——同样要把目录注入宿主 PATH，只是把机制搬到构建面；
+  ④ 把系统 pnpm 当唯一来源——Finder 启动的 PATH 里本就没有，且版本随机器漂移（18 §9.2）；
+  本方案只在宿主 PATH 无 pnpm 时兜底，此时版本语义随用户。直接执行 `pnpm.cjs` 不可行：非可执行
+  位 + shebang 依赖宿主 PATH 上的 node。追加式兜底（不探测、恒追加）被否：不遮蔽是结构性成立，
+  但会让已满足的宿主 PATH 也变样，并使 wrapper 落盘于每个宿主；探测版以"逐字不动"换取可验证的
+  不遮蔽，代价是镜像上面的解析规则。
 - **cwd 决策**：installed 布局（桌面打包态 `vendor/dsh` 运行时树）**不以安装树为 cwd**——就地替换会让宿主持有
   已 unlink 的工作目录（`uv_cwd ENOENT` 事故），改用 `<stateDir>/dsh-home`（控制面所有、0700、
   宿主整个生命周期稳定存在）为 cwd；source 布局保持 `dshWorkspacePath`（开发态 `ref-dsh` 检出根）为 cwd，

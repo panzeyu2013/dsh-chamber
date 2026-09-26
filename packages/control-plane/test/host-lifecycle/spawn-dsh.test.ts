@@ -18,7 +18,7 @@ import { EventEmitter, once } from 'node:events'
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { createServer as createNetServer } from 'node:net'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { delimiter, isAbsolute, join, relative, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import {
@@ -69,6 +69,67 @@ function browserAuthCookieName(authority: string): string {
  * script): the host mints its cookie from the Host header it actually
  * received, exactly like the real BrowserAuth.authorizeIndex does.
  */
+
+/**
+ * The answering fake host for the PATH-provision cases: an optional prelude (the
+ * child's PATH marker), the launch-token line, the 303 exchange and the identity
+ * probe with the minted cookie — the canonical ready path.
+ */
+function answeringFakeHostBody(prelude: readonly string[]): string {
+  return [
+    ...prelude,
+    ...FAKE_DSH_PREAMBLE,
+    "console.log('dsh web: http://127.0.0.1:' + port + '/?token=launch-1')",
+    "createServer((req, res) => {",
+    "  if (req.url === '/?token=launch-1') {",
+    "    res.writeHead(303, { location: '/', 'set-cookie': authCookieName(req.headers.host) + '=sess; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict' })",
+    "    res.end(); return",
+    "  }",
+    "  if (req.url === '/api/session/canOpenWorkspacePath') {",
+    "    if ((req.headers.cookie || '').includes(authCookieName(req.headers.host) + '=sess')) {",
+    "      let body = ''",
+    "      req.on('data', c => { body += c })",
+    "      req.on('end', () => {",
+    "        const rpcId = JSON.parse(body).rpcId",
+    "        res.writeHead(200, { 'content-type': 'application/json' })",
+    "        res.end(JSON.stringify({ type: 'server-response', rpcId: rpcId, result: { ok: true, value: true } }))",
+    "      })",
+    "      return",
+    "    }",
+    "    res.writeHead(401); res.end('unauthorized'); return",
+    "  }",
+    "  res.writeHead(404); res.end()",
+    "}).listen(port, '127.0.0.1')",
+    '',
+  ].join('\n')
+}
+
+/** One PATH-provision fixture: a fake host that records the PATH it actually
+ *  received, plus the fake bundled pnpm entry handed to spawnDsh. */
+function writePathRecordingHost(stateDir: string, dshWorkspacePath: string): { pathMarker: string; entry: string } {
+  const pathMarker = join(stateDir, 'child-path')
+  const entry = join(stateDir, 'fake-pnpm.cjs')
+  writeFileSync(entry, '// fake bundled pnpm entry\n')
+  writeFakeDshEntry(dshWorkspacePath, answeringFakeHostBody([
+    "const { writeFileSync } = require('node:fs')",
+    "writeFileSync(" + JSON.stringify(pathMarker) + ", process.env.PATH ?? '')",
+  ]))
+  return { pathMarker, entry }
+}
+
+/** Run body with the process PATH pinned (spawnDsh copies the process env). An
+ *  originally-unset PATH is deleted again, never restored as the string
+ *  "undefined"; these cases rely on node:test running this file's tests serially. */
+async function withProcessPath<T>(pathValue: string, body: () => Promise<T>): Promise<T> {
+  const original = process.env.PATH
+  process.env.PATH = pathValue
+  try {
+    return await body()
+  } finally {
+    if (original === undefined) delete process.env.PATH
+    else process.env.PATH = original
+  }
+}
 
 /** A fake dsh CLI entry under a fake workspace (node runs it directly). */
 function writeFakeDshEntry(dshWorkspacePath: string, body: string): string {
@@ -431,31 +492,7 @@ test('spawnDsh: the 0.1.2 browser-auth bootstrap mints the cookie and the host-i
   // host 401s the whole /api surface without it, the browser-auth gate).
   const stateDir = tempDir()
   const dshWorkspacePath = join(stateDir, 'ws')
-  writeFakeDshEntry(dshWorkspacePath, [
-    ...FAKE_DSH_PREAMBLE,
-    "console.log('dsh web: http://127.0.0.1:' + port + '/?token=launch-1')",
-    "createServer((req, res) => {",
-    "  if (req.url === '/?token=launch-1') {",
-    "    res.writeHead(303, { location: '/', 'set-cookie': authCookieName(req.headers.host) + '=sess; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict' })",
-    "    res.end(); return",
-    "  }",
-    "  if (req.url === '/api/session/canOpenWorkspacePath') {",
-    "    if ((req.headers.cookie || '').includes(authCookieName(req.headers.host) + '=sess')) {",
-    "      let body = ''",
-    "      req.on('data', c => { body += c })",
-    "      req.on('end', () => {",
-    "        const rpcId = JSON.parse(body).rpcId",
-    "        res.writeHead(200, { 'content-type': 'application/json' })",
-    "        res.end(JSON.stringify({ type: 'server-response', rpcId: rpcId, result: { ok: true, value: true } }))",
-    "      })",
-    "      return",
-    "    }",
-    "    res.writeHead(401); res.end('unauthorized'); return",
-    "  }",
-    "  res.writeHead(404); res.end()",
-    "}).listen(port, '127.0.0.1')",
-    '',
-  ].join('\n'))
+  writeFakeDshEntry(dshWorkspacePath, answeringFakeHostBody([]))
   const controller = new AbortController()
   let spawned: Awaited<ReturnType<typeof spawnDsh>> | undefined
   try {
@@ -473,6 +510,63 @@ test('spawnDsh: the 0.1.2 browser-auth bootstrap mints the cookie and the host-i
     // A failed assertion must not leave the detached fake host running: the
     // child's pipes keep this test process alive, so the file would hang until
     // the manifest's per-file SIGKILL — and the failure detail dies with it.
+    spawned?.child.kill()
+    clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('spawnDsh: a host PATH without pnpm reaches the child with the bundled launcher prepended', async () => {
+  // Upstream's plugin manager spawns a literal `pnpm` out of the host env
+  // (design 02 §3.1): the packaged pnpm is a node script no PATH lookup can find,
+  // so the resolved entry is exposed through a generated wrapper — and only when
+  // the host PATH resolves no pnpm of its own (the sibling case below).
+  const stateDir = tempDir()
+  const dshWorkspacePath = join(stateDir, 'ws')
+  const { pathMarker, entry } = writePathRecordingHost(stateDir, dshWorkspacePath)
+  const emptyBin = join(stateDir, 'empty-bin')
+  mkdirSync(emptyBin)
+  const controller = new AbortController()
+  let spawned: Awaited<ReturnType<typeof spawnDsh>> | undefined
+  try {
+    // spawnDsh copies the process env; pin a PATH that cannot resolve a pnpm so the
+    // provision is what this test observes, not the developer machine's toolchain.
+    spawned = await withProcessPath(emptyBin, () =>
+      spawnHost(stateDir, dshWorkspacePath, controller.signal, { pnpmEntry: entry }))
+    const shimDir = join(stateDir, 'pnpm-shim')
+    assert.equal(readFileSync(pathMarker, 'utf8'), shimDir + delimiter + emptyBin)
+    const shim = join(shimDir, process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm')
+    assert.equal(readFileSync(shim, 'utf8').includes(entry), true, 'the wrapper targets the resolved entry')
+    await reapSpawned(spawned)
+  } finally {
+    controller.abort()
+    spawned?.child.kill()
+    clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('spawnDsh: a host PATH that already resolves pnpm is handed to the child untouched', async () => {
+  const stateDir = tempDir()
+  const dshWorkspacePath = join(stateDir, 'ws')
+  const { pathMarker, entry } = writePathRecordingHost(stateDir, dshWorkspacePath)
+  const userBin = join(stateDir, 'user-bin')
+  mkdirSync(userBin)
+  writeFileSync(
+    join(userBin, process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'),
+    process.platform === 'win32' ? '@echo off\r\n' : '#!/bin/sh\n',
+    { mode: 0o755 },
+  )
+  const controller = new AbortController()
+  let spawned: Awaited<ReturnType<typeof spawnDsh>> | undefined
+  try {
+    spawned = await withProcessPath(userBin, () =>
+      spawnHost(stateDir, dshWorkspacePath, controller.signal, { pnpmEntry: entry }))
+    assert.equal(readFileSync(pathMarker, 'utf8'), userBin, 'the user toolchain is never shadowed')
+    assert.equal(existsSync(join(stateDir, 'pnpm-shim')), false, 'nothing is materialized for a satisfied host')
+    await reapSpawned(spawned)
+  } finally {
+    controller.abort()
     spawned?.child.kill()
     clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
     rmSync(stateDir, { recursive: true, force: true })

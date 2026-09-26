@@ -79,8 +79,9 @@
 - `materialize`：本地路径包物化（pack → ssh 传输 → 远端 `add file:`）；`add file:` 走独立目录约束
   白名单分支（仅物化目录内绝对路径）。本地 `pnpm pack` 固定 `--config.ignore-scripts=true`，选择
   目录只授权读取/传输，不授权执行包的 prepack/prepare/postpack 生命周期脚本。本地 `dsh plugin` /
-  `pnpm pack` 依赖本机 pnpm（`resolvePnpmBinDir` 扫描 PATH + nvm/volta/homebrew，打包态
-  best-effort）。
+  `pnpm pack` 的 pnpm 来源不再靠机器上恰好装了一个：入口由各 flavor 从随包份解析后交给控制面，
+  控制面在该次 spawn 的宿主 PATH 解析不出 pnpm 时以 wrapper 前置供给（02 §3.1），宿主已有的
+  pnpm 优先。
 
 宿主包 seed 的顺序与失败语义固定：
 
