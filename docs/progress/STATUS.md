@@ -167,7 +167,7 @@
      `test/session-health/vendor-heal-contract.test.ts` 锁住：pin 升级若改了 retain/resync/open/error
      语义，该测试即红，届时恢复臂须重推而不是静默失效）；`error` 的自动重开还会让聊天面重挂载
      （滚动回尾）——是否需要「保持滚动位置」取决于实机观感。失效判据 = 真机拆链后自查恢复
-     header 健康臂之外的页面级打开恢复入口现持有唯一 `loading` 自动重建臂（具象 `openPromise` 明确为空、且没有尚在等待旧流 `dispose()` 的 resync 才执行，2s 后启动、15s 冷却、5 分钟至多 2 次）；header 保留 `error` 自动 heal 与手动重建，两入口共用具象 Session 的 resync 在途互斥。两处在真机的可见性与恢复结果仍待验证：包内既有 ui-lock 源文本锁禁止 `src/client/**` 出现任何
+     header 健康臂之外的页面级打开恢复入口**不再对 `loading` 自动重建**（F2：`loading` 面在进入分类器前被摘除，在飞保护折进 `escalationBlocked`），它只把终局 opening 事实翻成 `loading-failed` 并 arm 用户控制；`error` 臂的自动 heal 仍按具象 `openPromise` 明确为空才执行（2s 后启动、15s 冷却、5 分钟至多 2 次），header 保留 `error` 自动 heal 与手动重建，两入口共用具象 Session 的 resync 在途互斥。两处在真机的可见性与恢复结果仍待验证：包内既有 ui-lock 源文本锁禁止 `src/client/**` 出现任何
      `console.*`，所以它与 ⑩ 同源、仍无落盘面；`presented` 判据是 document 级 `[data-chat-flow]`
      **存在性**（非「实际可见」，多实例壳下可能把隐藏实例的 ChatView 也算作已呈现——放宽只让动作多
      发生一次，收窄会静默废掉恢复臂，故刻意取宽；失效判据 = 确认隐藏实例的 conversation 树是否常驻
@@ -221,7 +221,7 @@
   ① vendor 侧自身 rAF 循环（chat/conversation/layout/trajectory）未收敛；② 崩溃恢复的窗口标题提示与页面内恢复
   过程/结果缺真机验证；③ 页面事实的持久消费面仍缺（见下条残余 ⑥）。
 
-- 会话打开停滞（「载入历史…」永久停留，实机 `session-28e9eb86` 经 gateway）：根因未证实（宿主侧经代理实测健康）；
+- 会话打开停滞（「载入历史…」永久停留，实机 `session-28e9eb86` 经 gateway）：根因**已证一支**（F1：`openingAnswered` 曾把「首帧交付」当接受并清掉加宽账本，于是已交付而消费者未接受的快照永久停在 `loading`——v14 实测 3.65 MB/169 s/零事实）；该起事件属哪支仍未证（宿主侧经代理实测健康）；
   同构状态 = mux socket 正常而 `session/follow` 逻辑流永久无首帧。客户端侧已有三层防护（开帧发送前校验、首帧期限
   30s 起、静默载波升级 `replaceSocket()` 含 teardown 分支与 60s 冷却限速），机制与阈值口径见 design 14 §D4 与
   `session-stall.ts` 头注；宿主侧仍无首帧期限。收口需设备侧帧证据（CDP WS Frames/抓包，入口 `mobile-walkthrough.mjs`）。
@@ -233,12 +233,30 @@
   ⑦ `presented` 是 document 级近似（隐藏实例可能被执行 auto-resync，账本有界 1–3 次/10min）。
   ⑧ 各处阈值（20s/90s、45s、零帧与连续 2 次超时 / 60s 冷却）未经真机校准，`session-stall.ts` 判据全为属性锚点。
   ⑨ 设计未决：unary 引导通道是否新写成兜底内容引导——本轮未采纳（design 14 §D4、todo/upstream-proposals.md §4.3）。
+  ⑩ 保留但无生产消费/发射面的小面（登记而非删除）：fork 的取证 retention/snapshot 桥（`stream-forensics.ts` 的 REQUEST/SNAPSHOT 事件与 ring 记录、`index.ts` 的 bridge 安装）仓内无人
+  dispatch/监听（design 14 §198/§267 把「request → 逐条 snapshot 导出」定为诊断面本身，缺的是 dispatcher 而不是设计，删它即与设计冲突）；
+  页面解析器也读不了 `{instanceId, entry}` 快照包装 ⇒ 监听器安装前发布的终局事实不可恢复（同 ⑥ 缺口；
+  另一条路是把它接起来：账本安装时请求一次快照并兼容包装形状——未做，属独立变更）；
+  reducer 的 `forensic` 效果里与宿主事实同名的三项（opening-orphaned/timeout + opening-budget-exhausted + opening-accepted）
+  与生产不可达的 `'carrier-forensic'` kind 已删（宿主以更全 detail 发布，等价向量无这些路径、drift 仍为 0）；剩下三个
+  （silent-not-proven / stall-below-threshold / episode-claim-released）保留为 differential 记录，宿主无同名事实。
+  `RebuildReason 'handshakeTimeout'` 无发射者、`carrierClosed` 事件在生产无发送者（reducer 的转移仍被测试消费）。同类：`loading` 永不是自动症状这一不变量分三层写——classifier（`delivery-evidence.ts` 的 loadingStall：记录「事实」，被 `session-content-stall.openStallSymptomActive` 的 parity 测试钉住）、owner（`session-delivery-state.ts` 剥 loadingFace + 折 escalationBlocked：执行「策略」）、shell（`InstanceView` 在边界剥面）。**本轮不改**：唯一自洽的收口是让 classifier 不再把 loading 当 open-stall 并删两处剥离，那要改共享包契约、翻掉 `delivery-evidence.test.ts` 的 8 处 loading 期望 + `session-content-stall.test.ts` + 两处源文本锁——属独立评审的变更，在 vendor 缺失（shell-loader 测试跑不了）的本轮做它不划算。
+  ⑪ 未归属 opening 事实的实例级回退（`session-stream-health-probe.ts`）现按「比整条阶梯更旧即失效」+「任何 accept 即退休」
+  收口，但仍是粗粒度猜测：真机若出现「A 会话的未归属终局压住 B 会话」，需改成「仅当该实例恰有一个 loading 会话」或由
+  fork 补齐归属。
+  ⑫ 接受通道（opening ticket）丢失不可检出：任一跳丢 ticket ⇒ mux 静默退回「无接受通道 = 交付即接受」，与合法的 direct mux 消费者不可区分。负向需显式契约（如 `'none'` 哨兵），属独立加固项（design 14 §D4 未闭合）。
+  ⑬ 设计未决（审计新发现）：`dsh-stream-state` 的 **未完成补读（unresolved completion）** 面全仓无生产接线——
+  `DeliveryEvidence.unresolvedCompletion`（delivery-evidence.ts:73）没有任何生产构造者、`delivery-unresolved` 症状无生产消费者、
+  `unresolvedRetryDelayMs()` 只被测试调用；配套阈值 `unresolvedRetryBaseMs`/`unresolvedRetryMaxMs`/`unresolvedRetryMax`
+  （tables.ts:182-184）中，`unresolvedRetryMax` 只被 Swift 镜像解码并被 parity 门断言（verify-stream-state-swift-parity.mjs:79），
+  Swift 侧同样无决策读取。它是「有能力、有测试、有镜像、无调用者」的预备面，故不按死代码删除：要么接线（谁构造该证据、
+  重试几次后成为事实），要么整体退役（TS 证据字段+症状+函数+三阈值+tables.json+Swift 字段+parity 断言+测试）。裁决待定。
   宿主侧两条（`session/follow` 无首帧期限、`doOpen` 可把 `loading` 静默留下）已登记 `todo/upstream-proposals.md`
   §4.3/§4.7。
 
 - **本地实例 mux 周期性抖动（实测，触发源未钉死）**：
   `<stateDir>/logs/control-plane.log` 3 天 233 次 `WebSocket stream local closed`；09:04:44–09:10:56 七分钟内 15 次 `browser close`、寿命 17.4–21.1 s（远端实例同时段 socket 活数分钟），且 09:03:48 WKWebView WebContent 崩溃自动重载后进入该节奏。同一宿主经控制面代理实测：`$events` 就绪 25 ms、普通会话快照 57 ms、已结束子代理快照 73 ms ⇒ 抖动既不是握手慢、也不是宿主不答，而是页面侧每次 generation 结束后 `RemoteStreamMuxClient.reconnect()` 关掉该 socket 上全部逻辑流（本地 15s readiness 期限 vs 远端 45s override 的差异与之相符；触发源仍需 `dsh-chamber:stream-forensics` 真机回读钉死）。
-  已落取证事实 `dsh-chamber:stream-forensics`（socket lost/reconnect/disposed、opening-timeout、generation ready/lost，design 14 §D4）。失效判据 = 一次真机回读把触发源定位到具体调用路径，且修复后该节奏不再周期性出现。
+  已落取证事实 `dsh-chamber:stream-forensics`（socket lost/reconnect/disposed、opening-timeout、generation ready/lost，design 14 §D4）。**静默口径待统一（评审 O6）**：`$events` 观察者已按「静默既非内容也非载波证据」停止换代（F3、design 19 §3.5），而健康事实源 `packages/renderer/src/session-facts-source.ts` 仍保留 `SESSION_FACTS_SILENCE_MS = 60_000` 的静默重订阅——后者是 gateway push 通道（有帧预期），两者是否应统一口径未决。失效判据 = 一次真机回读把触发源定位到具体调用路径，且修复后该节奏不再周期性出现。
 
 - 上游装载面三项待办（只登记，不改upstream）：① `dsh-client-modules` 的 `compose()`把全部非bootstrap行打成application批次、只按URL 3 KiB切分（不按字节）⇒ 首屏~10.65 MiB响应（`ui-sidebar-documentpreview` 内嵌PDF.js占6.57 MiB）；懒加载需连带chunk供给方案（combo URL下发时相对动态chunk 404；chamber `seedFiles` 也带chunk）——低优先级，不裁功能；② `ui-subagent` 的 `SubagentHeaderLineage` 类字典缺 `count` 键 ⇒ 计数span无class、仅靠继承 `nowrap`，应补class/nowrap；③ 会话打开流应加首帧超时、失败落成可见错误态（现永久loading）。
 
@@ -330,12 +348,27 @@
   出口判据已改为「仓内提案文本」，提交属开放的外部动作；
   ③b R12 的**真机 abort 样本**仍未捕获：`aborted+cause=user`（用户停止不得产生未读）目前只有夹具样本，
   真机无该样本时应判 **INCONCLUSIVE 而不是 PASS**（不得用中立项或夹具样本替代；负例判据见 `packages/renderer/test/session-state/unread-derivation.test.ts:60`）；
-  ④ 移动端 scoper 产物绿：需 `build:renderer` 产物（`packages/dsh-chamber-client-ui-mobile/scripts/assert-scoper-artifact.mjs`；
-  无产物时该守卫 exit 1 并写明前置，已实测）；⑤ vendor 树 lockstep：需物化 `vendor/harness-packages`（CI 的 `ensure-harness-vendor` 前置）。
   另四条开放验收（同属实机/CI 权威）：⑥ W5 跨端已读的真实双客户端 E2E——两端单元均 live，但缺两个真实 clientId 的端到端对照；
   ⑦ 场景级时序判据（`t_c + 2s`、≤2s 等）目前只有单元/纯函数代理，没有场景级执行器；
   ⑧ I1/I2/I5/I13 的 DOM 层断言现为源码正则 + 生产代码路径（本环境无 DOM），真判据在 GUI 腿；
   ⑨ `measure-ui` 尚无 `switchFrameMs`（该字段只在 `switch-frame-probe`），也没有同环境 A/B 基线落入 `perf/data`。
+
+- **P2b 观察者的 `$events` 边沿事实在本机无投递（开放，2026 实测）**：`packages/renderer/src/source-mux-facts.ts` 的 `$events` 长连接（已去 45s 静默换代，见 design 19 §3.5）在本地来源上仍只收到一帧 `ready`（物化 vendor、重建页面后实测：75s 帧级 dump 仍只有 `ready`；同 socket 上 `account/watch`/`workspace/follow`/`session/control` 等流正常收 item），即 `api-session/*` 与 `goal/activation-changed` 的边沿事实实际没有到达页面。**socket 长连接化已实测**：同一驱动（8 分钟空转）在旧构建（安装态 0.4.0-beta.3）= 11 个 socket、7 次寿命精确 45.0s（45006–45721ms、code 1005）换代；新构建（本 worktree 重建页面、独立隔离实例）= 2 个 socket、0 次关闭，30 分钟前台 soak（165 采样点、`finalLoading=false`）= 0 次换代、长连接 mux 收 25 帧 / 36KB，页面侧只出现 `opening-accepted` 事实、无 miss/终局。缺失的边沿事实属**宿主侧**根因，事实全部来自 30s `session/list` 基线。出口判据：抓到一个真实投递的 `api-session/*` 帧（或确认该宿主本就不发），据此裁决 `$events` 观察者是否仍值得保留；复现配方 = 空转页面 dump 观察者 socket 的帧（`openEventsFrame`/`EVENTS_ENDPOINT`）。**同一形态仍在 gateway 镜像里**：`packages/gateway/src/session-state.ts:1540,1547` 用 `DEFAULT_EVENT_SILENCE_MS`（45s，声明在 `:100`，测试断言 45_000）把「静默」当降级证据并触发重订阅 + 重基线——那是 design 17 的服务器形态、本轮范围外，登记为一致性待决（页面侧已按本机实测删掉该形态，两侧结论目前不一致）。
+
+- **开帧相位机的真机校准与接受通道单测（开放）**：F1 的判定（预算耗尽即终局、`opening-orphaned` vs `opening-timeout`）已由 reducer 真值表与 `test/behavior/opening-phase-machine.test.ts` 的行为用例钉住（含跨世代与终局），未闭合的是真机校准；接受通道依赖 `follow(request, signal)` 把信号作为参数原样传入（同进程内对象身份），该 `prepareInvocation` 组合跳已由 `F1/wiring` 行为用例钉住，仍缺一条**信号组合负向单测**。**`$events` 型流无 accept 通道**（`remote-events.ts` 直连 mux，沿用「交付即接受」），若真实停驻属该形态则不会有 `opening-orphaned`；这一点作为开放项。出口判据 = 在真实半开载波/慢接受宿主上采到两类终局事实的到达率，并补一条信号组合单测。证据：packages/dsh-api-gateway/src/client/stream-client.ts#OpeningTicket、packages/dsh-api-gateway/test/behavior/opening-phase-machine.test.ts。
+
+
+- **流级预算仍是表外多副本（开放）**：`tables.ts`/`tables.json` 锁住的只有生命周期一族 10 个常量，`DEFAULT_FOLLOW_TIMEOUT_MS = 2_000` 与 `FOLLOW_MAX_MESSAGES = 8` 在 `packages/control-plane/src/session-mux.ts:63,65` 与 `packages/renderer/src/source-mux-facts.ts:75,359` 各一份（后者注释声称同预算但无锁），另有 `session-mux.ts:53-69`、`source-mux-facts.ts:73-80`、`remote-retry-policy.ts`、`stream-stall-policy.ts` 四族表外数字；`verify:ladder-table-parity` 的 CONSUMERS 不含这四个文件。出口判据 = 该族并入 tables 并进 parity 门，或给 2s/8 重复对加锁步断言。
+
+- **F2 座席（`session-stream-health-seat.ts`）无行为测试（开放）**：step、手动 1s 守卫、churn 的实例归属过滤、64 条 ladder 内存界只被 `test/ui-lock/instance-view-guard.test.ts` 的源码正则锁定。出口判据 = 可注入测试缝（或抽出纯 `seat-model.ts`）后补四条行为用例（连点只执行一次、异实例 churn 不改本实例、仅 loading 读 opening failure、65 会话淘汰最旧）。
+
+- **F1 行为矩阵与 cancel 腿的测试缺口（开放）**：① `stream-client.ts` deadline 的 no-socket 兜底分支（:517-521）无用例，且它有意不推进加宽阶梯——该语义需一条行为用例钉住；② snapshot/wiring 两个入口只有 accept/miss 单格，缺跨世代与终局格；③ design 14:564 的期限到点 cancel 与 `session-mux.ts` timeout 腿的 cancel 无断言；④ F1→F2 的 window 事件 seam（`stream-forensics.ts:185` → `session-stream-health-probe.ts:386`）无端到端用例；⑤ 页面账本 64 条淘汰路径无用例。
+
+- **载波 reducer 的 socket 生命周期半边无生产发射者（开放；既有条目升级）**：`carrierConnecting`/`carrierOpened`/`carrierClosed`/`streamFrame`/`streamClosed` 五类事件在生产零发射（仅测试夹具），`framesOnSocket` 无读取者、`phase:'silent'` 不可达、`decideRebuild` 的 closed 守卫不可达；`test/wiring/emission-coverage.test.ts` 把 `case 'x'` 当生产覆盖，故永绿。出口判据 = 删除或接线（裁决项），门禁改为按生产 emit 点判定。
+
+- **结构性重复与死分支待裁决（开放）**：① `healRoute` 在生产两处恒等于 `resyncAvailable`（`shell.ts:832`、`session-stream-health-seat.ts:181`），使 `delivery-evidence.ts:107` 的 `unhealableError` 臂不可达、两条测试用不可达组合钉绿——要么删字段与臂，要么给它独立来源；② `turn/end`/goal/follow 的解析在 `session-mux.ts:1001-1061` 与 `source-mux-facts.ts:359-439` 双份，且扁平 `reason.cause` 一侧收一侧不收（已漂移），待收敛为一个纯 wire 模块；③ carrier 的 `streamRequestKeys`/`openingPhases`/`openingLatest` 三张同域账本可并为一张；④ `session-stream-health.ts` 手抄的 `carry` 五处可抽一个函数；⑤ `source-mux-facts.ts` 的 baseline 失败三连块可抽局部函数、`connect()` 内 `clearStable()` 同路径重复调用，测试侧另有两处弱断言与一条与 soak 重复的用例可并。
+
+- **页面侧限速与身份 churn（开放；P2b 收口后转热）**：① 失效基线的 250ms 重取样地板可自持（RPC 窗口内持续有事件时最坏约 4 次/秒全表 `session/list`，无连续 stale 上限/退避）；② `advanceSessionOpenHealth` 每秒返回新对象导致 `InstanceView` 每秒 setState（收口须保留时钟推进）；③ 载波换代后 ≤60s 内的 lane reconnect 被重建窗口限速为「只发事实、不换 socket」，`stream-client.ts:204` 注释「the guard cannot suppress it」与窗口行为不符（改注释或显式豁免）；④ 加宽账本在容量上限处的整表重建成本悬崖（需 ≥256 个并发 episode 才可达，属界的健壮性）。
 
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
@@ -349,6 +382,20 @@
   跨包逐字重复口径见计划 §6（31 组多行体中 24 组为 3–5 行守卫、≥8 行 4 组全为 win-probes parity
   锁；既有约束下可删 0 组）。
 
+
+- **`run-checks tests` 的链式包步骤可能「零覆盖记通过」（2026-09 实测，开放）**：解析器对 `PACKAGE_TESTS` 的链式调用（如
+  `test:renderer-shell` = `pnpm --filter @dsh-chamber/renderer run test`）在解析期带 `DSH_TEST_MANIFEST_DUMP=1` 运行；若那行多 KiB 的
+  manifest dump 在捕获中丢失（`scripts/lib/test-manifest.mjs` 注释已记「intermittently captured as empty」），`parseManifestDump` 返回 null，
+  而「缺 dump 即硬失败」的守卫（`requireDump`）只对 direct invocation 生效 ⇒ 该步按「链式步骤已真跑」记通过，清单里的文件一个都没跑。
+  复现（实测）：往 `packages/renderer/scripts/test.mjs` 的 session-state 组临时加一条必然失败的 test 后跑 `node scripts/gates/run-checks.mjs tests`
+  ⇒ 仍 `28 step(s) passed`、日志零次提及该文件；同一环境变量**直接**调用该链能正常打出含该文件的 dump（7,003 B、1 行）⇒ 缺口在解析期捕获/判定，
+  不在 manifest。影响：本 worktree 的「tests 28/28 绿」不构成 vendor 相关套件真跑的证明（逐脚本独立跑仍红）。修法方向 = 对「exit 0 且无 dump 且无 transcript」
+  的链式步骤硬失败，或让 dump 的标识行短到不会被丢弃。
+
+- **页面健康快照的重复读面（评审 O3，裁决「不改」）**：`packages/renderer/src/shell.ts` 的 1 Hz 采样依次调
+  `sessionOpenState`/`hasSessionStreamResync`/`sessionOpenInFlight`/`sessionStreamResyncInFlight`，各自走一遍 `readCurrentSession`
+  （`session-stream-health-probe.ts` 的「保留判定 + `binding()`」）。合并成一次读面可省 4×→1×，但绝对量在 1 Hz × 活动实例级、
+  且 `shell.ts` 不在本轮补丁面（改动会扩大评审面）；真机 profiling 显示占比可观再收。
 
 - **本地 `pnpm run smoke` 不能与在跑的实例并存（未排期）**：smoke 用控制面默认起始端口
   `DEFAULT_DSH_START_PORT = 17510`（`packages/control-plane/src/spawn-dsh.ts`，重试 +1 至 17514）拉起受管 dsh，

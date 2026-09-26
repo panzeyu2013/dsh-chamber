@@ -823,7 +823,12 @@ interface ChamberSettings {
     **不消费 gateway 镜像**；两条事实源在 renderer 侧汇成同一份 `SessionFactsSnapshot`。
     其 `goalActivations` 保留边与 P1/P2a 同纪律：绑定 id 与基线不符**保留待匹配、不直接
     drop**（由后续 baseline/added 携带匹配 identity 时消费），no-goal 事件只把**已知对象**
-    goal 即时清成 null——不缓存、不落到 unknown 行、不新建行。
+    goal 即时清成 null——不缓存、不落到 unknown 行、不新建行。    其 `$events` 订阅为**长连接**（已去 45s 静默换代）：订阅静默既不是内容证据、也不是载波
+    证据，事实刷新由 30s `reconcile()` 的 `session/list` 基线承担；真失败（close/error、end/error
+    帧、握手超时）仍按 1s→30s 有界退避换代。旧行为每次换代都会关 socket + 置 `baselineTrusted=false`
+    + 清 stable + `emit()` 整表，即每 45s 一次周期性全量失效（离线实测 8 分钟换代 9 次、寿命精确
+    45.0s，且每条命只收到一帧 `ready`）。**实测缺口**：本机 `$events` 的边沿事实没有投递，
+    事实实际全部来自 HTTP 基线——该缺口作为开放项登记（不用定时器掩盖）。
   - **浏览器/mobile（gateway web 直连）**只服务 mobile 插件，无 chamber sidebar/renderer
     ⇒ 不存在 goal 压制/通知面；而 **chamber renderer 被浏览器/dev 直开**是另一形态：
     渲染器与 durable 剪枝门都在（无桥按 §3.2.4 F11 视同已结算放行），只是没有远程来源、
