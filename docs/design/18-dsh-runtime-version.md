@@ -754,6 +754,11 @@ interface RuntimeHostAdapter {
   ~7–8MB（gzip）。安装器 `stage_local_version` 对缺 `dist/pnpm/bin/pnpm.cjs`
   的资产 fail-fast 拒绝；release.yml smoke 增加 tarball 成员断言与「裸解包
   （无 npm install）直接 `node dist/pnpm/bin/pnpm.cjs --version`」；
+- **消费面：宿主插件管理器**（新增）：内嵌份不只服务 installer 与 `dsh plugin` CLI——上游插件
+  管理器在托管宿主进程里 spawn 字面量 `pnpm`（PATH 契约），因此 desktop 与 gateway 都把入口交给
+  控制面，由 `withPnpmShim`（pnpm-shim.ts）在宿主 PATH 无 pnpm 时以 wrapper 前置供给
+  （02 §3.1）：供给生效的宿主上版本恒为钉住的 11.21.0；宿主 PATH 已有 pnpm 时按 02 §3.1 逐字
+  不动（不遮蔽），该宿主上的插件写入版本随用户自己的 pnpm，不在"不漂移"保证内；
 - 备选（不推荐）：`--pnpm-path` 注入 + PATH 探测——版本漂移违背内嵌定案。
 
 ### 9.3 gateway 宿主

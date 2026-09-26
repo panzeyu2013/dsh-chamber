@@ -454,7 +454,7 @@ async function waitFor(check: () => boolean, timeoutMs = 2000): Promise<void> {
 
 test('createLocalConnection re-resolves the patchPath thunk on the restart path', async t => {
   const dir = tempDir(t)
-  const spawnOptions: Array<{ patchPath?: string | null }> = []
+  const spawnOptions: Array<{ patchPath?: string | null; pnpmEntry?: string | null }> = []
   const spawnedList: Array<ReturnType<typeof mockSpawnedWithExit>> = []
   let patchValue: string | null = '/tmp/first.yml'
   const connection = createLocalConnection({
@@ -462,9 +462,9 @@ test('createLocalConnection re-resolves the patchPath thunk on the restart path'
     dshHome: join(dir, 'dsh-home'),
     dshWorkspacePath: join(dir, 'dsh'),
     logger: silentLogger,
-    options: { patchPath: () => patchValue },
+    options: { patchPath: () => patchValue, pnpmEntry: '/tmp/spawn-pnpm/pnpm.cjs' },
     deps: {
-      spawnDsh: async (options: { patchPath?: string | null }) => {
+      spawnDsh: async (options: { patchPath?: string | null; pnpmEntry?: string | null }) => {
         spawnOptions.push(options)
         const spawned = mockSpawnedWithExit()
         spawnedList.push(spawned)
@@ -484,6 +484,11 @@ test('createLocalConnection re-resolves the patchPath thunk on the restart path'
     spawnedList[0].fireExit()
     await waitFor(() => spawnOptions.length >= 2)
     assert.equal(spawnOptions[1].patchPath, '/tmp/second.yml')
+    // Both spawn call sites carry the bundled entry (design 02 §3.1).
+    assert.deepEqual(spawnOptions.map(options => options.pnpmEntry), [
+      '/tmp/spawn-pnpm/pnpm.cjs',
+      '/tmp/spawn-pnpm/pnpm.cjs',
+    ])
     assert.equal(connection.getState(), 'ready')
   } finally {
     await connection.stop()

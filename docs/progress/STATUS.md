@@ -209,6 +209,7 @@
 - 上游镜像包的 exports 保持 `lib` 目标而磁盘无 `lib/`（有意保留；死发布面已删）。
 - 元工程余量（R10）：`preload.cts` payload 形状未单源（靠文本锁）；「文本锁改 import 断言」未全量执行（161 个测试文件读源码），需范围裁决。
 - desktop 跨包接入受 Swift 锚点约束（R11）：布局助手与 `resolvePnpmEntry` 顺序被 Swift 源文本锁，迁移属 macOS 门。
+- 宿主插件管理器的随包 pnpm 供给待打包实机验收：控制面在托管宿主 PATH 解析不出可执行 pnpm 时，于 `<stateDir>/pnpm-shim/` 生成 wrapper 并只前置到该次 spawn 的 PATH（02 §3.1，`withPnpmShim`）；宿主已有 pnpm 时按设计逐字不动（此时不保证 11.21.0）。单测与穿线已覆盖（`pnpm-shim.test.ts`、`spawn-dsh.test.ts`、`manager-api.test.ts` 的 plane→spawn、gateway `lifecycle.test.ts` 的 gateway→plane），但「Finder 双击打包 App → 设置里安装/卸载插件成功 + 同一宿主会话 `pnpm --version` = 11.21.0」仍需一次实机确认；判定面 = 实机 + `<stateDir>/logs/control-plane.log` 的 `[dsh:<port>] pnpm: ...` 供给行。
 - state 根租约的 legacy 退役时点（R2）：一个 minor 后删 `retireLegacyStateLocks` 及相关。
 - Windows 覆盖缺口（R2/R14）：`state-root-lease` T4–T6 与 `host-domain-wiring-lockstep` 未进 WIN32_FILES。
 - chamber-named 副本的 preflight 覆盖边界（R15）：`ui-layout` 走 C1/C2/C3 分类表，非逐文件 fork-replay。

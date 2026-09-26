@@ -154,7 +154,7 @@ test('gateway start quarantines and stops a blocked verdict that left its probe 
   const stateDir = mkdtempSync(join(tmpdir(), 'gateway-blocked-ready-'))
   let state = 'stopped'
   let localStops = 0
-  let planeOptions: { canExposeLocal(): boolean; canStartLocal(): { ok: boolean } } | null = null
+  let planeOptions: { canExposeLocal(): boolean; canStartLocal(): { ok: boolean }; pnpmEntry?: string | null } | null = null
   let proxyOptions: { canExposeLocal(): boolean } | null = null
   const plane: PlaneHandle = {
     async start() {},
@@ -198,6 +198,8 @@ test('gateway start quarantines and stops a blocked verdict that left its probe 
     assert.equal(state, 'stopped')
     assert.equal(localStops, 1, 'composition boundary proves a blocked probe process is stopped')
     assert.equal(planeOptions!.canExposeLocal(), false)
+    // The gateway hands the resolved bundled pnpm entry to the plane (design 02 §3.1).
+    assert.equal(String(planeOptions!.pnpmEntry).endsWith('pnpm.cjs'), true)
     assert.equal(proxyOptions!.canExposeLocal(), false)
     assert.equal(planeOptions!.canStartLocal().ok, false, 'automatic host starts remain fenced until recovery')
     await gateway.stop()
@@ -381,7 +383,7 @@ test('stop keeps the proxy quarantined when a rollback finishes during disposal'
   const stateDir = mkdtempSync(join(tmpdir(), 'gateway-stop-quarantine-'))
   const order: string[] = []
   const { plane } = listenerPlane(order)
-  let planeOptions: { canExposeLocal(): boolean; canStartLocal(): { ok: boolean } } | null = null
+  let planeOptions: { canExposeLocal(): boolean; canStartLocal(): { ok: boolean }; pnpmEntry?: string | null } | null = null
   let proxyOptions: { canExposeLocal(): boolean } | null = null
   let quarantineChange: GatewayRuntimeManagerOptions['onActivationQuarantineChange']
   let activation = false

@@ -356,7 +356,7 @@ interface HostEdges {
   `.app/Contents/Resources/sidecar/
   node`。**摘要的信任基座在仓库内**（`build-sidecar.mjs` 的
   `PINNED_NODE_SHA256`，逐字取自官方 `SHASUMS256.txt`）：默认版本两个 darwin 归档必须在表内，`--node-sha256` 与固定值冲突即拒绝；未固定版本（`--node-version`）回退联网 SHASUMS256.txt 并响亮说明——「没固定」不得呈现为「已校验」；升级默认版本 = 同一提交更新该表（`build-sidecar.test.mjs` 会红）。**基名必须叫 `node`**：`resolveNodeExecutable`（spawn-dsh.ts:435-447）的纯 Node 分支只在 `basename(execPath) ∈ {node,node.exe}` 时直用 process.execPath，否则回落 PATH/knownNodeLocations（nvm 等）→ 裸 'node'（系统版本不可控）；P1 加解析断言测试钉死该前提（A5；`build-sidecar.test.mjs` 断言归档成员名 + 解包后基名 + `resolveNodeExecutable` 直用分支）。Electron 分支 = execPath + ELECTRON_RUN_AS_NODE=1 + `--expose-internals`（dsh loader 的 node-addon-require-builtin 需要；updater 的 runtimeNodeExecutor 同构，`host-assembly.ts:824`）。
-- **必须绑 Node**：dsh 实例本身是 Node 进程（vendor dsh 由 pnpm 安装），控制面 spawn 它、dsh-runtime 安装它；pnpm 11.21.0 已随 desktop 依赖，改由 sidecar 目录内嵌 + 注入（**plugin-sync resolvePnpmBinDir 不感知 bundled pnpm**，需 PATH 前置或 env 注入，plugin-sync.ts:41）。
+- **必须绑 Node**：dsh 实例本身是 Node 进程（vendor dsh 由 pnpm 安装），控制面 spawn 它、dsh-runtime 安装它；pnpm 11.21.0 已随 desktop 依赖，改由 sidecar 目录内嵌 + 注入；宿主插件管理器的供给见 02 §3.1（入口仍由各 flavor 解析后交给控制面，控制面按宿主 PATH 决定是否前置 wrapper）。
 - **dsh-runtime 默认执行器恒纯 Node**（{file: process.execPath}，runtime-installer.ts:777）。
 - Node 版本策略：与 desktop 的 Electron 内置 Node 大版本对齐或取 LTS（决策 6）。
 

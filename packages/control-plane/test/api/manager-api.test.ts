@@ -42,6 +42,35 @@ async function makePlane(stateDirOverride?: string, corsOrigins: string[] = []) 
   }
 }
 
+test('createControlPlane hands the bundled pnpm entry to the managed spawn (design 02 §3.1)', async () => {
+  // The original bug was exactly "the bundled pnpm never reaches the host": losing
+  // pnpmEntry anywhere between the plane options and spawnDsh must fail here.
+  const stateDir = mkdtempSync(join(tmpdir(), 'dsh-chamber-pnpm-entry-'))
+  const entry = '/tmp/dsh-chamber-bundled/pnpm/bin/pnpm.cjs'
+  const seen: Array<string | null | undefined> = []
+  const plane = createControlPlane({
+    port: 0,
+    stateDir,
+    logger: silentLogger,
+    pnpmEntry: entry,
+    localConnectionDeps: {
+      spawnDsh: async (options): Promise<SpawnedDsh> => {
+        seen.push(options.pnpmEntry)
+        return { child: { on() {}, exitCode: null }, port: DEFAULT_DSH_START_PORT, stop: async () => {} }
+      },
+      probeHostIdentity: async () => true,
+    },
+  })
+  try {
+    await plane.start()
+    await plane.startLocal()
+    assert.deepEqual(seen, [entry])
+  } finally {
+    await plane.stop()
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
 const postJson = (body: unknown): RequestInit => ({
   method: 'POST',
   headers: { 'content-type': 'application/json' },

@@ -523,6 +523,8 @@ const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 's
   const controlPlane = createControlPlane({
     port: args.port ?? 17500,
     stateDir: stateRootDir(args.userDataDir),
+    // 宿主 PATH 无 pnpm 时供给随包 launcher（design 02 §3.1）；与 main.ts 同参。
+    pnpmEntry: headless!.pnpmEntry,
     // 租约记录的诊断 flavor：冲突方读到 sidecar 而不是笼统的 control-plane。
     stateWriter: 'sidecar',
     webDistDir,

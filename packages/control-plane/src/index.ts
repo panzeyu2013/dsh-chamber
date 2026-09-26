@@ -159,6 +159,13 @@ export interface ControlPlaneOptions {
   corsEvaluator?: ApiCorsEvaluator
   /** Injectable local-connection wire deps (test seams: fake spawn/probe). */
   localConnectionDeps?: LocalConnectionDeps
+  /**
+   * Bundled pnpm entry for the managed host PATH provision (design 02 §3.1): a host
+   * whose own PATH resolves no pnpm gets an executable wrapper prepended so
+   * upstream's plugin manager can run the pinned release. Absent = no provisioning
+   * (standalone callers and tests).
+   */
+  pnpmEntry?: string | null
   /** Injectable orphan reaper (test seam for lifecycle interleavings). */
   reaper?: typeof runReaper
   /**
@@ -532,6 +539,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     // starts and restarts so a profile-internal prune self-heals without a DSH_HOME write during runtime apply/restore.
     options: {
       ...(options.dshPortBase === undefined ? {} : { dshPortBase: options.dshPortBase }),
+      pnpmEntry: options.pnpmEntry,
       ownerInstanceId: instanceId,
       canSpawn: localStartGate,
       onWriterQuiescenceUnknown: (writerError) => {

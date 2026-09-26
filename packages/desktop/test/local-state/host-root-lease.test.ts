@@ -109,6 +109,8 @@ test('state 根派生单源：sidecar 两文件不再裸 join <userData>/state�
     'sidecar-entry 不得再裸 join <userData>/state')
   assert.match(entry, /stateDir: stateRootDir\(args\.userDataDir\)/u,
     'createControlPlane 的 stateDir 必须来自 shell-core.stateRootDir')
+  assert.match(entry, /pnpmEntry: headless!\.pnpmEntry/u,
+    'sidecar 必须把随包 pnpm 入口交给控制面（design 02 §3.1）')
   // 时序：host-root 租约 → 无头 ctx 装配 → plane 构造（构造期自取 state-root
   // 并启动时 reaper）→ plane.start()。任何一步提前都会把写者身份留到写之后。
   const leaseAt = entry.indexOf('acquireHostRootLease(args.userDataDir')
@@ -127,6 +129,8 @@ test('desktop main：flock → host-root 租约 → plane，quit 先放 L2 再�
   assert.ok(lockAt >= 0, 'main 必须取 L1 目录锁（acquireChamberLock）')
   assert.ok(leaseAt > lockAt, 'host-root 租约必须在 flock 成功之后取得')
   assert.ok(planeAt > leaseAt, 'host-root 租约必须早于 control-plane 构造（state-root 租约在构造期自取）')
+  assert.match(main, /createControlPlane\(\{[\s\S]{0,400}?pnpmEntry,/u,
+    'main 必须把随包 pnpm 入口交给控制面（design 02 §3.1）')
   // C4 启动与修复（2026-12）：租约冲突不再走单键 showErrorBox，而是走统一的
   // 三选恢复框（reportFatalStartupFailure）；标题仍经 shell-locale，不写死语言。
   assert.match(main, /reportFatalStartupFailure\(\s*\{ title: shellStrings\(app\.getLocale\(\)\)\.startupFailedTitle, detail \},\s*'startup',/u,

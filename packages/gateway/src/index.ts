@@ -41,6 +41,7 @@ import { createChannelRegistry } from './channels.ts'
 import { createGatewayRuntimeManager, type GatewayRuntimeManager } from './runtime-manager.ts'
 import { createRuntimeRoutes } from './runtime-routes.ts'
 import { createPluginWriteCheckpoint } from './spawn-checkpoint.ts'
+import { resolvePnpmEntry } from './pnpm-entry.ts'
 
 /** Startup-block reasons that fail gateway boot loudly. Metadata corruption (the
  * shared dsh-runtime FATAL set, also the desktop main's) is a hard boot failure;
@@ -257,6 +258,8 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       host: options.config.plane.host,
       port: options.config.plane.port,
       stateDir: options.config.plane.stateDir,
+      // 宿主 PATH 无 pnpm 时供给随包 launcher（design 02 §3.1）。
+      pnpmEntry: resolvePnpmEntry(),
       // Same handle: the control plane adopts it (root check + assertCurrent) rather than acquiring a second lease on this root.
       stateLease,
       // Static anchor for fakes/boot log; the live spawn path resolves through the runtime manager (env → override → anchor).
