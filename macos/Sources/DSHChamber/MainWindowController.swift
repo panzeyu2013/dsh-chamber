@@ -166,6 +166,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private var externalBudget = ExternalOpenBudget()
 
     private var webView: WKWebView!
+    /// 侧栏材质视图（建窗时唯一一次 install；最小化/隐藏兜底要切它的 isHidden）。
+    private var windowMaterial: NSVisualEffectView?
+    /// WKWebView 是否真的关掉了自己的底（私有键 `drawsBackground` 生效 ⇒ 页面透明区能露出
+    /// 窗口/材质；不可用或回读不一致时 WebKit 不透明绘制，露底色必须留主题色）。
+    private var webViewIsTransparent = false
     private var bridgeHandler: ChamberMessageHandler!
     /// 关窗决策委托（AppDelegate；见 windowShouldClose）。
     weak var closeDelegate: MainWindowCloseDeciding?
@@ -185,6 +190,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 独立消息通道 ShellPageFactsScript.messageName 的 handler（**不**混进
     /// ChamberMessageHandler 的白名单/origin 就绪门链路）。
     private var pageFactsHandler: ShellPageFactsMessageHandler?
+    /// 窗口拖拽通道 ShellWindowDragScript.messageName 的 handler（同样**不**混进 A 桥
+    /// 白名单/就绪门链路：ready 前窗口就该能拖）。
+    private var windowDragHandler: ShellWindowDragMessageHandler?
     private var consoleCatcher: ShellConsoleCatcher?
     private var didSnapshot = false
     /// 在途下载占用的目标路径（静默落盘：WebKit 要求目标文件在决策时
@@ -313,6 +321,28 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             forMainFrameOnly: true
         ))
         shellLog("[shell] 页面事实载波注入完成（\(ShellPageFactsScript.messageName)）")
+
+        // 窗口拖拽通道：WKWebView 不认上游页面的 -webkit-app-region，且其
+        // mouseDownCanMoveWindow 恒 false（实测，见 ShellWindowDrag.swift 文件头），
+        // 隐藏标题栏后整窗没有原生可拖区域——页面在标记行（data-window-drag）上的
+        // 按下经本通道交回，壳按当前鼠标位置起原生拖拽。与 shim/overscroll/pageFacts
+        // 同段：必须在 WKWebView 构造前注册；文档面门与页面事实通道同源
+        // （isSameOriginDocument）。
+        let windowDragHandler = ShellWindowDragMessageHandler(
+            admittedDocument: { [weak self] url in
+                MainWindowController.isSameOriginDocument(url: url,
+                                                          expectedOrigin: self?.cpOrigin)
+            },
+            targetWindow: { [weak self] in self?.window })
+        self.windowDragHandler = windowDragHandler
+        configuration.userContentController.add(windowDragHandler,
+                                                name: ShellWindowDragScript.messageName)
+        configuration.userContentController.addUserScript(WKUserScript(
+            source: ShellWindowDragScript.source,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        ))
+        shellLog("[shell] 窗口拖拽通道注入完成（\(ShellWindowDragScript.messageName)）")
 
         // 消息通道：ChamberMessageHandler 只做护栏与转发
         let handler = ChamberMessageHandler(
@@ -448,7 +478,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // 直接 abort 进程（实测 exit_code=134）。故走 DSHChamberWebKitSupport 的
         // 异常安全包装（@try/@catch 吞异常、返回设置结果），成功/失败都写 shellLog
         // 可诊断，缺键时保持 WebKit 默认且绝不崩。
-        shellLog(Self.drawsBackgroundLogLine(DSHChamberSetDrawsBackground(webView, false)))
+        let drawsBackgroundOutcome = DSHChamberSetDrawsBackground(webView, false)
+        webViewIsTransparent = drawsBackgroundOutcome == .applied
+        shellLog(Self.drawsBackgroundLogLine(drawsBackgroundOutcome))
         // 恢复本 origin 上次的缩放（Chromium 按 origin 持久化 zoomLevel；
         // WKWebView.pageZoom 每次启动回 100%，这里用 UserDefaults 补齐）。
         webView.pageZoom = ZoomPersistence.load(
@@ -465,18 +497,35 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         window.title = Self.displayName
         // 上游 macOS 窗口形态（官方 desktop titleBarStyle:'hiddenInset' 的 AppKit 等价物，
         // 2026-09 跟随上游）：标题栏透明、内容延伸进标题栏，红绿灯浮在侧栏顶部——页面按
-        // data-platform=darwin 自行留出侧栏空白。vibrancy/材质腿不搬：窗底仍由
-        // applyThemedBackground 按页面事实上色（与 Electron 的 applyAppearance 同源）。
+        // data-platform=darwin 自行留出侧栏空白。灯组位置由 ShellTrafficLightInset 内缩到
+        // 页面 chrome 行（AppKit 默认比那条带高 9pt，见该文件实测）；窗背后是
+        // ShellWindowMaterial 的侧栏材质（上游 vibrancy:'sidebar' 的等价面）。
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        // WKWebView 不支持上游页面用的 -webkit-app-region: drag，等价面是「窗口背景可拖」；
-        // 缺了它，隐藏标题栏后整窗无法移动。
+        // 窗口拖拽。上游页面用 -webkit-app-region: drag 把 chrome 行的盒交给窗口，
+        // WKWebView 不认该属性；而 isMovableByWindowBackground 判的是**命中视图**的
+        // mouseDownCanMoveWindow，WKWebView 恒 false（本机实测：该开关为 true 时合成
+        // leftMouseDown 也不挪窗），故页面内容上的拖动面由 ShellWindowDrag 通道负责
+        // （标记行 → 原生 performDrag）。本开关保留：它仍覆盖命中 AppKit 自有视图
+        // （标题栏层）的位置。
         window.isMovableByWindowBackground = true
         // 上游同款最小内容尺寸：没有它窗口会被缩到侧栏/composer 不可用的尺寸。
         window.contentMinSize = NSSize(width: 880, height: 600)
-        // 窗口底色 = 同一 #0f1115（缩放/全屏露底不白闪）。
-        window.backgroundColor = Self.windowBackgroundColor
-        window.contentView = webView
+        // 材质面：装上后窗口转非不透明、底色 clear（`.behindWindow` 采样窗后桌面），页面
+        // 透明区露出材质；首帧/重载仍有 underPageBackgroundColor 的骨架色兜住"不白闪"
+        // （构造时先置 #0f1115，页面事实到达后由 reconcileThemedBackground 接管）。
+        windowMaterial = ShellWindowMaterial.install(in: window, webView: webView)
+        // WebKit 真能透明时露底色即刻转 clear，不必等第一份页面事实到达：窗口在首个
+        // didCommit 前不呈现（StartupPresentationGate），页面骨架 .dsh-boot 不透明，故这里
+        // 转 clear 不会白闪；事实到达后 reconcileThemedBackground 走同一判定（幂等）。
+        webView.underPageBackgroundColor = ShellWindowMaterial.underPageColor(
+            usesTransparentPage: webViewIsTransparent, themed: Self.windowBackgroundColor)
+        // 上游 hiddenInset 的红绿灯内缩：把灯组平移到页面 chrome 行（首灯中心 23,25）。
+        if !ShellTrafficLightInset.apply(to: window) {
+            // 建窗点是唯一"应当成功"的调用点（灯就在默认位）；失败只可能是取不到标准
+            // 按钮或三灯不在同一 titlebar 视图，loud 一行便于实机诊断。
+            shellLog("[shell] 红绿灯内缩未生效：标准按钮不可用或不在同一 titlebar 视图")
+        }
         window.center()
         // 关窗决策委托（E1/E20）：windowShouldClose 交给 AppDelegate（隐藏 vs
         // 转入退出链由 core 决策，Swift 只执行）。
@@ -501,6 +550,21 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                            name: NSWindow.didResignKeyNotification, object: window)
         center.addObserver(self, selector: #selector(hostFactsWindowWillClose(_:)),
                            name: NSWindow.willCloseNotification, object: window)
+        // 窗口 chrome 重排：AppKit 每次重排 titlebar（缩放、跨屏、进出全屏…）都把红绿灯放回
+        // 默认位置，故这些通知各重做一次内缩；进出全屏同时写 html[data-fullscreen]。
+        for name in ShellTrafficLightInset.reapplyNotifications {
+            center.addObserver(self, selector: #selector(windowChromeLayoutDidChange(_:)),
+                               name: name, object: window)
+        }
+        // 最小化/隐藏期间的材质兜底（上游 applyBackdrop 的等价面，见 ShellWindowMaterial）。
+        for name in [NSWindow.didMiniaturizeNotification, NSWindow.didDeminiaturizeNotification] {
+            center.addObserver(self, selector: #selector(windowBackdropVisibilityDidChange(_:)),
+                               name: name, object: window)
+        }
+        for name in [NSApplication.didHideNotification, NSApplication.didUnhideNotification] {
+            center.addObserver(self, selector: #selector(windowBackdropVisibilityDidChange(_:)),
+                               name: name, object: nil)
+        }
         // 换屏与低电量模式切换都会改变实际上限（WebKit 侧实时生效），
         // 对照日志按值去重补记（见 logRefreshRateIfChanged）。
         center.addObserver(self, selector: #selector(refreshRateWindowDidChangeScreen(_:)),
@@ -1259,16 +1323,62 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         return themedBackgroundColor(pageIsDark: pageIsDark)
     }
 
-    /// 露底色对账（幂等——记录已应用值，不同才改窗口/WKWebView 的露底色）。
+    /// 露底色对账（幂等——记录已应用值，不同才改 WKWebView 的露底色；窗口底归材质面）。
     /// **不**写日志（避免每次 ingest 都刷屏）；appliedPageIsDark 只在这里推进。
     private func reconcileThemedBackground(desiredPageIsDark: Bool?) {
         guard let color = Self.themedBackgroundColorToApply(
             pageIsDark: desiredPageIsDark, appliedPageIsDark: appliedPageIsDark) else {
             return
         }
-        webView?.underPageBackgroundColor = color
-        window?.backgroundColor = color
+        // 露底色：WebKit 真能透明才 clear，否则主题色（窗口底由 ShellWindowMaterial 独家管）。
+        webView?.underPageBackgroundColor = ShellWindowMaterial.underPageColor(
+            usesTransparentPage: webViewIsTransparent, themed: color)
         appliedPageIsDark = desiredPageIsDark
+    }
+
+    /// 窗口 chrome 重排（缩放 / 跨屏 / backing 变化 / 最小化恢复 / 进出全屏）：重做红绿灯
+    /// 内缩；全屏那两条通知另外写标记（`markValue` 对其余返回 nil，这里就此打住）。
+    /// 全屏在下一轮主循环再补一次内缩：进场路径上 AppKit 会在 didEnterFullScreen 之前再静默
+    /// 排一次（本机真全屏探针：通知同一轮读到的仍是默认位），那一轮补做才是真正落位的一次；
+    /// 已在位时 `apply` 因 delta==0 立即返回（幂等），不会与 AppKit 布局互刷。
+    @objc private func windowChromeLayoutDidChange(_ note: Notification) {
+        if let window { ShellTrafficLightInset.apply(to: window) }
+        guard let fullscreen = ShellWindowFullscreenMark.markValue(for: note.name) else { return }
+        applyFullscreenMark(fullscreen)
+        DispatchQueue.main.async { [weak self] in
+            guard let window = self?.window else { return }
+            ShellTrafficLightInset.apply(to: window)
+        }
+    }
+
+    /// 最小化/隐藏期间的材质兜底（上游 darwin `applyBackdrop` 的等价面）。
+    @objc private func windowBackdropVisibilityDidChange(_ note: Notification) {
+        guard let window, let windowMaterial else { return }
+        let suppressed = window.isMiniaturized || !window.isVisible || NSApp.isHidden
+        ShellWindowMaterial.applyBackdrop(suppressed: suppressed, effect: windowMaterial,
+                                          window: window, pageIsDark: appliedPageIsDark)
+        // 恢复时顺带确认灯位（最小化期间 AppKit 不重排，实测；这条是防御性收口）。
+        if !suppressed { ShellTrafficLightInset.apply(to: window) }
+    }
+
+    /// 幂等写 html[data-fullscreen]（document 未就绪时静默无效；装载完成会重放）。
+    private func applyFullscreenMark(_ fullscreen: Bool) {
+        webView?.evaluateJavaScript(ShellWindowFullscreenMark.script(fullscreen: fullscreen)) { _, error in
+            guard let error else { return }
+            // 只可能来自 JS 异常/文档未就绪；装载完成会重放，这里只留可诊断痕迹。
+            shellLog("[shell] 全屏标记写入失败：\(error.localizedDescription)")
+        }
+    }
+
+    /// 窗口标题的唯一写入口。AppKit 在**标题换值**时同样重排 titlebar 并把三灯放回默认位
+    /// （本机实测：换值后即回 (16,16)，且不发任何窗口通知——`didResize`/`didUpdate` 都不发，
+    /// 故 `reapplyNotifications` 接不到），所以写标题后必须重做内缩。
+    /// 不做同值早退：`apply` 幂等且 ~1µs，无条件重做还能自愈历史上任何一次错位的灯位
+    /// （`didFinish` 每次都写 displayName，是这里最热的一条调用）。
+    private func setWindowTitle(_ title: String) {
+        guard let window else { return }
+        window.title = title
+        ShellTrafficLightInset.apply(to: window)
     }
 
     /// 合并一次页面事实上报：有变化才落盘（Store 内）并通知 sink。
@@ -1667,7 +1777,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         shellLog("[shell] 页面加载完成 \(webView.url?.absoluteString ?? "(未知)")")
-        window?.title = Self.displayName
+        setWindowTitle(Self.displayName)
+        // 导航会重置 document：全屏标记按窗口当前状态重放（上游 preload 每份文档都能
+        // 打标，Swift 壳的等价面 = 每次装载完成补写一次）。
+        applyFullscreenMark(ShellWindowFullscreenMark.isFullscreen(window?.styleMask ?? []))
         // 崩溃归因：记录本次加载完成时刻；若这次加载来自崩溃恢复，落地耗时是
         // "崩溃→重载→可用"这段用户可见空窗的直接量度。
         let previousLoad = lastLoadFinishedAt
@@ -1735,7 +1848,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     func webView(_ webView: WKWebView,
                  didFail navigation: WKNavigation!,
                  withError error: Error) {
-        window?.title = Self.displayName
+        setWindowTitle(Self.displayName)
         // 失败路径必须推 webViewLoading:false（无 didFinish 可收敛；
         // sidecar 侧同步门若保持 true，通知打开/深链 drain 会被永久 hold）。
         pushHostFacts(Self.navigationFacts(for: .failed))
@@ -1992,7 +2105,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             recoveryReloadGeneration &+= 1
             let generation = recoveryReloadGeneration
             shellLog("[shell] 渲染恢复（\(reason)），\(String(format: "%.2f", delay))s 后重载（\(attempt)/\(recoveryPolicy.maxReloads)）")
-            window?.title = Self.displayName + " — " + NativeText.string(.rendererRecovering)
+            setWindowTitle(Self.displayName + " — " + NativeText.string(.rendererRecovering))
             let item = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 guard self.recoveryReloadGeneration == generation,
@@ -2011,7 +2124,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             }
             recoveryGaveUp = true
             shellLog("[shell] 渲染恢复正常化放弃（\(reason)，\(attempts) 次），本次不重载")
-            window?.title = Self.displayName + " — " + NativeText.string(.rendererCrashTitle)
+            setWindowTitle(Self.displayName + " — " + NativeText.string(.rendererCrashTitle))
             let alert = NSAlert()
             alert.alertStyle = .critical
             alert.messageText = NativeText.string(.rendererCrashTitle)
@@ -2171,10 +2284,13 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         <!doctype html><meta charset="utf-8"><title>\(displayName)</title>
         <meta name="color-scheme" content="light dark">
         <style>
-          :root { --dsh-failure-fg: #1d1d1f; --dsh-failure-muted: #6e6e73; }
+          :root { --dsh-failure-bg: #ffffff; --dsh-failure-fg: #1d1d1f; --dsh-failure-muted: #6e6e73; }
           @media (prefers-color-scheme: dark) {
-            :root { --dsh-failure-fg: #f5f5f7; --dsh-failure-muted: #a1a1a6; }
+            :root { --dsh-failure-bg: #0f1115; --dsh-failure-fg: #f5f5f7; --dsh-failure-muted: #a1a1a6; }
           }
+          /* 材质腿里窗口底是 clear：失败页必须自带不透明底，否则文字压在桌面模糊上
+             （与骨架同值：浅色白、深色 #0f1115）。 */
+          html, body { background: var(--dsh-failure-bg); }
           body { font-family:-apple-system,system-ui; padding:48px; color:var(--dsh-failure-fg); }
           .dsh-failure-muted { color:var(--dsh-failure-muted); }
         </style>

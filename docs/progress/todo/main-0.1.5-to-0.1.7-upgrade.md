@@ -465,7 +465,7 @@ pnpm run test:swift     # UpdateStallWatchdogTests + UpdateAvailabilityTests
 
 **验收**：`pnpm run test:swift`（`ShellIdentityTests` 窗口形态断言）、`pnpm --filter @dsh-chamber/desktop run test`（`upstream-seats.test.ts`）、`pnpm --filter @dsh-chamber-client-ui-sidebar run test`（visual-lock）、`node scripts/gates/run-checks.mjs static`。
 
-**坑**：① 窗口的 vibrancy/主题别与 main 的 `applyAppearance` 打架（Swift 腿不搬）；② `Info.plist.template` 保留 main 的版本键；③ 0.1.5 没有 leading 座——我们是**新注册**，0.1.7 换成 `shell.leading` 后必须按 §15.4 的 owner props 形状写。
+**坑**：① 窗口的 vibrancy/主题别与 main 的 `applyAppearance` 打架（**2026-09 起 Swift 腿已装 `.sidebar` 材质，侧栏列 darwin 透明与上游同形，见 design 25 §5.6**；主题化露底色仍是材质缺席 / WebKit 不可透明时的兜底）；② `Info.plist.template` 保留 main 的版本键；③ 0.1.5 没有 leading 座——我们是**新注册**，0.1.7 换成 `shell.leading` 后必须按 §15.4 的 owner props 形状写。
 
 ### 12.7 P1-5 · python 载荷
 

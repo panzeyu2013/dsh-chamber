@@ -22,6 +22,14 @@
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
 }
 
+/* macOS desktop: the AppFrame column owns the translucent sidebar tint; an
+   opaque fill here would sit on top of it and block the window vibrancy.
+   （本仓按 data-window-vibrancy 门控：只有 Swift 壳的窗口真有 material vibrancy，
+   Electron darwin 腿窗口不透明，跟着透明会把侧栏压到窗口底色上。） */
+:global([data-platform='darwin'][data-window-vibrancy]) .root {
+  background: transparent;
+}
+
 /* Rail geometry (figma rail spec): 36x36 control boxes centered in the 56px
    rail (10px side padding), 12px vertical rhythm, 18px from the rail top to
    the whale's box (24px to the 24-wide whale glyph itself). */
@@ -66,15 +74,16 @@
    行同高，收展不跳位）。上游同一块（ui-sidebar SidebarRoot.module.css 的
    `.topStrip` / `.topStrip + .logoRow`）；chamber fork 此前整块缺失，字标因此
    直接贴在红绿灯下沿（web 无窗控件，同一布局看起来正常——2026-09 用户截图）。
-   两处与上游刻意的差异：
-   ① 不加 `data-window-drag`：上游靠 ui-web base.css 的 app-region 规则做窗口
-   拖拽，Swift 壳忽略该属性（整窗由 isMovableByWindowBackground 拖动），Electron
-   macOS 腿又仍是系统标准标题栏（hiddenInset 属未落地计划，见
-   docs/progress/todo/main-0.1.5-to-0.1.7-upgrade.md），此刻加标记只是一层无
-   消费面的死面；hiddenInset 落地时按上游把标记加回本带与 logo 行。
-   ② `[data-fullscreen]` 分支照上游保留但今天不生效：两 flavor 都还没把窗口
-   全屏状态镜像到 html（vendor AppFrame 的 `[data-fullscreen]` 座位规则同样
-   待命），接入全屏时与本带一起开启。 */
+   窗口拖拽：带与 logo 行带上游同款 `data-window-drag` 标记（SidebarRoot.tsx），
+   与上游 CHROME_ROWS 清单同形。WKWebView 的 mouseDownCanMoveWindow 恒 false
+   （本机实测），`isMovableByWindowBackground` 因此对页面内容失效，Swift 壳改为把标记
+   行上的 mousedown 转成原生窗口拖拽（ShellWindowDrag.swift；控件命中优先，不拖）；
+   Electron 腿走 ui-web base.css 的 app-region 规则——该腿窗口仍是系统标准标题栏
+   （hiddenInset 属未落地计划，见 docs/progress/todo/main-0.1.5-to-0.1.7-upgrade.md），
+   标记在那条腿要等 hiddenInset 落地才成为拖拽面。
+   `[data-fullscreen]` 分支照上游保留：Swift 腿 2026-09 起由 `ShellWindowFullscreenMark`
+   把窗口全屏状态镜像到 html（design 25 §5.6；vendor AppFrame 的 `[data-fullscreen]`
+   座位规则随之生效），Electron 腿仍未镜像（未收口，见 STATUS 的窗口 chrome 实机验收项）。 */
 .topStrip {
   flex: none;
   display: flex;
@@ -89,7 +98,7 @@
 }
 
 /* 全屏时红绿灯消失，开关让位到带左；上游由 preload 打 html[data-fullscreen]，
-   本仓今天不生效（见上）。 */
+   Swift 腿等价面见上（Electron 腿未镜像、不生效）。 */
 :global([data-fullscreen]) .topStrip {
   justify-content: flex-start;
 }
@@ -139,6 +148,12 @@
   background: transparent;
   color: inherit;
   cursor: pointer;
+}
+
+/* On macOS the brand is a window-drag surface, not a New Session button;
+   a pointer cursor would promise a click that drags the window instead. */
+:global([data-platform='darwin'][data-window-vibrancy]) .brand {
+  cursor: default;
 }
 
 .iconButton {
@@ -212,6 +227,25 @@
 
 .newSession:hover {
   background: var(--dsw-alias-button-floating-hover);
+}
+
+/* macOS: the themed elevated fill reads as a foreign slab on the vibrancy
+   sidebar; a white wash sits in the glass like native macOS sidebar
+   controls. Dark keeps the same white ink at lower alpha. */
+:global([data-platform='darwin'][data-window-vibrancy]) .newSession {
+  background: rgb(255 255 255 / 0.55);
+}
+
+:global([data-platform='darwin'][data-window-vibrancy]) .newSession:hover {
+  background: rgb(255 255 255 / 0.3);
+}
+
+:global([data-platform='darwin'][data-window-vibrancy]) :global([data-ds-dark-theme]) .newSession {
+  background: rgb(255 255 255 / 0.15);
+}
+
+:global([data-platform='darwin'][data-window-vibrancy]) :global([data-ds-dark-theme]) .newSession:hover {
+  background: rgb(255 255 255 / 0.2);
 }
 
 .collapsed .newSession {

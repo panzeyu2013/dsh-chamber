@@ -97,7 +97,7 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   occupancy 是真实消费面）。**不含侧栏自己的顶部带**（ui-sidebar 的 `.topStrip`，52px、负 margin
   抵消 root 内距、开关停在带内）：它是侧栏列内的排布，消费面就是红绿灯让位与开关本身（与
   `shell.leading` 座同高，收展不跳位）；2026-09 随 macOS 隐藏标题栏实机补齐（此前 fork 整块缺失，
-  字标贴在红绿灯下沿）。
+  字标贴在红绿灯下沿）。该带与 logo 行同时按上游打 `data-window-drag`（窗口 chrome 行标记，必带清单见 ui-theme 的 `CHROME_ROWS`）：Swift 壳据此把它们当窗口拖动面（design 25 §5.5），Electron 腿的 `base.css` app-region 规则读同一批标记；窗口侧的红绿灯行（首灯中心 23,25）、材质与全屏标记见 design 25 §5.6。
 - 保留官方侧边栏的：logo 行、New Session（作用于当前活动来源）、折叠（wide/rail）状态机、
   foot（footer.action + settings 孔位）。rc.2 起官方在 darwin 折叠态额外用窗口 chrome 的
   `shell.leading` 单席（官方 `ui-sidebar` 的 `HeaderLeadingControls`）承载展开/新建；

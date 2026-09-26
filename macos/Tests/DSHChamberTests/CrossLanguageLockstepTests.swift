@@ -212,6 +212,60 @@ final class CrossLanguageLockstepTests: XCTestCase {
         }
     }
 
+    /// 窗口拖拽契约锁步：Swift 注入脚本的标记属性与控件选择器必须与 TS 单源
+    /// （packages/dsh-client-web/src/window-drag/regions.ts）逐值一致。两侧消费**同一批**
+    /// 页面标记——Electron 走 base.css 的 app-region 盒，Swift 壳走 ShellWindowDrag 的
+    /// mousedown 通道；选择器漂移会让「控件不拖」在其中一侧失效（按在按钮上会拖动整窗）。
+    func testWindowDragMarkAndInteractiveSelectorLockstep() throws {
+        let regions = try source("packages/dsh-client-web/src/window-drag/regions.ts")
+        XCTAssertTrue(regions.contains("export const DRAG_MARK = 'data-window-drag'"),
+                      "regions.ts 必须继续以 data-window-drag 为拖拽标记单源（DRAG_MARK）")
+        XCTAssertEqual(ShellWindowDragScript.dragMarkAttribute, "data-window-drag",
+                       "Swift 侧标记属性必须与 TS DRAG_MARK 逐字同值")
+        XCTAssertTrue(regions.contains("export const RECALL_MARK = 'data-window-drag-recall'"),
+                      "recall 脉冲标记的单源仍在 regions.ts")
+        XCTAssertTrue(ShellWindowDragScript.source.contains("'data-window-drag-recall'"),
+                      "Swift 脚本必须认识 recall 标记（它只表示 Electron 需重采集，不参与本侧判定）")
+
+        // INTERACTIVE_SELECTOR 数组字面量 → 逐项（含顺序）比对。
+        guard let start = regions.range(of: "export const INTERACTIVE_SELECTOR = ["),
+              let end = regions.range(of: "].join(', ')",
+                                      range: start.upperBound..<regions.endIndex) else {
+            return XCTFail("regions.ts 必须保留 INTERACTIVE_SELECTOR = [...] .join(', ') 形状（锁步锚点）")
+        }
+        let entries = regions[start.upperBound..<end.lowerBound]
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "\"'")) }
+        XCTAssertEqual(entries, ShellWindowDragScript.interactiveSelector,
+                       "控件选择器必须逐项、同序一致（改一侧必须同步另一侧）")
+        XCTAssertTrue(ShellWindowDragScript.source.contains(ShellWindowDragScript.interactiveSelectorJSON),
+                      "注入源码下发的必须正是这份列表")
+    }
+
+    /// 窗口 vibrancy 契约锁步：Swift 壳的 shim 落 `data-window-vibrancy`，页面侧所有「让出
+    /// 底色给窗后材质」的 darwin 规则都必须按它门控。缺任一侧 → 材质不可见（页面不透明）或
+    /// Electron 腿被误伤（同为 darwin 但没有 vibrancy，透明会把侧栏/中列压到窗口底色上）。
+    func testWindowVibrancyMarkerLockstep() throws {
+        let shim = try source("macos/Sources/DSHChamber/Resources/bridge-shim.js")
+        XCTAssertTrue(shim.contains("dataset.windowVibrancy = 'true'"),
+                      "Swift 壳必须在 documentStart 落 data-window-vibrancy（材质在位的唯一标记）")
+        let renderer = try source("packages/renderer/src/styles.css")
+        XCTAssertTrue(renderer.contains("html[data-platform='darwin'][data-window-vibrancy] .app")
+                      && renderer.contains("html[data-platform='darwin'][data-window-vibrancy] .instance-view"),
+                      "renderer 的 .app/.instance-view 必须在 vibrancy 标记下让出底色（否则材质被盖住）")
+        XCTAssertFalse(renderer.contains("html[data-platform='darwin'] .app"),
+                       "不得只按 data-platform 门控（Electron 腿同样命中）")
+        let sidebar = try source("packages/dsh-chamber-client-ui-sidebar/src/client/SidebarRoot.module.css")
+        for selector in [".root", ".brand", ".newSession"] {
+            XCTAssertTrue(sidebar.contains("[data-platform='darwin'][data-window-vibrancy]) \(selector) {"),
+                          "侧栏 \(selector) 的 darwin 规则必须挂 vibrancy 标记")
+        }
+        XCTAssertFalse(sidebar.contains(":global([data-platform='darwin']) .root"),
+                       "侧栏 .root 透明不得只按 data-platform 门控")
+    }
+
     /// served markup 的默认语言是 zh-CN（packages/renderer/index.html 的
     /// html lang="zh-CN"）——冷启动兜底与静态骨架都依赖这个锚。
     func testServedMarkupDeclaresZhCnDefaultLanguage() throws {

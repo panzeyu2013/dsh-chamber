@@ -862,12 +862,21 @@
 
   /** 上游 markDocumentPlatform()：文档根带宿主平台，官方共享 UI（含 shortcuts
    *  服务的 desktop 判定与 ui-layout 的 macOS 规则）据此走桌面默认。注入点为
-   *  documentStart，根节点可能尚未创建，故回退 DOMContentLoaded。 */
+   *  documentStart，根节点可能尚未创建，故回退 DOMContentLoaded。
+   *
+   *  同处落 data-window-vibrancy：**只有本壳**的窗口背后有 material vibrancy
+   *  （ShellWindowMaterial 的 .sidebar + behindWindow）。页面侧所有"让出底色给窗后材质"
+   *  的 darwin 规则（ui-web 的 html/body、自建侧栏的 .root/.newSession/.brand、renderer
+   *  的 .app/.instance-view）都按这个标记门控——Electron 腿同样是 darwin 但窗口不透明，
+   *  跟着透明会在浅色主题下把侧栏/中列压到窗口底色上。 */
   function markDocumentPlatform() {
     if (typeof document === 'undefined' || document === null || document.documentElement === undefined) return
     var platform = /win/i.test(hostNavigatorPlatform()) ? 'win32'
       : /darwin|mac|iphone|ipad/i.test(hostNavigatorPlatform()) ? 'darwin' : 'linux'
-    var mark = function () { document.documentElement.dataset.platform = platform }
+    var mark = function () {
+      document.documentElement.dataset.platform = platform
+      document.documentElement.dataset.windowVibrancy = 'true'
+    }
     if (document.documentElement === null) document.addEventListener('DOMContentLoaded', mark, { once: true })
     else mark()
   }

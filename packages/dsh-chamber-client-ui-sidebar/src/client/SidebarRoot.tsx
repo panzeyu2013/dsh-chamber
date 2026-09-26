@@ -196,10 +196,13 @@ export function SidebarRoot({
       }}
       onPointerLeave={() => { armLinger() }}
     >
-      {/* macOS 隐藏标题栏：带内只有面板开关（红绿灯由原生窗画在同一行的左端）。 */}
-      {darwinDesktop && <div className={css.topStrip}>{toggle}</div>}
+      {/* macOS 隐藏标题栏：带内只有面板开关（红绿灯由原生窗画在同一行的左端）。带与
+          logo 行都打 data-window-drag：Swift 壳据此把按下的行转成原生窗口拖拽
+          （ShellWindowDrag.swift），Electron 腿据此走 ui-web base.css 的 app-region
+          规则（与上游 CHROME_ROWS 清单同形）。 */}
+      {darwinDesktop && <div className={css.topStrip} data-window-drag>{toggle}</div>}
 
-      <div className={css.logoRow}>
+      <div className={css.logoRow} data-window-drag>
         {/* 展开时 wordmark 兼作 New Session 快捷方式（rail 的展开入口在 toggle 内）。 */}
         {wide && (
           <button
