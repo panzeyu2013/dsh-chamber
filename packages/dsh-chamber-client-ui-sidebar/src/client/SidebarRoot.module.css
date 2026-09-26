@@ -66,15 +66,16 @@
    行同高，收展不跳位）。上游同一块（ui-sidebar SidebarRoot.module.css 的
    `.topStrip` / `.topStrip + .logoRow`）；chamber fork 此前整块缺失，字标因此
    直接贴在红绿灯下沿（web 无窗控件，同一布局看起来正常——2026-09 用户截图）。
-   两处与上游刻意的差异：
-   ① 不加 `data-window-drag`：上游靠 ui-web base.css 的 app-region 规则做窗口
-   拖拽，Swift 壳忽略该属性（整窗由 isMovableByWindowBackground 拖动），Electron
-   macOS 腿又仍是系统标准标题栏（hiddenInset 属未落地计划，见
-   docs/progress/todo/main-0.1.5-to-0.1.7-upgrade.md），此刻加标记只是一层无
-   消费面的死面；hiddenInset 落地时按上游把标记加回本带与 logo 行。
-   ② `[data-fullscreen]` 分支照上游保留但今天不生效：两 flavor 都还没把窗口
-   全屏状态镜像到 html（vendor AppFrame 的 `[data-fullscreen]` 座位规则同样
-   待命），接入全屏时与本带一起开启。 */
+   窗口拖拽：带与 logo 行带上游同款 `data-window-drag` 标记（SidebarRoot.tsx），
+   与上游 CHROME_ROWS 清单同形。WKWebView 的 mouseDownCanMoveWindow 恒 false
+   （本机实测），`isMovableByWindowBackground` 因此对页面内容失效，Swift 壳改为把标记
+   行上的 mousedown 转成原生窗口拖拽（ShellWindowDrag.swift；控件命中优先，不拖）；
+   Electron 腿走 ui-web base.css 的 app-region 规则——该腿窗口仍是系统标准标题栏
+   （hiddenInset 属未落地计划，见 docs/progress/todo/main-0.1.5-to-0.1.7-upgrade.md），
+   标记在那条腿要等 hiddenInset 落地才成为拖拽面。
+   `[data-fullscreen]` 分支照上游保留但今天不生效：两 flavor 都还没把窗口全屏
+   状态镜像到 html（vendor AppFrame 的 `[data-fullscreen]` 座位规则同样待命），
+   接入全屏时与本带一起开启。 */
 .topStrip {
   flex: none;
   display: flex;

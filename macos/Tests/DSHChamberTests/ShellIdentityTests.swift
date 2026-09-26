@@ -374,8 +374,11 @@ final class ShellIdentityTests: XCTestCase {
         XCTAssertTrue(source.contains("window.backgroundColor = Self.windowBackgroundColor"),
                       "窗口底色必须设（T-4）")
         // 上游 macOS 窗口形态（2026-09 跟随上游，升级计划 §12.6）：内容延伸进标题栏 +
-        // 透明标题栏 + 背景可拖 + 最小内容尺寸。vibrancy/材质腿不搬——窗底仍由
+        // 透明标题栏 + 最小内容尺寸。vibrancy/材质腿不搬——窗底仍由
         // applyThemedBackground 按页面事实上色（与 Electron 的 applyAppearance 同源）。
+        // 「背景可拖」不在其中：命中视图恒为 WKWebView 而它的 mouseDownCanMoveWindow
+        // 恒 false（实测），该开关对页面内容无效；拖动面是 ShellWindowDrag（design 25 §5.5），
+        // 本行保留只是让 AppKit 自有命中视图（标题栏层）仍吃原生路径。
         XCTAssertTrue(source.contains(".fullSizeContentView"),
                       "内容延伸进标题栏（上游 titleBarStyle:'hiddenInset' 的等价物）")
         XCTAssertTrue(source.contains("window.titlebarAppearsTransparent = true"),
@@ -383,7 +386,7 @@ final class ShellIdentityTests: XCTestCase {
         XCTAssertTrue(source.contains("window.titleVisibility = .hidden"),
                       "隐藏标题文字（可见标题仍投影为窗口标题）")
         XCTAssertTrue(source.contains("window.isMovableByWindowBackground = true"),
-                      "WKWebView 无 -webkit-app-region: drag——窗口背景可拖是等价面")
+                      "保留的原生兜底（只对 AppKit 自有命中视图生效；页面内容的拖动面见 ShellWindowDrag）")
         XCTAssertTrue(source.contains("window.contentMinSize = NSSize(width: 880, height: 600)"),
                       "上游同款最小内容尺寸（官方 desktop main 的 880×600）")
         XCTAssertTrue(source.contains(

@@ -185,6 +185,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 独立消息通道 ShellPageFactsScript.messageName 的 handler（**不**混进
     /// ChamberMessageHandler 的白名单/origin 就绪门链路）。
     private var pageFactsHandler: ShellPageFactsMessageHandler?
+    /// 窗口拖拽通道 ShellWindowDragScript.messageName 的 handler（同样**不**混进 A 桥
+    /// 白名单/就绪门链路：ready 前窗口就该能拖）。
+    private var windowDragHandler: ShellWindowDragMessageHandler?
     private var consoleCatcher: ShellConsoleCatcher?
     private var didSnapshot = false
     /// 在途下载占用的目标路径（静默落盘：WebKit 要求目标文件在决策时
@@ -313,6 +316,28 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             forMainFrameOnly: true
         ))
         shellLog("[shell] 页面事实载波注入完成（\(ShellPageFactsScript.messageName)）")
+
+        // 窗口拖拽通道：WKWebView 不认上游页面的 -webkit-app-region，且其
+        // mouseDownCanMoveWindow 恒 false（实测，见 ShellWindowDrag.swift 文件头），
+        // 隐藏标题栏后整窗没有原生可拖区域——页面在标记行（data-window-drag）上的
+        // 按下经本通道交回，壳按当前鼠标位置起原生拖拽。与 shim/overscroll/pageFacts
+        // 同段：必须在 WKWebView 构造前注册；文档面门与页面事实通道同源
+        // （isSameOriginDocument）。
+        let windowDragHandler = ShellWindowDragMessageHandler(
+            admittedDocument: { [weak self] url in
+                MainWindowController.isSameOriginDocument(url: url,
+                                                          expectedOrigin: self?.cpOrigin)
+            },
+            targetWindow: { [weak self] in self?.window })
+        self.windowDragHandler = windowDragHandler
+        configuration.userContentController.add(windowDragHandler,
+                                                name: ShellWindowDragScript.messageName)
+        configuration.userContentController.addUserScript(WKUserScript(
+            source: ShellWindowDragScript.source,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        ))
+        shellLog("[shell] 窗口拖拽通道注入完成（\(ShellWindowDragScript.messageName)）")
 
         // 消息通道：ChamberMessageHandler 只做护栏与转发
         let handler = ChamberMessageHandler(
@@ -467,8 +492,12 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // applyThemedBackground 按页面事实上色（与 Electron 的 applyAppearance 同源）。
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        // WKWebView 不支持上游页面用的 -webkit-app-region: drag，等价面是「窗口背景可拖」；
-        // 缺了它，隐藏标题栏后整窗无法移动。
+        // 窗口拖拽。上游页面用 -webkit-app-region: drag 把 chrome 行的盒交给窗口，
+        // WKWebView 不认该属性；而 isMovableByWindowBackground 判的是**命中视图**的
+        // mouseDownCanMoveWindow，WKWebView 恒 false（本机实测：该开关为 true 时合成
+        // leftMouseDown 也不挪窗），故页面内容上的拖动面由 ShellWindowDrag 通道负责
+        // （标记行 → 原生 performDrag）。本开关保留：它仍覆盖命中 AppKit 自有视图
+        // （标题栏层）的位置。
         window.isMovableByWindowBackground = true
         // 上游同款最小内容尺寸：没有它窗口会被缩到侧栏/composer 不可用的尺寸。
         window.contentMinSize = NSSize(width: 880, height: 600)

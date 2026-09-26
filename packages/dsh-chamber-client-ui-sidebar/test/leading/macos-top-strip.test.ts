@@ -42,10 +42,23 @@ test('the darwin top strip reserves the traffic-light band at the column top', (
 test('the strip holds the panel toggle on darwin, the logo row keeps it elsewhere', () => {
   assert.match(tsx, /const darwinDesktop = isDarwinDesktop\(\)/u,
     'the hiddenInset marker is read at render time (vendor darwin-desktop.ts)')
-  assert.match(tsx, /\{darwinDesktop && <div className=\{css\.topStrip\}>\{toggle\}<\/div>\}/u,
+  assert.match(tsx, /\{darwinDesktop && <div className=\{css\.topStrip\} data-window-drag>\{toggle\}<\/div>\}/u,
     'the band renders only under the hiddenInset marker and carries the toggle')
   assert.match(tsx, /\{!darwinDesktop && toggle\}/u,
     'the non-darwin logo row keeps its right-edge toggle')
   assert.equal(tsx.split('const toggle =').length, 2,
     'the toggle stays one box rendered into exactly one of the two seats')
+})
+
+test('the strip and the logo row carry the window-drag mark', () => {
+  // 标记行的盒就是窗口拖拽面（上游 ui-theme app-region 清单 CHROME_ROWS 的同一属性；
+  // 单一真源 packages/dsh-client-web/src/window-drag/regions.ts 的 DRAG_MARK）。
+  // Swift 壳不认 -webkit-app-region：标记行上的按下经 ShellWindowDrag.swift 的通道转成
+  // 原生窗口拖拽（实测 WKWebView.mouseDownCanMoveWindow 恒 false，isMovableByWindowBackground
+  // 对页面无效）；Electron 腿的拖拽面来自 base.css 的 app-region 规则。两行漏标 →
+  // 顶部带（红绿灯所在带 + 字标行）无法拖动整窗。
+  assert.match(tsx, /className=\{css\.topStrip\} data-window-drag/u,
+    'the hiddenInset strip is a window-chrome row')
+  assert.match(tsx, /className=\{css\.logoRow\} data-window-drag/u,
+    'the logo row is a window-chrome row')
 })

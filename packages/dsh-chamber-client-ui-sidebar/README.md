@@ -321,7 +321,11 @@ session-echo ledger (`shared/session-echo.ts`) and its own single funnel
   margins cancel the root padding, the logo row tucking 12px back under it; the
   toggle's centre stays level with the collapsed `shell.leading` seat, so
   collapse/expand never shifts it vertically). Off macOS the toggle stays at the
-  logo row's right edge.
+  logo row's right edge. The strip and the logo row carry upstream's
+  `data-window-drag` mark (a window-chrome row): the Swift shell turns presses on
+  marked rows into native window dragging (`ShellWindowDrag.swift`, design 25 §5.5)
+  and the Electron leg reads the same mark through `base.css`'s app-region rule —
+  controls inside a row are never dragged.
 - The frame's `shell.leading` window-chrome seat (`SidebarLeadingControls.tsx`):
   on macOS the collapsed sidebar hides the whole column, so the frame mounts
   this seat beside the traffic lights and the occupant restores the reopen

@@ -763,6 +763,46 @@ Crashpad），原生壳自己给出「闪退后可考古、可给出原因」的
   用户与日志无法区分「又崩了一次」和「上次标记没删掉」；改为 loud 一行失败
   （路径 + 后果 + 手动删除），崩溃报告行本身照常返回。
 
+### 5.5 窗口拖拽（`-webkit-app-region` 的等价面）
+
+窗口形态是「隐藏标题栏 + 内容延伸进标题栏」（`titlebarAppearsTransparent` + `fullSizeContentView`），红绿灯浮在侧栏顶部、
+页面按 `data-platform=darwin` 自己留白——整窗因此**没有原生可拖区域**：`isMovableByWindowBackground` 判的是**命中视图**的
+`mouseDownCanMoveWindow`，而 WKWebView 恒 `false`（本机实测：900×600 窗 + WKWebView 作 `contentView` + 该开关为 true，
+`hitTest` 命中 WKWebView、`canMove=false`，合成 `leftMouseDown` 后窗口不动；只有命中 AppKit 自有视图（标题栏层）的位置才吃该开关）。
+页面用 `data-window-drag` 标记窗口 chrome 行（单一真源 `packages/dsh-client-web/src/window-drag/regions.ts#DRAG_MARK`；必带行清单 =
+`vendor/harness-packages/@deepseek-ai/dsh-client-ui-theme/tests/app-region-styles.client.spec.ts` 的 `CHROME_ROWS`；chamber 侧栏的顶部带与
+logo 行同款，`packages/dsh-chamber-client-ui-sidebar/src/client/SidebarRoot.tsx`）。Electron（Chromium）原生消费 `-webkit-app-region`，
+WKWebView 不认，故壳自建等价面（`macos/Sources/DSHChamber/ShellWindowDrag.swift`）：
+
+- **注入**：configuration 段以 WKUserScript（documentStart、仅主 frame）装一条 capture 段 `mousedown` 监听；命中标记行且未命中控件时
+  `preventDefault + stopPropagation`，再经独立通道 `dshChamberWindowDrag` 交回壳（载荷只有 `{kind:"drag"}`）。
+- **判定三条纪律**：①只有标记行是拖拽面（未标记处永不触发）；②**控件优先**——`button/a/input/…`（`ShellWindowDragScript.interactiveSelector`
+  与 `regions.ts#INTERACTIVE_SELECTOR` 逐项锁步）命中即不拖，点击、焦点、文本选择与页签原行为不变；③⌘/⌃/⌥/⇧ 按下时不拖。命中用
+  **DOM 真实命中**（按下的元素链上最近的匹配者）而不是 app-region 的几何盒序：可见且被按下的那一层决定结果；
+  `data-window-drag-recall` 脉冲只被"认识"、不参与判定（壳不缓存几何，无重采集需求）。
+- **起拖**：消息回调（主线程）里用**当前鼠标位置**（`NSEvent.mouseLocation` → `convertPoint(fromScreen:)` 窗口坐标）合成
+  `leftMouseDown` 事件调 `NSWindow.performDrag`，AppKit 的窗口拖拽循环接管到抬键。位置取窗口坐标系 ⇒ 起拖瞬间抓取偏移为零、
+  窗口不跳；「按下与消息到达之间已抬键」不会挂住壳（实测：未按键时 `performDrag` 立即返回、不挪窗）。不可移动/最小化窗口直接弃。
+- **安全边界**：mousedown 是页面事件，本通道**不接受**页面指定"拖哪个窗、挪到哪"——窗口与位置都取自壳自己的事实；准入 =
+  通道名 + 主 frame + 同源文档（`MainWindowController.isSameOriginDocument`，与页面事实通道同款门）。本通道**不**并入 A 桥
+  白名单/就绪门（sidecar ready 前窗口就该能拖）。
+- **行为锁**：`macos/Tests/DSHChamberTests/ShellWindowDragTests.swift` 直测围栏真值表与事件合成字段，并在 JavaScriptCore + 最小假 DOM
+  下跑**注入脚本本身**（13 个场景：标记行/控件/未标记/修饰键/非左键/页面已 preventDefault/recall 标记/portal 层/非元素目标 + 幂等）；
+  TS 侧锁步在 `CrossLanguageLockstepTests.swift#testWindowDragMarkAndInteractiveSelectorLockstep`（标记属性与选择器逐项同序）。
+- **范围**：iframe 子文档不注入（只有主 frame）；非左键、双击与页面自己的 `preventDefault` 一律原样放行；Electron 腿的窗口仍是系统
+  标准标题栏，标记在那条腿要等 `hiddenInset` 落地才成为拖拽面（deviations T-30）——**拖拽面本身两腿同源**（同一批标记）。
+
+**Rejected alternatives**（本等价面的选择依据）：
+
+- **让 `isMovableByWindowBackground` 生效**（子类化 WKWebView 覆写 `mouseDownCanMoveWindow`，或让命中视图不再是 WebView）：
+  命中视图是 WebKit 自己的内层视图，覆写不到；把整窗设成拖拽面又会吃掉文本选择、滚动条与画布拖拽，拒。
+- **原生覆盖层**（把 `data-window-drag` 盒镜像成一组 `mouseDownCanMoveWindow = true` 的透明 NSView）：要几何镜像 + 布局变化时
+  重采集，陈旧矩形会把控件"盖死"（点击被吞），失败模式比本方案重；且 DOM 命中比几何盒序更贴近用户所见，拒。
+- **自己跑拖拽循环**（mousemove 报偏移 → `setFrameOrigin`）：逐帧 IPC，跟手感与多屏/缩放边界处理都差，拒。
+- **在 ui-web 副本里加 Swift 专用分支**：本方案零页面改动（标记是上游本来就有的属性），拒。
+- **把 `-webkit-app-region: drag` 留在页面上等 WKWebView 支持**：无此计划，且窗口整场不能移动，拒。
+
+
 ## 6. 数据、状态兼容与共存
 
 ### 6.1 userData 目录
