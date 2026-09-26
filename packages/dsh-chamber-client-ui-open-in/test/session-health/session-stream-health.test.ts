@@ -313,6 +313,24 @@ test('stream-health: both arms report their failure notice at the exact tick the
   assert.equal(lastNotice, T0 + 320_000)
 })
 
+test('stream-health: the reached arm threshold reports at its exact grace tick', () => {
+  // A heal runs at the grace, the stream recovers, and a fresh error starts a new
+  // hold while the heal cooldown still blocks the automatic lane: the notice is
+  // then the ARM threshold's own edge (held >= errorGraceMs), not the settle
+  // latch. Pin the exact tick — the suite's other samples sit at G+S, C+S and W-1.
+  const healed = T0 + G
+  const { actions, notices } = drive([
+    { at: T0, observation: observe('error') },
+    { at: healed, observation: observe('error') },
+    { at: healed + 1_000, observation: observe('open') },
+    { at: healed + 2_000, observation: observe('error') },
+    { at: healed + 2_000 + G - 1, observation: observe('error') },
+    { at: healed + 2_000 + G, observation: observe('error') },
+  ])
+  assert.deepEqual(notices, [null, null, null, null, null, 'heal-failed'])
+  assert.equal(actions[5], 0, 'the cooldown still blocks the automatic lane')
+})
+
 test('stream-health: a judged-failed heal latches the failure notice while the retries continue', () => {
   const healed = T0 + G
   const judged = healed + S
