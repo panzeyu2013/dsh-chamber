@@ -1,6 +1,6 @@
 {
   "name": "@dsh-chamber/dsh-chamber-client-core",
-  "version": "0.4.0-beta.4",
+  "version": "0.4.0-beta.5",
   "private": true,
   "description": "Chamber client-core: the shared client kernel every chamber client package consumes (multi-source session/workspace projection, the chamberBridge singleton, the page-level client-plugin load kernel, the per-instance unary client, the settings-seat contract, plus the framework-free runtime-management and SVG-resource-scope leaf contracts). Source-only: consumers resolve the TypeScript sources through these named faces; the seed bundle inlines them.",
   "type": "module",
