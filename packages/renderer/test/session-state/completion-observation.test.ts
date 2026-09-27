@@ -28,14 +28,14 @@ import {
 } from '../../src/notification-projection.ts'
 import { createCompleteLedger } from '../../src/complete-ledger.ts'
 import {
-  UNREAD_V4_KEY,
-  loadUnread,
-  saveUnread,
-  unreadOutcomeTable,
-  unreadPendingTable,
-  type UnreadStorageLike,
-  type UnreadV4Payload,
-} from '../../src/unread-store.ts'
+  NOTIFICATIONS_V1_KEY,
+  loadNotifications,
+  notificationOutcomeTable,
+  notificationPendingTable,
+  saveNotifications,
+  type NotificationPayload,
+  type NotificationStorageLike,
+} from '../../src/notification-store.ts'
 import type { SessionFactsRow, SessionFactsSnapshot } from '../../src/session-facts-source.ts'
 
 function factsRow(extra: Partial<FactsObservationRow> = {}): FactsObservationRow {
@@ -76,7 +76,6 @@ function snapshot(extra: Partial<SessionFactsSnapshot> = {}): SessionFactsSnapsh
     stale: false,
     cursor: 0,
     rows: {},
-    read: null,
     lastEventAt: null,
     ...extra,
   }
@@ -110,8 +109,8 @@ function batchOf(observations: CompletionObservation[], extra: Partial<Observati
   }
 }
 
-/** 未读 v2 的假 storage（App reload 路径的直测形）。 */
-function fakeStorage(initial: Record<string, string> = {}): { storage: UnreadStorageLike; data: Map<string, string> } {
+/** 通知 v1 的假 storage（App reload 路径的直测形）。 */
+function fakeStorage(initial: Record<string, string> = {}): { storage: NotificationStorageLike; data: Map<string, string> } {
   const data = new Map<string, string>(Object.entries(initial))
   return {
     data,
@@ -166,6 +165,33 @@ test('observeSource: the first shell report only seeds (G2); the next true→idl
   assert.equal(third.observations[0].candidate, undefined)
 })
 
+test('CONTROL: the official completed bit on a shell row is never notification evidence', () => {
+  // 通道行现在携带官方 completionUnread（对齐后；见 derive.ts 的稀疏写），但通知边沿只认运行位：
+  // 「稳态 idle + completed:true」不得产生候选——否则 observeSource 里读一次该位就会双发横幅。
+  const completedIdle = { running: false, completed: true }
+  const completedRunning = { running: true, completed: true }
+  const first = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: completedIdle } },
+  })
+  assert.equal(first.observations[0].candidate, undefined, 'seeding never carries a candidate')
+  const steady = observeSource({
+    state: first.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: completedIdle } },
+  })
+  assert.equal(steady.observations[0].candidate, undefined, '官方位不构成边沿')
+  const running = observeSource({
+    state: steady.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: completedRunning } },
+  })
+  assert.equal(running.observations[0].candidate, undefined, '重新 running 不产生完成边沿')
+  const stopped = observeSource({
+    state: running.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: completedIdle } },
+  })
+  assert.deepEqual(stopped.observations[0].candidate, { evidence: 'shell-edge' }, '边沿形状仍由运行位决定')
+})
+
 test('observeSource: an empty first report still establishes the baseline; a shell row first seen idle never fabricates a completion', () => {
   const first = observeSource({
     sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
@@ -175,8 +201,8 @@ test('observeSource: an empty first report still establishes the baseline; a she
   assert.equal(first.state.baselineDone, true, 'the baseline is the first batch, rows or not')
 
   // 首份之后的一行 first-seen idle：没有运行 true→false 边沿就**不得**产生完成边沿。
-  // 壳行类型 ShellObservationRow 已不声明 `completed`——通道行从不携带该位（这是结构级保证），
-  // 唯一合法的壳完成边沿是运行位 true→false。这条负向锁取代了原先钉住幻影的正向用例。
+  // 壳行类型 ShellObservationRow 刻意不声明 `completed`（结构上的第一道锁），运行位是唯一
+  // 合法的壳完成边沿——行为面由上方 CONTROL 用例钉住（官方位在场也不是通知证据）。
   const second = observeSource({
     state: first.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
     shell: { rows: { s9: { running: false } } },
@@ -976,7 +1002,7 @@ test('REGRESSION(TL3): a #3/silent drop is persisted immediately too', () => {
 
 // ── F5 修复回归（阻断 1/2 + 重要 3/4；每条都有临时回退即红的用例） ──────────
 
-test('REGRESSION(F5 阻断项 1): a busy-deferred pending survives the v4 round-trip and releases after a same-page reload', () => {
+test('REGRESSION(F5 阻断项 1): a busy-deferred pending survives the notifications.v1 round-trip and releases after a same-page reload', () => {
   // 反例：goal unknown + busy 完成 → pending{deferred} 落盘 → 同页 reload（boot same）
   // → 标记丢 → busy 结束后零 emit、pending 永久留存（goal null/paused 则 #3 静默 drop）。
   const ledger = createCompleteLedger()
@@ -989,22 +1015,20 @@ test('REGRESSION(F5 阻断项 1): a busy-deferred pending survives the v4 round-
   assert.equal(ledger.pendingEntry('src', 's1')?.deferred, 'subagent-busy')
   assert.equal(ledger.pendingEntry('src', 's1')?.watermark, 120)
 
-  // App 落盘/回读路径：pendingTable() → saveUnread → loadUnread → unreadPendingTable。
+  // App 落盘/回读路径：pendingTable() → saveNotifications → loadNotifications → notificationPendingTable。
   const { storage, data } = fakeStorage()
-  const payload: UnreadV4Payload = {
-    v: 4,
-    read: {},
-    edge: {},
+  const payload: NotificationPayload = {
+    v: 1,
     notifiedRuns: ledger.notifiedRunTable(),
     pending: ledger.pendingTable(),
     outcomes: ledger.outcomesTable(),
   }
-  assert.equal(saveUnread(storage, payload), true)
-  assert.ok(data.get(UNREAD_V4_KEY)?.includes('"deferred":"subagent-busy"'), '落盘载荷必须带延迟标记')
-  const loaded = loadUnread(storage)
+  assert.equal(saveNotifications(storage, payload), true)
+  assert.ok(data.get(NOTIFICATIONS_V1_KEY)?.includes('"deferred":"subagent-busy"'), '落盘载荷必须带延迟标记')
+  const loaded = loadNotifications(storage)
   const restored = createCompleteLedger({}, {
-    pending: unreadPendingTable(loaded),
-    outcomes: unreadOutcomeTable(loaded),
+    pending: notificationPendingTable(loaded),
+    outcomes: notificationOutcomeTable(loaded),
     boot: 'same',
   })
   assert.equal(restored.pendingEntry('src', 's1')?.deferred, 'subagent-busy', '同页 reload 后延迟身份仍在')
@@ -1680,7 +1704,7 @@ test('R3【B3-1】: seeding only to the boundary keeps the fence and eats the ne
   assert.equal(calls.notifications.length, 0, '首份可用 facts 快照只播种')
   assert.equal(batch.state.sessions.s1.factsWatermark, 100, '播种吸收水位（running 权威为 idle）')
 
-  // 合法的壳完成边沿 = 运行位 true→false（通道行不带 completed 位）。
+  // 合法的壳完成边沿 = 运行位 true→false（官方 completed 位在场也不是通知证据）。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
     shell: { rows: { s1: { running: true, goal: null } } },

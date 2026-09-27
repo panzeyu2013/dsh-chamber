@@ -6,8 +6,8 @@
  * publish signatures).
  *
  * The publish-signature identity and the separator-forgery negative live
- * below. Sibling: derive-unread.test.ts (the shared unread predicate,
- * referenced by the remote-state injection matrix).
+ * below. The completion correction arm's own step machine is pinned by the
+ * sibling completion-arm.test.ts.
  */
 
 import { test } from 'node:test'
@@ -34,7 +34,6 @@ import {
   orderUngroupedSessions,
   projectInstanceSnapshot,
   projectRuntimeFacts,
-  reconcileCompletedFacts,
   reconciledSessionOrder,
   relativeTimeBucket,
   runningRingVisible,
@@ -524,14 +523,14 @@ test('an accounted fork child renders in its workspace even while an unrelated g
 /** Verbatim two-argument oracle for the compatibility lock. */
 function legacyMergeRuntimeFacts(
   runtime: InstanceRuntimeReport | undefined,
-  completedBySource: Record<string, boolean> | undefined,
+  correctionArms: Record<string, boolean> | undefined,
 ): InstanceRuntimeReport | undefined {
-  const chamberCompleted = completedBySource
-  const hasArmed = chamberCompleted !== undefined && Object.values(chamberCompleted).some(value => value === true)
+  const arms = correctionArms
+  const hasArmed = arms !== undefined && Object.values(arms).some(value => value === true)
   if (runtime === undefined && !hasArmed) return undefined
   const sessions: InstanceRuntimeReport['sessions'] = { ...(runtime?.sessions ?? {}) }
-  if (chamberCompleted !== undefined) {
-    for (const [sessionId, armed] of Object.entries(chamberCompleted)) {
+  if (arms !== undefined) {
+    for (const [sessionId, armed] of Object.entries(arms)) {
       if (armed !== true) continue
       const row = sessions[sessionId] ?? {}
       sessions[sessionId] = { ...row, completed: true }
@@ -549,23 +548,32 @@ const RUNTIME_FACTS: InstanceRuntimeReport = {
     s3: { running: false, completed: true },
   },
 }
-const ARMED_DOTS: Record<string, boolean> = { s1: true, s4: true, s5: false }
+const CORRECTION_ARMS: Record<string, boolean> = { s1: true, s4: true, s5: false }
 const COMPAT_CASES: [InstanceRuntimeReport | undefined, Record<string, boolean> | undefined][] = [
   [undefined, undefined], [undefined, {}], [undefined, { x: false }], [RUNTIME_FACTS, undefined],
-  [RUNTIME_FACTS, {}], [RUNTIME_FACTS, { s1: false }], [RUNTIME_FACTS, ARMED_DOTS],
+  [RUNTIME_FACTS, {}], [RUNTIME_FACTS, { s1: false }], [RUNTIME_FACTS, CORRECTION_ARMS],
   [{ current: 's1', sessions: {} }, undefined],
   [{ sessions: { a: { running: false, completed: true, pending: 'question' } } }, { b: true }],
 ]
 
-test('mergeRuntimeFacts: the two-argument call stays byte-identical to the pre-overlay implementation', () => {
-  for (const [runtime, completed] of COMPAT_CASES) {
-    assert.equal(JSON.stringify(mergeRuntimeFacts(runtime, completed)), JSON.stringify(legacyMergeRuntimeFacts(runtime, completed)),
+test('mergeRuntimeFacts: the official channel completed passes through and correctionArms are OR-ed in', () => {
+  // 两参逐字节相容锁：第二参的语义仍是「修正臂真值表」，实现未动。
+  for (const [runtime, arms] of COMPAT_CASES) {
+    assert.equal(JSON.stringify(mergeRuntimeFacts(runtime, arms)), JSON.stringify(legacyMergeRuntimeFacts(runtime, arms)),
       'two-argument behaviour (including key order) must not move')
   }
-  assert.equal(JSON.stringify(mergeRuntimeFacts(RUNTIME_FACTS, ARMED_DOTS)),
+  assert.equal(JSON.stringify(mergeRuntimeFacts(RUNTIME_FACTS, CORRECTION_ARMS)),
     '{"current":"s1","sessions":{"s1":{"running":true,"completed":true},'
     + '"s2":{"running":false,"pending":"approval","runningSubagents":2},'
     + '"s3":{"running":false,"completed":true},"s4":{"completed":true}}}')
+  // 通道行自带的官方 completed 原样透传；修正臂只做 OR 追加——官方为真时臂无关，
+  // 官方缺席/为假时臂把 N-ctx 空洞补成 true，任何臂都不得清除官方位。
+  assert.deepEqual(mergeRuntimeFacts({ sessions: { s9: { running: false, completed: true } } }, undefined)?.sessions.s9,
+    { running: false, completed: true }, 'the official channel bit rides through with no arm')
+  assert.deepEqual(mergeRuntimeFacts({ sessions: { s9: { running: false, completed: true } } }, { s9: false })?.sessions.s9,
+    { running: false, completed: true }, 'a false arm never clears the official bit (OR)')
+  assert.deepEqual(mergeRuntimeFacts({ sessions: { s9: { running: false } } }, { s9: true })?.sessions.s9,
+    { running: false, completed: true }, 'the correction arm appends the N-ctx hole')
 })
 
 test('mergeRuntimeFacts: overlay-only content, channel precedence, stale and anti-churn', () => {
@@ -582,7 +590,7 @@ test('mergeRuntimeFacts: overlay-only content, channel precedence, stale and ant
   assert.deepEqual(mergeRuntimeFacts(undefined, { s1: true }, undefined, true),
     { current: undefined, sessions: { s1: { completed: true } }, stale: true })
   for (const value of [false, undefined]) {
-    assert.equal('stale' in (mergeRuntimeFacts(RUNTIME_FACTS, ARMED_DOTS, undefined, value) ?? {}), false)
+    assert.equal('stale' in (mergeRuntimeFacts(RUNTIME_FACTS, CORRECTION_ARMS, undefined, value) ?? {}), false)
   }
   assert.equal(mergeRuntimeFacts(undefined, undefined, undefined, true), undefined,
     'stale alone is not content: the two-argument early return is preserved')
@@ -617,7 +625,7 @@ test('mergeRuntimeFacts: a stale channel report keeps its stale bit and the P5 s
   )
   // 显式第四参与报告位是 OR；报告无该位时两参/四参行为不变（兼容锁的另一半）。
   assert.equal(mergeRuntimeFacts({ sessions: { a: { running: true } }, stale: true }, undefined, undefined, false)?.stale, true)
-  assert.equal(mergeRuntimeFacts(RUNTIME_FACTS, ARMED_DOTS)?.stale, undefined)
+  assert.equal(mergeRuntimeFacts(RUNTIME_FACTS, CORRECTION_ARMS)?.stale, undefined)
   assert.equal(mergeRuntimeFacts({ sessions: { a: { running: true } } }, undefined, undefined, true)?.stale, true)
 })
 
@@ -684,11 +692,11 @@ test('reconciledSessionOrder/orderUngroupedSessions keep stored-known ids first 
   assert.notEqual(copy, wire, 'no stored order returns a wire-order copy')
 })
 
-test('projectRuntimeFacts: live bits, pending kinds, subagent and sparse lineage discipline', () => {
-  // The real client store row (post-`projectList`) carries NO `completed` field — the
-  // official completion-unread fact is `sessionStatus.completionUnread`, which the
-  // mounted store never mirrors. A fixture with `completed` would model a field that
-  // cannot exist, so the completed bit here can only come from the App ledger.
+test('projectRuntimeFacts: live bits, pending kinds, the official completion bit and sparse lineage discipline', () => {
+  // `completed` is the OFFICIAL completion-unread bit (`sessionStatus.completionUnread`,
+  // passed as the sixth argument); the store row itself carries no such field. The write
+  // is SPARSE: only a true bit writes the key — absent means the official bit is clear,
+  // or the source is unmounted and has no status projection at all.
   const report = projectRuntimeFacts({
     // rc.2: `current` is the official main view's retained row, not a list field.
     byId: { s1: { running: true, retainedBy: { mainView: 1 } }, sub1: { running: false, origin: 'subagent' }, s2: { running: false }, c: {} },
@@ -704,6 +712,17 @@ test('projectRuntimeFacts: live bits, pending kinds, subagent and sparse lineage
     },
   }, 'subagent rows and unknown kinds never enter the report; zero counts stay sparse')
   assert.deepEqual(projectRuntimeFacts({}), { sessions: {} })
+  // 官方完成位稀疏写入：只有集合成员才写字段（true 才写），非成员保持无键、绝不臆造 false。
+  const completed = projectRuntimeFacts(
+    { byId: { s1: { running: false }, s2: { running: false } } },
+    undefined, undefined, undefined, undefined, new Set(['s1']),
+  )
+  assert.equal(completed.sessions.s1?.completed, true, 'an armed official bit rides the row')
+  assert.equal('completed' in (completed.sessions.s2 ?? {}), false, 'a clear official bit writes no key')
+  const outside = projectRuntimeFacts({ byId: { s1: { running: false } } }, undefined, undefined, undefined, undefined, new Set(['gone']))
+  assert.equal('completed' in (outside.sessions.s1 ?? {}), false, 'an id outside the list writes nothing')
+  assert.equal('completed' in (projectRuntimeFacts({ byId: { s1: { running: false } } }).sessions.s1 ?? {}), false,
+    'an absent status projection (unmounted source) writes no key')
   // Only the row the OFFICIAL main view retains is current: a sidebar-only or
   // subagent-only retention must not become the source's current session.
   assert.equal(projectRuntimeFacts({ byId: { s1: { retainedBy: { sidebarView: 1 } } } }).current, undefined)
@@ -919,36 +938,8 @@ test('archiveSetKnown and archivedSessions participate in the publish signatures
     serversProjectionSignature([{ ...plain, archivedSessions: [], archiveSetKnown: true }] as never))
 })
 
-// ---- completed-dot state machine + report signatures (the separator-forgery
-//      negative is retained verbatim because a signature collision silently
-//      skips a real republish) ----
-
-function reconcile(
-  prevCompleted: Record<string, boolean>,
-  prevRunning: Record<string, boolean>,
-  sessions: Record<string, { running?: boolean }>,
-  readingCurrent: string | undefined,
-) {
-  const nextRunning: Record<string, boolean> = {}
-  for (const [id, row] of Object.entries(sessions)) nextRunning[id] = row?.running === true
-  // 本语料的 sessions 就是完整权威列表：缺席当删除（键空间 prevRunning ∪ prevCompleted）。
-  return reconcileCompletedFacts({ sessions, nextRunning, prevRunning, prevCompleted, readingCurrent, authoritativeList: true })
-}
-
-test('reconcileCompletedFacts: a background edge arms, the read session never arms, a re-run disarms', () => {
-  const armed = reconcile({}, { x: true }, { x: { running: false } }, undefined)
-  assert.deepEqual(armed.completed, { x: true })
-  assert.equal(armed.changed, true)
-  assert.deepEqual(reconcile({}, { x: true }, { x: { running: false } }, 'x').completed, {}, 'the active view never arms')
-  assert.deepEqual(reconcile({}, { x: true, y: true }, { x: { running: false }, y: { running: false } }, 'x').completed, { y: true })
-  assert.deepEqual(reconcile({}, {}, { x: { running: false } }, undefined).completed, {}, 'first observation records no edge')
-  const prev = { x: true }
-  assert.equal(reconcile(prev, { x: false }, { x: { running: false } }, undefined).completed, prev, 'no re-edge, identity kept')
-  assert.equal(reconcile(prev, { x: false }, { x: { running: false } }, undefined).changed, false, 'an unchanged arm must not churn the state')
-  assert.deepEqual(reconcile({ x: true }, { x: false }, { x: { running: true } }, undefined).completed, {}, 'a re-run disarms')
-  assert.deepEqual(reconcile({ x: true }, { x: false }, { x: { running: false } }, 'x').completed, {}, 'starting to read disarms')
-  assert.deepEqual(reconcile({ x: true, y: true }, { x: false, y: false }, { x: { running: true }, y: { running: false } }, undefined).completed, { y: true })
-})
+// ---- report signatures (the separator-forgery negative is retained verbatim
+//      because a signature collision silently skips a real republish) ----
 
 test('runtimeReportSignature: the L1 receipt, onlyIds and listComplete identity discipline', () => {
   const receipt: InstanceRuntimeReport = { sessions: { p: { running: true } }, sessionAuthority: { requestedAt: 1_000, settledAt: 2_000, ok: true, progressStamp: 1, probes: 0, corrections: 0, recent: [] } }
@@ -1243,21 +1234,13 @@ test('round-3 restore: mergeRuntimeFacts overlay keeps the armed union and spars
       s3: { running: false, completed: true },
       s2: { completed: true, pending: 'question' },
     },
-  }, 'an overlay row still receives its armed dot')
+  }, 'an overlay row still receives its correction arm, and the channel official bit passes through')
   assert.deepEqual(mergeRuntimeFacts({ sessions: { a: { running: false } } }, undefined, { a: { runningSubagents: 3 } })?.sessions.a,
     { running: false, runningSubagents: 3 }, 'an absent channel count is filled by the overlay')
   assert.deepEqual(mergeRuntimeFacts(undefined, undefined, { s1: {} })?.sessions.s1, {}, 'an empty overlay row invents nothing')
 })
 
-test('round-3 restore: reconcile composition, replaced receipt variants and report signatures', () => {
-  const left = reconcile({ x: true }, { x: false }, {}, undefined)
-  assert.deepEqual(left.completed, {}, 'a departed session drops its armed dot')
-  assert.equal(left.changed, true)
-  const stepA = reconcile({}, { x: true }, { x: { running: false }, y: { running: false } }, undefined)
-  assert.deepEqual(stepA.completed, { x: true })
-  const stepB = reconcile(stepA.completed, { x: false, y: true }, { x: { running: false }, y: { running: false } }, undefined)
-  assert.deepEqual(stepB.completed, { x: true, y: true }, 'two batched updaters keep both arms')
-  assert.deepEqual(reconcile({ x: true }, { x: false }, { x: { running: false } }, 'x').completed, {}, 'reading the armed session disarms')
+test('round-3 restore: replaced receipt variants and report signatures', () => {
   assert.equal(runtimeReportSignature(undefined), '')
   const a: InstanceRuntimeReport = { current: 's1', sessions: { s1: { running: true }, s2: { completed: true } } }
   assert.equal(runtimeReportSignature(a), runtimeReportSignature({ current: 's1', sessions: { s2: { completed: true }, s1: { running: true } } }), 'insertion order is normalized')

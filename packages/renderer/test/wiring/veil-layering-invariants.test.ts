@@ -191,7 +191,7 @@ test('P3：揭幕信号来自会话面 DOM 事实，窗口锚在本次持有起�
  * 侧栏 current 高亮跟随屏上、退役回落、失败/控制面不可达强制释放持有。
  * 阅读/蓝点武装（notify requireHidden / reconcile 的 readingCurrent / 清 current
  * 蓝点 effect）按同一语义也应当读 paintedView，但那三处位于 runtime-facts handler
- * 与 completedBySource 账本内；本工作流的写权限冻结在它们之外
+ * 与完成修正臂 store 内；本工作流的写权限冻结在它们之外
  * （App.tsx 的 paintedView 声明注释同样写明）。
  */
 test('P4/W3：可见性由 paintedView 驱动，选择与绘制分离', () => {
@@ -250,7 +250,7 @@ test('P4/W3：保留 / 回收 / 计时 / 侧栏高亮 / 退役都跟随 paintedV
   )
   assert.ok(app.includes('}, [paintedView])'), 'hiddenSince 落地 effect 必须以 paintedView 为键')
   assert.ok(
-    app.includes('completedBySource, paintedView, pluginDiagnostics'),
+    app.includes('correctionArms, paintedView, pluginDiagnostics'),
     'deriveServers 的 current 投影必须吃 paintedView（侧栏高亮跟随屏上来源）',
   )
   assert.ok(

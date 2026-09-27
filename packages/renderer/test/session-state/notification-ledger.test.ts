@@ -19,12 +19,13 @@ import {
 
 const APP = readFileSync(fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8')
 const APP_LINES = APP.split('\n')
-// 唯一组装点（emitSessionNotification）已随通知/未读投影簇抽到命名 hook；
-// 决策账本与单组装点锁跨 App + 该 hook 取并集（数量锁仍是"全 frame 恰好一次"）。
-const UNREAD_HOOK = readFileSync(
-  fileURLToPath(new URL('../../src/app-hooks/use-unread-notifications.ts', import.meta.url)), 'utf8')
-const UNREAD_LINES = UNREAD_HOOK.split('\n')
-const FRAME = APP + '\n' + UNREAD_HOOK
+// 唯一组装点（emitSessionNotification）已随通知投影簇抽到命名 hook
+// （use-notifications.ts）；决策账本与单组装点锁跨 App + 该 hook 取并集
+// （数量锁仍是"全 frame 恰好一次"）。
+const NOTIFICATIONS_HOOK = readFileSync(
+  fileURLToPath(new URL('../../src/app-hooks/use-notifications.ts', import.meta.url)), 'utf8')
+const NOTIFICATIONS_LINES = NOTIFICATIONS_HOOK.split('\n')
+const FRAME = APP + '\n' + NOTIFICATIONS_HOOK
 // 徽标推送 effect 簇是命名 hook；锁钉在该 hook（App 内不可渲染测试，
 // hook 的行为由窗口桥面在真机验证）。
 const BADGE_HOOK = readFileSync(
@@ -92,14 +93,14 @@ test('the instruments publish once and stay live views', () => {
 test('the badge hook publishes the dispatched count next to the projection', () => {
   // goal-aware v5 §4：投影输入是**合并后**的 runtime（badgeSuppressionFacts 把
   // goalActive / subagentActivity 从行上归一），发布点仍必须紧邻同一次投影。
-  assert.match(BADGE_HOOK, /const count = projectBadgeCount\(completedBySource, badgeSuppressionFacts\(runtimeFacts\)\)[\s\S]{0,220}?publishBadgeCount\(count\)/)
+  assert.match(BADGE_HOOK, /const count = projectBadgeCount\(correctionArms, badgeSuppressionFacts\(runtimeFacts\)\)[\s\S]{0,220}?publishBadgeCount\(count\)/)
 })
 
 test('every notification decision is recorded — including the no-bridge case', () => {
-  assert.match(UNREAD_HOOK, /if \(bridge === undefined\) \{\s*settle\('retryable', 'no-notification-bridge'\)/)
-  assert.match(UNREAD_HOOK, /decision: outcome === 'shown' \? 'sent' : outcome === 'suppressed' \? 'suppressed' : 'skipped'/)
-  assert.match(UNREAD_HOOK, /error => settle\('retryable', String\(error\)\)/)
-  assert.match(UNREAD_HOOK, /notificationOutboxRef\.current\.settle\(attempt, outcome\)/)
+  assert.match(NOTIFICATIONS_HOOK, /if \(bridge === undefined\) \{\s*settle\('retryable', 'no-notification-bridge'\)/)
+  assert.match(NOTIFICATIONS_HOOK, /decision: outcome === 'shown' \? 'sent' : outcome === 'suppressed' \? 'suppressed' : 'skipped'/)
+  assert.match(NOTIFICATIONS_HOOK, /error => settle\('retryable', String\(error\)\)/)
+  assert.match(NOTIFICATIONS_HOOK, /notificationOutboxRef\.current\.settle\(attempt, outcome\)/)
   assert.match(FRAME, /publishNotificationInstrument\(\)/)
 })
 
@@ -108,7 +109,7 @@ test('the ledger records the MAIN-PROCESS result, and notify is still called exa
   assert.doesNotMatch(FRAME, /notificationLedger\.record\(\{\s*\.\.\.ledgerBase,\s*decision: 'sent' \}\)/)
   // 单组装点锁：去掉注释行后 bridge.notify( 在 App + 投影 hook 的并集里只出现一次。
   // 注释行两种形态都要剔除：行注释 `//` 与块注释体 `*`（文档注释里也会提到这个调用）。
-  const calls = [...APP_LINES, ...UNREAD_LINES].filter(line => {
+  const calls = [...APP_LINES, ...NOTIFICATIONS_LINES].filter(line => {
     const trimmed = line.trimStart()
     return !trimmed.startsWith('//') && !trimmed.startsWith('*') && line.includes('bridge.notify(')
   })

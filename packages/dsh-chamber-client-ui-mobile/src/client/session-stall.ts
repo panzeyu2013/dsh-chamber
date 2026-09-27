@@ -304,8 +304,7 @@ export interface StallSessionFace {
 
 //  Presentation and concrete-Session access are single-sourced in
 //  session-presentation.ts (presentedSessionId + presentedConcreteSession) so the
-//  stall arm and the read-watermark reporter cannot drift into two readings of
-//  the same official face.
+//  stall arm reads the official face through exactly one accessor pair.
 
 /**
  * Build the automatic arm's face from the plugin context, or undefined when

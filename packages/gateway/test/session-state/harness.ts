@@ -97,7 +97,6 @@ export function sessionSurfaceFor(
     store,
     observer: { status: () => observerStatus, hostInfo: () => host } as never,
     enabled: options.enabled ?? true,
-    now: () => 1_000,
     keepaliveMs: options.keepaliveMs ?? 30,
     maxStreams: options.maxStreams,
   })

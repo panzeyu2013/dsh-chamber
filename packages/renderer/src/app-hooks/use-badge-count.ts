@@ -1,7 +1,7 @@
 /**
  * 未读徽标推送的 effect 簇（design 19 §3.7）。
  *
- * 输入只有两个事实源（completedBySource / **合并后** runtimeFacts）与
+ * 输入只有两个事实源（correctionArms 修正臂 / **合并后** runtimeFacts）与
  * LISTENER_READY 重试预算；桥面经 window.dshChamber 读取（页面级单例）。
  * App 只传当前事实与预算常量——**合并投影**（含 facts overlay 与 stale）保证
  * 徽标与侧栏六面（sessionRowState）消费同一份事实。
@@ -17,10 +17,10 @@ import {
 } from '@dsh-chamber/dsh-chamber-client-core'
 
 export interface BadgeCountDeps {
-  /** 完成未读蓝点集（每来源每会话布尔）。 */
-  completedBySource: Record<string, Record<string, boolean>>
+  /** App 的 N-ctx 完成修正臂（行键控，读一行不清另一行）；官方位在 runtimeFacts 行里。 */
+  correctionArms: Record<string, Record<string, boolean>>
   /**
-   * **合并后**的运行时事实（App 的 servers[].runtime：通道报告 ∪ 蓝点 ∪ facts
+   * **合并后**的运行时事实（App 的 servers[].runtime：通道报告 ∪ 修正臂 ∪ facts
    * overlay ∪ stale）。子代理压制、goal 压制与计数归零都读它——与侧栏六面同源，
    * 而不是原始通道报告（无壳来源的 goal 只在 facts overlay 里）。
    */
@@ -187,11 +187,11 @@ export function createBadgePushRetry(options: BadgePushRetryOptions): BadgePushR
 }
 
 export function useBadgeCount(deps: BadgeCountDeps): void {
-  const { completedBySource, runtimeFacts, retryMs, retryLimit } = deps
+  const { correctionArms, runtimeFacts, retryMs, retryLimit } = deps
 
-  // 未读徽标（design 19 §3.7）：completedBySource（完成未读蓝点集）是徽标计数的
-  // 唯一事实源——跨来源求未读会话数（projectBadgeCount，纯函数），推给主进程
-  // 呈现 Dock/任务栏红气泡。计数与蓝点同源同规则（武装/解除同一状态机），两面
+  // 未读徽标（design 19 §3.7）：correctionArms（N-ctx 补臂）∪ 合并行的官方 completed
+  // 是徽标计数的输入——跨来源求未读会话数（projectBadgeCount，纯函数），推给主进程
+  // 呈现 Dock/任务栏红气泡。计数与蓝点同源同规则（官方位 ∨ 修正臂），两面
   // 永不分叉；0 = 清除。子代理压制（06 §4.5 同规）：父回合结束
   // 但后台子代理仍存活（runningSubagents > 0）的会话虽然已武装蓝点，窗口内点
   // 被运行环压制、complete 通知被过滤，徽标同样不计——投影须读最新运行时事实
@@ -209,7 +209,7 @@ export function useBadgeCount(deps: BadgeCountDeps): void {
   // 有界重推当前计数（badgeCountRef 始终最新），预算耗尽 loud 一次。
   const badgeCountRef = useRef(0)
   /**
-   * 上一次真正推给主进程的计数。**只有计数变化才推 IPC**：runtimeFacts/completedBySource
+   * 上一次真正推给主进程的计数。**只有计数变化才推 IPC**：runtimeFacts/correctionArms
    * 换身份（别的来源账本变化、子代理计数归零、goal 压制翻转）会把同一个计数重复推上去——
    * 实测 Swift 包里 4.8 Hz 的冗余 IPC，而 Dock 视觉完全没变。
    * 首个计数（含重载后复位为 0）必须推；被拒后的有界重推链在 badgeRetry.start 内部，
@@ -237,7 +237,7 @@ export function useBadgeCount(deps: BadgeCountDeps): void {
   }
   const badgeRetry = badgeRetryRef.current
   useEffect(() => {
-    const count = projectBadgeCount(completedBySource, badgeSuppressionFacts(runtimeFacts))
+    const count = projectBadgeCount(correctionArms, badgeSuppressionFacts(runtimeFacts))
     badgeCountRef.current = count
     // 把 renderer 派发的计数发布成只读回读值，可在测试中比对
     // 「徽标数 == 蓝点集合大小」，无需 IPC 或读主进程状态。
@@ -246,11 +246,11 @@ export function useBadgeCount(deps: BadgeCountDeps): void {
     // 只有真的派发出去才提交闸：没推出去（桥缺失/版本偏斜）时不提交，下一次 effect 提交
     // 同一计数还会再试（首个计数含重载复位的 0 永不丢）。
     if (badgeRetry.start(count, retryLimit, retryMs)) pushedCountRef.current = count
-  }, [completedBySource, runtimeFacts, badgeRetry, retryLimit, retryMs])
+  }, [correctionArms, runtimeFacts, badgeRetry, retryLimit, retryMs])
 
   // 桥迟到的兜底（同 LISTENER_READY 重试纪律，见通知就绪 handshake）：窗口重载/
-  // 重建后 completedBySource 复位为 {}，必须向主进程推 0 清除遗留徽标——桥经
-  // requestAppInfo 异步暴露，可能晚于首个 [completedBySource, runtimeFacts]
+  // 重建后 correctionArms 复位为 {}，必须向主进程推 0 清除遗留徽标——桥经
+  // requestAppInfo 异步暴露，可能晚于首个 [correctionArms, runtimeFacts]
   // effect 的提交时机（该 effect 在挂载帧即推 0，此时桥大概率未就绪）。有界重试
   // 直至桥出现，推一次当前计数（0）后停止；预算耗尽静默放弃（dev 无桥场景的
   // 正常路径）。

@@ -14,7 +14,7 @@ const ALL: TodoAttentionFilters = { completed: true, ask: true, request: true }
 /** deriveTodoAttention for the 'local' viewing source (filters default to ALL). */
 const run = (
   servers: ChamberServerAggregate[],
-  view: { viewingSessionId?: string; filters?: TodoAttentionFilters; offlineUnread?: boolean } = {},
+  view: { viewingSessionId?: string; filters?: TodoAttentionFilters } = {},
 ) => deriveTodoAttention(servers, { viewingSourceId: 'local', filters: ALL, ...view })
 
 function session(id: string, extra: { title?: string; running?: boolean; updatedAt?: number } = {}) {
@@ -76,7 +76,7 @@ test('completed-but-unread rides the merged dot state (vendor/App union) and its
   assert.equal(entries[0]?.kind, 'completed')
   assert.equal(entries[0]?.sourceId, 'r1')
   assert.equal(entries[0]?.sessionId, 's1')
-  // No merged completed (vendor not armed, no App dot) → no entry.
+  // No merged completed (no official bit, no correction arm) → no entry.
   const idle = server('r1', [workspace('w', [session('s1')])], { sessions: { s1: {} } })
   assert.deepEqual(run([idle]), [])
   // wire running true alone is NOT a suppress: completed outranks the ring
@@ -120,17 +120,6 @@ test('goal-active completed facts are suppressed like the row dot (v5 §4 single
       { filters: { completed: false, ask: true, request: true } }),
     [],
   )
-})
-
-test('goal-active suppression covers the offline-unread (row-absent) branch too', () => {
-  const noRows = server('r1', [], {
-    stale: true,
-    sessions: {
-      gone: { completed: true, goal: { goalId: 'g1', revision: 1, phase: 'active' } },
-      other: { completed: true },
-    },
-  }, { connected: false })
-  assert.deepEqual(run([noRows], { offlineUnread: true }).map(entry => entry.sessionId), ['other'])
 })
 
 test('per-kind filters gate entries independently', () => {
@@ -240,7 +229,7 @@ test('workspace rows without session runtime facts never produce entries (fact =
   assert.deepEqual(entries.map(entry => entry.sessionId), ['withFacts'])
 })
 
-// ---- stale facts of a disconnected source (option A + the offline-unread group) ----
+// ---- stale facts of a disconnected source (option A) ----
 
 test('R14 option A: a disconnected source with rows renders stale-marked facts only', () => {
   const rows = [workspace('w', [session('s1'), session('s2')])]
@@ -268,74 +257,4 @@ test('R14 option A: a disconnected source with rows renders stale-marked facts o
   assert.equal(run([connectedStale])[0]?.stale, true)
   // A connected fresh source keeps the marker absent (today's semantics).
   assert.equal('stale' in (run([server('r1', rows, { sessions: { s1: { completed: true } } })])[0] ?? {}), false)
-})
-
-test('R14 row-absent branch: the offline-unread group is opt-in and uses the sessionId fallback label', () => {
-  const noRows = server('r1', [], {
-    stale: true,
-    sessions: { gone: { completed: true } },
-  }, { connected: false })
-  // Default: row-bound semantics exactly as before (no row ⇒ no entry).
-  assert.deepEqual(run([noRows]), [])
-  const entries = run([noRows], { offlineUnread: true })
-  assert.deepEqual(entries.map(entry => [entry.sessionId, entry.kind, entry.title, entry.displayTitle, entry.stale]), [
-    ['gone', 'completed', '', 'gone', true],
-  ])
-  // The group is UNREAD only: a pending fact on a row-less session is not an
-  // offline-unread item (the criterion is about unread; the pending surface
-  // remains row-bound until its own design says otherwise).
-  const pendingOnly = server('r1', [], {
-    stale: true,
-    sessions: { asksGone: { pending: 'question' } },
-  }, { connected: false })
-  assert.deepEqual(run([pendingOnly], { offlineUnread: true }), [])
-})
-
-test('R14 row-absent branch: row-present ids never duplicate, and a stale subagent count never suppresses', () => {
-  const mixed = server('r1', [workspace('w', [session('s1')])], {
-    stale: true,
-    sessions: {
-      s1: { completed: true },
-      gone: { completed: true },
-      busyGone: { completed: true, runningSubagents: 2 },
-    },
-  }, { connected: false })
-  const entries = run([mixed], { offlineUnread: true })
-  assert.deepEqual(
-    entries.map(entry => entry.sessionId),
-    ['s1', 'busyGone', 'gone'],
-    'row entry once + offline group; a stale subagent count is unknown and must not hide the unread entry',
-  )
-  // P5：残留计数仍然呈现，但带 stale 标签——用户看到的是「可能过期」，不是被静默吞掉。
-  assert.equal(entries.find(entry => entry.sessionId === 'busyGone')?.stale, true)
-  // completed gate off ⇒ both the row entry and the offline group disappear.
-  assert.deepEqual(run([mixed], { offlineUnread: true, filters: { completed: false, ask: true, request: true } }), [])
-  // The option only affects disconnected stale sources; a CONNECTED source with
-  // row-less completed facts keeps today's row-bound behavior.
-  const connected = server('r1', [workspace('w', [session('s1')])], {
-    sessions: { s1: { completed: true }, gone: { completed: true } },
-  })
-  assert.deepEqual(run([connected], { offlineUnread: true }).map(entry => entry.sessionId), ['s1'])
-})
-
-test('R14 row-absent branch: viewing exclusion and waiting-first ordering survive', () => {
-  const localStale = server('local', [], {
-    stale: true,
-    sessions: { cur: { completed: true } },
-  }, { connected: false })
-  assert.deepEqual(run([localStale], { offlineUnread: true, viewingSessionId: 'cur' }), [])
-  assert.deepEqual(
-    run([localStale], { offlineUnread: true, viewingSessionId: 'other' }).map(entry => entry.sessionId),
-    ['cur'],
-  )
-  // Waiting entries stay first; the offline group is appended to the completed
-  // list in sessionId order.
-  const ordered = server('r1', [workspace('w', [session('ask'), session('done')])], {
-    stale: true,
-    sessions: { ask: { pending: 'question' }, done: { completed: true }, goneB: { completed: true }, goneA: { completed: true } },
-  }, { connected: false })
-  assert.deepEqual(
-    run([ordered], { offlineUnread: true }).map(entry => [entry.sessionId, entry.kind]),
-    [['ask', 'question'], ['done', 'completed'], ['goneA', 'completed'], ['goneB', 'completed']],
-  )
 })

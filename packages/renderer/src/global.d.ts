@@ -307,7 +307,7 @@ export interface DesktopSshSurface {
   /** Registry load health (degraded + roster-incomplete gates): a degraded
    *  registry's empty roster must not settle the renderer's authoritative-
    *  roster gate, and an incomplete (row-dropping) load's partial roster must
-   *  not retire its durable unread keys. */
+   *  not retire its durable notification keys. */
   instances_health(): Promise<SshInstancesHealth>
   /** Exact id-addressed main-owned delete; an absent id is an idempotent no-op. */
   delete_connection(id: string): Promise<SshInstanceSpec[]>

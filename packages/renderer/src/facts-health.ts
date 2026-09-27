@@ -20,7 +20,6 @@ import {
 } from '@dsh-chamber/dsh-chamber-client-core/authority-log-store'
 
 const FACTS_HEALTH_KIND = 'facts-health'
-const UNREAD_DERIVE_ERROR_KIND = 'unread-derive-error'
 
 /** 一次采样的判定面事实（全部是可读计数；不含标题、不含 transcript）。 */
 export interface FactsHealthSample {
@@ -33,8 +32,6 @@ export interface FactsHealthSample {
   readonly reconnects: number
   readonly socketErrors: number
   readonly rows: number
-  /** 输入行的最大内容水位（0 = 全部行都没有 host 水位）：未读面「播种不消费」的现场读数。 */
-  readonly maxWatermark: number
   /** 最近一次可信基线的时刻（null = 从未取到过）：区分「从没基线」与「基线变旧」。 */
   readonly lastTrustedBaselineAt: number | null
 }
@@ -52,7 +49,6 @@ function factsHealthSignature(sample: FactsHealthSample): string {
 function factsHealthDetail(sample: FactsHealthSample): string {
   return 'ready=' + (sample.ready ? '1' : '0')
     + ' rows=' + String(sample.rows)
-    + ' maxWatermark=' + String(sample.maxWatermark)
     + ' baselines=' + String(sample.baselines)
     + ' baselineFailures=' + String(sample.baselineFailures)
     + ' resamples=' + String(sample.baselineResamples)
@@ -78,7 +74,7 @@ export interface FactsStepErrorSink {
 }
 
 /**
- * 步骤级 never-throw 包装：**唯一**的未读派生/接线失败面（design 19 §3.7.1 诊断）。
+ * 步骤级 never-throw 包装：投影/接线步骤的唯一失败面（design 19 §3.7 诊断）。
  * 异常 → 事实健康环 + loud 一次（按来源 + 步骤去重：确定性异常每拍都抛，环与 console
  * 都不得被刷屏），返回值 undefined；调用方的控制流不回退（下一步照常执行）。
  */
@@ -98,7 +94,7 @@ export function createFactsStepGuard(
     const key = sourceId + '|' + step
     if (warned.has(key)) return
     warned.add(key)
-    warn('[unread] ' + step + ' 失败（保持上一拍）：', sourceId, message)
+    warn('[facts] ' + step + ' 失败（保持上一拍）：', sourceId, message)
   }
   return {
     guard(sourceId, step, run) {
@@ -139,7 +135,7 @@ export function createFactsHealthRecorder(
       lastError.set(sourceId, text)
       if (storage === undefined) return
       appendAuthorityLog(storage, sourceId, {
-        at: now(), kind: UNREAD_DERIVE_ERROR_KIND, detail: text,
+        at: now(), kind: FACTS_HEALTH_KIND, detail: text,
       })
     },
   }

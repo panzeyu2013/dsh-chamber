@@ -157,8 +157,8 @@ test('projectBadgeCount: an explicit zero runningSubagents row is NOT suppressed
   assert.equal(projectBadgeCount(completed, unknown), 1)
 })
 
-// ---- 合并投影（裁决 14）：vendor-only completed 必须计入，
-// 否则会出现「侧栏蓝点/待办有、Dock 徽标无」的诚实分叉。
+// ---- 合并投影（裁决 14）：官方通道行 completed（无修正臂条目）必须计入，
+// 否则会出现「侧栏蓝点/待办有、Dock 徽标无」的诚实分叉。计数输入 = 修正臂 ∨ 行 completed。
 
 test('projectBadgeCount: a vendor-armed completion counts even with no ledger entry', () => {
   const facts = { local: { sessions: { a: { completed: true } } } }
@@ -167,9 +167,9 @@ test('projectBadgeCount: a vendor-armed completion counts even with no ledger en
 })
 
 test('projectBadgeCount: the union never double-counts one session', () => {
-  const ledger = { local: { a: true } }
+  const correctionArms = { local: { a: true } }
   const facts = { local: { sessions: { a: { completed: true } } } }
-  assert.equal(projectBadgeCount(ledger, facts), 1)
+  assert.equal(projectBadgeCount(correctionArms, facts), 1, '臂 ∨ 行 completed 是并集，不是一个会话两条')
 })
 
 test('projectBadgeCount: vendor-only rows obey the same subagent suppression', () => {
@@ -551,7 +551,7 @@ test('badge count-change gate: same-count effects never re-push and a failed dis
   const effect = hook.slice(hook.indexOf('const count = projectBadgeCount('), hook.indexOf('// 桥迟到的兜底'))
   assert.ok(effect.length > 0, 'the count projection effect must exist')
   const publishAt = effect.indexOf('publishBadgeCount(count)')
-  // ① 闸：与上次真正推出去的计数相同 ⇒ 直接返回（runtimeFacts/completedBySource 换身份 4.8Hz 重推）。
+  // ① 闸：与上次真正推出去的计数相同 ⇒ 直接返回（runtimeFacts/correctionArms 换身份 4.8Hz 重推）。
   const gateAt = effect.indexOf('if (pushedCountRef.current === count) return')
   assert.notEqual(gateAt, -1, 'the count-change gate must exist (same count must not re-push)')
   // ② 提交：只有 start 真的派发（true）才提交；缺桥/版本偏斜（push 返回 undefined ⇒ start false）不提交，

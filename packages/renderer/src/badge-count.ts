@@ -2,9 +2,10 @@
  * 未读徽标计数投影（design 19 §3.7）——pure logic, no React/DOM, zero imports,
  * node:test runnable (see test/aggregate/badge-count.test.ts).
  *
- * The count is a PROJECTION of the App-owned「完成未读」blue-dot set
- * (\`completedBySource\`, App.tsx / 06 §4.1) — never a second state machine:
- * the same running→idle arming and reading-disarm rules that drive the
+ * The count is a PROJECTION of the merged completion set — the vendor's official
+ * completion-unread bit (channel rows, memory-only in the owning ctx) ∪ the
+ * App-owned N-ctx correction arm (\`correctionArms\`, App.tsx / 06 §4.1) — never a
+ * second state machine: the same official arming/clearing rules that drive the
  * in-window dots drive the OS badge, so the two surfaces can never disagree.
  * Semantics mirror OpenChamber's \`dockBadgeCount\` (chats with unseen
  * activity, not the number of notifications): one unit per unseen session,
@@ -44,8 +45,8 @@
  * sessions rows) as the badge consumes it: the suppression dimensions are the
  * subagent activity tri-state (stale-guarded by the caller) plus the
  * precomputed goal gate. The sibling field merged rows carry (\`completed\`) is
- * injected by the App ledger at merge time (the channel never carries it), so
- * the same shape accepts ledger-armed integration rows. Deliberately NOT
+ * the official channel bit plus the App's N-ctx correction arm applied at merge
+ * time, so the same shape accepts merged integration rows. Deliberately NOT
  * imported from the sidebar shared module so this module keeps zero imports and
  * stays runnable anywhere.
  */
@@ -73,11 +74,10 @@ function subagentSuppressesBadge(
 }
 
 /**
- * 跨来源求「完成未读」会话数——输入是 App 的**合并投影**，不是账本本身：
- * 一个会话计入当且仅当 \`completedBySource[source][session] === true\`（chamber 边沿
- * 账本）；这里的 \`row.completed\` 是 \`mergeRuntimeFacts\` 从**同一个账本**注入的
- * （通道从不携带该位），故两个析取恒等价。这与侧栏行尾蓝点/待办区的权威完全一致，
- * 因此不会出现「点/待办有、徽标无」的诚实分叉。
+ * 跨来源求「完成未读」会话数——输入是官方位所在的**合并投影** + App 的 N-ctx 修正臂：
+ * 官方 \`row.completed\` 走通道（\`mergeRuntimeFacts\` 只追加修正臂），\`correctionArms\`
+ * 是隐藏来源 current 行的内存补臂（按行、不扫描）。两个析取 ≡ mergeRuntimeFacts 的
+ * 合并结果，与侧栏行尾蓝点/待办区的权威完全一致，因此不会出现「点/待办有、徽标无」的诚实分叉。
  *
  * 仍排除：①当前事实行归一为在跑的子代理（三值 running；06 §4.5 与窗口内运行环压制、
  * complete 通知抑制同规——子代理干活中的会话不是完成；stale/unknown 已由调用方降级、
@@ -86,17 +86,17 @@ function subagentSuppressesBadge(
  * 自行判空）。
  */
 export function projectBadgeCount(
-  completedBySource: Record<string, Record<string, boolean>> | undefined,
+  correctionArms: Record<string, Record<string, boolean>> | undefined,
   runtimeFacts?: Record<string, BadgeSuppressionFacts | undefined>,
 ): number {
-  if (completedBySource === undefined && runtimeFacts === undefined) return 0
+  if (correctionArms === undefined && runtimeFacts === undefined) return 0
   const sources = new Set<string>([
-    ...Object.keys(completedBySource ?? {}),
+    ...Object.keys(correctionArms ?? {}),
     ...Object.keys(runtimeFacts ?? {}),
   ])
   let count = 0
   for (const sourceId of sources) {
-    const ledger = completedBySource?.[sourceId]
+    const ledger = correctionArms?.[sourceId]
     const facts = runtimeFacts?.[sourceId]
     const sessions = new Set<string>([
       ...Object.keys(ledger ?? {}),

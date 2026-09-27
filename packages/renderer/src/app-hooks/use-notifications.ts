@@ -1,9 +1,10 @@
 /**
- * 通知 / 未读投影簇：App.tsx 的投影回调原样抽出（含步骤 guard 与立即落盘出入口，共 7 个成员）。
- * 规则本体全部在既有纯模块
- * （unread-derivation / unread-store / notification-projection / complete-ledger /
- * notification-ledger）里；本 hook 只做装配：读 refs → 推进读水位 → 派生未读 →
- * 写回 store → 节流落盘。
+ * 通知投影 / 完成点装配簇：App.tsx 的投影回调原样抽出（含步骤 guard 与立即落盘出入口）。
+ * 通知规则本体在既有纯模块（notification-projection / complete-ledger / notification-outbox /
+ * notification-ledger）里；完成未读规则本体在 client-core（completion-arm.ts +
+ * projectRuntimeFacts / mergeRuntimeFacts），官方 sessionStatus.completionUnread 是唯一权威。
+ *
+ * 本 hook 只做装配：读 refs → 步进 N-ctx 修正臂（写内存 store）→ 节流落盘通知三表。
  *
  * 完成通知：生产脊柱是 reconcile（完成观测组装 → applyObservationBatch）；native 投递
  * 只有一个出口——durable outbox（run 身份 key + 稳定 eventKey）：观测先入 journal，
@@ -12,11 +13,7 @@
  * 绝不二次发横幅。
  */
 import { useCallback, useEffect, useMemo, useRef } from 'react'
-import {
-  deriveUnread,
-  reconcileCompletedFacts,
-  type InstanceAggregate,
-} from '@dsh-chamber/dsh-chamber-client-core'
+import { stepCompletionArm, type InstanceAggregate } from '@dsh-chamber/dsh-chamber-client-core'
 import type { CompletedStore } from '../host/completed-store.ts'
 import type { ViewStore } from '../host/view-store.ts'
 import type { FactsStore } from '../host/facts-store.ts'
@@ -36,24 +33,16 @@ import { notificationLedger, publishNotificationInstrument } from '../notificati
 import type { DeliveryOutcome, NotificationOutbox, PendingNotification } from '../notification-outbox.ts'
 import type { NotificationTitleId } from '../notification-projection.ts'
 import { completionWatermark } from '../watermark.ts'
-import { factsDecisionInput, isFactsDecisionUsable, type SessionFactsSnapshot, type SessionFactsSource } from '../session-facts-source.ts'
+import { isFactsDecisionUsable, type SessionFactsSnapshot } from '../session-facts-source.ts'
 import {
-  advanceReadMark,
-  createUnreadSaveCoalescer,
-  maxWatermark,
-  mergeReadMarks,
-  saveUnread,
-  saveUnreadShadow,
-  type UnreadSaveCoalescer,
-  type UnreadStorageLike,
-  type UnreadV4Payload,
-  createUnreadStepGate,
-  type UnreadStepGate,
-} from '../unread-store.ts'
+  createNotificationSaveCoalescer,
+  saveNotifications,
+  type NotificationPayload,
+  type NotificationSaveCoalescer,
+  type NotificationStorageLike,
+} from '../notification-store.ts'
+import { createStepGate, type StepGate } from '../step-gate.ts'
 import { createFactsHealthRecorder, createFactsStepGuard, type FactsHealthRecorder, type FactsStepGuard } from '../facts-health.ts'
-import { recordUnreadShadowReport } from '../unread-instrument.ts'
-import { publishUnreadInstrument, sampleUnreadRows, unreadInstrument } from '../unread-instrument.ts'
-import { deriveSourceUnread, factsBaselineSeed, viewingReadWatermark } from '../unread-derivation.ts'
 
 /**
  * 通知组装请求（唯一组装点 emitSessionNotification 的入参）：watermark 是 host 域内容
@@ -78,7 +67,7 @@ export type SessionNotificationRequest = {
   hostObservedAt?: number
 }
 
-export interface UnreadNotificationsDeps {
+export interface NotificationsDeps {
   /** 通知组装镜像：onRuntimeReport effect（依赖 []）经 ref 读取最新值。 */
   aggregates: Record<string, InstanceAggregate>
   serverLabels: Record<string, string>
@@ -87,12 +76,11 @@ export interface UnreadNotificationsDeps {
   /** 已挂载来源的运行时事实（渲染期镜像）。 */
   liveServerIdsRef: { current: ReadonlySet<string> }
   factsStore: FactsStore
-  sessionFactsSourcesRef: { current: Map<string, SessionFactsSource> }
   sourceLifecyclesRef: { current: SourceOwnershipRegistry | null }
-  /** 每来源每会话的上一份 channel running 位（蓝点机边沿记忆）。 */
+  /** 每来源每会话的上一份 channel running 位（修正臂的边沿记忆）。 */
   prevRunningRef: { current: Record<string, Record<string, boolean>> }
+  /** App 的完成点 store：官方位之外只放修正臂（内存、行键控、不扫描）。 */
   completedStore: CompletedStore
-  readMarksRef: { current: Record<string, Record<string, number>> }
   completeLedgerRef: { current: CompleteLedger }
   /** native 投递 journal（唯一 native 调用层的队列；durable）。 */
   notificationOutboxRef: { current: NotificationOutbox }
@@ -101,24 +89,24 @@ export interface UnreadNotificationsDeps {
   /** 页代 token 与判定（§3.5；identity 与 reconcile 的 boot 都读它）。 */
   bootToken: string
   bootVerdict: 'same' | 'fresh'
-  unreadStorageRef: { current: UnreadStorageLike | undefined }
-  unreadSaveTimerRef: { current: ReturnType<typeof setTimeout> | null }
-  /** 读标记落盘入口：hook 把最新 flushUnread 写进它（App 的 pagehide effect 读）。 */
-  flushUnreadRef: { current: () => void }
-  clientInstallIdRef: { current: string }
+  notificationStorageRef: { current: NotificationStorageLike | undefined }
+  notificationSaveTimerRef: { current: ReturnType<typeof setTimeout> | null }
+  /** 通知落盘入口：hook 把最新 flush 写进它（App 的 pagehide effect 读）。 */
+  flushNotificationsRef: { current: () => void }
 }
 
-export interface UnreadNotifications {
-  schedulePersistUnread: () => void
-  recomputeSourceUnread: (sourceId: string) => void
+export interface NotificationsProjection {
+  schedulePersistNotifications: () => void
+  /** 完成点步进（唯一入口）：官方位在通道行上，这里只推进 N-ctx 修正臂。 */
+  stepCompletionArmFor: (sourceId: string) => void
   emitSessionNotification: (request: SessionNotificationRequest) => boolean
   applySessionFacts: (sourceId: string, snapshot: SessionFactsSnapshot | undefined) => void
   /** reconcile 批次的落盘出口（immediate ⇒ 微任务合并，否则 1s 节流）。 */
   persistCompletionLedger: (immediate: boolean) => void
   /** 关键路径 flush（pagehide / hidden / unmount）：取消待办并同步落最新状态。 */
-  unreadImmediateSave: UnreadSaveCoalescer
+  notificationImmediateSave: NotificationSaveCoalescer
   /** 步骤级 never-throw 包装：桥面 runtime 上报等外部 listener 的失败面（同环 + 同 loud 纪律）。 */
-  guardUnreadStep: FactsStepGuard
+  guardStep: FactsStepGuard
 }
 
 /** outbox 行在运行时携带的瞬时诊断/文案字段（类型面之外，随行 JSON 往返）。 */
@@ -128,13 +116,13 @@ type QueuedNotification = PendingNotification & {
   readonly pendingAge?: number
 }
 
-export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNotifications {
+export function useNotifications(deps: NotificationsDeps): NotificationsProjection {
   const {
     aggregates, serverLabels, viewStore, factsStore, liveServerIdsRef,
-    sessionFactsSourcesRef, sourceLifecyclesRef, prevRunningRef,
-    completedStore, readMarksRef, completeLedgerRef, notificationOutboxRef,
+    sourceLifecyclesRef, prevRunningRef,
+    completedStore, completeLedgerRef, notificationOutboxRef,
     completionObservationRef, bootToken, bootVerdict,
-    unreadStorageRef, unreadSaveTimerRef, flushUnreadRef, clientInstallIdRef,
+    notificationStorageRef, notificationSaveTimerRef, flushNotificationsRef,
   } = deps
 
   // 通知事件组装镜像（设计 19）：onRuntimeReport effect（依赖 []）经 ref 读取最新
@@ -152,13 +140,6 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
    */
   const pendingOutboxClaimsRef = useRef<ReadonlySet<string>>(new Set())
 
-  /**
-   * 首见基线播种标记（每来源**化身**一次，值 = 播种时的化身身份 = owner token 对象）：
-   * 语义、化身判据与被否决的近似全部在 unread-derivation.ts `factsBaselineSeed`（design 19 §3.7.1）；
-   * 本 hook 只负责 refs 与落盘。
-   */
-  const factsBaselineSeedRef = useRef<Record<string, unknown>>({})
-
   /** 事实健康环（本 hook 的记录点：派生异常写它，never-throw；观察者不可判由生命周期 hook 采样）。 */
   const factsHealthRef = useRef<FactsHealthRecorder | null>(null)
   factsHealthRef.current ??= createFactsHealthRecorder()
@@ -168,177 +149,83 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
   const factsStepGuard = factsStepGuardRef.current
 
   /**
-   * 读标记 / 退避账本写盘（≤1 次/秒节流；pagehide/hidden 立即 flush）。内存是权威，
-   * v4 只是缓存，服务端是跨端权威。never-throw。
+   * 通知三表写盘（≤1 次/秒节流；pagehide/hidden 立即 flush）。内存是权威，键只是缓存。
+   * never-throw。修正臂是纯内存，不在这里落盘。
    */
-  const flushUnread = useCallback((): void => {
-    if (unreadSaveTimerRef.current !== null) {
-      clearTimeout(unreadSaveTimerRef.current)
-      unreadSaveTimerRef.current = null
+  const flushNotifications = useCallback((): void => {
+    if (notificationSaveTimerRef.current !== null) {
+      clearTimeout(notificationSaveTimerRef.current)
+      notificationSaveTimerRef.current = null
     }
-    const payload: UnreadV4Payload = {
-      v: 4,
-      read: readMarksRef.current,
-      edge: completedStore.getSnapshot(),
+    const payload: NotificationPayload = {
+      v: 1,
       notifiedRuns: completeLedgerRef.current.notifiedRunTable(),
       pending: completeLedgerRef.current.pendingTable(),
       outcomes: completeLedgerRef.current.outcomesTable(),
     }
-    saveUnread(unreadStorageRef.current, payload)
-    // W3 影子写：同一意图投影成 v5 写另一个键（只写不读；失败绝不影响 v4 权威），
-    // 并记录读回净化后的等价性报告（`__dshChamberUnread.shadow()`）——ok=false 时不得切权威。
-    const shadow = saveUnreadShadow(unreadStorageRef.current, payload)
-    recordUnreadShadowReport({
-      phase: 'write',
-      written: shadow.written,
-      ok: shadow.parity?.ok ?? false,
-      differences: shadow.parity?.differences ?? (shadow.written ? [] : ['shadow-not-written']),
-    })
+    saveNotifications(notificationStorageRef.current, payload)
   }, [])
-  flushUnreadRef.current = flushUnread
+  flushNotificationsRef.current = flushNotifications
   /**
    * immediate 落盘的微任务合并器（OPT P1 热路径）：voided/dropped/flushed 常一波到达，逐次全量
    * prune+stringify（208KB 实测约 6.5ms）会阻塞主线程；同一 tick 的多次 immediate 只落一次盘，
-   * 仍远早于下面 1s 节流。pagehide/hidden/unmount 走 flushUnread 同步关键路径——取消待办 + 立即
+   * 仍远早于下面 1s 节流。pagehide/hidden/unmount 走 flushNotifications 同步关键路径——取消待办 + 立即
    * 落最新状态，不丢也不重复。
    */
-  const unreadImmediateSave = useMemo(
-    () => createUnreadSaveCoalescer(() => flushUnreadRef.current()),
+  const notificationImmediateSave = useMemo(
+    () => createNotificationSaveCoalescer(() => flushNotificationsRef.current()),
     [],
   )
-  const schedulePersistUnread = useCallback((): void => {
-    if (unreadSaveTimerRef.current !== null) return
-    unreadSaveTimerRef.current = setTimeout(() => {
-      unreadSaveTimerRef.current = null
-      flushUnreadRef.current()
+  const schedulePersistNotifications = useCallback((): void => {
+    if (notificationSaveTimerRef.current !== null) return
+    notificationSaveTimerRef.current = setTimeout(() => {
+      notificationSaveTimerRef.current = null
+      flushNotificationsRef.current()
     }, 1_000)
   }, [])
   /** reconcile 批次的落盘出口（immediate ⇒ 微任务合并，否则 1s 节流）。 */
   const persistCompletionLedger = useCallback((immediate: boolean): void => {
-    if (immediate) unreadImmediateSave.request()
-    else schedulePersistUnread()
-  }, [schedulePersistUnread, unreadImmediateSave])
+    if (immediate) notificationImmediateSave.request()
+    else schedulePersistNotifications()
+  }, [schedulePersistNotifications, notificationImmediateSave])
 
   /**
-   * 一个来源的未读派生（唯一出口的实体）：判定规则全部来自 unread-derivation.ts。
-   * 本体只负责 读 refs → 读动作推进 → 派生 → 写回 refs/state → 落盘/ack；异常兜底在
-   * recomputeSourceUnread 的 never-throw 包装里。
+   * 一个来源的完成点步进（唯一出口的实体）：官方位经通道行呈现，本步只补 N-ctx 修正臂
+   * （隐藏来源 mainView 持有的 current 行）。规则本体在 client-core completion-arm.ts；
+   * "谁在阅读" 是 paintedView（屏上），不是桥发布的 activeView（选择）。
    */
-  const deriveSourceUnreadNow = useCallback((sourceId: string): void => {
+  const stepArmNow = useCallback((sourceId: string): void => {
     if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
-    const factsSnapshot = factsStore.getSnapshot().session[sourceId]
-    // 可判 facts = 唯一判据元组（session-facts-source 拥有）：行键与 verified 同源同拍。
-    // 渲染用 isFactsUsable 更宽（含 stale）；判定面必须用这一支（stale 快照的行不得当证据）。
-    const factsDecision = factsDecisionInput(factsSnapshot)
-    const factsRows = factsDecision.rows
     const report = factsStore.getSnapshot().runtime[sourceId]
-    // 唯一「正在阅读」谓词：paintedView（屏上是谁，不是选择）
-    // ∩ 该来源 current ∩ document.hasFocus()。失焦即视为未读。
-    const readingCurrent = viewStore.getSnapshot().painted === sourceId && document.hasFocus()
-      ? report?.current
-      : undefined
-    if (readingCurrent !== undefined && factsRows !== undefined) {
-      const watermark = viewingReadWatermark(factsRows[readingCurrent])
-      if (watermark !== undefined) {
-        const table = readMarksRef.current[sourceId] ?? {}
-        const advanced = advanceReadMark(table[readingCurrent], watermark)
-        if (advanced !== undefined && advanced !== table[readingCurrent]) {
-          readMarksRef.current = { ...readMarksRef.current, [sourceId]: { ...table, [readingCurrent]: advanced } }
-          schedulePersistUnread()
-          sessionFactsSourcesRef.current.get(sourceId)?.ackRead(clientInstallIdRef.current, readingCurrent, advanced)
-        }
-      }
-    }
-    // W0 读数（只读旁路）：播种输入水位与保护集规模——「read 为空」的第一现场。
-    const factsRead = { through: 0, consumed: false, keepUnread: 0 }
-    if (factsRows !== undefined) {
-      factsRead.through = maxWatermark(factsRows)
-      factsRead.keepUnread = Object.keys(completedStore.getSnapshot()[sourceId] ?? {}).length
-      const seed = factsBaselineSeed({
-        factsRows,
-        // 化身身份 = owner token 的**对象身份**（SourceOwnershipRegistry 的唯一权威）；
-        // 无 owner 时回落页代 token（与旧实现的 fallback 同一形状，但判据是身份而非指纹）。
-        incarnation: sourceLifecyclesRef.current?.capture(sourceId) ?? bootToken,
-        seededIncarnation: factsBaselineSeedRef.current[sourceId],
-        readMarks: readMarksRef.current[sourceId] ?? {},
-        keepUnread: completedStore.getSnapshot()[sourceId] ?? {},
-      })
-      if (seed.seeded) {
-        factsRead.consumed = true
-        // 有界化：清理**只在播种那一拍**（seed.seeded）执行，真实上界 = 曾播种来源数，下一次播种拍
-        // 才收敛到当时的 roster（liveServerIdsRef 是既有的挂载输入，不引入第二套身份判据）。
-        for (const id of Object.keys(factsBaselineSeedRef.current)) {
-          if (!liveServerIdsRef.current.has(id)) delete factsBaselineSeedRef.current[id]
-        }
-        factsBaselineSeedRef.current[sourceId] = seed.incarnation
-        readMarksRef.current = { ...readMarksRef.current, [sourceId]: seed.readMarks }
-        schedulePersistUnread()
-      }
-      // W0 判词语义：consumed = **本化身的基线镜像是否已落地**（本拍播种，或此前拍已播种且化身未换）。
-      // 只在「刚播种那一拍」置 true 会把健康稳态误判成 M2：实测（隔离实例 + 真实 renderer）在播种后的
-      // 每一拍都报 m2-seed-not-consumed，而水位与 unread 都已就位。判据下沉到纯模块的 alreadySeeded。
-      factsRead.consumed = seed.seeded || seed.alreadySeeded
-    }
-    const result = deriveSourceUnread({
-      facts: factsRows,
-      channel: report?.sessions,
-      // 只有权威完整列表（listComplete === true 且通道在场）才允许剪枝；缺省/未证明 = 不剪。
-      listComplete: report?.listComplete === true,
-      prevRunning: prevRunningRef.current[sourceId] ?? {},
-      prevLedger: completedStore.getSnapshot()[sourceId] ?? {},
-      readMarks: readMarksRef.current[sourceId] ?? {},
-      readingSessionId: readingCurrent,
-      // 规则 0（判定闸）：快照缺席 = channel-only 照常派生；在场但不可判只冻 facts 的结论
-      // （不结算/剪枝/clobber，通道边沿照常），只有通道也缺席才原样返回 prevLedger。全文见 design 19 §3.7.1。
-      factsVerified: factsDecision.verified,
-    }, { deriveUnread, reconcileCompletedFacts })
-    prevRunningRef.current[sourceId] = result.nextRunning
-    completedStore.setSource(sourceId, result.unread)
-    // W0 仪表（只读；unread-instrument.ts）：每次派生留一条——分支 / 行数 / 最大水位 / 行样本 /
-    // 读表规模 / 播种读数 / 结果计数。使「read 为空」当场可判：M1 = 水位为 0；M2 = 水位可用而写入未发生。
-    publishUnreadInstrument()
-    unreadInstrument.record({
-      at: Date.now(),
-      sourceId,
-      branch: factsRows !== undefined ? 'facts' : report?.sessions !== undefined ? 'channel' : 'freeze',
-      factsVerified: factsDecision.verified,
-      rows: factsRows === undefined ? 0 : Object.keys(factsRows).length,
-      maxWatermark: factsRead.through,
-      sample: sampleUnreadRows(factsRows),
-      readMarks: Object.keys(readMarksRef.current[sourceId] ?? {}).length,
-      seed: factsRead,
-      ...(unreadStepGateRef.current === null ? {} : { gate: unreadStepGateRef.current.stats() }),
-      unread: Object.keys(result.unread).length,
-      running: Object.values(result.nextRunning).filter(Boolean).length,
-      changed: result.changed,
-    })
-    if (!result.changed) return
-    schedulePersistUnread()
-  }, [schedulePersistUnread])
-
-  /**
-   * 一个来源的未读派生（唯一入口）：never-throw —— 派生/接线异常不得打死未读面与账本
-   * （保持上一拍状态），loud 一次并落进事实健康环（createFactsStepGuard）：诊断不破账本链，
-   * 异常也不许静默（静默异常正是「账本 8 小时为空而外面什么都看不到」的成因形状）。
-   */
-  /**
-   * 派生步骤的**重入闸**（W1 M2，见 `createUnreadStepGate`）：派生体末尾写 `completedStore`
-   * （`useSyncExternalStore` 订阅面）。实机证据：该写入触发的 React 同步更新再回调派生 ⇒
-   * 「派生 → 写 store → 同步渲染 → 派生」嵌套环，React 以 #185 中止、被步骤守卫吞掉后**整拍作废**
-   * ⇒ `read`/`edge` 永不落盘（9 天 18 份存储全空 + `unread-derive-error`）。闸把重入请求按 id 去重、
-   * 排到微任务：派生体永不嵌套，非重入路径（桥事件/effect）保持同步执行、行为不变。
-   */
-  const unreadStepGateRef = useRef<UnreadStepGate | null>(null)
-  // 经 ref 转发，闸始终调用最新的派生闭包（useCallback 依赖变化时不持有旧状态）。
-  const deriveGuardedRef = useRef<(sourceId: string) => void>(() => {})
-  deriveGuardedRef.current = (sourceId: string): void => {
-    factsStepGuard.guard(sourceId, 'derive-unread', () => deriveSourceUnreadNow(sourceId))
-  }
-  unreadStepGateRef.current ??= createUnreadStepGate(sourceId => { deriveGuardedRef.current(sourceId) })
-  const recomputeSourceUnread = useCallback((sourceId: string): void => {
-    unreadStepGateRef.current?.request(sourceId)
+    const next = stepCompletionArm(
+      completedStore.getSnapshot()[sourceId] ?? {},
+      prevRunningRef.current[sourceId] ?? {},
+      {
+        current: report?.current,
+        rows: report?.sessions,
+        painted: viewStore.getSnapshot().painted === sourceId,
+        listComplete: report?.listComplete === true,
+        stale: report?.stale === true,
+      },
+    )
+    if (!next.changed) return
+    prevRunningRef.current[sourceId] = next.running
+    completedStore.setSource(sourceId, next.arms)
   }, [])
-
+  /**
+   * 步进的 never-throw 出口：异常落环 + loud 一次（同旧纪律），控制流交给调用方。
+   * 重入闸：本步末尾写 completedStore（useSyncExternalStore 订阅面），写入触发的同步渲染
+   * 若再回调本步即成 React #185 嵌套环；闸按 id 去重、排到微任务（见 step-gate.ts）。
+   */
+  const stepGateRef = useRef<StepGate | null>(null)
+  const stepArmGuardedRef = useRef<(sourceId: string) => void>(() => {})
+  stepArmGuardedRef.current = (sourceId: string): void => {
+    factsStepGuard.guard(sourceId, 'completion-arm', () => stepArmNow(sourceId))
+  }
+  stepGateRef.current ??= createStepGate(sourceId => { stepArmGuardedRef.current(sourceId) })
+  const stepCompletionArmFor = useCallback((sourceId: string): void => {
+    stepGateRef.current?.request(sourceId)
+  }, [])
   const pumpNotificationsRef = useRef<() => void>(() => {})
   const notificationRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => {
@@ -394,7 +281,7 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
           completeLedgerRef.current.markRuntimeSettled(delivered.sourceId, delivered.sessionId, delivered.hostObservedAt)
         } else {
           completeLedgerRef.current.setNotifiedRun(delivered.sourceId, delivered.sessionId, identity)
-          schedulePersistUnread()
+          schedulePersistNotifications()
         }
       }
       notificationLedger.record({
@@ -582,26 +469,17 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
     factsStepGuard.guard(sourceId, 'reconcile-completions', () => reconcileCompletionsNow(sourceId))
   }, [reconcileCompletionsNow, factsStepGuard])
 
-  /** facts 快照到达的**实体**（probe / SSE delta / resync 共用）：先合服务端读水位，再走同一观测组装 + reconcile，最后重算未读。 */
+  /** facts 快照到达的**实体**（probe / SSE delta / resync 共用）：先按可判快照补通知证据，再走同一观测组装 + reconcile，最后推进完成点（修正臂）。 */
   const applySessionFactsNow = useCallback((sourceId: string, snapshot: SessionFactsSnapshot | undefined): void => {
     if (snapshot === undefined) {
       factsStore.dropSession(sourceId)
       // facts 通道消失 = 一次观测（running 权威回落壳行，goal 回落壳行/unknown）；不 emit，
       // 只让收敛器看到最新事实。
       reconcileCompletions(sourceId)
-      recomputeSourceUnread(sourceId)
       return
     }
-    // 同一可判谓词：read 水位合并与完成证据关联都只认可判快照（stale 的 read 是旧读数）。
+    // 完成证据关联只认可判快照（stale 快照不作证据）。
     const usable = isFactsDecisionUsable(snapshot)
-    if (usable && snapshot.read !== null) {
-      const local = readMarksRef.current[sourceId] ?? {}
-      const merged = mergeReadMarks(local, snapshot.read.marks)
-      if (merged !== local) {
-        readMarksRef.current = { ...readMarksRef.current, [sourceId]: merged }
-        schedulePersistUnread()
-      }
-    }
     factsStore.setSession(prev => (prev[sourceId] === snapshot ? prev : { ...prev, [sourceId]: snapshot }))
     if (usable) {
       // 关联锚点：给待发的壳完成补上 facts 证据（内容水位 + 事件序 + host updatedAt），
@@ -635,8 +513,7 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
     // 同一观测组装缝：facts 候选（observed + 播种 + 水位严格前进）与壳行 goal 的结算都在
     // reconcile 里裁决——接线层不再有第二 planner。
     reconcileCompletions(sourceId)
-    recomputeSourceUnread(sourceId)
-  }, [reconcileCompletions, recomputeSourceUnread, schedulePersistUnread])
+  }, [reconcileCompletions, schedulePersistNotifications])
 
   /**
    * facts 快照的**唯一入口**（gateway 订阅 / 无壳观察者 / dropSession 共用）：never-throw ——
@@ -648,7 +525,7 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
   }, [applySessionFactsNow, factsStepGuard])
 
   return {
-    schedulePersistUnread, recomputeSourceUnread, emitSessionNotification, applySessionFacts,
-    persistCompletionLedger, unreadImmediateSave, guardUnreadStep: factsStepGuard,
+    schedulePersistNotifications, stepCompletionArmFor, emitSessionNotification, applySessionFacts,
+    persistCompletionLedger, notificationImmediateSave, guardStep: factsStepGuard,
   }
 }

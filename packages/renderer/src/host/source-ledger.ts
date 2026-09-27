@@ -12,7 +12,6 @@
  * Identity-preserving: a prune that removes nothing keeps the SAME object, so
  * consumers that memoize on identity do not re-render for a no-op.
  */
-import type { SessionFacts } from '../notification-edges.ts'
 import { pruneSourceRecord, pruneSourceSet } from '../source-registry.ts'
 
 export interface RefBox<T> {
@@ -47,13 +46,8 @@ export interface SourceLedger {
    * a degraded commit keeps filtering archived rows. Never authoritative on its
    * own. */
   authoritativeArchiveSet: RefBox<Record<string, readonly string[]>>
-  /** 通知边沿记忆（设计 19）：每来源每会话的上一份事实快照（running→idle /
-   * pending 武装边沿）。与 prevRunning（蓝点机）并存互不耦合。 */
-  prevRuntimeFacts: RefBox<Record<string, Record<string, SessionFacts>>>
   /** 蓝点机（未读边沿）的上一轮 running 投影。随来源生命周期收敛。 */
   prevRunning: RefBox<Record<string, Record<string, boolean>>>
-  /** 首帧从 v2 落盘载入的读水位（sourceId → sessionId → host 域水位）。 */
-  readMarks: RefBox<Record<string, Record<string, number>>>
   /** 通知第二入口的基线播种集：首份 facts 快照只播种水位，不补发通知。 */
   factsSeeded: RefBox<Set<string>>
   /** 行刷新提示的 floor 记账（每来源）。 */
@@ -62,9 +56,9 @@ export interface SourceLedger {
   factsPullInFlight: RefBox<Record<string, number>>
 }
 
-/** Build an empty ledger. The two persisted tables are installed by the App
- * once the unread boot payload is read (assignment, not construction: the
- * ledger exists before the payload does). */
+/** Build an empty ledger. Persisted tables are installed by the App once the
+ * boot payload is read (assignment, not construction: the ledger exists
+ * before the payload does). */
 export function createSourceLedger(): SourceLedger {
   return {
     snapshotAt: { current: {} },
@@ -73,9 +67,7 @@ export function createSourceLedger(): SourceLedger {
     sessionListRefreshAt: { current: {} },
     sessionListRefreshPending: { current: {} },
     authoritativeArchiveSet: { current: {} },
-    prevRuntimeFacts: { current: {} },
     prevRunning: { current: {} },
-    readMarks: { current: {} },
     factsSeeded: { current: new Set() },
     refreshHintAt: { current: {} },
     factsPullInFlight: { current: {} },
@@ -95,9 +87,7 @@ export function pruneSourceLedger(ledger: SourceLedger, live: ReadonlySet<string
     ledger.sessionListRefreshAt,
     ledger.sessionListRefreshPending,
     ledger.authoritativeArchiveSet,
-    ledger.prevRuntimeFacts,
     ledger.prevRunning,
-    ledger.readMarks,
     ledger.refreshHintAt,
     ledger.factsPullInFlight,
   ]

@@ -12,7 +12,6 @@ import { readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   MAX_SESSIONS,
-  READ_MARK_TTL_MS,
   SESSION_STATE_DIR_NAME,
   SESSION_STATE_FILE_NAME,
   createSessionStateStore,
@@ -35,14 +34,12 @@ test('the snapshot is 0600 inside a 0700 directory (posix)', async t => {
   store.dispose()
 })
 
-test('reload preserves the cursor, rows, completion classification and read marks', async t => {
+test('reload preserves the cursor, rows and completion classification', async t => {
   const stateDir = scratch(t)
   const first = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 100 })
   first.applyBaseline([baselineItem('s1', true, 5)], { at: 100 })
   const [edge] = first.applyStatus('s1', false, 110)
   first.settleCompletion(edge!, { at: 110, turnEnd: { kind: 'completed', cause: null, at: 110, seq: 7 }, unreadable: false })
-  first.markRead('install-1', 's1', 110, 120)
-  first.markAllRead('install-1', 500, 121)
   const cursor = first.status().cursor
   await first.flush()
   first.dispose()
@@ -50,13 +47,10 @@ test('reload preserves the cursor, rows, completion classification and read mark
   const second = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 200 })
   assert.equal(second.status().integrity, 'ok')
   assert.equal(second.status().cursor, cursor, 'the cursor must not fall back across a restart')
-  const row = second.snapshotFor(null, 'sse', second.host()).sessions[0]
+  const row = second.snapshotFor('sse', second.host()).sessions[0]
   assert.equal(row.completedAt, 110)
   assert.equal(row.completedAtSource, 'observed')
   assert.equal(row.lastTurnEnd?.seq, 7)
-  const read = second.readStateFor('install-1')
-  assert.equal(read.marks['s1'], 110)
-  assert.equal(read.floor, 500)
 })
 
 test('a stored running row stays a gap candidate across a restart until classified', async t => {
@@ -69,7 +63,7 @@ test('a stored running row stays a gap candidate across a restart until classifi
   const second = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 200 })
   const edges = second.applyBaseline([baselineItem('s1', false, 5)], { at: 200 })
   assert.deepEqual(edges, [{ sessionId: 's1', source: 'reconstructed' }])
-  assert.equal(second.snapshotFor(null, 'sse', second.host()).sessions[0].completedAt, null)
+  assert.equal(second.snapshotFor('sse', second.host()).sessions[0].completedAt, null)
 })
 
 test('a corrupt main falls back to the backup with an explicit recovery state', async t => {
@@ -84,7 +78,7 @@ test('a corrupt main falls back to the backup with an explicit recovery state', 
   const recovered = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 300 })
   assert.equal(recovered.status().integrity, 'recovered')
   assert.match(recovered.status().recoveryDetail ?? '', /backup/)
-  const ids = recovered.snapshotFor(null, 'sse', recovered.host()).sessions.map(row => row.sessionId)
+  const ids = recovered.snapshotFor('sse', recovered.host()).sessions.map(row => row.sessionId)
   assert.equal(ids.includes('durable'), true)
 })
 
@@ -103,7 +97,7 @@ test('double corruption is sticky, loud and never overwritten', async t => {
   assert.equal(corrupt.status().integrity, 'corrupt')
   assert.equal(corrupt.status().loaded, false)
   assert.match(corrupt.status().recoveryDetail ?? '', /broken|unsupported|JSON/i)
-  assert.equal(corrupt.snapshotFor(null, 'sse', corrupt.host()).sessions.length, 0)
+  assert.equal(corrupt.snapshotFor('sse', corrupt.host()).sessions.length, 0)
   corrupt.applyBaseline([baselineItem('s2', false, 5)], { at: 200 })
   await corrupt.flush()
   assert.equal(readFileSync(stateFile(stateDir), 'utf8'), before, 'the damaged evidence must not be overwritten')
@@ -136,15 +130,13 @@ test('unreadable rows are dropped with a loud counter, never silently', async t 
       { sessionId: '' },
       { sessionId: 's1', running: false, updatedAt: 4, present: true, observedAt: 5 },
     ],
-    readMarks: {},
-    readFloor: 0,
-    dropped: { sessions: 0, readClients: 0, readMarks: 0 },
+    dropped: { sessions: 0, goalActivations: 0 },
   }))
   const logger = capturingLogger()
   const store = createSessionStateStore({ stateDir, logger, now: () => 100 })
   assert.equal(store.status().integrity, 'ok', 'a readable main with bad rows is not a corrupt file')
   assert.equal(store.status().dropped.sessions, 1)
-  assert.equal(store.snapshotFor(null, 'sse', store.host()).sessions.length, 1)
+  assert.equal(store.snapshotFor('sse', store.host()).sessions.length, 1)
   assert.equal(logger.lines.some(line => line.includes('dropped 1 unreadable session row')), true)
 })
 
@@ -163,15 +155,13 @@ test('process-local dropped counters restart at 0 on reload (normalization, not 
     mode: 'poll',
     host: { state: 'unknown', serviceable: false, since: 1, lastBaselineAt: null, baselineOk: false },
     sessions: [{ sessionId: 's1', running: false, updatedAt: 4, present: true, observedAt: 5 }],
-    readMarks: {},
-    readFloor: 0,
-    dropped: { sessions: 0, readClients: 0, readMarks: 7, goalActivations: 9 },
+    dropped: { sessions: 0, goalActivations: 9 },
   }))
   const store = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 100 })
   // 单一口径：validateDocument 把进程内累计计数归 0，adoptDocument 不从持久值读
-  // （否则就是一个永不产生非零值的死读分支）。四个键都在，形状不缩水。
-  assert.deepEqual(store.status().dropped, { sessions: 0, readClients: 0, readMarks: 0, goalActivations: 0 })
-  assert.equal(store.snapshotFor(null, 'sse', store.host()).sessions.length, 1)
+  // （否则就是一个永不产生非零值的死读分支）。键都在，形状不缩水。
+  assert.deepEqual(store.status().dropped, { sessions: 0, goalActivations: 0 })
+  assert.equal(store.snapshotFor('sse', store.host()).sessions.length, 1)
 })
 
 test('the row cap evicts the oldest rows and counts the loss', async t => {
@@ -208,7 +198,7 @@ test('a doubly-corrupt store still enforces the row cap on an oversized baseline
   await corrupt.flush()
   assert.equal(corrupt.status().sessions, MAX_SESSIONS)
   assert.equal(corrupt.status().dropped.sessions, 5)
-  assert.equal(corrupt.snapshotFor(null, 'sse', corrupt.host()).sessions.length, MAX_SESSIONS)
+  assert.equal(corrupt.snapshotFor('sse', corrupt.host()).sessions.length, MAX_SESSIONS)
   assert.equal(logger.lines.some(line => line.includes('cap reached')), true, 'the loss is loud')
 
   // 持久化仍被拒绝：损坏证据不被覆盖，flush 也没有偷偷写盘。
@@ -220,20 +210,6 @@ test('a doubly-corrupt store still enforces the row cap on an oversized baseline
   assert.equal(corrupt.status().sessions, MAX_SESSIONS)
   assert.equal(corrupt.status().dropped.sessions, 5)
   corrupt.dispose()
-})
-
-test('read-mark clients expire on TTL and the drop is counted', async t => {
-  const stateDir = scratch(t)
-  const start = 1_000
-  const first = createSessionStateStore({ stateDir, logger: silentLogger, now: () => start })
-  first.applyBaseline([baselineItem('s1', false, 5)], { at: start })
-  first.markRead('install-old', 's1', 500, start)
-  await first.flush()
-  first.dispose()
-
-  const later = createSessionStateStore({ stateDir, logger: silentLogger, now: () => start + READ_MARK_TTL_MS + 1 })
-  assert.deepEqual(later.readStateFor(null).marks, {})
-  assert.equal(later.status().dropped.readClients >= 1, true)
 })
 
 test('the persisted document carries only session ids and state metadata (privacy whitelist)', async t => {
@@ -283,7 +259,7 @@ test('a restart preserves the durable goal fact but clears the process-local act
     goal: { goalId: 'g1', revision: 2, phase: 'active', updatedAt: 5 },
   })], { at: 100 })
   assert.equal(first.applyGoalActivation({ sessionId: 's1', goalId: 'g1', activation: 'armed' }, 101), true)
-  assert.equal(first.snapshotFor(null, 'sse', first.host()).sessions[0].goal?.activation, 'armed')
+  assert.equal(first.snapshotFor('sse', first.host()).sessions[0].goal?.activation, 'armed')
   await first.flush()
   first.dispose()
 
@@ -295,7 +271,7 @@ test('a restart preserves the durable goal fact but clears the process-local act
   // A new store = a new watcher epoch: activation degrades to unknown, the
   // durable phase/watermark survive.
   const second = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 200 })
-  const after = second.snapshotFor(null, 'sse', second.host()).sessions[0]
+  const after = second.snapshotFor('sse', second.host()).sessions[0]
   assert.deepEqual(after.goal, { goalId: 'g1', revision: 2, phase: 'active', updatedAt: 5 })
   assert.equal(after.goal?.activation, undefined)
 })

@@ -247,8 +247,8 @@ test('settleFence cleanup: withdraw / forget / forgetSession / prune drop the re
 
 test('a persisted pending entry round-trips its deferred origin; an invalid value drops only the field', () => {
   // 坏形状经 unknown 注入（与 same-page 卫生用例同法）。deferred 是字段级清洗
-  // （A3-2）：非法值只丢字段，at 成立即保留整条——与 unread-store.sanitizeUnreadPayload
-  // 同口径；整条丢弃会让水位结算位在离线/降级路径静默消失。
+  // （A3-2）：非法值只丢字段，at 成立即保留整条——与 notification-store 的
+  // sanitizeNotificationPayload 同口径；整条丢弃会让水位结算位在离线/降级路径静默消失。
   const pending = {
     src: {
       delayed: { at: 1, watermark: 3, deferred: 'subagent-busy' },
@@ -323,7 +323,7 @@ test('a same-page boot keeps fresh pending and drops stale/malformed entries lou
 
 test('REGRESSION(P2 dead state): the ledger keeps no bootToken copy (single source is boot-token.ts)', () => {
   // bootToken 生产零读：页代 token 的单源是 boot-token.ts（经 App 的
-  // unreadBoot.boot.token 进观测层 identity）。兼容入参仍被接受（App 调用点不在本次
+  // notificationsBoot.boot.token 进观测层 identity）。兼容入参仍被接受（App 调用点不在本次
   // 改动范围），但账本状态面不再保留副本——回退该字段即红。
   const ledger = createCompleteLedger(undefined, { bootToken: 'page-token-1', boot: 'same' })
   assert.equal('bootToken' in ledger.state(), false, '状态面不再保留 bootToken 副本')

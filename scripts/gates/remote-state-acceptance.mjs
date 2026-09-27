@@ -167,7 +167,7 @@ function selfTest(node) {
   // 死引用检测同样必须有负控：合成缺失路径必须被 deadEntries 抓到，
   // 真实存在路径必须放行——否则「loud 校验」可能退化成「一律报死」。
   const deadDetected = deadEntries(['packages/renderer/test/__deleted-for-self-test__.test.ts']).length === 1
-  const liveKept = deadEntries(['packages/renderer/test/session-state/unread-store.test.ts']).length === 0
+  const liveKept = deadEntries(['packages/renderer/test/session-state/session-facts-source.test.ts']).length === 0
   const ok = bad.verdict === 'fail' && bad.exit !== 0 && good.verdict === 'pass' && deadDetected && liveKept
   console.log(ok
     ? `acceptance self-test: ok（合成失败判 fail / exit ${bad.exit}；合成通过判 pass；死引用负控 missing=1/live=0）`

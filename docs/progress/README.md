@@ -42,4 +42,7 @@ docs/progress/
 > 等执行台账与 `todo/main-0.1.5-to-0.1.7-upgrade.md`（0.1.7 升级线，已执行；残余在 `STATUS.md`）已按「已执行计划不留在工作文档」删除；仍开放内容并入 `STATUS.md` 与 `deviations.md`，原文存git历史。
 > 另：`todo/remote-session-state-and-switch.md`（已实施计划）与 `todo/notes/` 六份蓝图（remote-state
 > 实现蓝图的执行记录）按同一纪律删除——契约由 design 17 §10.7/§20、design 06 §4.2、design 19 §3.3/§3.7
-> 与 `packages/*` 源码/测试承接，仍开放的实机/CI 验收项并入 `STATUS.md`「远端完成未读 / 切源体验」条。
+> 与 `packages/*` 源码/测试承接，仍开放的实机/CI 验收项并入 `STATUS.md`「只读会话状态镜像」条。
+> 又：`todo/unread-upstream-alignment.md`（完成未读上游对齐，已执行）与 `todo/notify-unread-badge-remediation.md`
+> （通知/未读/角标整改，未落项随对齐作废）按同一纪律删除——契约回写 design 06 §4/§5/§9、design 19 §3.7、
+> design 17 §10.7，仍开放的实机验收与旧端 404 兼容变化在 `STATUS.md`。
