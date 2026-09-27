@@ -10,7 +10,8 @@
  *      row can arm, and reading one row clears only that row;
  *   3. memory-only signature (no storage, no clock, no watermarks, no facts);
  *   4. no second clearing rule: re-running, reading (source becomes painted with
- *      that row as current), leaving an authoritative list, or retirement;
+ *      that row as current), or leaving an authoritative list (source retirement
+ *      drops the whole per-source table upstream, so this step never sees it);
  *   5. fail-closed: a stale report never arms, an absent report freezes both tables.
  */
 import { test } from 'node:test'
@@ -23,7 +24,6 @@ const BASE: CompletionArmStepInput = {
   painted: false,
   listComplete: true,
   stale: false,
-  retired: false,
 }
 
 function step(
