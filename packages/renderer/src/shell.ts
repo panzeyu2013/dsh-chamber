@@ -208,6 +208,16 @@ export interface ShellState {
    * at ~0ms, probe at 5s), so only the later verdict is shown — both stay on console.error.
    */
   degraded: ShellDegradedFact | null
+  /**
+   * Present on a settled CLEAN boot whose graph fetch was ATTEMPTED: did the source answer its
+   * client plugin graph? `false` = this boot carried no graph (the legitimate non-local
+   * `not-injected` shape — the chamber host packages are not in that profile yet). Such a shell
+   * never armed the live subscriber, so the App re-checks the channel once per ready epoch and
+   * re-boots this instance once if the graph has appeared (graph-return.ts — the per-instance
+   * replacement for the retired window reload). Absent = the fetch was never attempted (safe
+   * mode / module-system failure): no graph decision belongs to this boot.
+   */
+  graphAnswered?: boolean
 }
 
 /** The shape lives in the leaf module boot-gap.ts (shared with chamber-entry producers
@@ -464,6 +474,10 @@ export function bootInstanceShell(
   let graphUnavailable: { kind: GraphGapKind; message: string } | null = null
   /** This boot's host graph ANSWERED (the only arm condition for live sync). */
   let graphAnswered = false
+  /** This boot ATTEMPTED the graph fetch (safe mode / module-system failure never do) — the
+   *  settled `graphAnswered` fact is published only for an attempt, so a non-graph boot is not
+   *  mistaken for a graph-less host. */
+  let graphFetchAttempted = false
   const reportPluginDiagnostic = (sourceId: string, diagnostic: PluginGraphDiagnostic): void => {
     if (!mayPublish()) return
     chamberBridge.reportPluginDiagnostic(sourceId, diagnostic)
@@ -541,7 +555,8 @@ export function bootInstanceShell(
       }
       return Promise.resolve<ExtraModuleRow[]>([])
     }
-    const promise = moduleSystemError === null
+    graphFetchAttempted = moduleSystemError === null
+    const promise = graphFetchAttempted
       ? collectExtraRows(instanceId, basePath, {
         loadModuleBundle,
         awaitBeforeLoad: () => chamberEval ?? Promise.resolve(),
@@ -693,6 +708,7 @@ export function bootInstanceShell(
         degraded: graphUnavailable === null
           ? null
           : { kind: graphUnavailable.kind, message: graphUnavailable.message },
+        ...(graphFetchAttempted ? { graphAnswered } : {}),
       }
       const holder: ShellHolder = {
         entry, activeDispatchCancels: new Set(), serial, onState, onRepublish: options.onRepublish, lastState: settled,

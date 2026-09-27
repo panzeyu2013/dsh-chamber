@@ -145,6 +145,25 @@ test('bootInstanceShell: a clean run settles booted with no error and keeps the 
   }
 })
 
+test('bootInstanceShell: a clean boot without a graph settles graphAnswered:false (the App graph-return fact)', async (t) => {
+  // 404 = the legitimate non-local no-graph shape (no chamber host packages). The shell must
+  // NOT degrade for it, and it must publish the fact the App's graph-return policy reads:
+  // such a boot never armed the live subscriber, so a later graph answer needs a re-mount.
+  shellTestScope(t, { graph: 'not-injected', timers: false })
+  const state = await bootInstanceShell('ssh-graphless-1', '/api/i/ssh-graphless-1', {} as HTMLElement, () => {})
+  assert.equal(state.booted, true)
+  assert.equal(state.error, null)
+  assert.equal(state.degraded, null, 'a non-local 404 is not a degrade')
+  assert.equal(state.graphAnswered, false)
+})
+
+test('bootInstanceShell: an answered graph settles graphAnswered:true (never re-checked)', async (t) => {
+  shellTestScope(t, { graph: 'ready', timers: false })
+  const state = await bootInstanceShell('ssh-graphed-1', '/api/i/ssh-graphed-1', {} as HTMLElement, () => {})
+  assert.equal(state.booted, true)
+  assert.equal(state.graphAnswered, true)
+})
+
 test('bootInstanceShell: the serving gate is threaded into the host-graph fetch (rows after a wait)', async (t) => {
   // The App injects `waitForServing`; the boot must pass it to collectExtraRows
   // so a source that is still starting (503) is waited for instead of costing

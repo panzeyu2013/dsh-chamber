@@ -3,7 +3,7 @@
   "files": [
     {
       "path": "packages/renderer/src/App.tsx",
-      "lines": 2407,
+      "lines": 2380,
       "target": 400,
       "note": "renderer container (function-of-state mixes; stores/budgets/servers/ledger extracted)"
     },

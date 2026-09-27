@@ -92,6 +92,17 @@ export function stubReadyGraph(onFetch?: (url: string) => void): () => void {
   return () => { globalThis.fetch = original }
 }
 
+/** Host graph endpoint answered 404: the legitimate no-graph shape (no chamber host packages). */
+export function stubNotInjectedGraph(onFetch?: (url: string) => void): () => void {
+  const original = globalThis.fetch
+  globalThis.fetch = (async (input) => {
+    onFetch?.(String(input))
+    return new Response(JSON.stringify({ error: 'no such method: clientGraph/graph' }),
+      { status: 404, headers: { 'content-type': 'application/json' } })
+  }) as typeof fetch
+  return () => { globalThis.fetch = original }
+}
+
 /** Mirror the browser's `window === globalThis` relationship for renderer code. */
 export function stubWindow(): () => void {
   const g = globalThis as Record<string, unknown>
@@ -123,8 +134,9 @@ export function hostileThrownValue(): unknown {
 // ── Per-test scope ─────────────────────────────────────────────────────────
 
 export interface ShellTestScopeOptions {
-  /** Graph stub: 'ready' (default), 'unavailable' (pre-ready 503), 'none' (caller installs fetch). */
-  graph?: 'ready' | 'unavailable' | 'none'
+  /** Graph stub: 'ready' (default), 'unavailable' (pre-ready 503), 'not-injected' (404 no
+   *  chamber host packages), 'none' (caller installs fetch). */
+  graph?: 'ready' | 'unavailable' | 'not-injected' | 'none'
   /** Records a graph fetch; called by the graph stub with the fetched url. */
   onFetch?: (url: string) => void
   /** Enable fake setTimeout+Date timers (default true). */
@@ -155,6 +167,7 @@ export function shellTestScope(
   const { graph = 'ready', onFetch, timers = true, silentConsole = true } = options
   const restoreFetch = graph === 'unavailable' ? stubUnavailableGraph(() => onFetch?.(''))
     : graph === 'ready' ? stubReadyGraph(url => onFetch?.(url))
+    : graph === 'not-injected' ? stubNotInjectedGraph(url => onFetch?.(url))
     : (): void => {}
   const restoreWindow = stubWindow()
   const originalConsoleError = console.error

@@ -149,6 +149,7 @@ import { decideServingGate, servingGatePhase, shouldDeferBootForSource } from '.
 import { harvestSatisfied } from './baseline-harvest.ts'
 import InstanceView from './components/InstanceView.tsx'
 import { useAggregateRefresh } from './app-hooks/use-aggregate-refresh.ts'
+import { useShellRetry } from './app-hooks/use-shell-retry.ts'
 import { useBadgeCount } from './app-hooks/use-badge-count.ts'
 import {
   durableUnreadPruneAllowed, healthProbeUnavailableDiagnostic, rosterIncompleteDiagnostic,
@@ -441,7 +442,8 @@ export default function App() {
   const [shellStates, setShellStates] = useState<Record<string, ShellState>>({})
   /**
    * 来源就绪门 + 降级自愈：① 实例仍启动时让取图等它就绪（冷启动/重启跨越窗口不丢整套 profile 客户端
-   * 插件）；② boot 以降级收尾而来源随后 ready 时自动重挂一次，每个 ready 世代一次。相位从 servers 的
+   * 插件）；② boot 以降级收尾而来源随后 ready 时自动重挂一次，每个 ready 世代一次；③ 干净 boot 但没取到
+   * 图的壳在宿主后来才有图时重检 + 重挂一次（图回归，graph-return.ts）。相位从 servers 的
    * 渲染期镜像读取，门带绝对上限，来源被移除即放弃。
    */
   const serversPhaseRef = useRef<Record<string, string | undefined>>({})
@@ -713,39 +715,10 @@ export default function App() {
   const deferredBootRef = useRef<ReadonlySet<string>>(new Set<string>())
   deferredBootRef.current = deferredBootIds
 
-  useEffect(() => {
-    // Feed the facts into the container BEFORE planning, so the self-heal mark has one owner. The
-    // dispatch is idempotent (`bootSettled` spreads previous state; `phaseChanged` away from ready
-    // drops the mark) and `isRetryableBootGap` stays the reducer's single retryability source.
-    for (const server of servers) dispatchLifecycle(server.id, { kind: 'phaseChanged', phase: server.phase })
-    for (const [instanceId, state] of Object.entries(shellStates)) {
-      if (state.degraded === null) continue
-      dispatchLifecycle(instanceId, {
-        kind: 'bootSettled',
-        outcome: 'degraded',
-        gapKind: state.degraded.kind,
-      })
-    }
-    // The re-boot list comes from the container's typed effect: "who decided" and "who remembers"
-    // are one place, and the carry-forward is reproduced by dispatching the same facts every pass.
-    const retry: string[] = []
-    for (const [instanceId, state] of Object.entries(shellStates)) {
-      if (state.degraded === null) continue
-      const effect = dispatchLifecycle(instanceId, {
-        kind: 'bootSettled',
-        outcome: 'degraded',
-        gapKind: state.degraded.kind,
-      })
-      if (effect?.e === 'degradedSelfHeal') retry.push(instanceId)
-    }
-    if (retry.length === 0) return
-    console.warn(`[app] degraded shell(s) re-booting after the source became ready: ${retry.join(', ')}`)
-    setRetryTokens(prev => {
-      const next = { ...prev }
-      for (const instanceId of retry) next[instanceId] = (next[instanceId] ?? 0) + 1
-      return next
-    })
-  }, [servers, shellStates])
+  // 两条「来源 ready 后重挂该实例」的政策（降级自愈 + 图回归）在 use-shell-retry.ts：容器仍是
+  // 降级自愈的唯一判定者，本处只传状态容器与 App 唯一的重挂 sink（retryTokens）。
+  useShellRetry({ servers, shellStates, pluginDiagnostics, dispatchLifecycle, setRetryTokens })
+
 
   // 托管 dsh 探针 effect（15s/仅前台/单飞+超时/退役收敛）见
   // host/use-managed-runtime.ts；probeManagedRuntimeRef 由该 hook 返回。

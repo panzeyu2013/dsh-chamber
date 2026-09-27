@@ -41,7 +41,8 @@ test('readSafeModeFlag：从注入作用域读取，缺省作用域为普通模�
 test('shell.ts 接线：安全模式在 collectExtraRows 之前短路成空 extra rows', () => {
   const start = shellSource.indexOf('const startExtraRows = (): Promise<ExtraModuleRow[]> => {')
   assert.ok(start > 0, 'startExtraRows 必须存在')
-  const end = shellSource.indexOf('const promise = moduleSystemError === null', start)
+  // Anchor = the graph-request decision line (`graphFetchAttempted`; the ternary body follows it).
+  const end = shellSource.indexOf('const promise = graphFetchAttempted', start)
   assert.ok(end > start, '必须在 host-graph 请求之前插入安全模式门')
   const body = shellSource.slice(start, end)
   const gate = body.indexOf('if (safeMode) {')

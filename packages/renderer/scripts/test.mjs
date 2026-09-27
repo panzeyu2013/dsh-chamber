@@ -73,6 +73,8 @@ export const GROUPS = {
     // The self-heal decision's truth table, expressed against the container
     // (the planner keeps its own copy).
     'test/lifecycle/degraded-retry-decision.test.ts',
+    // 图回归政策（退役窗口重载的每实例替代）的真值表 + App 接线锁。
+    'test/lifecycle/graph-return.test.ts',
     // facts 行刷新提示的四拒 + 1s floor。
     'test/lifecycle/source-refresh-hint.test.ts',
     // P3 会话面绘制信号（[data-phase] 揭示门）的纯决策契约。
