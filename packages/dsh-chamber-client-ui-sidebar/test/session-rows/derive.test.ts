@@ -1270,6 +1270,19 @@ test('round-3 restore: replaced receipt variants and report signatures', () => {
     runtimeReportSignature({ sessions: { s1: { running: false, factAt: 0 } } }),
     '0/absent both mean "no observer fact" — no churn invented',
   )
+  // I-3 修正 provenance：像 running 一样只签身份路径。身份路径漏签会让 App 的去重
+  // （factsStore.setRuntime 用同一签名）吞掉「只有 corrected 变化」的上报，已提交的
+  // store 行永远拿不到修正标记；投影路径签它则会让一个侧栏不渲染的位单独触发重发布。
+  assert.notEqual(
+    runtimeReportSignature({ sessions: { s1: { running: false } } }),
+    runtimeReportSignature({ sessions: { s1: { running: false, corrected: true } } }),
+    'a corrected-only change must republish on the identity path',
+  )
+  assert.equal(
+    runtimeReportSignature({ sessions: { s1: { running: false } } }, undefined, false),
+    runtimeReportSignature({ sessions: { s1: { running: false, corrected: true } } }, undefined, false),
+    'the projection path drops the correction provenance bit',
+  )
 })
 
 test('F6 regression: report.stale is signed on BOTH paths so a stale-only flip is never deduped away', () => {

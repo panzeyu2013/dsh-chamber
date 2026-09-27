@@ -167,6 +167,7 @@ export const EXPORTS_ALLOWLIST = Object.freeze({
     './purged-tracker',
     './runtime-management',
     './search-state',
+    './session-correction-marks',
     './session-create-ledger',
     './session-fact-reconcile',
     './session-mutations',

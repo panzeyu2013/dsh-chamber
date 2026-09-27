@@ -272,6 +272,22 @@ prev 位不在观测里（F26 已删 `prevRunning`/`prevGoalPhase`），由观�
 完成证据只有运行位 true→false 边沿与 facts 水位）承担。running 权威：同代
 **新鲜壳行**优先；否则非 stale 且 serviceable 的 facts 行；否则 unknown（不作废、
 不产生候选）。
+**修正 provenance（I3）**：壳行的 `corrected`（侧栏把权威证伪写回官方 store 的标记，随运行时
+事实通道到观测层）为真时，该行 true→false **不是**宿主完成边沿——只有 facts 行携带 host 域 observed
+的 `completedAt` 才允许产 `shell-edge` 候选，否则关闭该候选；蓝点仍由修正臂（`completed-store`）
+武装，UX 不变，其余行不带该字段 ⇒ fail-open。标记生命周期（写回前落下 / 写回或自校验失败撤回 / 租约
+到期弃标 / 行消失弃标）在纯包 `session-correction-marks.ts` 单测，防止「写回没落地却把更晚一次真
+完成认成修正」的反向误判。**已登记边界**：证据判据是「facts 行存在且 observed」，不比较新鲜度——
+一行在上个回合完成、随后本地停止（facts 该行仍在但过期）时修正边沿仍会产通知（fail-open 侧的错误，
+不是漏报）；收紧需以 `factsWatermark` 严格新于本行证据，属上游退役该修正臂后的收敛面。退役触发见
+`scripts/upstream/capabilities.json` 的 `session-controller/handleSessionStatus` 与
+`sessionStatus.completionUnread` 两条 `retireWhen`。
+
+  - **Rejected alternatives（修正 provenance）**：① 不记 provenance、让修正边沿照发——把侧栏自己的权威
+    写回当成宿主完成，产出假完成通知（本次要修的正是它）；② 不做标记，改在观测层比较 store 前后值或
+    `factAt` 新鲜度——无法区分「宿主完成」与「本地证伪」（两者都是 true→false），且收紧新鲜度需
+    `factsWatermark`，属上游退役该修正臂后的收敛面；③ 把标记塞进 chamberBridge 全局通道——两个
+    god-file 预算零余量，且它是页内观测 provenance、不是跨包事实，随既有运行时事实报告即可到达观测层。
 **stale 壳批（C4-X3）**：壳通道标记 `stale` 时，该批的整体观测在**候选生成层**关闭
 complete 与 ask/request 边沿（stale = 断连来源仍附加的只读事实，不得作运行证据，
 running 权威也随之降为 unknown）；行记忆照常推进，故 `stale` true→false 的同一行

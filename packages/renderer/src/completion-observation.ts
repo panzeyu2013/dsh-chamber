@@ -66,6 +66,8 @@ export interface ShellObservationRow {
   runningSubagents?: number
   subagentActivity?: ShellObservationActivity
   goal?: GoalFact | null
+  /** I3 修正 provenance：本行 running 刚被侧栏权威写回压假（非宿主完成）。 */
+  corrected?: boolean
 }
 
 /** facts 行（session-facts-source.SessionFactsRow 的判定输入子集）。 */
@@ -452,7 +454,12 @@ export function observeSource(input: {
       // 「CONTROL: the official completed bit on a shell row is never notification evidence」
       // 钉住（结构锁 = ShellObservationRow 刻意不声明该位）。
       const runningEdge = memory.shellRunning === 'running' && shellRunning === 'idle'
-      if (runningEdge) candidates.push({ evidence: 'shell-edge' })
+      // I3：修正 provenance。侧栏把权威证伪写回官方 store 造成的 true→false 不是宿主
+      // 完成边沿；无独立 host 证据（facts 域 observed 的 completedAt）时不得产候选。
+      // 蓝点仍由修正臂（completed-store）武装，UX 不变；旧壳无标记 ⇒ fail-open。
+      const correctedWithoutHostEvidence = shellRow.corrected === true
+        && (factsChannelRow === undefined || factsCompletionOf(factsChannelRow) === undefined)
+      if (runningEdge && !correctedWithoutHostEvidence) candidates.push({ evidence: 'shell-edge' })
     }
     if (shellEdgeEligible && shellRow !== undefined && shellRow.pending !== undefined && memory.shellPending !== shellRow.pending) {
       candidates.push({

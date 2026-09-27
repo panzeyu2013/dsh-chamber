@@ -26,6 +26,7 @@
     "./prewarm-intent": "./src/prewarm-intent.ts",
     "./purged-tracker": "./src/purged-tracker.ts",
     "./search-state": "./src/search-state.ts",
+    "./session-correction-marks": "./src/session-correction-marks.ts",
     "./session-create-ledger": "./src/session-create-ledger.ts",
     "./session-fact-reconcile": "./src/session-fact-reconcile.ts",
     "./session-mutations": "./src/session-mutations.ts",

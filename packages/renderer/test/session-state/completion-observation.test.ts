@@ -192,6 +192,42 @@ test('CONTROL: the official completed bit on a shell row is never notification e
   assert.deepEqual(stopped.observations[0].candidate, { evidence: 'shell-edge' }, '边沿形状仍由运行位决定')
 })
 
+test('CONTROL(I3): a corrected shell idle edge produces no notification without host completion evidence', () => {
+  // 修正 provenance：侧栏 tier-3 权威写回把 running 压成 false，不是宿主完成边沿。
+  // 无独立 host 证据时不产候选（蓝点走修正臂，不在本层）；有 host 域 observed 完成
+  // 时刻仍照发；observer 域不算 host 证据；无标记的旧壳 fail-open。
+  const shellSeededState = (): ReturnType<typeof observeSource>['state'] => observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: true } } },
+  }).state
+
+  const corrected = observeSource({
+    state: shellSeededState(), sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, corrected: true } } },
+  })
+  assert.equal(corrected.observations[0].candidate, undefined, '修正不是完成')
+
+  const plain = observeSource({
+    state: shellSeededState(), sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false } } },
+  })
+  assert.deepEqual(plain.observations[0].candidate, { evidence: 'shell-edge' }, '无标记 = fail-open')
+
+  const withHostEvidence = observeSource({
+    state: shellSeededState(), sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, corrected: true } } },
+    facts: { usable: false, rows: { s1: factsRow({ completedAt: 3000, completedAtSource: 'observed', completedAtDomain: 'host', updatedAt: 3000 }) } },
+  })
+  assert.deepEqual(withHostEvidence.observations[0].candidate, { evidence: 'shell-edge' }, 'host 域完成证据在场 ⇒ 真实完成照发')
+
+  const observerOnly = observeSource({
+    state: shellSeededState(), sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, corrected: true } } },
+    facts: { usable: false, rows: { s1: factsRow({ completedAt: 3000, completedAtSource: 'observed', completedAtDomain: 'observer', updatedAt: 3000 }) } },
+  })
+  assert.equal(observerOnly.observations[0].candidate, undefined, 'observer 域时刻不是 host 证据')
+})
+
 test('observeSource: an empty first report still establishes the baseline; a shell row first seen idle never fabricates a completion', () => {
   const first = observeSource({
     sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,

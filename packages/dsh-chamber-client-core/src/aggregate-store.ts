@@ -398,6 +398,8 @@ export interface InstanceRuntimeReport {
      * it); a fresh run mints a new one.
      */
     runId?: string
+    /** I3 修正 provenance：running=false 来自侧栏 tier-3 写回而非宿主完成边沿（无 host 域 observed `completedAt` 时不产通知候选；蓝点仍由修正臂武装；缺席 = 未修正，fail-open）。 */
+    corrected?: boolean
     /** Host-domain `updatedAt` of this row (read ordering anchor for the App's runtime-completion adoption; never a read watermark). */
     updatedAt?: number
     /** Running subagent descendants (vendor runningSubagentCount semantics); absent = 0. */
