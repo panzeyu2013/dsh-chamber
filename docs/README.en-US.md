@@ -95,6 +95,7 @@ In Settings → Connections, pick a target (`dsh` / `gateway`) and a transport (
 - Can I use an SSH password on Windows? — No (askpass needs a PE executable). Use a key or ssh-agent (Pageant); the save gate refuses passwords and guides you.
 - dsh runtime version management on Windows? — in progress (design 23): read-only projection by default; dev validation uses `DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1`; the official unlock waits for real-Windows records.
 - Why does Windows show a SmartScreen warning? — the installer is not Authenticode-signed yet (known tradeoff, design 23 F6); sha512 only proves download integrity. From this repository's Releases, choose "More info → Run anyway".
+- macOS shows the screen-recording prompt but dsh-chamber never appears in Settings (or the switch is on yet capture still fails)? — In System Settings → Privacy & Security → Screen & System Audio Recording, select any old dsh-chamber entry, remove it with "−", then re-add `/Applications/dsh-chamber.app` with "+", turn it on, and finally quit (⌘Q) and reopen dsh-chamber (machines upgraded from an older build or a different bundle id must do this remove-then-re-add once; `tccutil reset` can only clear records, never create one).
 
 ## Documentation
 

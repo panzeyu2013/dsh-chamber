@@ -95,6 +95,7 @@ bash install-gateway.sh
 - Windows上SSH连接能用密码吗？ — 不能（askpass需要PE可执行）。请用密钥或ssh-agent（Pageant）——保存连接时拒绝密码并有引导提示。
 - Windows上dsh运行时版本管理？ — 推进中（design 23）：默认只读投影；开发验证经 `DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1` 开启，正式解锁以真实Windows验证记录为准。
 - Windows版为什么有SmartScreen提示？ — 安装包尚未Authenticode签名（已知取舍，design 23 F6）；sha512校验只证明下载完整性。从本仓库Release下载时选「更多信息 → 仍要运行」即可。
+- macOS上弹了录屏权限框、设置里却找不到dsh-chamber（或开关已开仍无法截图）？ — 打开「系统设置 → 隐私与安全性 → 录屏与系统录音」：列表里若有旧条目，先选中并用左下「−」删除，再用「+」把 `/Applications/dsh-chamber.app` 重新加入并打开开关，最后 **⌘Q 完全退出并重开 dsh-chamber**（升级自旧版或换过 bundle id 的机器必须「删除旧条目 → 重新加入」一次；`tccutil reset` 只能清记录，建记录只能靠这一步）。
 
 ## 文档
 
