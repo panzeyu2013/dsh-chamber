@@ -8,6 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts';
 import { MANAGED_RESTART_REFUSAL_KEYS, runManagedRestart } from '../../src/client/restart-action.ts';
 import { en, zh } from '../../src/locales.ts';
 import type { RuntimeRefusalKey } from '../../src/client/managed-restart.ts';
@@ -96,19 +97,24 @@ test('runManagedRestart: a 202 whose readiness poll settles is served (the seam 
 })
 
 test('runManagedRestart: a 202 that never becomes ready is accepted-timeout, not served', async () => {
+  let calls = 0
   const outcome = await runManagedRestart('gateway-x', tZh, {
-    fetchImpl: async (_input, init) => init?.method === 'POST'
-      ? new Response(null, { status: 202 })
-      : jsonResponse(200, { connectionState: 'connecting' }),
+    fetchImpl: async (_input, init) => {
+      calls += 1
+      return init?.method === 'POST'
+        ? new Response(null, { status: 202 })
+        : jsonResponse(200, { connectionState: 'connecting' })
+    },
     pollIntervalMs: 0,
     timeoutMs: 10,
   })
   assert.deepEqual(outcome, { kind: 'accepted-timeout' })
+  assert.ok(calls >= 2, 'the readiness poll must ride the injected fetch (without it this returns slowly and green)')
 })
 
 test('ConnectionsSection keeps both 202 legs wired (poll → honest note)', () => {
-  const src = readFileSync(new URL('../../src/client/ConnectionsSection.tsx', import.meta.url), 'utf8')
-  assert.match(src, /pollGatewayReady\(id, \{ action: 'start' \}\)/,
+  const src = stripComments(readFileSync(new URL('../../src/client/ConnectionsSection.tsx', import.meta.url), 'utf8'))
+  assert.match(src, /await pollGatewayReady\(id, \{ action: 'start' \}\)/,
     'the start leg readiness poll is gone: a bare 202 would read as success')
   assert.match(src, /outcome\.kind === 'served'/,
     'the restart served→ok note mapping is gone')
@@ -116,4 +122,16 @@ test('ConnectionsSection keeps both 202 legs wired (poll → honest note)', () =
     'the restart accepted-timeout note mapping is gone')
   assert.match(src, /cls\.kind === 'accepted-timeout'/,
     'the start accepted-timeout note mapping is gone')
+})
+
+test('runManagedRestart: the readiness poll follows the restart table, not the start table', async () => {
+  // This payload is where the two tables disagree: restart:'failed' is a failure for a restart,
+  // while a start would read `start` (undefined) and resolve on connectionState 'ready' — so a
+  // mis-wired action would turn this honest failure into a false 'served'.
+  const outcome = await runManagedRestart('gateway-x', tZh, {
+    fetchImpl: async (_input, init) => init?.method === 'POST'
+      ? new Response(null, { status: 202 })
+      : jsonResponse(200, { connectionState: 'ready', restart: 'failed', operationError: 'spawn denied' }),
+  })
+  assert.deepEqual(outcome, { kind: 'failed', detail: 'restart failed: spawn denied' })
 })

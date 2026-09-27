@@ -264,7 +264,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
 
   /** One-click restart: the chamber host packages are seeded and the insert is in place, but
    *  the RUNNING instance has not loaded them — restarting makes them live (a new/removed CLIENT half
-   *  arrives live via §3.7; a rebuilt rev change needs a manual page reload). Re-probes after. */
+   *  arrives live via design 09 §3.7; a rebuilt rev change needs a manual page reload). Re-probes after. */
   const doRestartNow = useCallback(async (): Promise<void> => {
     if (!isSsh || sshSpec === null || restartBusy || seedBusy) return
     setRestartBusy(true)

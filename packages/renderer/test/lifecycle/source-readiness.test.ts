@@ -8,6 +8,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 import {
   SERVING_TERMINAL_GRACE_MS,
   decideServingGate,
@@ -150,10 +151,18 @@ test('terminal-phase vocabulary lockstep: renderer / client-core / sidebar name 
     assert.ok(m, 'the vocabulary site moved — re-derive this lockstep: ' + String(re))
     return [...m[1]!.matchAll(/'([^']+)'/g)].map(x => x[1]!).sort()
   }
-  const here = readFileSync(new URL('../../src/source-readiness.ts', import.meta.url), 'utf8')
-  const core = readFileSync(new URL('../../../dsh-chamber-client-core/src/managed-runtime.ts', import.meta.url), 'utf8')
-  const sidebar = readFileSync(new URL('../../../dsh-chamber-client-ui-sidebar/src/client/server-section-model.ts', import.meta.url), 'utf8')
-  const rendererList = rendered(here, /isTerminalUnreadyPhase[\s\S]*?return ((?:phase === '[^']+'(?: \|\| )?)+)/)
+  /** The body of one top-level function: the regexes below must not be satisfied by a later function. */
+  const body = (source: string, header: string): string => {
+    const start = source.indexOf(header)
+    assert.notEqual(start, -1, 'the vocabulary site moved — re-derive this lockstep: ' + header)
+    const end = source.indexOf('\n}', start)
+    assert.notEqual(end, -1, 'the vocabulary function no longer ends at a top-level brace: ' + header)
+    return source.slice(start, end + 2)
+  }
+  const here = stripComments(readFileSync(new URL('../../src/source-readiness.ts', import.meta.url), 'utf8'))
+  const core = stripComments(readFileSync(new URL('../../../dsh-chamber-client-core/src/managed-runtime.ts', import.meta.url), 'utf8'))
+  const sidebar = stripComments(readFileSync(new URL('../../../dsh-chamber-client-ui-sidebar/src/client/server-section-model.ts', import.meta.url), 'utf8'))
+  const rendererList = rendered(body(here, 'export function isTerminalUnreadyPhase'), /return ((?:phase === '[^']+'(?: \|\| )?)+)/)
   const coreList = rendered(core, /MANAGED_RUNTIME_DOWN_STATES = \[([^\]]+)\]/)
   const sidebarList = rendered(sidebar, /if \(((?:phase === '[^']+'(?: \|\| )?)+)\) return 'err'/)
   assert.deepEqual(rendererList, ['error', 'restart-exhausted', 'stopped'])

@@ -30,7 +30,7 @@ export const MANAGED_RESTART_REFUSAL_KEYS: { notRunning: RuntimeRefusalKey; busy
 
 /**
  * Run one managed-dsh restart against a gateway source.
- * @param deps.fetchImpl - test seam; defaults to the page fetch.
+ * @param deps - the readiness-poll seams (fetchImpl/sleepMs/timeoutMs/pollIntervalMs), forwarded verbatim.
  * @returns the outcome; never throws (every failure is a returned arm).
  */
 export async function runManagedRestart(

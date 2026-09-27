@@ -25,6 +25,7 @@ import {
 import type { RuntimeInstallProgress as MainRuntimeInstallProgress } from '@dsh-chamber/dsh-runtime'
 import type { RuntimeInstallProgress as RendererRuntimeInstallProgress } from '@dsh-chamber/dsh-chamber-client-core/runtime-management'
 import { balancedBlock } from './source-blocks.ts'
+import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
 const PHASES: readonly RuntimePhase[] = [
   'idle', 'checking', 'available', 'downloading', 'installing', 'pending',
@@ -502,8 +503,15 @@ test('shell-ipc-runtime keeps the resolve≠success whitelist on restart-dsh (re
   // The renderer's own readiness wait was retired with the window-reload completion, so this
   // guard is now the ONLY thing between restartLocal() resolving from restart-exhausted/stopped
   // and a false "已重启" note: keep it, and keep it loud.
-  assert.match(desktopMain, /connectionState !== 'ready' && connectionState !== 'degraded'/,
+  const handleStart = desktopMain.indexOf('.handle(IPC_CHANNELS.RUNTIME_RESTART')
+  assert.notEqual(handleStart, -1, 'the RUNTIME_RESTART handler is gone from the main-side files')
+  const handler = stripComments(balancedBlock(desktopMain, desktopMain.indexOf('{', handleStart)))
+  const restartCall = handler.indexOf('await restartLocalDsh()')
+  assert.notEqual(restartCall, -1, 'the restart plane handle no longer awaits restartLocalDsh()')
+  assert.match(handler, /connectionState !== 'ready' && connectionState !== 'degraded'/,
     'the resolve≠success whitelist is gone from the restart plane handle')
-  assert.match(desktopMain, /dsh restart did not reach ready/,
+  assert.match(handler, /dsh restart did not reach ready/,
     'the loud failure line for a restart that never became ready is gone')
+  assert.ok(handler.indexOf("connectionState !== 'ready'") > restartCall,
+    'the whitelist must sit AFTER restartLocal() resolved')
 })

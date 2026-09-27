@@ -3,7 +3,7 @@
  * start primitive has the same 202 contract). Pure module with injectable fetch/sleep.
  *
  * Deliberately NOT abortable: a panel unmount must not cancel the readiness confirmation
- * (the 120 s ceiling and the terminal classification are the only exits).
+ * (no cancellation path; the default 120 s ceiling and the terminal classification end it).
  *
  * `action` selects WHICH outcome field and decision table this poll follows:
  * restart reads `restart`, start reads `start`. The two are not interchangeable —
