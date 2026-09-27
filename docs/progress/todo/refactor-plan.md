@@ -142,9 +142,9 @@ useSyncExternalStore 的小 store（单源），事件回调读 store 的 getSna
     4 条删除路径）、`seed-archive-cleanup/src/core.ts`、`mobile/composer.ts`、`mobile/styles.ts`、
     `sidebar/ServerSection.tsx`。
   - **死导出门的覆盖洞**：7 个 client-ui 包全在 `RUNTIME_LOADED_PACKAGES`（整包跳过），而 `src/index.ts`
-    只是 4 行 `apply()` 桩 ⇒ `./client/**` 从不受判。已知零消费者导出 6 个：`isFixedSectionId`、
-    `sourceFingerprintIsCurrent`、`staleOwnedSessionIds`、`orderApplyOps`、`BATCH_FAILURE_POLICY`、
-    `transportTargetChangedSpec`（另 `__resetOpenInChoiceForTests` 为显式测试缝）。
+    只是 4 行 `apply()` 桩 ⇒ `./client/**` 从不受判。已知零消费者导出 2 个：`isFixedSectionId`、
+    `transportTargetChangedSpec`（`sourceFingerprintIsCurrent`/`staleOwnedSessionIds`/`orderApplyOps`/
+    `BATCH_FAILURE_POLICY` 已随实现消失，勿再寻找；另 `__resetOpenInChoiceForTests` 为显式测试缝）。
   - **真实第二实现（无锁步）**：client `plugin-diff.ts` 的 spec 分类 vs desktop `plugin-sync.ts`；
     `openPromise` 三态证据在 mobile `session-stall.ts` 与 open-in `session-stream-health-probe.ts`
     逐字复制；`safeStorage` 访问器手写 5 份。收口优先：openPromise → client-core；spec 分类 → 单一 verdict。

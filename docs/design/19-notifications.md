@@ -9,7 +9,7 @@
 > 需求来源：用户要求「一个 session 在 complete、ask、request 时推送通知」并做成设置
 > 可选项；未读徽标是同一投影的被动指示。
 > 本文先给 **OpenChamber 通知功能调研**（外部参考，源码
-> `/Users/panzeyu2013/Desktop/code/develop/OpenChamber`，体例同设计 14），再给 dsh-chamber
+> OpenChamber 外部仓库，体例同设计 14），再给 dsh-chamber
 > 的移植设计契约。
 
 ---
