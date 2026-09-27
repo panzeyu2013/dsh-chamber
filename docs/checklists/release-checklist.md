@@ -61,7 +61,7 @@ CI:   dry_run 先行 → 正式 tag push → 监控 → 发布后核对
 - [ ] `git commit -m "release(v<版本>): …"`；amend已推送提交用 `--amend --no-edit` + `--force-with-lease`。
 - [ ] `git tag -a v<版本> -m "…"`（重推前先删旧tag：`git tag -d v<版本> && git push origin :v<版本>`）。
 - [ ] dry-run先行：push分支 → Actions手动 `release.yml`（`version=<版本>`、`dry_run=true`）→ create-release断言 + validation + 全部构建腿绿。任一步失败：修复 → 本地复验 → 再dry-run。
-- [ ] 发布提交的CI证明：`validation` 硬断言该提交在 `main` 上有完整成功运行（linux `test` + `test-windows` + `test-macos`，各腿承载步全success）。本地可预检：`GITHUB_TOKEN=<token> node scripts/release/verify-release-ci-proof.mjs --sha <commit>`。
+- [ ] 发布提交的CI证明：`validation` 硬断言该提交在 `main` 上有完整成功运行（linux `test` + `test-windows`/`test-windows-pack` + `test-macos`/`test-macos-pack`，各腿承载步全success）。本地可预检：`GITHUB_TOKEN=<token> node scripts/release/verify-release-ci-proof.mjs --sha <commit>`。
 - [ ] 正式发布：`git push origin <分支> && git push origin v<版本>` → 监控create-release → validation → build-macos/windows/linux/gateway/swift → finalize-release；确认validation的 "Set up job" 通过（action SHA解析失败在此暴露）。
 
 ## 8. 发布后
