@@ -28,10 +28,8 @@ const GROUPS = {
     'test/behavior/drawer-taps.test.ts',
     'test/behavior/settings-sheet.test.ts',
   ],
-  // state: read-watermark reporting to the gateway mirror (pure, injected fetch/list)
-  // and the single presentation read (presented id + concrete Session accessor).
+  // state: the single presentation read (presented id + concrete Session accessor).
   state: [
-    'test/state/read-watermark.test.ts',
     'test/state/session-presentation.test.ts',
     // 呈现事实的 vendor 源文本锁：retainedBy.mainView + binding(id)（缺树 loud skip）。
     'test/state/vendor-session-contract.test.ts',

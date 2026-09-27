@@ -74,14 +74,14 @@ const SESSION_LIST_REFRESH_COALESCE_MS = 5_000
 export type DesktopBridgeVerdict = 'pending' | 'present' | 'absent'
 
 /**
- * Durable（v2 落盘）未读账本的剪枝门控。
+ * Durable（落盘）通知账本的剪枝门控。
  *
- * App 首帧**同步**从 localStorage 载入 read/edge（unread-store）与
- * notified/pending/outcomes（complete-ledger），而权威远端 roster 是异步事实：
+ * App 首帧**同步**从 localStorage 载入 notified/pending/outcomes
+ * （notification-store → complete-ledger），而权威远端 roster 是异步事实：
  * 桥要等 `window.dshChamber` 暴露（500ms 探测），`instances_get` 还要一次 IPC
  * 往返，期间 `remoteInstances` 仍是 `[]`、`servers` 只含 local。若此时按
  * live={local} 剪枝，四类 durable 表里属于远端来源的键会被当成退役来源写盘删除
- * ——pending/outcomes/notified 与 read/edge 全部不可恢复（这正是 F6 回归的写盘
+ * ——pending/outcomes/notified 全部不可恢复（这正是 F6 回归的写盘
  * 丢失）。因此四类 durable 剪枝统一由本谓词放行：
  * - 有桥（`'present'`）：只有权威 roster 结算
  *   （`remoteRosterSettledRef`：refreshRemotes 成功结算后置位，见 App.tsx）
@@ -178,11 +178,11 @@ export interface BridgeSubscriptionsDeps {
   // 回调（App 侧既有实现）
   acknowledgeDeepLink: (delivery: RendererDeliveryCoordinates) => Promise<void>
   emitSessionNotification: (request: BridgeNotificationRequest) => boolean
-  markSourceAllRead: (sourceId: string) => void
   openSession: (instanceId: string, sessionId: string) => Promise<unknown>
-  recomputeSourceUnread: (sourceId: string) => void
-  /** 步骤级 never-throw 包装（未读 hook 的唯一失败面）：runtime 上报的 body 同环同 loud 纪律。 */
-  guardUnreadStep: FactsStepGuard
+  /** 完成点步进（官方位 ∪ 修正臂的唯一入口，见 client-core completion-arm.ts）。 */
+  stepCompletionArmFor: (sourceId: string) => void
+  /** 步骤级 never-throw 包装（hook 的唯一失败面）：runtime 上报的 body 同环同 loud 纪律。 */
+  guardStep: FactsStepGuard
   refreshAggregate: (instanceId: string, mutationTag?: number) => Promise<unknown>
   reportDeepLinkAckFailure: (delivery: RendererDeliveryCoordinates, error: unknown) => void
   selectView: (viewId: string, onApply?: (applied: boolean) => void) => boolean
@@ -243,8 +243,8 @@ export interface BridgeSubscriptionsDeps {
 
 export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
   const {
-    acknowledgeDeepLink, emitSessionNotification, markSourceAllRead, openSession,
-    recomputeSourceUnread, guardUnreadStep, refreshAggregate, reportDeepLinkAckFailure, selectView,
+    acknowledgeDeepLink, emitSessionNotification, openSession,
+    stepCompletionArmFor, guardStep, refreshAggregate, reportDeepLinkAckFailure, selectView,
     updateSessionArchive, updateSessionEcho, updateWorkspaceEcho,
     aggregatePollSeqRef, aggregateRequestOwnersRef, authoritativeArchiveSetRef, autoPrewarmedRef,
     completeLedgerRef, drainPrewarmRef, factsAtRef, harvestCandidatesRef, harvestIntentRef,
@@ -259,14 +259,6 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
     completionObservationRef, persistCompletionLedger, bootToken, bootVerdict,
     sshBridgeReady, LISTENER_READY_RETRY_MS, LISTENER_READY_RETRY_LIMIT,
   } = deps
-
-  /** 侧栏「全部已读」请求（插件→App 单向，与 openSession 同一条桥纪律）。 */
-  useEffect(() => {
-    const unsubscribe = chamberBridge.onMarkAllRead(({ sourceId }) => {
-      markSourceAllRead(sourceId)
-    })
-    return unsubscribe
-  }, [markSourceAllRead])
 
   /**
    * 意图预热：把 hover 意图的来源提到**既有**后台预热队列队首；绝不代行"点开"
@@ -718,7 +710,7 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
     })
   }, [])
 
-  /** 每来源 ctx 的运行时事实上报：report 覆盖、clear 删除；同时重算该来源完成未读。 */
+  /** 每来源 ctx 的运行时事实上报：report 覆盖、clear 删除；同时推进该来源完成点（修正臂）。 */
   useEffect(() => {
     type RuntimeReportListener = Parameters<typeof chamberBridge.onRuntimeReport>[0]
     const handleRuntimeReport: RuntimeReportListener = (sourceId, report, sourceFingerprint) => {
@@ -740,7 +732,7 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
         return { ...prev, [sourceId]: report }
       })
       if (report === undefined) {
-        // 通道撤回（shell 重连/重 boot 窗口）：清掉 UI 蓝点边沿、观测状态与通知账本的易失轨
+        // 通道撤回（shell 重连/重 boot 窗口）：删 running 边沿记忆（`prevRunning`）、观测状态与通知账本的易失轨；已完成修正臂按设计**冻结**（不误清），恢复后按新上报对账
         // （withdraw 清 armed + pending，notified/outcomes 保持 durable，R2-D/§3.1）；恢复后首报
         // 是纯播种。wire 只有 running 位，窗口内被手动停止的会话会误报「完成」，故不补发。
         // 撤回不删来源账本（durable 由事实重算）；prevRunning 是「转移」不是「状态」。
@@ -748,7 +740,7 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
         completionObservationRef.current.delete(sourceId)
         completeLedgerRef.current.withdraw(sourceId)
         persistCompletionLedger(true)
-        recomputeSourceUnread(sourceId)
+        stepCompletionArmFor(sourceId)
         return
       }
       // runtime report 的同步权威就是 factsStore：store 写入后，同一事件轮到达的 facts 快照、
@@ -800,12 +792,12 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
           persist: immediate => persistCompletionLedger(immediate),
         },
       })
-      // 派生账本重算：规则全在纯模块 unread-derivation.ts；「正在阅读」谓词 =
-      // paintedView ∩ 该来源 current ∩ hasFocus，listComplete 是唯一剪枝门。
-      recomputeSourceUnread(sourceId)
+      // 完成点步进：官方位在通道行上，这里只推进 N-ctx 修正臂（completion-arm.ts）；
+      // 「谁在阅读」= paintedView ∩ 该来源 current（focus 只属于通知门）。
+      stepCompletionArmFor(sourceId)
     }
     return chamberBridge.onRuntimeReport((sourceId, report, sourceFingerprint) => {
-      guardUnreadStep.guard(sourceId, 'runtime-report', () => handleRuntimeReport(sourceId, report, sourceFingerprint))
+      guardStep.guard(sourceId, 'runtime-report', () => handleRuntimeReport(sourceId, report, sourceFingerprint))
     })
   }, [])
 }

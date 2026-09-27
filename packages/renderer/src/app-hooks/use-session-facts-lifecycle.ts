@@ -1,6 +1,6 @@
 /**
  * 事实源生命周期簇：gateway 只读事实源与 SSH/dsh 远端无壳观察者的创建/收敛/退订，
- * 外加 focus/blur 重算未读与 pagehide/hidden 落盘 flush 两条全局监听。
+ * 外加 focus/blur 步进完成臂与 pagehide/hidden 落盘 flush 两条全局监听。
  * 稳定签名（id + 化身指纹 + connected）决定重探/停流；判定与状态仍在既有纯模块与 App
  * 的 ref/state 容器里，本 hook 只做订阅生命周期装配。
  */
@@ -11,15 +11,15 @@ import { createSessionFactsSource, type SessionFactsSnapshot, type SessionFactsS
 import { createSourceMuxFacts, isMuxObservableSourceKind, type SourceMuxFacts } from '../source-mux-facts.ts'
 import { createFactsHealthRecorder, createFactsStepGuard, type FactsHealthRecorder, type FactsStepGuard } from '../facts-health.ts'
 import { shouldDispatchRefreshHint } from '../source-refresh-hint.ts'
-import { maxWatermark, type UnreadSaveCoalescer } from '../unread-store.ts'
+import type { NotificationSaveCoalescer } from '../notification-store.ts'
 
 export interface SessionFactsLifecycleDeps {
   /** deriveServers 的当前投影（签名与收敛都从最新 servers 读）。 */
   servers: ChamberServerAggregate[]
   applySessionFacts: (sourceId: string, snapshot: SessionFactsSnapshot | undefined) => void
-  recomputeSourceUnread: (sourceId: string) => void
-  /** 未读落盘合并器（pagehide/hidden/unmount 走它的关键路径 flush；hook 只调用不拥有）。 */
-  unreadImmediateSave: UnreadSaveCoalescer
+  /** 完成点步进（focus/blur 的重算入口；臂本体在 use-notifications）。 */
+  /** 通知落盘合并器（pagehide/hidden/unmount 走它的关键路径 flush；hook 只调用不拥有）。 */
+  notificationImmediateSave: NotificationSaveCoalescer
   /** 聚合簇的「无法确认」标记（行刷新提示的 unverified 拒绝输入）。 */
   unverifiedSourcesRef: { current: readonly string[] }
   /** 每来源在途 unary 拉取计数（提示的 inFlight 拒绝输入）。 */
@@ -42,7 +42,7 @@ export interface SessionFactsLifecycleDeps {
 /** 事实源生命周期装配；无对外返回值（调用面全在 App 的既有 ref/回调上）。 */
 export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void {
   const {
-    servers, applySessionFacts, recomputeSourceUnread, unreadImmediateSave,
+    servers, applySessionFacts, notificationImmediateSave,
     unverifiedSourcesRef, factsPullInFlightRef, refreshHintAtRef, refreshAggregateRef,
     factsStore, sessionFactsSourcesRef, sessionFactsTeardownRef,
     sourceMuxTeardownRef, sourceMuxIdentityRef,
@@ -53,7 +53,7 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
   serversRef.current = servers
   const sourceMuxObserversRef = useRef(new Map<string, SourceMuxFacts>())
   /**
-   * 事实健康面包屑（本 hook 的记录点：与 use-unread-notifications 各自一个 recorder 实例、
+   * 事实健康面包屑（本 hook 的记录点：与 use-notifications 各自一个 recorder 实例、
    * 同一权威日志环、记录点不同）：观察者每次快照后采样一次，状态不变不写环。它给「观察者
    * 一直不可判」这类形状留下盘上时间线——没有它，画面外的人只能看到空账本。
    */
@@ -139,7 +139,7 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
   /**
    * SSH / 其它 dsh 远端来源的**无壳观察者**：这些来源没有只读镜像，关壳期间没有事实
    * 通道，完成会丢。观察者讲实例自己的远程协议，产出的快照与 gateway 事实源**同形**，
-   * 直接喂同一条 applySessionFacts 管线（同一份事实、同一套未读判定）；只观察，永不结算瀑布。
+   * 直接喂同一条 applySessionFacts 管线（同一份事实、同一套通知判定）；只观察，永不结算瀑布。
    */
   const sourceMuxSpec = useMemo(
     () => servers
@@ -167,7 +167,7 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
       // 观察者实例要先有才能采样（onSnapshot 闭包在构造时就存在，只能经 created 拿实例）：
       // createSourceMuxFacts 构造期不 emit，且赋值在 start() 之前 ⇒ 这里必定已赋值，无需恒真守卫。
       let created: SourceMuxFacts | null = null
-      const sampleFactsHealth = (snapshot: SessionFactsSnapshot): void => {
+      const sampleFactsHealth = (): void => {
         const status = created!.status()
         factsHealthRef.current?.record(sourceId, {
           ready: status.ready,
@@ -179,8 +179,6 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
           reconnects: status.reconnects,
           socketErrors: status.socketErrors,
           rows: status.rows,
-          // 同一拍的行水位：未读面空账时，第一现场就是这里（0 = 行没有 host 水位）。
-          maxWatermark: maxWatermark(snapshot.rows),
           lastTrustedBaselineAt: status.lastTrustedBaselineAt,
         })
       }
@@ -190,7 +188,7 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
         onSnapshot: snapshot => {
           factsStepGuard.guard(sourceId, 'mux-snapshot', () => {
             applySessionFacts(sourceId, snapshot)
-            sampleFactsHealth(snapshot)
+            sampleFactsHealth()
           })
         },
       })
@@ -207,23 +205,9 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
     }
   }, [sourceMuxSpec, applySessionFacts, factsStepGuard])
 
-  // 焦点参与「正在阅读」谓词：focus/blur 只重算账本，不回退读标记（已读单向）。
-  useEffect(() => {
-    const onFocusChange = (): void => {
-      const ids = new Set<string>([...sessionFactsSourcesRef.current.keys(), ...Object.keys(factsStore.getSnapshot().runtime)])
-      for (const sourceId of ids) recomputeSourceUnread(sourceId)
-    }
-    window.addEventListener('focus', onFocusChange)
-    window.addEventListener('blur', onFocusChange)
-    return () => {
-      window.removeEventListener('focus', onFocusChange)
-      window.removeEventListener('blur', onFocusChange)
-    }
-  }, [recomputeSourceUnread])
-
   useEffect(() => {
     // 关键路径 = 合并器的 flush：取消待办的微任务 + 同步落最新状态（不丢、不重复）。
-    const flush = (): void => unreadImmediateSave.flush()
+    const flush = (): void => notificationImmediateSave.flush()
     const onVisibility = (): void => {
       if (document.visibilityState === 'hidden') flush()
     }
@@ -232,7 +216,7 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
     return () => {
       window.removeEventListener('pagehide', flush)
       document.removeEventListener('visibilitychange', onVisibility)
-      unreadImmediateSave.flush()
+      notificationImmediateSave.flush()
     }
-  }, [unreadImmediateSave])
+  }, [notificationImmediateSave])
 }

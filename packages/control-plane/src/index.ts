@@ -1293,23 +1293,15 @@ export {
 // Session-state wire contract — single source for the gateway watcher and the
 // desktop probe; the Typert mux client is the client half of the same contract.
 export {
-  clampReadThrough,
   classifyTurnEnd,
-  mergeReadMark,
-  SESSION_STATE_CLIENT_ID_PATTERN,
   SESSION_STATE_FEATURES,
   SESSION_STATE_HANDSHAKE_WINDOW_MS,
   SESSION_STATE_PATH,
   SESSION_STATE_PROTOCOL_VERSION,
-  SESSION_STATE_READ_ALL_PATH,
-  SESSION_STATE_READ_BODY_MAX_BYTES,
-  SESSION_STATE_READ_PATH,
   SESSION_STATE_SESSION_ID_MAX_CHARS,
   SESSION_STATE_STREAM_PATH,
 } from './session-state-protocol.ts'
 export type {
-  ReadAllRequest,
-  ReadRequest,
   SessionStateCapability,
   SessionStateCapabilityKind,
   SessionStateCompletedAtSource,
@@ -1328,7 +1320,6 @@ export type {
   SessionStatePendingKind,
   SessionStateProbeFailureReason,
   SessionStateProbeOutcome,
-  SessionStateReadState,
   SessionStateRow,
   SessionStateSnapshot,
   SessionTurnEnd,

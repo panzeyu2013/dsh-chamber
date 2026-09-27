@@ -5,7 +5,7 @@
  * plan-review / question). No state of its own, no memory, no DOM — a plain
  * node:test-runnable derivation over the SAME merged runtime facts the
  * row-level state indicators render (06 §4; the merged `completed` bit is written
- * by the App's completed-unread ledger alone — the channel never carries one).
+ * by the official completion-unread bit carried on the channel row).
  *
  * Mirror-of-the-mirror discipline: an entry appears/disappears exactly when
  * the corresponding row indicator would — the rules below replicate the
@@ -17,10 +17,8 @@
  *   disconnected source carries no LIVE runtime facts (unknown ≠ attention);
  *   exactly one door is open: facts the App explicitly marked `stale: true`
  *   ride a disconnected source too, and are rendered (labelled `stale`) while
- *   the rows survive. With `offlineUnread` enabled, a disconnected stale
- *   source whose ROWS ARE GONE still surfaces its completed-unread facts as an
- *   "offline unread" group (sessionId fallback label) — the row-absent half of
- *   the stale-facts branch, opt-in so no consumer is forced onto a new surface.
+ *   the rows survive. Rows GONE from the projection surface nothing — the
+ *   completed bit lives on the row, so a row-absent session has no fact to show.
  * - The session being read right now (the active view's current session) is
  *   excluded by the caller-provided viewing ids — the same single-selection
  *   rule as the current-session highlight (SidebarRoot chamberInstanceId).
@@ -49,8 +47,7 @@ export interface TodoAttentionEntry {
   updatedAt?: number
   /**
    * The entry comes from facts of a source that is disconnected right now
-   * (the aggregate `runtime.stale` fact) — or, for the offline-unread group,
-   * from facts whose rows are gone. Consumers must label it (I13/I2
+   * (the aggregate `runtime.stale` fact). Consumers must label it (I13/I2
    * `data-chamber-stale`); absent = live fact, today's semantics.
    */
   stale?: boolean
@@ -64,8 +61,7 @@ export interface TodoAttentionFilters {
 }
 
 /** Derive the attention entries over the display-ordered servers projection.
- * `viewingSourceId`/`viewingSessionId` exclude the session being read; `offlineUnread` (opt-in)
- * additionally emits completed-unread facts of a disconnected stale source whose rows are gone.
+ * `viewingSourceId`/`viewingSessionId` exclude the session being read.
  */
 export function deriveTodoAttention(
   servers: readonly ChamberServerAggregate[],
@@ -73,7 +69,6 @@ export function deriveTodoAttention(
     viewingSourceId?: string
     viewingSessionId?: string
     filters: TodoAttentionFilters
-    offlineUnread?: boolean
   },
 ): TodoAttentionEntry[] {
   const waiting: TodoAttentionEntry[] = []
@@ -86,10 +81,8 @@ export function deriveTodoAttention(
     if (runtime === undefined) continue
     // 事实是否 stale 只信事实本身（连接态也可能带着一份标注过期的快照）。
     const factsStale = runtime.stale === true
-    const rowSessionIds = new Set<string>()
     for (const workspace of server.workspaces) {
       for (const session of workspace.sessions) {
-        rowSessionIds.add(session.id)
         // 正在查看的会话不进待办（同高亮单选纪律；内容已在屏幕上）。
         if (server.id === opts.viewingSourceId && session.id === opts.viewingSessionId) continue
         const facts = runtime.sessions[session.id]
@@ -116,8 +109,8 @@ export function deriveTodoAttention(
           waiting.push(entry)
           continue
         }
-        // completed 与行尾蓝点同一条件：pending 无、子代理不存活、合并 completed 为真（该位来自
-        // App 账本）。只有**确证在跑**的子代理压制未读；unknown（stale/索引缺席）不压制。
+        // completed 与行尾蓝点同一条件：pending 无、子代理不存活、合并 completed 为真（官方位 ∪
+        // 修正臂）。只有**确证在跑**的子代理压制未读；unknown（stale/索引缺席）不压制。
         if (subagentActivityOf(facts, factsStale) === 'running') continue
         // goal 呈现门（v5 §4）：相位 active（含 activation unknown）压制「完成未读」
         // 条目——与行尾点/文案/仪表/搜索同一单源派生（INV7），否则待办区会为一条
@@ -140,25 +133,6 @@ export function deriveTodoAttention(
         if (factsStale) entry.stale = true
         completed.push(entry)
       }
-    }
-    // 行缺席分支（显式选项）：断连 + stale + 行不在投影里的 completed 事实；只出未读，标签用 sessionId 兜底，分组键 entry.stale。
-    if (!offline || opts.offlineUnread !== true) continue
-    for (const sessionId of Object.keys(runtime.sessions).sort()) {
-      if (rowSessionIds.has(sessionId)) continue
-      if (server.id === opts.viewingSourceId && sessionId === opts.viewingSessionId) continue
-      const facts = runtime.sessions[sessionId]
-      if (facts?.completed !== true || !opts.filters.completed) continue
-      if (subagentActivityOf(facts, true) === 'running') continue
-      // 同一呈现门：行缺席分支也必须与其它五面同拍（active 即压制）。
-      if (goalSuppressesPresentation(facts?.goal)) continue
-      completed.push({
-        sourceId: server.id,
-        sessionId,
-        kind: 'completed',
-        title: '',
-        displayTitle: sessionDisplayTitle({ sessionId }),
-        stale: true,
-      })
     }
   }
   // 等待类（阻塞 agent）在前、完成未读在后；组内保持列表扫描序。

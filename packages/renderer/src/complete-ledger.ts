@@ -30,7 +30,7 @@
  * （卫生上界，不是判定计时器）。
  *
  * 身份键空间（D1，独立于水位面）：notifiedRuns = source → session → 最后一次已通知的
- * SessionRunId（unread v4 的持久来源；v2 迁移对旧水位表写 LEGACY_NOTIFIED_RUN_ID
+ * SessionRunId（notifications.v1 的持久来源；v2 迁移对旧水位表写 LEGACY_NOTIFIED_RUN_ID
  * 哨兵），以及易失的 runtimeSettled = source → session → 原生结算边沿的 host updatedAt
  * 锚点（无 host 身份的运行完成后，下一份可信 host 完成据此认领身份）。身份面与水位的
  * notified/pending/outcomes 只并列存储、互不混写：水位裁定仍全部走 state()。
@@ -42,7 +42,7 @@ import type { SessionRunId } from '@dsh-chamber/dsh-stream-state'
 /** v2 未读 payload 的 notified 段：source → session → kind → 已通知水位。 */
 export type NotifiedWatermarkTable = Record<string, Record<string, Partial<Record<UnreadKind, number>>>>
 
-/** 身份 spine：source → session → 最后一次已通知的 SessionRunId（unread v4 持久来源）。 */
+/** 身份 spine：source → session → 最后一次已通知的 SessionRunId（notifications.v1 持久来源）。 */
 export type NotifiedRunTable = Record<string, Record<string, SessionRunId>>
 
 /** 被压制完成的 pending 条目（v5 §3.1）。 */
@@ -91,7 +91,7 @@ export type GoalOutcomeTable = Record<string, Record<string, number>>
 
 /**
  * reconcile 的完整状态（v5 §3.1：三张 durable 表 + 五项易失状态）。
- * durable 三表（notified/pending/outcomes）走 unread payload 增量；其余全部易失：
+ * durable 三表（notified/pending/outcomes）走通知载荷增量；其余全部易失：
  *   - armed：壳边沿武装位；
  *   - armedFloor：与 armed 同拍的「已消费水位上界」（arm 时写；见字段注释）；
  *   - settleFence：无水位消费的 emit 后按 boundary（置栏时已吸收的 facts 水位）
@@ -125,15 +125,15 @@ export const PENDING_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000
 
 /** 加载期选项（旧调用点只传 notified 表时全部取默认）。 */
 export interface CompleteLedgerOptions {
-  /** 持久化读出的 pending 表（unread v4 payload.pending）。 */
+  /** 持久化读出的 pending 表（notifications.v1 payload.pending）。 */
   pending?: PendingCompletionTable
-  /** 持久化读出的 outcomes 表（unread v4 payload.outcomes）。 */
+  /** 持久化读出的 outcomes 表（notifications.v1 payload.outcomes）。 */
   outcomes?: GoalOutcomeTable
   /** same = reload（保留 pending）；fresh = 新进程/新窗口（丢弃 pending 并 loud）。缺省 same。 */
   boot?: 'same' | 'fresh'
   /**
    * sessionStorage 页代 token（**兼容入参，账本不再保留副本**）：页代 token 的单源
-   * 是 boot-token.ts（App 的 unreadBoot.boot.token，经 completionIdentity 进观测层
+   * 是 boot-token.ts（App 的 notificationsBoot.boot.token，经 completionIdentity 进观测层
    * identity）；本账本既不读也不存它，保留该键只为 App 调用点继续按原签名传入
    * （App 不在本次改动范围）。新调用点无需提供。
    */
@@ -162,7 +162,7 @@ export interface CompleteLedger {
   notifiedWatermark(sourceId: string, sessionId: string, kind: UnreadKind): number | undefined
   /** **仅测试/诊断面**（D4）：语义同 {@link notifiedWatermark}。 */
   setNotifiedWatermark(sourceId: string, sessionId: string, kind: UnreadKind, watermark: number): void
-  /** 身份轨：落盘读出的表（内部对象，调用方只读；持久化来源是 unread v4 payload.notifiedRuns）。 */
+  /** 身份轨：落盘读出的表（内部对象，调用方只读；持久化来源是 notifications.v1 payload.notifiedRuns）。 */
   notifiedRunTable(): NotifiedRunTable
   /** 身份轨：该会话最后一次已通知的运行身份（重复观察同一身份 = 不重发）。 */
   notifiedRun(sourceId: string, sessionId: string): SessionRunId | undefined
@@ -246,7 +246,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 
 /**
  * 条目的成立条件只有 at（有限数）；watermark/goalId 是判定字段，坏值整条不成立。
- * deferred 是**字段级**清洗（与 unread-store.sanitizeUnreadPayload 同口径）：非法值
+ * deferred 是**字段级**清洗（与 notification-store.sanitizeNotificationPayload 同口径）：非法值
  * 只丢该字段、moved 到加载循环里剥掉——deferred 缺失时条目仍可用于水位结算，
  * 整条丢弃反而会在离线/降级路径静默丢一次完成。
  */
@@ -273,8 +273,8 @@ function copyOutcomes(outcomes: GoalOutcomeTable | undefined): GoalOutcomeTable 
 }
 
 /**
- * @param initialNotified - 持久化读数：水位表（unread v2 遗留 shape）或身份表
- *   （unread v4 payload.notifiedRuns）；逐行按值的形状分流后浅拷贝、写时复制。
+ * @param initialNotified - 持久化读数：水位表（历史 unread v2 shape）或身份表
+ *   （notifications.v1 payload.notifiedRuns）；逐行按值的形状分流后浅拷贝、写时复制。
  * @param options - 持久化 pending/outcomes + boot/年龄卫生（旧调用点省略）。
  */
 export function createCompleteLedger(

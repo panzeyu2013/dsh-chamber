@@ -1,7 +1,7 @@
 /**
  * Gateway-side session-state watcher: a READ-ONLY mirror of dsh session facts
  * over the control-plane mux client: per-session state machine with a monotonic
- * cursor, one snapshot at <stateDir>/session-state/state.json, and the four
+ * cursor, one snapshot at <stateDir>/session-state/state.json, and the two
  * /chamber/session-state routes inside the /chamber/* auth gate.
  *
  * It never writes to dsh, never answers a waterfall on its own (the mux holds the
@@ -24,23 +24,17 @@ import {
   DEFAULT_WATERFALL_GRACE_MS,
   SESSION_LIST_MAX_RESPONSE_BYTES,
   SESSION_LIST_PAYLOAD,
-  SESSION_STATE_CLIENT_ID_PATTERN,
   SESSION_STATE_FEATURES,
   SESSION_STATE_PATH,
   SESSION_STATE_PROTOCOL_VERSION,
-  SESSION_STATE_READ_ALL_PATH,
-  SESSION_STATE_READ_BODY_MAX_BYTES,
-  SESSION_STATE_READ_PATH,
   SESSION_STATE_SESSION_ID_MAX_CHARS,
   SESSION_STATE_STREAM_PATH,
   authCookieFor,
   call as controlPlaneCall,
-  clampReadThrough,
   classifyTurnEnd,
   createJsonStore,
   createSessionMux,
   ensurePrivateDirectoryNoFollow,
-  mergeReadMark,
   parseSessionListBaselineItems,
   type ApiRequest,
   type ApiResponse,
@@ -61,14 +55,11 @@ import {
   type SessionStateHostState,
   type SessionStateMode,
   type SessionStatePendingKind,
-  type SessionStateReadState,
   type SessionStateRow,
   type SessionStateSnapshot,
   type SessionTurnEnd,
-  type ReadAllRequest,
-  type ReadRequest,
 } from '@dsh-chamber/control-plane'
-import { jsonResponse, readBoundedBody } from './http-utils.ts'
+import { jsonResponse } from './http-utils.ts'
 
 // Gateway-owned limits; protocol constants are imported, never re-declared.
 
@@ -83,10 +74,6 @@ export const MAX_SESSIONS = 2_000
  * bounded: eviction is oldest-first and counted in `dropped.goalActivations`.
  */
 export const MAX_PENDING_GOAL_ACTIVATIONS = MAX_SESSIONS
-export const MAX_READ_CLIENTS = 64
-export const MAX_MARKS_PER_CLIENT = 5_000
-/** Read-mark client TTL (old marks are cleaned by the server). */
-export const READ_MARK_TTL_MS = 90 * 24 * 60 * 60 * 1000
 /** In-memory SSE resume window (deltas, not bytes). */
 export const SSE_RING_MAX = 1_024
 /** Concurrent SSE streams per surface. */
@@ -173,12 +160,6 @@ interface StoredRow {
   goal?: SessionStateGoalFact | null
 }
 
-/** Per-client read marks (stored per client, judged source-wide). */
-interface StoredReadClient {
-  at: number
-  marks: Map<string, { readThrough: number; at: number }>
-}
-
 /** Persisted host gate (the wire projection adds the current clock). */
 interface StoredHost {
   state: SessionStateHostState
@@ -197,9 +178,7 @@ export interface SessionStateDocument {
   mode: SessionStateMode
   host: StoredHost
   sessions: StoredRow[]
-  readMarks: Record<string, { at: number; marks: Record<string, { readThrough: number; at: number }> }>
-  readFloor: number
-  dropped: { sessions: number; readClients: number; readMarks: number; goalActivations: number }
+  dropped: { sessions: number; goalActivations: number }
   [key: string]: unknown
 }
 
@@ -211,8 +190,7 @@ export interface SessionStateStoreStatus {
   persistedAt: number | null
   cursor: number
   sessions: number
-  readClients: number
-  dropped: { sessions: number; readClients: number; readMarks: number; goalActivations: number }
+  dropped: { sessions: number; goalActivations: number }
   /** 已结算完成边沿的 turn/end 分类构成（unreadable = 降级武装）。 */
   turnEnds: { completed: number; userStopped: number; neutral: number; unreadable: number }
 }
@@ -253,10 +231,7 @@ export interface SessionStateStore {
     turnEnd: SessionTurnEnd | null
     unreadable: boolean
   }): boolean
-  markRead(clientId: string, sessionId: string, readThrough: number, at: number): { changed: boolean; stored: boolean; readThrough: number }
-  markAllRead(clientId: string, through: number, at: number): { changed: boolean; through: number; updated: number }
-  readStateFor(clientId: string | null): SessionStateReadState
-  snapshotFor(clientId: string | null, mode: SessionStateMode, host: SessionStateHostInfo): SessionStateSnapshot
+  snapshotFor(mode: SessionStateMode, host: SessionStateHostInfo): SessionStateSnapshot
   subscribe(listener: (delta: SessionStateDelta) => void): () => void
   /** Ring replay after Last-Event-ID; null = cannot satisfy (client refetches). */
   replayFrom(sinceCursor: number): SessionStateDelta[] | null
@@ -398,7 +373,6 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
   ensurePrivateDirectoryNoFollow(sessionStateDir, SESSION_STATE_DIR_MODE)
 
   const rows = new Map<string, StoredRow>()
-  const readClients = new Map<string, StoredReadClient>()
   const ring: SessionStateDelta[] = []
   const listeners = new Set<(delta: SessionStateDelta) => void>()
   const gapCandidates = new Set<string>()
@@ -438,10 +412,9 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
   let firstBaselineDone = false
 
   let cursor = 0
-  let readFloor = 0
   let mode: SessionStateMode = 'poll'
   let host: StoredHost = { state: 'unknown', serviceable: false, since: now(), lastBaselineAt: null, baselineOk: false }
-  let dropped = { sessions: 0, readClients: 0, readMarks: 0, goalActivations: 0 }
+  let dropped = { sessions: 0, goalActivations: 0 }
   // 每条完成边沿的 turn/end 分类构成（与 follow 读取一一对应）。
   const turnEnds = { completed: 0, userStopped: 0, neutral: 0, unreadable: 0 }
   let integrity: SessionStateStoreStatus['integrity'] = 'ok'
@@ -454,7 +427,6 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
   // Accumulated delta changes (one cursor step per committed batch).
   const deltaSessions = new Map<string, SessionStateRow>()
   const deltaRemoved = new Set<string>()
-  let deltaRead = false
   let deltaHost = false
   let deltaMode = false
   let revision = 0
@@ -470,9 +442,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       mode: 'poll',
       host: { state: 'unknown', serviceable: false, since: at, lastBaselineAt: null, baselineOk: false },
       sessions: [],
-      readMarks: {},
-      readFloor: 0,
-      dropped: { sessions: 0, readClients: 0, readMarks: 0, goalActivations: 0 },
+      dropped: { sessions: 0, goalActivations: 0 },
     }
   }
 
@@ -500,9 +470,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         baselineOk: raw.host.baselineOk === true,
       }
     }
-    normalized.readFloor = isWatermark(raw.readFloor) ? raw.readFloor : 0
     let droppedSessions = 0
-    let droppedClients = 0
     const sessions: StoredRow[] = []
     if (Array.isArray(raw.sessions)) {
       for (const value of raw.sessions) {
@@ -515,31 +483,11 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       }
     }
     normalized.sessions = sessions
-    const marks: SessionStateDocument['readMarks'] = {}
-    if (isPlainRecord(raw.readMarks)) {
-      for (const [clientId, value] of Object.entries(raw.readMarks)) {
-        if (!SESSION_STATE_CLIENT_ID_PATTERN.test(clientId) || !isPlainRecord(value)) continue
-        const at = isWatermark(value.at) ? value.at : 0
-        if (now() - at > READ_MARK_TTL_MS) {
-          droppedClients += 1
-          continue
-        }
-        const clientMarks: Record<string, { readThrough: number; at: number }> = {}
-        if (isPlainRecord(value.marks)) {
-          for (const [sessionId, mark] of Object.entries(value.marks)) {
-            if (!isPlainRecord(mark) || !isWatermark(mark.readThrough)) continue
-            clientMarks[sessionId] = { readThrough: mark.readThrough, at: isWatermark(mark.at) ? mark.at : at }
-          }
-        }
-        marks[clientId] = { at, marks: clientMarks }
-      }
-    }
-    normalized.readMarks = marks
     // Load-time losses ride the document itself (adoptDocument replaces the
     // in-memory counters); a closure-only increment would be silently lost. The
-    // process-local readMarks/goalActivations counters load as 0: their retained
-    // state is never persisted, so adopting a stale value would be a lie.
-    normalized.dropped = { sessions: droppedSessions, readClients: droppedClients, readMarks: 0, goalActivations: 0 }
+    // process-local goalActivations counter loads as 0: its retained state is
+    // never persisted, so adopting a stale value would be a lie.
+    normalized.dropped = { sessions: droppedSessions, goalActivations: 0 }
     return { doc: normalized, droppedSessions }
   }
 
@@ -626,7 +574,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     recoveryDetail = storeStatus.recoveryState === null
       ? null
       : 'recovered session-state snapshot from ' + storeStatus.recoveryState.source
-    if (integrity === 'recovered') warn(recoveryDetail + '; loading the last durable read/completion state')
+    if (integrity === 'recovered') warn(recoveryDetail + '; loading the last durable completion state')
     adoptDocument(loadedDoc)
     loaded = true
   } catch (error) {
@@ -643,31 +591,19 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
   function adoptDocument(loadedDoc: SessionStateDocument): void {
     doc = loadedDoc
     cursor = isWatermark(doc.cursor) ? doc.cursor : 0
-    readFloor = isWatermark(doc.readFloor) ? doc.readFloor : 0
     mode = doc.mode === 'sse' || doc.mode === 'poll' || doc.mode === 'off' ? doc.mode : 'poll'
     host = doc.host
     dropped = {
       sessions: isWatermark(doc.dropped?.sessions) ? doc.dropped.sessions : 0,
-      readClients: isWatermark(doc.dropped?.readClients) ? doc.dropped.readClients : 0,
-      // readMarks / goalActivations 是进程内累计计数：validateDocument 在加载时
-      // 已按契约把它们归 0（保留边不落盘，重启本就不继承），这里从 0 起算。
-      // 绝不按持久值读——那是 validateDocument 永不产生非零值的死分支。
-      readMarks: 0,
+      // goalActivations 是进程内累计计数：validateDocument 在加载时已按契约把它
+      // 归 0（保留边不落盘，重启本就不继承），这里从 0 起算。绝不按持久值读——
+      // 那是 validateDocument 永不产生非零值的死分支。
       goalActivations: 0,
     }
     revision = isWatermark(doc.revision) ? doc.revision : 0
     for (const row of doc.sessions) {
       rows.set(row.sessionId, row)
       if (row.running) gapCandidates.add(row.sessionId)
-    }
-    for (const [clientId, value] of Object.entries(doc.readMarks ?? {})) {
-      if (!isPlainRecord(value) || !isPlainRecord(value.marks)) continue
-      const marks = new Map<string, { readThrough: number; at: number }>()
-      for (const [sessionId, mark] of Object.entries(value.marks as Record<string, unknown>)) {
-        if (!isPlainRecord(mark) || !isWatermark(mark.readThrough)) continue
-        marks.set(sessionId, { readThrough: mark.readThrough, at: isWatermark(mark.at) ? mark.at : 0 })
-      }
-      readClients.set(clientId, { at: isWatermark(value.at) ? value.at : 0, marks })
     }
   }
 
@@ -699,34 +635,17 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     commitDelta()
   }
 
-  function trimReadClients(): void {
-    const at = now()
-    for (const [clientId, client] of readClients) {
-      if (at - client.at > READ_MARK_TTL_MS) {
-        readClients.delete(clientId)
-        dropped.readClients += 1
-      }
-    }
-    if (readClients.size <= MAX_READ_CLIENTS) return
-    const ordered = [...readClients.entries()].sort((a, b) => a[1].at - b[1].at)
-    for (const [clientId] of ordered.slice(0, readClients.size - MAX_READ_CLIENTS)) {
-      readClients.delete(clientId)
-      dropped.readClients += 1
-    }
-  }
-
   async function flush(): Promise<void> {
     if (flushing !== null) return flushing
     const run = (async () => {
       try {
-        // The row/read-client caps are in-memory invariants, NOT persistence
-        // concerns: they must hold even when persistence is refused (double
-        // corruption early-returns below). Enforce them BEFORE the
-        // persistBlocked gate, or a 2005-row baseline would be served over the
-        // cap with dropped.sessions stuck at 0 in exactly the state where the
-        // snapshot is the only evidence left.
+        // The row cap is an in-memory invariant, NOT a persistence concern: it
+        // must hold even when persistence is refused (double corruption
+        // early-returns below). Enforce it BEFORE the persistBlocked gate, or a
+        // 2005-row baseline would be served over the cap with dropped.sessions
+        // stuck at 0 in exactly the state where the snapshot is the only
+        // evidence left.
         enforceLimits()
-        trimReadClients()
         if (persistBlocked) return
         revision += 1
         doc.schemaVersion = SESSION_STATE_SCHEMA_VERSION
@@ -736,14 +655,6 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         doc.mode = mode
         doc.host = host
         doc.sessions = [...rows.values()].map(persistedRow)
-        const marks: SessionStateDocument['readMarks'] = {}
-        for (const [clientId, client] of readClients) {
-          const clientMarks: Record<string, { readThrough: number; at: number }> = {}
-          for (const [sessionId, mark] of client.marks) clientMarks[sessionId] = { readThrough: mark.readThrough, at: mark.at }
-          marks[clientId] = { at: client.at, marks: clientMarks }
-        }
-        doc.readMarks = marks
-        doc.readFloor = readFloor
         doc.dropped = { ...dropped }
         if (jsonStore !== null) await jsonStore.persist(doc)
         persistedAt = now()
@@ -763,37 +674,22 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
 
   // --- delta emission ------------------------------------------------------
 
-  function readState(): SessionStateReadState {
-    const marks: Record<string, number> = {}
-    for (const row of rows.values()) {
-      let mark = 0
-      for (const client of readClients.values()) {
-        const value = client.marks.get(row.sessionId)
-        if (value !== undefined && value.readThrough > mark) mark = value.readThrough
-      }
-      if (mark > 0) marks[row.sessionId] = mark
-    }
-    return { clientId: null, marks, floor: readFloor }
-  }
-
   function hostInfo(): SessionStateHostInfo {
     return { now: now(), serviceable: host.serviceable, state: host.state }
   }
 
   function commitDelta(): void {
-    if (deltaSessions.size === 0 && deltaRemoved.size === 0 && !deltaRead && !deltaHost && !deltaMode) return
+    if (deltaSessions.size === 0 && deltaRemoved.size === 0 && !deltaHost && !deltaMode) return
     cursor += 1
     const delta: SessionStateDelta = {
       cursor,
       sessions: [...deltaSessions.values()],
       removedSessionIds: [...deltaRemoved],
-      read: deltaRead ? readState() : null,
       host: deltaHost ? hostInfo() : null,
       mode: deltaMode ? mode : null,
     }
     deltaSessions.clear()
     deltaRemoved.clear()
-    deltaRead = false
     deltaHost = false
     deltaMode = false
     ring.push(delta)
@@ -878,7 +774,6 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         persistedAt,
         cursor,
         sessions: rows.size,
-        readClients: readClients.size,
         dropped: { ...dropped },
         turnEnds: { ...turnEnds },
       }
@@ -978,7 +873,6 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
           pendingGoalActivations.delete(row.sessionId)
           deltaRemoved.add(row.sessionId)
           deltaSessions.delete(row.sessionId)
-          for (const client of readClients.values()) client.marks.delete(row.sessionId)
         }
       }
       recomputeSubagentCounts()
@@ -1081,7 +975,6 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       pendingEdges.delete(sessionId)
       deltaSessions.delete(sessionId)
       deltaRemoved.add(sessionId)
-      for (const client of readClients.values()) client.marks.delete(sessionId)
       recomputeSubagentCounts()
       commitDelta()
       return true
@@ -1201,61 +1094,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       return true
     },
 
-    markRead(clientId, sessionId, readThrough, at): { changed: boolean; stored: boolean; readThrough: number } {
-      if (!rows.has(sessionId)) return { changed: false, stored: false, readThrough: 0 }
-      trimReadClients()
-      let client = readClients.get(clientId)
-      if (client === undefined) {
-        client = { at, marks: new Map() }
-        readClients.set(clientId, client)
-      }
-      client.at = at
-      const previous = client.marks.get(sessionId)?.readThrough ?? 0
-      const next = mergeReadMark(previous, readThrough)
-      if (next === previous) return { changed: false, stored: true, readThrough: next }
-      if (!client.marks.has(sessionId) && client.marks.size >= MAX_MARKS_PER_CLIENT) {
-        const oldest = [...client.marks.entries()].sort((a, b) => a[1].at - b[1].at)[0]
-        if (oldest !== undefined) {
-          client.marks.delete(oldest[0])
-          dropped.readMarks += 1
-        }
-      }
-      client.marks.set(sessionId, { readThrough: next, at })
-      deltaRead = true
-      commitDelta()
-      return { changed: true, stored: true, readThrough: next }
-    },
-
-    markAllRead(clientId, through, at): { changed: boolean; through: number; updated: number } {
-      trimReadClients()
-      let client = readClients.get(clientId)
-      if (client === undefined) {
-        client = { at, marks: new Map() }
-        readClients.set(clientId, client)
-      }
-      client.at = at
-      const next = mergeReadMark(readFloor, through)
-      if (next === readFloor) return { changed: false, through: readFloor, updated: 0 }
-      readFloor = next
-      // updated counts rows whose watermark is now inside the floor; the late-row
-      // guarantee comes from the source floor, not from per-row marks.
-      let updated = 0
-      for (const row of rows.values()) {
-        if (!row.present) continue
-        const watermark = Math.max(row.updatedAt, row.completedAt ?? 0)
-        if (watermark > 0 && watermark <= next) updated += 1
-      }
-      deltaRead = true
-      commitDelta()
-      return { changed: true, through: next, updated }
-    },
-
-    readStateFor(clientId): SessionStateReadState {
-      const state = readState()
-      return { clientId, marks: state.marks, floor: state.floor }
-    },
-
-    snapshotFor(clientId, snapshotMode, snapshotHost): SessionStateSnapshot {
+    snapshotFor(snapshotMode, snapshotHost): SessionStateSnapshot {
       const sessions = [...rows.values()]
         .filter(row => row.present)
         .sort((a, b) => {
@@ -1264,7 +1103,6 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
           return bw - aw || (a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0)
         })
         .map(toWireRow)
-      const read = readState()
       return {
         protocol: SESSION_STATE_PROTOCOL_VERSION,
         features: featuresForMode(snapshotMode),
@@ -1272,7 +1110,6 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         cursor,
         host: snapshotHost,
         sessions,
-        read: { clientId, marks: read.marks, floor: read.floor },
       }
     },
 
@@ -1627,39 +1464,8 @@ export interface ChamberSessionStateDeps {
   observer: Pick<SessionStateObserver, 'status' | 'hostInfo'>
   /** Source-level off switch: every route answers 503 session_state_disabled. */
   enabled: boolean
-  now?: () => number
   maxStreams?: number
   keepaliveMs?: number
-}
-
-/** Session-id bound (control characters rejected; the id is never a path). */
-function isSessionId(value: unknown): value is string {
-  return typeof value === 'string'
-    && value.length > 0
-    && value.length <= SESSION_STATE_SESSION_ID_MAX_CHARS
-    && !/[\u0000-\u001f\u007f]/.test(value)
-}
-
-/** Parse one read body (strict; unknown fields ignored). */
-export function parseReadRequestBody(value: unknown): ReadRequest | null {
-  if (!isPlainRecord(value)) return null
-  const clientId = value.clientId
-  const sessionId = value.sessionId
-  const readThrough = value.readThrough
-  if (typeof clientId !== 'string' || !SESSION_STATE_CLIENT_ID_PATTERN.test(clientId)) return null
-  if (!isSessionId(sessionId)) return null
-  if (!isWatermark(readThrough)) return null
-  return { clientId, sessionId, readThrough }
-}
-
-/** Parse a read-all body; `through` is REQUIRED — the server never computes "now". */
-export function parseReadAllRequestBody(value: unknown): ReadAllRequest | null {
-  if (!isPlainRecord(value)) return null
-  const clientId = value.clientId
-  const through = value.through
-  if (typeof clientId !== 'string' || !SESSION_STATE_CLIENT_ID_PATTERN.test(clientId)) return null
-  if (!isWatermark(through)) return null
-  return { clientId, through }
 }
 
 /**
@@ -1671,7 +1477,6 @@ export function parseReadAllRequestBody(value: unknown): ReadAllRequest | null {
  */
 export function createChamberSessionState(deps: ChamberSessionStateDeps): ChamberSessionState {
   const enabled = deps.enabled
-  const clock = deps.now ?? (() => Date.now())
   const maxStreams = deps.maxStreams ?? MAX_SSE_STREAMS
   const keepaliveMs = deps.keepaliveMs ?? SSE_KEEPALIVE_MS
   const activeStreams = new Set<() => void>()
@@ -1681,8 +1486,8 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
     return deps.observer.status().mode
   }
 
-  function snapshot(clientId: string | null): SessionStateSnapshot {
-    const base = deps.store.snapshotFor(clientId, mode(), deps.observer.hostInfo())
+  function snapshot(): SessionStateSnapshot {
+    const base = deps.store.snapshotFor(mode(), deps.observer.hostInfo())
     const observer = deps.observer.status()
     const storeStatus = deps.store.status()
     // 只读自诊断骑在描述符的加法字段上：丢帧/重连/follow 失败可见，不必从沉默推断。
@@ -1703,13 +1508,6 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
         cursor: storeStatus.cursor,
       },
     }
-  }
-
-  function readClientId(req: ApiRequest): { ok: true; clientId: string | null } | { ok: false } {
-    const url = new URL(req.url ?? '/', 'http://gateway.invalid')
-    const raw = url.searchParams.get('clientId')
-    if (raw === null || raw === '') return { ok: true, clientId: null }
-    return SESSION_STATE_CLIENT_ID_PATTERN.test(raw) ? { ok: true, clientId: raw } : { ok: false }
   }
 
   function parseLastEventId(req: ApiRequest): number | null {
@@ -1806,12 +1604,6 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
     })
     // Node 16+: the request close event fires once the body is consumed, so detect disconnects on the response leg.
     res.on('close', () => { if (!res.writableEnded) teardown() })
-    const client = readClientId(req)
-    if (!client.ok) {
-      writeFrame('event: error\ndata: ' + JSON.stringify({ error: 'bad_request', code: 'bad_request' }) + '\n\n')
-      teardown()
-      return true
-    }
     let deliveredCursor = -1
     const replay = lastEventId === null ? null : deps.store.replayFrom(lastEventId)
     if (replay !== null) {
@@ -1822,7 +1614,7 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
       // replay !== null implies lastEventId !== null; this guard only keeps the narrowing local.
       if (deliveredCursor < 0 && lastEventId !== null) deliveredCursor = lastEventId
     } else {
-      const body = snapshot(client.clientId)
+      const body = snapshot()
       writeFrame(snapshotFrame(body))
       deliveredCursor = body.cursor
     }
@@ -1848,19 +1640,6 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
     return true
   }
 
-  async function readJsonBody(req: ApiRequest): Promise<
-    { kind: 'body'; value: unknown } | { kind: 'oversize' } | { kind: 'aborted' } | { kind: 'invalid' }
-  > {
-    const outcome = await readBoundedBody(req, SESSION_STATE_READ_BODY_MAX_BYTES)
-    if (outcome.kind === 'oversize') return { kind: 'oversize' }
-    if (outcome.kind === 'aborted' || outcome.kind === 'closed' || outcome.kind === 'stream-error') return { kind: 'aborted' }
-    try {
-      return { kind: 'body', value: outcome.buffer.length === 0 ? {} : JSON.parse(outcome.buffer.toString('utf8')) }
-    } catch {
-      return { kind: 'invalid' }
-    }
-  }
-
   function methodNotAllowed(res: ApiResponse): true {
     return jsonResponse(res, 405, { error: 'method_not_allowed', code: 'method_not_allowed' })
   }
@@ -1872,51 +1651,11 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
     }
     if (pathname === SESSION_STATE_PATH) {
       if (req.method !== 'GET' && req.method !== 'HEAD') return methodNotAllowed(res)
-      const client = readClientId(req)
-      if (!client.ok) return jsonResponse(res, 400, { error: 'bad_request', code: 'bad_request' })
-      return jsonResponse(res, 200, snapshot(client.clientId))
+      return jsonResponse(res, 200, snapshot())
     }
     if (pathname === SESSION_STATE_STREAM_PATH) {
       if (req.method !== 'GET') return methodNotAllowed(res)
       return openStream(req, res)
-    }
-    if (pathname === SESSION_STATE_READ_PATH || pathname === SESSION_STATE_READ_ALL_PATH) {
-      if (req.method !== 'POST') return methodNotAllowed(res)
-      const body = await readJsonBody(req)
-      if (body.kind === 'oversize') {
-        const result = jsonResponse(res, 413, { error: 'body_too_large', code: 'body_too_large' })
-        req.destroy?.()
-        return result
-      }
-      if (body.kind === 'aborted') return true
-      if (body.kind === 'invalid') return jsonResponse(res, 400, { error: 'bad_request', code: 'bad_request' })
-      if (pathname === SESSION_STATE_READ_PATH) {
-        const parsed = parseReadRequestBody(body.value)
-        if (parsed === null) return jsonResponse(res, 400, { error: 'bad_request', code: 'bad_request' })
-        // Clamp a client clock ahead of the host: it must not buy a permanent read mark in the host's future.
-        const at = clock()
-        const outcome = deps.store.markRead(parsed.clientId, parsed.sessionId, clampReadThrough(parsed.readThrough, at), at)
-        return jsonResponse(res, 200, {
-          ok: true,
-          clientId: parsed.clientId,
-          sessionId: parsed.sessionId,
-          readThrough: outcome.readThrough,
-          changed: outcome.changed,
-          stored: outcome.stored,
-        })
-      }
-      const parsed = parseReadAllRequestBody(body.value)
-      if (parsed === null) return jsonResponse(res, 400, { error: 'bad_request', code: 'bad_request' })
-      const at = clock()
-      const outcome = deps.store.markAllRead(parsed.clientId, clampReadThrough(parsed.through, at), at)
-      return jsonResponse(res, 200, {
-        ok: true,
-        clientId: parsed.clientId,
-        through: outcome.through,
-        floor: outcome.through,
-        changed: outcome.changed,
-        updated: outcome.updated,
-      })
     }
     return jsonResponse(res, 404, { error: 'not_found', code: 'not_found' })
   }

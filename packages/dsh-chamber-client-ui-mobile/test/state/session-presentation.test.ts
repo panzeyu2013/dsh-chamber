@@ -1,9 +1,8 @@
 /**
  * The mobile tier's single presentation read: the presented session id (rc.2
  * `retainedBy.mainView`) and the one concrete Session accessor (`binding`). The
- * stall arm and the read-watermark reporter both consume this module, so these
- * locks cover the migration a fake carrying only the removed pre-rc.2 accessors
- * would hide.
+ * stall arm consumes this module, so these locks cover the migration a fake
+ * carrying only the removed pre-rc.2 accessors would hide.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

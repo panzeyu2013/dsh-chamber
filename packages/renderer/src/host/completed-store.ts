@@ -1,29 +1,27 @@
 /**
- * The completed-unread ledger ("blue dots"): sourceId → sessionId → completed
- * flag, seeded from the persisted unread v4 payload on the first frame. ONE
- * authority: the rendered table, the persisted \`edge\` table and the event-side
- * prevLedger read all come from this snapshot (they used to be a useState plus
- * a ledger ref written together, plus a third read in the persistence closure).
+ * The App's completion-point store ("blue dots"): sourceId → sessionId → true.
  *
- * setSource is the single write: the derivation's new table replaces a source's
- * entry only when it actually differs (sameBooleanMap), so a re-derived-but-
- * equal table costs no render; a source's row is dropped when the registry
- * retires it, and pruned in the same sweep as the other per-source tables.
+ * Authority is the vendor's own `uiSession.sessionStatus.completionUnread`, carried
+ * on the channel row and merged into the runtime facts. This store holds ONLY the
+ * App's N-ctx correction arm (client-core `completion-arm.ts`): the hidden source's
+ * mainView-retained row the vendor rule cannot arm. It is memory-only — never
+ * seeded from disk, never persisted (reload forgets, exactly like upstream).
+ *
+ * setSource is the single write: the step's new table replaces a source's entry
+ * only when it actually differs, so a re-stepped-but-equal table costs no render;
+ * a source's row is dropped when the registry retires it, and pruned in the same
+ * sweep as the other per-source tables.
  */
 
-import { createListenerSet } from '@dsh-chamber/dsh-chamber-client-core'
-import { sameBooleanMap } from '../unread-derivation.ts'
+import { createListenerSet, sameTrueTable } from '@dsh-chamber/dsh-chamber-client-core'
 
 export type CompletedTable = Record<string, Record<string, boolean>>
 
 export interface CompletedStore {
   subscribe(listener: () => void): () => void
-  /** Synchronous latest table for event callbacks and persistence. */
+  /** Synchronous latest table for event callbacks. */
   getSnapshot(): CompletedTable
-  /** Install the persisted v4 edge table (first frame, before any effect). */
-  seed(table: CompletedTable): void
   setSource(sourceId: string, table: Record<string, boolean>): void
-  dropSource(sourceId: string): void
   prune(live: ReadonlySet<string>): void
   retire(sourceIds: Iterable<string>): void
 }
@@ -39,16 +37,9 @@ export function createCompletedStore(): CompletedStore {
   return {
     subscribe: listeners.subscribe,
     getSnapshot: () => snapshot,
-    seed(table) { emit(table) },
     setSource(sourceId, table) {
-      if (sameBooleanMap(snapshot[sourceId] ?? {}, table)) return
+      if (sameTrueTable(snapshot[sourceId] ?? {}, table)) return
       emit({ ...snapshot, [sourceId]: table })
-    },
-    dropSource(sourceId) {
-      if (snapshot[sourceId] === undefined) return
-      const next = { ...snapshot }
-      delete next[sourceId]
-      emit(next)
     },
     prune(live) {
       let next: CompletedTable | null = null

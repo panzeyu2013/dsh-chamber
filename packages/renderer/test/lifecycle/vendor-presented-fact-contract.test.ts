@@ -142,3 +142,15 @@ test('chamber renderer lock: the core runtime report still passes the rc.2 row o
     'projectRuntimeFacts no longer accepts the rc.2 retainedBy row field - the presentation pass-through must be re-derived',
   )
 })
+
+test('chamber renderer lock: projectRuntimeFacts carries the official completion-unread bit', () => {
+  const derive = repoSource('packages/dsh-chamber-client-core/src/derive.ts')
+  assert.ok(
+    derive.includes('statusCompleted?: ReadonlySet<string>'),
+    'projectRuntimeFacts no longer accepts the official sessionStatus.completionUnread projection - the one authority for completion points must be re-derived',
+  )
+  assert.ok(
+    derive.includes('if (statusCompleted?.has(id) === true) row.completed = true'),
+    'the official completion-unread bit no longer rides the runtime row - the App would be left with only its N-ctx correction arm',
+  )
+})

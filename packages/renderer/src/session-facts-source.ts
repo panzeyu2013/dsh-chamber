@@ -9,8 +9,7 @@
  * session_state_disabled / serviceable / completedAtSource）是跨包单一来源，不得本地改写。
  * mode === 'sse' 消费 SSE 增量（id 单调游标，重连带 Last-Event-ID；心跳只作活性）；
  * mode === 'poll' 按 pollIntervalMs 重取快照；静默超时 ⇒ 关流重订阅并整量重取，期间标
- * stale。ack 上行失败进 unread-store 有界待发表，通道恢复点重放，成功才出队（幂等，
- * 绝不阻塞读推进）。行数据只承载会话元数据（goal 三值事实 = 白名单 {goalId, revision,
+ * stale。行数据只承载会话元数据（goal 三值事实 = 白名单 {goalId, revision,
  * phase, activation?, updatedAt?}，绝不含 objective/blockedReason），**绝不**带
  * title/cwd/消息。
  */
@@ -18,8 +17,6 @@
 /** 快照路由后缀；与 control-plane 的 SESSION_STATE_PATH 逐字节相同（跨包锁步，不得本地改写）。 */
 export const SESSION_FACTS_ROUTE = '/chamber/session-state'
 export const SESSION_FACTS_STREAM_ROUTE = '/chamber/session-state/stream'
-export const SESSION_FACTS_READ_ROUTE = '/chamber/session-state/read'
-export const SESSION_FACTS_READ_ALL_ROUTE = '/chamber/session-state/read-all'
 
 /** 本客户端支持的接口主版本；与 control-plane 的 PROTOCOL_VERSION 锁步。 */
 export const SESSION_FACTS_PROTOCOL_VERSION = 1
@@ -33,7 +30,7 @@ export const SESSION_FACTS_PROBE_TIMEOUT_MS = 5_000
 /**
  * 流建连/首字节 deadline：与 probe 同预算。到点按「流断开」收口（abort + markStale +
  * 诊断 + 有界重连）——半死隧道下裸 fetch 可能永不落定，否则流会带着 streamStarted=true
- * 永久楔死：无 stale、无重连、未读/通知/行刷新静默冻结。
+ * 永久楔死：无 stale、无重连、完成点/通知/行刷新静默冻结。
  */
 export const SESSION_FACTS_STREAM_CONNECT_TIMEOUT_MS = SESSION_FACTS_PROBE_TIMEOUT_MS
 
@@ -51,7 +48,6 @@ export const SESSION_FACTS_SILENCE_MS = 60_000
 export const SESSION_FACTS_POLL_MS = 30_000
 
 import { isWatermark } from './watermark.ts'
-import { createUnreadAckOutbox, type UnreadAckMethod } from './unread-store.ts'
 import { isPlainRecord } from './plain-record.ts'
 
 export type SessionFactsVerdict = 'ok' | 'legacy-gateway' | 'degraded'
@@ -78,7 +74,7 @@ export type SessionFactsTurnEndKind =
 /** wire aborted cause 族（缺失 = 字段缺席，绝不臆造 legacy）。 */
 export type SessionFactsTurnEndCause = 'user' | 'parent' | 'hook' | 'disposed' | 'legacy'
 
-/** 判定输入；形状与 client-core 的 TurnEndFact 结构兼容（可直接喂 deriveUnread）。 */
+/** 判定输入；形状与 client-core 的 TurnEndFact 结构兼容（完成观测/通知投影共用）。 */
 export interface SessionFactsTurnEnd {
   kind: SessionFactsTurnEndKind
   cause?: SessionFactsTurnEndCause
@@ -113,7 +109,7 @@ export interface SessionFactsRow {
    */
   completedAt: number | null
   /** observed = 实时观察且带 host 时间戳（可通知）；reconstructed = 缺口重建或拿不到
-   *  host 时间的降级戳，两者都只出未读、不发通知。 */
+   *  host 时间的降级戳，两者都不作通知证据。 */
   completedAtSource: SessionFactsCompletedAtSource | null
   /**
    * 完成戳的时钟域：`host` = 可直接与读水位比较；`observer` = 客户端观察者时钟，
@@ -132,13 +128,6 @@ export interface SessionFactsRow {
   factAt: number
 }
 
-/** 服务端来源级读状态（本机读标记由 unread-store 持有；此处是跨端权威的那一份）。 */
-export interface SessionFactsReadState {
-  clientId: string | null
-  marks: Readonly<Record<string, number>>
-  floor: number
-}
-
 export interface SessionFactsSnapshot {
   verdict: SessionFactsVerdict
   degradation: SessionFactsDegradation
@@ -151,7 +140,6 @@ export interface SessionFactsSnapshot {
   stale: boolean
   cursor: number
   rows: Readonly<Record<string, SessionFactsRow>>
-  read: SessionFactsReadState | null
   lastEventAt: number | null
 }
 
@@ -163,20 +151,20 @@ export interface SessionFactsSnapshot {
  * `serviceable` is copied verbatim from the host's own lifecycle. `verdict ok +
  * serviceable false` is reachable (host stopped / managed dsh stopped), and such
  * a snapshot's rows are contractually read-only-unknown; treating them as usable
- * advanced the unread watermarks from rows this module calls unknown, while the
- * sidebar overlay suppressed them. The overlay demanded both; the notification
- * and unread consumers checked only `verdict` — one rule, three sites, two
+ * let the notification and completion observers act on rows this module calls
+ * unknown, while the sidebar overlay suppressed them. The overlay demanded both;
+ * the notification consumers checked only `verdict` — one rule, three sites, two
  * answers.
  *
  * RENDER vs DECISION. This predicate answers "may these rows be RENDERED as
  * read-only facts?" and it deliberately keeps a `stale` snapshot usable: the
  * sidebar overlay renders a disconnected source's residual rows and labels them
- * (`mergeRuntimeFacts` ORs the stale bit in). The DECISION surfaces — the unread
- * ledger, the read-watermark advance and the completion observation — must not
- * act on a snapshot whose live carrier is gone, so they use
- * {@link isFactsDecisionUsable} instead. Both predicates live here so the chain
- * has one owner; a consumer must never re-spell either rule (the historical
- * defect: an always-true copy of the decision rule in the unread wiring).
+ * (`mergeRuntimeFacts` ORs the stale bit in). The DECISION surfaces — the
+ * completion observation and the notification projection — must not act on a
+ * snapshot whose live carrier is gone, so they use {@link isFactsDecisionUsable}
+ * instead. Both predicates live here so the chain has one owner; a consumer must
+ * never re-spell either rule (the historical defect: an always-true copy of the
+ * decision rule in the completion wiring).
  */
 export function isFactsUsable(snapshot: SessionFactsSnapshot): boolean {
   return snapshot.verdict === 'ok' && snapshot.serviceable !== false
@@ -184,50 +172,24 @@ export function isFactsUsable(snapshot: SessionFactsSnapshot): boolean {
 
 /**
  * The decision gate: may this snapshot's rows be treated as authoritative
- * EVIDENCE (arm/disarm the unread ledger, advance a read watermark, drive the
- * completion observation)? Strictly narrower than {@link isFactsUsable} by
+ * EVIDENCE (drive the completion observation and the notification projection)?
+ * Strictly narrower than {@link isFactsUsable} by
  * `!stale`.
  *
  * Why `stale`: `markStale()` is a pass-through that flips only the `stale` bit,
  * so every "carrier is gone / silent / rejected" window (stream close, silence
  * watchdog, connect deadline, disconnect) reaches consumers WITHOUT touching
- * `verdict` or `serviceable`. Treating such a snapshot as evidence let the
- * UNREAD consumer fall back to a channel-only recomputation while the very same
- * tick's snapshot still carried rows: the armed "completed" dot was pruned by
- * the channel-only pass and re-armed when the carrier returned — the Dock badge
- * and the row dot flickered once per carrier flap. Rule 0 is the fix, and its
- * scope is the *facts conclusion* only: with a channel present the derivation
- * still settles by channel edges (arming is never frozen), and `prevLedger` is
- * returned untouched only when facts AND channel are both absent (design 19
- * §3.7.1; `factsVerified === false` with `channel === undefined`).
+ * `verdict` or `serviceable`. Treating such a snapshot as evidence let a
+ * completion be observed on rows whose live carrier was already gone (the badge
+ * and the row dot flickered once per carrier flap). Rule 0 is the fix, and its
+ * scope is the *facts conclusion* only: with a channel present the completion
+ * observation still settles by channel edges (arming is never frozen), and
+ * `factsVerified === false` means "no facts evidence this tick".
  */
 export function isFactsDecisionUsable(snapshot: SessionFactsSnapshot): boolean {
   return snapshot.verdict === 'ok' && snapshot.serviceable !== false && snapshot.stale !== true
 }
 
-/**
- * The ONE decision tuple the unread/badge chain consumes. Returns the two values
- * TOGETHER so they can never be derived from different predicates — the
- * historical defect shipped an always-true `verified` next to rows taken from the
- * strict predicate, which is exactly the mismatch this shape forbids:
- *
- *   snapshot absent            → { rows: undefined, verified: true  }  (channel-only)
- *   snapshot present, decidable → { rows: snapshot.rows, verified: true }
- *   snapshot present, undecidable → { rows: undefined, verified: false } (rule 0:
- *                                  no facts evidence; channel edges still arm)
- *
- * Callers (the unread wiring, the read-watermark advance, `markSourceAllRead`)
- * must take BOTH values from this call; never compute either by hand.
- */
-export function factsDecisionInput(snapshot: SessionFactsSnapshot | undefined): {
-  rows: SessionFactsSnapshot['rows'] | undefined
-  verified: boolean
-} {
-  if (snapshot === undefined) return { rows: undefined, verified: true }
-  return isFactsDecisionUsable(snapshot)
-    ? { rows: snapshot.rows, verified: true }
-    : { rows: undefined, verified: false }
-}
 
 /** 探测观测（只交事实，HTTP carrier 由本模块拥有）。 */
 export type SessionFactsProbeOutcome =
@@ -258,8 +220,6 @@ export interface SessionFactsSourceOptions {
   streamConnectTimeoutMs?: number
   /** 重连退避（probe 失败与流断开共用；默认 SESSION_FACTS_RECONNECT_MS；测试注入小值）。 */
   reconnectMs?: number
-  /** 待发 ack 队列上限（条目数；默认 UNREAD_PENDING_MAX；测试注入小值）。 */
-  ackQueueMax?: number
   /** 诊断回调（warn 一次语义由调用方决定；本模块不直接 console）。 */
   onDiagnostic?: (message: string, error?: unknown) => void
 }
@@ -278,10 +238,6 @@ export interface SessionFactsSource {
   subscribe(listener: (snapshot: SessionFactsSnapshot | undefined) => void): () => void
   onRowHint(listener: (hint: SessionFactsRowHint) => void): () => void
   getSnapshot(): SessionFactsSnapshot | undefined
-  /** 单会话读水位上行（幂等 max；失败只 warn，本地为准）。 */
-  ackRead(clientId: string, sessionId: string, readThrough: number): void
-  /** 来源级 read-all 水位上行（客户端给 through，服务端不取当下）。 */
-  ackAllRead(clientId: string, through: number): void
 }
 
 
@@ -358,7 +314,7 @@ export function parseSessionFactsRow(value: unknown): SessionFactsRow | null {
     : null
   let lastTurnEnd: SessionFactsTurnEnd | null = null
   if (isPlainRecord(value.lastTurnEnd) && typeof value.lastTurnEnd.kind === 'string') {
-    // kind 词汇之外的值按「已知非完成」处理（deriveUnread 语义）；cause 只接受 known 值。
+    // kind 词汇之外的值按「已知非完成」处理（完成判定语义）；cause 只接受 known 值。
     const rawCause = value.lastTurnEnd.cause
     const cause = rawCause === 'user' || rawCause === 'parent' || rawCause === 'hook'
       || rawCause === 'disposed' || rawCause === 'legacy'
@@ -403,22 +359,6 @@ function parseRows(value: unknown): Record<string, SessionFactsRow> {
   return rows
 }
 
-/** 服务端 read 状态；主体缺失时 null（不是「全已读」）。 */
-export function parseSessionFactsReadState(value: unknown): SessionFactsReadState | null {
-  if (!isPlainRecord(value)) return null
-  const marks: Record<string, number> = {}
-  if (isPlainRecord(value.marks)) {
-    for (const [sessionId, mark] of Object.entries(value.marks)) {
-      if (isWatermark(mark)) marks[sessionId] = mark
-    }
-  }
-  return {
-    clientId: stringOrNull(value.clientId),
-    marks,
-    floor: isWatermark(value.floor) ? value.floor : 0,
-  }
-}
-
 /** 快照主体解析（200 响应或 SSE sync data）；非对象/无 protocol 即 null。 */
 export function parseSessionFactsSnapshotValue(value: unknown): {
   protocol: number
@@ -428,7 +368,6 @@ export function parseSessionFactsSnapshotValue(value: unknown): {
   hostState: string
   serviceable: boolean
   rows: Record<string, SessionFactsRow>
-  read: SessionFactsReadState | null
 } | null {
   if (!isPlainRecord(value)) return null
   if (typeof value.protocol !== 'number' || !Number.isSafeInteger(value.protocol) || value.protocol < 1) return null
@@ -443,7 +382,6 @@ export function parseSessionFactsSnapshotValue(value: unknown): {
     hostState: typeof host.state === 'string' && host.state !== '' ? host.state : 'unknown',
     serviceable: host.serviceable !== false,
     rows: parseRows(value.sessions),
-    read: parseSessionFactsReadState(value.read),
   }
 }
 
@@ -548,7 +486,6 @@ export function applySessionFactsDelta(current: SessionFactsSnapshot, value: unk
   const removed = Array.isArray(value.removedSessionIds)
     ? value.removedSessionIds.filter((id): id is string => typeof id === 'string' && id !== '')
     : []
-  const read = value.read === undefined || value.read === null ? null : parseSessionFactsReadState(value.read)
   const host = isPlainRecord(value.host) ? value.host : null
   const nextRows: Record<string, SessionFactsRow> = { ...current.rows }
   let added = 0
@@ -571,7 +508,6 @@ export function applySessionFactsDelta(current: SessionFactsSnapshot, value: unk
     mode: mode ?? current.mode,
     cursor,
     rows: nextRows,
-    read: read ?? current.read,
     hostState: host !== null && typeof host.state === 'string' && host.state !== '' ? host.state : current.hostState,
     serviceable: host !== null && typeof host.serviceable === 'boolean' ? host.serviceable : current.serviceable,
     stale: false,
@@ -670,26 +606,6 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     options.onDiagnostic?.(message, error)
   }
 
-  /**
-   * 有界待发 ack 队列（unread-store.createUnreadAckOutbox）：失败（网络错误 / 5xx）的
-   * /read、/read-all 在此等待重放，2xx 才出队；读推进永不等待它。
-   */
-  const ackOutbox = createUnreadAckOutbox({
-    fetchImpl,
-    ...(options.ackQueueMax === undefined ? {} : { maxPending: options.ackQueueMax }),
-    onError: error => diagnostic('[session-facts] read ack', error),
-  })
-
-  /**
-   * 既有「通道恢复」钩子：服务端真的回了一帧/一块（probe 快照、SSE sync、增量帧、
-   * 心跳注释或 resync 后的整量重取）就是同一条通道恢复的证据，此刻重放待发 ack。
-   * 只触发不等待（void），单飞由 outbox 保证。
-   */
-  const noteChannelAlive = (): void => {
-    if (state.stopped || !state.connected || ackOutbox.size() === 0) return
-    void ackOutbox.replay()
-  }
-
   const emit = (): void => {
     if (state.stopped) return
     for (const listener of [...listeners]) listener(state.snapshot)
@@ -718,13 +634,12 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     stale: false,
     cursor: parsed.cursor,
     rows: parsed.rows,
-    read: parsed.read,
     lastEventAt: now(),
   })
 
   /**
    * 无载荷降级快照工厂（legacy / disabled / unversioned / 首次失败）：拿不到协议载荷时
-   * 行/游标/read 全空是事实而不是猜测；mode 为 null。stale 默认 true（没有活载体在刷新，
+   * 行/游标全空是事实而不是猜测；mode 为 null。stale 默认 true（没有活载体在刷新，
    * 消费者据此降档）；legacy 例外——它按 reconnectMs 有界低频重探，快照会继续更新，按事实标 false。
    * 曾有历史后的 404 / 已有行的 unversioned 走「保留既有行 + 标不可用」出口，**不得**走本工厂
    * （那会把旧行清成权威空集）。
@@ -742,7 +657,6 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     stale,
     cursor: 0,
     rows: {},
-    read: null,
     lastEventAt: now(),
   })
 
@@ -847,7 +761,6 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
       state.protocolFactsSeen = true
       state.lastEventId = parsed.cursor
       emit()
-      noteChannelAlive()
       return { probe, parsed }
     }
     const previous = state.snapshot
@@ -858,7 +771,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
       return { probe, parsed: null }
     }
     if (probe.verdict === 'legacy-gateway') {
-      // 首探从未见过协议行 = 该网关没有镜像协议的权威空集；曾有历史后 404 = 保留旧行/游标/read
+      // 首探从未见过协议行 = 该网关没有镜像协议的权威空集；曾有历史后 404 = 保留旧行/游标
       // 只标不可用（整体清空等于宣告全体会话消失，observeSource 触发遗忘结算、held pending 被清）。
       state.snapshot = state.protocolFactsSeen
         ? {
@@ -1077,8 +990,6 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
           buffer = buffer.slice(index + 2)
           if (block.trim() !== '') {
             state.lastFrameAt = now()
-            // 心跳注释帧也证明通道仍在：同样是一次既有的「通道恢复」信号。
-            noteChannelAlive()
             const frame = parseSessionFactsSseBlock(block)
             if (frame !== null) applyFrame(frame)
           }
@@ -1143,11 +1054,6 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     state.probing = false
   }
 
-  const ack = (method: UnreadAckMethod, route: string, body: Record<string, unknown>): void => {
-    // 载荷纪律与重放归 unread-store（键白名单/幂等 max/有界待发表/never-throw），源只负责方法、URL 与触发点。
-    ackOutbox.post(options.sourceId, method, urlFor(route), body)
-  }
-
   return {
     update,
     reconcile() { void probeOnce() },
@@ -1161,11 +1067,5 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
       return () => { hintListeners.delete(listener) }
     },
     getSnapshot() { return state.snapshot },
-    ackRead(clientId, sessionId, readThrough) {
-      ack('read', SESSION_FACTS_READ_ROUTE, { clientId, sessionId, readThrough })
-    },
-    ackAllRead(clientId, through) {
-      ack('read-all', SESSION_FACTS_READ_ALL_ROUTE, { clientId, through })
-    },
   }
 }

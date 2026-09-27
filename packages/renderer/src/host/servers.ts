@@ -85,7 +85,8 @@ export function deriveServers(
   aggregates: Record<string, InstanceAggregate>,
   hostFacts: Record<string, HostFacts | undefined>,
   runtimeFacts: Record<string, InstanceRuntimeReport | undefined>,
-  completedBySource: Record<string, Record<string, boolean>>,
+  /** App 的 N-ctx 完成修正臂（官方位在通道行里，mergeRuntimeFacts 只追加）。 */
+  correctionArms: Record<string, Record<string, boolean>>,
   activeViewId: string,
   pluginDiagnostics: Record<string, PluginGraphDiagnostic | undefined>,
   // 降级事实要过投影给侧栏来源行与连接页，
@@ -106,7 +107,7 @@ export function deriveServers(
   // frame's dictionary in the locale the frame renders in.
   locale: FrameLocale,
   // overlay 的来源；判定输入不过桥，见 factsOverlay。刻意追加在参数表末尾：
-  // 既有接线锁按 completedBySource/paintedView/pluginDiagnostics 的文本锚点
+  // 既有接线锁按 correctionArms/paintedView/pluginDiagnostics 的文本锚点
   // 钉 current 投影（veil-layering-invariants.test.ts），不重排既有参数。
   sessionFacts: Record<string, SessionFactsSnapshot | undefined>,
 ): ChamberServerAggregate[] {
@@ -222,13 +223,11 @@ export function deriveServers(
       updatedAt: now,
     }
     // 运行时事实附加闸：connected 仍是主闸，
-    // 但**未读事实与 facts overlay 破例**——断连来源仍附只读事实并标
-    // stale:true，消费者（todo-attention）按 stale 出「离线未读」条目；没有
-    // 事实时合并结果不变（mergeRuntimeFacts 兼容锁）。
-    // 完成未读点只有 App 账本（completedBySource）一个来源：蓝点以派生投影为准
-    // （deriveSourceUnread；它无视后台来源 shell 的陈旧 selected），通道永不携带
-    // completed（官方 store 行没有该字段）。合并为纯函数 mergeRuntimeFacts（shared/
-    // derive.ts，单测覆盖）。
+    // 但**完成点事实与 facts overlay 破例**——断连来源仍附只读事实并标
+    // stale:true；没有事实时合并结果不变（mergeRuntimeFacts 兼容锁）。
+    // 完成点：官方 completionUnread 由生产者写进通道行，App 的 N-ctx 修正臂
+    // （correctionArms，按行补臂、读一行不清另一行）在这里追加；合并为纯函数
+    // mergeRuntimeFacts（client-core derive.ts，单测覆盖）。
     // 能力一览：把该来源事实的 probe 判定投影进聚合条目。无快照时
     // 保持缺席（侧栏把缺席读作未知；臆造 full 会让能力说明在未知状态下撒谎）。
     // 位置纪律：必须在 entry 字面量**之后**（否则 TDZ 直接抛）。
@@ -239,12 +238,12 @@ export function deriveServers(
       if (dshVersion !== undefined) entry.dshVersion = dshVersion
     }
     const overlay = factsOverlay(sessionFacts[id])
-    const sourceLedger = completedBySource[id]
-    const hasLedger = sourceLedger !== undefined && Object.values(sourceLedger).some(value => value === true)
-    if (connected || hasLedger || overlay !== undefined) {
+    const sourceArms = correctionArms[id]
+    const hasArms = sourceArms !== undefined && Object.values(sourceArms).some(value => value === true)
+    if (connected || hasArms || overlay !== undefined) {
       const merged = mergeRuntimeFacts(
         runtimeFacts[id],
-        sourceLedger,
+        sourceArms,
         overlay,
         connected ? undefined : true,
       )

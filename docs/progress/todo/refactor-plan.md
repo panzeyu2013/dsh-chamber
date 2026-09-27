@@ -55,8 +55,9 @@ useSyncExternalStore 的小 store（单源），事件回调读 store 的 getSna
   旧反向锁正则大小写不敏感缺口一并补上）→ 改读 `factsStore.getSnapshot().runtime`；
   锁 `facts-store.test.ts` 正则改 `/i`。
 - ✅ 已收口：`snapshotSources` → `host/mounted-sources-store.ts`（mark/withdraw/retire/prune
-  领域操作；ledger ref 盒与 reducer 的 lifecycle 字段一并删除）；`edgeLedgerRef` +
-  `completedBySource` → `host/completed-store.ts`（相等表静默；落盘/渲染/事件读同一快照）。
+  领域操作；ledger ref 盒与 reducer 的 lifecycle 字段一并删除）；完成未读修正臂 `correctionArms`
+  → `host/completed-store.ts`（相等表静默；渲染/事件读同一快照；旧的 `edgeLedgerRef`/`completedBySource`
+  账本已随上游对齐删除）。
 - **未收口（renderer 外，已登记）**：`sidebar-root-projection.ts`（useState+serversRef 镜像
   chamberBridge store）、`InstanceView.tsx` activeRef/settledRef、`DshRuntimeSection.tsx`
   confirmLaunchRef。
@@ -108,8 +109,8 @@ useSyncExternalStore 的小 store（单源），事件回调读 store 的 getSna
 ### 7.1 新一轮审计新增开放项（未动；供下一轮排期）
 
 - **renderer usable-facts 三处判定分叉**：`host/servers.ts`（要求 serviceable）vs
-  `use-bridge-subscriptions.ts` / `use-unread-notifications.ts/:261`（只看 verdict）；
-  verdict=ok + serviceable=false 可达 ⇒ 通知与读水位从未知行推进。收口 = 单一 `isFactsUsable`。
+  `use-bridge-subscriptions.ts` / `use-notifications.ts`（只看 verdict）；
+  verdict=ok + serviceable=false 可达 ⇒ 通知候选从未知行推进。收口 = 单一 `isFactsUsable`。
 - **renderer reconnect 记账第四份手抄**：`App.tsx` 复制 `use-aggregate-refresh.ts` 三臂
   gate/backoff；`retireSources` 漏 `sessionListRefreshAt/Pending`、`authoritativeArchiveSet`
   （同 id 换代泄漏）。收口 = 单一 `reconnectSource(id)` + 生命周期参与者注册表。

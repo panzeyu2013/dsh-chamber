@@ -388,57 +388,6 @@ export function nextServerOrder(
 }
 
 /**
- * One reconcile step of the App-owned "completed but unread" dot state
- * machine. PURE — called inside a functional state updater so batched reports
- * compose without losing earlier arms.
- * "Being read" is the ACTIVE view's current session (the App's fact), not this
- * ctx's possibly-stale `selected`: a running→idle edge arms unless the session
- * is being read; re-running, leaving the list, or starting to read disarms.
- * `prevRunning` is the source's last-observed bits — a per-report snapshot,
- * never a shared ref. `authoritativeList` gates absent = deleted (see deriveSourceUnread).
- * @returns the next armed set (identity when unchanged).
- */
-export function reconcileCompletedFacts(params: {
-  sessions: Record<string, { running?: boolean }>
-  nextRunning: Record<string, boolean>
-  prevRunning: Record<string, boolean>
-  prevCompleted: Record<string, boolean>
-  readingCurrent: string | undefined
-  authoritativeList: boolean
-}): { completed: Record<string, boolean>; changed: boolean } {
-  const next = { ...params.prevCompleted }
-  let changed = false
-  for (const [sessionId, row] of Object.entries(params.sessions)) {
-    if (row?.running === true) {
-      // Re-run disarms.
-      if (next[sessionId] === true) {
-        delete next[sessionId]
-        changed = true
-      }
-      continue
-    }
-    // running → idle edge: arm unless the session is being read right now.
-    if (params.prevRunning[sessionId] === true && sessionId !== params.readingCurrent && next[sessionId] !== true) {
-      next[sessionId] = true
-      changed = true
-    }
-    // Reading disarms: the active view's current session is on screen.
-    if (sessionId === params.readingCurrent && next[sessionId] === true) {
-      delete next[sessionId]
-      changed = true
-    }
-  }
-  // Left the list: drop armed dots + edge memory (authoritative-only sweep; off-list has no target).
-  if (params.authoritativeList) {
-    for (const sessionId of [...Object.keys(params.prevRunning), ...Object.keys(params.prevCompleted)]) {
-      if (params.nextRunning[sessionId] !== undefined) continue
-      if (next[sessionId] === true) { delete next[sessionId]; changed = true }
-    }
-  }
-  return { completed: changed ? next : params.prevCompleted, changed }
-}
-
-/**
  * Turn-end classification of a completion edge: `completed` arms, and so does
  * an UNREADABLE tail (the degraded marker, `lastTurnEnd: null` +
  * `degraded`). `aborted` + cause `user` is a user stop; every other known kind
@@ -456,37 +405,14 @@ export interface TurnEndFact {
 }
 
 /**
- * THE unread predicate: unread ⟺ max(updatedAt, completedAt) > readThrough.
- * `updatedAt` (host domain) is valid however the turn ended, so a user stop
- * still leaves the user's own prompt unread. `completedAt` counts when the
- * classification is `completed` OR ABSENT — absent is the watcher's degraded
- * marker for an unreadable tail, where the edge has already armed, so
- * fail-closed here would LOSE a real completion; a known non-completion
- * (aborted incl. `user`, blocked, error, max-tokens, interrupted) suppresses
- * the arm. `readThrough` is the host-domain watermark (absent/0 = nothing
- * read); comparisons are strictly `>` and use ONLY the integer inputs — no
- * client wall clock, no ledger state.
- */
-export function deriveUnread(
-  completedAt: number | undefined,
-  lastTurnEnd: TurnEndFact | null | undefined,
-  readThrough: number | undefined,
-  updatedAt: number | undefined,
-): boolean {
-  const kind = lastTurnEnd === undefined || lastTurnEnd === null ? undefined : lastTurnEnd.kind
-  const knownNonCompletion = kind !== undefined && kind !== 'completed'
-  const completedWatermark = completedAt !== undefined && !knownNonCompletion ? completedAt : 0
-  const watermark = Math.max(updatedAt ?? 0, completedWatermark)
-  return watermark > (readThrough ?? 0)
-}
-
-/**
  * Project one ctx's sessions snapshot into the chamber runtime-facts report:
  * every listed session carries its live `running` bit (via
  * {@link resolveSessionRunning}), `pending` rides the official sessionStatus
- * projection, and `completed` is injected later by {@link mergeRuntimeFacts} —
- * the channel never carries it. The App owns the completed-but-unread dot
- * (running→idle edges: it alone knows what "being read" means).
+ * projection, and `completed` is the OFFICIAL completion-unread bit
+ * (`sessionStatus.completionUnread`, passed as `statusCompleted`) — the vendor's
+ * own fact, memory-only in the ctx that owns the session. The App adds only the
+ * N-ctx correction arm at merge time ({@link mergeRuntimeFacts},
+ * `completion-arm.ts`).
  * `subagentRunning` (running descendant count per parent) and
  * `pendingInteractions` are INJECTED by the plugin (the pending vocabulary
  * mirrors the official `visiblePendingKind`, unknown kinds stay undefined) so
@@ -513,6 +439,10 @@ export function projectRuntimeFacts(
    *  {@link resolveSessionRunning} — the vendor's own rule. Omitted = unmounted
    *  source (no status projection): the row keeps its own bit. */
   statusRunning?: SessionRunningStatus,
+  /** The official completion-unread projection (`sessionStatus.completionUnread`).
+   *  Sparse: only `true` writes the row field; absent = no such fact (unmounted
+   *  source) or the vendor bit is clear. */
+  statusCompleted?: ReadonlySet<string>,
 ): InstanceRuntimeReport {
   const sessions: InstanceRuntimeReport['sessions'] = {}
   for (const [id, facts] of Object.entries(snapshot.byId ?? {})) {
@@ -521,6 +451,7 @@ export function projectRuntimeFacts(
     // 子代理完成是高频事件，漏入会刷屏。
     if (facts?.origin === 'subagent') continue
     const row: {
+      completed?: boolean
       running?: boolean
       pending?: 'approval' | 'plan-review' | 'question'
       runningSubagents?: number
@@ -531,6 +462,10 @@ export function projectRuntimeFacts(
     } = {
       running: resolveSessionRunning(statusRunning, id, facts?.running),
     }
+    // Official bit: the ctx that owns the session armed it in its own memory
+    // (running→idle while NOT mainView-retained). The channel carries it
+    // verbatim; the App correction arm only ADDS the N-ctx hole at merge time.
+    if (statusCompleted?.has(id) === true) row.completed = true
     if (typeof facts?.updatedAt === 'number' && Number.isSafeInteger(facts.updatedAt) && facts.updatedAt >= 0) {
       row.updatedAt = facts.updatedAt
     }
@@ -849,11 +784,11 @@ export interface RuntimeFactsOverlayRow {
 export type RuntimeFactsOverlay = Readonly<Record<string, RuntimeFactsOverlayRow>>
 
 /**
- * Merge one source's live runtime-facts report with the App-owned
- * completed-but-unread dots, preserving the current session and every other live
- * row. The App's running→idle edge ledger (`completedBySource`) is the ONLY
- * writer of `completed` — the channel never carries it (the official client store
- * row has no such field; its `sessionStatus.completionUnread` is not consumed).
+ * Merge one source's live runtime-facts report with the App's N-ctx correction
+ * arms, preserving the current session and every other live row. `completed`
+ * comes from the CHANNEL (the official `sessionStatus.completionUnread` bit); the
+ * App only ORs in `correctionArms` — row-keyed arms for the hidden source's
+ * mainView-retained sessions the vendor rule could not arm (`completion-arm.ts`).
  * PURE; returns undefined when there is nothing to attach.
  *
  * `overlay` supplies render fields when the shell channel is absent (pending:
@@ -865,11 +800,11 @@ export type RuntimeFactsOverlay = Readonly<Record<string, RuntimeFactsOverlayRow
  */
 export function mergeRuntimeFacts(
   runtime: InstanceRuntimeReport | undefined,
-  completedBySource: Record<string, boolean> | undefined,
+  correctionArms: Record<string, boolean> | undefined,
   overlay?: RuntimeFactsOverlay,
   stale?: boolean,
 ): InstanceRuntimeReport | undefined {
-  const chamberCompleted = completedBySource
+  const chamberCompleted = correctionArms
   const hasArmed = chamberCompleted !== undefined && Object.values(chamberCompleted).some(value => value === true)
   const hasOverlay = overlay !== undefined && Object.keys(overlay).length > 0
   // The report's own stale bit (channel) counts exactly like the explicit arg.

@@ -31,8 +31,8 @@ export interface ChamberSurfaceDeps {
   plugins: ChamberPlugins
   /** The managed web-profile plugin read projection (read-only). */
   installed: ChamberInstalled
-  /** The read-only session-state watcher: snapshot, SSE deltas and read marks
-   * under /chamber/session-state*. Optional so the surface stays additive; when
+  /** The read-only session-state watcher: snapshot and SSE deltas under
+   * /chamber/session-state*. Optional so the surface stays additive; when
    * absent the prefix falls through to this surface's own 404. */
   sessionState?: ChamberSessionState
 }
@@ -230,7 +230,7 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
       return true
     }
 
-    // /chamber/session-state*: snapshot / SSE / read / read-all. Exact-prefix
+    // /chamber/session-state*: snapshot / SSE. Exact-prefix
     // match only — '/chamber/session-stateevil' must NOT be claimed. Host-down
     // still answers 200 with host.serviceable=false; the disabled switch answers
     // 503 session_state_disabled.

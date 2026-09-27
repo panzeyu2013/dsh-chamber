@@ -1,8 +1,7 @@
 /**
  * session-state-protocol.ts unit tests: descriptor parsing, the
  * capability matrix (404 / 503-disabled / unversioned / 5xx+timeout /
- * forward-skew / ok), the frozen feature tuple + coverage net, read-mark
- * monotonic max merge and source-wide effective max, and the turn/end
+ * forward-skew / ok), the frozen feature tuple + coverage net, and the turn/end
  * classification that closes R12 (completed counts; aborted+user does not;
  * blocked/error/max-tokens/interrupted are neutral).
  *
@@ -12,11 +11,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  clampReadThrough,
   classifySessionStateProbe,
   classifyTurnEnd,
-  effectiveReadMark,
-  mergeReadMark,
   parseSessionStateDescriptor,
   PROTOCOL_VERSION,
   SESSION_STATE_BASE_FEATURES,
@@ -24,8 +20,6 @@ import {
   SESSION_STATE_FEATURES,
   SESSION_STATE_PATH,
   SESSION_STATE_PROTOCOL_VERSION,
-  SESSION_STATE_READ_ALL_PATH,
-  SESSION_STATE_READ_PATH,
   SESSION_STATE_ROUTES,
   SESSION_STATE_STREAM_PATH,
   sessionStateFeatureSupport,
@@ -59,13 +53,9 @@ test('protocol version + route set are the frozen single source', () => {
   assert.equal(SESSION_STATE_PROTOCOL_VERSION, PROTOCOL_VERSION)
   assert.equal(SESSION_STATE_PATH, '/chamber/session-state')
   assert.equal(SESSION_STATE_STREAM_PATH, '/chamber/session-state/stream')
-  assert.equal(SESSION_STATE_READ_PATH, '/chamber/session-state/read')
-  assert.equal(SESSION_STATE_READ_ALL_PATH, '/chamber/session-state/read-all')
   assert.deepEqual([...SESSION_STATE_ROUTES], [
     SESSION_STATE_PATH,
     SESSION_STATE_STREAM_PATH,
-    SESSION_STATE_READ_PATH,
-    SESSION_STATE_READ_ALL_PATH,
   ])
 })
 
@@ -91,8 +81,6 @@ test('feature coverage net: every advertised feature is consciously listed', () 
     'session-state.snapshot',
     'session-state.stream',
     'session-state.last-event-id',
-    'session-state.read',
-    'session-state.read-all',
     'session-state.host-clock',
     'session-state.dsh-events',
     'session-state.pending-graph',
@@ -107,10 +95,10 @@ test('feature coverage net: every advertised feature is consciously listed', () 
 
 /**
  * diagnostics.dropped 的键集单一来源：P2a 保留边的容量淘汰计数
- * `goalActivations` 必须在协议声明里（gateway 发 4 键；旧端只读已知键）。
+ * `goalActivations` 必须在协议声明里（gateway 发 2 键；旧端只读已知键）。
  * 类型注解就是编译期断言——协议漏声明该键时 typecheck 直接红。
  */
-const DIAGNOSTICS_DROPPED_KEYS = ['goalActivations', 'readClients', 'readMarks', 'sessions'] as const
+const DIAGNOSTICS_DROPPED_KEYS = ['goalActivations', 'sessions'] as const
 
 function assertDiagnosticsDroppedKeys(value: Record<string, number>, label: string): void {
   assert.deepEqual(Object.keys(value).sort(), [...DIAGNOSTICS_DROPPED_KEYS], label + ': diagnostics.dropped key set drifted')
@@ -118,12 +106,12 @@ function assertDiagnosticsDroppedKeys(value: Record<string, number>, label: stri
 
 test('diagnostics dropped declares the additive goalActivations counter (P2a) and the tripwire can fail', () => {
   const dropped: SessionStateDiagnostics['dropped'] = {
-    sessions: 1, readClients: 2, readMarks: 3, goalActivations: 4,
+    sessions: 1, goalActivations: 4,
   }
   assertDiagnosticsDroppedKeys(dropped, 'declared shape')
-  // Negative control：同一键集闸门必须拒绝退回旧三键形状的 dropped。
+  // Negative control：同一键集闸门必须拒绝缺少 goalActivations 的旧形状 dropped。
   assert.throws(
-    () => assertDiagnosticsDroppedKeys({ sessions: 1, readClients: 2, readMarks: 3 }, 'mutant old shape'),
+    () => assertDiagnosticsDroppedKeys({ sessions: 1 }, 'mutant old shape'),
     /mutant old shape/,
   )
 })
@@ -259,9 +247,9 @@ test('classifier: the required-feature set is injectable', () => {
 
 test('sessionStateFeatureSupport: unknown advertised ids do not count as support', () => {
   assert.deepEqual(sessionStateFeatureSupport([...SESSION_STATE_FEATURES]), { ok: true, missing: [] })
-  assert.deepEqual(sessionStateFeatureSupport(['x', 'y'], ['session-state.read']), {
+  assert.deepEqual(sessionStateFeatureSupport(['x', 'y'], ['session-state.stream']), {
     ok: false,
-    missing: ['session-state.read'],
+    missing: ['session-state.stream'],
   })
 })
 
@@ -272,14 +260,14 @@ test('sessionStateFeatureSupport: unknown advertised ids do not count as support
 test('parseSessionStateDescriptor: unknown fields ignored, invalid fields null', () => {
   const descriptor = parseSessionStateDescriptor({
     protocol: 1,
-    features: ['session-state.snapshot', 42, '', null, 'session-state.read'],
+    features: ['session-state.snapshot', 42, '', null, 'session-state.stream'],
     mode: 'nonsense',
     cursor: -1,
     x_future: { anything: true },
   })
   assert.deepEqual(descriptor, {
     protocol: 1,
-    features: ['session-state.snapshot', 'session-state.read'],
+    features: ['session-state.snapshot', 'session-state.stream'],
     mode: null,
     cursor: null,
   })
@@ -299,32 +287,6 @@ test('sessionStateNoteKey: ok is silent; every degraded kind has a unique non-em
     keys.add(key)
   }
   assert.equal(keys.size, 5)
-})
-
-// ---------------------------------------------------------------------------
-// 读标记
-// ---------------------------------------------------------------------------
-
-test('mergeReadMark: monotonic max, idempotent, invalid values treated as absent', () => {
-  assert.equal(mergeReadMark(undefined, 5), 5)
-  assert.equal(mergeReadMark(null, 5), 5)
-  assert.equal(mergeReadMark(5, 3), 5)
-  assert.equal(mergeReadMark(5, 5), 5)
-  assert.equal(mergeReadMark(7, Number.NaN), 7)
-  assert.equal(mergeReadMark(7, -1), 7)
-  assert.equal(mergeReadMark(0, 1.5), 0)
-  assert.equal(mergeReadMark(Number.NaN, 2), 2)
-})
-
-test('effectiveReadMark: source-wide max over every client plus the floor', () => {
-  assert.equal(effectiveReadMark([], 0), 0)
-  assert.equal(effectiveReadMark([1, 9, 3, null, undefined], 5), 9)
-  assert.equal(effectiveReadMark([], 7), 7)
-  assert.equal(effectiveReadMark([2, 4]), 4)
-  assert.equal(effectiveReadMark([2, 4], -5), 4)
-  assert.equal(effectiveReadMark([Number.NaN, 1.5], 0), 0)
-  function* marks() { yield 12; yield 3 }
-  assert.equal(effectiveReadMark(marks(), 1), 12)
 })
 
 // ---------------------------------------------------------------------------
@@ -355,18 +317,4 @@ test('classifyTurnEnd: aborted for any non-user cause is neutral', () => {
 test('classifyTurnEnd: an absent fact is neutral', () => {
   assert.equal(classifyTurnEnd(null), 'neutral')
   assert.equal(classifyTurnEnd(undefined), 'neutral')
-})
-
-test('clampReadThrough keeps read marks in the host domain (clock skew)', () => {
-  const hostNow = 1_700_000_000_000
-  // A legitimate mark at or below the host clock is untouched.
-  assert.equal(clampReadThrough(hostNow - 60_000, hostNow), hostNow - 60_000)
-  assert.equal(clampReadThrough(hostNow, hostNow), hostNow)
-  assert.equal(clampReadThrough(0, hostNow), 0)
-  // A desktop clock running an hour ahead cannot buy a future mark: without the
-  // clamp it would suppress every completion in that hour (lost true unread).
-  assert.equal(clampReadThrough(hostNow + 3_600_000, hostNow), hostNow)
-  // An unusable acceptance time yields 0 (nothing is stored in a future domain).
-  assert.equal(clampReadThrough(5, Number.NaN), 0)
-  assert.equal(clampReadThrough(5, -1), 0)
 })

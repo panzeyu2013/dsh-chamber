@@ -123,7 +123,7 @@ test('start sends the exact $events open frame and reconciles a full baseline on
   assert.equal(harness.observer.status().mode, 'sse')
   assert.equal(harness.observer.status().ready, true)
   assert.equal(harness.observer.status().clientId, 'mux-client-1')
-  assert.equal(harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions.length, 1)
+  assert.equal(harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions.length, 1)
 })
 
 test('suspend: host-down reports serviceable false and stop() closes the watcher', async t => {
@@ -158,7 +158,7 @@ test('each true->false edge opens exactly one session/follow and a completed tai
   assert.deepEqual(follows[0]['payload'], {
     args: { request: { address: { kind: 'session', sessionId: 's1' }, maxMessages: 8 } },
   })
-  const rowBefore = harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]
+  const rowBefore = harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions[0]
   assert.equal(rowBefore.running, false)
   assert.equal(rowBefore.completedAt, null, 'the raw edge arms nothing until the read settles')
   // Duplicate edge before the read settles must not open a second follow.
@@ -169,7 +169,7 @@ test('each true->false edge opens exactly one session/follow and a completed tai
     records: [{ type: 'event', event: { type: 'turn/end', seq: 7, time: 9, data: { turn: 1, reason: { kind: 'completed' } } } }],
   })
   await settle()
-  const row = harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]
+  const row = harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions[0]
   // 观察者用**结算时刻**的时钟打戳，而 harness.clock 是持续走的真实时钟：精确相等
   // 只在"恰好同一毫秒"时成立。断言落在本次交互的
   // 时间窗内：既排除 0/陈旧戳，也不依赖同毫秒。
@@ -192,7 +192,7 @@ test('an aborted+user tail never arms unread but is recorded as lastTurnEnd', as
     records: [{ type: 'event', event: { type: 'turn/end', seq: 8, time: 1, data: { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } } } }],
   })
   await settle()
-  const row = harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]
+  const row = harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions[0]
   assert.equal(row.completedAt, null)
   assert.equal(row.completedAtSource, null)
   assert.equal(row.lastTurnEnd?.kind, 'aborted')
@@ -209,7 +209,7 @@ test('a neutral (blocked) tail arms nothing', async t => {
     records: [{ type: 'event', event: { type: 'turn/end', seq: 2, time: 1, data: { turn: 1, reason: { kind: 'blocked' } } } }],
   })
   await settle()
-  const row = harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]
+  const row = harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions[0]
   assert.equal(row.completedAt, null)
   assert.equal(row.lastTurnEnd?.kind, 'blocked')
 })
@@ -221,7 +221,7 @@ test('an unreadable follow falls back to arming with the degraded marker', async
   socket.emitItem('events', { type: 'emit', event: 'api-session/status', args: ['s1', false] })
   socket.emitEnd('follow-1')
   await settle()
-  const row = harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]
+  const row = harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions[0]
   // 真实完成不得丢，但戳记是结算时刻而非 harness.clock 的读数。
   assert.ok((row.completedAt ?? 0) >= 1_000 && (row.completedAt ?? 0) <= harness.clock,
     `a real completion must not be lost（得到 ${row.completedAt}）`)
@@ -241,7 +241,7 @@ test('an unreadable follow falls back to arming with the degraded marker', async
       data: { turn: 1, reason: { kind: 'completed' } } } }],
   })
   await settle()
-  assert.equal(harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]?.completedAtSource,
+  assert.equal(harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions[0]?.completedAtSource,
     'observed', 'only a classified tail may authorize the live completion')
 })
 
@@ -258,7 +258,7 @@ test('a delayed old follow cannot write a completion into a newly running row', 
       data: { turn: 1, reason: { kind: 'completed' } } } }],
   })
   await settle()
-  const row = harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]
+  const row = harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions[0]
   assert.equal(row?.running, true)
   assert.equal(row?.completedAt, null)
 })
@@ -279,7 +279,7 @@ test('a baseline-found stop after a restart is re-classified (gap reconstruction
     records: [{ type: 'event', event: { type: 'turn/end', seq: 3, time: 1, data: { turn: 1, reason: { kind: 'completed' } } } }],
   })
   await settle()
-  const row = restart.store.snapshotFor(null, 'sse', restart.observer.hostInfo()).sessions[0]
+  const row = restart.store.snapshotFor('sse', restart.observer.hostInfo()).sessions[0]
   assert.equal(row.completedAtSource, 'reconstructed')
   assert.equal(row.completedAt !== null, true)
 })
@@ -296,7 +296,7 @@ test('a waterfall is held while no downstream mux client exists (never settled)'
     type: 'waterfall', event: 'approval/request', eventId: 'w1', agentId: 's1', request: { question: 'TOP-SECRET-QUESTION' },
   })
   await settle()
-  const row = harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]
+  const row = harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions[0]
   assert.equal(row.pendingKind, 'approval')
   assert.equal(harness.calls.calls.some(entry => entry.method === '$events/result'), false,
     'no downstream client: never answer next (that would settle the approval as unavailable)')
@@ -322,7 +322,7 @@ test('a held waterfall is delegated with next once a downstream client exists an
   })
   harness.sockets.sockets[0].emitItem('events', { type: 'cancel', eventId: 'w2' })
   await settle()
-  assert.equal(harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0].pendingKind, null)
+  assert.equal(harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions[0].pendingKind, null)
 })
 
 test('the grace window is honoured: no delegation before waterfallGraceMs', async t => {
@@ -362,7 +362,7 @@ test('poll mode owns the unary baseline cadence while $events never becomes read
   assert.equal(harness.observer.status().mode, 'poll')
   assert.equal(harness.calls.calls.filter(entry => entry.method === 'session/list').length >= 1, true,
     'the observer polls session/list while the event stream is unavailable')
-  assert.equal(harness.store.snapshotFor(null, 'poll', harness.observer.hostInfo()).sessions.length, 1)
+  assert.equal(harness.store.snapshotFor('poll', harness.observer.hostInfo()).sessions.length, 1)
 })
 
 test('poll mode rejects a partial baseline without changing a previously running row', async t => {
@@ -370,13 +370,13 @@ test('poll mode rejects a partial baseline without changing a previously running
   harness.observer.start()
   harness.sockets.sockets[0].emitOpen()
   await delay(70)
-  assert.equal(harness.store.snapshotFor(null, 'poll', harness.observer.hostInfo()).sessions[0]?.running, true)
+  assert.equal(harness.store.snapshotFor('poll', harness.observer.hostInfo()).sessions[0]?.running, true)
   harness.setItems([
     baselineItem('s1', false, 6),
     { sessionId: 's2', updatedAt: 6 },
   ])
   await delay(70)
-  assert.equal(harness.store.snapshotFor(null, 'poll', harness.observer.hostInfo()).sessions[0]?.running, true,
+  assert.equal(harness.store.snapshotFor('poll', harness.observer.hostInfo()).sessions[0]?.running, true,
     'a partial response must not be applied as a successful baseline')
   assert.equal(harness.observer.status().degraded, true)
 })
@@ -391,7 +391,7 @@ test('a poll-mode running edge degrades to unknown instead of fabricating unread
   harness.observer.start()
   harness.sockets.sockets[0].emitOpen()
   await delay(70)
-  const row = harness.store.snapshotFor(null, 'poll', harness.observer.hostInfo()).sessions[0]
+  const row = harness.store.snapshotFor('poll', harness.observer.hostInfo()).sessions[0]
   assert.equal(row.running, false)
   assert.equal(row.completedAt, null, 'no completion classification without a session/follow carrier')
   assert.equal(followFrames(harness).length, 0)
@@ -444,7 +444,7 @@ test('goal activation edges reach the wire row and degrade to unknown on a fresh
     args: [{ sessionId: 's1', goal: { id: 'g1', revision: 1, activation: 'armed' } }],
   })
   await settle()
-  let row = harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]
+  let row = harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions[0]
   assert.deepEqual(row.goal, { goalId: 'g1', revision: 1, phase: 'active', updatedAt: 5, activation: 'armed' })
 
   // Silence resubscribe creates a NEW $events generation. Its emit frames have
@@ -456,7 +456,7 @@ test('goal activation edges reach the wire row and degrade to unknown on a fresh
   second.emitOpen()
   second.emitItem('events', { type: 'ready', clientId: 'mux-client-2' })
   await settle()
-  row = harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]
+  row = harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions[0]
   assert.deepEqual(row.goal, { goalId: 'g1', revision: 1, phase: 'active', updatedAt: 5 })
   assert.equal(row.goal?.activation, undefined)
 })
@@ -493,7 +493,7 @@ test('goal activation identity survives the mux end-to-end: complete then a new 
     args: [{ sessionId: 's1', goal: { id: 'g2', revision: 1, activation: 'armed' } }],
   })
   await settle()
-  let row = harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]
+  let row = harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions[0]
   assert.equal(row.goal?.goalId, 'g1')
   assert.equal(row.goal?.activation, undefined, 'the previous goal never reads armed')
   assert.notEqual(row.completedAt, null, 'the completion is still on the wire')
@@ -503,7 +503,7 @@ test('goal activation identity survives the mux end-to-end: complete then a new 
   harness.setItems([rawItem('g2', 7)])
   harness.observer.kick('resync')
   await settle()
-  row = harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]
+  row = harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions[0]
   assert.deepEqual(row.goal, { goalId: 'g2', revision: 1, phase: 'active', updatedAt: 7, activation: 'armed' })
   assert.equal(JSON.stringify(row).includes('SECRET-OBJECTIVE'), false)
 })
@@ -523,13 +523,13 @@ test('a host $events end releases the held waterfall pending row and never answe
     type: 'waterfall', event: 'approval/request', eventId: 'w-end', agentId: 's1', request: { question: 'x' },
   })
   await settle()
-  assert.equal(harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0].pendingKind, 'approval')
+  assert.equal(harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions[0].pendingKind, 'approval')
 
   // 宿主流结束 $events：该代已死。hold 必须本地 cancel 收尾，gateway 的
   // pendingKind 不得滞留到下一代（否则该审批永远显示为待处理）。
   harness.sockets.sockets[0].emitEnd('events')
   await settle()
-  assert.equal(harness.store.snapshotFor(null, 'poll', harness.observer.hostInfo()).sessions[0].pendingKind, null)
+  assert.equal(harness.store.snapshotFor('poll', harness.observer.hostInfo()).sessions[0].pendingKind, null)
   assert.equal(harness.observer.status().ready, false)
   assert.equal(harness.observer.status().clientId, null)
   assert.equal(harness.calls.calls.some(entry => entry.method === '$events/result'), false)
@@ -546,7 +546,7 @@ test('a host $events end releases the held waterfall pending row and never answe
   harness.observer.kick('tick')
   await settle()
   assert.equal(harness.calls.calls.some(entry => entry.method === '$events/result'), false)
-  assert.equal(harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0].pendingKind, null)
+  assert.equal(harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions[0].pendingKind, null)
 })
 
 test('a $events death withdraws the process-local activation and never resurrects it in poll mode', async t => {
@@ -573,7 +573,7 @@ test('a $events death withdraws the process-local activation and never resurrect
     args: [{ sessionId: 's1', goal: { id: 'g1', revision: 1, activation: 'armed' } }],
   })
   await settle()
-  let row = harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]
+  let row = harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions[0]
   assert.deepEqual(row.goal, { goalId: 'g1', revision: 1, phase: 'active', updatedAt: 5, activation: 'armed' })
 
   // ready true -> false 同样是一次代际切换：emit 帧没有重放，死亡窗口里的
@@ -585,13 +585,13 @@ test('a $events death withdraws the process-local activation and never resurrect
   // serviceable 语义：死的是事件流而不是宿主，poll 模式仍可服务。
   assert.equal(harness.observer.hostInfo().serviceable, true)
   assert.equal(harness.observer.hostInfo().state, 'ready')
-  row = harness.store.snapshotFor(null, 'poll', harness.observer.hostInfo()).sessions[0]
+  row = harness.store.snapshotFor('poll', harness.observer.hostInfo()).sessions[0]
   assert.equal(row.goal?.goalId, 'g1')
   assert.equal(row.goal?.activation, undefined)
 
   // 死亡窗口内 poll 基线继续对账：陈旧 activation 不回流。
   await delay(60)
-  row = harness.store.snapshotFor(null, 'poll', harness.observer.hostInfo()).sessions[0]
+  row = harness.store.snapshotFor('poll', harness.observer.hostInfo()).sessions[0]
   assert.equal(row.goal?.activation, undefined)
   assert.equal(JSON.stringify(row).includes('SECRET-OBJECTIVE'), false)
 
@@ -608,6 +608,6 @@ test('a $events death withdraws the process-local activation and never resurrect
     args: [{ sessionId: 's1', goal: { id: 'g1', revision: 1, activation: 'disarmed' } }],
   })
   await settle()
-  row = harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]
+  row = harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions[0]
   assert.deepEqual(row.goal, { goalId: 'g1', revision: 1, phase: 'active', updatedAt: 5, activation: 'disarmed' })
 })

@@ -395,7 +395,7 @@ export function apply(ctx: ClientContext): void {
           /** 官方实时运行观测；缺席 = 该行尚无观测（见 resolveSessionRunning）。 */
           running?: boolean
           pendingInteraction?: { kind?: string }
-          /** 官方自己的「完成未读」；chamber 自持账本，只在取证时可读（今日不消费）。 */
+          /** 官方自己的「完成未读」位（内存 Set，上游就绪）；运行时事实通道唯一的 completed 来源。 */
           completionUnread?: boolean
         }>
         subscribe(listener: () => void): () => void
@@ -411,6 +411,18 @@ export function apply(ctx: ClientContext): void {
       const rows = new Map<string, boolean | undefined>()
       for (const [sessionId, status] of sessionStatus.getSnapshot()) rows.set(sessionId, status.running)
       return rows
+    }
+
+    /**
+     * 官方完成未读位的读：与运行位同一订阅、同一份投影。位为真才进集合（稀疏），
+     * 缺席 = 官方未武装。chamber 不再自持账本，也不做任何时间戳/水位判定。
+     */
+    const readStatusCompleted = (): ReadonlySet<string> => {
+      const ids = new Set<string>()
+      for (const [sessionId, status] of sessionStatus.getSnapshot()) {
+        if (status.completionUnread === true) ids.add(sessionId)
+      }
+      return ids
     }
 
     /**
@@ -577,7 +589,7 @@ export function apply(ctx: ClientContext): void {
       for (const [sessionId, status] of sessionStatus.getSnapshot()) {
         if (status.pendingInteraction !== undefined) pendingBySession.set(sessionId, status.pendingInteraction)
       }
-      const baseReport = projectRuntimeFacts(snapshot, subagentRunning, pendingBySession, runIds, statusRunning)
+      const baseReport = projectRuntimeFacts(snapshot, subagentRunning, pendingBySession, runIds, statusRunning, readStatusCompleted())
       // listComplete：官方列表的 arrival phase（'pending' → 首次成功 'ready'，此后出错不回退）
       // 就是「列表是否完整」的权威事实；只有 ready 才允许 App 把缺席当删除剪掉未读（pending
       // 恒 false ⇒ 不剪枝，否则一次未完成的列表会假清未读）。它是判定输入，不进侧边栏渲染。
@@ -748,7 +760,7 @@ export function apply(ctx: ClientContext): void {
     })
     verifySessionBaseline()
     const unsubscribeWorkspaces = workspacesList.subscribe(queueSnapshot)
-    // sessionStatus 的 pendingInteraction 变化只影响运行时事实（琥珀点/通知边沿）；sync() 内 queueSnapshot 有签名去重兜底，重复触发无副作用。
+    // sessionStatus 的 pendingInteraction / completionUnread 变化只影响运行时事实（琥珀点/通知边沿/完成点）；sync() 内 queueSnapshot 有签名去重兜底，重复触发无副作用。
     const unsubscribePending = sessionStatus.subscribe(sync)
     return () => {
       disposed = true

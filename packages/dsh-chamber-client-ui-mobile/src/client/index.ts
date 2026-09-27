@@ -31,7 +31,6 @@ import {
   type MutationLike,
 } from './markup.ts'
 import { createLayoutFactSource } from './layout-facts.ts'
-import { installMobileReadWatermark } from './read-watermark.ts'
 import {
   installComposerSelfHeal, installEditabilityRecovery, installEnterToNewline,
   installImeLadder, installComposerVisibilityGuard, PHONE_TIER_QUERY, TOUCH_TIER_QUERY,
@@ -76,12 +75,6 @@ export function apply(ctx: ClientContext): void {
   const t = ctx.locale.bind(NS)
 
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-chamber: mobile dictionaries')
-
-  // ---- read watermark: reading a session on the phone teaches the gateway
-  // mirror the host-domain watermark, clearing the desktop unread dot.
-  // Fail-closed: absent service / missing row / rejected fetch are silent
-  // no-ops (read-watermark.ts). ----
-  ctx.effect(() => installMobileReadWatermark(ctx), 'dsh-chamber: mobile read watermark')
 
   // ---- assets: viewport tokens + stylesheet (idempotent) ----
   ctx.effect(() => {

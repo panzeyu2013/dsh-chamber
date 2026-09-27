@@ -92,22 +92,18 @@ export const GROUPS = {
     'test/aggregate/goal-unknown-arm.test.ts',
     'test/aggregate/badge-count.test.ts',
   ],
-  // session-state: gateway session-state 事实源 + 未读 v4 落盘（v2 一次性迁移）+ 派生账本
+  // session-state: gateway session-state 事实源 + 通知三表落盘（旧 v4/v2 一次性迁移）+ 完成观测装配
   'session-state': [
     // 粗分类/快照/增量/SSE 帧 + 与 control-plane 协议模块的源文本锁步。
     'test/session-state/session-facts-source.test.ts',
-    // 未读 v4（键常量/清洗含 pending+outcomes/v2→v4 一次性迁移/单调 max/LRU/client id/ack/隐私白名单）。
-    'test/session-state/unread-store.test.ts',
+    // 通知三表落盘（notifications.v1 键常量/清洗/旧 v4+v2 一次性迁移/有界化/落盘合并器/隐私白名单）。
+    'test/session-state/notification-store.test.ts',
     // 回声账本单一 store（同步快照/identity-preserving/三表独立/镜像不得复活）。
     'test/session-state/echo-store.test.ts',
     // facts 表单一 store（同步快照/幂等静默/唯一退役路径/渲染期镜像不得复活）。
     'test/session-state/facts-store.test.ts',
-    // 完成未读账本单一 store（相等表静默/退役/prune + 旧 state+ref 对不得复活）。
+    // 完成点修正臂单一 store（相等表静默/退役/prune + 纯内存无 seed + 旧 state+ref 对不得复活）。
     'test/session-state/completed-store.test.ts',
-    // 派生投影行为（deriveUnread + 通道边沿机 + listComplete 唯一剪枝门）。
-    'test/session-state/unread-derivation.test.ts',
-    // W0 未读派生仪表：行样本 top-N / 有界环 / 幂等挂全局（只读诊断面，不参与判定）。
-    'test/session-state/unread-instrument.test.ts',
     // W2：通知身份分支顺序 + identitySource 归因读数。
     'test/session-state/notification-identity.test.ts',
     // 仪器：徽标回读 + 通知决定账本（含「没有桥」这一次）与单组装点锁。
@@ -144,11 +140,11 @@ export const GROUPS = {
     'test/wiring/veil-layering-invariants.test.ts',
     // P4 源注册表接线：指纹只在 roster 刷新处换代，事件只带 epoch，退役即出表。
     'test/wiring/source-registry-wiring.test.ts',
-    // F6 回归：durable 未读四类剪枝必须门控在权威 roster 水合后（源码锁 +
-    // 纯谓词/假存储双证据）。
+    // 完成点步进的 #185 重入闸：非重入同步、步骤体永不嵌套、按 id 去重、微任务补跑。
+    'test/wiring/step-gate.test.ts',
+    // F6 回归：durable 通知三表 + outbox 剪枝必须门控在权威 roster 水合后
+    // （源码锁 + 纯谓词/假存储双证据），并锁完成修正臂的接线形状。
     'test/wiring/unread-prune-roster-gate.test.ts',
-    // W5 前置结构护栏：未读单一实现 / 页面代身份预算 / v5 权威锁。
-    'test/wiring/unread-single-authority.test.ts',
   ],
   // view-runtime: 视图运行时 —— 隐藏视图回收、视图过渡队列、侧栏滚动恢复、切源揭示
   'view-runtime': [

@@ -33,7 +33,6 @@ const SECTION = [
 ].join('\n')
 const HOOK = read('../../src/client/server-section-session-state.tsx')
 const TODO = read('../../src/client/SessionTodoArea.tsx')
-const LOCALES = read('../../src/client/locales.ts')
 
 test('the marker mirrors the dot priority exactly (pending > subagents > completed > running)', () => {
   assert.deepEqual(sessionRowState({ pending: 'approval', runningSubagents: 2, completed: true, running: true }).state, 'pending:approval')
@@ -172,28 +171,4 @@ test('six faces derive from the single sessionRowState source (goal gate include
   assert.match(SECTION, /data-chamber-goal-active=\{sessionStateMarker\(server, session\)\.goalActive \? '' : undefined\}/)
   assert.match(SECTION, /sessionStateDot\(server, \{ id: item\.sessionId, running \}\)/)
   assert.match(SECTION, /sessionStateLabel\(server, \{ id: item\.sessionId, running \}\)/)
-})
-
-/**
- * 「全部已读」：入口必须在来源菜单里可达，且**只发意图**——读水位与落盘归 App，
- * 插件不自己写读数（同一份权威，两个载体不重复实现）。
- */
-test('W4: the source menu offers 全部已读 and asks the App instead of writing read marks', () => {
-  assert.match(SECTION, /\{ id: 'mark-all-read', label: t\('source\.markAllRead'\) \}/)
-  assert.match(SECTION, /if \(id === 'mark-all-read'\) \{[\s\S]{0,160}?chamberBridge\.requestMarkAllRead\(server\.id\)/)
-  // 两个语言都必须有这条文案（缺一条即运行时显示 key）。
-  assert.equal((LOCALES.match(/'source\.markAllRead'/g) ?? []).length, 2)
-})
-
-/** 桥的行为：意图必须真的到达订阅者，且取消订阅后不再投递。 */
-test('W4: requestMarkAllRead reaches App-layer subscribers and unsubscribes cleanly', async () => {
-  const { chamberBridge } = await import('@dsh-chamber/dsh-chamber-client-core/aggregate-store')
-  const seen: string[] = []
-  const unsubscribe = chamberBridge.onMarkAllRead(({ sourceId }) => { seen.push(sourceId) })
-  chamberBridge.requestMarkAllRead('local')
-  chamberBridge.requestMarkAllRead('test')
-  assert.deepEqual(seen, ['local', 'test'])
-  unsubscribe()
-  chamberBridge.requestMarkAllRead('local')
-  assert.deepEqual(seen, ['local', 'test'], '取消订阅后不再投递')
 })

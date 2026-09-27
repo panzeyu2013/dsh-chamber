@@ -106,7 +106,7 @@ test('badge input is the renderer merged projection — the desktop never re-der
   // 与 renderer 投影并存的第二权威（裁决 14 明确徽标输入 = 合并投影）。
   assert.doesNotMatch(
     badgeModuleSource,
-    /completedBySource|runtimeFacts|mergeRuntimeFacts|projectBadgeCount|sessionId/,
+    /correctionArms|runtimeFacts|mergeRuntimeFacts|projectBadgeCount|sessionId/,
     'badge.ts must stay a pure intake/adjudication leaf; the count is the renderer merged projection',
   );
   const handler = badgeCountHandlerSource();
@@ -114,7 +114,7 @@ test('badge input is the renderer merged projection — the desktop never re-der
   assert.match(handler, /adjudicateBadgeCount\(/, 'settings adjudication stays the only transform');
   assert.doesNotMatch(
     handler,
-    /completedBySource|runtimeFacts|projectBadgeCount|\.sessions\b/,
+    /correctionArms|runtimeFacts|projectBadgeCount|\.sessions\b/,
     'the BADGE_COUNT handler must not tally sessions itself (single authority)',
   );
 });
@@ -156,7 +156,7 @@ test('main-window show is a badge replay edge, bound to the count reconcile at a
 });
 
 test('badge intake keeps the renderer retry/reload-zero semantics (design 19 §3.7)', () => {
-  // 0 = 合法清除值：窗口重载后 renderer 的 completedBySource 复位为 {}，挂载兜底
+  // 0 = 合法清除值：窗口重载后 renderer 的 correctionArms 复位为 {}，挂载兜底
   // 推 0 依赖主进程照单接收并清除遗留徽标。
   assert.deepEqual(validateBadgeRequest({ count: 0 }), { ok: true, count: 0 });
   const handler = badgeCountHandlerSource();

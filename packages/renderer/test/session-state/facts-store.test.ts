@@ -61,19 +61,17 @@ test('the App and its hooks keep ONE facts store, not render-time ref mirrors', 
     '../../src/app-hooks/use-aggregate-refresh.ts',
     '../../src/app-hooks/use-bridge-subscriptions.ts',
     '../../src/app-hooks/use-session-facts-lifecycle.ts',
-    '../../src/app-hooks/use-unread-notifications.ts',
+    '../../src/app-hooks/use-notifications.ts',
   ]
   const app = read(files[0])
   assert.match(app, /createFactsStore/, 'one store instance')
   assert.match(app, /factsStore\.getSnapshot\(\)/, 'reads go through the store snapshot')
-  // A "previous value" ledger for edge detection (prevRuntimeFactsRef) is not a
-  // mirror of the current table; every OTHER facts-shaped ref is a regression —
+  // Facts-shaped refs are mirrors of the current table, so none may come back —
   // including a prefixed one like the watchdogRuntimeFactsRef this lock once
-  // missed because the old pattern was case-sensitive and unanchored.
-  const allowedPreviousValueLedgers = new Set(['prevRuntimeFactsRef', 'prevRuntimeFacts'])
+  // missed because the old pattern was case-sensitive and unanchored. The former
+  // prevRuntimeFactsRef allowlist is gone with the late ledger field it named.
   for (const file of files) {
     const hits = read(file).match(/[A-Za-z0-9_$]*(?:sessionFactsRef|runtimeFactsRef|setSessionFacts|setRuntimeFacts)[A-Za-z0-9_$]*/gi) ?? []
-    const mirrors = hits.filter(hit => !allowedPreviousValueLedgers.has(hit))
-    assert.deepEqual(mirrors, [], file + ': the render-time ref mirrors and their setters must not come back')
+    assert.deepEqual(hits, [], file + ': the render-time ref mirrors and their setters must not come back')
   }
 })

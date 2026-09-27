@@ -26,6 +26,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
 /** pin 住的 vendor 链接树（ensure-harness-vendor 建链）。 */
 const VENDOR = fileURLToPath(new URL('../../../../vendor/harness-packages/@deepseek-ai/', import.meta.url))
@@ -142,7 +143,7 @@ vendorTest('上游：官方运行位解析 = status?.running ?? s.running（cham
     '官方 nav 的运行位必须仍是「status 投影优先、列表行兜底」；规则一变，resolveSessionRunning '
     + '与它的全部消费点（环/事实通道/运行身份/子代理计数）必须按 design 06 §4.3 重推')
   assert.match(nav, /completed: status\?\.completionUnread === true/,
-    '官方完成位读的是 sessionStatus.completionUnread；若上游改回 store 行字段，chamber 的账本归属须重审')
+    '官方完成位读的是 sessionStatus.completionUnread；若上游改回 store 行字段，chamber 的完成归属（生产者消费）须重审')
   assert.match(nav, /statuses\.get\(child\.id\)\?\.running \?\? list\.byId\[child\.id\]\?\.running/,
     '**子行**运行位走同一规则——chamber 的 indexSubagentDescendants 镜像的正是这条，'
     + '改成单读 list 行会让子代理运行环与官方计数分歧')
@@ -171,7 +172,25 @@ vendorTest('上游：status 投影行形状（running 可为 undefined ⇒ 回�
     '未读只在「真观测过 running」之后武装——诊断性写回不得被误当作运行观测')
 })
 
-vendorTest('上游：客户端 store 行没有 completed（chamber 曾读的字段是幻影）', () => {
+vendorTest('对齐锁：chamber 生产者消费官方 completionUnread（读投影 → 第 6 参 → 稀疏行字段）', () => {
+  // vendor 只给事实（内存 Set）；chamber 侧必须真的把它读出来、写进通道行——
+  // 生产者的唯一入口是 projectRuntimeFacts 的第 6 参，行字段稀疏（true 才写）。
+  const producer = stripComments(readFileSync(fileURLToPath(new URL('../../src/client/index.ts', import.meta.url)), 'utf8'))
+  assert.match(producer, /const readStatusCompleted = \(\): ReadonlySet<string> => \{/,
+    '生产者必须定义官方完成位的读（与 readStatusRunning 同一份 sessionStatus 投影）')
+  assert.match(producer, /if \(status\.completionUnread === true\) ids\.add\(sessionId\)/,
+    '只有官方为真才进集合（稀疏）：缺席 = 未武装，chamber 不得自行补位')
+  assert.match(producer,
+    /projectRuntimeFacts\(snapshot, subagentRunning, pendingBySession, runIds, statusRunning, readStatusCompleted\(\)\)/,
+    '该读必须作为第 6 参喂给 projectRuntimeFacts（完成位唯一的生产者入口）')
+  const derive = stripComments(readFileSync(fileURLToPath(new URL('../../../dsh-chamber-client-core/src/derive.ts', import.meta.url)), 'utf8'))
+  assert.match(derive, /statusCompleted\?: ReadonlySet<string>/, 'projectRuntimeFacts 声明第 6 余参 statusCompleted')
+  assert.match(derive, /if \(statusCompleted\?\.has\(id\) === true\) row\.completed = true/,
+    '行字段必须只在官方位为真时稀疏写入（true 才写字段）')
+  assert.doesNotMatch(derive, /row\.completed = false/, '清位只由官方集合缺席表达，绝不写 false 字段')
+})
+
+vendorTest('对齐锁：客户端 store 行没有 completed —— 官方 completionUnread 才是唯一来源', () => {
   const list = readVendorSourceProviding('dsh-api-session-controller', 'id: entry.sessionId')
   // 断言锚刻意不同于定位符（否则是自证）：parentId 的改名才是 ambient 模型的另一半依据。
   assert.match(list, /parentId: entry\.parentSessionId/,
@@ -179,7 +198,7 @@ vendorTest('上游：客户端 store 行没有 completed（chamber 曾读的字�
   assert.match(list, /retainedBy: this\.retentionSnapshot\(entry\.sessionId\)\.retainedBy/,
     "current 判定所依赖的 retainedBy 必须仍在 store 行上")
   assert.doesNotMatch(list, /completed:/,
-    'store 行一旦出现 completed，chamber 的完成归属应改读它（今日它只能来自 App 账本）')
+    'store 行必须仍无 completed：完成位的唯一官方载体是 sessionStatus.completionUnread（chamber 经生产者消费，见上一条对齐锁）')
 })
 
 vendorTest('上游：visiblePendingKind 三档与 chamber pendingKindOf 逐字一致（词表缺口登记）', () => {

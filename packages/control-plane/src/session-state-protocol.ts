@@ -10,9 +10,8 @@
  *   - A missing advertised-required feature ⇒ forward-skew with the exact ids.
  *   - `completedAtSource` distinguishes an observed completion edge from a gap
  *     reconstruction; only an observed completion may feed a notification.
- *   - Read marks merge monotonically (max), evaluated SOURCE-WIDE across clients
- *     plus the source floor (phone read ⇒ desktop dot out); `completed` counts as a
- *     completion, `aborted`+cause=user is a user stop (never unread), the rest neutral.
+ *   - `completed` counts as a completion, `aborted`+cause=user is a user stop
+ *     (never unread), the rest neutral.
  */
 
 /**
@@ -33,19 +32,10 @@ export const SESSION_STATE_PATH = '/chamber/session-state'
  *  `Last-Event-ID` resumes from it (heartbeat comments never carry an id). */
 export const SESSION_STATE_STREAM_PATH = `${SESSION_STATE_PATH}/stream`
 
-/** Idempotent, monotonic per-session read-mark upsert. */
-export const SESSION_STATE_READ_PATH = `${SESSION_STATE_PATH}/read`
-
-/** Idempotent, monotonic source-wide read-floor upsert (`through`; a
- *  server-side "take the current maximum" is explicitly rejected). */
-export const SESSION_STATE_READ_ALL_PATH = `${SESSION_STATE_PATH}/read-all`
-
-/** The four claimed paths in canonical order. */
+/** The two claimed paths in canonical order. */
 export const SESSION_STATE_ROUTES = Object.freeze([
   SESSION_STATE_PATH,
   SESSION_STATE_STREAM_PATH,
-  SESSION_STATE_READ_PATH,
-  SESSION_STATE_READ_ALL_PATH,
 ] as const)
 
 /**
@@ -60,11 +50,8 @@ export const SESSION_STATE_FEATURES = Object.freeze([
   'session-state.stream',
   /** The stream resumes from Last-Event-ID within a bounded cursor window. */
   'session-state.last-event-id',
-/** POST /read upserts a per-session read mark. */
-  'session-state.read',
-/** POST /read-all upserts the source-wide read floor. */
-  'session-state.read-all',
-  /** The snapshot carries the host clock (the only unread comparison domain). */
+  /** The snapshot carries the host clock (the host-domain basis every
+   *  completion fact is compared in). */
   'session-state.host-clock',
   /** The $events subscription is live (dsh-events family observed). */
   'session-state.dsh-events',
@@ -123,22 +110,12 @@ export const SESSION_STATE_DEGRADATION_CODES = Object.freeze([
   'cursor-expired',
   /** Last-Event-ID is ahead of the cursor (observer restart) — refetch. */
   'cursor-ahead',
-  /** The gateway predates the read routes; read marks stay local. */
-  'read-unsupported',
 ] as const)
 
 /** Stable degradation code (derived union of the tuple). */
 export type SessionStateDegradationCode = (typeof SESSION_STATE_DEGRADATION_CODES)[number]
 
-/** Read-request body cap (gateway routes reject larger bodies with 413). */
-export const SESSION_STATE_READ_BODY_MAX_BYTES = 16 * 1024
-
-/** Client-install id shape: an unguessable token minted once per install
- *  (localStorage + server registration). Read marks are keyed by it. */
-export const SESSION_STATE_CLIENT_ID_PATTERN = /^[A-Za-z0-9._:-]{1,64}$/
-
-/** Session-id bound accepted by the read routes (control characters rejected
- *  by the route validator, not here). */
+/** Session-id bound accepted by persisted session rows. */
 export const SESSION_STATE_SESSION_ID_MAX_CHARS = 128
 
 /** Runtime dsh-events handshake window (5s ⇒ mode:poll +
@@ -277,14 +254,6 @@ export interface SessionStateRow {
   factAt: number
 }
 
-/** Source-wide read state. `marks` is the per-session max across clients known to the
- *  observer; `floor` is the read-all floor. `clientId` echoes the requesting install. */
-export interface SessionStateReadState {
-  clientId: string | null
-  marks: Readonly<Record<string, number>>
-  floor: number
-}
-
 /** Host gate + clock carried by every snapshot. When `serviceable` is false the rows
  *  are still returned but MUST be read as unknown — host-down never fabricates a completion. */
 export interface SessionStateHostInfo {
@@ -322,12 +291,12 @@ export interface SessionStateDiagnostics {
   /** turn/end classification mix of settled completions (I16/R12). */
   turnEnds: { completed: number; userStopped: number; neutral: number; unreadable: number }
   /**
-   * Store-side losses: evicted rows / trimmed read clients / trimmed marks /
-   * evicted retained goal-activation edges。goalActivations 是 P2a 的**加法**
-   * 嵌套键（gateway 与 P2b 同形；旧端只读已知键，不受影响）。它是**进程内**
-   * 累计计数：保留边不落盘，重启不继承（持久文档同形但加载时归 0）。
+   * Store-side losses: evicted rows / evicted retained goal-activation edges。
+   * goalActivations 是 P2a 的**加法**嵌套键（gateway 与 P2b 同形；旧端只读已知
+   * 键，不受影响）。它是**进程内**累计计数：保留边不落盘，重启不继承（持久文档
+   * 同形但加载时归 0）。
    */
-  dropped: { sessions: number; readClients: number; readMarks: number; goalActivations: number }
+  dropped: { sessions: number; goalActivations: number }
   /** Cursor of the last committed delta batch (baseline-progress readback). */
   cursor: number
 }
@@ -339,7 +308,6 @@ export interface SessionStateSnapshot {
   cursor: number
   host: SessionStateHostInfo
   sessions: readonly SessionStateRow[]
-  read: SessionStateReadState
   /** I6/I16：加法字段（本版 watcher 总是发；旧客户端忽略）。 */
   diagnostics?: SessionStateDiagnostics
 }
@@ -350,26 +318,8 @@ export interface SessionStateDelta {
   cursor: number
   sessions: readonly SessionStateRow[]
   removedSessionIds: readonly string[]
-  /** Present whenever any read mark moved (R10 cross-client convergence). */
-  read: SessionStateReadState | null
   host: SessionStateHostInfo | null
   mode: SessionStateMode | null
-}
-
-/** POST {SESSION_STATE_READ_PATH} body: idempotent, monotonic upsert. */
-export interface ReadRequest {
-  clientId: string
-  sessionId: string
-  /** The client's monotonic completion cursor for this session (never a
-   *  client wall clock). */
-  readThrough: number
-}
-
-/** POST {SESSION_STATE_READ_ALL_PATH} body: source-wide floor upsert. The client
- *  supplies `through`; the server must NOT compute "now". */
-export interface ReadAllRequest {
-  clientId: string
-  through: number
 }
 
 /** The descriptor facts the capability classifier consumes (parsed from an
@@ -596,45 +546,6 @@ export function sessionStateNoteKey(kind: SessionStateCapabilityKind): string | 
     case 'unavailable': return 'source.sessionState.unavailable'
     case 'forward-skew': return 'source.sessionState.forwardSkew'
   }
-}
-
-/**
- * Monotonic read-mark merge: max(existing, incoming). Read marks only ever rise, so a
- * reordered or repeated write can never resurrect unread. Values outside the watermark
- * domain are treated as absent.
- */
-export function mergeReadMark(existing: number | null | undefined, incoming: number): number {
-  const current = isWatermark(existing) ? existing : 0
-  const next = isWatermark(incoming) ? incoming : 0
-  return next > current ? next : current
-}
-
-/**
- * Clamp an incoming read mark to the HOST clock at acceptance time. Read marks live in
- * the host domain, so a client may claim to have read up to "now" but never into its own
- * future: a desktop clock running ahead would otherwise suppress every completion
- * landing in the skew window (lost true unread). Watermarks share the same host domain
- * (`row.updatedAt`/`row.completedAt`), so a legitimate mark is unaffected.
- */
-export function clampReadThrough(value: number, at: number): number {
-  const ceiling = isWatermark(at) ? at : 0
-  return value > ceiling ? ceiling : value
-}
-
-/**
- * Source-wide effective read mark for ONE session: the max over every client's mark for
- * that session plus the source floor. "Stored per client-install, judged per source" is
- * what lets a read on one client clear unread on every other client.
- */
-export function effectiveReadMark(
-  marks: Iterable<number | null | undefined>,
-  floor = 0,
-): number {
-  let effective = isWatermark(floor) ? floor : 0
-  for (const mark of marks) {
-    if (isWatermark(mark) && mark > effective) effective = mark
-  }
-  return effective
 }
 
 /**

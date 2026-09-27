@@ -35,8 +35,8 @@ test('mounted producer: ONE status read feeds all four running consumers', () =>
     'readStatusRunning 必须直读 sessionStatus 行的 running（官方投影的唯一读点）')
   assert.match(SOURCE, /projectInstanceSnapshot\(workspacesSnapshot, sessionsSnapshot, readStatusRunning\(\)\)/,
     '运行环所在的投影必须拿到 status 解析（漏掉 ⇒ 环仍读 store 行，正是本次缺陷）')
-  assert.match(SOURCE, /projectRuntimeFacts\(snapshot, subagentRunning, pendingBySession, runIds, statusRunning\)/,
-    '事实通道（蓝点/通知边沿/未读/徽标）必须拿到同一份解析')
+  assert.match(SOURCE, /projectRuntimeFacts\(snapshot, subagentRunning, pendingBySession, runIds, statusRunning, readStatusCompleted\(\)\)/,
+    '事实通道（蓝点/通知边沿/未读/徽标）必须拿到同一份运行解析；第 6 参是官方完成未读投影（同一 sessionStatus 快照）')
   assert.match(SOURCE, /indexSubagentDescendants\(snapshot\.byId, statusRunning\)/,
     '子代理计数必须按官方规则解析子行运行位')
   assert.match(SOURCE, /resolveSessionRunning\(statusRunning, id, facts\?\.running\)/,

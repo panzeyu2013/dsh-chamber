@@ -30,7 +30,7 @@
  * 的 turn/end.time（>= 1e12 才算可用），拿不到就用观察者戳并标 reconstructed（诚实降级，
  * 不发通知）；stop() 后在途读取不再 emit，并摘下 __dshChamberSourceMux 本源项。
  * 快照与 gateway 事实源**同形**，直接喂 App 既有的 applySessionFacts 管线（同一份事实、
- * 同一套未读判定）。
+ * 同一套完成判定）。
  */
 import { isRecord } from '@dsh-chamber/dsh-chamber-client-core'
 import type {
@@ -91,7 +91,7 @@ export const HOST_EPOCH_MS_FLOOR = 1e12
 /**
  * 一行观察者事实。除 gateway SessionFactsRow 字段外，多一个**客户端内部**的时间域
  * 标注（不进 wire）：'host' = completedAt 取自 host turn/end.time（可进 host 域水位）；
- * 'observer' = 客户端观察者戳（拿不到 host 时间时的降级，只武装未读，绝不推进 host 域
+ * 'observer' = 客户端观察者戳（拿不到 host 时间时的降级，不作通知证据，绝不推进 host 域
  * 读水位）。未标注 = 非本源（gateway 事实源）的行。
  */
 export type SessionMuxCompletedAtDomain = 'host' | 'observer'
@@ -769,7 +769,6 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       stale: !usable,
       cursor: 0,
       rows: record,
-      read: null,
       lastEventAt,
     }
   }
@@ -1077,7 +1076,7 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
    * true→false 边沿（status 或基线）恰好一次 follow 读尾再分类。completedAt
    * 优先取 tail 的 host turn/end.time（epoch ms）；拿不到就用观察者戳并标
    * reconstructed/observer——这是**降级而不是等价**：该时间不在 host 域，
-   * 绝不能当作 host 水位，App 也因此不发通知（reconstructed = 只出未读，
+   * 绝不能当作 host 水位，App 也因此不发通知（reconstructed = 不作通知证据，
    * 与 gateway 的缺口重建同规）。
    */
   async function readTail(sessionId: string, expected: PendingTail): Promise<void> {
@@ -1105,7 +1104,7 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       // preceding run. A status edge is no stronger than a prompt-gap probe
       // when its host prompt watermark is known: the tail must be strictly
       // newer before it can classify this run. A missing host timestamp may
-      // still arm reconstructed unread, but must never produce a notification.
+      // still arm the reconstructed completion, but must never produce a notification.
       const promptFloor = expected.afterPromptAt ??
         (expectedUpdatedAt !== undefined && expectedUpdatedAt > 0 ? expectedUpdatedAt : null)
       // Unreadable (no turn/end at all), stale (a host time at or below the prompt
@@ -1451,8 +1450,8 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     stop(): void {
       // 退役前的最后一次发布（唯一出口）：观察者停掉后**不再有任何载体刷新**，而
       // `emit()` 也会被 stopped 拦下——若把最后一份 readable 快照留在 store 里，判定面
-      // 会继续把死载体的行当证据（`isFactsDecisionUsable` 仍是 true：读水位推进、完成
-      // 观测、未读账本都还在用它）。保留最后一批行（在场证据不得清空，design 19 §3.2.4）+
+      // 会继续把死载体的行当证据（`isFactsDecisionUsable` 仍是 true：完成观测与通知投影
+      // 都还在用它）。保留最后一批行（在场证据不得清空，design 19 §3.2.4）+
       // 标不可用，与 gateway 事实源「保留既有行 + 标不可用」的两条出口同规。
       // 只在 `ready()` 时发：其余时刻 store 里最后一份快照本就是 degraded（每条降级
       // 出口都 emit 过），再发一份只是噪音。
