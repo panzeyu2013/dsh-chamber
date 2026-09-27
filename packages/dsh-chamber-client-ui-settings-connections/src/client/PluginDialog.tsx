@@ -19,9 +19,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import clsx from 'clsx'
 import { Button, IconRefreshOutlineRegular, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
-// Page-owned restart→reload completion for the ssh chamber seed's restart-to-apply step:
-// a restart refreshes the host's plugin mounts, but this window keeps the pre-restart client
-// plugin set until it boots again.
+// Page-owned restart→reload completion for the ssh chamber seed's restart-to-apply step.
+// Add/remove now arrives live (design 09 §3.7); the reload is kept because a seeded host half
+// can also change an ALREADY-LOADED bundle's rev, which still needs a fresh page.
 import {
   RESTART_RELOAD_BUDGET_MS,
   armWindowReloadWhenServed,
@@ -270,9 +270,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     }
   }, [isSsh, sshSpec, seedBusy, loadRemoteList])
 
-  /** One-click restart: the chamber host packages are seeded and the insert is in
-   *  place, but the RUNNING instance has not loaded them — restarting makes them
-   *  live. Re-probes after. */
+  /** One-click restart: the chamber host packages are seeded and the insert is in place, but
+   *  the RUNNING instance has not loaded them — restarting makes them live (new CLIENT halves
+   *  arrive live; the reload arm stays for a rev change of an already-loaded bundle). Re-probes after. */
   const doRestartNow = useCallback(async (): Promise<void> => {
     if (!isSsh || sshSpec === null || restartBusy || seedBusy) return
     setRestartBusy(true)
@@ -284,8 +284,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       } else {
         setPendingRestart(false)
         onRecheckDiagnostic?.()
-        // Page-owned restart→reload completion: the window only picks the new client half
-        // up on a fresh boot, and the completion must survive this dialog closing.
+        // Page-owned restart→reload completion: kept for a REBUILT bundle's rev change (a
+        // new/removed id arrives live, design 09 §3.7); must survive this dialog closing.
         const reloadSourceId = `dsh-${sshSpec.id}`
         void armWindowReloadWhenServed(
           reloadSourceId,
@@ -359,7 +359,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   }, [sourceId, reloadNonce])
 
   // local: Loader 快照（第三方行生效状态）——本对话框打开时与每次 zone reload 加载；
-  // 运行中的本地实例只在「dsh 运行时」→「重启 dsh」（对话框外）变化，故无需按操作重载。
+  // 运行中的本地实例也可由热同步（design 09 §3.7）改变，但这些节点已足够，无需按操作重载。
   useEffect(() => {
     if (!isLocal) return
     let cancelled = false

@@ -222,8 +222,8 @@ interface WebBootGraph {
   rev: string // 全图一致性锚（sha1-12；= shortHash(JSON.stringify({entries, batches}))，覆盖各行全部字段与 batches）
   entries: {
     id: string // 条目名 == 包名（插件注册键）
-    url: string // bundle 端点（宿主行 = combo 'plugins/??<id>/client.js&rev=…'；chamber 自产 vite 行才是裸 URL，见下）
-    rev: string // bundle 构建标识（sha1-12；由文件 mtime/ctime/size 派生，不是内容哈希）
+    url: string // bundle 端点：宿主行 = combo 'plugins/??<id>/client.js&rev=…'；chamber 复合 manifest 行 = 裸 URL（无 ?rev= 查询串，见下）
+    rev: string // chamber 复合 manifest：bundle 内容哈希（sha1-12）；宿主图 extra 行：文件 metadata hash（mtime/ctime/size，design 09 §3.7）
     inject?: string[] // 工厂须先到达的依赖包行（缺席 = 无依赖）
     external?: string[] // 本行向模块表请求的非基线 specifier（缺席 = 无）
     immediately?: boolean // 一阶段预取标记

@@ -10,3 +10,4 @@ export { AppWebEntry, ensureWebModuleSystem, type AppWebEntryOptions, type BootS
 export { getStaticModules } from './seed.ts'
 export { PLATFORM_MODULES, type PlatformModule } from './platform.ts'
 export { STATE_LABELS, FIBER_STATE, type LoaderEntryState } from './loader-status.ts'
+export { registerExtraChunkOwners, removeExtraChunkOwners } from './extra-chunk-owners.ts'

@@ -7,13 +7,14 @@
  * lives here so both surfaces arm the SAME completion per key.
  *
  * WHY: the client-plugin set is fixed at each instance shell boot (the host boot
- * graph is fetched once per boot and its `dsh.client` bundles execute then), and
- * restarting the dsh process refreshes the HOST side only. A newly installed or
- * rebuilt `dsh.client` contribution (a settings section, say) cannot appear until
- * the window boots again, and the page-level module table is first-load-wins per
- * plugin id, so only a fresh page can switch an ALREADY-LOADED plugin's
- * implementation. A window reload is the honest scope of "restart dsh to refresh
- * mounted plugins".
+ * graph is fetched once per boot and its `dsh.client` bundles execute then).
+ * ADD/REMOVE no longer rides this completion: the live graph subscriber
+ * (`renderer/src/live-graph.ts`, design 09 §3.7) mounts rows a running host
+ * applied and drops rows it removed, without a reload. What REMAINS here is the
+ * honest scope of a window reload: a REBUILT contribution's rev change (the page
+ * module table is first-load-wins per plugin id, so only a fresh page can switch
+ * an ALREADY-LOADED plugin's implementation) and every real restart/runtime
+ * transaction whose page pairing changes with the host.
  *
  * PAGE-OWNED, NOT COMPONENT-OWNED: the restart is a host-side fact that proceeds
  * whether or not the button that started it is still on screen, so the reload is

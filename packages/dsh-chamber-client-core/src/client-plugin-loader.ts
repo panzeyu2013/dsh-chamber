@@ -3,8 +3,10 @@
  *
  * Single source: the page executes a source's `dsh.client` bundles in the
  * per-instance shell boot (`renderer/src/host-graph.ts` preloads every non-covered
- * graph row before the boot kernel materializes entries); the settings panel renders
- * the source's own boot-ctx ledger and loads nothing. That path needs the SAME
+ * graph row before the boot kernel materializes entries) AND, after settle, from the
+ * live graph subscriber's adds (`renderer/src/live-graph.ts`, design 09 §3.7 — same
+ * rows, same kernel, load failures collected per pass); the settings panel renders
+ * the source's own boot-ctx ledger and loads nothing. Those paths need the SAME
  * page-level bookkeeping — one script execution per combo URL, one factory claim per
  * plugin id (first-load-wins), timeout tombstones that keep observing a script that
  * outlived its request budget, and honest rev-conflict facts — and this module owns

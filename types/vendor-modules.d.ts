@@ -79,6 +79,17 @@ declare module '@deepseek-ai/dsh-client-web' {
   }
   /** Fiber-state value mirror of packages/dsh-client-web/src/loader-status.ts. */
   export const FIBER_STATE: { PENDING: 0; LOADING: 1; ACTIVE: 2; FAILED: 3; DISPOSED: 4; UNLOADING: 5 }
+  /**
+   * chamber patch (design 09 §3.7): per-instance host rows own their later
+   * package-local chunks; the live reconciler registers its adds and removes its
+   * drops. Mirror of packages/dsh-client-web/src/extra-chunk-owners.ts — the
+   * first arg is the installed module system (typed loose here).
+   */
+  export function registerExtraChunkOwners(
+    modules: unknown,
+    rows: readonly { id: string; url: string; initialUrl?: string }[] | undefined,
+  ): readonly string[]
+  export function removeExtraChunkOwners(modules: unknown, ids: Iterable<string>): readonly string[]
   /** The web shell kernel consumed by the renderer (boot.ts). */
   export class AppWebEntry {
     constructor(el: HTMLElement, options?: AppWebEntryOptions)

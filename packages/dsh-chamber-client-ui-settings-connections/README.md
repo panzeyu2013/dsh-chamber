@@ -17,7 +17,10 @@ no host frames, no dsh runtime objects.
   phase, systemd/log projections where applicable, connect/disconnect, edit,
   delete, and a dashed add card opening the schema-driven modal form.
 - **Restart = host restart + one window reload ( design 18 §3.6 item 8)**:
-  the page-side client-plugin set is fixed at the window's boot, so every
+  the page-side client-plugin set takes the window's boot as its single
+  authority; **install/uninstall is the exception** — when the host hmr reports
+  `applied`, design 09 §3.7 hot-syncs it into the live ctx with no reload
+  (rev changes/repackaging and real restart entries still reload). A
   plugin-refresh restart ends with the client-core face's page-owned completion
   (`restart-window-reload.ts`: single-flight per source, not cancelled by a panel
   unmount, never reloading when readiness does not arrive). Wired here: the gateway

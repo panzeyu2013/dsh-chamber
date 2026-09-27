@@ -79,7 +79,7 @@
    （本机实测），`isMovableByWindowBackground` 因此对页面内容失效，Swift 壳改为把标记
    行上的 mousedown 转成原生窗口拖拽（ShellWindowDrag.swift；控件命中优先，不拖）；
    Electron 腿走 ui-web base.css 的 app-region 规则——该腿窗口仍是系统标准标题栏
-   （hiddenInset 属未落地计划，见 docs/progress/todo/main-0.1.5-to-0.1.7-upgrade.md），
+   （hiddenInset 属未落地计划，见 STATUS 的窗口 chrome 实机验收条），
    标记在那条腿要等 hiddenInset 落地才成为拖拽面。
    `[data-fullscreen]` 分支照上游保留：Swift 腿 2026-09 起由 `ShellWindowFullscreenMark`
    把窗口全屏状态镜像到 html（design 25 §5.6；vendor AppFrame 的 `[data-fullscreen]`

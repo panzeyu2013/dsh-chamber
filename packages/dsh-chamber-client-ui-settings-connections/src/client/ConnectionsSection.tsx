@@ -434,10 +434,10 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   }, [clearOpError])
 
   /**
-   * systemd restart of a dsh source: a new host process = a new plugin set for that
-   * source, so the page-owned completion reloads the window once the source serves again.
-   * Gateway sources are deliberately NOT armed — 「重启网关服务」 does not restart the
-   * instance's plugin set.
+   * systemd restart of a dsh source: the host comes back with a plugin set that may differ. A
+   * REMOVED/RE-ADDED id is picked up live (design 09 §3.7); a REBUILT bundle's rev change still
+   * needs a fresh page, so the page-owned completion keeps the reload for that case. Gateway
+   * sources are deliberately NOT armed — 「重启网关服务」 does not restart the instance's set.
    */
   const restartSourceService = useCallback(async (spec: SshInstanceSpec): Promise<void> => {
     const restarted = await runServiceOp(spec.id, 'restart_service')

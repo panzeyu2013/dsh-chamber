@@ -792,7 +792,7 @@ test('collectExtraRows: a 503 that resolves on retry loads the rows (spawn-windo
 test('collectExtraRows: keeps non-covered rows and preloads each once (real covered list)', async (t) => {
   stubFetch(t, 200, envelope([
     row('@deepseek-ai/dsh-client-ui-conversation'), // composite-covered → dropped by the merge
-    row('@deepseek-ai/dsh-client-hmr'), // page-own covered → dropped: its /plugins/events EventSource must never hit the control-plane origin (SPA fallback text/html)
+    row('@deepseek-ai/dsh-client-hmr'), // page-own covered → dropped: its document-relative EventSource would hit the control-plane origin (SPA fallback text/html); the host route is consumed by the chamber's own instance-prefixed subscriber instead
     row('@scope/p1'),
     row('@scope/p2'),
   ]))
@@ -825,10 +825,11 @@ test('collectExtraRows: a bundle load failing BOTH attempts rejects loud (never 
   assert.equal(diagnostic?.state, 'bundle-load-failed')
 })
 
-test('collectExtraRows: a restart-straddled boot recovers — stale-rev bundle failures reload at the fresh graph rev', async (t) => {
+test('collectExtraRows: a bundle rewritten between fetch and load recovers — stale-rev failures reload at the fresh graph rev', async (t) => {
   // A bundle rev derives from the file's filesystem metadata
-  // (dsh-client-modules `artifactRevision` = sha1(mtimeMs, ctimeMs, size)): a
-  // rebuild/replacement between the graph fetch and the bundle loads 404s every
+  // (dsh-client-modules `artifactRevision` = sha1(mtimeMs, ctimeMs, size)): an
+  // untouched bundle keeps its rev across host restarts, while a rebuild or
+  // replacement between the graph fetch and the bundle loads 404s every
   // not-yet-loaded row on its stale rev. The bounded recovery pass re-fetches
   // the graph and reloads the failed row at the fresh rev, so the boot proceeds
   // instead of failing loud.

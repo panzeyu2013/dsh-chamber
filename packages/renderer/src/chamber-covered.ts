@@ -142,11 +142,12 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // ctx.uiRenderer), so a second entry would install a second slot renderer.
   // Page-own only, no factory: chamber-entry never imports it.
   '@deepseek-ai/dsh-client-ui-renderer',
-  // The official dev-only HMR entry: its client fiber opens
-  // `new EventSource('/plugins/events')` on the instance-origin-relative path,
-  // which the control plane's SPA fallback answers as text/html — the chamber web
-  // profile has no usable hmr client channel, so the row is skipped, never loaded
-  // (page-own, no factory).
+  // The official dev-only HMR entry: its client fiber opens a DOCUMENT-relative
+  // `new EventSource('plugins/events')`, which in this one-page-N-ctx shell would
+  // hit the control-plane origin (SPA fallback: text/html). The HOST route itself
+  // is a per-instance service and is consumed by the chamber's own subscriber at
+  // the instance prefix (live-graph.ts / design 09 §3.7); this client row stays
+  // skipped forever (page-own, no factory).
   '@deepseek-ai/dsh-client-hmr',
   // The official open-in client row is NOT skipped any more (D2): it loads from
   // the host graph so its file-level surfaces register — the right-sidebar
