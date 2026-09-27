@@ -223,7 +223,7 @@ interface WebBootGraph {
   entries: {
     id: string // 条目名 == 包名（插件注册键）
     url: string // bundle 端点：宿主行 = combo 'plugins/??<id>/client.js&rev=…'；chamber 复合 manifest 行 = 裸 URL（无 ?rev= 查询串，见下）
-    rev: string // chamber 复合 manifest：bundle 内容哈希（sha1-12）；宿主图 extra 行：文件 metadata hash（mtime/ctime/size，design 09 §3.7）
+    rev: string // chamber 复合 manifest：bundle 内容哈希（sha1-12）；宿主图 extra 行：文件 metadata hash（mtime/ctime/size，推导见 design 09 §3.5/§5）
     inject?: string[] // 工厂须先到达的依赖包行（缺席 = 无依赖）
     external?: string[] // 本行向模块表请求的非基线 specifier（缺席 = 无）
     immediately?: boolean // 一阶段预取标记
@@ -248,8 +248,8 @@ interface WebBootGraph {
   - **bundle URL 约定**：vite 产物 `/assets/chamber-<hash>.js`（**裸 URL，无
     `?rev=` 查询串**：查询串会造成双模块记录——加载延迟 chunk 时二次执行入口
     bundle、延迟 ui-* 族不注册；文件名哈希已是不可变标记，照抄旧 `?rev=` 写法会复现该故障。gen-boot-manifest 按
-    `assets/chamber-*.js` 模式定位产物；vendor 默认路径 `/plugins/<id>/client.js`
-    仅为参考——wire 只要求 id/url/rev 为字符串）。
+    `assets/chamber-*.js` 模式定位产物；vendor 图行 url 就是上方 combo，
+    `/plugins/<id>/client.<chunk>.js?rev=…` 是 package-local chunk 路由、仅为参考——wire 只要求 id/url/rev 为字符串）。
 - **N-ctx**：每个实例一个 AppWebEntry（05 §4）；实例流量全部经
   `/api/i/<id>/*`（03 §3）；侧栏会话行点击 → 经 `AppWebEntry.runtimeCtx`
   分发打开动作（05 §2/§4）。

@@ -255,10 +255,10 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   叶模块（chamber-entry.ts 仅 re-export）以免 shell.ts 把模块表交接与整棵复合插件图拉进主 chunk。与 §3.2
   的 union-table 修复锁步：`COVERED_FACTORIES`（首屏静态导入族的 factory 注册）中每个 id 必须在覆盖集内
   （执行期断言）。
-- **有意跳过名单（覆盖集/复合入口的显式例外）**：①官方 dev-only HMR 行
+- **有意跳过名单（覆盖集/复合入口的显式例外）**：①官方 HMR 行（宿主半身 always mounted；dev-only 的只是 rebuild watcher）
   `@deepseek-ai/dsh-client-hmr` 在覆盖集内但**永不加载**——它开的是 **document-relative**
   `new EventSource('plugins/events')`，单页多实例下会打到控制面 origin（SPA 回退答 `text/html`）；
-  **宿主通道本身可用，且已由 §3.7 的 chamber 订阅者按实例前缀消费**（`packages/renderer/src/chamber-covered.ts#=literal:The official dev-only HMR entry`，page-own 无 factory）；②
+  **宿主通道本身可用，且已由 §3.7 的 chamber 订阅者按实例前缀消费**（`packages/renderer/src/chamber-covered.ts#=literal:The official HMR entry`，page-own 无 factory）；②
   `@deepseek-ai/dsh-client-ui-cordis` **有意不由复合入口注册、也不进覆盖集**——它按宿主图 extra row
   加载（`packages/renderer/src/chamber-entry.ts#=literal:ui-cordis is deliberately not`；`host-graph.test.ts` 固定「未覆盖 ⇒ extra」）；③ 官方**桌面专属**账户家族
   `@deepseek-ai/dsh-client-ui-settings-account` 在覆盖集内但**永不加载**——它的 apply 以 `'dshDesktop' in
@@ -329,7 +329,7 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   产物写入 chamber-owned `renderer/src/generated/typert/`，Vite 的通用 `/remote` resolver 只消费这些产物。
   当前 23 个 contribution（`EXPECTED_MOUNT_PACKAGES` 挂载序表 + import 选择集合，含 file/session/workspace reference）由独立锁步测试
   固定，避免手抄包表滞后到 Rollup 才报缺模块；vendor 始终只读。
-- **失败降级与诊断语义（模块 C）**：图**通道**失败（fetch 网络错 / 非 2xx / 图畸形 / 行缺 id/url/rev）→ 降级为无额外插件继续 boot + console.error，并经 renderer-local chamberBridge 上报用户可见诊断（404/方法缺失 = `not-injected`，其余 = `graph-unreachable`；复合 bundle 仍提供完整官方壳，仅丢失 profile 新装插件；畸形图响亮报错，不做猜测式合并）；503 `instance_unavailable` 是未就绪预期态，静默。**（W3）**：**除 404 外的通道失败同样上浮 `ShellState.degraded`**（kind `graph-unavailable`，判定在 `renderer/src/source-readiness.ts` 的 `graphGapKindFor`），由 App 的非阻断 boot-gap 横幅说明并沿用「每个 ready 世代自动重挂一次」；`not-injected`（HTTP 404 或通道答 method 缺失）仍是 gateway/mobile 的合法无图形态。**bundle 加载**失败**不降级**——响亮失败、该实例 boot 报错呈现（§4 fail-loud）。**跨代 bundle 恢复（一轮有界恢复）**：上游 rev 是文件元数据派生的构建标识（推导与根治见 §5「vendor 侧根治」；**重建/替换**该文件才变，纯重启不变）⇒ 取图与加载之间被改写（dev 重建/重装）的行在旧 URL 上 404，一般瞬时 404 同样落此；故 `collectExtraRows` 对普通失败行重拉一次宿主图（同一 503 预算）并按 fresh URL 重载，仍失败才响亮失败（DOM script **超时**不进恢复轮：迟到 load 收敛成功、迟到 error 允许重试）；恢复成功的行以 fresh url/rev 返回（旧 rev URL 已失效，不得作为可加载源下发）。**根治在上游（vendor 只读，登记不修）**：`artifactRevision` 改为对 bundle 字节求内容哈希即可让同内容跨安装/跨宿主的 rev 一致、假 `instance-version-conflict` 整类消失（§5，提案 §11）；恢复轮只覆盖「文件被改写与取图的竞态」。**分层**：`loadModuleBundle` 失败即 throw → 该实例 boot 响亮失败；预加载成功后内核不再为额外行发起新加载，只剩 materialize/apply 失败，按下一条降级。
+- **失败降级与诊断语义（模块 C）**：图**通道**失败（fetch 网络错 / 非 2xx / 图畸形 / 行缺 id/url/rev）→ 降级为无额外插件继续 boot + console.error，并经 renderer-local chamberBridge 上报用户可见诊断（404/方法缺失 = `not-injected`，其余 = `graph-unreachable`；复合 bundle 仍提供完整官方壳，仅丢失 profile 新装插件；畸形图响亮报错，不做猜测式合并）；503 `instance_unavailable` 是未就绪预期态，静默。**（W3）**：**除 404 外的通道失败同样上浮 `ShellState.degraded`**（kind `graph-unavailable`，判定在 `renderer/src/source-readiness.ts` 的 `graphGapKindFor`），由 App 的非阻断 boot-gap 横幅说明并沿用「每个 ready 世代自动重挂一次」；`not-injected`（HTTP 404 或通道答 method 缺失）仍是 gateway/mobile 的合法无图形态。**bundle 加载**失败**不降级**——响亮失败、该实例 boot 报错呈现（§4 fail-loud）。**重建/替换竞态恢复（一轮有界恢复）**：上游 rev 是文件元数据派生的构建标识（推导与根治见 §5「vendor 侧根治」；**重建/替换**该文件才变，纯重启不变）⇒ 取图与加载之间被改写（dev 重建/重装）的行在旧 URL 上 404，一般瞬时 404 同样落此；故 `collectExtraRows` 对普通失败行重拉一次宿主图（同一 503 预算）并按 fresh URL 重载，仍失败才响亮失败（DOM script **超时**不进恢复轮：迟到 load 收敛成功、迟到 error 允许重试）；恢复成功的行以 fresh url/rev 返回（旧 rev URL 已失效，不得作为可加载源下发）。**根治在上游（vendor 只读，登记不修）**：`artifactRevision` 改为对 bundle 字节求内容哈希即可让同内容跨安装/跨宿主的 rev 一致、假 `instance-version-conflict` 整类消失（§5，提案 §11）；恢复轮只覆盖「文件被改写与取图的竞态」。**分层**：`loadModuleBundle` 失败即 throw → 该实例 boot 响亮失败；预加载成功后内核不再为额外行发起新加载，只剩 materialize/apply 失败，按下一条降级。
 - **额外行 apply 失败降级（模块 D）**：额外行**加载成功但 entry 未能 apply**（materialize 出非插件对象——如壳种子词表把某包静态注册、后端新增其 client half 后 seed 遮蔽 factory 导致的 "invalid plugin"；注册进本壳未声明的槽；重复安装壳已提供的服务）→ **降级不致命**：
   console.error + status 'failed'，shell 照常 boot（boot.ts 对 extraRows 逐行容错 + sweep 排除）。理由：复合
   bundle 固定一个 dsh client 版本，"后端 dsh 版本 ≠ 壳版本"时新/旧核心行与壳不兼容是**正常条件**（特性缺席），
@@ -432,7 +432,7 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   它开的是 **document-relative** 路径，在单页多实例下会打到控制面 origin。**同步单元只用 `graph` 帧**
   （全量快照，无需顺序号）；`rebuilt` 帧不必单独消费——上游 `rebuilt()` 自己会 `compose()` 并
   `notifyGraphChanged()`，带新 rev 的 graph 帧必然随到。
-- **机会性契约**：通道拿不到帧 ≠ 降级。boot 仍是行集合的唯一权威；live pass 失败/不可用一律 no-op，
+- **机会性契约**：通道拿不到帧 ≠ 降级。boot 是通道不可用时的回退权威（通道正常时由 graph 帧热同步增删，§3.7）；live pass 失败/不可用一律 no-op，
   绝不影响 boot、其它行或实例状态。arm 判词三态：**answered（含空图）→ arm**；`not-injected` 与
   channel 失败 → 不 arm（前者是 gateway/mobile 的合法形态，后者等 App 的 ready 世代自愈重 boot）；
   用户面急停 = safe mode（不 arm）；另有页面级 devtools/测试开关
@@ -489,10 +489,16 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
 - **实现边界（正文未逐条展开，代码即契约）**：① 无 `await` 方法的 fiber 视为已激活（不等待、不报 pending）；
   ② recheck 发现 entry 的 fiber 消失时，先删该 entry 与页面级 chunk-owner 行，再把行塞回本次 add 重试；
   ③ 帧分三类——`graph`（唯一消费）、`rebuilt`（上游自会补一帧 graph，故不消费）、其余非 graph 类型一律
-  `ignored`（含上游判 invalid 的形状）；只有 JSON 或 graph 结构违规才算 malformed，且每 holder 只告警一次；
+  `ignored`（含上游判 invalid 的形状）；只有 JSON 或 graph/rebuilt 结构违规才算 malformed（`rebuilt` 缺 string id/rev 同判，上游 events.ts 亦判 invalid），且每 holder 只告警一次；
   ④ `handled` 是只增不减的管理集合，仅服务上述收敛规则 (e)；⑤ 挂载集合以「活 loader 的同名 entry 有 fiber」
-  为基线，boot 遗留的 fiberless entry 在 arm 时直接删除（否则重试会造同名孤儿）；⑥ boot 注册的 graphRows 行
-  对 live 的 `removeExtraChunkOwners` 不设保护（live 删行即删，boot 描述符的权威只在**注册**方向）。
+  为基线，boot 遗留的 fiberless **或终态 fiber（FAILED/DISPOSED/UNLOADING；判定由 boot-tolerance 的
+  degraded/failed 语义拥有）** entry 在 arm 时直接删除（否则重试会造同名孤儿），下一帧的 add 重试并用 create
+  的真实错误出事实；⑥ boot 注册的 graphRows 行
+  对 live 的 `removeExtraChunkOwners` 不设保护（live 删行即删，boot 描述符的权威只在**注册**方向），但该表
+  按 id 键**跨来源共享**：只有该 id 的 factory owner（`clientPluginRowOwner`）才撤销描述符——非 owner 来源的
+  remove/add 回滚一律保留，否则会删掉 owner 仍挂载行所需的 chunk 解析。遗留边界：owner 自身移除而另一来源仍
+  挂载同 id 时描述符会被删（STATUS 登记）；owner 已退役时的残留描述符可接受（没有 entry 就不会再发该包的
+  chunk require）。
 
 **Rejected alternatives**：① 控制面中继 SSE——反代已直达端点，中继只多协议与来源归属问题；② 加载官方
 客户端半身（改覆盖集/锁步）——见 §3.5 名单①，且它是运行期 bundle，vendor 补丁打不到；③ 复用上游
@@ -546,8 +552,9 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
 
 - **插件生态成熟度**：当前第三方 `dsh.client` 包尚少，本方案是"机制先备"。
 - **远程实例部署说明（开放项）**：远端 seed 的机械编排已接线（§3.5），并入 design 02 §3.9 远端部署说明仍待做。
-- **上游端点属主（开放项）**：`/plugins/events` 的属主是上游 HMR 宿主行（自述 dev-only
-  "idle until a rebuild watcher actually rewrites client bundles"）。§3.7 依赖它：升级 pin 时按上游触点表
+- **上游端点属主（开放项）**：`/plugins/events` 的属主是上游 HMR 宿主行（cordis.patch.yml 原文
+  **always mounted**：idle until a rebuild watcher (pnpm run dev:web) actually rewrites client bundles——
+  dev-only 的是 watcher，行本身常驻）。§3.7 依赖它：升级 pin 时按上游触点表
   复验该路由与 graph/rebuilt 帧形状；端点被移除/改名即为失效判据（登记见上游触点表 §4 与 registry mirror）。
 - **vendor 侧根治（开放项，登记不修）**：pin 的 `dsh-client-modules` 用
   `artifactRevision` 对 bundle 文件求 `sha1(mtimeMs, ctimeMs, size)`（并写回被服务 bundle 的

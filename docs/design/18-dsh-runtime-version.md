@@ -342,7 +342,7 @@ chamber-settings.json，非秘密）：
    N-ctx shell 经 WS 断开重连重新 boot（design 09 每实例 boot graph 重新合并）。
    **互斥与门控**：与健康状态机 `restarting` 单飞互斥；applying 期间禁用；状态行
    「重启 dsh…」→「已重启」（就绪探测通过，随即窗口重载，见下；本动作是真重启入口，
-   报 `applied` 的装/卸已由 §3.7 热同步接管、不需要这次重载）/
+   报 `applied` 的装/卸已由 design 09 §3.7 热同步接管、不需要这次重载）/
    诚实失败文案（附 host-logs 入口）。失败不回滚、不改指针——重启前后是同一棵激活树，
    仅进程级刷新。
    per-server：local = `restartLocal()` 事务（§9.3，与健康重启单飞行串行化）；
@@ -352,9 +352,9 @@ chamber-settings.json，非秘密）：
    **窗口随动作重载一次**：宿主侧插件行每次 boot 重新确定（上）；页面侧 client
    插件集仍以窗口 boot 为**唯一权威**（宿主图每 boot 取一次、`dsh.client` bundle 那时
    执行；模块表按 id first-load-wins，design 09 §3.2/§3.5），但 boot 之后的**新装/卸载
-   已由 §3.7 活实例热同步接管**（宿主 hmr 报 `application:'applied'` 时即时挂/卸该行，
+   已由 design 09 §3.7 活实例热同步接管**（宿主 hmr 报 `application:'applied'` 时即时挂/卸该行，
    **无需窗口重载**）；**重打包（rev 变化）与真正执行重启的入口仍需重载**——前者同 id
-   异 rev 只报 `restart-required`、不换 entry（§3.7），后者重启同时换掉已加载实现与
+   异 rev 只报 `restart-required`、不换 entry（design 09 §3.7），后者重启同时换掉已加载实现与
    运行时配对，因此**这些入口的重启动作** = 就绪探测通过 **+ 一次窗口重载**，重载后需
    重新打开设置面板。
    **实现 = 一个 page-owned completion**（sidebar 共享面
@@ -366,7 +366,7 @@ chamber-settings.json，非秘密）：
    两种形态、本地「立即应用」/「重试应用」/「重试恢复」三类重启事务（仅成功时 arm）、
    本地卡「启动」/写者接管、gateway 卡「重启 dsh」/「启动实例」、插件对话框 footer 重启
    与 restart-to-apply（行删/加/导入/撤销/批量应用——**只在 `restarted`/换 rev 时 arm**；
-   报 `applied` 的装/卸已由 §3.7 热同步接管、不再接重载）、ssh 卡
+   报 `applied` 的装/卸已由 design 09 §3.7 热同步接管、不再接重载）、ssh 卡
    「重启实例」（仅 dsh 目标）；「重启网关服务」（systemd）不改变实例插件集，**不接**。
    **被拒替代**：①只重挂该来源的页内壳——换不掉**已加载** id 的实现（模块表按 id
    first-load-wins，插件集与各 id 的实现都不会变），也覆盖不了 rev 变化：宿主行 rev 是文件

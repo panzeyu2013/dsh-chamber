@@ -186,7 +186,7 @@
           "scripts/test.mjs": "chamber 测试清单委托共享 runner（scripts/lib/test-manifest.mjs）：3 文件表 + configure-context 的 vendor register 参数",
           "src/boot-rows.ts": "chamber 每实例 boot-rows（design 09 module D）",
           "src/boot-tolerance.ts": "chamber boot 容忍/恢复（design 09）",
-          "src/extra-chunk-owners.ts": "chamber extra rows 的包内动态 chunk owner 登记（design 09）"
+          "src/extra-chunk-owners.ts": "chamber extra rows 的包内动态 chunk owner 登记/撤销（design 09）"
         },
         "ownPrefix": [
           "test/"
@@ -568,7 +568,7 @@
       ],
       "evidence": "人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验宿主半身注册的 exact GET/HEAD /plugins/events 路由（连接即一帧全量 graph；rebuilt 会 compose+notifyGraphChanged，带新 rev 的 graph 帧随到）与 chamber 订阅者（design 09 §3.7）的消费形状",
       "status": "accepted",
-      "rationale": "上游端点属主是自述 dev-only 的 HMR 宿主行；chamber 只消费 graph 帧做装/卸同步、不加载官方客户端半身，无自动锁步面（C16 vendorSourceConsumers 只认 vendor 源码相对导入）。端点被移除/改名时 chamber 静默退回现状（机会性契约），故接受人工复验而非新增 C 编号门"
+      "rationale": "上游端点属主是 always-mounted 的 HMR 宿主行（dev-only 的只是 rebuild watcher）；chamber 只消费 graph 帧做装/卸同步、不加载官方客户端半身，无自动锁步面（C16 vendorSourceConsumers 只认 vendor 源码相对导入）。端点被移除/改名时 chamber 静默退回现状（机会性契约），故接受人工复验而非新增 C 编号门"
     }
   ],
   "notes": "machine facts only; prose lives in docs/checklists/upstream-touchpoints.md"

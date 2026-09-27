@@ -171,7 +171,7 @@ http+dsh 直连无按钮。
   （队列满时等槽位再排下一波，`DRAIN_DEADLINE` 10 分钟兜底），**全部**排空意图 op 终态
   （且至少一个 ok）后请求一次受控 restart（请求点不在首个 ok 终态——否则会撞上仍在途的租约被门控跳过）；
   门闭时 skip 不报错并登记；
-- 安装后自动「重启生效」：apply 默认 defer=false → 队列尾自动 restart（受 C 轮询语义）；defer=true 仅落盘不重启。**「生效」= 宿主侧重启 + 页面侧 §3.7 热同步**（hmr 报 `applied` 时新行即时进活 ctx，不再暗示手动/窗口重载）；rev 变化与真重启入口仍走窗口重载。
+- 安装后自动「重启生效」：apply 默认 defer=false → 队列尾自动 restart（受 C 轮询语义）；defer=true 仅落盘不重启。**「生效」= 宿主侧重启 + 页面侧 design 09 §3.7 热同步**（仅宿主有 hmr 行时报 `applied` 时新行即时进活 ctx，不再暗示手动/窗口重载；无 hmr 行的宿主仍走窗口重载）；rev 变化与真重启入口仍走窗口重载。
 
 ### 6.4 ssh 后端收敛（写面已退役；读面收敛仍有效）
 ssh 后端动词映射到既有 IPC（readManifest=plugin_list、apply=plugin_apply、materialize=plugin_materialize_add_pick、chamberProvision=seed_host_graph、restartToApply/startFromStopped=restart_service）；模型统一要求（ssh/gateway 同权，决策 10/11/19）：
