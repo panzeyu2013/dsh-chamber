@@ -96,6 +96,9 @@ export const GROUPS = {
     // 修复面（design 06 §4.3「显示面与修复面分工」）——纯源码断言，无运行时依赖。
     'test/source-runtime/mounted-running-resolution-wiring.test.ts',
     'test/source-runtime/instance-api.test.ts',
+    // I-4 锁：sidebar.workspaces 保留声明但永不渲染（上游 ui-workspace 注册不抛，
+    // chamber 自有多源列表拥有浏览区）。
+    'test/source-runtime/sidebar-slot-declaration.test.ts',
     'test/source-runtime/instance-mutation-values.test.ts',
     'test/source-runtime/control-plane-client.test.ts',
     'test/source-runtime/serving-gate.test.ts',
