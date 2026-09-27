@@ -84,7 +84,8 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
           ? t('source.baselinePending')
           // 会话事实档位说明（最低优先级）：字段缺席 = 尚未投影 = 未知，绝不臆造为 full。
           : server.sessionFacts === 'degraded'
-            ? t('source.factsDegraded')
+            // 成因必须按 kind 分叉：网关来源的 facts 走只读镜像，本地/SSH 走实例自身协议。
+            ? t(server.kind === 'gateway' ? 'source.factsDegraded' : 'source.factsDegradedLocal')
             : server.sessionFacts === 'legacy'
               ? t('source.factsLegacy')
               : server.sessionFacts === 'disabled'

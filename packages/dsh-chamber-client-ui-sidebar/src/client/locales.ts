@@ -110,6 +110,8 @@ export const zh = {
   'source.baselinePending': '会话基线尚未就绪：当前为降级列表（已归档会话可能显示为普通行）。',
   // 能力一览：档位说明并入同一条 live region 级联的最低优先级。
   'source.factsDegraded': '会话事实降级：完成通知可能延迟或缺省（网关镜像受限）。',
+  // 本地/SSH 来源的 facts 走实例自身协议（无壳观察者），降级成因与网关镜像无关，不得借用上一句。
+  'source.factsDegradedLocal': '会话事实降级：完成通知可能延迟或缺省（实例未及时应答）。',
   'source.factsLegacy': '该网关未升级：完成通知由本机观察得出，窗口关闭期间可能丢失。',
   'source.factsDisabled': '该网关的会话观察已被关闭（管理员配置）。',
   'source.managedStarting': '托管 dsh 正在启动（{state}）：就绪后自动恢复。',
@@ -263,6 +265,7 @@ export const en = {
   'source.managedDown': 'Managed dsh unavailable ({state}): start this instance in Settings → Connections, then retry.',
   'source.baselinePending': 'Session baseline not ready: this is a degraded list (archived sessions may appear as ordinary rows).',
   'source.factsDegraded': 'Session facts degraded: completion notifications may lag or be missing (the gateway mirror is limited).',
+  'source.factsDegradedLocal': 'Session facts degraded: completion notifications may lag or be missing (the instance is not answering in time).',
   'source.factsLegacy': 'This gateway is not upgraded: completion notifications come from local observation and may be missed while the window is closed.',
   'source.factsDisabled': 'Session observation is disabled on this gateway (administrator setting).',
   'source.managedStarting': 'Managed dsh is starting ({state}): it recovers automatically once ready.',
