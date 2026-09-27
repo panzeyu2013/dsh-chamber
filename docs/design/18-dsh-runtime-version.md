@@ -339,10 +339,10 @@ chamber-settings.json，非秘密）：
    **刷新语义**（重启生效的一切，02 §2.6/设计 13）：chamber host 包 seed thunk 每次
    spawn 前重新求值（client-graph/git-worktree 挂载行按当前构建产物重建）；dsh boot
    重读 DSH_HOME profiles + `--patch` overlay（`dsh plugin` 装/删的插件生效）；前端页面
-   不随宿主重启重 boot（已 boot 的实例壳不重 boot）。页面侧 client 行的刷新只有一条机会性路径：
-   design 09 §3.7 的 `/plugins/events` 重连**若成功**即重新下发整图并热同步增删；重连撞上反代
-   503/502 窗口（本段下文）时按 §3.7 回连边界 fail-the-connection、不自动重建——该来源退回 boot
-   现状，须手动重载页面/重启应用（存活仍为 STATUS 开放实机项）。
+   不随宿主重启重 boot（已 boot 的实例壳不重 boot）。页面侧 client 行的刷新走 design 09 §3.7 的
+   `/plugins/events`：重连撞上本段下文的 503/502 窗口会被浏览器判死（`readyState CLOSED`），hold 层
+   随后按 §3.7 的有界重建（≈97s 预算，覆盖就绪窗）重开订阅，成帧即重新下发整图并热同步增删；
+   预算耗尽才退回 boot 现状、须手动重载页面/重启应用（存活仍为 STATUS 开放实机项）。
    **互斥与门控**：与健康状态机 `restarting` 单飞互斥；applying 期间禁用；状态行
    「重启 dsh…」→「已重启」
    与诚实失败文案（附 host-logs 入口）。失败不回滚、不改指针——重启前后是同一棵激活树，

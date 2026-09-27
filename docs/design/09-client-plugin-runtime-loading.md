@@ -432,12 +432,13 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   channel 失败 → 不 arm（前者是 gateway/mobile 的合法形态，后者等 App 的 ready 世代自愈重 boot）；
   用户面急停 = safe mode（不 arm）；另有页面级 devtools/测试开关
   （`__DSH_CHAMBER_LIVE_PLUGIN_SYNC__ === false`，arm 时读取、无缓存）、主机无 `EventSource` 同样不 arm。
-  **回连边界（v1 接受）**：连接**已建立**后断线由浏览器 EventSource 自动重连；但**重连响应非 200**
+  **回连与有界重建（v1）**：连接**已建立**后断线由浏览器 EventSource 自动重连；**重连响应非 200**
   （404——该 profile 没有 hmr 宿主行；反代切流/缓冲导致的非 `text/event-stream`；或宿主重启窗口内反代的
-  503/502，design 18 §3.6 项 8）按规范 fail-the-connection、**永久 CLOSED**，本方不重建订阅（`live-graph.ts`
-  的 error 只记一条日志）。该来源退回 boot 时现状；已 boot 的健康壳不会因 ready 世代重 boot（自愈重挂只
-  覆盖 boot 曾降级收尾的壳），故恢复 = 用户手动重载页面/重启应用（机会性契约，不附加诊断；宿主重启后的
-  活行存活是 STATUS 开放实机项）。
+  503/502，design 18 §3.6 项 8）按规范 fail-the-connection、**永久 CLOSED**，浏览器不再重试。hold 层据此
+  自己重建：`live-graph.ts` 检测 `readyState === CLOSED` 后按 2s/5s/10s/20s/30s/30s（≈97s，覆盖文档所述
+  90s 就绪窗）重开 `EventSource`，**成帧即重置预算**；预算耗尽只记一条日志、不再重建（机会性契约，不附加
+  诊断）。耗尽后该来源退回 boot 时现状——已 boot 的健康壳不会因 ready 世代重 boot（自愈重挂只覆盖 boot 曾
+  降级收尾的壳），恢复 = 用户手动重载页面/重启应用（宿主崩溃重启后活行存活仍是 STATUS 开放实机项）。
 - **范围**：只做行 **add/remove**（id 集合）。**rev 变化不换 entry**：模块表按 id first-load-wins，
   同 id 异 rev 只上报 `restart-required`（同实例重建）/ `instance-version-conflict`（跨来源 owner），
   等用户**手动重载页面/重启应用**收口（自动窗口重载已随热重载修复退役，design 18 §3.6 项 8）；
