@@ -41,6 +41,8 @@ const projection = stripComments(readFileSync(
   fileURLToPath(new URL('../../src/notification-projection.ts', import.meta.url)), 'utf8'))
 const logStore = stripComments(readFileSync(
   fileURLToPath(new URL('../../../dsh-chamber-client-core/src/authority-log-store.ts', import.meta.url)), 'utf8'))
+const completeLedger = stripComments(readFileSync(
+  fileURLToPath(new URL('../../src/complete-ledger.ts', import.meta.url)), 'utf8'))
 
 test('the App has no second liveness planner or state machine', () => {
   assert.doesNotMatch(frame, /planSessionLiveness|sessionLivenessRef|markSessionLiveness/)
@@ -102,8 +104,25 @@ test('both run-start sites use the ordering rule, never an unconditional clear (
     assert.doesNotMatch(text, /observeRunStart\(|markRunStarted\(/, label + ' 不得有无条件 run-start 权威')
     assert.doesNotMatch(text, /clearRuntimeSettled\(sourceId, (row\.sessionId|sessionId)\)/, label + ' 不得为迟到的 running 快照丢结算标记')
   }
-  assert.match(notificationsHook, /factsRow\.updatedAt <= anchor/, '锚点序：行严格更新才属于下一轮运行')
+  assert.match(
+    notificationsHook,
+    /completionAlreadySettled\(settled, notification\.sessionId, factsRow\?\.updatedAt\)/,
+    '锚点序：行严格更新才属于下一轮运行（比较本体走唯一实现）',
+  )
   assert.match(notificationsHook, /pendingClaims\.has\(notification\.sessionId\)/, '在途原生投递必须让行，不被 facts 吸附')
+})
+
+test('the same-completion anchor rule has ONE implementation shared by both sinks (I2)', () => {
+  // 缺陷史：facts sink 有锚点判定、壳 sink 没有 ⇒ producer 重置后的壳完成重放双发。
+  // 比较本体只允许在 complete-ledger 出现一次；两个 sink 都引用它，且不得内联重写。
+  assert.match(completeLedger, /export function completionAlreadySettled\(/)
+  assert.match(notificationsHook, /completionAlreadySettled\(/)
+  assert.match(hook, /completionAlreadySettled\(completeLedgerRef\.current\.runtimeSettled\(sourceId\)/)
+  assert.doesNotMatch(
+    hook + '\n' + notificationsHook,
+    /updatedAt <= anchor/,
+    'sink 不得内联重写锚点比较（唯一实现在 complete-ledger）',
+  )
 })
 
 test('the notification association uses the facts host anchor, never the content watermark', () => {

@@ -146,6 +146,20 @@ export interface CompleteLedgerOptions {
   onDiagnostic?: (message: string, detail?: unknown) => void
 }
 
+/**
+ * 同一完成的重放判定（壳 sink 锚点单一判据，facts/壳两 sink 共用）：delivery 结算时记下的
+ * host `updatedAt` 锚点（runtimeSettled）覆盖到候选行 ⇒ 同一次完成的重放，不得二次投递。
+ * Fail-open 由调用方持有：无标记/无锚点/无行时间都 false，facts 侧的 legacy 无锚点抑制留在调用点。
+ */
+export function completionAlreadySettled(
+  settled: ReadonlyMap<string, number | undefined>,
+  sessionId: string,
+  rowUpdatedAt: number | undefined,
+): boolean {
+  const anchor = settled.get(sessionId)
+  return anchor !== undefined && rowUpdatedAt !== undefined && rowUpdatedAt <= anchor
+}
+
 /** 通知水位与壳边沿武装位的合并账本（App 单例持有）。 */
 export interface CompleteLedger {
   /** 完整状态（reconcile 直接读写；durable 三表是持久化来源）。 */

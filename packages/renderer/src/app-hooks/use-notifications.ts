@@ -17,7 +17,7 @@ import { stepCompletionArm, type InstanceAggregate } from '@dsh-chamber/dsh-cham
 import type { CompletedStore } from '../host/completed-store.ts'
 import type { ViewStore } from '../host/view-store.ts'
 import type { FactsStore } from '../host/facts-store.ts'
-import type { CompleteLedger } from '../complete-ledger.ts'
+import { completionAlreadySettled, type CompleteLedger } from '../complete-ledger.ts'
 import {
   applyObservationBatch,
   completionIdentity,
@@ -437,8 +437,9 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
               // 分叉的读必须走 session-facts-source 的判据元组。
               const factsRow = snapshot.session[sourceId]?.rows[notification.sessionId]
               // 锚点缺失（无 host 时间）或 facts 行不晚于锚点 = 同一次完成：认领不重发。
-              // 行严格更新 ⇒ 属于下一轮运行，照常通知。
-              if (anchor === undefined || (factsRow !== undefined && factsRow.updatedAt <= anchor)) {
+              // 行严格更新 ⇒ 属于下一轮运行，照常通知。比较本体与壳 sink 共用
+              // completionAlreadySettled；anchor 缺失的 legacy 抑制是 facts 侧语义，留在本处。
+              if (anchor === undefined || completionAlreadySettled(settled, notification.sessionId, factsRow?.updatedAt)) {
                 completeLedgerRef.current.setNotifiedRun(sourceId, notification.sessionId, runId)
                 persistCompletionLedger(true)
                 return

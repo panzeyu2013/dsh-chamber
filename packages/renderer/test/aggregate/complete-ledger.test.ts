@@ -10,6 +10,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   PENDING_MAX_AGE_MS,
+  completionAlreadySettled,
   createCompleteLedger,
   type PendingCompletionTable,
 } from '../../src/complete-ledger.ts'
@@ -69,6 +70,20 @@ test('runtime settlement carries the host anchor that keeps adoption run-scoped'
   // A newer edge for the same session replaces the stale anchor.
   ledger.markRuntimeSettled('src', 's1', 1_700_000_060_000)
   assert.equal(ledger.runtimeSettled('src').get('s1'), 1_700_000_060_000)
+})
+
+test('completionAlreadySettled answers only comparable-anchor replays (I2)', () => {
+  // 壳/facts 两个 sink 共用的唯一比较本体：可比的 host 锚点覆盖到候选行才算重放。
+  // 无标记、无锚点（legacy 无 host 时间）、无行时间一律 false = fail-open。
+  const anchor = 1_700_000_000_000
+  const settled = new Map<string, number | undefined>([['s1', anchor], ['legacy', undefined]])
+  assert.equal(completionAlreadySettled(settled, 'absent', anchor), false, '无标记 = fail-open')
+  assert.equal(completionAlreadySettled(settled, 's1', anchor), true, '同 host 时刻 = 同一次完成')
+  assert.equal(completionAlreadySettled(settled, 's1', anchor - 1), true, '更旧的行属于锚点那次完成')
+  assert.equal(completionAlreadySettled(settled, 's1', anchor + 1), false, '更新的行 = 下一轮运行')
+  assert.equal(completionAlreadySettled(settled, 's1', undefined), false, '无行时间 = fail-open')
+  assert.equal(completionAlreadySettled(settled, 'legacy', anchor), false, '无锚点的 legacy 标记不静音壳通道')
+  assert.equal(completionAlreadySettled(new Map(), 's1', anchor), false, '空表 = fail-open')
 })
 
 test('forget drops every track; prune removes only absent sources and reports change', () => {

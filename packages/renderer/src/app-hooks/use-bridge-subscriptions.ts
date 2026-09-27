@@ -25,7 +25,7 @@ import {
 import { notificationRunId } from '../notification-identity.ts'
 import { notificationLedger } from '../notification-ledger.ts'
 import type { NotificationTitleId } from '../notification-projection.ts'
-import type { CompleteLedger } from '../complete-ledger.ts'
+import { completionAlreadySettled, type CompleteLedger } from '../complete-ledger.ts'
 import type { FactsStepGuard } from '../facts-health.ts'
 import {
   chamberBridge,
@@ -785,6 +785,13 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
             // I1：壳行的生产者运行身份优先，其次事件序/水位；host updatedAt 是 outbox
             // 跨通道关联的同一锚点。两条证据由此共用一个 key，不会各发一条横幅。
             const row = report.sessions[notification.sessionId]
+            // 壳 sink 锚点：壳通道自身的 settled 锚点挡住「producer 重置后的同一次完成重放」——
+            // 与 facts sink 共用 completionAlreadySettled；无标记/无锚点 = fail-open，
+            // 只影响抑制，不影响投递（open 面见 STATUS「通知壳 sink runtimeSettled 锚点」）。
+            if (notification.kind === 'complete'
+                && completionAlreadySettled(completeLedgerRef.current.runtimeSettled(sourceId), notification.sessionId, row?.updatedAt)) {
+              return
+            }
             const runId = notification.kind !== 'complete' ? undefined : notificationRunId({
               sourceFingerprint,
               sessionId: notification.sessionId,
