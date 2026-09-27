@@ -434,8 +434,8 @@ test('the kernel-adopted id set stays lockstep with boot-rows.ts / boot.ts (the 
   // The registration SET, not just presence: a third `target.load` would adopt
   // another row and invalidate the predicate until KERNEL_ADOPTED_IDS grows too.
   // Tolerant of whitespace/extra keys after `id`: a third registration must not slip
-// past merely because its options line reformatted.
-const registered = [...boot.matchAll(/target\.load\(\{\s*id:\s*(\w+)/g)].map(match => match[1]!)
+  // past merely because its options line reformatted.
+  const registered = [...boot.matchAll(/target\.load\(\{\s*id:\s*(\w+)/g)].map(match => match[1]!)
   assert.deepEqual(
     [...new Set(registered)].sort(),
     ['MODULES_ID', 'UI_RENDERER_ID'],
@@ -846,18 +846,45 @@ test('collectExtraRows: a bundle rewritten between fetch and load recovers — s
   }) as typeof fetch)
   const loaded: string[] = []
   let diagnostic: { state: string } | undefined
+  let answered = 0
   const rows = await collectExtraRows('local', '/api/i/local', {
     loadModuleBundle: async url => {
       if (url.includes('stale-rev')) throw new Error(`stale rev bundle 404: ${url}`)
       loaded.push(url)
     },
     reportDiagnostic: (_sourceId, next) => { diagnostic = next },
+    onGraphAnswered: () => { answered += 1 },
   })
   assert.equal(calls, 2, 'one bounded recovery refetch, no more')
   assert.deepEqual(loaded, [`/api/i/local/plugins/??${id}&rev=fresh-rev`])
   assert.equal(rows.length, 1)
   assert.equal(rows[0]!.rev, 'fresh-rev')
   assert.equal(diagnostic?.state, 'ok')
+  assert.equal(answered, 1, 'the arm condition fires once per boot; the recovery refetch never re-fires it')
+})
+
+test('collectExtraRows: an answered graph fires onGraphAnswered once (empty rows included); a missing channel never does', async (t) => {
+  // This is the live-sync arm condition (shell.ts): the subscriber exists only for a boot
+  // whose host graph ANSWERED — an all-covered/empty row set counts, a failed channel does not.
+  let answered = 0
+  stubFetch(t, 200, envelope([]))
+  assert.deepEqual(await collectExtraRows('answered-empty', '/api/i/local', {
+    loadModuleBundle: async () => {},
+    onGraphAnswered: () => { answered += 1 },
+  }), [])
+  assert.equal(answered, 1, 'a valid graph with no extra rows is still an answer')
+
+  stubFetch(t, 200, {
+    rpcId: 'r1',
+    result: { ok: false, error: { code: 'rpc_failed', message: 'unknown method clientGraph/graph' } },
+  })
+  captureConsoleError(t)
+  let failedAnswered = 0
+  assert.deepEqual(await collectExtraRows('answered-missing', '/api/i/missing', {
+    loadModuleBundle: async () => {},
+    onGraphAnswered: () => { failedAnswered += 1 },
+  }), [])
+  assert.equal(failedAnswered, 0, 'a channel that never answered must not arm live sync')
 })
 
 test('collectExtraRows: a recovery-refetch channel failure keeps the original bundle failure loud', async (t) => {

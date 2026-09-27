@@ -130,6 +130,7 @@ function harness(
     diagnostics: sink as LiveDiagnosticSink,
     isCurrent: () => current,
     fiberIsActive: fiber => fiber?.state === 2,
+    fiberIsTerminal: fiber => fiber?.state === 3 || fiber?.state === 4 || fiber?.state === 5,
     createEventSource: url => { sourceUrls.push(url); return source.source },
     now: () => 1_000,
     activationTimeoutMs: 20,
@@ -683,6 +684,57 @@ test('a rev change owned by another source reports instance-version-conflict, no
   assert.match(second.sink.record?.message ?? '', /实例 local 先加载的版本/)
 })
 
+test('a removal never drops a page-level chunk owner another source still holds', async (t) => {
+  resetClientPluginLoaderState()
+  const first = harness(t)
+  first.source.emit(graphFrame([row('@scope/shared-owner')]))
+  await tick()
+  assert.equal(clientPluginRowOwner('@scope/shared-owner'), 'local')
+  // A SECOND source mounts the same id from its boot baseline (kernel reuse)...
+  const loader = fakeLoader([{ name: '@scope/shared-owner' }])
+  const second = harness(t, {
+    sourceId: 'ssh-1', basePath: '/api/i/ssh-1', loader: loader.loader,
+    initialRows: [extra('@scope/shared-owner')],
+  }, { resetKernel: false })
+  // ...and its host drops the row: the shared descriptor belongs to 'local', so it stays.
+  second.source.emit(graphFrame([]))
+  await tick()
+  assert.deepEqual(second.chunkRemovals, [], 'a non-owner remove must not delete the descriptor the owner still needs')
+  assert.equal(loader.entries.length, 0, 'the entry itself is still removed for this source')
+  // Positive control: the owner's own removal still drops it.
+  first.source.emit(graphFrame([]))
+  await tick()
+  assert.deepEqual(first.chunkRemovals, [['@scope/shared-owner']])
+})
+
+test('a boot baseline fiber in a terminal state is dropped and the next frame retries it', async (t) => {
+  resetClientPluginLoaderState()
+  const loader = fakeLoader([{ name: '@scope/dead' }])
+  loader.entries[0]!.fiber!.state = 3
+  const h = harness(t, { loader: loader.loader, initialRows: [extra('@scope/dead')] }, { resetKernel: false })
+  assert.equal(loader.entries.length, 0, 'a FAILED boot entry is dropped, never reported pending forever')
+  h.source.emit(graphFrame([row('@scope/dead')]))
+  await tick()
+  assert.equal(loader.entries.length, 1, 'the frame retries the row through the ordinary add path')
+  assert.ok(!h.sink.writes.some(record => /未在窗口内激活/.test(record.message ?? '')), 'no fabricated pending fact for the dropped baseline')
+})
+
+test('a mounted row whose fiber turns terminal is dropped and retried, not reported pending forever', async (t) => {
+  resetClientPluginLoaderState()
+  const loader = fakeLoader([{ name: '@scope/late-fail', active: false }])
+  const h = harness(t, { loader: loader.loader, initialRows: [extra('@scope/late-fail')] }, { resetKernel: false })
+  h.source.emit(graphFrame([row('@scope/late-fail')]))
+  await tick()
+  assert.equal(h.sink.record?.state, 'bundle-load-failed')
+  assert.match(h.sink.record?.message ?? '', /未在窗口内激活/)
+  loader.entries[0]!.fiber!.state = 3
+  h.source.emit(graphFrame([row('@scope/late-fail')]))
+  await tick()
+  assert.equal(loader.entries.length, 1, 'the terminal entry was dropped and retried once')
+  assert.notEqual(loader.entries[0]!.fiber!.state, 3, 'the retry created a fresh entry')
+  assert.ok(!/未在窗口内激活/.test(h.sink.writes.at(-1)?.message ?? ''), 'a terminal fiber no longer masquerades as pending')
+})
+
 test('disarm joins the in-flight pass (its promise is a real teardown barrier)', async (t) => {
   let release: (() => void) | undefined
   const gate = new Promise<void>(resolve => { release = resolve })
@@ -710,5 +762,12 @@ test('shell wiring lockstep: boot-entry disarm, settle-time arm gate, dispose di
   // Disposal disarms through the same barrier.
   assert.match(source,
     /if \(holder\.liveSync !== undefined\) \{\s*registerTeardownBarrier\(instanceId, holder\.liveSync\.disarm\(\)\)/)
+  // The arm flag's setter itself (only an ANSWERED graph arms) and the terminal-fiber predicate:
+  // source locks, because deleting either still leaves every behavior test green.
+  assert.match(source, /onGraphAnswered: \(\) => \{ graphAnswered = true \}/)
+  assert.match(source, /fiberIsTerminal: fiber => fiber\?\.state === FIBER_STATE\.FAILED/)
+  // The page-level chunk-owner adapters the reconciler drives.
+  assert.match(source, /registerChunkOwners: rows => \{ registerExtraChunkOwners\(modules, rows\) \}/)
+  assert.match(source, /removeChunkOwners: ids => \{ removeExtraChunkOwners\(modules, ids\) \}/)
 })
 

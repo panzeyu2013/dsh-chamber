@@ -732,6 +732,11 @@ export function bootInstanceShell(
             },
             isCurrent: () => entries.get(instanceId) === holder && mayPublish(),
             fiberIsActive: fiber => fiber?.state === FIBER_STATE.ACTIVE,
+            // A terminal fiber can never activate: live drops the entry and retries via the
+            // next frame's add, so a boot-tolerated apply failure reports its real error
+            // instead of "mount but inactive" forever (boot-tolerance.ts owns the verdict).
+            fiberIsTerminal: fiber => fiber?.state === FIBER_STATE.FAILED
+              || fiber?.state === FIBER_STATE.DISPOSED || fiber?.state === FIBER_STATE.UNLOADING,
             createEventSource: url => new EventSource(url) as unknown as LiveEventSourceFace,
           })
         }

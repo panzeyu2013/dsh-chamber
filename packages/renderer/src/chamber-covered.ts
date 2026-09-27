@@ -142,7 +142,8 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // ctx.uiRenderer), so a second entry would install a second slot renderer.
   // Page-own only, no factory: chamber-entry never imports it.
   '@deepseek-ai/dsh-client-ui-renderer',
-  // The official dev-only HMR entry: its client fiber opens a DOCUMENT-relative
+  // The official HMR entry (its host half is always mounted; only the rebuild watcher
+  // is dev-only): its client fiber opens a DOCUMENT-relative
   // `new EventSource('plugins/events')`, which in this one-page-N-ctx shell would
   // hit the control-plane origin (SPA fallback: text/html). The HOST route itself
   // is a per-instance service and is consumed by the chamber's own subscriber at

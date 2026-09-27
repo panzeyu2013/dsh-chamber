@@ -20,6 +20,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+// The test-shell loader maps this specifier to the committed fixture; these two mirror the
+// producer's chunk-owner contract, and the shell arm body is out of reach in plain-node
+// tests (no global EventSource), so the mirror is pinned here directly.
+import { registerExtraChunkOwners, removeExtraChunkOwners } from '@deepseek-ai/dsh-client-web'
 // The settled-boot fact the seam carries (type-only: erased at runtime, so the
 // loader hook never sees the specifier). Typing the test's ctx cast from the
 // producer's own interface keeps a payload field from drifting out of the test.
@@ -635,5 +639,21 @@ test('bootInstanceShell: a cancelled generation cannot overwrite the retry plugi
     chamberBridge.clearPluginDiagnostic(sourceId)
     globalThis.fetch = originalFetch
   }
+})
+
+test('the dsh-client-web fixture mirror keeps the producer chunk-owner contract', () => {
+  // shell.ts drives these two through the fixture alias; the producer's own contract is
+  // pinned in packages/dsh-client-web/test/extra-chunk-owners.test.ts (same cases here).
+  const boot = { id: '@app/boot', url: '/plugins/??@app/boot&rev=r1' }
+  const graphRows = new Map([[boot.id, boot]])
+  const live = { id: '@scope/live', url: '/plugins/??@scope/live&rev=r1' }
+
+  assert.deepEqual(registerExtraChunkOwners({} as never, []), [], 'an empty batch never consults the index')
+  assert.deepEqual(registerExtraChunkOwners({ graphRows } as never, [live]), [live.id])
+  assert.deepEqual(registerExtraChunkOwners({ graphRows } as never, [live]), [], 'registration is idempotent')
+  assert.equal(graphRows.get(boot.id), boot, 'the boot descriptor stays authoritative')
+  assert.deepEqual(removeExtraChunkOwners({ graphRows } as never, [live.id]), [live.id])
+  assert.deepEqual(removeExtraChunkOwners({ graphRows } as never, [live.id]), [], 'removal is idempotent')
+  assert.throws(() => removeExtraChunkOwners({} as never, [live.id]), /graphRows index/)
 })
 

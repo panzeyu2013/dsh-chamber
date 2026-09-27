@@ -255,10 +255,13 @@ export function ensureWebModuleSystem() {
  * fails loud, so a fixture drift cannot be silently absorbed.
  */
 export function registerExtraChunkOwners(modules, rows) {
+  // Same early return as the producer (extra-chunk-owners.ts): an empty batch has nothing to
+  // own, so the missing-index guard is never consulted for it (keep the mirror exact).
+  if (rows === undefined || rows.length === 0) return []
   const registry = modules?.graphRows
   if (!(registry instanceof Map)) throw new Error('fixture: module system has no graphRows index')
   const added = []
-  for (const row of rows ?? []) {
+  for (const row of rows) {
     if (registry.has(row.id)) continue
     registry.set(row.id, { ...row, initialUrl: row.initialUrl || row.url })
     added.push(row.id)
@@ -434,6 +437,7 @@ export function __testResetLifecycle() {
   sessionsOpenError = undefined
   chamberPrefetchError = undefined
   loaderEntries = []
+  graphRows.clear()
 }
 
 /** Event log: 'ensure' (module-system install) vs 'fetch' (host-graph channel) call order. */

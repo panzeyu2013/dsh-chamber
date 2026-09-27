@@ -19,7 +19,8 @@
  * always follows.
  *
  * OPPORTUNISTIC BY CONTRACT: a missing/failing channel is NOT a degrade — every
- * path below no-ops, and boot remains the single authority for the row set.
+ * path below no-ops, and boot stays the FALLBACK authority for the row set whenever the
+ * channel is unavailable (an answered channel's graph frames take over add/remove, §3.7).
  * Arm/disarm is owned by shell.ts: disarm happens synchronously at the next
  * same-id boot entry and inside disposeHolder, and the in-flight pass joins the
  * id-local teardown barrier (the page-level loader kernel and module table are
@@ -35,7 +36,7 @@
  * either a duplicate-factory throw or permanently missing styles.
  */
 
-import type { PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-core'
+import { describeThrown, type PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-core'
 import {
   clientPluginRowOwner, dedupeCoveredRows, loadClientPluginRows, type ClientRowOutcome,
 } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
@@ -197,6 +198,12 @@ export interface LiveGraphSyncDeps {
   /** Holder identity + generation fence: re-checked after EVERY await. */
   isCurrent(): boolean
   fiberIsActive(fiber: LiveLoaderEntryFace['fiber']): boolean
+  /** True when a fiber can never activate any more (FAILED/DISPOSED/UNLOADING): live
+   *  treats it like a fiberless entry (drop now + retry on the next frame) instead of
+   *  reporting the row "mounted but not active" forever. boot-tolerance.ts owns the
+   *  terminal-state semantics: a tolerated apply failure is marked degraded/failed and
+   *  is NOT retried by the boot path. */
+  fiberIsTerminal(fiber: LiveLoaderEntryFace['fiber']): boolean
   /** EventSource factory; absent = the channel is unavailable on this host. */
   createEventSource?(url: string): LiveEventSourceFace
   now?(): number
@@ -221,10 +228,6 @@ type LiveFact =
   | { kind: 'restart-required'; id: string; message: string }
   | { kind: 'load-failed'; id: string; message: string }
   | { kind: 'pending'; id: string; message: string }
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
 
 /** One text for the mounted-but-inactive fact (derived, emitted and re-emitted). */
 function pendingMessage(id: string): string {
@@ -276,19 +279,23 @@ export function startLiveGraphSync(deps: LiveGraphSyncDeps): LiveGraphSync {
   for (const row of deps.initialRows) {
     const entry = entriesByName.get(row.id)
     if (entry === undefined) continue
-    if (entry.fiber === undefined) {
-      // The boot pass materialized this entry but its import failed, so it can never
-      // activate. Drop it now: the loader keys entries by id, so retrying the row later
-      // would create a SECOND entry with the same name (orphan). Not fenced on purpose —
-      // this runs synchronously on the current holder before any pass, and a fiberless
-      // entry is already dead.
+    const fiber = entry.fiber
+    if (fiber === undefined || deps.fiberIsTerminal(fiber)) {
+      // The boot pass materialized this entry but it can never activate: no fiber at all
+      // (import failed), or a TERMINAL fiber (FAILED/DISPOSED/UNLOADING — a tolerated
+      // apply failure is boot-tolerance's degraded/failed verdict, never a retry). Drop it
+      // now: the loader keys entries by id, so retrying the row later would create a SECOND
+      // entry with the same name (orphan). The next frame's add retries it instead, and the
+      // retry's real create/apply error is what gets reported. Not fenced on purpose — this
+      // runs synchronously on the current holder before any pass, and a terminal entry is
+      // already dead.
       const deadId = entry.id
       if (deadId !== undefined) {
         try { deps.loader.remove(deadId) } catch { /* best effort */ }
       }
       continue
     }
-    mounted.set(row.id, { row, entryId: entry.id, pending: !deps.fiberIsActive(entry.fiber) })
+    mounted.set(row.id, { row, entryId: entry.id, pending: !deps.fiberIsActive(fiber) })
   }
 
   const resolveEntry = (entryId: string): LiveLoaderEntryFace | undefined => {
@@ -341,6 +348,16 @@ export function startLiveGraphSync(deps: LiveGraphSyncDeps): LiveGraphSync {
     lastWrite = record
   }
 
+  /** The page-level chunk-owner table is id-keyed and SHARED across sources: a second
+   *  source mounting an already-claimed id reuses the owner's factory, so its add
+   *  rollback/remove must never delete a descriptor it does not own (the owner's still-
+   *  mounted row needs it). `undefined` = nobody claimed the id yet, so this source's own
+   *  registration is the only one. */
+  const ownsChunkDescriptor = (id: string): boolean => {
+    const owner = clientPluginRowOwner(id)
+    return owner === undefined || owner === deps.sourceId
+  }
+
   const removeMounted = async (item: { id: string; mounted: MountedLiveRow }): Promise<void> => {
     mounted.delete(item.id)
     const entryId = item.mounted.entryId
@@ -375,17 +392,21 @@ export function startLiveGraphSync(deps: LiveGraphSyncDeps): LiveGraphSync {
     }
     // Deliberately NOT fenced: the chunk-owner index is a PAGE-LEVEL table, so a
     // disarmed holder must still drop its row or the removed plugin's chunks stay
-    // resolvable for every later consumer on the page.
-    try {
-      deps.removeChunkOwners([item.id])
-    } catch (error) {
-      warn(`[live-graph] chunk-owner removal for ${item.id} failed`, error)
+    // resolvable for every later consumer on the page — but only the id's factory
+    // owner may drop it (a shared id's descriptor serves the owner's mounted row).
+    if (ownsChunkDescriptor(item.id)) {
+      try {
+        deps.removeChunkOwners([item.id])
+      } catch (error) {
+        warn(`[live-graph] chunk-owner removal for ${item.id} failed`, error)
+      }
     }
   }
 
   /** Undo one add's page-level side effects (entry + chunk-owner row), best effort. */
   const rollbackAdd = (id: string, entryId: string): void => {
     try { deps.loader.remove(entryId) } catch (error) { warn(`[live-graph] stale entry rollback for ${id} failed`, error) }
+    if (!ownsChunkDescriptor(id)) return
     try { deps.removeChunkOwners([id]) } catch { /* best effort */ }
   }
 
@@ -397,7 +418,7 @@ export function startLiveGraphSync(deps: LiveGraphSyncDeps): LiveGraphSync {
         timeout: 'collect',
       })
     } catch (error) {
-      facts.push({ kind: 'load-failed', id: row.id, message: errorMessage(error) })
+      facts.push({ kind: 'load-failed', id: row.id, message: describeThrown(error) })
       return
     }
     const outcome = outcomes[0]
@@ -414,11 +435,12 @@ export function startLiveGraphSync(deps: LiveGraphSyncDeps): LiveGraphSync {
       return
     }
     if (outcome.state === 'failed') {
-      // Deliberately NO findDeferredExternalDependencies enrichment here: that predicate
-      // is a static set check, while the deferred cluster may already have registered by
-      // the time a live frame arrives, so reusing it live would fabricate misses. The
-      // authoritative answer is this create/apply outcome.
-      facts.push({ kind: 'load-failed', id: row.id, message: errorMessage(outcome.error) })
+      // Deliberately NO unsatisfiable-external enrichment here: the boot predicate is a
+      // STATIC potential-missing projection over the declared `external` set (and only the
+      // boot path reports it). A live frame's authoritative answer is this create/apply
+      // outcome — deferred families never register a factory at any later time, so there is
+      // no timing window either way.
+      facts.push({ kind: 'load-failed', id: row.id, message: describeThrown(outcome.error) })
       return
     }
     if (!deps.isCurrent()) return
@@ -426,16 +448,16 @@ export function startLiveGraphSync(deps: LiveGraphSyncDeps): LiveGraphSync {
       deps.registerChunkOwners([row])
     } catch (error) {
       // A partial registration must not outlive the failed row (page-level table).
-      try { deps.removeChunkOwners([row.id]) } catch { /* best effort */ }
-      facts.push({ kind: 'load-failed', id: row.id, message: errorMessage(error) })
+      if (ownsChunkDescriptor(row.id)) { try { deps.removeChunkOwners([row.id]) } catch { /* best effort */ } }
+      facts.push({ kind: 'load-failed', id: row.id, message: describeThrown(error) })
       return
     }
     let entryId: string
     try {
       entryId = await deps.loader.create({ name: row.id })
     } catch (error) {
-      try { deps.removeChunkOwners([row.id]) } catch { /* best effort */ }
-      facts.push({ kind: 'load-failed', id: row.id, message: errorMessage(error) })
+      if (ownsChunkDescriptor(row.id)) { try { deps.removeChunkOwners([row.id]) } catch { /* best effort */ } }
+      facts.push({ kind: 'load-failed', id: row.id, message: describeThrown(error) })
       return
     }
     if (!deps.isCurrent()) {
@@ -503,8 +525,9 @@ export function startLiveGraphSync(deps: LiveGraphSyncDeps): LiveGraphSync {
     }
     for (const item of diff.recheck) {
       const fiber = item.mounted.entryId === undefined ? undefined : resolveEntry(item.mounted.entryId)?.fiber
-      if (fiber === undefined) {
-        // Drop the stale entry before the retry, or the add would create a duplicate.
+      if (fiber === undefined || deps.fiberIsTerminal(fiber)) {
+        // Drop the dead entry (missing OR terminal fiber) before the retry, or the add
+        // would create a duplicate; the retry's create error is the honest fact.
         if (item.mounted.entryId !== undefined) rollbackAdd(item.id, item.mounted.entryId)
         mounted.delete(item.id)
         diff.add.push(item.mounted.row)

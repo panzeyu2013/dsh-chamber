@@ -6,7 +6,7 @@
  * clientModules, loads code, or touches the Loader.
  * Endpoint contract (global, fixed): namespace 'clientGraph', method 'graph' →
  * wire endpoint 'clientGraph/graph', returning the WebBootGraph shape
- * {rev, entries: [{id, url, rev, inject?, immediately?}]}, single-sourced from
+ * {rev, entries: [{id, url, rev, inject?, external?, immediately?}]}, single-sourced from
  * client-modules' client/manifest.ts.
  * Vendor TypertGatewayService discovers live @Remote-marked subclasses; `static inject` orders after the node half.
  */

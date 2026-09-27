@@ -264,6 +264,17 @@ function reportDiagnostic(
   listener?.(instanceId, { state, ...extra, updatedAt: Date.now() })
 }
 
+/** The cross-instance bundle-rev drift fact text (shared by the boot projection and live sync):
+ *  states only the FILE-METADATA fact (design 09 §3.5) — never "the versions differ". */
+export function versionConflictMessage(id: string, ownerSourceId: string): string {
+  return `实例间 ${id} 的 bundle rev 不同（rev 由 bundle 文件的 mtime/ctime/size 派生，不是内容哈希；独立安装/拷贝通常不同，仅当两侧指向同一底层文件时才相同）：页面已沿用实例 ${ownerSourceId} 先加载的版本`
+}
+
+/** The same-source rebuilt-bundle fact text (shared by the boot projection and live sync). */
+export function restartRequiredMessage(id: string): string {
+  return `页面已加载 ${id} 的另一版本，重启应用后才能切换`
+}
+
 /**
  * THE single row projection of one composed graph: the boot fetch (unary
  * `clientGraph/graph`) and the live SSE subscriber both validate through here,
@@ -276,17 +287,6 @@ function reportDiagnostic(
  * @throws Error when a present optional field is malformed — a wrong graph is a
  *   boot hazard, never guesswork; live callers catch and drop the frame instead.
  */
-/** The cross-instance bundle-rev drift fact text (shared by the boot projection and live sync):
- *  states only the FILE-METADATA fact (design 09 §3.5) — never "the versions differ". */
-export function versionConflictMessage(id: string, ownerSourceId: string): string {
-  return `实例间 ${id} 的 bundle rev 不同（rev 由 bundle 文件的 mtime/ctime/size 派生，不是内容哈希；独立安装/拷贝通常不同，仅当两侧指向同一底层文件时才相同）：页面已沿用实例 ${ownerSourceId} 先加载的版本`
-}
-
-/** The same-source rebuilt-bundle fact text (shared by the boot projection and live sync). */
-export function restartRequiredMessage(id: string): string {
-  return `页面已加载 ${id} 的另一版本，重启应用后才能切换`
-}
-
 export function parseGraphRows(entries: readonly PluginGraphBaseEntry[]): HostGraphRow[] {
   const rows: HostGraphRow[] = []
   for (const row of entries) {
@@ -558,8 +558,9 @@ export async function collectExtraRows(
         }
       }
     }
-    // Surface the recovery's FRESH urls/revs: pass-1 urls carry the stale process
-    // generation and must never reach the kernel as loadable sources.
+    // Surface the recovery's FRESH urls/revs: pass-1 urls carry the SUPERSEDED
+    // metadata rev (not a per-process identity) and must never reach the kernel
+    // as loadable sources.
     if (recoveredRows.length > 0) {
       const recoveredById = new Map(recoveredRows.map(fresh => [fresh.id, fresh] as const))
       for (let index = 0; index < rows.length; index++) {

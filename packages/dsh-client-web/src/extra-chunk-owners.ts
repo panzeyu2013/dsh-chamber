@@ -30,13 +30,16 @@ export function registerExtraChunkOwners(
   }
   return added
 }
+
 /**
  * The symmetric UNDO of {@link registerExtraChunkOwners}: a live-synced row that
  * leaves the instance's graph must stop owning chunks, or a row that later
  * `require()`s the removed id resolves it through a resurrected dependency and
  * executes an uninstalled plugin's bundle. Same fork-boundary guard as the
- * register half: a changed index representation fails loud instead of leaving a
- * stale owner behind.
+ * register half: a changed index representation throws across this boundary. The
+ * live callers keep the DELETE best-effort (a throw is warned and the stale owner
+ * stays page-level), while the register half's throw becomes a named boot fact —
+ * so a fork break is loud on the add path, quiet on the remove path.
  * @returns the ids actually removed (an id with no owner is skipped).
  */
 export function removeExtraChunkOwners(

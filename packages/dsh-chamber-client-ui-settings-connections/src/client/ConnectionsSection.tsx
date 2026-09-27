@@ -34,8 +34,8 @@ import {
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pulls the settings shell's SlotMap merge ('settings.section').
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
-// Page-owned restart→reload completion: a restarted source's client-plugin set only
-// changes on a window boot, so every restart-to-apply entry point arms it.
+// Page-owned restart→reload completion: add/remove arrives live (design 09 §3.7);
+// the reload stays for a REBUILT bundle's rev change and the real restart entries.
 import {
   RESTART_RELOAD_BUDGET_MS,
   armLocalDshRestartCompletion,
