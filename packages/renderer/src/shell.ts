@@ -13,7 +13,10 @@
 
 
 
-import { AppWebEntry, ensureWebModuleSystem, FIBER_STATE } from '@deepseek-ai/dsh-client-web'
+import {
+  AppWebEntry, ensureWebModuleSystem, FIBER_STATE,
+  registerExtraChunkOwners, removeExtraChunkOwners,
+} from '@deepseek-ai/dsh-client-web'
 import type { Context } from '@deepseek-ai/cordis'
 
 import { parseAuthoritativeSourceFingerprint } from './deep-link-activation.ts'
@@ -36,6 +39,10 @@ import {
 import type { GraphGapKind } from './source-readiness.ts'
 import { isChamberSourceId, rawInstanceIdFromSourceId } from './transport-source.ts'
 import { collectExtraRows, type CollectExtraRowsDeps, type ExtraModuleRow } from './host-graph.ts'
+import {
+  readLiveSyncEnabled, startLiveGraphSync,
+  type LiveEventSourceFace, type LiveGraphSync, type LiveLoaderFace,
+} from './live-graph.ts'
 import { readSafeModeFlag, SAFE_MODE_GLOBAL } from './safe-mode.ts'
 import { BundleLoadTimeoutError } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
 import { chamberBridge, describeThrown, type PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-core'
@@ -288,6 +295,10 @@ interface ShellHolder {
    *  banner, projections and self-heal). Absent in hosts that boot without an App. */
   onRepublish?: (instanceId: string, next: ShellState) => void
   lastState?: ShellState
+  /** Live client-plugin graph sync (armed after settle, disarmed before any
+   *  successor preload and inside disposeHolder). Absent = never armed (safe
+   *  mode, channel did not answer, kill switch, no EventSource on this host). */
+  liveSync?: LiveGraphSync
 }
 
 /**
@@ -451,6 +462,8 @@ export function bootInstanceShell(
   /** Degrade facts of this boot: `graphUnavailable` is known before settle; the entry's
    *  producers arrive later and are republished through the holder. */
   let graphUnavailable: { kind: GraphGapKind; message: string } | null = null
+  /** This boot's host graph ANSWERED (the only arm condition for live sync). */
+  let graphAnswered = false
   const reportPluginDiagnostic = (sourceId: string, diagnostic: PluginGraphDiagnostic): void => {
     if (!mayPublish()) return
     chamberBridge.reportPluginDiagnostic(sourceId, diagnostic)
@@ -472,6 +485,15 @@ export function bootInstanceShell(
   // registers an async teardown barrier synchronously — capture it before any page-global preloading.
   const previousTeardownBarrier = instanceTeardownBarriers.get(instanceId)
   const hadLiveHolder = entries.has(instanceId)
+  // A same-id successor must stop the predecessor's live sync BEFORE any page-global
+  // preload: the page-level loader kernel / module table are shared, so a pass still in
+  // flight could interleave with this boot's eager preload (and clear the same combo
+  // records). The in-flight pass joins the id-local barrier synchronously here, so the
+  // later retireSameIdPredecessors() waits for it too.
+  const predecessorHolder = hadLiveHolder ? entries.get(instanceId) : undefined
+  if (predecessorHolder?.liveSync !== undefined) {
+    registerTeardownBarrier(instanceId, predecessorHolder.liveSync.disarm())
+  }
   const previousInstanceBoot = Promise.all([
     previousInstanceTail ?? Promise.resolve(),
     previousTeardownBarrier ?? Promise.resolve(),
@@ -529,6 +551,7 @@ export function bootInstanceShell(
         ...(options.waitForServing === undefined ? {} : { waitForServing: options.waitForServing }),
         ...(options.retry === undefined ? {} : { retry: options.retry }),
         onGraphUnavailable: (message, kind) => { if (mayPublish()) graphUnavailable = { kind, message } },
+        onGraphAnswered: () => { graphAnswered = true },
       })
       : Promise.resolve<ExtraModuleRow[]>([])
     // An eager different-id prefetch may reject while waiting for its global slot; run awaits it.
@@ -685,6 +708,37 @@ export function bootInstanceShell(
       // 门覆盖 await 期间被新代取代的情形；残留阈值只会扩大 Map。
       cancelledBoots.delete(instanceId)
       flushPendingOpens(instanceId)
+      // Live client-plugin graph sync: armed only for a boot whose host graph ANSWERED,
+      // in normal mode, on a host with EventSource. The holder owns it; a successor boot
+      // or disposal disarms it (see the boot-entry fence above and disposeHolder).
+      if (graphAnswered && !safeMode && installedModulesSystem !== null
+        && readLiveSyncEnabled() && typeof EventSource === 'function') {
+        // 机会性通道：arm 自身的失败绝不把已 settle 的 boot 变成失败。
+        try {
+        const liveLoader = readLiveLoaderFace(entry.runtimeCtx)
+        if (liveLoader !== undefined) {
+          const modules = installedModulesSystem
+          holder.liveSync = startLiveGraphSync({
+            sourceId: instanceId,
+            basePath,
+            initialRows: extraRows,
+            loader: liveLoader,
+            registerChunkOwners: rows => { registerExtraChunkOwners(modules, rows) },
+            removeChunkOwners: ids => { removeExtraChunkOwners(modules, ids) },
+            loadBundle: loadModuleBundle,
+            diagnostics: {
+              read: () => chamberBridge.getPluginDiagnostics()[instanceId],
+              write: record => { reportPluginDiagnostic(instanceId, record) },
+            },
+            isCurrent: () => entries.get(instanceId) === holder && mayPublish(),
+            fiberIsActive: fiber => fiber?.state === FIBER_STATE.ACTIVE,
+            createEventSource: url => new EventSource(url) as unknown as LiveEventSourceFace,
+          })
+        }
+        } catch (error) {
+          console.error(`[shell] instance ${instanceId} live plugin sync failed to arm:`, error)
+        }
+      }
       // perf 埋点：该实例 shell 成功 settle（真实 UI 可用的最近似点）。
       perfMark(PERF_MARKS.shellSettled, instanceId)
       return settled
@@ -1043,6 +1097,22 @@ function dispatchOpen(
   })
 }
 
+/**
+ * Register one async work item into the id-local teardown barrier (serialized per id;
+ * rejections are the caller's problem — this only sequences). A successor boot awaits
+ * the barrier, so holder-owned work (entry dispose, live-sync join) must land here.
+ */
+function registerTeardownBarrier(instanceId: string, work: Promise<void>): Promise<void> {
+  const prior = instanceTeardownBarriers.get(instanceId) ?? Promise.resolve()
+  const barrier = Promise.all([prior, work]).then(() => undefined)
+  instanceTeardownBarriers.set(instanceId, barrier)
+  void barrier.then(() => {
+    if (instanceTeardownBarriers.get(instanceId) === barrier) instanceTeardownBarriers.delete(instanceId)
+    scheduleInstanceLifecycleOwnerCleanup(instanceId)
+  })
+  return barrier
+}
+
 /** Register one async teardown into the id-local barrier; rejections are loud but contained
  * so a broken disposer cannot wedge every future boot for that source. */
 function teardownEntry(instanceId: string, entry: AppWebEntry, reason: string): Promise<void> {
@@ -1055,14 +1125,21 @@ function teardownEntry(instanceId: string, entry: AppWebEntry, reason: string): 
     console.error(`[shell] dispose of instance ${instanceId} (${reason}) threw:`, error)
     ownTeardown = Promise.resolve()
   }
-  const prior = instanceTeardownBarriers.get(instanceId) ?? Promise.resolve()
-  const barrier = Promise.all([prior, ownTeardown]).then(() => undefined)
-  instanceTeardownBarriers.set(instanceId, barrier)
-  void barrier.then(() => {
-    if (instanceTeardownBarriers.get(instanceId) === barrier) instanceTeardownBarriers.delete(instanceId)
-    scheduleInstanceLifecycleOwnerCleanup(instanceId)
-  })
-  return barrier
+  return registerTeardownBarrier(instanceId, ownTeardown)
+}
+
+/**
+ * The cordis loader face the live reconciler drives. Read through a guard: a hostile
+ * runtimeCtx getter must not turn a settled boot into a failure, and a ctx without a
+ * loader (pre-materialization shapes) simply keeps live sync off.
+ */
+function readLiveLoaderFace(ctx: unknown): LiveLoaderFace | undefined {
+  try {
+    const loader = (ctx as { loader?: LiveLoaderFace } | undefined)?.loader
+    return loader === undefined || loader === null ? undefined : loader
+  } catch {
+    return undefined
+  }
 }
 
 /** Invalidate all holder-owned dispatches before disposing its runtime ctx. */
@@ -1070,6 +1147,10 @@ function disposeHolder(instanceId: string, holder: ShellHolder, reason: string):
   const error = new Error(`实例 ${instanceId} 无法打开会话：${reason}`)
   for (const cancel of [...holder.activeDispatchCancels]) cancel(error)
   holder.activeDispatchCancels.clear()
+  // 同步撤活插件同步（关通道 + 上栅栏），在飞 pass 并入同一 id 屏障；再 dispose ctx。
+  if (holder.liveSync !== undefined) {
+    registerTeardownBarrier(instanceId, holder.liveSync.disarm())
+  }
   return teardownEntry(instanceId, holder.entry, reason)
 }
 

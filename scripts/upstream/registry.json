@@ -550,6 +550,24 @@
       "evidence": "人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验（上游 apps/desktop/src/update-{coordinator,journal,schedule,error,attention,http-executor}.ts 与 mandatory-update-*.ts）",
       "status": "accepted",
       "rationale": "上游 0.1.7 有完整 electron-updater 链；chamber 自建更新链按相位/注意力/journal 语义镜像其形状（§22.3.5）。两处明确不采用：update-http-executor 的「替换 electron-updater 传输」需要注入私有字段（Electron 升级即碎，chamber 用外部 watchdog + 忽略迟到事件），mandatory-update 家族是上游 Desktop 的产品面。另：T-04 —— 上游 apps/ 与 patches/ 均无 Sparkle，Swift 腿的更新链是 chamber 自建，本触点只覆盖 Electron 腿。"
+    },
+    {
+      "id": "mirror.dsh-client-hmr-events-endpoint",
+      "type": "mirror",
+      "ours": "packages/renderer/src/live-graph.ts",
+      "upstream": "packages/client/hmr",
+      "authority": "upstream",
+      "criteria": [],
+      "deviations": [],
+      "relatedGates": [
+        "packages/renderer/test/lifecycle/live-graph.test.ts"
+      ],
+      "symbols": [
+        "packages/renderer/src/live-graph.ts#parsePluginEventFrame"
+      ],
+      "evidence": "人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验宿主半身注册的 exact GET/HEAD /plugins/events 路由（连接即一帧全量 graph；rebuilt 会 compose+notifyGraphChanged，带新 rev 的 graph 帧随到）与 chamber 订阅者（design 09 §3.7）的消费形状",
+      "status": "accepted",
+      "rationale": "上游端点属主是自述 dev-only 的 HMR 宿主行；chamber 只消费 graph 帧做装/卸同步、不加载官方客户端半身，无自动锁步面（C16 vendorSourceConsumers 只认 vendor 源码相对导入）。端点被移除/改名时 chamber 静默退回现状（机会性契约），故接受人工复验而非新增 C 编号门"
     }
   ],
   "notes": "machine facts only; prose lives in docs/checklists/upstream-touchpoints.md"

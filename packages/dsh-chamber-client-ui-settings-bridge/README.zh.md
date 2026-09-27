@@ -78,9 +78,10 @@ settings 失效通知，以及真的 `useSessions` / `useWorkspaces` / `usePanel
   `window.confirm`）已移除：原生 chrome 既套不上面板的 `--dsw-alias-*` 词汇，也
   不属于这个多壳文档，而 gateway 形态根本没有原生对话框。确认由哪一层负责其余部分
   不变——本地 apply-now 事务仍由本地运行时面自己确认，面板不会二次追问。
-- **重启 = 宿主重启 + 一次窗口重载（）**：页面侧 client 插件集在窗口 boot 时固定
-  （宿主图每 boot 取一次、模块表按 id first-load-wins），所以「重启 dsh 刷新插件挂载」这个
-  动作只有窗口重新 boot 才会让新装/重打包的 `dsh.client` 半身（例如设置分节）出现。
+- **重启 = 宿主重启 + 一次窗口重载（design 18 §3.6 项 8）**：页面侧 client 插件集以窗口 boot 为唯一权威
+  （宿主图每 boot 取一次、模块表按 id first-load-wins）；**装/卸例外**——宿主 hmr 报
+  `applied` 时 design 09 §3.7 热同步即时把新行装进活 ctx（例如设置分节出现），**无需这次
+  窗口重载**；重打包（rev 变化）与真重启入口才需窗口重新 boot。
   实现是 client-core 共享面的 **page-owned completion**
   （`restart-window-reload.ts`：本包与 connections 包都不得互相 value-import，故共享）：
   本段的两种重启、以及本地「立即应用」/「重试应用」/「重试恢复」三类重启事务（仅成功时），

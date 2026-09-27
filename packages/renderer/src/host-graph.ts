@@ -30,6 +30,7 @@ import { postUnary, type UnaryPostOutcome } from '@dsh-chamber/dsh-chamber-clien
 // can never drift.
 import {
   classifyPluginGraphOutcome, graphEntryImmediatelyMessage, graphEntryLabel, wrapGraphTransportFailure,
+  type PluginGraphBaseEntry,
 } from '@dsh-chamber/dsh-chamber-client-core/plugin-graph-classify'
 // Page-level client-plugin load kernel: the boot path and the settings bridge
 // share ONE implementation of combo/id bookkeeping, timeout tombstones and
@@ -51,8 +52,10 @@ export interface HostGraphRow {
   id: string
   /** Bundle endpoint, '/plugins/??<id>/client.js&rev=<rev>' (host-root-relative). */
   url: string
-  /** Opaque cache-busting revision (`<per-process nonce>-<ordinal>`), NOT a
-   *  content hash: every instance restart invalidates all previous bundle URLs. */
+  /** Opaque revision of this build: upstream computes it from file METADATA
+   *  (`sha1(mtimeMs, ctimeMs, size)`), so it is neither a content hash nor a
+   *  per-process nonce — an untouched bundle keeps its rev across host restarts
+   *  (bundle urls stay valid), and only a rewritten file takes a new rev. */
   rev: string
   /** Package-name dependency edges, informational. */
   inject?: string[]
@@ -125,30 +128,7 @@ export async function fetchHostGraph(basePath: string): Promise<HostGraphRow[] |
   if (verdict.kind === 'instance-unavailable') return null
   if (verdict.kind === 'channel') throw new HostGraphChannelError(verdict.state, verdict.message)
   if (verdict.kind === 'malformed') throw new Error(verdict.message)
-  const rows: HostGraphRow[] = []
-  for (const row of verdict.entries) {
-    const where = graphEntryLabel(row)
-    // Optional fields via upstream's helper; present-but-malformed THROWS (a
-    // wrong graph is a boot hazard, not a candidate for guesswork) — a dropped
-    // `external` would hide the one require edge the deferred diagnostic names.
-    const subject = `boot graph entry ${where}`
-    const inject = optionalStringArray(subject, 'inject', row.inject)
-    const external = optionalStringArray(subject, 'external', row.external)
-    if (row.immediately !== undefined && typeof row.immediately !== 'boolean') {
-      throw new Error(graphEntryImmediatelyMessage(row))
-    }
-    rows.push({
-      id: row.id,
-      url: row.url,
-      rev: row.rev,
-      // Optional wire fields, carried through when well-formed (malformed throws
-      // above); `external` is LOAD-BEARING for the deferred-dependency diagnostic.
-      ...(inject === undefined ? {} : { inject: [...inject] }),
-      ...(external === undefined ? {} : { external: [...external] }),
-      ...(typeof row.immediately === 'boolean' ? { immediately: row.immediately } : {}),
-    })
-  }
-  return rows
+  return parseGraphRows(verdict.entries)
 }
 
 /**
@@ -252,6 +232,55 @@ function reportDiagnostic(
   listener?.(instanceId, { state, ...extra, updatedAt: Date.now() })
 }
 
+/**
+ * THE single row projection of one composed graph: the boot fetch (unary
+ * `clientGraph/graph`) and the live SSE subscriber both validate through here,
+ * so a wire shape can never be read two ways. Deliberately LOOSER than upstream's
+ * `parseBootManifest` (which also requires `batches` and one initial-load batch
+ * per entry): the chamber reads `entries` only and ignores the graph batches;
+ * everything it DOES check is upstream's own check.
+ * @param entries - wire rows that passed the shared base gate (string id/url/rev).
+ * @returns validated rows in wire order.
+ * @throws Error when a present optional field is malformed — a wrong graph is a
+ *   boot hazard, never guesswork; live callers catch and drop the frame instead.
+ */
+/** The cross-instance version-drift fact text (shared by the boot projection and live sync). */
+export function versionConflictMessage(id: string, ownerSourceId: string): string {
+  return `实例间 ${id} 插件版本不同：已使用实例 ${ownerSourceId} 先加载的版本；对齐两个实例的 dsh 运行时（或插件）版本后可切换`
+}
+
+/** The same-source rebuilt-bundle fact text (shared by the boot projection and live sync). */
+export function restartRequiredMessage(id: string): string {
+  return `页面已加载 ${id} 的另一版本，重启应用后才能切换`
+}
+
+export function parseGraphRows(entries: readonly PluginGraphBaseEntry[]): HostGraphRow[] {
+  const rows: HostGraphRow[] = []
+  for (const row of entries) {
+    const where = graphEntryLabel(row)
+    // Optional fields via upstream's helper; present-but-malformed THROWS (a
+    // wrong graph is a boot hazard, not a candidate for guesswork) — a dropped
+    // `external` would hide the one require edge the deferred diagnostic names.
+    const subject = `boot graph entry ${where}`
+    const inject = optionalStringArray(subject, 'inject', row.inject)
+    const external = optionalStringArray(subject, 'external', row.external)
+    if (row.immediately !== undefined && typeof row.immediately !== 'boolean') {
+      throw new Error(graphEntryImmediatelyMessage(row))
+    }
+    rows.push({
+      id: row.id,
+      url: row.url,
+      rev: row.rev,
+      // Optional wire fields, carried through when well-formed (malformed throws
+      // above); `external` is LOAD-BEARING for the deferred-dependency diagnostic.
+      ...(inject === undefined ? {} : { inject: [...inject] }),
+      ...(external === undefined ? {} : { external: [...external] }),
+      ...(typeof row.immediately === 'boolean' ? { immediately: row.immediately } : {}),
+    })
+  }
+  return rows
+}
+
 /** The shell-owned bundle loader, injected so pure-node tests can stub it (shell.ts owns the DOM). */
 export interface CollectExtraRowsDeps {
   loadModuleBundle(url: string): Promise<void>
@@ -271,6 +300,15 @@ export interface CollectExtraRowsDeps {
    * shapes): that is legitimate, not degraded.
    */
   onGraphUnavailable?(message: string, kind: GraphGapKind): void
+  /**
+   * The channel ANSWERED a valid graph for this boot (the fetch resolved rows —
+   * an all-covered/empty row set counts). Fired once, after the first non-null
+   * fetch; the recovery fetch never re-fires it. This is the live-sync arm
+   * condition: the subscriber only exists for a source whose host graph answers,
+   * and `not-injected`/unreachable boots never arm (they wait for the App's
+   * readiness self-heal to re-boot the shell instead).
+   */
+  onGraphAnswered?(): void
   /**
    * Awaited once the rows are known, BEFORE the first extra-bundle load pass:
    * the composite entry must have evaluated so its covered factories answer the
@@ -326,10 +364,11 @@ const SERVING_HEAL_BUDGET_MS = 70_000
  * the expected pre-ready state: bounded retries + one serving wait, then a
  * named `graph-unreachable` diagnostic. A kept row whose `external` requests a
  * deferred-covered id is a NAMED diagnostic, not `ok`. A bundle that fails to
- * LOAD fails the boot loud after ONE bounded recovery pass: upstream revs are
- * opaque PER-PROCESS nonces, so a restart between graph fetch and loads 404s
- * every not-yet-loaded row; the pass re-fetches and retries at fresh URLs, and
- * only still-failing rows fail the boot. A DOM-script TIMEOUT is not recovery:
+ * LOAD fails the boot loud after ONE bounded recovery pass: a bundle REWRITTEN
+ * between the graph fetch and its load (dev rebuild, reinstall) takes a new
+ * metadata rev while the fetched url still names the old one, and a transient
+ * 404 lands here too; the pass re-fetches and retries at fresh URLs, and only
+ * still-failing rows fail the boot. A DOM-script TIMEOUT is not recovery:
  * its tombstone observes the original element.
  */
 export async function collectExtraRows(
@@ -412,6 +451,8 @@ export async function collectExtraRows(
   }
   // 上方三条失败出口已 return，此处 rows 必非 null；判别式无法跨类型层关联，显式断言。
   const firstRows = firstFetch.rows as HostGraphRow[]
+  // The channel answered: the live subscriber may arm for this source (once per boot).
+  deps.onGraphAnswered?.()
   const rows = toExtraRows(dedupeCoveredRows(firstRows, CHAMBER_COVERED_IDS), basePath)
   // The chamber entry must have evaluated before any extra bundle executes (it
   // answers the ui-primitives require edges the seed does not serve); the shell
@@ -450,9 +491,9 @@ export async function collectExtraRows(
   // No second gate: it settled before the first pass, and recovery only
   // re-executes scripts (their synchronous requires run later, during run()'s
   // loader.create materialization, after the chamber entry has evaluated).
-  // One bounded recovery cycle: revs are opaque per-process nonces, so an
-  // instance restart between fetch and loads 404s every remaining row. Re-fetch
-  // the graph and reload at fresh URLs; only still-failing rows fail the boot.
+  // One bounded recovery cycle: a bundle rewritten between fetch and load (or a
+  // transient 404) fails its row. Re-fetch the graph and reload at fresh URLs;
+  // only still-failing rows fail the boot.
   if (failedRows.length > 0) {
     const secondFetch = await fetchWithRetry()
     const keptFailures: { row: ExtraModuleRow; error: unknown }[] = []
@@ -513,12 +554,12 @@ export async function collectExtraRows(
     const ownerSourceId = clientPluginRowOwner(versionConflict.id) ?? '—'
     reportDiagnostic(instanceId, 'instance-version-conflict', {
       pluginId: versionConflict.id,
-      message: `实例间 ${versionConflict.id} 插件版本不同：已使用实例 ${ownerSourceId} 先加载的版本；对齐两个实例的 dsh 运行时（或插件）版本后可切换`,
+      message: versionConflictMessage(versionConflict.id, ownerSourceId),
     }, deps.reportDiagnostic)
   } else if (restartConflict !== undefined) {
     reportDiagnostic(instanceId, 'restart-required', {
       pluginId: restartConflict.id,
-      message: `页面已加载 ${restartConflict.id} 的另一版本，重启应用后才能切换`,
+      message: restartRequiredMessage(restartConflict.id),
     }, deps.reportDiagnostic)
   } else if (deferredExternalMisses.length > 0) {
     // A kept row's create-time require can never be answered (see

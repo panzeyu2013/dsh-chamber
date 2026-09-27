@@ -4,8 +4,8 @@
  * `@deepseek-ai/dsh-client-web` face shell.ts consumes.
  *
  * The renderer has no install-tree copy of the dsh workspace packages, so the
- * bare specifier cannot resolve in plain node; `scripts/test-shell-loader.mjs`
- * maps it here (registered via `--import scripts/test-shell-register.mjs` in
+ * bare specifier cannot resolve in plain node; `scripts/dev/test-shell-loader.mjs`
+ * maps it here (registered via `--import scripts/dev/test-shell-register.mjs` in
  * the test:renderer-shell script). The fixture mirrors the ambient face of
  * vendor-modules.d.ts (AppWebEntry + ensureWebModuleSystem) with test knobs;
  * it is test-only — the build/typecheck never load it.
@@ -226,7 +226,11 @@ export class AppWebEntry {
 // await-before-load behavior is driven by shell-core's awaitBeforeLoad /
 // chamberEval instead.
 let chamberPrefetchError = undefined
+/** The per-row chunk-owner index (mirror of the vendored module system's private
+ *  `graphRows` map). Boot and live-sync register/remove host rows through it. */
+const graphRows = new Map()
 const moduleSystemFace = {
+  graphRows,
   manifest: { plugins: [{ id: '@dsh-chamber/app', immediately: true }] },
   async prefetch(id) {
     eventLog.push(`prefetch:${id}`)
@@ -243,6 +247,31 @@ export function ensureWebModuleSystem() {
   eventLog.push('ensure')
   if (moduleSystemError !== undefined) throw moduleSystemError
   return moduleSystemFace
+}
+
+/**
+ * Chunk-owner index face (mirror of the vendored registerExtraChunkOwners /
+ * removeExtraChunkOwners): same guard shape — a module system without the index
+ * fails loud, so a fixture drift cannot be silently absorbed.
+ */
+export function registerExtraChunkOwners(modules, rows) {
+  const registry = modules?.graphRows
+  if (!(registry instanceof Map)) throw new Error('fixture: module system has no graphRows index')
+  const added = []
+  for (const row of rows ?? []) {
+    if (registry.has(row.id)) continue
+    registry.set(row.id, { ...row, initialUrl: row.initialUrl || row.url })
+    added.push(row.id)
+  }
+  return added
+}
+
+export function removeExtraChunkOwners(modules, ids) {
+  const registry = modules?.graphRows
+  if (!(registry instanceof Map)) throw new Error('fixture: module system has no graphRows index')
+  const removed = []
+  for (const id of ids) { if (registry.delete(id)) removed.push(id) }
+  return removed
 }
 
 /** Test knobs (same module instance as shell.ts sees — the loader maps to this URL). */

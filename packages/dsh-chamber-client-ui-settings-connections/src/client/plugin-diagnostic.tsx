@@ -6,7 +6,9 @@
  * `instance-version-conflict` is INFORMATIONAL: the page keeps the first-loaded plugin revision and
  * nothing in-app can switch it (first-load-wins re-runs identically on any restart), so it is never
  * styled like a problem — cards show only the neutral state marker, the full detail (plugin id +
- * reason) lives in the plugin dialog.
+ * reason) lives in the plugin dialog. The live graph subscriber (design 09 §3.7, live-graph.ts)
+ * writes the SAME three fact states through this one slot under a provenance CAS, so the card needs
+ * no live-specific branch.
  * The card also renders the instance's settled-boot GAP — a DIFFERENT fact. The graph channel may
  * legitimately answer `ok` while a service the page's frontend injects was never provided ("session
  * titles fine, conversation body empty"); when a gap is present the `ok` diagnostic line is

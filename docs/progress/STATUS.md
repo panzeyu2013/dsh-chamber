@@ -32,6 +32,9 @@
   - boot 死区收敛（design 05 §4.1）：idle 远端点会话不启 boot、`error`/托管 stopped 1.5s 宽限判死、挂死 boot 10s 给重试/⌘R、502 非阻断横幅 + 自愈。
   - idle 来源点会话排队 68s 才失败（05 §4.1）：候选 = 记推迟 open 意图、ready 重放。
   - 0.1.7-rc.2 pin 四项：内置插件页目检、跨代 profile 对账、gateway 就地升级、0.1.6 代移动端 + 右栏终端 tab。
+  - 客户端插件热同步（design 09 §3.7）剩余实机面：经插件管理器/配置编辑路径触发的一次真实 add/remove 帧、
+    ssh/gateway 各一来源、卸载保证边界（factory/loadCache/style 保留面）、隐藏回收期无迟到写入、宿主崩溃重启后
+    活行存活；已验范围与复现命令见 design 09 §5（不在本文件重复）。
   - 遮罩层叠/揭幕 P0–P3（design 05 §2.2.1/§4）：W-1b 真机走查、揭幕时延（active ≤1 帧 / absent ≤2s / hero 保持）、Swift 发布包 Safari 人工抽检。
 - **Swift 原生运行期监督**：控制面只首载前探一次 `/health`（S-45）⇒ 收口 = 前台周期探测 +「重启 sidecar」；`didCommit` 后缺首载期限；两 flavor 需按 design 14 §8 分层真机取证。
 - 宿主 cwd / 安装根（余两条）：vendor `worker_threads` 共享 `process.cwd()`；安装/更新原子化 + 运行中检测。
@@ -161,13 +164,16 @@
 - 构建产物移出 git：clean checkout 先 `pnpm run build:artifacts`；`renderer/src/generated` 不提交。
 - 测试面精简上限：再压必落安全/fail-closed/parity/golden/CI 引用类 → 删减需显式裁决。
 - 统一名称的保留面：bundle id（T-14）、跨进程协议串、`native-shell.page-zoom.*`（T-22）、POC 标记与 `'native-shell'` 分类 id；改名须同步 T-14/T-17/T-22 与两侧测试。
-- 重启即重载：用户发起入口已接线；gateway 服务重启不接；外部改 profile 只能手动刷新（失效判据 = 新入口须接同一 completion）。
+- 重启即重载：用户发起入口已接线；gateway 服务重启不接；装/卸改由 live 热同步接管（design 09 §3.7，hmr 在场时
+  插件管理器报 applied），窗口重载保留给 rev 变化/重打包——外部改 profile 的即时生效边界 = 走插件管理器/配置编辑路径
+  （原始文件编辑不在监听面内）。失效判据 = 新入口须接同一 completion。
 - 租客 body portal 不受 stacking 约束（残余，顶层幕布不做；design 05 §4 被否方案⑤）。
 - 降级事实覆盖边界：已覆盖四座；不覆盖未激活来源、壳回收清除、单槽后报覆盖、侧栏行无动作。
 - 侧栏行悬停卡片由本仓自持（上游修竞态即退役；C15 锁形状+常数，锁红先于升级落地）。
 - 连接页手写 tooltip 未走 vendor `Tooltip`：无 `role="tooltip"` 关联；未决 = 补 ARIA 或改用 vendor。
 - api-gateway fork 未重放 rc.2 uplink 客户端半边（G43）：带 uplink 的 descriptor 同步抛错；证据 `client-uplink-rejection.test.ts`。
 - 插件管理 tab 钉在上游页结构上（design 05 §5）：上游改结构即静默回归；失效判据见 design 05 §5，pin 升级按 §7 复核。
+- `/plugins/events` 属主是上游 dev-only HMR 宿主行（design 09 §5）：端点被移除/改名即 live 热同步静默退回 boot 现状；失效判据 = pin 升级按 §7 复验该路由与帧形状（registry `mirror.dsh-client-hmr-events-endpoint`）。
 - git 客户端与宿主错误码重叠是有意例外（design 08；`host-client-lockstep.test.ts` 钉死）。
 - 移出项（P3 硬纪律）：匿名 control-plane 的认证/审计、薄壳会话面、统一索引、broker、通知中心、MCP 等不得回流；design 17/18/19/08/20/24 例外不作他域先例。
 - `--no-auth` 是醒目的可信网络有界例外（默认必须认证）。

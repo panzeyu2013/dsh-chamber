@@ -42,6 +42,8 @@ export const GROUPS = {
     'test/lifecycle/safe-mode.test.ts',
     'test/lifecycle/baseline-harvest.test.ts',
     'test/lifecycle/host-graph.test.ts',
+    // 活实例 ctx 的客户端插件热同步：帧解析 / id 集 diff / 装-卸-rev 诊断 / 撤臂栅栏。
+    'test/lifecycle/live-graph.test.ts',
     'test/lifecycle/required-extra-rows.test.ts',
     // 必需行探针的纯记账（单调钟选择 / 每成员 grace / 有界复查窗口）
     'test/lifecycle/required-service-probe.test.ts',

@@ -223,7 +223,7 @@ interface WebBootGraph {
   entries: {
     id: string // 条目名 == 包名（插件注册键）
     url: string // bundle 端点（裸 URL，无 ?rev= 查询串——去掉查询串以修复延迟族双执行，见下）
-    rev: string // bundle 内容哈希（sha1-12）
+    rev: string // chamber 复合 manifest：bundle 内容哈希（sha1-12）；宿主图 extra 行：文件 metadata hash（design 09 §3.7）
     inject?: string[] // 工厂须先到达的依赖包行（缺席 = 无依赖）
     external?: string[] // 本行向模块表请求的非基线 specifier（缺席 = 无）
     immediately?: boolean // 一阶段预取标记
