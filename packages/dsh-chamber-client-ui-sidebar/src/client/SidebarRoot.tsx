@@ -87,9 +87,11 @@ export function SidebarRoot({
   const {
     renaming, setRenaming, menuOpen, toggleMenu, closeMenu, sortMenuOpen, setSortMenuOpen, commitRename,
   } = useSidebarMenus({ servers, runAction })
-  const { onForkSession, onNewSession, onArchiveSession } = useSidebarSessionActions({ runAction })
+  // 对话框状态先于会话动作：归档的两段式确认层归 dialogs 所有（单层规则在
+  // 那里执行一次），行菜单只在宿主拒绝后代 dialogs.openArchiveConfirm 武装它。
   const dialogs = useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors })
-  const { onOpenArchiveCleanup, openWorkspaceBrowser, onDeleteWorkspace } = dialogs
+  const { onOpenArchiveCleanup, openWorkspaceBrowser, onDeleteWorkspace, openArchiveConfirm } = dialogs
+  const { onForkSession, onNewSession, onArchiveSession } = useSidebarSessionActions({ runAction, openArchiveConfirm })
 
   const openSession = (serverId: string, sessionId: string): void => {
     // 新点击立即清掉该行陈旧失败文案（若再次失败，dispatch 结果会重报）。

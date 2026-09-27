@@ -191,6 +191,58 @@ vendorTest('上游：visiblePendingKind 三档与 chamber pendingKindOf 逐字�
   }
 })
 
+vendorTest('上游：归档准入是两段式（无 stopActivity 拒绝 + details.activity；带则写归档后由 provider 停止）', () => {
+  // 1) 注册表：非 stopActivity 路径以活动拒绝；stopActivity 路径由宿主自己的
+  //    workspace/session-stop provider 停止该会话的工作（chamber 不再有客户端补偿腿）。
+  const registry = readVendorSourceProviding('dsh-workspace', 'WorkspaceActiveSessionError')
+  // 逐字 includes（非正则）：锚点全是代码原文，转义不参与，改一处即红。
+  assert.ok(registry.includes('if (options.stopActivity !== true) {'),
+    'stopActivity 必须短路活动检查（否则第二调仍会被拒）')
+  assert.ok(registry.includes('if (activity.length > 0) throw new WorkspaceActiveSessionError(sessionId, activity)'),
+    '非 stopActivity 路径必须在写入前以活动拒绝')
+  assert.ok(registry.includes('if (options.stopActivity === true) await this.stopSessionActivity(sessionId)'),
+    'stopActivity 路径必须由宿主的 provider 停止会话工作')
+  // 2) 活动条目形状：items 可选（turn 家族不带）、label 可选（chamber 以 id 兜底）。
+  const activityTypes = readVendorSourceProviding('dsh-workspace', 'readonly items?: readonly SessionActivityItem[]')
+  assert.ok(activityTypes.includes('readonly label?: string'),
+    'label 必须仍可选（chamber 的确认列表以 id 兜底）')
+  // 3) RPC：拒绝码 + details 的 activity 载体（chamber 的 sessionArchiveRefusal 只认这一对）。
+  const commands = readVendorSourceProviding('dsh-api-workspace-controller', 'activity: error.activity')
+  assert.ok(commands.includes("'workspace/session-active'"),
+    '拒绝码必须仍是 workspace/session-active')
+  // 4) 官方客户端：首调不带 stopActivity，拒绝后才带 stopActivity 重发；拒绝按 error.name 认
+  //    （跨 bundle 类身份不可靠），chamber 同 bundle 因此用 instanceof + code。
+  const officialClient = readVendorSourceProviding('dsh-client-ui-workspace', 'activeSessionRefusal')
+  assert.ok(officialClient.includes("reason.name !== 'WorkspaceArchiveError'"),
+    '官方客户端按 error.name 识别归档拒绝')
+  assert.ok(officialClient.includes('uiWorkspace.archiveSession(sessionId).then'),
+    '首调必须不带 stopActivity')
+  assert.ok(officialClient.includes('archiveSession(sessionId, { stopActivity: true })'),
+    '确认后必须带 stopActivity 重发')
+  assert.ok(officialClient.includes("rpcError.code === 'workspace/session-active' ? rpcError.details.activity : undefined"),
+    '拒绝解析必须只认该码并读 details.activity')
+  // 5) 请求字段本身是加法契约（wire 类型文件按路径读，同 §handleSessionStatus 的先例）：
+  //    上游改名会让 chamber 的确认相位退回首调语义而所有测试仍绿。
+  const archiveRequest = readVendor('dsh-api-workspace-controller/src/types.ts')
+  assert.ok(archiveRequest.includes('export interface WorkspaceArchiveSessionRequest {')
+    && archiveRequest.includes('readonly stopActivity?: boolean'),
+  '请求字段 stopActivity 必须仍是可选布尔（chamber 只在确认后发送它）')
+  assert.ok(commands.includes('request.stopActivity === true ? { stopActivity: true } : {}'),
+    'controller 必须把 stopActivity 原样转发给 registry（否则第二调退化为首调）')
+  // 6) 顺序：先写归档集、再 await 宿主停止——确认相位的成功语义押在「resolve 时归档已持久」。
+  const archiveWrite = registry.indexOf('archivedSessionIds: [...state.archivedSessionIds, sessionId],')
+  const stopAfterWrite = registry.indexOf('if (options.stopActivity === true) await this.stopSessionActivity(sessionId)')
+  assert.ok(archiveWrite !== -1 && stopAfterWrite > archiveWrite,
+    '必须先把 session 写进归档集、再 await 停止（顺序变了确认的成功含义就变了）')
+  // 7) 停止 provider 失败被吞（记日志、不重抛）：归档已落时确认相位仍 resolve，
+  //    chamber 的 confirmArchive 不会把「已归档但停止失败」报成整体失败。
+  const stopPass = readVendorSourceProviding('dsh-workspace', 'workspace/session-stop')
+  assert.ok(stopPass.includes("await this.ctx.parallel('workspace/session-stop', { sessionId })"),
+    '宿主停止必须走 workspace/session-stop provider')
+  assert.ok(stopPass.includes('this.ctx.logger.warn('),
+    'provider 失败必须只记日志、不重抛（确认相位仍 resolve）')
+})
+
 vendorTest('上游：handleSessionStatus 不在 ISessions 契约里（chamber 的能力守卫与上游诉求的依据）', () => {
   const contract = readVendor('dsh-api-session-controller/src/client/contract/sessions.ts')
   assert.doesNotMatch(contract, /handleSessionStatus/,

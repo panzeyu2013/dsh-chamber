@@ -312,6 +312,15 @@
   line-height: 1.45;
 }
 
+/* The checked archive checkbox's consequence line: the host stops the archived
+   sessions' still-running work (stopActivity) instead of refusing the removal. */
+.archiveNote {
+  margin: 2px 0 0 21px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 /* Dirty-worktree removal authorization (design 08 §6 amendment):
    the discard checkbox must visually stand out against the ordinary
    archive/branch toggles. */

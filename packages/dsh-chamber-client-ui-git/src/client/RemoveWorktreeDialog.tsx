@@ -323,6 +323,11 @@ export function RemoveWorktreeDialog({
               />
               <span>{t('archiveSessionsLabel')}</span>
             </label>
+            {/* 勾选后必须说清后果：归档请求带 stopActivity，宿主会停止这些会话里仍在
+                运行的工作（回合/后台任务/定时提醒），而不是把移除拒绝掉。 */}
+            {archiveSessions && (
+              <div className={css.archiveNote}>{t('archiveSessionsNote')}</div>
+            )}
             {target.branch !== null && (
               <label className={css.archiveToggle}>
                 <input

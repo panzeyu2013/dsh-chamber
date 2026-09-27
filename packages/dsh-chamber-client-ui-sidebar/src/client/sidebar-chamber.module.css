@@ -2031,6 +2031,20 @@
   color: var(--dsw-alias-state-error-primary);
 }
 
+/* Archive-active confirm: the activity families' list, upstream
+   WorkspaceBrowser.module.css .archiveActivity metrics. */
+.archiveActivity {
+  margin: 0 0 8px;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.archiveActivity li {
+  overflow-wrap: anywhere;
+}
+
 /* Workspace-delete confirm: the in-app
    Modal — upstream's
    WorkspaceBrowser.module.css .deleteStatus metrics for the in-flight

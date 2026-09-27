@@ -73,6 +73,8 @@ export const GROUPS = {
     'test/session-state/workspace-echo.test.ts',
     'test/session-state/session-echo.test.ts',
     'test/session-state/session-mutations.test.ts',
+    // 归档两段式的纯逻辑：失败分类 + 活动家族 → 文案行（官方 activityLine 的逐分支对照）。
+    'test/session-state/session-archive-confirm.test.ts',
     'test/session-state/workspace-drag-order.test.ts',
     'test/session-state/workspace-git-flags.test.ts',
     'test/session-state/view-prefs.test.ts',

@@ -102,10 +102,14 @@ The shell declares and renders the three holes the alpha.2 official
   included) plus rename / delete behind the kebab — non-worktree rows only,
   since a derived worktree deliberately keeps no kebab (OpenChamber parity).
   There is no second hover button: the session row's archive verb is a MENU
-  ENTRY and it runs IMMEDIATELY, with no confirmation, because archiving only
-  hides the row and never touches the session log (upstream's own reason for
-  keeping archive out of the confirm family). Failures surface inline, never
-  silently; every success triggers `chamberBridge.requestRefresh(sourceId)` —
+  ENTRY and it follows the official TWO-PHASE call — a quiet session archives
+  immediately, with no confirmation, because archiving only hides the row and
+  never touches the session log (upstream's own reason for keeping quiet
+  archives out of the confirm family); the host refuses a session that still has
+  running work (`workspace/session-active`), and only then does a "stop and
+  archive" confirmation appear — confirming resends with `stopActivity` and the
+  host's own providers stop the work (design 24 §5). Failures surface inline,
+  never silently; every success triggers `chamberBridge.requestRefresh(sourceId)` —
   the App layer re-pulls that source's snapshot immediately.
 - Workspace delete is confirmed by an in-app `Modal`, never by a native OS
   confirm (which cannot ride the alias tokens): upstream chrome — its
@@ -124,8 +128,9 @@ The shell declares and renders the three holes the alpha.2 official
   Modal layer is ever up, and that guarantee is a SYMMETRIC GATE on the
   openers, not a claim about the mask: the official Modal has no focus trap, so
   the nav stays tabbable behind every mask — the always-rendered orphan badge
-  and the source-header controls included — and all three openers (arming this
-  confirm, opening the archive manager, opening the add-workspace browser)
+  and the source-header controls included — and all four openers (arming this
+  delete confirm, arming the archive-activity confirm, opening the archive
+  manager, opening the add-workspace browser)
   refuse while any of the other layers is up, in whichever order the user
   reaches them. Two layers would each register a document Escape listener and
   close on one Escape — the reason the archive manager itself refuses a second

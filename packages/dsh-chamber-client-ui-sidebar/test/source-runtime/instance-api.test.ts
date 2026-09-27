@@ -129,9 +129,12 @@ test('fetchInstanceSnapshot cwd grouping titles handle Windows separators, trail
 // ---------------------------------------------------------------------------
 
 import {
+  archiveSession,
   getInstanceClient,
+  InstanceRpcError,
   purgeArchivedSessions,
-  stopArchivedSubtree,
+  releaseInstanceClient,
+  sessionArchiveRefusal,
   stopSessionsForPurge,
   type SessionRunningLineage,
   type ArchiveCleanupPurgeResult,
@@ -811,16 +814,101 @@ test('stopSessionsForPurge: a COMPLETE viewed-session chain keeps the cancel pas
   assert.deepEqual(result.refusedRoots, [])
 })
 
-test('stopArchivedSubtree: the archive-time stop is the exclusion-free closure pass (advisory, never throws)', async () => {
-  // A failed lineage read must resolve to the advisory `unavailable` outcome —
-  // the archive already happened, so the stop never throws and never rolls it
-  // back (the delete-time pass tries again later).
-  const result = await stopArchivedSubtree({
-    session: { list: async () => { throw new Error('session/list exploded') } },
-  } as never, 'root')
-  assert.equal(result.unavailable, true)
-  assert.deepEqual(result.cancelled, [])
-  assert.equal(result.lineage, null)
+// ---------------------------------------------------------------------------
+// Archive admission (dsh 0.1.7): the two-phase official wire — plain first,
+// stop-and-archive only after a `workspace/session-active` refusal named what
+// still runs. A non-refusal failure and a malformed refusal both keep the raw
+// surface: the confirmation's list is a promise about what will stop.
+// ---------------------------------------------------------------------------
+
+/** A client whose workspace.archiveSession records every payload. */
+function archiveClient(): { client: unknown; requests: unknown[] } {
+  const requests: unknown[] = []
+  return {
+    requests,
+    client: {
+      workspace: {
+        archiveSession: async (payload: unknown) => {
+          requests.push(payload)
+          return { ok: true as const, value: { archivedSessionIds: [] } }
+        },
+      },
+    },
+  }
+}
+
+test('archiveSession sends the additive stopActivity field only when true', async () => {
+  const { client, requests } = archiveClient()
+  await archiveSession(client as never, 's1')
+  await archiveSession(client as never, 's2', {})
+  await archiveSession(client as never, 's3', { stopActivity: true })
+  assert.deepEqual(requests, [{ sessionId: 's1' }, { sessionId: 's2' }, { sessionId: 's3', stopActivity: true }],
+    'the plain first call stays byte-identical to the pre-admission wire')
+})
+
+test('sessionArchiveRefusal decodes exactly the official session-active refusal', () => {
+  const refusal = new InstanceRpcError('workspace/session-active', 'busy', {
+    sessionId: 's1',
+    activity: [{ kind: 'turn' }, { kind: 'job', items: [{ id: 'j1', label: 'build' }] }],
+  })
+  assert.deepEqual(sessionArchiveRefusal(refusal), [
+    { kind: 'turn', items: [] },
+    { kind: 'job', items: [{ id: 'j1', label: 'build' }] },
+  ])
+  // Every other outcome stays on the caller's raw surface.
+  assert.equal(sessionArchiveRefusal(new InstanceRpcError('workspace/unknown-session', 'gone')), undefined)
+  assert.equal(sessionArchiveRefusal(new Error('transport exploded')), undefined)
+  assert.equal(sessionArchiveRefusal(
+    new InstanceRpcError('workspace/session-active', 'busy', { activity: 'turn' }),
+  ), undefined)
+})
+
+test('archiveSession posts the official request shape and keeps a WIRE-level refusal decodable', async () => {
+  // Shape and carrier in one: the first call must be the plain official request
+  // (no stopActivity), the confirmed phase adds the additive field, and a
+  // refusal crossing the unary carrier must keep details — the confirmation's
+  // whole input — instead of silently degrading every refusal to a row error.
+  const bodies: string[] = []
+  const instanceId = 'wire-archive-shape'
+  const client = getInstanceClient(instanceId)
+  let refuse = true
+  const stub: typeof fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const raw = String(init?.body ?? '{}')
+    bodies.push(raw)
+    const envelope = JSON.parse(raw) as { rpcId?: string }
+    const result = refuse
+      ? {
+          ok: false,
+          error: {
+            code: 'workspace/session-active',
+            message: 'cannot archive session s1: the session is active (turn, job)',
+            details: {
+              sessionId: 's1',
+              activity: [{ kind: 'turn' }, { kind: 'job', items: [{ id: 'j1', label: 'build' }] }],
+            },
+          },
+        }
+      : { ok: true, value: {} }
+    refuse = false
+    return jsonResponse({ type: 'server-response', rpcId: envelope.rpcId, result })
+  }) as typeof fetch
+  try {
+    await withFetch(stub, async () => {
+      const error = await archiveSession(client, 's1').then(() => undefined, (reason: unknown) => reason)
+      assert.ok(error instanceof InstanceRpcError, 'a business refusal is an InstanceRpcError, not a transport error')
+      assert.deepEqual(sessionArchiveRefusal(error), [
+        { kind: 'turn', items: [] },
+        { kind: 'job', items: [{ id: 'j1', label: 'build' }] },
+      ])
+      await archiveSession(client, 's1', { stopActivity: true })
+    })
+  } finally { releaseInstanceClient(instanceId) }
+  const first = JSON.parse(bodies[0] as string) as { method?: string; payload?: unknown }
+  assert.equal(first.method, 'workspace/archiveSession')
+  assert.deepEqual(first.payload, { args: { request: { sessionId: 's1' } } })
+  const second = JSON.parse(bodies[1] as string) as { method?: string; payload?: unknown }
+  assert.equal(second.method, 'workspace/archiveSession')
+  assert.deepEqual(second.payload, { args: { request: { sessionId: 's1', stopActivity: true } } })
 })
 
 // The unary fallback publishes the session's

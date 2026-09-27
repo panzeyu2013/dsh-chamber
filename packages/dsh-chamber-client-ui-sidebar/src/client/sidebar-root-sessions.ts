@@ -6,11 +6,17 @@
 import { useRef } from 'react'
 import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { increasedForkTitle } from '@dsh-chamber/dsh-chamber-client-core/derive'
-import { getInstanceClient, renameSession, stopArchivedSubtree } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
+import { getInstanceClient, renameSession } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 import { archiveSessionForSource, createSessionForSource, forkSessionForSource } from '@dsh-chamber/dsh-chamber-client-core/session-mutations'
+import { classifyArchiveFailure, type SessionArchiveConfirmRequest } from './session-archive-confirm.ts'
 import type { RunAction } from './sidebar-root-actions.ts'
 
-export function useSidebarSessionActions({ runAction }: { runAction: RunAction }) {
+export function useSidebarSessionActions({ runAction, openArchiveConfirm }: {
+  runAction: RunAction
+  /** Arms the archive-active confirmation (owner: useSidebarDialogs). Returns
+   *  false when the single-dialog-layer rule refused the arm. */
+  openArchiveConfirm: (request: SessionArchiveConfirmRequest) => boolean
+}) {
   /** Per-workspace in-flight "+" resolution (upstream `connectWorkspace`'s
    *  `connecting` map): a second click joins the first. Keyed like the
    *  row-error key `<source>/workspace/<id>/new`. */
@@ -73,26 +79,28 @@ export function useSidebarSessionActions({ runAction }: { runAction: RunAction }
     })
   }
 
-  // 归档立即执行、无确认对话框：它只隐藏行、从不触碰会话日志（上游同款），
-  // 非破坏性；动作挂在行菜单上，drag-end 尾随 click 守卫与按行 rowErrors
-  // 归因不变。
-  const onArchiveSession = (server: ChamberServerAggregate, sessionId: string): void => {
+  // 归档两段式，对齐上游 workspace UI：首调只发 workspace/archiveSession
+  // { sessionId }。安静会话一次成功（无确认、宿主直接归档）；宿主因仍有活跃
+  // 工作而拒绝（workspace/session-active）时，details 列出将被停止的工作，武装
+  // 归档确认层；用户确认后由 dialogs.confirmArchive 带 stopActivity 重发，停止
+  // 交给宿主自己的 provider（回合/子代理后代/后台任务/定时提醒）——客户端不再
+  // 有补偿停止腿。动作仍在行菜单上，drag-end 尾随 click 守卫与按行 rowErrors
+  // 归因不变；拒绝本身不写行错误，其它失败照旧。
+  const onArchiveSession = (server: ChamberServerAggregate, sessionId: string, displayTitle: string): void => {
     runAction(`${server.id}/session/${sessionId}/archive`, async () => {
       // 唯一出口：归档同时撤下该会话的待定回声，创建后立即归档不留幽灵行。
-      await archiveSessionForSource(server.id, sessionId)
-      // 归档即终止（与删除侧同一纪律）：归档成功后就地停止该会话及其
-      // subagent 闭包。归档清空"正在查看"的选中，卡在提问/权限的回合永远等
-      // 不到回答——不停止就是永久 running 僵尸，之后删除会被 running 守卫
-      // 整树跳过。停止是 advisory：归档已生效，停止失败（含停止腿自身抛错）
-      // 只告警、绝不回滚归档。
       try {
-        const stop = await stopArchivedSubtree(getInstanceClient(server.id), sessionId)
-        if (stop.unavailable || stop.stillRunning.length > 0) {
-          console.warn(`[chamber] archived ${sessionId} on ${server.id} but its subtree did not settle:`,
-            stop.unavailable ? 'session list unreadable' : `still running: ${stop.stillRunning.join(', ')}`)
-        }
+        await archiveSessionForSource(server.id, sessionId)
       } catch (error) {
-        console.warn(`[chamber] archived ${sessionId} on ${server.id} but the stop pass threw (advisory):`, error)
+        const attempt = classifyArchiveFailure(error)
+        // 非拒绝、或 details 不可解码：保持行级失败上报（绝不弹空/残缺列表）。
+        if (attempt.kind === 'reject') throw error
+        // 标题是点击那一行的 displayTitle（aggregate 的会话挂在 server.workspaces[*].sessions
+        // 下，本就没有 server.sessions）：确认打开期间行可能卸载，仍需点击时的可读标题。
+        const title = displayTitle === '' ? sessionId : displayTitle
+        // 单层规则拒绝武装时保留原始上报：用户的动作绝不静默消失。
+        if (!openArchiveConfirm({ sourceId: server.id, sessionId, displayTitle: title, activity: attempt.activity })) throw error
+        return
       }
       chamberBridge.requestRefresh(server.id)
     })

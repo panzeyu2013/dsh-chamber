@@ -19,11 +19,13 @@
 
 ## 1. 需求与语义
 
-- 归档在 dsh **单向且不可见**（todo 12 §1 代码核实）：唯一 wire 方法
-  `workspace.archiveSession` 只把 id 追加进 registry-global 集合；官方与 chamber
-  所有表面过滤归档行；上游无 unarchive / 删除会话 / 归档可见查询。归档会话**内容**
-  （会话目录 + 其 subagent 起源子会话内容）永久占用实例宿主磁盘且无清除入口，对
-  gateway 服务器部署是可观察的磁盘增长来源。
+- 归档面语义（0.1.7 复核；todo 12 §1 的旧核实已部分过期）：归档集仍只由 registry-global
+  集合承载，`workspace.archiveSession` 幂等地把 id 追加进去；0.1.7 另补了**反向**的单条
+  `workspace/unarchiveSession`（官方 UI 的撤销 toast 与「全部对话（显示已归档）」
+  筛选走它），但**仍无删除会话内容的 wire**。官方默认视图仍过滤归档行（显式筛选可显示）；
+  chamber 侧默认视图同样过滤，且**没有**恢复/浏览入口（推迟登记见 STATUS）。归档会话
+  **内容**（会话目录 + 其 subagent 起源子会话内容）永久占用实例宿主磁盘且无清除入口，
+  对 gateway 服务器部署是可观察的磁盘增长来源。
 - 本需求 = chamber 前端（桌面 app 与 gateway 的同一套自研 UI）为每个 server 提供
   **「删除已归档内容」**动作：
   - 语义：永久删除该来源实例上**所有已归档会话的内容**，**级联其 subagent 起源
@@ -144,9 +146,10 @@ archiveCleanup/purge({sessionIds?, force?, protectSessionIds?}) → 同上
 - **可选 `force` 语义**：缺省 = 既有 fail-closed 行为，逐字节不变；`force: true` = 只放过
   「**已加载（idle/attached）**」子树，**running 永远拒绝**（含 force）。改动全落在**删除侧**，
   且是「**先停止、再删除**」，不放松任何安全守卫判据。结果口径按 `skippedRunning`/
-  `skippedLoaded`/`forcedLoaded` 拆分（定义见上方 wire 注释）。**归档语义不动**（哪些会话被归档、级联与
-  wire 面均保持原样；交互形态改为：归档动词移入会话行
-  kebab 菜单、不再弹确认——见 design 05 §2.2 / 06 §7）。
+  `skippedLoaded`/`forcedLoaded` 拆分（定义见上方 wire 注释）。**归档准入改为官方两段式**
+  （哪些会话被归档、级联与 wire 面保持原样；交互形态 = 归档动词在会话行 kebab 菜单，安静会话
+  直接归档、无确认，宿主因仍有活跃工作而拒绝时才弹「停止并归档」确认——见 design 05 §2.2 /
+  06 §7 与 §5「归档即终止」）。
 - **常驻保留**：官方会话列表 live 优先（`sessionQuery.listSessions()` =
   持久化重扫 ∪ `ctx.sessions.list()`，见 §10⑤），内容删除后**只有归档集合成员关系遮着
   该行**，清掉它 = 把刚删掉的会话以普通行推回侧栏（F2 权威探针也会列出它）。因此
@@ -450,12 +453,25 @@ generic throw（无 status 透出）；503 `instance_unavailable` 有专类特�
     的 running** 成员；**失败**则对 observed-running **与** listed 成员都上报（listed 者
     可能正处维护相位，其取消失败不可吞），无列表行（cold）成员的机会性 cancel 是文档化
     no-op（`session/not-found`）。
-  - **归档即终止（user motion「已归档的对话应该终止」）**：chamber 的归档动词在
-    `workspace.archiveSession` 成功后**就地**执行同一趟停止（`stopArchivedSubtree` =
-    无排除的闭包停止，含全部 subagent 后代）。归档会清空"正在查看"的选中（vendor
+  - **归档即终止（user motion「已归档的对话应该终止」；0.1.7 起由宿主执行）**：chamber 的
+    归档动词恒发官方**两段式**——首调 `workspace.archiveSession { sessionId }`；宿主对仍有
+    活跃工作的会话以 `workspace/session-active` 拒绝，details 的 `activity` 列出将被停止的
+    工作（回合 / 子代理后代 / 后台任务 / 定时提醒），确认后第二调带 `stopActivity: true`；
+    宿主在同一次操作里先写归档集、再由**它自己的** provider 停这些工作（客户端不再有补偿
+    停止腿，旧 `stopArchivedSubtree` 已删）。归档会清空"正在查看"的选中（vendor
     `clearArchivedCurrent`），卡在提问/权限的回合永远等不到回答——不终止就是永久 running
-    的僵尸，之后任何删除都被 running 守卫整树跳过。停止是 advisory（归档已生效，失败只
-    告警、不回滚），删除侧再停一次兜底（别的客户端归档的会话也走这条）。
+    的僵尸，之后任何删除都被 running 守卫整树跳过。拒绝本身不写行错误（只有可解码的
+    `activity` 进确认；解不出或其它失败照旧行进级 rowErrors）；删除侧仍在 purge 前停一次
+    兜底（别的客户端归档的会话也走这条）。**旧宿主（无该准入）**上第二调原样上抛，归档
+    不再伴随客户端停止——该降级登记在 STATUS，不保留旧客户端停止腿。
+  - **Rejected alternatives（归档准入）**：① 保留客户端补偿停止腿（旧
+    `stopArchivedSubtree`：归档成功后自己按活动家族发 cancel）——它必须复制宿主的活动
+    模型，且在 0.1.7 上首调就被拒绝、归档根本不会发生；② 只认拒绝码不看 `details`
+    （解不出就按家族猜或显示空列表）——会让确认框谎报将被停止的工作，宁可回退原始错误；
+    ③ 兼容旧宿主的分支（`dshVersion` 门、或失败后去掉 `stopActivity` 重试）——能力自证
+    （只有会拒绝的宿主才收到第二调），探测只会把「宿主是否准入」复制成客户端的版本表；
+    ④ 客户端先停后归档（先 cancel 再 archive）——把宿主一次原子写的「归档集 + 停止」
+    拆成两段，竞态窗口里归档会被再次拒绝，且停止失败会留下已停却未归档的会话。
   - **停止未生效 / 子代理仍在跑** → 宿主照旧整树跳过（fail-closed），note 提示可稍后
     重试。
   - **版本歪斜：不做兼容回退**：客户端**恒发**
@@ -625,7 +641,8 @@ generic throw（无 status 透出）；503 `instance_unavailable` 有专类特�
   `workspace.expand/collapse`、`list.ungrouped`、`rowCount`；行内错误/信息（domainMissing /
   超时 / 空态 / 部分失败 / 跳过 / force 回退说明）按 §5 走 zh 硬编码，不进 locale。
   `archive.manager.deleteAll`/`confirmAll` 不存在（独立「删除全部」已退役）。
-- 范围：**v1 不做**搜索/目录过滤/恢复（无 unarchive wire）；rail/窄栏与移动端
+- 范围：**v1 不做**搜索/目录过滤/恢复（chamber 侧无恢复入口；上游 0.1.7 起有单条
+  `workspace/unarchiveSession`，见 STATUS 的推迟登记）；rail/窄栏与移动端
   不做（范围声明见头部）。
 
 ## 7. 宿主包接线与分发面
@@ -783,7 +800,8 @@ STATUS.md。
 - 客户端 wire：`instance-api.test.ts`（client 对象 stub + global fetch stub）：404/503/超时
   分类、畸形双层载体 fail-loud、有界 404 判别体、wrapper 层错误类映射、**唯一 wire 形状**
   （`{sessionIds, force:true, protectSessionIds}` 恒发、无重试腿）、旧宿主 args 拒绝原样
-  上抛、`session/cancel` 请求形状、`stopArchivedSubtree` 的 advisory 语义、
+  上抛、`session/cancel` 请求形状、**归档准入门**（首调不带 `stopActivity`、`false` 不发送、
+  `sessionArchiveRefusal` 只认 `workspace/session-active` 且 details 畸形即回退原始错误）、
   **`residentRetainedRoots` 解码**（正常列表 / 缺席 / 非数组 / 空数组 / 混入非字符串条目
   一律不伪造 id / **重复 id 收敛**）；
 - 客户端编排纯函数：`archive-purge.test.ts`（**未知 viewed 仍照删**（死端回归）、
@@ -792,7 +810,10 @@ STATUS.md。
 - 停止回合：`stopSessionsForPurge` 的**闭包全员 cancel**（含维护相位覆盖）、
   观察到的 running 才计数、失败对 running∪listed 上报（cold 吞掉）、有界并发的
   **输入序记账**、`requireCompleteExcludeChain` 整趟闸、排除 viewed、
-  `session/not-found` 幂等、`stopArchivedSubtree` 的 advisory 语义；
+  `session/not-found` 幂等；
+- 归档确认相位（纯逻辑）：`session-archive-confirm.test.ts`（只有可解码的
+  `workspace/session-active` 进确认；活动家族逐分支对照官方 `activityLine`，未知家族走
+  generic 行且不丢行）；
 - UI 逻辑（纯函数可测部分）：per-server 单飞状态机、empty/skipped 优先级、
   部分失败警告文案装配、`deriveArchivedSessions`/`groupArchivedRows`（成员
   归属优先于 cwd 的冲突 fixture、cwd 回退 + 尾分隔符归一、组序与未分组尾置、
@@ -871,7 +892,7 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.7-rc.2 477b4f42
 
 ## 11. 风险与上游收敛
 
-- **上游未来落地 unarchive / sessions.delete**：收敛路径**机制化**——上游 wire 随 vendor
+- **上游收敛（unarchive 已落地 0.1.7；sessions.delete 仍是未来）**：收敛路径**机制化**——上游 wire 随 vendor
   bump 出现即登记为独立 STATUS 跟踪项：客户端 wrapper 单点切到官方 wire（批量编排），宿主
   包按发行周期从 seed 清单退役，双协议不永久并存；§3 命名空间与官方分离保证切换无碰撞；
 - **seam 退役**：上游 wire 落地即退役 `state`/`setState`/`enqueueOperation` 三个私有面 +
@@ -927,8 +948,9 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.7-rc.2 477b4f42
   （走 unary，服务端逐调重扫）。
 - **触发 1（App 收敛状态机）**：mounted 推送提交前对**每一次** ready 推送评估
   `planSessionListRefresh`（renderer `aggregate-refresh.ts` 纯函数）：(a) 检测**归档集合
-  收缩**（`archiveSetShrink`：无 unarchive wire ⇒ 收缩 = 宿主 purge 完成集合移除的唯一客户端
-  可观测信号；仅两侧 `archiveSetKnown:true` 才产生，降级空集永不误报）；(b) 收缩移除的 id ∪
+  收缩**（`archiveSetShrink`：收缩 = 「id 离开了归档集合」的客户端可观测信号——宿主 purge 完成
+  集合移除，或 0.1.7 的单条 unarchive（官方撤销/筛选走它）；两者的正确响应相同，故判据不区分；
+  仅两侧 `archiveSetKnown:true` 才产生，降级空集永不误报）；(b) 收缩移除的 id ∪
   上一轮未收敛（pending）id 中**仍以行存在于本推送**者 = 幽灵候选；(c) 幽灵候选非空即请求
   会话列表刷新，并按来源以 5s 冷却封底重发节流（`SESSION_LIST_REFRESH_COALESCE_MS`；官方
   refreshList 单飞兜底并发）；(d) 行消失即收敛——pending 清空、状态机自终止。**覆盖超时续跑、
@@ -1003,8 +1025,8 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.7-rc.2 477b4f42
    完成不再浮现；点击不再 `session/not-found`；归档正常会话仍隐藏；两次连续 purge；purge
    后回收再打开；purge 后断隧道恢复；local/ssh/gateway 三形态；30s 合并窗口观测；对话框的
    视觉与键盘实感（缩进几何、组头折叠、武装态交互、回焦）与 `force` 链（卡在提问的归档会话 → 管理器删除 → 停止
-   + 强制清理成功）；**归档即终止**（归档动作后就地停止含 subagent 闭包；之后删除不再出现
-   "仍在运行"跳过）；**保护修正三态**（无会话打开时照删 + 顶部降级说明行；正在查看的会话
+   + 强制清理成功）；**归档即终止**（运行中会话 → 弹出「停止并归档」确认并列出活动 → 确认后
+   宿主停止该会话的工作；之后删除不再出现 "仍在运行" 跳过）；**保护修正三态**（无会话打开时照删 + 顶部降级说明行；正在查看的会话
    所在树被 `skippedProtected` 跳过；被回收来源可删）；工作树侧「只对 INERT 会话放行」的
    实机验收（design 08 §5.2）——未归档的运行中会话仍阻塞，已归档者不阻塞也不被触碰（跳过的
    是 INERT 成员，不是整个 RUNNING 守卫）；
@@ -1048,13 +1070,12 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.7-rc.2 477b4f42
     没有廉价检测器**：维护相位不是「已加载 agent / attached session」这类公开事实，
     `liveSessionFacts` 看不到它。**REJECTED 备选**：读 vendor 私有 phase 字段——依赖上游内部
     形状、一改即静默失效（且把内部实现变成跨仓契约），不采纳。force 路径**不保证**对维护相位
-    安全，收敛路径是官方 delete wire 落地后本域退役（§11）；在此之前三条缓解：归档即终止、
+    安全，收敛路径是官方 delete wire 落地后本域退役（§11）；在此之前三条缓解：归档即终止（宿主 `stopActivity`）、
     删除侧对**闭包全员**发 cancel、管理器的 viewed 保护（`protectSessionIds`）——最佳缓解，
     不是保证；
 13. **force 删除后残档机制**：`force` 删的是「本进程已加载」的会话档而宿主进程仍持有其内存
-    对象——之后任一写事件会重建**无头残档**（写机制见 §10 #8）。四条缓解：(a) 归档时停一次 +
-    删除前再停一次（闭包全员
-    `session/cancel`）；(b) 宿主按 `protectSessionIds` 整棵跳过**正在查看**的会话所在树
+    对象——之后任一写事件会重建**无头残档**（写机制见 §10 #8）。四条缓解：(a) 归档时宿主停一次
+    （`stopActivity`）+ 删除前客户端再停一次（闭包全员 `session/cancel`）；(b) 宿主按 `protectSessionIds` 整棵跳过**正在查看**的会话所在树
     （保护修正：判定已下沉到宿主，覆盖全量语料）；(c) 已归档会话无任何 UI 路径开始
     新回合；**running 不能裸删**的理由同此机制（`force` 也不放过 running）；(d) **常驻保留
     **常驻保留的成员关系**：这类树的成员关系不再被摘掉，即便残档被重建、甚至迁移竞态把整份内容写回

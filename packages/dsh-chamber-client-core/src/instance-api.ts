@@ -32,6 +32,11 @@ import {
 } from '@dsh-chamber/dsh-chamber-wire'
 export { basenameOf } from './session-display.ts'
 export { InstanceRpcError } from './instance-rpc-error.ts'
+// The archive-confirm phase's public surface: the refusal classifier and the
+// activity types (the sidebar's confirmation maps them to rows). The individual
+// decoders stay package-internal.
+export { sessionArchiveRefusal } from './instance-mutation-values.ts'
+export type { SessionArchiveActivity, SessionArchiveActivityItem } from './instance-mutation-values.ts'
 
 /** One workspace row (WorkspaceView wire shape). */
 export interface WorkspaceRow {
@@ -745,8 +750,22 @@ export async function renameSession(client: InstanceApiClient, sessionId: string
   await callAndThrow(client, () => client.session.rename({ sessionId, title }))
 }
 
-export async function archiveSession(client: InstanceApiClient, sessionId: string): Promise<void> {
-  await callAndThrow(client, () => client.workspace.archiveSession({ sessionId }))
+/**
+ * Archive one session through the OFFICIAL two-phase `workspace/archiveSession`
+ * wire: plain first; on a `workspace/session-active` refusal (see
+ * {@link sessionArchiveRefusal}) resend with `stopActivity` so the host writes
+ * the archive set and has its own providers stop the work. The additive field
+ * rides only when true — never an explicit false.
+ */
+export async function archiveSession(
+  client: InstanceApiClient,
+  sessionId: string,
+  options: { stopActivity?: boolean } = {},
+): Promise<void> {
+  await callAndThrow(client, () => client.workspace.archiveSession({
+    sessionId,
+    ...(options.stopActivity === true ? { stopActivity: true } : {}),
+  }))
 }
 
 /**
@@ -1342,25 +1361,6 @@ export async function stopSessionsForPurge(
     refusedRoots,
     lineage: snapshot,
   }
-}
-
-/**
- * ARCHIVE-TIME TERMINATION (「已归档的对话应该终止」): stop one just-archived
- * session together with its whole subagent-origin subtree. Archiving clears the
- * current selection, which leaves a turn waiting on a question/approval with NO
- * answerer — it would run forever and block every later delete of that tree. So
- * the archive verb stops the subtree as part of the same action: no exclusion
- * list, the full closure, and every member asked to cancel (idle ones included
- * — a maintenance phase reports `idle` while still appending).
- *
- * ADVISORY: the archive already happened (authoritative), so a failed lineage
- * read or a still-running member is reported, never thrown or rolled back.
- */
-export async function stopArchivedSubtree(
-  client: InstanceApiClient,
-  rootSessionId: string,
-): Promise<StopSessionsResult> {
-  return await stopSessionsForPurge(client, [rootSessionId])
 }
 
 export interface CreateWorkspaceResult {

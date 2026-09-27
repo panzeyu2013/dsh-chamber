@@ -50,7 +50,7 @@
 - A2：A2-4（哨兵 vs semver）、A2-7（raw vs effective pending）。
 - A3：A3-1/2/3/4 保鲜门自证、A3-5 假过且 `--check` 未进 CI、A3-6、A3-10、A3-11、A3-13、A3-15、A3-14，另有 S1–S13 疑似面（S12 已单列）；判据 = 读失败/未检必须可与「通过」区分。
 - bundle 层生效信号（design 21 §6.6）：需新宿主事实 `bundleLayers`，两态才可区分。
-- 归档清理与归档管理器（design 24）：打包版目检、探针 fail-closed、>65,536 不清扫、gateway/远程实机；待跑验收（skippedProtected/skippedRunning/子代理后代/常驻保留链）；残余 = 事件 no-op 至上游 wire、维护期 force 风险、保护边界 = 活 `current`；seam 依赖官方私有三面（退役 = 上游批量原语）；缺陷 = `errors` 通道混用致成功也红；清理残留 = projcache 4KB 档未回收、迁移在飞 purge 留代际窗口；可选增强 = PluginDialog 三态行/rowError 本地化/已归档浏览区；tombstone 由孤儿清扫收敛（空语料 G1a 永跳）。
+- 归档清理与归档管理器（design 24）：打包版目检、探针 fail-closed、>65,536 不清扫、gateway/远程实机；待跑验收（skippedProtected/skippedRunning/子代理后代/常驻保留链）；**归档两段式实机目检**（运行中会话 → 确认框列出活动 → 停止并归档；安静会话仍单次归档）；残余 = 事件 no-op 至上游 wire、维护期 force 风险、保护边界 = 活 `current`；seam 依赖官方私有三面（退役 = 上游批量原语）；缺陷 = `errors` 通道混用致成功也红；清理残留 = projcache 4KB 档未回收、迁移在飞 purge 留代际窗口；可选增强 = PluginDialog 三态行/rowError 本地化/已归档浏览区；tombstone 由孤儿清扫收敛（空语料 G1a 永跳）。
 - 会话列表标签：链 = 官方 title→cwd basename→id；无超出日常的实机门禁。
 - 移动端 Web（design 17 §18）：未实施 = 移动中量化/滚动记忆/宽屏触控/长按气泡；composer 守卫 WebKit 未验（真机读 `[data-mobile-kbd-state]`）；复审①–⑪（右栏全屏让位、44px 底线、官方浮面未适配、`touch-action:none` 冲突、真机抽检、回到底部控件被键盘遮、caret reveal、layer-2 不可达、iPad 指针档假设、档位边界、模态叠加）；§18.6 实机门禁清单；登录页预热三项（真机链路/滥用度量/边界复核）；git 侧栏与 P2/P3 排期；DOM 锚点审计三项（details 打标仅实机可验、composer 锚点 fixture 化、Android 键盘盲区）。
 - 连接稳定性：`/api/remote.mux` 实例侧 2s×2 心跳 ⇒ 4–6s terminate；下一步抓 close code（1006/4000），若为实例心跳则调宽 `websocketHeartbeatIntervalMs`；pong 代答已回退；桌面 idle 看门狗 gateway 目标也吃 ~2min bounce。
@@ -183,6 +183,7 @@
 - 设置壳偏差：自绘 chrome、面板渲染选中源自己 boot ctx 台账（故该源壳必须挂载）、离线远端不可达占位、选择器 body portal。
 - 上游对齐轮引入的有意偏差（仍成立）：首启阶段活动视图门与完成集只跟 sessions 事实（残留 = 重挂载从空集重跑）；`sectionsEmpty` 占位保留；框架失败屏深引 `ui-primitives/src/Button.tsx`（主图已越 `mainGraphRaw.warn`，待决 = 拆懒化 or 上调阈值并写头注）；`Switch` 披露属性挂原语控制节点（收口需上游透传）；「开/选中」色用业务蓝（六处落点，不改官方组件）；侧栏 schedule 事实由 chamber 带过去；会话状态标记（蓝点/14px 徽标）为保留偏差，判据 design 06 §4.3。
 - 默认排序 `manual`（design 06 §3.1）；窗口标题冻结（Electron `dsh-chamber-electron`、壳 `dsh-chamber`）。
+- **归档准入两段式 + 旧宿主降级**（design 24 §5）：chamber 恒发官方两段式（首调无 `stopActivity`，宿主以 `workspace/session-active` 拒绝并列出活动，确认后带 `stopActivity: true` 重发，停止由宿主 provider 完成）；**已接受的降级** = 无该准入的旧宿主上第二调原样上抛，归档不再由客户端补偿停止（旧 `stopArchivedSubtree` 腿已删，不保留）——安静会话归档照旧，带后台工作的会话在旧宿主上归档后其工作继续运行；**不做版本探测**（能力自证：只有能返回该拒绝的宿主才收到第二调）。git 的 pre-remove 归档勾选同此口径（`stopActivity` 随勾选授权，旧宿主忽略该字段，行为同前）。证据：`packages/dsh-chamber-client-core/src/instance-api.ts`（`archiveSession`/`sessionArchiveRefusal`）、`packages/dsh-chamber-client-ui-sidebar/src/client/session-archive-confirm.ts`、`packages/dsh-chamber-client-ui-git/src/shared/saga.ts`。
 - 菜单密度 = chamber `compact` 档（design 06 §7/design 15④），不得改回默认/dense。
 - Electron 二进制惰性安装（共享 dist）；dev 实例隔离（独立 user-data、端口 17520 起退避）。
 - 内建版本行引导（方案 2：同版本行引导「恢复内建」，下载为次要动作）。

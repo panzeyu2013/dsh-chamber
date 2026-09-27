@@ -50,11 +50,13 @@ chamber侧缓解（不动上游事实面）：design 05 §2.2.1的open意图本�
 
 > 上游 = `deepseek-harness`（本仓不可改；落地前以vendor `dsh-client-modules/src/client/manifest.ts` 为权威复查）。design 24的归档清理域随上游 `sessions.delete` wire落地后退休。
 
-根因：dsh归档单向不可见——上游只有 `workspace.archiveSession`（registry-global集合，幂等），无unarchive/delete-session；官方与chamber投影同规则排除归档行（`!archived.has(id)`）；数据未丢（`sessions.list/search` 返回归档会话，集合持久化于 `<DSH_HOME>/profiles/web/**/workspace.json` 的 `global.archivedSessionIds`）。OpenCode/OpenChamber有可逆归档 + 删除 + 归档可见查询，manager只做UI；dsh三项全缺，chamber无法只靠前端补全。
+根因（0.1.7 复核）：dsh 归档面仍**无 delete-session、也无归档可见查询**——上游的 `workspace.archiveSession`
+（registry-global集合，幂等追加）已在 0.1.7 由单条 `workspace.unarchiveSession` 补齐反向；官方与chamber
+默认投影同规则排除归档行（`!archived.has(id)`）；数据未丢（`sessions.list/search` 返回归档会话，集合持久化于 `<DSH_HOME>/profiles/web/**/workspace.json` 的 `global.archivedSessionIds`）。OpenCode/OpenChamber有可逆归档 + 删除 + 归档可见查询；dsh仍缺删除与可见查询两项，chamber无法只靠前端补全。
 
-1. `workspace.unarchiveSession({ sessionId })`——与 `archiveSession` 对称、幂等移除；复用既有 `host/archived-sessions-changed` 事件与 `workspace.list.archivedSessionIds` 投影，客户端零新协议。
+1. ~~`workspace.unarchiveSession({ sessionId })`~~——**0.1.7 已落地**（单条、幂等移除；官方 UI 的撤销 toast 与「全部对话（显示已归档）」筛选走它）。**chamber 侧尚未接入口**：design 24 的「已归档浏览区/恢复」仍待排期（STATUS 范围决策节），本轮只消费其归档准入（`stopActivity`）。
 2. `sessions.delete({ sessionId })`（或workspace下同义）——服务端删会话目录 + 级联subagent起源子会话 + workspace成员账目自愈（header索引重建剔除已删id）+ 清archived集合；复用 `host/session-removed` 事件。
-3. （可选）`sessions.list` 行加 `archived` 标志或查询参数。保持registry-set形态则仅补1+2，即可让design 24的可选「已归档浏览区」补上恢复/删除——最小改动优先。
+3. （可选）`sessions.list` 行加 `archived` 标志或查询参数。保持registry-set形态则仅补2（+可选3），即可让design 24的可选「已归档浏览区」补上恢复/删除——最小改动优先。
 
 > 其余与design 24相关的chamber侧剩余面（浏览区A未排期、控制面特权层直删B冻结）见 `docs/progress/STATUS.md` 范围决策节与 `docs/design/24-archived-session-cleanup.md`。
 

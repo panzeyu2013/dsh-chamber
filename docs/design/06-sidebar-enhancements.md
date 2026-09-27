@@ -441,8 +441,8 @@
 - **悬停替换（真正替换，零占位）**：行/头操作静止时 `display:none`（不占布局
   空间），状态图标/徽标因此真正位于行/头末端；悬停时操作簇 `display:inline-flex`
   换入、状态槽 `display:none` 换出（session 行：状态环 ↔ **kebab 菜单**（重命名/
-  分叉/归档——归档动词移入行菜单；归档只隐藏行、
-  不触碰会话日志）；来源头：连接状态 ↔ 排序菜单 + 搜索 + 添加工作区（官方
+  分叉/归档——归档动词移入行菜单；归档只隐藏行、不触碰会话日志；安静会话直接归档，宿主因
+  仍有活跃工作而拒绝时才弹「停止并归档」确认，design 24 §5）；来源头：连接状态 ↔ 排序菜单 + 搜索 + 添加工作区（官方
   project-add 字形，`IconProjectAddOutlineRegular`）；workspace：会话数徽标 ↔ `+`（新建
   会话）+ kebab（重命名/删除））。胶囊/菜单展开时操作簇保持显示
   （`.sourceActionsVisible`/`.rowActionsVisible`，`:has` 同步换出状态槽）。
@@ -750,8 +750,9 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   （`ServerSection.tsx` 的 `cc.orphanBadge`，在 hover 簇之外），键盘用户可 Tab 到
   任一遮罩之后武装第二层，两层各注册 Escape 监听、一次 Esc 双关（design 24 §6 项 7
   正是归档管理器拒绝第二层的理由）。真不变量落在**打开方**、不在遮罩：
-  `SidebarRoot.tsx` 的单一谓词 `otherChamberDialogOpen(self)` 被**全部三个打开方**
+  `SidebarRoot.tsx` 的单一谓词 `otherChamberDialogOpen(self)` 被**全部四个打开方**
   咨询——删除武装（`onDeleteWorkspace`）、归档管理器（`onOpenArchiveCleanup`）、
+  归档活动确认（`openArchiveConfirm`：两段式第二调前的「停止并归档」层）、
   添加工作区浏览器（`openWorkspaceBrowser`；节 `ServerSection` 只拿得到这个带门的
   opener，拿不到裸 setter）——每个子句排除自己那一层，故**任一方向**最多只可能有一层；
   被拒的控件在该层消失（cancel / X / 遮罩 / Escape 均可）后立刻恢复，能力不丢。

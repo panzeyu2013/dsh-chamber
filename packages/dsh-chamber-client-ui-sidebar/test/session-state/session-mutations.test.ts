@@ -95,6 +95,43 @@ test('archiveSessionForSource: the withdraw fact is published after the wire acc
   } finally { facts.off(); releaseInstanceClient(sourceId) }
 })
 
+test('archiveSessionForSource: stopActivity rides only the confirmed phase, never as an explicit false', async () => {
+  const sourceId = 'session-funnel-archive-stop'
+  const client = getInstanceClient(sourceId)
+  const calls: unknown[] = []
+  client.workspace.archiveSession = async (payload: unknown): Promise<UnaryResult<unknown>> =>
+    (calls.push(payload), { ok: true, value: { archivedSessionIds: [] } })
+  const facts = collectFacts(sourceId)
+  try {
+    await archiveSessionForSource(sourceId, 's-plain')
+    await archiveSessionForSource(sourceId, 's-stopped', { stopActivity: true })
+    await archiveSessionForSource(sourceId, 's-false', { stopActivity: false })
+    assert.deepEqual(calls, [
+      { sessionId: 's-plain' },
+      { sessionId: 's-stopped', stopActivity: true },
+      { sessionId: 's-false' },
+    ], 'the wire schema has an additive optional field: false must not be sent')
+    assert.deepEqual(facts.removed, [
+      { sourceId, sessionId: 's-plain' },
+      { sourceId, sessionId: 's-stopped' },
+      { sourceId, sessionId: 's-false' },
+    ], 'both phases publish the withdraw fact (no echo outliving the host archive)')
+  } finally { facts.off(); releaseInstanceClient(sourceId) }
+})
+
+test('a REFUSED archive publishes no withdraw fact in either phase (the fact never outruns the host)', async () => {
+  const sourceId = 'session-funnel-archive-failure'
+  const client = getInstanceClient(sourceId)
+  client.workspace.archiveSession = async (): Promise<UnaryResult<unknown>> =>
+    ({ ok: false, error: { code: 'workspace/session-active', message: 'active', details: {} } })
+  const facts = collectFacts(sourceId)
+  try {
+    await assert.rejects(archiveSessionForSource(sourceId, 's-1'), /active/)
+    await assert.rejects(archiveSessionForSource(sourceId, 's-1', { stopActivity: true }), /active/)
+    assert.deepEqual(facts.removed, [], 'a refused archive leaves the row in place (no local withdraw)')
+  } finally { facts.off(); releaseInstanceClient(sourceId) }
+})
+
 test('a failed wire publishes NOTHING (the echo must never outrun the host)', async () => {
   const sourceId = 'session-funnel-failure'
   const client = getInstanceClient(sourceId)

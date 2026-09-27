@@ -1,7 +1,8 @@
 /**
  * Chamber dialog layers: add-workspace directory browser, per-source archive
- * manager, armed workspace-delete confirm. One hook owns the state, the openers
- * and the single-dialog-layer predicate; one component renders the three layers.
+ * manager, armed workspace-delete confirm, and the archive-active confirm the
+ * host's refusal arms. One hook owns the state, the openers and the
+ * single-dialog-layer predicate; one component renders the four layers.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
@@ -9,9 +10,12 @@ import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import { DirectoryBrowser } from '@deepseek-ai/dsh-client-ui-directory-picker-browse/client/DirectoryBrowser.tsx'
 import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { createHostDirectory, getInstanceClient, listHostDirectory } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
+import { archiveSessionForSource } from '@dsh-chamber/dsh-chamber-client-core/session-mutations'
 import { createWorkspaceForSource, deleteWorkspaceForSource } from '@dsh-chamber/dsh-chamber-client-core/workspace-mutations'
 import { getWorkspaceGitFlag } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
 import { ArchiveManagerDialog } from './ArchiveManagerDialog.tsx'
+import { SessionArchiveConfirmDialog } from './SessionArchiveConfirmDialog.tsx'
+import type { SessionArchiveConfirmRequest } from './session-archive-confirm.ts'
 import type { SidebarRootComponentProps } from './contract/slots.ts'
 import type { RunActionWithOutcome } from './sidebar-root-actions.ts'
 import cc from './sidebar-chamber.module.css'
@@ -50,29 +54,44 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
    * Escape，一次 Escape 关掉**两层**。
    * 唯一谓词在此，每个打开方都必须查询（只闸 delete 会漏掉反向顺序）：`onDeleteWorkspace`
    * 武装删除确认、`onOpenArchiveCleanup` 打开归档管理器、`openWorkspaceBrowser` 打开目录
-   * 浏览器。拒绝不丢功能：每层都可取消/X/mask/Escape 关闭，关闭后被拒控件立即可用。
-   * 刻意用 hoisted `function`：两个 opener 与下方 arm 处理器共用一条规则，而它读的 `deleteTarget` 声明在组件更后面（函数声明提升）。
+   * 浏览器、`openArchiveConfirm` 武装归档活动确认。拒绝不丢功能：每层都可取消/X/mask/Escape
+   * 关闭，关闭后被拒控件立即可用（归档确认的拒绝由调用方回退成原始失败上报，见 opener）。
+   * 刻意用 hoisted `function`：各 opener 与下方 arm 处理器共用一条规则（函数声明提升），
+   * 但它判定的是 `openLayersRef` 而不是渲染闭包里的 state：
+   * `openArchiveConfirm` 在行菜单首调失败后（最长一个 unary 超时）才被调用，它所在闭包里的
+   * state 早已过期——期间键盘用户可在任一 mask 后从常驻 orphan 徽标武装删除确认，或第二个会话的
+   * 首调先拒绝并武装。过期闭包看到「没有别的层」就会叠出第二层（各注册一个 Escape，一次 Esc
+   * 双关），或在 `setArchiveConfirm` 上静默覆盖前一个待确认目标（连同它的 pending/error 一起
+   * 清掉）。因此闸门读这个同步权威：打开方在武装的同一 tick 声明，关闭方同步释放，每次提交后再
+   * 由 state 对齐兜底；state 只负责渲染。
    */
-  function otherChamberDialogOpen(self: 'delete' | 'archive' | 'browser'): boolean {
-    return (self !== 'delete' && deleteTarget !== null)
-      || (self !== 'archive' && archiveCleanupServerId !== null)
-      || (self !== 'browser' && addingWorkspace !== null)
+  const openLayersRef = useRef({ delete: false, archive: false, browser: false, sessionArchive: false })
+
+  function otherChamberDialogOpen(self: 'delete' | 'archive' | 'browser' | 'sessionArchive'): boolean {
+    const open = openLayersRef.current
+    return (self !== 'delete' && open.delete)
+      || (self !== 'archive' && open.archive)
+      || (self !== 'browser' && open.browser)
+      || (self !== 'sessionArchive' && open.sessionArchive)
   }
 
   /** 添加工作区入口（来源头的 `+`）走本 opener 而不暴露原始 setter——单层规则必须在打开处
    *  执行，而不是每个调用点。 */
   const openWorkspaceBrowser = (sourceId: string): void => {
     if (otherChamberDialogOpen('browser')) return
+    openLayersRef.current.browser = true
     setAddingWorkspace(sourceId)
   }
 
   const onOpenArchiveCleanup = (server: ChamberServerAggregate): void => {
     // 反方向：删除确认 mask 之下仍可从来源头到达（无焦点陷阱），必须同样拒绝。
     if (otherChamberDialogOpen('archive')) return
+    openLayersRef.current.archive = true
     archiveCleanupOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     setArchiveCleanupServerId(server.id)
   }
   const closeArchiveCleanup = (): void => {
+    openLayersRef.current.archive = false
     setArchiveCleanupServerId(null)
     // 关闭渲染提交后再聚焦（opener 可能已卸载——折叠 rail 或来源移除——focus() 此时是无害 no-op）。
     requestAnimationFrame(() => {
@@ -104,7 +123,7 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
    * nav 行在打开的 Modal mask 之后可达（orphan 徽标是 hover 簇之外的常驻可 Tab 按钮，官方
    * Modal 无焦点陷阱），键盘用户能在任一 chamber 对话框 mask 后 Tab 并武装本确认，两层随后
    * 各注册 document Escape，一次 Escape 关掉**两层**。真正的不变量因此在打开方而非 mask：
-   * `otherChamberDialogOpen` 被全部三个打开方查询，任一顺序下至多一层。
+   * `otherChamberDialogOpen` 被全部四个打开方查询（含本确认与归档活动确认），任一顺序下至多一层。
    */
   const [deleteTarget, setDeleteTarget] = useState<WorkspaceDeleteTarget | null>(null)
   const [deletePending, setDeletePending] = useState(false)
@@ -126,12 +145,109 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
     if (server === undefined || !server.connected) setDeleteTarget(null)
   }, [servers, deleteTarget, deletePending, deleteError])
 
+  /**
+   * ARMED 归档活动确认：**唯一**会先问一次的归档场合——宿主以
+   * `workspace/session-active` 拒绝，details 列出将被停止的工作（回合/子代理后代/
+   * 后台任务/定时提醒）。行菜单在首调失败后武装它，确认才发第二调（stopActivity）。
+   * 状态放在 SHELL（同删除确认）：打开它的行可能在确认仍开着时卸载/断连，行级 rowErrors
+   * 已无表面。
+   */
+  const [archiveConfirm, setArchiveConfirm] = useState<SessionArchiveConfirmRequest | null>(null)
+  const [archiveConfirmPending, setArchiveConfirmPending] = useState(false)
+  const [archiveConfirmError, setArchiveConfirmError] = useState<string | null>(null)
+  const archiveConfirmBodyRef = useRef<HTMLDivElement | null>(null)
+  const archiveConfirmOpenerRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    if (archiveConfirm === null) return
+    archiveConfirmBodyRef.current?.focus()
+  }, [archiveConfirm])
+  /** 同删除确认的来源守卫：失败消息在屏时暂停自动丢弃——唯一可见解释不能被一起卸载。 */
+  useEffect(() => {
+    if (archiveConfirm === null || archiveConfirmPending || archiveConfirmError !== null) return
+    const server = servers.find(candidate => candidate.id === archiveConfirm.sourceId)
+    if (server === undefined || !server.connected) setArchiveConfirm(null)
+  }, [servers, archiveConfirm, archiveConfirmPending, archiveConfirmError])
+
+  /**
+   * 每次提交后把闸门 ref 对齐 state 兜底：显式关闭方已同步释放，但来源断连的自动丢弃
+   * （上面三个 effect）与任何将来的关闭路径都只改 state——没有这层对齐，漏写一次释放就会
+   * 让闸门永久关闭（其余三层再也打不开）。
+   */
+  useEffect(() => {
+    openLayersRef.current = {
+      delete: deleteTarget !== null,
+      archive: archiveCleanupServerId !== null,
+      browser: addingWorkspace !== null,
+      sessionArchive: archiveConfirm !== null,
+    }
+  })
+
+  /**
+   * 行菜单首调失败（可解码的 session-active 拒绝）后武装。返回 false = 单层规则拒绝了这次
+   * 武装（另一个 chamber 对话框在屏；行菜单此时本不可达但键盘可达）：调用方据此保留原始
+   * 失败上报，绝不静默吞掉用户动作。
+   */
+  const openArchiveConfirm = (request: SessionArchiveConfirmRequest): boolean => {
+    if (otherChamberDialogOpen('sessionArchive')) return false
+    // 同步声明本层：同一 tick 里的第二个拒绝（或紧随其后的其它 opener）必须看到它，
+    // 而不是等下一次提交后由 state 告诉它们。
+    openLayersRef.current.sessionArchive = true
+    archiveConfirmOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    // 失败/在飞属于它自己的尝试：武装新目标绝不能继承上一轮的状态。
+    setArchiveConfirmError(null)
+    setArchiveConfirmPending(false)
+    setArchiveConfirm(request)
+    return true
+  }
+
+  /** 无条件关闭（确认路径已在同一批清掉 pending 标志）；连同显示过的失败一起丢弃。 */
+  const dismissArchiveConfirm = (): void => {
+    openLayersRef.current.sessionArchive = false
+    setArchiveConfirm(null)
+    setArchiveConfirmError(null)
+    requestAnimationFrame(() => {
+      const opener = archiveConfirmOpenerRef.current
+      archiveConfirmOpenerRef.current = null
+      if (opener !== null && opener.isConnected) opener.focus()
+    })
+  }
+
+  const closeArchiveConfirm = (): void => {
+    if (archiveConfirmPending) return
+    dismissArchiveConfirm()
+  }
+
+  /**
+   * 第二段：带 `stopActivity` 重发——宿主自己写归档集并让 provider 停止该会话的工作
+   * （回合、子代理后代、后台任务、定时提醒），客户端不再有补偿停止腿。失败留在对话框内并
+   * 保持打开（同删除确认：重新抛出以保留行级 rowErrors 上报）。
+   */
+  const confirmArchive = (): void => {
+    const target = archiveConfirm
+    if (target === null || archiveConfirmPending) return
+    setArchiveConfirmPending(true)
+    setArchiveConfirmError(null)
+    void runActionWithOutcome(`${target.sourceId}/session/${target.sessionId}/archive`, async () => {
+      try {
+        await archiveSessionForSource(target.sourceId, target.sessionId, { stopActivity: true })
+        chamberBridge.requestRefresh(target.sourceId)
+      } catch (reason) {
+        setArchiveConfirmError(reason instanceof Error ? reason.message : String(reason))
+        throw reason
+      }
+    }).then((ok) => {
+      setArchiveConfirmPending(false)
+      if (ok) dismissArchiveConfirm()
+    })
+  }
+
   const onDeleteWorkspace = (server: ChamberServerAggregate, workspaceId: string, title: string): void => {
     // 武装确认是这里唯一的副作用——wire 调用在 confirmDeleteWorkspace，用户接受前不会有破坏性操作。
     if (deletePending) return
     // 拒绝在另一个 chamber 对话框之上武装：本处理器可从常驻 orphan 徽标（任一层 mask 后）到达，
     // 两层各注册 Escape 会让一次 Escape 关掉两层。规则在 `otherChamberDialogOpen`（唯一谓词，双向）。
     if (otherChamberDialogOpen('delete')) return
+    openLayersRef.current.delete = true
     deleteOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     // 失败消息属于它自己的尝试：武装新目标绝不能把上次失败显示进新对话框。
     setDeleteError(null)
@@ -146,6 +262,7 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
 
   /** 无条件关闭（确认路径已在同一批清掉 pending 标志）；连同其显示过的失败一起丢弃。 */
   const dismissDeleteWorkspace = (): void => {
+    openLayersRef.current.delete = false
     setDeleteTarget(null)
     setDeleteError(null)
     requestAnimationFrame(() => {
@@ -245,14 +362,17 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
     [addingWorkspace, browseClient],
   )
   const browseClose = useCallback(() => {
+    openLayersRef.current.browser = false
     setAddingWorkspace(null)
     setAddingWorkspaceBusy(false)
   }, [])
   return {
     addingWorkspace, addingWorkspaceBusy, archiveCleanupServerId,
     deleteTarget, deletePending, deleteError, deleteBodyRef,
-    openWorkspaceBrowser, onOpenArchiveCleanup, onDeleteWorkspace,
+    archiveConfirm, archiveConfirmPending, archiveConfirmError, archiveConfirmBodyRef,
+    openWorkspaceBrowser, onOpenArchiveCleanup, onDeleteWorkspace, openArchiveConfirm,
     closeArchiveCleanup, closeDeleteWorkspace, confirmDeleteWorkspace,
+    closeArchiveConfirm, confirmArchive,
     browseListDirectory, browseCreateDirectory, browsePick, browseClose,
   }
 }
@@ -267,7 +387,9 @@ export function SidebarRootDialogs({ dialogs, servers, t, directoryBrowserT }: {
   const {
     addingWorkspace, addingWorkspaceBusy, archiveCleanupServerId,
     deleteTarget, deletePending, deleteError, deleteBodyRef,
+    archiveConfirm, archiveConfirmPending, archiveConfirmError, archiveConfirmBodyRef,
     closeArchiveCleanup, closeDeleteWorkspace, confirmDeleteWorkspace,
+    closeArchiveConfirm, confirmArchive,
     browseListDirectory, browseCreateDirectory, browsePick, browseClose,
   } = dialogs
   return (
@@ -296,7 +418,7 @@ export function SidebarRootDialogs({ dialogs, servers, t, directoryBrowserT }: {
       {/* chamber: 工作区删除确认——应用内 Modal（上游 chrome：outline 取消/危险确认、
           描述句、role="status" pending 行、role="alert" 失败行）。仅在武装目标存在时挂载，
           开启它的行可能已不在。单层不变量：本确认绝不在另一 chamber 对话框之上或之下——
-          三个打开方都查询 `otherChamberDialogOpen`，任一顺序下只有一层。 */}
+          四个打开方都查询 `otherChamberDialogOpen`，任一顺序下只有一层。 */}
       <Modal
         open={deleteTarget !== null}
         onClose={closeDeleteWorkspace}
@@ -334,6 +456,20 @@ export function SidebarRootDialogs({ dialogs, servers, t, directoryBrowserT }: {
           {deleteError !== null && <div className={cc.deleteError} role="alert">{deleteError}</div>}
         </div>
       </Modal>
+      {/* chamber: 归档活动确认——宿主以 `workspace/session-active` 拒绝后的第二段。仅在
+          武装目标存在时挂载；开启它的行可能已不在。单层不变量同删除确认：四个打开方都查询
+          `otherChamberDialogOpen`。 */}
+      {archiveConfirm !== null && (
+        <SessionArchiveConfirmDialog
+          request={archiveConfirm}
+          t={t}
+          pending={archiveConfirmPending}
+          error={archiveConfirmError}
+          bodyRef={archiveConfirmBodyRef}
+          onClose={closeArchiveConfirm}
+          onConfirm={confirmArchive}
+        />
+      )}
     </>
   )
 }

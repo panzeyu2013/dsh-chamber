@@ -7,7 +7,7 @@
 export type * from './instance-api.ts'
 export type * from './instance-rpc-error.ts'
 export { InstanceRpcError } from './instance-rpc-error.ts'
-export { InstanceDomainMissingError, archiveSession, createHostDirectory, createSession, createWorkspace, deleteWorkspace, emptyAggregate, fetchInstanceSnapshot, forkSession, getInstanceClient, insertSessionBefore, insertWorkspaceBefore, isInstanceUnavailable, listHostDirectory, purgeArchivedSessions, releaseInstanceClient, renameSession, renameWorkspace, searchSessions, stopArchivedSubtree, stopSessionsForPurge } from './instance-api.ts'
+export { InstanceDomainMissingError, archiveSession, createHostDirectory, createSession, createWorkspace, deleteWorkspace, emptyAggregate, fetchInstanceSnapshot, forkSession, getInstanceClient, insertSessionBefore, insertWorkspaceBefore, isInstanceUnavailable, listHostDirectory, purgeArchivedSessions, releaseInstanceClient, renameSession, renameWorkspace, searchSessions, stopSessionsForPurge } from './instance-api.ts'
 export type * from './workspace-mutations.ts'
 export { createWorkspaceForSource, deleteWorkspaceForSource, renameWorkspaceForSource } from './workspace-mutations.ts'
 export type * from './wire-common.ts'
