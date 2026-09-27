@@ -122,7 +122,8 @@ function readStored(storage: NotificationStorageLike | undefined, key: string): 
  * stable, which is precisely why the identity now has to be written down.
  */
 function normalizeStored(row: StoredRow): { entry: PendingNotification; minted: boolean } {
-  const stored = row.runId !== undefined && isSessionRunId(row.runId) ? row.runId : undefined
+  // runId 的存在性由 readStored -> validStoredRow 校验（同一文件 :86），此处只做分支判定。
+  const stored = row.runId
   const resolved = { ...row, runId: stored ?? notificationRunId(row) } as PendingNotification
   return { entry: { ...resolved, key: keyFor(resolved) }, minted: stored === undefined }
 }

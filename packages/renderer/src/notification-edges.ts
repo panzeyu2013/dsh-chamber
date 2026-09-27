@@ -8,6 +8,10 @@
  * `running` 已由生产者按官方 `status?.running ?? row.running` 解析；`completed` 是官方
  * `sessionStatus.completionUnread`（内存 Set），由侧栏生产者写进通道行；App 只在
  * `mergeRuntimeFacts` 追加 N-ctx 修正臂（design 06 §4，通知观察面不读该位）。
+ *
+ * 契约镜像是类型级契约（design 19 §3.2.7 的 `corrected` 域），当前仓内无消费者，故不进
+ * verify:no-dead-exports 的判定面。不是死导出：生产侧由壳报告与 facts 通道提供该字段，
+ * 上游退役修正臂时一并删除。
  */
 export interface SessionFacts {
   running?: boolean

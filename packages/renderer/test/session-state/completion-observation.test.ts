@@ -220,12 +220,67 @@ test('CONTROL(I3): a corrected shell idle edge produces no notification without 
   })
   assert.deepEqual(withHostEvidence.observations[0].candidate, { evidence: 'shell-edge' }, 'host 域完成证据在场 ⇒ 真实完成照发')
 
+  const withFreshAnchor = observeSource({
+    state: shellSeededState(), sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, corrected: true } } },
+    facts: {
+      usable: false,
+      rows: {
+        s1: factsRow({
+          completedAt: 3000, completedAtSource: 'observed', completedAtDomain: 'host', updatedAt: 3000,
+          lastTurnEnd: { kind: 'completed', at: 3000, seq: 42 },
+        }),
+      },
+    },
+  })
+  assert.deepEqual(
+    withFreshAnchor.observations[0].candidate,
+    { evidence: 'shell-edge', completionSeq: 42 },
+    'I3 门放行 + R1 继承同一宿主锚：两条改写在同一条边沿上不互相吞',
+  )
+
   const observerOnly = observeSource({
     state: shellSeededState(), sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
     shell: { rows: { s1: { running: false, corrected: true } } },
     facts: { usable: false, rows: { s1: factsRow({ completedAt: 3000, completedAtSource: 'observed', completedAtDomain: 'observer', updatedAt: 3000 }) } },
   })
   assert.equal(observerOnly.observations[0].candidate, undefined, 'observer 域时刻不是 host 证据')
+
+  // design 19 §3.2.7 已登记边界：证据判据是「facts 行存在且 host 域 observed」，不比较新鲜度——
+  // 上个回合完成、随后本地停止（facts 该行仍在但已旧）时修正边沿仍须照发（fail-open 侧）；
+  // 但 R1 的新鲜度门① 仍拒绝这条旧锚，候选不得带 completionSeq。
+  const staleEvidenceState = (): ReturnType<typeof observeSource>['state'] =>
+    observeSource({
+      state: shellSeededState(), sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+      shell: { rows: { s1: { running: true } } },
+      facts: {
+        usable: true,
+        rows: {
+          s1: factsRow({
+            completedAt: 1000, completedAtSource: 'observed', completedAtDomain: 'host', updatedAt: 1000,
+            lastTurnEnd: { kind: 'completed', at: 1000, seq: 9 },
+          }),
+        },
+      },
+    }).state
+  const staleHostEvidence = observeSource({
+    state: staleEvidenceState(), sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, corrected: true } } },
+    facts: {
+      usable: false,
+      rows: {
+        s1: factsRow({
+          completedAt: 1000, completedAtSource: 'observed', completedAtDomain: 'host', updatedAt: 1000,
+          lastTurnEnd: { kind: 'completed', at: 1000, seq: 9 },
+        }),
+      },
+    },
+  })
+  assert.deepEqual(
+    staleHostEvidence.observations[0].candidate,
+    { evidence: 'shell-edge' },
+    '旧 host 证据仍放行修正边沿（登记边界），但 R1 新鲜度门不借这条旧锚',
+  )
 })
 
 test('observeSource: an empty first report still establishes the baseline; a shell row first seen idle never fabricates a completion', () => {
@@ -2462,7 +2517,7 @@ test('R1 fence: a borrowed host seq is never borrowed twice (F1 regression: iden
   // 身份门（notifiedRun === runId）会按「已显示」把**真实新完成**吞掉（漏发）。借出的锚必须记账。
   const ledger = createCompleteLedger()
   const { calls, sink } = makeSink()
-  const stuckRow = (state: ObservationState, running: boolean) => observeSource({
+  const stuckRow = (state: ReturnType<typeof observeSource>['state'], running: boolean) => observeSource({
     state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
     shell: { rows: { s1: { running, goal: null } } },
     facts: {

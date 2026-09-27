@@ -138,8 +138,16 @@ test('the correction provenance is minted before the write and gates the shell c
   assert.match(sidebar, /createCorrectionMarks\(5_000\)/, '租约必须有界')
   assert.match(sidebar, /correctionMarks\.retract\(/, '写回抛出/自校验失败必须撤回标记')
   assert.match(sidebar, /report\.sessions\[id\] = \{ \.\.\.row, corrected: true \}/)
-  assert.match(completionObservation, /shellRow\.corrected === true/)
-  assert.match(completionObservation, /factsCompletionOf\(factsChannelRow\) === undefined/)
+  assert.match(completionObservation, /shellRow\.corrected === true && hostCompletion === undefined/)
+  assert.match(
+    completionObservation,
+    /const hostCompletion = factsChannelRow === undefined \? undefined : factsCompletionOf\(factsChannelRow\)/,
+  )
+  assert.equal(
+    (completionObservation.match(/factsCompletionOf\(factsChannelRow\)/g) ?? []).length,
+    1,
+    '宿主证据只解析一次：I3 门与 R1 锚继承同读一个值，互斥是结构性的，不得各自重算',
+  )
   assert.match(correctionMarks, /now >= deadline/, '过期标记不得消费更晚的边沿')
 })
 

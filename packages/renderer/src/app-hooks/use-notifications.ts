@@ -518,7 +518,7 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
     // 同一观测组装缝：facts 候选（observed + 播种 + 水位严格前进）与壳行 goal 的结算都在
     // reconcile 里裁决——接线层不再有第二 planner。
     reconcileCompletions(sourceId)
-  }, [reconcileCompletions, schedulePersistNotifications])
+  }, [reconcileCompletions])
 
   /**
    * facts 快照的**唯一入口**（gateway 订阅 / 无壳观察者 / dropSession 共用）：never-throw ——
