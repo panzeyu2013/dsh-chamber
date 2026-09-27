@@ -436,18 +436,22 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   **回连与有界重建（v1）**：连接**已建立**后断线由浏览器 EventSource 自动重连；**重连响应非 200**
   （404——该 profile 没有 hmr 宿主行；反代切流/缓冲导致的非 `text/event-stream`；或宿主重启窗口内反代的
   503/502，design 18 §3.6 项 8）按规范 fail-the-connection、**永久 CLOSED**，浏览器不再重试。hold 层据此
-  自己重建：`live-graph.ts` 检测 `readyState === CLOSED` 后按 2s/5s/10s/20s/30s/30s（≈97s，覆盖文档所述
-  90s 就绪窗）重开 `EventSource`，**成帧即重置预算**；预算耗尽只记一条日志、不再重建（机会性契约，不附加
-  诊断）。耗尽后该来源退回 boot 时现状——已 boot 的健康壳不会因 ready 世代重 boot（自愈重挂只覆盖 boot 曾
-  降级收尾的壳），恢复 = 用户手动重载页面/重启应用（宿主崩溃重启后活行存活仍是 STATUS 开放实机项）。
+  自己重建：`live-graph.ts` 检测 `readyState === CLOSED` 后按 2s/5s/10s/20s/30s/30s（≈97s，覆盖 design 18
+  §9 所述 90s 就绪窗）重开 `EventSource`，**成帧即重置预算**；预算耗尽只记一条日志、不再重建（机会性契约，
+  不附加诊断）。耗尽后该来源退回 boot 时现状——订阅已 arm 的壳不会因 ready 世代重 boot（自愈/图回归只覆盖
+  另一类壳：前者是 boot 曾降级收尾，后者是干净但无图，见下条），恢复 = 用户手动重载页面/重启应用（宿主崩溃
+  重启后活行存活仍是 STATUS 开放实机项）。
 - **图回归（退役窗口重载的每实例替代）**：boot 干净但**没取到图**（`graphAnswered === false`，即 `not-injected`）
   的壳从不 arm，而取图只发生在 boot 内 ⇒ 宿主**后来才有**客户端插件图（典型：seed
   `@dsh-chamber/dsh-chamber-seed-client-graph` 后重启远端 dsh，design 13 的 seed 流程）时没有任何路径自己
   跟上。App 每实例补两步，判定与两次上界在 `renderer/src/graph-return.ts`（接线在
-  `app-hooks/use-shell-retry.ts`）：① 每 ready 世代跑一次共享通道重检（`recheckPluginGraphDiagnostic`；
-  `not-injected` 属 channel-class，且只在判定态变化时写回，故永久无图来源零 store 噪声）；② 诊断翻 `ok`
-  而该壳仍无图 ⇒ 经 App 唯一重挂 sink（retryTokens）重挂该实例一次（重新取图、装 profile 的 client 行、
-  arm），每条 `ok` 记录一次。结构性上界：重挂后仍无图会写新的非 `ok` 记录（不会二次触发），取到图则
+  `app-hooks/use-shell-retry.ts`）：① 共享通道重检，**每来源每 60s 至多一次**（`recheckPluginGraphDiagnostic`；
+  `not-injected`/`graph-unreachable` 属 channel-class，且只在判定态变化时写回，故永久无图来源零 store 噪声）；
+  ② 诊断翻 `ok` 而该壳仍无图 ⇒ 经 App 唯一重挂 sink（retryTokens）重挂该实例一次（重新取图、装 profile 的
+  client 行、arm），每条 `ok` 记录一次。**为什么探测必须按时间而不是按 ready 世代计数**：ssh seed 流程的远端
+  重启是 `systemctl restart`，**隧道相位保持 `ready`**（design 18 §3.6），世代计数会在宿主有图之前就用掉唯一
+  一次探测；定时探测（hook 侧的 interval + 判定里的间隔闸，二者同闸同值）保证宿主有图后 ≤60s 内被发现，且
+  与状态churn 无关。结构性上界：重挂后仍无图会写新的非 `ok` 记录（不会二次触发），取到图则
   `graphAnswered === true`（彻底出界）。整页重载不再需要；safe mode / module-system 失败从未取图，字段缺席，
   不属于该政策。
 - **范围**：只做行 **add/remove**（id 集合）。**rev 变化不换 entry**：模块表按 id first-load-wins，

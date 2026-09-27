@@ -342,9 +342,10 @@ chamber-settings.json，非秘密）：
    不随宿主重启重 boot（已 boot 的实例壳不重 boot）。页面侧 client 行的刷新走 design 09 §3.7 的
    `/plugins/events`：重连撞上本段下文的 503/502 窗口会被浏览器判死（`readyState CLOSED`），hold 层
    随后按 §3.7 的有界重建（≈97s 预算，覆盖就绪窗）重开订阅，成帧即重新下发整图并热同步增删；
-   预算耗尽才退回 boot 现状、须手动重载页面/重启应用（存活仍为 STATUS 开放实机项）。boot 时**没有图**
-   （`not-injected`）的壳走 §3.7 的另一路：宿主后来才有图时（design 13 的 seed 流程即此）按 ready 世代重检
-   一次、图回归后重挂该实例一次，同样不需要整页重载。
+   预算耗尽才退回 boot 现状、须手动重载页面/重启应用（存活仍为 STATUS 开放实机项）。boot 时**没有图**的非
+   本地壳（`not-injected`，host 尚无 chamber 宿主包）走 §3.7 的另一路：宿主后来才有图时（design 13 的 seed
+   流程即此）按有界探测（每来源每 60s 至多一次）发现并重挂该实例一次，同样不需要整页重载；**本地**实例的 404
+   是 `local-graph-not-injected` 降级 boot，归降级自愈（§3.2 W3），不属该路。
    **互斥与门控**：与健康状态机 `restarting` 单飞互斥；applying 期间禁用；状态行
    「重启 dsh…」→「已重启」
    与诚实失败文案（附 host-logs 入口）。失败不回滚、不改指针——重启前后是同一棵激活树，
