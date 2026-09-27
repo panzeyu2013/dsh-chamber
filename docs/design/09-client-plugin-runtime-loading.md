@@ -428,8 +428,9 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   （全量快照，无需顺序号）；`rebuilt` 帧不必单独消费——上游 `rebuilt()` 自己会 `compose()` 并
   `notifyGraphChanged()`，带新 rev 的 graph 帧必然随到。
 - **机会性契约**：通道拿不到帧 ≠ 降级。boot 是通道不可用时的回退权威（通道正常时由 graph 帧热同步增删，§3.7）；live pass 失败/不可用一律 no-op，
-  绝不影响 boot、其它行或实例状态。arm 判词三态：**answered（含空图）→ arm**；`not-injected` 与
-  channel 失败 → 不 arm（前者是 gateway/mobile 的合法形态，后者等 App 的 ready 世代自愈重 boot）；
+  绝不影响 boot、其它行或实例状态。arm 判词三态：**answered（含空图）→ arm**；`not-injected` → 不 arm，
+  但该 boot 以 `ShellState.graphAnswered === false` 把「取过图且没答」交给 App 的**图回归**政策（下一条；
+  这是 gateway/mobile 的合法形态）；channel 失败 → 不 arm（等 App 的 ready 世代自愈重 boot）；
   用户面急停 = safe mode（不 arm）；另有页面级 devtools/测试开关
   （`__DSH_CHAMBER_LIVE_PLUGIN_SYNC__ === false`，arm 时读取、无缓存）、主机无 `EventSource` 同样不 arm。
   **回连与有界重建（v1）**：连接**已建立**后断线由浏览器 EventSource 自动重连；**重连响应非 200**
@@ -439,6 +440,16 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   90s 就绪窗）重开 `EventSource`，**成帧即重置预算**；预算耗尽只记一条日志、不再重建（机会性契约，不附加
   诊断）。耗尽后该来源退回 boot 时现状——已 boot 的健康壳不会因 ready 世代重 boot（自愈重挂只覆盖 boot 曾
   降级收尾的壳），恢复 = 用户手动重载页面/重启应用（宿主崩溃重启后活行存活仍是 STATUS 开放实机项）。
+- **图回归（退役窗口重载的每实例替代）**：boot 干净但**没取到图**（`graphAnswered === false`，即 `not-injected`）
+  的壳从不 arm，而取图只发生在 boot 内 ⇒ 宿主**后来才有**客户端插件图（典型：seed
+  `@dsh-chamber/dsh-chamber-seed-client-graph` 后重启远端 dsh，design 13 的 seed 流程）时没有任何路径自己
+  跟上。App 每实例补两步，判定与两次上界在 `renderer/src/graph-return.ts`（接线在
+  `app-hooks/use-shell-retry.ts`）：① 每 ready 世代跑一次共享通道重检（`recheckPluginGraphDiagnostic`；
+  `not-injected` 属 channel-class，且只在判定态变化时写回，故永久无图来源零 store 噪声）；② 诊断翻 `ok`
+  而该壳仍无图 ⇒ 经 App 唯一重挂 sink（retryTokens）重挂该实例一次（重新取图、装 profile 的 client 行、
+  arm），每条 `ok` 记录一次。结构性上界：重挂后仍无图会写新的非 `ok` 记录（不会二次触发），取到图则
+  `graphAnswered === true`（彻底出界）。整页重载不再需要；safe mode / module-system 失败从未取图，字段缺席，
+  不属于该政策。
 - **范围**：只做行 **add/remove**（id 集合）。**rev 变化不换 entry**：模块表按 id first-load-wins，
   同 id 异 rev 只上报 `restart-required`（同实例重建）/ `instance-version-conflict`（跨来源 owner），
   等用户**手动重载页面/重启应用**收口（自动窗口重载已随热重载修复退役，design 18 §3.6 项 8）；

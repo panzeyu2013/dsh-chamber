@@ -97,7 +97,9 @@
    不持久化可能漂移的 "seeded" 标记。自动 seed **不替用户重启远端 dsh**：已运行实例的宿主行须重启后才
    装载新增 row，日志明确标注「重启后生效」；**页面侧无需窗口重载**——这些 seed 包全是 host-only
    （无 `dsh.client` 半身，不进活图），新增/重建的宿主行重启后在宿主生效，页面侧没有对应行可同步；
-   design 09 §3.7 的 live 热同步只承运 client 行，与本段无关。（插件管理器/配置编辑路径另见 §3.7；
+   design 09 §3.7 的 live 热同步只承运 client 行，与本段无关。唯一的页面侧跟随是**图回归**：`client-graph`
+   本身就是图端点，装它之前该来源取图是 `not-injected`（boot 无图、不 arm）⇒ seed 生效后 App 按 design 09 §3.7
+   重检一次并重挂该实例一次（重新取图、装 profile 的 client 行、arm），**仍不需要整页重载**。（插件管理器/配置编辑路径另见 §3.7；
    原始文件编辑不触发 `applied` 帧，design 09 §5。）
 
 该通道只复制 chamber 自有构建产物。Git worktree RPC/校验/子进程全部由远端实例加载后的
