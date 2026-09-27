@@ -33,12 +33,10 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
 - 任何**已装进 profile 的 `dsh.client` 包** → chamber 前端**按实例运行时加载**：
   装法维持官方语义（profile 装包 + `cordis.patch.yml` 加行），宿主图变化后
   chamber 前端自然看到新插件（插件集变化在宿主重启生效）。**修订（§3.7 活实例热同步）**：
-  chamber 是常驻窗口，页面侧 client 插件集在**窗口 boot** 时固定（宿主图每 boot 取一次、
-  bundle 那时执行；模块表按 id first-load-wins）——**装/卸由 §3.7 接管**：宿主 hmr 报
-  `applied` 后不重载窗口即把新 entry 挂进对应实例的活 ctx、卸下的 entry 退出；**单插件 rev
-  热替换仍不做**，rev 变化与真正执行重启的入口继续走「宿主重启 **+ 一次窗口重载**」
-  （sidebar 共享面的 page-owned completion `restart-window-reload.ts`，按来源单飞、卸载不取消），
-  入口清单按 design 18 §3.6 项 8 逐入口重裁（报 `applied` 的装/卸不再需要重载）。
+  chamber 是常驻窗口，页面侧 client 插件集在**窗口 boot** 时取一次（宿主图每 boot 取一次、
+  bundle 那时执行；模块表按 id first-load-wins）；用户发起的重启 = 宿主重启本身，
+  **不再附带窗口重载**——装/卸由 §3.7 热同步接管（宿主 hmr 报 `applied` 即把新 entry 挂进
+  对应实例的活 ctx、卸下的 entry 退出），重启入口不再需要窗口重 boot（design 18 §3.6 项 8）。
 - 本地与远程实例同等（远程宿主插件集不同，各自 ctx 加载自己的子集）。
 - 宿主侧 / vendor **零改动**：图是现成的、bundle 是现成的、反代是现成的。
 
@@ -104,10 +102,7 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
   判词按 boot 序号暂存、settle 补放。事实**身份 = kind + 载荷**（同日修订）：延迟簇失败曾与探针判词共用
   `required-services-missing`，`reportSettledDegrade` 的「同 kind 即重复」会静默丢弃第二条；现延迟
   簇有自己的 kind（`deferred-registration-failed` + 失败 id 集），探针载荷带结构化
-  `services`/`injectedBy`。③ 同一道门被**设置壳**复用：`waitForSourceServing`（shared face
-  `serving-gate.ts`，读 chamberBridge 投影的 `connected`）在 `instance_unavailable` /
-  `dsh_not_ready` 这类**冷启动拒绝**上等来源并重试一次；终态来源（error/stopped/restart-exhausted）与
-  未知来源**立即**失败，真实原因照旧呈现。`chamber-entry.ts` 的 `assertRequiredExtraRowServices`
+  `services`/`injectedBy`。`chamber-entry.ts` 的 `assertRequiredExtraRowServices`
   （名字不变；纯判定在 `required-extra-rows.ts`）在 5s 内探测**派生并集**里仍未被 provide 的服务，点名
   「服务 + 注入它的已注册插件」，并经 shell 的 `chamberReportBootDegraded` 上报（**仍是诊断，不是启动
   门**：gateway/移动形态可合法不加载该行）。
@@ -424,7 +419,7 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
 
 §3.2/§3.5 的合并与预载发生在**窗口 boot**：宿主图每 boot 取一次，bundle 那时执行。宿主侧 hmr 在场时
 （`dsh-hmr` 监听 profile 并 `reconcileProfilePatches`，插件管理器报 `application:'applied'`）装/卸**已经**
-在宿主生效，但页面侧仍要等一次窗口重载。本节的 `/plugins/events` 订阅者是**页面侧最后一环**：把宿主图的
+在宿主生效，但页面侧曾只能等一次窗口重载。本节的 `/plugins/events` 订阅者是**页面侧最后一环**：把宿主图的
 变化实时消费进对应实例的活 ctx。
 
 - **通道**：每来源一条 `EventSource(<basePath>/plugins/events)`（上游 `dsh-client-hmr` 的宿主半身
@@ -442,7 +437,8 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   该来源退回 boot 时现状，等下一次 App ready 世代的重 boot 重建订阅（机会性契约，不附加诊断）。
 - **范围**：只做行 **add/remove**（id 集合）。**rev 变化不换 entry**：模块表按 id first-load-wins，
   同 id 异 rev 只上报 `restart-required`（同实例重建）/ `instance-version-conflict`（跨来源 owner），
-  等窗口重载收口；rev-conflict 的 **add 一律不建 entry**（不把旧 factory 装成新行）。
+  等用户**手动重载页面/重启应用**收口（自动窗口重载已随热重载修复退役，design 18 §3.6 项 8）；
+  rev-conflict 的 **add 一律不建 entry**（不把旧 factory 装成新行）。
 - **算法（每个 graph 帧一次幂等 pass）**：帧 → 同一行投影（`parseGraphRows` → `dedupeCoveredRows` →
   `toExtraRows`，与 boot 取图共用，绝不写第二套解析）→ 与 mounted 集合 diff（基线取**活 loader**：
   boot extra id 且同名 entry 有 fiber；boot 期 create 失败的行视为未挂载，后续帧重试到挂载）→
@@ -580,12 +576,12 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   触发面事实：活重载来自 `dsh-plugin-manager` 的 `reconcileProfilePatches`
   （`lib/index.js` 约 :2033，`application: ctx.get("hmr") ? "applied" : "restart-required"`），**原始编辑
   `cordis.patch.yml`/`cordis.yml` 不触发**（实测无新帧），故「装/卸即时生效」只在插件管理器/配置编辑路径成立。
-- **重载臂裁决（保留，不再作为删除候选）**：`PluginDialog.restartSourceService`（ssh 服务重启）、
-  `PluginDialog.doRestartNow`（seed restart-to-apply）、受管 gateway 的 start/restart 腿保留窗口重载。
-  理由：① §3.7 只接管 id 集合变化，**rev 变化/重打包仍只能靠新页面**（模块表 first-load-wins），而重启臂无法
-  区分「新增行」与「同一行的 bundle 被重建」；② `applied` 只在该宿主有 hmr 行时成立，无 hmr 的宿主插件管理器
-  报 `restart-required`，此时重载是唯一出路；③ 删除会让「重启后仍见旧客户端实现」在 dev/重打包态静默回归。
-  语义重裁（只在 `restart-required` 时 arm）属官方插件管理器面，不在本仓改。
+- **重载臂退役（原「保留」裁决的反转）**：`PluginDialog.restartSourceService`（ssh 服务重启）、
+  `PluginDialog.doRestartNow`（seed restart-to-apply）、受管 gateway 的 start/restart 腿**不再 arm 任何页面级
+  收尾**（`restart-window-reload.ts` 已删，design 18 §3.6 项 8）。§3.7 接管 id 集合变化；**但 rev 变化/重打包的
+  已加载行仍只能靠新页面**（模块表 first-load-wins，内核报 `rev-conflict('restart')` 并复用旧 factory），该路径
+  现在只上报 `restart-required`、需要用户手动重载页面/重启应用，不再有自动收尾（STATUS 登记）；无 hmr 的宿主
+  插件管理器报 `restart-required` 时同理。
 - **Windows**：支持推进见 design 23（win32 验证随其 §7 矩阵实机门禁，见 STATUS）。
 
 ## 6. 相关文档

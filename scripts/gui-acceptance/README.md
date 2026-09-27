@@ -90,7 +90,7 @@ Electron 那样驱动它的 DOM。`--flavor native` 因此驱动**打包 .app �
 
 | 情形 | 处置 | 依据 |
 |---|---|---|
-| `clientGraph/graph` 冷启动期 503 | 记为**容忍**（原始文本仍入报告） | design 09 §3.2：`client/serving-gate.ts` 头注——实例未 serving 时反代拒转发，属预期 |
+| `clientGraph/graph` 冷启动期 503 | 记为**容忍**（原始文本仍入报告） | design 09 §3.2：实例未 serving 时反代拒转发，属预期 |
 | `api/host/health-events` 的 `net::ERR_ABORTED` | 记为**容忍** | 页面自身重订阅/关闭 SSE 时浏览器记客户端 abort；服务端掉线会是状态码或别的错误串，仍判失败 |
 | `[cordis-client-runner] … has no active Connection` | 记为**上游噪声**（原始文本仍入报告） | 上游 `cordis-client-runner/src/client/inspect-registry.ts` 启动期日志，非 chamber 缺陷 |
 | 首启向导（`settings.onboarding`） | `--dev` 会**走完**（优先点关闭动作，最多 4 步自动推进）；`--attach` **绝不代点**，记 INFO 并跳过设置面走查 | 推进向导会写实例自身状态：只允许发生在一次性实例上 |

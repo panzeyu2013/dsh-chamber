@@ -34,15 +34,8 @@ import {
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pulls the settings shell's SlotMap merge ('settings.section').
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
-// Page-owned restart→reload completion: add/remove arrives live (design 09 §3.7);
-// the reload stays for a REBUILT bundle's rev change and the real restart entries.
-import {
-  RESTART_RELOAD_BUDGET_MS,
-  armLocalDshRestartCompletion,
-  armWindowReloadWhenServed,
-  pollGatewayReady,
-  waitForSourceServing,
-} from '@dsh-chamber/dsh-chamber-client-core'
+// Managed restart/start readiness: the poll behind each card's success note.
+import { pollGatewayReady } from '@dsh-chamber/dsh-chamber-client-core'
 import type {
   DesktopSshSurface, SshConfigDiscovery, SshConfigHost, SshInstanceSpec, SshLogEntry, SshStatusProjection,
 } from '../global.d.ts'
@@ -307,8 +300,6 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     try {
       setConnection(await cp.createLocal())
       setLocalError(null)
-      // Starting the instance is a new host process: a plugin installed while it was stopped only shows on a window boot.
-      void armLocalDshRestartCompletion()
     } catch (err) {
       setLocalError(errorMessage(err))
     } finally {
@@ -330,8 +321,6 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       setConnection(outcome.connection)
       setReclaimOk(true)
       setLocalError(null)
-      // The reclaim starts the instance (new host process): same completion as the start button.
-      void armLocalDshRestartCompletion()
     } catch (err) {
       setReclaimError(errorMessage(err))
     } finally {
@@ -409,46 +398,25 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       setBusy(prev => ({ ...prev, [id]: false }))
     }
   }, [clearOpError])
-
-  /** systemd 起停/查询：结果投影合并进 statuses（serviceActive 随卡片显示）。Returns
-   *  whether the op succeeded — the restart leg arms the page-owned completion only on real success. */
-  const runServiceOp = useCallback(async (id: string, op: 'start_service' | 'stop_service' | 'restart_service' | 'is_active'): Promise<boolean> => {
+  /** systemd 起停/查询：结果投影合并进 statuses（serviceActive 随卡片显示）。 */
+  const runServiceOp = useCallback(async (id: string, op: 'start_service' | 'stop_service' | 'restart_service' | 'is_active'): Promise<void> => {
     const bridge = ssh()
-    if (bridge === null) return false
+    if (bridge === null) return
     setBusy(prev => ({ ...prev, [id]: true }))
     try {
       const result = await bridge[op](id)
       if ('error' in result) {
         setOpError(prev => ({ ...prev, [id]: result.error }))
-        return false
+        return
       }
       setStatuses(prev => ({ ...prev, [id]: result }))
       clearOpError(id)
-      return true
     } catch (err) {
       setOpError(prev => ({ ...prev, [id]: errorMessage(err) }))
-      return false
     } finally {
       setBusy(prev => ({ ...prev, [id]: false }))
     }
   }, [clearOpError])
-
-  /**
-   * systemd restart of a dsh source: the host comes back with a plugin set that may differ. A
-   * REMOVED/RE-ADDED id is picked up live (design 09 §3.7); a REBUILT bundle's rev change still
-   * needs a fresh page, so the page-owned completion keeps the reload for that case. Gateway
-   * sources are deliberately NOT armed — 「重启网关服务」 does not restart the instance's set.
-   */
-  const restartSourceService = useCallback(async (spec: SshInstanceSpec): Promise<void> => {
-    const restarted = await runServiceOp(spec.id, 'restart_service')
-    if (!restarted || spec.kind !== 'dsh') return
-    const sourceId = `dsh-${spec.id}`
-    void armWindowReloadWhenServed(
-      sourceId,
-      () => waitForSourceServing(sourceId, { timeoutMs: 120_000 }),
-      { budgetMs: RESTART_RELOAD_BUDGET_MS },
-    )
-  }, [runServiceOp])
 
   /**
    * 受控重启 gateway 托管的 dsh：POST …/chamber/runtime/restart —— 仅 202 接受。409 拒绝按
@@ -465,10 +433,10 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       setRestartNotes(prev => ({ ...prev, [spec.id]: value }))
     }
     try {
-      // 传输 + 202 门 + page-owned 就绪轮询只有一份实现（restart-action.ts）：409 走同一族
+      // 传输 + 202 门 + 就绪轮询只有一份实现（restart-action.ts）：409 走同一族
       // 本地化文案，超时/失败按 outcome 落到本卡结果行；POST 不自带 controller。
       const outcome = await runManagedRestart(`gateway-${spec.id}`, t)
-      if (outcome.kind === 'reloaded') {
+      if (outcome.kind === 'served') {
         note({ tone: 'ok', text: t('restartManagedDshOk') })
         // 成功刷新卡片状态投影：registry 不变，只重读各实例 phase/service 激活态。
         void loadRemote()
@@ -545,28 +513,14 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
         note({ tone: 'error', text: runtimeRefusalText(body, response.status, START_REFUSAL_KEYS, t) })
         return
       }
-      // Same page-owned completion as the restart leg: a started managed dsh boots a new plugin set.
-      let pollFailure: unknown = null
-      const outcome = await armWindowReloadWhenServed(
-        id,
-        async signal => {
-          try {
-            await pollGatewayReady(id, signal, { action: 'start' })
-            return true
-          } catch (err) {
-            pollFailure = err
-            return false
-          }
-        },
-        { budgetMs: RESTART_RELOAD_BUDGET_MS },
-      )
-      if (outcome === 'reloaded') {
+      // The 202 only accepts the start: the readiness poll decides whether the success note is honest.
+      try {
+        await pollGatewayReady(id, undefined, { action: 'start' })
         note({ tone: 'ok', text: t('startManagedDshOk') })
         void loadRemote()
         void probeGatewayRuntime(spec.id)
-      } else {
-        const cls = classifyRestartError(pollFailure
-          ?? new Error('start completion aborted before the readiness poll settled'))
+      } catch (err) {
+        const cls = classifyRestartError(err)
         // accepted-timeout = 启动已接受、仍在恢复（标记与 restart 共用）→ 本地化说明，ok 语气；
         // 其余 = 启动失败 + 轮询的英文 detail（error 语气，未本地化）。
         note(cls.kind === 'accepted-timeout'
@@ -1019,8 +973,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     return () => { clearInterval(timer) }
   }, [bridgeUp])
 
-  // 卸载即中止在飞的「启动实例」POST（它自带 controller）。重启腿没有 controller：就绪轮询的
-  // signal 属于 page-owned completion，关闭面板不取消它。
+  // 卸载即中止在飞的「启动实例」POST（它自带 controller）。重启/启动腿的就绪轮询不挂
+  // controller（pollGatewayReady 自带 120s 上限），关闭面板不取消。
   useEffect(() => {
     return () => {
       for (const controller of Object.values(startAbortRefs.current)) controller.abort()
@@ -1407,7 +1361,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                         // aria 配对：tip 存在（未配置原因 / gateway 的 systemd 重启说明）即为 aria-label，否则回退可见标签。
                         data-tip={!serviceConfigured ? t('serviceUnconfigured') : spec.kind === 'gateway' ? t('restartServiceTip') : undefined}
                         aria-label={!serviceConfigured ? t('serviceUnconfigured') : spec.kind === 'gateway' ? t('restartServiceTip') : t('restartInstance')}
-                        onClick={() => { void restartSourceService(spec) }}
+                        onClick={() => { void runServiceOp(spec.id, 'restart_service') }}
                       >
                         {spec.kind === 'gateway' ? t('restartGatewayService') : t('restartInstance')}
                       </Button>

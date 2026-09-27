@@ -21,8 +21,7 @@ import type { ShellDegradedKind } from './boot-gap.ts'
  * 入参刻意收 `string | undefined`：相位从 sidebar 聚合与 `serversPhaseRef` 镜像流入，边界做字符串判等。
  */
 export function isTerminalUnreadyPhase(phase: string | undefined): boolean {
-  // 与 sidebar 的姊妹门同词表（`shared/serving-gate.ts` 的 TERMINAL_PHASES）：托管 dsh 的
-  // stopped/restart-exhausted 同样是"再等也不会服务"；degraded 不在内（重连在途）。
+  // 托管 dsh 的 stopped/restart-exhausted 同样是"再等也不会服务"；degraded 不在内（重连在途）。
   return phase === 'error' || phase === 'stopped' || phase === 'restart-exhausted'
 }
 

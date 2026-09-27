@@ -1,7 +1,7 @@
 /**
  * The single gateway managed-dsh restart action: the connection card and the
  * plugin dialog share the ONE action and its refusal projection; the 202
- * + page-owned poll leg needs a DOM/page harness and is covered by the parity
+ * + readiness-poll leg needs a DOM/page harness and is covered by the parity
  * test's classifier lock plus the manual acceptance path.
  */
 

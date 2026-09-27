@@ -617,9 +617,8 @@ App 级失败覆盖层只在已 settle 失败时出现——"boot 不 settle"窗
 - **相位感知的就绪门（W2）**：`waitForServing` 仍以 `BOOT_TIMEOUT_MS` 为绝对上
   界，但**终态相位持续 `SERVING_TERMINAL_GRACE_MS`（1.5s） 后立即判"不可服务"**，
   不再烧满 60s。终态词汇 = `error` + `stopped`/`restart-exhausted`（快速重试耗
-  尽或托管 dsh 停机；门读**合并后**的 `phase`，本地托管停机同词，SSH 无此两相)，
-  与姊妹门 `packages/dsh-chamber-client-core/src/serving-gate.ts` 的 `TERMINAL_PHASES` 对齐；gateway 自动回
-  滚期 `restart-exhausted` 可能已在自愈，代价一次无图挂载 + ready 世代自愈。
+  尽或托管 dsh 停机；门读**合并后**的 `phase`，本地托管停机同词，SSH 无此两相)；
+  gateway 自动回滚期 `restart-exhausted` 可能已在自愈，代价一次无图挂载 + ready 世代自愈。
   **`degraded`（重连在途）与 `connecting` 一样等满预算**。
   **原始 transport 投影只决定在场与否；相位取合并后的派生 `phase`**：`undefined`
   （投影未到）不是断开事实，预算内继续等；只有真正的 `idle` 立即判不可服务——

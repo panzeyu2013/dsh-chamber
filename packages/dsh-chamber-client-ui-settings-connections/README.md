@@ -16,18 +16,6 @@ no host frames, no dsh runtime objects.
   (`dsh|gateway × ssh|http`), with label, endpoint, target/transport badges,
   phase, systemd/log projections where applicable, connect/disconnect, edit,
   delete, and a dashed add card opening the schema-driven modal form.
-- **Restart = host restart + one window reload ( design 18 §3.6 item 8)**:
-  the page-side client-plugin set takes the window's boot as its single
-  authority; **install/uninstall is the exception** — when the host hmr reports
-  `applied`, design 09 §3.7 hot-syncs it into the live ctx with no reload
-  (rev changes/repackaging and real restart entries still reload). A
-  plugin-refresh restart ends with the client-core face's page-owned completion
-  (`restart-window-reload.ts`: single-flight per source, not cancelled by a panel
-  unmount, never reloading when readiness does not arrive). Wired here: the gateway
-  card's restart/start, the plugin dialog's footer restart and every
-  restart-to-apply, the ssh card's 「重启实例」 (dsh targets only), and the local
-  card's start/reclaim. **Exception**: 「重启网关服务」 (systemd) does not change the
-  instance's plugin set and is deliberately not armed.
 
 ## Data discipline
 

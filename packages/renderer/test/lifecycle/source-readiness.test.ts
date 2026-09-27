@@ -59,8 +59,8 @@ test('serving gate: ready serves, idle is unavailable, a terminal phase fast-fai
     'wait',
     'a reconnecting source must keep its chance to serve the graph')
   assert.equal(isTerminalUnreadyPhase('error'), true)
-  // 托管运行时的终态与 sidebar 姊妹门（serving-gate.ts 的 TERMINAL_PHASES）同词汇：
-  // 再等也不会服务，必须同样快判（否则网关卡死要烧满 60s）。
+  // 托管运行时的终态（stopped/restart-exhausted）同样是"再等也不会服务"，必须同样快判
+  // （否则网关卡死要烧满 60s）。
   assert.equal(isTerminalUnreadyPhase('stopped'), true)
   assert.equal(isTerminalUnreadyPhase('restart-exhausted'), true)
   for (const phase of ['stopped', 'restart-exhausted']) {

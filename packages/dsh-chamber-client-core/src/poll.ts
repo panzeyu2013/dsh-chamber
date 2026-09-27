@@ -1,14 +1,14 @@
 /**
- * The chamber polling kernel — the single source for the package's four poll
- * loops (gateway restart/start readiness, remote dsh-runtime settle, source
- * serving gate, purge-time running-bit settle wait). It owns ONLY the loop
+ * The chamber polling kernel — the single source for the package's three poll
+ * loops (gateway restart/start readiness, remote dsh-runtime settle, purge-time
+ * running-bit settle wait). It owns ONLY the loop
  * shape (budget check, probe, verdict, wait) and the one default sleep; every
  * caller keeps its own probe, classify (done / fail / retry / stop), budget
  * (absolute `deadline` or fixed `attempts`) and timeout wording (the kernel
  * returns `undefined` on budget exhaustion). First-round semantics are explicit:
  * deadline pollers check the budget BEFORE the first probe (timeout 0 = no
- * probe, no sleep), while the serving gate probes once and only then tests its
- * deadline — `probeFirstRound` plus a deadline-checking classify keep that shape.
+ * probe, no sleep), while a probe-first caller probes once and only then tests
+ * its deadline — `probeFirstRound` plus a deadline-checking classify keep that shape.
  */
 
 /** The one default sleep of the package (deps seams still override it). */

@@ -1,6 +1,6 @@
 /** chamber client-core shared faces: the instance unary client, the chamberBridge singleton, the
- * control-plane REST client, the gateway dsh-runtime core, and the page-owned restart→reload
- * completion. The `.` face is the production-consumed surface list, not a barrel: a runtime value
+ * control-plane REST client, and the gateway dsh-runtime core.
+ * The `.` face is the production-consumed surface list, not a barrel: a runtime value
  * only a test needs is not a public face (judged by `verify-no-dead-exports`), and a new production
  * consumer adds its face here in the same change. `archive-purge.ts` belongs to the sidebar. */
 
@@ -18,10 +18,6 @@ export type * from './control-plane-client.ts'
 export { controlPlaneUrl, post, request, toConnectionSummary, toLocalWriterDiagnosis } from './control-plane-client.ts'
 export type * from './aggregate-store.ts'
 export { SOURCE_PHASE_UNKNOWN, chamberBridge, isValidProducerSourceFingerprint } from './aggregate-store.ts'
-export type * from './serving-gate.ts'
-export { waitForSourceServing } from './serving-gate.ts'
-export type * from './restart-window-reload.ts'
-export { RESTART_RELOAD_BUDGET_MS, armLocalDshRestartCompletion, armWindowReloadWhenServed } from './restart-window-reload.ts'
 export type * from './client-plugin-loader.ts'
 export { BundleLoadTimeoutError, clientPluginRowOwner, dedupeCoveredRows, loadClientPluginRows } from './client-plugin-loader.ts'
 export type * from './plugin-graph-recheck.ts'

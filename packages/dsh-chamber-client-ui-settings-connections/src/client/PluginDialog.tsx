@@ -19,14 +19,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import clsx from 'clsx'
 import { Button, IconRefreshOutlineRegular, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
-// Page-owned restart→reload completion for the ssh chamber seed's restart-to-apply step.
-// Add/remove now arrives live (design 09 §3.7); the reload is kept because a seeded host half
-// can also change an ALREADY-LOADED bundle's rev, which still needs a fresh page.
-import {
-  RESTART_RELOAD_BUDGET_MS,
-  armWindowReloadWhenServed,
-  waitForSourceServing,
-} from '@dsh-chamber/dsh-chamber-client-core'
 import type {
   ChamberHostPackageState,
   LocalPluginManifest,
@@ -284,14 +276,6 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       } else {
         setPendingRestart(false)
         onRecheckDiagnostic?.()
-        // Page-owned restart→reload completion: kept for a REBUILT bundle's rev change (a
-        // new/removed id arrives live, design 09 §3.7); must survive this dialog closing.
-        const reloadSourceId = `dsh-${sshSpec.id}`
-        void armWindowReloadWhenServed(
-          reloadSourceId,
-          () => waitForSourceServing(reloadSourceId, { timeoutMs: 120_000 }),
-          { budgetMs: RESTART_RELOAD_BUDGET_MS },
-        )
       }
     } catch (err) {
       setRestartError(errorMessage(err))

@@ -21,13 +21,13 @@
     },
     {
       "path": "packages/dsh-chamber-client-ui-settings-bridge/src/client/DshRuntimeSection.tsx",
-      "lines": 2240,
+      "lines": 2199,
       "target": 600,
       "note": "gateway + local runtime branches in one file"
     },
     {
       "path": "packages/dsh-chamber-client-ui-settings-connections/src/client/PluginDialog.tsx",
-      "lines": 986,
+      "lines": 970,
       "target": 700,
       "note": "plugin dialog controller/render mix（2026-12 P1-6 上游 parity 取件：官方 Plugins 页能力门 +27 行，实现形体与 backup/v016-alpha1-pre-reset 逐字一致；+28（2026-12 §22.4.3）能力门按 source phase 重探 + SSH live 判词（对 dsh-<id> 读 pluginInventory/list 合并展示）；重构目标 700 不变）"
     },
@@ -45,7 +45,7 @@
     },
     {
       "path": "packages/dsh-chamber-client-ui-settings-connections/src/client/ConnectionsSection.tsx",
-      "lines": 1716,
+      "lines": 1670,
       "target": 900,
       "note": "connections page + form flow"
     },

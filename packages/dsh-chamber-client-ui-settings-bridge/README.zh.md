@@ -78,18 +78,6 @@ settings 失效通知，以及真的 `useSessions` / `useWorkspaces` / `usePanel
   `window.confirm`）已移除：原生 chrome 既套不上面板的 `--dsw-alias-*` 词汇，也
   不属于这个多壳文档，而 gateway 形态根本没有原生对话框。确认由哪一层负责其余部分
   不变——本地 apply-now 事务仍由本地运行时面自己确认，面板不会二次追问。
-- **重启 = 宿主重启 + 一次窗口重载（design 18 §3.6 项 8）**：页面侧 client 插件集以窗口 boot 为唯一权威
-  （宿主图每 boot 取一次、模块表按 id first-load-wins）；**装/卸例外**——宿主 hmr 报
-  `applied` 时 design 09 §3.7 热同步即时把新行装进活 ctx（例如设置分节出现），**无需这次
-  窗口重载**；重打包（rev 变化）与真重启入口才需窗口重新 boot。
-  实现是 client-core 共享面的 **page-owned completion**
-  （`restart-window-reload.ts`：本包与 connections 包都不得互相 value-import，故共享）：
-  本段的两种重启、以及本地「立即应用」/「重试应用」/「重试恢复」三类重启事务（仅成功时），
-  按来源 key（`local` / `gateway-<id>`）单飞 arm；**面板卸载不取消**
-  （重启是宿主事实，review F6）；本地等 `/health` 的 `ready|degraded`（30s 预算），
-  gateway 由 `pollGatewayReady`（120s 内层）在 180s 页面净之内等待；预算内未就绪
-  **不重载**，以 `dshRuntimeRestartNotServed` 如实报错，绝不把失败藏进一次新 boot。
-  重载后需重新打开设置面板。
 - 配置事实留在目标宿主：无 chamber 侧持久化、无新控制面 API。
 
 

@@ -101,7 +101,6 @@ export const GROUPS = {
     'test/source-runtime/sidebar-slot-declaration.test.ts',
     'test/source-runtime/instance-mutation-values.test.ts',
     'test/source-runtime/control-plane-client.test.ts',
-    'test/source-runtime/serving-gate.test.ts',
     'test/source-runtime/source-boot-gap.test.ts',
     'test/source-runtime/gateway-runtime.test.ts',
     'test/source-runtime/gateway-runtime-poll.test.ts',
@@ -124,7 +123,6 @@ export const GROUPS = {
     // host-graph 通道分类的单一来源（各状态码/信封分支 + 逐字文案 + 两个消费点锁）。
     'test/plugin-kernel/plugin-graph-classify.test.ts',
     'test/plugin-kernel/plugin-graph-recheck.test.ts',
-    'test/plugin-kernel/restart-window-reload.test.ts',
     // panel-source.ts value-imports the dsh store engine, so this file runs through
     // the test-only vendor loader (mapping it to test/support/vendor-store-double.mjs).
     { file: 'test/plugin-kernel/panel-source.test.ts', nodeArgs: ['--import', './test/support/vendor-register.mjs'] },

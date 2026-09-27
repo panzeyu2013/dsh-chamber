@@ -177,15 +177,13 @@
 - 构建产物移出 git：clean checkout 先 `pnpm run build:artifacts`；`renderer/src/generated` 不提交。
 - 测试面精简上限：再压必落安全/fail-closed/parity/golden/CI 引用类 → 删减需显式裁决。
 - 统一名称的保留面：bundle id（T-14）、跨进程协议串、`native-shell.page-zoom.*`（T-22）、POC 标记与 `'native-shell'` 分类 id；改名须同步 T-14/T-17/T-22 与两侧测试。
-- 重启即重载：用户发起入口已接线；gateway 服务重启不接；装/卸改由 live 热同步接管（design 09 §3.7，hmr 在场时
-  插件管理器报 applied），窗口重载保留给 rev 变化/重打包——外部改 profile 的即时生效边界 = 走插件管理器/配置编辑路径
-  （原始文件编辑不在监听面内）。失效判据 = 新增**重启型**入口须接同一 completion（装/卸入口不再接）。
 - 租客 body portal 不受 stacking 约束（残余，顶层幕布不做；design 05 §4 被否方案⑤）。
 - 降级事实覆盖边界：已覆盖四座；不覆盖未激活来源、壳回收清除、单槽后报覆盖、侧栏行无动作。
 - 侧栏行悬停卡片由本仓自持（上游修竞态即退役；C15 锁形状+常数，锁红先于升级落地）。
 - 连接页手写 tooltip 未走 vendor `Tooltip`：无 `role="tooltip"` 关联；未决 = 补 ARIA 或改用 vendor。
 - api-gateway fork 未重放 rc.2 uplink 客户端半边（G43）：带 uplink 的 descriptor 同步抛错；证据 `client-uplink-rejection.test.ts`。
 - 插件管理 tab 钉在上游页结构上（design 05 §5）：上游改结构即静默回归；失效判据见 design 05 §5，pin 升级按 §7 复核。
+- 重打包（rev 变化）的已加载 client 插件无活页面切换路径：内核按 id first-load-wins 报 `rev-conflict('restart')` 并复用旧 factory，`restart-required` 只是事实；自动窗口重载已随 hot-reload 修复退役（`restart-window-reload.ts` 删除），需要用户手动重载页面/重启应用（design 09 §3.7/§5、design 18 §3.6 项 8）。
 - live 热同步的跨来源 chunk-owner 撤销边界：页面级 `graphRows` 按 id 共享，只有 factory owner 的 remove 才撤销描述符（非 owner 保留）；**owner 自身移除而另一来源仍挂载同 id** 时描述符仍会被删（`live-graph.ts` 的 `ownsChunkDescriptor`；design 09 §3.7 ⑥）。
 - `/plugins/events` 属主是上游 HMR 宿主行（cordis.patch.yml 原文 always mounted，仅 rebuild watcher 为 dev 工具；design 09 §5）：端点被移除/改名即 live 热同步静默退回 boot 现状；失效判据 = pin 升级按 §7 复验该路由与帧形状（registry `mirror.dsh-client-hmr-events-endpoint`）。
 - git 客户端与宿主错误码重叠是有意例外（design 08；`host-client-lockstep.test.ts` 钉死）。

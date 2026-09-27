@@ -341,33 +341,28 @@ chamber-settings.json，非秘密）：
    重读 DSH_HOME profiles + `--patch` overlay（`dsh plugin` 装/删的插件生效）；前端
    N-ctx shell 经 WS 断开重连重新 boot（design 09 每实例 boot graph 重新合并）。
    **互斥与门控**：与健康状态机 `restarting` 单飞互斥；applying 期间禁用；状态行
-   「重启 dsh…」→「已重启」（就绪探测通过，随即窗口重载，见下；本动作是真重启入口，
-   报 `applied` 的装/卸已由 design 09 §3.7 热同步接管、不需要这次重载）/
+   「重启 dsh…」→「已重启」/
    诚实失败文案（附 host-logs 入口）。失败不回滚、不改指针——重启前后是同一棵激活树，
    仅进程级刷新。
    per-server：local = `restartLocal()` 事务（§9.3，与健康重启单飞行串行化）；
    gateway = `POST /chamber/runtime/restart`（202 + status 轮询，§9.3）。远端重启窗口内
    隧道 phase 保持 `ready`（隧道未断）、实例反代对目标连接拒绝返回显式 503（诚实失败，
    03 §3），会话/侧边栏短时错误属预期。
-   **窗口随动作重载一次**：宿主侧插件行每次 boot 重新确定（上）；页面侧 client
-   插件集仍以窗口 boot 为**唯一权威**（宿主图每 boot 取一次、`dsh.client` bundle 那时
-   执行；模块表按 id first-load-wins，design 09 §3.2/§3.5），但 boot 之后的**新装/卸载
-   已由 design 09 §3.7 活实例热同步接管**（宿主 hmr 报 `application:'applied'` 时即时挂/卸该行，
-   **无需窗口重载**）；**重打包（rev 变化）与真正执行重启的入口仍需重载**——前者同 id
-   异 rev 只报 `restart-required`、不换 entry（design 09 §3.7），后者重启同时换掉已加载实现与
-   运行时配对，因此**这些入口的重启动作** = 就绪探测通过 **+ 一次窗口重载**，重载后需
-   重新打开设置面板。
-   **实现 = 一个 page-owned completion**（sidebar 共享面
-   `restart-window-reload.ts`，两个客户端插件都不得互相 value-import）：按来源 key
-   （`local` / `gateway-<id>` / `dsh-<id>`）单飞；**发起面板卸载不取消**（重启是宿主
-   事实，完成动作不能随按钮消失）；就绪预算内未恢复则**不重载**并如实报错；
-   就绪 waiter 由调用方提供（本地 `/health` 的 `ready|degraded`；gateway
-   `pollGatewayReady`；ssh `waitForSourceServing`）。**接线范围**：本段「重启 dsh」
-   两种形态、本地「立即应用」/「重试应用」/「重试恢复」三类重启事务（仅成功时 arm）、
-   本地卡「启动」/写者接管、gateway 卡「重启 dsh」/「启动实例」、插件对话框 footer 重启
-   与 restart-to-apply（行删/加/导入/撤销/批量应用——**只在 `restarted`/换 rev 时 arm**；
-   报 `applied` 的装/卸已由 design 09 §3.7 热同步接管、不再接重载）、ssh 卡
-   「重启实例」（仅 dsh 目标）；「重启网关服务」（systemd）不改变实例插件集，**不接**。
+   **完成确认（不重载窗口）**：重启动作不再附带窗口重载。local 腿在事务化
+   `restartLocal()` 返回后即报结果（该事务 resolve ≠ success——窗口耗尽落
+   `restart-exhausted` 也照样 resolve，§9.3；运行时状态面本身如实呈现）；gateway 腿保留
+   `pollGatewayReady`（1s/120s）的 202 + status 轮询，超时/失败按分类器如实投影。
+   **窗口重载退役**：此前「重启 = 宿主重启 + 一次窗口重载」的 page-owned completion
+   （`restart-window-reload.ts`，按来源单飞、卸载不取消）已随客户端插件热重载的直接修复
+   整体移除：**新装/卸载**由 design 09 §3.7 的活实例热同步接管（宿主 hmr 报 `applied` 即把该行
+   挂进/移出活 ctx），重启入口不再动页面；**已加载 id 的重建（rev 变化）仍换不掉实现**
+   （模块表按 id first-load-wins），`restart-required` 只上报事实——这条路径需要用户**手动重载
+   页面/重启应用**，不再有自动收尾（STATUS 登记）。
+   **接线范围**：本段「重启 dsh」两种形态、gateway 卡「重启 dsh」/「启动实例」、插件对话框
+   footer 重启与全部 restart-to-apply、ssh 卡「重启实例」（仅 dsh 目标）都不再有任何页面级
+   收尾（gateway 两态仍按 `pollGatewayReady` 确认）；本地卡「启动」/写者接管、本地
+   「立即应用」/「重试应用」/「重试恢复」只执行事务本身；「重启网关服务」（systemd）
+   不改变实例插件集，**不接**。
    **被拒替代**：①只重挂该来源的页内壳——换不掉**已加载** id 的实现（模块表按 id
    first-load-wins，插件集与各 id 的实现都不会变），也覆盖不了 rev 变化：宿主行 rev 是文件
    metadata hash（`sha1(mtimeMs,ctimeMs,size)`，重启不改文件即不变，故重启本身不产生假
@@ -375,8 +370,8 @@ chamber-settings.json，非秘密）：
    重载才能换掉旧实现；②单插件热替换（vendor 已验证的
    `invalidate → 装载 → registry-first teardown → 清样式 → entry.refresh()` 顺序）——
    保住来源壳状态，但要在 chamber 侧重实现 HMR 换血纪律（样式重复注入、依赖闭包、
-   跨来源同 id 共享），成本风险远超收益，只登记为将来可选；③不重载只提示——半自动，
-   用户仍须手动刷新，主诉未解。
+   跨来源同 id 共享），成本风险远超收益，只登记为将来可选；③「不重载只提示」当时被拒
+   （半自动，用户仍须手动刷新）——客户端插件热重载直接修复后成为现行形态。
 
 **B. connections 本地实例卡片**：加一行/chip「dsh vX」，读同一 resolve 结果，与 settings
 块同源（桥未就绪时回落 `window.dshChamber.dshVersion`）。

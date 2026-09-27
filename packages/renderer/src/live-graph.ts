@@ -14,7 +14,7 @@
  * SCOPE (v1): row ADD/REMOVE by id. A rev change for a mounted id is a fact, not
  * a re-mount: the page-level module table is first-load-wins per id, so the panel
  * reports `restart-required` (or `instance-version-conflict` across sources) and
- * waits for a window reload. Rebuilt frames need no handling: upstream's
+ * waits for a MANUAL page reload (the automatic restart→reload completion is retired). Rebuilt frames need no handling: upstream's
  * `rebuilt()` recomposes and fires the graph listeners, so a fresh graph frame
  * always follows.
  *

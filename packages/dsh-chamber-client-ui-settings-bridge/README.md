@@ -115,23 +115,6 @@ from retention reclaim); closing the panel releases both guarantees.
   confirms an action is otherwise unchanged — the local apply-now transaction is
   still confirmed inside the local runtime surface, so the panel never
   double-asks.
-- **Restart = host restart + one window reload (design 18 §3.6 item 8)**: the page-side
-  client-plugin set takes the window's boot as its single authority (the host graph
-  is fetched once per boot and the module table is first-load-wins per plugin id);
-  **install/uninstall is the exception** — when the host hmr reports `applied`,
-  design 09 §3.7 hot-syncs the new row into the live ctx (a settings section, e.g.),
-  with no window reload; repackaging (rev changes) and real restart entries still
-  need the boot. The implementation is the client-core face's **page-owned
-  completion** (`restart-window-reload.ts` — this package and the connections
-  package must not value-import each other): this section's two restart shapes —
-  plus the local "apply now" / "retry apply" / "retry restore" transactions (armed
-  only on success) — arm it per source key (`local` / `gateway-<id>`); **a panel
-  unmount does not cancel
-  it** (the restart is a host fact, review F6); local waits for `/health`
-  `ready|degraded` (30s budget) and the gateway leg waits inside the 180s page
-  net via `pollGatewayReady` (120s inner). A restart that never becomes ready is
-  NOT reloaded onto — it reports `dshRuntimeRestartNotServed` honestly instead.
-  Reopen Settings afterwards.
 - Config facts stay on the target host: no chamber-side persistence, no new
   control-plane API.
 

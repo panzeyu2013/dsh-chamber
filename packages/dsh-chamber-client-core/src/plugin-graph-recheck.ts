@@ -6,7 +6,7 @@
  * `instance-version-conflict`) are never touched — they are written by the shell boot
  * and (for add/remove passes) by the live graph subscriber (`renderer/src/live-graph.ts`,
  * design 09 §3.7), both under their own provenance fences; a live `restart-required`
- * therefore keeps the recheck from healing the slot until a window reload.
+ * therefore keeps the recheck from healing the slot until a manual page reload.
  * Writes only on a verdict STATE change (message-only drift → no ping-pong),
  * re-reads the store at write time (a fresher boot record is never clobbered),
  * and treats a 503 `instance_unavailable` as "cannot judge". Verdict
