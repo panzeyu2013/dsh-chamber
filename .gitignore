@@ -106,6 +106,3 @@ packages/gateway/host-packages/
 packages/desktop/resources/primary-runtime/**
 !packages/desktop/resources/primary-runtime/README.md
 release/primary-runtime-cache/**
-
-# Scratch audit reports (read-only review output; never committed)
-.audit/

@@ -27,7 +27,7 @@
  */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { pathToFileURL } from 'node:url'
 
 /** Electron mac 腿产物（electron-builder 缺省命名：productName-version-arch[-mac].ext）。 */
 export function electronMacArtifacts(version) {

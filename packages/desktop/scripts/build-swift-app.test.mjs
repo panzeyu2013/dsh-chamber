@@ -95,8 +95,6 @@ import {
   assertDmgLayoutFacts,
   dsStoreHasIlocEntry,
   DMG_ICON_SIZE,
-  DMG_WINDOW,
-  DMG_WINDOW_ORIGIN,
   findSparkleFramework,
   shouldCopyWebDistEntry,
   sparkleFeedChannel,

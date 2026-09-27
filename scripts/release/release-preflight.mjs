@@ -25,7 +25,7 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseReleaseVersion } from './release-semver.mjs'

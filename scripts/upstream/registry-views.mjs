@@ -16,7 +16,7 @@
  *   node scripts/upstream/registry-views.mjs --write   # 写 registry canonical + 文档块
  */
 import { readFileSync, realpathSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { CLASSIFIED_TYPES, REGISTRY_PATH, loadRegistry, renderRegistryText, validateRegistry } from './registry.mjs'
 
