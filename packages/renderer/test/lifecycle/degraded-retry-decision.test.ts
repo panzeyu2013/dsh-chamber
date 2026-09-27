@@ -10,6 +10,7 @@ import assert from 'node:assert/strict'
 
 import { dispatchSource, epochOf, reincarnate } from '../../../../packages/dsh-stream-state/src/index.ts'
 import type { SourceEnv, SourceIncarnation, SourceRegistry } from '../../../../packages/dsh-stream-state/src/index.ts'
+import type { ShellRetryDispatch } from '../../src/source-readiness.ts'
 
 const V: SourceIncarnation = { sourceId: 'ssh-a', fingerprint: 'fp' }
 // Retryability is the App's table (isRetryableBootGap); here only 'graph-unavailable'
@@ -86,6 +87,32 @@ test('the mark of a retired source is dropped, not carried', () => {
   assert.ok(epoch !== undefined)
   const forgotten = dispatchSource(marked, V.sourceId, { kind: 'retryForgotten', epoch }, ENV).registry
   assert.equal(forgotten[V.sourceId]?.state.degradedRetried, false)
+})
+
+test('planDegradedSelfHeal reads the one-shot effect from the dispatch that emits it (the App path)', async () => {
+  // The hook's degraded feed, driven over the REAL registry: the effect must be returned by the
+  // SAME dispatch that the container decides on. The pre-fix shape (dispatch the fact, discard
+  // the effect, re-dispatch it in a second pass) returns [] and loses the re-boot silently —
+  // this case fails on that shape, which no truth-table test could see.
+  const { planDegradedSelfHeal } = await import('../../src/source-readiness.ts')
+  let registry = reincarnate({}, V)
+  const dispatch: ShellRetryDispatch = (sourceId, event) => {
+    const epoch = epochOf(registry, sourceId)
+    if (epoch === undefined) return undefined
+    const reduction = dispatchSource(registry, sourceId, { ...event, epoch }, ENV)
+    registry = reduction.registry
+    return reduction.effects[0]?.effect
+  }
+  const facts = {
+    servers: [{ id: V.sourceId, phase: 'ready' }],
+    shellStates: { [V.sourceId]: { degraded: { kind: 'graph-unavailable' } } },
+    dispatch,
+  } as const
+  assert.deepEqual(planDegradedSelfHeal(facts), [V.sourceId])
+  assert.equal(registry[V.sourceId]?.state.retryToken, 1, 'one re-boot per ready epoch')
+  assert.deepEqual(planDegradedSelfHeal(facts), [],
+    'the emitting reduction consumed the mark: a second pass must NOT be the place the effect is read')
+  assert.equal(registry[V.sourceId]?.state.retryToken, 1, 'and no second re-boot')
 })
 
 test('the self-heal effect is ONE-SHOT: it is observable only on the bootSettled dispatch itself', () => {

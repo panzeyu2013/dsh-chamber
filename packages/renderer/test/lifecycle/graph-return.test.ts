@@ -138,14 +138,21 @@ test('wiring lockstep: App delegates to the hook, the hook drives the planner an
   assert.match(hook, /for \(const \{ id \} of plan\.reboots\) next\[id\] = \(next\[id\] \?\? 0\) \+ 1/)
   // The cadence is time-driven with the shared constant (the ssh restart does not flap the phase).
   assert.match(hook, /setInterval\(graphReturnPass, GRAPH_RETURN_PROBE_INTERVAL_MS\)/)
-  // The degraded self-heal effect is ONE-SHOT: it must be read from the dispatch that emits it.
-  assert.match(hook, /const effect = dispatchLifecycle\(instanceId, \{\s*kind: 'bootSettled'/)
-  assert.match(hook, /if \(effect\?\.e === 'degradedSelfHeal'\) retry\.push\(instanceId\)/)
-  const bootSettledDispatches = (hook.match(/kind: 'bootSettled'/g) ?? []).length
-  assert.equal(bootSettledDispatches, 1,
+  // The degraded feed delegates to the pure planner that owns the dispatch sequence.
+  assert.match(hook, /planDegradedSelfHeal\(\{ servers, shellStates, dispatch: dispatchLifecycle \}\)/)
+  // The self-heal effect is ONE-SHOT: it must be read from the dispatch that emits it. The
+  // behavioral proof lives in degraded-retry-decision.test.ts (real registry); this lock keeps
+  // the two-pass shape from reappearing in the module that would silently lose the re-boot.
+  const readiness = stripComments(await readFile(new URL('../../src/source-readiness.ts', import.meta.url), 'utf8'))
+  assert.match(readiness, /const effect = facts\.dispatch\(sourceId, \{\s*kind: 'bootSettled',\s*outcome: 'degraded',\s*gapKind: state\.degraded\.kind,\s*\}\)/)
+  assert.match(readiness, /if \(effect\?\.e === 'degradedSelfHeal'\) retry\.push\(sourceId\)/)
+  // (Only the CALL counts: the event union in the type above carries the same literal.)
+  const dispatchCalls = /facts\.dispatch\(sourceId, \{\s*kind: 'bootSettled'/g
+  assert.equal((readiness.match(dispatchCalls) ?? []).length, 1,
     'a second bootSettled dispatch would return no effect (the reducer marks in the same reduction) and lose the self-heal')
-  // Non-vacuity: the count above is what discriminates the old two-pass shape.
-  const duplicated = hook.replace("kind: 'phaseChanged'", "kind: 'phaseChanged', phase: 'ready' })\n    dispatchLifecycle('x', { kind: 'bootSettled'")
-  assert.equal((duplicated.match(/kind: 'bootSettled'/g) ?? []).length, 2,
+  // Non-vacuity: that count is what discriminates the old two-pass shape.
+  const duplicated = readiness.replace("kind: 'phaseChanged'",
+    "kind: 'phaseChanged', phase: 'ready' })\n  facts.dispatch(sourceId, { kind: 'bootSettled'")
+  assert.equal((duplicated.match(dispatchCalls) ?? []).length, 2,
     'the lock would fail on a re-dispatch, which is exactly the regression it exists for')
 })

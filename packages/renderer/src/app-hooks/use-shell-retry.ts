@@ -24,17 +24,9 @@ import {
   type ChamberServerAggregate,
   type PluginGraphDiagnostic,
 } from '@dsh-chamber/dsh-chamber-client-core'
-import type { SourceEvent } from '@dsh-chamber/dsh-stream-state'
 import { GRAPH_RETURN_PROBE_INTERVAL_MS, planGraphReturn } from '../graph-return.ts'
+import { planDegradedSelfHeal, type ShellRetryDispatch } from '../source-readiness.ts'
 import type { ShellState } from '../shell.ts'
-
-/** Container dispatch (the App's `dispatchLifecycle`): only the returned effect's `e`
- *  discriminant (`degradedSelfHeal`) is read here, so the dependency needs no more. */
-export type ShellRetryDispatch = (
-  viewId: string,
-  event: SourceEvent,
-  capturedEpoch?: number,
-) => { readonly e?: string } | undefined
 
 export interface ShellRetryDeps {
   /** The servers projection: source id + phase (the only field read here). */
@@ -53,20 +45,9 @@ export function useShellRetry(deps: ShellRetryDeps): void {
   const { servers, shellStates, pluginDiagnostics, dispatchLifecycle, setRetryTokens } = deps
 
   useEffect(() => {
-    // Feed the facts into the container in ONE pass: `phaseChanged` first, then the degraded
-    // verdict whose reduction is the self-heal decision itself. The effect must be read from this
-    // dispatch (see ① above) — the container's mark makes a second identical dispatch a no-op.
-    const retry: string[] = []
-    for (const server of servers) dispatchLifecycle(server.id, { kind: 'phaseChanged', phase: server.phase })
-    for (const [instanceId, state] of Object.entries(shellStates)) {
-      if (state.degraded === null) continue
-      const effect = dispatchLifecycle(instanceId, {
-        kind: 'bootSettled',
-        outcome: 'degraded',
-        gapKind: state.degraded.kind,
-      })
-      if (effect?.e === 'degradedSelfHeal') retry.push(instanceId)
-    }
+    // The feed (and the container's one-shot effect read) lives in the purely testable
+    // planDegradedSelfHeal: this effect only supplies the facts and the sink.
+    const retry = planDegradedSelfHeal({ servers, shellStates, dispatch: dispatchLifecycle })
     if (retry.length === 0) return
     console.warn(`[app] degraded shell(s) re-booting after the source became ready: ${retry.join(', ')}`)
     setRetryTokens(prev => {

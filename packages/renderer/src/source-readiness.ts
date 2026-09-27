@@ -6,6 +6,8 @@
  *     `connecting`/`degraded`（恢复中）在预算内继续等。
  *  3. `isDeferredReclaimDue`：推迟挂载的回收裁决（只接管从未 settle 的挂载，绝不碰设置面板正在编辑的来源）。
  *  4. `graphGapKindFor`：图通道失败的上浮边界（非本地 `not-injected` 豁免，本地收敛为 `local-graph-not-injected`）。
+ *  5. `planDegradedSelfHeal`：降级自愈的事实喂入——判定在 `dsh-stream-state` 容器里（`degradedSelfHeal`
+ *     是它的 typed effect），本函数只按 **容器的真实时序** 派发（先相位、后降级结论）并读回该 effect。
  *
  * 叶子（零运行时 import，kind 为 `import type`）；只输出决策与结构化事实，文案走 locales.ts。
  */
@@ -130,4 +132,41 @@ export function isDeferredReclaimDue(input: {
  */
 export function shouldAnnounceRetryQueue(queuedBehindPredecessor: boolean, settled: boolean): boolean {
   return queuedBehindPredecessor && !settled
+}
+
+/** 容器派发的最窄切面：事件进、typed effect（若有）出。结构化而不 import 容器包，保持本模块是叶子。 */
+export type ShellRetryDispatch = (
+  sourceId: string,
+  event:
+    | { readonly kind: 'phaseChanged'; readonly phase: string | undefined }
+    | { readonly kind: 'bootSettled'; readonly outcome: 'degraded'; readonly gapKind: ShellDegradedKind },
+) => { readonly e?: string } | undefined
+
+/** 降级自愈喂入所需的事实：来源投影（id + 相位）+ 已 settle 的壳（只读降级缺口）。 */
+export interface DegradedSelfHealFacts {
+  servers: readonly { readonly id: string; readonly phase: string | undefined }[]
+  shellStates: Readonly<Record<string, { readonly degraded: { readonly kind: ShellDegradedKind } | null }>>
+  dispatch: ShellRetryDispatch
+}
+
+/**
+ * 降级自愈的一次喂入（App 的 ① 路）：给容器喂来源相位与降级结论，读回它的 `degradedSelfHeal`。
+ *
+ * **effect 是一次性的**：发 `degradedSelfHeal` 的同一次归约就置上 `degradedRetried`（source.ts
+ * `bootSettled`），所以必须在这一次派发上读回——先派发后丢弃、再派发同一事实的"两次循环"拿到的是空
+ * effects，会静默丢掉重挂。返回需要重挂的实例 id（每个 ready 世代至多一次，由容器持有该上界）。
+ */
+export function planDegradedSelfHeal(facts: DegradedSelfHealFacts): string[] {
+  for (const server of facts.servers) facts.dispatch(server.id, { kind: 'phaseChanged', phase: server.phase })
+  const retry: string[] = []
+  for (const [sourceId, state] of Object.entries(facts.shellStates)) {
+    if (state.degraded === null) continue
+    const effect = facts.dispatch(sourceId, {
+      kind: 'bootSettled',
+      outcome: 'degraded',
+      gapKind: state.degraded.kind,
+    })
+    if (effect?.e === 'degradedSelfHeal') retry.push(sourceId)
+  }
+  return retry
 }
