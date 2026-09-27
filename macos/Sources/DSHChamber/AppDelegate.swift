@@ -1690,9 +1690,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         guard statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
-            let icon = NSApp.applicationIconImage
-            icon?.size = NSSize(width: 18, height: 18)
-            button.image = icon
+            // 自持 18pt 图：不改写共享的 applicationIconImage（原因见 StatusItemIcon 的注释）。
+            button.image = StatusItemIcon.make(from: NSApp.applicationIconImage)
             button.toolTip = "dsh-chamber"
         }
         let menu = NSMenu()
