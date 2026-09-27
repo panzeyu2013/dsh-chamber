@@ -364,8 +364,7 @@ chamber-settings.json，非秘密）：
    与全部 restart-to-apply（行删/加/导入/撤销/批量应用，按 `restarted` 判定）、ssh 卡
    「重启实例」（仅 dsh 目标）；「重启网关服务」（systemd）不改变实例插件集，**不接**。
    **被拒替代**：①只重挂该来源的页内壳——换不掉**已加载** id 的实现（模块表按 id
-   first-load-wins），且 bundle rev 每进程 nonce 会让旧行冒 `restart-required` 假警报
-   （审计 F5 同类）；②单插件热替换（vendor 已验证的
+   first-load-wins，插件集与各 id 的实现都不会变）；②单插件热替换（vendor 已验证的
    `invalidate → 装载 → registry-first teardown → 清样式 → entry.refresh()` 顺序）——
    保住来源壳状态，但要在 chamber 侧重实现 HMR 换血纪律（样式重复注入、依赖闭包、
    跨来源同 id 共享），成本风险远超收益，只登记为将来可选；③不重载只提示——半自动，

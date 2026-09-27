@@ -96,7 +96,7 @@
 
 import { createHash } from 'node:crypto'
 import {
-  closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
+  closeSync, existsSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
 } from 'node:fs'
 import { dirname, join, relative, sep } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -167,6 +167,9 @@ const COVERED_SENTINELS = [
   '@deepseek-ai/dsh-client-modules',
   '@deepseek-ai/dsh-client-ui-renderer',
   '@deepseek-ai/dsh-client-hmr',
+  // desktop-only account family: a covered SKIP — deleting this id re-arms its
+  // body-level onboarding takeover (design 09 §3.5 有意跳过名单③).
+  '@deepseek-ai/dsh-client-ui-settings-account',
   // D2: the official open-in CLIENT row is deliberately UNCOVERED (it loads from
   // the host graph for its file-level seats), so it must not be sentineled here —
   // its chamber replacement below is the surface this sentinel protects.
