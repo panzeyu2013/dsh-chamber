@@ -23,7 +23,7 @@
  * 结算点记忆随会话身份作废），notified/outcomes 保持 durable；forgetSession 对单会话
  * 执行同一纪律（B4-2：goalKnown 不得在会话 churn 下泄漏）；forget/prune 收敛全部
  * **8 张 per-source 表**（durable + 易失）。页代 token 的单源是 boot-token.ts：
- * 本账本不保留副本、不参与来源收敛（见 {@link CompleteLedgerOptions.bootToken}）。
+ * 本账本不读、不存、不参与来源收敛（兼容入参已在 beta 线退役，别再加回）。
  *
  * 加载期卫生（§3.5）：boot='fresh'（新进程/新窗口）丢弃全部 pending 并 loud；
  * boot='same'（reload）保留 pending，但超过 PENDING_MAX_AGE_MS 的条目丢弃并 loud
@@ -131,13 +131,6 @@ export interface CompleteLedgerOptions {
   outcomes?: GoalOutcomeTable
   /** same = reload（保留 pending）；fresh = 新进程/新窗口（丢弃 pending 并 loud）。缺省 same。 */
   boot?: 'same' | 'fresh'
-  /**
-   * sessionStorage 页代 token（**兼容入参，账本不再保留副本**）：页代 token 的单源
-   * 是 boot-token.ts（App 的 notificationsBoot.boot.token，经 completionIdentity 进观测层
-   * identity）；本账本既不读也不存它，保留该键只为 App 调用点继续按原签名传入
-   * （App 不在本次改动范围）。新调用点无需提供。
-   */
-  bootToken?: string
   /** 年龄判定基准（测试注入；缺省 Date.now()）。 */
   now?: number
   /** 卫生上界覆盖（测试注入；非正数回落到 PENDING_MAX_AGE_MS）。 */

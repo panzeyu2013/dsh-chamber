@@ -337,10 +337,10 @@ test('a same-page boot keeps fresh pending and drops stale/malformed entries lou
 })
 
 test('REGRESSION(P2 dead state): the ledger keeps no bootToken copy (single source is boot-token.ts)', () => {
-  // bootToken 生产零读：页代 token 的单源是 boot-token.ts（经 App 的
-  // notificationsBoot.boot.token 进观测层 identity）。兼容入参仍被接受（App 调用点不在本次
-  // 改动范围），但账本状态面不再保留副本——回退该字段即红。
-  const ledger = createCompleteLedger(undefined, { bootToken: 'page-token-1', boot: 'same' })
+  // 页代 token 的单源是 boot-token.ts（经 App 的 notificationsBoot.boot.token 进观测层
+  // identity）。账本既不读也不存它——兼容入参本身也已退役（见 CompleteLedgerOptions 的历史），
+  // 状态面回退该字段即红。
+  const ledger = createCompleteLedger(undefined, { boot: 'same' })
   assert.equal('bootToken' in ledger.state(), false, '状态面不再保留 bootToken 副本')
 })
 
