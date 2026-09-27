@@ -9,7 +9,9 @@
  * reports residency, and a drifted liveness shape refuses the read (a dropped entry would
  * fail OPEN); the two official enumerations are UNIONed by id — dropping a record is the
  * unsafe direction; `hasStoredContent` fails closed to TRUE on every `stat` error except
- * the official not-found carrier.
+ * the official not-found carrier; the archived-set write is READ BACK immediately
+ * (object replaced / set as intended / no foreign field touched) and refuses the run
+ * with `registry-write-mismatch` when the private `setState` seam drifts.
  */
 
 import { rm, rmdir, lstat, readdir } from 'node:fs/promises'
@@ -38,6 +40,23 @@ import {
 
 export { BUSY_MESSAGE, assertHostSurface } from './binding-parts.ts'
 export type { HostCtxServices } from './binding-parts.ts'
+
+/**
+ * 写后读回（I-5）: does the live `archivedSessionIds` the registry now carries equal the
+ * intended set? Duplicate- and order-insensitive (a patch-style seam may reorder), but a
+ * missing/extra id or a duplicated id is a mismatch — the sweep's member accounting would
+ * silently diverge from what this domain believes it wrote.
+ */
+function sameIdSet(after: readonly unknown[], next: readonly string[]): boolean {
+  if (after.length !== next.length) return false
+  const wanted = new Set(next)
+  const seen = new Set<string>()
+  for (const value of after) {
+    if (typeof value !== 'string' || !wanted.has(value) || seen.has(value)) return false
+    seen.add(value)
+  }
+  return true
+}
 
 export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
   const registry = ctx.workspaceRegistry
@@ -291,6 +310,33 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
         // rebuilding a field list silently drops whatever the pin adds (design 24 §4 step 9).
         const live = reg.state as Record<string, unknown>
         await reg.setState!({ ...live, archivedSessionIds: next })
+        // WRITE-VERIFY (design 24 §11, I-5): the three private faces below are the seam this
+        // domain cannot contract-check, so the RESULT of the write is checked instead. Any
+        // mismatch aborts the run — continuing on an unverified write could clear member
+        // bookkeeping for content that still exists, or leave the live global corrupted.
+        const after = reg.state as Record<string, unknown> | undefined
+        if (after === undefined || after === live) {
+          throw new ArchiveCleanupError(
+            'registry-write-mismatch',
+            'archiveCleanup: workspaceRegistry.setState did not replace the live global — refusing to continue on the unverified archived-set write',
+          )
+        }
+        const afterArchived = after.archivedSessionIds
+        if (!Array.isArray(afterArchived) || !sameIdSet(afterArchived as readonly unknown[], next)) {
+          throw new ArchiveCleanupError(
+            'registry-write-mismatch',
+            'archiveCleanup: workspaceRegistry.setState wrote a different archivedSessionIds set than requested — refusing to continue',
+          )
+        }
+        for (const key of Object.keys(live)) {
+          if (key === 'archivedSessionIds') continue
+          if (after[key] !== live[key]) {
+            throw new ArchiveCleanupError(
+              'registry-write-mismatch',
+              `archiveCleanup: workspaceRegistry.setState changed the field "${key}" that this domain does not own — refusing to continue`,
+            )
+          }
+        }
       }
       try {
         // Run INSIDE the official mutation chain — serialized against every

@@ -159,6 +159,11 @@ export type ArchiveCleanupDomainResult<T> =
 /** Stable action error code (serialized over the wire):
  *  `busy` — another purge is in flight (host single-flight);
  *  `registry-unreadable` — a precondition read failed, nothing mutated;
+ *  `registry-write-mismatch` — the archived-set write did not land as requested
+ *  (seam drift). The BINDING refuses that run on the unverified write; the purge
+ *  path catches it and remaps to the run-level `archive-set` error below (every
+ *  listed id stays archived, the next purge converges), so this code itself is a
+ *  binding-layer diagnostic, never a client-visible result code;
  *  `host-binding-pending` — a host capability is not wired, domain disabled;
  *  `purge-capacity` / `invalid-request` — the candidate set or a filter
  *  exceeded MAX_PURGE_SESSIONS (nothing mutated).
