@@ -4,7 +4,6 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { basename, resolve } from 'node:path'
 import {
   GitWorktreeError,
   assertSafeGitArgv,

@@ -295,10 +295,9 @@ function assertCoveredFactoryLockstep(): void {
 }
 
 /**
- * Deferred-roster lockstep guard: `DEFERRED_ROWS` and `DEFERRED_EXTRA_ROW_IDS` (the list
- * host-graph.ts matches a third-party row's `external` requests against) must name exactly
- * the same ids — otherwise the `external` diagnostic goes blind to a deferred family.
- * Runs inside apply() so a drift fails this entry loudly.
+ * Deferred-roster lockstep guard: `DEFERRED_ROWS` and the shared `DEFERRED_EXTRA_ROW_IDS`
+ * roster must name exactly the same ids, so the test-visible roster cannot drift from what
+ * actually mounts. Runs inside apply() so a drift fails this entry loudly.
  */
 function assertDeferredRosterLockstep(): void {
   const rosterIds = DEFERRED_ROWS.map(([id]) => id)

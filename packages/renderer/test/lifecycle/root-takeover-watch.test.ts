@@ -413,7 +413,7 @@ test('install: a throwing release write is reported as not released, and the ret
   assert.equal(fake.element.inert, false)
 })
 
-test('install: the disposer unsubscribes and clears the pending timer; a missing #root is a no-op', (t) => {
+test('install: the disposer unsubscribes and makes any pending wake-up a no-op; a missing #root is a no-op', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
   const fake = fakeRoot({ opacity: '0' })
   const dom = installDom(t, fake.element)

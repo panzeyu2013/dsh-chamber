@@ -160,7 +160,8 @@ export interface RootTakeoverFacts {
   opacity: string
   /** Whether the root was inert at detection (read before the release rewrites it). */
   inert: boolean
-  /** `held`: the grace elapsed; `flapping`: the rolling window filled first. */
+  /** 由 heldMs 与 grace 推出（非触发分支本身）：cooldown 推迟的报告可能落在任一侧。
+   *  `held`: heldMs ≥ grace；`flapping`: heldMs < grace。纯诊断，勿据此判定真实触发路径。 */
   trigger: 'held' | 'flapping'
   /** Whether this report also released the hold (false = spent budget, or a rejected write). */
   released: boolean
@@ -196,7 +197,7 @@ export function installRootTakeoverWatch(options: RootTakeoverWatchOptions): () 
     if (disposed) return
     const previous = state
     const at = monotonicNow()
-    const observation: RootTakeoverObservation = { opacity: String(target.style.opacity ?? ''), at }
+    const observation: RootTakeoverObservation = { opacity: target.style.opacity, at }
     const step = rootTakeoverStep(previous, observation)
     state = step.state
     if (step.actions.length > 0) {

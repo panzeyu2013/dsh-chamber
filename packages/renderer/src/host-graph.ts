@@ -19,9 +19,6 @@ import { graphGapKindFor, type GraphGapKind } from './source-readiness.ts'
 // and plain-node tests must resolve the real module without a bundler.
 // Keep the local parse LOOSER than upstream's — see the fetchHostGraph comment.
 import { optionalStringArray, stripClientSuffix } from '../../../vendor/harness-packages/@deepseek-ai/dsh-client-modules/src/client/manifest.ts'
-// Deferred-covered roster, shared with the composite entry (which asserts its
-// roster against it at apply time): covered ids whose module-table factory
-// exists only AFTER the boot settled.
 
 import type { PluginGraphDiagnostic, PluginGraphDiagnosticState } from '@dsh-chamber/dsh-chamber-client-core'
 import { postUnary, type UnaryPostOutcome } from '@dsh-chamber/dsh-chamber-client-core/wire-common'

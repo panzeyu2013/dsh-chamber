@@ -454,6 +454,7 @@ test('no platform seed word is a covered id without a composite factory (predica
   const root = join(import.meta.dirname, '..', '..', '..', '..')
   const platform = stripComments(readFileSync(join(root, 'packages/dsh-client-web/src/platform.ts'), 'utf8'))
   const words = [...platform.matchAll(/'([^']+)'/g)].map(match => match[1]!)
+  assert.ok(words.length > 0, 'platform seed words extracted from the pinned source')
   const covered = new Set(CHAMBER_COVERED_IDS)
   const factories = new Set(CHAMBER_COVERED_FACTORY_IDS)
   assert.deepEqual(
