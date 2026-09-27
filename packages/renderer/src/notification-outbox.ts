@@ -112,14 +112,31 @@ function readStored(storage: NotificationStorageLike | undefined, key: string): 
   } catch { return [] }
 }
 
-/** Rebuild one stored row: the run identity is derived when the row predates the spine. */
-function normalizeStored(row: StoredRow): PendingNotification {
-  // The stored identity is authoritative. Re-deriving an anonymous ask/request after
-  // a page reload minted a NEW id, re-keyed a pending entry and decoupled it from the
-  // receipt the host may already hold.
-  const runId = row.runId !== undefined && isSessionRunId(row.runId) ? row.runId : notificationRunId(row)
-  const resolved = { ...row, runId } as PendingNotification
-  return { ...resolved, key: keyFor(resolved) }
+/**
+ * Rebuild one stored row. The stored identity is authoritative; a row that predates
+ * the identity field gets one MINTED HERE, exactly once — the caller persists it back
+ * (see the `repaired` signal in {@link load}). Re-deriving in memory on every load
+ * would drift the row key (an anonymous ask/request or an anchorless completion mints
+ * a fresh nonce each time) and decouple the entry from the receipt the host may
+ * already hold — the constant fallback used to hide this by making the re-derivation
+ * stable, which is precisely why the identity now has to be written down.
+ */
+function normalizeStored(row: StoredRow): { entry: PendingNotification; minted: boolean } {
+  const stored = row.runId !== undefined && isSessionRunId(row.runId) ? row.runId : undefined
+  const resolved = { ...row, runId: stored ?? notificationRunId(row) } as PendingNotification
+  return { entry: { ...resolved, key: keyFor(resolved) }, minted: stored === undefined }
+}
+
+/**
+ * 事件签名：除身份外的全部判别字段。身份是**采纳时**才 mint 的（每行各一个 nonce），
+ * 所以 v1→v2 的"这条事件已在 v2 里"必须按签名比对，不能按 mint 出来的键——否则同一事件的
+ * 两份拷贝会各得一个 nonce、双双进入 journal（重复投递一次）。
+ */
+function eventSignature(row: StoredRow): string {
+  return JSON.stringify([
+    row.sourceId, row.sourceFingerprint, row.sessionId, row.kind,
+    row.watermark ?? null, row.completionSeq ?? null, row.hostObservedAt ?? null,
+  ])
 }
 
 /**
@@ -127,33 +144,46 @@ function normalizeStored(row: StoredRow): PendingNotification {
  * usual, never silently dropped) and removed only after v2 is persisted; an entry
  * that already exists in v2 is not duplicated.
  */
-function load(storage: NotificationStorageLike | undefined): { pending: PendingNotification[]; legacy: PendingNotification[] } {
-  const current = readStored(storage, NOTIFICATION_OUTBOX_KEY).map(normalizeStored)
+function load(storage: NotificationStorageLike | undefined): { pending: PendingNotification[]; legacy: PendingNotification[]; repaired: boolean } {
+  let repaired = false
+  const adopt = (row: StoredRow): PendingNotification => {
+    const { entry, minted } = normalizeStored(row)
+    repaired ||= minted
+    return entry
+  }
+  const stored = readStored(storage, NOTIFICATION_OUTBOX_KEY)
+  const current = stored.map(adopt)
+  const represented = new Set(stored.map(eventSignature))
   const keys = new Set(current.map(entry => entry.key))
   const legacy = readStored(storage, LEGACY_NOTIFICATION_OUTBOX_KEY)
-    .map(normalizeStored).filter(entry => !keys.has(entry.key))
-  return { pending: current, legacy }
+    .filter(row => !represented.has(eventSignature(row)) && (row.key === undefined || !keys.has(row.key)))
+    .map(adopt)
+    .filter(entry => !keys.has(entry.key))
+  return { pending: current, legacy, repaired }
 }
 
 export function createNotificationOutbox(storage?: NotificationStorageLike, now: () => number = Date.now) {
   const loaded = load(storage)
   const pending = new Map<string, PendingNotification>(loaded.pending.map(item => [item.key, item]))
   for (const entry of loaded.legacy) pending.set(entry.key, entry)
-  if (loaded.legacy.length > 0) {
+  const persist = (): void => {
+    try { storage?.setItem(NOTIFICATION_OUTBOX_KEY, JSON.stringify([...pending.values()])) } catch { /* in-memory delivery continues */ }
+  }
+  if (loaded.repaired || loaded.legacy.length > 0) {
     try {
       storage?.setItem(NOTIFICATION_OUTBOX_KEY, JSON.stringify([...pending.values()]))
-      storage?.removeItem(LEGACY_NOTIFICATION_OUTBOX_KEY)
-    } catch { /* v1 stays for the next boot; the adopted entries still deliver */ }
+      if (loaded.legacy.length > 0) storage?.removeItem(LEGACY_NOTIFICATION_OUTBOX_KEY)
+    } catch { /* 内存投递继续；v1 留到下次 boot */ }
   }
+  // 采纳即落盘（身份只 mint 一次）：缺 runId 的存量行一旦补上身份就必须写回，否则下次 boot
+  // 会再造一个新 nonce——行键漂移、与宿主已持的回执脱钩。v1 journal 在同一次写里搬到 v2；
+  // 写失败则保留 v1 供下次 boot 再采纳。
   // 存量别名键一次性清理（见 LEGACY_COMPLETION_ALIAS_KEY）。
   try { storage?.removeItem(LEGACY_COMPLETION_ALIAS_KEY) } catch { /* storage is best-effort */ }
   const inFlight = new Map<string, number>()
   let nextAttemptId = 1
   const dueAt = (entry: PendingNotification, at: number): number =>
     entry.nextAttemptAt - at > MAX_RETRY_DELAY_MS ? at : entry.nextAttemptAt
-  const persist = (): void => {
-    try { storage?.setItem(NOTIFICATION_OUTBOX_KEY, JSON.stringify([...pending.values()])) } catch { /* in-memory delivery continues */ }
-  }
   return {
     enqueue(intent: NotificationIntent): PendingNotification | null {
       // 身份只有一条来源：`notificationRunId`（宿主事件序 → 页内事件 → 提示水位）；重复抑制由身份
@@ -163,9 +193,12 @@ export function createNotificationOutbox(storage?: NotificationStorageLike, now:
         runId: notificationRunId(intent),
       }
       if (resolved.watermark === undefined && resolved.completionSeq === undefined) {
-        // Replayed runtime edges after a renderer reload resolve to the journal's ORIGINAL
-        // run id and retain its native eventKey; a new completion has its own id and
-        // creates its own event. Identity is the only run key here.
+        // A replayed runtime edge that carries its own identity (producer run id, host
+        // watermark or turn seq) resolves to the journal's ORIGINAL run id and returns its
+        // original entry, retaining the native eventKey; a new completion has its own id
+        // and creates its own event. An ANCHORLESS edge has no identity to resolve back to:
+        // it gets a fresh page nonce per call, so only the durable receipt can stop a
+        // replayed delivery (worst case = one repeat, never a swallow).
         const prior = [...pending.values()].find(entry => entry.sourceId === resolved.sourceId
           && entry.sourceFingerprint === resolved.sourceFingerprint && entry.sessionId === resolved.sessionId
           && entry.kind === resolved.kind && entry.watermark === undefined

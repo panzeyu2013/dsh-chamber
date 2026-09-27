@@ -1302,14 +1302,20 @@ test('REGRESSION(COR-1): facts-only before the first shell report notifies the s
     facts: { usable: false, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
   assert.equal(batch.state.factsSeeded, true, '无壳轨时不可用 facts 批不得复位播种位（COR-1 收窄）')
-  assert.equal(batch.observations[0].candidate, undefined, '不可用窗口不产候选')
+  // R2：host 域 observed 的 turn/end 自带判别符，快照不可判不推翻它 ⇒ 窗口批即产候选并通知。
+  assert.deepEqual(
+    batch.observations[0].candidate,
+    { kind: 'complete', watermark: 200, evidence: 'facts-watermark' },
+    'R2：事件型证据不等恢复批（旧口径在此吞发到恢复拍）',
+  )
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
-  // 3) 恢复批复用 200：水位严格前进 ⇒ 候选 + 恰 1 条通知（旧口径吞发 ⇒ 0 条）。
+  assert.equal(calls.notifications.length, 1, '窗口批恰 1 条')
+  // 3) 恢复批：同一水位已被窗口批消费 ⇒ 不重发（总数仍 1，COR-1 的"恰一次"由窗口批兑现）。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same',
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
-  assert.deepEqual(batch.observations[0].candidate, { kind: 'complete', watermark: 200, evidence: 'facts-watermark' })
+  assert.equal(batch.observations[0].candidate, undefined, 'R2：窗口批已消费该水位，恢复批不得重发')
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
   assert.equal(calls.notifications.length, 1, '从未通知过的完成必须恰 1 条（回退即 0 条：丢发）')
   assert.equal(calls.notifications[0].watermark, 200)
@@ -1350,15 +1356,22 @@ test('REGRESSION(COR-1): after a shell withdrawal the restarted facts-only track
     facts: { usable: false, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
   assert.equal(fresh.state.factsSeeded, true, '无壳轨时不可用 facts 批不得复位播种位（COR-1 收窄）')
+  // R2：C2(200) 是 host 域 observed 的完成 ⇒ 窗口批即发，不等恢复批。
+  assert.deepEqual(
+    fresh.observations[0].candidate,
+    { kind: 'complete', watermark: 200, evidence: 'facts-watermark' },
+    'R2：事件型证据不等恢复批',
+  )
   applyObservationBatch({ ledger, sourceId: 'src', batch: fresh, sink })
-  // 4) 恢复批：C2(200) 恰通知一次（总数 2 = C1 + C2；旧口径吞 C2 ⇒ 1 条）。
+  assert.equal(calls.notifications.length, 2, 'C1 一条 + 窗口批 C2 一条')
+  // 4) 恢复批：C2 水位已消费 ⇒ 不重发（总数 2 = C1 + C2；旧口径在此才发 C2）。
   fresh = observeSource({
     state: fresh.state, sourceId: 'src', identity: 'fp', pageBoot: 'same',
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
-  assert.deepEqual(fresh.observations[0].candidate, { kind: 'complete', watermark: 200, evidence: 'facts-watermark' })
+  assert.equal(fresh.observations[0].candidate, undefined, 'R2：恢复批不得重发窗口批已消费的水位')
   applyObservationBatch({ ledger, sourceId: 'src', batch: fresh, sink })
-  assert.equal(calls.notifications.length, 2, 'C1 一条 + 撤回后的 C2 一条（回退即 1 条：C2 丢发）')
+  assert.equal(calls.notifications.length, 2, '总数仍 2（回退即丢 C2）')
   assert.equal(calls.notifications[1].watermark, 200)
 })
 
@@ -1388,7 +1401,10 @@ test('REGRESSION(COR-1 精度①): the shell first report landing between stale 
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same',
     facts: { usable: false, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
+  assert.deepEqual(batch.observations[0].candidate, { kind: 'complete', watermark: 200, evidence: 'facts-watermark' },
+    'R2：窗口批即发 200（旧口径在恢复批才发）')
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 1, 'R2：窗口批恰 1 条')
   // 3) 壳轨首报恰落在 stale 窗口与恢复之间：首报只播种，绝不 emit。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
@@ -1398,18 +1414,14 @@ test('REGRESSION(COR-1 精度①): the shell first report landing between stale 
   assert.equal(batch.state.factsSeeded, true, '首报只播种壳位：不得把壳轨在场当通知证据（回退即复位吞发）')
   assert.equal(batch.observations[0].candidate, undefined, '首份壳 report 只播种')
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
-  assert.equal(calls.notifications.length, 0, '壳轨从未通知')
-  // 4) 恢复批：200 是窗口内唯一事实，必须恰 1 条。
+  assert.equal(calls.notifications.length, 1, '壳轨从未通知（总数仍只有窗口批那 1 条）')
+  // 4) 恢复批：200 已被窗口批消费，不重发（总数仍恰 1 条）。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
     shell: { rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
-  assert.deepEqual(
-    batch.observations[0].candidate,
-    { kind: 'complete', watermark: 200, evidence: 'facts-watermark' },
-    '恢复批照常按水位严格前进产候选',
-  )
+  assert.equal(batch.observations[0].candidate, undefined, 'R2：恢复批不得重发窗口批已消费的水位')
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
   assert.equal(calls.notifications.length, 1, '从未通知过的 200 恰 1 条（回退即 0 条：永久丢发）')
   assert.equal(calls.notifications[0].watermark, 200)
@@ -1446,20 +1458,20 @@ test('REGRESSION(COR-1 精度②): a stale-only shell track cannot swallow the s
     facts: { usable: false, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
   assert.equal(batch.state.factsSeeded, true, '仅 stale 的壳轨没有通知可吞（回退即复位吞发）')
-  assert.equal(batch.observations[0].candidate, undefined, 'stale 壳行不产边沿')
+  assert.deepEqual(
+    batch.observations[0].candidate,
+    { kind: 'complete', watermark: 200, evidence: 'facts-watermark' },
+    'R2：stale 壳行不产边沿，但 host 域 observed 的 facts 完成照常成候选',
+  )
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
-  assert.equal(calls.notifications.length, 0)
-  // 恢复（壳仍 stale）：200 恰 1 条。
+  assert.equal(calls.notifications.length, 1, 'R2：窗口批即发 200')
+  // 恢复（壳仍 stale）：200 已被窗口批消费，不重发。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
     shell: { stale: true, rows: { s1: { running: false, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
-  assert.deepEqual(
-    batch.observations[0].candidate,
-    { kind: 'complete', watermark: 200, evidence: 'facts-watermark' },
-    'stale 壳轨不拦 facts 候选',
-  )
+  assert.equal(batch.observations[0].candidate, undefined, 'R2：恢复批不重发')
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
   assert.equal(calls.notifications.length, 1, '从未通知过的 200 恰 1 条')
   // 同水位重放 0；stale→fresh 的同一行不得伪造边沿（factsUsable 下壳 complete 本就不作候选）。
@@ -1489,18 +1501,23 @@ test('REGRESSION(COR-1 精度③): a session present only in the facts rows is n
     facts: { usable: false, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
   assert.equal(batch.state.factsSeeded, true, '壳轨不在场于 s1 ⇒ 不得复位（回退即吞 200）')
+  assert.deepEqual(
+    batch.observations.find(observation => observation.sessionId === 's1')?.candidate,
+    { kind: 'complete', watermark: 200, evidence: 'facts-watermark' },
+    'R2：facts-only 会话的 host 域 observed 完成在窗口批即成候选',
+  )
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
-  assert.equal(calls.notifications.length, 0)
-  // 恢复：s1 的 200 恰 1 条。
+  assert.equal(calls.notifications.length, 1, 'R2：窗口批即发 200')
+  // 恢复：s1 的 200 已被窗口批消费，不重发。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
     shell: { rows: { other: { running: true, goal: null } } },
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
-  assert.deepEqual(
+  assert.equal(
     batch.observations.find(observation => observation.sessionId === 's1')?.candidate,
-    { kind: 'complete', watermark: 200, evidence: 'facts-watermark' },
-    'facts-only 会话照常产候选',
+    undefined,
+    'R2：恢复批不重发',
   )
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
   assert.equal(calls.notifications.length, 1, '从未通知过的 200 恰 1 条')
@@ -1530,9 +1547,11 @@ test('REGRESSION(COR-1 精度③b): another shell session notifying must not swa
     facts: { usable: false, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
-  assert.equal(calls.notifications.length, 1, 'other 的壳边沿恰 1 条')
+  // R2：other 的壳边沿 + s1 的 host 域 observed 完成在同一窗口批各发一条（旧口径 s1 要等恢复批）。
+  assert.equal(calls.notifications.length, 2, 'other 壳边沿 1 条 + s1 窗口批 1 条')
+  assert.equal(calls.notifications[1].watermark, 200, 's1 的 200 不被 other 的壳通知株连')
   assert.equal(batch.state.factsSeeded, false, '确实 emit ⇒ 复位播种位（B3-2 语义保持）')
-  // 恢复批：other 重新播种（per-session 旗标），s1 从未通知 ⇒ 照常产候选。
+  // 恢复批：other 重新播种（per-session 旗标）；s1 已在窗口批通知 ⇒ 不重发。
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
     shell: { rows: { other: { running: false, goal: null } } },
@@ -2320,3 +2339,230 @@ test('CONTROL(C4-X2 行缺席): without a fence the shell-only recovery seeding 
   assert.equal(calls.notifications.length, 1, '无围栏的恢复播种不得吞首个水位')
   assert.equal(calls.notifications[0].watermark, 100)
 })
+
+// ── R1/R2：完成身份与「事件型证据」的逐观察可判性 ──────────────────────────
+//
+// R2：host 域 observed 的 turn/end 是**事件**，它的可判性来自这次完成本身，不来自某一份
+// session/list 基线的存活判定——快照降级只说明"此刻问不到宿主"，不能推翻一条已经读到的完成。
+// R1：无锚完成绝不共享常量身份（身份层已改发页内 nonce）；能拿到宿主 seq 时，壳轨与 facts 轨
+// 产出同一个 host:turn/<seq>，跨通道幂等由身份相等保证。
+
+test('R2: a host-anchored completion in an unusable snapshot emits immediately, with its host seq', () => {
+  const ledger = createCompleteLedger()
+  const { calls, sink } = makeSink()
+  // 1) 可用批播种 100。
+  let batch = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same',
+    facts: { usable: true, rows: { s1: factsRow({ completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) } },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 0, '首份可用批只播种')
+  // 2) 快照降级，但 follow 已读到宿主 turn/end（seq=7, at=200）：不得等恢复批。
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same',
+    facts: {
+      usable: false,
+      rows: {
+        s1: factsRow({
+          completedAt: 200, completedAtSource: 'observed', completedAtDomain: 'host', updatedAt: 200,
+          lastTurnEnd: { kind: 'completed', at: 200, seq: 7 },
+        }),
+      },
+    },
+  })
+  assert.deepEqual(
+    batch.observations[0].candidate,
+    { kind: 'complete', watermark: 200, completionSeq: 7, evidence: 'facts-watermark' },
+    'R2：降级快照上的 host 域 observed 完成照常成候选，并带宿主 seq',
+  )
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 1, '窗口批即发（旧口径要等恢复拍）')
+  assert.equal(calls.notifications[0].completionSeq, 7, '身份可用 host:turn/7 去重')
+  // 3) 恢复批：同一水位已被消费 ⇒ 不重发。
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same',
+    facts: {
+      usable: true,
+      rows: {
+        s1: factsRow({
+          completedAt: 200, completedAtSource: 'observed', completedAtDomain: 'host', updatedAt: 200,
+          lastTurnEnd: { kind: 'completed', at: 200, seq: 7 },
+        }),
+      },
+    },
+  })
+  assert.equal(batch.observations[0].candidate, undefined, '恢复批不重发')
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 1, '恰 1 条')
+})
+
+test('R2 freshness: a raw anchored row already seen in a usable batch is never re-claimed as event evidence', () => {
+  // 播种批已经读到过 50（壳权威 running ⇒ I1 不吸收水位）：之后同一行不得被 facts 抢先认领，
+  // 否则壳边沿的无水位语义（+围栏）被改写成「旧完成再发一次」。
+  const ledger = createCompleteLedger()
+  const { calls, sink } = makeSink()
+  let batch = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: true, goal: null } } },
+    facts: { usable: true, rows: { s1: factsRow({ completedAt: 50, completedAtSource: 'observed', updatedAt: 50 }) } },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, goal: null } } },
+    facts: { usable: false, rows: { s1: factsRow({ completedAt: 50, completedAtSource: 'observed', updatedAt: 50 }) } },
+  })
+  assert.deepEqual(
+    batch.observations[0].candidate,
+    { evidence: 'shell-edge' },
+    '已见水位不是新鲜事件：语义仍是壳边沿（无 completionSeq）',
+  )
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 1)
+  assert.equal(calls.notifications[0].watermark, undefined, '壳边沿完成没有水位')
+})
+
+test('R1: same-batch precedence — the facts candidate wins and the shell edge is not repeated', () => {
+  const ledger = createCompleteLedger()
+  const { calls, sink } = makeSink()
+  let batch = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: true, goal: null } } },
+    facts: { usable: true, rows: { s1: factsRow({ completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) } },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  // facts 不可用 + 壳 idle，raw 行带更新的宿主 turn/end(seq=9, at=200)（follow 成功、基线失败）。
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, goal: null } } },
+    facts: {
+      usable: false,
+      rows: {
+        s1: factsRow({
+          completedAt: 200, completedAtSource: 'observed', completedAtDomain: 'host', updatedAt: 200,
+          lastTurnEnd: { kind: 'completed', at: 200, seq: 9 },
+        }),
+      },
+    },
+  })
+  const candidates = batch.observations.map(observation => observation.candidate).filter(c => c !== undefined)
+  assert.deepEqual(
+    candidates,
+    [{ kind: 'complete', watermark: 200, completionSeq: 9, evidence: 'facts-watermark' }],
+    '同一完成只产一个候选，且带宿主 seq（壳边沿不重复发）',
+  )
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 1)
+  assert.equal(calls.notifications[0].completionSeq, 9, '壳轨若发也是 host:turn/9：跨通道同身份')
+})
+
+test('R1 fence: a borrowed host seq is never borrowed twice (F1 regression: identity reuse = silent loss)', () => {
+  // 反例形状（对抗式 review A5）：facts 轨持续不可用且行停在旧 turn/end(seq=9)——
+  // 第一次壳边沿借 seq9 投递（notifiedRun = host:turn/9）；下一回合壳边沿若再借同一个 seq9，
+  // 身份门（notifiedRun === runId）会按「已显示」把**真实新完成**吞掉（漏发）。借出的锚必须记账。
+  const ledger = createCompleteLedger()
+  const { calls, sink } = makeSink()
+  const stuckRow = (state: ObservationState, running: boolean) => observeSource({
+    state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running, goal: null } } },
+    facts: {
+      usable: false,
+      rows: {
+        s1: factsRow({
+          completedAt: 200, completedAtSource: 'observed', completedAtDomain: 'host', updatedAt: 200,
+          lastTurnEnd: { kind: 'completed', at: 200, seq: 9 },
+        }),
+      },
+    },
+  })
+  let batch = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: true, goal: null } } },
+    facts: { usable: false, rows: {} },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  batch = stuckRow(batch.state, false)
+  assert.deepEqual(batch.observations[0].candidate, { evidence: 'shell-edge', completionSeq: 9 }, '第一次借用合法')
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 1)
+  assert.equal(calls.notifications[0].completionSeq, 9)
+  // 下一回合：行未前进（facts 仍不可用），壳边沿再次 idle。不得再借 seq9。
+  batch = stuckRow(batch.state, true)
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  batch = stuckRow(batch.state, false)
+  assert.equal(
+    batch.observations[0].candidate?.completionSeq,
+    undefined,
+    '同一个宿主 seq 不得被第二条完成复用（复用 ⇒ 身份门抑制 ⇒ 漏发）',
+  )
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 2, '第二条物理完成必须照常投递')
+  assert.notEqual(calls.notifications[1].completionSeq, 9, '第二条不得复用已借出的宿主事件序')
+})
+
+test('R1: a shell edge inherits the fresh host seq when no facts candidate can be produced', () => {
+  // 这是继承路径**唯一**的正向覆盖：facts 轨从未播种（首报只有壳），所以这条完成只能由壳边沿发，
+  // shellEdgeCompletionSeq 必须真的执行并把宿主 seq 带进候选（函数恒返回 undefined 时本用例变红）。
+  const ledger = createCompleteLedger()
+  const { calls, sink } = makeSink()
+  let batch = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: true, goal: null } } },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 0, '首份壳报只播种')
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, goal: null } } },
+    facts: {
+      usable: false,
+      rows: {
+        s1: factsRow({
+          completedAt: 200, completedAtSource: 'observed', completedAtDomain: 'host', updatedAt: 200,
+          lastTurnEnd: { kind: 'completed', at: 200, seq: 9 },
+        }),
+      },
+    },
+  })
+  assert.deepEqual(
+    batch.observations[0].candidate,
+    { evidence: 'shell-edge', completionSeq: 9 },
+    '壳边沿必须继承同一宿主 seq（否则两轨身份不同 ⇒ 同一完成两条横幅）',
+  )
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 1)
+  assert.equal(calls.notifications[0].completionSeq, 9)
+})
+
+test('R1: an old anchor is never borrowed (the edge stays anchorless and the identity layer mints a nonce)', () => {
+  const ledger = createCompleteLedger()
+  const { calls, sink } = makeSink()
+  let batch = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: true, goal: null } } },
+    facts: { usable: true, rows: { s1: factsRow({ completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) } },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, goal: null } } },
+    facts: {
+      usable: false,
+      rows: {
+        s1: factsRow({
+          completedAt: 100, completedAtSource: 'observed', completedAtDomain: 'host', updatedAt: 100,
+          lastTurnEnd: { kind: 'completed', at: 100, seq: 4 },
+        }),
+      },
+    },
+  })
+  assert.deepEqual(
+    batch.observations[0].candidate,
+    { evidence: 'shell-edge' },
+    '已见锚不得被借用（借用会把这次完成误认成上一轮 ⇒ 身份门抑制 ⇒ 漏发）',
+  )
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 1)
+  assert.equal(calls.notifications[0].completionSeq, undefined, '无锚完成不由本层编造 host 身份')
+})
+

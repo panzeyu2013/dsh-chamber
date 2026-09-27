@@ -49,8 +49,13 @@ test('only the three non-full modes have a note branch, and the cascade still en
 })
 
 test('every facts-mode key exists in both dictionaries', () => {
-  for (const key of ['source.factsDegraded', 'source.factsLegacy', 'source.factsDisabled']) {
+  for (const key of ['source.factsDegraded', 'source.factsDegradedLocal', 'source.factsLegacy', 'source.factsDisabled']) {
     const hits = LOCALES.split("'" + key + "'").length - 1
     assert.equal(hits, 2, key + ' must exist once per language')
   }
+})
+
+test('the degraded note names the cause that matches the source kind', () => {
+  // 网关镜像只解释网关来源；本地/SSH 的降级是实例自身协议未及时应答，不得共用网关句子。
+  assert.match(SECTION, /server\.kind === 'gateway' \? 'source\.factsDegraded' : 'source\.factsDegradedLocal'/)
 })

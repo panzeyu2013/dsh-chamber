@@ -15,16 +15,19 @@ import { parseChamberRunId } from '@dsh-chamber/dsh-stream-state'
 
 const base = { sourceFingerprint: 'fp1', sessionId: 's1' }
 
-test('identity source: host event id wins, then the watermark episode, then the constant fallback (W2)', () => {
+test('identity source: host event id wins, then the watermark episode, then a per-event nonce (W2)', () => {
   const live = notificationRunId({ ...base, watermark: 5 })
   assert.deepEqual(notificationIdentityOf({ ...base, runId: live }), { runId: live, source: 'run-id' })
   assert.deepEqual(notificationIdentityOf({ ...base, completionSeq: 7 }), { runId: 'host:turn%2F7', source: 'host-turn' })
   assert.equal(notificationIdentityOf({ ...base, watermark: 42 }).source, 'watermark')
   assert.equal(notificationIdentityOf({ ...base, watermark: 0 }).source, 'watermark', '水位 0 是合法水位')
-  const constant = notificationIdentityOf(base)
-  assert.equal(constant.source, 'constant', '无任何 host 域判别符 ⇒ 兜底常量（最可疑，W2 目标）')
-  assert.equal(constant.runId, notificationRunId(base), '包装函数与分类函数同一处产出')
-  assert.ok(isSessionRunId(constant.runId))
+  // 无任何 host 域判别符（无 runId / seq / 水位）：**绝不**共享常量身份。共享会让两次物理完成
+  // 共用一个 outbox key 与一条 durable receipt，第二条被宿主按「已显示」静默吞掉（漏发）。
+  const first = notificationIdentityOf({ ...base, kind: 'complete' })
+  const second = notificationIdentityOf({ ...base, kind: 'complete' })
+  assert.equal(first.source, 'event-nonce', '无锚完成走页内 nonce（旧 constant 分支已移除）')
+  assert.notEqual(second.runId, first.runId, '同一会话两次无锚完成必须不同身份：唯一性优先于跨通道去重')
+  assert.ok(isSessionRunId(first.runId))
 })
 
 test('identity source: ask/request keep the per-event nonce, and completionSeq outranks kind (W2)', () => {
@@ -42,7 +45,7 @@ test('event-nonce generation: CSPRNG page generation stays a positive safe integ
   const parts = parseChamberRunId(ask.runId)
   assert.notEqual(parts, null, '页内非事件身份必须可解析')
   assert.ok(Number.isSafeInteger(parts!.generation), 'generation 必须是安全整数（53 位算术不得溢出）')
-  assert.ok(parts!.generation > 0, 'generation 必须为正：0 是水位族/常量族的保留 generation（实现已把抽到 0 归一为 1）')
+  assert.ok(parts!.generation > 0, 'generation 必须为正：0 是水位族的保留 generation（实现已把抽到 0 归一为 1）')
   // 同一页内两次 ask 只差 episode（计数），generation 恒为同一页代。
   const ask2 = notificationIdentityOf({ ...base, kind: 'ask' })
   assert.equal(parseChamberRunId(ask2.runId)!.generation, parts!.generation, '页代在页内稳定')

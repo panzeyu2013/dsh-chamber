@@ -322,6 +322,33 @@ boot 值闩锁的**合并字段**（原独立 `bootReported` 已删，二者机�
   是**内容水位**（记忆/围栏用），把 `updatedAt` 的活动前进也算成更高水位；候选若用它，
   「一条老完成 + 新活动」或权威运行位抖动就会被重提成一次新完成（实测假通知的形状）。
   observer 域的 `reconstructed` 时刻不在 host 域（不作完成证据：不发通知，也不产生完成点——完成点的唯一权威是官方位），同样不作证据。
+- **候选的可判性门（R2，2026-09）**：候选门是**逐观察 provenance**，不是快照级 liveness。
+  `factsCompletionOf` 非 undefined 已证明这一行是 host 域、observed 的 `turn/end`——**事件型证据**
+  自带判别符，`verdict !== 'ok'`（基线超时/宽限期内）只说明「此刻问不到宿主」，不能推翻一条已经
+  读到的完成；把它当快照门会让窗口内已观察到的完成必须等恢复批才发（延迟上界 = 降级窗口长度，
+  随宿主抖动一起出现）。因此 `completion-observation.ts` 在 `usable=false` 时仍读**原始行**产候选，
+  并加一道**新鲜度门**：该行水位必须严格新于「本批之前已见水位」（`factsSeenWatermark`，含被 I1
+  挡下未吸收的行）——否则它只是上一轮读过的旧完成（播种批/I1 未吸收行），语义仍是壳边沿（无水位
+  候选 + 围栏）。**状态型证据不受影响**：running 位权威与 `factsContradictsIdle` 反证守卫仍按
+  `factsUsable` 走（状态是"现在如何"的主张，必须由活着的通道背书；事件是"发生过什么"）。
+- **完成身份统一（R1，2026-09）**：同一物理完成在两条轨道上产出**同一个** `host:turn/<seq>`：
+  facts 候选带 `lastTurnEnd.seq`（既有 W2，§3.2.7 ⑧）；壳完成边沿在原始 facts 行带**新鲜** host 域
+  observed 完成时继承同一个 seq（`shellEdgeCompletionSeq`），同批 facts 已用带锚候选发过该完成时
+  壳边沿不再重复发。继承必须过**两道门**，缺一即漏发：① 完成水位严格新于「已见水位与已消费水位的
+  较大者」——已读过或已消费的旧锚属于上一轮；② seq 严格大于**已借出/已投递的最高 seq**
+  （`lastAnchoredSeq`）——行没有前进时（facts 持续不可用、turn/end 停在旧值）不得复用同一个宿主
+  事件序，否则两轨身份相等、身份门按「已显示」吞掉真实新完成。拿不到任何 host 判别符时，身份层
+  **绝不**再退化成同会话共享常量（`notification-identity.ts` 的 `constant` 分支已删）：改用页内
+  事件 nonce（与 ask/request 同形）。共享常量会让两次物理完成共用一个 outbox key 与一条 durable
+  receipt，第二条被宿主按「已显示」静默吞掉——那是漏发，不是去重。
+  **两种身份的分工**：outbox 行身份（journal 键与宿主回执 eventKey）与 durable `notifiedRuns` 里的
+  身份**不是同一个值**——后者取投递载荷携带的 host 域判别符（`host:turn/N` 或水位 id），因为行可以
+  先无锚入队、事后被 `associateCompletion` 补上锚；此时写行身份（nonce）就永远不会被后续 facts
+  观察命中，身份门失效 ⇒ 重复。
+  **残留边界**：无锚完成在两条轨道上身份不同（页内 nonce vs 水位/宿主 seq），跨通道最坏一次重复
+  （与 §3.2.7 ⑥/⑦ 同源）；同一无锚边沿跨页重放也会得到新 nonce（行内无身份可回解，durable receipt
+  是唯一网），同样最坏一次重复、绝不漏发。R2 与 R1 对 P2a/P2b 是**源无关**的：gateway 镜像解析同样
+  投影 `lastTurnEnd`。
 - **G5** facts 候选的水位必须相对 pending 吸收位与已通知位**严格前进**；壳候选已被
   armed ⇒ 无候选（同一次完成的延迟 completed 边沿不得再出）。无 pending 且壳已 armed 的
   facts 候选**按 `armedFloor` 分界**（armSession 在 arm 时记下该次消费的 candidate/notified
@@ -561,6 +588,8 @@ running 批之后重放更早的批，其 `keepFence` 早已随原批过去、�
   `completion-observation.test.ts` 的 `KNOWN-BOUNDARY(C4-X2 cross-batch)` / `(I1 fence cross-batch)`
   各钉 2 个物理完成 / 3 条通知；主进程 5s 去重 claim 键为五元组（§3.3），两条投递身份 eventKey 不同
   故不被吞。为何不做跨批围栏存活、计数式启发为何被否决见 §3.2.8；当前以有界重复接受。
+  **2026-09 R1/R2 收窄**：本项只在完成**无锚**时成立（facts 行缺席或只有已见旧行）；一旦原始行带
+  新鲜 host 域 observed 完成，壳边沿继承同一 `turn/end.seq`，两轨身份相等、不再重复。
 - ⑦ **facts 输入缺席（纯壳批）不触发复位补偿（F30 登记，开放边界）**：触发链——来源已有可用 facts 批
   （`factsSeeded=true`）→ 某批 facts 输入**缺席**（与显式不可用不同）→ 壳轨 emit 无水位 complete 置栏
   （`shellCompleteSinceFacts=true`，但无「不可用窗口」可复位）→ 恢复的首个可用批因 `factsSeeded` 仍真
@@ -569,6 +598,9 @@ running 批之后重放更早的批，其 `keepFence` 早已随原批过去、�
   running 清掉，本项栏还在、只是恢复批无从补种。**建议修法**（未实施）：把「facts 缺席 → 可用」并入
   非可用窗口，按 `shellNotifiedSinceFacts` 对确实通知过的会话再次播种补偿；影响面 = 该窗口内恰有一次
   壳轨通知的来源会话，每条重复一条横幅（会话事实与蓝点不受影响）。
+  **2026-09 R1/R2 收窄**：有锚完成（原始行带新鲜 host 域 observed 完成）经壳边沿继承同一
+  `turn/end.seq`，两轨身份相等；无锚完成改发页内 nonce——失败方向从此固定为「最多一次重复」，
+  不再有共享常量身份造成的静默漏发。
 
 - ⑧ **运行身份的生产者（W2，2026-09 已落）**：facts 完成候选现在携带宿主 `turn/end.seq`
   （`completion-observation.ts` 取 `factsRow.lastTurnEnd.seq`，非负安全整数才带），运行身份因此可产出
@@ -576,10 +608,11 @@ running 批之后重放更早的批，其 `keepFence` 早已随原批过去、�
   所有完成都落回水位族）。seq 随候选进 durable `pending`（`PendingCompletion.completionSeq`，
   `sanitizeNotificationPayload` 逐字段保留）并在释放时进入通知 ⇒ 延迟/被压制的完成也不会丢身份。
   缺席（宿主不带 seq / 非法值）时形状与修复前**逐字一致**（水位族回退，无回归）。
-  **残留边界**：壳边沿完成没有 host 事件 id（它本就没有 facts 证据），因此 §3.2.7 ⑥/⑦ 的
-  跨批重复不受本项影响——本项只是把 facts 侧的重复判定从水位改成真实事件序，
-  为将来「壳完成对齐到同一 host id」留下唯一入口；v5 载荷（`{v:5,records}`）不含 pending 段，
-  故本次不动影子面。
+  **残留边界（2026-09 R1 收窄）**：壳边沿完成原本没有 host 事件 id，因此 ⑥/⑦ 的跨批重复不受
+  本项影响；R1 起壳边沿在原始 facts 行带**新鲜** host 域 observed 完成时继承同一个 seq（§3.2.3），
+  有锚完成的两轨身份相等、⑥/⑦ 对其闭合；仍无锚的完成（facts 行缺席/只有已见旧行）改发页内
+  nonce（唯一），只保留有界重复、不再共享常量身份——共享常量导致的**静默漏发**路径已消。
+  v5 载荷（`{v:5,records}`）不含 pending 段，故本次不动影子面。
   **实机已证实（2026-09）**：本地 mux `session/follow` 快照的 `turn/end` 记录恒带宿主 `seq`——生产者的数据面
   是线上现实，`notifiedRuns` 的 `host:turn%2F` 前缀只是它的下游读数（逐值证据见方案 §8）。
 - ⑨ **页内非事件的页代判别符（ask/request）**：`PAGE_GENERATION` 取自 CSPRNG 的 53 位安全整数（跨页必不同、
@@ -596,11 +629,28 @@ running 批之后重放更早的批，其 `keepFence` 早已随原批过去、�
    上游只读「完成身份」面，落地前接受有界重复（§3.2.7 ⑥ 用例钉住时序与吞栏边界）。
    **已改判并改（W2，2026-09）**：宿主事件序是**上游只读面**、不是本地伪造——`turn/end.seq`
    本就是 host 域判别符，候选带上它（§3.2.7 ⑧），身份 = `host:turn/<seq>`；
-   壳边沿仍无此判别符，跨批重复照 §3.2.7 ⑥/⑦ 有界接受。
+   壳边沿在**无新鲜未借出的锚**时仍无此判别符（有则继承，见 §3.2.3 R1），跨批重复照 §3.2.7 ⑥/⑦ 有界接受。
 4. **用内容水位当候选**（`completionWatermark = max(completedAt, updatedAt)`）：**已改判并改**。
    内容水位把「用户内容更新」与「运行位抖动」都算成更高水位，于是同一次老完成被反复重提
    （实测假通知的生产者）；候选只认 host 域 observed 的 `completedAt`（§3.2.3 候选证据门），
    `updatedAt` 只保留「活动 ⇒ 作废完成声明」的记忆语义。
+5. **保留常量身份、只让宿主回执别吞**（receipt 键加 pending `at`，或让主进程区分同 key 的两次投递）：
+   否决——渲染器自己的身份门（`notifiedRun === runId`）同样以该身份去重，第二次在**本地**就被抑制，
+   宿主侧补偿救不回来；身份必须唯一，成因修复是给无锚完成发 per-event nonce。
+6. **只在回执 settle 处重算身份，不动 `constant`**：否决——重算得到同一个常量，durable 记忆照样与
+   真实键分叉；只改 settle 而不同时改身份层，则 outbox 键与 durable 记忆分叉（重复横幅）。
+7. **壳通道借 facts sink 的 producer episode（I1）来对齐身份**：否决——producer episode 是页内非事件
+   身份，可能比当前完成落后一拍；借它会把新完成误认成上一轮，身份门直接抑制（漏发）。对齐必须走
+   host 域判别符（`turn/end.seq`）；拿不到就发唯一 nonce，让失败方向停在重复而非漏发。
+8. **现在就删掉 G5 围栏族**（`armedFloor`/`shellCompleteSinceFacts`/`factsReseedPending`/`settleFence`）：
+   否决（本期）——有锚完成已由身份相等幂等，但**无锚**完成仍可能双发，围栏仍是目前唯一的跨通道
+   吸收面；删除需要先把「无锚」也纳入同一身份体系（上游只读面），在此之前保留、作用域随 ⑥/⑦ 收窄。
+9. **借出的锚不做单调记账**（允许同一个 `turn/end.seq` 归属两条壳边沿）：否决——facts 不可用期间
+   行会停在旧 turn/end，第二条边沿复用同一 seq 即与已投递完成同身份，身份门把真实新完成按「已显示」
+   静默吞掉（已执行反例：2 次物理完成 / 1 条投递）。宁可无锚发页内 nonce：最坏一次重复，绝不漏发。
+10. **把不可用窗口当纯"宽限期"处理**（只把候选推迟到恢复批之外再加宽限）：否决——不恢复被丢弃的
+   判别符，延迟上界仍等于窗口长度，且无锚完成的身份别名照旧；正确做法是按观察 provenance 分型
+   （事件型证据自带判别符、状态型证据仍需 liveness）。
 
 ### 3.3 通知事件与 IPC
 
@@ -803,8 +853,11 @@ interface ChamberSettings {
     证据，事实刷新由 30s `reconcile()` 的 `session/list` 基线承担；真失败（close/error、end/error
     帧、握手超时）仍按 1s→30s 有界退避换代。旧行为每次换代都会关 socket + 置 `baselineTrusted=false`
     + 清 stable + `emit()` 整表，即每 45s 一次周期性全量失效（离线实测 8 分钟换代 9 次、寿命精确
-    45.0s，且每条命只收到一帧 `ready`）。**实测缺口**：本机 `$events` 的边沿事实没有投递，
-    事实实际全部来自 HTTP 基线——该缺口作为开放项登记（不用定时器掩盖）。
+    45.0s，且每条命只收到一帧 `ready`）。**实测更正（2026-09-27）**：`$events` 的边沿事实**有
+    投递**，「本机只收 ready、事实全部来自 HTTP 基线」的记录作废：按观察者同款帧订阅 4 分钟收到
+    18 帧 `api-session/status`、13 `added`、5 `removed`；与真实完成对齐的两次投递
+    （`badge write` +7ms、`retire` +21ms）证明稳态完成由状态边沿即时触发、不必等 30s HTTP 基线。
+    降级窗口的成因见 `docs/progress/STATUS.md`（宿主重负载 / 插件长 RPC），与投递能力无关。
   - **浏览器/mobile（gateway web 直连）**只服务 mobile 插件，无 chamber sidebar/renderer
     ⇒ 不存在 goal 压制/通知面；而 **chamber renderer 被浏览器/dev 直开**是另一形态：
     渲染器与 durable 剪枝门都在（无桥按 §3.2.4 F11 视同已结算放行），只是没有远程来源、

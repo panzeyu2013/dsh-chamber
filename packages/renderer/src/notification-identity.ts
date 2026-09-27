@@ -81,7 +81,7 @@ function createPageGeneration(): number {
   const high = words[0] ?? 0
   const low = words[1] ?? 0
   const raw = (high % 0x20_0000) * 0x1_0000_0000 + low
-  // 0 是水位族与常量族的**保留** generation（`isSessionRunId` 只要求安全非负整数）：抽到 0 的概率是
+  // 0 是水位族的**保留** generation（`isSessionRunId` 只要求安全非负整数；旧的共享常量身份已删）：抽到 0 的概率是
   // 2⁻⁵³，但归一到 1 让「页代 ≥ 1」成为精确性质，而不是一条概率性断言。
   return raw === 0 ? 1 : raw
 }
@@ -92,11 +92,14 @@ let localEventSequence = 0
 
 /**
  * 身份**来源**（只读诊断，W2 读数面）：identity 由哪条分支产出，便于把「幻影通知 / 静默漏发」
- * 直接归因到分支——`host-turn` = 宿主事件 id（目标形态）；`event-nonce` = ask/request 的页内
- * 事件计数 + CSPRNG 页代（时钟已移除）；`watermark` = 用提示水位当 episode；`constant` = 无任何
- * host 域判别符的兜底（同一会话的所有此类完成共享一个 identity，最可疑）。
+ * 直接归因到分支——`host-turn` = 宿主事件 id（目标形态）；`event-nonce` = 无 host 域判别符时的
+ * 页内事件计数 + CSPRNG 页代（ask/request 与无锚完成共用同一形状，时钟已移除）；
+ * `watermark` = 用提示水位当 episode；`run-id` = 调用方已持有的运行身份（回执/重放路径原样回写）。
+ *
+ * 已移除 `constant`：无判别符时的"同会话共享常量身份"会让两次物理完成共用一个 outbox key 与
+ * 一条 durable receipt，第二条被宿主按"已显示"静默吞掉——这是漏发，不是去重。
  */
-export type NotificationIdentitySource = 'run-id' | 'host-turn' | 'event-nonce' | 'watermark' | 'constant'
+export type NotificationIdentitySource = 'run-id' | 'host-turn' | 'event-nonce' | 'watermark'
 
 export function notificationIdentityOf(
   input: NotificationIdentityInput,
@@ -134,14 +137,21 @@ export function notificationIdentityOf(
       source: 'watermark',
     }
   }
+  // 无任何 host 域判别符（既无调用方身份，也无 seq / 水位 episode）。此处**不得**退化成
+  // 「同会话共享一个常量身份」：常量下两次物理完成共用一个 outbox key 与一条 durable
+  // receipt，宿主对第二条回 `shown:true` 而**不显示**——静默漏发。ask/request 早在同一分支
+  // 上踩到过这个形状（注释见上），完成同样适用：唯一性优先于跨通道可去重，两次无锚完成
+  // 最多各发一条，绝不互相吞。有锚的完成不走这里——宿主 turn/end 的 seq 在 host-turn 分支
+  // 产出与 facts 通道同值的稳定身份，跨通道幂等由身份相等保证。
+  localEventSequence += 1
   return {
     runId: chamberRunId({
       sourceFingerprint: input.sourceFingerprint,
-      generation: 0,
+      generation: PAGE_GENERATION,
       sessionId: input.sessionId,
-      episode: 0,
+      episode: localEventSequence,
     }),
-    source: 'constant',
+    source: 'event-nonce',
   }
 }
 

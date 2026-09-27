@@ -49,7 +49,7 @@ export interface NotificationLedgerEntry {
   origin?: string
   /** W2 身份诊断：本条通知（或回执）用的运行身份字符串。 */
   identity?: string
-  /** W2 身份来源：`host-turn` = 宿主事件 id（目标形态）；`constant` = 无 host 域判别符的兜底。 */
+  /** W2 身份来源：`host-turn` = 宿主事件 id（目标形态）；`event-nonce` = 无 host 域判别符时的页内唯一事件身份。 */
   identitySource?: string
   /** pending 存续毫秒数诊断（可选；flush/drop 时由投影回执带出）。 */
   pendingAge?: number

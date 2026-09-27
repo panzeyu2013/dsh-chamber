@@ -110,6 +110,20 @@ interface SessionObservationMemory {
   shellPending?: ShellObservationPending
   factsWatermark: number
   /**
+   * 已**见**水位（≠ 已消费水位）：facts 通道在**可用**批里读到过的最高 observed 水位，
+   * 含被 I1 挡下、不吸收进 memory.factsWatermark 的那些行。它唯一的用途是给 R2 的
+   * 「事件型证据」判新鲜度：一条 raw host 域 observed 行只有严格新于「本批之前已见水位」
+   * 才可能是此刻这条边沿的完成——否则它只是把上一轮读过的旧完成再搬出来（旧口径下
+   * 这种行正是壳边沿的无水位语义，不能被 facts 侧抢先认领）。
+   */
+  factsSeenWatermark: number
+  /**
+   * 已经**借出或投递**过的最高宿主判别符（turn/end.seq）。锚是完成的身份：同一个 seq 只能归属
+   * 一条完成，借出后必须记账。否则行停在旧 turn/end（facts 通道持续不可用）时，下一条壳边沿
+   * 会再借同一个 seq ⇒ 两轨身份相等 ⇒ 身份门把真实新完成当"已显示"吞掉（静默漏发）。
+   */
+  lastAnchoredSeq: number
+  /**
    * 重现待决位（F5 重要项 4）：会话重现时没有可用的 facts 水位行（通道不可用 /
    * 行缺席 / 非 observed）⇒ 第一个可用的 facts 行只播种（不产候选、水位入 memory）
    * 后清除。没有它时，消失前已由壳通知的同一完成会在 facts 后到时水位 100 > memory 0
@@ -253,6 +267,32 @@ function factsCompletionOf(row: FactsObservationRow): number | undefined {
 }
 
 /**
+ * 壳完成边沿可继承的宿主判别符（R1）：原始 facts 行上的 `turn/end.seq`。带锚 ⇒ 壳轨与
+ * facts 轨产出**同一个** `host:turn/<seq>` 身份（跨通道幂等）；不带锚 ⇒ 候选无 completionSeq，
+ * 身份层发页内 nonce（唯一、不共享），代价是最坏一次跨通道重复，而不是静默互吞。
+ *
+ * 两道门都必须过，缺一即漏发：
+ * ① 完成水位严格新于「已见水位与已消费水位的较大者」——行上锚点属于**尚未被读过**的那次
+ *    完成，才可能是此刻这条边沿的完成；已消费（含 R2 在不可用批的投递）或已见（I1 挡下未
+ *    吸收）的旧锚若被借出，会把这次完成误认成上一轮。
+ * ② `seq` 严格大于已借出/已投递的最高 seq（`memory.lastAnchoredSeq`）——行没有前进时
+ *    （facts 持续不可用、turn/end 停在旧值），下一条边沿不得复用同一个宿主事件序：复用会让
+ *    两轨身份相等，身份门按"已显示"吞掉真实新完成。宁可无锚发 nonce（最坏重复，不漏）。
+ */
+function shellEdgeCompletionSeq(
+  row: FactsObservationRow | undefined,
+  seenWatermark: number,
+  lastAnchoredSeq: number,
+): number | undefined {
+  if (row === undefined || row.running === true) return undefined
+  const watermark = factsCompletionOf(row)
+  if (watermark === undefined || watermark <= seenWatermark) return undefined
+  const seq = row.lastTurnEnd?.seq
+  if (typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 0) return undefined
+  return seq > lastAnchoredSeq ? seq : undefined
+}
+
+/**
  * 记一个已遗忘会话（同键移到队尾；超限 FIFO 淘汰最旧键）。
  *
  * 有界性优先（F5 次要项 5）：极端 churn（同一来源在记忆窗口内遗忘超过 500 个不同
@@ -359,14 +399,28 @@ export function observeSource(input: {
     const factsRow = factsRows[sessionId]
     // 原始 facts 行（不可用时仍在场，评审 B2 的键空间）：反证守卫读最后已知的 host 内容。
     const factsChannelRow = factsChannelRows[sessionId]
+    // 本批是否已由 facts（带锚）候选发出该完成：壳边沿不再重复发同一完成。
+    let factsCandidatePushed = false
     // 重现会话：本批只播种（候选生成见下）；删除条目即消费这条重现记忆。
     const reappearing = state.forgottenSessions.delete(sessionId)
     const memory: SessionObservationMemory = state.sessions[sessionId] ?? {
       shellRunning: 'unknown',
       factsWatermark: 0,
+      factsSeenWatermark: 0,
+      lastAnchoredSeq: 0,
       factsSeedPending: false,
       shellNotifiedSinceFacts: false,
     }
+    // R2 候选行（design 19 §3.2.3 逐观察可判性）：快照可判时就是普通行；不可判时仍取**原始
+    // 行**——只要它带 host 域 observed 的 turn/end（factsCompletionOf 非 undefined），这次完成
+    // 就自带判别符，不需要一份可用基线来"背书"。新鲜度门（不是快照门）：这条 raw 行必须严格
+    // 新于**本批之前已见水位**，否则它只是上一轮读过的旧完成（I1 挡下未吸收的行、播种批的行
+    // 都属此类），此时语义仍是壳边沿。
+    const seenBefore = memory.factsSeenWatermark
+    const anchoredCompletion = factsChannelRow === undefined ? undefined : factsCompletionOf(factsChannelRow)
+    const factsCandidateRow = factsUsable
+      ? factsRow
+      : anchoredCompletion !== undefined && anchoredCompletion > seenBefore ? factsChannelRow : undefined
     // goal 三值：壳行优先（生产者已回填最后已知），facts 行兜底；全缺席 = unknown。
     const goal: GoalFactObservation = shellRow?.goal !== undefined
       ? shellRow.goal
@@ -419,13 +473,13 @@ export function observeSource(input: {
     // COR-1 精度：复位后的恢复批是播种批（state.factsSeeded=false），但只对**确实
     // 通知过**的会话重新播种（per-session 旗标）；其余会话从未有壳通知可吞，照常按
     // 水位严格前进产候选——复位不得株连它们（facts-only 会话的完成不得被永久丢发）。
-    if (!reappearing && !memory.factsSeedPending && factsUsable && factsRow !== undefined) {
+    if (!reappearing && !memory.factsSeedPending && factsCandidateRow !== undefined) {
       // W2：候选水位 = host 域 turn/end 时刻；记忆/围栏仍用内容水位（activities 只推记忆）。
-      const watermark = factsCompletionOf(factsRow)
+      const watermark = factsCompletionOf(factsCandidateRow)
       // W2 身份：宿主 `turn/end.seq` 与完成时刻同为 host 域判别符——带上它，运行身份即可用
       // `host:turn/<seq>`（稳定、可去重）；缺席时回退水位族（现状，无回归）。
       // 顺序：seq 属于「完成边沿」本身，比内容水位更贴近「同一次完成」的身份。
-      const turnSeq = factsRow.lastTurnEnd?.seq
+      const turnSeq = factsCandidateRow.lastTurnEnd?.seq
       const completionSeq = typeof turnSeq === 'number' && Number.isSafeInteger(turnSeq) && turnSeq >= 0
         ? turnSeq
         : undefined
@@ -438,6 +492,10 @@ export function observeSource(input: {
           ...(completionSeq === undefined ? {} : { completionSeq }),
           evidence: 'facts-watermark',
         })
+        factsCandidatePushed = true
+        if (completionSeq !== undefined) {
+          memory.lastAnchoredSeq = Math.max(memory.lastAnchoredSeq, completionSeq)
+        }
       }
     }
     // C4-X3：stale 壳快照不得作运行证据——complete 与 ask/request 边沿整体关闭
@@ -457,9 +515,26 @@ export function observeSource(input: {
       // I3：修正 provenance。侧栏把权威证伪写回官方 store 造成的 true→false 不是宿主
       // 完成边沿；无独立 host 证据（facts 域 observed 的 completedAt）时不得产候选。
       // 蓝点仍由修正臂（completed-store）武装，UX 不变；旧壳无标记 ⇒ fail-open。
+      // 与 R1 的锚继承互斥且不打架：无 host 证据时 shellEdgeCompletionSeq 本就返回
+      // undefined，被 I3 挡下的边沿不会借出锚位（memory.lastAnchoredSeq 不动）。
       const correctedWithoutHostEvidence = shellRow.corrected === true
         && (factsChannelRow === undefined || factsCompletionOf(factsChannelRow) === undefined)
-      if (runningEdge && !correctedWithoutHostEvidence) candidates.push({ evidence: 'shell-edge' })
+      // R1：本批 facts 已用带锚候选发过同一次完成（factsCandidatePushed）时，壳边沿不再
+      // 重复发——同一身份两次 reconcile 只会让事件键与水位消费多走一趟。其余场合壳边沿照常发：
+      // 有新鲜且未借出的宿主锚就继承（与 facts 轨同身份），没有就无锚（身份层发 nonce，
+      // 最坏一次重复，绝不静默漏发）。
+      const anchorSeq = factsCandidatePushed
+        ? undefined
+        : shellEdgeCompletionSeq(factsChannelRow, Math.max(seenBefore, memory.factsWatermark), memory.lastAnchoredSeq)
+      if (anchorSeq !== undefined) {
+        memory.lastAnchoredSeq = Math.max(memory.lastAnchoredSeq, anchorSeq)
+      }
+      if (runningEdge && !factsCandidatePushed && !correctedWithoutHostEvidence) {
+        candidates.push({
+          evidence: 'shell-edge',
+          ...(anchorSeq === undefined ? {} : { completionSeq: anchorSeq }),
+        })
+      }
     }
     if (shellEdgeEligible && shellRow !== undefined && shellRow.pending !== undefined && memory.shellPending !== shellRow.pending) {
       candidates.push({
@@ -523,7 +598,7 @@ export function observeSource(input: {
           fenceSeeds.push({ sessionId, watermark })
         }
       }
-    } else if (factsUsable && factsRow !== undefined && running !== 'running') {
+    } else if ((factsUsable || factsCandidatePushed) && factsCandidateRow !== undefined && running !== 'running') {
       // I1（Wave6）**契约**（design 19 §3.2.3 已落地，与本实现逐字一致）：running 权威为
       // running 时**不得**消费 facts 水位记忆（不推进 memory.factsWatermark、不吸收进
       // pending），候选保持可重提——两通道可能相差一个 commit（facts 已报完成、壳仍停在
@@ -531,7 +606,9 @@ export function observeSource(input: {
       // 壳追平 idle 后候选永不重提（丢发）。保持水位不推进 ⇒ 候选在后续观测中持续重提；
       // 真正的新回合以更高水位覆盖它。相邻的 C4-X2 播种块对「被 I1 挡下的水位」只登记
       // 围栏播种补偿（吞一次已由壳边沿通知的同一完成），不改这条不吸收契约。
-      const watermark = factsWatermarkOf(factsRow)
+      // R2：不可判快照上的 host 域 observed 完成（factsCandidateRow 来自原始行）同样消费水位——
+      // 否则恢复批会以「水位仍严格前进」把同一次完成再发一遍。
+      const watermark = factsWatermarkOf(factsCandidateRow)
       if (watermark !== undefined) {
         memory.factsWatermark = maxWatermarkValue(memory.factsWatermark, watermark)
         // 本代首份可用 facts 批的推进 = 播种（F5 重要项 3；A2/A3-3/B3-1 边界化）：
@@ -562,6 +639,10 @@ export function observeSource(input: {
     // 完成水位会二次通知（V5-B：2 个物理完成 / 3 条通知，KNOWN-BOUNDARY 用例钉住）。
     // 闭合需要围栏跨 running 批存活，但没有完成身份时同一栏可能吞掉真实新完成；
     // **消除需要完成身份（上游只读）**，见 notification-projection.applyRunningAuthority 注释。
+    // 已见水位：可用批里读到过的最高 observed 水位（含 I1 挡下未吸收的行）。
+    if (rowWatermark !== undefined) {
+      memory.factsSeenWatermark = maxWatermarkValue(memory.factsSeenWatermark, rowWatermark)
+    }
     state.sessions[sessionId] = memory
   }
 

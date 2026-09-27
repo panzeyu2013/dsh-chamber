@@ -99,7 +99,8 @@
 - 根级弹性回弹（S-50）：打包态实机 + macOS 14.4 复验。
 - **只读会话状态镜像（design 17 §10.7）**：实机矩阵（无 CDP Electron 阻断）、gateway/SSH 事实（running/pending/goal）与 404/降级自愈、场景级时序、DOM 断言、性能基线；跨端读回执相关用例（双客户端 E2E、read/read-all 回放）随该面退役删除。
 - **旧 desktop 对 read/read-all 的 404 兼容变化（发布说明素材，发布时写 CHANGELOG）**：v0.4.0-beta.1 客户端 `POST /chamber/session-state/read|read-all` 现在得 fail-closed 404（旧行为 = 幂等 200），跨端已读静默失效；`PROTOCOL_VERSION` 未升，tombstone 登记在 `support/compat/route-table-0.4.0.fixture.json`（`postFreezeRetirements` + `retired:true`），`packages/gateway/test/session-state/session-state-old-desktop-matrix.test.ts` 逐条 replay 断言 404 与能力位退场。
-- P2b `$events` 无投递：本地只收 `ready`；出口 = 抓到真实 `api-session/*` 帧或确认宿主不发；gateway 镜像仍用 45s 静默降级（两侧不一致）；页面侧卡死已独立归因，本条仍开放。
+- 事实通道降级归因（P2b）：`$events` **有投递**（2026-09-27 实测 4 分钟 18 帧 `api-session/status`，原「只收 ready」记录作废；design 19 §3.5 已更正）。11:01:08→11:02:32 已定案 = 插件管理器长 RPC（`installBundle`/`waitForInstall` 不在 `LONG_RPC_PATHS`，撞 45s 保险丝；扩容该表是待裁的修复候选）；09:29:26→09:34:56 十连败无宿主自述证据，与「事件循环长阻塞 / 外部 CPU-IO 饥饿 / 浏览器侧排队」不可区分——出口 = 窗口期差分（真观察者模块在 Node 跑默认时序 + 独立 unary 探针；宿主侧全绿而页面侧失败 ⇒ 浏览器侧）。
+- 完成身份跨通道边界（design 19 §3.2.3 R1/R2 落地后仍开放）：**无锚**完成（facts 行缺席 / 只有已见旧行 / 跨页重放的同一边沿）在两条轨道上身份不同（页内 nonce vs 水位/宿主 seq），最坏一次重复横幅、绝不漏发；已借出的宿主 seq 有单调记账（`lastAnchoredSeq`），同一事件序不再归属第二条完成。消除重复需要上游只读面让壳完成也带 `turn/end` 判别符（§3.2.7 ⑥⑦ 已按此收窄）。
 - 流级预算表外多副本：2s/8 两份未锁；出口 = 并入 tables + parity 或加锁步。
 - 取证 request/snapshot 半条通道无生产消费者：页面终局账本退役后 `dsh-chamber:stream-forensics-request` 无 dispatcher、snapshot 无 listener（`stream-forensics.test.ts` 仍覆盖往返）；live `dsh-chamber:stream-forensics` + ring 不变。出口 = 删除或按探针用途接线。
 - 载波 reducer socket 生命周期无生产发射者：F1 的 accept 通道（`OpeningTicket`/`openingAccepted`）已退役，`openingAnswered` 保留为「交付即结算」（生产发射者 = `stream-client.ts` 首帧交付处）；余下事件出口 = 删除或接线，门禁按生产 emit 判定。

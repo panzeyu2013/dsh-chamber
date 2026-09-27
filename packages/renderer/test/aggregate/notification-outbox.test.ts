@@ -15,7 +15,7 @@ function storage() {
 
 const completion = { sourceId: 'ssh-a', sourceFingerprint: 'host-1', sessionId: 's1', kind: 'complete' as const, watermark: 100 }
 
-/** 同一个宿主完成在 outbox 层的两种身份族：无 seq 的壳边（显式 runId）与带序的 facts 边（`completionSeq`）。 */
+/** 同一个宿主完成在 outbox 层的两种身份族：调用方已持身份的回执/重放路径（显式 runId）与事实通道的宿主事件序（`completionSeq`）；R1 起壳边沿在有新鲜锚时也带 seq。 */
 function edgeOf(options: { runId?: string; hostObservedAt?: number; completionSeq?: number }) {
   return {
     sourceId: 'ssh-a', sourceFingerprint: 'host-1', sessionId: 's1', kind: 'complete' as const,
@@ -353,4 +353,43 @@ test('run identity: an explicit id wins and a host turn seq outranks the waterma
   const watermarkOnly = outbox.enqueue(completion)!
   assert.match(watermarkOnly.runId ?? '', /^chamber:/)
   assert.notEqual(watermarkOnly.key, hostSeq.key)
+})
+
+test('a stored row that predates the identity field is repaired once and keeps its key across reloads', () => {
+  const disk = storage()
+  // 旧构建写下的行：没有任何 host 域判别符（无水位/事件序），也没有 runId——匿名 ask/request 与
+  // 无锚完成都长这样。它必须被补上一个身份**并写回**，否则每次装载都会 mint 一个新 nonce：
+  // 行键漂移、与宿主已持回执脱钩（共享常量身份曾把这一点掩盖成"稳定"）。
+  disk.values.set(NOTIFICATION_OUTBOX_KEY, JSON.stringify([
+    { sourceId: 'ssh-a', sourceFingerprint: 'host-1', sessionId: 's1', kind: 'complete', attempts: 0, nextAttemptAt: 0, blocked: false },
+  ]))
+  const first = createNotificationOutbox(disk, () => 1_000)
+  const repaired = first.entries()[0]!
+  assert.match(repaired.runId ?? '', /^chamber:/)
+  const persisted = JSON.parse(disk.values.get(NOTIFICATION_OUTBOX_KEY)!) as { runId?: string }[]
+  assert.equal(persisted[0]?.runId, repaired.runId, '补出的身份在采纳当次就落盘')
+  const second = createNotificationOutbox(disk, () => 1_000)
+  assert.equal(second.entries()[0]?.key, repaired.key, '重载后行键恒定（同一身份，不再重铸）')
+})
+
+test('a pre-spine v1 row is not duplicated when its v2 copy also lacks an identity', () => {
+  const disk = storage()
+  // 无锚事件在 v1/v2 各一份拷贝，两份都没有 runId：身份是采纳时才 mint 的（每行一个 nonce），
+  // 所以"这条事件已在 v2 里"必须按事件签名判定，否则两次采纳各得一个 nonce，重复投递一次。
+  const anonymous = { sourceId: 'ssh-a', sourceFingerprint: 'host-1', sessionId: 's1', kind: 'complete' as const, attempts: 0, nextAttemptAt: 0, blocked: false }
+  disk.values.set(NOTIFICATION_OUTBOX_KEY, JSON.stringify([{ ...anonymous, key: 'v2-key' }]))
+  disk.values.set('dsh-chamber.notification-outbox.v1', JSON.stringify([{ ...anonymous, key: 'v1-key' }]))
+  const outbox = createNotificationOutbox(disk, () => 1_000)
+  assert.equal(outbox.entries().length, 1, '同一无锚事件不得因各自 mint 身份而双双采纳')
+})
+
+test('two anonymous rows of one session no longer collapse into one identity', () => {
+  const disk = storage()
+  // 同一会话的两条无锚完成（例如两次目标释放）。共享常量身份时两行会归并成一条 pending
+  // 并共用一条 durable receipt，第二条被宿主按"已显示"静默吞掉；现在各 mint 唯一身份、各占一条。
+  const anonymous = { sourceId: 'ssh-a', sourceFingerprint: 'host-1', sessionId: 's1', kind: 'complete' as const, attempts: 0, nextAttemptAt: 0, blocked: false }
+  disk.values.set(NOTIFICATION_OUTBOX_KEY, JSON.stringify([anonymous, { ...anonymous }]))
+  const outbox = createNotificationOutbox(disk, () => 1_000)
+  assert.equal(outbox.entries().length, 2)
+  assert.equal(new Set(outbox.entries().map(entry => entry.runId)).size, 2)
 })
