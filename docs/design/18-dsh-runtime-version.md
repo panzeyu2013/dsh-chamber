@@ -339,8 +339,10 @@ chamber-settings.json，非秘密）：
    **刷新语义**（重启生效的一切，02 §2.6/设计 13）：chamber host 包 seed thunk 每次
    spawn 前重新求值（client-graph/git-worktree 挂载行按当前构建产物重建）；dsh boot
    重读 DSH_HOME profiles + `--patch` overlay（`dsh plugin` 装/删的插件生效）；前端页面
-   不随宿主重启重 boot——design 09 §3.7 的 `/plugins/events` 重连自行把新行热同步进活 ctx
-   （已 boot 的实例壳不重 boot；无该通道的宿主须手动重载页面）。
+   不随宿主重启重 boot（已 boot 的实例壳不重 boot）。页面侧 client 行的刷新只有一条机会性路径：
+   design 09 §3.7 的 `/plugins/events` 重连**若成功**即重新下发整图并热同步增删；重连撞上反代
+   503/502 窗口（本段下文）时按 §3.7 回连边界 fail-the-connection、不自动重建——该来源退回 boot
+   现状，须手动重载页面/重启应用（存活仍为 STATUS 开放实机项）。
    **互斥与门控**：与健康状态机 `restarting` 单飞互斥；applying 期间禁用；状态行
    「重启 dsh…」→「已重启」
    与诚实失败文案（附 host-logs 入口）。失败不回滚、不改指针——重启前后是同一棵激活树，
@@ -350,9 +352,10 @@ chamber-settings.json，非秘密）：
    隧道 phase 保持 `ready`（隧道未断）、实例反代对目标连接拒绝返回显式 503（诚实失败，
    03 §3），会话/侧边栏短时错误属预期。
    **完成确认（不重载窗口）**：重启动作不再附带窗口重载。local 腿经桌面 IPC 的
-   ready/degraded 白名单后即报结果（`restartLocal()` 的 resolve ≠ success——窗口耗尽落
-   `restart-exhausted` 也照样 resolve，§9.3；非白名单终态由 `shell-ipc-runtime.ts` 的
-   "did not reach ready" 响亮拒绝）；gateway 腿保留
+   ready/degraded 白名单后即报结果：`restartLocal()` 的 resolve ≠ success——窗口耗尽落
+   `restart-exhausted` 也照样 resolve（契约所有者 = control-plane `local-connection.ts` 的
+   `restartLocal`，§9.3 只定义事务），非白名单终态由 `shell-ipc-runtime.ts` 的
+   "did not reach ready" 响亮拒绝；gateway 腿保留
    `pollGatewayReady`（1s/120s）的 202 + status 轮询，超时/失败按分类器如实投影。
    **窗口重载退役**：此前「重启 = 宿主重启 + 一次窗口重载」的 page-owned completion
    （`restart-window-reload.ts`，按来源单飞、卸载不取消）已随客户端插件热重载的直接修复
@@ -366,7 +369,7 @@ chamber-settings.json，非秘密）：
    「立即应用」/「重试应用」/「重试恢复」只执行事务本身；「重启网关服务」（systemd）
    不改变实例插件集，**不接**。
    **被拒替代**：①只重挂该来源的页内壳——换不掉**已加载** id 的实现（模块表按 id
-   first-load-wins，插件集与各 id 的实现都不会变），也覆盖不了 rev 变化：宿主行 rev 是文件
+   first-load-wins：重挂只会重取图、改插件集，**已加载 id 的实现**换不掉），也覆盖不了 rev 变化：宿主行 rev 是文件
    metadata hash（`sha1(mtimeMs,ctimeMs,size)`，重启不改文件即不变，故重启本身不产生假
    `restart-required`），真正的 `restart-required` 来自重建/重装后的文件改写，只有窗口
    重载才能换掉旧实现；②单插件热替换（vendor 已验证的

@@ -95,10 +95,10 @@
    pair，不能把两条交叉 row 误判为已存在；用户已有顶层 list 保留，只追加缺失的 chamber rows。
 5. SSH transport 每次进入 `ready` 都在 instance 单飞守卫下重跑该幂等流程；重连是廉价 hash-skip，
    不持久化可能漂移的 "seeded" 标记。自动 seed **不替用户重启远端 dsh**：已运行实例的宿主行须重启后才
-   装载新增 row，日志明确标注「重启后生效」；**页面侧无需窗口重载**——宿主重启后 `/plugins/events`
-   重连即重新下发整图，由 design 09 §3.7 的 live 热同步把新行装进活 ctx；已 boot 的实例壳不会因宿主
-   重启重新 boot（仅 boot 曾降级收尾的壳有 ready 世代自愈重挂一次），无该通道的宿主须手动重载页面。
-   插件管理器/配置编辑路径同走 §3.7；原始文件编辑不触发 `applied` 帧（design 09 §5）。
+   装载新增 row，日志明确标注「重启后生效」；**页面侧无需窗口重载**——这些 seed 包全是 host-only
+   （无 `dsh.client` 半身，不进活图），新增/重建的宿主行重启后在宿主生效，页面侧没有对应行可同步；
+   design 09 §3.7 的 live 热同步只承运 client 行，与本段无关。（插件管理器/配置编辑路径另见 §3.7；
+   原始文件编辑不触发 `applied` 帧，design 09 §5。）
 
 该通道只复制 chamber 自有构建产物。Git worktree RPC/校验/子进程全部由远端实例加载后的
 `@dsh-chamber/dsh-chamber-seed-git-worktree` 执行（设计 08），Desktop 既不接收 Git argv，也不读 Git

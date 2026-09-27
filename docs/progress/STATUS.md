@@ -40,7 +40,8 @@
   - 0.1.7-rc.2 pin 四项：内置插件页目检、跨代 profile 对账、gateway 就地升级、0.1.6 代移动端 + 右栏终端 tab。
   - 客户端插件热同步（design 09 §3.7）剩余实机面：经插件管理器/配置编辑路径触发的一次真实 add/remove 帧、
     ssh/gateway 各一来源、卸载保证边界（factory/loadCache/style 保留面）、隐藏回收期无迟到写入、宿主崩溃重启后
-    活行存活；已验范围与复现命令见 design 09 §5（不在本文件重复）。
+    活行存活（重连响应非 200——重启窗口内的 503/502——EventSource 按规范永久 CLOSED、无自动重建，
+    退回 boot 现状须手动重载页面；浏览器行为与恢复路径待实机）；已验范围与复现命令见 design 09 §5（不在本文件重复）。
   - 遮罩层叠/揭幕 P0–P3（design 05 §2.2.1/§4）：W-1b 真机走查、揭幕时延（active ≤1 帧 / absent ≤2s / hero 保持）、Swift 发布包 Safari 人工抽检。
 - **Swift 原生运行期监督**：控制面只首载前探一次 `/health`（S-45）⇒ 收口 = 前台周期探测 +「重启 sidecar」；`didCommit` 后缺首载期限；两 flavor 需按 design 14 §8 分层真机取证。
 - 宿主 cwd / 安装根（余两条）：vendor `worker_threads` 共享 `process.cwd()`；安装/更新原子化 + 运行中检测。
