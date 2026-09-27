@@ -273,6 +273,10 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
           ...(delivered.completionSeq === undefined ? {} : { completionSeq: delivered.completionSeq }),
           ...(delivered.watermark === undefined ? {} : { watermark: delivered.watermark }),
         })
+        // durable 身份用**投递载荷里的 host 域判别符**（host:turn/N 或水位 id），不是 outbox
+        // 行自己的 runId：行可以先无锚入队、事后被 associateCompletion 补上锚，此时行身份仍是
+        // 页内 nonce——写进 notifiedRuns 就永远不会被后续 facts 观察命中（身份门失效 ⇒ 重复）。
+        // 行身份只用于 journal/receipt 键（宿主回执的 eventKey）；两种用途分离，不得合并。
         identityDiagnostic = diagnosed
         const identity = delivered.watermark === undefined && delivered.completionSeq === undefined
           ? undefined
