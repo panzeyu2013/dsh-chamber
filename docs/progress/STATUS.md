@@ -6,6 +6,12 @@
 
 ## 未完成 / 部分完成（剩余验收）
 
+- **上游漂移批次二/三（I-7/I-8/I-10–I-15）**：vendor 补丁缺 retire 检测（C9 锚点未命中无法区分施工
+  错误与「上游已修 ⇒ 可退役」）、registry 桌面 seat 镜像覆盖未审计（唯一门
+  `packages/desktop/upstream-seats.test.ts` 未进 C5/复核面）、运行位写回仍走非契约成员（「会话运行位
+  卡死」⑭）、`session.list` 单飞悬挂残余（同节③）、子代理 lineage 压制缺失（同节④/⑯）、api-gateway
+  uplink 升级裁决点未登记（范围决策 G43 条）、selection scope 待裁（上游提案 §1）、四组实机验收未归并
+  （I-15）。判据/方案/落点/关闭与待退役块触发见 [todo/upstream-drift-plan.md](todo/upstream-drift-plan.md)。
 - **通知壳 sink `runtimeSettled` 锚点（I2；剩打包态实机回执）**：facts/壳两 sink 共用
   `complete-ledger.ts` 的 `completionAlreadySettled`（无标记/无锚点 = fail-open，只影响抑制、
   不影响投递；**未恢复别名表**）。残余重复窗口 = 「同页、非首批、producer 状态被重置的壳完成
@@ -101,6 +107,10 @@
 
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
+- 验证面缺类：`verify:no-dead-exports` 只判「经 package entry 可达的运行时导出」⇒ **type-only 导出**
+  与**仅测试引用**的导出都不判（本轮人工收窄 11 个类型；`PendingSession` 与 `PENDING_*` pin 常量属
+  测试专用导出）。规则化提案（allowlist + 一句理由；类型面是否纳入待裁）见
+  [todo/upstream-drift-plan.md](todo/upstream-drift-plan.md)「验证面缺类」。
 - 结构性重构与清理（未闭合；[todo/refactor-plan.md](todo/refactor-plan.md)）：三门（`verify:import-cycles`/`verify:file-budgets`/`verify:no-dead-exports`）常驻但**只本地跑**；未收口 = renderer 外三处 state/ref 镜像、`ssh-<id>` 别名与旧版本探测（保留）；跨包逐字重复可删 0 组（计划 §6）。
 - `run-checks tests` 链式步骤可「零覆盖记通过」：manifest dump 丢失时 `requireDump` 只对 direct 生效 ⇒ tests 绿不代表 vendor 套件真跑；修法 = 无 dump 无 transcript 即硬失败。
 - 本地 `pnpm run smoke` 与在跑实例端口冲突（`DEFAULT_DSH_START_PORT = 17510`，重试 +1 至 17514）：需端口基址覆盖开关。
