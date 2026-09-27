@@ -7,8 +7,7 @@
  * (absolute `deadline` or fixed `attempts`) and timeout wording (the kernel
  * returns `undefined` on budget exhaustion). First-round semantics are explicit:
  * deadline pollers check the budget BEFORE the first probe (timeout 0 = no
- * probe, no sleep), while a probe-first caller probes once and only then tests
- * its deadline — `probeFirstRound` plus a deadline-checking classify keep that shape.
+ * probe, no sleep).
  */
 
 /** The one default sleep of the package (deps seams still override it). */
@@ -42,8 +41,6 @@ export interface PollUntilOptions<Probe, Done = Probe> {
   attempts?: number
   /** Wait BEFORE each probe (attempts mode); default false = probe first. */
   waitFirst?: boolean
-  /** Probe the first round even when the deadline has already passed. */
-  probeFirstRound?: boolean
   /** Probe rejection handling; default = rethrow the error. */
   onProbeError?: (error: unknown) => PollOutcome<Done>
   /** Wait implementation (default {@link sleepMs}); abort-aware callers pass their own. */
@@ -62,7 +59,7 @@ export async function pollUntil<Probe, Done = Probe>(options: PollUntilOptions<P
   let round = 0
   for (;;) {
     if (attempts !== undefined && round >= attempts) return undefined
-    if (exhausted() && !(options.probeFirstRound === true && round === 0)) return undefined
+    if (exhausted()) return undefined
     if (options.waitFirst === true) {
       await sleep(intervalMs)
       if (exhausted()) return undefined

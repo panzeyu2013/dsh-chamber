@@ -515,7 +515,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       }
       // The 202 only accepts the start: the readiness poll decides whether the success note is honest.
       try {
-        await pollGatewayReady(id, undefined, { action: 'start' })
+        await pollGatewayReady(id, { action: 'start' })
         note({ tone: 'ok', text: t('startManagedDshOk') })
         void loadRemote()
         void probeGatewayRuntime(spec.id)

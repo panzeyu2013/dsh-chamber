@@ -1394,18 +1394,16 @@ export function DshRuntimeSection({
       .sort((a, b) => compareSemver(b, a) ?? 0)
   }, [envGated, state, active, pending])
 
-  /** Run one local runtime action; reports whether it succeeded. The restarting
-   *  transactions (apply-now / retry-apply / retry-restore) run the local runtime
-   *  surface's own transaction. */
-  const runRuntimeAction = useCallback(async (task: () => Promise<unknown>): Promise<boolean> => {
+  /** Run one local runtime action (the result rides the surface's own state
+   *  projection). The restarting transactions (apply-now / retry-apply / retry-restore)
+   *  run the local runtime surface's own transaction. */
+  const runRuntimeAction = useCallback(async (task: () => Promise<unknown>): Promise<void> => {
     setBusy(true)
     setActionError(null)
     try {
       await task()
-      return true
     } catch (error) {
       setActionError(errorMessage(error))
-      return false
     } finally {
       setBusy(false)
     }
@@ -1468,7 +1466,7 @@ export function DshRuntimeSection({
         // The 202 only accepts the restart; readiness is confirmed here so the
         // success note is never claimed for a restart that did not come back
         // (the poll's classified failure rides the panel's error line).
-        await pollGatewayReady(chamberInstanceId, undefined, { action: 'restart' })
+        await pollGatewayReady(chamberInstanceId, { action: 'restart' })
         setRestartNote(t('dshRuntimeRestarted'))
         return
       } else {

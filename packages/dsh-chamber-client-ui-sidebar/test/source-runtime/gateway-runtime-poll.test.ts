@@ -13,36 +13,33 @@ import { pollUntil } from '../../../dsh-chamber-client-core/src/poll.ts'
 const stubFetch = (status: number, body: unknown): typeof fetch => (async () => ({ status, json: async () => body })) as unknown as typeof fetch
 const fast = { pollIntervalMs: 0, timeoutMs: 5_000 }
 
-test('pollGatewayReady resolves on ready, times out honestly, and honours abort', async () => {
+test('pollGatewayReady resolves on ready, times out honestly, and surfaces terminal failure', async () => {
   let calls = 0
   const readyFetch = (async () => {
     calls += 1
     return { status: 200, json: async () => ({ connectionState: calls >= 2 ? 'ready' : 'starting' }) }
   }) as unknown as typeof fetch
-  await pollGatewayReady('gateway-x', undefined, { fetchImpl: readyFetch, ...fast })
+  await pollGatewayReady('gateway-x', { fetchImpl: readyFetch, ...fast })
   assert.equal(calls, 2, 'polls until ready')
 
   const stuckFetch = stubFetch(500, {})
-  await assert.rejects(pollGatewayReady('gateway-x', undefined, { fetchImpl: stuckFetch, pollIntervalMs: 0, timeoutMs: 10 }), /did not reach ready/)
+  await assert.rejects(pollGatewayReady('gateway-x', { fetchImpl: stuckFetch, pollIntervalMs: 0, timeoutMs: 10 }), /did not reach ready/)
 
-  const controller = new AbortController()
-  controller.abort()
-  await assert.rejects(pollGatewayReady('gateway-x', controller.signal, { fetchImpl: readyFetch, ...fast }), /cancelled/)
 
   // A failed restart must be distinguishable from a slow one — the poll surfaces terminal failure states
   // with the gateway's operationError.
   const failedFetch = stubFetch(200, { connectionState: 'restart-exhausted', operationError: 'spawn denied' })
-  await assert.rejects(pollGatewayReady('gateway-x', undefined, { fetchImpl: failedFetch, ...fast }), /restart failed: spawn denied/)
+  await assert.rejects(pollGatewayReady('gateway-x', { fetchImpl: failedFetch, ...fast }), /restart failed: spawn denied/)
 })
 
 test('pollGatewayReady fails fast on auth/support config errors instead of blind-polling', async () => {
   // 401: gateway token invalid/missing through the desktop gateway transport.
   const unauthorized = stubFetch(401, {})
-  await assert.rejects(pollGatewayReady('gateway-x', undefined, { fetchImpl: unauthorized, ...fast, timeoutMs: 90_000 }),
+  await assert.rejects(pollGatewayReady('gateway-x', { fetchImpl: unauthorized, ...fast, timeoutMs: 90_000 }),
     /restart failed: unauthorized \(401\)/)
   // 404: the gateway predates the /chamber/runtime surface.
   const unsupported = stubFetch(404, {})
-  await assert.rejects(pollGatewayReady('gateway-x', undefined, { fetchImpl: unsupported, ...fast, timeoutMs: 90_000 }),
+  await assert.rejects(pollGatewayReady('gateway-x', { fetchImpl: unsupported, ...fast, timeoutMs: 90_000 }),
     /restart failed: gateway does not expose \/chamber\/runtime \(404\)/)
   // Transient 5xx during the down-window still keeps polling.
   let calls = 0
@@ -50,7 +47,7 @@ test('pollGatewayReady fails fast on auth/support config errors instead of blind
     calls += 1
     return { status: calls < 3 ? 502 : 200, json: async () => (calls < 3 ? {} : { connectionState: 'ready', restart: 'ok' }) }
   }) as unknown as typeof fetch
-  await pollGatewayReady('gateway-x', undefined, { fetchImpl: transient, ...fast })
+  await pollGatewayReady('gateway-x', { fetchImpl: transient, ...fast })
   assert.equal(calls, 3, '5xx tolerated until ready')
 })
 
@@ -60,11 +57,11 @@ test('pollGatewayReady: a post-202 entry rejection (restart:failed + ready conne
   const entryRejected = stubFetch(200, {
     connectionState: 'ready', operationError: 'restart-exhausted: recover with start()', restart: 'failed',
   })
-  await assert.rejects(pollGatewayReady('gateway-x', undefined, { fetchImpl: entryRejected, ...fast }),
+  await assert.rejects(pollGatewayReady('gateway-x', { fetchImpl: entryRejected, ...fast }),
     /restart failed: restart-exhausted: recover with start\(\)/)
   // And restart:'ok' resolves even when the connectionState projection lags.
   const okFetch = stubFetch(200, { connectionState: 'starting', restart: 'ok' })
-  await pollGatewayReady('gateway-x', undefined, { fetchImpl: okFetch, ...fast })
+  await pollGatewayReady('gateway-x', { fetchImpl: okFetch, ...fast })
 })
 
 test('pollGatewayReady: terminal connection states OUTRANK a stale/misreported restart:ok', async () => {
@@ -72,7 +69,7 @@ test('pollGatewayReady: terminal connection states OUTRANK a stale/misreported r
   // (restartLocal also resolves from restart-exhausted/error/stopped). A future reordering would fail here.
   for (const terminal of ['restart-exhausted', 'error', 'stopped'] as const) {
     const fetchImpl = stubFetch(200, { connectionState: terminal, operationError: 'landed ' + terminal, restart: 'ok' })
-    await assert.rejects(pollGatewayReady('gateway-x', undefined, { fetchImpl, ...fast }),
+    await assert.rejects(pollGatewayReady('gateway-x', { fetchImpl, ...fast }),
       new RegExp('restart failed: landed ' + terminal), terminal + ' must outrank restart:ok')
   }
 })

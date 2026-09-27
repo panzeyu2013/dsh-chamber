@@ -7,7 +7,7 @@
  * are plain-node tested). This action owns the transport and the readiness poll, hence it
  * imports fetch/poll — one implementation, one call site.
  */
-import { pollGatewayReady } from '@dsh-chamber/dsh-chamber-client-core'
+import { pollGatewayReady, type GatewayPollDeps } from '@dsh-chamber/dsh-chamber-client-core'
 import { classifyRestartError, runtimeRefusalText, type RuntimeRefusalKey } from './managed-restart.ts'
 import { errorMessage } from './error-text.ts'
 
@@ -36,7 +36,7 @@ export const MANAGED_RESTART_REFUSAL_KEYS: { notRunning: RuntimeRefusalKey; busy
 export async function runManagedRestart(
   sourceId: string,
   t: (key: RuntimeRefusalKey) => string,
-  deps: { fetchImpl?: typeof fetch } = {},
+  deps: Omit<GatewayPollDeps, 'action'> = {},
 ): Promise<ManagedRestartOutcome> {
   const fetchImpl = deps.fetchImpl ?? fetch
   let response: Response
@@ -56,7 +56,7 @@ export async function runManagedRestart(
   // (pollGatewayReady owns its own 120s ceiling and classification). The poll failure is kept for the
   // panel's copy; accepted-timeout = the restart IS accepted and still recovering (ok tone).
   try {
-    await pollGatewayReady(sourceId, undefined, { action: 'restart' })
+    await pollGatewayReady(sourceId, { ...deps, action: 'restart' })
     return { kind: 'served' }
   } catch (error) {
     const cls = classifyRestartError(error)

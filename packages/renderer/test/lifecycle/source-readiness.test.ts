@@ -2,10 +2,12 @@
  * 来源就绪门 / 遮罩判定的**行为**契约（source-readiness.ts、retention.ts）。
  *
  * 本文件持有可执行的行为断言：App/InstanceView 的源码文本 wiring 锁（只证明 SHAPE）
- * 不在此处。
+ * 不在此处；但终态相位词表的三份手抄（renderer / client-core / sidebar）由本文件末尾的
+ * 源码文本 lockstep 互锁——它替代被删的 sidebar `serving-gate.ts` 姊妹门锚点。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   SERVING_TERMINAL_GRACE_MS,
   decideServingGate,
@@ -141,3 +143,20 @@ test('the deferred reclaim decision only takes never-settled, unhidden, unheld m
 })
 
 // ── 2. App 接线（源码文本契约） ─────────────────────────────────────────────
+
+test('terminal-phase vocabulary lockstep: renderer / client-core / sidebar name one set', () => {
+  const rendered = (source: string, re: RegExp): string[] => {
+    const m = re.exec(source)
+    assert.ok(m, 'the vocabulary site moved — re-derive this lockstep: ' + String(re))
+    return [...m[1]!.matchAll(/'([^']+)'/g)].map(x => x[1]!).sort()
+  }
+  const here = readFileSync(new URL('../../src/source-readiness.ts', import.meta.url), 'utf8')
+  const core = readFileSync(new URL('../../../dsh-chamber-client-core/src/managed-runtime.ts', import.meta.url), 'utf8')
+  const sidebar = readFileSync(new URL('../../../dsh-chamber-client-ui-sidebar/src/client/server-section-model.ts', import.meta.url), 'utf8')
+  const rendererList = rendered(here, /isTerminalUnreadyPhase[\s\S]*?return ((?:phase === '[^']+'(?: \|\| )?)+)/)
+  const coreList = rendered(core, /MANAGED_RUNTIME_DOWN_STATES = \[([^\]]+)\]/)
+  const sidebarList = rendered(sidebar, /if \(((?:phase === '[^']+'(?: \|\| )?)+)\) return 'err'/)
+  assert.deepEqual(rendererList, ['error', 'restart-exhausted', 'stopped'])
+  assert.deepEqual(coreList, rendererList, 'client-core MANAGED_RUNTIME_DOWN_STATES drifted')
+  assert.deepEqual(sidebarList, rendererList, 'sidebar sourceStatusKind err branch drifted')
+})

@@ -2,6 +2,9 @@
  * Gateway runtime-action readiness polling (restart is 202 + status polling; the
  * start primitive has the same 202 contract). Pure module with injectable fetch/sleep.
  *
+ * Deliberately NOT abortable: a panel unmount must not cancel the readiness confirmation
+ * (the 120 s ceiling and the terminal classification are the only exits).
+ *
  * `action` selects WHICH outcome field and decision table this poll follows:
  * restart reads `restart`, start reads `start`. The two are not interchangeable —
  * a start BEGINS from connectionState 'stopped', which the restart table treats
@@ -23,7 +26,7 @@ export interface GatewayPollDeps {
 /** Connection states terminal for a RESTART (resolve ≠ success). 'stopped' is deliberately NOT terminal for a START — that is the state a start starts from. */
 const TERMINAL_CONNECTION_STATES = new Set(['error', 'restart-exhausted'])
 
-export async function pollGatewayReady(chamberInstanceId: string, signal?: AbortSignal, deps: GatewayPollDeps = {}): Promise<void> {
+export async function pollGatewayReady(chamberInstanceId: string, deps: GatewayPollDeps = {}): Promise<void> {
   const fetchImpl = deps.fetchImpl ?? fetch
   const sleep = deps.sleepMs ?? sleepMs
   const timeoutMs = deps.timeoutMs ?? 120_000
@@ -33,20 +36,6 @@ export async function pollGatewayReady(chamberInstanceId: string, signal?: Abort
   const failure = (reason: string): Error =>
     new Error(`${action} failed: ${reason === '' ? `unknown ${action} failure` : reason}`)
   const deadline = Date.now() + timeoutMs
-  const throwIfAborted = (): void => {
-    if (signal?.aborted) throw new Error(`${action} polling cancelled`)
-  }
-  const sleepAbortable = (ms: number): Promise<void> => {
-    if (signal === undefined || deps.sleepMs !== undefined) return sleep(ms)
-    // The default sleep is abort-sensitive: an unmount mid-pause must not linger for the full interval.
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(resolve, ms)
-      signal.addEventListener('abort', () => {
-        clearTimeout(timer)
-        reject(new Error(`${action} polling cancelled`))
-      }, { once: true })
-    })
-  }
   /** One status round, already reduced to this poll's own vocabulary. */
   type Round =
     | { kind: 'status'; connectionState: string | null; operationError: string; outcome: unknown }
@@ -55,16 +44,14 @@ export async function pollGatewayReady(chamberInstanceId: string, signal?: Abort
   const settled = await pollUntil<Round, true>({
     intervalMs,
     deadline,
-    sleep: sleepAbortable,
+    sleep,
     onProbeError: (error) => {
-      throwIfAborted()
       // A failure raised by this poll must surface; a transient proxy failure while dsh is down keeps polling.
       if (error instanceof Error && error.message.startsWith(`${action} failed`)) return { kind: 'fail', error }
       return { kind: 'retry' }
     },
     probe: async (): Promise<Round> => {
-      throwIfAborted()
-      const response = await fetchImpl(`/api/i/${chamberInstanceId}/chamber/runtime/status`, { credentials: 'same-origin', signal })
+      const response = await fetchImpl(`/api/i/${chamberInstanceId}/chamber/runtime/status`, { credentials: 'same-origin' })
       if (response.status !== 200) {
         return response.status === 401 || response.status === 403 || response.status === 404
           ? { kind: 'config-error', status: response.status }

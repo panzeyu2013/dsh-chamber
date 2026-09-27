@@ -113,9 +113,9 @@ export function writerEvidence(body) {
  */
 export const TOLERATED_REQUEST_FAILURES = [
   {
-    // design 09 §3.2: "A cold-started instance answers clientGraph/graph with
-    // 503 instance_unavailable (the reverse proxy refuses to forward while the
-    // managed dsh is not serving yet)."
+    // design 09 §3.2 documents this environment state: a cold-started instance
+    // answers clientGraph/graph with 503 instance_unavailable (the reverse proxy
+    // refuses to forward while the managed dsh is not serving yet).
     pattern: /503 \S*\/api\/i\/[^/]+\/api\/clientGraph\/graph$/,
     reason: '冷启动期实例未 serving：clientGraph/graph 503 属 design 09 §3.2 预期',
   },

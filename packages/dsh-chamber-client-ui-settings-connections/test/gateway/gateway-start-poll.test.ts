@@ -43,13 +43,13 @@ test('start: the start outcome field decides — failed is a start failure, ok s
     { connectionState: 'ready', start: 'failed', operationError: 'start-exhausted: recover with start()' },
   ])
   await rejectsWithStartFailure(
-    pollGatewayReady('gateway-x', undefined, { ...START, fetchImpl: entryRejected.fetchImpl, pollIntervalMs: 0, timeoutMs: 5_000 }),
+    pollGatewayReady('gateway-x', { ...START, fetchImpl: entryRejected.fetchImpl, pollIntervalMs: 0, timeoutMs: 5_000 }),
     'start-exhausted: recover with start()',
   )
 
   // start:'ok' settles even when the connectionState projection lags behind.
   const started = replayFetch([{ connectionState: 'starting', start: 'ok' }])
-  await pollGatewayReady('gateway-x', undefined, { ...START, fetchImpl: started.fetchImpl, pollIntervalMs: 0, timeoutMs: 5_000 })
+  await pollGatewayReady('gateway-x', { ...START, fetchImpl: started.fetchImpl, pollIntervalMs: 0, timeoutMs: 5_000 })
 })
 
 test('start: a start BEGINS from stopped — that state is not a terminal failure for the start action', async () => {
@@ -60,14 +60,14 @@ test('start: a start BEGINS from stopped — that state is not a terminal failur
     { connectionState: 'stopped', start: 'running', operationError: null },
     { connectionState: 'ready', start: 'ok' },
   ])
-  await pollGatewayReady('gateway-x', undefined, { ...START, fetchImpl: progressing.fetchImpl, pollIntervalMs: 0, timeoutMs: 5_000 })
+  await pollGatewayReady('gateway-x', { ...START, fetchImpl: progressing.fetchImpl, pollIntervalMs: 0, timeoutMs: 5_000 })
   assert.equal(progressing.calls(), 2, 'the poll waits through the stopped→ready transition')
 
   // error / restart-exhausted are terminal for a start too.
   for (const terminal of ['error', 'restart-exhausted'] as const) {
     const failed = replayFetch([{ connectionState: terminal, start: 'running', operationError: `landed ${terminal}` }])
     await rejectsWithStartFailure(
-      pollGatewayReady('gateway-x', undefined, { ...START, fetchImpl: failed.fetchImpl, pollIntervalMs: 0, timeoutMs: 5_000 }),
+      pollGatewayReady('gateway-x', { ...START, fetchImpl: failed.fetchImpl, pollIntervalMs: 0, timeoutMs: 5_000 }),
       `landed ${terminal}`,
     )
   }
@@ -76,13 +76,13 @@ test('start: a start BEGINS from stopped — that state is not a terminal failur
 test('start: config errors and the timeout are worded for a start', async () => {
   const unauthorized = (async () => ({ status: 401, json: async () => ({}) })) as unknown as typeof fetch
   await rejectsWithStartFailure(
-    pollGatewayReady('gateway-x', undefined, { ...START, fetchImpl: unauthorized, pollIntervalMs: 0, timeoutMs: 9_000 }),
+    pollGatewayReady('gateway-x', { ...START, fetchImpl: unauthorized, pollIntervalMs: 0, timeoutMs: 9_000 }),
     'unauthorized (401) — check the gateway token',
   )
 
   const stuck = (async () => ({ status: 500, json: async () => ({}) })) as unknown as typeof fetch
   await assert.rejects(
-    pollGatewayReady('gateway-x', undefined, { ...START, fetchImpl: stuck, pollIntervalMs: 0, timeoutMs: 10 }),
+    pollGatewayReady('gateway-x', { ...START, fetchImpl: stuck, pollIntervalMs: 0, timeoutMs: 10 }),
     (error: unknown) => {
       const message = error instanceof Error ? error.message : String(error)
       assert.match(message, /^start accepted but the gateway did not reach ready in time$/u)
@@ -104,14 +104,14 @@ test('restart keeps its own decision table (the start action must not leak into 
     return true
   }
   await assert.rejects(
-    pollGatewayReady('gateway-x', undefined, { action: 'restart', fetchImpl: failedFetch, pollIntervalMs: 0, timeoutMs: 5_000 }),
+    pollGatewayReady('gateway-x', { action: 'restart', fetchImpl: failedFetch, pollIntervalMs: 0, timeoutMs: 5_000 }),
     restartFailed,
   )
 
-  // The restart default is unchanged for callers that pass no action at all
-  // (restart-action.ts, DshRuntimeSection).
+  // Passing no action keeps the public default ('restart'); the production
+  // callers name it explicitly, so this stays a compatibility contract.
   await assert.rejects(
-    pollGatewayReady('gateway-x', undefined, { fetchImpl: failedFetch, pollIntervalMs: 0, timeoutMs: 5_000 }),
+    pollGatewayReady('gateway-x', { fetchImpl: failedFetch, pollIntervalMs: 0, timeoutMs: 5_000 }),
     restartFailed,
   )
 })

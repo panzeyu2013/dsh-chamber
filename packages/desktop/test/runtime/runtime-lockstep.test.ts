@@ -497,3 +497,13 @@ test('main.ts keeps restart-dsh on its own gate, outside the unsupported-platfor
   assert.equal(desktopRestartAllowed(rendererState('idle', { source: 'user', managementSupported: false })), true)
   assert.equal(desktopRestartAllowed(rendererState('applying', { source: 'user', managementSupported: false })), false)
 })
+
+test('shell-ipc-runtime keeps the resolve≠success whitelist on restart-dsh (ready/degraded only)', () => {
+  // The renderer's own readiness wait was retired with the window-reload completion, so this
+  // guard is now the ONLY thing between restartLocal() resolving from restart-exhausted/stopped
+  // and a false "已重启" note: keep it, and keep it loud.
+  assert.match(desktopMain, /connectionState !== 'ready' && connectionState !== 'degraded'/,
+    'the resolve≠success whitelist is gone from the restart plane handle')
+  assert.match(desktopMain, /dsh restart did not reach ready/,
+    'the loud failure line for a restart that never became ready is gone')
+})
