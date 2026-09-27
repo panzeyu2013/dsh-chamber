@@ -254,7 +254,7 @@ vite shared 单例纪律，因为目标实例自己的 ctx 也要读它）及其
 ## 共享 gateway-runtime 面（design 21 §5.2）
 
 - gateway dsh-runtime 纯核心（status parse/fetch、动作门、错误分类、重启就绪
-  轮询 `pollGatewayReady`：1s/120s、abort 感知）现驻 client-core：
+  轮询 `pollGatewayReady`：1s/120s、有意不可取消）现驻 client-core：
  `packages/dsh-chamber-client-core/src/gateway-runtime.ts` +
  `gateway-runtime-poll.ts`，经
   `@dsh-chamber/dsh-chamber-client-core` 的 `.`

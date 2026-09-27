@@ -344,7 +344,7 @@ session-echo ledger (`shared/session-echo.ts`) and its own single funnel
 
 - The pure gateway dsh-runtime core (status parse/fetch, action gates, error
   classification, restart-readiness poll — `pollGatewayReady`, 1 s interval /
-  120 s cap, abort-aware) lives in client-core:
+  120 s cap, deliberately not abortable) lives in client-core:
  `packages/dsh-chamber-client-core/src/gateway-runtime.ts` +
  `gateway-runtime-poll.ts`, reached through the
  `@dsh-chamber/dsh-chamber-client-core` `.` face (source-only; vite consumers

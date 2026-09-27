@@ -338,19 +338,21 @@ chamber-settings.json，非秘密）：
    → 1s → SIGKILL，02 §3.7）→ 重新 spawn（同端口 / P+1 退让）→ 就绪探测。
    **刷新语义**（重启生效的一切，02 §2.6/设计 13）：chamber host 包 seed thunk 每次
    spawn 前重新求值（client-graph/git-worktree 挂载行按当前构建产物重建）；dsh boot
-   重读 DSH_HOME profiles + `--patch` overlay（`dsh plugin` 装/删的插件生效）；前端
-   N-ctx shell 经 WS 断开重连重新 boot（design 09 每实例 boot graph 重新合并）。
+   重读 DSH_HOME profiles + `--patch` overlay（`dsh plugin` 装/删的插件生效）；前端页面
+   不随宿主重启重 boot——design 09 §3.7 的 `/plugins/events` 重连自行把新行热同步进活 ctx
+   （已 boot 的实例壳不重 boot；无该通道的宿主须手动重载页面）。
    **互斥与门控**：与健康状态机 `restarting` 单飞互斥；applying 期间禁用；状态行
-   「重启 dsh…」→「已重启」/
-   诚实失败文案（附 host-logs 入口）。失败不回滚、不改指针——重启前后是同一棵激活树，
+   「重启 dsh…」→「已重启」
+   与诚实失败文案（附 host-logs 入口）。失败不回滚、不改指针——重启前后是同一棵激活树，
    仅进程级刷新。
    per-server：local = `restartLocal()` 事务（§9.3，与健康重启单飞行串行化）；
    gateway = `POST /chamber/runtime/restart`（202 + status 轮询，§9.3）。远端重启窗口内
    隧道 phase 保持 `ready`（隧道未断）、实例反代对目标连接拒绝返回显式 503（诚实失败，
    03 §3），会话/侧边栏短时错误属预期。
-   **完成确认（不重载窗口）**：重启动作不再附带窗口重载。local 腿在事务化
-   `restartLocal()` 返回后即报结果（该事务 resolve ≠ success——窗口耗尽落
-   `restart-exhausted` 也照样 resolve，§9.3；运行时状态面本身如实呈现）；gateway 腿保留
+   **完成确认（不重载窗口）**：重启动作不再附带窗口重载。local 腿经桌面 IPC 的
+   ready/degraded 白名单后即报结果（`restartLocal()` 的 resolve ≠ success——窗口耗尽落
+   `restart-exhausted` 也照样 resolve，§9.3；非白名单终态由 `shell-ipc-runtime.ts` 的
+   "did not reach ready" 响亮拒绝）；gateway 腿保留
    `pollGatewayReady`（1s/120s）的 202 + status 轮询，超时/失败按分类器如实投影。
    **窗口重载退役**：此前「重启 = 宿主重启 + 一次窗口重载」的 page-owned completion
    （`restart-window-reload.ts`，按来源单飞、卸载不取消）已随客户端插件热重载的直接修复
@@ -370,8 +372,9 @@ chamber-settings.json，非秘密）：
    重载才能换掉旧实现；②单插件热替换（vendor 已验证的
    `invalidate → 装载 → registry-first teardown → 清样式 → entry.refresh()` 顺序）——
    保住来源壳状态，但要在 chamber 侧重实现 HMR 换血纪律（样式重复注入、依赖闭包、
-   跨来源同 id 共享），成本风险远超收益，只登记为将来可选；③「不重载只提示」当时被拒
-   （半自动，用户仍须手动刷新）——客户端插件热重载直接修复后成为现行形态。
+   跨来源同 id 共享），成本风险远超收益，只登记为将来可选。
+   （原替代③「不重载只提示」当时因半自动被拒；客户端插件热重载直接修复后已成为现行形态——
+   装/卸热同步、rev 变化只上报 `restart-required`。）
 
 **B. connections 本地实例卡片**：加一行/chip「dsh vX」，读同一 resolve 结果，与 settings
 块同源（桥未就绪时回落 `window.dshChamber.dshVersion`）。

@@ -140,7 +140,8 @@ useSyncExternalStore 的小 store（单源），事件回调读 store 的 getSna
     hook 块之后）。均已在棘轮内，按序做。
   - **未纳棘轮的 client/seed god 文件**：`dsh-chamber-seed-git-worktree/src/core.ts`（单类 60+ 方法、
     4 条删除路径）、`seed-archive-cleanup/src/core.ts`、`mobile/composer.ts`、`mobile/styles.ts`、
-    `sidebar/ServerSection.tsx`。
+    `sidebar/ServerSection.tsx`、`renderer/src/live-graph.ts`（活图热同步；本轮只登记，行数入棘轮
+    待下一轮裁决）。
   - **死导出门的覆盖洞**：7 个 client-ui 包全在 `RUNTIME_LOADED_PACKAGES`（整包跳过），而 `src/index.ts`
     只是 4 行 `apply()` 桩 ⇒ `./client/**` 从不受判。已知零消费者导出 2 个：`isFixedSectionId`、
     `transportTargetChangedSpec`（`sourceFingerprintIsCurrent`/`staleOwnedSessionIds`/`orderApplyOps`/

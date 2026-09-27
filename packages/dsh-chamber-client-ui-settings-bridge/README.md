@@ -136,8 +136,9 @@ from retention reclaim); closing the panel releases both guarantees.
 
 - The bridge outlet supports root+keyed slots (`settings.plugin.item`,
   entryKey dispatch + fallback, mirroring the official scoped-slots contract).
-- Every outlet this shell renders (the local-only `settings.action` and the
-  selected-instance `settings.section` content outlet) is contained by
+- Every outlet this shell renders (the local-only `settings.action`, the
+  selected-instance `settings.section` content outlet, and this ctx's own
+  `settings.onboarding`) is contained by
   `<BridgeEntryBoundary containAll>` — the source's own plugin content never
   abdicates wholesale to the official SettingsRoot (bridge-owned assembly errors
   still fail loud).

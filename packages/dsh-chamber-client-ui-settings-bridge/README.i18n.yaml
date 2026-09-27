@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal
 # authority; after editing either side, bring the other along and update both
 # hashes here (重录由 `pnpm run verify:i18n -- --write`；该门禁现在会校验这里的哈希).
-README.md: 7d6a8d663a42af63788c873812ef0111e3701e3d2dfcff4b3805e114d5ef37c0
+README.md: ede9b6225e35597803788b07b786ea7b330ffbafebc8b41ebaf916c71c4c4b43
 README.zh.md: f51027bec84c0a640930917feb4f5e6b230b18205041299293e131617eb76e6b
