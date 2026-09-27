@@ -50,11 +50,13 @@ chamber侧缓解（不动上游事实面）：design 05 §2.2.1的open意图本�
 
 > 上游 = `deepseek-harness`（本仓不可改；落地前以vendor `dsh-client-modules/src/client/manifest.ts` 为权威复查）。design 24的归档清理域随上游 `sessions.delete` wire落地后退休。
 
-根因：dsh归档单向不可见——上游只有 `workspace.archiveSession`（registry-global集合，幂等），无unarchive/delete-session；官方与chamber投影同规则排除归档行（`!archived.has(id)`）；数据未丢（`sessions.list/search` 返回归档会话，集合持久化于 `<DSH_HOME>/profiles/web/**/workspace.json` 的 `global.archivedSessionIds`）。OpenCode/OpenChamber有可逆归档 + 删除 + 归档可见查询，manager只做UI；dsh三项全缺，chamber无法只靠前端补全。
+根因（0.1.7 复核）：dsh 归档面仍**无 delete-session、也无归档可见查询**——上游的 `workspace.archiveSession`
+（registry-global集合，幂等追加）已在 0.1.7 由单条 `workspace.unarchiveSession` 补齐反向；官方与chamber
+默认投影同规则排除归档行（`!archived.has(id)`）；数据未丢（`sessions.list/search` 返回归档会话，集合持久化于 `<DSH_HOME>/profiles/web/**/workspace.json` 的 `global.archivedSessionIds`）。OpenCode/OpenChamber有可逆归档 + 删除 + 归档可见查询；dsh仍缺删除与可见查询两项，chamber无法只靠前端补全。
 
-1. `workspace.unarchiveSession({ sessionId })`——与 `archiveSession` 对称、幂等移除；复用既有 `host/archived-sessions-changed` 事件与 `workspace.list.archivedSessionIds` 投影，客户端零新协议。
+1. ~~`workspace.unarchiveSession({ sessionId })`~~——**0.1.7 已落地**（单条、幂等移除；官方 UI 的撤销 toast 与「全部对话（显示已归档）」筛选走它）。**chamber 侧尚未接入口**：design 24 的「已归档浏览区/恢复」仍待排期（STATUS 范围决策节），本轮只消费其归档准入（`stopActivity`）。
 2. `sessions.delete({ sessionId })`（或workspace下同义）——服务端删会话目录 + 级联subagent起源子会话 + workspace成员账目自愈（header索引重建剔除已删id）+ 清archived集合；复用 `host/session-removed` 事件。
-3. （可选）`sessions.list` 行加 `archived` 标志或查询参数。保持registry-set形态则仅补1+2，即可让design 24的可选「已归档浏览区」补上恢复/删除——最小改动优先。
+3. （可选）`sessions.list` 行加 `archived` 标志或查询参数。保持registry-set形态则仅补2（+可选3），即可让design 24的可选「已归档浏览区」补上恢复/删除——最小改动优先。
 
 > 其余与design 24相关的chamber侧剩余面（浏览区A未排期、控制面特权层直删B冻结）见 `docs/progress/STATUS.md` 范围决策节与 `docs/design/24-archived-session-cleanup.md`。
 
@@ -155,12 +157,14 @@ chamber 侧缓解（`packages/renderer/src/svg-resource-scope.ts`，design 05 §
 
 ## 6. 会话状态的只读观察者与未读事实（design 17 §10.7 只读镜像 carve-out 的上游根治诉求）
 
-背景：chamber 的 gateway 侧 watcher 需要一个**不渲染任何界面**的进程持续观察会话状态，才能在桌面关壳/关闭期间仍把「完成未读」带到下次启动。当前 pin 下这条路能走通（`$events` + 每条完成边沿一次 `session/follow` 读尾巴），但有三处本可由上游消掉的尖锐面——每处的 chamber 侧现状与判据在 plan 里登记。
+背景：chamber 的 gateway 侧 watcher 需要一个**不渲染任何界面**的进程持续观察会话状态，才能在桌面关壳/关闭期间仍观察到会话状态的完成边沿（完成通知候选的 host 域证据）。当前 pin 下这条路能走通（`$events` + 每条完成边沿一次 `session/follow` 读尾巴），但有三处本可由上游消掉的尖锐面——每处的 chamber 侧现状与判据在 design 17 §10.7 与本文登记。
 
 1. **`updatedAt` 语义请给一个契约级承诺**。当前 pin 的摘要是 `updatedAt = max(header.createdAt, sessionListMetadata.lastPromptAt)`，而 `lastPromptAt` 只在 `user/message && data.source.kind === 'user'` 推进（vendor `dsh-api-session-controller/lib/index.js` 的 `applySessionListMetadata` / `updatedAt`；事件自述见 `typert.host.js` 的 `api-session/activity` JSDoc）。若上游把「任意 durable 产出都推进 `updatedAt`」写成契约，只读客户端就能用**内容水位**（`unread ⟺ updatedAt > 已读标记`）判定未读：不需要观察者、轮询就够、手动停止天然不产生未读——这是本族问题里性价比最高的一处改动。不承诺也可以，但请明确「只在用户消息推进」为契约，以便下游按边沿轨设计（chamber 现按此口径）。
 2. **turn-end 的稳定性与转发**。`turn/end.reason`（`completed | aborted{reason} | blocked | error | max-tokens | interrupted`）已在 pin 存在（`typert.host.js` 的 `SessionEventMap` 与 `TurnEndReasonMap`），chamber 用它区分「完成」与「用户停止」以闭合误报。请求两点：① 冻结为稳定契约（含 `aborted` 的 `TurnEndCancelCause` 取值域）；② 考虑把 `turn/end` 纳入 `API_REMOTE_FORWARDED_EVENTS`——现白名单没有任何会话事件（`dsh-api-remotes` 的 `remote-events.js` 仅有 `api-session/*` 与两个 request 瀑布），观察者因此必须为每条完成边沿开一次 `session/follow` 才能读到尾巴。
 3. **观察者角色 / pending 投影**。经 `$events` 接入的客户端会成为 `approval/request`、`user-questions/request` 瀑布的交付目标（`dsh-api-gateway/lib/index.js` 的 `deliverRemoteEvent` / `receiveRemoteEventResult`）：静默会挂起等待中的批准，而无条件回 `{kind:'next'}` 会在没有其他下游客户端时把它结算成 unavailable。chamber 的规则是「仅当另有 mux 客户端在线且过 1.5s grace 才委派，否则保持等待」，但这本质是把上游缺失的角色区分补在了下游。请求任一：① 给只读订阅者一个 **observer 角色**（不参与 waterfall 交付）；② 或在 `session/list` 上提供 pending 投影，让只读方无需接触瀑布即可知道「等待输入」。
 4. **宿主侧持久 unread/pending 事实**。当前只有「有人正在观察」时才能记录完成边沿；桌面关闭且无观察者运行的窗口内完成的会话仍会丢。若宿主为每个会话持久化「最后完成水位 + 是否未读」（或至少给出稳定的 per-session unread 投影），这类丢失就能被根除，下游无需再各自维护观察者。
+
+   > **下游现状注记（完成未读上游对齐后）**：chamber 本地的 durable 未读账本与读水位（以及跨端读回执）已随上游对齐**整体移除**——完成未读的唯一权威是官方内存 `uiSession.sessionStatus.completionUnread`，「重载即忘」是接受的行为（design 06 §4.1/§5）。因此本条回到**纯上游诉求**：请宿主提供持久的 per-session unread/pending 投影；下游不再维护第二套观察者来补这个洞。
 
 chamber 侧现状（非上游阻塞项，供参照）：只读镜像的边界与验收判据见 `docs/design/17-server-side-gateway.md` §10.7 与 §20；协议单一源 `packages/control-plane/src/session-state-protocol.ts`；watcher `packages/gateway/src/session-state.ts`（`/chamber/session-state*`，能力协商 + 优雅降级）。
 ## 7. 子代理生命周期/计数与完整性信号（P5）

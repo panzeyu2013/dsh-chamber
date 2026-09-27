@@ -56,7 +56,7 @@ test('the App and its hooks keep ONE view store, not render-time ref mirrors', (
   for (const file of [
     app,
     read('../../src/app-hooks/use-view-scheduler.ts'),
-    read('../../src/app-hooks/use-unread-notifications.ts'),
+    read('../../src/app-hooks/use-notifications.ts'),
   ]) {
     assert.doesNotMatch(file, /activeViewRef|paintedViewRef|setActiveView|setPaintedView/,
       'the render-time ref mirrors and their setters must not come back')

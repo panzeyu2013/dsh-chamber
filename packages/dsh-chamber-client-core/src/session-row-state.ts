@@ -17,7 +17,7 @@
  *   - stale   断连来源上仍附加的只读事实——**最优先报出**，因为它是"这一个
  *             读数可能过期"的唯一机器信号；
  *   - channel chamberBridge 运行时通道提供的位：pending 来自官方 sessionStatus，
- *             completed 只来自 App 账本（通道自身永不携带 completed，见 mergeRuntimeFacts）；
+ *             completed = 通道行的官方 completionUnread ∪ App 的 N-ctx 修正臂（mergeRuntimeFacts）；
  *   - derived chamber 自己的派生量（子代理后代计数，来自 vendor 谱系索引）；
  *   - wire    运行位：调用方传入的布尔——它已由生产者按官方规则
  *             `status?.running ?? row.running` 解析（resolveSessionRunning），
@@ -87,7 +87,7 @@ export function goalHoldsCompletion(goal: GoalFact | null | undefined): boolean 
 export interface SessionRowStateFacts {
   /** 已解析的运行位（调用方用与圆点相同的规则解决快照/通道之争）。 */
   running?: boolean
-  /** App 账本注入的完成位（经 `mergeRuntimeFacts` 合并后的事实行；通道自身永不携带）。 */
+  /** 完成位：官方位（通道行）∪ App 的 N-ctx 修正臂，经 `mergeRuntimeFacts` 合并。 */
   completed?: boolean
   /** 等待输入的种类（运行时通道）。 */
   pending?: 'approval' | 'plan-review' | 'question'

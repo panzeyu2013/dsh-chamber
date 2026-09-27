@@ -883,8 +883,12 @@ inert；复核实测）——要让响应头也条件化需把「是否下发了
 
 > §10 开头的「不得回流」针对的是**编排**（审批/提问代理、跨会话调度、会话索引、功能开关、feature host）。
 > 本节只开一条**只读事实镜像**：gateway 观察它托管的本地 dsh 的会话状态并向外提供只读投影，供桌面在
-> 「未挂载该来源」时仍能正确显示运行 / 等待 / 完成未读。它不写、不发命令、不代替用户响应，也不是 dsh
-> 事实的权威（权威永远是 dsh 宿主与其前端）。实现面见 `packages/gateway/src/session-state.ts` 与 `packages/control-plane/src/session-state-protocol.ts`；仍开放的实机/CI 权威验收见 `docs/progress/STATUS.md`「远端完成未读 / 切源体验」条。
+> 「未挂载该来源」时仍能正确显示运行 / 等待 / goal 事实。它不写、不发命令、不代替用户响应，也不是 dsh
+> 事实的权威（权威永远是 dsh 宿主与其前端）。**完成未读不在镜像职责内**：唯一权威是官方内存 Set
+> `uiSession.sessionStatus.completionUnread`，只在已挂载 ctx 里存在（design 06 §4.1/§4.2）；未挂载来源
+> 无完成点/角标是对齐的明确放弃（design 06 §5）。实现面见 `packages/gateway/src/session-state.ts` 与
+> `packages/control-plane/src/session-state-protocol.ts`；仍开放的实机/CI 权威验收见
+> `docs/progress/STATUS.md`「只读会话状态镜像」条。
 
 **边界（review 判据，任一不成立即越界）**：
 
@@ -895,8 +899,15 @@ inert；复核实测）——要让响应头也条件化需把「是否下发了
 - 路由全部落在既有 `/chamber/*` 鉴权门内；宿主停机时返回 200 + `serviceable:false`（不 5xx，避免被误判为「未升级」）。
 
 **接口摘要**：`GET /chamber/session-state`（快照 + `protocol` / `features` / `cursor`）、
-`GET /chamber/session-state/stream`（SSE 增量，单调 `id`，`Last-Event-ID` 续传或快照兜底）、
-`POST /chamber/session-state/read` 与 `/read-all`（幂等、只升不降）。
+`GET /chamber/session-state/stream`（SSE 增量，单调 `id`，`Last-Event-ID` 续传或快照兜底）。
+**已退役（跨端读回执）**：`POST /chamber/session-state/read` 与 `/read-all`（每客户端读标记与
+源级读水位地板）连同 `session-state.read`/`session-state.read-all` 能力位与快照 `read` 字段整体
+删除——完成未读对齐上游后它们没有消费者；`PROTOCOL_VERSION` 保持 1。旧 desktop（v0.4.0-beta.1）
+再发这两个 POST 得到 fail-closed 的 404（`not_found`）并静默忽略，无非崩溃/无重试风暴；这是
+**有记录**的冻结表破坏，纪律 = 不删冻结条目、以 tombstone + `postFreezeRetirements` 追加登记：
+`support/compat/route-table-0.4.0.fixture.json`（`retired: true` + 期望 404），旧端矩阵
+`packages/gateway/test/session-state/session-state-old-desktop-matrix.test.ts` 逐条 replay 断言
+404，并断言退役能力不再出现在 `features` 词汇表里。
 
 **P2a 增量面：goal 事实（2026-12 落地，design 19 §3.2.1）**
 
@@ -942,7 +953,7 @@ inert；复核实测）——要让响应头也条件化需把「是否下发了
   都**不计**（不是容量损失）。`dropped.goalActivations` 是**加法诊断键**（协议声明在
   `packages/control-plane/src/session-state-protocol.ts` 的 `SessionStateDiagnostics.dropped`；
   `status().dropped` 与持久文档 `dropped` 同形，旧客户端不进 diagnostics）：flush 把当时
-  的进程内累计值写进持久文档，但加载校验把 `readMarks`/`goalActivations` **一律归一为
+  的进程内累计值写进持久文档，但加载校验把 `goalActivations` **一律归一为
   0**（缺键/坏值与携带非零值同路，重启不继承）；保留边本身**不落盘**。旧端矩阵 fixture
   （`support/compat/route-table-0.4.0.fixture.json`）把
   `diagnostics.dropped.goalActivations` 以 dotted path 记进
@@ -979,9 +990,9 @@ inert；复核实测）——要让响应头也条件化需把「是否下发了
   绑定 id 与基线不符保留待匹配、no-goal 只清已知对象 goal（design 19 §3.2.2/§3.5）。
 - **验证与开放**：goal 白名单投影/activation 身份绑定路由/能力可选/旧端矩阵/持久化剥
   activation 的定向用例由 `test:control-plane` / `test:gateway` 覆盖；实机/CI 权威验收
-  仍见 `docs/progress/STATUS.md` 的「远端完成未读 / 切源体验」条（本地环境伪象与轮次叙事不属设计契约）。
+  仍见 `docs/progress/STATUS.md` 的「只读会话状态镜像」条（本地环境伪象与轮次叙事不属设计契约）。
 
-完成分类由每次 true→false 边沿持有的读尾身份结算：新一轮 running、新提示水位或移除会撤销旧身份，迟到的 `session/follow` 不得写回。`session/list.updatedAt` 在当前宿主是最近用户提示时间；`false→false` 且水位前进时，旧完成事实必须撤销，但没有可信运行轮次证据便保持未知。读尾失败只生成 `reconstructed` 未读，不可触发原生完成通知；同一边沿在后续可信基线继续读尾，直到分类或被新活动取代。
+完成分类由每次 true→false 边沿持有的读尾身份结算：新一轮 running、新提示水位或移除会撤销旧身份，迟到的 `session/follow` 不得写回。`session/list.updatedAt` 在当前宿主是最近用户提示时间；`false→false` 且水位前进时，旧完成事实必须撤销，但没有可信运行轮次证据便保持未知。读尾失败只给出 `reconstructed` 时刻（observer 域，不作完成证据），不可触发原生完成通知；同一边沿在后续可信基线继续读尾，直到分类或被新活动取代。
 
 **Rejected alternatives**：用 `updatedAt` 的前进直接补出完成会混淆用户停止与完成；让读尾失败保留 `observed` 会把未知结果当完成通知；迟到读尾只检查当前 `running=false` 会把上一轮结果写进另一轮已停的会话。
 

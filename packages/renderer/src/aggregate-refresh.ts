@@ -179,8 +179,11 @@ export function shouldDropUnverifiedRunningFacts(opts: {
 }
 /**
  * Detect an archived-set SHRINK between the last committed aggregate and an
- * incoming snapshot. There is NO unarchive wire, so a strict shrink is the
- * client's observable "a purge completed and those ids left the set" signal.
+ * incoming snapshot. A strict shrink is the client's observable "ids left the
+ * archive set" signal — a completed purge, or an unarchive (0.1.7 added
+ * `workspace/unarchiveSession`; the official undo/filter uses it). Both
+ * legitimately mean the mounted list may need the source's official session-list
+ * refresh, so the response is the same.
  * The baseline is the committed aggregate when archive-set-authoritative
  * (`state==='ok' && archiveSetKnown===true`), otherwise the caller's `remembered`
  * set (the last authoritative set seen for this source) — otherwise a shrink

@@ -565,8 +565,9 @@ test('archiveSetShrink returns exactly the ids a known ok aggregate lost to the 
   )
   // A full removal and an empty-next case both shrink.
   assert.deepEqual(archiveSetShrink(previous, { archivedSessionIds: [], archiveSetKnown: true }), ['a1', 'a2', 'a3'])
-  // Same set or additions only = no shrink (no unarchive wire, but a registry
-  // re-seed could re-add; additions must never trigger).
+  // Same set or additions only = no shrink (unarchive — 0.1.7's
+  // workspace/unarchiveSession — or a registry re-seed can re-add; additions
+  // must never trigger).
   assert.deepEqual(archiveSetShrink(previous, { archivedSessionIds: ['a1', 'a2', 'a3', 'a4'], archiveSetKnown: true }), [])
   assert.deepEqual(archiveSetShrink(previous, { archivedSessionIds: ['a1', 'a2', 'a3'], archiveSetKnown: true }), [])
 })

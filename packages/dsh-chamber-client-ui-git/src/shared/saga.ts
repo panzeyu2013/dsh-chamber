@@ -330,7 +330,8 @@ export interface PreRemoveArchiveDeps {
     /** Sessions already archived; excluded from the archive pass (retry-safe). */
     archivedSessionIds?: ReadonlyArray<string>
   }>
-  archiveSession(sessionId: string): Promise<void>
+  /** `stopActivity: true` is part of the contract: see runPreRemoveArchive. */
+  archiveSession(sessionId: string, options: { stopActivity: true }): Promise<void>
 }
 
 /**
@@ -338,6 +339,12 @@ export interface PreRemoveArchiveDeps {
  * Returns the archived closure (roots + transitive subsessions via
  * parentSessionId, minus already-archived ids); a failure throws with nothing
  * removed, while earlier archives in the same run are already committed.
+ *
+ * Every call carries `stopActivity: true`: the checkbox authorizes the
+ * removal, and archive admission would otherwise refuse any member whose work
+ * is still running in a way the blocking-running fact cannot see (background
+ * jobs, schedules, subagent descendants, a turn started since the guard). The
+ * host's own providers stop that work — this saga runs no cancel loop.
  */
 export async function runPreRemoveArchive(
   deps: PreRemoveArchiveDeps,
@@ -348,17 +355,19 @@ export async function runPreRemoveArchive(
   const closure = collectSessionClosure(sessions, roots)
   const toArchive = closure.filter(sessionId => !archived.has(sessionId))
   for (const sessionId of toArchive) {
-    await deps.archiveSession(sessionId)
+    await deps.archiveSession(sessionId, { stopActivity: true })
   }
   return toArchive
 }
 
 /**
- * NO STOP-THEN-REMOVE HERE (design 08 §5.2): a worktree removal never stops,
- * cancels or deletes a session — what blocks is the host's archived-aware running
- * fact (an archived session, or one under an archived ancestor, is inert), so the
- * git plugin needs no cancel loop. The only cancel/wait implementation belongs to
- * the archive manager (`stopSessionsForPurge`, design 24 §5).
+ * NO CLIENT-SIDE STOP LOOP HERE (design 08 §5.2): the removal itself never
+ * stops, cancels or deletes a session — what blocks is the host's archived-aware
+ * running fact (an archived session, or one under an archived ancestor, is
+ * inert), so the git plugin needs no cancel loop. The one session mutation is
+ * the explicit archive pass above, and its stop is the host's archive-time stop
+ * (`stopActivity`), not a chamber compensation leg. The cancel/wait loop of
+ * `stopSessionsForPurge` remains the archive manager's alone (design 24 §5).
  */
 
 /** Git-first removal. A registry failure is retry-only; Git is never recreated. */

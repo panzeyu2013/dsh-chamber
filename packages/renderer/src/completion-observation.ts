@@ -17,7 +17,7 @@
  *    unknown）；**facts-only 行的 subagentCount（在场子会话数）不作为 busy 证据**
  *    （对 06 §4.5 的有意修正：在场不等于在干活），按 idle/unknown 语义处理；
  *  - candidate：facts 候选要求 completedAtSource==='observed'、该来源本代已播种、
- *    水位严格前进；壳候选 = running true→idle 或合并事实行里（App 账本注入的）completed 从无到有，且
+ *    水位严格前进；壳候选 = running true→idle（官方 completed 位在通道行上，但**不**构成通知边沿），且
  *    **factsUsable（verdict ok && serviceable && !stale）为真时壳 complete 不是候选**
  *    （一完成一轨，归属过滤）；ask/request 是 candidate.kind，走同一 reconcile
  *    （v5 #12/INV4：只受 G2 基线播种约束，与 goal 状态无关）。**stale 壳快照不得作
@@ -58,7 +58,8 @@ export type ShellObservationPending = 'approval' | 'plan-review' | 'question'
 export type ShellObservationActivity = 'none' | 'running' | 'unknown'
 
 /** 壳运行时行（InstanceRuntimeReport.sessions 的结构子集）。
- *  `completed` 刻意不在此声明：通道行从不携带它（账本位只在合并后的聚合行上）。 */
+ *  `completed` 刻意不在此声明：通知边沿只认运行位，官方完成位由呈现面消费
+ *  （行为锁见 completion-observation.test.ts 的 CONTROL 用例）。 */
 export interface ShellObservationRow {
   running?: boolean
   pending?: ShellObservationPending
@@ -241,7 +242,7 @@ function factsWatermarkOf(row: FactsObservationRow): number | undefined {
  * WHY：`factsWatermarkOf` 取 `completionWatermark(row) = max(completedAt, updatedAt)`——它是
  * **内容水位**（记忆/围栏用），把 updatedAt 的活动前进也算成"更高水位"。候选若用它，一条
  * 老完成 + 新活动（或权威运行位抖动）就会重提一次"完成"，实测正是假通知的形状。
- * observer 域的 `reconstructed` 时刻不在 host 域（design 19：只出未读、不发通知），同样不是证据。
+ * observer 域的 `reconstructed` 时刻不在 host 域（design 19：不作通知证据），同样不是证据。
  */
 function factsCompletionOf(row: FactsObservationRow): number | undefined {
   if (row.completedAtSource !== 'observed' || row.completedAt === null) return undefined
@@ -445,11 +446,11 @@ export function observeSource(input: {
     // 或该行不存在（无 facts 通道）时，降级窗口的壳完成语义保持不变（B3-2/COR-1 继续钉住）。
     const factsContradictsIdle = factsChannelRow !== undefined && factsChannelRow.running === true
     if (shellEdgeEligible && shellRow !== undefined && !factsUsable && !factsContradictsIdle) {
-      // 唯一合法的壳完成边沿是运行位 true→false。壳行的 `completed` 不参与判定：
-      // 两条生产路径喂进来的都是**原始**通道报告（factsStore.runtime，见
-      // use-bridge-subscriptions / use-unread-notifications），而通道从不携带该位
-      // ——账本注入只发生在 mergeRuntimeFacts 之后的聚合行，观察面不读它。
-      // 该负向契约由 completion-observation.test.ts「壳 completed 位不产生边沿」钉住。
+      // 唯一合法的壳完成边沿是运行位 true→false。壳行的 `completed`（官方
+      // completionUnread，通道现在会携带）不参与判定：通知只认运行位边沿，官方位由
+      // 侧栏/徽标呈现面消费。该负向契约由 completion-observation.test.ts
+      // 「CONTROL: the official completed bit on a shell row is never notification evidence」
+      // 钉住（结构锁 = ShellObservationRow 刻意不声明该位）。
       const runningEdge = memory.shellRunning === 'running' && shellRunning === 'idle'
       if (runningEdge) candidates.push({ evidence: 'shell-edge' })
     }

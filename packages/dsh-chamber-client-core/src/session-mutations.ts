@@ -66,8 +66,17 @@ export async function forkSessionForSource(
 
 /** 对 `sourceId` 执行 workspace.archiveSession，并发布撤下事实。App 据此退休该会话的
  *  待定创建回声，并记一条本地**归档墓碑**（未挂载来源上刚归档的行也必须立刻消失——
- *  那条来源没有任何活通道能带出新的归档集）。 */
-export async function archiveSessionForSource(sourceId: string, sessionId: string): Promise<void> {
-  await archiveSession(getInstanceClient(sourceId), sessionId)
+ *  那条来源没有任何活通道能带出新的归档集）。
+ *
+ *  `stopActivity`：上游归档准入的两段式第二段。首调不带它，宿主对有活跃工作的会话
+ *  以 `workspace/session-active` 拒绝并列出活动；用户确认后带它重发，宿主写归档集并由
+ *  自己的 provider 停止该会话的工作（回合/子代理后代/后台任务/定时提醒），客户端不再
+ *  自跑补偿停止腿。 */
+export async function archiveSessionForSource(
+  sourceId: string,
+  sessionId: string,
+  options: { stopActivity?: boolean } = {},
+): Promise<void> {
+  await archiveSession(getInstanceClient(sourceId), sessionId, options)
   chamberBridge.reportSessionRemoved({ sourceId, sessionId })
 }

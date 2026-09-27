@@ -202,8 +202,8 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
                                           } else if (id === 'fork') {
                                             onForkSession(server, session)
                                           } else if (id === 'archive') {
-                                          // 不传标题：动词立即执行，无人读取它。
-                                            onArchiveSession(server, session.id)
+                                          // 标题随行传入：拒绝相位（两段式确认）要用它。
+                                            onArchiveSession(server, session.id, session.displayTitle)
                                           }
                                         }}
                                         items={[
@@ -218,10 +218,12 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
                                             icon: <IconBranchOutlineRegular size={14} />,
                                           },
                                           {
-                                          // 归档动词只在这里的行菜单：归档只隐藏行（不触碰会话日志），
-                                          // 故既不破坏性也无确认门控。字形尺寸是对 compact 槽位的刻意
-                                          // 光学例外：compact 把图标槽缩到 14px，但 20 原生的归档字形保持
-                                          // 16，才与旁边按 14 画的 16 原生字形同视觉重量（flex 槽容忍 +2px）。
+                                          // 归档动词只在这里的行菜单：安静会话直接归档（只隐藏行，
+                                          // 不触碰会话日志）；宿主因仍有活跃工作而拒绝时才走两段式——
+                                          // 行菜单武装确认层，确认后带 stopActivity 重发。字形尺寸是对
+                                          // compact 槽位的刻意光学例外：compact 把图标槽缩到 14px，但 20
+                                          // 原生的归档字形保持 16，才与旁边按 14 画的 16 原生字形同视觉
+                                          // 重量（flex 槽容忍 +2px）。
                                             id: 'archive',
                                             label: t('menu.archiveSession'),
                                             icon: <IconArchiveOutlineRegular size={16} />,

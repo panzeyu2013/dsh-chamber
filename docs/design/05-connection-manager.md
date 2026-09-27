@@ -129,10 +129,13 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 - **点击来源分组头**（非当前来源）= 切换活动来源视图：
   `chamberBridge.requestActivateSource(sourceId)` → App 层仅切换该来源
   shell（N-ctx），不打开会话。
-- **归档会话立即从列表消失，且无确认**（upstream-alignment T2a）：归档动词在
-  会话行的 kebab 菜单里，执行即提交（上游理由：归档只隐藏该行、从不触碰会话日志，故既不
-  破坏性也无需确认，vendor ui-workspace `Rows.tsx:412-421`)；`archivedSessionIds` 过滤在
-  derive 层（`packages/dsh-chamber-client-core/src/derive.ts` 纯函数），不等聚合轮询。
+- **归档会话立即从列表消失；安静会话无确认，活跃会话走官方两段式确认**（upstream-alignment
+  T2a + 0.1.7 准入）：归档动词在会话行的 kebab 菜单里，首调 `{ sessionId }` 直接提交（上游理由：
+  归档只隐藏该行、从不触碰会话日志，故安静会话不具破坏性也无需确认，vendor ui-workspace
+  `Rows.tsx:412-421`）；宿主以 `workspace/session-active` 拒绝（该会话仍有工作）时才弹 chamber
+  的「停止并归档」确认，确认后带 `stopActivity: true` 重发，停止由宿主 provider 完成（design 24
+  §5）。`archivedSessionIds` 过滤在 derive 层（`packages/dsh-chamber-client-core/src/derive.ts`
+  纯函数），不等聚合轮询。
 - 会话行悬停操作（v1 最小集，走该来源自己的 API）：重命名/**fork**/归档（**kebab 菜单
   三项**；行内不再有独立归档按钮——upstream-alignment T2a)——行内 fork 走 wire
   `sessions.fork` + 标题递增（increaseTitle，对齐官方 ui-workspace），成功后打开子会话，递增

@@ -52,7 +52,7 @@ import { publishRendererStallObservation } from './renderer-stall-evidence.ts'
 // native 投递 journal（唯一 native 调用层的 durable 队列；run 身份 key + 稳定 eventKey）。
 import { createNotificationOutbox } from './notification-outbox.ts'
 import { monotonicNow } from './monotonic-now.ts'
-// 观测状态（goal-aware v5 §3.2）：App 持有每来源观测代状态，裁决在 useUnreadNotifications
+// 观测状态（goal-aware v5 §3.2）：App 持有每来源观测代状态，裁决在 useNotifications
 // 与桥 hook 的 observeSource/applyObservationBatch 接线里。
 import { withdrawObservationState, type SourceObservationState } from './completion-observation.ts'
 // 页代 token（sessionStorage）：区分 reload 与新进程/新窗口（§3.5）。
@@ -60,13 +60,12 @@ import { browserBootTokenStorage, loadBootToken } from './boot-token.ts'
 // 预热命中率仪表（attempt/hit/cancelled）。
 import { recordPrewarm } from './prewarm-ledger.ts'
 // gateway session-state 只读事实源的快照/实例类型 + 唯一可判谓词（读水位推进门）。
-import { factsDecisionInput, type SessionFactsSource } from './session-facts-source.ts'
+import type { SessionFactsSource } from './session-facts-source.ts'
 // probe 判定 → 侧栏档位：无快照即缺席 = 未知。
 import {
-  browserUnreadStorage, loadClientInstallId, loadUnread, maxWatermark,
-  seedReadFloor, unreadOutcomeTable, unreadPendingTable, type UnreadStorageLike,
-} from './unread-store.ts'
-import { reportUnreadShadowParityOnLoad } from './unread-instrument.ts'
+  browserNotificationStorage, loadNotifications, notificationOutcomeTable, notificationPendingTable,
+  type NotificationStorageLike,
+} from './notification-store.ts'
 import { pruneSourceList, pruneSourceRecord } from './source-registry.ts'
 import { LOCAL_INSTANCE_ID } from './local-instance.ts'
 import {
@@ -157,7 +156,7 @@ import {
   type DesktopBridgeVerdict, type HealthProbeUnavailableKind,
 } from './app-hooks/use-bridge-subscriptions.ts'
 import { useSessionFactsLifecycle } from './app-hooks/use-session-facts-lifecycle.ts'
-import { useUnreadNotifications } from './app-hooks/use-unread-notifications.ts'
+import { useNotifications } from './app-hooks/use-notifications.ts'
 import {
   useAbandonedViewsView,
   useAutoPrewarmedView,
@@ -488,9 +487,9 @@ export default function App() {
   // mounted 表单一权威：host/mounted-sources-store.ts（渲染值与事件侧同步读同一份）。
   const [mountedSources] = useState(createMountedSourcesStore)
   const snapshotSources = useSyncExternalStore(mountedSources.subscribe, mountedSources.getSnapshot, mountedSources.getSnapshot)
-  // 完成未读账本（蓝点）单一权威：渲染表 = 落盘 edge 表 = 事件侧 prevLedger 读。
+  // 完成点修正臂（唯一 App 侧状态）：官方位走通道行，这里只放隐藏来源 current 行的补臂（纯内存）。
   const [completedStore] = useState(createCompletedStore)
-  const completedBySource = useSyncExternalStore(completedStore.subscribe, completedStore.getSnapshot, completedStore.getSnapshot)
+  const correctionArms = useSyncExternalStore(completedStore.subscribe, completedStore.getSnapshot, completedStore.getSnapshot)
   // 每来源记账账本：字段表与单一 prune 清单都在 host/source-ledger.ts。
   // 以下别名保持既有接线（app-hooks 收到的是同一批 ref 盒，形状不变）。
   const [sourceLedger] = useState(createSourceLedger)
@@ -502,7 +501,6 @@ export default function App() {
     sessionListRefreshPending: sessionListRefreshPendingRef,
     authoritativeArchiveSet: authoritativeArchiveSetRef,
     prevRunning: prevRunningRef,
-    readMarks: readMarksRef,
     refreshHintAt: refreshHintAtRef,
     factsPullInFlight: factsPullInFlightRef,
   } = sourceLedger
@@ -592,14 +590,10 @@ export default function App() {
   // gateway 来源的托管 dsh connectionState（managed-runtime.ts）。null = 探不到（fail open），键随来源生命周期收敛。
   // 托管 dsh 探针簇（状态 + 15s 前台探针 + 退役收敛）在 host/use-managed-runtime.ts。
   const { managedRuntime, probeRef: probeManagedRuntimeRef, retireManagedRuntime } = useManagedRuntime(remoteInstances)
-  // chamber (design 06)：App 自持的「完成未读」蓝点（completedBySource）
-  // 与边沿记忆（prevRunningRef）。蓝点不依赖各来源 shell 的 selected——后台
-  // 来源的陈旧 selected 会让 vendor 提醒错误压制「完成但未读」——而是由 App
-  // 从上报里的实时 running 位自行推导 running→idle 边沿，以 App 已知的
-  // 「谁在阅读」（**屏上来源** paintedView + 各来源 current + 焦点）判定武装/解除。
-  // 插件侧保持无状态（纯投影），避免在每 ctx 复制一套状态机。
-  // facts wiring：completedBySource 是 deriveSourceUnread 的**派生投影**；durable 回退账本（completedStore）
-  // 与读水位（readMarksRef）首帧从 v4 载入（v2 是唯一历史迁移来源），撤回/同代重挂/重启后由事实重算。
+  // 完成未读的唯一权威是官方 uiSession.sessionStatus.completionUnread（vendor 内存 Set，
+  // 经 sidebar 生产者进通道行 completed）。App 只补一条 N-ctx 修正臂：隐藏来源的 mainView
+  // 持有行（current）在 vendor 规则下漏武装，那一格由 client-core completion-arm.ts 填补；
+  // 插件侧保持无状态（纯投影）。修正臂纯内存、不落盘、无水位、无播种。
   // Desktop-observed stall evidence: the shell's frame/input probe pushes strike
   // counters; the page registry feeds the delivery owner the same evidence.
   useEffect(() => {
@@ -608,36 +602,30 @@ export default function App() {
     })
     return () => { unsubscribeStall?.() }
   }, [])
-  const [unreadBoot] = useState(() => {
-    const storage = browserUnreadStorage()
-    const payload = loadUnread(storage)
-    // W3 启动期影子对账：只报告不改判定（权威仍是 v4，差异文本有界 ≤8 条）。
-    reportUnreadShadowParityOnLoad(storage, payload)
+  const [notificationsBoot] = useState(() => {
+    const storage = browserNotificationStorage()
+    // 通知三表首帧载入（旧 unread.v4/v2 一次性迁移并清理旧键，见 notification-store.ts）。
+    const payload = loadNotifications(storage)
     // 页代 token（v5 §3.5）：同 tab reload = same（保留 pending/outcomes），新进程/新窗口 =
     // fresh（丢弃 pending 并 loud；notified/outcomes 仍 durable）。
     const boot = loadBootToken(browserBootTokenStorage())
     return { storage, payload, boot }
   })
-  const unreadStorageRef = useRef<UnreadStorageLike | undefined>(unreadBoot.storage)
-  // 落盘载荷在首帧装进账本（在任何 effect 之前）。
-  readMarksRef.current = unreadBoot.payload.read
-  completedStore.seed(unreadBoot.payload.edge)
+  const notificationStorageRef = useRef<NotificationStorageLike | undefined>(notificationsBoot.storage)
   // complete 通知账本（设计 19 + goal-aware v5 §3.1 + v4 身份轨）：身份轨 notifiedRuns 与
-  // durable 三表（notified 水位 / pending 压制结算位 / outcomes 标题一次性身份）从 v4 落盘
+  // durable 三表（notified 身份哨兵 / pending 压制结算位 / outcomes 标题一次性身份）从 v4 落盘
   // 恢复；armed/settleFence/generation/goalKnown 易失。fresh 丢弃 pending（loud），same 只做
   // 上界卫生。身份面与水位面并列、互不混写。
-  const completeLedgerRef = useRef(createCompleteLedger(unreadBoot.payload.notifiedRuns, {
-    pending: unreadPendingTable(unreadBoot.payload),
-    outcomes: unreadOutcomeTable(unreadBoot.payload),
-    boot: unreadBoot.boot.verdict,
-    bootToken: unreadBoot.boot.token,
+  const completeLedgerRef = useRef(createCompleteLedger(notificationsBoot.payload.notifiedRuns, {
+    pending: notificationPendingTable(notificationsBoot.payload),
+    outcomes: notificationOutcomeTable(notificationsBoot.payload),
+    boot: notificationsBoot.boot.verdict,
+    bootToken: notificationsBoot.boot.token,
     onDiagnostic: (message, detail) => console.warn('[renderer] complete-ledger: ' + message, detail ?? ''),
   }))
   // native 投递 journal（唯一 native 调用层）：pending 行 durable，跨 reload 继续投递。
-  const [notificationOutbox] = useState(() => createNotificationOutbox(unreadBoot.storage))
+  const [notificationOutbox] = useState(() => createNotificationOutbox(notificationsBoot.storage))
   const notificationOutboxRef = useRef(notificationOutbox)
-  const clientInstallIdRef = useRef('')
-  if (clientInstallIdRef.current === '') clientInstallIdRef.current = loadClientInstallId(unreadBoot.storage)
 
   /** 每来源 facts 快照（判定输入：completedAt/updatedAt/lastTurnEnd/pendingKind）。 */
   const sessionFacts = facts.session
@@ -656,22 +644,22 @@ export default function App() {
    * prevRunningRef 同纪律）。
    */
   const completionObservationRef = useRef<Map<string, SourceObservationState>>(new Map())
-  /** 读标记落盘节流（≤1 次/秒；immediate 走微任务合并，pagehide/hidden/unmount 同步 flush）。 */
-  const unreadSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const flushUnreadRef = useRef<() => void>(() => undefined)
+  /** 通知落盘节流（≤1 次/秒；immediate 走微任务合并，pagehide/hidden/unmount 同步 flush）。 */
+  const notificationSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const flushNotificationsRef = useRef<() => void>(() => undefined)
   /**
-   * 落盘调度（≤1 次/秒节流）的 ref 镜像：早期 effect（来源剪枝 / 退役）在 useUnreadNotifications
-   * 返回 schedulePersistUnread 之前声明，靠这个 ref 在运行期拿到稳定实现（与 flushUnreadRef 同纪律）。
+   * 落盘调度（≤1 次/秒节流）的 ref 镜像：早期 effect（来源剪枝 / 退役）在 useNotifications
+   * 返回 schedulePersistNotifications 之前声明，靠这个 ref 在运行期拿到稳定实现。
    * durable 三表被 prune/forget 改动却漏落盘，重启后会用磁盘上的旧表复活已退役来源的判定。
    */
-  const schedulePersistUnreadRef = useRef<() => void>(() => undefined)
+  const schedulePersistNotificationsRef = useRef<() => void>(() => undefined)
 
   // chamberBridge 投影：health/remoteStatus/aggregates 任一变化后派生并发布；首帧（health 未就绪）即发布 connected=false 的分组。
   const servers = useMemo(
     // current 投影（侧栏高亮）跟随 **paintedView**（屏上是谁），不是选择——持有窗内用户点向 B 时
     // 屏上仍是 A，摘掉再装回 A 的高亮是纯闪烁；揭示完成那一拍 painted 变化自然交棒给 B。
-    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, paintedView, pluginDiagnostics, shellStates, managedRuntime, echoes.workspace, echoes.session, echoes.archive, openIntents, locale, sessionFacts),
-    [health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, paintedView, pluginDiagnostics, shellStates, managedRuntime, echoes, openIntents, locale, sessionFacts],
+    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, correctionArms, paintedView, pluginDiagnostics, shellStates, managedRuntime, echoes.workspace, echoes.session, echoes.archive, openIntents, locale, sessionFacts),
+    [health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, correctionArms, paintedView, pluginDiagnostics, shellStates, managedRuntime, echoes, openIntents, locale, sessionFacts],
   )
   // chamberBridge publish 签名闸：servers 每次依赖变化都会重建，但只有**渲染相关内容**变化才值得
   // 通知订阅方，否则每个 shell 的侧边栏都会周期性全量重渲染。签名排除无人消费的 updatedAt 时间戳。
@@ -853,22 +841,21 @@ export default function App() {
       if (live.has(sourceId)) continue
       completionObservationRef.current.delete(sourceId)
       if (withdrawObservationState(completeLedgerRef.current, sourceId)) {
-        schedulePersistUnreadRef.current()
+        schedulePersistNotificationsRef.current()
       }
     }
-    // ── durable（v2 落盘载入）四类剪枝：权威 roster / 无桥形态门控（F6+F11） ────
-    // read/edge（unread-store）与 complete 通知账本的 notified/pending/outcomes 在 App 首帧
+    // ── durable（旧载荷载入）四类剪枝：权威 roster / 无桥形态门控（F6+F11） ────
+    // complete 通知账本的 notified/pending/outcomes 在 App 首帧
     // **同步**载入，而权威远端 roster 是异步事实（桥探测 + IPC 往返）：未结算前按 live={local}
     // 剪枝会把远端来源的 durable 键当退役来源写盘删除。只放行结算后（或确认无桥）的剪枝；
     // 有桥但未结算严格关门。易失轨（prevRunning / 观测状态 / 水位记账）不受此门约束。
     if (durableUnreadPruneAllowed(rosterGate.isSettled(), bridgeVerdict, registryDegraded, rosterIncomplete)) {
       completedStore.prune(live)
       // 剪掉的 durable 表项必须落盘（否则重启后旧判决复活）。
-      if (completeLedgerRef.current.prune(live)) schedulePersistUnreadRef.current()
+      if (completeLedgerRef.current.prune(live)) schedulePersistNotificationsRef.current()
       // native 投递 journal 的退役来源同拍收敛（durable，与账本同受本门约束）。
       notificationOutboxRef.current.pruneSources(live)
-      // 每来源账本一次收敛（字段表在 host/source-ledger.ts）：读水位是 durable，必须与
-      // edge/notified/pending/outcomes 同受本门约束；易失字段随同一次 prune 收敛。
+      // 每来源账本一次收敛（字段表在 host/source-ledger.ts）：易失字段随同一次 prune 收敛。
       pruneSourceLedger(sourceLedger, live)
       // facts wiring 数据面：退役来源的 facts state 一并清（same-id 重加 = 新来源代）。
       if (pruneSourceRecord(factsStore.getSnapshot().session, live) !== null) {
@@ -1004,10 +991,10 @@ export default function App() {
         || ledger.pendingTable()[sourceId] !== undefined
         || ledger.outcomesTable()[sourceId] !== undefined
       ledger.forget(sourceId)
-      if (ledgerHadDurable) schedulePersistUnreadRef.current()
+      if (ledgerHadDurable) schedulePersistNotificationsRef.current()
       // native 投递 journal 中该来源的未完成条目同拍退役（durable；重加 = 新来源代）。
       notificationOutboxRef.current.forgetSource(sourceId)
-      // facts wiring：事实源实例与全部未读数据面键随退役同拍收敛（reclaimView 刻意不碰——拆壳不等于来源消失）。
+      // facts wiring：事实源实例与完成点/通知数据面键随退役同拍收敛（reclaimView 刻意不碰——拆壳不等于来源消失）。
       sessionFactsTeardownRef.current.get(sourceId)?.()
       sessionFactsTeardownRef.current.delete(sourceId)
       sessionFactsSourcesRef.current.delete(sourceId)
@@ -1015,8 +1002,6 @@ export default function App() {
       sourceMuxTeardownRef.current.get(sourceId)?.()
       sourceMuxTeardownRef.current.delete(sourceId)
       sourceMuxIdentityRef.current.delete(sourceId)
-      delete readMarksRef.current[sourceId]
-      completedStore.dropSource(sourceId)
       delete refreshHintAtRef.current[sourceId]
       delete factsPullInFlightRef.current[sourceId]
     }
@@ -1131,7 +1116,7 @@ export default function App() {
         if (registryDegradedWarnedRef.current !== reason) {
           registryDegradedWarnedRef.current = reason
           console.warn(
-            `[renderer] SSH instance registry is degraded (${reason}); the empty roster is NOT authoritative — durable unread state is retained until the registry is rebuilt`,
+            `[renderer] SSH instance registry is degraded (${reason}); the empty roster is NOT authoritative — durable notification state is retained until the registry is rebuilt`,
           )
         }
         setRegistryDegraded(true)
@@ -1146,7 +1131,7 @@ export default function App() {
         if (rosterIncompleteWarnedRef.current !== diagnostic) {
           rosterIncompleteWarnedRef.current = diagnostic
           console.warn(
-            `[renderer] SSH instance registry roster is incomplete (${diagnostic}); valid rows are installed but durable unread state is retained until the roster is complete`,
+            `[renderer] SSH instance registry roster is incomplete (${diagnostic}); valid rows are installed but durable notification state is retained until the roster is complete`,
           )
         }
       }
@@ -1762,24 +1747,24 @@ export default function App() {
     return map
   }, [connections, remoteInstances])
 
-  // 通知 / 未读投影簇（写盘、未读派生、通知唯一组装点、facts 应用）是命名 hook
-  // （use-unread-notifications.ts）；App 只传状态容器与 setter（pagehide flush 经 flushUnreadRef，ref 由 hook 写入）。
+  // 通知投影 / 完成点装配簇（写盘、修正臂步进、通知唯一组装点、facts 应用）是命名 hook
+  // （use-notifications.ts）；App 只传状态容器与 setter（pagehide flush 经 flushNotificationsRef，ref 由 hook 写入）。
   const {
-    schedulePersistUnread, recomputeSourceUnread, emitSessionNotification, applySessionFacts,
-    persistCompletionLedger, unreadImmediateSave, guardUnreadStep,
-  } = useUnreadNotifications({
+    schedulePersistNotifications, stepCompletionArmFor, emitSessionNotification, applySessionFacts,
+    persistCompletionLedger, notificationImmediateSave, guardStep,
+  } = useNotifications({
     aggregates, serverLabels, viewStore, factsStore, liveServerIdsRef,
-    sessionFactsSourcesRef, sourceLifecyclesRef, prevRunningRef,
-    readMarksRef, completeLedgerRef, notificationOutboxRef, completionObservationRef,
-    unreadStorageRef, unreadSaveTimerRef, flushUnreadRef, clientInstallIdRef,
-    completedStore, bootToken: unreadBoot.boot.token, bootVerdict: unreadBoot.boot.verdict,
+    sourceLifecyclesRef, prevRunningRef,
+    completeLedgerRef, notificationOutboxRef, completionObservationRef,
+    notificationStorageRef, notificationSaveTimerRef, flushNotificationsRef,
+    completedStore, bootToken: notificationsBoot.boot.token, bootVerdict: notificationsBoot.boot.verdict,
   })
-  schedulePersistUnreadRef.current = schedulePersistUnread
+  schedulePersistNotificationsRef.current = schedulePersistNotifications
 
   // servers 渲染期镜像、行刷新提示、gateway 事实源与 dsh 无壳观察者的创建/收敛/退订、focus 重算与
   // pagehide 落盘是命名 hook（use-session-facts-lifecycle.ts）；App 只注入状态容器与投影回调。
   useSessionFactsLifecycle({
-    servers, applySessionFacts, recomputeSourceUnread, unreadImmediateSave,
+    servers, applySessionFacts, notificationImmediateSave,
     unverifiedSourcesRef, factsPullInFlightRef, refreshHintAtRef, refreshAggregateRef,
     factsStore, sessionFactsSourcesRef, sessionFactsTeardownRef,
     sourceMuxTeardownRef, sourceMuxIdentityRef,
@@ -2096,30 +2081,10 @@ export default function App() {
     reportNotificationAckFailure,
   ])
 
-  /**
-   * 「全部已读」：读水位与落盘都在 App 手里，所以侧栏只发意图、动作在此执行——一次性把该来源的
-   * 读标记抬到**源级上界**（maxWatermark = 逐行 **host 域**水位（updatedAt + host 域 completedAt）的全表最大值），落盘并
-   * 镜像（ackAllRead 的 read-all 地板），再重算派生（蓝点/todo 立即清空，单调提升绝不回退）。
-   */
-  const markSourceAllRead = useCallback((sourceId: string): void => {
-    if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
-    // 唯一判据元组（只升不降的读水位绝不允许从冻结/降级的行推进）。
-    const rows = factsDecisionInput(factsStore.getSnapshot().session[sourceId]).rows
-    if (rows === undefined) return
-    const through = maxWatermark(rows)
-    // 没有可用水位（全是 0）时什么都不做：绝不写一个凭空的"已读"读数。
-    if (through <= 0) return
-    const next = seedReadFloor(readMarksRef.current[sourceId] ?? {}, rows, through)
-    readMarksRef.current = { ...readMarksRef.current, [sourceId]: next }
-    schedulePersistUnread()
-    sessionFactsSourcesRef.current.get(sourceId)?.ackAllRead(clientInstallIdRef.current, through)
-    recomputeSourceUnread(sourceId)
-  }, [recomputeSourceUnread, schedulePersistUnread])
-
-  // 桥订阅簇（全部已读 / 深链 / 回声 / 挂载快照 / 运行时上报…）是命名 hook；App 只传当前 ref/state/回调与预算常量。
+  // 桥订阅簇（深链 / 回声 / 挂载快照 / 运行时上报…）是命名 hook；App 只传当前 ref/state/回调与预算常量。
   useBridgeSubscriptions({
-    acknowledgeDeepLink, emitSessionNotification, markSourceAllRead, openSession,
-    recomputeSourceUnread, guardUnreadStep, refreshAggregate, reportDeepLinkAckFailure, selectView,
+    acknowledgeDeepLink, emitSessionNotification, openSession,
+    stepCompletionArmFor, guardStep, refreshAggregate, reportDeepLinkAckFailure, selectView,
     updateSessionArchive, updateSessionEcho, updateWorkspaceEcho, aggregatePollSeqRef,
     aggregateRequestOwnersRef, authoritativeArchiveSetRef, autoPrewarmedRef, completeLedgerRef,
     drainPrewarmRef, factsAtRef, harvestCandidatesRef, harvestIntentRef,
@@ -2134,21 +2099,19 @@ export default function App() {
     setUnverified, sshBridgeReady, LISTENER_READY_RETRY_MS, LISTENER_READY_RETRY_LIMIT,
     // goal-aware v5：观测状态/落盘出口 + 页代判定（reconcile 迁移件）。
     completionObservationRef, persistCompletionLedger,
-    bootToken: unreadBoot.boot.token, bootVerdict: unreadBoot.boot.verdict,
+    bootToken: notificationsBoot.boot.token, bootVerdict: notificationsBoot.boot.verdict,
   })
 
-  /** chamber：**屏上**来源（paintedView，非选择——持有窗内 active 已是目标而屏上仍是旧视图）的
-   *  current 会话立即视为已读：清除后台期间武装的蓝点；读水位推进 + 派生重算在同一拍
-   *  （recomputeSourceUnread），覆盖「激活但无新上报」的路径。谓词与通知 requireHidden /
-   *  readingCurrent 完全同一份（paintedView ∩ current ∩ hasFocus）。 */
+  /** chamber：**屏上**来源（paintedView，非选择）的 current 行被读到 ⇒ 清除修正臂。
+   *  官方位由 vendor 自己在 retain / ready 时清除，这里只补修正臂那一格；进入屏上的一拍重跑一次，
+   *  覆盖「激活但无新上报」的路径。 */
   const prevPaintedViewRef = useRef(paintedView)
   useEffect(() => {
     const previous = prevPaintedViewRef.current
     prevPaintedViewRef.current = paintedView
     if (previous === paintedView) return
-    recomputeSourceUnread(paintedView)
-    recomputeSourceUnread(previous)
-  }, [paintedView, recomputeSourceUnread])
+    stepCompletionArmFor(paintedView)
+  }, [paintedView, stepCompletionArmFor])
 
   /**
    * 徽标输入 = **合并后**的 runtime 投影（与侧栏六面同一份事实，INV7）：deriveServers 已经把
@@ -2163,7 +2126,7 @@ export default function App() {
 
   // 未读徽标 effect 簇（推送 / 桥迟到兜底 / reject 重推与卸载清理）是命名 hook；事实源与预算显式传入。
   useBadgeCount({
-    completedBySource,
+    correctionArms,
     runtimeFacts: badgeRuntime,
     retryMs: LISTENER_READY_RETRY_MS,
     retryLimit: LISTENER_READY_RETRY_LIMIT,

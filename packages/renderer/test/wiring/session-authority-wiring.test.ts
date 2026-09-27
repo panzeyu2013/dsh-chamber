@@ -22,8 +22,8 @@ const hook = stripComments(readFileSync(
   fileURLToPath(new URL('../../src/app-hooks/use-bridge-subscriptions.ts', import.meta.url)), 'utf8'))
 // 事实/壳两条通道与升级 ladder 的执行端已随通知/未读投影簇、聚合刷新簇抽到
 // 命名 hook；锁跨 App + 两个 hook 取并集（presence/absence 都不放松）。
-const unreadHook = stripComments(readFileSync(
-  fileURLToPath(new URL('../../src/app-hooks/use-unread-notifications.ts', import.meta.url)), 'utf8'))
+const notificationsHook = stripComments(readFileSync(
+  fileURLToPath(new URL('../../src/app-hooks/use-notifications.ts', import.meta.url)), 'utf8'))
 const factsSource = stripComments(readFileSync(
   fileURLToPath(new URL('../../src/session-facts-source.ts', import.meta.url)), 'utf8'))
 const completionObservation = stripComments(readFileSync(
@@ -36,7 +36,7 @@ const aggregateHook = stripComments(readFileSync(
   fileURLToPath(new URL('../../src/app-hooks/use-aggregate-refresh.ts', import.meta.url)), 'utf8'))
 const factsHook = stripComments(readFileSync(
   fileURLToPath(new URL('../../src/app-hooks/use-session-facts-lifecycle.ts', import.meta.url)), 'utf8'))
-const frame = app + '\n' + unreadHook + '\n' + aggregateHook + '\n' + factsHook
+const frame = app + '\n' + notificationsHook + '\n' + aggregateHook + '\n' + factsHook
 const projection = stripComments(readFileSync(
   fileURLToPath(new URL('../../src/notification-projection.ts', import.meta.url)), 'utf8'))
 const logStore = stripComments(readFileSync(
@@ -78,8 +78,8 @@ test('completion notifications have one policy entry and one edge implementation
   // 第二 planner，也不得在接线层重实现水位原语（nextNotifiedWatermark/shouldNotifyWatermark）。
   assert.match(hook, /observeSource\(/)
   assert.match(hook, /applyObservationBatch\(/)
-  assert.match(unreadHook, /observeSource\(/)
-  assert.match(unreadHook, /applyObservationBatch\(/)
+  assert.match(notificationsHook, /observeSource\(/)
+  assert.match(notificationsHook, /applyObservationBatch\(/)
   assert.doesNotMatch(
     frame + '\n' + hook,
     /planRuntimeNotifications|planFactsNotifications|detectNotificationEdges|dedupeCompleteEdges|isStaleRunIdentity|shouldNotifyWatermark|nextNotifiedWatermark/,
@@ -98,12 +98,12 @@ test('completion notifications have one policy entry and one edge implementation
 test('both run-start sites use the ordering rule, never an unconditional clear (A3)', () => {
   // 迁移自 notification-run-scope（旧 planner 直测已删）：run-start 不得有无条件清
   // 结算标记的第二权威；认领同一完成前必须有「facts 行不晚于 host 锚点」的同域序。
-  for (const [label, text] of [['use-bridge-subscriptions', hook], ['use-unread-notifications', unreadHook]] as const) {
+  for (const [label, text] of [['use-bridge-subscriptions', hook], ['use-notifications', notificationsHook]] as const) {
     assert.doesNotMatch(text, /observeRunStart\(|markRunStarted\(/, label + ' 不得有无条件 run-start 权威')
     assert.doesNotMatch(text, /clearRuntimeSettled\(sourceId, (row\.sessionId|sessionId)\)/, label + ' 不得为迟到的 running 快照丢结算标记')
   }
-  assert.match(unreadHook, /factsRow\.updatedAt <= anchor/, '锚点序：行严格更新才属于下一轮运行')
-  assert.match(unreadHook, /pendingClaims\.has\(notification\.sessionId\)/, '在途原生投递必须让行，不被 facts 吸附')
+  assert.match(notificationsHook, /factsRow\.updatedAt <= anchor/, '锚点序：行严格更新才属于下一轮运行')
+  assert.match(notificationsHook, /pendingClaims\.has\(notification\.sessionId\)/, '在途原生投递必须让行，不被 facts 吸附')
 })
 
 test('the notification association uses the facts host anchor, never the content watermark', () => {
@@ -111,9 +111,9 @@ test('the notification association uses the facts host anchor, never the content
   // host `updatedAt` BOTH sides carry. Passing the content watermark (completedAt ??
   // updatedAt) as that anchor was the double-banner defect; the API now requires the
   // anchor object, and this lock pins the one caller's value and its single call.
-  assert.match(unreadHook, /hostUpdatedAt: row\.updatedAt/)
-  assert.match(unreadHook, /associateCompletion\(\s*\n?\s*sourceId, lifecycle\.fingerprint, row\.sessionId, observed,/)
-  assert.match(unreadHook, /pendingSessions\.add\(row\.sessionId\)/)
+  assert.match(notificationsHook, /hostUpdatedAt: row\.updatedAt/)
+  assert.match(notificationsHook, /associateCompletion\(\s*\n?\s*sourceId, lifecycle\.fingerprint, row\.sessionId, observed,/)
+  assert.match(notificationsHook, /pendingSessions\.add\(row\.sessionId\)/)
 })
 
 test('the completion observation seam keeps its identity/page-boot/shell-report inputs (v5 §3.2/§3.5)', () => {
@@ -122,11 +122,11 @@ test('the completion observation seam keeps its identity/page-boot/shell-report 
   assert.match(hook, /observeSource\(\{[\s\S]{0,400}?identity: completionIdentity\(sourceFingerprint, bootToken\)/)
   assert.match(hook, /pageBoot: bootVerdict/)
   assert.match(hook, /shellReport: true/)
-  assert.match(unreadHook, /identity: completionIdentity\(owner\.fingerprint, bootToken\)/)
-  assert.match(unreadHook, /pageBoot: bootVerdict/)
+  assert.match(notificationsHook, /identity: completionIdentity\(owner\.fingerprint, bootToken\)/)
+  assert.match(notificationsHook, /pageBoot: bootVerdict/)
   // App 把观测状态 / 落盘出口交给桥（P2a/P2b 的 goal 事实断链守卫）。
   assert.match(app, /completionObservationRef, persistCompletionLedger/)
-  assert.match(app, /bootToken: unreadBoot\.boot\.token, bootVerdict: unreadBoot\.boot\.verdict/)
+  assert.match(app, /bootToken: notificationsBoot\.boot\.token, bootVerdict: notificationsBoot\.boot\.verdict/)
 })
 
 test('the badge is fed the merged runtime projection, never the raw channel report (design 19 §3.2.5/§3.7, INV7)', () => {
@@ -145,13 +145,13 @@ test('the badge is fed the merged runtime projection, never the raw channel repo
 test('the complete ledger persists when a prune/forget changes the durable tables (M6)', () => {
   // 内存是权威、磁盘是缓存：剪枝/退役删掉的 durable 表项（notified/pending/
   // outcomes）必须排一次写，否则重启后旧判定从磁盘复活。App 的早期 effect 在
-  // schedulePersistUnread 定义之前就捕获它，所以走 ref 镜像（与 flushUnreadRef 同纪律）。
-  assert.match(app, /if \(completeLedgerRef\.current\.prune\(live\)\) schedulePersistUnreadRef\.current\(\)/)
+  // schedulePersistNotifications 定义之前就捕获它，所以走 ref 镜像（与 flushNotificationsRef 同纪律）。
+  assert.match(app, /if \(completeLedgerRef\.current\.prune\(live\)\) schedulePersistNotificationsRef\.current\(\)/)
   assert.match(app, /notifiedTable\(\)\[sourceId\] !== undefined/)
   assert.match(app, /pendingTable\(\)\[sourceId\] !== undefined/)
   assert.match(app, /outcomesTable\(\)\[sourceId\] !== undefined/)
   assert.match(app, /ledger\.forget\(sourceId\)/)
-  assert.match(app, /schedulePersistUnreadRef\.current = schedulePersistUnread/)
+  assert.match(app, /schedulePersistNotificationsRef\.current = schedulePersistNotifications/)
 })
 
 test('FINAL-C wiring: the observation-state prune withdraws the ledger scope before any rebuild', () => {
@@ -172,7 +172,7 @@ test('FINAL-C wiring: the observation-state prune withdraws the ledger scope bef
     /withdrawObservationState\(completeLedgerRef\.current, sourceId\)/,
     'the same pass must scoped-withdraw the ledger (FINAL-C)',
   )
-  assert.match(loop, /schedulePersistUnreadRef\.current\(\)/, 'a dropped durable pending must be persisted')
+  assert.match(loop, /schedulePersistNotificationsRef\.current\(\)/, 'a dropped durable pending must be persisted')
   assert.match(
     app,
     /import \{[\s\S]*?withdrawObservationState,[\s\S]*?\} from '\.\/completion-observation\.ts'/,
@@ -206,37 +206,37 @@ test('facts decidability has ONE owner: no consumer may re-spell the rule', () =
   // 缺陷史：判定面曾有三份各写一遍的可用性规则——overlay 的 isFactsUsable、未读接线的
   // 恒真 factsVerified、completion-observation 内联的 !stale 变体。前者渲染用（含 stale），
   // 后两者判定用；一条规则三个写法两个答案，载体抖动时账本在两条通道间来回重算。
-  // 现在 owner 唯一（session-facts-source 导出两支谓词），本锁保证没有第四份。
-  assert.match(factsSource, /export function isFactsUsable\(/)
-  assert.match(factsSource, /export function isFactsDecisionUsable\(/)
-  assert.match(factsSource, /verdict === 'ok' && snapshot\.serviceable !== false && snapshot\.stale !== true/)
+  // 现在 owner 唯一（session-facts-source 导出两支谓词；元组 helper 已删，判定面直接
+  // 引用 isFactsDecisionUsable），本锁保证没有第四份。
+  assert.ok(factsSource.includes('export function isFactsUsable('))
+  assert.ok(factsSource.includes('export function isFactsDecisionUsable('))
+  assert.ok(factsSource.includes("verdict === 'ok' && snapshot.serviceable !== false && snapshot.stale !== true"))
   // 判定面必须引用 owner，不得内联重写（stale 检查只能出现在 owner 里）。
   for (const [label, text] of [
-    ['unread hook', unreadHook],
+    ['notifications hook', notificationsHook],
     ['completion observation', completionObservation],
-    ['App read-watermark', app],
+    ['facts mode', factsMode],
   ] as const) {
-    assert.match(text, /isFactsDecisionUsable\(|factsDecisionInput\(/, label + ' 必须用唯一判据')
-    assert.doesNotMatch(text, /stale !== true/, label + ' 不得内联可判性规则')
+    assert.ok(text.includes('isFactsDecisionUsable('), label + ' 必须用唯一判据')
+    assert.ok(!text.includes('factsDecisionInput'), label + ' 不得引用已删除的元组 helper')
+    assert.ok(!text.includes('stale !== true'), label + ' 不得内联可判性规则')
     // 判定面**不得**触及渲染支谓词：留着它就能用 isFactsUsable(x) && x.stale === false
     // 越过「唯一判据」的命名锁（审计 B 的已验证逃逸路径）。
-    assert.doesNotMatch(text, /isFactsUsable/, label + ' 是判定面，不得引用渲染支谓词')
+    assert.ok(!text.includes('isFactsUsable'), label + ' 是判定面，不得引用渲染支谓词')
   }
-  // 未读接线的两个消费点必须**同源**：facts 键与 factsVerified 取自同一个判据元组。
-  assert.match(unreadHook, /const factsDecision = factsDecisionInput\(factsSnapshot\)/)
-  assert.match(unreadHook, /const factsRows = factsDecision\.rows/)
-  assert.match(unreadHook, /factsVerified: factsDecision\.verified/)
+  // 修正臂装配的唯一接入点：快照可用性取自 owner（恒真 factsVerified 已删）。
+  assert.ok(notificationsHook.includes('const usable = isFactsDecisionUsable(snapshot)'))
   // 回归锁：曾经那一行是「可用 ? serviceable!==false : true」——恒真，规则 0 成了死代码。
-  assert.doesNotMatch(unreadHook, /\?\s*\w+\.serviceable !== false\s*:\s*true/)
-  assert.doesNotMatch(unreadHook, /usableFacts/)
-  // 只升不降的读水位不得从冻结/降级的行推进（读水位也走同一个判据元组）。
-  assert.match(app, /const rows = factsDecisionInput\(factsStore\.getSnapshot\(\)\.session\[sourceId\]\)\.rows/)
-  assert.doesNotMatch(app, /snapshot\.verdict === 'ok' \? snapshot\.rows/)
+  assert.ok(!notificationsHook.includes('serviceable !== false'), 'hook 不得内联可判性规则')
+  assert.ok(!notificationsHook.includes('factsVerified') && !notificationsHook.includes('usableFacts'))
+  // App 不再有第二处判据（读水位/全部已读已退役）：元组 helper 与渲染支谓词都不得复活。
+  assert.ok(!app.includes('factsDecisionInput'), 'deleted tuple helper must not come back')
+  assert.ok(!app.includes('isFactsDecisionUsable') && !app.includes('isFactsUsable'),
+    'App 的 facts 呈现走 host/servers 的 overlay，不得再有判定面/渲染支谓词的直接引用')
   // 能力一览（session-facts-mode）也不得内联重写可判性规则。
-  assert.match(factsMode, /return isFactsDecisionUsable\(snapshot\) \? 'full' : 'degraded'/)
-  assert.doesNotMatch(factsMode, /snapshot\.stale === true \? 'degraded'/)
+  assert.ok(factsMode.includes("return isFactsDecisionUsable(snapshot) ? 'full' : 'degraded'"))
+  assert.ok(!factsMode.includes("snapshot.stale === true ? 'degraded'"))
 })
-
 test('every RENDERED runtime row field rides the report signature (factAt)', () => {
   // runtimeReportSignature 是 App 提交运行时事实前的去重键：漏签一个渲染字段，
   // 该字段的单独变化就被整个丢弃（factAt 冻结 ⇒ data-chamber-fact-at 永远首见值）。

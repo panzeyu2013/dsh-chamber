@@ -111,10 +111,16 @@ test('projectRuntimeFacts carries the goal fact sparsely and keeps rows without 
   assert.equal(report.sessions.s2?.goal, null, 'explicit null survives the projection')
   assert.equal('goal' in (report.sessions.s3 ?? {}), false, 'unknown stays SPARSE (no fabricated null)')
   assert.equal('goal' in (report.sessions.s4 ?? {}), false)
-  // Rows without goal facts keep the pre-goal bytes (no extra key, no churn).
+  // Rows without goal facts keep the pre-goal bytes (no extra key, no churn);
+  // the official completion bit is the one field the channel may add, sparsely.
   assert.deepEqual(projectRuntimeFacts({ byId: { s: { running: false } } }).sessions.s, {
     running: false, subagentActivity: 'unknown',
   })
+  assert.deepEqual(
+    projectRuntimeFacts({ byId: { s: { running: false } } }, undefined, undefined, undefined, undefined, new Set(['s'])).sessions.s,
+    { running: false, completed: true, subagentActivity: 'unknown' },
+    'the official completionUnread bit rides the row when armed (sparse true)',
+  )
 })
 
 test('retainGoalFacts restores the last known fact for unknown rows and drops vanished sessions', () => {

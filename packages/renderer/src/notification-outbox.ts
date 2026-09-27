@@ -5,7 +5,7 @@
  */
 import type { SessionRunId } from '@dsh-chamber/dsh-stream-state'
 import { isSessionRunId, notificationRunId } from './notification-identity.ts'
-import type { UnreadStorageLike } from './unread-store.ts'
+import type { NotificationStorageLike } from './notification-store.ts'
 import { isWatermark } from './watermark.ts'
 
 export const NOTIFICATION_OUTBOX_KEY = 'dsh-chamber.notification-outbox.v2'
@@ -102,7 +102,7 @@ function keyFor(intent: NotificationIntent & { runId: SessionRunId }): string {
   return JSON.stringify([intent.sourceId, intent.sourceFingerprint, intent.sessionId, intent.kind, intent.runId])
 }
 
-function readStored(storage: UnreadStorageLike | undefined, key: string): StoredRow[] {
+function readStored(storage: NotificationStorageLike | undefined, key: string): StoredRow[] {
   try {
     const raw = storage?.getItem(key)
     if (raw === null || raw === undefined) return []
@@ -127,7 +127,7 @@ function normalizeStored(row: StoredRow): PendingNotification {
  * usual, never silently dropped) and removed only after v2 is persisted; an entry
  * that already exists in v2 is not duplicated.
  */
-function load(storage: UnreadStorageLike | undefined): { pending: PendingNotification[]; legacy: PendingNotification[] } {
+function load(storage: NotificationStorageLike | undefined): { pending: PendingNotification[]; legacy: PendingNotification[] } {
   const current = readStored(storage, NOTIFICATION_OUTBOX_KEY).map(normalizeStored)
   const keys = new Set(current.map(entry => entry.key))
   const legacy = readStored(storage, LEGACY_NOTIFICATION_OUTBOX_KEY)
@@ -135,7 +135,7 @@ function load(storage: UnreadStorageLike | undefined): { pending: PendingNotific
   return { pending: current, legacy }
 }
 
-export function createNotificationOutbox(storage?: UnreadStorageLike, now: () => number = Date.now) {
+export function createNotificationOutbox(storage?: NotificationStorageLike, now: () => number = Date.now) {
   const loaded = load(storage)
   const pending = new Map<string, PendingNotification>(loaded.pending.map(item => [item.key, item]))
   for (const entry of loaded.legacy) pending.set(entry.key, entry)

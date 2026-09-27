@@ -254,18 +254,12 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                         onClose={() => { setSortMenuOpen(null) }}
                         onSelect={(id: string) => {
                           setSortMenuOpen(null)
-                          // 「全部已读」只把意图发给 App（读水位与落盘归 App）：同一权威，插件不重复实现。
-                          if (id === 'mark-all-read') {
-                            chamberBridge.requestMarkAllRead(server.id)
-                            return
-                          }
                           if (id === 'manual' || id === 'updated') setOrderBy(server, id)
                         }}
                         items={[
                           { type: 'label' as const, id: 'sort-label', text: t('orderBy.label') },
                           { id: 'manual', label: t('orderBy.manual') },
                           { id: 'updated', label: t('orderBy.updated') },
-                          { id: 'mark-all-read', label: t('source.markAllRead') },
                         ]}
                         selectedIds={[viewPrefs.orderBy?.[server.id] ?? 'manual']}
                         anchor={(

@@ -402,11 +402,14 @@ fresh-preflight -> git-removing -> git-removed
 
 ### 5.2 归档感知 running 判据（INERT）
 
-工作树删除**不停、不取消、不隐式归档、也不删除任何会话**（「先归档（含子会话）」是 §5.4 的
+工作树删除**自身不停、不取消、不隐式归档、也不删除任何会话**（「先归档（含子会话）」是 §5.4 的
 **显式、默认关闭**独立勾选项）；**运行中的会话仍阻塞删除，除非它已归档（或其经 subagent-origin
-边链到的祖先已归档）**——归档即「已了结」，停止与内容清理只属归档侧（design 24 §5：本 saga 的
-pre-remove 归档**不**停止，仍由归档管理器的删除前停止兜底；chamber 侧边栏的归档动词
-**就地**终止该会话与 subagent 闭包）。
+边链到的祖先已归档）**——归档即「已了结」，停止与内容清理只属归档侧（design 24 §5）。该勾选的
+pre-remove 归档**带 `stopActivity: true`**：勾选即授权宿主停止这些会话里仍在运行的工作（回合 /
+后台任务 / 定时提醒；阻塞删除的 running agent 会话根本到不了这一步），因为归档准入会拒绝仍有
+活跃工作的成员；停止由宿主 provider 完成，本 saga 不跑 cancel 循环（旧「归档不停止、由管理器
+兜底」的口径已随 0.1.7 准入作废）。chamber 侧边栏的归档动词同样走两段式（安静会话直接归档，
+拒绝后确认再带 `stopActivity` 重发）。
 
 - **判据（宿主侧，`assertNoRunningSessions` / `assertNoRunningAtPath` 共用；同一条判据作用于所有
   mutation 腿——首次删除、rollbackCreate 的 path 腿（`assertNoRunningAtPath(facts.path)`）、以及
@@ -434,10 +437,11 @@ pre-remove 归档**不**停止，仍由归档管理器的删除前停止兜底�
   **agent 行的列漂移不在此列**：`origin`/`status`/`cwd` 三列都**逐行**处理
   （`agent-origin-unknown`/`agent-status-unknown`/`agent-cwd-unknown` SnapshotError），未知 `status` 按
   running、不可解析的 `cwd` 保持阻塞（§6.4）。
-- **起因（保留为语义依据）**：归档是**软隐藏**（上游 `archiveSession` 只把 id 追加进
+- **起因（保留为语义依据；0.1.7 前）**：归档曾是**软隐藏**（上游 `archiveSession` 只把 id 追加进
   `archivedSessionIds`），**不**停止运行；会话卡在 `ask_user_question` 时归档反让它从侧边栏消失、
   失去停止入口，工作树既删不掉、归档清理也清不掉，故已归档的运行中会话不再挡住工作树删除，其停止
-  与清理归归档管理器。
+  与清理归归档管理器。0.1.7 起归档准入会拒绝活跃会话（本域/chamber 的归档经 `stopActivity` 停止），
+  但**已归档**成员（别的客户端归档、或更早归档）仍按 INERT 放行，本判据因此原样保留。
 
 ### 5.3 显式授权：dirty / 子模块 / 删分支
 
@@ -485,8 +489,9 @@ pre-remove 归档**不**停止，仍由归档管理器的删除前停止兜底�
 ### 5.4 删除对话框与文案
 
 - 会话闭包统计 + **会话标题列表**（≤5 + "还有 N 条"，取自侧栏 aggregate）；「先归档（含子会话）」
-  显式勾选、默认关闭（`archiveSessions` 初值 `false`，每次打开/换目标重置）；另可选「同时删除本地
-  分支」（§5.3）。
+  显式勾选、默认关闭（`archiveSessions` 初值 `false`，每次打开/换目标重置）；勾选后在其下显示后果行
+  （归档会先停止这些会话中仍在运行的工作——`archiveSessionsNote`，§5.2）；另可选「同时删除本地分支」
+  （§5.3）。
 - **dirty**：删除图标不再禁用（仅 dirty），点击进对话框显示醒目警示（"该工作树有未提交的更改，将被
   永久丢弃"）；授权由**官方 `RiskConfirmation`** 收集
   （`RemoveWorktreeDialog.tsx`，单手势与撤销语义按 

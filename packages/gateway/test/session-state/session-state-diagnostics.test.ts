@@ -43,7 +43,6 @@ test('the descriptor carries the additive diagnostics field with the documented 
   assert.ok(Array.isArray(body.features))
   assert.equal(body.mode, 'sse')
   assert.ok(Array.isArray(body.sessions))
-  assert.ok(body.read !== undefined)
   const diagnostics = body.diagnostics as Record<string, unknown>
   assert.equal(diagnostics.eventsReceived, 7)
   assert.equal(diagnostics.lastEventAt, 950)
@@ -54,7 +53,7 @@ test('the descriptor carries the additive diagnostics field with the documented 
   assert.equal(diagnostics.heldWaterfalls, 1)
   assert.equal(diagnostics.degraded, true)
   assert.deepEqual(diagnostics.turnEnds, { completed: 0, userStopped: 0, neutral: 0, unreadable: 0 })
-  assert.deepEqual(diagnostics.dropped, { sessions: 0, readClients: 0, readMarks: 0, goalActivations: 0 })
+  assert.deepEqual(diagnostics.dropped, { sessions: 0, goalActivations: 0 })
   assert.equal(typeof diagnostics.cursor, 'number')
 })
 
@@ -82,7 +81,7 @@ test('store losses stay visible in the diagnostics (dropped counters pass throug
   activeSurface = harness.surface
   const diagnostics = (await get()).diagnostics as { dropped: Record<string, number> }
   // 未注入任何溢出时全 0（既不遗漏也不臆造）。
-  assert.deepEqual(diagnostics.dropped, { sessions: 0, readClients: 0, readMarks: 0, goalActivations: 0 })
+  assert.deepEqual(diagnostics.dropped, { sessions: 0, goalActivations: 0 })
   assert.ok(harness.store.status().dropped !== undefined)
 })
 
@@ -95,14 +94,14 @@ test('the P2a retained-edge eviction counter rides diagnostics.dropped (sub-key 
   const diagnostics = (await get()).diagnostics as { dropped: Record<string, number> }
   assert.deepEqual(
     Object.keys(diagnostics.dropped).sort(),
-    ['goalActivations', 'readClients', 'readMarks', 'sessions'],
+    ['goalActivations', 'sessions'],
     'the additive P2a counter is part of the declared dropped shape',
   )
   assert.equal(diagnostics.dropped.goalActivations, 1, 'the cap eviction is visible on the wire, never silent')
-  // 负控制：同一子键闸门必须拒绝三键旧形状。
+  // 负控制：同一子键闸门必须拒绝缺少 goalActivations 的旧形状。
   assert.throws(
     () => assert.deepEqual(
-      Object.keys({ sessions: 0, readClients: 0, readMarks: 0 }).sort(),
+      Object.keys({ sessions: 0 }).sort(),
       Object.keys(diagnostics.dropped).sort(),
       'mutant dropped without goalActivations',
     ),

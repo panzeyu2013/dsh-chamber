@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   GitSagaError, isProvenPreMutationRefusal, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runPreRemoveArchive,
   runRemoveSaga, runRollbackRecovery, runWorkspaceAdoptRecovery, runWorkspaceDeleteRecovery,
@@ -517,7 +518,7 @@ test('session-adopt recovery reuses workspace-adopt execution and commits the sa
   assert.equal(result.sessionId, 'session-fixed')
 })
 
-test('pre-remove archive archives the whole session closure in order', async () => {
+test('pre-remove archive archives the whole session closure in order, every call carrying stopActivity', async () => {
   const calls: string[] = []
   const archived = await runPreRemoveArchive({
     fetchSessions: async () => ({
@@ -528,10 +529,13 @@ test('pre-remove archive archives the whole session closure in order', async () 
         { sessionId: 'unrelated' },
       ],
     }),
-    archiveSession: async sessionId => { calls.push(sessionId) },
+    archiveSession: async (sessionId, options) => { calls.push(`${sessionId}:${String(options.stopActivity)}`) },
   }, ['root-a'])
   assert.deepEqual(archived, ['root-a', 'sub-a1', 'sub-a2'])
-  assert.deepEqual(calls, ['root-a', 'sub-a1', 'sub-a2'])
+  // The checkbox authorizes stopping the background work the blocking-running
+  // fact cannot see; admission would otherwise refuse those members and abort
+  // the whole removal.
+  assert.deepEqual(calls, ['root-a:true', 'sub-a1:true', 'sub-a2:true'])
 })
 
 test('pre-remove archive with no roots archives nothing', async () => {
@@ -638,6 +642,20 @@ test('a definitive 404 host error surfaces as a no-recovery failure, never a rec
   const error = await expectSagaError(() =>
     runCreateSaga(deps, PREVIEW, { operationId: 'op-404', sessionId: 'session-404' }))
   assert.equal(error.recovery, undefined, 'a definitive host failure must not mint a recovery entry')
+})
+
+test('coordinator wiring lock: the pre-remove archive forwards the stopActivity authorization', () => {
+  // runPreRemoveArchive's own contract is covered above; this pins the
+  // PRODUCTION wiring the saga cannot see. Dropping `archiveOptions` here is
+  // type-legal (fewer arguments) and would send a plain archive for sessions the
+  // user just authorized to stop — the host would refuse it as
+  // workspace/session-active and the removal would fail as archive-failed.
+  const coordinator = readFileSync(new URL('../../src/shared/coordinator.ts', import.meta.url), 'utf8')
+  assert.ok(coordinator.includes(
+    'archiveSession: (sessionId, archiveOptions) => archiveSessionForSource(sourceId, sessionId, archiveOptions)',
+  ))
+  assert.ok(coordinator.includes('if (options.archiveSessions === true && directSessionIds.length > 0) {'),
+    'archiving happens only behind the user\'s checkbox (default OFF is the authorization)')
 })
 
 test('create saga with createSession:false commits the worktree + workspace but no session', async () => {

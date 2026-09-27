@@ -12,7 +12,7 @@
  *  - 无 facts 的来源：完成由壳 running true→false 给出（边沿判定在
  *    completion-observation.ts），以「武装位」去重（重新 running 即解除）；
  *  - facts 证据：`completedAtSource === 'observed'` 且水位严格前进才通知
- *    （reconstructed 只出未读）；首份快照只播种水位（design 19 §3.5），两轨共用
+ *    （reconstructed 不作通知证据）；首份快照只播种水位（design 19 §3.5），两轨共用
  *    complete-ledger 的键空间。
  *
  * 水位原语复用 watermark.ts；本模块只做「哪条证据作数 + 统一去重」的裁决。

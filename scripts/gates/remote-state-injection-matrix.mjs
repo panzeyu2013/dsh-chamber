@@ -22,10 +22,13 @@ const GW = 'packages/gateway/test/session-state'
 const SB = 'packages/dsh-chamber-client-ui-sidebar/test'
 const RN = 'packages/renderer/test'
 
-/** 每条注入：covered = 必须有 live 断言；open = 已知未闭合（如实列出）。 */
+/**
+ * 每条注入：covered = 必须有 live 断言；open = 已知未闭合（如实列出）；
+ * retired = 该故障的机制已随上游对齐整体退役（必须给出 retiredReason，见下）。
+ */
 const INJECTIONS = [
   { id: 'watcher-restart', fault: 'watcher 被杀 / 重启', expect: 'covered', checks: [
-    { file: `${GW}/session-state-persistence.test.ts`, title: 'reload preserves the cursor, rows, completion classification and read marks' },
+    { file: `${GW}/session-state-persistence.test.ts`, title: 'reload preserves the cursor, rows and completion classification' },
     { file: `${GW}/session-state-persistence.test.ts`, title: 'a stored running row stays a gap candidate across a restart until classified' },
   ] },
   { id: 'host-down', fault: 'host 停机（不伪造完成）', expect: 'covered', checks: [
@@ -36,10 +39,10 @@ const INJECTIONS = [
   { id: 'unreadable-tail', fault: '读取失败（尾巴不可读）→ 降级武装而非丢完成', expect: 'covered', checks: [
     { file: `${GW}/session-state-observer.test.ts`, title: 'an unreadable follow falls back to arming with the degraded marker' },
     { file: `${GW}/session-state-store.test.ts`, title: 'an unreadable tail falls back to arming with a null lastTurnEnd marker' },
-    { file: `${SB}/session-rows/derive-unread.test.ts`, title: 'a degraded arm still respects the read watermark (no permanent unread)' },
+    { file: `${RN}/session-state/source-mux-facts.test.ts`, title: 'a user stop and a neutral ending never arm; an unreadable tail degrades and arms' },
   ] },
-  { id: 'clock-skew', fault: '时钟偏斜 ≥1h（不丢真未读）', expect: 'covered', checks: [
-    { file: `${GW}/session-state-routes.test.ts`, title: 'a client clock ahead of the host cannot buy a future read mark (clock skew)' },
+  { id: 'clock-skew', fault: '时钟偏斜（客户端时钟不得回买宿主水位）', expect: 'covered', checks: [
+    { file: `${RN}/aggregate/notification-outbox.test.ts`, title: 'a backward wall-clock jump cannot strand a retry for hours' },
   ] },
   { id: 'cursor-expired', fault: '游标过期 / 伪造（强制全量重取）', expect: 'covered', checks: [
     { file: `${GW}/session-state-store.test.ts`, title: 'replayFrom distinguishes satisfiable, current, future and e' },
@@ -48,8 +51,9 @@ const INJECTIONS = [
   { id: 'event-silence', fault: '事件静默（连接在、事件停，R21）', expect: 'covered', checks: [
     { file: `${GW}/session-state-observer.test.ts`, title: 'event silence triggers a resubscribe and a fresh baseline' },
   ] },
-  { id: 'read-write-order', fault: '/read 写失败与乱序（R22）', expect: 'covered', checks: [
-    { file: `${GW}/session-state-store.test.ts`, title: 'read marks are per-client, monotonic, idempotent and source-wide effective' },
+  { id: 'read-write-order', fault: '/read 写失败与乱序（R22）', expect: 'retired',
+    retiredReason: '上游对齐：桌面完成未读是官方 uiSession.sessionStatus.completionUnread（内存），gateway 的 per-client read 回执面与其持久化已整体删除，写失败/乱序这一故障不再存在；快照持久化的损坏纪律仍由 persistence 用例守护。',
+    checks: [
     { file: `${GW}/session-state-persistence.test.ts`, title: 'double corruption is sticky, loud and never overwritten' },
   ] },
   { id: 'gap-reconstruction', fault: '缺口重建（R3，重启后重分类）', expect: 'covered', checks: [
@@ -63,7 +67,7 @@ const INJECTIONS = [
   ] },
   { id: 'user-stop-no-unread', fault: '用户主动停止不产生假未读', expect: 'covered', checks: [
     { file: `${GW}/session-state-observer.test.ts`, title: 'an aborted+user tail never arms unread but is recorded as lastTurnEnd' },
-    { file: `${SB}/session-rows/derive-unread.test.ts`, title: 'completedAt counts for a completed classification and for the degraded (absent) marker' },
+    { file: `${RN}/session-state/source-mux-facts.test.ts`, title: 'a user stop and a neutral ending never arm; an unreadable tail degrades and arms' },
   ] },
   { id: 'neutral-endings', fault: 'blocked/error/max-tokens/interrupted 中立', expect: 'covered', checks: [
     { file: `${GW}/session-state-observer.test.ts`, title: 'a neutral (blocked) tail arms nothing' },
@@ -83,7 +87,7 @@ const INJECTIONS = [
   ] },
   { id: 'four-surface-consistency', fault: '四面一致（点/待办/徽标/通知同一投影）', expect: 'covered', checks: [
     { file: `${RN}/aggregate/badge-count.test.ts`, title: 'a vendor-armed completion counts even with no ledger entry' },
-    { file: `${SB}/session-rows/derive-unread.test.ts`, title: 'unread uses max(updatedAt, completedAt): either watermark above readThrough wins' },
+    { file: `${SB}/session-rows/completion-arm.test.ts`, title: 'the painted source is reading: no arm, and an armed current clears' },
     { file: `${SB}/session-rows/todo-attention.test.ts`, title: '' },
   ] },
   { id: 'blank-frame', fault: '白帧三形态判据（含严格档）', expect: 'covered', checks: [
@@ -105,9 +109,8 @@ const INJECTIONS = [
     // No App source-text wiring lock is needed here: a wiring lock dies once the
     // invariant has behaviour tests, and the three behaviour witnesses below
     // carry the injection.
-    { file: `${RN}/session-state/unread-store.test.ts`, title: '' },
+    { file: `${RN}/session-state/notification-store.test.ts`, title: '' },
     { file: `${RN}/session-state/session-facts-source.test.ts`, title: '' },
-    { file: `${RN}/session-state/unread-derivation.test.ts`, title: '' },
   ] },
 ]
 
@@ -136,19 +139,25 @@ function main() {
     const checks = injection.checks.map(check => ({ file: check.file, title: check.title || '(文件级：该文件存在即证据)', live: exists(check.title, check.file) }))
     return { ...injection, checks, live: checks.every(c => c.live) }
   })
-  const lost = rows.filter(r => r.expect === 'covered' && !r.live)
+  // A retirement without a written reason is a silent disappearance, so it is
+  // judged exactly like missing evidence.
+  const retired = rows.filter(r => r.expect === 'retired' && typeof r.retiredReason === 'string' && r.retiredReason.length > 40)
+  const lost = rows.filter(r => (r.expect === 'covered' || r.expect === 'retired') && !r.live && !retired.includes(r))
   const open = rows.filter(r => r.expect === 'open')
   if (wantJson) {
-    console.log(JSON.stringify({ schema: 'remote-state-injection-matrix/v1', capturedAt: new Date().toISOString(), rows, lost: lost.map(r => r.id), open: open.map(r => r.id) }, null, 2))
+    console.log(JSON.stringify({ schema: 'remote-state-injection-matrix/v1', capturedAt: new Date().toISOString(), rows, lost: lost.map(r => r.id), open: open.map(r => r.id), retired: retired.map(r => r.id) }, null, 2))
   } else {
     console.log('故障注入覆盖矩阵')
     for (const r of rows) {
-      const tag = r.expect === 'open' ? 'OPEN   ' : r.live ? 'COVERED' : 'LOST   '
+      const tag = r.expect === 'open' ? 'OPEN   '
+        : r.expect === 'retired' ? 'RETIRED'
+          : r.live ? 'COVERED' : 'LOST   '
       console.log(`  ${tag} ${r.id.padEnd(26)} ${r.fault}`)
-      for (const c of r.checks) if (!c.live) console.log(`           ↳ 缺证据：${c.file} :: ${c.title || '(文件)'}`)
+      if (r.expect === 'retired') console.log(`           ↳ 已退役：${r.retiredReason ?? '(缺 retiredReason —— 判 LOST)'}；残留证据：${r.checks.map(c => c.file + ' :: ' + (c.title || '(文件)') + (c.live ? ' [live]' : ' [MISSING]')).join(' / ')}`)
+      for (const c of r.checks) if (!c.live && r.expect !== 'retired') console.log(`           ↳ 缺证据：${c.file} :: ${c.title || '(文件)'}`)
       if (r.expect === 'open') console.log('           ↳ 未闭合：交付后须替换为 live 断言，本项不得计入通过')
     }
-    console.log(`\ncovered=${rows.filter(r => r.expect === 'covered' && r.live).length} lost=${lost.length} open=${open.length}`)
+    console.log(`\ncovered=${rows.filter(r => r.expect === 'covered' && r.live).length} lost=${lost.length} open=${open.length} retired=${retired.length}`)
     if (open.length > 0) console.log(`未闭合（不得计入通过）：${open.map(r => r.id).join(', ')}`)
   }
   process.exit(lost.length > 0 ? 1 : 0)

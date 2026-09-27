@@ -66,7 +66,6 @@ interface RouteExpect {
   additiveKeys?: string[]
   nested?: {
     host?: string[]
-    read?: string[]
     sessionRow?: string[]
     sessionRowAdditive?: string[]
     goal?: string[]
@@ -84,6 +83,8 @@ interface RouteFixture {
   id: string
   method: string
   path: string
+  /** Post-freeze retirement tombstone: the route is gone, replay must fail closed. */
+  retired?: boolean
   request: { query: string | null; headers: Record<string, string>; body: unknown }
   expect: RouteExpect
 }
@@ -99,6 +100,12 @@ interface Fixture {
   }
   features: { clientRequired: string[]; addedAtFreeze: string[]; addedAfterFreeze: string[] }
   routesAddedAfterFreeze: string[]
+  postFreezeRetirements: Array<{
+    reason: string
+    removedFeatures: string[]
+    removedRoutes: string[]
+    removedFields: string[]
+  }>
   routes: RouteFixture[]
 }
 
@@ -116,7 +123,6 @@ function routeById(id: string): RouteFixture {
 
 /** The one seeded session the old client's replay observes. */
 const LEGACY_SESSION = 'legacy-session-1'
-const CLIENT_ID = 'dsh-chamber-mobile-legacy'
 
 // ---------------------------------------------------------------------------
 // Harness: the REAL gateway entry + the REAL session-state surface
@@ -218,7 +224,6 @@ function legacySnapshotRead(body: Record<string, unknown>, route: RouteFixture):
         return projected
       })
     : []
-  projection.read = pick(body.read, nested.read ?? [])
   return projection
 }
 
@@ -259,7 +264,6 @@ function assertSnapshotContract(body: Record<string, unknown>, route: RouteFixtu
   for (const key of additive) assert.ok(!frozen.includes(key), route.id + ': additive key ' + key + ' is also frozen')
   assertFrozenKeySet(route.id + ' top-level', keysOf(body), [...frozen, ...additive])
   assertFrozenKeySet(route.id + '.host', keysOf(body.host), nested.host ?? [])
-  assertFrozenKeySet(route.id + '.read', keysOf(body.read), nested.read ?? [])
   const sessions = Array.isArray(body.sessions) ? body.sessions : []
   assert.equal(sessions.length, 1, route.id + ': the replay seed must yield exactly one session row')
   assertFrozenKeySet(
@@ -317,7 +321,6 @@ function assertOldClientProjection(projection: Record<string, unknown>): void {
     lastRunningAt: 100,
     lastTurnEnd: { kind: 'completed', cause: null, at: 110, seq: 1 },
   }])
-  assert.deepEqual(projection.read, { clientId: null, marks: {}, floor: 0 })
 }
 
 interface InjectedSnapshot {
@@ -426,7 +429,10 @@ test('cell B: the frozen v0.4.0-beta.1 fixture pins the vocabulary and the route
   // Route-table freeze: the live claimed table is the old table plus consciously
   // appended post-freeze routes (the old client keeps calling only the old four).
   const liveRoutes = [...SESSION_STATE_ROUTES].sort()
-  const recordedRoutes = [...fixture.routes.map(route => route.path), ...fixture.routesAddedAfterFreeze].sort()
+  const recordedRoutes = [
+    ...fixture.routes.filter(route => route.retired !== true).map(route => route.path),
+    ...fixture.routesAddedAfterFreeze,
+  ].sort()
   assert.deepEqual(liveRoutes, recordedRoutes, 'live route table changed: append the new path to routesAddedAfterFreeze (never edit a frozen entry)')
   // The old client's base set stays usable in the degraded poll shape too.
   for (const feature of SESSION_STATE_BASE_FEATURES) assert.ok(featuresForMode('poll').includes(feature))
@@ -451,6 +457,11 @@ for (const route of fixture.routes) {
     assert.equal(res.status, route.expect.status, route.id + ': status drifted')
     assert.ok(String(res.getHeader('content-type') ?? '').startsWith(route.expect.contentType), route.id + ': content-type drifted')
     assert.equal(res.headersSent, true)
+    if (route.retired === true) {
+      // The one sanctioned frozen-table break: the old call must fail closed
+      // (404) and the removal is recorded under postFreezeRetirements.
+      return
+    }
     if (route.id === 'snapshot') {
       const body = res.json() as Record<string, unknown>
       assertSnapshotContract(body, route)
@@ -471,28 +482,6 @@ for (const route of fixture.routes) {
       const projection = legacySnapshotRead(data, dataRoute)
       assertOldClientProjection(projection)
       assertUnknownKeysIgnored(data, dataRoute, projection)
-    } else if (route.id === 'read') {
-      const body = res.json() as Record<string, unknown>
-      assertFrozenKeySet(route.id, keysOf(body), [...(route.expect.frozenKeys ?? []), ...(route.expect.additiveKeys ?? [])])
-      assert.equal(body.ok, true)
-      assert.equal(body.clientId, CLIENT_ID)
-      assert.equal(body.sessionId, LEGACY_SESSION)
-      assert.equal(body.readThrough, 90)
-      assert.equal(body.changed, true)
-      assert.equal(body.stored, true)
-      // Fire-and-forget in the old client (fixture clientReads = []): the frozen
-      // contract is the status plus the exact response key set above.
-      assert.equal(route.expect.clientReads.length, 0, route.id + ': the fixture must record the fire-and-forget read path')
-    } else if (route.id === 'read-all') {
-      const body = res.json() as Record<string, unknown>
-      assertFrozenKeySet(route.id, keysOf(body), [...(route.expect.frozenKeys ?? []), ...(route.expect.additiveKeys ?? [])])
-      assert.equal(body.ok, true)
-      assert.equal(body.clientId, CLIENT_ID)
-      assert.equal(body.through, 110)
-      assert.equal(body.floor, 110)
-      assert.equal(body.changed, true)
-      assert.equal(body.updated, 1)
-      assert.equal(route.expect.clientReads.length, 0, route.id + ': the fixture must record the fire-and-forget read path')
     } else {
       assert.fail(
         'the fixture route ' + route.id + ' has no cell-B assertion: add one when appending the route '
@@ -502,6 +491,39 @@ for (const route of fixture.routes) {
   })
 }
 
+test('cell B: every post-freeze retirement is a tombstone replayed fail-closed', async t => {
+  const retired = fixture.routes.filter(route => route.retired === true)
+  assert.ok(retired.length > 0, 'retirements are recorded as tombstones, never deleted from the frozen table')
+  const recordedPaths = new Set(fixture.postFreezeRetirements.flatMap(entry => entry.removedRoutes))
+  for (const route of retired) {
+    assert.ok(recordedPaths.has(route.path), route.path + ': a tombstone must be listed under postFreezeRetirements.removedRoutes')
+    const harness = gatewayFor(t)
+    seedOldDesktopState(harness.store)
+    const res = await replay(harness.surface, route)
+    assert.equal(res.status, 404, route.path + ': a retired route must answer fail-closed (404)')
+  }
+  // A retired capability must be gone from the advertised vocabulary, and no
+  // still-live route may be listed as retired (the record cannot drift).
+  const advertised = new Set<string>(SESSION_STATE_FEATURES)
+  for (const entry of fixture.postFreezeRetirements) {
+    for (const feature of entry.removedFeatures) {
+      assert.equal(advertised.has(feature), false, feature + ': a retired feature is still advertised')
+    }
+  }
+  for (const path of SESSION_STATE_ROUTES) {
+    assert.equal(recordedPaths.has(path), false, path + ': a live route is listed as retired')
+  }
+  // The retirement record is executable too: every field it lists must be gone
+  // from the live snapshot, so a silent re-add cannot pass unnoticed.
+  const snapshotHarness = gatewayFor(t)
+  seedOldDesktopState(snapshotHarness.store)
+  const snapshotRes = await replay(snapshotHarness.surface, routeById('snapshot'))
+  const live = JSON.parse(snapshotRes.body) as Record<string, unknown>
+  for (const field of fixture.postFreezeRetirements.flatMap(entry => entry.removedFields)) {
+    const path = field.startsWith('snapshot.') ? field.slice('snapshot.'.length) : field
+    assert.equal(resolves(live, path), false, field + ': a retired field is back in the live snapshot')
+  }
+})
 // ---------------------------------------------------------------------------
 // Live negative control: the tripwire itself must be able to fail
 // ---------------------------------------------------------------------------

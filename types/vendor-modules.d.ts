@@ -137,9 +137,10 @@ declare module '@deepseek-ai/dsh-api-session-controller/client' {
    *
    * There is deliberately NO `completed` member: the store row has none. The
    * official completion-unread fact is `uiSession.sessionStatus.completionUnread`
-   * (read by the official nav as `status?.completionUnread === true`), and chamber's
-   * completed-unread dot is its own ledger — a `completed` here would be a phantom
-   * field that reads `undefined` forever.
+   * (read by the official nav as `status?.completionUnread === true`); chamber reads
+   * exactly that bit from `sessionStatus` and carries it on its own runtime-facts
+   * channel row — a `completed` on the vendor row would be a phantom field that
+   * reads `undefined` forever.
    */
   export interface SessionSummary {
     id: string; title?: string; displayTitle: string; cwd?: string; parentId?: string

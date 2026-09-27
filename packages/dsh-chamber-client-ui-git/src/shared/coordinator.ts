@@ -638,10 +638,13 @@ export async function removeWorktree(
     const server = chamberBridge.getServers().find(candidate => candidate.id === sourceId)
     const current = server?.runtime?.current
     // NO IMPLICIT SESSION TOUCHING: removal never stops, cancels or deletes a
-    // session, and archives only under the explicit default-OFF checkbox. What
-    // blocks is the HOST's archived-aware running fact (an archived running
-    // session is INERT); `removeBlockReason` falls back to `runningSessionIds` on
-    // an older host (conservative). The `current` hard block and the
+    // session by itself, and archives only under the explicit default-OFF
+    // checkbox. That checkbox authorizes the host's archive-time stop
+    // (`stopActivity`) on the archived sessions, because archive admission
+    // refuses a session whose background work is still running. What blocks is
+    // the HOST's archived-aware running fact (an archived running session is
+    // INERT); `removeBlockReason` falls back to `runningSessionIds` on an older host
+    // (conservative). The `current` hard block and the
     // `runtime-unknown` fail-closed block are NOT running guards and stay in
     // force (removing the viewed session's cwd would break its tool calls); both
     // are evaluated before the running reason.
@@ -671,8 +674,14 @@ export async function removeWorktree(
     if (workspaceId === null) throw new Error('The worktree row has no workspace id')
 
     // Optional soft-archive of the whole session tree BEFORE any Git mutation; a
-    // failure aborts with nothing removed. Already-archived ids are skipped, so a
-    // retry after a partial failure never re-archives.
+    // failure aborts with nothing removed. The already-archived skip is
+    // best-effort — the unary snapshot fallback reports an empty archive set (a
+    // registered degradation, see STATUS) — but a retry still never re-archives:
+    // the HOST's archiveSession is idempotent for an id already in the set. Each
+    // archive carries
+    // `stopActivity`: the host stops that session's still-running work (jobs,
+    // schedules, subagent descendants) instead of refusing the admission — the
+    // checkbox is the user's authorization for exactly that (dialog copy says so).
     const directSessionIds = worktree.sessionIds
     if (options.archiveSessions === true && directSessionIds.length > 0) {
       try {
@@ -681,7 +690,7 @@ export async function removeWorktree(
             const snapshot = await fetchInstanceSnapshot(getInstanceClient(sourceId))
             return { sessions: snapshot.sessions, archivedSessionIds: snapshot.archivedSessionIds }
           },
-          archiveSession: sessionId => archiveSessionForSource(sourceId, sessionId),
+          archiveSession: (sessionId, archiveOptions) => archiveSessionForSource(sourceId, sessionId, archiveOptions),
         }, directSessionIds)
       } catch (error) {
         throw new GitActionError('archive-failed', 'Archiving sessions failed; no worktree was removed', error)

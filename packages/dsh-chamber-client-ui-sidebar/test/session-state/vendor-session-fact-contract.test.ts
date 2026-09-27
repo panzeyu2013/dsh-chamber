@@ -26,6 +26,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
 /** pin 住的 vendor 链接树（ensure-harness-vendor 建链）。 */
 const VENDOR = fileURLToPath(new URL('../../../../vendor/harness-packages/@deepseek-ai/', import.meta.url))
@@ -142,7 +143,7 @@ vendorTest('上游：官方运行位解析 = status?.running ?? s.running（cham
     '官方 nav 的运行位必须仍是「status 投影优先、列表行兜底」；规则一变，resolveSessionRunning '
     + '与它的全部消费点（环/事实通道/运行身份/子代理计数）必须按 design 06 §4.3 重推')
   assert.match(nav, /completed: status\?\.completionUnread === true/,
-    '官方完成位读的是 sessionStatus.completionUnread；若上游改回 store 行字段，chamber 的账本归属须重审')
+    '官方完成位读的是 sessionStatus.completionUnread；若上游改回 store 行字段，chamber 的完成归属（生产者消费）须重审')
   assert.match(nav, /statuses\.get\(child\.id\)\?\.running \?\? list\.byId\[child\.id\]\?\.running/,
     '**子行**运行位走同一规则——chamber 的 indexSubagentDescendants 镜像的正是这条，'
     + '改成单读 list 行会让子代理运行环与官方计数分歧')
@@ -171,7 +172,25 @@ vendorTest('上游：status 投影行形状（running 可为 undefined ⇒ 回�
     '未读只在「真观测过 running」之后武装——诊断性写回不得被误当作运行观测')
 })
 
-vendorTest('上游：客户端 store 行没有 completed（chamber 曾读的字段是幻影）', () => {
+vendorTest('对齐锁：chamber 生产者消费官方 completionUnread（读投影 → 第 6 参 → 稀疏行字段）', () => {
+  // vendor 只给事实（内存 Set）；chamber 侧必须真的把它读出来、写进通道行——
+  // 生产者的唯一入口是 projectRuntimeFacts 的第 6 参，行字段稀疏（true 才写）。
+  const producer = stripComments(readFileSync(fileURLToPath(new URL('../../src/client/index.ts', import.meta.url)), 'utf8'))
+  assert.match(producer, /const readStatusCompleted = \(\): ReadonlySet<string> => \{/,
+    '生产者必须定义官方完成位的读（与 readStatusRunning 同一份 sessionStatus 投影）')
+  assert.match(producer, /if \(status\.completionUnread === true\) ids\.add\(sessionId\)/,
+    '只有官方为真才进集合（稀疏）：缺席 = 未武装，chamber 不得自行补位')
+  assert.match(producer,
+    /projectRuntimeFacts\(snapshot, subagentRunning, pendingBySession, runIds, statusRunning, readStatusCompleted\(\)\)/,
+    '该读必须作为第 6 参喂给 projectRuntimeFacts（完成位唯一的生产者入口）')
+  const derive = stripComments(readFileSync(fileURLToPath(new URL('../../../dsh-chamber-client-core/src/derive.ts', import.meta.url)), 'utf8'))
+  assert.match(derive, /statusCompleted\?: ReadonlySet<string>/, 'projectRuntimeFacts 声明第 6 余参 statusCompleted')
+  assert.match(derive, /if \(statusCompleted\?\.has\(id\) === true\) row\.completed = true/,
+    '行字段必须只在官方位为真时稀疏写入（true 才写字段）')
+  assert.doesNotMatch(derive, /row\.completed = false/, '清位只由官方集合缺席表达，绝不写 false 字段')
+})
+
+vendorTest('对齐锁：客户端 store 行没有 completed —— 官方 completionUnread 才是唯一来源', () => {
   const list = readVendorSourceProviding('dsh-api-session-controller', 'id: entry.sessionId')
   // 断言锚刻意不同于定位符（否则是自证）：parentId 的改名才是 ambient 模型的另一半依据。
   assert.match(list, /parentId: entry\.parentSessionId/,
@@ -179,7 +198,7 @@ vendorTest('上游：客户端 store 行没有 completed（chamber 曾读的字�
   assert.match(list, /retainedBy: this\.retentionSnapshot\(entry\.sessionId\)\.retainedBy/,
     "current 判定所依赖的 retainedBy 必须仍在 store 行上")
   assert.doesNotMatch(list, /completed:/,
-    'store 行一旦出现 completed，chamber 的完成归属应改读它（今日它只能来自 App 账本）')
+    'store 行必须仍无 completed：完成位的唯一官方载体是 sessionStatus.completionUnread（chamber 经生产者消费，见上一条对齐锁）')
 })
 
 vendorTest('上游：visiblePendingKind 三档与 chamber pendingKindOf 逐字一致（词表缺口登记）', () => {
@@ -189,6 +208,58 @@ vendorTest('上游：visiblePendingKind 三档与 chamber pendingKindOf 逐字�
     assert.match(nav, new RegExp('case [\'"]' + kind + '[\'"]'),
       '待办词表必须仍含 ' + kind + '；词表一变，pendingKindOf 与琥珀点/等待分类须同步')
   }
+})
+
+vendorTest('上游：归档准入是两段式（无 stopActivity 拒绝 + details.activity；带则写归档后由 provider 停止）', () => {
+  // 1) 注册表：非 stopActivity 路径以活动拒绝；stopActivity 路径由宿主自己的
+  //    workspace/session-stop provider 停止该会话的工作（chamber 不再有客户端补偿腿）。
+  const registry = readVendorSourceProviding('dsh-workspace', 'WorkspaceActiveSessionError')
+  // 逐字 includes（非正则）：锚点全是代码原文，转义不参与，改一处即红。
+  assert.ok(registry.includes('if (options.stopActivity !== true) {'),
+    'stopActivity 必须短路活动检查（否则第二调仍会被拒）')
+  assert.ok(registry.includes('if (activity.length > 0) throw new WorkspaceActiveSessionError(sessionId, activity)'),
+    '非 stopActivity 路径必须在写入前以活动拒绝')
+  assert.ok(registry.includes('if (options.stopActivity === true) await this.stopSessionActivity(sessionId)'),
+    'stopActivity 路径必须由宿主的 provider 停止会话工作')
+  // 2) 活动条目形状：items 可选（turn 家族不带）、label 可选（chamber 以 id 兜底）。
+  const activityTypes = readVendorSourceProviding('dsh-workspace', 'readonly items?: readonly SessionActivityItem[]')
+  assert.ok(activityTypes.includes('readonly label?: string'),
+    'label 必须仍可选（chamber 的确认列表以 id 兜底）')
+  // 3) RPC：拒绝码 + details 的 activity 载体（chamber 的 sessionArchiveRefusal 只认这一对）。
+  const commands = readVendorSourceProviding('dsh-api-workspace-controller', 'activity: error.activity')
+  assert.ok(commands.includes("'workspace/session-active'"),
+    '拒绝码必须仍是 workspace/session-active')
+  // 4) 官方客户端：首调不带 stopActivity，拒绝后才带 stopActivity 重发；拒绝按 error.name 认
+  //    （跨 bundle 类身份不可靠），chamber 同 bundle 因此用 instanceof + code。
+  const officialClient = readVendorSourceProviding('dsh-client-ui-workspace', 'activeSessionRefusal')
+  assert.ok(officialClient.includes("reason.name !== 'WorkspaceArchiveError'"),
+    '官方客户端按 error.name 识别归档拒绝')
+  assert.ok(officialClient.includes('uiWorkspace.archiveSession(sessionId).then'),
+    '首调必须不带 stopActivity')
+  assert.ok(officialClient.includes('archiveSession(sessionId, { stopActivity: true })'),
+    '确认后必须带 stopActivity 重发')
+  assert.ok(officialClient.includes("rpcError.code === 'workspace/session-active' ? rpcError.details.activity : undefined"),
+    '拒绝解析必须只认该码并读 details.activity')
+  // 5) 请求字段本身是加法契约（wire 类型文件按路径读，同 §handleSessionStatus 的先例）：
+  //    上游改名会让 chamber 的确认相位退回首调语义而所有测试仍绿。
+  const archiveRequest = readVendor('dsh-api-workspace-controller/src/types.ts')
+  assert.ok(archiveRequest.includes('export interface WorkspaceArchiveSessionRequest {')
+    && archiveRequest.includes('readonly stopActivity?: boolean'),
+  '请求字段 stopActivity 必须仍是可选布尔（chamber 只在确认后发送它）')
+  assert.ok(commands.includes('request.stopActivity === true ? { stopActivity: true } : {}'),
+    'controller 必须把 stopActivity 原样转发给 registry（否则第二调退化为首调）')
+  // 6) 顺序：先写归档集、再 await 宿主停止——确认相位的成功语义押在「resolve 时归档已持久」。
+  const archiveWrite = registry.indexOf('archivedSessionIds: [...state.archivedSessionIds, sessionId],')
+  const stopAfterWrite = registry.indexOf('if (options.stopActivity === true) await this.stopSessionActivity(sessionId)')
+  assert.ok(archiveWrite !== -1 && stopAfterWrite > archiveWrite,
+    '必须先把 session 写进归档集、再 await 停止（顺序变了确认的成功含义就变了）')
+  // 7) 停止 provider 失败被吞（记日志、不重抛）：归档已落时确认相位仍 resolve，
+  //    chamber 的 confirmArchive 不会把「已归档但停止失败」报成整体失败。
+  const stopPass = readVendorSourceProviding('dsh-workspace', 'workspace/session-stop')
+  assert.ok(stopPass.includes("await this.ctx.parallel('workspace/session-stop', { sessionId })"),
+    '宿主停止必须走 workspace/session-stop provider')
+  assert.ok(stopPass.includes('this.ctx.logger.warn('),
+    'provider 失败必须只记日志、不重抛（确认相位仍 resolve）')
 })
 
 vendorTest('上游：handleSessionStatus 不在 ISessions 契约里（chamber 的能力守卫与上游诉求的依据）', () => {

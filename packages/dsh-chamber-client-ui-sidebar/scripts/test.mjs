@@ -35,10 +35,9 @@ export const GROUPS = {
     // 三处拖拽闭包共用的 over-目标推进（纯叶子）。
     'test/session-rows/drag-over-state.test.ts',
     'test/session-rows/derive.test.ts',
-    // The shared unread predicate of the B edge track; the
-    // facts-merge / ordering / label / search-archive contracts live in
-    // derive.test.ts.
-    'test/session-rows/derive-unread.test.ts',
+    // N-ctx 完成修正臂（官方 completionUnread 之外的唯一 App 侧状态）；facts-merge /
+    // ordering / label / search-archive 契约在 derive.test.ts。
+    'test/session-rows/completion-arm.test.ts',
     // 行/待办条的机器可读状态标记（纯分类器 + 属性锁）。
     'test/session-rows/session-row-state.test.ts',
     // goal 三值事实：解析/最后已知/activation 合并/身份签名（design 19 §3.2.1）。
@@ -73,6 +72,8 @@ export const GROUPS = {
     'test/session-state/workspace-echo.test.ts',
     'test/session-state/session-echo.test.ts',
     'test/session-state/session-mutations.test.ts',
+    // 归档两段式的纯逻辑：失败分类 + 活动家族 → 文案行（官方 activityLine 的逐分支对照）。
+    'test/session-state/session-archive-confirm.test.ts',
     'test/session-state/workspace-drag-order.test.ts',
     'test/session-state/workspace-git-flags.test.ts',
     'test/session-state/view-prefs.test.ts',

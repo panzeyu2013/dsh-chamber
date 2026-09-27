@@ -371,10 +371,10 @@ export interface SessionRemovedFact {
  * plugin projects the source's session-list snapshot (minus the ids it has
  * tombstoned as purged — design 24 §12) —
  * every listed session carries its live `running` bit — the producer's
- * resolveSessionRunning result — the App layer derives the completed-but-unread dot
- * from running→idle edges itself (App.tsx), `pending` rides the official
- * `sessionStatus` projection, `completed` is injected by the App ledger at merge
- * time and never by the channel, and `runningSubagents` carries the lineage index's RUNNING subagent
+ * resolveSessionRunning result — while `completed` is the official
+ * `sessionStatus.completionUnread` bit (channel-carried; the App only ORs its
+ * N-ctx correction arm at merge time). `pending` rides the official
+ * `sessionStatus` projection, and `runningSubagents` carries the lineage index's RUNNING subagent
  * descendant count per parent (06 §4.5 — a parent whose round ended while
  * background subagents still work must not render its completed dot). Attached to
  * ChamberServerAggregate.runtime as a separate channel — never polled by the App.
@@ -382,10 +382,10 @@ export interface SessionRemovedFact {
 export interface InstanceRuntimeReport {
   current?: string
   /**
-   * Every listed session (edge memory for the App's completed-dot derivation):
-   * the live running bit, a sparse `pending` from the official sessionStatus
-   * projection, `completed` injected at merge time by the App ledger only, and a
-   * non-zero `runningSubagents`.
+   * Every listed session (edge memory for the App's N-ctx completion arm):
+   * the live running bit, a sparse `pending` and the official `completed`
+   * (`sessionStatus.completionUnread`) from the official sessionStatus
+   * projection, and a non-zero `runningSubagents`.
    */
   sessions: Record<string, {
     running?: boolean
@@ -430,7 +430,7 @@ export interface InstanceRuntimeReport {
    * dsh-api-session-controller/lib/types/client/sessions/manager.js:41,387 —
    * pending until the first successful list, never rolled back by a later
    * error). Only `true` is an authoritative "a session absent here is
-   * GONE" gate for the App's unread pruning; absent/undefined means "not
+   * GONE" gate for the App's per-source pruning gate; absent/undefined means "not
    * proven complete" and must retain state (never prune on a shrinking list
    * that is merely unverified). It is a JUDGMENT input, not a rendered fact —
    * the sidebar projection does not carry it (shared/derive.ts
@@ -449,8 +449,6 @@ export interface InstanceRuntimeReport {
 
 type Listener = () => void
 type OpenListener = (request: OpenSessionRequest) => void
-/** 「全部已读」请求（插件→App）：读水位是 App 的权威，插件不持有读标记。 */
-type MarkAllReadListener = (request: { sourceId: string }) => void
 /**
  * 意图预热（插件→App）：「指针在该来源头部停留过」这一
  * 优先级提示。它不是打开/挂载请求：App 侧只把它折算成"既有后台预热队列里
@@ -541,7 +539,6 @@ function createChannel<Args extends unknown[]>(label: (args: Args) => string) {
 const serversChannel = createChannel<Parameters<Listener>>(() => '[dsh-chamber] bridge subscriber threw')
 const openChannel = createChannel<Parameters<OpenListener>>(() => '[dsh-chamber] open-session listener threw')
 const openOutcomeChannel = createChannel<Parameters<OpenOutcomeListener>>(() => '[dsh-chamber] open-outcome listener threw')
-const markAllReadChannel = createChannel<Parameters<MarkAllReadListener>>(() => '[dsh-chamber] mark-all-read listener threw')
 const intentPrewarmChannel = createChannel<Parameters<IntentPrewarmListener>>(() => '[dsh-chamber] intent-prewarm listener threw')
 const refreshChannel = createChannel<Parameters<RefreshListener>>(() => '[dsh-chamber] refresh listener threw')
 const sessionListRefreshChannel = createChannel<Parameters<SessionListRefreshListener>>(
@@ -626,17 +623,6 @@ export const chamberBridge = {
   /** Sidebar subscription to open-outcome reports; returns the unsubscribe. */
   onOpenSessionOutcome(listener: OpenOutcomeListener): () => void {
     return openOutcomeChannel.subscribe(listener)
-  },
-
-  /** 请 App 把一个来源整体标记为已读（单向：插件→App）。读标记与落盘都在 App
-   *  手里，插件只发意图。 */
-  requestMarkAllRead(sourceId: string): void {
-    markAllReadChannel.emit({ sourceId })
-  },
-
-  /** App 层订阅「全部已读」请求；返回取消订阅。 */
-  onMarkAllRead(listener: MarkAllReadListener): () => void {
-    return markAllReadChannel.subscribe(listener)
   },
 
   /** 来源头部 hover dwell 留驻后，侧栏发出的单向优先级提示。绝不挂载/打开任何

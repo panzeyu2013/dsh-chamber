@@ -143,7 +143,7 @@ export interface SidebarSectionContextValue {
 
   openSession: (serverId: string, sessionId: string) => void
   onNewSession: (server: ChamberServerAggregate, workspaceId: string) => void
-  onArchiveSession: (server: ChamberServerAggregate, sessionId: string) => void
+  onArchiveSession: (server: ChamberServerAggregate, sessionId: string, displayTitle: string) => void
   onForkSession: (server: ChamberServerAggregate, session: { id: string; title: string }) => void
   onDeleteWorkspace: (server: ChamberServerAggregate, workspaceId: string, title: string) => void
 }

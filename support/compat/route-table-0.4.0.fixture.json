@@ -3,9 +3,9 @@
   "usage": {
     "who": "packages/gateway/test/session-state/session-state-old-desktop-matrix.test.ts (cross-version matrix cell B: OLD desktop x NEW gateway). The test replays every entry below against the REAL gateway /chamber/session-state* surface and checks status, key sets and the old parse path. Any future compat tooling that must speak as the v0.4.0-beta.1 client reads the same file.",
     "whenToUpdate": "Only when the INTERFACE major version changes (control-plane PROTOCOL_VERSION, i.e. the descriptor `protocol` field). A major bump adds a NEW file anchored at that major (for example route-table-2.0.0.fixture.json). This v0.4.0-beta.1 file then stays frozen forever: the old desktop it records can no longer be rebuilt from this repository, so rewriting it would destroy the only forward-compatibility evidence.",
-    "howToUpdate": "Append-only. NEVER rename, delete or rewrite an existing route / method / path / status / frozen key entry - those entries ARE the old-client record. A 0.4.x minor that adds a capability appends only: a new id to `features.addedAfterFreeze`, a new path to `routesAddedAfterFreeze`, a new field to a route's `expect.additiveKeys`, or a new post-freeze nested key list under `expect.nested` (each with an entry in `anchor.postFreezeAdditions`). Features.clientRequired / features.addedAtFreeze and every EXISTING frozenKeys or nested key list are immutable; appended lists only record what this client never read anyway.",
+    "howToUpdate": "Append-only. NEVER rename, delete or rewrite an existing route / method / path / status / frozen key entry - those entries ARE the old-client record. Post-freeze RETIREMENTS are the one sanctioned exception: never delete a frozen entry - append a tombstone entry (id / method / path + retired: true + the fail-closed expected status) and record the removal under postFreezeRetirements. The matrix replays every tombstone and asserts the fail-closed answer, so an accepted break stays visible and reviewed instead of vanishing. A 0.4.x minor that adds a capability appends only: a new id to `features.addedAfterFreeze`, a new path to `routesAddedAfterFreeze`, a new field to a route's `expect.additiveKeys`, or a new post-freeze nested key list under `expect.nested` (each with an entry in `anchor.postFreezeAdditions`). Features.clientRequired / features.addedAtFreeze and every EXISTING frozenKeys or nested key list are immutable; appended lists only record what this client never read anyway.",
     "whyFrozen": "Plan section 6 and protocol-compat-blueprint section 2.2/3.1: the old desktop cannot be produced in-repo, so the only executable evidence that a NEW gateway stays backward compatible is replaying this recorded call sequence. A test that re-derives its expectations from the current server can only prove the server equals itself.",
-    "scope": "/chamber/session-state* only (snapshot / stream / read / read-all). Other old-desktop routes are outside this fixture."
+    "scope": "/chamber/session-state* only (snapshot / stream; the read / read-all POST routes were retired post-freeze, see postFreezeRetirements). Other old-desktop routes are outside this fixture."
   },
   "anchor": {
     "productVersion": "0.4.0-beta.1",
@@ -50,8 +50,6 @@
     "addedAtFreeze": [
       "session-state.stream",
       "session-state.last-event-id",
-      "session-state.read",
-      "session-state.read-all",
       "session-state.dsh-events",
       "session-state.pending-graph"
     ],
@@ -60,6 +58,27 @@
     ]
   },
   "routesAddedAfterFreeze": [],
+  "postFreezeRetirements": [
+    {
+      "reason": "Upstream alignment post-freeze: the desktop completion-unread state is the official in-memory uiSession.sessionStatus.completionUnread, so the gateway read / read-all receipt face (per-client read marks and the source floor) lost every consumer and is deleted, not rewritten. This is a conscious, recorded break of the frozen route table; the snapshot/stream surface and the goal row fact stay untouched.",
+      "removedFeatures": [
+        "session-state.read",
+        "session-state.read-all"
+      ],
+      "removedRoutes": [
+        "/chamber/session-state/read",
+        "/chamber/session-state/read-all"
+      ],
+      "removedFields": [
+        "snapshot.read",
+        "snapshot.read.clientId",
+        "snapshot.read.marks",
+        "snapshot.read.floor",
+        "diagnostics.dropped.readClients",
+        "diagnostics.dropped.readMarks"
+      ]
+    }
+  ],
   "routes": [
     {
       "id": "snapshot",
@@ -82,8 +101,7 @@
           "mode",
           "cursor",
           "host",
-          "sessions",
-          "read"
+          "sessions"
         ],
         "additiveKeys": [
           "diagnostics"
@@ -93,11 +111,6 @@
             "now",
             "serviceable",
             "state"
-          ],
-          "read": [
-            "clientId",
-            "marks",
-            "floor"
           ],
           "sessionRow": [
             "sessionId",
@@ -143,8 +156,6 @@
           ],
           "diagnosticsDropped": [
             "sessions",
-            "readClients",
-            "readMarks",
             "goalActivations"
           ]
         },
@@ -165,10 +176,7 @@
           "sessions[].lastTurnEnd.kind",
           "sessions[].lastTurnEnd.cause",
           "sessions[].lastTurnEnd.at",
-          "sessions[].lastTurnEnd.seq",
-          "read.clientId",
-          "read.marks",
-          "read.floor"
+          "sessions[].lastTurnEnd.seq"
         ]
       }
     },
@@ -202,67 +210,45 @@
     },
     {
       "id": "read",
+      "retired": true,
       "method": "POST",
       "path": "/chamber/session-state/read",
       "request": {
         "query": null,
         "headers": {
-          "content-type": "application/json",
-          "accept": "application/json"
+          "content-type": "application/json"
         },
         "body": {
-          "clientId": "dsh-chamber-mobile-legacy",
+          "clientId": "0.4.0-beta.1",
           "sessionId": "legacy-session-1",
-          "readThrough": 90
+          "watermark": 1
         }
       },
       "expect": {
-        "status": 200,
+        "status": 404,
         "kind": "json",
-        "contentType": "application/json",
-        "frozenKeys": [
-          "ok",
-          "clientId",
-          "sessionId",
-          "readThrough",
-          "changed",
-          "stored"
-        ],
-        "additiveKeys": [],
-        "nested": {},
-        "clientReads": []
+        "contentType": "application/json"
       }
     },
     {
       "id": "read-all",
+      "retired": true,
       "method": "POST",
       "path": "/chamber/session-state/read-all",
       "request": {
         "query": null,
         "headers": {
-          "content-type": "application/json",
-          "accept": "application/json"
+          "content-type": "application/json"
         },
         "body": {
-          "clientId": "dsh-chamber-mobile-legacy",
-          "through": 110
+          "clientId": "0.4.0-beta.1",
+          "through": 1
         }
       },
       "expect": {
-        "status": 200,
+        "status": 404,
         "kind": "json",
-        "contentType": "application/json",
-        "frozenKeys": [
-          "ok",
-          "clientId",
-          "through",
-          "floor",
-          "changed",
-          "updated"
-        ],
-        "additiveKeys": [],
-        "nested": {},
-        "clientReads": []
+        "contentType": "application/json"
       }
     }
   ]
