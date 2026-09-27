@@ -57,7 +57,7 @@ Git worktree由chamber-bundled client插件与每实例内host插件配对；控
 |`packages/dsh-chamber-client-ui-git`|chamber内建Git worktree客户端：sidebar座位、每实例拓扑、创建/删除saga；不直接执行Git|
 |`packages/dsh-chamber-client-ui-open-in`|chamber内建open-in客户端插件（官方客户端半的超集并替换其注册）：会话头部utilities槽打开按钮——本地应用目录+本地/远程VS Code，主进程OpenInApp注册表+ `dsh-chamber://` 深链|
 |`packages/dsh-chamber-seed-git-worktree`|实例内host包：按workspace/agent权威校验并执行受限、本地-only Git worktree生命周期|
-|`packages/dsh-chamber-seed-archive-cleanup`|实例内host包：已归档会话内容清理 `archiveCleanup/{preview,purge,probe}`（只删不读、幂等；design 24）|
+|`packages/dsh-chamber-seed-archive-cleanup`|实例内host包：已归档会话内容清理 `archiveCleanup/{probe,purge}`（只删不读、幂等；design 24）|
 |`packages/dsh-chamber-seed-open-in`|实例内host包（仅本地形态）：上游 `dsh-host-open-in-app` 的fork，经 `openInApp/*` Typert Remote提供本机应用目录、真实bundle图标与拉起（design 20 §6）|
 
 ## 2. 环境搭建

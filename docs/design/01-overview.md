@@ -89,7 +89,7 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 | 21 | [21-gateway-plugin-parity.md](21-gateway-plugin-parity.md) | 现行（A/B/C；余留项见文内登记） | 统一插件管理模型与 gateway 连接对齐：单一模型、末段执行分叉（ssh exec / gateway 编排面） |
 | 22 | [22-linux-desktop.md](22-linux-desktop.md) | 现行（实机门禁见 STATUS） | Linux 桌面支持：AppImage（x64）发行形态 + 自动更新形态门（可写 $APPIMAGE）、XDG/$APPIMAGE 桌面集成纪律（自启 + 每启重写的协议 .desktop）、node 兜底平台分表与目录 fsync 平台无关容错、release.yml build-linux 腿 |
 | 23 | [23-windows-support.md](23-windows-support.md) | Windows 11 x64 支持契约（代码面可用；真实 runner/实机门禁未过） | Windows 支持：平台适配、运行时管理解锁纪律、妥协点与验收矩阵 |
-| 24 | [24-archived-session-cleanup.md](24-archived-session-cleanup.md) | 现行（gateway/远程与打包版目检待验） | 已归档会话内容清理：第三个 chamber 宿主域 `archiveCleanup/{preview,purge}`（purge 带可选子集过滤 / `force` / 保护集 `protectSessionIds`；有界例外动议，AGENTS 已登记）+ 归档管理器对话框（server 行 hover 打开，逐条删除 / 显式全选后删除选中——无独立「删除全部」；按工作区分组、可折叠；销毁确认 = 对话框内两段式）；探针期望集派生契约见 design 18 §3.4 |
+| 24 | [24-archived-session-cleanup.md](24-archived-session-cleanup.md) | 现行（gateway/远程与打包版目检待验） | 已归档会话内容清理：第三个 chamber 宿主域 `archiveCleanup/{probe,purge}`（purge 带可选子集过滤 / `force` / 保护集 `protectSessionIds`；有界例外动议，AGENTS 已登记）+ 归档管理器对话框（server 行 hover 打开，逐条删除 / 显式全选后删除选中——无独立「删除全部」；按工作区分组、可折叠；销毁确认 = 对话框内两段式）；探针期望集派生契约见 design 18 §3.4 |
 | 25 | [25-macos-swift-native-shell.md](25-macos-swift-native-shell.md) | 路线 A 代码面；实机/凭据门禁见 STATUS | macOS Swift 原生壳：WKWebView 载控制面 origin 的壳文档 + 打包 Node sidecar（A/B 桥、70 通道 manifest 锁步（61 invoke+9 push）、目录锁、原生边沿），与 Electron 三平台版共存保留 |
 
 ---
@@ -126,7 +126,7 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 > 无读取面、无任意 argv、无本地文件级打开；控制面仍零执行面，桌面主进程仍 vscode-only。
 > 该域仅由我们的客户端插件消费（官方两份都不加载），不构成会话域或执行面先例。
 >
-> **design 24 §2**：`archiveCleanup/{preview,purge,probe}` 是实例内归档
+> **design 24 §2**：`archiveCleanup/{probe,purge}` 是实例内归档
 > 清理宿主域（宿主包 `packages/dsh-chamber-seed-archive-cleanup`，控制面只随种子把它同步进
 > 实例图，见 `packages/control-plane/src/host-graph-seed.ts`）：只删不读、运行中整棵跳过、
 > 幂等，域缺失 404 给诚实文案；控制面不持有归档事实、不新增执行面，最窄边界见 design 24 §2。

@@ -70,7 +70,7 @@
 - JSC 崩溃 → 静默整页重载：vendor rAF 循环未收敛、恢复提示与过程缺真机验证、页面事实持久消费面缺。
 - 会话打开停滞（仅余开放项；根因归 design 14 §D4 的引擎判定第三类 vendor 补丁，不复述）：宿主无首帧期限；①触屏档无载波层；②blank 子形态恢复入口待真机；③移动端 source↔artifact 缺锁；④FNV 预算键碰撞；⑤`socket-silent` 消费面缺；⑥`presented` document 级近似；⑦阈值未校准；⑧unary 引导未采纳；⑨无消费的取证小面；⑩实例级回退粗粒度；⑪未完成补读面待接线或退役。宿主两条已登记 `todo/upstream-proposals.md` §4.3/§4.7。
 - 本地 mux 周期性抖动（触发源未钉死）：页面侧 generation 结束 `reconnect()` 关掉全部逻辑流；失效 = 真机回读定位到调用路径且修复后不再周期性出现；静默口径未统一（`$events` 已停换代 vs `session-facts-source` 60s 重订阅）；页面侧卡死已独立归因（引擎判定补丁，design 14 §D4），本条只留 mux 抖动/静默 socket 本身。
-- **Electron 托盘图标尺寸未实机核验**（Swift 对偶面＝自持 18pt 图，`macos/Sources/DSHChamber/StatusItemIcon.swift`）：`packages/desktop/main.ts` 的 `maybeCreateTray`（`packages/desktop/main.ts#=literal:function maybeCreateTray(cp: PlaneHandle)`）把 1024×1024 的 `resources/icon.png`（打包后 `process.resourcesPath/icon.png`）原样交给 `Tray`，macOS 下是否被菜单栏自动缩放未验；判据 = 打包态托盘图标与状态栏等高、不出现被裁的大图，并与 Swift 侧 18pt 观感一致；若不缩放 ⇒ 换/缩专用托盘图，或按 T-15 纪律登记 deviations。两侧都需实机目检（Swift 侧装新构建后看菜单栏，Electron 侧同上）。（Swift 对偶面＝自持 18pt 图，`macos/Sources/DSHChamber/StatusItemIcon.swift`）：`packages/desktop/main.ts` 的 `maybeCreateTray`（457-495 行）把 1024px `packages/desktop/resources/icon.png` 直接交给 `Tray`，macOS 下是否被菜单栏自动缩放未验；判据 = 打包态托盘图标与状态栏等高、不出现被裁的大图，并与 Swift 侧 18pt 观感一致。
+- **Electron 托盘图标尺寸未实机核验**（Swift 对偶面＝自持 18pt 图，`macos/Sources/DSHChamber/StatusItemIcon.swift`）：`packages/desktop/main.ts` 的 `maybeCreateTray`（`packages/desktop/main.ts#=literal:function maybeCreateTray(cp: PlaneHandle)`）把 1024×1024 的 `resources/icon.png`（打包后 `process.resourcesPath/icon.png`）原样交给 `Tray`，macOS 下是否被菜单栏自动缩放未验；判据 = 打包态托盘图标与状态栏等高、不出现被裁的大图，并与 Swift 侧 18pt 观感一致；若不缩放 ⇒ 换/缩专用托盘图，或按 T-15 纪律登记 deviations。两侧都需实机目检（Swift 侧装新构建后看菜单栏，Electron 侧同上）。
 - **实机验收 + soak 未执行**：Swift 壳流式中点开 ×20、soak 采集 mux churn 与 JSC 崩溃率基线；证据路径 = `~/Library/Logs/DiagnosticReports` WebContent 报告、`control-plane.log` 的 `browser close` 频率、`dsh-chamber:stream-forensics`/`dsh-chamber:stream-carrier-failed` 页面事实；design 14 §D4 末条。
 - 上游装载面三项：`compose()` 首批 ~10.65 MiB（PDF.js 6.57 MiB）、`SubagentHeaderLineage` 缺 `count` class、会话打开流缺首帧超时。
 - 会话可靠性六项：跨 Electron/Swift 注入矩阵、Swift 真机隐藏/遮挡/唤醒、无独立绘制游标、通知显示与落盘无原子事务、缺共同轮次键、Swift 有界写器注入。
@@ -110,6 +110,7 @@
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
 - 验证面缺类：`verify:no-dead-exports` 只判「经 package entry 可达的运行时导出」⇒ **type-only 导出**
+- 验证面缺类（叶子模块）：`verify:no-dead-exports` 只沿各包 `src/index.ts` 判定「经 package entry 可达的运行时导出」，故**无入口可达的叶子模块**对它不可见——本轮按该门绿灯删掉的 `packages/gateway/src/util.ts` 即实例，未来同类新增同样隐形。方向：新增「`packages/*/src/**/*.ts` 必须被导入或被构建程序点名」的孤儿模块门禁（误报面待设计），或并入上一条统一收口。证据：`node scripts/gates/verify-no-dead-exports.mjs`（绿）与 `packages/gateway/src/util.ts` 的删除提交说明。
   与**仅测试引用**的导出都不判（本轮人工收窄 11 个类型；`PendingSession` 与 `PENDING_*` pin 常量属
   测试专用导出）。规则化提案（allowlist + 一句理由；类型面是否纳入待裁）见
   [todo/upstream-drift-plan.md](todo/upstream-drift-plan.md)「验证面缺类」。

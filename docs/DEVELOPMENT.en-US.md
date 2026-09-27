@@ -59,7 +59,7 @@ Design authority: `docs/design/` (01 entry point, 05 v1 surface/architecture con
 |`packages/dsh-chamber-client-ui-git`|Chamber-bundled Git worktree client: sidebar slot, per-instance topology, create/remove sagas; never executes Git directly|
 |`packages/dsh-chamber-client-ui-open-in`|Chamber-bundled open-in client plugin (a superset of the official client, replacing its registration): session-header utilities open button—local app catalog + local/remote VS Code via the main-process OpenInApp registry + `dsh-chamber://` deep link|
 |`packages/dsh-chamber-seed-git-worktree`|In-instance host package: authoritative workspace/agent guards + constrained local-only Git worktree lifecycle|
-|`packages/dsh-chamber-seed-archive-cleanup`|In-instance host package: archived-session content cleanup `archiveCleanup/{preview,purge,probe}` (delete-only, idempotent; design 24)|
+|`packages/dsh-chamber-seed-archive-cleanup`|In-instance host package: archived-session content cleanup `archiveCleanup/{probe,purge}` (delete-only, idempotent; design 24)|
 |`packages/dsh-chamber-seed-open-in`|In-instance host package (local shape only): fork of the upstream `dsh-host-open-in-app` serving the local app catalog, real bundle icons and launches over the `openInApp/*` Typert Remote (design 20 §6)|
 
 ## 2. Environment setup

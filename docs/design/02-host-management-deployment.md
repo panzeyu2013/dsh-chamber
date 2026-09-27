@@ -141,7 +141,7 @@ client-graph / git-worktree / archive-cleanup（design 24）/ open-in（design 2
 |---|---|---|
 | `client-graph` | `@dsh-chamber/dsh-chamber-seed-client-graph` | 只读暴露该实例的 client module boot graph |
 | `git-worktree` | `@dsh-chamber/dsh-chamber-seed-git-worktree` | 在该实例进程/用户/文件系统内执行受限 Git worktree 领域操作（设计 08） |
-| `archive-cleanup` | `@dsh-chamber/dsh-chamber-seed-archive-cleanup` | 已归档会话内容清理域 `archiveCleanup/{preview,purge}`：实例进程内权威清除归档集（含 subagent 级联），只删不读（设计 24） |
+| `archive-cleanup` | `@dsh-chamber/dsh-chamber-seed-archive-cleanup` | 已归档会话内容清理域 `archiveCleanup/{probe,purge}`：实例进程内权威清除归档集（含 subagent 级联），只删不读（设计 24） |
 | `open-in` | `@dsh-chamber/dsh-chamber-seed-open-in` | 本机应用打开域 `openInApp/{probe,apps,icon,open}`：实例进程内权威解析/校验本机应用目录与图标并拉起（设计 20 §6，注册表标 `localOnly`） |
 
 本地托管实例的接线如下：

@@ -259,13 +259,14 @@ interface CompletionDecisionState {
 ```
 
 页代 token 不属于账本状态：单源是 `boot-token.ts`（经 `completionIdentity` 进观测层
-identity）；`CompleteLedgerOptions.bootToken` 只是 App 调用点继续按原签名传入的
-**兼容入参**，账本既不读也不存它（新调用点无需提供）。
+identity）；账本不读、不存它——`CompleteLedgerOptions.bootToken` 兼容入参已在 beta 线
+退役（`complete-ledger.ts` 头注；别再加回）。
 
 **观测**（`completion-observation.ts` 每份可序列化、含转移、每会话至多一个候选）：
 每份观测 = 来源代 `generation`、`running` 三值、`subagents` 三值、goal 三值
 （`GoalFact | null | 'unknown'`）、可选 `candidate`（`{ kind?, watermark?, evidence:
-'shell-edge' | 'facts-watermark' }`；`kind` 缺省 = complete，承载 #12 的 ask/request）、
+'shell-edge' | 'facts-watermark', completionSeq? }`；`kind` 缺省 = complete，承载 #12 的
+ask/request；`completionSeq` 由 R1 的宿主锚继承给出）、
 `baseline`、`boot: 'same' | 'fresh'`、可选 `factsMemory`（已吸收水位）。边沿所需的
 prev 位不在观测里（F26 已删 `prevRunning`/`prevGoalPhase`），由观测层 per-session
 转移记忆（`shellRunning`/`shellPending`；壳行的 `completed` 位**不参与**——通道行从不携带它，
@@ -329,14 +330,16 @@ boot 值闩锁的**合并字段**（原独立 `bootReported` 已删，二者机�
   随宿主抖动一起出现）。因此 `completion-observation.ts` 在 `usable=false` 时仍读**原始行**产候选，
   并加一道**新鲜度门**：该行水位必须严格新于「本批之前已见水位」（`factsSeenWatermark`，含被 I1
   挡下未吸收的行）——否则它只是上一轮读过的旧完成（播种批/I1 未吸收行），语义仍是壳边沿（无水位
-  候选 + 围栏）。**状态型证据不受影响**：running 位权威与 `factsContradictsIdle` 反证守卫仍按
-  `factsUsable` 走（状态是"现在如何"的主张，必须由活着的通道背书；事件是"发生过什么"）。
+  候选 + 围栏）。**状态型证据不受影响**：running 位权威仍按 `factsUsable` 走；`factsContradictsIdle`
+  反证守卫按**原始行**的最后已知运行位判（降级窗口亦然，W2）——状态是"现在如何"的主张，必须
+  由活着的通道背书，事件是"发生过什么"。
 - **完成身份统一（R1，2026-09）**：同一物理完成在两条轨道上产出**同一个** `host:turn/<seq>`：
   facts 候选带 `lastTurnEnd.seq`（既有 W2，§3.2.7 ⑧）；壳完成边沿在原始 facts 行带**新鲜** host 域
   observed 完成时继承同一个 seq（`shellEdgeCompletionSeq`），同批 facts 已用带锚候选发过该完成时
   壳边沿不再重复发。继承必须过**两道门**，缺一即漏发：① 完成水位严格新于「已见水位与已消费水位的
-  较大者」——已读过或已消费的旧锚属于上一轮；② seq 严格大于**已借出/已投递的最高 seq**
-  （`lastAnchoredSeq`）——行没有前进时（facts 持续不可用、turn/end 停在旧值）不得复用同一个宿主
+  较大者」——已读过或已消费的旧锚属于上一轮；② seq 严格大于**已消费的最高 seq**
+  （`lastAnchoredSeq`；新鲜锚在场即记账，未成边沿也消费）——行没有前进时（facts 持续不可用、
+  turn/end 停在旧值）不得复用同一个宿主
   事件序，否则两轨身份相等、身份门按「已显示」吞掉真实新完成。拿不到任何 host 判别符时，身份层
   **绝不**再退化成同会话共享常量（`notification-identity.ts` 的 `constant` 分支已删）：改用页内
   事件 nonce（与 ask/request 同形）。共享常量会让两次物理完成共用一个 outbox key 与一条 durable

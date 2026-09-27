@@ -108,7 +108,7 @@ docs: document the commit message convention
 ## 范围纪律
 
 - 凡dsh宿主、插件生态或复用的dsh前端已提供的能力，控制面只做**接入或服务，绝不重造**。
-- 被移出范围的域（walkthrough、通知中心/历史、终端渲染/输入、web预览、MCP、薄壳聊天UI、控制面会话运行时等）以任何形式**不得**回流。已定稿的有界例外：设计08的实例内Git worktree插件；设计17的独立gateway（shell/host职责/种子注册表）；设计18的共享dsh运行时管理核心；设计19的Electron原生通知边缘投影；设计20的可信open-in边缘能力（含仅本地形态的实例内host域 `openInApp`，边界见design 20 §6.3）；设计24的实例内归档清理宿主域 `archiveCleanup/{preview,purge,probe}`（只删不读、运行中整棵跳过、幂等；最窄边界见design 24 §2）。它们不得把执行面、session消费者、通知历史或事实权威带进 `packages/control-plane` 或renderer。
+- 被移出范围的域（walkthrough、通知中心/历史、终端渲染/输入、web预览、MCP、薄壳聊天UI、控制面会话运行时等）以任何形式**不得**回流。已定稿的有界例外：设计08的实例内Git worktree插件；设计17的独立gateway（shell/host职责/种子注册表）；设计18的共享dsh运行时管理核心；设计19的Electron原生通知边缘投影；设计20的可信open-in边缘能力（含仅本地形态的实例内host域 `openInApp`，边界见design 20 §6.3）；设计24的实例内归档清理宿主域 `archiveCleanup/{probe,purge}`（只删不读、运行中整棵跳过、幂等；最窄边界见design 24 §2）。它们不得把执行面、session消费者、通知历史或事实权威带进 `packages/control-plane` 或renderer。
 - 任何新领域功能提案先回答：dsh原生、插件生态或宿主web前端是否已覆盖？有 → 不开发。
 
 ## Pull Requests

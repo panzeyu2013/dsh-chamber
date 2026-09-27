@@ -406,7 +406,7 @@ interface HostEdges {
 | # | Electron 现状（main.ts/…） | Swift 对应 | 备注 |
 |---|---|---|---|
 | E1 | `BrowserWindow` + `loadURL` + hide-to-tray/close 语义 | `NSWindow` + `WKWebView`；`windowShouldClose` 按 14 D1（hide 而非关；mac Dock 恒为恢复入口 → orderOut） | 关窗隐藏/恢复、重建窗口只允许单窗 |
-| E2 | `Tray`（打包态，resources/icon.png） | v1：mac 用 Dock 常驻即可，`trayAvailable()=true`；可选 NSStatusItem | 现状镜像：托盘缺失回退关窗即退（mac 不会缺） |
+| E2 | `Tray`（打包态，resources/icon.png） | v1：mac 用 Dock 常驻即可，`trayAvailable()=true`；恒建 NSStatusItem（自持 18pt 图，T-15） | 现状镜像：托盘缺失回退关窗即退（mac 不会缺） |
 | E3 | **未自定义应用菜单**（默认菜单含 Edit role，Cmd+C/V 靠它；Menu 只用于托盘 :779） | NSMenu 标准菜单 + **Edit 项（copy/paste/selectAll 走 first responder → WKWebView）** + **窗口项（Cmd+M 最小化 / Cmd+W 关闭，AppDelegate.swift:659-700）** | 缺菜单会丢 Cmd+C/V/全选；Edit + 窗口菜单 |
 | E4 | `Notification` + `Notification.isSupported`；**session 权限 handler 显式拒绝网页 Notification**（:5693-5695） | `UNUserNotificationCenter`；授权请求时机与现状一致 | **网页 Notification 双路径风险（B10）**：WKWebView 无等价预拒绝 API，网页 requestPermission 会绕过 chamber 裁决直发——P0 实测官方 UI 是否存在网页通知入口并处置 |
 | E5 | `app.setBadgeCount`（平台门 + badgeEnabled 裁决在 core） | `NSApp.dockTile.badgeLabel` | 门控逻辑留 core（badge.ts） |
