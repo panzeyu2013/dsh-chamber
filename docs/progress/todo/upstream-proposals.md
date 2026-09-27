@@ -218,3 +218,34 @@ fallback 与 `test/session-rows/session-row-state.test.ts` 里钉住它的契约
 或改为不受引擎文本形态影响的判定（构造器名 + 原型身份 + 不可构造性）。本仓的两条临时载体（上游落地后一并删除）：① renderer 构建期的第三类 vendor 补丁覆盖 chamber 自建前端；② gateway 出口的 S0 头补丁之二（`packages/gateway/src/html-inject.ts`，design 17 §10.5）覆盖**代理的官方前端**（WebKit 浏览器 / 移动档）——两者都只做空白归一，语义一致。① 的登记：本仓已按前者落临时 vendor 补丁（design 09 §3.6 第三类；
 删除条件 = 上游携带引擎无关判定）。接受的取舍：仅空白差异的伪造函数会通过空白归一，名字与原型身份检查仍在。
 
+## 10. 桌面专属客户端家族的门应以宿主能力为准（非桌面宿主上的整页浮层劫持）
+
+现象（chamber 0.4.0-beta.6 实测，Electron 与 Swift 两 flavor 同源页面均复现）：`dsh-client-ui-settings-account`
+的 apply 门是 `'dshDesktop' in globalThis`（载体**存在性**），而 chamber 两 flavor 为官方快捷键/更新座位必须
+常驻该载体（S-52/S-54）⇒ 家族激活，并在同一载体门下注册 `shell.overlay` 的 `desktop-onboarding` 全屏浮层
+（`OnboardingSurface`）：portal 到 `document.body`、把 `#root` 置 `opacity: 0` + `inert`，而浮层状态由
+桌面 account/configForms 事实驱动——非官方桌面宿主上没有表单把它结算，于是整页停在「正在加载设置…」
+（`onboardingLoading`），且 `displayed === null && status === 'loading'` 时**无视 `visible`** 渲染 ⇒ 永久
+接管页面（chamber 侧触发面 = 连接任意实例后的冷启动）。
+
+上游最小改法（二选一或并用）：① 门改成**宿主能力就绪**（`dshOnboarding`/桌面 configForms 有值）而不是载体
+存在性；② 控制器给 `host.status === 'loading' || account === undefined` 的 loading 态一个期限或 error 收敛，
+不要无期限渲染 loading 面。收益：任何未来以 `dshDesktop` 为门的桌面专属客户端家族都不会在非官方桌面宿主上
+夺屏。chamber 侧现状 = 覆盖集跳过（design 09 §3.5 有意跳过名单③），上游落地后该覆盖条目可删（同处已写退出
+条件）。
+
+## 11. bundle rev 应由内容派生（跨宿主/跨安装稳定）
+
+现象：pin 的 `dsh-client-modules` 用 `artifactRevision` 对 bundle 文件求
+`sha1(mtimeMs, ctimeMs, size)`（前 12 hex），并把它写回被服务 bundle 的 `sourceMappingURL`。两个后果：
+① **同内容跨宿主/跨安装 rev 通常不同**（ctime；仅同一底层文件的硬链接例外），而页级 first-load-wins 按 id+rev 认领，于是同一个插件
+挂在两个实例（本地 + gateway 等）时永久报 `instance-version-conflict`——chamber 只能把诊断中性化并说明
+rev 是文件元数据派生的构建标识；② rev 只在**重建/替换**bundle 文件时变化，因此 chamber 的额外行加载必须
+保留一轮有界恢复（重拉宿主图 + 按 fresh URL 重载），否则一次重建就会让旧 URL 404 掉整轮 boot。
+
+上游最小改法：`artifactRevision` 改为对 bundle **字节**求内容哈希（combo/整图 rev 随之稳定）。收益：同内容
+跨宿主/重装 rev 一致，跨实例冲突诊断整类消失，恢复轮只剩"文件真的变了"这一种情形。
+
+chamber 侧现状 = 中性诊断文案（design 09 §3.5）+ 一轮有界恢复。退出条件：上游落地后，删 design 09 §5 的
+「vendor 侧根治」开放项与 §3.5 的恢复轮必要性说明（保留超时/迟到语义）。
+

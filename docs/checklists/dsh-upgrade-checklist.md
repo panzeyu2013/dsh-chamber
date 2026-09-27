@@ -39,7 +39,7 @@
 - [ ] 其余适配面：控制面代理限额、`spawn-dsh` 的pin注释、desktop/renderer注释基线等与上游对齐。
 - [ ] 上游行为变化逐项裁决：限额与代理上限冲突、事件改名是否被消费、新包是否要动作、新wire是否改变例外边界。
 - [ ] 逐面验证：`test:connection`、`test:client-web`、`typecheck:client-web`、`typecheck:connection`、`test:control-plane`、`test:api-gateway`、`typecheck:api-gateway`。
-- [ ] 自建物重放（layout/sidebar fork、covered factory、vendor补丁锚点）逐项裁决：采纳或保留偏差并登记（口径见 `upstream-touchpoints.md` §1–§3）；layout fork 已登记为 chamber-named 副本（registry `seed.dsh-chamber-client-ui-layout`，§2.6），其 client index/store 副本面随 C2 报告 + 预检 vendor-seam 重放。
+- [ ] 自建物重放（layout/sidebar fork、covered factory、vendor补丁锚点）逐项裁决：采纳或保留偏差并登记（口径见 `upstream-touchpoints.md` §1–§3）；layout fork 已登记为 chamber-named 副本（registry `seed.dsh-chamber-client-ui-layout`，§2.6），其 client index/store 副本面随 C2 报告 + 预检 vendor-seam 重放；并重审 design 09 §3.5 有意跳过名单（每条 skip 是否仍必须跳过、上游门是否已修好）。
 - [ ] **内部依赖 range 按上游政策归位**（`workspace:*`，拒 caret——政策依据 `.agents/notes/implemented/process/2026-09-22-workspace-release-ranges.md`）：改动 `package.json` 后必须 `pnpm install --lockfile-only` 同步 lockfile；棘轮门 `scripts/upstream/workspace-range-ratchet.test.mjs`（覆盖 registry 的 fork/seed 集合）。
 
 ## 4. 锁文件

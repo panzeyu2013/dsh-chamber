@@ -111,7 +111,7 @@ pnpm run dev:desktop         # 完整窗口：控制面 + dsh 前端 + 桌面壳
 ## 4. 构建与打包
 
 ```bash
-pnpm run build:host-packages # 构建 host-graph + host-git-worktree 两个宿主包
+pnpm run build:host-packages # 构建 host-graph / host-git-worktree / host-archive-cleanup / host-open-in 四个宿主包
 pnpm run build:renderer      # 构建 dsh 前端 bundle（vite 构建 dsh workspace 源码）
 pnpm run build:desktop       # host 包 → renderer → 控制面/host 包复制 → preload → bundle:dsh
 pnpm run dist:desktop:mac    # 打包 macOS 应用（dmg + zip）

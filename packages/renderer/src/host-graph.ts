@@ -12,7 +12,7 @@
  * authoritative control-plane rpc-envelope.ts via the shared browser kernel.
  */
 
-import { CHAMBER_COVERED_IDS } from './chamber-covered.ts'
+import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from './chamber-covered.ts'
 import { graphGapKindFor, type GraphGapKind } from './source-readiness.ts'
 // Boot-graph wire validators are UPSTREAM's own — never hand-rolled — imported
 // by real-source relative path because the renderer has no install-tree copy
@@ -22,7 +22,7 @@ import { optionalStringArray, stripClientSuffix } from '../../../vendor/harness-
 // Deferred-covered roster, shared with the composite entry (which asserts its
 // roster against it at apply time): covered ids whose module-table factory
 // exists only AFTER the boot settled.
-import { DEFERRED_EXTRA_ROW_IDS } from './required-extra-rows.ts'
+
 import type { PluginGraphDiagnostic, PluginGraphDiagnosticState } from '@dsh-chamber/dsh-chamber-client-core'
 import { postUnary, type UnaryPostOutcome } from '@dsh-chamber/dsh-chamber-client-core/wire-common'
 // Envelope classification SINGLE SOURCE, also consumed by client-core's
@@ -41,25 +41,28 @@ import {
   type ClientRowOutcome,
 } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
 
-/** Re-exported for existing consumers (the type lives in the chamber shared face). */
-export type { PluginGraphDiagnostic, PluginGraphDiagnosticState }
-
 /** One composed client entry row (mirror of upstream WebBootEntry): bundle urls
  *  use the single-id combo form; the graph's multi-id combo BATCHES are ignored
  *  (the fetch reads `entries` only). */
 export interface HostGraphRow {
   id: string
-  /** Bundle endpoint, '/plugins/??<id>/client.js&rev=<rev>' (host-root-relative). */
+  /** Bundle endpoint in the pin's single-id combo form, document-relative
+   *  ('plugins/??<id>/client.js&rev=<rev>'; 0.1.6 and earlier were host-root-relative).
+   *  Both shapes are accepted — see normalizeBundleUrl below. */
   url: string
-  /** Opaque cache-busting revision (`<per-process nonce>-<ordinal>`), NOT a
-   *  content hash: every instance restart invalidates all previous bundle URLs. */
+  /** Opaque cache-busting build revision, NOT a content hash: the pinned host
+   *  derives it from the bundle file's filesystem metadata (mtimeMs/ctimeMs/size —
+   *  dsh-client-modules `artifactRevision`), so replacing/rebuilding that file
+   *  invalidates its URL (a plain restart does not). Two INDEPENDENT installs of the
+   *  same bytes usually differ (ctime), while two hard links to one file share it. */
   rev: string
   /** Package-name dependency edges, informational. */
   inject?: string[]
   /** Exact non-inject module requests of this row (WebBootEntry.external):
    *  specifiers the bundle requires beyond its `inject` edges. Load-bearing: a
-   *  request onto a deferred-covered id (DEFERRED_EXTRA_ROW_IDS) is the ONE
-   *  unsatisfiable edge this merge must name, not drop. */
+   *  request onto a covered id that no registration answers (no first-screen
+   *  factory, not kernel-adopted) is an unsatisfiable edge this merge must name,
+   *  not drop. */
   external?: string[]
   /** Stage-one prefetch mark (the chamber merge preloads everything it keeps). */
   immediately?: boolean
@@ -69,7 +72,7 @@ export interface HostGraphRow {
  *  BootModuleRow): `initialUrl` equals `url` (the merge preloads each entry's
  *  own combo), `inject` stays empty (the composite covers the shell), and
  *  `external` records the specifiers the factory will `require` from the module
- *  table at materialization — what {@link findDeferredExternalDependencies}
+ *  table at materialization — what {@link findUnsatisfiableExternalDependencies}
  *  judges. */
 export interface ExtraModuleRow {
   id: string
@@ -198,37 +201,70 @@ export function toExtraRows(rows: readonly HostGraphRow[], basePath: string): Ex
       // The composite covers the shell; kept extras have no inject edges to arrive first.
       inject: [],
       // The wire's non-inject requests travel UNCHANGED; this merge decides
-      // which are unsatisfiable (findDeferredExternalDependencies).
+      // which are unsatisfiable (findUnsatisfiableExternalDependencies).
       external: [...(row.external ?? [])],
     })
   }
   return out
 }
 
+/** One kept row's unsatisfiable create-time requires (see the predicate below). */
+interface UnsatisfiableExternalRequests {
+  rowId: string
+  /** Every unsatisfiable id of this row: stripped form, first-seen order, deduped. */
+  dependencies: string[]
+}
+
 /**
- * The `external` requests of the kept rows this page can NEVER satisfy: a
- * request naming a composite-COVERED id whose family registers only after the
- * boot settled (`DEFERRED_EXTRA_ROW_IDS`).
- * Unsatisfiable, not merely late: the covered row is filtered out of the graph,
- * the composite registers only its FIRST-SCREEN families, and the consumer
- * row's synchronous `require` misses the module table at create — only this
- * merge knows the covered/deferred sets without a round trip, so it names the
- * miss here. Requests are matched suffix-stripped exactly as the kernel does;
- * peer extras and first-screen factories are satisfied, not reported.
+ * The covered ids the module table answers BESIDES the composite's own factories:
+ * the two ids the boot kernel adopts for the shell itself BEFORE any extra row
+ * runs (`packages/dsh-client-web/src/boot-rows.ts` `MODULES_ID`/`UI_RENDERER_ID`,
+ * registered in `boot.ts` `ensureWebModuleSystem`). Both are page-own covered rows
+ * with no composite factory, so without this set the predicate would call a
+ * resolvable require unsatisfiable. A lockstep test pins both ends of this list.
  */
-export function findDeferredExternalDependencies(
+const KERNEL_ADOPTED_IDS: readonly string[] = [
+  '@deepseek-ai/dsh-client-modules',
+  '@deepseek-ai/dsh-client-ui-renderer',
+]
+
+/**
+ * The `external` requests of the kept rows this page can NEVER satisfy: a request
+ * naming a composite-COVERED id that no registration ever answers. Covered rows are
+ * filtered out of the host graph, and the page's module table answers only:
+ *  - the composite's FIRST-SCREEN factories (`COVERED_FACTORIES`), and
+ *  - the kernel-adopted ids above.
+ * Everything else covered is permanently unresolvable: the deliberate skips
+ * (hmr / mobile / directory-picker-native / the desktop account family) are never
+ * loaded; the deferred families are mounted with `ctx.plugin` but never register a
+ * module-table factory; page-own and replaced official rows register nothing either.
+ * This is NOT a timing claim — there is no later moment at which those ids resolve,
+ * which is why every qualifying id is reported the same way. Only this merge knows
+ * the covered/factory/kernel sets without a round trip, so it names the miss here.
+ * Requests are matched suffix-stripped exactly as the kernel does; first-screen
+ * factories and kernel-adopted ids are satisfied, not reported, while kept peers and
+ * every other non-covered id are OUTSIDE the domain (the seed table must stay
+ * disjoint from the covered non-factory ids — pinned by an invariant test). Three boundaries: only the `external` WIRE form is judged (a
+ * bundle's bare `inject`-style require was already dropped by toExtraRows and stays
+ * the kernel fix's failure face), and the verdict assumes the composite entry
+ * EVALUATED — a failed prefetch is the composite path's report, not re-derived here.
+ * Requests onto ids OUTSIDE the covered set are not judged either: a non-covered id
+ * that never loads is the kernel `require`'s failure face.
+ */
+export function findUnsatisfiableExternalDependencies(
   rows: readonly ExtraModuleRow[],
-): { rowId: string; dependencies: string[] }[] {
-  const deferred = new Set(DEFERRED_EXTRA_ROW_IDS)
-  const out: { rowId: string; dependencies: string[] }[] = []
+): UnsatisfiableExternalRequests[] {
+  const covered = new Set(CHAMBER_COVERED_IDS)
+  const satisfied = new Set<string>([...CHAMBER_COVERED_FACTORY_IDS, ...KERNEL_ADOPTED_IDS])
+  const out: UnsatisfiableExternalRequests[] = []
   for (const row of rows) {
-    const hits: string[] = []
+    const dependencies: string[] = []
     for (const request of row.external) {
       const id = stripClientSuffix(request)
-      if (!deferred.has(id) || hits.includes(id)) continue
-      hits.push(id)
+      if (!covered.has(id) || satisfied.has(id) || dependencies.includes(id)) continue
+      dependencies.push(id)
     }
-    if (hits.length > 0) out.push({ rowId: row.id, dependencies: hits })
+    if (dependencies.length > 0) out.push({ rowId: row.id, dependencies })
   }
   return out
 }
@@ -325,11 +361,12 @@ const SERVING_HEAL_BUDGET_MS = 70_000
  * reports success (derived probe roster, `required-extra-rows.ts`). A 503 is
  * the expected pre-ready state: bounded retries + one serving wait, then a
  * named `graph-unreachable` diagnostic. A kept row whose `external` requests a
- * deferred-covered id is a NAMED diagnostic, not `ok`. A bundle that fails to
- * LOAD fails the boot loud after ONE bounded recovery pass: upstream revs are
- * opaque PER-PROCESS nonces, so a restart between graph fetch and loads 404s
- * every not-yet-loaded row; the pass re-fetches and retries at fresh URLs, and
- * only still-failing rows fail the boot. A DOM-script TIMEOUT is not recovery:
+ * covered id with no module-table factory is a NAMED diagnostic, not `ok`. A
+ * bundle that fails to LOAD fails the boot loud after ONE bounded recovery pass:
+ * a rev derives from the bundle file's filesystem metadata, so a rebuild or
+ * replacement between graph fetch and loads 404s every not-yet-loaded row; the
+ * pass re-fetches and retries at fresh URLs, and only still-failing rows fail the
+ * boot. A DOM-script TIMEOUT is not recovery:
  * its tombstone observes the original element.
  */
 export async function collectExtraRows(
@@ -450,9 +487,10 @@ export async function collectExtraRows(
   // No second gate: it settled before the first pass, and recovery only
   // re-executes scripts (their synchronous requires run later, during run()'s
   // loader.create materialization, after the chamber entry has evaluated).
-  // One bounded recovery cycle: revs are opaque per-process nonces, so an
-  // instance restart between fetch and loads 404s every remaining row. Re-fetch
-  // the graph and reload at fresh URLs; only still-failing rows fail the boot.
+  // One bounded recovery cycle: a rev derives from the bundle file's filesystem
+  // metadata, so a rebuild/replacement between fetch and loads 404s every
+  // remaining row (a plain restart does not). Re-fetch the graph and reload at
+  // fresh URLs; only still-failing rows fail the boot.
   if (failedRows.length > 0) {
     const secondFetch = await fetchWithRetry()
     const keptFailures: { row: ExtraModuleRow; error: unknown }[] = []
@@ -502,37 +540,47 @@ export async function collectExtraRows(
       throw keptFailures[0]!.error
     }
   }
-  // Deferred-dependency verdict of the rows actually handed to the kernel
-  // (post-recovery); computed once because the projection reports per boot.
-  const deferredExternalMisses = findDeferredExternalDependencies(rows)
+  // Unsatisfiable-dependency verdict of the rows actually handed to the kernel
+  // (post-recovery); computed once because the projection reports per boot. The
+  // single diagnostic slot can carry only one state and a rev conflict wins it, so
+  // the boot fact is ALSO logged: a row whose create-time require can never be
+  // answered must not go silent just because another row conflicted.
+  const unsatisfiableExternal = findUnsatisfiableExternalDependencies(rows)
+  const unsatisfiableMessage = unsatisfiableExternal.length === 0
+    ? null
+    : `额外行的模块依赖本 boot 无法满足：${unsatisfiableExternal
+        .map(miss => `${miss.rowId} → ${miss.dependencies.join(', ')}`).join('; ')}`
+      + ' — 这些 id 在覆盖集内，而覆盖集内可被模块表应答的只有首屏 factory 与内核收编的 '
+      + `${KERNEL_ADOPTED_IDS.join(' / ')}；有意跳过行、延迟族（只以 ctx.plugin 挂载）、页面自有/被替换的`
+      + '官方行都不注册 factory，任何时刻都拿不到；相关功能在本 boot 缺失（extra 行的 create 期 require 落空）'
+  if (unsatisfiableMessage !== null) console.error(`[shell] instance ${instanceId} ${unsatisfiableMessage}`)
   if (versionConflict !== undefined) {
-    // Cross-instance plugin version drift: a different instance first claimed
-    // this id at another rev, and the page keeps the first-load-wins factory —
-    // no restart can switch it. The fix is aligning the two instances' dsh
-    // runtimes (or plugin versions); then the revs match and the diagnostic clears.
+    // Cross-instance rev drift: a different instance first claimed this id at
+    // another rev, and the page keeps the first-load-wins factory — no restart
+    // switches it. rev is a FILE-METADATA fact, not a version or content fact:
+    // the pinned host hashes mtimeMs/ctimeMs/size, so two independent installs of
+    // byte-identical bundles usually differ (ctime; hard links share it). The
+    // message therefore states only the fact; the
+    // user-facing hint (locales) carries the conditional "if it misbehaves" copy.
     const ownerSourceId = clientPluginRowOwner(versionConflict.id) ?? '—'
     reportDiagnostic(instanceId, 'instance-version-conflict', {
       pluginId: versionConflict.id,
-      message: `实例间 ${versionConflict.id} 插件版本不同：已使用实例 ${ownerSourceId} 先加载的版本；对齐两个实例的 dsh 运行时（或插件）版本后可切换`,
+      message: `实例间 ${versionConflict.id} 的 bundle rev 不同（rev 由 bundle 文件的 mtime/ctime/size 派生，不是内容哈希；独立安装/拷贝通常不同，仅当两侧指向同一底层文件时才相同）：页面已沿用实例 ${ownerSourceId} 先加载的版本`,
     }, deps.reportDiagnostic)
   } else if (restartConflict !== undefined) {
     reportDiagnostic(instanceId, 'restart-required', {
       pluginId: restartConflict.id,
       message: `页面已加载 ${restartConflict.id} 的另一版本，重启应用后才能切换`,
     }, deps.reportDiagnostic)
-  } else if (deferredExternalMisses.length > 0) {
+  } else if (unsatisfiableMessage !== null) {
     // A kept row's create-time require can never be answered (see
-    // findDeferredExternalDependencies). This is a BOOT fact, so it must not be
-    // `ok`; projected as `bundle-load-failed` ("row cannot materialize"), which
-    // the settings recheck never heals (it heals channel facts only).
-    const message = `额外行的模块依赖本 boot 无法满足：`
-      + deferredExternalMisses.map(miss => `${miss.rowId} → ${miss.dependencies.join(', ')}`).join('; ')
-      + ` — 该依赖已被复合入口覆盖但属延迟簇（boot 之后才注册，见 required-extra-rows.ts DEFERRED_EXTRA_ROW_IDS）；`
-      + '相关功能在本 boot 缺失（extra 行的 create 期 require 落空）'
-    console.error(`[shell] instance ${instanceId} ${message}`)
+    // findUnsatisfiableExternalDependencies). This is a BOOT fact, so it must not
+    // be `ok`; projected as `bundle-load-failed` ("row cannot materialize"), which
+    // the settings recheck never heals (it heals channel facts only). One entry per
+    // boot with the first row id is deliberate: the message names every edge.
     reportDiagnostic(instanceId, 'bundle-load-failed', {
-      pluginId: deferredExternalMisses[0]!.rowId,
-      message,
+      pluginId: unsatisfiableExternal[0]!.rowId,
+      message: unsatisfiableMessage,
     }, deps.reportDiagnostic)
   } else {
     reportDiagnostic(instanceId, 'ok', {}, deps.reportDiagnostic)

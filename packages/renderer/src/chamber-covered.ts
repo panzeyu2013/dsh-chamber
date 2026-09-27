@@ -4,8 +4,13 @@
  * Loading any of these again from the host graph would register the same plugin
  * twice on one cordis ctx (duplicate provide / slot), so they are skipped, never
  * loaded — mostly the client plugin packages the composite registers, plus the
- * page-own rows (ui-sidebar / ui-modules / ui-renderer / ui-layout / hmr / mobile
- * / directory-picker-native) and the PLATFORM_MODULES words the composite answers.
+ * page-own rows (ui-sidebar / ui-modules / ui-renderer / ui-layout) and the
+ * PLATFORM_MODULES words the composite answers.
+ *
+ * The deliberate extra ids — covered but never loaded — are the skips: hmr /
+ * mobile / directory-picker-native / settings-account. They are page-own rows the
+ * composite replaces plus host rows the shell drops on purpose; each carries its
+ * own reason below, and design 09 §3.5 有意跳过名单 owns their re-review.
  *
  * Maintenance: a plugin import added to chamber-entry.ts must append its package
  * name here in the same batch (missing ids fail LOUD at boot; extra ids are
@@ -87,13 +92,24 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // reason as file-upload: its vendor bundle builds a same-origin absolute export
   // URL that 404s under the N-ctx shell.
   '@deepseek-ai/dsh-session-log-export',
-  // chamber page-own skips (covered, no factory, never loaded into the chamber
-  // shell): mobile is the GATEWAY deployment's single-shell surface (its own
-  // header says its document-level effects are single-shell by design); the
-  // `native` directory-picker face can never win because the host's picker
-  // interaction is pinned to `browse`.
+  // chamber skips (covered, no factory, never loaded into the chamber shell):
+  // page-own rows plus the host rows the shell deliberately drops. mobile is the
+  // GATEWAY deployment's single-shell surface (its own header says its
+  // document-level effects are single-shell by design); the `native`
+  // directory-picker face can never win because the host's picker interaction is
+  // pinned to `browse`.
   '@dsh-chamber/dsh-client-ui-mobile',
   '@deepseek-ai/dsh-client-ui-directory-picker-native',
+  // The official DESKTOP-only account family: apply is gated on `'dshDesktop' in
+  // globalThis` — the carrier BOTH flavors expose for the official shortcuts/
+  // updater seats (S-52/S-54) — so it activates here while the official WEB flavor
+  // returns early. Its `shell.overlay` `desktop-onboarding` seat then portals a
+  // full-screen surface, zeroes + inerts `#root` and parks on「正在加载设置…」 (no
+  // desktop configForms form resolves it here; observed parked ≥30s), taking over
+  // every instance view. Skipping the row keeps the family's activation state equal
+  // to the web flavor's; an account/sign-in surface is a chamber-side feature
+  // (design 05 §5), never this row's (design 09 §3.5 有意跳过名单③).
+  '@deepseek-ai/dsh-client-ui-settings-account',
   // deferred families (registerDeferred dynamic imports): registered after the
   // boot settles — composite-owned namespaces all the same, so a host-graph row
   // would double-register the package on the same ctx.

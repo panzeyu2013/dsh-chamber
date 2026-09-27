@@ -16,7 +16,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   VENDOR_PATCHES,
-  VENDOR_WORKSPACE,
   parsePatchedDependencies,
   renderRuntimeWorkspace,
   stageUpstreamPatches,

@@ -61,11 +61,10 @@ import {
   readlinkSync,
   rmSync,
   statSync,
-  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { isCliEntry, runCliTool } from '../../scripts/lib/cli.mjs'
 // 共享装配 seam（monorepo 内相对导入，同 packages/desktop/scripts/
 // build-swift-app.test.mjs 的反向引用）：bundle 内符号链接归一化必须与

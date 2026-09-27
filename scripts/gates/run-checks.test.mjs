@@ -22,7 +22,7 @@ import {
   runMode, stepInvocation, totalJobs,
 } from './run-checks.mjs'
 import { ARTIFACTS, ensureArtifacts, formatMissingArtifacts, missingArtifacts } from '../dev/ensure-artifacts.mjs'
-import { ciUnclassifiedGateCommands, jobBlock, staticGateParityProblems } from './static-gate-parity.mjs'
+import { ciUnclassifiedGateCommands, jobBlock } from './static-gate-parity.mjs'
 import { judgeSwiftTestReport, parseSwiftTestReport, swiftTestArgs, swiftTestEnvironment } from './run-swift-tests.mjs'
 import { smokeDecision } from './compiled-sidecar-smoke.mjs'
 import { DEFAULT_SIDECAR_DIR, resolveNodeBinary, resolveSidecarDir } from '../lib/sidecar-assembly.mjs'

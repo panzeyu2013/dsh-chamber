@@ -24,7 +24,9 @@
  * parsed `BootModuleRow` view then gets `initialUrl = batch.url` (= the
  * bundle url) and `inject = []` (the composite provides every service).
  *
- * revs are sha1 content hashes shortened to 12 hex (the dsh convention).
+ * revs are sha1 content hashes shortened to 12 hex — true for this chamber-composed
+ * manifest and for the whole-graph `rev`; a HOST graph's per-entry revs are
+ * file-metadata build ids instead (see host-graph.ts `normalizeBundleUrl`).
  * The control plane serves this file at /manifest.json and injects it into
  * the served index.html as `window.__DSH_BOOT__` (design 05 §7.3); until
  * that injection exists the chamber boot refuses to start (missing

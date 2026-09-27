@@ -14,7 +14,7 @@
 |vendor链接数|由 `ensure-harness-vendor` 断言 == 锁文件importer集合——源码线，不是F|
 |运行时线族集合（F）|`packages/desktop/vendor/dsh/pnpm-lock.yaml` 闭包里的 `@deepseek-ai/*` 名字集合（C11硬门）：含核心 `dsh`/`dsh-base`/`dsh-web-app`，不含dev/test与源码线harness段；官方opt-in（`dsh-experimental-*`）只放行**登记白名单**内的名字（运行时根包自己声明的opt-in依赖属于F；未登记名字出现/已登记名字不再出现都红）；本行与上一行是两条线，数量相近但集合不同，不可互推|
 |typert remote装配契约|23（C4；import 选择表与 apply 挂载表各自定序，集合相等）|
-|covered / factory|`chamber-covered.ts` 的两个集合（factory ⊆ covered，chamber-entry锁步断言；含 `ui-dockkit`、`client-file-upload` 的covered factory与 `session-log-export`（deferred）、两个page-own跳过id）|
+|covered / factory|`chamber-covered.ts` 的两个集合（factory ⊆ covered，chamber-entry锁步断言；含 `ui-dockkit`、`client-file-upload` 的covered factory与 `session-log-export`（deferred）、四个有意跳过id（hmr/mobile/directory-picker-native/settings-account））|
 |种子域|`clientGraph/graph`、`gitWorktree/previewCreate`、`archiveCleanup/probe`、`openInApp/probe`（C7双门）|
 
 ## 1. 标记约定（每文件分类）

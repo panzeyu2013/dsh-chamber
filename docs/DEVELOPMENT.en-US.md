@@ -113,7 +113,7 @@ pnpm run dev:desktop         # full window: control plane + dsh frontend + deskt
 ## 4. Build & package
 
 ```bash
-pnpm run build:host-packages # build both host-graph and host-git-worktree packages
+pnpm run build:host-packages # build the four host packages: host-graph, host-git-worktree, host-archive-cleanup, host-open-in
 pnpm run build:renderer      # build the dsh-frontend bundle (vite over the dsh workspace source)
 pnpm run build:desktop       # host packages → renderer → control-plane/copy → preload → bundle:dsh
 pnpm run dist:desktop:mac    # package the macOS app (dmg + zip)
@@ -122,7 +122,7 @@ pnpm run dist:desktop:win    # package the Windows app (nsis only; must run on W
 
 Artifacts land in `packages/desktop/release/` (electron-builder `directories.output`). A formal macOS release needs all five Apple/Developer ID credentials (a missing value fails closed before any GitHub Release mutation) and must pass Developer ID signing, notarization, stapler and spctl checks before its draft is public. Even with formal secrets, `workflow_dispatch dry_run` clears all signing/notarization variables and `GH_TOKEN`, uses `--publish=never`, writes no Release or asset, and produces an ad-hoc-signed validation package via the afterPack hook. The first Windows release remains unsigned (the SmartScreen warning is the explicit Design 11 §7 tradeoff).
 
-`build:desktop` copies the two built host packages into `packages/desktop/dist/host-graph-package/` and `packages/desktop/dist/host-git-worktree-package/`; the packaged local control-plane seed and the desktop's ready-time remote seed consume those artifacts.
+`build:desktop` copies the four built host packages into `packages/desktop/dist/host-*-package/` (`host-graph-package/`, `host-git-worktree-package/`, `host-archive-cleanup-package/`, `host-open-in-package/`); the packaged local control-plane seed and the desktop's ready-time remote seed consume those artifacts (open-in is `localOnly`: local seed only, never the remote/gateway seed).
 
 > Windows install slowness/hangs on "Installing" (Windows Defender per-file scanning) — see the README FAQ.
 

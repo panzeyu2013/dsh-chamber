@@ -42,6 +42,8 @@ export const GROUPS = {
     'test/lifecycle/safe-mode.test.ts',
     'test/lifecycle/baseline-harvest.test.ts',
     'test/lifecycle/host-graph.test.ts',
+    // 页面根接管安全网：外部 shell.overlay 置 0 #root 的检测 / 上报 / 释放。
+    'test/lifecycle/root-takeover-watch.test.ts',
     'test/lifecycle/required-extra-rows.test.ts',
     // 必需行探针的纯记账（单调钟选择 / 每成员 grace / 有界复查窗口）
     'test/lifecycle/required-service-probe.test.ts',

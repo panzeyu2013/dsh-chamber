@@ -1,7 +1,8 @@
 import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { collectExtraRows, fetchHostGraph, findDeferredExternalDependencies, normalizeBundleUrl, toExtraRows, type ExtraModuleRow, type HostGraphRow } from '../../src/host-graph.ts'
+import { join } from 'node:path'
+import { collectExtraRows, fetchHostGraph, findUnsatisfiableExternalDependencies, normalizeBundleUrl, toExtraRows, type ExtraModuleRow, type HostGraphRow } from '../../src/host-graph.ts'
 import {
   BundleLoadTimeoutError, dedupeCoveredRows,
 } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
@@ -12,6 +13,10 @@ import {
 } from '@dsh-chamber/dsh-chamber-client-core/plugin-graph-classify'
 import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from '../../src/chamber-covered.ts'
 import { DEFERRED_EXTRA_ROW_IDS } from '../../src/required-extra-rows.ts'
+// The kernel-adopted ids are imported BY VALUE from the boot source: KERNEL_ADOPTED_IDS
+// keys on them, so a wrong literal in host-graph.ts must fail the behavior test below
+// (a text regex over boot-rows.ts would pin spelling, not the coupling).
+import { MODULES_ID, UI_RENDERER_ID } from '../../../dsh-client-web/src/boot-rows.ts'
 import { normalize, stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
 // Extra-bundle URLs are `/plugins/??<id>&rev=…` combos, so the fixture and the
@@ -71,10 +76,9 @@ test('fetchHostGraph: success resolves the entries, carrying optional fields', a
 
 test('fetchHostGraph: carries the row `external` requests (BootModuleRow parity)', async (t) => {
   // The wire `external` field must be preserved at parse: an extra row's exact
-  // non-inject module requests must reach the merge, since the one case the
-  // chamber merge cannot satisfy (a request onto a covered id whose family the
-  // composite registers only AFTER the boot settles, i.e. the deferred
-  // cluster) is otherwise invisible. The deferred-dependency diagnostic below
+  // non-inject module requests must reach the merge, since the cases the chamber
+  // merge cannot satisfy (a request onto a covered id no registration answers)
+  // are otherwise invisible. The unsatisfiable-dependency diagnostic below
   // matches against it.
   stubFetch(t, 200, envelope([
     row('@scope/pkg-ext', { external: ['@deepseek-ai/dsh-client-ui-tool/client', '@deepseek-ai/dsh-client-ui-dockkit'] }),
@@ -94,8 +98,8 @@ test('fetchHostGraph: a malformed optional field throws (A4: upstream optionalSt
   // one its `parseBootManifest` uses for this same wire. A present-but-malformed
   // field therefore fails the fetch LOUD (the boot then degrades to no profile
   // plugins with a named diagnostic) instead of being dropped silently — a
-  // silently dropped `external` would erase the one unsatisfiable require edge
-  // the deferred-dependency diagnostic exists to name.
+  // silently dropped `external` would erase the unsatisfiable require edges the
+  // diagnostic below exists to name.
   for (const bad of [
     { external: ['ok', 7] as unknown as string[] },
     { inject: 'slots' as unknown as string[] },
@@ -378,35 +382,107 @@ test('toExtraRows: passes `external` through to the kernel row (never dropped, n
   ])
 })
 
-test('findDeferredExternalDependencies: names the rows whose `external` requests a deferred-covered id', () => {
-  // The deferred cluster (chamber-entry registerDeferred) is COVERED — its rows
-  // are filtered out of the host graph — but has no module-table factory until
-  // its chunk registers, after the boot settled. A synchronous require of such
-  // an id inside an extra bundle's factory therefore misses the table during
-  // create (upstream system.ts makeRequire), which is exactly what this
-  // predicate surfaces by name.
+test('findUnsatisfiableExternalDependencies: names covered requires no registration answers', () => {
+  // Covered rows are filtered out of the host graph, so the module table is the
+  // only possible source — and it answers the composite's first-screen factories
+  // plus the two kernel-adopted ids, NOTHING else covered: the deliberate skips
+  // are never loaded, the deferred families are mounted via `ctx.plugin` but
+  // never registered, and page-own / replaced official rows register nothing.
+  // Not a timing distinction: those requires miss at create AND later.
   const deferredId = DEFERRED_EXTRA_ROW_IDS[0]!
   const otherDeferredId = DEFERRED_EXTRA_ROW_IDS[1]!
   const coveredFactoryId = CHAMBER_COVERED_FACTORY_IDS[0]!
+  const skipId = '@deepseek-ai/dsh-client-ui-settings-account'
+  const kernelAdoptedId = UI_RENDERER_ID
+  assert.ok(CHAMBER_COVERED_IDS.includes(skipId), 'the fixture skip is a covered id')
+  assert.ok(!CHAMBER_COVERED_FACTORY_IDS.includes(skipId), 'the fixture skip has no factory')
+  assert.ok(CHAMBER_COVERED_IDS.includes(kernelAdoptedId), 'the kernel-adopted id is a covered id')
+  assert.ok(!CHAMBER_COVERED_FACTORY_IDS.includes(kernelAdoptedId), 'and has no composite factory')
   const rows: ExtraModuleRow[] = [
     {
       id: 'a', url: '/plugins/a', initialUrl: '/plugins/a', rev: 'r', inject: [],
-      // The `/client` subpath form (upstream stripClientSuffix) and the bare id
-      // are the SAME dependency: reported once, in its stripped form.
-      external: [`${deferredId}/client`, deferredId, `${coveredFactoryId}/client`],
+      // The `/client` subpath form (upstream stripClientSuffix) and the bare id are
+      // the SAME dependency: reported once, stripped. A first-screen factory and a
+      // kernel-adopted id are satisfied; the kept peer is outside the judged domain.
+      external: [
+        `${deferredId}/client`, deferredId, `${coveredFactoryId}/client`, `${skipId}/client`,
+        `${kernelAdoptedId}/client`, '@scope/kept-peer',
+      ],
     },
-    { id: 'b', url: '/plugins/b', initialUrl: '/plugins/b', rev: 'r', inject: [], external: [otherDeferredId] },
-    { id: 'c', url: '/plugins/c', initialUrl: '/plugins/c', rev: 'r', inject: [], external: ['@scope/kept-peer'] },
-    { id: 'd', url: '/plugins/d', initialUrl: '/plugins/d', rev: 'r', inject: [], external: [] },
+    {
+      id: 'b', url: '/plugins/b', initialUrl: '/plugins/b', rev: 'r', inject: [],
+      external: [otherDeferredId, MODULES_ID],
+    },
+    { id: 'c', url: '/plugins/c', initialUrl: '/plugins/c', rev: 'r', inject: [], external: [] },
   ]
-  assert.deepEqual(findDeferredExternalDependencies(rows), [
-    { rowId: 'a', dependencies: [deferredId] },
+  assert.deepEqual(findUnsatisfiableExternalDependencies(rows), [
+    { rowId: 'a', dependencies: [deferredId, skipId] },
     { rowId: 'b', dependencies: [otherDeferredId] },
   ])
   assert.ok(!CHAMBER_COVERED_FACTORY_IDS.includes(deferredId), 'a deferred id must NOT be a registered factory')
 })
 
-test('collectExtraRows: an `external` request onto a deferred-covered id reports the NAMED diagnostic', async (t) => {
+test('the kernel-adopted id set stays lockstep with boot-rows.ts / boot.ts (the predicate keys on it)', () => {
+  // findUnsatisfiableExternalDependencies treats `dsh-client-modules` and
+  // `dsh-client-ui-renderer` as resolvable because the boot kernel registers both
+  // BEFORE any extra row runs. If that registration or the id constants move, the
+  // predicate would report a satisfiable require as `bundle-load-failed`.
+  assert.equal(MODULES_ID, '@deepseek-ai/dsh-client-modules', 'the imported constant is the id the predicate names')
+  assert.equal(UI_RENDERER_ID, '@deepseek-ai/dsh-client-ui-renderer')
+  const root = join(import.meta.dirname, '..', '..', '..', '..')
+  const boot = stripComments(readFileSync(join(root, 'packages/dsh-client-web/src/boot.ts'), 'utf8'))
+  // The registration SET, not just presence: a third `target.load` would adopt
+  // another row and invalidate the predicate until KERNEL_ADOPTED_IDS grows too.
+  // Tolerant of whitespace/extra keys after `id`: a third registration must not slip
+// past merely because its options line reformatted.
+const registered = [...boot.matchAll(/target\.load\(\{\s*id:\s*(\w+)/g)].map(match => match[1]!)
+  assert.deepEqual(
+    [...new Set(registered)].sort(),
+    ['MODULES_ID', 'UI_RENDERER_ID'],
+    'the kernel adopts exactly these two rows',
+  )
+  for (const constant of ['MODULES_ID', 'UI_RENDERER_ID']) {
+    assert.match(boot, new RegExp(`registration\\.id === ${constant}`), `${constant} presence check`)
+  }
+})
+
+test('no platform seed word is a covered id without a composite factory (predicate safety)', () => {
+  // The kernel resolves seed words BEFORE registered factories, so a seed word that
+  // is covered but NOT factory-answered would still resolve — the predicate must
+  // never name it. Today the only covered seed word (`dsh-client-store`) has a
+  // factory; this pins that no future platform word lands in the gap.
+  const root = join(import.meta.dirname, '..', '..', '..', '..')
+  const platform = stripComments(readFileSync(join(root, 'packages/dsh-client-web/src/platform.ts'), 'utf8'))
+  const words = [...platform.matchAll(/'([^']+)'/g)].map(match => match[1]!)
+  const covered = new Set(CHAMBER_COVERED_IDS)
+  const factories = new Set(CHAMBER_COVERED_FACTORY_IDS)
+  assert.deepEqual(
+    words.filter(word => covered.has(word) && !factories.has(word)),
+    [],
+    'a covered seed word without a factory would resolve through the seed, not the module table',
+  )
+})
+
+test('collectExtraRows: a require onto a skipped covered id is named with the real reason', async (t) => {
+  const id = '@scope/f1-needs-account-skip'
+  const skipId = '@deepseek-ai/dsh-client-ui-settings-account'
+  stubFetch(t, 200, envelope([row(id, { external: [`${skipId}/client`] })]))
+  const consoleCapture = captureConsoleError(t)
+  const diagnostics: { state: string; pluginId?: string; message?: string }[] = []
+  await collectExtraRows('local', '/api/i/local', {
+    loadModuleBundle: async () => {},
+    reportDiagnostic: (_sourceId, next) => { diagnostics.push(next) },
+  })
+  assert.equal(diagnostics.length, 1)
+  assert.equal(diagnostics[0]!.state, 'bundle-load-failed')
+  assert.equal(diagnostics[0]!.pluginId, id)
+  assert.match(diagnostics[0]!.message ?? '', new RegExp(`${id} → ${skipId}`), 'the row→id edge is named')
+  assert.match(diagnostics[0]!.message ?? '', /任何时刻都拿不到/)
+  assert.doesNotMatch(diagnostics[0]!.message ?? '', /延迟注册者|永不加载\)/, 'no non-existent timing claim')
+  assert.match(consoleCapture.messages.join('\n'), /settings-account/)
+})
+
+test('collectExtraRows: an `external` request onto a deferred family id reports the NAMED diagnostic', async (t) => {
   const id = '@scope/f1-needs-deferred-tool'
   stubFetch(t, 200, envelope([
     row(id, { external: ['@deepseek-ai/dsh-client-ui-tool/client'] }),
@@ -427,7 +503,19 @@ test('collectExtraRows: an `external` request onto a deferred-covered id reports
   assert.equal(diagnostics[0]!.state, 'bundle-load-failed')
   assert.equal(diagnostics[0]!.pluginId, id)
   assert.match(diagnostics[0]!.message ?? '', /@deepseek-ai\/dsh-client-ui-tool/)
-  assert.match(diagnostics[0]!.message ?? '', /deferred|延迟/)
+  // The deferred cluster is NOT "late": its chunk is mounted with `ctx.plugin` and
+  // never registers a module-table factory, so the require misses at every moment —
+  // the copy must not claim a delayed registration that never happens.
+  assert.match(diagnostics[0]!.message ?? '', /任何时刻都拿不到/)
+  assert.match(diagnostics[0]!.message ?? '', /ctx\.plugin/)
+  assert.doesNotMatch(diagnostics[0]!.message ?? '', /延迟注册者|boot 之后|永不加载\)/)
+  // The copy must NAME the ids it means: dropping the interpolation would leave a
+  // message that still reads plausibly while pointing at nothing.
+  assert.match(
+    diagnostics[0]!.message ?? '',
+    new RegExp(MODULES_ID + ' / ' + UI_RENDERER_ID),
+    'the copy interpolates both kernel-adopted ids',
+  )
   // The console line is the operator's copy of the same fact — never the
   // ONLY channel (the diagnostic above is the durable one).
   assert.match(consoleCapture.messages.join('\n'), /@scope\/f1-needs-deferred-tool/)
@@ -737,11 +825,12 @@ test('collectExtraRows: a bundle load failing BOTH attempts rejects loud (never 
 })
 
 test('collectExtraRows: a restart-straddled boot recovers — stale-rev bundle failures reload at the fresh graph rev', async (t) => {
-  // Upstream bundle revs are opaque per-process nonces (dsh-client-modules
-  // allocateInitialRevision): an instance restart between the graph fetch and
-  // the bundle loads 404s every not-yet-loaded row on its stale rev. The
-  // bounded recovery pass re-fetches the graph and reloads the failed row at
-  // the fresh rev, so the boot proceeds instead of failing loud.
+  // A bundle rev derives from the file's filesystem metadata
+  // (dsh-client-modules `artifactRevision` = sha1(mtimeMs, ctimeMs, size)): a
+  // rebuild/replacement between the graph fetch and the bundle loads 404s every
+  // not-yet-loaded row on its stale rev. The bounded recovery pass re-fetches
+  // the graph and reloads the failed row at the fresh rev, so the boot proceeds
+  // instead of failing loud.
   const id = '@scope/restart-straddle'
   let calls = 0
   stubFetchImpl(t, (() => {
@@ -806,11 +895,15 @@ test('collectExtraRows: a cross-instance plugin revision conflict reports instan
   })
   // A DIFFERENT instance owns the id at another rev: no app restart can
   // switch the loaded factory — the honest diagnostic names the owner
-  // instance and the drift instead of the misleading restart-required copy.
+  // instance and the OBSERVABLE rev/build-artifact difference (never a version
+  // claim: a same-version plugin still differs across hosts by build metadata —
+  // measured 11 bytes in the bundle's own sourceMappingURL).
   assert.equal(diagnostic?.state, 'instance-version-conflict')
   assert.equal(diagnostic?.pluginId, id)
-  assert.match(diagnostic?.message ?? '', /实例间 .*插件版本不同/)
-  assert.match(diagnostic?.message ?? '', /已使用实例 revision-source-one 先加载的版本/)
+  assert.match(diagnostic?.message ?? '', /bundle rev 不同/)
+  assert.match(diagnostic?.message ?? '', /mtime\/ctime\/size/, 'the copy names the real rev derivation')
+  assert.match(diagnostic?.message ?? '', /已沿用实例 revision-source-one 先加载的版本/)
+  assert.doesNotMatch(diagnostic?.message ?? '', /插件版本不同/)
 })
 
 test('collectExtraRows: same id across instances at the SAME rev reuses without any conflict', async (t) => {
@@ -845,7 +938,7 @@ test('collectExtraRows: versionConflict outranks restartConflict within one boot
     row(driftId, { rev: 'drift-two' }),
     row(rebuiltId, { rev: 'rebuild-two' }),
   ]))
-  let diagnostic: { state: string; pluginId?: string } | undefined
+  let diagnostic: { state: string; pluginId?: string; message?: string } | undefined
   await collectExtraRows('dual-owner', '/api/i/one', {
     loadModuleBundle: async () => {},
     reportDiagnostic: (_sourceId, next) => { diagnostic = next },
@@ -854,6 +947,41 @@ test('collectExtraRows: versionConflict outranks restartConflict within one boot
   // any restart) outranks the same-instance rebuild (fixable by restart).
   assert.equal(diagnostic?.state, 'instance-version-conflict')
   assert.equal(diagnostic?.pluginId, driftId)
+  // The message states the OBSERVABLE fact (a rev/build-artifact difference) and
+  // the first-load-wins owner — never a version claim (same-version plugins differ
+  // across hosts by build metadata, measured: 11 bytes in sourceMappingURL).
+  assert.match(diagnostic?.message ?? '', /bundle rev 不同/)
+  assert.match(diagnostic?.message ?? '', /dual-other/)
+  assert.doesNotMatch(diagnostic?.message ?? '', /插件版本不同/)
+})
+
+test('collectExtraRows: a rev conflict still logs an unsatisfiable-require fact instead of hiding it', async (t) => {
+  // One diagnostic slot per boot, and a conflict wins it. The BOOT fact (a kept row
+  // whose create-time require can never be answered) must still reach the console:
+  // it never heals and would otherwise be invisible until the conflict disappears.
+  const missing = '@deepseek-ai/dsh-client-ui-jobs'
+  const conflicted = '@scope/precedence-conflicted'
+  const needy = '@scope/precedence-needy'
+  assert.ok(CHAMBER_COVERED_IDS.includes(missing), 'fixture: the missing id is a covered id')
+  assert.ok(!CHAMBER_COVERED_FACTORY_IDS.includes(missing), 'fixture: no factory answers it')
+  stubFetch(t, 200, envelope([row(conflicted, { rev: 'rev-one' })]))
+  await collectExtraRows('precedence-other', '/api/i/other', { loadModuleBundle: async () => {} })
+  stubFetch(t, 200, envelope([
+    row(conflicted, { rev: 'rev-two' }),
+    row(needy, { external: [`${missing}/client`] }),
+  ]))
+  const consoleCapture = captureConsoleError(t)
+  let diagnostic: { state: string; pluginId?: string; message?: string } | undefined
+  await collectExtraRows('precedence-owner', '/api/i/one', {
+    loadModuleBundle: async () => {},
+    reportDiagnostic: (_sourceId, next) => { diagnostic = next },
+  })
+  assert.equal(diagnostic?.state, 'instance-version-conflict')
+  assert.equal(diagnostic?.pluginId, conflicted, 'the conflict owns the single diagnostic slot')
+  assert.doesNotMatch(diagnostic?.message ?? '', /无法满足/, 'the conflict message stays about the conflict')
+  const logged = consoleCapture.messages.join('\n')
+  assert.match(logged, /无法满足/, 'the boot fact is still logged')
+  assert.match(logged, new RegExp(`${needy} → ${missing}`), 'the console names the row→id edge')
 })
 
 test('collectExtraRows: a failed owner preload rolls the id back so ANOTHER instance re-claims and owns it', async (t) => {
@@ -1017,6 +1145,27 @@ test('D2: the official open-in client row stays uncovered; chamber open-in stays
     'the official open-in client row must stay uncovered so its file-level seats load')
   assert.ok(CHAMBER_COVERED_IDS.includes('@dsh-chamber/dsh-chamber-client-ui-open-in'))
   assert.ok(CHAMBER_COVERED_FACTORY_IDS.includes('@dsh-chamber/dsh-chamber-client-ui-open-in'))
+})
+
+test('desktop-only account family stays skipped: no body-level onboarding takeover', async (t) => {
+  // Mechanism, cost and rejected alternatives: chamber-covered.ts (the skip entry)
+  // and design 09 §3.5 有意跳过名单③.
+  const id = '@deepseek-ai/dsh-client-ui-settings-account'
+  assert.ok(CHAMBER_COVERED_IDS.includes(id),
+    id + ' must stay covered: its desktop onboarding overlay hijacks the entire page (design 09 有意跳过名单)')
+  assert.ok(!CHAMBER_COVERED_FACTORY_IDS.includes(id),
+    id + ' is a skip, not a composite family: no factory may ever load it')
+  assert.ok(!DEFERRED_EXTRA_ROW_IDS.includes(id),
+    id + ' must not be listed as a deferred covered row — a deferred id IS loaded after settle')
+  // End to end through the real merge (`collectExtraRows`): if the row ever
+  // reaches the preload pass again, the body-level takeover re-arms.
+  stubFetch(t, 200, envelope([row(id)]))
+  let loaded = false
+  const rows = await collectExtraRows('account-skip', '/api/i/local', {
+    loadModuleBundle: async () => { loaded = true },
+  })
+  assert.deepEqual(rows, [])
+  assert.equal(loaded, false, 'the covered account row must never be preloaded')
 })
 
 // ── `awaitBeforeLoad` must settle before the

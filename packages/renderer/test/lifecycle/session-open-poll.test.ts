@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import { AppWebEntry } from '../../test-fixtures/dsh-client-web.mjs'
 import {
   __testEventLog, __testOpenedSessions, __testPresentedSession, __testQueueRunGate,
-  __testReleasedSessions, __testResetEventLog, __testResetLifecycle, __testRetainCalls,
+  __testReleasedSessions, __testResetEventLog, __testRetainCalls,
   __testSetChamberPrefetchError, __testSetNavigationAvailable, __testSetNavigationReadError, __testSetReflectAvailable,
   __testSetSessionsAvailable,
   __testSetSessionsListed, __testSetSessionsOpenError, __testSetSessionsReadError,

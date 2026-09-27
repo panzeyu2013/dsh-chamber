@@ -5,7 +5,7 @@
 > 唤醒后快速恢复，可选登录自启后台常驻；未完成门禁见 `docs/progress/STATUS.md`。
 > 本文是睡眠/后台常驻的契约（关窗行为、托盘、退出确认、唤醒恢复与连接活性、
 > 防休眠、登录自启、设置权威边界）；文中「OpenChamber 实现调研」为外部参考
-> （本地源码 `/Users/panzeyu2013/Desktop/code/develop/OpenChamber`），移植设计在其后。
+> （外部仓库 OpenChamber 的一份本地检出），移植设计在其后。
 
 ---
 
@@ -24,7 +24,7 @@
 
 ## 2. OpenChamber 实现调研（外部参考）
 
-> 源码：`/Users/panzeyu2013/Desktop/code/develop/OpenChamber/packages/electron/`
+> 源码：OpenChamber 仓库的 `packages/electron/`
 > （主进程）+ `packages/ui/`（渲染端）。OpenChamber 的「睡眠连带运行」由
 > **四个机制**组成：
 
@@ -753,7 +753,7 @@ chamber 的边界是「自动升级 + 显式失败面」；页面级阶梯的自
 - 设计 15（Chamber 设置呈现，v1 平铺形态）：睡眠/运行设置的呈现面
   （`__general` 固定入口）；
 - `docs/progress/STATUS.md`（进度唯一记录）；
-- OpenChamber 参考：本地 `/Users/panzeyu2013/Desktop/code/develop/OpenChamber`
+- OpenChamber 参考（外部仓库）：
   `packages/electron/main.mjs`、`tray.mjs`、`packages/ui/src/sync/event-pipeline.ts`、
   `packages/ui/src/components/sections/openchamber/DesktopNetworkSettings.tsx`。
 

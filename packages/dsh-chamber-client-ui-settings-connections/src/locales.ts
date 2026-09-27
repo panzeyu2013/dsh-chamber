@@ -186,7 +186,7 @@ export const zh = {
   pluginDiagnosticGraphUnreachable: '图通道不可达',
   pluginDiagnosticBundleFailed: 'bundle 加载失败',
   pluginDiagnosticRestartRequired: '需要重启',
-  pluginDiagnosticInstanceVersionConflict: '实例间插件版本不同',
+  pluginDiagnosticInstanceVersionConflict: '实例间插件构建 rev 不一致',
   // boot 成功但已知缺口（结构化事实来自 chamberBridge 投影的 bootGap）：与「客户端插件状态」是两条不同
   // 事实——图通道 ok 不代表服务都在，缺口在场时不渲染 ok 那一行。
   bootGapLabel: '前端能力受限',
@@ -281,7 +281,7 @@ export const zh = {
   startManagedDshFailed: '启动失败：{error}',
   startManagedDshRefused: '启动被拒绝：当前状态不可启动或运行时正忙（409 {code}），请刷新后重试',
   // 版本冲突指引 / 服务提示。
-  pluginDiagnosticVersionConflictHint: '对齐两个实例的 dsh 运行时（或插件）版本后此提示消失：在「本地实例」或该 gateway 连接的设置中打开 dsh 运行时 分节，切换/升级到一致版本。',
+  pluginDiagnosticVersionConflictHint: '该提示不影响启动：页面始终沿用先加载的那份插件构建。rev 由 bundle 文件的 mtime/ctime/size 派生，不是内容哈希，所以两份独立安装（甚至内容相同）的 rev 通常不同、会显示它（仅当两侧指向同一底层文件时才相同）。若该插件的功能确实异常，请让两个实例运行一致的 dsh 运行时与插件版本后重启应用再试。',
   serviceUnconfiguredHint: '未配置 systemd 服务：启动/停止/重启与「重启生效」不可用（编辑连接填写服务名后可启用）。',
 } satisfies Record<string, string>
 
@@ -476,7 +476,7 @@ export const en: Record<SettingsConnectionsKey, string> = {
   pluginDiagnosticGraphUnreachable: 'Graph channel unreachable',
   pluginDiagnosticBundleFailed: 'Bundle load failed',
   pluginDiagnosticRestartRequired: 'Restart required',
-  pluginDiagnosticInstanceVersionConflict: 'Instance plugin versions differ',
+  pluginDiagnosticInstanceVersionConflict: 'Plugin build revisions differ across instances',
   bootGapLabel: 'Interface limited',
   bootGapGeneric: 'Some surfaces may be missing',
   bootGapGraphUnavailable: 'This mount loaded none of the instance’s frontend plugins (surfaces such as the conversation body may be missing)',
@@ -568,6 +568,6 @@ export const en: Record<SettingsConnectionsKey, string> = {
   startManagedDshFailed: 'Start failed: {error}',
   startManagedDshRefused: 'Start refused: the current state is not startable or the runtime is busy (409 {code}); refresh and retry',
   // Version-conflict guidance / service hint.
-  pluginDiagnosticVersionConflictHint: 'This notice clears once both instances share a dsh runtime (or plugin) version: open the dsh runtime section in the settings of the local instance or of the involved gateway connection and switch/upgrade to a matching version.',
+  pluginDiagnosticVersionConflictHint: 'This notice does not block startup: the page always keeps whichever plugin build loaded first. The rev derives from the bundle file\u2019s mtime/ctime/size rather than its contents, so two independent installations (even byte-identical ones) usually differ and can show it (they match only when both point at the same underlying file). If that plugin actually misbehaves, make both instances run the same dsh runtime and plugin versions, then restart the app.',
   serviceUnconfiguredHint: 'No systemd service is configured: start/stop/restart and \u201cRestart to apply\u201d are unavailable (fill in the service name when editing the connection to enable them).',
 }

@@ -7,8 +7,6 @@ import assert from 'node:assert/strict'
 import {
   __testDisposedCount, __testEntryStates, __testOpenedSessions,
   __testQueueDisposeGate, __testQueueRunGate,
-  __testResetDisposed, __testResetLifecycle,
-  __testSetBootError, __testSetModuleSystemError, __testSetRunError,
   bootInstanceShell, disposeAllShells, disposeInstanceShell, INSTANCE_TAIL_WAIT_CAP_MS,
   openInstanceSession, shellModule, shellTestScope, tailWaitRemainingMs,
 } from '../support/shell-harness.ts'
