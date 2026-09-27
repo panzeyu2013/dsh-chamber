@@ -35,17 +35,18 @@ name: Release
 # INSTALL step is blocked without a Developer ID signature (design 11 §3.1).
 #
 # ---------------------------------------------------------------- TEMPORARY SCOPE
-# Native-only publication (temporary): of the platform legs, ONLY build-swift
-# publishes right now. The four other publishing legs — build-gateway,
-# build-macos, build-windows and build-linux — carry a job-level
+# Native + gateway publication (temporary): of the platform legs, ONLY
+# build-swift and build-gateway publish right now. The three other publishing
+# legs — build-macos, build-windows and build-linux — carry a job-level
 # `if: ${{ false }}` and are skipped; finalize-release tolerates that skipped
 # state while still refusing to publish after a failure, a cancellation or a red
 # validation. A v* tag (or a manual dispatch) therefore produces a release whose
-# assets are the native ones only (zip / dmg / delta / signed appcast): no
-# Electron/gateway artifact and no Electron update feed is built, uploaded or
-# published. Restore the full platform release by deleting the four job-level
-# `if: ${{ false }}` lines and the `if:` on finalize-release — every site
-# carries the same TEMPORARY marker pointing back here.
+# assets are the native ones (zip / dmg / delta / signed appcast) plus the
+# gateway tarball with its SHA256: no Electron artifact and no Electron update
+# feed is built, uploaded or published. Restore the full platform release by
+# deleting the three job-level `if: ${{ false }}` lines and the `if:` on
+# finalize-release — every site carries the same TEMPORARY marker pointing back
+# here.
 
 on:
   push:
@@ -464,9 +465,6 @@ jobs:
           git diff --exit-code -- pnpm-lock.yaml
 
   build-gateway:
-    # TEMPORARY native-only publication (see the header note): the gateway
-    # tarball does not publish right now. Delete this condition to re-enable.
-    if: ${{ false }}
     # Gateway is distributed in this release only as a GitHub Release tarball
     # plus SHA256. Runs in PARALLEL with the desktop build legs:
     # it packs from the same tag-bound SHA and downloads no
@@ -1910,9 +1908,10 @@ jobs:
           echo "${APPCAST} uploaded to the draft release after the archives"
 
   finalize-release:
-    # needs keeps the full leg set (the publish contract): the four non-Swift
-    # legs are currently skipped by their own `if: ${{ false }}` — temporary
-    # native-only publication, see the header note.
+    # needs keeps the full leg set (the publish contract): the three Electron
+    # legs are currently skipped by their own `if: ${{ false }}` while the
+    # gateway and Swift legs publish — temporary native + gateway scope, see the
+    # header note.
     needs: [validation, create-release, build-gateway, build-macos, build-windows, build-linux, build-swift]
     # TEMPORARY: a skipped dependency would normally skip this job too, which
     # would also drop the native publication. `always()` is what bypasses that

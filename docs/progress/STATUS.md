@@ -175,7 +175,7 @@
 - safeStorage 诚实回退：Gateway 优先 safeStorage，不可用时 target-bound 0600 明文并如实显示；SSH 密码同；Windows DPAPI 不可用则拒绝落盘（仅内存）。
 - Windows 发布身份让步：x64 无 Authenticode，SmartScreen 已知；sha512 不等价签名。
 - macOS 平台范围让步：v1 不发布 x64（无 Intel runner；交叉构建需 Rosetta）。
-- 发布面临时收窄（2026-09-26，暂态）：正式发布只出 Swift 原生壳 —— 其余四条发布腿（gateway / mac / win / linux）带 job 级 `if: ${{ false }}` 整腿跳过（不构建、不上传），`finalize-release` 的 `if:` 以 `always() && !cancelled()` 放行被跳过的依赖，同时保持 fail-closed（`validation`/`create-release`/`build-swift` 必须 success、任一腿失败即拒发）。恢复 = 删这四处 `if:` 与 finalize 的 `if:`；判据 = `.github/workflows/release.yml` 头注 TEMPORARY SCOPE（`needs` 全腿集未改，故 `pnpm run test:release-workflow` 的钉法原样成立）。
+- 发布面临时收窄（2026-09-26 起，暂态；2026-09-27 恢复 gateway 腿）：正式发布出 Swift 原生壳 + gateway tarball —— 其余三条 Electron 发布腿（mac / win / linux）带 job 级 `if: ${{ false }}` 整腿跳过（不构建、不上传），`finalize-release` 的 `if:` 以 `always() && !cancelled()` 放行被跳过的依赖，同时保持 fail-closed（`validation`/`create-release`/`build-swift` 必须 success、任一腿失败即拒发）。恢复 = 删这三处 `if:` 与 finalize 的 `if:`；判据 = `.github/workflows/release.yml` 头注 TEMPORARY SCOPE（`needs` 全腿集未改，故 `pnpm run test:release-workflow` 的钉法原样成立）。
 - N-ctx 单文档信任域：横向隔离推迟到每实例独立 WebContents。
 - N-ctx 原生键盘路由（RC-C4，design 25 §4.4.1）：单槽桥 ⇒ 全部已 boot 实例 accept；按活动源路由要改三层 + Swift 同构，本轮不做；实机验收 = 焦点在 B 只动 B、A 独有绑定不被误 preventDefault；收口触发 = 上游给作用域或决定拆投递。
 - N-ctx 壳常驻语义收窄：local 恒留、隐藏壳最多 1、超限回收；完成边沿不依赖壳（design 06 §4.2、design 19 §3.3/§3.7）；仅实机腿未判。
