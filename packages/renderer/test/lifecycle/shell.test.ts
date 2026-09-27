@@ -20,6 +20,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import { SAFE_MODE_GLOBAL } from '../../src/safe-mode.ts'
 // The test-shell loader maps this specifier to the committed fixture; these two mirror the
 // producer's chunk-owner contract, and the shell arm body is out of reach in plain-node
 // tests (no global EventSource), so the mirror is pinned here directly.
@@ -149,19 +150,43 @@ test('bootInstanceShell: a clean boot without a graph settles graphAnswered:fals
   // 404 = the legitimate non-local no-graph shape (no chamber host packages). The shell must
   // NOT degrade for it, and it must publish the fact the App's graph-return policy reads:
   // such a boot never armed the live subscriber, so a later graph answer needs a re-mount.
-  shellTestScope(t, { graph: 'not-injected', timers: false })
+  const fetched: string[] = []
+  shellTestScope(t, { graph: 'not-injected', timers: false, onFetch: url => fetched.push(url) })
   const state = await bootInstanceShell('ssh-graphless-1', '/api/i/ssh-graphless-1', {} as HTMLElement, () => {})
   assert.equal(state.booted, true)
   assert.equal(state.error, null)
   assert.equal(state.degraded, null, 'a non-local 404 is not a degrade')
   assert.equal(state.graphAnswered, false)
+  assert.ok(fetched.some(url => url.includes('ssh-graphless-1')),
+    'the fact is only published for a fetch that actually happened')
 })
 
 test('bootInstanceShell: an answered graph settles graphAnswered:true (never re-checked)', async (t) => {
-  shellTestScope(t, { graph: 'ready', timers: false })
+  const fetched: string[] = []
+  shellTestScope(t, { graph: 'ready', timers: false, onFetch: url => fetched.push(url) })
   const state = await bootInstanceShell('ssh-graphed-1', '/api/i/ssh-graphed-1', {} as HTMLElement, () => {})
   assert.equal(state.booted, true)
   assert.equal(state.graphAnswered, true)
+  assert.ok(fetched.some(url => url.includes('ssh-graphed-1')))
+})
+
+test('bootInstanceShell: a boot that never attempted the graph OMITS graphAnswered (safe mode)', async (t) => {
+  // Absent, not false: "never attempted" (safe mode / module-system failure) is NOT "the host
+  // has no graph", and the App's graph-return policy keys on `=== false`. A false negative here
+  // would make every safe-mode boot a graph-return candidate.
+  const scope = globalThis as Record<string, unknown>
+  const before = scope[SAFE_MODE_GLOBAL]
+  scope[SAFE_MODE_GLOBAL] = true
+  const fetched: string[] = []
+  shellTestScope(t, { graph: 'none', timers: false, onFetch: url => fetched.push(url) })
+  t.after(() => {
+    if (before === undefined) delete scope[SAFE_MODE_GLOBAL]
+    else scope[SAFE_MODE_GLOBAL] = before
+  })
+  const state = await bootInstanceShell('ssh-safemode-1', '/api/i/ssh-safemode-1', {} as HTMLElement, () => {})
+  assert.equal(state.booted, true)
+  assert.equal('graphAnswered' in state, false, 'no attempt = no per-boot graph fact')
+  assert.deepEqual(fetched, [], 'safe mode must not contact the graph channel at all')
 })
 
 test('bootInstanceShell: the serving gate is threaded into the host-graph fetch (rows after a wait)', async (t) => {

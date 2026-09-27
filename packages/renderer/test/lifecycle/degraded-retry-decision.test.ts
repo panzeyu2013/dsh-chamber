@@ -88,6 +88,22 @@ test('the mark of a retired source is dropped, not carried', () => {
   assert.equal(forgotten[V.sourceId]?.state.degradedRetried, false)
 })
 
+test('the self-heal effect is ONE-SHOT: it is observable only on the bootSettled dispatch itself', () => {
+  // use-shell-retry.ts relies on this contract: the reduction that emits `degradedSelfHeal`
+  // sets `degradedRetried` in the same step, so a feed pass that dispatches the fact and
+  // DISCARDS the effect, followed by a plan pass that re-dispatches it, sees effects: [] and
+  // silently loses the re-boot. Read the effect where it is emitted.
+  const ready = apply(reincarnate({}, V), 'ready', null)
+  const epoch = epochOf(ready, V.sourceId)
+  assert.ok(epoch !== undefined)
+  const settled = { kind: 'bootSettled', outcome: 'degraded', gapKind: 'graph-unavailable', epoch } as const
+  const first = dispatchSource(ready, V.sourceId, settled, ENV)
+  assert.deepEqual(first.effects.map(item => item.effect.e), ['degradedSelfHeal'])
+  const second = dispatchSource(first.registry, V.sourceId, settled, ENV)
+  assert.deepEqual(second.effects, [], 'the emitting reduction already set the mark')
+  assert.equal(second.registry[V.sourceId]?.state.retryToken, 1, 'no second token increment')
+})
+
 test('the mark survives the idle reset that the retry itself causes (no re-boot loop)', () => {
   // The App's re-boot makes the shell momentarily non-degraded; the fact then
   // disappears (degraded: null) and must NOT be read as "the source recovered".

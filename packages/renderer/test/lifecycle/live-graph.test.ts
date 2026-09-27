@@ -423,6 +423,55 @@ test('disarm cancels a pending rebuild', async (t) => {
   assert.equal(fakes.length, 1, 'no socket may be built after disarm')
 })
 
+test('a delivered frame resets the rebuild budget (a later drop earns a fresh attempt)', async (t) => {
+  const fakes: ReturnType<typeof fakeSource>[] = []
+  const h = harness(t, {
+    resubscribeDelaysMs: [0],
+    createEventSource: url => { const fake = fakeSource(url); fakes.push(fake); return fake.source },
+  })
+  fakes[0]!.closeForGood()
+  fakes[0]!.error()
+  await tick()
+  await tick()
+  assert.equal(fakes.length, 2, 'the single budget slot was spent')
+  // A frame on the rebuilt socket is proof the channel works: the budget must re-arm.
+  fakes[1]!.emit(graphFrame([row('@scope/revive')]))
+  const deadline = Date.now() + 1_000
+  while (h.loader.entries.length === 0 && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  fakes[1]!.closeForGood()
+  fakes[1]!.error()
+  await tick()
+  await tick()
+  assert.equal(fakes.length, 3, 'a delivered frame re-arms the full budget')
+})
+
+test('the shipped rebuild ladder is 2/5/10/20/30/30s and then gives up (97s, the restart window)', async (t) => {
+  // Every other case injects the seam; this one pins the DEFAULT the design quotes.
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  t.after(() => { t.mock.timers.reset() })
+  const fakes: ReturnType<typeof fakeSource>[] = []
+  const h = harness(t, {
+    createEventSource: url => { const fake = fakeSource(url); fakes.push(fake); return fake.source },
+  })
+  const ladder = [2_000, 5_000, 10_000, 20_000, 30_000, 30_000]
+  for (const [index, delay] of ladder.entries()) {
+    fakes.at(-1)!.closeForGood()
+    fakes.at(-1)!.error()
+    t.mock.timers.tick(delay - 1)
+    assert.equal(fakes.length, index + 1, `slot ${index + 1} must not fire before ${delay}ms`)
+    t.mock.timers.tick(1)
+    assert.equal(fakes.length, index + 2, `slot ${index + 1} fires after ${delay}ms`)
+  }
+  // Budget exhausted: one more CLOSED error gives up (no socket, exactly one log).
+  fakes.at(-1)!.closeForGood()
+  fakes.at(-1)!.error()
+  t.mock.timers.tick(60_000)
+  assert.equal(fakes.length, 1 + ladder.length, 'exactly six slots, then stop')
+  assert.equal(h.warns.filter(message => message.includes('gave up')).length, 1)
+})
+
 test('a CONNECTING error still leaves reconnection to the browser (no rebuild)', async (t) => {
   const fakes: ReturnType<typeof fakeSource>[] = []
   const h = harness(t, {

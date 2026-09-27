@@ -4,26 +4,28 @@
  * bounds and the single re-mount sink call).
  *
  * ① degraded self-heal: a boot that settled with a RETRYABLE gap is re-mounted once per ready
- *    epoch. The DECISION stays in the lifecycle container (`degradedSelfHeal`, reached through
- *    dispatchLifecycle): this hook feeds it the same facts every pass and consumes its typed
- *    effect, so "who decided" and "who remembers" keep one owner.
+ *    epoch. The DECISION stays in the lifecycle container (`degradedSelfHeal`); the effect is
+ *    ONE-SHOT (the reduction that emits it also sets `degradedRetried`, source.ts bootSettled),
+ *    so it is read from the very dispatch that produces it — re-dispatching the same fact returns
+ *    no effect and silently loses the self-heal.
  * ② graph return: a CLEAN boot that carried no graph never armed the live subscriber, so a host
  *    that GAINS the graph later needs one re-mount (the documented SSH seed flow). The truth
- *    table and both bounds live in graph-return.ts; this hook wires them to the shared channel
- *    recheck and to the same retry sink. It is the per-instance replacement for the retired
+ *    table, the marks and both bounds live in graph-return.ts; the probe is TIME-bounded (an ssh
+ *    `systemctl restart` does not flap the source phase), so this hook also runs the cadence
+ *    independently of unrelated state churn. It is the per-instance replacement for the retired
  *    window reload — neither path ever reloads the page.
  *
  * The dep arrays are the ones the effects had inside App (the containers and the setter are
  * App-owned/stable); nothing here is a second source of truth for either decision.
  */
-import { useEffect, useRef, type Dispatch, type SetStateAction } from 'react'
+import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from 'react'
 import {
   recheckPluginGraphDiagnostic,
   type ChamberServerAggregate,
   type PluginGraphDiagnostic,
 } from '@dsh-chamber/dsh-chamber-client-core'
 import type { SourceEvent } from '@dsh-chamber/dsh-stream-state'
-import { decideGraphReturn } from '../graph-return.ts'
+import { GRAPH_RETURN_PROBE_INTERVAL_MS, planGraphReturn } from '../graph-return.ts'
 import type { ShellState } from '../shell.ts'
 
 /** Container dispatch (the App's `dispatchLifecycle`): only the returned effect's `e`
@@ -51,21 +53,11 @@ export function useShellRetry(deps: ShellRetryDeps): void {
   const { servers, shellStates, pluginDiagnostics, dispatchLifecycle, setRetryTokens } = deps
 
   useEffect(() => {
-    // Feed the facts into the container BEFORE planning, so the self-heal mark has one owner. The
-    // dispatch is idempotent (`bootSettled` spreads previous state; `phaseChanged` away from ready
-    // drops the mark) and `isRetryableBootGap` stays the reducer's single retryability source.
-    for (const server of servers) dispatchLifecycle(server.id, { kind: 'phaseChanged', phase: server.phase })
-    for (const [instanceId, state] of Object.entries(shellStates)) {
-      if (state.degraded === null) continue
-      dispatchLifecycle(instanceId, {
-        kind: 'bootSettled',
-        outcome: 'degraded',
-        gapKind: state.degraded.kind,
-      })
-    }
-    // The re-boot list comes from the container's typed effect: "who decided" and "who remembers"
-    // are one place, and the carry-forward is reproduced by dispatching the same facts every pass.
+    // Feed the facts into the container in ONE pass: `phaseChanged` first, then the degraded
+    // verdict whose reduction is the self-heal decision itself. The effect must be read from this
+    // dispatch (see ① above) — the container's mark makes a second identical dispatch a no-op.
     const retry: string[] = []
+    for (const server of servers) dispatchLifecycle(server.id, { kind: 'phaseChanged', phase: server.phase })
     for (const [instanceId, state] of Object.entries(shellStates)) {
       if (state.degraded === null) continue
       const effect = dispatchLifecycle(instanceId, {
@@ -84,50 +76,45 @@ export function useShellRetry(deps: ShellRetryDeps): void {
     })
   }, [servers, shellStates])
 
-  /** Graph-return bounds: probed = one channel re-check per ready epoch (cleared on leaving
-   *  ready); acted = the `ok` record already consumed by a re-boot (one re-mount per record). */
-  const graphProbedRef = useRef(new Map<string, true>())
+  /** Graph-return marks (graph-return.ts owns their semantics): when each source last probed and
+   *  the `ok` record each last consumed. Both are pruned against the live source set per pass. */
+  const graphProbedAtRef = useRef(new Map<string, number>())
   const graphRebootActedRef = useRef(new Map<string, number>())
+  /** Render mirror: the interval callback below must read the LATEST inputs without re-arming. */
+  const latestRef = useRef({ servers, shellStates, pluginDiagnostics })
+  latestRef.current = { servers, shellStates, pluginDiagnostics }
 
-  useEffect(() => {
-    // 退役来源的记号随此循环收敛（与其它每来源状态同款的剪枝纪律）。
-    const live = new Set(servers.map(server => server.id))
-    for (const sourceId of [...graphProbedRef.current.keys()]) {
-      if (live.has(sourceId)) continue
-      graphProbedRef.current.delete(sourceId)
-      graphRebootActedRef.current.delete(sourceId)
+  const graphReturnPass = useCallback((): void => {
+    const plan = planGraphReturn({
+      servers: latestRef.current.servers,
+      shells: latestRef.current.shellStates,
+      diagnostics: latestRef.current.pluginDiagnostics,
+      probedAt: graphProbedAtRef.current,
+      acted: graphRebootActedRef.current,
+      nowMs: Date.now(),
+    })
+    graphProbedAtRef.current = plan.probedAt
+    graphRebootActedRef.current = plan.acted
+    if (plan.probes.length > 0) {
+      console.warn(`[app] source(s) booted without the client plugin graph; re-checking the channel: ${plan.probes.join(', ')}`)
+      for (const sourceId of plan.probes) void recheckPluginGraphDiagnostic(sourceId)
     }
-    const probes: string[] = []
-    const reboots: string[] = []
-    for (const server of servers) {
-      // 每 ready 世代一次的记号：离开 ready 即清，所以一次重连/重启后可以再探一次。
-      if (server.phase !== 'ready') { graphProbedRef.current.delete(server.id); continue }
-      const diagnostic = pluginDiagnostics[server.id]
-      const decision = decideGraphReturn({
-        shell: shellStates[server.id],
-        phase: server.phase,
-        diagnostic,
-        probedThisEpoch: graphProbedRef.current.has(server.id),
-        actedUpdatedAt: graphRebootActedRef.current.get(server.id),
-      })
-      if (decision.kind === 'probe') {
-        graphProbedRef.current.set(server.id, true)
-        probes.push(server.id)
-      } else if (decision.kind === 'reboot' && diagnostic !== undefined) {
-        graphRebootActedRef.current.set(server.id, diagnostic.updatedAt)
-        reboots.push(server.id)
-      }
-    }
-    if (probes.length > 0) {
-      console.warn(`[app] source(s) booted without the client plugin graph; re-checking the channel once: ${probes.join(', ')}`)
-      for (const sourceId of probes) void recheckPluginGraphDiagnostic(sourceId)
-    }
-    if (reboots.length === 0) return
-    console.warn(`[app] client plugin graph is now available; re-booting shell(s) that booted without it: ${reboots.join(', ')}`)
+    if (plan.reboots.length === 0) return
+    console.warn(`[app] client plugin graph is now available; re-booting shell(s) that booted without it: ${plan.reboots.map(r => r.id).join(', ')}`)
     setRetryTokens(prev => {
       const next = { ...prev }
-      for (const instanceId of reboots) next[instanceId] = (next[instanceId] ?? 0) + 1
+      for (const { id } of plan.reboots) next[id] = (next[id] ?? 0) + 1
       return next
     })
-  }, [servers, shellStates, pluginDiagnostics])
+  }, [setRetryTokens])
+
+  // (1) State-driven: react at once to the graph turning `ok` and to newly settled shells.
+  useEffect(() => { graphReturnPass() }, [graphReturnPass, servers, shellStates, pluginDiagnostics])
+  // (2) Time-driven: the probe cadence, independent of unrelated state churn (the ssh restart
+  //     keeps the phase `ready`, so nothing else would re-run this policy afterwards). The
+  //     planner's interval gate keeps this to at most one unary per source per interval.
+  useEffect(() => {
+    const timer = setInterval(graphReturnPass, GRAPH_RETURN_PROBE_INTERVAL_MS)
+    return () => clearInterval(timer)
+  }, [graphReturnPass])
 }
