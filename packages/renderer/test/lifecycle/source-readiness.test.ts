@@ -143,7 +143,7 @@ test('the deferred reclaim decision only takes never-settled, unhidden, unheld m
     'without this guard the settings panel is pinned on "starting this instance" (review MAJOR)')
 })
 
-// ── 2. App 接线（源码文本契约） ─────────────────────────────────────────────
+// ── 2. 源码文本契约（跨包终态词表 lockstep） ──────────────────────────────────
 
 test('terminal-phase vocabulary lockstep: renderer / client-core / sidebar name one set', () => {
   const rendered = (source: string, re: RegExp): string[] => {

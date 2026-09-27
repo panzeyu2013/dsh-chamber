@@ -87,6 +87,18 @@ test('the poll kernel stops at the attempts budget and on a stop verdict (no ext
   assert.equal(exhausted, undefined)
   assert.equal(probes, 3)
 
+  // Deadline mode checks the budget BEFORE the first probe: an already-passed deadline
+  // never probes and never sleeps (timeout 0 = 0 probes) — the kernel's documented shape.
+  let deadlineProbes = 0
+  const outOfTime = await pollUntil<number>({
+    intervalMs: 0,
+    deadline: Date.now() - 1,
+    probe: async () => { deadlineProbes += 1; return deadlineProbes },
+    classify: () => ({ kind: 'retry' }),
+  })
+  assert.equal(outOfTime, undefined)
+  assert.equal(deadlineProbes, 0)
+
   // A rejected probe mapped to 'stop' ends the loop immediately (the purge
   // settle wait must keep the last observed running set, not fabricate one).
   let failedProbes = 0

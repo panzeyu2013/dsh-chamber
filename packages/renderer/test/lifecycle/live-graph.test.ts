@@ -70,19 +70,23 @@ function fakeLoader(seed: { name: string; active?: boolean; fiberAwait?: () => P
 function fakeSource(url: string) {
   const listeners = new Map<string, ((event: { data?: string }) => void)[]>()
   let closed = false
+  let readyState = 1
   const source: LiveEventSourceFace = {
     addEventListener(type, listener) {
       const list = listeners.get(type) ?? []
       list.push(listener)
       listeners.set(type, list)
     },
-    close() { closed = true },
+    close() { closed = true; readyState = 2 },
+    get readyState() { return readyState },
   }
   return {
     url, source,
     get closed() { return closed },
     emit(data: string) { for (const listener of listeners.get('message') ?? []) listener({ data }) },
     error() { for (const listener of listeners.get('error') ?? []) listener({}) },
+    /** The browser failed the connection for good (a non-200 reconnect does exactly that). */
+    closeForGood() { readyState = 2 },
   }
 }
 
@@ -364,6 +368,71 @@ test('a channel error logs once and never closes the source (the browser owns re
 test('the channel is one EventSource on the instance-prefixed /plugins/events route', async (t) => {
   const h = harness(t)
   assert.deepEqual(h.sourceUrls, [`${BASE}/plugins/events`])
+})
+
+test('a permanently-CLOSED socket (non-200 reconnect) is rebuilt with bounded backoff', async (t) => {
+  const fakes: ReturnType<typeof fakeSource>[] = []
+  const h = harness(t, {
+    resubscribeDelaysMs: [0, 0],
+    createEventSource: url => { const fake = fakeSource(url); fakes.push(fake); return fake.source },
+  })
+  assert.equal(fakes.length, 1, 'one socket at arm time')
+  fakes[0]!.closeForGood()
+  fakes[0]!.error()
+  await tick()
+  await tick()
+  assert.equal(fakes.length, 2, 'a CLOSED socket is re-established')
+  assert.equal(fakes[1]!.url, `${BASE}/plugins/events`, 'the rebuild targets the same route')
+  // The rebuilt socket still drives the reconciler (a frame mounts a row again).
+  fakes[1]!.emit(graphFrame([row('@scope/revived')]))
+  const deadline = Date.now() + 1_000
+  while (h.loader.entries.length === 0 && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  assert.equal(h.loader.entries.length, 1, 'frames on the rebuilt socket mount rows again')
+})
+
+test('the rebuild budget is bounded: it stops and says so once when exhausted', async (t) => {
+  const fakes: ReturnType<typeof fakeSource>[] = []
+  const warns: string[] = []
+  harness(t, {
+    resubscribeDelaysMs: [0, 0],
+    warn: message => { warns.push(message) },
+    createEventSource: url => { const fake = fakeSource(url); fakes.push(fake); return fake.source },
+  })
+  for (let round = 0; round < 4; round++) {
+    fakes.at(-1)!.closeForGood()
+    fakes.at(-1)!.error()
+    await tick()
+    await tick()
+  }
+  assert.equal(fakes.length, 3, 'one initial socket + one per budget slot, then stop')
+  assert.equal(warns.filter(message => message.includes('gave up')).length, 1)
+})
+
+test('disarm cancels a pending rebuild', async (t) => {
+  const fakes: ReturnType<typeof fakeSource>[] = []
+  const h = harness(t, {
+    resubscribeDelaysMs: [50],
+    createEventSource: url => { const fake = fakeSource(url); fakes.push(fake); return fake.source },
+  })
+  fakes[0]!.closeForGood()
+  fakes[0]!.error()
+  await h.sync.disarm()
+  await new Promise(resolve => setTimeout(resolve, 80))
+  assert.equal(fakes.length, 1, 'no socket may be built after disarm')
+})
+
+test('a CONNECTING error still leaves reconnection to the browser (no rebuild)', async (t) => {
+  const fakes: ReturnType<typeof fakeSource>[] = []
+  const h = harness(t, {
+    resubscribeDelaysMs: [0],
+    createEventSource: url => { const fake = fakeSource(url); fakes.push(fake); return fake.source },
+  })
+  fakes[0]!.error()
+  await tick()
+  assert.equal(fakes.length, 1, 'CONNECTING must not trigger our own rebuild')
+  assert.equal(h.warns.filter(message => message.includes('the browser will retry')).length, 1)
 })
 
 test('rebuilt and unknown frames are consumed without a malformed warning or a pass', async (t) => {

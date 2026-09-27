@@ -21,6 +21,11 @@
  * OPPORTUNISTIC BY CONTRACT: a missing/failing channel is NOT a degrade — every
  * path below no-ops, and boot stays the FALLBACK authority for the row set whenever the
  * channel is unavailable (an answered channel's graph frames take over add/remove, §3.7).
+ * SOCKET RECOVERY: the browser retries a network drop by itself, but a NON-200 reconnect
+ * (the host-restart window's 503/502) fails the connection permanently — readyState CLOSED,
+ * no further retries. The holder then re-opens the socket on the bounded backoff below
+ * (spanning the readiness window); a delivered frame resets the budget, exhaustion logs once
+ * and leaves recovery to the next page boot.
  * Arm/disarm is owned by shell.ts: disarm happens synchronously at the next
  * same-id boot entry and inside disposeHolder, and the in-flight pass joins the
  * id-local teardown barrier (the page-level loader kernel and module table are
@@ -82,6 +87,8 @@ export interface LiveLoaderFace {
 export interface LiveEventSourceFace {
   addEventListener(type: string, listener: (event: { data?: string }) => void): void
   close(): void
+  /** 0 CONNECTING / 1 OPEN / 2 CLOSED; absent = never treated as permanently failed. */
+  readyState?: number
 }
 
 /** One row this holder currently owns, with the entry id create returned. */
@@ -206,6 +213,9 @@ export interface LiveGraphSyncDeps {
   fiberIsTerminal(fiber: LiveLoaderEntryFace['fiber']): boolean
   /** EventSource factory; absent = the channel is unavailable on this host. */
   createEventSource?(url: string): LiveEventSourceFace
+  /** Bounded re-establishment delays for a permanently-CLOSED socket (test seam);
+   *  defaults to {@link LIVE_RESUBSCRIBE_DELAYS_MS}. */
+  resubscribeDelaysMs?: readonly number[]
   now?(): number
   /** Bounded activation wait; defaults to {@link LIVE_ACTIVATION_TIMEOUT_MS}. */
   activationTimeoutMs?: number
@@ -222,6 +232,14 @@ const LIVE_ACTIVATION_TIMEOUT_MS = 5_000
 
 /** Bound on the fiber.inertia drain during removal (a wedged disposer must not wedge the id). */
 const LIVE_INERTIA_TIMEOUT_MS = 2_000
+
+/** Bounded re-establishment of a permanently-CLOSED `/plugins/events` socket: a non-200
+ *  reconnect (the host-restart window's 503/502) fails the connection for good and the
+ *  browser never retries. The sequence spans the documented restart-readiness window. */
+const LIVE_RESUBSCRIBE_DELAYS_MS = [2_000, 5_000, 10_000, 20_000, 30_000, 30_000] as const
+
+/** `EventSource.readyState`: the browser failed the connection and stopped retrying. */
+const LIVE_EVENT_SOURCE_CLOSED = 2
 
 type LiveFact =
   | { kind: 'version-conflict'; id: string; owner: string }
@@ -588,30 +606,79 @@ export function startLiveGraphSync(deps: LiveGraphSyncDeps): LiveGraphSync {
     })()
   }
 
+  const resubscribeDelaysMs = deps.resubscribeDelaysMs ?? LIVE_RESUBSCRIBE_DELAYS_MS
   let source: LiveEventSourceFace | undefined
-  try {
-    source = deps.createEventSource?.(`${deps.basePath}/plugins/events`)
-  } catch (error) {
-    warn('[live-graph] EventSource construction failed; live sync is off for this holder', error)
-  }
-  if (source !== undefined) {
-    source.addEventListener('message', (event) => {
+  let resubscribeAttempt = 0
+  let resubscribeTimer: ReturnType<typeof setTimeout> | undefined
+  let gaveUpLogged = false
+
+  const attach = (next: LiveEventSourceFace): void => {
+    source = next
+    next.addEventListener('message', (event) => {
       if (disposed) return
+      // A delivered frame is proof the socket works: the next drop earns the full budget.
+      resubscribeAttempt = 0
+      errorLogged = false
+      gaveUpLogged = false
       acceptFrame(typeof event?.data === 'string' ? event.data : '')
     })
-    source.addEventListener('error', () => {
-      // EventSource reconnects on its own; never close on error. One log per holder.
-      if (errorLogged || disposed) return
-      errorLogged = true
-      warn(`[live-graph] /plugins/events connection for ${deps.sourceId} dropped; the browser will retry`)
+    next.addEventListener('error', () => {
+      if (disposed) return
+      if (next.readyState !== LIVE_EVENT_SOURCE_CLOSED) {
+        // CONNECTING: the browser owns the retry (one log per drop).
+        if (errorLogged) return
+        errorLogged = true
+        warn(`[live-graph] /plugins/events connection for ${deps.sourceId} dropped; the browser will retry`)
+        return
+      }
+      // CLOSED: the browser gave up for good (a non-200 reconnect fails the connection
+      // permanently) — rebuild it ourselves, bounded, so a restart window does not kill live sync.
+      scheduleResubscribe()
     })
   }
+
+  const scheduleResubscribe = (): void => {
+    if (disposed || resubscribeTimer !== undefined) return
+    if (!errorLogged) {
+      errorLogged = true
+      warn(`[live-graph] /plugins/events connection for ${deps.sourceId} failed; re-establishing with bounded backoff`)
+    }
+    if (resubscribeAttempt >= resubscribeDelaysMs.length) {
+      if (!gaveUpLogged) {
+        gaveUpLogged = true
+        warn(`[live-graph] gave up re-establishing /plugins/events for ${deps.sourceId} after ${resubscribeDelaysMs.length} attempts; only a page reload restores live sync`)
+      }
+      return
+    }
+    const delay = resubscribeDelaysMs[resubscribeAttempt]!
+    resubscribeAttempt += 1
+    resubscribeTimer = setTimeout(() => {
+      resubscribeTimer = undefined
+      if (disposed) return
+      openSource()
+    }, delay)
+  }
+
+  const openSource = (): void => {
+    try {
+      const next = deps.createEventSource?.(`${deps.basePath}/plugins/events`)
+      if (next !== undefined) attach(next)
+    } catch (error) {
+      warn('[live-graph] EventSource construction failed; live sync is off for this holder', error)
+    }
+  }
+
+  openSource()
 
   return {
     disarm(): Promise<void> {
       if (disposed) return current
       disposed = true
       pendingFrame = null
+      if (resubscribeTimer !== undefined) {
+        clearTimeout(resubscribeTimer)
+        resubscribeTimer = undefined
+      }
       try {
         source?.close()
       } catch (error) {
