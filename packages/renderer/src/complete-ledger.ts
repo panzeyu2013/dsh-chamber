@@ -40,10 +40,10 @@ import type { UnreadKind } from './watermark.ts'
 import type { SessionRunId } from '@dsh-chamber/dsh-stream-state'
 
 /** v2 未读 payload 的 notified 段：source → session → kind → 已通知水位。 */
-export type NotifiedWatermarkTable = Record<string, Record<string, Partial<Record<UnreadKind, number>>>>
+type NotifiedWatermarkTable = Record<string, Record<string, Partial<Record<UnreadKind, number>>>>
 
 /** 身份 spine：source → session → 最后一次已通知的 SessionRunId（notifications.v1 持久来源）。 */
-export type NotifiedRunTable = Record<string, Record<string, SessionRunId>>
+type NotifiedRunTable = Record<string, Record<string, SessionRunId>>
 
 /** 被压制完成的 pending 条目（v5 §3.1）。 */
 export interface PendingCompletion {
@@ -84,7 +84,7 @@ export interface SettleFenceEntry {
 }
 
 /** settleFence 段：source → session → 围栏（易失，不落盘）。 */
-export type SettleFenceTable = Record<string, Record<string, SettleFenceEntry>>
+type SettleFenceTable = Record<string, Record<string, SettleFenceEntry>>
 
 /** outcomes 段：source → goalId → 已消费标题的水位（一次性身份）。 */
 export type GoalOutcomeTable = Record<string, Record<string, number>>
@@ -124,7 +124,7 @@ export interface CompletionDecisionState {
 export const PENDING_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000
 
 /** 加载期选项（旧调用点只传 notified 表时全部取默认）。 */
-export interface CompleteLedgerOptions {
+interface CompleteLedgerOptions {
   /** 持久化读出的 pending 表（notifications.v1 payload.pending）。 */
   pending?: PendingCompletionTable
   /** 持久化读出的 outcomes 表（notifications.v1 payload.outcomes）。 */

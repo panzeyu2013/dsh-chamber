@@ -68,7 +68,7 @@ export type SessionEchoLedger = Readonly<Record<string, readonly PendingSession[
 export const PENDING_SESSION_TTL_MS = 600_000
 
 /** The fact one successful in-app session creation publishes. */
-export interface SessionCreationRecord {
+interface SessionCreationRecord {
   /** HOST session id — the only trustworthy "this session now exists" proof. */
   sessionId: string
   /** Host workspace id the session belongs to, when the creator knows it. */

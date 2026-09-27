@@ -17,7 +17,7 @@ import { createChannel } from './aggregate-store.ts'
 assertSingletonModule('session-restore')
 
 /** 一次成功的官方单条恢复（`workspace/unarchiveSession`，幂等）。 */
-export interface SessionRestoredFact {
+interface SessionRestoredFact {
   sourceId: string
   sessionId: string
 }

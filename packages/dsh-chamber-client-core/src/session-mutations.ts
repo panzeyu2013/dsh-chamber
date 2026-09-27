@@ -18,7 +18,7 @@ import {
 } from './instance-api.ts'
 import { reportSessionRestored } from './session-restore.ts'
 
-export interface SessionCreationOptions {
+interface SessionCreationOptions {
   /** 调用方预分配的会话 id（多步 saga 重试复用；缺省 = 宿主自铸）。 */
   sessionId?: string
   /** 该次创建**意图**写入的显示标题（fork 的递增标题）：回声行生来就是最终标签，

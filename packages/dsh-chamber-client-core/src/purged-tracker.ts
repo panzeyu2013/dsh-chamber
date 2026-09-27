@@ -17,7 +17,7 @@ import {
 import { createPurgedConvergence, type PurgedConvergenceChain } from './purged-convergence.ts'
 
 /** Injectable seams. */
-export interface PurgeTrackerDeps {
+interface PurgeTrackerDeps {
   /** Official refresh in METHOD-CALL form (see purged-convergence.ts). */
   refresh: () => Promise<unknown> | undefined
   /** Ids the official summaries currently list (`ctx.sessions.list.byId` keys). */
@@ -47,7 +47,7 @@ export interface PurgeTrackerState {
   readonly knownSessionIds: readonly string[]
 }
 
-export interface PurgeTracker {
+interface PurgeTracker {
   /** Observe the raw workspace `archivedSessionIds` field; returns the ids NEWLY
    *  tombstoned (empty for a first observation, an unchanged array identity, growth or
    *  no-change). A non-array shape is treated as unknown and arms nothing. */

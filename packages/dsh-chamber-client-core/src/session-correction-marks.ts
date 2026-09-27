@@ -13,11 +13,11 @@ import { assertSingletonModule } from './singleton.ts'
 assertSingletonModule('session-correction-marks')
 
 /** 报告行上标记需要的最小形状。 */
-export interface CorrectionMarkRow {
+interface CorrectionMarkRow {
   running?: boolean
 }
 
-export interface CorrectionMarks {
+interface CorrectionMarks {
   /** 写回**之前**武装；deadline = now + ttlMs。 */
   arm(ids: readonly string[], now: number): void
   /** 撤回（写回抛出、自校验失败、或任何证明该写回没产生边沿的证据）。 */
