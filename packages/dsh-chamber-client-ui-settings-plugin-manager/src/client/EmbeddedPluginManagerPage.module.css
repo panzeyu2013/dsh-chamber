@@ -35,8 +35,9 @@
   max-width: 960px;
 }
 
-/* The settings bridge mounts its seats behind a display: contents anchor, so a slot
-   occupant is a grid item too and needs the same default span and cap. */
+/* The page's own display: contents slot anchor (plugins.bundle.activation, currently
+   unoccupied): a future occupant is a grid item too and needs the same span and cap.
+   The settings-bridge seat anchor wraps the panel itself, so it is not matched here. */
 .embedded [data-plugin-panel] > [data-slot] > * {
   grid-column: 1 / -1;
   min-width: 0;
@@ -73,14 +74,12 @@
 }
 
 /* Without subgrid the second track stays unsized and the heading shares row one
-   unbounded: keep the controls on top and out of its reach (a static label needs no
-   pointer). The only path where the label-length invariant still holds. */
+   unbounded: keep the controls on top and out of its reach (the heading's
+   pointer-events: none comes from the placement rule below). The only path where the
+   label-length invariant still holds. */
 @supports not (grid-template-columns: subgrid) {
   .embedded [data-plugin-panel] > [data-window-drag] {
     z-index: 1;
-  }
-  .embedded [data-plugin-panel] > [data-plugin-group]:is(:first-of-type, :nth-child(1 of [data-plugin-group])) > :first-child {
-    pointer-events: none;
   }
 }
 
@@ -96,6 +95,11 @@
    placement for engines whose selector parser drops that form. */
 .embedded [data-plugin-panel] > [data-plugin-group]:is(:first-of-type, :nth-child(1 of [data-plugin-group])) > :first-child {
   grid-area: 1 / 1;
+  /* It overlaps the head row that spans row one, and paint order puts the later box on
+     top: without this the Swift shell's drag walk finds the label instead of
+     [data-window-drag] and the press becomes a text selection. A static label needs no
+     pointer. */
+  pointer-events: none;
 }
 
 /* A label the engine cannot break (no space, no hyphen) must break anyway: it lives
