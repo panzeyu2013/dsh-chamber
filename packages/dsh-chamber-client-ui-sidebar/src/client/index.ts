@@ -38,6 +38,7 @@ import {
   legacyStaleSessionProtectedIds,
 } from './purged-session-store.ts'
 import { publishSessionCreationInstrument } from '@dsh-chamber/dsh-chamber-client-core/session-create-ledger'
+import { onSessionRestored } from '@dsh-chamber/dsh-chamber-client-core/session-restore'
 import {
   SessionAuthorityReconciler,
   writeBackTargets,
@@ -383,6 +384,14 @@ export function apply(ctx: ClientContext): void {
       // running/pending/completed/current 事实已被丢弃）并排队快照。
       onRelease: () => { sync() },
       warn: (message) => { console.warn(`[chamber] ${message} (${chamberInstanceId})`) },
+    })
+    // I-1 恢复与 F1 墓碑的交叉口：官方 unarchive 让归档集收缩，但内容还在、行仍被官方
+    // summaries 列出——F1 的「收缩 ⇔ 内容已删」前提对它不成立。恢复事实一到就释放该 id 的
+    // 墓碑并重发两轨（release → onRelease → sync()，sync 末尾 queueSnapshot）。事实先于
+    // 收缩推送到达时由 tracker 的 restored 集兜住：那次收缩不为该 id 立碑。
+    const unsubscribeRestored = onSessionRestored((fact) => {
+      if (fact.sourceId !== chamberInstanceId) return
+      purgedRows.release([fact.sessionId])
     })
     // pending（审批/提问/plan-review）的权威源是官方 ui-session 暴露的 sessionStatus
     // 投影；内部 pending registry 是私有状态，不能从服务面直接读取。订阅公开投影并把
@@ -771,6 +780,7 @@ export function apply(ctx: ClientContext): void {
       unsubscribeWorkspaces()
       unsubscribePending()
       unsubscribeSessionListRefresh()
+      unsubscribeRestored()
       unsubscribeBaselineVerification()
       verificationGeneration += 1
       if (verificationRetry !== undefined) clearTimeout(verificationRetry)

@@ -322,6 +322,21 @@ export function reconcilePendingArchives(
   return filterLedgerRows(ledger, sourceId, row => !covered.has(row.sessionId))
 }
 
+/**
+ * Drop ONE archive tombstone: that id was RESTORED through the official
+ * `workspace/unarchiveSession` wire. The authoritative-set reconciliation is not
+ * enough here — it retires tombstones the set now COVERS (archived), and a restored
+ * id leaves the set; without this explicit drop the frozen view keeps hiding the
+ * restored row. Identity-preserving when the source/id is absent.
+ */
+export function removePendingArchive(
+  ledger: SessionArchiveLedger,
+  sourceId: string,
+  sessionId: string,
+): SessionArchiveLedger {
+  return filterLedgerRows(ledger, sourceId, row => row.sessionId !== sessionId)
+}
+
 /** Retire the tombstones of sources that left the registry (same-id re-add = new generation). */
 export function forgetPendingArchives(
   ledger: SessionArchiveLedger,

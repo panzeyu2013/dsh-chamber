@@ -1,8 +1,12 @@
 /**
  * Chamber archive manager dialog: lists the source snapshot's archived sessions
  * grouped by workspace (collapse is dialog-local view state, never selection or
- * counts) and deletes per row or as an explicit counted multi-selection — no
- * standalone delete-all, so a purge can never cover rows the dialog could not list.
+ * counts), deletes per row or as an explicit counted multi-selection — no
+ * standalone delete-all, so a purge can never cover rows the dialog could not list —
+ * and RESTORES per row or as the same counted selection through the official
+ * `workspace/unarchiveSession` wire (idempotent, non-destructive: no confirm
+ * stage). Restore only exists for the listed authoritative view, same gate as
+ * deletion.
  * Deletion surfaces ONLY from the listed view (rows landed AND archiveSetKnown):
  * degraded and pending/pull-error views offer no destructive action, since a
  * non-authoritative set may hide archived rows. Destructive actions are
@@ -18,6 +22,7 @@ import {
   IconChevronRightOutlineRegular,
   IconFolderOpenOutlineRegular,
   IconLoadingOutlineRegular,
+  IconRefreshOutlineRegular,
   IconTrashOutlineRegular,
   IconWarningOutlineRegular,
   Modal,
@@ -27,6 +32,7 @@ import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-cor
 import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { groupArchivedRows, workspaceAccentStyle, type ArchivedSessionGroup } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import { getInstanceClient } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
+import { unarchiveSessionForSource } from '@dsh-chamber/dsh-chamber-client-core/session-mutations'
 import { archivePurgeNote, purgeRemovedContent, runArchivePurge } from './archive-purge.ts'
 import { getWorkspaceGitFlag, isSourceGitFlagsLoaded } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
 import type { SidebarKey } from './locales.ts'
@@ -70,7 +76,11 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
   // never mirrored to nav prefs. Collapse hides rows but changes no counts
   // (select-all covers collapsed groups too).
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
-  const [busy, setBusy] = useState(false)
+  // Single-flight lock for BOTH actions; the value also says which run the
+  // spinner/label describes (the footer copy must not call a restore "deleting").
+  // null = idle: one state, so "busy" and "what is running" can never disagree.
+  const [busyKind, setBusyKind] = useState<'purge' | 'restore' | null>(null)
+  const busy = busyKind !== null
   const [note, setNote] = useState<{ kind: NoteKind; text: string } | null>(null)
   // Rows whose content this dialog deleted while the session stayed resident in
   // the instance process: the host keeps their archived membership, so they stay
@@ -271,7 +281,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
     // one the run still proceeds (the host's running guard and the cancel pass
     // are the safety boundary) and the hint line above states that fact.
     const client = getInstanceClient(server.id)
-    setBusy(true)
+    setBusyKind('purge')
     setNote(null)
     void (async () => {
       try {
@@ -320,7 +330,53 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
           : message
         setNote({ kind: 'error', text: friendly })
       } finally {
-        if (mountedRef.current) setBusy(false)
+        if (mountedRef.current) setBusyKind(null)
+      }
+    })()
+  }
+
+  /**
+   * Restore the given rows through the OFFICIAL `workspace/unarchiveSession` wire
+   * (idempotent, additive reverse of archive). NOT destructive, so it arms no
+   * confirm; failures are counted and surfaced (a partial restore must stay
+   * visible). The core mutation publishes the restore fact, which drops this
+   * page's archive tombstone and requests the re-list; the explicit requests here
+   * cover the mounted-ctx refresh as well.
+   */
+  const runRestore = (sessionIds: readonly string[]): void => {
+    if (busy) return
+    setBusyKind('restore')
+    setNote(null)
+    void (async () => {
+      try {
+        let restored = 0
+        let failure: string | null = null
+        for (const id of sessionIds) {
+          try {
+            await unarchiveSessionForSource(server.id, id)
+            restored += 1
+          } catch (error) {
+            if (failure === null) failure = error instanceof Error ? error.message : String(error)
+          }
+        }
+        // 不在这里刷新：恢复事实本身是清墓碑与生产端 purge 墓碑释放的唯一信号，重列
+        // 由挂载 push 的 archive-set 收缩走既有 planSessionListRefresh 机器；对话框再
+        // 发一次请求只会让一次恢复触发两次刷新。
+        if (!mountedRef.current) return
+        const lines = [t('archive.manager.restored', { count: restored })]
+        if (failure !== null) {
+          lines.push(t('archive.manager.restoreFailed', { count: sessionIds.length - restored }), failure)
+        }
+        setNote({ kind: failure === null ? 'info' : 'error', text: lines.join('\n') })
+        if (failure === null) {
+          setSelected(prev => {
+            const next = new Set(prev)
+            for (const id of sessionIds) next.delete(id)
+            return next
+          })
+        }
+      } finally {
+        if (mountedRef.current) setBusyKind(null)
       }
     })()
   }
@@ -372,6 +428,9 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
   const selectedCountKey: SidebarKey = selected.size === 1
     ? 'archive.manager.deleteSelected.one'
     : 'archive.manager.deleteSelected.other'
+  const selectedRestoreKey: SidebarKey = selected.size === 1
+    ? 'archive.manager.restoreSelected.one'
+    : 'archive.manager.restoreSelected.other'
 
   // View-mode derivation: the destructive surface is EXACTLY the listed view —
   // rows only render when the archive set is authoritative and non-empty, so a
@@ -421,19 +480,30 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
             {busy && (
               <>
                 <IconLoadingOutlineRegular className={cc.statusSpinner} size={13} />
-                {t('archive.manager.deleting')}
+                {t(busyKind === 'restore' ? 'archive.manager.restoring' : 'archive.manager.deleting')}
               </>
             )}
           </span>
           {listVisible && confirming === null && (
-            <Button
-              variant="outline"
-              className={cc.archiveManagerDanger}
-              disabled={inputLocked || selected.size === 0}
-              onClick={(event: ReactMouseEvent<HTMLButtonElement>) => { deleteSelected(event.currentTarget) }}
-            >
-              {t(selectedCountKey, { count: selected.size })}
-            </Button>
+            <>
+              {/* Safe action first (same order as the confirm bar: 取消 then 删除) —
+                  restore is idempotent and never destructive. */}
+              <Button
+                variant="outline"
+                disabled={inputLocked || selected.size === 0}
+                onClick={() => { runRestore([...selected]) }}
+              >
+                {t(selectedRestoreKey, { count: selected.size })}
+              </Button>
+              <Button
+                variant="outline"
+                className={cc.archiveManagerDanger}
+                disabled={inputLocked || selected.size === 0}
+                onClick={(event: ReactMouseEvent<HTMLButtonElement>) => { deleteSelected(event.currentTarget) }}
+              >
+                {t(selectedCountKey, { count: selected.size })}
+              </Button>
+            </>
           )}
         </div>
       )}
@@ -591,6 +661,19 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
                               {projectLabelOf(row.cwd)}
                             </span>
                           )}
+                          <button
+                            type="button"
+                            className={cc.actionIcon}
+                            aria-label={t('archive.manager.rowRestoreAria', { title: titleText(row.title) })}
+                            title={t('archive.manager.rowRestoreAria', { title: titleText(row.title) })}
+                            disabled={inputLocked}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              runRestore([row.sessionId])
+                            }}
+                          >
+                            <IconRefreshOutlineRegular size={14} />
+                          </button>
                           <button
                             type="button"
                             className={clsx(cc.actionIcon, cc.actionIconDanger)}

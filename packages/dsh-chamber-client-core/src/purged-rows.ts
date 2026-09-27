@@ -19,13 +19,16 @@
  * OWNED BY THE PRODUCER. SUPPRESSION: an id that left the set through a shrink is
  * tombstoned and filtered until the summaries stop listing it (or it is
  * re-archived); the shrink only contains trees whose content deletion SUCCEEDED
- * plus record-less orphan members, so "left the set" ⇔ content gone. CONVERGENCE:
+ * plus record-less orphan members, so "left the set" ⇔ content gone — EXCEPT for
+ * the official unarchive (I-1), whose shrink leaves content and listed rows in
+ * place. That path is released explicitly through the restore fact
+ * (`createPurgeTracker.release`), never inferred from the set. CONVERGENCE:
  * the shrink triggers `ctx.sessions.refresh()` and VERIFIES the ids are gone,
  * retrying bounded times (the refresh MUST be invoked as a method on the service
  * object — `ClientSessions.refresh` reads `this.manager`).
  *
- * RELEASE RULE: an id is released when the summaries stop listing it or it
- * re-enters the set. Deliberately NO "the refresh resolved" valve (`refreshList`
+ * RELEASE RULE: an id is released when the summaries stop listing it, it
+ * re-enters the set, or the producer reports an official restore for it. Deliberately NO "the refresh resolved" valve (`refreshList`
  * also resolves on a failed pull / a joined stale caller); a residual non-purge
  * shrink is released by the convergence probe's terminal state.
  */

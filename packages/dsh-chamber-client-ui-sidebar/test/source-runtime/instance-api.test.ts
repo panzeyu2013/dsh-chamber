@@ -130,6 +130,7 @@ test('fetchInstanceSnapshot cwd grouping titles handle Windows separators, trail
 
 import {
   archiveSession,
+  callAndThrow,
   getInstanceClient,
   InstanceRpcError,
   purgeArchivedSessions,
@@ -909,6 +910,30 @@ test('archiveSession posts the official request shape and keeps a WIRE-level ref
   const second = JSON.parse(bodies[1] as string) as { method?: string; payload?: unknown }
   assert.equal(second.method, 'workspace/archiveSession')
   assert.deepEqual(second.payload, { args: { request: { sessionId: 's1', stopActivity: true } } })
+})
+
+test('the unarchive accessor posts the official workspace/unarchiveSession envelope (I-1)', async () => {
+  // Restore is the additive reverse of archive: one official argument, no
+  // stopActivity-style admission, no local field. The arg key must be the
+  // @Remote parameter name (request), like every other workspace mutation
+  // (session-mutations.ts calls this accessor through the exported callAndThrow).
+  const bodies: string[] = []
+  const instanceId = 'wire-unarchive-shape'
+  const client = getInstanceClient(instanceId)
+  const stub: typeof fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const raw = String(init?.body ?? '{}')
+    bodies.push(raw)
+    const envelope = JSON.parse(raw) as { rpcId?: string }
+    return jsonResponse({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: {} } })
+  }) as typeof fetch
+  try {
+    await withFetch(stub, async () => {
+      await callAndThrow(() => client.workspace.unarchiveSession({ sessionId: 's1' }))
+    })
+  } finally { releaseInstanceClient(instanceId) }
+  const body = JSON.parse(bodies[0] as string) as { method?: string; payload?: unknown }
+  assert.equal(body.method, 'workspace/unarchiveSession')
+  assert.deepEqual(body.payload, { args: { request: { sessionId: 's1' } } })
 })
 
 // The unary fallback publishes the session's

@@ -170,6 +170,7 @@ export const EXPORTS_ALLOWLIST = Object.freeze({
     './session-create-ledger',
     './session-fact-reconcile',
     './session-mutations',
+    './session-restore',
     './session-row-state',
     './session-row-window',
     './settings-shell',

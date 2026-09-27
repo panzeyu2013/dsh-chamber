@@ -37,7 +37,9 @@ import {
   reconcilePendingWorkspaces,
   recordPendingArchive,
   recordPendingSession,
+  onSessionRestored,
   recordPendingWorkspace,
+  removePendingArchive,
   removePendingSession,
   removePendingWorkspace,
   renamePendingWorkspace,
@@ -573,6 +575,21 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
       updateSessionArchive(archived)
     })
   }, [updateSessionArchive, updateSessionEcho])
+  /**
+   * 恢复事实（I-1）：官方 `workspace/unarchiveSession` 成功后，本地归档墓碑必须同拍
+   * 清除——权威集合**不再覆盖**该 id，而墓碑的收敛规则只退休仍被覆盖的 id；不清就会
+   * 让「本页归档过、又恢复」的行在冻结视图里继续被隐藏。重列不需要在这里发：挂载 push
+   * 的 archive-set 收缩本就走既有的 `planSessionListRefresh` 机器（聚合刷新随 push 落地）。
+   */
+  useEffect(() => {
+    return onSessionRestored((fact) => {
+      const { sourceId } = fact
+      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
+      const owner = sourceLifecyclesRef.current!.capture(sourceId)
+      if (owner === null) return
+      updateSessionArchive(removePendingArchive(echoStore.getSnapshot().archive, sourceId, fact.sessionId))
+    })
+  }, [updateSessionArchive])
   /**
    * 归档墓碑的权威收敛点：挂载 push 的**权威**归档集命名该 id 即退休（degraded 视图
    * 的空集绝不能传进来）。与其它两个回声收敛点同位置（ready 门之前）。

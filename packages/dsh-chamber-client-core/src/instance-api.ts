@@ -360,10 +360,7 @@ class InstanceApiClient {
       this.call('session/cancel', { args: { request: payload } }, signal),
   }
 
-  /**
-   * workspace-controller unary Remotes. NOTE: `workspace/list` does not exist
-   * upstream — the workspace face is the `workspace/follow` stream.
-   */
+  /** workspace-controller unary Remotes (`workspace/list` does not exist upstream — the face is the `workspace/follow` stream). */
   readonly workspace = {
     create: (payload: unknown, signal?: AbortSignal): Promise<UnaryResult<any>> =>
       this.call('workspace/create', { args: { request: payload } }, signal),
@@ -377,6 +374,8 @@ class InstanceApiClient {
       this.call('workspace/insertSessionBefore', { args: { request: payload } }, signal),
     archiveSession: (payload: unknown, signal?: AbortSignal): Promise<UnaryResult<any>> =>
       this.call('workspace/archiveSession', { args: { request: payload } }, signal),
+    unarchiveSession: (payload: unknown, signal?: AbortSignal): Promise<UnaryResult<any>> =>
+      this.call('workspace/unarchiveSession', { args: { request: payload } }, signal),
   }
 
   /** directoryPicker unary Remotes — POSITIONAL-argument face. */
@@ -644,7 +643,8 @@ export async function fetchInstanceSnapshot(client: InstanceApiClient): Promise<
 // value import in this direction would be a cycle); re-exported below so the
 // workspace-echo row builder keeps its import site.
 
-async function callAndThrow(_client: InstanceApiClient, call: () => Promise<UnaryResult<any>>): Promise<UnaryResult<any>> {
+/** Run one unary call and throw the decoded refusal (also the funnel used by session-mutations). */
+export async function callAndThrow(call: () => Promise<UnaryResult<any>>): Promise<UnaryResult<any>> {
   let result: UnaryResult<any>
   try {
     result = await call()
@@ -702,7 +702,7 @@ export async function insertSessionBefore(
 ): Promise<void> {
   const payload: { workspaceId: string; sessionId: string; beforeSessionId?: string } = { workspaceId, sessionId }
   if (beforeSessionId !== undefined) payload.beforeSessionId = beforeSessionId
-  await callAndThrow(client, () => client.workspace.insertSessionBefore(payload))
+  await callAndThrow(() => client.workspace.insertSessionBefore(payload))
 }
 
 /** workspace.insertBefore wrapper; omitted anchor = append to end. */
@@ -713,7 +713,7 @@ export async function insertWorkspaceBefore(
 ): Promise<void> {
   const payload: { workspaceId: string; beforeWorkspaceId?: string } = { workspaceId }
   if (beforeWorkspaceId !== undefined) payload.beforeWorkspaceId = beforeWorkspaceId
-  await callAndThrow(client, () => client.workspace.insertBefore(payload))
+  await callAndThrow(() => client.workspace.insertBefore(payload))
 }
 
 /**
@@ -728,7 +728,7 @@ export async function createSession(
 ): Promise<string> {
   const payload: { workspaceId: string; sessionId?: string } = { workspaceId }
   if (sessionId !== undefined) payload.sessionId = sessionId
-  const result = await callAndThrow(client, () => client.session.create(payload))
+  const result = await callAndThrow(() => client.session.create(payload))
   return decodeSessionCreateValue(result.ok ? result.value : undefined, sessionId)
 }
 
@@ -738,7 +738,7 @@ export async function createSession(
  * （derive.ts 的 increasedForkTitle，逐字移植官方实现）。
  */
 export async function forkSession(client: InstanceApiClient, sessionId: string): Promise<string> {
-  const result = await callAndThrow(client, () => client.session.fork({ sessionId }))
+  const result = await callAndThrow(() => client.session.fork({ sessionId }))
   const childId = result.ok ? (result.value as { sessionId?: unknown } | undefined)?.sessionId : undefined
   if (typeof childId !== 'string' || childId === '') {
     throw new Error('instance-session-fork: 实例未返回子会话 id')
@@ -747,7 +747,7 @@ export async function forkSession(client: InstanceApiClient, sessionId: string):
 }
 
 export async function renameSession(client: InstanceApiClient, sessionId: string, title: string): Promise<void> {
-  await callAndThrow(client, () => client.session.rename({ sessionId, title }))
+  await callAndThrow(() => client.session.rename({ sessionId, title }))
 }
 
 /**
@@ -762,7 +762,7 @@ export async function archiveSession(
   sessionId: string,
   options: { stopActivity?: boolean } = {},
 ): Promise<void> {
-  await callAndThrow(client, () => client.workspace.archiveSession({
+  await callAndThrow(() => client.workspace.archiveSession({
     sessionId,
     ...(options.stopActivity === true ? { stopActivity: true } : {}),
   }))
@@ -776,7 +776,7 @@ export async function archiveSession(
  * not running" as success swallow it themselves).
  */
 export async function cancelSession(client: InstanceApiClient, sessionId: string): Promise<void> {
-  await callAndThrow(client, () => client.session.cancel({ sessionId }))
+  await callAndThrow(() => client.session.cancel({ sessionId }))
 }
 
 /** True when an error is the official "session is not attached" refusal —
@@ -966,7 +966,7 @@ export async function purgeArchivedSessions(
 ): Promise<ArchiveCleanupPurgeResult> {
   let result: UnaryResult<any>
   try {
-    result = await callAndThrow(client, () => client.archiveCleanup.purge(sessionIds, true, protectSessionIds))
+    result = await callAndThrow(() => client.archiveCleanup.purge(sessionIds, true, protectSessionIds))
   } catch (error) {
     if (looksNoResponse(error)) {
       throw new Error('清理超时或网络中断——清理可能仍在进行，请稍后重试（重复执行是安全的）。')
@@ -1371,15 +1371,15 @@ export interface CreateWorkspaceResult {
 }
 
 export async function createWorkspace(client: InstanceApiClient, path: string): Promise<CreateWorkspaceResult> {
-  const result = await callAndThrow(client, () => client.workspace.create({ path }))
+  const result = await callAndThrow(() => client.workspace.create({ path }))
   return decodeWorkspaceCreateValue(result.ok ? result.value : undefined)
 }
 
 export async function renameWorkspace(client: InstanceApiClient, workspaceId: string, title: string): Promise<void> {
-  await callAndThrow(client, () => client.workspace.rename({ workspaceId, title }))
+  await callAndThrow(() => client.workspace.rename({ workspaceId, title }))
 }
 
 export async function deleteWorkspace(client: InstanceApiClient, workspaceId: string): Promise<void> {
-  const result = await callAndThrow(client, () => client.workspace.delete({ workspaceId }))
+  const result = await callAndThrow(() => client.workspace.delete({ workspaceId }))
   decodeWorkspaceDeleteValue(result.ok ? result.value : undefined)
 }

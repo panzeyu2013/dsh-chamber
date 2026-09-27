@@ -29,6 +29,7 @@
     "./session-create-ledger": "./src/session-create-ledger.ts",
     "./session-fact-reconcile": "./src/session-fact-reconcile.ts",
     "./session-mutations": "./src/session-mutations.ts",
+    "./session-restore": "./src/session-restore.ts",
     "./session-row-state": "./src/session-row-state.ts",
     "./session-row-window": "./src/session-row-window.ts",
     "./settings-shell": "./src/settings-shell.ts",
