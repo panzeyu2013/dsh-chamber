@@ -1095,20 +1095,43 @@ jobs:
             echo "signing identity: $IDENTITY"
             export KEYCHAIN_PASSWORD KEYCHAIN_FILE
           fi
+          # 三条互不依赖的 lane 在 3 vCPU runner 上重叠（7GB 内存上限，最多三条）：
+          #   1  swift build -c release —— 只吃 actions/cache 恢复的 macos/.build，
+          #      与 JS 链零依赖；装配步用 --skip-build 消费这份产物（argv 与
+          #      build-swift-app.mjs 的 swift build 逐字一致，含链接期 rpath）
+          #   2  bundle:dsh —— 内嵌 dsh 运行时物化，只吃 ensure:artifacts 的 dsh-runtime dist
+          #   3  ensure:artifacts → host/renderer/control-plane —— build:sidecar 的输入
+          # 任一 lane 失败都必须让本步骤非零退出：绝不让半份产物进入装配与签名。
+          SWIFT_BUILD_PID=""
+          BUNDLE_DSH_PID=""
+          LANE_FAILURES=""
+          cleanup_lanes() {
+            for pid in ${SWIFT_BUILD_PID:-} ${BUNDLE_DSH_PID:-}; do
+              kill "$pid" 2>/dev/null || true
+            done
+          }
+          trap cleanup_lanes EXIT
+          swift build --package-path macos -c release \
+            -Xlinker -rpath -Xlinker @executable_path/../Frameworks &
+          SWIFT_BUILD_PID=$!
           # bundle:dsh below imports @dsh-chamber/dsh-runtime (dist), which the
           # build:sidecar line would only ensure later; bootstrap the untracked
           # build-time artifacts first.
           pnpm run ensure:artifacts
+          # 内置 dsh 工作区必须先物化（.gitignore 只提交 vendor/dsh/pnpm-lock.yaml，
+          # package.json + node_modules 由 bundle-dsh.mjs 生成；否则 build-sidecar
+          # 只 warn、下面 verify 的 test -f 直接失败）。
+          pnpm --filter @dsh-chamber/desktop run bundle:dsh &
+          BUNDLE_DSH_PID=$!
           pnpm run build:host-packages
           pnpm run build:renderer
           # scoper 标记门：没有它「构建把 scoper 摇掉」的产物可以一路装配进正式 .app
           # （源产物先断一次）。
           node packages/dsh-chamber-client-ui-mobile/scripts/assert-scoper-artifact.mjs
           pnpm --filter @dsh-chamber/desktop run build:control-plane
-          # 内置 dsh 工作区必须先物化（.gitignore 只提交 vendor/dsh/pnpm-lock.yaml，
-          # package.json + node_modules 由 bundle-dsh.mjs 生成；否则 build-sidecar
-          # 只 warn、下面 verify 的 test -f 直接失败）。
-          pnpm --filter @dsh-chamber/desktop run bundle:dsh
+          wait "$SWIFT_BUILD_PID" || { echo "::error::parallel lane failed: swift build -c release"; LANE_FAILURES=1; }
+          wait "$BUNDLE_DSH_PID" || { echo "::error::parallel lane failed: bundle:dsh"; LANE_FAILURES=1; }
+          test -z "$LANE_FAILURES" || exit 1
           # 真实 Node 捆绑（官方 tar.gz + SHA-256 校验；命名必须是 node）。
           # C5：显式 --arch arm64（架构是参数而非 runner 宿主架构）；--require-python 让
           # python 载荷缺件 fail-closed（缺件时默认只 warn，发布腿不允许）。
@@ -1148,9 +1171,12 @@ jobs:
           else
             echo "::warning::SPARKLE_PUBLIC_ED_KEY absent — native auto-update stays disabled in this build"
           fi
+          # --skip-build：上面的 lane 1 已经用同一 argv 完成 swift build（含 rpath），
+          # 这里只做装配/签名；Lane 1 已 fail-closed 断言过，绝不在装配期重编。
           pnpm run build:swift-app --out macos/release \
             --app-name dsh-chamber \
             --artifact-basename "dsh-chamber-${VERSION}-macos-arm64" \
+            --skip-build \
             --identity "$IDENTITY" ${SPARKLE_ARGS[@]+"${SPARKLE_ARGS[@]}"} ${ARTIFACT_ARGS[@]+"${ARTIFACT_ARGS[@]}"}
         env:
           VERSION: ${{ needs.create-release.outputs.version }}
@@ -1193,7 +1219,12 @@ jobs:
           xcrun stapler staple "$APP"
           xcrun stapler validate "$APP"
           rm -f "$SUBMIT_ZIP" "${BASE}.zip" "${BASE}.dmg"
-          ditto -c -k --sequesterRsrc --keepParent "$APP" "${BASE}.zip"
+          # 最终 zip 与 dmg 相互独立：zip 走 ditto 的单核压缩，dmg 走 hdiutil
+          # 的多核压缩，串行执行等于让 3 vCPU runner 空转一半；这里并行生成，
+          # 两条各自的退出码都收齐后统一判定——绝不让一条的成败掩盖另一条
+          # （set -e 对后台任务不生效，必须显式 wait + 状态判断）。
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "${BASE}.zip" &
+          ZIP_PID=$!
           # DMG 卷 = .app + /Applications 快捷方式（Finder 拖拽安装惯例）
           # **+ Finder 拖拽布局**（背景箭头 + 图标定位，与 Electron/electron-builder
           # 的卷观感对齐），且 DMG 本体也要公证+装订——只装订 .app 时离线
@@ -1202,7 +1233,18 @@ jobs:
           # import 同一模块）；这里绝不内联 ditto/hdiutil 步骤，否则两腿漂移。
           # 该脚本自带产物级校验（挂载断言 .DS_Store/.background/快捷方式），
           # 失败 loud = 绝不发布没有拖拽提示的 DMG。
-          node macos/scripts/dmg.mjs --app "$APP" --app-name dsh-chamber --out "${BASE}.dmg"
+          node macos/scripts/dmg.mjs --app "$APP" --app-name dsh-chamber --out "${BASE}.dmg" &
+          DMG_PID=$!
+          ZIP_STATUS=0
+          DMG_STATUS=0
+          wait "$ZIP_PID" || ZIP_STATUS=$?
+          wait "$DMG_PID" || DMG_STATUS=$?
+          if [[ "$ZIP_STATUS" -ne 0 || "$DMG_STATUS" -ne 0 ]]; then
+            echo "::error::distribution archive generation failed (zip exit ${ZIP_STATUS}, dmg exit ${DMG_STATUS})"
+            exit 1
+          fi
+          test -f "${BASE}.zip"
+          test -f "${BASE}.dmg"
           xcrun notarytool submit "${BASE}.dmg" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_SPECIFIC_PASSWORD" \

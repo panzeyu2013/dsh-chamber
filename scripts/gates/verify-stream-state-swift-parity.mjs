@@ -102,6 +102,26 @@ export function swiftAssertions(tablesPath) {
   ].join('\n')
 }
 
+/**
+ * The module cache directory for this run: the repository scratch path when it
+ * can be created, a per-run temp directory otherwise. Only system modules
+ * (Foundation/SwiftShims) are ever stored there - the gates' own sources are
+ * passed on the command line - so a shared path cannot leak a stale mirror.
+ * @param {string} runDir - this run's temp directory (the fallback parent).
+ * @returns {string} an existing, writable module cache directory.
+ */
+function moduleCacheDir(runDir) {
+  try {
+    const stable = join(REPO_ROOT, '.tmp', 'swift-parity', 'module-cache')
+    mkdirSync(stable, { recursive: true })
+    return stable
+  } catch {
+    const fallback = join(runDir, 'module-cache')
+    mkdirSync(fallback, { recursive: true })
+    return fallback
+  }
+}
+
 function fail(message) {
   console.error('[swift-parity] ' + message)
   process.exit(1)
@@ -123,6 +143,7 @@ function main() {
   // leaves the Electron watchdog is locked to, and typechecks the file. If it ever
   // needs an Apple framework, move this check to the macOS leg - never delete it.
   const WATCHDOG = join(REPO_ROOT, 'macos', 'Sources', 'DSHChamber', 'RendererHangWatchdog.swift')
+  const typecheckMirrors = []
   if (existsSync(WATCHDOG)) {
     const source = readFileSync(WATCHDOG, 'utf8')
     const table = JSON.parse(readFileSync(TABLES, 'utf8')).tables.ladders.delivery.scheduleProbe
@@ -141,41 +162,44 @@ function main() {
     if (timeout !== table.timeoutMs / 1000) fail('swift watchdog probeTimeout drifts from tables.json')
     if (strikes !== table.strikes) fail('swift watchdog maxStrikes drifts from tables.json')
     if (inputBlockRtt !== table.inputBlockRttMs / 1000) fail('swift watchdog inputBlockRtt drifts from tables.json')
-    const typecheck = spawnSync('swiftc', ['-typecheck', WATCHDOG], { encoding: 'utf8' })
-    if (typecheck.status !== 0) {
-      process.stderr.write(typecheck.stderr ?? '')
-      fail('swiftc -typecheck of the Foundation-pure watchdog failed')
-    }
+    typecheckMirrors.push(WATCHDOG)
   }
   const dir = mkdtempSync(join(tmpdir(), 'swift-parity-'))
   try {
     const main = join(dir, 'main.swift')
     writeFileSync(main, swiftAssertions(TABLES), 'utf8')
     const out = join(dir, 'parity')
-    // A hermetic module cache inside the temp dir: sandboxed/file-restricted
-    // environments have a read-only ~/.cache/clang, and swiftc fails there with
-    // "could not build C module 'SwiftShims'" - a tooling restriction, not a
-    // defect in the mirror.
-    const cache = join(dir, 'module-cache')
-    mkdirSync(cache, { recursive: true })
-    // Foundation-only policy mirrors that must keep typechecking on a Linux host:
-    // the renderer-recovery policy and its rolling-window limiter (the numbers the
-    // Electron recovery path and the Swift shell share). A mirror that grows an
-    // Apple-only dependency moves to the macOS leg - it is never dropped.
+    // One hermetic module cache, created before the FIRST swiftc call and reused
+    // by every later one: Foundation's modules are then built once per gate run
+    // instead of once per invocation. It is hermetic (not ~/.cache/clang) because
+    // sandboxed/file-restricted environments have a read-only system cache and
+    // swiftc fails there with "could not build C module 'SwiftShims'" - a tooling
+    // restriction, not a defect in a mirror. A stable scratch path is used when
+    // it is writable so repeat local runs stay warm; module-cache entries are
+    // keyed by compiler version, so a shared path cannot serve a stale module.
+    const cache = moduleCacheDir(dir)
+    // Foundation-only Swift mirrors that must keep typechecking on a Linux host:
+    // the renderer-hang watchdog, the renderer-recovery policy and its
+    // rolling-window limiter (the numbers the Electron recovery path, the
+    // watchdog and the Swift shell share). A mirror that grows an Apple-only
+    // dependency moves to the macOS leg - it is never dropped.
     const policyMirrors = ['RendererRecovery.swift', 'RollingWindowLimiter.swift']
       .map(name => join(REPO_ROOT, 'macos', 'Sources', 'DSHChamber', name))
     const policyTypecheck = spawnSync(
       'swiftc',
-      ['-typecheck', '-module-cache-path', cache, ...policyMirrors],
+      ['-typecheck', '-module-cache-path', cache, ...typecheckMirrors, ...policyMirrors],
       { encoding: 'utf8' },
     )
     if (policyTypecheck.status !== 0) {
       process.stderr.write(policyTypecheck.stderr ?? '')
-      fail('swiftc -typecheck of the Foundation policy mirrors failed')
+      fail('swiftc -typecheck of the Foundation-pure mirrors failed')
     }
+    // No optimization flag: this gate asserts behaviour, never speed, and the
+    // shipped macOS binary is optimized by SwiftPM in release.yml - optimizing
+    // here only bought CI seconds.
     const compile = spawnSync(
       'swiftc',
-      ['-O', '-module-cache-path', cache, '-o', out, MIRROR, main],
+      ['-module-cache-path', cache, '-o', out, MIRROR, main],
       { encoding: 'utf8' },
     )
     if (compile.status !== 0) {

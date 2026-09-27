@@ -104,7 +104,8 @@
 - 结构性重构与清理（未闭合；[todo/refactor-plan.md](todo/refactor-plan.md)）：三门（`verify:import-cycles`/`verify:file-budgets`/`verify:no-dead-exports`）常驻但**只本地跑**；未收口 = renderer 外三处 state/ref 镜像、`ssh-<id>` 别名与旧版本探测（保留）；跨包逐字重复可删 0 组（计划 §6）。
 - `run-checks tests` 链式步骤可「零覆盖记通过」：manifest dump 丢失时 `requireDump` 只对 direct 生效 ⇒ tests 绿不代表 vendor 套件真跑；修法 = 无 dump 无 transcript 即硬失败。
 - 本地 `pnpm run smoke` 与在跑实例端口冲突（`DEFAULT_DSH_START_PORT = 17510`，重试 +1 至 17514）：需端口基址覆盖开关。
-- CI `test-windows` 打包排练 CPU bound（285–342s）：压缩只能动排练范围/打包参数。
+- CI 打包排练 CPU bound（Windows 285–342s、macOS 133–188s）：拆成独立并行 job 后 push 侧墙钟由 Windows 排练单独决定，压缩只能动排练范围/打包参数。
+- Swift 套件串行是 macOS 腿最大单项（113s，`scripts/gates/run-swift-tests.mjs`）：`swift test --parallel` 不能直接开——并行模式只在 worker 内打印分片汇总且不打印 `Test Case ... skipped` 行（G2「XCTSkip=0」判据会静默失效），套件另有多处共用固定端口（17520、17951–17953 等），须先做并行隔离与判据重设计。
 - 0.1.7 升级线残余：fatal 恢复框真机键位走查、node-pty 补偿「补丁生效、补偿可撤」复核。
 - 隐私口径：`DSH_TELEMETRY_DISABLED=1` 不覆盖 `session-log-deepseek`，chamber 不拦（design 02 环境固定）。
 - `isMainFrame` 归属缺陷（真实 WKWebView 实测）：同源 blob/子 frame 经 `parent.` 投递被当主 frame；需真实壳复验，根治 = sandbox/换源（并入 S-35）。

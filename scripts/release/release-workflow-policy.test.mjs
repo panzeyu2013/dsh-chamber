@@ -977,7 +977,7 @@ const jobWithoutStep = (name, stepName) => {
   const entry = job(name, 'success')
   return { ...entry, steps: entry.steps.filter(step => step.name !== stepName) }
 }
-assert.equal(judgeRun(GREEN_RUN, [job('test', 'success'), job('test-windows', 'success'), job('test-macos', 'success')]).state, 'ok')
+assert.equal(judgeRun(GREEN_RUN, [job('test', 'success'), job('test-windows', 'success'), job('test-windows-pack', 'success'), job('test-macos', 'success'), job('test-macos-pack', 'success')]).state, 'ok')
 assert.equal(judgeRun(GREEN_RUN, [job('test', 'success'), job('test-windows', 'skipped')]).state, 'failed',
   'a skipped windows leg does not prove the win32 contracts')
 assert.equal(judgeRun(GREEN_RUN, [job('test', 'success')]).state, 'failed',
@@ -992,7 +992,9 @@ assert.equal(
   judgeRun(GREEN_RUN, [
     job('test', 'success'),
     job('test-windows', 'success'),
+    job('test-windows-pack', 'success'),
     jobWithoutStep('test-macos', 'Swift tests (release configuration, XCTSkip == 0)'),
+    job('test-macos-pack', 'success'),
   ]).state,
   'failed',
   'deleting the macOS Swift/XCTest step must fail the proof')
@@ -1000,14 +1002,18 @@ assert.match(
   judgeRun(GREEN_RUN, [
     job('test', 'success'),
     job('test-windows', 'success'),
+    job('test-windows-pack', 'success'),
     jobWithoutStep('test-macos', 'Swift tests (release configuration, XCTSkip == 0)'),
+    job('test-macos-pack', 'success'),
   ]).reason,
   /no "Swift tests \(release configuration, XCTSkip == 0\)" step/)
 assert.equal(
   judgeRun(GREEN_RUN, [
     jobWithoutStep('test', 'Package unit tests — single entry (runtime / control-plane / desktop / gateway / renderer-shell / client+host plugins)'),
     job('test-windows', 'success'),
+    job('test-windows-pack', 'success'),
     job('test-macos', 'success'),
+    job('test-macos-pack', 'success'),
   ]).state,
   'failed',
   'deleting a linux-chain step must fail the proof')
@@ -1015,7 +1021,9 @@ assert.equal(
   judgeRun(GREEN_RUN, [
     job('test', 'success', 'skipped'),
     job('test-windows', 'success'),
+    job('test-windows-pack', 'success'),
     job('test-macos', 'success'),
+    job('test-macos-pack', 'success'),
   ]).state,
   'failed',
   'a step the classifier skipped does not prove that gate ran on the release commit')
@@ -1025,7 +1033,9 @@ assert.equal(
   judgeRun(GREEN_RUN, [
     job('test', 'success'),
     job('test-windows', 'success'),
-    jobWithoutStep('test-macos', 'macOS packaging rehearsal (ad-hoc, no publish, no credentials)'),
+    job('test-windows-pack', 'success'),
+    job('test-macos', 'success'),
+    jobWithoutStep('test-macos-pack', 'macOS packaging rehearsal (ad-hoc, no publish, no credentials)'),
   ]).state,
   'failed',
   'deleting the mac packaging rehearsal step must fail the release proof')
@@ -1037,11 +1047,11 @@ assert.equal(
 // nothing uploaded — and require it by name in the proof.
 const WIN_REHEARSAL_STEP = 'Windows packaging rehearsal (no publish, no credentials)'
 assert.ok(
-  REQUIRED_JOB_STEPS['test-windows'].includes(WIN_REHEARSAL_STEP),
+  REQUIRED_JOB_STEPS['test-windows-pack'].includes(WIN_REHEARSAL_STEP),
   'G25/P2: the proof must require the Windows packaging rehearsal step')
-const winRehearsal = jobBlock(ciWorkflow, 'test-windows').slice(
-  jobBlock(ciWorkflow, 'test-windows').indexOf(`- name: ${WIN_REHEARSAL_STEP}`))
-assert.notEqual(winRehearsal, '', 'ci.yml test-windows must define the Windows packaging rehearsal step')
+const winRehearsal = jobBlock(ciWorkflow, 'test-windows-pack').slice(
+  jobBlock(ciWorkflow, 'test-windows-pack').indexOf(`- name: ${WIN_REHEARSAL_STEP}`))
+assert.notEqual(winRehearsal, '', 'ci.yml test-windows-pack must define the Windows packaging rehearsal step')
 assert.match(winRehearsal,
   /if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main' && steps\.classify\.outputs\.code == 'true'/,
   'the win rehearsal is push-only and classifier-gated: never minutes of NSIS work per pull request')
@@ -1053,8 +1063,10 @@ assert.doesNotMatch(winRehearsal, /--publish=always|gh release upload/,
 assert.equal(
   judgeRun(GREEN_RUN, [
     job('test', 'success'),
-    jobWithoutStep('test-windows', WIN_REHEARSAL_STEP),
+    job('test-windows', 'success'),
+    jobWithoutStep('test-windows-pack', WIN_REHEARSAL_STEP),
     job('test-macos', 'success'),
+    job('test-macos-pack', 'success'),
   ]).state,
   'failed',
   'deleting the windows packaging rehearsal step must fail the release proof')
@@ -1062,7 +1074,9 @@ assert.equal(
   judgeRun(GREEN_RUN, [
     { name: 'test', conclusion: 'success' },
     job('test-windows', 'success'),
+    job('test-windows-pack', 'success'),
     job('test-macos', 'success'),
+    job('test-macos-pack', 'success'),
   ]).state,
   'failed',
   'a job entry with no step data cannot prove its steps ran (fail closed)')
@@ -1077,8 +1091,8 @@ assert.deepEqual(
   'only a push run on the base branch proves a release')
 assert.equal(
   judgeCandidates([GREEN_RUN, { ...GREEN_RUN, id: 5, created_at: '2026-09-13T06:00:00Z' }], new Map([
-    [5, [job('test', 'success'), job('test-windows', 'failure'), job('test-macos', 'success')]],
-    [1, [job('test', 'success'), job('test-windows', 'success'), job('test-macos', 'success')]],
+    [5, [job('test', 'success'), job('test-windows', 'failure'), job('test-windows-pack', 'success'), job('test-macos', 'success'), job('test-macos-pack', 'success')]],
+    [1, [job('test', 'success'), job('test-windows', 'success'), job('test-windows-pack', 'success'), job('test-macos', 'success'), job('test-macos-pack', 'success')]],
   ])).state,
   'ok',
   'a flaky failure that was re-run green still proves the commit')
@@ -1089,8 +1103,8 @@ assert.equal(judgeCandidates([], new Map()).state, 'pending', 'no run yet is "no
 // a leg a deliberate edit, and the native artifacts ship from the same tag.
 assert.deepEqual(
   REQUIRED_JOBS,
-  ['test', 'test-windows', 'test-macos'],
-  'the proof must require the push chain plus both platform contract legs, including the macOS leg that validates the native artifacts')
+  ['test', 'test-windows', 'test-windows-pack', 'test-macos', 'test-macos-pack'],
+  'the proof must require the push chain plus both platform contract legs, each split into a contract job and a parallel push-only packaging job, including the macOS leg that validates the native artifacts')
 // G25: job names alone are not a proof. Every required job pins its load-bearing steps, and
 // those names must exist verbatim in the ci.yml job the proof watches (rename => two-file edit).
 assert.deepEqual(
@@ -1101,7 +1115,7 @@ assert.ok(
   REQUIRED_JOB_STEPS['test-macos'].includes('Swift tests (release configuration, XCTSkip == 0)'),
   'the proof must require the step that runs `swift test`')
 assert.ok(
-  REQUIRED_JOB_STEPS['test-macos'].includes('Compiled sidecar smoke (shipped sidecar.js executes)'),
+  REQUIRED_JOB_STEPS['test-macos-pack'].includes('Compiled sidecar smoke (shipped sidecar.js executes)'),
   'the proof must require the step that executes the shipped sidecar')
 // The Electron mac pack must not be first really executed inside release.yml (after
 // the draft exists, with Apple credentials loaded). ci.yml rehearses the exact chain on an
@@ -1111,11 +1125,11 @@ assert.ok(
 // anywhere in the step.
 const MAC_REHEARSAL_STEP = 'macOS packaging rehearsal (ad-hoc, no publish, no credentials)'
 assert.ok(
-  REQUIRED_JOB_STEPS['test-macos'].includes(MAC_REHEARSAL_STEP),
+  REQUIRED_JOB_STEPS['test-macos-pack'].includes(MAC_REHEARSAL_STEP),
   'G25/A2: the proof must require the mac packaging rehearsal step')
-const macRehearsal = jobBlock(ciWorkflow, 'test-macos').slice(
-  jobBlock(ciWorkflow, 'test-macos').indexOf(`- name: ${MAC_REHEARSAL_STEP}`))
-assert.notEqual(macRehearsal, '', 'ci.yml test-macos must define the mac packaging rehearsal step')
+const macRehearsal = jobBlock(ciWorkflow, 'test-macos-pack').slice(
+  jobBlock(ciWorkflow, 'test-macos-pack').indexOf(`- name: ${MAC_REHEARSAL_STEP}`))
+assert.notEqual(macRehearsal, '', 'ci.yml test-macos-pack must define the mac packaging rehearsal step')
 assert.match(macRehearsal,
   /if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main' && steps\.classify\.outputs\.code == 'true'/,
   'the rehearsal is push-only and classifier-gated: never minutes of packaging per pull request')
@@ -1136,12 +1150,12 @@ for (const step of [
   'Native assembly acceptance (spawned sidecar boots + serves)',
 ]) {
   assert.ok(
-    REQUIRED_JOB_STEPS['test-macos'].includes(step),
+    REQUIRED_JOB_STEPS['test-macos-pack'].includes(step),
     `G32/G33: the proof must require the executed-assembly step "${step}"`,
   )
   assert.ok(
-    jobBlock(ciWorkflow, 'test-macos').includes(`- name: ${step}`),
-    `ci.yml test-macos must keep the proof-required step: ${step}`)
+    jobBlock(ciWorkflow, 'test-macos-pack').includes(`- name: ${step}`),
+    `ci.yml test-macos-pack must keep the proof-required step: ${step}`)
 }
 assert.ok(
   REQUIRED_JOB_STEPS['test'].includes('Package unit tests — single entry (runtime / control-plane / desktop / gateway / renderer-shell / client+host plugins)'),

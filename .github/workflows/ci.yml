@@ -359,17 +359,6 @@ jobs:
       # owning package. The renderer/sidebar manifests are the boot-gap
       # mechanism's platform-neutral decision face (host-graph merge → required
       # row probe → degraded presentation / sidebar copy).
-      # electron-builder 工具链与 Electron 发行包缓存（2026-09 CI 计时：Windows 排练步
-      # 285-342s，大头是 nsis / nsis-resources 等工具链的每次冷下载）。键含
-      # packages/desktop/package.json 哈希：electron-builder/Electron 一升级即失效重下。
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/AppData/Local/electron-builder/Cache
-            ~/AppData/Local/electron/Cache
-          key: electron-toolchain-windows-${{ hashFiles('packages/desktop/package.json') }}
-          restore-keys: |
-            electron-toolchain-windows-
       - name: dsh-runtime test:win32 manifest
         if: steps.classify.outputs.code == 'true'
         run: pnpm --filter @dsh-chamber/dsh-runtime run test:win32
@@ -385,6 +374,65 @@ jobs:
       - name: sidebar test:win32 manifest (source boot-gap copy)
         if: steps.classify.outputs.code == 'true'
         run: pnpm --filter @dsh-chamber/dsh-chamber-client-ui-sidebar run test:win32
+
+  # Windows packaging half of the leg, split out of `test-windows` so the minutes
+  # of NSIS toolchain work run on their own runner in parallel with the win32
+  # contract manifests instead of extending that job wall clock. Push-only, never
+  # on pull requests; the release proof pins the rehearsal step as
+  # REQUIRED_JOB_STEPS of THIS job (verify-release-ci-proof.mjs), so deleting or
+  # renaming it still fails the proof.
+  test-windows-pack:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: windows-2022
+    steps:
+      - name: Normalize git autocrlf and symlink handling
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.symlinks true
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # The pinned harness source tree is a git submodule
+          # (vendor/harness-checkout, gitlink == harness.commit). The gitlink
+          # pins an exact commit, so the submodule is materialized at that
+          # commit regardless of clone depth. STATUS.md tracks the remaining
+          # acceptance: submodule materialization + junction link creation on
+          # a real Windows runner (this job IS that acceptance).
+          submodules: true
+          # The change classifier diffs the pushed range, so both endpoints must exist locally.
+          fetch-depth: 0
+      # Same classifier as the contract leg: a prose-only push skips the NSIS
+      # work here as well.
+      - name: Classify the change (prose-only pushes skip the win32 contracts)
+        id: classify
+        env:
+          CI_BEFORE: ${{ github.event.before }}
+          CI_AFTER: ${{ github.sha }}
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/gates/classify-ci-changes.mjs
+      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Bootstrap vendor tree (verify pin + ensure links)
+        if: steps.classify.outputs.code == 'true'
+        run: node scripts/dev/ensure-harness-vendor.mjs
+      - run: pnpm install --frozen-lockfile
+        if: steps.classify.outputs.code == 'true'
+      # electron-builder 工具链与 Electron 发行包缓存（2026-09 CI 计时：Windows 排练步
+      # 285-342s，大头是 nsis / nsis-resources 等工具链的每次冷下载）。键含
+      # packages/desktop/package.json 哈希：electron-builder/Electron 一升级即失效重下。
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/AppData/Local/electron-builder/Cache
+            ~/AppData/Local/electron/Cache
+          key: electron-toolchain-windows-${{ hashFiles('packages/desktop/package.json') }}
+          restore-keys: |
+            electron-toolchain-windows-
       # Credential-free packaging rehearsal. This leg builds the
       # desktop payload and runs electron-builder with `--publish=never`, so a
       # broken `files`/`extraResources`/beforePack/afterPack path fails on an
@@ -403,19 +451,17 @@ jobs:
           # GH_TOKEN). This mirrors the release workflow's own invocation.
           pnpm --filter @dsh-chamber/desktop exec electron-builder --win --x64 --publish=never
 
-  # macOS Swift shell leg (design 25): the SwiftPM package, the JS↔Swift
-  # bridge manifest lockstep and the packaging inputs are macOS-only surfaces —
-  # without this job a Swift/bridge/manifest regression lands unnoticed until a
-  # release. Deliberately NOT a packaging job: the .app/sidecar assembly and
-  # the real Node download stay in release.yml (network + credentials), and the
-  # expensive desktop suite keeps running on the linux leg. The macOS-only
-  # desktop tests (the darwin lock assertions and the build-sidecar /
-  # build-swift-app packaging-script suites) live in the package's MACOS_FILES
-  # list (packages/desktop/scripts/test.mjs) and run HERE via test:macos, never
-  # on the ubuntu leg; this job also re-runs the cheap bridge gates, the Swift
-  # suite in the release configuration (XCTSkip == 0), the compiled sidecar
-  # smoke and the packaging dry runs. A prose-only push skips the whole
-  # leg through the same classifier as test/test-windows.
+  # macOS Swift shell leg (design 25): the SwiftPM package and the JS↔Swift
+  # bridge manifest lockstep are macOS-only surfaces — without this job a
+  # Swift/bridge regression lands unnoticed until a release. The packaging half
+  # of the leg (the macOS-only desktop suites, the executed-assembly gates, the
+  # dry runs and the credential-free rehearsal) runs on a parallel runner in
+  # test-macos-pack; this job keeps the Swift build/test core so a Swift-only
+  # push gets its verdict without queueing behind packaging work. Deliberately
+  # NOT a release job: the .app/sidecar assembly with the real Node download and
+  # the signing/notarization chain stay in release.yml (network + credentials). A
+  # prose-only push skips the whole leg through the same classifier as
+  # test/test-windows.
   test-macos:
     runs-on: macos-latest
     steps:
@@ -468,16 +514,6 @@ jobs:
       # This raw step stays the release proof's pinned anchor
       # (REQUIRED_JOB_STEPS in release-workflow-policy.test.mjs); the gated
       # release run below is the one that enforces the shipped configuration.
-      # electron-builder 工具链与 Electron 发行包缓存（同 Windows 排练）；macOS 排练步
-      # 133-188s 里 Electron 发行包与 dmg 工具链的下载占大头。
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/Library/Caches/electron-builder
-            ~/Library/Caches/electron
-          key: electron-toolchain-macos-${{ hashFiles('packages/desktop/package.json') }}
-          restore-keys: |
-            electron-toolchain-macos-
       # SwiftPM 构建缓存：release 构建 62-81s 与测试编译的大头；键 = Package.resolved
       # （依赖一变即失效，restore-keys 仍复用同族缓存）。
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -516,6 +552,85 @@ jobs:
           node packages/desktop/bridge-shim.test.ts
           node packages/desktop/bridge-shim-surface.test.ts
           node scripts/gates/verify-shim-payload-shape.mjs
+
+  # macOS packaging half of the leg, split out of `test-macos` so the two run on
+  # their own runners in parallel: the executed-artifact gates and the
+  # credential-free packaging rehearsal share no state with the Swift build/test
+  # core and only need the SwiftPM output for `test:macos`. This job restores the
+  # same caches and rebuilds its own `macos/.build` (cache-backed, ~45s) instead
+  # of queueing behind `swift test`. The rehearsal stays push-only. Every step
+  # below is pinned as REQUIRED_JOB_STEPS of THIS job by
+  # verify-release-ci-proof.mjs, so deleting or renaming one still fails the
+  # release proof.
+  test-macos-pack:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # The pinned harness source tree is a git submodule (gitlink ==
+          # harness.commit); the Swift package itself has zero third-party
+          # dependencies (AppKit/WebKit only).
+          submodules: true
+          # The change classifier diffs the pushed range, so both endpoints must
+          # exist locally.
+          fetch-depth: 0
+      - name: Verify workflow action pins
+        run: node scripts/gates/verify-workflow-action-pins.mjs
+      # The same change classifier as the core mac leg: a prose-only push skips
+      # the packaging chain too (ci.yml owns no tag path; the proof watches this
+      # job on main).
+      - name: Classify the change (prose-only pushes skip the macOS packaging leg)
+        id: classify
+        env:
+          CI_BEFORE: ${{ github.event.before }}
+          CI_AFTER: ${{ github.sha }}
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/gates/classify-ci-changes.mjs
+      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Bootstrap vendor tree (verify pin + ensure links)
+        if: steps.classify.outputs.code == 'true'
+        run: node scripts/dev/ensure-harness-vendor.mjs
+      - run: pnpm install --frozen-lockfile
+        if: steps.classify.outputs.code == 'true'
+      - name: Assert lockfile not rewritten
+        if: steps.classify.outputs.code == 'true'
+        run: git diff --exit-code -- pnpm-lock.yaml
+      # `test:macos` consumes the untracked build-time artifacts and the SwiftPM
+      # `.build` output, so this job bootstraps and builds its own copies — it
+      # never depends on the test-macos job having run first.
+      - name: Bootstrap untracked build-time artifacts (sidecar sources)
+        if: steps.classify.outputs.code == 'true'
+        run: pnpm run ensure:artifacts
+      # electron-builder 工具链与 Electron 发行包缓存（同 Windows 排练）；macOS 排练步
+      # 133-188s 里 Electron 发行包与 dmg 工具链的下载占大头。
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/Library/Caches/electron-builder
+            ~/Library/Caches/electron
+          key: electron-toolchain-macos-${{ hashFiles('packages/desktop/package.json') }}
+          restore-keys: |
+            electron-toolchain-macos-
+      # SwiftPM 构建缓存：release 构建 62-81s 与测试编译的大头；键 = Package.resolved
+      # （依赖一变即失效，restore-keys 仍复用同族缓存）。
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: macos/.build
+          key: swift-build-${{ hashFiles('macos/Package.resolved') }}
+          restore-keys: |
+            swift-build-
+      - name: Swift build (release, packaging leg)
+        if: steps.classify.outputs.code == 'true'
+        working-directory: macos
+        run: |
+          export DSH_CHAMBER_SHELL_NODE_BIN="$(command -v node)"
+          swift build -c release
       # Packaging inputs, no network / no real Node download: the sidecar
       # assembly needs build:control-plane first, then both packaging scripts
       # validate their plans and layouts (the real Node fetch is release.yml).
