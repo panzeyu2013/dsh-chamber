@@ -9,7 +9,7 @@
 - [ ] 取目标tag/commit：`git ls-remote --tags https://github.com/deepseek-ai/deepseek-harness.git`，或submodule内 `git -C vendor/harness-checkout fetch origin --tags && git -C vendor/harness-checkout tag -l | sort -V`；记录当前 `harness.commit`（旧pin）与目标commit。
 - [ ] 工作区与stash干净（无未提交的迁移相关工作）。
 - [ ] 预检（防「动pin才发现规模」）：`node scripts/upstream/preflight-vendor-pin.mjs <tag> --offline` ——fork pure/replay/dropped + 深引vendor seam + 上游包集合增删 + 新增client行 + 运行时npm状态；`--fail-on-replay` 可当硬门。
-- [ ] 门禁基线照面（三条都必须绿，升级后 §6要复绿）：`node scripts/upstream/verify-registry.mjs`、`node scripts/upstream/check-anchors.mjs --report`、`node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild`。C11–C14（插件受保护集合）升级后仍须绿——变红按 §7改派生，**不得**改判据放行。
+- [ ] 门禁基线照面（四条都必须绿，升级后 §6要复绿）：`node scripts/upstream/verify-registry.mjs`、`node scripts/upstream/check-anchors.mjs --report`、`node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild`、`node scripts/upstream/verify-capabilities.mjs`。C11–C14（插件受保护集合）升级后仍须绿——变红按 §7改派生，**不得**改判据放行。能力面变红是**裁决输入**：`chamber-behind` / `chamber-ahead-broken` 表示消费与 pin 脱节（对齐或降级并登记），`upstream-landed` 表示某条本地替代的退役触发已到（按该条 `retireWhen` 排退役，而不是继续养本地实现）。
 
 ## 1. 上游差异审计（只读）
 
@@ -18,6 +18,7 @@
 - [ ] 规模与主题：`git log --oneline <旧>..<新> | wc -l`、`git diff --stat <旧> <新>`。
 - [ ] 包集合增删：`git ls-tree -r --name-only <新> -- packages | grep package.json` 对比——新增包进vendor树，删除包在锁文件留下待清importer记录。
 - [ ] chamber import面审计：上游有实质改动的包 × chamber的import/事件消费（改名/重构是否被消费）。
+- [ ] 能力面对齐：`node scripts/upstream/verify-capabilities.mjs` 逐条照面——`present` 面缺席而 chamber 已消费 = 必炸（先改消费面再动 pin）；`absent` 面出现 = 本地替代的退役触发已到（把 `retireWhen` 变成当期工作项）。
 - [ ] fork副本diff：`packages/client/connection`、`packages/client/web`、`packages/api/gateway` → 判断「冲突需合并」vs「干净采纳」（→ §3）；chamber-named 的 `packages/dsh-chamber-client-ui-layout`（registry §2.6，上游 `packages/client/ui-layout`）同样逐 diff 裁决，其深引 frame 面由预检以 vendor-seam 报告。
 - [ ] 首屏耦合审计：上游新增/改名的官方client行若被复合首屏inject → 同步host-graph降级注释；探针集合是派生的（不用加名字），但命名空间不再导出 `inject` 的漂移由 `packages/renderer/test/lifecycle/required-extra-rows.test.ts` 的逐id表兜底。
 
@@ -59,7 +60,7 @@
 
 - [ ] 全量：`pnpm run check:full`（= `run-checks.mjs full`：static + typecheck + 全部包测试 + macOS/Swift腿 + 打包前冒烟）。
 - [ ] full之外的升级项：`build:renderer`、`verify:i18n`、`smoke`（未捆绑运行时的检出打印SKIP属正常；只有lockfile的 `packages/desktop/vendor/dsh` 不算已安装）。
-- [ ] 门禁复绿（§0的三条）：`verify-upstream-touchpoints.mjs`（C1/C3–C15；`--no-artifact-rebuild` 可跳产物重建）、`verify-registry.mjs`（改了 `registry.json` 必须 `registry-views.mjs --write`，生成块禁手改）、`check-anchors.mjs`（预算只降不升；迁移后 `--update-budget` 调低）。C11–C14变红时先判上游漂移还是派生写错，再改派生（B₀ 快照 / F来源 / S注册表 / wire镜像）。
+- [ ] 门禁复绿（§0的四条）：`verify-upstream-touchpoints.mjs`（C1/C3–C15；`--no-artifact-rebuild` 可跳产物重建）、`verify-registry.mjs`（改了 `registry.json` 必须 `registry-views.mjs --write`，生成块禁手改）、`check-anchors.mjs`（预算只降不升；迁移后 `--update-budget` 调低）、`verify-capabilities.mjs`（能力面对齐；`chamber-behind`/`chamber-ahead-broken` 先修消费面，`upstream-landed` 按条目的 `retireWhen` 排退役）。C11–C14变红时先判上游漂移还是派生写错，再改派生（B₀ 快照 / F来源 / S注册表 / wire镜像）。
 - [ ] 残留扫描：`grep -rn "<上一版 pin 的版本字面量>|<上一版 commit 短哈希>" packages/ scripts/ harness.commit` 仅剩注释里的历史叙述；生产源码/脚本/配置里的「活」版本字面量必须登记在C10白名单。
 
 ## 7. 文档与记录

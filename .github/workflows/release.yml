@@ -349,6 +349,11 @@ jobs:
         run: pnpm run verify:registry
       - name: Upstream anchor probe (symbol anchors + legacy budget)
         run: pnpm run verify:anchors
+      # 能力面对齐门（I-6）：与 ci.yml 的 push 路径同一条命令（策略测试从 ci.yml 派生，
+      # 缺一条即红）。chamber 已消费而 vendor 缺席 = chamber-ahead-broken；本地替代的
+      # 退役触发（upstream-landed）必须在发版前暴露。
+      - name: Upstream capability alignment (chamber-behind / upstream-landed)
+        run: node scripts/upstream/verify-capabilities.mjs
       # Stream-state refactor gates — same two commands as ci.yml's push path
       # (the policy test derives the release chain from ci.yml, so a missing
       # command here is a red). The differential replay must keep showing zero
