@@ -275,6 +275,7 @@
         }
       },
       "authority": "chamber",
+      "retireWhen": "上游 client 半自带 per-entry base path 与 chamber 现有三件流可靠性（carrier retry / opening deadline + silent-socket upgrade / journal stall watchdog）后，本 fork 与 G43 一起退役：pin 升级改为整体替换，不再重放。",
       "criteria": [
         "C1",
         "C2",

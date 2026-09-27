@@ -166,6 +166,10 @@ const STATIC_CHECKS = [
   // 否则本地 static/full 可以在 C1/C3 失败（例如把 pure 文件挪进 patched）时全绿，
   // 与 AGENTS "本地 pass = CI 同证据" 的口径矛盾。CI 两处直接调用同一命令。
   'node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild',
+  // 能力面对齐门（I-6）：capabilities.json × vendor 源树，逐条判 aligned/chamber-behind/
+  // chamber-ahead-broken/upstream-landed/probe-unresolvable（前两类 + upstream-landed
+  // 即红：退役触发到了就必须处理）。只读、离线、自带 --self-test 负控，故属 static。
+  'node scripts/upstream/verify-capabilities.mjs',
   // 远端完成未读/切源的故障注入矩阵：快、离线、自带 --self-test 负控。
   'node scripts/gates/remote-state-injection-matrix.mjs',
   // 差分回放：把旧路轨迹与新 reducer 的 effects 对着 vectors.json 比一遍。

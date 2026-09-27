@@ -4,7 +4,8 @@
  * 出口的运行时契约：事实在 wire
  * **成功之后**才发布，携带宿主返回的 session id（权威）与 workspaceId /
  * blank 事实；fork 携带 parentSessionId 与 blank:false（子会话继承内容），标题提示缺省时字段
- * 不出现（稀疏）；归档发布撤下事实；wire 失败（业务失败或抛错）**不发布任何事实**，也不吞掉失败。
+ * 不出现（稀疏）；归档发布撤下事实；恢复（官方 `workspace/unarchiveSession`）发布恢复事实以清本地
+ * 归档墓碑；wire 失败（业务失败或抛错）**不发布任何事实**，也不吞掉失败。
  *
  * 打桩方式：getInstanceClient 按 instanceId 缓存同一个
  * InstanceApiClient，直接替换该缓存对象的 session/workspace 面。
@@ -17,17 +18,31 @@ import {
   archiveSessionForSource,
   createSessionForSource,
   forkSessionForSource,
+  unarchiveSessionForSource,
 } from '@dsh-chamber/dsh-chamber-client-core/session-mutations'
+import { onSessionRestored } from '@dsh-chamber/dsh-chamber-client-core/session-restore'
 import { createWorkspaceForSource } from '@dsh-chamber/dsh-chamber-client-core/workspace-mutations'
 
-interface SessionFacts { created: Record<string, unknown>[]; removed: Record<string, unknown>[]; off(): void }
+interface SessionFacts {
+  created: Record<string, unknown>[]
+  removed: Record<string, unknown>[]
+  restored: Record<string, unknown>[]
+  off(): void
+}
 
 function collectFacts(sourceId: string): SessionFacts {
   const created: Record<string, unknown>[] = []
   const removed: Record<string, unknown>[] = []
+  const restored: Record<string, unknown>[] = []
   const offCreated = chamberBridge.onSessionCreated((fact) => { if (fact.sourceId === sourceId) created.push({ ...fact }) })
   const offRemoved = chamberBridge.onSessionRemoved((fact) => { if (fact.sourceId === sourceId) removed.push({ ...fact }) })
-  return { created, removed, off: () => { offCreated(); offRemoved() } }
+  const offRestored = onSessionRestored((fact) => { if (fact.sourceId === sourceId) restored.push({ ...fact }) })
+  return {
+    created,
+    removed,
+    restored,
+    off: () => { offCreated(); offRemoved(); offRestored() },
+  }
 }
 
 function stubCreate(sourceId: string, value: unknown): { calls: unknown[] } {
@@ -129,6 +144,33 @@ test('a REFUSED archive publishes no withdraw fact in either phase (the fact nev
     await assert.rejects(archiveSessionForSource(sourceId, 's-1'), /active/)
     await assert.rejects(archiveSessionForSource(sourceId, 's-1', { stopActivity: true }), /active/)
     assert.deepEqual(facts.removed, [], 'a refused archive leaves the row in place (no local withdraw)')
+  } finally { facts.off(); releaseInstanceClient(sourceId) }
+})
+
+test('unarchiveSessionForSource: the official wire takes the id and the restore fact follows it', async () => {
+  const sourceId = 'session-funnel-unarchive'
+  const client = getInstanceClient(sourceId)
+  const calls: unknown[] = []
+  client.workspace.unarchiveSession = async (payload: unknown): Promise<UnaryResult<unknown>> =>
+    (calls.push(payload), { ok: true, value: { unarchived: true } })
+  const facts = collectFacts(sourceId)
+  try {
+    await unarchiveSessionForSource(sourceId, 's-1')
+    assert.deepEqual(calls, [{ sessionId: 's-1' }], 'one official argument — no local archive semantics')
+    assert.deepEqual(facts.restored, [{ sourceId, sessionId: 's-1' }])
+    assert.deepEqual(facts.removed, [], 'a restore is not an archive')
+  } finally { facts.off(); releaseInstanceClient(sourceId) }
+})
+
+test('a rejected restore publishes no restore fact (the tombstone must not clear early)', async () => {
+  const sourceId = 'session-funnel-unarchive-failure'
+  const client = getInstanceClient(sourceId)
+  client.workspace.unarchiveSession = async (): Promise<UnaryResult<unknown>> =>
+    ({ ok: false, error: { code: 'workspace/unknown-session', message: 'gone', details: {} } })
+  const facts = collectFacts(sourceId)
+  try {
+    await assert.rejects(unarchiveSessionForSource(sourceId, 's-1'), /gone/)
+    assert.deepEqual(facts.restored, [], 'the frozen view keeps hiding the row it could not restore')
   } finally { facts.off(); releaseInstanceClient(sourceId) }
 })
 

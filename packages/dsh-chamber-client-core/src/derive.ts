@@ -994,8 +994,8 @@ export function runtimeReportSignature(
       // is the only clock a facts-only source can advance: leaving it out of the
       // signature let the App's report dedupe freeze the anchor at its first-seen
       // value, so every freshness readout lied. Sparse on purpose: 0 and absent
-      // both mean "no observer fact", so the encoding invents no churn for them.
-      `${id}:${includeRunning && facts.running === true ? 'r' : ''}${facts.completed === true ? 'c' : ''}${facts.pending ?? ''}:${facts.runningSubagents ?? 0}:${facts.subagentActivity ?? ''}:${(facts.factAt ?? 0) > 0 ? facts.factAt : ''}${goalFactSignature(facts.goal)}`)
+      // both mean "no observer fact", so the encoding invents no churn for them. `corrected`（I-3 修正 provenance）像 `running` 一样只签身份路径：它必须重发（否则 App 的去重会吞掉修正标记），而投影从不渲染它、不得为它单独重发布。
+      `${id}:${includeRunning && facts.running === true ? 'r' : ''}${includeRunning && facts.corrected === true ? 'x' : ''}${facts.completed === true ? 'c' : ''}${facts.pending ?? ''}:${facts.runningSubagents ?? 0}:${facts.subagentActivity ?? ''}:${(facts.factAt ?? 0) > 0 ? facts.factAt : ''}${goalFactSignature(facts.goal)}`)
   // L1 对账回执也是事实内容的一部分，必须进签名——App 的运行时事实提交按本签名
   // 去重：回执若不入签名，一次「事实没变、只有回执结算」的上报会被整个丢弃，守卫
   // 随后误判「对账通道无回执」并升级 reconnect/L3。只签在 `includeRunning` 路径；

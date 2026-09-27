@@ -34,7 +34,7 @@ export const ENTRY_STATUSES = Object.freeze(['aligned', 'open', 'accepted', 'not
 export const CLASSIFIED_TYPES = Object.freeze(['fork', 'seed'])
 
 const TOP_KEYS = ['schema', 'pins', 'authorityEnum', 'chamberNamedForks', 'excludedUpstreamDirs', 'criteriaCodeOnly', 'vendorSourceConsumers', 'patches', 'generatedBlocks', 'entries', 'notes']
-const ENTRY_KEYS = ['id', 'type', 'name', 'ours', 'upstream', 'upstreamFormer', 'versionAnchor', 'classify', 'authority', 'criteria', 'deviations', 'relatedGates', 'symbols', 'evidence', 'status', 'rationale']
+const ENTRY_KEYS = ['id', 'type', 'name', 'ours', 'upstream', 'upstreamFormer', 'versionAnchor', 'classify', 'authority', 'retireWhen', 'criteria', 'deviations', 'relatedGates', 'symbols', 'evidence', 'status', 'rationale']
 const CLASSIFY_KEYS = ['patched', 'own', 'ownPrefix', 'ownNotes', 'dropped', 'droppedNotes']
 /** `vendorSourceConsumers[]` 的字段集（C16：登记一条 vendor 源直穿的最小机械事实）。 */
 const VENDOR_CONSUMER_KEYS = ['consumer', 'vendorFile', 'symbols', 'reason', 'retiresWhen']
@@ -313,6 +313,13 @@ export function validateRegistry(registry) {
     }
     if (entry.versionAnchor !== undefined && !['upstream', 'chamber'].includes(entry.versionAnchor)) push(`${at}.versionAnchor 非法: ${entry.versionAnchor}`)
     if (entry.authority !== undefined && !(registry.authorityEnum ?? []).includes(entry.authority)) push(`${at}.authority 不在 authorityEnum: ${entry.authority}`)
+    // I-6：authority=chamber 的条目 = 我方维护的本地实现，必须给退役触发（retireWhen）；
+    // 该字段只对 chamber 条目开放——上游权威条目没有「何时退役」的语义。
+    if (entry.authority === 'chamber') {
+      if (typeof entry.retireWhen !== 'string' || entry.retireWhen === '') push(`${at}.retireWhen 对 authority=chamber 的条目必填（本地实现的退役触发）`)
+    } else if (entry.retireWhen !== undefined) {
+      push(`${at}.retireWhen 只允许 authority=chamber 的条目（上游权威条目没有退役语义）`)
+    }
     if (!Array.isArray(entry.criteria)) push(`${at}.criteria 必须是数组`)
     else for (const id of entry.criteria) if (!CRITERIA_IDS.includes(id)) push(`${at}.criteria 未知判据 id: ${id}`)
     if (!Array.isArray(entry.deviations)) push(`${at}.deviations 必须是数组`)

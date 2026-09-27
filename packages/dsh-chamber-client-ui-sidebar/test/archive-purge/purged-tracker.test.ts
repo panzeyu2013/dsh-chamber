@@ -492,3 +492,46 @@ test('round-3 restore: default watchdog, rejected-refresh retry and single-fligh
   await flush()
   assert.equal(joinClock.pending, 1, 'a second converge joins the in-flight chain instead of restarting the bound')
 })
+
+test('tracker: release lifts a purge tombstone for a restored id (I-1)', () => {
+  // The official unarchive shrinks the archive set exactly like a purge does, but the
+  // content and the listed row stay — the shrink is NOT a purge. The restore fact is the
+  // only provenance that can tell them apart, so release must drop the tombstone and ask
+  // the producer to re-publish (the filtered row/snapshot otherwise stays hidden).
+  let releases = 0
+  const t = tracker({ onRelease: () => { releases += 1 } })
+  t.handle.observeArchive(['g', 'live'])
+  assert.deepEqual(t.handle.observeArchive(['live']), ['g'])
+  assert.deepEqual([...t.handle.suppressed()], ['g'])
+  t.handle.release(['g'])
+  assert.equal(t.handle.suppressed().size, 0)
+  assert.equal(releases, 1)
+})
+
+test('tracker: a shrink landing before the restore fact does not swallow the NEXT genuine purge', () => {
+  // The dialog's unary resolve can reach this producer AFTER the ctx push already carried the
+  // shrunk archive set (host writes the global, then answers). The late fact must clear that
+  // tombstone without leaving a footprint that silently exempts the id's next real purge.
+  const t = tracker()
+  t.handle.observeArchive(['g', 'live'])
+  assert.deepEqual(t.handle.observeArchive(['live']), ['g'], 'the un-explained shrink still arms')
+  t.handle.release(['g'])
+  assert.equal(t.handle.suppressed().size, 0)
+  t.handle.observeArchive(['g', 'live'])
+  assert.deepEqual(t.handle.observeArchive(['live']), ['g'], 'a later genuine purge must arm again')
+  assert.deepEqual([...t.handle.suppressed()], ['g'])
+})
+
+test('tracker: a restore fact landing before the shrink suppresses that shrink (I-1 ordering)', () => {
+  // The dialog's unary restore resolves before the ctx push carrying the shrunk archive set
+  // reaches this producer. The remembered id must survive the intervening observation, and
+  // a LATER genuine purge of the same id must still arm (the record is consumed, not sticky).
+  const t = tracker()
+  t.handle.observeArchive(['g', 'live'])
+  t.handle.release(['g'])
+  assert.deepEqual(t.handle.observeArchive(['live']), [], 'the restore shrink must not tombstone the id')
+  assert.equal(t.handle.suppressed().size, 0)
+  t.handle.observeArchive(['g', 'live'])
+  assert.deepEqual(t.handle.observeArchive(['live']), ['g'])
+  assert.deepEqual([...t.handle.suppressed()], ['g'])
+})

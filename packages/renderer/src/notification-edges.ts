@@ -17,6 +17,12 @@ export interface SessionFacts {
   runningSubagents?: number
   /** Host activity time of this row. */
   updatedAt?: number
+  /**
+   * I3 correction provenance（见 client-core InstanceRuntimeReport）：true = 本行的
+   * running 刚被侧栏 tier-3 权威写回压假，不是宿主完成。通知候选门在无 host 域
+   * observed 完成证据时不把它当完成；旧壳不写 ⇒ fail-open。
+   */
+  corrected?: boolean
 }
 export type NotificationKind = 'complete' | 'ask' | 'request'
 export interface NotificationEdge { sessionId: string; kind: NotificationKind }

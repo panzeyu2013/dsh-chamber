@@ -54,7 +54,9 @@ chamber侧缓解（不动上游事实面）：design 05 §2.2.1的open意图本�
 （registry-global集合，幂等追加）已在 0.1.7 由单条 `workspace.unarchiveSession` 补齐反向；官方与chamber
 默认投影同规则排除归档行（`!archived.has(id)`）；数据未丢（`sessions.list/search` 返回归档会话，集合持久化于 `<DSH_HOME>/profiles/web/**/workspace.json` 的 `global.archivedSessionIds`）。OpenCode/OpenChamber有可逆归档 + 删除 + 归档可见查询；dsh仍缺删除与可见查询两项，chamber无法只靠前端补全。
 
-1. ~~`workspace.unarchiveSession({ sessionId })`~~——**0.1.7 已落地**（单条、幂等移除；官方 UI 的撤销 toast 与「全部对话（显示已归档）」筛选走它）。**chamber 侧尚未接入口**：design 24 的「已归档浏览区/恢复」仍待排期（STATUS 范围决策节），本轮只消费其归档准入（`stopActivity`）。
+> 第 1 条（单条 `workspace.unarchiveSession`）已落地并按文首规则移出本条；未排期的浏览过滤
+> （`ArchivedFilter` 镜像）登记在 STATUS 范围决策节。
+
 2. `sessions.delete({ sessionId })`（或workspace下同义）——服务端删会话目录 + 级联subagent起源子会话 + workspace成员账目自愈（header索引重建剔除已删id）+ 清archived集合；复用 `host/session-removed` 事件。
 3. （可选）`sessions.list` 行加 `archived` 标志或查询参数。保持registry-set形态则仅补2（+可选3），即可让design 24的可选「已归档浏览区」补上恢复/删除——最小改动优先。
 

@@ -84,6 +84,7 @@ export const GROUPS = {
     'scripts/upstream/artifact-gate.test.mjs',
     'scripts/upstream/restore-lockfile-vendor-records.test.mjs',
     'scripts/upstream/verify-upstream-touchpoints-args.test.mjs',
+    'scripts/upstream/verify-capabilities.test.mjs',
     'scripts/upstream/registry.test.mjs',
     'scripts/upstream/check-anchors.test.mjs',
     'scripts/upstream/plugin-protection-gate.test.mjs',

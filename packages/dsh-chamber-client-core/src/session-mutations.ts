@@ -8,15 +8,17 @@
  * 必须点开那个服务器才出现。包装刻意保持薄：无状态、无重试、不是第二事实源；
  * 投影的唯一写者仍是 App 层，权威仍是该来源挂载壳的会话列表 / 工作区 follow 基线。
  * 归档（archive）是这条链的撤下半：创建后立刻归档的行靠它退场（与工作区回声的
- * remove 半同理），而不是留到 TTL。
+ * remove 半同理），而不是留到 TTL；恢复（unarchive，官方 wire）是它的可逆半，同时
+ * 负责清掉本地归档墓碑。
  */
 import { chamberBridge } from './aggregate-store.ts'
 import type { SessionCreationOrigin } from './session-create-ledger.ts'
 import {
-  archiveSession, createSession, forkSession, getInstanceClient,
+  archiveSession, callAndThrow, createSession, forkSession, getInstanceClient,
 } from './instance-api.ts'
+import { reportSessionRestored } from './session-restore.ts'
 
-export interface SessionCreationOptions {
+interface SessionCreationOptions {
   /** 调用方预分配的会话 id（多步 saga 重试复用；缺省 = 宿主自铸）。 */
   sessionId?: string
   /** 该次创建**意图**写入的显示标题（fork 的递增标题）：回声行生来就是最终标签，
@@ -79,4 +81,13 @@ export async function archiveSessionForSource(
 ): Promise<void> {
   await archiveSession(getInstanceClient(sourceId), sessionId, options)
   chamberBridge.reportSessionRemoved({ sourceId, sessionId })
+}
+
+/** 对 `sourceId` 执行官方 `workspace/unarchiveSession`（0.1.7，幂等），并发布恢复
+ *  事实。App 据此立即清除该会话的本地归档墓碑——权威集合收缩**不**覆盖它，墓碑的收敛规则
+ *  只退休仍被集合覆盖的 id；重列由挂载 push 的 archive-set 收缩走既有重列机器。 */
+export async function unarchiveSessionForSource(sourceId: string, sessionId: string): Promise<void> {
+  const client = getInstanceClient(sourceId)
+  await callAndThrow(() => client.workspace.unarchiveSession({ sessionId }))
+  reportSessionRestored({ sourceId, sessionId })
 }

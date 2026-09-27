@@ -17,7 +17,7 @@ import {
 import { createPurgedConvergence, type PurgedConvergenceChain } from './purged-convergence.ts'
 
 /** Injectable seams. */
-export interface PurgeTrackerDeps {
+interface PurgeTrackerDeps {
   /** Official refresh in METHOD-CALL form (see purged-convergence.ts). */
   refresh: () => Promise<unknown> | undefined
   /** Ids the official summaries currently list (`ctx.sessions.list.byId` keys). */
@@ -47,11 +47,15 @@ export interface PurgeTrackerState {
   readonly knownSessionIds: readonly string[]
 }
 
-export interface PurgeTracker {
+interface PurgeTracker {
   /** Observe the raw workspace `archivedSessionIds` field; returns the ids NEWLY
    *  tombstoned (empty for a first observation, an unchanged array identity, growth or
    *  no-change). A non-array shape is treated as unknown and arms nothing. */
   observeArchive(archivedField: unknown): readonly string[]
+  /** I-1 官方恢复（unarchive）：恢复的 id 必须立刻离开墓碑，且**不得**被它自己的归档集收缩
+   *  重新立碑——该收缩正是恢复的足迹，而内容并没有被删。id 记到那次收缩被观察到为止，
+   *  恢复事实先到（收缩后到）或后到（墓碑已立）都安全。 */
+  release(ids: readonly string[]): void
   /** Drop tombstones no longer needing suppression (id dropped by the official refresh, or re-entered the archive set). */
   reconcile(listedIds: ReadonlySet<string>): void
   /** Compare summaries with a fresh host scan and tombstone stale rows. `legacyCandidates`
@@ -83,6 +87,8 @@ export function createPurgeTracker(deps: PurgeTrackerDeps): PurgeTracker {
   const cleanIds = (values: readonly string[] | undefined): string[] =>
     (values ?? []).filter(id => typeof id === 'string' && id.length > 0 && id.length <= 512)
   const purged = new Set(cleanIds(restored?.purgedIds))
+  // I-1：刚被官方恢复的 id（还没观察到它那次收缩）。见 PurgeTracker.release。
+  const restoredIds = new Set<string>()
   let knownSessionIds = new Set(cleanIds(restored?.knownSessionIds))
   let archivedSeen: string[] | undefined
   let rawSeen: readonly unknown[] | undefined
@@ -121,10 +127,27 @@ export function createPurgeTracker(deps: PurgeTrackerDeps): PurgeTracker {
       const step = trackArchiveSetShrink(archivedSeen, archivedField.map(String))
       archivedSeen = step.archived
       if (step.removed.length === 0) return NO_IDS
-      for (const id of step.removed) purged.add(id)
+      // 恢复造成的收缩不是 purge：消费掉 restored 记录，且不为这些 id 立碑。
+      const armed = step.removed.filter(id => !restoredIds.has(id))
+      for (const id of step.removed) restoredIds.delete(id)
+      if (armed.length === 0) return NO_IDS
+      for (const id of armed) purged.add(id)
       persist()
       chain.converge()
-      return step.removed
+      return armed
+    },
+    release(ids: readonly string[]): void {
+      // 足迹只在「这次恢复的收缩还没被观察到」时记（见 restoredIds 声明处）：收缩已经过去的
+      // id 没有可豁免的快照，记下来只会静默吞掉它下一次真 purge 的收缩（逆序帧：host 先写
+      // global 推流、后回 unary，恢复事实落在收缩之后）。
+      const observed = new Set(archivedSeen ?? [])
+      let changed = false
+      for (const id of cleanIds(ids)) {
+        if (purged.delete(id)) changed = true
+        if (observed.has(id)) restoredIds.add(id)
+      }
+      if (changed) persist()
+      deps.onRelease?.()
     },
     reconcile(listedIds: ReadonlySet<string>): void {
       if (purged.size === 0) return

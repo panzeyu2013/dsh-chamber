@@ -67,6 +67,7 @@ export const GROUPS = {
     'test/session-state/facts-capability-note.test.ts',
     // 会话创建归因账本（含 blank 的按标签聚合与「无标签外来源」判据）。
     'test/session-state/session-create-ledger.test.ts',
+  'test/session-state/session-correction-marks.test.ts',
     // 上游会话事实语义的源码 lockstep（vendor 树未物化时默认失败，显式 opt-out 才跳过）。
     'test/session-state/vendor-session-fact-contract.test.ts',
     'test/session-state/workspace-echo.test.ts',
@@ -95,6 +96,9 @@ export const GROUPS = {
     // 修复面（design 06 §4.3「显示面与修复面分工」）——纯源码断言，无运行时依赖。
     'test/source-runtime/mounted-running-resolution-wiring.test.ts',
     'test/source-runtime/instance-api.test.ts',
+    // I-4 锁：sidebar.workspaces 保留声明但永不渲染（上游 ui-workspace 注册不抛，
+    // chamber 自有多源列表拥有浏览区）。
+    'test/source-runtime/sidebar-slot-declaration.test.ts',
     'test/source-runtime/instance-mutation-values.test.ts',
     'test/source-runtime/control-plane-client.test.ts',
     'test/source-runtime/serving-gate.test.ts',

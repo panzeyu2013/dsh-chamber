@@ -68,7 +68,7 @@ export type SessionEchoLedger = Readonly<Record<string, readonly PendingSession[
 export const PENDING_SESSION_TTL_MS = 600_000
 
 /** The fact one successful in-app session creation publishes. */
-export interface SessionCreationRecord {
+interface SessionCreationRecord {
   /** HOST session id — the only trustworthy "this session now exists" proof. */
   sessionId: string
   /** Host workspace id the session belongs to, when the creator knows it. */
@@ -320,6 +320,21 @@ export function reconcilePendingArchives(
   if (ledger[sourceId] === undefined) return ledger
   const covered = new Set(authoritative)
   return filterLedgerRows(ledger, sourceId, row => !covered.has(row.sessionId))
+}
+
+/**
+ * Drop ONE archive tombstone: that id was RESTORED through the official
+ * `workspace/unarchiveSession` wire. The authoritative-set reconciliation is not
+ * enough here — it retires tombstones the set now COVERS (archived), and a restored
+ * id leaves the set; without this explicit drop the frozen view keeps hiding the
+ * restored row. Identity-preserving when the source/id is absent.
+ */
+export function removePendingArchive(
+  ledger: SessionArchiveLedger,
+  sourceId: string,
+  sessionId: string,
+): SessionArchiveLedger {
+  return filterLedgerRows(ledger, sourceId, row => row.sessionId !== sessionId)
 }
 
 /** Retire the tombstones of sources that left the registry (same-id re-add = new generation). */

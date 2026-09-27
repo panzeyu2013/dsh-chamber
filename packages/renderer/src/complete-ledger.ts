@@ -23,7 +23,7 @@
  * 结算点记忆随会话身份作废），notified/outcomes 保持 durable；forgetSession 对单会话
  * 执行同一纪律（B4-2：goalKnown 不得在会话 churn 下泄漏）；forget/prune 收敛全部
  * **8 张 per-source 表**（durable + 易失）。页代 token 的单源是 boot-token.ts：
- * 本账本不保留副本、不参与来源收敛（见 {@link CompleteLedgerOptions.bootToken}）。
+ * 本账本不读、不存、不参与来源收敛（兼容入参已在 beta 线退役，别再加回）。
  *
  * 加载期卫生（§3.5）：boot='fresh'（新进程/新窗口）丢弃全部 pending 并 loud；
  * boot='same'（reload）保留 pending，但超过 PENDING_MAX_AGE_MS 的条目丢弃并 loud
@@ -40,10 +40,10 @@ import type { UnreadKind } from './watermark.ts'
 import type { SessionRunId } from '@dsh-chamber/dsh-stream-state'
 
 /** v2 未读 payload 的 notified 段：source → session → kind → 已通知水位。 */
-export type NotifiedWatermarkTable = Record<string, Record<string, Partial<Record<UnreadKind, number>>>>
+type NotifiedWatermarkTable = Record<string, Record<string, Partial<Record<UnreadKind, number>>>>
 
 /** 身份 spine：source → session → 最后一次已通知的 SessionRunId（notifications.v1 持久来源）。 */
-export type NotifiedRunTable = Record<string, Record<string, SessionRunId>>
+type NotifiedRunTable = Record<string, Record<string, SessionRunId>>
 
 /** 被压制完成的 pending 条目（v5 §3.1）。 */
 export interface PendingCompletion {
@@ -84,7 +84,7 @@ export interface SettleFenceEntry {
 }
 
 /** settleFence 段：source → session → 围栏（易失，不落盘）。 */
-export type SettleFenceTable = Record<string, Record<string, SettleFenceEntry>>
+type SettleFenceTable = Record<string, Record<string, SettleFenceEntry>>
 
 /** outcomes 段：source → goalId → 已消费标题的水位（一次性身份）。 */
 export type GoalOutcomeTable = Record<string, Record<string, number>>
@@ -124,26 +124,33 @@ export interface CompletionDecisionState {
 export const PENDING_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000
 
 /** 加载期选项（旧调用点只传 notified 表时全部取默认）。 */
-export interface CompleteLedgerOptions {
+interface CompleteLedgerOptions {
   /** 持久化读出的 pending 表（notifications.v1 payload.pending）。 */
   pending?: PendingCompletionTable
   /** 持久化读出的 outcomes 表（notifications.v1 payload.outcomes）。 */
   outcomes?: GoalOutcomeTable
   /** same = reload（保留 pending）；fresh = 新进程/新窗口（丢弃 pending 并 loud）。缺省 same。 */
   boot?: 'same' | 'fresh'
-  /**
-   * sessionStorage 页代 token（**兼容入参，账本不再保留副本**）：页代 token 的单源
-   * 是 boot-token.ts（App 的 notificationsBoot.boot.token，经 completionIdentity 进观测层
-   * identity）；本账本既不读也不存它，保留该键只为 App 调用点继续按原签名传入
-   * （App 不在本次改动范围）。新调用点无需提供。
-   */
-  bootToken?: string
   /** 年龄判定基准（测试注入；缺省 Date.now()）。 */
   now?: number
   /** 卫生上界覆盖（测试注入；非正数回落到 PENDING_MAX_AGE_MS）。 */
   maxPendingAgeMs?: number
   /** loud 出口（缺省 console.warn；never-throw）。 */
   onDiagnostic?: (message: string, detail?: unknown) => void
+}
+
+/**
+ * 同一完成的重放判定（壳 sink 锚点单一判据，facts/壳两 sink 共用）：delivery 结算时记下的
+ * host `updatedAt` 锚点（runtimeSettled）覆盖到候选行 ⇒ 同一次完成的重放，不得二次投递。
+ * Fail-open 由调用方持有：无标记/无锚点/无行时间都 false，facts 侧的 legacy 无锚点抑制留在调用点。
+ */
+export function completionAlreadySettled(
+  settled: ReadonlyMap<string, number | undefined>,
+  sessionId: string,
+  rowUpdatedAt: number | undefined,
+): boolean {
+  const anchor = settled.get(sessionId)
+  return anchor !== undefined && rowUpdatedAt !== undefined && rowUpdatedAt <= anchor
 }
 
 /** 通知水位与壳边沿武装位的合并账本（App 单例持有）。 */

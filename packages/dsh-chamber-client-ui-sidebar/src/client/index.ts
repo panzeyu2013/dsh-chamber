@@ -38,6 +38,8 @@ import {
   legacyStaleSessionProtectedIds,
 } from './purged-session-store.ts'
 import { publishSessionCreationInstrument } from '@dsh-chamber/dsh-chamber-client-core/session-create-ledger'
+import { createCorrectionMarks } from '@dsh-chamber/dsh-chamber-client-core/session-correction-marks'
+import { onSessionRestored } from '@dsh-chamber/dsh-chamber-client-core/session-restore'
 import {
   SessionAuthorityReconciler,
   writeBackTargets,
@@ -335,9 +337,18 @@ export function apply(ctx: ClientContext): void {
         }
         return false
       }
+      // I3：provenance 必须在写之前落下——写回会触发本生产者的 store 订阅 → sync()，
+      // 若等自校验通过再记，那一拍的报告已把修正的 true→false 当成宿主完成边沿发出去。
+      // 只写 false；写不出去的 id 在 catch 里撤回（其行仍是 running，标记无意义）。
+      correctionMarks.arm(targets, Date.now())
+      let written = 0
       try {
-        for (const id of targets) service.handleSessionStatus(id, false)
+        for (const id of targets) {
+          service.handleSessionStatus(id, false)
+          written += 1
+        }
       } catch (error) {
+        correctionMarks.retract(targets.slice(written))
         console.warn(`[chamber] authoritative write-back threw for ${chamberInstanceId}:`,
           error instanceof Error ? error.message : String(error))
         return false
@@ -348,6 +359,10 @@ export function apply(ctx: ClientContext): void {
         const after = readStoreRunning()
         if (targets.every(id => after[id]?.running !== true)) return true
       }
+      // 自校验失败 ⇒ store 位没被这次写回改成 false；其 false 边沿不可能由本写回产生，撤回标记
+      // （留着会被之后一次真实完成消费，反把真完成通知压掉）。行仍在 running 的 id 继续走升级阶梯。
+      const after = readStoreRunning()
+      correctionMarks.retract(targets.filter(id => after[id]?.running === true))
       return false
     }
 
@@ -383,6 +398,14 @@ export function apply(ctx: ClientContext): void {
       // running/pending/completed/current 事实已被丢弃）并排队快照。
       onRelease: () => { sync() },
       warn: (message) => { console.warn(`[chamber] ${message} (${chamberInstanceId})`) },
+    })
+    // I-1 恢复与 F1 墓碑的交叉口：官方 unarchive 让归档集收缩，但内容还在、行仍被官方
+    // summaries 列出——F1 的「收缩 ⇔ 内容已删」前提对它不成立。恢复事实一到就释放该 id 的
+    // 墓碑并重发两轨（release → onRelease → sync()，sync 末尾 queueSnapshot）。事实先于
+    // 收缩推送到达时由 tracker 的 restored 集兜住：那次收缩不为该 id 立碑。
+    const unsubscribeRestored = onSessionRestored((fact) => {
+      if (fact.sourceId !== chamberInstanceId) return
+      purgedRows.release([fact.sessionId])
     })
     // pending（审批/提问/plan-review）的权威源是官方 ui-session 暴露的 sessionStatus
     // 投影；内部 pending registry 是私有状态，不能从服务面直接读取。订阅公开投影并把
@@ -490,6 +513,10 @@ export function apply(ctx: ClientContext): void {
     let sessionFacts: SessionAuthorityReconciler | undefined
     /** 写回能力缺失只告警一次（永久性失败，不重试）。 */
     let warnedMissingHandleSessionStatus = false
+    /** I3 修正 provenance 的标记生命周期（写回前落下 / 失败撤回 / 报告边沿消费 / 租约到期弃标）
+     *  在纯包 session-correction-marks.ts 里单测；租约 5s 远大于「写回 → store 订阅 → sync」
+     *  的边沿延迟，超窗的 false 边沿只可能是宿主自己的完成。 */
+    const correctionMarks = createCorrectionMarks(5_000)
 
     // design 19 §3.2.1/§3.2.2 (P1): the per-source-generation
     // last-known goal facts (unknown rows are restored from here) and the
@@ -616,6 +643,15 @@ export function apply(ctx: ClientContext): void {
       lastKnownGoalFacts = retainGoalFacts(report, lastKnownGoalFacts)
       goalActivation.observe(report, lastKnownGoalFacts)
       applyGoalActivation(report, sessionId => goalActivation.activationOf(sessionId))
+      // I3 correction provenance: 只在行真正以非 running 落到报告时打标并消费——官方
+      // manager 走微任务投影，写回后的第一拍可能仍读 running=true，提早消费会把标记
+      // 浪费在错误的拍上、下一拍的 false 边沿反而失去 provenance。
+      if (correctionMarks.size() > 0) {
+        for (const id of correctionMarks.consume(report.sessions, Date.now())) {
+          const row = report.sessions[id]
+          if (row !== undefined) report.sessions[id] = { ...row, corrected: true }
+        }
+      }
       runtimeProducer.report(report)
       queueSnapshot()
     }
@@ -771,6 +807,7 @@ export function apply(ctx: ClientContext): void {
       unsubscribeWorkspaces()
       unsubscribePending()
       unsubscribeSessionListRefresh()
+      unsubscribeRestored()
       unsubscribeBaselineVerification()
       verificationGeneration += 1
       if (verificationRetry !== undefined) clearTimeout(verificationRetry)

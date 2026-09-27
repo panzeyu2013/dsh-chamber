@@ -25,7 +25,7 @@ import {
 import { notificationRunId } from '../notification-identity.ts'
 import { notificationLedger } from '../notification-ledger.ts'
 import type { NotificationTitleId } from '../notification-projection.ts'
-import type { CompleteLedger } from '../complete-ledger.ts'
+import { completionAlreadySettled, type CompleteLedger } from '../complete-ledger.ts'
 import type { FactsStepGuard } from '../facts-health.ts'
 import {
   chamberBridge,
@@ -37,7 +37,9 @@ import {
   reconcilePendingWorkspaces,
   recordPendingArchive,
   recordPendingSession,
+  onSessionRestored,
   recordPendingWorkspace,
+  removePendingArchive,
   removePendingSession,
   removePendingWorkspace,
   renamePendingWorkspace,
@@ -574,6 +576,21 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
     })
   }, [updateSessionArchive, updateSessionEcho])
   /**
+   * 恢复事实（I-1）：官方 `workspace/unarchiveSession` 成功后，本地归档墓碑必须同拍
+   * 清除——权威集合**不再覆盖**该 id，而墓碑的收敛规则只退休仍被覆盖的 id；不清就会
+   * 让「本页归档过、又恢复」的行在冻结视图里继续被隐藏。重列不需要在这里发：挂载 push
+   * 的 archive-set 收缩本就走既有的 `planSessionListRefresh` 机器（聚合刷新随 push 落地）。
+   */
+  useEffect(() => {
+    return onSessionRestored((fact) => {
+      const { sourceId } = fact
+      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
+      const owner = sourceLifecyclesRef.current!.capture(sourceId)
+      if (owner === null) return
+      updateSessionArchive(removePendingArchive(echoStore.getSnapshot().archive, sourceId, fact.sessionId))
+    })
+  }, [updateSessionArchive])
+  /**
    * 归档墓碑的权威收敛点：挂载 push 的**权威**归档集命名该 id 即退休（degraded 视图
    * 的空集绝不能传进来）。与其它两个回声收敛点同位置（ready 门之前）。
    */
@@ -768,6 +785,13 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
             // I1：壳行的生产者运行身份优先，其次事件序/水位；host updatedAt 是 outbox
             // 跨通道关联的同一锚点。两条证据由此共用一个 key，不会各发一条横幅。
             const row = report.sessions[notification.sessionId]
+            // 壳 sink 锚点：壳通道自身的 settled 锚点挡住「producer 重置后的同一次完成重放」——
+            // 与 facts sink 共用 completionAlreadySettled；无标记/无锚点 = fail-open，
+            // 只影响抑制，不影响投递（open 面见 STATUS「通知壳 sink runtimeSettled 锚点」）。
+            if (notification.kind === 'complete'
+                && completionAlreadySettled(completeLedgerRef.current.runtimeSettled(sourceId), notification.sessionId, row?.updatedAt)) {
+              return
+            }
             const runId = notification.kind !== 'complete' ? undefined : notificationRunId({
               sourceFingerprint,
               sessionId: notification.sessionId,

@@ -620,7 +620,6 @@ export default function App() {
     pending: notificationPendingTable(notificationsBoot.payload),
     outcomes: notificationOutcomeTable(notificationsBoot.payload),
     boot: notificationsBoot.boot.verdict,
-    bootToken: notificationsBoot.boot.token,
     onDiagnostic: (message, detail) => console.warn('[renderer] complete-ledger: ' + message, detail ?? ''),
   }))
   // native 投递 journal（唯一 native 调用层）：pending 行 durable，跨 reload 继续投递。

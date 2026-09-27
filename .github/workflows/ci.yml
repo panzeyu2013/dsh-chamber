@@ -130,6 +130,11 @@ jobs:
         run: pnpm run verify:registry
       - name: Upstream anchor probe (symbol anchors + legacy budget)
         run: pnpm run verify:anchors
+      # 能力面对齐门（I-6，与本地 check:static 同一条命令）：capabilities.json 的每条
+      # vendor 探针按期望判缺席/出现，chamber 已消费而 vendor 缺席 = chamber-ahead-broken，
+      # 本地替代的退役触发（upstream-landed）也必须在此暴露。
+      - name: Upstream capability alignment (chamber-behind / upstream-landed)
+        run: node scripts/upstream/verify-capabilities.mjs
       # Stream-state gates. File-only, so NOT behind
       # the classifier: the differential replay must keep showing zero behavioral
       # drift against the recorded vectors, and the Swift carrier-decision mirror

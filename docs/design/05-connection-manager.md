@@ -146,10 +146,13 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   说明句——**全包不再有 `window.confirm`**（OS 样式弹窗无法使用 alias token）。wire 缺失的
   方法不做（如删除会话），不发明协议——**design 24 受界例外**（用户批准，AGENTS 已
   登记)：来源头 hover 簇新增「删除已归档内容」动作，走 chamber 自有宿主域
-  `archiveCleanup/{preview,purge}`(design 24 引入的宿主包，实例进程内权威清除归档集内容含
+  `archiveCleanup/{probe,purge}`(design 24 引入的宿主包，实例进程内权威清除归档集内容含
   subagent 级联；只删不读、运行中整棵跳过、幂等；域缺失 404 给诚实文案；host binding 已按
   design 24 §10 的 vendor 核对结论落地，见
   `packages/dsh-chamber-seed-archive-cleanup/src/binding.ts`)。详见 design 24 与 §6 宿主包清单。
+  （另：上游 ui-workspace 的归档/恢复/过滤贡献走 `sidebar.workspaces` 洞；chamber 保留声明但
+  从不渲染该洞，故这些贡献在 chamber 为死件，归档/恢复由 chamber 列表与归档管理器承担——
+  design 24 §1、STATUS 范围决策节。）
 - 已连接来源提供"添加工作区"（来源头部按钮，官方 project-add 字形 `IconProjectAddOutlineRegular` upstream-alignment T7)：打开该来源的应用内目录浏览对话框（§4 同一 browse 表面，
   不做手敲路径表单)，确认的路径走该来源的 workspace.create（须为该实例宿主上已存在的目录；
   远程路径 = 远端服务器路径)。
@@ -213,6 +216,12 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 - 收敛只认**权威**归档集（挂载 push 且 `archiveSetKnown === true`）命名该 id——degraded 视图的空集绝不能用来收敛（会把墓碑全撤掉）；
 - 租约挂在 30s unary 兜底拉取上：只要那份（冻结/降级）视图还列该会话就继续藏它，且**每次列出该 id 的拉取都会续租**；回收是全账本的（任何一次拉取都清所有过期租约），故顺序是**先续租、再回收**——否则来源离线超过租约窗、重连后首个列表还没续租就被别的来源清掉。窗口 10min，故正常在线的未挂载来源上墓碑不会过期；唯一回浮路径是"离线超过窗口、其间被其它来源的全账本回收清掉"，结果与修复前相同（行重新可点），重挂载即收敛，来源退役同样回收。TTL 是泄漏护栏，不是收敛预算；
 - `archiveSetKnown` 刻意不动：归档管理器仍只按权威集工作（它不列这条墓碑），墓碑只是**导航可见性**事实，不冒充归档集来源。
+- **恢复（官方 `workspace/unarchiveSession`）是墓碑的显式撤回**：`session-mutations.ts` 的
+  `unarchiveSessionForSource` 在 wire 成功后经**独立页级通道** `packages/dsh-chamber-client-core/src/session-restore.ts`
+  （形状同创建/撤下事实，刻意不进 chamberBridge：两个 god-file 预算文件零余量，加性能力不挤占；原因写在该文件头）
+  发布恢复事实。App 只删该 id 的墓碑；重列交给挂载 push 的 archive-set 收缩（`planSessionListRefresh`，
+  与 purge 收缩同一条机器）。**侧栏生产端**同时消费同一事实，释放 purge 墓碑（`purged-tracker` 的 `release`）——
+  权威集合收缩**不是**收敛信号，因为「离开集合」对恢复同样成立，provenance 只能来自恢复事实本身。
 
 **登记残余（本修订不解决）**：
 - 会话侧的**外部变更**（另一个客户端、宿主侧直接改动）仍只有两条收敛通道（已挂载来源的宿主广播 / 挂载 push、未挂载来源的 30s unary 兜底）——**未挂载来源上刚在别处出现的会话行仍要等该来源被点开**（其成员位只存在于挂载 follow 基线里，属 §2.3 已登记的整源降级面）；本修订覆盖的是**应用内**发起的创建。**别处归档**同理（本页自己归档的已由归档墓碑覆盖），且墓碑租约到期后那条行会回浮，直到该来源被挂载。
@@ -722,7 +731,7 @@ settle 时拆除)，风险超窗，登记后续项；② 只下调 `HARVEST_ABAN
 - 自研宿主包（随 chamber 分发、运行于每个 dsh 实例进程）：
   - `packages/dsh-chamber-seed-client-graph/`——设计 09 的只读 client boot graph Remote；
   - `packages/dsh-chamber-seed-git-worktree/`——设计 08 的领域限定 Git Remote，与该实例 `workspaceRegistry`/live agents 同用户、同文件系统做权威守卫；Desktop 与控制面均不执行 Git。
-  - `packages/dsh-chamber-seed-archive-cleanup/`——设计 24 的已归档会话内容清理域（`archiveCleanup/{preview,purge}`，AGENTS 登记的有界例外）：实例进程内经宿主权威状态 children-first 级联清除归档集内容（含 subagent 起源后代、官方事件发射），只删不读、绝不触碰运行中/未归档内容；上游 delete wire 落地后退役。
+  - `packages/dsh-chamber-seed-archive-cleanup/`——设计 24 的已归档会话内容清理域（`archiveCleanup/{probe,purge}`，AGENTS 登记的有界例外）：实例进程内经宿主权威状态 children-first 级联清除归档集内容（含 subagent 起源后代、官方事件发射），只删不读、绝不触碰运行中/未归档内容；上游 delete wire 落地后退役。
   - `packages/dsh-chamber-seed-open-in/`——**设计 20 §6（本地形态专用，`localOnly`）**：上游 `dsh-host-open-in-app` 宿主半的 fork（本机应用目录 + 真实 bundle 图标 + 绝对目录校验 + 拉起，`openInApp/{probe,apps,icon,open}`），删去上游 SSH 休眠门、`webServer` 路由与连接栅栏（改走实例自身通用 RPC 通道）；不读启动标记，与目录选择 pin 解耦。
 - 前端入口复用 `packages/renderer/`：vite 构建时把 workspace 包 alias 到源码；`chamber-entry.ts` 复合 entry 挂整棵 dsh 客户端树（connection→typert→
   gateway→remotes→runtime→locale→theme→**layout（chamber ui-layout fork 替换

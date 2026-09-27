@@ -40,6 +40,8 @@
 
 > 其它裁决规则（沿用既有口径）：版本值只认 `harness.commit` / 运行时锁文件 / 各fork `package.json`，
 > 本表与生成块都不记录版本值；`status: accepted` 必须带 `rationale`（理由随条目走）。
+> `authority: chamber` 的条目必须带非空 `retireWhen`（一句可判的退役触发），其余 authority 不得携带——
+> 校验在 `scripts/upstream/registry.mjs`，能力面的对应触发由 `node scripts/upstream/verify-capabilities.mjs` 在命中时打印。
 > 符号锚（`registry.entries[].symbols`）写作 `path#symbol`（退化 `path#=literal:<唯一子串>`），
 > path先按该条目的 `ours` 解析、再退回仓库根；解析门 = `node scripts/upstream/check-anchors.mjs`。
 

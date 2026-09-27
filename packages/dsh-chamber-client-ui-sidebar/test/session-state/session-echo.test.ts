@@ -23,6 +23,7 @@ import {
   recordPendingArchive,
   recordPendingSession,
   refreshPendingArchives,
+  removePendingArchive,
   removePendingSession,
   sweepPendingArchives,
   sweepPendingSessions,
@@ -279,6 +280,18 @@ test('archive ledger: only an AUTHORITATIVE set converges — the degraded empty
     'the authoritative set now names the id: the host owns its visibility again')
   assert.deepEqual(reconcilePendingArchives({ 'ssh-b': [{ sessionId: 's-1', at: 10 }, { sessionId: 's-2', at: 11 }] }, 'ssh-b', ['s-1'])['ssh-b'],
     [{ sessionId: 's-2', at: 11 }], 'only the covered id retires')
+})
+
+test('archive ledger: a RESTORE drops exactly one tombstone; the authoritative set alone never would', () => {
+  // I-1：恢复走官方 unarchiveSession。权威集合「不再覆盖」不是收敛信号——reconcile 只
+  // 退休仍被集合覆盖的 id（上一用例），所以恢复必须显式删这一条，否则冻结视图继续隐藏它。
+  let ledger: SessionArchiveLedger = recordPendingArchive({}, 'ssh-b', 's-1', 10)
+  ledger = recordPendingArchive(ledger, 'ssh-b', 's-2', 20)
+  assert.equal(reconcilePendingArchives(ledger, 'ssh-b', []), ledger, '集合收缩不退休墓碑（这正是需要本函数的原因）')
+  const after = removePendingArchive(ledger, 'ssh-b', 's-1')
+  assert.deepEqual(after['ssh-b'], [{ sessionId: 's-2', at: 20 }], '只删被恢复的那一条')
+  assert.equal(removePendingArchive(after, 'ssh-b', 'absent'), after, '缺席 = 原引用（不触发重渲染）')
+  assert.equal(removePendingArchive(after, 'ssh-zzz', 's-2'), after, '未知来源 = 原引用')
 })
 
 test('archive ledger: forget retires with the source generation', () => {

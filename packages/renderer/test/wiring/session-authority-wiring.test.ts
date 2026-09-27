@@ -41,6 +41,10 @@ const projection = stripComments(readFileSync(
   fileURLToPath(new URL('../../src/notification-projection.ts', import.meta.url)), 'utf8'))
 const logStore = stripComments(readFileSync(
   fileURLToPath(new URL('../../../dsh-chamber-client-core/src/authority-log-store.ts', import.meta.url)), 'utf8'))
+const completeLedger = stripComments(readFileSync(
+  fileURLToPath(new URL('../../src/complete-ledger.ts', import.meta.url)), 'utf8'))
+const correctionMarks = stripComments(readFileSync(
+  fileURLToPath(new URL('../../../dsh-chamber-client-core/src/session-correction-marks.ts', import.meta.url)), 'utf8'))
 
 test('the App has no second liveness planner or state machine', () => {
   assert.doesNotMatch(frame, /planSessionLiveness|sessionLivenessRef|markSessionLiveness/)
@@ -102,8 +106,41 @@ test('both run-start sites use the ordering rule, never an unconditional clear (
     assert.doesNotMatch(text, /observeRunStart\(|markRunStarted\(/, label + ' 不得有无条件 run-start 权威')
     assert.doesNotMatch(text, /clearRuntimeSettled\(sourceId, (row\.sessionId|sessionId)\)/, label + ' 不得为迟到的 running 快照丢结算标记')
   }
-  assert.match(notificationsHook, /factsRow\.updatedAt <= anchor/, '锚点序：行严格更新才属于下一轮运行')
+  assert.match(
+    notificationsHook,
+    /completionAlreadySettled\(settled, notification\.sessionId, factsRow\?\.updatedAt\)/,
+    '锚点序：行严格更新才属于下一轮运行（比较本体走唯一实现）',
+  )
   assert.match(notificationsHook, /pendingClaims\.has\(notification\.sessionId\)/, '在途原生投递必须让行，不被 facts 吸附')
+})
+
+test('the same-completion anchor rule has ONE implementation shared by both sinks (I2)', () => {
+  // 缺陷史：facts sink 有锚点判定、壳 sink 没有 ⇒ producer 重置后的壳完成重放双发。
+  // 比较本体只允许在 complete-ledger 出现一次；两个 sink 都引用它，且不得内联重写。
+  assert.match(completeLedger, /export function completionAlreadySettled\(/)
+  assert.match(notificationsHook, /completionAlreadySettled\(/)
+  assert.match(hook, /completionAlreadySettled\(completeLedgerRef\.current\.runtimeSettled\(sourceId\)/)
+  assert.doesNotMatch(
+    hook + '\n' + notificationsHook,
+    /updatedAt <= anchor/,
+    'sink 不得内联重写锚点比较（唯一实现在 complete-ledger）',
+  )
+})
+
+test('the correction provenance is minted before the write and gates the shell candidate (I3)', () => {
+  // 缺陷：写回造成的 true→false 在 facts 轨不可用时被当宿主完成通知。provenance 必须在
+  // 写之前落（写回同步触发 store 订阅 → sync），只在行真正以非 running 落报告时消费；
+  // 生命周期（租约到期弃标、写回/自校验失败撤回）在纯包 session-correction-marks 单测，
+  // 防的是「写回没落地却把更晚一次真完成认成修正」的反向误判。
+  const armAt = sidebar.indexOf('correctionMarks.arm(targets, Date.now())')
+  const writeAt = sidebar.indexOf('service.handleSessionStatus(id, false)')
+  assert.ok(armAt > -1 && writeAt > -1 && armAt < writeAt, '标记必须先于写回落下')
+  assert.match(sidebar, /createCorrectionMarks\(5_000\)/, '租约必须有界')
+  assert.match(sidebar, /correctionMarks\.retract\(/, '写回抛出/自校验失败必须撤回标记')
+  assert.match(sidebar, /report\.sessions\[id\] = \{ \.\.\.row, corrected: true \}/)
+  assert.match(completionObservation, /shellRow\.corrected === true/)
+  assert.match(completionObservation, /factsCompletionOf\(factsChannelRow\) === undefined/)
+  assert.match(correctionMarks, /now >= deadline/, '过期标记不得消费更晚的边沿')
 })
 
 test('the notification association uses the facts host anchor, never the content watermark', () => {

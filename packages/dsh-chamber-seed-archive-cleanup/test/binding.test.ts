@@ -60,6 +60,8 @@ interface RegistryFake {
   setStateCalls: { state: unknown; chained: boolean }[]
   chainCalls: number
   failNextSetState?: boolean
+  /** I-5 negative fixtures: how the fake's `setState` lands the write. */
+  setStateMode?: 'replace' | 'patch' | 'replace-partial' | 'replace-wrong-set'
 }
 
 /** Fresh registry fake over `archived` ids with the standard single workspace. */
@@ -126,7 +128,21 @@ function makeCtx(overrides: Partial<HostCtxServices> = {}, registry?: RegistryFa
             throw new Error('fake: setState failed')
           }
           registry.setStateCalls.push({ state, chained: false })
-          registry.state = state
+          switch (registry.setStateMode) {
+            case 'patch':
+              // Patch semantics: the live global OBJECT is not replaced, only mutated.
+              for (const [key, value] of Object.entries(state)) registry.state[key] = value
+              break
+            case 'replace-partial':
+              // Replaces the object but drops every field this writer did not name.
+              registry.state = { archivedSessionIds: state.archivedSessionIds }
+              break
+            case 'replace-wrong-set':
+              registry.state = { ...state, archivedSessionIds: [...registry.archived, 'ghost'] }
+              break
+            default:
+              registry.state = state
+          }
           registry.archived = [...state.archivedSessionIds as string[]]
         },
         enqueueOperation: async <T>(operation: () => Promise<T>): Promise<T> => {
@@ -160,6 +176,30 @@ test('binding: batched archived-set removal is ONE chained write that carries ev
   // Idempotent no-op when nothing to remove → no write.
   await host.removeArchivedSessionIds(['a'])
   assert.equal(registry.setStateCalls.length, 1)
+})
+
+test('binding: a setState that patches in place is refused (I-5 write-verify)', async () => {
+  // Seam drift #1: a patch-style store that mutates the live global instead of replacing it.
+  // The guard must abort instead of assuming the write landed.
+  const registry = registryFake(['a', 'b'], { setStateMode: 'patch' })
+  const host = makeHostBinding(makeCtx({}, registry))
+  await assert.rejects(() => host.removeArchivedSessionIds(['a']), codeIs('registry-write-mismatch'))
+})
+
+test('binding: a setState that drops a foreign field is refused (I-5 write-verify)', async () => {
+  // Seam drift #2: the write replaces the global but loses fields this domain does not own —
+  // exactly the shape that crashed the next official archiveSession on pinnedSessionIds.
+  const registry = registryFake(['a', 'b'], { setStateMode: 'replace-partial' })
+  const host = makeHostBinding(makeCtx({}, registry))
+  await assert.rejects(() => host.removeArchivedSessionIds(['a']), codeIs('registry-write-mismatch'))
+})
+
+test('binding: a setState that writes a different archived set is refused (I-5 write-verify)', async () => {
+  // Seam drift #3: the write lands a set other than the intended one (silent membership
+  // divergence). Read-back catches it before any deletion is reported as complete.
+  const registry = registryFake(['a', 'b'], { setStateMode: 'replace-wrong-set' })
+  const host = makeHostBinding(makeCtx({}, registry))
+  await assert.rejects(() => host.removeArchivedSessionIds(['a']), codeIs('registry-write-mismatch'))
 })
 
 test('binding: official setState failures map to item code storage', async () => {

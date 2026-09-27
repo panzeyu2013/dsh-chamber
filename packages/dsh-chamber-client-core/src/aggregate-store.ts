@@ -382,10 +382,9 @@ export interface SessionRemovedFact {
 export interface InstanceRuntimeReport {
   current?: string
   /**
-   * Every listed session (edge memory for the App's N-ctx completion arm):
-   * the live running bit, a sparse `pending` and the official `completed`
-   * (`sessionStatus.completionUnread`) from the official sessionStatus
-   * projection, and a non-zero `runningSubagents`.
+   * Every listed session (edge memory for the App's N-ctx completion arm): the live running
+   * bit, a sparse `pending`, the official `completed` (`sessionStatus.completionUnread`),
+   * and a non-zero `runningSubagents`.
    */
   sessions: Record<string, {
     running?: boolean
@@ -399,8 +398,9 @@ export interface InstanceRuntimeReport {
      * it); a fresh run mints a new one.
      */
     runId?: string
-    /** Host-domain `updatedAt` of this row (read ordering anchor for the App's
-     *  runtime-completion adoption; never a read watermark). */
+    /** I3 修正 provenance：running=false 来自侧栏 tier-3 写回而非宿主完成边沿（无 host 域 observed `completedAt` 时不产通知候选；蓝点仍由修正臂武装；缺席 = 未修正，fail-open）。 */
+    corrected?: boolean
+    /** Host-domain `updatedAt` of this row (read ordering anchor for the App's runtime-completion adoption; never a read watermark). */
     updatedAt?: number
     /** Running subagent descendants (vendor runningSubagentCount semantics); absent = 0. */
     runningSubagents?: number
@@ -515,7 +515,7 @@ type PluginDiagnosticListener = (sourceId: string, diagnostic: PluginGraphDiagno
  * during dispatch never affects the in-flight fan-out. `label` names the
  * channel (and may use the emit arguments) in the console diagnostic.
  */
-function createChannel<Args extends unknown[]>(label: (args: Args) => string) {
+export function createChannel<Args extends unknown[]>(label: (args: Args) => string) {
   const listeners = new Set<(...args: Args) => void>()
   return {
     subscribe(listener: (...args: Args) => void): () => void {
