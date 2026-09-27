@@ -6,7 +6,7 @@
 >
 > 承接并修订原 `docs/progress/todo/12-todo-archived-sessions.md`（归档单向、不可见、
 > 上游无 delete/unarchive wire 的事实核实见 git 历史）；该 todo 的方案 B
-> （控制面/主进程特权层直删）继续冻结（STATUS「范围决策」），上游 wire 草案移入
+> （控制面/主进程特权层直删）继续冻结（§2 边界 5），上游 wire 草案移入
 > `docs/progress/todo/upstream-proposals.md` §3。方案以「实例进程内的 chamber 宿主域」
 > 替代 B 的位置（理由见 §2）。
 >
@@ -23,9 +23,17 @@
   集合承载，`workspace.archiveSession` 幂等地把 id 追加进去；0.1.7 另补了**反向**的单条
   `workspace/unarchiveSession`（官方 UI 的撤销 toast 与「全部对话（显示已归档）」
   筛选走它），但**仍无删除会话内容的 wire**。官方默认视图仍过滤归档行（显式筛选可显示）；
-  chamber 侧默认视图同样过滤，且**没有**恢复/浏览入口（推迟登记见 STATUS）。归档会话
+  chamber 侧默认视图同样过滤；**恢复入口已接**（归档管理器行/批量调官方单条
+  `workspace/unarchiveSession`），**浏览过滤**（镜像上游 `ArchivedFilter`）推迟（STATUS
+  范围决策节）。归档会话
   **内容**（会话目录 + 其 subagent 起源子会话内容）永久占用实例宿主磁盘且无清除入口，
   对 gateway 服务器部署是可观察的磁盘增长来源。
+- **上游归档 UI 在 chamber 为死件（裁决）**：上游 ui-workspace 的归档/恢复/过滤贡献注册进
+  `sidebar.workspaces` 洞；chamber 保留该洞的声明（撤销会让注册抛错）但**从不渲染**，浏览区
+  由 chamber 自有多源列表拥有。归档/恢复语义因此由 chamber 列表 + 归档管理器承担，镜像上游
+  浏览 UI 不作 v1 范围。锁测试
+  `packages/dsh-chamber-client-ui-sidebar/test/source-runtime/sidebar-slot-declaration.test.ts`；
+  取舍登记见 STATUS 范围决策节。
 - 本需求 = chamber 前端（桌面 app 与 gateway 的同一套自研 UI）为每个 server 提供
   **「删除已归档内容」**动作：
   - 语义：永久删除该来源实例上**所有已归档会话的内容**，**级联其 subagent 起源
@@ -319,6 +327,12 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
    透传**，不得枚举、不得重建。该 spread 同时修正了旧实现的第二个隐患：旧重建会**丢掉
    `pendingMutation` marker**，若在链外执行即抹掉在飞 create/delete 的恢复标记；透传后
    marker 原样保留（链内 `recoverPendingMutation` 仍先于本操作清它）。
+   **写后读回（I-5 守卫）**：`setState` 返回后立即重读 live global 复核三件事——重读到的**不是写前
+   那个对象**（`after !== live`：整体替换真的发生，静默 no-op 被排除）、`archivedSessionIds` 精确等于
+   目标集合（顺序无关、无重复、无缺失）、其余键**逐键引用不变**（spread 透传且未被深拷贝的证明）；
+   任一不符即 `registry-write-mismatch`
+   fail-closed：binding 层拒绝该次运行、**绝不带着未验证的写继续**，命中项保持归档由下一轮幂等重跑收敛。
+   守卫覆盖存在性检查管不了的语义漂移（官方 `setState` 改语义、字段被第三方重写、目标集合被脏写）。
    **最终批量写（常驻保留修正后）**：完成树根、完成树覆盖的已归档后代、孤儿
    在同一批官方 setState 写中清除（clearIds 去重；core.ts `purge()` + binding
    `removeArchivedSessionIds`，测试固化）——**唯一例外是常驻保留树**（§3）：该树根与它
@@ -541,12 +555,18 @@ generic throw（无 status 透出）；503 `instance_unavailable` 有专类特�
      `aria-checked="mixed"`）+ 折叠钮 + 标题（600 字重、省略号）+ 「已归档 N 个会话」计数
      （复用 rowCount 键）。折叠为**对话框本地视图态**（默认展开、不持久化、不与导航 folded
      互扰、只藏行不改选中）；
-  6. 破坏性动作只有一处：footer 的**条件渲染「删除选中（N）」**（列表视图且选中数 > 0）。
+  6. **恢复（非破坏，0.1.7 对齐）**：每行一个「恢复」图标钮 + footer 条件渲染「恢复选中（N）」，
+     都走官方 `workspace/unarchiveSession`（幂等；见 §1 与 `session-mutations.ts` 的
+     `unarchiveSessionForSource`）。恢复**不武装确认**（无删除语义），失败按行计数并在结果行如实
+     报告（部分成功不得静默）；成功后核心层发布恢复事实（`session-restore.ts`），App 清该 id 的
+     本地归档墓碑，重列由挂载 push 的 archive-set 收缩经既有 `planSessionListRefresh` 机器完成。
+     与删除共用 `busy` 单飞锁，footer 状态文案按本次动作区分（restoring/deleting）。
+  7. 破坏性动作只有一处：footer 的**条件渲染「删除选中（N）」**（列表视图且选中数 > 0）。
      **没有独立「删除全部」按钮**——整集清理的唯一路径 = 用户显式全选后再确认带计数的
      「删除选中」，`runPurge` 必带 `sessionIds` 数组，UI 不存在 `purge(undefined)`（整集）
      调用路径；确认文案携带实际计数（`confirmSelected`），对**所选行树（含其子代理内容）**
      负责；
-  7. **两段式确认门（对话框内武装态）**：破坏性动作不走 OS 原生弹窗、也不叠第二层 Modal
+  8. **两段式确认门（对话框内武装态）**：破坏性动作不走 OS 原生弹窗、也不叠第二层 Modal
      （官方 Modal 每开一次注册一个 document 级 BUBBLE Escape 监听、互不知晓——叠层一次 Esc
      双关，且无嵌套先例）。改为对话框内 `confirming` 状态：id 列表在武装瞬间冻结 +
      单行标题或计数文案 → 行输入
@@ -563,7 +583,7 @@ generic throw（无 status 透出）；503 `instance_unavailable` 有专类特�
      `archive.manager.confirmDelete`/`confirmSingle`/计数键 chrome；`role="alert"` 挂在
      **纯文本消息 span**（容器首钮同 commit 抢焦点 → SR 播报竞态，APG 文本性 alert 惯例）。
      单选与多选共用同一条，只换主体文案；
-  8. **关闭策略统一**：Esc/X/遮罩任意时刻可关；关闭**不取消**宿主 purge；
+  9. **关闭策略统一**：Esc/X/遮罩任意时刻可关；关闭**不取消**宿主 purge；
      `chamberBridge.requestRefresh(server.id)` 仍无条件发出——对 live 来源是即时
      mutation-pull（App.tsx 无条件拉取并合并会话行，见 §4 step 7），两者都不改变可见列表
      （归档/子代理行本就不可见），属惯例性调用，与 archive 动作一致；§12 的会话列表刷新请求
@@ -641,8 +661,9 @@ generic throw（无 status 透出）；503 `instance_unavailable` 有专类特�
   `workspace.expand/collapse`、`list.ungrouped`、`rowCount`；行内错误/信息（domainMissing /
   超时 / 空态 / 部分失败 / 跳过 / force 回退说明）按 §5 走 zh 硬编码，不进 locale。
   `archive.manager.deleteAll`/`confirmAll` 不存在（独立「删除全部」已退役）。
-- 范围：**v1 不做**搜索/目录过滤/恢复（chamber 侧无恢复入口；上游 0.1.7 起有单条
-  `workspace/unarchiveSession`，见 STATUS 的推迟登记）；rail/窄栏与移动端
+- 范围：**v1 不做**搜索/目录过滤；**恢复已接**（管理器调官方单条
+  `workspace/unarchiveSession`，幂等、非破坏、无确认级）；浏览过滤（`ArchivedFilter` 镜像）
+  推迟，见 STATUS 范围决策节；rail/窄栏与移动端
   不做（范围声明见头部）。
 
 ## 7. 宿主包接线与分发面
@@ -851,7 +872,7 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.7-rc.2 477b4f42
    （仅增向）/ 单条 `unarchiveSession`（public，本域未用）可用；本域写集合另需三个
    **私有**面——实例字段 `state`（官方 live global 本体，`setState` 换的就是它）、
    `setState`（**整体替换**且 `dsh-storage-domain` 的 `global.set` **不跑 `schema.parse`**，
-   故 zod 默认值不兜底 → 只能 read-modify-write）、`enqueueOperation`（官方串行链，集合写
+   0.1.7-rc.2 发行产物复核；故 zod 默认值不兜底 → 只能 read-modify-write）、`enqueueOperation`（官方串行链，集合写
    必须在其内）。`list()` 公开可用但**本域已不再使用**（不再重建 `workspaceIds`）。
    **成员 `sessionIds` 是 header 索引派生的
    getter**（启动/实时按 `sessionPersistence.list()` 重建）——内容删除后
@@ -970,6 +991,9 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.7-rc.2 477b4f42
   （含 `current`）中过滤，直到原始 summaries 不再列出该 id、或它重新入集合（**无**「resolve
   即释放」阀，见 F2）。诚实性依据：宿主 `core.ts` 的 `clearIds` 只含**内容删除成功**的树与
   无记录孤儿（集合写失败时 id 留在集合 ⇒ 永不布防），故「离开归档集合 ⇔ 内容已不存在」；
+  **官方单条恢复是唯一例外**（同一收缩）：恢复事实到达时清掉该 id 的墓碑，并记一条**单次豁免足迹**——
+  足迹只在「这次恢复的收缩还没被观察到」时记（逆序帧：host 先写 global 推流、后回 unary，事实落在
+  收缩之后就**不记**），且被对应收缩消费后即作废：绝不粘住、绝不静默豁免下一次真 purge 的收缩。
   首次 archive-set 观测本身永不推断集合收缩；跨 renderer 重启或首次升级的 summaries 另由 F5 的
   session.list 基线校验处理。过滤在签名计算**之前**完成；无过滤时
   返回同一数组引用。**与常驻保留的关系**：常驻保留的根**从不离开集合** ⇒ 不收缩、
@@ -1132,3 +1156,6 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.7-rc.2 477b4f42
 
 - **archiveCleanup 契约继续两端手抄 + 宽容解码**：否决——客户端对缺失计数字段静默取 0（「已删除 0 个」的静默错误），且方法名/入参键/结果字段没有跨包锁步；改为中立契约包 `@dsh-chamber/dsh-chamber-wire`（唯一声明；seed esbuild 内联；行为锁步测试解析真实 `purge(` 签名比对键序），必需计数（6 项）缺失或非法即 loud，可选计数缺省 = 合法旧宿主。
 - **保留 `preview` 端点**（原文曾描述 wrapper）：否决——§5 已写明管理器列表来自会话快照投影且不调用 preview，wrapper 从未存在；删除宿主方法/core/类型/测试并同步本文，而不是补一个没有调用方的 RPC 面。
+- **恢复路径自造本地「取消归档」状态**（对齐上游 0.1.7 时）：否决——官方已有 `workspace/unarchiveSession`（幂等移除归档集合成员，官方撤销 toast 与「显示已归档」筛选同源）。chamber 只做入口（管理器行/批量）+ 本地墓碑清除，不新增任何本地归档权威状态；老宿主无该方法时按普通 RPC 失败如实报错，不降级成「假装恢复了」。墓碑不靠权威集合收缩收敛（集合「不再覆盖」不是收敛信号，§12 的收敛规则只退休仍被覆盖的 id），必须由恢复事实显式删除。
+- **撤销 `sidebar.workspaces` 声明**（回应「上游归档/恢复 UI 在 chamber 不可达」）：否决——该洞是官方 `ui-workspace` 的注册目标，撤声明会让其注册直接抛错（N-ctx 壳里整棵 ui-workspace 失败）；保留声明但从不渲染，浏览区由 chamber 自有多源列表拥有（锁测试 `test/source-runtime/sidebar-slot-declaration.test.ts`）。代价是上游归档/恢复/过滤贡献在 chamber 为死件，由 chamber 归档管理器承担这些语义。
+- **registry 写入不做写后读回**（archiveCleanup 的 `setState`）：否决——官方 `setState` 是同步全局替换，但 replace/partial/patch 三种实现都可能被宿主升级换掉；写后读回并逐键比对（`registry-write-mismatch`）把「删了 A 结果 B 也丢了」变成拒绝运行，而不是把不一致留给按 id 判断的下游守卫（§4 步骤 6、§10）。

@@ -6,17 +6,17 @@
 
 ## 未完成 / 部分完成（剩余验收）
 
-- **通知壳 sink 缺 `runtimeSettled` 锚点检查**：facts sink（`use-notifications.ts`）有锚点判定，
-  壳 sink（`use-bridge-subscriptions.ts`）没有 ⇒ 残余重复窗口 = 「同页、非首批、producer 状态被
-  重置的壳完成重放」双发；配方 = 把锚点判定搬进壳 sink（~10 行，fail-open ⇒ 只影响抑制、不影响
-  投递），**不要恢复别名表**（生产 facts intent 不带 `hostObservedAt`，两族键从不相等）。打包态
+- **通知壳 sink `runtimeSettled` 锚点（I2；剩打包态实机回执）**：facts/壳两 sink 共用
+  `complete-ledger.ts` 的 `completionAlreadySettled`（无标记/无锚点 = fail-open，只影响抑制、
+  不影响投递；**未恢复别名表**）。残余重复窗口 = 「同页、非首批、producer 状态被重置的壳完成
+  重放」需在打包态证不再双发。打包态
   `ShellDebug.isEnabled` 恒 false（`!isPackaged` 守卫）⇒ 判据只能走实机回执。**实机/复核未做**：
   候选证据门（`factsCompletionOf` 只认 host 域 observed 的 `completedAt`）、`factsContradictsIdle`、
   Dock 真实回执链（去无窗守卫、同值不写、写后真读回 `{count, applied}`）、`authority-log-store` 的
   `facts-health` 保底名额。
 - **目标活跃期间的完成通知/未读压制**（design 19 §3.2）：打包态实机（N 轮 `held≥1 && sent==0`、outcome 后恰一条、六面同拍、reload/冷启、撤回、local/gateway/SSH 各一组）；activation unknown 静默窗口需上游只读 activation 读；围栏双发（§3.2.7 ⑦ F30）与 scoped withdraw（§3.2.4）待裁。
 - **会话链重构**（design 14 §D4）：阈值真机校准（60/190/310s，[session-authority-calibration.md](../checklists/session-authority-calibration.md)）、ssh 写回时延、macOS 腿、集中日志面（机内环已有）；mobile `session-stall.ts` 行数待裁（现 584 行；决策核心已表驱动，其余为 DOM/提示壳）；Swift 收口 `RendererRecovery.swift`（≈185 行）与 `RendererHangWatchdog.swift`（≈129 行）仍超 ≤90/≤60 目标且未入棘轮、`RendererRecoveryPolicy` 判定/记账分离；反补丁波次①–④（阶梯决策边界、子代理完整性属上游依赖、载波身份仍是请求键、P6 上游首帧期限 / `doOpen` 契约，`verify:upstream-lifecycle-contract` 钉住）；`tests` 模式 flaky（gateway/control-plane，假宿主占端口）。
-- **会话运行位卡死**（ui-chat「深度求索中」；机制已单源化）：①实机 lane 复现未接 CI；②HTTP 健康而 WS 半盲时 transcript 不收敛（45s 旁路 follow 已落，宿主 `asOfSeq` 对账未做）；③`session.list` 单飞悬挂 ⇒ store 永久 loading（需上游超时）；④子代理（`origin==='subagent'`）不在事实通道；⑤隐藏期 watchdog 不 tick；⑥阈值/N=2/写回链未实机校准；⑦上游语义由 `vendor-session-fact-contract.test.ts` 逐条钉住（vendor 未物化默认失败）；⑧控制面/壳日志的取证价值未验；⑨`session.list` 全量性缺水位；⑩控制面集中日志面未做；⑪两处「更省形态」候选未落；⑫对话流健康臂实机验收未做（自动 resync / `loading` 提示、滚动位置观感）；⑬静默半死（宿主流级 keepalive+游标未做、首帧期限与探针阈值未校准、`ended(false)` 兜底）；⑭修链未闭合（非 `ISessions` 契约写回、90s 界限只在失败分支、ssh 时延、窄缝、行为测试缺）；⑮运行位解析对齐后未实机校准；⑯子代理运行环行集与官方不同源（收紧 or 写进契约，待裁）。
+- **会话运行位卡死**（ui-chat「深度求索中」；机制已单源化）：①实机 lane 复现未接 CI；②HTTP 健康而 WS 半盲时 transcript 不收敛（45s 旁路 follow 已落，宿主 `asOfSeq` 对账未做）；③`session.list` 单飞悬挂 ⇒ store 永久 loading（需上游超时）；④子代理（`origin==='subagent'`）不在事实通道；⑤隐藏期 watchdog 不 tick；⑥阈值/N=2/写回链未实机校准；⑦上游语义由 `vendor-session-fact-contract.test.ts` 逐条钉住（vendor 未物化默认失败）；⑧控制面/壳日志的取证价值未验；⑨`session.list` 全量性缺水位；⑩控制面集中日志面未做；⑪两处「更省形态」候选未落；⑫对话流健康臂实机验收未做（自动 resync / `loading` 提示、滚动位置观感）；⑬静默半死（宿主流级 keepalive+游标未做、首帧期限与探针阈值未校准、`ended(false)` 兜底）；⑭修链未闭合（非 `ISessions` 契约写回、90s 界限只在失败分支、ssh 时延、窄缝、行为测试缺）；修正 provenance 的 I3 臂无 host 证据不通知，实机矩阵未跑；⑮运行位解析对齐后未实机校准；⑯子代理运行环行集与官方不同源（收紧 or 写进契约，待裁）。
 
 - 实机门禁（缺真实实例 / 打包态环境）：
   - 调试模式 T-10 打包态（Web Inspector 附着**只能人工判**）。
@@ -57,7 +57,7 @@
 - A2：A2-4（哨兵 vs semver）、A2-7（raw vs effective pending）。
 - A3：A3-1/2/3/4 保鲜门自证、A3-5 假过且 `--check` 未进 CI、A3-6、A3-10、A3-11、A3-13、A3-15、A3-14，另有 S1–S13 疑似面（S12 已单列）；判据 = 读失败/未检必须可与「通过」区分。
 - bundle 层生效信号（design 21 §6.6）：需新宿主事实 `bundleLayers`，两态才可区分。
-- 归档清理与归档管理器（design 24）：打包版目检、探针 fail-closed、>65,536 不清扫、gateway/远程实机；待跑验收（skippedProtected/skippedRunning/子代理后代/常驻保留链）；**归档两段式实机目检**（运行中会话 → 确认框列出活动 → 停止并归档；安静会话仍单次归档）；残余 = 事件 no-op 至上游 wire、维护期 force 风险、保护边界 = 活 `current`；seam 依赖官方私有三面（退役 = 上游批量原语）；缺陷 = `errors` 通道混用致成功也红；清理残留 = projcache 4KB 档未回收、迁移在飞 purge 留代际窗口；可选增强 = PluginDialog 三态行/rowError 本地化/已归档浏览区；tombstone 由孤儿清扫收敛（空语料 G1a 永跳）。
+- 归档清理与归档管理器（design 24）：打包版目检、探针 fail-closed、>65,536 不清扫、gateway/远程实机；待跑验收（skippedProtected/skippedRunning/子代理后代/常驻保留链）；**归档两段式实机目检**（运行中会话 → 确认框列出活动 → 停止并归档；安静会话仍单次归档）；**恢复路径实机未跑**（管理器行/批量 → 官方 `workspace/unarchiveSession` → 行回归，且侧栏生产端的 purge 墓碑由同一事实释放；曾挂载/当前未挂载来源按既有「归档集两收割间冻结」降级、重挂载收敛）；残余 = 事件 no-op 至上游 wire、维护期 force 风险、保护边界 = 活 `current`；seam 依赖官方私有三面（已加写后读回守卫 `registry-write-mismatch`；退役 = 上游批量原语）；缺陷 = `errors` 通道混用致成功也红；清理残留 = projcache 4KB 档未回收、迁移在飞 purge 留代际窗口；可选增强 = PluginDialog 三态行/rowError 本地化；tombstone 由孤儿清扫收敛（空语料 G1a 永跳）。
 - 会话列表标签：链 = 官方 title→cwd basename→id；无超出日常的实机门禁。
 - 移动端 Web（design 17 §18）：未实施 = 移动中量化/滚动记忆/宽屏触控/长按气泡；composer 守卫 WebKit 未验（真机读 `[data-mobile-kbd-state]`）；复审①–⑪（右栏全屏让位、44px 底线、官方浮面未适配、`touch-action:none` 冲突、真机抽检、回到底部控件被键盘遮、caret reveal、layer-2 不可达、iPad 指针档假设、档位边界、模态叠加）；§18.6 实机门禁清单；登录页预热三项（真机链路/滥用度量/边界复核）；git 侧栏与 P2/P3 排期；DOM 锚点审计三项（details 打标仅实机可验、composer 锚点 fixture 化、Android 键盘盲区）。
 - 连接稳定性：`/api/remote.mux` 实例侧 2s×2 心跳 ⇒ 4–6s terminate；下一步抓 close code（1006/4000），若为实例心跳则调宽 `websocketHeartbeatIntervalMs`；pong 代答已回退；桌面 idle 看门狗 gateway 目标也吃 ~2min bounce。
@@ -115,7 +115,6 @@
 - `install-gateway.sh` 锚走 npm：绕过 `allow-builds.mjs` 单源；无机械锁步。
 - `client-web` 未使用依赖 `ui-theme`：删除须与锁文件重生成同批。
 - layout `ThemePresenter` 永不回收（有意）：残留 `color-scheme`/token/theme-color。
-- `sidebar.workspaces` 声明但不渲染：待裁（撤声明 or 诊断报告）。
 - wire 载体 A–F：P4-3 不合并；E 禁改。
 - sanitize 语义矩阵与 win-probes 孪生：无机械锁步。
 - dashboard 仍为第三份运行时 UI（共享核心迁移列后续）。
@@ -190,6 +189,12 @@
 - 设置壳偏差：自绘 chrome、面板渲染选中源自己 boot ctx 台账（故该源壳必须挂载）、离线远端不可达占位、选择器 body portal。
 - 上游对齐轮引入的有意偏差（仍成立）：首启阶段活动视图门；`sectionsEmpty` 占位保留；框架失败屏深引 `ui-primitives/src/Button.tsx`（主图已越 `mainGraphRaw.warn`，待决 = 拆懒化 or 上调阈值并写头注）；`Switch` 披露属性挂原语控制节点（收口需上游透传）；「开/选中」色用业务蓝（六处落点，不改官方组件）；侧栏 schedule 事实由 chamber 带过去；会话状态标记（蓝点/14px 徽标）与 Dock 角标/桌面通知为保留偏差，判据 design 06 §4.3/§5、design 19 §3.7。
 - 默认排序 `manual`（design 06 §3.1）；窗口标题冻结（Electron `dsh-chamber-electron`、壳 `dsh-chamber`）。
+- `sidebar.workspaces` 声明但不渲染（裁决）：保留声明（撤销会让上游 ui-workspace 注册抛错），
+  chamber 自有多源列表拥有浏览区，上游归档/恢复/过滤贡献在 chamber 为死件；锁测试
+  `packages/dsh-chamber-client-ui-sidebar/test/source-runtime/sidebar-slot-declaration.test.ts`
+  （design 24 §1、design 05 §2.2.1）。
+- 已归档浏览过滤推迟：恢复入口走官方 `workspace/unarchiveSession`（管理器行/批量）；
+  `ArchivedFilter` 镜像 + view-prefs 持久化仅在多来源确有浏览需求时排期（判据 = design 24 §1）。
 - **归档准入两段式 + 旧宿主降级**（design 24 §5）：chamber 恒发官方两段式（首调无 `stopActivity`，宿主以 `workspace/session-active` 拒绝并列出活动，确认后带 `stopActivity: true` 重发，停止由宿主 provider 完成）；**已接受的降级** = 无该准入的旧宿主上第二调原样上抛，归档不再由客户端补偿停止（旧 `stopArchivedSubtree` 腿已删，不保留）——安静会话归档照旧，带后台工作的会话在旧宿主上归档后其工作继续运行；**不做版本探测**（能力自证：只有能返回该拒绝的宿主才收到第二调）。git 的 pre-remove 归档勾选同此口径（`stopActivity` 随勾选授权，旧宿主忽略该字段，行为同前）。证据：`packages/dsh-chamber-client-core/src/instance-api.ts`（`archiveSession`/`sessionArchiveRefusal`）、`packages/dsh-chamber-client-ui-sidebar/src/client/session-archive-confirm.ts`、`packages/dsh-chamber-client-ui-git/src/shared/saga.ts`。
 - 菜单密度 = chamber `compact` 档（design 06 §7/design 15④），不得改回默认/dense。
 - Electron 二进制惰性安装（共享 dist）；dev 实例隔离（独立 user-data、端口 17520 起退避）。
