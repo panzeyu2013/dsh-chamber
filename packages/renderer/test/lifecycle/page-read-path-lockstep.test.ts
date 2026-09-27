@@ -121,7 +121,7 @@ test('the shell wiring reads the installed catalog and its real icons through th
 
 test('connections.createLocal refuses a body without a connection row instead of fabricating one', () => {
   // 6.1.2 契约锁。源码文本而非 wire 调用：api.ts 经 sidebar shared barrel 取 client，
-  // 该 barrel 会拉入页面级 store（restart-window-reload.ts 明记普通 node 测试不可载入），
+  // 该 barrel 会拉入页面级 store（普通 node 测试不可载入），
   // 所以这里钉契约守卫的形状，行为由 api 的 wire 契约（2xx 必带 connection 行）约束。
   const api = normalize(stripComments(
     readFileSync(fileURLToPath(new URL('../../src/api.ts', import.meta.url)), 'utf8'),

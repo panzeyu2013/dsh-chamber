@@ -172,7 +172,6 @@
 - 构建产物移出 git：clean checkout 先 `pnpm run build:artifacts`；`renderer/src/generated` 不提交。
 - 测试面精简上限：再压必落安全/fail-closed/parity/golden/CI 引用类 → 删减需显式裁决。
 - 统一名称的保留面：bundle id（T-14）、跨进程协议串、`native-shell.page-zoom.*`（T-22）、POC 标记与 `'native-shell'` 分类 id；改名须同步 T-14/T-17/T-22 与两侧测试。
-- 重启即重载：用户发起入口已接线；gateway 服务重启不接；外部改 profile 只能手动刷新（失效判据 = 新入口须接同一 completion）。
 - 租客 body portal 不受 stacking 约束（残余，顶层幕布不做；design 05 §4 被否方案⑤）。
 - 降级事实覆盖边界：已覆盖四座；不覆盖未激活来源、壳回收清除、单槽后报覆盖、侧栏行无动作。
 - 侧栏行悬停卡片由本仓自持（上游修竞态即退役；C15 锁形状+常数，锁红先于升级落地）。

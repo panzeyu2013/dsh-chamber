@@ -609,7 +609,7 @@ pre-remove 归档**带 `stopActivity: true`**：勾选即授权宿主停止这�
 
 - **404 = 确定性 `git-host-not-loaded`**（git RPC 404，host 包缺失或未生效）：客户端判定为**确定性
   失败**——不建恢复（recovery 会永久死循环）、不重试，按来源指引重启：本地实例在「dsh 运行时」点
-  「重启 dsh」（窗口重载一次，design 18 §3.6 项 8）；远程 ssh 实例在连接设置重新下发 chamber host 包
+  「重启 dsh」（受控重启，design 18 §3.6 项 8）；远程 ssh 实例在连接设置重新下发 chamber host 包
   并点「重启生效」（`restart_service` systemd IPC）后重试；gateway 实例经 `/chamber/runtime/restart`
   （事务化受控重启，刷新插件挂载，design 17 §3 / design 18 §3.6）后重试。该错误归属 connections 插件
   的插件管理面（`PluginDialog`，design 21 §6.6），不进侧栏：`ChamberInjectionState` 是按注册表包的

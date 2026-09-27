@@ -33,11 +33,10 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
 - 任何**已装进 profile 的 `dsh.client` 包** → chamber 前端**按实例运行时加载**：
   装法维持官方语义（profile 装包 + `cordis.patch.yml` 加行），宿主图变化后
   chamber 前端自然看到新插件（插件集变化在宿主重启生效）。**修订**：
-  chamber 是常驻窗口，页面侧 client 插件集在**窗口 boot** 时固定（宿主图每 boot 取一次、
-  bundle 那时执行；模块表按 id first-load-wins），所以「用户发起重启」的完整动作
-  = 宿主重启 **+ 一次窗口重载**——由 sidebar 共享面的 page-owned completion
-  （`restart-window-reload.ts`，按来源单飞、卸载不取消）统一承担，已覆盖全部用户发起的
-  插件刷新入口（design 18 §3.6 项 8 列清单）；设置面板需随之重新打开。
+  chamber 是常驻窗口，页面侧 client 插件集在**窗口 boot** 时取一次（宿主图每 boot 取一次、
+  bundle 那时执行；模块表按 id first-load-wins）；用户发起的重启 = 宿主重启本身，
+  **不再附带窗口重载**（客户端插件热重载已直接修复，重启入口不再需要窗口重 boot；
+  design 18 §3.6 项 8）。
 - 本地与远程实例同等（远程宿主插件集不同，各自 ctx 加载自己的子集）。
 - 宿主侧 / vendor **零改动**：图是现成的、bundle 是现成的、反代是现成的。
 
@@ -103,10 +102,7 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
   判词按 boot 序号暂存、settle 补放。事实**身份 = kind + 载荷**（同日修订）：延迟簇失败曾与探针判词共用
   `required-services-missing`，`reportSettledDegrade` 的「同 kind 即重复」会静默丢弃第二条；现延迟
   簇有自己的 kind（`deferred-registration-failed` + 失败 id 集），探针载荷带结构化
-  `services`/`injectedBy`。③ 同一道门被**设置壳**复用：`waitForSourceServing`（shared face
-  `serving-gate.ts`，读 chamberBridge 投影的 `connected`）在 `instance_unavailable` /
-  `dsh_not_ready` 这类**冷启动拒绝**上等来源并重试一次；终态来源（error/stopped/restart-exhausted）与
-  未知来源**立即**失败，真实原因照旧呈现。`chamber-entry.ts` 的 `assertRequiredExtraRowServices`
+  `services`/`injectedBy`。`chamber-entry.ts` 的 `assertRequiredExtraRowServices`
   （名字不变；纯判定在 `required-extra-rows.ts`）在 5s 内探测**派生并集**里仍未被 provide 的服务，点名
   「服务 + 注入它的已注册插件」，并经 shell 的 `chamberReportBootDegraded` 上报（**仍是诊断，不是启动
   门**：gateway/移动形态可合法不加载该行）。

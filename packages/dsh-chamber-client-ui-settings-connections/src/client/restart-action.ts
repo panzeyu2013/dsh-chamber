@@ -1,24 +1,20 @@
 /**
- * The ONE gateway managed-dsh restart action: POST /chamber/runtime/restart → 202 → PAGE-owned
- * readiness poll → reload. The connection card calls this function and maps its outcome onto its
- * own per-card note, so every restart entry shares one refusal copy and one completion.
+ * The ONE gateway managed-dsh restart action: POST /chamber/runtime/restart → 202 → readiness poll.
+ * The connection card calls this function and maps its outcome onto its own per-card note, so every
+ * restart entry shares one refusal copy and one readiness poll.
  *
  * Not in managed-restart.ts: that module is deliberately pure and import-free (its classifiers
- * are plain-node tested). This action owns the transport and the page-owned completion, hence it
- * imports fetch/poll/reload — one implementation, one call site.
+ * are plain-node tested). This action owns the transport and the readiness poll, hence it
+ * imports fetch/poll — one implementation, one call site.
  */
-import {
-  RESTART_RELOAD_BUDGET_MS,
-  armWindowReloadWhenServed,
-  pollGatewayReady,
-} from '@dsh-chamber/dsh-chamber-client-core'
+import { pollGatewayReady } from '@dsh-chamber/dsh-chamber-client-core'
 import { classifyRestartError, runtimeRefusalText, type RuntimeRefusalKey } from './managed-restart.ts'
 import { errorMessage } from './error-text.ts'
 
 /** How one managed-dsh restart attempt ended (the caller owns the note/UI). */
 export type ManagedRestartOutcome =
-  /** The managed dsh is serving again and the page reloaded onto it. */
-  | { kind: 'reloaded' }
+  /** The managed dsh is serving again (the readiness poll settled). */
+  | { kind: 'served' }
   /** The restart was accepted; readiness did not settle inside the poll window. */
   | { kind: 'accepted-timeout' }
   /** The route refused the action (409/400) — localized copy, ready to render. */
@@ -56,20 +52,14 @@ export async function runManagedRestart(
     try { body = await response.json() } catch { body = null }
     return { kind: 'refused', text: runtimeRefusalText(body, response.status, MANAGED_RESTART_REFUSAL_KEYS, t) }
   }
-  // Readiness + reload are PAGE-owned: closing the card/dialog mid-restart cannot cancel the completion.
-  let pollFailure: unknown = null
-  const outcome = await armWindowReloadWhenServed(sourceId, async signal => {
-    try {
-      await pollGatewayReady(sourceId, signal, { action: 'restart' })
-      return true
-    } catch (error) {
-      pollFailure = error
-      return false
-    }
-  }, { budgetMs: RESTART_RELOAD_BUDGET_MS })
-  if (outcome === 'reloaded') return { kind: 'reloaded' }
-  // accepted-timeout = the restart IS accepted and still recovering (ok tone); everything else keeps the poll's English detail.
-  const cls = classifyRestartError(pollFailure
-    ?? new Error('restart completion aborted before the readiness poll settled'))
-  return cls.kind === 'accepted-timeout' ? { kind: 'accepted-timeout' } : { kind: 'failed', detail: cls.detail }
+  // The 202 only accepts the restart: the readiness poll decides whether the success note is honest
+  // (pollGatewayReady owns its own 120s ceiling and classification). The poll failure is kept for the
+  // panel's copy; accepted-timeout = the restart IS accepted and still recovering (ok tone).
+  try {
+    await pollGatewayReady(sourceId, undefined, { action: 'restart' })
+    return { kind: 'served' }
+  } catch (error) {
+    const cls = classifyRestartError(error)
+    return cls.kind === 'accepted-timeout' ? { kind: 'accepted-timeout' } : { kind: 'failed', detail: cls.detail }
+  }
 }
