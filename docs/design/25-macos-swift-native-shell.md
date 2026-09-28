@@ -47,7 +47,7 @@
 | A7 | "macOS 无 argv 扫描"不实（open-url + argv 防御双路径，main.ts:1479-1482/1687） | §4.5 改写 |
 | A8 | Electron 从未 setApplicationMenu（Cmd+C/V 靠默认菜单） | §5 E3 现状列改正，Swift 结论不变（W2 必修） |
 | A9 | §6.1/§6.4 验证项编号 E1/E2 与 §5 边沿表撞车 | 更名 **U1**（userData 实根）/ **S1**（safeStorage 判别单测） |
-| A10 | E8 对话框归属错引 design 24；desktop_pick_directory 已不存在 | E8 = 插件源 folder\|.tgz 一体化 picker（design 21 §10 ⑧ / 13 §5.8）；**删除无消费方的 pickDirectory()** |
+| A10 | E8 对话框归属错引 design 24；desktop_pick_directory 已不存在 | E8 = 插件源 folder\|.tgz 一体化 picker（design 21 §6.5 / 13 §5.8）；**删除无消费方的 pickDirectory()** |
 | A13 | userData 清单漏 ssh-plugin-journal 与 *.corrupt | §6.1 补全（ssh-plugin-journal 已随写面退役删除，见 design 13 实现状态） |
 | B1/B13 | 资源/打包路径 seam 缺失；sidecar 打包双路径解析未写 | §4.1 HostEdges 补 `resolveResource`/`isPackaged` 能力位（≈15 处直拼点 P1 参数化）；§3.2 补 sidecar 打包布局同构（tsc 产物 + dist/web + host 包 + node/pnpm） |
 | B2 | §6.3 互斥锁设计缺陷（pidfile stale 模式正是 STATUS 判死刑的；未提 Electron 侧同落地；二次 flock 自锁） | §6.3 改 **flock(LOCK_EX\|LOCK_NB)** + 双 flavor 同实现 + fd 常驻 + 复验不二次 flock |
@@ -253,10 +253,27 @@ Apple 凭据（外部阻断）。
    §3.3 注）→ 输出 **ready 帧最小化 {port,
    shellVersion}**（其余身份字段走既有 `dsh-chamber:info`，保留其 10×50ms 重试与 null 兜底，
    防双源漂移，D8）→ 异步启动尾部 `runStartupTail` 内 pre-spawn 本地实例（**绝不使 ready 帧
-   延迟**；与 main.ts 同序——`controlPlane.start()` → 建窗/ready → `runStartupTail()`，
-   spawn 与页面加载重叠；旧文「pre-spawn → ready」是笔误，2026-12 次序裁定按实现）。
-3. Swift 收到 ready → 以 `/health` 做首载门；HTTP 2xx 后继续检查 `dsh.status`：**在途相位**（只有 `starting`/`restarting`）按有界退避节拍持续探测、不先渲染半初始化的会话 UI，**静止相位**立即载入（`ready` → 应用；`stopped`/`error`/`degraded`/`restart-exhausted` 以及词表外的未知词 → 控制面，以开放诊断与恢复入口）。壳不设等待总期限：收敛由控制面状态机负责（在途相位必然终止于静止态），壳只消费静止态，时间只有一个所有者。A 桥注入时机见 §4.4.1 D1。
-   **Rejected alternatives（首屏就绪门）**：只等 sidecar ready 帧或 `/health` 2xx 会把“控制面开始监听”误当成“本地 dsh 已 ready”，因为 `runStartupTail()` 有意异步启动本地实例；对所有状态无限等待又会把终态错误的诊断/恢复 UI 一并藏掉（`stopped`/`restart-exhausted` 正是「重试已停止、需手动启动」的终态），因此只等待**在途**相位，其余一律呈现；也不再给等待加第二个时间所有者（壳侧总期限会把控制面已经在管的事再管一遍，并让「超时之后显示什么」变成新的兜底）。
+   延迟**；与 main.ts 同序——`controlPlane.start()` → 建窗/ready → `runStartupTail()`；
+   旧文「pre-spawn → ready」是笔误，2026-12 次序裁定按实现）。**overlap 只在 Electron 腿成立**：
+   main.ts 不等本地 dsh，spawn 与页面加载重叠；Swift 腿的首帧被 (3) 的就绪门挡住
+   （`starting`/`restarting` 期间不导航），首次冷启 = 等整段 runtime 安装收敛，**Swift 腿不重叠**。
+   等待期深链不丢：`DeepLinkBuffer`（RendererRecovery.swift）有界暂存到 ready，
+   `handleSidecarReady` 的 `markReady()` 按序补发；也没有 host 侧 ready 超时会被这段等待拖耗尽
+   （门只消费控制面相位、深链缓冲只有容量上界，两者都无期限）。
+3. Swift 收到 ready → 以 `/health` 做首载门；HTTP 2xx 后继续检查 `dsh.status`，分三类：**在途相位**
+   （只有 `starting`/`restarting`）与**事实缺失**（2xx 但 `dsh.status` 缺失/不可解析/为空，按「还没到」
+   等待、绝不读成终态）都按有界退避节拍持续探测、不先渲染半初始化的会话 UI——退避 0.5→5s
+   （0.5s 起 ×2 递增、单步封顶 5s），独立计数、**不消耗 `navRetries`**；**静止相位**立即载入
+   （`ready` → 应用；`stopped`/`error`/`degraded`/`restart-exhausted` 以及词表外的未知词 →
+   控制面，以开放诊断与恢复入口）。壳不设等待总期限：收敛由控制面状态机负责（在途相位必然终止于
+   静止态），壳只消费静止态，时间只有一个所有者。事实缺失分支只在 2xx 来自非控制面时才可达：
+   控制面 `/health` 恒带 `dsh.status`（`getHealth`），端口由 sidecar 独占、EADDRINUSE 即 loud
+   fatal，故它是对陌生 2xx 的防御性等待，正常路径不经过。A 桥注入时机见 §4.4.1 D1。
+   **Rejected alternatives（首屏就绪门）**：只等 sidecar ready 帧或 `/health` 2xx 会把“控制面开始监听”
+   误当成“本地 dsh 已 ready”，因为 `runStartupTail()` 有意异步启动本地实例；对所有状态无限等待又会把
+   终态错误的诊断/恢复 UI 一并藏掉（`stopped`/`restart-exhausted` 正是「重试已停止、需手动启动」的
+   终态），因此只等待**在途状态与事实未达**，其余一律呈现；也不再给等待加第二个时间所有者（壳侧总期限
+   会把控制面已经在管的事再管一遍，并让「超时之后显示什么」变成新的兜底）。
 4. 运行时故障分级：
    - sidecar 崩溃/非零退出 → Supervisor 按重启退避重启（**无 Electron 先例，退避语义另立**：
      cp.start 失败 = fatal 退出；运行中崩溃 = 退避重启，上限与 renderer 恢复参数化同族）；fatal 边界
@@ -415,7 +432,7 @@ interface HostEdges {
 | E5 | `app.setBadgeCount`（平台门 + badgeEnabled 裁决在 core） | `NSApp.dockTile.badgeLabel` | 门控逻辑留 core（badge.ts） |
 | E6 | `powerMonitor.on('resume')` + held lastResume 补发（挂在 win.on('show') :1434-1441） | `NSWorkspace.didWakeNotification` + HostEdges.onMainWindowShown（窗口显示/恢复事件）→ core 补发语义原样 | 推送 `dsh-chamber:system-resume {timestamp}` |
 | E7 | `powerSaveBlocker`（keep-awake 断言） | `ProcessInfo.beginActivity(.idleSystemSleepDisabled…)` 或 IOKit 断言 | 触发条件随 core 状态机原样（网关会话保持等，14）；**启动期 reconcile** `<userData>/chamber-settings.json` 的 `keepAwake`（缺省 off / 损坏 loud+off；AppDelegate.swift:322-328） |
-| E8 | `dialog.showOpenDialog`（唯一 = 插件源 folder\|.tgz 一体化 picker :334-347，darwin 双模式，**design 21 §10 ⑧ / 13 §5.8**） | `NSOpenPanel`（canChooseDirectories + canChooseFiles 双模式） | 归档清理（design 24）无任何文件对话框 |
+| E8 | `dialog.showOpenDialog`（唯一 = 插件源 folder\|.tgz 一体化 picker :334-347，darwin 双模式，**design 21 §6.5 / 13 §5.8**） | `NSOpenPanel`（canChooseDirectories + canChooseFiles 双模式） | 归档清理（design 24）无任何文件对话框 |
 | E9 | `dialog.showErrorBox/showMessageBox`（fatal 启动/前端崩溃/退出确认 D2）+ fatal 边界（uncaughtException → app.exit(1) :230-251） | `NSAlert`（sheet 或 app-modal）+ **sidecar fatal 边界：stderr + 非零退出码分级，Supervisor 分流文案** | 退出确认三分支与 5s 硬顶（§3.3/4） |
 | E10 | `shell.openExternal`（外链/发布页/`openVscodeUrl`） | `NSWorkspace.shared.open(URL)`（URL 规范化/预算/冷却在 core，main.ts:1269-1303） | open-release 亦此 |
 | E11 | `shell.openPath/showItemInFolder` | NSWorkspace `open(_:)` / `activateFileViewerSelecting` | 失败模式语义照搬 |
