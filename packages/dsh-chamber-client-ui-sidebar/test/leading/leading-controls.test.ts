@@ -28,6 +28,8 @@ test('the reopen toggle comes first and runs the layout toggle; New Session foll
   assert.match(newSession as string, /aria-label=\{t\('session\.new\.label'\)\}/u)
   assert.match(newSession as string, /onClick=\{\(\) => \{ startSession\(\) \}\}/u)
   assert.match(newSession as string, /IconNewChatOutlineRegular/u)
+  assert.doesNotMatch(component, /SIDEBAR_LEADING_CONTROLS/u,
+    'the seat is a fixed two-control projection, not a table')
 })
 
 test('each control carries its effective shortcut binding, absent while unregistered', () => {

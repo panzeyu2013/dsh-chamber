@@ -19,8 +19,9 @@
  *
  * **缺 vendor 树的口径**：默认**响亮失败**，与仓内其它 vendor 门
  * 一致（C6 缺 submodule 树即失败、open-in 的 vendor 契约测试 ENOENT 即失败）——「本地绿」
- * 绝不能靠静默跳过换来。只有确为无 submodule 的本地 worktree 才显式设
- * `DSH_CHAMBER_VENDOR_ABSENT=skip`；CI 不设该变量，这六条语义因此在 CI 上必然执行。
+ * 绝不能靠静默跳过换来。`DSH_CHAMBER_VENDOR_ABSENT=skip` 只是本地调试出口：本文件在本包
+ * `scripts/test.mjs` 的 guard 是 `executed`，全跳过会被零测试守卫判红，换不来「本地绿」；
+ * CI 不设该变量，这六条语义因此在 CI 上必然执行。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

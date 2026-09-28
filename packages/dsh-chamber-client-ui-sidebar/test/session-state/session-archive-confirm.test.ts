@@ -68,7 +68,10 @@ test('wiring lock: the confirm phase resends with stopActivity; only a decodable
   // The single-layer gate must decide on the synchronous ref, not the render
   // closure: the first archive call can settle ~30s after the click, so a stale
   // closure would stack a second layer or silently replace a pending confirm.
-  assert.ok(dialogs.includes('const openLayersRef = useRef({ delete: false, archive: false, browser: false, sessionArchive: false })'))
+  // 每层都必须以 false 起手：新增一层不该让这条锁红，但 true 起手会让首个确认被静默吞掉。
+  const layers = /const openLayersRef = useRef\(\{([^}]*)\}\)/.exec(dialogs)
+  assert.ok(layers !== null, 'the layer gate must be one synchronous ref')
+  assert.doesNotMatch(layers[1], /:\s*true/u)
   assert.ok(dialogs.includes('const open = openLayersRef.current'))
   assert.ok(dialogs.includes('openLayersRef.current.sessionArchive = true'))
   assert.ok(dialogs.includes('openLayersRef.current.sessionArchive = false'))

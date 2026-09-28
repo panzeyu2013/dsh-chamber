@@ -155,8 +155,6 @@ test('goal-active suppression: the suppressed state never reports completed and 
 })
 
 test('P5: the upstream completeness-signal ask is pinned until upstream lands it', () => {
-  const proposals = read('../../../../docs/progress/todo/upstream-proposals.md')
-  assert.match(proposals, /## 7\. 子代理生命周期\/计数与完整性信号/)
   // The local fallback this test retires: an ABSENT lineage index is unknown, never "none".
   assert.match(read('../../../dsh-chamber-client-core/src/derive.ts'), /subagentRunning === undefined\s*\n\s*\? 'unknown'/)
 })

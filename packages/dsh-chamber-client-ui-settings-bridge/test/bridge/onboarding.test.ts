@@ -2,8 +2,9 @@
  * `settings.onboarding` coordinator tests: pure
  * facts only, no DOM, no renderer. The stage mounts exactly one ordered step, and only
  * while the instance's current session is blank or absent — upstream's readiness
- * selector, verbatim. The React wiring is pinned by the source-text locks in
- * `upstream-alignment-locks.test.ts`; the truth table and projection are here.
+ * selector, verbatim. The React wiring has no source-text lock (the former
+ * `upstream-alignment-locks.test.ts` was retired in the UI-alignment batch); the truth
+ * table and projection are here.
  */
 
 import { test } from 'node:test';
