@@ -5,8 +5,7 @@
  * checking/downloading phase. electron-updater cannot be aborted, so a late
  * result from an abandoned attempt is handled explicitly.
  *
- * Sibling parts: updater.test.ts, updater-restart-install.test.ts,
- * updater-cache-maintenance.test.ts.
+ * Sibling parts: updater.test.ts, updater-restart-install.test.ts.
  */
 
 import { test } from 'node:test'
@@ -145,10 +144,17 @@ test('A2 回归：永不 settle 的检查不得让 checkNow 永久挂起，被�
   const { fake, controller } = makeController({ deps: { updateIdleTimeoutMs: 40 } })
   let rejectLate = null as ((error: Error) => void) | null
   fake.checkResult = new Promise((_resolve, reject) => { rejectLate = reject })
+  // 空闲守卫必须显式释放：竞态赢家落定后，残留的 3s 定时器仍会占住事件循环，
+  // 把整个文件拖到它到点（实测该文件因此多付约 3s），runner 的每文件预算白花。
+  let idleGuard: ReturnType<typeof setTimeout> | undefined
   const outcome = await Promise.race([
     controller.checkNow().then((value) => ({ kind: 'resolved' as const, value })),
-    new Promise<{ kind: 'hung' }>((resolve) => setTimeout(() => resolve({ kind: 'hung' }), 3000)),
-  ])
+    new Promise<{ kind: 'hung' }>((resolve) => {
+      idleGuard = setTimeout(() => resolve({ kind: 'hung' }), 3000)
+    }),
+  ]).finally(() => {
+    if (idleGuard !== undefined) clearTimeout(idleGuard)
+  })
   assert.deepEqual(outcome, { kind: 'resolved', value: { ok: true } },
     '看门狗超时后 runCheck 必须返回（修复前 checkNow 永久挂起）')
   assert.equal(controller.state().phase, 'error')

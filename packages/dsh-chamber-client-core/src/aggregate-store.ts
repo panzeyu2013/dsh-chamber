@@ -39,13 +39,16 @@ export function isValidProducerSourceFingerprint(sourceId: string, value: unknow
 export interface ChamberServerWorkspace {
   id: string
   title: string
+  /** Wire display path: the hover card's middle line and its click-to-copy text. */
+  path?: string
+  /** `Date.parse` epoch ms for the card; SPARSE (missing/unparseable ⇒ absent, never NaN). */
+  createdAt?: number
   /** True only for the synthetic trailing ungrouped bucket. */
   ungrouped?: boolean
   /**
-   * True only for the fallback's cwd-derived groups (`__cwd__:` ids,
-   * fetchInstanceSnapshot). Display-only: the host does not know these ids,
-   * so the sidebar must disable every workspace-scoped mutation on them
-   * (ungrouped-bucket parity).
+   * True only for the fallback's cwd-derived groups (`__cwd__:` ids, fetchInstanceSnapshot).
+   * Display-only: the host does not know these ids, so the sidebar must disable every
+   * workspace-scoped mutation on them (ungrouped-bucket parity).
    */
   synthetic?: boolean
   sessions: {
@@ -103,13 +106,12 @@ export interface ChamberServerAggregate {
   /** Status text (ready/connecting/… projection). */
   phase: string
   /**
-   * Gateway only: the managed dsh was probed into a terminal-down state while
-   * the TRANSPORT was up (`stopped`/`error`/`restart-exhausted`). A dedicated
-   * fact, never re-derived from `phase`: `phase` merges the managed state with
-   * the transport phase and both vocabularies contain `error`, so classifying
-   * the merged string would misdiagnose an SSH/tunnel failure as a stopped
-   * managed dsh. Absent = not a gateway, transport
-   * down, probe missing, or a healthy/transient managed state (fail open).
+   * Gateway only: the managed dsh was probed into a terminal-down state while the
+   * TRANSPORT was up (`stopped`/`error`/`restart-exhausted`). A dedicated fact, never
+   * re-derived from `phase`: `phase` merges the managed state with the transport phase
+   * and both vocabularies contain `error`, so classifying the merged string would
+   * misdiagnose an SSH/tunnel failure as a stopped managed dsh. Absent = not a gateway,
+   * transport down, probe missing, or a healthy/transient managed state (fail open).
    */
   managedRuntimeDown?: boolean
   /**
@@ -268,11 +270,10 @@ export interface WorkspaceCreatedFact {
    */
   afterWorkspaceId?: string
   /**
-   * Optional label this creation INTENDS for the row: the Git
-   * plugin's adopt path renames the workspace to the branch right after the
-   * saga, and without the hint the echoed row would be born with the path
-   * basename and flip a few RPCs later. Absent = the ledger's path-basename
-   * rule; the mounted follow baseline still wins over both.
+   * Optional label this creation INTENDS for the row: the Git plugin's adopt path
+   * renames the workspace to the branch right after the saga, and without the hint the
+   * echoed row would be born with the path basename and flip a few RPCs later. Absent =
+   * the ledger's path-basename rule; the mounted follow baseline still wins over both.
    */
   title?: string
 }
@@ -663,11 +664,10 @@ export const chamberBridge = {
 
   /**
    * Call after a successful `workspace.create` (single funnel:
-   * shared/workspace-mutations.ts): publish the host workspace identity so the
-   * App layer can echo the row into that source's projection without waiting
-   * for a mount (`withWorkspaceEcho`). The App layer remains the only owner of
-   * the projection; this channel is a one-way fact, never a request to mutate
-   * the host.
+   * shared/workspace-mutations.ts): publish the host workspace identity so the App layer
+   * can echo the row into that source's projection without waiting for a mount
+   * (`withWorkspaceEcho`). The App layer remains the only owner of the projection; this
+   * channel is a one-way fact, never a request to mutate the host.
    */
   reportWorkspaceCreated(fact: WorkspaceCreatedFact): void {
     workspaceCreatedChannel.emit(fact)

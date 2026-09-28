@@ -28,7 +28,6 @@ test('currentWindowsUserName prefers the process token over the spoofable USERNA
   // process can set USERNAME to anything, so the environment may only fill in
   // when the OS lookup is unavailable (the second parameter injects it here).
   assert.equal(currentWindowsUserName({ USERNAME: 'spoofed' }, 'alice'), 'alice')
-  assert.equal(currentWindowsUserName({ USERNAME: 'spoofed' }, 'alice'), 'alice')
   assert.equal(currentWindowsUserName({ USERNAME: 'alice' }, ''), 'alice')
   assert.equal(currentWindowsUserName({ USERNAME: '  alice  ' }, null), 'alice')
   assert.equal(currentWindowsUserName({}, null), null)

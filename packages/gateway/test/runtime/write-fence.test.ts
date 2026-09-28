@@ -123,10 +123,18 @@ test('profile-write idle wait times out on the bound and on the lifecycle abort'
 })
 
 test('quarantine callback failures are logged, never propagated into runtime safety', () => {
-  const { warnings } = harness({
+  const { fence, warnings } = harness({
     onQuarantineChange: () => { throw new Error('feature resync exploded') },
   })
-  assert.equal(typeof warnings.length, 'number')
+  // The activation window is the real publisher: begin reaches depth 1 and fires the callback.
+  assert.doesNotThrow(() => fence.beginActivation())
+  assert.equal(fence.activationInProgress(), true, 'the window must stay open despite the resync failure')
+  assert.equal(warnings.length, 1, 'exactly one warning per failed resync publication')
+  assert.match(warnings[0] ?? '', /gateway runtime activation resync failed: .*feature resync exploded/)
+  // Closing publishes again: the failure stays non-fatal and repeatable.
+  assert.doesNotThrow(() => fence.endActivation())
+  assert.equal(fence.activationInProgress(), false)
+  assert.equal(warnings.length, 2)
 })
 
 test('tracked operations drain to a fixed point and can exclude the caller', async () => {
@@ -146,8 +154,14 @@ test('tracked operations drain to a fixed point and can exclude the caller', asy
   fence.trackOperation(self)
   // Excluding the caller itself is the F7 rollback contract: it must not
   // self-wait, otherwise the rollback deadlocks behind its own promise.
+  // 守卫定时器必须释放：正确实现不等待，残留的 100ms 会白占文件尾。
+  let selfWaitGuard: ReturnType<typeof setTimeout> | undefined
   await Promise.race([
     fence.drainOtherOperations(self),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('drainOtherOperations self-waited')), 100)),
-  ])
+    new Promise((_, reject) => {
+      selfWaitGuard = setTimeout(() => reject(new Error('drainOtherOperations self-waited')), 100)
+    }),
+  ]).finally(() => {
+    if (selfWaitGuard !== undefined) clearTimeout(selfWaitGuard)
+  })
 })

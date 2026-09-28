@@ -13,6 +13,8 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { createPanelSource, type SlotsReader } from '../../src/client/panel-source.ts'
 
 /** Ledger fake: one list of entries per slot key, wrapped in the ledger's `{ options }` shape exactly as stored. */
@@ -71,14 +73,9 @@ test('subscribers fire only when the projection actually changes', () => {
   assert.deepEqual(source.source.getSnapshot(), [])
 })
 
-// 测试经 test/support/vendor-store-double.mjs 断言
-// createSnapshotStore 契约（`set`/`update` 齐备、`set` 走 plain array、仅真实变化才通知），生产侧接线由源码锁与 `build:renderer` 的真实解析共同保证。
-test('the observable face follows the store engine contract (createSnapshotStore)', () => {
+test('the observable face stays a plain array that republishes only on real change', () => {
   const panelSource = createPanelSource()
   const { sync } = panelSource
-  const engine = panelSource.source as unknown as { set?: unknown; update?: unknown }
-  assert.equal(typeof engine.set, 'function', 'createSnapshotStore products carry set()')
-  assert.equal(typeof engine.update, 'function', 'createSnapshotStore products carry update()')
   sync(makeSlots([{ id: 'engine', order: 1, label: 'Engine' }]))
   const snapshot = panelSource.source.getSnapshot()
   assert.ok(Array.isArray(snapshot), 'the projection stays a plain array')
@@ -91,4 +88,17 @@ test('the observable face follows the store engine contract (createSnapshotStore
   assert.equal(notifications, 0)
   sync(makeSlots([{ id: 'engine', order: 1, label: 'Renamed' }]))
   assert.equal(notifications, 1)
+})
+
+test('production wiring: the real engine is imported and set() is the only write path', () => {
+  // The node run maps the store specifier to a double (see the file header), so
+  // the runtime tests above prove the READ semantics and this source lock proves
+  // the production wiring: the real engine is imported, set() writes, and no
+  // hand-rolled observable replaces it.
+  const source = readFileSync(fileURLToPath(new URL('../../src/client/panel-source.ts', import.meta.url)), 'utf8')
+  assert.match(source, /import \{ createSnapshotStore \} from '@deepseek-ai\/dsh-client-store'/,
+    'panel-source.ts must value-import the dsh store engine, never hand-roll one')
+  assert.match(source, /panels\.set\(next\)/, 'set() is the write path (a plain array, never an immer draft)')
+  assert.doesNotMatch(source, /panels\.update\(/, 'update() would hand React an immer draft and change what it observes')
+  assert.doesNotMatch(source, /new Set\(/, 'a hand-rolled listener Set must never replace the engine observable')
 })

@@ -52,8 +52,10 @@ test('parse: strongest algorithm wins; a weaker matching digest cannot rescue a 
 
 test('parse: only the strongest algorithm is verified, and its matching digest passes', () => {
   const strong = sha512(PAYLOAD)
-  const weakCorrect = sha256(PAYLOAD)
-  const verifier = createIntegrityVerifier(`sha256-${weakCorrect} sha512-${strong}`)
+  // 弱摘要故意写错：实现若改成"校验全部 token 且要求全中"，本用例才会红——
+  // 弱摘要也正确时两种实现都绿，判据没有判别力。
+  const weakWrong = sha256(new TextEncoder().encode('stale weak digest'))
+  const verifier = createIntegrityVerifier(`sha256-${weakWrong} sha512-${strong}`)
   verifier.update(PAYLOAD)
   assert.doesNotThrow(() => verifier.assertMatch())
 })

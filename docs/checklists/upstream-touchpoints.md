@@ -223,7 +223,8 @@ host插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游README（api
 
 > chamber-named fork（design 05 — 多来源侧栏）：不覆盖上游包名，上游
 > `@deepseek-ai/dsh-client-ui-sidebar` 保留在 vendor 树（C1 锚）并被本 fork 深引其
-> `HeaderLeadingControls` 面（按源码路径消费，注册 `shell.leading` 席位）——本 fork 只在
+> 同一 `shell.leading` 席位以自建 `SidebarLeadingControls`（上游同形 clone）占座；上游
+> `HeaderLeadingControls` 不镜像、也不被源码路径消费——本 fork 只在
 > 同一座位上重实现多来源列表、归档管理器与来源信号灯。登记形态 = registry 的
 > chamber-named 类（`versionAnchor: chamber`，`type: fork`；`registry.mjs` 的
 > chamberNamedForks 不变量接受 fork 与 seed 两种类型，两者都必须带文件级分类，否则
@@ -240,16 +241,16 @@ host插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游README（api
 | `src/client/SidebarRoot.module.css` | [patch-mod] | 重实现样式（多来源列表/行悬停卡/归档管理器/来源信号灯） |
 | `src/client/SidebarRoot.tsx` | [patch-mod] | 重实现：多来源会话列表（按工作区分组、搜索/排序/归档管理器/悬停卡片/来源信号灯）替换上游单来源 workspaces 浏览器 |
 | `src/client/contract/slots.ts` | [patch-mod] | chamber 座位契约（owner props 同名但按多来源扩展） |
-| `src/client/index.ts` | [patch-mod] | apply：注册 chamber 侧栏 + sidebar.panellist 镜像 + workspace navigation 服务 + shell.leading 上游 occupant（源码路径消费） |
+| `src/client/index.ts` | [patch-mod] | apply：注册 chamber 侧栏 + sidebar.panellist 镜像 + workspace navigation 服务 + shell.leading 席位由本包 SidebarLeadingControls（上游同形 clone）占座 |
 | `src/client/locales.ts` | [patch-mod] | chamber 文案表（含上游没有的工作区/来源操作） |
 | `src/index.ts` | [patch-mod] | 包入口差异（module-system 宿主接线 + chamber 构面导出） |
 | `tsconfig.json` | [patch-mod] | chamber 构面（vendor paths/检查面） |
 | `scripts/test.mjs` | [own] | chamber 自有测试清单（按域分组的显式 manifest；verify:test-wiring 校验可达性） |
 | `scripts/` | [own] | chamber 自有脚本（测试 manifest 与清单守卫） |
-| `src/` | [own] | chamber 自有实现（多来源聚合、面板镜像、来源降级、归档管理器、工作区变更/拖拽排序、client-plugin load kernel、席位 chrome 等） |
+| `src/` | [own] | chamber 自有实现（多来源聚合、面板镜像、来源降级、归档管理器、工作区变更/拖拽排序、client-plugin load kernel、席位 chrome、按上游逐字移植的 keyed-row FLIP 动画器 rows/animated-rows.* 等） |
 | `test/` | [own] | chamber 自有测试（按域分组：session-rows/session-state/source-runtime/plugin-kernel…） |
-| `src/client/HeaderLeadingControls.module.css` | [dropped] | 该组件的内部样式，随上游组件源码路径消费 |
-| `src/client/HeaderLeadingControls.tsx` | [dropped] | **按源码路径直接消费上游文件**（vendor-modules.d.ts 声明 + index.ts 导入并注册上游席位），不镜像进 fork |
+| `src/client/HeaderLeadingControls.module.css` | [dropped] | 该组件的内部样式；上游文件不镜像、也不被消费——同一 shell.leading 席位由本包 SidebarLeadingControls.module.css（上游同形 clone）实现 |
+| `src/client/HeaderLeadingControls.tsx` | [dropped] | 上游组件不镜像、不被源码路径消费；同一 shell.leading 席位由本包 SidebarLeadingControls.tsx 注册占座（src/client/index.ts；vendor-modules.d.ts 只声明本包用到的类型面） |
 | `tests/` | [dropped] | 上游测试/快照不镜像（chamber 有自建 test/） |
 | `tsdown.config.ts` | [dropped] | chamber 不构建 lib/（沿用上游模板形状但 chamber 树不产出该产物） |
 <!-- GENERATED:registry:touchpoints.fork-mirror.ui-sidebar:end -->

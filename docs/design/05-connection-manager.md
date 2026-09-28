@@ -101,12 +101,12 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 - 保留官方侧边栏的：logo 行、New Session（作用于当前活动来源）、折叠（wide/rail）状态机、
   foot（footer.action + settings 孔位）。rc.2 起官方在 darwin 折叠态额外用窗口 chrome 的
   `shell.leading` 单席（官方 `ui-sidebar` 的 `HeaderLeadingControls`）承载展开/新建；
-  chamber fork 以同形 occupancy 复用该席（`SidebarLeadingControls.tsx`，28px 圆钮，
+  chamber fork 以同形 occupancy 复用该席（`SidebarLeadingControls.tsx`，28px / `--dsw-radius-sm`，
   与 AppFrame 的 `--dsh-frame-leading-clearance` 计价锁步），不再是空席位。foot 的座位契约（审计补记）：
   `sidebar.footer.action` 是 **list 座**（`contract/slots.ts`），多个注册项共用同一行 ⇒
   该行由 chamber 补 4px 间距（官方块无 gap，两个 occupant 会零间距相接；该 4px 是侧栏/本表
-  的图标簇节奏——「4px = G1-4 两个 24px 命中盒的下限」一说已随 的命中盒整体
-  回退作废)；纵向（footer.action 行 ↔ settings 座）仍按官方契约由 occupant 自己的 margin
+  的图标簇节奏——「4px = G1-4 两个 24px 命中盒的下限」这一旧论证已随 06 §7 的命中盒 pass 整体
+  回退而作废，间距本身保留）；纵向（footer.action 行 ↔ settings 座）仍按官方契约由 occupant 自己的 margin
   承担（settings 触发器 `margin: 4px -2px` / rail `8px 0 10px` 即既有先例）。
 - **插件管理入口**：永久插件开关归入「设置 → 内置插件」的独立「插件管理」分页，复用上游
   `dsh-client-ui-plugin-manager` 的页面、控制器和配置表单；该上游包只由 chamber 替换面承载，
@@ -162,7 +162,10 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   切换**（显式排序菜单——官方 ViewOptionsMenu 模式，勾选标记当前模式，
   取代盲切循环，06 §2.2）；workspace 头/会话行**双击重命名**
   （会话行单击立即打开、二次点击进入重命名，06 §2.2）；workspace 头/会话行
-  悬停显示**信息卡片**（标题/会话数/相对时间/状态点/复制标题，06 §7）。
+  悬停显示**信息卡片**（workspace：标题/展示路径/绝对创建时间/点卡复制 cwd，路径为绝对路径（本仓范围选择：
+  `dsh-api-remotes` 的 home 事实可达，但本仓不缩写，06 §7）；会话行：标题/相对时间/状态点/复制标题，06 §7）。
+  **挂载门 = 创建时间存在**（与上游 `row.createdAt === void 0` 同门）：未挂载来源的 workspace echo 行只有 path、
+  没有 createdAt，此时不挂卡——投影稀疏写字段（不可解析 ⇒ 缺席，绝不写 NaN），`createdAt` 是唯一创建事实。
 - New Session → 当前活动来源新建会话。
 
 #### 2.2.1 打开意图、工作区回声与会话回声（修订；三项真机反馈）

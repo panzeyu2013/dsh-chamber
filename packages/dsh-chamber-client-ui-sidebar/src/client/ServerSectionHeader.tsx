@@ -12,6 +12,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import { MANAGED_RUNTIME_TRANSIENT_STATES } from '@dsh-chamber/dsh-chamber-client-core/managed-runtime'
 import { clearPendingClick } from '@dsh-chamber/dsh-chamber-client-core/pending-click'
 import type { PrewarmIntent } from '@dsh-chamber/dsh-chamber-client-core/prewarm-intent'
 import { collapseSearch, expandSearch, type SourceSearchState } from '@dsh-chamber/dsh-chamber-client-core/search-state'
@@ -52,7 +53,12 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
     serverDropCommitted,
     sortMenuOpen,
     setSortMenuOpen,
+    useShortcuts,
   } = useSidebarSection()
+  // 头部动作的键帽来自页面快捷键目录（上游 WorkspaceBrowser 同款选择）：
+  // 搜索 session.search、添加工作区 workspace.add；命令未注册时行缺席。
+  const searchShortcut = useShortcuts(rows => rows.find(row => row.id === 'session.search'))
+  const addWorkspaceShortcut = useShortcuts(rows => rows.find(row => row.id === 'workspace.add'))
   // 可激活入口判定与 title/aria 文案（托管 dsh 停机时说明原因，而不是"切换到该实例"）。
   const headerActivatable = sourceHeaderActivatable(server, chamberInstanceId)
   const headerTitle = sourceHeaderTitle(server, chamberInstanceId, t)
@@ -65,9 +71,9 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
   // 前两条不互斥（可能既停机、壳里又留着上次挂载的缺口事实），顺序即优先级；缺口事实
   // 仅存在于挂载/预热过的来源。内容变化时既有 live region 才可被 AT 播报。
   // 托管瞬态必须**按 kind 限定**：本地 /health 词表同样含 starting/restarting，
-  // 只判 phase 会给本地源挂上网关专属文案。
+  // 只判 phase 会给本地源挂上网关专属文案；瞬态集合共用 managed-runtime 的常量。
   const managedTransient = server.kind === 'gateway'
-    && (server.phase === 'starting' || server.phase === 'restarting')
+    && (MANAGED_RUNTIME_TRANSIENT_STATES as readonly string[]).includes(server.phase)
   const bootGapNote = sourceBootGapNote(server, t)
   // 缺口分支按构造出的布尔选择，绝不比较渲染字符串：文案是词典拷贝，
   // 两个分支共用句子时比较会静默误判。
@@ -246,8 +252,8 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                         （切换记账 + 覆盖丢弃）。 */}
                     {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
                       <Menu
-                        // Menu 密度用 `compact`（26px 行，12px 字）：原语 `dense`
-                        // 变体的菜单行比侧栏 26px 列表行更高。
+                        // Menu 密度用原语 `compact`（24px 行 / 11px 字；design 06 §7）：
+                        // 官方默认 item 34px、dense 30px，都比侧栏 26px 列表行高。
                         compact
                         portal
                         align="end"
@@ -288,11 +294,17 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                       />
                     )}
                     {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
-                      <Tooltip label={t('action.addWorkspace')} side="bottom" delayMs={500}>
+                      <Tooltip
+                        label={t('action.addWorkspace')}
+                        shortcutKeys={addWorkspaceShortcut?.keys}
+                        side="bottom"
+                        delayMs={500}
+                      >
                         <button
                           type="button"
                           className={clsx(cc.actionIcon, cc.addWorkspace)}
                           aria-label={t('action.addWorkspace')}
+                          aria-keyshortcuts={addWorkspaceShortcut?.aria}
                           onClick={(event) => {
                             event.stopPropagation()
                             if (suppressClickRef.current) return
@@ -307,11 +319,18 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                       </Tooltip>
                     )}
                     {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
-                      <Tooltip label={t('search.sessions.aria')} side="bottom" delayMs={500}>
+                      <Tooltip
+                        label={t('search.sessions.aria')}
+                        shortcutKeys={searchShortcut?.keys}
+                        side="bottom"
+                        delayMs={500}
+                        disabled={search?.expanded === true}
+                      >
                         <button
                           type="button"
                           className={cc.searchButton}
                           aria-label={t('search.sessions.aria')}
+                          aria-keyshortcuts={searchShortcut?.aria}
                           aria-expanded={search?.expanded === true}
                           ref={searchButton}
                           onClick={(event) => {

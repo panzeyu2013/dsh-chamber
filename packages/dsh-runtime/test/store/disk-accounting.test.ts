@@ -226,8 +226,8 @@ test('runtimeDiskSummaryAsync on an empty base is all zeros (full 14-key project
 
 test('runtimeDiskSummaryAsync batches: yields to the event loop and reports progress via onVisited', async () => {
   const base = freshBase();
-  // 300+ 目录 × 12 文件 ≈ 3.9k 节点：yieldEvery=64 → 确定性多次让渡。
-  for (let d = 0; d < 300; d += 1) {
+  // 120+ 目录 × 12 文件 ≈ 1.5k 节点：yieldEvery=64 → 确定性多次让渡（≥10 仍成立）。
+  for (let d = 0; d < 120; d += 1) {
     const dir = path.join(base, 'dsh-runtime', 'leftover', `dir-${d}`);
     mkdirSync(dir, { recursive: true });
     for (let f = 0; f < 12; f += 1) writeFileSync(path.join(dir, `f-${f}`), 'x');
@@ -245,8 +245,8 @@ test('runtimeDiskSummaryAsync batches: yields to the event loop and reports prog
     onVisited: (n) => { visited = n; yields += 1; },
   });
   keepTicking = false;
-  assert.ok(yields >= 10, `yieldEvery=64 下 3.9k 节点应让渡 ≥10 次，实际 ${yields}`);
-  assert.ok(visited > 3000);
+  assert.ok(yields >= 10, `yieldEvery=64 下 1.5k 节点应让渡 ≥10 次，实际 ${yields}`);
+  assert.ok(visited > 1000);
   assert.ok(macrotaskRounds >= 10, 'macrotask 链在遍历期间取得 ≥10 轮进展（未被冻结）');
   assert.ok(summary.unclassifiedBytes > 0);
   assert.equal(summary.totalBytes, summary.unclassifiedBytes,

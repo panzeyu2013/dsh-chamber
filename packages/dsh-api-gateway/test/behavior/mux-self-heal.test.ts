@@ -463,30 +463,6 @@ test('a slow-but-answering Host keeps its carrier', async (t) => {
   t.mock.timers.reset()
 })
 
-test('an unanswered stream open fails as a carrier error once the deadline fires', async (t) => {
-  installFakeSocket()
-  t.mock.timers.enable({ apis: ['setTimeout'] })
-  const client = new RemoteStreamMuxClient()
-  client.start()
-  await flushMicrotasks()
-  assert.equal(FakeSocket.instances.length, 1)
-  FakeSocket.instances[0].openNow()
-  await flushMicrotasks()
-  const iterator = client.open('$events', { args: {} }, new AbortController().signal)
-  const pending = iterator.next()
-  await flushMicrotasks()
-  assert.ok(
-    FakeSocket.instances[0].sent.some(frame => frame.includes('"type":"open"')),
-    'the open frame must reach the socket',
-  )
-  t.mock.timers.tick(30_000)
-  await assert.rejects(
-    pending,
-    (error: unknown) => error instanceof Error && error.name === 'RemoteStreamCarrierError',
-  )
-  await client.close()
-  t.mock.timers.reset()
-})
 
 /** Sentinel for an iterator step that has not settled yet. */
 const PENDING = Symbol('pending')

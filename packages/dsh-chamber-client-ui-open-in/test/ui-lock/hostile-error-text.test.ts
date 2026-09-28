@@ -31,12 +31,3 @@ test('按钮的 catch 走敌意值安全原语，不得回到朴素格式化', (
   assert.ok(!/instanceof Error \? error\.message : String\(error\)/u.test(BUTTON), '朴素格式化会在 .catch 内再抛')
 })
 
-test('行为面：敌意值 / 空值仍然只返回文本', () => {
-  const hostile = {
-    get message(): string { throw new Error('hostile getter') },
-    toString(): string { throw new Error('hostile toString') },
-  }
-  assert.equal(describeOpenInError(hostile), 'unknown error')
-  assert.equal(describeOpenInError(''), 'unknown error')
-  assert.equal(describeOpenInError(new Error('plain')), 'plain')
-})

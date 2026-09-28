@@ -275,7 +275,7 @@ Git 事实不加进 App 的 session aggregate，v1 徽标只在 Git 区内；普
   不可见 `::after` 24px rim **与它顺带加宽的 `.headerGit` 2→4px gap 一并回退**——命中区重新
   就是视觉盒，gap 回到 v0.2.4 的 2px。机制/
   范围/局限见 `sidebar-chamber.module.css` 的 `.actionIcon` 注释块（唯一权威处）与 design 06
-  §7：这是对"从按钮上离开头部"主触发的**缓解**，不是根治。**20px/r5 视觉盒不是本次回退
+  §7：这是对"从按钮上离开头部"主触发的**缓解**，不是根治。**20px/r-xs（4px）视觉盒不是本次回退
   对象**——那是同批的图标钮语言，v0.2.4 此处为 22px/r6；24px 目标
   尺寸重新成为本模块的已登记偏差，见 design 24 §13 第 17 条与 design 06 §7。行内动作钮命中区
   见 `SidebarGit.module.css` 的 `.unregisteredAction`：分支图标 + 名称 + 健康徽标；非 ready 行

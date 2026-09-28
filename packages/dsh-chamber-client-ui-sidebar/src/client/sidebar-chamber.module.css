@@ -42,7 +42,7 @@
   height: 20px;
   border: none;
   padding: 0;
-  border-radius: 5px;
+  border-radius: var(--dsw-radius-xs);
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
@@ -54,17 +54,24 @@
 }
 
 /* The capsule row beneath the source header: input + clear button. The
-   bordered capsule matches the official expanded-search geometry, with the
-   official Input focus treatment (brand border while the input is focused). */
+   bordered capsule matches the official expanded-search geometry, and the
+   focus-within border mirrors the official primitives Input
+   (`Input.module.css` `.wrap:focus-within`) — but in the chamber’s brand ink
+   rather than the official `state-business-primary` (registered in design 06
+   §7). A keyboard-focused clear button therefore shows both this border and
+   its own focus ring, exactly as a trailing control inside an official Input
+   would. */
 .searchCapsule {
   display: flex;
   align-items: center;
   gap: 4px;
   margin: 2px 6px 6px;
   padding: 2px 4px 2px 8px;
-  border: 0.5px solid var(--dsw-alias-border-l2);
-  border-radius: 10px;
-  background: var(--dsw-alias-interactive-bg-hover);
+  /* Official expanded-search geometry (WorkspaceBrowser.module.css
+     .searchExpanded): l4 hairline, radius-md, no fill. */
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: var(--dsw-radius-md);
+  background: 0 0;
 }
 
 .searchCapsule:focus-within {
@@ -78,7 +85,8 @@
   padding: 3px 0;
   background: transparent;
   color: var(--dsw-alias-label-primary);
-  font-size: 12px;
+  /* Official .searchInput runs 13/18. */
+  font-size: 13px;
   line-height: 18px;
   outline: none;
 }
@@ -87,6 +95,10 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* Official .clearButton is a 24px box with radius-sm; this module keeps the
+   registered v0.2.4 geometry — the 18px visual box from the hit-area discipline
+   block at the bottom of this file (design 06 §7 图标钮命中区 = 视觉盒). Ink,
+   hover and the glyph follow the official control. */
 .searchClear {
   flex: none;
   display: inline-flex;
@@ -96,14 +108,20 @@
   height: 18px;
   border: none;
   padding: 0;
-  border-radius: 4px;
+  border-radius: var(--dsw-radius-xs);
   background: transparent;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--dsw-alias-label-secondary);
   cursor: pointer;
 }
 
 .searchClear:hover {
-  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.searchButton:focus-visible,
+.searchClear:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: -2px;
 }
 
 /* Search results replace the workspace list while a query is active: title,
@@ -506,7 +524,6 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  min-width: 0;
 }
 
 .hoverTitle {
@@ -514,6 +531,13 @@
   line-height: 20px;
   color: #FFFFFF;
   overflow-wrap: break-word;
+}
+
+.hoverPath {
+  font-size: 12px;
+  line-height: 16px;
+  color: #CFD3D6;
+  word-break: break-all;
 }
 
 .hoverTime {
@@ -755,7 +779,7 @@
   height: 16px;
   border: none;
   padding: 0;
-  border-radius: 4px;
+  border-radius: var(--dsw-radius-xs);
   background: transparent;
   color: var(--chamber-workspace-accent, var(--dsw-alias-label-caption));
   cursor: pointer;
@@ -865,7 +889,7 @@
   height: 16px;
   border: none;
   padding: 0;
-  border-radius: 4px;
+  border-radius: var(--dsw-radius-xs);
   background: transparent;
   /* The glyph rides the SOURCE accent (inherited from the header's inline
      --chamber-source-accent — the same variable as the active-source left
@@ -1017,7 +1041,7 @@
      with the official `.title` (primary at rest, no
      hover step) would remove the row's only immediate
      hover feedback: the row wash alone is a very low-contrast tint, so before
-     the 500ms card appears, hovering a row changes nothing the eye can
+     the 800ms card appears, hovering a row changes nothing the eye can
      catch. The step is the feedback (rule below); the official parity claim
      holds for the FONT SIZE only. */
   color: var(--dsw-alias-label-secondary);
@@ -1025,6 +1049,33 @@
 
 .sessionRow:hover .sessionTitle {
   color: var(--dsw-alias-label-primary);
+}
+
+/* Title marquee (official rows/Rows.tsx useTitleMarquee): the title clips its
+   own text, so while the row is hovered it crawls and publishes the two fade
+   masks; at rest the ellipsis stands alone. The hover rule drops the ellipsis
+   so the crawled text is not doubly clipped; the menu-open variant keeps it
+   dropped while a kebab menu is open. */
+.sessionRow .sessionTitle[data-scrolled] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 12px);
+  mask-image: linear-gradient(to right, transparent, #000 12px);
+}
+
+.sessionRow .sessionTitle[data-clipped] {
+  -webkit-mask-image: linear-gradient(to left, transparent, #000 12px);
+  mask-image: linear-gradient(to left, transparent, #000 12px);
+}
+
+.sessionRow .sessionTitle[data-scrolled][data-clipped] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 12px, #000 calc(100% - 12px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 12px, #000 calc(100% - 12px), transparent);
+}
+
+@media (hover: hover) {
+  .sessionRow:hover .sessionTitle,
+  .sessionRow.sessionMenuOpen .sessionTitle {
+    text-overflow: clip;
+  }
 }
 
 /* The current ctx's current session (05 §2.2): the official dsh
@@ -1126,10 +1177,12 @@
   display: none;
 }
 
-/* Icon action button (the `+`, the three-dot kebab trigger — the dedicated
-   archive verb rides the session row's kebab menu): 20px hit
-   box. Glyph sizes differ per icon — the kebab is the official 16px ellipsis,
-   the `+` is 14px. The full reset (appearance/
+/* Icon action button (the workspace new-session control, the three-dot kebab
+   trigger — the dedicated archive verb rides the session row's kebab menu):
+   20px hit box. Glyph sizes differ per icon — the kebab is the official 16px
+   ellipsis, the new-session control draws the official new-chat artwork at
+   its 16px default (`IconNewChatOutlineRegular`, upstream’s own glyph on this
+   seat). The full reset (appearance/
    outline/line-height/font-size) kills every UA chrome artifact — Safari's
    button chrome and the click-focus ring must never draw a frame around the
    button; the grid centering pins the glyph to the exact center regardless
@@ -1145,7 +1198,7 @@
   margin: 0;
   padding: 0;
   border: none;
-  border-radius: 5px;
+  border-radius: var(--dsw-radius-xs);
   background: transparent;
   appearance: none;
   -webkit-appearance: none;

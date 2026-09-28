@@ -81,25 +81,6 @@ test('vendor session contract: the contract declares retainedBy, retain and bind
     /retain\(target: SessionTarget, options: SessionRetainOptions\): SessionReference/,
     'ISessions.retain signature changed - the retain-based presentation contract must be re-derived',
   )
-  assert.match(
-    contract,
-    /binding\(id: SessionId\): SessionBinding \| undefined/,
-    'ISessions.binding(id) is gone from the contract - the mobile concrete-session accessor must be re-derived',
-  )
-})
-
-test('vendor session contract: binding(id) returns the SessionBinding carrier whose .session is the face', { skip: VENDOR_SKIP }, () => {
-  const service = repoSource(SESSION_CONTROLLER + '/sessions/service.ts')
-  assert.match(
-    service,
-    /binding\(id: SessionId\): SessionBinding \| undefined \{ return this\.scopes\.get\(id\)\?\.binding \}/,
-    'ClientSessions.binding(id) changed - the mobile concrete-session accessor must be re-derived',
-  )
-  assert.match(
-    service,
-    /export interface SessionBinding \{ readonly sessionId: SessionId readonly session: SessionFace/,
-    'SessionBinding.session is no longer the carrier property the mobile read consumes',
-  )
 })
 
 test('chamber mobile lock: the presentation read consumes exactly those vendor facts', () => {

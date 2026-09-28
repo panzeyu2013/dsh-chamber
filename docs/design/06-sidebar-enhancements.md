@@ -247,7 +247,7 @@
   不保证执行，`pagehide` 才是可靠面）。
 - **shell.leading 席位（rc.2）**：官方 AppFrame 在 `darwin && sidebarCollapsed` 时把窗口 chrome 的
   `shell.leading` 单席作为唯一的可见重开入口（折叠列宽=0 且 `.sidebarCol{overflow:hidden}` 会裁掉
-  rail 内控件）。chamber sidebar fork 注册 `SidebarLeadingControls`（展开 + 新建，28px 圆钮；
+  rail 内控件）。chamber sidebar fork 注册 `SidebarLeadingControls`（展开 + 新建，28px / `--dsw-radius-sm`；
   宽度与 `--dsh-frame-leading-clearance` 计价锁步），layout fork 在 SlotMap 声明该 root-scoped 单席。窗口侧的红绿灯行、材质与全屏让位（leading 160→84、`.leadingSeat` 12px）见 design 25 §5.6。
 - **darwin 透明与窗口 vibrancy**：侧栏列 `.root` 在 darwin 下透明（规则体与上游 ui-sidebar 逐字同形：`.root` transparent + `.newSession` 白色洗染 + `.brand` cursor: default），让窗口材质从侧栏列透出；中列保持不透明 `--dsw-alias-bg-base`（同上游）。整条透明链（ui-web `html/body`、AppFrame `.frame`/`.sidebarCol`、本侧栏 `.root`、renderer 的 `.app`/`.instance-view`）统一按 `data-window-vibrancy` 门控——只有 Swift 壳的窗口背后真有材质，Electron darwin 腿窗口不透明，跟着透明会把它压到窗口底色上。窗口侧材质/灯位见 design 25 §5.6。
 - **orderBy**：每来源会话排序偏好 `'manual' | 'updated'`，默认 `manual`；
@@ -922,12 +922,12 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   底色 wash，卡片出现前读不到反馈。**这是对官方的有意偏离**；搜索结果与结果行的 12/18 字号、结果行
   几何仍归 §1.2 待决。来源身份点 8px（**仅 rail**）；session 行首为固定 10px 状态槽（常态空）。
 - **行几何**：圆角 8px（来源头/workspace 头/会话行一致）。
-- **搜索胶囊**（§1）：`border-l2` + `:focus-within` brand 边框；`maxLength` 取
+- **搜索胶囊**（§1）：`border-l4` 发丝边（= 官方 `.searchExpanded`；胶囊体 r-md、无填充）+ `:focus-within` 品牌墨色边框（官方 primitives `Input.module.css` 的 `.wrap:focus-within` 是 `state-business-primary`，本仓用 `brand-primary` 墨色，属登记的视觉档位）；`maxLength` 取
   `SEARCH_QUERY_MAX_CODE_UNITS`；30s 调用方 abort；结果分支优先于 aggregateError。
 - **未连接来源呈现**：搜索入口按 `connected` 门控；状态徽标语义见 05 §2.1（色点/转圈枚举、重试折叠为
-  稳定「重连中」、相位文本仅 hover/aria）；状态槽居来源头右端、hover 时被搜索/`+` 簇替换；全部断开时
+  稳定「重连中」、相位文本仅 hover/aria）；状态槽居来源头右端、hover 时被搜索/新建会话簇替换；全部断开时
   保留各来源分组、空态为列表底部一行；断连即清空该来源搜索状态。
-- **行内操作（图标化 + 悬停替换）**：workspace 组头 = `+`（新建会话）+ 官方 16px 横排三点 kebab
+- **行内操作（图标化 + 悬停替换）**：workspace 组头 = 新建会话钮（官方 new-chat 字形 `IconNewChatOutlineRegular`，16px 默认）+ 官方 16px 横排三点 kebab
   （重命名/删除，`Menu` portal）；横排省略号按官方 16px（不旋转 90° 成竖排 14px），`.actionIcon` 20×20
   命中盒不变。**动作簇间距**：统一走图标节奏 **4px**（`.rowActions` 与 workspace 头自身），不取官方
   `Rows .rowActions` 的 12px（只描述无 git occupant 的两项簇，含 `.headerGit` 的三项簇会被切成
@@ -935,16 +935,19 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   session 行簇只有单个 kebab = **重命名/分叉/归档三项**（归档无独立按钮；悬停替换行尾状态槽；**不显示
   相对时间**）。**添加工作区** = 来源头部按钮（官方 project-add 字形，与搜索/排序成簇、悬停替换连接
   状态槽，胶囊展开时簇保持可见）；文案在 aria 与**官方 `Tooltip`**（来源头四个动作排序/添加工作区/
-  搜索/归档清理由原生 `title` 换成设计系统 Tooltip，形状串 `side="bottom" delayMs={500}`；行与状态槽
+  搜索/归档清理由原生 `title` 换成设计系统 Tooltip，形状串 `side="bottom" delayMs={500}`；workspace 新建会话钮的
+  label 用官方的独立键 `actions.newSession`（zh「新会话」/ en "New session"，不共用 `session.new`）；行与状态槽
   仍原生 title）。替换为真正 display 交换；kebab 展开期间行操作保持可见（`.rowActionsVisible`）；行内
   图标按钮全量 reset（`appearance:none`/`outline:none`/grid 居中，focus-visible 用 brand 自绘环）。
-  **菜单密度 = chamber 档**：三个菜单（session kebab / workspace kebab / 排序）一律原语 `compact`——
-  item 26px/12px（= 列表行高）、容器 r7/padding 2px/min-width 164、item r5，`closeOnPointerLeave` 保留
-  （v0.2.4 即此档，属恢复发布行为）。`compact` 把圆角一并带回 r7/r5；pin 的 `Menu` 无 list/item 钩子
-  也无 CSS 变量，故「26px 行 + r20/r10」不可得（不做 `:global` 覆盖哈希类名）。排序菜单
-  `{type:'label'}` 取官方原值 `padding:4px 7px; font-size:11px; line-height:16px`。item 图标槽 14px
-  （默认 16px；session 行菜单归档字形仍画 16px，几何锁按 16 钉住）；列表最小宽 164px / 内距 2px
-  （默认 218/4）。设置页服务器下拉是自家 markup：`padding:7px 10px`、13px、行框 18px，圆角/背景 = 官方
+  **菜单密度 = primitives `compact` 档**：三个菜单（session kebab / workspace kebab / 排序）一律原语
+  `compact`（= `.compactList`），`closeOnPointerLeave` 保留（v0.2.4 即此档，属恢复发布行为）。**pin 实测值**
+  （`ui-primitives/lib/Menu.module.css`）：`.compactList .item` min-height 24px / padding 2px 6px /
+  圆角 `--dsw-radius-sm`=8px / 11px·17px / gap 5px；`.list.compactList` min-width 156px / padding 4px；
+  `.compactList .label` padding 3px 6px / 10px·15px；`.compactList .itemIcon svg`/`.check` 12px（wrapper `.itemIcon` 仍 14px；原语默认：
+  item 34px / 13px·20px / r-md / padding 6px 8px、itemIcon 14px、`.list` min-width 144px）。**不把菜单行抬到
+  侧栏列表行的 26px/13px**：pin 无 item 级钩子、无 CSS 变量，抬行只能 `:global` 覆盖哈希类名或改
+  `listClassName` 后的后代选择器；两个 kebab 菜单与设置页下拉因此比列表行矮 2px，属**接受的偏差**（不追官方
+  默认 34px，也不自建 26px）。设置页服务器下拉是自家 markup：`padding:7px 10px`、13px、行框 18px，圆角/背景 = 官方
   （item r10、列表 r20 + `bg-layer-3` + elevation）。
 - **图标钮命中区 = 视觉盒（回退命中盒 pass）**：小于 24px 的六个图标钮（`.actionIcon` 20 /
   `.searchButton` 20 / `.searchClear` 18 / `.foldToggle`、`.sourceFoldToggle`、`.railDotButton` 16）
@@ -958,16 +961,30 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   （design 24 §13 第 17 条、design 08 §3.4）。**簇间距**：`.rowActions` 4px 与 footer 4px 保留；
   `.sourceActions` 与 `.headerGit` 回到 2px。**rail**：只回退该 pass 加宽的 `gap`（16→12px），点按钮
   自带 `margin: -4px 0` 保留 ⇒ 20px 点距 / 12px 可见间隙；**不要只删 margin 不改 gap**（点距会松成
-  28px/20px）。该几何有测试钉住（含「scoped 重加 rim 也红」的选择器扫描）；**不要再加回 rim**。
+  28px/20px）。该几何以 `sidebar-chamber.module.css` 的注释块为唯一权威处；**不要再加回 rim**。小图标钮圆角 = `--dsw-radius-xs`
+  （=4px，官方 rows 图标钮角色值；官方 WorkspaceBrowser 的 28px 搜索钮与 24px 清除钮用 r-sm=8px，本模块因回退到
+  20/18/16px 视觉盒而用 xs；`.railDotButton` 是 8px 点的无圆角热区，不声明 radius）。
 - **会话行窗口与展开条**：每个 workspace 只展开前 N 行（`sessionRowWindow`），其余由展开条揭示；
   展开条用官方 `sessionOverflowButton` 几何：28px 高 / r8 / `0 12px 0 26px`（左内距取会话标题列
   26px，官方 28px）/ 12px 字 / hover 次级色。展开条是**双向 disclosure**：`aria-expanded` 报告状态，
   展开后同一控件给出 `sessions.collapse`；隐藏计数由与展开位无关的 `sessionRowDisclosure` 窗口算出
   （按展开后的 hiddenCount 决定去留会使点开一次再无收起入口）。
-- **悬停卡片**：workspace 头与真实会话行悬停显示卡片——workspace 卡 = 标题 + 会话数（投影无
-  path/createdAt 故省略）；会话行卡 = 标题 + 相对时间 + 状态点列表 + 复制标题按钮（blank 行不显示时间）。
+- **悬停卡片**：workspace 头与真实会话行悬停显示卡片——workspace 卡 = 标题 + 展示路径 + 绝对创建时间
+  （上游 `WorkspaceHoverContent` 逐字：`path` 与 `Date.parse(createdAt)` 进投影；`createdAt === undefined`
+  的合成 ungrouped 桶不挂卡，且 derive 对不可解析的 wire 值做**稀疏写入**——`''`（unary 兜底的 cwd 派生组）
+  不产出 `NaN`，否则逐字的 `createdLabel` 会画出「NaN年NaN月NaN日」），点卡片复制 cwd；展示路径为**绝对路径**
+  （官方在宿主给出 home 时缩写；本仓**选择**绝对路径——`dsh-api-remotes` 的 home 事实可达，非外部约束，收敛记录见
+  `todo/upstream-ui-parity-plan.md` §2）；
+  会话行卡 = 标题 + 相对时间 + 状态点列表 + 复制标题按钮
+  （blank 行不显示时间）。开卡 dwell = 上游行内值 **800ms**（`RowHoverCard` 机器默认 500ms = vendor
+  `HoverCard` 默认值；两处 call site 显式传 800，与上游 `openDelayMs: 800` 一致）。
   disabled = 菜单打开、拖拽中或行内重命名进行中（`menuOpen`/`sessionDrag`/`workspaceDrag`/
   `serverDrag`/`renamingThisWorkspace`）。
+- **会话标题跑马灯**：`session-title-marquee.ts` 逐字拷自上游 `rows/Rows.tsx`
+  （`MIN_TITLE_REVEAL_PX = 8`、`TITLE_MARQUEE_PX_PER_MS = 0.03`、`placeTitle`/`restTitle`/`useTitleMarquee`：
+  range ≤ 下限不动、reduced-motion 直跳端点、rAF 等速爬行、卸载 `cancelAnimationFrame`）；行把
+  `enter/leave` 挂指针、`ref` 挂标题 span，CSS 三条 `[data-scrolled]`/`[data-clipped]`/两者规则画双端 12px
+  渐隐（hover 与菜单打开时 `text-overflow: clip`）。行为锁：`test/session-rows/session-title-marquee.test.ts`。
   - **实现归属**：卡片由本包 `client/RowHoverCard.tsx` 渲染（不用 vendor `ui-primitives HoverCard`）；
     **开合状态机**在 `packages/dsh-chamber-client-core/src/hover-intent.ts`。原因：vendor 版
     （`onPointerLeave` = `clearTimer()` + `if (open) armClose()`，arm 宽限由**上一次已提交的 open** 决定）
@@ -982,13 +999,21 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
     可见**（页面级 slot，跨 N-ctx 壳共享，后开者关先开者，也是「leave 没送达」的自愈路径）；②**窗口
     blur / 文档 hidden 关闭可见卡片**；③**N-ctx 视图隐藏即关**：卡片 portal 到 `document.body`、非所属
     视图后代 ⇒ renderer 的 view-hide 路径在同一 commit 调 `dismissVisibleRowCard()`
-    （`packages/renderer/src/components/InstanceView.tsx:187-191`）；④**两轴定位 + 越界即关**：水平仍夹取，
+    （`packages/dsh-chamber-client-core/src/hover-intent.ts#dismissVisibleRowCard` 的调用点在
+    `packages/renderer/src/components/InstanceView.tsx:548-552`）；④**两轴定位 + 越界即关**：水平仍夹取，
     垂直**不设**官方「贴视口上缘钉住」地板，锚点滚出视口即关，位置由 `ResizeObserver` 重算（上游只有
     scroll/resize）；⑤**复制纪元与上游对齐**：关闭路径（唯一出口 `open === false`，三路都经过）先自增
-    copyEpoch 再清理，否则关闭时在飞的剪贴板写入会在新卡上亮一瞬 `copiedLabel`；⑥workspace 卡是
-    **只读卡**——无上游「点卡片复制 cwd」入口及其 a11y/键盘复制；会话行卡复制**标题**；⑦会话卡状态行
+    copyEpoch 再清理，否则关闭时在飞的剪贴板写入会在新卡上亮一瞬 `copiedLabel`；⑥会话卡状态行
     **0–1 行**，上游 **1–2 行且至少一行**（兜底常驻 `status.idle`；本包只在有状态时渲染，状态优先级
-    见 §4.3）。
+    见 §4.3）。workspace 卡已与上游同形（标题 + 展示路径 + 绝对创建时间，点卡片复制 cwd 及其
+    a11y/键盘复制），会话行卡复制的标题 = 上游 `sessionNode.title = sessionTitle(s)` 的同一展示标题
+    （blank 行不复制），都不再是偏差。
+    **Rejected alternatives**：保留只读 workspace 卡、不新增投影字段——否决，用户报告的原始症状就是卡片缺
+    path/创建时间；新增字段只进投影（`ChamberServerWorkspace.path/createdAt`），wire 与宿主契约不变。
+    **vendor 的 Tooltip 抑制契约不可达**：上游 `HoverCard` 用模块私有的 `TooltipSuppression` context 包 anchor，
+    锚点内 Tooltip 显示时抑制卡片（`card = open && pos !== null && !suppressed`）；该 context 不在
+    `ui-primitives` 的导出面（`createContext` 私有），本包无法接入 ⇒ 悬停 workspace 头的 `+`（tooltip 500ms）
+    时卡片（800ms）仍会同时出现。退役条件 = 上游导出该 context 或本仓自持 tooltip。
   - **同形状但不搁浅的先例（勿误记为竞态）**：vendor `Menu` 的 pointerleave 同形
     （`closeOnPointerLeave ? () => { if (open) armClose() } : undefined`），本包两处 kebab 菜单也显式
     opt-in；但菜单是**点击即同步提交**的受控 `open`（无 dwell 定时器），且另有外部 pointerdown /
@@ -1001,7 +1026,17 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   操作」对 AT 毫无信息。**折叠 rail 每来源一个具名可操作按钮**：`aria-label` = 来源名 + 激活提示
   （复用 `sourceHeaderTitle`/`sourceHeaderActivatable` 单一判定）、当前来源 `aria-current`、
   **非当前且不可激活**（托管停机等）来源 `aria-disabled` 且点击不动作；点/环仍是内层 span 既有几何
-  （点 8px、间距 12px），`aria-hidden`。
+  （点 8px、间距 12px），`aria-hidden`。**快捷键提示**：带命令的按钮/菜单项读目录行的生效绑定——toggle、
+  New Session、workspace 新建会话钮、搜索、添加工作区在 Tooltip 上传 `shortcutKeys` 并在按钮上传
+  `aria-keyshortcuts`；session 菜单的重命名/分叉/归档作为 `MenuItem.shortcut` 画键帽。键帽是官方目录行的**只读镜像**，
+  不代表该命令在本仓控件上可达。四条命令的**回调接线**：`session.search`/`workspace.add` 写被覆盖的官方浏览器 store
+  （无可见消费者 ⇒ 键帽只是只读镜像）；`session.rename`/`session.archive` 打开官方 `SessionRenameDialog`/
+  `SessionArchiveConfirmDialog`——两者是 `shell.overlay` 的座席，本仓 layout fork 声明该座席并用官方 AppFrame 渲染，
+  故模态真的出现（详见 `todo/upstream-ui-parity-plan.md` §1.3）。
+  **Rejected alternatives**（键帽面）：①不给回调不通的命令画键帽——否决：官方目录四键同面展示，本仓按官方席位
+  重实现控件，只在本仓侧隐藏会让同一条命令的来源可见性不一致；②自建 `chamber.*` 复用同一默认键——否决：注册表
+  在 :602 对默认键重叠抛 `Conflicting shortcut defaults`；③覆盖注册同名官方 id——否决：`ShortcutRegistry.register`
+  在 :589 对重复 id 抛 `Duplicate shortcut command`。
 - **blank 行**：当前空白"新会话"行隐藏操作簇（对齐官方 `!row.blank &&` 门控）；双击同样被 `blank`
   门控（不进入内联重命名）；离开 current 后的 450ms 宽限 ghost 占位（`visibility:hidden` 非交互、
   保留布局位，`derive.ts armBlankGhost` + `.sessionGhost`）——双击窗口内列表绝不位移。
@@ -1025,9 +1060,29 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   隐藏实例壳（`content-visibility: hidden`）或窗口被遮挡时字标与设置座席会停在首帧（不可见、仍可命中、
   除重挂载外不自愈，WKWebView 实测见 STATUS）。必要内容不再参与入场动画；折叠的位移/裁剪仍由
   AppFrame 轨道过渡承担，`.fading` 保留（类驱动 + settle 定时器界定）。回归锁：`test/visual-lock/`
-  + 渲染器隐藏壳门（design 05 §4）；设置壳按来源重放的 `contentFadeIn` 同批退役。同一「切源后座席/
+  + 渲染器隐藏壳门（design 05 §4）；设置壳按来源重放的 `contentFadeIn` 同批退役。类钩子 `css.wide`/`css.railIn`
+  与 `everWide` 记账 ref 随动画同批删除（CSS Modules 对未定义的类返回 `undefined` ⇒ 幽灵引用；锁改为「不再出现」）。同一「切源后座席/
   字标空白」症状另有根因，本段只覆盖**入场动画特有**的失绘风险；当前根因（文档级重复 SVG 资源 id ×
   隐藏壳的 WebKit 丢绘）与修复契约见 design 05 §4.2。
+
+- **行位移动效（自持移植上游 `AnimatedRows`，与入场退役不矛盾）**：浏览树的行增删/换位由
+  `src/client/rows/animated-rows.tsx`（上游 ui-workspace `rows/AnimatedRows.tsx` 逐字移植，含来源头注）
+  承担——换位的行 FLIP 滑到位（`ROW_GLIDE_MS = 200`，ease-out），进入行淡入，退出行克隆成 `inert` 覆盖层
+  淡出（`ROW_FADE_MS = 100`，`fill: 'forwards'`）。**接入面只有浏览树**：`ServerSection` 用
+  `<AnimatedRows className={cc.workspaceList} label={t('section.sessions')}>` 取代原列表容器 div，搜索分支
+  与聚合错误分支各自保留裸 `cc.workspaceList`（搜索结果自带 `role="tree"`，不参与动画）。**key 契约**：
+  `rowKeys` 在渲染 walk 中按同一 DOM 序 push（`workspace:` / `error:workspace:` / `error:workspace-drag:` /
+  `error:open:` / `session:` / `more:`，空列表初始化 `empty`），与元素上的 `data-row-key` 一一对应；尾部只有
+  「未注册 worktree 的 git 块」与「添加工作区错误」不带 key（上游同批也不动插件渲染内容）：它们**自身**的位置跳变
+  不可见，但上方行被删时 keyed 行会向上滑过它们已就位的新位置，存在 100–200ms 交叠——仅在存在未注册 worktree
+  （git 块可见）时可感知；要消除得给插件内容加 keyed wrapper 并纳入 `rowKeys`，本轮按上游口径不做。另一处按
+  上游口径接受的退化：上游以 list 自身 rect 做视口裁剪，本仓 `.workspaceList` 不是滚动容器（滚动在 `.chamberList`）
+  ⇒ 裁剪退化为「全部相交」，屏外被删行同样克隆 + 动画（`finish` 即回收，无残留）。**门控**（照抄上游语义）：
+  首次指针/键盘输入才 arm；`ready = aggregateReady && 无来源/会话拖拽`；
+  `resetKey = JSON.stringify([orderBy, sessionRowsExpanded, currentId])`——排序切换、会话窗口展开与当前会话变化
+  （>200 会话时窗口自动放大以覆盖当前会话）都属「视图替换」，立即 settle 不滑动；`prefers-reduced-motion: reduce` 整体跳过；每次动画 `finish` 即 `cancel()`，静止态永远是元素自身样式。
+  回归锁：`test/session-rows/animated-rows.test.ts`（移植体与 pin 住的上游逐字一致 + 常量/key 契约/门控）。
+- **Rejected alternatives（行位移动效）**：①*深引 vendor 源码*（`@deepseek-ai/dsh-client-ui-workspace/src/client/rows/AnimatedRows.tsx`）——registry C16 的 vendor 直穿只收「相对 import + `export function` 符号」，而原件是 `export class`，登记进 `vendorSourceConsumers` 会红；改用裸包说明符则绕开 C16 的双向登记（无登记的 vendor 直穿本仓不允许）。②*只加 CSS transition*——CSS 做不出退出克隆（被删除的行没有元素可过渡）与"仅重排才动"的 FLIP 测量，也表达不了 armed/ready/resetKey 门控。③*不做*——在 workspace 上点 `+` 新建会话时整列瞬移，正是本轮要修的观感。
 
 ## 8. 会话待办区（sidebar todo area）
 
@@ -1138,7 +1193,7 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
 - **墨色** = 会话行纪律（v0.2.4 两级）：`.todoRow` 自带
   `label-secondary`、hover 转 `label-primary`；`.todoRowTitle` 不自带墨色（v0.2.4
   亦然），随行两级；条带头部标题 `.todoTitle` 与计数 pill 在 `.todoHeader`
-  （行外，`SessionTodoArea.tsx:118-119`），两级同为 `label-secondary`。hover 另画
+  （行外，`SessionTodoArea.tsx:79-81`），两级同为 `label-secondary`。hover 另画
   行底色；行与「还有 N 项」按钮均带 brand focus-visible 自绘环（§7）。
 - **a11y 取舍（记录）**：装饰性槽位 aria-hidden；可访问名 = 状态 · 标题 · 来源
   （region 名带条目数）；tooltip = 完整标题 + 状态 · 来源 · 工作区——截断标题由此

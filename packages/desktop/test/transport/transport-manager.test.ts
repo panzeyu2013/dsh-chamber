@@ -455,8 +455,8 @@ test('editing sshPort of a live instance restarts the tunnel with the new -p', a
 // Provider exec channel + legacy registry migration.
 // The gateway credential/token assertions are covered by
 // connection-save.test.ts:321-345 (live-transport replacement rollback),
-// gateway-provider.test.ts:49-208 (token store + corrupt file), :774 (5xx
-// transient) and ssh-provider-exec.test.ts:279-341 (write-file byte domain);
+// gateway-provider.test.ts:49-208 (token store + corrupt file), :728 (5xx
+// transient) and ssh-provider-exec.test.ts:253-278 (write-file byte domain);
 // the packaging/preload anchors by ipc-surface-mirror.test.ts:449-495 and
 // scripts/after-pack-adhoc-sign.test.mjs:327.
 // ---------------------------------------------------------------------------

@@ -1302,15 +1302,6 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       return
     }
     if (stopped || atGeneration !== generation || request !== baselineRequest) return
-    if (baselineFailureReason !== null) {
-      // 恢复证据：这一次基线是有效观测。日志面要能回答「什么时候好的」，不只是「什么时候坏的」。
-      recordEvidence('mux-facts', 'answered', {
-        source: deps.sourceId,
-        method: 'session/list',
-        clearedReason: baselineFailureReason,
-        windowMs: now() - startedAt,
-      }, false)
-    }
     if (atRevision !== eventRevision) {
       // 列表的取样点未知；其间收到的事件可能比列表新。重新取样，不用旧列表覆写事件——
       // 但经 scheduleBaselineResample 合并 + 限速（review O1），不做无间隔递归。
@@ -1376,6 +1367,19 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       }
     }
     baselines += 1
+    if (baselineFailureReason !== null) {
+      // 恢复证据：这一次基线是**有效观测**（RPC 答了、items/行形状都合格、也在同一修订上落地）。
+      // 日志面要能回答「什么时候好的」，不只是「什么时候坏的」。清空原因同样必要：原因不清空时
+      // 每轮 30s 对账都会重发同一条 clearedReason=<旧原因>，把有界账本（内存 256 / 持久 128）刷掉；
+      // 旧形态还在 RPC 返回时就记，被拒形状的响应会同时落 answered 与 channel 两条相反记录。
+      recordEvidence('mux-facts', 'answered', {
+        source: deps.sourceId,
+        method: 'session/list',
+        clearedReason: baselineFailureReason,
+        windowMs: now() - startedAt,
+      }, false)
+      baselineFailureReason = null
+    }
     // 一次失效重取真正落地：节拍回到起点（下一次失效仍从最小间隔开始）。
     baselineResampleStreak = 0
     baselineFailureRetryStreak = 0

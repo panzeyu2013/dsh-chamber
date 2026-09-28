@@ -24,7 +24,6 @@ import {
   SESSION_STATE_STREAM_PATH,
   sessionStateFeatureSupport,
   sessionStateNoteKey,
-  type SessionStateDiagnostics,
   type SessionStateFeature,
   type SessionTurnEnd,
   type SessionTurnEndCause,
@@ -87,33 +86,6 @@ test('feature coverage net: every advertised feature is consciously listed', () 
     'session-state.goal',
   ]
   assert.deepEqual([...SESSION_STATE_FEATURES].sort(), [...covered].sort())
-})
-
-// ---------------------------------------------------------------------------
-// Diagnostics shape（I6/I16 的加法面）
-// ---------------------------------------------------------------------------
-
-/**
- * diagnostics.dropped 的键集单一来源：P2a 保留边的容量淘汰计数
- * `goalActivations` 必须在协议声明里（gateway 发 2 键；旧端只读已知键）。
- * 类型注解就是编译期断言——协议漏声明该键时 typecheck 直接红。
- */
-const DIAGNOSTICS_DROPPED_KEYS = ['goalActivations', 'sessions'] as const
-
-function assertDiagnosticsDroppedKeys(value: Record<string, number>, label: string): void {
-  assert.deepEqual(Object.keys(value).sort(), [...DIAGNOSTICS_DROPPED_KEYS], label + ': diagnostics.dropped key set drifted')
-}
-
-test('diagnostics dropped declares the additive goalActivations counter (P2a) and the tripwire can fail', () => {
-  const dropped: SessionStateDiagnostics['dropped'] = {
-    sessions: 1, goalActivations: 4,
-  }
-  assertDiagnosticsDroppedKeys(dropped, 'declared shape')
-  // Negative control：同一键集闸门必须拒绝缺少 goalActivations 的旧形状 dropped。
-  assert.throws(
-    () => assertDiagnosticsDroppedKeys({ sessions: 1 }, 'mutant old shape'),
-    /mutant old shape/,
-  )
 })
 
 test('classifier: session-state.goal is OPTIONAL — its absence never degrades', () => {

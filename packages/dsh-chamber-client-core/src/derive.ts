@@ -1095,7 +1095,6 @@ export function factRecordSignature(record: object, omit: readonly string[] = []
 export function serversProjectionSignature(servers: readonly ChamberServerAggregate[]): string {
   // JSON encoding (not delimiter concatenation): titles/labels are
   // user-controlled and could otherwise make two projections collide.
-  // change.
   return JSON.stringify(servers.map(server => {
     const visibleSessionIds = new Set<string>()
     for (const workspace of server.workspaces) {
@@ -1106,7 +1105,6 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
     // a JSON string value is unambiguous. A report whose rows were all filtered
     // out normalizes to null. includeRunning=false is the projection: the ring
     // renders from the polled wire bit.
-    // channel-only running flip must not re-publish the projection.
     const runtime = server.runtime === undefined ? '' : runtimeReportSignature(server.runtime, visibleSessionIds, false)
     return {
       id: server.id,
@@ -1125,7 +1123,6 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
       // renders it, but the settings-bridge derives the connections page's
       // pluginDiagnostics from the same chamberBridge channel, so a
       // diagnostic-only flip must still re-publish.
-      // block would regress it.
       pluginDiagnostic: server.pluginDiagnostic === undefined ? null : {
         state: server.pluginDiagnostic.state,
         message: server.pluginDiagnostic.message ?? null,
@@ -1134,7 +1131,6 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
       // bootGap is RENDERED (the source row's warning line) AND consumed by the
       // settings-bridge, and is encoded field-generically so a payload field
       // added later cannot silently freeze the sidebar.
-      // field added later freeze the sidebar silently).
       bootGap: gapSignature(server.bootGap),
       runtime: runtime === '' ? null : runtime,
       workspaces: server.workspaces.map(w => ({
@@ -1143,11 +1139,16 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
         ungrouped: w.ungrouped === true,
         // Synthetic rows disable their mutation affordances in the sidebar.
         synthetic: w.synthetic === true,
+        // The workspace hover card RENDERS both facts (official
+        // WorkspaceHoverContent), so a path/creation change alone must
+        // republish; non-sparse on purpose — this is a change detector, never
+        // persisted.
+        path: w.path ?? null,
+        createdAt: w.createdAt ?? null,
         // "+" reads this RENDERED-BEHAVIOUR fact to decide between reopening the
         // existing blank row and creating one; a candidate appearing or
         // disappearing alone must republish, or both publish gates drop it and
         // "+" mints the very empty session this field prevents.
-        // very empty session this field exists to prevent.
         reusableBlankSessionId: w.reusableBlankSessionId ?? null,
         sessions: w.sessions.map(x => ({
           id: x.id,
@@ -1155,7 +1156,6 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
           // The resolved label is what the row RENDERS, so it must move this
           // signature: a healed predecessor row can flip id -> directory name
           // with no durable-title change, and that flip must republish.
-          // change, and that label flip must republish.
           displayTitle: x.displayTitle,
           running: x.running === true,
           blank: x.blank === true,
@@ -1163,9 +1163,8 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
           updatedAt: x.updatedAt ?? null,
           // The active-Schedule marker is RENDERED right after the row title and
           // can flip while nothing else changes, so it must move this signature;
-          // non-sparse on purpose — this row is a change detector, never
-          // persisted.
-          // detector, never persisted, so a stable false is free.
+          // non-sparse on purpose — this row is a change detector, never persisted,
+          // so a stable false is free.
           hasActiveSchedule: x.hasActiveSchedule === true,
         })),
       })),
@@ -1175,7 +1174,6 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
       // host-side archive/purge/content path also moves the workspace block. The
       // archive-set PROVENANCE flag rides along — a mounted↔fallback transition
       // must re-publish, since the dialog's degraded branch depends on it.
-      // depends on it — deletion surfaces only from the listed view).
       archivedSessions: server.archivedSessions === undefined ? null : server.archivedSessions.map(row => ({
         sessionId: row.sessionId,
         updatedAt: row.updatedAt ?? null,
@@ -1245,8 +1243,7 @@ function sessionVisible(
   // Lazy SWEEP on read: an expired ghost entry is dropped the first time a
   // derive consults it; the currentness branch keeps a CURRENT blank row
   // visible regardless. At most one blank row per source, so this stays O(1);
-  // the source-scoped key keeps cloned UUIDs from sharing grace.
-  // across sources must not share ghost grace.
+  // the source-scoped key keeps cloned UUIDs ACROSS SOURCES from sharing ghost grace.
   const ghostKey = `${serverId}:${session.sessionId}`
   const ghostExpiry = blankGhostUntil.get(ghostKey)
   if (ghostExpiry !== undefined && ghostExpiry <= now) blankGhostUntil.delete(ghostKey)
@@ -1508,20 +1505,18 @@ export function deriveArchivedSessions(snapshot: InstanceSnapshot): ArchivedSess
   // Fast paths: the derive runs on the render path for every connected source,
   // so empty results must cost nothing — no Set build, no scan, no sort, no
   // attribution index.
-  // option; these guards remove the common-case cost).
   if (snapshot.archivedSessionIds.length === 0) return []
   const archived = new Set(snapshot.archivedSessionIds)
   // Both snapshot producers keep session ids unique, so the filter cannot yield
   // duplicates; row order = snapshot order, then a stable recency sort below.
-  // row order = snapshot order, then stable recency sort below.
   const rows = snapshot.sessions.filter(session => archived.has(session.sessionId))
   if (rows.length === 0) return []
   rows.sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
   // Attribution indexes over the SNAPSHOT's workspace rows (the full membership
   // view, not the nav projection, which drops archived rows); synthetic
   // cwd-derived groups only coexist with an empty archive set, so attribution
-  // never resolves through them in practice. Built only when rows exist.
-  // rows exist (the fast paths above returned already).
+  // never resolves through them in practice. Built only when rows exist (the fast
+  // paths above returned already).
   const memberOf = new Map<string, { id: string; title: string }>()
   const byCwd = new Map<string, { id: string; title: string }>()
   for (const workspace of snapshot.workspaces) {
@@ -1541,7 +1536,6 @@ export function deriveArchivedSessions(snapshot: InstanceSnapshot): ArchivedSess
       // NOTE: the running bit is deliberately NOT carried — the host purge skips
       // running subtrees whole (skippedRunning); a per-row delete of a running
       // archived session is a safe post-hoc skip surfaced by the result note.
-      // safe post-hoc skip, surfaced by the result note.
     }
   })
 }
@@ -1595,7 +1589,6 @@ export function groupArchivedRows(rows: readonly ArchivedSessionMetaRow[]): Arch
   for (const entry of entries) {
     // Defensive per-group re-sort: older callers may not pre-sort (the only
     // in-tree caller already returns global-recency rows, so this is a no-op).
-    // fast paths above keep the common no-rows case free).
     entry.group.rows.sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
   }
   return entries.map(entry => entry.group)
@@ -1676,7 +1669,6 @@ export function deriveServerWorkspaces(
         // sidebar can render the localized New Session label.
         ...(session.blank ? { blank: true } : {}),
         // The active-Schedule fact rides into the row the sidebar renders (sparse).
-        // hasActiveScheduleOf).
         ...(session.hasActiveSchedule === true ? { hasActiveSchedule: true } : {}),
       })
     }
@@ -1685,9 +1677,19 @@ export function deriveServerWorkspaces(
     const reusableBlankSessionId = snapshot.archiveSetKnown === true && workspace.synthetic !== true
       ? findReusableBlankSession(workspace, snapshot.sessions, archivedIds)
       : undefined
+    // Hover-card facts: the official card shows the display path and the
+    // absolute creation time (vendor ui-workspace Rows WorkspaceHoverContent;
+    // the group builder parses the same wire string with Date.parse). Sparse on
+    // purpose: an unparseable wire value ('' — the cwd-derived fallback groups
+    // fetchInstanceSnapshot mints) carries no creation fact, and the official
+    // card unmounts on `createdAt === undefined`; keeping NaN would render the
+    // verbatim createdLabel as "NaN年NaN月NaN日".
+    const createdMs = Date.parse(workspace.createdAt)
     workspaces.push({
       id: workspace.workspaceId,
       title: workspace.title,
+      path: workspace.path,
+      ...(Number.isFinite(createdMs) ? { createdAt: createdMs } : {}),
       sessions,
       ...(reusableBlankSessionId === undefined ? {} : { reusableBlankSessionId }),
       // Display-only cwd-derived fallback groups keep their marker, so the
@@ -1703,7 +1705,6 @@ export function deriveServerWorkspaces(
     // Fork responses can arrive after the host's session-added frame, so the UI
     // cannot pre-arm a child-id grace: arm it on first observation instead,
     // bounded — an attach failure after publication surfaces the child at expiry.
-    // case the still-unaccounted child surfaces when the grace expires.
     const parentAccounted = session.parentSessionId !== undefined && accounted.has(session.parentSessionId)
     if (parentAccounted) {
       forkCandidates.add(session.sessionId)
@@ -1711,7 +1712,6 @@ export function deriveServerWorkspaces(
     }
 
     // Armed only by create-with-workspaceId, so genuine strays are unaffected.
-    // armed only by create-with-workspaceId, so genuine strays are unaffected.
     return !membershipGraceActive(serverId, session.sessionId, now)
   }).sort(byRecency)
   retainForkMembershipCandidates(serverId, forkCandidates)

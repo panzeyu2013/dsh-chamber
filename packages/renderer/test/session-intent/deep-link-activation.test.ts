@@ -78,9 +78,6 @@ test('a stale ACK false is terminal and is not retried against a newer attempt',
   assert.equal(calls, 1)
 })
 
-test('a stale committed replay is vetoed after event-side roster invalidation', () => {
-})
-
 test('remote cold-start activation is held and replayed after the authoritative roster arrives', () => {
   const beforeRoster = routeDeepLinkActivation('ssh-alpha', false, new Set(['local']), null)
   assert.deepEqual(beforeRoster, {

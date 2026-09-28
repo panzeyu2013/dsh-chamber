@@ -101,13 +101,13 @@
   align-items: center;
   justify-content: center;
   flex: none;
-  /* Sidebar icon-button language: the 20px box / 5px corner every other in-row
-     action uses. */
+  /* Sidebar icon-button language: the 20px box / --dsw-radius-xs (4px) corner
+     every other in-row action uses. */
   width: 20px;
   height: 20px;
   padding: 0;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--dsw-radius-xs);
   background: transparent;
   color: var(--dsw-alias-label-secondary);
   cursor: pointer;
@@ -203,7 +203,7 @@
   height: 20px;
   padding: 0;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--dsw-radius-xs);
   background: transparent;
   color: var(--dsw-alias-label-secondary);
   cursor: pointer;

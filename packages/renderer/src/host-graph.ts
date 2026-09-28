@@ -372,22 +372,6 @@ export interface CollectExtraRowsDeps {
 }
 
 /**
- * Cancellation evidence: the observation never completed, so it CANNOT be read as a
- * source fact (`dsh-stream-state` 的 I5「缺席不作证据」推广到**活性证据**，design 14 §D4).
- * WebKit reports an aborted fetch as `TypeError: Fetch is aborted` and a signal-fired
- * abort as an `AbortError` DOMException, so both the name and the message count.
- * `TimeoutError` is deliberately NOT a cancellation: a fetch that outlived its own 30s
- * deadline is an admissible channel observation, and hiding it would hide a hung source.
- */
-export function isCancellationEvidence(error: unknown): boolean {
-  if (error === null || typeof error !== 'object') return false
-  const { name, message } = error as { name?: unknown; message?: unknown }
-  if (name === 'TimeoutError') return false
-  if (name === 'AbortError') return true
-  return typeof message === 'string' && /abort/i.test(message)
-}
-
-/**
  * Serving waits per boot. ONE is the honest bound: the wait already spans the
  * App's readiness gate (60s), and a source that serves but still has no
  * answerable graph is a channel problem, not a serving problem. A source that
@@ -463,7 +447,7 @@ export async function collectExtraRows(
             windowMs: Date.now() - attemptStartedAt,
             reason: error instanceof Error ? error.message : String(error),
           }
-          if (!isAdmissible(verdict) || isCancellationEvidence(error)) {
+          if (!isAdmissible(verdict)) {
             // 取消不是来源事实（挂载被取代 / 我们自己的拆除 / 页面被节流）：不落任何判定，
             // 在同一有界预算内重试。旧形态把它读成通道失败，把 graph-unreachable 钉在来源上
             // 交给一次性自愈，留下一个只能手动重载的空壳（实机 P5）。

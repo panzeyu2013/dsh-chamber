@@ -9,7 +9,7 @@
  * being passed down as a render-time clock: a `now` prop changes every render
  * and would defeat the memo.
  */
-import { Fragment, memo, useMemo } from 'react'
+import { Fragment, memo, useMemo, useRef } from 'react'
 import clsx from 'clsx'
 import {
   IconArchiveOutlineRegular, IconBranchOutlineRegular, IconEditOutlineRegular, IconEllipsisOutlineRegular, Menu,
@@ -22,6 +22,7 @@ import { clearPendingClick, noteSessionRowClick } from '@dsh-chamber/dsh-chamber
 import { RowHoverCard } from './RowHoverCard.tsx'
 import { ServerSectionRenameForm, SessionScheduleIndicator } from './server-section-controls.tsx'
 import { dragOverState, rowHalf } from './server-section-model.ts'
+import { useTitleMarquee } from './session-title-marquee.ts'
 import { useServerSectionSessionState } from './server-section-session-state.tsx'
 import { useSidebarSection } from './sidebar-context.ts'
 import cc from './sidebar-chamber.module.css'
@@ -81,7 +82,13 @@ const SessionRow = memo(function SessionRow({
     onArchiveSession,
     toggleMenu,
     closeMenu,
+    useShortcuts,
   } = useSidebarSection()
+  // 菜单键帽来自页面快捷键目录（上游 RenameSessionMenuItem / ForkSessionMenuItem /
+  // ArchiveSessionMenuItem 同款选择）：命令未注册时行缺席，键帽与 aria 一并消失。
+  const renameShortcut = useShortcuts(rows => rows.find(row => row.id === 'session.rename'))
+  const forkShortcut = useShortcuts(rows => rows.find(row => row.id === 'session.fork'))
+  const archiveShortcut = useShortcuts(rows => rows.find(row => row.id === 'session.archive'))
   const { sessionStateLabel, sessionStatePending, sessionStateMarker, sessionStateDot } = useServerSectionSessionState()
   /** 悬停卡片的本地化相对时间（"刚刚"/"5分钟前"），在卡片打开时采样。 */
   const hoverTimeLabel = (updatedAt: number, now: number): string => {
@@ -94,11 +101,13 @@ const SessionRow = memo(function SessionRow({
     {
       id: 'rename',
       label: t('action.rename'),
+      shortcut: renameShortcut,
       icon: <IconEditOutlineRegular size={14} />,
     },
     {
       id: 'fork',
       label: t('menu.fork'),
+      shortcut: forkShortcut,
       icon: <IconBranchOutlineRegular size={14} />,
     },
     {
@@ -110,9 +119,10 @@ const SessionRow = memo(function SessionRow({
     // 重量（flex 槽容忍 +2px）。
       id: 'archive',
       label: t('menu.archiveSession'),
+      shortcut: archiveShortcut,
       icon: <IconArchiveOutlineRegular size={16} />,
     },
-  ], [t])
+  ], [t, renameShortcut, forkShortcut, archiveShortcut])
   const sessionKey = `${server.id}/session/${session.id}`
   // 会话行（上提以便 HoverCard 包裹）。单击立即打开、零延迟；
   // 模块级 pending（按 sessionId 记）只判定同一会话在
@@ -121,12 +131,17 @@ const SessionRow = memo(function SessionRow({
   // 行外点击取消 pending（document 监听）；行渲染 data-session-id 供壳
   // 做包含判定；标题用官方 displayTitle（绝不渲染"未命名会话"）。
   const sessionTitleText = session.displayTitle
+  // 标题跑马灯（上游 ui-workspace Rows.tsx 同款）：悬停时让被裁切的标题匀速爬行并
+  // 打 data-scrolled / data-clipped 两个渐隐钩子；离开一步回到起点。
+  const titleRef = useRef<HTMLSpanElement | null>(null)
+  const marquee = useTitleMarquee(titleRef)
   const sessionRow = (
     <div
       className={clsx(
         cc.sessionRow,
         ghost && cc.sessionGhost,
         current && cc.sessionActive,
+        menuOpenRow && cc.sessionMenuOpen,
         marker === 'before' && cc.dropBefore,
         marker === 'after' && cc.dropAfter,
       )}
@@ -134,6 +149,9 @@ const SessionRow = memo(function SessionRow({
       aria-selected={current}
       data-session-id={session.id}
       data-chamber-row={sessionKey}
+      // Vendor motion contract (AnimatedRows): the key is the row's identity in
+      // DOM order, shared with the parent's rowKeys walk.
+      data-row-key={`session:${session.id}`}
       data-chamber-ghost={ghost ? '' : undefined}
       // 合成的 cwd 派生分组仅用于显示：其中的会话行既不能拖也不能放
       // （wire 提交会在宿主上以 workspace/not-found 失败）。
@@ -202,8 +220,10 @@ const SessionRow = memo(function SessionRow({
         armBlankGhostForClick()
         openSession(server.id, session.id)
       }}
+      onPointerEnter={marquee.enter}
+      onPointerLeave={marquee.leave}
     >
-      <span className={cc.sessionTitle}>{session.blank === true ? t('session.new') : sessionTitleText}</span>
+      <span ref={titleRef} className={cc.sessionTitle}>{session.blank === true ? t('session.new') : sessionTitleText}</span>
       {/* 活动 Schedule 标记位于标题与尾部单元之间；只对有该投影的行渲染，普通行几何/间距不变。 */}
       {session.hasActiveSchedule === true && (
         <SessionScheduleIndicator label={t('schedule.active')} />
@@ -307,6 +327,7 @@ const SessionRow = memo(function SessionRow({
               )}
             </div>
           )}
+          openDelayMs={800}
           disabled={menuOpenRow || sessionDrag !== null || workspaceDrag !== null || serverDrag !== null}
           copyText={session.blank === true ? undefined : sessionTitleText}
           copyLabel={t('action.copy')}

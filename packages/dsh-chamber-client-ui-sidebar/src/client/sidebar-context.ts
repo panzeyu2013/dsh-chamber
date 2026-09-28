@@ -11,7 +11,7 @@ import { sourceAccentColor, type SessionOrderBy } from '@dsh-chamber/dsh-chamber
 import type { WorkspaceDropEnv } from '@dsh-chamber/dsh-chamber-client-core/workspace-drag-order'
 import { getWorkspaceGitFlag, hiddenByMainWorkspaceFold } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
 import type { ChamberSidebarViewPrefs } from '@dsh-chamber/dsh-chamber-client-core/view-prefs'
-import type { SidebarRootComponentProps } from './contract/slots.ts'
+import type { ShortcutsHook, SidebarRootComponentProps } from './contract/slots.ts'
 
 export interface RenameTarget {
   sourceId: string
@@ -88,6 +88,10 @@ export interface SidebarSectionContextValue {
   t: SidebarRootComponentProps['t']
   /** The instance id this ctx's shell belongs to (active-view highlight gate). */
   chamberInstanceId: string | undefined
+  /** The page shortcut catalog bound as a selector hook (`hooks.shortcuts`): every
+   *  row-level affordance selects its own command row for the tooltip keycap and
+   *  `aria-keyshortcuts`, exactly as upstream threads `useShortcuts` down. */
+  useShortcuts: ShortcutsHook
   /** The chamber Git plugin's per-workspace seat (slot inject). */
   renderWorkspaceGit: (
     key: 'sidebar.workspace.git',

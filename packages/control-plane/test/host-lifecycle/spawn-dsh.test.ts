@@ -611,9 +611,11 @@ test('spawnDsh: a 401 that arrives before the launch-token line re-arms the boun
   // ordering the re-arm exists for.
   const stateDir = tempDir()
   const dshWorkspacePath = join(stateDir, 'ws')
-  const authBootstrapWaitMs = 300
-  const firstProbe401DelayMs = 700
-  const tokenLineDelayAfter401Ms = 150
+  // Shrunk from 300/700/150: the invariant is only the ORDERING (the 401 lands well
+  // after the injected window; the token line lands after the 401), not the magnitudes.
+  const authBootstrapWaitMs = 50
+  const firstProbe401DelayMs = 150
+  const tokenLineDelayAfter401Ms = 30
   writeFakeDshEntry(dshWorkspacePath, [
     ...FAKE_DSH_PREAMBLE,
     `const firstProbe401DelayMs = ${firstProbe401DelayMs}`,

@@ -10,6 +10,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { classifyRestartError, serverRefusalText, applyRuntimeProbe, classifyGatewayReadFence, classifyRuntimeRefusal, gatewayReadFenceText, runtimeBlocksRestart, runtimeRefusalText } from '../../src/client/managed-restart.ts';
+import { classifyRuntimeRefusal as coreClassifyRuntimeRefusal, serverRefusalText as coreServerRefusalText } from '@dsh-chamber/dsh-chamber-client-core';
 import { en, zh } from '../../src/locales.ts';
 import { FENCE_BODY } from '../support/fixtures.ts';
 
@@ -33,15 +34,13 @@ test('classifyRestartError: a non-Error throw input is failed with its stringifi
   assert.deepEqual(classifyRestartError(undefined), { kind: 'failed', detail: 'undefined' })
 })
 
-test('serverRefusalText: body.error is returned verbatim when present', () => {
-  assert.equal(serverRefusalText({ error: 'another restart is in flight', code: 'busy' }, 409), 'another restart is in flight')
-})
-
-test('serverRefusalText: an empty or non-string error falls back to the status-anchored text', () => {
-  assert.equal(serverRefusalText({ code: 'busy' }, 409), 'restart refused (409)')
-  assert.equal(serverRefusalText({ error: '' }, 400), 'restart refused (400)')
-  assert.equal(serverRefusalText(null, 400), 'restart refused (400)')
-  assert.equal(serverRefusalText('refused', 400), 'restart refused (400)')
+test('serverRefusalText / classifyRuntimeRefusal are the single-sourced core re-exports (no rule copy)', () => {
+  // Absolute behavior (body table, code shapes, word boundaries) is owned by
+  // sidebar test/shared/runtime-refusal.test.ts. This file only pins that the two
+  // names are the core objects themselves: a local re-implementation — which would
+  // silently drift from the route table — fails this identity check at once.
+  assert.equal(serverRefusalText, coreServerRefusalText)
+  assert.equal(classifyRuntimeRefusal, coreClassifyRuntimeRefusal)
 })
 
 /* ------------------------------------------------------------------ */
@@ -92,36 +91,6 @@ test('applyRuntimeProbe: an unavailable probe (null) DELETES the entry instead o
 })
 
 /* ---- 3. 409 refusals: classified, then localized ---- */
-
-test('classifyRuntimeRefusal: the not-running refusal is distinguished from every busy refusal', () => {
-  // runtime-routes.ts /restart: `managed dsh is not running (<state>); start the
-  // managed dsh …` (code runtime_busy — the code alone cannot tell them apart).
-  assert.deepEqual(
-    classifyRuntimeRefusal({ error: 'managed dsh is not running (stopped); start the managed dsh (start applies to stopped/error/restart-exhausted) or retry the interrupted apply/restore', code: 'runtime_busy' }, 409),
-    { kind: 'not-running', code: 'runtime_busy' },
-  )
-  for (const error of [
-    'a restart is already in flight',
-    'another runtime mutation is in flight',
-    'managed dsh is running (ready); start applies to stopped/error/restart-exhausted',
-    'runtime recovery interrupted-apply is required; resume via the matching retry route',
-  ]) {
-    assert.equal(classifyRuntimeRefusal({ error, code: 'runtime_busy' }, 409)?.kind, 'busy', error)
-  }
-  assert.deepEqual(classifyRuntimeRefusal({ error: 'x', code: 'runtime_recovery_required' }, 409),
-    { kind: 'busy', code: 'runtime_recovery_required' },
-    'a recovery-required 409 is a busy refusal, never the not-running one')
-})
-
-test('classifyRuntimeRefusal: every 409 is classified (never null), a non-409 is not', () => {
-  assert.deepEqual(classifyRuntimeRefusal(null, 409), { kind: 'busy', code: null },
-    'a body-less 409 still has to be localized — null here would leak the raw status text')
-  assert.deepEqual(classifyRuntimeRefusal({ code: 'runtime_busy' }, 409), { kind: 'busy', code: 'runtime_busy' })
-  assert.deepEqual(classifyRuntimeRefusal({ code: 42 }, 409), { kind: 'busy', code: null },
-    'a non-string code is not a code')
-  assert.equal(classifyRuntimeRefusal({ error: 'boom', code: 'runtime_busy' }, 400), null)
-  assert.equal(classifyRuntimeRefusal({ error: 'boom' }, 500), null)
-})
 
 test('runtimeRefusalText: a 409 becomes localized copy with the code; every other status stays verbatim', () => {
   const keys = { notRunning: 'restartRefusedNotRunning', busy: 'restartRefusedBusy' } as const

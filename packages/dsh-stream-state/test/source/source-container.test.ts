@@ -94,13 +94,21 @@ test('the projections are the EXACT shapes the App refs have today', () => {
   assert.deepEqual([...projectPrewarmSuppressed(registry)], [])
 })
 
-test('a view that is on screen has no hidden projection entry', () => {
+test('a view that is on screen has no hidden projection entry, but windowReset keeps its retention suppression', () => {
   const registry = run({}, V1, [
     { kind: 'mounted', at: 0 },
-    { kind: 'hidden', at: 7_000 },
+    { kind: 'bootSettled', outcome: 'booted' },
+    { kind: 'unmounted', at: 200 },
+    { kind: 'reclaimed', at: 100_000 },
+    { kind: 'mounted', at: 200_000 },
+    { kind: 'hidden', at: 300_000 },
     { kind: 'windowReset' },
   ])
   assert.deepEqual(projectHiddenSince(registry), {}, 'cleared window must not project a key')
+  // Suppression belongs to the INCARNATION, not the mount: paint closes the window and
+  // must NOT lift it, or the next tick would re-boot a reclaimed view in a loop.
+  assert.deepEqual([...projectPrewarmSuppressed(registry)], ['remote-1'],
+    'only a user action / registry removal lifts suppression')
 })
 
 test('suppressed/auto-prewarmed projections are Sets of source ids', () => {

@@ -100,8 +100,7 @@ test('the remove dialog derives its notes from the helper and never does inline 
   assert.match(dialog, /removeRunningNotes\(\{/, 'the dialog must use the pure derivation')
   assert.match(dialog, /runningNotes\.inertCount/, 'the inert count comes from the set difference')
   assert.doesNotMatch(dialog, /runningSessionIds\.length\s*-/, 'no length subtraction for the archived count')
-  // The code→copy resolver lives behind shared/action-error.ts: the dialog
-  // must still localize every user-reachable refusal (test/shared/action-error.test.ts).
-  assert.match(dialog, /gitActionErrorText\(error, t\)/, 'refusals must map to localized copy')
+  // 错误码→文案的本地化由 shared/action-error.ts 拥有，同一 dialog 的同正则锁在
+  // test/shared/action-error.test.ts（此处不再重复）。
   assert.match(dialog, /runtimeUnknownBlock/, 'the runtime-absent pre-hint must gate the confirm')
 })

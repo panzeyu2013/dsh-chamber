@@ -31,6 +31,8 @@ import {
 } from '../../src/source-mux-facts.ts'
 // 可判性唯一家：退役快照必须以它判定（不得在测试里自造第二套规则）。
 import { isFactsDecisionUsable } from '../../src/session-facts-source.ts'
+// 证据账本的唯一家（design 14 §D4）：恢复证据的落账时机与原因清空在这里被钉死。
+import { readEvidenceLog, resetEvidenceLogForTests } from '../../../dsh-chamber-client-core/src/evidence-log.ts'
 
 const SOURCE = readFileSync(fileURLToPath(new URL('../../src/source-mux-facts.ts', import.meta.url)), 'utf8')
 
@@ -201,6 +203,38 @@ test('a socket ready frame cannot certify facts after a failed first baseline', 
     await waitFor(() => facts.status().baselineFailures === 1, 'baseline failure did not surface')
     assert.equal(facts.status().ready, false)
     assert.equal(snapshots.at(-1)?.verdict, 'degraded')
+  } finally { facts.stop() }
+})
+
+test('recovery evidence belongs to the committed baseline, and the reason is cleared there', async () => {
+  resetEvidenceLogForTests()
+  let calls = 0
+  const socket = new FakeSocket()
+  const facts = createSourceMuxFacts({
+    sourceId: 'recovering', origin: 'http://cp', onSnapshot: () => {},
+    openSocket: () => socket,
+    // 第一轮「答了但形状被拒」：RPC 成功不是恢复（旧形态在 RPC 返回时就记 answered，与
+    // 形状拒绝的 channel 记录自相矛盾）；之后恢复成有效基线。
+    fetchImpl: rpcFetch({
+      'session/list': () => (++calls === 1 ? { items: 'not-an-array' } : { items: [] }),
+    }) as never,
+  })
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().baselineFailures >= 1, 'the rejected shape must count as a baseline failure')
+    assert.deepEqual(
+      readEvidenceLog().filter(entry => entry.owner === 'mux-facts' && entry.verdict === 'answered'),
+      [],
+      'an answered RPC whose shape is rejected is not a recovered baseline',
+    )
+    await waitFor(() => facts.status().baselines >= 1, 'the valid baseline must land')
+    const recovery = readEvidenceLog().filter(entry => entry.owner === 'mux-facts' && entry.verdict === 'answered')
+    assert.equal(recovery.length, 1, 'the recovery evidence is booked exactly once, on commit')
+    assert.equal(typeof recovery[0]?.detail.clearedReason, 'string', 'the record must name what was cleared')
+    assert.equal(facts.status().baselineFailureReason, null,
+      'the reason must be cleared on commit: a stale one re-emits the record on every 30s reconcile')
   } finally { facts.stop() }
 })
 
@@ -482,7 +516,11 @@ test('a carrier failure holds decidability through the grace, then degrades if n
   } finally { facts.stop() }
 })
 
-test('a late ready frame does not end the carrier grace (only a baseline or expiry does)', async () => {
+test('a late ready frame does not end the carrier grace (only a baseline or expiry does)', async (t) => {
+  // Mocked clock: a 2s real wait bought nothing the boundaries do not pin (the soak test
+  // above uses the same pattern). Ticks land exactly on the retry and the deadline.
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  t.after(() => t.mock.timers.reset())
   const sockets: FakeSocket[] = []
   let calls = 0
   const facts = createSourceMuxFacts({
@@ -496,15 +534,24 @@ test('a late ready frame does not end the carrier grace (only a baseline or expi
     facts.start()
     sockets[0]!.open()
     sockets[0]!.item({ type: 'ready', clientId: 'c' })
-    await waitFor(() => facts.status().ready, 'initial baseline did not make the carrier decidable')
-    // 真实失效 → 退避重连在宽限内开出继任套接字。
+    await settleMicrotasks()
+    assert.equal(facts.status().ready, true, 'initial baseline did not make the carrier decidable')
+    // 真实失效 → 退避重连（1s）在 2s 宽限内开出继任套接字。
     sockets[0]!.onclose?.({})
-    await waitFor(() => facts.status().carrierLostAt !== null, 'carrier loss did not start the grace')
-    await waitFor(() => sockets.length === 2, 'the backoff retry did not open a successor')
+    await settleMicrotasks()
+    assert.equal(facts.status().carrierLostAt !== null, true, 'carrier loss did not start the grace')
+    t.mock.timers.tick(1_000)
+    await settleMicrotasks()
+    assert.equal(sockets.length, 2, 'the backoff retry did not open a successor')
     // 新代际的 ready 帧到了，但基线没有落地：它只证明套接字腿，不许结束宽限。
     sockets[1]!.open()
     sockets[1]!.item({ type: 'ready', clientId: 'c' })
-    await waitFor(() => facts.status().ready === false, 'a ready frame extended the grace past its deadline')
+    await settleMicrotasks()
+    assert.equal(facts.status().ready, true, 'a ready frame must not end the grace early')
+    // 到期那一刻必须诚实降级（不是被 ready 帧取消，也不是永远不降级）。
+    t.mock.timers.tick(1_000)
+    await settleMicrotasks()
+    assert.equal(facts.status().ready, false, 'the grace must end at its deadline')
     assert.equal(facts.status().staleSince !== null, true, 'the degrade must be readable')
   } finally { facts.stop() }
 })
@@ -529,7 +576,10 @@ test('a failed first baseline does not poison the socket leg: the next successfu
   } finally { facts.stop() }
 })
 
-test('a reconnected carrier that re-baselines inside the grace never degrades the face', async () => {
+test('a reconnected carrier that re-baselines inside the grace never degrades the face', async (t) => {
+  // Mocked clock: the 1s backoff retry is the only wall time this test ever needed.
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  t.after(() => t.mock.timers.reset())
   const sockets: FakeSocket[] = []
   const verdicts: string[] = []
   const facts = createSourceMuxFacts({
@@ -542,16 +592,21 @@ test('a reconnected carrier that re-baselines inside the grace never degrades th
     facts.start()
     sockets[0]!.open()
     sockets[0]!.item({ type: 'ready', clientId: 'c' })
-    await waitFor(() => facts.status().ready, 'initial socket did not become ready')
+    await settleMicrotasks()
+    assert.equal(facts.status().ready, true, 'initial socket did not become ready')
     // 首连之前的那次 degraded 是诚实的（还没真相）；宽限语义说的是「有真相之后不得再逐次降级」。
     const okBefore = verdicts.lastIndexOf('ok')
     assert.notEqual(okBefore, -1, 'the initial baseline never published an ok snapshot')
     sockets[0]!.onclose?.({})
-    await waitFor(() => sockets.length === 2, 'the backoff retry did not open a successor')
+    await settleMicrotasks()
+    t.mock.timers.tick(1_000)
+    await settleMicrotasks()
+    assert.equal(sockets.length, 2, 'the backoff retry did not open a successor')
     // 继任者在宽限内完成握手 + 基线：对判定面是零变化（一次降级快照都不许出现）。
     sockets[1]!.open()
     sockets[1]!.item({ type: 'ready', clientId: 'c' })
-    await waitFor(() => facts.status().baselines >= 2, 'successor baseline missing')
+    await settleMicrotasks()
+    assert.ok(facts.status().baselines >= 2, 'successor baseline missing')
     assert.equal(facts.status().ready, true)
     assert.equal(facts.status().carrierLostAt, null)
     assert.equal(verdicts.slice(okBefore + 1).includes('degraded'), false,

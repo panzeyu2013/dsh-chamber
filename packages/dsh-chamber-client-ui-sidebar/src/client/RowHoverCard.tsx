@@ -233,6 +233,13 @@ export function RowHoverCard({
         if (cardRef.current?.contains(e.target as Node)) return
         intent.press()
       }}
+      // 与 pointerdown 同形的第二条收卡路径（vendor `dismissFromAnchor` 同时挂
+      // `onPointerDownCapture` 与 `onClickCapture`）：不经过 pointerdown 的
+      // click（键盘激活、程序化 click）过去只靠 leave/宽限收卡。
+      onClickCapture={(e) => {
+        if (cardRef.current?.contains(e.target as Node)) return
+        intent.press()
+      }}
     >
       {anchor}
       {open && copyable && <span className={cc.hoverCardStatus} role="status">{copied ? copiedLabel : ''}</span>}

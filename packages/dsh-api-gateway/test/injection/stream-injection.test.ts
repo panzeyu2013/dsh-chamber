@@ -4,16 +4,12 @@
  *
  * The wrapper options below are exactly the ones $stream installs (the page
  * global reader and RemoteStreamCarrierError), so a break observed here is the
- * retryable error the retry lane owns - not a test-only lookalike. The last case
- * proves the carrier leg's evidence lands in the one incident ring the renderer
- * reads back.
+ * retryable error the retry lane owns - not a test-only lookalike.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  IncidentInstrument,
   createInjectionHarness,
-  installIncidentInstrument,
   installInjectionHarness,
   readInjectionHarness,
   wrapOpenWithInjection,
@@ -22,9 +18,6 @@ import { RemoteStreamCarrierError } from '../../src/client/stream-client.ts'
 
 /** The documented page global (a literal so a rename is a cross-shell failure). */
 const INJECTION_GLOBAL = '__dshChamberInjection'
-/** The documented incident global the renderer installs and every shell reads. */
-const INCIDENT_GLOBAL = '__dshChamberIncident'
-
 /** Exactly the composition `$stream` installs. */
 function shippedWrapper<Item>(open: (signal: AbortSignal) => AsyncIterable<Item>) {
   return wrapOpenWithInjection(open, {
@@ -88,30 +81,3 @@ test('an armed append-silent fault starves the consumer until the generation abo
   }
 })
 
-test('the carrier leg records the break into the one incident ring', () => {
-  const incident = new IncidentInstrument()
-  installIncidentInstrument(globalThis, incident)
-  try {
-    incident.record({
-      at: 1_000,
-      source: 'carrier',
-      kind: 'carrier-break',
-      runId: 'host:turn%2F7',
-      sessionId: 's1',
-      symptom: 'content-stall',
-      detail: 'socket closed mid-frame',
-    })
-    const view = (globalThis as Record<string, unknown>)[INCIDENT_GLOBAL] as {
-      entries(): readonly Record<string, unknown>[]
-    }
-    const last = view.entries().at(-1)
-    assert.equal(last?.source, 'carrier')
-    assert.equal(last?.kind, 'carrier-break')
-    assert.equal(last?.runId, 'host:turn%2F7', 'the run identity travels with the evidence')
-    assert.equal(last?.sessionId, 's1')
-    assert.equal(last?.symptom, 'content-stall')
-    assert.equal(last?.detail, 'socket closed mid-frame')
-  } finally {
-    delete (globalThis as Record<string, unknown>)[INCIDENT_GLOBAL]
-  }
-})

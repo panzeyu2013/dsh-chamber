@@ -13,14 +13,16 @@
 import { useCallback, useMemo, type ReactNode } from 'react'
 import clsx from 'clsx'
 import {
-  BrandWordmark, FishLogo, IconNewChatOutlineRegular, IconPanelLeftOutlineRegular, Tooltip, isDarwinDesktop,
+  BrandWordmark, FishLogo, IconNewChatOutlineMedium, IconNewChatOutlineRegular, IconPanelLeftOutlineRegular,
+  ShortcutKeys, Tooltip, isDarwinDesktop,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { SidebarRootComponentProps } from './contract/slots.ts'
+import type { ShortcutsHook, SidebarRootComponentProps } from './contract/slots.ts'
 import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { getInstanceClient, searchSessions } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 import { setSearchFetcher } from '@dsh-chamber/dsh-chamber-client-core/search-state'
 import { SessionTodoArea } from './SessionTodoArea.tsx'
-import { ServerSection, sourceHeaderActivatable, sourceHeaderTitle } from './ServerSection.tsx'
+import { ServerSection } from './ServerSection.tsx'
+import { sourceHeaderActivatable, sourceHeaderTitle } from './server-section-model.ts'
 import { SidebarSectionContext, sourceAccentStyle, type SidebarSectionContextValue } from './sidebar-context.ts'
 import { ChamberListBoundary, PanelRow, sourceDotStyle, type PanelsHook } from './sidebar-root-chrome.tsx'
 import { useSidebarCollapse } from './sidebar-root-collapse.ts'
@@ -48,6 +50,7 @@ export function SidebarRoot({
   selectPanel,
   usePanels,
   usePanelInfo,
+  useShortcuts,
   chamberInstanceId,
   directoryBrowserT,
   t,
@@ -65,7 +68,7 @@ export function SidebarRoot({
   ) => ReactNode
 
   // 跨切面状态由各主题 hook 持有；每个 hook 无条件按固定顺序调用，effect 顺序稳定。
-  const { wide, column, lastWideWidth, everWide, pointerInside, setPointerInside, cancelLinger, armLinger } =
+  const { wide, column, lastWideWidth, pointerInside, setPointerInside, cancelLinger, armLinger } =
     useSidebarCollapse(collapsed, width)
   const {
     servers, viewPrefs, orderedServers, toggleWorkspaceFold, toggleSourceFold, setOrderBy,
@@ -110,12 +113,13 @@ export function SidebarRoot({
 
   // chamber：每个渲染周期一个 context value——各 per-source section 经 provider
   // （sidebar-context.ts）读取跨切面状态/动作，而不是穿三层组件传 ~40 个 prop；
-  // store/effect/commit 全归 shell，ServerSection 只消费。42 个字段逐项进依赖
+  // store/effect/commit 全归 shell，ServerSection 只消费。43 个字段逐项进依赖
   // 数组：漏一项会让 section/行读到过期值，多一项会让 memo 白算。
   const ctxValue: SidebarSectionContextValue = useMemo(() => ({
     wide,
     t,
     chamberInstanceId,
+    useShortcuts,
     renderWorkspaceGit,
     viewPrefs,
     toggleWorkspaceFold,
@@ -156,7 +160,7 @@ export function SidebarRoot({
     onForkSession,
     onDeleteWorkspace,
   }), [
-    wide, t, chamberInstanceId, renderWorkspaceGit, viewPrefs, toggleWorkspaceFold,
+    wide, t, chamberInstanceId, useShortcuts, renderWorkspaceGit, viewPrefs, toggleWorkspaceFold,
     toggleSourceFold, setOrderBy, sessionOrderOverride, workspaceOrderOverride,
     sessionDrag, setSessionDrag, workspaceDrag, setWorkspaceDrag, serverDrag, setServerDrag,
     commitSessionDrag, commitWorkspaceDrag, commitServerDrag, suppressClickRef,
@@ -175,18 +179,39 @@ export function SidebarRoot({
   // markDocumentPlatform，documentStart 注入 + DOMContentLoaded 兜底）；侧栏经 client-plugin
   // 图加载后才挂载，此刻标记必已就位，故渲染期直读即可（上游同款读法）。
   const darwinDesktop = isDarwinDesktop()
+  // 快捷键目录（hooks.shortcuts）：顶部控件按命令 id 取自己的生效绑定；命令未注册时
+  // 行缺席（tooltip 不带键帽、aria-keyshortcuts 不发）。上游 SidebarRoot.tsx 同款取法。
+  const toggleShortcut = (useShortcuts as ShortcutsHook)(rows => rows.find(row => row.id === 'sidebar.left.toggle'))
+  const newShortcut = (useShortcuts as ShortcutsHook)(rows => rows.find(row => row.id === 'session.new'))
+  // 品牌洞：mark 回退保持 chamber wordmark，name 洞未注册则不渲染。
+  const brandIdentity = (
+    <span className={css.brandIdentity} aria-hidden="true">
+      <span className={css.brandMark}>
+        {renderSlot('sidebar.brand.mark', { size: 24 }, { fallback: <BrandWordmark /> })}
+      </span>
+      {/* 无 name 回退：mark 洞已带产品名，未占用的 name 洞渲染空而非重复。 */}
+      <span className={css.brandName}>
+        {renderSlot('sidebar.brand.name', {}, { fallback: null })}
+      </span>
+    </span>
+  )
   // rail 静息态是鲸鱼标；悬停换成面板图标（展开入口）。
   const toggle = (
-    <Tooltip label={collapsed ? t('toggle.open') : t('toggle.collapse')} delayMs={500}>
+    <Tooltip
+      label={collapsed ? t('toggle.open') : t('toggle.collapse')}
+      shortcutKeys={toggleShortcut?.keys}
+      delayMs={500}
+    >
       <button
         type="button"
         className={clsx(css.iconButton, css.toggle)}
         aria-label={collapsed ? t('toggle.open') : t('toggle.collapse')}
+        aria-keyshortcuts={toggleShortcut?.aria}
         onClick={() => { toggleSidebar() }}
       >
         {!wide && (
           <span className={css.railMark} aria-hidden="true">
-            {renderSlot('sidebar.brand.mark', { size: 24 }, { fallback: <FishLogo className={css.railFish} size={24} /> })}
+            {renderSlot('sidebar.brand.mark', { size: 24 }, { fallback: <FishLogo size={24} /> })}
           </span>
         )}
         {/* Rail icons render at 18 (figma rail spec); expanded keeps the glyph-native sizes. */}
@@ -199,7 +224,7 @@ export function SidebarRoot({
     <div
       ref={column}
       className={clsx(
-        css.root, !wide && css.collapsed, !wide && everWide.current && css.railIn,
+        css.root, !wide && css.collapsed,
         collapsed && wide && css.fading, !pointerInside && css.quietBars,
       )}
       style={wide ? { width: collapsed ? lastWideWidth.current : width } : undefined}
@@ -216,40 +241,49 @@ export function SidebarRoot({
       {darwinDesktop && <div className={css.topStrip} data-window-drag>{toggle}</div>}
 
       <div className={css.logoRow} data-window-drag>
-        {/* 展开时 wordmark 兼作 New Session 快捷方式（rail 的展开入口在 toggle 内）。 */}
-        {wide && (
-          <button
-            type="button"
-            className={clsx(css.brand, css.wide)}
-            aria-label={t('session.new.label')}
-            onClick={() => { startSession() }}
-          >
-            {/* 品牌洞：mark 回退保持 chamber wordmark，name 洞未注册则不渲染。 */}
-            <span className={css.brandIdentity} aria-hidden="true">
-              <span className={css.brandMark}>
-                {renderSlot('sidebar.brand.mark', { size: 24 }, { fallback: <BrandWordmark /> })}
-              </span>
-              {/* 无 name 回退：mark 洞已带产品名，未占用的 name 洞渲染空而非重复。 */}
-              <span className={css.brandName}>
-                {renderSlot('sidebar.brand.name', {}, { fallback: null })}
-              </span>
-            </span>
-          </button>
-        )}
+        {/* 展开时 wordmark 兼作 New Session 快捷方式（rail 的展开入口在 toggle 内）。
+            darwin 的字标是窗口拖拽面（壳把按下的行转成原生拖拽），故与上游同款退化为
+            不可点的 span；其余平台是带键帽提示的按钮。 */}
+        {wide && (darwinDesktop ? (
+          <span className={css.brand}>{brandIdentity}</span>
+        ) : (
+          <Tooltip label={t('session.new.label')} shortcutKeys={newShortcut?.keys} delayMs={500}>
+            <button
+              type="button"
+              className={css.brand}
+              aria-label={t('session.new.label')}
+              aria-keyshortcuts={newShortcut?.aria}
+              onClick={() => { startSession() }}
+            >
+              {brandIdentity}
+            </button>
+          </Tooltip>
+        ))}
         {/* macOS 已把开关停在顶部带内；其余平台仍停在 logo 行右端。 */}
         {!darwinDesktop && toggle}
       </div>
 
-      {/* Expanded, the button carries its own label — tooltip only on the rail. */}
-      <Tooltip label={t('session.new.label')} delayMs={500} disabled={wide}>
+      {/* Expanded, the button carries its own label plus the hover keycap; the
+          tooltip is only on the rail. Upstream ui-sidebar SidebarRoot.tsx同款。 */}
+      <Tooltip label={t('session.new.label')} shortcutKeys={newShortcut?.keys} delayMs={500} disabled={wide}>
         <button
           type="button"
           className={css.newSession}
           aria-label={t('session.new.label')}
+          aria-keyshortcuts={newShortcut?.aria}
           onClick={() => { startSession() }}
         >
-          <IconNewChatOutlineRegular size={wide ? 14 : 18} />
-          {wide && <span className={clsx(css.newSessionLabel, css.wide)}>{t('session.new')}</span>}
+          <span className={css.newSessionLabelMask}>
+            <span className={css.newSessionContent}>
+              {wide ? <IconNewChatOutlineMedium size={14} /> : <IconNewChatOutlineRegular size={18} />}
+              {wide && <span className={css.newSessionLabel}>{t('session.new')}</span>}
+            </span>
+          </span>
+          {wide && newShortcut !== undefined && newShortcut.keys.length > 0 && (
+            <span className={css.newSessionShortcut} aria-hidden="true">
+              <ShortcutKeys keys={newShortcut.keys} />
+            </span>
+          )}
         </button>
       </Tooltip>
 

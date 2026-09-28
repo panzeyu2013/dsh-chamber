@@ -226,7 +226,7 @@ test('runEntries: a failure stops new launches at the pool bound (fail-fast surv
 test('runEntries: a failure declared after a round-robin hole is still reported and printed', async () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-manifest-hole-'))
   try {
-    writeFileSync(join(root, 'a-slow.test.mjs'), passingFixture('A', 400))
+    writeFileSync(join(root, 'a-slow.test.mjs'), passingFixture('A', 200))
     writeFileSync(join(root, 'a-never.test.mjs'), passingFixture('A2'))
     writeFileSync(join(root, 'b-fail.test.mjs'), [
       "console.log('ℹ tests 1')",

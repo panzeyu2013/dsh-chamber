@@ -390,6 +390,14 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
     disabled?: boolean; portal?: boolean; maxWidth?: number; children: ReactElement
   }
   export function Tooltip(props: TooltipProps): JSX.Element | null
+  /** Shortcut keycaps (vendor ShortcutKeys.tsx): one `kbd` per effective key label,
+   *  `'+'` renders as the combination separator; `variant` selects the tooltip face. */
+  export interface ShortcutKeysProps {
+    keys: readonly string[]
+    variant?: 'plain' | 'tooltip'
+    className?: string | undefined
+  }
+  export function ShortcutKeys(props: ShortcutKeysProps): JSX.Element | null
   /** macOS desktop detection for hiddenInset-titlebar layout variants (vendor
    *  darwin-desktop.ts): both desktop shells mark `<html>` with
    *  `data-platform="darwin"`; plain web never sets it. Read at render time. */
@@ -409,6 +417,7 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   export const IconChecklistOutlineRegular: IconComponent
   export const IconChevronDownOutlineRegular: IconComponent
   export const IconChevronRightOutlineRegular: IconComponent
+  export const IconCloseFillRegular: IconComponent
   export const IconCloseOutlineRegular: IconComponent
   export const IconDataOutlineRegular: IconComponent
   export const IconEditOutlineRegular: IconComponent
@@ -416,6 +425,7 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   export const IconFolderOpenOutlineRegular: IconComponent
   export const IconLinkOutlineRegular: IconComponent
   export const IconLoadingOutlineRegular: IconComponent
+  export const IconNewChatOutlineMedium: IconComponent
   export const IconNewChatOutlineRegular: IconComponent
   export const IconPanelLeftOutlineRegular: IconComponent
   export const IconPersonalizationOutlineRegular: IconComponent

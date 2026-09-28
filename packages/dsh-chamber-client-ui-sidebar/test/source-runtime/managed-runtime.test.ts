@@ -106,7 +106,6 @@ test('the sidebar consumes the dedicated managed-down fact, never the merged pha
   sLock(/server\.managedRuntimeDown === true/, 'the note/header must gate on the dedicated fact')
   sNoLock(/managedRuntimeDown\(server\.phase\)/,
     're-classifying the merged phase would misdiagnose a transport error as a stopped managed dsh')
-  sLock(/sourceHeaderActivatable\(/, 'a managed-down source header must stop being an activation affordance')
   sLock(/server\.connected && search\?\.expanded === true/,
     'the search capsule must be gated on connected (otherwise it is a keyboard dead end)')
 })
@@ -171,6 +170,8 @@ test('the header stops being an activation affordance only for managed-down sour
 
 test('managedRuntimeUnusable covers terminal and transient states only', () => {
   // 收割/预热门控用这个谓词：漏掉瞬态会拿 503 白烧一次尝试（只有 2 次），把 null/'' 当不可用则会隐藏健康来源。
+  // 集合成员单独钉住：谓词循环对集合自洽，少一项（头部说明行/门控同源）不会被它发现。
+  assert.deepEqual([...MANAGED_RUNTIME_TRANSIENT_STATES], ['starting', 'restarting'], '瞬态集合 = 官方网关词表的 starting/restarting')
   for (const state of MANAGED_RUNTIME_DOWN_STATES) assert.equal(managedRuntimeUnusable(state), true, state)
   for (const state of MANAGED_RUNTIME_TRANSIENT_STATES) assert.equal(managedRuntimeUnusable(state), true, state)
   for (const state of ['ready', 'degraded', 'unknown', '', null, undefined]) {
@@ -195,7 +196,9 @@ test('the source note id is per-shell and its empty state stays a live region', 
 
 test('the transient managed state gets its own honest note and the dot keeps its phase', () => {
   // 瞬态（starting/restarting）会把 connected 折叠为 false ⇒ 会话子树隐藏；没有说明行就是"整组凭空消失"
-  sLock(/const managedTransient = server\.kind === 'gateway'\s*\n\s*&& \(server\.phase === 'starting' \|\| server\.phase === 'restarting'\)/,
+  // 瞬态集合共用 managed-runtime 的常量：锁的是「kind 限定 + 相位在瞬态集合里」，
+  // 不再钉字面量拼写（集合增长时头部无需第二次编辑）。
+  sLock(/const managedTransient = server\.kind === 'gateway'\s*\n\s*&& \(MANAGED_RUNTIME_TRANSIENT_STATES as readonly string\[\]\)\.includes\(server\.phase\)/,
     'the transient note must be kind-scoped (local /health shares the vocabulary)')
   sLock(/const managedUnusable = server\.managedRuntimeDown === true/,
     'the transient state must also stop promising an activation that 503s')

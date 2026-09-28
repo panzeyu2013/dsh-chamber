@@ -61,11 +61,11 @@
    id × 隐藏壳丢绘），本文件只负责动画面：必要内容不参与任何入场动画。
    入场动画都以 `opacity: 0` 为首帧（`wide-in` / `rail-in` / `rail-fade-in`），
    而 CSS 动画只在所属子树被渲染时推进：被隐藏的实例壳（`.instance-hidden` →
-   `content-visibility: hidden`）或窗口被遮挡时，字标（`.wide`）与设置座席
-   （`.railIn .footArea`）会停在首帧——不可见、仍可命中、除重挂载外不自愈。
-   折叠的位移与裁剪由 AppFrame 轨道过渡承担，
-   而 `.fading` 保留——它是**类驱动**且被 settle 定时器界定，不是时间线动画。
-   `.wide` / `.railIn` 仅作为布局/接线钩子由组件挂载。 */
+   `content-visibility: hidden`）或窗口被遮挡时，字标与设置座席会停在首帧——
+   不可见、仍可命中、除重挂载外不自愈。整组动画与它们的类钩子（`css.wide` /
+   `css.railIn`）已一并删除：CSS Modules 对文件内未定义的类返回 `undefined`，
+   留着只是幽灵引用。折叠的位移与裁剪由 AppFrame 轨道过渡承担，而 `.fading`
+   保留——它是**类驱动**且被 settle 定时器界定，不是时间线动画。 */
 
 /* macOS 隐藏标题栏（Swift 壳 titlebarAppearsTransparent；上游官方桌面
    titleBarStyle:'hiddenInset' 同形）：红绿灯浮在侧栏顶部，该带横跨列顶
@@ -121,7 +121,7 @@
   gap: 8px;
   height: 60px;
   padding: 8px 0 8px 4px;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
   box-sizing: border-box;
   overflow: hidden;
 }
@@ -131,6 +131,7 @@
   padding: 0;
   margin-bottom: 12px;
   justify-content: flex-start;
+  overflow: visible;
 }
 
 /* Brand group (figma I133:7632): the full wordmark rides the text ink
@@ -150,13 +151,25 @@
   cursor: pointer;
 }
 
-/* On macOS the brand is a window-drag surface, not a New Session button;
-   a pointer cursor would promise a click that drags the window instead. */
+/* On macOS the brand is a window-drag surface, not a New Session button; a
+   pointer cursor would promise a click that drags the window instead. Two
+   rules on purpose:
+   - the vibrancy-gated one is the Swift cross-language lockstep contract
+     (macos/Tests/DSHChamberTests/CrossLanguageLockstepTests.swift requires the
+     marked selector for .root/.brand/.newSession);
+   - the plain darwin one covers the Electron leg, which is also darwin
+     (isDarwinDesktop reads data-platform only) but carries no vibrancy mark.
+   Both declare the same cursor, so the cascade has nothing to arbitrate. */
 :global([data-platform='darwin'][data-window-vibrancy]) .brand {
   cursor: default;
 }
 
+:global([data-platform='darwin']) .brand {
+  cursor: default;
+}
+
 .iconButton {
+  position: relative;
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -164,8 +177,7 @@
   width: 28px;
   height: 28px;
   border: none;
-  border-radius: 50%;
-  corner-shape: round;
+  border-radius: var(--dsw-radius-sm);
   padding: 0;
   background: transparent;
   cursor: pointer;
@@ -176,9 +188,15 @@
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
+.iconButton.toggle:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: -2px;
+}
+
 .collapsed .iconButton {
   width: 36px;
   height: 36px;
+  border-radius: var(--dsw-radius-md);
 }
 
 /* Rail logo swap: collapsed, the toggle rests as the whale mark (brand ink,
@@ -192,7 +210,7 @@
   display: inline;
 }
 
-.collapsed .toggle:hover .railFish {
+.collapsed .toggle:hover .railMark {
   display: none;
 }
 
@@ -202,20 +220,22 @@
   color: var(--dsw-alias-label-primary);
 }
 
-/* New Session: 38px bar, 12px radius (figma 133:7634 geometry, squared-off
-   corners); collapsed it renders as the rail's plain icon control. */
+/* New Session: the pinned upstream bar (38px, radius-md, l3 hairline, the
+   label mask + hover keycap); collapsed it renders as the rail's plain icon
+   control. */
 .newSession {
+  box-sizing: border-box;
+  position: relative;
   flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 0;
   height: 38px;
-  padding: 8px 16px;
-  margin: 0 2px 8px;
-  box-sizing: border-box;
-  border: 0.5px solid var(--dsw-alias-border-l2);
-  border-radius: 12px;
+  margin: 0 2px 12px;
+  padding: 8px 12px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-md);
   background: var(--dsw-alias-button-elevated-fill);
   color: var(--dsw-alias-label-primary);
   font-size: 14px;
@@ -223,6 +243,7 @@
   line-height: 22px;
   cursor: pointer;
   overflow: hidden;
+  container-type: inline-size;
 }
 
 .newSession:hover {
@@ -238,6 +259,20 @@
 
 :global([data-platform='darwin'][data-window-vibrancy]) .newSession:hover {
   background: rgb(255 255 255 / 0.3);
+}
+
+/* The vibrancy gate lifts the darwin fills, so the rail’s plain `.collapsed`
+   override below would lose. Re-establish the pair under the same gate — in the
+   position upstream’s specificity order puts it: the light darwin fill ties with
+   `.collapsed` (both reduced to the same specificity once gated) and loses by
+   source order, while the dark darwin fill outranks `.collapsed` and keeps the
+   white wash. So these sit after the light pair and before the dark pair. */
+:global([data-platform='darwin'][data-window-vibrancy]) .collapsed .newSession {
+  background: transparent;
+}
+
+:global([data-platform='darwin'][data-window-vibrancy]) .collapsed .newSession:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
 }
 
 :global([data-platform='darwin'][data-window-vibrancy]) :global([data-ds-dark-theme]) .newSession {
@@ -273,6 +308,40 @@
   max-width: 0;
 }
 
+.newSessionLabelMask {
+  flex: 1;
+  min-width: 0;
+}
+
+.newSession:is(:hover, :focus-visible) .newSessionLabelMask:has(+ .newSessionShortcut) {
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, #000 calc(100% - 16px), #0000);
+}
+
+.newSessionContent {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  width: 100cqw;
+}
+
+.newSessionContent > svg {
+  flex: none;
+}
+
+.newSessionShortcut {
+  flex: none;
+  display: inline-flex;
+  opacity: 0;
+  pointer-events: none;
+  font-weight: 400;
+}
+
+.newSession:is(:hover, :focus-visible) .newSessionShortcut {
+  opacity: 1;
+}
+
 /* Region seat: always mounted so the foot never moves. Its trailing margin
    cancels the wide shell inset so the nested scrollbar can sit at the sidebar
    edge; the browser restores that inset inside its own rows. */
@@ -293,18 +362,14 @@
   padding-left: 0;
 }
 
-/* Optional chamber feature seat between navigation and the fixed foot. The
-   occupant controls its own max-height/scrolling; an empty slot takes no room. */
 /* Footer seats: additive actions stack above Settings. Each occupant owns its
    button geometry and hover chrome — including its own VERTICAL margins (the
    settings trigger carries `margin: 4px -2px` wide / `8px 0 10px` on the rail,
-   SettingsShell.module.css:24/51), because this block is official-verbatim and
-   the stack itself carries no gap. The footer-action hole is a LIST seat
-   (`sidebar.footer.action`, kind 'list' — contract/slots.ts:88), so several
-   occupants share ONE row: that row holds the sheet's 4px icon-cluster rhythm
-   (chamber addition to the copied block; the seat ships empty, so the row has no
-   occupant to space today and the gap stays invisible; the value is the sheet's
-   icon-cluster rhythm, not a hit-rim floor). */
+   SettingsShell.module.css:24/51). The footer-action hole is a LIST seat
+   (`sidebar.footer.action`, kind 'list' — contract/slots.ts:67), so several
+   occupants share ONE row; the 4px gap is the registered chamber increment for
+   that shared row (official block has none — STATUS 「footer 动作行 gap: 4px」 /
+   design 05 §2.2). */
 .footArea {
   flex: none;
   display: flex;
@@ -350,25 +415,34 @@
 .brandIdentity {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
+  height: 24px;
 }
 
 .brandMark {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   flex: none;
 }
 
 .brandName {
   display: inline-flex;
   align-items: center;
+  gap: 6px;
   min-width: 0;
+  height: 24px;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 24px;
+  letter-spacing: 0.04em;
 }
 
 .railMark {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
 }
 
 /* Global panel list (`sidebar.panellist`): one row per registered main panel;
@@ -385,17 +459,17 @@
 }
 
 .panelRow {
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
   min-height: 36px;
+  margin: 0 2px;
   padding: 7px 8px;
-  box-sizing: border-box;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--dsw-radius-md);
   background: transparent;
-  color: var(--dsw-alias-label-secondary);
+  color: var(--dsw-alias-label-primary);
   font: inherit;
   line-height: 22px;
   text-align: left;
@@ -407,16 +481,15 @@
 }
 
 /* The compound selector is load-bearing: `.panelRow:hover` (0,2,0) would
-   otherwise beat a bare `.panelActive` (0,1,0) and flip an ACTIVE row's
-   background to the hover token while the pointer is over it. */
+   otherwise beat a bare `.panelActive` (0,1,0). Upstream paints the active row
+   with the same hover token. */
 .panelRow.panelActive {
-  background: var(--dsw-alias-interactive-bg-active);
+  background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
-  font-weight: 500;
 }
 
 .panelRow:focus-visible {
-  outline: 2px solid var(--dsw-alias-label-primary);
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
   outline-offset: -2px;
 }
 
@@ -443,6 +516,7 @@
   width: 36px;
   height: 36px;
   justify-content: center;
+  margin: 0;
   padding: 0;
   color: var(--dsw-alias-label-primary);
 }

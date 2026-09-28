@@ -193,8 +193,8 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
 - **门控三进**（任一不满足 → 渲染 null）：① 桥就绪且过滤后可用集非空；② 本 header 的
   `sessionId` 属于有路径的工作区；③ hooks 无条件先执行（`open-in-gates.ts`）；
 - **交互**：可用集 ≥1 → 官方那条分体按钮（主图标按钮 + chevron + **官方 `ui-primitives` `Menu`**）：
-  `autoFocus` 焦点转移、方向键/Home/End 导航、`compact` 行（`dense`/34px → `compact`/26px/12px，随 `菜单密度 = chamber 档`
-  的全仓口径，见 design 06 §7）、`selection="fill"` 填充、项 `icon` 真图标
+  `autoFocus` 焦点转移、方向键/Home/End 导航、`compact` 行（官方默认 34px → `compact` 24px/11px，随 design 06 §7 的
+  「菜单密度 = primitives `compact` 档」全仓口径）、`selection="fill"` 填充、项 `icon` 真图标
   （`OpenInButton.tsx:316-401`；props 面与 pin 的 `Menu.tsx`/`Tooltip.tsx` 对齐见
   `types/vendor-modules.d.ts`（open-in 段））。**呈现规格逐条等于官方 open-in
   分体按钮**（清单见 §7.1；对照 design 16 §6.1 与 `OpenInButton.module.css`、
@@ -359,7 +359,8 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
   `test/wire-protocol/open-in-wire-lockstep.test.ts` 取代；
 - bespoke 菜单三件套 `src/client/AccessibleAppMenu.tsx` + `AccessibleAppMenu.module.css` +
   `src/client/menu-navigation.ts` 及其 `test/menu-navigation.test.ts` → 由官方
-  `ui-primitives` `Menu`（焦点转移/方向键导航/`compact`/填充选中/项图标/portal）+ `Tooltip` 取代；仅
+  `ui-primitives` `Menu`（焦点转移/方向键导航/`compact`/填充选中/项图标/portal）+ `Tooltip` 取代（本仓 `OpenInButton`
+  除 `portal` 外其余能力已用上，`portal` 未传——已登记的呈现偏差，见 STATUS「功能差异」的 open-in 条）；仅
   N-ctx 归属留插件内（新增 `src/client/instance-view-guard.ts` +
   `test/ui-lock/instance-view-guard.test.ts`，§5）；
 - `docs/checklists/upstream-touchpoints.md` §4 的 "dsh-host-open-in-app 契约镜像"行 → 改为 fork 行；

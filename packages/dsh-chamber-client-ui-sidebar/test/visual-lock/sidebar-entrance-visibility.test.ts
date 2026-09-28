@@ -12,10 +12,11 @@
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { test } from 'node:test'
+import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
 const source = (relative: string): string => readFileSync(new URL(relative, import.meta.url), 'utf8')
 const sidebarCss = source('../../src/client/SidebarRoot.module.css')
-const sidebarTsx = source('../../src/client/SidebarRoot.tsx')
+const sidebarTsx = stripComments(source('../../src/client/SidebarRoot.tsx'))
 const settingsShellCss = source('../../../dsh-chamber-client-ui-settings-bridge/src/client/SettingsShell.module.css')
 const rendererCss = source('../../../renderer/src/styles.css')
 
@@ -27,25 +28,18 @@ function entranceKeyframes(css: string): string[] {
   })
 }
 
-test('the sidebar declares no entrance animation that starts invisible', () => {
-  assert.deepEqual(entranceKeyframes(sidebarCss), [], 'an opacity-0 first frame can be pinned by a frozen timeline')
-  for (const gone of ['wide-in', 'rail-in', 'rail-fade-in'])
-    assert.doesNotMatch(sidebarCss, new RegExp('@keyframes\\s+' + gone + '\\b', 'u'), gone + ' must stay retired')
-})
-
 test('the state-driven collapse fade is the only opacity transition left', () => {
   // Class-driven + settle-bounded, so it is NOT a timeline that can freeze.
   assert.match(sidebarCss, /\.fading > \*\s*\{\s*opacity: 0;\s*transition: opacity 150ms/u)
   assert.match(sidebarCss, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.fading > \*\s*\{\s*transition: none;/u)
 })
 
-test('the removed animations are documented and their class hooks stay mounted', () => {
-  // The animation retirement covers the animation-face risk; the blank-icon root
-  // cause is design 05 §4.2.
-  assert.match(sidebarCss, /必要内容不参与任何入场动画/u)
-  assert.match(sidebarCss, /design 05 §4\.2/u)
-  assert.match(sidebarTsx, /clsx\(css\.brand, css\.wide\)/u, 'the wide hook still marks the brand row')
-  assert.match(sidebarTsx, /css\.railIn/u, 'the railIn hook still marks a live collapse')
+test('the retired animation hooks are gone, not left as inert markers', () => {
+  // 入场动画退役后 `.wide` / `.railIn` 没有任何 CSS 规则：CSS Modules 对文件内未定义的类
+  // 返回 `undefined`，clsx 直接丢弃 ⇒ 留着只是「引用存在但无规则」的假接线。整组删除后
+  // 这里锁「不再出现」，防止有人把它们当布局钩子重新挂上。
+  assert.doesNotMatch(sidebarTsx, /css\.wide\b|css\.railIn\b/u, 'the retired class hooks must not come back')
+  assert.doesNotMatch(stripComments(source('../../src/client/sidebar-root-chrome.tsx')), /css\.wide\b/u)
 })
 
 test('the settings shell panel body carries no entrance animation either', () => {

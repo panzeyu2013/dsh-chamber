@@ -5,11 +5,8 @@ import {
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pulls the layout frame's `shell.leading` slot declaration.
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
-import type { SidebarRootInjected, SidebarShortcutEntry } from './contract/slots.ts'
+import type { ShortcutsHook, SidebarRootInjected } from './contract/slots.ts'
 import css from './SidebarLeadingControls.module.css'
-
-/** Bound `useShortcuts` selector hook (the loose vendor inject face erases the hook's type). */
-type ShortcutsHook = <Selected>(selector: (rows: readonly SidebarShortcutEntry[]) => Selected) => Selected
 
 /** Full props of the `shell.leading` occupant. */
 export type SidebarLeadingControlsProps =
