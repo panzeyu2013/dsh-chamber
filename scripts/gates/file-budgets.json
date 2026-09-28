@@ -51,9 +51,9 @@
     },
     {
       "path": "packages/dsh-chamber-client-core/src/derive.ts",
-      "lines": 1739,
+      "lines": 1742,
       "target": 1200,
-      "note": "aggregate/session derive"
+      "note": "aggregate/session derive；2026-09-28 review-justified: RuntimeFactsOverlayRow 增加 facts 侧子代理活动三值（busy/idle/unknown，与判定侧同映射）并只在通道未声明时填补——呈现面不再由原始计数反推 running（+4，含同批删除的重复注释 −1）；棘轮随之抬到 1742。"
     },
     {
       "path": "packages/desktop/transport-manager.ts",
@@ -63,9 +63,9 @@
     },
     {
       "path": "packages/gateway/src/session-state.ts",
-      "lines": 1833,
+      "lines": 1847,
       "target": 900,
-      "note": "gateway session state routes + store + SSE; 相对已提交棘轮 1742 → 现值 1805（+63，全部 review-justified 2026-12）: +18: subagent rows are excluded at this source (single commitDelta filter + origin-transition removal) so child sessions can never reach the desktop as completion subjects (design 19 §3.2); the flip guard also requires the row to have existed, so first-seen subagent rows are never announced as removals and a subagent-to-top-level row still rides the delta; −1: commitDelta also filters absent rows, matching snapshotFor, never projecting a stop edge for a row the baseline no longer lists（S3 单阶段缺席删除，design 17 §10.7）; +30（S1/S3 收尾）: S1 身份门（StoredRow.originKnown 位 + commitDelta/snapshotFor 共用 isDeliverable + 门开那一拍的 delta 投递 + 持久化校验）与 S3 单阶段缺席删除; +16（第三轮 review 修复）: S1 收紧为**只认列表事实**——删除进程级 baselineSeen 及其全部读写，未确认身份的 status/activity/pending 行一律不投递（design 17 §10.7）+ T2 wire diagnostics.baselines 改读 store 的「成功且完整基线」计数（含 poll 档；observer 自计数另放 muxBaselines）+ T5 删除门槛（applyRemoved/enforceLimits 只对曾可投递行补 removed、容量淘汰补 pendingEdges.delete、死分支与注释清理）。棘轮随之抬到 1805; +28（2026-12 C2-6）: 行退役（基线缺席单阶段删除 + applyRemoved）同拍按 sessionId 清 waterfall 配对 `pendingEvents`（与 renderer `source-mux-facts.pendingWaterfalls` 同规：旧 eventId 的迟到 cancel 不得清同 id 重建后的新待决位，配对表也不得无界增长），含 releasePendingEventsFor / releasePendingEventsAbsentFrom 两个 helper 与两处调用。棘轮随之抬到 1833。"
+      "note": "gateway session state routes + store + SSE; 相对已提交棘轮 1742 → 现值 1805（+63，全部 review-justified 2026-12）: +18: subagent rows are excluded at this source (single commitDelta filter + origin-transition removal) so child sessions can never reach the desktop as completion subjects (design 19 §3.2); the flip guard also requires the row to have existed, so first-seen subagent rows are never announced as removals and a subagent-to-top-level row still rides the delta; −1: commitDelta also filters absent rows, matching snapshotFor, never projecting a stop edge for a row the baseline no longer lists（S3 单阶段缺席删除，design 17 §10.7）; +30（S1/S3 收尾）: S1 身份门（StoredRow.originKnown 位 + commitDelta/snapshotFor 共用 isDeliverable + 门开那一拍的 delta 投递 + 持久化校验）与 S3 单阶段缺席删除; +16（第三轮 review 修复）: S1 收紧为**只认列表事实**——删除进程级 baselineSeen 及其全部读写，未确认身份的 status/activity/pending 行一律不投递（design 17 §10.7）+ T2 wire diagnostics.baselines 改读 store 的「成功且完整基线」计数（含 poll 档；observer 自计数另放 muxBaselines）+ T5 删除门槛（applyRemoved/enforceLimits 只对曾可投递行补 removed、容量淘汰补 pendingEdges.delete、死分支与注释清理）。棘轮随之抬到 1805; +28（2026-12 C2-6）: 行退役（基线缺席单阶段删除 + applyRemoved）同拍按 sessionId 清 waterfall 配对 `pendingEvents`（与 renderer `source-mux-facts.pendingWaterfalls` 同规：旧 eventId 的迟到 cancel 不得清同 id 重建后的新待决位，配对表也不得无界增长），含 releasePendingEventsFor / releasePendingEventsAbsentFrom 两个 helper 与两处调用。棘轮随之抬到 1833。+30（2026-09-28 review 修复，review-justified）: 子代理边界结论清理（进入/离开 origin='subagent' 边界 clearConclusion + pendingEdges.delete，堵身份翻面泄漏）、容量淘汰补 recomputeSubagentCounts、pending/cancel 帧补 present 位、去掉无引用导出的 export；棘轮随之抬到 1847。"
     },
     {
       "path": "packages/dsh-chamber-client-core/src/instance-api.ts",
