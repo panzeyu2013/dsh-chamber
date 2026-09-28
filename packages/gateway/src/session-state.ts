@@ -140,13 +140,10 @@ interface StoredRow {
   completedAtSource: SessionStateCompletedAtSource | null
   lastTurnEnd: SessionTurnEnd | null
   pendingKind: SessionStatePendingKind | null
-  pendingSince: number | null
   subagentCount: number
   /** Legacy 兼容位：S3 单阶段删除后行在即 present（没有任何写入者会置假）；仅
    *  旧文档的 `present: false` 仍按隐藏读，避免把历史隐藏行突然投递。 */
   present: boolean
-  /** An api-session/error was seen (boolean only - never the message). */
-  error: boolean
   observedAt: number
   /** Baseline bookkeeping for the parent/origin subagent count. */
   parentSessionId: string | null
@@ -171,12 +168,10 @@ interface StoredHost {
   state: SessionStateHostState
   serviceable: boolean
   since: number
-  lastBaselineAt: number | null
-  baselineOk: boolean
 }
 
 /** The persisted document (createJsonStore free-form domain doc). */
-export interface SessionStateDocument {
+interface SessionStateDocument {
   schemaVersion: number
   revision: number
   cursor: number
@@ -348,10 +343,8 @@ function createStoredRow(sessionId: string, at: number): StoredRow {
     completedAtSource: null,
     lastTurnEnd: null,
     pendingKind: null,
-    pendingSince: null,
     subagentCount: 0,
     present: true,
-    error: false,
     observedAt: at,
     parentSessionId: null,
     origin: null,
@@ -427,7 +420,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
 
   let cursor = 0
   let mode: SessionStateMode = 'poll'
-  let host: StoredHost = { state: 'unknown', serviceable: false, since: now(), lastBaselineAt: null, baselineOk: false }
+  let host: StoredHost = { state: 'unknown', serviceable: false, since: now() }
   let dropped = { sessions: 0, goalActivations: 0 }
   // 每条完成边沿的 turn/end 分类构成（与 follow 读取一一对应）。
   const turnEnds = { completed: 0, userStopped: 0, neutral: 0, unreadable: 0 }
@@ -454,7 +447,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       cursor: 0,
       watcherEpoch: epoch,
       mode: 'poll',
-      host: { state: 'unknown', serviceable: false, since: at, lastBaselineAt: null, baselineOk: false },
+      host: { state: 'unknown', serviceable: false, since: at },
       sessions: [],
       dropped: { sessions: 0, goalActivations: 0 },
     }
@@ -463,7 +456,6 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
   function warn(message: string): void {
     deps.logger.warn('gateway session-state: ' + message)
   }
-
 
   function validateDocument(raw: Record<string, unknown>): { doc: SessionStateDocument; droppedSessions: number } {
     if (raw.schemaVersion !== SESSION_STATE_SCHEMA_VERSION) {
@@ -480,8 +472,6 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         state,
         serviceable: raw.host.serviceable === true,
         since: isWatermark(raw.host.since) ? raw.host.since : now(),
-        lastBaselineAt: isWatermark(raw.host.lastBaselineAt) ? raw.host.lastBaselineAt : null,
-        baselineOk: raw.host.baselineOk === true,
       }
     }
     let droppedSessions = 0
@@ -521,10 +511,8 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       completedAtSource: completedAtSource !== null && isWatermark(value.completedAt) ? completedAtSource : null,
       lastTurnEnd: validateTurnEnd(value.lastTurnEnd),
       pendingKind: value.pendingKind === 'approval' || value.pendingKind === 'question' ? value.pendingKind : null,
-      pendingSince: isWatermark(value.pendingSince) ? value.pendingSince : null,
       subagentCount: isWatermark(value.subagentCount) ? value.subagentCount : 0,
       present: value.present !== false,
-      error: value.error === true,
       observedAt: isWatermark(value.observedAt) ? value.observedAt : 0,
       parentSessionId: typeof value.parentSessionId === 'string' ? value.parentSessionId : null,
       origin: value.origin === 'subagent' ? 'subagent' : null,
@@ -653,6 +641,9 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       dropped.sessions += 1
     }
     warn('session cap reached; dropped ' + dropped.sessions + ' oldest row(s) (never silent)')
+    // 淘汰是删除：子代理行被淘汰时父的 subagentCount 必须同拍回落（与 applyRemoved / 基线
+    // 缺席同一纪律），否则陈旧计数会随本次 flush 一起落盘。
+    recomputeSubagentCounts()
     commitDelta()
   }
 
@@ -778,6 +769,18 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     row.lastTurnEnd = null
   }
 
+  /**
+   * 子代理身份边界上的结论清除（S1 后续修正）：子代理行不是投递主体，但行本身必须保留
+   * ——父的 `subagentCount` 仍由它统计。进入子代理身份时丢掉此前（顶层身份期间）武装的
+   * 结论；身份翻回顶层时再清一次：子代理身份期间仍可能有 status/基线边沿武装出 observed
+   * 完成（读尾照常分类），不清就会以「全新行」形态带出一条真横幅。P2b 在揭示子代理时
+   * `retireSession`、重上架即全新行（source-mux-facts.ts）；本处保留行、只清结论，同语义。
+   */
+  function clearConclusionAtSubagentBoundary(row: StoredRow): void {
+    clearConclusion(row)
+    pendingEdges.delete(row.sessionId)
+  }
+
   function newCompletionEdge(sessionId: string, source: SessionStateCompletedAtSource): CompletionEdge {
     const edge = { sessionId, source }
     pendingEdges.set(sessionId, edge)
@@ -860,12 +863,17 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         const wasDeliverable = isDeliverable(row)
         const previousRunning = row.running
         const previousUpdatedAt = row.updatedAt
+        const previousOrigin = row.origin
         row.updatedAt = Math.max(row.updatedAt, item.updatedAt)
         row.present = true
         row.observedAt = opts.at
         row.parentSessionId = item.parentSessionId
         row.origin = item.origin
         row.originKnown = true
+        // 身份边界的结论清除：进入子代理 / 从子代理翻回顶层都不带旧结论（见 helper 头注）。
+        if (item.origin === 'subagent' || previousOrigin === 'subagent') {
+          clearConclusionAtSubagentBoundary(row)
+        }
         // 门开（或从旧的未投递态转成可投递）本身就是一次投递变化：不只在字段变化时发。
         // 否则首基线前被扣下的 activity 行（updatedAt 已在位、基线带同一值）会静默上线，
         // 只被后续整量快照看见，delta-only 客户端会缺这一行。
@@ -934,7 +942,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       // （首份基线的判定与新计数同源，不再维护第二个布尔。）
       if (baselinesApplied === 0) gapCandidates.clear()
       baselinesApplied += 1
-      host = { ...host, lastBaselineAt: opts.at, baselineOk: true }
+      // 每次成功基线照旧投递 host 帧（now 变化即证据）；host 本身只有 state/serviceable/since 三键。
       deltaHost = true
       commitDelta()
       return edges
@@ -952,7 +960,6 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         clearConclusion(row)
         pendingEdges.delete(sessionId)
         row.pendingKind = null
-        row.pendingSince = null
         gapCandidates.delete(sessionId)
         if (changed) deltaSessions.set(sessionId, row)
         commitDelta()
@@ -992,11 +999,16 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       const existed = rows.has(item.sessionId)
       const row = getOrCreate(item.sessionId, at)
       const wasDeliverable = isDeliverable(row)
+      const previousOrigin = row.origin
       row.observedAt = at
       row.present = true
       row.parentSessionId = item.parentSessionId
       row.origin = item.origin
       row.originKnown = true
+      // 与 applyBaseline 同一身份边界纪律：子代理行不带结论，翻回顶层即全新行。
+      if (item.origin === 'subagent' || previousOrigin === 'subagent') {
+        clearConclusionAtSubagentBoundary(row)
+      }
       if (item.origin === 'subagent' && existed && wasDeliverable) deltaRemoved.add(item.sessionId)
       const previousUpdatedAt = row.updatedAt
       row.updatedAt = Math.max(row.updatedAt, item.updatedAt)
@@ -1101,8 +1113,10 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     applyPending(sessionId, kind, at): boolean {
       const row = getOrCreate(sessionId, at)
       if (row.pendingKind === kind) return false
+      // 兼容位（S3）：旧文档的 present:false 行仍按隐藏读；瀑布帧是行在场的证据，与
+      // applyStatus/applyActivity 同规把行置回 present（身份门 originKnown 不受影响）。
+      row.present = true
       row.pendingKind = kind
-      row.pendingSince = at
       row.observedAt = at
       deltaSessions.set(sessionId, row)
       commitDelta()
@@ -1112,14 +1126,14 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     clearPending(sessionId, at): boolean {
       const row = rows.get(sessionId)
       if (row === undefined || row.pendingKind === null) return false
+      // 同上：cancel 帧同样证明行在场，与 status/activity 同规置回 present。
+      row.present = true
       row.pendingKind = null
-      row.pendingSince = null
       row.observedAt = at
       deltaSessions.set(sessionId, row)
       commitDelta()
       return true
     },
-
 
     settleCompletion(edge, input): boolean {
       const row = rows.get(edge.sessionId)

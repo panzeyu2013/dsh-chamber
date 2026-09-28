@@ -342,6 +342,33 @@ test('a subagent row that becomes top-level again rides the delta even when noth
   store.applyBaseline([baselineItem('child', false, 4)], { at: 200 })
   assert.deepEqual(store.snapshotFor('sse', store.host()).sessions.map(row => row.sessionId), ['child'])
   assert.deepEqual(deltas.at(-1), ['child'], 'the reverse transition must reach delta-only clients')
+
+  // 回归（身份边界结论清除）：顶层 → 子代理 → 顶层，且结论是在**子代理身份期间**武装的。
+  // 子代理行在源侧不投递，但读尾照常分类；翻回顶层必须是全新行——不得把子代理期间武装的
+  // observed 完成带出去（renderer 判定面只认 completedAtSource==='observed'，那会是一条真横幅）。
+  const armed = storeFor(t)
+  const armedDeltas: string[][] = []
+  armed.subscribe(delta => armedDeltas.push(delta.sessions.map(row => row.sessionId)))
+  // ① 顶层上线（列表事实确认身份）。
+  armed.applyBaseline([baselineItem('child', false, 1)], { at: 10 })
+  assert.deepEqual(armed.snapshotFor('sse', armed.host()).sessions.map(row => row.sessionId), ['child'])
+  // ② 基线揭示子代理：行离场（补 removed），行本身保留作父的计数输入。
+  armed.applyBaseline([baselineItem('child', false, 1, { origin: 'subagent', parentSessionId: 'parent' })], { at: 20 })
+  assert.deepEqual(armed.snapshotFor('sse', armed.host()).sessions, [])
+  // ③ 子代理身份期间的真实完成边沿：status true → false + 一次分类读尾（行内武装 observed）。
+  assert.deepEqual(armed.applyStatus('child', true, 30), [])
+  const [armedEdge] = armed.applyStatus('child', false, 40)
+  armed.settleCompletion(armedEdge!, {
+    at: 40, turnEnd: { kind: 'completed', cause: null, at: 40, seq: 7 }, unreadable: false,
+  })
+  // ④ 基线把身份翻回顶层（停止态、updatedAt 不变：没有任何既有分支会自动清结论）⇒ 必须全新。
+  armed.applyBaseline([baselineItem('child', false, 1)], { at: 50 })
+  const [fresh] = armed.snapshotFor('sse', armed.host()).sessions
+  assert.equal(fresh?.sessionId, 'child')
+  assert.equal(fresh?.completedAt, null, '身份翻回顶层必须发布全新行（P2b retireSession 同语义）')
+  assert.equal(fresh?.completedAtSource, null, '子代理期间的 observed 完成绝不随行带出')
+  assert.equal(fresh?.lastTurnEnd, null)
+  assert.deepEqual(armedDeltas.at(-1), ['child'], '重上架仍走 delta')
 })
 
 test('a baseline that reports a stopped row emits an observed edge, not a completion', t => {
@@ -435,6 +462,32 @@ test('T5: row-cap eviction retracts only ever-delivered rows, never a never-deli
   assert.equal(store.status().dropped.sessions, MAX_SESSIONS + 1)
   assert.deepEqual([...removed].sort(), confirmed.map(item => item.sessionId).sort(),
     '曾可投递的 2000 行全部补撤回；最老的未确认行（ghost-0）静默淘汰，不补幽灵撤回')
+})
+
+test('T5: row-cap eviction of a subagent child drops the surviving parent count (and the persisted value agrees)', async t => {
+  const stateDir = scratch(t)
+  const store = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 1_000 })
+  // 父 + 子代理同拍入库（observedAt 都是 1）；再用 added 把父移到较新的保留序，使唯一被
+  // 淘汰的最旧行恰好是子代理行。
+  store.applyBaseline([
+    baselineItem('parent', false, 1),
+    baselineItem('child', false, 1, { origin: 'subagent', parentSessionId: 'parent' }),
+  ], { at: 1 })
+  store.applyAdded(baselineItem('parent', false, 2), 100)
+  const parentOf = (source: ReturnType<typeof createSessionStateStore>) =>
+    source.snapshotFor('sse', source.host()).sessions.find(row => row.sessionId === 'parent')
+  assert.equal(parentOf(store)?.subagentCount, 1, '前置：子代理行计入父')
+  // 1999 行新 filler（observedAt 200）⇒ 总行数 2001：淘汰唯一最旧行 child。
+  for (let index = 0; index < MAX_SESSIONS - 1; index += 1) store.applyStatus('filler-' + String(index), false, 200)
+  await store.flush()
+  assert.equal(store.status().sessions, MAX_SESSIONS)
+  assert.equal(store.status().dropped.sessions, 1)
+  assert.equal(parentOf(store)?.subagentCount, 0, '淘汰子代理行必须同拍回落父的计数（绝不留下陈旧 >0）')
+  store.dispose()
+  // 落盘值一致：同一份快照文档重新加载后父计数同样是 0（陈旧计数不得随 flush 落盘）。
+  const reopened = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 2_000 })
+  assert.equal(parentOf(reopened)?.subagentCount, 0, '落盘快照里的父计数同样回落')
+  reopened.dispose()
 })
 
 test('the row-cap eviction announces a removal delta (an SSE client never keeps a phantom row)', async t => {

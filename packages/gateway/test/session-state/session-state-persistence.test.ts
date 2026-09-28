@@ -295,8 +295,8 @@ test('the persisted document carries only session ids and state metadata (privac
   assert.equal(text.includes('activation'), false, 'activation is process-local and never persisted')
   const document = JSON.parse(text) as { sessions: Array<Record<string, unknown>> }
   assert.deepEqual(Object.keys(document.sessions[0]).sort(), [
-    'completedAt', 'completedAtSource', 'error', 'goal', 'lastRunningAt', 'lastTurnEnd', 'observedAt',
-    'origin', 'originKnown', 'parentSessionId', 'pendingKind', 'pendingSince', 'present', 'running',
+    'completedAt', 'completedAtSource', 'goal', 'lastRunningAt', 'lastTurnEnd', 'observedAt',
+    'origin', 'originKnown', 'parentSessionId', 'pendingKind', 'present', 'running',
     'sessionId', 'subagentCount', 'updatedAt',
   ])
   // The persisted goal carries ONLY the whitelisted durable fields.
