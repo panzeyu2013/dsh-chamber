@@ -943,7 +943,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   `compact`（= `.compactList`），`closeOnPointerLeave` 保留（v0.2.4 即此档，属恢复发布行为）。**pin 实测值**
   （`ui-primitives/lib/Menu.module.css`）：`.compactList .item` min-height 24px / padding 2px 6px /
   圆角 `--dsw-radius-sm`=8px / 11px·17px / gap 5px；`.list.compactList` min-width 156px / padding 4px；
-  `.compactList .label` padding 3px 6px / 10px·15px；`.compactList .itemIcon svg`/`.check` 12px（wrapper `.itemIcon` 仍 14px；原语默认：
+  `.compactList .label` padding 3px 6px / 10px·15px；`.compactList .itemIcon svg`/`.check` 12px（`.compactList .itemIcon` 这个 wrapper 本身即 12px，14px 只是原语默认：
   item 34px / 13px·20px / r-md / padding 6px 8px、itemIcon 14px、`.list` min-width 144px）。**不把菜单行抬到
   侧栏列表行的 26px/13px**：pin 无 item 级钩子、无 CSS 变量，抬行只能 `:global` 覆盖哈希类名或改
   `listClassName` 后的后代选择器；两个 kebab 菜单与设置页下拉因此比列表行矮 2px，属**接受的偏差**（不追官方

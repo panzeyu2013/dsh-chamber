@@ -122,7 +122,7 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
 
 | Package | Responsibility |
 |---|---|
-| `packages/control-plane` | Connection-manager core: local host lifecycle (spawn/readiness/reaper/health/logs), management REST, per-instance generic reverse proxy (HTTP/WS/SSE), static frontend serving |
+| `packages/control-plane` | Connection-manager core: local host lifecycle (spawn/readiness/reaper/health/logs), management REST, per-instance generic reverse proxy (HTTP/WS/SSE), static frontend serving, the page-level multiplex WS server (`/api/page-channel`) and its three upstream adapters (design 26) |
 | `packages/dsh-runtime` | Shared host-agnostic dsh runtime version management core (design 18); adapted by the desktop main process and the gateway, which never share runtime state |
 | `packages/renderer` | Self-built dsh frontend: composite entry build, per-instance host-graph merge and extra-entry preloading, N-ctx multi-instance orchestration, notification edge projection, boot manifest (designs 09, 19) |
 | `packages/dsh-chamber-client-core` | Shared chamber client kernel every chamber client package consumes: multi-source session/workspace projection, the chamberBridge singleton, the page-level client-plugin load kernel, the per-instance unary client, the page-level multiplex channel client (one socket for every long-lived stream, design 26), the settings-seat contract plus the framework-free runtime-management / SVG-resource-scope leaf contracts. Source-only: consumers resolve the TypeScript sources through its named faces and the seed bundle inlines them (designs 05, 09, 26) |
@@ -131,7 +131,7 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
 | `packages/dsh-client-connection` | In-repo copy of the official connection client plus the per-entry base-path patch |
 | `packages/dsh-client-web` | In-repo copy of the official web shell with the N-ctx boot re-base (design 09) |
 | `packages/dsh-api-gateway` | Second-implementation fork of the official api-gateway client half (client half only): per-entry base path plus chamber-owned stream reliability — carrier retry, opening deadline + silent-socket upgrade, journal stall watchdog — over `@dsh-chamber/dsh-stream-state`; pin upgrades replay it as a fork, never mirror-sync (registry `fork.dsh-api-gateway`, deviation G43) |
-| `packages/dsh-chamber-client-ui-sidebar` | Self-built sidebar: multi-source session navigation, chamberBridge, the page-level client-plugin load kernel, settings-seat contract (design 05) |
+| `packages/dsh-chamber-client-ui-sidebar` | Self-built sidebar: multi-source session navigation, chamberBridge, consuming client-core's page-level client-plugin load kernel and settings-seat contract (owner is client-core; design 05) |
 | `packages/dsh-chamber-client-ui-layout` | Self-built ui-layout shell fork: layout store persistence and the only document-level theme projection (design 06) |
 | `packages/dsh-chamber-client-ui-settings-connections` | Chamber-global connections settings page (design 05) |
 | `packages/dsh-chamber-client-ui-settings-bridge` | Self-built settings shell: server dropdown over the SELECTED source's own boot-ctx `settings.section` ledger, rendered with that ctx's renderer-bound seats (design 05 §5 complete-bridge revision) |

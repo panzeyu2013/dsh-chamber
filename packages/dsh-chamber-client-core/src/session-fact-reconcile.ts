@@ -308,6 +308,7 @@ export class SessionAuthorityReconciler {
       effect.kind === 'probe')
     const corrections: Extract<SessionAuthorityEffect, { kind: 'correct' }>[] = []
     let failed = false
+    let skippedRound = false
     let confirmation = false
     while (nextRead !== undefined) {
       let read: AuthorityRead | undefined
@@ -332,10 +333,14 @@ export class SessionAuthorityReconciler {
       this.authority = reduction.state
       if (read === undefined && readSkipped) {
         // 两次都未调度（`readBounded` 的末路）：账本已记 `booked=false`，本轮既不是失败也不是恢复
-        // ——未调度的窗口不携带来源事实（design 14 §D4）。直接收轮：不动 stuckSince/progressStamp，
-        // 也不落 read-failed（旧形态把「没有有效观测」读成「读失败」，既把误报送进权威梯子，
-        // 又会让下面的 !failed 分支把真 stuck 误清成 recovered）。
-        return true
+        // ——未调度的窗口不携带来源事实（design 14 §D4）。收轮但**不提前退出**：同一轮前一次读
+        // 已签发的 correct 仍要结算（写回失败照旧走 correct-failed/stuckSince）——提前 return 会
+        // 把 corrections 丢在循环里，reducer 的 correctionTicket 永不结算，之后每轮读都命
+        // 中「ticket 未结算」分支，tier-3 写回对该会话永久静默。收轮只表示本轮到此为止：
+        // 不动 stuckSince/progressStamp，也不落 read-failed（旧形态把「没有有效观测」读成
+        // 「读失败」，既把误报送进权威梯子，又会让下面的 !failed 分支把真 stuck 误清成 recovered）。
+        skippedRound = true
+        break
       }
       if (read === undefined || !read.ok) {
         failed = true
@@ -386,7 +391,7 @@ export class SessionAuthorityReconciler {
         failed = true
       }
     }
-    if (!failed) {
+    if (!failed && !skippedRound) {
       // A verdict was reached (converged, or corrected): the channel is not stuck.
       if (this.stuckSince !== undefined) this.note(this.deps.now(), 'recovered', 'authority verdict')
       this.stuckSince = undefined

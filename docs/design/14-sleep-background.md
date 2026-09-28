@@ -14,7 +14,7 @@
 | 项 | 事实 | 证据 |
 |---|---|---|
 | 进程拓扑 | 控制面（`createControlPlane`）、transport-manager 与全部 dsh 子进程都由 Electron 主进程持有；窗口只是视图 | `packages/desktop/main.ts` |
-| 断链恢复 | **已具备**：transport-manager jittered 指数退避重连 + 慢速重探（隧道断线自动恢复）；dsh-client-connection 原生 connect/pump/reconnect 循环（SSE 断线自动重连） | `transport-manager.ts`（重连状态机）；`dsh-client-connection/src/client/connection.ts`（connect/pump/reconnect） |
+| 断链恢复 | **已具备**：transport-manager jittered 指数退避重连 + 慢速重探（隧道断线自动恢复）；dsh-client-connection 原生 connect/pump/reconnect 循环（长活流断线自动重连） | `transport-manager.ts`（重连状态机）；`dsh-client-connection/src/client/connection.ts`（connect/pump/reconnect） |
 | 托盘 | 打包态防御式最小托盘：tooltip + 「显示窗口/退出」，无状态投影、无设置 | `main.ts`（`maybeCreateTray`） |
 | 退出清理所有权 | `will-quit` single-flight 完整 dispose 插件同步/本地插件子进程、传输层、控制面与 runtime 工作 | `main.ts`（`will-quit`） |
 
@@ -123,7 +123,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
     于是 `retention.ts` 的 `shouldRunBackgroundPhase` 六处门控在 Electron 上
     **从不生效**，隐藏期 renderer CPU 最高 28.1%（上游常驻动画 19.0% + 发布 19.4%）。
   - 恢复默认节流后同一测量台：隐藏期 rAF 0、CSS 动画暂停、`visibilitychange` 恢复，
-    renderer CPU 0.0–0.1%；**SSE 是网络流不受影响**（隐藏 9s 收 9/9 条、`maxGap`
+    renderer CPU 0.0–0.1%；**网络流不受影响**（该轮实测的载体是页面 SSE；design 26 §D6 之后长活流走页面通道 WS，同为网络流、结论不变）（隐藏 9s 收 9/9 条、`maxGap`
     1005ms、0 错误），唤醒即时重连走 `powerMonitor.on('resume')` →
     `dsh-chamber:system-resume` 的 IPC 推送（非计时器，不受节流影响）。被节流的只有
     <1s 定时器（100ms→1Hz；1s 保持 1Hz），3s/15s/30s/60s/120s 各档看门狗节奏不变。

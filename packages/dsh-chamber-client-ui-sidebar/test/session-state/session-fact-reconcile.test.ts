@@ -271,6 +271,52 @@ test('a round whose windows were both unscheduled books neither a failure nor a 
   }
 })
 
+test('a confirmed correction survives a final unscheduled window', async () => {
+  // 混合归约：同一轮第一次读同时否认 sA（第二次否认 ⇒ 已签发 correct）与 sB（首次 ⇒ 签发确认读），
+  // 随后失焦、确认窗口两次都未调度 ⇒ 本轮以 skipped 收轮。已签发的 correct(sA) 必须照常结算：
+  // 提前 return 会把它丢在循环里，reducer 的 correctionTicket 永不结算，此后每轮都命中
+  // 「ticket 未结算」分支，只写 false 的 tier-3 写回对该会话永久静默（design 14 §D4 的执行端契约）。
+  resetPageScheduleForTests()
+  try {
+    const read = (rows: Record<string, boolean>): AuthorityRead => ({
+      ok: true, proof: { kind: 'asOfSeq', asOfSeq: 1 }, rows,
+    })
+    const rows = { sA: { running: true }, sB: { running: true } }
+    // 每轮第一读在 20ms 期限内的真实窗口里返回；读完失焦、确认读挂起 ⇒ 两次尝试都在未调度
+    // 窗口里过期 ⇒ readBounded 的 skipped 末路（design 14 §D4 的 skipped 轮次）。
+    let firstOfRound = true
+    let verdict: 'denyA' | 'denyAB' = 'denyA'
+    const h = new Harness({
+      readAuthority: async () => {
+        noteFocus(false)
+        if (!firstOfRound) return new Promise<AuthorityRead | undefined>(() => {})
+        firstOfRound = false
+        // rows 是「谁在跑」的全量声明：第一读只否认 sA（sB 申明在跑），第二读否认两者。
+        return verdict === 'denyA' ? read({ sA: false, sB: true }) : read({ sA: false, sB: false })
+      },
+      readDeadlineMs: 20,
+    })
+    noteFocus(true)
+    await h.tick(0, rows)
+    await h.tick(60_000, rows)
+    assert.deepEqual(h.correctCalls, [], 'the first denial is unconfirmed: nothing to write')
+    // 第二轮：同一次读同时否认 sA（第二次 ⇒ 签发 correct）与 sB（首次 ⇒ 签发确认读），
+    // 确认读被 skipped 收轮 —— 已签发的 correct(sA) 必须仍然结算。
+    noteFocus(true)
+    firstOfRound = true
+    verdict = 'denyAB'
+    await h.tick(260_000, rows)
+    assert.deepEqual(h.correctCalls, [['sA']],
+      'the correction signed before the unscheduled window must still settle')
+    assert.equal(h.snapshot()?.corrections, 1)
+    assert.equal(h.records.filter(entry => entry.kind === 'read-failed').length, 0,
+      'an unscheduled round is not failure evidence')
+    assert.equal(h.snapshot()?.stuckSince, undefined)
+  } finally {
+    resetPageScheduleForTests()
+  }
+})
+
 test('a later healthy verdict clears stuck evidence and advances progress', async () => {
   const h = new Harness({ reads: [undefined, ALLOW] })
   await h.tick(0, { s1: { running: true } })

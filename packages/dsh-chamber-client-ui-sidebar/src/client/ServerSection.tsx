@@ -541,7 +541,8 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                             rowErrors[openErrorKey(server.id, session.id)] !== undefined
                             && (folded || !visibleSessions.some(visible => visible.id === session.id)))
                           // Motion contract (vendor AnimatedRows): keys are pushed in
-                          // the SAME order the rows render. Ghost rows are keyed even
+                          // the SAME order the rows render (the zero-workspace seed 'empty'
+                          // is the one exception: it only feeds membership/array equality). Ghost rows are keyed even
                           // when the row component drops an expired one — a stale key
                           // never clones a live row, a missing key would.
                           rowKeys.push(`workspace:${workspace.id}`)

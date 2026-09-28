@@ -14,7 +14,8 @@
  *    warn（无硬门：体积随上游 dsh 版本合法漂移，硬门会误伤升级）。
  *  - headCssRaw：dist/index.html 中全部 render-blocking 样式表合计——warn。
  *
- * 校准基线（raw bytes，见 dist/web/perf-sizes.json 最近一次构建）：mainGraph
+ * 校准基线（raw bytes，历史快照 commit 6f30fdbc / 2026-09-25；最新实测见
+ * dist/web/perf-sizes.json，随上游 dsh 版本与合并内容合法漂移）：mainGraph
  * 1,434,814（gzip 404,382，**超 `mainGraphRaw.warn = 1,350,000` 约 6.3%**，
  * 距 `fail = 1,550,000` 余量约 7.4%）；chamberEntry 7,595,113（gzip
  * 2,774,078，为 warn 门 2,000,000 的约 3.8 倍——该项**有意只有 warn、
