@@ -87,17 +87,16 @@ test('the boot gate blocks the two unconditional statuses whatever the rescue se
   }
 })
 
-test('the gate delegates needsRecovery to the facts projection (no second rule copy)', () => {
+test('the gate owns the startupMustBlock rule; needsRecovery is the facts projection by construction', () => {
   const statuses = ['healthy', 'selection-corrupt', 'recovery-in-progress', 'recovery-marker-corrupt', 'recovery-finalized'] as const
   for (const status of statuses) {
     for (const markerRescueAvailable of [false, true]) {
-      const fact = health({ status })
-      assert.deepEqual(
-        projectMetadataRecoveryGate(fact, { markerRescueAvailable }),
-        {
-          needsRecovery: projectMetadataHealthFacts(fact, { markerRescueAvailable }).needsRecovery,
-          startupMustBlock: status === 'recovery-in-progress' || status === 'recovery-marker-corrupt',
-        },
+      const gate = projectMetadataRecoveryGate(health({ status }), { markerRescueAvailable })
+      // needsRecovery 直接委托给 facts 投影（src:86 是同一调用），再断言"等于同一函数"
+      // 恒真；这里只独立重写 gate 自己拥有的 startupMustBlock 谓词。
+      assert.equal(
+        gate.startupMustBlock,
+        status === 'recovery-in-progress' || status === 'recovery-marker-corrupt',
         status + ' (rescue=' + String(markerRescueAvailable) + ')',
       )
     }

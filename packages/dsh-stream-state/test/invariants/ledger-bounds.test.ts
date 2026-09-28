@@ -93,10 +93,11 @@ test('a ladder dispatch ledger stays inside its quota window after 10^5 ticks', 
 
 test('the opening ledger is bounded by its key cap across repeated expiry rounds', () => {
   // The opening-ledger arm prunes by scanning the live key set on every event,
-  // so 10^5 iterations spend their time in that scan (8.7s) without showing the
-  // bound assertion anything new. 5,000 ticks = 10 full eviction cycles over the
-  // 500 reused keys, which is what the invariant needs.
-  const EXPIRY_TICKS = 5_000
+  // so every extra tick costs O(cap). The bound is STRUCTURAL, not statistical:
+  // 1,024 ticks = 4 full cap-fills (cap 256) over the 500 reused keys, i.e. two
+  // complete eviction cycles of the reused key set. Measured: 5,000 ticks cost
+  // 1.46s for the same three assertions this 1,024-tick run makes in ~0.30s.
+  const EXPIRY_TICKS = 1_024
   let state = initialCarrierState()
   for (let index = 0; index < EXPIRY_TICKS; index++) {
     const requestKey = 'k' + String(index % 500)
@@ -124,7 +125,10 @@ test('an ACTIVE streak survives ledger pressure instead of aging out', () => {
   // fresh keys while the active key keeps expiring: far beyond any real client (one key
   // per opening attempt), yet comfortably inside the refresh margin that keeps a live
   // key recent.
-  const ROUNDS = 12
+  // 6 rounds already admit 3 caps of fresh filler keys (128 per round), which is
+  // far beyond any real client (one key per opening attempt) while costing half
+  // the scan time of the original 12 (measured: 563ms → ~280ms).
+  const ROUNDS = 6
   let state = initialCarrierState()
   const streaks: number[] = []
   for (let round = 0; round < ROUNDS; round++) {

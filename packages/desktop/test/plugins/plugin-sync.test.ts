@@ -3,8 +3,8 @@
  * localPluginList classification (bundle/client/plain/materialize/unsyncable +
  * path-traversal defense, registry-driven chamber projection) and
  * the spec/dependency classifiers.
- * Sibling part: plugin-sync-apply.test.ts. Part 1b carries the remote-read,
- * renderer-projection and seed fail-closed assertions.
+ * Remote-read, renderer-projection and seed fail-closed assertions also live in
+ * this file; the shared fixtures are plugin-sync-fixtures.ts.
  */
 
 import { test } from 'node:test'

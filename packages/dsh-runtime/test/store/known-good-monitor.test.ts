@@ -98,9 +98,23 @@ test('legacy candidate is retained but cannot promote from offline age', () => {
 
 test('promoteDueCandidates: unsafe version never promoted', () => {
   const { base, t0 } = kgFixture();
-  // A second candidate that is unsafe would be written by recordProbePass's
-  // assertSafeVersion throwing, so verify that path throws instead.
+  // The writer refuses an unsafe candidate name up front…
   assert.throws(() => recordProbePass(base, '../evil', t0));
+  // …and a candidate table that names one anyway (hand-written around the writer) is
+  // refused WHOLESALE by the promotion path: it must not skip the bad row, promote the
+  // rest, and call the result a successful sweep.
+  const candidates = JSON.parse(readFileSync(knownGoodCandidatesPath(base), 'utf8')) as {
+    versions: Record<string, unknown>;
+  };
+  candidates.versions['../evil'] = {
+    firstProbePassAt: t0, bootCount: 5, healthWindowStartedAt: t0, healthWindowResetAt: null,
+  };
+  writeFileSync(knownGoodCandidatesPath(base), JSON.stringify(candidates));
+  assert.throws(
+    () => promoteDueCandidates(base, t0 + 10_000_000, { minUptimeMs: 0, minBoots: 0 }),
+    /known-good 候选记录形状无效/,
+  );
+  assert.deepEqual(knownGoodVersions(base), [], 'a poisoned table must promote NOTHING, not even the healthy sibling');
 });
 
 test('candidate requires a complete version tree and invalid tree never promotes', () => {

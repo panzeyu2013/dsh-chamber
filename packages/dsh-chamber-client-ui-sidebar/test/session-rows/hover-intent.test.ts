@@ -136,6 +136,7 @@ test('a press on the anchor dismisses and stays closed until the pointer enters 
   // Still inside, but the dwell must not re-fire without a fresh enter.
   mock.timers.tick(10_000)
   assert.equal(h.card, false)
+  assert.deepEqual(h.events, ['open', 'close'], 'the dismissal is the last transition while the pointer stays inside')
   h.intent.leave()
   mock.timers.tick(10_000)
   h.intent.enter()
@@ -210,20 +211,6 @@ test('unsubscribing stops the notifications (the component unmounts its view)', 
   mock.timers.tick(HOVER_OPEN_DELAY_MS)
   assert.equal(h.card, true)
   assert.deepEqual(h.events, [])
-})
-
-test('a press after the dwell fired leaves the card closed for good — the flag, not a render, is the truth', () => {
-  const h = harness()
-  h.intent.enter()
-  mock.timers.tick(HOVER_OPEN_DELAY_MS)
-  assert.equal(h.card, true)
-  // The owner is still inside the region: a press must dismiss and stay
-  // dismissed, with no later transition resurrecting the card.
-  h.intent.press()
-  assert.equal(h.card, false)
-  mock.timers.tick(10_000)
-  assert.equal(h.card, false)
-  assert.deepEqual(h.events, ['open', 'close'])
 })
 
 test('one visible card per document: opening a second card dismisses the first', () => {

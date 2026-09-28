@@ -87,7 +87,10 @@ test('the instruments publish once and stay live views', () => {
   publishBadgeCount(7, host)
   assert.equal(host.__dshChamberBadgeCount, 7)
   const instrument = first as { counts(): { sent: number } }
-  assert.equal(typeof instrument.counts(), 'object')
+  // "stay live views"：发布后再记一条必须被同一对象看见（delta，避免与进程级单例污染）。
+  const before = instrument.counts().sent
+  notificationLedger.record(entry('sent'))
+  assert.equal(instrument.counts().sent, before + 1, 'the published instrument must be a live view, not a publish-time snapshot')
 })
 
 test('the badge hook publishes the dispatched count next to the projection', () => {

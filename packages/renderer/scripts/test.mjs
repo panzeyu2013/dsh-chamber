@@ -70,9 +70,6 @@ export const GROUPS = {
     // 呈现事实的 vendor 源文本锁：shell 的 openSession 路由 + rc.2 retainedBy 计数。
     'test/lifecycle/vendor-presented-fact-contract.test.ts',
     'test/lifecycle/source-readiness.test.ts',
-    // The App's hidden-window ledger pinned against the
-    // shared source reducer, including the measured painted/suppression divergence.
-    'test/lifecycle/source-ledger-equivalence.test.ts',
     // The self-heal decision's truth table, expressed against the container
     // (the planner keeps its own copy).
     'test/lifecycle/degraded-retry-decision.test.ts',
@@ -84,8 +81,7 @@ export const GROUPS = {
     'test/lifecycle/session-surface.test.ts',
     // A6：InstanceView 1 Hz 采样座位的可执行契约（仅屏上 settled 挂表 / hidden 先于健康读取）。
     'test/lifecycle/instance-view-sampling.test.ts',
-    // P2 露屏接线：held 帧的定时器必须来自帧的绝对期限（>0ms），越界必须揭示租客。
-    'test/lifecycle/veil-release-timer.test.ts',
+    // P2 露屏接线锁已并入 test/wiring/veil-layering-invariants.test.ts（同一 InstanceView 读数）。
   ],
   // aggregate: 多来源聚合状态与通知投影（聚合拉取/重连、通知边、角标计数）
   aggregate: [

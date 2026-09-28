@@ -149,39 +149,26 @@ test('host logs: a raw line (ts:null, stream:null) renders placeholders, never a
     'new Date(null) is not a timestamp — a raw line has none, and the shell must say so')
 })
 
-test('host logs --follow: a ts:null line neither crashes nor fabricates 1970', async () => {
-  await withPlane(hostLogsPlane([RAW_LINE]), async plane => {
+test('host logs --follow: ts:null and non-ISO ts lines neither crash nor fabricate 1970', async () => {
+  // One follow process serves both malformed-timestamp shapes: they differ only in the
+  // input line and the projected wording, so a second child + liveness window buys nothing.
+  await withPlane(hostLogsPlane([RAW_LINE, NON_ISO_LINE]), async plane => {
     const run = startCli(['host', 'logs', '--follow', '--url', plane.url])
     try {
       await waitFor(
-        () => run.stdout.includes('raw line without metadata') || run.child.exitCode !== null,
+        () => (run.stdout.includes('raw line without metadata') && run.stdout.includes('non-iso ts line'))
+          || run.child.exitCode !== null,
         'the followed snapshot to be printed',
       )
       assert.match(run.stdout, /^\[\?\] \[\?\] raw line without metadata$/mu)
-      assert.equal(run.stdout.includes('1970'), false)
+      assert.equal(run.stdout.includes('1970'), false,
+        'new Date(null) is not a timestamp — a raw line has none, and the shell must say so')
+      assert.match(run.stdout, /^\[\?\] \[stdout\] non-iso ts line$/mu,
+        'new Date(<non-ISO>).toISOString() throws RangeError — that must never kill the follow loop')
       assert.equal(run.stderr, '', 'a followed line must never be a fatal error')
-      // Liveness: the follow loop keeps polling instead of exiting on the line.
+      // Liveness: the follow loop keeps polling instead of exiting on the lines.
       await new Promise(resolve => { setTimeout(resolve, 300) })
       assert.equal(run.child.exitCode, null, '--follow must stay alive across snapshots')
-    } finally {
-      await stopCli(run)
-    }
-  })
-})
-
-test('host logs --follow: a non-ISO ts string is a placeholder, not a RangeError out of the loop', async () => {
-  await withPlane(hostLogsPlane([NON_ISO_LINE]), async plane => {
-    const run = startCli(['host', 'logs', '--follow', '--url', plane.url])
-    try {
-      await waitFor(
-        () => run.stdout.includes('non-iso ts line') || run.child.exitCode !== null,
-        'the followed snapshot to be printed',
-      )
-      assert.match(run.stdout, /^\[\?\] \[stdout\] non-iso ts line$/mu)
-      assert.equal(run.stderr, '',
-        'new Date(<non-ISO>).toISOString() throws RangeError — that must never kill the follow loop')
-      await new Promise(resolve => { setTimeout(resolve, 300) })
-      assert.equal(run.child.exitCode, null)
     } finally {
       await stopCli(run)
     }

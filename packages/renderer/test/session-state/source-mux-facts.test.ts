@@ -482,7 +482,11 @@ test('a carrier failure holds decidability through the grace, then degrades if n
   } finally { facts.stop() }
 })
 
-test('a late ready frame does not end the carrier grace (only a baseline or expiry does)', async () => {
+test('a late ready frame does not end the carrier grace (only a baseline or expiry does)', async (t) => {
+  // Mocked clock: a 2s real wait bought nothing the boundaries do not pin (the soak test
+  // above uses the same pattern). Ticks land exactly on the retry and the deadline.
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  t.after(() => t.mock.timers.reset())
   const sockets: FakeSocket[] = []
   let calls = 0
   const facts = createSourceMuxFacts({
@@ -496,15 +500,24 @@ test('a late ready frame does not end the carrier grace (only a baseline or expi
     facts.start()
     sockets[0]!.open()
     sockets[0]!.item({ type: 'ready', clientId: 'c' })
-    await waitFor(() => facts.status().ready, 'initial baseline did not make the carrier decidable')
-    // 真实失效 → 退避重连在宽限内开出继任套接字。
+    await settleMicrotasks()
+    assert.equal(facts.status().ready, true, 'initial baseline did not make the carrier decidable')
+    // 真实失效 → 退避重连（1s）在 2s 宽限内开出继任套接字。
     sockets[0]!.onclose?.({})
-    await waitFor(() => facts.status().carrierLostAt !== null, 'carrier loss did not start the grace')
-    await waitFor(() => sockets.length === 2, 'the backoff retry did not open a successor')
+    await settleMicrotasks()
+    assert.equal(facts.status().carrierLostAt !== null, true, 'carrier loss did not start the grace')
+    t.mock.timers.tick(1_000)
+    await settleMicrotasks()
+    assert.equal(sockets.length, 2, 'the backoff retry did not open a successor')
     // 新代际的 ready 帧到了，但基线没有落地：它只证明套接字腿，不许结束宽限。
     sockets[1]!.open()
     sockets[1]!.item({ type: 'ready', clientId: 'c' })
-    await waitFor(() => facts.status().ready === false, 'a ready frame extended the grace past its deadline')
+    await settleMicrotasks()
+    assert.equal(facts.status().ready, true, 'a ready frame must not end the grace early')
+    // 到期那一刻必须诚实降级（不是被 ready 帧取消，也不是永远不降级）。
+    t.mock.timers.tick(1_000)
+    await settleMicrotasks()
+    assert.equal(facts.status().ready, false, 'the grace must end at its deadline')
     assert.equal(facts.status().staleSince !== null, true, 'the degrade must be readable')
   } finally { facts.stop() }
 })
@@ -529,7 +542,10 @@ test('a failed first baseline does not poison the socket leg: the next successfu
   } finally { facts.stop() }
 })
 
-test('a reconnected carrier that re-baselines inside the grace never degrades the face', async () => {
+test('a reconnected carrier that re-baselines inside the grace never degrades the face', async (t) => {
+  // Mocked clock: the 1s backoff retry is the only wall time this test ever needed.
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  t.after(() => t.mock.timers.reset())
   const sockets: FakeSocket[] = []
   const verdicts: string[] = []
   const facts = createSourceMuxFacts({
@@ -542,16 +558,21 @@ test('a reconnected carrier that re-baselines inside the grace never degrades th
     facts.start()
     sockets[0]!.open()
     sockets[0]!.item({ type: 'ready', clientId: 'c' })
-    await waitFor(() => facts.status().ready, 'initial socket did not become ready')
+    await settleMicrotasks()
+    assert.equal(facts.status().ready, true, 'initial socket did not become ready')
     // 首连之前的那次 degraded 是诚实的（还没真相）；宽限语义说的是「有真相之后不得再逐次降级」。
     const okBefore = verdicts.lastIndexOf('ok')
     assert.notEqual(okBefore, -1, 'the initial baseline never published an ok snapshot')
     sockets[0]!.onclose?.({})
-    await waitFor(() => sockets.length === 2, 'the backoff retry did not open a successor')
+    await settleMicrotasks()
+    t.mock.timers.tick(1_000)
+    await settleMicrotasks()
+    assert.equal(sockets.length, 2, 'the backoff retry did not open a successor')
     // 继任者在宽限内完成握手 + 基线：对判定面是零变化（一次降级快照都不许出现）。
     sockets[1]!.open()
     sockets[1]!.item({ type: 'ready', clientId: 'c' })
-    await waitFor(() => facts.status().baselines >= 2, 'successor baseline missing')
+    await settleMicrotasks()
+    assert.ok(facts.status().baselines >= 2, 'successor baseline missing')
     assert.equal(facts.status().ready, true)
     assert.equal(facts.status().carrierLostAt, null)
     assert.equal(verdicts.slice(okBefore + 1).includes('degraded'), false,

@@ -308,8 +308,7 @@ test('MATERIALIZED_VALUE_MASK is the SHARED wire constant on every side', () => 
   // The literal lives in @dsh-chamber/dsh-chamber-wire/plugin-manifest
   // (design 21 §6.2/§6.11.5): no side may hardcode its own copy — the
   // gateway's export, the control-plane re-export and the desktop's export
-  // must all resolve to PLUGIN_MATERIALIZED_VALUE_MASK (the wire/control-plane
-  // ↔ gateway equality is pinned again by plugin-manifest-lockstep.test.ts).
+  // must all resolve to PLUGIN_MATERIALIZED_VALUE_MASK.
   assert.equal(MATERIALIZED_VALUE_MASK, PLUGIN_MATERIALIZED_VALUE_MASK)
   assert.equal(PLUGIN_MATERIALIZED_VALUE_MASK, 'file:<hidden>')
   assert.match(desktopPluginSyncSource(),

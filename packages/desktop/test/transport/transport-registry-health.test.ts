@@ -392,6 +392,10 @@ test('V5-A: row-level drops mark the roster incomplete while every valid row sta
     { id: 'ok', label: 'fine', kind: 'dsh', transport: 'ssh', host: 'h.example.com', remotePort: 22 },
     { id: 'bad id', label: 'x', host: 'h.example.com', remotePort: 22 },
     null,
+    // Primitive rows (not just null) are dropped without reaching provider resolution;
+    // the shapes moved here from transport-connection-recovery so one fixture owns the matrix.
+    42,
+    'stray',
     { id: 'ok', label: 'duplicate', kind: 'dsh', transport: 'ssh', host: 'h2.example.com', remotePort: 22 },
   ]))
   const manager = makeHealthManager(dir, warnings)
@@ -401,13 +405,13 @@ test('V5-A: row-level drops mark the roster incomplete while every valid row sta
   assert.equal(manager.registryDegraded(), false, 'a partial parse is NOT a load failure')
   assert.equal(manager.loadFailure(), null)
   assert.equal(manager.registryIncomplete(), true)
-  assert.equal(manager.loadDroppedCount(), 3, 'two invalid entries + one duplicate id')
-  assert.ok(warnings.some(line => /dropped 2 invalid instance/.test(line)), 'the per-entry drop stays loud')
+  assert.equal(manager.loadDroppedCount(), 5, 'four invalid rows (bad id, null, 42, stray) + one duplicate id')
+  assert.ok(warnings.some(line => /dropped 4 invalid instance/.test(line)), 'the per-entry drop stays loud')
   assert.ok(warnings.some(line => /dropped 1 duplicate id/.test(line)), 'the duplicate drop stays loud')
   assert.deepEqual(await health.invokeHealth(), {
     degraded: false,
     rosterIncomplete: true,
-    droppedCount: 3,
+    droppedCount: 5,
   })
 })
 

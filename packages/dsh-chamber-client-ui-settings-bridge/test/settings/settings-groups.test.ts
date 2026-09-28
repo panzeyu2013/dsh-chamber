@@ -98,12 +98,22 @@ test('NOTIFICATIONS_DEFAULTS mirrors the desktop store defaults (chamber-setting
     onRequest: true,
     badgeEnabled: true,
   });
+  assert.match(
+    desktopDefaultsBlock,
+    /notifications: \{\s*enabled: false,\s*mode: 'hidden-only',\s*onComplete: true,\s*onAsk: true,\s*onRequest: true,\s*badgeEnabled: true,\s*\},/,
+    'desktop DEFAULT_CHAMBER_SETTINGS.notifications drifted from the settings-bridge mirror',
+  );
 });
 
 test('sessionTodo defaults are ALL ON and mirror the desktop store defaults', () => {
   // Mirror assertion: desktop DEFAULT_CHAMBER_SETTINGS.sessionTodo is
   // { enabled: true, onComplete: true, onAsk: true, onRequest: true }.
   assert.deepEqual(SESSION_TODO_DEFAULTS, { enabled: true, onComplete: true, onAsk: true, onRequest: true });
+  assert.match(
+    desktopDefaultsBlock,
+    /sessionTodo: \{\s*enabled: true,\s*onComplete: true,\s*onAsk: true,\s*onRequest: true,\s*\},/,
+    'desktop DEFAULT_CHAMBER_SETTINGS.sessionTodo drifted from the settings-bridge mirror',
+  );
 });
 
 test('sessionTodoOf: an absent block reads as the design defaults (never a fake off)', () => {
@@ -163,6 +173,20 @@ const generalViewSource = readFileSync(
   join(import.meta.dirname, '..', '..', 'src', 'client', 'GeneralView.tsx'),
   'utf8',
 );
+/**
+ * desktop 权威默认值源（跨包漂移守卫的真对象）。此前本文件 "mirrors the desktop
+ * defaults" 的镜像断言只把常量与同文件字面量自比，从不读 desktop 源：desktop
+ * 侧改值不会失败。这里把默认值钉到权威源文本上。
+ */
+const desktopChamberSettingsSource = readFileSync(
+  join(import.meta.dirname, '..', '..', '..', 'desktop', 'chamber-settings.ts'),
+  'utf8',
+);
+const desktopDefaultsBlock = (() => {
+  const captured = /const DEFAULT_CHAMBER_SETTINGS: ChamberSettings = \{([\s\S]*?)\n\};/.exec(desktopChamberSettingsSource);
+  assert.ok(captured !== null, 'desktop chamber-settings.ts must declare DEFAULT_CHAMBER_SETTINGS');
+  return captured[1];
+})();
 
 test('badge capability: the unsupported reason exists in both dictionaries (zh is the key-set source)', () => {
   assert.equal(typeof zh.generalNotificationsBadgeUnsupported, 'string');

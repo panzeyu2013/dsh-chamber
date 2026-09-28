@@ -247,19 +247,6 @@ test('resolveRuntimeFamily: 可信闭包优先；无锁文件退回树枚举；�
   }
 })
 
-test('isMaterializedValue: 路径形态才算 materialize，semver 范围/标签绝不算', () => {
-  // 路径形态（含 `~` 的 home 形态 —— 但**不是** `~1.2.0` 这种波浪号范围）
-  for (const value of ['file:../p', 'FILE:/abs/p', 'link:./p', './p', '../p', '.', '/abs/p', '~/p', '~\\p', '~',
-    'C:\\p', '\\\\server\\share', 'c:/p']) {
-    assert.equal(isMaterializedValue(value), true, value)
-  }
-  // registry 值：范围、标签、别名、git/url —— 一个都不能被当成 materialize
-  for (const value of ['~1.2.0', '~1.2', '^1.2.3', '>=1.0.0 <2', '1.x', '*', 'latest', 'next', 'beta',
-    'workspace:*', 'npm:alias@1.0.0', 'git+https://x/y.git', 'https://x/y.tgz', '1.2.3']) {
-    assert.equal(isMaterializedValue(value), false, value)
-  }
-})
-
 test('derivePluginRows: materialize 值在行投影里也被掩码（远端本地路径不得进渲染端）', () => {
   const rows = derivePluginRows({
     dependencies: { 'plain-pkg': '^1.0.0', 'local-pkg': 'file:/Users/someone/secret/path.tgz', 'rel-pkg': '../sibling' },

@@ -14,7 +14,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   readSessionSurfacePhase,
-  SESSION_PHASE_ATTRIBUTE, SESSION_SCROLL_ANCHOR,
+  SESSION_PHASE_ATTRIBUTE, SESSION_SCROLL_ANCHOR, SURFACE_SAMPLE_MIN_INTERVAL_MS,
 } from '../../src/session-surface.ts'
 import { PRESENTATION_THRESHOLDS } from '@dsh-chamber/dsh-stream-state'
 
@@ -52,6 +52,8 @@ test('常量、属性字面量与相位→上界映射都是导出契约', () =>
   // 兜底揭幕（"不闪空白新会话"整体退化）。
   assert.equal(SESSION_PHASE_ATTRIBUTE, 'data-phase')
   assert.equal(SESSION_SCROLL_ANCHOR, '[data-conversation-scroll]')
+  // 采样合并间隔：帧合并器的注入值不会发现这里被改成任意数，故钉字面量。
+  assert.equal(SURFACE_SAMPLE_MIN_INTERVAL_MS, 100)
   // 相位 → 上界的**唯一**映射属于共享 arbiter（surfaceBoundMs），其完整值域由
   // 该包的 presentation 套件覆盖（absent/unknown 走 2s、hero/settling 走 70s、active 为 0）。
   // 本文件仍钉这两个常量本身：它们是 arbiter 阈值表的输入，改动必须在此显式。

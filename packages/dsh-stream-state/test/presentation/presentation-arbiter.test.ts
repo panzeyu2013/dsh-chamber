@@ -91,12 +91,18 @@ test('an active surface releases the veil immediately', () => {
 })
 
 test('hero and settling are bounded by the outer hold, not the absent fallback', () => {
+  // Literal magnitudes pin the design contract; the TH comparisons catch a mapping that
+  // hard-codes today's numbers instead of reading the theme (the mapping is total and
+  // owned here, one copy).
   assert.equal(surfaceBoundMs('hero', TH), 70000)
   assert.equal(surfaceBoundMs('settling', TH), 70000)
+  assert.equal(surfaceBoundMs('hero', TH), TH.surfaceMaxHoldMs)
+  assert.equal(surfaceBoundMs('settling', TH), TH.surfaceMaxHoldMs)
   assert.equal(surfaceBoundMs('absent', TH), 2000)
   // The version-skew case: a phase this build cannot read shares the SHORT bound.
   assert.equal(surfaceBoundMs('unknown', TH), 2000)
-  assert.equal(surfaceBoundMs('active', TH), 0)
+  assert.equal(surfaceBoundMs('unknown', TH), TH.surfaceAbsentFallbackMs)
+  assert.equal(surfaceBoundMs('active', TH), 0, 'active releases immediately')
 })
 
 test('an unreadable phase no longer holds for the hero bound (the P4 fix)', () => {
@@ -181,17 +187,6 @@ test('a clock rollback never releases the veil', () => {
   assert.equal(frame.releaseAtMonoMs, 75000)
 })
 
-test('the phase to bound mapping is total and lives here (one copy)', () => {
-  // The phase-to-bound mapping is owned here (one copy): each phase has a bound, and
-  // only absent/unknown take the short fallback. A phase this build cannot name
-  // shares the absent bound ON PURPOSE.
-  assert.equal(surfaceBoundMs('absent', TH), TH.surfaceAbsentFallbackMs)
-  assert.equal(surfaceBoundMs('unknown', TH), TH.surfaceAbsentFallbackMs)
-  assert.equal(surfaceBoundMs('hero', TH), TH.surfaceMaxHoldMs)
-  assert.equal(surfaceBoundMs('settling', TH), TH.surfaceMaxHoldMs)
-  assert.equal(surfaceBoundMs('active', TH), 0, 'active releases immediately')
-})
-
 test('the absent boundary is INCLUSIVE, and hero/settling never use the 2s window', () => {
   // The degraded absent shape must not hang the veil past its bound, while
   // hero/settling must NOT
@@ -206,13 +201,18 @@ test('the absent boundary is INCLUSIVE, and hero/settling never use the 2s windo
     nowMs,
   }), TH)
   assert.equal(at('absent', start + 1_999).veil, 'held', 'inside the bound: hold')
-  assert.equal(at('absent', start + 2_000).veil, 'released', 'boundary is inclusive: release')
+  const absentPast = at('absent', start + 2_000)
+  assert.equal(absentPast.veil, 'released', 'boundary is inclusive: release')
+  assert.ok(Number.isFinite(absentPast.releaseAtMonoMs), 'a released frame must still carry a finite stamp')
+  assert.equal(planVeilTimer(absentPast, absentPast.releaseAtMonoMs), null, 'a released frame arms nothing')
   for (const phase of ['hero', 'settling'] as const) {
     assert.equal(at(phase, start + 2_000).veil, 'held', phase + ': the 2s window is not its bound')
     assert.equal(at(phase, start + 69_999).veil, 'held', phase + ': still inside the outer hold')
     const past = at(phase, start + 70_000)
     assert.equal(past.mode, 'loading-stuck', phase + ': the outer hold is the bounded exit')
     assert.equal(past.veil, 'actionable', phase + ': releasing the hold reveals the tenant')
+    assert.equal(past.actions, true, phase + ': the exit must still be offered')
+    assert.equal(planVeilTimer(past, past.releaseAtMonoMs), null, phase + ': an actionable frame arms no timer')
   }
 })
 

@@ -5,16 +5,23 @@
  * over a fake window.dshChamber.settings bridge — a persistent get()
  * failure must never stack permanent onChanged listeners (each retry releases the previous handle).
  */
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { SIDEBAR_TODO_PREFS_DEFAULTS, todoPrefsOf } from '../../../dsh-chamber-client-core/src/todo-prefs.ts'
 
 // ---- decode (pure, no window) ---
 
 test('sidebar todo defaults are ALL ON and mirror the desktop store defaults', () => {
-  // Mirror assertion: desktop DEFAULT_CHAMBER_SETTINGS.sessionTodo is
-  // { enabled: true, onComplete: true, onAsk: true, onRequest: true }.
+  // Mirror assertion against the AUTHORITATIVE desktop default (not a re-spelled literal):
+  // ipc-surface-mirror only compares types, so a drift here would otherwise stay green.
+  const source = readFileSync(new URL('../../../desktop/chamber-settings.ts', import.meta.url), 'utf8')
+  const block = /sessionTodo:\s*\{([\s\S]*?)\}/.exec(source)?.[1]
+  assert.ok(block, 'desktop DEFAULT_CHAMBER_SETTINGS.sessionTodo block must be locatable')
   assert.deepEqual(SIDEBAR_TODO_PREFS_DEFAULTS, { enabled: true, onComplete: true, onAsk: true, onRequest: true })
+  for (const [key, value] of Object.entries(SIDEBAR_TODO_PREFS_DEFAULTS)) {
+    assert.match(block, new RegExp(String.raw`(?<![A-Za-z])${key}:\s*${String(value)}`), `desktop default ${key} must mirror the sidebar default`)
+  }
 })
 
 test('todoPrefsOf: absent/invalid block reads as the full defaults (never a fake off)', () => {
@@ -42,6 +49,9 @@ const originalConsoleError = console.error
 console.error = (...args: unknown[]) => {
   if (!(typeof args[0] === 'string' && args[0].includes('共享单例模块'))) originalConsoleError(...args)
 }
+after(() => {
+  console.error = originalConsoleError
+})
 
 type TodoPrefsModule = typeof import('../../../dsh-chamber-client-core/src/todo-prefs.ts')
 
@@ -105,17 +115,24 @@ test('hydration: persistent get() failures never stack onChanged listeners (roun
   const surface = makeSurface({ failGet: true })
   ;(globalThis as Record<string, unknown>).window = { dshChamber: { settings: surface } }
   const store = await freshModule()
-  const unsubscribe = store.subscribeTodoPrefs(() => {})
+  // Sample from the callback itself: the store fires it on every attach/release hop, so the
+  // leak is observed at the transition instead of being re-sampled on a wall clock.
+  let maxActive = 0
+  const unsubscribe = store.subscribeTodoPrefs(() => {
+    maxActive = Math.max(maxActive, surface.activeListeners())
+  })
   try {
     // Let several attach→fail→release cycles run. Each attach registers ONE listener and must
     // release it before re-arming — a leaked handle keeps previous cycles' listeners registered.
     await waitFor(() => surface.getCalls >= 3)
-    // Sample across a few hundred ms: never more than 1 active listener (0 between hops is fine).
-    const deadline = Date.now() + 800
+    // Short settle sweep: never more than 1 active listener (0 between hops is fine).
+    const deadline = Date.now() + 200
     while (Date.now() < deadline) {
       assert.ok(surface.activeListeners() <= 1, `listener leak: ${surface.activeListeners()} active onChanged handles`)
-      await new Promise(resolve => setTimeout(resolve, 40))
+      assert.ok(maxActive <= 1, `listener leak observed at a transition: ${maxActive} active handles`)
+      await new Promise(resolve => setTimeout(resolve, 20))
     }
+    assert.ok(maxActive <= 1, `listener leak observed at a transition: ${maxActive} active handles`)
     // deepEqual, not identity: the fresh module carries its own defaults constant.
     assert.deepEqual(store.getTodoPrefs(), SIDEBAR_TODO_PREFS_DEFAULTS, 'unhydrated keeps serving the design defaults')
   } finally {

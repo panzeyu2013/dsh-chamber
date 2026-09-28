@@ -33,7 +33,6 @@ import {
   type MuxUnaryResult,
   type SessionListBaselineItem,
   type SessionMux,
-  type SessionMuxStatus,
 } from '../../src/session-mux.ts'
 import { classifyTurnEnd, type SessionStatePendingKind } from '../../src/session-state-protocol.ts'
 
@@ -147,7 +146,6 @@ interface Harness {
   cancels: string[]
   silences: number[]
   warnings: string[]
-  statusChanges: SessionMuxStatus[]
   results: RecordedCall[]
   setAttached(value: boolean): void
 }
@@ -178,7 +176,6 @@ function makeHarness(options: {
   const cancels: string[] = []
   const silences: number[] = []
   const warnings: string[] = []
-  const statusChanges: SessionMuxStatus[] = []
   const results: RecordedCall[] = []
   let base = options.baseUrl === undefined ? 'http://127.0.0.1:17510' : options.baseUrl
   let attached = options.attached ?? false
@@ -208,7 +205,6 @@ function makeHarness(options: {
     },
     onPending: (sessionId, kind, eventId, at) => { order.push('pending'); pending.push({ sessionId, kind, eventId, at }) },
     onCancel: (eventId) => { order.push('cancel'); cancels.push(eventId) },
-    onStatusChange: (status) => { statusChanges.push(status) },
     onSilence: (at) => { silences.push(at) },
     onWarn: (message) => { warnings.push(message) },
     openSocket: (url, openOptions) => {
@@ -227,7 +223,7 @@ function makeHarness(options: {
 
   return {
     mux, sockets, calls, order, baselines, statuses, activities, added, removed, activations, pending,
-    cancels, silences, warnings, statusChanges, results,
+    cancels, silences, warnings, results,
     setAttached: (value: boolean) => { attached = value },
   }
 }

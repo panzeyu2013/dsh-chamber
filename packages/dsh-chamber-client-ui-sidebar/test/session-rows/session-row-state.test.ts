@@ -181,10 +181,8 @@ test('six faces derive from the single sessionRowState source (goal gate include
   assert.match(HOOK, /subagentActivity: facts\?\.subagentActivity/)
   assert.match(HOOK, /stale: server\.runtime\?\.stale/)
   assert.match(HOOK, /goal: facts\?\.goal/)
-  assert.match(HOOK, /const sessionStateLabel = [\s\S]{0,240}?sessionRowStateOf\(server, session\)/)
-  assert.match(HOOK, /const sessionStatePending = [\s\S]{0,240}?sessionRowStateOf\(server, session\)\.pending/)
-  assert.match(HOOK, /const sessionStateMarker = [\s\S]{0,200}?sessionRowStateOf\(server, session\)/)
-  assert.match(HOOK, /const sessionStateDot = [\s\S]{0,240}?sessionRowStateOf\(server, session\)/)
+  // 四个 reader 的原文经同一 sessionRowStateOf 这一事实由 row-render-cost.test.ts:53-55
+  // 的循环锁（并含 slot/负面断言）更强守护，此处不再重复。
   // 旧的各写一遍优先级的 raw 分支必须消失——点与仪表不得再各自裁决。
   assert.doesNotMatch(HOOK, /facts\?\.completed === true/)
   // goal 门生效时行上出现可选验收属性（v5 §4）；搜索面消费同一批读者。

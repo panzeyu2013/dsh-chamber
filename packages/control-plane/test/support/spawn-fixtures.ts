@@ -26,7 +26,7 @@ export async function freeDshPortBase(): Promise<number> {
 
 /** The fake host's cookie-name helper: the host mints its cookie from the Host
  *  header it actually received, exactly like the real BrowserAuth.authorizeIndex. */
-export const FAKE_DSH_COOKIE_NAME_JS = [
+const FAKE_DSH_COOKIE_NAME_JS = [
   "const { createHash } = require('node:crypto')",
   "const authCookieName = host => 'dsh-auth-' + createHash('sha256').update(host).digest('base64').replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '')",
 ]

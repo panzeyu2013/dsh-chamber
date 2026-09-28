@@ -29,6 +29,30 @@ test('mount and unmount track the hidden window', () => {
   assert.equal(mounted.state.hiddenSince, null)
   const hidden = reduceSource(mounted.state, { kind: 'hidden', at: 5000 }, env)
   assert.equal(hidden.state.hiddenSince, 5000)
+  // Painting closes the window; a later departure opens a NEW one from that departure
+  // (the earlier start must never be reused).
+  const painted = reduceSource(hidden.state, { kind: 'painted', at: 9000 }, env)
+  assert.equal(painted.state.hiddenSince, null)
+  const hiddenAgain = reduceSource(painted.state, { kind: 'hidden', at: 20_000 }, env)
+  assert.equal(hiddenAgain.state.hiddenSince, 20_000)
+  // A remount is a new mount: the window of the mount that ended must not leak into it.
+  const remounted = reduceSource(hiddenAgain.state, { kind: 'mounted', at: 30_000 }, env)
+  assert.equal(remounted.state.hiddenSince, null)
+})
+
+test('retryForgotten drops the self-heal mark and nothing else', () => {
+  // The App's reclaimView forgets the degraded-retry mark; the container counterpart
+  // must be equally narrow: a still-settled-degraded view keeps its boot outcome.
+  const marked = reduceSourceSequence(initialSourceLifecycle(INC), [
+    { kind: 'mounted', at: 0 },
+    { kind: 'phaseChanged', phase: 'ready' },
+    { kind: 'bootSettled', outcome: 'degraded', gapKind: 'graph-unavailable' },
+  ], env)
+  assert.equal(marked.state.degradedRetried, true, 'ready + retryable degraded settle sets the mark')
+  const forgotten = reduceSource(marked.state, { kind: 'retryForgotten' }, env)
+  assert.equal(forgotten.state.degradedRetried, false, 'the mark is gone')
+  assert.deepEqual(forgotten.state.boot, marked.state.boot, 'the boot outcome is untouched')
+  assert.equal(forgotten.state.mounted, marked.state.mounted)
 })
 
 test('a degraded, retryable mount earns exactly one self-heal, paid by the ready epoch', () => {

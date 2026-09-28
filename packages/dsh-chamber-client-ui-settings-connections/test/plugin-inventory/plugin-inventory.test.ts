@@ -14,7 +14,6 @@ import {
   GIT_WORKTREE_PACKAGE,
   HOST_GRAPH_PACKAGE,
   chamberRemoteKey,
-  thirdPartyEntries,
 } from '../../src/client/plugin-inventory-text.ts'
 import { stubFetch, withPageOrigin } from '../support/fixtures.ts'
 
@@ -151,11 +150,6 @@ test('loadPluginInventory: the rc.2 real shape projects entries; meta/management
   } finally {
     stub.restore()
   }
-})
-
-test('thirdPartyEntries: official and chamber packages are excluded, everything else stays', () => {
-  const rows = thirdPartyEntries(okSnapshot)
-  assert.deepEqual(rows.map(row => row.moduleName), ['@dsh-chamber/user-tool', 'my-third-party-plugin'])
 })
 
 test('chamberRemoteKey: live Loader state derives the remote label, never a constant claim', () => {

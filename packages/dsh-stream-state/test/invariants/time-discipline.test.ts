@@ -128,6 +128,9 @@ test('a throwing onExpire settles the deadline instead of hanging', async () => 
       }, ms),
     clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
   }
+  // 兜底定时器必须释放：正确实现会立即落到 'rejected'，而残留的 500ms 定时器会
+  // 把这个文件唯一的真实等待变成整文件耗时（实测 652ms → ~150ms）。
+  let hungGuard: ReturnType<typeof setTimeout> | undefined
   const outcome = await Promise.race([
     withDeadline(new Promise<never>(() => {}), {
       ms: 1,
@@ -139,8 +142,12 @@ test('a throwing onExpire settles the deadline instead of hanging', async () => 
       () => 'resolved',
       (error) => 'rejected:' + String(error),
     ),
-    new Promise<string>((resolve) => setTimeout(() => resolve('hung'), 500)),
-  ])
+    new Promise<string>((resolve) => {
+      hungGuard = setTimeout(() => resolve('hung'), 500)
+    }),
+  ]).finally(() => {
+    if (hungGuard !== undefined) clearTimeout(hungGuard)
+  })
   assert.equal(outcome, 'rejected:Error: boom', 'a throwing onExpire must reject the deadline, not park it')
 })
 

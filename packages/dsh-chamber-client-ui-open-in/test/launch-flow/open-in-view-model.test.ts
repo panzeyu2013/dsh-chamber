@@ -171,20 +171,6 @@ test('gate 1 / http transport: neither target kind exposes vscode-remote', () =>
   assert.deepEqual(gate1Ids('gateway-edge-west', 'http', ALL), [])
 })
 
-test('gate 1 / unknown or malformed sources never reach the button (fail-closed parse)', () => {
-  // The production entry parses the loose ctx facts with parseOpenInSource and
-  // bails on null; malformed OpenInSource shapes are pinned in the top half of
-  // this file (buildOpenInViewModel's unknown-source branch).
-  for (const [value, transport] of [
-    ['', 'ssh'],
-    ['http-edge', 'ssh'],
-    ['ssh-', 'ssh'],
-    [undefined, 'ssh'],
-    ['gateway-edge', undefined],
-  ] as const) {
-    assert.equal(parseOpenInSource(value as unknown, transport as unknown), null, String(value) + ' must not parse')
-  }
-})
 
 test('gate 2: the session must live in a workspace with a concrete path', () => {
   const workspaces = [

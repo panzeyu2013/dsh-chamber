@@ -383,7 +383,7 @@ const connectionSave = readFileSync(join(ROOT, 'packages/desktop/connection-save
  *  electron-edges.ts) preserves the lockstep strength: the handle/send sets must still equal
  *  the preload invoke/on sets, handle spellings accept both main-side spellings, and the
  *  per-test text anchors stay anchored to the union rather than one file. */
-// R1（装配单源化）后 main 侧名单的唯一来源 = scripts/lib/main-side-files.mjs
+// R1（装配单源化）后 main 侧名单的唯一来源 = scripts/main-side-files.mjs
 // （与 emit-bridge-manifest.mjs 的扫描面同一份；host-assembly.ts 已收进名单，
 // 集合不放宽：原 main.ts 断言逐条仍在，只是来源换成实现真正所在处）。
 import { MAIN_SIDE_FILES } from '../../scripts/main-side-files.mjs'
@@ -704,7 +704,7 @@ test("the open-in plugin's private bridge face stays a structural subset of the 
   // The plugin declares its own loose `window.dshChamber.openIn` face on purpose (it stays
   // out of the renderer global-augmentation merge; a re-export was rejected for pulling that
   // augmentation in). Pin the relationship here so a preload OpenInSurface change cannot pass
-  // the plugin's typecheck silently. */
+  // the plugin's typecheck silently.
   const coordinator = readFileSync(
     join(ROOT, 'packages/dsh-chamber-client-ui-open-in/src/shared/coordinator.ts'),
     'utf8',
@@ -989,7 +989,7 @@ test('every preload channel literal is a known IPC_CHANNELS value (B8 — consta
   }
 })
 
-test('no IPC_CHANNELS constant is dead or duplicated across the main-side files (B12/E8 — 70/70 恰用一次由事实变断言)', () => {
+test('no IPC_CHANNELS constant is dead or duplicated across the main-side files (B12/E8 — 61/61 恰用一次由事实变断言)', () => {
   // 每个 channel 常量必须在 MAIN_SIDE_FILES 的代码引用中各恰用一次：
   // 0 次 = 死 channel（注册/发送丢失），>1 次 = 意外双引用（镜像集合
   // 相等看不见）。计数只认 `IPC_CHANNELS.<KEY>` 拼写，注释剥离用下方单趟状态机

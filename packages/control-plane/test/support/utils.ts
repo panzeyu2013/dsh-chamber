@@ -27,8 +27,8 @@ export const quietLogger = { log: () => {}, warn: () => {}, error: () => {} }
  * state dir. It must not exist, and it must not sit in the shared `/tmp`: a
  * real spawned host writes its logs under `stateDir`.
  */
-export const ABSENT_ROOT = mkdtempSync(join(tmpdir(), 'dsh-cp-absent-'))
-export const ABSENT_PATH = join(ABSENT_ROOT, 'none')
+const ABSENT_ROOT = mkdtempSync(join(tmpdir(), 'dsh-cp-absent-'))
+const ABSENT_PATH = join(ABSENT_ROOT, 'none')
 after(() => { rmSync(ABSENT_ROOT, { recursive: true, force: true }) })
 
 /** createLocalConnection over the absent-path sentinel and the quiet logger;

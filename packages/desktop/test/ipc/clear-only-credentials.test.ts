@@ -50,8 +50,8 @@ test('id 校验：非字符串 / 不合白名单（local 被排除）/ 未知 id
     { id: 'nope', password: null },
     { password: null },
     { id: 'a b', password: null },
-    // 存在性通过、白名单不通过：只有白名单能挡住这两条。
-    { id: 'local', password: null },
+    // 存在性通过、白名单不通过：只有白名单能挡住这两条（local 已在上面出现，
+    // 此处只留超长 id 一条——重复同输入不增加判据）。
     { id: 'x'.repeat(65), password: null },
   ]) {
     assert.deepEqual(admitClearOnly<Spec>(PASSWORD, payload), { ok: false, error: 'invalid or unknown instance id' })
