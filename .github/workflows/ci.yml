@@ -665,14 +665,22 @@ jobs:
       # spawns must actually launch and serve. This step drives the sidecar built
       # by the step above (the
       # NDJSON B bridge ready/info/settings frames, /health, the hostile-Origin
-      # fence, the shell index when the assembly carries dist/web, and a clean
+      # fence, the shell index served from a real web dist, and a clean
       # SIGTERM exit) and passes --require-assembly so a missing/skipped build
       # prerequisite is a hard FAIL instead of a loud SKIP. The WKWebView UI
       # and the .app double-click path still cannot be driven headlessly (no
       # CDP endpoint): those stay documented real-machine acceptance items.
+      #
+      # --web-dist: N-6（壳 index + 声明资源可服务）在 --require-assembly 下必须真执行，
+      # 找不到 web dist 记 FAIL 而不是 INFO。本 job 在此步之前没有任何步骤产出 renderer
+      # （ensure:artifacts 只自举 sidecar/host 产物，build:renderer 只出现在本 job 之后
+      # push-only 的打包排练里），所以把 renderer 构建放进本步：产物落 packages/desktop/dist/web，
+      # 由 --web-dist 显式交给走查（与 Swift 壳 AppDelegate 传 --web-dist-dir 的形状一致）。
       - name: Native assembly acceptance (spawned sidecar boots + serves)
         if: steps.classify.outputs.code == 'true'
-        run: node scripts/gui-acceptance/run.mjs --flavor native --require-assembly
+        run: |
+          pnpm run build:renderer
+          node scripts/gui-acceptance/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web
       # Electron compiled-artifact smoke: the compiled
       # dist/control-plane entry is spawned electron-free, must bind and answer
       # /health, then exit 0 on SIGTERM; dist/preload.cjs is executed inside

@@ -18,10 +18,12 @@ import {
   planLadder,
   reduceSessionAuthority,
   sessionAuthorityProbeLadder,
+  withDeadline,
   type AuthorityOfficialRow,
   type AuthorityRead,
   type LadderObservation,
   type LadderRecord,
+  type Scheduler,
   type SessionAuthorityEffect,
   type SessionAuthorityState,
 } from '@dsh-chamber/dsh-stream-state'
@@ -40,6 +42,10 @@ export interface SessionAuthorityDeps {
   readonly readOfficial: () => AuthorityOfficialRead
   /** undefined = transport failure (no verdict this round). */
   readonly readAuthority: () => Promise<AuthorityRead | undefined>
+  /** Budget for one authority read; expiry = degraded round (no verdict). Defaults to 5s (I-11). */
+  readonly readDeadlineMs?: number
+  /** Timer seam for the read budget; the I/O half defaults to the ambient scheduler. */
+  readonly scheduler?: Scheduler
   /** Tier-3 write-back: official `handleSessionStatus(id, false)` + self-verification. */
   readonly correct: (sessionIds: readonly string[]) => Promise<boolean>
   readonly warn: (message: string) => void
@@ -79,6 +85,15 @@ export interface AuthorityActionLogEntry {
 const LADDER_KEY = 'source'
 
 const CONFIG = { confirmReads: 2 } as const
+
+/** I-11: one authority read may not freeze the ladder (the unary client's own budget is 5s). */
+const AUTHORITY_READ_DEADLINE_MS = 5_000
+
+/** The I/O half may use ambient timers; policy stays in the pure package. */
+const AMBIENT_SCHEDULER: Scheduler = {
+  setTimeout: (run, ms) => setTimeout(run, ms),
+  clearTimeout: handle => { clearTimeout(handle as ReturnType<typeof setTimeout>) },
+}
 
 /** The probe cadence is a property of the one table, not of this module. */
 const PROBE_LADDER = sessionAuthorityProbeLadder(LADDER_TABLES.authority)
@@ -184,6 +199,25 @@ export class SessionAuthorityReconciler {
     return false
   }
 
+  /**
+   * One authority read under a hard budget (I-11). The unary client already bounds its own
+   * fetch; this fence also covers a seam that never settles (the official store's single-flight
+   * hang is upstream's, but it must degrade this round, not freeze the ladder forever).
+   */
+  private async readBounded(): Promise<{ read: AuthorityRead | undefined; timedOut: boolean }> {
+    const budget = this.deps.readDeadlineMs ?? AUTHORITY_READ_DEADLINE_MS
+    const outcome = await withDeadline(this.deps.readAuthority(), {
+      ms: budget,
+      scheduler: this.deps.scheduler ?? AMBIENT_SCHEDULER,
+      onExpire: () => undefined,
+    })
+    if (outcome.settled === 'deadline') {
+      this.deps.warn('session authority read deadline exceeded (' + String(budget) + 'ms) — no verdict this round')
+      return { read: undefined, timedOut: true }
+    }
+    return { read: outcome.value, timedOut: false }
+  }
+
   private async attempt(): Promise<void> {
     let generation: string | undefined
     try {
@@ -250,8 +284,11 @@ export class SessionAuthorityReconciler {
     let confirmation = false
     while (nextRead !== undefined) {
       let read: AuthorityRead | undefined
+      let readTimedOut = false
       try {
-        read = await this.deps.readAuthority()
+        const bounded = await this.readBounded()
+        read = bounded.read
+        readTimedOut = bounded.timedOut
       } catch (error) {
         this.deps.warn('session authority read failed: '
           + (error instanceof Error ? error.message : String(error)))
@@ -267,7 +304,8 @@ export class SessionAuthorityReconciler {
       if (read === undefined || !read.ok) {
         failed = true
         this.stuckSince ??= this.deps.now()
-        this.note(this.deps.now(), 'read-failed', confirmation ? 'confirmation read' : undefined)
+        this.note(this.deps.now(), 'read-failed',
+          readTimedOut ? 'read deadline exceeded' : (confirmation ? 'confirmation read' : undefined))
         break
       }
       if (reduction.unresolved === undefined || reduction.unresolved.length > 0) {

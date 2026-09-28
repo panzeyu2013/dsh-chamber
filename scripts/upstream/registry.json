@@ -287,6 +287,7 @@
         "G43"
       ],
       "relatedGates": [
+        "packages/dsh-api-gateway/test/behavior/client-uplink-rejection.test.ts",
         "packages/dsh-api-gateway/test/patch-lock/base-path-normalization-lock.test.ts",
         "packages/dsh-api-gateway/test/patch-lock/journal-stall-watchdog-lock.test.ts",
         "packages/dsh-api-gateway/test/patch-lock/remote-stream-carrier-retry-lock.test.ts",
@@ -306,7 +307,7 @@
         "src/client/stream-forensics.ts#createStreamForensicsReporter",
         "src/client/stream-stall-policy.ts#decideStreamStallAction"
       ],
-      "evidence": "node scripts/upstream/verify-upstream-touchpoints.mjs",
+      "evidence": "node scripts/upstream/verify-upstream-touchpoints.mjs；升级裁决点（I-13）：descriptor 带 uplink 半边时复核 client-uplink-rejection.test.ts 的 fail-loud 判定——维持 fail-loud 为默认，真机出现 uplink 需求再重放 rc.2 客户端半边（G43）。",
       "status": "open"
     },
     {
@@ -528,6 +529,90 @@
       "rationale": "goal wire 无自动化 vendor 源锁步：语义漂移只会保持 unknown（不误报），但白名单字段必须重锚；接受人工复验而非新增 C 编号门"
     },
     {
+      "id": "mirror.dsh-session-status-write-face",
+      "type": "mirror",
+      "ours": "packages/dsh-chamber-client-ui-sidebar/src/client/status-write-face.ts",
+      "upstream": "packages/api/session-controller",
+      "authority": "upstream",
+      "criteria": [],
+      "deviations": [],
+      "relatedGates": [
+        "packages/dsh-chamber-client-ui-sidebar/test/session-state/status-write-face.test.ts",
+        "packages/dsh-chamber-client-ui-sidebar/test/session-state/vendor-session-fact-contract.test.ts"
+      ],
+      "symbols": [
+        "packages/dsh-chamber-client-ui-sidebar/src/client/status-write-face.ts#CONTRACT_STATUS_WRITE_METHODS",
+        "packages/dsh-chamber-client-ui-sidebar/src/client/status-write-face.ts#detectStatusWriteFace"
+      ],
+      "evidence": "人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步复验 pin 住的 ISessions 契约；契约长出 status 写面即扩 CONTRACT_STATUS_WRITE_METHODS 并翻转探测（vendor-session-fact-contract.test.ts 的契约锁先红）。",
+      "status": "accepted",
+      "rationale": "tier-3 写回押在「上游公开但非 ISessions 契约」的 ClientSessions.handleSessionStatus 上：探测三分（contract / concrete+WARN-once / none 只读阶梯）把这一事实收成一个可测叶面，契约一旦长出写面即按 contract 支走，不再依赖具体成员名（I-10）。"
+    },
+    {
+      "id": "mirror.dsh-desktop-carrier-seats",
+      "type": "mirror",
+      "ours": "packages/desktop",
+      "upstream": "apps/desktop/src",
+      "authority": "upstream",
+      "criteria": [],
+      "deviations": [],
+      "relatedGates": [
+        "packages/desktop/test/ipc/bridge-shim-document.test.ts",
+        "packages/desktop/test/ipc/desktop-carrier-surface.test.ts",
+        "packages/desktop/upstream-seats.test.ts"
+      ],
+      "symbols": [
+        "packages/desktop/ipc-events.ts#IPC_CHANNELS"
+      ],
+      "evidence": "覆盖文件：apps/desktop/src/{preload-app,preload-platform,preload-theme,preload-windows,windows-layout,ipc}.ts。人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验载体面（data-platform / Windows caption 高度 40 / native theme 观察者 / dshDesktop protocolVersion 1 + 相位映射），门 = packages/desktop/upstream-seats.test.ts（S-51/S-52）+ test/ipc/*（§4.5 审计表 preload-*/windows-layout/ipc 行）。",
+      "status": "accepted",
+      "rationale": "官方共享 UI 的桌面判定与 dshDesktop 载体双 flavor 锁步：preload.cts 与 Swift bridge-shim 同形承载，native theme 通道改用 chamber 前缀。browser/webview 租客与 preload-menu 臂不采用（见 §4.5 审计表）。"
+    },
+    {
+      "id": "mirror.dsh-desktop-shortcuts-seat",
+      "type": "mirror",
+      "ours": "packages/desktop/shortcuts-bridge.ts",
+      "upstream": "apps/desktop/src",
+      "authority": "upstream",
+      "criteria": [],
+      "deviations": [],
+      "relatedGates": [
+        "packages/desktop/test/ipc/desktop-shortcuts-bridge.test.ts"
+      ],
+      "symbols": [
+        "packages/desktop/shortcuts-bridge.ts#DESKTOP_SHORTCUTS_CHANNELS",
+        "packages/desktop/shortcuts-bridge.ts#DesktopShortcutsBridge",
+        "packages/desktop/shortcuts-bridge.ts#desktopKeyEvent"
+      ],
+      "evidence": "覆盖文件：apps/desktop/src/{keyboard,keybindings}.ts。人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复核 before-input-event 决策表 / scopedDesktop 门 / revision 化偏好事务与 userData/keybindings.json 存储位置（§4.5 审计表 keyboard/keybindings 行）。",
+      "status": "accepted",
+      "rationale": "官方键盘桥的上游协议实现从运行树加载而非重写；chamber 只镜像决策表、投递门与偏好事务，main.ts 的 before-input-event glue 是同席位接线点。"
+    },
+    {
+      "id": "mirror.dsh-desktop-native-chrome-seats",
+      "type": "mirror",
+      "ours": "packages/desktop",
+      "upstream": "apps/desktop/src",
+      "authority": "upstream",
+      "criteria": [],
+      "deviations": [],
+      "relatedGates": [
+        "packages/desktop/chamber-lock.test.ts",
+        "packages/desktop/shell-locale.test.ts",
+        "packages/desktop/test/desktop-shell/fatal-report.test.ts",
+        "packages/desktop/test/desktop-shell/startup-recovery.test.ts"
+      ],
+      "symbols": [
+        "packages/desktop/chamber-lock.ts#acquireChamberLock",
+        "packages/desktop/fatal-report.ts#CONSOLE_RING_BYTES",
+        "packages/desktop/shell-locale.ts#resolveShellLocale",
+        "packages/desktop/startup-error.ts#planStartupRecovery"
+      ],
+      "evidence": "覆盖文件：apps/desktop/src/{locale,tray,single-instance,quit-confirmation,fatal-recovery,crash-report}.ts。人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复核原生 chrome 语义；有意差异（崩溃报告不轮转只追加、退出检查面收窄为本地实例运行中、跨 flavor O_EXLOCK 加层）见 §4.5 审计表对应行。",
+      "status": "accepted",
+      "rationale": "原生 chrome 席位（typed locale / 托盘 / 单实例 / 退出确认 / 致命恢复 / 崩溃报告）语义镜像上游；差异点：S-43 恢复框默认项与 Esc 落安全项、托盘仅打包态且图标存在时创建、崩溃报告不轮转。"
+    },
+    {
       "id": "mirror.dsh-desktop-update-chain",
       "type": "mirror",
       "ours": "packages/desktop",
@@ -536,11 +621,11 @@
       "criteria": [],
       "deviations": [],
       "relatedGates": [
+        "packages/desktop/test/desktop-shell/updater-attention.test.ts",
         "packages/desktop/test/desktop-shell/updater-main-wiring.test.ts",
         "packages/desktop/test/desktop-shell/updater-watchdog.test.ts",
         "packages/desktop/update-journal.test.ts",
-        "packages/desktop/update-schedule.test.ts",
-        "packages/desktop/upstream-seats.test.ts"
+        "packages/desktop/update-schedule.test.ts"
       ],
       "symbols": [
         "packages/desktop/update-headless.ts#selectLatestReleaseVersion",
@@ -548,9 +633,9 @@
         "packages/desktop/update-schedule.ts#UPDATE_SCHEDULE_DEFAULTS",
         "packages/desktop/updater.ts#LINUX_UPDATE_UNSUPPORTED_REASON"
       ],
-      "evidence": "人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验（上游 apps/desktop/src/update-{coordinator,journal,schedule,error,attention,http-executor}.ts 与 mandatory-update-*.ts）",
+      "evidence": "覆盖文件：apps/desktop/src/{update-coordinator,update-schedule,update-journal,update-attention,update-presentation}.ts（+ update-error/http-executor 为 different-adopted，逐行见 §4.5）。人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验（上游 apps/desktop/src/update-{coordinator,journal,schedule,attention,presentation,error,http-executor}.ts、preload.cts 的 update 臂与 mandatory-update-*.ts），逐行见 §4.5 审计表",
       "status": "accepted",
-      "rationale": "上游 0.1.7 有完整 electron-updater 链；chamber 自建更新链按相位/注意力/journal 语义镜像其形状（§22.3.5）。两处明确不采用：update-http-executor 的「替换 electron-updater 传输」需要注入私有字段（Electron 升级即碎，chamber 用外部 watchdog + 忽略迟到事件），mandatory-update 家族是上游 Desktop 的产品面。另：T-04 —— 上游 apps/ 与 patches/ 均无 Sparkle，Swift 腿的更新链是 chamber 自建，本触点只覆盖 Electron 腿。"
+      "rationale": "上游有完整 electron-updater 链；chamber 自建更新链按相位/注意力/presentation 归类/journal 语义镜像其形状（§22.3.5），ours = updater.ts / update-schedule.ts / update-journal.ts / update-headless.ts + preload.cts 的 update 臂。两处明确不采用：update-http-executor 的「替换 electron-updater 传输」需要注入私有字段（Electron 升级即碎，chamber 用外部 watchdog + 忽略迟到事件），update-dialog/overlay 与 mandatory-update 家族是上游 Desktop 的产品面（design 11 §2 无弹窗硬约束）。另：T-04 —— 上游 apps/ 与 patches/ 均无 Sparkle，Swift 腿的更新链是 chamber 自建，本触点只覆盖 Electron 腿。"
     },
     {
       "id": "mirror.dsh-client-hmr-events-endpoint",

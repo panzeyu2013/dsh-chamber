@@ -58,6 +58,7 @@ const controlPlaneModule: typeof import('@dsh-chamber/control-plane') = await (i
 
 export const createControlPlane = controlPlaneModule.createControlPlane
 export const call = controlPlaneModule.call
+export const isDshPortBaseValid = controlPlaneModule.isDshPortBaseValid
 
 // State-root writer lease: the desktop main and the Swift sidecar take the <userData>
 // host-root lease through this facade; the packaged sidecar control plane takes

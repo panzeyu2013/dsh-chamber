@@ -7,6 +7,7 @@
  * product or itself.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
@@ -33,6 +34,7 @@ import {
   nativeSidecarArgs,
   nativeSidecarEnv,
   resolveNativeSidecarDir,
+  resolveNativeWebDistDir,
   runNativeAcceptance,
 } from './native.mjs'
 const SHELL_HTML = `<!doctype html><html lang="zh-CN"><head><title>dsh-chamber</title>
@@ -908,9 +910,51 @@ test('native sidecar preflight: a missing or partial assembly is a named loud sk
 // 由 scripts/gates/run-checks.test.mjs 对同一 scripts/lib/sidecar-assembly.mjs 单测。
 test('native launch contract: throwaway user data + explicit port + compiled marker', () => {
   assert.deepEqual(nativeSidecarArgs({ userDataDir: '/tmp/u', port: 12345 }), ['--user-data-dir', '/tmp/u', '--port', '12345'])
+  assert.deepEqual(nativeSidecarArgs({ userDataDir: '/tmp/u', port: 12345, webDistDir: '/web/dist' }),
+    ['--user-data-dir', '/tmp/u', '--port', '12345', '--web-dist-dir', '/web/dist'],
+    'a resolved web dist rides the packaged shell flag (sidecar-entry --web-dist-dir), so N-6 judges the real UI and not the stub')
+  assert.deepEqual(nativeSidecarArgs({ userDataDir: '/tmp/u', port: 12345, webDistDir: null }),
+    ['--user-data-dir', '/tmp/u', '--port', '12345'], 'no resolved web dist means no flag')
   const env = nativeSidecarEnv({ KEEP: '1' })
   assert.equal(env.DSH_CHAMBER_SIDECAR_COMPILED, '1', 'the assembly-relative control-plane import requires the compiled marker')
   assert.equal(env.KEEP, '1', 'the base environment is preserved')
+})
+
+test('native web dist probe: explicit wins, else sidecarDir/dist/web → sidecarDir/../dist/web (.app mirror)', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'dsh-native-webdist-'))
+  try {
+    const sidecarDir = path.join(root, 'release', 'sidecar')
+    // .app 布局镜像：<root>/release/dist/web（= Contents/Resources/dist/web）
+    const appMirror = path.join(root, 'release', 'dist', 'web')
+    mkdirSync(appMirror, { recursive: true })
+    writeFileSync(path.join(appMirror, 'index.html'), SHELL_HTML)
+    const detected = resolveNativeWebDistDir({ sidecarDir })
+    assert.equal(detected.dir, appMirror)
+    assert.equal(detected.source, 'detected')
+    assert.equal(detected.ready, true)
+    const inAssembly = path.join(sidecarDir, 'dist', 'web')
+    mkdirSync(inAssembly, { recursive: true })
+    writeFileSync(path.join(inAssembly, 'index.html'), SHELL_HTML)
+    assert.equal(resolveNativeWebDistDir({ sidecarDir }).dir, inAssembly, 'sidecarDir/dist/web 先于 ../ 镜像探测')
+    const explicit = path.join(root, 'explicit-web')
+    mkdirSync(explicit, { recursive: true })
+    writeFileSync(path.join(explicit, 'index.html'), SHELL_HTML)
+    const byExplicit = resolveNativeWebDistDir({ sidecarDir, webDistDir: ` ${explicit} ` })
+    assert.equal(byExplicit.dir, explicit, '显式 --web-dist 优先于探测（含首尾空白）')
+    assert.equal(byExplicit.source, 'explicit')
+    const empty = path.join(root, 'empty-web')
+    mkdirSync(empty, { recursive: true })
+    assert.equal(resolveNativeWebDistDir({ sidecarDir, webDistDir: empty }).ready, false,
+      '目录存在但没有 index.html 不算携带（判据是页面入口，不是目录）')
+    const missing = resolveNativeWebDistDir({ sidecarDir: path.join(root, 'absent', 'sidecar') })
+    assert.equal(missing.ready, false)
+    assert.equal(missing.source, 'missing')
+    assert.deepEqual(missing.candidates,
+      [path.join(root, 'absent', 'sidecar', 'dist', 'web'), path.join(root, 'absent', 'dist', 'web')],
+      '缺件证据必须点出两个候选（说明缺什么）')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('native mode skips LOUDLY (not silently) when the assembly is absent, and writes a report', async () => {
@@ -950,6 +994,104 @@ test('native machine gate: --require-assembly makes an absent assembly a FAIL, n
     assert.equal(json.skipped, false)
     assert.match(json.reason, /build:sidecar/)
   } finally {
+    rmSync(outDir, { recursive: true, force: true })
+  }
+})
+
+/**
+ * 最小控制面替身：attach 腿只发只读 GET（/health、/api/connections、/、/assets/*）。
+ * @param {{ shellHtml?: string|null }} [options] - shellHtml 非 null 时 `/` 返回壳文档（否则 404）。
+ * @returns {Promise<{ origin: string, close: () => Promise<void> }>} 替身句柄。
+ */
+function startStubPlane({ shellHtml = null } = {}) {
+  const server = createServer((request, response) => {
+    if (request.url === '/health') {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end('{"status":"ok"}')
+      return
+    }
+    if (request.url === '/api/connections') {
+      response.writeHead(403, { 'content-type': 'application/json' })
+      response.end('{"error":"forbidden","code":"origin_forbidden"}')
+      return
+    }
+    if (request.url === '/' && shellHtml !== null) {
+      response.writeHead(200, { 'content-type': 'text/html' })
+      response.end(shellHtml)
+      return
+    }
+    if (request.url?.startsWith('/assets/') === true) {
+      response.writeHead(200, { 'content-type': 'application/javascript' })
+      response.end('/* asset */')
+      return
+    }
+    response.writeHead(404, { 'content-type': 'application/json' })
+    response.end('{"error":"not_found","code":"not_found"}')
+  })
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => {
+    const address = server.address()
+    resolve({
+      origin: `http://127.0.0.1:${address.port}`,
+      close: () => new Promise((done) => server.close(done)),
+    })
+  }))
+}
+
+test('native attach: no ready frame and no lifecycle are INFO, never a fake PASS (N-1/N-7)', async () => {
+  const plane = await startStubPlane({ shellHtml: SHELL_HTML })
+  const outDir = mkdtempSync(path.join(tmpdir(), 'dsh-native-attach-'))
+  try {
+    const verdict = await runNativeAcceptance({
+      sidecarDir: path.join(outDir, 'no-assembly'),
+      outDir,
+      attachPlaneOrigin: plane.origin,
+      log: () => {},
+    })
+    const byId = new Map(verdict.results.map(entry => [entry.id, entry]))
+    assert.equal(byId.get('N-1').ok, null, 'attach 未观测 ready 帧 ⇒ INFO（旧形态恒 true 是假通过）')
+    assert.match(byId.get('N-1').evidence, /attach/)
+    assert.equal(byId.get('N-7').ok, null, 'attach 无 sidecar 生命周期 ⇒ INFO（旧形态直接缺行）')
+    assert.match(byId.get('N-7').evidence, /无 sidecar 生命周期/)
+    assert.equal(byId.get('N-6').ok, true, '运行中的控制面伺服壳 index + 声明资源时 N-6 照常判 PASS')
+    assert.equal(verdict.failed, 0)
+    assert.equal(verdict.info, 2, 'N-1/N-7 按未执行计入 INFO')
+    assert.equal(verdict.passed, 3, 'N-4/N-5/N-6 才是本次真正判过的项')
+  } finally {
+    await plane.close()
+    rmSync(outDir, { recursive: true, force: true })
+  }
+})
+
+test('native N-6 tiers: a missing web dist is INFO by default and FAIL under --require-assembly', async () => {
+  const plane = await startStubPlane()
+  const outDir = mkdtempSync(path.join(tmpdir(), 'dsh-native-n6-gate-'))
+  const sidecarDir = path.join(outDir, 'no-assembly')
+  try {
+    const relaxed = await runNativeAcceptance({ sidecarDir, outDir: path.join(outDir, 'relaxed'), attachPlaneOrigin: plane.origin, log: () => {} })
+    const relaxedN6 = relaxed.results.find(entry => entry.id === 'N-6')
+    assert.equal(relaxedN6.ok, null, '默认档：腿没执行 ⇒ INFO（不假装通过，也不判红）')
+    assert.match(relaxedN6.evidence, /默认档/)
+    assert.match(relaxedN6.evidence, /index\.html/, 'INFO 也要说清缺什么')
+    assert.equal(relaxed.failed, 0)
+    const strict = await runNativeAcceptance({ sidecarDir, outDir: path.join(outDir, 'strict'), attachPlaneOrigin: plane.origin, requireAssembly: true, log: () => {} })
+    const strictN6 = strict.results.find(entry => entry.id === 'N-6')
+    assert.equal(strictN6.ok, false, '机器门：N-6 无法执行 ⇒ FAIL（门不得在腿没跑时变绿）')
+    assert.match(strictN6.title, /无法执行/)
+    assert.match(strictN6.evidence, /--require-assembly/)
+    assert.equal(strict.failed, 1)
+    // 显式 --web-dist 指向不完整目录：证据必须点名那个 index.html
+    const emptyWeb = path.join(outDir, 'empty-web')
+    mkdirSync(emptyWeb, { recursive: true })
+    const explicit = await runNativeAcceptance({
+      sidecarDir, outDir: path.join(outDir, 'explicit'), attachPlaneOrigin: plane.origin,
+      requireAssembly: true, webDistDir: emptyWeb, log: () => {},
+    })
+    const explicitN6 = explicit.results.find(entry => entry.id === 'N-6')
+    assert.equal(explicitN6.ok, false)
+    assert.match(explicitN6.title, /--web-dist 目录不完整/)
+    assert.ok(explicitN6.evidence.includes(path.join(emptyWeb, 'index.html')), 'FAIL 证据点名显式目录缺的 index.html')
+  } finally {
+    await plane.close()
     rmSync(outDir, { recursive: true, force: true })
   }
 })

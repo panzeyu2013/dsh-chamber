@@ -17,6 +17,10 @@
  *  ⑤b/⑤c 本地化 fail-closed：缺 .lproj（纯函数）+ 内容级（0 字节/截断/缺 .lproj
  *     的真实装配腿负例，plutil 解析；0 字节 .strings 不得 EXIT=0 报完成）；
  *  ⑥ sidecar 装配拷贝 + A5 基名反例 loud + 缺 node / node 无执行位 loud；
+ *  ⑥b/⑥c 注入式 DMG 执行器：调用参数与步骤序列、--no-dmg 不调用、失败 loud 冒泡
+ *     （Finder 布局步不真造 DMG）；
+ *  ⑥d sidecar 版本相等 fail-closed：装配腿 .app 内 sidecar/package.json version
+ *     必须 == 壳版本（复用旧装配目录的漂移过去能一路签进发布物）；
  *  ⑦ ad-hoc 签名 + codesign 校验通过（真实 codesign，无网络）；
  *  ⑧ codesignArgs argv 顺序（ad-hoc/hardened 分支互斥、identity 紧跟 --sign）；
  *  ⑨ entitlements 文件合法 plist 且为最小集；
@@ -82,6 +86,7 @@ import {
   stageDmgVolume,
   resourceBundleResourcesDir,
   assertBridgeShimPresent,
+  assertSidecarVersionMatchesShell,
   LOCALIZATIONS,
   localizationDir,
   localizationFile,
@@ -108,6 +113,10 @@ const desktopDir = path.resolve(here, '..')
 const macosDir = path.resolve(desktopDir, '..', '..', 'macos')
 const script = path.join(macosDir, 'scripts', 'build-swift-app.mjs')
 
+/** chamber 壳版本（packages/desktop/package.json）——Info.plist 与
+ *  sidecar/package.json 版本相等断言的同一期望值（⑥d 直测漂移反例）。 */
+const shellVersion = JSON.parse(readFileSync(path.join(desktopDir, 'package.json'), 'utf8')).version
+
 /** 组装测试共用的临时输出目录（每个用例独立）。 */
 function tempOut() {
   return mkdtempSync(path.join(tmpdir(), 'dsh-swift-app-'))
@@ -129,10 +138,17 @@ function fakeMachO(dir, name, arch) {
   return target
 }
 
-/** 写一个最小可用的 sidecar 装配目录（真实 Mach-O node + sidecar.js/package.json）。 */
+/** 写一个最小可用的 sidecar 装配目录（真实 Mach-O node + sidecar.js/package.json）。
+ *  package.json 必须携带**壳版本**：装配腿现在按它做版本相等断言（缺 version /
+ *  版本漂移都 loud），夹具要给出真实 build:sidecar 产物的形状。 */
 function writeFakeSidecar(dir, nodeArch) {
   writeFileSync(path.join(dir, 'sidecar.js'), '// fake')
-  writeFileSync(path.join(dir, 'package.json'), '{}')
+  writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+    name: '@dsh-chamber/sidecar',
+    version: shellVersion,
+    private: true,
+    type: 'module',
+  }, null, 2))
   fakeMachO(dir, 'node', nodeArch)
   return dir
 }
@@ -628,7 +644,6 @@ test('⑥ sidecar 拷贝 + A5 基名反例 loud', async () => {
   const sidecar = mkdtempSync(path.join(tmpdir(), 'dsh-fake-sidecar-'))
   try {
     writeFakeSidecar(sidecar)
-    writeFileSync(path.join(sidecar, 'package.json'), '{}')
     const result = await runBuildSwiftApp(parseBuildSwiftAppArgs([
       '--out', out, '--sidecar', sidecar, '--skip-build', '--skip-web-dist', '--no-sign', '--no-zip', '--no-dmg',
     ]), { log: () => {}, error: () => {} })
@@ -691,6 +706,120 @@ test('⑥ 缺捆绑 node / node 无执行位 → loud（runtime 不再静默回�
       runBuildSwiftApp(argv(sidecar), { log: () => {}, error: () => {} }),
       /没有可执行位/,
     )
+  } finally {
+    rmSync(out, { recursive: true, force: true })
+    rmSync(sidecar, { recursive: true, force: true })
+  }
+})
+
+test('⑥b 注入式 DMG 执行器：调用参数与步骤序列（不真造 DMG）', async () => {
+  const out = tempOut()
+  try {
+    const logs = []
+    const io = { log: (line) => logs.push(line), error: () => {} }
+    const calls = []
+    const deps = {
+      createStyledDmg: (options) => {
+        // 执行器必须在装配**完成之后**拿到最终 .app（Info.plist 已写、图标已就位）。
+        assert.ok(existsSync(path.join(options.appDir, 'Contents', 'Info.plist')),
+          '执行器拿到的必须是已装配完成的 .app')
+        options.io.log('  [dmg-executor]')
+        calls.push(options)
+        return { outPath: options.outPath, bytes: 1 }
+      },
+    }
+    const layout = appLayout(out)
+    const result = await runBuildSwiftApp(parseBuildSwiftAppArgs([
+      '--out', out, '--skip-build', '--skip-web-dist', '--skip-sidecar', '--no-sign', '--no-zip',
+    ]), io, deps)
+    assert.equal(result.dryRun, false)
+    assert.equal(calls.length, 1, '未 --no-dmg 时执行器必须恰好调用一次')
+    assert.equal(calls[0].appDir, layout.appDir, 'DMG 卷内容必须是最终 .app')
+    assert.equal(calls[0].appName, APP_NAME, '卷名必须来自 --app-name 的解析结果')
+    assert.equal(calls[0].outPath, layout.dmgPath, '产物路径必须是 artifactBasename 派生的精确 .dmg')
+    assert.equal(calls[0].io, io, '执行器必须复用同一个 io（日志出口一处）')
+    // 步骤序列：[6] 计划行 → 执行器 → 完成日志（顺序不得倒）。
+    const planIndex = logs.findIndex((line) => /\[6\] dmg →/.test(line))
+    const callIndex = logs.indexOf('  [dmg-executor]')
+    const doneIndex = logs.findIndex((line) => line.includes('完成：'))
+    assert.ok(planIndex >= 0 && callIndex > planIndex && doneIndex > callIndex,
+      `步骤序列错误（plan=${planIndex} call=${callIndex} done=${doneIndex}）：${logs.join('\n')}`)
+
+    // --no-dmg：执行器绝不调用（开关真的收敛了这一步）。
+    await runBuildSwiftApp(parseBuildSwiftAppArgs([
+      '--out', out, '--skip-build', '--skip-web-dist', '--skip-sidecar', '--no-sign', '--no-zip', '--no-dmg',
+    ]), io, deps)
+    assert.equal(calls.length, 1, '--no-dmg 时执行器不得再被调用')
+  } finally {
+    rmSync(out, { recursive: true, force: true })
+  }
+})
+
+test('⑥c 注入式 DMG 执行器失败必须 loud 冒泡（不打印完成）', async () => {
+  const out = tempOut()
+  try {
+    const logs = []
+    await assert.rejects(
+      runBuildSwiftApp(parseBuildSwiftAppArgs([
+        '--out', out, '--skip-build', '--skip-web-dist', '--skip-sidecar', '--no-sign', '--no-zip',
+      ]), { log: (line) => logs.push(line), error: () => {} }, {
+        createStyledDmg: () => { throw new Error('Finder 未在时限内写出内容级拖拽布局') },
+      }),
+      /Finder 未在时限内写出内容级拖拽布局/,
+      '执行器失败必须从 runBuildSwiftApp 冒泡——吞掉后照报「完成」就是发出没有拖拽提示的 DMG',
+    )
+    assert.ok(!logs.some((line) => line.includes('完成：')), '失败路径不得打印完成日志')
+  } finally {
+    rmSync(out, { recursive: true, force: true })
+  }
+})
+
+test('⑥d sidecar 版本相等 fail-closed：缺件/坏 JSON/漂移都必须红（装配侧）', async () => {
+  // 纯函数面：四个失败分支逐条覆盖，报错带精确路径。
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-version-'))
+  const manifest = path.join(dir, 'package.json')
+  try {
+    writeFileSync(manifest, JSON.stringify({ name: '@dsh-chamber/sidecar', version: shellVersion }))
+    assert.equal(assertSidecarVersionMatchesShell(dir, shellVersion), shellVersion)
+    assert.throws(() => assertSidecarVersionMatchesShell(dir, '0.0.1'), (error) => {
+      assert.match(error.message, /sidecar 版本与壳版本不一致/)
+      assert.ok(error.message.includes(manifest), error.message)
+      return true
+    })
+    writeFileSync(manifest, JSON.stringify({ name: '@dsh-chamber/sidecar' }))
+    assert.throws(() => assertSidecarVersionMatchesShell(dir, shellVersion), /缺 version/)
+    writeFileSync(manifest, '{ not json')
+    assert.throws(() => assertSidecarVersionMatchesShell(dir, shellVersion), /不是合法 JSON/)
+    rmSync(manifest, { force: true })
+    assert.throws(() => assertSidecarVersionMatchesShell(dir, shellVersion), /缺 package\.json/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+
+  // 真实装配腿：壳版本与 sidecar 版本漂移（复用旧装配目录）必须红。
+  const out = tempOut()
+  const sidecar = mkdtempSync(path.join(tmpdir(), 'dsh-fake-sidecar-version-'))
+  const argv = parseBuildSwiftAppArgs([
+    '--out', out, '--sidecar', sidecar, '--skip-build', '--skip-web-dist', '--no-sign', '--no-zip', '--no-dmg',
+  ])
+  try {
+    writeFakeSidecar(sidecar)
+    writeFileSync(path.join(sidecar, 'package.json'), JSON.stringify({
+      name: '@dsh-chamber/sidecar', version: '0.0.0-stale',
+    }))
+    await assert.rejects(
+      runBuildSwiftApp(argv, { log: () => {}, error: () => {} }),
+      /sidecar 版本与壳版本不一致/,
+      '复用旧 sidecar 装配目录（版本漂移）过去能一路签名打包进发布物',
+    )
+    // 修回同版本 → 装配通过，并打印已校验的版本（可观察）。
+    writeFileSync(path.join(sidecar, 'package.json'), JSON.stringify({
+      name: '@dsh-chamber/sidecar', version: shellVersion,
+    }))
+    const logs = []
+    await runBuildSwiftApp(argv, { log: (line) => logs.push(line), error: () => {} })
+    assert.ok(logs.some((line) => line.includes(`sidecar package.json version=${shellVersion}`)),
+      '版本相等通过后必须打印已校验版本')
   } finally {
     rmSync(out, { recursive: true, force: true })
     rmSync(sidecar, { recursive: true, force: true })

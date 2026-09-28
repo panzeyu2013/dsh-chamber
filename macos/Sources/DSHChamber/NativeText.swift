@@ -124,6 +124,7 @@ public enum NativeTextKey: String, CaseIterable {
     case fatalReadyPortMismatch = "fatal.readyPortMismatch"
     case fatalBridgeStartFailed = "fatal.bridgeStartFailed"
     case fatalSidecarStartFailedDetail = "fatal.sidecarStartFailedDetail"
+    case fatalSidecarVersionMismatch = "fatal.sidecarVersionMismatch"
     case rendererCrashTitle = "renderer.crashTitle"
     case rendererCrashDetail = "renderer.crashDetail"
     case rendererRecovering = "renderer.recovering"

@@ -42,6 +42,14 @@ test('observeProbe resolves symbols and reports empty probe roots (absence is un
     const gone = observeProbe({ roots: ['packages/api/gone'], symbol: 'unarchiveSession' }, root)
     assert.equal(gone.resolvable, false)
     assert.deepEqual(gone.missingRoots, ['packages/api/gone'])
+    // 形态①：声明级锚点（literal 要求恰好一次）。
+    assert.equal(observeProbe({ anchors: ['packages/api/workspace.ts#unarchiveSession'] }, root).present, true)
+    assert.equal(observeProbe({ anchors: ['packages/api/workspace.ts#=literal:unarchiveSession'] }, root).present, true)
+    assert.equal(observeProbe({ anchors: ['packages/api/workspace.ts#neverThere'] }, root).present, false)
+    assert.equal(observeProbe({ anchors: ['packages/api/workspace.ts#neverThere'] }, root).anyHit, false)
+    const anchorGone = observeProbe({ anchors: ['packages/api/gone.ts#unarchiveSession'] }, root)
+    assert.equal(anchorGone.resolvable, true, 'a missing anchor file is absence evidence, not an unresolvable tree')
+    assert.equal(anchorGone.present, false)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
@@ -64,7 +72,7 @@ test('validateCapabilities rejects shape rot and dead consumer paths', () => {
   ] })
   const joined = problems.join('\n')
   assert.match(joined, /id 重复/)
-  assert.match(joined, /恰好给 symbol 或 patterns/)
+  assert.match(joined, /恰好给 anchors 或 symbol 或 patterns/)
   assert.match(joined, /expect 必须是 present\/absent/)
   assert.match(joined, /patterns 非法正则/)
   assert.match(joined, /requires 路径不存在/)

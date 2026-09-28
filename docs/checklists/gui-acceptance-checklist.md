@@ -68,12 +68,49 @@
 |安装/更新事务、quitAndInstall、缓存清理|design 11 §9|
 |dsh运行时版本事务（激活/回退/恢复）|design 18 §3.5–§3.6、§9|
 |通知与未读徽标、Dock/托盘/任务栏三形态|design 19|
+|子代理谱系压制（父会话闲置等子代理时不误报完成点/徽标，子代理结束即释放，断连窗口不误报）|design 19 §3.2/§3.5|
+|多实例页级持久面（两个来源各自的会话选择/折叠等 scope 互不覆盖，重载后各自恢复）|design 09 §3.6（第四类补丁）|
 |open-in拉起外部应用、图标、深链冷热启动|design 16、20 §6/§10|
 |Git worktree全链（真实远程Linux仓库）|design 08|
 |归档管理器与force清理链（保护三态：无会话打开仍可删 + 顶部降级说明行 / 正在查看的会话所在树被 `skippedProtected` 跳过 / 归档即终止）|design 24 §5、§13|
 |gateway形态（生产TLS、`/chamber/*`、移动端）|design 17、21 §9|
 |移动端Web面（真机触控档、安全区、键盘）|design 17 §18.6|
 |Linux桌面 / Windows首版|design 22 §7、23|
+
+### 4.1 I-15 矩阵执行序（归并记录）
+
+四组既有矩阵 + 两组新增（I-12/I-14）。每行 = 怎么跑 → 看什么 → 留什么证据；判据在指针文档，
+本表只固定流程。跑完把「一句结论 + 截图/日志路径」记进 PR 证据，不写进 STATUS。
+
+|矩阵|怎么跑|看什么|证据/判据指针|
+|---|---|---|---|
+|完成未读 P6|打包态：A 会话后台跑完（窗口隐藏与聚焦两态各一次），切到 B 再回 A；整页重载一次|蓝点/pending 徽标/侧栏六面同拍；完成点只在 A 行；重载后官方位仍在|design 19；STATUS「完成未读对齐 P6 实机验收」|
+|归档两段式 + 恢复|归档一个仍在运行/刚结束的会话；杀进程重开；再从归档恢复|归档即终止；恢复后内容完整、无重复树、保护态提示正确|design 24 §5/§13|
+|通知行为四缺口|打包态：目标 active 期间完成、paused、unknown 静默窗、重载/冷启各一次|通知条数与目标相位一致；unknown 窗不通知、不双发|design 19 §3.2；STATUS「通知行为测试缺口四项」|
+|运行位校准 60/190/310s|按 `session-authority-calibration.md` 的步骤跑三档|阶梯决策与写回时刻落在表定阈值|同清单|
+|子代理谱系压制（I-12）|父会话发起后端子代理；父回合先结束、子代理仍在跑；随后断开来源再恢复|父完成点/徽标在子代理存活期不亮；子代理结束即释放；断连窗口不误报|design 19 §3.2/§3.5|
+|多实例持久面（I-14）|两个来源各选不同会话；整页重载；两来源来回切换|两次重载各自恢复自己的选择、互不覆盖；官方单实例布局不回归|design 09 §3.6（第四类补丁）|
+
+### 4.2 原生 flavor（Swift）腿
+
+原生壳（design 25）的窗口是 WKWebView，**没有 CDP 端点**，界面走查不能像 Electron 那样驱动；本节固定
+「哪些腿机器能跑、哪些只能真机」。
+
+**机械腿（本仓可跑）**
+
+|腿|怎么跑|看什么|留什么|
+|---|---|---|---|
+|装配|`pnpm run build:sidecar`（可选 `--dry-run`/显式 `--skip-*`）|装配目录齐 sidecar.js / dist/control-plane / vendor / node / pnpm|命令与退出码|
+|本机 .app|`pnpm run build:swift-app --no-sign`（本地不签；正式签名腿按 release 流程）|`.app` + `.dmg` 产出；`.app` 内含 `Contents/Resources/dist/web/index.html`、`sidecar/node` 可执行、`Sparkle.framework`|产物路径 + `du`/`hdiutil attach` 结论|
+|Swift 套件|`pnpm run test:swift`|executed>0、failures==0、**skipped==0**（G23 no-skip 纪律）|runner 收尾行|
+|macOS JS 腿|`pnpm run test:macos`|darwin 锁断言 + 打包脚本套件；skipped>0 即红|退出码|
+|headless 装配验收|`node scripts/gui-acceptance/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web`（先 `pnpm run build:renderer`；指向装配目录用 `--sidecar-dir <绝对路径>`）|N-1…N-5、N-6、N-7（ready/B 桥/health/Origin 围栏/壳 index 与声明资源/SIGTERM）；机器门档下 N-6 缺 web dist 即 FAIL，默认档才 INFO|`.tmp/gui-acceptance/gui-native-report.*`|
+|B 桥载荷 parity|`pnpm run verify:shim-payload`（macOS 腿）|preload ↔ shim 的成员/通道/载荷键一致|脚本收尾行|
+
+**只能真机（工具箱不可替代）**：`.app` 双击/首启、WKWebView 页面装载与 §5.2 视口、W1–W7 矩阵、
+C1/C2（含 S-10 隐藏态/App Nap 与心跳）、刷新率三工况（S-48）、通知音效回落、键盘桥（S-54）、
+macOS 14.4 首启（S-50）、Developer ID/公证/stapler/spctl 与首个 build-swift 发布腿（凭据）。逐条判据在
+design 25 §8 与 `docs/progress/todo/macos-swift-v1.md`，本节只固定怎么跑与留什么。
 
 ## 5. 证据与记录纪律
 

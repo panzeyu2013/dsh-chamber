@@ -8,7 +8,7 @@
  *   仍忙则 loud 失败；setBadge 同步契约只在已确证无主窗时回 applied:false。
  * - 通知按 interpretNativeNotificationReply 折算；notificationId/sourceId 登记须存活到退役，
  *   显示成功不得注销 click 路由；入站 __host.* 未注入消费方一律 loud 拒绝。
- * - 共享契约面（isPackaged/focusMainWindow/launchApp/同步 setKeepAwake/setLoginItem 等）core 未 Pick、暂无调用方，但删除会砍掉契约本身。
+ * - 共享契约面（isPackaged/trayAvailable/focusMainWindow/launchApp/同步 setKeepAwake/setLoginItem 等）core 未 Pick、暂无调用方，但删除会砍掉契约本身；它们是 design 25 §4.1 的有意保留面，保留 + 逐成员退役判据见 host-edges.ts 头注。
  */
 import type {
   HostEdges,

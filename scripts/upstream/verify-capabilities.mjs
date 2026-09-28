@@ -2,8 +2,12 @@
 /**
  * 能力面对齐门（I-6）：`scripts/upstream/capabilities.json` × vendor 源树。
  *
- * 每条能力 = 一个机械探针（vendor 树内 roots × symbol/patterns）+ 期望（present/absent）
- * + chamber 侧消费者（requires / localWorkaround.by，路径存在性一并校验）。判定：
+ * 每条能力 = 一个机械探针 + 期望（present/absent）+ chamber 侧消费者（requires /
+ * localWorkaround.by，路径存在性一并校验）。探针两种形态（校验强制互斥）：
+ *   ① anchors —— `vendor 相对路径#symbol` / `#=literal:<唯一子串>`，按 check-anchors 的声明解析：
+ *      present = 全部锚点解析；absent = 任一锚点出现即退役触发。present 条目优先用 anchors。
+ *   ② roots + symbol/patterns —— 纯文本匹配，只留给无法锚定的缺席探针（上游尚无该面、没有可锚声明）。
+ * 判定：
  *
  *   aligned             观测 == 期望（期望 absent 时正是「本地替代仍必要」的登记态）
  *   chamber-behind      期望 present 而缺席、chamber 尚未消费 ⇒ 门红：pin 落后于能力的登记面
@@ -14,21 +18,21 @@
  *
  * 只读、离线；`--self-test` 自带负控，`--json` 供 CI 消费，`--vendor-root` / `--capabilities` 供夹具。
  *
- * 已知边界：symbol/patterns 是**纯文本**匹配（注释或字符串里的提及也算命中），故 present 条目的 roots
- * 应收窄到声明所在的包（例如会话方法在 `session/*` 单数命名空间、会话级工作区方法在 `workspace/*`；
- * 形如 `xxx.sessions.delete(id)` 的 Map 调用会被 `sessions\.delete` 命中，故缺席探针只取路由形状）；
- * 测试目录与 `*.test.*`/`*.spec.*` 已从扫描面排除，但注释与字符串仍算命中——登记时宁可写窄，
- * 也别把注释里的旧拼写留在范围内；升级成 `path#symbol` 锚点解析（复用 check-anchors 的声明解析）
- * 需先物化 vendor 逐条验证，是跟进项。
+ * 已知边界：形态②仍是**纯文本**匹配（注释或字符串里的提及也算命中），只用于缺席探针；形如
+ * `xxx.sessions.delete(id)` 的 Map 调用会被 `sessions\.delete` 命中，故缺席探针只取路由形状。
+ * 测试目录与 `*.test.*`/`*.spec.*` 已从扫描面排除，但注释与字符串仍算命中——登记时宁可写窄。
+ * 形态①是声明级判定（复用 check-anchors 的解析）：`#symbol` 要求顶层声明，`#=literal:` 要求恰好
+ * 命中一次（方法级契约等没有顶层声明的面用它）。
  *
  * 离线预检夹具：同版本发行安装（`node_modules/@deepseek-ai/*`，按各自 `repository.directory` 映射回
  * `packages/<…>`、把 `lib/` 内容放到 `src/` 下）可作 `--vendor-root` 的近似树，用来核对探针定义与
  * 官方实现是否一致；它不能替代升级时对 vendor 源树的正式判定。
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join, relative, resolve, sep } from 'node:path'
+import { dirname, extname, join, relative, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { parseAnchor, resolveAnchorInText } from './check-anchors.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 export const REPO_ROOT = resolve(HERE, '..', '..')
@@ -37,7 +41,7 @@ export const DEFAULT_VENDOR_ROOT = join(REPO_ROOT, 'vendor', 'harness-checkout')
 
 const TOP_KEYS = ['schema', 'note', 'capabilities']
 const ENTRY_KEYS = ['id', 'note', 'probe', 'requires', 'localWorkaround']
-const PROBE_KEYS = ['roots', 'symbol', 'patterns', 'expect']
+const PROBE_KEYS = ['roots', 'anchors', 'symbol', 'patterns', 'expect']
 const WORKAROUND_KEYS = ['by', 'retireWhen']
 const SOURCE_SUFFIXES = ['.ts', '.tsx', '.mts', '.cts', '.js', '.mjs']
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', 'coverage', 'lib', 'build', 'test', 'tests', '__tests__', '__mocks__'])
@@ -114,13 +118,25 @@ export function validateCapabilities(capabilities, repoRoot = REPO_ROOT) {
     if (!isPlainObject(probe)) problems.push(at + '.probe 必须是对象')
     else {
       for (const key of Object.keys(probe)) if (!PROBE_KEYS.includes(key)) problems.push(at + '.probe 未知字段: ' + key)
-      if (!Array.isArray(probe.roots) || probe.roots.length === 0) problems.push(at + '.probe.roots 必须是非空数组')
-      else for (const root of probe.roots) {
-        if (!isRelativeVendorPath(root)) problems.push(at + '.probe.roots 必须是 vendor 树内相对路径（不得含 . 或 .. 段）: ' + JSON.stringify(root))
-      }
+      const hasAnchors = Array.isArray(probe.anchors) && probe.anchors.length > 0
       const hasSymbol = typeof probe.symbol === 'string' && probe.symbol !== ''
       const hasPatterns = Array.isArray(probe.patterns) && probe.patterns.length > 0
-      if (hasSymbol === hasPatterns) problems.push(at + '.probe 必须恰好给 symbol 或 patterns 之一')
+      if (hasAnchors) {
+        if (probe.roots !== undefined) problems.push(at + '.probe.roots 与 anchors 互斥（anchors 自带文件路径）')
+        if (hasSymbol || hasPatterns) problems.push(at + '.probe.anchors 与 symbol/patterns 互斥')
+        for (const anchor of probe.anchors) {
+          if (typeof anchor !== 'string' || anchor === '') { problems.push(at + '.probe.anchors 必须是非空字符串数组'); continue }
+          const parsed = parseAnchor(anchor)
+          if (parsed === null) { problems.push(at + '.probe.anchors 非法锚点（要求 path#symbol 或 path#=literal:…）: ' + JSON.stringify(anchor)); continue }
+          if (!isRelativeVendorPath(parsed.file)) problems.push(at + '.probe.anchors 必须是 vendor 树内相对路径（不得含 . 或 .. 段）: ' + JSON.stringify(parsed.file))
+        }
+      } else {
+        if (!Array.isArray(probe.roots) || probe.roots.length === 0) problems.push(at + '.probe.roots 必须是非空数组（或改用 anchors）')
+        else for (const root of probe.roots) {
+          if (!isRelativeVendorPath(root)) problems.push(at + '.probe.roots 必须是 vendor 树内相对路径（不得含 . 或 .. 段）: ' + JSON.stringify(root))
+        }
+        if (hasSymbol === hasPatterns) problems.push(at + '.probe 必须恰好给 anchors 或 symbol 或 patterns 之一')
+      }
       if (hasSymbol && !IDENTIFIER_PATTERN.test(probe.symbol)) problems.push(at + '.probe.symbol 非法标识符: ' + JSON.stringify(probe.symbol))
       if (hasPatterns) for (const pattern of probe.patterns) {
         if (typeof pattern !== 'string' || pattern === '') { problems.push(at + '.probe.patterns 必须是非空字符串数组'); continue }
@@ -184,8 +200,40 @@ function probeMatcher(probe) {
   return (text) => patterns.some((pattern) => pattern.test(text))
 }
 
+/**
+ * 锚点探针（形态①）：每个锚点按 check-anchors 的声明/字面量解析，要求恰好一次命中。
+ * `present` = 全部锚点解析（expect=present 的判据）；`anyHit` = 至少一个解析（absent 的退役触发）。
+ */
+function observeAnchors(anchors, vendorRoot) {
+  const boundary = resolve(vendorRoot)
+  const hits = []
+  const misses = []
+  for (const anchor of anchors) {
+    const parsed = parseAnchor(anchor)
+    if (parsed === null) { misses.push(anchor + ': 非法锚点'); continue }
+    const absolute = resolve(vendorRoot, parsed.file)
+    if (absolute !== boundary && !absolute.startsWith(boundary + sep)) { misses.push(parsed.file + ': 越界锚点'); continue }
+    if (!existsSync(absolute)) { misses.push(parsed.file + ': 文件缺失'); continue }
+    let text
+    try { text = readFileSync(absolute, 'utf8') } catch { misses.push(parsed.file + ': 不可读'); continue }
+    const outcome = resolveAnchorInText(text, extname(absolute), parsed)
+    if (outcome.status === 'ok') hits.push(parsed.file)
+    else misses.push(parsed.file + ': ' + outcome.detail)
+  }
+  return {
+    // vendor 树本身缺席才是不可判定；锚点文件缺失是「该面不在」的证据（absent 期望正需要它）。
+    resolvable: existsSync(boundary),
+    missingRoots: [],
+    hits,
+    misses,
+    present: anchors.length > 0 && misses.length === 0,
+    anyHit: hits.length > 0,
+  }
+}
+
 /** 观测一条探针：roots 全缺 = 不可判定（absent 无法证明）。 */
 export function observeProbe(probe, vendorRoot) {
+  if (Array.isArray(probe.anchors) && probe.anchors.length > 0) return observeAnchors(probe.anchors, vendorRoot)
   const missingRoots = []
   const hits = []
   const matches = probeMatcher(probe)
@@ -206,7 +254,7 @@ export function observeProbe(probe, vendorRoot) {
     }
     if (hits.length >= 3) break
   }
-  return { resolvable: missingRoots.length === 0, missingRoots, hits, present: hits.length > 0 }
+  return { resolvable: missingRoots.length === 0, missingRoots, hits, misses: [], present: hits.length > 0, anyHit: hits.length > 0 }
 }
 
 /** 判定全部条目；`ok === false` 时 CLI 退出 1。 */
@@ -217,7 +265,10 @@ export function evaluateCapabilities(capabilities, options = {}) {
   for (const entry of capabilities.capabilities ?? []) {
     const requires = entry.requires ?? []
     const missingConsumers = missingConsumerPaths(entry, repoRoot)
-    const subject = entry.probe.symbol ?? (entry.probe.patterns ?? []).join('|')
+    const anchorProbe = Array.isArray(entry.probe.anchors) && entry.probe.anchors.length > 0
+    const subject = anchorProbe
+      ? entry.probe.anchors.join('|')
+      : (entry.probe.symbol ?? (entry.probe.patterns ?? []).join('|'))
     let verdict = VERDICT.aligned
     let detail
     if (missingConsumers.length > 0) {
@@ -237,13 +288,15 @@ export function evaluateCapabilities(capabilities, options = {}) {
       verdict = VERDICT.unresolvable
       detail = '探针根缺失（vendor 未物化或路径漂移）: ' + observation.missingRoots.join(', ')
     } else if (observation.present && entry.probe.expect === 'present') {
-      detail = '命中 ' + observation.hits.length + ' 处: ' + observation.hits.join(', ')
+      detail = (anchorProbe ? '锚点全部解析: ' : '命中 ') + observation.hits.length + ' 处: ' + observation.hits.join(', ')
     } else if (!observation.present && entry.probe.expect === 'present') {
       verdict = requires.length > 0 ? VERDICT.broken : VERDICT.behind
-      detail = 'vendor 无 ' + subject + (requires.length > 0
-        ? '，但 chamber 已消费 ' + requires.length + ' 处: ' + requires.join(', ')
-        : '（chamber 尚未消费，可安全领先）')
-    } else if (observation.present && entry.probe.expect === 'absent') {
+      detail = observation.misses.length > 0
+        ? '锚点未解析: ' + observation.misses.join('; ')
+        : 'vendor 无 ' + subject + (requires.length > 0
+          ? '，但 chamber 已消费 ' + requires.length + ' 处: ' + requires.join(', ')
+          : '（chamber 尚未消费，可安全领先）')
+    } else if ((observation.anyHit ?? observation.present) && entry.probe.expect === 'absent') {
       verdict = VERDICT.landed
       detail = '上游已出现 ' + subject + '（命中: ' + observation.hits.join(', ') + '）'
         + (entry.localWorkaround ? '；退役触发: ' + entry.localWorkaround.retireWhen : '；请重排期范围决策')
@@ -274,6 +327,10 @@ export function runSelfTest() {
     const browseFilter = join(root, 'packages/client/ui-workspace/filter.ts')
     mkdirSync(dirname(browseFilter), { recursive: true })
     writeFileSync(browseFilter, 'export const actions = { setArchivedFilter: () => {} }\n')
+    // 锚点探针（形态①）负控：声明命中 / literal 命中 / 声明缺失 / literal 歧义 / 文件缺失。
+    const anchored = join(root, 'packages/api/anchored/wire.ts')
+    mkdirSync(dirname(anchored), { recursive: true })
+    writeFileSync(anchored, "export const id = '@deepseek-ai/dsh-api-session-controller#session/anchor'\nexport async function anchoredSession() {}\n")
     const cases = [
       { name: 'present+found → aligned', probe: { roots: ['packages/api'], symbol: 'unarchiveSession', expect: 'present' }, requires: [], want: VERDICT.aligned },
       { name: 'present+missing+no consumer → behind', probe: { roots: ['packages/api'], symbol: 'neverThere', expect: 'present' }, requires: [], want: VERDICT.behind },
@@ -288,6 +345,12 @@ export function runSelfTest() {
       { name: 'route-shaped session/delete → landed', probe: { roots: ['packages/api/route-decl'], patterns: ['session/delete(?![A-Za-z])', 'sessions/delete(?![A-Za-z])', '\\bdeleteSession\\b'], expect: 'absent' }, requires: [], want: VERDICT.landed },
       { name: 'setArchivedFilter matches the browse pattern', probe: { roots: ['packages/client/ui-workspace'], patterns: ['[Aa]rchivedFilter'], expect: 'present' }, requires: [], want: VERDICT.aligned },
       { name: 'bulk patterns stay absent on a Map call', probe: { roots: ['packages/api/map-call'], patterns: ['session/deleteAll', 'session/deleteMany', 'sessions/deleteAll', 'sessions/deleteMany', 'deleteAllSessions'], expect: 'absent' }, requires: [], want: VERDICT.aligned },
+      { name: 'anchor declaration found → aligned', probe: { anchors: ['packages/api/anchored/wire.ts#anchoredSession'], expect: 'present' }, requires: [], want: VERDICT.aligned },
+      { name: 'anchor literal found → aligned', probe: { anchors: ["packages/api/anchored/wire.ts#=literal:@deepseek-ai/dsh-api-session-controller#session/anchor"], expect: 'present' }, requires: [], want: VERDICT.aligned },
+      { name: 'anchor missing declaration → behind', probe: { anchors: ['packages/api/anchored/wire.ts#neverDeclared'], expect: 'present' }, requires: [], want: VERDICT.behind },
+      { name: 'anchor ambiguous literal → behind', probe: { anchors: ['packages/api/anchored/wire.ts#=literal:export'], expect: 'present' }, requires: [], want: VERDICT.behind },
+      { name: 'anchor file missing → behind', probe: { anchors: ['packages/api/anchored/gone.ts#anchoredSession'], expect: 'present' }, requires: [], want: VERDICT.behind },
+      { name: 'anchor absent when file missing → aligned', probe: { anchors: ['packages/api/anchored/gone.ts#deleteSession'], expect: 'absent' }, requires: [], want: VERDICT.aligned },
     ]
     let failed = 0
     for (const item of cases) {
@@ -312,6 +375,14 @@ export function runSelfTest() {
     if (!validateCapabilities(shapeFixture({ roots: ['packages/..'], symbol: 'x', expect: 'present' })).some((p) => p.includes('roots'))) {
       failed += 1
       console.error('[self-test] ✗ packages/.. 根必须被判形状错误')
+    }
+    if (!validateCapabilities(shapeFixture({ roots: ['packages/api'], anchors: ['packages/api/x.ts#y'], symbol: 'x', expect: 'present' })).some((p) => p.includes('anchors'))) {
+      failed += 1
+      console.error('[self-test] ✗ anchors 与 symbol/roots 并用必须被判形状错误')
+    }
+    if (!validateCapabilities(shapeFixture({ anchors: ['../escape.ts#y'], expect: 'present' })).some((p) => p.includes('anchors'))) {
+      failed += 1
+      console.error('[self-test] ✗ 越界锚点必须被判形状错误')
     }
     if (!validateCapabilities(shapeFixture({ roots: ['packages/api'], symbol: 'x', expect: 'absent' })).some((p) => p.includes('retireWhen'))) {
       failed += 1

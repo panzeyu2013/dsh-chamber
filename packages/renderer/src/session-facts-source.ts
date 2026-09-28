@@ -100,7 +100,24 @@ export interface SessionFactsRow {
   sessionId: string
   running: boolean
   pendingKind: SessionFactsPendingKind | null
+  /**
+   * I-12 谱系压制表：running 子代理后代数（官方 `session/list` 的 origin/
+   * parentSessionId 谱系在**同一份完整基线**上重算；sidebar 口径同源）。只有配着
+   * {@link SessionFactsRow.lineageVerified} 才是权威证据。
+   */
   subagentCount: number
+  /**
+   * I-12 完整性：true = 本行 `subagentCount` 来自一份可判的完整谱系基线（每条
+   * subagent 行都有可用父边）。缺席 = 无谱系证据（watcher 来源 / 基线不完整 / 世代
+   * 未验证）——消费面按 fail-closed 处理，绝不把它读作「无子代理」。
+   */
+  lineageVerified?: boolean
+  /**
+   * I-12 压制表命中：本行在**保留的**谱系表里有 ≥1 个 durable 子代理子代（durable
+   * 输出 = 仍在官方列表里的 subagent-origin 行，含已结束的）。基线不可判时该表保留
+   * ⇒ 消费面抑制完成（fail-closed），直到下一份可判基线证明子代已清空。
+   */
+  subagentKnown?: boolean
   /** host 域内容水位（epoch ms）；0 = 未知。 */
   updatedAt: number
   /**
@@ -339,6 +356,8 @@ export function parseSessionFactsRow(value: unknown): SessionFactsRow | null {
     running: value.running === true,
     pendingKind: pending,
     subagentCount: nonNegativeInt(value.subagentCount),
+    ...(value.lineageVerified === true ? { lineageVerified: true } : {}),
+    ...(value.subagentKnown === true ? { subagentKnown: true } : {}),
     updatedAt: numberOrZero(value.updatedAt),
     // 缺失/非法一律 0（= 未知），绝不臆造时间戳。
     factAt: numberOrZero(value.factAt),
@@ -453,7 +472,7 @@ function bodyHasDisabledCode(body: unknown): boolean {
  */
 export function sessionFactsRowSignature(row: SessionFactsRow): string {
   return JSON.stringify([
-    row.running, row.pendingKind, row.subagentCount, row.updatedAt,
+    row.running, row.pendingKind, row.subagentCount, row.lineageVerified === true, row.subagentKnown === true, row.updatedAt,
     row.completedAt, row.completedAtSource, row.lastTurnEnd,
     row.goal === undefined ? 'u' : row.goal === null ? 'n' : [
       row.goal.goalId, row.goal.revision, row.goal.phase,

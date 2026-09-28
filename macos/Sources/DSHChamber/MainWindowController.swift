@@ -30,6 +30,32 @@ import UniformTypeIdentifiers
 import UserNotifications
 import WebKit
 
+/// `__host.mainWindowShown` 的发送去重门（纯值，单测直测）。
+///
+/// 该入站事件是 core 的 held-resume / 徽标意图**补发边沿**
+/// （shell-core.ts handleMainWindowShown），而同一个用户可见的「窗口恢复」动作在
+/// AppKit 里至少有两条独立事件腿：窗口重新在屏（Dock/托盘/通知恢复 orderOut 或
+/// 最小化的窗口）与应用激活（app 从后台回到前台）。core 语义是「恢复可见」的一次
+/// 边沿而非事件计数，故两条腿都喂进本门，由门保证一个可见周期内**只发一次**：
+///   - 窗口在屏 + 应用同时激活（Dock 点击的常见形态）→ 仅首发；
+///   - 窗口离屏（orderOut/最小化）复位，下一次恢复重新放行。
+struct MainWindowShownGate {
+    /// 当前可见周期内是否已经放行过一次发送。
+    private var emittedInCurrentVisibleSpell = false
+
+    /// 窗口离屏（orderOut / 最小化）：复位，下一次恢复必须重新补发。
+    mutating func windowDidLeaveScreen() {
+        emittedInCurrentVisibleSpell = false
+    }
+
+    /// 恢复边沿（窗口在屏 / 应用激活）：true = 本次应发送。
+    mutating func shouldEmit() -> Bool {
+        guard !emittedInCurrentVisibleSpell else { return false }
+        emittedInCurrentVisibleSpell = true
+        return true
+    }
+}
+
 final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, NSWindowDelegate {
 
     // MARK: - 常量
@@ -162,6 +188,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 退出清理已开始（A 桥 app_quitting 门；AppDelegate
     /// beginTerminationCleanup 置位）。置位后全部 invoke 回 app_quitting。
     private var quitting = false
+    /// `__host.mainWindowShown` 的发送去重门（双边沿，绝不双发；见
+    /// MainWindowShownGate）。主线程独占：两条腿都是主线程回调。
+    private var mainWindowShownGate = MainWindowShownGate()
     /// 外链打开预算（镜像 shell-core openExternally：10s/8 次 + 30s 冷却）。
     private var externalBudget = ExternalOpenBudget()
 
@@ -442,9 +471,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // sidecar 出站 **notify 帧**（{"notify":event,"payload":…}——
         // node-edges 的 sendNotify 族：rendererPush/setBadge/
         // showItemInFolder/retireNotifications）→ 本控制器 notify 路由消费。
-        // event 帧族（BridgeClient.onEvent）已无生产接线（sidecar-entry 只发
-        // notify；桩 fixture 仅供 BridgeClientStubIntegrationTests），页面下行
-        // 唯一入口 = 本 onNotify 路由（双写纪律「乙」）。
+        // event 帧族已整体退役（BridgeClient 只余 request/response/notify/edge
+        // 四族），页面下行唯一入口 = 本 onNotify 路由（双写纪律「乙」）。
         // 线程契约：管道读取线程回调，消费在 routeNotify 内收敛主线程。
         bridge.onNotify = { [weak self] event, payload in
             self?.routeNotify(event: event, payload: payload)
@@ -594,6 +622,28 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             name: NSWorkspace.didWakeNotification, object: nil)
         center.addObserver(self, selector: #selector(appDidBecomeActive(_:)),
                            name: NSApplication.didBecomeActiveNotification, object: nil)
+        // 窗口恢复在屏腿（design 25 §5 E6/B9 的 onMainWindowShown 对偶）：
+        // 已激活态经 Dock/托盘/通知恢复 orderOut/最小化的窗口**不会**产生
+        // didBecomeActive——只靠应用激活一条腿会漏掉 held-resume 补发。
+        // didBecomeKey 与 didDeminiaturize 都喂同一去重门：AppKit 对
+        // deminiaturize 的伴随通知集合不属契约（版本间可能两条都发），门保证
+        // 一个可见周期内绝不双发；离屏通知复位，下一次恢复重新放行。
+        // AppKit 不向 Swift 导出 orderOn/OffScreen 通知（SDK 头文件无该常量，
+        // swiftc -typecheck 验证过），恢复面用 didBecomeKey + didDeminiaturize，
+        // 离屏面用 didMiniaturize + 应用隐藏；orderOut 型隐藏（关窗
+        // hide-to-tray/托盘）不产生任何可观察通知，由隐藏入口显式调
+        // noteWindowHiddenExplicitly()。
+        for name in [NSWindow.didBecomeKeyNotification,
+                     NSWindow.didDeminiaturizeNotification] {
+            center.addObserver(self, selector: #selector(windowDidRestoreToScreen(_:)),
+                               name: name, object: window)
+        }
+        // didHide 是**应用级**通知（object = NSApp），object 传 window 会永不
+        // 命中；窗口级的收窄只对 didMiniaturize 成立，故两条分开注册。
+        center.addObserver(self, selector: #selector(windowDidLeaveScreen(_:)),
+                           name: NSWindow.didMiniaturizeNotification, object: window)
+        center.addObserver(self, selector: #selector(windowDidLeaveScreen(_:)),
+                           name: NSApplication.didHideNotification, object: nil)
     }
 
     // MARK: - 刷新率对照日志
@@ -700,8 +750,31 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     @objc private func appDidBecomeActive(_ note: Notification) {
         clearUpdateAttention()
-        // 同样落盘——这是 core held-resume 的补发点，真机取证靠它。
-        shellLog("[shell] 应用激活——发送 __host.mainWindowShown")
+        sendMainWindowShownIfEdge()
+    }
+
+    /// 窗口恢复在屏（Dock/托盘/通知恢复 orderOut 或最小化窗口的路径）。
+    @objc private func windowDidRestoreToScreen(_ note: Notification) {
+        sendMainWindowShownIfEdge()
+    }
+
+    /// 窗口离屏（orderOut/最小化）：复位去重门，下一次恢复重新补发。
+    @objc private func windowDidLeaveScreen(_ note: Notification) {
+        mainWindowShownGate.windowDidLeaveScreen()
+    }
+
+    /// 显式 orderOut 隐藏（关窗 hide-to-tray / 托盘切换）：AppKit 不向 Swift 导出
+    /// orderOffScreen 通知，壳自己知道这次隐藏，必须手动复位去重门，否则再次
+    /// orderFront（应用仍激活）时 didBecomeKey 会被门当作重复而抑制。
+    func noteWindowHiddenExplicitly() {
+        mainWindowShownGate.windowDidLeaveScreen()
+    }
+
+    /// 唯一的 `__host.mainWindowShown` 发送点（窗口在屏腿与应用激活腿共用）：
+    /// 去重门放行才发，真机取证仍靠落盘行；失败 loud（core 侧幂等，无需重试）。
+    private func sendMainWindowShownIfEdge() {
+        guard mainWindowShownGate.shouldEmit() else { return }
+        shellLog("[shell] 窗口恢复/应用激活——发送 __host.mainWindowShown")
         Task { @MainActor in
             do {
                 _ = try await bridge.invoke(method: HostInboundMethod.mainWindowShown, payload: nil)

@@ -3,7 +3,7 @@
 // A 桥 web↔Swift（design 25 §4.4.1）：注入 bridge-shim.js shim，WKUserScript、
 // .page world、documentStart。shim 不是「挂出即
 // 定义完整 API」——公开面 dshChamber 只在 info 成功后（真实标量）或 1+10 次
-// 全败后（四个标量 null，见 preload.cts:923-940）暴露一次；Swift 侧
+// 全败后（四个标量 null，见 preload.cts 的 requestAppInfo()/INFO_MAX_ATTEMPTS 链）暴露一次；Swift 侧
 // 在 ready（origin 门开放）前对全部 invoke 回 ipc_not_ready，渲染端按自己的
 // surface 缺失重试链自愈（shim 自身的 info 链是 1+10 次、50ms 间隔，不是
 // 「10×50ms」）。
@@ -11,7 +11,7 @@
 // 调用契约（共享契约，MainWindowController 以
 // `BridgeShimInjector.install(config:source:)` 调用，勿改名）：
 //   - source：bridge-shim.js 源码（全表面：4 标量 + 9 命名空间 +
-//     59 invoke-backed 方法；文件内零 poc-unimplemented 兜底，错误如实上抛）；
+//     50 个 invoke 方法（+9 push；manifest 通道 52 含两个内部通道）；文件内零 poc-unimplemented 兜底，错误如实上抛）；
 //   - install 必须在用该 configuration 构造 WKWebView 之前调用（user
 //     script 随 configuration 生效于首次导航）。
 

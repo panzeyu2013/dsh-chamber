@@ -126,8 +126,11 @@ const CLIENT_TYPECHECKS = [
  * boots, DSH_CHAMBER_SIDECAR_COMPILED=1 so a missing assembly is a hard
  * failure), the native acceptance (the sidecar the packaged Swift shell spawns
  * launches and serves; `--require-assembly` turns the loud SKIP into a FAIL,
- * so deleting the build step cannot turn this gate green), and the compiled
- * Electron artifacts smoke (control-plane boot + frozen preload surface). The
+ * so deleting the build step cannot turn this gate green, and it now also
+ * requires N-6 to execute — hence `build:renderer` + `--web-dist` below,
+ * otherwise the shell index/asset leg would silently stay INFO), and the
+ * compiled Electron artifacts smoke (control-plane boot + frozen preload
+ * surface). The
  * sidecar assembly is built here exactly as ci.yml builds it
  * (--skip-node/--skip-vendor/--skip-host-packages) so the mode is
  * self-contained; the Electron gate needs build:preload because a
@@ -138,7 +141,9 @@ const MACOS_CHECKS = process.platform === 'darwin' ? [
   'test:macos',
   'pnpm run build:sidecar --skip-node --skip-vendor --skip-host-packages',
   'test:sidecar:compiled',
-  'node scripts/gui-acceptance/run.mjs --flavor native --require-assembly',
+  // N-6（壳 index + 声明资源）必须在机器门档下真执行：先产 renderer，再显式指给验收器。
+  'pnpm run build:renderer',
+  'node scripts/gui-acceptance/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web',
   'pnpm --filter @dsh-chamber/desktop run build:preload',
   'node scripts/gates/verify-electron-artifacts.mjs',
 ] : []

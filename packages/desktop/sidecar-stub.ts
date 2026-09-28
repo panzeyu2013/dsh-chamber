@@ -24,10 +24,12 @@
  *   - frames: request  {"id":N,"method":"…","payload":…}
  *             response {"id":N,"ok":true,"result":…}
  *                      {"id":N,"ok":false,"error":"…"}
- *             event    {"event":"…","payload":…}
+ *             notify   {"notify":"…","payload":…}
  *     Responses echo the request id (the Swift client owns id monotonicity;
- *     event frames carry no id, and this sidecar never originates a request
+ *     notify frames carry no id, and this sidecar never originates a request
  *     in the POC). One frame = one write = one line; no interleaving.
+ *     The retired event family ({"event":…}) is never emitted: BridgeClient
+ *     dropped its onEvent route, so a push here would only be discarded.
  *   - stdin EOF and SIGTERM/SIGINT both exit 0 — the signal path is genuinely
  *     reachable in pure Node (design 25 §3.3(5); it is dead code under
  *     Electron) and must be explicit here.
@@ -58,7 +60,7 @@ interface RequestFrame {
 type OutboundFrame =
   | { id: number; ok: true; result: Json }
   | { id: number; ok: false; error: string }
-  | { event: string; payload: Json }
+  | { notify: string; payload: Json }
 
 function send(frame: OutboundFrame): void {
   // One stringify + one write keeps every frame atomic on the pipe. A dead stdout must
@@ -71,8 +73,8 @@ function send(frame: OutboundFrame): void {
   }
 }
 
-function pushEvent(event: string, payload: Json): void {
-  send({ event: event, payload: payload })
+function pushNotify(event: string, payload: Json): void {
+  send({ notify: event, payload: payload })
 }
 
 /** Deliberate request failure → error frame with exactly this message; any other throw
@@ -111,7 +113,7 @@ function parseRequestFrame(rawLine: string): RequestFrame | null {
   }
   const frame = parsed as Record<string, unknown>
   if (typeof frame.id !== 'number' || !Number.isSafeInteger(frame.id) || typeof frame.method !== 'string') {
-    // Also catches unsolicited response/event frames from the Swift side, which the POC never sends.
+    // Also catches unsolicited response/notify frames from the Swift side, which the POC never sends.
     console.error('[sidecar-stub] malformed frame (no numeric id + method string), ignored: ' + preview(rawLine))
     return null
   }
@@ -216,7 +218,7 @@ async function connectHandler(payload: Json | null): Promise<Json> {
   await sleep(300)
   rememberPhase(instanceId, 'connected')
   // POC semantics are stubbed and loud-marked: the status event is fabricated (poc:true).
-  pushEvent('desktop_ssh_status_changed', { id: instanceId, status: 'connected', poc: true })
+  pushNotify('desktop_ssh_status_changed', { id: instanceId, status: 'connected', poc: true })
   return { ok: true }
 }
 
@@ -227,7 +229,7 @@ async function disconnectHandler(payload: Json | null): Promise<Json> {
     throw new HandlerError('invalid-payload')
   }
   rememberPhase(instanceId, 'idle')
-  pushEvent('desktop_ssh_status_changed', { id: instanceId, status: 'disconnected', poc: true })
+  pushNotify('desktop_ssh_status_changed', { id: instanceId, status: 'disconnected', poc: true })
   return { ok: true }
 }
 
@@ -256,7 +258,7 @@ function notificationClickedHandler(): Json {
   // Notification click loopback: Swift stub → edge:notification-clicked → this log line → push
   // dsh-chamber:notification-open back to the web. poc:true marks the fabricated delivery.
   console.error('[sidecar-stub] edge:notification-clicked — Swift notification-click stub; pushing notification-open back to the web')
-  pushEvent('dsh-chamber:notification-open', { sourceId: 'local', sessionId: 'poc', poc: true })
+  pushNotify('dsh-chamber:notification-open', { sourceId: 'local', sessionId: 'poc', poc: true })
   return null
 }
 
@@ -278,7 +280,7 @@ const handlers: { readonly [method: string]: MethodHandler | undefined } = {
 async function dispatch(method: string, payload: Json | null, id: number): Promise<void> {
   const handler = handlers[method]
   if (handler === undefined) {
-    // Loud rejection for everything outside the POC subset — the same {error:poc-unimplemented} convention the A-bridge shim uses.
+    // Loud rejection for everything outside this fixture subset. The A-bridge shim (macos bridge-shim.js) no longer uses the poc-unimplemented convention — it invokes real manifest channels.
     send({ id: id, ok: false, error: 'poc-unimplemented' })
     return
   }

@@ -20,7 +20,7 @@ import {
   type AuthorityActionLogEntry,
   type SessionAuthoritySnapshot,
 } from '@dsh-chamber/dsh-chamber-client-core/session-fact-reconcile'
-import type { AuthorityOfficialRow, AuthorityRead } from '@dsh-chamber/dsh-stream-state'
+import type { AuthorityOfficialRow, AuthorityRead, Scheduler } from '@dsh-chamber/dsh-stream-state'
 
 class Harness {
   now = 0
@@ -42,6 +42,8 @@ class Harness {
     correctResult?: boolean
     readAuthority?: () => Promise<AuthorityRead | undefined>
     correct?: (sessionIds: readonly string[]) => Promise<boolean>
+    readDeadlineMs?: number
+    scheduler?: Scheduler
   } = {}) {
     this.reads = options.reads ?? []
     this.correctResult = options.correctResult ?? true
@@ -54,6 +56,8 @@ class Harness {
         this.readCount += 1
         return options.readAuthority === undefined ? next : options.readAuthority()
       },
+      ...(options.readDeadlineMs === undefined ? {} : { readDeadlineMs: options.readDeadlineMs }),
+      ...(options.scheduler === undefined ? {} : { scheduler: options.scheduler }),
       correct: async (sessionIds) => {
         this.correctCalls.push([...sessionIds])
         return options.correct === undefined ? this.correctResult : options.correct(sessionIds)
@@ -215,6 +219,26 @@ test('the probe ladder throttles a second read inside the coalesce window', asyn
   assert.equal(h.readCount, 1, 'inside probeCoalesceMs')
   await h.tick(260_000, { s1: { running: true } })
   assert.equal(h.readCount, 2)
+})
+
+test('a hanging authority read is fenced by the read budget (I-11), not the ladder', async () => {
+  let armed = 0
+  const h = new Harness({
+    readAuthority: () => new Promise<AuthorityRead | undefined>(() => {}),
+    readDeadlineMs: 5_000,
+    scheduler: {
+      setTimeout: (run) => { armed += 1; run(); return armed },
+      clearTimeout: () => {},
+    },
+  })
+  await h.tick(0, { s1: { running: true } })
+  await h.tick(60_000, { s1: { running: true } })
+  assert.equal(armed, 1, 'exactly one deadline is armed for the hanging read')
+  assert.deepEqual(h.correctCalls, [], 'a timed-out read is no verdict: never write back')
+  assert.equal(h.snapshot()?.ok, false)
+  assert.equal(h.snapshot()?.stuckSince, 60_000)
+  assert.ok(h.warned.some(line => line.includes('read deadline exceeded')), h.warned.join(' | '))
+  assert.match(h.records.find(entry => entry.kind === 'read-failed')?.detail ?? '', /deadline/)
 })
 
 test('a later healthy verdict clears stuck evidence and advances progress', async () => {

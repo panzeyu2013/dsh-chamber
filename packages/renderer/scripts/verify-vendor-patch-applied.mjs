@@ -78,6 +78,12 @@ export const VENDOR_PATCH_MARKERS = [
     present: /new\s+[A-Za-z_$][\w$]*\s*\(\s*[A-Za-z_$][\w$]*\.get\("chamberBasePath"\)\s*\?\?\s*""\s*\)/,
   },
   {
+    vendorFile: 'dsh-client-ui-workspace/src/client/navigation.ts',
+    what: 'ui-workspace selection persist key carries the per-entry instance scope',
+    // Patched: the store name concatenates chamberSelectionScope(this.ctx).
+    present: /dsh\.sessions\.current["']?\s*\+\s*[A-Za-z_$][\w$]*\(/,
+  },
+  {
     vendorFile: 'dsh-client-ui-chat/src/client/chat/AssistantNodeView.tsx',
     what: 'ui-chat node view forwards the file-API base prop',
     // Patched: `chamberFileApiBase` closes the destructured parameter list and

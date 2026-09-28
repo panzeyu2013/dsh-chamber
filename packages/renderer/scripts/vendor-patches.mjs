@@ -43,6 +43,26 @@
  * compensate against the module's own state. Such an entry MUST state the
  * measured symptom and the accepted behaviour trade-off in `reason`, is held to
  * the same C9 anchor gate, and is deleted once the pin carries the upstream fix.
+ *
+ * FOURTH ADMITTED CLASS (N-ctx multi-instance correctness, admitted by maintainer
+ * ruling): a page-global upstream fact (a persist key, a storage name, a
+ * document-level registry) that the single page multiplexes across instances and
+ * that no chamber package can re-scope — the fact lives inside a module-private
+ * store or an upstream service. Such an entry MUST state the concrete
+ * cross-instance symptom and the accepted trade-off in `reason`, derive the
+ * scope from the per-entry `chamberBasePath` service provided on the plugin
+ * context (never a page-global knob, a URL guess or `import.meta.url`), keep
+ * upstream behaviour as the fallback so an official-layout deployment is
+ * unaffected, and retire once upstream scopes the fact itself.
+ *
+ * RETIREMENT (upstream-drift batch-2 I-7): every entry declares EITHER
+ * `retireCheck` (the pinned-upstream shape that carries the fix) or
+ * `noRetireForm` (why no stable text shape can be named). C9 keeps a missing
+ * anchor release-blocking but evaluates `retireCheck` first: a hit reports
+ * `retire-candidate` (still release-blocking) with the remediation — move the
+ * entry into `RETIRED_PATCHES` with an exact `ensure` snippet, and delete the
+ * patch + its artifact marker in the same change; a miss stays the plain drift
+ * failure (re-derive the patch against the new pin).
  */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -63,6 +83,26 @@ const VENDOR_ROOT = fileURLToPath(new URL('../../../vendor/harness-packages/@dee
  * @property {string} vendorFile Path under `vendor/harness-packages/@deepseek-ai/`.
  * @property {string} reason     Why chamber cannot fix this in its own package.
  * @property {readonly VendorPatchEdit[]} edits
+ * @property {VendorRetireCheck} [retireCheck] Upstream-fix shape; evaluated only
+ *   when an anchor no longer matches (see the retirement contract in the header).
+ * @property {string} [noRetireForm] Why no stable upstream-fix text shape can be
+ *   asserted. Mutually exclusive with `retireCheck`.
+ *
+ * @typedef {object} VendorRetireProbe
+ * @property {string} [vendorFile] Probed file under the vendor root; defaults to
+ *   the patch's own file.
+ * @property {readonly RegExp[]} [match] Every pattern must occur (NON-global).
+ * @property {readonly string[]} [absent] Every exact snippet must be gone.
+ *
+ * @typedef {object} VendorRetireCheck
+ * @property {readonly VendorRetireProbe[]} probes Every probe must agree on the
+ *   unpatched pinned source for the fix to be recognized.
+ * @property {string} note The upstream fix this shape recognizes + how to retire.
+ *
+ * @typedef {object} RetiredVendorPatch
+ * @property {string} vendorFile Path under `vendor/harness-packages/@deepseek-ai/`.
+ * @property {string} reason Which upstream fix retired the patch.
+ * @property {string} ensure Exact upstream-fix text (must occur exactly once).
  */
 
 /**
@@ -76,6 +116,7 @@ export const VENDOR_PATCHES = Object.freeze([
       'dsh-client-ui-chat/src/client/chat/AssistantMarkdown.tsx',
       'packages/client/ui-chat/src/client/chat/AssistantMarkdown.tsx',
     ]),
+    noRetireForm: 'no stable upstream text shape: the retire form is a new entry-scoped base API for this route (an accepted base parameter or an entry-private ctx service), which cannot be asserted as text today. C9 drift failure + maintainer ruling, not an automated retire check.',
     vendorFile: 'dsh-client-ui-chat/src/client/chat/AssistantMarkdown.tsx',
     reason: 'document-relative file-API URL (upstream resolves it against `document.baseURI`) resolves to the control-plane root in the N-ctx shell: one page cannot carry a per-entry base URI',
     edits: Object.freeze([
@@ -115,6 +156,7 @@ export const VENDOR_PATCHES = Object.freeze([
       'dsh-client-file-upload/src/client/runtime.ts',
       'packages/client/file-upload/src/client/runtime.ts',
     ]),
+    noRetireForm: 'no stable upstream text shape: the retire form is a new entry-scoped base API for this route (an accepted base parameter or an entry-private ctx service), which cannot be asserted as text today. C9 drift failure + maintainer ruling, not an automated retire check.',
     vendorFile: 'dsh-client-file-upload/src/client/runtime.ts',
     reason: 'document-relative upload URL (upstream resolves it against `document.baseURI`) resolves to the control-plane root in the N-ctx shell (composer attachments 404)',
     edits: Object.freeze([
@@ -152,6 +194,7 @@ export const VENDOR_PATCHES = Object.freeze([
       'dsh-session-log-export/src/client/controller.ts',
       'packages/session-query/session-log-export/src/client/controller.ts',
     ]),
+    noRetireForm: 'no stable upstream text shape: the retire form is a new entry-scoped base API for this route (an accepted base parameter or an entry-private ctx service), which cannot be asserted as text today. C9 drift failure + maintainer ruling, not an automated retire check.',
     vendorFile: 'dsh-session-log-export/src/client/controller.ts',
     reason: 'document-relative export URL resolves to the control-plane root in the N-ctx shell (the /export dialog and header action 404)',
     edits: Object.freeze([
@@ -177,6 +220,7 @@ export const VENDOR_PATCHES = Object.freeze([
       'dsh-session-log-export/src/client/index.ts',
       'packages/session-query/session-log-export/src/client/index.ts',
     ]),
+    noRetireForm: 'retires with the controller entry above (this apply threads the base into it); no independent upstream text shape to assert.',
     vendorFile: 'dsh-session-log-export/src/client/index.ts',
     reason: 'hands the per-entry API base prefix to the export controller (apply owns the only ctx)',
     edits: Object.freeze([
@@ -194,6 +238,7 @@ export const VENDOR_PATCHES = Object.freeze([
       'dsh-client-ui-deliverables/src/client/present-open.ts',
       'packages/client/ui-deliverables/src/client/present-open.ts',
     ]),
+    noRetireForm: 'no stable upstream text shape: the retire form is a new entry-scoped base API for this route (an accepted base parameter or an entry-private ctx service), which cannot be asserted as text today. C9 drift failure + maintainer ruling, not an automated retire check.',
     vendorFile: 'dsh-client-ui-deliverables/src/client/present-open.ts',
     reason: 'document-relative present URLs resolve to the control-plane root in the N-ctx shell (delivery-card open/reveal 404)',
     edits: Object.freeze([
@@ -226,6 +271,7 @@ export const VENDOR_PATCHES = Object.freeze([
       'dsh-client-ui-deliverables/src/client/index.ts',
       'packages/client/ui-deliverables/src/client/index.ts',
     ]),
+    noRetireForm: 'retires with the present-open entry above; no independent upstream text shape to assert.',
     vendorFile: 'dsh-client-ui-deliverables/src/client/index.ts',
     reason: 'hands the per-entry API base path to the present controller (the plugin apply owns the only ctx)',
     edits: Object.freeze([
@@ -240,6 +286,7 @@ export const VENDOR_PATCHES = Object.freeze([
       'dsh-client-ui-chat/src/client/chat/AssistantNodeView.tsx',
       'packages/client/ui-chat/src/client/chat/AssistantNodeView.tsx',
     ]),
+    noRetireForm: 'retires with the AssistantMarkdown entry above (the prop threading has no purpose once upstream carries the base); no independent upstream text shape to assert.',
     vendorFile: 'dsh-client-ui-chat/src/client/chat/AssistantNodeView.tsx',
     reason: 'forwards the chamberFileApiBase root standard prop into AssistantMarkdown (no chamber package can thread it)',
     edits: Object.freeze([
@@ -259,6 +306,15 @@ export const VENDOR_PATCHES = Object.freeze([
       'dsh-client-ui-chat/src/client/chat/ReasoningRow.module.css',
       'packages/client/ui-chat/src/client/chat/ReasoningRow.module.css',
     ]),
+    retireCheck: Object.freeze({
+      probes: Object.freeze([
+        Object.freeze({
+          match: Object.freeze([/@keyframes/]),
+          absent: Object.freeze(['0% { left: -300px; }']),
+        }),
+      ]),
+      note: 'Upstream retargets the running-row sweep onto a compositor property (the left keyframe is gone). Delete this entry + its artifact marker and move a transform-only ensure assertion into RETIRED_PATCHES.',
+    }),
     vendorFile: 'dsh-client-ui-chat/src/client/chat/ReasoningRow.module.css',
     reason: 'measured 120 Hz frame cost: the running-row sweep animates `left` (-300px→100%), forcing layout+paint every frame. A/B of the REAL pinned CSS bytes with this registry applied (Electron 43.4.0 / Chromium 150 / M5 Pro 120 Hz, app.getAppMetrics cumulative deltas): 3 concurrent rows 12.3% renderer / 7.6% GPU before → 1.3% / 1.2% after; 1 row 15.4% / 9.2% → 1.0% / 1.0%. Hashed CSS-module class names make a chamber-side override unselectable from styles.css, and the sweep is upstream UX: retarget it, never delete it. The sibling command-row sweep was retired upstream in the 0.1.7 line.',
     edits: Object.freeze([
@@ -283,6 +339,15 @@ export const VENDOR_PATCHES = Object.freeze([
       'dsh-client-ui-conversation/src/client/conversation/assembly.ts',
       'packages/client/ui-conversation/src/client/conversation/assembly.ts',
     ]),
+    retireCheck: Object.freeze({
+      probes: Object.freeze([
+        Object.freeze({
+          match: Object.freeze([/(?:performance|Date)\.now\(\)/, /(?:throttle|coalesc|slice|interval|budget)/i]),
+          absent: Object.freeze(['// Cross three paint opportunities before publishing high-frequency stream updates.']),
+        }),
+      ]),
+      note: 'Upstream replaces the three-paint chain with a rate-limited/sliced publication path. Delete this entry + its artifact marker and move the alternative scheduler shape into RETIRED_PATCHES.',
+    }),
     vendorFile: 'dsh-client-ui-conversation/src/client/conversation/assembly.ts',
     reason: 'measured 120 Hz re-render cost: the upstream three-paint publication chain is pinned at 40 flushes/s under a saturated stream (3 frames x 8.3ms) and each flush commits the whole transcript. A/B executing the REAL upstream and patched method bodies verbatim (1500-row React tree, Electron 43.4.0 / Chromium 150 / M5 Pro 120 Hz): 100 events/s 40 flush/s / 22.5% renderer before → 11 flush/s / 9.5% after (-58%); 25 events/s 25 / 16.6% → 14 / 9.6% (-42%); 8 events/s 8 / 5.8% → 8 / 7.4% (same cadence, difference within run noise). The scheduler is module-private; no chamber package can gate it, and hidden-window stalling alone does not cover the visible-but-streaming case.',
     edits: Object.freeze([
@@ -356,6 +421,16 @@ export const VENDOR_PATCHES = Object.freeze([
       'dsh-client-ui-chat/src/client/chat/use-chat-reading.ts',
       'packages/client/ui-chat/src/client/chat/use-chat-reading.ts',
     ]),
+    retireCheck: Object.freeze({
+      probes: Object.freeze([
+        Object.freeze({
+          vendorFile: 'dsh-client-ui-chat/src/client/chat/use-chat-viewport.ts',
+          match: Object.freeze([/movedByReader/]),
+          absent: Object.freeze(['movedByReader: Math.abs(metrics.top - Math.min(this.observation.top, metrics.floor)) > 0.5']),
+        }),
+      ]),
+      note: 'Upstream attributes movement by intent (the viewport no longer derives movedByReader from the position delta). Delete this entry + its artifact marker and move the intent-attribution shape into RETIRED_PATCHES.',
+    }),
     vendorFile: 'dsh-client-ui-chat/src/client/chat/use-chat-reading.ts',
     reason: 'sampled-settle logic defect (observable scroll offset): the viewport attributes any position-only movement to the reader, so a delivery no reader input produced (correlated trigger, scroll-side step not yet identified: the preparing -> started row replacement of a direct bash call, which PTC subcalls never render) arms the 500 ms sample; content that grows inside that window is not followed, and when the sample settled inside the follow tolerance (FOLLOW_THRESHOLD = 24 px) the reading layer kept the residual offset instead of re-pinning, so the newest row stayed half-hidden above the composer with data-chat-following-tail still set and no back-to-bottom affordance until the next layout change. Measured in the live frontend against the chamber-built ui-chat: a 12 px non-reader offset persisted indefinitely (12 px = half of a 24 px row) and any later layout change re-pinned it. Attribution and settle both live in this module-private state machine, so a chamber package could only nudge the scrollport from outside against it; this edit makes a settled sample agree with what the onScroll first branch and onResize already do inside the same tolerance. Accepted trade-off: a deliberate reader nudge within 24 px is re-pinned at the settle instead of surviving until the next layout change. Delete this entry once upstream carries the fix (upstream-preferred form: intent-based attribution in use-chat-viewport.ts).',
     edits: Object.freeze([
@@ -369,9 +444,57 @@ export const VENDOR_PATCHES = Object.freeze([
   }),
   Object.freeze({
     idSuffixes: Object.freeze([
+      'dsh-client-ui-workspace/src/client/navigation.ts',
+      'packages/client/ui-workspace/src/client/navigation.ts',
+    ]),
+    retireCheck: Object.freeze({
+      probes: Object.freeze([
+        Object.freeze({
+          absent: Object.freeze(["persist: { name: 'dsh.sessions.current' }"]),
+          match: Object.freeze([/persist[\s\S]{0,200}(?:scope|namespace|instance|basePath|keyPrefix)/i]),
+        }),
+      ]),
+      note: 'Upstream scopes the Workspace selection persist key itself (a scope/namespace option or an instance-derived name). Delete this entry + its artifact marker, move the scoped shape into RETIRED_PATCHES, and retire the sidebar owner-source compensation only if the store no longer needs it.',
+    }),
+    vendorFile: 'dsh-client-ui-workspace/src/client/navigation.ts',
+    reason: 'N-ctx multi-instance correctness (fourth admitted class): the official Workspace selection store persists under the page-global localStorage key `dsh.sessions.current`, while the chamber shell multiplexes every instance into ONE page document — two instances share one selection slot, so a source switch can restore (or overwrite) the other instance\'s current session; the sidebar only compensates by echoing the owner source, the store itself keeps the foreign value. The store is constructed inside the vendor service with no scope input and the key is module-private, so no chamber package can re-key it; the shell provides the per-entry `/api/i/<id>` base path on the plugin context (`chamberBasePath`), which this edit reads. Accepted trade-off: an official-layout deployment (no `chamberBasePath` service) keeps the upstream unscoped key. Delete this entry once upstream scopes the key itself.',
+    edits: Object.freeze([
+      Object.freeze({
+        expect: '  private readonly selection = createSnapshotStore<MainSelection>(' + '\n'
+          + "    {}, { persist: { name: 'dsh.sessions.current' } }," + '\n'
+          + '  )',
+        replace: '  private readonly selection = createSnapshotStore<MainSelection>(' + '\n'
+          + "    {}, { persist: { name: 'dsh.sessions.current' + chamberSelectionScope(this.ctx) } }," + '\n'
+          + '  )',
+      }),
+      Object.freeze({
+        expect: '/** Structured directory failure exposed to directory UI consumers. */',
+        replace: '/* chamber multi-instance correction: one page multiplexes N instances, so a' + '\n'
+          + ' * page-global persist key lets a selection from one instance bleed into another.' + '\n'
+          + ' * Scope the key to the /api/i/<id> base path of this entry (provided per entry' + '\n'
+          + ' * by the shell); the fallback keeps an official-layout deployment unscoped. */' + '\n'
+          + 'function chamberSelectionScope(ctx) {' + '\n'
+          + "  const scope = ctx.get('chamberBasePath')" + '\n'
+          + "  return typeof scope === 'string' && scope !== '' ? '.' + scope : ''" + '\n'
+          + '}' + '\n' + '\n'
+          + '/** Structured directory failure exposed to directory UI consumers. */',
+      }),
+    ]),
+  }),
+  Object.freeze({
+    idSuffixes: Object.freeze([
       'dsh-util-values/src/index.ts',
       'packages/util/values/src/index.ts',
     ]),
+    retireCheck: Object.freeze({
+      probes: Object.freeze([
+        Object.freeze({
+          match: Object.freeze([/\bhasIntrinsicConstructor\b/, /\[native code\]/]),
+          absent: Object.freeze(['Function.prototype.toString.call(constructor) === `function ${name}() { [native code] }`']),
+        }),
+      ]),
+      note: 'Upstream compares native constructors engine-independently (the single-line template equality is gone). Delete this entry + its artifact marker, move the fix shape into RETIRED_PATCHES, and retire the gateway html-inject normalizer with it.',
+    }),
     vendorFile: 'dsh-util-values/src/index.ts',
     reason: 'engine-dependent intrinsic check (measured in the shipped Swift/WKWebView shell): JavaScriptCore prints the native form as a MULTI-LINE string (`function Object() {\n    [native code]\n}`), so the strict one-line template compare is false for EVERY realm intrinsic. snapshotJsonValue then returns undefined for every plain object and array, and opening a streaming session throws a plain TypeError in the session controller raw-chunk validation; the pinned doOpen writes openState = error only for a remote failure and rethrows everything else, so the page parks on loading forever (raw chunk records appear only for block-start/block-end/usage/finish, which is why it is intermittent). The predicate is module-private, so no chamber package can reach it; whitespace-normalizing the same call was validated against the shipped bytes under JavaScriptCore (the unpatched control still fails) and leaves V8 unchanged. Accepted trade-off: a forged function whose printed source differs from the native form only by whitespace would now pass; the name and prototype identity checks still hold. Delete this entry once upstream compares engine-independently.',
     edits: Object.freeze([
@@ -417,34 +540,167 @@ export function applyVendorPatches(id, code) {
   return applied.length === 0 ? undefined : { code: next, applied }
 }
 
+/** Read a probed vendor file once per check run (string, or { error }). */
+function readProbed(vendorRoot, file, cache) {
+  if (!cache.has(file)) {
+    try {
+      cache.set(file, readFileSync(`${vendorRoot}${file}`, 'utf8'))
+    } catch (error) {
+      cache.set(file, { error })
+    }
+  }
+  return cache.get(file)
+}
+
+/**
+ * Evaluate one entry's retireCheck against the pinned (unpatched) tree.
+ * @returns {{ ok: boolean, detail: string }}
+ */
+function retireCheckVerdict(patch, vendorRoot, cache) {
+  for (const [index, probe] of patch.retireCheck.probes.entries()) {
+    const file = probe.vendorFile ?? patch.vendorFile
+    const source = readProbed(vendorRoot, file, cache)
+    if (typeof source !== 'string') {
+      return { ok: false, detail: `probe#${index} unreadable: ${file} (${source.error.message})` }
+    }
+    for (const pattern of probe.match ?? []) {
+      pattern.lastIndex = 0
+      if (!pattern.test(source)) {
+        return { ok: false, detail: `probe#${index}: fix pattern absent in ${file}: ${pattern}` }
+      }
+    }
+    for (const snippet of probe.absent ?? []) {
+      if (source.includes(snippet)) {
+        return { ok: false, detail: `probe#${index}: defect text still present in ${file}` }
+      }
+    }
+  }
+  return { ok: true, detail: 'all retire probes agree' }
+}
+
 /**
  * Freshness gate: every anchor must still match exactly once in the UNPATCHED
- * pinned vendor source. Used by the pin-verification script (C9) and the unit
- * test, so an upstream drift fails before a build does.
+ * pinned vendor source. When an anchor no longer matches, the entry's
+ * `retireCheck` decides between an upstream fix (`retire-candidate`, still
+ * release-blocking) and a plain drift failure. Used by C9 and the unit test, so
+ * an upstream drift fails before a build does.
  * @param {string} [vendorRoot] - override for tests.
- * @returns {Array<{ vendorFile: string, ok: boolean, detail: string }>}
+ * @param {readonly VendorPatch[]} [patches] - override for tests.
+ * @returns {Array<{ vendorFile: string, ok: boolean, verdict: 'ok' | 'retire-candidate' | 'drift', detail: string }>}
  */
-export function checkVendorPatchSources(vendorRoot = VENDOR_ROOT) {
+export function checkVendorPatchSources(vendorRoot = VENDOR_ROOT, patches = VENDOR_PATCHES) {
   const results = []
-  for (const patch of VENDOR_PATCHES) {
+  const cache = new Map()
+  for (const patch of patches) {
     let source
     try {
       source = readFileSync(`${vendorRoot}${patch.vendorFile}`, 'utf8')
     } catch (error) {
-      results.push({ vendorFile: patch.vendorFile, ok: false, detail: `unreadable: ${error.message}` })
+      results.push({ vendorFile: patch.vendorFile, ok: false, verdict: 'drift', detail: `unreadable: ${error.message}` })
       continue
     }
-    let ok = true
+    let anchorsOk = true
     let detail = `${patch.edits.length} anchor(s) matched once`
     for (const [index, edit] of patch.edits.entries()) {
       const hits = source.split(edit.expect).length - 1
       if (hits !== 1) {
-        ok = false
-        detail = `edit#${index}: anchor matched ${hits} times (expected 1) — ${patch.reason}`
+        anchorsOk = false
+        detail = `edit#${index}: anchor matched ${hits} times (expected 1)`
         break
       }
     }
-    results.push({ vendorFile: patch.vendorFile, ok, detail })
+    if (anchorsOk) {
+      results.push({ vendorFile: patch.vendorFile, ok: true, verdict: 'ok', detail })
+      continue
+    }
+    if (patch.retireCheck === undefined) {
+      results.push({ vendorFile: patch.vendorFile, ok: false, verdict: 'drift', detail: `${detail} — ${patch.reason}` })
+      continue
+    }
+    const retire = retireCheckVerdict(patch, vendorRoot, cache)
+    results.push(retire.ok
+      ? {
+          vendorFile: patch.vendorFile,
+          ok: false,
+          verdict: 'retire-candidate',
+          detail: `${detail}; retireCheck matched — ${patch.retireCheck.note}`,
+        }
+      : {
+          vendorFile: patch.vendorFile,
+          ok: false,
+          verdict: 'drift',
+          detail: `${detail}; retireCheck not matched (${retire.detail}) — re-derive the patch against the new pin`,
+        })
+  }
+  return results
+}
+
+/**
+ * Registry hygiene for the retirement contract: exactly one of `retireCheck` /
+ * `noRetireForm` per entry, and a usable shape whenever `retireCheck` is present.
+ * @param {readonly VendorPatch[]} [patches] - override for tests.
+ * @returns {string[]} problems (empty = valid).
+ */
+export function vendorPatchRegistryProblems(patches = VENDOR_PATCHES) {
+  const problems = []
+  for (const patch of patches) {
+    const hasRetire = patch.retireCheck !== undefined
+    const hasNoForm = typeof patch.noRetireForm === 'string' && patch.noRetireForm !== ''
+    if (hasRetire === hasNoForm) {
+      problems.push(`${patch.vendorFile}: exactly one of retireCheck / noRetireForm is required`)
+    }
+    if (!hasRetire) continue
+    const check = patch.retireCheck
+    if (!Array.isArray(check.probes) || check.probes.length === 0) {
+      problems.push(`${patch.vendorFile}: retireCheck.probes must be a non-empty array`)
+    }
+    if (typeof check.note !== 'string' || check.note === '') {
+      problems.push(`${patch.vendorFile}: retireCheck.note is required`)
+    }
+    for (const probe of check.probes ?? []) {
+      if ((probe.match ?? []).length + (probe.absent ?? []).length === 0) {
+        problems.push(`${patch.vendorFile}: a retire probe needs match and/or absent conditions`)
+      }
+      for (const pattern of probe.match ?? []) {
+        if (pattern.global) problems.push(`${patch.vendorFile}: retireCheck patterns must not use /g`)
+      }
+    }
+  }
+  return problems
+}
+
+/**
+ * Patches upstream has fixed and chamber has retired (upstream-drift batch-2
+ * I-7). Each entry is an `ensure` assertion: the fix must still be present
+ * exactly once, or C9 goes red (regression fence). A `retire-candidate` verdict
+ * is accepted by moving the entry here; the VENDOR_PATCHES entry and its artifact
+ * marker are deleted in the same change.
+ * @type {readonly RetiredVendorPatch[]}
+ */
+export const RETIRED_PATCHES = Object.freeze([])
+
+/**
+ * Regression fence for retired patches.
+ * @param {string} [vendorRoot] - override for tests.
+ * @param {readonly RetiredVendorPatch[]} [entries] - override for tests.
+ * @returns {Array<{ vendorFile: string, ok: boolean, detail: string }>}
+ */
+export function checkRetiredPatches(vendorRoot = VENDOR_ROOT, entries = RETIRED_PATCHES) {
+  const results = []
+  for (const entry of entries) {
+    let source
+    try {
+      source = readFileSync(`${vendorRoot}${entry.vendorFile}`, 'utf8')
+    } catch (error) {
+      results.push({ vendorFile: entry.vendorFile, ok: false, detail: `unreadable: ${error.message}` })
+      continue
+    }
+    const hits = source.split(entry.ensure).length - 1
+    results.push({
+      vendorFile: entry.vendorFile,
+      ok: hits === 1,
+      detail: hits === 1 ? 'ensure matched once' : `ensure matched ${hits} times (expected 1) — upstream fix regressed or drifted`,
+    })
   }
   return results
 }

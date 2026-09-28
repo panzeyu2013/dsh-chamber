@@ -74,7 +74,8 @@ profile——"控制面要一个什么样的宿主"由 dsh 官方命令直接表
 ### 2.2 端口占用重试（port+1）：固定端口 + 确定性退让
 
 web profile 的 `--port` 是**固定端口**（非 0 随机）。控制面选定起始端口
-（本地默认如 17510；端口不可在 `POST /api/connections` 中显式指定——body
+（本地默认 17510，桌面经 `DSH_CHAMBER_DSH_PORT_BASE` 覆盖、gateway 经 `--dsh-port`/
+`DSH_GATEWAY_DSH_PORT`；端口不可在 `POST /api/connections` 中显式指定——body
 仅收 kind/label/accentColor，见 04 §3）后：
 
 ```
@@ -90,6 +91,16 @@ web profile 的 `--port` 是**固定端口**（非 0 随机）。控制面选定
   可预测范围（`dshPort` 进入 pid ledger 与 live PlaneHandle 投影；不写 catalog），便于防火墙/隧道诊断。
 - **TOCTOU 说明**：spawn 前不做 `net.listen(0)` 预占（释放到绑定之间仍有
   竞态）；冲突一律以"就绪探测失败 → P+1"的后验方式处理，语义确定。
+- **与在跑安装并存**：起始端口只经 `DSH_CHAMBER_DSH_PORT_BASE` 覆盖（缺省 17510，非法值
+  loud 一次后回落），dev/验收实例因此不必与在跑安装的 17510..17514 相撞。
+
+**Rejected alternatives（起始端口覆盖形态）**
+
+- **占用时自动换空闲基址**：把冲突藏起来——"固定起点 + P+1 有界退让"的可预测范围（pid ledger、
+  隧道/防火墙诊断）随之失效，且同一台机上的第二个实例会静默漂到不同端口。拒绝：覆盖必须显式。
+- **配置文件级端口偏移**：为一个只出现在 dev/验收并存的需求新增持久化面与迁移成本。拒绝：
+  env 是一次进程级选择，语义窄且可回滚。
+- **选定**：仅 env 覆盖基址，默认不变；未知/越界值 fail-loud 后回落默认，绝不半生效。
 
 ### 2.3 孤儿回收直接移植参考实现安全模型
 
@@ -187,7 +198,12 @@ rows，不改变官方 web profile 的其它组合层。
     fuse，electron-builder 默认开启——**不得关闭该 fuse**），并前置 `--expose-internals`：dsh
     的 cordis loader 经 `node-addon-require-builtin` 取 `internal/modules/esm/loader`，该
     addon 的 V8 embedder 探测在 Electron 的 patched Node 下不可用（"no compatible
-    GetAlignedPointerFromEmbedderData symbol"），`--expose-internals` 的官方 require 路径可用；
+    GetAlignedPointerFromEmbedderData symbol"），`--expose-internals` 的官方 require 路径可用。
+  - **指纹白名单**：该 addon（`node-addon-require-builtin@0.1.6`）内置运行时指纹表，Electron 侧只认
+    构建时收录的版本（当前表内为 43.0.0 / 44.0.0 / 45.0.0-alpha.6）。桌面 Electron pin 不在表内时
+    宿主子进程直接 exit 1（`unsupported Electron runtime fingerprint`）——Electron flavor 的托管宿主
+    可用性因此由 **Electron pin × addon 版本**共同决定，任一侧升级都要实机复核；纯 node 路径
+    （含 Swift sidecar 的 `Resources/sidecar/node`）不受该白名单约束。
   - 兜底 → PATH 搜索 `node` → 常见安装位置（homebrew、`/usr/local/bin`、
     nvm/volta/fnm） → 最终退回裸名 `node`（仅作诊断兜底）。
 - **随包 pnpm 供给**（`withPnpmShim`，pnpm-shim.ts）：上游插件管理器在**托管宿主进程**里

@@ -14,15 +14,26 @@
  * and catches edits to every file listed by the package's projects.
  */
 import { spawnSync } from 'node:child_process'
+import { realpathSync } from 'node:fs'
 import { isAbsolute, join, normalize, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const ROOT = resolve(fileURLToPath(new URL('../../', import.meta.url)))
 const TSC = join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc')
-const VENDOR_ROOTS = [
+const VENDOR_ROOT_PATHS = [
   join(ROOT, 'vendor', 'harness-checkout'),
   join(ROOT, 'vendor', 'harness-packages'),
 ]
+// A git worktree may symlink the vendor submodule to another checkout; tsc
+// reports the RESOLVED path, so the vendor tolerance must follow the link or
+// every pinned-vendor diagnostic in that program counts as unexpected.
+const VENDOR_ROOTS = [...new Set(VENDOR_ROOT_PATHS.flatMap((root) => {
+  try {
+    return [root, realpathSync(root)]
+  } catch {
+    return [root]
+  }
+}))]
 const DIAGNOSTIC = /^(.*)\(\d+,\d+\): error TS\d+:/
 const GLOBAL_DIAGNOSTIC = /^error TS\d+:/
 

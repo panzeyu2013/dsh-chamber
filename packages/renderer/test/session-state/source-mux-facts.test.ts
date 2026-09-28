@@ -18,7 +18,9 @@ import {
   classifyTurnEndWire,
   createSourceMuxFacts,
   EVENTS_ENDPOINT,
+  indexMuxLineage,
   isMuxObservableSourceKind,
+  lineageFactsForRows,
   MUX_PATH,
   muxUrlFor,
   openEventsFrame,
@@ -185,6 +187,70 @@ test('a socket ready frame cannot certify facts after a failed first baseline', 
     await waitFor(() => facts.status().baselineFailures === 1, 'baseline failure did not surface')
     assert.equal(facts.status().ready, false)
     assert.equal(snapshots.at(-1)?.verdict, 'degraded')
+  } finally { facts.stop() }
+})
+
+test('lineage index: only SUBAGENT-origin rows contribute edges; one bad edge un-verifies the snapshot (I-12)', () => {
+  const ok = indexMuxLineage([
+    { sessionId: 'p', running: true },
+    { sessionId: 'c1', origin: 'subagent', parentSessionId: 'p', running: true },
+    { sessionId: 'fork', parentSessionId: 'p', running: true },
+  ])
+  assert.equal(ok.verified, true)
+  assert.deepEqual([...ok.edges], [['c1', 'p']], 'fork 行没有父边（父绝不猜）')
+  const bad = indexMuxLineage([
+    { sessionId: 'c1', origin: 'subagent', parentSessionId: 'p', running: true },
+    { sessionId: 'c2', origin: 'subagent', running: true },
+    { sessionId: 'c3', origin: 'subagent', parentSessionId: 'c3', running: true },
+  ])
+  assert.equal(bad.verified, false, '缺失/自指父边 ⇒ 整份快照不能把「无子代理」判成 0')
+  assert.deepEqual([...bad.edges], [['c1', 'p']])
+})
+
+test('lineage facts: running descendants attribute along the subagent chain; known children keep the fail-closed hold (I-12)', () => {
+  const rows = new Map([
+    ['p', { running: false }],
+    ['c1', { running: true }],
+    ['c2', { running: false }],
+    ['g1', { running: true }],
+  ])
+  const state = {
+    edges: new Map([['c1', 'p'], ['c2', 'p'], ['g1', 'c1']]),
+    verified: true,
+    children: new Map([['p', new Set(['c1', 'c2'])], ['c1', new Set(['g1'])]]),
+  }
+  const facts = lineageFactsForRows(rows, state)
+  assert.deepEqual(facts.get('p'), { count: 2, verified: true, known: true }, '子代 + 孙代都归并到祖先')
+  assert.deepEqual(facts.get('c1'), { count: 1, verified: true, known: true })
+  assert.deepEqual(facts.get('c2'), { count: 0, verified: true, known: false }, '结束的子代不再计数')
+  const unverified = lineageFactsForRows(rows, { ...state, verified: false })
+  assert.equal(unverified.get('p')?.verified, false)
+  assert.equal(unverified.get('p')?.known, true, '不可判基线保留已知子代表 ⇒ 消费面 fail-closed')
+})
+
+test('a verified baseline publishes lineage-verified subagent counts (I-12)', async () => {
+  const socket = new FakeSocket()
+  const snapshots: Array<{ rows: Record<string, { subagentCount?: number, lineageVerified?: boolean, subagentKnown?: boolean }> }> = []
+  const facts = createSourceMuxFacts({
+    sourceId: 'lineage', origin: 'http://cp',
+    onSnapshot: snapshot => snapshots.push(snapshot as never),
+    openSocket: () => socket,
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items: [
+      { sessionId: 'p', running: false, updatedAt: 1 },
+      { sessionId: 'c1', origin: 'subagent', parentSessionId: 'p', running: true, updatedAt: 2 },
+    ] }) }) as never,
+  })
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().ready, 'baseline did not settle')
+    const rows = snapshots.at(-1)?.rows ?? {}
+    assert.equal(rows.p?.subagentCount, 1)
+    assert.equal(rows.p?.lineageVerified, true)
+    assert.equal(rows.p?.subagentKnown, true)
+    assert.equal(rows.c1?.lineageVerified, true, '认证是来源级的：无子代理的行也带 0 判据')
+    assert.equal(rows.c1?.subagentKnown, undefined)
   } finally { facts.stop() }
 })
 

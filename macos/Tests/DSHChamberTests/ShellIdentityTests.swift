@@ -415,10 +415,12 @@ final class ShellIdentityTests: XCTestCase {
         let source = try uncommentedSource("Sources/DSHChamber/MainWindowController.swift")
         XCTAssertTrue(source.contains("shellLog(\"[shell] 系统唤醒——发送 __host.systemResume\")"),
                       "唤醒腿必须写 shellLog（落盘）")
-        XCTAssertTrue(source.contains("shellLog(\"[shell] 应用激活——发送 __host.mainWindowShown\")"),
-                      "held-resume 补发点（didBecomeActive）必须落盘")
+        // 激活/窗口恢复两条腿共用一个发送点（MainWindowShownGate），日志串
+        // 因此合并为「窗口恢复/应用激活」——只要该发送点落盘即可。
+        XCTAssertTrue(source.contains("shellLog(\"[shell] 窗口恢复/应用激活——发送 __host.mainWindowShown\")"),
+                      "held-resume 补发点（应用激活/窗口恢复共用发送点）必须落盘")
         XCTAssertFalse(source.contains("print(\"[shell] 系统唤醒"), "唤醒腿不得退回 print-only")
-        XCTAssertFalse(source.contains("print(\"[shell] 应用激活"), "激活腿不得退回 print-only")
+        XCTAssertFalse(source.contains("print(\"[shell] 窗口恢复/应用激活"), "激活腿不得退回 print-only")
         // 失败分支与 hop3 同样必须落盘（catch 与壳→页面这一跳
         // 若是 print-only，实机分不开「没发/没推」与「页面没消费」）。
         XCTAssertTrue(source.contains("shellLog(\"[shell] __host.systemResume 发送失败："),

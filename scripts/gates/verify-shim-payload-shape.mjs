@@ -19,8 +19,9 @@
  * must be exposed by a method (except the internal hydration channel).
  *
  * Count semantics: EXPECTED_SURFACE's 50 invoke is the namespace-exposed
- * surface (the internal `dsh-chamber:info` hydration channel is not counted);
- * bridge-manifest.json counts.invoke=51 (info included) + 9 push = 60, and the
+ * surface (the two internal channels — `dsh-chamber:info` hydration and
+ * `dsh-chamber:native-theme-set` — are not counted); bridge-manifest.json
+ * counts.invoke=52 (both internals included) + 9 push = 61, and the
  * desktopSsh namespace alone is 22 invoke + 2 push. The user plugin write
  * surface (apply / undo / materialize / npm search / local add-remove) was
  * retired with the 2026-09 C layering ruling.

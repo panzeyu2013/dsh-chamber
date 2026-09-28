@@ -22,6 +22,8 @@
 - [ ] fork副本diff：`packages/client/connection`、`packages/client/web`、`packages/api/gateway` → 判断「冲突需合并」vs「干净采纳」（→ §3）；chamber-named 的 `packages/dsh-chamber-client-ui-layout`（registry §2.6，上游 `packages/client/ui-layout`）同样逐 diff 裁决，其深引 frame 面由预检以 vendor-seam 报告。
 - [ ] 首屏耦合审计：上游新增/改名的官方client行若被复合首屏inject → 同步host-graph降级注释；探针集合是派生的（不用加名字），但命名空间不再导出 `inject` 的漂移由 `packages/renderer/test/lifecycle/required-extra-rows.test.ts` 的逐id表兜底。
 
+- [ ] vendor 补丁退休评估（drift I-7）：C9 现在三分——锚点命中 = 绿；锚点缺失且某条 `retireCheck` 命中 = `retire-candidate`（**仍 release-blocking**），remediation = 把该条移入 `vendor-patches.mjs` 的 `RETIRED_PATCHES`（`ensure` = 上游修复原文、必须唯一命中），同批删除补丁条目与 `verify-vendor-patch-applied` 的产物 marker，并同步 design 09 §3.6/§3 与触点表；锚点缺失且 `retireCheck` 未命中 = drift，按新 pin 重导补丁。`noRetireForm` 条目以登记理由为准。新增/重放补丁按 design 09 §3.6 的四类准入裁决；第四类（多实例正确性）只在页面级事实无法由 chamber 包重新 scoped 时准入，scope 必须取自 per-entry `chamberBasePath`（禁页面全局事实或 URL 猜测），且上游自带 scope 后删除。
+
 ## 2. 双线 pin 一致性
 
 > 源码线（构建期vendor树）= submodule commit，唯一入口 `update-vendor.mjs`；运行时线（打包进桌面的 `@deepseek-ai/dsh`）= 六个锚（见下）。
@@ -38,6 +40,7 @@
 - [ ] 三个fork副本：basePath补丁与上游改动同文件时手工合并（chamber选项对象、`ctx.chamberBasePath`、boot接线）；干净采纳项照抄；上游新增钩子按chamber场景裁决采纳/跳过。
 - [ ] 其余适配面：控制面代理限额、`spawn-dsh` 的pin注释、desktop/renderer注释基线等与上游对齐。
 - [ ] 上游行为变化逐项裁决：限额与代理上限冲突、事件改名是否被消费、新包是否要动作、新wire是否改变例外边界。
+- [ ] api-gateway uplink 裁决点（I-13/G43）：descriptor 带 uplink 半边时保持 fail-loud（`packages/dsh-api-gateway/test/behavior/client-uplink-rejection.test.ts`）；真机出现 uplink 需求才重放 rc.2 客户端半边并撤销该判定。
 - [ ] 逐面验证：`test:connection`、`test:client-web`、`typecheck:client-web`、`typecheck:connection`、`test:control-plane`、`test:api-gateway`、`typecheck:api-gateway`。
 - [ ] 自建物重放（layout/sidebar fork、covered factory、vendor补丁锚点）逐项裁决：采纳或保留偏差并登记（口径见 `upstream-touchpoints.md` §1–§3）；layout fork 已登记为 chamber-named 副本（registry `seed.dsh-chamber-client-ui-layout`，§2.6），其 client index/store 副本面随 C2 报告 + 预检 vendor-seam 重放；并重审 design 09 §3.5 有意跳过名单（每条 skip 是否仍必须跳过、上游门是否已修好）。
 - [ ] **内部依赖 range 按上游政策归位**（`workspace:*`，拒 caret——政策依据 `.agents/notes/implemented/process/2026-09-22-workspace-release-ranges.md`）：改动 `package.json` 后必须 `pnpm install --lockfile-only` 同步 lockfile；棘轮门 `scripts/upstream/workspace-range-ratchet.test.mjs`（覆盖 registry 的 fork/seed 集合）。

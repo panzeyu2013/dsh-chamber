@@ -6,12 +6,11 @@
 
 ## 未完成 / 部分完成（剩余验收）
 
-- **上游漂移批次二/三（I-7/I-8/I-10–I-15）**：vendor 补丁缺 retire 检测（C9 锚点未命中无法区分施工
-  错误与「上游已修 ⇒ 可退役」）、registry 桌面 seat 镜像覆盖未审计（唯一门
-  `packages/desktop/upstream-seats.test.ts` 未进 C5/复核面）、运行位写回仍走非契约成员（「会话运行位
-  卡死」⑭）、`session.list` 单飞悬挂残余（同节③）、子代理 lineage 压制缺失（同节④/⑯）、api-gateway
-  uplink 升级裁决点未登记（范围决策 G43 条）、selection scope 待裁（上游提案 §1）、四组实机验收未归并
-  （I-15）。判据/方案/落点/关闭与待退役块触发见 [todo/upstream-drift-plan.md](todo/upstream-drift-plan.md)。
+- **上游漂移批次三剩余（I-15 实机记录）**：六组矩阵（完成未读 P6、归档两段式 + 恢复、通知行为四缺口、
+  运行位校准 60/190/310s、I-14 selection scope、I-12 谱系压制）执行序已归并（`gui-acceptance-checklist.md`
+  §4.1），**待打包态/真机各跑一次并留证据**（用户裁定：合并到主分支后再执行，见下条原生壳缺口）。I-12 的判据落点见
+  design 19 §3.2/§3.5，I-14 见 design 09 §3.6。
+  判据/方案/落点/关闭与待退役块触发见 [todo/upstream-drift-plan.md](todo/upstream-drift-plan.md)。
 - **通知壳 sink `runtimeSettled` 锚点（I2；剩打包态实机回执）**：facts/壳两 sink 共用
   `complete-ledger.ts` 的 `completionAlreadySettled`（无标记/无锚点 = fail-open，只影响抑制、
   不影响投递；**未恢复别名表**）。残余重复窗口 = 「同页、非首批、producer 状态被重置的壳完成
@@ -22,7 +21,7 @@
   `facts-health` 保底名额。
 - **目标活跃期间的完成通知/未读压制**（design 19 §3.2）：打包态实机（N 轮 `held≥1 && sent==0`、outcome 后恰一条、六面同拍、reload/冷启、撤回、local/gateway/SSH 各一组）；activation unknown 静默窗口需上游只读 activation 读；围栏双发（§3.2.7 ⑦ F30）与 scoped withdraw（§3.2.4）待裁。
 - **会话链重构**（design 14 §D4）：阈值真机校准（60/190/310s，[session-authority-calibration.md](../checklists/session-authority-calibration.md)）、ssh 写回时延、macOS 腿、集中日志面（机内环已有）；mobile `session-stall.ts` 行数待裁（现 584 行；决策核心已表驱动，其余为 DOM/提示壳）；Swift 收口 `RendererRecovery.swift`（≈185 行）与 `RendererHangWatchdog.swift`（≈129 行）仍超 ≤90/≤60 目标且未入棘轮、`RendererRecoveryPolicy` 判定/记账分离；反补丁波次①–④（阶梯决策边界、子代理完整性属上游依赖、载波身份仍是请求键、P6 上游首帧期限 / `doOpen` 契约，`verify:upstream-lifecycle-contract` 钉住）；`tests` 模式 flaky（gateway/control-plane，假宿主占端口）。
-- **会话运行位卡死**（ui-chat「深度求索中」；机制已单源化）：①实机 lane 复现未接 CI；②HTTP 健康而 WS 半盲时 transcript 不收敛（45s 旁路 follow 已落，宿主 `asOfSeq` 对账未做）；③`session.list` 单飞悬挂 ⇒ store 永久 loading（需上游超时）；④子代理（`origin==='subagent'`）不在事实通道；⑤隐藏期 watchdog 不 tick；⑥阈值/N=2/写回链未实机校准；⑦上游语义由 `vendor-session-fact-contract.test.ts` 逐条钉住（vendor 未物化默认失败）；⑧控制面/壳日志的取证价值未验；⑨`session.list` 全量性缺水位；⑩控制面集中日志面未做；⑪两处「更省形态」候选未落；⑫对话流健康臂实机验收未做（自动 resync / `loading` 提示、滚动位置观感）；⑬静默半死（宿主流级 keepalive+游标未做、首帧期限与探针阈值未校准、`ended(false)` 兜底）；⑭修链未闭合（非 `ISessions` 契约写回、90s 界限只在失败分支、ssh 时延、窄缝、行为测试缺）；修正 provenance 的 I3 臂无 host 证据不通知，实机矩阵未跑；⑮运行位解析对齐后未实机校准；⑯子代理运行环行集与官方不同源（收紧 or 写进契约，待裁）。
+- **会话运行位卡死**（ui-chat「深度求索中」；机制已单源化）：①实机 lane 复现未接 CI；②HTTP 健康而 WS 半盲时 transcript 不收敛（45s 旁路 follow 已落，宿主 `asOfSeq` 对账未做）；③`session.list` 单飞悬挂 ⇒ store 永久 loading（需上游超时）；④子代理行（`origin==='subagent'`）仍不进运行时事实/导航（有意；I-12 lineage 压制已落，余实机旁证）；⑤隐藏期 watchdog 不 tick；⑥阈值/N=2/写回链未实机校准；⑦上游语义由 `vendor-session-fact-contract.test.ts` 逐条钉住（vendor 未物化默认失败）；⑧控制面/壳日志的取证价值未验；⑨`session.list` 全量性缺水位；⑩控制面集中日志面未做；⑪两处「更省形态」候选未落；⑫对话流健康臂实机验收未做（自动 resync / `loading` 提示、滚动位置观感）；⑬静默半死（宿主流级 keepalive+游标未做、首帧期限与探针阈值未校准、`ended(false)` 兜底）；⑭修链未闭合（非 `ISessions` 契约写回、90s 界限只在失败分支、ssh 时延、窄缝、行为测试缺）；修正 provenance 的 I3 臂无 host 证据不通知，实机矩阵未跑；⑮运行位解析对齐后未实机校准；⑯子代理运行环行集与官方不同源（收紧 or 写进契约，待裁）。
 
 - 实机门禁（缺真实实例 / 打包态环境）：
   - 调试模式 T-10 打包态（Web Inspector 附着**只能人工判**）。
@@ -115,14 +114,12 @@
 
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
-- 验证面缺类：`verify:no-dead-exports` 只判「经 package entry 可达的运行时导出」⇒ **type-only 导出**
+- 验证面缺类：`verify:no-dead-exports` 只判「经 package entry 可达的运行时导出」⇒ **type-only 导出**不判
+  （已裁：类型导出属文档/契约面、误报面大，理由与边界写在脚本头部）；**仅测试引用**的导出已规则化
+  （`TEST_ONLY_EXPORT_ALLOWLIST`，每条一句理由，stale 即红）。
 - 验证面缺类（叶子模块）：`verify:no-dead-exports` 只沿各包 `src/index.ts` 判定「经 package entry 可达的运行时导出」，故**无入口可达的叶子模块**对它不可见——本轮按该门绿灯删掉的 `packages/gateway/src/util.ts` 即实例，未来同类新增同样隐形。方向：新增「`packages/*/src/**/*.ts` 必须被导入或被构建程序点名」的孤儿模块门禁（误报面待设计），或并入上一条统一收口。证据：`node scripts/gates/verify-no-dead-exports.mjs`（绿）与 `packages/gateway/src/util.ts` 的删除提交说明。
-  与**仅测试引用**的导出都不判（本轮人工收窄 11 个类型；`PendingSession` 与 `PENDING_*` pin 常量属
-  测试专用导出）。规则化提案（allowlist + 一句理由；类型面是否纳入待裁）见
-  [todo/upstream-drift-plan.md](todo/upstream-drift-plan.md)「验证面缺类」。
 - 结构性重构与清理（未闭合；[todo/refactor-plan.md](todo/refactor-plan.md)）：三门（`verify:import-cycles`/`verify:file-budgets`/`verify:no-dead-exports`）常驻但**只本地跑**；未收口 = renderer 外三处 state/ref 镜像、`ssh-<id>` 别名与旧版本探测（保留）；跨包逐字重复可删 0 组（计划 §6）。
 - `run-checks tests` 链式步骤可「零覆盖记通过」：manifest dump 丢失时 `requireDump` 只对 direct 生效 ⇒ tests 绿不代表 vendor 套件真跑；修法 = 无 dump 无 transcript 即硬失败。
-- 本地 `pnpm run smoke` 与在跑实例端口冲突（`DEFAULT_DSH_START_PORT = 17510`，重试 +1 至 17514）：需端口基址覆盖开关。
 - CI 打包排练 CPU bound（Windows 285–342s、macOS 133–188s）：拆成独立并行 job 后 push 侧墙钟由 Windows 排练单独决定，压缩只能动排练范围/打包参数。
 - Swift 套件串行是 macOS 腿最大单项（113s，`scripts/gates/run-swift-tests.mjs`）：`swift test --parallel` 不能直接开——并行模式只在 worker 内打印分片汇总且不打印 `Test Case ... skipped` 行（G2「XCTSkip=0」判据会静默失效），套件另有多处共用固定端口（17520、17951–17953 等），须先做并行隔离与判据重设计。
 - 0.1.7 升级线残余：fatal 恢复框真机键位走查、node-pty 补偿「补丁生效、补偿可撤」复核。
@@ -156,8 +153,9 @@
 - C15 hover 触发降级（提案，待 CI/产品裁决）：改触发面 + 同批改 `AGENTS.md`/`upstream-touchpoints.md`/`release-workflow-policy.test.mjs`/`static-gate-parity.mjs`/`verify-release-ci-proof.mjs`。
 - 双 flavor 接入点 parity：仍 open = S-01（EdDSA/Sparkle/安装与 delta）、G19（CI 签名打包）、S-44（授权查询/申请面）、S-10（遮挡/App Nap）、T-28（`corner-shape` 等引擎降级）；核验清单见 §4。
 - 原生窗口高度折中（S-49）待裁：Swift 786 内容 vs Electron 800 外框；宽度偏好仍 per-flavor（T-18）。
-- macOS Swift 原生壳（design 25，路线 A）：M5 未闭合、D1–D7 未签核；六项残余 = 实机/GUI 验收（含 WKWebView 无 `backgroundThrottling` 等价物）、Developer ID/公证/stapler/spctl 与首个 `build-swift` 发布腿（缺凭据外部阻断）、M5 矩阵 W-28…W-32 与双端 harness、零 core 消费者契约面（flavor 契约）、`BridgeClient.onEvent` 保留（删除前先处理夹具）、通知音效平台等价物。
-- 起始端口偏移：本地 17510 / 控制面 17500；配置未决。
+- macOS Swift 原生壳（design 25，路线 A）：M5 实机矩阵未闭合（按用户裁定：合并到主分支后执行，见 I-15 条）；残余 = 实机/GUI 验收（含 WKWebView 无 `backgroundThrottling` 等价物）、Developer ID/公证/stapler/spctl 与首个 `build-swift` 发布腿（缺凭据外部阻断）、M5 矩阵 W-28…W-32 与双端 harness、通知音效平台等价物。
+- 起始端口偏移（已定）：本地 dsh 缺省 17510（spawn 逐次 +1 至 17514）、控制面缺省 17500，仅经 `DSH_CHAMBER_DSH_PORT_BASE` / `DSH_CHAMBER_CP_PORT` 覆盖，不引入配置文件级偏移（口径见 `packages/desktop/README.md` §控制面）。
+- Electron flavor 托管宿主的运行时指纹（待裁）：当前 pin（Electron 43.4.0 × dsh 0.1.7-rc.2 的 `node-addon-require-builtin@0.1.6`）下宿主子进程 exit 1，报 `unsupported Electron runtime fingerprint … (supported: 43.0.0 / 44.0.0 / 45.0.0-alpha.6)`，5 个起始端口全部失败——证据 `.tmp/gui-acceptance/dev-app.log`（`--dev` 验收腿）。待裁：Electron pin 对齐 addon 收录版本，或等上游 addon 收录 43.4.0（下次 pin 一并复核，见 [todo/upstream-drift-plan.md](todo/upstream-drift-plan.md) E2）。纯 node（Swift sidecar / standalone serve）不受影响。机制与指纹门见 [design 02](../design/02-host-management-deployment.md) §2.6。
 - trusted-host 自定义 Host：须同步扩 trusted-host 集。
 - 多控制面 `$DSH_HOME` 冲突：进一步隔离未决。
 - 多控制面 catalog metadata 无跨进程 CAS：需锁内 reload + 字段 intent，或正式要求「并发 plane 必须不同 stateDir」。

@@ -20,7 +20,7 @@
  *                                       逐条对齐）
  *
  * 步骤：swift build（可 --skip-build）→ 组装（sidecar 必须自带可执行 node 与
- * sidecar.js，build 时断言）→ 架构一致性断言（.app 可执行 vs 捆绑 node，lipo；
+ * sidecar.js，且 sidecar/package.json 版本必须等于壳版本——都在 build 时断言）→ 架构一致性断言（.app 可执行 vs 捆绑 node，lipo；
  * build-sidecar 缺省 darwin-arm64 而 swift build 跟随宿主——不一致的 .app 能
  * 签名打包、运行时才崩）→ Info.plist 渲染（plutil -lint）→ 嵌套签名
  * （sidecar/node，Developer ID 时带 hardened runtime + node 权限）→ 主签名
@@ -296,6 +296,54 @@ export function assertBridgeShimPresent(resourceBundleDir, source = '', exists =
     throw new Error('装配后的资源包缺 bridge-shim.js：' + resourceBundleDir
       + (source ? '（来源 ' + source + '——SwiftPM 资源形态变了？）' : ''))
   }
+}
+
+/**
+ * 装配断言（fail-closed）：.app 内 sidecar/package.json 的 version 必须与壳版本
+ * **逐字相等**。
+ *
+ * 为什么在装配期比：sidecar 的 package.json version 是 shell-core / sidecar-ctx
+ * 的 shellVersion 基准（运行时按 sibling package.json 读），override 与
+ * activation journal 的「壳换了」判别也用它；壳自身版本写进 Info.plist 的
+ * CFBundleShortVersionString——两者同源于 packages/desktop/package.json。复用旧
+ * 装配目录（或手工替换 sidecar）会让两处漂移：壳自报新版本、sidecar 自报旧版本
+ * 时，运行时把 override 判成「另一只壳」而静默失效用户已选的运行时版本。
+ * 运行时侧不做这项比较（ready 帧的 shellVersion 只被 AppDelegate 记日志），
+ * 所以装配期是唯一能拦下它的地方。
+ * @param {string} sidecarDir - .app 内 sidecar 目录。
+ * @param {string} shellVersion - 壳版本（与 Info.plist 同一来源）。
+ * @param {typeof readFileSync} [read] - 读取注入（单测直测失败分支）。
+ * @param {typeof existsSync} [exists] - 存在性注入（单测直测失败分支）。
+ * @returns {string} 已校验的 sidecar 版本。
+ */
+export function assertSidecarVersionMatchesShell(
+  sidecarDir,
+  shellVersion,
+  read = readFileSync,
+  exists = existsSync,
+) {
+  const manifestPath = path.join(sidecarDir, 'package.json')
+  if (!exists(manifestPath)) {
+    throw new Error(`sidecar 装配目录缺 package.json：${manifestPath}——版本相等校验的输入缺失（先跑 build:sidecar）`)
+  }
+  let manifest
+  try {
+    manifest = JSON.parse(read(manifestPath, 'utf8'))
+  } catch (error) {
+    throw new Error(`sidecar package.json 不是合法 JSON：${manifestPath}——`
+      + (error instanceof Error ? error.message : String(error)))
+  }
+  if (manifest === null || typeof manifest !== 'object'
+    || typeof manifest.version !== 'string' || manifest.version === '') {
+    throw new Error(`sidecar package.json 缺 version：${manifestPath}（无法与壳版本 ${shellVersion} 比对）`)
+  }
+  if (manifest.version !== shellVersion) {
+    throw new Error(
+      `sidecar 版本与壳版本不一致（fail-closed）：sidecar ${manifest.version} ≠ 壳 ${shellVersion}`
+      + `——${manifestPath} 来自另一次构建？重跑 pnpm run build:sidecar 后重新装配`,
+    )
+  }
+  return manifest.version
 }
 
 export function renderInfoPlist(template, values) {
@@ -775,7 +823,21 @@ export {
   DMG_WINDOW_ORIGIN,
 } from './dmg.mjs'
 
-export async function runBuildSwiftApp(options, io = { log: console.log, error: console.error }) {
+/**
+ * 装配主流程。
+ *
+ * `deps` 是**执行器注入缝**（单测用）：DMG 的 Finder 布局步会挂载可写卷、驱动
+ * Finder 并弹出带背景图的窗口——测试没有理由真造 DMG、占用屏幕。把
+ * createStyledDmg 作为依赖注入后，build-swift-app.test.mjs 能断言「执行器拿到的
+ * 是最终 .app / 卷名 / 精确产物路径」「步骤顺序」与「失败必须 loud 冒泡」，而
+ * 纯解析器用例覆盖不到的正是这一步的**执行**。生产调用（CLI / release.yml）
+ * 不传 deps，取真实实现。
+ */
+export async function runBuildSwiftApp(
+  options,
+  io = { log: console.log, error: console.error },
+  deps = {},
+) {
   const layout = appLayout(options.outDir, options.appName, options.artifactBasename)
   for (const step of assemblePlan(options)) io.log(`  ${step}`)
 
@@ -915,6 +977,11 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
     if ((nodeStat.mode & 0o111) === 0) {
       throw new Error(`捆绑 node 没有可执行位：${bundledNode}（mode ${(nodeStat.mode & 0o777).toString(8)}）`)
     }
+    // 版本相等（fail-closed）：sidecar/package.json version 与壳版本同源，
+    // 运行时把它当 shellVersion（override/activation journal 的判别基准）却从不
+    // 比较——复用旧 sidecar 目录造成的漂移只能在装配期拦下。
+    assertSidecarVersionMatchesShell(layout.sidecarDir, version)
+    io.log(`[build-swift-app] sidecar package.json version=${version}（与壳版本一致）`)
   } else {
     throw new Error(`缺少 W-23 sidecar 装配目录：${options.sidecarDir}（先跑 build:sidecar，或用 --skip-sidecar）`)
   }
@@ -1024,7 +1091,8 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
     // **+ Finder 拖拽布局**（背景箭头 + 图标定位，写进卷内 .DS_Store）。
     // 卷名/布局/背景资产全部由 dmg.mjs 单源；产出后立刻做产物级校验（挂载断言
     // .DS_Store/.background/快捷方式），失败 loud——绝不发没有提示的 DMG。
-    createStyledDmg({
+    const createDmg = deps.createStyledDmg ?? createStyledDmg
+    createDmg({
       appDir: layout.appDir,
       appName: options.appName,
       outPath: layout.dmgPath,

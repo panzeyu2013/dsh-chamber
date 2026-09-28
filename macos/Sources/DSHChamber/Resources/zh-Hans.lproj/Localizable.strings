@@ -106,6 +106,7 @@
 "fatal.readyPortMismatch" = "sidecar ready 端口 %d 与壳即将加载的控制面 origin 端口 %d 不一致（%@）——拒绝加载错 origin";
 "fatal.bridgeStartFailed" = "BridgeClient 启动失败：%@";
 "fatal.sidecarStartFailedDetail" = "sidecar 启动失败：%@";
+"fatal.sidecarVersionMismatch" = "sidecar 版本 %@ 与壳版本 %@ 不一致——拒绝启动（请重跑 pnpm run build:sidecar / build:swift-app 并重装 .app）";
 
 /* ===== 渲染恢复放弃 ===== */
 "renderer.crashTitle" = "dsh-chamber 前端异常";

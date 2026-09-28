@@ -24,7 +24,7 @@ final class BridgeManifestConsistencyTests: XCTestCase {
     func testCountsInvokeAndPush() {
         // 当前仓库事实（与 bridge-manifest.json 的 counts 及
         // bridge-manifest.test.ts ③ 同一批数字）；通道增删须同步更新。
-        XCTAssertEqual(BridgeManifest.invokeChannels.count, 52, "invoke 通道数应 == 提交物 counts.invoke（51）")
+        XCTAssertEqual(BridgeManifest.invokeChannels.count, 52, "invoke 通道数应 == 提交物 counts.invoke（52）")
         XCTAssertEqual(BridgeManifest.pushChannels.count, 9, "push 通道数应 == 提交物 counts.push（9）")
     }
 

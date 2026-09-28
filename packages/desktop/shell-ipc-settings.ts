@@ -96,6 +96,10 @@ export function registerSettingsHandlers(ctx: ShellIpcCtx): void {
     if (request.kind !== 'test') shownReceipts.record(request);
     return { shown: true, outcome: 'shown' };
   }
+  // info 载荷 = 4 个页面标量 + flavor（E2）。flavor 是**有意保留的零消费者
+  // 字段**：preload 不镜像、页面无消费者（用前须补消费者与 preload.cts /
+  // global.d.ts 镜像测试），E2 复核若仍无消费者即删除；4 个标量是 preload/shim/
+  // manifest 的暴露面契约（4 标量 + 10 命名空间），不得随内部 seam 删除。
   deps.ipc.handle(IPC_CHANNELS.INFO, () => ({
     controlPlaneUrl: hostFacts.controlPlaneUrl,
     dshVersion: deps.ctx.runtimeFacts?.dshVersion() ?? null,

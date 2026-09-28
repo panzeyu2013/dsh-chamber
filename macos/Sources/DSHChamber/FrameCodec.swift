@@ -21,7 +21,7 @@
 //   - id 单调纪律由 BridgeClient 保证（Swift 是客户端、sidecar 是服务端，
 //     design 25 §3.1：请求必带自增 id，sidecar 原样 echo；事件帧无 id、
 //     sidecar 不发起请求）。本文件只保证“响应必须可配对上 id”。
-//   - 帧内 method/event 字符串不校验：语义校验在 sidecar（51 invoke 处理器
+//   - 帧内 method/event 字符串不校验：语义校验在 sidecar（52 invoke 处理器
 //     原样），方法白名单在 A 桥（MessageHandler/TrustGuard，B12），B 桥只做
 //     结构解码与尺寸护栏（design 25 §4.4.2 护栏条）。
 //   - 容忍度：payload 键缺省与显式 null 一律折叠为 nil（协议两侧同语义）；
@@ -40,8 +40,6 @@ public enum BridgeFrame: Equatable {
     /// sidecar → Swift 的响应（ok=false 时 error 带文案；ok=true 时 result 可
     /// 为 null——本类型里 result 为 nil 即 JSON null 或缺省，容忍两者）。
     case response(id: Int, ok: Bool, result: AnyCodable?, error: String?)
-    /// sidecar → Swift 的推送事件（无 id）。
-    case event(event: String, payload: AnyCodable?)
 }
 
 /// NDJSON 帧编解码：全 static 纯函数，无共享可变状态（线程安全、可测性优先）。
@@ -92,9 +90,9 @@ public enum FrameCodec {
     ///   - 带 id + ok（Bool）→ .response；ok=false 时 error 缺省 → nil（容忍，
     ///     由调用方给兜底文案）；
     ///   - 带 id 却无 method/ok → nil（不是任何已知帧族）；
-    ///   - 无 id + event → .event；event 与 id 同现（协议外混写）按 id 族优先，
-    ///     解析不到合法 id 族即 nil；
-    ///   - 其余（空行/纯文本/数组顶层等）→ nil。
+    ///   - 其余（空行/纯文本/数组顶层/无 id 的旧 event 行等）→ nil——event 族
+    ///     已随 onEvent 订阅面一并退役，旧桩发来的 event 行落地为未知帧丢弃；
+    ///   - 无 id 时不存在任何合法帧族（字段类型毒化规则见下）。
     ///
     /// 严格性（FrameCodecTests 钉住）：
     ///   1. 已知键**存在但类型不符** → 整行 nil——绝不忽略该键继续分类，否则
@@ -110,13 +108,12 @@ public enum FrameCodec {
         let id = field(jsonObject, "id", intValue)
         let method = field(jsonObject, "method", stringValue)
         let ok = field(jsonObject, "ok", boolValue)
-        let event = field(jsonObject, "event", stringValue)
         let error = field(jsonObject, "error", stringValue)
         let payload = field(jsonObject, "payload") { AnyCodable.fromJSONObject($0) }
         let result = field(jsonObject, "result") { AnyCodable.fromJSONObject($0) }
 
         // 1. 任何已知键的类型不符都毒化整行（与 JSONDecoder 抛错等价）。
-        if id.isWrongType || method.isWrongType || ok.isWrongType || event.isWrongType
+        if id.isWrongType || method.isWrongType || ok.isWrongType
             || error.isWrongType || payload.isWrongType || result.isWrongType {
             return nil
         }
@@ -128,9 +125,6 @@ public enum FrameCodec {
                 return .response(id: id, ok: ok, result: result.value, error: error.value)
             }
             return nil
-        }
-        if let event = event.value {
-            return .event(event: event, payload: payload.value)
         }
         return nil
     }

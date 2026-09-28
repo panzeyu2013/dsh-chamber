@@ -557,6 +557,12 @@ running 批之后重放更早的批，其 `keepFence` 早已随原批过去、�
   是独立诊断计数（`notification-ledger.ts`），与主进程 `sent/suppressed/skipped` 回执
   账本互不替代；实机正对照读 `held ≥ 1 && sent == 0` 这类判据（§4）。
 
+**Rejected alternatives（I-12 谱系压制）**：① 只给 facts 行补 lineage 计数、消费面仍忽略
+（或在认证位缺席时读作 idle）——被否：列表不完整/断连时会把「无法证明子代理结束」误报成完成，
+正是 P5 的不确定性；② 让认证位缺席一律 busy——被否：watcher 来源（无谱系通路）会永久抑制完成，
+把「没有证据面」和「证据说不清」混为一谈；故只对**保留谱系表命中**的行 fail-closed busy，
+其余保持 presence 语义，且认证一旦失效（载波/基线丢失、换代）立即回收判 0 资格。
+
 #### 3.2.6 Rejected alternatives（goal 层）
 
 1. **`goals/get` 播种 activation**：冷会话 resume = 写面，且错误码前提不成立（§3.2.2）。
@@ -871,8 +877,13 @@ interface ChamberSettings {
     压制面为空。两者分述，不得合并成「浏览器一律没有渲染器」。
   - 行缺席即无 goal 事实（unknown），不压制；`schedule`/job/队列
     followup 本期不覆盖（收敛器输入可后续扩展）。activation unknown 的静默窗口（§3.2.2）
-    是文档化取舍。**facts-only 源忽略 `subagentCount`**（在场子会话数不是 busy 证据，
-    对 06 §4.5 的有意修正，见 §3.2.3 G4）。通知账本的
+    是文档化取舍。**facts-only 源的 `subagentCount` 只在谱系已认证时作 busy 证据**（I-12）：
+    mux 观察者用官方 `session/list` 的 `origin`/`parentSessionId` 在**同一份完整基线**上重算
+    running 子代——认证位 `lineageVerified`（每条 subagent 行都有可用父边）、保留表
+    `subagentKnown`（基线不可判时不清，durable 子代仍在官方列表里）；认证过的 0 判 idle、
+    >0 判 busy，认证位缺席但保留表命中的行按 busy 处理（列表不完整 ⇒ 抑制而非误报）；
+    watcher 来源（无谱系证据）保持 presence 语义（count>0 = unknown、永不 busy，对 06 §4.5
+    的有意修正，见 §3.2.3 G4）。通知账本的
     `held/flushed/voided/dropped/deferred` 与 `origin` 是独立计数，不替代主进程
     `sent/suppressed/skipped` 回执账本（§3.2.5）。
 - **facts 通道可用性语义（2xx unversioned / 404 legacy 二分）**：2xx 但无 `protocol`（解析失败 /

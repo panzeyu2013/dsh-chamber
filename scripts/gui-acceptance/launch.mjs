@@ -1,7 +1,8 @@
 /**
  * `--dev` launcher: a THROWAWAY dev dsh-chamber with its own user-data dir, its
- * own control-plane port and a CDP port, so the walkthrough never touches the
- * packaged app's state (sessions, connections, credentials).
+ * own control-plane port, its own managed-dsh port base and a CDP port, so the
+ * walkthrough never touches the packaged app's state (sessions, connections,
+ * credentials) and can boot beside a running installation.
  *
  * Mirrors packages/desktop/scripts/electron-dev.mjs and reuses its shared
  * Electron-dist resolver (single source for the binary cache); the additions are
@@ -117,7 +118,15 @@ export async function launchDevInstance({ outDir = '.tmp/gui-acceptance', cpPort
 
   const { distDir, status } = await ensureSharedElectronDist()
   const executable = path.join(distDir, platformExecutableName())
-  const env = { ...process.env, DSH_CHAMBER_ELECTRON_DEV: '1', DSH_CHAMBER_CP_PORT: String(cpPort) }
+  const env = {
+    ...process.env,
+    DSH_CHAMBER_ELECTRON_DEV: '1',
+    DSH_CHAMBER_CP_PORT: String(cpPort),
+    // 在跑安装占用 17510..17514；dev 实例从 cpPort+10 起（显式 env 优先）。
+    ...(process.env.DSH_CHAMBER_DSH_PORT_BASE === undefined
+      ? { DSH_CHAMBER_DSH_PORT_BASE: String(cpPort + 10) }
+      : {}),
+  }
   delete env.ELECTRON_RUN_AS_NODE
 
   const child = spawn(

@@ -363,12 +363,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         shellLog("[shell] control plane = \(cpURL.absoluteString)")
 
-        // 组装 B 桥：**接线先于 start**（onReady/onEvent/onNotify 在
-        // start 前就位——ready 帧不会被 loud 丢弃；控制器 setupWindow 亦先于
-        // start 完成事件接线，消灭起动期事件早丢窗口）。
+        // 组装 B 桥：**接线先于 start**（onReady/onNotify 与 edge 应答腿
+        // bridge.edgeHostLegs 在 start 前就位——ready 帧与 edge 请求不会被
+        // loud 丢弃；控制器 setupWindow 亦先于 start 完成事件接线，消灭起动期
+        // 事件早丢窗口）。
         let bridge = BridgeClient(nodePath: nodePath, arguments: sidecarArguments, environment: childEnv)
         // sidecar stderr → <userData>/logs/sidecar.log（有界；sink 自带锁）。
         bridge.sidecarLogSink = { line in ShellLog.sidecar.append(line) }
+        // 版本相等契约只约束**装配态 sidecar**（basename=sidecar.js；build-sidecar
+        // 把 packages/desktop/package.json 的版本写进 sidecar 目录 package.json，
+        // build-swift-app 把同一个值写进壳 Info.plist）。dev/自定义
+        // DSH_CHAMBER_SHELL_SIDECAR 脚本与壳没有版本同源关系，不受断言约束。
+        let enforceSidecarVersionEquality = compiledSidecar
         bridge.onReady = { [weak self] port, shellVersion in
             shellLog("[shell] sidecar ready（port=\(port) shellVersion=\(shellVersion)）")
             // Phase 0：启动分段——sidecar ready 是控制面加载的关键前置。
@@ -378,6 +384,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             // = 控制面实际在别的 origin（白窗 + A 桥全拒）。绝不静默加载错
             // origin：可见错误 + exit(1)（与 Electron 控制面启动失败分流同向）。
             if let mismatch = Self.readyPortMismatchMessage(readyPort: port, cpURL: cpURL) {
+                DispatchQueue.main.async { self.fatalStartup(mismatch) }
+                return
+            }
+            // 版本相等 fail-loud（装配契约）：只记日志会让「旧 sidecar payload +
+            // 新壳」的混合装配带病运行（协议/通道面可能已漂移）。shellVersion
+            // 来自 sidecar 目录 package.json，壳版本来自 Info.plist；无版本
+            // （dev）或非装配态形状由 mismatchMessage 自行跳过。
+            if enforceSidecarVersionEquality,
+               let mismatch = SidecarVersionContract.mismatchMessage(
+                   shellVersion: CrashDiagnostics.currentBundleVersion(),
+                   sidecarVersion: shellVersion) {
                 DispatchQueue.main.async { self.fatalStartup(mismatch) }
                 return
             }
@@ -742,6 +759,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             switch QuitCoordinator.closeAction(facts: facts) {
             case .hide:
                 shellLog("[shell] 关窗 → 隐藏（缓存事实即时决策，S3·V9）")
+                mainWindowController?.noteWindowHiddenExplicitly()
                 mainWindowController?.window?.orderOut(nil)
             case .terminate:
                 shellLog("[shell] 关窗 → 退出（close-behavior='quit'，缓存事实即时决策）")
@@ -755,12 +773,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             self.quitGate.endDecision()
             guard let facts else {
                 shellLog("[shell] 关窗决策获取失败：保守隐藏窗口（不关闭、不退出）")
+                self.mainWindowController?.noteWindowHiddenExplicitly()
                 self.mainWindowController?.window?.orderOut(nil)
                 return
             }
             switch QuitCoordinator.closeAction(facts: facts) {
             case .hide:
                 shellLog("[shell] 关窗 → 隐藏（Dock 常驻恢复入口）")
+                self.mainWindowController?.noteWindowHiddenExplicitly()
                 self.mainWindowController?.window?.orderOut(nil)
             case .terminate:
                 shellLog("[shell] 关窗 → 退出（close-behavior='quit'）")
@@ -887,8 +907,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.quitCleanupTimeout) { [weak self] in
             guard let self, self.awaitingTerminateReply else { return }
-            shellLog("[shell] 退出清理超时，强制放行退出（可能有子进程残留）")
-            self.replyTerminate(true)
+            // 5s 硬顶 = **直接退出**，不再 reply 放行后让 applicationWillTerminate
+            // 二次同步 stop()：那条路径会在 AppKit 的 willTerminate 里等仍在飞行的
+            // stop() 收尾（SIGTERM 5s + 有界收尸 2s，最坏 ≈7s），突破设计硬顶。
+            // 与 Electron 同向（main.ts runQuitCleanupChain 超时 = app.exit(1)）。
+            // 不截断持久化：此刻 SIGTERM 已发出 ≥5s，sidecar 自己的清理硬顶
+            // （QUIT_CLEANUP_TIMEOUT_MS − 500ms = 4.5s）早已到期。
+            shellLog("[shell] 退出清理超时，强制退出（与 Electron app.exit(1) 同向；可能有子进程残留）")
+            exit(1)
         }
         return true
     }

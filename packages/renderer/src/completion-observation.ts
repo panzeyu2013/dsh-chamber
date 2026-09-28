@@ -80,6 +80,10 @@ export interface FactsObservationRow {
   completedAtDomain?: 'host' | 'observer' | null
   updatedAt: number
   subagentCount: number
+  /** I-12 谱系认证位（mux 完整基线重算过）：只有它在场，`subagentCount` 才是子代理证据。 */
+  lineageVerified?: boolean
+  /** I-12 压制表命中（保留谱系表里有 durable 子代）：认证位缺席时按 busy 处理（fail-closed）。 */
+  subagentKnown?: boolean
   goal?: GoalFact | null
   /**
    * 宿主 `turn/end`（W2 身份）：**只读判别符**——`seq` 产出运行身份 `host:turn/<seq>`；
@@ -461,14 +465,22 @@ export function observeSource(input: {
       ? maxWatermarkValue(memory.factsWatermark, rowWatermark)
       : memory.factsWatermark
 
-    // 子代理：壳行按运行证据（stale 降 unknown）；facts-only 忽略 subagentCount。
+    // 子代理：壳行按运行证据（stale 降 unknown——残留计数**不是** busy 证据，契约测试钉住）。
+    // facts-only（I-12）：只有谱系已认证的行才作证据——认证过的 0 = idle（首次可证明「无
+    // 子代理」），认证过的 >0 = busy（抑制完成）；认证位缺席但保留表里有 durable 子代 =
+    // fail-closed busy（「列表不完整」不得读成「子代理结束」）；其余（watcher 来源）保持
+    // 旧口径：count>0 仅作 presence（unknown），永不作 busy 证据。
     const subagents: SubagentObservation = shellRow !== undefined
       ? (() => {
           const activity = shellActivityOf(shellRow, shellStale)
           return activity === 'running' ? 'busy' : activity === 'none' ? 'idle' : 'unknown'
         })()
       : factsRow !== undefined && factsUsable
-        ? (factsRow.subagentCount > 0 ? 'unknown' : 'idle')
+        ? (factsRow.lineageVerified === true
+            ? (factsRow.subagentCount > 0 ? 'busy' : 'idle')
+            : factsRow.subagentKnown === true
+              ? 'busy'
+              : factsRow.subagentCount > 0 ? 'unknown' : 'idle')
         : 'unknown'
 
     // 候选：complete 至多一个（归属过滤），ask/request 各自独立。重现会话的首份观测
