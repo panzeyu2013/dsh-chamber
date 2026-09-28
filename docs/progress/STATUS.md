@@ -151,8 +151,9 @@
 - **官方命令的键盘入口**（plan §1.3）：六个命令由官方 ui-workspace 注册（`WS:139-203`）。**可达四个**：
   `session.new`/`session.fork`/`session.archive` 调**共享服务**（键被派发就真的建/分叉/归档，归档在活动会话上弹官方两段式确认框）；
   `session.rename` 写 `controls.rename`，消费者是官方 `SessionRenameDialog`——它是 `shell.overlay` 的座席（`WS:4367-4372`），
-  该座席由本仓 layout fork 声明（`packages/dsh-chamber-client-ui-layout/src/client/index.ts:90`）并由官方 `AppFrame` 渲染
-  （fork `:22`/`:181`；`renderSlot("shell.overlay")` 见产物 `dsh-client-ui-layout/lib/client.js:312`、`:344-346`）⇒ **模态真的出现**。
+  该座席由本仓 layout fork 声明（`packages/dsh-chamber-client-ui-layout/src/client/index.ts#apply` 的 `slots.register`
+  子座席表 `shell.overlay`）并由官方 `AppFrame` 渲染（fork `:22`/`:181`；`renderSlot("shell.overlay")` 见产物
+  `dsh-client-ui-layout/lib/client.js`）⇒ **模态真的出现**。
   **死的两个**：`session.search`（`controls.search`）与 `workspace.add`（`controls.add`；其 `noPicker` 门因本仓为每个托管来源
   pin 了 directory-picker-browse、占同一座席而放行）只把 `searchRequest`/`addRequested` 写进被覆盖的官方浏览器 store，
   没有任何本仓可见的消费者。修法被注册表语义封死：

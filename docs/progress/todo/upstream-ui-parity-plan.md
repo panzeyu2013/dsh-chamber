@@ -43,8 +43,9 @@ design 同批更新；已落地面的契约见 design 06 §7、design 05 §2）�
   `session.new`→`navigation.startSession()`（:142）、`session.fork`→`navigation.forkSession(target.id)`（:184）、
   `session.archive`→`archiveSession(target.id)`（:200）调**共享服务**——键若被派发就真的建/分叉/归档；`session.rename`→
   `controls.rename(…)`（:167）写官方 store，但它的消费者是官方 `SessionRenameDialog`：该模态注册进 `shell.overlay`（`WS:4367-4372`），
-  而 `shell.overlay` 正是本仓 layout fork 声明的座席（`packages/dsh-chamber-client-ui-layout/src/client/index.ts:90`）并由官方
-  `AppFrame` 渲染（fork `:22`/`:181`；`renderSlot("shell.overlay")` 见产物 `dsh-client-ui-layout/lib/client.js:312`、`:344-346`）
+  而 `shell.overlay` 正是本仓 layout fork 声明的座席（`packages/dsh-chamber-client-ui-layout/src/client/index.ts#apply` 的
+  `slots.register` 子座席表 `shell.overlay`）并由官方 `AppFrame` 渲染（fork `:22`/`:181`；`renderSlot("shell.overlay")`
+  见产物 `dsh-client-ui-layout/lib/client.js`）
   ⇒ **模态真的出现，不是死件**。真正没有消费者的是两个：`session.search`→`controls.search`（:147）与 `workspace.add`→
   `controls.add`（:153）只把 `searchRequest`/`addRequested` 写进被覆盖的官方浏览器 store。`workspace.add` 的 `noPicker` 门
   （`WS:106` 的 `addReason()`）要求 `sidebar.workspaces.directoryFlow` 座席为空，而本仓为每个托管来源 pin 了
