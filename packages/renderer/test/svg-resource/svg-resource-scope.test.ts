@@ -164,6 +164,35 @@ function cloneOf(node: FakeElement): FakeElement {
 
 const element = (node: FakeElement): Element => node as unknown as Element
 
+/**
+ * Element double that mirrors the PRODUCTION DOM's `hasAttributes()` face and counts the
+ * two reads the old flush multiplied across five traversals: `children` accesses and
+ * `getAttribute` calls. The plain FakeElement deliberately has no `hasAttributes`, so
+ * every other spec drives the per-name fallback; this one measures production shape.
+ */
+class CountingElement extends FakeElement {
+  childReads = 0
+  attributeReads = 0
+
+  constructor(localName: string, attrs: Record<string, string> = {}) {
+    super(localName, attrs)
+    const list: FakeElement[] = []
+    Object.defineProperty(this, 'children', {
+      configurable: true,
+      get: () => { this.childReads += 1; return list },
+    })
+  }
+
+  hasAttributes(): boolean {
+    return this.attributeNames().length > 0
+  }
+
+  override getAttribute(name: string): string | null {
+    this.attributeReads += 1
+    return super.getAttribute(name)
+  }
+}
+
 /** The same icon authored with whitespace inside url( … ) — a form the guards must not skip. */
 function spaceyFormIcon(): FakeElement {
   const svg = new FakeElement('svg', { width: '16', height: '16' })
@@ -1238,6 +1267,144 @@ test('dispose() removes the link load listeners and a reinstall watches its own 
   second()
   assert.equal(linkB.listenerCount('load'), 0)
   assert.equal(linkA.listenerCount('load'), 0)
+})
+
+test('a same-batch a11y/style reference is read BEFORE the rename passes over the batch', () => {
+  const root = new FakeElement('body')
+  const style = new FakeElement('style')
+  style.textContent = '.late{clip-path:url(#order-style)}'
+  ;(root as unknown as { ownerDocument: unknown }).ownerDocument = {
+    querySelectorAll: (selector: string) => (selector === 'style' ? [style] : []),
+    getElementById: () => null,
+    styleSheets: [],
+  }
+  let registered: ((records: readonly { addedNodes: ArrayLike<unknown> }[]) => void) | null = null
+  installSvgResourceScope({
+    root: element(root) as unknown as ParentNode,
+    tokenPrefix: 'Q',
+    observe: (_target, callback) => {
+      registered = callback as never
+      return { disconnect: () => {} }
+    },
+    schedule: run => { run() },
+  })
+  const svg = new FakeElement('svg')
+  const group = new FakeElement('g', { 'clip-path': 'url(#order-a11y) url(#order-style) url(#order-free)' })
+  const defs = new FakeElement('defs')
+  for (const id of ['order-a11y', 'order-style', 'order-free']) {
+    const clip = new FakeElement('clipPath', { id })
+    clip.append(new FakeElement('rect', { width: '8', height: '8' }))
+    defs.append(clip)
+  }
+  svg.append(group, defs)
+  // Both reference holders and the icon arrive in ONE batch: the aria reference lives on a
+  // sibling node, the style reference only in the queued <style> text.
+  const holder = new FakeElement('button', { 'aria-labelledby': 'order-a11y' })
+  root.append(holder, style, svg)
+  ;(registered as unknown as (records: readonly { addedNodes: ArrayLike<unknown> }[]) => void)(
+    [{ addedNodes: [holder, style, svg] }],
+  )
+  const freeId = String(defs.children[2].getAttribute('id'))
+  assert.ok(/^Q\d+-order-free$/.test(freeId), freeId)
+  // The two same-batch references must already be in the document preserved set when the
+  // icon is renamed; otherwise these ids would carry the token prefix and dangle.
+  assert.equal(defs.children[0].getAttribute('id'), 'order-a11y')
+  assert.equal(defs.children[1].getAttribute('id'), 'order-style')
+  assert.equal(group.getAttribute('clip-path'), 'url(#order-a11y) url(#order-style) url(#' + freeId + ')')
+  assert.equal(holder.getAttribute('aria-labelledby'), 'order-a11y')
+  assert.equal(style.textContent, '.late{clip-path:url(#order-style)}')
+})
+
+test('a pure-text batch is walked ONCE: the five flush passes collapse into one DFS', () => {
+  const root = new FakeElement('body')
+  const scheduled: (() => void)[] = []
+  let registered: ((records: readonly { addedNodes: ArrayLike<unknown> }[]) => void) | null = null
+  installSvgResourceScope({
+    root: element(root) as unknown as ParentNode,
+    tokenPrefix: 'C',
+    observe: (_target, callback) => {
+      registered = callback as never
+      return { disconnect: () => {} }
+    },
+    schedule: run => { scheduled.push(run) },
+  })
+  const emit = (node: FakeElement): void => {
+    ;(registered as unknown as (records: readonly { addedNodes: ArrayLike<unknown> }[]) => void)([{ addedNodes: [node] }])
+  }
+  // The old flush walked every pending subtree five times (a11y ids, <style>/<link>
+  // detection, link watching, svg collection, resource probing): 5 children reads per
+  // node, and 3 a11y + 1 id + 9 resource-face attribute reads on the two attribute passes.
+  const OLD_CHILDREN_READS_PER_NODE = 5
+  const OLD_ATTRIBUTE_READS_PER_NODE = 13
+  const measure = (count: number): { children: number; attributes: number; attributed: number } => {
+    // A flat text block: container plus spans, every 8th carrying one benign attribute.
+    const nodes: CountingElement[] = [new CountingElement('div')]
+    for (let index = 1; index < count; index += 1) {
+      const span = index % 8 === 0
+        ? new CountingElement('span', { 'data-row': String(index) })
+        : new CountingElement('span')
+      nodes[0].append(span)
+      nodes.push(span)
+    }
+    const attributed = nodes.filter(node => node.hasAttributes()).length
+    for (const node of nodes) { node.childReads = 0; node.attributeReads = 0 }
+    root.append(nodes[0])
+    emit(nodes[0])
+    assert.equal(scheduled.length, 1)
+    scheduled.shift()?.()
+    let children = 0
+    let attributes = 0
+    for (const node of nodes) { children += node.childReads; attributes += node.attributeReads }
+    return { children, attributes, attributed }
+  }
+  const small = measure(64)
+  const large = measure(128)
+  // One traversal: exactly one children read per node for the whole batch.
+  assert.equal(small.children, 64)
+  assert.equal(large.children, 128)
+  assert.equal(large.children, 2 * small.children)
+  // No attributes -> zero attribute reads; otherwise the 13-name face is read exactly once.
+  assert.equal(small.attributes, 13 * small.attributed)
+  assert.equal(large.attributes, 13 * large.attributed)
+  assert.ok(small.attributed > 0 && large.attributed > small.attributed)
+  // Strictly below the old five-pass cost, and linear in the node count.
+  const oldSmall = OLD_CHILDREN_READS_PER_NODE * 64 + OLD_ATTRIBUTE_READS_PER_NODE * 64
+  const oldLarge = OLD_CHILDREN_READS_PER_NODE * 128 + OLD_ATTRIBUTE_READS_PER_NODE * 128
+  assert.ok(small.children + small.attributes < oldSmall, String(small.children + small.attributes) + ' !< ' + oldSmall)
+  assert.ok(large.children + large.attributes < oldLarge, String(large.children + large.attributes) + ' !< ' + oldLarge)
+  assert.ok(large.attributes <= 2 * small.attributes + 13, 'attribute reads scale with the block, not with a pass')
+})
+
+test('documentPreservedIds is queried per id, never copied per svg (P-scale guard)', () => {
+  const defined = Array.from({ length: 60 }, (_, index) => 'defined-' + index)
+  const referenced = defined.filter(id => id !== 'defined-59')
+  // A 5,000-entry document face, consulted through a has() lookup: counting the calls
+  // proves the module never materialises it (the old spread copied it once per svg).
+  const documentPreservedIds = new Set(Array.from({ length: 5000 }, (_, index) => 'preserved-' + index))
+  documentPreservedIds.add('defined-7')
+  let lookups = 0
+  const preservedLookup = {
+    has(id: string): boolean {
+      lookups += 1
+      return documentPreservedIds.has(id)
+    },
+  }
+  const plan = resourceRenamePlan(defined, referenced, 'T', [], preservedLookup)
+  assert.equal(plan.has('defined-7'), false, 'a document-preserved id must never be renamed')
+  assert.equal(plan.has('defined-8'), true)
+  assert.equal(plan.size, referenced.length - 1)
+  assert.equal(lookups, referenced.length, 'one lookup per defined∩referenced id, not one per preserved entry')
+  // The 4-arg form stays compatible and yields the same plan for the same membership.
+  assert.deepEqual([...resourceRenamePlan(defined, referenced, 'T', new Set(['defined-7']))], [...plan])
+  // Source ratchet: the document set is only ever queried, never spread per svg.
+  const source = normalize(stripComments(readFileSync(
+    createRequire(import.meta.url).resolve('@dsh-chamber/dsh-chamber-client-core/svg-resource-scope'),
+    'utf8',
+  )))
+  assert.ok(
+    !source.includes('...documentPreservedIds'),
+    'documentPreservedIds must be queried with has(), never copied (the removed O(P) spread)',
+  )
 })
 
 // ── The module face: an aria attribute entering the rename face is invisible
