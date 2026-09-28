@@ -232,6 +232,15 @@ final class ShellPageFactsTests: XCTestCase {
                       "语言事实读自 documentElement.lang")
         XCTAssertTrue(source.contains("postMessage") || source.contains("webkit.messageHandlers"),
                       "必须经 WKWebView message handler 上报")
+        // 观察面收窄（性能）：事实只来自 html/body 自身的属性与 head/body 的直接子节点
+        // 插入。childList 加全树观察会让页面的**每一次**节点增删（流式 token、虚拟列表
+        // 换行）都生成 MutationRecord 并回调本壳——那是页面级线性成本，必须钉死不存在。
+        XCTAssertFalse(source.contains("subtree"),
+                       "事实观察者绝不订阅整棵子树（childList 全树 = 页面级线性成本）")
+        XCTAssertTrue(source.contains("document.body"),
+                      "body 的属性事实（data-ds-dark-theme）必须单独观察")
+        XCTAssertTrue(source.contains("document.head"),
+                      "head 的直接子节点（meta）必须观察插入面")
         let attributeFilter = attributeFilterSource(source)
         XCTAssertFalse(attributeFilter.isEmpty, "脚本必须设置 attributeFilter（否则收不到属性变化）")
         // 观察面是 HTML 属性名：lang、data-ds-dark-theme，以及 html 内联
