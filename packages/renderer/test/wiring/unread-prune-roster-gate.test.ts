@@ -38,6 +38,10 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { durableUnreadPruneAllowed, healthProbeUnavailableDiagnostic, rosterIncompleteDiagnostic } from '../../src/app-hooks/use-bridge-subscriptions.ts'
+import {
+  BRIDGE_ABSENT_PROBE_LIMIT, BRIDGE_PROBE_MS, BRIDGE_SLOW_PROBE_MS,
+  classifySshBridgeProbeAttempt,
+} from '../../src/app-hooks/use-ssh-bridge-probe.ts'
 import { createCompleteLedger } from '../../src/complete-ledger.ts'
 import { AUTHORITY_LOG_KEY } from '@dsh-chamber/dsh-chamber-client-core/authority-log-store'
 import { createFactsHealthRecorder, createFactsStepGuard, type FactsHealthSample } from '../../src/facts-health.ts'
@@ -49,6 +53,8 @@ import {
 import { NOTIFICATION_OUTBOX_KEY, createNotificationOutbox } from '../../src/notification-outbox.ts'
 
 const APP = readFileSync(fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8')
+// A6：桥探测 effect 已抽到 app-hook（App.tsx 行数棘轮），其源码锁读 hook 文件。
+const PROBE = readFileSync(fileURLToPath(new URL('../../src/app-hooks/use-ssh-bridge-probe.ts', import.meta.url)), 'utf8')
 
 /** 从 marker 起的第一个花括号块（含嵌套；本门控块内字符串/模板无失衡花括号）。 */
 function bracedBlockFrom(source: string, marker: string): string {
@@ -111,16 +117,51 @@ test('F11 wiring: the no-bridge verdict comes only from the bounded probe budget
     APP.includes("const [bridgeVerdict, setBridgeVerdict] = useState<DesktopBridgeVerdict>('pending')"),
     'the verdict starts pending (first frame cannot distinguish a late bridge from no bridge)',
   )
+  // A6：探测 effect 抽到 app-hook 后，语义锁跟着代码落在 hook 源码上；App 只剩这一处接线。
+  assert.ok(APP.includes('useSshBridgeProbe({'), 'the probe effect lives in its app-hook')
   // 看到 desktopSsh：置 present（有桥 ⇒ 门重新交给 roster 结算）。
-  assert.equal(APP.split("setBridgeVerdict('present')").length - 1, 1)
-  assert.equal(APP.split('attempts >= BRIDGE_ABSENT_PROBE_LIMIT').length - 1, 1, 'absent only at the bounded budget')
-  assert.equal(APP.split("prev === 'present' ? prev : 'absent'").length - 1, 1, 'a seen bridge can never regress to absent')
-  // 预算常量：探测节奏与预算都存在（absent 不得由单帧缺席直接产生）。
-  assert.ok(APP.includes('const BRIDGE_PROBE_MS = '))
-  assert.ok(APP.includes('const BRIDGE_ABSENT_PROBE_LIMIT = '))
+  assert.equal(PROBE.split("setVerdict('present')").length - 1, 1)
+  assert.equal(PROBE.split('attempts >= BRIDGE_ABSENT_PROBE_LIMIT').length - 1, 1, 'absent only at the bounded budget')
+  assert.equal(PROBE.split("prev === 'present' ? prev : 'absent'").length - 1, 1, 'a seen bridge can never regress to absent')
+  // 预算常量：探测节奏与预算都存在（absent 不得由单帧缺席直接产生），且预算耗尽后还有 30s 长尾。
+  assert.ok(PROBE.includes('const BRIDGE_PROBE_MS = '))
+  assert.ok(PROBE.includes('const BRIDGE_ABSENT_PROBE_LIMIT = '))
+  assert.ok(PROBE.includes('const BRIDGE_SLOW_PROBE_MS = '))
   // 无桥判定不得顺手改权威结算位：preload 迟到的窗口仍走标准 roster 水合。
   assert.equal(APP.split('rosterGate.settle()').length - 1, 1, 'only the authoritative pull settles the roster')
-  assert.equal(APP.split('setBridgeVerdict').length - 1, 3, 'pending init + present + absent transitions only')
+  assert.equal(APP.split('setBridgeVerdict').length - 1, 2, 'pending init + the single probe-hook wiring only')
+})
+
+test('A6: the probe budget exhausts into the 30s tail and a late bridge still takes the original path', () => {
+  // 预算内的每一次尝试保持 500ms 节奏且不动判定（迟到桥的正常窗口）。
+  for (let attempts = 1; attempts < BRIDGE_ABSENT_PROBE_LIMIT; attempts += 1) {
+    assert.deepEqual(
+      classifySshBridgeProbeAttempt(attempts, false),
+      { verdict: null, nextDelayMs: BRIDGE_PROBE_MS },
+      'attempt ' + attempts + ' is still inside the 500ms window',
+    )
+  }
+  // 预算耗尽那一拍判 'absent' 并降到 30s 长尾；之后的每一拍都还在探（不是停探）。
+  assert.deepEqual(
+    classifySshBridgeProbeAttempt(BRIDGE_ABSENT_PROBE_LIMIT, false),
+    { verdict: 'absent', nextDelayMs: BRIDGE_SLOW_PROBE_MS },
+  )
+  assert.deepEqual(
+    classifySshBridgeProbeAttempt(BRIDGE_ABSENT_PROBE_LIMIT + 1, false),
+    { verdict: 'absent', nextDelayMs: BRIDGE_SLOW_PROBE_MS },
+    'the long tail keeps probing: a late bridge must still be seen',
+  )
+  // 桥出现 = 原语义（置 present 且停探）：预算内与预算耗尽后走同一条分支。
+  assert.deepEqual(classifySshBridgeProbeAttempt(1, true), { verdict: 'present', nextDelayMs: null })
+  assert.deepEqual(
+    classifySshBridgeProbeAttempt(BRIDGE_ABSENT_PROBE_LIMIT + 10, true),
+    { verdict: 'present', nextDelayMs: null },
+    'a late bridge after the budget is still the original sighting path',
+  )
+  // 节奏常量的字面值（预算 2.5s = 5 × 500ms；长尾 30s）。
+  assert.equal(BRIDGE_PROBE_MS, 500)
+  assert.equal(BRIDGE_ABSENT_PROBE_LIMIT, 5)
+  assert.equal(BRIDGE_SLOW_PROBE_MS, 30_000)
 })
 
 test('F6 wiring: the roster gate settles only on a successful authoritative roster pull', () => {

@@ -77,6 +77,8 @@ export const GROUPS = {
     'test/lifecycle/source-refresh-hint.test.ts',
     // P3 会话面绘制信号（[data-phase] 揭示门）的纯决策契约。
     'test/lifecycle/session-surface.test.ts',
+    // A6：InstanceView 1 Hz 采样座位的可执行契约（仅屏上 settled 挂表 / hidden 先于健康读取）。
+    'test/lifecycle/instance-view-sampling.test.ts',
     // P2 露屏接线：held 帧的定时器必须来自帧的绝对期限（>0ms），越界必须揭示租客。
     'test/lifecycle/veil-release-timer.test.ts',
   ],

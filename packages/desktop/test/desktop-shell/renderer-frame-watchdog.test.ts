@@ -25,8 +25,9 @@ function probeScriptPage(armed: (() => readonly string[]) | undefined) {
   }
   const pageWindow: Record<string, unknown> = {}
   if (armed !== undefined) pageWindow.__dshChamberInjection = { armed }
+  const pageDocument = { visibilityState: 'visible' as string }
   Reflect.set(globalThis, 'window', pageWindow)
-  Reflect.set(globalThis, 'document', { visibilityState: 'visible' })
+  Reflect.set(globalThis, 'document', pageDocument)
   Reflect.set(globalThis, 'requestAnimationFrame', (cb: () => void): number => {
     scheduled.push(cb)
     return scheduled.length
@@ -36,8 +37,10 @@ function probeScriptPage(armed: (() => readonly string[]) | undefined) {
     return timers.length
   }) as typeof setTimeout
   return {
-    probe: (): number => eval(RENDERER_FRAME_PROGRESS_SCRIPT) as number,
+    probe: (): number | null => eval(RENDERER_FRAME_PROGRESS_SCRIPT) as number | null,
     runFrame: (): void => { scheduled.shift()?.() },
+    runTimer: (): void => { timers.shift()?.() },
+    setVisibility: (state: string): void => { pageDocument.visibilityState = state },
     pendingRearms: (): number => scheduled.length + timers.length,
     restore: (): void => {
       Reflect.set(globalThis, 'window', previous.window)
@@ -67,6 +70,39 @@ test("an armed frame-stop fault freezes the shipped probe script's counter", () 
     page.runFrame()
     assert.equal(page.probe(), 0, 'the loop stopped instead of counting frames')
     assert.equal(page.pendingRearms(), 0, 'no re-arm: a stopped loop stays stopped')
+  } finally {
+    page.restore()
+  }
+})
+
+test('a hidden document drops the loop and a visible probe injection re-arms it', () => {
+  const page = probeScriptPage(undefined)
+  try {
+    assert.equal(page.probe(), 0, 'the probe initializes the counter and arms the loop')
+    page.runFrame()
+    assert.equal(page.probe(), 1)
+    assert.equal(page.pendingRearms(), 1, 'the healthy loop holds exactly one pending re-arm')
+
+    // Hidden: the injection itself is an explicit suspension and counts nothing.
+    page.setVisibility('hidden')
+    assert.equal(page.probe(), null, 'a hidden injection returns null instead of a frame count')
+    assert.equal(page.pendingRearms(), 1, 'the already-pending timer is the only chain left')
+
+    // The timer that comes due while hidden must not request another frame: the
+    // chain is dropped instead of held against a document that cannot run rAF.
+    page.runTimer()
+    assert.equal(page.pendingRearms(), 0, 'no setTimeout→rAF chain is held while hidden')
+    assert.equal(page.probe(), null)
+    assert.equal(page.pendingRearms(), 0, 'the hidden injection arms nothing either')
+
+    // The next visible injection re-arms the dropped loop; the counter resumes.
+    page.setVisibility('visible')
+    assert.equal(page.probe(), 1, 'the visible injection re-arms the dropped loop')
+    assert.equal(page.pendingRearms(), 1, 'exactly one chain is re-armed')
+    page.runFrame()
+    assert.equal(page.probe(), 2, 'the restarted loop counts frames again')
+    page.probe()
+    assert.equal(page.pendingRearms(), 1, 'an injection on a healthy loop never double-arms it')
   } finally {
     page.restore()
   }

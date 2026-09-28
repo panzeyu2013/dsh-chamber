@@ -11,21 +11,34 @@ export const RENDERER_FRAME_PROGRESS_SCRIPT = `
 (function () {
   if (document.visibilityState !== 'visible') return null;
   var name = '__dshChamberFrameProgress';
-  if (!window[name]) {
-    var state = { frames: 0 };
-    Object.defineProperty(window, name, { value: state });
-    function frame() {
-      // Acceptance injection (cross-shell harness): an armed 'frame-stop' fault
-      // stops the loop for real, which is what the probe must observe.
-      var injected = window.__dshChamberInjection;
-      if (injected && typeof injected.armed === 'function'
-          && injected.armed().indexOf('frame-stop') !== -1) return;
-      state.frames += 1;
-      setTimeout(function () { requestAnimationFrame(frame); }, 1000);
-    }
-    requestAnimationFrame(frame);
+  function arm(state) {
+    if (state.armed) return;
+    state.armed = true;
+    requestAnimationFrame(function () { frame(state); });
   }
-  return window[name].frames;
+  function frame(state) {
+    // Acceptance injection (cross-shell harness): an armed 'frame-stop' fault
+    // stops the loop for real, which is what the probe must observe.
+    var injected = window.__dshChamberInjection;
+    if (injected && typeof injected.armed === 'function'
+        && injected.armed().indexOf('frame-stop') !== -1) return;
+    state.frames += 1;
+    // Hidden is a gap, not a fault: check BEFORE re-arming, so a hidden document
+    // holds no setTimeout→rAF chain. The next probe injection on a visible
+    // document re-arms the dropped loop through arm().
+    if (document.visibilityState !== 'visible') { state.armed = false; return; }
+    setTimeout(function () {
+      if (document.visibilityState !== 'visible') { state.armed = false; return; }
+      requestAnimationFrame(function () { frame(state); });
+    }, 1000);
+  }
+  var state = window[name];
+  if (!state) {
+    state = { frames: 0, armed: false };
+    Object.defineProperty(window, name, { value: state });
+  }
+  arm(state);
+  return state.frames;
 })()
 `;
 
