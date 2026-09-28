@@ -76,7 +76,7 @@
 - 连接稳定性：控制面代理 24h 记录 494 次 WS 关闭**全部是 upstream close**（local 108 次、寿命 60–135 s 居多、最长 871 s，0 次 heartbeat lost），但独立 Node 客户端挂同一 mux 400 s 无 close ⇒ 关闭不是实例心跳的普遍行为，**页面侧（WebKit 的 pong/调度差异）才是差异所在**；下一步仍是抓 close code（1006/4000）与把页面侧 mux 关闭与 `[chamber:evidence]` 账本对齐。
 - JSC 崩溃 → 静默整页重载：引擎缺陷（WebKit 22625），仓内只降触发概率 + 状态可见化；2026-09-28 15:28:33 新增报告与已知族同源（主线程微任务路径 `operationOptimize → newReplacementCodeBlockFor`，`far=0x120`）⇒ 整页重载清空全部页面内事实仍是「各来源同时坏」的独立机制；恢复提示与过程缺真机验证、页面事实持久消费面缺（`dsh-chamber.evidence-log.v1` 已给判定面，尚未覆盖事实行本身）。
 - 会话打开停滞（仅余开放项；根因归 design 14 §D4 的引擎判定第三类 vendor 补丁，不复述）：宿主无首帧期限；①触屏档无载波层；②blank 子形态恢复入口待真机；③移动端 source↔artifact 缺锁；④FNV 预算键碰撞；⑤`socket-silent` 消费面缺；⑥`presented` document 级近似；⑦阈值未校准；⑧unary 引导未采纳；⑨无消费的取证小面；⑩实例级回退粗粒度；⑪未完成补读面待接线或退役。宿主两条已登记 `todo/upstream-proposals.md` §4.3/§4.7。
-- 本地 facts 间歇降级：**机制已定案为「页面调度证据被误记为来源事实」**（design 14 §D4 第四次排查）：服务端同时刻全绿（壳外同源 `session/list` 30/30 轮 34–98 ms、`chamber/session-state` 36 轮 3–25 ms、独立 Node mux 客户端 400 s 无 close），而页面权威日志写满 5s `session/list` 超时 / `Load failed` / `read deadline exceeded`，且 probe 均发生在窗口刚获得焦点、5 s 后已失焦的窗口里。已落（同一 P0 线）：证据有效性层（`dsh-stream-state/src/evidence.ts` 的 verdict/admissibility + `dsh-chamber-client-core/src/page-schedule.ts` 的页面调度记录 + `evidence-log.ts` 的有界持久 `[chamber:evidence]` 账本）、建连/基线/权威读/boot 图/侧栏探针全部只在页面被调度时落账、`verificationExhausted` 整页闩锁退役（有界 defer + 事件驱动重臂）、打包态冷启动按 `/health` 的 `dsh.status` 分「在途相位等待 / 静止相位立即呈现」（壳侧不设总期限）、`dsh-stream-state` 自愈臂「结算留 pending、下一个 ready 世代偿还」、boot 图取消不落缺口。未落：gateway 镜像 `diagnostics.degraded=true`（harness `followFailures` 19）的成因；下一次时好时坏窗口带 `[chamber:evidence]` 账本做一次真机复验（`unscheduled booked=false` 的出现频率与 v2 判定的对照）。
+- 本地 facts 间歇降级：**机制已定案为「页面调度证据被误记为来源事实」**（design 14 §D4 第四次排查）：服务端同时刻全绿（壳外同源 `session/list` 30/30 轮 34–98 ms、`chamber/session-state` 36 轮 3–25 ms、独立 Node mux 客户端 400 s 无 close），而页面权威日志写满 5s `session/list` 超时 / `Load failed` / `read deadline exceeded`，且 probe 均发生在窗口刚获得焦点、5 s 后已失焦的窗口里。未落：gateway 镜像 `diagnostics.degraded=true`（harness `followFailures` 19）的成因；下一次时好时坏窗口带 `[chamber:evidence]` 账本做一次真机复验（`unscheduled booked=false` 的出现频率与 v2 判定的对照）。
 - **Electron 托盘图标尺寸未实机核验**（Swift 对偶面＝自持 18pt 图，`macos/Sources/DSHChamber/StatusItemIcon.swift`）：`packages/desktop/main.ts` 的 `maybeCreateTray`（`packages/desktop/main.ts#=literal:function maybeCreateTray(cp: PlaneHandle)`）把 1024×1024 的 `resources/icon.png`（打包后 `process.resourcesPath/icon.png`）原样交给 `Tray`，macOS 下是否被菜单栏自动缩放未验；判据 = 打包态托盘图标与状态栏等高、不出现被裁的大图，并与 Swift 侧 18pt 观感一致；若不缩放 ⇒ 换/缩专用托盘图，或按 T-15 纪律登记 deviations。两侧都需实机目检（Swift 侧装新构建后看菜单栏，Electron 侧同上）。
 - **macOS 原生壳：设置页窗口拖拽面实机目检**（未验）：判据 = 实机上从设置页页头行空白处按下可拖动窗口、首组标题区域不被吃成文本选择。相关：`packages/dsh-chamber-client-ui-settings-plugin-manager/src/client/EmbeddedPluginManagerPage.module.css` 的基础落位规则（首组头 `pointer-events: none`）与 `macos/Sources/DSHChamber/ShellWindowDrag.swift` 的 `[data-window-drag]` 祖先链判定；设计 05 §5。
 - **实机验收 + soak 未执行**：Swift 壳流式中点开 ×20、soak 采集 mux churn 与 JSC 崩溃率基线；证据路径 = `~/Library/Logs/DiagnosticReports` WebContent 报告、`control-plane.log` 的 `browser close` 频率、`dsh-chamber:stream-forensics`/`dsh-chamber:stream-carrier-failed` 页面事实；design 14 §D4 末条。
@@ -143,8 +143,8 @@
 - 呈现语义：行尾状态槽（时间只在卡片）、会话卡状态行 0–1（上游 1–2 且至少一行）、菜单密度 = 原语 `compact` 实测档
   （24px 行/11px 字，比 26px 列表行矮 2px）、命中盒 = 视觉盒（六个小图标钮 20/20/18/16）、行标题两级墨色、
   动作簇 4px/20px、footer `gap: 4px`。
-- 缺的上游功能（已裁不做）：`sidebar.toggle.badge`、`sidebar.workspaces` 的官方归档/恢复/过滤贡献（见「范围决策」条）、
-  flat 单列表模式（推迟）、跨来源移动会话（v1 不做）。
+- 缺的上游功能（已裁不做）：`sidebar.toggle.badge`、`sidebar.workspaces` 的官方归档/恢复/过滤贡献、flat 单列表模式、跨来源移动会话
+  ——本条只登记「与上游不同」这一事实，逐条裁决与理由见上文「范围决策」条，不重复裁决文字。
 - 缺的上游交互机制（**按裁决登记为不做**；上游证据用安装产物 `SB`/`WS` 简写，本仓面只写路径不写行号）：
   - **重命名提交无校验**：上游 `trim()` 后提交、空/未变/重名时禁用确认并给 `conflict.named`、聚焦全选标题、组合输入
     中的 Enter 被 `composingRef` 吞掉（`WS:1142-1152`、`WS:1430`、`WS:1440-1446`、`WS:1451`；`session-actions/RenameSession.tsx`）；
@@ -185,8 +185,9 @@
   其 apps 探针落在控制面 origin，`currentApp()` 恒 undefined，键被消费后静默无反应。修法被注册表语义封死：
   `dsh-client-shortcuts/lib/client.js` 的 `ShortcutRegistry.register` 在 :589 对重复 id 抛 `Duplicate shortcut command`、
   :602 逐 runtime×platform 校验默认键重叠并抛 `Conflicting shortcut defaults`（:598/:599 另拒 Web 不可达键与保留键）
-  ⇒ 既不能覆盖注册同名 id，也不能用同一默认键自建 id。未做 = 一次实机确认两个死键确无可见反应（plan §1.3 的 C2 清单）；
-  两个活键与本仓 UI 并存：官方重命名模态 vs 本仓行内重命名、官方归档确认 vs 本仓两段式——不同入口、同语义，互不叠加。
+  ⇒ 既不能覆盖注册同名 id，也不能用同一默认键自建 id。未做 = 按 plan §1.3 的 C2 清单做一次实机判定（①四个活键确有效应；
+  ②⌥⌘R/⇧⌘A 各只出现官方一层、与本仓行内重命名/两段式是否真的不叠加；③store 级的两个死键 ⌘K/⌘O 确无可见反应），
+  再定登记口径；`workspace.openLocal` 的 ⌥⌘O 是另一种死法（键被消费、无反馈），不在 C2 三项内。
 - **悬停卡与 tooltip 的抑制契约**：vendor `HoverCard` 用模块私有的 `TooltipSuppression` context 抑制锚点内 tooltip，
   该 context 不在 `ui-primitives` 导出面 ⇒ 悬停 workspace 头的 `+` 时 tooltip（500ms）与卡片（800ms）会同时出现；
   退役条件 = 上游导出该 context 或本仓自持 tooltip（design 06 §7）。
