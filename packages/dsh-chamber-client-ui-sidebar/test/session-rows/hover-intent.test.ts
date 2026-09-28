@@ -171,10 +171,10 @@ test('dispose drops pending timers (StrictMode effect cleanups re-run setup)', (
 })
 
 test('custom timings are honored (the machine takes both timings as options)', () => {
-// Scope note: `openDelayMs` is an option of the
-// machine and a documented prop of `RowHoverCard`, but NO production caller
-// passes it — both `<RowHoverCard>` sites use the official 500ms dwell. This
-// case proves the seam works; it does not claim a per-row dwell exists.
+// Scope note: `openDelayMs` is an option of the machine and a documented prop of
+// `RowHoverCard`. Both production sites now pass upstream's 800ms explicitly
+// (ServerSection.tsx / ServerSectionRows.tsx); the machine default stays 500 =
+// the vendor HoverCard default. This case proves the seam honors a custom value.
   const h = harness({ openDelayMs: 120, graceMs: 40 })
   h.intent.enter()
   mock.timers.tick(119)

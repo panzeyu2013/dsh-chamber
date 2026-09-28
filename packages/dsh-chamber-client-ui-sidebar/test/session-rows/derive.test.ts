@@ -1039,6 +1039,27 @@ test('round-3 restore: label fallbacks, vendor displayTitle and label/reuse sign
   assert.notEqual(serversProjectionSignature([base]), serversProjectionSignature([reusable]), 'a reuse-only change must republish')
   const explicitNull = server('local', { workspaces: [{ id: 'w1', title: 'Work', reusableBlankSessionId: undefined, sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: false, updatedAt: 1 }] }] })
   assert.equal(serversProjectionSignature([base]), serversProjectionSignature([explicitNull]), 'absent and explicit-null are the same reuse fact')
+  // The workspace hover card RENDERS these two facts (official content), so a
+  // path/creation-only change must move the publish gate too.
+  const withPath = server('local', { workspaces: [{ ...base.workspaces[0]!, path: '/w1' }] })
+  assert.notEqual(serversProjectionSignature([base]), serversProjectionSignature([withPath]), 'a path-only change must republish')
+  const withCreatedAt = server('local', { workspaces: [{ ...base.workspaces[0]!, createdAt: 1 }] })
+  assert.notEqual(serversProjectionSignature([base]), serversProjectionSignature([withCreatedAt]), 'a creation-time-only change must republish')
+  // 两个独立对象、同一组事实 ⇒ 同一签名（签名只吃事实，不吃对象身份）。
+  const hoverFacts = { path: '/w1', createdAt: 1 } as const
+  const withHoverFacts = () => server('local', { workspaces: [{ ...base.workspaces[0]!, ...hoverFacts }] })
+  assert.equal(
+    serversProjectionSignature([withHoverFacts()]),
+    serversProjectionSignature([withHoverFacts()]),
+    'identical hover facts sign identically',
+  )
+  // 缺席与显式 undefined 是同一事实（签名用 `?? null` 归一，与 reusableBlankSessionId 同规）。
+  const explicitUndefinedPath = server('local', { workspaces: [{ ...base.workspaces[0]!, path: undefined }] })
+  assert.equal(
+    serversProjectionSignature([base]),
+    serversProjectionSignature([explicitUndefinedPath]),
+    'an absent path and an explicit undefined path are the same fact',
+  )
 })
 
 test('round-3 restore: workspace membership order, accounting slots and passthrough', () => {
@@ -1106,6 +1127,30 @@ test('round-3 restore: findReusableBlankSession skip rules and derive-side exclu
     archiveSetKnown: true,
   }, 'srv-a', '', undefined, 1_000)
   assert.equal('reusableBlankSessionId' in (synthetic[0] ?? {}), false, 'synthetic cwd groups offer no reuse')
+})
+
+test('workspace hover-card facts: wire path + Date.parse(createdAt) reach the projection', () => {
+  // Distinctive bytes on purpose: the fixture's default path is '/' + id, so a
+  // regression that synthesized the path from the id would still read '/w1'.
+  const projected = deriveServerWorkspaces(
+    snapshot([{ ...workspace('w1', 'Work', ['s1']), path: '/Users/me/proj', createdAt: '2031-05-06T07:08:09Z' }], [session('s1', 5)]),
+    'srv-a', '', undefined, 1_000)
+  assert.equal(projected[0]?.path, '/Users/me/proj', 'the card shows the workspace display path')
+  assert.equal(projected[0]?.createdAt, Date.parse('2031-05-06T07:08:09Z'),
+    'the group builder parses the same wire string with Date.parse (upstream buildGroup)')
+  // '' is what fetchInstanceSnapshot writes for cwd-derived fallback groups;
+  // Date.parse('') is NaN and must become "no creation fact", or the verbatim
+  // createdLabel renders NaN年NaN月NaN日.
+  const unparseable = deriveServerWorkspaces(
+    snapshot([{ ...workspace('w2', 'W2', []), createdAt: '' }], []), 'srv-a', '', undefined, 1_000)
+  assert.equal(unparseable[0] !== undefined && 'createdAt' in unparseable[0], false,
+    'an unparseable value carries no creation fact (undefined is what unmounts the card)')
+  assert.equal(unparseable[0]?.path, '/w2', 'the path is still a fact (the sparse write drops only createdAt)')
+  const ungrouped = deriveServerWorkspaces(snapshot([], [session('stray', 5)]), 'srv-a', '', undefined, 1_000)
+  const bucket = ungrouped.find(row => row.ungrouped === true)
+  assert.notEqual(bucket, undefined)
+  assert.equal(bucket !== undefined && 'path' in bucket, false, 'the synthetic ungrouped bucket has no host workspace row, so no card facts')
+  assert.equal(bucket !== undefined && 'createdAt' in bucket, false)
 })
 
 test('round-3 restore: orderServersForDisplay/nextServerOrder remaining drop-math edges', () => {

@@ -9,7 +9,7 @@
  *    （now 会让 memo 恒失效），悬停卡改成 open 时自取 Date.now()；
  * 2. 行的 12 处状态读数全走 reader，reader 内部共用 ONE memo 槽：
  *    (facts 身份, session.running, stale) 相同即同一次 sessionRowState 派生；
- * 3. SidebarRoot 的 ctxValue 走 useMemo 且 42 个字段逐项进依赖数组；
+ * 3. SidebarRoot 的 ctxValue 走 useMemo 且 43 个字段逐项进依赖数组；
  * 4. 空 query 不建搜索快照、空 rowErrors 不扫全表，短路都在调用点。
  *
  * Run directly: node test/session-rows/row-render-cost.test.ts
@@ -46,10 +46,10 @@ test('the row is a module-level memo component with value props and no render cl
   assert.ok(openAt !== -1 && clockAt > openAt, 'the clock is read inside the open-only card body')
 })
 
-test('the row derives nothing itself: 9+ state faces share the one memoized derivation', () => {
+test('the row derives nothing itself: 12 state faces share the one memoized derivation', () => {
   assert.doesNotMatch(ROWS, /sessionRowState\(/, 'the row must not call the pure leaf directly')
   const faces = ROWS.match(/sessionState(?:Label|Pending|Marker|Dot)\(server, session\)/g) ?? []
-  assert.ok(faces.length >= 9, 'the row renders marker/label/pending/dot (' + faces.length + ' reader calls)')
+  assert.equal(faces.length, 12, 'the row renders marker/label/pending/dot (' + faces.length + ' reader calls)')
   // 每个 reader 原文不动地经同一个 sessionRowStateOf……
   for (const reader of ['sessionStateLabel', 'sessionStatePending', 'sessionStateMarker', 'sessionStateDot'])
     assert.match(HOOK, new RegExp('const ' + reader + ' = [\\s\\S]{0,240}?sessionRowStateOf\\(server, session\\)'))
@@ -66,13 +66,13 @@ test('the row menu items are memoized on the dictionary', () => {
   assert.match(ROWS, /items=\{menuItems\}/)
 })
 
-test('the section memoizes its 42-field context value, covering every field', () => {
+test('the section memoizes its 43-field context value, covering every field', () => {
   assert.match(ROOT, /const ctxValue: SidebarSectionContextValue = useMemo\(\(\) => \(\{/)
   const block = /const ctxValue: SidebarSectionContextValue = useMemo\(\(\) => \(\{([\s\S]*?)\}\), \[([\s\S]*?)\]\)/.exec(ROOT)
   assert.ok(block !== null, 'the memoized ctxValue block must exist')
   const keys = [...block[1].matchAll(/^\s{4}([A-Za-z_$][\w$]*),$/gm)].map(match => match[1])
   const deps = block[2].split(',').map(part => part.trim()).filter(part => part !== '')
-  assert.equal(keys.length, 42, 'the context carries 42 fields')
+  assert.equal(keys.length, 43, 'the context carries 43 fields')
   assert.deepEqual([...keys].sort(), [...deps].sort(),
     'every context field must be a memo dependency: a missing one serves a stale value through the provider')
 })

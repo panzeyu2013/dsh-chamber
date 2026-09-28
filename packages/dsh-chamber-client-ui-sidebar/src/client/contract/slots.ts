@@ -96,13 +96,18 @@ export interface SidebarPanelMetadata {
 
 /** The effective-binding fields of one registered command this shell reads. */
 export interface SidebarShortcutEntry {
-  /** Registered command id; the shell binds `sidebar.left.toggle` and `session.new`. */
+  /** Registered command id; the shell reads the effective binding of every command it shows
+   * a keycap for: sidebar.left.toggle, session.new, session.search, workspace.add,
+   * session.rename, session.fork, session.archive. */
   readonly id: string
   /** Effective keycap sequence; empty when the command is unbound. */
   readonly keys: readonly string[]
   /** `aria-keyshortcuts` spelling of the effective binding; undefined when unbound. */
   readonly aria: string | undefined
 }
+
+/** Bound `useShortcuts` selector hook (the loose vendor inject face erases the hook's type). */
+export type ShortcutsHook = <Selected>(selector: (rows: readonly SidebarShortcutEntry[]) => Selected) => Selected
 
 /** Owner share of the settings seat: the column display state the trigger row renders against. */
 export interface SidebarSettingsOwnerProps {

@@ -50,6 +50,10 @@ export const GROUPS = {
     // 行为（design 06 §4.3）：?? 与 || 的差别在这里承重，禁止静默改名/删除。
     'test/session-rows/running-resolution.test.ts',
     'test/session-rows/session-row-window.test.ts',
+    // 上游 useTitleMarquee 的移植：placeTitle/restTitle 的两个渐隐钩子 + 常数下限。
+    'test/session-rows/session-title-marquee.test.ts',
+    // 官方「创建于 {time}」悬停行：zh/en 日期模板 + createdLabel 组合（无时钟行为测）。
+    'test/session-rows/hover-created-label.test.ts',
     'test/session-rows/todo-attention.test.ts',
     'test/session-rows/hover-intent.test.ts',
     // Source-header prewarm intent: the 120ms dwell machine (distinct from the
@@ -114,6 +118,10 @@ export const GROUPS = {
     // Cross-host lockstep for the gateway runtime-status identity literal
     // (gateway producer + inline payload, desktop constant, this package's contract).
     'test/source-runtime/gateway-runtime-status-kind-lockstep.test.ts',
+  ],
+  // shared: cross-package leaves this package also locks (refusal classifier, error text,
+  // settled-boot gap identity + copy shape).
+  shared: [
     // The shared 409 refusal classifier + verbatim-error projection (the plugins re-export it).
     'test/shared/runtime-refusal.test.ts',
     // The shared error-text projections (errorMessage / describeThrown).

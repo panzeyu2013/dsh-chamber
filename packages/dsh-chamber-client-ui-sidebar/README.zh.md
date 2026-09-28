@@ -76,7 +76,7 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   App 层切到该来源的 shell 并打开会话。
 - 行操作（v1 最小集，走该来源自己的 unary wire 客户端
   `shared/instance-api.ts`）**全部收在行菜单里**：会话 = 重命名/分叉/归档；
-  真实 workspace = 行内 `+` 新建会话（worktree 行也有）+ kebab 里的重命名/
+  真实 workspace = 行内 new-chat 字形新建会话钮（worktree 行也有）+ kebab 里的重命名/
   删除（仅非 worktree 行——派生 worktree 刻意无 kebab，OpenChamber parity）。
   不再有第二个悬停按钮——会话行的归档是**菜单项**且走官方**两段式**：安静会话立即归档、
   无确认（归档只隐藏该行、从不触及会话日志——上游把安静归档排除在确认家族之外的同一理由）；
@@ -234,7 +234,7 @@ vite shared 单例纪律，因为目标实例自己的 ctx 也要读它）及其
 ## 保留的官方外壳几何
 
 - logo 行（wide/rail）、New Session（走本 ctx 的运行时动作——恒为当前来源）、
-  wide/rail 折叠状态机（滑动 + 交叉淡化、rail-in 动画）、跟随指针的滚动条
+  wide/rail 折叠状态机（滑动 + 类驱动的交叉淡化；入场动画整组已退役，见 design 06 §7）、跟随指针的滚动条
   纪律、foot（`sidebar.footer.action` + `sidebar.settings`）。
 - macOS 顶部带（`.topStrip`）：隐藏标题栏下红绿灯浮在列顶，故该带预留这一条并
   把面板开关停在带内（上游 ui-sidebar 同形：52px 带、负 margin 抵消 root 内距，

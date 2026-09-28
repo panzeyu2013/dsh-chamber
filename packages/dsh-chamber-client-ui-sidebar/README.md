@@ -98,7 +98,7 @@ The shell declares and renders the three holes the alpha.2 official
   the App layer switches to that source's shell and opens the session.
 - Row actions (v1 minimal set over the source's own unary wire client,
   `shared/instance-api.ts`) all live in the ROW MENUS: session = rename / fork /
-  archive; real workspace = a `+` new-session in the row (worktree rows
+  archive; real workspace = a new-chat-glyph new-session button in the row (worktree rows
   included) plus rename / delete behind the kebab — non-worktree rows only,
   since a derived worktree deliberately keeps no kebab (OpenChamber parity).
   There is no second hover button: the session row's archive verb is a MENU
@@ -317,8 +317,8 @@ session-echo ledger (`shared/session-echo.ts`) and its own single funnel
 ## Kept official shell geometry
 
 - Logo row (wide/rail), New Session (rides this ctx's runtime action — always
-  the current source), the wide/rail fold state machine (slide + crossfade,
-  rail-in animation), the pointer-followed scrollbar discipline, the foot
+  the current source), the wide/rail fold state machine (slide + class-driven
+  crossfade; the entrance animations are retired — design 06 §7), the pointer-followed scrollbar discipline, the foot
   (`sidebar.footer.action` + `sidebar.settings`), i18n namespace `sidebar` (zh key source; `src/client/locales.ts`).
 - The macOS top strip (`.topStrip`): the hiddenInset titlebar floats the traffic
   lights over the column's top edge, so the strip reserves that band and carries

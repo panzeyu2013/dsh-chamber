@@ -3,6 +3,9 @@
 export const zh = {
   'session.new': '新会话',
   'session.new.label': '新建会话',
+  // 上游 workspace 头的 `+` tooltip 用独立键 `actions.newSession`（vendor ui-workspace 字典逐字：
+  // zh「新会话」/ en "New session"）；与 `session.new` 同值、与 `session.new.label` 形近，但键与值都照上游。
+  'actions.newSession': '新会话',
   'panels.label': '全局面板',
   'toggle.open': '打开侧边栏',
   'toggle.collapse': '收起侧边栏',
@@ -130,7 +133,8 @@ export const zh = {
   'source.bootGap.requiredServicesMissing': '该服务器前端能力受限：没有提供本次页面所需的前端服务（{services}）。',
   'source.bootGap.deferredRegistrationFailed': '该服务器前端能力受限：{n} 个前端插件家族没有注册成功。',
   'search.sessions.aria': '搜索会话',
-  'search.placeholder': '搜索会话…',
+  // 逐字取官方 WorkspaceBrowser 字典（zh「搜索会话名称」/ en "Search session names"）。
+  'search.placeholder': '搜索会话名称',
   'search.clear': '清除搜索',
   'search.results.aria': '搜索结果',
   // 浏览树的可访问名：上游工作区树同样带名（vendor ui-workspace WorkspaceBrowser.tsx，role="tree" 取 t('section.sessions')）。
@@ -153,7 +157,10 @@ export const zh = {
   'todo.more': '还有 {n} 项',
   'todo.fewer': '收起',
   'hover.copied': '已复制',
-  'hover.sessionCount': '{n} 个会话',
+  // 工作区悬停卡的两行正文（逐字取官方 workspace 字典）：绝对创建时间走
+  // date.ymd 模板 + 24 小时钟点，再套 hover.created。
+  'date.ymd': '{y}年{m}月{d}日',
+  'hover.created': '创建于 {time}',
   'time.now': '刚刚',
   'time.minutes': '{n}分钟',
   'time.hours': '{n}小时',
@@ -179,6 +186,7 @@ export const en = {
   'session.new': 'New Session',
   'panels.label': 'Global panels',
   'session.new.label': 'New session',
+  'actions.newSession': 'New session',
   'toggle.open': 'Open sidebar',
   'toggle.collapse': 'Collapse sidebar',
   'action.newSession.aria': 'New session in {name}',
@@ -288,7 +296,7 @@ export const en = {
   'source.bootGap.requiredServicesMissing': 'This server’s interface is limited: it did not provide the frontend service(s) this page needs ({services}).',
   'source.bootGap.deferredRegistrationFailed': 'This server’s interface is limited: {n} frontend plugin family/families did not register.',
   'search.sessions.aria': 'Search sessions',
-  'search.placeholder': 'Search sessions…',
+  'search.placeholder': 'Search session names',
   'search.clear': 'Clear search',
   'search.results.aria': 'Search results',
   'section.sessions': 'Sessions',
@@ -309,7 +317,8 @@ export const en = {
   'todo.more': '{n} more',
   'todo.fewer': 'Collapse',
   'hover.copied': 'Copied',
-  'hover.sessionCount': '{n} sessions',
+  'date.ymd': '{y}-{m}-{d}',
+  'hover.created': 'Created {time}',
   'time.now': 'now',
   'time.minutes': '{n}min',
   'time.hours': '{n}h',

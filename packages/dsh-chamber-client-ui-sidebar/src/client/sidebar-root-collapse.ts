@@ -13,7 +13,7 @@ const COLLAPSE_SETTLE_MS = 150
 const SCROLLBAR_LINGER_MS = 2000
 
 export function useSidebarCollapse(collapsed: boolean, width: number) {
-  // Wide content stays mounted while the collapse animates (fading via .collapsed .wide), unmounts at settle, remounts right away on expand.
+  // Wide content stays mounted while the collapse settles (class-driven fade), then unmounts; it remounts right away on expand.
   const [settled, setSettled] = useState(collapsed)
   useEffect(() => {
     if (!collapsed) { setSettled(false); return }
@@ -27,9 +27,6 @@ export function useSidebarCollapse(collapsed: boolean, width: number) {
   const lastWideWidth = useRef(width)
   if (!collapsed) lastWideWidth.current = width
 
-  // Rail-in only crossfades a live collapse: a refresh straight into the collapsed state renders the rail statically.
-  const everWide = useRef(!collapsed)
-  if (!collapsed) everWide.current = true
 
   // Scrollbars in the column follow the pointer (.quietBars rebinds them away):
   // drawn while it is inside, and for SCROLLBAR_LINGER_MS after it leaves; a pointer returning within that window cancels the pending hide.
@@ -81,5 +78,5 @@ export function useSidebarCollapse(collapsed: boolean, width: number) {
       cancelLinger()
     }
   }, [pointerInside, width, collapsed])
-  return { wide, column, lastWideWidth, everWide, pointerInside, setPointerInside, cancelLinger, armLinger }
+  return { wide, column, lastWideWidth, pointerInside, setPointerInside, cancelLinger, armLinger }
 }

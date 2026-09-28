@@ -1,17 +1,34 @@
 /**
  * Pure per-source helpers of the chamber sidebar ServerSection subtree: the
  * connection-status kind/label mapping, the public header title/activation
- * contract and the projection-local-search-snapshot rebuild. The two public
- * helpers stay re-exported so SidebarRoot keeps importing them from
- * ServerSection.tsx.
+ * contract and the projection-local-search-snapshot rebuild.
  */
 import { MANAGED_RUNTIME_TRANSIENT_STATES } from '@dsh-chamber/dsh-chamber-client-core/managed-runtime'
 import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import type { InstanceSnapshot } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
+import type { SidebarRootComponentProps } from './contract/slots.ts'
 import type { SidebarKey } from './locales.ts'
 
 /** Connection-status visual kind: dot colors plus the connecting spinner. */
 export type SourceStatusKind = 'ok' | 'busy' | 'err' | 'idle'
+
+/**
+ * Absolute creation time through the dictionary's date template (the message
+ * clock pattern), copied verbatim from upstream ui-workspace Rows.tsx
+ * `createdLabel`: `toLocaleString` would follow the browser language, not the
+ * app locale, and produce mixed-language text after a switch. The workspace
+ * hover card is its only consumer.
+ */
+export function createdLabel(
+  createdAt: number,
+  t: SidebarRootComponentProps['t'],
+): string {
+  const d = new Date(createdAt)
+  const pad2 = (v: number): string => String(v).padStart(2, '0')
+  return t('hover.created', {
+    time: `${t('date.ymd', { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate() })} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`,
+  })
+}
 
 /** Rebuild an InstanceSnapshot-shaped view of ONE source aggregate for the LOCAL search
  * matcher from already-post-filter VISIBLE rows (projection only — no raw snapshot, no
@@ -41,10 +58,9 @@ export function projectionToLocalSearchSnapshot(server: ChamberServerAggregate):
 }
 
 /** Is a session id present in the source's VISIBLE projection (the same row set
- * {@link projectionToLocalSearchSnapshot} rebuilds)? One predicate for both consumers that
- * need "is there a row for this session": the search-result visible filter and the
- * open-failure placement (a failure whose row is not rendered surfaces above the list).
- * A predicate — not a prebuilt id Set — so the browse path builds nothing. */
+ * {@link projectionToLocalSearchSnapshot} rebuilds)? The open-failure placement asks it
+ * (a failure whose row is not rendered surfaces above the list); the search leg keeps its
+ * own visibleIds Set, so this stays a predicate over the browse path. */
 export function projectionHasSession(server: ChamberServerAggregate, sessionId: string): boolean {
   for (const workspace of server.workspaces) {
     for (const session of workspace.sessions) {
@@ -65,7 +81,6 @@ export function sourceStatusKind(server: ChamberServerAggregate): SourceStatusKi
   return 'idle'
 }
 
-
 /** Header title/aria text: the managed-down reason replaces "switch to this instance".
  * Exported for the collapsed rail, whose dot buttons must carry the SAME activation
  * contract as the wide header — one definition, no rail copy that can drift. */
@@ -78,8 +93,9 @@ export function sourceHeaderTitle(
   if (server.managedRuntimeDown === true) {
     return t('source.managedDown', { state: t(sourceStatusLabelKey(server)) })
   }
-  // 瞬态托管态同样不可激活：title 不能还宣称"切换到该实例"。
-  if (server.kind === 'gateway' && (server.phase === 'starting' || server.phase === 'restarting')) {
+  // 瞬态托管态同样不可激活：title 不能还宣称"切换到该实例"。瞬态集合共用
+  // managed-runtime 的常量（与下方 sourceHeaderActivatable 同一判据）。
+  if (server.kind === 'gateway' && (MANAGED_RUNTIME_TRANSIENT_STATES as readonly string[]).includes(server.phase)) {
     return t('source.managedStarting', { state: t(sourceStatusLabelKey(server)) })
   }
   return t('list.activate')

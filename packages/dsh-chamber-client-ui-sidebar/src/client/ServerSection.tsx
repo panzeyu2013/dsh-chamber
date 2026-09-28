@@ -15,7 +15,7 @@ import clsx from 'clsx'
 import { SESSION_SEARCH_RESULT_LIMIT } from '@deepseek-ai/dsh-api-session-controller/client'
 import {
   IconBranchOutlineRegular, IconChevronRightOutlineRegular, IconEditOutlineRegular, IconEllipsisOutlineRegular,
-  IconFolderOpenOutlineRegular, IconPlusOutlineRegular, IconTrashOutlineRegular, Menu,
+  IconFolderOpenOutlineRegular, IconNewChatOutlineRegular, IconTrashOutlineRegular, Menu, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { RowHoverCard } from './RowHoverCard.tsx'
 import { chamberBridge, type ChamberServerAggregate, type ChamberServerWorkspace } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
@@ -39,16 +39,15 @@ import { ServerSectionHeader } from './ServerSectionHeader.tsx'
 import { ServerSectionSearchCapsule, ServerSectionSearchResults } from './ServerSectionSearch.tsx'
 import { ServerSectionSessionRows } from './ServerSectionRows.tsx'
 import { ServerSectionRenameForm } from './server-section-controls.tsx'
-import { dragOverState, projectionHasSession, projectionToLocalSearchSnapshot, rowHalf } from './server-section-model.ts'
+import { createdLabel, dragOverState, projectionHasSession, projectionToLocalSearchSnapshot, rowHalf } from './server-section-model.ts'
 import cc from './sidebar-chamber.module.css'
-
-export { sourceHeaderActivatable, sourceHeaderTitle } from './server-section-model.ts'
 
 export const ServerSection = memo(function ServerSection({ server }: { server: ChamberServerAggregate }) {
   const {
     wide,
     t,
     chamberInstanceId,
+    useShortcuts,
     renderWorkspaceGit,
     viewPrefs,
     toggleWorkspaceFold,
@@ -73,6 +72,8 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
     onNewSession,
     onDeleteWorkspace,
   } = useSidebarSection()
+  // 工作区行的 New Session 键帽/aria 来自页面快捷键目录（上游 ProjectRowItem 同款选择）。
+  const newSessionShortcut = useShortcuts(rows => rows.find(row => row.id === 'session.new'))
 
   // Per-source search state (capsule/query/results) and its debounced fetch
   // jobs live in ONE shared controller, so a search survives view switches and
@@ -675,26 +676,39 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                         clearPendingClick()
                                       }}
                                     >
-                                      <button
-                                        type="button"
-                                        className={cc.actionIcon}
-                                        // The row name rides the accessible name — a bare
-                                        // "新建会话" repeated per row tells AT nothing.
-                                        aria-label={t('action.newSession.aria', { name: workspace.title })}
-                                        title={t('action.newSession.aria', { name: workspace.title })}
-                                        onClick={() => {
-                                          if (suppressClickRef.current) return
-                                          clearPendingClick()
-                                          onNewSession(server, workspace.id)
-                                        }}
+                                      {/* Upstream ProjectRowItem: the per-workspace New Session
+                                          control is the new-chat glyph in a bottom-aligned tooltip that
+                                          carries the effective `session.new` keycap; the tooltip label is
+                                          upstream's own `actions.newSession` key. */}
+                                      <Tooltip
+                                        label={t('actions.newSession')}
+                                        shortcutKeys={newSessionShortcut?.keys}
+                                        side="bottom"
+                                        align="end"
+                                        delayMs={500}
                                       >
-                                        <IconPlusOutlineRegular size={16} />
-                                      </button>
+                                        <button
+                                          type="button"
+                                          className={cc.actionIcon}
+                                          // The row name rides the accessible name — a bare
+                                          // "新建会话" repeated per row tells AT nothing.
+                                          aria-keyshortcuts={newSessionShortcut?.aria}
+                                          aria-label={t('action.newSession.aria', { name: workspace.title })}
+                                          onClick={() => {
+                                            if (suppressClickRef.current) return
+                                            clearPendingClick()
+                                            onNewSession(server, workspace.id)
+                                          }}
+                                        >
+                                          <IconNewChatOutlineRegular />
+                                        </button>
+                                      </Tooltip>
                                       {!isWorktree && (
                                       <Menu
-                                        // `closeOnPointerLeave` matches upstream; `compact`
-                                        // keeps the 26px/12px density instead of the official
-                                        // 40px/14px.
+                                        // `closeOnPointerLeave` matches upstream; `compact` is the
+                                        // primitives' compact list (24px row / 11px type —
+                                        // default item 34px, denseList item 30px, both taller
+                                        // than the sidebar's 26px rows).
                                         compact
                                         portal
                                         closeOnPointerLeave
@@ -788,23 +802,32 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                   commitWorkspaceDrag(server, workspaceDrag, { id: workspace.id, half: rowHalf(event) })
                                 }}
                             >
-                              {workspace.ungrouped === true ? (
+                              {workspace.createdAt === undefined ? (
+                                // Upstream's own gate (`row.createdAt === void 0`): no
+                                // creation fact, no card. derive leaves createdAt sparse
+                                // for an unparseable wire value ('' on the cwd-derived
+                                // synthetic groups) and the ungrouped bucket is built
+                                // without one, so NaN never reaches the verbatim
+                                // createdLabel.
                                 workspaceHeader
                               ) : (
                                 <RowHoverCard
                                   anchor={workspaceHeader}
-                                  // Read-only: the projection carries no cwd, so there is
-                                  // nothing to copy and no copy props that could render.
+                                  // Upstream WorkspaceHoverContent: title, display path,
+                                  // absolute creation time; the whole card copies the cwd.
                                   content={(
                                     <div className={cc.hoverContent}>
                                       <div className={cc.hoverTitle}>{workspace.title}</div>
-                                      {sessions.length > 0 && (
-                                        <div className={cc.hoverTime}>{t('hover.sessionCount', { n: sessions.length })}</div>
-                                      )}
+                                      <div className={cc.hoverPath}>{workspace.path}</div>
+                                      <div className={cc.hoverTime}>{createdLabel(workspace.createdAt, t)}</div>
                                     </div>
                                   )}
+                                  openDelayMs={800}
                                   disabled={menuOpen[workspaceKey] === true || renamingThisWorkspace
                                     || workspaceDrag !== null || sessionDrag !== null || serverDrag !== null}
+                                  copyText={workspace.path}
+                                  copyLabel={t('action.copy')}
+                                  copiedLabel={t('hover.copied')}
                                 />
                               )}
                             {/* Workspace-scoped failures are hoisted OUT of the
