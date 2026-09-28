@@ -1806,7 +1806,7 @@ test('A1: the confirming re-probe keeps edge semantics (a tail without host time
     facts.start()
     sockets[0].open()
     // 边沿读不回答：确认到达时它仍在飞，随确认被 updatedAt 围栏作废。
-    sockets[0].onFollowOpen = (streamId, payload) => { follows.push(payload) }
+    sockets[0].onFollowOpen = (_streamId, payload) => { follows.push(payload) }
     await new Promise(resolve => setTimeout(resolve, 5))
     sockets[0].item({ type: 'ready', clientId: 'c' })
     sockets[0].item({ type: 'emit', event: 'api-session/status', args: ['s1', true] })
