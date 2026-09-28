@@ -76,8 +76,6 @@ export const GROUPS = {
     // 会话创建归因账本（含 blank 的按标签聚合与「无标签外来源」判据）。
     'test/session-state/session-create-ledger.test.ts',
   'test/session-state/session-correction-marks.test.ts',
-    // 上游会话事实语义的源码 lockstep（vendor 树未物化时默认失败，显式 opt-out 才跳过）。
-    'test/session-state/vendor-session-fact-contract.test.ts',
     // I-10 写面探测三分（contract/concrete/none）：执行端只依赖该叶面。
     'test/session-state/status-write-face.test.ts',
     'test/session-state/workspace-echo.test.ts',
@@ -155,21 +153,28 @@ export const GROUPS = {
   leading: [
     'test/leading/leading-controls.test.ts',
     'test/leading/leading-seat-wiring.test.ts',
-    // Expanded-state window chrome: the darwin top strip (traffic-light band)
-    // and the panel toggle it carries — geometry + wiring lock.
-    'test/leading/macos-top-strip.test.ts',
   ],
   // visual-lock: source locks over the sidebar's visual rules. No entrance animation may
   // start invisible (a frozen timeline pins it at opacity 0 while staying hit-testable),
   // and the renderer must refuse to create animations inside a shell nobody renders.
+  //
+  // This is also the LAST group, so every lock that reads the vendor tree lives here and
+  // after the non-vendor member: with the submodule unmaterialized (or under the documented
+  // DSH_CHAMBER_VENDOR_ABSENT=skip opt-out, where it contributes zero executed tests and
+  // trips the runner's zero-test guard) it always fails, and the runner stops at the first
+  // failing file — a missing submodule must never hide the runnable suite.
   'visual-lock': [
     'test/visual-lock/sidebar-entrance-visibility.test.ts',
-    // Row motion (the ported AnimatedRows + its key wiring, design 06 §7). Its
-    // byte-fidelity lock reads vendor/harness-packages and fails loud when that
-    // tree is absent, so it must stay in the LAST group: the runner stops at the
-    // first failing file and an unmaterialized tree must never hide the runnable
-    // suite (same reason macos-top-strip precedes it in run order).
+    // Row motion (the ported AnimatedRows + its key wiring, design 06 §7): the
+    // byte-fidelity lock compares against the pinned vendor source.
     'test/session-rows/animated-rows.test.ts',
+    // Expanded-state window chrome: the darwin top strip (traffic-light band) and the
+    // panel toggle it carries — geometry + wiring lock against the vendor CSS.
+    'test/leading/macos-top-strip.test.ts',
+    // Upstream session-fact semantics source lockstep. LAST on purpose: under the opt-out it
+    // contributes zero executed tests, so the zero-test guard always stops the run here — it
+    // must never sit in front of a file that can still run.
+    'test/session-state/vendor-session-fact-contract.test.ts',
   ],
 }
 
