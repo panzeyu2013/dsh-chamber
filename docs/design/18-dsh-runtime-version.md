@@ -441,10 +441,10 @@ chamber-settings.json，非秘密）：
 - 字段行 `.generalRow` + `.runtimeField`：列向 gap 6px，label `.generalFieldLabel`
   14px / 500；下拉 `.runtimeField`（radius 8px / bg layer-1 / 12px，focus 时 border
   brand）。**下拉文本字号不强统一**：服务器下拉**触发器** 13px/600 为导航强调
-  （菜单行 = chamber 密度：E4 对齐官方 dense item 14px/22px +
-  min-height 34px，A-4 同批裁决改回 v0.2.4 `padding:7px 10px`
+  （菜单行 = chamber 密度：E4 对齐官方默认 item 13px·20px + min-height 34px
+  （`denseList` 为 30px、`compactList` 为 24px/11px——pin 的 `Menu.module.css`），A-4 同批裁决改回 v0.2.4 `padding:7px 10px`
   + 13px、行框 18px（32px 高），保留 r10/列表 r20——见 design 06 §7「菜单密度 =
-  chamber 档」），运行时/表单字段 12px/400 为紧凑行；只统一箭头词汇。
+  primitives compact 档」），运行时/表单字段 12px/400 为紧凑行；只统一箭头词汇。
 - 下拉箭头统一 `IconChevronDownOutlineRegular`（`.runtimeSelectChevron`，appearance:none +
   自定义 chevron，右缘与文字左缘对称；文字↔箭头净间隙 ≥6px）。
 - 动作按钮：主（更新到/切换到 vY）与次（恢复内建 / 重启 dsh / 清理版本 / 恢复回滚前

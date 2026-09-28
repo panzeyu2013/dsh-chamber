@@ -11,6 +11,9 @@
   执行序已归并（`gui-acceptance-checklist.md` §4.1），**待打包态/真机各跑一次并留证据**（用户裁定：合并到主分支后再执行，
   见「设计未决」的 macOS Swift 原生壳条）。I-12 的判据落点见 design 19 §3.2/§3.5，I-14 见 design 09 §3.6。
   判据/方案/落点/关闭与待退役块触发见 [todo/upstream-drift-plan.md](todo/upstream-drift-plan.md)。
+- **上游 UI 对齐遗留面**：按性质分两处登记 —— 功能面差异见下文「功能差异（chamber vs 上游）」；受 vendor 语义/平台
+  面约束、本仓改不动的见下文「无法控制的差异（外部约束）」。判据、候选落法与已收敛项见
+  [todo/upstream-ui-parity-plan.md](todo/upstream-ui-parity-plan.md)；现状面与契约指针在 design 06 §7、design 05 §2。
 - **通知壳 sink `runtimeSettled` 锚点（I2；剩打包态实机回执）**：facts/壳两 sink 共用
   `complete-ledger.ts` 的 `completionAlreadySettled`（无标记/无锚点 = fail-open，只影响抑制、
   不影响投递；**未恢复别名表**）。残余重复窗口 = 「同页、非首批、producer 状态被重置的壳完成
@@ -113,6 +116,62 @@
 - 结构性重复与死分支五条：`healRoute` 恒等、解析双份漂移、三账本可并、`carry` 五处、baseline 三连块。
 - 页面侧限速：lane reconnect 注释与行为不符。
 
+## 功能差异（chamber vs 上游；功能面取舍与缺口）
+
+> 这里只收「app 做什么」的差异（功能有无、交互路径、呈现语义）。纯视觉档位与纪律条仍归
+> 「范围决策与必要取舍」；vendor 侧改不动的归「无法控制的差异（外部约束）」。判据口径与候选落法见
+> [todo/upstream-ui-parity-plan.md](todo/upstream-ui-parity-plan.md)（§1 = 待裁，§2 = 已收敛）。
+
+**待裁（与 chamber 功能/契约相冲；plan §1 编号即条号，1.3 归下面的外部约束模块）**
+
+- **1.1 pinned 会话**：上游有 pin/unpin/置顶序/`PinnedIndicator`，本仓零支撑——它是宿主写能力（改宿主 rowState），
+  且置顶序会与本仓 `sessionOrderOverride`（manual 覆盖）与 `updated` 自动置顶并列成第四条分区语义，拖拽要加跨分区守卫。
+- **1.2 会话行时间列**：上游行尾静息显示相对时间（`primaryStatus.trailingLabel ?? timeLabel(updatedAt…)`），本仓行尾是
+  **状态槽**（品牌蓝完成点 / 14px pending / `data-chamber-*` 机器标记），相对时间只在悬停卡。
+- **1.4 官方 `sidebar.session.row.{leading,hover}` 两座席**：schedule 插件的行标记与卡片任务列表不渲染，改由本仓
+  `SessionScheduleIndicator` + 自有卡片内容表达；要接须先解 `sidebar.workspaces` 的座席裁决（下方约束条）。
+- **1.5 重命名交互**：本仓行内表单（双击进入，拖拽/pending-click 围着它写），上游是 `shell.overlay` 模态
+  `SessionRenameDialog` / workspace Modal。
+- **1.6 search 形态**：本仓胶囊行常驻（展开即挂载），上游在来源头内 inline 展开（`max-width .18s` + `search-skeleton`
+  骨架，本仓同等 `loading` 状态下用 `search.pending` 文本）。
+
+**已裁决的本仓功能/呈现差异**（设计面见 design 06 §1–§3 与 design 05 §2；此处只登记「与上游不同」这一事实）
+
+- 自有功能面：多来源列表/分组/来源折叠与管理、会话拖拽排序三模式 + view-prefs 持久化、归档两段式确认 + 归档管理器、
+  workspace 头新建会话钮（官方 new-chat 字形）与行内重命名、搜索胶囊、悬停卡（机器自持，见下条约束）、chamber 字标（mark 回退；rail 态用
+  上游 FishLogo）。
+- 呈现语义：行尾状态槽（时间只在卡片）、会话卡状态行 0–1（上游 1–2 且至少一行）、菜单密度 = 原语 `compact` 实测档
+  （24px 行/11px 字，比 26px 列表行矮 2px）、命中盒 = 视觉盒（六个小图标钮 20/20/18/16）、行标题两级墨色、
+  动作簇 4px/20px、footer `gap: 4px`。
+- 缺的上游功能（已裁不做）：`sidebar.toggle.badge`、`sidebar.workspaces` 的官方归档/恢复/过滤贡献（见「范围决策」条）、
+  flat 单列表模式（推迟）、跨来源移动会话（v1 不做）。
+
+## 无法控制的差异（外部约束：vendor 语义 / 上游缺陷与未导出面）
+
+- **官方命令的键盘入口**（plan §1.3）：六个命令由官方 ui-workspace 注册（`WS:139-203`）。**可达四个**：
+  `session.new`/`session.fork`/`session.archive` 调**共享服务**（键被派发就真的建/分叉/归档，归档在活动会话上弹官方两段式确认框）；
+  `session.rename` 写 `controls.rename`，消费者是官方 `SessionRenameDialog`——它是 `shell.overlay` 的座席（`WS:4367-4372`），
+  该座席由本仓 layout fork 声明（`packages/dsh-chamber-client-ui-layout/src/client/index.ts:90`）并由官方 `AppFrame` 渲染
+  （fork `:22`/`:181`；`renderSlot("shell.overlay")` 见产物 `dsh-client-ui-layout/lib/client.js:312`、`:344-346`）⇒ **模态真的出现**。
+  **死的两个**：`session.search`（`controls.search`）与 `workspace.add`（`controls.add`；其 `noPicker` 门因本仓为每个托管来源
+  pin 了 directory-picker-browse、占同一座席而放行）只把 `searchRequest`/`addRequested` 写进被覆盖的官方浏览器 store，
+  没有任何本仓可见的消费者。修法被注册表语义封死：
+  `dsh-client-shortcuts/lib/client.js` 的 `ShortcutRegistry.register` 在 :589 对重复 id 抛 `Duplicate shortcut command`、
+  :602 逐 runtime×platform 校验默认键重叠并抛 `Conflicting shortcut defaults`（:598/:599 另拒 Web 不可达键与保留键）
+  ⇒ 既不能覆盖注册同名 id，也不能用同一默认键自建 id。未做 = 一次实机确认两个死键确无可见反应（plan §1.3 的 C2 清单）；
+  两个活键与本仓 UI 并存：官方重命名模态 vs 本仓行内重命名、官方归档确认 vs 本仓两段式——不同入口、同语义，互不叠加。
+- **悬停卡与 tooltip 的抑制契约**：vendor `HoverCard` 用模块私有的 `TooltipSuppression` context 抑制锚点内 tooltip，
+  该 context 不在 `ui-primitives` 导出面 ⇒ 悬停 workspace 头的 `+` 时 tooltip（500ms）与卡片（800ms）会同时出现；
+  退役条件 = 上游导出该 context 或本仓自持 tooltip（design 06 §7）。
+- **vendor `HoverCard` 的 pointerleave 竞态 ⇒ 卡片机器自持**：`onPointerLeave` = `clearTimer()` + `if (open) armClose()`，
+  dwell 到 React 提交之间落下的 leave 什么都不 arm ⇒ 卡片挂载后指针已离开且无自愈；本仓以 `hover-intent` 机器自持
+  （C15 形状 + 时间常数锁步；上游修掉即退役，登记行见 [upstream-touchpoints.md](../checklists/upstream-touchpoints.md) §4）。
+- **`sidebar.workspaces` 只能声明不能撤**：上游 ui-workspace 在座席未声明时会抛错 ⇒ 保留声明但永不渲染（裁决与锁见
+  「范围决策」条），后果 = 上游归档/恢复/过滤贡献在 chamber 是死件。
+- **平台腿未落地**：Windows 的 `[data-windows-titlebar]` 分支（属性已由 win32 preload 的 `markWindowsTitlebar` 写入，
+  侧栏整块未抄，收口随 design 23）与 Electron macOS 腿（标准标题栏未迁 `hiddenInset`，见「未完成」条）⇒ 这两条腿的侧栏
+  形态与上游不同，属排期而非功能选择。
+
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
 - 验证面缺类：`verify:no-dead-exports` 只判「经 package entry 可达的运行时导出」⇒ **type-only 导出**不判
@@ -181,7 +240,6 @@
 - 统一名称的保留面：bundle id（T-14）、跨进程协议串、`native-shell.page-zoom.*`（T-22）、POC 标记与 `'native-shell'` 分类 id；改名须同步 T-14/T-17/T-22 与两侧测试。
 - 租客 body portal 不受 stacking 约束（残余，顶层幕布不做；design 05 §4 被否方案⑤）。
 - 降级事实覆盖边界：已覆盖四座；不覆盖未激活来源、壳回收清除、单槽后报覆盖、侧栏行无动作。
-- 侧栏行悬停卡片由本仓自持（上游修竞态即退役；C15 锁形状+常数，锁红先于升级落地）。
 - 连接页手写 tooltip 未走 vendor `Tooltip`：无 `role="tooltip"` 关联；未决 = 补 ARIA 或改用 vendor。
 - api-gateway fork 未重放 rc.2 uplink 客户端半边（G43）：带 uplink 的 descriptor 同步抛错；证据 `client-uplink-rejection.test.ts`。
 - 插件管理 tab 钉在上游页结构上（design 05 §5）：上游改结构即静默回归；失效判据见 design 05 §5，pin 升级按 §7 复核。
@@ -218,7 +276,7 @@
 - 已归档浏览过滤推迟：恢复入口走官方 `workspace/unarchiveSession`（管理器行/批量）；
   `ArchivedFilter` 镜像 + view-prefs 持久化仅在多来源确有浏览需求时排期（判据 = design 24 §1）。
 - **归档准入两段式 + 旧宿主降级**（design 24 §5）：chamber 恒发官方两段式（首调无 `stopActivity`，宿主以 `workspace/session-active` 拒绝并列出活动，确认后带 `stopActivity: true` 重发，停止由宿主 provider 完成）；**已接受的降级** = 无该准入的旧宿主上第二调原样上抛，归档不再由客户端补偿停止（旧 `stopArchivedSubtree` 腿已删，不保留）——安静会话归档照旧，带后台工作的会话在旧宿主上归档后其工作继续运行；**不做版本探测**（能力自证：只有能返回该拒绝的宿主才收到第二调）。git 的 pre-remove 归档勾选同此口径（`stopActivity` 随勾选授权，旧宿主忽略该字段，行为同前）。证据：`packages/dsh-chamber-client-core/src/instance-api.ts`（`archiveSession`/`sessionArchiveRefusal`）、`packages/dsh-chamber-client-ui-sidebar/src/client/session-archive-confirm.ts`、`packages/dsh-chamber-client-ui-git/src/shared/saga.ts`。
-- 菜单密度 = chamber `compact` 档（design 06 §7/design 15④），不得改回默认/dense。
+- 菜单密度 = primitives `compact` 档（= `.compactList`，实测 24px 行 / 11px 字；design 06 §7），不得改回默认/dense。
 - Electron 二进制惰性安装（共享 dist）；dev 实例隔离（独立 user-data、端口 17520 起退避）。
 - 内建版本行引导（方案 2：同版本行引导「恢复内建」，下载为次要动作）。
 - dsh 运行时设置面残余偏差：desktop env 换 registry、https-only vs http-loopback、周期检查不移植、prune 不可 abort、`RUNTIME_RESTART` 无单测；F4b = gateway 12 分钟墙钟上限，本地无 abort 句柄（取消通道未排期）。

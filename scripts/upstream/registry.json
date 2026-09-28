@@ -461,7 +461,7 @@
           "src/client/SidebarRoot.module.css": "[patch-mod] 重实现样式（多来源列表/行悬停卡/归档管理器/来源信号灯）",
           "src/client/SidebarRoot.tsx": "[patch-mod] 重实现：多来源会话列表（按工作区分组、搜索/排序/归档管理器/悬停卡片/来源信号灯）替换上游单来源 workspaces 浏览器",
           "src/client/contract/slots.ts": "[patch-mod] chamber 座位契约（owner props 同名但按多来源扩展）",
-          "src/client/index.ts": "[patch-mod] apply：注册 chamber 侧栏 + sidebar.panellist 镜像 + workspace navigation 服务 + shell.leading 上游 occupant（源码路径消费）",
+          "src/client/index.ts": "[patch-mod] apply：注册 chamber 侧栏 + sidebar.panellist 镜像 + workspace navigation 服务 + shell.leading 席位由本包 SidebarLeadingControls（上游同形 clone）占座",
           "src/client/locales.ts": "[patch-mod] chamber 文案表（含上游没有的工作区/来源操作）",
           "src/index.ts": "[patch-mod] 包入口差异（module-system 宿主接线 + chamber 构面导出）",
           "tsconfig.json": "[patch-mod] chamber 构面（vendor paths/检查面）"
@@ -486,8 +486,8 @@
           "tsdown.config.ts"
         ],
         "droppedNotes": {
-          "src/client/HeaderLeadingControls.module.css": "该组件的内部样式，随上游组件源码路径消费",
-          "src/client/HeaderLeadingControls.tsx": "**按源码路径直接消费上游文件**（vendor-modules.d.ts 声明 + index.ts 导入并注册上游席位），不镜像进 fork",
+          "src/client/HeaderLeadingControls.module.css": "该组件的内部样式；上游文件不镜像、也不被消费——同一 shell.leading 席位由本包 SidebarLeadingControls.module.css（上游同形 clone）实现",
+          "src/client/HeaderLeadingControls.tsx": "上游组件不镜像、不被源码路径消费；同一 shell.leading 席位由本包 SidebarLeadingControls.tsx 注册占座（src/client/index.ts；vendor-modules.d.ts 只声明本包用到的类型面）",
           "tests/": "上游测试/快照不镜像（chamber 有自建 test/）",
           "tsdown.config.ts": "chamber 不构建 lib/（沿用上游模板形状但 chamber 树不产出该产物）"
         }
