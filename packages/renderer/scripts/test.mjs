@@ -95,6 +95,8 @@ export const GROUPS = {
     // 否则同一完成的延迟壳边沿会产生第二条 notification。
     'test/aggregate/goal-unknown-arm.test.ts',
     'test/aggregate/badge-count.test.ts',
+    // 投影缓存（性能 A1/A2）：按来源复用 + 签名片段/记忆入口。
+    'test/aggregate/servers-projection-cache.test.ts',
   ],
   // session-state: gateway session-state 事实源 + 通知三表落盘（旧 v4/v2 一次性迁移）+ 完成观测装配
   'session-state': [

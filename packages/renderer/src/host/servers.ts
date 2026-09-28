@@ -29,11 +29,33 @@ import type { ConnectionSummary, HealthResponse } from '../api.ts'
 import { isFactsUsable, type SessionFactsSnapshot } from '../session-facts-source.ts'
 import { sourceSessionFactsMode } from '../session-facts-mode.ts'
 import { LOCAL_INSTANCE_ID } from '../local-instance.ts'
-import { type ShellState } from '../shell.ts'
+import type { ShellState } from '../shell.ts'
 import { frameText, type FrameLocale } from '../locales.ts'
 import { toServerBootGap } from '../boot-gap.ts'
 import type { SshInstanceSpec, SshStatusProjection, TransportKind } from '../global.d.ts'
 import { instanceConnected, sourceIdForInstance } from '../transport-source.ts'
+
+/**
+ * 按来源投影缓存（性能 A1）：键 = 影响该来源条目的全部输入（对象按身份、标量按值）。
+ * 各 store 都是 identity-preserving（同内容不换对象），因此身份相等即内容相等；原地突变由不可变性契约禁止。
+ * TTL 只兜住按 now 判定的时间分支（ghost/成员宽限）：超时重算一次，语义不比现状更陈旧。
+ */
+export interface ServerProjectionCacheEntry {
+  readonly key: readonly unknown[]
+  readonly at: number
+  readonly server: ChamberServerAggregate
+}
+
+export interface ServerProjectionCache {
+  readonly entries: Map<string, ServerProjectionCacheEntry>
+  readonly ttlMs: number
+}
+
+export const SERVER_PROJECTION_CACHE_TTL_MS = 1_000
+
+export function createServerProjectionCache(ttlMs: number = SERVER_PROJECTION_CACHE_TTL_MS): ServerProjectionCache {
+  return { entries: new Map(), ttlMs }
+}
 
 /**
  * 轮询状态 → chamberBridge 投影（design 05）：local + 每个注册表远程实例一条。
@@ -110,8 +132,11 @@ export function deriveServers(
   // 既有接线锁按 correctionArms/paintedView/pluginDiagnostics 的文本锚点
   // 钉 current 投影（veil-layering-invariants.test.ts），不重排既有参数。
   sessionFacts: Record<string, SessionFactsSnapshot | undefined>,
+  /** 可选按来源投影缓存（App 的 useServerProjectionCaches 持有）；不传即逐次全量派生。 */
+  cache?: ServerProjectionCache,
 ): ChamberServerAggregate[] {
   const servers: ChamberServerAggregate[] = []
+  const liveIds = new Set<string>()
   const now = Date.now()
   const push = (
     kind: ChamberServerAggregate['kind'],
@@ -123,6 +148,7 @@ export function deriveServers(
     statusKind?: TransportKind,
   ): void => {
     const statusKey = kind === 'local' ? id : (rawId ?? id)
+    liveIds.add(id)
     const transportPhase = kind === 'local'
       ? (health?.dsh?.status ?? 'unknown')
       : (remoteStatus[statusKey]?.phase ?? SOURCE_PHASE_UNKNOWN)
@@ -156,6 +182,25 @@ export function deriveServers(
       remoteStatus,
       statusKey,
     )
+    // 命中即复用上次条目（引用稳定：下游 memo 与签名片段缓存都靠它）。键覆盖本条目的全部输入。
+    const cacheKey: readonly unknown[] = [
+      kind, transport, id, label, sourceFingerprint, rawId ?? null, statusKind ?? null,
+      transportPhase, managedDown, managedTransient, connected,
+      aggregate ?? null,
+      runtimeFacts[id] ?? null, correctionArms[id] ?? null, sessionFacts[id] ?? null,
+      hostFacts[id] ?? null, pluginDiagnostics[id] ?? null, shellStates[id] ?? null,
+      managedRuntime[id] ?? null, openIntents[id] ?? null,
+      workspaceEcho[id] ?? null, sessionEcho[id] ?? null, sessionArchive[id] ?? null,
+      activeViewId, locale,
+    ]
+    if (cache !== undefined) {
+      const hit = cache.entries.get(id)
+      if (hit !== undefined && now - hit.at <= cache.ttlMs && hit.key.length === cacheKey.length
+        && hit.key.every((value, index) => value === cacheKey[index])) {
+        servers.push(hit.server)
+        return
+      }
+    }
     let archivedSessions: ChamberServerAggregate['archivedSessions']
     let archiveSetKnown: ChamberServerAggregate['archiveSetKnown']
     if (connected && aggregate !== undefined && aggregate.state === 'ok') {
@@ -263,6 +308,7 @@ export function deriveServers(
     // 各出各的文案；生产者的诊断句子不过界。
     const bootGap = shellStates[id]?.degraded
     if (bootGap !== undefined && bootGap !== null) entry.bootGap = toServerBootGap(bootGap)
+    cache?.entries.set(id, { key: cacheKey, at: now, server: entry })
     servers.push(entry)
   }
   push('local', 'local', LOCAL_INSTANCE_ID,
@@ -280,6 +326,10 @@ export function deriveServers(
       instance.id,
       instance.kind,
     )
+  }
+  // 来源消失即释放其缓存条目（否则会钉住整份旧投影）。
+  if (cache !== undefined && cache.entries.size > liveIds.size) {
+    for (const key of [...cache.entries.keys()]) if (!liveIds.has(key)) cache.entries.delete(key)
   }
   return servers
 }
