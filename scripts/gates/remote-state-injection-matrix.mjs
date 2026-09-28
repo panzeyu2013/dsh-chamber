@@ -109,7 +109,7 @@ const INJECTIONS = [
   { id: 'subagent-completion-suppressed', fault: '子代理完成不产生通知/未读（源侧排除）', expect: 'covered', checks: [
     { file: `${GW}/session-state-store.test.ts`, title: 'subagent rows never ride the wire (snapshot or delta) yet still count' },
     { file: `${GW}/session-state-store.test.ts`, title: 'a row exposed before its subagent origin is revealed gets an explicit removal' },
-    { file: `${RN}/session-state/source-mux-facts.test.ts`, title: 'subagent rows never enter the row set and their status frames are ignored' },
+    { file: `${RN}/session-state/source-mux-facts.test.ts`, title: 'subagent rows never enter the row set; their status frames move only the parent count' },
   ] },
   // 无 ctx 来源的判定侧读回退：ask/完成/未读不依赖挂载（facts 快照投影，不物化）。
   { id: 'facts-only-provenance', fault: '无 ctx 来源的 ask/完成/未读（读侧投影；横幅证据仍要求 host 域 observed 水位）', expect: 'covered', checks: [
