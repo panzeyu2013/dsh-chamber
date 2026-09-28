@@ -164,6 +164,7 @@ export const EXPORTS_ALLOWLIST = Object.freeze({
     './plugin-manifest',
     './plugin-row',
     './prewarm-intent',
+    './projection-signature-cache',
     './purged-tracker',
     './runtime-management',
     './search-state',
