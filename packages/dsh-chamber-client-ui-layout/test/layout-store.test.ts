@@ -114,7 +114,10 @@ function makeViewPrefs(initial?: { sidebarWidth?: number }) {
 }
 
 /** One injectable environment per test (fresh runtime state, no leakage). */
-function makeEnv(initial?: { sidebarWidth?: number }) {
+function makeEnv(
+  initial?: { sidebarWidth?: number },
+  events?: { onPageHide?: (listener: () => void) => void },
+) {
   const viewPrefs = makeViewPrefs(initial)
   // The fake engine is intentionally a minimal structural stand-in for the
   // real store engine (per-create fresh init, draft-mutator update,
@@ -135,6 +138,7 @@ function makeEnv(initial?: { sidebarWidth?: number }) {
     },
     viewPrefs,
     initialViewportWidth: () => 1600,
+    ...(events?.onPageHide === undefined ? {} : { onPageHide: events.onPageHide }),
   } as LayoutStoreEnvironment
   return { env, viewPrefs }
 }
@@ -207,6 +211,48 @@ test('setSidebar clamps into the vendor range before persisting', withTimers(asy
   instance.actions.setSidebar(1)
   mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
   assert.deepEqual(viewPrefs.writes(), [SIDEBAR_MAX, SIDEBAR_MIN])
+}))
+
+test('a pagehide flush persists the pending drag inside the debounce window (exactly once)', withTimers(async () => {
+  const pageHideListeners: Array<() => void> = []
+  const { env, viewPrefs } = makeEnv(undefined, { onPageHide: listener => { pageHideListeners.push(listener) } })
+  const instance = createLayoutStore(env).create()
+  instance.actions.setSidebar(380)
+  assert.equal(viewPrefs.writeCount(), 0, '仍在防抖窗内：真实尾写尚未发生')
+  assert.equal(pageHideListeners.length, 1, '首个待写拖动装上页面事件订阅（每环境一次）')
+  for (const listener of pageHideListeners) listener()
+  assert.equal(viewPrefs.writeCount(), 1, 'pagehide 立即落盘未到期的尾写')
+  assert.deepEqual(viewPrefs.writes(), [380])
+  // 定时器已取消：过了防抖窗不会再写第二次（同一拖动只落盘一次）。
+  mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
+  assert.equal(viewPrefs.writeCount(), 1)
+  // 无 pending 时再次触发（beforeunload 与 pagehide 同监听器语义）→ no-op。
+  for (const listener of pageHideListeners) listener()
+  assert.equal(viewPrefs.writeCount(), 1)
+}))
+
+test('the production default flushes on BOTH pagehide and beforeunload', withTimers(async () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'addEventListener')
+  const registered = new Map<string, () => void>()
+  try {
+    Object.defineProperty(globalThis, 'addEventListener', {
+      configurable: true,
+      writable: true,
+      value: (type: string, listener: () => void) => { registered.set(type, listener) },
+    })
+    const { env, viewPrefs } = makeEnv()
+    const instance = createLayoutStore(env).create()
+    instance.actions.setSidebar(390)
+    assert.equal(typeof registered.get('pagehide'), 'function')
+    assert.equal(typeof registered.get('beforeunload'), 'function')
+    registered.get('pagehide')?.()
+    assert.deepEqual(viewPrefs.writes(), [390])
+    registered.get('beforeunload')?.()
+    assert.equal(viewPrefs.writeCount(), 1, '第二个页面事件不得重复写同一笔尾写')
+  } finally {
+    if (original === undefined) delete (globalThis as { addEventListener?: unknown }).addEventListener
+    else Object.defineProperty(globalThis, 'addEventListener', original)
+  }
 }))
 
 // ---- cross-shell adoption ----

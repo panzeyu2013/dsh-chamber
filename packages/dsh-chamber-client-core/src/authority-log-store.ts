@@ -55,7 +55,27 @@ function parseEntry(value: unknown): AuthorityLogEntry | undefined {
   }
 }
 
-/** Read the bounded per-source table; anything malformed reads as empty. */
+/**
+ * Parse cache keyed by the EXACT storage text: while `getItem` keeps returning the
+ * same string, the parsed table is reused (no JSON.parse, no per-entry validation).
+ * Append never mutates it — it builds a fresh table and publishes it only after
+ * `setItem` succeeded, so a failed write cannot desync the cache from storage.
+ */
+let cachedAuthorityLogRaw: string | undefined
+let cachedAuthorityLogTable: Record<string, AuthorityLogEntry[]> = {}
+
+/** Publish a parse result for `raw` (the text that is, or just became, storage's). */
+function rememberAuthorityLog(raw: string, table: Record<string, AuthorityLogEntry[]>): Record<string, AuthorityLogEntry[]> {
+  cachedAuthorityLogRaw = raw
+  cachedAuthorityLogTable = table
+  return table
+}
+
+/**
+ * Read the bounded per-source table; anything malformed reads as empty. The
+ * returned table is the shared parse cache — callers must read it, never mutate it
+ * (appendAuthorityLog builds a fresh table instead).
+ */
 export function loadAuthorityLog(
   storage: AuthorityLogStorage,
 ): Record<string, AuthorityLogEntry[]> {
@@ -66,13 +86,16 @@ export function loadAuthorityLog(
     return {}
   }
   if (raw === null || raw === '') return {}
+  if (raw === cachedAuthorityLogRaw) return cachedAuthorityLogTable
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
   } catch {
-    return {}
+    return rememberAuthorityLog(raw, {})
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {}
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return rememberAuthorityLog(raw, {})
+  }
   const result: Record<string, AuthorityLogEntry[]> = {}
   for (const [sourceId, value] of Object.entries(parsed as Record<string, unknown>)) {
     if (!Array.isArray(value)) continue
@@ -83,7 +106,7 @@ export function loadAuthorityLog(
     }
     if (entries.length > 0) result[sourceId] = trimEntries(entries)
   }
-  return result
+  return rememberAuthorityLog(raw, result)
 }
 
 /**
@@ -126,11 +149,16 @@ export function appendAuthorityLog(
   entry: AuthorityLogEntry,
 ): void {
   try {
+    // The loaded table (cached or fresh) is never mutated: the next table replaces
+    // this source's array on a shallow copy.
     const table = loadAuthorityLog(storage)
-    const entries = table[sourceId] ?? []
-    entries.push(entry)
-    table[sourceId] = trimEntries(entries)
-    storage.setItem(AUTHORITY_LOG_KEY, JSON.stringify(boundSources(table)))
+    const entries = [...(table[sourceId] ?? []), entry]
+    const next = boundSources({ ...table, [sourceId]: trimEntries(entries) })
+    const raw = JSON.stringify(next)
+    storage.setItem(AUTHORITY_LOG_KEY, raw)
+    // Cache only after the write landed: a throwing setItem leaves storage and the
+    // cache on the previous text.
+    rememberAuthorityLog(raw, next)
   } catch {
     // Diagnostics never break the chain.
   }
