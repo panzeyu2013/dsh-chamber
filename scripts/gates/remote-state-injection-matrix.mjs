@@ -105,6 +105,19 @@ const INJECTIONS = [
     { file: `${RN}/session-state/source-mux-facts.test.ts`, title: 'one true->false edge opens exactly one follow and completed arms the row' },
     { file: `${RN}/session-state/source-mux-facts.test.ts`, title: 'a user stop and a neutral ending never arm; an unreadable tail degrades and arms' },
   ] },
+  // 子代理完成绝不进判定面：源侧排除（gateway 单点过滤 + 观察者三处守卫），父行计数不受影响。
+  { id: 'subagent-completion-suppressed', fault: '子代理完成不产生通知/未读（源侧排除）', expect: 'covered', checks: [
+    { file: `${GW}/session-state-store.test.ts`, title: 'subagent rows never ride the wire (snapshot or delta) yet still count' },
+    { file: `${GW}/session-state-store.test.ts`, title: 'a row exposed before its subagent origin is revealed gets an explicit removal' },
+    { file: `${RN}/session-state/source-mux-facts.test.ts`, title: 'subagent rows never enter the row set and their status frames are ignored' },
+  ] },
+  // 无 ctx 来源的判定侧读回退：ask/完成/未读不依赖挂载（facts 快照投影，不物化）。
+  { id: 'facts-only-provenance', fault: '无 ctx 来源的 ask/完成/未读（读侧投影；横幅证据仍要求 host 域 observed 水位）', expect: 'covered', checks: [
+    { file: `${RN}/session-state/source-mux-facts.test.ts`, title: 'P3: request waterfalls set pendingKind from the frame identity alone; cancel clears it' },
+    { file: `${RN}/session-state/virtual-runtime-report.test.ts`, title: 'projection → arm: a facts-only completion arms its row (G3 composition)' },
+    { file: `${RN}/session-state/virtual-runtime-report.test.ts`, title: 'projection → arm: an unlatched baselines counter never clears an arm (absence ≠ empty list)' },
+    { file: `${RN}/session-state/virtual-runtime-report.test.ts`, title: 'composition: virtualRuntimeReport → observeSource yields ask and complete candidates' },
+  ] },
   { id: 'facts-source-wiring', fault: '桌面事实源接线（probe/stream/overlay/落盘）', expect: 'covered', checks: [
     // No App source-text wiring lock is needed here: a wiring lock dies once the
     // invariant has behaviour tests, and the three behaviour witnesses below
