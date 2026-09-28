@@ -27,6 +27,7 @@ import { notificationLedger } from '../notification-ledger.ts'
 import type { NotificationTitleId } from '../notification-projection.ts'
 import type { CompleteLedger } from '../complete-ledger.ts'
 import type { FactsStepGuard } from '../facts-health.ts'
+import type { WithdrawScope } from './use-notifications.ts'
 import {
   chamberBridge,
   instanceSnapshotSignature,
@@ -181,6 +182,12 @@ export interface BridgeSubscriptionsDeps {
   openSession: (instanceId: string, sessionId: string) => Promise<unknown>
   /** 完成点步进（官方位 ∪ 修正臂的唯一入口，见 client-core completion-arm.ts）。 */
   stepCompletionArmFor: (sourceId: string) => void
+  /**
+   * 来源撤回（facts 源退役 / 观察者换代 / 桥面 report=undefined）：清 running 边沿记忆、
+   * 观测状态与账本易失轨；臂冻结不误清。与 use-session-facts-lifecycle 用同一实体
+   * （use-notifications 的 withdrawSource），桥面不得再内联复制五连。
+   */
+  withdrawSource: (sourceId: string, scope?: WithdrawScope) => void
   /** 步骤级 never-throw 包装（hook 的唯一失败面）：runtime 上报的 body 同环同 loud 纪律。 */
   guardStep: FactsStepGuard
   refreshAggregate: (instanceId: string, mutationTag?: number) => Promise<unknown>
@@ -205,7 +212,6 @@ export interface BridgeSubscriptionsDeps {
   liveServerIdsRef: { current: Set<string> }
   mutationRefreshSeqRef: { current: Record<string, number> }
   pendingDeepLinkDeliveryRef: { current: DeepLinkDelivery | null }
-  prevRunningRef: { current: Record<string, Record<string, boolean>> }
   /** 完成观测状态（v5 §3.2；与 App 的 facts 轨共用同一份 Map）。 */
   completionObservationRef: { current: Map<string, SourceObservationState> }
   /** reconcile 批次的落盘出口（immediate ⇒ 立即 flushUnread）；同步壳行镜像就是 factsStore。 */
@@ -244,12 +250,12 @@ export interface BridgeSubscriptionsDeps {
 export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
   const {
     acknowledgeDeepLink, emitSessionNotification, openSession,
-    stepCompletionArmFor, guardStep, refreshAggregate, reportDeepLinkAckFailure, selectView,
+    stepCompletionArmFor, withdrawSource, guardStep, refreshAggregate, reportDeepLinkAckFailure, selectView,
     updateSessionArchive, updateSessionEcho, updateWorkspaceEcho,
     aggregatePollSeqRef, aggregateRequestOwnersRef, authoritativeArchiveSetRef, autoPrewarmedRef,
     completeLedgerRef, drainPrewarmRef, factsAtRef, harvestCandidatesRef, harvestIntentRef,
     harvestStateRef, intentBudgetRef, intentPriorityRef, liveServerIdsRef, mutationRefreshSeqRef,
-    pendingDeepLinkDeliveryRef, prevRunningRef, prewarmEligibleRef,
+    pendingDeepLinkDeliveryRef, prewarmEligibleRef,
     prewarmQueueRef, prewarmSuppressedRef, readyAggregateSourcesRef, reclaimViewRef,
     remotesStore, isRosterSettled, echoStore, factsStore,
     sessionListRefreshAtRef, sessionListRefreshPendingRef, settingsTargetRef, snapshotAtRef,
@@ -732,15 +738,13 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
         return { ...prev, [sourceId]: report }
       })
       if (report === undefined) {
-        // 通道撤回（shell 重连/重 boot 窗口）：删 running 边沿记忆（`prevRunning`）、观测状态与通知账本的易失轨；已完成修正臂按设计**冻结**（不误清），恢复后按新上报对账
-        // （withdraw 清 armed + pending，notified/outcomes 保持 durable，R2-D/§3.1）；恢复后首报
-        // 是纯播种。wire 只有 running 位，窗口内被手动停止的会话会误报「完成」，故不补发。
-        // 撤回不删来源账本（durable 由事实重算）；prevRunning 是「转移」不是「状态」。
-        delete prevRunningRef.current[sourceId]
-        completionObservationRef.current.delete(sourceId)
-        completeLedgerRef.current.withdraw(sourceId)
-        persistCompletionLedger(true)
-        stepCompletionArmFor(sourceId)
+        // 壳上报撤回（shell 重连/重 boot 窗口）：provenance = 壳轨——facts 载体未换代，
+        // 只清壳轨（shellSeeded 复位 + 每会话壳位清空，恢复后首份壳/虚拟报只播种）。
+        // facts 轨 watermarks 与账本守卫原样保留：窗口内到达的 observed 完成必须仍恰好
+        // 通知一次（C1）；prevRunning 保留 ⇒ 虚拟接管按 facts 逐行边沿武装蓝点。事实
+        // 载体真正换代的路径（gateway teardown / mux teardown / notReady 删 runtime）
+        // 仍走 withdrawSource 的整代撤回（scope='all'，缺省）。
+        withdrawSource(sourceId, 'shell')
         return
       }
       // runtime report 的同步权威就是 factsStore：store 写入后，同一事件轮到达的 facts 快照、

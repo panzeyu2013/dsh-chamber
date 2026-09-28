@@ -12,6 +12,8 @@ import { fileURLToPath } from 'node:url'
 import {
   SESSION_FACTS_DISABLED_CODE,
   __resetSessionFactsGoalWarningForTests,
+  SESSION_FACTS_DIAGNOSTICS_REFETCH_MAX,
+  SESSION_FACTS_DIAGNOSTICS_REFETCH_MIN_MS,
   SESSION_FACTS_PROTOCOL_VERSION,
   SESSION_FACTS_STREAM_ROUTE,
   SESSION_FACTS_ROUTE,
@@ -166,6 +168,42 @@ test('F2: 503 + session_state_disabled publishes watcher-disabled (and drives th
   } finally {
     source.stop()
   }
+})
+
+test('a disabled answer after a healthy baseline keeps the rows (never an authoritative empty set)', async () => {
+  const good = {
+    protocol: 1,
+    features: [],
+    mode: 'poll',
+    cursor: 11,
+    host: { state: 'ready', serviceable: true },
+    sessions: [{ sessionId: 's1', running: true, updatedAt: 11 }],
+  }
+  let payload: unknown = good
+  let status = 200
+  const fetchImpl = (async () => new Response(JSON.stringify(payload), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  })) as unknown as typeof fetch
+  const source = createSessionFactsSource({
+    sourceId: 'gw-disabled-after-good',
+    fetchImpl,
+    pollIntervalMs: 10,
+    silenceMs: 0,
+    reconnectMs: 5,
+  })
+  source.update({ fingerprint: 'f1', connected: true })
+  await waitFor(() => source.getSnapshot()?.verdict === 'ok' && source.getSnapshot()?.rows.s1 !== undefined)
+  status = 503
+  payload = { error: { code: SESSION_FACTS_DISABLED_CODE } }
+  await waitFor(() => source.getSnapshot()?.degradation === 'watcher-disabled')
+  const snapshot = source.getSnapshot()!
+  // 空行集会让在场集判空 ⇒ 遗忘结算 / 清 held pending / 撤已武装行（design 19 §3.5）。
+  assert.equal(snapshot.rows.s1?.sessionId, 's1', 'rows must survive a disabled answer')
+  assert.equal(snapshot.serviceable, false)
+  assert.equal(snapshot.stale, true)
+  assert.equal(isFactsUsable(snapshot), false)
+  source.stop()
 })
 
 test('F2: a plain 5xx is unavailable (never legacy) and schedules a bounded reprobe', async () => {
@@ -403,6 +441,96 @@ test('delta: cursor monotonicity is idempotent; hints classify added/changed/rem
     )
   }
   assert.deepEqual(applySessionFactsDelta(current, { cursor: 0, sessions: [] }), { next: null, refetch: true, hint: null }, '0 不是合法事件游标')
+})
+
+test('delta: a removedSessionIds entry for a row the client never had produces no hint and no row-set change', () => {
+  const base = parseSessionFactsSnapshotValue(SNAPSHOT)!
+  const current = {
+    verdict: 'ok' as const,
+    degradation: null,
+    mode: base.mode,
+    hostState: base.hostState,
+    serviceable: base.serviceable,
+    stale: false,
+    cursor: base.cursor,
+    rows: base.rows,
+    lastEventAt: null,
+  }
+  // 未知 id 的撤回（陈旧 removed / 另一客户端的行）：没有行被删 ⇒ 不得提示。
+  const unknown = applySessionFactsDelta(current, { cursor: 8, sessions: [], removedSessionIds: ['never-seen'] })
+  assert.ok(unknown.next !== null, '游标照常推进（帧本身合法）')
+  assert.equal(unknown.hint, null, '未知 id 不产生 removed 提示（不白触发整量重拉）')
+  assert.deepEqual(Object.keys(unknown.next.rows), Object.keys(current.rows))
+  // 同一个未知 id 与一次真变化同帧：提示仍是真变化的档位。
+  const changed = applySessionFactsDelta(current, {
+    cursor: 9,
+    sessions: [{ sessionId: 's1', running: true, updatedAt: 1 }],
+    removedSessionIds: ['never-seen'],
+  })
+  assert.equal(changed.hint, 'changed')
+})
+
+test('delta: hint priority is added > removed > changed (a mixed frame pulls once)', () => {
+  const base = parseSessionFactsSnapshotValue(SNAPSHOT)!
+  const current = {
+    verdict: 'ok' as const,
+    degradation: null,
+    mode: base.mode,
+    hostState: base.hostState,
+    serviceable: base.serviceable,
+    stale: false,
+    cursor: base.cursor,
+    rows: base.rows,
+    lastEventAt: null,
+  }
+  const mixed = applySessionFactsDelta(current, {
+    cursor: 9,
+    sessions: [{ sessionId: 's2', running: true, updatedAt: 1 }],
+    removedSessionIds: ['s1'],
+  })
+  assert.equal(mixed.hint, 'added',
+    'design 06 §4.2 的 added > removed > changed：混合帧一次整量拉取即同时收敛新增/删除/变化')
+  assert.equal(mixed.next?.rows.s2?.running, true)
+  assert.equal(mixed.next?.rows.s1, undefined, '删除仍在同一帧生效')
+  // 纯删除仍是 removed（分类不被优先级改写）。
+  const pureRemoval = applySessionFactsDelta(mixed.next!, { cursor: 10, sessions: [], removedSessionIds: ['s2'] })
+  assert.equal(pureRemoval.hint, 'removed')
+})
+
+test('firstSeenByDelta is observer-only: gateway delta/snapshot frames never write the local bit', () => {
+  const base = parseSessionFactsSnapshotValue(SNAPSHOT)!
+  const current = {
+    verdict: 'ok' as const,
+    degradation: null,
+    mode: base.mode,
+    hostState: base.hostState,
+    serviceable: base.serviceable,
+    stale: false,
+    cursor: base.cursor,
+    rows: base.rows,
+    lastEventAt: null,
+  }
+  assert.equal(current.rows.s1.firstSeenByDelta, undefined, '快照帧（列表播种）不带该位')
+  // d1：增量帧首建的新行也不带该位（P1：added/activity/tombstone 行不得冒充 status 事件）。
+  const d1 = applySessionFactsDelta(current, {
+    cursor: 8,
+    sessions: [{ sessionId: 's2', running: false, updatedAt: 5 }],
+  })
+  assert.equal(d1.next?.rows.s2?.firstSeenByDelta, undefined, '网关增量首建的行不带该位')
+  // d2：同行只改 updatedAt ⇒ 依旧不带。
+  const d2 = applySessionFactsDelta(d1.next!, {
+    cursor: 9,
+    sessions: [{ sessionId: 's2', running: false, updatedAt: 6 }],
+  })
+  assert.equal(d2.next?.rows.s2?.updatedAt, 6)
+  assert.equal(d2.next?.rows.s2?.firstSeenByDelta, undefined, 'd2：增量帧仍不写本地位')
+  // 即便上一份快照里该行带了本地位，增量帧也只写 wire 行（该位不属于网关平面）。
+  const seeded = { ...d2.next!, rows: { ...d2.next!.rows, s2: { ...d2.next!.rows.s2!, firstSeenByDelta: true } } }
+  const d3 = applySessionFactsDelta(seeded, {
+    cursor: 10,
+    sessions: [{ sessionId: 's2', running: false, updatedAt: 7 }],
+  })
+  assert.equal(d3.next?.rows.s2?.firstSeenByDelta, undefined, '增量帧不保留本地位')
 })
 
 test('delta: host gate updates ride the frame', () => {
@@ -647,9 +775,294 @@ test('snapshot factory negative: a malformed sync frame refetches instead of sil
   }
 })
 
+test('snapshot hints: an identical snapshot frame does not re-hint; a changed row hints once', async () => {
+  const baseRow = { sessionId: 's1', running: false, updatedAt: 11 }
+  let payload: unknown = {
+    protocol: 1, features: [], mode: 'poll', cursor: 11,
+    host: { state: 'ready', serviceable: true }, sessions: [baseRow],
+  }
+  let probes = 0
+  const fetchImpl = (async () => {
+    probes += 1
+    return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as unknown as typeof fetch
+  const hints: string[] = []
+  const source = createSessionFactsSource({
+    sourceId: 'gw-snapshot-hint', fetchImpl, pollIntervalMs: 10, silenceMs: 0,
+  })
+  source.onRowHint(hint => { hints.push(hint) })
+  try {
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => probes >= 3 && source.getSnapshot()?.rows.s1 !== undefined)
+    assert.deepEqual(hints, ['added'], '内容不变（同 verdict/rows/游标内容）的快照帧不得重复提示')
+    payload = {
+      protocol: 1, features: [], mode: 'poll', cursor: 12,
+      host: { state: 'ready', serviceable: true },
+      sessions: [{ ...baseRow, running: true }],
+    }
+    await waitFor(() => hints.length === 2)
+    assert.equal(hints[1], 'changed')
+  } finally {
+    source.stop()
+  }
+})
+
 // ── probe outcome → 快照（2026-12 单源化：classifier 是唯一判定 owner） ─────────
 // 404 legacy 的成立面由上面的 F2 用例覆盖（verdict / degradation / mode null /
 // stale false / 有界重探），这里只留 unversioned 的发布契约。
+
+test('the wire diagnostics counter latches into the snapshot (the only listComplete source)', async () => {
+  let payload: unknown = {
+    protocol: 1,
+    features: [],
+    mode: 'poll',
+    cursor: 11,
+    host: { state: 'ready', serviceable: true },
+    diagnostics: { baselines: 2 },
+    sessions: [{ sessionId: 's1', running: true, updatedAt: 11 }],
+  }
+  const fetchImpl = (async () => new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })) as unknown as typeof fetch
+  const source = createSessionFactsSource({
+    sourceId: 'gw-baselines',
+    fetchImpl,
+    pollIntervalMs: 10,
+    silenceMs: 0,
+    reconnectMs: 5,
+  })
+  source.update({ fingerprint: 'f1', connected: true })
+  await waitFor(() => source.getSnapshot()?.baselines === 2)
+  // 无诊断帧沿用闩锁值：绝不回退成「未就绪」而误清臂。
+  payload = {
+    protocol: 1,
+    features: [],
+    mode: 'poll',
+    cursor: 12,
+    host: { state: 'ready', serviceable: true },
+    sessions: [{ sessionId: 's1', running: true, updatedAt: 12 }],
+  }
+  await waitFor(() => source.getSnapshot()?.cursor === 12)
+  assert.equal(source.getSnapshot()?.baselines, 2)
+  source.stop()
+})
+
+/**
+ * S4 假件：probe 回 sse 快照（baselines 由回调按第几次 probe 决定），stream 以固定间隔
+ * 推 delta 帧。每次 delta 命中断流重取时都会重新走 probe + 重订阅，故 probe 次数就是
+ * 「诊断补快照」的计数。帧游标在所有流之间共享单调递增，避免重取后回退被当旧帧丢弃。
+ */
+function diagnosticsRefetchHarness(baselinesOf: (probeIndex: number) => number | undefined) {
+  let probeGets = 0
+  let frames = 0
+  let cursor = 0
+  const fetchImpl = (async (url: unknown, init?: unknown) => {
+    const text = String(url)
+    if (text.endsWith(SESSION_FACTS_STREAM_ROUTE)) {
+      const signal = ((init ?? {}) as RequestInit).signal as AbortSignal
+      const encoder = new TextEncoder()
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const timer = setInterval(() => {
+            if (signal.aborted) { clearInterval(timer); return }
+            cursor += 1
+            frames += 1
+            controller.enqueue(encoder.encode(
+              'event: session-state\ndata: ' + JSON.stringify({ cursor, sessions: [] }) + '\n\n',
+            ))
+          }, 5)
+          signal.addEventListener('abort', () => clearInterval(timer), { once: true })
+        },
+      })
+      return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+    }
+    probeGets += 1
+    const baselines = baselinesOf(probeGets)
+    return new Response(JSON.stringify({
+      protocol: 1,
+      mode: 'sse',
+      features: ['session-state.snapshot', 'session-state.stream'],
+      // 快照游标 = 当前帧游标（真实网关语义）：旧实现允许回退，T3 的单调门要求整量
+      // 快照不得落后于已应用的增量，否则它会被丢弃、闩锁永远得不到更新。
+      cursor,
+      host: { state: 'ready', serviceable: true },
+      ...(baselines === undefined ? {} : { diagnostics: { baselines } }),
+      sessions: [],
+    }), { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as unknown as typeof fetch
+  return { fetchImpl, probeGets: () => probeGets, frames: () => frames }
+}
+
+test('S4: a baselines latch stuck at 0 is refetched at most SESSION_FACTS_DIAGNOSTICS_REFETCH_MAX times per generation (bounded retry, no jitter)', async () => {
+  const harness = diagnosticsRefetchHarness(() => undefined)
+  const source = createSessionFactsSource({
+    sourceId: 'gw-diag-retry-bounded',
+    fetchImpl: harness.fetchImpl,
+    silenceMs: 0,
+    reconnectMs: 5,
+    pollIntervalMs: 0,
+    streamConnectTimeoutMs: 5_000,
+  })
+  try {
+    source.subscribe(() => {})
+    source.update({ fingerprint: 'f1', connected: true })
+    // 连续 0 ⇒ 有界重试：1 次首探 + 至多 MAX 次补快照。
+    await waitFor(() => harness.probeGets() >= 1 + SESSION_FACTS_DIAGNOSTICS_REFETCH_MAX, 3_000)
+    await new Promise(resolve => setTimeout(resolve, 150))
+    assert.equal(harness.probeGets(), 1 + SESSION_FACTS_DIAGNOSTICS_REFETCH_MAX,
+      '每代恰好至多 3 次诊断补快照：连续 0 会重试，但有界、不抖动')
+    assert.equal(source.getSnapshot()?.baselines, undefined, '网关始终没给诊断 ⇒ 闩锁保持 unknown')
+  } finally {
+    source.stop()
+  }
+})
+
+test('S4: a refetch that finally reports baselines >= 1 stops the retries for that generation', async () => {
+  const harness = diagnosticsRefetchHarness(probeIndex => (probeIndex === 1 ? undefined : 1))
+  const source = createSessionFactsSource({
+    sourceId: 'gw-diag-retry-satisfied',
+    fetchImpl: harness.fetchImpl,
+    silenceMs: 0,
+    reconnectMs: 5,
+    pollIntervalMs: 0,
+    streamConnectTimeoutMs: 5_000,
+  })
+  try {
+    source.subscribe(() => {})
+    source.update({ fingerprint: 'f1', connected: true })
+    // 首探无诊断 → 首个 delta 触发一次补快照；该次拿到 1 ⇒ 停止。
+    await waitFor(() => source.getSnapshot()?.baselines === 1, 3_000)
+    await waitFor(() => harness.frames() >= 2, 3_000)
+    await new Promise(resolve => setTimeout(resolve, 150))
+    assert.equal(harness.probeGets(), 2, '拿到 ≥1 后不再补快照（即使 delta 继续到达）')
+  } finally {
+    source.stop()
+  }
+})
+
+test('S4/T3: an out-of-order complete snapshot can never regress the cursor or the row set', async () => {
+  let probeGets = 0
+  const fetchImpl = (async () => {
+    probeGets += 1
+    const cursor = probeGets === 1 ? 9 : 7
+    return new Response(JSON.stringify({
+      protocol: 1,
+      mode: 'poll',
+      features: [],
+      cursor,
+      host: { state: 'ready', serviceable: true },
+      diagnostics: { baselines: 1 },
+      sessions: [{ sessionId: 'p' + String(cursor), running: true, updatedAt: cursor }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as unknown as typeof fetch
+  const source = createSessionFactsSource({
+    sourceId: 'gw-out-of-order', fetchImpl, pollIntervalMs: 0, silenceMs: 0, reconnectMs: 5,
+  })
+  try {
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => source.getSnapshot()?.cursor === 9, 3_000)
+    source.reconcile()
+    await waitFor(() => probeGets === 2, 3_000)
+    await new Promise(resolve => setTimeout(resolve, 60))
+    const snap = source.getSnapshot()
+    assert.equal(snap?.cursor, 9, '旧游标的整量快照不得覆盖新游标（与 applySessionFactsDelta 的 cursor 门同规）')
+    assert.deepEqual(Object.keys(snap?.rows ?? {}), ['p9'], '旧行集不得覆盖新行集')
+  } finally {
+    source.stop()
+  }
+})
+
+test('S4/T3: a same-chunk burst triggering a hung refetch is single-flight (no stacked GETs)', async () => {
+  let probeGets = 0
+  let streamServed = 0
+  let releaseSecond: (() => void) | null = null
+  const body = (baselines: number | undefined, cursor: number): string => JSON.stringify({
+    protocol: 1,
+    mode: 'sse',
+    features: ['session-state.snapshot', 'session-state.stream'],
+    cursor,
+    host: { state: 'ready', serviceable: true },
+    ...(baselines === undefined ? {} : { diagnostics: { baselines } }),
+    sessions: [],
+  })
+  const encoder = new TextEncoder()
+  const fetchImpl = (async (url: unknown) => {
+    const text = String(url)
+    if (text.endsWith(SESSION_FACTS_STREAM_ROUTE)) {
+      streamServed += 1
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (streamServed === 1) {
+            // 同一个 chunk 里五帧（旧实现每帧各发一次整量 GET ⇒ 叠发三连）。
+            let chunk = ''
+            for (let cursor = 1; cursor <= 5; cursor += 1) {
+              chunk += 'event: session-state\ndata: ' + JSON.stringify({ cursor, sessions: [] }) + '\n\n'
+            }
+            controller.enqueue(encoder.encode(chunk))
+          }
+        },
+      })
+      return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+    }
+    probeGets += 1
+    if (probeGets === 1) return new Response(body(undefined, 0), { status: 200, headers: { 'content-type': 'application/json' } })
+    if (probeGets === 2) {
+      await new Promise<void>(resolve => { releaseSecond = resolve })
+      return new Response(body(1, 1_000), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    return new Response(body(1, 1_000), { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as unknown as typeof fetch
+  const source = createSessionFactsSource({
+    sourceId: 'gw-refetch-single-flight', fetchImpl, pollIntervalMs: 0, silenceMs: 0, reconnectMs: 5,
+  })
+  try {
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => probeGets === 2, 3_000)
+    await new Promise(resolve => setTimeout(resolve, 120))
+    assert.equal(probeGets, 2, '在途整量补快照期间不得叠发（single-flight）：五帧同 chunk 也只发一次')
+    releaseSecond!()
+    await waitFor(() => source.getSnapshot()?.baselines === 1, 3_000)
+    await new Promise(resolve => setTimeout(resolve, 60))
+    assert.equal(probeGets, 2, '闩锁拿到 ≥1 后不再补快照')
+  } finally {
+    source.stop()
+  }
+})
+
+test('S4/T3: exhausted diagnostics attempts re-arm after the 30s floor (bounded rounds, never permanently stuck at 0)', async () => {
+  let clock = 1_000
+  const harness = diagnosticsRefetchHarness(() => 0)
+  const source = createSessionFactsSource({
+    sourceId: 'gw-diag-rearm',
+    fetchImpl: harness.fetchImpl,
+    now: () => clock,
+    silenceMs: 0,
+    reconnectMs: 5,
+    pollIntervalMs: 0,
+    streamConnectTimeoutMs: 5_000,
+  })
+  try {
+    source.subscribe(() => {})
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => harness.probeGets() >= 1 + SESSION_FACTS_DIAGNOSTICS_REFETCH_MAX, 3_000)
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const atBudget = harness.probeGets()
+    assert.equal(atBudget, 1 + SESSION_FACTS_DIAGNOSTICS_REFETCH_MAX, '每代恰好一轮（至多 MAX 次）')
+    // 未到 30s：不重武装（这段时间里也不再发 GET）。
+    await new Promise(resolve => setTimeout(resolve, 60))
+    assert.equal(harness.probeGets(), atBudget, '时间下限之前不得重武装')
+    // 时钟推进 30s：下一轮允许（仍是至多 MAX 次的有界一轮）。
+    clock += SESSION_FACTS_DIAGNOSTICS_REFETCH_MIN_MS
+    await waitFor(() => harness.probeGets() >= atBudget + 1, 3_000)
+    await new Promise(resolve => setTimeout(resolve, 100))
+    assert.ok(harness.probeGets() <= atBudget + SESSION_FACTS_DIAGNOSTICS_REFETCH_MAX,
+      '重武装的一轮同样有界：至多再 MAX 次')
+    assert.equal(source.getSnapshot()?.baselines, 0, '网关始终给 0 ⇒ 闩锁保持已知未就绪（不是永久未知）')
+  } finally {
+    source.stop()
+  }
+})
 
 test('404 after a good snapshot keeps the rows as presence evidence: unavailable legacy, never an authoritative empty set', async () => {
   const good = {

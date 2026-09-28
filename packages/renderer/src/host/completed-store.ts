@@ -3,8 +3,10 @@
  *
  * Authority is the vendor's own `uiSession.sessionStatus.completionUnread`, carried
  * on the channel row and merged into the runtime facts. This store holds ONLY the
- * App's N-ctx correction arm (client-core `completion-arm.ts`): the hidden source's
- * mainView-retained row the vendor rule cannot arm. It is memory-only — never
+ * App's N-ctx correction arm (client-core `completion-arm.ts`): the hidden shelled
+ * source's mainView-retained row the vendor rule cannot arm, plus — for a source with
+ * no official ctx report (facts-only provenance, `factsOnly`, design 06 §4.1/§4.2) —
+ * every row with a fresh host running→idle edge. It is memory-only — never
  * seeded from disk, never persisted (reload forgets, exactly like upstream).
  *
  * setSource is the single write: the step's new table replaces a source's entry

@@ -23,6 +23,7 @@ import {
   completionIdentity,
   factsChannelOf,
   observeSource,
+  withdrawShellTrack,
   type SourceObservationState,
 } from '../completion-observation.ts'
 import type { SourceOwnershipRegistry } from '../deep-link-activation.ts'
@@ -34,6 +35,7 @@ import type { DeliveryOutcome, NotificationOutbox, PendingNotification } from '.
 import type { NotificationTitleId } from '../notification-projection.ts'
 import { completionWatermark } from '../watermark.ts'
 import { isFactsDecisionUsable, type SessionFactsSnapshot } from '../session-facts-source.ts'
+import { virtualRuntimeReport } from '../virtual-runtime-report.ts'
 import {
   createNotificationSaveCoalescer,
   saveNotifications,
@@ -77,6 +79,9 @@ export interface NotificationsDeps {
   liveServerIdsRef: { current: ReadonlySet<string> }
   factsStore: FactsStore
   sourceLifecyclesRef: { current: SourceOwnershipRegistry | null }
+  /** 会话打开意图（sourceId → sessionId；App 唯一写者）。无壳来源无可读的 current，
+   *  它是"已读"的唯一事实（点开即消点，boot 失败也成立）。 */
+  openIntents: Readonly<Record<string, string>>
   /** 每来源每会话的上一份 channel running 位（修正臂的边沿记忆）。 */
   prevRunningRef: { current: Record<string, Record<string, boolean>> }
   /** App 的完成点 store：官方位之外只放修正臂（内存、行键控、不扫描）。 */
@@ -107,7 +112,23 @@ export interface NotificationsProjection {
   notificationImmediateSave: NotificationSaveCoalescer
   /** 步骤级 never-throw 包装：桥面 runtime 上报等外部 listener 的失败面（同环 + 同 loud 纪律）。 */
   guardStep: FactsStepGuard
+  /**
+   * 来源撤回，按 provenance 分域（C1）：
+   *  - `'all'`（缺省；facts 源退役 / 观察者换代 / 来源断连）——事实与壳两轨一并作废；
+   *  - `'shell'`（桥面 `report === undefined`，facts 载体未换代）——只清壳轨转移记忆，
+   *    facts 轨（factsSeeded/factsWatermark）与账本去重守卫原样保留：窗口内到达的
+   *    observed 完成仍按「水位严格前进」恰好通知一次，修正臂记忆也不清（窗口内按
+   *    facts 逐行边沿武装）。
+   */
+  withdrawSource: (sourceId: string, scope?: WithdrawScope) => void
 }
+
+/**
+ * 撤回作用域（C1 分域）：
+ *  - `'shell'`：壳上报撤回（facts 载体未换代）——只清壳轨；
+ *  - `'all'`：事实载体真正换代 / 来源退役——整代撤回（现状不变）。
+ */
+export type WithdrawScope = 'shell' | 'all'
 
 /** outbox 行在运行时携带的瞬时诊断/文案字段（类型面之外，随行 JSON 往返）。 */
 type QueuedNotification = PendingNotification & {
@@ -118,7 +139,7 @@ type QueuedNotification = PendingNotification & {
 
 export function useNotifications(deps: NotificationsDeps): NotificationsProjection {
   const {
-    aggregates, serverLabels, viewStore, factsStore, liveServerIdsRef,
+    aggregates, serverLabels, viewStore, factsStore, liveServerIdsRef, openIntents,
     sourceLifecyclesRef, prevRunningRef,
     completedStore, completeLedgerRef, notificationOutboxRef,
     completionObservationRef, bootToken, bootVerdict,
@@ -132,6 +153,9 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
   aggregatesRef.current = aggregates
   const serverLabelsRef = useRef(serverLabels)
   serverLabelsRef.current = serverLabels
+  /** 打开意图只在步进时按 sourceId 读最新值：ref 保持步进回调的依赖稳定（无 stale 闭包）。 */
+  const openIntentsRef = useRef(openIntents)
+  openIntentsRef.current = openIntents
 
   /**
    * 本拍由 outbox 待发壳边沿认领的会话（associateCompletion 返回 true）。facts 组装与
@@ -190,22 +214,35 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
   }, [schedulePersistNotifications, notificationImmediateSave])
 
   /**
-   * 一个来源的完成点步进（唯一出口的实体）：官方位经通道行呈现，本步只补 N-ctx 修正臂
-   * （隐藏来源 mainView 持有的 current 行）。规则本体在 client-core completion-arm.ts；
-   * "谁在阅读" 是 paintedView（屏上），不是桥发布的 activeView（选择）。
+   * 一个来源的完成点步进（唯一出口的实体）：官方位经通道行呈现，本步只补 N-ctx 修正臂。
+   * 武装面 = 有壳隐藏来源 mainView 持有的 current 行，**并集** 无 ctx（facts-only provenance）
+   * 来源的逐行 host running→idle 边沿 + 上游 beforeBaseline 支（首见 idle）；后者带
+   * `factsOnly` 显式来源，绝不靠 current === undefined 推断。规则本体在 client-core
+   * completion-arm.ts；"谁在阅读" 是 paintedView（屏上）∪ 无壳来源的打开意图，不是桥发布的
+   * activeView（选择）。无 ctx 上报时行源是该 facts 快照的判定侧投影（virtual-runtime-report.ts，
+   * 只读、不物化）。
    */
   const stepArmNow = useCallback((sourceId: string): void => {
     if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
-    const report = factsStore.getSnapshot().runtime[sourceId]
+    const runtime = factsStore.getSnapshot().runtime[sourceId]
+    // 判定侧读回退：无 ctx 上报的来源用 facts 快照的虚拟投影（不物化、不新增写者）。
+    const virtual = runtime === undefined
+      ? virtualRuntimeReport(factsStore.getSnapshot().session[sourceId])
+      : undefined
+    const report = runtime ?? virtual
     const next = stepCompletionArm(
       completedStore.getSnapshot()[sourceId] ?? {},
       prevRunningRef.current[sourceId] ?? {},
       {
-        current: report?.current,
+        current: runtime?.current,
         rows: report?.sessions,
         painted: viewStore.getSnapshot().painted === sourceId,
         listComplete: report?.listComplete === true,
+        // 基数已知位只属于虚拟投影（有壳路径无消费者，inert）。
+        listKnown: virtual?.listKnown === true,
         stale: report?.stale === true,
+        factsOnly: runtime === undefined && virtual !== undefined,
+        readIntent: openIntentsRef.current[sourceId],
       },
     )
     if (!next.changed) return
@@ -399,15 +436,25 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
     const pendingClaims = pendingOutboxClaimsRef.current
     pendingOutboxClaimsRef.current = new Set()
     const snapshot = factsStore.getSnapshot()
-    const report = snapshot.runtime[sourceId]
+    const runtime = snapshot.runtime[sourceId]
+    // 同一读回退：facts-only 来源的虚拟上报在本批充当壳报（唯一的壳边沿裁决点仍在本函数）。
+    const virtual = runtime === undefined ? virtualRuntimeReport(snapshot.session[sourceId]) : undefined
+    const shellReport = runtime ?? virtual
     const batch = observeSource({
       state: completionObservationRef.current.get(sourceId),
       sourceId,
       identity: completionIdentity(owner.fingerprint, bootToken),
       pageBoot: bootVerdict,
-      ...(report === undefined
+      ...(shellReport === undefined
         ? {}
-        : { shell: { rows: report.sessions, ...(report.stale === true ? { stale: true } : {}) } }),
+        : {
+            shell: {
+              rows: shellReport.sessions,
+              ...(shellReport.stale === true ? { stale: true } : {}),
+            },
+            // 有壳路径保持"复用当前壳行"（无 shellReport）；只有虚拟批是新"壳报"。
+            ...(virtual === undefined ? {} : { shellReport: true }),
+          }),
       facts: factsChannelOf(snapshot.session[sourceId]),
     })
     completionObservationRef.current.set(sourceId, batch.state)
@@ -476,6 +523,7 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
       // facts 通道消失 = 一次观测（running 权威回落壳行，goal 回落壳行/unknown）；不 emit，
       // 只让收敛器看到最新事实。
       reconcileCompletions(sourceId)
+      stepCompletionArmFor(sourceId)
       return
     }
     // 完成证据关联只认可判快照（stale 快照不作证据）。
@@ -513,7 +561,10 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
     // 同一观测组装缝：facts 候选（observed + 播种 + 水位严格前进）与壳行 goal 的结算都在
     // reconcile 里裁决——接线层不再有第二 planner。
     reconcileCompletions(sourceId)
-  }, [reconcileCompletions, schedulePersistNotifications])
+    // 同一同步单元里步进修正臂：无 ctx 来源没有桥报告驱动这一步，facts 到达就是它的
+    // "报告到达"。顺序在 reconcile 之后（判定读取 factsStore 已写完）。
+    stepCompletionArmFor(sourceId)
+  }, [reconcileCompletions, schedulePersistNotifications, stepCompletionArmFor])
 
   /**
    * facts 快照的**唯一入口**（gateway 订阅 / 无壳观察者 / dropSession 共用）：never-throw ——
@@ -524,8 +575,55 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
     factsStepGuard.guard(sourceId, 'apply-session-facts', () => applySessionFactsNow(sourceId, snapshot))
   }, [applySessionFactsNow, factsStepGuard])
 
+  /**
+   * 来源撤回（唯一实体，按 provenance 分域；C1）：
+   *
+   * `'all'`（缺省；gateway facts 源退役 / 无壳观察者换代 / aggregate notReady 删 runtime）：
+   * 事实载体换代——删 running 边沿记忆与整份观测状态、撤回通知账本易失轨；修正臂按
+   * 设计冻结（不误清）。没有它，新化身会继承旧化身的边沿记忆 ⇒ 假完成点（INV-7）。
+   *
+   * `'shell'`（桥面 `report === undefined`；facts 载体未换代）：**只清壳轨**——
+   * 观测层的 `shellSeeded` 复位与每会话壳位清空（{@link withdrawShellTrack}）。facts 轨
+   * （factsSeeded / factsWatermark / factsReseedPending）与修正臂记忆 `prevRunning` 原样
+   * 保留：窗口内到达的 observed 完成必须是「已播种 + 水位严格前进」⇒ 恰好通知一次
+   * （清掉 facts 轨会让恢复批变成 G2 播种批，把窗口内真完成吸收进水位，通知与蓝点两面
+   * 都丢——C1 回归）；保留 prevRunning 让虚拟接管按 facts 逐行边沿武装蓝点。
+   *
+   * **账本刻意不动**：armed / armedFloor / settleFence / pending 是**跨通道**的去重与结算
+   * 守卫——armed 同时由 facts 候选消费写入（I2），settleFence 正是「无水位壳 emit 后
+   * facts 追平同一完成」的一次性围栏（B3-2/COR-1），pending 是被目标压制的待结算完成。
+   * 它们没有「纯壳轨」子集：清任何一个都会让同一完成在窗口内被二次通知；壳轨的遗忘已由
+   * shellSeeded 复位精确表达（恢复后首份壳报只播种），无需再动账本。
+   */
+  const withdrawSource = useCallback((sourceId: string, scope: WithdrawScope = 'all'): void => {
+    if (scope === 'shell') {
+      const state = completionObservationRef.current.get(sourceId)
+      if (state !== undefined) withdrawShellTrack(state)
+      stepCompletionArmFor(sourceId)
+      return
+    }
+    delete prevRunningRef.current[sourceId]
+    completionObservationRef.current.delete(sourceId)
+    completeLedgerRef.current.withdraw(sourceId)
+    persistCompletionLedger(true)
+    stepCompletionArmFor(sourceId)
+  }, [persistCompletionLedger, stepCompletionArmFor])
+
+  /**
+   * 打开意图变化 = 无壳来源的"已读"边沿：立即步进一次（点开即消点；即便该来源的壳 boot
+   * 失败、永不出现官方 current）。**openIntents 里每个来源**都要步进——非 painted 来源
+   * 点开 + 壳 boot 失败时也必须消点（W14）；painted 来源照旧（有壳读清由官方 current
+   * 负责）。该输入对 factsOnly=false 不参与任何规则（步进本身幂等）。
+   */
+  useEffect(() => {
+    const touched = new Set(Object.keys(openIntents))
+    const painted = viewStore.getSnapshot().painted
+    if (painted !== undefined) touched.add(painted)
+    for (const sourceId of touched) stepCompletionArmFor(sourceId)
+  }, [openIntents, stepCompletionArmFor, viewStore])
+
   return {
     schedulePersistNotifications, stepCompletionArmFor, emitSessionNotification, applySessionFacts,
-    persistCompletionLedger, notificationImmediateSave, guardStep: factsStepGuard,
+    persistCompletionLedger, notificationImmediateSave, guardStep: factsStepGuard, withdrawSource,
   }
 }

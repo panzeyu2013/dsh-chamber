@@ -41,7 +41,7 @@ test('the identity track is keyed by (source, session) and survives a withdrawal
   assert.equal(ledger.notifiedRun('src', 's1'), 'host:turn%2F8')
   assert.equal(ledger.notifiedRun('src', 's2'), undefined, 'sessions are isolated')
   ledger.setArmed('src', new Set(['s1']))
-  ledger.forgetArmed('src')
+  ledger.withdraw('src')
   assert.equal(ledger.armed('src').size, 0, '撤回清武装轨')
   assert.equal(ledger.notifiedRun('src', 's1'), 'host:turn%2F8', '撤回不得清 durable 身份轨（R2）')
 })
@@ -137,17 +137,11 @@ test('withdrawal clears armed + pending but keeps durable notified/outcomes (R2-
     now: 5,
   })
   ledger.setArmed('src', new Set(['s1']))
-  ledger.forgetArmed('src') // 旧入口 = 撤回（use-bridge-subscriptions 当前调用点）
+  ledger.withdraw('src')
   assert.equal(ledger.armed('src').size, 0, '撤回清武装轨')
   assert.equal(ledger.pendingEntry('src', 's1'), undefined, '撤回清 pending：窗口内完成恢复后不补发')
   assert.equal(ledger.notifiedWatermark('src', 's1', 'complete'), 7, 'notified durable')
   assert.equal(ledger.outcomeWatermark('src', 'g1'), 9, 'outcomes durable')
-  // 显式名与旧名同语义（新 API 并列加入）。
-  ledger.setPending('src', 's1', { at: 6 })
-  ledger.setArmed('src', new Set(['s1']))
-  ledger.withdraw('src')
-  assert.equal(ledger.pendingEntry('src', 's1'), undefined)
-  assert.equal(ledger.armed('src').size, 0)
   // forgetPending 只清 pending。
   ledger.setPending('src', 's1', { at: 7 })
   ledger.setArmed('src', new Set(['s1']))

@@ -57,6 +57,9 @@ export interface SourceMuxDeps {
   now?: () => number
   /** 快照/增量到达（与 gateway 事实源同形）。 */
   onSnapshot: (snapshot: SessionFactsSnapshot) => void
+  /** 行刷新提示：事实行集变化 ⇒ 该来源一次 unary 聚合拉取（与 gateway 事实源同规；
+   *  节流/四拒在消费者）。 */
+  onRowHint?: () => void
   /** session/list 基线 deadline（默认 5s；半死隧道下不得永久挂起）。 */
   baselineTimeoutMs?: number
   /** 每条边沿 session/follow 的 deadline（默认 2s，与 control-plane/session-mux.ts 同预算）。 */
@@ -181,6 +184,9 @@ interface ParsedFrame {
   event?: string
   args?: unknown
   value?: unknown
+  /** waterfall/cancel 的身份字段（P3）：agentId 即 sessionId，eventId 用于 cancel 配对。 */
+  eventId?: string
+  agentId?: string
 }
 
 export function parseMuxFrame(raw: unknown): ParsedFrame | null {
@@ -207,11 +213,14 @@ export function parseMuxFrame(raw: unknown): ParsedFrame | null {
     // （parseStatusArgs 的注释即契约）；在这里归一成 [] 会静默丢掉对象形边沿。
     return { kind: 'emit', streamId: frame.streamId, event: value.event, args: value.args }
   }
+  // 瀑布只观察、永不回答（模块内没有任何 $events/result）：身份字段全留，请求载荷不读。
   if (value.type === 'waterfall' && typeof value.event === 'string' && value.event.length > 0
       && typeof value.eventId === 'string' && value.eventId.length > 0
-      && typeof value.agentId === 'string' && value.agentId.length > 0) return { kind: 'waterfall', streamId: frame.streamId }
+      && typeof value.agentId === 'string' && value.agentId.length > 0) {
+    return { kind: 'waterfall', streamId: frame.streamId, event: value.event, eventId: value.eventId, agentId: value.agentId }
+  }
   if (value.type === 'cancel' && typeof value.eventId === 'string'
-      && value.eventId.length > 0) return { kind: 'cancel', streamId: frame.streamId }
+      && value.eventId.length > 0) return { kind: 'cancel', streamId: frame.streamId, eventId: value.eventId }
   return { kind: 'other', streamId: frame.streamId, value: frame.value }
 }
 
@@ -222,7 +231,9 @@ export function hostEpochMs(value: unknown): number | null {
     : null
 }
 
-/** 新行的默认形状（无完成、无等待、无子代理）：后续事件只改它自己的字段。 */
+/** 新行的默认形状（无完成、无等待、无子代理）：后续事件只改它自己的字段。
+ *  身份默认**未确认**（identityConfirmed: false）：status/activity/waterfall 首建的行
+ *  在列表事实（基线/added）确认前不进入快照；列表播种路径负责置真（S1 的 P2b 等价门）。 */
 export function emptyRow(sessionId: string, running: boolean, updatedAt: number): SourceMuxRow {
   return {
     sessionId,
@@ -233,6 +244,7 @@ export function emptyRow(sessionId: string, running: boolean, updatedAt: number)
     completedAt: null,
     completedAtSource: null,
     lastTurnEnd: null,
+    identityConfirmed: false,
     // 本模块的观察时刻由写入点补齐（新建行还没有被观察过 ⇒ 0）。
     factAt: 0,
   }
@@ -275,6 +287,15 @@ export function parseProjectedGoalFact(item: Record<string, unknown>): SourceMux
   const fact: SourceMuxGoalFact = { goalId: id, revision, phase: phase as SourceMuxGoalPhase }
   if (isGoalWatermark(raw.updatedAt)) fact.updatedAt = raw.updatedAt
   return fact
+}
+
+/**
+ * 子代理行的源侧判定：host `session/list` item 的 `origin === 'subagent'`。
+ * 桌面会话主体是顶层会话（design 19 §3.2 / design 06 §4.5），子代理行不得进入
+ * 事实行集，也不得成为通知/未读主体。
+ */
+export function isSubagentListItem(item: unknown): boolean {
+  return isRecord(item) && item.origin === 'subagent'
 }
 
 /** 从 unary session/list 的 item 取行（与 watcher 的基线字段同源）。 */
@@ -589,9 +610,21 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   const readingTails = new Map<string, PendingTail>()
   const follows = new Map<string, { settle: (tail: FollowTailRead) => void; timer: ReturnType<typeof setTimeout>; carrier: MuxSocket }>()
   let followSeq = 0
-  // A complete baseline can briefly miss a row during host churn. The gateway
-  // mirror also waits for a second complete absence before retiring it.
+  // A complete baseline can briefly miss a row during host churn. P2b keeps its
+  // own two-miss tolerance (the list's sampling point is not knowable here). The
+  // P2a gateway mirror now deletes on the FIRST complete absence (design 17
+  // §10.7): its absent branch is only reached from a successful AND complete
+  // baseline, and it has an explicit removedSessionIds channel to retract. The
+  // two-plane divergence is deliberate and documented (design 19 §3.5).
   const missingBaselines = new Map<string, number>()
+  /**
+   * 子代理会话 id（host `session/list` 的 `origin === 'subagent'`）：这些行在源侧就
+   * 不进快照，状态/活动事件也必须忽略。基线每次刷新重登记，顶层行出现即注销；
+   * 代际终结（stop/start）时清空。
+   */
+  let subagentSessions = new Set<string>()
+  /** waterfall 配对表（与 gateway 的 pendingEvents 同规）：eventId → sessionId（agentId）。 */
+  const pendingWaterfalls = new Map<string, string>()
   /**
    * 每会话进程内 activation 边（仅内存；最新边覆盖）。与行的 goal 合并：基线/
    * added 建行时按 identity 匹配（命中即消费；行 goal unknown/null 或绑定 id
@@ -612,6 +645,9 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   let baselineResamples = 0
   let lastTrustedBaselineAt: number | null = null
   let eventRevision = 0
+  /** 行集提示闩锁（emit 的唯一判据）：只有前进的 api-session/* 版本或新基线才提示一次。 */
+  let hintedEventRevision = 0
+  let hintedBaselines = 0
   let baselineRequest = 0
   let runVersion = 0
   let edges = 0
@@ -752,7 +788,12 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     // 的撕裂快照。
     const usable = ready()
     const record: Record<string, SessionFactsRow> = {}
-    for (const [sessionId, row] of rows) record[sessionId] = row
+    for (const [sessionId, row] of rows) {
+      // S1 等价门（P2b）：身份未由列表事实确认的行不进快照——它可能其实是子代理，
+      // 投递就会为子代理发真横幅。行仍在内部（边沿/读尾照常），基线/added 确认后同拍发布。
+      if (row.identityConfirmed === false) continue
+      record[sessionId] = row
+    }
     return {
       // 观察者自带通道：verdict=ok 表示"这条通道可用"，与网关镜像的版本协商无关
       // （出口判据正是"不依赖 gateway 版本"）。这里是 $events WebSocket 观察者，
@@ -770,6 +811,9 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       cursor: 0,
       rows: record,
       lastEventAt,
+      // 本观察者自己的完整基线计数（与 wire diagnostics.baselines 同语义）：
+      // listComplete 的唯一来源，绝不由行数推断。
+      baselines,
     }
   }
 
@@ -777,6 +821,13 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     // stop() 之后到达的在途事件（基线/读尾）不得再推快照。
     if (stopped) return
     deps.onSnapshot(snapshot())
+    // 与 gateway 事实源同规：事实可能变了才提示一次聚合拉取。ready/心跳/降级等不改变行集的
+    // 发布不再触发拉取（代价上限的第一道；消费者侧的四拒 + 1s floor 是第二道）。
+    if (eventRevision !== hintedEventRevision || baselines !== hintedBaselines) {
+      hintedEventRevision = eventRevision
+      hintedBaselines = baselines
+      deps.onRowHint?.()
+    }
   }
 
   /**
@@ -974,6 +1025,11 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     // goal 与 activation 随行消亡：重建的会话不得继承旧 activation（显式删除与基线
     // 双缺席退役走同一路径，只改 handleRemoved 会漏）。
     goalActivations.delete(sessionId)
+    // 配对表也随行退役（所有退役路径共用这里）：行已不在，cancel 到达时没有可清的行；
+    // 不删则长跑下漏键无界，且过期 eventId 的 cancel 可能清掉同会话更新的待决位。
+    for (const [eventId, paired] of pendingWaterfalls) {
+      if (paired === sessionId) pendingWaterfalls.delete(eventId)
+    }
     return hadRow
   }
 
@@ -1020,7 +1076,19 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       carrierOrBaselineLost()
       return
     }
-    const items = rawItems.map(rowFromListItem)
+    // 子代理行在源侧排除（形状不合格的顶层行仍照旧整份拒绝）。基线在下面成功
+    // 之后才登记这些 id；拒绝路径绝不影响观察状态。
+    const topLevelItems: unknown[] = []
+    const subagentIds: string[] = []
+    for (const item of rawItems) {
+      if (isSubagentListItem(item)) {
+        const id = isRecord(item) && typeof item.sessionId === 'string' ? item.sessionId : null
+        if (id !== null) subagentIds.push(id)
+        continue
+      }
+      topLevelItems.push(item)
+    }
+    const items = topLevelItems.map(rowFromListItem)
     if (items.some(row => row === null)) {
       // A partial list is not a trustworthy baseline. Reject it atomically so
       // no earlier row in this response can change running state or start a tail.
@@ -1033,16 +1101,29 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     }
     baselines += 1
     const at = now()
+    // 基线是投递集的权威：整体重建子代理集合——host 把某 id 移出投递集不会有 removed/cancel
+    // 补偿，残留的 id 会永久吞掉它之后的状态帧。此前经 status 建过档的行（那时身份未知）
+    // 在基线揭示身份后立即退役（未读/边沿走既有撤回语义）。
+    const revealedSubagents = new Set<string>(subagentIds)
+    for (const id of revealedSubagents) {
+      if (rows.has(id)) retireSession(id)
+    }
+    subagentSessions = revealedSubagents
     const seen = new Set<string>()
     for (const row of items) {
       if (row === null) continue
+      subagentSessions.delete(row.sessionId)
       seen.add(row.sessionId)
       missingBaselines.delete(row.sessionId)
       const previous = rows.get(row.sessionId)
       if (row.running && previous?.running !== true) nextRunVersion(row.sessionId)
       if (row.running) pendingTails.delete(row.sessionId)
       runningBefore.set(row.sessionId, row.running)
-      rows.set(row.sessionId, mergeActivationIntoRow(row.sessionId, mergeBaselineRow(previous, row, at)))
+      // 列表事实确认身份：同一拍发布该行（含此前由 status 首建、被 S1 门扣下的行）。
+      rows.set(row.sessionId, {
+        ...mergeActivationIntoRow(row.sessionId, mergeBaselineRow(previous, row, at)),
+        identityConfirmed: true,
+      })
       if (previous !== undefined && previous.running === true && row.running === false) {
         edges += 1
         void readTail(row.sessionId, markObservedEdge(row.sessionId))
@@ -1189,15 +1270,21 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     const parsed = parseStatusArgs(args)
     if (parsed === null) return
     const { sessionId, running } = parsed
+    if (subagentSessions.has(sessionId)) return
     missingBaselines.delete(sessionId)
     const previousRunning = runningBefore.get(sessionId)
     if (running && previousRunning !== true) nextRunVersion(sessionId)
     if (running) pendingTails.delete(sessionId)
     runningBefore.set(sessionId, running)
-    const previous = rows.get(sessionId) ?? emptyRow(sessionId, running, 0)
+    const known = rows.get(sessionId)
+    const previous = known ?? emptyRow(sessionId, running, 0)
+    // 行来源位（全仓唯一生产者）：本行由状态事件首次建成 ⇒ 无壳来源可复现上游
+    // beforeBaseline 支；基线/added 建的行不带它。网关平面不赋该位（P1，见
+    // session-facts-source.applySessionFactsDelta）。
+    const firstSeen = known === undefined ? { firstSeenByDelta: true } : {}
     rows.set(sessionId, running
-      ? { ...previous, running: true, completedAt: null, completedAtSource: null, lastTurnEnd: null, factAt: now() }
-      : { ...previous, running: false, factAt: now() })
+      ? { ...previous, running: true, pendingKind: null, completedAt: null, completedAtSource: null, lastTurnEnd: null, factAt: now(), ...firstSeen }
+      : { ...previous, running: false, factAt: now(), ...firstSeen })
     if (previousRunning === true && running === false) {
       edges += 1
       void readTail(sessionId, markObservedEdge(sessionId))
@@ -1209,14 +1296,27 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   /** api-session/added：白名单行直接建/合行（不产边沿；状态边沿仍由 status 负责）。 */
   function handleAdded(args: unknown): void {
     const item = Array.isArray(args) ? args[0] : args
+    if (isSubagentListItem(item)) {
+      const id = isRecord(item) && typeof item.sessionId === 'string' ? item.sessionId : null
+      if (id !== null) {
+        subagentSessions.add(id)
+        if (retireSession(id)) emit()
+      }
+      return
+    }
     const row = rowFromListItem(item)
     if (row === null) return
+    subagentSessions.delete(row.sessionId)
     missingBaselines.delete(row.sessionId)
     const previous = rows.get(row.sessionId)
     if (row.running && previous?.running !== true) nextRunVersion(row.sessionId)
     if (row.running) pendingTails.delete(row.sessionId)
     runningBefore.set(row.sessionId, row.running)
-    rows.set(row.sessionId, mergeActivationIntoRow(row.sessionId, mergeBaselineRow(previous, row, now())))
+    // added 是列表事实的增量形态：确认身份并同拍发布（门开即投递）。
+    rows.set(row.sessionId, {
+      ...mergeActivationIntoRow(row.sessionId, mergeBaselineRow(previous, row, now())),
+      identityConfirmed: true,
+    })
     if (previous !== undefined && !previous.running && !row.running && row.updatedAt > previous.updatedAt) {
       markPromptGap(row.sessionId, row.updatedAt)
     }
@@ -1230,6 +1330,7 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     const updatedAt = pair[1]
     if (typeof sessionId !== 'string' || sessionId === '') return
     if (!isWatermark(updatedAt) || updatedAt === 0) return
+    if (subagentSessions.has(sessionId)) return
     missingBaselines.delete(sessionId)
     const previous = rows.get(sessionId)
     const prior = previous ?? emptyRow(sessionId, false, 0)
@@ -1250,6 +1351,38 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     if (typeof sessionId !== 'string' || sessionId === '') return
     const hadRow = retireSession(sessionId)
     if (hadRow) emit()
+  }
+
+  /** 瀑布事件 → pendingKind 的唯一分类（与控制面 session-mux.ts 的 APPROVAL/USER_QUESTIONS 同字面）。 */
+  function waterfallPendingKind(event: string): 'approval' | 'question' | null {
+    if (event === 'approval/request') return 'approval'
+    if (event === 'user-questions/request') return 'question'
+    return null
+  }
+
+  /** 一次请求瀑布：只把 pendingKind 落到行上（观察），绝不回答、绝不结算。 */
+  function handleWaterfall(event: string, eventId: string, agentId: string): void {
+    if (subagentSessions.has(agentId)) return
+    const kind = waterfallPendingKind(event)
+    if (kind === null) return
+    // 配对先记：重复投递仍要保证 cancel 能清（行本身幂等，不因此 emit）。
+    pendingWaterfalls.set(eventId, agentId)
+    const known = rows.get(agentId)
+    if (known !== undefined && known.pendingKind === kind) return
+    const previous = known ?? emptyRow(agentId, false, 0)
+    rows.set(agentId, { ...previous, pendingKind: kind, factAt: now() })
+    emit()
+  }
+
+  /** cancel：按 eventId 清除它所对应的待决位（与 gateway clearPending 同规）。 */
+  function handleCancel(eventId: string): void {
+    const sessionId = pendingWaterfalls.get(eventId)
+    pendingWaterfalls.delete(eventId)
+    if (sessionId === undefined) return
+    const row = rows.get(sessionId)
+    if (row === undefined || row.pendingKind === null) return
+    rows.set(sessionId, { ...row, pendingKind: null, factAt: now() })
+    emit()
   }
 
   function handleEmit(event: string | undefined, args: unknown): void {
@@ -1392,13 +1525,23 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
         armStableReconnectReset()
         // 新的 $events 代际（首连/换代重连；onopen 与 onclose 都置 socketReady=false）：
         // emit 型帧无重放 ⇒ 进程内 activation 不再可信，表与行一并清回 unknown。
-        if (freshGeneration) clearGoalActivations()
+        if (freshGeneration) {
+          clearGoalActivations()
+          // $events 无重放：上一代的 hold 永远等不到 cancel（控制面 mux 的
+          // releaseHeldWaterfalls 同义）⇒ 配对表清空，行的待决位交还下一次基线的 wire 真相。
+          pendingWaterfalls.clear()
+          for (const [sessionId, row] of rows) {
+            if (row.pendingKind !== null) rows.set(sessionId, { ...row, pendingKind: null })
+          }
+        }
         // 握手只证明载波可用；事实基线成功前仍必须让运行时边沿负责完成。
         emit()
         return
       }
       // 瀑布只观察，不回答：这里没有任何 send。
-      if (frame.kind === 'emit') handleEmit(frame.event, frame.args)
+      if (frame.kind === 'waterfall') handleWaterfall(frame.event!, frame.eventId!, frame.agentId!)
+      else if (frame.kind === 'cancel') handleCancel(frame.eventId!)
+      else if (frame.kind === 'emit') handleEmit(frame.event, frame.args)
     }
     next.onclose = failCarrier
     next.onerror = () => {
@@ -1477,6 +1620,8 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       staleSince = null
       // 退役即代际终结：进程内 activation 绝不越过一次 stop/start。
       clearGoalActivations()
+      subagentSessions.clear()
+      pendingWaterfalls.clear()
       // 代际 +1 作废在途回调；在途 baseline/readTail 的 emit 被 stopped 守卫拦下。
       generation += 1
       if (reconnectTimer !== null) clearTimeout(reconnectTimer)

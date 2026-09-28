@@ -784,12 +784,12 @@ export interface RuntimeFactsOverlayRow {
 export type RuntimeFactsOverlay = Readonly<Record<string, RuntimeFactsOverlayRow>>
 
 /**
- * Merge one source's live runtime-facts report with the App's N-ctx correction
- * arms, preserving the current session and every other live row. `completed`
- * comes from the CHANNEL (the official `sessionStatus.completionUnread` bit); the
- * App only ORs in `correctionArms` — row-keyed arms for the hidden source's
- * mainView-retained sessions the vendor rule could not arm (`completion-arm.ts`).
- * PURE; returns undefined when there is nothing to attach.
+ * Merge one source's live runtime-facts report with the App's N-ctx correction arms,
+ * preserving the current session and every other live row. `completed` comes from the
+ * CHANNEL (the official `sessionStatus.completionUnread` bit); the App only ORs in
+ * `correctionArms` — row-keyed arms for the hidden source's mainView-retained rows the
+ * vendor rule could not arm, plus a facts-only source's every row with a host
+ * running→idle edge (`completion-arm.ts`; design 06 §4.1/§4.2). PURE; undefined when nothing attaches.
  *
  * `overlay` supplies render fields when the shell channel is absent (pending:
  * channel wins, overlay fills an absent kind; runningSubagents: channel ?? overlay;

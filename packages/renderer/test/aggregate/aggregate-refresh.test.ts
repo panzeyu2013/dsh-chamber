@@ -6,6 +6,7 @@ import {
   AGGREGATE_UNVERIFIED_FACTS_MS,
   AggregateRefreshQueue,
   archiveSetShrink,
+  drainAggregateWaves,
   commitAggregateFailure,
   commitAggregatePull,
   invalidateRemovedAggregateSources,
@@ -231,6 +232,125 @@ test('a refresh edge arriving during a wave is retained for the successor wave',
   queue.enqueue(['ssh-late', 'ssh-late'])
   assert.equal(queue.size, 1)
   assert.deepEqual(queue.take(), ['ssh-late'])
+  assert.equal(queue.size, 0)
+})
+
+test('drainAggregateWaves: N>4 sources never exceed the 4-pull cap, and every source is pulled exactly once', async () => {
+  const queue = new AggregateRefreshQueue()
+  const sourceIds = ['s1', 's2', 's3', 's4', 's5', 's6', 's7', 's8', 's9', 's10']
+  queue.enqueue(sourceIds)
+  let inFlight = 0
+  let maxInFlight = 0
+  const pulls: string[] = []
+  const pull = async (sourceId: string): Promise<void> => {
+    inFlight += 1
+    maxInFlight = Math.max(maxInFlight, inFlight)
+    await new Promise(resolve => setImmediate(resolve))
+    pulls.push(sourceId)
+    inFlight -= 1
+  }
+  await drainAggregateWaves(queue, 4, pull)
+  assert.equal(maxInFlight, 4, '同时最多 4 个在途（跨源行提示共享同一个帽）')
+  assert.deepEqual([...pulls].sort(), [...sourceIds].sort(), '每个来源恰好拉一次')
+  assert.equal(queue.size, 0)
+})
+
+test('drainAggregateWaves: duplicate hints of a pending source coalesce into one pull', async () => {
+  const queue = new AggregateRefreshQueue()
+  // 同一来源被多次提示（facts 行提示可能连发）只该产生一次拉取。
+  queue.enqueue(['a'])
+  queue.enqueue(['a', 'a'])
+  const pulls: string[] = []
+  await drainAggregateWaves(queue, 4, async (sourceId: string) => { pulls.push(sourceId) })
+  assert.deepEqual(pulls, ['a'])
+})
+
+test('drainAggregateWaves: an edge arriving mid-wave is drained by the successor wave, never lost', async () => {
+  const queue = new AggregateRefreshQueue()
+  queue.enqueue(['a'])
+  let releaseA: () => void = () => {}
+  const gateA = new Promise<void>(resolve => { releaseA = resolve })
+  const pulls: string[] = []
+  const wave = drainAggregateWaves(queue, 4, async (sourceId: string) => {
+    if (sourceId === 'a') await gateA
+    pulls.push(sourceId)
+  })
+  // Mid-wave hint (the wave already took its batch synchronously).
+  queue.enqueue(['b'])
+  releaseA()
+  await wave
+  assert.deepEqual([...pulls].sort(), ['a', 'b'])
+})
+
+test('drainAggregateWaves: a rejected pull drops only its item; the wave and its successor waves still run (S5)', async () => {
+  const queue = new AggregateRefreshQueue()
+  queue.enqueue(['a', 'b', 'c', 'd', 'e'])
+  const pulls: string[] = []
+  const failures: string[] = []
+  let successorQueued = false
+  await drainAggregateWaves(queue, 4, async (sourceId: string) => {
+    if (sourceId === 'a') {
+      // 中波入队（后继波输入）：拒绝路径若拆掉 drain，'f' 永远不会被拉。
+      if (!successorQueued) { successorQueued = true; queue.enqueue(['f']) }
+      throw new Error('boom')
+    }
+    pulls.push(sourceId)
+  }, (sourceId, error) => { failures.push(sourceId + ':' + (error as Error).message) })
+  assert.deepEqual([...pulls].sort(), ['b', 'c', 'd', 'e', 'f'],
+    '本波剩余项与后继波都不丢（拒绝只丢弃失败项本身）')
+  assert.deepEqual(failures, ['a:boom'], '失败项计数诊断一次；绝不重入队（无界重入队 = 活锁）')
+  assert.equal(queue.size, 0)
+})
+
+test('drainAggregateWaves: rejections never orphan workers — the cap holds and every item is attempted (S5)', async () => {
+  const queue = new AggregateRefreshQueue()
+  const sourceIds = Array.from({ length: 10 }, (_, index) => 's' + String(index))
+  queue.enqueue(sourceIds)
+  let inFlight = 0
+  let maxInFlight = 0
+  const attempted: string[] = []
+  await drainAggregateWaves(queue, 4, async (sourceId: string) => {
+    inFlight += 1
+    maxInFlight = Math.max(maxInFlight, inFlight)
+    try {
+      await new Promise(resolve => setImmediate(resolve))
+      if (sourceId === 's0' || sourceId === 's5') throw new Error('boom')
+      attempted.push(sourceId)
+    } finally {
+      inFlight -= 1
+    }
+  })
+  assert.equal(maxInFlight, 4, '并发帽不因拒绝被突破（无孤儿 worker 与下一波叠加）')
+  assert.deepEqual([...attempted].sort(), sourceIds.filter(id => id !== 's0' && id !== 's5').sort())
+})
+
+test('drainAggregateWaves: an isolated pull rejection never becomes an unhandledRejection (S5)', async () => {
+  const unhandled: unknown[] = []
+  const onUnhandled = (reason: unknown): void => { unhandled.push(reason) }
+  process.on('unhandledRejection', onUnhandled)
+  try {
+    const queue = new AggregateRefreshQueue()
+    queue.enqueue(['x', 'y'])
+    await drainAggregateWaves(queue, 4, async (sourceId: string) => {
+      if (sourceId === 'x') throw new Error('boom')
+    })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.deepEqual(unhandled, [], '每项隔离在 worker 内，异常不得逃成 unhandledRejection')
+  } finally {
+    process.off('unhandledRejection', onUnhandled)
+  }
+})
+
+test('drainAggregateWaves: a throwing onPullFailure sink cannot reject the drain (cap/queue discipline survives a broken diagnostic)', async () => {
+  const queue = new AggregateRefreshQueue()
+  queue.enqueue(['a', 'b', 'c', 'd', 'e'])
+  const attempted: string[] = []
+  await drainAggregateWaves(queue, 2, async (sourceId: string) => {
+    attempted.push(sourceId)
+    if (sourceId === 'a') throw new Error('boom')
+  }, () => { throw new Error('sink boom') })
+  assert.deepEqual([...attempted].sort(), ['a', 'b', 'c', 'd', 'e'],
+    'sink 抛错被隔离：本波与所有项仍照常拉完，drain 正常 resolve')
   assert.equal(queue.size, 0)
 })
 

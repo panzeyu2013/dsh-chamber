@@ -47,6 +47,21 @@ export const SESSION_FACTS_SILENCE_MS = 60_000
 /** poll 档的快照重取周期（与 30s unary watchdog 同量级）。 */
 export const SESSION_FACTS_POLL_MS = 30_000
 
+/**
+ * 化身内「增量帧缺 diagnostics.baselines 时补快照」的上限（S4）：增量帧不带诊断，
+ * 若首份快照落在 mux ready 但首个 session/list 基线未成功的窗口，闩锁会停在 0
+ * （listComplete=false）。补快照**单飞**（在途期间不叠发），连续 0 会重试、拿到 ≥1
+ * 立即停止；每代至多 {@link SESSION_FACTS_DIAGNOSTICS_REFETCH_MAX} 次，计数用尽后
+ * 至少再过 {@link SESSION_FACTS_DIAGNOSTICS_REFETCH_MIN_MS} 才允许新的一轮。
+ */
+export const SESSION_FACTS_DIAGNOSTICS_REFETCH_MAX = 3
+
+/**
+ * 诊断补快照的重武装时间下限（S4）：一轮计数用尽仍为 0 时，距上次补快照满 30s 允许
+ * 下一轮——首基线可能只是比补快照更晚成功，没有时间下限则 3 次落在首基线前即永久卡 0。
+ */
+export const SESSION_FACTS_DIAGNOSTICS_REFETCH_MIN_MS = 30_000
+
 import { isWatermark } from './watermark.ts'
 import { isPlainRecord } from './plain-record.ts'
 
@@ -126,6 +141,20 @@ export interface SessionFactsRow {
   goal?: SessionFactsGoalFact | null
   /** 观察者刷新这一行事实的 host 域毫秒（0 = 未知）。 */
   factAt: number
+  /**
+   * **客户端本地位**（非 wire）：该行首次观察来自**无壳观察者的 status 事件**
+   * （source-mux-facts 的 handleStatus 首建；列表播种与网关平面——快照/增量——都不带该位）。
+   * 用于无壳来源忠实复现上游 `observeRunning` 的第二支（首见 idle 也武装；且只在列表基数
+   * 已知未就绪时启用）；一经写入即粘住（后续基线合并保留），行退役即消失。
+   */
+  firstSeenByDelta?: boolean
+  /**
+   * **客户端本地位**（非 wire）：身份是否已由**列表事实**确认（P2b 的 S1 等价门）。
+   * 缺席 = 已确认——网关平面（快照/增量）与列表播种的行**永不带该位**，服务端已过滤；
+   * 显式 `false` = 仅由无壳观察者的 status/activity/waterfall 首建、尚未在任何列表
+   * 事实出现过的行：它可能其实是子代理，**不得进入快照或判定面**，直到某次基线/added
+   * 把它确认为顶层（或揭示为子代理后退役）。 */
+  identityConfirmed?: boolean
 }
 
 export interface SessionFactsSnapshot {
@@ -141,6 +170,12 @@ export interface SessionFactsSnapshot {
   cursor: number
   rows: Readonly<Record<string, SessionFactsRow>>
   lastEventAt: number | null
+  /**
+   * 镜像已应用过的完整基线数（wire `diagnostics.baselines`，进程内计数）。
+   * 缺席 = unknown（旧端/无诊断帧）⇒ 消费者按 listComplete=false 处理（保守，绝不由
+   * 行数推断「离 ready 列表」）。快照帧闩锁，增量帧不携带该字段时沿用上一份。
+   */
+  baselines?: number
 }
 
 /**
@@ -237,6 +272,11 @@ export interface SessionFactsSource {
   /** undefined = 当前没有可用事实（degraded/未连接；legacy 404 两分支均给快照，不在此列）。 */
   subscribe(listener: (snapshot: SessionFactsSnapshot | undefined) => void): () => void
   onRowHint(listener: (hint: SessionFactsRowHint) => void): () => void
+  /**
+   * **仅测试缝（D4）**：生产零调用——订阅面 {@link subscribe} 是事实的唯一出口，运行时
+   * 读面是 App 的 factsStore（判定侧经 completionObservationRef 的状态）。保留给用例做
+   * 同步读回（快照相位/闩锁/降级断言）；新生产代码不得以它为接线面。
+   */
   getSnapshot(): SessionFactsSnapshot | undefined
 }
 
@@ -368,10 +408,17 @@ export function parseSessionFactsSnapshotValue(value: unknown): {
   hostState: string
   serviceable: boolean
   rows: Record<string, SessionFactsRow>
+  baselines?: number
 } | null {
   if (!isPlainRecord(value)) return null
   if (typeof value.protocol !== 'number' || !Number.isSafeInteger(value.protocol) || value.protocol < 1) return null
   const host = isPlainRecord(value.host) ? value.host : {}
+  // 诊断是加法描述字段：只看 baselines（完整基线数），其余键一概不解析。
+  const diagnostics = isPlainRecord(value.diagnostics) ? value.diagnostics : null
+  const baselines = diagnostics !== null && typeof diagnostics.baselines === 'number'
+    && Number.isSafeInteger(diagnostics.baselines) && diagnostics.baselines >= 0
+    ? diagnostics.baselines
+    : undefined
   return {
     protocol: value.protocol,
     mode: value.mode === 'sse' || value.mode === 'poll' || value.mode === 'off' ? value.mode : null,
@@ -382,6 +429,7 @@ export function parseSessionFactsSnapshotValue(value: unknown): {
     hostState: typeof host.state === 'string' && host.state !== '' ? host.state : 'unknown',
     serviceable: host.serviceable !== false,
     rows: parseRows(value.sessions),
+    ...(baselines === undefined ? {} : { baselines }),
   }
 }
 
@@ -462,6 +510,28 @@ export function sessionFactsRowSignature(row: SessionFactsRow): string {
   ])
 }
 
+/**
+ * 快照行集变化提示：与增量帧同一字段集与优先级（added > removed > changed）。
+ * 快照帧（探测/SSE sync/snapshot）过去不发提示，只有增量帧发——轮询档与重连后的
+ * 首帧因此没有聚合刷新触发（G1 的真实通路是 提示 → unary，而不是虚拟上报）。
+ */
+function snapshotRowHint(
+  before: SessionFactsSnapshot | undefined,
+  after: SessionFactsSnapshot,
+): SessionFactsRowHint | null {
+  if (before === undefined) return 'added'
+  let changed = false
+  for (const [sessionId, row] of Object.entries(after.rows)) {
+    const previous = before.rows[sessionId]
+    if (previous === undefined) return 'added'
+    if (!changed && sessionFactsRowSignature(previous) !== sessionFactsRowSignature(row)) changed = true
+  }
+  for (const sessionId of Object.keys(before.rows)) {
+    if (after.rows[sessionId] === undefined) return 'removed'
+  }
+  return changed ? 'changed' : null
+}
+
 export interface SessionFactsDeltaOutcome {
   /** 应用后的快照；null = 幂等丢弃（游标不前进）。 */
   next: SessionFactsSnapshot | null
@@ -472,7 +542,8 @@ export interface SessionFactsDeltaOutcome {
 
 /**
  * 应用一帧 SSE 增量（纯函数；调用方负责重取与 emit）。cursor <= 当前 ⇒ 幂等丢弃；
- * 行数/内容变化 → hint（added > removed > changed）；坏载荷 ⇒ refetch（丢帧的收敛路径）。
+ * 行数/内容变化 → hint（优先级 added > removed > changed，与 design 06 §4.2 一致：一个
+ * 混合帧只要有新行就先拉一次，拉取本身是整量快照，删除/变化同拍收敛）；坏载荷 ⇒ refetch。
  */
 export function applySessionFactsDelta(current: SessionFactsSnapshot, value: unknown): SessionFactsDeltaOutcome {
   if (!isPlainRecord(value)) return { next: null, refetch: true, hint: null }
@@ -490,15 +561,20 @@ export function applySessionFactsDelta(current: SessionFactsSnapshot, value: unk
   const nextRows: Record<string, SessionFactsRow> = { ...current.rows }
   let added = 0
   let changed = 0
+  let removedRows = 0
   for (const [sessionId, row] of Object.entries(rows)) {
     const before = nextRows[sessionId]
     if (before === undefined) added += 1
     else if (sessionFactsRowSignature(before) !== sessionFactsRowSignature(row)) changed += 1
+    // 行来源位不在网关平面赋值（P1）：added/activity/tombstone 行都会误带该位；上游
+    // observeRunning 的第二支只由 status 事件触发——该位只由无壳观察者的 status 首建
+    // （source-mux-facts.handleStatus），增量帧只写 wire 行。
     nextRows[sessionId] = row
   }
   for (const sessionId of removed) {
     if (nextRows[sessionId] !== undefined) {
       delete nextRows[sessionId]
+      removedRows += 1
       changed += 1
     }
   }
@@ -513,7 +589,9 @@ export function applySessionFactsDelta(current: SessionFactsSnapshot, value: unk
     stale: false,
     lastEventAt: current.lastEventAt,
   }
-  const hint = removed.length > 0 ? 'removed' : added > 0 ? 'added' : changed > 0 ? 'changed' : null
+  // 删除提示只按「真的删掉了行」判定：removedSessionIds 里的未知 id 不产生任何行集变化，
+  // 与行内容签名同规——否则一次幽灵撤回会白触发一次整量重拉（而调用方看到的是空变化）。
+  const hint = added > 0 ? 'added' : removedRows > 0 ? 'removed' : changed > 0 ? 'changed' : null
   return { next, refetch: false, hint }
 }
 
@@ -570,6 +648,17 @@ interface SourceState {
   silenceTimer: ReturnType<typeof setInterval> | null
   probing: boolean
   stopped: boolean
+  /**
+   * 「增量帧缺 diagnostics 时补快照」的化身内已用次数与上次触发时刻（S4/T3）：增量帧
+   * 不携带 diagnostics.baselines，若首个快照落在 mux ready 但首个 session/list 基线
+   * 未成功的窗口，闩锁会停在 0（listComplete=false）。每代至多
+   * {@link SESSION_FACTS_DIAGNOSTICS_REFETCH_MAX} 次单飞重试；计数用尽后距上次触发满
+   * {@link SESSION_FACTS_DIAGNOSTICS_REFETCH_MIN_MS} 允许新的一轮。代际切换清零。
+   */
+  diagnosticsRefetchAttempts: number
+  lastDiagnosticsRefetchAt: number
+  /** 整量补快照单飞门（坏帧/静默恢复与诊断补快照共用；T3①：同一 chunk 多帧不得并发再发 GET）。 */
+  refetchInFlight: boolean
 }
 
 export function createSessionFactsSource(options: SessionFactsSourceOptions): SessionFactsSource {
@@ -600,6 +689,9 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     silenceTimer: null,
     probing: false,
     stopped: false,
+    diagnosticsRefetchAttempts: 0,
+    lastDiagnosticsRefetchAt: 0,
+    refetchInFlight: false,
   }
 
   const diagnostic = (message: string, error?: unknown): void => {
@@ -635,7 +727,33 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     cursor: parsed.cursor,
     rows: parsed.rows,
     lastEventAt: now(),
+    // 无诊断帧（旧端/增量）沿用上一份闩锁值；绝不回退成「未就绪」而误清臂。
+    ...(parsed.baselines === undefined && state.snapshot?.baselines === undefined
+      ? {}
+      : { baselines: parsed.baselines ?? state.snapshot?.baselines }),
   })
+
+  /**
+   * 完整快照的**游标单调发布门**（T3②：probe/refetch 经 publishProbe、SSE sync 帧直接
+   * 调用；与 applySessionFactsDelta 的既有 cursor 门同规）：旧游标的整量快照不得覆盖
+   * 更新的快照——并发/迟到的补快照响应会把游标、行集与行记忆一起回退。被丢弃时不动
+   * lastEventId、不发 emit/hint（没有变化）。
+   * @returns 是否真的发布（false = 旧游标，丢弃）。
+   */
+  const publishCompleteSnapshot = (
+    parsed: NonNullable<ReturnType<typeof parseSessionFactsSnapshotValue>>,
+    verdict: SessionFactsVerdict,
+    degradation: SessionFactsDegradation,
+    mode: SessionFactsMode | null = parsed.mode,
+  ): boolean => {
+    if (state.snapshot !== undefined && parsed.cursor < state.snapshot.cursor) return false
+    const before = state.snapshot
+    state.snapshot = buildSnapshot(parsed, verdict, degradation, mode)
+    state.lastEventId = parsed.cursor
+    emit()
+    emitHint(snapshotRowHint(before, state.snapshot))
+    return true
+  }
 
   /**
    * 无载荷降级快照工厂（legacy / disabled / unversioned / 首次失败）：拿不到协议载荷时
@@ -757,10 +875,8 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
       // stands still, and refreshing lastFrameAt there hid the real silence age
       // from the page ladder. The first observation stamps a baseline.
       state.lastFrameAt = now()
-      state.snapshot = buildSnapshot(parsed, probe.verdict, probe.degradation)
       state.protocolFactsSeen = true
-      state.lastEventId = parsed.cursor
-      emit()
+      publishCompleteSnapshot(parsed, probe.verdict, probe.degradation)
       return { probe, parsed }
     }
     const previous = state.snapshot
@@ -804,8 +920,19 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
       emit()
       return { probe, parsed: null }
     }
-    // disabled / forward-skew 等其余无载荷结果：空快照（无活载体刷新 ⇒ stale）。
-    state.snapshot = buildEmptySnapshot(probe.verdict, probe.degradation, true)
+    // disabled / forward-skew 等其余无载荷结果：**不是**权威空行集。空行集会让在场集判空 ⇒
+    // observeSource 走遗忘结算、held pending 被清、已武装的行被撤（design 19 §3.5）。
+    // 与 unversioned 同规：保留既有行 + stale（等有界重探/流自愈）。
+    if (previous.verdict === probe.verdict && previous.degradation === probe.degradation && previous.stale) {
+      return { probe, parsed: null }
+    }
+    state.snapshot = {
+      ...previous,
+      verdict: probe.verdict,
+      degradation: probe.degradation,
+      serviceable: false,
+      stale: true,
+    }
     emit()
     return { probe, parsed: null }
   }
@@ -880,7 +1007,10 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
 
   const applyFrame = (frame: SessionFactsSseFrame): void => {
     state.lastFrameAt = now()
-    if (frame.id !== null) state.lastEventId = frame.id
+    // SSE id 是续传游标：只前进不回退（旧流/迟到帧的 id 不得把 Last-Event-ID 拉回去）。
+    if (frame.id !== null && (state.lastEventId === null || frame.id > state.lastEventId)) {
+      state.lastEventId = frame.id
+    }
     let data: unknown
     try {
       data = JSON.parse(frame.data)
@@ -896,9 +1026,8 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     if (frame.event === 'sync' || frame.event === 'snapshot') {
       const parsed = parseSessionFactsSnapshotValue(data)
       if (parsed === null) { void refetchSnapshot(); return }
-      state.snapshot = buildSnapshot(parsed, 'ok', null, parsed.mode ?? state.snapshot?.mode ?? 'sse')
-      state.lastEventId = parsed.cursor
-      emit()
+      // 整量帧与 probe/refetch 共用同一道游标单调门：旧 sync 帧不得回退快照。
+      publishCompleteSnapshot(parsed, 'ok', null, parsed.mode ?? state.snapshot?.mode ?? 'sse')
       return
     }
     const current = state.snapshot
@@ -909,28 +1038,49 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     state.snapshot = { ...outcome.next, lastEventAt: now() }
     emit()
     emitHint(outcome.hint)
+    // 增量帧不带 diagnostics：闩锁若仍是 0，每代最多补 SESSION_FACTS_DIAGNOSTICS_REFETCH_MAX
+    // 次 unary 快照（有界收敛，不动 wire）。一次性去重会被首个「仍是 0」的快照消耗掉，闩锁
+    // 永久卡在 0（listComplete=false ⇒ 权威列表清除与 beforeBaseline 支悬空）；连续 0 重试、
+    // 拿到 ≥1 立即停，既收敛又不抖动。unknown（旧端从未给过诊断）同样按 0 处理。
+    // 单飞：在途补快照不再叠发（同一 chunk 的多帧只算一次）；计数用尽后距上次触发满
+    // SESSION_FACTS_DIAGNOSTICS_REFETCH_MIN_MS 允许新的一轮（首基线可能更晚成功）。
+    if ((state.snapshot.baselines ?? 0) === 0 && !state.refetchInFlight) {
+      const exhausted = state.diagnosticsRefetchAttempts >= SESSION_FACTS_DIAGNOSTICS_REFETCH_MAX
+      if (!exhausted || now() - state.lastDiagnosticsRefetchAt >= SESSION_FACTS_DIAGNOSTICS_REFETCH_MIN_MS) {
+        if (exhausted) state.diagnosticsRefetchAttempts = 0
+        state.diagnosticsRefetchAttempts += 1
+        state.lastDiagnosticsRefetchAt = now()
+        void refetchSnapshot()
+      }
+    }
   }
 
   const refetchSnapshot = async (): Promise<void> => {
-    if (state.stopped || !state.connected) return
+    // 单飞：坏帧/静默恢复与诊断补快照共用这一个在途门，不并发叠发整量 GET。
+    if (state.stopped || !state.connected || state.refetchInFlight) return
+    state.refetchInFlight = true
     const generation = state.generation
-    closeStream()
-    state.lastEventId = null
-    const outcome = await observeProbe()
-    if (state.stopped || generation !== state.generation) return
-    const { probe, parsed } = publishProbe(outcome)
-    if (probe.verdict === 'ok' && parsed !== null) {
-      startDelivery(parsed.mode, parsed.features)
-      return
-    }
-    // 该重取是流收口后的再对账：与 probe 共用 shouldRetryProbe，但恢复动作是重连流；
-    // 版本/服务事实不重连假流，也不留静止降级。
-    if (shouldRetryProbe(probe)) {
-      diagnostic(
-        '[session-facts] snapshot refetch failed',
-        new Error('session-state probe ' + String(probe.status ?? outcome.kind)),
-      )
-      scheduleStreamReconnect()
+    try {
+      closeStream()
+      state.lastEventId = null
+      const outcome = await observeProbe()
+      if (state.stopped || generation !== state.generation) return
+      const { probe, parsed } = publishProbe(outcome)
+      if (probe.verdict === 'ok' && parsed !== null) {
+        startDelivery(parsed.mode, parsed.features)
+        return
+      }
+      // 该重取是流收口后的再对账：与 probe 共用 shouldRetryProbe，但恢复动作是重连流；
+      // 版本/服务事实不重连假流，也不留静止降级。
+      if (shouldRetryProbe(probe)) {
+        diagnostic(
+          '[session-facts] snapshot refetch failed',
+          new Error('session-state probe ' + String(probe.status ?? outcome.kind)),
+        )
+        scheduleStreamReconnect()
+      }
+    } finally {
+      state.refetchInFlight = false
     }
   }
 
@@ -1016,6 +1166,9 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     state.lastEventId = null
     state.lastFrameAt = 0
     state.probing = false
+    state.diagnosticsRefetchAttempts = 0
+    state.lastDiagnosticsRefetchAt = 0
+    state.refetchInFlight = false
     emit()
   }
 
@@ -1052,6 +1205,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     clearTimers()
     state.snapshot = undefined
     state.probing = false
+    state.refetchInFlight = false
   }
 
   return {
@@ -1066,6 +1220,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
       hintListeners.add(listener)
       return () => { hintListeners.delete(listener) }
     },
+    /** 仅测试缝（D4）：生产零调用，见接口注释。 */
     getSnapshot() { return state.snapshot },
   }
 }

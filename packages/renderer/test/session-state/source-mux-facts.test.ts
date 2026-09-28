@@ -51,6 +51,20 @@ test('lockstep: the mux route and $events literals match the control-plane and a
       label + ' must declare REMOTE_EVENT_STREAM_ENDPOINT = ' + JSON.stringify(EVENTS_ENDPOINT))
   }
   assert.match(sources['control-plane/src/session-mux.ts'], /REMOTE_EVENT_RESULT_ENDPOINT = '\$events\/result'/)
+  // 瀑布事件字面锁步（C2-9）：观察者 waterfallPendingKind 按字面分类 pendingKind，控制面用
+  // 常量声明同一组字面——任一侧改名都必须让本锁变红（之前只锁了路由与端点）。
+  const controlPlane = sources['control-plane/src/session-mux.ts']
+  for (const [literal, classification] of [
+    ['approval/request', 'approval'],
+    ['user-questions/request', 'question'],
+  ] as const) {
+    assert.ok(
+      SOURCE.includes("if (event === '" + literal + "') return '" + classification + "'"),
+      'source-mux-facts must classify ' + JSON.stringify(literal) + ' as ' + classification,
+    )
+    assert.ok(controlPlane.includes("'" + literal + "'"),
+      'control-plane session-mux must declare the same waterfall literal ' + JSON.stringify(literal))
+  }
 })
 
 test('the observer covers every dsh-protocol source: local profile and remote instances, never gateway', () => {
@@ -270,6 +284,69 @@ test('a silent live socket is never replaced, degraded or reconnected (long-live
   } finally { facts.stop() }
 })
 
+test('row hints: once per successful baseline, never per ready publication, once per changing status frame', async () => {
+  const socket = new FakeSocket()
+  let hints = 0
+  const facts = createSourceMuxFacts({
+    sourceId: 'hint-gate', origin: 'http://cp',
+    onSnapshot: () => {},
+    onRowHint: () => { hints += 1 },
+    openSocket: () => socket,
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items: [{ sessionId: 's1', running: false, updatedAt: 7 }] }) }) as never,
+    reconcileIntervalMs: 60_000,
+  })
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().baselines === 1, 'baseline did not settle')
+    assert.equal(hints, 1, 'the first complete baseline is exactly one row-source hint')
+    // 重复 ready 发布不改变行集 ⇒ 不得再拉取（代价上限的第一道）。
+    for (let i = 0; i < 3; i += 1) socket.item({ type: 'ready', clientId: 'c' })
+    await new Promise(resolve => setTimeout(resolve, 10))
+    assert.equal(hints, 1, 'repeated ready publications must not hint')
+    // 真正改行的 status 帧：恰好一次。
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', true] })
+    await waitFor(() => hints === 2, 'a changing status frame must hint once')
+    assert.equal(hints, 2)
+  } finally { facts.stop() }
+})
+
+test('a status-first row stays out of the snapshot until a list fact confirms it, then keeps the observer-only firstSeenByDelta bit', async () => {
+  const socket = new FakeSocket()
+  const snapshots: Array<Record<string, unknown>> = []
+  let items: unknown[] = []
+  const facts = createSourceMuxFacts({
+    sourceId: 'status-first', origin: 'http://cp',
+    onSnapshot: snapshot => snapshots.push(snapshot as never),
+    openSocket: () => socket,
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items }) }) as never,
+    reconcileIntervalMs: 60_000,
+  })
+  const rowOf = (): { firstSeenByDelta?: boolean } | undefined =>
+    (snapshots.at(-1)?.rows as Record<string, { firstSeenByDelta?: boolean }> | undefined)?.s9
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().ready, 'initial baseline did not settle')
+    // ① status 首建（身份未确认）：内部建档但**不进快照**——它可能其实是子代理。
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['s9', false] })
+    await new Promise(resolve => setTimeout(resolve, 10))
+    assert.equal(rowOf(), undefined, 'an unconfirmed status-first row must not publish')
+    assert.equal(facts.status().rows >= 1, true, 'the observer still tracks it internally')
+    // ② 列表事实确认顶层身份：同一拍发布，观察者本地位随之可见（网关平面不写该位）。
+    items = [{ sessionId: 's9', running: false, updatedAt: 0 }]
+    facts.reconcile()
+    await waitFor(() => rowOf() !== undefined, 'the confirmed status-first row did not publish')
+    assert.equal(rowOf()?.firstSeenByDelta, true, 'status 首建的行带观察者本地位')
+    // ③ 后续基线刷新（含该行）不得复位该位：一经写入即粘住。
+    facts.reconcile()
+    await waitFor(() => facts.status().baselines >= 2, 'reconcile baseline did not run')
+    assert.equal(rowOf()?.firstSeenByDelta, true, '基线合并保留该位')
+  } finally { facts.stop() }
+})
+
 test('three minutes of silence on a live socket change nothing (the retired 45s swap, soak)', async (t) => {
   // Behavioral counterpart of the harness record: the removed watchdog replaced the
   // socket at exactly 45.0s of $events silence (run13: 9 replacements in 8 idle
@@ -327,8 +404,9 @@ test('a carrier failure holds decidability through the grace, then degrades if n
     assert.equal(facts.status().carrierLostAt !== null, true, 'the grace must be timed from the loss')
     assert.equal(verdicts.at(-1), 'ok', 'a carrier loss must not degrade inside the grace')
     // 宽限内没有新基线 ⇒ 必须诚实降级，且退化为「不可判」而不是继续声称在场。
-    await waitFor(() => facts.status().ready === false, 'no successor baseline must end the grace')
-    assert.equal(verdicts.at(-1), 'degraded')
+    // 先等**发布**：ready() 是墙钟谓词，可能早于宽限计时器回调（负载下会读到 ok 的最后一帧）。
+    await waitFor(() => verdicts.at(-1) === 'degraded', 'no successor baseline must publish the degraded snapshot at the grace deadline')
+    assert.equal(facts.status().ready, false, 'after the degraded publication the source is not decidable')
     assert.equal(facts.status().carrierLostAt, null)
     assert.equal(facts.status().staleSince !== null, true, 'unusable start must be readable')
   } finally { facts.stop() }
@@ -429,8 +507,10 @@ test('an ended $events stream fails the carrier immediately and degrades after t
     // 逻辑流结束 = 载体立刻失败（换 socket + 退避重连），但「可判」只在宽限用尽后消失。
     assert.equal(socket.closed, true)
     assert.equal(facts.status().reconnects, 0, 'reconnect must use the scheduled backoff')
-    await waitFor(() => facts.status().ready === false, 'ended stream must not hold decidability past the grace')
-    assert.equal(verdicts.at(-1), 'degraded')
+    // 竞态：ready() 是墙钟谓词，宽限一到就可能翻转，而降级快照要等宽限计时器回调发布。
+    // 先等**发布**（契约本体），再断言可判性翻转——否则负载下会读到 ok 的最后一帧。
+    await waitFor(() => verdicts.at(-1) === 'degraded', 'ended stream must publish the degraded snapshot at the grace deadline')
+    assert.equal(facts.status().ready, false, 'after the degraded publication the source is not decidable')
   } finally { facts.stop() }
 })
 
@@ -509,9 +589,12 @@ test('status observed during a baseline forces a new reconciliation', async () =
     socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', true] })
     rpc.lists[0]!({ items: [{ sessionId: 's1', running: false, updatedAt: 1 }] })
     await waitFor(() => rpc.lists.length === 2, 'event revision did not trigger a new list')
-    assert.equal(snapshots.at(-1)?.rows.s1?.running, true)
+    // 第一份取样已失效（期间有更新的事件），不得用它覆写；此刻 s1 只有未确认的 status 行
+    // ⇒ 快照里没有该行（S1 等价门只扣投递，不扣观察）。
+    assert.equal(snapshots.at(-1)?.rows.s1, undefined, 'a withheld status row is not evidence')
     rpc.lists[1]!({ items: [{ sessionId: 's1', running: true, updatedAt: 2 }] })
     await waitFor(() => facts.status().ready, 'reconciled list did not certify facts')
+    assert.equal(snapshots.at(-1)?.rows.s1?.running, true, 'the confirming baseline publishes the row')
   } finally { facts.stop() }
 })
 
@@ -654,6 +737,84 @@ test('periodic reconciliation finds a dropped status while the socket stays acti
     socket.item({ type: 'cancel' })
     await waitFor(() => facts.status().edges === 1, 'periodic list did not recover the edge')
     await waitFor(() => snapshots.at(-1)?.rows.s1?.completedAt !== null, 'completion was not armed')
+  } finally { facts.stop() }
+})
+
+test('P3: request waterfalls set pendingKind from the frame identity alone; cancel clears it', async () => {
+  const socket = new FakeSocket()
+  const snapshots: Array<{ rows: Record<string, { pendingKind?: unknown }> }> = []
+  const facts = createSourceMuxFacts({
+    sourceId: 'waterfall-pending', origin: 'http://cp', now: () => 1_700_000_000_000,
+    onSnapshot: snapshot => snapshots.push(snapshot as never), openSocket: () => socket,
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items: [{ sessionId: 's1', running: true, updatedAt: 5 }] }) }) as never,
+  })
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().ready, 'baseline did not settle')
+    // 只观察、绝不回答：整段没有任何 $events/result（模块内无 send 路径）。
+    socket.item({ type: 'waterfall', event: 'approval/request', eventId: 'e1', agentId: 's1' })
+    await waitFor(() => snapshots.at(-1)?.rows.s1?.pendingKind === 'approval', 'approval was not projected')
+    socket.item({ type: 'waterfall', event: 'tool/request', eventId: 'e2', agentId: 's1' })
+    await new Promise(resolve => setTimeout(resolve, 8))
+    assert.equal(snapshots.at(-1)?.rows.s1?.pendingKind, 'approval', 'a foreign waterfall changes nothing')
+    socket.item({ type: 'cancel', eventId: 'e1' })
+    await waitFor(() => snapshots.at(-1)?.rows.s1?.pendingKind === null, 'cancel did not clear the pending bit')
+    socket.item({ type: 'waterfall', event: 'user-questions/request', eventId: 'e3', agentId: 's1' })
+    await waitFor(() => snapshots.at(-1)?.rows.s1?.pendingKind === 'question', 'question was not projected')
+    // 新一轮运行清除待决位（与 gateway applyStatus(running=true) 同规）。
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', true] })
+    await waitFor(() => snapshots.at(-1)?.rows.s1?.pendingKind === null, 'a rerun must clear the pending bit')
+    // 会话被删：行退役；随后到达的 cancel 不得复活行（配对表随会话一起退役，长跑不漏键）。
+    socket.item({ type: 'waterfall', event: 'user-questions/request', eventId: 'e4', agentId: 's1' })
+    await waitFor(() => snapshots.at(-1)?.rows.s1?.pendingKind === 'question', 'question was not re-projected')
+    socket.item({ type: 'emit', event: 'api-session/removed', args: ['s1'] })
+    await waitFor(() => snapshots.at(-1)?.rows.s1 === undefined, 'removed row must retire')
+    socket.item({ type: 'cancel', eventId: 'e4' })
+    await new Promise(resolve => setTimeout(resolve, 8))
+    assert.equal(snapshots.at(-1)?.rows.s1, undefined, 'a cancel after removal must not resurrect the row')
+  } finally { facts.stop() }
+})
+
+test('subagent rows never enter the row set and their status frames are ignored', async () => {
+  const socket = new FakeSocket()
+  const snapshots: Array<{ rows: Record<string, unknown>; baselines?: number }> = []
+  let items: unknown[] = [
+    { sessionId: 'parent', running: true, updatedAt: 5 },
+    { sessionId: 'child', running: false, updatedAt: 4, origin: 'subagent', parentSessionId: 'parent' },
+  ]
+  const facts = createSourceMuxFacts({
+    sourceId: 'subagent-excluded', origin: 'http://cp', now: () => 1_700_000_000_000,
+    onSnapshot: snapshot => snapshots.push(snapshot as never), openSocket: () => socket,
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items }) }) as never,
+  })
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().ready, 'baseline did not settle')
+    assert.deepEqual(Object.keys(snapshots.at(-1)?.rows ?? {}), ['parent'])
+    assert.equal(snapshots.at(-1)?.baselines, 1, 'the snapshot carries the observer baseline count')
+    // 子代理的 status / activity / added 都不得建行或产边沿。
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['child', true] })
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['child', false] })
+    socket.item({ type: 'emit', event: 'api-session/activity', args: ['child', 9] })
+    socket.item({ type: 'emit', event: 'api-session/added', args: [
+      { sessionId: 'child2', running: true, updatedAt: 9, origin: 'subagent', parentSessionId: 'parent' },
+    ] })
+    await new Promise(resolve => setTimeout(resolve, 8))
+    assert.deepEqual(Object.keys(snapshots.at(-1)?.rows ?? {}), ['parent'])
+    assert.equal(facts.status().edges, 0)
+    // 身份未知时先建的行（status 建档）：未确认 ⇒ 不进判定面；基线揭示子代理身份后退役。
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['late', true] })
+    await new Promise(resolve => setTimeout(resolve, 10))
+    assert.equal(snapshots.at(-1)?.rows.late, undefined, 'an unconfirmed status row never enters the snapshot')
+    assert.equal(facts.status().rows, 2, 'the observer still tracks it internally')
+    items = [...items, { sessionId: 'late', running: true, updatedAt: 9, origin: 'subagent', parentSessionId: 'parent' }]
+    facts.reconcile()
+    await waitFor(() => snapshots.at(-1)?.rows.late === undefined && facts.status().rows === 1,
+      'the revealed subagent row must retire')
   } finally { facts.stop() }
 })
 
@@ -837,8 +998,9 @@ test('a partial or malformed baseline cannot forge a completion or certify facts
     assert.equal(facts.status().ready, true, 'one rejected re-baseline holds the grace, not the whole face')
     assert.equal(snapshots.at(-1)?.verdict, 'ok')
     assert.equal(snapshots.at(-1)?.rows.s1?.running, true, 'a partial baseline must apply no rows')
-    await waitFor(() => facts.status().ready === false, 'a rejected baseline must not hold decidability past the grace')
-    assert.equal(snapshots.at(-1)?.verdict, 'degraded')
+    // 先等**发布**（同 carrier-loss 用例）：ready() 是墙钟谓词，不得据此读最后一帧。
+    await waitFor(() => snapshots.at(-1)?.verdict === 'degraded', 'a rejected baseline must publish the downgrade at the grace deadline')
+    assert.equal(facts.status().ready, false, 'a rejected baseline must not hold decidability past the grace')
     socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', 'false'] })
     assert.equal(facts.status().edges, 0, 'a malformed status must not close a running edge')
     assert.equal(follows, 0)
@@ -1355,13 +1517,14 @@ test('B3: a superseded socket cannot reschedule or mutate state', async () => {
 })
 
 /** 状态事件必须为未知会话建档；added/activity/removed 必须被消费。 */
-test('B4: status opens an unknown row; added/activity/removed are handled', async () => {
+test('B4: an unconfirmed status row stays out of the snapshot until a list fact confirms it; added/activity/removed are handled', async () => {
   const sockets: FakeSocket[] = []
   const snapshots: unknown[] = []
+  let items: unknown[] = []
   const facts = createSourceMuxFacts({
     sourceId: 'ssh-b4', origin: 'http://cp', now: () => 400, onSnapshot: s => snapshots.push(s),
     openSocket: () => { const s = new FakeSocket(); sockets.push(s); return s },
-    fetchImpl: rpcFetch({ 'session/list': () => ({ items: [] }) }) as never,
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items }) }) as never,
   })
   try {
     facts.start()
@@ -1374,9 +1537,16 @@ test('B4: status opens an unknown row; added/activity/removed are handled', asyn
     sockets[0].item({ type: 'emit', event: 'api-session/status', args: ['s1', false] })
     await new Promise(resolve => setTimeout(resolve, 10))
     let last = snapshots.at(-1) as { rows: Record<string, Record<string, unknown>> }
-    assert.notEqual(last.rows['s1'], undefined, 'status must open a row the baseline never saw')
-    assert.equal(last.rows['s1']?.completedAt, 400, 'the followed edge must arm the new row')
-    assert.equal(facts.status().edges, 1)
+    assert.equal(last.rows['s1'], undefined,
+      '身份未由列表事实确认的 status 行不进判定面（它可能其实是子代理）')
+    assert.equal(facts.status().edges, 1, '内部边沿照常计数：S1 门只扣投递，不扣观察')
+    // 列表事实确认顶层身份：同一拍发布该行（内部已武装/已分类的完成随之可见）。
+    items = [{ sessionId: 's1', running: false, updatedAt: 0 }]
+    facts.reconcile()
+    await waitFor(() => (snapshots.at(-1) as { rows: Record<string, unknown> }).rows['s1'] !== undefined,
+      'the confirming baseline did not publish the row')
+    last = snapshots.at(-1) as { rows: Record<string, Record<string, unknown>> }
+    assert.equal(last.rows['s1']?.completedAt, 400, 'the followed edge must arm the confirmed row')
     // activity：host 水位只升不降。
     sockets[0].item({ type: 'emit', event: 'api-session/activity', args: ['s1', 12_345] })
     sockets[0].item({ type: 'emit', event: 'api-session/activity', args: ['s1', 12_000] })

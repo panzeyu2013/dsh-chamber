@@ -37,6 +37,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 import { durableUnreadPruneAllowed, healthProbeUnavailableDiagnostic, rosterIncompleteDiagnostic } from '../../src/app-hooks/use-bridge-subscriptions.ts'
 import { createCompleteLedger } from '../../src/complete-ledger.ts'
 import { AUTHORITY_LOG_KEY } from '@dsh-chamber/dsh-chamber-client-core/authority-log-store'
@@ -50,19 +51,21 @@ import { NOTIFICATION_OUTBOX_KEY, createNotificationOutbox } from '../../src/not
 
 const APP = readFileSync(fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8')
 
-/** 从 marker 起的第一个花括号块（含嵌套；本门控块内字符串/模板无失衡花括号）。 */
+/** 从 marker 起的第一个花括号块（含嵌套）。先 stripComments：注释文本里的花括号
+ *  不得参与深度计数（按既有惯例共享实现仍保留字符串/模板字面量；S6 收尾修正）。 */
 function bracedBlockFrom(source: string, marker: string): string {
-  const start = source.indexOf(marker)
+  const text = stripComments(source)
+  const start = text.indexOf(marker)
   assert.notEqual(start, -1, 'missing marker: ' + marker)
-  const open = source.indexOf('{', start)
+  const open = text.indexOf('{', start)
   assert.notEqual(open, -1, 'marker has no block: ' + marker)
   let depth = 0
-  for (let index = open; index < source.length; index += 1) {
-    const char = source[index]
+  for (let index = open; index < text.length; index += 1) {
+    const char = text[index]
     if (char === '{') depth += 1
     else if (char === '}') {
       depth -= 1
-      if (depth === 0) return source.slice(start, index + 1)
+      if (depth === 0) return text.slice(start, index + 1)
     }
   }
   assert.fail('unterminated block for ' + marker)
@@ -547,6 +550,11 @@ test('completion-arm wiring: the arm step is the one gate-protected, never-throw
   // 唯一实体：读 facts 通道行 + painted，步进 client-core 的纯规则，写唯一 store。
   const step = bracedBlockFrom(hook, 'const stepArmNow = useCallback(')
   assert.ok(step.includes('factsStore.getSnapshot().runtime[sourceId]'), 'the step reads the facts channel row')
+  assert.ok(step.includes('virtualRuntimeReport('), 'a no-ctx source falls back to the facts-only projection')
+  assert.match(step, /factsOnly:[^,\n]*virtual !== undefined/,
+    'facts-only provenance comes from the virtual projection')
+  assert.doesNotMatch(step, /factsOnly:[^,\n]*current === undefined/,
+    'provenance must never be inferred from current === undefined')
   assert.ok(step.includes('viewStore.getSnapshot().painted === sourceId'), 'reading is the PAINTED fact, not the bridge selection')
   assert.ok(step.includes('stepCompletionArm('), 'the rule body is the client-core pure step (no second ledger)')
   assert.ok(step.includes('if (!next.changed) return'), 'an equal step is silent')
@@ -566,6 +574,129 @@ test('completion-arm wiring: the arm step is the one gate-protected, never-throw
     'the retired unread derivation must not come back')
   assert.ok(!hook.includes('saveUnread') && !hook.includes('loadUnread') && !hook.includes('UNREAD_V4_KEY'),
     'the retired unread journal must not come back')
+  // W14 读清边沿：openIntents 里**每个**来源都要步进（非 painted 来源点开 + 壳 boot 失败也消点）。
+  assert.ok(hook.includes('const touched = new Set(Object.keys(openIntents))'),
+    'every open-intent source enters the step set')
+  assert.ok(hook.includes('if (painted !== undefined) touched.add(painted)'),
+    'the painted source keeps its step')
+  assert.ok(hook.includes('for (const sourceId of touched) stepCompletionArmFor(sourceId)'),
+    'the open-intent edge steps every intent source, not only the painted one')
+  // reconcile 侧：只有 virtual 批是新壳报（shellReport: true），有壳路径复用当前壳行。
+  const reconcile = bracedBlockFrom(hook, 'const reconcileCompletionsNow = useCallback(')
+  assert.ok(reconcile.includes('virtualRuntimeReport(snapshot.session[sourceId])'),
+    'reconcile reads the same facts-only projection')
+  assert.match(reconcile, /virtual === undefined \? \{\} : \{ shellReport: true \}/,
+    'only the virtual batch is a NEW shell report')
+})
+
+test('facts-only wiring: clearing runtime facts on notReady withdraws the source in the same tick (ctx → virtual)', () => {
+  const aggregate = readFileSync(
+    fileURLToPath(new URL('../../src/app-hooks/use-aggregate-refresh.ts', import.meta.url)), 'utf8')
+  const poll = bracedBlockFrom(aggregate, 'const pollAggregates = useCallback(')
+  assert.ok(poll.includes('factsStore.setRuntime(prev => {'), 'the notReady branch still clears runtime facts')
+  assert.ok(poll.includes('const retired = notReady.filter(id => runtimeBefore[id] !== undefined)'),
+    'only sources that actually lost runtime facts are withdrawn')
+  assert.ok(poll.includes('for (const id of retired) withdrawSourceRef.current(id)'),
+    'the same tick withdraws the arm memory / observation state')
+  assert.ok(aggregate.includes('const withdrawSourceRef = useRef<(sourceId: string) => void>(() => {})'),
+    'a no-op ref until App fills it after useNotifications')
+  assert.match(APP, /withdrawSourceRef\.current = withdrawSource/,
+    'App must fill the late-bound withdraw entry')
+})
+
+test('source retirement wiring: the gateway facts teardown drops the facts row and withdraws in the same tick (S2)', () => {
+  const lifecycle = readFileSync(
+    fileURLToPath(new URL('../../src/app-hooks/use-session-facts-lifecycle.ts', import.meta.url)), 'utf8')
+  const teardown = bracedBlockFrom(lifecycle, 'sessionFactsTeardownRef.current.set(sourceId, () => {')
+  assert.ok(teardown.includes('factsStore.dropSession(sourceId)'),
+    'the gateway facts teardown owns the facts-row drop (retireSources calls it directly)')
+  assert.ok(teardown.includes('withdrawSource(sourceId)'),
+    'the same teardown withdraws the arm memory / observation state')
+  // retireSources 是与 lifecycle effect 的 wanted 收敛并行的第二条路径（源码内有唯一调用点）。
+  const retires = bracedBlockFrom(APP, 'const retireSources = useCallback(')
+  assert.ok(retires.includes('sessionFactsTeardownRef.current.get(sourceId)?.()'),
+    'retireSources must reach the teardown (same-id fingerprint replacement)')
+  // mux 观察者 teardown 保持不 drop（既有不对称）：stop() 先发布「保留最后一批行 +
+  // degraded/unavailable/stale」的退役快照（design 19 §3.5），行的最终删除由 App 注册表
+  // 收敛的 pruneSourceRecord(factsStore.session, live) 承担——这里 drop 会把旧化身最后一批
+  // 行误当权威空集。
+  const muxTeardown = bracedBlockFrom(lifecycle, 'sourceMuxTeardownRef.current.set(sourceId, () => {')
+  assert.ok(!muxTeardown.includes('dropSession'),
+    'the mux observer keeps its own convergence path (no factsStore drop in its teardown)')
+  // 单点删除：lifecycle effect 的「不再需要」分支不得再内联第二处 drop。
+  assert.equal(stripComments(lifecycle).split('factsStore.dropSession(').length - 1, 1,
+    'exactly one factsStore.dropSession call site in the lifecycle hook')
+})
+
+test('withdrawSource wiring: one withdrawal entity, provenance-scoped (C1) and deduped onto the bridge path (S6)', () => {
+  const hook = readFileSync(
+    fileURLToPath(new URL('../../src/app-hooks/use-notifications.ts', import.meta.url)), 'utf8')
+  const body = bracedBlockFrom(hook, 'const withdrawSource = useCallback(')
+  for (const needle of [
+    'delete prevRunningRef.current[sourceId]',
+    'completionObservationRef.current.delete(sourceId)',
+    'completeLedgerRef.current.withdraw(sourceId)',
+    'persistCompletionLedger(true)',
+    'stepCompletionArmFor(sourceId)',
+  ]) {
+    assert.ok(body.includes(needle), 'the one withdrawal entity must keep: ' + needle)
+  }
+  // 臂冻结：撤回不得直接写 completedStore（清除只由步进按规则做）。
+  assert.ok(!body.includes('completedStore'), 'withdrawal freezes the arm, it never clears it directly')
+  // C1 分域：'shell' 分支只清壳轨（shellSeeded + 每会话壳位）、保留 prevRunning（窗口内
+  // 虚拟接管按 facts 逐行边沿武装蓝点）与账本守卫（同一完成不得二次通知）。
+  assert.ok(body.includes("if (scope === 'shell')"), 'the entity must branch on the withdrawal scope')
+  const shellScope = bracedBlockFrom(hook, "if (scope === 'shell')")
+  assert.ok(shellScope.includes('withdrawShellTrack('), 'shell scope resets the shell observation track')
+  assert.ok(shellScope.includes('stepCompletionArmFor(sourceId)'), 'the arm re-steps under virtual provenance')
+  for (const forbidden of [
+    'delete prevRunningRef.current[sourceId]',
+    'completionObservationRef.current.delete(sourceId)',
+    'completeLedgerRef.current.withdraw(sourceId)',
+  ]) {
+    assert.ok(!shellScope.includes(forbidden), 'shell scope must NOT do: ' + forbidden)
+  }
+  assert.ok(hook.includes('withdrawShellTrack,') || hook.includes('withdrawShellTrack\n'),
+    'the shell-scope helper comes from the observation module (single entity)')
+  const observation = readFileSync(
+    fileURLToPath(new URL('../../src/completion-observation.ts', import.meta.url)), 'utf8')
+  assert.match(observation, /export function withdrawShellTrack\(state: SourceObservationState\): void \{/,
+    'the observation module owns the shell-scope semantics')
+  // 桥面 report === undefined 的五连内联复制已删：只剩 'shell' 分域调用（setRuntime 删除仍在前面）。
+  const bridge = readFileSync(
+    fileURLToPath(new URL('../../src/app-hooks/use-bridge-subscriptions.ts', import.meta.url)), 'utf8')
+  const handler = bracedBlockFrom(bridge, 'const handleRuntimeReport: RuntimeReportListener =')
+  assert.ok(handler.includes("withdrawSource(sourceId, 'shell')"),
+    'the bridge path calls the one entity with the shell provenance')
+  assert.ok(!handler.includes('withdrawSource(sourceId)\n'), 'the bridge path must not fall back to the all-scope call')
+  assert.ok(!handler.includes('delete prevRunningRef.current[sourceId]'),
+    'the five inline withdrawal statements must not come back')
+  assert.ok(!handler.includes('completeLedgerRef.current.withdraw(sourceId)'))
+  assert.ok(handler.includes('factsStore.setRuntime(prev => {'),
+    'the runtime-facts deletion still happens first, in the same handler')
+  // 事实载体真正换代的三个调用点仍走整代撤回（缺省 scope）——分域不得被接错侧。
+  const lifecycle = readFileSync(
+    fileURLToPath(new URL('../../src/app-hooks/use-session-facts-lifecycle.ts', import.meta.url)), 'utf8')
+  assert.equal(lifecycle.split('withdrawSource(sourceId)').length - 1, 2,
+    'gateway facts teardown + mux observer teardown keep the all-scope withdrawal')
+  const aggregate = readFileSync(
+    fileURLToPath(new URL('../../src/app-hooks/use-aggregate-refresh.ts', import.meta.url)), 'utf8')
+  assert.ok(aggregate.includes('withdrawSourceRef.current(id)'), 'aggregate notReady keeps the all-scope withdrawal')
+})
+
+test('R2 wiring: the facts row hint reaches the shared bounded wave through its one entry (S6)', () => {
+  const lifecycle = readFileSync(
+    fileURLToPath(new URL('../../src/app-hooks/use-session-facts-lifecycle.ts', import.meta.url)), 'utf8')
+  const hint = bracedBlockFrom(lifecycle, 'const requestFactsRefresh = useCallback(')
+  assert.ok(hint.includes('refreshAggregateRef.current(sourceId)'),
+    'the hint goes through the late-bound ref (the lifecycle effect builds it once)')
+  assert.ok(!hint.includes('refreshAggregate('), 'never a bare pull that bypasses the shared cap')
+  const aggregate = readFileSync(
+    fileURLToPath(new URL('../../src/app-hooks/use-aggregate-refresh.ts', import.meta.url)), 'utf8')
+  assert.ok(aggregate.includes('refreshAggregateRef.current = (sourceId: string): void => { runBoundedAggregateWave([sourceId]) }'),
+    'the ref IS the bounded wave entry (queue dedupe + shared 4-pull cap)')
+  assert.equal(stripComments(aggregate).split('runBoundedAggregateWave([sourceId])').length - 1, 1,
+    'exactly one row-hint wave call site')
 })
 
 test('facts-health sampling wiring: every observer snapshot reaches the ring recorder', () => {
@@ -639,8 +770,10 @@ test('never-throw wiring: reconcile / apply / arm and every facts listener bound
   ]
   for (const [step, text] of stepOwners) {
     // 语义计数：绑定 sourceId 与步骤名的 .guard() 调用点恰好一个（不数注释/文案里的字面量）。
+    // 计数前剥注释（共享实现保留字符串/模板字面量）：注释里出现 needle 不再被误计。
+    const source = stripComments(text)
     const needle = "guard(sourceId, '" + step + "'"
-    assert.equal(text.split(needle).length - 1, 1, '每步骤恰好一个 guard 调用点: ' + step)
+    assert.equal(source.split(needle).length - 1, 1, '每步骤恰好一个 guard 调用点: ' + step)
   }
   for (const marker of [
     'stepArmGuardedRef.current = (sourceId: string): void => {',

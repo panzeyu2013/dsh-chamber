@@ -18,7 +18,7 @@
  * watermark.ts，水平收敛器在 notification-projection.reconcile（直接读写本模块的
  * CompletionDecisionState）。
  *
- * 撤回语义（R2-D）：forgetArmed / withdraw 清 armed + armedFloor + pending +
+ * 撤回语义（R2-D）：withdraw 清 armed + armedFloor + pending +
  * settleFence + goalKnown（撤回窗口内的完成不得在恢复后补发，附属围栏不得跨撤回存活，
  * 结算点记忆随会话身份作废），notified/outcomes 保持 durable；forgetSession 对单会话
  * 执行同一纪律（B4-2：goalKnown 不得在会话 churn 下泄漏）；forget/prune 收敛全部
@@ -207,14 +207,19 @@ export interface CompleteLedger {
   /** 来源退役：全部 per-source 表（3 durable + 5 易失）同拍删除（同 id 重加 = 新来源代，不得继承上一代判定）。 */
   forget(sourceId: string): void
   /**
-   * 撤回（旧名）：清 armed + pending + settleFence + goalKnown，保留 durable 的
+   * 撤回：清 armed + pending + settleFence + goalKnown，保留 durable 的
    * notified/outcomes（R2-D）。通道撤回（壳重连/重 boot）时调用；恢复后首份观测
    * 不补发窗口内完成，且不得围栏吞掉窗口外的下一条真完成。
    */
-  forgetArmed(sourceId: string): void
-  /** 撤回（显式名）：语义同 forgetArmed。 */
   withdraw(sourceId: string): void
-  /** 只清 pending 不清 armed（诊断/局部收敛用）。 */
+  /**
+   * 只清 pending 不清 armed（诊断/局部收敛用）。
+   *
+   * **仅测试/诊断面（D4）**：生产零调用——生产结算位的清理由 reconcile 的 dropPending 与
+   * 账本内部的 forgetSessionScope/withdraw 承担；「清 pending 但保留 armed」这一形状在生产
+   * 没有合法消费者（撤回必须同拍清 armed，否则残留武装会吞掉恢复后的真完成）。保留给用例
+   * 构造/核对诊断形状；新生产代码不得以它为接线面。
+   */
   forgetPending(sourceId: string): void
   /**
    * 会话消失（两条通道都不再列出，§3.1）：该会话的 armed + settleFence + pending
@@ -606,8 +611,8 @@ export function createCompleteLedger(
       }
       state.armed = { ...state.armed, [sourceId]: new Set(sessions) }
     },
-    forgetArmed(sourceId) { withdrawSource(sourceId) },
     withdraw(sourceId) { withdrawSource(sourceId) },
+    /** 仅测试/诊断面（D4）：生产零调用，见接口注释。 */
     forgetPending(sourceId) {
       if (state.pending[sourceId] === undefined) return
       const next = { ...state.pending }

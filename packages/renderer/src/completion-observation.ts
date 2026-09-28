@@ -716,6 +716,28 @@ export function applyObservationBatch(input: {
 }
 
 /**
+ * 壳轨撤回（C1 分域；provenance = 桥面 `report === undefined`，facts 载体未换代）：
+ * 只清**壳轨**的转移记忆——壳通道是否已播种（下一次壳报/虚拟批重新播种，首份不产壳
+ * 候选）与每会话的壳运行/待决位（旧壳位不得当新边沿的证据）。**facts 轨原样保留**：
+ * `factsSeeded`/`factsWatermark`/`factsReseedPending` 与 `forgottenSessions` 都不动——
+ * 窗口内到达的 observed 完成必须仍按「水位严格前进」产出候选并恰好通知一次；清掉它们
+ * 会让恢复后的首个可用批变成播种批（G2），把窗口内的真完成吸收进水位 **通知与蓝点两面
+ * 都丢**（C1 回归）。壳轨的「撤回即播种」语义由 `shellSeeded = false` 精确表达，不需要
+ * 删除整份观测状态（删除 = freshState/generation 重置，facts 轨一并作废）。
+ *
+ * 「事实载体真正换代」的路径（gateway facts teardown / mux 观察者 teardown / aggregate
+ * notReady 删 runtime）不走这里：它们删整份状态（`completionObservationRef.delete` +
+ * 账本 withdraw 全量），本函数只服务壳轨的分域撤回。
+ */
+export function withdrawShellTrack(state: SourceObservationState): void {
+  state.shellSeeded = false
+  for (const memory of Object.values(state.sessions)) {
+    memory.shellRunning = 'unknown'
+    delete memory.shellPending
+  }
+}
+
+/**
  * 观测状态删除（调用方从 completionObservationRef 删除该来源时的同拍收敛）。
  *
  * WHY（FINAL-C）：观测状态删除 = 该来源的观测代终结（下一批 freshState 从代际 1
