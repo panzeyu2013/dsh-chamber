@@ -331,4 +331,39 @@ final class QuitCoordinatorTests: XCTestCase {
         XCTAssertTrue(source.contains("if let facts = quitFactsCache.current()"),
                       "关窗路径必须读缓存（S3·V9 即时决策）")
     }
+
+    /// 5s 硬顶 = 直接退出（design 25 §3.3(4)「Swift terminate 超时 = exit(_:)」）：
+    /// 若超时只 replyTerminate(true)，AppKit 随后在 applicationWillTerminate 里
+    /// 再同步 stop() 一次，会等仍在飞行的 SIGTERM 宽限（5s）+ 有界收尸（2s），
+    /// 最坏 ≈7s 突破硬顶。Electron 侧同一超时是 app.exit(1)（main.ts
+    /// runQuitCleanupChain）——这里同时钉两侧，任一改回「放行后二次等待」即红。
+    func testQuitCleanupTimeoutExitsInsteadOfSecondSynchronousStop() throws {
+        let appDelegate = Self.codeOnly(try Self.macOSSource("Sources/DSHChamber/AppDelegate.swift"))
+        guard let timeoutAnchor = appDelegate.range(of: "退出清理超时") else {
+            return XCTFail("AppDelegate 必须保留退出清理超时分支")
+        }
+        // 只取超时闭包本体（到缩进闭括号为止）：直接 prefix(N) 会越过闭包
+        // 抓到后面 replyTerminate 的函数定义，assertFalse 假红。
+        let tail = appDelegate[timeoutAnchor.lowerBound...]
+        guard let blockEnd = tail.range(of: "\n        }\n") else {
+            return XCTFail("超时分支必须以缩进闭括号结束（锚点收紧失败）")
+        }
+        let timeoutBlock = String(tail[..<blockEnd.upperBound])
+        XCTAssertTrue(timeoutBlock.contains("exit(1)"),
+                      "超时分支必须直接退出（exit(1)），不得 reply 后由 willTerminate 二次同步等待")
+        XCTAssertFalse(timeoutBlock.contains("replyTerminate"),
+                       "超时分支不得再调用 replyTerminate（那会把最坏退出时间推到 ≈7s）")
+
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // DSHChamberTests
+            .deletingLastPathComponent()   // Tests
+            .deletingLastPathComponent()   // macos
+            .deletingLastPathComponent()   // repo root
+        let mainTs = try String(contentsOf: root
+            .appendingPathComponent("packages/desktop/main.ts"), encoding: .utf8)
+        XCTAssertTrue(mainTs.contains("退出清理超时，强制退出"),
+                      "Electron 侧同一超时分支必须保留")
+        XCTAssertTrue(mainTs.contains("app.exit(1)"),
+                      "Electron 超时强退 = app.exit(1)（两 flavor 退出口径一致）")
+    }
 }

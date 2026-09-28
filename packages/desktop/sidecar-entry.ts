@@ -558,7 +558,7 @@ const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 's
   writeProtocolLine({ notify: 'ready', payload: { port: controlPlane.port, shellVersion } })
 
   // I 组更新控制器 start（订阅已在 installIpcHandlers 内注册，start 只排定 15s 静默首检与
-  // 6h 周期，绝不阻塞）；产品/装配态一律走真实节奏，只有测试注入门可改。
+  // 周期由 update-schedule.ts 单源（默认 10 min，含退避上限），绝不阻塞）；产品/装配态一律走真实节奏，只有测试注入门可改。
   if (process.env[TEST_NO_UPDATE_CHECK_ENV] === '1' && !isPackagedSidecarRuntime()) {
     console.log(`[sidecar] ${TEST_NO_UPDATE_CHECK_ENV}=1——跳过更新检查定时器（测试注入）`)
   } else {

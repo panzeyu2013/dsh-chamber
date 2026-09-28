@@ -31,6 +31,10 @@ const { values } = parseArgs({
     // the minimal sidecar walkthrough of the macOS Swift payload (G20).
     flavor: { type: 'string', default: 'electron' },
     'sidecar-dir': { type: 'string' },
+    // N-6 input: without it the native leg can only judge the shell index when
+    // the assembly itself carries dist/web, and under --require-assembly a
+    // missing web dist is now a FAIL, so CI must hand over the renderer output.
+    'web-dist': { type: 'string' },
     // G33: native machine gate — an absent assembly is a FAIL, not a SKIP, so a
     // CI step that lost its build prerequisite cannot exit 0 on a skip.
     'require-assembly': { type: 'boolean', default: false },
@@ -61,6 +65,10 @@ if (values.help) {
                              sidecar 装配（ready/B 桥/控制面 HTTP）；—— 注意 native 不可
                              驱动 WKWebView UI（无 CDP），那仍属实机验收
   --sidecar-dir <dir>        native 模式的 sidecar 装配目录（默认 packages/desktop/release/sidecar）
+  --web-dist <dir>           native 模式的 web dist 目录（renderer 产物，N-6 判"壳 index +
+                             声明资源可服务"；相对路径按当前目录解析）；未给时探测
+                             sidecarDir/dist/web → sidecarDir/../dist/web；
+                             --require-assembly 下探测不到即 N-6 FAIL
   --require-assembly         native 模式机器门：装配缺失记 FAIL（而非 SKIP）并退出 1，
                              供 CI 的 native 装配启动门使用（缺前置不得变绿）
   --out <dir>                产物目录（默认 .tmp/gui-acceptance）
@@ -107,6 +115,7 @@ try {
       outDir,
       attachPlaneOrigin: values.attach ? values.plane : null,
       requireAssembly: values['require-assembly'],
+      webDistDir: values['web-dist'] ?? null,
     })
     if (native.skipped) {
       console.error('SKIP: ' + native.reason)

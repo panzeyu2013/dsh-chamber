@@ -93,7 +93,7 @@ pnpm run dist:desktop
 
 ### 控制面
 
-`createControlPlane({ stateDir: <userData>/state, dshWorkspacePath })`：`stateDir` 固定为 `app.getPath('userData')/state`；`dshWorkspacePath` 为 dsh 工作区解析结果（打包态 `<resources>/vendor/dsh`；开发态环境变量 `DSH_CHAMBER_DSH_PATH` → `<repoRoot>/ref-dsh` → `<pkg>/vendor/dsh`；找不到时为 null，控制面内部回退到默认解析）。port 默认 17500、host 默认 127.0.0.1，start 后经 `controlPlane.port` 读取实际绑定端口。**dev 隔离**：`electron-dev.mjs` 以独立 `--user-data-dir`（`packages/desktop/.dev-user-data`，gitignored）启动，且 dev 模式控制面端口从 17520 起**自动退避到首个空闲端口**（多 worktree 并行 dev 各占各的端口；`DSH_CHAMBER_CP_PORT` 可固定覆盖；退避区间全占时回退系统临时端口）——与运行中的打包版实例（共享同一应用名 `@dsh-chamber/desktop` → 同一 userData 与单实例锁、占用 17500）互不冲突；renderer origin 始终取自实际绑定端口（`controlPlane.port`），无硬编码地址。dev 的注册表/密码/状态独立存放，绝不触碰打包版线上数据。
+`createControlPlane({ stateDir: <userData>/state, dshWorkspacePath })`：`stateDir` 固定为 `app.getPath('userData')/state`；`dshWorkspacePath` 为 dsh 工作区解析结果（打包态 `<resources>/vendor/dsh`；开发态环境变量 `DSH_CHAMBER_DSH_PATH` → `<repoRoot>/ref-dsh` → `<pkg>/vendor/dsh`；找不到时为 null，控制面内部回退到默认解析）。port 默认 17500、host 默认 127.0.0.1，start 后经 `controlPlane.port` 读取实际绑定端口。**dev 隔离**：`electron-dev.mjs` 以独立 `--user-data-dir`（`packages/desktop/.dev-user-data`，gitignored）启动，且 dev 模式控制面端口从 17520 起**自动退避到首个空闲端口**（多 worktree 并行 dev 各占各的端口；`DSH_CHAMBER_CP_PORT` 可固定覆盖；退避区间全占时回退系统临时端口）——与运行中的打包版实例（共享同一应用名 `@dsh-chamber/desktop` → 同一 userData 与单实例锁、占用 17500）互不冲突；renderer origin 始终取自实际绑定端口（`controlPlane.port`），无硬编码地址。dev 的注册表/密码/状态独立存放，绝不触碰打包版线上数据。本地 dsh 的**起始端口默认 17510**（spawn 失败逐次 +1，最多 5 次）；`DSH_CHAMBER_DSH_PORT_BASE` 可覆盖它——dev/验收实例与在跑安装并存时用它避开 17510..17514 的 `connection_busy`（非法值 loud 一次后回落默认）。
 
 ### transport-manager + providers（transport-provider.ts / transport-manager.ts / ssh-provider.ts / gateway-provider.ts）
 
@@ -124,7 +124,7 @@ pnpm run dist:desktop
 
 | 通道 | 方向 | 说明 |
 |---|---|---|
-| `dsh-chamber:info` | invoke | `{controlPlaneUrl, dshVersion, version, platform}`（不向 renderer 暴露本机工作区/状态目录） |
+| `dsh-chamber:info` | invoke | `{controlPlaneUrl, dshVersion, version, platform, flavor}`（4 标量为页面暴露面；flavor = E2 有意保留的零消费者字段，preload 不镜像、页面无消费者，用前须补消费者与 preload/global.d.ts 镜像测试。不向 renderer 暴露本机工作区/状态目录） |
 | `desktop_ssh_instances_get` | invoke | 实例列表 |
 | `desktop_ssh_instances_health` | invoke | 注册表**加载**健康位 `{degraded, reason?, rosterIncomplete, droppedCount?}`：损坏保留为 `*.corrupt` 后空启动（或 live 缺失而副本仍在）时 `{degraded:true, reason}`（F13）；JSON 数组内条目被丢弃（`validateSpec` 拒绝 / null 非对象行 / 重复 id 首胜）时 `{degraded:false, rosterIncomplete:true, droppedCount:N}`（V5-A，合法行照常安装/可见）；健康完整为 `{degraded:false, rosterIncomplete:false}`；`droppedCount` 仅随 incomplete 出现，旧生产者缺字段按 false/0 读。degraded 与 incomplete **同档**关死 renderer durable 剪枝门，incomplete 期间 `compensation` 也跳过落盘；一次无丢弃成功 load 或 `save_connection`（authoritative）重建后恢复 |
 | `desktop_ssh_save_connection` | invoke | add/edit/非空凭据写唯一入口；元数据 + 三类 write-only 凭据的主进程 crash-safe binding/补偿事务，旧值不返回 renderer |
@@ -148,7 +148,18 @@ pnpm run dist:desktop
 | `desktop_ssh_status_changed` | 主进程推送 | 状态变化事件 `{id, status}` |
 | `desktop_ssh_instances_changed` | 主进程推送 | 注册表增删改后触发（renderer 重拉 roster；另有 30s 轮询兜底） |
 
-preload 暴露 `window.dshChamber = {controlPlaneUrl, dshVersion, version, platform, desktopSsh, update, settings, systemResume, openIn, deepLink, notifications}`（`update` 为设计 11 的更新面：`state/download/openReleasePage/onChanged`）。
+preload 暴露 `window.dshChamber` = **4 个 info 标量**（`controlPlaneUrl`/`dshVersion`/`version`/`platform`）+ **10 个命名空间面**（`desktopSsh`/`update`/`settings`/`systemResume`/`rendererStall`/`openIn`/`deepLink`/`runtime`/`notifications`/`badge`；`update` 为设计 11 的更新面：`state/download/openReleasePage/onChanged`）。宿主 seam 的保留成员不属于这层暴露面。
+
+### 零 core 消费者的保留面（退役判据）
+
+HostEdges 的 `trayAvailable`/`setKeepAwake`/`focusMainWindow`/`launchApp`/`setLoginItem`/`isPackaged` 当前全仓无调用点（core 未 Pick；`.member(` grep 排除测试）。它们保留的是**两 flavor 同形的契约面**而不是用户路径，删除会让 Electron/Swift 两条 HostEdges 实现失去锁步面；HostEdges 不在 preload/bridge-manifest 内，删除不会动 A 桥暴露面：
+
+- `launchApp`（design 25 E12/S-05）：两 flavor 均无实现，等第一个消费者；消费者出现即在两侧实现，若 open-in 最终确认永不由壳执行（实例内 seed-open-in 包独占），随该裁决删除。
+- 同步 `setKeepAwake`/`setLoginItem`：settings 路径走装配 ctx 的 async 叶（`shell-assembly-ctx.ts`）；到保留面复核时仍无 HostEdges 直接调用方 → 删除成员、保留 ctx 叶。
+- `trayAvailable`/`isPackaged`（E2/B1）：Electron 侧本就未实现；关闭行为与打包裁决不再需要经本 seam 暴露 → 删除成员与 node-edges 缓存。
+- `focusMainWindow`（D3）：Electron 通知 click 由 electron-edges 的 `host.showMainWindow` 承担、Swift 在 `SwiftEdgeHostLegs` 内自办；core 不需要可复用聚焦入口 → 删除成员。
+
+`dsh-chamber:info` 的 `flavor` 字段同为 E2 有意保留的零消费者字段（preload 不镜像）；`hostFacts.flavor`（`main.ts`/`sidecar-ctx.ts`）仍由 `chamber-settings` 的能力门消费，二者不是一回事。
 
 ### 退出 / 单实例 / 错误处理
 

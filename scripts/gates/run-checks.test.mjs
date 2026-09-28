@@ -326,7 +326,7 @@ test('G32/G33: the darwin tests mode carries the executed-assembly gates ci.yml 
   const gates = [
     'test:sidecar:compiled',
     'node scripts/gates/verify-electron-artifacts.mjs',
-    'node scripts/gui-acceptance/run.mjs --flavor native --require-assembly',
+    'node scripts/gui-acceptance/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web',
   ]
   if (process.platform === 'darwin') {
     for (const gate of gates) assert.ok(MODES.tests.includes(gate), `check:tests must run ${gate}`)
@@ -336,8 +336,12 @@ test('G32/G33: the darwin tests mode carries the executed-assembly gates ci.yml 
     assert.ok(MODES.tests.indexOf(assemblyBuild) < MODES.tests.indexOf('test:sidecar:compiled'),
       'the sidecar assembly build must precede the compiled sidecar smoke')
     assert.ok(MODES.tests.indexOf(assemblyBuild)
-      < MODES.tests.indexOf('node scripts/gui-acceptance/run.mjs --flavor native --require-assembly'),
+      < MODES.tests.indexOf('node scripts/gui-acceptance/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web'),
     'the sidecar assembly build must precede the native acceptance')
+    // N-6 必须真执行：机器门档要求 renderer 产物在位，故 renderer 构建须先于原生验收。
+    assert.ok(MODES.tests.indexOf('pnpm run build:renderer')
+      < MODES.tests.indexOf('node scripts/gui-acceptance/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web'),
+    'build:renderer must precede the native acceptance once N-6 is required to execute')
     assert.ok(MODES.tests.indexOf('pnpm --filter @dsh-chamber/desktop run build:preload')
       < MODES.tests.indexOf('node scripts/gates/verify-electron-artifacts.mjs'),
     'build:preload must precede the Electron artifacts gate')

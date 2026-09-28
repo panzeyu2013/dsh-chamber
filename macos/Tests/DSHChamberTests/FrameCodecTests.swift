@@ -60,9 +60,9 @@ final class FrameCodecTests: XCTestCase {
     func testMalformedLinesReturnNil() {
         XCTAssertNil(decodeLine(""))
         XCTAssertNil(decodeLine("not json"))
-        XCTAssertNil(decodeLine(#"{"id":1}"#))          // 无 method/ok/event
+        XCTAssertNil(decodeLine(#"{"id":1}"#))          // 无 method/ok
         XCTAssertNil(decodeLine(#"{"method":"x"}"#))     // 无 id（request/response 需 id）
-        XCTAssertNil(decodeLine(#"{"id":1,"event":2}"#)) // event 名非字符串
+        XCTAssertNil(decodeLine(#"{"id":1,"event":2}"#)) // id 无 method/ok 且带退役族键
         XCTAssertNil(decodeLine(#"{"id":"1","ok":true}"#)) // id 非 Int
         XCTAssertNil(decodeLine(#"{"id":1,"ok":"yes"}"#))  // ok 非 Bool
     }
@@ -86,9 +86,9 @@ final class FrameCodecTests: XCTestCase {
         XCTAssertNil(FrameCodec.classify(jsonObject: ["id": 1, "ok": true, "error": 5]))
         XCTAssertNil(FrameCodec.classify(jsonObject: ["event": 2]))
         XCTAssertNil(FrameCodec.classify(jsonObject: ["id": 1, "ok": true, "result": ["k": Date()]]))
-        // null = 缺省（可选字段折叠为 nil）
-        XCTAssertEqual(FrameCodec.classify(jsonObject: ["id": NSNull(), "event": "e"]),
-                       .event(event: "e", payload: nil))
+        // null = 缺省（可选字段折叠为 nil）；无 id 的 event 行不再是任何帧族
+        XCTAssertNil(FrameCodec.classify(jsonObject: ["id": NSNull(), "event": "e"]))
+        XCTAssertNil(FrameCodec.classify(jsonObject: ["event": "e", "payload": NSNull()]))
         XCTAssertEqual(FrameCodec.classify(jsonObject: ["id": 1, "method": NSNull(), "ok": true]),
                        .response(id: 1, ok: true, result: nil, error: nil))
         XCTAssertEqual(FrameCodec.classify(jsonObject: ["id": 1, "ok": true, "payload": NSNull()]),
@@ -130,28 +130,31 @@ final class FrameCodecTests: XCTestCase {
     /// 无法事后还原；均为无实际影响的边界）：下溢指数折叠为 0（方向
     /// 变宽松）、整数写法 -0 变 .number(0)（AnyCodable == 相等、页面文本都是 "0"）。
     func testClassifyNumberTokenEdgeCases() {
-        guard case .event(event: "e", payload: .array(let underflow))? =
-            decodeLine(#"{"event":"e","payload":[1e-400]}"#) else {
+        guard case .response(id: 1, ok: true, result: .array(let underflow), error: nil)? =
+            decodeLine(#"{"id":1,"ok":true,"result":[1e-400]}"#) else {
             return XCTFail("下溢指数应折叠为 0 并被接受")
         }
         XCTAssertEqual(underflow, [.number(0)])
-        XCTAssertNil(decodeLine(#"{"event":"e","payload":[1e-1000]}"#),
+        XCTAssertNil(decodeLine(#"{"id":1,"ok":true,"result":[1e-1000]}"#),
                      "JSONSerialization 无法表示的数字整帧丢弃（与旧一致）")
-        XCTAssertEqual(decodeLine(#"{"event":"e","payload":[-0]}"#),
-                       .event(event: "e", payload: .array([.number(0)])))
+        XCTAssertEqual(decodeLine(#"{"id":1,"ok":true,"result":[-0]}"#),
+                       .response(id: 1, ok: true, result: .array([.number(0)]), error: nil))
     }
 
     func testClassificationPrecedence() {
-        // 确定性分类：request(id+method) > response(id+ok) > event(无 id)
+        // 确定性分类：request(id+method) > response(id+ok)；event 族已退役，
+        // 无 id 的 event 行不属任何帧族。
         XCTAssertNotNil(decodeLine(#"{"id":1,"method":"m","ok":true}"#))
         guard case .request? = decodeLine(#"{"id":1,"method":"m","ok":true}"#) else {
             return XCTFail("id+method 应分类为 request")
         }
-        // 未知键容忍：event 帧混入 ok 键仍按 event 解码（实现按"无 id"归类）
-        guard case .event(event: "e", payload: nil)? =
-            decodeLine(#"{"event":"e","ok":true}"#) else {
-            return XCTFail("无 id + event 应分类为 event（未知键容忍）")
+        // 未知键容忍：已知族（response）混入退役族键仍按该族解码
+        guard case .response(id: 1, ok: true, result: nil, error: nil)? =
+            decodeLine(#"{"id":1,"ok":true,"event":"e"}"#) else {
+            return XCTFail("id+ok 应分类为 response（额外 event 键按未知键容忍）")
         }
+        XCTAssertNil(decodeLine(#"{"event":"e","ok":true}"#),
+                     "event 族已退役：无 id 的事件行必须落地为未知帧")
     }
 
     func testIsLineTooLong() {

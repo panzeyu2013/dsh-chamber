@@ -2,12 +2,12 @@
 //
 // design 25 §4.4.2（B 桥 Swift ↔ sidecar）的 Swift 侧实现。AppDelegate
 // 与 MessageHandler 作者按本文件的公开契约引用（构造/start/stop/invoke/
-// onEvent），勿改名。
+// onEdgeRequest/onNotify/onReady），勿改名。
 //
 // 进程模型（design 25 §3.1）：Swift 应用是客户端、sidecar（打包 Node +
 // JS bundle；dev = `node packages/desktop/sidecar-entry.ts`、装配态 =
 // `sidecar.js`，见 AppDelegate.sidecarRelativePath）是服务端——
-//   - stdout 是**唯一协议流**（NDJSON 帧：request/response/event，行协议）；
+//   - stdout 是**唯一协议流**（NDJSON 帧：request/response + 出站 edge/notify，行协议）；
 //   - stderr 是**唯一日志通道**（D2：sidecar-entry 会把存量 console.* 重定向
 //     到 stderr，本客户端逐行透传到自己的标准错误，前缀 "[sidecar] "）；
 //     协议行若仍泄漏到 stdout（重定向后 = 违约）→ fail-loud 打印 + 丢弃，
@@ -39,7 +39,7 @@
 //     stop / 自然退出清空旧会话的排队帧，新会话使用独立写器，旧写任务
 //     绝不进入新 stdin。已进入内核的写无法撤回；
 //     超时后的远端副作用仍以宿主幂等性或读取事实对账判定。
-//   - **帧回调**（onEvent/onNotify/onReady/onEdgeRequest/响应分发）在**管道读取
+//   - **帧回调**（onNotify/onReady/onEdgeRequest/响应分发）在**管道读取
 //     线程**（Foundation 内部队列）或**终止收尾线程**（handleTermination →
 //     finish*Reading 抽干残帧）回调，均为非主线程；两条路径的派发经 dispatchLock
 //     串行（**回调绝不并发进入**），stderr 中继不参与该锁（独立线程 + stderrLock，
@@ -611,7 +611,7 @@ public final class BridgeClient {
     /// sidecar stderr 行的落盘出口：
     /// nil = 只透传 stdout（单测/自定义形状）。注入方保证线程安全（生产端是
     /// ShellLog，自带 NSLock）；本属性在 start() 之前赋值、之后只读，
-    /// 与管道读取线程不并发写（与 onEvent 同纪律）。
+    /// 与管道读取线程不并发写（与 onNotify 同纪律）。
     ///
     /// 调用点在 LogSink 的汇聚线程（见
     /// relaySidecarLogLine / Entry.sidecar）；赋值时同步给汇聚线程的旁路消费者。
@@ -627,11 +627,6 @@ public final class BridgeClient {
         return stderrTail.joined(separator: "\n")
     }
 
-    /// sidecar 事件出口（事件帧到达时在管道读取线程回调；调用方负责切回
-    /// 主线程再碰 UI/WKWebView——本属性在 start() 之前赋值、之后只读，
-    /// 赋值方（controller）与读取线程不并发写）。
-    public var onEvent: ((String, AnyCodable?) -> Void)?
-
     // MARK: - 出站面（sidecar → Swift：edge 请求 / notify / ready）
 
     /// sidecar→Swift 的 edge 请求出口。NOTIFY 类通道的宿主腿在 sidecar 侧
@@ -646,24 +641,24 @@ public final class BridgeClient {
     /// defaultEdgeResponse(method:payload:)（自定义不应答 = 挂起，注释声明）。
     /// 未设置（nil）时由 v1 默认应答策略兜底（defaultEdgeResponse——
     /// 构造参数 defaultEdgeResponder=true 会在 init 时把默认应答器装进本属性）。
-    /// 线程契约与 onEvent 相同：start() 之前赋值、之后只读。
+    /// 线程契约同 onNotify：start() 之前赋值、之后只读。
     public var onEdgeRequest: ((_ method: String, _ payload: AnyCodable?,
                                 _ reply: @escaping (_ result: AnyCodable?, _ error: String?) -> Void) -> Void)?
 
     /// sidecar→Swift 的 notify 事件出口（单向帧，不期待应答；ready 之外的
-    /// rendererPush 等）。线程契约与 onEvent 相同。ready 帧不进本出口
-    /// （结构校验后走 onReady）。
+    /// rendererPush 等）。线程契约同 onEdgeRequest（管道读取线程回调；
+    /// start() 之前赋值、之后只读）。ready 帧不进本出口（结构校验后走 onReady）。
     public var onNotify: ((_ event: String, _ payload: AnyCodable?) -> Void)?
 
     /// sidecar ready notify 专用出口：sidecar 起动完成、control plane 就绪后
     /// 主动输出的 {"notify":"ready","payload":{port,shellVersion}}（先于任何
-    /// 业务帧）。线程契约与 onEvent 相同（管道读取线程回调）。
+    /// 业务帧）。线程契约同 onNotify（管道读取线程回调）。
     public var onReady: ((_ port: Int, _ shellVersion: String) -> Void)?
 
     /// 自然终止出口：sidecar 崩溃/自行退出时回调
     /// terminationStatus（管道读取线程，即 SIGCHLD 处理线程）。**主动 stop()
     /// 不触发**（stop 先摘 terminationHandler 再 terminate）。赋值须在 start()
-    /// 之前（与 onEvent/onReady 同契约）。
+    /// 之前（与 onNotify/onReady 同契约）。
     public var onTerminated: ((Int32) -> Void)?
 
     /// 进程是否存活（含 start 前/stop 后 → false）。测试与未来 Supervisor 用。
@@ -725,7 +720,7 @@ public final class BridgeClient {
 
     /// 把 v1 默认 edge 应答器装回 onEdgeRequest（策略见 defaultEdgeResponse；
     /// 自定义应答器想整体恢复默认时调用；构造参数 defaultEdgeResponder=true
-    /// 时 init 已调用过）。线程：start() 之前调用（与 onEvent 同赋值契约）。
+    /// 时 init 已调用过）。线程：start() 之前调用（与 onNotify 同赋值契约）。
     public func setDefaultEdgeResponder() {
         onEdgeRequest = { [weak self] method, payload, reply in
             guard let self else { return }
@@ -1407,14 +1402,6 @@ public final class BridgeClient {
             switch frame {
             case .response(let id, let ok, let result, let error):
                 deliverResponse(id: id, ok: ok, result: result, error: error)
-            case .event(let event, let payload):
-                // 事件在读取线程回调（见文件头线程契约）；无订阅者 → loud
-                // （事件静默丢弃会让上层状态机漏状态，宁响勿哑）。
-                if let handler = onEvent {
-                    handler(event, payload)
-                } else {
-                    log("收到事件「\(event)」但 onEvent 未设置，丢弃")
-                }
             case .request:
                 // sidecar 从不发起带 id+method 的 request 帧（B 桥 id 所有权恒在
                 // Swift 侧；edge:* 反向通道是**出站帧** edge/notify 两族，已由
@@ -1425,7 +1412,7 @@ public final class BridgeClient {
             return
         }
         // id 族分类未命中 → 试出站面分类（edge/notify 两族——它们既无 id 也
-        // 无 event 键，不在 request/response/event 三族内，见 decodeOutboundFrame
+        // 无 method/ok 键，不在 request/response 两族内，见 decodeOutboundFrame
         // 注释），分类命中即由 dispatchOutboundFrame 分发——sidecar 的 sendEdge
         // 因此不会挂起）。
         if let outbound = Self.decodeOutboundFrame(jsonObject: object) {
@@ -1447,8 +1434,8 @@ public final class BridgeClient {
 
     // MARK: - 出站帧（sidecar → Swift：edge/notify）解码与分发
 
-    /// 出站帧的原始行分类结果（B 桥线协议在 request/response/event 三族之外
-    /// 的两族，sidecar → Swift 方向）。
+    /// 出站帧的原始行分类结果（B 桥线协议在 request/response 两族之外
+    /// 的两族，sidecar → Swift 方向；event 族已退役）。
     private enum OutboundFrame {
         /// sidecar→Swift edge 请求：期待 {"edgeId":N,"ok":…} 应答（edgeId 原样
         /// 回写）。payload 为 AnyCodable?（无 payload 键 → nil）。
@@ -1507,7 +1494,7 @@ public final class BridgeClient {
         return AnyCodable.fromJSONObject(object["payload"] as Any)
     }
 
-    /// 出站帧分发（管道读取线程；回调线程契约同 onEvent）。
+    /// 出站帧分发（管道读取线程；回调线程契约同 onNotify）。
     private func dispatchOutboundFrame(_ frame: OutboundFrame, generation: Int?) {
         switch frame {
         case .edgeRequest(let method, let payload, let edgeId):

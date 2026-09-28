@@ -12,7 +12,8 @@
  *      node), waits for the real `ready` frame over the NDJSON B bridge, drives
  *      `dsh-chamber:info` + `dsh-chamber:settings-get`, and probes the
  *      control-plane HTTP surface (`/health`, the origin fence, and the shell
- *      index + declared assets when `dist/web` is part of the assembly);
+ *      index + declared assets against the resolved web dist: explicit
+ *      `--web-dist`, else `sidecarDir/dist/web` → `sidecarDir/../dist/web`);
  *   3. terminates the sidecar with SIGTERM and requires a clean exit 0;
  *   4. writes the same report artifacts as the Electron walkthrough.
  *
@@ -21,7 +22,10 @@
  * surface cannot be driven from this toolbox; those stay real-machine
  * acceptance items (docs/checklists/gui-acceptance-checklist.md). `--attach`
  * targets an already-running native shell's control plane through the same
- * minimal HTTP walkthrough; it still cannot attach to the web view.
+ * minimal HTTP walkthrough; it still cannot attach to the web view. Attach mode
+ * records N-1/N-7 as INFO — no ready frame is observed and there is no sidecar
+ * lifecycle to terminate — so the report never claims a launch that did not
+ * happen (an unobserved ready frame is not a PASS).
  *
  * CI: with no sidecar assembly built, the mode prints `SKIP:` and exits 0. Run
  * `pnpm run build:sidecar --skip-vendor --skip-host-packages` (plus
@@ -30,9 +34,12 @@
  * G33: `--require-assembly` (runNativeAcceptance({ requireAssembly: true })) is
  * the machine-gate form: when the assembly is absent the preflight becomes a
  * FAIL instead of a loud SKIP, so a CI step cannot lose its build prerequisite
- * and still exit 0. ci.yml's "Native assembly acceptance" step uses it. What it
- * still cannot check (WKWebView UI, the .app double-click path) stays a
- * documented real-machine item either way.
+ * and still exit 0. ci.yml's "Native assembly acceptance" step uses it. N-6
+ * follows the same rule: when no web dist can be found the shell index + declared
+ * assets leg cannot execute, and the machine gate records it as FAIL naming the
+ * missing index.html instead of INFO (the default form keeps INFO) — a green CI
+ * run must mean that leg really ran. What it still cannot check (WKWebView UI,
+ * the .app double-click path) stays a documented real-machine item either way.
  */
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
@@ -79,14 +86,55 @@ export function nativePreflight({ sidecarDir = DEFAULT_SIDECAR_DIR } = {}) {
 }
 
 /**
+ * The web dist N-6 must judge, resolved the way the packaged shell resolves it
+ * (macos/Sources/DSHChamber/AppDelegate.swift: explicit arg, else the
+ * `<Resources>/dist/web` / `sidecar/dist/web` mirror pair).
+ *
+ * Resolution order: an explicit `--web-dist` wins (the CI step passes the
+ * renderer output it just built); otherwise the two same-named candidates are
+ * probed in the order `sidecarDir/dist/web` → `sidecarDir/../dist/web` (the
+ * latter IS the .app layout's `Contents/Resources/dist/web`). The
+ * judgement is `index.html` existing, not the directory existing: an empty
+ * directory left behind by a failed build is exactly the "carried but broken"
+ * shape that must not read as ready (build-swift-app.mjs uses the same judge).
+ * @param {{ sidecarDir?: string, webDistDir?: string|null }} [options] - assembly dir and explicit override.
+ * @returns {{ dir: string, source: 'explicit'|'detected'|'missing', ready: boolean, candidates: string[] }} verdict.
+ */
+export function resolveNativeWebDistDir({ sidecarDir = DEFAULT_SIDECAR_DIR, webDistDir = null } = {}) {
+  const candidates = [
+    path.join(sidecarDir, 'dist', 'web'),
+    // .app 布局：Contents/Resources/sidecar → Contents/Resources/dist/web（join 会把 `..` 归一）。
+    path.join(sidecarDir, '..', 'dist', 'web'),
+  ]
+  if (typeof webDistDir === 'string' && webDistDir.trim() !== '') {
+    const explicit = path.resolve(webDistDir.trim())
+    return { dir: explicit, source: 'explicit', ready: existsSync(path.join(explicit, 'index.html')), candidates: [explicit] }
+  }
+  for (const candidate of candidates) {
+    // 探测结果要交给子进程（--web-dist-dir），而子进程 cwd=sidecarDir：相对候选必须
+    // 先按本进程 cwd 定死，否则同一路径在父子进程里指向两处。existsSync 用的就是同一基准。
+    if (existsSync(path.join(candidate, 'index.html'))) return { dir: path.resolve(candidate), source: 'detected', ready: true, candidates }
+  }
+  return { dir: candidates[0], source: 'missing', ready: false, candidates }
+}
+
+/**
  * The argv the native sidecar is launched with — the shared launch contract
- * (scripts/lib/sidecar-launch.mjs). Exported so the contract stays a testable
- * pure function.
- * @param {{ userDataDir: string, port: number }} input - launch inputs.
+ * (scripts/lib/sidecar-launch.mjs) plus the packaged shell's web-dist flag.
+ * Exported so the contract stays a testable pure function.
+ *
+ * WHY `--web-dist-dir`: without it the sidecar serves a temporary stub UI
+ * (sidecar-entry.ts), so "the shell index + declared assets are servable" would
+ * have no real object to judge. The packaged .app passes the flag unconditionally
+ * (AppDelegate); this leg passes it whenever a ready web dist was resolved, so
+ * N-6 drives the same static-serving chain.
+ * @param {{ userDataDir: string, port: number, webDistDir?: string|null }} input - launch inputs.
  * @returns {string[]} argv.
  */
-export function nativeSidecarArgs({ userDataDir, port }) {
-  return sidecarLaunchArgs({ userDataDir, port })
+export function nativeSidecarArgs({ userDataDir, port, webDistDir = null }) {
+  const args = sidecarLaunchArgs({ userDataDir, port })
+  if (typeof webDistDir === 'string' && webDistDir !== '') args.push('--web-dist-dir', webDistDir)
+  return args
 }
 
 /** The environment the shipped sidecar.js requires — the shared launch contract
@@ -147,15 +195,15 @@ async function get(origin, target, headers = {}) {
 
 /**
  * Launch the native sidecar and hold it for the walkthrough.
- * @param {{ sidecarDir: string, outDir: string, timeoutMs?: number }} input - launch inputs.
+ * @param {{ sidecarDir: string, outDir: string, timeoutMs?: number, webDistDir?: string|null }} input - launch inputs.
  * @returns {Promise<{ child: object, port: number, stop: Function, logPath: string, ready: object }>} handle.
  */
-export async function launchNativeSidecar({ sidecarDir, outDir, timeoutMs = 30_000 }) {
+export async function launchNativeSidecar({ sidecarDir, outDir, timeoutMs = 30_000, webDistDir = null }) {
   mkdirSync(outDir, { recursive: true })
   const userDataDir = mkdtempSync(path.join(tmpdir(), 'dsh-native-acceptance-'))
   const port = await freeLoopbackPort()
   const logPath = path.join(outDir, 'native-sidecar.log')
-  const child = spawn(resolveNodeBinary(sidecarDir), [path.join(sidecarDir, 'sidecar.js'), ...nativeSidecarArgs({ userDataDir, port })], {
+  const child = spawn(resolveNodeBinary(sidecarDir), [path.join(sidecarDir, 'sidecar.js'), ...nativeSidecarArgs({ userDataDir, port, webDistDir })], {
     cwd: sidecarDir,
     env: nativeSidecarEnv(),
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -197,7 +245,7 @@ export async function launchNativeSidecar({ sidecarDir, outDir, timeoutMs = 30_0
 
 /**
  * Run the native-flavor walkthrough.
- * @param {{ sidecarDir?: string, outDir?: string, attachPlaneOrigin?: string|null, requireAssembly?: boolean, timeoutMs?: number, log?: Function }} [options] - options.
+ * @param {{ sidecarDir?: string, outDir?: string, attachPlaneOrigin?: string|null, requireAssembly?: boolean, webDistDir?: string|null, timeoutMs?: number, log?: Function }} [options] - options.
  * @returns {Promise<{ skipped: boolean, reason?: string, results: object[], passed: number, failed: number, info: number, reportPath: string, planeOrigin: string|null }>} verdict.
  */
 export async function runNativeAcceptance({
@@ -205,6 +253,7 @@ export async function runNativeAcceptance({
   outDir = '.tmp/gui-acceptance',
   attachPlaneOrigin = null,
   requireAssembly = false,
+  webDistDir = null,
   timeoutMs = 30_000,
   log = console.log,
 } = {}) {
@@ -213,6 +262,8 @@ export async function runNativeAcceptance({
   const reportPath = path.join(outDir, 'gui-native-report.md')
   let handle = null
   let planeOrigin = attachPlaneOrigin
+  // Resolved once: the launch flag and N-6's verdicts must agree on ONE web dist.
+  const webDist = resolveNativeWebDistDir({ sidecarDir, webDistDir })
 
   const preflight = nativePreflight({ sidecarDir })
   if (!preflight.ok && attachPlaneOrigin === null) {
@@ -242,7 +293,10 @@ export async function runNativeAcceptance({
 
   try {
     if (attachPlaneOrigin === null) {
-      handle = await launchNativeSidecar({ sidecarDir, outDir, timeoutMs })
+      // Only a ready web dist is handed over: pointing the sidecar at a directory
+      // without index.html would turn a missing renderer build into a boot
+      // failure (N-err) instead of N-6's named FAIL/INFO.
+      handle = await launchNativeSidecar({ sidecarDir, outDir, timeoutMs, webDistDir: webDist.ready ? webDist.dir : null })
       planeOrigin = `http://127.0.0.1:${handle.port}`
       rec.add('N-1', '原生 sidecar 就绪（ready 帧带端口）', typeof handle.ready.port === 'number', `port=${handle.port}`)
       const info = await handle.driver.invoke('dsh-chamber:info', null, 10_000)
@@ -251,7 +305,11 @@ export async function runNativeAcceptance({
       const settings = await handle.driver.invoke('dsh-chamber:settings-get', null, 10_000)
       rec.add('N-3', 'B 桥 dsh-chamber:settings-get 应答', settings.ok === true, `ok=${settings.ok}`)
     } else {
-      rec.add('N-1', 'attach 模式：不启动 sidecar', true, `plane=${attachPlaneOrigin}`)
+      // Attach never launches a sidecar, so no ready frame can be observed: an
+      // unobserved frame is INFO, not a vacuous PASS (the old shape passed N-1
+      // just for being in attach mode).
+      rec.add('N-1', '原生 sidecar 就绪（ready 帧带端口）', null,
+        `未执行：attach 模式指向运行中的原生壳（plane=${attachPlaneOrigin}），不启动 sidecar；未观测 ready 帧`)
     }
 
     const health = await get(planeOrigin, '/health')
@@ -263,7 +321,6 @@ export async function runNativeAcceptance({
       `status=${hostile.status} body=${hostile.body.slice(0, 120)}`)
 
     const shell = await get(planeOrigin, '/')
-    const webDist = path.join(sidecarDir, 'dist', 'web', 'index.html')
     if (isShellIndex(shell.status, shell.body)) {
       const assets = parseShellAssets(shell.body)
       const assetResults = []
@@ -272,11 +329,27 @@ export async function runNativeAcceptance({
         assetResults.push(`${asset}→${probe.status}`)
       }
       rec.add('N-6', '原生装配壳 index 与声明资源可服务', assets.length > 0 && assetResults.every((item) => item.endsWith('→200')), assetResults.join(' ') || '（无声明资源）')
-    } else if (!existsSync(webDist)) {
-      rec.add('N-6', '原生装配壳（本次装配未携带 dist/web，未执行）', null,
-        `status=${shell.status}；--skip-vendor 装配不含 dist/web；打包 .app 的 Swift 侧另有 web dist 装载断言`)
+    } else if (!webDist.ready) {
+      // The leg could not execute: no web dist was resolved (explicitly pointed at
+      // an incomplete dir, or neither candidate carries index.html). INFO is
+      // honest for a local run; under --require-assembly it is a FAIL that names
+      // the missing artifact, so a CI step cannot keep its green while the
+      // "shell index + declared assets" chain never ran.
+      const missing = webDist.source === 'explicit'
+        ? `--web-dist 指向的目录缺 index.html：${path.join(webDist.dir, 'index.html')}`
+        : `未找到携带 web dist 的目录，候选均缺 index.html：${webDist.candidates.map((candidate) => path.join(candidate, 'index.html')).join('、')}`
+      rec.add(
+        'N-6',
+        webDist.source === 'explicit'
+          ? '原生装配壳 index 与声明资源可服务（无法执行：--web-dist 目录不完整）'
+          : '原生装配壳 index 与声明资源可服务（无法执行：未找到 web dist）',
+        requireAssembly ? false : null,
+        `${missing}；status=${shell.status}（控制面未伺服壳 index）；补救：pnpm run build:renderer 后把产物目录传给 --web-dist`
+          + `（或 --sidecar-dir 指向自带 dist/web 的装配）${requireAssembly ? '——--require-assembly：本腿必须真执行，缺件即 FAIL' : '——本次为默认档，记 INFO'}`,
+      )
     } else {
-      rec.add('N-6', '原生装配壳 index 服务', false, `status=${shell.status} body=${shell.body.slice(0, 120)}`)
+      rec.add('N-6', '原生装配壳 index 服务', false,
+        `status=${shell.status} body=${shell.body.slice(0, 120)}；web dist=${webDist.dir}（index.html 在，但伺服的不是壳 index）`)
     }
   } catch (error) {
     rec.add('N-err', '原生走查执行异常', false, String(error instanceof Error ? error.message : error))
@@ -288,16 +361,23 @@ export async function runNativeAcceptance({
       } catch (error) {
         rec.add('N-7', 'sidecar SIGTERM 干净退出（exit 0）', false, String(error instanceof Error ? error.message : error))
       }
+    } else if (attachPlaneOrigin !== null) {
+      // attach has no sidecar lifecycle: it neither spawns nor terminates the
+      // running shell, so the SIGTERM leg is INFO with the reason, never a
+      // silently missing row (the old shape just omitted N-7).
+      rec.add('N-7', 'sidecar SIGTERM 干净退出（exit 0）', null,
+        '未执行：attach 模式无 sidecar 生命周期（不启动、不终止运行中的原生壳）')
     }
   }
 
-  const counts = { passed: rec.passed, failed: rec.failed }
+  const counts = { passed: rec.passed, failed: rec.failed, info: rec.results.filter((entry) => entry.ok === null).length }
   const report = renderMarkdown({
     title: 'GUI 验收（--flavor native：原生 sidecar 走查）',
     meta: {
       模式: attachPlaneOrigin === null ? 'launch' : 'attach',
       控制面: planeOrigin,
       装配: sidecarDir,
+      'web dist': webDist.ready ? webDist.dir : `未找到（候选：${webDist.candidates.join('、')}）`,
       覆盖: 'sidecar 就绪/B 桥/US 面（HTTP）；WKWebView UI 不可驱动（无 CDP），仍属实机验收',
     },
     results: rec.results,
@@ -305,9 +385,11 @@ export async function runNativeAcceptance({
   writeFileSync(reportPath, report)
   writeFileSync(path.join(outDir, 'gui-native-report.json'), JSON.stringify({
     skipped: false,
-    meta: { mode: attachPlaneOrigin === null ? 'launch' : 'attach', planeOrigin, sidecarDir },
+    meta: { mode: attachPlaneOrigin === null ? 'launch' : 'attach', planeOrigin, sidecarDir, webDistDir: webDist.ready ? webDist.dir : null },
     results: rec.results,
   }, null, 2))
-  log(`\n=== --flavor native: ${counts.passed} pass / ${counts.failed} fail / ${rec.results.length} checks ===\nreport: ${reportPath}`)
-  return { skipped: false, results: rec.results, passed: counts.passed, failed: counts.failed, info: rec.results.filter((entry) => entry.ok === null).length, reportPath, planeOrigin }
+  // The tail line must not overstate coverage: INFO rows are counted separately
+  // from the rows that actually decided something (pass+fail).
+  log(`\n=== --flavor native: ${counts.passed} pass / ${counts.failed} fail / ${counts.info} info（共 ${rec.results.length} 项，实际执行 ${counts.passed + counts.failed} 项） ===\nreport: ${reportPath}`)
+  return { skipped: false, results: rec.results, passed: counts.passed, failed: counts.failed, info: counts.info, reportPath, planeOrigin }
 }

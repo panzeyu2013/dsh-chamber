@@ -98,6 +98,7 @@
 "fatal.readyPortMismatch" = "The sidecar ready port %d does not match the control-plane origin port %d the shell is about to load (%@) — refusing to load the wrong origin";
 "fatal.bridgeStartFailed" = "BridgeClient failed to start: %@";
 "fatal.sidecarStartFailedDetail" = "The sidecar failed to start: %@";
+"fatal.sidecarVersionMismatch" = "Sidecar version %@ does not match shell version %@ — refusing to start (rebuild with pnpm run build:sidecar / build-swift-app and reinstall the .app)";
 
 /* ===== 渲染恢复放弃 ===== */
 "renderer.crashTitle" = "dsh-chamber Frontend Error";

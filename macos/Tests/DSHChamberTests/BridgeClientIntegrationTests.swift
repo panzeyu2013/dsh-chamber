@@ -179,7 +179,7 @@ final class BridgeClientStubIntegrationTests: XCTestCase {
 
     // MARK: - 线程安全小工具（事件回调在管道读取线程，断言在测试线程）
 
-    /// 跨线程顺序记录器：onEvent 在管道读取线程回调、测试线程在 await 返回后
+    /// 跨线程顺序记录器：onNotify 在管道读取线程回调、测试线程在 await 返回后
     /// 补记——NSLock 保证追加/快照线程安全。
     private final class OrderRecorder {
         private let lock = NSLock()
@@ -264,7 +264,7 @@ final class BridgeClientStubIntegrationTests: XCTestCase {
 
     /// 3) push 拓扑 + 顺序：connect 的 sidecar 实现（sidecar-stub.ts:216-231）
     /// 先等 300ms、再推 desktop_ssh_status_changed（payload {id,status:"connected",
-    /// poc:true}）、**之后**才回响应。onEvent 在管道读取线程按帧行序回调，
+    /// poc:true}）、**之后**才回响应。onNotify 在管道读取线程按帧行序回调，
     /// 事件帧处理完才轮到响应帧 resume 续体——因此测试线程在 await 返回后
     /// 补记 "response" 时，事件必然已先记录。这就是 push 拓扑的顺序语义，
     /// 这里无 GUI 直测。
@@ -276,8 +276,8 @@ final class BridgeClientStubIntegrationTests: XCTestCase {
         let statusEvent = expectation(description: "desktop_ssh_status_changed（connected）")
         let recorder = OrderRecorder()
         let eventPayload = SyncBox<AnyCodable>()
-        bridge.onEvent = { event, payload in
-            recorder.record("event:\(event)")
+        bridge.onNotify = { event, payload in
+            recorder.record("notify:\(event)")
             if event == "desktop_ssh_status_changed" {
                 eventPayload.set(payload ?? .null)
                 statusEvent.fulfill()
@@ -303,7 +303,7 @@ final class BridgeClientStubIntegrationTests: XCTestCase {
         XCTAssertEqual(eventFields["poc"], .bool(true), "POC 桩事件应 loud 标记 poc:true")
 
         // 顺序断言：事件帧先于响应帧（read 线程行序处理 → 事件回调先于 resume）
-        XCTAssertEqual(recorder.snapshot(), ["event:desktop_ssh_status_changed", "response"],
+        XCTAssertEqual(recorder.snapshot(), ["notify:desktop_ssh_status_changed", "response"],
                        "push 事件必须先于 invoke 响应返回（design 25 §4.4.2 push 拓扑）")
     }
 
@@ -318,10 +318,10 @@ final class BridgeClientStubIntegrationTests: XCTestCase {
         defer { bridge.stop() }
         try bridge.start()
 
-        // onEvent 先挂：connect 也会推 connected 事件，这里只认 disconnected。
+        // onNotify 先挂：connect 也会推 connected 通知，这里只认 disconnected。
         let disconnected = expectation(description: "desktop_ssh_status_changed（disconnected）")
         let disconnectedPayload = SyncBox<AnyCodable>()
-        bridge.onEvent = { event, payload in
+        bridge.onNotify = { event, payload in
             guard event == "desktop_ssh_status_changed",
                   case .object(let fields)? = payload,
                   fields["status"] == .string("disconnected") else { return }

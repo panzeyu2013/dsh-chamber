@@ -9,6 +9,9 @@
  * Retained HostEdges members with no core consumer (setKeepAwake / tray /
  * focus / launchApp / login item / isPackaged) are declared on the contract
  * but NOT implemented here — their Electron actions live in main.ts.
+ * 这些成员是有意保留（design 25 §4.1 注），保留 + 逐成员退役判据见 host-edges.ts
+ * 头注；它们不在 preload/bridge-manifest 暴露面内，所以「本 flavor 不实现」不等于
+ * 死代码。
  */
 import { Notification, app, dialog, nativeTheme, powerMonitor, shell } from 'electron';
 import type { BrowserWindow } from 'electron';

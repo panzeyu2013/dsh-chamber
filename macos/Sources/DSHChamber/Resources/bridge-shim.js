@@ -9,7 +9,7 @@
  * platform) + 9 namespaces (desktopSsh/update/settings/systemResume/openIn/
  * deepLink/runtime/notifications/badge)（全表面实现）：每个方法的通道、
  * payload 形状与返回映射逐字对齐 preload.cts（50 个 invoke-backed 方法 →
- * 51 manifest invoke 通道（含 info）+ 9 个 on* 订阅 → 9 manifest push
+ * 52 manifest invoke 通道（含 info 与 native-theme-set 两个内部通道）+ 9 个 on* 订阅 → 9 manifest push
  * 通道），文件内零 poc-unimplemented 兜底。用户插件写面（apply/undo/
  * materialize/npm search/local add-remove）已随 2026-09 C 分层裁决退役。语义校验（payload schema、来源
  * 指纹、ACK 队列……）在 sidecar 原处理器（design 25 §4.4.1）；本文件是

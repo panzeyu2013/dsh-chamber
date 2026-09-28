@@ -43,6 +43,7 @@ export const GROUPS = {
     'scripts/gates/classify-ci-changes.test.mjs',
     'scripts/gates/run-checks.test.mjs',
     'scripts/gates/run-script-tests.test.mjs',
+    'scripts/gates/run-swift-tests.test.mjs',
     'scripts/gates/verify-md-links.test.mjs',
     'scripts/gates/verify-test-wiring.test.mjs',
     'scripts/gates/verify-workflow-action-pins.test.mjs',

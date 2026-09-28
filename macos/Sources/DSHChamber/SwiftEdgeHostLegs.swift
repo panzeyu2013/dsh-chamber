@@ -18,7 +18,7 @@
 //    setKeepAwake / setLoginItem（E14：SMAppService.mainApp——
 //    swift run 无 bundle 时 guard 诚实报 no-bundle）/ showError /
 //    setDebugMode（调试模式：WKWebView.isInspectable 运行时开关，应答带实测
-//    回读）/ launchApp（E12：appId 最小映射 finder/vscode + 缺省 loud）。
+//    回读）/ launchApp 已按 E12 退役（`swift-edge-unimplemented:launchApp`，与 Electron 侧对称）。
 //  - 退役：edge 面 "retireNotifications" 不在本类（node-edges 以 notify 发送
 //    退役，不经 edge）——notify 消费路由在 MainWindowController：按
 //    sourceId→identifier 登记表调 UNUserNotificationCenter

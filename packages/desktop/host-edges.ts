@@ -57,6 +57,24 @@ export type HostSetBadgeResult =
  *  无调用方），保留它们等于保留一条语义不同、无法锁步的死面。hostFacts 的
  *  resources 推送不被消费（Swift 侧可继续推送，未知事实键按前向兼容
  *  忽略）。
+ *  **零 core 消费者的有意保留面**（design 25 §4.1 注；全仓 `.member(` 调用点
+ *  为零，排除测试）：isPackaged、trayAvailable、focusMainWindow、launchApp 与
+ *  同步 setKeepAwake/setLoginItem。它们保留的是**契约本身**（两 flavor 的同形
+ *  seam + 逐成员 doc 注释）而不是用户路径；逐成员退役判据：
+ *    - launchApp（E12/S-05）：两 flavor 均无实现，等第一个消费者——消费者出现即
+ *      在两侧实现；若 open-in 最终确认永不由壳执行（实例内 seed-open-in 包独占），
+ *      随该裁决连同 node-edges 的转发一起删除。
+ *    - 同步 setKeepAwake/setLoginItem：settings 路径走装配 ctx 的 async 叶
+ *      （shell-assembly-ctx.ts），这两个成员只服务未来的 HostEdges 直接调用方；
+ *      到保留面复核时仍无直接调用方 → 删除成员、保留 ctx 叶。
+ *    - trayAvailable/isPackaged（E2/B1）：Electron 侧本就未实现，Swift 侧托盘恒建
+ *      （T-15）、打包路径由 ctx/参数解析；关闭行为与打包裁决不再需要经本 seam
+ *      暴露 → 删除成员与 node-edges 的宿主事实缓存。
+ *    - focusMainWindow（D3）：Electron 通知 click 在 electron-edges 内用
+ *      host.showMainWindow、Swift 在 SwiftEdgeHostLegs 内自办；core 不需要可复用
+ *      的聚焦入口 → 删除成员。
+ *  这些成员不在 preload/bridge-manifest 暴露面内（HostEdges 是主进程内部 seam），
+ *  删除不动 A 桥；保留的唯一依据是 design 25 §4.1 的明确保留声明。
  *  electron-edges.ts 头注释列出已实现集合；每个成员标注其设计行来源，
  *  未实现前 core/main.ts 不得调用（Pick 收窄在编译期保证）。 */
 export interface HostEdges {

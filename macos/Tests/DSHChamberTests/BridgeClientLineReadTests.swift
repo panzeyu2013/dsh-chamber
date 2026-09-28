@@ -312,31 +312,31 @@ final class BridgeClientLineReadTests: XCTestCase {
     func testFinishStdoutReadingDrainsFramesAndGuardsGeneration() throws {
         let bridge = try makeSilentBridge()
         defer { bridge.stop() }
-        var events: [String] = []
-        bridge.onEvent = { event, _ in events.append(event) }
+        var notifies: [String] = []
+        bridge.onNotify = { event, _ in notifies.append(event) }
         let generation = bridge.readerGenerationSnapshot()
 
         // 先把错代际（旧收尾）放在前面：守卫失效时它会消费管道并 finish 本会话 reader，
         // 后续正确代际就无帧可派发 —— 这样断言才具区分力。
         let stalePipe = Pipe()
-        stalePipe.fileHandleForWriting.write(Data(#"{"event":"stale"}"#.utf8) + Data([0x0A]))
+        stalePipe.fileHandleForWriting.write(Data(#"{"notify":"stale"}"#.utf8) + Data([0x0A]))
         bridge.finishStdoutReading(stalePipe, generation: generation + 1)
-        XCTAssertEqual(events, [], "错代际收尾不得派发任何帧")
+        XCTAssertEqual(notifies, [], "错代际收尾不得派发任何帧")
         XCTAssertGreaterThan(bridge.bytesAvailableForTesting(stalePipe.fileHandleForReading), 0,
                              "错代际收尾不得消费管道字节（用非阻塞探针：守卫失效时不挂测试）")
 
         // 正确代际：逐帧送达 + 幂等 + 再调错代际不重复派发
         let pipe = Pipe()
-        pipe.fileHandleForWriting.write(Data(#"{"event":"a"}"#.utf8) + Data([0x0A])
-            + Data(#"{"event":"b"}"#.utf8) + Data([0x0A]) + Data("tail-no-newline".utf8))
+        pipe.fileHandleForWriting.write(Data(#"{"notify":"a"}"#.utf8) + Data([0x0A])
+            + Data(#"{"notify":"b"}"#.utf8) + Data([0x0A]) + Data("tail-no-newline".utf8))
         BridgeClient.resetInboundParseCount()
         bridge.finishStdoutReading(pipe, generation: generation)
-        XCTAssertEqual(events, ["a", "b"], "抽干必须把管道残帧逐帧同步送达")
+        XCTAssertEqual(notifies, ["a", "b"], "抽干必须把管道残帧逐帧同步送达")
         XCTAssertEqual(BridgeClient.inboundParseCountSnapshot(), 3,
                        "两帧 + 无换行残尾各计一次解析尝试")
         bridge.finishStdoutReading(pipe, generation: generation)     // 幂等
         bridge.finishStdoutReading(pipe, generation: generation + 1)
-        XCTAssertEqual(events, ["a", "b"], "幂等/错代际收尾不得改动任何状态")
+        XCTAssertEqual(notifies, ["a", "b"], "幂等/错代际收尾不得改动任何状态")
     }
 
     /// 代际与读状态原子发布；错代际的收尾不得清掉
@@ -422,14 +422,14 @@ final class BridgeClientLineReadTests: XCTestCase {
     func testStaleGenerationDispatchIsDropped() throws {
         let bridge = try makeSilentBridge()
         defer { bridge.stop() }
-        var events: [String] = []
-        bridge.onEvent = { event, _ in events.append(event) }
+        var notifies: [String] = []
+        bridge.onNotify = { event, _ in notifies.append(event) }
         let generation = bridge.readerGenerationSnapshot()
-        let outcome = LineReader.Outcome(lines: [Data(#"{"event":"e"}"#.utf8)], overflowResets: 0)
+        let outcome = LineReader.Outcome(lines: [Data(#"{"notify":"e"}"#.utf8)], overflowResets: 0)
         bridge.processStdoutOutcome(outcome, generation: generation)
-        XCTAssertEqual(events, ["e"], "当前代际必须正常派发")
+        XCTAssertEqual(notifies, ["e"], "当前代际必须正常派发")
         bridge.processStdoutOutcome(outcome, generation: generation + 1)
-        XCTAssertEqual(events, ["e"], "非当前代际的帧必须丢弃（不得进入新会话）")
+        XCTAssertEqual(notifies, ["e"], "非当前代际的帧必须丢弃（不得进入新会话）")
     }
 
     /// 抽干批次上限（生产中 1024 批 ≫ 管道容量，不可自然触发）：命中即停止抽干，
@@ -439,7 +439,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         defer { bridge.stop() }
         bridge.setDrainBatchLimitForTesting(0)
         let pipe = Pipe()
-        let bytes = Data(#"{"event":"a"}"#.utf8) + Data([0x0A])
+        let bytes = Data(#"{"notify":"a"}"#.utf8) + Data([0x0A])
         pipe.fileHandleForWriting.write(bytes)
         bridge.finishStdoutReading(pipe, generation: bridge.readerGenerationSnapshot())
         XCTAssertEqual(pipe.fileHandleForReading.availableData.count, bytes.count,
@@ -498,7 +498,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         defer { bridge.stop() }
         let active = LockedCounter()
         let maxActive = LockedCounter()
-        bridge.onEvent = { _, _ in
+        bridge.onNotify = { _, _ in
             active.enter()
             maxActive.enter()
             Thread.sleep(forTimeInterval: 0.02)
@@ -506,7 +506,7 @@ final class BridgeClientLineReadTests: XCTestCase {
             maxActive.leave()
         }
         let generation = bridge.readerGenerationSnapshot()
-        let lines = (0..<4).map { Data("{\"event\":\"e\($0)\"}".utf8) }
+        let lines = (0..<4).map { Data("{\"notify\":\"e\($0)\"}".utf8) }
         let group = DispatchGroup()
         for _ in 0..<6 {
             group.enter()
@@ -600,14 +600,14 @@ final class BridgeClientLineReadTests: XCTestCase {
                                   arguments: ["-c", "sleep 0.2; exit 7"], environment: [:])
         try bridge.start()
         let stopReturned = DispatchSemaphore(value: 0)
-        bridge.onEvent = { _, _ in
+        bridge.onNotify = { _, _ in
             Thread.sleep(forTimeInterval: 0.4)     // 此刻收尾已在等 dispatchLock
             bridge.stop()                          // **同步**（旧锁序下此处确定性死锁）
             stopReturned.signal()
         }
         let generation = bridge.readerGenerationSnapshot()
         DispatchQueue.global().async {
-            bridge.dispatchStdoutForTesting([Data(#"{"event":"e"}"#.utf8)], generation: generation)
+            bridge.dispatchStdoutForTesting([Data(#"{"notify":"e"}"#.utf8)], generation: generation)
         }
         XCTAssertEqual(stopReturned.wait(timeout: .now() + 10), .success,
                        "帧回调内同步 stop() 不得与收尾形成死锁")
@@ -622,23 +622,23 @@ final class BridgeClientLineReadTests: XCTestCase {
         let bridge = try makeSilentBridge()
         defer { bridge.stop() }
         let reentered = DispatchSemaphore(value: 0)
-        var events: [String] = []
-        bridge.onEvent = { event, _ in
-            events.append(event)
+        var notifies: [String] = []
+        bridge.onNotify = { event, _ in
+            notifies.append(event)
             if event == "outer" {
                 // 与 handleTermination 的抽干同一调用形状（同一线程、持 dispatchLock）
-                bridge.dispatchStdoutForTesting([Data(#"{"event":"inner"}"#.utf8)],
+                bridge.dispatchStdoutForTesting([Data(#"{"notify":"inner"}"#.utf8)],
                                                 generation: bridge.readerGenerationSnapshot())
                 reentered.signal()
             }
         }
         let generation = bridge.readerGenerationSnapshot()
         DispatchQueue.global().async {
-            bridge.dispatchStdoutForTesting([Data(#"{"event":"outer"}"#.utf8)], generation: generation)
+            bridge.dispatchStdoutForTesting([Data(#"{"notify":"outer"}"#.utf8)], generation: generation)
         }
         XCTAssertEqual(reentered.wait(timeout: .now() + 10), .success,
                        "派发锁必须允许收尾抽干的同线程重入（NSRecursiveLock）")
-        XCTAssertEqual(events, ["outer", "inner"])
+        XCTAssertEqual(notifies, ["outer", "inner"])
     }
 
     /// 诊断日志必须有界且**绝不阻塞调用方**——宿主 stderr 停止排水
@@ -704,34 +704,34 @@ final class BridgeClientLineReadTests: XCTestCase {
     func testBatchGenerationIsRecheckedPerLine() throws {
         let bridge = try makeSilentBridge()
         defer { bridge.stop() }
-        var events: [String] = []
-        bridge.onEvent = { event, _ in
-            events.append(event)
-            if events.count == 1 { bridge.advanceSessionGenerationForTesting() }   // 批次中途 stop/重启
+        var notifies: [String] = []
+        bridge.onNotify = { event, _ in
+            notifies.append(event)
+            if notifies.count == 1 { bridge.advanceSessionGenerationForTesting() }   // 批次中途 stop/重启
         }
         let generation = bridge.readerGenerationSnapshot()
         let outcome = LineReader.Outcome(lines: [
-            Data(#"{"event":"a"}"#.utf8),
-            Data(#"{"event":"b"}"#.utf8),
-            Data(#"{"event":"c"}"#.utf8),
+            Data(#"{"notify":"a"}"#.utf8),
+            Data(#"{"notify":"b"}"#.utf8),
+            Data(#"{"notify":"c"}"#.utf8),
         ])
         bridge.processStdoutOutcome(outcome, generation: generation)
-        XCTAssertEqual(events, ["a"], "批次中途代际推进后，剩余行必须被逐行复核丢弃")
+        XCTAssertEqual(notifies, ["a"], "批次中途代际推进后，剩余行必须被逐行复核丢弃")
     }
 
     /// stop() 立刻推进会话代际——返回后本会话的在途帧必须被
     /// 派发代际门丢弃（否则 2s 内还会继续进回调）。
     func testNoFramesAfterStop() throws {
         let bridge = try makeSilentBridge()
-        var events: [String] = []
-        bridge.onEvent = { event, _ in events.append(event) }
+        var notifies: [String] = []
+        bridge.onNotify = { event, _ in notifies.append(event) }
         let generation = bridge.readerGenerationSnapshot()
-        let outcome = LineReader.Outcome(lines: [Data(#"{"event":"late"}"#.utf8)], overflowResets: 0)
+        let outcome = LineReader.Outcome(lines: [Data(#"{"notify":"late"}"#.utf8)], overflowResets: 0)
         bridge.stop()
         XCTAssertFalse(bridge.isRunning)
         // stop 后模拟「已切行、尚未派发」的旧代际帧：必须被门丢弃
         bridge.processStdoutOutcome(outcome, generation: generation)
-        XCTAssertEqual(events, [], "stop() 后本会话帧不得再进回调（代际已推进）")
+        XCTAssertEqual(notifies, [], "stop() 后本会话帧不得再进回调（代际已推进）")
         // 读状态代际不变（不变量：只有 start() 发布 reader/句柄+代际）；会话代际由
         // stop() 推进，这正是派发门在 stop 后立刻生效的依据。
         XCTAssertEqual(bridge.readerGenerationSnapshot(), generation)
@@ -881,7 +881,14 @@ final class BridgeClientLineReadTests: XCTestCase {
         bridge.handleIncomingLine(#"{"edge":"e","edgeId":true,"payload":null}"#)
         XCTAssertEqual(edges, ["desktop_ssh_connect"], "布尔 edgeId 必须丢弃")
 
-        XCTAssertEqual(BridgeClient.inboundParseCountSnapshot(), 7, "七行各一次解析（含被丢弃的违约帧）")
+        // event 帧族已退役（onEvent 与 FrameCodec 分类一并删除）：旧桩发来的
+        // event 行必须落地为未知帧丢弃，绝不误入 notify 出口——「路由已删」的回归钉。
+        let notifiesBeforeRetiredEvent = notifies.count
+        bridge.handleIncomingLine(#"{"event":"retired","payload":{"x":1}}"#)
+        XCTAssertEqual(notifies.count, notifiesBeforeRetiredEvent,
+                       "event 帧族不得进入 notify 出口（onEvent 路由已删除）")
+
+        XCTAssertEqual(BridgeClient.inboundParseCountSnapshot(), 8, "八行各一次解析（含被丢弃的违约帧）")
     }
 
     /// stderr 环形摘要的可观察契约（>40 行丢最旧、单行 400 字符截断、

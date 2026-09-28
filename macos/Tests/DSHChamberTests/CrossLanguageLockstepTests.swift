@@ -274,4 +274,63 @@ final class CrossLanguageLockstepTests: XCTestCase {
                       "served markup 必须声明 lang=\"zh-CN\"（页面语言兜底单源）")
     }
 
+    /// ready/pre-spawn 次序锁步（design 25 §3.1 的 2026-12 次序裁定）：
+    /// ready 帧先于 runtime 启动尾部（pre-spawn 在尾部事务内）。这不是实现细节
+    /// 而是启动次序契约：若改回「先 pre-spawn 再 ready」，全新 profile 的
+    /// runtime 探针/安装会把 ready 帧推迟数秒到数分钟，Swift 壳的呈现门（S-42）
+    /// 整段停在无窗状态，且页面与 spawn 不再重叠。Electron flavor 同序
+    /// （main.ts controlPlane.start → 建窗 → runStartupTail，:1521-1523 注释自证）。
+    func testSidecarReadyPrecedesRuntimeStartupTailLikeElectron() throws {
+        let entry = try source("packages/desktop/sidecar-entry.ts")
+        guard let start = entry.range(of: "await controlPlane.start()"),
+              let ready = entry.range(of: "writeProtocolLine({ notify: 'ready'"),
+              let tail = entry.range(of: "headless.runStartupTail()") else {
+            return XCTFail("sidecar-entry.ts 必须保留 start → ready → runStartupTail 三锚点")
+        }
+        XCTAssertLessThan(start.lowerBound, ready.lowerBound,
+                          "控制面 start 必须先于 ready 帧（端口已 bind 才可宣告就绪）")
+        XCTAssertLessThan(ready.lowerBound, tail.lowerBound,
+                          "ready 帧必须先行；runStartupTail（含 pre-spawn）不得延迟它")
+        // pre-spawn 只允许出现在 ready 之后（legacy 分支与启动尾部事务内各一处）。
+        guard let spawn = entry.range(of: "controlPlane.startLocal()") else {
+            return XCTFail("sidecar-entry.ts 必须保留 controlPlane.startLocal()（pre-spawn 调用）")
+        }
+        XCTAssertLessThan(ready.lowerBound, spawn.lowerBound,
+                          "pre-spawn 不得先于 ready 帧（会把 ready 推迟到 runtime 事务之后）")
+
+        let mainText = try source("packages/desktop/main.ts")
+        guard let mStart = mainText.range(of: "await controlPlane.start();"),
+              let mWindow = mainText.range(of: "const created = createMainWindow(rendererOrigin, true);"),
+              let mTail = mainText.range(of: "void assembly.runStartupTail();") else {
+            return XCTFail("main.ts 必须保留 controlPlane.start → createMainWindow → runStartupTail 三锚点")
+        }
+        XCTAssertLessThan(mStart.lowerBound, mWindow.lowerBound,
+                          "Electron：窗口创建必须晚于控制面 start（白窗防护）")
+        XCTAssertLessThan(mWindow.lowerBound, mTail.lowerBound,
+                          "Electron：runtime 启动尾部必须晚于窗口创建（spawn 与页面加载重叠）")
+    }
+
+    /// 壳版本与 sidecar 版本同源 = packages/desktop/package.json：build-sidecar
+    /// 写入装配目录 package.json（sidecar-entry 随 ready 帧上报 shellVersion），
+    /// build-swift-app 写入 Info.plist CFBundleShortVersionString。AppDelegate
+    /// onReady 的相等 fail-loud 断言（SidecarVersionContract）只有在这个单源
+    /// 成立时才有意义——两侧任一改读别处，断言就该红。
+    func testPackagedShellAndSidecarVersionShareOneSource() throws {
+        let buildSidecar = try source("packages/desktop/scripts/build-sidecar.mjs")
+        let buildSwift = try source("macos/scripts/build-swift-app.mjs")
+        for (text, name) in [(buildSidecar, "build-sidecar.mjs"),
+                             (buildSwift, "build-swift-app.mjs")] {
+            XCTAssertTrue(text.contains("path.join(desktopDir, 'package.json')"),
+                          "\(name) 必须从 desktopDir/package.json 读版本（单一来源）")
+            XCTAssertTrue(text.contains("desktopPkg.version"),
+                          "\(name) 必须取 desktopPkg.version（不得另找版本源）")
+        }
+        XCTAssertTrue(buildSidecar.contains(
+            "version: typeof desktopPkg.version === 'string' ? desktopPkg.version : '0.0.0'"),
+            "build-sidecar 必须把 desktop 版本原样写进装配目录 package.json")
+        XCTAssertTrue(buildSwift.contains(
+            "const version = typeof desktopPkg.version === 'string' ? desktopPkg.version : '0.0.0'"),
+            "build-swift-app 必须把同一个字面量注入 Info.plist VERSION")
+    }
+
 }

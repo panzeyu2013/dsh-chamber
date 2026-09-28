@@ -91,7 +91,7 @@
 
 - G19 部分修复（open）：CI中启动签名/公证的打包 .app仍不可达（凭据 + GUI会话）；现仅静态校验（`.github/workflows/release.yml:635-667,1125-1189`），双击 → sidecar spawn → dist/web装载仍属release/实机验收项。
 
-- G43 open（arch-02 P0-1 复核）：packages/dsh-api-gateway 已是第二实现型 fork——4 个上游 client 文件的补丁面约 4,600 行（packages/dsh-api-gateway/src/client/stream-client.ts#RemoteStreamMuxClient、packages/dsh-api-gateway/src/client/journal-stream.ts#RemoteJournalStream、packages/dsh-api-gateway/src/client/remote-stream.ts#RemoteStream、packages/dsh-api-gateway/src/client/index.ts#apply），另加 4 个 chamber 自有文件（packages/dsh-api-gateway/src/client/remote-retry-policy.ts#remoteStreamRetryDelayMs、packages/dsh-api-gateway/src/client/stream-stall-policy.ts#decideStreamStallAction、packages/dsh-api-gateway/src/client/stream-carrier-fact.ts#createCarrierFailureReporter、packages/dsh-api-gateway/src/client/stream-forensics.ts#createStreamForensicsReporter），并引入 chamber 专属运行时依赖 `packages/dsh-api-gateway/package.json#=literal:"@dsh-chamber/dsh-stream-state"`；而 registry 原记 authority: upstream、deviations: []、relatedGates: []、status: aligned、符号锚仅 1 个——登记面与事实相反，会把「能否整体退役 / 换 vendor 补丁」的决策建立在错误的规模假设上。取舍 / 结论 = 按第二实现型 fork 登记：authority: chamber、显式 deviations: [G43]、relatedGates 指向真实门（test:api-gateway、typecheck:api-gateway、typecheck:connection、verify:upstream-lifecycle-contract 与三条 patch-lock 测试），升级按 fork 重放而非镜像同步。证据：`scripts/upstream/registry.json#=literal:"fork.dsh-api-gateway"`；patch-lock 测试 packages/dsh-api-gateway/test/patch-lock/journal-stall-watchdog-lock.test.ts、packages/dsh-api-gateway/test/patch-lock/remote-stream-carrier-retry-lock.test.ts；反向断言 packages/dsh-api-gateway/test/retry-policy/remote-retry-policy.test.ts。（补丁面的唯一语义门仍是 patch-lock 源文本锁 + verify-upstream-lifecycle-contract；原先的「补丁面第 5 项：**开帧相位机（F1）**」（`OpeningTicket`/`openingAnswered`/`openingAccepted`/跨世代预算/`RemoteStreamOpeningBudgetError`/`opening-orphaned`/`opening-budget-exhausted`/`opening-miss`）已整体退役：页面侧对 opening item 的 `accept()` 发生在 transport 层、早于页面应用快照，页面抛错对它不可观测；终局错误是普通 `Error`、vendor 永不写 `error`，该相位机既不可观测也基本不可达。保留的补丁面 = 载波重试、单档 30 s 开帧期限 + 静默 socket 升级（含 teardown 15 s 与 `OPENING_STALL_STREAK` 门）、journal 静默看门狗、mux 自查与握手期限；design 14 §D4）。退役判据 = patched 文件的继承面补 1–2 条「读 pin 住 vendor 源」的行为契约（上游同一文件漂移即红）；registry 显式 deviations + relatedGates 与升级清单补齐。
+- G43 open（arch-02 P0-1 复核）：packages/dsh-api-gateway 已是第二实现型 fork——4 个上游 client 文件的补丁面约 4,600 行（packages/dsh-api-gateway/src/client/stream-client.ts#RemoteStreamMuxClient、packages/dsh-api-gateway/src/client/journal-stream.ts#RemoteJournalStream、packages/dsh-api-gateway/src/client/remote-stream.ts#RemoteStream、packages/dsh-api-gateway/src/client/index.ts#apply），另加 4 个 chamber 自有文件（packages/dsh-api-gateway/src/client/remote-retry-policy.ts#remoteStreamRetryDelayMs、packages/dsh-api-gateway/src/client/stream-stall-policy.ts#decideStreamStallAction、packages/dsh-api-gateway/src/client/stream-carrier-fact.ts#createCarrierFailureReporter、packages/dsh-api-gateway/src/client/stream-forensics.ts#createStreamForensicsReporter），并引入 chamber 专属运行时依赖 `packages/dsh-api-gateway/package.json#=literal:"@dsh-chamber/dsh-stream-state"`；而 registry 原记 authority: upstream、deviations: []、relatedGates: []、status: aligned、符号锚仅 1 个——登记面与事实相反，会把「能否整体退役 / 换 vendor 补丁」的决策建立在错误的规模假设上。取舍 / 结论 = 按第二实现型 fork 登记：authority: chamber、显式 deviations: [G43]、relatedGates 指向真实门（test:api-gateway、typecheck:api-gateway、typecheck:connection、verify:upstream-lifecycle-contract 与三条 patch-lock 测试），升级按 fork 重放而非镜像同步。证据：`scripts/upstream/registry.json#=literal:"fork.dsh-api-gateway"`；patch-lock 测试 packages/dsh-api-gateway/test/patch-lock/journal-stall-watchdog-lock.test.ts、packages/dsh-api-gateway/test/patch-lock/remote-stream-carrier-retry-lock.test.ts；反向断言 packages/dsh-api-gateway/test/retry-policy/remote-retry-policy.test.ts。（补丁面的唯一语义门仍是 patch-lock 源文本锁 + verify-upstream-lifecycle-contract；原先的「补丁面第 5 项：**开帧相位机（F1）**」（`OpeningTicket`/`openingAnswered`/`openingAccepted`/跨世代预算/`RemoteStreamOpeningBudgetError`/`opening-orphaned`/`opening-budget-exhausted`/`opening-miss`）已整体退役：页面侧对 opening item 的 `accept()` 发生在 transport 层、早于页面应用快照，页面抛错对它不可观测；终局错误是普通 `Error`、vendor 永不写 `error`，该相位机既不可观测也基本不可达。保留的补丁面 = 载波重试、单档 30 s 开帧期限 + 静默 socket 升级（含 teardown 15 s 与 `OPENING_STALL_STREAK` 门）、journal 静默看门狗、mux 自查与握手期限；design 14 §D4）。退役判据 = patched 文件的继承面补 1–2 条「读 pin 住 vendor 源」的行为契约（上游同一文件漂移即红）；registry 显式 deviations + relatedGates 与升级清单补齐。升级裁决点（I-13）：uplink 半边——descriptor 带 uplink 时维持 fail-loud（门 = packages/dsh-api-gateway/test/behavior/client-uplink-rejection.test.ts，已进 registry relatedGates + 升级清单 §1），真机出现需求再重放 rc.2 客户端半边。
 
 **文档漂移（D）**
 
@@ -190,7 +190,7 @@
 - T-25 排障日志面
 - T-27 首帧/重载底色
 - P-01 sidecar帧长护栏
-- P-02 ready帧port不被消费也不校验
+- P-02 ready帧 port 已校验（不一致 fatal），无消费者的是 shellVersion
 - P-03 两个保留契约成员Swift语义不同
 - P-04 sidecar无内建dsh workspace回退
 - P-05 host包源目录8层向上启发式探测
@@ -252,7 +252,7 @@
 - D4 design 25的`sidecar-ctx.ts`锚点刷成当前值
 - D5 `bridge-shim.js:64-67,437`的loud stub描述删除
 - D6 design 25 §0.1-E2/:110/§7与当前UI能力门语义一致
-- D7 装配态web dist候选为「`resourcesDir/dist/web`
+- D7 装配态 web dist 候选序为「`resourcesDir/dist/web` → `sidecar/dist/web`」（AppDelegate.swift 的 resourceURL 优先；dev 走 `packages/desktop/dist/web`；PackagedLayoutTests 钉住）
 - D8 锚点校正：行为属实但旧锚点错
 - D9 模板注释/取值与出货行为一致
 - D10 design 25:467-472与实现语义一致

@@ -925,6 +925,27 @@ assert.doesNotMatch(nativeInfoPlistTemplate, /<string>1[23]\.0<\/string>/,
   'no pre-14.4 fallback may be reintroduced in the native plist')
 assert.doesNotMatch(swiftPackageManifest, /\.macOS\(\.v1[23]\)/,
   'no pre-14.4 fallback may be reintroduced in the Swift package')
+// Dual-flavor identity lockstep (design 25 §6.2): both shells install side by side
+// in /Applications and share one userData root + directory lock, so their bundle
+// identifiers MUST differ — one shared id would fold LaunchServices registration,
+// notification authorization and WebKit storage (T-18/T-23) into one identity while
+// the two flavors are separate apps. Each identifier is also pinned BY NAME here:
+// the native plist and the Electron manifest live in different trees, so renaming
+// either side must be an explicit, reviewed edit (T-14/T-29).
+const nativeBundleIdentifier = /<key>CFBundleIdentifier<\/key>\s*<string>([^<]+)<\/string>/
+  .exec(nativeInfoPlistTemplate)?.[1]
+assert.equal(
+  nativeBundleIdentifier,
+  'com.dshchamber.native',
+  'the native shell bundle id is released identity: changing it re-asks notification permission and moves WebKit storage')
+assert.equal(
+  desktopPackage.build?.appId,
+  'com.dshchamber.desktop',
+  'the Electron shell appId is the released identity on its side (same string as main.ts setAppUserModelId)')
+assert.notEqual(
+  nativeBundleIdentifier,
+  desktopPackage.build?.appId,
+  'the two flavors must never share a bundle id — they coexist on one machine and must stay distinguishable')
 // app-builder-lib keeps a locale only when wanted === basename or wanted.startsWith(
 // basename + '-' | '_') (ElectronFramework.js:81-88). Mac locale dirs use an UNDERSCORE
 // (zh_CN.lproj), so the hyphenated "zh-CN" of the win/linux .pak legs can never match and

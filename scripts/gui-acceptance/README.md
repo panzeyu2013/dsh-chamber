@@ -11,7 +11,7 @@
 |---|---|
 | `run.mjs` | 单一入口：`--live` / `--attach` / `--dev`（`--flavor electron|native`） |
 | `probe.mjs` | `--live`：对**运行中的应用**做只读 HTTP/WS 探测（安装态亦可，无 CDP） |
-| `native.mjs` | `--flavor native`：驱动**原生壳 spawn 的 sidecar 装配**（ready/B 桥/控制面 HTTP），或 `--attach` 探测运行中的原生壳控制面；WKWebView UI 不可驱动（没有 CDP 端点）。`--require-assembly` 是机器门形态：装配缺失记 FAIL 而非 SKIP（ci.yml 的 native 装配启动门用它） |
+| `native.mjs` | `--flavor native`：驱动**原生壳 spawn 的 sidecar 装配**（ready/B 桥/控制面 HTTP），或 `--attach` 探测运行中的原生壳控制面；WKWebView UI 不可驱动（没有 CDP 端点）。`--require-assembly` 是机器门形态：装配缺失（以及 N-6 找不到 web dist）记 FAIL 而非 SKIP/INFO（ci.yml 的 native 装配启动门用它）。`--web-dist <dir>` 给出 N-6 要判的 renderer 产物目录（未给时探测 `sidecarDir/dist/web` → `sidecarDir/../dist/web`） |
 | `walkthrough.mjs` | CDP 界面走查：结构断言 + 截图 + 控制台/网络事实采集（含 `W-4b` 行悬停卡片四条腿：标记锚定的升起/清卡 + 标题同一性、**实测窗口内**的搁浅竞态、A→B 互斥自愈、blur/hidden 清卡） |
 | `launch.mjs` | `--dev`：一次性 dev 实例（隔离 user-data、固定控制面端口、CDP 端口） |
 | `cdp.mjs` | 零依赖 CDP 客户端（Node 内置 `WebSocket`/`fetch`） |
@@ -33,12 +33,15 @@
 pnpm run acceptance:gui                      # --live：探测运行中的应用（只读，最安全）
 pnpm run acceptance:gui -- --attach          # 对已带 CDP 的 dev 实例做界面走查
 pnpm run acceptance:gui -- --dev             # 自起 dev 实例 → 走查 → 自动关闭
+# --dev 同时把 managed dsh 起始端口设为 cpPort+10（DSH_CHAMBER_DSH_PORT_BASE 可覆盖），
+# 因此在跑安装占用 17510..17514 时也能启动。
 pnpm run acceptance:gui -- --dev --require-hover   # 悬停腿必须真实执行：未执行（INFO）计为 FAIL
 pnpm run acceptance:gui -- --live --sources gateway-a,gateway-b   # 显式指定要扫的远程来源
 pnpm run acceptance:gui -- --live --plane http://127.0.0.1:17540 --registry <isolated-userData>/ssh-instances.json  # MX 来源与该平面同源
 pnpm run acceptance:gui -- --flavor native   # 原生 flavor：自起 sidecar 装配 → 走查 → SIGTERM 关闭
 pnpm run acceptance:gui -- --flavor native --attach --plane http://127.0.0.1:17500   # 探测运行中的原生壳控制面
-node scripts/gui-acceptance/run.mjs --flavor native --require-assembly             # 机器门：装配缺失即 FAIL（ci.yml 用同一条命令）
+pnpm run acceptance:gui -- --flavor native --web-dist packages/desktop/dist/web    # 让 N-6 判真实 renderer 产物（壳 index + 声明资源）
+node scripts/gui-acceptance/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web   # 机器门：装配缺失或 N-6 缺 web dist 即 FAIL（ci.yml 用这一形态；该步内先 build:renderer）
 pnpm run test:gui-acceptance                 # 纯判据单测（无需 GUI，CI 跑）
 ```
 
@@ -67,8 +70,15 @@ Electron 那样驱动它的 DOM。`--flavor native` 因此驱动**打包 .app �
 - `N-1` ready 帧（NDJSON B 桥，与 Swift BridgeClient 同一协议）带真实端口；
 - `N-2`/`N-3` `dsh-chamber:info`（platform 与宿主一致）与 `dsh-chamber:settings-get`；
 - `N-4`/`N-5` 控制面 `/health` 与敌意 Origin 的 403 `origin_forbidden` 围栏；
-- `N-6` 装配携带 `dist/web` 时壳 index 与声明资源全部 200；未携带时记 **INFO**（不假装通过）；
-- `N-7` SIGTERM 后干净退出（exit 0）。
+- `N-6` 对解析到的 web dist（`--web-dist` 显式给定，否则探测 `sidecarDir/dist/web` →
+  `sidecarDir/../dist/web`，即 .app 的 `Contents/Resources/dist/web`；判据是 `index.html` 在不在）
+  断言壳 index 与它声明的资源全部 200；没解析到就是"腿没执行"：默认档记 **INFO** 并写明缺哪个
+  `index.html`，`--require-assembly` 下记 **FAIL**（机器门不允许腿没跑却变绿）；
+- `N-7` SIGTERM 后干净退出（exit 0）；`--attach` 无生命周期时记 **INFO**。
+
+`--attach` 原生档的 `N-1`/`N-7` 也是 **INFO**：没有 ready 帧可观测（未观测 ≠ PASS），也没有
+sidecar 生命周期可终止（attach 不启动、也不终止运行中的壳）。收尾行分开报 pass/fail 与 INFO，
+"实际执行"只数真正判过的项。
 
 **不能查**：WKWebView 的界面本身（DOM、悬停卡片、设置面、首启向导）。这些腿只属于 Electron
 `--attach`/`--dev` 或实机目检；`--attach` 原生档只探测运行中壳的控制面 HTTP，接不进它的 web view。
@@ -80,9 +90,12 @@ Electron 那样驱动它的 DOM。`--flavor native` 因此驱动**打包 .app �
 - 装配缺失/半成品：默认打印 `SKIP: …`（列出缺失路径与补救命令）并以退出码 0 结束，报告里记 INFO——
   **不是静默通过**。`pnpm run test:gui-acceptance`（纯判据层）不构建 sidecar 装配，所以那里必定是这条
   loud skip 路径；本地/发布验收先构建装配即可得到真实走查。
-- **机器门（G33）**：CI 的 `test-macos` 在 `Compiled sidecar smoke` 之后跑
-  `node scripts/gui-acceptance/run.mjs --flavor native --require-assembly`——它**要求**上一步刚构建的
-  sidecar 装配在场（缺失即 FAIL，退出码 1），因此启动链的机器验证不会因为丢了构建前置而变绿；
+- **机器门（G33）**：CI 的 `test-macos-pack` 在 `Compiled sidecar smoke` 之后跑
+  `pnpm run build:renderer` + `node scripts/gui-acceptance/run.mjs --flavor native --require-assembly
+  --web-dist packages/desktop/dist/web`——它**要求**上一步刚构建的 sidecar 装配在场（缺失即 FAIL，退出码 1），
+  并且 N-6 必须真的对 renderer 产物执行（找不到 web dist 同样 FAIL）：启动链与"壳 index + 声明资源"
+  两条机器验证都不会因为丢了构建前置而变绿。renderer 构建放在该步内，是因为这个 job 在它之前没有任何
+  步骤产出 renderer（`ensure:artifacts` 只自举 sidecar/host 产物），而 `--web-dist` 必须指向真实产物。
   该步骤名同时进 `verify-release-ci-proof.mjs` 的必跑表，删掉它 release proof 会红。原生壳 spawn 出的
   sidecar 启动链由此在无 GUI 环境被机械验证，而 .app 双击与 WKWebView 界面仍归实机。
 
@@ -95,6 +108,7 @@ Electron 那样驱动它的 DOM。`--flavor native` 因此驱动**打包 .app �
 | `[cordis-client-runner] … has no active Connection` | 记为**上游噪声**（原始文本仍入报告） | 上游 `cordis-client-runner/src/client/inspect-registry.ts` 启动期日志，非 chamber 缺陷 |
 | 首启向导（`settings.onboarding`） | `--dev` 会**走完**（优先点关闭动作，最多 4 步自动推进）；`--attach` **绝不代点**，记 INFO 并跳过设置面走查 | 推进向导会写实例自身状态：只允许发生在一次性实例上 |
 | `W-4a` 来源级收拢（会写持久化偏好 `sourceFolded`） | `--dev` 执行（收拢→展开往返，并断言往返后无残留）；`--attach` 记 **INFO** 并写明原因 | design 06 §3.1；与上一行"只允许写在一次性实例上"同一口径 |
+| `--flavor native --attach`（不启动 sidecar） | `N-1`（ready 帧）/ `N-7`（SIGTERM 退出）记 **INFO** 并写明"未观测/无生命周期" | 未观测不算 PASS；attach 不启动也不终止运行中的壳（不碰他人实例） |
 | 实例未就绪（`dsh.status != ready`） | 实例面检查（`IP-*`/`IN-1`/`CP-5`）转 **INFO** 并说明隔离期 503 属预期 | design 18 §3.4 |
 | 实例确无可悬停的卡片行（只有来源头，或只有按设计无卡片的未分组桶头 `[data-chamber-row][role="treeitem"]`） | `W-4b`/`W-4b-race`/`W-4b-swap`/`W-4b-dismiss` 记 **INFO** 并写明未执行（`--require-hover` 时改记 **FAIL**） | design 06 §7：来源头、未分组桶头都不是卡片锚点（`ServerSection.tsx:1436-1437` 有行属性但 `:1743-1746` 不套 `RowHoverCard`） |
 | 有锚点形状的行（父节点是 `RowHoverCard` 的锚点 `<span>`）却没有 `[data-chamber-hovercard-anchor]` | `W-4b` 记 **FAIL** 并点名缺失标记 | **不是环境事实**：`--attach`/`--dev` 面向本仓 dev 构建，标记由 `RowHoverCard.tsx` 落地；缺标记 = 修复没打进包，正是 `W-4b` 要拦的 |
