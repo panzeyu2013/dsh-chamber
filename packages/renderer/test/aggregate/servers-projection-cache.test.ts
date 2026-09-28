@@ -17,6 +17,7 @@ import {
 import { createServerProjectionCache, deriveServers, type ServerProjectionCache } from '../../src/host/servers.ts'
 import { sourceIdForInstance } from '../../src/transport-source.ts'
 import type { HealthResponse } from '../../src/api.ts'
+import type { SessionFactsRow, SessionFactsSnapshot } from '../../src/session-facts-source.ts'
 import type { SshInstanceSpec, SshStatusProjection } from '../../src/global.d.ts'
 
 const READY_HEALTH = { dsh: { status: 'ready' } } as unknown as HealthResponse
@@ -128,6 +129,42 @@ test('projection signature cache: remembered signatures serve the published arra
   rememberServersProjectionSignature(servers, 'remembered')
   assert.equal(cachedServersProjectionSignature(servers), 'remembered')
   assert.equal(cachedServersProjectionSignature([...servers]), computed, 'a copy is not remembered')
+})
+
+/** facts 通道完整行形（session-facts-source.SessionFactsRow）。 */
+function factsRow(over: Partial<SessionFactsRow> = {}): SessionFactsRow {
+  return {
+    sessionId: 's1', running: false, pendingKind: null, subagentCount: 0, updatedAt: 5,
+    completedAt: null, completedAtSource: null, lastTurnEnd: null, factAt: 5, ...over,
+  }
+}
+
+function factsSnapshot(rows: Record<string, SessionFactsRow>): SessionFactsSnapshot {
+  return {
+    verdict: 'ok', degradation: null, mode: 'sse', hostState: 'ready', serviceable: true,
+    stale: false, cursor: 1, lastEventAt: null, baselines: 1, rows,
+  }
+}
+
+test('I-12 facts overlay: activity is the lineage classification, never the raw count', () => {
+  const f = fixture()
+  const servers = deriveServers(READY_HEALTH, [], f.remoteInstances, f.remoteStatus, f.aggregates,
+    {}, {}, {}, 'local', {}, {}, {}, {}, {}, {}, {}, 'zh',
+    { [REMOTE_SOURCE_ID]: factsSnapshot({
+      a: factsRow({ sessionId: 'a', subagentCount: 2, lineageVerified: true }),
+      b: factsRow({ sessionId: 'b', lineageVerified: true }),
+      c: factsRow({ sessionId: 'c', subagentKnown: true }),
+      d: factsRow({ sessionId: 'd', subagentCount: 3 }),
+    }) })
+  const remote = servers.find(server => server.id === REMOTE_SOURCE_ID)
+  const sessions = remote?.runtime?.sessions ?? {}
+  assert.equal(sessions.a?.subagentActivity, 'running', 'verified running child = busy')
+  assert.equal(sessions.a?.runningSubagents, 2, 'the count still rides for display')
+  assert.equal(sessions.b?.subagentActivity, 'none', 'verified zero children = idle')
+  assert.equal(sessions.c?.subagentActivity, 'running', 'known durable child fails closed (busy)')
+  assert.equal(sessions.c?.runningSubagents, undefined, 'no positive count is invented')
+  assert.equal(sessions.d?.subagentActivity, 'unknown', 'unverified presence count is never running')
+  assert.equal(sessions.d?.runningSubagents, 3, 'the raw count still rides, but only for display')
 })
 
 test('projection signature cache: fragments are keyed by source identity (immutability contract)', () => {

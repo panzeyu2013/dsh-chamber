@@ -72,6 +72,26 @@ test('P5: subagent activity is tri-state, and unknown never claims the subagent 
   assert.deepEqual(sessionRowState({ subagentActivity: 'unknown', running: true }).state, 'running')
 })
 
+test('I-12: the facts-derived activity decides suppression; the raw count no longer does', () => {
+  // 未认证的 presence 计数（facts overlay 分类 unknown）不得冒充「在跑」：完成点照常可见。
+  const presence = sessionRowState({ completed: true, runningSubagents: 3, subagentActivity: 'unknown' })
+  assert.equal(presence.state, 'completed')
+  assert.equal(presence.completedVisible, true)
+  // 认证/保留 busy（分类 running）仍压制；有正计数时保留 subagents:N 形态与计数。
+  const verified = sessionRowState({ completed: true, runningSubagents: 2, subagentActivity: 'running' })
+  assert.equal(verified.state, 'subagents:2')
+  assert.equal(verified.subagents, 2)
+  assert.equal(verified.suppressedBy, 'subagents')
+  // fail-closed busy 而没有正计数（subagentKnown 的保留子代）：落 running/none，绝不报 completed。
+  const known = sessionRowState({ completed: true, subagentActivity: 'running' })
+  assert.equal(known.state, 'none')
+  assert.equal(known.completedVisible, false)
+  assert.equal(known.suppressedBy, 'subagents')
+  assert.equal(sessionRowState({ completed: true, running: true, subagentActivity: 'running' }).state, 'running')
+  // 认证 idle / 明确 none（无在跑子代）不压制。
+  assert.equal(sessionRowState({ completed: true, subagentActivity: 'none' }).state, 'completed')
+})
+
 test('goal gates: presentation suppresses on phase active (unknown activation included); hold needs armed', () => {
   const active = (over: Partial<GoalFact> = {}): GoalFact => ({ goalId: 'g1', revision: 2, phase: 'active', ...over })
   // 呈现门：相位 active 即压制，activation unknown 也压制（R2-J）。

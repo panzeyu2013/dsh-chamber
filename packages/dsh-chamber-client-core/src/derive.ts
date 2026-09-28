@@ -769,6 +769,8 @@ export function projectInstanceSnapshot(
 export interface RuntimeFactsOverlayRow {
   pending?: 'approval' | 'plan-review' | 'question'
   runningSubagents?: number
+  /** facts 谱系活动三值（I-12 判定侧同映射：busy=verified>0 或 known；idle=verified 0；unknown=无谱系证据）。 */
+  subagentActivity?: 'busy' | 'idle' | 'unknown'
   /** 观察者刷新这一行事实的 host 域毫秒（渲染字段，不参与任何判定）。 */
   factAt?: number
   /**
@@ -836,6 +838,8 @@ export function mergeRuntimeFacts(
       if (next.runningSubagents === undefined && extra.runningSubagents !== undefined && extra.runningSubagents > 0) {
         next = { ...next, runningSubagents: extra.runningSubagents }
       }
+      // I-12：壳轨声明优先；缺席时按判定侧三值填补（绝不由 runningSubagents 反推）。
+      if (next.subagentActivity === undefined && extra.subagentActivity !== undefined) next = { ...next, subagentActivity: extra.subagentActivity === 'busy' ? 'running' : extra.subagentActivity === 'idle' ? 'none' : 'unknown' }
       // I5 时间戳只随观察者走，overlay 直接写；它是渲染字段，不参与判定。
       if (extra.factAt !== undefined && extra.factAt > 0) next = { ...next, factAt: extra.factAt }
       // goal（P2a）：通道行已给出（对象或显式 null）即权威；absent = unknown 由
@@ -1008,7 +1012,6 @@ export function runtimeReportSignature(
   // 是「缺席即删除」的权威门，属判定输入；只签在 includeRunning（App 身份校验）
   // 路径，投影签名不得因它单独翻转而重发布，否则一次「事实未变、只有 listComplete
   // 翻到 ready」的上报会被去重吞掉，派生层永远看不到权威缺席门。
-  // 去重吞掉，派生层永远看不到权威缺席门（同 832-845 的签名教训）。
   const listComplete = !includeRunning || report.listComplete === undefined
     ? ''
     : `#l:${report.listComplete ? '1' : '0'}`

@@ -26,7 +26,7 @@ import {
   type WorkspaceEchoLedger,
 } from '@dsh-chamber/dsh-chamber-client-core'
 import type { ConnectionSummary, HealthResponse } from '../api.ts'
-import { isFactsUsable, type SessionFactsSnapshot } from '../session-facts-source.ts'
+import { isFactsUsable, type SessionFactsRow, type SessionFactsSnapshot } from '../session-facts-source.ts'
 import { sourceSessionFactsMode } from '../session-facts-mode.ts'
 import { LOCAL_INSTANCE_ID } from '../local-instance.ts'
 import type { ShellState } from '../shell.ts'
@@ -79,6 +79,18 @@ export type HostFacts = { dshVersion?: string }
  * goal（v5 §6 P2a）：无壳来源的 goal 行事实经 overlay 进投影（通道行优先，
  * overlay 只在通道 Unknown 时填补，含显式 null）；字段缺席 = unknown，不写行。
  */
+/**
+ * facts 行的子代理活动分类（I-12）：与判定侧 completion-observation 的 facts-only 分支
+ * 逐条同映射——认证过的 count>0 = busy、认证过的 0 = idle；认证位缺席但保留表命中 =
+ * busy（fail-closed）；其余（watcher 平面）count>0 只作 presence，绝不 busy。呈现面
+ * （行态/徽标）由此取代「原始计数 >0 即在跑」的旧反推。
+ */
+function factsSubagentActivity(row: SessionFactsRow): 'busy' | 'idle' | 'unknown' {
+  if (row.lineageVerified === true) return row.subagentCount > 0 ? 'busy' : 'idle'
+  if (row.subagentKnown === true) return 'busy'
+  return row.subagentCount > 0 ? 'unknown' : 'idle'
+}
+
 function factsOverlay(snapshot: SessionFactsSnapshot | undefined): RuntimeFactsOverlay | undefined {
   if (snapshot === undefined || !isFactsUsable(snapshot)) return undefined
   const overlay: Record<string, RuntimeFactsOverlayRow> = {}
@@ -92,6 +104,8 @@ function factsOverlay(snapshot: SessionFactsSnapshot | undefined): RuntimeFactsO
     overlay[row.sessionId] = {
       ...(pending !== undefined ? { pending } : {}),
       ...(row.subagentCount > 0 ? { runningSubagents: row.subagentCount } : {}),
+      // 判定侧同一分类（busy/idle/unknown）；计数仍随行渲染，但不再决定压制。
+      subagentActivity: factsSubagentActivity(row),
       ...(row.factAt > 0 ? { factAt: row.factAt } : {}),
       ...(row.goal !== undefined ? { goal: row.goal } : {}),
     }

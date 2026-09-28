@@ -1237,6 +1237,19 @@ test('round-3 restore: mergeRuntimeFacts overlay keeps the armed union and spars
   }, 'an overlay row still receives its correction arm, and the channel official bit passes through')
   assert.deepEqual(mergeRuntimeFacts({ sessions: { a: { running: false } } }, undefined, { a: { runningSubagents: 3 } })?.sessions.a,
     { running: false, runningSubagents: 3 }, 'an absent channel count is filled by the overlay')
+  // I-12：facts overlay 的子代理活动只在通道未声明时填补（busy→running、idle→none）；
+  // 壳行的声明永远优先，原始计数绝不反推「在跑」。
+  assert.deepEqual(mergeRuntimeFacts(undefined, undefined, { s1: { subagentActivity: 'busy', runningSubagents: 2 } })?.sessions.s1,
+    { subagentActivity: 'running', runningSubagents: 2 }, 'facts busy rides the overlay')
+  assert.deepEqual(mergeRuntimeFacts(undefined, undefined, { s1: { subagentActivity: 'idle' } })?.sessions.s1,
+    { subagentActivity: 'none' }, 'verified idle becomes an explicit none')
+  assert.deepEqual(mergeRuntimeFacts(undefined, undefined, { s1: { subagentActivity: 'unknown', runningSubagents: 3 } })?.sessions.s1,
+    { subagentActivity: 'unknown', runningSubagents: 3 }, 'presence count stays unknown, never running')
+  assert.deepEqual(mergeRuntimeFacts({ sessions: { s1: { running: false, subagentActivity: 'none' } } }, undefined, { s1: { subagentActivity: 'busy', runningSubagents: 3 } })?.sessions.s1,
+    { running: false, runningSubagents: 3, subagentActivity: 'none' },
+    'the shell declaration wins the classification; the facts count still rides as an inert render field')
+  assert.equal(mergeRuntimeFacts(undefined, undefined, { s1: { subagentActivity: 'busy', runningSubagents: 2 } }, true)?.sessions.s1?.subagentActivity,
+    'unknown', 'the stale guard still downgrades an overlay-filled busy')
   assert.deepEqual(mergeRuntimeFacts(undefined, undefined, { s1: {} })?.sessions.s1, {}, 'an empty overlay row invents nothing')
 })
 

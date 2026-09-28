@@ -95,8 +95,9 @@ export interface SessionRowStateFacts {
   runningSubagents?: number
   /**
    * 子代理活动的可呈现性三值。`none` = 谱系索引可用且没有运行中的后代；
-   * `running` = 确有运行中的后代；`unknown` = 索引不可用，或事实 stale
-   * （断连来源上残留的计数不是「正在干活」的证据）。unknown 中性呈现：不点亮
+   * `running` = 确证在跑（含 facts 的 busy：lineageVerified>0 或 subagentKnown 的
+   * fail-closed）；`unknown` = 谱系证据不可用（watcher 平面的 presence 计数）或事实
+   * stale（断连来源上残留的计数不是「正在干活」的证据）。unknown 中性呈现：不点亮
    * 子代理读数，也不据此压制别的读数。
    */
   subagentActivity?: SubagentActivity
@@ -176,7 +177,8 @@ export interface SessionRowStateResult {
   /**
    * 已武装的 completed 被哪个更高优先级事实挡住（仅 `completed === true` 且
    * `state !== 'completed'` 时出现）：
-   *   - `subagents`：确证在跑的子代理后代（官方优先级 pending > subagents > completed）；
+   *   - `subagents`：确证在跑的子代理后代（官方优先级 pending > subagents > completed；
+   *     含无正计数可展示的 fail-closed busy——state 落 running/none，绝不报 completed）；
    *   - `goal`：goal 呈现门（相位 active，activation 已知）；
    *   - `unknown`：同一呈现门但 activation 仍未知（§2.2 静默窗口——通知层同态
    *     unknown-hold）。
@@ -224,6 +226,12 @@ export function sessionRowState(facts: SessionRowStateFacts | undefined): Sessio
         goalActive,
         suppressedBy: goal?.activation === undefined ? 'unknown' : 'goal',
       }
+    }
+    if (activity === 'running') {
+      // fail-closed busy 而没有正计数可展示（subagentKnown 的保留子代，count 仍为 0）：
+      // 与 goal 门同规落 running/none 并标注压制者——徽标按同一 declared activity 压制，
+      // 两面不分叉；下一份可判基线证明子代清空即自愈回 completed。
+      return { state: running ? 'running' : 'none', source, completedVisible: false, goalActive, suppressedBy: 'subagents' }
     }
     return { state: 'completed', source, completedVisible: true, goalActive }
   }

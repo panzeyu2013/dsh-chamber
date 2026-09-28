@@ -157,6 +157,14 @@ test('projectBadgeCount: an explicit zero runningSubagents row is NOT suppressed
   assert.equal(projectBadgeCount(completed, unknown), 1)
 })
 
+test('I-12: a declared running activity suppresses even without a positive count (known busy)', () => {
+  const completed = { local: { a: true } }
+  // facts overlay 的 fail-closed busy（subagentKnown、count 仍 0）也压低徽标——与判定侧 hold
+  // 及 sessionRowState 的同一分支同拍，不因缺少可展示计数而分叉。
+  const knownBusy = { local: { sessions: { a: { subagentActivity: 'running' as const } } } }
+  assert.equal(projectBadgeCount(completed, knownBusy), 0)
+})
+
 // ---- 合并投影（裁决 14）：官方通道行 completed（无修正臂条目）必须计入，
 // 否则会出现「侧栏蓝点/待办有、Dock 徽标无」的诚实分叉。计数输入 = 修正臂 ∨ 行 completed。
 
