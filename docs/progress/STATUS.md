@@ -236,6 +236,7 @@
 - 归档保护候选根闭包缺一条测试（开放无过滤清理前先补）。
 - 通知收敛器遗留收窄：`armedFloor` 比较近不可达、`keepFence` 待上移批次层、`setArmed`、`forgetPending`（只清 pending 不清 armed，生产零调用）与 `SessionFactsSource.getSnapshot()` 测试专用入口（均标 D4「仅测试/诊断面」，生产路径不得接线）；触发 = 下次重构。
 - 旧边沿孤岛：host 事件序回退而水位前进的异形上报无排序守卫（观测层收口，不恢复第二套边沿）。
+- 页面账本预热的接线对照锁：`source-lifecycle` 迁移后，「落屏写点派发 `windowReset`、绝不派发 `painted`」这条实测分歧只剩 `dsh-stream-state/src/source.ts` 的注释说明，已无用例阻止有人把 `painted` 接进落屏写点（会重开预热保留循环）；原锁随 `packages/renderer/test/lifecycle/source-ledger-equivalence.test.ts` 退役。
 - 页面通道模块重复实例的观测缺口：`assertSingletonModule('page-channel')` 只 `console.error`（design 26 §D5 登记为**检测器**，不是守卫）——同一 bundle 出现第二份模块实例会开出第二条页面 WS，I-1 的两件工具都看不见它；根治 = socket/订阅状态改 `Symbol.for` 全局键控（成本 vs 触发面待裁）。
 - 已发布 `CHANGELOG.md` / `docs/CHANGELOG.en-US.md` 的 beta.10 段落把可落账判定写成「只有前三类」——与 `packages/dsh-stream-state/src/evidence.ts` 的 admissible 集（含 `channel`）及 design 14 §D4 不一致；下一次发布编辑时改正（CHANGELOG 属发布期写作面）。
 - `packages/dsh-stream-state/src/evidence.ts` 的 `notServingYet` 有读者（`classifyObservation` 的 unavailable 分支）但**无生产者**：送达路径上该规则不可达，唯一置真值的是测试。保留（给未来分类器接线）还是删除待裁。
