@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core'
 import type { FactsStore } from '../host/facts-store.ts'
+import type { MountedSourcesStore } from '../host/mounted-sources-store.ts'
 import { createSessionFactsSource, type SessionFactsSnapshot, type SessionFactsSource } from '../session-facts-source.ts'
 import { createSourceMuxFacts, isMuxObservableSourceKind, type SourceMuxFacts } from '../source-mux-facts.ts'
 import { createFactsHealthRecorder, createFactsStepGuard, type FactsHealthRecorder, type FactsStepGuard } from '../facts-health.ts'
@@ -28,6 +29,8 @@ export interface SessionFactsLifecycleDeps {
   refreshHintAtRef: { current: Record<string, number> }
   /** 聚合拉取的稳定入口，**有界**：单来源入共享刷新波（队列去重 + 4 并发帽）。 */
   refreshAggregateRef: { current: (sourceId: string) => void }
+  /** 已发布完整权威快照的来源；这类来源不需要 facts 提示再走 unary 会话列表。 */
+  mountedSources: MountedSourcesStore
   /** 已挂载来源的运行时事实（focus 重算的键空间之一）。 */
   factsStore: FactsStore
   /** 活跃事实源实例（gateway 来源；指纹变化 = 新化身重探）。 */
@@ -50,6 +53,7 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
   const {
     servers, applySessionFacts, notificationImmediateSave,
     unverifiedSourcesRef, factsPullInFlightRef, refreshHintAtRef, refreshAggregateRef,
+    mountedSources,
     factsStore, sessionFactsSourcesRef, sessionFactsTeardownRef,
     sourceMuxTeardownRef, sourceMuxIdentityRef, withdrawSource,
   } = deps
@@ -81,11 +85,19 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
 
   /**
    * 行刷新提示：facts 的 session-added/removed/changed ⇒ 该来源一次 unary 聚合拉取
-   * （行权威仍在聚合，不做第二行源）。四拒：未连接 / unverified / 在途 / 页面不可见；
-   * 外加 1s floor。可见性直接读 document（本 hook 没有可复用的可见性 ref/监听，也不新增；
+   * （行权威仍在聚合，不做第二行源）。已发布完整快照的 mounted 来源先拒绝；其余四拒：
+   * 未连接 / unverified / 在途 / 页面不可见；外加 1s floor。可见性直接读 document（本 hook
+   * 没有可复用的可见性 ref/监听，也不新增；
    * 隐藏期不发起拉取，恢复可见由聚合 watchdog 的 visibilitychange 补偿）。
    */
   const requestFactsRefresh = useCallback((sourceId: string): void => {
+    // Mounted sources already publish their complete rows through the official
+    // ctx snapshot path. Fetching session/list again for each facts edge is
+    // redundant and can occupy WebKit's per-origin connection pool alongside
+    // the independent facts baseline and authority probes. Its weaker unary
+    // title projection can also replace a mounted display title with cwd's
+    // basename until the next official ctx snapshot arrives.
+    if (mountedSources.getSnapshot()[sourceId] === true) return
     const server = serversRef.current.find(candidate => candidate.id === sourceId)
     const now = Date.now()
     if (!shouldDispatchRefreshHint({
@@ -98,7 +110,7 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
     })) return
     refreshHintAtRef.current[sourceId] = now
     refreshAggregateRef.current(sourceId)
-  }, [])
+  }, [mountedSources])
 
   /**
    * 行刷新提示的唯一 guard 调用点（gateway 事实源与无壳观察者共用）：每步骤恰好一个

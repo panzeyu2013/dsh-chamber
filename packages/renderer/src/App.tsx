@@ -1708,7 +1708,7 @@ export default function App() {
   // servers 渲染期镜像、行刷新提示、gateway 事实源与 dsh 无壳观察者的创建/收敛/退订、focus 重算与
   // pagehide 落盘是命名 hook（use-session-facts-lifecycle.ts）；App 只注入状态容器与投影回调。
   useSessionFactsLifecycle({
-    servers, applySessionFacts, notificationImmediateSave,
+    servers, applySessionFacts, notificationImmediateSave, mountedSources,
     unverifiedSourcesRef, factsPullInFlightRef, refreshHintAtRef, refreshAggregateRef,
     factsStore, sessionFactsSourcesRef, sessionFactsTeardownRef,
     sourceMuxTeardownRef, sourceMuxIdentityRef, withdrawSource,

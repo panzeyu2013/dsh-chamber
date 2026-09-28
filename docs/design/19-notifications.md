@@ -915,6 +915,13 @@ interface ChamberSettings {
     18 帧 `api-session/status`、13 `added`、5 `removed`；与真实完成对齐的两次投递
     （`badge write` +7ms、`retire` +21ms）证明稳态完成由状态边沿即时触发、不必等 30s HTTP 基线。
     降级窗口的成因见 `docs/progress/STATUS.md`（宿主重负载 / 插件长 RPC），与投递能力无关。
+    facts 行变化可提示一次有界 unary 聚合刷新，但仅对**尚未 mounted** 的来源生效；已发布完整
+    官方 ctx 快照的来源由该推送持续维护，提示不得再为同一来源发起重复 `session/list`。来源撤回
+    mounted 状态后，后续 facts 提示重新允许补读。
+    **Rejected alternatives（facts 行刷新）**：对 mounted 来源仍逐边沿补读会重复请求完整会话列表，
+    并与独立 facts 基线/权威探针争用同一页面 origin 的连接；该 unary 行还可能缺少官方
+    `displayTitle`，其 cwd basename 回退会短暂覆盖已推送的会话名；全局禁用行提示则会让未
+    mounted 的来源只能等 30s 对账才更新。
   - **浏览器/mobile（gateway web 直连）**只服务 mobile 插件，无 chamber sidebar/renderer
     ⇒ 不存在 goal 压制/通知面；而 **chamber renderer 被浏览器/dev 直开**是另一形态：
     渲染器与 durable 剪枝门都在（无桥按 §3.2.4 F11 视同已结算放行），只是没有远程来源、
