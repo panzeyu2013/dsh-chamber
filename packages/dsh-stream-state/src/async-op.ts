@@ -1,16 +1,13 @@
 /**
- * Async operation primitives (deadline, retry pacing, bounded wait, single-flight) with
- * the scheduler INJECTED.
+ * Async operation primitives (deadline + bounded wait) with the scheduler INJECTED.
  *
  * PURITY CONTRACT: imports NOTHING (not even `node:` builtins) so browser code can
  * consume it; everything ambient arrives on {@link Scheduler}. Reaching for a global
  * clock is a gate failure, not a style nit.
  *
  * SEMANTICS: a deadline settles the operation ONCE and does not cancel behind the
- * caller's back - `onExpire` decides what the timeout MEANS; retry delay is immediate on
- * the first attempt, then doubles to a ceiling per episode; a bounded wait resolves
- * 'expired' instead of throwing; single-flight shares ONE promise and a rejection frees
- * the slot.
+ * caller's back - `onExpire` decides what the timeout MEANS; a bounded wait resolves
+ * 'expired' instead of throwing.
  */
 
 export interface Scheduler {
