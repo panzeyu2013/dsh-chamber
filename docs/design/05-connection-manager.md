@@ -412,8 +412,10 @@ export const chamberBridge: {
   `RETAINED_HIDDEN_VIEWS=1` 个（`src/retention.ts`），超限回收"已 settle +
   连续隐藏 ≥60s"的最久者；回收 = dispose shell + 卸载 UI 壳（App 层
   reclaimView，与注册表删除同原语），实例进程/隧道/后台任务不受影响，重开走
-  冷 boot + entry 重放；被回收源的侧栏聚合落到 30s unary 兜底（§2.3）。取舍：被回收壳内运行中任务的完成蓝点/通知边沿暂停至该源重开
-  （预热/可见性门控与偏差登记见 STATUS.md 与 `scripts/perf/README.md`）。
+  冷 boot + entry 重放；被回收源的侧栏聚合落到 30s unary 兜底（§2.3）。被回收只撤掉有壳路径的
+  runtime-facts；完成蓝点/通知边沿不依赖挂载——无壳（facts-only provenance）来源由判定侧读回退走
+  facts 通道（design 06 §4.1/§4.2、design 19 §3.2；预热/可见性门控与偏差登记见 STATUS.md 与
+  `scripts/perf/README.md`）。
 - N 个 AppWebEntry（共享一份静态模块表，v1 允许各自创建）；每来源一个 shell，hide/show
   切换，会话保活。**视图生命周期 = 注册表来源代生命周期**：来源删除，或
   `kind/host/user/sshPort/remotePort` 任一传输身份字段变化，都通过权威 `retiredIds` 同步

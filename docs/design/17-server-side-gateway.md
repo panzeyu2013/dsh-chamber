@@ -884,9 +884,12 @@ inert；复核实测）——要让响应头也条件化需把「是否下发了
 > §10 开头的「不得回流」针对的是**编排**（审批/提问代理、跨会话调度、会话索引、功能开关、feature host）。
 > 本节只开一条**只读事实镜像**：gateway 观察它托管的本地 dsh 的会话状态并向外提供只读投影，供桌面在
 > 「未挂载该来源」时仍能正确显示运行 / 等待 / goal 事实。它不写、不发命令、不代替用户响应，也不是 dsh
-> 事实的权威（权威永远是 dsh 宿主与其前端）。**完成未读不在镜像职责内**：唯一权威是官方内存 Set
-> `uiSession.sessionStatus.completionUnread`，只在已挂载 ctx 里存在（design 06 §4.1/§4.2）；未挂载来源
-> 无完成点/角标是对齐的明确放弃（design 06 §5）。实现面见 `packages/gateway/src/session-state.ts` 与
+> 事实的权威（权威永远是 dsh 宿主与其前端）。**完成未读不在镜像职责内**：镜像不投递该位，官方权威仍是
+> 官方内存 Set `uiSession.sessionStatus.completionUnread`，只在已挂载 ctx 里存在（design 06 §4.1/§4.2）。
+> 无壳来源的完成点/通知改由**桌面判定侧读回退**从镜像的 `running` 行边沿补出
+> （`virtual-runtime-report` 虚拟投影 + 完成修正臂的 `factsOnly` 路径，design 06 §4.1/§4.2、
+> design 19 §3.2/§3.5）：
+> 镜像不造完成权威，也不见「正在阅读」的清除语义。实现面见 `packages/gateway/src/session-state.ts` 与
 > `packages/control-plane/src/session-state-protocol.ts`；仍开放的实机/CI 权威验收见
 > `docs/progress/STATUS.md`「只读会话状态镜像」条。
 
@@ -897,6 +900,55 @@ inert；复核实测）——要让响应头也条件化需把「是否下发了
 - 观察者纪律：作为 `$events` 的 waterfall 交付目标时，**仅当另有下游 mux 客户端在线且过 1.5s grace 才回 `next` 委派，否则保持等待**——不得自行 settle 审批/提问；
 - 只存状态元数据：**不存标题 / cwd / 消息 / 审批与提问载荷**；状态文件 0600、目录 0700；
 - 路由全部落在既有 `/chamber/*` 鉴权门内；宿主停机时返回 200 + `serviceable:false`（不 5xx，避免被误判为「未升级」）。
+- **行集 = 顶层会话（2026-12）**：镜像不投递 `origin === 'subagent'` 的行——`commitDelta` 单点过滤
+  （全被过滤时空 payload 早退、游标不前进），`snapshotFor` 同过滤；子代理行只作统计输入，父行
+  `subagentCount` 仍由它们统计；行身份「顶层 → subagent」翻转时补发 `removedSessionIds`（行离场，
+  而非静默改写）。替代方案「wire 加 `origin`、由桌面过滤」被否：桌面没有子代理行的消费者，却要动
+  冻结协议、fixture 与旧端矩阵（§20）。P2b 观察者同样在本地跳过子代理行（design 19 §3.5）。
+- **身份只能由列表事实确认（S1，2026-12 收尾）**：`StoredRow.originKnown` 只在
+  `applyBaseline`/`applyAdded` 置真（`createStoredRow` 置假，随行持久化；旧文档缺该字段
+  按未确认读）。投递判定（`commitDelta` 与 `snapshotFor` 共用同一条 `isDeliverable`）是
+  `row.present && row.origin !== 'subagent' && row.originKnown`——**没有进程级一次性门**：
+  「本进程见过一次基线」不构成任何行的身份证据。语义：未由列表事实确认身份的
+  status/activity/pending 行一律不投递（快照与 delta 同规），直到下一次基线或 `added`
+  把它确认为顶层（门开那一刻补 delta 投递）、或揭示为子代理（永不投递、静默删除）。
+  动机：身份未知的行可能其实是子代理，投递就会为子代理发**真**完成横幅（子代理行的源侧
+  过滤只能滤掉已确认的子代理行）。该硬门覆盖**进程重启、每次 `$events` 换代与任何
+  `added` 丢失窗口**——旧实现只用「首基线已见」这一进程级布尔，首基线之后
+  status/activity/pending 首建的行会立即可投递，等于把 `added` 丢失窗口重新打开。
+  **代价（取舍）**：顶层新会话若 `added` 丢失，其 status-only 行最晚等一次基线
+  （poll 15s / sse ≤60s）才进入判定面——以硬约束「子代理绝不通知」为先。**旧端与断连
+  窗口**：门在**源侧**、wire 形状一字未动——v0.4.0-beta.1 及更早的桌面只会因为网关少投递
+  几行而少几个瞬时行，不存在需要旧端配合的新字段或新语义；基线一到即按真实身份投递、或按
+  缺席删除（补 `removedSessionIds` 的前提是该行**曾可投递**，从未上线的行绝不补幽灵撤回）。
+  `present` 是 legacy 兼容位（S3 起行在即 present；旧文档的 `present: false` 仍按隐藏读）。
+  证据：`packages/gateway/test/session-state/session-state-store.test.ts` 的 S1 门用例
+  （①任何列表事实之前 status 建行不投递 ②基线确认后可见并随确认那一拍补 delta ③基线揭示
+  subagent 不投递且补 removed ④added 确认同拍投递、added 缺失时 subagent 的
+  status→idle 不产任何投递）。
+- **`diagnostics.baselines` 的单一来源（S4/T2）**：wire 诊断的同步计数字段读 **store** 的
+  「成功且完整基线」计数（每次成功 `applyBaseline` 递增，**含 poll 档**），不再读 mux 自己的
+  reconcile 计数——后者只在 ready 后的 sse 档前进、poll 档恒 0，会把渲染侧 `listComplete`
+  永久钉假（已完成且随后离表的行残留蓝点，离表清臂失效）。`SessionStateObserverStatus` 自己的
+  计数另放 `muxBaselines`（观察者自诊断），**不得**再当 `listComplete` 的来源。证据：
+  `session-state-observer.test.ts` 的 poll 档 wire 用例 + `session-state-diagnostics.test.ts`
+  的负控制（注入 muxBaselines=2 仍读 store 的 1）。
+- **缺席即删除（2026-12 收尾，按上游 ready-即删对齐）**：missing-row 分支是**单阶段**删除——
+  行在一次**成功且完整**的基线缺席时立即从 store 删除；**曾可投递**的行同拍进
+  `removedSessionIds`（从未上线的行静默删除——补移除即幽灵撤回，见上一条），
+  `commitDelta` 与 `snapshotFor` 同规（缺席行没有 wire 形态，绝不投影 `running:false`）。
+  删除不是完成：不发 running 位、不产完成边沿，客户端离表清行 + 清臂 + 随行退役边沿记忆；
+  再上架是全新行，不继承旧完成与旧武装。旧的两阶段（首次缺席只标 `present=false` 隐藏、
+  二次缺席才移除）已退役：容忍窗只会让本地列表比上游更久地保留已删除行，而上游（ready 即删）
+  语义没有这个窗口。证据：
+  `packages/gateway/test/session-state/session-state-store.test.ts` 的单阶段缺席用例 +
+  `packages/renderer/test/session-state/virtual-runtime-report.test.ts` 的真实
+  `applySessionFactsDelta` → 无壳臂组合用例（缺席即 removed、再上架不点亮）。
+  **Rejected alternatives**：①**保留两阶段剪枝**，用第二次缺席容忍偶发的**不完整**列表——
+  「成功且完整」已是该分支的前置事实，再留一拍容忍窗只会让删除滞后，客户端多出的窗口没有
+  任何事实依据（上游 ready 即删）；②给 wire 行加 absent 语义位（`present` 出口或等价位）——
+  动冻结协议、fixture 与旧端矩阵，收益不足（同本节子代理 `origin` 的裁决）；③在桌面判定侧
+  识别缺席——wire 没有该位，判定侧只看到 `running:false`，边沿照样被武装（假蓝点）。
 
 **接口摘要**：`GET /chamber/session-state`（快照 + `protocol` / `features` / `cursor`）、
 `GET /chamber/session-state/stream`（SSE 增量，单调 `id`，`Last-Event-ID` 续传或快照兜底）。
@@ -937,8 +989,8 @@ inert；复核实测）——要让响应头也条件化需把「是否下发了
   迟到的行上。而 baseline/added 的显式 `goal:null` **不丢保留边**（create 可能仍在追这份
   基线的在途快照竞态安全，刻意不对称）。**清边路径**（保留边是进程内易失信息，任何「行不再
   可信」的收口都连边一起清）：`applyRemoved` **无条件清边**——在行存在性早退**之前**
-  删除（边可能跑在 create 之前、行从未存在；重建同 id 不得继承）；baseline **二次缺失**
-  prune 删行时随行清边（第一次缺失只标 absent）；行容量淘汰（`MAX_SESSIONS`，flush 时按
+  删除（边可能跑在 create 之前、行从未存在；重建同 id 不得继承）；baseline **单阶段缺席**
+  prune 删行时随行清边；行容量淘汰（`MAX_SESSIONS`，flush 时按
   `observedAt` 最旧优先）删行时随行清边并计入 `dropped.goalActivations`（被淘汰行带边
   时），`dropped.sessions` 照计；**该淘汰同时补发 delta**（`deltaRemoved` +
   `commitDelta()`，进 replay ring）——淘汰是删除而不是静默抹掉，否则 SSE 客户端会永久
@@ -949,7 +1001,7 @@ inert；复核实测）——要让响应头也条件化需把「是否下发了
   淘汰，为新会话登记边而超限时淘汰**最久未更新**的一条（LRU：更新已有键用 delete+set
   刷新保留序，不按首次登记序）并 warn，`dropped.goalActivations` 计数（绝不静默）。
   **计数口径**：只有两处容量淘汰计数——保留边 cap 淘汰与行容量淘汰随行清边；
-  `applyRemoved`、baseline 二次缺失 prune、no-goal 事件与 `clearGoalActivations` 的清边
+  `applyRemoved`、baseline 单阶段缺席 prune、no-goal 事件与 `clearGoalActivations` 的清边
   都**不计**（不是容量损失）。`dropped.goalActivations` 是**加法诊断键**（协议声明在
   `packages/control-plane/src/session-state-protocol.ts` 的 `SessionStateDiagnostics.dropped`；
   `status().dropped` 与持久文档 `dropped` 同形，旧客户端不进 diagnostics）：flush 把当时
@@ -993,6 +1045,7 @@ inert；复核实测）——要让响应头也条件化需把「是否下发了
   仍见 `docs/progress/STATUS.md` 的「只读会话状态镜像」条（本地环境伪象与轮次叙事不属设计契约）。
 
 完成分类由每次 true→false 边沿持有的读尾身份结算：新一轮 running、新提示水位或移除会撤销旧身份，迟到的 `session/follow` 不得写回。`session/list.updatedAt` 在当前宿主是最近用户提示时间；`false→false` 且水位前进时，旧完成事实必须撤销，但没有可信运行轮次证据便保持未知。读尾失败只给出 `reconstructed` 时刻（observer 域，不作完成证据），不可触发原生完成通知；同一边沿在后续可信基线继续读尾，直到分类或被新活动取代。
+
 
 **Rejected alternatives**：用 `updatedAt` 的前进直接补出完成会混淆用户停止与完成；让读尾失败保留 `observed` 会把未知结果当完成通知；迟到读尾只检查当前 `running=false` 会把上一轮结果写进另一轮已停的会话。
 
@@ -1569,7 +1622,12 @@ refocus / visualViewport 判定 / 键盘补偿五层）、回车=换行、compos
   - 把该镜像扩成控制路径（gateway 代答审批/提问，或代替桌面决定已读）——**否决**：正是 §10 开头禁止的回流；
     审批是 dsh 原生的，镜像只能看。
   - 未挂载来源的完成状态**只等上游**（host 持久 unread/pending）——**否决**为唯一路径：来源以 gateway 为主时
-    镜像可立即闭合绝大多数窗口；上游提案作为长期根治并行推进，前提是降级路径不劣化（§10.7）。
+    镜像可立即闭合绝大多数窗口；本轮补了**受控的判定侧读回退**（facts-only provenance 的逐行 host
+    运行边沿 + facts 完成候选，design 06 §4.2、design 19 §3.2/§3.5），只在**无 ctx 上报**时生效；
+    上游提案作为长期根治并行推进，前提是降级路径不劣化（§10.7）。
+  - 让镜像投递完成/未读位（wire 加 `completionUnread`/`unread`，或服务端自行判完成）——**否决**：
+    vendor 的位是「未读」而非「完成」，只在 ctx 内被 retain/read 清除；服务端另存会造第二权威与第二
+    清除规则。无壳来源的完成点由桌面按 host 运行边沿补（§10.7、design 06 §4.2）。
   - 用 `conversationPhase()` 的内部名字（`blank`/`engaging`）当判据——**否决**：它们从不到达
     `[data-phase]`，匹配等于写死一条永不成立（或永不恢复）的规则；DOM 值空间
     （`settling`/`hero`/`active`）才可锚定。

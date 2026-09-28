@@ -46,3 +46,6 @@ docs/progress/
 > 又：`todo/unread-upstream-alignment.md`（完成未读上游对齐，已执行）与 `todo/notify-unread-badge-remediation.md`
 > （通知/未读/角标整改，未落项随对齐作废）按同一纪律删除——契约回写 design 06 §4/§5/§9、design 19 §3.7、
 > design 17 §10.7，仍开放的实机验收与旧端 404 兼容变化在 `STATUS.md`。
+> 又：`todo/remote-source-status-sync.md`（远程来源状态同步，已执行）按同一纪律删除——契约由 design 06 §4、
+> design 17 §10.7、design 19 §3.2/§3.5 与 `packages/*` 源码/测试承接，仍开放的采样粒度与实机边界并入
+> `STATUS.md`（「facts-only 判定侧读回退的已知窗口」等条）。

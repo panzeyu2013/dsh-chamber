@@ -329,6 +329,18 @@
   STATUS ⑮），动机与语义见 §4.5：父会话 running 位只反映「agent 回合进行中」，后台
   子 agent 存活时父回合已结束（running=false）、子 agent 仍在工作——没有这条
   计数，完成蓝点会在子 agent 干活时提前亮起。
+- **无壳来源的判定侧读回退（facts-only provenance，2026-12）**：没有任何官方 ctx 上报的
+  来源（被 retention 回收、或从未 boot）没有壳行可读，但 facts 通道与挂载无关（P2a 镜像 /
+  P2b 观察者，§4.2）。App 在**两个判定读取点**（修正臂步进与通知 reconcile 的 shell 输入）
+  用纯投影 `packages/renderer/src/virtual-runtime-report.ts` 把 `SessionFactsSnapshot`
+  投影成壳上报的结构子集：`{ sessions: { running 必填, pending?（仅 approval/question）,
+  beforeBaseline? }, listComplete, listKnown, stale }`。**绝不物化**：不写 `factsStore`、不建第二张表、
+  不新增写者（物化被否，§9）；投影只在无 ctx 上报时在场。provenance 因此显式三分：有 ctx
+  上报 = `ctx`；无 ctx 上报且有可判 facts 快照 = `virtual`（臂输入 `factsOnly`）；
+  其余 = `none`（不产壳输入）。`listComplete`/`listKnown` 复用已冻结的
+  `diagnostics.baselines`（就绪 / 基数已知），**不动 wire、不加字段**（口径与闩锁规则见 §4.2）；
+  子代理行在**源侧**排除（镜像不投递 `origin === 'subagent'` 的行、观察者本地跳过），
+  行集 = 顶层会话。
 
 ### 4.2 通道 API（chamberBridge 扩展）
 
@@ -349,25 +361,64 @@
   的 `completedStore`）——纯内存修正臂，本模型唯一新增状态**。每次上报对账一次，
   纯函数 `stepCompletionArm`（`packages/dsh-chamber-client-core/src/completion-arm.ts`，
   单测 `packages/dsh-chamber-client-ui-sidebar/test/session-rows/completion-arm.test.ts`）——
-  - 武装：该来源 `current`（mainView 持有行）在新报里 `running false`、上一份新鲜
-    报为 `true`，且该来源**不是屏上视图**（`paintedView !== sourceId`）——即官方
-    规则因陈旧 `isMain` 漏掉的那一格；只有 `current` 可被武装，且**绝不扫描其它行**——
-    表按会话行键控，读取只清被读的那一行；`current` 迁移后各行的臂各自保留（即上游
-    「N 个未读会话」语义）。
-  - 清除：该会话重新 running；用户读到它（来源成为 painted 且该行仍是其
-    `current`）；权威列表里该行消失（`listComplete === true` 时缺席即删除）。
+  - **provenance 与两类输入**：`stepCompletionArm` 新增 `factsOnly`（= provenance
+    `virtual`：来源此刻**没有官方 ctx 上报**；**不得**由 `current === undefined` 推断
+    ——有壳 ctx 也可合法无 `current`，那是 §9 第 5 条的被否形状；缺席 = false ⇒ 有壳路径
+    逐字不变）与 `readIntent`（虚拟路径的「已读」事实 = App 的会话打开意图；有壳路径不用）。
+    来源从 `ctx` 切到 `virtual` 的**撤回按 provenance 分域**（C1；语义见 design 19 §3.2.4/§3.5）：
+    事实载体真正换代（抽壳 / facts 源退役换代 / aggregate notReady 删 runtime）删 running 边沿
+    记忆与整份观测状态（`withdrawSource` 缺省 `scope='all'`），虚拟接管不把旧壳记忆当边沿证据；
+    **桥面 `report === undefined`（facts 载体未换代）只清壳轨**——`withdrawSource(id, 'shell')`
+    复位观测层 `shellSeeded` 与每会话壳运行/待决位（旧壳位不得当新边沿证据），但保留
+    `prevRunning` 与 facts 轨水位：窗口内到达的 facts 完成仍恰好通知一次（清掉 facts 轨会让
+    恢复批变 G2 播种批、通知与蓝点两面皆丢），虚拟接管按 facts 逐行边沿继续武装。反向
+    （`virtual` → `ctx`：壳 boot 完成、桥面首份 report 到达）**不重播种记忆**：同一化身内 host
+    running 位是同一条事实，保留 `prevRunning` 让 boot 窗口里发生的真完成（虚拟 running true →
+    首份壳报 idle）仍被武装；若改成重播种，该行降为「首见 idle」，在有壳路径不武装——而有壳
+    修正臂的存在理由正是补这类漏。只有事实载体换代/新化身才清整份记忆（壳上报撤回只清壳轨）。
+  - 武装：该来源**不是屏上视图**（`paintedView !== sourceId`）且上报不 stale 时，按
+    provenance 二选一——
+    - **有壳路径**（无 `factsOnly`）：该来源 `current`（mainView 持有行）在新报里
+      `running false`、上一份新鲜报为 `true`——即官方规则因陈旧 `isMain` 漏掉的那一格；
+      **只有 `current` 可被武装，且绝不扫描其它行**（这是**有壳来源**的边界，仍成立）；
+    - **无壳路径**（`factsOnly`）：没有官方 `current/isMain` 主场，**逐行**的 host
+      `running true → false` 边沿是唯一证据（每行一格，与上游「N 个未读会话」同语义；
+      该行等于 `readIntent` 时不武装——读到与完成同拍也不留点，因为无官方位可清）。
+      该边沿的证据面只含**真实停止**：镜像的一次成功且完整基线缺席是**单阶段删除**（直接
+      进 `removedSessionIds`，绝不投影 `running:false`；见 design 17 §10.7），离表清除由
+      `listComplete` 门控，不产生边沿。首基线前的 status 行也进不了这份证据面——镜像侧
+      的 origin 门（design 17 §10.7 S1）会在基线确认身份前扣下它们。
+      两形态共享的 running 记忆**逐行保存观察到的布尔**：`false` 也写、`unknown`（行缺
+      running 位）缺席，只有 `undefined` 才算「从未观察」——这是第二支（首见 idle）与
+      「点击读清后不得重新武装」的共同判据（`stepCompletionArm` 用 `sameRunningMemory`
+      逐值比较；只存 true 会让读清后的下一拍把 false 当首见重新武装，W11）。
+      另有上游 `observeRunning` 的第二支：该行**首见即 idle**（`prevRunning` 无该行）、
+      行自带 `firstSeenByDelta`（**无壳观察者的 status 事件首建**；列表播种与网关平面都不带）、
+      且列表基数**已知**未就绪（`listKnown === true && listComplete === false`；未知 ≠ 未就绪）
+      ⇒ 一并武装。该窗口今天两个平面实际上都到不了：P2b 可判即 ≥1 基线；P2a（网关平面）的
+      行**永不带 `firstSeenByDelta`**（快照与增量帧都不赋该位）⇒ 第二支永不触发。登记为已知窗口。
+    - 两形态都**按会话行键控**：读一行只清那一行，`current` 迁移或逐行完成各自保留。
+  - 清除：该会话重新 running；**有壳**读清 = 来源成为 painted 且该行仍是其 `current`；
+    **无壳**读清 = 该行等于 App 的打开意图 `readIntent`（因此壳 boot 失败、永不出现
+    `current` 时点击也能消点）；权威列表里该行消失（`listComplete === true` 时缺席即删除）。
     来源退役不走步进：App 按同一批 id 对 `completedStore` 整表 `retire`（纯步进因此
     没有 retired 输入，见该模块头注）。
+    facts 不可判（`virtualRuntimeReport` 返回 undefined：host stopped/disabled/forward-skew/legacy）
+    时无壳读清与武装一并冻结，打开意图不消点——与冻结条款一致，登记为已知边界。
   - 冻结：**没有上报**（`rows === undefined`）时两表原样——既不武装也不清除；失败方向是
     「与上游一致地不亮」，不是旧实现的「fail-closed 到未读」。列表非权威（`listComplete
     === false`）时不按「缺席」清除（缺席不等于删除）。
   - stale 上报：**不武装**（不当作完成证据），但清除与 running 边沿记忆照常推进
     （`completion-arm.test.ts`「a stale report is never arm evidence but the edge memory
     still advances」钉住）——故断连期间的完成在重连后不补臂，fail-closed 方向与上游一致。
-    当前生产者不在**原始通道报告**上写 stale（stale 只作为合并事实的标记，servers.ts 第四参），
-    这条属预留语义。
+    有壳路径当前生产者不在**原始通道报告**上写 stale（stale 只作为合并事实的标记，servers.ts
+    第四参），这条属预留语义；无壳路径的 `stale` 由 `virtual-runtime-report.ts` 从
+    `isFactsDecisionUsable` 给出，是现役输入——facts 降级窗口（`disabled`/`forward-skew`/
+    unversioned/曾探到协议载荷后的 404）保留既有行并标 stale，无壳路径因此冻结武装、保留记忆，
+    不触发遗忘结算。
   - **五条不变式**：①不进口官方位（呈现 = 官方位 ∨ 臂；官方为真时臂无意义）；
-    ②行键控、绝不扫描（只有 `current` 可武装；读一行不清另一行）；③纯内存、不落盘、不跨 reload（无
+    ②行键控、绝不扫描（**有壳**来源只有 `current` 可武装，**无壳**来源按逐行 host 运行边沿；
+    两种形态都读一行不清另一行）；③纯内存、不落盘、不跨 reload（无
     localStorage 键、不进 `notifications.v1`）；④无水位（不比较
     `updatedAt`/`completedAt`，时间只用于诊断）；⑤无第二清除规则（不引入
     focus/遮挡判定，`document.hasFocus` 只留在通知门）。
@@ -385,6 +436,25 @@
   当证据；臂的武装证据同样要求 `!stale`。facts 行/水位**不参与**完成点武装（对齐后
   无水位概念），只服务通知候选与渲染；`todo-attention` 对断连来源只渲染
   `runtime.stale === true` 的事实（R14 方案 A）。
+- **facts 快照的行级输入（2026-12）**：`SessionFactsSnapshot.baselines` 从 wire
+  `diagnostics.baselines` 闩锁——该值的单一来源是 **store** 的「成功且完整基线」计数
+  （每次成功 `applyBaseline` 递增，**含 poll 档**；mux 自己的 reconcile 计数另放
+  `SessionStateObserverStatus.muxBaselines`，不再进 wire，design 17 §10.7 S4/T2）。
+  无诊断帧的增量帧沿用上一份闩锁值，来源指纹换代复位；无壳来源的
+  `listComplete = (baselines ?? 0) > 0`——它是**离表清臂**的唯一闩锁（poll 档缺了它，
+  已完成且随后离表的行会残留蓝点）。
+  `SessionFactsRow.firstSeenByDelta` 是客户端本地位（**无壳观察者的 status 事件首建**；
+  列表播种与网关平面——快照/增量——都**不赋该位**，基线合并保留、行退役即消失），只供无壳
+  路径的 `beforeBaseline` 武装支（该支另要 `listKnown === true && listComplete === false`）。
+  `SessionFactsRow.identityConfirmed` 是同一族的另一客户端本地位：**缺席 = 已确认**（网关
+  平面与列表播种行不带），显式 `false` = 仅由 status/activity/waterfall 首建、尚未被任何
+  列表事实确认的行——观察者快照与 `virtualRuntimeReport` 都跳过它（S1 的 P2b 等价门，
+  design 19 §3.2/§3.5），直到 baseline/added 确认后同拍发布。
+  行集变化产生 `onRowHint`（优先级 added > removed > changed）；消费者的
+  「提示 → 四拒 → ≤1 次 unary 拉取」链路见 §4.3。
+  降级窗口（`disabled`/`forward-skew`/2xx unversioned/曾探到协议载荷后的 404）**保留既有
+  行并标 `stale`/`serviceable=false`，绝不是权威空行集**——空行集会让在场集判空、走遗忘
+  结算、清 held pending 并撤掉已武装的行（design 19 §3.5）。
 - **goal 事实过桥与身份签名**（v5 §2.1/§6 P2a；2026-12）：mounted 来源由插件生产者在
   `sync()` 里先回填最后已知值、再合并 activation 缓存（`applyGoalActivation`，门读它）；
   无壳来源的 goal 经 App 的 `factsOverlay` 走 `mergeRuntimeFacts` 的 overlay 行——通道行
@@ -516,6 +586,14 @@
   不重复驱动同一环渲染；通道 running 位仍保留在 `InstanceRuntimeReport` 中，供 App 完成
   修正臂（`stepCompletionArm`）推导 running→idle 边沿（App 内部逻辑，非侧边栏
   渲染）。
+- **G1 的真实机制（2026-12）**：运行环的唯一权威仍是聚合快照行（`runningRingVisible`
+  **不吃**通道/虚拟上报的 running 位）；实时性由「facts 行集变化提示（`onRowHint`，快照帧
+  与增量帧都发）→ 既有 `requestFactsRefresh` 四拒 + 1s 底线 → **≤1 次 unary 聚合拉取**」
+  承担（P2a 网关档与 P2b 观察者同规；poll 档为一个 poll 周期）；该次拉取与边沿轮询/watchdog
+  共享同一个有界刷新波（队列按来源去重 + 4 并发帽，`drainAggregateWaves`，2026-12）。
+  判定侧读回退（§4.1）只服务
+  通知/修正臂，**不驱动环**；若将来要「通道 running 直接画环」，那是独立契约变更（需改
+  `runningRingVisible` 与两条锁测试并登记第二权威例外），本轮不做。
 - **被否方案（运行位解析）**：①**扩大 tier-3 写回去写 `true`**——要检测分歧就得先读
   `status.running`（读是必需的），却把 chamber 变成 running 的第二写入者（违反既有锁；
   上游 `refreshList` 才是契约内的修复路径），还会把渲染事实绑到 N=2/60s 门槛上；
@@ -535,7 +613,13 @@
   墓碑抑制/收敛链 + `indexSubagentDescendants` 注入 + 官方 `completionUnread` 采集）、
   `App.tsx`（runtimeFacts + 修正臂对账/合并/清理；runningSubagents 随事实行透传）、
   `packages/dsh-chamber-client-core/src/completion-arm.ts` + `packages/renderer/src/host/completed-store.ts`
-  （修正臂纯函数与其内存表）、
+  （修正臂纯函数与其内存表：有壳 `current` 行 ∪ 无壳 `factsOnly` 逐行边沿）、
+  `packages/renderer/src/virtual-runtime-report.ts`（无 ctx 来源的判定侧读回退投影——不物化、
+  不写 `factsStore`）、`packages/renderer/src/app-hooks/use-notifications.ts`（两个判定读取点
+  `stepArmNow`/`reconcileCompletionsNow` + 来源撤离 `withdrawSource`）、
+  `packages/renderer/src/session-facts-source.ts`（`baselines`/`firstSeenByDelta`/`onRowHint`
+  与降级保行）、`packages/renderer/src/app-hooks/use-session-facts-lifecycle.ts`
+  （`stepRowHint` 是 `facts-row-hint` 的唯一 guard 调用点；两个 teardown 调 `withdrawSource`）、
   `SidebarRoot.tsx` + `sidebar-chamber.module.css`（dot 状态类 + 高亮 +
   runningSubagents 分支 + `.scheduleIndicator` + `.railDotButton`）、
   `packages/dsh-chamber-client-core/src/derive.ts`（`hasActiveScheduleOf`；`hasActiveSchedule` 进
@@ -731,20 +815,30 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   权威」的代价，逐条登记（判定/生命周期与上游相同，偏差只在呈现）：
   - **重载即忘**：官方位是 ctx 内存 Set，桌面 reload/重启后全空；chamber 不再有
     durable 账本，也不做任何恢复或播种。
-  - **未挂载来源无完成点/角标**：无 ctx 即无官方位（facts 轨仍供通知候选与行事实）。
+  - **未挂载来源的官方完成位仍缺席**：无 ctx 即无官方 `completionUnread`（「正在阅读」的
+    解除语义也只存在于挂载 ctx）；但本轮加了受控的**判定侧读回退**——facts-only provenance 的
+    来源由修正臂按逐行 host 运行边沿补蓝点、facts 候选补完成通知（§4.1/§4.2、
+    design 19 §3.2/§3.5），只在**无 ctx 上报**时生效。
   - **手机读不再清桌面**：跨端读回执（mobile `read-watermark` + gateway
     `POST /chamber/session-state/read|read-all`）随权威切换整体退役；桌面点/角标
     只由本端阅读解除。
   - **「全部已读」入口消失**：来源级批量已读（桥/菜单/文案）整体删除。
   - **facts 水位不再参与武装**：observer 域 `completedAt` 不武装未读（无水位、无
-    播种、无时间域概念；facts 只服务通知候选与渲染）。
-- **完成发生在来源 shell 首次观察之前仍无蓝点**（与上游相同）：官方位只在已挂载
-  ctx 里产生；来源 shell 未挂载（预热排队中/首次打开前）期间的完成没有观察者。
-  空闲预热保证连接后尽快挂载，该窗口为「实例就绪 → shell boot 完成」，活动来源
-  完成即时可见。不做轮询级完成推导（10s 粒度会漏掉更短任务）。
+    播种、无时间域概念；facts 只服务通知候选与渲染）。无壳路径的 `beforeBaseline` 支也只用
+    host running 边沿 + status 首发位，不引入 observer 戳。
+- **有壳来源在 shell 首次观察之前的完成仍无官方位**（与上游相同）：官方位只在已挂载
+  ctx 里产生。本轮起该窗口只在**没有 facts 载体**时才是完成的盲区：P2a 镜像 / P2b 观察者与
+  挂载无关，被观察到的 host 运行边沿 + facts 候选可补完成点与通知（§4.1/§4.2）；采样粒度
+  之间起止的短任务仍可能漏（P2b 30s 基线、poll 档一个周期，design 19 §3.5 与 STATUS）。
+  空闲预热仍保证连接后尽快挂载。「不做轮询级完成推导（10s 粒度会漏掉更短任务）」仍是官方位的
+  边界：无壳完成点来自 host 运行边沿，不是轮询采样推导。
 - **修正臂跨断连冻结**：上报事实（runtimeFacts）断连即清（generation 级），修正臂
   在无上报时冻结（不武装也不清除）——断连期间该来源无行可显示，也不会有新完成；
-  重连后按新上报重新对账。官方位照旧留在 vendor 内存 Set。
+  重连后按新上报重新对账。官方位照旧留在 vendor 内存 Set。无壳路径同规：facts 降级窗口
+  保留行 + `stale` ⇒ 只冻结武装、保留边沿记忆；桥面上报撤回（`report === undefined`，
+  facts 载体未换代）只清壳轨、保留 running 记忆与 facts 轨（§4.2 分域）；真正换代/退役由
+  `withdrawSource` 缺省 `scope='all'` 删 running 记忆与观测状态、撤回账本易失轨，
+  **臂表冻结不误清**（§4.2）。
 - **保留的呈现偏差（仍成立）**：Dock/任务栏红气泡与桌面通知是 chamber 独有（上游
   无对应物），角标 = 官方位 ∪ 修正臂的投影 + 既有 goal/子代理压制（design 19
   §3.7）；品牌蓝点与 14px pending 徽标同 §4.3。
@@ -1064,9 +1158,21 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
    `sidebarChat` 是兄弟持有者，释放可能落空（`retainedBy` 仍 > 0）；④chamber 全仓无
    `.retain(` 调用，释放面无既有接线。
 5. **逐 ctx 复制官方规则**（把 `isMain` 换成 App 的 reading、不 OR 官方位）：重复规则，
-   上游改一处即漂移；官方位的武装/清除本就由 vendor 拥有。
+   上游改一处即漂移；官方位的武装/清除本就由 vendor 拥有。**边界 = 有壳来源**：无壳来源
+   没有官方位可复制、也没有 `isMain` 主场，走的是逐行 host 运行边沿 + facts 候选（§4.2）。
 6. **用 focus/隐藏收紧官方位**（失焦即未读）：与上游 `isMain` 语义分叉；
    `document.hasFocus` 只留在通知的 `requireHidden` 门。
-7. **保留 facts 轨武装**（observer 域戳）：旧「点击消不掉」的根因链，整条删除。
+7. **保留 facts 轨武装**（observer 域戳）：旧「点击消不掉」的根因链，整条删除。**边界 =
+   有壳来源**：无壳来源没有官方位可用，本轮实现的上游 `beforeBaseline` 支只用 host running
+   边沿 + status 首发位（列表基数已知未就绪），不引入 observer 戳/水位。
 8. **把通知候选也改成官方位边沿**：会让「开着但失焦的会话完成」不再通知（官方位被
    `isMain` 抑制），与通知既有 gates 语义冲突；通知继续用运行边沿（本已独立）。
+9. **物化写者**（把虚拟投影写进 `factsStore` 或新建「判定事实表」）：引入第二写者与第二套
+   生命周期/撤回次序，渲染 stale 与判定 stale 混用、共享壳轨记忆、第二个壳边沿裁决点；
+   对渲染零贡献（环不吃通道 running，`server.runtime.current` 补不出官方 current，pending
+   已由 facts overlay 供给）⇒ 改为判定侧两读取点回退（§4.1）。
+10. **wire 加字段**（`listPhase`/`origin`/`completionUnread` 位）：`listComplete` 用已冻结的
+    `diagnostics.baselines`、子代理在源侧过滤即可闭合，加字段要动冻结协议、fixture 与旧端
+    矩阵，收益不足（design 17 §10.7 同裁）。
+11. **全量 `SourceSessionStatus` 店**（第二未读权威 + 全来源常驻）：有壳来源已由官方位 ∪
+    修正臂承担，新建权威要维护交接/去重/持久化语义；复访条件 = 决定收敛有壳路径时。

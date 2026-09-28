@@ -18,7 +18,7 @@
 
 | 项 | 事实 | 证据 |
 |---|---|---|
-| 会话状态检测 | **已有事实源**：06 §4 运行时事实通道——每个已挂载 ctx 的侧边栏插件注册 generation-safe runtime producer，上报每会话 `{running, completed, pending}`（运行位按官方 `status?.running ?? row.running` 解析；`completed` = 官方 `sessionStatus.completionUnread` 位，稀疏携带，App 只 OR 入隐藏来源 current 行那一条修正臂）（`pending = 'approval' \| 'plan-review' \| 'question'`，来自 vendor sessions store 的实时 mux 交互状态） | `packages/dsh-chamber-client-ui-sidebar/src/client/index.ts`；`packages/renderer/src/App.tsx` |
+| 会话状态检测 | **已有事实源**：06 §4 运行时事实通道——每个已挂载 ctx 的侧边栏插件注册 generation-safe runtime producer，上报每会话 `{running, completed, pending}`（运行位按官方 `status?.running ?? row.running` 解析；`completed` = 官方 `sessionStatus.completionUnread` 位，稀疏携带，App 只 OR 入一条修正臂——**有壳**隐藏来源的 `current` 行 ∪ **无壳**（facts-only provenance）来源的逐行 host 运行边沿，06 §4.2；facts 行集 = 顶层会话，子代理行已在源侧排除）（`pending = 'approval' \| 'plan-review' \| 'question'`，来自 vendor sessions store 的实时 mux 交互状态） | `packages/dsh-chamber-client-ui-sidebar/src/client/index.ts`；`packages/renderer/src/App.tsx` |
 | 会话标题/来源 label | App 聚合已持有（`aggregates[sourceId].sessions[].title`、`server.label`） | `App.tsx` `deriveServers` |
 | goal 活性事实 | 运行时事实行 `goal?: GoalFact \| null`（三值：缺席 = unknown / `null` = 明确无 goal / 对象 = 有 goal；`{goalId, revision, phase, activation?, updatedAt?}`）。P1 来自挂载壳的会话投影 `projectionValues.goal`，P2a/P2b 来自只读 `session/list` 投影 + `$events` 的 activation 事件 | `packages/dsh-chamber-client-core/src/derive.ts`、`packages/control-plane/src/session-state-protocol.ts`（06 §4.1、17 §10.7） |
 | 窗口隐藏场景 | 设计 14：关窗 hide 到托盘 / macOS 无窗常驻——**窗口不可见时用户对会话完成与等待输入一无所知**（蓝点/pending 徽标只在窗口内） | 设计 14 |
@@ -135,11 +135,34 @@ type NotificationKind = 'complete' | 'ask' | 'request'
 | `ask` | `pending` **值变化到 `'question'`** | 代理提问等待回答；含直切（question→approval 等不经 undefined 的切换——vendor 组合选择器会正常产生，每个新值都通知一次）；同值重放与清除（→undefined）不发 |
 | `request` | `pending` **值变化到 `'approval' \| 'plan-review'`** | 工具/计划审批请求；直切/重放/清除语义同上 |
 
-- **首报/撤回即播种**：`prev === undefined`（含通道撤回后的首份上报）只播种不发事件，
-  窗口内完成/提问**不**补发（取舍与理由见 §3.5）；同内容重放不重复（边沿记忆按来源保留，
-  与 `prevRunningRef` 同生命周期纪律；主进程 claim 兜底）。
+- **facts-only provenance 的判定输入（2026-12）**：来源**没有官方 ctx 上报**时（回收壳 /
+  从未 boot），`stepArmNow` 与 `reconcileCompletionsNow` 都读 `runtime ??
+  virtualRuntimeReport(facts 快照)`（`packages/renderer/src/virtual-runtime-report.ts`）；
+  虚拟投影只在有**可判** facts 快照时在场，且 `shellReport: true` **只随虚拟批**——reconcile
+  复用的有壳现行报告不带（壳桥首报由 `onRuntimeReport` 自己带），避免同一份壳行被 facts
+  快照重复声明为新壳报、产生第二壳边沿裁决点。虚拟批供逐行 running 边沿与
+  ask/request：**完成**仍由 facts 候选（水位严格前进 + G5 武装栅栏）裁决——facts 可用时
+  壳完成边沿本就被 `!factsUsable` 门关掉；**ask/request** 事实 = P2a 镜像行 `pending`，
+  或 P2b 观察者从 `$events` 的 waterfall/cancel 帧**只观察**出的 `pendingKind`
+  （`approval/request` → approval、`user-questions/request` → question；`agentId` 即
+  sessionId），观察者**永不发** `$events/result`（不替任何客户端结算审批/提问），
+  `running=true` 清待决。壳/running 记忆只在**事实载体真正换代**一侧由整代撤回清除；
+  桥面上报撤回（`report === undefined`，facts 载体未换代）只清**壳轨**——facts 轨与
+  `prevRunningRef` 保留（分域语义见下条与 §3.5）。
+- **首报/撤回即播种（壳轨）与窗口内完成的 facts 轨不丢发**：壳轨 `prev === undefined`
+  （含桥面 `report === undefined` 撤回后的首份壳/虚拟报）只播种不发壳事件——wire 只有
+  `running` 位，无法区分「窗口内完成」与「窗口内被手动停止」，壳轨不补发。窗口内真正到达的
+  facts `observed+host` 完成**不在此列**：facts 载体未换代 ⇒ 观测层的 `factsSeeded`/
+  `factsWatermark` 跨撤回保留，完成仍按「水位严格前进」恰好通知一次（C1；撤回分域语义与
+  取舍见 §3.5）。同内容重放不重复（facts 水位吸收 + 壳边沿记忆 + 主进程 claim 兜底）。
 - subagent 会话不产生事件（事实通道不含 subagent 行）；父会话归一的
   `subagentActivity` 只让完成候选缓行（G4）与驱动子代理计数徽标，不进边沿判定。
+  **事实通道的「不含 subagent 行」是两条硬门**：P2a 网关镜像在 store 侧只投递
+  **身份已由列表事实（baseline/added）确认**的顶层行（design 17 §10.7 S1）；P2b 无壳
+  观察者对仅由 status/activity/waterfall 首建、尚未在任何列表事实出现过的 id 也不建
+  「可投递行」（`identityConfirmed === false`：观察者快照跳过 + `virtualRuntimeReport`
+  跳过，双保险），基线/added 确认后同拍发布——否则 `added` 丢失窗口里子代理的
+  status→idle 会合成 host 域 observed 完成并发出真横幅。
 - **P3 单入口修订**：生产裁决的唯一入口是 `packages/renderer/src/notification-projection.ts` 的
   `reconcile(state, observation)`——`completion-observation.ts` 把壳运行时 report 与 facts 快照两条
   独立到达的通道合并成每 (source, session) 一份可序列化观测；`App.tsx`（facts 轨）与
@@ -449,10 +472,18 @@ running 批之后重放更早的批，其 `keepFence` 早已随原批过去、�
   `prune`（§3.2.7 ③）。
 - **卫生上界**：加载时丢弃 `at` 超 7 天的 pending 并 loud（`PENDING_MAX_AGE_MS`，是卫生上界而非判定
   计时器）；unread 剪枝与 read 同界（每来源 500），outcomes 按水位 LRU 同界。
-- **撤回与遗忘**：通道撤回（壳重连/重 boot）清该来源 armed + armedFloor + pending + settleFence +
-  goalKnown（B4-2：结算点记忆与会话身份同拍作废，恢复后首份已知 goal 事实重新成为结算点；恢复后首份
-  观测不补发窗口内完成；水位界与 armed 同拍清理），`notified/outcomes` 保持 durable，reload 不清；
-  `forget/prune/归档/removed` 按既有作用域收敛（来源退役 `forget` 连 durable 表一并删）。**会话级遗忘**：
+- **撤回与遗忘（按 provenance 分域，C1）**：
+  ①**桥面上报撤回**（`use-bridge-subscriptions` 的 `report === undefined`，壳重连/重 boot；facts
+  载体未换代）只清**壳轨**：观测层复位 `shellSeeded` 与每会话壳运行/待决位，账本**整体不动**——
+  armed/armedFloor/settleFence/pending 是跨通道的去重与结算守卫（armed 也由 facts 候选消费写入、
+  settleFence 正是「无水位壳 emit 后 facts 追平同一完成」的一次性围栏），清任何一个都会让窗口内
+  追平的同一完成二次通知；facts 轨 `factsSeeded`/`factsWatermark`/`factsReseedPending` 与修正臂
+  `prevRunning` 原样保留（窗口内 observed+host 完成恰好通知一次；虚拟接管按 facts 逐行边沿武装蓝点）。
+  ②**事实载体真正换代**（gateway facts teardown / mux 观察者 teardown / aggregate notReady 删 runtime /
+  观测状态删除）才走整代撤回：清该来源 armed + armedFloor + pending + settleFence + goalKnown 并删观测
+  状态（B4-2：结算点记忆与会话身份同拍作废，恢复后首份已知 goal 事实重新成为结算点；恢复后首份观测
+  不补发窗口内完成；水位界与 armed 同拍清理），`notified/outcomes` 保持 durable，reload 不清。
+  ③`forget/prune/归档/removed` 按既有作用域收敛（来源退役 `forget` 连 durable 表一并删）。**会话级遗忘**：
   会话从**在场集**消失时同拍清 armed + armedFloor + settleFence + pending + goalKnown 并进入
   `forgottenSessions` 重现播种集（FIFO 上界 500，`FORGOTTEN_SESSION_LIMIT`）。**重现播种完整规则**：
   重现批**不产候选**、facts 水位记为已见；重现批**无可用 facts 水位行**（通道不可用/行缺席/非
@@ -465,8 +496,8 @@ running 批之后重放更早的批，其 `keepFence` 早已随原批过去、�
   `withdrawObservationState`（易失轨，不随 durable 剪枝门关门）；若不同拍清账本，重建新代
   （`freshState`，代际从 1 重算）首个 outcome 会拿旧 watermark flush 旧 pending。**取舍**：门关窗口
   （未结算/degraded/rosterIncomplete）里 `live` 可能只是磁盘子集，被剪来源的 durable pending 会被删且
-  不补发（与通道撤回同语义；`notified/outcomes` 保持 durable）；若只是 roster 缺口、会话仍活跃，重新
-  纳入后由新代重新观测。有 pending 被清时必须排一次落盘（否则旧 pending 从磁盘复活，页重载后以旧水位
+  不补发（与**事实载体换代**的整代撤回同语义；壳上报撤回是另一分域，见 §3.2.4/§3.5；`notified/outcomes`
+  保持 durable）；若只是 roster 缺口、会话仍活跃，重新纳入后由新代重新观测。有 pending 被清时必须排一次落盘（否则旧 pending 从磁盘复活，页重载后以旧水位
   flush）。相邻的 facts 输入缺席边界见 §3.2.7 ⑦。
 - **在场集定义（原始通道行键）**：在场 = 壳行键 ∪ facts **原始**行键（非可用/过滤后的 facts 行）。
   通道不可用/stale/degraded 只降该维度为 unknown，**不得当作会话缺席**——否则断连会把 held pending /
@@ -766,9 +797,15 @@ interface ChamberSettings {
 
 ### 3.5 覆盖边界与诚实性
 
-- **仅已挂载来源**可检测 ask/request（实时 mux 事实只在 ctx 内存在）；未挂载且未预热
-  的远程来源（预热槽 ≤3 + 用户打开过的 N-ctx 常驻之外）v1 不产生通知——文档化限制，
-  后续可选「unary 完成检测」（30s 延迟、无 pending 信息）扩展。
+- **ask/request 的来源分档（2026-12）**：有壳来源用 ctx 内实时 mux 事实；无壳来源按 facts
+  通道分档——P2a 镜像行带 `pending`，P2b 观察者从 `$events` 的 waterfall/cancel 帧只观察出
+  `pendingKind`（设计上**永不**回 `$events/result`，不替任何客户端结算审批/提问）。两者都经
+  判定侧虚拟投影进入同一条边沿（§3.2）。**仍开放**：P2b 的 `$events` 缺口（本地只收
+  `ready` ⇒ 没有瀑布帧就没有该证据，见 STATUS）；上游 `observeRunning` 的第二支（首见 idle
+  武装）只在「列表基数已知且未就绪（`listKnown && baselines === 0`）」时启用，且要求行带
+  `beforeBaseline`——今天两个平面实际上都到不了该窗口：P2b 可判即 ≥1 基线；P2a 网关平面
+  的行**永不带 `firstSeenByDelta`**（快照/增量都不赋该位），第二支永不触发。登记为已知窗口；
+  有载体但未收到任何帧的来源不产生通知。
 - **goal 活性事实的覆盖边界（2026-12）**：压制与目标标题需要 goal 事实，通路按来源形态
   分三档——
   - **P1（有挂载壳的来源）**：插件从会话投影 `projectionValues.goal` 读三值，零新增
@@ -781,9 +818,15 @@ interface ChamberSettings {
   - **P2b（SSH/dsh 来源）**：`source-mux-facts.ts` 讲**实例自己的**远程协议
     （`session/list` 投影 + `$events` + 每边沿一次 `session/follow`），
     **不消费 gateway 镜像**；两条事实源在 renderer 侧汇成同一份 `SessionFactsSnapshot`。
+    行集 = **列表事实确认过的**顶层会话：status/activity/waterfall 首建的 id 先扣在观察者
+    内部（`SessionFactsRow.identityConfirmed === false`，边沿照常分类、读尾照常发生），
+    基线/added 确认顶层后同拍发布；揭示为子代理即退役且全程不可见——S1 门在 P2b 的等价
+    形态（design 17 §10.7 的 `originKnown` 同语义）。`virtualRuntimeReport` 再挡一道
+    （`identityConfirmed === false` 不投影），判定面与观察者快照双保险。
     其 `goalActivations` 保留边与 P1/P2a 同纪律：绑定 id 与基线不符**保留待匹配、不直接
     drop**（由后续 baseline/added 携带匹配 identity 时消费），no-goal 事件只把**已知对象**
-    goal 即时清成 null——不缓存、不落到 unknown 行、不新建行。    其 `$events` 订阅为**长连接**（已去 45s 静默换代）：订阅静默既不是内容证据、也不是载波
+    goal 即时清成 null——不缓存、不落到 unknown 行、不新建行。
+    其 `$events` 订阅为**长连接**（已去 45s 静默换代）：订阅静默既不是内容证据、也不是载波
     证据，事实刷新由 30s `reconcile()` 的 `session/list` 基线承担；真失败（close/error、end/error
     帧、握手超时）仍按 1s→30s 有界退避换代。旧行为每次换代都会关 socket + 置 `baselineTrusted=false`
     + 清 stable + `emit()` 整表，即每 45s 一次周期性全量失效（离线实测 8 分钟换代 9 次、寿命精确
@@ -815,6 +858,11 @@ interface ChamberSettings {
     `legacy-gateway`、`serviceable=false`、`stale=true`（不可用但**不触发遗忘**、held pending
     不被清）；持续 404 的重探不得清掉这些行，行与水位也绝不推进。消费侧按 §3.2.4 的在场集
     纪律仍用**原始行键**判在场；**404→ok 恢复**时由新的协议快照重新成为权威行集（自愈）。
+  **disabled / forward-skew 同规（2026-12）**：503 `session_state_disabled`、mode `off`、
+  2xx 无 `protocol`、`protocol > 1` 等无载荷降级一律**保留既有行 +
+  `serviceable=false`/`stale=true`**，同样**不是权威空行集**——空行集会触发遗忘结算、清
+  held pending、撤掉已武装的完成点（无壳路径尤其不能失行）。该档重试无意义（等流/版本
+  自愈），恢复由 connected 边沿或新协议快照接回。
   **恢复纪律**：2xx unversioned 不是永久不可用——三条出口
   （首探空快照 / 已表达同事实 / 保留既有行）都在置快照后排一次有界重探
   （`scheduleProbe(reconnectMs)`），与 404 legacy、5xx/网络失败同一纪律
@@ -851,6 +899,9 @@ interface ChamberSettings {
   `emit()` 在 `stopped` 后拦下所有后续刷新，死载体的行就永久「可判」了（round-2 红队坐实的
   半死载体竞态）。退役快照只在 `ready()` 时发（其余时刻 store 里本就是 degraded，不发噪音）。
   接线锁 `test/wiring/session-authority-wiring.test.ts` 钉住「不得再出现第二个可用性表达式」。
+  **适用范围（C1 分域）**：本纪律只约束**事实载体**的终结——真正换代/退役走整代撤回（`withdrawSource`
+  缺省 `scope='all'`，两轨转移记忆与账本易失轨同拍清）；**壳上报撤回**（`report === undefined`，
+  facts 载体未换代）不是载体终结，只清壳轨、保留 facts 轨与臂记忆（见下条「断连/重连」）。
 - **`factAt` 是渲染字段，必须骑运行时上报签名**：`runtimeReportSignature` 是 App 提交运行时
   事实前的去重键，漏签一个渲染字段即该字段单独变化被整个丢弃（行的 `data-chamber-fact-at`
   证据锚冻结在首见值）。`factAt` 编码为稀疏（0/缺席同为空串，不制造 churn），两条签名路径
@@ -859,17 +910,23 @@ interface ChamberSettings {
   ②把 `factAt` 量化成粗粒度桶（如秒级）再签——省下的重发布（网关轮询 ≤1 次/30s，无壳
   观察者只随真实状态边沿，见 `source-mux-facts.ts` 的 `handleStatus`）远小于「锚点被吞」的
   代价，且引入第二个时间语义，不值得。
-- **断连/重连：撤回即播种，窗口内完成/提问不补发**（设计取舍，与实现一致）：通道撤回
-  （shell 重连/重 boot，来源移除的 clear 由 liveServerIds/指纹检查挡在前面）时，`App.tsx`
-  的 report 撤回分支删除该来源的 `runtimeFactsRef`/`prevRunningRef`/观测状态
-  （`completionObservationRef`），并 `completeLedger.withdraw(sourceId)`（清 armed +
-  armedFloor + pending + settleFence，`notified/outcomes` 保持 durable，§3.2.4）后重算
-  通知观测；修正臂按新上报重新对账（撤回本身不清臂，`stepCompletionArm` 在无上报时冻结）；
-  恢复后首份上报按代际
-  重新播种（`shellSeeded/factsSeeded` 尚未置位、G2 基线）→ 只播种、不发通知事件。理由：
-  wire 只有 `running` 位，无法区分「窗口内完成」与「窗口内被手动停止」，保留
-  记忆会把后者误报成完成；窗口只持续到重连完成，窗口内状态在 UI（Rows / pending 徽标）
-  照常可见，通知不补发即不撒谎。同内容重放仍不重复（边沿记忆 + 主进程 claim）。
+- **断连/重连：撤回按 provenance 分域，窗口内完成不丢发**（C1 语义修正，与实现一致）：
+  桥面上报撤回分支（`use-bridge-subscriptions` 的 `report === undefined`，shell 重连/重 boot；
+  来源移除的 clear 由 liveServerIds/指纹检查挡在前面）先删该来源的 **factsStore 运行时事实上报**，
+  再经 `withdrawSource(sourceId, 'shell')` 只清**壳轨**（观测层 `shellSeeded` 复位 + 每会话壳
+  运行/待决位清空 ⇒ 恢复后首份壳/虚拟报只播种，不产壳候选）；facts 轨 `factsSeeded`/
+  `factsWatermark`/`factsReseedPending`、修正臂 `prevRunningRef` 与账本守卫（armed/armedFloor/
+  settleFence/pending）**原样保留**后重算通知观测与臂。理由：**facts 载体未换代**——窗口内到达的
+  observed+host 完成必须仍按「已播种 + 水位严格前进」恰好通知一次；清掉 facts 轨会让恢复批变成
+  G2 播种批、把窗口完成吸收进 `factsWatermark`（既不通知也不可重提），清掉 `prevRunningRef`
+  则蓝点没有边沿（通知与未读两面皆丢）。真正换代的路径（gateway facts teardown / mux 观察者
+  teardown / aggregate notReady 删 runtime / 观测状态删除）仍走整代撤回（`withdrawSource` 缺省
+  `scope='all'`：删两轨转移记忆 + `completeLedger.withdraw` 易失轨，`notified/outcomes` durable，
+  §3.2.4）。**已知取舍**：壳轨首报只播种，故窗口内被手动停止的会话不由壳边沿补发通知；保留
+  `prevRunningRef` 后，窗口内被手动停止且恰为来源 `current` 的会话在壳恢复时会武装一次蓝点
+  （wire 无法区分完成与手动停止，上游 `observeRunning` 同样无法区分）——通知面不撒谎，蓝点面
+  与上游同形。窗口内状态在 UI（Rows / pending 徽标）照常可见。同内容重放仍不重复（facts 水位
+  吸收 + 壳边沿记忆 + 主进程 claim）。
 - 窗口内提醒仍由侧边栏蓝点/pending 徽标承担；通知只在窗口不可见（hidden-only 默认）或
   显式 always 时打扰。
 - **被裁决跳过的完成不补发**（设计取舍）：hidden-only + 窗口聚焦时主进程跳过
@@ -924,6 +981,11 @@ OpenChamber 参考实现：`packages/electron/main.mjs` 的 `desktop_tray_update
   → 呈现（窗口恢复 / 重载有重放钩子；`applied:false` = 未派发 → 与 rejection 同一条有界重试链）
 ```
 
+- **无壳来源的角标（2026-12）**：修正臂在 `factsOnly`（facts-only provenance）下对**逐行**
+  host `running true → false` 边沿武装（06 §4.2），徽标投影仍走同一析取
+  `armed = correctionArms[source][session] || row.completed`；facts 降级窗口保留行 + `stale`
+  只冻结武装、保留记忆，**不触发遗忘**（丢点方向 fail-closed）。子代理行已在源侧排除
+  （镜像不投递、观察者跳过），永不主体、永不武装、不计徽标。
 - **计数语义**：一个未读会话 = 1（同 OpenChamber「chats with unseen activity」，非通知条数）；
   pending（ask/request）不计数（窗口内提醒仍由侧边栏 pending 徽标承担）。投影输入只有
   合并后的完成析取（`projectBadgeCount(correctionArms, runtimeFacts)` 的 `row.completed`）
@@ -1117,7 +1179,7 @@ gateway 镜像与无壳观察者在**已观察到停止边沿**但读不到 `tur
 
 `session/list` 是 HTTP unary，`session/follow` 是同一 remote.mux 载波上的逻辑流：按独立 `streamId` 打开，只消费该流的 opening snapshot 与后续 event，读到 `turn/end` 即发 cancel；无尾巴的 snapshot 保持流至有界期限，载波替换和观察者停止也结算并取消在途流。把 follow 当作 HTTP unary 会使真实宿主拒绝读尾，完成永远只能降级为 reconstructed。`updatedAt` 来自最近用户消息的事件时间（空会话回退创建时间），与 `turn/end.time` 都是毫秒精度；两事件同毫秒无法仅凭时间比较区分先后，故保留待分类，不把等值尾巴用于通知。要消除该漏报边界，需要能关联用户消息和 turn/end 的序号或轮次键。
 
-无壳观察者的可信全量 `session.list` 连续两次缺席同一会话，才将该行退役；一次缺席保留原行，但暂停其在途读尾分类，期间收到该会话的 status/added/activity 会重置缺席计数。退役与显式 `removed` 走同一清理路径，删除不生成完成边沿。观察者 `stop()` 清除行、运行轮次及待分类读尾；同一对象再次 `start()` 必须从新基线建立事实，旧生命周期的读尾不能写入新行。
+无壳观察者的可信全量 `session.list` 连续两次缺席同一会话，才将该行退役；一次缺席保留原行，但暂停其在途读尾分类，期间收到该会话的 status/added/activity 会重置缺席计数。**两平面差异（有意登记）**：P2a 网关镜像已改为**单阶段**删除——一次成功且完整的基线缺席即进 `removedSessionIds` 并从 store 删除（design 17 §10.7）；观察者保留两次容忍，因为它的 `session/list` 采样时点不可知（host churn 下一次样本可能不完整），而网关的缺席分支只在「成功且完整」的基线上到达且删除有显式 wire 通道。退役与显式 `removed` 走同一清理路径，删除不生成完成边沿。观察者 `stop()` 清除行、运行轮次及待分类读尾；同一对象再次 `start()` 必须从新基线建立事实，旧生命周期的读尾不能写入新行。
 
 待投递与事实水位按**同一次完成**匹配：旧水位的 `permanent` 记录留作失败证据，但不得压住同会话更高水位的新完成。运行时 armed 只代表边沿已经入队；无水位运行时边沿收到 `shown` / 策略性 `suppressed` 后，另记易失的已结算待归属位，后到的 host 水位才可据此播种已通知水位。观察到重新 running 即清除该位；单凭 armed 不得将新的 host 水位当成已投递。
 
@@ -1125,4 +1187,4 @@ gateway 镜像与无壳观察者在**已观察到停止边沿**但读不到 `tur
 
 运行时边沿没有 host 运行轮次 ID。若旧运行时通知仍待投递，且新一轮运行的 true/false 两个状态都丢失，后到的 host 水位不能无歧义地归属旧或新完成。该混合证据窗口需端到端故障注入；要消除歧义须由宿主提供两通道共有的运行轮次键。
 
-**Rejected alternatives**：提前推进通知水位会把投递失败变成永久漏报；把所有原生 `shown:false` 当策略压制会吞掉暂时性权限、速率和 IPC 故障；把重试仅交给 5 秒去重窗会在其到期后重复显示；把同会话任一 pending 或 armed 当作已通知，会让旧永久失败吞掉新一轮完成。仅用稳定 `eventKey` 归属异步回执会让已撤销记录的旧结果结算同键新记录，因此投递尝试另有票据。无壳基线首次缺席就删除会把短暂不完整列表误判为删除；永不按基线缺席收敛则让丢失 `removed` 帧的旧 running 行永久存在。连续两次完整缺席与网关镜像的删除判据一致。把 `running=false` 或 authority 的纠偏边沿升级成 complete 会将用户停止误报为完成；把 `session/follow` 的最近尾巴无条件归给当前运行会复用旧 `turn/end`，因此必须按 host 提示时间校验。
+**Rejected alternatives**：提前推进通知水位会把投递失败变成永久漏报；把所有原生 `shown:false` 当策略压制会吞掉暂时性权限、速率和 IPC 故障；把重试仅交给 5 秒去重窗会在其到期后重复显示；把同会话任一 pending 或 armed 当作已通知，会让旧永久失败吞掉新一轮完成。仅用稳定 `eventKey` 归属异步回执会让已撤销记录的旧结果结算同键新记录，因此投递尝试另有票据。无壳观察者基线首次缺席就退役会把短暂不完整样本误判为删除（observer 保留两次容忍）；网关镜像 plane 的缺席分支只由成功且完整的基线到达且有显式 `removedSessionIds` 通道，故按上游 ready-即删**单阶段**删除（design 17 §10.7）；永不按基线缺席收敛则让丢失 `removed` 帧的旧 running 行永久存在。把 `running=false` 或 authority 的纠偏边沿升级成 complete 会将用户停止误报为完成；把 `session/follow` 的最近尾巴无条件归给当前运行会复用旧 `turn/end`，因此必须按 host 提示时间校验。
