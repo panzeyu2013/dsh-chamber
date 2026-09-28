@@ -21,6 +21,8 @@ import { graphGapKindFor, type GraphGapKind } from './source-readiness.ts'
 import { optionalStringArray, stripClientSuffix } from '../../../vendor/harness-packages/@deepseek-ai/dsh-client-modules/src/client/manifest.ts'
 
 import type { PluginGraphDiagnostic, PluginGraphDiagnosticState } from '@dsh-chamber/dsh-chamber-client-core'
+import { hadSchedulingGap, recordEvidence } from '@dsh-chamber/dsh-chamber-client-core'
+import { classifyObservation, isAdmissible } from '@dsh-chamber/dsh-stream-state'
 import { postUnary, type UnaryPostOutcome } from '@dsh-chamber/dsh-chamber-client-core/wire-common'
 // Envelope classification SINGLE SOURCE, also consumed by client-core's
 // plugin-graph-recheck.ts: boot and self-heal verdicts for the same wire answer
@@ -441,18 +443,36 @@ export async function collectExtraRows(
     const healDeadline = deps.waitForServing === undefined ? 0 : Date.now() + SERVING_HEAL_BUDGET_MS
     for (;;) {
       for (let attempt = 1; attempt <= retry.attempts; attempt++) {
+        const attemptStartedAt = Date.now()
         try {
           const entries = await fetchHostGraph(basePath)
           if (entries !== null) return { rows: entries, error: null, starting: false, cancelled: false }
         } catch (error) {
-          if (isCancellationEvidence(error)) {
+          // The evidence classifier owns "is this a source fact?": a WebKit cancellation
+          // (superseded) or a deadline that expired while the page was not scheduled
+          // (unscheduled) is NOT one (design 14 §D4) — book nothing, retry in budget.
+          const verdict = classifyObservation({
+            outcome: 'error',
+            errorName: error instanceof Error ? error.name : undefined,
+            errorMessage: error instanceof Error ? error.message : String(error),
+            schedulingGap: hadSchedulingGap(attemptStartedAt, Date.now()),
+          })
+          const detail = {
+            instance: instanceId,
+            attempt,
+            windowMs: Date.now() - attemptStartedAt,
+            reason: error instanceof Error ? error.message : String(error),
+          }
+          if (!isAdmissible(verdict) || isCancellationEvidence(error)) {
             // 取消不是来源事实（挂载被取代 / 我们自己的拆除 / 页面被节流）：不落任何判定，
             // 在同一有界预算内重试。旧形态把它读成通道失败，把 graph-unreachable 钉在来源上
             // 交给一次性自愈，留下一个只能手动重载的空壳（实机 P5）。
+            recordEvidence('host-graph', verdict, detail, false)
             cancelled = true
           } else {
             // Non-503 channel failures are NOT transient: fail fast (a hung fetch
             // already consumed its 30s timeout; retrying would only stack them).
+            recordEvidence('host-graph', verdict, detail, true)
             lastError = error
             return { rows: null, error: lastError, starting: false, cancelled: false }
           }

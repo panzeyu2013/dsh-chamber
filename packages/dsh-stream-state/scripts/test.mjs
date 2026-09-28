@@ -65,6 +65,12 @@ export const GROUPS = {
   tables: [
     'test/tables/tables-parity.test.ts',
   ],
+  // evidence: the observation-validity classifier every chamber liveness deadline
+  // consumes (design 14 §D4) — pure, clockless, and the single source of the verdict
+  // words the consumers' logs and the persisted page ledger carry.
+  evidence: [
+    'test/evidence/observation-validity.test.ts',
+  ],
   // source: the per-source lifecycle reducer that consolidates the App's six
   // ledgers + three loose fields into one incarnation-keyed object.
   source: [

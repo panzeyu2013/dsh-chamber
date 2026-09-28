@@ -32,12 +32,12 @@
  * 快照与 gateway 事实源**同形**，直接喂 App 既有的 applySessionFacts 管线（同一份事实、
  * 同一套完成判定）。
  */
-import { isRecord } from '@dsh-chamber/dsh-chamber-client-core'
+import { hadSchedulingGap, isRecord, recordEvidence } from '@dsh-chamber/dsh-chamber-client-core'
 import type {
   SessionFactsCompletedAtSource, SessionFactsRow, SessionFactsSnapshot, SessionFactsTurnEnd,
 } from './session-facts-source.ts'
 import { isWatermark } from './watermark.ts'
-import { TABLE_SNAPSHOT } from '@dsh-chamber/dsh-stream-state'
+import { TABLE_SNAPSHOT, classifyObservation, isAdmissible } from '@dsh-chamber/dsh-stream-state'
 
 export interface MuxSocket {
   send(data: string): void
@@ -1093,7 +1093,12 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     const expired = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
         controller.abort()
-        reject(new Error(method + ': timeout after ' + String(timeoutMs) + 'ms'))
+        // 'TimeoutError' is the evidence layer's machine word for "this observation
+        // outlived its own budget": it separates a real deadline from cancellation
+        // (superseded) and from a transport fault (channel). Never parse the text.
+        const deadline = new Error(method + ': timeout after ' + String(timeoutMs) + 'ms')
+        deadline.name = 'TimeoutError'
+        reject(deadline)
       }, timeoutMs)
     })
     try {
@@ -1261,10 +1266,32 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     const request = ++baselineRequest
     const atRevision = eventRevision
     let value: unknown
+    const startedAt = now()
     try {
       value = await rpc('session/list', { args: { _request: {} } }, baselineTimeoutMs)
     } catch (error) {
       // 失败 = 本次连接事实不可信（不能静默：必须能区分「没完成」与「观察者坏了」）。
+      // 但**只有有效观测**才算来源事实：页面被节流/挂起时墙钟 deadline 会先到期，
+      // 那不是来源没答，是页面没被调度（design 14 §D4 证据有效性层）。
+      const verdict = classifyObservation({
+        outcome: 'error',
+        errorName: error instanceof Error ? error.name : undefined,
+        errorMessage: failureText(error),
+        schedulingGap: hadSchedulingGap(startedAt, now()),
+      })
+      const detail = {
+        source: deps.sourceId,
+        method: 'session/list',
+        budgetMs: baselineTimeoutMs,
+        windowMs: now() - startedAt,
+        reason: failureText(error),
+      }
+      if (!isAdmissible(verdict)) {
+        recordEvidence('mux-facts', verdict, detail, false)
+        if (!stopped && atGeneration === generation && request === baselineRequest) scheduleBaselineFailureRetry()
+        return
+      }
+      recordEvidence('mux-facts', verdict, detail, true)
       if (!stopped && atGeneration === generation && request === baselineRequest) {
         baselineFailures += 1
         baselineFailureReason = failureText(error)
@@ -1275,6 +1302,15 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       return
     }
     if (stopped || atGeneration !== generation || request !== baselineRequest) return
+    if (baselineFailureReason !== null) {
+      // 恢复证据：这一次基线是有效观测。日志面要能回答「什么时候好的」，不只是「什么时候坏的」。
+      recordEvidence('mux-facts', 'answered', {
+        source: deps.sourceId,
+        method: 'session/list',
+        clearedReason: baselineFailureReason,
+        windowMs: now() - startedAt,
+      }, false)
+    }
     if (atRevision !== eventRevision) {
       // 列表的取样点未知；其间收到的事件可能比列表新。重新取样，不用旧列表覆写事件——
       // 但经 scheduleBaselineResample 合并 + 限速（review O1），不做无间隔递归。
@@ -1287,6 +1323,11 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       // A successful RPC envelope is not a successful facts baseline when its
       // required items list is absent. Treating null as [] would certify an
       // unobserved source and suppress the runtime completion fallback.
+      recordEvidence('mux-facts', 'channel', {
+        source: deps.sourceId,
+        method: 'session/list',
+        reason: 'items missing or not an array',
+      }, true)
       baselineFailures += 1
       baselineFailureReason = 'session/list: items missing or not an array'
       clearStable()

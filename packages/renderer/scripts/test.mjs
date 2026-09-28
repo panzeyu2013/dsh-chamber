@@ -42,6 +42,9 @@ export const GROUPS = {
     'test/lifecycle/safe-mode.test.ts',
     'test/lifecycle/baseline-harvest.test.ts',
     'test/lifecycle/host-graph.test.ts',
+    // 证据有效性层：页面调度记录（rAF 心跳/焦点/可见性 → 调度缺口）与有界持久证据账本。
+    'test/lifecycle/page-schedule.test.ts',
+    'test/lifecycle/evidence-log.test.ts',
     // 活实例 ctx 的客户端插件热同步：帧解析 / id 集 diff / 装-卸-rev 诊断 / 撤臂栅栏。
     'test/lifecycle/live-graph.test.ts',
     // 页面根接管安全网：外部 shell.overlay 置 0 #root 的检测 / 上报 / 释放。

@@ -664,12 +664,46 @@ chamber 的边界是「自动升级 + 显式失败面」；页面级阶梯的自
        - `sidebar-scroll-sync.ts`：容器未就位时的**帧内重试链加上界**（`FRAME_TIGHT_BUDGET_MS = 200`，之后回 80 ms 定时器节奏；boot 窗口里原本每帧一次 DOM 走访），并把锚行定位从"全量遍历行"改为一次属性选择器（`CSS.escape`，无 `CSS` 环境回落原扫描）。
        - `components/InstanceView.tsx` + 新纯模块 `frame-coalescer.ts`：相位采样的"每次变更排一帧"改为**合并采样**（首帧一次 + 间隔合并 + 尾部必采，`SURFACE_SAMPLE_MIN_INTERVAL_MS = 100`）——boot 窗口里原本等于每帧一次 React 同步 commit（正是崩溃栈的入口形态），语义不变（遮罩判定只依赖最终相位）。
        - Swift 壳：`RendererCrashAttribution`（纯值）+ `MainWindowController` 接线——崩溃行现在带「距上次加载完成 X.XXs（boot 窗口内/已稳定）+ 本窗口第 N 次崩溃」，恢复落地再记一条「崩溃后 X.XXs 重载完成」。归因量是静默崩溃唯一能被事后判定的依据。
-    3. **仍未闭合**：JSC 崩溃本身是引擎缺陷（WebKit 22625），仓内只能降低触发概率与把状态可见化，不能消除；vendor 侧自身的 rAF 循环（chat/conversation/layout/trajectory）仍在同一批次里；页面事实的持久消费面仍是 STATUS「会话打开停滞」残余项；10:19 那次没有崩溃报告的流层卡死现归因于本 D4 开头的引擎判定补丁（普通 TypeError，不留崩溃报告）；JSC 崩溃与静默重载仍是独立故障。
+    3. **仍未闭合**：JSC 崩溃本身是引擎缺陷（WebKit 22625），仓内只能降低触发概率与把状态可见化，不能消除；vendor 侧自身的 rAF 循环（chat/conversation/layout/trajectory）仍在同一批次里；页面事实的持久消费面仍是 STATUS「会话打开停滞」残余项；10:19 那次没有崩溃报告的流层卡死现归因于本 D4 开头的引擎判定补丁（普通 TypeError，不留崩溃报告）；JSC 崩溃与静默重载仍是独立故障（2026-09-28 15:28:33 的新报告与同族同源：主线程微任务路径 `operationOptimize → newReplacementCodeBlockFor`，`far=0x120`）。
 
 - **仍开放的实机验收与 soak（独立于上述已落地修复）**：① Swift 壳流式中点开 ×20（真机走查页面侧卡死是否复现）；
   ② soak 采集 mux churn 与 JSC 崩溃率基线——`~/Library/Logs/DiagnosticReports` 的 WebContent 报告、`control-plane.log` 的
   `browser close` 频率、`dsh-chamber:stream-forensics`/`dsh-chamber:stream-carrier-failed` 页面事实；③ 载波/静默 socket 与
   JSC 崩溃/静默重载（第三次排查）的兜底**未清理**，属独立故障。
+
+- **第四次排查（页面调度证据层）：把「我没被调度」从来源事实里分出去**
+  1. **现场证据（2026-09-28 打包态实机）**：服务端同时刻全绿——壳外同源探针 30/30 轮
+     `POST /api/i/<id>/api/session/list` 34–98 ms、5 源 `chamber/session-state` 36 轮 3–25 ms、
+     独立 Node WebSocket 客户端挂同一 mux 400 s 无 close；而页面自己的权威日志
+     （WebKit LocalStorage `dsh-chamber.authority-log.v1`）在同一分钟写满
+     `session/list: timeout after 5000ms` / `Load failed` / `read deadline exceeded`，
+     且 probe 都发生在窗口刚获得焦点那一秒、5 s 后窗口已失焦。机制：失焦/遮挡的 WKWebView
+     会被 WebKit 节流甚至挂起，而 `document.visibilityState` 仍是 `visible` ⇒ 墙钟 deadline
+     先到期，页面却从没拿到运行机会。同批取证的另两条独立故障：WebContent 在 JSC
+     `operationOptimize → newReplacementCodeBlockFor` 的 async-generator 微任务路径崩溃
+     （`far=0x120`，15:28:33）⇒ 静默整页重载清空全部页面内事实；启动期
+     `页面 emit 失败 dsh-chamber:runtime-state-changed …发生了JavaScript异常`（每次启动数条）
+     让本地卡片的运行时行缺省为「未知 / 端口：—」。
+  2. **单一所有者**：`packages/dsh-stream-state/src/evidence.ts` 是观测有效性的唯一分类器
+     （`answered | deadline | unscheduled | superseded | channel | unavailable`，
+     `isAdmissible` 只放行 `answered/deadline/channel`）；
+     `packages/dsh-chamber-client-core/src/page-schedule.ts` 是页面调度记录的唯一所有者
+     （rAF 心跳 + 焦点/可见性 + `document.hasFocus()`），`hadSchedulingGap(from, to)` 只在
+     **有正面证据**时返回 true（未知一律不放行——未被证明的缺口不得为真故障开脱）；
+     `evidence-log.ts` 是有界（内存 256 / 持久 128）且持久
+     （`dsh-chamber.evidence-log.v1`）的判定账本，控制台行
+     `[chamber:evidence] <verdict> booked=<bool> <owner> {…}`。
+     消费面：mux 基线（`session/list` deadline）、gateway facts 流建连 deadline（不再无条件
+     `markStale`）、权威读 `readBounded`（未调度则重读一次；两次都未调度 ⇒ 本轮不落任何判定）、
+     boot 图 `fetchWithRetry`、侧栏权威探针；boot 时由 `main.tsx` 安装探针。
+  3. **闩锁退役**：侧栏 `verificationExhausted`（4 次失败后整页生命周期不再校验基线）改为
+     有界 defer 下限（30 s）+ 事件驱动重臂（下一次真实 list 变更或 `connection/reset`）。
+  4. **Rejected alternatives**：① **抬高 deadline / 增加重试**——throttle 窗口是秒级到分钟级，
+     抬到多少都可能先到期，且真故障的发现时间被同步拉长；要判的是「这条观测是否有效」，不是「等更久」。
+     ② **只静默重试、不落账**——事后无法回答「刚才那 5 s 是来源没答还是页面没被调度」，正是本轮
+     排查看不到的东西。③ **只信 `document.visibilityState`**——WKWebView 失焦时它仍是 `visible`，
+     那正是旧判定失效的根因；rAF 心跳缺口才是正面证据。④ **壳侧总预算 / 超时照常载入**——时间的
+     所有者只能是控制面状态机，壳不设第二时基（前一轮裁决）。
 
 ### D5 keep-awake（v1 设置项，默认关）
 

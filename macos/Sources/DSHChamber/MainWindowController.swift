@@ -1319,7 +1319,15 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             "__dshChamberEmit(\(nativeTokenLiteral), \(eventJSON), \(payloadJSON))"
         ) { _, error in
             if let error {
-                shellLog("[shell] 页面 emit 失败 \(event)：\(error.localizedDescription)")
+                // The JS exception text is the only way to tell "the page's listener threw"
+                // from "the page was not there yet": WKError's localizedDescription is the
+                // generic 「发生了JavaScript异常」, while userInfo carries the thrown message
+                // (top level or nested under the underlying error). Logged for T-25 forensics.
+                let nsError = error as NSError
+                let underlying = (nsError.userInfo[NSUnderlyingErrorKey] as? NSError)?.userInfo
+                let thrown = (nsError.userInfo["WKJavaScriptExceptionMessage"] as? String)
+                    ?? (underlying?["WKJavaScriptExceptionMessage"] as? String)
+                shellLog("[shell] 页面 emit 失败 \(event)：\(error.localizedDescription)\(thrown.map { " | \($0)" } ?? "")")
             }
         }
     }
