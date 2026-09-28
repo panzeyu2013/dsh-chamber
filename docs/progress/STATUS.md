@@ -95,7 +95,7 @@
 - 会话创建/fork/归档侧栏收敛：四项实机验收 + 整源降级面。
 - 打开意图/工作区回声：四项实机验收 + 阶段 0 插桩判定 `early-open.ts` 去留。
 - 发布/CI 基础设施：reusable workflow、vendor submodule 验收、Gateway npm 分发未决、打包闭包自检。
-- 性能遗留（P0–P2）：五条实机复测 + 第二阶段 A/B 目标（全视图 DOM ≤13,000；实测 `document.querySelectorAll('*')`=15,805 含壳 chrome，需按 `scripts/perf/measure-ui.mjs` 口径复测）；已知取舍 = 回收壳蓝点/通知暂停至该源重开。
+- 性能遗留（P0–P2）：五条实机复测 + 第二阶段 A/B 目标（全视图 DOM ≤13,000；实测 `document.querySelectorAll('*')`=15,805 含壳 chrome，需按 `scripts/perf/measure-ui.mjs` 口径复测）；已知取舍 = 回收壳蓝点/通知暂停至该源重开、桥探测预算耗尽后转 30s 长尾（迟到 `desktopSsh` 采纳上界 30s，design 19 §3.2.4）、purged 孤儿键按指纹 K=2 淘汰且首迁移只清当前 instanceId（design 24 F5）；仍待真机验收：①隐藏/遮挡 ≥60s 的唤醒与采样实测（需最小化窗口）②打包态 SVG scope 探针（`scripts/dev/svg-resource-probe.mjs` 需活体控制面）③五条复测须含风暴档发布速率；侧栏 T2、factAt 量化与前置仪表等推迟项见 [todo/page-perf-p2.md](todo/page-perf-p2.md)。
 - Swift 壳性能 A/B：启动/大载荷 invoke p95/空闲 wakeups 需打包态；`[shell-fps]`/控制台转发在打包态被编译掉（`ShellDebug.isEnabled` 的 `!isPackaged` 守卫），打包态仲裁暂只有 Safari inspect 三角测量；0 延时定时器自激修复后的打包态判据 = 空闲安装率 <200/s、静默可见态 CPU <10%。
 - B 桥协议写端验证面：`sidecar-stdio.test.ts` 已有真实协议行为用例；出站帧门/有界缓冲仍是源码正则 + 本机真解析门（行为用例需可暂停 stdout 消费的夹具）。
 - SSH 密码一键免密与钥匙串（design 05 §8）：未实现。
@@ -111,7 +111,7 @@
 - 取证 request/snapshot 半条通道无生产消费者：页面终局账本退役后 `dsh-chamber:stream-forensics-request` 无 dispatcher、snapshot 无 listener（`stream-forensics.test.ts` 仍覆盖往返）；live `dsh-chamber:stream-forensics` + ring 不变。出口 = 删除或按探针用途接线。
 - 载波 reducer socket 生命周期无生产发射者：F1 的 accept 通道（`OpeningTicket`/`openingAccepted`）已退役，`openingAnswered` 保留为「交付即结算」（生产发射者 = `stream-client.ts` 首帧交付处）；余下事件出口 = 删除或接线，门禁按生产 emit 判定。
 - 结构性重复与死分支五条：`healRoute` 恒等、解析双份漂移、三账本可并、`carry` 五处、baseline 三连块。
-- 页面侧限速两条：250ms 重取样无退避、lane reconnect 注释与行为不符。
+- 页面侧限速：lane reconnect 注释与行为不符。
 
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 

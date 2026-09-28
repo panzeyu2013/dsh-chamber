@@ -2000,21 +2000,33 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// JS 求值确认事件循环能应答，rAF 计数确认可见页面仍在调度帧。
     /// 静态 DOM 也会驱动这个主动 rAF 心跳；每帧后延迟约 1s 再申请下一帧，
     /// 避免在与既有 JSC 崩溃相关的 rAF 路径上常驻高频循环。
-    /// 隐藏页面不作为故障证据。
+    /// 隐藏页面不作为故障证据：注入时隐藏直接返回 null（主进程 reset，不累计
+    /// strike）；心跳链在隐藏期被丢弃、可见后的下一次注入经 arm() 重新武装
+    /// （与 Electron flavor 的 RENDERER_FRAME_PROGRESS_SCRIPT 同一语义）。
     private static let rendererProgressScript = """
     (function () {
       if (document.visibilityState !== 'visible') return null;
       var name = '__dshChamberFrameProgress';
-      if (!window[name]) {
-        var state = { frames: 0 };
-        Object.defineProperty(window, name, { value: state });
-        function frame() {
-          state.frames += 1;
-          setTimeout(function () { requestAnimationFrame(frame); }, 1000);
-        }
-        requestAnimationFrame(frame);
+      function arm(state) {
+        if (state.armed) return;
+        state.armed = true;
+        requestAnimationFrame(function () { frame(state); });
       }
-      return window[name].frames;
+      function frame(state) {
+        state.frames += 1;
+        if (document.visibilityState !== 'visible') { state.armed = false; return; }
+        setTimeout(function () {
+          if (document.visibilityState !== 'visible') { state.armed = false; return; }
+          requestAnimationFrame(function () { frame(state); });
+        }, 1000);
+      }
+      var state = window[name];
+      if (!state) {
+        state = { frames: 0, armed: false };
+        Object.defineProperty(window, name, { value: state });
+      }
+      arm(state);
+      return state.frames;
     })()
     """
 

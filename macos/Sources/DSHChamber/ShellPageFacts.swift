@@ -131,8 +131,38 @@ public enum ShellPageFactsScript {
             // 实现单源：readDarkJS（与 snapshotSource 共用）。
             \(readDarkJS)
 
+            // 观察面（性能）：事实只来自 html/body 自身的属性，以及 head/body 这类容器的
+            // 直接子节点插入（带属性插入不会触发属性回调）。绝不订阅整棵子树——childList
+            // 加全树观察会让页面每一次节点增删（流式 token、虚拟列表换行）都生成
+            // MutationRecord 并回调本壳，而它只需要下面这几处。
+            function observeNode(node, options) {
+              try {
+                if (!node) { return; }
+                state.observer.observe(node, options);
+              } catch (e) {}
+            }
+
+            function observeContainers() {
+              try {
+                if (!state.observer) { return; }
+                if (document.head && state.headObserved !== document.head) {
+                  state.headObserved = document.head;
+                  observeNode(document.head, { childList: true });
+                }
+                if (document.body && state.bodyObserved !== document.body) {
+                  state.bodyObserved = document.body;
+                  observeNode(document.body, {
+                    attributes: true,
+                    attributeFilter: ['lang', 'style', 'data-ds-dark-theme', 'name', 'content'],
+                  });
+                }
+              } catch (e) {}
+            }
+
             function report() {
               try {
+                // body/head 可能晚于 documentElement 出现，或被整段替换：每次回调先补挂。
+                observeContainers();
                 var nextLang = readLang();
                 var nextDark = readDark();
                 var snapshot = nextLang + '\\u0000' + (nextDark ? '1' : '0');
@@ -153,12 +183,12 @@ public enum ShellPageFactsScript {
               try {
                 if (state.observer || !document.documentElement) { return; }
                 state.observer = new MutationObserver(report);
-                state.observer.observe(document.documentElement, {
-                  subtree: true,
+                observeNode(document.documentElement, {
                   childList: true,
                   attributes: true,
                   attributeFilter: ['lang', 'style', 'data-ds-dark-theme', 'name', 'content'],
                 });
+                observeContainers();
                 report();
               } catch (e) {}
             }

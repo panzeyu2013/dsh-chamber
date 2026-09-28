@@ -55,6 +55,41 @@ test('append then load round-trips entries in production order', () => {
   })
 })
 
+test('a repeated read of the same storage text skips JSON.parse and reuses the parsed table', () => {
+  const storage = new MemoryStorage()
+  appendAuthorityLog(storage, 's1', { at: 10, kind: 'probe' })
+  const first = loadAuthorityLog(storage)
+  const realParse = JSON.parse
+  let parses = 0
+  JSON.parse = ((text: string, reviver?: (this: unknown, key: string, value: unknown) => unknown) => {
+    parses += 1
+    return realParse(text, reviver)
+  }) as typeof JSON.parse
+  try {
+    const second = loadAuthorityLog(storage)
+    assert.equal(parses, 0, '原文未变：跳过 JSON.parse 与逐条校验')
+    assert.equal(second, first, '同一原文复用同一个解析结果')
+    assert.deepEqual(second, { s1: [{ at: 10, kind: 'probe' }] })
+    // 原文变化（外部写入）⇒ 缓存未命中，重新解析。
+    storage.map.set(AUTHORITY_LOG_KEY, JSON.stringify({ s1: [{ at: 20, kind: 'read-failed', detail: 'x' }] }))
+    assert.deepEqual(loadAuthorityLog(storage), { s1: [{ at: 20, kind: 'read-failed', detail: 'x' }] })
+    assert.equal(parses, 1)
+  } finally {
+    JSON.parse = realParse
+  }
+})
+
+test('a failed append leaves the cached table consistent with storage (no in-memory-only entry)', () => {
+  const storage = new MemoryStorage()
+  appendAuthorityLog(storage, 's1', { at: 1, kind: 'probe' })
+  const before = loadAuthorityLog(storage)
+  storage.throwOnSet = true
+  assert.doesNotThrow(() => { appendAuthorityLog(storage, 's1', { at: 2, kind: 'probe' }) })
+  const after = loadAuthorityLog(storage)
+  assert.deepEqual(after, { s1: [{ at: 1, kind: 'probe' }] })
+  assert.deepEqual(after, before, 'setItem 失败时缓存不得被未落盘的追加污染')
+})
+
 test('entries are bounded per source, oldest dropped', () => {
   const storage = new MemoryStorage()
   for (let index = 0; index < AUTHORITY_LOG_MAX_PER_SOURCE + 8; index += 1) {

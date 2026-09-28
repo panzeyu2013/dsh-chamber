@@ -26,8 +26,11 @@ const ANCHOR_GAP = 8
 /** Props: the vendored atom's used subset, so the call sites stay unchanged. */
 export interface RowHoverCardProps {
   anchor: ReactNode
-  /** Card body; the pointer may rest on it, so it is readable and selectable. */
-  content: ReactNode
+  /** Card body; the pointer may rest on it, so it is readable and selectable. A
+   *  function receives the card's OPEN-TIME clock: a relative timestamp is sampled
+   *  when the card actually opens instead of during every parent render (and the
+   *  caller needs no `now` prop, which would defeat a memoized row). */
+  content: RowHoverCardContent
   /** Suppress opening and close an open card (menu open, drag, inline rename). */
   disabled?: boolean
   /** Dwell before open (default {@link HOVER_OPEN_DELAY_MS}); read once at machine creation. */
@@ -38,6 +41,9 @@ export interface RowHoverCardProps {
   copyLabel?: string
   copiedLabel?: string
 }
+
+/** Card body: a node, or a function called with Date.now() while the card renders open. */
+export type RowHoverCardContent = ReactNode | ((now: number) => ReactNode)
 
 /** Render an anchor with a hover-triggered preview card. */
 export function RowHoverCard({
@@ -204,7 +210,11 @@ export function RowHoverCard({
           }
           : undefined}
       >
-        {copied ? <span className={cc.hoverCardCopied} aria-hidden="true">{copiedLabel}</span> : content}
+        {/* content() runs only while the card is open: the open-time clock is
+            sampled here, never during a parent render the card may not show. */}
+        {copied
+          ? <span className={cc.hoverCardCopied} aria-hidden="true">{copiedLabel}</span>
+          : typeof content === 'function' ? content(Date.now()) : content}
       </div>
     )
     : null

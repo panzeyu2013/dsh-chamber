@@ -239,8 +239,12 @@
   播种/回写——`init` 从 `getViewPrefs().sidebarWidth` 播种（钳位 vendor
   `[SIDEBAR_MIN, SIDEBAR_MAX]` 拖拽范围 [264,420]，从未拖过回退
   `SIDEBAR_DEFAULT`），每次拖拽 `setSidebar` 经 `updateViewPrefs` 写回同键
-  `dsh-chamber.sidebar.v1`，所有 live boot 的 store 订阅并即时采纳；替换官方
-  ui-layout 注册（见 05 §6）。
+  `dsh-chamber.sidebar.v1`，所有 live boot 的 store 订阅并即时采纳（宽度尾写见下条）；替换官方
+  ui-layout 注册（见 05 §6）。**宽度尾写（2026-02 性能修订）**：拖拽期仍是 150ms 防抖尾写
+  （拖动热路径不落盘），但窗口 `pagehide`／`beforeunload` 会立即 flush 待写宽度并取消定时器
+  （同一笔尾写恰好一次）——否则关窗会丢掉最后一次拖拽。**Rejected alternatives**：把防抖缩到 0
+  （拖动期每帧写盘，写放大回到热路径）；只在 `beforeunload` 里同步写（WKWebView 的 unload 路径
+  不保证执行，`pagehide` 才是可靠面）。
 - **shell.leading 席位（rc.2）**：官方 AppFrame 在 `darwin && sidebarCollapsed` 时把窗口 chrome 的
   `shell.leading` 单席作为唯一的可见重开入口（折叠列宽=0 且 `.sidebarCol{overflow:hidden}` 会裁掉
   rail 内控件）。chamber sidebar fork 注册 `SidebarLeadingControls`（展开 + 新建，28px 圆钮；

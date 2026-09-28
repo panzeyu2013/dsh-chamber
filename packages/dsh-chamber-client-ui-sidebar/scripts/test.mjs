@@ -40,6 +40,10 @@ export const GROUPS = {
     'test/session-rows/completion-arm.test.ts',
     // 行/待办条的机器可读状态标记（纯分类器 + 属性锁）。
     'test/session-rows/session-row-state.test.ts',
+    // A4 渲染成本：memo 行 / 一次性派生 / ctxValue 依赖覆盖（源码文本锁；本包无 DOM）。
+    'test/session-rows/row-render-cost.test.ts',
+    // (facts 身份, running, stale) → 单槽记忆化的纯行为测（9-12 次读数 → 1 次派生）。
+    'test/session-rows/row-state-cache.test.ts',
     // goal 三值事实：解析/最后已知/activation 合并/身份签名（design 19 §3.2.1）。
     'test/session-rows/goal-facts.test.ts',
     // 运行位唯一解析规则（官方 status?.running ?? row.running）的真值表 + 三处消费者

@@ -7,7 +7,8 @@
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
-import { nextUpdatedOrder, orderServersForDisplay, serversProjectionSignature, type SessionOrderBy } from '@dsh-chamber/dsh-chamber-client-core/derive'
+import { nextUpdatedOrder, orderServersForDisplay, type SessionOrderBy } from '@dsh-chamber/dsh-chamber-client-core/derive'
+import { cachedServersProjectionSignature } from '@dsh-chamber/dsh-chamber-client-core/projection-signature-cache'
 import {
   clearSourceBookkeeping, flushScheduledActivityWrites, getViewPrefs, scheduleUpdatedOrderWrite,
   subscribeViewPrefs, updateViewPrefs, type ChamberSidebarViewPrefs,
@@ -29,7 +30,7 @@ export function useSidebarProjection() {
   useEffect(() => {
     return chamberBridge.subscribe(() => {
       const next = chamberBridge.getServers()
-      if (serversProjectionSignature(next) === serversProjectionSignature(serversRef.current)) return
+      if (cachedServersProjectionSignature(next) === cachedServersProjectionSignature(serversRef.current)) return
       setServers(next)
     })
   }, [])

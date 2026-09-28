@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs'
 import { TABLE_SNAPSHOT } from '@dsh-chamber/dsh-stream-state'
 import { fileURLToPath } from 'node:url'
 import {
+  baselineResampleDelayMs,
   classifyTurnEndWire,
   createSourceMuxFacts,
   EVENTS_ENDPOINT,
@@ -540,6 +541,44 @@ test('a stale baseline is re-sampled on a bounded cadence, never recursively (O1
     await waitFor(() => facts.status().ready, 'reconciled list did not certify facts')
   } finally { facts.stop() }
 })
+test('the stale re-sample cadence backs off on consecutive invalidations (O1 follow-up)', async () => {
+  // 纯阶梯：base × 2^streak，封顶 max（越界只到 max，绝不提前）。
+  assert.equal(baselineResampleDelayMs(0, 250, 2_000), 250)
+  assert.equal(baselineResampleDelayMs(1, 250, 2_000), 500)
+  assert.equal(baselineResampleDelayMs(2, 250, 2_000), 1_000)
+  assert.equal(baselineResampleDelayMs(3, 250, 2_000), 2_000)
+  assert.equal(baselineResampleDelayMs(64, 250, 2_000), 2_000)
+
+  const socket = new FakeSocket()
+  const rpc = deferredRpc()
+  const facts = createSourceMuxFacts({
+    sourceId: 'backoff', origin: 'http://cp', onSnapshot: () => {},
+    baselineResampleMinMs: 60, baselineResampleMaxMs: 240,
+    openSocket: () => socket, fetchImpl: rpc.fetchImpl as never,
+  })
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => rpc.lists.length === 1, 'initial list not requested')
+    // 第一次失效：仍按最小节拍（1×base）重取。
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', true] })
+    rpc.lists[0]!({ items: [{ sessionId: 's1', running: false, updatedAt: 1 }] })
+    await waitFor(() => rpc.lists.length === 2, 'the first re-sample did not use the base cadence')
+    // 第二次失效：节拍退避到 2×base = 120ms；第 100ms 时第三次取数必须尚未发生
+    // （无退避时它会在 60ms 就取数，本断言即旧行为的反例）。
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', false] })
+    rpc.lists[1]!({ items: [{ sessionId: 's1', running: true, updatedAt: 2 }] })
+    await new Promise(resolve => setTimeout(resolve, 100))
+    assert.equal(rpc.lists.length, 2, 'the second re-sample must back off past one cadence')
+    await waitFor(() => rpc.lists.length === 3, 'the backed-off re-sample never ran')
+    // 落地一次即归零：本次不再注入事件，样本被接受。
+    rpc.lists[2]!({ items: [{ sessionId: 's1', running: false, updatedAt: 3 }] })
+    await waitFor(() => facts.status().ready, 'the backed-off sample did not certify facts')
+    assert.equal(facts.status().baselineResamples, 2)
+  } finally { facts.stop() }
+})
+
 test('a stale re-sample dies with its generation (a carrier turnover re-baselines on ready)', async () => {
   const sockets: FakeSocket[] = []
   const rpc = deferredRpc()

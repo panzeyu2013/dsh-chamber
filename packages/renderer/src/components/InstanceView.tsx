@@ -200,7 +200,24 @@ export default function InstanceView({
       setSessionOpenPhase('quiet')
       return
     }
+    // Hidden-gap re-anchor: the streak/rebound clocks the delivery ladder reads.
+    // One helper so the sampler's hidden tick and the visibilitychange listener
+    // cannot drift apart.
+    const reanchorAfterHiddenGap = (): void => {
+      scheduleStallRef.current = null
+      inputBlockStallRef.current = null
+      resyncDispatchedForRef.current = undefined
+    }
     const sample = (): void => {
+      // Hidden is a gap like a seat switch: evidence sampled before an arbitrary
+      // hidden period is not usable after resume, or the first visible sample can
+      // fire reboot/reload on pre-gap streaks. Re-anchor instead of freezing.
+      // The gate is FIRST: a sample that already read health, advanced the open
+      // ledger or wrote state is not a gap any more.
+      if (document.visibilityState === 'hidden') {
+        reanchorAfterHiddenGap()
+        return
+      }
       const observed = readInstanceSessionStreamHealth(instanceId, currentSessionId)
       const at = monotonicNow()
       const health = advanceSessionOpenHealth(sessionOpenHealthRef.current, currentSessionId, observed, at)
@@ -212,15 +229,6 @@ export default function InstanceView({
         health, currentSessionId, currentSessionKnownBlank === true,
       )
       setSessionOpenPhase(previous => (previous === nextPhase ? previous : nextPhase))
-      if (document.visibilityState === 'hidden') {
-        // Hidden is a gap like a seat switch: evidence sampled before an arbitrary
-        // hidden period is not usable after resume, or the first visible sample can
-        // fire reboot/reload on pre-gap streaks. Re-anchor instead of freezing.
-        scheduleStallRef.current = null
-        inputBlockStallRef.current = null
-        resyncDispatchedForRef.current = undefined
-        return
-      }
       if (health === null) return
       // The episode ordinal mints the chamber-namespace run id until a host run
       // key exists; the owner keys every stall decision on that identity.
@@ -334,9 +342,24 @@ export default function InstanceView({
         if (shouldReloadDocument(documentReloadBudgetStorage(), Date.now())) window.location.reload()
       }
     }
+    // A hidden document throttles timers and freezes rAF, but the 1 Hz sampler
+    // keeps ticking: the listener re-anchors IMMEDIATELY on hide (a tick that lands
+    // first must not decide anything either) and samples once on resume, so the
+    // first visible sample is a fresh reading rather than a pre-gap conclusion.
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState === 'hidden') {
+        reanchorAfterHiddenGap()
+        return
+      }
+      sample()
+    }
     sample()
+    document.addEventListener('visibilitychange', onVisibilityChange)
     const timer = setInterval(sample, 1_000)
-    return () => clearInterval(timer)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      clearInterval(timer)
+    }
   }, [active, shell.booted, shell.error, currentSessionId, instanceId])
 
   useEffect(() => {

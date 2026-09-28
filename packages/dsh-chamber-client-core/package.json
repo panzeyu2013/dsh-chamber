@@ -24,6 +24,7 @@
     "./plugin-manifest": "./src/plugin-manifest.ts",
     "./plugin-row": "./src/plugin-row.ts",
     "./prewarm-intent": "./src/prewarm-intent.ts",
+    "./projection-signature-cache": "./src/projection-signature-cache.ts",
     "./purged-tracker": "./src/purged-tracker.ts",
     "./search-state": "./src/search-state.ts",
     "./session-correction-marks": "./src/session-correction-marks.ts",

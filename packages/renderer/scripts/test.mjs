@@ -79,6 +79,8 @@ export const GROUPS = {
     'test/lifecycle/source-refresh-hint.test.ts',
     // P3 会话面绘制信号（[data-phase] 揭示门）的纯决策契约。
     'test/lifecycle/session-surface.test.ts',
+    // A6：InstanceView 1 Hz 采样座位的可执行契约（仅屏上 settled 挂表 / hidden 先于健康读取）。
+    'test/lifecycle/instance-view-sampling.test.ts',
     // P2 露屏接线：held 帧的定时器必须来自帧的绝对期限（>0ms），越界必须揭示租客。
     'test/lifecycle/veil-release-timer.test.ts',
   ],
@@ -97,6 +99,8 @@ export const GROUPS = {
     // 否则同一完成的延迟壳边沿会产生第二条 notification。
     'test/aggregate/goal-unknown-arm.test.ts',
     'test/aggregate/badge-count.test.ts',
+    // 投影缓存（性能 A1/A2）：按来源复用 + 签名片段/记忆入口。
+    'test/aggregate/servers-projection-cache.test.ts',
   ],
   // session-state: gateway session-state 事实源 + 通知三表落盘（旧 v4/v2 一次性迁移）+ 完成观测装配
   'session-state': [

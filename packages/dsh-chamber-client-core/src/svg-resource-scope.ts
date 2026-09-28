@@ -105,12 +105,47 @@ let selfProducedNodes = new WeakSet<Node>()
 /** 已应用的改名（原 id → 现 id）：消费侧解析被改名过的外部定义时用。 */
 const renamedResourceIds = new Map<string, string>()
 
+/**
+ * renamedResourceIds 的反向索引（现 id → 仍指向它的作者 id 集）：重扫推进改名链时只碰
+ * 真正指向旧 id 的条目，不再对整张改名表做 renames × R 的全量扫描。
+ */
+const renamedResourceIdHolders = new Map<string, Set<string>>()
+
+/** 写入一条改名并维护反向索引（同一作者 id 的旧目标先摘链）。 */
+function rememberRenamedResourceId(authorId: string, currentId: string): void {
+  const previous = renamedResourceIds.get(authorId)
+  if (previous !== undefined && previous !== currentId) {
+    const holders = renamedResourceIdHolders.get(previous)
+    if (holders !== undefined) {
+      holders.delete(authorId)
+      if (holders.size === 0) renamedResourceIdHolders.delete(previous)
+    }
+  }
+  renamedResourceIds.set(authorId, currentId)
+  let holders = renamedResourceIdHolders.get(currentId)
+  if (holders === undefined) {
+    holders = new Set<string>()
+    renamedResourceIdHolders.set(currentId, holders)
+  }
+  holders.add(authorId)
+}
+
+/** 重扫推进：仍指向旧 id 的作者条目一并前移到新 id（多跳解析语义不变）。 */
+function advanceRenamedResourceId(from: string, to: string): void {
+  const holders = renamedResourceIdHolders.get(from)
+  if (holders !== undefined) {
+    for (const authorId of [...holders]) rememberRenamedResourceId(authorId, to)
+  }
+  rememberRenamedResourceId(from, to)
+}
+
 /** 被样式表引用的 id（文档级 <style> / 同源 CSSOM / svg 内嵌 <style>）：保留原名。 */
 const documentPreservedIds = new Set<string>()
 
 /** 测试与热更新用：清掉模块级的记忆（token 计数器除外）。 */
 export function resetSvgResourceScopeMemory(): void {
   renamedResourceIds.clear()
+  renamedResourceIdHolders.clear()
   documentPreservedIds.clear()
   scopedSvgs = new WeakSet<Element>()
   selfProducedNodes = new WeakSet<Node>()
@@ -164,19 +199,33 @@ export function rewriteUrlReferences(value: string, renames: ReadonlyMap<string,
   return next
 }
 
-/** 纯函数：重命名计划 = 本 svg 内「定义 ∩ 引用」减去保留集。 */
+/** 保留集查找面：谓词或 `{ has(id) }` 形状，避免调用方物化 O(P) 的文档保留集。 */
+export type PreservedIdLookup = ((id: string) => boolean) | { has(id: string): boolean }
+
+function isPreservedId(lookup: PreservedIdLookup | undefined, id: string): boolean {
+  if (lookup === undefined) return false
+  return typeof lookup === 'function' ? lookup(id) : lookup.has(id)
+}
+
+/**
+ * 纯函数：重命名计划 = 本 svg 内「定义 ∩ 引用」减去保留集。
+ * `preservedIds` 是本 svg 的局部保留面；可选的 `preservedLookup` 是文档级保留面，
+ * 按 id 现查、绝不物化（该集只增不减，见 design 05 §4.2 残余边界①）。
+ * 第 4 参调用形态与行为保持不变。
+ */
 export function resourceRenamePlan(
   definedIds: Iterable<string>,
   referencedIds: Iterable<string>,
   token: string,
   preservedIds: Iterable<string> = [],
+  preservedLookup?: PreservedIdLookup,
 ): ReadonlyMap<string, string> {
   const referenced = new Set(referencedIds)
   const preserved = new Set(preservedIds)
   const renames = new Map<string, string>()
   const targets = new Set<string>()
   for (const id of definedIds) {
-    if (id === '' || !referenced.has(id) || preserved.has(id)) continue
+    if (id === '' || !referenced.has(id) || preserved.has(id) || isPreservedId(preservedLookup, id)) continue
     const base = token + '-' + stripOwnScopePrefix(id)
     let target = base
     for (let suffix = 1; targets.has(target) || target === id; suffix += 1) target = base + '-' + String(suffix)
@@ -331,7 +380,7 @@ function copyExternalDefinitions(svg: Element, ids: readonly string[], token: st
     const innerFacts = collectScopeFacts(clone)
     const innerToken = token + '-i' + String(copies.size + 1)
     const innerPlan = resourceRenamePlan(
-      innerFacts.defined, innerFacts.defined, innerToken, [...innerFacts.preserved, ...documentPreservedIds],
+      innerFacts.defined, innerFacts.defined, innerToken, innerFacts.preserved, documentPreservedIds,
     )
     if (innerPlan.size > 0) applyRenames(clone, innerPlan)
     // 只有「永不直接渲染」的定义元素可以落在不包 <defs> 的 svg 根上。
@@ -340,7 +389,7 @@ function copyExternalDefinitions(svg: Element, ids: readonly string[], token: st
     ;(directDefsChild(svg) ?? svg).appendChild(clone)
     selfProducedNodes.add(clone)
     copies.set(item.id, copyId)
-    renamedResourceIds.set(item.id, copyId)
+    rememberRenamedResourceId(item.id, copyId)
     if (item.depth < 2) {
       for (const inner of collectExternalIdsIn(clone, svg)) queue.push({ id: inner, depth: item.depth + 1 })
     }
@@ -400,35 +449,26 @@ function rescanSvgElement(svg: Element, token: string): number {
 
 function applyScopeToSvg(svg: Element, token: string): number {
   const { defined, referenced, preserved } = collectScopeFacts(svg)
-  const preservedAll = new Set<string>([...preserved, ...documentPreservedIds])
-  const renames = resourceRenamePlan(defined, referenced, token, preservedAll)
+  const localPreserved = new Set(preserved)
+  // 文档保留集只增不减（design 05 §4.2 残余边界①）：只按 id 现查，绝不为每个 svg 复制一份。
+  const renames = resourceRenamePlan(defined, referenced, token, localPreserved, documentPreservedIds)
   if (renames.size > 0) {
     applyRenames(svg, renames)
-    for (const [from, to] of renames) {
-      // 指向这个旧 id 的条目一并推进，避免重扫后只剩一跳的陈旧映射。
-      for (const [key, value] of renamedResourceIds) if (value === from) renamedResourceIds.set(key, to)
-      renamedResourceIds.set(from, to)
-    }
+    // 指向这个旧 id 的条目一并推进，避免重扫后只剩一跳的陈旧映射（反向索引，不全表扫）。
+    for (const [from, to] of renames) advanceRenamedResourceId(from, to)
   }
   const definedSet = new Set(defined)
   const externallyReferenced = [...new Set(referenced)]
-    .filter(id => id !== '' && !definedSet.has(id) && !renames.has(id) && !preservedAll.has(id))
+    .filter(id => id !== ''
+      && !definedSet.has(id)
+      && !renames.has(id)
+      && !localPreserved.has(id)
+      && !documentPreservedIds.has(id))
   const copies = copyExternalDefinitions(svg, externallyReferenced, token)
   if (copies.size > 0) applyRenames(svg, copies)
   svg.setAttribute(SVG_SCOPE_ATTRIBUTE, token)
   scopedSvgs.add(svg)
   return renames.size + copies.size
-}
-
-/** 新增子树里是否插入了样式表（<style> 或 <link>）。 */
-function containsStyleSheet(node: Element): boolean {
-  const name = (node.localName ?? node.tagName ?? '').toLowerCase()
-  if (name === STYLE_ELEMENT || name === 'link') return true
-  const children = node.children
-  for (let index = 0; index < children.length; index += 1) {
-    if (containsStyleSheet(children[index] as Element)) return true
-  }
-  return false
 }
 
 function collectSvgElements(node: Element, out: Element[]): void {
@@ -443,29 +483,83 @@ function collectSvgElements(node: Element, out: Element[]): void {
   }
 }
 
-/** 新增子树里是否带 id / 资源引用（决定要不要重扫它所在的已 scoped svg）。 */
-function introducesResourceContent(node: Element): boolean {
-  const stack: Element[] = [node]
-  while (stack.length > 0) {
-    const element = stack.pop() as Element
-    const id = element.getAttribute('id')
-    if (id !== null && id !== '') return true
-    for (const name of RESOURCE_REFERENCE_ATTRIBUTES) {
+/** 元素自身是否带 id / 资源引用（子树答案由 flush 的合并 DFS 汇总，不再单独重走）。 */
+function elementIntroducesResourceContent(element: Element): boolean {
+  const id = element.getAttribute('id')
+  if (id !== null && id !== '') return true
+  for (const name of RESOURCE_REFERENCE_ATTRIBUTES) {
+    const value = element.getAttribute(name)
+    if (value !== null && value.toLowerCase().indexOf('url(') >= 0) return true
+  }
+  if (isListed(HREF_RESOURCE_ELEMENTS, element)) {
+    for (const name of HREF_ATTRIBUTES) {
       const value = element.getAttribute(name)
-      if (value !== null && value.toLowerCase().indexOf('url(') >= 0) return true
-    }
-    if (isListed(HREF_RESOURCE_ELEMENTS, element)) {
-      for (const name of HREF_ATTRIBUTES) {
-        const value = element.getAttribute(name)
-        if (value !== null && value.charAt(0) === '#') return true
-      }
-    }
-    const children = element.children
-    for (let index = 0; index < children.length; index += 1) {
-      stack.push(children[index] as Element)
+      if (value !== null && value.charAt(0) === '#') return true
     }
   }
   return false
+}
+
+/**
+ * 元素是否可能携带本模块要读的属性面。真实 DOM 用 hasAttributes() 一次判定：没有属性的
+ * 元素不可能有 id / url(#…) / href / a11y 引用，相应的 getAttribute 读可以直接省掉。
+ * 没有该面的伪 DOM（测试注入的最小元素）一律按「有」处理，退回逐名读取。
+ */
+function hasAnyAttribute(element: Element): boolean {
+  const probe = (element as { hasAttributes?: unknown }).hasAttributes
+  if (typeof probe !== 'function') return true
+  return (probe as () => boolean).call(element)
+}
+
+/** 一个 pending 节点的一次迭代式 DFS 产出（合并原先五遍各自重走的同一棵子树）。 */
+interface PendingNodeFacts {
+  readonly node: Element
+  /** ID_REFERENCE_ATTRIBUTES 引用的 id：批内先于改名进文档保留集。 */
+  readonly idRefs: string[]
+  /** 子树里出现 <style>/<link>：需要重读文档样式面。 */
+  readonly hasStyleSheet: boolean
+  /** 要挂一次性 load 监听的新 <link>（watchedLinks 已在 DFS 中认领）。 */
+  readonly links: Element[]
+  /** 子树里的所有 <svg>（preorder，含嵌套 svg；与旧 collectSvgElements 同序）。 */
+  readonly svgs: Element[]
+  /** 子树里是否有 id / 资源引用：决定要不要重扫最近的已 scoped 宿主 svg。 */
+  readonly resourceContent: boolean
+}
+
+function collectPendingFacts(node: Element, watchedLinks: WeakSet<Element>): PendingNodeFacts {
+  const idRefs: string[] = []
+  const links: Element[] = []
+  const svgs: Element[] = []
+  let hasStyleSheet = false
+  let resourceContent = false
+  const stack: Element[] = [node]
+  while (stack.length > 0) {
+    const element = stack.pop() as Element
+    const name = localNameOf(element)
+    if (name === STYLE_ELEMENT || name === 'link') hasStyleSheet = true
+    if (name === 'svg') svgs.push(element)
+    if (
+      name === 'link'
+      && typeof (element as { addEventListener?: unknown }).addEventListener === 'function'
+      && !watchedLinks.has(element)
+    ) {
+      // 认领放在 DFS 里：同一 <link> 落在重叠 pending 根下也只挂一次监听。
+      watchedLinks.add(element)
+      links.push(element)
+    }
+    if (hasAnyAttribute(element)) {
+      for (const attribute of ID_REFERENCE_ATTRIBUTES) {
+        const value = element.getAttribute(attribute)
+        if (value === null) continue
+        for (const id of value.split(/\s+/)) if (id !== '') idRefs.push(id)
+      }
+      // 与旧第五遍一致：命中后这棵子树不再做 id/资源属性读。
+      if (!resourceContent) resourceContent = elementIntroducesResourceContent(element)
+    }
+    const children = element.children
+    for (let index = children.length - 1; index >= 0; index -= 1) stack.push(children[index] as Element)
+  }
+  return { node, idRefs, hasStyleSheet, links, svgs, resourceContent }
 }
 
 /** 最近的、已由本模块 scoped 的祖先 <svg>（用于后补内容的宿主重扫）。 */
@@ -597,48 +691,48 @@ export function installSvgResourceScope(deps: SvgResourceScopeDeps = {}): () => 
   let scheduled = false
   let active = true
   const watchedLinks = new WeakSet<Element>()
-  const linkHandlers: { element: Element; handler: () => void }[] = []
+  const linkHandlers = new Set<{ element: Element; handler: () => void }>()
 
-  /** 给本实例新插入的 <link> 挂一次性 load 监听：样式表加载完才能读 CSSOM。 */
-  const watchStyleSheetLinks = (node: Element): void => {
-    const stack: Element[] = [node]
-    while (stack.length > 0) {
-      const element = stack.pop() as Element
-      const listener = (element as { addEventListener?: unknown }).addEventListener
-      if (localNameOf(element) === 'link' && typeof listener === 'function' && !watchedLinks.has(element)) {
-        watchedLinks.add(element)
-        const handler = (): void => { if (active) rememberDocumentStyleIds(root) }
-        linkHandlers.push({ element, handler })
-        element.addEventListener('load', handler, { once: true })
-      }
-      const children = element.children
-      for (let index = 0; index < children.length; index += 1) stack.push(children[index] as Element)
+  /** 给本批次新插入的 <link> 挂一次性 load 监听：样式表加载完才能读 CSSOM。 */
+  const watchStyleSheetLink = (element: Element): void => {
+    const entry: { element: Element; handler: () => void } = { element, handler: () => {} }
+    entry.handler = () => {
+      // once 触发即出队：生产不调用 dispose，本模块不得继续强引用这个 <link> 元素。
+      linkHandlers.delete(entry)
+      if (active) rememberDocumentStyleIds(root)
     }
+    linkHandlers.add(entry)
+    element.addEventListener('load', entry.handler, { once: true })
   }
 
   const flush = (): void => {
     scheduled = false
     const nodes = [...pending]
     pending.clear()
-    // 样式与 a11y 引用面**先**读：同一批新插入的 <style>/aria 引用必须在改名之前进保留集。
-    for (const node of nodes) rememberReferenceIds(node)
-    if (nodes.some(node => containsStyleSheet(node))) rememberDocumentStyleIds(root)
-    for (const node of nodes) watchStyleSheetLinks(node)
-    const svgs: Element[] = []
-    for (const node of nodes) collectSvgElements(node, svgs)
+    // 每个 pending 节点一次迭代式 DFS：原先五遍（a11y 引用 / 样式表探测 / link 收集 /
+    // svg 收集 / 资源内容探测）各自重走的同一棵子树，现在一遍读完得出全部事实。
+    const facts: PendingNodeFacts[] = []
+    for (const node of nodes) facts.push(collectPendingFacts(node, watchedLinks))
+    // 批次阶段顺序是契约：样式与 a11y 引用面**先**读（同一批新插入的 <style>/aria 引用必须
+    // 在改名之前进保留集）→ 挂 link 监听 → 逐 svg scope → 只对资源内容为真的节点重扫。
+    for (const fact of facts) for (const id of fact.idRefs) documentPreservedIds.add(id)
+    if (facts.some(fact => fact.hasStyleSheet)) rememberDocumentStyleIds(root)
+    for (const fact of facts) for (const link of fact.links) watchStyleSheetLink(link)
     // 一遍过：工作量由这次插入的子树决定（整页 200+ 个 <svg> 仍是一次微任务内完成）。
     // 刻意不分片——分片只能让位给同一检查点里的其它微任务，不会把余量让到下一帧。
     const touched = new Set<Element>()
-    for (const svg of svgs) {
-      const wasScoped = scopedSvgs.has(svg)
-      const changed = scopeSvgElement(svg, nextSvgScopeToken(tokenPrefix))
-      // 本批「真的处理过」的判据：新 scoped 或真的改了东西；已在集合里的旧 svg 走 0 返回。
-      if (!wasScoped || changed > 0) touched.add(svg)
+    for (const fact of facts) {
+      for (const svg of fact.svgs) {
+        const wasScoped = scopedSvgs.has(svg)
+        const changed = scopeSvgElement(svg, nextSvgScopeToken(tokenPrefix))
+        // 本批「真的处理过」的判据：新 scoped 或真的改了东西；已在集合里的旧 svg 走 0 返回。
+        if (!wasScoped || changed > 0) touched.add(svg)
+      }
     }
     // 后补进「已 scoped svg」的内容：重扫那个宿主 svg，否则新引入的静态 id 会与别处重复而不再被看到。
-    for (const node of nodes) {
-      if (!introducesResourceContent(node)) continue
-      const host = nearestScopedAncestorSvg(node)
+    for (const fact of facts) {
+      if (!fact.resourceContent) continue
+      const host = nearestScopedAncestorSvg(fact.node)
       if (host !== null && !touched.has(host)) rescanSvgElement(host, nextSvgScopeToken(tokenPrefix))
     }
   }
@@ -676,7 +770,7 @@ export function installSvgResourceScope(deps: SvgResourceScopeDeps = {}): () => 
       const remove = (element as { removeEventListener?: unknown }).removeEventListener
       if (typeof remove === 'function') element.removeEventListener('load', handler)
     }
-    linkHandlers.length = 0
+    linkHandlers.clear()
     resetSvgResourceScopeMemory()
   }
 }

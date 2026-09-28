@@ -1035,6 +1035,13 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.7-rc.2 477b4f42
   **Rejected alternatives**：只用页内墓碑会在 renderer 重启后重现；直接改官方私有 summaries 会令官方
   store 与 chamber 快照分裂；无条件隐藏首轮扫描差集会误伤正在创建的会话。选择来源隔离的有界 id 状态、
   首升级候选保护与宿主权威 scan；对宽限保护项只做活动截止驱动的复核，不以常驻扫描换取收敛。
+  **按指纹的孤儿键收敛（2026-02 性能修订）**：该家族按 `(instanceId, sourceFingerprint)` 逐键保存，
+  来源重注册会生成新指纹而旧键再无读者（实机曾累计 78 键 / 855 KB，全仓无清理路径）。现在维护一个索引键
+  （`dsh-chamber.purged-sessions.v1.index`：instanceId 段 → MRU 指纹表）：每个 instanceId 只保留最近
+  K=2 个指纹的数据键、当前指纹永不淘汰；索引实例表自身有界（LRU 64），索引淘汰只掉索引、绝不连带删数据键。
+  **Rejected alternatives**：按会话 id 清——键的粒度是 (instanceId, fingerprint)，按 id 判断没有权威依据；
+  首次加载即清掉该 instanceId 的全部非当前指纹——迁移期尚无索引、localStorage 枚举顺序不可靠，会连带
+  删掉另一台在用实例的墓碑；不设索引、每次写入全量枚举——成本随键数增长且同样受不可靠顺序约束。
 - App 状态机与归档管理器触发点**全部保留**：正常 purge 路径下 F1 过滤后
   `planSessionListRefresh` 看不到行（`kept=[]` ⇒ 不再请求），但它与 F3 一起覆盖「生产端未
   布防 / 首次观测即 post-purge」的形态。

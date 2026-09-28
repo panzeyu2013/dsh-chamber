@@ -4,6 +4,8 @@ node_modules/
 .pnp
 
 # Build outputs
+# SwiftPM scratch/build dir of the native shell (swift build / swift test in macos/)
+macos/.build/
 dist/
 dist-ssr/
 release/

@@ -94,6 +94,12 @@ export interface LayoutStoreEnvironment {
   viewPrefs: LayoutStoreViewPrefs
   /** First-render frame width (production: `window.innerWidth`; injected so the pure module runs under plain node). */
   initialViewportWidth(): number
+  /**
+   * Page-lifetime subscription for the trailing sidebar-width write (production
+   * default: `pagehide` + `beforeunload` on `globalThis`). Injected so the flush
+   * is executable under plain node, where there is no page event target.
+   */
+  onPageHide?(listener: () => void): void
 }
 
 /** One page-lifetime runtime per environment: live instances (WeakRefs), subscription flag, shared write timer. */
@@ -101,17 +107,66 @@ interface LayoutStoreRuntime {
   instances: Set<WeakRef<LayoutInstance>>
   subscriptionInstalled: boolean
   writeTimer: ReturnType<typeof setTimeout> | undefined
+  /** Latest drag width awaiting the trailing write (last wins; shared per environment). */
+  pendingWidth: number | undefined
+  /** One page-event subscription per environment (installed with the first pending write). */
+  pageHideInstalled: boolean
 }
 
 /** Trailing debounce for the persistence write (drag → ONE updateViewPrefs). */
 export const SIDEBAR_WRITE_DEBOUNCE_MS = 150
+
+/** Production default: flush the trailing width write when the page goes away (reload/close/bfcache). */
+function defaultPageHideSubscription(listener: () => void): void {
+  if (typeof globalThis.addEventListener !== 'function') return
+  globalThis.addEventListener('pagehide', listener)
+  globalThis.addEventListener('beforeunload', listener)
+}
+
+/**
+ * Flush the environment's pending trailing width write NOW (pagehide/beforeunload
+ * or the debounce timer firing). Cancels the timer and clears the pending width,
+ * so one drag can never be written twice.
+ */
+function flushPendingSidebarWidthWrite(env: LayoutStoreEnvironment, runtime: LayoutStoreRuntime): void {
+  if (runtime.writeTimer !== undefined) {
+    clearTimeout(runtime.writeTimer)
+    runtime.writeTimer = undefined
+  }
+  const width = runtime.pendingWidth
+  runtime.pendingWidth = undefined
+  if (width === undefined) return
+  try {
+    env.viewPrefs.updateViewPrefs(prev => ({ ...prev, sidebarWidth: width }))
+  } catch (error) {
+    console.error('[dsh-chamber] layout width page-hide flush threw:', error)
+  }
+}
+
+/** Install the page-event flush once per environment, lazily (no drag → no listener). */
+function installPageHideFlush(env: LayoutStoreEnvironment, runtime: LayoutStoreRuntime): void {
+  if (runtime.pageHideInstalled) return
+  runtime.pageHideInstalled = true
+  try {
+    (env.onPageHide ?? defaultPageHideSubscription)(() => flushPendingSidebarWidthWrite(env, runtime))
+  } catch (error) {
+    runtime.pageHideInstalled = false // a throwing subscription may be retried on the next drag
+    console.error('[dsh-chamber] layout width page-hide subscription threw:', error)
+  }
+}
 
 const runtimes = new WeakMap<LayoutStoreEnvironment, LayoutStoreRuntime>()
 
 function runtimeFor(env: LayoutStoreEnvironment): LayoutStoreRuntime {
   let runtime = runtimes.get(env)
   if (runtime === undefined) {
-    runtime = { instances: new Set(), subscriptionInstalled: false, writeTimer: undefined }
+    runtime = {
+      instances: new Set(),
+      subscriptionInstalled: false,
+      writeTimer: undefined,
+      pendingWidth: undefined,
+      pageHideInstalled: false,
+    }
     runtimes.set(env, runtime)
   }
   return runtime
@@ -184,8 +239,10 @@ export function createLayoutStore(env: LayoutStoreEnvironment): EngineStoreHandl
    * dx every rAF tick, so the full updateViewPrefs path (prune + sanitize +
    * stringify + localStorage + notify) must not run per tick; each tick
    * reschedules a ~150ms trailing timer, so a drag settles into exactly ONE
-   * write (last width wins) and a paused gesture flushes early. The STORE value
-   * stays immediate. Shared per environment, so the last drag in any shell wins.
+   * write (last width wins) and a paused gesture flushes early. A pending write
+   * is ALSO flushed on pagehide/beforeunload, so a reload/quit inside the
+   * debounce window no longer loses the last drag. The STORE value stays
+   * immediate. Shared per environment, so the last drag in any shell wins.
    * A drag landing on the already-persisted width skips the whole persist/notify
    * path (and cancels a stale pending write).
    */
@@ -195,12 +252,15 @@ export function createLayoutStore(env: LayoutStoreEnvironment): EngineStoreHandl
         clearTimeout(runtime.writeTimer)
         runtime.writeTimer = undefined
       }
+      runtime.pendingWidth = undefined
       return
     }
+    runtime.pendingWidth = width
+    installPageHideFlush(env, runtime)
     if (runtime.writeTimer !== undefined) clearTimeout(runtime.writeTimer)
     runtime.writeTimer = setTimeout(() => {
       runtime.writeTimer = undefined
-      viewPrefs.updateViewPrefs(prev => ({ ...prev, sidebarWidth: width }))
+      flushPendingSidebarWidthWrite(env, runtime)
     }, SIDEBAR_WRITE_DEBOUNCE_MS)
   }
 

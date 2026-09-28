@@ -35,7 +35,6 @@ import {
   getOpenIntentsSnapshot,
   releaseInstanceClient,
   releaseOpenIntent,
-  serversProjectionSignature,
   shouldHoldViewVeil,
   subscribeOpenIntent,
   sweepPendingArchives,
@@ -105,6 +104,7 @@ import {
   SERVING_WAIT_MS,
 } from './host/budgets.ts'
 import { deriveServers, type HostFacts } from './host/servers.ts'
+import { usePublishServerProjection, useServerProjectionCaches } from './app-hooks/use-server-projection-publish.ts'
 import { createSourceLedger, pruneSourceLedger } from './host/source-ledger.ts'
 import { useDeadline } from './host/use-deadline.ts'
 import { createEchoStore } from './host/echo-store.ts'
@@ -156,6 +156,7 @@ import {
   useBridgeSubscriptions,
   type DesktopBridgeVerdict, type HealthProbeUnavailableKind,
 } from './app-hooks/use-bridge-subscriptions.ts'
+import { useSshBridgeProbe } from './app-hooks/use-ssh-bridge-probe.ts'
 import { useSessionFactsLifecycle } from './app-hooks/use-session-facts-lifecycle.ts'
 import { useNotifications } from './app-hooks/use-notifications.ts'
 import {
@@ -183,15 +184,7 @@ type SshInstancesHealthProbe = SshInstancesHealth & {
   droppedCount?: number
 }
 
-/** 桥面探测节奏（与既有 `window.dshChamber` 500ms 探测一致）。 */
-const BRIDGE_PROBE_MS = 500
-/**
- * 无桥形态判定预算（F11）：desktop preload 的 expose 有界（requestAppInfo 最多 10×50ms 后
- * 成功/失败两条分支都会 expose `window.dshChamber`），2.5s 内仍无 `desktopSsh` 正常路径只
- * 可能是真的无桥；超预算判 'absent'，durable 剪枝门才放行 live={local}；探测继续，真迟到的
- * 桥出现时翻回 'present' 并走标准 roster 水合。
- */
-const BRIDGE_ABSENT_PROBE_LIMIT = 5
+// 桥面探测常量与 effect：app-hooks/use-ssh-bridge-probe.ts（App.tsx 行数棘轮，逻辑已抽出）。
 
 
 
@@ -300,7 +293,7 @@ export default function App() {
    * 桥面形态判定（F11 无桥形态剪枝门）：'pending' 探测中 / 'present' desktopSsh 已 expose /
    * 'absent' 探测预算耗尽仍无桥。无桥形态没有远程来源，live={local} 即完整权威集合，durable
    * 四类剪枝可按它收敛；'pending' 与 'present' 都保持「等权威 roster 结算」。翻转那一拍使剪枝
-   * effect 重跑完成收敛。由下方 ``BRIDGE_PROBE_MS`` 探测 effect 维护。
+   * effect 重跑完成收敛。由 app-hooks/use-ssh-bridge-probe.ts 的探测 effect 维护。
    */
   const [bridgeVerdict, setBridgeVerdict] = useState<DesktopBridgeVerdict>('pending')
   // At most one renderer activation is useful (view switching is last-intent-wins), so this
@@ -656,21 +649,16 @@ export default function App() {
   const schedulePersistNotificationsRef = useRef<() => void>(() => undefined)
 
   // chamberBridge 投影：health/remoteStatus/aggregates 任一变化后派生并发布；首帧（health 未就绪）即发布 connected=false 的分组。
+  // 两个缓存（按来源投影 + 签名片段）在本 hook 内建，随 App 生命周期常驻。
+  const projectionCaches = useServerProjectionCaches()
   const servers = useMemo(
     // current 投影（侧栏高亮）跟随 **paintedView**（屏上是谁），不是选择——持有窗内用户点向 B 时
     // 屏上仍是 A，摘掉再装回 A 的高亮是纯闪烁；揭示完成那一拍 painted 变化自然交棒给 B。
-    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, correctionArms, paintedView, pluginDiagnostics, shellStates, managedRuntime, echoes.workspace, echoes.session, echoes.archive, openIntents, locale, sessionFacts),
-    [health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, correctionArms, paintedView, pluginDiagnostics, shellStates, managedRuntime, echoes, openIntents, locale, sessionFacts],
+    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, correctionArms, paintedView, pluginDiagnostics, shellStates, managedRuntime, echoes.workspace, echoes.session, echoes.archive, openIntents, locale, sessionFacts, projectionCaches.servers),
+    [health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, correctionArms, paintedView, pluginDiagnostics, shellStates, managedRuntime, echoes, openIntents, locale, sessionFacts, projectionCaches],
   )
-  // chamberBridge publish 签名闸：servers 每次依赖变化都会重建，但只有**渲染相关内容**变化才值得
-  // 通知订阅方，否则每个 shell 的侧边栏都会周期性全量重渲染。签名排除无人消费的 updatedAt 时间戳。
-  const lastServersSignatureRef = useRef('')
-  useEffect(() => {
-    const signature = serversProjectionSignature(servers)
-    if (signature === lastServersSignatureRef.current) return
-    lastServersSignatureRef.current = signature
-    chamberBridge.publish(servers)
-  }, [servers])
+  // chamberBridge publish 签名闸（等值不发布；签名与缓存见 app-hooks/use-server-projection-publish.ts）。
+  usePublishServerProjection(servers, projectionCaches)
 
   // 相位镜像（waitForServing 读它；effect 里写，避免渲染期改 ref）。远端来源取**原始 transport
   // 投影**的相位（与 deferredBootIds 同源）：deriveServers 把"投影未到达"发布成
@@ -1294,30 +1282,14 @@ export default function App() {
 
   /**
    * 桌面桥订阅：preload 经异步 info 往返后才暴露 window.dshChamber，桥可能在挂载 effect 之后
-   * 才出现——一次性订阅会静默丢失状态/注册表推送（退化为 30s 轮询自愈）。机制：500ms 探测直到
-   * 桥出现，出现即装载 roster 并订阅 onStatusChanged / onInstancesChanged；卸载时退订。
+   * 才出现——一次性订阅会静默丢失状态/注册表推送（退化为 30s 轮询自愈）。探测 effect 在
+   * app-hooks/use-ssh-bridge-probe.ts：500ms 直到预算耗尽，之后 30s 长尾；桥出现即装载 roster
+   * 并订阅 onStatusChanged / onInstancesChanged，卸载时退订。
    */
   const [sshBridgeReady, setSshBridgeReady] = useState(false)
-  useEffect(() => {
-    if (sshBridgeReady) return
-    let attempts = 0
-    const timer = setInterval(() => {
-      attempts += 1
-      if (window.dshChamber?.desktopSsh !== undefined) {
-        clearInterval(timer)
-        setSshBridgeReady(true)
-        setBridgeVerdict('present')
-        return
-      }
-      // F11：预算内缺席 = 桥可能迟到，判定保持 'pending'（剪枝门保守关闭）；预算耗尽仍无 =
-      // 无桥形态，判定 'absent' 让 durable 键按 live={local} 收敛。不停止探测：真迟到的桥出现
-      // 时上面的分支翻回 'present'，门重新交给 roster 结算。
-      if (attempts >= BRIDGE_ABSENT_PROBE_LIMIT) {
-        setBridgeVerdict(prev => (prev === 'present' ? prev : 'absent'))
-      }
-    }, BRIDGE_PROBE_MS)
-    return () => { clearInterval(timer) }
-  }, [sshBridgeReady])
+  useSshBridgeProbe({
+    ready: sshBridgeReady, setReady: setSshBridgeReady, setVerdict: setBridgeVerdict,
+  })
 
   /** First authoritative roster acquisition: retry transient IPC failures on a short bounded cadence;
    *  exhaustion keeps the one pending activation held, with the 30s registry poll as long-tail recovery. */

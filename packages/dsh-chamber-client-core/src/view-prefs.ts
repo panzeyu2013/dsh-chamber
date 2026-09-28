@@ -388,13 +388,24 @@ export function clearSourceBookkeeping(
  * Equal writes do NOT notify: the result is compared to the cache under a
  * canonical encoding (recursively sorted keys, arrays in order) first —
  * identical values skip persistence and notification (a needless full-shell
- * re-render).
+ * re-render). The comparison memoizes the cache side's canonical JSON (validated
+ * only on a successful replacement or a test reset), so an idempotent write costs
+ * ONE canonicalization + stringify instead of two.
  */
 export function updateViewPrefs(mutator: (prev: ChamberSidebarViewPrefs) => ChamberSidebarViewPrefs): void {
   const prev = getViewPrefs()
   const next = sanitizePrefs(prunePrefs(mutator(prev)))
-  if (canonicalEquals(prev, next)) return
+  const prevJson = canonicalJsonOf(prev)
+  const nextJson = canonicalJsonOf(next)
+  if (prevJson !== null && prevJson === nextJson) return
   cache = next
+  // Memoize the just-computed result; a failed serialization leaves the memo
+  // empty so the next comparison falls back to recomputing both sides.
+  if (nextJson !== null) {
+    canonicalMemoPrefs = next
+    canonicalMemoJson = nextJson
+  }
+  // 落盘沿用原序列化（插入序，存储键序不变）——memo 只服务比较，不改变字节形状。
   saveViewPrefs(cache)
   for (const listener of [...listeners]) {
     try {
@@ -416,11 +427,30 @@ function canonicalize(value: unknown): unknown {
   return value
 }
 
-function canonicalEquals(a: ChamberSidebarViewPrefs, b: ChamberSidebarViewPrefs): boolean {
+// Canonical-serialization memo. The cache object changes identity ONLY on a
+// successful replacement (and on the test reset), so the previous side of the
+// next comparison is already known — no need to re-traverse and re-stringify it.
+let canonicalMemoPrefs: ChamberSidebarViewPrefs | null = null
+let canonicalMemoJson = ''
+let canonicalSerializationCount = 0
+
+/** Test-only: non-memoized canonical serializations (canonicalize + JSON.stringify) since the last reset. */
+export function __canonicalSerializationCountForTests(): number {
+  return canonicalSerializationCount
+}
+
+/**
+ * Canonical JSON of the prefs, memoized by object identity. Returns null when the
+ * value cannot be serialized (the old canonicalEquals treated that as "not equal",
+ * so the write still proceeds).
+ */
+function canonicalJsonOf(prefs: ChamberSidebarViewPrefs): string | null {
+  if (canonicalMemoPrefs === prefs) return canonicalMemoJson
+  canonicalSerializationCount += 1
   try {
-    return JSON.stringify(canonicalize(a)) === JSON.stringify(canonicalize(b))
+    return JSON.stringify(canonicalize(prefs))
   } catch {
-    return false
+    return null
   }
 }
 
@@ -514,6 +544,9 @@ export function __resetViewPrefsForTests(): void {
   }
   activityPending = new Map()
   cache = null
+  canonicalMemoPrefs = null
+  canonicalMemoJson = ''
+  canonicalSerializationCount = 0
   listeners.clear()
   chamberBridge.publish([])
 }

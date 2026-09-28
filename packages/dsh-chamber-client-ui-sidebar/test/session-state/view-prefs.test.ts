@@ -15,6 +15,7 @@ import {
   type StorageLike,
 } from '@dsh-chamber/dsh-chamber-client-core/view-prefs'
 import {
+  __canonicalSerializationCountForTests,
   __resetViewPrefsForTests,
   loadViewPrefs,
   saveViewPrefs,
@@ -634,6 +635,31 @@ test('an idempotent updateViewPrefs writes neither persists nor notifies', () =>
   assert.equal(getViewPrefs(), before)
   // 真正的变化仍照常单次通知。
   updateViewPrefs(prev => ({ ...prev, folded: { ...prev.folded, 'local/w2': true } }))
+  assert.equal(notified, 1)
+  unsubscribe()
+})
+
+test('canonical comparison memoizes the cached side: an idempotent write serializes once, not twice', () => {
+  __resetViewPrefsForTests()
+  // 一次成功替换把新的缓存对象写进 memo（首次写仍计算两侧）。
+  updateViewPrefs(prev => ({ ...prev, folded: { ...prev.folded, 'local/w1': true } }))
+  let notified = 0
+  const unsubscribe = subscribeViewPrefs(() => { notified += 1 })
+  const before = getViewPrefs()
+  const beforeCount = __canonicalSerializationCountForTests()
+  updateViewPrefs(prev => ({ ...prev }))
+  assert.equal(
+    __canonicalSerializationCountForTests() - beforeCount,
+    1,
+    '缓存侧命中 memo：本次等值比较只规范化新结果一次（原为 2 次 canonicalize + 2 次 stringify）',
+  )
+  assert.equal(notified, 0)
+  assert.equal(getViewPrefs(), before)
+  // 真实变化替换缓存并刷新 memo：其后的等值写仍只序列化一次。
+  updateViewPrefs(prev => ({ ...prev, folded: { ...prev.folded, 'local/w2': true } }))
+  const afterChangeCount = __canonicalSerializationCountForTests()
+  updateViewPrefs(prev => ({ ...prev }))
+  assert.equal(__canonicalSerializationCountForTests() - afterChangeCount, 1)
   assert.equal(notified, 1)
   unsubscribe()
 })

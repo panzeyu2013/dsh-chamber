@@ -605,7 +605,11 @@ macOS WebKit 在**视口层**实现弹性越界：指针停在不可滚动 chrom
 **载波（脚本 + 独立 handler + 对账 + last-known）**：
 - **脚本** `macos/Sources/DSHChamber/ShellPageFacts.swift#ShellPageFactsScript`（WKUserScript、
   documentStart、仅主 frame、page world）观察 html[lang]、html 内联 style（color-scheme）、
-  body[data-ds-dark-theme]、meta[theme-color]（仅变化触发面，不参与 dark 判定）；同文档一次性安装 +
+  body[data-ds-dark-theme]、meta[theme-color]（仅变化触发面，不参与 dark 判定）；观察面只挂在
+  `documentElement`（属性 + 直接子节点）与 `head`/`body` 本身（childList / 属性），**绝不订阅整棵
+  子树**——childList 全树会让页面每一次节点增删（流式 token、虚拟列表换行）都生成 MutationRecord
+  并回调本壳，而事实只需要上述四处；body/head 晚于 documentElement 出现或被整段替换时在每次回调
+  里补挂（幂等）。同文档一次性安装 +
   (lang,dark) 快照去重，全部 try/catch（异常退化为不上报）；只留一次性安装标记
   `__dshChamberFactsState__`，不改 DOM、不读页面变量、绝不回写；装配点
   `macos/Sources/DSHChamber/MainWindowController.swift#setupWindow`。
