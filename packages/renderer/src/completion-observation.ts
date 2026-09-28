@@ -13,11 +13,15 @@
  *  - goal 三值：壳行 goal 优先（生产者已按来源代回填最后已知值），facts 行 goal 兜底
  *    （P2a；网关侧同样已回填）；两者都缺席 = 'unknown'。**null 与 unknown 绝不折叠**
  *    （null 是「明确无 goal」，unknown 是不结算/不降级）；
- *  - 子代理（R2-G）：只认运行证据——壳行 subagentActivity（stale 时 running 降为
- *    unknown）；**facts-only 行的 subagentCount（在场子会话数）不作为 busy 证据**
- *    （对 06 §4.5 的有意修正：在场不等于在干活），按 idle/unknown 语义处理；
+ *  - 子代理（R2-G + I-12）：壳行只认运行证据（subagentActivity；stale 时 running 降
+ *    unknown）。facts-only 行分三档（I-12，见下）：谱系已认证（lineageVerified）时
+ *    count>0 = busy、count 0 = idle；认证位缺席但保留表命中（subagentKnown）= fail-closed
+ *    busy；其余（watcher 来源 / 无谱系证据）保持 presence 语义——count>0 仅 unknown、
+ *    永不作 busy 证据（对 06 §4.5 的有意修正：在场不等于在干活）；
  *  - candidate：facts 候选要求 completedAtSource==='observed'、该来源本代已播种、
- *    水位严格前进；壳候选 = running true→idle（官方 completed 位在通道行上，但**不**构成通知边沿），且
+ *    水位严格前进；**R2 例外**：不可用快照上带 host 域 observed turn/end 的原始行只要
+ *    严格新于本批之前已见水位，就是自带判别符的事件证据（不等恢复批）；壳候选 =
+ *    running true→idle（官方 completed 位在通道行上，但**不**构成通知边沿），且
  *    **factsUsable（verdict ok && serviceable && !stale）为真时壳 complete 不是候选**
  *    （一完成一轨，归属过滤）；ask/request 是 candidate.kind，走同一 reconcile
  *    （v5 #12/INV4：只受 G2 基线播种约束，与 goal 状态无关）。**stale 壳快照不得作

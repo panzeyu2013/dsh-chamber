@@ -1789,3 +1789,152 @@ test('B10: stop() unpublishes the per-source instrument', () => {
   facts.stop()
   assert.equal(registry?.['ssh-b10-instrument'], undefined, 'stop() must remove the instrument entry')
 })
+
+/** A1：列表事实首次确认一行时，重探必须保持「直接观察到的边沿」语义，不得降级成 prompt-gap 探针。 */
+test('A1: the confirming re-probe keeps edge semantics (a tail without host time still arms reconstructed)', async () => {
+  const sockets: FakeSocket[] = []
+  const snapshots: Array<{ rows: Record<string, Record<string, unknown>> }> = []
+  let items: unknown[] = []
+  const follows: unknown[] = []
+  const HOST = 1_700_000_000_500
+  const facts = createSourceMuxFacts({
+    sourceId: 'ssh-a1', origin: 'http://cp', now: () => 700, onSnapshot: s => snapshots.push(s as never),
+    openSocket: () => { const s = new FakeSocket(); sockets.push(s); return s },
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items }) }) as never,
+  })
+  try {
+    facts.start()
+    sockets[0].open()
+    // 边沿读不回答：确认到达时它仍在飞，随确认被 updatedAt 围栏作废。
+    sockets[0].onFollowOpen = (streamId, payload) => { follows.push(payload) }
+    await new Promise(resolve => setTimeout(resolve, 5))
+    sockets[0].item({ type: 'ready', clientId: 'c' })
+    sockets[0].item({ type: 'emit', event: 'api-session/status', args: ['s1', true] })
+    sockets[0].item({ type: 'emit', event: 'api-session/status', args: ['s1', false] })
+    await waitFor(() => facts.status().edges === 1, 'the unconfirmed edge did not run')
+    items = [{ sessionId: 's1', running: false, updatedAt: HOST }]
+    facts.reconcile()
+    await waitFor(() => follows.length >= 2, 'the confirming re-probe did not open a follow')
+    // 重探尾巴没有 host 时间：边沿语义 ⇒ 武装 reconstructed（observer 域，不作通知证据）；
+    // prompt-gap 语义会把它当 unordered 直接丢掉，观察者已经看到的完成就此消失。
+    sockets[0].replyFollow(1, followSnapshot({ kind: 'completed' }))
+    await waitFor(() => snapshots.at(-1)?.rows.s1?.completedAtSource === 'reconstructed',
+      'the confirming re-probe must still arm a reconstructed completion')
+    const row = snapshots.at(-1)!.rows.s1
+    assert.equal(row.completedAtDomain, 'observer', '重建完成必须是 observer 域（不作通知证据）')
+    assert.equal(row.running, false)
+  } finally {
+    facts.stop()
+  }
+})
+
+/** A2：确认不得撤销「早于新水位」的观测完成；严格新于它的水位仍然作废。 */
+test('A2: a confirmation keeps an observed completion older than the new watermark and revokes a strictly newer one', async () => {
+  const HOST = 1_700_000_000_500
+  const run = async (confirmAt: number) => {
+    const sockets: FakeSocket[] = []
+    const snapshots: Array<{ rows: Record<string, Record<string, unknown>> }> = []
+    const follows: unknown[] = []
+    let items: unknown[] = []
+    const facts = createSourceMuxFacts({
+      sourceId: 'ssh-a2-' + confirmAt, origin: 'http://cp', now: () => 900,
+      onSnapshot: s => snapshots.push(s as never),
+      openSocket: () => { const s = new FakeSocket(); sockets.push(s); return s },
+      fetchImpl: rpcFetch({ 'session/list': () => ({ items }) }) as never,
+    })
+    try {
+      facts.start()
+      sockets[0].open()
+      sockets[0].onFollowOpen = (streamId, payload) => {
+        follows.push(payload)
+        if (follows.length === 1) sockets[0].followItem(streamId, followSnapshot({ kind: 'completed' }, HOST))
+      }
+      await new Promise(resolve => setTimeout(resolve, 5))
+      sockets[0].item({ type: 'ready', clientId: 'c' })
+      sockets[0].item({ type: 'emit', event: 'api-session/status', args: ['s1', true] })
+      sockets[0].item({ type: 'emit', event: 'api-session/status', args: ['s1', false] })
+      await waitFor(() => facts.status().edges === 1, 'the unconfirmed edge did not classify')
+      items = [{ sessionId: 's1', running: false, updatedAt: confirmAt }]
+      facts.reconcile()
+      await waitFor(() => snapshots.at(-1)?.rows.s1 !== undefined, 'the confirmation did not publish the row')
+      return snapshots.at(-1)!.rows.s1
+    } finally {
+      facts.stop()
+    }
+  }
+  const kept = await run(HOST - 1_000)
+  assert.equal(kept.completedAt, HOST, '确认水位早于完成 ⇒ 完成必须原样发布（不得被 0 水位的假推进撤销）')
+  assert.equal(kept.completedAtSource, 'observed')
+  assert.equal(kept.completedAtDomain, 'host')
+  const revoked = await run(HOST + 1_000)
+  assert.equal(revoked.completedAt, null, '新水位严格晚于完成 ⇒ 新的用户提示已取代该完成，必须作废')
+  assert.equal(revoked.completedAtSource, null)
+})
+
+/** B1：子代理行的 running 不是布尔 ⇒ 认证位 fail-closed（缺位不得当成 false）。 */
+test('B1: a subagent row with a missing or non-boolean running bit un-verifies the snapshot', () => {
+  const missing = indexMuxLineage([{ sessionId: 'c1', origin: 'subagent', parentSessionId: 'p' }])
+  assert.equal(missing.verified, false, '缺 running 不得当成 false——否则父行发布 verified idle')
+  assert.deepEqual([...missing.edges], [['c1', 'p']], '父边仍然记账（计数面另算）')
+  assert.equal(missing.running.size, 0)
+  const explicit = indexMuxLineage([{ sessionId: 'c1', origin: 'subagent', parentSessionId: 'p', running: false }])
+  assert.equal(explicit.verified, true, '显式 false 是可判的：认证不受影响')
+})
+
+/** B3：本拍有在跑证据的父链必须压制（suppression-only），即使保留表为空。 */
+test('B3: a live running edge is a fail-closed known child even when the retained table is empty', () => {
+  const rows = new Map([['p', { running: false }]])
+  const live = lineageFactsForRows(rows, {
+    edges: new Map([['c1', 'p']]), verified: false, children: new Map(), running: new Set(['c1']),
+  })
+  assert.deepEqual(live.get('p'), { count: 1, verified: false, known: true },
+    '未认证但不空：本拍在跑的子代仍必须压制父的完成')
+  const quiet = lineageFactsForRows(rows, {
+    edges: new Map([['c1', 'p']]), verified: false, children: new Map(), running: new Set(),
+  })
+  assert.equal(quiet.get('p')?.known, false, '没有在跑证据且保留表为空 ⇒ 不压制')
+})
+
+/** B2/A3：不可归属的 added 子代理让谱系失去认证；重挂父边同拍清理旧父并计入新父。 */
+test('B2/A3: an unattributable added subagent de-verifies the lineage, and reparenting clears the old parent', async () => {
+  const socket = new FakeSocket()
+  const snapshots: Array<{ rows: Record<string, Record<string, unknown>> }> = []
+  const facts = createSourceMuxFacts({
+    sourceId: 'ssh-b2a3', origin: 'http://cp', onSnapshot: s => snapshots.push(s as never),
+    openSocket: () => socket,
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items: [
+      { sessionId: 'p1', running: false, updatedAt: 1 },
+      { sessionId: 'p2', running: false, updatedAt: 2 },
+      { sessionId: 'c1', origin: 'subagent', parentSessionId: 'p1', running: true, updatedAt: 3 },
+    ] }) }) as never,
+  })
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().ready, 'baseline did not settle')
+    assert.equal(snapshots.at(-1)?.rows.p1?.subagentCount, 1)
+    assert.equal(snapshots.at(-1)?.rows.p1?.subagentKnown, true)
+    assert.equal(snapshots.at(-1)?.rows.p2?.subagentCount, 0)
+    // A3：c1 重挂到 p2——旧父的保留子代与计数同拍清理，新父立刻计入。
+    socket.item({ type: 'emit', event: 'api-session/added', args: [
+      { sessionId: 'c1', origin: 'subagent', parentSessionId: 'p2', running: true, updatedAt: 4 },
+    ] })
+    await waitFor(() => snapshots.at(-1)?.rows.p1?.subagentCount === 0, 'the old parent count did not drop on reparent')
+    assert.equal(snapshots.at(-1)?.rows.p1?.subagentKnown, undefined, '旧父的保留子代必须被清掉（known 不得粘住；真值只在 true 时出现）')
+    assert.equal(snapshots.at(-1)?.rows.p2?.subagentCount, 1, '新父立刻计入在跑子代')
+    assert.equal(snapshots.at(-1)?.rows.p2?.subagentKnown, true)
+    // B2：不可归属的子代理行证明这份谱系已不可信——认证位当拍清零，父行转 fail-closed。
+    socket.item({ type: 'emit', event: 'api-session/added', args: [
+      { sessionId: 'c2', origin: 'subagent', running: true, updatedAt: 5 },
+    ] })
+    await waitFor(() => snapshots.at(-1)?.rows.p1 !== undefined
+      && snapshots.at(-1)?.rows.p1?.lineageVerified === undefined,
+    'an unattributable subagent must un-verify the lineage (false is expressed as an absent key)')
+    assert.equal(snapshots.at(-1)?.rows.p2?.subagentKnown, true, 'fail-closed：认证位缺席时在跑子代仍压制')
+    assert.equal(snapshots.at(-1)?.rows.p2?.lineageVerified, undefined, '认证位表达为缺席（false 不落键）')
+  } finally {
+    facts.stop()
+  }
+})
+

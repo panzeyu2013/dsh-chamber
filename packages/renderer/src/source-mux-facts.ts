@@ -362,6 +362,10 @@ export function indexMuxLineage(items: readonly unknown[]): MuxLineageIndex {
       continue
     }
     edges.set(sessionId, parent)
+    // running 不是布尔 ⇒ 这份快照判不了「该子代理是否在跑」：认证位必须 fail-closed
+    // （与顶层行 rowFromListItem 同规——缺 running 不得当成 false；否则父行发布
+    // verified idle，消费者会在子代理仍在跑时放行完成）。
+    if (typeof item.running !== 'boolean') verified = false
     // 子代理行在 P2b 不建行、不投递（S1 门），父的计数只能由列表事实的 running 位得到
     // ——与 P2a 网关镜像「确认的子代理行不上 wire、但仍计入父的 subagentCount」同形。
     if (item.running === true) running.add(sessionId)
@@ -383,7 +387,7 @@ export interface MuxLineageFacts {
   /** running 子代理后代数（沿 subagent 链归并到所有祖先；与 sidebar index 同口径）。 */
   readonly count: number
   readonly verified: boolean
-  /** 本行在保留的谱系表里有 durable 子代（含已结束——它们仍在官方列表里）。 */
+  /** 保留表有 durable 子代（含已结束——它们仍在官方列表里），或本拍有在跑子代证据。 */
   readonly known: boolean
 }
 
@@ -396,15 +400,20 @@ export function lineageFactsForRows(
   state: MuxLineageState,
 ): ReadonlyMap<string, MuxLineageFacts> {
   const counts = new Map<string, number>()
+  // 本拍有在跑证据的父链集合：`known` 的第二条证据面（第一条 = 保留表）。谱系未认证
+  // 时保留表可能是空的，而本拍刚观察到的在跑子代仍必须 fail-closed 压制父的完成。
+  const liveParents = new Set<string>()
   for (const [child, parent] of state.edges) {
-    // 在跑证据 = 观察者内部行（status 首建、尚未被列表揭示的子代理）∪ 列表事实的
-    // running 位（已揭示的子代理在 P2b 不建行，行内状态因此缺席）。
+    // 在跑证据 = 观察者内部行 ∪ 列表事实的 running 位。生产路径上带父边的子代理在
+    // P2b 一律不建行（基线/added 揭示即退役），计数实际由 running 位承担；行内状态面
+    // 是这条纯函数对外契约的一部分（单元测试显式构造该形态），保留。
     if (rows.get(child)?.running !== true && state.running?.has(child) !== true) continue
     const seen = new Set<string>([child])
     let ancestor: string | undefined = parent
     while (ancestor !== undefined && !seen.has(ancestor)) {
       seen.add(ancestor)
       counts.set(ancestor, (counts.get(ancestor) ?? 0) + 1)
+      liveParents.add(ancestor)
       ancestor = state.edges.get(ancestor)
     }
   }
@@ -413,7 +422,7 @@ export function lineageFactsForRows(
     facts.set(sessionId, {
       count: counts.get(sessionId) ?? 0,
       verified: state.verified,
-      known: state.children.has(sessionId),
+      known: state.children.has(sessionId) || liveParents.has(sessionId),
     })
   }
   return facts
@@ -624,8 +633,14 @@ export function mergeBaselineRow(previous: SourceMuxRow | undefined, row: Source
     // updatedAt 是宿主列表项的派生水位（vendor list.js: max(header.createdAt,
     // projections.values.sessionListMetadata.lastPromptAt ?? 0)），即**最近一次用户内容的时间戳**
     // （本机实测：`session/list` 123/123 行都带真实值）。它证明「有更新」，但**不**证明「有一轮结束」——
-    // 故仅当水位推进且此前不在运行时，作废上一次完成声明（活动 ≠ 完成）。
-    ...(row.updatedAt > previous.updatedAt && !previous.running
+    // 故仅当有证据表明水位真的推进到该完成之后时，才作废上一次完成声明（活动 ≠ 完成）：
+    //  ① 两侧都有真实列表水位且推进（`previous.updatedAt > 0` 是必要条件——0 = 该行从未被
+    //     列表确认过，`row.updatedAt > 0` 恒真，不是推进证据；否则列表事实首次确认一行
+    //     就会无端撤销 status 边沿刚读到的完成）；
+    //  ② 已武装的完成在 host 域且**严格早于**新水位（新提示落在完成之后 ⇒ 该完成过期）。
+    ...((previous.updatedAt > 0 && row.updatedAt > previous.updatedAt && !previous.running)
+      || (!previous.running && previous.completedAtDomain === 'host'
+        && previous.completedAt !== null && row.updatedAt > previous.completedAt)
       ? { completedAt: null, completedAtSource: null, completedAtDomain: undefined, lastTurnEnd: null }
       : {}),
     factAt: at,
@@ -1327,7 +1342,13 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
           && row.updatedAt > previous.updatedAt) {
         // Both status frames can fit between baselines. A newer lastPromptAt
         // proves new activity, but only a newer turn/end may prove completion.
-        void readTail(row.sessionId, markPromptGap(row.sessionId, row.updatedAt))
+        // 列表事实**首次**确认一行（previous.updatedAt === 0）时 `row.updatedAt > 0`
+        // 不是「水位推进」：此前那条边沿仍是直接观察到的 status 边沿，重探必须保持边沿
+        // 语义（读不到尾巴 ⇒ 武装 reconstructed/observer），不得降级成 prompt-gap 探针
+        // ——prompt-gap 读不到尾巴只记一次失败，会把观察者已经看到的完成静默丢掉。
+        void readTail(row.sessionId, previous.updatedAt > 0
+          ? markPromptGap(row.sessionId, row.updatedAt)
+          : markObservedEdge(row.sessionId))
       } else if (!row.running && pendingTails.has(row.sessionId)) {
         // A previously unreadable tail remains pending classification. A later
         // periodic baseline gives it another bounded follow attempt.
@@ -1403,6 +1424,8 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
         // 期限内没有 turn/end ⇒ **读不到确定性尾巴**：判 unreadable 并武装（判 neutral
         // 会让跨缺口完成在唯一证据缺失时静默丢失）；紧接着重跑由 running=true 结算。
         followFailures += 1
+        // 已武装的 host 域完成是更强的证据：读不到尾巴只补空缺，绝不把观测降级成重建。
+        if (row.completedAtDomain === 'host') return
         rows.set(sessionId, {
           ...row,
           completedAt: now(),
@@ -1440,6 +1463,8 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       if (row !== undefined) {
         followFailures += 1
         if (expected.afterPromptAt !== null) return
+        // 同主线：已武装的 host 域完成不得被观察者重建覆盖（读失败只补空缺）。
+        if (row.completedAtDomain === 'host') return
         // 没有 host 时间 ⇒ 观察者戳 + reconstructed/observer（诚实标注降级）。
         rows.set(sessionId, {
           ...row,
@@ -1501,21 +1526,38 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     // 证据必须立刻跟上（与 P2a 网关镜像同形）。记账放在身份分派之前：added 的子代理行走
     // 下面的退役分支，它的父边仍然要记。
     const lineage = indexMuxLineage([item])
+    let lineageMutated = false
     for (const [child, parent] of lineage.edges) {
+      const previousParent = lineageEdges.get(child)
+      if (previousParent !== undefined && previousParent !== parent) {
+        // 重挂父边：旧父的保留表必须同拍清理，否则旧父永久保留一个已不属于它的
+        // fail-closed 已知子代（计数走 edges，但 known 位会一直粘住）。
+        const stale = lineageChildren.get(previousParent)
+        if (stale !== undefined) {
+          stale.delete(child)
+          if (stale.size === 0) lineageChildren.delete(previousParent)
+          lineageMutated = true
+        }
+      }
+      if (previousParent === undefined || previousParent !== parent) lineageMutated = true
       lineageEdges.set(child, parent)
       if (lineageVerified) {
         const set = lineageChildren.get(parent)
         if (set === undefined) lineageChildren.set(parent, new Set([child]))
-        else set.add(child)
+        else if (!set.has(child)) set.add(child)
       }
     }
     if (isSubagentListItem(item)) {
       const id = isRecord(item) && typeof item.sessionId === 'string' ? item.sessionId : null
       if (id !== null) {
         subagentSessions.add(id)
+        // 不可归属的子代理行（无/自指父）证明这份谱系已不可信：认证位当拍清零，父行转
+        // fail-closed（要么由保留表，要么由本拍在跑位压制），下一次完整基线重新认证。
+        const unattributable = !lineage.verified
+        if (unattributable) lineageVerified = false
         // 计数位变化同拍 emit：父行要立刻带上新的 subagentCount，完成候选才被正确缓行。
         const counting = noteSubagentRunning(id, lineage.running.has(id))
-        if (retireSession(id) || counting) emit()
+        if (retireSession(id) || counting || unattributable || lineageMutated) emit()
       }
       return
     }
