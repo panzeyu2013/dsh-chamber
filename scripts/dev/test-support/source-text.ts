@@ -23,6 +23,11 @@
 
 /**
  * Remove line/block comments while preserving string and template literals.
+ *
+ * **不识别正则字面量**（已知边界）：正则里的 `/`、引号或 `//` 会被当普通代码字符
+ * 继续扫描——最坏情形是进入错误的引号态，令后面的真注释**不被剥掉**（源锁因此可能匹配到
+ * 注释文本，正是本助手要防的失败模式）；反之 `//` 形状的正则也会把行尾截成注释。
+ * 需要正则感知的语料请用局部实现（见本文件头注列的刻意变体），不要靠本助手。
  * @param code - the source text.
  * @returns the source with comments replaced by spaces.
  */

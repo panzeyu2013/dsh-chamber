@@ -187,7 +187,6 @@ type SshInstancesHealthProbe = SshInstancesHealth & {
 // 桥面探测常量与 effect：app-hooks/use-ssh-bridge-probe.ts（App.tsx 行数棘轮，逻辑已抽出）。
 
 
-
 /** Stable empty list for boots whose failure carries no loader entries. */
 const NO_FAILED_ENTRIES: readonly string[] = []
 
@@ -482,7 +481,7 @@ export default function App() {
   // mounted 表单一权威：host/mounted-sources-store.ts（渲染值与事件侧同步读同一份）。
   const [mountedSources] = useState(createMountedSourcesStore)
   const snapshotSources = useSyncExternalStore(mountedSources.subscribe, mountedSources.getSnapshot, mountedSources.getSnapshot)
-  // 完成点修正臂（唯一 App 侧状态）：官方位走通道行，这里只放隐藏来源 current 行的补臂（纯内存）。
+  // 完成点修正臂（唯一 App 侧状态）：官方位走通道行；这里放有壳 current 行 ∪ 无壳（facts-only provenance）逐行边沿的补臂（design 06 §4.2）。
   const [completedStore] = useState(createCompletedStore)
   const correctionArms = useSyncExternalStore(completedStore.subscribe, completedStore.getSnapshot, completedStore.getSnapshot)
   // 每来源记账账本：字段表与单一 prune 清单都在 host/source-ledger.ts。
@@ -586,9 +585,9 @@ export default function App() {
   // 托管 dsh 探针簇（状态 + 15s 前台探针 + 退役收敛）在 host/use-managed-runtime.ts。
   const { managedRuntime, probeRef: probeManagedRuntimeRef, retireManagedRuntime } = useManagedRuntime(remoteInstances)
   // 完成未读的唯一权威是官方 uiSession.sessionStatus.completionUnread（vendor 内存 Set，
-  // 经 sidebar 生产者进通道行 completed）。App 只补一条 N-ctx 修正臂：隐藏来源的 mainView
-  // 持有行（current）在 vendor 规则下漏武装，那一格由 client-core completion-arm.ts 填补；
-  // 插件侧保持无状态（纯投影）。修正臂纯内存、不落盘、无水位、无播种。
+  // 经 sidebar 生产者进通道行 completed）。App 只补一条 N-ctx 修正臂（client-core
+  // completion-arm.ts）：有壳隐藏来源的 current 行 ∪ 无壳 facts-only 来源的逐行 host
+  // 运行边沿（design 06 §4.1/§4.2、design 19 §3.2）；纯内存、不落盘、无水位、无播种。
   // Desktop-observed stall evidence: the shell's frame/input probe pushes strike
   // counters; the page registry feeds the delivery owner the same evidence.
   useEffect(() => {
@@ -1150,7 +1149,7 @@ export default function App() {
   const {
     refreshAggregate, refreshAggregateRef, pollAggregatesRef, runStalenessWatchdogRef,
     stalledSources, dismissedStalls, setDismissedStalls, unverifiedSources, setUnverified,
-    unverifiedSourcesRef, watchdogAggregatesRef,
+    unverifiedSourcesRef, watchdogAggregatesRef, withdrawSourceRef,
   } = useAggregateRefresh({
     aggregates, health, remoteInstances, remoteStatus, snapshotSources,
     escalationLadder: SESSION_AUTHORITY_ESCALATION_LADDER,
@@ -1695,15 +1694,16 @@ export default function App() {
   // （use-notifications.ts）；App 只传状态容器与 setter（pagehide flush 经 flushNotificationsRef，ref 由 hook 写入）。
   const {
     schedulePersistNotifications, stepCompletionArmFor, emitSessionNotification, applySessionFacts,
-    persistCompletionLedger, notificationImmediateSave, guardStep,
+    persistCompletionLedger, notificationImmediateSave, guardStep, withdrawSource,
   } = useNotifications({
-    aggregates, serverLabels, viewStore, factsStore, liveServerIdsRef,
+    aggregates, serverLabels, viewStore, factsStore, liveServerIdsRef, openIntents,
     sourceLifecyclesRef, prevRunningRef,
     completeLedgerRef, notificationOutboxRef, completionObservationRef,
     notificationStorageRef, notificationSaveTimerRef, flushNotificationsRef,
     completedStore, bootToken: notificationsBoot.boot.token, bootVerdict: notificationsBoot.boot.verdict,
   })
   schedulePersistNotificationsRef.current = schedulePersistNotifications
+  withdrawSourceRef.current = withdrawSource
 
   // servers 渲染期镜像、行刷新提示、gateway 事实源与 dsh 无壳观察者的创建/收敛/退订、focus 重算与
   // pagehide 落盘是命名 hook（use-session-facts-lifecycle.ts）；App 只注入状态容器与投影回调。
@@ -1711,7 +1711,7 @@ export default function App() {
     servers, applySessionFacts, notificationImmediateSave,
     unverifiedSourcesRef, factsPullInFlightRef, refreshHintAtRef, refreshAggregateRef,
     factsStore, sessionFactsSourcesRef, sessionFactsTeardownRef,
-    sourceMuxTeardownRef, sourceMuxIdentityRef,
+    sourceMuxTeardownRef, sourceMuxIdentityRef, withdrawSource,
   })
 
 
@@ -2028,12 +2028,12 @@ export default function App() {
   // 桥订阅簇（深链 / 回声 / 挂载快照 / 运行时上报…）是命名 hook；App 只传当前 ref/state/回调与预算常量。
   useBridgeSubscriptions({
     acknowledgeDeepLink, emitSessionNotification, openSession,
-    stepCompletionArmFor, guardStep, refreshAggregate, reportDeepLinkAckFailure, selectView,
+    stepCompletionArmFor, withdrawSource, guardStep, refreshAggregate, reportDeepLinkAckFailure, selectView,
     updateSessionArchive, updateSessionEcho, updateWorkspaceEcho, aggregatePollSeqRef,
     aggregateRequestOwnersRef, authoritativeArchiveSetRef, autoPrewarmedRef, completeLedgerRef,
     drainPrewarmRef, factsAtRef, harvestCandidatesRef, harvestIntentRef,
     harvestStateRef, intentBudgetRef, intentPriorityRef, liveServerIdsRef,
-    mutationRefreshSeqRef, pendingDeepLinkDeliveryRef, prevRunningRef,
+    mutationRefreshSeqRef, pendingDeepLinkDeliveryRef,
     prewarmEligibleRef, prewarmQueueRef, prewarmSuppressedRef, readyAggregateSourcesRef,
     reclaimViewRef, remotesStore, isRosterSettled: () => rosterGate.isSettled(), echoStore,
     factsStore, sessionListRefreshAtRef, sessionListRefreshPendingRef,
@@ -2046,9 +2046,9 @@ export default function App() {
     bootToken: notificationsBoot.boot.token, bootVerdict: notificationsBoot.boot.verdict,
   })
 
-  /** chamber：**屏上**来源（paintedView，非选择）的 current 行被读到 ⇒ 清除修正臂。
-   *  官方位由 vendor 自己在 retain / ready 时清除，这里只补修正臂那一格；进入屏上的一拍重跑一次，
-   *  覆盖「激活但无新上报」的路径。 */
+  /** chamber：**屏上**来源（paintedView，非选择）的已读边沿 ⇒ 步进修正臂做清除。
+   *  有壳读 `current` 行；无壳（facts-only provenance）读 App 打开意图（design 06 §4.2）。
+   *  官方位由 vendor 在 retain/ready 时清除；进入屏上的一拍重跑一次，覆盖「激活但无新上报」。 */
   const prevPaintedViewRef = useRef(paintedView)
   useEffect(() => {
     const previous = prevPaintedViewRef.current

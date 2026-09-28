@@ -76,7 +76,8 @@ function subagentSuppressesBadge(
 /**
  * 跨来源求「完成未读」会话数——输入是官方位所在的**合并投影** + App 的 N-ctx 修正臂：
  * 官方 \`row.completed\` 走通道（\`mergeRuntimeFacts\` 只追加修正臂），\`correctionArms\`
- * 是隐藏来源 current 行的内存补臂（按行、不扫描）。两个析取 ≡ mergeRuntimeFacts 的
+ * 是有壳隐藏来源 current 行 ∪ 无壳（facts-only provenance，design 06 §4.1/§4.2）来源
+ * 逐行 host 运行边沿的内存补臂（按行、不扫描）。两个析取 ≡ mergeRuntimeFacts 的
  * 合并结果，与侧栏行尾蓝点/待办区的权威完全一致，因此不会出现「点/待办有、徽标无」的诚实分叉。
  *
  * 仍排除：①当前事实行归一为在跑的子代理（三值 running；06 §4.5 与窗口内运行环压制、

@@ -296,6 +296,53 @@ export class AggregateRefreshQueue {
   }
 }
 
+/**
+ * Drain queued aggregate refreshes under a fixed concurrency cap: one wave at a
+ * time, at most `concurrency` pulls in flight, every source of a wave pulled
+ * exactly once (the queue already dedupes by source id). The drain loops until
+ * the queue is empty, so a refresh edge arriving mid-wave is picked up by the
+ * successor wave instead of being lost.
+ *
+ * This is the ONE bounded-wave implementation: the edge poll, the staleness
+ * watchdog and the facts row hint all reach it (the row hint enqueues a single
+ * source — the cap is shared, never bypassed).
+ */
+export async function drainAggregateWaves(
+  queue: AggregateRefreshQueue,
+  concurrency: number,
+  pull: (sourceId: string) => Promise<void>,
+  onPullFailure?: (sourceId: string, error: unknown) => void,
+): Promise<void> {
+  while (queue.size > 0) {
+    const sourceIds = queue.take()
+    let cursor = 0
+    const worker = async (): Promise<void> => {
+      while (cursor < sourceIds.length) {
+        const sourceId = sourceIds[cursor]
+        cursor += 1
+        // 每项独立隔离（S5）：pull 拒绝只丢弃该项（计数走 onPullFailure，绝不重入队——
+        // 无界重入队 = 活锁），本波剩余项照常拉完，Promise.all 只在所有 worker 收工后
+        // resolve ⇒ 不产生孤儿 worker 与下一波叠加突破并发帽，也不逃成 unhandledRejection。
+        // 拉取自身的 deadline 在实例 unary 层（INSTANCE_UNARY_TIMEOUT_MS = 30s），这里不叠第二层。
+        try {
+          await pull(sourceId)
+        } catch (error) {
+          // 诊断 sink 必须自隔离：它自己抛错不得把 worker 打 reject——Promise.all 会提前
+          // settle，.finally 在其余 worker 仍在飞时复位并发帽，下一波就与残留 worker 叠加
+          // （破坏 4-pull 上限）。sink 的失败不改变本波纪律。
+          try {
+            onPullFailure?.(sourceId, error)
+          } catch { /* 诊断失败不影响拉取纪律 */ }
+        }
+      }
+    }
+    await Promise.all(Array.from(
+      { length: Math.min(Math.max(1, concurrency), sourceIds.length) },
+      () => worker(),
+    ))
+  }
+}
+
 /** Staleness predicate for the aggregate watchdog: stale when a source never
  *  pushed or its last push is older than the threshold — recency is the only
  *  liveness signal, since the unary client exposes no connection state. */

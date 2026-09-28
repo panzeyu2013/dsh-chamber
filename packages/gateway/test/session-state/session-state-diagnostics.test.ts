@@ -34,7 +34,7 @@ async function get(): Promise<Record<string, unknown>> {
 }
 
 test('the descriptor carries the additive diagnostics field with the documented shape', async t => {
-  const harness = surfaceFor(t, { eventsReceived: 7, baselines: 2, reconnects: 3, followReads: 4, followFailures: 1, heldWaterfalls: 1, degraded: true })
+  const harness = surfaceFor(t, { eventsReceived: 7, muxBaselines: 2, reconnects: 3, followReads: 4, followFailures: 1, heldWaterfalls: 1, degraded: true })
   harness.store.applyBaseline([baselineItem('s1', true, 5)], { at: 100 })
   activeSurface = harness.surface
   const body = await get()
@@ -46,7 +46,10 @@ test('the descriptor carries the additive diagnostics field with the documented 
   const diagnostics = body.diagnostics as Record<string, unknown>
   assert.equal(diagnostics.eventsReceived, 7)
   assert.equal(diagnostics.lastEventAt, 950)
-  assert.equal(diagnostics.baselines, 2)
+  // S4/T2：wire 的 listComplete 闩锁只认 **store** 的完整基线计数（含 poll 档），
+  // observer 自己那份 mux 计数（这里故意注入 2）不得再当来源——否则 poll 档恒 0。
+  assert.equal(diagnostics.baselines, 1)
+  assert.equal(harness.observerStatus.muxBaselines, 2, 'negative control: the mux self-count is a separate field')
   assert.equal(diagnostics.reconnects, 3)
   assert.equal(diagnostics.followReads, 4)
   assert.equal(diagnostics.followFailures, 1)

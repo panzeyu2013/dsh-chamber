@@ -234,8 +234,9 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
    * 键空间（随 producer 通道撤回自行收敛）、不回退 active/pending 意图、不清在途
    * deep-link/通知交付。dispose 先于 React 卸载（同一提交内），实例进程/隧道/后台
    * 任务不受影响；重开 = selectView 冷 boot + entry 重放。
-   * 壳内运行中任务的完成蓝点/通知边沿随 runtime-facts 撤回而暂停，直至该源重开——
-   * 60s 安全窗 + RETAINED_HIDDEN_VIEWS=1 限制损失面。
+   * 壳撤回只撤掉有壳路径的 runtime-facts：无壳（facts-only provenance）来源的完成蓝点由
+   * 修正臂按逐行 host 运行边沿补、通知判定走 facts 通道（design 06 §4.2、design 19 §3.2），
+   * 都不因回收而暂停；60s 安全窗 + RETAINED_HIDDEN_VIEWS=1 限制的只是渲染/聚合时延。
    */
   const reclaimView = useCallback((id: string, reason: 'retention' | 'harvest' = 'retention') => {
     if (id === LOCAL_INSTANCE_ID || !mountedViews.includes(id)) return

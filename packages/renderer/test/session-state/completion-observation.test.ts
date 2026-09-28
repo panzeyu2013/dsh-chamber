@@ -16,6 +16,7 @@ import {
   factsChannelOf,
   observeSource,
   withdrawObservationState,
+  withdrawShellTrack,
   type CompletionSink,
   type FactsObservationRow,
   type ObservationBatch,
@@ -2642,3 +2643,234 @@ test('R1: an old anchor is never borrowed (the edge stays anchorless and the ide
   assert.equal(calls.notifications[0].completionSeq, undefined, '无锚完成不由本层编造 host 身份')
 })
 
+
+// ── C1：壳上报撤回按 provenance 分域（facts 载体未换代只清壳轨） ─────────────
+//
+// 回归形状：桥面 `onRuntimeReport(undefined)`（shell 重连/重 boot 窗口）此前走整代
+// 撤回（删观测状态 + 账本 withdraw）。facts 载体并未换代，窗口内到达的 observed+host
+// 完成本应经 facts 轨通知一次；观测状态被删 ⇒ 下一批是 freshState/G2 播种批，水位被
+// 吸收进 memory.factsWatermark，候选永不产生（通知丢发，重放也补不回），prevRunning
+// 落空（蓝点没有边沿）。分域后 `withdrawShellTrack` 只复位 shellSeeded 与每会话壳位，
+// factsSeeded / factsWatermark / factsReseedPending / shellCompleteSinceFacts 原样保留。
+
+test('C1: a shell-report withdrawal keeps the facts track, so the window completion notifies exactly once', () => {
+  const ledger = createCompleteLedger()
+  const { calls, sink } = makeSink()
+  // 1) 壳报 + facts 播种（s1 running）。
+  let batch = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: true, goal: null } } },
+    facts: { usable: true, rows: {} },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(batch.state.factsSeeded, true, '可用 facts 批播种')
+  assert.equal(batch.state.sessions.s1?.factsWatermark, 0)
+
+  // 2) 壳上报撤回（facts 载体未换代）：只清壳轨。
+  withdrawShellTrack(batch.state)
+  assert.equal(batch.state.shellSeeded, false, '壳轨撤回即播种（恢复后首份壳/虚拟报不再产壳候选）')
+  assert.equal(batch.state.sessions.s1?.shellRunning, 'unknown', '旧壳运行位不得当新边沿证据')
+  assert.equal(batch.state.sessions.s1?.shellPending, undefined)
+  assert.equal(batch.state.factsSeeded, true, 'facts 播种位必须保留（丢了 ⇒ G2 播种批吸收窗口完成）')
+  assert.equal(batch.state.sessions.s1?.factsWatermark, 0, 'facts 水位记忆必须保留')
+
+  // 3) 窗口内 facts 完成 100（撤回后 runtime 已删，判定侧走 virtualRuntimeReport：虚拟壳报
+  //    只带 running，不带 goal）。
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false } } },
+    facts: {
+      usable: true,
+      rows: { s1: factsRow({ running: false, completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) },
+    },
+  })
+  assert.deepEqual(batch.observations[0].candidate, { kind: 'complete', watermark: 100, evidence: 'facts-watermark' })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 1, '窗口内完成恰好通知一次')
+  assert.equal(calls.notifications[0].watermark, 100)
+  assert.equal(batch.state.sessions.s1?.factsWatermark, 100, '水位随候选吸收')
+
+  // 4) 重复回放同一批（同水位）：水位已吸收 ⇒ 无候选、无第二条通知。
+  const replay = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false } } },
+    facts: {
+      usable: true,
+      rows: { s1: factsRow({ running: false, completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) },
+    },
+  })
+  assert.equal(replay.observations[0].candidate, undefined, '同水位重放不得重提候选')
+  applyObservationBatch({ ledger, sourceId: 'src', batch: replay, sink })
+  assert.equal(calls.notifications.length, 1, '重复回放不双发')
+})
+
+test('C1 control: the retired whole-state withdrawal loses that same window completion (fix is load-bearing)', () => {
+  // 对照（修复前的整代撤回）：删除观测状态 + withdraw 账本 ⇒ 同序列变成 freshState 的
+  // G2 播种批，窗口完成被吸收进水位；候选 0 条、通知 0 条——本修复去掉的正是这个形状。
+  const ledger = createCompleteLedger()
+  const { calls, sink } = makeSink()
+  let batch = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: true, goal: null } } },
+    facts: { usable: true, rows: {} },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  // 整代撤回（旧 report===undefined 路径的形状）：状态删除 + 账本易失轨撤回。
+  ledger.withdraw('src')
+  const fresh = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false } } },
+    facts: {
+      usable: true,
+      rows: { s1: factsRow({ running: false, completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) },
+    },
+  })
+  assert.equal(fresh.freshState, true)
+  assert.equal(fresh.observations[0].candidate, undefined, '新代首批是 G2 播种批：无候选')
+  applyObservationBatch({ ledger, sourceId: 'src', batch: fresh, sink })
+  assert.equal(fresh.state.sessions.s1?.factsWatermark, 100, '窗口完成被吸收进水位（不可重提）')
+  assert.equal(calls.notifications.length, 0, '整代撤回 ⇒ 窗口完成两面皆丢（C1 回归形状）')
+})
+
+test('C1: the shell withdrawal must not clear held pending — the suppressed completion still flushes exactly once', () => {
+  // 账本「整体不动」是载荷性的：goal 活跃期完成已被吸收进 pending、水位记忆同步前进；
+  // 若撤回把 pending 清掉，水位已消费（factsWatermark=100）而 settlement 身份不存在 ⇒
+  // 该完成永不 flush（丢发）。保留 pending 时同一个 outcome 恰好补发一次。
+  const ledger = createCompleteLedger()
+  const { calls, sink } = makeSink()
+  const activeGoal = { goalId: 'g1', revision: 1, phase: 'active' as const, activation: 'armed' as const, updatedAt: 1 }
+  let batch = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: true, goal: activeGoal } } },
+    facts: { usable: true, rows: {} },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, goal: activeGoal } } },
+    facts: {
+      usable: true,
+      rows: { s1: factsRow({ running: false, completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) },
+    },
+  })
+  assert.deepEqual(batch.observations[0].candidate, { kind: 'complete', watermark: 100, evidence: 'facts-watermark' },
+    '候选在场，但 goal active ⇒ reconcile 把它吸收为 pending、不发通知')
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 0)
+  assert.notEqual(ledger.pendingTable().src?.s1, undefined, 'held pending 在水位面已消费')
+  assert.equal(batch.state.sessions.s1?.factsWatermark, 100, '水位记忆同步到 100')
+
+  withdrawShellTrack(batch.state)
+  assert.notEqual(ledger.pendingTable().src?.s1, undefined, 'pending 跨壳轨撤回保留（清掉 ⇒ 水位已消费、完成永久丢发）')
+
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, goal: { ...activeGoal, revision: 2, phase: 'complete' as const, updatedAt: 2 } } } },
+    facts: {
+      usable: true,
+      rows: { s1: factsRow({ running: false, completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) },
+    },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 1, '被压制的完成在 outcome 后恰好补发一次')
+  assert.equal(calls.notifications[0].title, 'goal-completed')
+  assert.equal(ledger.pendingTable().src?.s1, undefined, 'flush 后 pending 结清')
+})
+
+test('C1 control: clearing the ledger at the shell withdrawal loses that held completion forever', () => {
+  const ledger = createCompleteLedger()
+  const { calls, sink } = makeSink()
+  const activeGoal = { goalId: 'g1', revision: 1, phase: 'active' as const, activation: 'armed' as const, updatedAt: 1 }
+  let batch = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: true, goal: activeGoal } } },
+    facts: { usable: true, rows: {} },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, goal: activeGoal } } },
+    facts: {
+      usable: true,
+      rows: { s1: factsRow({ running: false, completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) },
+    },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 0)
+  // 旧口径的整代撤回顾及账本（armed/pending/fence/goalKnown 同拍清）——本修复去掉的形状。
+  ledger.withdraw('src')
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, goal: { ...activeGoal, revision: 2, phase: 'complete' as const, updatedAt: 2 } } } },
+    facts: {
+      usable: true,
+      rows: { s1: factsRow({ running: false, completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) },
+    },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 0, '账本被清 ⇒ 水位已吸收 + settlement 身份丢失 ⇒ 完成永久丢发（回退即红）')
+})
+
+test('C1: the shell-withdrawal keeps the B3-2/COR-1 reseed guards, so the shell-notified completion never re-notifies', () => {
+  // 时序：facts 已播种 → facts 不可用窗口里壳边沿通知 C1（同批复位 factsSeeded 并挂
+  // factsReseedPending + per-session shellNotifiedSinceFacts）→ 壳上报撤回 → facts 恢复并
+  // 报同一完成 100。若撤回把 facts 轨守卫清掉，恢复批会以「已播种 + 水位前进」二次通知；
+  // 保留守卫则重新播种吸收，仍恰 1 条；随后真正的新完成 200 照常通知。
+  const ledger = createCompleteLedger()
+  const { calls, sink } = makeSink()
+  let batch = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: true, goal: null } } },
+    facts: { usable: true, rows: {} },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, goal: null } } },
+    facts: { usable: false, rows: { s1: factsRow() } },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 1, 'facts 不可用窗口内壳边沿通知 C1')
+  assert.equal(batch.state.factsSeeded, false, '同批复位播种位（B3-2）')
+  assert.equal(batch.state.factsReseedPending, true)
+  assert.equal(batch.state.sessions.s1?.shellNotifiedSinceFacts, true)
+  assert.equal(batch.state.shellCompleteSinceFacts, true)
+  assert.equal(ledger.armed('src').has('s1'), true, '壳完成已武装（无水位消费）')
+  assert.notEqual(ledger.state().settleFence.src?.s1, undefined, '无水位 emit 置栏')
+
+  withdrawShellTrack(batch.state)
+  assert.equal(batch.state.factsSeeded, false, '撤回不得把恢复批变回「已播种」（否则二次通知）')
+  assert.equal(batch.state.factsReseedPending, true, '恢复播种位跨撤回保留')
+  assert.equal(batch.state.sessions.s1?.shellNotifiedSinceFacts, true, 'per-session 守卫跨撤回保留')
+  assert.equal(ledger.armed('src').has('s1'), true, '账本守卫不动（去重身份不跨壳轨撤回）')
+  assert.notEqual(ledger.state().settleFence.src?.s1, undefined, '围栏动不得：它正是 facts 追平同一完成的一次性守卫')
+
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false } } },
+    facts: {
+      usable: true,
+      rows: { s1: factsRow({ running: false, completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) },
+    },
+  })
+  assert.equal(batch.observations[0].candidate, undefined, '重新播种批：同一完成只吸收，不产候选')
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 1, '壳已通知的同一完成不得二次通知')
+  assert.equal(batch.state.factsSeeded, true, '恢复批完成播种')
+
+  // 新完成 200：水位严格前进 ⇒ 照常通知（撤回不得毒死后续完成）。
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false } } },
+    facts: {
+      usable: true,
+      rows: { s1: factsRow({ running: false, completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) },
+    },
+  })
+  assert.deepEqual(batch.observations[0].candidate, { kind: 'complete', watermark: 200, evidence: 'facts-watermark' })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 2, '撤回后的新完成照常通知')
+  assert.equal(calls.notifications[1].watermark, 200)
+})

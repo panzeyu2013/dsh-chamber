@@ -25,12 +25,20 @@ function storeFor(t: { after(fn: () => void): void }, now: () => number = () => 
   return createSessionStateStore({ stateDir: scratch(t), logger: silentLogger, now })
 }
 
+/** 身份已确认的 store：一次成功基线把 s1 确认为顶层。S1 硬门之下，纯 status/activity
+ *  用例建的行必须有**列表事实**（基线/added）背书才会投递——「本进程见过基线」不再是门票。 */
+function storeWithList(t: { after(fn: () => void): void }, now: () => number = () => 1_000): ReturnType<typeof createSessionStateStore> {
+  const store = storeFor(t, now)
+  store.applyBaseline([baselineItem('s1', false, 1)], { at: 0 })
+  return store
+}
+
 // ---------------------------------------------------------------------------
 // Running edge + completion classification (R12)
 // ---------------------------------------------------------------------------
 
 test('status true -> false yields one edge and arms nothing before classification', t => {
-  const store = storeFor(t)
+  const store = storeWithList(t)
   assert.deepEqual(store.applyStatus('s1', true, 10), [])
   const edges = store.applyStatus('s1', false, 20)
   assert.deepEqual(edges, [{ sessionId: 's1', source: 'observed' }])
@@ -43,13 +51,13 @@ test('status true -> false yields one edge and arms nothing before classificatio
 })
 
 test('a false status without a running edge produces no edge', t => {
-  const store = storeFor(t)
+  const store = storeWithList(t)
   assert.deepEqual(store.applyStatus('s1', false, 10), [])
   assert.equal(store.snapshotFor('sse', store.host()).sessions[0].completedAt, null)
 })
 
 test('completed arms completedAt with the observed source', t => {
-  const store = storeFor(t)
+  const store = storeWithList(t)
   store.applyStatus('s1', true, 10)
   const [edge] = store.applyStatus('s1', false, 20)
   assert.equal(store.settleCompletion(edge!, {
@@ -62,7 +70,7 @@ test('completed arms completedAt with the observed source', t => {
 })
 
 test('aborted + user never arms unread (R12) but records the fact', t => {
-  const store = storeFor(t)
+  const store = storeWithList(t)
   store.applyStatus('s1', true, 10)
   const [edge] = store.applyStatus('s1', false, 20)
   store.settleCompletion(edge!, {
@@ -84,7 +92,7 @@ test('neutral turn-end kinds (blocked/error/max-tokens/interrupted, aborted non-
     { kind: 'aborted', reason: { kind: 'parent' } },
     { kind: 'aborted', reason: { kind: 'legacy' } },
   ]) {
-    const store = storeFor(t)
+    const store = storeWithList(t)
     store.applyStatus('s1', true, 10)
     const [edge] = store.applyStatus('s1', false, 20)
     store.settleCompletion(edge!, {
@@ -103,7 +111,7 @@ test('neutral turn-end kinds (blocked/error/max-tokens/interrupted, aborted non-
 })
 
 test('an unreadable tail falls back to arming with a null lastTurnEnd marker', t => {
-  const store = storeFor(t)
+  const store = storeWithList(t)
   store.applyStatus('s1', true, 10)
   const [edge] = store.applyStatus('s1', false, 20)
   store.settleCompletion(edge!, { at: 20, turnEnd: null, unreadable: true })
@@ -114,7 +122,7 @@ test('an unreadable tail falls back to arming with a null lastTurnEnd marker', t
 })
 
 test('a new running edge resolves the previous completion', t => {
-  const store = storeFor(t)
+  const store = storeWithList(t)
   store.applyStatus('s1', true, 10)
   const [edge] = store.applyStatus('s1', false, 20)
   store.settleCompletion(edge!, { at: 20, turnEnd: { kind: 'completed', cause: null, at: 20, seq: 7 }, unreadable: false })
@@ -194,6 +202,148 @@ test('baseline merges rows, tracks subagentCount and the running edge', t => {
   assert.equal(parent?.updatedAt, 5)
 })
 
+test('subagent rows never ride the wire (snapshot or delta) yet still count', t => {
+  const store = storeFor(t)
+  const deltaRows: string[][] = []
+  store.subscribe(delta => deltaRows.push(delta.sessions.map(row => row.sessionId)))
+  store.applyBaseline([
+    baselineItem('parent', true, 5, { running: true }),
+    baselineItem('child', false, 4, { origin: 'subagent', parentSessionId: 'parent' }),
+  ], { at: 100 })
+  const rows = store.snapshotFor('sse', store.host()).sessions
+  assert.deepEqual(rows.map(row => row.sessionId), ['parent'])
+  assert.equal(rows[0]?.subagentCount, 1)
+  assert.deepEqual(deltaRows.flat().filter(id => id === 'child'), [], 'the child row must never be delivered')
+})
+
+test('a row exposed before its subagent origin is revealed gets an explicit removal', t => {
+  const store = storeFor(t)
+  const removed: string[] = []
+  store.subscribe(delta => removed.push(...delta.removedSessionIds))
+  store.applyStatus('child', true, 10)
+  // 首基线先把该 id 确认为顶层：门开、行上线（首基线前它会被 S1 门扣下）。
+  store.applyBaseline([baselineItem('child', true, 10)], { at: 15 })
+  assert.deepEqual(store.snapshotFor('sse', store.host()).sessions.map(row => row.sessionId), ['child'])
+  store.applyBaseline([baselineItem('child', true, 10, { origin: 'subagent', parentSessionId: 'parent' })], { at: 20 })
+  assert.deepEqual(store.snapshotFor('sse', store.host()).sessions.map(row => row.sessionId), [])
+  assert.ok(removed.includes('child'), 'the transition to subagent retracts the exposed row')
+})
+
+test('a first-seen subagent row is never announced as a removal (no phantom retraction)', t => {
+  const store = storeFor(t)
+  const deltas: Array<{ sessions: string[]; removed: string[] }> = []
+  store.subscribe(delta => deltas.push({ sessions: delta.sessions.map(row => row.sessionId), removed: [...delta.removedSessionIds] }))
+  store.applyBaseline([
+    baselineItem('parent', true, 5, { running: true }),
+    baselineItem('child', false, 4, { origin: 'subagent', parentSessionId: 'parent' }),
+  ], { at: 100 })
+  assert.deepEqual(deltas, [{ sessions: ['parent'], removed: [] }],
+    'a row that never rode the wire must not be retracted')
+})
+
+test('S1: a status-created row is withheld until the first complete baseline confirms its origin', t => {
+  const store = storeFor(t)
+  const deltas: Array<{ sessions: string[]; removed: string[] }> = []
+  store.subscribe(delta => deltas.push({
+    sessions: delta.sessions.map(row => row.sessionId),
+    removed: [...delta.removedSessionIds],
+  }))
+  // ① 首基线前的 status 行：身份未确认（可能是子代理），快照与增量都不可见。
+  store.applyStatus('child', true, 10)
+  assert.deepEqual(store.snapshotFor('sse', store.host()).sessions, [],
+    'a pre-baseline status row must not ride the snapshot')
+  assert.deepEqual(deltas.flatMap(delta => delta.sessions), [], 'nor any delta')
+  // ② 首基线把该 id 确认为顶层：门开，行按真实 running 位上线。
+  store.applyBaseline([baselineItem('child', true, 10)], { at: 20 })
+  assert.deepEqual(store.snapshotFor('sse', store.host()).sessions.map(row => row.sessionId), ['child'])
+  assert.deepEqual(deltas.at(-1), { sessions: ['child'], removed: [] })
+  // ③ 下一份基线揭示它是 subagent：不投递，并为已上线的行补 removed。
+  store.applyBaseline([baselineItem('child', true, 10, { origin: 'subagent', parentSessionId: 'parent' })], { at: 30 })
+  assert.deepEqual(store.snapshotFor('sse', store.host()).sessions.map(row => row.sessionId), [])
+  assert.deepEqual(deltas.at(-1), { sessions: [], removed: ['child'] },
+    'the revealed subagent row is retracted with an explicit removal')
+  // ④ 首基线之后由 status 新建的行：身份仍未由列表事实确认（added 丢失窗口）⇒ 扣下、
+  // 游标不前进（这是 S1 的硬约束：子代理绝不通知；代价是新会话最晚等一次基线）。
+  const beforeWithheld = deltas.length
+  store.applyStatus('live', true, 40)
+  assert.deepEqual(store.snapshotFor('sse', store.host()).sessions.map(row => row.sessionId), [])
+  assert.equal(deltas.length, beforeWithheld, 'a withheld row must not advance the cursor (no delta at all)')
+  // ⑤ added（列表事实的增量形态）确认的同一拍补投该行。
+  store.applyAdded(baselineItem('live', true, 40), 41)
+  assert.deepEqual(store.snapshotFor('sse', store.host()).sessions.map(row => row.sessionId), ['live'])
+  assert.deepEqual(deltas.at(-1), { sessions: ['live'], removed: [] },
+    'the confirming added must carry the newly-deliverable row in its own delta')
+  // ⑥ 基线确认同样立即补投（不只在后续整量快照里可见）。
+  store.applyStatus('bg', false, 50)
+  assert.deepEqual(store.snapshotFor('sse', store.host()).sessions.map(row => row.sessionId), ['live'])
+  store.applyBaseline([baselineItem('live', true, 40), baselineItem('bg', false, 50)], { at: 60 })
+  assert.deepEqual(store.snapshotFor('sse', store.host()).sessions.map(row => row.sessionId).sort(), ['bg', 'live'])
+  assert.deepEqual(deltas.at(-1), { sessions: ['bg'], removed: [] },
+    'the confirming baseline must carry the newly-deliverable row in its own delta')
+})
+
+test('S1: a subagent status->idle with a lost added frame never reaches the wire or a delta (identity unconfirmed)', t => {
+  const store = storeFor(t)
+  const deltas: Array<{ sessions: string[]; removed: string[] }> = []
+  store.subscribe(delta => deltas.push({
+    sessions: delta.sessions.map(row => row.sessionId),
+    removed: [...delta.removedSessionIds],
+  }))
+  // added 帧丢失：子代理的 status 先到，身份未知——凭它判就会为子代理发真横幅。
+  store.applyStatus('child', true, 10)
+  store.applyStatus('child', false, 20)
+  assert.deepEqual(store.snapshotFor('sse', store.host()).sessions, [],
+    'the true->false edge of an unconfirmed row must not ride the snapshot')
+  assert.deepEqual(deltas, [], 'no delta may be emitted for a withheld row (the cursor stays put)')
+  // 基线揭穿身份：从未上线的行删除时静默（幽灵撤回比沉默更糟）。
+  store.applyBaseline([baselineItem('child', false, 20, { origin: 'subagent', parentSessionId: 'parent' })], { at: 30 })
+  assert.deepEqual(store.snapshotFor('sse', store.host()).sessions, [])
+  assert.deepEqual(deltas.at(-1), { sessions: [], removed: [] },
+    'a never-delivered row is never announced as a removal')
+})
+
+test('S1: a pre-baseline status row missing from the first baseline is deleted silently (never a phantom removal)', t => {
+  const store = storeFor(t)
+  const deltas: Array<{ sessions: string[]; removed: string[] }> = []
+  store.subscribe(delta => deltas.push({
+    sessions: delta.sessions.map(row => row.sessionId),
+    removed: [...delta.removedSessionIds],
+  }))
+  store.applyStatus('ghost', false, 10)
+  // 从未上线 ⇒ 单阶段删除也绝不补 removed（补 = 幽灵撤回）。
+  store.applyBaseline([], { at: 20 })
+  assert.deepEqual(store.snapshotFor('sse', store.host()).sessions, [])
+  assert.deepEqual(deltas.at(-1), { sessions: [], removed: [] })
+})
+
+test('S1: the first baseline that confirms a withheld row rides that same delta (the gate opening is a delivery change)', t => {
+  const store = storeFor(t)
+  const deltas: Array<{ sessions: string[]; removed: string[] }> = []
+  store.subscribe(delta => deltas.push({
+    sessions: delta.sessions.map(row => row.sessionId),
+    removed: [...delta.removedSessionIds],
+  }))
+  // activity 建行（updatedAt 已就位）⇒ 被门扣下：快照不可见。
+  store.applyActivity('quiet', 7, 10)
+  assert.deepEqual(store.snapshotFor('sse', store.host()).sessions, [])
+  // 首基线带同一 id、同一 updatedAt（没有任何字段变化）：门开本身必须让该行上线——
+  // 否则它会静默转成可投递，只被后续整量快照看见，delta-only 客户端缺这一行。
+  store.applyBaseline([baselineItem('quiet', false, 7)], { at: 20 })
+  assert.deepEqual(store.snapshotFor('sse', store.host()).sessions.map(row => row.sessionId), ['quiet'])
+  assert.deepEqual(deltas.at(-1), { sessions: ['quiet'], removed: [] },
+    'the confirming baseline must carry the newly-deliverable row in its own delta')
+})
+
+test('a subagent row that becomes top-level again rides the delta even when nothing else changed', t => {
+  const store = storeFor(t)
+  const deltas: string[][] = []
+  store.subscribe(delta => deltas.push(delta.sessions.map(row => row.sessionId)))
+  store.applyBaseline([baselineItem('child', false, 4, { origin: 'subagent', parentSessionId: 'parent' })], { at: 100 })
+  store.applyBaseline([baselineItem('child', false, 4)], { at: 200 })
+  assert.deepEqual(store.snapshotFor('sse', store.host()).sessions.map(row => row.sessionId), ['child'])
+  assert.deepEqual(deltas.at(-1), ['child'], 'the reverse transition must reach delta-only clients')
+})
+
 test('a baseline that reports a stopped row emits an observed edge, not a completion', t => {
   const store = storeFor(t)
   store.applyBaseline([baselineItem('s1', true, 5)], { at: 100 })
@@ -232,19 +382,59 @@ test('removed clears completion and never arms unread (R13)', t => {
   assert.equal(store.snapshotFor('sse', store.host()).sessions.length, 0)
 })
 
-test('a row missing from one complete baseline is hidden, then pruned on the next (deletion is not a completion)', t => {
+test('a row missing from one complete baseline is removed immediately, never delivered as running:false (deletion is not a completion)', t => {
   const store = storeFor(t)
   store.applyBaseline([baselineItem('s1', true, 5)], { at: 100 })
+  const deltas: Array<{ sessions: Array<{ sessionId: string; running: boolean }>; removed: string[] }> = []
+  store.subscribe(delta => deltas.push({
+    sessions: delta.sessions.map(row => ({ sessionId: row.sessionId, running: row.running })),
+    removed: [...delta.removedSessionIds],
+  }))
+  // S3 单阶段删除（上游 ready-即删对齐）：一次**成功且完整**的基线缺席立即离表。删除不是
+  // 完成——不发 running:false（wire 行没有 absent 位，那会被无壳判定读成 host running→idle
+  // 边沿，产假蓝点）、不产完成边沿，客户端靠 removedSessionIds 清行 + 清臂 + 随行退役记忆。
+  const edges = store.applyBaseline([], { at: 200 })
+  assert.deepEqual(edges, [], 'a vanished row is not a completion edge')
+  assert.equal(store.snapshotFor('sse', store.host()).sessions.length, 0)
+  assert.deepEqual(deltas.at(-1), { sessions: [], removed: ['s1'] },
+    'the single missing baseline removes the row without ever projecting a stop edge')
+  // Re-listed: a fresh row rides the wire with its real running bit (old completion/arm
+  // state died with the removed row; nothing is inherited).
+  store.applyBaseline([baselineItem('s1', true, 6)], { at: 400 })
+  assert.deepEqual(deltas.at(-1), { sessions: [{ sessionId: 's1', running: true }], removed: [] })
+})
+
+test('T5: removing a never-delivered row is silent (no phantom removal delta)', t => {
+  const store = storeFor(t)
   const removed: string[] = []
   store.subscribe(delta => removed.push(...delta.removedSessionIds))
-  // First complete baseline without the row: absent, armed nothing.
-  const firstEdges = store.applyBaseline([], { at: 200 })
-  assert.deepEqual(firstEdges, [], 'a vanished row is not a completion edge')
-  assert.equal(store.snapshotFor('sse', store.host()).sessions.length, 0)
-  assert.deepEqual(removed, [], 'not pruned on the first miss')
-  // Second complete baseline without the row: pruned + removal delta.
-  store.applyBaseline([], { at: 300 })
-  assert.deepEqual(removed, ['s1'])
+  // 仅由 status 首建、身份未确认的行从未上线：显式移除不补 removed（幽灵撤回比沉默更糟）。
+  store.applyStatus('ghost', true, 10)
+  assert.equal(store.applyRemoved('ghost', 20), true, 'the row is still removed from the store')
+  assert.deepEqual(removed, [], 'never-delivered ⇒ no removedSessionIds')
+  // 曾可投递的行照常补撤回（同一门槛的另一半）。
+  store.applyBaseline([baselineItem('live', false, 5)], { at: 30 })
+  store.applyRemoved('live', 40)
+  assert.deepEqual(removed, ['live'])
+})
+
+test('T5: row-cap eviction retracts only ever-delivered rows, never a never-delivered one', async t => {
+  const stateDir = scratch(t)
+  const logger = capturingLogger()
+  const store = createSessionStateStore({ stateDir, logger, now: () => 1_000 })
+  const removed: string[] = []
+  store.subscribe(delta => removed.push(...delta.removedSessionIds))
+  // 一整份基线：这些行曾可投递（observedAt 都是基线时刻 1）。
+  const confirmed = Array.from({ length: MAX_SESSIONS }, (_, index) => baselineItem('seen-' + String(index), false, 1))
+  store.applyBaseline(confirmed, { at: 1 })
+  removed.length = 0
+  // 基线之后的 status 行身份未确认、从未上线（observedAt 2..）；再建 2001 行使总行数越界。
+  for (let index = 0; index <= MAX_SESSIONS; index += 1) store.applyStatus('ghost-' + String(index), true, 2 + index)
+  await store.flush()
+  assert.equal(store.status().sessions, MAX_SESSIONS)
+  assert.equal(store.status().dropped.sessions, MAX_SESSIONS + 1)
+  assert.deepEqual([...removed].sort(), confirmed.map(item => item.sessionId).sort(),
+    '曾可投递的 2000 行全部补撤回；最老的未确认行（ghost-0）静默淘汰，不补幽灵撤回')
 })
 
 test('the row-cap eviction announces a removal delta (an SSE client never keeps a phantom row)', async t => {
@@ -465,16 +655,15 @@ test('P2a retained edges: applyRemoved clears an edge whose row never existed (r
   assert.deepEqual(row.goal, { goalId: 'goal-1', revision: 1, phase: 'active', updatedAt: 5 })
 })
 
-test('P2a retained edges: a row pruned by the second missing baseline drops its edge too', t => {
+test('P2a retained edges: a row missing from one complete baseline drops its edge too', t => {
   const store = storeFor(t)
   store.applyBaseline([baselineItem('s1', false, 5, { goal: activeGoal() })], { at: 100 })
   // goal-2's edge is retained while the projection still names goal-1.
   assert.equal(store.applyGoalActivation({ sessionId: 's1', goalId: 'goal-2', activation: 'armed' }, 101), false)
-  // First complete baseline without the row: hidden (present=false), edge kept.
+  // One complete baseline without the row: single-phase removal; the retained edge must die
+  // with the row (the row and its edge leave the store in the same step, S3).
   store.applyBaseline([], { at: 110 })
   assert.equal(store.snapshotFor('sse', store.host()).sessions.length, 0)
-  // Second miss: pruned; the retained edge must die with the row.
-  store.applyBaseline([], { at: 120 })
   // Re-listed projecting goal-2: no inherited armed.
   store.applyBaseline([baselineItem('s1', false, 6, {
     goal: { goalId: 'goal-2', revision: 1, phase: 'active', updatedAt: 7 },

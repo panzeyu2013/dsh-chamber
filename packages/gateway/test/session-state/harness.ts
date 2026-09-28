@@ -89,7 +89,7 @@ export function sessionSurfaceFor(
     followFailures: 0,
     clientId: 'mux-1',
     eventsReceived: 0,
-    baselines: 1,
+    muxBaselines: 1,
     ...options.observerOverrides,
   }
   const surface = createChamberSessionState({

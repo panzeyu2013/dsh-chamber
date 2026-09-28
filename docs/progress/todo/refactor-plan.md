@@ -108,9 +108,6 @@ useSyncExternalStore 的小 store（单源），事件回调读 store 的 getSna
 
 ### 7.1 新一轮审计新增开放项（未动；供下一轮排期）
 
-- **renderer usable-facts 三处判定分叉**：`host/servers.ts`（要求 serviceable）vs
-  `use-bridge-subscriptions.ts` / `use-notifications.ts`（只看 verdict）；
-  verdict=ok + serviceable=false 可达 ⇒ 通知候选从未知行推进。收口 = 单一 `isFactsUsable`。
 - **renderer reconnect 记账第四份手抄**：`App.tsx` 复制 `use-aggregate-refresh.ts` 三臂
   gate/backoff；`retireSources` 漏 `sessionListRefreshAt/Pending`、`authoritativeArchiveSet`
   （同 id 换代泄漏）。收口 = 单一 `reconnectSource(id)` + 生命周期参与者注册表。

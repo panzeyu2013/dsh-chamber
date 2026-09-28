@@ -26,8 +26,8 @@ export interface SessionFactsLifecycleDeps {
   factsPullInFlightRef: { current: Record<string, number> }
   /** 行刷新提示的 floor 记账（每来源）。 */
   refreshHintAtRef: { current: Record<string, number> }
-  /** 聚合拉取的稳定入口（lifecycle 闭包只创建一次，取最新 refreshAggregate）。 */
-  refreshAggregateRef: { current: (sourceId: string) => Promise<unknown> }
+  /** 聚合拉取的稳定入口，**有界**：单来源入共享刷新波（队列去重 + 4 并发帽）。 */
+  refreshAggregateRef: { current: (sourceId: string) => void }
   /** 已挂载来源的运行时事实（focus 重算的键空间之一）。 */
   factsStore: FactsStore
   /** 活跃事实源实例（gateway 来源；指纹变化 = 新化身重探）。 */
@@ -37,6 +37,12 @@ export interface SessionFactsLifecycleDeps {
   /** 非 gateway 来源的无壳观察者退订与身份表。 */
   sourceMuxTeardownRef: { current: Map<string, () => void> }
   sourceMuxIdentityRef: { current: Map<string, string> }
+  /**
+   * 来源撤回（facts 源退役 / 观察者换代）：删该来源的 running 边沿记忆与观测状态、
+   * 撤回通知账本易失轨；修正臂冻结不误清。与桥面 report=undefined 撤回同语义；没有它，
+   * 新化身会继承旧化身的边沿记忆 ⇒ 假完成点（INV-7）。
+   */
+  withdrawSource: (sourceId: string) => void
 }
 
 /** 事实源生命周期装配；无对外返回值（调用面全在 App 的既有 ref/回调上）。 */
@@ -45,7 +51,7 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
     servers, applySessionFacts, notificationImmediateSave,
     unverifiedSourcesRef, factsPullInFlightRef, refreshHintAtRef, refreshAggregateRef,
     factsStore, sessionFactsSourcesRef, sessionFactsTeardownRef,
-    sourceMuxTeardownRef, sourceMuxIdentityRef,
+    sourceMuxTeardownRef, sourceMuxIdentityRef, withdrawSource,
   } = deps
 
   /** servers 的渲染期镜像（facts effect 闭包不随每次 servers 重建）。 */
@@ -75,7 +81,9 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
 
   /**
    * 行刷新提示：facts 的 session-added/removed/changed ⇒ 该来源一次 unary 聚合拉取
-   * （行权威仍在聚合，不做第二行源）。四拒：未连接 / unverified / 在途 / 1s floor。
+   * （行权威仍在聚合，不做第二行源）。四拒：未连接 / unverified / 在途 / 页面不可见；
+   * 外加 1s floor。可见性直接读 document（本 hook 没有可复用的可见性 ref/监听，也不新增；
+   * 隐藏期不发起拉取，恢复可见由聚合 watchdog 的 visibilitychange 补偿）。
    */
   const requestFactsRefresh = useCallback((sourceId: string): void => {
     const server = serversRef.current.find(candidate => candidate.id === sourceId)
@@ -84,12 +92,21 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
       connected: server?.connected === true,
       unverified: unverifiedSourcesRef.current.includes(sourceId),
       inFlight: (factsPullInFlightRef.current[sourceId] ?? 0) > 0,
+      visible: document.visibilityState === 'visible',
       lastHintAt: refreshHintAtRef.current[sourceId],
       now,
     })) return
     refreshHintAtRef.current[sourceId] = now
-    void refreshAggregateRef.current(sourceId)
+    refreshAggregateRef.current(sourceId)
   }, [])
+
+  /**
+   * 行刷新提示的唯一 guard 调用点（gateway 事实源与无壳观察者共用）：每步骤恰好一个
+   * never-throw 包装，两条生产者不得各包一层。
+   */
+  const stepRowHint = useCallback((sourceId: string): void => {
+    factsStepGuard.guard(sourceId, 'facts-row-hint', () => requestFactsRefresh(sourceId))
+  }, [factsStepGuard, requestFactsRefresh])
 
   /** facts 生命周期稳定签名：来源 id + 化身指纹 + connected；指纹变化 = 新化身，
    *  connected 边沿 = 重探/停流。 */
@@ -108,10 +125,10 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
     }
     for (const [sourceId, teardown] of [...sessionFactsTeardownRef.current]) {
       if (wanted.has(sourceId)) continue
+      // teardown 自身负责 facts 行删除（S2 单点）；这里只收敛引用。
       teardown()
       sessionFactsTeardownRef.current.delete(sourceId)
       sessionFactsSourcesRef.current.delete(sourceId)
-      factsStore.dropSession(sourceId)
     }
     for (const [sourceId, input] of wanted) {
       let source = sessionFactsSourcesRef.current.get(sourceId)
@@ -123,18 +140,25 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
         source = created
         // Single boundary: applySessionFacts IS the 'apply-session-facts' never-throw register boundary.
         const unsubscribeFacts = created.subscribe(snapshot => applySessionFacts(sourceId, snapshot))
-        const unsubscribeHint = created.onRowHint(() =>
-          factsStepGuard.guard(sourceId, 'facts-row-hint', () => requestFactsRefresh(sourceId)))
+        const unsubscribeHint = created.onRowHint(() => stepRowHint(sourceId))
         sessionFactsSourcesRef.current.set(sourceId, created)
         sessionFactsTeardownRef.current.set(sourceId, () => {
           unsubscribeFacts()
           unsubscribeHint()
           created.stop()
+          // 退役 = 新来源代：fact 行必须同拍删除（S2）。retireSources 直接调这条
+          // teardown（不经过下面「不再需要」循环），缺了它同 id 新化身会继承上一代的
+          // facts 快照（旧 overlay/记忆）。mux 观察者 teardown 不 drop：stop() 先发布
+          // 「保留最后一批行 + degraded/stale」的退役快照（design 19 §3.5 载体终结纪律），
+          // 行的最终删除由 App 注册表收敛的 pruneSourceRecord(factsStore runtime, live)
+          // 承担——这里 drop 会把旧化身最后一批行误当权威空集（两侧不对称是既有纪律）。
+          factsStore.dropSession(sourceId)
+          withdrawSource(sourceId)
         })
       }
       source.update(input)
     }
-  }, [gatewayFactsSpec, applySessionFacts, requestFactsRefresh, factsStepGuard])
+  }, [gatewayFactsSpec, applySessionFacts, requestFactsRefresh, stepRowHint, factsStepGuard])
 
   /**
    * SSH / 其它 dsh 远端来源的**无壳观察者**：这些来源没有只读镜像，关壳期间没有事实
@@ -191,6 +215,8 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
             sampleFactsHealth()
           })
         },
+        // 行刷新提示：与 gateway 事实源同规 ⇒ 该来源一次 unary 聚合拉取（G1 的真实通路）。
+        onRowHint: () => stepRowHint(sourceId),
       })
       created = observer
       observer.start()
@@ -200,10 +226,11 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
       sourceMuxTeardownRef.current.set(sourceId, () => {
         observer.stop()
         sourceMuxObserversRef.current.delete(sourceId)
+        withdrawSource(sourceId)
       })
       sourceMuxIdentityRef.current.set(sourceId, fingerprint)
     }
-  }, [sourceMuxSpec, applySessionFacts, factsStepGuard])
+  }, [sourceMuxSpec, applySessionFacts, requestFactsRefresh, stepRowHint, factsStepGuard])
 
   useEffect(() => {
     // 关键路径 = 合并器的 flush：取消待办的微任务 + 同步落最新状态（不丢、不重复）。

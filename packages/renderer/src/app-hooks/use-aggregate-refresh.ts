@@ -26,6 +26,7 @@ import type { MountedSourcesStore } from '../host/mounted-sources-store.ts'
 import {
   commitAggregateFailure,
   commitAggregatePull,
+  drainAggregateWaves,
   planAggregateRefreshes,
   refreshPullStillCurrent,
   isFallbackDerivedView,
@@ -120,7 +121,8 @@ export interface AggregateRefreshDeps {
 
 export interface AggregateRefresh {
   refreshAggregate: (instanceId: string, mutationTag?: number) => Promise<void>
-  refreshAggregateRef: { current: (instanceId: string, mutationTag?: number) => Promise<void> }
+  /** facts 行提示的有界入口：单来源入共享刷新波（队列去重 + 4 并发帽），不是裸拉取。 */
+  refreshAggregateRef: { current: (sourceId: string) => void }
   pollAggregatesRef: { current: () => void }
   runStalenessWatchdogRef: { current: () => void }
   /** 会话停滞横幅（watchdog notice 闩锁）的可见集合。 */
@@ -135,6 +137,12 @@ export interface AggregateRefresh {
   unverifiedSourcesRef: { current: readonly string[] }
   /** aggregates 的渲染期镜像（桥订阅读最新值，不因每次推送重建订阅）。 */
   watchdogAggregatesRef: { current: Record<string, InstanceAggregate> }
+  /**
+   * App 在 useNotifications 返回后回填的撤回入口（本 hook 先于它调用，只能走 ref）：
+   * notReady 清掉该来源 runtime facts 的**同一拍**撤回修正臂边沿记忆与观测状态，对齐
+   * 桥面 report === undefined 的 ctx → virtual 切换（design 06 §4.2）。
+   */
+  withdrawSourceRef: { current: (sourceId: string) => void }
 }
 
 export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefresh {
@@ -306,38 +314,47 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
       else factsPullInFlightRef.current[instanceId] = remaining
     }
   }, [clearAggregateRetry, refreshHealth, sweepSessionArchive, sweepSessionEcho, sweepWorkspaceEcho, updateSessionArchive, updateSessionEcho])
-  /** facts 提示的稳定入口（lifecycle effect 的闭包只创建一次，取最新 refreshAggregate）。 */
-  const refreshAggregateRef = useRef(refreshAggregate)
-  refreshAggregateRef.current = refreshAggregate
+  /** 见 {@link AggregateRefresh.withdrawSourceRef}：App 在 useNotifications 之后回填。 */
+  const withdrawSourceRef = useRef<(sourceId: string) => void>(() => {})
+  /** 被隔离丢弃的波内拉取失败计数（S5 诊断；失败项不重入队）。 */
+  const aggregateWaveFailuresRef = useRef(0)
 
 /** Run a bounded wave: at most AGGREGATE_POLL_CONCURRENCY concurrent pulls, one
- *  wave at a time, shared by the edge poll and the watchdog. */
+ *  wave at a time, shared by the edge poll, the watchdog AND the facts row hint
+ *  (drainAggregateWaves is the single implementation). */
   const runBoundedAggregateWave = useCallback((sourceIds: string[]) => {
-    aggregateRefreshQueueRef.current.enqueue(sourceIds)
-    if (aggregateRefreshQueueRef.current.size === 0 || aggregatePollRunningRef.current) return
-    aggregatePollRunningRef.current = true
-    void (async () => {
-      try {
-        while (aggregateRefreshQueueRef.current.size > 0) {
-          const queuedSourceIds = aggregateRefreshQueueRef.current.take()
-          let cursor = 0
-          const worker = async () => {
-            while (cursor < queuedSourceIds.length) {
-              const sourceId = queuedSourceIds[cursor]
-              cursor += 1
-              await refreshAggregate(sourceId)
-            }
-          }
-          await Promise.all(Array.from(
-            { length: Math.min(AGGREGATE_POLL_CONCURRENCY, queuedSourceIds.length) },
-            () => worker(),
-          ))
-        }
-      } finally {
+    const queue = aggregateRefreshQueueRef.current
+    queue.enqueue(sourceIds)
+    const pump = (): void => {
+      if (queue.size === 0 || aggregatePollRunningRef.current) return
+      aggregatePollRunningRef.current = true
+      void drainAggregateWaves(queue, AGGREGATE_POLL_CONCURRENCY, refreshAggregate, (sourceId, error) => {
+        // 失败项丢弃 + 计数诊断（绝不重入队）；refreshAggregate 自身吞掉自己的失败，
+        // 能到这里的只有接线/边界异常。
+        aggregateWaveFailuresRef.current += 1
+        console.warn(
+          '[renderer] aggregate wave pull rejected; item dropped without requeue (' +
+          String(aggregateWaveFailuresRef.current) + '):', sourceId, error,
+        )
+      }).catch(error => {
+        // 每项与诊断 sink 都已自隔离 ⇒ drain 本体不会 reject；这里**仅**兜底
+        // unhandledRejection（例如 drain 自身被后续改动破坏时），不承担业务失败。
+        console.warn('[renderer] aggregate wave drain failed (unhandledRejection sink only):', error)
+      }).finally(() => {
         aggregatePollRunningRef.current = false
-      }
-    })()
+        // 复位发生在 drain 返回后的下一个微任务：这期间入队的提示必须在这里接走，
+        // 否则要等到 30s 兜底轮询（违背「mid-wave 边沿留给下一波、绝不静默吞掉」）。
+        pump()
+      })
+    }
+    pump()
   }, [refreshAggregate])
+  /**
+   * facts 行提示的稳定入口（lifecycle effect 的闭包只创建一次）：单来源入**同一个**有界波，
+   * 共享队列与 AGGREGATE_POLL_CONCURRENCY 帽——不再直连 refreshAggregate 绕过跨源并发上限（W7）。
+   */
+  const refreshAggregateRef = useRef<(sourceId: string) => void>(() => {})
+  refreshAggregateRef.current = (sourceId: string): void => { runBoundedAggregateWave([sourceId]) }
 
 /** 刷新需要兜底/刚重连的就绪实例；未就绪实例落 not-connected（已推送挂载来源除外）。 */
   const pollAggregates = useCallback(() => {
@@ -377,6 +394,8 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
         return changed ? next : prev
       })
       // 断连即清该来源的运行时事实（generation 级事实随断连失效）
+      const runtimeBefore = factsStore.getSnapshot().runtime
+      const retired = notReady.filter(id => runtimeBefore[id] !== undefined)
       factsStore.setRuntime(prev => {
         let changed = false
         const next = { ...prev }
@@ -388,6 +407,10 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
         }
         return changed ? next : prev
       })
+      // 同一拍撤回（W13）：runtime facts 的删除就是 §4.2 的 ctx → virtual 切换，不撤回
+      // 修正臂会把旧壳边沿记忆当虚拟证据。只对真的删掉 runtime facts 的来源调用（没有
+      // facts 可清的来源无切换，撤回只会多一次不必要的落盘）。
+      for (const id of retired) withdrawSourceRef.current(id)
       // Host facts are generation-scoped too: a disconnected source keeps no version from the old generation.
       setHostFacts(prev => {
         let changed = false
@@ -617,5 +640,6 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
     setUnverified,
     unverifiedSourcesRef,
     watchdogAggregatesRef,
+    withdrawSourceRef,
   }
 }
