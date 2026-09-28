@@ -44,6 +44,37 @@ function stubFetch(t: TestContext, status: number, body: unknown): { calls: { ur
   return { calls }
 }
 
+test('collectExtraRows: a cancelled observation never settles a gap', async (t) => {
+  // WebKit 把被打断的 fetch 报成 `TypeError: Fetch is aborted`（挂载被取代 / 我们自己的拆除 /
+  // 页面被节流都走这一形）。取消不是来源事实（design 14 §D4 的 I5 推广到活性证据），
+  // 所以 boot 绝不能上浮 onGraphUnavailable——旧形态正是这样把缺口钉在来源上，只有重载能清。
+  const abort = new Error('Fetch is aborted')
+  abort.name = 'TypeError'
+  stubFetchImpl(t, (() => Promise.reject(abort)) as unknown as typeof fetch)
+  const gaps: string[] = []
+  const diagnostics: string[] = []
+  const rows = await collectExtraRows('cancelled-a', '/api/i/cancelled-a', {
+    loadModuleBundle: async () => { throw new Error('unreachable: no rows to load') },
+    reportDiagnostic: (_sourceId, diagnostic) => { diagnostics.push(String((diagnostic as { state?: unknown }).state)) },
+    onGraphUnavailable: (_message, kind) => { gaps.push(kind) },
+    retry: { attempts: 2, delayMs: 0, sleep: async () => {} },
+  })
+  assert.deepEqual(rows, [])
+  assert.deepEqual(gaps, [], 'cancellation is not a source fact')
+  assert.deepEqual(diagnostics, ['graph-unreachable'], 'the cancellation stays diagnosable')
+})
+
+test('collectExtraRows: a real channel failure still reports the gap (cancellation never hides it)', async (t) => {
+  stubFetchImpl(t, (() => Promise.reject(new Error('socket hang up'))) as unknown as typeof fetch)
+  const gaps: string[] = []
+  await collectExtraRows('channel-fail-a', '/api/i/channel-fail-a', {
+    loadModuleBundle: async () => { throw new Error('unreachable: no rows to load') },
+    onGraphUnavailable: (_message, kind) => { gaps.push(kind) },
+    retry: { attempts: 2, delayMs: 0, sleep: async () => {} },
+  })
+  assert.deepEqual(gaps, ['graph-unavailable'])
+})
+
 /** Install an arbitrary fetch implementation for one test; t.after restores the original. */
 function stubFetchImpl(t: TestContext, impl: typeof fetch): void {
   const original = globalThis.fetch

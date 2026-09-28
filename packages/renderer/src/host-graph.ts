@@ -370,6 +370,22 @@ export interface CollectExtraRowsDeps {
 }
 
 /**
+ * Cancellation evidence: the observation never completed, so it CANNOT be read as a
+ * source fact (`dsh-stream-state` 的 I5「缺席不作证据」推广到**活性证据**，design 14 §D4).
+ * WebKit reports an aborted fetch as `TypeError: Fetch is aborted` and a signal-fired
+ * abort as an `AbortError` DOMException, so both the name and the message count.
+ * `TimeoutError` is deliberately NOT a cancellation: a fetch that outlived its own 30s
+ * deadline is an admissible channel observation, and hiding it would hide a hung source.
+ */
+export function isCancellationEvidence(error: unknown): boolean {
+  if (error === null || typeof error !== 'object') return false
+  const { name, message } = error as { name?: unknown; message?: unknown }
+  if (name === 'TimeoutError') return false
+  if (name === 'AbortError') return true
+  return typeof message === 'string' && /abort/i.test(message)
+}
+
+/**
  * Serving waits per boot. ONE is the honest bound: the wait already spans the
  * App's readiness gate (60s), and a source that serves but still has no
  * answerable graph is a channel problem, not a serving problem. A source that
@@ -417,20 +433,29 @@ export async function collectExtraRows(
   /** Fetch the host graph on the bounded 503-retry budget, then (with a serving
    *  gate) wait for the source to serve and retry on a fresh budget. Resolves
    *  rows, a channel error (non-503 fails fast), or `starting: true` on timeout. */
-  const fetchWithRetry = async (): Promise<{ rows: HostGraphRow[] | null; error: unknown; starting: boolean }> => {
+  const fetchWithRetry = async (): Promise<{ rows: HostGraphRow[] | null; error: unknown; starting: boolean; cancelled: boolean }> => {
     let lastError: unknown = null
+    /** True when at least one attempt ended in a cancelled (non-admissible) observation. */
+    let cancelled = false
     let servingWaits = 0
     const healDeadline = deps.waitForServing === undefined ? 0 : Date.now() + SERVING_HEAL_BUDGET_MS
     for (;;) {
       for (let attempt = 1; attempt <= retry.attempts; attempt++) {
         try {
           const entries = await fetchHostGraph(basePath)
-          if (entries !== null) return { rows: entries, error: null, starting: false }
+          if (entries !== null) return { rows: entries, error: null, starting: false, cancelled: false }
         } catch (error) {
-          // Non-503 channel failures are NOT transient: fail fast (a hung fetch
-          // already consumed its 30s timeout; retrying would only stack them).
-          lastError = error
-          return { rows: null, error: lastError, starting: false }
+          if (isCancellationEvidence(error)) {
+            // 取消不是来源事实（挂载被取代 / 我们自己的拆除 / 页面被节流）：不落任何判定，
+            // 在同一有界预算内重试。旧形态把它读成通道失败，把 graph-unreachable 钉在来源上
+            // 交给一次性自愈，留下一个只能手动重载的空壳（实机 P5）。
+            cancelled = true
+          } else {
+            // Non-503 channel failures are NOT transient: fail fast (a hung fetch
+            // already consumed its 30s timeout; retrying would only stack them).
+            lastError = error
+            return { rows: null, error: lastError, starting: false, cancelled: false }
+          }
         }
         if (attempt < retry.attempts) await retry.sleep(retry.delayMs)
       }
@@ -439,14 +464,24 @@ export async function collectExtraRows(
       if (deps.waitForServing === undefined
         || servingWaits >= MAX_SERVING_WAITS
         || Date.now() >= healDeadline) {
-        return { rows: null, error: lastError, starting: true }
+        return { rows: null, error: lastError, starting: true, cancelled }
       }
       servingWaits += 1
       const serving = await deps.waitForServing(instanceId)
-      if (!serving) return { rows: null, error: lastError, starting: true }
+      if (!serving) return { rows: null, error: lastError, starting: true, cancelled }
     }
   }
   const firstFetch = await fetchWithRetry()
+  if (firstFetch.cancelled && firstFetch.rows === null) {
+    // 预算在"只有取消"的情况下走完：来源从未得到说话的机会，因此关于它不能有任何结论。
+    // 无图启动是合法形态（gateway/mobile 本来就没有图），既有 graph-return 探测会在图真的
+    // 可答时重挂；**绝不上浮 onGraphUnavailable**——那正是让缺口粘住的路径（实机 P5）。
+    const message = `instance ${instanceId} client plugin graph observation was cancelled before it completed `
+      + '(superseded mount / aborted request); no gap recorded'
+    console.error(`[shell] instance ${instanceId} boot-graph cancelled: ${message}`)
+    reportDiagnostic(instanceId, 'graph-unreachable', { message }, deps.reportDiagnostic)
+    return []
+  }
   if (firstFetch.rows === null && firstFetch.error === null && firstFetch.starting) {
     // Must not degrade in TOTAL silence: the boot keeps succeeding (gateway/
     // mobile may legitimately run without the graph), but a merely slow source

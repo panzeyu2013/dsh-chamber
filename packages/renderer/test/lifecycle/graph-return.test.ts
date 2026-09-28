@@ -144,8 +144,13 @@ test('wiring lockstep: App delegates to the hook, the hook drives the planner an
   // behavioral proof lives in degraded-retry-decision.test.ts (real registry); this lock keeps
   // the two-pass shape from reappearing in the module that would silently lose the re-boot.
   const readiness = stripComments(await readFile(new URL('../../src/source-readiness.ts', import.meta.url), 'utf8'))
+  // BOTH arms read the effect back: the phase arm pays the arm a settle left PENDING
+  // (a settle that landed before ready used to lose the re-boot entirely), and the
+  // settle arm covers a source that was already ready when the settle arrived.
+  assert.match(readiness, /const effect = facts\.dispatch\(server\.id, \{ kind: 'phaseChanged', phase: server\.phase \}\)/)
+  assert.match(readiness, /if \(effect\?\.e === 'degradedSelfHeal'\) retry\.push\(server\.id\)/)
   assert.match(readiness, /const effect = facts\.dispatch\(sourceId, \{\s*kind: 'bootSettled',\s*outcome: 'degraded',\s*gapKind: state\.degraded\.kind,\s*\}\)/)
-  assert.match(readiness, /if \(effect\?\.e === 'degradedSelfHeal'\) retry\.push\(sourceId\)/)
+  assert.match(readiness, /if \(effect\?\.e === 'degradedSelfHeal' && !retry\.includes\(sourceId\)\) retry\.push\(sourceId\)/)
   // (Only the CALL counts: the event union in the type above carries the same literal.)
   const dispatchCalls = /facts\.dispatch\(sourceId, \{\s*kind: 'bootSettled'/g
   assert.equal((readiness.match(dispatchCalls) ?? []).length, 1,

@@ -922,6 +922,11 @@ interface ChamberSettings {
     并与独立 facts 基线/权威探针争用同一页面 origin 的连接；该 unary 行还可能缺少官方
     `displayTitle`，其 cwd basename 回退会短暂覆盖已推送的会话名；全局禁用行提示则会让未
     mounted 的来源只能等 30s 对账才更新。
+    **基线失败恢复**：`session/list` 超时、传输失败或响应形状不可信时，保持现有事实不可判规则，
+    同时按 500ms 起、最多 5s 的有界指数退避重试；每代至多一个待办重试，下一份完整基线成功后
+    退避归零，30s 对账继续作为后备。**Rejected alternatives（基线失败恢复）**：只等下一次 30s
+    对账会把一次瞬态 fetch 超时放大成长期事实降级；无退避的立即重试又会在持续拥塞时叠加完整
+    `session/list` 请求并进一步挤压同源载体。
   - **浏览器/mobile（gateway web 直连）**只服务 mobile 插件，无 chamber sidebar/renderer
     ⇒ 不存在 goal 压制/通知面；而 **chamber renderer 被浏览器/dev 直开**是另一形态：
     渲染器与 durable 剪枝门都在（无桥按 §3.2.4 F11 视同已结算放行），只是没有远程来源、

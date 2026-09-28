@@ -152,4 +152,40 @@ final class StartupLoadRetryTests: XCTestCase {
         XCTAssertTrue(source.contains("noteStartupFailure"),
                       "sidecar fatal 必须停重试并立即显示真实原因")
     }
+
+    // MARK: - 首屏就绪门：静止态 vs 在途态（design 25 §3）
+
+    private func healthBody(_ status: String) -> Data {
+        Data("{\"ok\":true,\"dsh\":{\"status\":\"\(status)\",\"port\":0}}".utf8)
+    }
+
+    func testLocalReadinessWaitsOnlyForInFlightStates() {
+        // 在途 = 有进展正在进行；这两个词之外的任何词都不能无限等待。
+        XCTAssertEqual(MainWindowController.StartupLoadPlan.localReadiness(statusCode: 200, body: healthBody("starting")),
+                       .waiting(status: "starting"))
+        XCTAssertEqual(MainWindowController.StartupLoadPlan.localReadiness(statusCode: 200, body: healthBody("restarting")),
+                       .waiting(status: "restarting"))
+        XCTAssertEqual(MainWindowController.StartupLoadPlan.localReadiness(statusCode: 200, body: healthBody("ready")),
+                       .ready)
+    }
+
+    func testLocalReadinessPresentsEveryQuiescentState() {
+        // 静止态（含真终态）一律立即呈现：stopped/restart-exhausted 与 client-core 的
+        // MANAGED_RUNTIME_DOWN_STATES 同词表——等它们等于把「启动实例」这个恢复入口藏起来。
+        for status in ["stopped", "error", "degraded", "restart-exhausted"] {
+            XCTAssertEqual(MainWindowController.StartupLoadPlan.localReadiness(statusCode: 200, body: healthBody(status)),
+                           .showRecovery(status: status), "\(status) 必须立即呈现诊断/恢复入口")
+        }
+        // 未知词按静止处理：无法证明它在途，就不允许无限等待（无兜底、无第二个时间所有者）。
+        XCTAssertEqual(MainWindowController.StartupLoadPlan.localReadiness(statusCode: 200, body: healthBody("some-future-state")),
+                       .showRecovery(status: "some-future-state"))
+    }
+
+    func testLocalReadinessWithoutTheFactStaysWaiting() {
+        // 事实未到（缺 dsh/status、body 不可解析、非 2xx）一律等待，绝不读成终态。
+        XCTAssertEqual(MainWindowController.StartupLoadPlan.localReadiness(statusCode: 200, body: Data(#"{"ok":true}"#.utf8)),
+                       .waiting(status: "unavailable"))
+        XCTAssertEqual(MainWindowController.StartupLoadPlan.localReadiness(statusCode: 503, body: nil),
+                       .waiting(status: "unavailable"))
+    }
 }

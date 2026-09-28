@@ -43,7 +43,7 @@
     该窗口，预算耗尽才退回 boot 现状须手动重载；重建是否真覆盖重启窗口待实机）；图回归（boot 无图的 ssh 来源在
    seed + 重启后由每 60s 有界探测发现图已就绪并重挂一次，取到 profile 的 client 行）同待实机；已验范围与复现命令见 design 09 §5（不在本文件重复）。
   - 遮罩层叠/揭幕 P0–P3（design 05 §2.2.1/§4）：W-1b 真机走查、揭幕时延（active ≤1 帧 / absent ≤2s / hero 保持）、Swift 发布包 Safari 人工抽检。
-- **Swift 原生运行期监督**：控制面只首载前探一次 `/health`（S-45）⇒ 收口 = 前台周期探测 +「重启 sidecar」；`didCommit` 后缺首载期限；两 flavor 需按 design 14 §8 分层真机取证。
+- **Swift 原生运行期监督**：首载门现按 `/health` 中的 `dsh.status` 等待 managed dsh ready；首屏提交后仍无前台周期健康探测（S-45）或「重启 sidecar」入口；`didCommit` 后缺首载期限；两 flavor 需按 design 14 §8 分层真机取证。
 - 宿主 cwd / 安装根（余两条）：vendor `worker_threads` 共享 `process.cwd()`；安装/更新原子化 + 运行中检测。
 - ProMotion / 120Hz：打包态三工况实机；确认 `[shell-fps]` 只在 `DSH_CHAMBER_SHELL_DEBUG=1` 出现。
 - macOS 窗口 chrome 实机（待打包 .app）：折叠/展开条带上灯与开关同一水平线（缩放/全屏/跨屏后不变）、侧栏模糊与 Reduce Transparency、恢复不瞬时透出、`html[data-fullscreen]`、失败页可读、可拖整窗；组装 `build:sidecar`→`build:swift-app`。
@@ -73,7 +73,7 @@
 - 连接稳定性：`/api/remote.mux` 实例侧 2s×2 心跳 ⇒ 4–6s terminate；下一步抓 close code（1006/4000），若为实例心跳则调宽 `websocketHeartbeatIntervalMs`；pong 代答已回退；桌面 idle 看门狗 gateway 目标也吃 ~2min bounce。
 - JSC 崩溃 → 静默整页重载：vendor rAF 循环未收敛、恢复提示与过程缺真机验证、页面事实持久消费面缺。
 - 会话打开停滞（仅余开放项；根因归 design 14 §D4 的引擎判定第三类 vendor 补丁，不复述）：宿主无首帧期限；①触屏档无载波层；②blank 子形态恢复入口待真机；③移动端 source↔artifact 缺锁；④FNV 预算键碰撞；⑤`socket-silent` 消费面缺；⑥`presented` document 级近似；⑦阈值未校准；⑧unary 引导未采纳；⑨无消费的取证小面；⑩实例级回退粗粒度；⑪未完成补读面待接线或退役。宿主两条已登记 `todo/upstream-proposals.md` §4.3/§4.7。
-- 本地 mux 周期性抖动（触发源未钉死）：页面侧 generation 结束 `reconnect()` 关掉全部逻辑流；失效 = 真机回读定位到调用路径且修复后不再周期性出现；静默口径未统一（`$events` 已停换代 vs `session-facts-source` 60s 重订阅）；页面侧卡死已独立归因（引擎判定补丁，design 14 §D4），本条只留 mux 抖动/静默 socket 本身。
+- 本地 facts 间歇降级（浏览器侧已定位，WebKit 内部触发仍未钉死）：Safari 与独立 Node 的同源 `session/list` 正常；原生 WebKit 曾在 `$events` socket 健康时让一次 5s `session/list` 基线超时，旧路径要等 30s reconcile 才重试。renderer 现加入 500ms→5s 有界重试；打包态冷启动现等 `/health` 的 `dsh.status=ready` 才载入首屏。收口 = 上述场景全程不需要重载页面。已落（同一 P0 线）：打包态冷启动按 `/health` 的 `dsh.status` 分「在途相位等待 / 静止相位立即呈现」（含 `stopped`/`restart-exhausted` 真终态与词表外未知词，壳侧不设总期限）、`dsh-stream-state` 自愈臂改为「结算留 pending、下一个 ready 世代偿还」、boot 图取消不落缺口（`isCancellationEvidence`）。未落：页面未调度期的活性证据分类（`unscheduled` 不落账）、5s 建连 deadline 直接 `markStale` 的替换、`verificationExhausted` 一类整页生命周期闩锁的删除、gateway 镜像 `diagnostics.degraded=true`（harness `followFailures` 19）的成因。
 - **Electron 托盘图标尺寸未实机核验**（Swift 对偶面＝自持 18pt 图，`macos/Sources/DSHChamber/StatusItemIcon.swift`）：`packages/desktop/main.ts` 的 `maybeCreateTray`（`packages/desktop/main.ts#=literal:function maybeCreateTray(cp: PlaneHandle)`）把 1024×1024 的 `resources/icon.png`（打包后 `process.resourcesPath/icon.png`）原样交给 `Tray`，macOS 下是否被菜单栏自动缩放未验；判据 = 打包态托盘图标与状态栏等高、不出现被裁的大图，并与 Swift 侧 18pt 观感一致；若不缩放 ⇒ 换/缩专用托盘图，或按 T-15 纪律登记 deviations。两侧都需实机目检（Swift 侧装新构建后看菜单栏，Electron 侧同上）。
 - **macOS 原生壳：设置页窗口拖拽面实机目检**（未验）：判据 = 实机上从设置页页头行空白处按下可拖动窗口、首组标题区域不被吃成文本选择。相关：`packages/dsh-chamber-client-ui-settings-plugin-manager/src/client/EmbeddedPluginManagerPage.module.css` 的基础落位规则（首组头 `pointer-events: none`）与 `macos/Sources/DSHChamber/ShellWindowDrag.swift` 的 `[data-window-drag]` 祖先链判定；设计 05 §5。
 - **实机验收 + soak 未执行**：Swift 壳流式中点开 ×20、soak 采集 mux churn 与 JSC 崩溃率基线；证据路径 = `~/Library/Logs/DiagnosticReports` WebContent 报告、`control-plane.log` 的 `browser close` 频率、`dsh-chamber:stream-forensics`/`dsh-chamber:stream-carrier-failed` 页面事实；design 14 §D4 末条。

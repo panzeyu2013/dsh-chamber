@@ -229,6 +229,12 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private var reservedDownloadPaths: Set<String> = []
     private var downloadDestinations: [ObjectIdentifier: String] = [:]
     private var navRetries = 0
+    /// The sidecar can answer `/health` while its asynchronously-started managed dsh is still
+    /// starting. Keep the first document behind that second readiness fact.
+    private var localReadinessProbeAttempts = 0
+    private var localReadinessProbeStartedAt: Date?
+    private var lastLocalReadinessLogAt: Date?
+    private var lastLocalReadinessStatus: String?
     private var didStartLoading = false
     /// 首载失败退避重试的挂起调度（sidecar fatal / 退出 / 成功时取消）。
     private var navRetryWorkItem: DispatchWorkItem?
@@ -795,12 +801,14 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// sidecar ready 前**绝不**发起首载——打包态冷启动时控制面还没监听，抢跑只会
     /// 拿到「连接被拒」的 WebKit/ATS 文案并停在失败页。判定抽成纯函数
     /// （shouldStartFirstLoad，单测直测）。
-    /// ready 帧只是 sidecar 协议就绪；首载前还必须先过一次 HTTP 就绪探测
-    /// （GET /health 期望 2xx）——探测先行、导航在后（StartupLoadPlan 不变量）。
+    /// ready 帧只是 sidecar 协议就绪；首载前还必须先确认控制面可达、且 managed local dsh
+    /// 已 ready。`/health` 的 HTTP 2xx 只证明控制面监听，不证明 `runStartupTail()` 已完成。
+    /// 在 dsh 启动期间只探测并退避，不加载会话 UI；终态 error/degraded 则放行 UI 供恢复。
     private func startLoadingIfNeeded() {
         guard Self.shouldStartFirstLoad(sidecarReady: sidecarReady,
                                         didStartLoading: didStartLoading) else { return }
         didStartLoading = true
+        localReadinessProbeStartedAt = Date()
         beginHealthProbe()
     }
 
@@ -814,6 +822,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     /// 就绪探测路径（控制面 /health；与 sidecar/control-plane 同一路由）。
     static let healthProbePath = "/health"
+    /// The liveness endpoint includes `dsh.status`; HTTP 2xx alone is only control-plane readiness.
     /// 探测超时（秒）：loopback 的 /health 是毫秒级；2s 足够区分「尚未监听」
     /// 与「已监听但不应答」，且单次卡顿只占退避预算的一个节拍。
     static let healthProbeTimeout: TimeInterval = 2.0
@@ -839,18 +848,49 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             case giveUp
         }
 
+        /// The local host starts asynchronously after the sidecar announces ready. A terminal
+        /// state must still expose the management UI so the user can inspect/recover it; transient
+        /// states stay behind the first navigation until the host is serviceable.
+        enum LocalReadiness: Equatable {
+            case ready
+            case waiting(status: String)
+            case showRecovery(status: String)
+        }
+
         static func firstStep(sidecarReady: Bool, didStartLoading: Bool) -> Step {
             if didStartLoading { return .alreadyStarted }
             return sidecarReady ? .probe : .waitForSidecar
         }
 
-        /// 2xx → navigate；否则按首载退避预算重试/耗尽（sidecar fatal 立即 giveUp）。
+        /// 2xx reachability → navigate；otherwise use the bounded control-plane retry budget.
         static func outcome(afterProbeReachable reachable: Bool, attempts: Int,
                             sidecarFailed: Bool) -> ProbeOutcome {
             if reachable { return .navigate }
             switch StartupLoadRetry.decision(attempts: attempts, sidecarFailed: sidecarFailed) {
             case .retry(let delay): return .retry(after: delay)
             case .giveUp: return .giveUp
+            }
+        }
+
+        static func localReadiness(statusCode: Int, body: Data?) -> LocalReadiness {
+            guard MainWindowController.isHealthyResponse(statusCode: statusCode),
+                  let body,
+                  let json = try? JSONSerialization.jsonObject(with: body),
+                  let payload = json as? [String: Any],
+                  let dsh = payload["dsh"] as? [String: Any],
+                  let status = dsh["status"] as? String,
+                  !status.isEmpty else {
+                return .waiting(status: "unavailable")
+            }
+            // 静止态 vs 在途态（design 25 §3）：只有**有进展在途**的两个词才等待，其余一律立即
+            // 呈现（ready → 应用；stopped/error/degraded/restart-exhausted → 控制面诊断与恢复入口）。
+            // stopped / restart-exhausted 是**真终态**（与 client-core 的 MANAGED_RUNTIME_DOWN_STATES
+            // 同词表）：等它们永远不会结束，只会把「启动实例」这个唯一的恢复入口一起藏掉。
+            // 未知词按静止处理——无法证明它在途，就不能无限等待（无兜底、无第二个时间所有者）。
+            switch status {
+            case "ready": return .ready
+            case "starting", "restarting": return .waiting(status: status)
+            default: return .showRecovery(status: status)
             }
         }
     }
@@ -893,18 +933,29 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             handleHealthProbeFailure(statusCode: nil, error: nil, probeURL: cpURL)
             return
         }
-        shellLog("[shell] 控制面就绪探测先行：GET \(probeURL.absoluteString)")
+        shellLog("[shell] 控制面/本地 dsh 就绪探测先行：GET \(probeURL.absoluteString)")
         var request = URLRequest(url: probeURL)
         request.httpMethod = "GET"
         request.timeoutInterval = Self.healthProbeTimeout
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        let task = URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
+        let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.healthProbeTask = nil
                 let statusCode = (response as? HTTPURLResponse)?.statusCode
                 if let statusCode, Self.isHealthyResponse(statusCode: statusCode) {
-                    self.loadControlPlaneAfterProbe()
+                    switch Self.StartupLoadPlan.localReadiness(statusCode: statusCode, body: data) {
+                    case .ready:
+                        self.localReadinessProbeAttempts = 0
+                        self.lastLocalReadinessStatus = nil
+                        self.lastLocalReadinessLogAt = nil
+                        self.loadControlPlaneAfterProbe(localStatus: "ready")
+                    case .waiting(let status):
+                        self.scheduleLocalReadinessRetry(status: status)
+                    case .showRecovery(let status):
+                        shellLog("[shell] 本地 dsh 进入终态 \(status)；加载控制面以开放诊断/恢复入口")
+                        self.loadControlPlaneAfterProbe(localStatus: status)
+                    }
                 } else {
                     self.handleHealthProbeFailure(statusCode: statusCode, error: error,
                                                   probeURL: probeURL)
@@ -916,12 +967,33 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 
     /// 探测 2xx 后的首载导航（唯一首载导航入口）。
-    private func loadControlPlaneAfterProbe() {
-        shellLog("[shell] 控制面就绪（GET \(Self.healthProbePath) 2xx），加载控制面 "
+    private func loadControlPlaneAfterProbe(localStatus: String) {
+        localReadinessProbeStartedAt = nil
+        shellLog("[shell] 控制面就绪且本地 dsh status=\(localStatus)，加载控制面 "
             + "\(cpURL.absoluteString)（origin=\(cpOrigin)）")
         // 启动分段（sidecar ready → 控制面就绪 → 首帧）。
         shellLog(ShellPerf.bootLine("controlPlaneReady"))
         webView.load(URLRequest(url: cpURL))
+    }
+
+    /// Keep polling while the managed host is in a startup/restart phase. The delay is capped so
+    /// a slow runtime activation does not turn into either a request storm or a false failure page.
+    private func scheduleLocalReadinessRetry(status: String) {
+        guard startupFailureMessage == nil, !quitting else { return }
+        let now = Date()
+        let logIntervalElapsed = lastLocalReadinessLogAt.map { now.timeIntervalSince($0) >= 15 } ?? true
+        if lastLocalReadinessStatus != status || logIntervalElapsed {
+            let waited = localReadinessProbeStartedAt.map { now.timeIntervalSince($0) } ?? 0
+            shellLog(String(format: "[shell] 控制面已监听；本地 dsh 尚未 ready（status=%@，等待 %.1fs），首屏继续等待",
+                            status, waited))
+            lastLocalReadinessStatus = status
+            lastLocalReadinessLogAt = now
+        }
+        let exponent = min(localReadinessProbeAttempts, 4)
+        let delay = min(0.5 * pow(2, Double(exponent)), 5.0)
+        localReadinessProbeAttempts += 1
+        guard let probeURL = Self.healthProbeURL(cpURL: cpURL) else { return }
+        scheduleNavRetry(probe: true, url: probeURL, after: delay)
     }
 
     /// 探测失败 = 「控制面未就绪」的同义事实：走同一退避预算；预算耗尽才

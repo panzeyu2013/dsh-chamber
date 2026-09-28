@@ -33,6 +33,15 @@ export interface SourceLifecycleState {
   readonly phase: string | undefined
   /** Once-per-ready-epoch degraded self-heal mark, scoped to the MOUNT. */
   readonly degradedRetried: boolean
+  /**
+   * A settled-degraded mount with a retryable gap whose ready epoch has not been seen
+   * yet. The arm is a FACT (the settle), never a moment: a settle that lands before the
+   * source turns ready used to lose the self-heal entirely, because the emit was gated
+   * on \`phase === 'ready'\` at the settle tick and nothing re-armed it afterwards - only a
+   * page reload could recover (real-machine P4/P5). Cleared when the heal is emitted, on
+   * a new mount, on reclaim, and by \`retryForgotten\`.
+   */
+  readonly healPending: boolean
   /** Background boots that own the single prewarm slot. */
   readonly autoPrewarmed: boolean
   /** Retention reclaimed this incarnation: no automatic prewarm until a user act. */
@@ -55,6 +64,7 @@ export function initialSourceLifecycle(incarnation: SourceIncarnation): SourceLi
     hiddenSince: null,
     phase: undefined,
     degradedRetried: false,
+    healPending: false,
     autoPrewarmed: false,
     prewarmSuppressed: false,
     abandoned: false,
@@ -165,6 +175,7 @@ export function reduceSource(
           abandoned: false,
           boot: null,
           degradedRetried: false,
+          healPending: false,
           autoPrewarmed: false,
         },
         effects: [],
@@ -179,11 +190,14 @@ export function reduceSource(
         boot: { outcome: event.outcome, ...(event.gapKind === undefined ? {} : { kind: event.gapKind }) },
       }
       // The self-heal arm: a settled-degraded mount with a retryable gap waits for ready.
-      if (event.outcome !== 'degraded') return { state: next, effects: [] }
-      if (!env.retryableGap(event.gapKind)) return { state: next, effects: [] }
-      if (state.phase !== 'ready' || state.degradedRetried) return { state: next, effects: [] }
+      // A settle that lands while the source is NOT ready keeps the arm PENDING instead of
+      // dropping it: the ready epoch that follows is the fact that pays for the re-mount.
+      if (event.outcome !== 'degraded') return { state: { ...next, healPending: false }, effects: [] }
+      if (!env.retryableGap(event.gapKind)) return { state: { ...next, healPending: false }, effects: [] }
+      if (state.phase !== 'ready') return { state: { ...next, healPending: true }, effects: [] }
+      if (state.degradedRetried) return { state: { ...next, healPending: false }, effects: [] }
       return {
-        state: { ...next, degradedRetried: true, retryToken: state.retryToken + 1 },
+        state: { ...next, degradedRetried: true, healPending: false, retryToken: state.retryToken + 1 },
         effects: [{ e: 'degradedSelfHeal' }],
       }
     }
@@ -191,11 +205,19 @@ export function reduceSource(
     case 'phaseChanged': {
       // Leaving ready drops the self-heal mark: a later ready transition earns a fresh attempt.
       const degradedRetried = event.phase === 'ready' ? state.degradedRetried : false
-      return { state: { ...state, phase: event.phase, degradedRetried }, effects: [] }
+      const next: SourceLifecycleState = { ...state, phase: event.phase, degradedRetried }
+      // Entering ready pays for an arm left pending by a settle that preceded it.
+      if (event.phase !== 'ready' || !state.healPending || state.degradedRetried) {
+        return { state: next, effects: [] }
+      }
+      return {
+        state: { ...next, degradedRetried: true, healPending: false, retryToken: state.retryToken + 1 },
+        effects: [{ e: 'degradedSelfHeal' }],
+      }
     }
 
     case 'retryForgotten':
-      return { state: { ...state, degradedRetried: false }, effects: [] }
+      return { state: { ...state, degradedRetried: false, healPending: false }, effects: [] }
 
     case 'prewarmStarted':
       return { state: { ...state, autoPrewarmed: true }, effects: [] }
@@ -249,6 +271,7 @@ export function reduceSource(
           hiddenSince: null,
           // The mark dies with the mount it belonged to; the next mount starts unmarked.
           degradedRetried: false,
+          healPending: false,
         },
         effects: [{ e: 'reclaim' }],
       }

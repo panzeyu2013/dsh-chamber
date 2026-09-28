@@ -31,14 +31,30 @@ test('mount and unmount track the hidden window', () => {
   assert.equal(hidden.state.hiddenSince, 5000)
 })
 
-test('a degraded, retryable, ready mount earns exactly one self-heal', () => {
-  const ready = reduceSource(settled('degraded', 'graph-unavailable'), { kind: 'phaseChanged', phase: 'ready' }, env)
-  const healed = reduceSource(ready.state, { kind: 'bootSettled', outcome: 'degraded', gapKind: 'graph-unavailable' }, env)
-  assert.equal(healed.state.degradedRetried, true)
-  assert.deepEqual(healed.effects, [{ e: 'degradedSelfHeal' }])
-  // Once per ready epoch: a second degraded settle does NOT heal again.
-  const again = reduceSource(healed.state, { kind: 'bootSettled', outcome: 'degraded', gapKind: 'graph-unavailable' }, env)
+test('a degraded, retryable mount earns exactly one self-heal, paid by the ready epoch', () => {
+  // 结算时相位未到 ready（真实冷启动的常态）：不立即自愈，但把"待自愈"留成事实。
+  const settledEarly = settled('degraded', 'graph-unavailable')
+  assert.equal(settledEarly.healPending, true, 'the arm survives a settle that precedes ready')
+  // ready 世代偿还它：一次 effect + 本世代已用标记。
+  const ready = reduceSource(settledEarly, { kind: 'phaseChanged', phase: 'ready' }, env)
+  assert.equal(ready.state.degradedRetried, true)
+  assert.deepEqual(ready.effects, [{ e: 'degradedSelfHeal' }])
+  // Once per ready epoch: a repeat settle does NOT heal again.
+  const again = reduceSource(ready.state, { kind: 'bootSettled', outcome: 'degraded', gapKind: 'graph-unavailable' }, env)
   assert.deepEqual(again.effects, [])
+  assert.equal(again.state.healPending, false)
+})
+
+test('a degraded, retryable mount that is ready at the settle still heals on the settle', () => {
+  const readyAtSettle = reduceSource(settled('degraded', 'graph-unavailable'), { kind: 'phaseChanged', phase: 'ready' }, env)
+  const healed = reduceSource(readyAtSettle.state, { kind: 'bootSettled', outcome: 'degraded', gapKind: 'graph-unavailable' }, env)
+  assert.deepEqual(healed.effects, [], 'the ready transition already paid for this epoch')
+  const fresh = reduceSourceSequence(initialSourceLifecycle(INC), [
+    { kind: 'phaseChanged', phase: 'ready' },
+    { kind: 'bootSettled', outcome: 'degraded', gapKind: 'graph-unavailable' },
+  ], env)
+  assert.deepEqual(fresh.effects, [{ e: 'degradedSelfHeal' }])
+  assert.equal(fresh.state.degradedRetried, true)
 })
 
 test('a non-retryable gap never earns a self-heal and never marks', () => {
@@ -56,10 +72,19 @@ test('leaving ready drops the self-heal mark so a later ready transition earns a
   assert.equal(left.state.degradedRetried, false)
 })
 
-test('a degraded mount that is not ready yet never heals (the ready transition earns it)', () => {
+test('an unready source never heals while it stays unready, and only a NEW settle re-arms it', () => {
   const notReady = settled('degraded', 'graph-unavailable')
   const attempt = reduceSource(notReady, { kind: 'bootSettled', outcome: 'degraded', gapKind: 'graph-unavailable' }, env)
-  assert.deepEqual(attempt.effects, [])
+  assert.deepEqual(attempt.effects, [], 'never heals while the source is unready')
+  assert.equal(attempt.state.healPending, true)
+  const leaving = reduceSource(attempt.state, { kind: 'phaseChanged', phase: 'starting' }, env)
+  assert.deepEqual(leaving.effects, [])
+  // 消费之后仅靠相位往返不再自愈（防止"每个 ready 都重挂一次"的松紧误读）。
+  const ready = reduceSource(leaving.state, { kind: 'phaseChanged', phase: 'ready' }, env)
+  assert.deepEqual(ready.effects, [{ e: 'degradedSelfHeal' }])
+  const back = reduceSource(ready.state, { kind: 'phaseChanged', phase: 'starting' }, env)
+  const readyAgain = reduceSource(back.state, { kind: 'phaseChanged', phase: 'ready' }, env)
+  assert.deepEqual(readyAgain.effects, [], 'a consumed arm needs a new settle')
 })
 
 test('retention reclaims only inside the grace window and only after a settle', () => {
