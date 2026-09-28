@@ -9,6 +9,10 @@
       "types": "./src/index.ts",
       "default": "./src/index.ts"
     },
+    "./page-channel": {
+      "types": "./src/page-channel.ts",
+      "default": "./src/page-channel.ts"
+    },
     "./plugin-manifest": {
       "types": "./src/plugin-manifest.ts",
       "default": "./src/plugin-manifest.ts"

@@ -1,11 +1,12 @@
 /**
  * 事实源生命周期簇：gateway 只读事实源与 SSH/dsh 远端无壳观察者的创建/收敛/退订，
  * 外加 focus/blur 步进完成臂与 pagehide/hidden 落盘 flush 两条全局监听。
- * 稳定签名（id + 化身指纹 + connected）决定重探/停流；判定与状态仍在既有纯模块与 App
+ * 稳定签名（id + 化身指纹 + connected）决定重探/停订阅；判定与状态仍在既有纯模块与 App
  * 的 ref/state 容器里，本 hook 只做订阅生命周期装配。
  */
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core'
+import { subscribePageChannel } from '@dsh-chamber/dsh-chamber-client-core/page-channel'
 import type { FactsStore } from '../host/facts-store.ts'
 import type { MountedSourcesStore } from '../host/mounted-sources-store.ts'
 import { createSessionFactsSource, type SessionFactsSnapshot, type SessionFactsSource } from '../session-facts-source.ts'
@@ -148,6 +149,15 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
         const created = createSessionFactsSource({
           sourceId,
           onDiagnostic: (message, error) => console.warn(message, error ?? ''),
+          // 增量面 = 页面唯一长连接上的一条逻辑订阅：通道自己重连、重订阅与按字节确认，
+          // 事实源只持有代际/指纹门与 close()（不得自排重连阶梯）。
+          subscribeSessionFacts: handlers => subscribePageChannel({
+            family: 'sessionFacts',
+            instanceId: sourceId,
+            onItem: handlers.onItem,
+            onOpen: () => { handlers.onOpen?.() },
+            onError: (code, message) => { handlers.onError?.(code, message) },
+          }),
         })
         source = created
         // Single boundary: applySessionFacts IS the 'apply-session-facts' never-throw register boundary.

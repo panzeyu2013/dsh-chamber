@@ -26,7 +26,7 @@
 - 实机门禁（缺真实实例 / 打包态环境）：
   - 调试模式 T-10 打包态（Web Inspector 附着**只能人工判**）。
   - 多来源 sleep/wake 与隐藏恢复、版本歪斜容忍、gateway 形态回归（含 WebKit 原生源码归一注入的真机复验）。
-  - 隐藏/遮挡态节流（design 14 §D1；S-10）：最小化/完全覆盖两工况的 rAF/定时器/`visibilityState`/App Nap、隐藏 ≥60s SSE/推送不断、唤醒即时重连、30s 兜底轮询跳过 + 补偿。
+  - 隐藏/遮挡态节流（design 14 §D1；S-10）：最小化/完全覆盖两工况的 rAF/定时器/`visibilityState`/App Nap、隐藏 ≥60s 页面通道（`/api/page-channel`，design 26）与 Remote mux/推送不断、唤醒即时重连、30s 兜底轮询跳过 + 补偿。
   - vendor 性能补丁可见态 A/B（真实 app 同环境）。
   - 右侧栏栈真实 profile 装载时序、session v3 迁移真实存储。
   - open-in 实例内 host 包：两代 runtime 探针（pin 0.1.7-rc.2 需复跑，最大未验证风险）、图标/缓存/CSP/无 cookie fence/remote cwd、macOS 实机清单（目录顺序、拉起落工作区、ssh 两态、设置页行集、N-ctx、打包 seed）、Windows 盘符/UNC、第三方 scheme、fork 折入流程。
@@ -73,7 +73,8 @@
 - 连接稳定性：控制面代理 24h 记录 494 次 WS 关闭**全部是 upstream close**（local 108 次、寿命 60–135 s 居多、最长 871 s，0 次 heartbeat lost），但独立 Node 客户端挂同一 mux 400 s 无 close ⇒ 关闭不是实例心跳的普遍行为，**页面侧（WebKit 的 pong/调度差异）才是差异所在**；下一步仍是抓 close code（1006/4000）与把页面侧 mux 关闭与 `[chamber:evidence]` 账本对齐。
 - JSC 崩溃 → 静默整页重载：引擎缺陷（WebKit 22625），仓内只降触发概率 + 状态可见化；2026-09-28 15:28:33 新增报告与已知族同源（主线程微任务路径 `operationOptimize → newReplacementCodeBlockFor`，`far=0x120`）⇒ 整页重载清空全部页面内事实仍是「各来源同时坏」的独立机制；恢复提示与过程缺真机验证、页面事实持久消费面缺（`dsh-chamber.evidence-log.v1` 已给判定面，尚未覆盖事实行本身）。
 - 会话打开停滞（仅余开放项；根因归 design 14 §D4 的引擎判定第三类 vendor 补丁，不复述）：宿主无首帧期限；①触屏档无载波层；②blank 子形态恢复入口待真机；③移动端 source↔artifact 缺锁；④FNV 预算键碰撞；⑤`socket-silent` 消费面缺；⑥`presented` document 级近似；⑦阈值未校准；⑧unary 引导未采纳；⑨无消费的取证小面；⑩实例级回退粗粒度；⑪未完成补读面待接线或退役。宿主两条已登记 `todo/upstream-proposals.md` §4.3/§4.7。
-- 本地 facts 间歇降级：**机制已定案为「页面调度证据被误记为来源事实」**（design 14 §D4 第四次排查）：服务端同时刻全绿（壳外同源 `session/list` 30/30 轮 34–98 ms、`chamber/session-state` 36 轮 3–25 ms、独立 Node mux 客户端 400 s 无 close），而页面权威日志写满 5s `session/list` 超时 / `Load failed` / `read deadline exceeded`，且 probe 均发生在窗口刚获得焦点、5 s 后已失焦的窗口里。已落（同一 P0 线）：证据有效性层（`dsh-stream-state/src/evidence.ts` 的 verdict/admissibility + `dsh-chamber-client-core/src/page-schedule.ts` 的页面调度记录 + `evidence-log.ts` 的有界持久 `[chamber:evidence]` 账本）、建连/基线/权威读/boot 图/侧栏探针全部只在页面被调度时落账、`verificationExhausted` 整页闩锁退役（有界 defer + 事件驱动重臂）、打包态冷启动按 `/health` 的 `dsh.status` 分「在途相位等待 / 静止相位立即呈现」（壳侧不设总期限）、`dsh-stream-state` 自愈臂「结算留 pending、下一个 ready 世代偿还」、boot 图取消不落缺口。未落：gateway 镜像 `diagnostics.degraded=true`（harness `followFailures` 19）的成因；下一次时好时坏窗口带 `[chamber:evidence]` 账本做一次真机复验（`unscheduled booked=false` 的出现频率与 v2 判定的对照）。
+- 本地 facts 间歇降级：两条机制归 design 14 §D4 证据有效性层与 design 26 页面通道（实现不复述）。开放项：①design 26 的打包态实机复验（冷启动 + 多来源窗口：`[chamber:evidence]` 的 `page-channel` 行与 unary 时延对账、重载/唤醒后的订阅重放）；②gateway 形态**不**挂载 `/api/page-channel`（升级分发已**明确拒绝**该路径并有用例钉住；移动端当前不使用这三族，将来要用须在 gateway 升级分发登记同一端点，design 26 §2 非目标）；③gateway 镜像 `diagnostics.degraded=true`（harness `followFailures` 19）的成因仍未查。
+- 页面通道的上游连接**不**计入逐实例反代的并发计数与诊断面（design 26 必要取舍：每订阅一条长活上游是 O(活跃订阅) 的设计，套用反代的 64 条并发上限就是把容量旋钮搬回来）。`pageChannel.stats()` 已暴露 `{sockets,subscriptions,upstreams}` 并有测试，但控制面当前没有诊断面消费方（`InstanceProxy.getDiagnostics()` 同样无生产消费方）——将来做运维面时从这里接。
 - **Electron 托盘图标尺寸未实机核验**（Swift 对偶面＝自持 18pt 图，`macos/Sources/DSHChamber/StatusItemIcon.swift`）：`packages/desktop/main.ts` 的 `maybeCreateTray`（`packages/desktop/main.ts#=literal:function maybeCreateTray(cp: PlaneHandle)`）把 1024×1024 的 `resources/icon.png`（打包后 `process.resourcesPath/icon.png`）原样交给 `Tray`，macOS 下是否被菜单栏自动缩放未验；判据 = 打包态托盘图标与状态栏等高、不出现被裁的大图，并与 Swift 侧 18pt 观感一致；若不缩放 ⇒ 换/缩专用托盘图，或按 T-15 纪律登记 deviations。两侧都需实机目检（Swift 侧装新构建后看菜单栏，Electron 侧同上）。
 - **macOS 原生壳：设置页窗口拖拽面实机目检**（未验）：判据 = 实机上从设置页页头行空白处按下可拖动窗口、首组标题区域不被吃成文本选择。相关：`packages/dsh-chamber-client-ui-settings-plugin-manager/src/client/EmbeddedPluginManagerPage.module.css` 的基础落位规则（首组头 `pointer-events: none`）与 `macos/Sources/DSHChamber/ShellWindowDrag.swift` 的 `[data-window-drag]` 祖先链判定；设计 05 §5。
 - **实机验收 + soak 未执行**：Swift 壳流式中点开 ×20、soak 采集 mux churn 与 JSC 崩溃率基线；证据路径 = `~/Library/Logs/DiagnosticReports` WebContent 报告、`control-plane.log` 的 `browser close` 频率、`dsh-chamber:stream-forensics`/`dsh-chamber:stream-carrier-failed` 页面事实；design 14 §D4 末条。
@@ -148,6 +149,9 @@
 - 归档保护候选根闭包缺一条测试（开放无过滤清理前先补）。
 - 通知收敛器遗留收窄：`armedFloor` 比较近不可达、`keepFence` 待上移批次层、`setArmed`、`forgetPending`（只清 pending 不清 armed，生产零调用）与 `SessionFactsSource.getSnapshot()` 测试专用入口（均标 D4「仅测试/诊断面」，生产路径不得接线）；触发 = 下次重构。
 - 旧边沿孤岛：host 事件序回退而水位前进的异形上报无排序守卫（观测层收口，不恢复第二套边沿）。
+- 页面通道模块重复实例的观测缺口：`assertSingletonModule('page-channel')` 只 `console.error`（design 26 §D5 登记为**检测器**，不是守卫）——同一 bundle 出现第二份模块实例会开出第二条页面 WS，I-1 的两件工具都看不见它；根治 = socket/订阅状态改 `Symbol.for` 全局键控（成本 vs 触发面待裁）。
+- 已发布 `CHANGELOG.md` / `docs/CHANGELOG.en-US.md` 的 beta.10 段落把可落账判定写成「只有前三类」——与 `packages/dsh-stream-state/src/evidence.ts` 的 admissible 集（含 `channel`）及 design 14 §D4 不一致；下一次发布编辑时改正（CHANGELOG 属发布期写作面）。
+- `packages/dsh-stream-state/src/evidence.ts` 的 `notServingYet` 有读者（`classifyObservation` 的 unavailable 分支）但**无生产者**：送达路径上该规则不可达，唯一置真值的是测试。保留（给未来分类器接线）还是删除待裁。
 
 ## 设计未决
 

@@ -1,20 +1,21 @@
 /**
- * Renderer REST client, narrowed to health + connections (local); the settings-connections
- * plugin owns its own control-plane client.
- * The transport + wire-contract shapes are the SINGLE shared copy in the chamber sidebar
- * package (shared/control-plane-client.ts): this module and that plugin both consume it, so
+ * Renderer client surface, narrowed to health + connections (local): the REST reads plus the
+ * page-channel host health subscription; the settings-connections plugin delegates to the same
+ * shared surface. The transport + wire-contract shapes are the SINGLE shared copy in the chamber
+ * client-core package (control-plane-client.ts): this module and that plugin both consume it, so
  * the two cannot drift apart. This module keeps the App-facing `api` object and re-exports
  * the shared types/functions unchanged (App.tsx's import surface stays as-is).
  */
 import {
-  controlPlaneUrl,
   post,
   request,
+  subscribeHostHealth,
   toConnectionSummary,
   type ApiError,
   type ApiErrorBody,
   type ConnectionRowWire,
   type ConnectionSummary,
+  type HealthEventsHandle,
   type HealthResponse,
 } from '@dsh-chamber/dsh-chamber-client-core'
 
@@ -28,8 +29,9 @@ export const api = {
   host: {
     /** GET /health → {ok, dsh:{status, port, error?}} */
     health: (): Promise<HealthResponse> => request('/health'),
-    /** GET /api/host/health-events: SSE push channel — snapshot on connect, then every machine transition. */
-    healthEvents: (): EventSource => new EventSource(controlPlaneUrl() + '/api/host/health-events'),
+    /** host 健康流（design 26）：控制面原生 health 生产者经页面通道承载——
+     *  句柄契约与诊断前缀都单源在 client-core 的 subscribeHostHealth。 */
+    healthEvents: (): HealthEventsHandle => subscribeHostHealth(),
   },
   connections: {
     /** GET /api/connections → {connection}；无连接行 404 → 空数组 */

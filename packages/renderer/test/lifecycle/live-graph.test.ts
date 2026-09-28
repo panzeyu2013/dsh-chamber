@@ -1,8 +1,11 @@
 /**
  * Live client-plugin graph sync (live-graph.ts): frame parsing, the pure id-set
  * diff, the reconciler's add/remove/rev/diagnostic behavior, and the
- * disarm/fence contract. The kernel IS the shipped one (page-level state), so
- * every case resets it — mutation of the shared tables must be observable.
+ * disarm/fence contract. The transport is a fake page-channel `pluginGraph`
+ * subscription — the real client-core module owns the socket and its retry ladder,
+ * so no case here may expect the reconciler to rebuild anything. The kernel IS the
+ * shipped one (page-level state), so every case resets it — mutation of the shared
+ * tables must be observable.
  */
 import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
@@ -12,11 +15,13 @@ import {
 } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
 import { restartRequiredMessage, type ExtraModuleRow, type HostGraphRow } from '../../src/host-graph.ts'
 import { readFile } from 'node:fs/promises'
+import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 import {
   diffLiveRows, parsePluginEventFrame,
   readLiveSyncEnabled, startLiveGraphSync,
-  type LiveDiagnosticSink, type LiveEventSourceFace, type LiveGraphSyncDeps,
-  type LiveLoaderEntryFace, type LiveLoaderFace, type MountedLiveRow,
+  type LiveDiagnosticSink, type LiveGraphSyncDeps,
+  type LiveLoaderEntryFace, type LiveLoaderFace, type LivePluginGraphHandlers,
+  type LivePluginGraphSubscription, type MountedLiveRow,
 } from '../../src/live-graph.ts'
 
 const BASE = '/api/i/local'
@@ -66,40 +71,47 @@ function fakeLoader(seed: { name: string; active?: boolean; fiberAwait?: () => P
   return { loader, entries, removed }
 }
 
-/** Fake EventSource: records the url, exposes the message/error listeners. */
-function fakeSource(url: string) {
-  const listeners = new Map<string, ((event: { data?: string }) => void)[]>()
-  let closed = false
-  let readyState = 1
-  const source: LiveEventSourceFace = {
-    addEventListener(type, listener) {
-      const list = listeners.get(type) ?? []
-      list.push(listener)
-      listeners.set(type, list)
-    },
-    close() { closed = true; readyState = 2 },
-    get readyState() { return readyState },
+/**
+ * Fake page-channel `pluginGraph` subscription: captures the reconciler's handlers and
+ * counts subscribe/unsubscribe calls. There is deliberately NO rebuild here — the real
+ * client-core module owns the socket and every retry (design 26 §D4), so a failure must
+ * be observable as "no timer, handle still live", never as a second subscription.
+ */
+function fakeSubscription() {
+  let onItem: ((data: string) => void) | undefined
+  let onOpen: (() => void) | undefined
+  let onError: ((code: string, message: string) => void) | undefined
+  let subscribeCalls = 0
+  let closeCalls = 0
+  const subscription: LivePluginGraphSubscription = {
+    close() { closeCalls += 1 },
   }
   return {
-    url, source,
-    get closed() { return closed },
-    emit(data: string) { for (const listener of listeners.get('message') ?? []) listener({ data }) },
-    error() { for (const listener of listeners.get('error') ?? []) listener({}) },
-    /** The browser failed the connection for good (a non-200 reconnect does exactly that). */
-    closeForGood() { readyState = 2 },
+    subscription,
+    record(handlers: LivePluginGraphHandlers) {
+      subscribeCalls += 1
+      onItem = handlers.onItem
+      onOpen = handlers.onOpen
+      onError = handlers.onError
+    },
+    emit(data: string) { onItem?.(data) },
+    ready() { onOpen?.() },
+    fail(code: string, message: string) { onError?.(code, message) },
+    get subscribeCalls() { return subscribeCalls },
+    get closeCalls() { return closeCalls },
+    get closed() { return closeCalls > 0 },
   }
 }
 
 interface Harness {
   sync: ReturnType<typeof startLiveGraphSync>
-  source: ReturnType<typeof fakeSource>
+  channel: ReturnType<typeof fakeSubscription>
   sink: { record: PluginGraphDiagnostic | undefined; writes: PluginGraphDiagnostic[]; read(): PluginGraphDiagnostic | undefined; write(record: PluginGraphDiagnostic): void }
   loader: ReturnType<typeof fakeLoader>
   chunkOwners: string[]
   chunkRemovals: string[][]
   warns: string[]
   loads: string[]
-  sourceUrls: string[]
   setIsCurrent(value: boolean): void
 }
 
@@ -110,7 +122,7 @@ function harness(
 ): Harness {
   if (options.resetKernel !== false) resetClientPluginLoaderState()
   const loader = fakeLoader()
-  const source = fakeSource(`${BASE}/plugins/events`)
+  const channel = fakeSubscription()
   const sink = {
     record: undefined as PluginGraphDiagnostic | undefined,
     writes: [] as PluginGraphDiagnostic[],
@@ -121,7 +133,6 @@ function harness(
   const chunkRemovals: string[][] = []
   const warns: string[] = []
   const loads: string[] = []
-  const sourceUrls: string[] = []
   let current = true
   const deps: LiveGraphSyncDeps = {
     sourceId: 'local',
@@ -135,7 +146,7 @@ function harness(
     isCurrent: () => current,
     fiberIsActive: fiber => fiber?.state === 2,
     fiberIsTerminal: fiber => fiber?.state === 3 || fiber?.state === 4 || fiber?.state === 5,
-    createEventSource: url => { sourceUrls.push(url); return source.source },
+    subscribePluginGraph: handlers => { channel.record(handlers); return channel.subscription },
     now: () => 1_000,
     activationTimeoutMs: 20,
     warn: message => { warns.push(message) },
@@ -144,7 +155,7 @@ function harness(
   const sync = startLiveGraphSync(deps)
   t.after(() => { void sync.disarm(); resetClientPluginLoaderState() })
   return {
-    sync, source, sink, loader, chunkOwners, chunkRemovals, warns, loads, sourceUrls,
+    sync, channel, sink, loader, chunkOwners, chunkRemovals, warns, loads,
     setIsCurrent: value => { current = value },
   }
 }
@@ -192,7 +203,7 @@ test('diffLiveRows: add/remove/rev/recheck with first-duplicate-wins', () => {
 
 test('a graph frame mounts kept rows once and registers them as chunk owners', async (t) => {
   const h = harness(t)
-  h.source.emit(graphFrame([row('@scope/a'), row('@scope/b')]))
+  h.channel.emit(graphFrame([row('@scope/a'), row('@scope/b')]))
   await tick()
   assert.deepEqual(h.loader.entries.map(entry => entry.options?.name), ['@scope/a', '@scope/b'])
   assert.deepEqual(h.chunkOwners, ['@scope/a', '@scope/b'])
@@ -200,7 +211,7 @@ test('a graph frame mounts kept rows once and registers them as chunk owners', a
     [`${BASE}/plugins/??@scope/a&rev=abc123`, `${BASE}/plugins/??@scope/b&rev=abc123`])
   assert.equal(h.sink.record, undefined)
   // The identical frame is a no-op: no second script, no second create.
-  h.source.emit(graphFrame([row('@scope/a'), row('@scope/b')]))
+  h.channel.emit(graphFrame([row('@scope/a'), row('@scope/b')]))
   await tick()
   assert.equal(h.loads.length, 2)
   assert.equal(h.chunkOwners.length, 2)
@@ -208,16 +219,16 @@ test('a graph frame mounts kept rows once and registers them as chunk owners', a
 
 test('a removed id drops its entry + chunk owner and keeps the factory (same-rev re-add reuses)', async (t) => {
   const h = harness(t)
-  h.source.emit(graphFrame([row('@scope/a')]))
+  h.channel.emit(graphFrame([row('@scope/a')]))
   await tick()
   const entryId = h.loader.entries[0]!.id
-  h.source.emit(graphFrame([]))
+  h.channel.emit(graphFrame([]))
   await tick()
   assert.deepEqual(h.loader.removed, [entryId])
   assert.deepEqual(h.chunkRemovals, [['@scope/a']])
   assert.equal(h.sink.record, undefined)
   // Re-add at the SAME rev: the kernel still owns the factory, so no new script.
-  h.source.emit(graphFrame([row('@scope/a')]))
+  h.channel.emit(graphFrame([row('@scope/a')]))
   await tick()
   assert.equal(h.loads.length, 1)
   assert.equal(h.loader.entries.length, 1)
@@ -225,10 +236,10 @@ test('a removed id drops its entry + chunk owner and keeps the factory (same-rev
 
 test('a rev change for a mounted id reports restart-required without touching the entry', async (t) => {
   const h = harness(t)
-  h.source.emit(graphFrame([row('@scope/a')]))
+  h.channel.emit(graphFrame([row('@scope/a')]))
   await tick()
   const entryId = h.loader.entries[0]!.id
-  h.source.emit(graphFrame([row('@scope/a', { rev: 'rev2', url: '/plugins/??@scope/a&rev=rev2' })]))
+  h.channel.emit(graphFrame([row('@scope/a', { rev: 'rev2', url: '/plugins/??@scope/a&rev=rev2' })]))
   await tick()
   assert.equal(h.sink.record?.state, 'restart-required')
   assert.equal(h.sink.record?.pluginId, '@scope/a')
@@ -244,7 +255,7 @@ test('an add on a rev-conflict never creates an entry and reports the boot fact'
   await loadClientPluginRows('local', [extra('@scope/a')], { loadBundle: async () => undefined }, {
     ordinary: 'defer', timeout: 'collect',
   })
-  h.source.emit(graphFrame([row('@scope/a', { rev: 'rev2', url: '/plugins/??@scope/a&rev=rev2' })]))
+  h.channel.emit(graphFrame([row('@scope/a', { rev: 'rev2', url: '/plugins/??@scope/a&rev=rev2' })]))
   await tick()
   assert.equal(h.sink.record?.state, 'restart-required')
   // Locked to the boot projection's text: both writers share one builder.
@@ -255,12 +266,12 @@ test('an add on a rev-conflict never creates an entry and reports the boot fact'
 
 test('covered official rows are filtered, and an answered empty graph is a no-op', async (t) => {
   const h = harness(t)
-  h.source.emit(graphFrame([row('@deepseek-ai/dsh-client-hmr'), row('@scope/plain')]))
+  h.channel.emit(graphFrame([row('@deepseek-ai/dsh-client-hmr'), row('@scope/plain')]))
   await tick()
   // Positive control: the pass really ran — only the COVERED row is filtered out.
   assert.deepEqual(h.loader.entries.map(entry => entry.options?.name), ['@scope/plain'])
   assert.equal(h.sink.record, undefined)
-  h.source.emit(graphFrame([]))
+  h.channel.emit(graphFrame([]))
   await tick()
   assert.equal(h.warns.length, 0)
 })
@@ -281,12 +292,12 @@ test('a mounted-but-pending row is re-checked on the next frame and healed to ok
     pendingFiber = entry.fiber
     return id
   }
-  h.source.emit(graphFrame([row('@scope/a')]))
+  h.channel.emit(graphFrame([row('@scope/a')]))
   await new Promise(resolve => setTimeout(resolve, 30))
   assert.equal(h.sink.record?.state, 'bundle-load-failed')
   assert.equal(h.sink.record?.pluginId, '@scope/a')
   pendingFiber.state = 2
-  h.source.emit(graphFrame([row('@scope/a')]))
+  h.channel.emit(graphFrame([row('@scope/a')]))
   await tick()
   assert.equal(h.sink.record?.state, 'ok')
 })
@@ -294,14 +305,14 @@ test('a mounted-but-pending row is re-checked on the next frame and healed to ok
 test('a fact another plugin id owns is never clobbered', async (t) => {
   const h = harness(t)
   // Positive control: this reconciler CAN write its own fact into an empty slot.
-  h.source.emit(graphFrame([row('@scope/a')]))
+  h.channel.emit(graphFrame([row('@scope/a')]))
   await tick()
-  h.source.emit(graphFrame([row('@scope/a', { rev: 'rev2', url: '/plugins/??@scope/a&rev=rev2' })]))
+  h.channel.emit(graphFrame([row('@scope/a', { rev: 'rev2', url: '/plugins/??@scope/a&rev=rev2' })]))
   await tick()
   assert.deepEqual(h.sink.writes.map(record => record.state), ['restart-required'])
   // Another writer now owns the slot for a DIFFERENT plugin id.
   h.sink.record = { state: 'restart-required', pluginId: '@other/pkg', message: 'boot fact', updatedAt: 5 }
-  h.source.emit(graphFrame([row('@scope/a', { rev: 'rev3', url: '/plugins/??@scope/a&rev=rev3' })]))
+  h.channel.emit(graphFrame([row('@scope/a', { rev: 'rev3', url: '/plugins/??@scope/a&rev=rev3' })]))
   await tick()
   assert.deepEqual(h.sink.record, { state: 'restart-required', pluginId: '@other/pkg', message: 'boot fact', updatedAt: 5 })
   assert.equal(h.sink.writes.length, 1, 'the foreign fact must survive the pass')
@@ -309,22 +320,22 @@ test('a fact another plugin id owns is never clobbered', async (t) => {
 
 test('malformed frames warn once and never break the stream', async (t) => {
   const h = harness(t)
-  h.source.emit('{oops')
-  h.source.emit('{again')
+  h.channel.emit('{oops')
+  h.channel.emit('{again')
   await tick()
   assert.equal(h.warns.length, 1)
-  h.source.emit(graphFrame([row('@scope/a')]))
+  h.channel.emit(graphFrame([row('@scope/a')]))
   await tick()
   assert.equal(h.loader.entries.length, 1)
 })
 
 test('after disarm a frame is inert and disarm resolves the in-flight pass', async (t) => {
   const h = harness(t)
-  h.source.emit(graphFrame([row('@scope/a')]))
+  h.channel.emit(graphFrame([row('@scope/a')]))
   const idle = h.sync.disarm()
-  assert.equal(h.source.closed, true)
+  assert.equal(h.channel.closed, true)
   await idle
-  h.source.emit(graphFrame([row('@scope/b')]))
+  h.channel.emit(graphFrame([row('@scope/b')]))
   await tick()
   assert.deepEqual(h.loader.entries.map(entry => entry.options?.name), ['@scope/a'])
 })
@@ -338,7 +349,7 @@ test('a fence that flips mid-pass stops the remaining rows', async (t) => {
     if (calls === 2) h.setIsCurrent(false)
     return await original(options)
   }
-  h.source.emit(graphFrame([row('@scope/a'), row('@scope/b')]))
+  h.channel.emit(graphFrame([row('@scope/a'), row('@scope/b')]))
   await tick()
   // The first row mounted; the fence flipped during the second create, so that entry is
   // rolled back and no further row is attempted.
@@ -357,145 +368,67 @@ test('kill switch: only an explicit boolean false disables, read at arm time', (
   assert.equal(readLiveSyncEnabled(null), true)
 })
 
-test('a channel error logs once and never closes the source (the browser owns reconnection)', async (t) => {
+test('a channel onError logs once, schedules NO timer and leaves the subscription live (no reconnect storm)', async (t) => {
   const h = harness(t)
-  h.source.error()
-  h.source.error()
-  assert.equal(h.warns.filter(message => message.includes('dropped')).length, 1)
-  assert.equal(h.source.closed, false, 'closing would stop the browser EventSource retry')
+  // Any own retry would have to schedule a timer; the channel owns reconnection, so the
+  // reconciler must schedule nothing (design 26 §D4).
+  const originalSetTimeout = globalThis.setTimeout
+  let timers = 0
+  globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
+    timers += 1
+    return originalSetTimeout(...args)
+  }) as typeof setTimeout
+  t.after(() => { globalThis.setTimeout = originalSetTimeout })
+  h.channel.fail('upstream_end', '上游结束了该订阅')
+  h.channel.fail('channel_closed', '通道关闭 code=1006')
+  await Promise.resolve()
+  assert.equal(timers, 0, 'a channel failure must not schedule any timer of its own')
+  assert.equal(h.channel.closed, false, 'the handle stays live: the channel retries by itself')
+  assert.equal(h.warns.filter(message => message.includes('page channel retries')).length, 1)
+  // Positive control: the subscription is still wired — a later item still reconciles.
+  h.channel.emit(graphFrame([row('@scope/after-error')]))
+  await tick()
+  assert.equal(h.loader.entries.length, 1)
 })
 
-test('the channel is one EventSource on the instance-prefixed /plugins/events route', async (t) => {
+test('a fresh onOpen ends the outage: the next failure logs again', async (t) => {
   const h = harness(t)
-  assert.deepEqual(h.sourceUrls, [`${BASE}/plugins/events`])
+  h.channel.fail('upstream_end', '第一次中断')
+  h.channel.ready()
+  h.channel.fail('channel_closed', '第二次中断')
+  assert.equal(h.warns.filter(message => message.includes('page channel retries')).length, 2)
 })
 
-test('a permanently-CLOSED socket (non-200 reconnect) is rebuilt with bounded backoff', async (t) => {
-  const fakes: ReturnType<typeof fakeSource>[] = []
-  const h = harness(t, {
-    resubscribeDelaysMs: [0, 0],
-    createEventSource: url => { const fake = fakeSource(url); fakes.push(fake); return fake.source },
-  })
-  assert.equal(fakes.length, 1, 'one socket at arm time')
-  fakes[0]!.closeForGood()
-  fakes[0]!.error()
-  await tick()
-  await tick()
-  assert.equal(fakes.length, 2, 'a CLOSED socket is re-established')
-  assert.equal(fakes[1]!.url, `${BASE}/plugins/events`, 'the rebuild targets the same route')
-  // The rebuilt socket still drives the reconciler (a frame mounts a row again).
-  fakes[1]!.emit(graphFrame([row('@scope/revived')]))
-  const deadline = Date.now() + 1_000
-  while (h.loader.entries.length === 0 && Date.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, 5))
-  }
-  assert.equal(h.loader.entries.length, 1, 'frames on the rebuilt socket mount rows again')
-})
-
-test('the rebuild budget is bounded: it stops and says so once when exhausted', async (t) => {
-  const fakes: ReturnType<typeof fakeSource>[] = []
-  const warns: string[] = []
-  harness(t, {
-    resubscribeDelaysMs: [0, 0],
-    warn: message => { warns.push(message) },
-    createEventSource: url => { const fake = fakeSource(url); fakes.push(fake); return fake.source },
-  })
-  for (let round = 0; round < 4; round++) {
-    fakes.at(-1)!.closeForGood()
-    fakes.at(-1)!.error()
-    await tick()
-    await tick()
-  }
-  assert.equal(fakes.length, 3, 'one initial socket + one per budget slot, then stop')
-  assert.equal(warns.filter(message => message.includes('gave up')).length, 1)
-})
-
-test('disarm cancels a pending rebuild', async (t) => {
-  const fakes: ReturnType<typeof fakeSource>[] = []
-  const h = harness(t, {
-    resubscribeDelaysMs: [50],
-    createEventSource: url => { const fake = fakeSource(url); fakes.push(fake); return fake.source },
-  })
-  fakes[0]!.closeForGood()
-  fakes[0]!.error()
+test('disarm() unsubscribes exactly once (only the live channel handle is closed)', async (t) => {
+  const h = harness(t)
+  assert.equal(h.channel.subscribeCalls, 1, 'one subscription at arm time')
+  assert.equal(h.channel.closeCalls, 0)
   await h.sync.disarm()
-  await new Promise(resolve => setTimeout(resolve, 80))
-  assert.equal(fakes.length, 1, 'no socket may be built after disarm')
+  await h.sync.disarm()
+  assert.equal(h.channel.closeCalls, 1, 'a second disarm must not re-close')
 })
 
-test('a delivered frame resets the rebuild budget (a later drop earns a fresh attempt)', async (t) => {
-  const fakes: ReturnType<typeof fakeSource>[] = []
-  const h = harness(t, {
-    resubscribeDelaysMs: [0],
-    createEventSource: url => { const fake = fakeSource(url); fakes.push(fake); return fake.source },
-  })
-  fakes[0]!.closeForGood()
-  fakes[0]!.error()
+test('a host without the page-channel dep stays a silent no-op (the opportunistic contract)', async (t) => {
+  const h = harness(t, { subscribePluginGraph: undefined })
+  assert.equal(h.channel.subscribeCalls, 0, 'no channel on this host: nothing is subscribed')
+  assert.deepEqual(h.warns, [])
+  h.channel.emit(graphFrame([row('@scope/no-channel')]))
   await tick()
-  await tick()
-  assert.equal(fakes.length, 2, 'the single budget slot was spent')
-  // A frame on the rebuilt socket is proof the channel works: the budget must re-arm.
-  fakes[1]!.emit(graphFrame([row('@scope/revive')]))
-  const deadline = Date.now() + 1_000
-  while (h.loader.entries.length === 0 && Date.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, 5))
-  }
-  fakes[1]!.closeForGood()
-  fakes[1]!.error()
-  await tick()
-  await tick()
-  assert.equal(fakes.length, 3, 'a delivered frame re-arms the full budget')
-})
-
-test('the shipped rebuild ladder is 2/5/10/20/30/30s and then gives up (97s, the restart window)', async (t) => {
-  // Every other case injects the seam; this one pins the DEFAULT the design quotes.
-  t.mock.timers.enable({ apis: ['setTimeout'] })
-  t.after(() => { t.mock.timers.reset() })
-  const fakes: ReturnType<typeof fakeSource>[] = []
-  const h = harness(t, {
-    createEventSource: url => { const fake = fakeSource(url); fakes.push(fake); return fake.source },
-  })
-  const ladder = [2_000, 5_000, 10_000, 20_000, 30_000, 30_000]
-  for (const [index, delay] of ladder.entries()) {
-    fakes.at(-1)!.closeForGood()
-    fakes.at(-1)!.error()
-    t.mock.timers.tick(delay - 1)
-    assert.equal(fakes.length, index + 1, `slot ${index + 1} must not fire before ${delay}ms`)
-    t.mock.timers.tick(1)
-    assert.equal(fakes.length, index + 2, `slot ${index + 1} fires after ${delay}ms`)
-  }
-  // Budget exhausted: one more CLOSED error gives up (no socket, exactly one log).
-  fakes.at(-1)!.closeForGood()
-  fakes.at(-1)!.error()
-  t.mock.timers.tick(60_000)
-  assert.equal(fakes.length, 1 + ladder.length, 'exactly six slots, then stop')
-  assert.equal(h.warns.filter(message => message.includes('gave up')).length, 1)
-})
-
-test('a CONNECTING error still leaves reconnection to the browser (no rebuild)', async (t) => {
-  const fakes: ReturnType<typeof fakeSource>[] = []
-  const h = harness(t, {
-    resubscribeDelaysMs: [0],
-    createEventSource: url => { const fake = fakeSource(url); fakes.push(fake); return fake.source },
-  })
-  fakes[0]!.error()
-  await tick()
-  assert.equal(fakes.length, 1, 'CONNECTING must not trigger our own rebuild')
-  assert.equal(h.warns.filter(message => message.includes('the browser will retry')).length, 1)
+  assert.equal(h.loader.entries.length, 0, 'without a subscription the reconciler only holds the boot rows')
 })
 
 test('rebuilt and unknown frames are consumed without a malformed warning or a pass', async (t) => {
   const h = harness(t)
   // Positive control: a real graph frame DOES mount a row and run the pass.
-  h.source.emit(graphFrame([row('@scope/ctrl')]))
+  h.channel.emit(graphFrame([row('@scope/ctrl')]))
   await tick()
   assert.equal(h.loader.entries.length, 1)
   assert.equal(h.loads.length, 1)
-  h.source.emit(JSON.stringify({ type: 'rebuilt', id: '@scope/a', rev: 'rev2' }))
-  h.source.emit(JSON.stringify({ type: 'connected' }))
-  h.source.emit(JSON.stringify({ type: 'future-frame', payload: 1 }))
-  h.source.emit(JSON.stringify({ type: 3 }))
-  h.source.emit(JSON.stringify({ graph: {} }))
+  h.channel.emit(JSON.stringify({ type: 'rebuilt', id: '@scope/a', rev: 'rev2' }))
+  h.channel.emit(JSON.stringify({ type: 'connected' }))
+  h.channel.emit(JSON.stringify({ type: 'future-frame', payload: 1 }))
+  h.channel.emit(JSON.stringify({ type: 3 }))
+  h.channel.emit(JSON.stringify({ graph: {} }))
   await tick()
   assert.equal(h.warns.length, 0)
   assert.equal(h.loads.length, 1, 'the no-op frames must not trigger a second pass')
@@ -507,7 +440,7 @@ test('a boot row whose entry never materialized is mounted by the first frame (l
   // The boot tolerated a failed create for this row, so nothing is mounted for it; the
   // live baseline scans the loader and must retry it instead of treating it as removed.
   const h = harness(t, { initialRows: [extra('@scope/late')] })
-  h.source.emit(graphFrame([row('@scope/late')]))
+  h.channel.emit(graphFrame([row('@scope/late')]))
   await tick()
   assert.deepEqual(h.loader.entries.map(entry => entry.options?.name), ['@scope/late'])
   assert.deepEqual(h.chunkOwners, ['@scope/late'])
@@ -517,7 +450,7 @@ test('a boot row whose entry never materialized is mounted by the first frame (l
 test('a boot-mounted row is not re-created by the first frame (baseline from the live loader)', async (t) => {
   const loader = fakeLoader([{ name: '@scope/a', active: true }])
   const h = harness(t, { loader: loader.loader, initialRows: [extra('@scope/a')] })
-  h.source.emit(graphFrame([row('@scope/a')]))
+  h.channel.emit(graphFrame([row('@scope/a')]))
   await tick()
   assert.equal(loader.entries.length, 1)
   assert.equal(h.loads.length, 0)
@@ -527,7 +460,7 @@ test('a boot-mounted row is not re-created by the first frame (baseline from the
 
 test('a second source adding an id another source owns reports instance-version-conflict and stays isolated', async (t) => {
   const first = harness(t)
-  first.source.emit(graphFrame([row('@scope/shared')]))
+  first.channel.emit(graphFrame([row('@scope/shared')]))
   await tick()
   assert.deepEqual(first.loader.entries.map(entry => entry.options?.name), ['@scope/shared'])
   // N-ctx: a second source shares the page-level kernel but has its own loader/sink.
@@ -536,7 +469,7 @@ test('a second source adding an id another source owns reports instance-version-
     { sourceId: 'ssh-1', basePath: '/api/i/ssh-1' },
     { resetKernel: false },
   )
-  second.source.emit(graphFrame([row('@scope/shared', { rev: 'other-rev', url: '/plugins/??@scope/shared&rev=other-rev' })]))
+  second.channel.emit(graphFrame([row('@scope/shared', { rev: 'other-rev', url: '/plugins/??@scope/shared&rev=other-rev' })]))
   await tick()
   assert.equal(second.sink.record?.state, 'instance-version-conflict')
   assert.equal(second.sink.record?.pluginId, '@scope/shared')
@@ -556,13 +489,13 @@ test('a failed add reports bundle-load-failed and a later frame retries the load
       if (attempts === 1) throw new Error('boom')
     },
   })
-  h.source.emit(graphFrame([row('@scope/a')]))
+  h.channel.emit(graphFrame([row('@scope/a')]))
   await tick()
   assert.equal(h.sink.record?.state, 'bundle-load-failed')
   assert.equal(h.sink.record?.pluginId, '@scope/a')
   assert.equal(h.loader.entries.length, 0)
   // The kernel cleared the failed combo, so the next frame attempts the script again.
-  h.source.emit(graphFrame([row('@scope/a')]))
+  h.channel.emit(graphFrame([row('@scope/a')]))
   await tick()
   assert.equal(attempts, 2)
   assert.equal(h.loader.entries.length, 1)
@@ -583,13 +516,13 @@ test('a still-inactive mounted row keeps its pending fact across later frames (n
     }
     return id
   }
-  h.source.emit(graphFrame([row('@scope/a')]))
+  h.channel.emit(graphFrame([row('@scope/a')]))
   await new Promise(resolve => setTimeout(resolve, 30))
   assert.equal(h.sink.record?.state, 'bundle-load-failed')
   assert.equal(h.sink.record?.pluginId, '@scope/a')
   assert.match(h.sink.record?.message ?? '', /未在窗口内激活/)
   // A later frame (another row appears) must RE-EMIT '@scope/a' pending, not converge to ok.
-  h.source.emit(graphFrame([row('@scope/a'), row('@scope/b')]))
+  h.channel.emit(graphFrame([row('@scope/a'), row('@scope/b')]))
   await new Promise(resolve => setTimeout(resolve, 30))
   assert.equal(h.sink.record?.state, 'bundle-load-failed')
   assert.equal(h.sink.record?.pluginId, '@scope/a')
@@ -604,7 +537,7 @@ test('a holder that dies while create is in flight rolls the created entry back'
     h.setIsCurrent(false)
     return id
   }
-  h.source.emit(graphFrame([row('@scope/a')]))
+  h.channel.emit(graphFrame([row('@scope/a')]))
   await tick()
   // The page-level loader must not keep an orphan entry (a successor boot would create
   // a second entry for the same plugin name), and its chunk owner is dropped too.
@@ -615,14 +548,14 @@ test('a holder that dies while create is in flight rolls the created entry back'
 
 test('a removal still drops the page-level chunk owner when the fence flips mid-removal', async (t) => {
   const h = harness(t)
-  h.source.emit(graphFrame([row('@scope/a')]))
+  h.channel.emit(graphFrame([row('@scope/a')]))
   await tick()
   const original = h.loader.loader.remove.bind(h.loader.loader)
   h.loader.loader.remove = id => {
     h.setIsCurrent(false)
     original(id)
   }
-  h.source.emit(graphFrame([]))
+  h.channel.emit(graphFrame([]))
   await tick()
   assert.deepEqual(h.chunkRemovals, [['@scope/a']])
 })
@@ -633,22 +566,22 @@ test('a persisting fact is written once under a real clock (fact identity, not t
   // keep a persisting fact from rewriting + re-emitting on every graph frame.
   const before = Date.now()
   const h = harness(t, { now: undefined })
-  h.source.emit(graphFrame([row('@scope/a')]))
+  h.channel.emit(graphFrame([row('@scope/a')]))
   await tick()
-  h.source.emit(graphFrame([row('@scope/a', { rev: 'rev2', url: '/plugins/??@scope/a&rev=rev2' })]))
+  h.channel.emit(graphFrame([row('@scope/a', { rev: 'rev2', url: '/plugins/??@scope/a&rev=rev2' })]))
   await tick()
   assert.deepEqual(h.sink.writes.map(record => record.state), ['restart-required'])
   assert.ok((h.sink.writes[0]?.updatedAt ?? 0) >= before, 'a real clock, not a constant fallback')
   // The same fact again: no second write, no second emit.
-  h.source.emit(graphFrame([row('@scope/a', { rev: 'rev2', url: '/plugins/??@scope/a&rev=rev2' })]))
+  h.channel.emit(graphFrame([row('@scope/a', { rev: 'rev2', url: '/plugins/??@scope/a&rev=rev2' })]))
   await tick()
   assert.deepEqual(h.sink.writes.map(record => record.state), ['restart-required'])
   // The rev matches the mounted row again → the fact clears (one ok write), and a
   // further identical frame must not rewrite that ok record either.
-  h.source.emit(graphFrame([row('@scope/a')]))
+  h.channel.emit(graphFrame([row('@scope/a')]))
   await tick()
   assert.deepEqual(h.sink.writes.map(record => record.state), ['restart-required', 'ok'])
-  h.source.emit(graphFrame([row('@scope/a')]))
+  h.channel.emit(graphFrame([row('@scope/a')]))
   await tick()
   assert.deepEqual(h.sink.writes.map(record => record.state), ['restart-required', 'ok'])
 })
@@ -663,7 +596,7 @@ test('a fence that flips during activation rolls the created entry back', async 
     entry.fiber = { state: 1, await: () => new Promise(() => undefined) }
     return id
   }
-  h.source.emit(graphFrame([row('@scope/g')]))
+  h.channel.emit(graphFrame([row('@scope/g')]))
   // Deterministic: wait until the entry EXISTS before flipping the fence, then poll for
   // the rollback — no fixed margin that a loaded CI could miss.
   const deadline = Date.now() + 1_000
@@ -688,14 +621,14 @@ test('an entry created without a fiber is rolled back and a later frame retries 
     delete entry.fiber
     return id
   }
-  h.source.emit(graphFrame([row('@scope/nf')]))
+  h.channel.emit(graphFrame([row('@scope/nf')]))
   await tick()
   assert.equal(h.loader.entries.length, 0, 'a fiberless entry can never activate')
   assert.equal(h.sink.record?.state, 'bundle-load-failed')
   assert.deepEqual(h.chunkRemovals, [['@scope/nf']])
   // The retry must create exactly one fresh entry, not a duplicate.
   h.loader.loader.create = original
-  h.source.emit(graphFrame([row('@scope/nf')]))
+  h.channel.emit(graphFrame([row('@scope/nf')]))
   await tick()
   assert.equal(h.loader.entries.length, 1)
   assert.equal(h.sink.record?.state, 'ok')
@@ -711,14 +644,14 @@ test('a no-op frame never evicts a queued graph snapshot (the slot takes graph f
       if (calls === 1) await gate
     },
   })
-  h.source.emit(graphFrame([row('@scope/first')]))
+  h.channel.emit(graphFrame([row('@scope/first')]))
   await tick()
   assert.equal(h.loader.entries.length, 0, 'the first pass is gated inside loadBundle')
   // While that pass is in flight: a NEW graph snapshot, then frames that are no-ops.
-  h.source.emit(graphFrame([row('@scope/first'), row('@scope/queued')]))
-  h.source.emit(JSON.stringify({ type: 'rebuilt', id: '@scope/first', rev: 'rev2' }))
-  h.source.emit(JSON.stringify({ type: 'future-frame', payload: 1 }))
-  h.source.emit(JSON.stringify({ graph: {} }))
+  h.channel.emit(graphFrame([row('@scope/first'), row('@scope/queued')]))
+  h.channel.emit(JSON.stringify({ type: 'rebuilt', id: '@scope/first', rev: 'rev2' }))
+  h.channel.emit(JSON.stringify({ type: 'future-frame', payload: 1 }))
+  h.channel.emit(JSON.stringify({ graph: {} }))
   release!()
   const deadline = Date.now() + 1_000
   while (h.loader.entries.length < 2 && Date.now() < deadline) {
@@ -733,15 +666,15 @@ test('a no-op frame never evicts a queued graph snapshot (the slot takes graph f
 
 test('a fact cleared behind the reconciler is re-published (dedupe checks the slot)', async (t) => {
   const h = harness(t)
-  h.source.emit(graphFrame([row('@scope/a')]))
+  h.channel.emit(graphFrame([row('@scope/a')]))
   await tick()
-  h.source.emit(graphFrame([row('@scope/a', { rev: 'rev2', url: '/plugins/??@scope/a&rev=rev2' })]))
+  h.channel.emit(graphFrame([row('@scope/a', { rev: 'rev2', url: '/plugins/??@scope/a&rev=rev2' })]))
   await tick()
   assert.deepEqual(h.sink.writes.map(record => record.state), ['restart-required'])
   // An external retire path clears the slot while this holder lives: a memoised
   // lastWrite must NOT swallow the persisting fact.
   h.sink.record = undefined
-  h.source.emit(graphFrame([row('@scope/a', { rev: 'rev2', url: '/plugins/??@scope/a&rev=rev2' })]))
+  h.channel.emit(graphFrame([row('@scope/a', { rev: 'rev2', url: '/plugins/??@scope/a&rev=rev2' })]))
   await tick()
   assert.deepEqual(h.sink.writes.map(record => record.state), ['restart-required', 'restart-required'])
   assert.equal(h.sink.writes.at(-1)?.pluginId, '@scope/a')
@@ -752,7 +685,7 @@ test('a boot-era fiberless entry is dropped, not duplicated, when the row retrie
   delete loader.entries[0]!.fiber
   const h = harness(t, { loader: loader.loader, initialRows: [extra('@scope/bootbroken')] })
   assert.equal(loader.entries.length, 0, 'the dead boot entry is dropped at arm time')
-  h.source.emit(graphFrame([row('@scope/bootbroken')]))
+  h.channel.emit(graphFrame([row('@scope/bootbroken')]))
   const deadline = Date.now() + 1_000
   while (loader.entries.length === 0 && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 5))
@@ -763,7 +696,7 @@ test('a boot-era fiberless entry is dropped, not duplicated, when the row retrie
 test('a disposal phase that installs a second inertia promise is awaited (bounded chain)', async (t) => {
   const loader = fakeLoader()
   const h = harness(t, { loader: loader.loader })
-  h.source.emit(graphFrame([row('@scope/i')]))
+  h.channel.emit(graphFrame([row('@scope/i')]))
   await tick()
   assert.equal(loader.entries.length, 1)
   const entry = loader.entries[0]!
@@ -775,7 +708,7 @@ test('a disposal phase that installs a second inertia promise is awaited (bounde
     setTimeout(() => { entry.fiber!.inertia = second; resolve() }, 5)
   })
   entry.fiber = { state: 2, await: async () => undefined, inertia: head }
-  h.source.emit(graphFrame([]))
+  h.channel.emit(graphFrame([]))
   // disarm() resolves with the in-flight pass: if the pass stopped after the FIRST
   // inertia promise, it finishes ~25ms before 'second' ever resolves.
   await h.sync.disarm()
@@ -785,7 +718,7 @@ test('a disposal phase that installs a second inertia promise is awaited (bounde
 
 test('a rev change owned by another source reports instance-version-conflict, not restart-required', async (t) => {
   const first = harness(t)
-  first.source.emit(graphFrame([row('@scope/shared')]))
+  first.channel.emit(graphFrame([row('@scope/shared')]))
   await tick()
   assert.equal(clientPluginRowOwner('@scope/shared'), 'local')
   // This source's boot baseline already mounted the shared row (kernel reuse)...
@@ -795,7 +728,7 @@ test('a rev change owned by another source reports instance-version-conflict, no
     initialRows: [extra('@scope/shared')],
   }, { resetKernel: false })
   // ...and its host now rebuilds the SAME id: no restart of THIS source can switch it.
-  second.source.emit(graphFrame([row('@scope/shared', { rev: 'other-rev', url: '/plugins/??@scope/shared&rev=other-rev' })]))
+  second.channel.emit(graphFrame([row('@scope/shared', { rev: 'other-rev', url: '/plugins/??@scope/shared&rev=other-rev' })]))
   await tick()
   assert.equal(second.sink.record?.state, 'instance-version-conflict')
   assert.equal(second.sink.record?.pluginId, '@scope/shared')
@@ -805,7 +738,7 @@ test('a rev change owned by another source reports instance-version-conflict, no
 test('a removal never drops a page-level chunk owner another source still holds', async (t) => {
   resetClientPluginLoaderState()
   const first = harness(t)
-  first.source.emit(graphFrame([row('@scope/shared-owner')]))
+  first.channel.emit(graphFrame([row('@scope/shared-owner')]))
   await tick()
   assert.equal(clientPluginRowOwner('@scope/shared-owner'), 'local')
   // A SECOND source mounts the same id from its boot baseline (kernel reuse)...
@@ -815,12 +748,12 @@ test('a removal never drops a page-level chunk owner another source still holds'
     initialRows: [extra('@scope/shared-owner')],
   }, { resetKernel: false })
   // ...and its host drops the row: the shared descriptor belongs to 'local', so it stays.
-  second.source.emit(graphFrame([]))
+  second.channel.emit(graphFrame([]))
   await tick()
   assert.deepEqual(second.chunkRemovals, [], 'a non-owner remove must not delete the descriptor the owner still needs')
   assert.equal(loader.entries.length, 0, 'the entry itself is still removed for this source')
   // Positive control: the owner's own removal still drops it.
-  first.source.emit(graphFrame([]))
+  first.channel.emit(graphFrame([]))
   await tick()
   assert.deepEqual(first.chunkRemovals, [['@scope/shared-owner']])
 })
@@ -831,7 +764,7 @@ test('a boot baseline fiber in a terminal state is dropped and the next frame re
   loader.entries[0]!.fiber!.state = 3
   const h = harness(t, { loader: loader.loader, initialRows: [extra('@scope/dead')] }, { resetKernel: false })
   assert.equal(loader.entries.length, 0, 'a FAILED boot entry is dropped, never reported pending forever')
-  h.source.emit(graphFrame([row('@scope/dead')]))
+  h.channel.emit(graphFrame([row('@scope/dead')]))
   await tick()
   assert.equal(loader.entries.length, 1, 'the frame retries the row through the ordinary add path')
   assert.ok(!h.sink.writes.some(record => /未在窗口内激活/.test(record.message ?? '')), 'no fabricated pending fact for the dropped baseline')
@@ -841,12 +774,12 @@ test('a mounted row whose fiber turns terminal is dropped and retried, not repor
   resetClientPluginLoaderState()
   const loader = fakeLoader([{ name: '@scope/late-fail', active: false }])
   const h = harness(t, { loader: loader.loader, initialRows: [extra('@scope/late-fail')] }, { resetKernel: false })
-  h.source.emit(graphFrame([row('@scope/late-fail')]))
+  h.channel.emit(graphFrame([row('@scope/late-fail')]))
   await tick()
   assert.equal(h.sink.record?.state, 'bundle-load-failed')
   assert.match(h.sink.record?.message ?? '', /未在窗口内激活/)
   loader.entries[0]!.fiber!.state = 3
-  h.source.emit(graphFrame([row('@scope/late-fail')]))
+  h.channel.emit(graphFrame([row('@scope/late-fail')]))
   await tick()
   assert.equal(loader.entries.length, 1, 'the terminal entry was dropped and retried once')
   assert.notEqual(loader.entries[0]!.fiber!.state, 3, 'the retry created a fresh entry')
@@ -857,7 +790,7 @@ test('disarm joins the in-flight pass (its promise is a real teardown barrier)',
   let release: (() => void) | undefined
   const gate = new Promise<void>(resolve => { release = resolve })
   const h = harness(t, { loadBundle: async () => { await gate } })
-  h.source.emit(graphFrame([row('@scope/slow')]))
+  h.channel.emit(graphFrame([row('@scope/slow')]))
   await tick()
   let settled = false
   const idle = h.sync.disarm().then(() => { settled = true })
@@ -868,15 +801,20 @@ test('disarm joins the in-flight pass (its promise is a real teardown barrier)',
   assert.equal(settled, true)
 })
 test('shell wiring lockstep: boot-entry disarm, settle-time arm gate, dispose disarm', async () => {
-  const source = await readFile(new URL('../../src/shell.ts', import.meta.url), 'utf8')
+  // 正控必须剥离注释后再匹配：这些锁断言的是**代码**在，注释里的同名字符串不能算数
+  // （仓库为此提供了 source-text 的 stripComments；负控 doesNotMatch 用原文更严，保持原样）。
+  const source = stripComments(await readFile(new URL('../../src/shell.ts', import.meta.url), 'utf8'))
   // A successor boot disarms the predecessor's live sync synchronously, joined into the
   // id-local teardown barrier (design 09 §3.7 lifecycle).
   assert.match(source,
     /if \(predecessorHolder\?\.liveSync !== undefined\) \{\s*registerTeardownBarrier\(instanceId, predecessorHolder\.liveSync\.disarm\(\)\)/)
-  // Arm only for an answered graph, in normal mode, on a host with EventSource and the
-  // switch on, inside the settle path.
+  // Arm only for an answered graph, in normal mode, on a host whose page-channel
+  // subscribe dependency is present and the switch on, inside the settle path.
   assert.match(source,
-    /graphAnswered && !safeMode && installedModulesSystem !== null\s*&& readLiveSyncEnabled\(\) && typeof EventSource === 'function'/)
+    /graphAnswered && !safeMode && installedModulesSystem !== null\s*&& readLiveSyncEnabled\(\) && pageChannelSubscribe !== null/)
+  // The SHELL binds its own instance identity to the page channel's pluginGraph topic.
+  assert.match(source,
+    /subscribePluginGraph: handlers => pageChannelSubscribe\(\{\s*family: 'pluginGraph',\s*instanceId,/)
   // Disposal disarms through the same barrier.
   assert.match(source,
     /if \(holder\.liveSync !== undefined\) \{\s*registerTeardownBarrier\(instanceId, holder\.liveSync\.disarm\(\)\)/)
@@ -887,5 +825,11 @@ test('shell wiring lockstep: boot-entry disarm, settle-time arm gate, dispose di
   // The page-level chunk-owner adapters the reconciler drives.
   assert.match(source, /registerChunkOwners: rows => \{ registerExtraChunkOwners\(modules, rows\) \}/)
   assert.match(source, /removeChunkOwners: ids => \{ removeExtraChunkOwners\(modules, ids\) \}/)
+  // The per-instance SSE transport is gone: the shell has no EventSource, and live-graph
+  // holds neither the old socket face nor a reconnect ladder of its own (design 26 §D5).
+  assert.doesNotMatch(source, /EventSource/)
+  const live = await readFile(new URL('../../src/live-graph.ts', import.meta.url), 'utf8')
+  assert.doesNotMatch(live, /LiveEventSourceFace|createEventSource|resubscribeDelaysMs|LIVE_RESUBSCRIBE_DELAYS_MS|readyState/)
+  assert.match(live, /subscribePluginGraph\?\(handlers: LivePluginGraphHandlers\): LivePluginGraphSubscription/)
 })
 

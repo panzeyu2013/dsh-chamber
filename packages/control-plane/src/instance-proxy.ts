@@ -143,6 +143,20 @@ export interface InstanceProxy {
    *  leaves the HTTP server's connection tracking, so a lingering half-open downlink
    *  would hang server.close() forever. */
   closeAllStreams(): void
+  /** Resolve one instance id to its forward target WITHOUT writing any HTTP error
+   *  (the page channel's per-subscription path has no response to write): the same
+   *  local/dsh/gateway resolution as the proxy, `null` where resolveTarget would
+   *  answer 503. The returned record is a DEFENSIVE COPY, so a caller cannot mutate
+   *  a live transport registration. `connectionId` is the SAME string
+   *  revokeTransportTraffic receives ('dsh:<id>' / 'gateway:<id>' / legacy
+   *  'ssh:<id>'); it is absent for `local`, which is never registered as a transport
+   *  and therefore never revoked. */
+  resolveTargetFor(instanceId: string): { baseUrl: string; connectionId?: string; headers?: Record<string, string>; tls?: { spkiPin?: string }; authority?: string } | null
+  /** Transport replacement/removal notification. Traffic that lives OUTSIDE the
+   *  proxy's own tracking (the page channel opens one http.request per subscription)
+   *  is invisible to revokeTransportTraffic, so an owner such as the page channel
+   *  registers here to fail its subscriptions for the replaced connectionId. */
+  onTransportRevoked(listener: (connectionId: string) => void): void
 }
 
 /** Main-process-only facts used to validate a ready transport registration. The
@@ -258,6 +272,9 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
    *  pendingUpgrades tracker, established WS ownership on ProxyLiveStream. Revocation must
    *  terminate traffic already authenticated with the old transport/token. */
   const liveHttpByTransport = new Map<string, Set<ProxyResponse>>()
+  /** Landlords of traffic the proxy does not track itself (the page channel's
+   *  per-subscription upstreams); notified from inside revokeTransportTraffic. */
+  const transportRevokedListeners = new Set<(connectionId: string) => void>()
 
   function connectionIdForInstance(id: string): string | null {
     if (id === 'local') return null
@@ -289,6 +306,15 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       if (stream.ownerId !== connectionId) continue
       try { stream.downstream.destroy() } catch { /* already closed */ }
       try { stream.upstream.destroy() } catch { /* already closed */ }
+    }
+    // Every revocation path (registerTransport replacement, unregisterTransport)
+    // goes through here; the listener must never be able to break the others.
+    for (const listener of transportRevokedListeners) {
+      try {
+        listener(connectionId)
+      } catch (error) {
+        logger.warn(`instance-proxy: transport-revoked listener failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
     }
   }
 
@@ -329,6 +355,23 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     // An unregistered transport is an instance without a live tunnel — explicit 503.
     if (res !== null) writeError(res, 503, 'instance_unavailable', 'no transport is available for this instance', logger)
     return null
+  }
+
+  /** resolveTargetFor: the read-only twin of resolveTarget (null instead of a 503 write).
+   *  The registration record is COPIED field by field (including the header map) so a
+   *  caller such as the page channel can never mutate a live transport — a transport is
+   *  replaced/revoked underneath at any time. */
+  function resolveTargetFor(instanceId: string): (TransportRecord & { connectionId?: string }) | null {
+    const record = resolveTarget(instanceId, null)
+    if (record === null) return null
+    const connectionId = connectionIdForInstance(instanceId)
+    return {
+      baseUrl: record.baseUrl,
+      ...(connectionId === null ? {} : { connectionId }),
+      ...(record.headers === undefined ? {} : { headers: { ...record.headers } }),
+      ...(record.tls === undefined ? {} : { tls: { ...record.tls } }),
+      ...(record.authority === undefined ? {} : { authority: record.authority }),
+    }
   }
 
   return {
@@ -613,6 +656,15 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       if (removed) {
         logger.log(`instance-proxy: transport unregistered ${connectionId}`)
       }
+    },
+
+    /** Resolve one instance id to its forward target without writing an error response
+     *  (see the interface doc); null = unknown/unavailable instance. */
+    resolveTargetFor,
+
+    /** Register a revocation listener (see the interface doc). */
+    onTransportRevoked(listener: (connectionId: string) => void) {
+      transportRevokedListeners.add(listener)
     },
 
     /** Plain counters (no URLs, no credentials). */

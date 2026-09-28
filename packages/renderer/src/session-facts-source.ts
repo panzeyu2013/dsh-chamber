@@ -1,22 +1,27 @@
 /**
- * Gateway session-state facts source。只读、浏览器安全（零 Node import；只用 fetch /
- * ReadableStream / 定时器）。分类**粗粒度且只有一份**：classifySessionFactsProbe 是本
- * 客户端唯一分类器（权威分类器在 control-plane 的 session-state-protocol，状态语义逐条
- * 对齐；本包不能 import 它）；probe 与流恢复重取都调用它，模块内不得再内联判定：
- * 404 ⇒ legacy-gateway（首探从未有过协议行 = 空权威快照；曾有历史后 = 保留旧行 + 标
- * 不可用）；503 + session_state_disabled / mode off ⇒ watcher-disabled；其余非 ok ⇒
- * degraded；2xx 且 protocol 命中 ⇒ ok。共享字面量（route 路径 / protocol /
- * session_state_disabled / serviceable / completedAtSource）是跨包单一来源，不得本地改写。
- * mode === 'sse' 消费 SSE 增量（id 单调游标，重连带 Last-Event-ID；心跳只作活性）；
- * mode === 'poll' 按 pollIntervalMs 重取快照；静默超时 ⇒ 关流重订阅并整量重取，期间标
- * stale。行数据只承载会话元数据（goal 三值事实 = 白名单 {goalId, revision,
- * phase, activation?, updatedAt?}，绝不含 objective/blockedReason），**绝不**带
- * title/cwd/消息。
+ * Gateway session-state facts source。只读、浏览器安全（零 Node import；unary 面只用
+ * fetch / 定时器，增量面走 page-channel 的 `sessionFacts` 逻辑订阅）。
+ *
+ * 分类**粗粒度且只有一份**：classifySessionFactsProbe 是本客户端唯一分类器（权威分类器在
+ * control-plane 的 session-state-protocol，状态语义逐条对齐；本包不能 import 它）；probe
+ * 与对账重取都调用它，模块内不得再内联判定：404 ⇒ legacy-gateway（首探从未有过协议行 =
+ * 空权威快照；曾有历史后 = 保留旧行 + 标不可用）；503 + session_state_disabled / mode off
+ * ⇒ watcher-disabled；其余非 ok ⇒ degraded；2xx 且 protocol 命中 ⇒ ok。共享字面量（route
+ * 路径 / protocol / session_state_disabled / serviceable / completedAtSource）是跨包单一
+ * 来源，不得本地改写。
+ *
+ * 两面纪律：**权威面**永远是 unary 快照（探测/对账走 SESSION_FACTS_ROUTE；网关快照是权威
+ * 行集，绝不依赖通道）。**增量面**是通道订阅：一条页面 WS 上的逻辑流，事件名 + data 原文与
+ * 旧 SSE 同形（sync/snapshot 整量、其余增量、resync 要求整量重取）；carrier 的断开由
+ * control-plane 以 error 帧上报，重连与重订阅都归通道（本模块不得再排自己的重连阶梯）。
+ * 订阅 OPEN 起武装静默看门狗：静默 ⇒ 标 stale + 一次 unary 对账。mode 非 'sse'（或没有
+ * 订阅缝）时按 pollIntervalMs 重取快照。行数据只承载会话元数据（goal 三值事实 = 白名单
+ * {goalId, revision, phase, activation?, updatedAt?}，绝不含 objective/blockedReason），
+ * **绝不**带 title/cwd/消息。
  */
 
 /** 快照路由后缀；与 control-plane 的 SESSION_STATE_PATH 逐字节相同（跨包锁步，不得本地改写）。 */
 export const SESSION_FACTS_ROUTE = '/chamber/session-state'
-export const SESSION_FACTS_STREAM_ROUTE = '/chamber/session-state/stream'
 
 /** 本客户端支持的接口主版本；与 control-plane 的 PROTOCOL_VERSION 锁步。 */
 export const SESSION_FACTS_PROTOCOL_VERSION = 1
@@ -28,20 +33,13 @@ export const SESSION_FACTS_DISABLED_CODE = 'session_state_disabled'
 export const SESSION_FACTS_PROBE_TIMEOUT_MS = 5_000
 
 /**
- * 流建连/首字节 deadline：与 probe 同预算。到点按「流断开」收口（abort + markStale +
- * 诊断 + 有界重连）——半死隧道下裸 fetch 可能永不落定，否则流会带着 streamStarted=true
- * 永久楔死：无 stale、无重连、完成点/通知/行刷新静默冻结。
- */
-export const SESSION_FACTS_STREAM_CONNECT_TIMEOUT_MS = SESSION_FACTS_PROBE_TIMEOUT_MS
-
-/**
- * 流断开后的重连退避（固定、有界）。刻意与 source-mux-facts 的 1s→30s 指数退避不同：
- * 本源的载体是 HTTP 快照 + SSE 事件流，断开路径另有 5s 首字节期限与 60s 静默看门狗，
- * 固定 3s 已把重试压到低频；数值差异是载体差异，两侧阈值表同一 owner，退避节奏各自拥有。
+ * 坏答案后的有界重探退避（固定、有界）：probe 失败与整量对账失败共用。流载体的重连已归
+ * page-channel（错误帧 + 通道阶梯），本值只服务 unary 面；刻意与 source-mux-facts 的
+ * 1s→30s 指数退避不同——数值差异是载体差异，两侧阈值表同一 owner，退避节奏各自拥有。
  */
 export const SESSION_FACTS_RECONNECT_MS = 3_000
 
-/** 静默探针周期：超过该时长没有任何帧（含心跳注释）即重订阅。 */
+/** 静默窗：订阅 OPEN 后超过该时长没有任何 item 即标 stale 并做一次整量对账。 */
 export const SESSION_FACTS_SILENCE_MS = 60_000
 
 /** poll 档的快照重取周期（与 30s unary watchdog 同量级）。 */
@@ -65,6 +63,7 @@ export const SESSION_FACTS_DIAGNOSTICS_REFETCH_MIN_MS = 30_000
 import { isWatermark } from './watermark.ts'
 import { isPlainRecord } from './plain-record.ts'
 import { hadSchedulingGap, recordEvidence } from '@dsh-chamber/dsh-chamber-client-core'
+import { isPageChannelKeepaliveItem } from '@dsh-chamber/dsh-chamber-client-core/page-channel'
 import { classifyObservation, isAdmissible } from '@dsh-chamber/dsh-stream-state'
 
 export type SessionFactsVerdict = 'ok' | 'legacy-gateway' | 'degraded'
@@ -179,12 +178,12 @@ export interface SessionFactsRow {
 export interface SessionFactsSnapshot {
   verdict: SessionFactsVerdict
   degradation: SessionFactsDegradation
-  /** 传输档（gateway 平面）；SSE sync 帧缺失时沿用上一份快照，绝不静默丢档。 */
+  /** 传输档（gateway 平面）；整量帧缺席时沿用上一份快照，绝不静默丢档。 */
   mode: SessionFactsMode | null
   /** host 生命周期（gateway 平面）；serviceable=false 时行只读作未知。 */
   hostState: string
   serviceable: boolean
-  /** 流断/静默/断连时 true；这些只读事实仍会被渲染并明确标注。 */
+  /** 订阅断/静默/断连时 true；这些只读事实仍会被渲染并明确标注。 */
   stale: boolean
   cursor: number
   rows: Readonly<Record<string, SessionFactsRow>>
@@ -231,8 +230,8 @@ export function isFactsUsable(snapshot: SessionFactsSnapshot): boolean {
  * `!stale`.
  *
  * Why `stale`: `markStale()` is a pass-through that flips only the `stale` bit,
- * so every "carrier is gone / silent / rejected" window (stream close, silence
- * watchdog, connect deadline, disconnect) reaches consumers WITHOUT touching
+ * so every "carrier is gone / silent / rejected" window (subscription error/end,
+ * silence watchdog, disconnect) reaches consumers WITHOUT touching
  * `verdict` or `serviceable`. Treating such a snapshot as evidence let a
  * completion be observed on rows whose live carrier was already gone (the badge
  * and the row dot flickered once per carrier flap). Rule 0 is the fix, and its
@@ -260,6 +259,20 @@ export interface SessionFactsProbe {
   features: readonly string[]
 }
 
+/** 一条逻辑订阅的句柄；close() 只关闭这一条（通道自身的重连阶梯仍归通道）。 */
+export interface SessionFactsSubscription {
+  close(): void
+}
+
+/** 订阅缝回调：与 page-channel 的 item 同形（event 名 + data 原文，按到达顺序串行）。 */
+export interface SessionFactsSubscriptionHandlers {
+  onItem(event: string, data: string): void
+  /** 本订阅（重新）就绪；之后的 item 属于新的一段。 */
+  onOpen?(): void
+  /** 订阅级失败（上游结束/报错或通道断开）；通道会自行重订阅，消费方不得再排阶梯。 */
+  onError?(code: string, message: string): void
+}
+
 export interface SessionFactsSourceOptions {
   sourceId: string
   /** 默认 /api/i/<sourceId>（控制面实例代理剥前缀后原样转发）。 */
@@ -270,15 +283,19 @@ export interface SessionFactsSourceOptions {
   silenceMs?: number
   /** poll 档重取周期（0 = 不轮询）。 */
   pollIntervalMs?: number
-  /** 流建连/首字节 deadline（默认 SESSION_FACTS_STREAM_CONNECT_TIMEOUT_MS；测试注入小值）。 */
-  streamConnectTimeoutMs?: number
-  /** 重连退避（probe 失败与流断开共用；默认 SESSION_FACTS_RECONNECT_MS；测试注入小值）。 */
+  /** 坏答案后的有界重探退避（默认 SESSION_FACTS_RECONNECT_MS；测试注入小值）。 */
   reconnectMs?: number
+  /**
+   * 长连接订阅缝：生产由 App 用 `subscribePageChannel({ family: 'sessionFacts',
+   * instanceId })` 构造（重连/重订阅都归通道）；测试注入假件。缺席（或工厂
+   * 抛错）时增量面退化为 pollIntervalMs 的 unary 轮询——权威面始终是 SESSION_FACTS_ROUTE 快照。
+   */
+  subscribeSessionFacts?: (handlers: SessionFactsSubscriptionHandlers) => SessionFactsSubscription
   /** 诊断回调（warn 一次语义由调用方决定；本模块不直接 console）。 */
   onDiagnostic?: (message: string, error?: unknown) => void
 }
 
-/** update() 的期望态：指纹变化 = 新化身（判定与流必须作废重来）。 */
+/** update() 的期望态：指纹变化 = 新化身（判定与订阅必须作废重来）。 */
 export interface SessionFactsSourceUpdate {
   fingerprint: string
   connected: boolean
@@ -420,7 +437,7 @@ function parseRows(value: unknown): Record<string, SessionFactsRow> {
   return rows
 }
 
-/** 快照主体解析（200 响应或 SSE sync data）；非对象/无 protocol 即 null。 */
+/** 快照主体解析（200 响应或通道整量帧 data）；非对象/无 protocol 即 null。 */
 export function parseSessionFactsSnapshotValue(value: unknown): {
   protocol: number
   mode: SessionFactsMode | null
@@ -532,8 +549,8 @@ export function sessionFactsRowSignature(row: SessionFactsRow): string {
 }
 
 /**
- * 快照行集变化提示：与增量帧同一字段集与优先级（added > removed > changed）。
- * 快照帧（探测/SSE sync/snapshot）过去不发提示，只有增量帧发——轮询档与重连后的
+ * 快照行集变化提示：与增量项同一字段集与优先级（added > removed > changed）。
+ * 整量帧（探测/通道 sync/snapshot）过去不发提示，只有增量项发——轮询档与重订阅后的
  * 首帧因此没有聚合刷新触发（G1 的真实通路是 提示 → unary，而不是虚拟上报）。
  */
 function snapshotRowHint(
@@ -562,7 +579,7 @@ export interface SessionFactsDeltaOutcome {
 }
 
 /**
- * 应用一帧 SSE 增量（纯函数；调用方负责重取与 emit）。cursor <= 当前 ⇒ 幂等丢弃；
+ * 应用一条增量项（纯函数；调用方负责重取与 emit）。cursor <= 当前 ⇒ 幂等丢弃；
  * 行数/内容变化 → hint（优先级 added > removed > changed，与 design 06 §4.2 一致：一个
  * 混合帧只要有新行就先拉一次，拉取本身是整量快照，删除/变化同拍收敛）；坏载荷 ⇒ refetch。
  */
@@ -616,37 +633,10 @@ export function applySessionFactsDelta(current: SessionFactsSnapshot, value: unk
   return { next, refetch: false, hint }
 }
 
-/** 一帧 SSE 文本块的解析结果；注释块（心跳）返回 null。 */
-export interface SessionFactsSseFrame { event: string; id: number | null; data: string }
-
-export function parseSessionFactsSseBlock(block: string): SessionFactsSseFrame | null {
-  const lines = block.replace(/\r\n?/g, '\n').split('\n')
-  let event = ''
-  let id: number | null = null
-  const data: string[] = []
-  let sawField = false
-  for (const line of lines) {
-    if (line === '' || line.startsWith(':')) continue
-    const colon = line.indexOf(':')
-    const field = colon === -1 ? line : line.slice(0, colon)
-    const raw = colon === -1 ? '' : line.slice(colon + 1)
-    const value = raw.startsWith(' ') ? raw.slice(1) : raw
-    if (field === 'event') { event = value; sawField = true }
-    else if (field === 'data') { data.push(value); sawField = true }
-    else if (field === 'id') {
-      sawField = true
-      const parsed = Number(value)
-      id = Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null
-    }
-  }
-  if (!sawField || data.length === 0) return null
-  return { event, id, data: data.join('\n') }
-}
-
 
 interface SourceState {
   fingerprint: string
-  /** 化身代际：指纹变化即 +1；在途 probe/stream/refetch 的迟到结果按代作废。 */
+  /** 化身代际：指纹变化即 +1；在途 probe/refetch 的迟到结果按代作废。 */
   generation: number
   connected: boolean
   running: boolean
@@ -657,12 +647,14 @@ interface SourceState {
    * 必须保留既有行/游标（在场证据），否则无壳来源被遗忘、held pending 被清。
    */
   protocolFactsSeen: boolean
-  streamController: AbortController | null
-  streamStarted: boolean
-  /** 当前在途流的建连/首字节 deadline 定时器（正常收头或 closeStream 后必须清）。 */
-  streamConnectTimer: ReturnType<typeof setTimeout> | null
-  lastEventId: number | null
+  /** 当前活跃的通道订阅（通道自己重订阅；只有换代/断连/stop 才 close）。 */
+  subscription: SessionFactsSubscription | null
+  /** 本次订阅的创建时刻：error 分类的窗口下界（open/item 会把 lastFrameAt 推后）。 */
+  subscriptionStartedAt: number
+  /** 内容水位：最后一条**带数据**的状态帧（keepalive 不动它）。 */
   lastFrameAt: number
+  /** 传输水位：最后一条状态帧**或上游 keepalive**（区分「安静」与「载体已死」）。 */
+  lastLivenessAt: number
   reconnectTimer: ReturnType<typeof setTimeout> | null
   probeTimer: ReturnType<typeof setTimeout> | null
   pollTimer: ReturnType<typeof setInterval> | null
@@ -678,7 +670,7 @@ interface SourceState {
    */
   diagnosticsRefetchAttempts: number
   lastDiagnosticsRefetchAt: number
-  /** 整量补快照单飞门（坏帧/静默恢复与诊断补快照共用；T3①：同一 chunk 多帧不得并发再发 GET）。 */
+  /** 整量补快照单飞门（坏帧/静默恢复与诊断补快照共用；T3①：同一批多条项不得并发再发 GET）。 */
   refetchInFlight: boolean
 }
 
@@ -688,7 +680,6 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
   const basePath = options.basePath ?? ('/api/i/' + options.sourceId)
   const silenceMs = options.silenceMs ?? SESSION_FACTS_SILENCE_MS
   const pollIntervalMs = options.pollIntervalMs ?? SESSION_FACTS_POLL_MS
-  const streamConnectTimeoutMs = options.streamConnectTimeoutMs ?? SESSION_FACTS_STREAM_CONNECT_TIMEOUT_MS
   const reconnectMs = options.reconnectMs ?? SESSION_FACTS_RECONNECT_MS
   const listeners = new Set<(snapshot: SessionFactsSnapshot | undefined) => void>()
   const hintListeners = new Set<(hint: SessionFactsRowHint) => void>()
@@ -699,11 +690,10 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     running: false,
     snapshot: undefined,
     protocolFactsSeen: false,
-    streamController: null,
-    streamStarted: false,
-    streamConnectTimer: null,
-    lastEventId: null,
+    subscription: null,
+    subscriptionStartedAt: 0,
     lastFrameAt: 0,
+    lastLivenessAt: 0,
     reconnectTimer: null,
     probeTimer: null,
     pollTimer: null,
@@ -730,7 +720,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
   }
 
   /**
-   * 快照构造单一工厂：probe / SSE sync / refetch 三入口共用同形状；verdict /
+   * 快照构造单一工厂：probe / 通道整量帧 / refetch 三入口共用同形状；verdict /
    * degradation 由调用点经唯一分类器传入，mode 也由调用点按入口语义给，本工厂只负责形状。
    */
   const buildSnapshot = (
@@ -755,10 +745,10 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
   })
 
   /**
-   * 完整快照的**游标单调发布门**（T3②：probe/refetch 经 publishProbe、SSE sync 帧直接
+   * 完整快照的**游标单调发布门**（T3②：probe/refetch 经 publishProbe、通道 sync 帧直接
    * 调用；与 applySessionFactsDelta 的既有 cursor 门同规）：旧游标的整量快照不得覆盖
-   * 更新的快照——并发/迟到的补快照响应会把游标、行集与行记忆一起回退。被丢弃时不动
-   * lastEventId、不发 emit/hint（没有变化）。
+   * 更新的快照——并发/迟到的补快照响应会把游标、行集与行记忆一起回退。被丢弃时不发
+   * emit/hint（没有变化）。
    * @returns 是否真的发布（false = 旧游标，丢弃）。
    */
   const publishCompleteSnapshot = (
@@ -770,7 +760,6 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     if (state.snapshot !== undefined && parsed.cursor < state.snapshot.cursor) return false
     const before = state.snapshot
     state.snapshot = buildSnapshot(parsed, verdict, degradation, mode)
-    state.lastEventId = parsed.cursor
     emit()
     emitHint(snapshotRowHint(before, state.snapshot))
     return true
@@ -799,40 +788,37 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     lastEventAt: now(),
   })
 
-  /** 清掉当前流的静默看门狗（closeStream / clearTimers 共用）。 */
+  /** 清掉当前订阅的静默看门狗（closeSubscription / clearTimers 共用）。 */
   const clearSilenceTimer = (): void => {
     if (state.silenceTimer !== null) { clearInterval(state.silenceTimer); state.silenceTimer = null }
   }
 
   /**
-   * 清掉当前流的建连 deadline；显式传 timer 时只清「就是它自己」的那只：迟到的旧流
-   * 不得清掉后继流的定时器。
+   * poll 定时器的唯一 owner 是轮询交付路径（startDelivery 的 poll 分支）：订阅档一旦接管
+   * 增量面就必须显式停掉它，否则通道与 30s unary 轮询会同时刷新同一来源（双份新鲜度面
+   * + 多余 GET）。换代/断连/stop 的整表清理也经本函数，时钟所有权只有这一处。
    */
-  const clearStreamConnectTimer = (timer?: ReturnType<typeof setTimeout>): void => {
-    if (timer === undefined) {
-      if (state.streamConnectTimer === null) return
-      timer = state.streamConnectTimer
-    } else if (state.streamConnectTimer !== timer) {
-      return
-    }
-    state.streamConnectTimer = null
-    clearTimeout(timer)
+  const stopPollTimer = (): void => {
+    if (state.pollTimer !== null) { clearInterval(state.pollTimer); state.pollTimer = null }
   }
 
   const clearTimers = (): void => {
     if (state.reconnectTimer !== null) { clearTimeout(state.reconnectTimer); state.reconnectTimer = null }
     if (state.probeTimer !== null) { clearTimeout(state.probeTimer); state.probeTimer = null }
-    if (state.pollTimer !== null) { clearInterval(state.pollTimer); state.pollTimer = null }
+    stopPollTimer()
     clearSilenceTimer()
-    clearStreamConnectTimer()
   }
 
-  const closeStream = (): void => {
-    state.streamStarted = false
-    state.streamController?.abort()
-    state.streamController = null
+  /**
+   * 关掉当前逻辑订阅（换代/断连/stop）。通道自己的重连与重订阅不归这里——close() 是
+   * 终态，订阅级 error 后必须让句柄继续活着等通道重订阅，绝不在这里收口。
+   */
+  const closeSubscription = (): void => {
+    const subscription = state.subscription
+    state.subscription = null
+    state.subscriptionStartedAt = 0
     clearSilenceTimer()
-    clearStreamConnectTimer()
+    subscription?.close()
   }
 
   const markStale = (): void => {
@@ -876,8 +862,8 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
   }
 
   /**
-   * 一次探测 = classifier 的唯一生产消费者，分类 + 发布（全源唯一判定点）：探测与流恢复
-   * 重取都经 classifySessionFactsProbe，快照只携带它的 verdict/degradation，模块内不再有
+   * 一次探测 = classifier 的唯一生产消费者，分类 + 发布（全源唯一判定点）：探测与整量
+   * 对账重取都经 classifySessionFactsProbe，快照只携带它的 verdict/degradation，模块内不再有
    * 第二份内联分类。发布规则：2xx 且载荷可解析 ⇒ 带该载荷的行/读状态 + 分类判定并记
    * protocolFactsSeen；无载荷且已有行 ⇒ 保留旧行（在场证据不得清空）：unavailable / 曾有
    * 协议历史后的 404 / unversioned 三档分别标 stale 或 serviceable=false；其余无载荷结果
@@ -891,13 +877,14 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     const is2xx = probe.status !== null && probe.status >= 200 && probe.status < 300
     const parsed = parseSessionFactsSnapshotValue(is2xx && outcome.kind === 'response' ? outcome.body : undefined)
     if (parsed !== null) {
-      // Content progress is a CURSOR ADVANCE, not a successful probe: a heartbeat
-      // returning the same cursor keeps the channel healthy while the conversation
-      // stands still, and refreshing lastFrameAt there hid the real silence age
-      // from the page ladder. The first observation stamps a baseline.
-      state.lastFrameAt = now()
+      // 内容水位只认**游标前进**，不认「探测成功」：同游标的快照只是来源在复述既有状态，
+      // 若把它算作内容进度，静默看门狗会用自己的对账响应重置水位，真实的静默年龄被掩盖
+      // （载体的增量面可能早已停摆）。游标门拒绝的迟到快照更不得计数——否则一次迟到拒绝
+      // 就清掉正在累积的静默对账。首份观测没有前游标，按基线盖章。
+      const priorCursor = state.snapshot?.cursor
       state.protocolFactsSeen = true
-      publishCompleteSnapshot(parsed, probe.verdict, probe.degradation)
+      const published = publishCompleteSnapshot(parsed, probe.verdict, probe.degradation)
+      if (published && (priorCursor === undefined || parsed.cursor > priorCursor)) state.lastFrameAt = now()
       return { probe, parsed }
     }
     const previous = state.snapshot
@@ -943,7 +930,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     }
     // disabled / forward-skew 等其余无载荷结果：**不是**权威空行集。空行集会让在场集判空 ⇒
     // observeSource 走遗忘结算、held pending 被清、已武装的行被撤（design 19 §3.5）。
-    // 与 unversioned 同规：保留既有行 + stale（等有界重探/流自愈）。
+    // 与 unversioned 同规：保留既有行 + stale（等有界重探/通道自愈）。
     if (previous.verdict === probe.verdict && previous.degradation === probe.degradation && previous.stale) {
       return { probe, parsed: null }
     }
@@ -959,7 +946,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
   }
 
   /**
-   * 坏答案是否值得**有界重试**（probe 与流恢复重取共用的唯一谓词；只答「是否重试」，
+   * 坏答案是否值得**有界重试**（probe 与整量对账重取共用的唯一谓词；只答「是否重试」，
    * 退避动作归调用路径）：unavailable / unversioned 是 carrier 层可能自愈的答案；404
    * legacy 是版本事实但网关升级后应被自动接回，也给有界低频重探；forward-skew 与
    * watcher-disabled 重试无意义。
@@ -990,7 +977,9 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
         scheduleProbe(reconnectMs)
       }
     } finally {
-      state.probing = false
+      // 只有仍属当前代的 finally 才能释放单飞门：指纹翻转会重置门并由新代另起 probe，
+      // 旧代迟到时若照样清零，reconcile 会在新代在途时叠发第三条并发 unary GET。
+      if (generation === state.generation) state.probing = false
     }
   }
 
@@ -1003,49 +992,137 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
   }
 
   /**
-   * 静默看门狗在**请求发起时**武装：建连/首字节挂起同样是通道静默，晚武装会让半死隧道
-   * 既无 stale 也无重连；真正的收口判据仍是 lastFrameAt。
+   * 静默看门狗在订阅 **OPEN** 时武装，两条水位分开看（通道的 keepalive 与内容帧不是一回事）：
+   * - **内容水位** `lastFrameAt`：只有带数据的状态帧才推后。窗口内没有内容 ⇒ 一次整量对账
+   *   （idle 但健康的来源也要保持新鲜，这就是 sse 模式下唯一的新鲜度面）。
+   * - **传输水位** `lastLivenessAt`：内容帧与上游 keepalive item 都推后。传输仍活 ⇒ 只对账、
+   *   **不标 stale**——把「安静」误报成降级正是要消灭的假事实；传输也静默 ⇒ 标 stale（活载体
+   *   确实消失，直到下一次 admissible success 才清）。
+   * **绝不 close 订阅**——close 是终态，关了通道就不再重订阅这条流；半死上游的重建由
+   * control-plane 的 error 帧 + 通道阶梯承担，这里只把权威面拉回一致。
    */
   const armSilenceWatchdog = (): void => {
     if (silenceMs <= 0 || state.silenceTimer !== null) return
     state.silenceTimer = setInterval(() => {
-      if (state.stopped || now() - state.lastFrameAt <= silenceMs) return
-      diagnostic('[session-facts] stream silent beyond ' + String(silenceMs) + 'ms; resubscribing')
-      closeStream()
-      markStale()
+      if (state.stopped) return
+      const at = now()
+      if (at - state.lastFrameAt <= silenceMs) return
+      const transportAlive = state.lastLivenessAt > 0 && at - state.lastLivenessAt <= silenceMs
+      diagnostic('[session-facts] session-facts channel silent beyond ' + String(silenceMs) + 'ms; reconciling via snapshot'
+        + (transportAlive ? ' (transport alive; not marking stale)' : ''))
+      if (!transportAlive) markStale()
       void refetchSnapshot()
     }, Math.max(1000, Math.floor(silenceMs / 3)))
   }
 
+  /**
+   * 订阅 OPEN：载体重启了一段。刷新活性水位（静默窗从 open 或最后一条 item 起算）并
+   * 武装看门狗；stale 不在这里清——它只由一次 admissible success（整量帧/增量帧）清。
+   */
+  const handleSubscriptionOpen = (): void => {
+    const at = now()
+    state.lastFrameAt = at
+    state.lastLivenessAt = at
+    armSilenceWatchdog()
+  }
+
+  /**
+   * 订阅级失败（上游结束/报错或通道断开）。通道会自行重订阅，这里只做三件事：按唯一
+   * 分类器给这次失败定性并记证据账本、把事实标 stale（活载体已消失，直到下一次
+   * admissible success）、诊断一行。**绝不自排重连阶梯、也绝不 close 句柄**——close 是
+   * 终态，关了通道就不会再重订阅这条流。
+   */
+  const handleSubscriptionError = (code: string, message: string): void => {
+    const windowStart = state.lastFrameAt > 0 ? state.lastFrameAt : state.subscriptionStartedAt
+    const at = now()
+    // 与旧的建连 deadline 同一分类纪律：窗口内页面确实没被调度过 ⇒ unscheduled，
+    // booked=false（页面自身调度的事实不能记成来源故障）；否则 channel/deadline ⇒ booked=true。
+    const verdict = classifyObservation({
+      outcome: 'error',
+      errorName: code,
+      errorMessage: message,
+      schedulingGap: hadSchedulingGap(windowStart, at),
+    })
+    const detail = {
+      source: options.sourceId,
+      topic: 'page-channel sessionFacts',
+      code,
+      message,
+      windowMs: at - windowStart,
+    }
+    recordEvidence('facts-stream', verdict, detail, isAdmissible(verdict))
+    diagnostic(
+      '[session-facts] session-facts channel failed (' + code + '); channel resubscribes, awaiting an admissible success',
+      new Error(message),
+    )
+    markStale()
+  }
+
+  /**
+   * 打开当前代的逻辑订阅（幂等：已有句柄即返回 true）。缝缺席或工厂抛错 ⇒ false，调用
+   * 方退回 unary 轮询——权威快照仍是 facts 的唯一行源。
+   */
+  const ensureSubscription = (): boolean => {
+    if (state.subscription !== null) return true
+    const factory = options.subscribeSessionFacts
+    if (factory === undefined) return false
+    state.subscriptionStartedAt = now()
+    // 订阅是「期望交付」的开始：两个水位与静默看门狗从这一刻起算，而不是等第一次 open。
+    // 否则一条挂起的握手（或整体不可用的通道）会停在 sse 路径上——没有 item 推内容水位、
+    // 没有 open 武装看门狗、startDelivery 又把 unary 轮询停掉——事实永远 stale 且无人再试。
+    // 看门狗的既有判据正好覆盖这段：内容静默 + 传输不活 ⇒ markStale + unary 权威快照。
+    state.lastFrameAt = state.subscriptionStartedAt
+    state.lastLivenessAt = state.subscriptionStartedAt
+    armSilenceWatchdog()
+    try {
+      state.subscription = factory({
+        onItem: (event, data) => { applyItem(event, data) },
+        onOpen: () => { handleSubscriptionOpen() },
+        onError: (code, message) => { handleSubscriptionError(code, message) },
+      })
+      return true
+    } catch (error) {
+      state.subscriptionStartedAt = 0
+      diagnostic('[session-facts] channel subscribe failed; falling back to unary polling', error)
+      return false
+    }
+  }
+
   const startDelivery = (mode: SessionFactsMode | null, features: readonly string[]): void => {
-    if (mode === 'sse' && features.includes('session-state.stream')) {
-      void streamLoop()
+    if (mode === 'sse' && features.includes('session-state.stream') && ensureSubscription()) {
+      // 订阅已接管增量面：两档互斥，停掉旧轮询（ensureSubscription 失败则仍回退轮询档）。
+      stopPollTimer()
       return
     }
     if (pollIntervalMs <= 0 || state.pollTimer !== null) return
     state.pollTimer = setInterval(() => { void probeOnce() }, pollIntervalMs)
   }
 
-  const applyFrame = (frame: SessionFactsSseFrame): void => {
-    state.lastFrameAt = now()
-    // SSE id 是续传游标：只前进不回退（旧流/迟到帧的 id 不得把 Last-Event-ID 拉回去）。
-    if (frame.id !== null && (state.lastEventId === null || frame.id > state.lastEventId)) {
-      state.lastEventId = frame.id
-    }
-    let data: unknown
+  /**
+   * 应用一条订阅项（event 名 + data 原文；与旧 SSE 帧逐字同规，游标由载荷携带）。
+   * 任何一条 item 都是载体活着的观察：先刷新活性水位。data 坏 ⇒ 一次整量对账；
+   * resync ⇒ 对账；sync/snapshot 是整量帧（走游标单调门）；其余按增量项应用。
+   */
+  const applyItem = (event: string, data: string): void => {
+    const at = now()
+    state.lastLivenessAt = at
+    // 上游 keepalive（data 为空）：只是传输活着的证据，不是状态帧——不解析、不动内容水位。
+    if (isPageChannelKeepaliveItem(event, data)) return
+    state.lastFrameAt = at
+    let value: unknown
     try {
-      data = JSON.parse(frame.data)
+      value = JSON.parse(data)
     } catch {
-      diagnostic('[session-facts] malformed SSE data; refetching snapshot')
+      diagnostic('[session-facts] malformed session-facts item; refetching snapshot')
       void refetchSnapshot()
       return
     }
-    if (frame.event === 'resync') {
+    if (event === 'resync') {
       void refetchSnapshot()
       return
     }
-    if (frame.event === 'sync' || frame.event === 'snapshot') {
-      const parsed = parseSessionFactsSnapshotValue(data)
+    if (event === 'sync' || event === 'snapshot') {
+      const parsed = parseSessionFactsSnapshotValue(value)
       if (parsed === null) { void refetchSnapshot(); return }
       // 整量帧与 probe/refetch 共用同一道游标单调门：旧 sync 帧不得回退快照。
       publishCompleteSnapshot(parsed, 'ok', null, parsed.mode ?? state.snapshot?.mode ?? 'sse')
@@ -1053,7 +1130,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     }
     const current = state.snapshot
     if (current === undefined) { void refetchSnapshot(); return }
-    const outcome = applySessionFactsDelta(current, data)
+    const outcome = applySessionFactsDelta(current, value)
     if (outcome.refetch) { void refetchSnapshot(); return }
     if (outcome.next === null) return
     state.snapshot = { ...outcome.next, lastEventAt: now() }
@@ -1063,7 +1140,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     // 次 unary 快照（有界收敛，不动 wire）。一次性去重会被首个「仍是 0」的快照消耗掉，闩锁
     // 永久卡在 0（listComplete=false ⇒ 权威列表清除与 beforeBaseline 支悬空）；连续 0 重试、
     // 拿到 ≥1 立即停，既收敛又不抖动。unknown（旧端从未给过诊断）同样按 0 处理。
-    // 单飞：在途补快照不再叠发（同一 chunk 的多帧只算一次）；计数用尽后距上次触发满
+    // 单飞：在途补快照不再叠发（同一批多条项只算一次）；计数用尽后距上次触发满
     // SESSION_FACTS_DIAGNOSTICS_REFETCH_MIN_MS 允许新的一轮（首基线可能更晚成功）。
     if ((state.snapshot.baselines ?? 0) === 0 && !state.refetchInFlight) {
       const exhausted = state.diagnosticsRefetchAttempts >= SESSION_FACTS_DIAGNOSTICS_REFETCH_MAX
@@ -1082,8 +1159,6 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     state.refetchInFlight = true
     const generation = state.generation
     try {
-      closeStream()
-      state.lastEventId = null
       const outcome = await observeProbe()
       if (state.stopped || generation !== state.generation) return
       const { probe, parsed } = publishProbe(outcome)
@@ -1091,124 +1166,31 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
         startDelivery(parsed.mode, parsed.features)
         return
       }
-      // 该重取是流收口后的再对账：与 probe 共用 shouldRetryProbe，但恢复动作是重连流；
-      // 版本/服务事实不重连假流，也不留静止降级。
+      // 该重取是坏帧/静默后的再对账：与 probe 共用 shouldRetryProbe，恢复动作是**同一条
+      // unary 有界重探**——流载体的重建归通道，本模块不得再排流重连阶梯；版本/服务事实
+      // 不重探，也不留静止降级。
       if (shouldRetryProbe(probe)) {
         diagnostic(
           '[session-facts] snapshot refetch failed',
           new Error('session-state probe ' + String(probe.status ?? outcome.kind)),
         )
-        scheduleStreamReconnect()
+        scheduleProbe(reconnectMs)
       }
     } finally {
-      state.refetchInFlight = false
-    }
-  }
-
-  const scheduleStreamReconnect = (): void => {
-    if (state.stopped || !state.connected || state.reconnectTimer !== null) return
-    state.reconnectTimer = setTimeout(() => {
-      state.reconnectTimer = null
-      void streamLoop()
-    }, reconnectMs)
-  }
-
-  const streamLoop = async (): Promise<void> => {
-    if (state.stopped || !state.connected || state.streamStarted) return
-    const generation = state.generation
-    state.streamStarted = true
-    const controller = new AbortController()
-    state.streamController = controller
-    state.lastFrameAt = now()
-    armSilenceWatchdog()
-    // 建连/首字节 deadline：到点按流断开收口。收口动作放定时器里而不是依赖 fetch 因 abort
-    // reject——忽略 abort 的 carrier 也必须被收口，且 catch 侧早退不得把这次失败吞成静默。
-    const connectStartedAt = now()
-    const connectTimer = setTimeout(() => {
-      if (state.stopped || state.streamController !== controller) return
-      // 建连 deadline 只有在页面**确实被调度**过整个窗口时才是来源事实：失焦/遮挡的
-      // WKWebView 会被 WebKit 节流（document.visibilityState 仍是 visible），墙钟到期
-      // 而请求从没拿到运行机会——那是页面自身调度的事实，不是来源没答（design 14 §D4）。
-      const verdict = classifyObservation({
-        outcome: 'error',
-        errorName: 'TimeoutError',
-        schedulingGap: hadSchedulingGap(connectStartedAt, now()),
-      })
-      const detail = {
-        source: options.sourceId,
-        method: 'GET ' + SESSION_FACTS_STREAM_ROUTE,
-        budgetMs: streamConnectTimeoutMs,
-        windowMs: now() - connectStartedAt,
-      }
-      if (!isAdmissible(verdict)) {
-        recordEvidence('facts-stream', verdict, detail, false)
-        diagnostic('[session-facts] stream connect deadline during an unscheduled window; re-arming without marking stale')
-        closeStream()
-        scheduleStreamReconnect()
-        return
-      }
-      recordEvidence('facts-stream', verdict, detail, true)
-      diagnostic('[session-facts] stream connect timed out after ' + String(streamConnectTimeoutMs) + 'ms; reconnecting')
-      markStale()
-      closeStream()
-      scheduleStreamReconnect()
-    }, streamConnectTimeoutMs)
-    state.streamConnectTimer = connectTimer
-    try {
-      const headers: Record<string, string> = { accept: 'text/event-stream' }
-      if (state.lastEventId !== null) headers['last-event-id'] = String(state.lastEventId)
-      const response = await fetchImpl(urlFor(SESSION_FACTS_STREAM_ROUTE), {
-        method: 'GET',
-        headers,
-        credentials: 'same-origin',
-        cache: 'no-store',
-        signal: controller.signal,
-      })
-      // 响应头到达 = 建连成功：建连 deadline 退场，静默交给看门狗。
-      clearStreamConnectTimer(connectTimer)
-      if (generation !== state.generation) return
-      if (!response.ok) throw new Error('stream answered ' + String(response.status))
-      const body = response.body
-      if (body === null || typeof body.getReader !== 'function') throw new Error('stream body unavailable')
-      const reader = body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      for (;;) {
-        const { value, done } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        buffer = buffer.replace(/\r\n?/g, '\n')
-        let index = buffer.indexOf('\n\n')
-        while (index !== -1) {
-          const block = buffer.slice(0, index)
-          buffer = buffer.slice(index + 2)
-          if (block.trim() !== '') {
-            state.lastFrameAt = now()
-            const frame = parseSessionFactsSseBlock(block)
-            if (frame !== null) applyFrame(frame)
-          }
-          index = buffer.indexOf('\n\n')
-        }
-      }
-      throw new Error('stream ended')
-    } catch (error) {
-      if (state.stopped || controller.signal.aborted) return
-      markStale()
-      diagnostic('[session-facts] stream closed', error)
-      closeStream()
-      scheduleStreamReconnect()
+      // 与 probeOnce 同一纪律：旧代迟到不得释放新代的整量对账单飞门。
+      if (generation === state.generation) state.refetchInFlight = false
     }
   }
 
   const resetForFingerprint = (): void => {
     state.generation += 1
     state.running = false
-    closeStream()
+    closeSubscription()
     clearTimers()
     state.snapshot = undefined
     state.protocolFactsSeen = false
-    state.lastEventId = null
     state.lastFrameAt = 0
+    state.lastLivenessAt = 0
     state.probing = false
     state.diagnosticsRefetchAttempts = 0
     state.lastDiagnosticsRefetchAt = 0
@@ -1232,7 +1214,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     state.connected = input.connected
     if (!input.connected) {
       state.running = false
-      closeStream()
+      closeSubscription()
       clearTimers()
       markStale()
       return
@@ -1243,9 +1225,12 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
 
   const stop = (): void => {
     state.stopped = true
+    // stop() 也是代际边界：同一指纹复活时 stopped/connected 会被 update() 翻回，只有代际
+    // 比较能拦住旧代在途探测的迟到结果（绝不作为新化身的事实发布）。
+    state.generation += 1
     state.connected = false
     state.running = false
-    closeStream()
+    closeSubscription()
     clearTimers()
     state.snapshot = undefined
     state.probing = false

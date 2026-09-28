@@ -27,9 +27,6 @@ import type { Logger } from './types.ts'
 const MAX_BODY_BYTES = 10 * 1024 * 1024
 /** Management body per-chunk idle timeout. */
 const BODY_IDLE_TIMEOUT_MS = 10_000
-const MAX_HEALTH_EVENT_STREAMS = 32
-/** Per-client frames retained while its SSE socket is backpressured. */
-const MAX_HEALTH_EVENT_PENDING_FRAMES = 32
 
 /**
  * The minimal request surface the HTTP layer reads. Structural on purpose: both
@@ -127,11 +124,6 @@ export interface ApiDeps {
   stopConnection(connectionId: string): Promise<unknown>
   hostLogs?(query: { port?: number; limit?: number; offset?: number }): Promise<unknown>
   instanceProxy?: InstanceProxy
-  /**
-   * Health-event subscription: the renderer never polls for local status — every machine
-   * transition is pushed as the /health `dsh` snapshot. Returns the unsubscribe.
-   */
-  subscribeHealthEvents?(listener: (snapshot: { status: string; port: number | null; error: string | null }) => void): () => void
 }
 
 /** The createApi return value: the HTTP surface handle. */
@@ -199,7 +191,6 @@ function corsFor(req: ApiRequest, allowlist: string[]) {
 export function createApi(deps: ApiDeps) {
   const corsOrigins = Array.isArray(deps.corsOrigins) ? deps.corsOrigins : []
   const corsEvaluator = deps.corsEvaluator
-  let activeHealthEventStreams = 0
 
   /** The per-request CORS headers (explicit-origin discipline). */
   function corsHeaders(req: ApiRequest) {
@@ -296,108 +287,6 @@ export function createApi(deps: ApiDeps) {
     }
     if (segments[0] === 'api') {
       const [a, b] = [segments[1], segments[2]]
-      if (a === 'host' && b === 'health-events' && segments.length === 3 && method === 'GET' && deps.subscribeHealthEvents !== undefined) {
-        return async () => {
-          if (activeHealthEventStreams >= MAX_HEALTH_EVENT_STREAMS) {
-            return jsonError(res, 503, { code: 'resource_exhausted', message: 'too many health-event streams' })
-          }
-          activeHealthEventStreams += 1
-          // SSE push channel: current snapshot first, then every machine transition; keepalive
-          // through idle browsers. Backpressure is bounded per client and drained in order;
-          // write failures, overflow or client close tear the subscription down (a slow/dead
-          // socket must never escape into the state machine or grow memory without bound).
-          res.writeHead(200, {
-            'content-type': 'text/event-stream',
-            'cache-control': 'no-store',
-            connection: 'keep-alive',
-            ...(res._corsHeaders ?? {}),
-          })
-          let tornDown = false
-          let backpressured = false
-          let keepalive: ReturnType<typeof setInterval> | null = null
-          let unsubscribe: (() => void) | null = null
-          const pendingFrames: string[] = []
-          const releaseSubscription = () => {
-            const release = unsubscribe
-            unsubscribe = null
-            try {
-              release?.()
-            } catch { /* subscriber cleanup is isolated from stream cleanup */ }
-          }
-          const teardown = () => {
-            if (tornDown) return
-            tornDown = true
-            activeHealthEventStreams = Math.max(0, activeHealthEventStreams - 1)
-            if (keepalive !== null) clearInterval(keepalive)
-            pendingFrames.length = 0
-            res.removeListener('drain', flushPending)
-            releaseSubscription()
-            try {
-              res.end()
-            } catch { /* already gone */ }
-          }
-          const writeFrame = (frame: string) => {
-            if (tornDown) return
-            if (backpressured) {
-              if (pendingFrames.length >= MAX_HEALTH_EVENT_PENDING_FRAMES) {
-                teardown()
-              } else {
-                pendingFrames.push(frame)
-              }
-              return
-            }
-            try {
-              // Node accepted this frame even when write() returns false; pause only subsequent
-              // frames until the socket drains.
-              if (!res.write(frame)) {
-                backpressured = true
-                res.once('drain', flushPending)
-              }
-            } catch {
-              teardown()
-            }
-          }
-          function flushPending() {
-            if (tornDown) return
-            backpressured = false
-            while (!tornDown && !backpressured && pendingFrames.length > 0) {
-              writeFrame(pendingFrames.shift()!)
-            }
-          }
-          const send = (snapshot: { status: string; port: number | null; error: string | null }) => {
-            if (tornDown) return
-            const payload = {
-              ok: true,
-              dsh: { status: snapshot.status, port: snapshot.port ?? 0, error: snapshot.error ?? undefined },
-            }
-            writeFrame(`data: ${JSON.stringify(payload)}\n\n`)
-          }
-          // IncomingMessage 'close' fires as soon as the request body is consumed (immediately
-          // for a bodyless GET), not on client disconnect, so a req listener would tear this SSE
-          // stream down right after it opens. Detect real disconnects on the response leg:
-          // 'close' fires on teardown and writableEnded separates a normal end from an abort
-          // (teardown is idempotent via tornDown).
-          res.on('close', () => { if (!res.writableEnded) teardown() })
-          const health = deps.getHealth()
-          send({ status: health.dsh.status, port: health.dsh.port, error: health.dsh.error ?? null })
-          if (tornDown) return
-          try {
-            unsubscribe = deps.subscribeHealthEvents!(send)
-          } catch {
-            teardown()
-            return
-          }
-          // A custom subscription seam may synchronously close the request; do not strand a listener.
-          if (tornDown) {
-            releaseSubscription()
-            return
-          }
-          keepalive = setInterval(() => {
-            // A keepalive has no state value and must not consume the bounded queue while state frames wait.
-            if (!tornDown && !backpressured) writeFrame(': keepalive\n\n')
-          }, 20_000)
-        }
-      }
       if (a === 'connections') {
         if (b === undefined && method === 'GET') {
           return async () => {

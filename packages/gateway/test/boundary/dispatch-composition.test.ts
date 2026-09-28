@@ -221,6 +221,31 @@ test('WS applies the same Host policy before auth and proxies an allowed authent
   assert.equal(state.upgradeProxyCalls, 1)
 })
 
+test('an authenticated client cannot open /api/page-channel on the gateway origin', async () => {
+  // design 26 §2：页面通道只挂在控制面 origin；gateway 的升级面不挂它。落到控制面的
+  // defaultUpgrade 会把这个带 health/pluginGraph 上游的通道整体服务给已认证客户端，
+  // 所以这里必须是显式拒绝，而不是「未认领、随意穿过」。
+  const auth: AuthProvider = {
+    kind: 'token',
+    async verify(req) {
+      return req.headers.authorization === 'Bearer secret' ? { kind: 'token', id: 'x', issuedAt: 0 } : null
+    },
+  }
+  const state = setup(auth)
+  let rejection = ''
+  const socket = { end(value: string) { rejection = value }, destroy() {} }
+  const claimed = await state.dispatch.upgradeMiddleware(
+    gatewayRequest('GET', '/api/page-channel', { origin: 'http://gateway.example:3000', authorization: 'Bearer secret' }) as unknown as ApiRequest,
+    socket as never,
+    Buffer.alloc(0),
+    {} as never,
+  )
+  assert.equal(claimed, true, 'the gateway claims and refuses the path instead of falling through')
+  assert.match(rejection, /404 Not Found/)
+  assert.match(rejection, /not mounted/)
+  assert.equal(state.upgradeProxyCalls, 0, 'the page channel is never proxied or served here')
+})
+
 test('WS auth-boundary rejections are audited as auth_rejected (401/421/400) without the refused credential', async () => {
   const { auth, auditFile, cleanup } = realAuth({ config: { kind: 'token', token: TOKEN } })
   try {

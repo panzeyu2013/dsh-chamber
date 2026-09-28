@@ -16,6 +16,7 @@
 - `spawn-dsh.ts` — `dsh --profile web` 的 spawn、端口递增重试、pid 记录、`resolveNodeExecutable`。
 - `local-connection.ts` — 健康/重启状态机（30s 探测、1s→60s 退避、窗口内重启上限）。
 - `proxy-forward.ts` — 与 gateway 共用的转发核心：上限、白名单、长 RPC 豁免、WS 心跳。
+- `page-channel.ts` — 页面级多路复用通道（design 26）：页面唯一的长活 WS，health/pluginGraph/sessionFacts 三族逻辑订阅按 `instanceId` 定址、每订阅信用窗口与上游拆除。
 - `host-logs.ts` / `catalog.ts` / `json-store.ts` / `private-file.ts` — 滚动日志、连接目录、原子 JSON、私有文件原语。
 
 ## 测试

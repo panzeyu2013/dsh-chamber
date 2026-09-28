@@ -116,7 +116,12 @@ export function classifyPluginGraphOutcome(outcome: UnaryPostOutcome): PluginGra
     // state classification). The state regex is wire-common's shared one.
     const error = isRecord(result.error) ? result.error : {}
     const hostError = error.message ?? error.code ?? 'unknown'
-    const classification = `${error.code ?? ''} ${error.message ?? ''}`
+    // Only strings are admissible into the classification: a foreign shape such as
+    // `message: ['method','missing']` must not be able to interpolate its way into a
+    // 'not-injected' verdict — that claim is about the host's answer, and a non-string
+    // is no answer. (The message copy above stays verbatim; exotic shapes drift the
+    // message only.)
+    const classification = `${typeof error.code === 'string' ? error.code : ''} ${typeof error.message === 'string' ? error.message : ''}`
     return {
       kind: 'channel',
       state: classifyGraphChannelFailure(classification),

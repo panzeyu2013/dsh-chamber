@@ -31,6 +31,8 @@ import {
   type InstanceProxy,
   type InstanceTransportRegistrationOptions,
 } from './instance-proxy.ts'
+import { createPageChannel } from './page-channel.ts'
+import { PAGE_CHANNEL_PATH } from '@dsh-chamber/dsh-chamber-wire/page-channel'
 import { ensureInstanceId } from './instance-id.ts'
 import { ensurePrivateDirectoryNoFollow } from './private-file.ts'
 import {
@@ -499,7 +501,9 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   // Explicit-origin allowlist for the API's CORS decision (v1 has no other cross-origin control).
   const explicitOrigins = Array.isArray(options.corsOrigins) ? options.corsOrigins : []
 
-  // Health-events SSE subscribers; the stream snapshots on subscribe too, so no transition is missed.
+  // Health fan-out for the page channel's native health producer. The producer reads
+  // currentPublicLocalSnapshot() at subscribe time and pushes it as one item, so a
+  // subscriber can never miss the state that exists before its first transition.
   const healthListeners = new Set<(snapshot: { status: string; port: number | null; error: string | null }) => void>()
 
   /**
@@ -671,6 +675,28 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     return { reclaimed, connection: started.connection, spawned: started.spawned }
   }
 
+  /** health 事件扇出：控制面原生生产者，页面级多路复用通道（design 26）的 health
+   *  订阅面；转移由这里推送，订阅时的当前快照由下方 currentHealthSnapshot 提供。 */
+  const subscribeHealthEvents = (listener: (snapshot: { status: string; port: number | null; error: string | null }) => void): (() => void) => {
+    healthListeners.add(listener)
+    return () => { healthListeners.delete(listener) }
+  }
+
+  // 页面级多路复用通道（design 26）：页面唯一的长连接，承载 health / pluginGraph /
+  // sessionFacts 三类逻辑订阅；上游每个活动订阅至多一条，页面侧容量与实例数无关。
+  const pageChannel = createPageChannel({
+    logger,
+    subscribeHealthEvents,
+    // 懒闭包：订阅发生在任意时刻，快照必须在那一刻读，不能在外面先算好（否则
+    // 每个订阅都拿到创建通道时的旧状态）。
+    currentHealthSnapshot: () => currentPublicLocalSnapshot(),
+    resolveTargetFor: instanceId => instanceProxy.resolveTargetFor(instanceId),
+  })
+  // 通道自己开的每条上游 http.request 不在实例代理的 traffic 表里：隧道被替换或
+  // 注销时，代理显式通知，通道失败对应订阅（客户端重连阶梯会重新 subscribe，届时
+  // 解析到新传输），否则旧化身的 SSE 会继续把事实推给页面。
+  instanceProxy.onTransportRevoked(connectionId => { pageChannel.revokeConnection(connectionId) })
+
   const api = createApi({
     logger,
     corsOrigins: explicitOrigins,
@@ -678,10 +704,6 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     getHealth: () => {
       const snapshot = currentPublicLocalSnapshot()
       return { ok: true, dsh: { status: snapshot.status, port: snapshot.port ?? 0, error: snapshot.error ?? undefined } }
-    },
-    subscribeHealthEvents: (listener) => {
-      healthListeners.add(listener)
-      return () => { healthListeners.delete(listener) }
     },
     getConnectionRow: connectionRowView,
     startConnection: ({ kind, label, accentColor }) => {
@@ -758,6 +780,10 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   let startPromise: Promise<void> | null = null
   let stopPromise: Promise<void> | null = null
   let lifecycleEpoch = 0
+  // stop() 之后（或启动失败期间）不再接受任何 upgrade：升级过的 socket 不在 HTTP
+  // server 的连接跟踪里，closeAllConnections() 收不回它，一条排队中的 upgrade 事件
+  // 足以让通道在 stop() 之后「复活」。start() 成功监听后再打开。
+  let accepting = false
 
   // Static frontend service: dist/ + __DSH_BOOT__, assembled in static-serving.ts;
   // anonymous like every other surface, disabled when webDistDir is unset.
@@ -769,6 +795,10 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   /** Close one candidate/active server without letting long-lived proxy streams strand stop(). */
   async function closeHttpServer(srv: Server, closeProxyStreams: boolean): Promise<void> {
     if (closeProxyStreams) instanceProxy.closeAllStreams()
+    // 页面级通道的 socket 逃出 HTTP server 的连接跟踪，**任何** server 收尾都要显式以 1012
+    // 关掉：包括启动被取消的候选 server——那时升级过的 socket 既不在 server 里，也不会再
+    // 有后续 stop() 认领它（server 始终为 null）。
+    pageChannel.closeAll()
     if (!srv.listening) return
     await new Promise<void>(resolveClose => {
       const force = setTimeout(resolveClose, 500)
@@ -788,7 +818,12 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     /** Bind the HTTP surface and prepare the state layout. */
 
     async start() {
-      if (stopPromise !== null) await stopPromise
+      if (stopPromise !== null) {
+        const epochBeforeWait = lifecycleEpoch
+        await stopPromise
+        // 等待期间又来了 stop()（epoch 前进）：最后一次意图是停，排队中的 start 不得复活。
+        if (lifecycleEpoch !== epochBeforeWait) return
+      }
       if (server !== null) return
       if (startPromise !== null) return startPromise
       // stop() releases the plane-owned lease after the quiescence proof; stop→start
@@ -908,6 +943,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
           listeningServer.maxConnections = 192
 
           function defaultUpgrade(req: ApiRequest, socket: Duplex, head: Buffer): void {
+            if (!accepting) { socket.destroy(); return }
             if (!api.getCorsHeaders(req).allowed) {
               socket.end(
                 'HTTP/1.1 403 Forbidden\r\n'
@@ -916,6 +952,18 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
                 + '\r\n'
                 + '{"error":"request origin is not allowed","code":"origin_forbidden"}',
               )
+              return
+            }
+            // 页面级多路复用通道（design 26）：按 PATHNAME 匹配（查询串忽略），在实例
+            // 代理之前接管；未匹配的 upgrade 原样进入 /api/i/* 实例代理。
+            let upgradePathname: string | null = null
+            try {
+              upgradePathname = new URL(req.url ?? '/', 'http://localhost').pathname
+            } catch {
+              upgradePathname = null
+            }
+            if (upgradePathname === PAGE_CHANNEL_PATH) {
+              pageChannel.handleUpgrade(req, socket, head)
               return
             }
             void instanceProxy.handleUpgrade(req as never, socket as never, head).catch((error: unknown) => {
@@ -961,11 +1009,15 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
           const address = listeningServer.address()
           serverPort = typeof address === 'object' && address !== null ? address.port : null
           server = listeningServer
+          accepting = true
           candidate = null
           listeningServer.on('error', error => logger.error(`control plane server error: ${String(error)}`))
           logger.log(`control plane listening on http://${host}:${serverPort}`)
         } finally {
-          if (candidate !== null) await closeHttpServer(candidate, false)
+          if (candidate !== null) {
+            accepting = false
+            await closeHttpServer(candidate, false)
+          }
         }
       })()
       startPromise = pending
@@ -978,8 +1030,12 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
 
     /** Stop every local writer before releasing the HTTP surface. */
     async stop() {
-      if (stopPromise !== null) return stopPromise
+      // 每一次 stop() 调用都必须推进 epoch 并落 accepting，**包括合并进已有 stop 的那次**：
+      // 「stop(); start(); stop()」里第二个 stop 若只返回第一个 stop 的 promise，排队等第一个
+      // stop 结算的 start 会照样复活——最后一次调用是 stop，控制面却停在 RUNNING。
       lifecycleEpoch += 1
+      accepting = false
+      if (stopPromise !== null) return stopPromise
       const pending = (async () => {
         const starting = startPromise
         if (starting !== null) {

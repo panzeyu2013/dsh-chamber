@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { fetchInstanceSnapshot } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
+import { createHostDirectory, fetchInstanceSnapshot, searchSessions } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 
 /** One wire summary row (SessionSummary shape the unary client decodes). */
 function summary(overrides: Record<string, unknown>): Record<string, unknown> {
@@ -36,6 +36,54 @@ test('fetchInstanceSnapshot 带走投影块水印（kind/asOfSeq），坏形状�
   assert.equal(byId.get('bad-kind')?.projectionKind, undefined)
   assert.equal(byId.get('bad-seq')?.projectionAsOfSeq, undefined)
   assert.equal(byId.get('nan-seq')?.projectionAsOfSeq, undefined)
+})
+
+test('fetchInstanceSnapshot 绝不伪造 sessionId：非字符串行直接丢弃', async () => {
+  const client = listClient([
+    summary({ sessionId: 'ok' }),
+    summary({ sessionId: ['x'] }),
+    summary({ sessionId: 42 }),
+    summary({ sessionId: null }),
+    summary({ sessionId: undefined }),
+    summary({ sessionId: { id: 'x' } }),
+    summary({ sessionId: '' }),
+  ])
+  const snapshot = await fetchInstanceSnapshot(client as never)
+  assert.deepEqual(snapshot.sessions.map(row => row.sessionId), ['ok'],
+    "String() 会把 ['x']/42/null/{id} 造成 'x'/'42'/'null'/'[object Object]' 这类假 id")
+})
+
+test('unary 错误码只承认字符串：数组 code 不得伪造 domain 词汇', async () => {
+  const client = { session: { list: async () => ({ ok: false as const, error: { code: ['session/not-found'], message: 'gone', details: {} } }) } }
+  await assert.rejects(fetchInstanceSnapshot(client as never), (err: any) => {
+    assert.equal(err.code, 'unknown', '数组 code 不得成为会话语汇')
+    assert.equal(isSessionNotAttached(err), false, '取消失败绝不能被读成幂等成功')
+    return true
+  })
+  const okClient = { session: { list: async () => ({ ok: false as const, error: { code: 'session/not-found', message: 'gone', details: {} } }) } }
+  await assert.rejects(fetchInstanceSnapshot(okClient as never), (err: any) => {
+    assert.equal(err.code, 'session/not-found', '真字符串码照常透传')
+    return true
+  })
+})
+
+test('createHostDirectory 与 searchSessions 的坏形状不字符串化', async () => {
+  const badCreate = { directoryPicker: { createDirectory: async () => ({ ok: true as const, value: { path: '/tmp/x' } }) } }
+  await assert.rejects(createHostDirectory(badCreate as never, '/tmp', 'x'), (err: any) => {
+    assert.equal(err.rpcError?.code, 'directory-create-failed', '非字符串 value 不得变成 [object Object] 路径')
+    return true
+  })
+  const goodCreate = { directoryPicker: { createDirectory: async () => ({ ok: true as const, value: '/tmp/created' }) } }
+  assert.equal(await createHostDirectory(goodCreate as never, '/tmp', 'x'), '/tmp/created')
+
+  const search = { session: { search: async () => ({ ok: true as const, value: { items: [
+    { sessionId: 's1', snippet: { html: 'x' } },
+    { sessionId: ['s2'], snippet: 'hit' },
+    { sessionId: 's3', snippet: 'hit' },
+  ], hasMore: false } }) } }
+  const rows = await searchSessions(search as never, 'q', new AbortController().signal)
+  assert.deepEqual(rows.items, [{ sessionId: 's3', snippet: 'hit' }, { sessionId: 's1', snippet: '' }].sort((a, b) => a.sessionId.localeCompare(b.sessionId)),
+    '非字符串 sessionId 行丢弃、非字符串 snippet 落空串')
 })
 
 test('fetchInstanceSnapshot derives workspace groups from session cwd facts', async () => {

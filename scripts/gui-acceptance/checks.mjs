@@ -119,15 +119,6 @@ export const TOLERATED_REQUEST_FAILURES = [
     pattern: /503 \S*\/api\/i\/[^/]+\/api\/clientGraph\/graph$/,
     reason: '冷启动期实例未 serving：clientGraph/graph 503 属 design 09 §3.2 预期',
   },
-  {
-    // Chromium records a CLIENT-side abort as `net::ERR_ABORTED`; the health
-    // stream is re-subscribed by the app (e.g. when the settings surface mounts
-    // its source), so the previous connection is torn down by the page itself.
-    // A server-side drop shows up as a status code or another error string and
-    // stays a failure.
-    pattern: /^FAILED\(net::ERR_ABORTED\) \S*\/api\/host\/health-events$/,
-    reason: 'SSE 流由页面自身重订阅/关闭：浏览器记 net::ERR_ABORTED，非服务端错误',
-  },
 ]
 
 /** Upstream boot noise that is not a chamber defect (raw text still reported). */

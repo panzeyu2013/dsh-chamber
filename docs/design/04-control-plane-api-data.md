@@ -15,12 +15,14 @@
 
 ## 1. 目标与范围
 
-**范围**：控制面对外暴露的全部 API 面与持久化数据模型，分三块：
+**范围**：控制面对外暴露的全部 API 面与持久化数据模型，分四块：
 
 1. **管理 REST**：`/health`、`/api/connections`（仅 local）、`/api/host/logs`
    ——桌面 chamber 插件（侧栏 / 管理视图）与 CLI 的消费面；
 2. **每实例反代**：`/api/i/<id>/*` 的 HTTP 形状（错误码 / 收敛），契约定义在 03 §3；
-3. **前端服务**：静态 dist + `__DSH_BOOT__` 启动图清单。
+3. **前端服务**：静态 dist + `__DSH_BOOT__` 启动图清单；
+4. **页面级长活流**：`/api/page-channel`（WS，design 26）——页面唯一属于 HTTP 池的长连接，
+   health/pluginGraph/sessionFacts 三族逻辑订阅按 `instanceId` 定址（§4.4）。
 
 **不在本文档范围**：宿主进程托管（02）、连接模型细节（03）、会话业务（dsh 前端
 runtime，本仓不承载）、远程隧道与 systemd（desktop transport-manager（ssh provider），
@@ -62,7 +64,7 @@ runtime，本仓不承载）、远程隧道与 systemd（desktop transport-manag
 
 - renderer 的管理 REST/SSE 基址以当前 shell 的 `window.location.origin` 为权威；
   preload 异步注入的 `controlPlaneUrl` 只作非页面 harness 回退——dev 端口或
-  `DSH_CHAMBER_CP_PORT` 覆盖首个 effect 即生效、不会先连固定 17500，也无需桥水合后重建 EventSource。
+  `DSH_CHAMBER_CP_PORT` 覆盖首个 effect 即生效、不会先连固定 17500，也无需桥水合后重建长连接。
 - 静态 gzip 先协商再读文件：缓存命中直接返回压缩 Buffer，miss 只读一次后压缩并入
   有界 cache；identity 仍只读一次，避免命中时无用分配原文件、miss 时重复读取。
 
@@ -80,7 +82,6 @@ runtime，本仓不承载）、远程隧道与 systemd（desktop transport-manag
 | 端点 | 方法 | 说明 |
 |---|---|---|
 | `/health` | GET | 存活 / 自检（§3.1） |
-| `/api/host/health-events` | GET | SSE 状态推送流（§3.1.1） |
 | `/api/connections` | GET | 连接行投影（§3.2） |
 | `/api/connections` | POST | 幂等启动 `{kind:'local'}`（§3.2） |
 | `/api/connections/local` | PATCH | 仅 label / accentColor（§3.2） |
@@ -98,20 +99,6 @@ runtime，本仓不承载）、远程隧道与 systemd（desktop transport-manag
 - `dsh.status` ∈ 02 §3.5 七态（stopped / starting / ready / degraded /
   restarting / restart-exhausted / error）；`port` 为 0 时即未就绪；
   `error` 仅在非 ready 时出现（原因摘要，脱敏）。
-
-### 3.1.1 GET /api/host/health-events（SSE 状态推送）
-
-- `text/event-stream`；连接即发当前快照（`{ok:true, dsh:{...}}`，形状与 §3.1
-  相同），此后**每次机器状态迁移**推一帧；每 20s 发 `: keepalive` 注释帧；
-  客户端断开即摘除监听（不泄漏）；写入失败（连接已死）同样触发拆除。`write() === false` 表示下游背压：暂停写入、按序保留至多
-  32 个后续状态帧，`drain` 后继续；背压期间不排 keepalive，队列溢出拆除慢客户端。
-  所有拆除路径都取消状态订阅、清空队列并移除待定 `drain` 监听——写错误/慢客户端
-  永不逃逸进状态机或造成无界内存增长（监听器隔离在 local-connection 扇出点）；连接行/标签等低频字段不走此流（仍由 §3.2
-  轮询，30s 兜底）。
-- 动机（05 §2.3）：本地状态在控制面主进程产生，推送让
-  stopped → starting → ready 即时可见、渲染层不轮询；远程来源经桌面
-  `desktop_ssh_status_changed` 推送，两形态对称。畸形帧由客户端忽略，下一帧快照
-  覆盖。
 
 ### 3.2 /api/connections（仅 local）
 
@@ -194,6 +181,23 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 | id 未知 | 404 `{error, code:'instance_not_found'}` |
 | WS 路径不在 `WS_STREAM_PATHS` 白名单（唯一在册路径 `/api/remote.mux`） | 404 `{error, code:'instance_not_found'}`（upgrade 前拒绝，§4.1） |
 | 已声明请求体 > 300MiB、未知长度请求体 > 32MiB / 响应体 > 300MiB | 413 `{error, code:'body_too_large'}` / 取消上游流 + 413 |
+
+### 4.4 页面级多路复用通道（WS，design 26）
+
+```
+upgrade：/api/page-channel      精确路径匹配，不属于 /api/i/* 面
+顺序：Origin 门禁（§4.2 第一行）→ 精确路径命中 → 每实例反代（/api/i/* 与其它 upgrade 路径）
+帧：客户端 subscribe / unsubscribe / ack；控制面 ready / item / error / end（wire 契约 26 §4）
+订阅：family ∈ {health, pluginGraph, sessionFacts}；pluginGraph / sessionFacts 必须带 instanceId
+```
+
+- **I-1**：页面侧长活 HTTP 流 = 0、属于 HTTP 池的长连接 = 0，这条 WS 是页面唯一的长活连接；
+  升级后的 WS 不占池、不计入（每实例 Remote mux 仍在 §4.1 白名单内，随来源数增长）。
+- 订阅级失败以 **error 帧**表达（`instance_unavailable` / `capability_not_found` / `upstream_failed` /
+  `upstream_timeout`），不是 HTTP 状态码；宿主不具备通道条件（无 `WebSocket` / 无页面 origin）时客户端
+  上报 `channel_unavailable` 并走 unary 兜底。
+- **gateway 形态不挂载该端点**（26 §2）：gateway 的 upgrade 面只认 `/api/remote.mux` 与 `/api/i/*`，
+  该路径被明确拒绝；将来若移动端要用这三族，须在 gateway 升级分发注册同一端点（17 §9）。
 
 ### 4.3 响应头白名单
 

@@ -117,6 +117,15 @@ const GROUPS = {
     // 行为级锁定——若代理吃掉该头，续传会静默降级为整量重取。
     'test/proxy/sse-resume.test.ts',
   ],
+  // page-channel: 页面级多路复用通道（design 26）——WS 服务端、三类上游适配、
+  // 每订阅信用窗口、订阅/断线/关停清理，以及 index.ts 的接线（升级路由、
+  // InstanceProxy.resolveTargetFor、stop() 清理）。纯模块 + 假上游/假 socket，
+  // 平台中性。
+  'page-channel': [
+    'test/page-channel/page-channel.test.ts',
+    'test/page-channel/page-channel-flow.test.ts',
+    'test/page-channel/page-channel-wiring.test.ts',
+  ],
   // plugins: 宿主图种子、cordis insert 渲染与受保护插件集合判定
   'plugins': [
     'test/plugins/host-graph-seed.test.ts',

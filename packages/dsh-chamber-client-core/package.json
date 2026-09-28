@@ -19,6 +19,7 @@
     "./managed-runtime": "./src/managed-runtime.ts",
     "./open-intent": "./src/open-intent.ts",
     "./open-outcome": "./src/open-outcome.ts",
+    "./page-channel": "./src/page-channel.ts",
     "./pending-click": "./src/pending-click.ts",
     "./plugin-graph-classify": "./src/plugin-graph-classify.ts",
     "./plugin-manifest": "./src/plugin-manifest.ts",

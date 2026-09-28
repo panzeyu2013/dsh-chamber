@@ -245,8 +245,9 @@ session-echo ledger (`shared/session-echo.ts`) and its own single funnel
 ## Data discipline
 
 - The shell subscribes to the chamberBridge projection only; the renderer App
-  layer owns and publishes it (state via push: /health health-events stream,
-  tunnel phase onStatusChanged, registry onInstancesChanged + 30s poll
+  layer owns and publishes it (state via push: /health page-channel health
+  subscription (/api/page-channel, design 26), tunnel phase onStatusChanged,
+  registry onInstancesChanged + 30s poll
   fallback; mounted ctx runtime/snapshot producers push aggregates, while a
   30s unary fallback covers only sources without a complete producer, and
   requestRefresh keeps action refreshes immediate). The control plane holds no

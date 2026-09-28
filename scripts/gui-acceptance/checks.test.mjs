@@ -124,14 +124,12 @@ test('writer evidence names every scan outcome and the error count', () => {
 
 test('tolerances cover exactly the documented states and nothing else', () => {
   const coldStart = '503 http://127.0.0.1:17500/api/i/local/api/clientGraph/graph'
-  const sseAbort = 'FAILED(net::ERR_ABORTED) http://127.0.0.1:17500/api/host/health-events'
-  const partition = partitionFailures([coldStart, sseAbort, '500 http://x/api/connections', '404 http://x/assets/a.js'], TOLERATED_REQUEST_FAILURES)
-  assert.equal(partition.tolerated.length, 2)
+  const partition = partitionFailures([coldStart, '500 http://x/api/connections', '404 http://x/assets/a.js'], TOLERATED_REQUEST_FAILURES)
+  assert.equal(partition.tolerated.length, 1)
   assert.deepEqual(partition.unexpected, ['500 http://x/api/connections', '404 http://x/assets/a.js'])
   assert.match(partition.tolerated[0], /design 09 §3\.2/)
   // The same endpoint with a real server answer is NOT tolerated.
   assert.equal(partitionFailures(['500 http://x/api/i/local/api/clientGraph/graph'], TOLERATED_REQUEST_FAILURES).tolerated.length, 0)
-  assert.equal(partitionFailures(['FAILED(net::ERR_CONNECTION_REFUSED) http://x/api/host/health-events'], TOLERATED_REQUEST_FAILURES).tolerated.length, 0)
 })
 
 test('known upstream boot noise is described, not silently dropped', () => {

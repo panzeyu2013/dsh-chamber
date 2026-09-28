@@ -15,9 +15,9 @@
  */
 
 import {
-  controlPlaneUrl,
   post,
   request,
+  subscribeHostHealth,
   toConnectionSummary,
   toLocalWriterDiagnosis,
   type LocalWriterDiagnosisWire,
@@ -25,6 +25,7 @@ import {
   type ApiErrorBody,
   type ConnectionRowWire,
   type ConnectionSummary,
+  type HealthEventsHandle,
   type HealthResponse,
   type HostLogLine,
   type HostLogsResponse,
@@ -48,8 +49,10 @@ export const cp = {
   /** GET /health → 本地 dsh 进程状态。 */
   health: (): Promise<HealthResponse> => request('/health'),
 
-  /** SSE push channel: 当前快照 + 每次状态迁移。 */
-  healthEvents: (): EventSource => new EventSource(controlPlaneUrl() + '/api/host/health-events'),
+  /** host 健康流（design 26）：控制面原生 health 生产者经页面通道承载，不再有
+   *  /api/host/health-events 端点；句柄契约与诊断前缀都与 App 同源（client-core 的
+   *  subscribeHostHealth），调用方只拿句柄。 */
+  healthEvents: (): HealthEventsHandle => subscribeHostHealth(),
 
   /** GET /api/connections → 本地连接行（无行 404 → null）。 */
   connectionsList: async (): Promise<ConnectionSummary | null> => {

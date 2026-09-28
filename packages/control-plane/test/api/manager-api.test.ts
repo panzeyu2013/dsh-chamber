@@ -13,8 +13,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { connect, createServer } from 'node:net'
-import { createControlPlane, DEFAULT_CONTROL_PLANE_PORT } from '../../src/index.ts'
-import { createApi } from '../../src/api.ts'
+import { createControlPlane } from '../../src/index.ts'
 import { CATALOG_FILE } from '../../src/catalog.ts'
 import { DshSpawnExhaustedError, MAX_SPAWN_ATTEMPTS } from '../../src/spawn-dsh.ts'
 import type { SpawnedDsh } from '../../src/local-connection.ts'
@@ -200,31 +199,11 @@ test('candidate quarantine hides ready/port until the activation verdict opens e
     assert.equal(logsResponse.status, 503)
     assert.equal(logsResponse.body.code, 'quarantined')
 
-    const events = await fetch(`${base}/api/host/health-events`)
-    const reader = events.body!.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    const nextFrame = async (): Promise<any> => {
-      for (;;) {
-        const boundary = buffer.indexOf('\n\n')
-        if (boundary !== -1) {
-          const frame = buffer.slice(0, boundary)
-          buffer = buffer.slice(boundary + 2)
-          return JSON.parse(frame.replace(/^data: /, ''))
-        }
-        const { done, value } = await reader.read()
-        if (done) throw new Error('quarantine health stream ended early')
-        buffer += decoder.decode(value, { stream: true })
-      }
-    }
-    assert.equal((await nextFrame()).dsh.status, 'starting')
-
     exposed = true
     plane.refreshLocalExposure()
-    const readyEvent = await nextFrame()
-    assert.equal(readyEvent.dsh.status, 'ready')
-    assert.equal(readyEvent.dsh.port, 17510)
-    await reader.cancel()
+    const exposedHealth = await fetchJson(base, '/health')
+    assert.equal(exposedHealth.body.dsh.status, 'ready')
+    assert.equal(exposedHealth.body.dsh.port, 17510)
     const accepted = await fetchJson(base, '/api/connections')
     assert.equal(accepted.body.connection.status, 'ready')
     assert.equal(accepted.body.connection.dshPort, 17510)
@@ -361,28 +340,6 @@ test('an exhausted start (every candidate port occupied) is a visible /health fa
     assert.equal(connections.body.connection.status, 'error')
     assert.match(connections.body.connection.error, /already in use/)
 
-    // The push channel carries the same terminal: the SSE snapshot on subscribe
-    // is the current projection, so a renderer mounting after the failure still
-    // receives the reason.
-    const events = await fetch(`${origin}/api/host/health-events`)
-    const reader = events.body!.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let frame: any = null
-    const deadline = Date.now() + 5_000
-    while (frame === null && Date.now() < deadline) {
-      const boundary = buffer.indexOf('\n\n')
-      if (boundary !== -1) {
-        frame = JSON.parse(buffer.slice(0, boundary).replace(/^data: /, ''))
-        break
-      }
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-    }
-    await reader.cancel()
-    assert.equal(frame?.dsh?.status, 'error')
-    assert.match(String(frame?.dsh?.error ?? ''), /already in use/)
   } finally {
     await plane.stop()
     await Promise.all(holders.map(holder => new Promise<void>(resolveClose => holder.close(() => resolveClose()))))
@@ -785,7 +742,7 @@ test('unknown management paths answer 404 not_found', async () => {
       '/api/projects', '/api/sessions', '/api/events', '/api/projects/capabilities', '/api/session/x/message',
       // Route segment-count violations: extra segments on
       // exact-length routes must not reach the handler.
-      '/health/x', '/api/host/logs/extra', '/api/host/health-events/x',
+      '/health/x', '/api/host/logs/extra',
     ]) {
       const response = await fetchJson(holder.base, path)
       assert.equal(response.status, 404, `${path} should be 404`)
@@ -820,181 +777,6 @@ test('host-logs answers 404 without the hostLogs dependency and 400 invalid_argu
       assert.equal(response.status, 400, `${path} should be 400`)
       assert.equal(response.body.code, 'invalid_argument', `${path} should carry the code`)
     }
-  } finally {
-    await holder.plane.stop()
-    rmSync(holder.stateDir, { recursive: true, force: true })
-  }
-})
-
-test('health-events streams the current snapshot and pushes every transition', async () => {
-  const holder = await makePlane()
-  try {
-    const response = await fetch(`${holder.base}/api/host/health-events`)
-    assert.equal(response.status, 200)
-    assert.match(response.headers.get('content-type') ?? '', /text\/event-stream/)
-    const reader = response.body!.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    const nextFrame = async (): Promise<any> => {
-      for (;;) {
-        const double = buffer.indexOf('\n\n')
-        if (double !== -1) {
-          const frame = buffer.slice(0, double)
-          buffer = buffer.slice(double + 2)
-          return JSON.parse(frame.replace(/^data: /, ''))
-        }
-        const { done, value } = await reader.read()
-        if (done) throw new Error('stream ended before the expected frame')
-        buffer += decoder.decode(value, { stream: true })
-      }
-    }
-
-    // The subscribe snapshot arrives first, no polling involved.
-    const snapshot = await nextFrame()
-    assert.equal(snapshot.ok, true)
-    assert.equal(snapshot.dsh.status, 'stopped')
-
-    // Starting the instance pushes each transition over the same stream.
-    const start = await fetch(`${holder.base}/api/connections`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ kind: 'local' }),
-    })
-    assert.equal(start.status, 200)
-    const starting = await nextFrame()
-    assert.equal(starting.dsh.status, 'starting')
-    const ready = await nextFrame()
-    assert.equal(ready.dsh.status, 'ready')
-    assert.equal(ready.dsh.port, DEFAULT_DSH_START_PORT)
-
-    await reader.cancel()
-  } finally {
-    await holder.plane.stop()
-    rmSync(holder.stateDir, { recursive: true, force: true })
-  }
-})
-
-test('health-events: write backpressure drains in order and bounded overflow releases the subscription', async () => {
-  const reqEvents = new EventEmitter()
-  const resEvents = new EventEmitter()
-  const writes: string[] = []
-  let writeCalls = 0
-  let endCalls = 0
-  let unsubscribeCalls = 0
-  let healthListener: ((snapshot: { status: string; port: number | null; error: string | null }) => void) | null = null
-
-  const req = {
-    url: '/api/host/health-events',
-    method: 'GET',
-    headers: { host: `127.0.0.1:${DEFAULT_CONTROL_PLANE_PORT}` },
-    async *[Symbol.asyncIterator]() {},
-    on: reqEvents.on.bind(reqEvents),
-    once: reqEvents.once.bind(reqEvents),
-    off: reqEvents.off.bind(reqEvents),
-    removeListener: reqEvents.removeListener.bind(reqEvents),
-  }
-  const res = {
-    headersSent: false,
-    writableEnded: false,
-    writeHead() { this.headersSent = true },
-    write(chunk: unknown) {
-      writes.push(String(chunk))
-      writeCalls += 1
-      return writeCalls !== 1 && writeCalls !== 3
-    },
-    end() { endCalls += 1; this.writableEnded = true },
-    destroy() {},
-    setHeader() {},
-    on: resEvents.on.bind(resEvents),
-    once: resEvents.once.bind(resEvents),
-    removeListener: resEvents.removeListener.bind(resEvents),
-  }
-  const api = createApi({
-    logger: silentLogger,
-    getHealth: () => ({ ok: true, dsh: { status: 'stopped', port: 0 } }),
-    subscribeHealthEvents: (listener) => {
-      healthListener = listener
-      return () => { unsubscribeCalls += 1 }
-    },
-    getConnectionRow: () => null,
-    startConnection: async () => ({ connection: null, spawned: false }),
-    updateConnectionProfile: async () => null,
-    stopConnection: async () => {},
-  })
-
-  await api.handle(req, res)
-  assert.equal(writes.length, 1, 'the initial frame is accepted even when write reports backpressure')
-  assert.equal(endCalls, 0, 'backpressure is not a dead connection')
-  assert.equal(unsubscribeCalls, 0)
-
-  healthListener!({ status: 'starting', port: null, error: null })
-  assert.equal(writes.length, 1, 'subsequent state waits in the bounded queue')
-  resEvents.emit('drain')
-  assert.equal(writes.length, 2)
-  assert.match(writes[1], /"status":"starting"/)
-
-  healthListener!({ status: 'ready', port: DEFAULT_DSH_START_PORT, error: null })
-  assert.equal(writes.length, 3, 'a later false write enters backpressure again')
-  assert.equal(resEvents.listenerCount('drain'), 1)
-  for (let i = 0; i < 32; i += 1) {
-    healthListener!({ status: `queued-${i}`, port: null, error: null })
-  }
-  assert.equal(endCalls, 0, 'the documented bounded queue itself is accepted')
-  healthListener!({ status: 'overflow', port: null, error: null })
-  assert.equal(unsubscribeCalls, 1, 'overflow disconnects the slow subscriber')
-  assert.equal(endCalls, 1, 'overflow ends the SSE response once')
-  assert.equal(resEvents.listenerCount('drain'), 0, 'teardown removes the pending drain listener')
-
-  reqEvents.emit('close')
-  assert.equal(unsubscribeCalls, 1, 'a later close cannot clean up twice')
-  assert.equal(endCalls, 1)
-  healthListener!({ status: 'after-teardown', port: DEFAULT_DSH_START_PORT, error: null })
-  assert.equal(writes.length, 3, 'a detached listener cannot write again')
-})
-
-test('health-events: a disconnected client unsubscribes and others keep streaming', async () => {
-  const holder = await makePlane()
-  try {
-    const makeFrameReader = (reader: ReadableStreamDefaultReader<Uint8Array>) => {
-      let buffer = ''
-      return async (): Promise<any> => {
-        for (;;) {
-          const double = buffer.indexOf('\n\n')
-          if (double !== -1) {
-            const frame = buffer.slice(0, double)
-            buffer = buffer.slice(double + 2)
-            return JSON.parse(frame.replace(/^data: /, ''))
-          }
-          const { done, value } = await reader.read()
-          if (done) throw new Error('stream ended before the expected frame')
-          buffer += new TextDecoder().decode(value, { stream: true })
-        }
-      }
-    }
-
-    // Two concurrent subscribers both get the snapshot.
-    const a = await fetch(`${holder.base}/api/host/health-events`)
-    const b = await fetch(`${holder.base}/api/host/health-events`)
-    const readerA = a.body!.getReader()
-    const readerB = b.body!.getReader()
-    const nextA = makeFrameReader(readerA)
-    const nextB = makeFrameReader(readerB)
-    assert.equal((await nextA()).dsh.status, 'stopped')
-    assert.equal((await nextB()).dsh.status, 'stopped')
-
-    // Subscriber A disappears abruptly; a transition must not throw and B
-    // must still receive it (the detached listener is gone — no leak).
-    await readerA.cancel()
-    const start = await fetch(`${holder.base}/api/connections`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ kind: 'local' }),
-    })
-    assert.equal(start.status, 200)
-    assert.equal((await nextB()).dsh.status, 'starting')
-    assert.equal((await nextB()).dsh.status, 'ready')
-
-    await readerB.cancel()
   } finally {
     await holder.plane.stop()
     rmSync(holder.stateDir, { recursive: true, force: true })

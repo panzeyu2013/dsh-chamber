@@ -1,8 +1,8 @@
 /**
  * SessionFactsSource 纯契约。
  *
- * 覆盖：粗分类全分支（404=版本事实；5xx/超时绝不是「旧网关」）、快照/增量/SSE
- * 帧解析、游标幂等、serviceable、**源文本锁步**（对着
+ * 覆盖：粗分类全分支（404=版本事实；5xx/超时绝不是「旧网关」）、快照/增量项解析、
+ * 游标幂等、serviceable、通道订阅缝的 stale/证据/生命周期语义、**源文本锁步**（对着
  * control-plane/src/session-state-protocol.ts 钉共享字面量）。
  */
 import { test } from 'node:test'
@@ -15,7 +15,6 @@ import {
   SESSION_FACTS_DIAGNOSTICS_REFETCH_MAX,
   SESSION_FACTS_DIAGNOSTICS_REFETCH_MIN_MS,
   SESSION_FACTS_PROTOCOL_VERSION,
-  SESSION_FACTS_STREAM_ROUTE,
   SESSION_FACTS_ROUTE,
   applySessionFactsDelta,
   classifySessionFactsProbe,
@@ -24,8 +23,11 @@ import {
   parseSessionFactsGoalFact,
   parseSessionFactsRow,
   parseSessionFactsSnapshotValue,
-  parseSessionFactsSseBlock,
+  type SessionFactsSubscriptionHandlers,
 } from '../../src/session-facts-source.ts'
+import { PAGE_CHANNEL_KEEPALIVE_EVENT } from '../../../dsh-chamber-client-core/src/page-channel.ts'
+import { readEvidenceLog, resetEvidenceLogForTests } from '../../../dsh-chamber-client-core/src/evidence-log.ts'
+import { noteFocus, resetPageScheduleForTests } from '../../../dsh-chamber-client-core/src/page-schedule.ts'
 import { sourceSessionFactsMode } from '../../src/session-facts-mode.ts'
 import { factsChannelOf } from '../../src/completion-observation.ts'
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
@@ -117,6 +119,29 @@ function probeHarness(responses: Array<Response | Error>) {
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+}
+
+/**
+ * 延迟探测假件：每次 fetch 调用入队一个未决 Promise，由用例按序放行——世代竞态用例需要
+ * 「旧代探测仍在途时新代探测已发出，再让旧代迟到」的精确时序（真实 fetch 无法钉住）。
+ */
+function deferredProbe() {
+  const pending: Array<(response: Response) => void> = []
+  let calls = 0
+  const fetchImpl = (() => {
+    calls += 1
+    return new Promise<Response>(resolve => { pending.push(resolve) })
+  }) as unknown as typeof fetch
+  return {
+    fetchImpl,
+    calls: () => calls,
+    resolve: (index: number, body: unknown) => {
+      pending[index](new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }))
+    },
+  }
 }
 
 function sourceOver(
@@ -280,21 +305,10 @@ test('F2: a 200 HTML fallback (unversioned) retries on the carrier backoff and r
   }
 })
 
-test('F2: an unversioned refetch re-arms the stream instead of wedging', async () => {
-  let streams = 0
+test('F2: an unversioned refetch re-arms the unary reprobe instead of wedging', async () => {
   let probes = 0
-  const fetchImpl = (async (url: unknown) => {
-    const text = String(url)
-    if (text.endsWith(SESSION_FACTS_STREAM_ROUTE)) {
-      streams += 1
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          // 第一条流立刻要求整量重取；重取答案是 200 HTML（不可解析）。
-          if (streams === 1) controller.enqueue(new TextEncoder().encode('event: resync\ndata: {}\n\n'))
-        },
-      })
-      return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })
-    }
+  const channel = channelHarness()
+  const fetchImpl = (async () => {
     probes += 1
     if (probes === 1) {
       return new Response(JSON.stringify(SSE_PROBE_BODY), { status: 200, headers: { 'content-type': 'application/json' } })
@@ -305,16 +319,20 @@ test('F2: an unversioned refetch re-arms the stream instead of wedging', async (
     sourceId: 'gw-unversioned-refetch',
     fetchImpl,
     silenceMs: 0,
-    streamConnectTimeoutMs: 60_000,
     reconnectMs: 10,
+    subscribeSessionFacts: channel.option,
   })
   try {
     source.subscribe(() => {})
     source.update({ fingerprint: 'f1', connected: true })
-    await waitFor(() => streams >= 1)
+    await waitFor(() => channel.liveCount() === 1)
+    // 第一条 item 立刻要求整量重取；重取答案是 200 HTML（不可解析）。
+    channel.item('resync', {})
     await waitFor(() => source.getSnapshot()?.degradation === 'unversioned', 2_000)
-    // 与 probe 共用 shouldRetryProbe：refetch 的恢复动作是重连流，不得静止降级。
-    await waitFor(() => streams >= 2, 2_000)
+    // refetch 失败与 probe 共用 shouldRetryProbe：恢复动作是 unary 有界重探，不得静止降级；
+    // 流载体的重建归通道，本地不得新建第二条订阅。
+    await waitFor(() => probes >= 3, 2_000)
+    assert.equal(channel.subscriptions.length, 1, '本地不得自排订阅重连（通道自己重订阅）')
   } finally {
     source.stop()
   }
@@ -555,16 +573,6 @@ test('delta: host gate updates ride the frame', () => {
   assert.equal(outcome.next?.serviceable, false)
 })
 
-test('SSE frame parser: data/id/event; comment-only heartbeat returns null', () => {
-  assert.deepEqual(
-    parseSessionFactsSseBlock('event: session-state\nid: 12\ndata: {"cursor":12}'),
-    { event: 'session-state', id: 12, data: '{"cursor":12}' },
-  )
-  assert.deepEqual(parseSessionFactsSseBlock('data: line1\ndata: line2'), { event: '', id: null, data: 'line1\nline2' })
-  assert.equal(parseSessionFactsSseBlock(': keepalive'), null)
-  assert.equal(parseSessionFactsSseBlock('event: sync'), null)
-})
-
 test('lockstep: our route/protocol/disabled literals are pinned to the control-plane single source', () => {
   const protocolSource = stripComments(readFileSync(
     fileURLToPath(new URL('../../../control-plane/src/session-state-protocol.ts', import.meta.url)),
@@ -592,8 +600,9 @@ async function waitFor(condition: () => boolean, timeoutMs = 1_000): Promise<voi
   assert.ok(condition(), 'waitFor 超时')
 }
 
-// ── SSE 收口：建连 deadline 与「请求发起即武装」的静默看门狗 ───────────────
+// ── 通道订阅缝：静默看门狗（OPEN 武装）与订阅生命周期 ─────────────────────
 
+/** 网关 mode='sse' 的探测载荷：事实源自此开启通道订阅（订阅缝假件在下方）。 */
 const SSE_PROBE_BODY = {
   protocol: 1,
   mode: 'sse',
@@ -603,91 +612,339 @@ const SSE_PROBE_BODY = {
   sessions: [],
 }
 
+/** 订阅假件的一条句柄：记录 close()，用例经它驱动 open/item/error。 */
+interface FakeSubscription {
+  handlers: SessionFactsSubscriptionHandlers
+  closed: boolean
+}
+
 /**
- * SSE 假件：probe GET 立即回一份 sse 快照把流带起来；stream GET 按场景选择
- * 「永不回响应头」（半死隧道：fetch 永不落定）或「回响应头但永不产出帧」（静默载体）。
+ * 订阅缝假件：创建即 OPEN（通道 ready 的语义）；item/error 只投给未 close 的句柄。
+ * 通道自己的重连/重订阅阶梯由真实模块拥有（page-channel 的用例锁它），本假件刻意不
+ * 模拟：事实源若在本地自排第二条阶梯，用例会因此变红。
  */
-function sseStreamHarness(behavior: 'never-headers' | 'silent-body') {
-  const streams: Array<{ url: string; aborted: () => boolean }> = []
-  const probeGets: string[] = []
-  const fetchImpl = (async (url: unknown, init?: unknown) => {
-    const text = String(url)
-    if (text.endsWith(SESSION_FACTS_STREAM_ROUTE)) {
-      const signal = ((init ?? {}) as RequestInit).signal as AbortSignal
-      streams.push({ url: text, aborted: () => signal.aborted })
-      if (behavior === 'never-headers') {
-        return await new Promise<Response>((_resolve, reject) => {
-          signal.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
-        })
-      }
-      return new Response(new ReadableStream<Uint8Array>({ start() {} }), {
-        status: 200,
-        headers: { 'content-type': 'text/event-stream' },
-      })
-    }
-    probeGets.push(text)
+function channelHarness() {
+  const subscriptions: FakeSubscription[] = []
+  const option = (handlers: SessionFactsSubscriptionHandlers) => {
+    const record: FakeSubscription = { handlers, closed: false }
+    subscriptions.push(record)
+    handlers.onOpen?.()
+    return { close: () => { record.closed = true } }
+  }
+  const live = (): FakeSubscription[] => subscriptions.filter(record => !record.closed)
+  return {
+    option,
+    subscriptions,
+    liveCount: () => live().length,
+    item: (event: string, data: unknown) => {
+      const text = typeof data === 'string' ? data : JSON.stringify(data)
+      for (const record of live()) record.handlers.onItem(event, text)
+    },
+    error: (code: string, message: string) => {
+      for (const record of live()) record.handlers.onError?.(code, message)
+    },
+  }
+}
+
+test('G2: switching from the poll delivery to the channel subscription stops the unary poll timer', async () => {
+  let probes = 0
+  const channel = channelHarness()
+  const fetchImpl = (async () => {
+    probes += 1
+    const body = probes === 1 ? { ...SSE_PROBE_BODY, mode: 'poll', features: [] } : SSE_PROBE_BODY
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as unknown as typeof fetch
+  const source = createSessionFactsSource({
+    sourceId: 'gw-poll-to-channel',
+    fetchImpl,
+    silenceMs: 0,
+    pollIntervalMs: 10,
+    reconnectMs: 5,
+    subscribeSessionFacts: channel.option,
+  })
+  try {
+    source.update({ fingerprint: 'f1', connected: true })
+    // 首探 poll 档 ⇒ 轮询接管；下一次轮询探到 sse + 订阅缝 ⇒ 通道接管，旧轮询必须停。
+    await waitFor(() => channel.liveCount() === 1 && source.getSnapshot()?.mode === 'sse', 3_000)
+    const settled = probes
+    await new Promise(resolve => setTimeout(resolve, 120))
+    assert.equal(probes, settled, '订阅档接管后残留的轮询必须停止（通道是唯一增量面，否则同一来源有两个刷新面）')
+  } finally {
+    source.stop()
+  }
+})
+
+test('R21: a silent subscription (OPEN, no items) is marked stale and reconciled without a local resubscribe', async () => {
+  const channel = channelHarness()
+  let probes = 0
+  const diagnostics: string[] = []
+  const staleEmissions: boolean[] = []
+  const fetchImpl = (async () => {
+    probes += 1
     return new Response(JSON.stringify(SSE_PROBE_BODY), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     })
   }) as unknown as typeof fetch
-  return { fetchImpl, streams, probeGets }
-}
-
-test('R21: a stream whose response headers never arrive hits the connect deadline and is retried', async () => {
-  const harness = sseStreamHarness('never-headers')
-  const diagnostics: string[] = []
-  const source = createSessionFactsSource({
-    sourceId: 'gw-sse-wedge',
-    fetchImpl: harness.fetchImpl,
-    silenceMs: 0,
-    streamConnectTimeoutMs: 20,
-    reconnectMs: 10,
-    onDiagnostic: message => diagnostics.push(message),
-  })
-  try {
-    source.subscribe(() => {})
-    source.update({ fingerprint: 'f1', connected: true })
-    await waitFor(() => harness.streams.length >= 1)
-    // 关键回归：没有 deadline 时这条流永久停在 in-flight（第二个请求永不出现）。
-    await waitFor(() => harness.streams.length >= 2, 2_000)
-    assert.ok(harness.streams[0].aborted(), '建连超时必须 abort 在途 stream')
-    assert.ok(
-      diagnostics.some(line => line.includes('connect timed out')),
-      '建连超时必须响亮诊断（不许静默楔死）',
-    )
-    assert.equal(source.getSnapshot()?.stale, true, '收口后事实必须标 stale')
-    source.stop()
-    const settled = harness.streams.length
-    await new Promise(resolve => setTimeout(resolve, 60))
-    assert.equal(harness.streams.length, settled, 'stop 必须清掉重连定时器（不得再起新流）')
-    assert.ok(harness.streams[settled - 1].aborted(), 'stop 必须 abort 在途流')
-  } finally {
-    source.stop()
-  }
-})
-
-test('R21: a silent stream (headers arrived, no frames) is re-subscribed by the watchdog armed at request start', async () => {
-  const harness = sseStreamHarness('silent-body')
-  const diagnostics: string[] = []
   const source = createSessionFactsSource({
     sourceId: 'gw-sse-silent',
-    fetchImpl: harness.fetchImpl,
-    // 看门狗间隔 floor = 1s；建连 deadline 远大于它 ⇒ 静默臂先收口。
+    fetchImpl,
+    // 看门狗间隔 floor = 1s（silenceMs/3 与 1s 取大者）。
     silenceMs: 10,
-    streamConnectTimeoutMs: 60_000,
     reconnectMs: 10,
     onDiagnostic: message => diagnostics.push(message),
+    subscribeSessionFacts: channel.option,
+  })
+  source.subscribe(snapshot => { staleEmissions.push(snapshot?.stale === true) })
+  try {
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => channel.liveCount() === 1)
+    assert.equal(source.getSnapshot()?.stale, false)
+    await waitFor(() => diagnostics.some(line => line.includes('channel silent')), 3_000)
+    assert.ok(staleEmissions.includes(true), '静默收口必须先发布 stale 事实')
+    // 收口路径 = 整量重取（unary）；重订阅归通道，本地不得 close/新建第二条订阅。
+    await waitFor(() => probes >= 2, 2_000)
+    assert.equal(channel.subscriptions.length, 1, '独立于通道的本地重连阶梯必须不存在')
+    assert.equal(channel.subscriptions[0].closed, false, '看门狗不得 close 订阅（close 是终态）')
+    // 之后一条 admissible success（整量帧）清 stale。
+    channel.item('sync', {
+      protocol: 1, mode: 'sse', features: [],
+      cursor: 4, host: { state: 'ready', serviceable: true }, sessions: [],
+    })
+    await waitFor(() => source.getSnapshot()?.stale === false)
+  } finally {
+    source.stop()
+  }
+})
+
+test('transport keepalives keep a quiet source fresh-but-not-stale, while still reconciling the unary authority', async () => {
+  const channel = channelHarness()
+  let probes = 0
+  const diagnostics: string[] = []
+  const staleEmissions: boolean[] = []
+  const fetchImpl = (async () => {
+    probes += 1
+    return new Response(JSON.stringify(SSE_PROBE_BODY), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }) as unknown as typeof fetch
+  const source = createSessionFactsSource({
+    sourceId: 'gw-sse-quiet',
+    fetchImpl,
+    // keepalive 节奏（100ms）必须快于静默窗（300ms）：生产里 gateway 每 20s 一条 keepalive、
+    // 静默窗 60s，是同一条大小关系。看门狗间隔 floor = 1s。
+    silenceMs: 300,
+    reconnectMs: 10,
+    onDiagnostic: message => diagnostics.push(message),
+    subscribeSessionFacts: channel.option,
+  })
+  source.subscribe(snapshot => { staleEmissions.push(snapshot?.stale === true) })
+  const keepalive = setInterval(() => { channel.item(PAGE_CHANNEL_KEEPALIVE_EVENT, '') }, 100)
+  try {
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => channel.liveCount() === 1)
+    // 看门狗间隔 floor = 1s：跨过一轮而无内容帧。keepalive 是传输活着的证据 ⇒ 只对账不降级。
+    await waitFor(() => diagnostics.some(line => line.includes('transport alive')), 3_000)
+    assert.equal(source.getSnapshot()?.stale, false, '传输仍活 ⇒ 安静的来源不得被标 stale')
+    assert.equal(staleEmissions.includes(true), false, 'keepalive 窗口内不得发布 stale 事实')
+    await waitFor(() => probes >= 2, 2_000)
+    assert.equal(channel.subscriptions.length, 1, 'keepalive 不触发第二条订阅')
+    assert.equal(channel.subscriptions[0].closed, false)
+  } finally {
+    clearInterval(keepalive)
+    source.stop()
+  }
+})
+
+test('G3: a cursor-rejected late probe must not reset the content watermark (silence reconciliation stays pending)', async () => {
+  let clock = 1_000_000
+  let probes = 0
+  const channel = channelHarness()
+  const fetchImpl = (async () => {
+    probes += 1
+    return new Response(JSON.stringify(SSE_PROBE_BODY), { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as unknown as typeof fetch
+  const source = createSessionFactsSource({
+    sourceId: 'gw-rejected-watermark',
+    fetchImpl,
+    now: () => clock,
+    // 看门狗间隔 floor = 1s；静默窗 3s：时钟一推即越过静默，不需要真实等 3s。
+    silenceMs: 3_000,
+    pollIntervalMs: 0,
+    reconnectMs: 5,
+    subscribeSessionFacts: channel.option,
   })
   try {
-    source.subscribe(() => {})
     source.update({ fingerprint: 'f1', connected: true })
-    await waitFor(() => harness.streams.length >= 1)
-    await waitFor(() => diagnostics.some(line => line.includes('stream silent')), 3_000)
-    assert.ok(harness.streams[0].aborted(), '静默收口必须关掉旧流')
-    // 收口路径 = 整量重取（probe GET）+ 重订阅：都必须在有限时间内发生。
-    await waitFor(() => harness.probeGets.length >= 2, 2_000)
-    await waitFor(() => harness.streams.length >= 2, 2_000)
+    await waitFor(() => channel.liveCount() === 1 && source.getSnapshot()?.cursor === SSE_PROBE_BODY.cursor)
+    // 通道给一个更新的游标（9）＝真正的内容进度；这是静默的基准水位。
+    channel.item('sync', {
+      protocol: 1, mode: 'sse', features: [],
+      cursor: 9, host: { state: 'ready', serviceable: true }, sessions: [],
+    })
+    await waitFor(() => source.getSnapshot()?.cursor === 9)
+    clock += 5_000
+    // 看门狗发起静默对账；probe 回的游标 3 < 9，必被游标单调门拒绝。
+    await waitFor(() => probes >= 2, 3_000)
+    assert.equal(source.getSnapshot()?.cursor, 9, '被拒绝的迟到快照不得回退游标/行集')
+    // 若被拒绝的快照把内容水位推后，下一轮看门狗会误判「刚有内容」而不再对账；语义正确时
+    // 静默对账仍在待办 ⇒ 第二轮对账 GET 必须到来（rejected ⇒ 水位不动）。
+    await waitFor(() => probes >= 3, 3_000)
+  } finally {
+    source.stop()
+  }
+})
+
+test('subscription error marks the source stale and records channel evidence without scheduling a local retry', async () => {
+  const channel = channelHarness()
+  let probes = 0
+  const staleEmissions: boolean[] = []
+  const fetchImpl = (async () => {
+    probes += 1
+    return new Response(JSON.stringify(SSE_PROBE_BODY), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }) as unknown as typeof fetch
+  const source = createSessionFactsSource({
+    sourceId: 'gw-channel-error',
+    fetchImpl,
+    silenceMs: 0,
+    reconnectMs: 5,
+    subscribeSessionFacts: channel.option,
+  })
+  source.subscribe(snapshot => { staleEmissions.push(snapshot?.stale === true) })
+  try {
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => channel.liveCount() === 1 && source.getSnapshot()?.verdict === 'ok')
+    const probesBefore = probes
+    resetEvidenceLogForTests()
+    channel.error('channel_closed', '通道关闭 code=1006')
+    // 载体级失败：事实立刻 stale（直到下一次 admissible success），但不排本地重连阶梯。
+    assert.equal(source.getSnapshot()?.stale, true)
+    assert.ok(staleEmissions.includes(true))
+    await new Promise(resolve => setTimeout(resolve, 80))
+    assert.equal(probes, probesBefore, '订阅错误不得触发本地重探/重连（通道自己重订阅）')
+    assert.equal(channel.subscriptions.length, 1, '错误后本地不得新建第二条订阅')
+    assert.equal(channel.subscriptions[0].closed, false, '错误后句柄必须留给通道重订阅')
+    // 证据账本：非取消/超时的订阅错误 = channel，且 booked=true；细节指向通道 topic。
+    const entries = readEvidenceLog().filter(entry => entry.owner === 'facts-stream')
+    assert.equal(entries.length, 1)
+    assert.equal(entries[0].verdict, 'channel')
+    assert.equal(entries[0].booked, true)
+    assert.equal(entries[0].detail.topic, 'page-channel sessionFacts')
+  } finally {
+    source.stop()
+  }
+})
+
+test('a subscription failure inside an unscheduled window is booked=false (same classifier, no second path)', async () => {
+  const channel = channelHarness()
+  const fetchImpl = (async () => new Response(JSON.stringify(SSE_PROBE_BODY), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })) as unknown as typeof fetch
+  const source = createSessionFactsSource({
+    sourceId: 'gw-channel-unscheduled',
+    fetchImpl,
+    silenceMs: 0,
+    reconnectMs: 5,
+    subscribeSessionFacts: channel.option,
+  })
+  try {
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => channel.liveCount() === 1 && source.getSnapshot()?.verdict === 'ok')
+    resetEvidenceLogForTests()
+    // 页面自身没被调度（失焦/节流）：同一分类器 + hadSchedulingGap ⇒ unscheduled，不记账。
+    resetPageScheduleForTests()
+    noteFocus(false)
+    channel.error('TimeoutError', '上游超时')
+    const entries = readEvidenceLog().filter(entry => entry.owner === 'facts-stream')
+    assert.equal(entries.length, 1)
+    assert.equal(entries[0].verdict, 'unscheduled')
+    assert.equal(entries[0].booked, false)
+    // 免除的是故障记账，不是载体事实：没有活载体在推进 item，stale 仍必须立起。
+    assert.equal(source.getSnapshot()?.stale, true)
+  } finally {
+    resetPageScheduleForTests()
+    source.stop()
+  }
+})
+
+test('an admissible item after a subscription error clears stale', async () => {
+  const channel = channelHarness()
+  const fetchImpl = (async () => new Response(JSON.stringify(SSE_PROBE_BODY), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })) as unknown as typeof fetch
+  const source = createSessionFactsSource({
+    sourceId: 'gw-channel-heal',
+    fetchImpl,
+    silenceMs: 0,
+    reconnectMs: 5,
+    subscribeSessionFacts: channel.option,
+  })
+  try {
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => channel.liveCount() === 1 && source.getSnapshot()?.verdict === 'ok')
+    channel.error('upstream_end', '上游结束了该订阅')
+    assert.equal(source.getSnapshot()?.stale, true)
+    channel.item('sync', {
+      protocol: 1, mode: 'sse', features: [],
+      cursor: 5, host: { state: 'ready', serviceable: true }, sessions: [],
+    })
+    assert.equal(source.getSnapshot()?.stale, false, '重新收到一条 admissible success 即清 stale')
+    assert.equal(source.getSnapshot()?.cursor, 5)
+  } finally {
+    source.stop()
+  }
+})
+
+test('stop() closes the channel subscription', async () => {
+  const channel = channelHarness()
+  const fetchImpl = (async () => new Response(JSON.stringify(SSE_PROBE_BODY), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })) as unknown as typeof fetch
+  const source = createSessionFactsSource({
+    sourceId: 'gw-channel-stop',
+    fetchImpl,
+    silenceMs: 0,
+    reconnectMs: 5,
+    subscribeSessionFacts: channel.option,
+  })
+  source.update({ fingerprint: 'f1', connected: true })
+  await waitFor(() => channel.liveCount() === 1)
+  source.stop()
+  assert.equal(channel.subscriptions.length, 1)
+  assert.equal(channel.subscriptions[0].closed, true, 'stop() 必须 close 订阅句柄')
+  assert.equal(channel.liveCount(), 0)
+})
+
+test('G4: stop() bumps the generation — a late probe from the previous incarnation publishes nothing', async () => {
+  const probe = deferredProbe()
+  const source = createSessionFactsSource({
+    sourceId: 'gw-stop-generation',
+    fetchImpl: probe.fetchImpl,
+    silenceMs: 0,
+    pollIntervalMs: 0,
+    reconnectMs: 5,
+  })
+  try {
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => probe.calls() === 1)
+    source.stop()
+    assert.equal(source.getSnapshot(), undefined)
+    // 同一指纹复活（生命周期钩子今日不这么做，但接口允许）：stop() 后的 stopped/connected 会被
+    // update() 翻回，只有代际比较能拦住旧代在途探测的迟到结果，绝不作为新化身的事实发布。
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => probe.calls() === 2)
+    probe.resolve(0, { ...SSE_PROBE_BODY, cursor: 99 })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(source.getSnapshot(), undefined, 'stop() 之前的旧代探测必须按代作废')
+    probe.resolve(1, SSE_PROBE_BODY)
+    await waitFor(() => source.getSnapshot()?.cursor === SSE_PROBE_BODY.cursor, 2_000)
   } finally {
     source.stop()
   }
@@ -697,9 +954,9 @@ test('R21: a silent stream (headers arrived, no frames) is re-subscribed by the 
 
 
 
-// ── 快照构造单一工厂（probe / SSE sync 帧 / refetch 同形状） ─────────────
+// ── 快照构造单一工厂（probe / 通道整量帧 / refetch 同形状） ─────────────
 
-test('snapshot factory: an SSE sync frame builds the same shape as the probe', async () => {
+test('snapshot factory: a channel sync item builds the same shape as the probe', async () => {
   const syncFrame = JSON.stringify({
     protocol: 1,
     mode: null,
@@ -707,26 +964,21 @@ test('snapshot factory: an SSE sync frame builds the same shape as the probe', a
     host: { state: 'stopped', serviceable: false },
     sessions: [],
   })
-  const fetchImpl = (async (url: unknown) => {
-    const text = String(url)
-    if (text.endsWith(SESSION_FACTS_STREAM_ROUTE)) {
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode('event: sync\ndata: ' + syncFrame + '\n\n'))
-        },
-      })
-      return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })
-    }
-    return new Response(JSON.stringify(SSE_PROBE_BODY), { status: 200, headers: { 'content-type': 'application/json' } })
-  }) as unknown as typeof fetch
+  const channel = channelHarness()
+  const fetchImpl = (async () => new Response(JSON.stringify(SSE_PROBE_BODY), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })) as unknown as typeof fetch
   const source = createSessionFactsSource({
     sourceId: 'gw-factory',
     fetchImpl,
     silenceMs: 0,
-    streamConnectTimeoutMs: 60_000,
+    subscribeSessionFacts: channel.option,
   })
   try {
     source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => channel.liveCount() === 1)
+    channel.item('sync', syncFrame)
     await waitFor(() => source.getSnapshot()?.cursor === 9)
     const snapshot = source.getSnapshot()
     assert.equal(snapshot?.verdict, 'ok')
@@ -741,34 +993,27 @@ test('snapshot factory: an SSE sync frame builds the same shape as the probe', a
   }
 })
 
-test('snapshot factory negative: a malformed sync frame refetches instead of silently clearing the snapshot', async () => {
-  const probeGets: string[] = []
-  let streams = 0
-  const fetchImpl = (async (url: unknown) => {
-    const text = String(url)
-    if (text.endsWith(SESSION_FACTS_STREAM_ROUTE)) {
-      streams += 1
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          // 只有第一条流发坏帧；重取后的第二条流保持静默，避免测试内无限重取。
-          if (streams === 1) controller.enqueue(new TextEncoder().encode('event: sync\ndata: {"oops":true}\n\n'))
-        },
-      })
-      return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })
-    }
-    probeGets.push(text)
-    return new Response(JSON.stringify(SSE_PROBE_BODY), { status: 200, headers: { 'content-type': 'application/json' } })
+test('snapshot factory negative: a malformed sync item refetches instead of silently clearing the snapshot', async () => {
+  const channel = channelHarness()
+  let probes = 0
+  const fetchImpl = (async () => {
+    probes += 1
+    return new Response(JSON.stringify(SSE_PROBE_BODY), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
   }) as unknown as typeof fetch
   const source = createSessionFactsSource({
     sourceId: 'gw-factory-bad',
     fetchImpl,
     silenceMs: 0,
-    streamConnectTimeoutMs: 60_000,
+    subscribeSessionFacts: channel.option,
   })
   try {
     source.update({ fingerprint: 'f1', connected: true })
-    await waitFor(() => probeGets.length >= 1)
-    await waitFor(() => probeGets.length >= 2, 2_000)
+    await waitFor(() => channel.liveCount() === 1 && probes === 1)
+    channel.item('sync', { oops: true })
+    await waitFor(() => probes >= 2, 2_000)
     assert.equal(source.getSnapshot()?.cursor, SSE_PROBE_BODY.cursor, '坏帧不得清空既有快照（走 refetch 收敛）')
   } finally {
     source.stop()
@@ -849,49 +1094,45 @@ test('the wire diagnostics counter latches into the snapshot (the only listCompl
 })
 
 /**
- * S4 假件：probe 回 sse 快照（baselines 由回调按第几次 probe 决定），stream 以固定间隔
- * 推 delta 帧。每次 delta 命中断流重取时都会重新走 probe + 重订阅，故 probe 次数就是
- * 「诊断补快照」的计数。帧游标在所有流之间共享单调递增，避免重取后回退被当旧帧丢弃。
+ * S4 假件：probe 回 mode='sse' 快照（baselines 由回调按第几次 probe 决定）；订阅缝用
+ * channelHarness，帧由内部定时器以固定间隔推 delta 项。每条 delta 命中整量重取时都会重新
+ * 走 probe，故 probe 次数就是「诊断补快照」的计数。帧游标在所有帧之间共享单调递增，避免
+ * 重取后回退被当旧帧丢弃。
  */
 function diagnosticsRefetchHarness(baselinesOf: (probeIndex: number) => number | undefined) {
   let probeGets = 0
   let frames = 0
   let cursor = 0
-  const fetchImpl = (async (url: unknown, init?: unknown) => {
-    const text = String(url)
-    if (text.endsWith(SESSION_FACTS_STREAM_ROUTE)) {
-      const signal = ((init ?? {}) as RequestInit).signal as AbortSignal
-      const encoder = new TextEncoder()
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          const timer = setInterval(() => {
-            if (signal.aborted) { clearInterval(timer); return }
-            cursor += 1
-            frames += 1
-            controller.enqueue(encoder.encode(
-              'event: session-state\ndata: ' + JSON.stringify({ cursor, sessions: [] }) + '\n\n',
-            ))
-          }, 5)
-          signal.addEventListener('abort', () => clearInterval(timer), { once: true })
-        },
-      })
-      return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })
-    }
+  const channel = channelHarness()
+  const fetchImpl = (async () => {
     probeGets += 1
     const baselines = baselinesOf(probeGets)
     return new Response(JSON.stringify({
       protocol: 1,
       mode: 'sse',
       features: ['session-state.snapshot', 'session-state.stream'],
-      // 快照游标 = 当前帧游标（真实网关语义）：旧实现允许回退，T3 的单调门要求整量
-      // 快照不得落后于已应用的增量，否则它会被丢弃、闩锁永远得不到更新。
+      // 快照游标 = 当前帧游标（真实网关语义）：T3 的单调门要求整量快照不得落后于
+      // 已应用的增量，否则它会被丢弃、闩锁永远得不到更新。
       cursor,
       host: { state: 'ready', serviceable: true },
       ...(baselines === undefined ? {} : { diagnostics: { baselines } }),
       sessions: [],
     }), { status: 200, headers: { 'content-type': 'application/json' } })
   }) as unknown as typeof fetch
-  return { fetchImpl, probeGets: () => probeGets, frames: () => frames }
+  const frameTimer = setInterval(() => {
+    // 通道尚未（重新）就绪时没有订阅：帧只投给活着的句柄（与真实通道同语义）。
+    if (channel.liveCount() === 0) return
+    cursor += 1
+    frames += 1
+    channel.item('session-state', { cursor, sessions: [] })
+  }, 5)
+  return {
+    fetchImpl,
+    channel,
+    stop: () => clearInterval(frameTimer),
+    probeGets: () => probeGets,
+    frames: () => frames,
+  }
 }
 
 test('S4: a baselines latch stuck at 0 is refetched at most SESSION_FACTS_DIAGNOSTICS_REFETCH_MAX times per generation (bounded retry, no jitter)', async () => {
@@ -902,7 +1143,7 @@ test('S4: a baselines latch stuck at 0 is refetched at most SESSION_FACTS_DIAGNO
     silenceMs: 0,
     reconnectMs: 5,
     pollIntervalMs: 0,
-    streamConnectTimeoutMs: 5_000,
+    subscribeSessionFacts: harness.channel.option,
   })
   try {
     source.subscribe(() => {})
@@ -915,6 +1156,7 @@ test('S4: a baselines latch stuck at 0 is refetched at most SESSION_FACTS_DIAGNO
     assert.equal(source.getSnapshot()?.baselines, undefined, '网关始终没给诊断 ⇒ 闩锁保持 unknown')
   } finally {
     source.stop()
+    harness.stop()
   }
 })
 
@@ -926,7 +1168,7 @@ test('S4: a refetch that finally reports baselines >= 1 stops the retries for th
     silenceMs: 0,
     reconnectMs: 5,
     pollIntervalMs: 0,
-    streamConnectTimeoutMs: 5_000,
+    subscribeSessionFacts: harness.channel.option,
   })
   try {
     source.subscribe(() => {})
@@ -938,6 +1180,7 @@ test('S4: a refetch that finally reports baselines >= 1 stops the retries for th
     assert.equal(harness.probeGets(), 2, '拿到 ≥1 后不再补快照（即使 delta 继续到达）')
   } finally {
     source.stop()
+    harness.stop()
   }
 })
 
@@ -973,9 +1216,8 @@ test('S4/T3: an out-of-order complete snapshot can never regress the cursor or t
   }
 })
 
-test('S4/T3: a same-chunk burst triggering a hung refetch is single-flight (no stacked GETs)', async () => {
+test('S4/T3: a same-batch burst triggering a hung refetch is single-flight (no stacked GETs)', async () => {
   let probeGets = 0
-  let streamServed = 0
   let releaseSecond: (() => void) | null = null
   const body = (baselines: number | undefined, cursor: number): string => JSON.stringify({
     protocol: 1,
@@ -986,25 +1228,8 @@ test('S4/T3: a same-chunk burst triggering a hung refetch is single-flight (no s
     ...(baselines === undefined ? {} : { diagnostics: { baselines } }),
     sessions: [],
   })
-  const encoder = new TextEncoder()
-  const fetchImpl = (async (url: unknown) => {
-    const text = String(url)
-    if (text.endsWith(SESSION_FACTS_STREAM_ROUTE)) {
-      streamServed += 1
-      const stream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          if (streamServed === 1) {
-            // 同一个 chunk 里五帧（旧实现每帧各发一次整量 GET ⇒ 叠发三连）。
-            let chunk = ''
-            for (let cursor = 1; cursor <= 5; cursor += 1) {
-              chunk += 'event: session-state\ndata: ' + JSON.stringify({ cursor, sessions: [] }) + '\n\n'
-            }
-            controller.enqueue(encoder.encode(chunk))
-          }
-        },
-      })
-      return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } })
-    }
+  const channel = channelHarness()
+  const fetchImpl = (async () => {
     probeGets += 1
     if (probeGets === 1) return new Response(body(undefined, 0), { status: 200, headers: { 'content-type': 'application/json' } })
     if (probeGets === 2) {
@@ -1015,16 +1240,90 @@ test('S4/T3: a same-chunk burst triggering a hung refetch is single-flight (no s
   }) as unknown as typeof fetch
   const source = createSessionFactsSource({
     sourceId: 'gw-refetch-single-flight', fetchImpl, pollIntervalMs: 0, silenceMs: 0, reconnectMs: 5,
+    subscribeSessionFacts: channel.option,
   })
   try {
     source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => channel.liveCount() === 1 && probeGets === 1, 3_000)
+    // 同一批五条 delta 项（旧实现每帧各发一次整量 GET ⇒ 叠发三连）。
+    for (let cursor = 1; cursor <= 5; cursor += 1) {
+      channel.item('session-state', { cursor, sessions: [] })
+    }
     await waitFor(() => probeGets === 2, 3_000)
     await new Promise(resolve => setTimeout(resolve, 120))
-    assert.equal(probeGets, 2, '在途整量补快照期间不得叠发（single-flight）：五帧同 chunk 也只发一次')
+    assert.equal(probeGets, 2, '在途整量补快照期间不得叠发（single-flight）：五条同批也只发一次')
     releaseSecond!()
     await waitFor(() => source.getSnapshot()?.baselines === 1, 3_000)
     await new Promise(resolve => setTimeout(resolve, 60))
     assert.equal(probeGets, 2, '闩锁拿到 ≥1 后不再补快照')
+  } finally {
+    source.stop()
+  }
+})
+
+test('G1: a stale generation probe must not free the new generation single-flight flag', async () => {
+  const probe = deferredProbe()
+  const source = createSessionFactsSource({
+    sourceId: 'gw-stale-generation',
+    fetchImpl: probe.fetchImpl,
+    silenceMs: 0,
+    pollIntervalMs: 0,
+    reconnectMs: 5,
+  })
+  try {
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => probe.calls() === 1)
+    // 指纹翻转：旧代 probe 仍在途，新代 probe 立即发出（这两条并发是换代的正当窗口）。
+    source.update({ fingerprint: 'f2', connected: true })
+    await waitFor(() => probe.calls() === 2)
+    // 旧代迟到：结果作废（resetForFingerprint 已清快照），其 finally 也不得清掉新代的 probing。
+    probe.resolve(0, { ...SSE_PROBE_BODY, cursor: 99 })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(source.getSnapshot(), undefined, '旧代的迟到结果绝不发布')
+    source.reconcile()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(probe.calls(), 2, '新代探测在途时 reconcile 不得叠发第三条并发 unary GET')
+    probe.resolve(1, SSE_PROBE_BODY)
+    await waitFor(() => source.getSnapshot()?.cursor === SSE_PROBE_BODY.cursor, 2_000)
+  } finally {
+    source.stop()
+  }
+})
+
+test('G1: a stale generation refetch must not free the new generation refetch single-flight flag', async () => {
+  const probe = deferredProbe()
+  const channel = channelHarness()
+  const source = createSessionFactsSource({
+    sourceId: 'gw-stale-generation-refetch',
+    fetchImpl: probe.fetchImpl,
+    silenceMs: 0,
+    pollIntervalMs: 0,
+    reconnectMs: 5,
+    subscribeSessionFacts: channel.option,
+  })
+  try {
+    source.update({ fingerprint: 'f1', connected: true })
+    probe.resolve(0, SSE_PROBE_BODY)
+    await waitFor(() => channel.liveCount() === 1)
+    // 坏帧 ⇒ 旧代整量对账 R1 在途（refetchInFlight 立起）。
+    channel.item('session-state', 'not json')
+    await waitFor(() => probe.calls() === 2)
+    // 换代：resetForFingerprint 清门并关掉旧订阅，新代 probe 发出。
+    source.update({ fingerprint: 'f2', connected: true })
+    await waitFor(() => probe.calls() === 3)
+    probe.resolve(2, SSE_PROBE_BODY)
+    await waitFor(() => channel.liveCount() === 1 && probe.calls() === 3)
+    // 新代的坏帧 ⇒ 整量对账 R2 在途，单飞门再次立起。
+    channel.item('resync', {})
+    await waitFor(() => probe.calls() === 4)
+    // 旧代 R1 迟到：其 finally 不得清掉新代 R2 的单飞门，否则第二条 resync 会叠发 R3。
+    probe.resolve(1, SSE_PROBE_BODY)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    channel.item('resync', {})
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(probe.calls(), 4, '旧代迟到不得释放新代整量对账的单飞门')
+    probe.resolve(3, SSE_PROBE_BODY)
+    await new Promise(resolve => setTimeout(resolve, 20))
   } finally {
     source.stop()
   }
@@ -1040,7 +1339,7 @@ test('S4/T3: exhausted diagnostics attempts re-arm after the 30s floor (bounded 
     silenceMs: 0,
     reconnectMs: 5,
     pollIntervalMs: 0,
-    streamConnectTimeoutMs: 5_000,
+    subscribeSessionFacts: harness.channel.option,
   })
   try {
     source.subscribe(() => {})
@@ -1061,6 +1360,7 @@ test('S4/T3: exhausted diagnostics attempts re-arm after the 30s floor (bounded 
     assert.equal(source.getSnapshot()?.baselines, 0, '网关始终给 0 ⇒ 闩锁保持已知未就绪（不是永久未知）')
   } finally {
     source.stop()
+    harness.stop()
   }
 })
 

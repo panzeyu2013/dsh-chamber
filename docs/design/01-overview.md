@@ -91,6 +91,7 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 | 23 | [23-windows-support.md](23-windows-support.md) | Windows 11 x64 支持契约（代码面可用；真实 runner/实机门禁未过） | Windows 支持：平台适配、运行时管理解锁纪律、妥协点与验收矩阵 |
 | 24 | [24-archived-session-cleanup.md](24-archived-session-cleanup.md) | 现行（gateway/远程与打包版目检待验） | 已归档会话内容清理：第三个 chamber 宿主域 `archiveCleanup/{probe,purge}`（purge 带可选子集过滤 / `force` / 保护集 `protectSessionIds`；有界例外动议，AGENTS 已登记）+ 归档管理器对话框（server 行 hover 打开，逐条删除 / 显式全选后删除选中——无独立「删除全部」；按工作区分组、可折叠；销毁确认 = 对话框内两段式）；探针期望集派生契约见 design 18 §3.4 |
 | 25 | [25-macos-swift-native-shell.md](25-macos-swift-native-shell.md) | 路线 A 代码面；实机/凭据门禁见 STATUS | macOS Swift 原生壳：WKWebView 载控制面 origin 的壳文档 + 打包 Node sidecar（A/B 桥、61 通道 manifest 锁步（52 invoke+9 push）、目录锁、原生边沿），与 Electron 三平台版共存保留 |
+| 26 | [26-page-channel.md](26-page-channel.md) | 现行 | 页面级多路复用通道：一条同源 WS 承载全部长活流（health / pluginGraph / sessionFacts），实例在通道内以 instanceId 定址、容量归控制面（O(活跃订阅)）；每订阅信用窗口流控；通道独占重连与重订阅；不变量 I-1（页面长活 HTTP 流 = 0）配静态与运行期断言；健康 SSE 端点退役 |
 
 ---
 

@@ -253,7 +253,7 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
 - **有意跳过名单（覆盖集/复合入口的显式例外）**：①官方 HMR 行（宿主半身 always mounted；dev-only 的只是 rebuild watcher）
   `@deepseek-ai/dsh-client-hmr` 在覆盖集内但**永不加载**——它开的是 **document-relative**
   `new EventSource('plugins/events')`，单页多实例下会打到控制面 origin（SPA 回退答 `text/html`）；
-  **宿主通道本身可用，且已由 §3.7 的 chamber 订阅者按实例前缀消费**（`packages/renderer/src/chamber-covered.ts#=literal:The official HMR entry`，page-own 无 factory）；②
+  **宿主通道本身可用，且已由 §3.7 的 chamber 订阅者经页面通道消费**（控制面按 `instanceId` 打开上游 `GET <target>/plugins/events`，页面侧不再自建按实例前缀的订阅）（`packages/renderer/src/chamber-covered.ts#=literal:The official HMR entry`，page-own 无 factory）；②
   `@deepseek-ai/dsh-client-ui-cordis` **有意不由复合入口注册、也不进覆盖集**——它按宿主图 extra row
   加载（`packages/renderer/src/chamber-entry.ts#=literal:ui-cordis is deliberately not`；`host-graph.test.ts` 固定「未覆盖 ⇒ extra」）；③ 官方**桌面专属**账户家族
   `@deepseek-ai/dsh-client-ui-settings-account` 在覆盖集内但**永不加载**——它的 apply 以 `'dshDesktop' in
@@ -444,25 +444,26 @@ scope——被否：同一 document 复用 N 个实例，页面级事实不可�
 在宿主生效，但页面侧曾只能等一次窗口重载。本节的 `/plugins/events` 订阅者是**页面侧最后一环**：把宿主图的
 变化实时消费进对应实例的活 ctx。
 
-- **通道**：每来源一条 `EventSource(<basePath>/plugins/events)`（上游 `dsh-client-hmr` 的宿主半身
-  注册的 exact 路由，实例 webServer 上；反代透明转发 SSE）。**官方客户端半身仍不加载**（§3.5 名单①）：
+- **通道**：每来源一条**页面级多路复用通道**（design 26）的 `pluginGraph` 逻辑订阅。页面只开一条同源 WS
+  （`/api/page-channel`），控制面按 `instanceId` 为这条订阅打开一条上游 `GET <target>/plugins/events`
+  （上游 `dsh-client-hmr` 的宿主半身注册的 exact 路由，实例 webServer 上）；上游的 SSE 注释行
+  （keepalive）以 data 为空的 keepalive item 透传，只作传输活性证据、不进对账器。**官方客户端半身仍不加载**（§3.5 名单①）：
   它开的是 **document-relative** 路径，在单页多实例下会打到控制面 origin。**同步单元只用 `graph` 帧**
   （全量快照，无需顺序号）；`rebuilt` 帧不必单独消费——上游 `rebuilt()` 自己会 `compose()` 并
   `notifyGraphChanged()`，带新 rev 的 graph 帧必然随到。
 - **机会性契约**：通道拿不到帧 ≠ 降级。boot 是通道不可用时的回退权威（通道正常时由 graph 帧热同步增删，§3.7）；live pass 失败/不可用一律 no-op，
   绝不影响 boot、其它行或实例状态。arm 判词三态：**answered（含空图）→ arm**；`not-injected` → 不 arm，
   但该 boot 以 `ShellState.graphAnswered === false` 把「取过图且没答」交给 App 的**图回归**政策（下一条；
-  这是 gateway/mobile 的合法形态）；channel 失败 → 不 arm（等 App 的 ready 世代自愈重 boot）；
+  这是 gateway/mobile 的合法形态）；boot 图请求失败 → 不 arm（等 App 的 ready 世代自愈重 boot）；
   用户面急停 = safe mode（不 arm）；另有页面级 devtools/测试开关
-  （`__DSH_CHAMBER_LIVE_PLUGIN_SYNC__ === false`，arm 时读取、无缓存）、主机无 `EventSource` 同样不 arm。
-  **回连与有界重建（v1）**：连接**已建立**后断线由浏览器 EventSource 自动重连；**重连响应非 200**
-  （404——该 profile 没有 hmr 宿主行；反代切流/缓冲导致的非 `text/event-stream`；或宿主重启窗口内反代的
-  503/502，design 18 §3.6 项 8）按规范 fail-the-connection、**永久 CLOSED**，浏览器不再重试。hold 层据此
-  自己重建：`live-graph.ts` 检测 `readyState === CLOSED` 后按 2s/5s/10s/20s/30s/30s（≈97s，覆盖 design 18
-  §9 所述 90s 就绪窗）重开 `EventSource`，**成帧即重置预算**；预算耗尽只记一条日志、不再重建（机会性契约，
-  不附加诊断）。耗尽后该来源退回 boot 时现状——订阅已 arm 的壳不会因 ready 世代重 boot（自愈/图回归只覆盖
-  另一类壳：前者是 boot 曾降级收尾，后者是干净但无图，见下条），恢复 = 用户手动重载页面/重启应用（宿主崩溃
-  重启后活行存活仍是 STATUS 开放实机项）。
+  （`__DSH_CHAMBER_LIVE_PLUGIN_SYNC__ === false`，arm 时读取、无缓存）、宿主不提供页面通道订阅
+  （`pageChannelSubscribe === null`，只看测试/非浏览器宿主）同样不 arm。
+  **回连与有界重建**：重连**只有一条阶梯、属页面通道**（design 26 §D4）：socket 断线按 1s/2s/5s/10s/20s/30s
+  重连并在重开后自动重订阅；订阅级失败（上游 404——该 profile 没有 hmr 宿主行；上游非 200；或宿主重启窗口内
+  反代的 503/502，design 18 §3.6 项 8）由控制面发该订阅的 error 帧、通道按 3s/5s/10s/20s/30s 重发 `subscribe`。
+  `live-graph.ts` **不再排自己的阶梯**（旧 EventSource 的 readyState/CLOSED 分支与 2s→30s 预算已删除）：每次
+  断供只记一条日志（下一次成帧或 onOpen 重新武装），boot 始终是回退权威。宿主崩溃重启后的活行存活仍是
+  STATUS 开放实机项。
 - **图回归（退役窗口重载的每实例替代）**：boot 干净但**没取到图**（`graphAnswered === false`，即 `not-injected`）
   的壳从不 arm，而取图只发生在 boot 内 ⇒ 宿主**后来才有**客户端插件图（典型：seed
   `@dsh-chamber/dsh-chamber-seed-client-graph` 后重启远端 dsh，design 13 的 seed 流程）时没有任何路径自己

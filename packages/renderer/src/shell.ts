@@ -41,11 +41,15 @@ import { isChamberSourceId, rawInstanceIdFromSourceId } from './transport-source
 import { collectExtraRows, type CollectExtraRowsDeps, type ExtraModuleRow } from './host-graph.ts'
 import {
   readLiveSyncEnabled, startLiveGraphSync,
-  type LiveEventSourceFace, type LiveGraphSync, type LiveLoaderFace,
+  type LiveGraphSync, type LiveLoaderFace,
 } from './live-graph.ts'
 import { readSafeModeFlag, SAFE_MODE_GLOBAL } from './safe-mode.ts'
 import { BundleLoadTimeoutError } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
 import { chamberBridge, describeThrown, type PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-core'
+// The page's ONE long connection (design 26). The shell binds its own instance identity
+// here; live-graph holds no stream URL and no reconnect ladder of its own.
+import { subscribePageChannel } from '@dsh-chamber/dsh-chamber-client-core/page-channel'
+import { isPageChannelKeepaliveItem } from '@dsh-chamber/dsh-chamber-client-core/page-channel'
 // Page-level machine catalog + the page-level instance client it reads through: pure
 // modules with no vendor/runtime links.
 import {
@@ -307,7 +311,7 @@ interface ShellHolder {
   lastState?: ShellState
   /** Live client-plugin graph sync (armed after settle, disarmed before any
    *  successor preload and inside disposeHolder). Absent = never armed (safe
-   *  mode, channel did not answer, kill switch, no EventSource on this host). */
+   *  mode, channel did not answer, kill switch, no page-channel dependency on this host). */
   liveSync?: LiveGraphSync
 }
 
@@ -452,6 +456,10 @@ export function bootInstanceShell(
     /** Test seam: host-graph retry budget (attempts/delayMs/sleep). Production keeps
      *  the shipped 10×500ms window. */
     retry?: CollectExtraRowsDeps['retry']
+    /** Test seam: the page-channel subscribe face this shell binds to its own instance
+     *  id. Production uses the client-core module; an explicit `null` models a host with
+     *  no page channel (live sync stays off). */
+    pageChannelSubscribe?: typeof subscribePageChannel | null
   } = {},
 ): Promise<ShellState> {
   // perf 埋点：boot 入口（含全局队列排队；注册表见 perf-marks.ts）。
@@ -725,10 +733,14 @@ export function bootInstanceShell(
       cancelledBoots.delete(instanceId)
       flushPendingOpens(instanceId)
       // Live client-plugin graph sync: armed only for a boot whose host graph ANSWERED,
-      // in normal mode, on a host with EventSource. The holder owns it; a successor boot
-      // or disposal disarms it (see the boot-entry fence above and disposeHolder).
+      // in normal mode, on a host whose page-channel subscribe dependency is present. The
+      // holder owns the subscription; a successor boot or disposal disarms it (see the
+      // boot-entry fence above and disposeHolder).
+      const pageChannelSubscribe = options.pageChannelSubscribe === undefined
+        ? subscribePageChannel
+        : options.pageChannelSubscribe
       if (graphAnswered && !safeMode && installedModulesSystem !== null
-        && readLiveSyncEnabled() && typeof EventSource === 'function') {
+        && readLiveSyncEnabled() && pageChannelSubscribe !== null) {
         // 机会性通道：arm 自身的失败绝不把已 settle 的 boot 变成失败。
         try {
         const liveLoader = readLiveLoaderFace(entry.runtimeCtx)
@@ -753,7 +765,16 @@ export function bootInstanceShell(
             // instead of "mount but inactive" forever (boot-tolerance.ts owns the verdict).
             fiberIsTerminal: fiber => fiber?.state === FIBER_STATE.FAILED
               || fiber?.state === FIBER_STATE.DISPOSED || fiber?.state === FIBER_STATE.UNLOADING,
-            createEventSource: url => new EventSource(url) as unknown as LiveEventSourceFace,
+            // The SHELL binds the instance identity: one page-channel pluginGraph topic for
+            // THIS instance. The channel owns the socket and every retry (design 26 §D4).
+            subscribePluginGraph: handlers => pageChannelSubscribe({
+              family: 'pluginGraph',
+              instanceId,
+              // keepalive（data 为空）只是传输活着的证据，不是插件图状态帧：不喂给对账器。
+              onItem: (event, data) => { if (!isPageChannelKeepaliveItem(event, data)) handlers.onItem(data) },
+              onOpen: () => { handlers.onOpen?.() },
+              onError: (code, message) => { handlers.onError?.(code, message) },
+            }),
           })
         }
         } catch (error) {

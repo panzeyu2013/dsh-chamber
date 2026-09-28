@@ -80,8 +80,8 @@ test('credential rotation revokes every authenticated downstream while preservin
     api: {
       async handle(_req: unknown, res: FakeResponse) {
         managementCalls += 1
-        // Simulate both management SSE and a long-lived /api/i/local HTTP
-        // response: neither ends until credential rotation destroys it.
+        // Simulate a long-lived /api/i/local HTTP response: it does not
+        // end until credential rotation destroys it.
         res.writeHead(200, { 'content-type': 'text/event-stream' })
       },
       getCorsHeaders() { return { allowed: true, headers: {} } },
@@ -91,12 +91,6 @@ test('credential rotation revokes every authenticated downstream while preservin
     },
   } as never
   const headers = { host: 'gateway.example:3000', authorization: `Bearer ${TOKEN}` }
-  const managementSse = await runHttp(
-    dispatch,
-    new FakeRequest('GET', '/api/host/health-events', headers),
-    undefined,
-    ctx,
-  )
   const localHttp = await runHttp(
     dispatch,
     new FakeRequest('GET', '/api/i/local/api/slow', headers),
@@ -143,12 +137,12 @@ test('credential rotation revokes every authenticated downstream while preservin
   )
   assert.equal(mutation.status, 200)
   assert.equal(mutation.destroyed, false, 'the credential mutation response is excluded from its own teardown')
-  for (const response of [managementSse, localHttp, gatewayHttp, featureSse]) {
+  for (const response of [localHttp, gatewayHttp, featureSse]) {
     assert.equal(response.destroyed, true)
   }
   assert.equal(localWs.destroyed, true)
   assert.equal(gatewayWs.destroyed, true)
-  assert.equal(managementCalls, 2, 'management SSE and /api/i/local HTTP use the authoritative plane API')
+  assert.equal(managementCalls, 1, '/api/i/local HTTP uses the authoritative plane API')
   assert.equal(instanceUpgradeCalls, 1, '/api/i/local WS uses the authoritative instance proxy')
 })
 

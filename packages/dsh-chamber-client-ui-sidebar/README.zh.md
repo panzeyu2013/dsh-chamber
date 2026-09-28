@@ -180,7 +180,7 @@ vite shared 单例纪律，因为目标实例自己的 ctx 也要读它）及其
 ## 数据纪律
 
 - 外壳只订阅 chamberBridge 投影；renderer App 层持有并发布它（状态走
-  推送：/health 由 health-events 流驱动、隧道相位 onStatusChanged、注册表
+  推送：/health 由页面级通道（`/api/page-channel`，design 26）的 health 订阅驱动、隧道相位 onStatusChanged、注册表
   onInstancesChanged + 30s 轮询兜底；已挂载 ctx 的 runtime/snapshot producer
   事件级推送聚合，30s unary 仅兜底无完整 producer 的来源，动作后的
   requestRefresh 仍即时）。

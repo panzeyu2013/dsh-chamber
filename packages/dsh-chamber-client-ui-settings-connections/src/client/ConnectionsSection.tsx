@@ -146,7 +146,7 @@ const START_REFUSAL_KEYS: { notRunning: RuntimeRefusalKey; busy: RuntimeRefusalK
  *  css.hint + role="status"（接受/完成 = ok，拒绝/失败/超时 = error）。 */
 type RestartNote = { tone: 'ok' | 'error'; text: string }
 
-/** Local-card connection-row poll cadence: 状态由 /api/host/health-events 推送，此处只兜底行字段与流异常收敛。 */
+/** Local-card connection-row poll cadence: 状态由页面通道 health 订阅推送，此处只兜底行字段与流异常收敛。 */
 const LOCAL_ROW_POLL_MS = 30_000
 
 /** Slugify a ~/.ssh/config alias into the id whitelist (^[a-zA-Z0-9_-]+$). */
@@ -936,7 +936,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       }
     }
     events.onerror = () => {
-      // 流中断（控制面重启/网络抖动）：一次性回读，EventSource 会自行重连
+      // 流中断（控制面重启/网络抖动）：一次性回读，页面通道会自行重连
       void loadLocal()
     }
     return () => {

@@ -18,6 +18,7 @@ import {
   type PlaneMiddlewareContext,
 } from '@dsh-chamber/control-plane'
 import type { Duplex } from 'node:stream'
+import { PAGE_CHANNEL_PATH } from '@dsh-chamber/dsh-chamber-wire/page-channel'
 import type { AuthChangeProof, AuthPrincipal, AuthProvider, ChangePasswordInput, ChangeTokenInput } from './auth.ts'
 import { SESSION_COOKIE } from './auth.ts'
 import { DEFAULT_MOBILE_ENTRY_PATH } from './config.ts'
@@ -174,8 +175,9 @@ function sendBoundaryRejection(res: ApiResponse, req: ApiRequest, decision: Gate
 function rejectWs(socket: { end(data: string): unknown }, status: number, message: string, code?: string): void {
   const reason = status === 400 ? 'Bad Request'
     : status === 401 ? 'Unauthorized'
-      : status === 421 ? 'Misdirected Request'
-        : status === 503 ? 'Service Unavailable' : 'Forbidden'
+      : status === 404 ? 'Not Found'
+        : status === 421 ? 'Misdirected Request'
+          : status === 503 ? 'Service Unavailable' : 'Forbidden'
   socket.end(
     `HTTP/1.1 ${status} ${reason}\r\n`
     + 'Content-Type: application/json\r\n'
@@ -927,6 +929,20 @@ export function createGatewayDispatch(
         }
         return true
       }
+    }
+    // 3.5 The page-level multiplex channel is deliberately NOT mounted on the
+    // gateway shape (design 26 §2): the page here is the control-plane origin, and
+    // the mobile client does not consume health/pluginGraph/sessionFacts. Falling
+    // through would let the control-plane shell's defaultUpgrade serve the whole
+    // channel (health + pluginGraph upstreams) behind this boundary, so the WS
+    // upgrade is claimed and answered with an explicit "not here" 404.
+    // The HTTP surface deliberately differs: it has no carrier of its own for this
+    // path, so GET /api/page-channel falls through to the local-dsh proxy (step 5)
+    // and gets the host's own 404 — no channel capability is reachable that way
+    // (the channel lives on the control-plane WS upgrade, never on host HTTP).
+    if (pathname === PAGE_CHANNEL_PATH) {
+      rejectWs(socket, 404, 'the page channel is not mounted on the gateway', 'not_found')
+      return true
     }
     // 4. Everything else → fall through; authenticated sockets stay tracked.
     return false

@@ -104,7 +104,6 @@ sidecar 生命周期可终止（attach 不启动、也不终止运行中的壳�
 | 情形 | 处置 | 依据 |
 |---|---|---|
 | `clientGraph/graph` 冷启动期 503 | 记为**容忍**（原始文本仍入报告） | design 09 §3.2：实例未 serving 时反代拒转发，属预期 |
-| `api/host/health-events` 的 `net::ERR_ABORTED` | 记为**容忍** | 页面自身重订阅/关闭 SSE 时浏览器记客户端 abort；服务端掉线会是状态码或别的错误串，仍判失败 |
 | `[cordis-client-runner] … has no active Connection` | 记为**上游噪声**（原始文本仍入报告） | 上游 `cordis-client-runner/src/client/inspect-registry.ts` 启动期日志，非 chamber 缺陷 |
 | 首启向导（`settings.onboarding`） | `--dev` 会**走完**（优先点关闭动作，最多 4 步自动推进）；`--attach` **绝不代点**，记 INFO 并跳过设置面走查 | 推进向导会写实例自身状态：只允许发生在一次性实例上 |
 | `W-4a` 来源级收拢（会写持久化偏好 `sourceFolded`） | `--dev` 执行（收拢→展开往返，并断言往返后无残留）；`--attach` 记 **INFO** 并写明原因 | design 06 §3.1；与上一行"只允许写在一次性实例上"同一口径 |
@@ -128,7 +127,7 @@ sidecar 生命周期可终止（attach 不启动、也不终止运行中的壳�
 
 ## 前置条件
 
-- **`--live`**：应用已在跑（打包态或 dev 均可）。只发 GET/HEAD、读一帧 SSE、做原始
+- **`--live`**：应用已在跑（打包态或 dev 均可）。只发 GET/HEAD、做原始
   upgrade 握手；**不发任何写请求**，可安全用于有真实会话的安装态。MX-1/MX-2 默认读**本机
   Electron userData 约定**的桌面注册表（`~/Library/Application Support/@dsh-chamber/desktop/ssh-instances.json`）；
   当 `--plane` 指向的不是该注册表所属的实例（`--dev` 一次性实例、被替换的打包载荷等）时，用

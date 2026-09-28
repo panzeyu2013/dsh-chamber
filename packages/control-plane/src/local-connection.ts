@@ -142,8 +142,8 @@ export interface LocalConnection {
    */
   restartLocal(): Promise<void>
   /**
-   * Lifecycle-change subscription (the push channel behind
-   * GET /api/host/health-events): every transition fires the listener with the
+   * Lifecycle-change subscription (the producer behind the page channel's
+   * `health` family, design 26): every transition fires the listener with the
    * /health `dsh` snapshot. Listener throws are isolated. Returns the unsubscribe.
    */
   onStateChange(listener: (snapshot: { status: string; port: number | null; error: string | null }) => void): () => void
@@ -258,7 +258,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
    * begins or the connection stops.
    */
   let startFailure: string | null = null
-  /** Lifecycle-change subscribers (the health-events push channel, 05 §3). */
+  /** Lifecycle-change subscribers (the page channel's health producer, design 26). */
   const stateListeners = new Set<(snapshot: { status: string; port: number | null; error: string | null }) => void>()
   let dshPort: number | null = null
   let child: SpawnedDsh | null = null
@@ -371,8 +371,10 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
     // The host itself stays silent on stdio in the web profile, so lifecycle
     // transitions are the observable content of GET /api/host/logs — always written.
     noteHostLog(`[control-plane] local connection → ${next}${nextError ? `: ${nextError}` : ''}`)
-    // Push channel: every transition reaches the renderer instantly; the SSE endpoint
-    // also snapshots on subscribe. Subscriber throws are isolated.
+    // Push channel: every transition reaches the page channel's health producer
+    // instantly; the producer additionally emits the current snapshot when a
+    // subscription opens, so a late subscriber is never left on a stale state.
+    // Subscriber throws are isolated.
     const snapshot = { status: next, port: dshPort, error: nextError }
     for (const listener of stateListeners) {
       try {

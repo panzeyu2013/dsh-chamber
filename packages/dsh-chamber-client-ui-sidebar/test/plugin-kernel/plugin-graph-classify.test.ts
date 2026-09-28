@@ -91,6 +91,12 @@ test('a result that is not ok carries the host error copy and the shared state r
   // An ARRAY result passes the typeof-object gate and falls into the ok !== true branch.
   assert.deepEqual(classifyPluginGraphOutcome(outcome(200, envelope(['not', 'a', 'record']))),
     { kind: 'channel', state: 'graph-unreachable', message: '宿主启动图：graph 调用失败：unknown' })
+  // 非字符串的 code/message 不得参与分类：数组文本插值过去会伪装成 'not-injected'
+  // （把不可达判成未注入）。消息面仍照 ?? 链逐字呈现，分类面只承认字符串。
+  assert.deepEqual(classifyPluginGraphOutcome(failed({ message: ['method', 'missing'] })),
+    { kind: 'channel', state: 'graph-unreachable', message: '宿主启动图：graph 调用失败：method,missing' })
+  assert.deepEqual(classifyPluginGraphOutcome(failed({ code: ['not_found'] })),
+    { kind: 'channel', state: 'graph-unreachable', message: '宿主启动图：graph 调用失败：not_found' })
 })
 
 test('a value without an entries array is malformed', () => {

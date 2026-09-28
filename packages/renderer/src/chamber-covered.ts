@@ -146,9 +146,9 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // is dev-only): its client fiber opens a DOCUMENT-relative
   // `new EventSource('plugins/events')`, which in this one-page-N-ctx shell would
   // hit the control-plane origin (SPA fallback: text/html). The HOST route itself
-  // is a per-instance service and is consumed by the chamber's own subscriber at
-  // the instance prefix (live-graph.ts / design 09 §3.7); this client row stays
-  // skipped forever (page-own, no factory).
+  // is a per-instance service, consumed by the chamber's own subscriber through the
+  // page channel's `pluginGraph` topic (live-graph.ts / design 26); this client row
+  // stays skipped forever (page-own, no factory).
   '@deepseek-ai/dsh-client-hmr',
   // The official open-in client row is NOT skipped any more (D2): it loads from
   // the host graph so its file-level surfaces register — the right-sidebar

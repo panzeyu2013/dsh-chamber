@@ -340,9 +340,10 @@ chamber-settings.json，非秘密）：
    spawn 前重新求值（client-graph/git-worktree 挂载行按当前构建产物重建）；dsh boot
    重读 DSH_HOME profiles + `--patch` overlay（`dsh plugin` 装/删的插件生效）；前端页面
    不随宿主重启重 boot（已 boot 的实例壳不重 boot）。页面侧 client 行的刷新走 design 09 §3.7 的
-   `/plugins/events`：重连撞上本段下文的 503/502 窗口会被浏览器判死（`readyState CLOSED`），hold 层
-   随后按 §3.7 的有界重建（≈97s 预算，覆盖就绪窗）重开订阅，成帧即重新下发整图并热同步增删；
-   预算耗尽才退回 boot 现状、须手动重载页面/重启应用（存活仍为 STATUS 开放实机项）。boot 时**没有图**的非
+   `/plugins/events`：重连撞上本段下文的 503/502 窗口时，控制面为该 `pluginGraph` 订阅发 error 帧、
+   页面级通道（design 26）按 3s→30s 阶梯重发 `subscribe`（重连阶梯只有通道这一条），成帧即重新下发整图并
+   热同步增删；通道或上游持续不可用则退回 boot 现状（机会性契约：boot 始终是回退权威），须手动重载页面/重启
+   应用（存活仍为 STATUS 开放实机项）。boot 时**没有图**的非
    本地壳（`not-injected`，host 尚无 chamber 宿主包）走 §3.7 的另一路：宿主后来才有图时（design 13 的 seed
    流程即此）按有界探测（每来源每 60s 至多一次）发现并重挂该实例一次，同样不需要整页重载；**本地**实例的 404
    是 `local-graph-not-injected` 降级 boot，归降级自愈（§3.2 W3），不属该路。

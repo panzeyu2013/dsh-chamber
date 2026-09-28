@@ -15,7 +15,7 @@ export { classifyGraphChannelFailure, isRecord, mintRpcId, postUnary } from './w
 export type * from './wire-error.ts'
 export { throwIfInstanceUnavailable, wrapWireError } from './wire-error.ts'
 export type * from './control-plane-client.ts'
-export { controlPlaneUrl, post, request, toConnectionSummary, toLocalWriterDiagnosis } from './control-plane-client.ts'
+export { controlPlaneUrl, post, request, subscribeHostHealth, toConnectionSummary, toLocalWriterDiagnosis } from './control-plane-client.ts'
 export type * from './aggregate-store.ts'
 export { SOURCE_PHASE_UNKNOWN, chamberBridge, isValidProducerSourceFingerprint } from './aggregate-store.ts'
 export type * from './client-plugin-loader.ts'
@@ -85,3 +85,9 @@ export type * from './page-schedule.ts'
 export { hadSchedulingGap, startPageScheduleProbe } from './page-schedule.ts'
 export type * from './evidence-log.ts'
 export { recordEvidence } from './evidence-log.ts'
+// 页面级多路复用通道（design 26）：页面**唯一**的长连接。只有生产消费面经桶导出——
+// 两个符号分别被 renderer/main.tsx 与 api.ts、settings-connections 消费；常数、socket
+// 注入面与测试复位面留在模块与其子路径（测试直接 import './page-channel.ts'，与
+// page-schedule / evidence-log 同规，见 verify:no-dead-exports 的判定口径）。
+export type * from './page-channel.ts'
+export { subscribePageChannel, installPageChannelEventSourceAudit } from './page-channel.ts'

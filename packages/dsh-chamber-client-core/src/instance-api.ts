@@ -439,9 +439,10 @@ export function releaseInstanceClient(instanceId: string): void {
 function resultError(result: UnaryResult): Error | null {
   if (result.ok === true) return null
   const error = result.error
+  // 码/文案是字符串契约：String(['session/not-found']) 会伪造 domain 词汇，把取消失败读成幂等成功。
   return new InstanceRpcError(
-    String(error.code ?? 'unknown'),
-    String(error.message ?? '未知错误'),
+    typeof error.code === 'string' && error.code !== '' ? error.code : 'unknown',
+    typeof error.message === 'string' && error.message !== '' ? error.message : '未知错误',
     error.details,
   )
 }
@@ -530,7 +531,7 @@ export async function createHostDirectory(client: InstanceApiClient, path: strin
     throw wrapWireError(err)
   }
   if (result.ok !== true) throw new DirectoryBrowseError(result.error)
-  const created = String(result.value ?? '')
+  const created = typeof result.value === 'string' ? result.value : ''
   if (created === '') {
     // Chamber-local synthetic code (no upstream wire code exists for "host
     // returned no created path").
@@ -576,9 +577,10 @@ export async function fetchInstanceSnapshot(client: InstanceApiClient): Promise<
 
   const summaries = ((sessionResult.ok ? sessionResult.value?.items : undefined) ?? []) as any[]
   const sessions: SessionRow[] = summaries.flatMap((summary: any) => {
-    if (summary?.origin === 'subagent') return []
+    // 非字符串 id 的行不是会话行：String() 伪造的假 id 会被导航与归档清理（按 id 行动）当真，丢弃。
+    if (summary?.origin === 'subagent' || typeof summary?.sessionId !== 'string' || summary.sessionId === '') return []
     const row: SessionRow = {
-      sessionId: String(summary.sessionId),
+      sessionId: summary.sessionId,
       running: summary.running === true,
       blank: summary.blank === true,
     }
@@ -682,10 +684,8 @@ export async function searchSessions(
   const value = result.ok ? result.value : undefined
   const items = (value?.items ?? []) as any[]
   return {
-    items: items.map((item: any) => ({
-      sessionId: String(item.sessionId),
-      snippet: String(item.snippet ?? ''),
-    })),
+    items: items.flatMap((item: any) => (typeof item?.sessionId === 'string' && item.sessionId !== ''
+      ? [{ sessionId: item.sessionId, snippet: typeof item.snippet === 'string' ? item.snippet : '' }] : [])),
     hasMore: value?.hasMore === true,
   }
 }

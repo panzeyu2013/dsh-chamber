@@ -5,7 +5,7 @@ import { frameText, readDocumentLocale } from './locales.ts'
 import { installPageLanguageOwner } from './page-language.ts'
 import { installSvgResourceScope } from '@dsh-chamber/dsh-chamber-client-core/svg-resource-scope'
 import { installRootTakeoverWatch } from './root-takeover-watch.ts'
-import { startPageScheduleProbe } from '@dsh-chamber/dsh-chamber-client-core'
+import { installPageChannelEventSourceAudit, startPageScheduleProbe } from '@dsh-chamber/dsh-chamber-client-core'
 import { recordIncident } from './incident.ts'
 import './styles.css'
 
@@ -37,6 +37,11 @@ installPageLanguageOwner()
 // name, so a gate can prove the entry called the installer on minified output.
 ;(globalThis as unknown as { __chamberPageScheduleInstalled?: unknown }).__chamberPageScheduleInstalled =
   startPageScheduleProbe()
+
+// I-1（页面只有一条长连接）：安装 EventSource 审计——页面自建 EventSource 会被记账与告警。
+// 锚定赋值同上：esbuild 保留点号属性名，产物守卫可在压缩输出上证明入口装了 I-1 的运行时告警。
+;(globalThis as unknown as { __chamberPageChannelAuditInstalled?: unknown }).__chamberPageChannelAuditInstalled =
+  installPageChannelEventSourceAudit()
 
 // One foreign `shell.overlay` seat can zero + inert `#root` and cover the whole
 // window (the desktop-only account family did exactly this: design 09 §3.5 有意

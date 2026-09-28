@@ -52,6 +52,17 @@ const MARKERS = [
   // deriveProtectedSet fail-closed guard: an all-empty fact set is never
   // answered as "nothing is protected".
   'protected set derived empty (installation/seed/family facts all empty)',
+  // design 26 page channel (third-round finding): a bundle predating the whole
+  // feature still satisfied the four protected-set markers above, so the packaged
+  // app silently served a control plane with no /api/page-channel route while its
+  // web half (desktop/dist/web) already carried the client. Pin the route, the
+  // gateway-only family and the permanent-mismatch code: every one of them is a
+  // verbatim string constant of the bundled sources. Measured discrimination: the
+  // route and family markers are absent from the stale sidecar copy that passed
+  // before, so either one reddens this test; the code marker is a contract pin.
+  '/api/page-channel',
+  'sessionFacts',
+  'capability_not_found',
 ]
 
 test('packaged dist/control-plane carries the CURRENT protected-set read-face facts', () => {

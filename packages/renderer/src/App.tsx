@@ -838,7 +838,7 @@ export default function App() {
     try {
       setConnections(await api.connections.list())
     } catch {
-      // 控制面不可达由 /health 轮询的 healthError 呈现；连接行保持现状
+      // 控制面不可达由页面通道的 health 推送与一次性 /health 回读呈现；连接行保持现状
     }
   }, [])
 
@@ -1231,8 +1231,8 @@ export default function App() {
     pollAggregatesRef.current()
 
     // Local status push channel: the control plane streams every machine transition (starting →
-    // ready flips immediately, no periodic health poll). EventSource reconnects and re-snapshots;
-    // a failed stream falls back to one-shot /health (controlUnreachable + first-frame convergence).
+    // ready flips immediately, no periodic health poll). The page channel reconnects and the health
+    // subscription snapshots on subscribe; a failed stream falls back to one-shot /health.
     const healthEvents = api.host.healthEvents()
     healthEvents.onmessage = (event) => {
       if (cancelled) return

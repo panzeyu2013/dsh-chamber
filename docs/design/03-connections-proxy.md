@@ -252,7 +252,7 @@ WS   /api/i/<id>/api/remote.mux    → 实例 WS  /api/remote.mux
   `requiresIdentityUpstreamEncoding`，取舍见设计 17 §8；其余请求把协商交给上游 gzip 中间件
   （响应白名单放行 `content-encoding` ——压缩标签必须随行，浏览器才能正确解码；反代不经手压缩字节）。
 - **进程级资源预算**：并发 HTTP ≤ 64、活动 WS ≤ 64、待完成 WS 握手 ≤ 16、所有 proxy owner
-  共享的进程级缓冲请求体预算 ≤ 300MiB；健康 SSE ≤ 32。超额统一 503 `resource_exhausted`，
+  共享的进程级缓冲请求体预算 ≤ 300MiB。超额统一 503 `resource_exhausted`，
   计数在断连/超时/错误/完成时幂等释放；HTTP server 在路由前另设 10s header、35s request、
   5s keep-alive 与 192 连接上限。
 - 非 SSE 上游响应使用 45s **空闲**超时（每数据块重新计时；chamber Git mutation 预算 30s，更短窗会在

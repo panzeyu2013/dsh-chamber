@@ -2,8 +2,8 @@
  * `--live` acceptance: read-only probes against a RUNNING dsh-chamber.
  *
  * Works against the packaged app (no CDP, no dev instance) and against a dev
- * control plane: it only issues GET/HEAD, reads one SSE frame, and performs raw
- * HTTP upgrade handshakes. It never POSTs/PATCHes/DELETEs, so it is safe on a
+ * control plane: it only issues GET/HEAD and performs raw HTTP upgrade handshakes.
+ * It never POSTs/PATCHes/DELETEs, so it is safe on a
  * live install with real sessions.
  */
 import { request as httpRequest } from 'node:http'
@@ -104,8 +104,6 @@ async function get(origin, target, init) {
   return { status: response.status, headers: Object.fromEntries(response.headers), body }
 }
 
-const headerList = headers => headers['content-type'] ?? ''
-
 /**
  * Run every live probe.
  * @param opts.planeOrigin control-plane origin (default http://127.0.0.1:17500)
@@ -163,9 +161,6 @@ export async function runLiveAcceptance({
     rec.add('CP-5', 'GET /api/host/logs 可读（实例未就绪，跳过）', null,
       `status=${logs.status} body=${logs.body.slice(0, 120)}`)
   }
-
-  const sse = await firstSseFrame(`${planeOrigin}/api/host/health-events`)
-  rec.add('CP-6', 'GET /api/host/health-events SSE 首帧', sse.ok, sse.detail)
 
   const hostile = await get(planeOrigin, '/api/connections', { headers: { origin: 'https://evil.example' } })
   rec.add('CP-7', '敌意 Origin 被拒（403 origin_forbidden）',
@@ -300,28 +295,6 @@ export async function runLiveAcceptance({
   writeFileSync(path.join(outDir, 'gui-live-report.json'), JSON.stringify({ meta: { planeOrigin, instanceOrigin, sources }, results }, null, 2))
   console.log(`\n=== --live: ${counts.passed} pass / ${counts.failed} fail / ${results.length} checks ===\nreport: ${reportPath}`)
   return { results, reportPath, passed: counts.passed, failed: counts.failed }
-}
-
-/** Read exactly one SSE frame (then abort) — enough to prove the push channel lives. */
-async function firstSseFrame(url, timeoutMs = 5_000) {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-  try {
-    const response = await fetch(url, { headers: { accept: 'text/event-stream' }, signal: controller.signal })
-    if (response.status !== 200 || !headerList(Object.fromEntries(response.headers)).includes('text/event-stream')) {
-      return { ok: false, detail: `status=${response.status} content-type=${response.headers.get('content-type')}` }
-    }
-    const reader = response.body.getReader()
-    const { value } = await reader.read()
-    const chunk = new TextDecoder().decode(value ?? new Uint8Array())
-    const ok = /^data: /m.test(chunk) && chunk.includes('"dsh"')
-    return { ok, detail: `firstFrame=${ok} bytes=${chunk.length}` }
-  } catch (error) {
-    return { ok: false, detail: `no frame: ${String(error?.message ?? error)}` }
-  } finally {
-    clearTimeout(timer)
-    controller.abort()
-  }
 }
 
 export { summarizeNetFailures }

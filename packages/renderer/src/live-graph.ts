@@ -1,15 +1,15 @@
 /**
- * Live client-plugin graph sync: one chamber-owned EventSource per instance shell
- * (`<basePath>/plugins/events`, the upstream HMR host route) feeding an id-set
- * reconciler for the LIVE ctx of that instance — add/remove rows without a window
- * reload.
+ * Live client-plugin graph sync: one page-channel `pluginGraph` subscription per
+ * instance shell (the upstream HMR host route `/plugins/events`, relayed by the
+ * control plane) feeding an id-set reconciler for the LIVE ctx of that instance —
+ * add/remove rows without a window reload.
  *
  * WHY THIS SHAPE: the official HMR client half opens a DOCUMENT-relative
  * EventSource, which in the chamber page would hit the control-plane origin
  * (the composite entry covers it and its bundles are runtime-loaded, so no build
- * patch can re-base it). The host route itself is a per-instance service, so the
- * chamber subscribes at the instance prefix instead and keeps the official client
- * row unloaded (chamber-covered.ts).
+ * patch can re-base it). The host route itself is a per-instance service; the
+ * chamber consumes it as the page channel's `pluginGraph` topic instead (design 26)
+ * and keeps the official client row unloaded (chamber-covered.ts).
  *
  * SCOPE (v1): row ADD/REMOVE by id. A rev change for a mounted id is a fact, not
  * a re-mount: the page-level module table is first-load-wins per id, so the panel
@@ -21,14 +21,14 @@
  * OPPORTUNISTIC BY CONTRACT: a missing/failing channel is NOT a degrade — every
  * path below no-ops, and boot stays the FALLBACK authority for the row set whenever the
  * channel is unavailable (an answered channel's graph frames take over add/remove, §3.7).
- * SOCKET RECOVERY: the browser retries a network drop by itself, but a NON-200 reconnect
- * (the host-restart window's 503/502) fails the connection permanently — readyState CLOSED,
- * no further retries. The holder then re-opens the socket on the bounded backoff below
- * (spanning the readiness window); a delivered frame resets the budget, exhaustion logs once
- * and leaves recovery to the next page boot.
+ * RECOVERY IS THE CHANNEL'S (design 26 §D4): the page module owns the socket, its reconnect
+ * ladder and resubscribe-on-reconnect, so this reconciler schedules no ladder of its own —
+ * a subscription-level onError (upstream ended/errored, or the channel dropped) only logs
+ * once per outage and leaves recovery to the channel. A subscription that never recovers
+ * just leaves boot as the row-set authority.
  * Arm/disarm is owned by shell.ts: disarm happens synchronously at the next
- * same-id boot entry and inside disposeHolder, and the in-flight pass joins the
- * id-local teardown barrier (the page-level loader kernel and module table are
+ * same-id boot entry and inside disposeHolder (it closes the subscription), and the
+ * in-flight pass joins the id-local teardown barrier (the page-level loader kernel and module table are
  * SHARED across sources, so a superseded pass must never interleave with a
  * successor's eager preload). Every await re-checks `isCurrent` — except the two
  * deliberate cases documented in design 09 §3.7: the page-level chunk-owner delete
@@ -83,12 +83,20 @@ export interface LiveLoaderFace {
   resolve(id: string): LiveLoaderEntryFace
 }
 
-/** The browser EventSource slice (injected so plain-node tests never open one). */
-export interface LiveEventSourceFace {
-  addEventListener(type: string, listener: (event: { data?: string }) => void): void
+/** One page-channel `pluginGraph` subscription's callbacks: the shell binds the family
+ *  and instance id, so the reconciler consumes the item DATA only. `onOpen` marks a fresh
+ *  (re)subscribed segment; `onError` reports an upstream end/error or a channel drop —
+ *  the channel resubscribes by itself (design 26 §D4). */
+export interface LivePluginGraphHandlers {
+  onItem(data: string): void
+  onOpen?(): void
+  onError?(code: string, message: string): void
+}
+
+/** The page-channel handle one instance's pluginGraph topic is consumed through;
+ *  `close()` unsubscribes THIS topic only. The channel owns reconnection. */
+export interface LivePluginGraphSubscription {
   close(): void
-  /** 0 CONNECTING / 1 OPEN / 2 CLOSED; absent = never treated as permanently failed. */
-  readyState?: number
 }
 
 /** One row this holder currently owns, with the entry id create returned. */
@@ -211,11 +219,9 @@ export interface LiveGraphSyncDeps {
    *  terminal-state semantics: a tolerated apply failure is marked degraded/failed and
    *  is NOT retried by the boot path. */
   fiberIsTerminal(fiber: LiveLoaderEntryFace['fiber']): boolean
-  /** EventSource factory; absent = the channel is unavailable on this host. */
-  createEventSource?(url: string): LiveEventSourceFace
-  /** Bounded re-establishment delays for a permanently-CLOSED socket (test seam);
-   *  defaults to {@link LIVE_RESUBSCRIBE_DELAYS_MS}. */
-  resubscribeDelaysMs?: readonly number[]
+  /** Page-channel `pluginGraph` factory bound to this holder's instance id; absent =
+   *  the page channel is unavailable on this host (live sync stays a silent no-op). */
+  subscribePluginGraph?(handlers: LivePluginGraphHandlers): LivePluginGraphSubscription
   now?(): number
   /** Bounded activation wait; defaults to {@link LIVE_ACTIVATION_TIMEOUT_MS}. */
   activationTimeoutMs?: number
@@ -232,14 +238,6 @@ const LIVE_ACTIVATION_TIMEOUT_MS = 5_000
 
 /** Bound on the fiber.inertia drain during removal (a wedged disposer must not wedge the id). */
 const LIVE_INERTIA_TIMEOUT_MS = 2_000
-
-/** Bounded re-establishment of a permanently-CLOSED `/plugins/events` socket: a non-200
- *  reconnect (the host-restart window's 503/502) fails the connection for good and the
- *  browser never retries. The sequence spans the documented restart-readiness window. */
-const LIVE_RESUBSCRIBE_DELAYS_MS = [2_000, 5_000, 10_000, 20_000, 30_000, 30_000] as const
-
-/** `EventSource.readyState`: the browser failed the connection and stopped retrying. */
-const LIVE_EVENT_SOURCE_CLOSED = 2
 
 type LiveFact =
   | { kind: 'version-conflict'; id: string; owner: string }
@@ -263,8 +261,9 @@ function sameRecord(a: PluginGraphDiagnostic, b: PluginGraphDiagnostic): boolean
 }
 
 /**
- * Start the reconciler for one holder. Returns synchronously; the EventSource is
- * the only side effect until the first frame arrives.
+ * Start the reconciler for one holder. Returns synchronously; subscribing to the page
+ * channel's `pluginGraph` topic is the only side effect until the first item arrives
+ * (an absent seam is a no-op).
  */
 export function startLiveGraphSync(deps: LiveGraphSyncDeps): LiveGraphSync {
   const now = deps.now ?? (() => Date.now())
@@ -606,83 +605,47 @@ export function startLiveGraphSync(deps: LiveGraphSyncDeps): LiveGraphSync {
     })()
   }
 
-  const resubscribeDelaysMs = deps.resubscribeDelaysMs ?? LIVE_RESUBSCRIBE_DELAYS_MS
-  let source: LiveEventSourceFace | undefined
-  let resubscribeAttempt = 0
-  let resubscribeTimer: ReturnType<typeof setTimeout> | undefined
-  let gaveUpLogged = false
+  let subscription: LivePluginGraphSubscription | undefined
 
-  const attach = (next: LiveEventSourceFace): void => {
-    source = next
-    next.addEventListener('message', (event) => {
-      if (disposed) return
-      // A delivered frame is proof the socket works: the next drop earns the full budget.
-      resubscribeAttempt = 0
-      errorLogged = false
-      gaveUpLogged = false
-      acceptFrame(typeof event?.data === 'string' ? event.data : '')
-    })
-    next.addEventListener('error', () => {
-      if (disposed) return
-      if (next.readyState !== LIVE_EVENT_SOURCE_CLOSED) {
-        // CONNECTING: the browser owns the retry (one log per drop).
-        if (errorLogged) return
-        errorLogged = true
-        warn(`[live-graph] /plugins/events connection for ${deps.sourceId} dropped; the browser will retry`)
-        return
-      }
-      // CLOSED: the browser gave up for good (a non-200 reconnect fails the connection
-      // permanently) — rebuild it ourselves, bounded, so a restart window does not kill live sync.
-      scheduleResubscribe()
-    })
-  }
-
-  const scheduleResubscribe = (): void => {
-    if (disposed || resubscribeTimer !== undefined) return
-    if (!errorLogged) {
-      errorLogged = true
-      warn(`[live-graph] /plugins/events connection for ${deps.sourceId} failed; re-establishing with bounded backoff`)
-    }
-    if (resubscribeAttempt >= resubscribeDelaysMs.length) {
-      if (!gaveUpLogged) {
-        gaveUpLogged = true
-        warn(`[live-graph] gave up re-establishing /plugins/events for ${deps.sourceId} after ${resubscribeDelaysMs.length} attempts; only a page reload restores live sync`)
-      }
-      return
-    }
-    const delay = resubscribeDelaysMs[resubscribeAttempt]!
-    resubscribeAttempt += 1
-    resubscribeTimer = setTimeout(() => {
-      resubscribeTimer = undefined
-      if (disposed) return
-      openSource()
-    }, delay)
-  }
-
-  const openSource = (): void => {
+  const subscribe = deps.subscribePluginGraph
+  if (subscribe !== undefined) {
+    // The page channel owns the socket, its reconnect ladder and resubscribe-on-reconnect
+    // (design 26 §D4); this reconciler never schedules a reconnect of its own. One warning
+    // per outage, ended by a delivered item or a fresh onOpen.
     try {
-      const next = deps.createEventSource?.(`${deps.basePath}/plugins/events`)
-      if (next !== undefined) attach(next)
+      subscription = subscribe({
+        onItem(data) {
+          if (disposed) return
+          // A delivered frame is proof the subscription works: the next outage logs again.
+          errorLogged = false
+          acceptFrame(data)
+        },
+        onOpen() {
+          if (disposed) return
+          errorLogged = false
+        },
+        onError(code, message) {
+          if (disposed || errorLogged) return
+          errorLogged = true
+          warn(`[live-graph] pluginGraph subscription for ${deps.sourceId} failed (${code}: ${message}); the page channel retries on its own`)
+        },
+      })
     } catch (error) {
-      warn('[live-graph] EventSource construction failed; live sync is off for this holder', error)
+      // Opportunistic contract: a failed subscribe only switches THIS holder's live sync
+      // off; it must never bubble into the settled boot.
+      warn('[live-graph] page-channel subscription failed; live sync is off for this holder', error)
     }
   }
-
-  openSource()
 
   return {
     disarm(): Promise<void> {
       if (disposed) return current
       disposed = true
       pendingFrame = null
-      if (resubscribeTimer !== undefined) {
-        clearTimeout(resubscribeTimer)
-        resubscribeTimer = undefined
-      }
       try {
-        source?.close()
+        subscription?.close()
       } catch (error) {
-        warn('[live-graph] EventSource close failed', error)
+        warn('[live-graph] page-channel unsubscribe failed', error)
       }
       return current
     },

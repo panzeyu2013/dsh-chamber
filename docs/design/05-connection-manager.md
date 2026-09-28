@@ -244,7 +244,7 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 
 - 会话/workspace 数据**只来自各实例自己的 API**（经 `/api/i/<id>/*` 同源 unary：workspace.list / sessions.list），控制面不建会话索引、不消费宿主帧。
 - 连接状态 = 非秘密投影（本地：控制面 /health；远程：desktopSsh status 推送），永不用持久化/推断值冒充。
-- 数据节奏：状态与已挂载来源聚合均走现有事件链。本地 `/health` 由 health-events EventSource 驱动；远程隧道相位走 onStatusChanged；每个已挂载 ctx 订阅自己的 `sessions.list` + `workspaces.list`，两份 reconnect baseline 于 idle + ready 后经 chamberBridge 上报完整快照；任一 store 进入 loading/error 即撤回旧快照并清除内容签名，使同内容 reconnect baseline 也重新上报。远端 ctx 的 host frames 仍经既有 SSH 隧道/实例反代 WebSocket 到达，**不增加协议、不修改上游 dsh**。
+- 数据节奏：状态与已挂载来源聚合均走现有事件链。本地 `/health` 由页面级通道（`/api/page-channel`，design 26）的 `health` 订阅驱动；远程隧道相位走 onStatusChanged；每个已挂载 ctx 订阅自己的 `sessions.list` + `workspaces.list`，两份 reconnect baseline 于 idle + ready 后经 chamberBridge 上报完整快照；任一 store 进入 loading/error 即撤回旧快照并清除内容签名，使同内容 reconnect baseline 也重新上报。远端 ctx 的 host frames 仍经既有 SSH 隧道/实例反代 WebSocket 到达，**不增加协议、不修改上游 dsh**。
 - 只有未挂载或 reconnect baseline 不完整的 ready 来源走 30s unary 兜底；全部 ready 来源都有完整生产者时不建聚合定时器。连接/生产者状态变化立即重估；`requestRefresh` 对每个 live 来源无条件执行一次即时 mutation-pull（合并会话行、保留分组/归档集），mounted 来源亦然（host-store 推送为主，unary pull 并行通道）。not-ready → ready 连接代边沿固定执行一次 unary。App 断线分支**不清空**已推送来源的聚合（`shouldRetainPushedAggregate`；行渲染以 connected 为门，断连不显示；ready-edge 拉取为 sessions-only merge，归档集/工作区不丢失）。稳定 ready 代非零轮询：30s unary 兜底 watchdog 照常拉取 stale 来源；卡在降级视图（合成行）的来源由限流自愈臂（S2）重连并重放 workspace follow，使 producer 重发真实基线（`shouldRebaselineFallbackView`）。S2 臂陈旧阈值按传输分级（`packages/renderer/src/aggregate-refresh.ts`）：`http` = 120s（上游腿无应用心跳、仅 ~10min OS TCP keepalive）；`ssh` 隧道 = 300s（三个独立探活：反代浏览器腿 30s WS ping、host mux 2s/2-miss 心跳、ssh `ServerAliveInterval=30 × CountMax=3` ≈90s；故只作最后手段）；`local` 与未知传输取 `null`（本地由权威直接服务；未知传输已 fail-closed），该臂**不得触碰**它们。该拉取瞬时失败由 loading 撤回 + idle baseline 重发恢复，不永久停在 error。推快照按来源序号使较旧在途 pull 失效。
   **保留视图有界化（残留修复）**：已推送来源的聚合在 unary 反复失败时保留最后视图
   （上面 `shouldRetainPushedAggregate`），此前是**无限**保留——旧 `running` 位会一直渲染成
@@ -381,7 +381,7 @@ export const chamberBridge: {
   按注册表 auto-connect 远程实例（`desktopSsh.connect`）。
 - 活动视图发布：`useLayoutEffect` 在**绘制前**把 `activeView` 写入
   `setActiveSource`（延迟到 passive effect 会先画一帧旧主题）。
-- 状态合并发布：控制面 `/health`（health-events 推送流）+
+- 状态合并发布：控制面 `/health`（页面级通道 `/api/page-channel` 的 `health` 订阅推送，design 26）+
   `/api/connections`（30s）+ desktopSsh status 推送（onStatusChanged）+
   已挂载 ctx 的完整快照上报；仅无完整生产者的 ready 来源 30s unary 兜底 →
   `chamberBridge.publish`；另在每个 not-ready → ready 连接代边沿执行一次 unary，
