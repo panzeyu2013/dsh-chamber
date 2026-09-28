@@ -164,6 +164,12 @@ export const GROUPS = {
   // and the renderer must refuse to create animations inside a shell nobody renders.
   'visual-lock': [
     'test/visual-lock/sidebar-entrance-visibility.test.ts',
+    // Row motion (the ported AnimatedRows + its key wiring, design 06 §7). Its
+    // byte-fidelity lock reads vendor/harness-packages and fails loud when that
+    // tree is absent, so it must stay in the LAST group: the runner stops at the
+    // first failing file and an unmaterialized tree must never hide the runnable
+    // suite (same reason macos-top-strip precedes it in run order).
+    'test/session-rows/animated-rows.test.ts',
   ],
 }
 
