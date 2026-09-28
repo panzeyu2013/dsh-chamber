@@ -11,9 +11,10 @@
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
 
-## [0.4.0-beta.10] - 2026-09-28
+## [0.4.0-beta.11] - 2026-09-28
 
 ### 新增
+- **页面通道：全部长活流收敛到一条页面级多路复用 WS（design 26）** —— 每个页面只保留一条长活通道（`/api/page-channel`）：来源图、会话事实与直接订阅的流帧都按 `(kind, key)` 登记在同一个 socket 上，隐藏 ≥60s 的页面不再各自维持连接（收敛判据与既有隐藏期纪律同源）；Remote mux 与推送路径不搬、行为逐字保留。控制面在既有 origin 栅栏后注册该端点并承载三类上游适配，gateway 明确不挂载它（非目标，遇到即 404）；每条流按 `booked` 判定写入 `[chamber:evidence]` 账本，未调度窗口覆盖不到的观测不落失败（design 14 §D4 同一判据）。
 - **目标运行期间，完成通知按目标自己的结局收尾（design 19 §3.2）** —— 会话目标处于 active 且 armed 时，一次完成不再立刻以「会话已完成」播报：收敛器把它压住（呈现面同样不亮完成未读），等目标结束（完成 / 受阻 / 停止）时按该目标的首次结局播报一次「目标已完成」「目标已受阻」「目标未继续运行」，同目标的后续完成回到「会话已完成」；目标事实缺席时保持现有中性行为（fail-open），提问与审批不受目标状态影响。目标三值事实（缺席 = unknown / null = 明确无目标 / 对象 = 有目标）与 activation 事件在 renderer、sidebar 与 gateway 三侧同源，远端来源与壳被回收的来源都走同一收敛器；侧栏不新增独立目标视觉元素。
 - **open-in 官方行的文件级动作开始生效，chamber 目录打开保持严格超集（design 20 §7）** —— 官方 open-in 客户端行不再被跳过：右栏文档页签与交付卡上的**文件级**打开动作（`sidebar.right.tab.document.actions` / `deliverables[.review].file.actions`）由它注册，经每实例会话 RPC 取数；chamber 自有的 `open-in` 头部入口在同一槽位以自有 id 保留**目录级打开超集**（本机全量应用拾取器、真实 bundle 图标、官方分体按钮形态），官方头部条目在复合壳里不再产生第二个入口。
 - **双 flavor 的原生键盘快捷键桥** —— 官方快捷键服务由每个注入 `shortcuts` 的官方客户端族构造，在桌面形态下要求宿主提供原生键盘面：Electron 侧由主进程按上游 `before-input-event` 语义实现（决策表、按键记录、偏好事务与其 revision 门），Swift 原生壳由注入 shim 提供等价的 DOM 键源；设置里的快捷键录制/编辑与原生按键投递因此在两个 flavor 下同样可用，页面也不会因缺该面而整体起不来。
@@ -58,6 +59,7 @@
 - **本地实例的起始端口可覆盖，与在跑安装并存不再撞端口（design 02 §2.2）** —— 本地 dsh 起始端口仍默认 17510，新增 `DSH_CHAMBER_DSH_PORT_BASE` 覆盖它（控制面端口早有 `DSH_CHAMBER_CP_PORT`）：dev / 验收实例与在跑安装并存时不必再被 17510..17514 的 `connection_busy` 挡住；非法值响亮回落到默认，绝不静默半生效。
 
 ### 变更
+- **侧栏工作区面与上游 UI 对齐（design 05/06）** —— 工作区行、悬停卡与搜索胶囊按上游表面复用：悬停卡的 `path` 与绝对创建时间走新增的稀疏事实（`createdAt` 缺席即不挂卡，合成 cwd 组不带创建事实）；行列表接入字节保真的上游 `AnimatedRows`（同一行键序与 resetKey 语义：拖拽在途、聚合未就绪、fold 与当前会话变化都只落位不滑行），会话标题按上游 marquee 规则移位；菜单密度、命中盒与行尾状态槽按 pin 实测回填（24px 行/11px 字、六钮 20/20/18/16、状态槽只有品牌蓝完成点），`sidebar.workspaces` 只声明不渲染的座席裁决不变。
 - **插件写面退役（2026-09「C 分层」裁决落地）** —— chamber 不再提供用户可触达的插件写面：桌面 IPC 的安装 / 卸载 / 物化 / 任务 / 撤销 / npm 搜索与 SSH 写通道、gateway 的五个写路由、以及设置页的安装 / 卸载 / 搜索 UI 一并退役；插件清单、行投影、能力探针与 gateway 的 seed 供给面保持只读可用（受保护集合与升级门禁不变）。
 - **dsh 上游锚推进到 `0.1.7-rc.2` 一代（源码线 + 捆绑运行时 + 三个 fork 副本同代）** —— 构建期 vendor 源（`harness.commit` 与子模块 gitlink）与随包运行时（`packages/desktop/vendor/dsh` 的锁文件）同处 `0.1.7-rc.2`；`@deepseek-ai/dsh-client-connection` / `dsh-client-web` / `dsh-api-gateway` 三个 fork 副本按该基线重放，安装脚本、发布工作流与 gateway 的锚版本一并同步。经运行时线进入受管实例的上游可见变化：web 形态新增**官方右栏终端**（交互式 shell 标签，0.1.7 代的 `ui-sidebar-terminal`），随宿主图进入窗口。
 - **win32 私有状态读写不再要求 `O_NOFOLLOW`** —— 平台没有该旗标时改为身份回退：open 前后 lstat 拒符号链接并以 dev/ino 复验，不可证即 fail-closed（不再在事务首步抛错）；Windows 上 `<userData>/dsh-runtime` 已存在也不再被误判为 corrupt 而永久阻断。登记为 design 23 F8（身份回退的 TOCTOU 残余）。
@@ -92,6 +94,8 @@
 - **页面与原生壳的常态开销下降（design 14、design 19、design 25）** —— 窗口隐藏时停止视图采样与 rAF 帧进度心跳（可见后重新武装，不再空转）、chamberBridge 发布按投影签名等值不发布、SVG 资源范围走查两趟合一、侧栏一行只派生一次读数、原生壳页面事实的 DOM 观察面收窄到必要节点：都是常驻路径的固定开销，判定语义不变。代价与边界：回收（未挂载）来源不再做 DOM 侧采样，其行内派生状态与桥探测退到长尾——探测预算耗尽后按 30s 节奏复查，迟到的 `desktopSsh` 事实采纳上界同为 30s；已被清掉的孤儿行键按来源指纹推进两代才淘汰（首次迁移只清当前 instanceId），不会把别处仍存活的键误删。完成、提问与未读的送达不受这些采样边界影响（由 facts 只读投影承担）。
 
 ### 修复
+- **已确认的会话修正不再被未调度的确认读丢掉（design 14 §D4）** —— 同一次权威读同时确认一个会话并给另一个会话发确认读时，确认读可能落在「两个窗口都未调度」的收轮路径；旧实现会在收轮时把同一轮已签发的写回丢在循环里，reducer 的修正票永不结算，此后只写 false 的 tier-3 写回对该会话永久静默。现在收轮仍结算已签发的写回（写失败照旧记 stuck），未调度的轮次依旧既不记失败也不记恢复。
+- **取消判定与恢复证据的落点收敛（design 14 §D4）** —— 壳把「取消不是证据」的判定从 host-graph 的本地副本迁到 `@dsh-chamber/dsh-stream-state` 的观测有效性分类器（真实通道失败照旧上浮，取消不得掩掉它）；页面静默看门狗的恢复证据改记在事实基线真正提交的那一点上，迟到结果不再把恢复写进旧世代。
 - **「我没被调度」不再被写进来源事实（design 14 §D4）** —— 新增观测有效性分类器（`@dsh-chamber/dsh-stream-state` 的 `evidence.ts`：`answered / deadline / unscheduled / superseded / channel / unavailable`，只有前三类可落账）与页面调度记录（`@dsh-chamber/dsh-chamber-client-core` 的 `page-schedule.ts`：rAF 心跳 + 焦点/可见性 + `document.hasFocus()`，只在**有正面证据**时判「窗口内没有被调度」），并落一条有界且可跨重载读回的判定账本（`dsh-chamber.evidence-log.v1`，控制台行 `[chamber:evidence] <verdict> booked=<bool> <owner> {…}`）。mux 基线、gateway facts 流建连 deadline、权威读、boot 图取数与侧栏权威探针从此只在页面确实被调度时才算来源事实：被 WebKit 节流/挂起的窗口里墙钟到期不再把「实例未及时应答 / 网关镜像受限」写到来源头上（未调度即静默重发；权威读两次窗口都未调度则本轮不落任何判定）。
 - **会话基线校验的整页闩锁退役** —— 侧栏权威基线校验此前在 4 次失败后整个页面生命周期不再重试（只能等 `connection/reset`），一次被节流的探针就能永久关掉它；现在是有界 defer（30s 下限）+ 事件驱动重臂（下一次真实 list 变更或重置），每次探针结果按 verdict 记入证据账本。
 - **原生壳的「页面 emit 失败」日志带出被抛出的 JS 异常文本** —— 启动期 `dsh-chamber:update-state-changed / runtime-state-changed / settings-changed` 推送失败此前只留一句通用「发生了JavaScript异常」；现在追加 WebKit userInfo 里的异常消息（T-25 取证面），本地卡片运行时行缺省为「未知 / 端口：—」一类现象因此能定位到具体页面异常。
