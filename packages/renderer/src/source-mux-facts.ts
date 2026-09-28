@@ -63,6 +63,8 @@ export interface SourceMuxDeps {
   followTimeoutMs?: number
   /** 基线因期间事件失效后的重取样最小间隔（默认 250ms）：合并 + 节拍上限。 */
   baselineResampleMinMs?: number
+  /** 连续失效重取的最大间隔（默认 2s）：没有它时事件密集源会一直按最小间隔重取整表。 */
+  baselineResampleMaxMs?: number
   /** 与载波换代独立的低频对账；即使 socket 持续有帧也能修复丢失的 status。 */
   reconcileIntervalMs?: number
   /** 载波掉线/基线失败后的可判性宽限（默认 3s）：旧基线仍在宽限内即保持可判。 */
@@ -77,6 +79,20 @@ export const DEFAULT_BASELINE_TIMEOUT_MS = 5_000
 export const DEFAULT_FOLLOW_TIMEOUT_MS = 2_000
 /** 失效基线的重取样节拍（事件密集源上把「事件率 > RPC 周期」变成有界节奏；仲裁者不变）。 */
 export const DEFAULT_BASELINE_RESAMPLE_MIN_MS = 250
+/**
+ * 连续失效重取的上限节拍（250 → 500 → 1000 → 2000ms 后封顶）：每次重取都被新事件再次
+ * 判失效时退避，而不是永远以最小间隔重取整表。列表级事实最多滞后这个上限；会话级边沿
+ * 仍由事件即时携带，滞后只影响「事件覆盖不到的行」（新建/退役会话），下一个 30s 对账
+ * 仍是兜底。
+ */
+export const DEFAULT_BASELINE_RESAMPLE_MAX_MS = 2_000
+/**
+ * 连续失效重取的节拍（纯函数，单测直测）：base × 2^streak，封顶 max。streak = 本代际内
+ * 已被新事件判失效、尚未落地的重取次数（一次落地即归零）。
+ */
+export function baselineResampleDelayMs(streak: number, minMs: number, maxMs: number): number {
+  return Math.min(minMs * 2 ** streak, maxMs)
+}
 export const DEFAULT_RECONCILE_INTERVAL_MS = 30_000
 /**
  * 空闲关流的恢复宽限：宿主会回收空闲的 `$events` 套接字（实测约 45s 一次），而「可判」表达的是
@@ -579,6 +595,7 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   const baselineTimeoutMs = deps.baselineTimeoutMs ?? DEFAULT_BASELINE_TIMEOUT_MS
   const followTimeoutMs = deps.followTimeoutMs ?? DEFAULT_FOLLOW_TIMEOUT_MS
   const baselineResampleMinMs = deps.baselineResampleMinMs ?? DEFAULT_BASELINE_RESAMPLE_MIN_MS
+  const baselineResampleMaxMs = deps.baselineResampleMaxMs ?? DEFAULT_BASELINE_RESAMPLE_MAX_MS
   const reconcileIntervalMs = deps.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_MS
   const carrierGraceMs = deps.carrierGraceMs ?? DEFAULT_CARRIER_GRACE_MS
   const rows = new Map<string, SourceMuxRow>()
@@ -610,6 +627,8 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   let staleSince: number | null = null
   let baselineFailureReason: string | null = null
   let baselineResamples = 0
+  /** 连续无效重取的次数（纯计数，供 baselineResampleDelayMs 换算节拍）。 */
+  let baselineResampleStreak = 0
   let lastTrustedBaselineAt: number | null = null
   let eventRevision = 0
   let baselineRequest = 0
@@ -647,13 +666,17 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     // carrier turnover re-baselines on its own ready frame, so a stale retry must not
     // fetch a second time (the reconcile timer captures its generation the same way).
     const atGeneration = generation
+    // 连续失效逐次退避（base × 2^streak，封顶 max）：每次重取都被新事件再次判失效的
+    // 事件密集源不得永远按最小间隔重取整表。落地一次即归零（见 baseline 的成功臂）。
+    const delayMs = baselineResampleDelayMs(baselineResampleStreak, baselineResampleMinMs, baselineResampleMaxMs)
+    baselineResampleStreak += 1
     baselineResampleTimer = setTimeout(() => {
       baselineResampleTimer = null
       if (stopped || atGeneration !== generation) return
       // 重取不是失败，但持续重取同样意味着「还没有可信基线」⇒ 计数供诊断区分。
       baselineResamples += 1
       void baseline()
-    }, baselineResampleMinMs)
+    }, delayMs)
   }
   const clearBaselineResample = (): void => {
     if (baselineResampleTimer === null) return
@@ -1032,6 +1055,8 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       return
     }
     baselines += 1
+    // 一次失效重取真正落地：节拍回到起点（下一次失效仍从最小间隔开始）。
+    baselineResampleStreak = 0
     const at = now()
     const seen = new Set<string>()
     for (const row of items) {
@@ -1297,6 +1322,8 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     // 换代即丢套接字，但**不丢真相**：可判性由 carrierOrBaselineLost 在本次代际上裁定
     // （有旧基线 → 宽限；从来没有 → 立即降级），等待下一个 onopen 之前绝不宣称新连接可用。
     socketReady = false
+    // 新代际自带 ready 帧基线：旧代际攒下的失效退避不得穿越换代。
+    baselineResampleStreak = 0
     clearStable()
     if (socket !== null) {
       // 换代。先 +1 再 close——close 可能同步触发旧 socket 的 onclose。
@@ -1504,6 +1531,7 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       pendingReads = 0
       lastEventAt = null
       reconnectDelayMs = 1_000
+      baselineResampleStreak = 0
       // 退役的观察者不得继续以本源的名义出现在观测仪器里。
       unpublishSourceMuxInstrument(deps.sourceId, globalThis, instrument)
     },
