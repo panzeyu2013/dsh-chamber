@@ -255,7 +255,8 @@ Apple 凭据（外部阻断）。
    防双源漂移，D8）→ 异步启动尾部 `runStartupTail` 内 pre-spawn 本地实例（**绝不使 ready 帧
    延迟**；与 main.ts 同序——`controlPlane.start()` → 建窗/ready → `runStartupTail()`，
    spawn 与页面加载重叠；旧文「pre-spawn → ready」是笔误，2026-12 次序裁定按实现）。
-3. Swift 收到 ready → 用 `http://127.0.0.1:<port>/` 建 WKWebView 并 loadURL（A 桥注入时机见 §4.4.1 D1）。
+3. Swift 收到 ready → 以 `/health` 做首载门；HTTP 2xx 后继续检查 `dsh.status`：**在途相位**（只有 `starting`/`restarting`）按有界退避节拍持续探测、不先渲染半初始化的会话 UI，**静止相位**立即载入（`ready` → 应用；`stopped`/`error`/`degraded`/`restart-exhausted` 以及词表外的未知词 → 控制面，以开放诊断与恢复入口）。壳不设等待总期限：收敛由控制面状态机负责（在途相位必然终止于静止态），壳只消费静止态，时间只有一个所有者。A 桥注入时机见 §4.4.1 D1。
+   **Rejected alternatives（首屏就绪门）**：只等 sidecar ready 帧或 `/health` 2xx 会把“控制面开始监听”误当成“本地 dsh 已 ready”，因为 `runStartupTail()` 有意异步启动本地实例；对所有状态无限等待又会把终态错误的诊断/恢复 UI 一并藏掉（`stopped`/`restart-exhausted` 正是「重试已停止、需手动启动」的终态），因此只等待**在途**相位，其余一律呈现；也不再给等待加第二个时间所有者（壳侧总期限会把控制面已经在管的事再管一遍，并让「超时之后显示什么」变成新的兜底）。
 4. 运行时故障分级：
    - sidecar 崩溃/非零退出 → Supervisor 按重启退避重启（**无 Electron 先例，退避语义另立**：
      cp.start 失败 = fatal 退出；运行中崩溃 = 退避重启，上限与 renderer 恢复参数化同族）；fatal 边界

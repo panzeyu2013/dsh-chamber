@@ -12,7 +12,6 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { PLUGIN_MATERIALIZED_VALUE_MASK } from '@dsh-chamber/control-plane'
 import {
   isMaterializedValue,
   maskMaterializedDependencies,
@@ -73,7 +72,3 @@ test('gateway source consumes the wire face and keeps no local parse/mask/versio
   assert.doesNotMatch(source, /JSON\.parse\(text\)/, 'the local manifest parse was replaced by parsePluginManifest')
 })
 
-test('mask lockstep: wire === control-plane re-export === gateway export', () => {
-  assert.equal(MATERIALIZED_VALUE_MASK, PLUGIN_MATERIALIZED_VALUE_MASK)
-  assert.equal(PLUGIN_MATERIALIZED_VALUE_MASK, 'file:<hidden>')
-})

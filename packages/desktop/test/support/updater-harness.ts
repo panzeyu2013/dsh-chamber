@@ -77,24 +77,30 @@ export function makeController(overrides: {
     ...overrides.deps,
   }
   const prevChannel = process.env.DSH_CHAMBER_UPDATE_CHANNEL
-  if (overrides.env) {
-    for (const [key, value] of Object.entries(overrides.env)) process.env[key] = value
+  // finally, not straight-line: a throwing constructor must not leak the injected env.
+  try {
+    if (overrides.env) {
+      for (const [key, value] of Object.entries(overrides.env)) process.env[key] = value
+    }
+    const controller = createUpdateController(
+      { version: overrides.version ?? '0.1.5', logger: silentLogger },
+      deps,
+    )
+    return { fake, controller }
+  } finally {
+    if (overrides.env) {
+      for (const key of Object.keys(overrides.env)) delete process.env[key]
+    }
+    if (prevChannel !== undefined) process.env.DSH_CHAMBER_UPDATE_CHANNEL = prevChannel
   }
-  const controller = createUpdateController(
-    { version: overrides.version ?? '0.1.5', logger: silentLogger },
-    deps,
-  )
-  if (overrides.env) {
-    for (const key of Object.keys(overrides.env)) delete process.env[key]
-  }
-  if (prevChannel !== undefined) process.env.DSH_CHAMBER_UPDATE_CHANNEL = prevChannel
-  return { fake, controller }
 }
 
 export async function waitFor(condition: () => boolean, tries = 100): Promise<boolean> {
   for (let attempt = 0; attempt < tries; attempt += 1) {
     if (condition()) return true
-    await new Promise(resolve => setTimeout(resolve, 20))
+    // Fast-start poll: the first ten hops cost ~20ms total instead of 200ms, while the
+    // overall window stays ~2s (90 × 20ms tail), so no caller's timeout budget shrinks.
+    await new Promise(resolve => setTimeout(resolve, attempt < 10 ? 2 : 20))
   }
   return condition()
 }

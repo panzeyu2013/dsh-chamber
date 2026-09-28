@@ -77,6 +77,10 @@ test('decideVerdict: duplicate or unexpected names fail closed', () => {
   duplicate[duplicate.length - 1] = ok('commands/execute');
   assert.equal(decideVerdict(duplicate, { elapsedMs: 1 }), 'observe');
   assert.equal(decideVerdict(duplicate, { elapsedMs: 1, observedOnce: true }), 'fail');
+  // 标题的另一半：名字不在期望集合内（长度相同、但少了一个必需名）也必须 fail closed。
+  const unexpected = [...allOk().slice(0, -1), ok('unknown/probe')];
+  assert.equal(decideVerdict(unexpected, { elapsedMs: 1 }), 'observe');
+  assert.equal(decideVerdict(unexpected, { elapsedMs: 1, observedOnce: true }), 'fail');
 });
 
 type RollbackInput = Parameters<typeof rollbackTarget>[0];

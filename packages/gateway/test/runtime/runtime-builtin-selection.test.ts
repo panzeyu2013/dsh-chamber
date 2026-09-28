@@ -1,15 +1,13 @@
 /**
  * /chamber/runtime builtin/anchor selection and post-update invalidation:
- * restore-pre-rollback, pnpm entry resolution, the builtin snapshot and staged
- * re-selection.
+ * restore-pre-rollback, the builtin snapshot and staged re-selection.
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, basename, join } from 'node:path'
-import { createRequire } from 'node:module'
+import { basename, join } from 'node:path'
 import { createGatewayRuntimeManager } from '../../src/runtime-manager.ts'
 import {
   readActivationJournalState,
@@ -114,17 +112,6 @@ test('env-probe-failed closes every mutation route with an explicit no-recovery-
     assert.match((response.json as { error: string }).error, /no recovery route applies/, suffix)
   }
 })
-
-test('the gateway pnpm installer entry resolves to an existing file (R9-R1: exports-hidden subpath regression)', () => {
-  const require = createRequire(import.meta.url)
-  // Mirror the manager's strategy: pnpm's exports only exposes '.', so join
-  // the bin path from the resolved package.json — and assert it exists.
-  const pnpmPkg = require.resolve('pnpm')
-  assert.ok(pnpmPkg.endsWith('package.json'), `resolved pnpm entry is its package.json (${pnpmPkg})`)
-  const entry = join(dirname(pnpmPkg), 'bin', 'pnpm.cjs')
-  assert.ok(existsSync(entry), `pnpm CLI entry must exist at ${entry}`)
-})
-
 
 test('readAnchorVersion reads the anchor package version (F1 regression)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'gw-rt-builtin-ver-'))

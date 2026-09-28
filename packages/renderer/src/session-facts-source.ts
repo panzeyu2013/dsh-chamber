@@ -64,6 +64,8 @@ export const SESSION_FACTS_DIAGNOSTICS_REFETCH_MIN_MS = 30_000
 
 import { isWatermark } from './watermark.ts'
 import { isPlainRecord } from './plain-record.ts'
+import { hadSchedulingGap, recordEvidence } from '@dsh-chamber/dsh-chamber-client-core'
+import { classifyObservation, isAdmissible } from '@dsh-chamber/dsh-stream-state'
 
 export type SessionFactsVerdict = 'ok' | 'legacy-gateway' | 'degraded'
 export type SessionFactsDegradation =
@@ -1121,8 +1123,31 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     armSilenceWatchdog()
     // 建连/首字节 deadline：到点按流断开收口。收口动作放定时器里而不是依赖 fetch 因 abort
     // reject——忽略 abort 的 carrier 也必须被收口，且 catch 侧早退不得把这次失败吞成静默。
+    const connectStartedAt = now()
     const connectTimer = setTimeout(() => {
       if (state.stopped || state.streamController !== controller) return
+      // 建连 deadline 只有在页面**确实被调度**过整个窗口时才是来源事实：失焦/遮挡的
+      // WKWebView 会被 WebKit 节流（document.visibilityState 仍是 visible），墙钟到期
+      // 而请求从没拿到运行机会——那是页面自身调度的事实，不是来源没答（design 14 §D4）。
+      const verdict = classifyObservation({
+        outcome: 'error',
+        errorName: 'TimeoutError',
+        schedulingGap: hadSchedulingGap(connectStartedAt, now()),
+      })
+      const detail = {
+        source: options.sourceId,
+        method: 'GET ' + SESSION_FACTS_STREAM_ROUTE,
+        budgetMs: streamConnectTimeoutMs,
+        windowMs: now() - connectStartedAt,
+      }
+      if (!isAdmissible(verdict)) {
+        recordEvidence('facts-stream', verdict, detail, false)
+        diagnostic('[session-facts] stream connect deadline during an unscheduled window; re-arming without marking stale')
+        closeStream()
+        scheduleStreamReconnect()
+        return
+      }
+      recordEvidence('facts-stream', verdict, detail, true)
       diagnostic('[session-facts] stream connect timed out after ' + String(streamConnectTimeoutMs) + 'ms; reconnecting')
       markStale()
       closeStream()

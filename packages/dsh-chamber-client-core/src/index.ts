@@ -77,3 +77,11 @@ export type * from './todo-attention.ts'
 export { deriveTodoAttention } from './todo-attention.ts'
 export type * from './todo-prefs.ts'
 export { getTodoPrefs, subscribeTodoPrefs } from './todo-prefs.ts'
+// 证据有效性层（design 14 §D4）：只有**生产消费**面经桶导出——`hadSchedulingGap` 与
+// `startPageScheduleProbe` 被 renderer/侧栏/reconcile 消费，`recordEvidence` 被四处截止判定
+// 消费；其余（探针注入点、快照/复位、账本读回与键名）是本模块与其测试的内部面，测试直接
+// import 子路径（与 forensics 的内部面同规，见 verify:no-dead-exports 的判定口径）。
+export type * from './page-schedule.ts'
+export { hadSchedulingGap, startPageScheduleProbe } from './page-schedule.ts'
+export type * from './evidence-log.ts'
+export { recordEvidence } from './evidence-log.ts'

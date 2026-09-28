@@ -11,3 +11,14 @@ export { chamberBridge } from '../../dsh-chamber-client-core/src/aggregate-store
 export { describeThrown } from '../../dsh-chamber-client-core/src/error-text.ts'
 // shell.ts → open-in stream-health-probe 的会话打开证据读取（abstract 侧单源化后新增）。
 export { sessionOpenPromiseInFlight } from '../../dsh-chamber-client-core/src/session-open.ts'
+// 证据有效性层（design 14 §D4）：页面调度记录 + 有界持久证据账本。两个模块零依赖
+// （不链接任何 source-only 的 dsh 包），因此可在隔离测试里直接重导出真实实现。
+export {
+  PAGE_SCHEDULE_GAP_MS, hadSchedulingGap, noteFocus, notePageTick, noteVisibility,
+  pageScheduleSnapshot, resetPageScheduleForTests, startPageScheduleProbe,
+} from '../../dsh-chamber-client-core/src/page-schedule.ts'
+export {
+  EVIDENCE_LOG_PERSIST_INTERVAL_MS, EVIDENCE_LOG_PERSIST_MAX, EVIDENCE_LOG_RING_MAX,
+  EVIDENCE_LOG_STORAGE_KEY, evidenceLogText, readEvidenceLog, readPersistedEvidenceLog,
+  recordEvidence, resetEvidenceLogForTests,
+} from '../../dsh-chamber-client-core/src/evidence-log.ts'

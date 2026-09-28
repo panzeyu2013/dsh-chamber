@@ -13,7 +13,7 @@
  * non-erasable syntax fails here instead of at bundle time.
  *
  * Why no dependencies: the reducers are clockless and effect-free. Everything
- * that waits (deadlines, retries, single-flight) belongs to the executor
+ * that waits (deadlines, bounded waits) belongs to the executor
  * (dsh-stream-state/async-op); anything that needs
  * a real socket, DOM or React belongs to the consumer. If a change makes a file
  * here import a runtime module, that change is a design error, not a build error.
@@ -65,6 +65,12 @@ export const GROUPS = {
   tables: [
     'test/tables/tables-parity.test.ts',
   ],
+  // evidence: the observation-validity classifier every chamber liveness deadline
+  // consumes (design 14 §D4) — pure, clockless, and the single source of the verdict
+  // words the consumers' logs and the persisted page ledger carry.
+  evidence: [
+    'test/evidence/observation-validity.test.ts',
+  ],
   // source: the per-source lifecycle reducer that consolidates the App's six
   // ledgers + three loose fields into one incarnation-keyed object.
   source: [
@@ -83,10 +89,9 @@ export const GROUPS = {
   // presentation: the single veil/reveal decision that replaces four
   // independent timers and computes the total bound in one place.
   presentation: [
+    // G-E（释放期限半边已并入本文件的 held/actionable 用例）：held 帧携带有限的
+    // 绝对 releaseAtMonoMs，planVeilTimer 拒绝为 held 帧装 0 ms 定时器。
     'test/presentation/presentation-arbiter.test.ts',
-    // G-E: a held veil carries a finite absolute releaseAtMonoMs, and
-    // planVeilTimer refuses to arm a 0 ms timer for a held frame.
-    'test/presentation/veil-release.test.ts',
   ],
   // ladder: the unified recovery-ladder engine that all four ladders
   // (liveness / reconcile / stream-health / mobile stall) become instances of.
@@ -108,8 +113,7 @@ export const GROUPS = {
   incident: [
     'test/incident/incident.test.ts',
   ],
-  // async-op: deadline / retry pacing / bounded wait / single-flight with an
-  // injected scheduler - the five hand-written waiting shapes, once.
+  // async-op: deadline / bounded wait with an injected scheduler.
   asyncOp: [
     'test/async-op/async-op.test.ts',
   ],

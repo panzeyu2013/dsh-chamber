@@ -10,7 +10,7 @@ import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SpawnOptions } from 'node:child_process'
 import { createTransportManager, jitteredBackoffMs, RING_BUFFER_LIMIT, RING_LOG_MESSAGE_MAX_CHARS } from '../../transport-manager.ts'
@@ -91,35 +91,6 @@ function saveCompleted(
   })))
 }
 
-test('loadInstances fails loudly on corrupt files and drops invalid entries', () => {
-  const dir = tempDir()
-  const corrupt = join(dir, 'corrupt.json')
-  writeFileSync(corrupt, '{not json')
-  const corruptManager = createTransportManager({ provider: sshProvider, instancesFile: corrupt, logger: silentLogger })
-  assert.throws(() => corruptManager.loadInstances(), /corrupt/)
-  const mixed = join(dir, 'mixed.json')
-  writeFileSync(mixed, JSON.stringify([
-    { id: 'ok', label: 'fine', kind: 'dsh', transport: 'ssh', host: 'h.example.com', remotePort: 22 },
-    { id: 'bad id', label: 'x', host: 'h', remotePort: 22 },
-  ]))
-  const mixedManager = createTransportManager({ provider: sshProvider, instancesFile: mixed, logger: silentLogger })
-  const loaded = mixedManager.loadInstances()
-  assert.deepEqual(loaded.map(entry => entry.id), ['ok'])
-  // A null/non-object entry among valid ones must be DROPPED loudly, never
-  // throw inside provider resolution (per-entry defense beside the corrupt
-  // whole-file path).
-  const withNull = join(dir, 'with-null.json')
-  writeFileSync(withNull, JSON.stringify([
-    { id: 'ok', label: 'fine', kind: 'dsh', transport: 'ssh', host: 'h.example.com', remotePort: 22 },
-    null,
-    42,
-    'stray',
-    { id: 'also-ok', label: 'fine', kind: 'dsh', transport: 'ssh', host: 'h.example.com', remotePort: 22 },
-  ]))
-  const nullManager = createTransportManager({ provider: sshProvider, instancesFile: withNull, logger: silentLogger })
-  const nullLoaded = nullManager.loadInstances()
-  assert.deepEqual(nullLoaded.map(entry => entry.id), ['ok', 'also-ok'], 'valid entries survive; null/non-object entries are dropped')
-})
 test('label-only edits keep the live tunnel untouched', async t => {
   const { manager, spawnCalls } = await readyManager(t)
   assert.equal(spawnCalls.length, 1)

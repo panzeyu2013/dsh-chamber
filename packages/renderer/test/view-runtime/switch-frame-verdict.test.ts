@@ -2,7 +2,6 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   applyRequireSwitch,
-  DARK_SURFACE_MAX_LUMA,
   switchFrameVerdict,
   type SwitchFrameSample,
 } from '../../scripts/switch-frame-verdict.ts'
@@ -71,8 +70,8 @@ test('形态(c) 无 cache 时回退暗色族：chamber 暗色通过，中灰/亮
   const dark0f1115 = switchFrameVerdict({ switchExercised: true, samples: [domSample({ veil: true, veilBg: 'rgb(15, 17, 21)' })] })
   assert.equal(dark151517.ok, true)
   assert.equal(dark0f1115.ok, true)
-  // 中灰（0x77=119/通道，luma≈119）必须高于暗色族阈值，否则下面这条用例证明不了任何东西。
-  assert.ok(DARK_SURFACE_MAX_LUMA < 0.2126 * 119 + 0.7152 * 119 + 0.0722 * 119, '中灰必须高于暗色族阈值')
+  // 中灰（0x77=119/通道，luma≈119）必须高于暗色族阈值，判据本身由下面这条
+  // 行为断言承担；在此复算亮度公式只会得到测试自己写的同一算术，故不复算。
   const midGray = switchFrameVerdict({ switchExercised: true, samples: [domSample({ veil: true, veilBg: '#777777' })] })
   assert.equal(midGray.ok, false)
   assert.equal(midGray.counts.themeMismatchedFrames, 1)

@@ -29,16 +29,56 @@ test('mount and unmount track the hidden window', () => {
   assert.equal(mounted.state.hiddenSince, null)
   const hidden = reduceSource(mounted.state, { kind: 'hidden', at: 5000 }, env)
   assert.equal(hidden.state.hiddenSince, 5000)
+  // Painting closes the window; a later departure opens a NEW one from that departure
+  // (the earlier start must never be reused).
+  const painted = reduceSource(hidden.state, { kind: 'painted', at: 9000 }, env)
+  assert.equal(painted.state.hiddenSince, null)
+  const hiddenAgain = reduceSource(painted.state, { kind: 'hidden', at: 20_000 }, env)
+  assert.equal(hiddenAgain.state.hiddenSince, 20_000)
+  // A remount is a new mount: the window of the mount that ended must not leak into it.
+  const remounted = reduceSource(hiddenAgain.state, { kind: 'mounted', at: 30_000 }, env)
+  assert.equal(remounted.state.hiddenSince, null)
 })
 
-test('a degraded, retryable, ready mount earns exactly one self-heal', () => {
-  const ready = reduceSource(settled('degraded', 'graph-unavailable'), { kind: 'phaseChanged', phase: 'ready' }, env)
-  const healed = reduceSource(ready.state, { kind: 'bootSettled', outcome: 'degraded', gapKind: 'graph-unavailable' }, env)
-  assert.equal(healed.state.degradedRetried, true)
-  assert.deepEqual(healed.effects, [{ e: 'degradedSelfHeal' }])
-  // Once per ready epoch: a second degraded settle does NOT heal again.
-  const again = reduceSource(healed.state, { kind: 'bootSettled', outcome: 'degraded', gapKind: 'graph-unavailable' }, env)
+test('retryForgotten drops the self-heal mark and nothing else', () => {
+  // The App's reclaimView forgets the degraded-retry mark; the container counterpart
+  // must be equally narrow: a still-settled-degraded view keeps its boot outcome.
+  const marked = reduceSourceSequence(initialSourceLifecycle(INC), [
+    { kind: 'mounted', at: 0 },
+    { kind: 'phaseChanged', phase: 'ready' },
+    { kind: 'bootSettled', outcome: 'degraded', gapKind: 'graph-unavailable' },
+  ], env)
+  assert.equal(marked.state.degradedRetried, true, 'ready + retryable degraded settle sets the mark')
+  const forgotten = reduceSource(marked.state, { kind: 'retryForgotten' }, env)
+  assert.equal(forgotten.state.degradedRetried, false, 'the mark is gone')
+  assert.deepEqual(forgotten.state.boot, marked.state.boot, 'the boot outcome is untouched')
+  assert.equal(forgotten.state.mounted, marked.state.mounted)
+})
+
+test('a degraded, retryable mount earns exactly one self-heal, paid by the ready epoch', () => {
+  // 结算时相位未到 ready（真实冷启动的常态）：不立即自愈，但把"待自愈"留成事实。
+  const settledEarly = settled('degraded', 'graph-unavailable')
+  assert.equal(settledEarly.healPending, true, 'the arm survives a settle that precedes ready')
+  // ready 世代偿还它：一次 effect + 本世代已用标记。
+  const ready = reduceSource(settledEarly, { kind: 'phaseChanged', phase: 'ready' }, env)
+  assert.equal(ready.state.degradedRetried, true)
+  assert.deepEqual(ready.effects, [{ e: 'degradedSelfHeal' }])
+  // Once per ready epoch: a repeat settle does NOT heal again.
+  const again = reduceSource(ready.state, { kind: 'bootSettled', outcome: 'degraded', gapKind: 'graph-unavailable' }, env)
   assert.deepEqual(again.effects, [])
+  assert.equal(again.state.healPending, false)
+})
+
+test('a degraded, retryable mount that is ready at the settle still heals on the settle', () => {
+  const readyAtSettle = reduceSource(settled('degraded', 'graph-unavailable'), { kind: 'phaseChanged', phase: 'ready' }, env)
+  const healed = reduceSource(readyAtSettle.state, { kind: 'bootSettled', outcome: 'degraded', gapKind: 'graph-unavailable' }, env)
+  assert.deepEqual(healed.effects, [], 'the ready transition already paid for this epoch')
+  const fresh = reduceSourceSequence(initialSourceLifecycle(INC), [
+    { kind: 'phaseChanged', phase: 'ready' },
+    { kind: 'bootSettled', outcome: 'degraded', gapKind: 'graph-unavailable' },
+  ], env)
+  assert.deepEqual(fresh.effects, [{ e: 'degradedSelfHeal' }])
+  assert.equal(fresh.state.degradedRetried, true)
 })
 
 test('a non-retryable gap never earns a self-heal and never marks', () => {
@@ -56,10 +96,19 @@ test('leaving ready drops the self-heal mark so a later ready transition earns a
   assert.equal(left.state.degradedRetried, false)
 })
 
-test('a degraded mount that is not ready yet never heals (the ready transition earns it)', () => {
+test('an unready source never heals while it stays unready, and only a NEW settle re-arms it', () => {
   const notReady = settled('degraded', 'graph-unavailable')
   const attempt = reduceSource(notReady, { kind: 'bootSettled', outcome: 'degraded', gapKind: 'graph-unavailable' }, env)
-  assert.deepEqual(attempt.effects, [])
+  assert.deepEqual(attempt.effects, [], 'never heals while the source is unready')
+  assert.equal(attempt.state.healPending, true)
+  const leaving = reduceSource(attempt.state, { kind: 'phaseChanged', phase: 'starting' }, env)
+  assert.deepEqual(leaving.effects, [])
+  // 消费之后仅靠相位往返不再自愈（防止"每个 ready 都重挂一次"的松紧误读）。
+  const ready = reduceSource(leaving.state, { kind: 'phaseChanged', phase: 'ready' }, env)
+  assert.deepEqual(ready.effects, [{ e: 'degradedSelfHeal' }])
+  const back = reduceSource(ready.state, { kind: 'phaseChanged', phase: 'starting' }, env)
+  const readyAgain = reduceSource(back.state, { kind: 'phaseChanged', phase: 'ready' }, env)
+  assert.deepEqual(readyAgain.effects, [], 'a consumed arm needs a new settle')
 })
 
 test('retention reclaims only inside the grace window and only after a settle', () => {

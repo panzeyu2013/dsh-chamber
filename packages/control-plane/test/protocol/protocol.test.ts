@@ -15,7 +15,6 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -38,6 +37,9 @@ import {
 import { writePidRecord } from '../../src/pid-record.ts'
 import { runReaper } from '../../src/reaper.ts'
 import { absentConnection, jsonResponse, mockIdentityProbe, quietLogger, waitFor } from '../support/utils.ts'
+// One shared "port free right now" helper (rationale in the support module): the
+// live chamber range may be taken on a developer machine.
+import { freeDshPortBase } from '../support/spawn-fixtures.ts'
 
 const HOST = `http://127.0.0.1:${DEFAULT_DSH_START_PORT}`
 
@@ -293,18 +295,6 @@ test('malformed error branch degrades to unknown_rpc_code instead of dropping', 
  * path they actually assert. The ledger/termination contract is port-agnostic,
  * so bind an ephemeral port and hand it over explicitly.
  */
-async function freeDshPortBase(): Promise<number> {
-  return await new Promise<number>((resolvePort, rejectPort) => {
-    const server = createServer()
-    server.on('error', rejectPort)
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address()
-      const port = typeof address === 'object' && address !== null ? address.port : 0
-      server.close(() => resolvePort(port))
-    })
-  })
-}
-
 function idleDshWorkspace(root: string): string {
   const workspace = join(root, 'runtime')
   const binDir = join(workspace, 'node_modules', '@deepseek-ai', 'dsh', 'lib')
@@ -388,10 +378,17 @@ test('terminateChild waits past leader exit and kills a stubborn same-group desc
 
     const leaderExited = new Promise<void>(resolve => leader.once('exit', () => resolve()))
     termination = terminateChild(leader, 750)
+    // 守卫定时器必须释放：被放弃的 sleep 会把本文件的事件循环拖满 2s，且它迟到
+    // 的 throw 会在竞态结束后变成 unhandled rejection。用可回收的 reject 守卫代替。
+    let exitGuard: ReturnType<typeof setTimeout> | undefined
     await Promise.race([
       leaderExited,
-      sleep(2_000).then(() => { throw new Error('leader did not exit after process-group SIGTERM') }),
-    ])
+      new Promise<never>((_resolve, reject) => {
+        exitGuard = setTimeout(() => reject(new Error('leader did not exit after process-group SIGTERM')), 2_000)
+      }),
+    ]).finally(() => {
+      if (exitGuard !== undefined) clearTimeout(exitGuard)
+    })
     // The default-behaviour leader exited on TERM, while the descendant's
     // installed handler deliberately ignored it. Group liveness—not the
     // leader exit event—must keep terminateChild pending here.

@@ -5,6 +5,7 @@ import { frameText, readDocumentLocale } from './locales.ts'
 import { installPageLanguageOwner } from './page-language.ts'
 import { installSvgResourceScope } from '@dsh-chamber/dsh-chamber-client-core/svg-resource-scope'
 import { installRootTakeoverWatch } from './root-takeover-watch.ts'
+import { startPageScheduleProbe } from '@dsh-chamber/dsh-chamber-client-core'
 import { recordIncident } from './incident.ts'
 import './styles.css'
 
@@ -28,6 +29,14 @@ installPageLanguageOwner()
 // 安装；裸调用会被改名，使产物守卫恒红；负控：把右侧换成非调用（如 = null）标记即消失。
 ;(globalThis as unknown as { __chamberSvgScopeInstalled?: unknown }).__chamberSvgScopeInstalled =
   installSvgResourceScope()
+
+// The page's own scheduling record (design 14 §D4): every liveness deadline asks it
+// whether the page was actually being scheduled before booking a source fact. Installed
+// BEFORE any shell boots so the first facts-channel attempt is already covered. The
+// anchored assignment mirrors the SVG scope line above: esbuild keeps the property
+// name, so a gate can prove the entry called the installer on minified output.
+;(globalThis as unknown as { __chamberPageScheduleInstalled?: unknown }).__chamberPageScheduleInstalled =
+  startPageScheduleProbe()
 
 // One foreign `shell.overlay` seat can zero + inert `#root` and cover the whole
 // window (the desktop-only account family did exactly this: design 09 §3.5 有意

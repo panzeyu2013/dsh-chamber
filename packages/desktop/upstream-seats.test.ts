@@ -1,9 +1,11 @@
 /**
- * Upstream desktop seat lock (2026-09 calibration S-51/S-52): both flavors install
- * the two things the official Web client looks for — the document platform mark
- * (`data-platform`) and the \`globalThis.dshDesktop\` carrier — and the carrier keeps
- * the upstream shape (protocolVersion 1 + status/open/subscribe) with an identical
- * phase mapping on both sides (one chamber UpdateState source).
+ * Upstream desktop seat lock (2026-09 calibration S-52): both flavors install the
+ * \`globalThis.dshDesktop\` carrier the official Web client looks for, and the carrier
+ * keeps the upstream shape (protocolVersion 1 + status/open/subscribe) with an
+ * identical phase mapping on both sides (one chamber UpdateState source).
+ *
+ * S-51 (the `data-platform` document mark) is locked by
+ * test/ipc/desktop-carrier-surface.test.ts ④ — do not re-pin it here.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -18,19 +20,6 @@ const shim = readFileSync(
   join(REPO_ROOT, 'macos', 'Sources', 'DSHChamber', 'Resources', 'bridge-shim.js'),
   'utf8',
 )
-
-test('S-51: both flavors mark the document platform', () => {
-  assert.match(
-    preload,
-    /document\.documentElement\.dataset\.platform = process\.platform/,
-    'Electron mirrors upstream preload-platform.ts (process.platform)',
-  )
-  assert.match(
-    shim,
-    /document\.documentElement\.dataset\.platform = platform/,
-    'the Swift shell marks the host platform (darwin on its only supported host, design 25)',
-  )
-})
 
 test('S-52: both flavors expose the upstream dshDesktop carrier', () => {
   const arms: [string, string][] = [['preload', preload], ['shim', shim]]
@@ -83,7 +72,7 @@ test('S-52: the carrier classifies the failed operation like upstream', () => {
   for (const [name, text] of [['preload', preload], ['shim', shim]] as [string, string][]) {
     assert.match(text, /upstreamActiveOperation = 'download'/, name + ' tracks download failures')
     assert.match(text, /upstreamActiveOperation = 'install'/, name + ' tracks install failures')
-    assert.match(text, /'checking'\) upstreamActiveOperation = 'check'|upstreamActiveOperation = 'check'/, name + ' tracks check failures')
+    assert.match(text, /'checking'\) upstreamActiveOperation = 'check'/, name + ' tracks check failures')
   }
 })
 

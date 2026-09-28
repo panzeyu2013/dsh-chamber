@@ -6,6 +6,10 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { SessionListState } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { WorkspaceSnapshot } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import { indexSubagentDescendants } from '@dsh-chamber/dsh-chamber-client-core/subagent-lineage'
+// Liveness evidence (design 14 §D4): the baseline verification records WHY a probe did
+// not answer, and a deadline that expired while the page was not scheduled never books
+// a source fact.
+import { hadSchedulingGap, recordEvidence } from '@dsh-chamber/dsh-chamber-client-core'
 import type { SidebarRootInjected } from './contract/slots.ts'
 import { SidebarRoot } from './SidebarRoot.tsx'
 import { SidebarLeadingControls } from './SidebarLeadingControls.tsx'
@@ -48,7 +52,9 @@ import {
 } from '@dsh-chamber/dsh-chamber-client-core/session-fact-reconcile'
 import { appendAuthorityLog, authorityLogStorage } from '@dsh-chamber/dsh-chamber-client-core/authority-log-store'
 // 单一权威链：reducer 的输入类型；reducer 本体与策略都在纯包。
-import type { AuthorityOfficialRow, AuthorityRead } from '@dsh-chamber/dsh-stream-state'
+import {
+  classifyObservation, isAdmissible, type AuthorityOfficialRow, type AuthorityRead,
+} from '@dsh-chamber/dsh-stream-state'
 import { fetchInstanceSnapshot, getInstanceClient } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 import {
   classifySettingsSeatOccupant, settingsSeatTakeoverMessage,
@@ -377,10 +383,24 @@ export function apply(ctx: ClientContext): void {
      * 未被 purge 的活会话（释放抑制），省略的 id 无内容（保持抑制）。失败 ⇒ 保持抑制。
      */
     const authoritativeListedIds = async (): Promise<ReadonlySet<string> | undefined> => {
+      const startedAt = Date.now()
       try {
         const snapshot = await fetchInstanceSnapshot(getInstanceClient(chamberInstanceId))
         return new Set(snapshot.sessions.map(row => row.sessionId))
       } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        // Provenance first: is this the source failing, or the page being throttled?
+        const verdict = classifyObservation({
+          outcome: 'error',
+          errorName: error instanceof Error ? error.name : undefined,
+          errorMessage: reason,
+          schedulingGap: hadSchedulingGap(startedAt, Date.now()),
+        })
+        recordEvidence('baseline-verification', verdict, {
+          instance: chamberInstanceId,
+          windowMs: Date.now() - startedAt,
+          reason,
+        }, isAdmissible(verdict))
         console.warn(`[chamber] authoritative session-list probe failed for ${chamberInstanceId}:`,
           error instanceof Error ? error.message : String(error))
         return undefined
@@ -696,7 +716,12 @@ export function apply(ctx: ClientContext): void {
     // are also vetted so legacy stale rows do not survive merely because this
     // tracker had never persisted a baseline before.
     let verifiedSessionBaseline = false
-    let verificationExhausted = false
+    // Fact-driven re-arm floor (no latch): after an exhausted burst the verification is
+    // deferred until this instant and then retried on the next genuine list change (or
+    // by `connection/reset`). A page-lifetime latch here froze the baseline forever after
+    // four throttled probes — the failure mode recorded in STATUS/design 14 §D4.
+    const BASELINE_VERIFICATION_DEFER_MS = 30_000
+    let verificationNotBefore = 0
     let verificationGeneration = 0
     let verifyingGeneration: number | undefined
     let verificationAttempts = 0
@@ -735,7 +760,10 @@ export function apply(ctx: ClientContext): void {
       }, delay)
     }
     const verifySessionBaseline = (): void => {
-      if (verifiedSessionBaseline || verificationExhausted || disposed || sessionsList.getSnapshot().phase !== 'ready') return
+      if (verifiedSessionBaseline || disposed || sessionsList.getSnapshot().phase !== 'ready') return
+      // Bounded re-arm floor: an exhausted burst waits, then the next genuine list change
+      // (or connection/reset) retries. Deliberately NOT a page-lifetime latch.
+      if (Date.now() < verificationNotBefore) return
       const generation = verificationGeneration
       if (verifyingGeneration === generation) return
       verifyingGeneration = generation
@@ -750,8 +778,16 @@ export function apply(ctx: ClientContext): void {
               verifySessionBaseline()
             }, 750)
           } else {
-            verificationExhausted = true
-            console.warn(`[chamber] session baseline verification unavailable after ${verificationAttempts} attempts (${chamberInstanceId})`)
+            // Deferred, not latched: the evidence ledger keeps why, and the floor keeps
+            // the retry rate bounded while still re-arming from new observations.
+            verificationNotBefore = Date.now() + BASELINE_VERIFICATION_DEFER_MS
+            recordEvidence('baseline-verification', 'deferred', {
+              instance: chamberInstanceId,
+              attempts: verificationAttempts,
+              deferMs: BASELINE_VERIFICATION_DEFER_MS,
+            }, false)
+            verificationAttempts = 0
+            console.warn(`[chamber] session baseline verification deferred after ${String(4)} attempts (${chamberInstanceId}); retrying on the next list change after ${String(BASELINE_VERIFICATION_DEFER_MS)}ms`)
           }
           return
         }
@@ -779,7 +815,7 @@ export function apply(ctx: ClientContext): void {
     const unsubscribeBaselineVerification = ctx.on('connection/reset', () => {
       verificationGeneration += 1
       verifiedSessionBaseline = false
-      verificationExhausted = false
+      verificationNotBefore = 0
       verifyingGeneration = undefined
       verificationAttempts = 0
       protectedLegacySessionIds.clear()

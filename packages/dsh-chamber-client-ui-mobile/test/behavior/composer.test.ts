@@ -65,13 +65,10 @@ test('isNavigationGestureTarget: drawer/header gestures are navigation', () => {
 })
 
 test('isNavigationGestureTarget: non-navigation gestures are typing intent', () => {
-  // Composer seat, portaled picker menus, message area — none navigates.
-  assert.equal(isNavigationGestureTarget(new ClosestStub({})), false)
+  // Composer seat, portaled picker menus, message area — none navigates. The
+  // bare-{} (non-nav) shape is already pinned in the test above; only the null
+  // target adds a distinct input here.
   assert.equal(isNavigationGestureTarget(null), false)
-  // A target inside the seat but NOT inside a nav region (single closest
-  // match answered for the nav selector only).
-  const seatOnly = new ClosestStub({})
-  assert.equal(isNavigationGestureTarget(seatOnly), false)
 })
 
 test('kbdLiftTarget: hysteresis (arm >96px, hold >72px) over the measured overlap', () => {

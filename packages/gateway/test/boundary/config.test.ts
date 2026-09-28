@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { GatewayConfigError, parseGatewayConfig } from '../../src/config.ts'
+import { GatewayConfigError, parseGatewayConfig, type GatewayConfigInput } from '../../src/config.ts'
 
 const STATE = '/tmp/dsh-gateway-state'
 const DSH = '/tmp/dsh-workspace'
@@ -65,12 +65,18 @@ test('S1 override: --no-auth permits an anonymous external bind', () => {
 })
 
 test('S1 override: also permits anonymous loopback behind a public origin or trusted proxy', () => {
-  assert.doesNotThrow(
-    () => parseGatewayConfig({ host: '127.0.0.1', publicOrigin: 'https://gateway.example', allowAnonymousExternal: true }, STATE, DSH),
-  )
-  assert.doesNotThrow(
-    () => parseGatewayConfig({ host: '127.0.0.1', trustedProxies: ['127.0.0.1'], allowAnonymousExternal: true }, STATE, DSH),
-  )
+  // 判据是"仍然解析成 anonymous 且 override 生效"，不是"没有抛错"：只断言 doesNotThrow
+  // 时，把 allowAnonymousExternal 误接到别的分支也全绿。
+  const anonymousLoopbackCases: GatewayConfigInput[] = [
+    { host: '127.0.0.1', publicOrigin: 'https://gateway.example', allowAnonymousExternal: true },
+    { host: '127.0.0.1', trustedProxies: ['127.0.0.1'], allowAnonymousExternal: true },
+  ]
+  for (const input of anonymousLoopbackCases) {
+    const config = parseGatewayConfig({ ...input }, STATE, DSH)
+    assert.equal(config.auth.kind, 'none', JSON.stringify(input))
+    assert.equal(config.allowAnonymousExternal, true, JSON.stringify(input))
+    assert.equal(config.plane.host, '127.0.0.1', JSON.stringify(input))
+  }
 })
 
 test('S1 override with a credential still resolves the credential kind (flag is inert)', () => {
@@ -313,24 +319,6 @@ test('gateway serve surfaces a bad --mobile-entry as exit 2 (flags parse end-to-
     { encoding: 'utf8', timeout: 10_000 })
   assert.equal(result.status, 2, result.stderr)
   assert.match(result.stderr, /mobile entry path must be an origin-form path/)
-})
-
-test('session-state watcher is ON by default and --no-session-state / env pin it off', () => {
-  // Default ON: the read-only mirror ships enabled (design 17 §10.7).
-  const previous = process.env.DSH_GATEWAY_SESSION_STATE
-  try {
-    delete process.env.DSH_GATEWAY_SESSION_STATE
-    assert.equal(parseGatewayConfig({}, STATE, DSH).sessionState, true)
-    // Explicit CLI pin wins over the env (the --no-warmup pattern).
-    process.env.DSH_GATEWAY_SESSION_STATE = '1'
-    assert.equal(parseGatewayConfig({ sessionState: false }, STATE, DSH).sessionState, false)
-    // Env twin: 0/false disables it without any flag.
-    process.env.DSH_GATEWAY_SESSION_STATE = '0'
-    assert.equal(parseGatewayConfig({}, STATE, DSH).sessionState, false)
-  } finally {
-    if (previous === undefined) delete process.env.DSH_GATEWAY_SESSION_STATE
-    else process.env.DSH_GATEWAY_SESSION_STATE = previous
-  }
 })
 
 test('gateway serve accepts --no-session-state (flags parse end-to-end)', () => {

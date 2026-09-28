@@ -5,9 +5,16 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { EXACT_SEMVER, assertSafeVersion, compareSemverAsc, isSafeVersion } from '../../src/version-safety.ts';
 
-test('EXACT_SEMVER: 与 bundle-dsh.mjs 第 69 行同口径（精确 semver，含 prerelease/build）', () => {
+test('EXACT_SEMVER: 与 bundle-dsh.mjs 的同一正则源文本锁步（精确 semver，含 prerelease/build）', () => {
+  // 跨产物锁：打包侧与运行时的 semver 口径必须逐字相同（此前只有注释声称"同口径"）。
+  const bundle = readFileSync(new URL('../../../desktop/scripts/bundle-dsh.mjs', import.meta.url), 'utf8');
+  const captured = /^const EXACT_SEMVER = (\/.*\/);$/m.exec(bundle);
+  assert.ok(captured !== null, 'bundle-dsh.mjs must still declare EXACT_SEMVER');
+  assert.equal(captured[1], `/${EXACT_SEMVER.source}/${EXACT_SEMVER.flags}`,
+    'the packaged and runtime EXACT_SEMVER must stay byte-identical');
   assert.equal(EXACT_SEMVER.test('0.1.1'), true);
   assert.equal(EXACT_SEMVER.test('0.1.1-rc.2'), true);
   assert.equal(EXACT_SEMVER.test('1.2.3-beta.1+build.5'), true);

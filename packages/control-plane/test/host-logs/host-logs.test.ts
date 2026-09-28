@@ -199,7 +199,7 @@ test('multi-MB file: tail-only read, no partial lines, truncated flag', async t 
   }
 })
 
-test('huge file beyond whole-read cap: truncated when the window is insufficient', async t => {
+test('huge file: the tail window truncates an unsatisfiable request but not a clamped one it can satisfy', async t => {
   const stateDir = tempDir(t)
   makeLogs(stateDir)
   const port = 17515
@@ -218,20 +218,15 @@ test('huge file beyond whole-read cap: truncated when the window is insufficient
   assert.ok(result.lines.length > 1000, `window held ${result.lines.length} lines`)
   assert.equal(result.lines[result.lines.length - 1].line, 'huge 99999')
   for (const entry of result.lines) assert.match(entry.line, /^huge \d+$/)
-})
 
-test('huge file: a request the window CAN satisfy is not flagged truncated', async t => {
-  const stateDir = tempDir(t)
-  makeLogs(stateDir)
-  const port = 17515
-  writePidRecord(stateDir, 4246, port, process.pid)
-  writeJsonlLines(logPathFor(stateDir, port), 100_000, { prefix: 'huge' })
-
+  // The SAME 100k-line fixture also pins the other side of the clamp: a request
+  // the 256 KiB window CAN satisfy is not flagged truncated. One fixture write
+  // (~7.2 MB) serves both readings.
   const { readManagedLog } = hostLogs({ stateDir, logger: silentLogger })
-  const result = await readManagedLog('local', { limit: 200 })
-  assert.equal(result.truncated, false)
-  assert.equal(result.lines.length, 200)
-  assert.equal(result.lines[result.lines.length - 1].line, 'huge 99999')
+  const managed = await readManagedLog('local', { limit: 200 })
+  assert.equal(managed.truncated, false)
+  assert.equal(managed.lines.length, 200)
+  assert.equal(managed.lines[managed.lines.length - 1].line, 'huge 99999')
 })
 
 test('window-starved file (window too small for the needed count) is read whole', async t => {

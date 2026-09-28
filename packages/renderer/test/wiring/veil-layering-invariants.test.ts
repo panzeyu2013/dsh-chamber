@@ -161,6 +161,15 @@ test('P3：揭幕信号来自会话面 DOM 事实，窗口锚在本次持有起�
     view.includes('}, [presentation.veil, presentation.releaseAtMonoMs, frameNowMs, surfaceFallbackTick])'),
     '定时器 deps 必须含帧的 held 事实、绝对期限与到期 tick（提前触发只重算，不再 0ms 空转）',
   )
+  // P2 露屏接线（自 test/lifecycle/veil-release-timer.test.ts 并入）：计划出的 delay 必须是
+  // setTimeout 的入参，released/坏钟必须走 null 早退，旧字段与渲染端阈值副本不得复活。
+  assert.match(view, /const delay = planVeilTimer\(presentation, frameNowMs\)[\s\S]*?setTimeout\(/,
+    'the planned delay must be what setTimeout is armed with')
+  assert.ok(view.includes('if (delay === null) return'), 'null must return before the timer is armed')
+  assert.equal(view.includes('Number.isFinite(delay)'), false, 'a numeric 0 can never reach setTimeout')
+  assert.equal(view.includes('presentation.reevaluateInMs'), false, 'the old delay field must be gone')
+  assert.equal(view.includes('presentation.veilVisible'), false, 'the old visibility field must be gone (the local veilVisible deriviation is present)')
+  assert.equal(view.includes('VEIL_ACTIONS_AFTER_MS'), false, 'the renderer must not keep a copy of the feedback window')
   const leaf = read('../../src/session-surface.ts')
   assert.equal(leaf.includes('SURFACE_ABSENT_FALLBACK_MS'), false, 'absent 兜底窗已收归共享表，leaf 不得留副本')
   assert.equal(leaf.includes('SURFACE_MAX_HOLD_MS'), false, 'hero/settling 外层保险已收归共享表，leaf 不得留副本')
@@ -172,6 +181,7 @@ test('P3：揭幕信号来自会话面 DOM 事实，窗口锚在本次持有起�
   // 只能按本仓既有惯例（baseline-harvest/session-authority-wiring 同款）读源码钉住——
   // 否则"改回静态 cut 或漏传第三参"会让命名组硬切静默消失。
   const app = read('../../src/App.tsx')
+  assert.ok(app.includes('if (!(remainingMs > 0)) return'), 'the reveal hold timer must refuse a clamped 0')
   assert.ok(
     app.includes("el.querySelector('.instance-loading') === null ? 'crossfade' : 'cut'"),
     'App 的 paint 判据必须按目标视图落地后的遮罩事实（settled 镜像不是判据）',

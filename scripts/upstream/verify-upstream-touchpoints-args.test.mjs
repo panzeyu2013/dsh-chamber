@@ -160,12 +160,6 @@ test('every dynamic import in the gate goes through pathToFileURL (Windows ESM s
 const ROOT = join(here, '..', '..')
 /** Frozen upstream tree the two C15 upstream sources live in; absent = loud skip. */
 const PIN_ROOT = join(ROOT, 'vendor', 'harness-checkout')
-// 空目录也算「未物化」：只判 PIN_ROOT 会让「目录在、pin 文件不在」的树误走真跑并以 ENOENT 变红，
-// 掩盖真正的 loud skip。判据改成第一个 pin 住的源文件存在。
-const firstPinnedSource = join(PIN_ROOT, HOVER_PORT_SOURCES.upstreamHoverCard)
-const pinSkip = existsSync(firstPinnedSource)
-  ? false
-  : 'vendor/harness-checkout 未物化（子模块缺失）：' + firstPinnedSource
 
 /** Root each C15 source resolves against; paths come from HOVER_PORT_SOURCES, so a registry rename cannot silently pass. */
 const HOVER_SOURCE_ROOT = {
@@ -173,6 +167,16 @@ const HOVER_SOURCE_ROOT = {
   upstreamPointerGrace: PIN_ROOT,
   chamberHoverIntent: ROOT,
 }
+
+// The uninitialized submodule exists as an EMPTY DIRECTORY, so an existsSync(PIN_ROOT)
+// check reads as "materialized" and the two upstream reads then fail with ENOENT —
+// defeating the documented loud skip. Probe the two files the registry names instead.
+const missingPinFiles = ['upstreamHoverCard', 'upstreamPointerGrace']
+  .map((key) => HOVER_PORT_SOURCES[key])
+  .filter((relative) => !existsSync(join(PIN_ROOT, relative)))
+const pinSkip = missingPinFiles.length === 0
+  ? false
+  : 'vendor/harness-checkout 未物化（缺 ' + missingPinFiles.join(', ') + '）：' + PIN_ROOT
 const readHoverSource = (key) => readFileSync(join(HOVER_SOURCE_ROOT[key], HOVER_PORT_SOURCES[key]), 'utf8')
 const realHoverSources = () => Object.fromEntries(Object.keys(HOVER_PORT_SOURCES)
   .map((key) => [key, { path: HOVER_PORT_SOURCES[key], text: readHoverSource(key) }]))

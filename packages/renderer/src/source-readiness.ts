@@ -157,8 +157,13 @@ export interface DegradedSelfHealFacts {
  * effects，会静默丢掉重挂。返回需要重挂的实例 id（每个 ready 世代至多一次，由容器持有该上界）。
  */
 export function planDegradedSelfHeal(facts: DegradedSelfHealFacts): string[] {
-  for (const server of facts.servers) facts.dispatch(server.id, { kind: 'phaseChanged', phase: server.phase })
   const retry: string[] = []
+  // 相位先行：进入 ready 会偿还"结算早于 ready"留下的待自愈（source.ts healPending），
+  // 所以这一支也要读回 effect——否则那条通路只有 bootSettled 一条出口，永远发不出来。
+  for (const server of facts.servers) {
+    const effect = facts.dispatch(server.id, { kind: 'phaseChanged', phase: server.phase })
+    if (effect?.e === 'degradedSelfHeal') retry.push(server.id)
+  }
   for (const [sourceId, state] of Object.entries(facts.shellStates)) {
     if (state.degraded === null) continue
     const effect = facts.dispatch(sourceId, {
@@ -166,7 +171,7 @@ export function planDegradedSelfHeal(facts: DegradedSelfHealFacts): string[] {
       outcome: 'degraded',
       gapKind: state.degraded.kind,
     })
-    if (effect?.e === 'degradedSelfHeal') retry.push(sourceId)
+    if (effect?.e === 'degradedSelfHeal' && !retry.includes(sourceId)) retry.push(sourceId)
   }
   return retry
 }

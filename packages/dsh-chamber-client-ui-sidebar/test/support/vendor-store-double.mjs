@@ -18,9 +18,9 @@
  *   2. `pnpm run build:renderer` resolves that same specifier to the vendor
  *      source through vite's deepseekSource alias — a broken import fails the
  *      build, not a test;
- *   3. `test/plugin-kernel/panel-source.test.ts` keeps asserting the contract shape
- *      (`set`/`update` present, plain arrays, notify-only-on-change), so a
- *      hand-rolled observable fails.
+ *   3. `test/plugin-kernel/panel-source.test.ts` keeps asserting the observable
+ *      behaviour (plain arrays, notify-only-on-change) while its wiring lock pins
+ *      item 1, so a hand-rolled observable fails.
  *
  * Never imported by `src`, the bundle or the typecheck.
  */

@@ -79,8 +79,12 @@ const TREE: Row[] = [
   { pid: 104, ppid: 104, command: 'self-parent', createdAt: 'T104' },
   { pid: 105, ppid: null, command: 'orphan', createdAt: null },
   { pid: 106, ppid: 999, command: 'detached-from-unknown', createdAt: null },
-  { pid: 107, ppid: 103, command: 'cycle-a', createdAt: null },
-  { pid: 108, ppid: 107, command: 'cycle-b', createdAt: null },
+  { pid: 107, ppid: 103, command: 'chain-a', createdAt: null },
+  { pid: 108, ppid: 107, command: 'chain-b', createdAt: null },
+  // A real parent-pointer cycle: nobody outside it can reach it, so the guard is
+  // exercised by rooting the walk INSIDE the cycle (rootPid 111 below).
+  { pid: 111, ppid: 112, command: 'cycle-a', createdAt: null },
+  { pid: 112, ppid: 111, command: 'cycle-b', createdAt: null },
 ]
 
 const TASKKILL_CASES: ReadonlyArray<{ status: number | null; combined: string; expected: 'signalled' | 'gone' | 'error' }> = [
@@ -155,6 +159,10 @@ test('descendantPidsOf agrees on trees, self-parents, orphans and cycles', () =>
     { rootPid: 104, expected: [] },
     { rootPid: 999, expected: [106] },
     { rootPid: 1000, expected: [] },
+    // Rooted in the cycle: the walk must terminate and visit each pid once
+    // (112's child 111 is the root itself; 111's child 112 is already seen).
+    { rootPid: 111, expected: [112] },
+    { rootPid: 112, expected: [111] },
   ]
   for (const item of cases) {
     const a = cp.descendantPidsOf(TREE, item.rootPid)

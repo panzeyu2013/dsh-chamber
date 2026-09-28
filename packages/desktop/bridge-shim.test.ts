@@ -6,7 +6,8 @@
  *  ② stub 内 invoke/push 通道数组 == bridge-manifest.json（同序）；
  *  ③ counts 一致；
  *  ④ 以 node:vm 执行提交物 stub：window.__DSH_CHAMBER_MANIFEST__ 形状 +
- *     __dshChamberAssertMethod/__dshChamberAssertEvent 正/负例。
+ *     __dshChamberAssertMethod/__dshChamberAssertEvent 正/负例；
+ *  ⑤ 提交物 descriptor 不可配置/不可写（:107）。
  * 生成器与提交物同源（ipc-events.ts IPC_CHANNELS + main 侧注册事实）。
  */
 import { test } from 'node:test'
@@ -46,9 +47,12 @@ function extractArray(text: string, key: string): string[] {
   return items
 }
 
-test('① 重生成 stub == 提交物（逐字节）', () => {
-  const { stub } = regenerateToTemp()
-  assert.equal(stub, committedStub)
+test('① 重生成 stub == 提交物（逐字节），且两次重生成一致（生成器稳定）', () => {
+  const first = regenerateToTemp()
+  const second = regenerateToTemp()
+  assert.equal(first.stub, second.stub, '两次重生成的 stub 必须逐字节一致')
+  assert.equal(first.json, second.json, '两次重生成的 JSON 必须逐字节一致')
+  assert.equal(first.stub, committedStub)
 })
 
 test('② stub invoke/push 数组 == bridge-manifest.json（同序）', () => {
@@ -111,9 +115,3 @@ test('⑤ 提交物可写性：descriptor 不可配置/不可写', () => {
   assert.equal(desc.writable, false)
 })
 
-test('⑥ 生成器稳定性：两次重生成字节一致', () => {
-  const a = regenerateToTemp()
-  const b = regenerateToTemp()
-  assert.equal(a.stub, b.stub)
-  assert.equal(a.json, b.json)
-})

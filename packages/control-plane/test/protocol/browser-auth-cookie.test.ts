@@ -19,8 +19,6 @@ import {
 test('parseDshWebUrlLine extracts the URL from the web-profile readiness line', () => {
   assert.equal(parseDshWebUrlLine('dsh web: http://127.0.0.1:17510/?token=abc123'), 'http://127.0.0.1:17510/?token=abc123')
   assert.equal(parseDshWebUrlLine('dsh web: http://127.0.0.1:17510 (LAN: http://10.0.0.5:17510)'), 'http://127.0.0.1:17510')
-  // rc.2 layout: no token, LAN note
-  assert.equal(parseDshWebUrlLine('dsh web: http://127.0.0.1:17510 (LAN: http://10.0.0.5:17510)'), 'http://127.0.0.1:17510')
   assert.equal(parseDshWebUrlLine('[dsh:17510] some log noise'), undefined)
   assert.equal(parseDshWebUrlLine(''), undefined)
 })

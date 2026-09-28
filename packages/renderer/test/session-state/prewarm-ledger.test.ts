@@ -8,7 +8,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { createPrewarmLedger, publishPrewarmInstrument } from '../../src/prewarm-ledger.ts'
+import { createPrewarmLedger, publishPrewarmInstrument, recordPrewarm } from '../../src/prewarm-ledger.ts'
 
 const APP = readFileSync(fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8')
 // drainPrewarm 在视图调度 hook —— attempt 锚点钉在最终落点；
@@ -42,9 +42,12 @@ test('the instrument publishes once and stays live', () => {
   const first = host.__dshChamberPrewarm
   publishPrewarmInstrument(host)
   assert.equal(host.__dshChamberPrewarm, first, 'idempotent')
-  const instrument = first as { hitRate(): number; totals(): { attempts: number } }
-  assert.equal(typeof instrument.hitRate(), 'number')
-  assert.equal(typeof instrument.totals().attempts, 'number')
+  const instrument = first as { totals(): { attempts: number } }
+  // "stays live"：发布后再记一次账必须被同一对象看见。模块单例（prewarm-ledger.ts:57）
+  // 可能与同文件其它用例相互污染，故用 delta 而不是绝对值。
+  const before = instrument.totals().attempts
+  recordPrewarm('attempt', 'live-view-probe')
+  assert.equal(instrument.totals().attempts, before + 1, 'the published instrument must be a live view, not a publish-time snapshot')
 })
 
 test('App records attempt/hit/cancelled at the three real anchors', () => {

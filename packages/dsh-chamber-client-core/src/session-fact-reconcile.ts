@@ -14,7 +14,9 @@
  */
 import {
   LADDER_TABLES,
+  classifyObservation,
   initialSessionAuthorityState,
+  isAdmissible,
   planLadder,
   reduceSessionAuthority,
   sessionAuthorityProbeLadder,
@@ -27,6 +29,8 @@ import {
   type SessionAuthorityEffect,
   type SessionAuthorityState,
 } from '@dsh-chamber/dsh-stream-state'
+import { hadSchedulingGap } from './page-schedule.ts'
+import { recordEvidence } from './evidence-log.ts'
 
 export interface AuthorityOfficialRead {
   /** Every listed session; subagent rows are exported but never reconciled. */
@@ -206,16 +210,38 @@ export class SessionAuthorityReconciler {
    */
   private async readBounded(): Promise<{ read: AuthorityRead | undefined; timedOut: boolean }> {
     const budget = this.deps.readDeadlineMs ?? AUTHORITY_READ_DEADLINE_MS
-    const outcome = await withDeadline(this.deps.readAuthority(), {
-      ms: budget,
-      scheduler: this.deps.scheduler ?? AMBIENT_SCHEDULER,
-      onExpire: () => undefined,
-    })
-    if (outcome.settled === 'deadline') {
+    // At most one re-issue when the deadline expired inside an unscheduled window
+    // (WebKit throttling an unfocused/occluded page): that deadline is not a fact
+    // about the source. Only a deadline the page was awake for is booked (design 14 §D4).
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const startedAt = this.deps.now()
+      const outcome = await withDeadline(this.deps.readAuthority(), {
+        ms: budget,
+        scheduler: this.deps.scheduler ?? AMBIENT_SCHEDULER,
+        onExpire: () => undefined,
+      })
+      if (outcome.settled !== 'deadline') return { read: outcome.value, timedOut: false }
+      const windowMs = this.deps.now() - startedAt
+      const verdict = classifyObservation({
+        outcome: 'error',
+        errorName: 'TimeoutError',
+        schedulingGap: hadSchedulingGap(startedAt, this.deps.now()),
+      })
+      if (!isAdmissible(verdict)) {
+        recordEvidence('authority-read', verdict, { budgetMs: budget, windowMs, attempt }, false)
+        this.deps.warn('session authority read deadline during an unscheduled window ('
+          + String(budget) + 'ms) — re-reading while the page is awake')
+        continue
+      }
+      recordEvidence('authority-read', verdict, { budgetMs: budget, windowMs, attempt }, true)
       this.deps.warn('session authority read deadline exceeded (' + String(budget) + 'ms) — no verdict this round')
       return { read: undefined, timedOut: true }
     }
-    return { read: outcome.value, timedOut: false }
+    // Both windows were unscheduled: there is no valid observation either way, so this
+    // round books neither a deadline nor a success (the ladder's own no-read path owns
+    // the consequence, and the evidence ledger shows why).
+    this.deps.warn('session authority read skipped: the page was not scheduled in either window')
+    return { read: undefined, timedOut: false }
   }
 
   private async attempt(): Promise<void> {

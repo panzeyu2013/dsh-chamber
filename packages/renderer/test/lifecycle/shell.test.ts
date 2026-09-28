@@ -2,8 +2,8 @@
  * shell.ts boot-failure tests (05 §4 failure presentation).
  *
  * The renderer has no install-tree copy of the dsh workspace packages, so
- * `@deepseek-ai/dsh-client-web` is mapped by `scripts/test-shell-loader.mjs`
- * (registered via `--import scripts/test-shell-register.mjs`, see the
+ * `@deepseek-ai/dsh-client-web` is mapped by `scripts/dev/test-shell-loader.mjs`
+ * (registered via `--import scripts/dev/test-shell-register.mjs`, see the
  * test:renderer-shell script) to the committed fixture
  * `test-fixtures/dsh-client-web.mjs`, whose AppWebEntry reports a controlled
  * `bootError` through the test knobs. The host-graph channel is stubbed to 503

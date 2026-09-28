@@ -32,12 +32,12 @@
  * 快照与 gateway 事实源**同形**，直接喂 App 既有的 applySessionFacts 管线（同一份事实、
  * 同一套完成判定）。
  */
-import { isRecord } from '@dsh-chamber/dsh-chamber-client-core'
+import { hadSchedulingGap, isRecord, recordEvidence } from '@dsh-chamber/dsh-chamber-client-core'
 import type {
   SessionFactsCompletedAtSource, SessionFactsRow, SessionFactsSnapshot, SessionFactsTurnEnd,
 } from './session-facts-source.ts'
 import { isWatermark } from './watermark.ts'
-import { TABLE_SNAPSHOT } from '@dsh-chamber/dsh-stream-state'
+import { TABLE_SNAPSHOT, classifyObservation, isAdmissible } from '@dsh-chamber/dsh-stream-state'
 
 export interface MuxSocket {
   send(data: string): void
@@ -97,6 +97,9 @@ export function baselineResampleDelayMs(streak: number, minMs: number, maxMs: nu
   return Math.min(minMs * 2 ** streak, maxMs)
 }
 export const DEFAULT_RECONCILE_INTERVAL_MS = 30_000
+/** Failed unary baselines get a bounded quick retry; the periodic reconcile remains the backstop. */
+export const DEFAULT_BASELINE_FAILURE_RETRY_MIN_MS = 500
+export const DEFAULT_BASELINE_FAILURE_RETRY_MAX_MS = 5_000
 /**
  * 空闲关流的恢复宽限：宿主会回收空闲的 `$events` 套接字（实测约 45s 一次），而「可判」表达的是
  * **事实是否可信**，不是**套接字此刻是否连着**。掉线/单次基线失败后在宽限内保持可判，重连成功
@@ -801,6 +804,8 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   let reconcileTimer: ReturnType<typeof setTimeout> | null = null
   let stableTimer: ReturnType<typeof setTimeout> | null = null
   let baselineResampleTimer: ReturnType<typeof setTimeout> | null = null
+  let baselineFailureRetryTimer: ReturnType<typeof setTimeout> | null = null
+  let baselineFailureRetryStreak = 0
   /** A carrier that never opens, errors or closes would leave the observer with no
    *  failure evidence and no retry: the missing handshake is itself a carrier failure. */
   const clearConnectDeadline = (): void => {
@@ -830,7 +835,7 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       if (stopped || atGeneration !== generation) return
       // 重取不是失败，但持续重取同样意味着「还没有可信基线」⇒ 计数供诊断区分。
       baselineResamples += 1
-      void baseline()
+      runBaseline()
     }, delayMs)
   }
   const clearBaselineResample = (): void => {
@@ -848,6 +853,24 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   let reconnectDelayMs = 1_000
   const MAX_RECONNECT_DELAY_MS = 30_000
   const RECONNECT_STABLE_MS = 30_000
+  const clearBaselineFailureRetry = (): void => {
+    if (baselineFailureRetryTimer !== null) clearTimeout(baselineFailureRetryTimer)
+    baselineFailureRetryTimer = null
+  }
+  const scheduleBaselineFailureRetry = (): void => {
+    if (stopped || !socketReady || baselineFailureRetryTimer !== null) return
+    const atGeneration = generation
+    const delayMs = Math.min(
+      DEFAULT_BASELINE_FAILURE_RETRY_MIN_MS * 2 ** baselineFailureRetryStreak,
+      DEFAULT_BASELINE_FAILURE_RETRY_MAX_MS,
+    )
+    baselineFailureRetryStreak = Math.min(baselineFailureRetryStreak + 1, 8)
+    baselineFailureRetryTimer = setTimeout(() => {
+      baselineFailureRetryTimer = null
+      if (stopped || atGeneration !== generation || !socketReady) return
+      runBaseline()
+    }, delayMs)
+  }
   const instrument = (): SourceMuxStatus => currentStatus()
   /** 载波宽限是否仍然成立（掉线后的一小段「旧真相仍然可用」窗口）。 */
   const carrierGraceActive = (): boolean =>
@@ -1070,7 +1093,12 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     const expired = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
         controller.abort()
-        reject(new Error(method + ': timeout after ' + String(timeoutMs) + 'ms'))
+        // 'TimeoutError' is the evidence layer's machine word for "this observation
+        // outlived its own budget": it separates a real deadline from cancellation
+        // (superseded) and from a transport fault (channel). Never parse the text.
+        const deadline = new Error(method + ': timeout after ' + String(timeoutMs) + 'ms')
+        deadline.name = 'TimeoutError'
+        reject(deadline)
       }, timeoutMs)
     })
     try {
@@ -1238,19 +1266,51 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     const request = ++baselineRequest
     const atRevision = eventRevision
     let value: unknown
+    const startedAt = now()
     try {
       value = await rpc('session/list', { args: { _request: {} } }, baselineTimeoutMs)
     } catch (error) {
       // 失败 = 本次连接事实不可信（不能静默：必须能区分「没完成」与「观察者坏了」）。
+      // 但**只有有效观测**才算来源事实：页面被节流/挂起时墙钟 deadline 会先到期，
+      // 那不是来源没答，是页面没被调度（design 14 §D4 证据有效性层）。
+      const verdict = classifyObservation({
+        outcome: 'error',
+        errorName: error instanceof Error ? error.name : undefined,
+        errorMessage: failureText(error),
+        schedulingGap: hadSchedulingGap(startedAt, now()),
+      })
+      const detail = {
+        source: deps.sourceId,
+        method: 'session/list',
+        budgetMs: baselineTimeoutMs,
+        windowMs: now() - startedAt,
+        reason: failureText(error),
+      }
+      if (!isAdmissible(verdict)) {
+        recordEvidence('mux-facts', verdict, detail, false)
+        if (!stopped && atGeneration === generation && request === baselineRequest) scheduleBaselineFailureRetry()
+        return
+      }
+      recordEvidence('mux-facts', verdict, detail, true)
       if (!stopped && atGeneration === generation && request === baselineRequest) {
         baselineFailures += 1
         baselineFailureReason = failureText(error)
         clearStable()
         carrierOrBaselineLost()
+        scheduleBaselineFailureRetry()
       }
       return
     }
     if (stopped || atGeneration !== generation || request !== baselineRequest) return
+    if (baselineFailureReason !== null) {
+      // 恢复证据：这一次基线是有效观测。日志面要能回答「什么时候好的」，不只是「什么时候坏的」。
+      recordEvidence('mux-facts', 'answered', {
+        source: deps.sourceId,
+        method: 'session/list',
+        clearedReason: baselineFailureReason,
+        windowMs: now() - startedAt,
+      }, false)
+    }
     if (atRevision !== eventRevision) {
       // 列表的取样点未知；其间收到的事件可能比列表新。重新取样，不用旧列表覆写事件——
       // 但经 scheduleBaselineResample 合并 + 限速（review O1），不做无间隔递归。
@@ -1263,10 +1323,16 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       // A successful RPC envelope is not a successful facts baseline when its
       // required items list is absent. Treating null as [] would certify an
       // unobserved source and suppress the runtime completion fallback.
+      recordEvidence('mux-facts', 'channel', {
+        source: deps.sourceId,
+        method: 'session/list',
+        reason: 'items missing or not an array',
+      }, true)
       baselineFailures += 1
       baselineFailureReason = 'session/list: items missing or not an array'
       clearStable()
       carrierOrBaselineLost()
+      scheduleBaselineFailureRetry()
       return
     }
     // 子代理行在源侧排除（形状不合格的顶层行仍照旧整份拒绝）。基线在下面成功
@@ -1290,6 +1356,7 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
         + ' of ' + String(items.length) + ')'
       clearStable()
       carrierOrBaselineLost()
+      scheduleBaselineFailureRetry()
       return
     }
     // I-12：谱系在**同一份基线**上重算（只认 subagent-origin 行；fork 行不贡献边）。
@@ -1311,6 +1378,8 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     baselines += 1
     // 一次失效重取真正落地：节拍回到起点（下一次失效仍从最小间隔开始）。
     baselineResampleStreak = 0
+    baselineFailureRetryStreak = 0
+    clearBaselineFailureRetry()
     const at = now()
     // 基线是投递集的权威：整体重建子代理集合——host 把某 id 移出投递集不会有 removed/cancel
     // 补偿，残留的 id 会永久吞掉它之后的状态帧。此前经 status 建过档的行（那时身份未知）
@@ -1687,6 +1756,8 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
 
   function connect(): void {
     if (stopped) return
+    clearBaselineFailureRetry()
+    baselineFailureRetryStreak = 0
     // 换代即丢套接字，但**不丢真相**：可判性由 carrierOrBaselineLost 在本次代际上裁定
     // （有旧基线 → 宽限；从来没有 → 立即降级），等待下一个 onopen 之前绝不宣称新连接可用。
     socketReady = false
@@ -1823,10 +1894,12 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
    * 「有旧基线则进宽限、没有则立刻降级」的同一策略重新判定可判性。
    */
   function runBaseline(): void {
+    clearBaselineFailureRetry()
     // 只保证「不静默」+ 重新判定可判性：不做失败记账——内部失败路径已经记过，消费者抛错再记
     // 一次会把一次失败计成两次、并用消费者错误覆盖真正的原因（探针实测 baselineFailures=2）。
     void baseline().catch(() => {
       carrierOrBaselineLost()
+      scheduleBaselineFailureRetry()
     })
   }
 
@@ -1893,6 +1966,7 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       clearReconcile()
       clearStable()
       clearBaselineResample()
+      clearBaselineFailureRetry()
       reconnectTimer = null
       const current = socket
       cancelFollows()
@@ -1918,6 +1992,7 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       lastEventAt = null
       reconnectDelayMs = 1_000
       baselineResampleStreak = 0
+      baselineFailureRetryStreak = 0
       // 退役的观察者不得继续以本源的名义出现在观测仪器里。
       unpublishSourceMuxInstrument(deps.sourceId, globalThis, instrument)
     },
