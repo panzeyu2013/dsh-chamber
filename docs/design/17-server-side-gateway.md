@@ -1046,7 +1046,6 @@ inert；复核实测）——要让响应头也条件化需把「是否下发了
 
 完成分类由每次 true→false 边沿持有的读尾身份结算：新一轮 running、新提示水位或移除会撤销旧身份，迟到的 `session/follow` 不得写回。`session/list.updatedAt` 在当前宿主是最近用户提示时间；`false→false` 且水位前进时，旧完成事实必须撤销，但没有可信运行轮次证据便保持未知。读尾失败只给出 `reconstructed` 时刻（observer 域，不作完成证据），不可触发原生完成通知；同一边沿在后续可信基线继续读尾，直到分类或被新活动取代。
 
-
 **Rejected alternatives**：用 `updatedAt` 的前进直接补出完成会混淆用户停止与完成；让读尾失败保留 `observed` 会把未知结果当完成通知；迟到读尾只检查当前 `running=false` 会把上一轮结果写进另一轮已停的会话。
 
 ## 11. Git worktree：服务器侧范围外

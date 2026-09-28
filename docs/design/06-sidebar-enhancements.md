@@ -678,12 +678,16 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   也不据此压制 completed/running 读数与待办条目；`runningSubagents` 保持稀疏计数供诊断。
   守卫单源 = `packages/dsh-chamber-client-core/src/session-row-state.ts` 的 `subagentActivityOf`（行读数、圆点、待办共用）；
   上游完整性信号落地后删除本地 fallback（见 `docs/progress/todo/upstream-proposals.md` §7）。
-- **facts-only 源的 `subagentCount` 不是 busy 证据（对 §4.5 的有意修正，R2-G，2026-12）**：
+- **facts-only 源的 `subagentCount` 只在谱系已认证时是 busy 证据（I-12 修正 R2-G，2026-12）**：
   gateway/SSH facts 行的 `subagentCount` 是「在场子会话数」（宿主投影/谱系索引的
-  cross-section），不是「正在干活」的证据。`completion-observation.ts` 只把**壳通道**的
-  `runningSubagents + subagentActivity` 当运行证据；facts-only 行的 count>0 按 idle/unknown
-  处理，绝不据此压制完成（complete 通知延迟 G4 与徽标/待办压制同规——误判 busy 就是永久
-  hold）。goal 门的唯一出口同样是本模块的 `goalSuppressesPresentation`（§4.3），待办与徽标
+  cross-section），默认不是「正在干活」的证据。`completion-observation.ts` 只把**壳通道**的
+  `runningSubagents + subagentActivity` 当运行证据；facts-only 行要成为运行证据须命中源侧认证——
+  `lineageVerified`（每条 subagent 行都有可用父边）或保留表 `subagentKnown`（基线不可判时
+  不清，durable 子代仍在官方列表里）：认证过 0 判 idle、>0 判 busy，认证位缺席但保留表命中按
+  busy（列表不完整 ⇒ 抑制而非误报）；其余（watcher/无谱系证据）保持 presence/unknown，
+  绝不据此压制完成（complete 通知延迟 G4 与徽标/待办压制同规——误判 busy 就是永久 hold）。
+  口径与落点见 design 19 §3.5 与 `packages/renderer/src/source-mux-facts.ts` 的 `lineageFactsForRows`；
+  goal 门的唯一出口同样是本模块的 `goalSuppressesPresentation`（§4.3），待办与徽标
   只消费它的结果，不得各写一遍。
 
 **残留（记录）**：one-shot await 期间父回合与子 agent 同活，我们只显示子 agent

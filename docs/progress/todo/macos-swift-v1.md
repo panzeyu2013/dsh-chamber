@@ -56,7 +56,7 @@
 |A桥shim表面|`bridge-shim-surface.test.ts`|shim每个命名空间方法集 == preload；method→channel映射一致；无W-04别名残留|
 |A桥stub锁步|`bridge-shim.test.ts`|重生成逐字节 == 提交物；invoke/push计数；信封 `{id,method,payload}`|
 |core禁electron|`electron-free-gate.test.ts`|fail-closed传递闭包：core家族无electron import；白名单四文件有|
-|sidecar全通道冒烟|`sidecar-stdio.test.ts`|假Swift驱动60 invoke回包 + 9 push 面的代表采样（真处理器）|
+|sidecar全通道冒烟|`sidecar-stdio.test.ts`|假Swift驱动52 invoke回包 + 9 push 面的代表采样（真处理器）|
 |release腿策略/打包清单同源|`scripts/release/release-workflow-policy.test.mjs`、`packaging-manifest-lockstep.test.mjs`|staple先于归档；`ARTIFACT_ARGS` 展开恰2次；产物名 `dsh-chamber-<ver>-macos-arm64`；host包清单五处一致|
 |Swift负例护栏|`macos/Tests`（XCTest，ci.yml `test-macos`）|伪造frame/超大帧/非协议流/伪造事件名/越origin全拒|
 |双端harness|`swift-harness-driver.test.ts`（未实施）|真实窗口/桥/通知/深链（需mac + GUI，见 §一）|

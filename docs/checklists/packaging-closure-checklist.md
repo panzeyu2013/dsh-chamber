@@ -77,7 +77,7 @@ glob即闭包：`packages/desktop/package.json` 的 `build.files` 用包根三�
 复核命令（与glob同义，扣除测试夹具 negate 与包根 `.test.ts`；自检式：输出必须等于上方名单的模块数，名单与计数同改，任一漂移即红）：
 
 ```sh
-count=$(ls -1 packages/desktop/*.ts packages/desktop/*.cts packages/desktop/*.mjs \
+count=$(ls -1 packages/desktop/*.ts packages/desktop/*.cts packages/desktop/*.mjs 2>/dev/null \
   | grep -vE '/(loopback-http-test-server|sidecar-stub)\.ts$' \
   | grep -vc '\.test\.ts$')
 echo "root-level collected modules: $count"

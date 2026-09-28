@@ -6,10 +6,10 @@
 
 ## 未完成 / 部分完成（剩余验收）
 
-- **上游漂移批次三剩余（I-15 实机记录）**：六组矩阵（完成未读 P6、归档两段式 + 恢复、通知行为四缺口、
-  运行位校准 60/190/310s、I-14 selection scope、I-12 谱系压制）执行序已归并（`gui-acceptance-checklist.md`
-  §4.1），**待打包态/真机各跑一次并留证据**（用户裁定：合并到主分支后再执行，见下条原生壳缺口）。I-12 的判据落点见
-  design 19 §3.2/§3.5，I-14 见 design 09 §3.6。
+- **上游漂移批次三剩余（I-15 实机记录）**：本条只作执行序指针，六组矩阵（完成未读 P6、归档两段式 + 恢复、
+  通知行为四缺口、运行位校准 60/190/310s、I-14 selection scope、I-12 谱系压制）的开放事实仍在各自条目；
+  执行序已归并（`gui-acceptance-checklist.md` §4.1），**待打包态/真机各跑一次并留证据**（用户裁定：合并到主分支后再执行，
+  见「设计未决」的 macOS Swift 原生壳条）。I-12 的判据落点见 design 19 §3.2/§3.5，I-14 见 design 09 §3.6。
   判据/方案/落点/关闭与待退役块触发见 [todo/upstream-drift-plan.md](todo/upstream-drift-plan.md)。
 - **通知壳 sink `runtimeSettled` 锚点（I2；剩打包态实机回执）**：facts/壳两 sink 共用
   `complete-ledger.ts` 的 `completionAlreadySettled`（无标记/无锚点 = fail-open，只影响抑制、
@@ -163,6 +163,7 @@
 - 响应头白名单双处同步（权威在 design 04 §4.3）。
 - `__DSH_BOOT__` 随 dsh 漂移：以 vendor `parseBootManifest` 为准。
 - 未挂载来源只读 `workspace/follow` 流（未决）：架构级解法，代价 = 侧栏再实现读通道，触碰边界；当前不走。
+- facts 源 forward-skew 且载荷可解析时按整量快照替换行集（`packages/renderer/src/session-facts-source.ts` 的 `publishProbe` → `publishCompleteSnapshot`），而 design 19 §3.5 的「保留既有行」只定契**无载荷**降级（503 disabled / mode off / 无 protocol / protocol>1）：带载荷的版本偏斜是否仍算权威行集未裁，关闭 = 代码改为保留既有行或 design 补一句。
 
 ## 范围决策与必要取舍（不做 / 推迟 / 移出 / 偏差）
 
@@ -173,7 +174,7 @@
 - 组件工厂 + local slots 推迟（与手写镜像重合）。
 - 0.1.6 代已裁决不做 5 项：`session/writer-held`、`sidebar.toggle.badge`、`workspace-tree` 认领、`.dsh-module-fallback` 自动删除、外部仓 `plugins.bundle.config`。
 - 依赖声明补齐与跨包原语合并暂缓：待平台正确的 lockfile 重生成；此前以 parity/lockstep 门代替。
-- 目标通知压制的覆盖/偏差边界（design 19 §3.2.5/§3.5）：P1 只覆盖有壳来源，facts-only 源已覆盖 ask/完成（判定侧读回退）但 `beforeBaseline` 首见窗口实际不可达（见「facts-only 判定侧读回退的已知窗口」）；mobile 无该面、facts-only `subagentCount` 不作 busy 证据、paused 通知 drop、结束通知复用 `complete`、schedule/job 不覆盖、侧栏不加 goal 视觉。
+- 目标通知压制的覆盖/偏差边界（design 19 §3.2.5/§3.5）：P1 只覆盖有壳来源，facts-only 源已覆盖 ask/完成（判定侧读回退）但 `beforeBaseline` 首见窗口实际不可达（见「facts-only 判定侧读回退的已知窗口」）；mobile 无该面、facts-only `subagentCount` 仅在谱系已认证时作 busy 证据（watcher/无谱系证据来源保持 presence 语义）、paused 通知 drop、结束通知复用 `complete`、schedule/job 不覆盖、侧栏不加 goal 视觉。
 - 注册表降级期间 durable 收敛：不把空/不完整 roster 当权威 ⇒ 通知账本三表不剪不落盘（修正臂表同拍不剪），fail-closed（design 05 §7.4、design 19 §3.2.4）。
 - 构建产物移出 git：clean checkout 先 `pnpm run build:artifacts`；`renderer/src/generated` 不提交。
 - 测试面精简上限：再压必落安全/fail-closed/parity/golden/CI 引用类 → 删减需显式裁决。

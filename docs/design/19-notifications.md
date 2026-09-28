@@ -879,8 +879,9 @@ interface ChamberSettings {
 - **ask/request 的来源分档（2026-12）**：有壳来源用 ctx 内实时 mux 事实；无壳来源按 facts
   通道分档——P2a 镜像行带 `pending`，P2b 观察者从 `$events` 的 waterfall/cancel 帧只观察出
   `pendingKind`（设计上**永不**回 `$events/result`，不替任何客户端结算审批/提问）。两者都经
-  判定侧虚拟投影进入同一条边沿（§3.2）。**仍开放**：P2b 的 `$events` 缺口（本地只收
-  `ready` ⇒ 没有瀑布帧就没有该证据，见 STATUS）；上游 `observeRunning` 的第二支（首见 idle
+  判定侧虚拟投影进入同一条边沿（§3.2）。**仍开放**：P2b 的 `$events` 降级窗口（宿主重负载 /
+  插件管理器长 RPC 期间没有瀑布帧证据——投递能力已实测，成因与出口见 STATUS「事实通道降级
+  归因」）；上游 `observeRunning` 的第二支（首见 idle
   武装）只在「列表基数已知且未就绪（`listKnown && baselines === 0`）」时启用，且要求行带
   `beforeBaseline`——今天两个平面实际上都到不了该窗口：P2b 可判即 ≥1 基线；P2a 网关平面
   的行**永不带 `firstSeenByDelta`**（快照/增量都不赋该位），第二支永不触发。登记为已知窗口；
@@ -922,7 +923,9 @@ interface ChamberSettings {
     followup 本期不覆盖（收敛器输入可后续扩展）。activation unknown 的静默窗口（§3.2.2）
     是文档化取舍。**facts-only 源的 `subagentCount` 只在谱系已认证时作 busy 证据**（I-12）：
     mux 观察者用官方 `session/list` 的 `origin`/`parentSessionId` 在**同一份完整基线**上重算
-    running 子代——认证位 `lineageVerified`（每条 subagent 行都有可用父边）、保留表
+    running 子代，子代理 `api-session/status` 帧同拍改计数（`source-mux-facts.ts` 的
+    `noteSubagentRunning`），漏帧由下一次基线整表重算收敛——认证位 `lineageVerified`
+    （每条 subagent 行都有可用父边）、保留表
     `subagentKnown`（基线不可判时不清，durable 子代仍在官方列表里）；认证过的 0 判 idle、
     >0 判 busy，认证位缺席但保留表命中的行按 busy 处理（列表不完整 ⇒ 抑制而非误报）；
     watcher 来源（无谱系证据）保持 presence 语义（count>0 = unknown、永不 busy，对 06 §4.5
