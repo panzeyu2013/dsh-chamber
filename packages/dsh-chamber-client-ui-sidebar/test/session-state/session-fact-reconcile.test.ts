@@ -21,6 +21,8 @@ import {
   type SessionAuthoritySnapshot,
 } from '@dsh-chamber/dsh-chamber-client-core/session-fact-reconcile'
 import type { AuthorityOfficialRow, AuthorityRead, Scheduler } from '@dsh-chamber/dsh-stream-state'
+// 页面调度记录的唯一所有者：本文件需要一个「两次窗口都未调度」的场景（design 14 §D4）。
+import { noteFocus, resetPageScheduleForTests } from '../../../dsh-chamber-client-core/src/page-schedule.ts'
 
 class Harness {
   now = 0
@@ -239,6 +241,34 @@ test('a hanging authority read is fenced by the read budget (I-11), not the ladd
   assert.equal(h.snapshot()?.stuckSince, 60_000)
   assert.ok(h.warned.some(line => line.includes('read deadline exceeded')), h.warned.join(' | '))
   assert.match(h.records.find(entry => entry.kind === 'read-failed')?.detail ?? '', /deadline/)
+})
+
+test('a round whose windows were both unscheduled books neither a failure nor a recovery', async () => {
+  // 从未 tick + 失焦 ⇒ hadSchedulingGap 对任何窗口都为真 ⇒ readBounded 的两次窗口都判 unscheduled，
+  // 末路返回 { read: undefined, timedOut: false }。design 14 §D4：未调度的窗口不携带来源事实，
+  // 所以这一轮既不能进 stuck 证据、也不能落 read-failed，更不能把既有的 stuck 当恢复清掉。
+  resetPageScheduleForTests()
+  noteFocus(false)
+  try {
+    let armed = 0
+    const h = new Harness({
+      readAuthority: () => new Promise<AuthorityRead | undefined>(() => {}),
+      readDeadlineMs: 5_000,
+      scheduler: {
+        setTimeout: (run) => { armed += 1; run(); return armed },
+        clearTimeout: () => {},
+      },
+    })
+    await h.tick(0, { s1: { running: true } })
+    await h.tick(60_000, { s1: { running: true } })
+    assert.equal(armed, 2, 'both windows must be judged before the round is given up')
+    assert.equal(h.snapshot()?.stuckSince, undefined, 'an unscheduled round is not stuck evidence')
+    assert.equal(h.records.some(entry => entry.kind === 'read-failed'), false,
+      'no read-failed verdict may be booked for an observation the page never got to make')
+    assert.ok(h.warned.some(line => line.includes('not scheduled in either window')), h.warned.join(' | '))
+  } finally {
+    resetPageScheduleForTests()
+  }
 })
 
 test('a later healthy verdict clears stuck evidence and advances progress', async () => {

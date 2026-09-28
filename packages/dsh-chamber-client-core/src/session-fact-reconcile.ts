@@ -208,7 +208,7 @@ export class SessionAuthorityReconciler {
    * fetch; this fence also covers a seam that never settles (the official store's single-flight
    * hang is upstream's, but it must degrade this round, not freeze the ladder forever).
    */
-  private async readBounded(): Promise<{ read: AuthorityRead | undefined; timedOut: boolean }> {
+  private async readBounded(): Promise<{ read: AuthorityRead | undefined; timedOut: boolean; skipped: boolean }> {
     const budget = this.deps.readDeadlineMs ?? AUTHORITY_READ_DEADLINE_MS
     // At most one re-issue when the deadline expired inside an unscheduled window
     // (WebKit throttling an unfocused/occluded page): that deadline is not a fact
@@ -220,7 +220,7 @@ export class SessionAuthorityReconciler {
         scheduler: this.deps.scheduler ?? AMBIENT_SCHEDULER,
         onExpire: () => undefined,
       })
-      if (outcome.settled !== 'deadline') return { read: outcome.value, timedOut: false }
+      if (outcome.settled !== 'deadline') return { read: outcome.value, timedOut: false, skipped: false }
       const windowMs = this.deps.now() - startedAt
       const verdict = classifyObservation({
         outcome: 'error',
@@ -235,13 +235,14 @@ export class SessionAuthorityReconciler {
       }
       recordEvidence('authority-read', verdict, { budgetMs: budget, windowMs, attempt }, true)
       this.deps.warn('session authority read deadline exceeded (' + String(budget) + 'ms) — no verdict this round')
-      return { read: undefined, timedOut: true }
+      return { read: undefined, timedOut: true, skipped: false }
     }
     // Both windows were unscheduled: there is no valid observation either way, so this
     // round books neither a deadline nor a success (the ladder's own no-read path owns
     // the consequence, and the evidence ledger shows why).
     this.deps.warn('session authority read skipped: the page was not scheduled in either window')
-    return { read: undefined, timedOut: false }
+    // `skipped` 把「两次都未调度」与「读缝自己没给出值」分开：后者仍是失败证据，前者不是判定。
+    return { read: undefined, timedOut: false, skipped: true }
   }
 
   private async attempt(): Promise<void> {
@@ -311,10 +312,12 @@ export class SessionAuthorityReconciler {
     while (nextRead !== undefined) {
       let read: AuthorityRead | undefined
       let readTimedOut = false
+      let readSkipped = false
       try {
         const bounded = await this.readBounded()
         read = bounded.read
         readTimedOut = bounded.timedOut
+        readSkipped = bounded.skipped
       } catch (error) {
         this.deps.warn('session authority read failed: '
           + (error instanceof Error ? error.message : String(error)))
@@ -327,6 +330,13 @@ export class SessionAuthorityReconciler {
         read: read ?? { ok: false, proof: { kind: 'none' }, rows: {} },
       }, CONFIG)
       this.authority = reduction.state
+      if (read === undefined && readSkipped) {
+        // 两次都未调度（`readBounded` 的末路）：账本已记 `booked=false`，本轮既不是失败也不是恢复
+        // ——未调度的窗口不携带来源事实（design 14 §D4）。直接收轮：不动 stuckSince/progressStamp，
+        // 也不落 read-failed（旧形态把「没有有效观测」读成「读失败」，既把误报送进权威梯子，
+        // 又会让下面的 !failed 分支把真 stuck 误清成 recovered）。
+        return true
+      }
       if (read === undefined || !read.ok) {
         failed = true
         this.stuckSince ??= this.deps.now()
