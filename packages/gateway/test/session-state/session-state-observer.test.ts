@@ -13,7 +13,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createSessionStateObserver, createSessionStateStore } from '../../src/session-state.ts'
+import { createChamberSessionState, createSessionStateObserver, createSessionStateStore } from '../../src/session-state.ts'
+import { FakeRequest, FakeResponse } from '../support/utils.ts'
 import {
   OPEN_EVENTS_FRAME,
   baselineItem,
@@ -325,6 +326,65 @@ test('a held waterfall is delegated with next once a downstream client exists an
   assert.equal(harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions[0].pendingKind, null)
 })
 
+test('CC2-6: a baseline-absent retirement retires the waterfall pairing, so a stale cancel is inert', async t => {
+  // 行退役（基线缺席单阶段删除）后，旧 eventId 的配对必须随行消亡：否则同 id 重建 + 新
+  // waterfall 之后，过期 eventId 的 cancel 会清掉**新**待决位（renderer pendingWaterfalls 同规）。
+  const harness = harnessFor(t, { items: [baselineItem('s1', false, 5)] })
+  await connect(harness)
+  const socket = harness.sockets.sockets[0]
+  const row = () => harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions[0]
+  socket.emitItem('events', { type: 'waterfall', event: 'approval/request', eventId: 'old', agentId: 's1', request: {} })
+  await settle()
+  assert.equal(row().pendingKind, 'approval')
+
+  harness.setItems([])
+  harness.observer.kick('tick')
+  await settle()
+  assert.equal(harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions.length, 0, '基线缺席即单阶段删除')
+
+  harness.setItems([baselineItem('s1', false, 7)])
+  harness.observer.kick('tick')
+  await settle()
+  socket.emitItem('events', { type: 'waterfall', event: 'user-questions/request', eventId: 'new', agentId: 's1', request: {} })
+  await settle()
+  assert.equal(row().pendingKind, 'question', '重建后的新待决位')
+
+  socket.emitItem('events', { type: 'cancel', eventId: 'old' })
+  await settle()
+  assert.equal(row().pendingKind, 'question', '过期 eventId 的 cancel 必须惰性（回退即红：清掉重建后的新待决位）')
+  socket.emitItem('events', { type: 'cancel', eventId: 'new' })
+  await settle()
+  assert.equal(row().pendingKind, null, '真 cancel 照常生效')
+})
+
+test('CC2-6: an explicit api-session/removed retires the waterfall pairing too', async t => {
+  const harness = harnessFor(t, { items: [baselineItem('s1', false, 5)] })
+  await connect(harness)
+  const socket = harness.sockets.sockets[0]
+  const row = () => harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions[0]
+  socket.emitItem('events', { type: 'waterfall', event: 'approval/request', eventId: 'old', agentId: 's1', request: {} })
+  await settle()
+  assert.equal(row().pendingKind, 'approval')
+
+  socket.emitItem('events', { type: 'emit', event: 'api-session/removed', args: ['s1'] })
+  await settle()
+  assert.equal(harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions.length, 0)
+
+  socket.emitItem('events', { type: 'emit', event: 'api-session/added', args: [baselineItem('s1', false, 9)] })
+  await settle()
+  assert.equal(harness.store.snapshotFor('sse', harness.observer.hostInfo()).sessions.length, 1, '同 id 重建')
+  socket.emitItem('events', { type: 'waterfall', event: 'user-questions/request', eventId: 'new', agentId: 's1', request: {} })
+  await settle()
+  assert.equal(row().pendingKind, 'question')
+
+  socket.emitItem('events', { type: 'cancel', eventId: 'old' })
+  await settle()
+  assert.equal(row().pendingKind, 'question', '过期 eventId 的 cancel 必须惰性（回退即红）')
+  socket.emitItem('events', { type: 'cancel', eventId: 'new' })
+  await settle()
+  assert.equal(row().pendingKind, null)
+})
+
 test('the grace window is honoured: no delegation before waterfallGraceMs', async t => {
   const harness = harnessFor(t, { items: [baselineItem('s1', false, 5)], attached: true, waterfallGraceMs: 120 })
   await connect(harness)
@@ -363,6 +423,33 @@ test('poll mode owns the unary baseline cadence while $events never becomes read
   assert.equal(harness.calls.calls.filter(entry => entry.method === 'session/list').length >= 1, true,
     'the observer polls session/list while the event stream is unavailable')
   assert.equal(harness.store.snapshotFor('poll', harness.observer.hostInfo()).sessions.length, 1)
+})
+
+test('S4/T2: a poll-mode wire snapshot latches diagnostics.baselines from the store, not the mux count', async t => {
+  const harness = harnessFor(t, { items: [baselineItem('s1', false, 5)], tickMs: 10, pollMs: 20 })
+  const surface = createChamberSessionState({
+    logger: silentLogger, store: harness.store, observer: harness.observer, enabled: true,
+  })
+  t.after(() => surface.closeAllStreams())
+  harness.observer.start()
+  harness.sockets.sockets[0].emitOpen() // socket open, ready frame never arrives
+  await delay(70)
+  assert.equal(harness.observer.status().mode, 'poll')
+  // mux 自己的 reconcile 计数恒 0（没有 ready 帧）——旧实现只认它，wire 闩锁被钉死在 0，
+  // 渲染侧 listComplete 永假 ⇒ 离表清臂永久失效（已完成且随后离表的行残留蓝点）。
+  assert.equal(harness.observer.status().muxBaselines, 0)
+  assert.equal(harness.store.status().baselines >= 1, true,
+    'a successful poll baseline must count in the store complete-baseline counter')
+  const req = new FakeRequest('GET', '/chamber/session-state', {})
+  const res = new FakeResponse()
+  const pending = surface.handle(req as never, res as never, '/chamber/session-state')
+  req.emit('end')
+  await pending
+  const body = res.json() as { mode: string; diagnostics: { baselines: number } }
+  assert.equal(body.mode, 'poll')
+  assert.equal(body.diagnostics.baselines >= 1, true,
+    'wire diagnostics.baselines must be >= 1 ⇒ the renderer latches listComplete=true ⇒ 离表清臂生效')
+  assert.equal(body.diagnostics.baselines, harness.store.status().baselines, 'single source: the store counter')
 })
 
 test('poll mode rejects a partial baseline without changing a previously running row', async t => {

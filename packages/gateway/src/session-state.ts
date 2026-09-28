@@ -123,7 +123,6 @@ export function normalizeHostState(state: string): SessionStateHostState {
   }
 }
 
-
 /** One completion edge requiring exactly one follow read. source='observed' is a
  *  live true->false edge in this observer epoch; 'reconstructed' is a post-restart recovery. */
 export interface CompletionEdge {
@@ -143,7 +142,8 @@ interface StoredRow {
   pendingKind: SessionStatePendingKind | null
   pendingSince: number | null
   subagentCount: number
-  /** Last complete baseline contained this id. */
+  /** Legacy 兼容位：S3 单阶段删除后行在即 present（没有任何写入者会置假）；仅
+   *  旧文档的 `present: false` 仍按隐藏读，避免把历史隐藏行突然投递。 */
   present: boolean
   /** An api-session/error was seen (boolean only - never the message). */
   error: boolean
@@ -151,6 +151,12 @@ interface StoredRow {
   /** Baseline bookkeeping for the parent/origin subagent count. */
   parentSessionId: string | null
   origin: 'subagent' | null
+  /**
+   * 该行的 origin 是否已被**列表事实**确认（S1）：只有 applyBaseline/applyAdded 置真，
+   * 由 status/activity/pending 首建的行置假。未确认的行一律不投递——它可能其实是子代理，
+   * 投递就会为子代理发真横幅；列表事实把身份落定（顶层或子代理）后才可判。
+   */
+  originKnown: boolean
   /**
    * Projected goal fact (P2a). `undefined` = the projection key was never
    * observed (unknown); `null` = the host explicitly reports no goal; an
@@ -193,6 +199,8 @@ export interface SessionStateStoreStatus {
   dropped: { sessions: number; goalActivations: number }
   /** 已结算完成边沿的 turn/end 分类构成（unreadable = 降级武装）。 */
   turnEnds: { completed: number; userStopped: number; neutral: number; unreadable: number }
+  /** 本进程成功应用的「成功且完整」基线数（含 poll 档）：wire diagnostics.baselines 的唯一来源。 */
+  baselines: number
 }
 
 export interface SessionStateStoreDeps {
@@ -347,6 +355,7 @@ function createStoredRow(sessionId: string, at: number): StoredRow {
     observedAt: at,
     parentSessionId: null,
     origin: null,
+    originKnown: false,
   }
 }
 
@@ -409,7 +418,12 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     if (retained) pendingGoalActivations.delete(sessionId)
     pendingGoalActivations.set(sessionId, edge)
   }
-  let firstBaselineDone = false
+  /**
+   * 本进程已成功应用的「成功且完整」基线数（S4/T2）：wire `diagnostics.baselines` 的
+   * 唯一来源，含 poll 档（mux 的自计数只作观察者自诊断）。同时承担「本进程首份基线」
+   * 判定——重启后持久化的 running 行只在这一拍被当作缺口候选分类。
+   */
+  let baselinesApplied = 0
 
   let cursor = 0
   let mode: SessionStateMode = 'poll'
@@ -425,7 +439,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
   let doc: SessionStateDocument = emptyDocument(now())
 
   // Accumulated delta changes (one cursor step per committed batch).
-  const deltaSessions = new Map<string, SessionStateRow>()
+  const deltaSessions = new Map<string, StoredRow>()
   const deltaRemoved = new Set<string>()
   let deltaHost = false
   let deltaMode = false
@@ -514,6 +528,8 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       observedAt: isWatermark(value.observedAt) ? value.observedAt : 0,
       parentSessionId: typeof value.parentSessionId === 'string' ? value.parentSessionId : null,
       origin: value.origin === 'subagent' ? 'subagent' : null,
+      // 旧文档（无该字段）按未确认读：保守地等到本进程的首份基线再投递。
+      originKnown: value.originKnown === true,
       goal: validateGoalFact(value.goal),
     }
   }
@@ -551,7 +567,6 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       seq: isWatermark(value.seq) ? value.seq : null,
     }
   }
-
 
   let jsonStore: JsonStore | null = null
   try {
@@ -623,11 +638,17 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     if (rows.size <= MAX_SESSIONS) return
     const ordered = [...rows.values()].sort((a, b) => a.observedAt - b.observedAt)
     for (const row of ordered.slice(0, rows.size - MAX_SESSIONS)) {
+      const wasDeliverable = isDeliverable(row)
       rows.delete(row.sessionId)
-      // Eviction is a deletion, not a quiet field wipe: the client must be told
-      // (applyRemoved discipline), or an SSE client keeps a phantom row forever.
+      // Eviction is a deletion, not a quiet field wipe: a row that once rode the
+      // wire must be retracted (applyRemoved discipline), or an SSE client keeps
+      // a phantom row forever. A never-delivered row (unconfirmed identity) is
+      // removed silently — a removal for it would be a phantom retraction.
       deltaSessions.delete(row.sessionId)
-      deltaRemoved.add(row.sessionId)
+      if (wasDeliverable) deltaRemoved.add(row.sessionId)
+      // 完成边与 goal 边随行消亡：其余删除路径都做（applyRemoved / baseline 缺席 prune），
+      // 漏掉会让陈旧边在重列后复活，也会让 map 无界残留。
+      pendingEdges.delete(row.sessionId)
       if (pendingGoalActivations.delete(row.sessionId)) dropped.goalActivations += 1
       dropped.sessions += 1
     }
@@ -678,12 +699,34 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     return { now: now(), serviceable: host.serviceable, state: host.state }
   }
 
+  /**
+   * 单点投递判定（snapshot 与 delta 同规，S1）：子代理行不是桌面事实主体
+   *  （design 19 §3.2）；**行身份只能由列表事实确认**——只有 applyBaseline/applyAdded
+   *  置真的 originKnown 才算数，仅由 status/activity/pending 建的行（originKnown=false）
+   *  一律不投递，直到某次基线或 added 把它确认为顶层。该硬门覆盖进程重启、每次 $events
+   *  换代与任何 added 丢失窗口，绝不依赖「本进程见过基线」这类进程级一次性状态。
+   *  代价：顶层新会话若 added 丢失，其 status-only 行最晚等一次基线（poll 15s /
+   *  sse ≤60s）才进入判定面——以硬约束「子代理绝不通知」为先。
+   *  基线缺席行已在 applyBaseline 里直接删除（S3 单阶段），不会走到这里。
+   */
+  function isDeliverable(row: StoredRow): boolean {
+    return row.present && row.origin !== 'subagent' && row.originKnown
+  }
+
   function commitDelta(): void {
-    if (deltaSessions.size === 0 && deltaRemoved.size === 0 && !deltaHost && !deltaMode) return
+    const sessions = [...deltaSessions.values()]
+      .filter(isDeliverable)
+      .map(toWireRow)
+    if (sessions.length === 0 && deltaRemoved.size === 0 && !deltaHost && !deltaMode) {
+      // 只有被过滤的行发生变化：游标不前进、payload 为空。
+      deltaSessions.clear()
+      deltaRemoved.clear()
+      return
+    }
     cursor += 1
     const delta: SessionStateDelta = {
       cursor,
-      sessions: [...deltaSessions.values()],
+      sessions,
       removedSessionIds: [...deltaRemoved],
       host: deltaHost ? hostInfo() : null,
       mode: deltaMode ? mode : null,
@@ -714,7 +757,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       const next = counts.get(row.sessionId) ?? 0
       if (next !== row.subagentCount) {
         row.subagentCount = next
-        deltaSessions.set(row.sessionId, toWireRow(row))
+        deltaSessions.set(row.sessionId, row)
       }
     }
   }
@@ -724,7 +767,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     if (row === undefined) {
       row = createStoredRow(sessionId, at)
       rows.set(sessionId, row)
-      deltaSessions.set(sessionId, toWireRow(row))
+      deltaSessions.set(sessionId, row)
     }
     return row
   }
@@ -776,6 +819,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         sessions: rows.size,
         dropped: { ...dropped },
         turnEnds: { ...turnEnds },
+        baselines: baselinesApplied,
       }
     },
 
@@ -808,8 +852,12 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       const edges: CompletionEdge[] = []
       for (const item of items) {
         seen.add(item.sessionId)
+        // 「曾经存在」是翻转补移除的前提：首见即子代理的行从未上线，补移除只会造假删除与假提示。
+        const existed = rows.has(item.sessionId)
         const row = getOrCreate(item.sessionId, opts.at)
-        const wasPresent = row.present
+        // 变更**前**该行是否可能已经被投递：补移除只对已上线的行有意义。身份未确认
+        // （仅由 status 首建）的行从未投递，翻成子代理时补移除只会造出幽灵撤回（S1）。
+        const wasDeliverable = isDeliverable(row)
         const previousRunning = row.running
         const previousUpdatedAt = row.updatedAt
         row.updatedAt = Math.max(row.updatedAt, item.updatedAt)
@@ -817,6 +865,13 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         row.observedAt = opts.at
         row.parentSessionId = item.parentSessionId
         row.origin = item.origin
+        row.originKnown = true
+        // 门开（或从旧的未投递态转成可投递）本身就是一次投递变化：不只在字段变化时发。
+        // 否则首基线前被扣下的 activity 行（updatedAt 已在位、基线带同一值）会静默上线，
+        // 只被后续整量快照看见，delta-only 客户端会缺这一行。
+        const becameDeliverable = !wasDeliverable && isDeliverable(row)
+        // 曾以顶层身份上线又变成子代理：补移除，桌面才能丢掉它（并清掉可能已武装的行）。
+        if (item.origin === 'subagent' && existed && wasDeliverable) deltaRemoved.add(item.sessionId)
         // Baseline refresh is the phase/watermark authority; activation (if any)
         // survives an unchanged goalId, and a retained edge for THIS goal id
         // lands the moment the create reaches the projection.
@@ -830,8 +885,8 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
           clearConclusion(row)
           pendingEdges.delete(item.sessionId)
           gapCandidates.delete(item.sessionId)
-          if (!wasPresent || !previousRunning || resolves || row.updatedAt !== previousUpdatedAt || goalChanged) {
-            deltaSessions.set(item.sessionId, toWireRow(row))
+          if (becameDeliverable || !previousRunning || resolves || row.updatedAt !== previousUpdatedAt || goalChanged) {
+            deltaSessions.set(item.sessionId, row)
           }
         } else if (previousRunning) {
           // The edge is armed by the observer after ONE classified follow read; the baseline never arms completedAt raw.
@@ -839,7 +894,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
           const source: SessionStateCompletedAtSource = gapCandidates.has(item.sessionId) ? 'reconstructed' : 'observed'
           gapCandidates.delete(item.sessionId)
           edges.push(newCompletionEdge(item.sessionId, source))
-          deltaSessions.set(item.sessionId, toWireRow(row))
+          deltaSessions.set(item.sessionId, row)
         } else {
           if (row.updatedAt > previousUpdatedAt) {
             // The official list watermark is lastPromptAt. A newer prompt
@@ -850,38 +905,35 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
           }
           const pending = pendingEdges.get(item.sessionId)
           if (pending !== undefined && row.updatedAt === previousUpdatedAt) edges.push(pending)
-          if (!wasPresent || row.running !== false || row.updatedAt !== previousUpdatedAt || goalChanged) {
+          // becameDeliverable 已覆盖「subagent 行翻回顶层」的形状（当时不可投递 ⇒ 现在可投递）。
+          if (becameDeliverable || row.running !== false || row.updatedAt !== previousUpdatedAt || goalChanged) {
             row.running = false
-            deltaSessions.set(item.sessionId, toWireRow(row))
+            deltaSessions.set(item.sessionId, row)
           }
         }
       }
       for (const row of [...rows.values()]) {
         if (seen.has(row.sessionId)) continue
-        if (row.present) {
-          // Deletion is not a completion: mark absent, arm nothing, and prune on the next complete baseline that still misses it.
-          row.present = false
-          row.running = false
-          pendingEdges.delete(row.sessionId)
-          row.observedAt = opts.at
-          deltaSessions.set(row.sessionId, toWireRow(row))
-        } else {
-          rows.delete(row.sessionId)
-          pendingEdges.delete(row.sessionId)
-          // The retained edge dies with the pruned row: a re-listed session id
-          // must never inherit it (same rule as applyRemoved / the row cap).
-          pendingGoalActivations.delete(row.sessionId)
-          deltaRemoved.add(row.sessionId)
-          deltaSessions.delete(row.sessionId)
-        }
+        // 单阶段删除（2026-12 收尾，按上游 ready-即删对齐；design 17 §10.7）：一次
+        // **成功且完整**的基线缺席即离表——进 removedSessionIds 并从 store 删除，不再有
+        // 「首次隐藏、二次剪枝」的容忍窗。删除不是完成：不发 running:false、不产完成
+        // 边沿（缺 wire 行 = 客户端离表清臂 + 随行退役记忆）。
+        const wasDeliverable = isDeliverable(row)
+        rows.delete(row.sessionId)
+        pendingEdges.delete(row.sessionId)
+        // The retained edge dies with the pruned row: a re-listed session id
+        // must never inherit it (same rule as applyRemoved / the row cap).
+        pendingGoalActivations.delete(row.sessionId)
+        deltaSessions.delete(row.sessionId)
+        // 从未上线的行（首基线前的 status 行、子代理行）删除时静默：补移除是幽灵撤回。
+        if (wasDeliverable) deltaRemoved.add(row.sessionId)
       }
       recomputeSubagentCounts()
       // A persisted running candidate is recognized on the first complete
       // baseline after load; an unreadable classification may still retry.
-      if (!firstBaselineDone) {
-        gapCandidates.clear()
-        firstBaselineDone = true
-      }
+      // （首份基线的判定与新计数同源，不再维护第二个布尔。）
+      if (baselinesApplied === 0) gapCandidates.clear()
+      baselinesApplied += 1
       host = { ...host, lastBaselineAt: opts.at, baselineOk: true }
       deltaHost = true
       commitDelta()
@@ -890,7 +942,6 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
 
     applyStatus(sessionId, running, at): CompletionEdge[] {
       const row = getOrCreate(sessionId, at)
-      const wasPresent = row.present
       row.observedAt = at
       row.present = true
       if (running) {
@@ -903,7 +954,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         row.pendingKind = null
         row.pendingSince = null
         gapCandidates.delete(sessionId)
-        if (changed) deltaSessions.set(sessionId, toWireRow(row))
+        if (changed) deltaSessions.set(sessionId, row)
         commitDelta()
         return []
       }
@@ -911,12 +962,12 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         row.running = false
         const source: SessionStateCompletedAtSource = gapCandidates.has(sessionId) ? 'reconstructed' : 'observed'
         gapCandidates.delete(sessionId)
-        deltaSessions.set(sessionId, toWireRow(row))
+        deltaSessions.set(sessionId, row)
         commitDelta()
         return [newCompletionEdge(sessionId, source)]
       }
-      // Already stopped: only a row that just became present is a change (a duplicate status(false) must not advance the cursor).
-      if (!wasPresent) deltaSessions.set(sessionId, toWireRow(row))
+      // Already stopped: nothing changed (a duplicate status(false) must not advance the cursor).
+      // （S3 起行在即 present；旧的 !wasPresent 分支已无写入者，删除。）
       commitDelta()
       return []
     },
@@ -932,17 +983,21 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         clearConclusion(row)
         pendingEdges.delete(sessionId)
       }
-      deltaSessions.set(sessionId, toWireRow(row))
+      deltaSessions.set(sessionId, row)
       commitDelta()
       return true
     },
 
     applyAdded(item, at): boolean {
+      const existed = rows.has(item.sessionId)
       const row = getOrCreate(item.sessionId, at)
+      const wasDeliverable = isDeliverable(row)
       row.observedAt = at
       row.present = true
       row.parentSessionId = item.parentSessionId
       row.origin = item.origin
+      row.originKnown = true
+      if (item.origin === 'subagent' && existed && wasDeliverable) deltaRemoved.add(item.sessionId)
       const previousUpdatedAt = row.updatedAt
       row.updatedAt = Math.max(row.updatedAt, item.updatedAt)
       mergeGoalFact(row, item.goal)
@@ -959,7 +1014,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         pendingEdges.delete(item.sessionId)
       }
       recomputeSubagentCounts()
-      deltaSessions.set(item.sessionId, toWireRow(row))
+      deltaSessions.set(item.sessionId, row)
       commitDelta()
       return true
     },
@@ -969,12 +1024,16 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       // (an activation edge that outraced its create): a re-created session id
       // must never inherit it. Delete BEFORE the early return.
       pendingGoalActivations.delete(sessionId)
-      if (!rows.has(sessionId)) return false
-      // The goal fact dies with the row.
+      const row = rows.get(sessionId)
+      if (row === undefined) return false
+      const wasDeliverable = isDeliverable(row)
+      // The goal fact and the completion edge die with the row.
       rows.delete(sessionId)
       pendingEdges.delete(sessionId)
       deltaSessions.delete(sessionId)
-      deltaRemoved.add(sessionId)
+      // 补移除只对「曾可投递」的行有意义（与 baseline 缺席删除同一门槛）：身份未确认的
+      // status 行从未上线，补 removed 只会造出幽灵撤回与多余的整量重取提示。
+      if (wasDeliverable) deltaRemoved.add(sessionId)
       recomputeSubagentCounts()
       commitDelta()
       return true
@@ -993,7 +1052,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         if (row === undefined || row.goal === undefined || row.goal === null) return false
         row.goal = null
         row.observedAt = at
-        deltaSessions.set(sessionId, toWireRow(row))
+        deltaSessions.set(sessionId, row)
         commitDelta()
         return true
       }
@@ -1017,7 +1076,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       next.activation = event.activation
       row.goal = next
       row.observedAt = at
-      deltaSessions.set(sessionId, toWireRow(row))
+      deltaSessions.set(sessionId, row)
       commitDelta()
       return true
     },
@@ -1032,7 +1091,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         if (goal === undefined || goal === null || goal.activation === undefined) continue
         row.goal = persistedGoalFact(goal)
         row.observedAt = at
-        deltaSessions.set(row.sessionId, toWireRow(row))
+        deltaSessions.set(row.sessionId, row)
         changed = true
       }
       if (changed) commitDelta()
@@ -1045,7 +1104,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       row.pendingKind = kind
       row.pendingSince = at
       row.observedAt = at
-      deltaSessions.set(sessionId, toWireRow(row))
+      deltaSessions.set(sessionId, row)
       commitDelta()
       return true
     },
@@ -1056,10 +1115,11 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       row.pendingKind = null
       row.pendingSince = null
       row.observedAt = at
-      deltaSessions.set(sessionId, toWireRow(row))
+      deltaSessions.set(sessionId, row)
       commitDelta()
       return true
     },
+
 
     settleCompletion(edge, input): boolean {
       const row = rows.get(edge.sessionId)
@@ -1089,14 +1149,14 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       row.lastTurnEnd = input.turnEnd
       row.observedAt = input.at
       if (!changed) return false
-      deltaSessions.set(edge.sessionId, toWireRow(row))
+      deltaSessions.set(edge.sessionId, row)
       commitDelta()
       return true
     },
 
     snapshotFor(snapshotMode, snapshotHost): SessionStateSnapshot {
       const sessions = [...rows.values()]
-        .filter(row => row.present)
+        .filter(isDeliverable)
         .sort((a, b) => {
           const aw = Math.max(a.updatedAt, a.completedAt ?? 0, a.observedAt)
           const bw = Math.max(b.updatedAt, b.completedAt ?? 0, b.observedAt)
@@ -1138,7 +1198,6 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
   }
 }
 
-
 export interface SessionStateObserverStatus {
   mode: SessionStateMode
   ready: boolean
@@ -1146,7 +1205,9 @@ export interface SessionStateObserverStatus {
   lastEventAt: number | null
   /** 下行帧计数与基线次数（丢帧/对账可见，不靠沉默推断）。 */
   eventsReceived: number
-  baselines: number
+  /** mux **自己**的成功基线计数（观察者自诊断）；**不是** wire diagnostics.baselines 的来源
+   *  ——wire 的 listComplete 闩锁读 store 的完整基线计数（含 poll 档），mux 计数不参与。 */
+  muxBaselines: number
   reconnects: number
   lastError: string | null
   degraded: boolean
@@ -1208,6 +1269,29 @@ export function createSessionStateObserver(deps: SessionStateObserverDeps): Sess
   const tickMs = deps.tickMs ?? DEFAULT_TICK_MS
   const baselineTimeoutMs = deps.baselineTimeoutMs ?? DEFAULT_BASELINE_TIMEOUT_MS
   const pendingEvents = new Map<string, string>()
+
+  /**
+   * 行退役时按 sessionId 清配对（与 renderer `source-mux-facts.pendingWaterfalls` 同规）：
+   * 行已不在，过期 eventId 的 cancel 只应被忽略——留着的配对既让 map 无界增长，又可能在
+   * 同 id 重建后清掉**新**待决位（旧 eventId 的迟到 cancel 命中新行）。两条退役路径都必须
+   * 清：显式 remove（`applyRemoved`）与基线缺席单阶段删除（`applyBaseline` 的 absent 集）。
+   * 已知边界：行上限淘汰（`enforceLimits`，>MAX_SESSIONS，loud 记账）发生在本观察者之外，
+   * 该极端形状下配对可残留到下一次基线对账；不引入第二套行生命周期钩子。
+   */
+  function releasePendingEventsFor(sessionId: string): void {
+    for (const [eventId, paired] of pendingEvents) {
+      if (paired === sessionId) pendingEvents.delete(eventId)
+    }
+  }
+
+  /** 基线缺席 = store 已单阶段删除该行 ⇒ 配对随行退役（缺席集与 store 的删除集同源）。 */
+  function releasePendingEventsAbsentFrom(items: readonly SessionListBaselineItem[]): void {
+    if (pendingEvents.size === 0) return
+    const present = new Set(items.map(item => item.sessionId))
+    for (const [eventId, sessionId] of pendingEvents) {
+      if (!present.has(sessionId)) pendingEvents.delete(eventId)
+    }
+  }
   let degraded = false
   let lastError: string | null = null
   let followReads = 0
@@ -1262,6 +1346,8 @@ export function createSessionStateObserver(deps: SessionStateObserverDeps): Sess
 
   function applyBaseline(items: readonly SessionListBaselineItem[], at: number, canClassify: boolean): void {
     const edges = store.applyBaseline(items, { at })
+    // 同一份权威列表：缺席行已被 store 单阶段删除，其 waterfall 配对同拍退役（见 helper）。
+    releasePendingEventsAbsentFrom(items)
     refreshHost()
     // Poll mode has no follow carrier: an unreadable tail there would fabricate
     // unread on every user stop, so offline edges degrade to unknown, not armed.
@@ -1360,7 +1446,10 @@ export function createSessionStateObserver(deps: SessionStateObserverDeps): Sess
     onStatus: (sessionId, running, at) => { onStatus(sessionId, running, at) },
     onActivity: (sessionId, updatedAt, at) => { store.applyActivity(sessionId, updatedAt, at) },
     onAdded: (item, at) => { store.applyAdded(item, at) },
-    onRemoved: (sessionId, at) => { store.applyRemoved(sessionId, at) },
+    onRemoved: (sessionId, at) => {
+      store.applyRemoved(sessionId, at)
+      releasePendingEventsFor(sessionId)
+    },
     onGoalActivation: (event) => {
       store.applyGoalActivation(event, now())
     },
@@ -1432,7 +1521,7 @@ export function createSessionStateObserver(deps: SessionStateObserverDeps): Sess
         baselineAt: muxStatus.lastBaselineAt,
         lastEventAt: muxStatus.lastEventAt,
         eventsReceived: muxStatus.eventsReceived,
-        baselines: muxStatus.baselines,
+        muxBaselines: muxStatus.baselines,
         reconnects: muxStatus.reconnects,
         lastError: muxStatus.lastError ?? lastError,
         degraded: degraded || muxStatus.eventsDegraded,
@@ -1496,7 +1585,9 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
       diagnostics: {
         eventsReceived: observer.eventsReceived,
         lastEventAt: observer.lastEventAt ?? 0,
-        baselines: observer.baselines,
+        // S4/T2：listComplete 闩锁的唯一来源是 store 的完整基线计数——observer 的
+        // muxBaselines 只覆盖 sse 档 reconcile，poll 档（无 ready 帧）永远为 0。
+        baselines: storeStatus.baselines,
         reconnects: observer.reconnects,
         followReads: observer.followReads,
         followFailures: observer.followFailures,

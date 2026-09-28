@@ -128,7 +128,7 @@ test('unreadable rows are dropped with a loud counter, never silently', async t 
     host: { state: 'unknown', serviceable: false, since: 1, lastBaselineAt: null, baselineOk: false },
     sessions: [
       { sessionId: '' },
-      { sessionId: 's1', running: false, updatedAt: 4, present: true, observedAt: 5 },
+      { sessionId: 's1', running: false, updatedAt: 4, present: true, observedAt: 5, originKnown: true },
     ],
     dropped: { sessions: 0, goalActivations: 0 },
   }))
@@ -154,7 +154,7 @@ test('process-local dropped counters restart at 0 on reload (normalization, not 
     watcherEpoch: 'e',
     mode: 'poll',
     host: { state: 'unknown', serviceable: false, since: 1, lastBaselineAt: null, baselineOk: false },
-    sessions: [{ sessionId: 's1', running: false, updatedAt: 4, present: true, observedAt: 5 }],
+    sessions: [{ sessionId: 's1', running: false, updatedAt: 4, present: true, observedAt: 5, originKnown: true }],
     dropped: { sessions: 0, goalActivations: 9 },
   }))
   const store = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 100 })
@@ -162,6 +162,57 @@ test('process-local dropped counters restart at 0 on reload (normalization, not 
   // （否则就是一个永不产生非零值的死读分支）。键都在，形状不缩水。
   assert.deepEqual(store.status().dropped, { sessions: 0, goalActivations: 0 })
   assert.equal(store.snapshotFor('sse', store.host()).sessions.length, 1)
+})
+
+test('a legacy document without originKnown is read as UNCONFIRMED: hidden until a list fact confirms it (S1)', async t => {
+  const stateDir = scratch(t)
+  const { ensurePrivateDirectoryNoFollow } = await import('@dsh-chamber/control-plane')
+  ensurePrivateDirectoryNoFollow(join(stateDir, SESSION_STATE_DIR_NAME), 0o700)
+  // 旧文档（S1 之前写入）没有 originKnown 字段；按未确认读，保守地等本进程的列表事实。
+  writeFileSync(stateFile(stateDir), JSON.stringify({
+    schemaVersion: 1,
+    revision: 1,
+    cursor: 3,
+    watcherEpoch: 'e',
+    mode: 'poll',
+    host: { state: 'unknown', serviceable: false, since: 1, lastBaselineAt: null, baselineOk: false },
+    sessions: [{ sessionId: 'legacy', running: false, updatedAt: 4, present: true, observedAt: 5 }],
+    dropped: { sessions: 0, goalActivations: 0 },
+  }))
+  const store = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 100 })
+  assert.deepEqual(store.snapshotFor('sse', store.host()).sessions, [],
+    '缺 originKnown 的旧行按未确认读：基线前不得投递（它可能其实是子代理）')
+  // 列表事实确认顶层身份：同一拍上线（持久行的字段原样保留）。
+  store.applyBaseline([baselineItem('legacy', false, 4)], { at: 200 })
+  const row = store.snapshotFor('sse', store.host()).sessions[0]
+  assert.equal(row.sessionId, 'legacy')
+  assert.equal(row.updatedAt, 4)
+})
+
+test('a legacy row with present:false stays hidden until a list fact re-confirms it (compat read)', async t => {
+  const stateDir = scratch(t)
+  const { ensurePrivateDirectoryNoFollow } = await import('@dsh-chamber/control-plane')
+  ensurePrivateDirectoryNoFollow(join(stateDir, SESSION_STATE_DIR_NAME), 0o700)
+  // S3 之前写入的隐藏行（present:false）：兼容读保留该位——「行在即 present」只适用于新
+  // 写入者，绝不把历史隐藏行突然投递；本进程的列表事实确认后同拍上线（与 S1 originKnown 同款）。
+  writeFileSync(stateFile(stateDir), JSON.stringify({
+    schemaVersion: 1,
+    revision: 1,
+    cursor: 3,
+    watcherEpoch: 'e',
+    mode: 'poll',
+    host: { state: 'unknown', serviceable: false, since: 1, lastBaselineAt: null, baselineOk: false },
+    sessions: [{ sessionId: 'hidden', running: false, updatedAt: 4, present: false, observedAt: 5, originKnown: true }],
+    dropped: { sessions: 0, goalActivations: 0 },
+  }))
+  const store = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 100 })
+  assert.equal(store.snapshotFor('sse', store.host()).sessions.length, 0,
+    'present:false 的旧行不得投递（兼容读保留该位）')
+  // 列表事实确认顶层身份：row.present = true ⇒ 同一拍上线，持久字段原样保留。
+  store.applyBaseline([baselineItem('hidden', false, 4)], { at: 200 })
+  const row = store.snapshotFor('sse', store.host()).sessions[0]
+  assert.equal(row.sessionId, 'hidden')
+  assert.equal(row.updatedAt, 4)
 })
 
 test('the row cap evicts the oldest rows and counts the loss', async t => {
@@ -245,8 +296,8 @@ test('the persisted document carries only session ids and state metadata (privac
   const document = JSON.parse(text) as { sessions: Array<Record<string, unknown>> }
   assert.deepEqual(Object.keys(document.sessions[0]).sort(), [
     'completedAt', 'completedAtSource', 'error', 'goal', 'lastRunningAt', 'lastTurnEnd', 'observedAt',
-    'origin', 'parentSessionId', 'pendingKind', 'pendingSince', 'present', 'running', 'sessionId',
-    'subagentCount', 'updatedAt',
+    'origin', 'originKnown', 'parentSessionId', 'pendingKind', 'pendingSince', 'present', 'running',
+    'sessionId', 'subagentCount', 'updatedAt',
   ])
   // The persisted goal carries ONLY the whitelisted durable fields.
   assert.deepEqual(document.sessions[0].goal, { goalId: 'goal-1', revision: 2, phase: 'active', updatedAt: 5 })
