@@ -63,16 +63,29 @@ test('the strip and the logo row carry the window-drag mark', () => {
     'the logo row is a window-chrome row')
 })
 
-test('the darwin transparency rules keep the pinned upstream bodies', () => {
+const VENDOR_CSS_MISSING = !existsSync(new URL(
+  '../../../../vendor/harness-checkout/packages/client/ui-sidebar/src/client/SidebarRoot.module.css', import.meta.url))
+const VENDOR_OPT_OUT = process.env.DSH_CHAMBER_VENDOR_ABSENT === 'skip'
+
+test('the darwin transparency rules keep the pinned upstream bodies', (context) => {
+  // 缺树默认响亮失败，只有显式 opt-out 才 skip——与同包 vendor-session-fact-contract 同一
+  // 约定（remote-state-acceptance 的 sidebar 腿正是设该变量跑本包）。
+  if (VENDOR_CSS_MISSING) {
+    if (VENDOR_OPT_OUT) {
+      context.skip('vendor tree absent; explicit DSH_CHAMBER_VENDOR_ABSENT=skip')
+      return
+    }
+    assert.fail('vendor/harness-checkout 未物化：先跑 scripts/dev/ensure-harness-vendor.mjs 再跑本测试'
+      + '（显式 DSH_CHAMBER_VENDOR_ABSENT=skip 才跳过）。')
+  }
   // design 25 §5.6：这三组规则是「窗口 vibrancy 从侧栏列透出」的承重面，页面自身没有像素判据
   // 能发现它们被删/改。规则体与 pin 住的 vendor ui-sidebar 同名文件逐条比对；本仓选择器多一层
   // data-window-vibrancy 门控（Electron darwin 腿没有 vibrancy，跟着透明会把侧栏压到窗口底色
   // 上，见 design 25 §5.6 的 Rejected alternatives），故比对前只从选择器里去掉该门控。
   // 缺 vendor 子模块时响亮失败并给出补救（仓内同款：control-plane host-log-bridge）——
-  // 「本地绿」不能靠静默跳过换来，树在时这条体逐字比对是唯一覆盖。
+  // 「本地绿」不能靠静默跳过换来，树在时这条体逐字比对是唯一覆盖；唯一例外是显式
+  // DSH_CHAMBER_VENDOR_ABSENT=skip（见函数开头的 opt-out 分支）。
   const vendorPath = '../../../../vendor/harness-checkout/packages/client/ui-sidebar/src/client/SidebarRoot.module.css'
-  if (!existsSync(new URL(vendorPath, import.meta.url)))
-    assert.fail('vendor/harness-checkout 未物化：先跑 scripts/dev/ensure-harness-vendor.mjs 再跑本测试')
   const vendor = read(vendorPath)
   const gated = (suffix: string): string => ":global([data-platform='darwin'][data-window-vibrancy])" + suffix
   const pinned = (suffix: string): string => ":global([data-platform='darwin'])" + suffix
