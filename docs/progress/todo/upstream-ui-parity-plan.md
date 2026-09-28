@@ -46,8 +46,10 @@ design 同批更新；已落地面的契约见 design 06 §7、design 05 §2）�
   而 `shell.overlay` 正是本仓 layout fork 声明的座席（`packages/dsh-chamber-client-ui-layout/src/client/index.ts#apply` 的
   `slots.register` 子座席表 `shell.overlay`）并由官方 `AppFrame` 渲染（fork `:22`/`:181`；`renderSlot("shell.overlay")`
   见产物 `dsh-client-ui-layout/lib/client.js`）
-  ⇒ **模态真的出现，不是死件**。真正没有消费者的是两个：`session.search`→`controls.search`（:147）与 `workspace.add`→
-  `controls.add`（:153）只把 `searchRequest`/`addRequested` 写进被覆盖的官方浏览器 store。`workspace.add` 的 `noPicker` 门
+  ⇒ **模态真的出现，不是死件**。真正没有消费者的是三个：`session.search`→`controls.search`（:147）与
+  `workspace.add`→`controls.add`（:153）只把 `searchRequest`/`addRequested` 写进被覆盖的官方浏览器 store；
+  open-in 的 `workspace.openLocal` 是另一种死法——键被消费、`currentApp()` 恒 undefined、无可见反馈
+  （见 STATUS「无法控制的差异」的死键条）。`workspace.add` 的 `noPicker` 门
   （`WS:106` 的 `addReason()`）要求 `sidebar.workspaces.directoryFlow` 座席为空，而本仓为每个托管来源 pin 了
   `directory-picker-browse`（`packages/renderer/src/chamber-entry.ts:105-110`；picker 在 :1027 注入该座席）⇒ 门放行、
   只写 `addRequested: true`（`WS:28-50`）——静默死件，**不是** `shortcut.noPicker` 的 blocked。

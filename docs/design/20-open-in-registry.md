@@ -359,7 +359,8 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
   `test/wire-protocol/open-in-wire-lockstep.test.ts` 取代；
 - bespoke 菜单三件套 `src/client/AccessibleAppMenu.tsx` + `AccessibleAppMenu.module.css` +
   `src/client/menu-navigation.ts` 及其 `test/menu-navigation.test.ts` → 由官方
-  `ui-primitives` `Menu`（焦点转移/方向键导航/`compact`/填充选中/项图标/portal）+ `Tooltip` 取代；仅
+  `ui-primitives` `Menu`（焦点转移/方向键导航/`compact`/填充选中/项图标/portal）+ `Tooltip` 取代（本仓 `OpenInButton`
+  除 `portal` 外其余能力已用上，`portal` 未传——已登记的呈现偏差，见 STATUS「功能差异」的 open-in 条）；仅
   N-ctx 归属留插件内（新增 `src/client/instance-view-guard.ts` +
   `test/ui-lock/instance-view-guard.test.ts`，§5）；
 - `docs/checklists/upstream-touchpoints.md` §4 的 "dsh-host-open-in-app 契约镜像"行 → 改为 fork 行；

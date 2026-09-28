@@ -145,6 +145,31 @@
   动作簇 4px/20px、footer `gap: 4px`。
 - 缺的上游功能（已裁不做）：`sidebar.toggle.badge`、`sidebar.workspaces` 的官方归档/恢复/过滤贡献（见「范围决策」条）、
   flat 单列表模式（推迟）、跨来源移动会话（v1 不做）。
+- 缺的上游交互机制（**按裁决登记为不做**；上游证据用安装产物 `SB`/`WS` 简写，本仓面只写路径不写行号）：
+  - **重命名提交无校验**：上游 `trim()` 后提交、空/未变/重名时禁用确认并给 `conflict.named`、聚焦全选标题、组合输入
+    中的 Enter 被 `composingRef` 吞掉（`WS:1142-1152`、`WS:1430`、`WS:1440-1446`、`WS:1451`；`session-actions/RenameSession.tsx`）；
+    本仓行内表单直接 Enter 提交（`server-section-controls.tsx`），`isComposing`/`trim()` 在本包零命中。
+  - **折叠组上 `+` 不展开该组**：上游 `onCreate` 先展开组再建会话（`WS:508-513`）；本仓 `ServerSection.tsx` 的 `+` 只调
+    `onNewSession` ⇒ 折叠态下新会话行不渲染、无当前位置反馈。
+  - **搜索命中打开后不 reveal**：上游清查询、收搜索、置 `revealSessionId`、展开所属组、抬窗口、`scrollIntoView`
+    （`WS:1032-1040`、`WS:343-356`）；本仓 `ServerSectionSearch.tsx` 只 `openSession`，`scrollIntoView` 在本包与
+    client-core 零命中（与 §1.6 search 形态同族，重议时并裁）。
+  - **本仓归档路径无提示/撤销**：上游归档后 6s toast + 撤销 + 看已归档（`session-actions/RowActionToast.tsx`）；本仓
+    `sidebar-root-sessions.ts` 只 `requestRefresh`，`notify`/`toast` 在本包零命中 ⇒ 与官方 ⇧⌘A 路线行为不同。
+  - **占位「新会话」行可拖拽**：上游 `draggable` 带 `!row.blank` 门（`rows/Rows.tsx`）；本仓 `ServerSectionRows.tsx` 只排除
+    ghost/synthetic（同行动作簇与双击重命名已按 blank 门控）⇒ 空行可被拖走并提交一次 `insertSessionBefore` 重排。
+  - **添加工作区后不自动开会话**：上游 adopt+create 后 `startSession`（`WS:1316-1319`）；本仓 `sidebar-root-dialogs.tsx`
+    只建+刷新+关闭（本仓流程见 design 05 §2）⇒ 每个新工作区多一次 `+`。
+  - **rail 无「添加工作区」控件**：上游两态都渲染 add 按钮（`WS:1287-1302`）；本仓 rail 只有来源色点（design 06 §5 已裁
+    「rail 无搜索」；此条为其邻项）。
+  - **删除工作区确认框按 unary 结果关闭**：上游等投影不再含该 id 才关（`WS:1175-1184`、`WS:1196-1204`，注释点名早关
+    一帧会暴露给下一个手势）；本仓 `sidebar-root-dialogs.tsx` 在 action 报 ok 时即关 ⇒ 一帧闪影。
+  - **open-in 分体控件**：上游忙/挂起时整控件禁用（含 chevron 与菜单 `open` 门控）、Menu/Tooltip 传 `portal`、按目标路径
+    `key={cwd}` 重挂载（`OpenTargetButton.tsx`、`OpenInAppAction.tsx`）；本仓 `OpenInButton.tsx` 只 disable 主按钮、三处未传
+    `portal`、无 `key` ⇒ 拉起中可从菜单选到被静默丢弃的项、菜单/提示不 portal、切会话后打开态与错误装饰不归零（⌥⌘O
+    死键属外部约束，见下节）。
+  重议条件：任一条在上游退役或本仓交互面重启时并裁。判据口径与上游行号口径见
+  [todo/upstream-ui-parity-plan.md](todo/upstream-ui-parity-plan.md)（§1 = 待裁，§2 = 已收敛）。
 
 ## 无法控制的差异（外部约束：vendor 语义 / 上游缺陷与未导出面）
 
@@ -154,9 +179,10 @@
   该座席由本仓 layout fork 声明（`packages/dsh-chamber-client-ui-layout/src/client/index.ts#apply` 的 `slots.register`
   子座席表 `shell.overlay`）并由官方 `AppFrame` 渲染（fork `:22`/`:181`；`renderSlot("shell.overlay")` 见产物
   `dsh-client-ui-layout/lib/client.js`）⇒ **模态真的出现**。
-  **死的两个**：`session.search`（`controls.search`）与 `workspace.add`（`controls.add`；其 `noPicker` 门因本仓为每个托管来源
+  **死的三个**：`session.search`（`controls.search`）与 `workspace.add`（`controls.add`；其 `noPicker` 门因本仓为每个托管来源
   pin 了 directory-picker-browse、占同一座席而放行）只把 `searchRequest`/`addRequested` 写进被覆盖的官方浏览器 store，
-  没有任何本仓可见的消费者。修法被注册表语义封死：
+  没有任何本仓可见的消费者；`workspace.openLocal`（官方 ui-open-in-app 行注册的 ⌥⌘O）同理——本仓不加载该行的控制器，
+  其 apps 探针落在控制面 origin，`currentApp()` 恒 undefined，键被消费后静默无反应。修法被注册表语义封死：
   `dsh-client-shortcuts/lib/client.js` 的 `ShortcutRegistry.register` 在 :589 对重复 id 抛 `Duplicate shortcut command`、
   :602 逐 runtime×platform 校验默认键重叠并抛 `Conflicting shortcut defaults`（:598/:599 另拒 Web 不可达键与保留键）
   ⇒ 既不能覆盖注册同名 id，也不能用同一默认键自建 id。未做 = 一次实机确认两个死键确无可见反应（plan §1.3 的 C2 清单）；
