@@ -9,6 +9,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -23,6 +24,18 @@ import {
 } from './verify-no-dead-exports.mjs'
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
+
+test('the gate self-test runs clean (exemption seams and retired write-face names have a negative control)', () => {
+  // Without this the gate's own --self-test has no automated caller: ENTRYLESS_SEAMS and
+  // RETIRED_PLUGIN_WRITE_FACE_NAMES would silently stop being exercised.
+  const result = spawnSync(
+    process.execPath,
+    [join(dirname(fileURLToPath(import.meta.url)), 'verify-no-dead-exports.mjs'), '--self-test'],
+    { encoding: 'utf8' },
+  )
+  assert.equal(result.status, 0, result.stdout + result.stderr)
+  assert.match(result.stdout, /no-dead-exports self-test: ok/)
+})
 
 test('negative control: an orphan export is reported, used ones are not', () => {
   const modules = [
