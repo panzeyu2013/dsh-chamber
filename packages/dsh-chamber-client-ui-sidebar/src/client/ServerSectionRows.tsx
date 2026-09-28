@@ -149,6 +149,9 @@ const SessionRow = memo(function SessionRow({
       aria-selected={current}
       data-session-id={session.id}
       data-chamber-row={sessionKey}
+      // Vendor motion contract (AnimatedRows): the key is the row's identity in
+      // DOM order, shared with the parent's rowKeys walk.
+      data-row-key={`session:${session.id}`}
       data-chamber-ghost={ghost ? '' : undefined}
       // 合成的 cwd 派生分组仅用于显示：其中的会话行既不能拖也不能放
       // （wire 提交会在宿主上以 workspace/not-found 失败）。

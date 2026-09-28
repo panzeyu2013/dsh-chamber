@@ -38,6 +38,12 @@ import { useSidebarSection, workspaceDropEnv } from './sidebar-context.ts'
 import { ServerSectionHeader } from './ServerSectionHeader.tsx'
 import { ServerSectionSearchCapsule, ServerSectionSearchResults } from './ServerSectionSearch.tsx'
 import { ServerSectionSessionRows } from './ServerSectionRows.tsx'
+// Row motion is upstream's own animator, ported verbatim into ./rows (the vendor
+// file is an `export class`, so registry C16's vendor-source pass-through — which
+// only admits a relative import of an `export function` — cannot register it).
+// The port's constants and body are locked against the pinned source by
+// test/session-rows/animated-rows.test.ts.
+import { AnimatedRows } from './rows/animated-rows.tsx'
 import { ServerSectionRenameForm } from './server-section-controls.tsx'
 import { createdLabel, dragOverState, projectionHasSession, projectionToLocalSearchSnapshot, rowHalf } from './server-section-model.ts'
 import cc from './sidebar-chamber.module.css'
@@ -272,9 +278,13 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                 if (workspaceDropBlocked(workspace.id, workspaceDrag.over.half)) return null
                 return workspaceDrag.over.half
               }
+              // Ordering is a view key too: the motion resetKey below settles an
+              // order swap instead of gliding every row (hoisted out of sessionsOf
+              // for that reason).
+              const orderBy = viewPrefs.orderBy?.[server.id] ?? 'manual'
+              const rowKeys: string[] = server.workspaces.length === 0 ? ['empty'] : []
               const sessionsOf = (workspace: ChamberServerWorkspace): ChamberServerWorkspace['sessions'] => {
                 const wire = workspace.sessions
-                const orderBy = viewPrefs.orderBy?.[server.id] ?? 'manual'
                 // updated = 手动序 + 活动置顶：渲染序取共享的 updated-order account
                 // （推导 effect 已写回 seeding/recency sort/promotion），account 不存在
                 // 时（切换后首帧、effect 尚未落盘）回退 wire 序。**重入 updated** 时
@@ -387,29 +397,42 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                   {serverOpenFailures.filter(failure => !projectionHasSession(server, failure.sessionId)).map(failure => (
                     <div key={failure.sessionId} className={cc.rowError} role="alert">{failure.message}</div>
                   ))}
-                  <div
-                    className={cc.workspaceList}
-                    // The browse list is one tree; an active query replaces it with the
-                    // search-results tree and the fetch-error branch renders no tree.
-                    // The browse tree carries an accessible name like its sibling.
-                    role={query === '' && server.aggregateError === undefined ? 'tree' : undefined}
-                    aria-label={query === '' && server.aggregateError === undefined ? t('section.sessions') : undefined}
-                  >
-                    {merged !== undefined ? (
-                      // An active query (query !== '', the only branch that builds
-                      // 'merged') replaces the whole workspace list (header/status
-                      // stay; fold and add-workspace hidden). Results outrank the
-                      // snapshot-fetch error: a content-search failure still shows the
-                      // local metadata hits, with the error banner below them.
+                  {merged !== undefined ? (
+                    // An active query (query !== '', the only branch that builds
+                    // 'merged') replaces the whole workspace list (header/status
+                    // stay; fold and add-workspace hidden). Results outrank the
+                    // snapshot-fetch error: a content-search failure still shows the
+                    // local metadata hits, with the error banner below them. The
+                    // search list names its own tree, so no motion wrapper here.
+                    <div className={cc.workspaceList}>
                       <ServerSectionSearchResults
                         server={server}
                         merged={merged}
                         currentRemote={currentRemote}
                         currentId={currentId}
                       />
-                    ) : server.aggregateError !== undefined ? (
+                    </div>
+                  ) : server.aggregateError !== undefined ? (
+                    <div className={cc.workspaceList}>
                       <div className={cc.aggregateError} role="alert">{server.aggregateError}</div>
-                    ) : (
+                    </div>
+                  ) : (
+                    <AnimatedRows
+                      className={cc.workspaceList}
+                      // The browse tree keeps the tree/treeitem semantics the search
+                      // branch replaces with its own named tree.
+                      label={t('section.sessions')}
+                      rowKeys={rowKeys}
+                      // Motion only while the list is the interaction target: a drag
+                      // in flight moves rows by hand, not by data (upstream gates on
+                      // its native-drag flag the same way).
+                      ready={server.aggregateReady === true && workspaceDrag === null && sessionDrag === null}
+                      // Order, the per-group session disclosure and the current
+                      // session (whose >200-row window enlarges around it) replace
+                      // the view and must settle instead of gliding — upstream's
+                      // JSON.stringify([animationResetKey, sessionLimits]).
+                      resetKey={JSON.stringify([orderBy, sessionRowsExpanded, currentId])}
+                    >
                       <>
                         {workspaceDropAtListStart && firstDropRow !== undefined
                           && !workspaceDropBlocked(firstDropRow, 'before') && (
@@ -510,6 +533,25 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                           const workspaceError = rowErrors[`${server.id}/workspace/${workspace.id}/new`]
                             ?? rowErrors[`${server.id}/workspace/${workspace.id}/rename`]
                             ?? rowErrors[`${server.id}/workspace/${workspace.id}/delete`]
+                          const workspaceDragError = rowErrors[`${server.id}/workspace-drag/${workspace.id}`]
+                          // Session open failures whose row the fold/window gate hides
+                          // are hoisted below the header (a failure survives a
+                          // mid-flight fold); visible rows render the error inline.
+                          const hoistedOpenErrors = sessions.filter(session =>
+                            rowErrors[openErrorKey(server.id, session.id)] !== undefined
+                            && (folded || !visibleSessions.some(visible => visible.id === session.id)))
+                          // Motion contract (vendor AnimatedRows): keys are pushed in
+                          // the SAME order the rows render. Ghost rows are keyed even
+                          // when the row component drops an expired one — a stale key
+                          // never clones a live row, a missing key would.
+                          rowKeys.push(`workspace:${workspace.id}`)
+                          if (workspaceError !== undefined) rowKeys.push(`error:workspace:${workspace.id}`)
+                          if (workspaceDragError !== undefined) rowKeys.push(`error:workspace-drag:${workspace.id}`)
+                          for (const session of hoistedOpenErrors) rowKeys.push(`error:open:${session.id}`)
+                          if (!folded) {
+                            for (const session of visibleSessions) rowKeys.push(`session:${session.id}`)
+                            if (hiddenVisibleCount > 0) rowKeys.push(`more:${workspace.id}`)
+                          }
                           // The workspace header row, hoisted so real workspaces wrap it
                           // in a HoverCard (the ungrouped bucket has no workspace and no
                           // rename). Double click enters inline rename, whose form replaces
@@ -525,6 +567,7 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                               // CSS falls back to the default ink.
                               style={workspaceAccent}
                               data-chamber-row={workspaceKey}
+                              data-row-key={`workspace:${workspace.id}`}
                               role="treeitem"
                               aria-expanded={!folded}
                               draggable={!renamingThisWorkspace
@@ -836,23 +879,21 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                 folded, since all of those are reachable from a
                                 folded header. */}
                             {workspaceError !== undefined && (
-                              <div className={cc.rowError} role="alert">{workspaceError}</div>
+                              <div className={cc.rowError} role="alert"
+                                data-row-key={`error:workspace:${workspace.id}`}>{workspaceError}</div>
                             )}
-                            {rowErrors[`${server.id}/workspace-drag/${workspace.id}`] !== undefined && (
-                              <div className={cc.rowError} role="alert">{rowErrors[`${server.id}/workspace-drag/${workspace.id}`]}</div>
+                            {workspaceDragError !== undefined && (
+                              <div className={cc.rowError} role="alert"
+                                data-row-key={`error:workspace-drag:${workspace.id}`}>{workspaceDragError}</div>
                             )}
-                            {/* Session open failures whose row the fold/window
-                                gate hides are hoisted the same way, so a
-                                failure survives a mid-flight fold; visible rows
-                                render the error inline below themselves. */}
-                            {sessions
-                              .filter(session => rowErrors[openErrorKey(server.id, session.id)] !== undefined
-                                && (folded || !visibleSessions.some(visible => visible.id === session.id)))
-                              .map(session => (
-                                <div key={session.id} className={clsx(cc.rowError, cc.sessionNested)} role="alert">
-                                  {rowErrors[openErrorKey(server.id, session.id)]}
-                                </div>
-                              ))}
+                            {/* The hoisted open failures (see the key block above);
+                                visible rows render the error inline below. */}
+                            {hoistedOpenErrors.map(session => (
+                              <div key={session.id} className={clsx(cc.rowError, cc.sessionNested)} role="alert"
+                                data-row-key={`error:open:${session.id}`}>
+                                {rowErrors[openErrorKey(server.id, session.id)]}
+                              </div>
+                            ))}
                             {!folded && (
                             <>
                               <ServerSectionSessionRows
@@ -868,6 +909,7 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                 <button
                                   type="button"
                                   className={cc.sessionRowsMore}
+                                  data-row-key={`more:${workspace.id}`}
                                   // A real two-way disclosure: the control
                                   // reports its state and collapses again.
                                   aria-expanded={rowsExpanded}
@@ -903,13 +945,15 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                               </Fragment>
                             ))
                         })()}
-                        {server.workspaces.length === 0 && <div className={cc.empty}>{t('list.noWorkspaces')}</div>}
+                        {server.workspaces.length === 0 && (
+                          <div className={cc.empty} data-row-key="empty">{t('list.noWorkspaces')}</div>
+                        )}
                         {query === '' && rowErrors[`${server.id}/add-workspace`] !== undefined && (
                           <div className={cc.rowError} role="alert">{rowErrors[`${server.id}/add-workspace`]}</div>
                         )}
                       </>
                     )}
-                  </div>
+                    </AnimatedRows>
                   </>
                   )
                 })() : (

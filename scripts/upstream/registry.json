@@ -476,7 +476,7 @@
         ],
         "ownNotes": {
           "scripts/": "chamber 自有脚本（测试 manifest 与清单守卫）",
-          "src/": "chamber 自有实现（多来源聚合、面板镜像、来源降级、归档管理器、工作区变更/拖拽排序、client-plugin load kernel、席位 chrome 等）",
+          "src/": "chamber 自有实现（多来源聚合、面板镜像、来源降级、归档管理器、工作区变更/拖拽排序、client-plugin load kernel、席位 chrome、按上游逐字移植的 keyed-row FLIP 动画器 rows/animated-rows.* 等）",
           "test/": "chamber 自有测试（按域分组：session-rows/session-state/source-runtime/plugin-kernel…）"
         },
         "dropped": [

@@ -1065,6 +1065,25 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   字标空白」症状另有根因，本段只覆盖**入场动画特有**的失绘风险；当前根因（文档级重复 SVG 资源 id ×
   隐藏壳的 WebKit 丢绘）与修复契约见 design 05 §4.2。
 
+- **行位移动效（自持移植上游 `AnimatedRows`，与入场退役不矛盾）**：浏览树的行增删/换位由
+  `src/client/rows/animated-rows.tsx`（上游 ui-workspace `rows/AnimatedRows.tsx` 逐字移植，含来源头注）
+  承担——换位的行 FLIP 滑到位（`ROW_GLIDE_MS = 200`，ease-out），进入行淡入，退出行克隆成 `inert` 覆盖层
+  淡出（`ROW_FADE_MS = 100`，`fill: 'forwards'`）。**接入面只有浏览树**：`ServerSection` 用
+  `<AnimatedRows className={cc.workspaceList} label={t('section.sessions')}>` 取代原列表容器 div，搜索分支
+  与聚合错误分支各自保留裸 `cc.workspaceList`（搜索结果自带 `role="tree"`，不参与动画）。**key 契约**：
+  `rowKeys` 在渲染 walk 中按同一 DOM 序 push（`workspace:` / `error:workspace:` / `error:workspace-drag:` /
+  `error:open:` / `session:` / `more:`，空列表初始化 `empty`），与元素上的 `data-row-key` 一一对应；尾部只有
+  「未注册 worktree 的 git 块」与「添加工作区错误」不带 key（上游同批也不动插件渲染内容）：它们**自身**的位置跳变
+  不可见，但上方行被删时 keyed 行会向上滑过它们已就位的新位置，存在 100–200ms 交叠——仅在存在未注册 worktree
+  （git 块可见）时可感知；要消除得给插件内容加 keyed wrapper 并纳入 `rowKeys`，本轮按上游口径不做。另一处按
+  上游口径接受的退化：上游以 list 自身 rect 做视口裁剪，本仓 `.workspaceList` 不是滚动容器（滚动在 `.chamberList`）
+  ⇒ 裁剪退化为「全部相交」，屏外被删行同样克隆 + 动画（`finish` 即回收，无残留）。**门控**（照抄上游语义）：
+  首次指针/键盘输入才 arm；`ready = aggregateReady && 无来源/会话拖拽`；
+  `resetKey = JSON.stringify([orderBy, sessionRowsExpanded, currentId])`——排序切换、会话窗口展开与当前会话变化
+  （>200 会话时窗口自动放大以覆盖当前会话）都属「视图替换」，立即 settle 不滑动；`prefers-reduced-motion: reduce` 整体跳过；每次动画 `finish` 即 `cancel()`，静止态永远是元素自身样式。
+  回归锁：`test/session-rows/animated-rows.test.ts`（移植体与 pin 住的上游逐字一致 + 常量/key 契约/门控）。
+- **Rejected alternatives（行位移动效）**：①*深引 vendor 源码*（`@deepseek-ai/dsh-client-ui-workspace/src/client/rows/AnimatedRows.tsx`）——registry C16 的 vendor 直穿只收「相对 import + `export function` 符号」，而原件是 `export class`，登记进 `vendorSourceConsumers` 会红；改用裸包说明符则绕开 C16 的双向登记（无登记的 vendor 直穿本仓不允许）。②*只加 CSS transition*——CSS 做不出退出克隆（被删除的行没有元素可过渡）与"仅重排才动"的 FLIP 测量，也表达不了 armed/ready/resetKey 门控。③*不做*——在 workspace 上点 `+` 新建会话时整列瞬移，正是本轮要修的观感。
+
 ## 8. 会话待办区（sidebar todo area）
 
 **问题**：会话多时行尾状态指示随列表滚出视野，用户需频繁滑动检查「哪个会话完成 / 在等
