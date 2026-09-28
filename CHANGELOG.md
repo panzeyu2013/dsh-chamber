@@ -11,7 +11,7 @@
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
 
-## [0.4.0-beta.7] - 2026-09-27
+## [0.4.0-beta.7] - 2026-09-28
 
 ### 新增
 - **目标运行期间，完成通知按目标自己的结局收尾（design 19 §3.2）** —— 会话目标处于 active 且 armed 时，一次完成不再立刻以「会话已完成」播报：收敛器把它压住（呈现面同样不亮完成未读），等目标结束（完成 / 受阻 / 停止）时按该目标的首次结局播报一次「目标已完成」「目标已受阻」「目标未继续运行」，同目标的后续完成回到「会话已完成」；目标事实缺席时保持现有中性行为（fail-open），提问与审批不受目标状态影响。目标三值事实（缺席 = unknown / null = 明确无目标 / 对象 = 有目标）与 activation 事件在 renderer、sidebar 与 gateway 三侧同源，远端来源与壳被回收的来源都走同一收敛器；侧栏不新增独立目标视觉元素。
@@ -54,6 +54,9 @@
 - **活实例的客户端插件装卸热同步（design 09 §3.7）** —— 每来源一条 `EventSource(<basePath>/plugins/events)`（上游 dsh-hmr 宿主半身注册的 exact 路由，反代透明转发 SSE；官方客户端半身仍不加载——它开 document-relative 路径，单页多实例下会打到控制面 origin），只消费 `graph` 全量快照帧，与已挂载集合（基线取活 loader）做幂等 diff、先 remove 后 add、按当前映射插入序逐 id try/catch：宿主 hmr 报 `applied` 后新装/卸载的插件立即进入该实例的活 ctx，不再等一次窗口重载。boot 仍是通道不可用时的回退权威（机会性契约：通道拿不到帧一律 no-op，绝不影响 boot、其它行或实例状态）。范围只做 id 集合：rev 变化不换 entry（模块表 first-load-wins），同实例报 `restart-required`、跨来源 owner 报 `instance-version-conflict`（rev-conflict 的 add 一律不建 entry），收口 = 用户手动重载页面/重启应用；卸载撤销 fiber/服务/slots/`settings.section`/loader 行/chunk-owner 行，保留模块表 factory、`loadCache`、内核 `preloadedIds` 与 `style[data-plugin]`（同 rev re-add 不重新执行脚本、样式不永久丢失；模块顶层副作用活到页面结束是边界不是缺陷）。诊断走每来源单槽的 provenance CAS，持久事实不被逐帧重写。
 - **归档会话的官方恢复入口（I-1，design 24 §5）** —— 归档管理器的行级「恢复」与「恢复选中（N）」都经 `session-mutations` 的单一漏斗调官方幂等 `workspace/unarchiveSession`（`callAndThrow` 收敛为单参形态，顺带删掉从未使用的 `_client` 参数与十三处调用点实参）：恢复不武装确认（无删除语义）、失败按行计数如实报告；只有 wire 成功才发布页级恢复事实（`session-restore.ts`）并撤回该 id 的本地归档墓碑——`purged-tracker.release` 同时记住该 id 直到自己那次收缩被观察到（恢复与清理的两种先后顺序都有测试），重列由挂载 push 的归档集收缩经既有刷新机器完成。chamber 不新增任何本地归档权威状态；墓碑必须由恢复事实显式删除，权威集合「不再覆盖」不作收敛信号；老宿主无该方法时按普通 RPC 失败如实报错，不降级成「假装恢复了」。
 - **上游能力面锁步门（I-6）** —— 「上游有这个/没有这个」此前只活在散文里，pin 升级可以悄悄落地或丢能力；现在探针进 `scripts/upstream/capabilities.json`（规范 id、期望存在/缺席、源码根与模式、本地变通及其退休触发），`verify:capabilities` 每条给一个判词：消费中的能力消失 = chamber-ahead-broken，期望缺席却命中 = upstream-landed（删除本地挂号变通的信号）。runner 自带自测（判词阶梯夹具、探针形状规则、覆盖夹具——非 api 包下的真实 delete wire 也必须命中），`registry.mjs` 校验 chamber 自持变通的 `retireWhen`，升级清单与上游触点清单都指到该门，两条 CI 路径与普通 static 门同跑。
+- **没有官方壳上报的来源也有完成点与未读角标（design 19 §3.2/§3.5）** —— 壳被回收、或从未 boot 的来源此前没有 ctx 上报，完成点与未读角标因此缺一条腿：判定侧现在对 facts 快照做只读投影（不写回事实面），逐行按宿主 running→idle 边沿武装、窗口内到达的完成照常通知，打开会话即消点；提问/审批证据按来源分档（网关镜像行自带的 `pending`，或 `$events` 瀑布/取消帧只观察出的 `pendingKind`——观察者永不自答审批）。
+- **本地实例的起始端口可覆盖，与在跑安装并存不再撞端口（design 02 §2.2）** —— 本地 dsh 起始端口仍默认 17510，新增 `DSH_CHAMBER_DSH_PORT_BASE` 覆盖它（控制面端口早有 `DSH_CHAMBER_CP_PORT`）：dev / 验收实例与在跑安装并存时不必再被 17510..17514 的 `connection_busy` 挡住；非法值响亮回落到默认，绝不静默半生效。
+
 ### 变更
 - **插件写面退役（2026-09「C 分层」裁决落地）** —— chamber 不再提供用户可触达的插件写面：桌面 IPC 的安装 / 卸载 / 物化 / 任务 / 撤销 / npm 搜索与 SSH 写通道、gateway 的五个写路由、以及设置页的安装 / 卸载 / 搜索 UI 一并退役；插件清单、行投影、能力探针与 gateway 的 seed 供给面保持只读可用（受保护集合与升级门禁不变）。
 - **dsh 上游锚推进到 `0.1.7-rc.2` 一代（源码线 + 捆绑运行时 + 三个 fork 副本同代）** —— 构建期 vendor 源（`harness.commit` 与子模块 gitlink）与随包运行时（`packages/desktop/vendor/dsh` 的锁文件）同处 `0.1.7-rc.2`；`@deepseek-ai/dsh-client-connection` / `dsh-client-web` / `dsh-api-gateway` 三个 fork 副本按该基线重放，安装脚本、发布工作流与 gateway 的锚版本一并同步。经运行时线进入受管实例的上游可见变化：web 形态新增**官方右栏终端**（交互式 shell 标签，0.1.7 代的 `ui-sidebar-terminal`），随宿主图进入窗口。
@@ -86,6 +89,8 @@
 - **重启不再重载窗口（design 05/08/09/18）** —— 页面自持的「实例重启后等就绪再整页重载」整体退役：`restart-window-reload.ts`（每来源单飞、等就绪、`window.location.reload`）与其测试、只被 ssh 重载臂消费的 `serving-gate.ts`、以及只为该重载计时存在的本地 `/health` 等待器一并删除。本地重启与 apply/retry 事务、gateway 卡片的重启/启动、共享受管重启动作、插件对话框 footer 的重启与「重启以应用」、ssh 卡片的重启，各处只如实报告自己的结果，不再触碰页面；gateway 腿保留原有 202 + `pollGatewayReady` 契约，本地重启在 `restartLocal()` 事务结算时报告。装卸新插件由 design 09 §3.7 的热同步接管；rev 变化仍需用户手动重载页面/重启应用。
 - **发布恢复 gateway 腿** —— `release.yml` 的 `build-gateway` 去掉 job 级 `if: ${{ false }}`：正式发布重新产出 gateway tarball 与 `.sha256`（无需签名凭据，故在三条 Electron 腿之前先恢复）；workflow 头注与 `finalize-release` 注释改写为「原生壳 + gateway」范围，`needs` 全腿集与 fail-closed 语义不变（mac/win/linux 仍整腿跳过，任一腿失败即拒发）。
 - **仓库级清障与裁定锁定** —— 删除全仓唯一孤儿源码 `packages/gateway/src/util.ts`（零导入零引用，且不经包入口可达，故 `verify:no-dead-exports` 本来也看不见它）、12 处无用 import 绑定与 6 处夹具 import、`.gitignore` 里重复的 `.audit/` 块；11 个「有出口无消费者」的类型导出收窄为模块内（类型面不在死导出门判定内，该缺类已登记）；`CompleteLedgerOptions.bootToken` 这个从未被读取的选项退役，file-budgets 相应下调。侧栏的 `sidebar.workspaces` 座席保留「声明但不渲染」裁定并加源码文本锁：上游 ui-workspace 的归档/恢复/筛选贡献面必须能注册（撤声明会让注册直接抛错），浏览面仍是 chamber 列表，任何移动该裁定的改动响亮失败。
+- **页面与原生壳的常态开销下降（design 14、design 19、design 25）** —— 窗口隐藏时停止视图采样与 rAF 帧进度心跳（可见后重新武装，不再空转）、chamberBridge 发布按投影签名等值不发布、SVG 资源范围走查两趟合一、侧栏一行只派生一次读数、原生壳页面事实的 DOM 观察面收窄到必要节点：都是常驻路径的固定开销，判定语义不变。代价与边界：回收（未挂载）来源不再做 DOM 侧采样，其行内派生状态与桥探测退到长尾——探测预算耗尽后按 30s 节奏复查，迟到的 `desktopSsh` 事实采纳上界同为 30s；已被清掉的孤儿行键按来源指纹推进两代才淘汰（首次迁移只清当前 instanceId），不会把别处仍存活的键误删。完成、提问与未读的送达不受这些采样边界影响（由 facts 只读投影承担）。
+
 ### 修复
 - **SSH 实例清册的半读不再被当作权威空集** —— 连接注册表读取部分失败时，桌面此前会把它投影成一份「完整」清册，暂缺的来源会被当成已删除而剪掉；现在注册表把降级与缺行事实（`degraded` / `rosterIncomplete` / `droppedCount`）经新的健康通道交给页面，清册不确定期间不作任何「来源已删除」判定，整文件失败与行级缺行分别记账。
 - **同一次完成不再因两条通道各投递一次而双响** —— 完成事件经壳通道与 facts 源两条入口到达时，待投递账本由同一 outbox 身份派生同一投递键，合并成一条横幅；主进程的已投递回执跨宿主重载保留（一次完成一条横幅），可重试的抑制自动补发、永久性拒绝如实带原因，新一轮完成是新身份、不被吞。
@@ -170,6 +175,11 @@
 - **插件管理页的首个分组标题不再悬空（design 05 §5）** —— tab 体隐藏了上游 h1 与 intro，头部行只剩工具条，而首个分组的「官方 7」压在它下方 32px，像一枚搁浅的标题。页面根改为两轨网格：一轨给分组标题、一轨给头部行自己的控件；头部行横跨两轨（拖窗面保持）并以 subgrid 采纳两轨，控件落在第二轨并定尺；首个分组的标题因此共享第一行而永不碰到按钮，引擎断不开的标签被包在第一轨里而不是溢出。分组以 `display: contents` 溶解，标题与卡片列各自落位（组内 8px、组间 32px），960px 列宽上限移到页面根并为 `display: contents` 的子级手工恢复；首个分组用 `:is(:first-of-type, :nth-child(1 of [data-plugin-group]))` 判定，上游新增同级 `<section>` 抢不走位置，引擎丢掉 `of` 形态时退回旧行为；不支持 subgrid 的引擎保持上游 flex 头行，z-index 与 pointer-events 保证控件可点。
 - **boot 没取到图的来源会自己跟上（图回归，design 09 §3.7）** —— boot 干净但 `graphAnswered === false`（`not-injected`）的壳从不 arm，而取图只发生在 boot 内，宿主后来才有客户端插件图（典型：seed `@dsh-chamber/dsh-chamber-seed-client-graph` 后重启远端 dsh）时没有任何路径自己跟上。App 每实例补两步（判定与两次上界单源在 `renderer/src/graph-return.ts`，接线在 `app-hooks/use-shell-retry.ts`）：① 共享通道重检每来源每 60s 至多一次，只在判定态变化时写回（永久无图来源零 store 噪声）；② 诊断翻 `ok` 而该壳仍无图 ⇒ 经 App 唯一重挂 sink 重挂该实例一次（重新取图、装 profile 的 client 行、arm），每条 `ok` 记录只消费一次。探测按时间而不是按 ready 世代计数：ssh seed 流程的 `systemctl restart` 保持隧道相位 ready，世代计数会在宿主有图之前就烧掉唯一一次探测；重挂后仍无图只写新的非 `ok` 记录、不会二次触发，取到图即彻底出界——整页重载不再需要。safe mode / module-system 失败字段缺席，不属该政策。
 - **热同步订阅在永久 CLOSED 后有界重建（design 09 §3.7）** —— 连接已建立后的断线由浏览器 EventSource 自动重连，但重连响应非 200（该 profile 没有 hmr 宿主行的 404、反代切流导致的非 `text/event-stream`、或宿主重启窗内反代的 503/502）会按规范永久 CLOSED、浏览器不再重试。hold 层现在检测 `readyState === CLOSED` 后按 2s/5s/10s/20s/30s/30s（≈97s，覆盖 90s 就绪窗）自己重开，成帧即重置预算；预算耗尽只记一条日志、不再重建（机会性契约不附加诊断），该来源退回 boot 现状、恢复 = 用户手动重载页面/重启应用。
+- **壳重连窗口内的完成不再被吞掉（C1，design 19 §3.2/§3.5）** —— 桥面上报撤回（壳重连/重 boot，事实载体并未换代）此前清掉整份观测状态：窗口内由 facts 通道到达的完成被吸收进水位，既不通知也补不回。现在撤回按来源分域——只复位壳轨（壳播种位与每会话壳运行/待决位），facts 轨水位与账本守卫原样保留，窗口内完成照常恰好通知一次；真正的载体换代仍走整代撤回。
+- **网关镜像不再把子代理行播成真横幅，完整基线缺席一次即删（design 17 §10.7）** —— 镜像此前一行一出现就投递，事后才揭示为子代理的行会点亮真实的完成通知/未读；投递现在要求身份已由列表事实确认（未确认先等待，暴露为子代理即显式撤回），确认的子代理行不上线、但仍计入父会话的子代理计数——子代理会话在任何平面都不产生完成通知或未读。完整基线缺席改为单阶段删除（与上游 ready-means-deleted 对齐），不再有「先 present:false 再删除」的幽灵停止边沿；诊断的 `baselines` 改为计成功的完整基线，轮询模式不再恒 0 而把列表误判为不可信。
+- **父会话回合结束但子代理仍在跑时不再提前播报完成（I-12，design 19 §3.2）** —— 子代理行按设计不进 facts 快照，父会话的子代理计数因此恒 0，会被读成「已证明没有子代理在跑」而照常播报；现在计数证据面由列表事实的运行位与状态帧合成（子代理行仍不投递、不成为通知主体），只有谱系已认证时才把 0 读作空闲；列表不完整时保留已知子代并 fail-closed 缓行，子代理结束即释放，缓行的完成入账可释放而不是丢弃。
+- **运行位写回改走官方契约成员，权威读不再无界等待（I-10/I-11，design 19 §3.5）** —— 侧栏 tier-3 写回此前直接调用非契约成员，官方版本一旦改名就静默失效、运行位卡住不再自愈；写面探测现在按契约方法集选路。一次权威读此前可以无限等待（半死隧道下让校准梯子永久冻结），现在带 5 秒预算，超时按本轮不可判降级，不把「读不到」当成「没完成」。
+- **原生壳装配错位与异常退出不再静默** —— bundled sidecar 与壳的版本不一致现在在就绪前响亮失败并给出可读原因（旧 payload + 新壳的混合装配此前带病运行，表现为白屏/停驻）；退出清理在失败路径上返回非零退出码（与 Electron 的退出链同向）；就绪帧不再可能早于 spawn 校验到达（冷启动深链按序补发），窗口显示信号每条边沿只发一次。
 
 ## [0.4.0-beta.6] - 2026-09-27
 
