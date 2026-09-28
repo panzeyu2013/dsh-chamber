@@ -153,7 +153,7 @@ chamber侧缓解（不动上游事实面）：design 05 §2.2.1的open意图本�
 2. 或让这些 clip/mask 只依赖 `viewBox` 与路径本身（该文件里三处 `clip0_*` 矩形与 viewBox 等值，
    删掉后无视觉差），保留真实裁剪的那几处改用实例私有 id。
 
-chamber 侧缓解（`packages/renderer/src/svg-resource-scope.ts`，design 05 §4.2）：不改上游、
+chamber 侧缓解（`packages/dsh-chamber-client-core/src/svg-resource-scope.ts`，design 05 §4.2）：不改上游、
 在每个 `<svg>` 内把「自定 ∩ 自用」的资源 id 改名到文档唯一 token，外部引用复制进消费方。
 未覆盖的是 gateway/mobile 独立部署的官方壳（由实例自带 bundle 渲染，见 STATUS）。
 

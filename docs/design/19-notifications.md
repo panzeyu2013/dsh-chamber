@@ -478,7 +478,11 @@ running 批之后重放更早的批，其 `keepFence` 早已随原批过去、�
   durable 表在首帧写盘删除（不可恢复）；结算那一拍重跑剪枝 effect，易失轨不在此门内。
   **无桥形态（F11）**：`durableUnreadPruneAllowed` 把桥面 `'absent'`（500ms 探测预算耗尽仍无
   `desktopSsh`，浏览器/dev 直开）**视同已结算**放行（无远程来源，`live={local}` 即完整权威集合）；
-  预算内缺席（`'pending'`）与有桥未结算同样关门。**注册表加载降级（F13）**：`refreshRemotes` 先 invoke
+  预算内缺席（`'pending'`）与有桥未结算同样关门。**探测的长尾形态（2026-02 性能修订）**：
+  500ms x 5 预算耗尽后不再停探，而是降频 30s 继续探——`'absent'` 判定与剪枝门语义一字不变，
+  只把"迟到桥"的采纳延迟上界从"永不再试"收到 30s；否决的替代「预算耗尽即永久停探」：迟到挂载的
+  `desktopSsh` 此后永不被采纳，更糟的是剪枝门已在"无桥"错觉下按 `live={local}` 删过远端
+  durable 表（不可恢复）。**注册表加载降级（F13）**：`refreshRemotes` 先 invoke
   只读健康通道 `desktop_ssh_instances_health`（载荷 `{degraded, reason?, rosterIncomplete, droppedCount?}`，
   契约见 05 §7.4）：degraded 时空 roster 不是权威——**不安装、不置结算位、warn-once**，且
   `durableUnreadPruneAllowed` 把 degraded/rosterIncomplete 作**同档优先否决**维（含 `'absent'` 防御性
