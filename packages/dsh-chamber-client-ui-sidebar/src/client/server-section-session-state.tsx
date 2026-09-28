@@ -7,11 +7,12 @@
  * presentation gate — so an active goal cannot leave one half of a row showing
  * "completed" while another suppresses it (R2-K/INV7).
  */
-import type { ReactNode } from 'react'
+import { useMemo, type ReactNode } from 'react'
 import { IconChecklistOutlineRegular, IconQuestionOutlineRegular, IconWarningOutlineRegular, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { runningRingVisible } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import { sessionRowState, type SessionRowStateResult } from '@dsh-chamber/dsh-chamber-client-core/session-row-state'
+import { createSessionRowStateCache } from './session-row-state-cache.ts'
 import { useSidebarSection } from './sidebar-context.ts'
 import cc from './sidebar-chamber.module.css'
 
@@ -27,9 +28,16 @@ export function useServerSectionSessionState() {
   // land one commit apart, so the fixed priority keeps that skew from hiding state.
   // The one resolved input is handed to sessionRowState — the shared leaf that also
   // owns the goal gate — so label, pending, marker and dot can never drift.
+  // 一份派生喂全部读数：一次行渲染会调用 sessionRowStateOf 9-12 次（marker / label /
+  // pending / dot + 悬停卡），而 sessionRowState 是纯的，其输入恰好是 (facts 行对象
+  // 身份, session.running, 来源 stale)：未变化的行在 mergeRuntimeFacts 里按引用保留，
+  // 所以同一行只派生一次，其余调用命中同一个结果对象（槽按 WeakMap 随行对象回收）。
+  const rowStateCache = useMemo(() => createSessionRowStateCache<SessionRowStateResult>(), [])
   const sessionRowStateOf = (server: ChamberServerAggregate, session: { id: string; running?: boolean }): SessionRowStateResult => {
     const facts = server.runtime?.sessions[session.id]
-    return sessionRowState({
+    const slot = rowStateCache.slot(facts, session.running, server.runtime?.stale)
+    if (slot.result !== undefined) return slot.result
+    const result = sessionRowState({
       running: runningRingVisible(facts?.running, session.running),
       completed: facts?.completed,
       pending: facts?.pending,
@@ -38,6 +46,8 @@ export function useServerSectionSessionState() {
       stale: server.runtime?.stale,
       goal: facts?.goal,
     })
+    slot.result = result
+    return result
   }
   const sessionStateLabel = (server: ChamberServerAggregate, session: { id: string; running?: boolean }): string | undefined => {
     const row = sessionRowStateOf(server, session)

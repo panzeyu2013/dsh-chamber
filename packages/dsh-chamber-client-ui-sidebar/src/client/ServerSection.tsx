@@ -10,7 +10,7 @@
  * composition and the sort-menu anchor-cleanup; the header, search surface,
  * rows and pure helpers live in the sibling ServerSection* / server-section-*.
  */
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, memo, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { SESSION_SEARCH_RESULT_LIMIT } from '@deepseek-ai/dsh-api-session-controller/client'
 import {
@@ -39,12 +39,12 @@ import { ServerSectionHeader } from './ServerSectionHeader.tsx'
 import { ServerSectionSearchCapsule, ServerSectionSearchResults } from './ServerSectionSearch.tsx'
 import { ServerSectionSessionRows } from './ServerSectionRows.tsx'
 import { ServerSectionRenameForm } from './server-section-controls.tsx'
-import { dragOverState, projectionToLocalSearchSnapshot, rowHalf } from './server-section-model.ts'
+import { dragOverState, projectionHasSession, projectionToLocalSearchSnapshot, rowHalf } from './server-section-model.ts'
 import cc from './sidebar-chamber.module.css'
 
 export { sourceHeaderActivatable, sourceHeaderTitle } from './server-section-model.ts'
 
-export function ServerSection({ server }: { server: ChamberServerAggregate }) {
+export const ServerSection = memo(function ServerSection({ server }: { server: ChamberServerAggregate }) {
   const {
     wide,
     t,
@@ -136,9 +136,6 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
     return () => { document.removeEventListener('click', onClick) }
   }, [wide, server.id, searchState])
 
-  // Hover-card relative times share one render-time clock.
-  const now = Date.now()
-
               // The query is sanitized by construction; the loading fallback covers expand-without-query.
               const search = searchState.get(server.id)
               const query = sanitizeSearchQuery(search?.query ?? '')
@@ -172,17 +169,22 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
               // plus the remote content-search page. 远程腿按可见集过滤——投影已
               // 过滤 subagent/archived/blank-non-current，"在投影里"即"可见"；
               // 空集（断连/未就绪）时 mergeSearchResults 降级为不过滤。
-              const visibleIds = new Set<string>()
-              for (const workspace of server.workspaces) {
-                for (const session of workspace.sessions) visibleIds.add(session.id)
+              // 空 query 短路在调用点：结果树只由 query !== '' 渲染，整投影快照
+              // （projectionToLocalSearchSnapshot）与可见集都只在这条分支里构建。
+              let merged: { items: SearchRow[]; hasMore: boolean } | undefined
+              if (query !== '') {
+                const visibleIds = new Set<string>()
+                for (const workspace of server.workspaces) {
+                  for (const session of workspace.sessions) visibleIds.add(session.id)
+                }
+                merged = mergeSearchResults(
+                  deriveLocalSearchMatches(projectionToLocalSearchSnapshot(server), query),
+                  currentRemote,
+                  SESSION_SEARCH_RESULT_LIMIT,
+                  visibleIds,
+                  server.aggregateReady === true,
+                )
               }
-              const merged = mergeSearchResults(
-                deriveLocalSearchMatches(projectionToLocalSearchSnapshot(server), query),
-                currentRemote,
-                SESSION_SEARCH_RESULT_LIMIT,
-                visibleIds,
-                server.aggregateReady === true,
-              )
               // Current-session highlight is channel-based (no store subscription)
               // and single-selection: only the source owning THIS visible ctx
               // renders it — one global selection marker.
@@ -196,13 +198,16 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
               // rename/archive/fork family shares the prefix but ends in its own
               // suffix, and no other key family ends in '/open'.
               const serverOpenFailures: { sessionId: string; message: string }[] = []
-              const openErrorPrefix = `${server.id}/session/`
-              for (const [key, message] of Object.entries(rowErrors)) {
-                if (!key.startsWith(openErrorPrefix) || !key.endsWith('/open')) continue
-                serverOpenFailures.push({
-                  sessionId: key.slice(openErrorPrefix.length, key.length - '/open'.length),
-                  message,
-                })
+              // 空错误账本直接留下空数组：绝大多数渲染没有任何行失败，不扫描全表。
+              if (Object.keys(rowErrors).length > 0) {
+                const openErrorPrefix = `${server.id}/session/`
+                for (const [key, message] of Object.entries(rowErrors)) {
+                  if (!key.startsWith(openErrorPrefix) || !key.endsWith('/open')) continue
+                  serverOpenFailures.push({
+                    sessionId: key.slice(openErrorPrefix.length, key.length - '/open'.length),
+                    message,
+                  })
+                }
               }
               // The ghost predicate is hoisted so the header count reuses the SAME
               // rule: a ghost is a blank "New Session" row that stopped being current
@@ -378,7 +383,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                       projection but whose only render anchor vanished stays
                       invisible for the 10s window (the inline slot is
                       suppressed identically). */}
-                  {serverOpenFailures.filter(failure => !visibleIds.has(failure.sessionId)).map(failure => (
+                  {serverOpenFailures.filter(failure => !projectionHasSession(server, failure.sessionId)).map(failure => (
                     <div key={failure.sessionId} className={cc.rowError} role="alert">{failure.message}</div>
                   ))}
                   <div
@@ -389,8 +394,9 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                     role={query === '' && server.aggregateError === undefined ? 'tree' : undefined}
                     aria-label={query === '' && server.aggregateError === undefined ? t('section.sessions') : undefined}
                   >
-                    {query !== '' ? (
-                      // An active query replaces the whole workspace list (header/status
+                    {merged !== undefined ? (
+                      // An active query (query !== '', the only branch that builds
+                      // 'merged') replaces the whole workspace list (header/status
                       // stay; fold and add-workspace hidden). Results outrank the
                       // snapshot-fetch error: a content-search failure still shows the
                       // local metadata hits, with the error banner below them.
@@ -833,7 +839,6 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                 currentId={currentId}
                                 sessionMarker={sessionMarker}
                                 activeSessionDrag={activeSessionDrag}
-                                now={now}
                                 isGhostSession={isGhostSession}
                               />
                               {hiddenVisibleCount > 0 && (
@@ -894,4 +899,4 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
               </section>
               )
 
-}
+})

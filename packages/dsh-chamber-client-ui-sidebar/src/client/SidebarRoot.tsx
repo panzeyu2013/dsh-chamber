@@ -10,7 +10,7 @@
  * (cross-ctx live sync); drag commits go through the wire with an optimistic override that
  * self-heals on the next pull; search is a debounced per-source unary content search (one
  * 30s-aborted job per query); the pinned 待办区 is a pure projection over the SAME merged facts. */
-import type { ReactNode } from 'react'
+import { useCallback, useMemo, type ReactNode } from 'react'
 import clsx from 'clsx'
 import {
   BrandWordmark, FishLogo, IconNewChatOutlineRegular, IconPanelLeftOutlineRegular, Tooltip, isDarwinDesktop,
@@ -93,11 +93,11 @@ export function SidebarRoot({
   const { onOpenArchiveCleanup, openWorkspaceBrowser, onDeleteWorkspace, openArchiveConfirm } = dialogs
   const { onForkSession, onNewSession, onArchiveSession } = useSidebarSessionActions({ runAction, openArchiveConfirm })
 
-  const openSession = (serverId: string, sessionId: string): void => {
+  const openSession = useCallback((serverId: string, sessionId: string): void => {
     // 新点击立即清掉该行陈旧失败文案（若再次失败，dispatch 结果会重报）。
     clearOpenRowError(serverId, sessionId)
     chamberBridge.requestOpenSession(serverId, sessionId)
-  }
+  }, [clearOpenRowError])
 
   // chamber（会话待办区）：受守卫的打开——与行点击同一权威，另加行点击已有的两道守卫：
   // 拖拽尾部点击抑制（suppressClickRef）与同会话内联重命名排除（打开正在编辑的会话会丢编辑）。
@@ -108,10 +108,11 @@ export function SidebarRoot({
     openSession(sourceId, sessionId)
   }
 
-  // chamber：每次渲染一个 context value——各 per-source section 经 provider
+  // chamber：每个渲染周期一个 context value——各 per-source section 经 provider
   // （sidebar-context.ts）读取跨切面状态/动作，而不是穿三层组件传 ~40 个 prop；
-  // store/effect/commit 全归 shell，ServerSection 只消费。
-  const ctxValue: SidebarSectionContextValue = {
+  // store/effect/commit 全归 shell，ServerSection 只消费。42 个字段逐项进依赖
+  // 数组：漏一项会让 section/行读到过期值，多一项会让 memo 白算。
+  const ctxValue: SidebarSectionContextValue = useMemo(() => ({
     wide,
     t,
     chamberInstanceId,
@@ -154,7 +155,17 @@ export function SidebarRoot({
     onArchiveSession,
     onForkSession,
     onDeleteWorkspace,
-  }
+  }), [
+    wide, t, chamberInstanceId, renderWorkspaceGit, viewPrefs, toggleWorkspaceFold,
+    toggleSourceFold, setOrderBy, sessionOrderOverride, workspaceOrderOverride,
+    sessionDrag, setSessionDrag, workspaceDrag, setWorkspaceDrag, serverDrag, setServerDrag,
+    commitSessionDrag, commitWorkspaceDrag, commitServerDrag, suppressClickRef,
+    dragPressOnButtonRef, sessionDropCommitted, workspaceDropCommitted, serverDropCommitted,
+    ghostExpiry, armBlankGhostForClick, rowErrors, menuOpen, toggleMenu, closeMenu,
+    sortMenuOpen, setSortMenuOpen, renaming, setRenaming, commitRename, onOpenArchiveCleanup,
+    openWorkspaceBrowser, openSession, onNewSession, onArchiveSession, onForkSession,
+    onDeleteWorkspace,
+  ])
 
   // macOS 隐藏标题栏（红绿灯浮在侧栏顶，Swift 壳 titlebarAppearsTransparent；上游官方
   // 桌面 titleBarStyle:'hiddenInset' 同形）：该带与红绿灯同一行，展开/折叠两态都把面板

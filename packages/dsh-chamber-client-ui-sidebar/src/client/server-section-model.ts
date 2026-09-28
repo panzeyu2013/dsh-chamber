@@ -40,6 +40,20 @@ export function projectionToLocalSearchSnapshot(server: ChamberServerAggregate):
   }
 }
 
+/** Is a session id present in the source's VISIBLE projection (the same row set
+ * {@link projectionToLocalSearchSnapshot} rebuilds)? One predicate for both consumers that
+ * need "is there a row for this session": the search-result visible filter and the
+ * open-failure placement (a failure whose row is not rendered surfaces above the list).
+ * A predicate — not a prebuilt id Set — so the browse path builds nothing. */
+export function projectionHasSession(server: ChamberServerAggregate, sessionId: string): boolean {
+  for (const workspace of server.workspaces) {
+    for (const session of workspace.sessions) {
+      if (session.id === sessionId) return true
+    }
+  }
+  return false
+}
+
 /** Map the projected phase to a visual kind. The reconnect cycle folds into ONE stable
  * "trying" state — the main surface must never flicker between spinner and dot per retry;
  * the text is never rendered (hover carries it). */
