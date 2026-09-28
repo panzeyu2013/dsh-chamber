@@ -370,10 +370,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let bridge = BridgeClient(nodePath: nodePath, arguments: sidecarArguments, environment: childEnv)
         // sidecar stderr → <userData>/logs/sidecar.log（有界；sink 自带锁）。
         bridge.sidecarLogSink = { line in ShellLog.sidecar.append(line) }
-        // 版本相等契约只约束**装配态 sidecar**（basename=sidecar.js；build-sidecar
+        // 版本相等契约只对**装配态形状**（basename=sidecar.js）启用：build-sidecar
         // 把 packages/desktop/package.json 的版本写进 sidecar 目录 package.json，
-        // build-swift-app 把同一个值写进壳 Info.plist）。dev/自定义
-        // DSH_CHAMBER_SHELL_SIDECAR 脚本与壳没有版本同源关系，不受断言约束。
+        // build-swift-app 把同一个值写进壳 Info.plist。dev 的 sidecar-entry.ts 与
+        // 形状不识别的自定义脚本没有版本同源关系，不受断言约束；注意
+        // DSH_CHAMBER_SHELL_SIDECAR 显式指向的脚本若 basename 也是 sidecar.js
+        // （装配态形状），同样受断言约束。
         let enforceSidecarVersionEquality = compiledSidecar
         bridge.onReady = { [weak self] port, shellVersion in
             shellLog("[shell] sidecar ready（port=\(port) shellVersion=\(shellVersion)）")

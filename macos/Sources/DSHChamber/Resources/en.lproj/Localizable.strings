@@ -173,4 +173,3 @@
 "panel.openFilePrompt" = "Open";
 "bridge.errorFallback" = "bridge error";
 "frame.tooLarge" = "Frame exceeds the %d-byte limit (actual: %d bytes)";
-"frame.responseMissingError" = "An ok=false response frame must carry an error message (id=%d)";

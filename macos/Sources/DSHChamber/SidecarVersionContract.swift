@@ -25,6 +25,6 @@ enum SidecarVersionContract {
     static func mismatchMessage(shellVersion: String, sidecarVersion: String) -> String? {
         guard shellVersion != unknownShellVersion, !shellVersion.isEmpty else { return nil }
         guard sidecarVersion != shellVersion else { return nil }
-        return NativeText.format(.fatalSidecarVersionMismatch, shellVersion, sidecarVersion)
+        return NativeText.format(.fatalSidecarVersionMismatch, sidecarVersion, shellVersion)
     }
 }

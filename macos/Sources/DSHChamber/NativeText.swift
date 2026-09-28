@@ -29,8 +29,8 @@
 //   bridge.pendingAborted / bridge.pendingProcessExited / bridge.stdoutResync /
 //   bridge.frameTooLarge / bridge.writeFailed / bridge.responseWithoutError
 //     → BridgeClient（生命周期过渡、进程状态、未决请求作废与写帧/违约兜底）
-//   frame.tooLarge / frame.responseMissingError → FrameCodec
-//     （FrameCodecError.errorDescription：%d 分别为字节上限/实际字节与帧 id）
+//   frame.tooLarge → FrameCodec
+//     （FrameCodecError.errorDescription：两个 %d 分别为字节上限与实际字节）
 //   bridge.errorFallback →（当前无代码引用：错误文案走 AnyCodable 字面量
 //     出口，恒可序列化）——键表冻结，保留待下一次键表评审再决定删表
 //   resources.explicitNodeMissing / resources.packagedNodeMissing /
@@ -181,7 +181,6 @@ public enum NativeTextKey: String, CaseIterable {
     case panelOpenFilePrompt = "panel.openFilePrompt"
     case bridgeErrorFallback = "bridge.errorFallback"
     case frameTooLarge = "frame.tooLarge"
-    case frameResponseMissingError = "frame.responseMissingError"
 }
 
 /// 壳内建本地化取值面。

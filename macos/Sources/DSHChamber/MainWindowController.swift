@@ -2076,7 +2076,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 隐藏页面不作为故障证据：注入时隐藏直接返回 null（主进程 reset，不累计
     /// strike）；心跳链在隐藏期被丢弃、可见后的下一次注入经 arm() 重新武装
     /// （与 Electron flavor 的 RENDERER_FRAME_PROGRESS_SCRIPT 同一语义）。
-    private static let rendererProgressScript = """
+    /// internal（非 private）：单测在 JavaScriptCore 里直跑本字面量
+    /// （RendererProgressScriptTests），不复制第二份脚本。
+    static let rendererProgressScript = """
     (function () {
       if (document.visibilityState !== 'visible') return null;
       var name = '__dshChamberFrameProgress';
@@ -2085,7 +2087,23 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         state.armed = true;
         requestAnimationFrame(function () { frame(state); });
       }
+      // 验收注入（跨壳 harness；与 Electron 版同形）：armed() 含 'frame-stop' 时本
+      // 轮不计数也不续链，故障对探针真实可见。读取全程 try/catch + 形状收窄，只当
+      // 注入是 object/function 且 armed 是函数才调用——宿主 getter 抛错、返回非
+      // 字符串或注入值不是对象都只落回「无注入」，绝不从 rAF 回调抛出（**有意分歧**：
+      // Electron 版读注入对象没有这层 try/catch，敌意 getter 会把异常抛出 rAF 回调；
+      // 本壳按「注入不得反伤探针」加固，非敌意形状逐条同形）。
+      function faultStopsLoop() {
+        try {
+          var injected = window.__dshChamberInjection;
+          if (injected === null
+              || (typeof injected !== 'object' && typeof injected !== 'function')) { return false; }
+          if (typeof injected.armed !== 'function') { return false; }
+          return injected.armed().indexOf('frame-stop') !== -1;
+        } catch (e) { return false; }
+      }
       function frame(state) {
+        if (faultStopsLoop()) { return; }
         state.frames += 1;
         if (document.visibilityState !== 'visible') { state.armed = false; return; }
         setTimeout(function () {

@@ -7,7 +7,8 @@
 //   请求   {"id":<Int>, "method":"<string>", "payload":<json|null>}
 //   响应   {"id":<Int>, "ok":true,  "result":<json>}
 //          {"id":<Int>, "ok":false, "error":"<string>"}
-//   事件   {"event":"<string>", "payload":<json|null>}
+//   （`event` 推送族已随 onEvent 订阅面退役，见 design 25 §4.4.2：本文件不再分类，
+//     旧桩 event 行落未知帧丢弃；唯一推送面 = 出站 notify 帧。）
 //
 // 传输纪律（design 25 §4.4.2 / D2）：
 //   - stdout 是唯一协议流：每帧一行、以 \n 结尾、UTF-8；sidecar 的
@@ -19,9 +20,9 @@
 //     「帧长上限」）——由 BridgeLimits 单一定义，本文件只做别名，
 //     避免 B 桥编解码反向耦合 A 桥文件。
 //   - id 单调纪律由 BridgeClient 保证（Swift 是客户端、sidecar 是服务端，
-//     design 25 §3.1：请求必带自增 id，sidecar 原样 echo；事件帧无 id、
-//     sidecar 不发起请求）。本文件只保证“响应必须可配对上 id”。
-//   - 帧内 method/event 字符串不校验：语义校验在 sidecar（52 invoke 处理器
+//     design 25 §3.1：请求必带自增 id，sidecar 原样 echo。本文件只保证“响应
+//     必须可配对上 id”。
+//   - 帧内 method 字符串不校验：语义校验在 sidecar（52 invoke 处理器
 //     原样），方法白名单在 A 桥（MessageHandler/TrustGuard，B12），B 桥只做
 //     结构解码与尺寸护栏（design 25 §4.4.2 护栏条）。
 //   - 容忍度：payload 键缺省与显式 null 一律折叠为 nil（协议两侧同语义）；

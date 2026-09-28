@@ -180,4 +180,3 @@
 "panel.openFilePrompt" = "打开";
 "bridge.errorFallback" = "桥接错误";
 "frame.tooLarge" = "帧超过上限 %d 字节（实际 %d 字节）";
-"frame.responseMissingError" = "ok=false 的响应帧必须携带 error 文案（id=%d）";
