@@ -45,6 +45,8 @@ const completeLedger = stripComments(readFileSync(
   fileURLToPath(new URL('../../src/complete-ledger.ts', import.meta.url)), 'utf8'))
 const correctionMarks = stripComments(readFileSync(
   fileURLToPath(new URL('../../../dsh-chamber-client-core/src/session-correction-marks.ts', import.meta.url)), 'utf8'))
+const statusWriteFace = stripComments(readFileSync(
+  fileURLToPath(new URL('../../../dsh-chamber-client-ui-sidebar/src/client/status-write-face.ts', import.meta.url)), 'utf8'))
 
 test('the App has no second liveness planner or state machine', () => {
   assert.doesNotMatch(frame, /planSessionLiveness|sessionLivenessRef|markSessionLiveness/)
@@ -63,10 +65,13 @@ test('the producer executes the one authority reducer + probe ladder', () => {
   assert.doesNotMatch(executor, /maxAttempts|verifyTimeoutMs|SESSION_FACT_RECONCILE_DEFAULTS/)
 })
 
-test('the write-back only ever writes false, behind the capability guard', () => {
-  assert.match(sidebar, /service\.handleSessionStatus\(id, false\)/)
+test('the write-back only ever writes false, behind the detected write face', () => {
+  assert.match(sidebar, /face\.write\(id, false\)/)
   assert.doesNotMatch(sidebar, /handleSessionStatus\([^)]*true[^)]*\)/)
-  assert.match(sidebar, /typeof service\.handleSessionStatus !== 'function'/)
+  // 具体成员探测与能力守卫只在 write-face 叶子；index.ts 不直呼（I-10）。
+  assert.match(statusWriteFace, /typeof concrete === 'function'/)
+  assert.match(statusWriteFace, /member: 'handleSessionStatus'/)
+  assert.match(sidebar, /face\.write === undefined/, 'none 分支必须有降级路径')
 })
 
 test('authority actions persist to the machine-local ring (P5)', () => {
@@ -133,8 +138,11 @@ test('the correction provenance is minted before the write and gates the shell c
   // 生命周期（租约到期弃标、写回/自校验失败撤回）在纯包 session-correction-marks 单测，
   // 防的是「写回没落地却把更晚一次真完成认成修正」的反向误判。
   const armAt = sidebar.indexOf('correctionMarks.arm(targets, Date.now())')
-  const writeAt = sidebar.indexOf('service.handleSessionStatus(id, false)')
+  // 写回只走探测出的 write face（I-10）；直呼上游具体成员不再是允许的路径。
+  const writeAt = sidebar.indexOf('face.write(id, false)')
   assert.ok(armAt > -1 && writeAt > -1 && armAt < writeAt, '标记必须先于写回落下')
+  assert.match(sidebar, /detectStatusWriteFace\(ctx\.sessions\)/, '写面必须经探测决定')
+  assert.doesNotMatch(sidebar, /(?:service|ctx\.sessions)\.handleSessionStatus\(/, '不得直呼具体成员')
   assert.match(sidebar, /createCorrectionMarks\(5_000\)/, '租约必须有界')
   assert.match(sidebar, /correctionMarks\.retract\(/, '写回抛出/自校验失败必须撤回标记')
   assert.match(sidebar, /report\.sessions\[id\] = \{ \.\.\.row, corrected: true \}/)

@@ -291,6 +291,121 @@ host插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游README（api
 |dsh-host-open-in-app + dsh-client-ui-open-in-app（官方两份）|chamber fork（设计20 §2.2/§6）：宿主半 `packages/dsh-chamber-seed-open-in/`（`src/{catalog,resolver,icons}.ts` pure、`src/{shared,index}.ts` patched、其余own/dropped），客户端半 `packages/dsh-chamber-client-ui-open-in/` 自有wire镜像与 `app.*` 标签表；官方 client 行**加载**（D2：其文件级席位生效——右栏文档动作 `sidebar.right.tab.document.actions`/`.unpreviewable` 与 deliverables 文件动作，走 per-instance session Remote；其 header 席位读的 document-relative `open-in-app/*` 路由落在控制面 SPA origin ⇒ 渲染 null，目录打开仍由 chamber `open-in` 承接），官方 host 行仍由控制面以本地 `--patch` overlay 显式 `disabled: true`（见 `host-graph-seed.ts` 的 `OFFICIAL_OPEN_IN_DISABLE` 与 `local-host-seeding.ts` 的条件追加）|registry `seed.*` 条目（`versionAnchor: 'chamber'`，分类表见 §2.5）：C1 / C3 / C5（版本锚豁免）；有意分歧逐条写在 `patched`/`dropped` 原因里，跨半契约由客户端 `test/wire-protocol/open-in-wire-lockstep.test.ts` 钉住|
 |dsh-client-ui-primitives（`HoverCard`/`pointer-grace`；vendor seam，非fork）|侧栏行卡片自持移植（design 06 §7）：`RowHoverCard.tsx` + `dsh-chamber-client-core/src/hover-intent.ts` 取代vendor原子（vendor宽限关闭以**已提交的 `open`** 判定，leave落在dwell→commit窗口即残留）；相对上游等价 + 有意增量（页面级单卡、blur/hidden关闭、两轴定位、关闭路径copyEpoch）见design 06 §7与 `STATUS.md` 偏差条|C15（硬失败）：在冻结pin上断言 ① CLOSE侧竞态形状仍在——`onPointerLeave` 每个arm的守卫必须是已提交 `open` 本身（或含 `open` 合取项、无顶层 `\|\|` 析取；`open \|\| intentRef.current` / `open \|\| true` 这类 ref-intent 修复判红）①b OPEN侧以 `openDelayMs` 为延迟的dwell回调只 `setPhase('open')`、至多把该 `setTimeout` 赋值目标的 ref 清成 `null`（其他成员写判红）、无指针在场复查（相位机的预览淡出关闭回调投影后同形，故定时器按延迟识别）、生效点唯一 ①c 组件体内的 post-commit 回调（`useEffect`/`useLayoutEffect`/`useInsertionEffect`）fail-closed：任何执行关闭/相位动作（`close()`/`setPhase('')`/宽限 arm）的回调都必须是白名单化的 pinned 形状逐字一致（冻结pin的预览淡出定时器 / owner-disable / Escape 三个 effect），其余一律判红并交人工裁决——把指针在场事实挪到 ref 之外（模块作用域/helper）即可绕过旧的「回调内出现 `*.current` 读取」判据，故判据不再以 ref 读取为前提（二次复核补强：上游可在 commit/effect 层修竞态而两处被钉形状一字不变） ② 时间常数逐值锁步（`POINTER_GRACE_MS` / `openDelayMs`）。**rc.2 复核**：preview/inline 相位机把开卡语句 `setOpen(true)`→`setPhase('open')`，`onPointerLeave` 逐字未变 ⇒ 竞态仍在、偏差不退役，判据已按相位机形态更新。退役条件 = 上游修掉该竞态，任一断言不成立即红并逼出裁决。防伪：去注释 + 去字符串投影、组件体内逐调用点、常数取值唯一；单测随 `test:upgrade-tools`，端到端走查 `W-4b`|
 |`@deepseek-ai/dsh-client-locale` + `dsh-client-ui-settings`（页面语言归属，design 06 §4.6）|`packages/renderer/src/locale-ownership.ts` 只依赖四条vendor事实：① locale服务名 `locale` 与 `slots.installLocale` 面；② `LOCALE_SETTINGS_NAMESPACE = 'locale'` 与 `ctx.configForms.get('locale')`（ConfigForm 的 getSnapshot/subscribe 面）形状；③ `locale.subscribe(sync)` 先于apply里紧随的立即 `sync()`；④ 每namespace scope的 `status: persistence === 'host' ? 'loading' : 'unavailable'` 与 `derive → ready/unavailable`（settled判据 = `status !== 'loading'`）|四条事实无自动化锁步 ⇒ pin升级时人工复审（③ 漂移削弱同栈回写，④ 漂移让闪烁问题复活）|
+## 4.5 桌面 seat 覆盖审计（`apps/desktop/src`，61 文件）
+
+> I-8 的人工覆盖台账（registry 条目 + 本表两份同源；无 C 编号门）。pin 升级时按 §7 第 6 步逐条照面：
+> `mirror` 行必须仍有对应 chamber 席位与门；`different-adopted` 行必须仍是显式取舍；`not-applicable`
+> 行一旦被采用（chamber 开始渲染/依赖该上游产品面）即转 mirror 条目。审计对象 = 当前 pin 的 vendor
+> 子模块 `apps/desktop/src` 全量 61 文件（任务书估「约 59」）。registry 落点：
+> `mirror.dsh-desktop-carrier-seats`（data-platform/dshDesktop 载体/caption/native theme）、
+> `mirror.dsh-desktop-shortcuts-seat`（keyboard/keybindings）、`mirror.dsh-desktop-native-chrome-seats`
+> （locale/tray/single-instance/quit-confirmation/fatal-recovery/crash-report）、`mirror.dsh-desktop-update-chain`
+> （更新链，本批补齐 attention/presentation 并收窄传输/弹窗面）。registry 的 `upstream` 字段受 schema 约束、必须是
+> pin 树内存在的单一路径（故四条 mirror 条目仍写 `apps/desktop/src`，逐文件覆盖清单写在各条目 evidence 与本表行内）。
+> Swift 腿窗口量不单列条目：由 design 25
+> §5.6 逐值重锚 + §4 的 mobile anchors 门覆盖（T-04 记明上游无 Sparkle、Swift 更新链自建）。
+
+| 上游文件 | 分类 | chamber 对照点 | 一句理由 |
+|---|---|---|---|
+| `account-backend.ts` | not-applicable | 无（对照面：`packages/control-plane` 的无认证 loopback 模型） | 上游 DeepSeek 账号后端（WebSocket 账号流 + 会话 cookie）；chamber 是匿名 loopback 连接管理器，无账号面。 |
+| `backend-controller.ts` | different-adopted | `packages/control-plane/src/local-connection.ts`、`packages/desktop/host-assembly.ts` | 本地 dsh 后端的启动/就绪/失败状态机归控制面持有，desktop 只消费 PlaneHandle，不再由 Electron 主进程自持 backend。 |
+| `background-notice.ts` | not-applicable | `packages/desktop/chamber-settings.ts`（windowCloseBehavior）、`packages/desktop/main.ts`（maybeCreateTray） | 上游 Windows「首次隐藏到托盘」的一次性确认+标记文件；chamber 的关窗行为是设置项 + 托盘恢复入口，没有该确认产品面。 |
+| `browser-guests.ts` | not-applicable | `packages/desktop/README.md`（webPreferences 无 webviewTag） | 上游为官方 sidebar-browser 的 webview 租客做分区/租约隔离；chamber 单窗口无 webviewTag、也不加载该客户端行。 |
+| `client-metadata.ts` | not-applicable | 无 | 账号客户端元数据（版本/语言）供账号平台使用；chamber 无账号面。 |
+| `client/WelcomePage.tsx` | not-applicable | 无 | 上游欢迎/登录页 React 组件（账号登录 UI）；chamber 不采用 welcome 产品面。 |
+| `client/styles.d.ts` | not-applicable | 无 | 欢迎页 CSS module 类型垫片，随 welcome 面一起不采用。 |
+| `client/welcome.tsx` | not-applicable | 无 | 欢迎页渲染入口（createRoot + theme CSS）；不采用。 |
+| `core-package-set.ts` | different-adopted | `packages/dsh-runtime/src/registry-integrity.ts`、`packages/dsh-runtime/src/anchor-version.ts`、`packages/desktop/vendor/dsh/pnpm-lock.yaml` | chamber 的运行树完整性由 registry 版本 + 已提交 lockfile 锚管理（design 18），不下载/校验上游 desktop-packages.json 的 tgz 包集与 sha512。 |
+| `crash-report.ts` | mirror | `packages/desktop/fatal-report.ts`（FATAL_REPORT_FILE / CONSOLE_RING_BYTES=64KiB / REPORT_DETAIL_LIMIT）、`packages/desktop/main.ts`（crashReporter uploadToServer=false） | 落盘崩溃报告 + 有界渲染端 console 环 + 本地留证与上游 fatal diagnostics 同口径；有意差异 = 不做 10 份轮转、只追加。 |
+| `directory-picker.ts` | not-applicable | `packages/renderer/src/chamber-covered.ts` 有意跳过名单（directory-picker-native） | 上游为 native 目录选择行提供窗口级对话框 IPC；chamber 把该行列为「covered 但不加载」，picker 交互钉在 browse。 |
+| `fatal-recovery.ts` | mirror | `packages/desktop/startup-error.ts`（planStartupRecovery / resolveStartupRecoveryAction / SAFE_MODE_ENV）、`packages/desktop/main.ts` 恢复框接线 | 三选恢复框 + 安全模式重启是上游 fatal-recovery 的等价物；有意差异（S-43 默认项/Esc 落安全项、不实现 disableAllPlugins/sanitizeProfile）已登记在源码头注。 |
+| `host-process.ts` | different-adopted | `packages/control-plane/src/spawn-dsh.ts`、`packages/control-plane/src/reaper.ts`、`packages/desktop/host-assembly.ts` | 本地 dsh 子进程的 spawn/就绪探测/回收在控制面，desktop 不做上游的 Electron 子进程协议与 quit inspection。 |
+| `host-protocol.ts` | different-adopted | `packages/desktop/sidecar-entry.ts`（B 桥 NDJSON）、`packages/desktop/sidecar-exit-codes.ts` | chamber 的双 flavor 宿主协议是自持 B 桥与退出码分级，没有上游 Desktop host protocol v4 这一 Electron↔host 版本面。 |
+| `ipc.ts` | mirror | `packages/desktop/ipc-events.ts`、`packages/desktop/shortcuts-bridge.ts`（DESKTOP_SHORTCUTS_CHANNELS 六个字面量与上游同名）、`packages/desktop/preload.cts`、`packages/desktop/test/ipc/desktop-carrier-surface.test.ts` | 通道表与 DesktopUpdatePresentation/失败分类形状镜像上游；native-theme 通道改用 chamber 前缀 `dsh-chamber:native-theme-set`（upstream-seats 钉住）。 |
+| `keybindings.ts` | mirror | `packages/desktop/main.ts`（userData/keybindings.json，注释点名 upstream 同位文件）、`packages/desktop/shortcuts-bridge.ts`（revision 化事务） | 快捷键偏好持久化事务与存储位置镜像上游。 |
+| `keyboard.ts` | mirror | `packages/desktop/shortcuts-bridge.ts`（before-input-event 决策表/scopedDesktop 门/投递门）、`packages/desktop/main.ts` glue | 原生键盘桥语义按上游 rc.2 实现；上游协议实现本身从运行树加载而非重写。 |
+| `locale.ts` | mirror | `packages/desktop/shell-locale.ts`、`packages/desktop/shell-locale.test.ts` | typed en/zh 字典与 `zh*`→zh-CN 判定镜像上游，范围收窄到原生 chrome（tray/错误框/退出框/恢复框）。 |
+| `main.ts` | different-adopted | `packages/desktop/main.ts`（单帧加载控制面 origin）、`packages/desktop/shell-core.ts`、`macos/Sources/DSHChamber/*` | 上游是单进程桌面宿主（web document + account + overlay + app menu）；chamber 是连接管理器单帧 + 双 flavor core，仅 win32 caption/tray/quit 等席位是镜像子集。 |
+| `mandatory-update-ipc.ts` | not-applicable | 无 | 上游强制更新 IPC 表；chamber 无强制更新面。 |
+| `mandatory-update-policy.ts` | not-applicable | 无 | 上游强制更新策略（semver 门 + 策略页）；chamber 更新一律用户确认、无强制门。 |
+| `mandatory-update-window.ts` | not-applicable | 无 | 上游强制更新窗口（下载/安装/稍后）；不采用。 |
+| `microphone-permissions.ts` | different-adopted | `packages/desktop/main.ts`（setPermissionRequestHandler / setPermissionCheckHandler + isChamberPermissionGranted） | chamber 的权限面是「默认拒绝，只放行 clipboard-sanitized-write」，不实现上游的麦克风主帧白名单。 |
+| `node-environment.ts` | different-adopted | `packages/control-plane/src/spawn-dsh.ts`（resolveNodeExecutable）、`packages/desktop/host-assembly.ts`（pnpm 子进程 ELECTRON_RUN_AS_NODE 分支） | 同样用 Electron-as-node，但 node 解析由控制面单源（process.execPath + ELECTRON_RUN_AS_NODE + --expose-internals），无上游的 launcher 目录 / DSH_DESKTOP_NODE_EXECUTABLE / PATH 契约。 |
+| `owned-directory.ts` | different-adopted | `packages/dsh-runtime/src/dsh-runtime-store.ts`、`packages/dsh-runtime/src/private-fs.ts` | chamber 的受管目录清理/校验在 dsh-runtime（lstat + 符号链接拒绝 + 私有 FS 纪律），没有上游那个专用于 Electron 递归 rm 的 junction-safe 删除助手。 |
+| `paths.ts` | different-adopted | `packages/desktop/chamber-lock.ts`（`<userData>/.dsh-chamber.lock`）、`packages/desktop/host-root-lease.ts` | chamber 的路径根 = Electron userData + 双 flavor 锁/租约；上游 `profiles/desktop` profile 布局不采用。 |
+| `platform-ipc.ts` | not-applicable | 无 | 账号平台视图 IPC 表（locale bootstrap 等）；无账号面。 |
+| `platform-view.ts` | not-applicable | 无 | 账号登录 WebContentsView（cookie 合并 / platform headers）；chamber 无账号登录面。 |
+| `policy-test-auth.ts` | not-applicable | 无 | 上游强制更新策略的登录测试助手；不适用。 |
+| `preload-app.ts` | mirror | `packages/desktop/preload.cts`（exposeDesktopCarrier：protocolVersion 1 + updates/keyboard/shortcuts）、`macos/Sources/DSHChamber/Resources/bridge-shim.js`、`packages/desktop/upstream-seats.test.ts`（S-52） | dshDesktop 载体的存在、成员与相位映射双 flavor 锁步；browser 臂不采用（chamber 无 webview 租客）。 |
+| `preload-browser.ts` | not-applicable | 无 | sidebar-browser 的 preload 桥；chamber 不加载该客户端行。 |
+| `preload-mandatory-overlay.ts` | not-applicable | 无 | 强制更新遮罩 preload；不采用。 |
+| `preload-mandatory.ts` | not-applicable | 无 | 强制更新窗口 preload；不采用。 |
+| `preload-menu.ts` | not-applicable | `packages/desktop/main.ts`（唯一 Menu 是托盘上下文菜单，无 setApplicationMenu） | 上游 Windows 应用菜单（原生菜单 + 窗口控制）；chamber 无应用菜单产品面。 |
+| `preload-platform-account.ts` | not-applicable | 无 | 账号平台 preload；不采用。 |
+| `preload-platform.ts` | mirror | `packages/desktop/preload.cts`（markDocumentPlatform 逐字）、`macos/Sources/DSHChamber/ShellWindowFullscreenMark.swift`（fullscreen 半边）、`packages/desktop/upstream-seats.test.ts`（S-51） | `dataset.platform` 与 fullscreen 标记镜像上游；Electron 腿不写 fullscreen，Swift 腿写（design 25 §5.6 逐字同形）。 |
+| `preload-theme.ts` | mirror | `packages/desktop/preload.cts`（syncNativeTheme observer）、`packages/desktop/shell-ipc-settings.ts`（NATIVE_THEME_SET）、`packages/desktop/electron-edges.ts`（nativeTheme.themeSource）、`packages/desktop/node-edges.ts`（显式 no-op） | `data-ds-theme-source` 观察者与宿主投影镜像上游（macOS-only）；Swift 腿按页面事实跟随，通道保留成员。 |
+| `preload-update-dialog.ts` | not-applicable | 无 | 上游更新对话框 preload（update-dialog 窗口）；chamber 更新面无该窗口。 |
+| `preload-welcome.ts` | not-applicable | 无 | 欢迎页 preload；不采用。 |
+| `preload-windows.ts` | mirror | `packages/desktop/preload.cts`（markWindowsTitlebar：`data-windows-titlebar` + `--dsh-windows-titlebar-height`）、`packages/desktop/main.ts`（titleBarStyle hidden + titleBarOverlay）、`windows-layout.ts` 常数 | Windows caption 席位逐值镜像（高度 40），preload/main 两份常数相等由 upstream-seats 钉住。 |
+| `project-manager.ts` | different-adopted | `packages/dsh-runtime/src/runtime-installer.ts`、`packages/desktop/dsh-runtime-controller.ts` | chamber 用 registry 版本安装 + override 机制（design 18）管理运行树，不建上游的 desktop-runtime pnpm 工程/profile 元数据。 |
+| `quit-confirmation.ts` | mirror | `packages/desktop/chamber-settings.ts`（computeQuitRisk）、`packages/desktop/main.ts`（before-quit 对话框） | 「退出会打断什么才确认」的席位镜像；检查面收窄为本地实例运行中（上游 = host 活跃/计划任务探测）。 |
+| `release.ts` | different-adopted | `packages/desktop/package.json`（version）、`packages/desktop/vendor/dsh/pnpm-lock.yaml`、`packages/desktop/primary-runtime-lock.json` | chamber 的版本身份单源 = 包版本 + lockfile 锚；不读上游 desktop-runtime.json 的 release 元数据（node/pnpm 版本）。 |
+| `runtime-tree.ts` | different-adopted | `packages/dsh-runtime/src/dsh-runtime-store.ts`、`packages/desktop/runtime-tree-check.ts` | 运行树清单/校验在 dsh-runtime + 启动期闭包抽样，不采用上游 desktop-runtime.json 描述符与 shared package inventory。 |
+| `single-instance.ts` | mirror | `packages/desktop/main.ts`（requestSingleInstanceLock + second-instance 路由）、`packages/desktop/chamber-lock.ts`（O_EXLOCK 跨 flavor） | 单实例所有权与二次启动聚焦镜像上游，另加一层跨 flavor 目录锁（design 25 §6.3）。 |
+| `startup-error.ts` | mirror | `packages/desktop/startup-error.ts`（desktopErrorState 同形） | 启动失败态的形状/文案投影与上游同名同义。 |
+| `tray.ts` | mirror | `packages/desktop/main.ts`（maybeCreateTray：tooltip + 显示/退出菜单）、`packages/desktop/shell-locale.ts` | 「常驻托盘 = 回到窗口 + 显式退出的入口」席位镜像；chamber 仅打包态且图标存在时创建。 |
+| `update-attention.ts` | mirror | `packages/desktop/updater.ts`（Dock 注意力 / flashFrame / parent.isFocused 注入）、`packages/desktop/test/desktop-shell/updater-attention.test.ts` | 更新就绪注意力语义镜像（mac Dock bounce + win flashFrame + 聚焦闩锁，每目标一次）。 |
+| `update-coordinator.ts` | mirror | `packages/desktop/updater.ts`（相位机/焦点 nudge/单飞/quitAndInstall 武装）、`packages/desktop/update-headless.ts`（Swift 腿同相位） | 更新编排的相位/注意力/安装语义镜像（§22.3.5）；传输面有意不同（见 update-http-executor）。 |
+| `update-dialog.ts` | different-adopted | `packages/dsh-chamber-client-ui-settings-bridge`（UpdateSection / update-store / update-gate） | chamber 的更新面是 settings 普通状态行，无对话框/遮罩窗口（design 11 §2 无弹窗硬约束）。 |
+| `update-error.ts` | different-adopted | `packages/desktop/updater.ts`（failureKind + 相位保持 + 一次性 restartFailureText） | 无上游 preparationFailure 家族（停止失败/任务变更/任务不可用）——chamber 没有安装前任务检查面。 |
+| `update-http-executor.ts` | different-adopted | `packages/desktop/updater.ts`（idle 看门狗 + 忽略迟到事件） | registry 明载：替换 electron-updater 传输需注入私有字段（Electron 升级即碎），chamber 改用外部 watchdog + 忽略迟到事件。 |
+| `update-journal.ts` | mirror | `packages/desktop/update-journal.ts`、`packages/desktop/update-journal.test.ts` | 白名单字段 JSONL 取证日志同名镜像（同 env 开关 DSH_DESKTOP_UPDATE_JOURNAL_DIR、同白名单、失败自禁用）。 |
+| `update-overlay.ts` | different-adopted | `packages/desktop/main.ts`（唯一 BrowserWindow）、settings-bridge UpdateSection | 上游用遮罩子窗阻塞父窗输入；chamber 只有一个主窗 + settings 状态行，无遮罩面。 |
+| `update-presentation.ts` | mirror | `packages/desktop/preload.cts`（toUpstreamUpdatePresentation 相位映射）、`packages/desktop/updater.ts`（failureKind）、`packages/desktop/upstream-seats.test.ts`（S-52 失败归类） | 对官方设置壳的相位/失败归类呈现契约镜像（downloaded→ready、downloading→download…）；上游的本地化文案面不镜像（文案在 settings 壳）。 |
+| `update-schedule.ts` | mirror | `packages/desktop/update-schedule.ts`、`packages/desktop/update-schedule.test.ts` | 600s 基准 ±20% 抖动、失败退避封顶 1h、同 env 名镜像；有意差异 = 非法 env 回退默认并 loud 警告而非抛错。 |
+| `web-document.ts` | different-adopted | `packages/control-plane/src/static-serving.ts`、`packages/control-plane/src/instance-proxy.ts` | 静态前端与请求转发由控制面 loopback origin 提供，不使用上游 `dsh-app:` scheme / boot 注入 / cookie 转发。 |
+| `welcome-api.ts` | not-applicable | 无 | 欢迎 API 与「是否需要登录」判定；chamber 无账号面。 |
+| `welcome-backend.ts` | not-applicable | 无 | 欢迎后端连接（账号流）；不采用。 |
+| `welcome-window.ts` | not-applicable | 无 | 欢迎窗口；不采用。 |
+| `windows-layout.ts` | mirror | `packages/desktop/main.ts`（WINDOWS_TITLEBAR_HEIGHT = 40）、`packages/desktop/preload.cts`（同值副本） | caption 高度常数逐值镜像（上游 40），两份副本相等由 upstream-seats 钉住。 |
+
+## 计数
+
+| 分类 | 计数 |
+|---|---|
+| mirror | 20 |
+| different-adopted | 17 |
+| not-applicable | 24 |
+| **合计** | **61** |
+
+（mirror：crash-report / fatal-recovery / ipc / keybindings / keyboard / locale / preload-app / preload-platform / preload-theme / preload-windows / quit-confirmation / single-instance / startup-error / tray / update-attention / update-coordinator / update-journal / update-presentation / update-schedule / windows-layout。
+different-adopted：backend-controller / core-package-set / host-process / host-protocol / main / microphone-permissions / node-environment / owned-directory / paths / project-manager / release / runtime-tree / update-dialog / update-error / update-http-executor / update-overlay / web-document。
+not-applicable：account-backend / background-notice / browser-guests / client-metadata / client/WelcomePage.tsx / client/styles.d.ts / client/welcome.tsx / directory-picker / mandatory-update-ipc / mandatory-update-policy / mandatory-update-window / platform-ipc / platform-view / policy-test-auth / preload-browser / preload-mandatory-overlay / preload-mandatory / preload-menu / preload-platform-account / preload-update-dialog / preload-welcome / welcome-api / welcome-backend / welcome-window。）
+
+### 计数与落点
+
+| 分类 | 计数 | 登记方式 |
+|---|---|---|
+| mirror | 20 | 四条 `mirror.dsh-desktop-*` 条目 + 各自 relatedGates（本表逐行给出对照点） |
+| different-adopted | 17 | 逐条写进对应 mirror 条目的 rationale / evidence（本表给出对照点与差异） |
+| not-applicable | 24 | 本节一行式「有意不采用」列表（welcome/account/mandatory-update/browser-guest 等上游桌面产品面），不建条目 |
+| **合计** | **61** | — |
+
+bucket 明细：mirror = crash-report / fatal-recovery / ipc / keybindings / keyboard / locale / preload-app /
+preload-platform / preload-theme / preload-windows / quit-confirmation / single-instance / startup-error / tray /
+update-attention / update-coordinator / update-journal / update-presentation / update-schedule / windows-layout。
+different-adopted = backend-controller / core-package-set / host-process / host-protocol / main / microphone-permissions /
+node-environment / owned-directory / paths / project-manager / release / runtime-tree / update-dialog / update-error /
+update-http-executor / update-overlay / web-document。not-applicable = account-backend / background-notice / browser-guests /
+client-metadata / client/WelcomePage.tsx / client/styles.d.ts / client/welcome.tsx / directory-picker / mandatory-update-ipc /
+mandatory-update-policy / mandatory-update-window / platform-ipc / platform-view / policy-test-auth / preload-browser /
+preload-mandatory-overlay / preload-mandatory / preload-menu / preload-platform-account / preload-update-dialog /
+preload-welcome / welcome-api / welcome-backend / welcome-window。
+
+门覆盖：`mirror.dsh-desktop-update-chain` 原有的 `packages/desktop/upstream-seats.test.ts` 已迁到 carrier 条目
+（S-51 文档平台标记 / S-52 dshDesktop 载体与失败归类归载体席位）；`upstream-seats.test.ts` 在 desktop 套件内执行
+（`packages/desktop/scripts/test.mjs`），非新增 C 编号门。
+
 ## 5. 再生物登记
 
 |再生物|源|提交纪律|
@@ -368,11 +483,15 @@ host插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游README（api
 |---|---|---|---|---|---|---|
 | `fork.dsh-client-connection` | fork | `packages/client/connection` | `packages/dsh-client-connection` | C1, C2, C3, C5, C6 | — | aligned |
 | `fork.dsh-client-web` | fork | `packages/client/web` | `packages/dsh-client-web` | C1, C2, C3, C5, C6 | — | aligned |
-| `fork.dsh-api-gateway` | fork | `packages/api/gateway` | `packages/dsh-api-gateway` | C1, C2, C3, C5, C6 | G43, packages/dsh-api-gateway/test/patch-lock/base-path-normalization-lock.test.ts, packages/dsh-api-gateway/test/patch-lock/journal-stall-watchdog-lock.test.ts, packages/dsh-api-gateway/test/patch-lock/remote-stream-carrier-retry-lock.test.ts, test:api-gateway, typecheck:api-gateway, typecheck:connection, verify:upstream-lifecycle-contract | open |
+| `fork.dsh-api-gateway` | fork | `packages/api/gateway` | `packages/dsh-api-gateway` | C1, C2, C3, C5, C6 | G43, packages/dsh-api-gateway/test/behavior/client-uplink-rejection.test.ts, packages/dsh-api-gateway/test/patch-lock/base-path-normalization-lock.test.ts, packages/dsh-api-gateway/test/patch-lock/journal-stall-watchdog-lock.test.ts, packages/dsh-api-gateway/test/patch-lock/remote-stream-carrier-retry-lock.test.ts, test:api-gateway, typecheck:api-gateway, typecheck:connection, verify:upstream-lifecycle-contract | open |
 | `seed.dsh-chamber-seed-open-in` | seed | `packages/host/open-in-app` | `packages/dsh-chamber-seed-open-in` | C1, C2, C3, C5 | — | aligned |
 | `seed.dsh-chamber-client-ui-layout` | seed | `packages/client/ui-layout` | `packages/dsh-chamber-client-ui-layout` | C1, C2, C3, C5 | packages/dsh-chamber-client-ui-layout/test/document-theme.test.ts, packages/dsh-chamber-client-ui-layout/test/layout-store.test.ts, test:layout, typecheck:layout | aligned |
 | `fork.dsh-chamber-client-ui-sidebar` | fork | `packages/client/ui-sidebar` | `packages/dsh-chamber-client-ui-sidebar` | C1, C2, C3, C5 | — | aligned |
 | `mirror.dsh-api-session-controller-goal` | mirror | `packages/api/session-controller` | `packages/control-plane` | — | packages/control-plane/test/protocol/session-mux.test.ts, packages/renderer/test/session-state/source-mux-facts-goal.test.ts | accepted |
-| `mirror.dsh-desktop-update-chain` | mirror | `apps/desktop/src` | `packages/desktop` | — | packages/desktop/test/desktop-shell/updater-main-wiring.test.ts, packages/desktop/test/desktop-shell/updater-watchdog.test.ts, packages/desktop/update-journal.test.ts, packages/desktop/update-schedule.test.ts, packages/desktop/upstream-seats.test.ts | accepted |
+| `mirror.dsh-session-status-write-face` | mirror | `packages/api/session-controller` | `packages/dsh-chamber-client-ui-sidebar/src/client/status-write-face.ts` | — | packages/dsh-chamber-client-ui-sidebar/test/session-state/status-write-face.test.ts, packages/dsh-chamber-client-ui-sidebar/test/session-state/vendor-session-fact-contract.test.ts | accepted |
+| `mirror.dsh-desktop-carrier-seats` | mirror | `apps/desktop/src` | `packages/desktop` | — | packages/desktop/test/ipc/bridge-shim-document.test.ts, packages/desktop/test/ipc/desktop-carrier-surface.test.ts, packages/desktop/upstream-seats.test.ts | accepted |
+| `mirror.dsh-desktop-shortcuts-seat` | mirror | `apps/desktop/src` | `packages/desktop/shortcuts-bridge.ts` | — | packages/desktop/test/ipc/desktop-shortcuts-bridge.test.ts | accepted |
+| `mirror.dsh-desktop-native-chrome-seats` | mirror | `apps/desktop/src` | `packages/desktop` | — | packages/desktop/chamber-lock.test.ts, packages/desktop/shell-locale.test.ts, packages/desktop/test/desktop-shell/fatal-report.test.ts, packages/desktop/test/desktop-shell/startup-recovery.test.ts | accepted |
+| `mirror.dsh-desktop-update-chain` | mirror | `apps/desktop/src` | `packages/desktop` | — | packages/desktop/test/desktop-shell/updater-attention.test.ts, packages/desktop/test/desktop-shell/updater-main-wiring.test.ts, packages/desktop/test/desktop-shell/updater-watchdog.test.ts, packages/desktop/update-journal.test.ts, packages/desktop/update-schedule.test.ts | accepted |
 | `mirror.dsh-client-hmr-events-endpoint` | mirror | `packages/client/hmr` | `packages/renderer/src/live-graph.ts` | — | packages/renderer/test/lifecycle/live-graph.test.ts | accepted |
 <!-- GENERATED:registry:touchpoints.index:end -->

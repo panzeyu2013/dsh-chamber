@@ -21,6 +21,12 @@
  * re-export face is judged). An export with no importer is red unless it is
  * covered by a documented exemption.
  *
+ * TEST-ONLY EXPORTS. An export reachable from an entry with no production
+ * importer but named by a test still needs a reason: TEST_ONLY_EXPORT_ALLOWLIST
+ * names it with the reviewer's reason (typically a pinned constant the suite
+ * asserts, or a state seam the suite owns). The list may not lie: an entry whose
+ * export gains a production importer, or loses every test importer, is red.
+ *
  * NOT JUDGED, but named with a reason so the skip is auditable:
  * - RUNTIME_LOADED_PACKAGES: entries the dsh plugin loader / host-graph insert
  *   loads at runtime by package name - no static importer exists by design.
@@ -28,6 +34,11 @@
  *   are still counted and printed, but do not fail this run. A pending package
  *   with no dead export is a zombie entry and FAILS - the list can only shrink
  *   as owners land their narrowing.
+ * - TYPE-ONLY exports (interfaces, type aliases, `export type` faces): erased at
+ *   runtime and often the contract's documentation face; judging them by "an
+ *   importer names the type" would flag the many types read only in type
+ *   positions. Ruling (upstream-drift V2): they stay out of this gate - narrowing
+ *   a type that lost its last consumer is a review duty, not a script verdict.
  *
  * EXEMPTIONS. DEAD_EXPORT_EXEMPTIONS names a real dead export per package, with
  * the reason a reviewer accepted and where the consumer lands. A stale exemption
@@ -75,27 +86,38 @@ export const DEAD_EXPORT_EXEMPTIONS = [
   { package: 'dsh-stream-state', name: 'MIN_REBUILD_SPACING_MS', reason: 'table value consumed via CARRIER_ENV + parity gate' },
   { package: 'dsh-stream-state', name: 'IN_FLIGHT_GRACE_MS', reason: 'table value consumed via CARRIER_ENV + parity gate' },
   { package: 'dsh-stream-state', name: 'OPENING_STALL_STREAK', reason: 'table value consumed via CARRIER_ENV + parity gate' },
-  // Differential-harness surface: imported by test/equivalence and
-  // scripts/refactor/equivalence.mjs, not by a production module.
-  { package: 'dsh-stream-state', name: 'reasonClassOf', reason: 'differential normalizer; consumed by the equivalence harness' },
-  { package: 'dsh-stream-state', name: 'equivalents', reason: 'differential comparison; consumed by the equivalence harness' },
-  // Aggregate reducers re-exported for the differential replay and the Swift
-  // mirror; production callers use reduceCarrier/reduceSource.
-  { package: 'dsh-stream-state', name: 'decideRebuild', reason: 'pure rebuild predicate; used by reduceCarrier and the vectors' },
-  { package: 'dsh-stream-state', name: 'reduceSourceSequence', reason: 'source reducer replay face; used by the vectors' },
+  // Aggregate reducer kept for the ladder's suite only.
   { package: 'dsh-stream-state', name: 'collapseRecords', reason: 'ladder internal; used by planLadder + its suite' },
-  // Presentation outer-bound helpers superseded by decidePresentation/planVeilTimer;
-  // kept for the renderer suite's bound cases.
-  { package: 'dsh-stream-state', name: 'surfaceBoundMs', reason: 'outer-bound helper; retires when the renderer tests use the frame API only' },
-  { package: 'dsh-stream-state', name: 'veilUpperBoundMs', reason: 'outer-bound helper; retires when the renderer tests use the frame API only' },
   // Upstream host-plugin entry (src/index.ts is a [pure] mirror of the upstream
-  // package, C1 byte-identical): name/inject/Config/apply are the cordis plugin
-  // ABI the dsh loader reads at runtime; the browser half is imported through the
+  // package, C1 byte-identical): name/inject/Config are the cordis plugin ABI
+  // the dsh loader reads at runtime; the browser half is imported through the
   // ./client subpath and does not consume the root entry.
   { package: 'dsh-client-connection', name: 'name', reason: 'upstream [pure] host-plugin entry: loader reads the plugin name at runtime (no static importer)' },
   { package: 'dsh-client-connection', name: 'inject', reason: 'upstream [pure] host-plugin entry: cordis reads inject at load time (no static importer)' },
   { package: 'dsh-client-connection', name: 'Config', reason: 'upstream [pure] host-plugin entry: config schema consumed by the dsh loader (no static importer)' },
-  { package: 'dsh-client-connection', name: 'apply', reason: 'upstream [pure] host-plugin entry: dsh loader calls apply() by plugin ABI (no static importer)' },
+]
+
+/**
+ * Test-only runtime exports (upstream-drift V1): no production importer, but at
+ * least one suite imports the name. The reason names the suite that owns it;
+ * the export retires when that suite stops needing it.
+ * @type {readonly { package: string, name: string, reason: string }[]}
+ */
+export const TEST_ONLY_EXPORT_ALLOWLIST = [
+  // Differential harness: the equivalence suite imports the normalizer and the
+  // comparator directly (scripts/refactor/equivalence.mjs imports the reducers).
+  { package: 'dsh-stream-state', name: 'reasonClassOf', reason: 'differential normalizer consumed by the equivalence suite (test/equivalence)' },
+  { package: 'dsh-stream-state', name: 'equivalents', reason: 'differential comparison consumed by the equivalence suite (test/equivalence)' },
+  // Replay faces driven by the carrier/source vectors in the package suite.
+  { package: 'dsh-stream-state', name: 'decideRebuild', reason: 'pure rebuild predicate replayed by the carrier vectors in the package suite' },
+  { package: 'dsh-stream-state', name: 'reduceSourceSequence', reason: 'source reducer replay face driven by the package vectors' },
+  // Presentation outer-bound helpers superseded by decidePresentation/planVeilTimer
+  // in production, kept for the suite's bound cases.
+  { package: 'dsh-stream-state', name: 'surfaceBoundMs', reason: 'outer-bound helper asserted by the package suite; retires when the frame API covers the bound cases' },
+  { package: 'dsh-stream-state', name: 'veilUpperBoundMs', reason: 'outer-bound helper asserted by the package suite; retires when the frame API covers the bound cases' },
+  // Upstream [pure] host-plugin entry: the loader calls apply() by plugin ABI; the
+  // C1 byte-parity suite imports it for the comparison.
+  { package: 'dsh-client-connection', name: 'apply', reason: 'upstream [pure] host-plugin entry: dsh loader calls apply() by plugin ABI; the byte-parity suite imports it' },
 ]
 
 /**
@@ -342,12 +364,15 @@ export function discoverPackages(repoRoot = REPO_ROOT) {
 }
 
 /**
- * Production importer names of one package's entry (see the header for the
- * consumer rule). Every file under packages/ and scripts/ is scanned, including
- * the package's own sources; tests and build output are excluded.
+ * Importer names of one package's entry (see the header for the consumer rule).
+ * Every file under packages/ and scripts/ is scanned, including the package's
+ * own sources; build output is always excluded.
+ * @param {{ scope?: 'production' | 'test' }} [options] - `production` (default)
+ *   excludes test files; `test` reads ONLY them (the V1 test-only rule).
  * @returns {Set<string>}
  */
-export function collectPackageConsumers(pkg, repoRoot = REPO_ROOT) {
+export function collectPackageConsumers(pkg, repoRoot = REPO_ROOT, options = {}) {
+  const scope = options.scope ?? 'production'
   const imported = new Set()
   const files = [
     ...walkFiles(join(repoRoot, 'packages'), () => true),
@@ -356,7 +381,10 @@ export function collectPackageConsumers(pkg, repoRoot = REPO_ROOT) {
   for (const absolute of files) {
     if (!/\.(?:ts|tsx|mts|mjs)$/u.test(absolute)) continue
     const rel = relative(repoRoot, absolute).split(sep).join('/')
-    if (rel.includes('/test/') || rel.includes('/tests/') || rel.includes('/dist/') || rel.includes('/lib/')) continue
+    if (rel.includes('/dist/') || rel.includes('/lib/')) continue
+    const inTest = rel.includes('/test/') || rel.includes('/tests/')
+      || /\.(?:test|spec)\.(?:ts|tsx|mts|cts|js|mjs)$/u.test(rel)
+    if (scope === 'production' ? inTest : !inTest) continue
     let raw
     try {
       raw = readFileSync(absolute, 'utf8')
@@ -452,6 +480,32 @@ export function deadExports(modules, imported, exemptions = DEAD_EXPORT_EXEMPTIO
   return { dead, checked }
 }
 
+/**
+ * Pure verdict for the V1 test-only rule: entries' runtime exports that no
+ * production importer names but a test does. Each needs an allowlist reason.
+ * @returns {{ unallowed: { name: string, file: string, package?: string }[], stale: typeof TEST_ONLY_EXPORT_ALLOWLIST, checked: number }}
+ */
+export function testOnlyExports(modules, productionImported, testImported, allowlist = TEST_ONLY_EXPORT_ALLOWLIST) {
+  const allowed = new Map()
+  for (const entry of allowlist) allowed.set((entry.package ?? '') + '\u0000' + entry.name, entry)
+  const used = new Set()
+  const unallowed = []
+  let checked = 0
+  for (const module of modules) {
+    for (const name of module.names) {
+      if (productionImported.has(name)) continue
+      if (!testImported.has(name)) continue
+      checked += 1
+      const key = (module.package ?? '') + '\u0000' + name
+      if (allowed.has(key)) { used.add(key); continue }
+      const entry = { name, file: module.file }
+      if (module.package !== undefined) entry.package = module.package
+      unallowed.push(entry)
+    }
+  }
+  return { unallowed, stale: allowlist.filter((entry) => !used.has((entry.package ?? '') + '\u0000' + entry.name)), checked }
+}
+
 /** Exemptions that no longer name a dead export (stale = the list would lie). */
 export function staleExemptions(modules, imported, exemptions = DEAD_EXPORT_EXEMPTIONS) {
   const dead = new Set(deadExports(modules, imported, []).dead.map((entry) => (entry.package ?? '') + '\u0000' + entry.name))
@@ -497,6 +551,16 @@ function selfTest() {
   const exemptionWorks = exempted.dead.length === 0
   const stale = staleExemptions(modules, new Set(['used', 'alsoUsed', 'orphan']), [{ name: 'orphan', reason: 'scheduled' }])
   const staleDetected = stale.length === 1
+  // V1 test-only rule negative controls: report without an entry, silence with a
+  // reason, red once the export gains a production importer.
+  const testOnlyModules = [{ package: 'pkg', file: 'packages/x/src/index.ts', names: ['pinnedConstant', 'usedInProd'] }]
+  const testOnlyVerdict = testOnlyExports(testOnlyModules, new Set(['usedInProd']), new Set(['pinnedConstant', 'usedInProd']), [])
+  const testOnlyDetected = testOnlyVerdict.checked === 1 && testOnlyVerdict.unallowed.length === 1
+    && testOnlyVerdict.unallowed[0].name === 'pinnedConstant'
+  const testOnlyAllowed = testOnlyExports(testOnlyModules, new Set(['usedInProd']), new Set(['pinnedConstant', 'usedInProd']),
+    [{ package: 'pkg', name: 'pinnedConstant', reason: 'pinned constant asserted by the suite' }]).unallowed.length === 0
+  const testOnlyStale = testOnlyExports(testOnlyModules, new Set(['pinnedConstant', 'usedInProd']), new Set(['pinnedConstant', 'usedInProd']),
+    [{ package: 'pkg', name: 'pinnedConstant', reason: 'x' }]).stale.length === 1
   const parsed = parseIndexModules(
     '// comment with { braces } must not parse as an export\n' +
     "export * from './a.ts'\n" +
@@ -520,15 +584,17 @@ function selfTest() {
     { file: 'macos/Sources/X/Resources/bridge-shim.js', text: "invoke('desktop_local_plugin_add', {})" },
   ])
   const retiredDetected = retiredVerdict.length === 1 && retiredVerdict[0].name === 'local_plugin_add'
-  if (detected && exemptionWorks && staleDetected && commentsIgnored && entrylessDetected && entrylessStaleDetected && retiredDetected) {
-    console.log('no-dead-exports self-test: ok (an orphan is reported, an exemption silences it, a stale exemption is flagged, comments are not code, a retired write-face name reappearing is caught)')
+  if (detected && exemptionWorks && staleDetected && commentsIgnored && entrylessDetected && entrylessStaleDetected && retiredDetected
+    && testOnlyDetected && testOnlyAllowed && testOnlyStale) {
+    console.log('no-dead-exports self-test: ok (an orphan is reported, an exemption silences it, a stale exemption is flagged, a test-only export needs a reason, comments are not code, a retired write-face name reappearing is caught)')
     return
   }
   console.error(
     'no-dead-exports self-test: FAIL (detected=' + String(detected) +
     ', exemptionWorks=' + String(exemptionWorks) + ', staleDetected=' + String(staleDetected) +
     ', commentsIgnored=' + String(commentsIgnored) + ', entryless=' + String(entrylessDetected) + '/' + String(entrylessStaleDetected) +
-    ', retiredWriteFace=' + String(retiredDetected) + ')',
+    ', retiredWriteFace=' + String(retiredDetected) +
+    ', testOnly=' + String(testOnlyDetected) + '/' + String(testOnlyAllowed) + '/' + String(testOnlyStale) + ')',
   )
   process.exit(1)
 }
@@ -561,12 +627,17 @@ function main() {
       continue
     }
     const imported = collectPackageConsumers(pkg)
-    const exemptions = DEAD_EXPORT_EXEMPTIONS.filter((entry) => entry.package === pkg.name)
-    const { dead, checked } = deadExports(modules, imported, exemptions)
-    const stale = staleExemptions(modules, imported, exemptions)
+    const testImported = collectPackageConsumers(pkg, REPO_ROOT, { scope: 'test' })
+    const deadExemptions = DEAD_EXPORT_EXEMPTIONS.filter((entry) => entry.package === pkg.name)
+    const testOnlyAllowlist = TEST_ONLY_EXPORT_ALLOWLIST.filter((entry) => entry.package === pkg.name)
+    // An allowlisted test-only export is not a dead face, but the test-only rule
+    // below still judges it (its entry must stay honest).
+    const { dead, checked } = deadExports(modules, imported, [...deadExemptions, ...testOnlyAllowlist])
+    const stale = staleExemptions(modules, imported, deadExemptions)
+    const testOnly = testOnlyExports(modules, imported, testImported, testOnlyAllowlist)
     totalChecked += checked
     totalDead += dead.length
-    perPackage.push({ pkg, declared, dead, stale })
+    perPackage.push({ pkg, declared, dead, stale, testOnly })
   }
   let entrylessChecked = 0
   let entrylessDead = 0
@@ -621,6 +692,20 @@ function main() {
     failures.push('retired plugin write-face names reappeared in shipped surfaces: '
       + retiredViolations.map((entry) => entry.name + ' (' + entry.file + ')').join(', '))
   }
+  let testOnlyAllowedCount = 0
+  for (const entry of perPackage) {
+    testOnlyAllowedCount += entry.testOnly.checked
+    if (entry.testOnly.unallowed.length > 0) {
+      failures.push(entry.pkg.name + ': ' + String(entry.testOnly.unallowed.length)
+        + ' test-only runtime export(s) need a TEST_ONLY_EXPORT_ALLOWLIST entry with the reason a reviewer accepted: '
+        + entry.testOnly.unallowed.map((item) => item.name + ' (' + item.file + ')').join(', '))
+    }
+    if (entry.testOnly.stale.length > 0) {
+      failures.push(entry.pkg.name + ': ' + String(entry.testOnly.stale.length)
+        + ' stale TEST_ONLY_EXPORT_ALLOWLIST entry(ies) - the export gained a production importer or every test importer is gone: '
+        + entry.testOnly.stale.map((item) => item.name).join(', '))
+    }
+  }
   if (totalChecked < 100) {
     failures.push('the workspace parsed only ' + String(totalChecked) + ' runtime export(s) - below the sanity floor (100); refusing to read a parse failure as a clean surface')
   }
@@ -664,6 +749,7 @@ function main() {
   const suffix = [
     runtimeLoaded > 0 ? String(runtimeLoaded) + ' runtime-loaded package(s) not judged' : '',
     pendingSuppressed > 0 ? String(pendingSuppressed) + ' pending dead export(s) suppressed' : '',
+    testOnlyAllowedCount > 0 ? String(testOnlyAllowedCount) + ' test-only export(s) allowlisted' : '',
   ].filter(Boolean).join('; ')
   console.log('ok no-dead-exports: all ' + String(totalChecked - pendingSuppressed) + ' judged runtime export(s) have a production importer across ' + String(packages.length) + ' package(s), plus ' + String(entrylessChecked) + ' entryless export(s) across ' + String(ENTRYLESS_PACKAGES.length) + ' package(s)'
     + (suffix === '' ? '' : '（' + suffix + '）'))

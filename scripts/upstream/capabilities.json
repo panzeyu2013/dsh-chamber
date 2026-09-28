@@ -6,10 +6,9 @@
       "id": "workspace/unarchiveSession",
       "note": "0.1.7 官方单条恢复 wire（幂等移除归档集合成员）：chamber 归档管理器的「恢复」入口与本地归档墓碑清除依赖它。探针根收窄到声明该 Remote 的包——registry 服务上也有同名方法。",
       "probe": {
-        "roots": [
-          "packages/api/workspace-controller"
+        "anchors": [
+          "packages/api/workspace-controller/src/index.ts#=literal:@Remote('unarchiveSession')"
         ],
-        "symbol": "unarchiveSession",
         "expect": "present"
       },
       "requires": [
@@ -28,10 +27,9 @@
       "id": "sessionStatus.completionUnread",
       "note": "官方内存完成未读位：chamber 通知/角标的完成事实唯一权威（durable 账本已随上游对齐移除，重载即忘是接受行为）。探针根 = 官方 ui-session 客户端经理（该位是客户端投影态，不在 api 包）。",
       "probe": {
-        "roots": [
-          "packages/client/ui-session"
+        "anchors": [
+          "packages/client/ui-session/src/client/index.ts#=literal:readonly completionUnread: boolean"
         ],
-        "symbol": "completionUnread",
         "expect": "present"
       },
       "requires": [
@@ -50,10 +48,9 @@
       "id": "session-controller/handleSessionStatus",
       "note": "官方 manager 的会话状态写入口（私有缝合面）：chamber 的运行位修正臂依赖它在 status 写入时同步投影（store 订阅 → producer report）。",
       "probe": {
-        "roots": [
-          "packages/api/session-controller"
+        "anchors": [
+          "packages/api/session-controller/src/client/sessions/service.ts#=literal:handleSessionStatus(...args: Parameters<SessionManager['handleSessionStatus']>): void {"
         ],
-        "symbol": "handleSessionStatus",
         "expect": "present"
       },
       "requires": [
@@ -121,11 +118,9 @@
       "id": "archived-browse-filter",
       "note": "上游「全部对话（显示已归档）」过滤面在 pin 上**已存在**：官方 ui-workspace 的 ArchivedFilter 类型（tree.ts）+ archivedFilter 状态 + onArchivedFilterPick / setArchivedFilter 动作；chamber v1 刻意不镜像（自有多源列表拥有浏览区，STATUS 范围决策节）。本条目只登记上游仍有该面——消失即需重排期已归档浏览的缺口。",
       "probe": {
-        "roots": [
-          "packages/client/ui-workspace"
-        ],
-        "patterns": [
-          "[Aa]rchivedFilter"
+        "anchors": [
+          "packages/client/ui-workspace/src/client/tree.ts#ArchivedFilter",
+          "packages/client/ui-workspace/src/client/stores.ts#=literal:setArchivedFilter: (draft: WorkspaceViewState, filter: ArchivedFilter) => void"
         ],
         "expect": "present"
       },

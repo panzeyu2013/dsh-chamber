@@ -70,6 +70,8 @@ export const GROUPS = {
   'test/session-state/session-correction-marks.test.ts',
     // 上游会话事实语义的源码 lockstep（vendor 树未物化时默认失败，显式 opt-out 才跳过）。
     'test/session-state/vendor-session-fact-contract.test.ts',
+    // I-10 写面探测三分（contract/concrete/none）：执行端只依赖该叶面。
+    'test/session-state/status-write-face.test.ts',
     'test/session-state/workspace-echo.test.ts',
     'test/session-state/session-echo.test.ts',
     'test/session-state/session-mutations.test.ts',

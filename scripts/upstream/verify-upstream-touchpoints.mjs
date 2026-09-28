@@ -637,20 +637,33 @@ for (const fork of FORKS) {
   }
 }
 
-// C9 —— vendor 源码补丁锚（design 09 §3.6；硬失败）
+// C9 —— vendor 源码补丁锚 + 退役判定（design 09 §3.6；硬失败）
 {
-  const { VENDOR_PATCHES, checkVendorPatchSources } = await import(
+  const { VENDOR_PATCHES, checkRetiredPatches, checkVendorPatchSources, vendorPatchRegistryProblems } = await import(
     pathToFileURL(join(ROOT, 'packages/renderer/scripts/vendor-patches.mjs')).href
   )
+  const registryProblems = vendorPatchRegistryProblems()
+  if (registryProblems.length > 0) {
+    fail(`C9 vendor 补丁登记表不完整（每条须恰好给 retireCheck 或 noRetireForm）: ${registryProblems.join('; ')}`)
+  }
+  const retired = checkRetiredPatches()
+  for (const entry of retired) {
+    if (!entry.ok) fail(`C9 退役补丁 ensure 断言失败（上游修复回退/漂移，drift I-7）: ${entry.vendorFile} — ${entry.detail}`)
+  }
   const results = checkVendorPatchSources()
-  const broken = results.filter(result => !result.ok)
   const editCount = VENDOR_PATCHES.reduce((total, patch) => total + patch.edits.length, 0)
-  if (broken.length > 0) {
-    fail(`C9 vendor 补丁锚漂移（重锚后需按新 pin 重导补丁）: ${broken.map(b => `${b.vendorFile} — ${b.detail}`).join('; ')}`)
-  } else if (results.length === 0) {
-    warn('C9 未注册任何 vendor 补丁（如确已全部退役可忽略）')
-  } else {
-    console.log(`✓ C9 vendor 补丁锚: ${results.length} 文件 / ${editCount} 处锚点全部唯一命中`)
+  const drifted = results.filter(result => result.verdict === 'drift')
+  const candidates = results.filter(result => result.verdict === 'retire-candidate')
+  if (drifted.length > 0) {
+    fail(`C9 vendor 补丁锚漂移（重锚后需按新 pin 重导补丁）: ${drifted.map(b => `${b.vendorFile} — ${b.detail}`).join('; ')}`)
+  }
+  if (candidates.length > 0) {
+    fail('C9 vendor 补丁 retire-candidate（上游已带修复形状；仍 release-blocking，remediation = 移入 RETIRED_PATCHES 的 ensure 断言区，并在同批删除补丁与产物 marker）: '
+      + candidates.map(b => `${b.vendorFile} — ${b.detail}`).join('; '))
+  }
+  if (drifted.length === 0 && candidates.length === 0) {
+    if (results.length === 0) warn('C9 未注册任何 vendor 补丁（如确已全部退役可忽略）')
+    else console.log(`✓ C9 vendor 补丁锚: ${results.length} 文件 / ${editCount} 处锚点全部唯一命中；退役 ensure 断言 ${retired.length} 条`)
   }
 }
 

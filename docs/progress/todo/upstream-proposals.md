@@ -112,7 +112,10 @@ chamber侧缓解（不动上游事实面）：design 05 §2.2.1的open意图本�
    sessionId, running)` 是具体类的公开方法（`src/client/sessions/service.ts`），一次调用
    同时写 list summaries、物化 Session 的 `running`（聊天面）与 catalog activity；但
    `ISessions` 契约只暴露 `refresh()`。把它（或语义等价的 `reconcileSummaries(rows)`）写进
-   `contract/sessions.ts`，chamber 的 tier-3 写回即从「上游公开但非契约」变成受契约保护的面。
+   `contract/sessions.ts`，chamber 的 tier-3 写回即从「上游公开但非契约」变成受契约保护的面。chamber 侧现已把该面
+   探测为 contract/concrete/none 三分（`packages/dsh-chamber-client-ui-sidebar/src/client/status-write-face.ts`，I-10）：
+   契约成员一落地即走 contract 支（把真实名字加进 `CONTRACT_STATUS_WRITE_METHODS`），不再依赖具体成员名；
+   vendor 契约锁在契约长出写面时先红。
 7. **把「打开是否在途」暴露到契约/快照**（新增诉求）：`Session.doOpen()` 有三条
    静默留在 `loading` 的路径（非 `isRemoteFailure` 抛错；`events.open()` 返回前
    `openGeneration`/`events` 推进），而重开只有 `followCurrent()` 的 stage 移动一条**外部**

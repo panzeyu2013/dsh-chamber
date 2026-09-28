@@ -19,6 +19,7 @@ import {
   extractRuntimeExports,
   parseIndexModules,
   staleExemptions,
+  testOnlyExports,
 } from './verify-no-dead-exports.mjs'
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -40,6 +41,29 @@ test('an exemption silences exactly the orphan, and a stale exemption is flagged
   assert.deepEqual(staleExemptions(modules, new Set(['used', 'orphan']), [{ name: 'orphan', reason: 'scheduled' }]), [
     { name: 'orphan', reason: 'scheduled' },
   ])
+})
+
+test('V1: a test-only export needs a reason, and the entry goes stale once production imports it', () => {
+  const modules = [{ package: 'pkg', file: 'packages/pkg/src/index.ts', names: ['pinnedConstant', 'usedInProd'] }]
+  const production = new Set(['usedInProd'])
+  const tests = new Set(['pinnedConstant', 'usedInProd'])
+  const unallowed = testOnlyExports(modules, production, tests, [])
+  assert.deepEqual(unallowed.unallowed, [
+    { name: 'pinnedConstant', file: 'packages/pkg/src/index.ts', package: 'pkg' },
+  ])
+  assert.equal(unallowed.checked, 1, 'a production-imported export is never a test-only case')
+  const allowed = testOnlyExports(modules, production, tests, [
+    { package: 'pkg', name: 'pinnedConstant', reason: 'pin constant asserted by the suite' },
+  ])
+  assert.deepEqual(allowed.unallowed, [])
+  assert.equal(allowed.stale.length, 0)
+  // The export gains a production importer: the allowlist entry now lies.
+  const landed = testOnlyExports(modules, new Set(['pinnedConstant', 'usedInProd']), tests, [
+    { package: 'pkg', name: 'pinnedConstant', reason: 'pin constant asserted by the suite' },
+  ])
+  assert.equal(landed.stale.length, 1)
+  // No test names it either: that is the plain dead-export path, not test-only.
+  assert.equal(testOnlyExports(modules, production, new Set(['usedInProd']), []).checked, 0)
 })
 
 test('the real index and its modules parse into a non-trivial surface', () => {

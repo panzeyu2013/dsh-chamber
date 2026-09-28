@@ -521,6 +521,27 @@ test('observeSource: facts-only subagentCount is presence, not busy (R2-G)', () 
   assert.equal(batch.observations[0].subagents, 'unknown', 'facts-only presence never suppresses')
 })
 
+test('observeSource: lineage-verified facts rows are evidence; known durable children fail closed (I-12)', () => {
+  // 认证过的 >0：抑制完成（子代理还在跑）。
+  const busy = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same',
+    facts: { usable: true, rows: { s1: factsRow({ subagentCount: 2, lineageVerified: true }) } },
+  })
+  assert.equal(busy.observations[0].subagents, 'busy', '谱系认证过的 running 子代必须抑制')
+  // 认证过的 0：首次可以把「无子代理」判成 idle（旧口径只有 presence 一种读法）。
+  const idle = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same',
+    facts: { usable: true, rows: { s1: factsRow({ subagentCount: 0, lineageVerified: true }) } },
+  })
+  assert.equal(idle.observations[0].subagents, 'idle', '认证过的 0 才释放压制')
+  // 认证位缺席但保留表里有 durable 子代：列表可能不完整 ⇒ fail-closed 抑制而非误报。
+  const failClosed = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same',
+    facts: { usable: true, rows: { s1: factsRow({ subagentCount: 0, subagentKnown: true }) } },
+  })
+  assert.equal(failClosed.observations[0].subagents, 'busy', '保留表命中 ⇒ 抑制完成（fail-closed）')
+})
+
 test('observeSource: goal precedence is shell → facts → unknown and null never folds into unknown', () => {
   const shellGoal: GoalFact = { goalId: 'shell', revision: 1, phase: 'active' }
   const factsGoal: GoalFact = { goalId: 'facts', revision: 2, phase: 'paused' }

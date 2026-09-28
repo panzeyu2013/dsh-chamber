@@ -369,7 +369,7 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   `expect`→`replace`，`expect` 必须**恰好命中一次**（0 次或多次 = 构建期抛错，绝不静默发出未打补丁的
   bundle）。应用点 = renderer 的 `deepseekSource().transform`（我们的 vite 配置），vendor 文件**零写入**；
   模块 id 并接受软链形式与 `realpathSync` 后的子模块形式（vite 实际给后者）。
-- 落点（rc.2：11 个文件 / 24 处锚点，逐锚点由触点表 C9 与 `packages/renderer/scripts/vendor-patches.test.mjs`
+- 落点（当前：12 个文件 / 26 处锚点，逐锚点由触点表 C9 与 `packages/renderer/scripts/vendor-patches.test.mjs`
   校验）：① `ui-chat` 的 `chat/AssistantMarkdown.tsx` 读取新增 root 标准 **prop**
   `chamberFileApiBase`（chamber layout fork 经 `ctx.slots.provideRoot({ props })` 提供，值 = 本 entry 的
   `ctx.chamberBasePath`），`pathImages` 以 `new URL(chamberFileApiBase + '/', document.baseURI)` 作为上游
@@ -400,13 +400,35 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   （间歇性：raw chunk 只对 block-start/block-end/usage/finish 出现）。修法 = 同一次调用加 `.replace(/\s+/g, ' ')`
   空白归一（V8 行为不变、WebKit 恢复）；`reason` 写明症状、接受的取舍（仅空白差异的伪造函数会通过，名字与原型身份
   检查仍在）与删除条件（上游改为引擎无关判定）。该条同样由 C9 + `vendor-patches.test.mjs` 的**执行用例与负对照**钉住。
-- 保鲜门：`verify-upstream-touchpoints.mjs` **C9** 对 pin 住的 vendor 文件逐锚点校验（硬失败）；
-  `packages/renderer/scripts/vendor-patches.test.mjs` 在 CI 侧验证锚点唯一、改写后函数行为（含上游回落
-  分支）与 id 形态匹配。
+- 第四类补丁：**N-ctx 多实例正确性（维护者裁决纳入）**——`ui-workspace` 的 `client/navigation.ts`
+  Workspace selection store 用页面级 localStorage 键 `dsh.sessions.current`，而单页把 N 个实例复用进同一
+  document ⇒ 两个实例共享一个选择槽，切换源会恢复（或覆盖）另一实例的当前会话（侧栏只做 owner 源回显补偿，
+  store 里的外来值仍在）。store 在 vendor service 内构造、键模块私有，chamber 包无法从外部改键；补丁从
+  per-entry `ctx.chamberBasePath` 取 scope（缺失即回落上游未 scoped 行为），键变为
+  `dsh.sessions.current./api/i/<id>`。`reason` 必须写明跨实例症状与接受的取舍；上游自带 scope 后删除该条。
+- 保鲜门：`verify-upstream-touchpoints.mjs` **C9** 对 pin 住的 vendor 文件逐锚点校验（硬失败）；锚点缺失
+  时先评估条目的退役形态：`retireCheck` 命中 ⇒ 报 `retire-candidate`（**仍 release-blocking**，
+  remediation = 把该条移入 `vendor-patches.mjs` 的 `RETIRED_PATCHES`（`ensure` = 上游修复原文、必须
+  唯一命中），同批删除补丁条目与 `verify-vendor-patch-applied` 的产物 marker）；未命中 ⇒ drift 硬失败
+  （按新 pin 重导）。无可断言形态的条目以 `noRetireForm` 写明理由。退役后的 `ensure` 断言是回归栅栏：
+  上游修复一旦回退，C9 同拍变红。`packages/renderer/scripts/vendor-patches.test.mjs` 在 CI 侧验证锚点
+  唯一、三分支判定、退役栅栏、改写后函数行为（含上游回落分支）与 id 形态匹配。
+
+**Rejected alternatives（I-7 retire 机制）**：① 维持「锚点缺失 = 一律硬失败」——被否：无法区分施工错误与
+上游已修，每次 pin 升级都要人工重读全部补丁；② 锚点缺失即自动删除补丁/自动退役——被否：退役必须显式裁决
+（上游修复可能只落一半），且删除后没有回归栅栏；故采用「`retireCheck` 判候选 + 人工移入
+`RETIRED_PATCHES` 的 `ensure` 断言」。
+
+**Rejected alternatives（I-14 selection scope）**：① 维持现状、只靠侧栏 owner 源回显补偿——被否：补偿只改
+显示面，store 的外来选择仍会在下一次挂载时复浮；② 用页面全局事实（`import.meta.url`、document 前缀）推导
+scope——被否：同一 document 复用 N 个实例，页面级事实不可分；③ fork `ui-workspace`——被否：为一个键 fork
+客户端包不成比例；故采用第四类补丁 + per-entry `chamberBasePath` scope。
 
 登记纪律：新增补丁前先问「能否在 chamber 自己的包里修」；同源绝对或 document-relative URL 一类硬假设优先
 采用「可选的 chamber 标准 prop + 上游回落」的形状，使官方布局部署保持正确。实测帧成本类必须附 A/B；模块私有
-状态机的逻辑缺陷类（第三类）必须写明实测症状、接受的取舍与删除条件，并在上游携带修复后删除条目。
+状态机的逻辑缺陷类（第三类）必须写明实测症状、接受的取舍与删除条件，并在上游携带修复后删除条目；多实例
+正确性类（第四类）必须写明跨实例症状、接受的取舍与删除条件，scope 只能取自 per-entry `chamberBasePath`
+（禁页面全局事实或 URL 猜测），且上游自带 scope 后删除。
 
 **Rejected alternatives**：① 在 chamber 侧加运行时护栏（包一层滚动位置重贴/监听渲染）——被否：读策略属于
 模块私有状态机（`ChatReading` 不导出、viewport 不表达意图），chamber 侧护栏会成为尾随策略的第二个所有者，

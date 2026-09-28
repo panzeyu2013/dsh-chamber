@@ -292,6 +292,86 @@ export function rowFromListItem(item: unknown): SourceMuxRow | null {
   return row
 }
 
+/**
+ * 官方 `session/list` 的谱系证据（I-12）。只认 SUBAGENT-origin 行：fork 行没有父边
+ * （与 client-core 的 `fetchSessionRunningLineage` 同规，父绝不猜）。`verified` = 每一条
+ * subagent 行都有可用父边（非空、非自指、有 sessionId）；只要有一条不可归属，整份快照
+ * 就不能把「没有子代理」判成 0（fail-closed 的判据位）。
+ */
+export interface MuxLineageIndex {
+  /** child → parent 边（只含 subagent-origin 行）。 */
+  readonly edges: ReadonlyMap<string, string>
+  /** true = 全部 subagent 行都可归属。 */
+  readonly verified: boolean
+}
+
+export function indexMuxLineage(items: readonly unknown[]): MuxLineageIndex {
+  const edges = new Map<string, string>()
+  let verified = true
+  for (const item of items) {
+    if (!isRecord(item)) continue
+    if (item.origin !== 'subagent') continue
+    const sessionId = typeof item.sessionId === 'string' ? item.sessionId : ''
+    if (sessionId === '') {
+      verified = false
+      continue
+    }
+    const parent = typeof item.parentSessionId === 'string' ? item.parentSessionId : ''
+    if (parent === '' || parent === sessionId) {
+      verified = false
+      continue
+    }
+    edges.set(sessionId, parent)
+  }
+  return { edges, verified }
+}
+
+/** 一棵谱系压制表（边 + 认证位 + 保留的已知子代表）的现状。 */
+export interface MuxLineageState {
+  readonly edges: ReadonlyMap<string, string>
+  readonly verified: boolean
+  readonly children: ReadonlyMap<string, ReadonlySet<string>>
+}
+
+/** 一行会话的谱系压制事实。 */
+export interface MuxLineageFacts {
+  /** running 子代理后代数（沿 subagent 链归并到所有祖先；与 sidebar index 同口径）。 */
+  readonly count: number
+  readonly verified: boolean
+  /** 本行在保留的谱系表里有 durable 子代（含已结束——它们仍在官方列表里）。 */
+  readonly known: boolean
+}
+
+/**
+ * 从当前 `rows` 与谱系表算每行的压制事实。只数 **running** 子代：子代理结束即释放
+ * 压制（durable 输出仍在，等待的完成属于父会话）。
+ */
+export function lineageFactsForRows(
+  rows: ReadonlyMap<string, { readonly running: boolean }>,
+  state: MuxLineageState,
+): ReadonlyMap<string, MuxLineageFacts> {
+  const counts = new Map<string, number>()
+  for (const [child, parent] of state.edges) {
+    if (rows.get(child)?.running !== true) continue
+    const seen = new Set<string>([child])
+    let ancestor: string | undefined = parent
+    while (ancestor !== undefined && !seen.has(ancestor)) {
+      seen.add(ancestor)
+      counts.set(ancestor, (counts.get(ancestor) ?? 0) + 1)
+      ancestor = state.edges.get(ancestor)
+    }
+  }
+  const facts = new Map<string, MuxLineageFacts>()
+  for (const sessionId of rows.keys()) {
+    facts.set(sessionId, {
+      count: counts.get(sessionId) ?? 0,
+      verified: state.verified,
+      known: state.children.has(sessionId),
+    })
+  }
+  return facts
+}
+
 /** api-session/status 载荷：冻结 wire 是 [sessionId, running]，对象形一并接受（不因形状漂移丢边沿）。 */
 export function parseStatusArgs(args: unknown): { sessionId: string; running: boolean } | null {
   if (Array.isArray(args)) {
@@ -582,6 +662,14 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   const reconcileIntervalMs = deps.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_MS
   const carrierGraceMs = deps.carrierGraceMs ?? DEFAULT_CARRIER_GRACE_MS
   const rows = new Map<string, SourceMuxRow>()
+  /**
+   * I-12 谱系压制表（本世代）：child → parent，只含 subagent-origin 行。可判基线整表
+   * 替换；不可判基线只更新边、**保留** `lineageChildren`——「列表不完整」绝不能被读成
+   * 「子代理结束」（fail-closed）。
+   */
+  const lineageEdges = new Map<string, string>()
+  const lineageChildren = new Map<string, Set<string>>()
+  let lineageVerified = false
   const runningBefore = new Map<string, boolean>()
   // 同一会话的运行轮次。读尾仅能结算它观察到的那次 true→false。
   const runVersions = new Map<string, number>()
@@ -714,6 +802,9 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
    *   - 宽限到期仍无新基线 ⇒ 清 baselineTrusted 并发布降级（真断连仍在宽限内诚实降级）。
    */
   function carrierOrBaselineLost(): void {
+    // I-12 fail-closed：基线/载波一丢，「判 0」资格立刻失效；已知子代表保留，消费面因此
+    // 抑制完成而不是误报（下一代可判基线才重新认证）。
+    lineageVerified = false
     if (!baselineTrusted) {
       // 没有可信基线时只有基线腿能作判；socketReady 属于套接字腿，只由 connect()/failCarrier()
       // 的换代决定。在这里顺手清掉它，之后成功基线也永远 ready()=false（ready 帧只在换 socket
@@ -752,7 +843,23 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     // 的撕裂快照。
     const usable = ready()
     const record: Record<string, SessionFactsRow> = {}
-    for (const [sessionId, row] of rows) record[sessionId] = row
+    const lineage = lineageFactsForRows(rows, {
+      edges: lineageEdges, verified: lineageVerified, children: lineageChildren,
+    })
+    for (const [sessionId, row] of rows) {
+      const facts = lineage.get(sessionId)
+      const verified = facts?.verified === true ? true : undefined
+      const known = facts?.known === true ? true : undefined
+      record[sessionId] = facts === undefined
+        || (row.subagentCount === facts.count && row.lineageVerified === verified && row.subagentKnown === known)
+        ? row
+        : {
+            ...row,
+            subagentCount: facts.count,
+            ...(verified === undefined ? {} : { lineageVerified: true }),
+            ...(known === undefined ? {} : { subagentKnown: true }),
+          }
+    }
     return {
       // 观察者自带通道：verdict=ok 表示"这条通道可用"，与网关镜像的版本协商无关
       // （出口判据正是"不依赖 gateway 版本"）。这里是 $events WebSocket 观察者，
@@ -1031,6 +1138,20 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       carrierOrBaselineLost()
       return
     }
+    // I-12：谱系在**同一份基线**上重算（只认 subagent-origin 行；fork 行不贡献边）。
+    const lineage = indexMuxLineage(rawItems)
+    lineageEdges.clear()
+    for (const [child, parent] of lineage.edges) lineageEdges.set(child, parent)
+    lineageVerified = lineage.verified
+    if (lineage.verified) {
+      // 只有可判的完整列表才能替换「已知子代」表；坏边快照保留旧表 ⇒ 消费面继续压制。
+      lineageChildren.clear()
+      for (const [child, parent] of lineage.edges) {
+        const set = lineageChildren.get(parent)
+        if (set === undefined) lineageChildren.set(parent, new Set([child]))
+        else set.add(child)
+      }
+    }
     baselines += 1
     const at = now()
     const seen = new Set<string>()
@@ -1211,6 +1332,15 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     const item = Array.isArray(args) ? args[0] : args
     const row = rowFromListItem(item)
     if (row === null) return
+    // I-12：新增行若是 subagent-origin 且父边可用，边立刻生效（计数在 snapshot 重算）。
+    for (const [child, parent] of indexMuxLineage([item]).edges) {
+      lineageEdges.set(child, parent)
+      if (lineageVerified) {
+        const set = lineageChildren.get(parent)
+        if (set === undefined) lineageChildren.set(parent, new Set([child]))
+        else set.add(child)
+      }
+    }
     missingBaselines.delete(row.sessionId)
     const previous = rows.get(row.sessionId)
     if (row.running && previous?.running !== true) nextRunVersion(row.sessionId)
@@ -1297,6 +1427,8 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     // 换代即丢套接字，但**不丢真相**：可判性由 carrierOrBaselineLost 在本次代际上裁定
     // （有旧基线 → 宽限；从来没有 → 立即降级），等待下一个 onopen 之前绝不宣称新连接可用。
     socketReady = false
+    // I-12：换代后谱系必须由新世代的完整基线重新认证。
+    lineageVerified = false
     clearStable()
     if (socket !== null) {
       // 换代。先 +1 再 close——close 可能同步触发旧 socket 的 onclose。
@@ -1496,6 +1628,9 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       // stop/start on the same observer object is a new subscription lifetime.
       // Old unary follow replies must not classify rows belonging to it.
       rows.clear()
+      lineageEdges.clear()
+      lineageChildren.clear()
+      lineageVerified = false
       runningBefore.clear()
       runVersions.clear()
       pendingTails.clear()

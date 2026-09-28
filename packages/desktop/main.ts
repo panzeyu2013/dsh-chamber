@@ -57,6 +57,7 @@ import type { ShortcutStorage } from './shortcuts-bridge.ts';
 import { RENDERER_CRASH_RELOAD_DELAY_MS, RENDERER_HANG_RELOAD_DELAY_MS, RENDERER_RECOVERY_MAX_RELOADS, noteRendererReload, shouldReloadAfterChildProcessGone, auditLogFilePath, chamberSettingsFilePath, gatewaySecretsFilePath, QUIT_CLEANUP_TIMEOUT_MS, resolveActiveRuntime, resolveControlPlanePort, scanDeepLinkUrls, sshPasswordsFilePath, stateRootDir, installIpcHandlers, clearBadgeIntentForQuit, drainDeepLinkLaunches, enqueueDeepLink, onRendererLifecycle, openExternally, resolveDevBuiltinDshWorkspace, shouldReloadAfterCrash, shouldScheduleHangReload } from './shell-core.ts';
 import type { RendererReloadBudgetState } from './shell-core.ts';
 import { createElectronEdges } from './electron-edges.ts';
+import { resolveDshPortBase } from './dsh-port-base.ts';
 import { describeFatalError } from './describe-error.ts';
 import { ConsoleRing, pushConsoleMessage, recordFatalReport } from './fatal-report.ts';
 import { RendererFrameWatchdog, RENDERER_FRAME_PROGRESS_SCRIPT, RENDERER_INPUT_BLOCK_RTT_MS } from './renderer-frame-watchdog.ts';
@@ -1372,6 +1373,10 @@ if (!gotTheLock) {
           ? 'dev 自动退避（17520 起，首个空闲端口）'
           : '打包默认';
       console.log(`[dsh-chamber] 控制面端口：${controlPlanePort}（${portSourceLabel}${controlPlanePort === 0 ? '；0 = 系统临时分配' : ''}）`);
+      // 本地 dsh 起始端口（缺省 17510，spawn 逐次 +1）。env 覆盖用于 dev/验收实例与
+      // 在跑安装并存（否则 17510..17514 的 connection_busy 让 dev 实例永远起不来）。
+      const dshPortBase = resolveDshPortBase();
+      console.log(`[dsh-chamber] 本地 dsh 端口基址：${dshPortBase === undefined ? '默认 17510' : `${dshPortBase}（DSH_CHAMBER_DSH_PORT_BASE 覆盖）`}`);
       // C4 安全模式（design 25 §6 / 计划 §12.5）：env 不落盘，只影响本次进程；
       // 一行声明生效面，并显式传给控制面（选项优先于 env，两个读点不分叉）。
       const safeModeActive = isSafeModeEnabled(process.env);
@@ -1380,6 +1385,8 @@ if (!gotTheLock) {
       }
       controlPlane = createControlPlane({
         port: controlPlanePort,
+        // 本地 dsh 的起始端口（缺省 17510）；env 覆盖只在显式设置时传入。
+        ...(dshPortBase === undefined ? {} : { dshPortBase }),
         stateDir: stateRootDir(app.getPath('userData')),
         // 宿主 PATH 无 pnpm 时供给随包 launcher（design 02 §3.1）；与 sidecar-entry 同参。
         pnpmEntry,

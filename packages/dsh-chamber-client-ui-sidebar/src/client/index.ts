@@ -39,6 +39,7 @@ import {
 } from './purged-session-store.ts'
 import { publishSessionCreationInstrument } from '@dsh-chamber/dsh-chamber-client-core/session-create-ledger'
 import { createCorrectionMarks } from '@dsh-chamber/dsh-chamber-client-core/session-correction-marks'
+import { detectStatusWriteFace } from './status-write-face.ts'
 import { onSessionRestored } from '@dsh-chamber/dsh-chamber-client-core/session-restore'
 import {
   SessionAuthorityReconciler,
@@ -316,26 +317,30 @@ export function apply(ctx: ClientContext): void {
     }
 
     /**
-     * tier-3 写回：把独立权威读的正面证伪写进官方 store 的公开写路径
-     * （`ClientSessions.handleSessionStatus`）——一次调用同时改侧栏摘要、物化 Session 的
-     * `running` 与子代理 activity，完成蓝点/通知边沿照常武装。纪律：只写 false、从不写 true，
-     * 且只写权威已证伪而 store 仍 claiming running 的 id（幂等、最小写面）；写后自校验
-     * （等一个宏任务再读，迟一拍重试一次）失败即记 stuck 证据、允许升级；`handleSessionStatus`
-     * 非 `ISessions` 契约方法，缺席时 WARN 一次并降级到升级阶梯；host 永远赢，无 TTL、无 latch。
+     * tier-3 写回：把独立权威读的正面证伪写进官方 store 的写面——一次调用同时改侧栏摘要、物化
+     * Session 的 `running` 与子代理 activity，完成蓝点/通知边沿照常武装。写面由
+     * `detectStatusWriteFace` 探测（I-10）：契约面（上游落地后）优先，缺失时用上游公开但非契约的
+     * `ClientSessions.handleSessionStatus` 并 WARN-once，两者都没有 ⇒ 只读阶梯（不写回）。纪律：
+     * 只写 false、从不写 true，且只写权威已证伪而 store 仍 claiming running 的 id（幂等、最小写面）；
+     * 写后自校验（等一个宏任务再读，迟一拍重试一次）失败即记 stuck 证据、允许升级；host 永远赢，
+     * 无 TTL、无 latch。
      */
     const correctAuthorityRunning = async (sessionIds: readonly string[]): Promise<boolean> => {
       const targets = writeBackTargets(new Set(sessionIds), readStoreRunning())
       if (targets.length === 0) return true
-      const service = ctx.sessions as unknown as {
-        handleSessionStatus?: (sessionId: string, running: boolean) => void
-      }
-      if (typeof service.handleSessionStatus !== 'function') {
-        if (!warnedMissingHandleSessionStatus) {
-          warnedMissingHandleSessionStatus = true
-          console.warn(`[chamber] official session client exposes no handleSessionStatus() (${chamberInstanceId}) — `
-            + 'authoritative running-bit write-back is unavailable; falling back to the reconnect/reload ladder')
+      const face = detectStatusWriteFace(ctx.sessions)
+      if (face.write === undefined) {
+        if (!warnedMissingStatusWriteFace) {
+          warnedMissingStatusWriteFace = true
+          console.warn(`[chamber] official session client exposes no authoritative status write face (${chamberInstanceId}) — `
+            + 'tier-3 running-bit write-back is unavailable; falling back to the reconnect/reload ladder')
         }
         return false
+      }
+      if (face.nonContract && !warnedNonContractStatusWriteFace) {
+        warnedNonContractStatusWriteFace = true
+        console.warn(`[chamber] authoritative write-back uses the upstream-public but non-contract ${face.member}() (${chamberInstanceId}) — `
+          + 'the vendor-session-fact-contract lockstep pins that member; a pin upgrade must keep it green or land the contract face')
       }
       // I3：provenance 必须在写之前落下——写回会触发本生产者的 store 订阅 → sync()，
       // 若等自校验通过再记，那一拍的报告已把修正的 true→false 当成宿主完成边沿发出去。
@@ -344,7 +349,7 @@ export function apply(ctx: ClientContext): void {
       let written = 0
       try {
         for (const id of targets) {
-          service.handleSessionStatus(id, false)
+          face.write(id, false)
           written += 1
         }
       } catch (error) {
@@ -511,8 +516,9 @@ export function apply(ctx: ClientContext): void {
     let runEpisodes: ReadonlyMap<string, number> = new Map()
     // 会话事实单一权威的执行端：策略在包内 reducer + ladder，本类只做 I/O；先声明后装配（二者互为闭包）。
     let sessionFacts: SessionAuthorityReconciler | undefined
-    /** 写回能力缺失只告警一次（永久性失败，不重试）。 */
-    let warnedMissingHandleSessionStatus = false
+    /** 写面缺失（只读阶梯）与非契约写面各只告警一次（永久性事实，不重试）。 */
+    let warnedMissingStatusWriteFace = false
+    let warnedNonContractStatusWriteFace = false
     /** I3 修正 provenance 的标记生命周期（写回前落下 / 失败撤回 / 报告边沿消费 / 租约到期弃标）
      *  在纯包 session-correction-marks.ts 里单测；租约 5s 远大于「写回 → store 订阅 → sync」
      *  的边沿延迟，超窗的 false 边沿只可能是宿主自己的完成。 */

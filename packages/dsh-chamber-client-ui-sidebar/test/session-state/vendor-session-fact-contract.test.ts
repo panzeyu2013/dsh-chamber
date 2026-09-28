@@ -27,6 +27,7 @@ import assert from 'node:assert/strict'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
+import { CONTRACT_STATUS_WRITE_METHODS } from '../../src/client/status-write-face.ts'
 
 /** pin 住的 vendor 链接树（ensure-harness-vendor 建链）。 */
 const VENDOR = fileURLToPath(new URL('../../../../vendor/harness-packages/@deepseek-ai/', import.meta.url))
@@ -115,6 +116,18 @@ vendorTest('上游：handleSessionStatus 是公开方法、且一次写 summarie
     '必须仍写物化 Session（聊天面 running）')
   assert.match(manager, /this\.updateParentAvailability\(\)/,
     '必须仍刷新子代理父可用性（rc.2 取代旧 updateCatalogActivity；语义变了 ⇒ 写回的副作用须重推）')
+})
+
+vendorTest('契约锁：ISessions 仍未长出 status 写面（长出即扩 CONTRACT_STATUS_WRITE_METHODS 并翻转探测）', () => {
+  const contractSource = readVendor('dsh-api-session-controller/src/client/contract/sessions.ts')
+  const body = stripComments(contractSource.slice(contractSource.indexOf('export interface ISessions {')))
+  assert.doesNotMatch(body, /\bhandleSessionStatus\b/,
+    'handleSessionStatus 进入 ISessions 契约 ⇒ 写面探测应走 contract 支：把真实成员名加进 CONTRACT_STATUS_WRITE_METHODS（src/client/status-write-face.ts）')
+  const statusMembers = [...body.matchAll(/\b(\w*[Ss]tatus\w*)\s*\(/g)].map(match => match[1])
+  for (const member of statusMembers) {
+    assert.ok(CONTRACT_STATUS_WRITE_METHODS.includes(member),
+      `ISessions 契约长出 status 写面成员 ${member}：按 I-10 扩 CONTRACT_STATUS_WRITE_METHODS 并让写回走契约支（不得把断言改绿）`)
+  }
 })
 
 vendorTest('上游：refreshList 对 remote 失败照常 resolve（回执必须自带权威判定）且把 running 下推', () => {

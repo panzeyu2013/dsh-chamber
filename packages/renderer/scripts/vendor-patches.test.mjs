@@ -21,10 +21,15 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { applyVendorPatches, checkVendorPatchSources, VENDOR_PATCHES } from './vendor-patches.mjs'
+import {
+  applyVendorPatches, checkRetiredPatches, checkVendorPatchSources, RETIRED_PATCHES,
+  VENDOR_PATCHES, vendorPatchRegistryProblems,
+} from './vendor-patches.mjs'
 import {
   VENDOR_PATCH_MARKERS,
   checkVendorPatchBundle,
@@ -54,6 +59,7 @@ const FILES = {
   assembly: VENDOR + 'dsh-client-ui-conversation/src/client/conversation/assembly.ts',
   reading: VENDOR + 'dsh-client-ui-chat/src/client/chat/use-chat-reading.ts',
   values: VENDOR + 'dsh-util-values/src/index.ts',
+  workspaceNavigation: VENDOR + 'dsh-client-ui-workspace/src/client/navigation.ts',
 }
 
 /** Module ids in both forms: the symlinked vendor path and the realpath'd submodule path. */
@@ -70,6 +76,7 @@ const IDS = {
   exportController: '/x/vendor/harness-checkout/packages/session-query/session-log-export/src/client/controller.ts',
   exportIndex: '/x/vendor/harness-checkout/packages/session-query/session-log-export/src/client/index.ts',
   assembly: '/x/vendor/harness-checkout/packages/client/ui-conversation/src/client/conversation/assembly.ts',
+  workspaceNavigation: '/x/vendor/harness-checkout/packages/client/ui-workspace/src/client/navigation.ts',
   readingReal: '/x/vendor/harness-checkout/packages/client/ui-chat/src/client/chat/use-chat-reading.ts',
   valuesVendor: '/x/node_modules/@deepseek-ai/dsh-util-values/src/index.ts',
   valuesReal: '/x/vendor/harness-checkout/packages/util/values/src/index.ts',
@@ -660,6 +667,26 @@ test('vite module ids with a query string or windows separators still match', ()
   )
 })
 
+test('the ui-workspace selection persist key is scoped to the entry base path (I-14)', () => {
+  const source = readFileSync(FILES.workspaceNavigation, 'utf8')
+  const patched = applyVendorPatches(IDS.workspaceNavigation, source)
+  assert.notEqual(patched, undefined, 'the ui-workspace navigation module must be patched')
+  assert.ok(patched.applied.includes('dsh-client-ui-workspace/src/client/navigation.ts'))
+  assert.ok(patched.code.includes('chamberSelectionScope(this.ctx)'), 'the store call must read the per-entry scope')
+  assert.ok(!patched.code.includes("{ persist: { name: 'dsh.sessions.current' } }"),
+    'the page-global persist key must be gone')
+  // The injected helper is plain JS: evaluate exactly the emitted function and
+  // prove the scope semantics, including the official-layout fallback.
+  const start = patched.code.indexOf('function chamberSelectionScope')
+  const end = patched.code.indexOf(NL + '}', start)
+  assert.ok(start !== -1 && end !== -1, 'the helper must be injected')
+  const scopeOf = new Function('return (' + patched.code.slice(start, end + 2) + ')')()
+  assert.equal(scopeOf({ get: () => '/api/i/remote-a' }), './api/i/remote-a')
+  assert.equal(scopeOf({ get: () => '/api/i/local' }), './api/i/local')
+  assert.equal(scopeOf({ get: () => undefined }), '', 'no chamberBasePath keeps upstream behaviour')
+  assert.equal(scopeOf({ get: () => 42 }), '', 'a non-string service value keeps upstream behaviour')
+})
+
 test('every registered vendor patch has exactly one artifact present marker', () => {
   for (const patch of VENDOR_PATCHES) {
     const markers = VENDOR_PATCH_MARKERS.filter((marker) => marker.vendorFile === patch.vendorFile)
@@ -715,4 +742,85 @@ test('the intrinsic-prototype patch accepts plain JSON under a multi-line Functi
   // V8's canonical single-line form keeps working, and non-plain objects stay out.
   assert.deepEqual(fixed({ a: [1, 2] }), { a: [1, 2] })
   assert.equal(fixed(new Date()), undefined)
+})
+
+/**
+ * A throwaway vendor root for the retirement verdicts. The real tree exercises
+ * the happy path above; these fixtures drive the two failure branches.
+ */
+function retireFixtureRoot() {
+  const dir = mkdtempSync(join(tmpdir(), 'vendor-retire-'))
+  return {
+    root: dir + '/',
+    write: (file, text) => writeFileSync(join(dir, file), text),
+  }
+}
+
+const FIXTURE_PATCH = {
+  idSuffixes: ['fixture.ts'],
+  vendorFile: 'fixture.ts',
+  reason: 'fixture reason',
+  edits: [{ expect: 'ORIGINAL;', replace: 'PATCHED;' }],
+  retireCheck: {
+    probes: [{ match: [/FIXED_MARK/], absent: ['ORIGINAL;'] }],
+    note: 'upstream carries the fix',
+  },
+}
+
+test('C9 verdicts separate a retired upstream fix from a construction drift (I-7)', () => {
+  const fixture = retireFixtureRoot()
+  fixture.write('fixture.ts', 'ORIGINAL;' + NL)
+  const ok = checkVendorPatchSources(fixture.root, [FIXTURE_PATCH])[0]
+  assert.equal(ok.verdict, 'ok')
+  assert.equal(ok.ok, true)
+
+  // Anchor gone + the fix shape present = retire candidate, still blocking.
+  fixture.write('fixture.ts', '// FIXED_MARK' + NL + 'CHANGED;' + NL)
+  const candidate = checkVendorPatchSources(fixture.root, [FIXTURE_PATCH])[0]
+  assert.equal(candidate.verdict, 'retire-candidate')
+  assert.equal(candidate.ok, false)
+  assert.match(candidate.detail, /retireCheck matched/)
+  assert.match(candidate.detail, /upstream carries the fix/)
+
+  // Anchor gone and no fix shape = plain drift, re-derive against the new pin.
+  fixture.write('fixture.ts', 'CHANGED;' + NL)
+  const drift = checkVendorPatchSources(fixture.root, [FIXTURE_PATCH])[0]
+  assert.equal(drift.verdict, 'drift')
+  assert.match(drift.detail, /re-derive the patch against the new pin/)
+
+  // An entry without a retireCheck keeps the drift-only behavior.
+  fixture.write('fixture.ts', 'CHANGED;' + NL)
+  const noCheck = { ...FIXTURE_PATCH, retireCheck: undefined }
+  assert.equal(checkVendorPatchSources(fixture.root, [noCheck])[0].verdict, 'drift')
+})
+
+test('retired patches are fenced by their ensure assertion', () => {
+  const fixture = retireFixtureRoot()
+  fixture.write('fixed.ts', 'const engineIndependent = true;' + NL)
+  const entry = { vendorFile: 'fixed.ts', reason: 'fixture fix', ensure: 'const engineIndependent = true;' }
+  assert.equal(checkRetiredPatches(fixture.root, [entry])[0].ok, true)
+  fixture.write('fixed.ts', 'const regressed = true;' + NL)
+  const missing = checkRetiredPatches(fixture.root, [entry])[0]
+  assert.equal(missing.ok, false)
+  assert.match(missing.detail, /ensure matched 0 times/)
+  fixture.write('fixed.ts', 'const engineIndependent = true;' + NL + 'const engineIndependent = true;' + NL)
+  assert.match(checkRetiredPatches(fixture.root, [entry])[0].detail, /matched 2 times/)
+})
+
+test('the live registry declares a retirement form per patch and no orphan artifact marker', () => {
+  assert.deepEqual(vendorPatchRegistryProblems(), [])
+  for (const patch of VENDOR_PATCHES) {
+    assert.ok(patch.retireCheck !== undefined || patch.noRetireForm !== undefined, patch.vendorFile)
+  }
+  // Nothing is retired at the current pin. Accepting a retire-candidate moves
+  // the entry here and deletes its patch + marker in the same change.
+  assert.deepEqual(RETIRED_PATCHES, [])
+  for (const marker of VENDOR_PATCH_MARKERS) {
+    if (marker.vendorFile === undefined) continue
+    assert.equal(
+      VENDOR_PATCHES.some((patch) => patch.vendorFile === marker.vendorFile),
+      true,
+      'orphan artifact marker (its patch was retired without deleting the marker): ' + marker.vendorFile,
+    )
+  }
 })
