@@ -62,8 +62,9 @@ The shell declares and renders the three holes the alpha.2 official
   carries an active
   `schedule` projection renders the official active-Schedule marker (16 px
   alarm glyph, `role="img"`, localized `schedule.active` accessible name)
-  between its title and the trailing cells, in the search-result rows too; the
-  fact is sparse, so every other row's geometry is untouched. State-dot
+  in the leading seat before its title; the search-result rows still render it
+  between the title and the trailing cells. The fact is sparse, so every other
+  row's geometry is untouched. State-dot
   priority and the current-session highlight (single-selection) are described
   under "Chamber third round (design 06)" below.
 - Workspace groups fold via the header chevron (session-count badge); fold

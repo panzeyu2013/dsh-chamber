@@ -502,7 +502,7 @@
     **武装/解除事实 = 官方 `completionUnread` 位 ∪ 修正臂**（§4.1/§4.2；通知边沿继续走运行位，未变）。
     判据按此钉住：蓝点必须存在、
     `StateDot state="done"` 不得回归、运行环仍是官方 ongoing。
-  - **活动定时任务标记**：行标题之后渲染官方
+  - **活动定时任务标记**：会话行在行首座席（标题之前）渲染官方；搜索结果行仍在标题之后（`ServerSectionSearch.tsx`）渲染官方
     `ActiveScheduleIndicator` 同形标记（16px 闹钟字形 + `role="img"`，可访问名与
     title 都是本地化 `schedule.active`，行本身仍是唯一动作），事实 = 该会话
     `projectionValues.schedule` 非空（`derive.ts hasActiveScheduleOf`，

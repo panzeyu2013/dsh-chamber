@@ -45,9 +45,9 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   （2026-09 用户裁决；沿革：≤0.2.4 品牌蓝点 → 0.3.0-beta.1 T10 官方绿点 →
   本轮回到蓝点，06 §4.3）；不渲染
   相对时间单元格（06 §4.3——`relativeTimeBucket` 仅保留为共享工具）。行所属
-  会话的 `schedule` 投影非空时，标题与尾随单元格之间渲染官方 active-Schedule
-  标记（16px 闹钟字形、`role="img"`、可访问名 `schedule.active`），搜索结果行
-  同样如此；该事实稀疏，其余行的几何一字不动。状态点优先级与当前会话高亮
+  会话的 `schedule` 投影非空时，在**行首座席（标题之前）**渲染官方 active-Schedule
+  标记（16px 闹钟字形、`role="img"`、可访问名 `schedule.active`）；搜索结果行仍在
+  标题与尾随单元格之间渲染。该事实稀疏，其余行的几何一字不动。状态点优先级与当前会话高亮
   （全局单选）见下方"第三轮（设计 06）"。
 - workspace 组可**折叠**（组头 chevron + 会话数徽标）；折叠状态持久化于
   localStorage 视图偏好（`dsh-chamber.sidebar.v1`）。

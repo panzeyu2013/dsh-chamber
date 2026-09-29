@@ -32,7 +32,7 @@ docs/progress/
 
 |文件|主题|状态|
 |---|---|---|
-|[upstream-proposals.md](todo/upstream-proposals.md)|十一条上游提案（选题：N-壳宿主 selection scope、设置面声明式贡献通道（T3）、归档会话 wire 草案、静默丢帧自愈、图标资源 id 实例私有化、子代理生命周期、载波 open episode 身份、桌面专属家族门、bundle rev 内容派生、座席声明可转移）|上游提案，未排期；chamber侧不等待|
+|[upstream-proposals.md](todo/upstream-proposals.md)|十一条上游提案（选题：N-壳宿主 selection scope、设置面声明式贡献通道（T3）、归档会话 wire 草案、静默丢帧自愈、图标资源 id 实例私有化、子代理生命周期、载波 open episode 身份、桌面专属家族门、bundle rev 内容派生、座席声明可转移、会话状态只读观察者与未读事实）|上游提案，未排期；chamber侧不等待|
 |[windows-v1.md](todo/windows-v1.md)|Windows v1剩余外部门禁（M0–M6）+ 基线登记口径（原windows-baseline.md）+ 取舍指针（权威在design 23 §5/STATUS）|待真实Windows runner/实机/产物|
 |[deferred-features.md](todo/deferred-features.md)|延后功能（未排期想法）：侧边栏 subagents 显示；open-in 超集分批 S1/S2/S3（S4 不做）与 S3/S4 降级留档形态|未排期（open-in 实机验收清单在STATUS）|
 |[macos-swift-v1.md](todo/macos-swift-v1.md)|macOS Swift原生壳：双端验收协议（W1–W7判定/性能A/B/中止点A1–A8）+ WBS W-01…W-32编号索引|代码面已落地；外部门禁状态在STATUS|
