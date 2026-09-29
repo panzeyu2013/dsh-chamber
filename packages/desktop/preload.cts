@@ -1032,7 +1032,16 @@ function markDocumentPlatform(): void {
   // A host without a document (text-level test harnesses) skips: a real renderer
   // always has the root, which is what upstream assumes too.
   if (typeof document === 'undefined' || document === null || document.documentElement === undefined) return;
-  const mark = () => { document.documentElement.dataset.platform = process.platform; };
+  // The darwin window carries the sidebar material (main.ts's darwin branch: vibrancy
+  // 'sidebar' + transparent background), so the page's "yield the fill to the material"
+  // rules must apply: they are gated on this marker, never on data-platform alone
+  // (renderer/styles.css, the self-built sidebar). Twin of the Swift shim's mark
+  // (bridge-shim.js `dataset.windowVibrancy = 'true'`), locked by upstream-seats S-55
+  // and the macOS CrossLanguageLockstepTests.
+  const mark = () => {
+    document.documentElement.dataset.platform = process.platform;
+    if (process.platform === 'darwin') document.documentElement.dataset.windowVibrancy = 'true';
+  };
   const root = document.documentElement;
   if (root === null) window.addEventListener('DOMContentLoaded', mark);
   else mark();

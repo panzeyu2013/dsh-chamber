@@ -111,6 +111,18 @@ test('S-54: the macOS window chrome mirrors the upstream darwin branch', () => {
   assert.match(main, /: \{ backgroundColor: '#0f1115' \}/)
 })
 
+test('S-55: the darwin mark publishes the vibrancy marker the page rules gate on', () => {
+  // The page's "yield the fill to the window material" rules (renderer/styles.css
+  // .app/.instance-view, the sidebar's .root/.brand/.newSession) are gated on
+  // html[data-platform=darwin][data-window-vibrancy], never on data-platform alone;
+  // macos CrossLanguageLockstepTests locks the Swift shim half. The Electron window
+  // now carries the same material, so its preload mark must publish the marker too —
+  // without it the vibrancy stays hidden behind the page's opaque fills.
+  assert.match(preload, /dataset\.windowVibrancy = 'true'/)
+  assert.match(preload, /if \(process\.platform === 'darwin'\) document\.documentElement\.dataset\.windowVibrancy = 'true'/)
+  assert.match(preload, /dataset\.platform = process\.platform/, 'the platform mark stays (upstream preload-platform.ts)')
+})
+
 test('S-52: the carrier is installed before info hydration', () => {
   assert.ok(
     preload.indexOf('exposeDesktopCarrier();') < preload.indexOf('requestAppInfo().then('),
