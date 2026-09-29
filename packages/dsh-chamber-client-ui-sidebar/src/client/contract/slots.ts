@@ -14,6 +14,9 @@ import type {
 } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pulls ui-layout's SlotMap merge so PropsRuntime<'sidebar'> resolves.
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+// Type-only: pulls ui-workspace's SlotMap merge for the two session-row seats this
+// shell now declares (patch 13) — the keys must exist in SlotMap to be declared.
+import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { WorkspaceId } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { Translate } from '@deepseek-ai/dsh-client-locale/client'
@@ -164,5 +167,7 @@ export type SidebarRootComponentProps =
     | 'sidebar.workspace.git'
     | 'sidebar.settings'
     | 'sidebar.footer.action'
+    | 'sidebar.session.row.leading'
+    | 'sidebar.session.row.hover'
   >
   & InjectFace<SidebarRootInjected> & PropsLocale<'sidebar'>

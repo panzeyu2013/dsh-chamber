@@ -437,7 +437,9 @@
    chamber row pitch (26px row / 3px padding / gap 6). The 20px box height
    matches the row's action cluster, so a scheduled row keeps the same 26px
    height and no other row's pitch moves (the marker is absent, i.e. zero
-   footprint, for every session without an active schedule). */
+   footprint, for every session without an active schedule). POSITION: the marker
+   sits BEFORE the title, at the upstream `.slot` address (the official seat is
+   rendered there too, patch 13); the row's state dot stays in the trailing slot. */
 .scheduleIndicator {
   display: inline-flex;
   flex: none;

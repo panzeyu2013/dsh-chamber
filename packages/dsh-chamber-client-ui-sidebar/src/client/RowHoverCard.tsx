@@ -23,6 +23,19 @@ const EDGE_MARGIN = 8
 /** Card offset from the anchor's right edge (official HoverCard value). */
 const ANCHOR_GAP = 8
 
+/**
+ * Upstream overlayTopMargin (ui-primitives/overlay-top-margin.ts; module-private,
+ * so mirrored here): keep an overlay clear of the frame's top strip unless the
+ * window is fullscreen. `--dsh-frame-top-clearance` is the strip's height; a
+ * missing custom property falls back to the plain viewport margin.
+ */
+function overlayTopMargin(min: number): number {
+  const root = document.documentElement
+  const clearance = Number.parseFloat(getComputedStyle(root).getPropertyValue('--dsh-frame-top-clearance'))
+  if (Number.isNaN(clearance)) return min
+  return Math.max(min, (root.hasAttribute('data-fullscreen') ? 0 : clearance) + 20)
+}
+
 /** Props: the vendored atom's used subset, so the call sites stay unchanged. */
 export interface RowHoverCardProps {
   anchor: ReactNode
@@ -135,8 +148,12 @@ export function RowHoverCard({
         return
       }
       const left = Math.max(EDGE_MARGIN, Math.min(r.right + ANCHOR_GAP, window.innerWidth - card.offsetWidth - EDGE_MARGIN))
-      // 底边夹紧同上游且不低于视口顶边：部分可见的锚点可能比卡片矮，卡片要留在 y=0 可读而不是整个挂到屏外。
-      const top = Math.max(0, Math.min(r.top, window.innerHeight - card.offsetHeight - EDGE_MARGIN))
+      // 顶边夹紧同上游的 overlayTopMargin：非全屏时卡片不压住框架顶部条，全屏时退化为普通
+      // 视口边距；部分可见的锚点可能比卡片矮，卡片要留在可读位置而不是整个挂到屏外。
+      const top = Math.max(
+        overlayTopMargin(EDGE_MARGIN),
+        Math.min(r.top, window.innerHeight - card.offsetHeight - EDGE_MARGIN),
+      )
       setPos(prev => (prev !== null && prev.left === left && prev.top === top ? prev : { left, top }))
     }
     place()

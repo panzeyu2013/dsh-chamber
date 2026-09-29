@@ -98,6 +98,15 @@ export interface SidebarSectionContextValue {
     owner: { wide: boolean },
     opts: { hookContext: { sourceId: string; workspaceId: string; repoKey?: string } },
   ) => ReactNode
+  /** chamber patch 13: the two session-row seats this shell declares (the leading
+   *  status seat and the hover-card seat) rendered with the official occurrence
+   *  share. `opts.fallback` renders when no occupant elects, so the shell's own
+   *  Schedule mark is the fallback and can never double with an occupant. */
+  renderSessionSeat: (
+    key: 'sidebar.session.row.leading' | 'sidebar.session.row.hover',
+    owner: { sessionId: string },
+    opts?: { fallback?: ReactNode },
+  ) => ReactNode
 
   viewPrefs: ChamberSidebarViewPrefs
   toggleWorkspaceFold: (serverId: string, workspaceId: string) => void

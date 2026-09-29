@@ -66,6 +66,12 @@ export function SidebarRoot({
     owner: { wide: boolean },
     opts: { hookContext: { sourceId: string; workspaceId: string; repoKey?: string } },
   ) => ReactNode
+  // 同一次 cast 的第二个面：会话行两座席（补丁 13 转由本壳声明）。
+  const renderSessionSeat = renderSlot as (
+    key: 'sidebar.session.row.leading' | 'sidebar.session.row.hover',
+    owner: { sessionId: string },
+    opts?: { fallback?: ReactNode },
+  ) => ReactNode
 
   // 跨切面状态由各主题 hook 持有；每个 hook 无条件按固定顺序调用，effect 顺序稳定。
   const { wide, column, lastWideWidth, pointerInside, setPointerInside, cancelLinger, armLinger } =
@@ -121,6 +127,7 @@ export function SidebarRoot({
     chamberInstanceId,
     useShortcuts,
     renderWorkspaceGit,
+    renderSessionSeat,
     viewPrefs,
     toggleWorkspaceFold,
     toggleSourceFold,
@@ -160,7 +167,7 @@ export function SidebarRoot({
     onForkSession,
     onDeleteWorkspace,
   }), [
-    wide, t, chamberInstanceId, useShortcuts, renderWorkspaceGit, viewPrefs, toggleWorkspaceFold,
+    wide, t, chamberInstanceId, useShortcuts, renderWorkspaceGit, renderSessionSeat, viewPrefs, toggleWorkspaceFold,
     toggleSourceFold, setOrderBy, sessionOrderOverride, workspaceOrderOverride,
     sessionDrag, setSessionDrag, workspaceDrag, setWorkspaceDrag, serverDrag, setServerDrag,
     commitSessionDrag, commitWorkspaceDrag, commitServerDrag, suppressClickRef,

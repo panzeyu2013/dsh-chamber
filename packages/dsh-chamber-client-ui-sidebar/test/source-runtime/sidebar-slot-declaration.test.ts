@@ -1,12 +1,15 @@
 /**
  * I-4 lock: `sidebar.workspaces` stays DECLARED but never rendered.
  *
- * WHY: the official ui-workspace registers into that hole; revoking the declaration
- * would make its registration throw. chamber renders its own multi-source browsing
- * region instead, so the hole must never be CALLED — a call would mount the official
- * workspace UI over the chamber list. This lock makes an accidental render call or a
- * silent removal of the declaration fail loudly, and records the accepted deviation
- * (design 24 §1 / design 05 §2.2.1) so the decision is not re-litigated.
+ * WHY: the official ui-workspace registers into that hole through `slots.inject`;
+ * revoking the declaration would not throw — an undeclared hole simply never runs the
+ * inject callback (the `register` inside it is what throws on an undeclared child) —
+ * but it would drop the official registrant and any third-party injection silently.
+ * chamber renders its own multi-source browsing region instead, so the hole must never
+ * be CALLED — a call would mount the official workspace UI over the chamber list. This
+ * lock makes an accidental render call or a silent removal of the declaration fail
+ * loudly, and records the accepted deviation (design 24 §1 / design 05 §2.2.1) so the
+ * decision is not re-litigated.
  */
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
@@ -29,10 +32,10 @@ const shell = readdirSync(clientDir, { recursive: true, encoding: 'utf8' })
   .join('\n')
 
 test('sidebar.workspaces is declared for registrant compatibility but never rendered', () => {
-  assert.match(slots, /'sidebar\.workspaces': \{/, 'the declaration must stay: ui-workspace registration would throw without it')
+  assert.match(slots, /'sidebar\.workspaces': \{/, 'the declaration must stay: revoking it silently drops the official registrant')
   assert.match(slots, /owner: \{ wide: boolean; expandSidebar: \(\) => void \}/, 'the owner type stays wire-compatible with the official declaration')
   assert.match(runtime, /'sidebar\.workspaces': \{ kind: 'single', scope: 'root' \}/,
-    'the RUNTIME children table must keep the hole too (registration throws on an undeclared child)')
+    'the RUNTIME children table must keep the hole too (the registrant inside resolves against it)')
   assert.doesNotMatch(shell, /'sidebar\.workspaces'/, 'the chamber shell must never call the hole (its own multi-source list owns the region)')
   const calls = [...shell.matchAll(/renderSlot\(\s*'([^']+)'/g)].map(match => match[1])
   assert.ok(calls.length > 0, 'the rendered-slot list must be extractable, otherwise this lock is vacuous')

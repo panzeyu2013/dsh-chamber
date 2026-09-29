@@ -83,6 +83,8 @@ const SessionRow = memo(function SessionRow({
     toggleMenu,
     closeMenu,
     useShortcuts,
+    renderSessionSeat,
+    chamberInstanceId,
   } = useSidebarSection()
   // 菜单键帽来自页面快捷键目录（上游 RenameSessionMenuItem / ForkSessionMenuItem /
   // ArchiveSessionMenuItem 同款选择）：命令未注册时行缺席，键帽与 aria 一并消失。
@@ -223,11 +225,28 @@ const SessionRow = memo(function SessionRow({
       onPointerEnter={marquee.enter}
       onPointerLeave={marquee.leave}
     >
+      {/* 座席转移（补丁 13）：座席只在**本实例**（当前页面 ctx 的拥有者）的行上求值——
+          occupant（官方 ui-schedule 的 schedule-mark / 卡片任务列表）读的是本实例 Host 的
+          catalog，把外来源 sessionId 交给它只会查空并压掉回落；外来源行因此直接走自有标记
+          （与 A1 前一致）。位置与上游 Rows.tsx 的 `.slot` 同址——**标题之前**（状态位与它互斥的
+          上游语义里两者共用一个 slot；本仓的状态槽在行尾，故这里只放座席）。自有标记只在活动
+          Schedule 投影存在时作为 occupant 缺席的回落，两者永不并现。
+          上游同址守卫照搬（Rows.tsx: `!row.archived && !row.blank`）：本仓行数据不带 archived
+          （归档会话在管理器面呈现、不进入行列表），故只落 blank 半边；空白（新建）占位行整席
+          不求值，与上游「归档/空白行槽留空」同语义。 */}
+      {session.blank !== true
+        && (server.id === chamberInstanceId
+          ? renderSessionSeat(
+            'sidebar.session.row.leading',
+            { sessionId: session.id },
+            session.hasActiveSchedule === true
+              ? { fallback: <SessionScheduleIndicator label={t('schedule.active')} /> }
+              : undefined,
+          )
+          : session.hasActiveSchedule === true
+            ? <SessionScheduleIndicator label={t('schedule.active')} />
+            : null)}
       <span ref={titleRef} className={cc.sessionTitle}>{session.blank === true ? t('session.new') : sessionTitleText}</span>
-      {/* 活动 Schedule 标记位于标题与尾部单元之间；只对有该投影的行渲染，普通行几何/间距不变。 */}
-      {session.hasActiveSchedule === true && (
-        <SessionScheduleIndicator label={t('schedule.active')} />
-      )}
       {/* 空白（新建）行是临时占位：kebab（含 fork/归档）作用于不存在的内容，整簇隐藏。 */}
       {session.blank !== true && (
       <span
@@ -325,6 +344,9 @@ const SessionRow = memo(function SessionRow({
                   <span>{sessionStateLabel(server, session)}</span>
                 </div>
               )}
+              {/* 座席转移（补丁 13）：hover 座席（官方 ui-schedule 的任务行）落在卡片内；
+                  同上只对本实例的行求值（外来源行没有本实例 occupant 的事实面）。 */}
+              {server.id === chamberInstanceId && renderSessionSeat('sidebar.session.row.hover', { sessionId: session.id })}
             </div>
           )}
           openDelayMs={800}

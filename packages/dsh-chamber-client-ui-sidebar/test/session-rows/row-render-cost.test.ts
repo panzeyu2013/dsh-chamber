@@ -66,13 +66,13 @@ test('the row menu items are memoized on the dictionary', () => {
   assert.match(ROWS, /items=\{menuItems\}/)
 })
 
-test('the section memoizes its 43-field context value, covering every field', () => {
+test('the section memoizes its 44-field context value, covering every field', () => {
   assert.match(ROOT, /const ctxValue: SidebarSectionContextValue = useMemo\(\(\) => \(\{/)
   const block = /const ctxValue: SidebarSectionContextValue = useMemo\(\(\) => \(\{([\s\S]*?)\}\), \[([\s\S]*?)\]\)/.exec(ROOT)
   assert.ok(block !== null, 'the memoized ctxValue block must exist')
   const keys = [...block[1].matchAll(/^\s{4}([A-Za-z_$][\w$]*),$/gm)].map(match => match[1])
   const deps = block[2].split(',').map(part => part.trim()).filter(part => part !== '')
-  assert.equal(keys.length, 43, 'the context carries 43 fields')
+  assert.equal(keys.length, 44, 'the context carries 44 fields')
   assert.deepEqual([...keys].sort(), [...deps].sort(),
     'every context field must be a memo dependency: a missing one serves a stale value through the provider')
 })

@@ -42,6 +42,8 @@ export const GROUPS = {
     'test/session-rows/session-row-state.test.ts',
     // A4 渲染成本：memo 行 / 一次性派生 / ctxValue 依赖覆盖（源码文本锁；本包无 DOM）。
     'test/session-rows/row-render-cost.test.ts',
+    // A1 seat-position lock (patch 13): the transferred leading seat renders before the title.
+    'test/session-rows/seat-position.test.ts',
     // (facts 身份, running, stale) → 单槽记忆化的纯行为测（9-12 次读数 → 1 次派生）。
     'test/session-rows/row-state-cache.test.ts',
     // goal 三值事实：解析/最后已知/activation 合并/身份签名（design 19 §3.2.1）。
