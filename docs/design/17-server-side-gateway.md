@@ -366,7 +366,7 @@ trusted proxy 缺失、重复、含逗号或非法的 XFF 时，client identity 
   change 路由同纪律）；凭据和内部错误不进入日志或响应。
 - 代理到 dsh 前端的响应头取自 `packages/gateway/src/dispatch.ts` 的
   `GATEWAY_PROXY_CSP`（gateway-only 放宽）：`script-src` 放开 inline（被代理的文档是
-  上游自己的内联 `__DSH_BOOT__`/loader 脚本不带 nonce，本进程只插入 S0 头补丁（信任声明与 WebKit 原生源码归一）、不为不属于
+  上游自己的内联 `__DSH_BOOT__`/loader 脚本不带 nonce，本进程只插入 S0 头补丁（仅信任声明；原 WebKit 原生源码归一已随最低 runtime 抬升删除，见 §10.5）、不为不属于
   自己的脚本回填 nonce）；`base-uri` 取 `'self'` 而非 `'none'`——上游
   `@deepseek-ai/dsh-host-frontend-static` 每个 renderIndex 文档都注入 `<base href="/">`，
   `'none'` 会让浏览器拒绝该元素。该放宽按「元素必须生效」记账：固定 pin 下 `serveStatic`
@@ -492,7 +492,7 @@ Gateway proxy 与 per-instance proxy 共用 `proxy-forward.ts`，协议行为相
   ① HTML 文档导航（GET/HEAD + `Accept` 含 `text/html`，路径不在 `/api`、`/plugins`、`/auth/…`、
   `/chamber/<subpath>`，且不是内容寻址的 `/assets/<name>-<hash>.<ext>`）——S0 头补丁注入的前提：
   `htmlInjectable` 要求上游 `text/html` 未被编码，`html-inject.ts` 依赖它写入
-  `__DSH_TRANSPORT__` 与原生源码归一脚本；② `Accept` 含 `text/event-stream` 的 SSE 请求——**不是文档导航，而是传输层
+  `__DSH_TRANSPORT__`；② `Accept` 含 `text/event-stream` 的 SSE 请求——**不是文档导航，而是传输层
   保险**（远端/旧版实例未必带 pinned gzip filter，长流被压缩即被缓冲）。其余请求把压缩协商交给
   上游 gzip 中间件（dsh-host-webserver `createGzipMiddleware` 自身拒绝 `text/event-stream` 与
   `content-range`），回程 `content-encoding`/`vary` 已在响应白名单内——该取舍修订 2026 audit M3b
