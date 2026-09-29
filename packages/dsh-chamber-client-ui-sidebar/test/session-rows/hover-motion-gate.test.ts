@@ -90,6 +90,13 @@ test('every row-level hover reveal carries the gate clause', () => {
   ]
   for (const selector of required) assert.ok(CSS.includes(selector), `缺少门控条款：${selector}`)
 
+  // 级联对拍：`:not([data-hover-gate])` 计一个额外伪类（揭示升到 (0,5,0)），重命名抑制的 hover
+  // 半边必须带同一条款，否则被反超——改名中的字形仍会交换（合并后审计发现的真回归）。
+  for (const selector of [
+    '.workspaceRenaming:hover:not([data-hover-gate]) .foldToggleFolder .foldChevron,',
+    '.workspaceRenaming:hover:not([data-hover-gate]) .foldToggleFolder .foldFolder,',
+  ]) assert.ok(CSS.includes(selector), `重命名抑制缺少与揭示同级的门控条款：${selector}`)
+
   // 漂移锁：行级 :hover 选择器不得漏带条款（注释散文不算）。
   const stripped = CSS.replace(/\/\*[\s\S]*?\*\//gu, '')
   const offenders: string[] = []

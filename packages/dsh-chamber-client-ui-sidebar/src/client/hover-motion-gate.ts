@@ -36,13 +36,12 @@ export function needsHoverGate(moved: boolean, hoveredBefore: boolean): boolean 
 export interface HoverMotionGate {
   /** 每次提交后的 layout effect 调用；root 为该节段（section）根。 */
   scan(root: Element | null): void
-  /** enter 处理器用：事件目标是否落在门控行内（跑马灯/悬停卡因此不 arm）。 */
-  blocked(target: EventTarget | null): boolean
   /** 卸载：摘监听并清掉遗留门控属性。 */
   dispose(): void
 }
 
-/** 每个侧栏壳一台机器（与 sidebar-root-ghost.ts 的"每壳本地状态"同款）。 */
+/** 每个来源 section 一台机器（hook 挂在 ServerSection 上，各自只扫自己的子树）：N 个来源 =
+ * N 台机器、2N 个 document 监听，每次提交各做一次子树 `getAnimations` 扫描。 */
 export function createHoverMotionGate(): HoverMotionGate {
   const gated = new Set<HTMLElement>()
   let lastX = Number.NaN
@@ -53,7 +52,9 @@ export function createHoverMotionGate(): HoverMotionGate {
     for (const row of gated) {
       row.removeAttribute(HOVER_GATE_ATTR)
       // 指针此刻就在这行上、只是从未移动过：补一次 over，让 React 的 onPointerEnter
-      // 重新求值——否则该行要到指针离开再进入才会 arm 卡片与跑马灯。
+      // 重新求值——否则该行要到指针离开再进入才会 arm 卡片与跑马灯。这次合成 over 会冒泡到
+      // 侧栏壳列的 onPointerEnter（SidebarRoot 的 cancelLinger/setPointerInside）：指针确实
+      // 还在侧栏内，语义一致，只是本机制唯一的跨组件副作用，记此备查。
       if (row.matches(':hover')) {
         row.dispatchEvent(new PointerEvent('pointerover', {
           bubbles: true, composed: true, relatedTarget: null,
@@ -88,9 +89,6 @@ export function createHoverMotionGate(): HoverMotionGate {
         target.setAttribute(HOVER_GATE_ATTR, '')
         gated.add(target)
       }
-    },
-    blocked(target) {
-      return target instanceof Element && target.closest(HOVER_GATE_SELECTOR) !== null
     },
     dispose() {
       release()

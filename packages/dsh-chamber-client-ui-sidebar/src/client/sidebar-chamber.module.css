@@ -1466,9 +1466,13 @@
 
 /* While editing in place, the fold-glyph hover/focus swap is suppressed —
    the row is in edit mode, so the chevron affordance must not displace the
-   folder glyph under the pointer or the focused input. Same specificity as
-   the `.workspaceHeader:hover` / `:has(.rowActionsVisible)` rules above,
-   declared later so they win. (A focused text input matches :focus-visible even
+   folder glyph under the pointer or the focused input. The hover half carries
+   the SAME gate clause as the `.workspaceHeader:hover:not([data-hover-gate])`
+   reveals above: `:not()` counts an extra pseudo-class, so without the clause
+   the reveal (0,5,0) outranks this suppression (0,4,0) and the glyph swaps
+   mid-edit anyway; the :focus-visible half stays ungated because it competes
+   with the ungated :has(.rowActionsVisible) half, declared later. (A focused
+   text input matches :focus-visible even
    after a pointer click, so :has(:focus-visible) covers both the keyboard
    and the mouse-armed rename.) Only the FOLDER variant is needed: in the
    flags-resolved steady state rename can never arm on a derived (worktree)
@@ -1478,12 +1482,12 @@
    pre-existing arming-window caveat; a mid-edit flag flip would only mean
    the glyph hover swap is not suppressed for the rest of that edit
    (cosmetic). */
-.workspaceRenaming:hover .foldToggleFolder .foldChevron,
+.workspaceRenaming:hover:not([data-hover-gate]) .foldToggleFolder .foldChevron,
 .workspaceRenaming:has(:focus-visible) .foldToggleFolder .foldChevron {
   display: none;
 }
 
-.workspaceRenaming:hover .foldToggleFolder .foldFolder,
+.workspaceRenaming:hover:not([data-hover-gate]) .foldToggleFolder .foldFolder,
 .workspaceRenaming:has(:focus-visible) .foldToggleFolder .foldFolder {
   display: inline-flex;
 }
