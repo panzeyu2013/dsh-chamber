@@ -120,6 +120,14 @@ const VENDOR_ROOT = fileURLToPath(new URL('../../../vendor/harness-packages/@dee
  */
 
 /**
+ * The retire form shared by the entry-scoped base-API entries: upstream has to expose
+ * an entry-private base (an accepted parameter or a ctx service) before any text shape
+ * exists to assert, so retirement is C9 drift + a maintainer ruling. One constant keeps
+ * the copies from drifting apart.
+ */
+const NO_RETIRE_FORM_ENTRY_BASE_API = 'no stable upstream text shape: the retire form is a new entry-scoped base API for this route (an accepted base parameter or an entry-private ctx service), which cannot be asserted as text today. C9 drift failure + maintainer ruling, not an automated retire check.'
+
+/**
  * Every registered vendor patch. Keep this list small: each entry is a
  * permanent upgrade liability, and C9 fails the pin bump when an anchor drifts.
  * @type {readonly VendorPatch[]}
@@ -130,7 +138,7 @@ export const VENDOR_PATCHES = Object.freeze([
       'dsh-client-ui-chat/src/client/chat/AssistantMarkdown.tsx',
       'packages/client/ui-chat/src/client/chat/AssistantMarkdown.tsx',
     ]),
-    noRetireForm: 'no stable upstream text shape: the retire form is a new entry-scoped base API for this route (an accepted base parameter or an entry-private ctx service), which cannot be asserted as text today. C9 drift failure + maintainer ruling, not an automated retire check.',
+    noRetireForm: NO_RETIRE_FORM_ENTRY_BASE_API,
     vendorFile: 'dsh-client-ui-chat/src/client/chat/AssistantMarkdown.tsx',
     reason: 'document-relative file-API URL (upstream resolves it against `document.baseURI`) resolves to the control-plane root in the N-ctx shell: one page cannot carry a per-entry base URI',
     edits: Object.freeze([
@@ -157,7 +165,7 @@ export const VENDOR_PATCHES = Object.freeze([
         replace: '  const pathImages = useMemo<MarkdownPathImages>(() => {\n'
           + '    // chamber patch: the page base is the control plane in the N-ctx shell, so\n'
           + '    // the file API must resolve from this entry\'s own base path.\n'
-          + '    const base = chamberFileApiBase === undefined\n'
+          + '    const base = chamberFileApiBase === undefined || chamberFileApiBase === \'\'\n'
           + '      ? document.baseURI\n'
           + '      : new URL(`${chamberFileApiBase}/`, document.baseURI).href\n'
           + '    return { resolve: value => localPathMediaUrl(base, value) }\n'
@@ -170,7 +178,7 @@ export const VENDOR_PATCHES = Object.freeze([
       'dsh-client-file-upload/src/client/runtime.ts',
       'packages/client/file-upload/src/client/runtime.ts',
     ]),
-    noRetireForm: 'no stable upstream text shape: the retire form is a new entry-scoped base API for this route (an accepted base parameter or an entry-private ctx service), which cannot be asserted as text today. C9 drift failure + maintainer ruling, not an automated retire check.',
+    noRetireForm: NO_RETIRE_FORM_ENTRY_BASE_API,
     vendorFile: 'dsh-client-file-upload/src/client/runtime.ts',
     reason: 'document-relative upload URL (upstream resolves it against `document.baseURI`) resolves to the control-plane root in the N-ctx shell (composer attachments 404)',
     edits: Object.freeze([
@@ -208,7 +216,7 @@ export const VENDOR_PATCHES = Object.freeze([
       'dsh-session-log-export/src/client/controller.ts',
       'packages/session-query/session-log-export/src/client/controller.ts',
     ]),
-    noRetireForm: 'no stable upstream text shape: the retire form is a new entry-scoped base API for this route (an accepted base parameter or an entry-private ctx service), which cannot be asserted as text today. C9 drift failure + maintainer ruling, not an automated retire check.',
+    noRetireForm: NO_RETIRE_FORM_ENTRY_BASE_API,
     vendorFile: 'dsh-session-log-export/src/client/controller.ts',
     reason: 'document-relative export URL resolves to the control-plane root in the N-ctx shell (the /export dialog and header action 404)',
     edits: Object.freeze([
@@ -243,7 +251,7 @@ export const VENDOR_PATCHES = Object.freeze([
         replace: '  const controller = new SessionLogDownloadController()\n'
           + '  // chamber patch: the export URL must carry this entry\'s API base prefix.\n'
           + '  const chamberBasePath = ctx.get(\'chamberBasePath\') as string | undefined\n'
-          + '  controller.chamberFileApiBase = chamberBasePath === undefined ? \'\' : `${chamberBasePath}/`',
+          + '  controller.chamberFileApiBase = chamberBasePath === undefined || chamberBasePath === \'\' ? \'\' : `${chamberBasePath}/`',
       }),
     ]),
   }),
@@ -252,7 +260,7 @@ export const VENDOR_PATCHES = Object.freeze([
       'dsh-client-ui-deliverables/src/client/present-open.ts',
       'packages/client/ui-deliverables/src/client/present-open.ts',
     ]),
-    noRetireForm: 'no stable upstream text shape: the retire form is a new entry-scoped base API for this route (an accepted base parameter or an entry-private ctx service), which cannot be asserted as text today. C9 drift failure + maintainer ruling, not an automated retire check.',
+    noRetireForm: NO_RETIRE_FORM_ENTRY_BASE_API,
     vendorFile: 'dsh-client-ui-deliverables/src/client/present-open.ts',
     reason: 'document-relative present URLs resolve to the control-plane root in the N-ctx shell (delivery-card open/reveal 404)',
     edits: Object.freeze([
@@ -287,11 +295,23 @@ export const VENDOR_PATCHES = Object.freeze([
     ]),
     noRetireForm: 'retires with the present-open entry above; no independent upstream text shape to assert.',
     vendorFile: 'dsh-client-ui-deliverables/src/client/index.ts',
-    reason: 'hands the per-entry API base path to the present controller (the plugin apply owns the only ctx)',
+    reason: 'hands the per-entry API base path to the present controller and both read stores (the plugin apply owns the only ctx)',
     edits: Object.freeze([
       Object.freeze({
         expect: '  const opener = new PresentedOpenController()',
         replace: '  const opener = new PresentedOpenController((ctx.get(\'chamberBasePath\') as string | undefined) ?? \'\')',
+      }),
+      Object.freeze({
+        expect: '  const summaries = new ChangesSummaryStore()\n'
+        + '  const diffs = new ChangesDiffStore()',
+        replace: '  const summaries = new ChangesSummaryStore()\n'
+        + '  const diffs = new ChangesDiffStore()\n'
+        + '  // chamber patch: the summary and diff reads must carry this entry\'s API base prefix\n'
+        + '  // (undefined/empty-safe; the store keeps the un-prefixed URL as its state key).\n'
+        + '  const chamberBasePath = ctx.get(\'chamberBasePath\') as string | undefined\n'
+        + '  const chamberFileApiBase = chamberBasePath === undefined || chamberBasePath === \'\' ? \'\' : `${chamberBasePath}/`\n'
+        + '  summaries.chamberFileApiBase = chamberFileApiBase\n'
+        + '  diffs.chamberFileApiBase = chamberFileApiBase',
       }),
     ]),
   }),
@@ -478,6 +498,138 @@ export const VENDOR_PATCHES = Object.freeze([
       }),
     ]),
   }),
+  Object.freeze({
+    idSuffixes: Object.freeze([
+      'dsh-client-ui-deliverables/src/client/Deliverables.tsx',
+      'packages/client/ui-deliverables/src/client/Deliverables.tsx',
+    ]),
+    noRetireForm: NO_RETIRE_FORM_ENTRY_BASE_API,
+    vendorFile: 'dsh-client-ui-deliverables/src/client/Deliverables.tsx',
+    reason: 'the delivery-card file-action owner route (api/present.open) is document-relative, so the official open-in consumer fetches the control-plane page origin in the N-ctx shell: the delivery-card folder menu cannot list applications',
+    edits: Object.freeze([
+      Object.freeze({
+        expect: '& Pick<GlobalStandardProps, \'useSessions\'> & InjectFace<DeliverablesInjected>',
+        replace: '& Pick<GlobalStandardProps, \'useSessions\'> & {\n'
+        + '  /**\n'
+        + '   * chamber patch: this entry\'s API base path (`/api/i/<id>`, no trailing\n'
+        + '   * slash), absent when the chamber fact is absent. An owner action route must\n'
+        + '   * carry it: the official open-in consumer fetches this URL directly, and in\n'
+        + '   * the N-ctx shell the page origin is the control plane.\n'
+        + '   */\n'
+        + '  chamberFileApiBase?: string | undefined\n'
+        + '} & InjectFace<DeliverablesInjected>',
+      }),
+      Object.freeze({
+        expect: '  useChangesDiff, loadChangesDiff, useChangesSummary, reloadPresentedHost, loadChangesSummary, useShowCodeDiff, renderSlot,\n'
+        + '}: Pick<TurnTailOwnerProps, \'openFile\'> & {',
+        replace: '  useChangesDiff, loadChangesDiff, useChangesSummary, reloadPresentedHost, loadChangesSummary, useShowCodeDiff, renderSlot,\n'
+        + '  chamberFileApiBase,\n'
+        + '}: Pick<TurnTailOwnerProps, \'openFile\'> & {',
+      }),
+      Object.freeze({
+        expect: '            actionUrl: presentedFileUrl(sessionId, file.seq, file.index),',
+        replace: '            actionUrl: (chamberFileApiBase === undefined || chamberFileApiBase === \'\' ? \'\' : `${chamberFileApiBase}/`) + presentedFileUrl(sessionId, file.seq, file.index),',
+      }),
+    ]),
+  }),
+  Object.freeze({
+    idSuffixes: Object.freeze([
+      'dsh-client-ui-deliverables/src/client/ReviewTab.tsx',
+      'packages/client/ui-deliverables/src/client/ReviewTab.tsx',
+    ]),
+    noRetireForm: NO_RETIRE_FORM_ENTRY_BASE_API,
+    vendorFile: 'dsh-client-ui-deliverables/src/client/ReviewTab.tsx',
+    reason: 'the review file-action owner route (api/changes.open) is document-relative, so the official open-in consumer fetches the control-plane page origin in the N-ctx shell: the review tab folder menu cannot list applications',
+    edits: Object.freeze([
+      Object.freeze({
+        expect: 'export type ReviewTabProps = PropsRuntime<\'sidebar.right.pane.tab\'> & PropsStore<ReturnType<typeof createReviewStore>>',
+        replace: 'export type ReviewTabProps = PropsRuntime<\'sidebar.right.pane.tab\'> & {\n'
+        + '  /**\n'
+        + '   * chamber patch: this entry\'s API base path (`/api/i/<id>`, no trailing\n'
+        + '   * slash), absent when the chamber fact is absent. An owner action route must\n'
+        + '   * carry it: the official open-in consumer fetches this URL directly, and in\n'
+        + '   * the N-ctx shell the page origin is the control plane.\n'
+        + '   */\n'
+        + '  chamberFileApiBase?: string | undefined\n'
+        + '} & PropsStore<ReturnType<typeof createReviewStore>>',
+      }),
+      Object.freeze({
+        expect: '  loadChangesSummary, loadChangesDiff, reloadPresentedHost, openChanged, t, renderSlot,\n'
+        + '}: ReviewTabProps): ReactNode {',
+        replace: '  loadChangesSummary, loadChangesDiff, reloadPresentedHost, openChanged, t, renderSlot,\n'
+        + '  chamberFileApiBase,\n'
+        + '}: ReviewTabProps): ReactNode {',
+      }),
+      Object.freeze({
+        expect: '            actionUrl: changedFileUrl(sessionId, seq, index), available: native,',
+        replace: '            actionUrl: (chamberFileApiBase === undefined || chamberFileApiBase === \'\' ? \'\' : `${chamberFileApiBase}/`) + changedFileUrl(sessionId, seq, index), available: native,',
+      }),
+    ]),
+  }),
+  Object.freeze({
+    idSuffixes: Object.freeze([
+      'dsh-client-ui-deliverables/src/client/host-read-store.ts',
+      'packages/client/ui-deliverables/src/client/host-read-store.ts',
+    ]),
+    noRetireForm: NO_RETIRE_FORM_ENTRY_BASE_API,
+    vendorFile: 'dsh-client-ui-deliverables/src/client/host-read-store.ts',
+    reason: 'the summary and diff reads (api/changes.summary, api/changes.diff) are document-relative, so both stores fetch the control-plane page origin in the N-ctx shell: the summary never resolves (changed-files card missing, review tab unreachable) and the diff errors. ONLY the wire URL is rebased — the state key stays the authenticated URL every caller already holds',
+    edits: Object.freeze([
+      Object.freeze({
+        expect: 'export class HostReadStore<T> {\n'
+        + '  /** Record URLs key the state across Sessions and turns. */',
+        replace: 'export class HostReadStore<T> {\n'
+        + '  /** chamber patch: per-entry API base prefix (`/api/i/<id>/`; \'\' when absent). */\n'
+        + '  chamberFileApiBase = \'\'\n'
+        + '  /** Record URLs key the state across Sessions and turns. */',
+      }),
+      Object.freeze({
+        expect: '      next = await this.policy.decode(await fetch(url, { signal }))',
+        replace: '      next = await this.policy.decode(await fetch(`${this.chamberFileApiBase}${url}`, { signal }))',
+      }),
+    ]),
+  }),
+  Object.freeze({
+    idSuffixes: Object.freeze([
+      'dsh-client-ui-chat/src/client/chat/ChatView.tsx',
+      'packages/client/ui-chat/src/client/chat/ChatView.tsx',
+    ]),
+    noRetireForm: 'retires with the AssistantMarkdown entry above (one prop, one route family); no independent upstream text shape to assert.',
+    vendorFile: 'dsh-client-ui-chat/src/client/chat/ChatView.tsx',
+    reason: 'the chat view resolves decoded file-reference images against document.baseURI, which is the control-plane origin in the N-ctx shell: mentioned-image previews 404 (the sibling pathImages provider in AssistantMarkdown already carries the same prop)',
+    edits: Object.freeze([
+      Object.freeze({
+        expect: '  usePresentation, useProjection, t,\n}: ChatViewSlotProps) {',
+        replace: '  usePresentation, useProjection, t, chamberFileApiBase,\n}: ChatViewSlotProps & {\n'
+          + '  /**\n'
+          + '   * chamber patch: this entry\'s API base path (`/api/i/<id>`, no trailing\n'
+          + '   * slash), absent when the chamber fact is absent. A file-API URL must\n'
+          + '   * carry it: the page origin is the control plane in the N-ctx shell.\n'
+          + '   */\n'
+          + '  chamberFileApiBase?: string | undefined\n'
+          + '}) {',
+      }),
+      Object.freeze({
+        expect: '    resolve: (path: string) => fileMediaUrl(document.baseURI, resolveWorkspacePath(cwd, path)),',
+        replace: '    resolve: (path: string) => fileMediaUrl(chamberFileApiBase === undefined || chamberFileApiBase === \'\' ? document.baseURI : new URL(`${chamberFileApiBase}/`, document.baseURI).href, resolveWorkspacePath(cwd, path)),',
+      }),
+      Object.freeze({
+        // The labels block is upstream text the resolver edit leaves alone: binding it
+        // keeps this deps anchor from moving onto a sibling memo with the same `[cwd, t]`.
+        expect: '    labels: {\n'
+          + "      open: t('image.open'), loading: t('image.loading'), failed: t('image.failed'),\n"
+          + "      dialog: t('image.dialog'), close: t('image.close'),\n"
+          + '    },\n'
+          + '  }), [cwd, t])',
+        replace: '    labels: {\n'
+          + "      open: t('image.open'), loading: t('image.loading'), failed: t('image.failed'),\n"
+          + "      dialog: t('image.dialog'), close: t('image.close'),\n"
+          + '    },\n'
+          + '  }), [chamberFileApiBase, cwd, t])',
+      }),
+    ]),
+  }),
+
 ])
 
 /** Normalize a module id: drop vite query/hash and force POSIX separators. */
@@ -502,7 +654,8 @@ export function applyVendorPatches(id, code) {
       if (hits !== 1) {
         throw new Error(
           `vendor patch ${patch.vendorFile} edit#${index}: anchor matched ${hits} times (expected exactly 1). `
-          + `The pinned upstream text changed — re-derive the patch against the new pin. Reason: ${patch.reason}`,
+          + `The pinned upstream text changed — re-derive the patch against the new pin. Reason: ${patch.reason} `
+          + `Anchor: ${JSON.stringify(edit.expect.slice(0, 160))}`,
         )
       }
       next = next.replace(edit.expect, edit.replace)
@@ -577,7 +730,7 @@ export function checkVendorPatchSources(vendorRoot = VENDOR_ROOT, patches = VEND
       const hits = source.split(edit.expect).length - 1
       if (hits !== 1) {
         anchorsOk = false
-        detail = `edit#${index}: anchor matched ${hits} times (expected 1)`
+        detail = `edit#${index}: anchor matched ${hits} times (expected 1) — anchor ${JSON.stringify(edit.expect.slice(0, 160))}`
         break
       }
     }

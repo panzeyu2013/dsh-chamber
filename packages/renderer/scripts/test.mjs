@@ -37,6 +37,8 @@ export const GROUPS = {
   ],
   // lifecycle: 实例启动生命周期 —— shell 引导与降级自愈、宿主图/必需行探测、首屏基线预热、page 读路
   lifecycle: [
+    // 交付卡/review 的文件动作与两个读 store 的 owner 路由 base 前缀：上游事实源码锁（design 09 §3.6）
+    'test/lifecycle/vendor-file-route-base-contract.test.ts',
     'test/lifecycle/boot-degradation.test.ts',
     // C4 安全模式：控制面注入的页面级开关（只认布尔 true）与 extra rows 跳过
     'test/lifecycle/safe-mode.test.ts',

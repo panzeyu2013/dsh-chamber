@@ -153,8 +153,11 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // The official open-in client row is NOT skipped any more (D2): it loads from
   // the host graph so its file-level surfaces register — the right-sidebar
   // document actions (sidebar.right.tab.document.actions / .unpreviewable) and
-  // the deliverables file actions (deliverables[.review].file.actions), all fed
-  // by the per-instance session Remote, not by its own host half. Its HEADER
+  // the deliverables file actions (deliverables[.review].file.actions), whose
+  // owner route (api/present.open / api/changes.open) the ui-deliverables covered
+  // fork prefixes per entry (design 09 §3.6); the document seats carry only an
+  // absolutePath and stay on their own per-instance source, not on open-in's host
+  // half. Its HEADER
   // entry (id open-in-app at conversation.session.header.utilities) reads the
   // document-relative open-in-app/* routes, which resolve to the control-plane
   // origin this composite page is served from (only host-graph bundle urls get

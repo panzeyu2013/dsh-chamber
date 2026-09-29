@@ -3,7 +3,8 @@
 > **契约（fork & supersede）**——本文是「统一打开面」的契约与形态。
 > 官方**宿主半**（`@deepseek-ai/dsh-host-open-in-app`）**fork 进本仓**成 seed 包在实例内服务本机
 > 目录/图标/拉起；官方**客户端半**（`@deepseek-ai/dsh-client-ui-open-in-app`）自 0.1.7 起随官方行
-> **加载**（D2：右栏文档文件级 open/reveal 与 deliverables 文件动作走 per-instance session Remote），
+> **加载**（D2：右栏文档文件级 open/reveal 由 per-instance 通道解析；deliverables 文件动作读 owner 的鉴权路由
+> `api/present.open|changes.open`，该路由在 N-ctx 下由 ui-deliverables 带 per-entry 前缀发出，见 design 09 §3.6），
 > 但其 header 席位在本页 inert（apps/icon/open 探针是 document-relative，落在控制面 SPA origin）；
 > 目录打开入口仍由 `@dsh-chamber/dsh-chamber-client-ui-open-in` 承接并做成**官方超集**（§7）。
 > 纪律与 sidebar（design 05 §2.2）、ui-layout fork（design 06）同款：**官方包在 vendor 保持原样**。
@@ -30,8 +31,8 @@
   trusted IPC 落地；远程路径**绝不**进入本地文件系统面；
 - **N-ctx 正确性**：每个 `AppWebEntry` 的私有 cordis Context 提供 `chamberInstanceId` /
   `chamberBasePath` / `chamberTransport` / `chamberSourceFingerprint`（声明
-  `chamber-entry.ts:138-149`，读取与校验 `chamber-entry.ts:607-610`，安装 `shell.ts:328-331`），以及
-  **页级机器目录** `chamberMachineCatalog`（同一 reader 对象注入每个 entry，`shell.ts:336`，§4.2）
+  `chamber-entry.ts:31-42`，读取与校验 `chamber-entry.ts:366-389`，安装 `shell.ts:259-266`），以及
+  **页级机器目录** `chamberMachineCatalog`（同一 reader 对象注入每个 entry，`shell.ts:266`，§4.2）
   ——入口只读自己 ctx 上的事实，不读页面级可变全局值；另两个页级事实 `chamberBootGeneration` /
   `chamberReportBootDegraded` 沿用"消费方宽松 cast"，故未进那份声明。
 - **官方超集**：官方那份能做的都能做，且**不依赖**上游运行时行为（§7）。
@@ -60,10 +61,12 @@
    （`src/index.ts:50-76`），`directory-picker-auto` 无 Config（`src/index.ts:62-69`）
    ⇒ 本地目录要非空只能去掉标记，而标记也是 picker pin（远程实例靠它，design 02 §3.9 的 systemd 行），
    故被迫改 spawn env + `--no-open` + pin overlay（含上游没有的 `disabled:` 行）。
-2. **官方客户端半假定同源绝对路径**。`hostBase()` 取 `location.origin`
-   （`packages/client/ui-open-in-app/src/client/controller.ts:12-15` 用于 `:63,:74` 的 `new URL`），
-   `iconUrl` 是根相对路径（`src/client/index.ts:50`）——N-ctx 壳下页面 origin 是控制面 ⇒ 探针/图标
-   404 ⇒ 只有拉进复合（covered + factory）+ 构建期 vendor 补丁与 subpath seam 才能修好。
+2. **官方客户端半的探针路由是 document-relative**（当时记作 `hostBase()`/`location.origin`，该符号在现行 pin
+   已不存在）。`packages/client/ui-open-in-app/src/client/controller.ts` 取 `OPEN_IN_APP_APPS_ROUTE`/
+   `OPEN_IN_APP_OPEN_ROUTE`（`packages/host/open-in-app/src/shared.ts` 的 `*_PATH.slice(1)`）；`iconUrl` 是根相对路径
+   （同包 `src/client/index.ts` 的 `iconUrl` 构造）——N-ctx 壳下页面 origin 是控制面 ⇒
+   header 探针/图标 404、席位渲染 null。当时的结论（「拉进复合才不会 404」）已被 §2.2/D2 取代：官方行照常
+   加载，deliverables 文件动作的 owner 路由由 ui-deliverables 侧带 per-entry 前缀（design 09 §3.6），header 仍 inert。
 3. **效果依赖实例 runtime 的版本**：官方 open-in 行自 **dsh-v0.1.3-alpha.2** 才存在
    （`packages/renderer/src/chamber-covered.ts#=literal:The official open-in client row is NOT skipped any more`）；本仓**运行时锚与源码 pin 都已是 0.2.0-rc.1**
    （单一来源 `packages/desktop/vendor/dsh/pnpm-lock.yaml`，`bundle-dsh.mjs:79` 兜底同值）⇒ 非主要理由。fork & supersede 不依赖该行。
@@ -80,8 +83,9 @@
   除外，见 §6.2）；第三消费者（实例侧官方 open-in 目录）仍在，但**无人调用官方那一份**，不再是偏差。
 - **官方宿主行保持原样挂载但不被调用**（目录解析惰性，`resolutions ??=`，
   `host/open-in-app/src/index.ts`，零成本；不引入 overlay `disabled:` 能力）；**官方客户端行自 0.1.7 起
-  加载**（D2）：文件级席位（右栏文档 open/reveal、deliverables 文件动作）生效；header 席位因
-  document-relative 路由落在控制面 SPA origin 而 inert，故 `chamber-covered.ts` 不再登记为 page-own；
+  加载**（D2）：文件级席位（右栏文档 open/reveal、deliverables 文件动作）生效（后者的 owner 路由带
+  per-entry 前缀，design 09 §3.6）；header 席位因 document-relative 路由落在控制面 SPA origin 而 inert，
+  故 `chamber-covered.ts` 不再登记为 page-own；
   目录打开入口仍是 chamber `open-in`（同座、同 order、异 id，允许并存）。
 
 ## 3. 形态与分层
@@ -411,7 +415,7 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
 | 网关派生白名单 | `test:gateway`（feature-lifecycle / chamber-installed / runtime-routes） | **网关侧**的 `/chamber/plugins` 投影与 PUT 名单由注册表派生 ⇒ 该 localOnly 行自动出现（只要只有桌面在上传，该行 `version` 恒 null；这是 API 投影，插件页不在非本地目标列出它——桌面侧的上传**源清单**是另一回事，见 §6.2 第 6 条）；gateway load 断言的域集 == `HOST_DOMAIN_PROBE_NAMES`（本机实测：该断言在 shim 解析到旧 runtime 时当场抛错，正是它应有的行为） |
 | 注册表锁步 | `test/plugin-inventory/chamber-rows.test.ts`（connections 包） | 客户端名字镜像 == `CHAMBER_HOST_PACKAGES` 行集，且每个注册表包必须被 `classifyInventoryEntry` 归为 chamber 行（非本地目标不再列 localOnly 行后，第三方区对该行只余分类这一道网，故把分类也钉进同一门） |
 | 文案 | `pnpm run verify:i18n` | 新文案 zh/en 双份与记录一致 |
-| 触点门 | `verify-upstream-touchpoints.mjs` | C7（四域锁步）+ C8（含新 seed dist，重建-比对 6 组）+ C9（vendor 补丁集不变：open-in 不新增补丁）+ 新 fork 的 C1/C3/C5（registry 的 `seed.*` 条目 + `versionAnchor: 'chamber'` 豁免，见 §10） |
+| 触点门 | `verify-upstream-touchpoints.mjs` | C7（四域锁步）+ C8（含新 seed dist，重建-比对 6 组）+ C9（open-in 包本身不新增补丁；deliverables owner 路由的 per-entry 前缀见 design 09 §3.6）+ 新 fork 的 C1/C3/C5（registry 的 `seed.*` 条目 + `versionAnchor: 'chamber'` 豁免，见 §10） |
 
 ## 10. 已知边界与实机验收
 
