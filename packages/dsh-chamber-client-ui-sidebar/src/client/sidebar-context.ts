@@ -52,13 +52,6 @@ export function sourceAccentStyle(server: ChamberServerAggregate): { '--chamber-
 }
 
 /**
- * Resolver env for one source's workspace drag: display order (transient drag
- * override first, rows it does not know appended in registry order — a
- * workspace that appeared mid-drag stays a valid target), git-flag lookup and
- * repo-group-fold visibility. One rule set for the marker render, the
- * onDragOver gate, the drop handler and the commit — no drift between them.
- */
-/**
  * 拖拽覆盖表 → 实际顺序的**唯一**规则，渲染序与 drop 环境序共用（两处不同序会把拖拽锚点算到
  * 旧行上）。覆盖表只描述拖拽那一刻存在的行；不在表里的 id 是其后新建的行，而宿主把新建的
  * workspace 插在序列头部（PREPEND）⇒ 按原序**前置**（否则新建/回声行先落表尾，位置意图的首帧
@@ -86,10 +79,21 @@ export function orderWithOverride<T>(
     ordered.push(item)
     placed.add(id)
   }
+  // Duplicate-id fallback only: ids are unique in practice, so every item was
+  // already emitted by one of the two loops above.
   for (const item of items) if (!placed.has(idOf(item))) ordered.push(item)
   return ordered
 }
 
+/**
+ * Resolver env for one source's workspace drag: display order comes from
+ * `orderWithOverride` (the transient drag override describes the rows that
+ * existed when the drag started; rows created meanwhile keep their original
+ * order ahead of it, mirroring the host's PREPEND — a workspace that appeared
+ * mid-drag stays a valid target), plus git-flag lookup and repo-group-fold
+ * visibility. One rule set for the marker render, the onDragOver gate, the
+ * drop handler and the commit — no drift between them.
+ */
 export function workspaceDropEnv(
   sourceId: string,
   realWorkspaceIds: readonly string[],
