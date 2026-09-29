@@ -182,12 +182,15 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
    * 让闸门永久关闭（其余三层再也打不开）。
    */
   useEffect(() => {
-    openLayersRef.current = {
-      delete: deleteTarget !== null,
-      archive: archiveCleanupServerId !== null,
-      browser: addingWorkspace !== null,
-      sessionArchive: archiveConfirm !== null,
-    }
+    // 原地改写而不是整体替换：本兜底只对齐四个「层是否在屏」的布尔。`archiveTarget` /
+    // `archivePending` 是打开方在同一 tick 声明的同步权威（见上），不由 state 派生——整体
+    // 替换会把已武装的目标与在飞标记一起清成 undefined，两道保护（跨行换靶 / 第二次点击
+    // 在飞）随即失效（类型上也要求补齐这两个字段）。
+    const open = openLayersRef.current
+    open.delete = deleteTarget !== null
+    open.archive = archiveCleanupServerId !== null
+    open.browser = addingWorkspace !== null
+    open.sessionArchive = archiveConfirm !== null
   })
 
   /**

@@ -80,5 +80,11 @@ test('wiring lock: the confirm phase resends with stopActivity; only a decodable
   assert.ok(dialogs.includes('open.archiveTarget !== null && open.archiveTarget !== request.sessionId'))
   assert.ok(dialogs.includes('open.archiveTarget === request.sessionId && open.archivePending'))
   assert.ok(dialogs.includes('open.archiveTarget = request.sessionId'))
+  // 兜底对齐（每次提交后把四个「层在屏」布尔对齐 state）**不得整体替换 ref**：
+  // `archiveTarget`/`archivePending` 是打开方在同一 tick 声明的同步权威、不由 state 派生，
+  // 整体替换会把已武装目标与「第二段在飞」标记一起清成 undefined，跨行换靶与重复点击
+  // 两道保护随即静默失效（TS 也会因缺字段报错）。只允许属性级改写。
+  assert.doesNotMatch(dialogs, /openLayersRef\.current\s*=\s*\{/u)
+  assert.ok(dialogs.includes('const open = openLayersRef.current'))
 })
 
