@@ -10,20 +10,26 @@ design 同批更新；已落地面的契约见 design 06 §7、design 05 §2）�
 
 ## 1. 待裁决
 
-### 1.1 pinned 会话（本仓零支撑）
+### 1.1 pinned 会话（残余：置顶序 + 拖拽分区守卫）
 
+- 本仓：写入口与三个行面已落地（形态见 design 06 §7、checklist §4.6），不是本条开放部分。
 - 上游：树节点 `pinned: !archived.has(id) && pinned.has(id)`（`WS:450-465`）；置顶序在 `sectionMembers`（`WS:371-382`）；
   菜单项 pin/unpin（`WS:3630-3643`，order 100）+ 行 hover 按钮（`WS:3649-3668`，order 200）+ 静息 `PinnedIndicator`
   （`WS:1441-1450`、行内 1636）；拖拽分区边界由 `sectionMembers` 决定；`pinnedSessionIds` 来自 registry 级 rowState。
-- 本仓：`pinnedSessionIds`/pin/unpin/`IconPin*` 在 sidebar 与 core **零命中**；`ChamberServerWorkspace.sessions`
-  无 `pinned` 字段，derive 无置顶序；行 hover 动作簇是本仓设计，但已按上游形态补上第二个成员
-  （kebab + 独立归档钮 `ArchiveSessionRowButton`，design 06 §7；pin 行按钮仍零支撑）。
-- 为何要裁：①这是一项**宿主写能力**（pin/unpin 会改宿主 rowState），不是样式；②完整对齐需消费上游 rowState 面
-  （本仓当前只读 workspaces/sessions 两个 store）并把置顶序接进**本仓自有的会话拖拽排序**（`sessionOrderOverride`），
-  与 `sidebar.workspaces.*` 座席「只声明不渲染」的既有裁决（design 24 §1、STATUS）直接相邻。
-- 候选落法：A. 只做展示半（指示器 + 置顶序，无动作）＝无用（无人能 pin）；B. 菜单项 pin/unpin + 指示器 + 置顶序 +
-  拖拽分区守卫（不渲染 `sidebar.workspaces.session.menu.item` 座席，走本仓菜单）；C. 不落，登记为有意缺失。
-- 证据：`packages/dsh-chamber-seed-archive-cleanup/test/binding.test.ts`（宿主 state 确有该字段，本仓只做透传保护）。
+- 仍缺（本条的开放部分）：①客户端置顶序（`pinSessionOrder`）——置顶行领跑本节、只在置顶块内可拖；②拖拽的跨分区
+  守卫（上游 `sectionMembers` + `reconcileManualOrder`）；③与本仓 `sessionOrderOverride`（manual 覆盖）和
+  `updated` 排序的自动提升并列时的第三条分区语义与簿记互斥；④半开 follow 通道下的陈旧置顶标记（pin → HTTP
+  归档 → HTTP 恢复，本地集仍指该 id、unpin 变 no-op；修法 = 归档成功时本地按 vendor 同规则清 id）与未挂载
+  来源的"发送即忘"（标记无界延迟到挂载）。
+- 候选落法：A. 完整对齐（序 + 拖拽分区守卫 + 与两套既有排序的簿记互斥）；B. 只做序、不动拖拽
+  （置顶行领跑本节，拖拽仍按现有规则）；C. 维持不做（标记只陈述集合事实，序留给官方前端 ui-workspace 的
+  `pinSessionOrder`，本仓不接）。
+- 为何仍要裁：置顶序会与本仓两套既有排序语义并列，并给会话拖拽加跨分区守卫；与
+  `sidebar.workspaces.*` 座席「只声明不渲染」的既有裁决（design 24 §1、STATUS）相邻——写入口与标记的移植形态
+  （不渲染官方座席）已定，后半（序 + 守卫）仍需一次裁决。
+- 证据：`packages/dsh-chamber-seed-archive-cleanup/test/binding.test.ts`（宿主 state 确有该字段，本仓只做透传保护）；
+  `packages/dsh-chamber-client-ui-sidebar/test/session-rows/session-row-actions.test.ts` 与
+  `test/session-state/vendor-session-fact-contract.test.ts`（形态/座席/文案/线协议锁）。
 
 ### 1.2 会话行时间列
 

@@ -136,8 +136,10 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   的「停止并归档」确认，确认后带 `stopActivity: true` 重发，停止由宿主 provider 完成（design 24
   §5）。`archivedSessionIds` 过滤在 derive 层（`packages/dsh-chamber-client-core/src/derive.ts`
   纯函数），不等聚合轮询。
-- 会话行悬停操作（v1 最小集，走该来源自己的 API）：重命名/**fork**/归档（**kebab 菜单
-  三项** + **独立归档图标钮**——同一归档动词的双出口，按钮形态、座席与无障碍取舍见 design 06 §7）
+- 会话行悬停操作（v1 最小集，走该来源自己的 API）：置顶/重命名/**fork**/归档（**kebab 菜单
+  四项** + **独立归档图标钮** + **独立置顶图标钮**——归档与置顶各自的双出口，按钮形态、座席、无障碍与
+  「首落不含置顶序」的取舍见 design 06 §7/§5），置顶写面 = `workspace/pinSession`/`workspace/unpinSession`
+  （幂等 unary，无本地事实；标记的线源与三处诚实性缺口见 design 06 §5/§7）
   ——行内 fork 走 wire
   `sessions.fork` + 标题递增（increaseTitle，对齐官方 ui-workspace），成功后打开子会话，递增
   rename 失败非致命（子会话仍创建并打开）；官方 conversation 回合尾部的 `turn-tail forkAt`

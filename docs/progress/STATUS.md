@@ -130,8 +130,9 @@
 
 **待裁（与 chamber 功能/契约相冲；plan §1 编号即条号，1.3 归下面的外部约束模块）**
 
-- **1.1 pinned 会话**：上游有 pin/unpin/置顶序/`PinnedIndicator`，本仓零支撑——它是宿主写能力（改宿主 rowState），
-  且置顶序会与本仓 `sessionOrderOverride`（manual 覆盖）与 `updated` 自动置顶并列成第四条分区语义，拖拽要加跨分区守卫。
+- **1.1 pinned 会话（残余：置顶序 + 拖拽分区守卫）**：写入口与行面见 design 06 §5/§7（登记 checklist §4.6）；
+  仍未接客户端置顶序（上游 `pinSessionOrder`）与拖拽的跨分区守卫；另有两处置顶诚实性缺口（未挂载来源的发送即忘、
+  半开 follow 通道的陈旧集）——机制、候选落法与残余④见 design 06 §5、plan §1.1。
 - **1.2 会话行时间列**：上游行尾静息显示相对时间（`primaryStatus.trailingLabel ?? timeLabel(updatedAt…)`），本仓行尾是
   **状态槽**（品牌蓝完成点 / 14px pending / `data-chamber-*` 机器标记），相对时间只在悬停卡。
 - **1.5 重命名交互**：本仓行内表单（双击进入，拖拽/pending-click 围着它写），上游是 `shell.overlay` 模态
