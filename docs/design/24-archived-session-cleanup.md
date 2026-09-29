@@ -611,7 +611,10 @@ generic throw（无 status 透出）；503 `instance_unavailable` 有专类特�
   外列；未分组桶行同规。
 - **视觉与焦点**：组头折叠钮复用导航同款 chrome（本 css module 的
   `foldToggle*`/`foldChevron`/`foldFolder` 类 + `workspaceAccentStyle(server.id, key,
-  gitFlag)`，git flag 已加载时同 seed——accent 与导航同工作区一致）；行删除钮并入模块
+  gitFlag)`，git flag 已加载时同 seed——accent 与导航同工作区一致；folder 字形同样自带组状态，
+  展开=开启 / 折叠=闭合（design 08 §3.2），且 **worktree 归属组也画 folder**——归档组头不区分
+  派生，nav 的 git-branch 字形不在此处；**未分组桶只画 chevron、无 folder/accent**——与 nav 同
+  例外）；行删除钮并入模块
   `.actionIcon` 家族（`actionIconDanger` 修饰 hover 转 error ink，20px 命中 + 纯色 hover，
   disabled 与焦点环随基类）；焦点环常数合并为
   `.actionIcon:focus-visible, .archiveManagerGroupHeader .foldToggle:focus-visible` 单一规则表（+1px 外扩）；

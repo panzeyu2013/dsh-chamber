@@ -824,11 +824,14 @@
   transform: rotate(0deg);
 }
 
-/* OpenChamber SessionGroupSection swap (08 §11): a normal workspace shows
-   the FOLDER glyph (project-row parity), a worktree (derived) workspace the
+/* OpenChamber SessionGroupSection swap (design 08 §3.2): a normal workspace
+   shows the FOLDER glyph (project-row parity) whose artwork itself carries
+   the group's fold state — open while expanded, closed while folded (upstream
+   ui-workspace ProjectRowItem state mechanism; the open side keeps the
+   primitives' 1px-stroke IconFolderOpenOutlineRegular) — a worktree (derived) workspace the
    git-branch glyph, at rest — and both swap to the collapse chevron on row
    hover / keyboard focus / kebab-open (`.rowActionsVisible`), in the same
-   slot, so nothing shifts. Pointer-safe like the occupant reveal (08 §11.7):
+   slot, so nothing shifts. Pointer-safe like the occupant reveal (design 08 §3.2):
    plain :focus-within would keep the chevron swapped in after a pointer
    click on the fold toggle (Chromium leaves focus on the clicked button),
    leaving a hover-like glyph at rest; keyboard focus rides the JS state
@@ -861,7 +864,7 @@
   display: none;
 }
 
-/* OpenChamber SessionGroupSection swap (08 §11): a worktree (derived)
+/* OpenChamber SessionGroupSection swap (design 08 §3.2): a worktree (derived)
    workspace shows the git-branch glyph at rest and the collapse chevron on
    row hover / KEYBOARD focus / kebab-open — the same slot, so nothing
    shifts (pointer-safe, see the folder variant note above). */
@@ -881,10 +884,6 @@
 .workspaceHeader:hover:not([data-hover-gate]) .foldToggleGit .foldBranch,
 .workspaceHeader:has(.rowActionsVisible) .foldToggleGit .foldBranch {
   display: none;
-}
-
-.foldToggleFolded {
-  transform: rotate(0deg);
 }
 
 /* chamber (06 §2.4, glyph per user feedback): SOURCE-level fold toggle
@@ -980,8 +979,8 @@
   font-size: 14px;
   line-height: 18px;
   font-weight: 600;
-  /* Project-row parity (OpenChamber 08 §11): a workspace label is the
-     primary entity label — foreground ink. */
+  /* Project-row parity (OpenChamber swap, design 08 §3.2): a workspace label is
+     the primary entity label — foreground ink. */
   color: var(--dsw-alias-label-primary);
 }
 
@@ -1112,7 +1111,8 @@
   .statusSpinner {
     animation: none;
   }
-  .foldToggle {
+  /* The rotation transition rides .foldChevron, not the button. */
+  .foldChevron {
     transition: none;
   }
   .sourceFoldChevron {
@@ -2048,7 +2048,10 @@
    .archiveManagerGroupRows below; the header hover wash is shared with
    .workspaceHeader — see the nav rule above). The header
    reuses the NAV workspace chrome — the SAME module's fold-toggle classes
-   (folder glyph at rest, chevron swap on hover/focus, folded rotation) and
+   (folder glyph at rest, its artwork carrying the fold state open/closed
+   exactly as in the nav header — a worktree-attributed group draws the folder
+   here, not the nav's git-branch glyph — chevron swap on hover/focus, folded
+   rotation) and
    the workspaceAccentStyle accent var — so a group stays visually bound to
    its workspace row in the session list. It does NOT reuse .workspaceHeader
    itself: that class hides its count on hover expecting the nav action

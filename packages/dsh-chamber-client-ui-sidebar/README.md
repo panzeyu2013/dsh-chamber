@@ -76,7 +76,10 @@ The shell declares and renders the three holes the alpha.2 official
   priority and the current-session highlight (single-selection) are described
   under "Chamber third round (design 06)" below.
 - Workspace groups fold via the header chevron (session-count badge); fold
-  state persists in localStorage view prefs (`dsh-chamber.sidebar.v1`).
+  state persists in localStorage view prefs (`dsh-chamber.sidebar.v1`). The
+  resting folder glyph carries the same state — open while expanded, closed
+  while folded (upstream `ui-workspace` ProjectRowItem parity; the open side
+  keeps the primitives' 1px-stroke `IconFolderOpenOutlineRegular`; design 08 §3.2).
 - Source groups fold the same way (2026-09, design 06 §2.4): each source
   header's left slot holds a MONITOR glyph (self-drawn `IconMonitorOutline16`
   in `client/icons.tsx` — the primitives set has no server glyph, and the
