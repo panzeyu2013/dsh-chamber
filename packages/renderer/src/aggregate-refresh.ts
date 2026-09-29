@@ -127,6 +127,12 @@ export function commitAggregatePull(
       sessions: fallback.sessions,
       archivedSessionIds: current.archivedSessionIds,
       archiveSetKnown: current.archiveSetKnown === true,
+      // 置顶集与归档集同权：unary 回退没有该线源，丢掉会让标记在每次兜底拉取时闪没。
+      // 稀疏：只对「该面出现之前铸出的 aggregate」生效（今天的每个生产者都会写这两个键）；
+      // 键缺席时不产出键，合并对象与 current 逐字节一致，identity 去重门不会因这次落位抖动。
+      // ids 与 known **同进同出**：两个独立 spread 能拼出「known:true 而 ids 缺席」的混合态
+      // （derive 会把空集当成权威「真无置顶」），一个 spread 从形状上排除它。
+      ...(current.pinnedSessionIds === undefined ? {} : { pinnedSessionIds: current.pinnedSessionIds, pinSetKnown: current.pinSetKnown === true }),
       error: null,
     }
   }
