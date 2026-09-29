@@ -1,5 +1,5 @@
 /* Styles for the per-workspace Git occupant and its create/remove dialogs
-   (design 08 §11). */
+   (design 08 §3.2 / §4 / §5). */
 
 /* OpenChamber-style entry: the create button reveals with the row's cluster. */
 
@@ -244,7 +244,7 @@
 }
 
 /* The tabpanel wraps the mode-specific fields; it must be its own flex column
-   so consecutive fields get the design's 14px field gap (design 08 §11.1 —
+   so consecutive fields get the design's 14px field gap (design 08 §4.2 —
    a plain wrapper leaves them flush, which is the spacing defect). */
 .tabPanel {
   display: flex;

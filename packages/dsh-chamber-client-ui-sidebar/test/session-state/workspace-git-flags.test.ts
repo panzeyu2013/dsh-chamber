@@ -55,7 +55,7 @@ test('git-flags-loaded marker: per-source, idempotent, reset on clear ( F4)', ()
   assert.ok(getWorkspaceGitFlagsVersion() > v1, 'reset bumps')
 })
 
-test('repo-group fold predicate (08 §11.7): derived rows hide only while the main is folded AND still present', () => {
+test('repo-group fold predicate (design 08 §3.3): derived rows hide only while the main is folded AND still present', () => {
   const derived = { isWorktree: true, isMain: false, mainWorkspaceId: 'main-1', repoKey: 'r' }
   const derivedNoMain = { isWorktree: true, isMain: false, repoKey: 'r' }
   const mainFlag = { isWorktree: false, isMain: true, repoKey: 'r' }
