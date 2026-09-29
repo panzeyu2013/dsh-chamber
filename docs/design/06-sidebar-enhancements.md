@@ -821,6 +821,60 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   `<style>`（同内容，随各自 fiber 移除，良性重复）。① 的治本同本节：按活动来源
   门控，但落在 vendor 源码，需 seed/patch 路线裁定后实施。
 
+### 4.7 来源级面板轴（`sidebar.panellist` 按来源下挂）
+
+**契约与 Rejected alternatives 见 design 05 §2「来源级面板轴」**；本节只记实现面与副作用。
+
+- **宽态**：行渲染在 owning source 的 server 分组内——`ServerSection.tsx` 在
+  `<ServerSectionHeader/>` 之后、`{!sourceFolded && (…)}` 之前挂
+  `ServerSectionPanels`（`server.id === chamberInstanceId` 守卫）。**折叠只收浏览区**
+  （搜索胶囊 / 来源级 git 提示 / 工作区列表），面板行不随之折叠；折叠钮只有 `aria-expanded`、
+  **无 `aria-controls`**，故不构成"受控区域已折叠却仍渲染其内容"的矛盾。
+- **rail 态**：分组不渲染，保留上游全局面板字形行（`SidebarRoot.tsx` 的
+  `!wide && panels.length > 0` 守卫；字形 16/18px、tooltip、`aria-current` 与上游逐字一致）
+  ⇒ 每个条目任一时刻**恰好挂载一次**（位置锁：`test/plugin-kernel/panel-entry-placement.test.ts`）。
+- **行几何**：沿用上游 `.panelRow` 原值（36px / `padding 7px 8px` / `margin 0 2px` /
+  radius-md / hover 与 active 同 token），**密度有意不改**——分组里它是唯一 36px 元素属已知
+  观感；容器只做两件事：补内距（使行盒起点与 28px 来源头的 6px 内容起点对齐），并按上游
+  `.panelList` 复制列表栈（`display:flex; flex-direction:column; gap:4px`）——同源注册 ≥2 个面板时的
+  行距与上游一致。
+  行文案 `font: inherit`，随所在分组的字号。
+- **可达性（既有约束 + 一个新依赖）**：侧栏由活动来源的 ctx 渲染、ledger 只含该 ctx 的注册，
+  因此入口只在**拥有它的来源成为活动视图**时可见（全局轴时代同样如此）。另：宽态行还要求该来源
+  已进入 App 的 `servers` 投影（`ServerSection` 只对投影里的 source 渲染）；投影初值 / registry
+  移除先于 view 销毁的瞬时窗口内，**整个来源分组（含会话列表）一并缺席**、不是"只有面板行缺失"，
+  rail 轴不受影响（自愈，不设回退轴——那会重新引入双挂载）。
+- **断连来源**：行仍渲染（"注册即在"），点开的页面自呈该 Host 的失败态——对"断连来源只渲染
+  header + 状态"的**有意例外**。
+- **语言**：label thunk 由该实例自己的 locale 解析（per-ctx），与页面语言归属一致。
+- **已知副作用**：
+  - 来源拖拽的 before/after 由 `rowHalf` 用 **section 的 rect 中点**判定
+    （`server-section-model.ts#rowHalf`）：面板行使 section 增高**最多 42px**（行高 36 + 容器上下 6；
+    与下方相邻元素的外边距合并后常见约 38px），中点随之**下移约 19–21px**（上界 = 42/2），
+    "before"判定区略微变大。接受，不改 `rowHalf`（服务器/工作区/会话三种拖拽共用）。
+  - **wide↔rail 重挂载**：行的两个站点父级不同，收起/展开会卸载→重挂（上游是同一元素）⇒ 键盘
+    焦点若正停在该行，折叠后落回 `document.body`（需重新 Tab）。行组件无状态，无可见状态丢失；
+    接受，不为此改结构（rail 不渲染 section，单站点方案在本仓不成立）。
+  - **hover 色带内缩**：容器 4px 内距使行的 hover 色带比来源头 / 会话行的全宽带窄约 6px/侧，
+    换来行盒与 28px 来源头的内容起点对齐；实机眼检若偏好色带对齐，改
+    `sidebar-chamber.module.css` 的 `.sectionPanels { padding: 0 }`（一行、可逆）。
+  - **nav 的 a11y 上下文**：上游的 `nav[aria-label="全局面板"/"Global panels"]` 是列级兄弟节点，
+    本仓宽态嵌在 `<section role="group" aria-label={server.label}>` 内；文案仍取上游值（见下条），
+    这里只登记"它在来源分组内"这一语义后果。
+  - **文案 parity**：宽态 nav 的 `aria-label` 保持上游 `panels.label`（「全局面板」/“Global
+    panels”）不改写——改文案会破坏与上游逐字一致；来源身份由所在的 `role="group"` 标签承载。
+  - 侧栏滚动锚（`packages/renderer/src/sidebar-scroll-sync.ts`）：REFINE 以 `[data-chamber-row]`
+    （会话行）为锚**连同屏幕 offset 一起恢复**，面板行不是锚点、也不参与该等式；只有锚行缺失时
+    才回退 PARK 的原始 `scrollTop`——跨 profile 的高度差（行在 / 不在，±42px）只影响这条回退路径，
+    属该回退固有的近似，非本改动引入。
+  - `ui-schedule` 的**点击埋点**（上游 `selectPanel` 对 `plugins`/`schedules` 发
+    `sidebar_menu_click{menu_name}`）**有意未复制**：它是遥测而非 UI 行为，且桌面壳是否上报
+    产品分析是既有开放裁决（STATUS 遥测条）。若将来要逐字对齐，落点是
+    `packages/dsh-chamber-client-ui-sidebar/src/client/index.ts` 的 `selectPanel`
+    （实际可达的只有 `schedules → 'cron'` 一条，`plugins` 面板在本仓已迁设置页）。
+- **Rejected alternatives**（实现面）：① 全局轴 + 分组内双渲染——一条注册两个入口，上游只有一行；
+  ② rail 不显示——丢掉上游"折叠后仍可达"；③ 26px 密度变体——本批明确维持上游几何。
+
 ## 5. 已知取舍与开放项
 
 - **置顶（pin）首落不含置顶序：已知取舍**——pin/unpin 写入口、静息标记与两个行入口都已按上游形态落地（§7），

@@ -1,24 +1,17 @@
-/** Sidebar shell chrome: the global-panel row, the region error boundary and
- *  the source-dot accent helper — presentational pieces that own no shell state. */
+/** Sidebar shell chrome: the panel row (rail axis and source-scoped section
+ *  share it), the region error boundary and the source-dot accent helper —
+ *  presentational pieces that own no shell state. */
 
 import { Component, type CSSProperties, type ReactNode } from 'react'
 import clsx from 'clsx'
 import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { SidebarPanelMetadata, SidebarRootComponentProps } from './contract/slots.ts'
+import type { PanelSelectorHook, SidebarPanelMetadata, SidebarRootComponentProps } from './contract/slots.ts'
 import { sourceAccentColor } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import css from './SidebarRoot.module.css'
 import cc from './sidebar-chamber.module.css'
 
-/** Root panel-selection snapshot (framework-bound prop). */
-interface PanelInfoSnapshot {
-  readonly activePanelId: string | null
-}
-
-/** Selector hook over the panel selection (framework-bound prop). */
-type PanelSelectorHook = <Selected>(selector: (info: PanelInfoSnapshot) => Selected) => Selected
-
-/** Selector hook over the registered global panels (inject hooks compartment). */
+/** Selector hook over the registered panels (inject hooks compartment). */
 export type PanelsHook = <Selected>(selector: (panels: readonly SidebarPanelMetadata[]) => Selected) => Selected
 
 /**
@@ -56,8 +49,9 @@ export class ChamberListBoundary extends Component<{ children: ReactNode }, { er
   }
 }
 
-/** One global-panel row: it subscribes only to its own selection state, so a panel
- *  switch re-renders the affected rows instead of the whole column. */
+/** One panel row (the rail axis and the per-source section share this component):
+ *  it subscribes only to its own selection state, so a panel switch re-renders the
+ *  affected rows instead of the whole column. */
 export function PanelRow({
   id,
   label,

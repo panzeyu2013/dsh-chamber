@@ -9,7 +9,7 @@
  *    （now 会让 memo 恒失效），悬停卡改成 open 时自取 Date.now()；
  * 2. 行的 12 处状态读数全走 reader，reader 内部共用 ONE memo 槽：
  *    (facts 身份, session.running, stale) 相同即同一次 sessionRowState 派生；
- * 3. SidebarRoot 的 ctxValue 走 useMemo 且 45 个字段逐项进依赖数组；
+ * 3. SidebarRoot 的 ctxValue 走 useMemo 且 49 个字段逐项进依赖数组；
  * 4. 空 query 不建搜索快照、空 rowErrors 不扫全表，短路都在调用点。
  *
  * Run directly: node test/session-rows/row-render-cost.test.ts
@@ -66,14 +66,16 @@ test('the row menu items are memoized on the dictionary', () => {
   assert.match(ROWS, /items=\{menuItems\}/)
 })
 
-test('the section memoizes its 45-field context value, covering every field', () => {
+test('the section memoizes its 49-field context value, covering every field', () => {
   assert.match(ROOT, /const ctxValue: SidebarSectionContextValue = useMemo\(\(\) => \(\{/)
   const block = /const ctxValue: SidebarSectionContextValue = useMemo\(\(\) => \(\{([\s\S]*?)\}\), \[([\s\S]*?)\]\)/.exec(ROOT)
   assert.ok(block !== null, 'the memoized ctxValue block must exist')
   const keys = [...block[1].matchAll(/^\s{4}([A-Za-z_$][\w$]*),$/gm)].map(match => match[1])
   const deps = block[2].split(',').map(part => part.trim()).filter(part => part !== '')
-  // 45 = 44 + onPinSession（置顶行级漏斗，pin 落地时有意抬升；键与依赖仍须一一对应）。
-  assert.equal(keys.length, 45, 'the context carries 45 fields')
+  // 49 = 45 + 来源级面板轴四字段（panels/selectPanel/usePanelInfo/renderSlot，
+  // design 06 §4.7；键与依赖仍须一一对应）。键正则只认简写键：ctxValue 的每一项
+  // 必须写成 `name,`（`name: expr,` 会少计一个键而假红）。
+  assert.equal(keys.length, 49, 'the context carries 49 fields')
   assert.deepEqual([...keys].sort(), [...deps].sort(),
     'every context field must be a memo dependency: a missing one serves a stale value through the provider')
 })

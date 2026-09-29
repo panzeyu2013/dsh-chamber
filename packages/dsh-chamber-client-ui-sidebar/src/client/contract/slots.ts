@@ -10,14 +10,14 @@
  * (ui-settings) followed by optional `sidebar.footer.action`.
  */
 import type {
-  HostObservable, InjectFace, PropsLocale, PropsRenderSlots, PropsRuntime,
+  HostObservable, InjectFace, PropsLocale, PropsRenderSlots, PropsRuntime, SnapshotSelectorHook,
 } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pulls ui-layout's SlotMap merge so PropsRuntime<'sidebar'> resolves.
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 // Type-only: pulls ui-workspace's SlotMap merge for the two session-row seats this
 // shell now declares (patch 13) — the keys must exist in SlotMap to be declared.
 import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
-import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
+import type { MainPanelId, PanelInfo } from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { WorkspaceId } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { Translate } from '@deepseek-ai/dsh-client-locale/client'
 
@@ -27,9 +27,12 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'sidebar.brand.mark': { kind: 'single'; scope: 'root'; owner: SidebarBrandMarkOwnerProps }
     /** Brand name beside the expanded mark; the shell supplies a generic text fallback. */
     'sidebar.brand.name': { kind: 'single'; scope: 'root'; owner: SidebarBrandNameOwnerProps }
-    /** Global panel icons: each list id addresses the matching main panel key;
-     *  the shell owns the button, resolves its label from list metadata, then
-     *  asks `ctx.layout.selectPanel(id)`. */
+    /** Source-scoped panel icons: each list id addresses the matching main panel
+     *  key of THIS ctx's instance, so an entry belongs to the source that loaded
+     *  its registrant. The shell owns the button, resolves its label from list
+     *  metadata, then asks `ctx.layout.selectPanel(id)`; the wide column renders
+     *  the row inside the owning source's section, while the collapsed rail keeps
+     *  the upstream global glyph axis. */
     'sidebar.panellist': { kind: 'list'; scope: 'root'; owner: SidebarPanelIconOwnerProps }
     /** The workspace/session browsing region: declared by this package's
      *  'sidebar' entry, so ui-workspace may register without error, but the
@@ -87,7 +90,11 @@ export interface SidebarPanelIconOwnerProps {
   active: boolean
 }
 
-/** Serializable metadata for one active global panel list registration. */
+/** Root-scope panel-selection selector hook (the framework-bound `usePanelInfo`
+ *  seat): a row subscribes only to its own active state. */
+export type PanelSelectorHook = SnapshotSelectorHook<PanelInfo>
+
+/** Serializable metadata for one active panel-list registration of THIS ctx. */
 export interface SidebarPanelMetadata {
   /** List id and matching main panel key. */
   id: MainPanelId
@@ -139,7 +146,8 @@ export type SidebarRootInjected = {
   startSession: (workspaceId?: WorkspaceId) => void
   /** Toggle the sidebar column through the layout service. */
   toggleSidebar: () => void
-  /** Select the global panel addressed by a sidebar row. */
+  /** Select the main panel addressed by a sidebar row (the keyed `main` entry
+   *  of the owning ctx's layout). */
   selectPanel: (id: MainPanelId) => void
   /** Private reactive sources bound to framework selector hooks. */
   hooks: {

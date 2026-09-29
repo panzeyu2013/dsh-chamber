@@ -459,9 +459,9 @@
           "README.zh.md": "[own-divergent] 同 README.md（中文镜像）",
           "package.json": "[patch-mod] chamber 包名/版本/测试脚本（版本行走 chamber 发布）",
           "src/client/SidebarRoot.module.css": "[patch-mod] 重实现样式（多来源列表/行悬停卡/归档管理器/来源信号灯）",
-          "src/client/SidebarRoot.tsx": "[patch-mod] 重实现：多来源会话列表（按工作区分组、搜索/排序/归档管理器/悬停卡片/来源信号灯）替换上游单来源 workspaces 浏览器",
-          "src/client/contract/slots.ts": "[patch-mod] chamber 座位契约（owner props 同名但按多来源扩展）；承接 ui-workspace 的 `sidebar.session.row.{leading,hover}` SlotMap 合并（座席所有权转移，vendor 补丁 13）",
-          "src/client/index.ts": "[patch-mod] apply：注册 chamber 侧栏 + sidebar.panellist 镜像 + workspace navigation 服务 + shell.leading 席位由本包 SidebarLeadingControls（上游同形 clone）占座；座席所有权转移后续：本包自行声明并渲染 `sidebar.session.row.{leading,hover}`（原声明由 vendor 补丁 13 删除）",
+          "src/client/SidebarRoot.tsx": "[patch-mod] 重实现：多来源会话列表（按工作区分组、搜索/排序/归档管理器/悬停卡片/来源信号灯）替换上游单来源 workspaces 浏览器；来源级面板轴：宽态的行由 owning server 分组的 ServerSectionPanels 渲染，本文件的 sidebar.panellist 轴降为 rail-only（design 05 §2 / 06 §4.7）",
+          "src/client/contract/slots.ts": "[patch-mod] chamber 座位契约（owner props 同名但按多来源扩展）；承接 ui-workspace 的 `sidebar.session.row.{leading,hover}` SlotMap 合并（座席所有权转移，vendor 补丁 13）；sidebar.panellist 的来源级措辞与面板选择器别名 PanelSelectorHook（= SnapshotSelectorHook<PanelInfo>）",
+          "src/client/index.ts": "[patch-mod] apply：注册 chamber 侧栏 + 来源级面板轴投影（sidebar.panellist 镜像 → 宽态供 owning section、rail 供字形轴）+ workspace navigation 服务 + shell.leading 席位由本包 SidebarLeadingControls（上游同形 clone）占座；座席所有权转移后续：本包自行声明并渲染 `sidebar.session.row.{leading,hover}`（原声明由 vendor 补丁 13 删除）",
           "src/client/locales.ts": "[patch-mod] chamber 文案表（含上游没有的工作区/来源操作）",
           "src/index.ts": "[patch-mod] 包入口差异（module-system 宿主接线 + chamber 构面导出）",
           "tsconfig.json": "[patch-mod] chamber 构面（vendor paths/检查面）"
@@ -476,7 +476,7 @@
         ],
         "ownNotes": {
           "scripts/": "chamber 自有脚本（测试 manifest 与清单守卫）",
-          "src/": "chamber 自有实现（多来源聚合、面板镜像、来源降级、归档管理器、工作区变更/拖拽排序、client-plugin load kernel、席位 chrome、按上游逐字移植的 keyed-row FLIP 动画器 rows/animated-rows.* 等）",
+          "src/": "chamber 自有实现（多来源聚合、来源级面板轴（panel-source 镜像 + ServerSectionPanels 下挂）、来源降级、归档管理器、工作区变更/拖拽排序、client-plugin load kernel、席位 chrome、按上游逐字移植的 keyed-row FLIP 动画器 rows/animated-rows.* 等）",
           "test/": "chamber 自有测试（按域分组：session-rows/session-state/source-runtime/plugin-kernel…）"
         },
         "dropped": [
@@ -500,7 +500,10 @@
         "C5"
       ],
       "deviations": [],
-      "relatedGates": [],
+      "relatedGates": [
+        "packages/dsh-chamber-client-ui-sidebar/test/plugin-kernel/panel-entry-placement.test.ts",
+        "packages/dsh-chamber-client-ui-sidebar/test/plugin-kernel/panel-source.test.ts"
+      ],
       "symbols": [
         "src/client/SidebarRoot.tsx#SidebarRoot"
       ],

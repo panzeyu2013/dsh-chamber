@@ -203,10 +203,20 @@
   「范围决策」条），后果 = 上游归档/恢复/过滤贡献在 chamber 是死件。两座席（`sidebar.session.row.{leading,hover}`）不随该注册
   出现：上游注册里的两行由 vendor 补丁 13 号删除，改由本仓侧栏在**自己的** `children` 里声明并渲染（`renderSlot` 的
   `fallback` 让自有 Schedule 标记与 occupant 永不并现；design 09 §3.6 第四类第二形态）。
-- **A1 座席的页面级 id 冲突（开放风险）**：座席是页面级 list slot，`ui-schedule` 用固定
-  `id: 'schedule-mark'` 注册（`ui-slots` 对同 id 同优先级的第二条注册**抛错**：`already has an entry with id`）。
-  单实例或只开一个实例的 schedule bundle 时无冲突；**同一页面两个实例都加载 schedule bundle**（opt-in、默认不被 shipped 模板选中）
-  会在第二条注册处抛错——须先解「每实例 bundle 的页面级 slot id 命名空间」，再放开多实例同时启用。
+- **A1 座席的 id 冲突（口径修订 2026-09；实机复核仍挂在待办）**：注册台账是**每实例 ctx 一份**
+  （每个 boot 一个 `new Context()` + 每 ctx 一个 `SlotRegistry`；页面级共享的只有模块表/transport）。
+  以 pin 的 `ui-slots` core 做旁证（一次性实验，非仓内测试）：**同一 registry** 内同 id 同优先级
+  第二条注册抛错（`list slot "…" already has an entry with id "schedules"`），而**两个独立 registry
+  各自注册互不干扰**。故「同一页面两个实例都加载 schedule bundle 必抛」在 registry 层**不可复现**，
+  原登记按此修正。
+  仍需动作 = 实机同时启用两实例的 bundle，观察 console 是否出现该抛错（覆盖 `schedule-mark` 与
+  `schedules` 两个 id）；若出现，再走「每实例页面级 slot id 命名空间」方案。
+- **面板轴残余（已登记，不改；证据与处置在 design 06 §4.7）**：`ui-schedule` 的页面级 localStorage
+  键（`dsh.schedule.recent-time-zones.v1` 真跨实例共享；`dsh.schedule.task-tab.v1.<sessionId>` 按会话分键）、
+  30s 无 `visibilityState` 门的相对时钟（隐藏视图同样在跑）、来源拖拽中点因面板行增高最多 42px
+  （常见约 38px）而下移约 19–21px、面板点击埋点 `sidebar_menu_click` 未复制（按裁决不复制）。前三条是
+  extra row / 上游组件的既有行为（chamber 无补丁面），不做本仓修补；本轮接受的焦点 / 色带 / nav 语义 /
+  文案 parity 四项同样见 §4.7。
 - **平台腿未落地**：Windows 的 `[data-windows-titlebar]` 分支（属性已由 win32 preload 的 `markWindowsTitlebar` 写入，
   侧栏整块未抄，收口随 design 23）⇒ Windows 腿的侧栏
   形态与上游不同，属排期而非功能选择（Electron macOS 腿已按上游 darwin 分支收口，见第 52 行）。

@@ -7,18 +7,22 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 插件注册进 layout 的 `sidebar` 槽，**替换官方 ui-sidebar 注册**（官方包在
 `vendor/harness-packages` 保持原样，永不进启动图）。
 
-## alpha.2 扩展孔位（品牌 + 全局面板）
+## alpha.2 扩展孔位（品牌 + 来源级面板）
 
 外壳声明并渲染 alpha.2 官方 `ui-sidebar` 新增的三个孔位，使上游/第三方的注册
 永不悬空：
 
 - `sidebar.brand.mark` / `sidebar.brand.name`——左上品牌行；chamber 字标保持
   mark 回退，name 孔位无占用时不渲染内容（rail 同样渲染 mark 孔位）。
-- `sidebar.panellist`（list）——全局主面板行。`src/client/panel-source.ts` 把
-  槽位台账镜像为 `{id, order, label}` 元数据（label thunk 读取时解析、仅在
-  变化时通知），外壳为每条渲染一行 `PanelRow`，点击调用
-  `ctx.layout.selectPanel(id)`。上游出厂为空列表，故该区默认不可见；投影与
-  投影由 `test/plugin-kernel/panel-source.test.ts` 钉死（配套的 source-text 接线锁已按 裁决退役）。
+- `sidebar.panellist`（list）——**来源级**主面板行。`src/client/panel-source.ts`
+  把槽位台账镜像为 `{id, order, label}` 元数据（label thunk 读取时解析、仅在
+  变化时通知）。**宽态**由 owning source 的 server 分组渲染（`ServerSectionPanels`，
+  位于来源头与可折叠区之间——折叠来源不收面板行），**rail 态**保留上游全局面板
+  字形行；两种形态都由 `PanelRow` 调 `ctx.layout.selectPanel(id)`，每个条目任一
+  时刻恰好挂载一次。上游出厂为空列表，故该区默认不可见；投影由
+  `test/plugin-kernel/panel-source.test.ts` 钉死，位置由
+  `test/plugin-kernel/panel-entry-placement.test.ts` 钉死（design 05 §2 /
+  design 06 §4.7）。
 
 ## 结构
 
@@ -37,7 +41,8 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   （`packages/dsh-chamber-client-core/src/derive.ts`）。
 - 已连接来源的聚合拉取失败时，以错误文本代替 workspace 列表呈现——绝不
   冒充"无工作区"；未连接来源只显示分组头 + 状态提示；全部来源断开时显示
-  空态提示。
+  空态提示。**一处有意例外**：来源断开时它的 `sidebar.panellist` 面板行仍渲染
+  ——条目存在与否只取决于注册者是否注册，与连接态无关（design 06 §4.7）。
 - 会话行带**运行指示点**（wire `sessions.list.running`），完成未读用**chamber
   品牌蓝点**（`.stateCompleted`，6px 实心）——与固定待办条带同一枚标记，**不取**
   官方 `StateDot` 的 `done` 绿：该色与来源头连接状态绿点同 token
@@ -55,8 +60,9 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   **MONITOR 电脑字形**（自绘 `client/icons.tsx` `IconMonitorOutline16`——
   primitives 无服务器字形，原 folder 字形与 workspace 文件夹图标重合易
   误解：folder = workspace、monitor = server 用户反馈）、hover 换
-  折叠 chevron——点击收拢该来源**整个 workspace 列表**
-  （搜索胶囊、来源级 git 告警与列表一并隐藏），**不动各 workspace 自身的
+  折叠 chevron——点击收拢该来源的**浏览区**
+  （搜索胶囊、来源级 git 告警与列表一并隐藏；该来源自己的面板行在浏览区之上、
+  不随之折叠——design 06 §4.7），**不动各 workspace 自身的
   对话折叠态**（`sourceFolded` 独立于 `folded`），展开后各 workspace 及其
   会话原样恢复。**用户反馈**：来源头身份圆点已移除（身份由折叠
   字形 accent + 激活左内边线 + rail 点承担；连接状态点/转圈保留右端）。

@@ -2208,3 +2208,21 @@
 .archiveManagerDanger {
   color: var(--dsw-alias-state-error-primary);
 }
+
+/* Source-scoped panel rows (sidebar.panellist hung under its owner source;
+   design 05 §2 / design 06 §4.7). The ROW geometry stays the upstream .panelRow
+   verbatim (36px / padding 7px 8px / margin 0 2px — density is a deliberate
+   no-change); this container adds no row geometry of its own, only the section
+   inset (row box starts at 4 + its own 2px margin = the 28px source header's 6px
+   content origin) and the upstream list stack (flex column + 4px gap, copied
+   from .panelList). Accepted
+   consequence of the 4px inset: the row's hover band is ~6px narrower per side
+   than the full-bleed bands of the header/session rows; dropping the padding to
+   0 (row box at 2px) is the one-line alternative if the real machine prefers it. */
+.sectionPanels {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 2px 0 4px;
+  padding: 0 4px;
+}

@@ -409,7 +409,7 @@
   }
 }
 
-/* ---- extension holes (brand + global panel list) ---- */
+/* ---- extension holes (brand + panel axis) ---- */
 
 /* Brand identity group: the mark hole plus the optional name occupant. The
    chamber wordmark stays the mark fallback, so the row looks unchanged when
@@ -447,11 +447,13 @@
   justify-content: center;
 }
 
-/* Global panel list (`sidebar.panellist`): one row per registered main panel;
-   hidden while no plugin registers one (upstream default). Geometry mirrors
-   the official ui-sidebar stylesheet (no horizontal padding — the column root
-   owns it; 36px row height in both widths) so the rows line up with the New
-   Session button and the footer. */
+/* Rail panel axis (the upstream global panel list, rendered only while collapsed)
+   (`sidebar.panellist`): the wide column renders the rows inside each owning source's
+   section (ServerSectionPanels) and this axis takes over while collapsed, so every
+   entry mounts exactly once. Hidden while no plugin
+   registers one (upstream default). Geometry mirrors the official ui-sidebar
+   stylesheet (no horizontal padding — the column root owns it; 36px row height in
+   both widths) so the rows line up with the New Session button and the footer. */
 .panelList {
   flex: none;
   display: flex;
