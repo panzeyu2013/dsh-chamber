@@ -24,6 +24,7 @@ import { forgetMapSources } from './ledger.ts'
 import { assertSingletonModule } from './singleton.ts'
 import type { ArchivedSessionMetaRow } from './aggregate-types.ts'
 import { basenameOf, hasActiveScheduleOf, sessionDisplayTitle } from './session-display.ts'
+import type { ProjectionSessionBaseline, ProjectionWorkspaceBaseline } from './instance-projection-input.ts'
 
 export { basenameOf, hasActiveScheduleOf, sessionDisplayTitle } from './session-display.ts'
 export type { ArchivedSessionMetaRow } from './aggregate-types.ts'
@@ -632,39 +633,8 @@ function pendingKindOf(kind: string | undefined): 'approval' | 'plan-review' | '
  *  invalidate the push snapshot and let the bounded fallback pull take over; subagent
  *  rows are excluded (navigation never renders them). */
 export function projectInstanceSnapshot(
-  workspaces: {
-    items?: readonly {
-      workspaceId: string
-      path: string
-      title: string
-      sessionIds: readonly string[]
-      createdAt: string
-      updatedAt: string
-    }[]
-    archivedSessionIds?: readonly string[]
-    state?: string
-    phase?: string
-    error?: unknown
-  },
-  sessions: {
-    ids?: readonly string[]
-    byId?: Record<string, {
-      id: string
-      title?: string
-      /** The mounted vendor store resolves the official display label itself —
-       *  carried verbatim into the snapshot row. */
-      displayTitle?: string
-      cwd?: string
-      parentId?: string
-      origin?: 'subagent'
-      running?: boolean
-      blank?: boolean
-      updatedAt?: number
-      /** The row's projection bag; read for the active-Schedule fact only. */
-      projectionValues?: Readonly<Record<string, unknown>>
-    }>
-    phase?: string
-  },
+  workspaces: ProjectionWorkspaceBaseline,
+  sessions: ProjectionSessionBaseline,
   /** See {@link projectRuntimeFacts}: the SAME resolved bit feeds the ring, so one
    *  rendered fact keeps the vendor's authority. Omitted = the row's own bit. */
   statusRunning?: SessionRunningStatus,
@@ -757,6 +727,9 @@ export function projectInstanceSnapshot(
     // The mounted ctx store's workspace baseline IS the authoritative
     // archive-set source — even an empty set is a true "nothing archived" fact.
     archiveSetKnown: true,
+    pinnedSessionIds: (workspaces.pinnedSessionIds ?? []).map(String),
+    // 与归档集同址的权威来源；字段缺失 = 老宿主形状，绝不把它当成"真无置顶"。
+    pinSetKnown: workspaces.pinnedSessionIds !== undefined,
   }
 }
 
@@ -909,15 +882,15 @@ export function applyGoalActivation(
 }
 
 /**
- * Content signature of one instance snapshot (workspaces + sessions + archived
- * ids). The App layer uses it to keep aggregate state identity-preserving: an
+ * Content signature of one instance snapshot (workspaces + sessions + archive /
+ * pin sets). The App layer uses it to keep aggregate state identity-preserving: an
  * update whose rows are byte-identical must NOT mint a new state object (it
  * would re-derive servers, re-publish the chamber bridge and re-render every
  * sidebar on every fallback tick). Key order is fixed by the wire row
  * constructors, so JSON.stringify is deterministic across updates.
  */
 export function instanceSnapshotSignature(
-  snapshot: Pick<InstanceSnapshot, 'workspaces' | 'sessions' | 'archivedSessionIds' | 'archiveSetKnown'>,
+  snapshot: Pick<InstanceSnapshot, 'workspaces' | 'sessions' | 'archivedSessionIds' | 'archiveSetKnown' | 'pinnedSessionIds' | 'pinSetKnown'>,
 ): string {
   return JSON.stringify({
     w: snapshot.workspaces.map(w => ({
@@ -950,6 +923,9 @@ export function instanceSnapshotSignature(
     })),
     a: snapshot.archivedSessionIds,
     k: snapshot.archiveSetKnown === true,
+    // 置顶集必须参与签名：只变更置顶的推入否则字节相同，去重门会把标记冻住。
+    n: snapshot.pinnedSessionIds,
+    nk: snapshot.pinSetKnown === true,
   })
 }
 
@@ -1166,6 +1142,9 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
           // non-sparse on purpose — this row is a change detector, never persisted,
           // so a stable false is free.
           hasActiveSchedule: x.hasActiveSchedule === true,
+          // RENDERED like the schedule marker: a pin-only change must move this
+          // publish gate (App hook + sidebar-root-projection compare it), or the marker freezes.
+          pinned: x.pinned === true,
         })),
       })),
       // Archived rows ride the publish gate too (an open manager dialog derives
@@ -1644,6 +1623,9 @@ export function deriveServerWorkspaces(
 ): ChamberServerWorkspace[] {
   const sessionsById = new Map(snapshot.sessions.map(session => [session.sessionId, session]))
   const archivedIds = new Set(snapshot.archivedSessionIds)
+  // 上游把置顶当集合事实（tree.ts row.pinned）：由集合求得行标记，未知集合不宣称任何事实。
+  const pinnedIds = new Set(snapshot.pinnedSessionIds ?? [])
+  const pinSetKnown = snapshot.pinSetKnown === true
   const accounted = new Set<string>()
   const workspaces: ChamberServerWorkspace[] = []
   for (const workspace of snapshot.workspaces) {
@@ -1670,6 +1652,7 @@ export function deriveServerWorkspaces(
         ...(session.blank ? { blank: true } : {}),
         // The active-Schedule fact rides into the row the sidebar renders (sparse).
         ...(session.hasActiveSchedule === true ? { hasActiveSchedule: true } : {}),
+        ...(pinSetKnown && pinnedIds.has(sessionId) && !archivedIds.has(sessionId) ? { pinned: true as const } : {}),
       })
     }
     // Requires an AUTHORITATIVE archive set: with the unary fallback's unknown
@@ -1735,6 +1718,7 @@ export function deriveServerWorkspaces(
         ...(session.blank ? { blank: true } : {}),
         // Same sparse active-Schedule carry as the workspace-member rows above.
         ...(session.hasActiveSchedule === true ? { hasActiveSchedule: true } : {}),
+        ...(pinSetKnown && pinnedIds.has(session.sessionId) && !archivedIds.has(session.sessionId) ? { pinned: true as const } : {}),
       })),
     })
   }

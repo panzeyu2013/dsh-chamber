@@ -5,19 +5,17 @@
  * subscribes to the projection and publishes open-session requests. Both
  * import this module through `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`; a
  * vite shared chunk keeps the runtime single instance.
- *
- * One workspace group in the sidebar projection (computed by shared/derive.ts).
- * The synthetic trailing ungrouped bucket carries `ungrouped: true` and the
- * shared UNGROUPED_WORKSPACE_ID as its id.
  */
 import type { InstanceSnapshot } from './instance-api.ts'
-import type { ArchivedSessionMetaRow } from './aggregate-types.ts'
+import type { ArchivedSessionMetaRow, ChamberServerWorkspace } from './aggregate-types.ts'
 import type { GoalFact, SubagentActivity } from './session-row-state.ts'
 import type { SessionAuthoritySnapshot } from './session-fact-reconcile.ts'
 import { assertSingletonModule } from './singleton.ts'
 import {
   publishSessionCreationInstrument, sessionCreationLedger, type SessionCreationOrigin,
 } from './session-create-ledger.ts'
+
+export type { ChamberServerWorkspace } from './aggregate-types.ts'
 
 assertSingletonModule('aggregate-store')
 
@@ -34,56 +32,6 @@ export function isValidProducerSourceFingerprint(sourceId: string, value: unknow
   return sourceId === 'local'
     ? value === 'local'
     : typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
-}
-
-export interface ChamberServerWorkspace {
-  id: string
-  title: string
-  /** Wire display path: the hover card's middle line and its click-to-copy text. */
-  path?: string
-  /** `Date.parse` epoch ms for the card; SPARSE (missing/unparseable ⇒ absent, never NaN). */
-  createdAt?: number
-  /** True only for the synthetic trailing ungrouped bucket. */
-  ungrouped?: boolean
-  /**
-   * True only for the fallback's cwd-derived groups (`__cwd__:` ids, fetchInstanceSnapshot).
-   * Display-only: the host does not know these ids, so the sidebar must disable every
-   * workspace-scoped mutation on them (ungrouped-bucket parity).
-   */
-  synthetic?: boolean
-  sessions: {
-    id: string
-    /** Durable title projection — '' when the session has none. Rename/fork copy uses THIS. */
-    title: string
-    /**
-     * Official display label (I3): `title ?? basename(cwd) ?? id`, resolved by
-     * `derive.ts sessionDisplayTitle` and NEVER empty. This is what row labels,
-     * hover copy, aria names and todo rows render — a session whose title the
-     * host could not read shows its project directory name, never
-     * 「未命名会话」.
-     */
-    displayTitle: string
-    running?: boolean
-    updatedAt?: number
-    blank?: boolean
-    /**
-     * The session owns at least one active
-     * schedule — projected from the session's `schedule` projection
-     * (`derive.ts hasActiveScheduleOf`, upstream ui-workspace tree.ts:161-163)
-     * so the row can render the official active-Schedule marker. Sparse: absent
-     * means no active schedule.
-     */
-    hasActiveSchedule?: boolean
-  }[]
-  /**
-   * Official reuse-or-create resolution for this workspace's "+" (I2), computed
-   * by `derive.ts findReusableBlankSession` over the RAW snapshot: a blank,
-   * non-archived member session in the workspace's own directory that upstream
-   * `connectWorkspace` would reopen instead of creating another one. Absent
-   * means "create" — either no such row, or the archive set is unknown
-   * (unary fallback), where create is the honest degradation.
-   */
-  reusableBlankSessionId?: string
 }
 
 /** 会话事实档位（判定与展示分离：判定只用事实本身）。 */

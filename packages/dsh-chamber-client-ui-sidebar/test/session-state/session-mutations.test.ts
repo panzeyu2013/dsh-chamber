@@ -18,7 +18,9 @@ import {
   archiveSessionForSource,
   createSessionForSource,
   forkSessionForSource,
+  pinSessionForSource,
   unarchiveSessionForSource,
+  unpinSessionForSource,
 } from '@dsh-chamber/dsh-chamber-client-core/session-mutations'
 import { onSessionRestored } from '@dsh-chamber/dsh-chamber-client-core/session-restore'
 import { createWorkspaceForSource } from '@dsh-chamber/dsh-chamber-client-core/workspace-mutations'
@@ -145,6 +147,47 @@ test('a REFUSED archive publishes no withdraw fact in either phase (the fact nev
     await assert.rejects(archiveSessionForSource(sourceId, 's-1', { stopActivity: true }), /active/)
     assert.deepEqual(facts.removed, [], 'a refused archive leaves the row in place (no local withdraw)')
   } finally { facts.off(); releaseInstanceClient(sourceId) }
+})
+
+test('pinSessionForSource: the wire is the whole exit — one argument, no local fact, refusal rejects', async () => {
+  const sourceId = 'session-funnel-pin'
+  const client = getInstanceClient(sourceId)
+  const calls: unknown[] = []
+  client.workspace.pinSession = async (payload: unknown): Promise<UnaryResult<unknown>> =>
+    (calls.push(payload), { ok: true, value: { pinnedSessionIds: ['s-1'] } })
+  const facts = collectFacts(sourceId)
+  try {
+    await pinSessionForSource(sourceId, 's-1')
+    assert.deepEqual(calls, [{ sessionId: 's-1' }], 'one official argument — the pin set comes back on the push')
+    // 刻意无本地事实（无乐观回声）：标记只由权威置顶集落定，三个事实通道都不许动。
+    assert.deepEqual([facts.created, facts.removed, facts.restored], [[], [], []],
+      'pin publishes no local fact on any channel')
+  } finally { facts.off(); releaseInstanceClient(sourceId) }
+  const refusing = getInstanceClient(sourceId)
+  refusing.workspace.pinSession = async (): Promise<UnaryResult<unknown>> =>
+    ({ ok: false, error: { code: 'gateway/bad-request', message: 'archived', details: {} } })
+  await assert.rejects(pinSessionForSource(sourceId, 's-1'), /archived/,
+    'the archived-session refusal must reject so the row-level error funnel can render it')
+  releaseInstanceClient(sourceId)
+})
+
+test('unpinSessionForSource: same single exit, and a refusal rejects too', async () => {
+  const sourceId = 'session-funnel-unpin'
+  const client = getInstanceClient(sourceId)
+  const calls: unknown[] = []
+  client.workspace.unpinSession = async (payload: unknown): Promise<UnaryResult<unknown>> =>
+    (calls.push(payload), { ok: true, value: { pinnedSessionIds: [] } })
+  const facts = collectFacts(sourceId)
+  try {
+    await unpinSessionForSource(sourceId, 's-1')
+    assert.deepEqual(calls, [{ sessionId: 's-1' }])
+    assert.deepEqual([facts.created, facts.removed, facts.restored], [[], [], []])
+  } finally { facts.off(); releaseInstanceClient(sourceId) }
+  const refusing = getInstanceClient(sourceId)
+  refusing.workspace.unpinSession = async (): Promise<UnaryResult<unknown>> =>
+    ({ ok: false, error: { code: 'session/not-found', message: 'missing', details: {} } })
+  await assert.rejects(unpinSessionForSource(sourceId, 's-1'), /missing/)
+  releaseInstanceClient(sourceId)
 })
 
 test('unarchiveSessionForSource: the official wire takes the id and the restore fact follows it', async () => {

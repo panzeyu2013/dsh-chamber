@@ -110,6 +110,10 @@ test('fetchInstanceSnapshot derives workspace groups from session cwd facts', as
   // empty set as "no archived sessions".
   assert.deepEqual(snapshot.archivedSessionIds, [])
   assert.equal(snapshot.archiveSetKnown, false)
+  // 置顶集同一条三态规矩：unary 兜底没有置顶线源，必须报未知（false）而不是"确实没有"，
+  // 否则侧栏会在兜底来源上把空集当权威、pin 方向与标记一起说谎。
+  assert.equal(snapshot.pinSetKnown, false)
+  assert.deepEqual(snapshot.pinnedSessionIds, [])
 })
 
 test('fetchInstanceSnapshot resolves the official display label on the unary path', async () => {
@@ -181,10 +185,12 @@ import {
   callAndThrow,
   getInstanceClient,
   InstanceRpcError,
+  pinSession,
   purgeArchivedSessions,
   releaseInstanceClient,
   sessionArchiveRefusal,
   stopSessionsForPurge,
+  unpinSession,
   type SessionRunningLineage,
   type ArchiveCleanupPurgeResult,
 } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
@@ -982,6 +988,33 @@ test('the unarchive accessor posts the official workspace/unarchiveSession envel
   const body = JSON.parse(bodies[0] as string) as { method?: string; payload?: unknown }
   assert.equal(body.method, 'workspace/unarchiveSession')
   assert.deepEqual(body.payload, { args: { request: { sessionId: 's1' } } })
+})
+
+test('the pin/unpin accessors post the official workspace envelopes', async () => {
+  // Pin landing: two official idempotent Remotes with the same single { sessionId }
+  // request key as every other workspace mutation. No local field, no second phase —
+  // the marker set arrives on the follow push only.
+  const bodies: string[] = []
+  const instanceId = 'wire-pin-shape'
+  const client = getInstanceClient(instanceId)
+  const stub: typeof fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const raw = String(init?.body ?? '{}')
+    bodies.push(raw)
+    const envelope = JSON.parse(raw) as { rpcId?: string }
+    return jsonResponse({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: { pinnedSessionIds: ['s1'] } } })
+  }) as typeof fetch
+  try {
+    await withFetch(stub, async () => {
+      await pinSession(client, 's1')
+      await unpinSession(client, 's1')
+    })
+  } finally { releaseInstanceClient(instanceId) }
+  const first = JSON.parse(bodies[0] as string) as { method?: string; payload?: unknown }
+  assert.equal(first.method, 'workspace/pinSession')
+  assert.deepEqual(first.payload, { args: { request: { sessionId: 's1' } } })
+  const second = JSON.parse(bodies[1] as string) as { method?: string; payload?: unknown }
+  assert.equal(second.method, 'workspace/unpinSession')
+  assert.deepEqual(second.payload, { args: { request: { sessionId: 's1' } } })
 })
 
 // The unary fallback publishes the session's
