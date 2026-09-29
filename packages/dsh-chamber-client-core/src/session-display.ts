@@ -15,8 +15,8 @@
  * Mirrors the official derivation verbatim — upstream reads the session's
  * registered `schedule` projection and asks whether anything is active:
  * `(session.projectionValues?.schedule?.length ?? 0) > 0`
- * (vendor ui-workspace/src/client/tree.ts:161-163, consumed by
- * `{row.hasActiveSchedule && <ActiveScheduleIndicator/>}` at Rows.tsx:468).
+ * (upstream derives the same fact from the shared Host task catalog:
+ * ui-schedule/src/client/SessionScheduleMark.tsx).
  * The value is unknown-typed here (a wire projection bag), so the array test
  * replaces upstream's optional chaining on a typed `readonly ScheduleRecord[]`:
  * absent / not-an-array / empty all mean "no active schedule" — never a claim

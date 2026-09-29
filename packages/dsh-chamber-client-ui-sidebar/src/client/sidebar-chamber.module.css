@@ -2208,3 +2208,74 @@
 .archiveManagerDanger {
   color: var(--dsw-alias-state-error-primary);
 }
+
+
+/* ===== 归档行与归档提示条（design 06 §3.4，上游 Rows.module.css 的 .archived 与
+   RowActionToast 的 section 内实例化）===== */
+
+/* 归档行：占原槽位、置灰；标题落到 caption 墨色（上游同一步阶）。 */
+.sessionArchived .sessionTitle {
+  color: var(--dsw-alias-label-caption);
+}
+
+/* 来源级归档提示条：header 之下、列表之上的一行内联通知（rowError 同族版式）。 */
+.archiveNotice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: 2px 4px 4px 20px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-caption);
+  white-space: normal;
+  word-break: break-word;
+}
+
+.archiveNoticeText {
+  color: var(--dsw-alias-label-caption);
+}
+
+/* 内联文本动作（撤销 / 筛选已归档 / 查看其他会话）：上游 toast 的按钮在行内文字里
+   同样是无胶囊的文本动作。 */
+.archiveNoticeAction {
+  border: 0;
+  padding: 0 2px;
+  background: none;
+  font: inherit;
+  color: var(--dsw-alias-brand-primary);
+  cursor: pointer;
+}
+
+.archiveNoticeAction:hover {
+  text-decoration: underline;
+}
+
+/* only 空态里的跳回入口与说明同行。 */
+.empty .archiveNoticeAction {
+  margin-left: 6px;
+}
+
+
+/* 搜索命中行复用归档行墨色（上游 .searchResultRow.archived 同组选择器）。 */
+.sessionArchived .searchResultTitle,
+.sessionArchived .searchResultWorkspace,
+.sessionArchived .searchResultSnippet {
+  color: var(--dsw-alias-label-caption);
+}
+
+/* 归档命中的恢复入口（行后同级文本动作；见 ServerSectionSearch 注释）。 */
+.searchResultUnarchive {
+  align-self: flex-start;
+  margin: 0 4px 4px 20px;
+}
+
+
+/* ===== 按工作区树（design 06 §3.4）===== */
+
+/* 嵌套工作区：父目录前缀 / 家族优先给出的深度，缩进整组（头 + 行）；同级顺序仍由
+   wire 序与家族约束决定（本模块只改缩进，不改序）。 */
+.workspaceTreeNested {
+  padding-left: calc(var(--chamber-tree-depth, 1) * 12px);
+}
+

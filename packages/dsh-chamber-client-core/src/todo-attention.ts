@@ -19,6 +19,9 @@
  *   ride a disconnected source too, and are rendered (labelled `stale`) while
  *   the rows survive. Rows GONE from the projection surface nothing — the
  *   completed bit lives on the row, so a row-absent session has no fact to show.
+ * - Archived rows are excluded: the list and the search refuse to open them (they
+ *   show the archived notice instead), so an entry could never be cleared by
+ *   viewing it and would haunt the area forever.
  * - The session being read right now (the active view's current session) is
  *   excluded by the caller-provided viewing ids — the same single-selection
  *   rule as the current-session highlight (SidebarRoot chamberInstanceId).
@@ -85,6 +88,9 @@ export function deriveTodoAttention(
       for (const session of workspace.sessions) {
         // 正在查看的会话不进待办（同高亮单选纪律；内容已在屏幕上）。
         if (server.id === opts.viewingSourceId && session.id === opts.viewingSessionId) continue
+        // 归档行不进待办：归档行不可打开（show/only 下虽进投影但点击只提示），若进待办会留下
+        // 永久无法通过“查看”清除的幻影未读，直接违反归档=不可打开的契约。
+        if (session.archived === true) continue
         const facts = runtime.sessions[session.id]
         if (facts === undefined) continue
         const pending = facts.pending

@@ -46,6 +46,20 @@ export const GROUPS = {
     'test/session-rows/seat-position.test.ts',
     // 行动作簇：kebab + 独立归档钮（上游 ArchiveSessionRowButton 的形态移植；源码文本 + 字典值锁）。
     'test/session-rows/session-row-actions.test.ts',
+    // 来源头视图选项菜单：上游 ViewOptionsMenu 三段三轴形态 + 未知归档集的禁用/选中规则。
+    'test/session-rows/view-options-menu.test.ts',
+    // 归档筛选三态（derive + 搜索跟随 + renderer 接线锁）。
+    'test/session-rows/archived-filter.test.ts',
+    // 按工作区树：owningParentFolder 规则 + 家族优先 + 缩进接线锁。
+    'test/session-rows/workspace-tree.test.ts',
+    // 单列表 flat：per-source 账号 + 无表头渲染 + 本地拖拽提交接线锁。
+    'test/session-rows/flat-list.test.ts',
+    // 置顶渲染分区（Phase 4 选项1）：纯函数 + 三处接线 + 集合出处门。
+    'test/session-rows/pin-partition.test.ts',
+    // 归档提示条模型：per-kind TTL + 断连裁剪 + hook/shell 接线锁。
+    'test/session-rows/archive-notice.test.ts',
+    // 第三轮 review 的回归锁：置顶拖放门、看门狗、待办归档排除、签名/簿记/焦点/悬停/提示条等。
+    'test/session-rows/round3-regressions.test.ts',
     // 孤儿 workspace 行的注册清理入口：常驻清理钮 + 徽标共用 opener（源码文本 + 字典值锁）。
     'test/session-rows/workspace-orphan-cleanup.test.ts',
     // (facts 身份, running, stale) → 单槽记忆化的纯行为测（9-12 次读数 → 1 次派生）。

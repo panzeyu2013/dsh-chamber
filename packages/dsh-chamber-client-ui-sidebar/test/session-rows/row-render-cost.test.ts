@@ -7,7 +7,7 @@
  *
  * 1. 行 = 模块级 memo(SessionRow)，props 全是原始值/稳定引用，now 不在 props
  *    （now 会让 memo 恒失效），悬停卡改成 open 时自取 Date.now()；
- * 2. 行的 12 处状态读数全走 reader，reader 内部共用 ONE memo 槽：
+ * 2. 行的 13 处状态读数全走 reader，reader 内部共用 ONE memo 槽：
  *    (facts 身份, session.running, stale) 相同即同一次 sessionRowState 派生；
  * 3. SidebarRoot 的 ctxValue 走 useMemo 且 45 个字段逐项进依赖数组；
  * 4. 空 query 不建搜索快照、空 rowErrors 不扫全表，短路都在调用点。
@@ -46,15 +46,16 @@ test('the row is a module-level memo component with value props and no render cl
   assert.ok(openAt !== -1 && clockAt > openAt, 'the clock is read inside the open-only card body')
 })
 
-test('the row derives nothing itself: 12 state faces share the one memoized derivation', () => {
+test('the row derives nothing itself: 13 state faces share the one memoized derivation', () => {
   assert.doesNotMatch(ROWS, /sessionRowState\(/, 'the row must not call the pure leaf directly')
   const faces = ROWS.match(/sessionState(?:Label|Pending|Marker|Dot)\(server, session\)/g) ?? []
-  assert.equal(faces.length, 12, 'the row renders marker/label/pending/dot (' + faces.length + ' reader calls)')
+  // 13 = 12 + 归档悬停卡的 done/idle 替换判定（同样只经 sessionRowStateOf，不新增派生）。
+  assert.equal(faces.length, 13, 'the row renders marker/label/pending/dot + the archived-hover branch (' + faces.length + ' reader calls)')
   // 每个 reader 原文不动地经同一个 sessionRowStateOf……
   for (const reader of ['sessionStateLabel', 'sessionStatePending', 'sessionStateMarker', 'sessionStateDot'])
     assert.match(HOOK, new RegExp('const ' + reader + ' = [\\s\\S]{0,240}?sessionRowStateOf\\(server, session\\)'))
   // ……而 sessionRowStateOf 对 (facts 身份, running, stale) 只有一个槽：
-  // 首次调用派生并填槽，其余 11 次读数命中 slot.result（行为见 row-state-cache.test.ts）。
+  // 首次调用派生并填槽，其余 12 次读数命中 slot.result（行为见 row-state-cache.test.ts）。
   assert.match(HOOK, /const rowStateCache = useMemo\(\(\) => createSessionRowStateCache<SessionRowStateResult>\(\), \[\]\)/)
   assert.match(HOOK, /const slot = rowStateCache\.slot\(facts, session\.running, server\.runtime\?\.stale\)/)
   assert.match(HOOK, /if \(slot\.result !== undefined\) return slot\.result/)
@@ -66,16 +67,32 @@ test('the row menu items are memoized on the dictionary', () => {
   assert.match(ROWS, /items=\{menuItems\}/)
 })
 
-test('the section memoizes its 45-field context value, covering every field', () => {
+test('the section memoizes its context value: stable actions + state-only deps', () => {
   assert.match(ROOT, /const ctxValue: SidebarSectionContextValue = useMemo\(\(\) => \(\{/)
   const block = /const ctxValue: SidebarSectionContextValue = useMemo\(\(\) => \(\{([\s\S]*?)\}\), \[([\s\S]*?)\]\)/.exec(ROOT)
   assert.ok(block !== null, 'the memoized ctxValue block must exist')
   const keys = [...block[1].matchAll(/^\s{4}([A-Za-z_$][\w$]*),$/gm)].map(match => match[1])
   const deps = block[2].split(',').map(part => part.trim()).filter(part => part !== '')
-  // 45 = 44 + onPinSession（置顶行级漏斗，pin 落地时有意抬升；键与依赖仍须一一对应）。
-  assert.equal(keys.length, 45, 'the context carries 45 fields')
-  assert.deepEqual([...keys].sort(), [...deps].sort(),
-    'every context field must be a memo dependency: a missing one serves a stale value through the provider')
+  // 动作身份由 useStableHandlers 冻结（每个属性是缓存闭包，调用转发到 ref 中的最新实现），
+  // 不再逐项进依赖；**状态字段仍必须逐项进依赖**，否则 provider 会端出过期值。
+  assert.ok(block[1].includes('...actions,'), 'the stable actions object is spread into the value')
+  assert.ok(deps.includes('actions'), 'the stable actions object is a memo dependency')
+  const stateDeps = deps.filter(dep => dep !== 'actions')
+  assert.deepEqual([...keys].sort(), [...stateDeps].sort(),
+    'every state field must be a memo dependency: a missing one serves a stale value through the provider')
+  // 稳定包装本身：一次创建、按 key 缓存闭包、调用转发到每次渲染刷新的 ref。
+  assert.match(ROOT, /function useStableHandlers<T extends object>\(handlers: T\): T \{/)
+  assert.match(ROOT, /const actions = useStableHandlers\(\{/)
+  assert.match(ROOT, /handlersRef\.current = handlers/)
+  // 关键回归（第二轮评审 blocker）：**每渲染重建**的 commit* 三兄弟必须走稳定包装，不得留在
+  // ctxValue 字面量/依赖里——否则 Object.is 每渲染失败，memo(ServerSection/SessionRow) 全部失效。
+  const actionsBlock = /const actions = useStableHandlers\(\{([\s\S]*?)\}\)/.exec(ROOT)
+  assert.ok(actionsBlock !== null, 'the actions literal must exist')
+  for (const handler of ['commitSessionDrag', 'commitWorkspaceDrag', 'commitServerDrag']) {
+    assert.ok(actionsBlock[1].includes(`    ${handler},`), `${handler} must ride the stable actions object`)
+    assert.equal(block[1].includes(`    ${handler},`), false,
+      `${handler} must NOT sit in the ctxValue literal (per-render identity defeats the memo)`)
+  }
 })
 
 test('the source section itself is memo-wrapped', () => {

@@ -7,15 +7,18 @@ import { useRef } from 'react'
 import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { increasedForkTitle } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import { getInstanceClient, renameSession } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
-import { archiveSessionForSource, createSessionForSource, forkSessionForSource, pinSessionForSource, unpinSessionForSource } from '@dsh-chamber/dsh-chamber-client-core/session-mutations'
+import { archiveSessionForSource, createSessionForSource, forkSessionForSource, pinSessionForSource, unarchiveSessionForSource, unpinSessionForSource } from '@dsh-chamber/dsh-chamber-client-core/session-mutations'
+import type { SourceNoticeKind } from './sidebar-root-notices.ts'
 import { classifyArchiveFailure, type SessionArchiveConfirmRequest } from './session-archive-confirm.ts'
 import type { RunAction } from './sidebar-root-actions.ts'
 
-export function useSidebarSessionActions({ runAction, openArchiveConfirm }: {
+export function useSidebarSessionActions({ runAction, openArchiveConfirm, showNotice }: {
   runAction: RunAction
   /** Arms the archive-active confirmation (owner: useSidebarDialogs). Returns
    *  false when the single-dialog-layer rule refused the arm. */
   openArchiveConfirm: (request: SessionArchiveConfirmRequest) => boolean
+  /** 来源级归档提示条（design 06 §3.4）：归档成功后就地提示「撤销 / 筛选」。 */
+  showNotice: (sourceId: string, kind: SourceNoticeKind, sessionId: string) => void
 }) {
   /** Per-workspace in-flight "+" resolution (upstream `connectWorkspace`'s
    *  `connecting` map): a second click joins the first. Keyed like the
@@ -110,6 +113,8 @@ export function useSidebarSessionActions({ runAction, openArchiveConfirm }: {
         return
       }
       chamberBridge.requestRefresh(server.id)
+      // 上游 toast：归档成功后提示撤销 / 筛选（已显示归档时筛选项由渲染侧隐藏）。
+      showNotice(server.id, 'archived', sessionId)
     })
     archiveActionRef.current.set(key, task)
     void task.finally(() => {
@@ -138,5 +143,22 @@ export function useSidebarSessionActions({ runAction, openArchiveConfirm }: {
       if (pinActionRef.current.get(key) === task) pinActionRef.current.delete(key)
     })
   }
-  return { onForkSession, onNewSession, onArchiveSession, onPinSession }
+  /** 归档行的「恢复」出口（官方 workspace/unarchiveSession，管理器批量同款线面）：
+   *  与归档同一条 keyed 漏斗，失败落行级 rowErrors 键 `<source>/session/<id>/unarchive`。 */
+  const unarchiveActionRef = useRef(new Map<string, Promise<void>>())
+
+  const onUnarchiveSession = (server: ChamberServerAggregate, sessionId: string): void => {
+    const key = `${server.id}/session/${sessionId}/unarchive`
+    if (unarchiveActionRef.current.has(key)) return
+    const task = runAction(key, async () => {
+      await unarchiveSessionForSource(server.id, sessionId)
+      chamberBridge.requestRefresh(server.id)
+    })
+    unarchiveActionRef.current.set(key, task)
+    void task.finally(() => {
+      if (unarchiveActionRef.current.get(key) === task) unarchiveActionRef.current.delete(key)
+    })
+  }
+
+  return { onForkSession, onNewSession, onArchiveSession, onUnarchiveSession, onPinSession }
 }

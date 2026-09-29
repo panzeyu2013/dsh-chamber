@@ -32,10 +32,12 @@ interface WorkspaceDeleteTarget {
   orphaned: boolean
 }
 
-export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors }: {
+export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors, showNotice }: {
   servers: readonly ChamberServerAggregate[]
   runActionWithOutcome: RunActionWithOutcome
   setRowErrors: Dispatch<SetStateAction<Record<string, string>>>
+  /** 来源级归档提示条（design 06 §3.4）：第二段「停止并归档」成功后同样就地提示。 */
+  showNotice: (sourceId: string, kind: 'archived' | 'stoppedAndArchived' | 'archivedNotOpenable', sessionId: string) => void
 }) {
   const [addingWorkspace, setAddingWorkspace] = useState<string | null>(null)
   const [addingWorkspaceBusy, setAddingWorkspaceBusy] = useState(false)
@@ -252,6 +254,8 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
       try {
         await archiveSessionForSource(target.sourceId, target.sessionId, { stopActivity: true })
         chamberBridge.requestRefresh(target.sourceId)
+        // 上游 stoppedAndArchived 文案分支：撤销 / 筛选入口与 archived 同形。
+        showNotice(target.sourceId, 'stoppedAndArchived', target.sessionId)
       } catch (reason) {
         setArchiveConfirmError(reason instanceof Error ? reason.message : String(reason))
         throw reason

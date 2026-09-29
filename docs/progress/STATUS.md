@@ -130,9 +130,10 @@
 
 **待裁（与 chamber 功能/契约相冲；plan §1 编号即条号，1.3 归下面的外部约束模块）**
 
-- **1.1 pinned 会话（残余：置顶序 + 拖拽分区守卫）**：写入口与行面见 design 06 §5/§7（登记 checklist §4.6）；
-  仍未接客户端置顶序（上游 `pinSessionOrder`）与拖拽的跨分区守卫；另有两处置顶诚实性缺口（未挂载来源的发送即忘、
-  半开 follow 通道的陈旧集）——机制、候选落法与残余④见 design 06 §5、plan §1.1。
+- **1.1 pinned 会话（残余：块内拖拽 + 跨块守卫 + 账号写入）**：未做 = 置顶块内拖拽与跨块守卫
+  （涉及置顶行的拖放一律不提交，marker 关闭——比上游更保守的守卫）、以及把置顶写进本地账号
+  （上游 `pinSessionOrder` 的持久领先槽——本仓 unpin 回自然位，登记偏差 B2，见下方必要取舍）；另有两处
+  置顶诚实性缺口（未挂载来源的发送即忘、半开 follow 通道的陈旧集）不变——机制与残余见 design 06 §5、plan §1.1。
 - **1.2 会话行时间列**：上游行尾静息显示相对时间（`primaryStatus.trailingLabel ?? timeLabel(updatedAt…)`），本仓行尾是
   **状态槽**（品牌蓝完成点 / 14px pending / `data-chamber-*` 机器标记），相对时间只在悬停卡。
 - **1.5 重命名交互**：本仓行内表单（双击进入，拖拽/pending-click 围着它写），上游是 `shell.overlay` 模态
@@ -148,8 +149,8 @@
 - 呈现语义：行尾状态槽（时间只在卡片）、会话卡状态行 0–1（上游 1–2 且至少一行）、菜单密度 = 原语 `compact` 实测档
   （24px 行/11px 字，比 26px 列表行矮 2px）、命中盒 = 视觉盒（六个小图标钮 20/20/18/16）、行标题两级墨色、
   动作簇 4px/20px、footer `gap: 4px`。
-- 缺的上游功能（已裁不做）：`sidebar.toggle.badge`、`sidebar.workspaces` 的官方归档/恢复/过滤贡献、flat 单列表模式、
-  按工作区树分组（`groupBy.workspaceTree`）、跨来源移动会话
+- 缺的上游功能（已裁不做）：`sidebar.toggle.badge`、`sidebar.workspaces` 的官方归档/恢复/过滤贡献（洞内贡献仍不渲染）、
+  跨来源移动会话；flat 单列表与按工作区树按 per-source 提供（见下文「视图选项三轴」条）
   ——本条只登记「与上游不同」这一事实，逐条裁决与理由见下文「范围决策」条，不重复裁决文字。
 - 缺的上游交互机制（**按裁决登记为不做**；上游证据用安装产物 `SB`/`WS` 简写，本仓面只写路径不写行号）：
   - **重命名提交无校验**：上游 `trim()` 后提交、空/未变/重名时禁用确认并给 `conflict.named`、聚焦全选标题、组合输入
@@ -160,10 +161,6 @@
   - **搜索命中打开后不 reveal**：上游清查询、收搜索、置 `revealSessionId`、展开所属组、抬窗口、`scrollIntoView`
     （`WS:1032-1040`、`WS:343-356`）；本仓 `ServerSectionSearch.tsx` 只 `openSession`，`scrollIntoView` 在本包与
     client-core 零命中（与 §1.6 search 形态同族，重议时并裁）。
-  - **本仓归档路径无提示/撤销**：上游归档后 6s toast + 撤销 + 看已归档（`session-actions/RowActionToast.tsx`）；本仓
-    `sidebar-root-sessions.ts` 只 `requestRefresh`，`notify`/`toast` 在本包零命中 ⇒ 与官方 ⇧⌘A 路线行为不同。
-  - **占位「新会话」行可拖拽**：上游 `draggable` 带 `!row.blank` 门（`rows/Rows.tsx`）；本仓 `ServerSectionRows.tsx` 只排除
-    ghost/synthetic（同行动作簇与双击重命名已按 blank 门控）⇒ 空行可被拖走并提交一次 `insertSessionBefore` 重排。
   - **添加工作区后不自动开会话**：上游 adopt+create 后 `startSession`（`WS:1316-1319`）；本仓 `sidebar-root-dialogs.tsx`
     只建+刷新+关闭（本仓流程见 design 05 §2）⇒ 每个新工作区多一次 `+`。
   - **rail 无「添加工作区」控件**：上游两态都渲染 add 按钮（`WS:1287-1302`）；本仓 rail 只有来源色点（design 06 §5 已裁
@@ -320,20 +317,33 @@
 - 远端宿主上的空白会话残留：按已知降级接受；根治须上游给 selection 作用域。
 - 复合首屏 `ui-chat` 老代实例整面失败：收口 = 升锚到当前 pin + chamber 侧诚实提示。
 - 未挂载来源的工作区集合只有「回声 + 挂载 push」：不做每次变更付一次后台挂载。
-- 不做（v1）：跨来源移动会话、单 store 真融合、控制面会话实时同步、远程实例管理 UI 外壳、上游视图选项菜单的
-  分组与归档筛选两轴（`groupBy` 三态与 `archivedFilter` 三态——归档会话不进导航投影，看/恢复归档由归档管理器承担；
-  `orderBy` 两态本仓已实现，见 design 06 §3.1）。推迟：flat 单列表模式。
+- 不做（v1）：跨来源移动会话、单 store 真融合、控制面会话实时同步、远程实例管理 UI 外壳、跨来源平铺列表。
+- **视图选项三轴的登记偏差（B 类；规则正文与理由见 design 06 §3.4/§5，STATUS 不重复）**：
+  B1 排序模型——默认 `manual`（上游 `updated`）、manual 权威 = 宿主 wire 序（上游本地账号序）、
+  updated = 本仓活动视图（上游纯 recency）；B2 pin `unpin` 后行回自然位（上游 manual 保留领先槽，
+  见 1.1）；B3 按工作区树在本仓**家族优先**（上游纯目录前缀，design 08 §3.3）；B4 树模式的展开/折叠
+  模型与拖拽父子约束未照搬上游（上游按 ancestor 自动展开、父组折叠隐藏子组、拖拽受父子约束；本仓
+  folded 缺席即展开、父组折叠只隐藏自己的行、拖拽无父子约束）；B5 会话拖拽不切换 `orderBy`（上游
+  拖拽即切 `manual`，本仓留在 updated 并写 account 序）；B6 本地账号（flatOrder / ungroupedOrder /
+  updated account）的成员集 = 当前可见行（上游保留隐藏成员，恢复时回原槽位）；B7 本地搜索匹配链
+  （displayTitle → cwd basename → session id；上游只匹配 summary.title + workspace 标签）；B8 归档
+  提示条的颜色 tone 与成功/警示字形未移植（role = alert 本就是上游行为；TTL 仅 hold 层对齐）；B9 会话
+  行窗口的配额语义（上游 5 行且 blank/running/子代理豁免）；B10 本地账号中新 fork 子项落尾（上游
+  `placeFork` 紧邻其源）。
+  per-source 是 N-ctx 实例化（单来源浏览面 =
+  上游单主机浏览器），**不计偏差**。
 - 保留项（裁决）：`ALLOW_BUILDS` 的 `fs-ext` 保留；`runtime-host-adapter` 退役不采纳（夹具契约）；连接 fork `ownsGeneration()` 守卫保留为纵深防御（删除行为等价、无法被测试见证）——不要补测试。
 - 设置壳偏差：自绘 chrome、面板渲染选中源自己 boot ctx 台账（故该源壳必须挂载）、离线远端不可达占位、选择器 body portal。
 - 官方桌面账户家族不加载（design 09 §3.5 有意跳过名单③）：该行的 `dshDesktop` 门在本页成立而其 `desktop-onboarding` 浮层会接管 `#root`（本页没有 desktop 表单结算它）⇒ 冷启动整页被接管；跳过 = 与官方 web 形态一致。代价：桌面账户分节（各源实测 `signed-out`）、账户登录步骤/`settings.models.sign-in` 座与 `shell.quota-notice` 认领一并消失，凭据配置回落到 models 的 API-key 编辑路径。开放风险：skip 压在上游 id 字面量上，远端实例可跑不同 dsh ⇒ 换 id/换家族会静默复发（C4 `COVERED_SENTINELS` + `roster-parity`，后者依赖 vendor 子模块/CI）。复发兜底 = `root-takeover-watch`（design 09 §3.5）：只认 #root 内联 `style.opacity=0`（稳定态按 grace，亚 grace 抖动按 15s/3 次窗口），上报 incident 并按页面预算释放；样式表/类名隐藏、`calc()`/`var()` 与替换 #root 不在网内，释放不移除外来浮层（可能仍拦指针）；`inert`-only 合法对话框不受影响。**退出条件冲突**：若上游把该门改成宿主能力而删本覆盖条目，必须同批退役/降级本网（合法 onboarding 与劫持签名不可区分）。账户面若要做属 chamber 自建特性（design 05 §5，未排期）。
 - 上游对齐轮引入的有意偏差（仍成立）：首启阶段活动视图门；`sectionsEmpty` 占位保留；框架失败屏深引 `ui-primitives/src/Button.tsx`（主图已越 `mainGraphRaw.warn`，待决 = 拆懒化 or 上调阈值并写头注）；`Switch` 披露属性挂原语控制节点（收口需上游透传）；「开/选中」色用业务蓝（六处落点，不改官方组件）；侧栏 schedule 事实由 chamber 带过去（A1 后官方行座席同样渲染：`ui-schedule` 的 occupant 落在 leading/hover 座席，本仓 `SessionScheduleIndicator` 只作 occupant 缺席的 fallback）；会话状态标记（蓝点/14px 徽标）与 Dock 角标/桌面通知为保留偏差，判据 design 06 §4.3/§5、design 19 §3.7。
-- 默认排序 `manual`（design 06 §3.1）；窗口标题冻结（Electron `dsh-chamber-electron`、壳 `dsh-chamber`）。
+- 默认排序 `manual`（design 06 §3.1/§3.4）；窗口标题冻结
+  （Electron `dsh-chamber-electron`、壳 `dsh-chamber`）。
 - `sidebar.workspaces` 声明但不渲染（裁决）：保留声明（撤销会让官方注册与第三方注入静默消失：未声明槽的 `slots.inject` 不执行回调，抛错点在回调内的 `register`），
   chamber 自有多源列表拥有浏览区，上游归档/恢复/过滤贡献在 chamber 为死件；锁测试
   `packages/dsh-chamber-client-ui-sidebar/test/source-runtime/sidebar-slot-declaration.test.ts`
   （design 24 §1、design 05 §2.2.1）。
-- 已归档浏览过滤推迟：恢复入口走官方 `workspace/unarchiveSession`（管理器行/批量）；
-  `ArchivedFilter` 镜像 + view-prefs 持久化仅在多来源确有浏览需求时排期（判据 = design 24 §1）。
+- 归档提示条（section 内、折叠门内、per-shell 瞬态）与筛选降级（`archiveSetKnown !== true` 时整轴禁用、
+  按 default 渲染、存储值保留）在**上游无对应状态**；规则与理由见 design 06 §3.4/§5。
 - **归档准入两段式 + 旧宿主降级**（design 24 §5）：chamber 恒发官方两段式（首调无 `stopActivity`，宿主以 `workspace/session-active` 拒绝并列出活动，确认后带 `stopActivity: true` 重发，停止由宿主 provider 完成）；**已接受的降级** = 无该准入的旧宿主上第二调原样上抛，归档不再由客户端补偿停止（旧 `stopArchivedSubtree` 腿已删，不保留）——安静会话归档照旧，带后台工作的会话在旧宿主上归档后其工作继续运行；**不做版本探测**（能力自证：只有能返回该拒绝的宿主才收到第二调）。git 的 pre-remove 归档勾选同此口径（`stopActivity` 随勾选授权，旧宿主忽略该字段，行为同前）。证据：`packages/dsh-chamber-client-core/src/instance-api.ts`（`archiveSession`/`sessionArchiveRefusal`）、`packages/dsh-chamber-client-ui-sidebar/src/client/session-archive-confirm.ts`、`packages/dsh-chamber-client-ui-git/src/shared/saga.ts`。
 - 菜单密度 = primitives `compact` 档（= `.compactList`，实测 24px 行 / 11px 字；design 06 §7），不得改回默认/dense。
 - Electron 二进制惰性安装（共享 dist）；dev 实例隔离（独立 user-data、端口 17520 起退避）。

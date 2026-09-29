@@ -13,7 +13,7 @@ import { Fragment, memo, useMemo, useRef } from 'react'
 import clsx from 'clsx'
 import {
   IconArchiveOutlineRegular, IconBranchOutlineRegular, IconEditOutlineRegular, IconEllipsisOutlineRegular,
-  IconPinFillRegular, IconPinOutlineRegular, Menu,
+  IconPinFillRegular, IconPinOutlineRegular, IconUnarchiveOutlineRegular, Menu,
   Tooltip, type MenuItem,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChamberServerAggregate, ChamberServerWorkspace } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
@@ -36,6 +36,8 @@ export interface ServerSectionSessionRowsProps {
   sessionMarker: (sessionId: string) => 'before' | 'after' | null
   activeSessionDrag: boolean
   isGhostSession: (session: ChamberServerWorkspace['sessions'][number]) => boolean
+  /** 本组是否 flat 伪账号（显式传入，见 SessionRowProps.flat）。 */
+  flat: boolean
 }
 
 type SidebarSession = ChamberServerWorkspace['sessions'][number]
@@ -61,11 +63,14 @@ interface SessionRowProps {
   accountKey: string
   synthetic: boolean
   ungrouped: boolean
+  /** 单列表伪账号标记：由调用侧显式传入（不得从 accountKey 反推——真实工作区 id
+   *  恰好等于 FLAT_ACCOUNT_KEY 时会被误判为 flat）。 */
+  flat: boolean
 }
 
 const SessionRow = memo(function SessionRow({
   server, session, current, ghost, marker, activeSessionDrag, menuOpenRow, renamingRow,
-  sessionDragError, sessionActionError, accountKey, synthetic, ungrouped,
+  sessionDragError, sessionActionError, accountKey, synthetic, ungrouped, flat,
 }: SessionRowProps) {
   const {
     t,
@@ -81,7 +86,9 @@ const SessionRow = memo(function SessionRow({
     openSession,
     onForkSession,
     onArchiveSession,
+    onUnarchiveSession,
     onPinSession,
+    showNotice,
     toggleMenu,
     closeMenu,
     useShortcuts,
@@ -102,14 +109,18 @@ const SessionRow = memo(function SessionRow({
   // 行菜单条目（4 对象 + 4 元素 + 4 次 t()）每次渲染重建：按 t 与 session.pinned 记忆化——
   // 两者是文案与字形的全部输入，locale / 置顶态不变时同一数组跨渲染复用。
   const menuItems = useMemo((): MenuItem[] => [
-    {
-      // 上游 PinSession 的菜单入口（order 100，先于 rename 的 200）：本仓按该文件逐字移植
-      // 菜单项形态（无分隔线/快捷键）。图标照上游 markup 传 14；本仓菜单是 compact 档，
-      // `.compactList .itemIcon svg` 会把它覆盖成 12px（design 06 §7 的 pin 实测值）。
-      id: 'pin',
-      label: t(session.pinned === true ? 'menu.unpinSession' : 'menu.pinSession'),
-      icon: session.pinned === true ? <IconPinFillRegular size={14} /> : <IconPinOutlineRegular size={14} />,
-    },
+    // 归档行上 pin 两个入口缺席（上游 PinSession 的 `if (archived) return null` 早退）；
+    // 归档项在归档行上翻转为「恢复」（上游 ArchiveSession 同一菜单项的两个方向）。
+    ...(session.archived === true
+      ? []
+      : [{
+        // 上游 PinSession 的菜单入口（order 100，先于 rename 的 200）：本仓按该文件逐字移植
+        // 菜单项形态（无分隔线/快捷键）。图标照上游 markup 传 14；本仓菜单是 compact 档，
+        // `.compactList .itemIcon svg` 会把它覆盖成 12px（design 06 §7 的 pin 实测值）。
+        id: 'pin',
+        label: t(session.pinned === true ? 'menu.unpinSession' : 'menu.pinSession'),
+        icon: session.pinned === true ? <IconPinFillRegular size={14} /> : <IconPinOutlineRegular size={14} />,
+      }]),
     {
       id: 'rename',
       label: t('action.rename'),
@@ -130,11 +141,12 @@ const SessionRow = memo(function SessionRow({
     // 原生的归档字形保持 16，才与旁边按 14 画的 16 原生字形同视觉
     // 重量（flex 槽容忍 +2px）。
       id: 'archive',
-      label: t('menu.archiveSession'),
-      shortcut: archiveShortcut,
-      icon: <IconArchiveOutlineRegular size={16} />,
+      label: t(session.archived === true ? 'menu.unarchiveSession' : 'menu.archiveSession'),
+      // 归档行不带归档快捷键（上游 `shortcut={archived ? undefined : shortcut}`）。
+      shortcut: session.archived === true ? undefined : archiveShortcut,
+      icon: session.archived === true ? <IconUnarchiveOutlineRegular size={16} /> : <IconArchiveOutlineRegular size={16} />,
     },
-  ], [t, session.pinned, renameShortcut, forkShortcut, archiveShortcut])
+  ], [t, session.pinned, session.archived, renameShortcut, forkShortcut, archiveShortcut])
   const sessionKey = `${server.id}/session/${session.id}`
   // 会话行（上提以便 HoverCard 包裹）。单击立即打开、零延迟；
   // 模块级 pending（按 sessionId 记）只判定同一会话在
@@ -154,11 +166,14 @@ const SessionRow = memo(function SessionRow({
         ghost && cc.sessionGhost,
         current && cc.sessionActive,
         menuOpenRow && cc.sessionMenuOpen,
+        session.archived === true && cc.sessionArchived,
         marker === 'before' && cc.dropBefore,
         marker === 'after' && cc.dropAfter,
       )}
       role="treeitem"
       aria-selected={current}
+      // 归档行不可打开（上游 aria-description 同键）：点击就地提示，不进入打开流程。
+      aria-description={session.archived === true ? t('toast.archivedNotOpenable') : undefined}
       data-session-id={session.id}
       data-chamber-row={sessionKey}
       // Vendor motion contract (AnimatedRows): the key is the row's identity in
@@ -167,8 +182,10 @@ const SessionRow = memo(function SessionRow({
       data-chamber-ghost={ghost ? '' : undefined}
       // 合成的 cwd 派生分组仅用于显示：其中的会话行既不能拖也不能放
       // （wire 提交会在宿主上以 workspace/not-found 失败）。
-      draggable={!ghost && !synthetic}
-      onDragStart={ghost || synthetic
+      // 归档行是一个不可拖的落点（上游 draggable 同样排除 archived）；blank（暂存新会话）行
+      // 同样不可拖（上游 Rows.tsx: draggable = ... && !row.blank）。
+      draggable={!ghost && !synthetic && session.archived !== true && session.blank !== true}
+      onDragStart={ghost || synthetic || session.archived === true || session.blank === true
         ? undefined
         : (event) => {
           event.dataTransfer.effectAllowed = 'move'
@@ -179,6 +196,8 @@ const SessionRow = memo(function SessionRow({
             sourceId: server.id,
             accountKey,
             ungrouped,
+            flat,
+            pinned: session.pinned === true,
             sessionId: session.id,
             over: null,
           })
@@ -197,7 +216,15 @@ const SessionRow = memo(function SessionRow({
         : (event) => {
           event.preventDefault()
           event.dataTransfer.dropEffect = 'move'
-          const half = rowHalf(event)
+          // 置顶门（选项1）：块内拖拽/跨块守卫未实现——源或目标是置顶行时不画 marker。
+          if (sessionDrag?.pinned === true || session.pinned === true) {
+            setSessionDrag(current => (current === null || current.over === null
+              ? current
+              : { ...current, over: null }))
+            return
+          }
+          // blank 落点半边归一（上游：落在 blank 占位行上的 drop 一律当 after，marker 在下方）。
+          const half = session.blank === true ? 'after' : rowHalf(event)
           setSessionDrag(current => dragOverState(current, session.id, half))
         }}
       onDrop={!activeSessionDrag
@@ -205,12 +232,20 @@ const SessionRow = memo(function SessionRow({
         : (event) => {
           event.preventDefault()
           if (sessionDrag === null) return
-          commitSessionDrag(server, sessionDrag, { id: session.id, half: rowHalf(event) })
+          if (sessionDrag.pinned === true || session.pinned === true) return
+          const half = session.blank === true ? 'after' : rowHalf(event)
+          commitSessionDrag(server, sessionDrag, { id: session.id, half })
         }}
       onClick={() => {
         if (suppressClickRef.current) return
         // ghost 行是不可交互的布局占位（visibility:hidden，点击到不了）；防御性守卫。
         if (ghost) return
+        // 归档行占据原槽位但不可打开：就地提示（上游 notifyArchivedNotOpenable），
+        // 不 arm pending、不进入打开流程。
+        if (session.archived === true) {
+          showNotice(server.id, 'archivedNotOpenable', session.id)
+          return
+        }
         // 菜单展开或本行重命名进行中：忽略整次点击（不 arm、不开会话）。
         if (menuOpenRow || renamingRow) return
         // 单击立即打开（零延迟）：pending 只回答"是否同一会话在窗口内的
@@ -241,10 +276,10 @@ const SessionRow = memo(function SessionRow({
           （与 A1 前一致）。位置与上游 Rows.tsx 的 `.slot` 同址——**标题之前**（状态位与它互斥的
           上游语义里两者共用一个 slot；本仓的状态槽在行尾，故这里只放座席）。自有标记只在活动
           Schedule 投影存在时作为 occupant 缺席的回落，两者永不并现。
-          上游同址守卫照搬（Rows.tsx: `!row.archived && !row.blank`）：本仓行数据不带 archived
-          （归档会话在管理器面呈现、不进入行列表），故只落 blank 半边；空白（新建）占位行整席
-          不求值，与上游「归档/空白行槽留空」同语义。 */}
-      {session.blank !== true
+          上游同址守卫照搬（Rows.tsx: `!row.archived && !row.blank`）：本仓行数据带稀疏 archived
+          标记（归档筛选落地后），两半都照搬——归档行与空白占位行的行首座席都不求值
+          （上游「归档/空白行槽留空」同语义）。 */}
+      {session.archived !== true && session.blank !== true
         && (server.id === chamberInstanceId
           ? renderSessionSeat(
             'sidebar.session.row.leading',
@@ -290,8 +325,13 @@ const SessionRow = memo(function SessionRow({
             } else if (id === 'fork') {
               onForkSession(server, session)
             } else if (id === 'archive') {
-            // 标题随行传入：拒绝相位（两段式确认）要用它。
-              onArchiveSession(server, session.id, session.displayTitle)
+              // 归档行走恢复方向（上游同一菜单项的两个方向）。
+              if (session.archived === true) {
+                onUnarchiveSession(server, session.id)
+              } else {
+                // 标题随行传入：拒绝相位（两段式确认）要用它。
+                onArchiveSession(server, session.id, session.displayTitle)
+              }
             } else if (id === 'pin') {
               onPinSession(server, session.id, session.pinned === true)
             }
@@ -318,26 +358,27 @@ const SessionRow = memo(function SessionRow({
         />
         {/* 独立归档钮：上游 `session-actions/ArchiveSession.tsx` 的
             `ArchiveSessionRowButton`（注册进 `sidebar.workspaces.session.row.action`，
-            order 100）——同一动作簇里 kebab 之后的第二个成员，tooltip 用上游
-            `actions.archive`、无障碍名按本仓行级政策参数化行名 `action.archive.aria`（上游同座席用泛化名——有意分歧，
-      design 06 §7；行菜单项仍是 `menu.archiveSession`）。
-            本仓不渲染官方座席，故按该文件逐字移植按钮形态（类名换成本仓
-            `.actionIcon`）。上游的 unarchive 半个分支在本仓不可达：归档行根本不进
-            导航投影（`derive.ts` 的 sessionVisible），恢复由归档管理器承担，
-            因此这里只保留归档方向，不引入死分支。 */}
-        <Tooltip label={t('actions.archive')} side="bottom" align="end" delayMs={500}>
+            order 100）——同一动作簇里 kebab 之后的第二个成员。归档行上该钮翻转为
+            「恢复」（上游同文件 unarchive 半边：tooltip `actions.unarchive`、unarchive
+            字形；无障碍名按本仓行级政策仍参数化行名——有意分歧，design 06 §7）。
+            本仓不渲染官方座席，故按该文件逐字移植按钮形态（类名换成本仓 `.actionIcon`）。 */}
+        <Tooltip label={t(session.archived === true ? 'actions.unarchive' : 'actions.archive')} side="bottom" align="end" delayMs={500}>
           <button
             type="button"
             className={cc.actionIcon}
-            aria-label={t('action.archive.aria', { name: session.displayTitle })}
+            aria-label={t(session.archived === true ? 'action.unarchive.aria' : 'action.archive.aria', { name: session.displayTitle })}
             onClick={() => {
               // 本仓约定（上游该钮的 markup 无此门）：拖拽尾随 click 入口即生效，
               // 动作类控件必须自查——否则拖拽子项结束的一击会直接发起归档。
               if (suppressClickRef.current) return
+              if (session.archived === true) {
+                onUnarchiveSession(server, session.id)
+                return
+              }
               onArchiveSession(server, session.id, session.displayTitle)
             }}
           >
-            <IconArchiveOutlineRegular size={14} />
+            {session.archived === true ? <IconUnarchiveOutlineRegular size={14} /> : <IconArchiveOutlineRegular size={14} />}
           </button>
         </Tooltip>
         {/* 独立置顶钮：上游 `session-actions/PinSession.tsx` 的 `PinSessionRowButton`（注册进
@@ -347,6 +388,8 @@ const SessionRow = memo(function SessionRow({
             座席，故按该文件逐字移植按钮形态（类名换 `.actionIcon`）。置顶集未知
             （`pinSetKnown !== true`）时行不宣称任何置顶事实：无标记，钮按 pin 方向出——
             宿主 pin 幂等，重复 pin 无害，反向才有假断言。 */}
+        {/* 归档行不给 pin 入口（上游 PinSession 的 archived 早退）。 */}
+        {session.archived !== true && (
         <Tooltip label={t(session.pinned === true ? 'actions.unpin' : 'actions.pin')} side="bottom" align="end" delayMs={500}>
           <button
             type="button"
@@ -361,6 +404,7 @@ const SessionRow = memo(function SessionRow({
             {session.pinned === true ? <IconPinFillRegular size={14} /> : <IconPinOutlineRegular size={14} />}
           </button>
         </Tooltip>
+        )}
       </span>
       )}
       {/* 尾部状态槽：行右缘的圆环/圆点。hover 时行动作簇换入、本槽换出
@@ -377,9 +421,10 @@ const SessionRow = memo(function SessionRow({
         data-chamber-goal-active={sessionStateMarker(server, session).goalActive ? '' : undefined}
         title={sessionStateLabel(server, session)}
         aria-label={sessionStateLabel(server, session)}
-        role={sessionStateDot(server, session) !== null ? 'status' : undefined}
+        role={session.archived !== true && sessionStateDot(server, session) !== null ? 'status' : undefined}
       >
-        {sessionStateDot(server, session)}
+        {/* 归档行的状态槽留空（上游同规则：灰行自身承载归档语义，活状态只在悬停卡）。 */}
+        {session.archived === true ? null : sessionStateDot(server, session)}
       </span>
       {/* 静息置顶标记：上游 `PinnedIndicator`（`row.pinned && !row.archived`，非交互
           `role="img"` span，无障碍名与 title 都是 `row.pinned`，14px 实心针）。上游把它
@@ -406,7 +451,14 @@ const SessionRow = memo(function SessionRow({
               {session.blank !== true && session.updatedAt !== undefined && session.updatedAt > 0 && (
                 <div className={cc.hoverTime}>{hoverTimeLabel(session.updatedAt, now)}</div>
               )}
-              {sessionStateLabel(server, session) !== undefined && (
+              {/* 座席转移（补丁 13）：上游把座席放在状态行**之前**（状态行保持尾行，Rows.tsx:442）；
+                  只对本实例的行求值（外来源行没有本实例 occupant 的事实面）。 */}
+              {server.id === chamberInstanceId && renderSessionSeat('sidebar.session.row.hover', { sessionId: session.id })}
+              {/* 归档行：上游只把 done/idle 状态行滤掉（用**派生静息 kind**判，不能用原始 running 位——
+                  父行 running=false 而子代理仍在跑时状态行必须保留），归档行总是最后追加（Rows.tsx:432-454）。 */}
+              {sessionStateLabel(server, session) !== undefined
+                && !(session.archived === true
+                  && sessionStateMarker(server, session).state === 'completed') && (
                 <div className={cc.hoverStatus}>
                   <span className={clsx(cc.sessionStateSlot, sessionStatePending(server, session) !== undefined && cc.sessionStateSlotPending)}>
                     {sessionStateDot(server, session)}
@@ -414,9 +466,9 @@ const SessionRow = memo(function SessionRow({
                   <span>{sessionStateLabel(server, session)}</span>
                 </div>
               )}
-              {/* 座席转移（补丁 13）：hover 座席（官方 ui-schedule 的任务行）落在卡片内；
-                  同上只对本实例的行求值（外来源行没有本实例 occupant 的事实面）。 */}
-              {server.id === chamberInstanceId && renderSessionSeat('sidebar.session.row.hover', { sessionId: session.id })}
+              {session.archived === true && (
+                <div className={cc.hoverStatus}><span>{t('row.archived')}</span></div>
+              )}
             </div>
           )}
           openDelayMs={800}
@@ -436,20 +488,24 @@ const SessionRow = memo(function SessionRow({
   )
 })
 
-export function ServerSectionSessionRows({ server, workspace, sessions, currentId, sessionMarker, activeSessionDrag, isGhostSession }: ServerSectionSessionRowsProps) {
+export function ServerSectionSessionRows({ server, workspace, sessions, currentId, sessionMarker, activeSessionDrag, isGhostSession, flat }: ServerSectionSessionRowsProps) {
   const { rowErrors, menuOpen, renaming, ghostExpiry } = useSidebarSection()
+  // 空账本不查表：绝大多数渲染没有任何行失败（提到 map 外：一次，而不是每行一次）。
+  const hasRowErrors = Object.keys(rowErrors).length > 0
   return (
     <>
       {sessions.map((session) => {
         const sessionKey = `${server.id}/session/${session.id}`
-        const sessionDragError = rowErrors[`${server.id}/session-drag/${session.id}`]
-        const sessionActionError = rowErrors[`${server.id}/session/${session.id}/rename`]
-          ?? rowErrors[`${server.id}/session/${session.id}/archive`]
-          ?? rowErrors[`${server.id}/session/${session.id}/pin`]
-          ?? rowErrors[`${server.id}/session/${session.id}/fork`]
-          // 打开失败落在同一槽位（低优先级——同一行的
-          // rename/archive/pin/fork 失败优先，且每行只显示这一条），key 与写入方共享。
-          ?? rowErrors[openErrorKey(server.id, session.id)]
+        const sessionDragError = hasRowErrors ? rowErrors[`${server.id}/session-drag/${session.id}`] : undefined
+        const sessionActionError = !hasRowErrors ? undefined
+          : rowErrors[`${server.id}/session/${session.id}/rename`]
+            ?? rowErrors[`${server.id}/session/${session.id}/archive`]
+            ?? rowErrors[`${server.id}/session/${session.id}/unarchive`]
+            ?? rowErrors[`${server.id}/session/${session.id}/pin`]
+            ?? rowErrors[`${server.id}/session/${session.id}/fork`]
+            // 打开失败落在同一槽位（低优先级——同一行的
+            // rename/archive/pin/fork 失败优先，且每行只显示这一条），key 与写入方共享。
+            ?? rowErrors[openErrorKey(server.id, session.id)]
         // 空白行在不再 current 后仍被投影 = GHOST：App 按
         // BLANK_GHOST_GRACE_MS 保留它，使列表在双击窗口内不位移。
         // 本地过期在渲染侧兜底：宽限过后即使 App 还没重派生也丢弃该
@@ -474,6 +530,7 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
             accountKey={workspace.id}
             synthetic={workspace.synthetic === true}
             ungrouped={workspace.ungrouped === true}
+            flat={flat}
           />
         )
       })}

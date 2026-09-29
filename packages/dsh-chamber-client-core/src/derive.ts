@@ -1095,6 +1095,10 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
       managedRuntimeDown: server.managedRuntimeDown === true,
       dshVersion: server.dshVersion ?? null,
       aggregateError: server.aggregateError ?? null,
+      // sessionFacts is RENDERED (the source header's capability note,
+      // data-chamber-facts-mode): a facts-source markStale() flips it without any
+      // other signature field moving, so omitting it froze the note.
+      sessionFacts: server.sessionFacts ?? null,
       // pluginDiagnostic STAYS in the publish gate: the sidebar no longer
       // renders it, but the settings-bridge derives the connections page's
       // pluginDiagnostics from the same chamberBridge channel, so a
@@ -1108,6 +1112,9 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
       // settings-bridge, and is encoded field-generically so a payload field
       // added later cannot silently freeze the sidebar.
       bootGap: gapSignature(server.bootGap),
+      // 置顶集（最新在前）与出处门：pin 分区的输入，集合或顺序变化必须重新发布。
+      pinnedSessionIds: server.pinnedSessionIds ?? null,
+      pinSetKnown: server.pinSetKnown === true,
       runtime: runtime === '' ? null : runtime,
       workspaces: server.workspaces.map(w => ({
         id: w.id,
@@ -1145,6 +1152,9 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
           // RENDERED like the schedule marker: a pin-only change must move this
           // publish gate (App hook + sidebar-root-projection compare it), or the marker freezes.
           pinned: x.pinned === true,
+          // 归档筛选把归档行放进/移出投影：这一位变化必须移动发布闸，否则切到
+          // show/only 后壳里仍是旧行集（design 06 §3.4）。
+          archived: x.archived === true,
         })),
       })),
       // Archived rows ride the publish gate too (an open manager dialog derives
@@ -1204,11 +1214,15 @@ export function __resetBlankGhostsForTests(): void {
 }
 
 /**
- * Navigation visibility: subagent-origin and archived rows are always hidden;
- * blank rows follow the official rule (!blank || current), plus the ghost-slot
- * exception — a blank row that stopped being current within
- * BLANK_GHOST_GRACE_MS stays visible (non-interactively) so the list cannot
- * shift inside the double-click-to-rename window. Only the ACTIVE source
+ * Navigation visibility. Subagent-origin rows are always hidden. Blank rows
+ * follow the official order (upstream tree.ts): a non-current, non-ghost blank
+ * is hidden in EVERY filter state; the ghost-slot exception — a blank row that
+ * stopped being current within BLANK_GHOST_GRACE_MS — stays visible
+ * (non-interactively) so the list cannot shift inside the double-click-to-rename
+ * window. Archived membership follows the three-state `archivedFilter`
+ * (default hides, show/only admit), including the archive tombstone of a
+ * just-archived current blank; a blank row that IS archived is therefore
+ * hidden under `default` and shown under show/only. Only the ACTIVE source
  * passes a current session id, so no other source's provisional blank row
  * ever enters the projection.
  */
@@ -1218,6 +1232,7 @@ function sessionVisible(
   currentSessionId: string | undefined,
   archived: ReadonlySet<string>,
   now: number,
+  archivedFilter: ArchivedFilter = 'default',
 ): boolean {
   // Lazy SWEEP on read: an expired ghost entry is dropped the first time a
   // derive consults it; the currentness branch keeps a CURRENT blank row
@@ -1226,11 +1241,20 @@ function sessionVisible(
   const ghostKey = `${serverId}:${session.sessionId}`
   const ghostExpiry = blankGhostUntil.get(ghostKey)
   if (ghostExpiry !== undefined && ghostExpiry <= now) blankGhostUntil.delete(ghostKey)
-  return session.origin !== 'subagent'
-    && !archived.has(session.sessionId)
-    && (!session.blank
-      || session.sessionId === currentSessionId
-      || (ghostExpiry ?? 0) > now)
+  if (session.origin === 'subagent') return false
+  // blank 先于三态判（上游 tree.ts 245-252 的次序）：非当前、非 ghost 的 blank 行在任何
+  // 筛选下都不渲染；当前 blank 与 ghost 宽限行继续参与三态——归档墓碑仍能藏住它的回声
+  // blank 行（session-echo 集成契约：default 隐藏、show/only 显示）。
+  if (session.blank) {
+    const isCurrent = session.sessionId === currentSessionId
+    const isGhost = (ghostExpiry ?? 0) > now
+    if (!isCurrent && !isGhost) return false
+    if (archived.has(session.sessionId)) return archivedFilter !== 'default'
+    return archivedFilter !== 'only'
+  }
+  if (archived.has(session.sessionId)) return archivedFilter !== 'default'
+  // only：非归档行（含当前 blank 行）全部不渲染（上游 `only` 分支同规则）。
+  return archivedFilter !== 'only'
 }
 
 /**
@@ -1278,6 +1302,17 @@ function byRecency(
 
 /** Per-workspace session ordering preference (orderBy). */
 export type SessionOrderBy = 'manual' | 'updated'
+
+/**
+ * Per-source session grouping preference (upstream ui-workspace SessionGroupBy).
+ * `workspace-tree` nests each workspace under the nearest REGISTERED parent
+ * directory; where a git repo family exists the family's main anchor decides
+ * the level (design 06 §3.4). `flat` renders one session list per source.
+ */
+export type SessionGroupBy = 'workspace' | 'workspace-tree' | 'flat'
+
+/** Per-source archived-row visibility (upstream ui-workspace ArchivedFilter). */
+export type ArchivedFilter = 'default' | 'show' | 'only'
 
 /**
  * Recency-sort an id array by updatedAt (newest first, id ascending
@@ -1365,12 +1400,16 @@ export function orderUngroupedSessions<T extends { id: string; updatedAt?: numbe
 /**
  * Local-metadata search hits (the official deriveSearchResults local segment):
  * a session matches when its title OR the title of a workspace it belongs to
- * contains the query substring (case-insensitive). Blank / archived /
- * subagent-origin rows never match; a missing session title can still hit via
- * a workspace title. Hits are recency-ordered with an empty snippet (the
+ * contains the query substring (case-insensitive). Blank / subagent-origin rows
+ * never match; archived rows follow `archivedFilter`; a missing session title
+ * can still hit via a workspace title. Hits are recency-ordered with an empty snippet (the
  * remote merge overlays the content snippet).
  */
-export function deriveLocalSearchMatches(snapshot: InstanceSnapshot, query: string): SearchRow[] {
+export function deriveLocalSearchMatches(
+  snapshot: InstanceSnapshot,
+  query: string,
+  archivedFilter: ArchivedFilter = 'default',
+): SearchRow[] {
   const q = query.trim().toLowerCase()
   if (q === '') return []
   const archived = new Set(snapshot.archivedSessionIds)
@@ -1382,10 +1421,13 @@ export function deriveLocalSearchMatches(snapshot: InstanceSnapshot, query: stri
   }
   const matches: { sessionId: string; updatedAt?: number }[] = []
   for (const session of snapshot.sessions) {
-    if (session.origin === 'subagent' || session.blank || archived.has(session.sessionId)) continue
+    if (session.origin === 'subagent' || session.blank) continue
+    // 归档命中跟随 archivedFilter（上游 deriveSearchResults 同规则）。
+    const isArchived = archived.has(session.sessionId)
+    if (archivedFilter === 'default' ? isArchived : archivedFilter === 'only' ? !isArchived : false) continue
     // The DISPLAY label is what the user reads, so search matches it: a row
-    // labeled by its project directory must be findable by that directory.
-    // that directory, not only by its durable title.
+    // labeled by its project directory must be findable by that directory,
+    // not only by its durable title.
     const title = sessionDisplayTitle({
       displayTitle: session.displayTitle,
       title: session.title,
@@ -1422,8 +1464,7 @@ export function mergeSearchResults(
   visibleIds: ReadonlySet<string>,
   projectionReady: boolean,
 ): { items: SearchRow[]; hasMore: boolean } {
-  // 投影 READY 后可见集是权威：空集 = 合法空；未就绪时降级为不过滤。
-  // 回流）；未就绪时降级为不过滤（避免临时缺位清空全部命中）。
+  // 投影 READY 后可见集是权威：空集 = 合法空；未就绪时降级为不过滤（避免临时缺位清空全部命中）。
   const filterRemote = projectionReady
   const remoteBySession = new Map<string, string>()
   for (const item of remote.items) {
@@ -1611,8 +1652,11 @@ export function findReusableBlankSession(
  * membership graces are measured against it, so an injected `now` makes the
  * derive deterministic. Fork children of workspace-accounted parents get a
  * bounded first-observation grace and surface ungrouped if membership never
- * lands. @returns real workspaces in wire order, plus one synthetic trailing
- * ungrouped group when visible strays exist; [] for an empty snapshot.
+ * lands. Archived rows follow `archivedFilter` (upstream ArchivedFilter): hidden
+ * by default, mixed back into their accounting slot on `show`, and the only
+ * visible rows on `only` (a workspace without a visible archived member is
+ * dropped there). @returns real workspaces in wire order, plus one synthetic
+ * trailing ungrouped group when visible strays exist; [] for an empty snapshot.
  */
 export function deriveServerWorkspaces(
   snapshot: InstanceSnapshot,
@@ -1620,6 +1664,7 @@ export function deriveServerWorkspaces(
   ungroupedTitle: string,
   currentSessionId?: string,
   now = Date.now(),
+  archivedFilter: ArchivedFilter = 'default',
 ): ChamberServerWorkspace[] {
   const sessionsById = new Map(snapshot.sessions.map(session => [session.sessionId, session]))
   const archivedIds = new Set(snapshot.archivedSessionIds)
@@ -1634,7 +1679,7 @@ export function deriveServerWorkspaces(
       const session = sessionsById.get(sessionId)
       if (session === undefined) continue
       accounted.add(sessionId)
-      if (!sessionVisible(serverId, session, currentSessionId, archivedIds, now)) continue
+      if (!sessionVisible(serverId, session, currentSessionId, archivedIds, now, archivedFilter)) continue
       sessions.push({
         id: sessionId,
         title: session.title ?? '',
@@ -1652,9 +1697,14 @@ export function deriveServerWorkspaces(
         ...(session.blank ? { blank: true } : {}),
         // The active-Schedule fact rides into the row the sidebar renders (sparse).
         ...(session.hasActiveSchedule === true ? { hasActiveSchedule: true } : {}),
+        // 归档行在 show/only 下进入投影（default 已被 sessionVisible 滤掉）；稀疏标记，
+        // 行形态与动作（置灰/不可开/归档钮翻转为恢复）由侧栏消费（design 06 §3.4）。
+        ...(archivedIds.has(sessionId) ? { archived: true as const } : {}),
         ...(pinSetKnown && pinnedIds.has(sessionId) && !archivedIds.has(sessionId) ? { pinned: true as const } : {}),
       })
     }
+    // only：无可见成员的 workspace 不渲染（上游 groupByWorkspace 同规则）。
+    if (archivedFilter === 'only' && sessions.length === 0) continue
     // Requires an AUTHORITATIVE archive set: with the unary fallback's unknown
     // set an archived blank row would look reusable, so degrade to create.
     const reusableBlankSessionId = snapshot.archiveSetKnown === true && workspace.synthetic !== true
@@ -1683,7 +1733,9 @@ export function deriveServerWorkspaces(
   const forkCandidates = new Set<string>()
   const stray = snapshot.sessions.filter(session => {
     if (accounted.has(session.sessionId)) return false
-    if (!sessionVisible(serverId, session, currentSessionId, archivedIds, now)) return false
+    // 与上面的 workspace 成员分支同一过滤参数：漏掉它会让未分组归档行在 show/only
+    // 下永不出现（上游 tree.ts 的 ungrouped 分支同样传 filter，review 修正）。
+    if (!sessionVisible(serverId, session, currentSessionId, archivedIds, now, archivedFilter)) return false
 
     // Fork responses can arrive after the host's session-added frame, so the UI
     // cannot pre-arm a child-id grace: arm it on first observation instead,
@@ -1718,6 +1770,7 @@ export function deriveServerWorkspaces(
         ...(session.blank ? { blank: true } : {}),
         // Same sparse active-Schedule carry as the workspace-member rows above.
         ...(session.hasActiveSchedule === true ? { hasActiveSchedule: true } : {}),
+        ...(archivedIds.has(session.sessionId) ? { archived: true as const } : {}),
         ...(pinSetKnown && pinnedIds.has(session.sessionId) && !archivedIds.has(session.sessionId) ? { pinned: true as const } : {}),
       })),
     })

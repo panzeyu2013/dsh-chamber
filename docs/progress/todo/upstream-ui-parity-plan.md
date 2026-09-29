@@ -10,26 +10,27 @@ design 同批更新；已落地面的契约见 design 06 §7、design 05 §2）�
 
 ## 1. 待裁决
 
-### 1.1 pinned 会话（残余：置顶序 + 拖拽分区守卫）
+### 1.1 pinned 会话（残余：块内拖拽 + 跨块守卫 + 账号写入）
 
-- 本仓：写入口与三个行面已落地（形态见 design 06 §7、checklist §4.6），不是本条开放部分。
+- 本仓：写入口、三个行面与**置顶渲染分区**已落地（形态见 design 06 §7、分区见 §3.4、checklist §4.6）。
+  分区 = 上游 `sectionMembers` 语义（blank → pinned → 其余；manual 块内取宿主 `pinnedSessionIds`
+  的「最近置顶在前」，updated 保留本仓 account 序，搜索结果不分区），`pinSetKnown` 出处门不变。
 - 上游：树节点 `pinned: !archived.has(id) && pinned.has(id)`（`WS:450-465`）；置顶序在 `sectionMembers`（`WS:371-382`）；
   菜单项 pin/unpin（`WS:3630-3643`，order 100）+ 行 hover 按钮（`WS:3649-3668`，order 200）+ 静息 `PinnedIndicator`
   （`WS:1441-1450`、行内 1636）；拖拽分区边界由 `sectionMembers` 决定；`pinnedSessionIds` 来自 registry 级 rowState。
-- 仍缺（本条的开放部分）：①客户端置顶序（`pinSessionOrder`）——置顶行领跑本节、只在置顶块内可拖；②拖拽的跨分区
-  守卫（上游 `sectionMembers` + `reconcileManualOrder`）；③与本仓 `sessionOrderOverride`（manual 覆盖）和
-  `updated` 排序的自动提升并列时的第三条分区语义与簿记互斥；④半开 follow 通道下的陈旧置顶标记（pin → HTTP
-  归档 → HTTP 恢复，本地集仍指该 id、unpin 变 no-op；修法 = 归档成功时本地按 vendor 同规则清 id）与未挂载
-  来源的"发送即忘"（标记无界延迟到挂载）。
-- 候选落法：A. 完整对齐（序 + 拖拽分区守卫 + 与两套既有排序的簿记互斥）；B. 只做序、不动拖拽
-  （置顶行领跑本节，拖拽仍按现有规则）；C. 维持不做（标记只陈述集合事实，序留给官方前端 ui-workspace 的
-  `pinSessionOrder`，本仓不接）。
-- 为何仍要裁：置顶序会与本仓两套既有排序语义并列，并给会话拖拽加跨分区守卫；与
-  `sidebar.workspaces.*` 座席「只声明不渲染」的既有裁决（design 24 §1、STATUS）相邻——写入口与标记的移植形态
-  （不渲染官方座席）已定，后半（序 + 守卫）仍需一次裁决。
-- 证据：`packages/dsh-chamber-seed-archive-cleanup/test/binding.test.ts`（宿主 state 确有该字段，本仓只做透传保护）；
-  `packages/dsh-chamber-client-ui-sidebar/test/session-rows/session-row-actions.test.ts` 与
-  `test/session-state/vendor-session-fact-contract.test.ts`（形态/座席/文案/线协议锁）。
+- 仍缺（本条的开放部分）：①置顶块内拖拽与跨块守卫（上游 `sessionDragOrder` 的同分区门）；②把置顶写进本地
+  账号（上游 `pinSessionOrder` 的持久领先槽语义，含 `unpin` 落点偏差 B2——本仓回自然位）；③半开 follow
+  通道下的陈旧置顶标记（pin → HTTP 归档 → HTTP 恢复，本地集仍指该 id、unpin 变 no-op；修法 = 归档成功时
+  本地按 vendor 同规则清 id）与未挂载来源的"发送即忘"（标记/分区无界延迟到挂载）。
+- 候选落法：A. 完整对齐（拖拽分区守卫 + 账号写入，会引入第三条持久手动账号并碰 manual=wire 权威）；
+  B. **已落地的渲染分区**（选项1：序的可见结果对齐、不写账号、不动拖拽）；C. 维持不做（已被否——标记之外
+  毫无位置效果）。
+- 为何仍要裁：残余 A 会与本仓两套既有排序语义并列并给会话拖拽加跨分区守卫；与
+  `sidebar.workspaces.*` 座席「只声明不渲染」的既有裁决（design 24 §1、STATUS）相邻——写入口/标记/分区的
+  移植形态已定，剩下两项仍需一次裁决。
+- 证据：`packages/dsh-chamber-client-ui-sidebar/test/session-rows/pin-partition.test.ts`（分区语义与三处接线）、
+  `test/session-rows/session-row-actions.test.ts` 与 `test/session-state/vendor-session-fact-contract.test.ts`
+  （形态/座席/文案/线协议锁）、`packages/dsh-chamber-seed-archive-cleanup/test/binding.test.ts`（宿主字段透传）。
 
 ### 1.2 会话行时间列
 
@@ -58,7 +59,7 @@ design 同批更新；已落地面的契约见 design 06 §7、design 05 §2）�
   open-in 的 `workspace.openLocal` 是另一种死法——键被消费、`currentApp()` 恒 undefined、无可见反馈
   （见 STATUS「无法控制的差异」的死键条）。`workspace.add` 的 `noPicker` 门
   （`WS:106` 的 `addReason()`）要求 `sidebar.workspaces.directoryFlow` 座席为空，而本仓为每个托管来源 pin 了
-  `directory-picker-browse`（`packages/renderer/src/chamber-entry.ts:105-110`；picker 在 :1027 注入该座席）⇒ 门放行、
+  `directory-picker-browse`（`packages/renderer/src/chamber-entry.ts:105-110`；picker 在 `packages/dsh-chamber-client-ui-directory-picker-browse/src/client/index.ts:86-92` 注入该座席）⇒ 门放行、
   只写 `addRequested: true`（`WS:28-50`）——静默死件，**不是** `shortcut.noPicker` 的 blocked。
 - 为何要裁（**注册表语义已实测，候选只剩「不动注册表」两条**）：pin 的 `dsh-client-shortcuts/lib/client.js`
   `ShortcutRegistry.register` 在 :589 对重复 id 抛 `Duplicate shortcut command`、在 :602 逐 runtime×platform 校验默认键重叠并抛
@@ -138,8 +139,8 @@ design 同批更新；已落地面的契约见 design 06 §7、design 05 §2）�
 
 行高/字号密度（26px 行、13px 标题、20px 命中盒）、菜单 `compact` 档、行动作簇 4px/20px、来源 accent 与
 多来源分组、折叠入场动画删除、`RowHoverCard` 自持（vendor 竞态；上游修掉即退役）、darwin vibrancy 门、
-`sidebar.workspaces` 只声明不渲染、`sidebar.toggle.badge` 不做、完成状态品牌蓝点、默认 `orderBy=manual`、
-flat/workspace-tree 与归档过滤推迟、`data-chamber-row` 锚点、归档确认对话框（本仓两段式）。
+`sidebar.workspaces` 只声明不渲染、`sidebar.toggle.badge` 不做、完成状态品牌蓝点、默认 `orderBy=manual`（偏差 B1）、
+flat/workspace-tree 与归档过滤已于 2026 对齐轮落地（per-source，design 06 §3.4）、`data-chamber-row` 锚点、归档确认对话框（本仓两段式）。
 
 指针：design 06 §7、design 24 §1、STATUS 的对应条目与 `docs/checklists/upstream-touchpoints.md`（registry 门 C1–C15）。
 

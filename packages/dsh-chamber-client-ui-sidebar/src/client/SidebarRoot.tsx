@@ -10,7 +10,7 @@
  * (cross-ctx live sync); drag commits go through the wire with an optimistic override that
  * self-heals on the next pull; search is a debounced per-source unary content search (one
  * 30s-aborted job per query); the pinned 待办区 is a pure projection over the SAME merged facts. */
-import { useCallback, useMemo, type ReactNode } from 'react'
+import { useCallback, useMemo, useRef, type ReactNode } from 'react'
 import clsx from 'clsx'
 import {
   BrandWordmark, FishLogo, IconNewChatOutlineMedium, IconNewChatOutlineRegular, IconPanelLeftOutlineRegular,
@@ -28,6 +28,7 @@ import { ChamberListBoundary, PanelRow, sourceDotStyle, type PanelsHook } from '
 import { useSidebarCollapse } from './sidebar-root-collapse.ts'
 import { useSidebarProjection } from './sidebar-root-projection.ts'
 import { useSidebarActions } from './sidebar-root-actions.ts'
+import { useSidebarNotices } from './sidebar-root-notices.ts'
 import { useSidebarDrags } from './sidebar-root-drag.ts'
 import { useSidebarGhost } from './sidebar-root-ghost.ts'
 import { useSidebarClickGuard } from './sidebar-root-click-guard.ts'
@@ -41,6 +42,29 @@ import cc from './sidebar-chamber.module.css'
 // 在模块作用域把共享 search controller 的 wire fetch 接一次（controller 保持纯的、
 // 可用 plain node 测试的状态机；instance-api 的 unary client 仅限浏览器/vite）。
 setSearchFetcher((sourceId, query, signal) => searchSessions(getInstanceClient(sourceId), query, signal))
+
+/**
+ * Stable handler identities for the ONE context value. The shell recreates every
+ * handler each render, so a plain `useMemo` over them can never hit and every
+ * memo(ServerSection/SessionRow) is defeated. This returns ONE object (created
+ * once) whose properties are cached closures that forward to the LATEST
+ * implementation (the ref is refreshed every render) — identity is stable and no
+ * stale closure is ever read. Only actions belong here: state stays in ctxValue.
+ * The key set is frozen from the FIRST render's literal, so every action must be
+ * listed in that literal (a key added later would silently vanish from ctxValue).
+ */
+function useStableHandlers<T extends object>(handlers: T): T {
+  const handlersRef = useRef(handlers)
+  handlersRef.current = handlers
+  return useMemo(() => {
+    const stable: Record<string, unknown> = {}
+    for (const key of Object.keys(handlersRef.current)) {
+      stable[key] = (...args: unknown[]) =>
+        (handlersRef.current as Record<string, (...inner: unknown[]) => unknown>)[key]!(...args)
+    }
+    return stable as T
+  }, [])
+}
 
 export function SidebarRoot({
   collapsed,
@@ -77,10 +101,13 @@ export function SidebarRoot({
   const { wide, column, lastWideWidth, pointerInside, setPointerInside, cancelLinger, armLinger } =
     useSidebarCollapse(collapsed, width)
   const {
-    servers, viewPrefs, orderedServers, toggleWorkspaceFold, toggleSourceFold, setOrderBy,
+    servers, viewPrefs, orderedServers, toggleWorkspaceFold, toggleSourceFold, setOrderBy, setGroupBy, setArchivedFilter,
     sessionOrderOverride, setSessionOrderOverride, workspaceOrderOverride, setWorkspaceOrderOverride,
   } = useSidebarProjection()
   const { rowErrors, setRowErrors, runAction, runActionWithOutcome } = useSidebarActions()
+  // 来源级归档提示条（upstream RowActionToast 的 N-ctx 实例化）：per-shell 瞬态。
+  // servers 参与：断连来源的提示与其计时器一并清除（TTL 内重连不得弹回）。
+  const { notices, showNotice, dismissNotice } = useSidebarNotices(servers)
   const {
     sessionDrag, setSessionDrag, workspaceDrag, setWorkspaceDrag, serverDrag, setServerDrag,
     commitSessionDrag, commitWorkspaceDrag, commitServerDrag,
@@ -98,9 +125,9 @@ export function SidebarRoot({
   } = useSidebarMenus({ servers, runAction })
   // 对话框状态先于会话动作：归档的两段式确认层归 dialogs 所有（单层规则在
   // 那里执行一次），行级归档入口只在宿主拒绝后代 dialogs.openArchiveConfirm 武装它。
-  const dialogs = useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors })
+  const dialogs = useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors, showNotice })
   const { onOpenArchiveCleanup, openWorkspaceBrowser, onDeleteWorkspace, openArchiveConfirm } = dialogs
-  const { onForkSession, onNewSession, onArchiveSession, onPinSession } = useSidebarSessionActions({ runAction, openArchiveConfirm })
+  const { onForkSession, onNewSession, onArchiveSession, onUnarchiveSession, onPinSession } = useSidebarSessionActions({ runAction, openArchiveConfirm, showNotice })
 
   const openSession = useCallback((serverId: string, sessionId: string): void => {
     // 新点击立即清掉该行陈旧失败文案（若再次失败，dispatch 结果会重报）。
@@ -119,8 +146,32 @@ export function SidebarRoot({
 
   // chamber：每个渲染周期一个 context value——各 per-source section 经 provider
   // （sidebar-context.ts）读取跨切面状态/动作，而不是穿三层组件传 ~40 个 prop；
-  // store/effect/commit 全归 shell，ServerSection 只消费。45 个字段逐项进依赖
-  // 数组：漏一项会让 section/行读到过期值，多一项会让 memo 白算。
+  // store/effect/commit 全归 shell，ServerSection 只消费。
+  // **memo 切分（性能修订）**：动作经 useStableHandlers 冻结身份（转发到最新实现），
+  // 状态字段逐项进依赖——于是 shell 的无关渲染（hover/pointer/菜单动画等）不再换
+  // ctxValue 身份，memo(ServerSection)/memo(SessionRow) 真正生效；状态变化仍精确触发。
+  const actions = useStableHandlers({
+    toggleWorkspaceFold,
+    toggleSourceFold,
+    setOrderBy,
+    setGroupBy,
+    setArchivedFilter,
+    commitSessionDrag,
+    commitWorkspaceDrag,
+    commitServerDrag,
+    armBlankGhostForClick,
+    toggleMenu,
+    closeMenu,
+    commitRename,
+    onOpenArchiveCleanup,
+    openWorkspaceBrowser,
+    onDeleteWorkspace,
+    onNewSession,
+    onArchiveSession,
+    onPinSession,
+    onForkSession,
+    onUnarchiveSession,
+  })
   const ctxValue: SidebarSectionContextValue = useMemo(() => ({
     wide,
     t,
@@ -129,9 +180,7 @@ export function SidebarRoot({
     renderWorkspaceGit,
     renderSessionSeat,
     viewPrefs,
-    toggleWorkspaceFold,
-    toggleSourceFold,
-    setOrderBy,
+    ...actions,
     sessionOrderOverride,
     workspaceOrderOverride,
     sessionDrag,
@@ -140,43 +189,30 @@ export function SidebarRoot({
     setWorkspaceDrag,
     serverDrag,
     setServerDrag,
-    commitSessionDrag,
-    commitWorkspaceDrag,
-    commitServerDrag,
     suppressClickRef,
     dragPressOnButtonRef,
     sessionDropCommitted,
     workspaceDropCommitted,
     serverDropCommitted,
     ghostExpiry,
-    armBlankGhostForClick,
     rowErrors,
     menuOpen,
-    toggleMenu,
-    closeMenu,
     sortMenuOpen,
     setSortMenuOpen,
     renaming,
     setRenaming,
-    commitRename,
-    onOpenArchiveCleanup,
-    openWorkspaceBrowser,
     openSession,
-    onNewSession,
-    onArchiveSession,
-    onPinSession,
-    onForkSession,
-    onDeleteWorkspace,
+    notices,
+    showNotice,
+    dismissNotice,
   }), [
-    wide, t, chamberInstanceId, useShortcuts, renderWorkspaceGit, renderSessionSeat, viewPrefs, toggleWorkspaceFold,
-    toggleSourceFold, setOrderBy, sessionOrderOverride, workspaceOrderOverride,
+    wide, t, chamberInstanceId, useShortcuts, renderWorkspaceGit, renderSessionSeat, viewPrefs, actions,
+    sessionOrderOverride, workspaceOrderOverride,
     sessionDrag, setSessionDrag, workspaceDrag, setWorkspaceDrag, serverDrag, setServerDrag,
-    commitSessionDrag, commitWorkspaceDrag, commitServerDrag, suppressClickRef,
+    suppressClickRef,
     dragPressOnButtonRef, sessionDropCommitted, workspaceDropCommitted, serverDropCommitted,
-    ghostExpiry, armBlankGhostForClick, rowErrors, menuOpen, toggleMenu, closeMenu,
-    sortMenuOpen, setSortMenuOpen, renaming, setRenaming, commitRename, onOpenArchiveCleanup,
-    openWorkspaceBrowser, openSession, onNewSession, onArchiveSession, onPinSession, onForkSession,
-    onDeleteWorkspace,
+    ghostExpiry, rowErrors, menuOpen, sortMenuOpen, setSortMenuOpen, renaming, setRenaming,
+    openSession, notices, showNotice, dismissNotice,
   ])
 
   // macOS 隐藏标题栏（红绿灯浮在侧栏顶，Swift 壳 titlebarAppearsTransparent；上游官方

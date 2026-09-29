@@ -57,12 +57,12 @@ test('the workspace row arms .rowActionsVisible from keyboard focus', () => {
   )
   assert.match(
     section,
-    /if \(keyboardFocusKey !== null && !liveWorkspaceKeys\.has\(keyboardFocusKey\)\) setKeyboardFocusKey\(null\)/u,
+    /if \(keyboardFocusKey !== null && !liveWorkspaceKeys\.current\.has\(keyboardFocusKey\)\) setKeyboardFocusKey\(null\)/u,
     'a row removed while focused fires no blur in Blink: the stale key must be dropped once its row is gone',
   )
   assert.match(
     section,
-    /liveWorkspaceKeys\.add\(workspaceKey\)/u,
+    /liveWorkspaceKeys\.current\.add\(workspaceKey\)/u,
     'every rendered workspace row registers its key for that post-render check',
   )
   assert.match(

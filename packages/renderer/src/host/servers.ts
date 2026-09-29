@@ -16,6 +16,7 @@ import {
   withSessionEcho,
   withWorkspaceEcho,
   withWorkspacePlacements,
+  type ArchivedFilter,
   type ChamberServerAggregate,
   type InstanceAggregate,
   type InstanceRuntimeReport,
@@ -154,6 +155,10 @@ export function deriveServers(
   // 把宿主 create 短暂渲染在列表头部的行按在锚点后。与 sessionFacts 同理追加在参数表末尾，
   // 不重排既有参数（接线锁按文本锚点钉 current 投影）。
   workspacePlacements?: WorkspacePlacementLedger,
+  // 视图选项的归档筛选（per-source，design 06 §3.4）：show/only 让归档行进入导航
+  // 投影。与 workspacePlacements 同理追加在参数表末尾（既有接线锁按文本锚点钉
+  // current 投影，不重排既有参数）。
+  archivedFilters?: Readonly<Record<string, ArchivedFilter>>,
 ): ChamberServerAggregate[] {
   const servers: ChamberServerAggregate[] = []
   const liveIds = new Set<string>()
@@ -194,6 +199,12 @@ export function deriveServers(
     const phase = managedDown || managedTransient ? runtimeState! : transportPhase
     let workspaces: ChamberServerAggregate['workspaces'] = []
     const aggregate = aggregates[id]
+    // 该来源的归档筛选三态（缺省 default = 现状）。**降级出处门**：归档集未知
+    // （archiveSetKnown !== true，unary 兜底 / 未挂载）时按 default 渲染、存储值保留
+    // （design 06 §3.4：默认项点击会把存储值写回 default，故菜单整轴禁用 + 渲染回退）。
+    const archivedFilter: ArchivedFilter = aggregate?.archiveSetKnown === true
+      ? (archivedFilters?.[id] ?? 'default')
+      : 'default'
     // 托管态瞬态（starting/restarting）同样不可用：dsh 还没服务，动作入口只会
     // 503（与终态停机同一理由）。phase 已携带忙碌点。
     const connected = !managedDown && !managedTransient && instanceConnected(
@@ -207,6 +218,7 @@ export function deriveServers(
       kind, transport, id, label, sourceFingerprint, rawId ?? null, statusKind ?? null,
       transportPhase, managedDown, managedTransient, connected,
       aggregate ?? null,
+      archivedFilter,
       runtimeFacts[id] ?? null, correctionArms[id] ?? null, sessionFacts[id] ?? null,
       hostFacts[id] ?? null, pluginDiagnostics[id] ?? null, shellStates[id] ?? null,
       managedRuntime[id] ?? null, openIntents[id] ?? null,
@@ -267,6 +279,8 @@ export function deriveServers(
         id,
         '',
         current,
+        undefined,
+        archivedFilter,
       )
       // Archive-manager metadata (design 24 revision): archived rows
       // of this source's snapshot ride the same aggregate; the manager UI
@@ -289,6 +303,11 @@ export function deriveServers(
       phase,
       ...(managedDown ? { managedRuntimeDown: true } : {}),
       workspaces,
+      // 置顶集（最新在前）与出处门：pin 渲染分区读它；快照缺席/降级时两个字段都缺席
+      // （未挂载来源的 unary 兜底带着空集 + pinSetKnown:false，分区门照旧不宣称）。
+      ...(aggregate?.pinnedSessionIds === undefined
+        ? {}
+        : { pinnedSessionIds: aggregate.pinnedSessionIds.map(String), pinSetKnown: aggregate.pinSetKnown === true }),
       ...(archivedSessions === undefined ? {} : { archivedSessions, archiveSetKnown }),
       aggregateReady: aggregate !== undefined && aggregate.state === 'ok',
       updatedAt: now,

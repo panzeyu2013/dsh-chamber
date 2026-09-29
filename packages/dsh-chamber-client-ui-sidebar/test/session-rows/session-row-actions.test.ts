@@ -9,9 +9,8 @@
  * `actions.archive`（tooltip，`side="bottom" align="end" delayMs={500}` 为上游
  * 调用值）、无障碍名 `action.archive.aria`（`{name}` = 行标题；上游同座席用泛化名，本仓按行级
  * 无障碍政策参数化行名并记为有意分歧，design 06 §7；行菜单项仍是 `menu.archiveSession`），点击走本仓既有的两段式
- * 归档出口。上游的 unarchive 半个分支在本仓不可达（归档行不进导航投影，
- * `derive.ts` 的 sessionVisible），所以本仓只有归档方向——这条锁同时钉住
- * 「不得引入死分支」。
+ * 归档出口。归档筛选（design 06 §3.4）落地后，上游的 unarchive 半个分支同样可达：
+ * 归档行上归档钮/菜单项翻转为「恢复」并走官方 `workspace/unarchiveSession`。
  *
  * 本包测试跑在 plain node 下、没有 DOM/React 渲染环境，因此用源码文本锁 +
  * 可独立导入的字典值（与 row-render-cost.test.ts 同款纪律）。
@@ -35,7 +34,7 @@ const CLUSTER = 'className={clsx(cc.rowActions, menuOpenRow && cc.rowActionsVisi
 test('the session row renders the upstream archive hover button inside the action cluster', () => {
   const gate = ROWS.indexOf(BLANK_GATE)
   const cluster = ROWS.indexOf(CLUSTER)
-  const button = ROWS.indexOf(`<Tooltip label={t('actions.archive')} side="bottom" align="end" delayMs={500}>`)
+  const button = ROWS.indexOf(`<Tooltip label={t(session.archived === true ? 'actions.unarchive' : 'actions.archive')} side="bottom" align="end" delayMs={500}>`)
   const kebab = ROWS.indexOf('items={menuItems}')
   assert.ok(gate !== -1 && cluster > gate, 'the action cluster stays inside the blank-row gate')
   assert.ok(button > cluster, 'the archive button lives in the row action cluster (hover reveal), not beside it')
@@ -45,26 +44,29 @@ test('the session row renders the upstream archive hover button inside the actio
   const gateEnd = ROWS.indexOf('\n      )}', gate)
   assert.notEqual(gateEnd, -1, 'the blank gate must close with an indented )}')
   const gateBlock = ROWS.slice(gate, gateEnd)
-  assert.ok(gateBlock.includes(CLUSTER) && gateBlock.includes(`<Tooltip label={t('actions.archive')}`),
+  assert.ok(gateBlock.includes(CLUSTER) && gateBlock.includes(`<Tooltip label={t(session.archived === true ? 'actions.unarchive' : 'actions.archive')}`),
     'both row-action exits stay INSIDE the blank gate (a cluster moved outside would survive index order)')
   // 断言只在这一个按钮的切片里做（不用跨文件的宽松窗口）：形态 = 共享动作类名 + 上行无障碍名 +
   // 14px 归档字形 + 本仓两段式出口（标题随行传入，拒绝相位要用它）+ 拖拽尾随 click 门。
   const buttonBlock = ROWS.slice(button, ROWS.indexOf('</Tooltip>', button) + '</Tooltip>'.length)
   assert.match(buttonBlock, /className=\{cc\.actionIcon\}/u, 'the shared icon-action class, not a new one')
-  assert.match(buttonBlock, /aria-label=\{t\('action\.archive\.aria', \{ name: session\.displayTitle \}\)\}/u,
-    'the accessible name is parameterized with the row title (chamber row-action policy; upstream uses the plain verb)')
-  assert.match(buttonBlock, /<IconArchiveOutlineRegular size=\{14\} \/>/u, 'upstream glyph size')
+  assert.match(buttonBlock, /aria-label=\{t\(session\.archived === true \? 'action\.unarchive\.aria' : 'action\.archive\.aria', \{ name: session\.displayTitle \}\)\}/u,
+    'the accessible name is parameterized with the row title and flips on archived rows (chamber row-action policy)')
+  assert.match(buttonBlock, /\{session\.archived === true \? <IconUnarchiveOutlineRegular size=\{14\} \/> : <IconArchiveOutlineRegular size=\{14\} \/>\}/u,
+    'the unarchive/archive glyph toggle at the upstream 14px size')
   assert.match(buttonBlock, /if \(suppressClickRef\.current\) return/u,
     'the row-control drag-tail click guard stays first in the handler (upstream markup has none)')
+  assert.match(buttonBlock, /onUnarchiveSession\(server, session\.id\)/u,
+    'an archived row restores through the official workspace/unarchiveSession funnel')
   assert.match(buttonBlock, /onArchiveSession\(server, session\.id, session\.displayTitle\)/u,
     'the button calls the existing archive funnel, with the row title for the confirm phase')
-  assert.equal(ROWS.includes('IconUnarchiveOutlineRegular'), false,
-    'no unarchive half: archived rows never enter the navigation projection')
   // 「恰一个」也要锁计数：indexOf 只锁第一个，粘贴出第二个按钮/第三处出口仍会绿。
-  assert.equal((ROWS.match(/<Tooltip label=\{t\('actions\.archive'\)/gu) ?? []).length, 1,
-    'exactly one row-level archive button')
+  assert.equal((ROWS.match(/<Tooltip label=\{t\(session\.archived === true \? 'actions\.unarchive' : 'actions\.archive'\)/gu) ?? []).length, 1,
+    'exactly one row-level archive/unarchive button')
   assert.equal((ROWS.match(/onArchiveSession\(/gu) ?? []).length, 2,
     'exactly two archive exits: the hover button and the kebab menu item')
+  assert.equal((ROWS.match(/onUnarchiveSession\(/gu) ?? []).length, 2,
+    'the same two surfaces flip to unarchive on archived rows')
 })
 
 test('the archive funnel guards an in-flight click and clears it by identity', () => {
@@ -89,7 +91,7 @@ test('the hover reveal is the shared cluster rule, not a second mechanism', () =
 test('the pin surfaces are the upstream forms: menu order 100 first, hover button 200 rightmost, sparse set marker', () => {
   // 上游座席顺序：菜单项 pin(100) 先于 rename(200)；行动作 archive(100) 先于 pin(200)，pin 是最右成员。
   const kebab = ROWS.indexOf('items={menuItems}')
-  const archive = ROWS.indexOf(`<Tooltip label={t('actions.archive')}`)
+  const archive = ROWS.indexOf(`<Tooltip label={t(session.archived === true ? 'actions.unarchive' : 'actions.archive')}`)
   const pin = ROWS.indexOf(`{t(session.pinned === true ? 'actions.unpin' : 'actions.pin')}`)
   assert.ok(kebab !== -1 && archive > kebab && pin > archive,
     'DOM order mirrors the two upstream seats: archive (100) then pin (200) after the kebab')
@@ -118,8 +120,8 @@ test('the pin surfaces are the upstream forms: menu order 100 first, hover butto
   assert.ok(menu.indexOf("id: 'pin'") !== -1 && menu.indexOf("id: 'pin'") < menu.indexOf("id: 'rename'"),
     'the pin menu item leads the list (upstream menu order 100)')
   assert.ok(menu.includes("label: t(session.pinned === true ? 'menu.unpinSession' : 'menu.pinSession')"))
-  assert.ok(ROWS.includes('], [t, session.pinned, renameShortcut, forkShortcut, archiveShortcut])'),
-    'the memo must depend on session.pinned or the toggle label freezes')
+  assert.ok(ROWS.includes('], [t, session.pinned, session.archived, renameShortcut, forkShortcut, archiveShortcut])'),
+    'the memo must depend on session.pinned and session.archived or the toggle labels freeze')
   // 断言到分支体本身：只查字符串的话，悬停钮那处调用就能满足它，清空菜单分支也全绿。
   assert.match(ROWS, /else if \(id === 'pin'\) \{\n\s*onPinSession\(server, session\.id, session\.pinned === true\)/u,
     'the kebab item reaches the same funnel (branch body, not just the string)')
@@ -157,10 +159,10 @@ test('the pin surfaces are the upstream forms: menu order 100 first, hover butto
   const chainFrom = ROWS.indexOf('const sessionActionError = ')
   const chainTo = ROWS.indexOf('openErrorKey(', chainFrom)
   assert.ok(chainFrom !== -1 && chainTo !== -1, 'the row error chain must exist as one block')
-  const chainOrder = ['/rename`]', '/archive`]', '/pin`]', '/fork`]'].map(marker => ROWS.slice(chainFrom, chainTo).indexOf(marker))
-  assert.ok(chainOrder.every(at => at !== -1), 'the chain must name all four action keys')
+  const chainOrder = ['/rename`]', '/archive`]', '/unarchive`]', '/pin`]', '/fork`]'].map(marker => ROWS.slice(chainFrom, chainTo).indexOf(marker))
+  assert.ok(chainOrder.every(at => at !== -1), 'the chain must name all five action keys')
   assert.deepEqual(chainOrder, [...chainOrder].sort((a, b) => a - b),
-    'the chain order stays rename → archive → pin → fork (a reordered key masks the newer failure)')
+    'the chain order stays rename → archive → unarchive → pin → fork (a reordered key masks the newer failure)')
 })
 
 test('the pin funnel mirrors the archive funnel: in-flight guard by key, toggle direction, refresh after success', () => {
@@ -196,6 +198,63 @@ test('the pin copy is upstream verbatim in both dictionaries', () => {
   assert.equal(en['actions.pin'], 'Pin')
   assert.equal(en['actions.unpin'], 'Unpin')
   assert.equal(en['row.pinned'], 'Pinned')
+})
+
+test('the archived row is the upstream form: grayed, unopenable, unpinnable, archive flips to unarchive', () => {
+  const SESSIONS = read('../../src/client/sidebar-root-sessions.ts')
+  const SEARCH = read('../../src/client/ServerSectionSearch.tsx')
+  const SECTION = read('../../src/client/ServerSection.tsx')
+  // 行形态：置灰类 + 不可打开 aria + 不可拖 + 点击就地提示 + 状态槽留空。
+  assert.ok(ROWS.includes('session.archived === true && cc.sessionArchived'))
+  assert.ok(ROWS.includes("aria-description={session.archived === true ? t('toast.archivedNotOpenable') : undefined}"))
+  assert.ok(ROWS.includes('draggable={!ghost && !synthetic && session.archived !== true && session.blank !== true}'),
+    'archived rows are undroppable sources, and blank (provisional) rows are excluded like upstream')
+  assert.ok(ROWS.includes("showNotice(server.id, 'archivedNotOpenable', session.id)"))
+  assert.ok(ROWS.includes('{session.archived === true ? null : sessionStateDot(server, session)}'))
+  // pin 两个出口在归档行缺席（菜单项 spread 门 + 悬停钮包裹门），静息标记由 derive 保证。
+  assert.ok(ROWS.includes('...(session.archived === true'))
+  assert.ok(ROWS.includes('{session.archived !== true && ('))
+  // 恢复漏斗：与归档同一条 keyed 行动作。
+  assert.ok(SESSIONS.includes('const key = `${server.id}/session/${sessionId}/unarchive`'))
+  assert.ok(SESSIONS.includes('await unarchiveSessionForSource(server.id, sessionId)'))
+  // 提示条：三态文案 + 筛选入口在已显示归档时隐藏 + 两个相位触达。
+  for (const key of ["'toast.stoppedAndArchived'", "'toast.archived'", "t('toast.archivedNotOpenable')"]) {
+    assert.ok(SECTION.includes(key), `the notice renders ${key}`)
+  }
+  assert.ok(SECTION.includes("archivedFilter === 'default' && server.archiveSetKnown === true && ("),
+    'the filter link hides once archived rows are visible AND is provenance-gated (it writes show)')
+  assert.ok(SECTION.includes("t('empty.noneArchived')") && SECTION.includes("t('empty.viewOthers')"), 'the only-mode empty state')
+  assert.ok(SESSIONS.includes("showNotice(server.id, 'archived', sessionId)"))
+  const DIALOGS = read('../../src/client/sidebar-root-dialogs.tsx')
+  assert.ok(DIALOGS.includes("showNotice(target.sourceId, 'stoppedAndArchived', target.sessionId)"))
+  // 搜索结果命中行跟随（归档行不可开 + 行后恢复入口）。
+  assert.ok(SEARCH.includes('const archived = projectedArchived(item.sessionId)'))
+  assert.ok(SEARCH.includes("showNotice(server.id, 'archivedNotOpenable', item.sessionId)"))
+  assert.ok(SEARCH.includes('onUnarchiveSession(server, item.sessionId)'))
+})
+
+test('the archived/notice copy is upstream verbatim in both dictionaries', () => {
+  assert.equal(zh['row.archived'], '已归档')
+  assert.equal(zh['menu.unarchiveSession'], '取消归档')
+  assert.equal(zh['actions.unarchive'], '取消归档')
+  assert.equal(zh['toast.archivedNotOpenable'], '已归档对话暂时无法查看，请取消归档后查看')
+  assert.equal(zh['toast.archived'], '会话已归档，可')
+  assert.equal(zh['toast.stoppedAndArchived'], '已停止并归档，可')
+  assert.equal(zh['toast.archivedUndo'], '撤销')
+  assert.equal(zh['toast.archivedOr'], '或')
+  assert.equal(zh['toast.archivedFilter'], '筛选已归档会话')
+  assert.equal(zh['empty.noneArchived'], '暂无已归档会话')
+  assert.equal(zh['empty.viewOthers'], '查看其他会话')
+  assert.equal(en['row.archived'], 'Archived')
+  assert.equal(en['menu.unarchiveSession'], 'Unarchive session')
+  assert.equal(en['actions.unarchive'], 'Unarchive')
+  assert.equal(en['toast.archived'], 'Session archived. You can ')
+  assert.equal(en['toast.stoppedAndArchived'], 'Session stopped and archived. You can ')
+  assert.equal(en['toast.archivedUndo'], 'undo')
+  assert.equal(en['toast.archivedOr'], ' or ')
+  assert.equal(en['toast.archivedFilter'], 'filter archived sessions')
+  assert.equal(en['empty.noneArchived'], 'No archived sessions yet')
+  assert.equal(en['empty.viewOthers'], 'View other sessions')
 })
 
 test('the button copy is upstream verbatim in both dictionaries', () => {
