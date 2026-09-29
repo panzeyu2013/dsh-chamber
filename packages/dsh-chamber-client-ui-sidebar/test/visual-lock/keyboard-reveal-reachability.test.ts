@@ -55,6 +55,21 @@ test('the workspace row arms .rowActionsVisible from keyboard focus', () => {
     /if \(!\(next instanceof Node\) \|\| !event\.currentTarget\.contains\(next\)\)[\s\S]{0,160}?setKeyboardFocusKey\(current => \(current === workspaceKey \? null : current\)\)/u,
     'the focus transfer INSIDE the row must keep it (that is what lets Tab reach the buttons)',
   )
+  assert.match(
+    section,
+    /if \(keyboardFocusKey !== null && !liveWorkspaceKeys\.has\(keyboardFocusKey\)\) setKeyboardFocusKey\(null\)/u,
+    'a row removed while focused fires no blur in Blink: the stale key must be dropped once its row is gone',
+  )
+  assert.match(
+    section,
+    /liveWorkspaceKeys\.add\(workspaceKey\)/u,
+    'every rendered workspace row registers its key for that post-render check',
+  )
+  assert.match(
+    section,
+    /if \(prevInlineRenameActive\.current && !inlineRenameActive\) setKeyboardFocusKey\(null\)/u,
+    'an inline rename ends with focus still in the row (its autoFocus input unmounts, no blur fires): the key must be dropped',
+  )
 })
 
 test('the source header arms .sourceActionsVisible from keyboard focus', () => {

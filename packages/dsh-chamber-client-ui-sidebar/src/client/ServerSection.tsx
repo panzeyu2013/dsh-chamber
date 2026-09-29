@@ -100,15 +100,38 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
   const capsuleHeldFocus = useRef(false)
   const searchButton = useRef<HTMLButtonElement | null>(null)
   /**
-   * 键盘焦点揭示态（design 08 §3.2）：动作簇的 `:has(:focus-visible)` CSS 揭示只承担
-   * 视觉换入换出——Blink 的 Tab 导航看不到由 `:has()` 失效触发的 display 变化（受控
-   * 对照：同页里 `:focus-within` 驱动的簇 Tab 能进、`:has(:focus-visible)` 驱动的簇被
-   * 跳过，强制出帧也一样），所以键盘态必须同时落到 JS 驱动的 `.rowActionsVisible` 类上
-   * ——与 kebab 展开同一个类、同一条揭示路径，簇里的按钮才真的可聚焦。只认
-   * `:focus-visible`：指针点中折叠钮留下的是"聚焦但不可见"的焦点，不该常驻揭示
-   * （当年否掉 `:focus-within` 的理由）。
+   * 键盘焦点揭示态（design 08 §3.2）：键盘揭示**只能**落在 JS 驱动的
+   * `.rowActionsVisible` 类上——与 kebab 展开同一个类、同一条揭示路径，簇里的按钮才
+   * 真的可聚焦。CSS `:has(:focus-visible)` 那条路已被本仓删除：Blink 的 Tab 导航看不到
+   * 由 `:has()` 失效触发的 display 变化（受控对照：同页里 `:focus-within` 驱动的簇 Tab
+   * 能进、`:has(:focus-visible)` 驱动的簇被跳过，强制出帧也一样），规则在也只会"看得见、
+   * 进不去"。只认 `:focus-visible`：指针点中折叠钮留下的是"聚焦但不可见"的焦点，不该
+   * 常驻揭示（当年否掉 `:focus-within` 的理由）。
    */
   const [keyboardFocusKey, setKeyboardFocusKey] = useState<string | null>(null)
+
+  /**
+   * 本轮渲染实际出现的 workspace 行键。Chromium 在"持焦行被移除"时不发 blur（键盘触发
+   * 的清理、来源消失……），悬留的键会在该 workspace 再现的瞬间把簇点亮；故每轮渲染后核对
+   * 一次：键还在、行没了就归零（design 08 §3.2 的键盘揭示态）。
+   */
+  const liveWorkspaceKeys = new Set<string>()
+  useEffect(() => {
+    if (keyboardFocusKey !== null && !liveWorkspaceKeys.has(keyboardFocusKey)) setKeyboardFocusKey(null)
+  })
+
+  /**
+   * 行内重命名表单的 input 带 autoFocus（文本输入聚焦即匹配 `:focus-visible`，本行的
+   * `onFocus` 因此会把键置为本行），而四条结束路径（提交 / Escape / 取消 / 保存）都在焦点
+   * 仍在行内时卸载表单：Chromium 不发 blur、React 也不为被移除的 target 合成 onBlur，悬留
+   * 的键会让该行的 hover 簇常驻、计数徽标同被换出。重命名一结束就清（design 08 §3.2）。
+   */
+  const inlineRenameActive = renaming !== null && renaming.sourceId === server.id
+  const prevInlineRenameActive = useRef(false)
+  useEffect(() => {
+    if (prevInlineRenameActive.current && !inlineRenameActive) setKeyboardFocusKey(null)
+    prevInlineRenameActive.current = inlineRenameActive
+  })
 
   /**
    * 意图预热：**本来源头部** hover 的 120ms dwell 机器，一台机器一个来源，
@@ -486,6 +509,7 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                         {(() => {
                           return visibleOrderedWorkspaces.map(workspace => {
                           const workspaceKey = `${server.id}/${workspace.id}`
+                          liveWorkspaceKeys.add(workspaceKey)
                           const folded = viewPrefs.folded[workspaceKey] === true
                           // While THIS workspace's inline rename is active the header row
                           // hosts the edit form in place (no added list row); the flag
