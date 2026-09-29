@@ -168,6 +168,13 @@ export interface ControlPlaneOptions {
    * (standalone callers and tests).
    */
   pnpmEntry?: string | null
+  /**
+   * Desktop login-shell environment (login-shell-env.ts) every managed host
+   * inherits — the early-started read promise (or its resolved value). The
+   * Electron main and the Swift sidecar pass it; gateway, standalone and
+   * tests leave it absent.
+   */
+  hostEnv?: NodeJS.ProcessEnv | Promise<NodeJS.ProcessEnv>
   /** Injectable orphan reaper (test seam for lifecycle interleavings). */
   reaper?: typeof runReaper
   /**
@@ -544,6 +551,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     options: {
       ...(options.dshPortBase === undefined ? {} : { dshPortBase: options.dshPortBase }),
       pnpmEntry: options.pnpmEntry,
+      ...(options.hostEnv === undefined ? {} : { hostEnv: options.hostEnv }),
       ownerInstanceId: instanceId,
       canSpawn: localStartGate,
       onWriterQuiescenceUnknown: (writerError) => {
@@ -1157,6 +1165,14 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
 }
 
 export { isDshPortBaseValid, resolveNodeExecutable, sanitizeManagedDshEnv, spawnDsh } from './spawn-dsh.ts'
+/** Desktop login-shell read (design 02 §3.1 sibling): the only runtime face
+ *  the desktop entries consume; probe internals stay module-private. */
+export { readLoginShellEnvironment, readLoginShellEnvironmentOnce } from './login-shell-env.ts'
+export type {
+  LoginShellEnvironmentFailure,
+  LoginShellEnvironmentOptions,
+  LoginShellEnvironmentResult,
+} from './login-shell-env.ts'
 export { installGracefulShutdown, type GracefulShutdownPlane } from './graceful-shutdown.ts'
 // Unary RPC remains the ordinary control-plane client; the gateway composes the
 // same client. The client-response/event-stream helpers belong to the removed

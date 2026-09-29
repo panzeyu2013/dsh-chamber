@@ -300,17 +300,15 @@ export function SidebarRoot({
         {wide && (darwinDesktop ? (
           <span className={css.brand}>{brandIdentity}</span>
         ) : (
-          <Tooltip label={t('session.new.label')} shortcutKeys={newShortcut?.keys} delayMs={500}>
-            <button
-              type="button"
-              className={css.brand}
-              aria-label={t('session.new.label')}
-              aria-keyshortcuts={newShortcut?.aria}
-              onClick={() => { startSession() }}
-            >
-              {brandIdentity}
-            </button>
-          </Tooltip>
+          <button
+            type="button"
+            className={css.brand}
+            aria-label={t('session.new.label')}
+            aria-keyshortcuts={newShortcut?.aria}
+            onClick={() => { startSession() }}
+          >
+            {brandIdentity}
+          </button>
         ))}
         {/* macOS 已把开关停在顶部带内；其余平台仍停在 logo 行右端。 */}
         {!darwinDesktop && toggle}

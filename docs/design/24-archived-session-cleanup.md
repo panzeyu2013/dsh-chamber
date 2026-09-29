@@ -867,7 +867,7 @@ STATUS.md。
 
 ## 10. 宿主面事实（vendor 核对结论）
 
-vendor/harness-packages（pinned submodule，当前 pin dsh-v0.2.0-rc.1 4878cdab）核对的宿主面
+vendor/harness-packages（pinned submodule，当前 pin dsh-v0.2.0-rc.2 639ed015）核对的宿主面
 事实，binding 与算法以此为准。§4 step 9 的字段归属铁律即由此得出：**面**（服务方法/属性）
 自 alpha.2 b2e3b2a0 审计以来未变，但**全局字段集合**在 0.1.7 长过（新增
 `pinnedSessionIds`/`defaultWorkspaceId`），故本域不再镜像字段：

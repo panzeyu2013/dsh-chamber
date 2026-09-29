@@ -590,7 +590,7 @@ test('⑤ CLI（main 级）：不带 --target 时按宿主解析，显式未登�
 
 /**
  * 上游唯一消费者 `@deepseek-ai/dsh-tool-workspace-dependencies` 的
- * `parsePrimaryRuntime`（当前 pin 4878cdab；vendor/harness-checkout/packages/skill/
+ * `parsePrimaryRuntime`（当前 pin 639ed015；vendor/harness-checkout/packages/skill/
  * tool-workspace-dependencies/src/index.ts）**在本仓不能直接 import**：子模块自身的
  * node_modules 链接指向未构建的 lib。这里按同一份源码镜像出接受规则，并由下面的源锁
  * 用例钉住那几行——上游改规则时这条锁先红，再决定要不要跟。

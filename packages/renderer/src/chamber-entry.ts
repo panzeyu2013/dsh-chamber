@@ -392,13 +392,14 @@ export function apply(ctx: Context): void {
   // probes exactly that derived union (upstream reads the same declaration off `fiber.inject`);
   // the recorded id is the mount identity. The deferred cluster extends the same roster as
   // chunks mount and re-arms one pass.
-  // Deferred-only members (no first-screen declaration) — 16, each provided by first-screen
+  // Deferred-only members (no first-screen declaration) — 19, each provided by first-screen
   // composite plugins only, never by another deferred family: `jobs`, `modules`, `remote.goals`,
   // `remote.skills`, `remote.messageFeedback`, `remote.sessionFeedback`, `remote.agentPresets`,
-  // `remote.credentials`, `remote.llm`, `remote.pluginInventory`, `remote.permissionPresets`,
-  // `remote.fileReferences`, `remote.sessionReferenceResolver`, `resources`, `sidebarRightTabs`,
-  // `settingsSchema`. Without the re-arm such a member would pend with no diagnostic, the
-  // silent gap this probe closes.
+  // `remote.credentials`, `remote.llm`, `remote.pluginInventory`, `remote.pluginManager`,
+  // `remote.pluginRegistryProbe`, `remote.permissionPresets`, `remote.fileReferences`,
+  // `remote.sessionReferenceResolver`, `remote.userQuestions` (rc.2), `resources`,
+  // `sidebarRightTabs`, `settingsSchema`. Without the re-arm such a member would pend with no
+  // diagnostic, the silent gap this probe closes.
   const registered: RegisteredPluginInject[] = []
   /** Probe re-arm hand-off; filled when the probe effect installs. */
   const probeRearm: ProbeRearmSlot = {}

@@ -48,8 +48,8 @@
   ],
   "patches": [
     {
-      "spec": "@earendil-works/pi-ai@0.85.1",
-      "file": "patches/@earendil-works__pi-ai@0.85.1.patch",
+      "spec": "@earendil-works/pi-ai@0.87.1",
+      "file": "patches/@earendil-works__pi-ai@0.87.1.patch",
       "runtimeClosure": true,
       "note": "pi-ai 流式修复；运行期闭包内的依赖（runtime lock 记录 patch_hash）"
     },
@@ -636,7 +636,7 @@
         "packages/desktop/update-schedule.ts#UPDATE_SCHEDULE_DEFAULTS",
         "packages/desktop/updater.ts#LINUX_UPDATE_UNSUPPORTED_REASON"
       ],
-      "evidence": "覆盖文件：apps/desktop/src/{update-coordinator,update-schedule,update-journal,update-attention,update-presentation}.ts（+ update-error/http-executor 为 different-adopted，逐行见 §4.5）。人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验（上游 apps/desktop/src/update-{coordinator,journal,schedule,attention,presentation,error,http-executor}.ts、preload.cts 的 update 臂与 mandatory-update-*.ts），逐行见 §4.5 审计表",
+      "evidence": "覆盖文件：apps/desktop/src/{update-coordinator,update-schedule,update-journal,update-attention,update-presentation}.ts（+ update-error/http-executor 为 different-adopted，逐行见 §4.5）。人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验（上游 apps/desktop/src/update-{coordinator,journal,schedule,attention,presentation,error,http-executor}.ts、preload.cts 的 update 臂与 mandatory-update-*.ts）。上游把 schedule 的时长解析抽出 duration-env.ts（语义不变；本仓非法 env 告警回退的行为不动）；登录 shell 环境在 §4.6 手工移植登记行，不做镜像声明（该行是它的落点，不逐行见 §4.5），逐行见 §4.5 审计表",
       "status": "accepted",
       "rationale": "上游有完整 electron-updater 链；chamber 自建更新链按相位/注意力/presentation 归类/journal 语义镜像其形状（§22.3.5），ours = updater.ts / update-schedule.ts / update-journal.ts / update-headless.ts + preload.cts 的 update 臂。两处明确不采用：update-http-executor 的「替换 electron-updater 传输」需要注入私有字段（Electron 升级即碎，chamber 用外部 watchdog + 忽略迟到事件），update-dialog/overlay 与 mandatory-update 家族是上游 Desktop 的产品面（design 11 §2 无弹窗硬约束）。另：T-04 —— 上游 apps/ 与 patches/ 均无 Sparkle，Swift 腿的更新链是 chamber 自建，本触点只覆盖 Electron 腿。"
     },

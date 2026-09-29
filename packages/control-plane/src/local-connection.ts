@@ -49,6 +49,8 @@ export interface LocalConnectionDeps {
     ownerInstanceId?: string
     dshHome: string
     dshWorkspacePath: string
+    /** Desktop login-shell merge (value or its early-started promise) handed to the host spawn. */
+    hostEnv?: NodeJS.ProcessEnv | Promise<NodeJS.ProcessEnv>
     logger: Logger
     /** Optional `--patch` overlay for the dsh launcher (design 09 module B); null/absent when none. */
     patchPath?: string | null
@@ -107,6 +109,12 @@ export interface LocalConnectionOptions {
    * cannot move under a running shell.
    */
   pnpmEntry?: string | null
+  /**
+   * Desktop login-shell environment (login-shell-env.ts) every managed host
+   * inherits — the early-started read promise or its resolved value. Set only
+   * by the two desktop entries; absent keeps process.env.
+   */
+  hostEnv?: NodeJS.ProcessEnv | Promise<NodeJS.ProcessEnv>
 }
 
 /** The local connection adapter surface (the createLocalConnection return). */
@@ -202,6 +210,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
   const dshPortBase = options.dshPortBase
   const ownerInstanceId = options.ownerInstanceId
   const pnpmEntry = options.pnpmEntry ?? null
+  const hostEnv = options.hostEnv
   const spawnDshFn = (deps.spawnDsh ?? spawnDsh) as NonNullable<LocalConnectionDeps['spawnDsh']>
   const probeHostIdentity = deps.probeHostIdentity ?? probeHostIdentityFn
 
@@ -320,6 +329,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
     try {
       return await spawnDshFn({
         ...options,
+        ...(hostEnv === undefined ? {} : { hostEnv }),
         ...(ownerInstanceId === undefined ? {} : { ownerInstanceId }),
         ...(dshPortBase === undefined ? {} : { dshPortBase }),
         signal: controller.signal,

@@ -57,6 +57,8 @@ const controlPlaneModule: typeof import('@dsh-chamber/control-plane') = await (i
   : import('@dsh-chamber/control-plane'))
 
 export const createControlPlane = controlPlaneModule.createControlPlane
+/** Desktop login-shell read (design 02 §3.1 sibling): shared by both flavor entries. */
+export const readLoginShellEnvironmentOnce = controlPlaneModule.readLoginShellEnvironmentOnce
 export const call = controlPlaneModule.call
 export const isDshPortBaseValid = controlPlaneModule.isDshPortBaseValid
 

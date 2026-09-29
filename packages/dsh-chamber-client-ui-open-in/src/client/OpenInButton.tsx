@@ -25,7 +25,7 @@ import { describeOpenInError } from '../shared/capabilities.ts'
 import type { OpenInResult, OpenInSource } from '../shared/capabilities.ts'
 import type { OpenInViewEntry, OpenInViewModel } from '../shared/open-in-view-model.ts'
 import { OPEN_IN_APP_LABEL_KEY } from '../locales.ts'
-import { workspacePathForSession } from './open-in-gates.ts'
+import { resolveOpenInPath } from './open-in-gates.ts'
 import styles from './OpenInButton.module.css'
 
 /** Injected face the plugin supplies: per-boot source id + bound translator. */
@@ -62,12 +62,24 @@ export interface OpenInInjected {
  * d.ts tree in the workspace symlink.
  */
 export interface OpenInProps extends OpenInInjected {
-  /** The session this header belongs to (framework-supplied). */
+  /** The session this header belongs to (framework-supplied by the session-scoped slot). */
   sessionId: string
-  /** Framework selector hook over the workspace list (rows carry path/sessionIds). */
-  useWorkspaces: <S>(sel: (ws: {
-    items: ReadonlyArray<{ workspaceId: string; path: string; sessionIds: string[] }>
-  }) => S) => S
+  /** Framework selector hook over the workspace list (delivered to every slot component). */
+  useWorkspaces: <S>(sel: (ws: { items: ReadonlyArray<OpenInWorkspaceRow> }) => S) => S
+  /**
+   * Owner-supplied directory for the Files-tab seat (rc.2 hole
+   * `sidebar.right.tab.files.actions`): the file tree's displayed root IS the
+   * directory the entry opens, so that seat needs no session lookup. Absent on
+   * the header seat, which resolves its own session's workspace instead.
+   */
+  absolutePath?: string
+}
+
+/** One workspace row as the framework selector publishes it. */
+export interface OpenInWorkspaceRow {
+  workspaceId: string
+  path: string
+  sessionIds: string[]
 }
 
 /** Quick launches settle well under this delay, so their busy dress never
@@ -153,6 +165,7 @@ export function OpenInButton({
   t,
   sessionId,
   useWorkspaces,
+  absolutePath,
   getViewModel,
   subscribe,
   refresh,
@@ -186,16 +199,18 @@ export function OpenInButton({
   // view that owns it goes inactive. Everything else comes from the primitive.
   useInstanceViewDismissal(open, groupRef, () => { setOpen(false) })
 
-  // Hooks run unconditionally (before any gate's early return).
+  // Hooks run unconditionally (before any gate's early return); the framework
+  // delivers the workspace selector to every slot component in every scope.
   const workspaces = useWorkspaces(ws => ws.items)
 
   // Gate 1: the merged view-model decides what this source may use (fail-closed); an empty set renders null.
   const entries = model.entries
   if (entries.length === 0) return null
 
-  // Gate 2: THIS header's session must live in a workspace with a concrete path;
-  // the launch channel decides ssh-remote vs local/instance semantics.
-  const path = workspacePathForSession(workspaces, sessionId)
+  // Gate 2: the Files seat's owner path wins; a header seat resolves its own
+  // session's workspace. Either way the launch channel decides ssh-remote vs
+  // local/instance semantics.
+  const path = resolveOpenInPath(absolutePath, workspaces, sessionId)
   if (path === undefined || path === '') return null
 
   // Remembered selection when still usable, else the view-model default (first VS Code entry, else first).

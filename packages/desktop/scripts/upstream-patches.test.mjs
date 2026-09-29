@@ -76,6 +76,29 @@ test('提交的运行期锁文件记录同一 patch 集合（pin 升级必须重
   assert.equal(new Set(lockEntries.map(e => e.hash)).size, lockEntries.length, '每个 specifier 一个独立 patch hash')
 })
 
+test('runtimeClosure 补丁在运行期锁的 snapshot 键里带同名 patch_hash（allowUnusedPatches 静默窗口）', () => {
+  // Why the spec-set comparison above is not enough: pnpm 11
+  // (tryFastUpdatePatchedDependencies) SKIPS the appliedPatchKeys verification
+  // when the patch set changes under allowUnusedPatches, so a registry entry
+  // whose specifier no longer resolves in the graph would stay green while the
+  // packaged runtime shipped unpatched. Pin the resolution instead: every
+  // runtimeClosure spec must appear as a snapshot key carrying its patch_hash.
+  const registry = JSON.parse(readFileSync(new URL('../../../scripts/upstream/registry.json', import.meta.url), 'utf8'))
+  const closure = registry.patches.filter(patch => patch.runtimeClosure === true)
+  assert.ok(closure.length > 0, '至少一条 runtimeClosure 补丁（pi-ai / node-pty）')
+  const lock = readFileSync(RUNTIME_LOCKFILE, 'utf8')
+  const lockBlock = /^patchedDependencies:\n(?: {2}.*\n)+/mu.exec(lock)?.[0]
+  const hashes = new Map([...lockBlock.matchAll(/^ {2}'?([^':\n]+)'?: ([0-9a-f]{64})$/gmu)].map(match => [match[1], match[2]]))
+  for (const patch of closure) {
+    const hash = hashes.get(patch.spec)
+    assert.ok(hash !== undefined, `${patch.spec} 必须在运行期锁的 patchedDependencies 里`)
+    assert.ok(
+      lock.includes(`${patch.spec}(patch_hash=${hash})`),
+      `运行期锁的 snapshot 键必须解析到 ${patch.spec}(patch_hash=${hash})——否则该补丁在册却未生效`,
+    )
+  }
+})
+
 test('缺少 patchedDependencies 块的上游 workspace 必须红', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-patch-ws-'))
   try {

@@ -21,6 +21,8 @@
 - [ ] 能力面对齐：`node scripts/upstream/verify-capabilities.mjs` 逐条照面——`present` 面缺席而 chamber 已消费 = 必炸（先改消费面再动 pin）；`absent` 面出现 = 本地替代的退役触发已到（把 `retireWhen` 变成当期工作项）。
 - [ ] fork副本diff：`packages/client/connection`、`packages/client/web`、`packages/api/gateway` → 判断「冲突需合并」vs「干净采纳」（→ §3）；chamber-named 的 `packages/dsh-chamber-client-ui-layout`（registry §2.6，上游 `packages/client/ui-layout`）同样逐 diff 裁决，其深引 frame 面由预检以 vendor-seam 报告。
 - [ ] 首屏耦合审计：上游新增/改名的官方client行若被复合首屏inject → 同步host-graph降级注释；探针集合是派生的（不用加名字），但命名空间不再导出 `inject` 的漂移由 `packages/renderer/test/lifecycle/required-extra-rows.test.ts` 的逐id表兜底。
+- [ ] 上游 release notes「其他变更」段与上游 `docs/upgrade-guide/**` 逐条过一遍：落在 chamber 托管面（profile patch/bundles、chamber 注入的 settings、chamber 读的 session 日志、chamber 渲染的官方客户端面）的破坏写进 design/STATUS；不落本仓的记「无消费者」一句。
+- [ ] SlotMap 座席键差集：对 `packages/client/**/src` 抽取 `SlotMap` 声明键与各洞的占用者（注册方），与上一代逐键对比；新增/改名/删除的键与新增占用者逐条列出——**侧栏（`sidebar.*`）与 `sidebar.right.*` 的新内容一律上报用户裁决**，其余新座席也登记，不静默跟随（与 §7 第 5 步同一纪律）。
 
 - [ ] vendor 补丁退休评估（drift I-7）：C9 现在三分——锚点命中 = 绿；锚点缺失且某条 `retireCheck` 命中 = `retire-candidate`（**仍 release-blocking**），remediation = 把该条移入 `vendor-patches.mjs` 的 `RETIRED_PATCHES`（`ensure` = 上游修复原文、必须唯一命中），同批删除补丁条目与 `verify-vendor-patch-applied` 的产物 marker，并同步 design 09 §3.6/§3 与触点表；锚点缺失且 `retireCheck` 未命中 = drift，按新 pin 重导补丁。`noRetireForm` 条目以登记理由为准。新增/重放补丁按 design 09 §3.6 的四类准入裁决；第四类（多实例正确性）只在页面级事实无法由 chamber 包重新 scoped 时准入，scope 必须取自 per-entry `chamberBasePath`（禁页面全局事实或 URL 猜测），且上游自带 scope 后删除。
 
@@ -57,7 +59,8 @@
 - [ ] `pnpm --filter @dsh-chamber/desktop run bundle:dsh -- --force --refresh-lockfile`（runtime锁文件版本变化时必须 `--refresh-lockfile`，否则 `ERR_PNPM_OUTDATED_LOCKFILE`）。
 - [ ] 冒烟：`node packages/desktop/vendor/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js --version` = 目标版本。
 - [ ] `allowBuilds` / `DENY_BUILDS` 复核：上游新增原生依赖时显式裁决（单源生成点 + 测试钉住），不留沉默的ignored builds。
-- [ ] 上游 patch 集合变化（§17-C）：`vendor/harness-checkout/{pnpm-workspace.yaml,patches/}` 的 `patchedDependencies` 与 registry 的 `patches` 逐条对拍（`node --test scripts/upstream/registry.test.mjs`），再跑 `pnpm --filter @dsh-chamber/desktop run bundle:dsh -- --force --refresh-lockfile` 让 runtime lock 记录 patch set；`node --test packages/desktop/scripts/upstream-patches.test.mjs` 在集合漂移时红（`allowUnusedPatches` 只豁免图外条目，图内条目必须有 patch_hash）。
+- [ ] 上游 patch 集合变化（§17-C）：先 `cmp` 新旧补丁文件内容——**文件名变化不等于语义变化**（同字节改名只换登记锚）；内容确有变化才按四类准入重导/重锚。随后对拍 `vendor/harness-checkout/{pnpm-workspace.yaml,patches/}` 的 `patchedDependencies` 与 registry 的 `patches`（`node --test scripts/upstream/registry.test.mjs`），再跑 `pnpm --filter @dsh-chamber/desktop run bundle:dsh -- --force --refresh-lockfile` 让 runtime lock 记录 patch set；`node --test packages/desktop/scripts/upstream-patches.test.mjs` 在集合漂移或 runtimeClosure 条目未解析出 patch_hash 时红（`allowUnusedPatches` 只豁免图外条目）。
+- [ ] 根锁里无 use 边的旧快照是 pnpm 的既定保留行为（非手改信号）：收口以 frozen 安装 + 前后哈希一致为准，不手工删条目；确需清理时用一次受控非 frozen 安装并复核幂等。
 
 ## 6. 回归
 

@@ -34,7 +34,7 @@ import { applyWindowsAclTightening } from './win-acl.ts';
 import { verifyRuntimeClientClosure } from './runtime-tree-check.ts';
 import { createTrustedIpc, isChamberPermissionGranted, isExternalLinkUrl, isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
 import type { TrustedIpc } from './renderer-trust.ts';
-import { atomicWritePrivateFileNoFollow, createControlPlane, ensurePrivateDirectoryNoFollow, readPrivateFileNoFollow } from './control-plane-module.ts';
+import { atomicWritePrivateFileNoFollow, createControlPlane, ensurePrivateDirectoryNoFollow, readLoginShellEnvironmentOnce, readPrivateFileNoFollow } from './control-plane-module.ts';
 import { attemptDeepLinkProtocolRegistration, canRestoreMainWindow, decideDeepLinkProtocolRegistration, describeUnknownError, ensureLinuxProtocolDesktopFile, linuxAutostartDesktopEntry, linuxAutostartDirectory, resolveLinuxLaunchExecutable } from './deep-link.ts';
 import { createUpdateController, flashUpdateAttentionWindow } from './updater.ts';
 import { shellStrings } from './shell-locale.ts';
@@ -1413,6 +1413,23 @@ if (!gotTheLock) {
       if (safeModeActive) {
         console.log(`[dsh-chamber] 安全模式生效（${SAFE_MODE_ENV}=1）：跳过 chamber 宿主包 seeding 与 extra rows 装载；下次普通启动自动恢复`);
       }
+      // Dock/Finder 启动只继承 launchd 环境：登录 shell 读一次，全部托管宿主共用
+      // （rc.2 对齐，design 02 §3.1 姊妹项）。读取在入口发起、首个宿主 spawn 前才
+      // await（上游同序）：窗口与控制面构造不被探测阻塞；失败或非法 timeout env
+      // 只告警并回退继承环境；will-quit 终止仍在跑的探测进程组。
+      const loginShellAbort = new AbortController();
+      app.on('will-quit', () => { loginShellAbort.abort() });
+      const loginShellEnvironment = readLoginShellEnvironmentOnce(process.env, { signal: loginShellAbort.signal })
+        .then((result) => {
+          for (const failure of result.failures) {
+            console.warn(`[dsh-chamber] 登录 shell 环境读取失败（${failure.shell}）：${failure.reason}`);
+          }
+          return result.environment;
+        })
+        .catch((error: unknown) => {
+          console.warn(`[dsh-chamber] 登录 shell 环境读取配置错误，回退继承环境：${String(error)}`);
+          return process.env;
+        });
       controlPlane = createControlPlane({
         port: controlPlanePort,
         // 本地 dsh 的起始端口（缺省 17510）；env 覆盖只在显式设置时传入。
@@ -1420,6 +1437,9 @@ if (!gotTheLock) {
         stateDir: stateRootDir(app.getPath('userData')),
         // 宿主 PATH 无 pnpm 时供给随包 launcher（design 02 §3.1）；与 sidecar-entry 同参。
         pnpmEntry,
+        // 托管宿主继承登录 shell 环境；传入口早已发起的读取 promise，由
+        // spawn-dsh 在首次 spawn 前 await（与 Swift sidecar 同一契约）。
+        hostEnv: loginShellEnvironment,
         // 租约记录的诊断 flavor（冲突方读到「desktop」而不是笼统的 control-plane）。
         stateWriter: 'desktop',
         // 本地 dsh spawn 门 = 共享装配的 localSpawnGates（与 Swift sidecar 同一语义）。

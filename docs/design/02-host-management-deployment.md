@@ -255,6 +255,29 @@ rows，不改变官方 web profile 的其它组合层。
   的证据（登记字段：binary、args、cwd、env 键数、PATH 项数；spawn-dsh 以注册表字段承载，非独立
   结构化 `lastSpawnDiagnostics` 对象）。
 
+- **登录 shell 环境（rc.2 对齐；控制面 `login-shell-env.ts`）**：Dock/Finder/桌面启动只继承
+  session manager 的环境，用户写在 `~/.zprofile`/`~/.zshrc` 的 PATH、代理与 API key 不会进入托管
+  宿主与它的 agent shell/终端（与随包 pnpm shim 同一病根）。两个桌面入口（Electron main、Swift
+  sidecar）**各发起一次** `readLoginShellEnvironmentOnce(process.env)`（进程级一次读取的 promise），
+  把它作为 `hostEnv` 选项交下去：控制面与窗口构造不等它，`spawn-dsh` 在**首次 spawn 前才 await**
+  （上游同序）。候选 = 账号记录的登录 shell → `/bin/zsh` → `/bin/bash` → `/bin/sh`，各跑一次
+  `<shell> -ilc`，以两个标记包住 `command env -0 || exit` 的输出（不等待 stdout 关闭；cwd = 用户
+  home）。shell 值覆盖继承值，但**探测环境键集（PROBE_ENVIRONMENT：DISABLE_AUTO_UPDATE /
+  ZSH_TMUX_AUTOSTART / ZSH_TMUX_AUTOSTARTED，绝不泄进宿主）**、探测会话变量（PWD/OLDPWD/SHLVL/_）
+  与 `DSH_*`/`ELECTRON_*` 命名空间除外。单候选预算默认 10s，可用 `DSH_DESKTOP_LOGIN_SHELL_TIMEOUT_MS`
+  覆盖（非 1000..2147483647 的整数 = 配置错误，入口告警并回退）；超时/中止杀**进程组**后换下一候选，
+  **成功候选不杀**（让它自行退出，不动用户 rc 拉起的后台作业）。全部失败返回继承环境并逐条告警
+  （含 exit/signal），绝不阻塞启动；Windows 跳过。gateway/standalone 不调用（服务由服务管理器供给
+  环境）。失败列表进启动日志；托管宿主 env 的其余卫生规则（DSH_HOME 显式 pin 等）不变。
+
+#### Rejected alternatives（宿主登录 shell 环境）
+
+- **读 `$SHELL`**：Dock 启动继承的是 launchd 的 `$SHELL`，不是 `chsh` 后的当前选择。
+- **只跑 `<shell> -lc`**：多数用户把 PATH 追加写在 `~/.zshrc`（只有交互式 shell 读它），非交互式读不到。
+- **允许 shell 覆盖 `DSH_*`**：控制面在读取之前已解析 `DSH_HOME`，让启动文件改它会指向另一个 home。
+- **等待 stdout 关闭**：启动文件拉起的后台进程会一直占着 stdout，等于每次读取都超时。
+- **在控制面无条件读取**：gateway/systemd 由服务管理器提供环境，读账号登录 shell 会把服务错误绑定到某个用户配置。
+
 #### Rejected alternatives（首启设置迁移）
 
 - **每次缺 `settings.yaml` 就重播种**：0.1.7 的正常导入会使该路径永久缺席；重播种导致每次启动重新导入默认中文，覆盖用户后续选择。

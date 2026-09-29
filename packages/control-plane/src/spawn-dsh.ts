@@ -237,6 +237,8 @@ interface SpawnAttemptOptions {
   stateDir: string
   ownerInstanceId: string
   dshWorkspacePath: string
+  /** Environment the host inherits (desktop login-shell merge); absent = process.env. */
+  hostEnv?: NodeJS.ProcessEnv
   port: number
   logger: Logger
   patchPath?: string | null
@@ -546,6 +548,7 @@ async function spawnAttempt({
   stateDir,
   ownerInstanceId,
   dshWorkspacePath,
+  hostEnv: inheritedHostEnv,
   port,
   logger,
   patchPath,
@@ -585,7 +588,7 @@ async function spawnAttempt({
   // SSH-launch marker directory-picker-auto serves directoryPicker.list /
   // createDirectory, so every instance gets the same in-app dialog.
   const hostEnv = sanitizeManagedDshEnv({
-    ...process.env,
+    ...(inheritedHostEnv ?? process.env),
     ...nodeExec.env,
     DSH_HOME: dshHome,
     DSH_TELEMETRY_DISABLED: '1',
@@ -1068,6 +1071,13 @@ export interface SpawnDshOptions {
   ownerInstanceId?: string
   dshHome: string
   dshWorkspacePath: string
+  /**
+   * Environment the managed host inherits. The desktop entries pass the
+   * login-shell merge promise (login-shell-env.ts) so the probe never blocks
+   * the startup path; it is awaited here, immediately before the first spawn.
+   * Absent = the control plane's own process environment (gateway/standalone/tests).
+   */
+  hostEnv?: NodeJS.ProcessEnv | Promise<NodeJS.ProcessEnv>
   logger: Logger
   /** Optional `--patch` overlay passed to the dsh launcher (design 09 module B). */
   patchPath?: string | null
@@ -1100,6 +1110,7 @@ export async function spawnDsh({
   ownerInstanceId,
   dshHome,
   dshWorkspacePath,
+  hostEnv: inheritedHostEnv,
   logger,
   patchPath,
   pnpmEntry,
@@ -1117,6 +1128,10 @@ export async function spawnDsh({
   if (!isValidInstanceId(resolvedOwnerInstanceId)) {
     throw new Error('spawn ownerInstanceId must be a UUID')
   }
+  // The desktop entries start the login-shell read early and hand its promise
+  // down; it is awaited HERE, immediately before the first spawn attempt, so
+  // window creation and plane construction never wait on the probe.
+  const resolvedHostEnv = inheritedHostEnv === undefined ? undefined : await Promise.resolve(inheritedHostEnv)
   // One typed record per failed attempt; the terminal error below carries all
   // of them, so an exhausted retry window always names the real reason.
   const failures: SpawnAttemptFailure[] = []
@@ -1151,6 +1166,7 @@ export async function spawnDsh({
         stateDir,
         ownerInstanceId: resolvedOwnerInstanceId,
         dshWorkspacePath,
+        ...(resolvedHostEnv === undefined ? {} : { hostEnv: resolvedHostEnv }),
         port,
         logger,
         patchPath,

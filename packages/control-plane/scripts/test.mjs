@@ -87,6 +87,10 @@ const GROUPS = {
     'test/host-lifecycle/pnpm-shim.test.ts',
     'test/host-lifecycle/reaper.test.ts',
     'test/host-lifecycle/restart-local.test.ts',
+    // 桌面登录 shell 环境（rc.2 对齐，design 02 §3.1 姊妹项）：标记解析/受保护
+    // 命名空间合并 + 真实替身 shell 的早完成、超时杀掉回退、无结束标记回退、
+    // 中止与 Windows 跳过。两 flavor 共用同一读取，gateway/standalone 不调用。
+    'test/host-lifecycle/login-shell-env.test.ts',
   ],
   // host-logs: 宿主日志文件（listDiagnostics/轮转）与 opt-in 应用日志桥
   'host-logs': [
