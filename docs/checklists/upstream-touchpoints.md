@@ -394,6 +394,31 @@ preload-welcome / welcome-api / welcome-backend / welcome-window。
 （S-51 文档平台标记 / S-52 dshDesktop 载体与失败归类归载体席位）；`upstream-seats.test.ts` 在 desktop 套件内执行
 （`packages/desktop/scripts/test.mjs`），非新增 C 编号门。
 
+## 4.6 手工移植登记（hand-transplant register）
+
+本节登记**手工移植 / 镜像上游形态**的面：上游锚（当前 pin 的 vendor 树）→ 本仓落点、移植形态、有意分歧 / 我方增量、今日钉法、升 pin 复核触发。
+人工台账，与 §4.5 同规矩**无 C 编号门**；文件级分类（`[own]` / `[patch-*]` / `[pure]` / `[dropped]`）仍归 §2 / §9 生成块，本表不重复；版本值不进本表。
+
+**评审义务**：新增这样的面（或上游新增的占用者 / 键值被本仓接手）时，先补本表一行，并按 §7 第 5 步交用户裁决**采纳 / 跳过 / 替换**——默认处置只有「上报待裁」，不得默认拒绝、也不得静默跟随。升 pin 时按 §7 第 6 步逐行照面复核。
+
+**移植形态词**：形态副本（上游组件 / 标记的 markup 逐字复刻）｜逐字副本（源码级复刻）｜行为镜像（语义等价、实现不同）｜声明转移（座席 / 契约声明的所有权转移）。
+
+| 上游锚（vendor 树） | chamber 落点 | 移植形态 | 有意分歧 / 我方增量 | 今日钉法 | 升 pin 复核触发 |
+|---|---|---|---|---|---|
+| `ui-workspace/…/session-actions/ArchiveSession.tsx` 的 `ArchiveSessionRowButton`（`sidebar.workspaces.session.row.action` order 100） | 侧栏 `ServerSectionRows.tsx` 行悬停动作簇（kebab 之后第二成员） | 形态副本 | 无障碍名参数化 `action.archive.aria`（上游用行菜单同款泛化名）；无 unarchive 半支（归档行不进本仓列表）；拖拽尾随 click 门；类名换 `.actionIcon` | `test/session-rows/session-row-actions.test.ts` | 上游改形态 / order / 文案键即重放并复核 aria 分歧 |
+| `ui-primitives` 的 `HoverCard.tsx` + `overlay-top-margin.ts` 的 `overlayTopMargin` | `RowHoverCard.tsx` + client-core `hover-intent.ts` + `sidebar-chamber.module.css` 卡片盒 | 形态副本 + 行为镜像 | 打开判宽限、copy epoch、出屏即关、ResizeObserver；`overlayTopMargin` 公式逐行镜像（`max(min, (fullscreen ? 0 : 顶部净空) + 20)`） | C15（§6）+ `hover-intent.test.ts` | 上游修竞态 / 改净空公式 ⇒ C15 判红逼裁决 |
+| `ui-workspace/…/rows/Rows.tsx` 的行首 / 悬停座席渲染（`sidebar.session.row.{leading,hover}`） | `ServerSectionRows.tsx` 行首座席与悬停卡 + `index.ts` 声明 + `contract/slots.ts` | 声明转移 + 行为镜像 | 只对本实例求值（外来源行自有标记）；只留 blank 半边守卫（本仓行数据无 archived 标记）；两席声明权本仓代持（vendor 补丁 13） | `seat-position.test.ts` / `sidebar-slot-declaration.test.ts` / C9 | 座席键或渲染位变先改 vendor 补丁 13；所有权回归上游 ⇒ 上报待裁 |
+| `ui-sidebar/…/SidebarRoot.tsx` 的 darwin 顶部带 + `.topStrip` / `.logoRow` | `SidebarRoot.tsx` darwin 分支 + `SidebarRoot.module.css` | 形态副本 + 几何值镜像 | 带高 / 位移 / 内距逐值照上游；透明三组加 `[data-window-vibrancy]` 门；toggle 为本仓组件 | `test/leading/macos-top-strip.test.ts` + Swift 接线锁 | 带高 / 拖拽清单 / 净空变量变即同步（与表格第 2 行同批复核） |
+| `ui-sidebar/…/HeaderLeadingControls.tsx` + module.css | `SidebarLeadingControls.tsx` + `index.ts` 注册（`shell.leading`） | 形态副本 + 声明转移 | 同 inject 面 / sidebar 命名空间；不写 id-order-priority；ShortcutsHook cast；控件顺序与键帽取法照上游 | `leading-controls.test.ts` / `leading-seat-wiring.test.ts` | 席位成员或注册形态变先裁决所有权；帧座挂载条件变复核重开入口不变量 |
+| `ui-schedule/…/SessionScheduleMark.tsx`（`sidebar.session.row.leading`，`schedule-mark` order 10） | `server-section-controls.tsx` 的 `SessionScheduleIndicator`（行首座席 / 搜索行） | 形态副本（锚已换代：旧锚 `ActiveScheduleIndicator` 已退役） | 本仓 16px 闹钟 + `role="img"` + `aria/title = schedule.active`；上游 12px 时钟 + `data-session-schedule-mark` + 视觉隐藏计数标签；本仓去 margin-right 6px | 无自动化锁（本行为唯一登记） | 上游形态 / 规模变，或 `ui-schedule` 进 roster（不进 ⇒ 本仓回落是唯一渲染路径）⇒ 上报待裁 |
+| 旧代上游搜索行的日程标记（当前 pin 的搜索行不渲染） | `ServerSectionSearch.tsx` 搜索行标记 | 行为镜像（旧代同址） | 投影外即 false；状态点前 / 标题后；无额外 blank 门 | 无自动化锁 | 上游重新引入 / 移除 ⇒ 与上一行同批复核 |
+| `ui-workspace/…/rows/AnimatedRows.tsx` + module.css | `rows/animated-rows.tsx` + module.css（接 `ServerSection.tsx`） | 逐字副本 | 不深引（C16 只收 `export function`）；`.workspaceList` 非滚动容器 ⇒ 裁剪退化 | `animated-rows.test.ts` 逐字对拍 | 上游改体 / 常数即重放；若改走 C16 直穿可删副本（同批改 registry） |
+| `ui-workspace/…/rows/Rows.tsx` 的 `useTitleMarquee` + 常数 | `session-title-marquee.ts`（接 `ServerSectionRows.tsx`） | 逐字副本 | 同常数；`data-scrolled` / `data-clipped` 由本仓样式消费 | `session-title-marquee.test.ts` | 上游改速度 / 最小揭示 / 停靠 / reduced-motion 即重放 |
+| `ui-workspace/…/session-actions/ArchiveSession.tsx` 的 `SessionArchiveConfirmDialog`（`shell.overlay`） | `SessionArchiveConfirmDialog.tsx` + `session-archive-confirm.ts` | 形态副本 + 文案转录 | Modal 与入口归本仓；generic 活动行阶梯；框内 `role=alert` 失败行；单层 Modal | `session-archive-confirm.test.ts` | 上游改家族词表 / 文案键 / 停止语义逐条重放；座席归属变复核不叠加 |
+| `ui-workspace` / `ui-sidebar` 的 `locales.ts` 键值（侧栏部分） | 侧栏 `locales.ts` 字典 | 形态副本（词典值逐字） | 键为本仓并集；行级动作名参数化 | `session-row-actions.test.ts` / `leading-controls.test.ts` 的值断言 | 上游改词值即重放；新增键先裁决归属 |
+| 宿主 runtime service 的 fork 标题递增 | client-core `derive.ts` 的 `increasedForkTitle`（由 `sidebar-root-sessions.ts` 调用） | 逐字副本 | 无（rename 失败非致命） | client-core 测试 + `instance-api.test.ts` 锚 | 上游改递增规则即重放；跨包移动更新落点 |
+| 官方应用内 Modal chrome（删除工作区的标题 / 描述 / pending 文案 + outline 取消 / 破坏性确认 + pending 行 + 框内失败） | `sidebar-root-dialogs.tsx` | 行为镜像 + 文案转录 | 焦点入框 / 归还 opener；四开启点单层闸门；来源消失撤武装（失败行除外） | `workspace-echo.test.ts` | 上游改 chrome / 文案键重放；该面退役 ⇒ 上报待裁 |
+
 ## 5. 再生物登记
 
 |再生物|源|提交纪律|
