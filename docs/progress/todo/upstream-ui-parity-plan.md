@@ -80,7 +80,7 @@ design 同批更新；已落地面的契约见 design 06 §7、design 05 §2）�
   （`@deepseek-ai/dsh-client-ui-schedule` 的 client bundle，两个 `sidebar.session.row.*` 注册），上游由 `sidebar.workspaces` 的 children 表声明（`WS:4307-4314`）——本仓构建里这两行由 vendor 补丁 13 号删除，改由 chamber 侧栏声明（见下）。
 - 本仓（已收口，A1 = 座席所有权转移）：上游注册里的两行声明由 vendor 补丁 13 号删除，本仓侧栏在**自己的** `children`
   里声明两席并渲染（行首座席的 `fallback` = 自有 `SessionScheduleIndicator`，两者永不并现，design 09 §3.6 第四类第二形态）。
-- 裁决账：曾拒「在本仓自有行内渲染官方注册项」（跨插件渲染面）与「撤销 `sidebar.workspaces` 声明」（上游注册会抛错）；
+- 裁决账：曾拒「在本仓自有行内渲染官方注册项」（跨插件渲染面）与「撤销 `sidebar.workspaces` 声明」（撤销会让官方注册与第三方注入静默消失）；
   上游若提供座席转交/共享 API，则该 vendor 补丁退役（提案见 upstream-proposals.md §11）。
 
 ### 1.5 重命名交互：模态 vs 行内
