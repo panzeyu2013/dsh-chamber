@@ -5,7 +5,8 @@
  * 1. 行为：`needsHoverGate` 真值表——位移判据 × "位移前是否已 hover" 的四行全表；
  * 2. 接线与漂移（源码文本）：纯机器零 React 依赖（因此可被本文件直接 import）；scan 只认
  *    keyed 行、只由 pointermove/pointerdown 解除、解除时对仍在指针下的行补一次 over（让
- *    React 的 onPointerEnter 重新求值）；section 根 ref、行内跑马灯、悬停卡三处守卫在场；
+ *    React 的 onPointerEnter 重新求值）；钩子 dispose 后置空 ref（StrictMode 重挂载换新机器，
+ *    不复用 inert 机器）；section 根 ref、行内跑马灯、悬停卡三处守卫在场；
  *    样式表里每一条**行级** `:hover` 揭示都带 `:not([data-hover-gate])`——新增漏带即红。
  *    归档管理器（不参与 FLIP）、重命名态（抑制性规则，不是揭示）、JS 揭示半边
  *    `:has(.rowActionsVisible)`、未分组桶的 transparent 复位都不在门控面内。
@@ -40,7 +41,10 @@ test('only a row that moved under a stationary pointer is gated', () => {
 test('the machine stays React-free and releases only on real pointer input', () => {
   assert.ok(!/from 'react'/u.test(GATE), '纯机器不得依赖 React（否则 plain-node 行为测无法 import）')
   assert.match(HOOK, /import \{ createHoverMotionGate, type HoverMotionGate \} from '\.\/hover-motion-gate\.ts'/u)
-  assert.match(HOOK, /useLayoutEffect\(\(\) => \{ gate\.scan\(ref\.current\) \}\)/u, '每次提交后的 layout 阶段 scan')
+  assert.match(HOOK, /useLayoutEffect\(\(\) => \{[\s\S]{0,220}?gateRef\.current === null[\s\S]{0,120}?gateRef\.current = createHoverMotionGate\(\)[\s\S]{0,80}?gateRef\.current\.scan\(ref\.current\)/u,
+    '每次提交后的 layout 阶段 scan；机器在此补建（首次挂载与 StrictMode 重挂载），渲染期不建')
+  assert.match(HOOK, /gateRef\.current\?\.dispose\(\)[\s\S]{0,80}?gateRef\.current = null/u,
+    'dispose 后必须把 ref 置空：StrictMode 的 setup→cleanup→setup 否则会复用一台永久 inert 的机器，scan 加上的门控再无人解除')
   assert.match(GATE, /document\.addEventListener\('pointermove', onPointer, \{ capture: true, passive: true \}\)/u)
   assert.match(GATE, /document\.addEventListener\('pointerdown', onPointer, \{ capture: true, passive: true \}\)/u)
   assert.match(GATE, /document\.removeEventListener\('pointermove', onPointer, \{ capture: true \}\)/u, '卸载摘监听')
