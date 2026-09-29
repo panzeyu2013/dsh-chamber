@@ -51,9 +51,9 @@
     },
     {
       "path": "packages/dsh-chamber-client-core/src/derive.ts",
-      "lines": 1742,
+      "lines": 1726,
       "target": 1200,
-      "note": "aggregate/session derive；2026-09-28 review-justified: RuntimeFactsOverlayRow 增加 facts 侧子代理活动三值（busy/idle/unknown，与判定侧同映射）并只在通道未声明时填补——呈现面不再由原始计数反推 running（+4，含同批删除的重复注释 −1）；棘轮随之抬到 1742。"
+      "note": "aggregate/session derive；2026-09-28 review-justified: RuntimeFactsOverlayRow 增加 facts 侧子代理活动三值（busy/idle/unknown，与判定侧同映射）并只在通道未声明时填补——呈现面不再由原始计数反推 running（+4，含同批删除的重复注释 −1）；棘轮随之抬到 1742；pin 落地把投影输入类型移入叶子（instance-projection-input.ts；快照行类型的叶子化记在 instance-api 条）后下调到 1727；review 又删掉一行多余的导入空行 → 1726。"
     },
     {
       "path": "packages/desktop/transport-manager.ts",
@@ -69,9 +69,9 @@
     },
     {
       "path": "packages/dsh-chamber-client-core/src/instance-api.ts",
-      "lines": 1385,
+      "lines": 1347,
       "target": 900,
-      "note": "per-instance unary api surface; +19 (2026-12) carries the upstream SessionProjectionHints watermark (projectionKind/projectionAsOfSeq) so cached blocks are never compared with a connected session's values"
+      "note": "per-instance unary api surface; +19 (2026-12) carries the upstream SessionProjectionHints watermark (projectionKind/projectionAsOfSeq) so cached blocks are never compared with a connected session's values；pin 在此新增置顶集字段（+）并把快照行类型移出到 instance-snapshot-rows.ts（−），净下调到 1347"
     },
     {
       "path": "packages/desktop/runtime-startup-host.ts",
@@ -87,9 +87,9 @@
     },
     {
       "path": "packages/dsh-chamber-client-core/src/aggregate-store.ts",
-      "lines": 1069,
+      "lines": 1017,
       "target": 600,
-      "note": "aggregate store types/channels/registry; +85 = the worktree placement facts/channels (feature, review-justified raise; registered in STATUS)"
+      "note": "aggregate store types/channels/registry; +85 = the worktree placement facts/channels (feature, review-justified raise; registered in STATUS)；ChamberServerWorkspace 移入 aggregate-types.ts（并把它自己的说明带上）后下调到 1017"
     }
   ]
 }

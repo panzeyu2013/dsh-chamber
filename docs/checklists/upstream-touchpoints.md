@@ -418,6 +418,7 @@ preload-welcome / welcome-api / welcome-backend / welcome-window。
 | `ui-workspace` / `ui-sidebar` 的 `locales.ts` 键值（侧栏部分） | 侧栏 `locales.ts` 字典 | 形态副本（词典值逐字） | 键为本仓并集；行级动作名参数化 | `session-row-actions.test.ts` / `leading-controls.test.ts` 的值断言 | 上游改词值即重放；新增键先裁决归属 |
 | 宿主 runtime service 的 fork 标题递增 | client-core `derive.ts` 的 `increasedForkTitle`（由 `sidebar-root-sessions.ts` 调用） | 逐字副本 | 无（rename 失败非致命） | client-core 测试 + `instance-api.test.ts` 锚 | 上游改递增规则即重放；跨包移动更新落点 |
 | 官方应用内 Modal chrome（删除工作区的标题 / 描述 / pending 文案 + outline 取消 / 破坏性确认 + pending 行 + 框内失败） | `sidebar-root-dialogs.tsx` | 行为镜像 + 文案转录 | 焦点入框 / 归还 opener；四开启点单层闸门；来源消失撤武装（失败行除外） | `workspace-echo.test.ts` | 上游改 chrome / 文案键重放；该面退役 ⇒ 上报待裁 |
+| `ui-workspace/…/session-actions/PinSession.tsx` 的两个入口（menu.item order 100 / row.action order 200）+ `rows/Rows.tsx` 的 `PinnedIndicator` | 侧栏 `ServerSectionRows.tsx` 行菜单首项 + 归档钮之后的悬停置顶钮 + 状态槽之后的静息标记；client-core 的置顶集投影与 unary 出口 | 形态副本（不注册官方座席：官方 ui-workspace 声明所在洞只声明不渲染，I-4 锁） | 无障碍名**照上游**用行菜单长名（行名参数化只留在归档钮上）；首落不含置顶序（design 06 §5）；失败走行级 `rowErrors` 槽（上游是 toast）；`pinSetKnown !== true` 时标记不出现、动作按 pin 方向出；静息标记盒 20×20 跟齐本仓动作盒且不另加左边距（上游 16×20 + `margin-left:6px`，差异源于本仓行 gap/动作盒结构） | `test/session-rows/session-row-actions.test.ts` + `test/session-state/vendor-session-fact-contract.test.ts`（上游形态 lockstep）+ `test/source-runtime/instance-api.test.ts`（wire 信封） | 上游改入口 order / 文案键 / 14px 字形 / 归档守卫 / 线协议即重放；座席顺序或形态变先改本行并按 §7 第 5 步上报裁决 |
 
 ## 5. 再生物登记
 
