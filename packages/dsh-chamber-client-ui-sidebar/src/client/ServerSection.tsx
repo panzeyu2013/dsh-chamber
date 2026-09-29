@@ -46,6 +46,7 @@ import { ServerSectionSessionRows } from './ServerSectionRows.tsx'
 // The port's constants and body are locked against the pinned source by
 // test/session-rows/animated-rows.test.ts.
 import { AnimatedRows } from './rows/animated-rows.tsx'
+import { useHoverMotionGate } from './use-hover-motion-gate.ts'
 import { ServerSectionRenameForm } from './server-section-controls.tsx'
 import { createdLabel, dragOverState, projectionHasSession, projectionToLocalSearchSnapshot, rowHalf } from './server-section-model.ts'
 import cc from './sidebar-chamber.module.css'
@@ -99,6 +100,17 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
   /** 上次渲染时焦点是否在胶囊内——卸载后 activeElement 会回落，必须提前记。 */
   const capsuleHeldFocus = useRef(false)
   const searchButton = useRef<HTMLButtonElement | null>(null)
+
+  /**
+   * 行位移门控的根（design 06 §7）：一次提交把某 keyed 行搬到静止指针下时，浏览器会为该行
+   * 合成 pointerenter（实测 t≈347ms、0 个 pointermove），于是 :hover 揭示树 / 悬停卡 /
+   * 标题跑马灯会在用户并未指向该行时触发——"删除会话时对应的 workspace 闪一下"。机器在每次
+   * 提交后的 layout 阶段扫描本 section 的 keyed 行动画，只门控"被搬进指针下"的行
+   * （位移前已在指针下的行保留揭示），真实 pointermove/pointerdown 即解除。
+   * 机理、实测与残余见 hover-motion-gate.ts 头注。
+   */
+  const sectionRef = useRef<HTMLElement | null>(null)
+  useHoverMotionGate(sectionRef)
   /**
    * 键盘焦点揭示态（design 08 §3.2）：键盘揭示**只能**落在 JS 驱动的
    * `.rowActionsVisible` 类上——与 kebab 展开同一个类、同一条揭示路径，簇里的按钮才
@@ -354,6 +366,7 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
               }
               return (
               <section
+                ref={sectionRef}
                 key={server.id}
                 className={clsx(
                   cc.sourceGroup,

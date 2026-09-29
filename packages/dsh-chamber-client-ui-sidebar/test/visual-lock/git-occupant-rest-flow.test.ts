@@ -99,9 +99,12 @@ test('the reveal set is exactly the action hook’s states', () => {
     selectors(shown[0]!).sort(),
     [
       '.workspaceHeader:has(.rowActionsVisible) ' + HOOK,
-      '.workspaceHeader:hover ' + HOOK,
+      // hover 半边带行位移门控（design 06 §7）：被位移搬到静止指针下、而指针并未移动的行不得
+      // 认领揭示——否则 :hover 揭示树会在用户没指向它时整行重构（"删除会话时 workspace 闪一下"）。
+      // 下面的 HOOK→ACTION_HOOK 映射断言要求容器与动作两侧同时带这条门控，漏一侧即红。
+      '.workspaceHeader:hover:not([data-hover-gate]) ' + HOOK,
     ].sort(),
-    'hover / .rowActionsVisible (kebab-open or keyboard focus) — never :focus-within, and never a CSS :has(:focus-visible) reveal (Blink does not navigate into it; see keyboard-reveal-reachability.test.ts)',
+    'hover (:not([data-hover-gate])) / .rowActionsVisible (kebab-open or keyboard focus) — never :focus-within, and never a CSS :has(:focus-visible) reveal (Blink does not navigate into it; see keyboard-reveal-reachability.test.ts)',
   )
   for (const hook of [HOOK, ACTION_HOOK]) {
     assert.equal(

@@ -83,7 +83,9 @@ test('the hover reveal is the shared cluster rule, not a second mechanism', () =
   // 归档钮不新增揭示规则：cluster 仍由行 hover / kebab 展开切进切出。注意行簇**没有**
   // 键盘焦点入口（session 行无 focus 座席；键盘焦点那一半只属于 workspace 头，见 CSS 注释
   // 与 design 06 §7 的已登记取舍）。
-  assert.match(CSS, /\.sessionRow:hover \.rowActions \{/u)
+  // hover 半边带行位移门控（design 06 §7）：被位移搬到静止指针下、而指针并未移动的行不得认领
+  // 揭示——门控只是给同一条共享簇规则加一个属性条件，不是第二条揭示机制。
+  assert.match(CSS, /\.sessionRow:hover:not\(\[data-hover-gate\]\) \.rowActions \{/u)
 })
 
 test('the pin surfaces are the upstream forms: menu order 100 first, hover button 200 rightmost, sparse set marker', () => {
@@ -138,7 +140,8 @@ test('the pin surfaces are the upstream forms: menu order 100 first, hover butto
   const pinAt = ROWS.indexOf('cc.pinSlot')
   assert.ok(stateAt !== -1 && pinAt !== -1 && pinAt > stateAt,
     'the marker trails the trailing cell, like upstream trails the time cell')
-  assert.ok(CSS.includes('.sessionRow:hover .pinSlot,\n.sessionRow:has(.rowActionsVisible) .pinSlot {\n  display: none;'),
+  // hover 半边带行位移门控（design 06 §7）：门控行在指针未移动前不得换出标记/状态槽。
+  assert.ok(CSS.includes('.sessionRow:hover:not([data-hover-gate]) .pinSlot,\n.sessionRow:has(.rowActionsVisible) .pinSlot {\n  display: none;'),
     'the marker swaps out with the state slot while the actions are in')
   // 几何按本仓结构定稿（design 06 §7、checklist §4.6）：20×20 跟齐动作盒、不另加左边距。
   // 必须**在 .pinSlot 规则体内**断言：整份 CSS 里 "width: 20px; height: 20px;" 另有命中

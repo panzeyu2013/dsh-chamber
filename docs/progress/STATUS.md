@@ -96,10 +96,14 @@
 - Git Worktree（design 08）：远程 Linux 端到端 3 项 + 实机 3 项 + 孤儿 workspace 注册清理两态 1 项（外部删除目录 / 目录+记录都已 prune，判据见 gui-acceptance checklist）。
 - 会话创建/fork/归档侧栏收敛：四项实机验收 + 整源降级面。
 - 打开意图/工作区回声：四项实机验收 + 阶段 0 插桩判定 `early-open.ts` 去留。
-- 新 worktree 首帧落点（位置意图）与行动效：实机验收四项——①从所属 workspace 之后入场、不在列表最顶端（含主 checkout
+- 新 worktree 首帧落点（位置意图）与行动效：实机验收五项——①从所属 workspace 之后入场、不在列表最顶端（含主 checkout
   折叠、恰好 200 行的组、拖拽覆盖序残留窗口）；②点 + 新建会话时新行淡入、下方行滑移，不整列瞬移（未钳制组与折叠组都不改键）；
   ③活动会话被拒绝时行菜单项与行内悬停钮都进同一确认层，跨行换靶被拒、连点不重复；④列表最底行的归档钮
-  tooltip 不被 `.chamberList` 裁剪容器切掉（Tooltip 未传 portal，需一次渲染实测后接受或补上）。
+  tooltip 不被 `.chamberList` 裁剪容器切掉（Tooltip 未传 portal，需一次渲染实测后接受或补上）；
+  ⑤行位移不认领未移动的指针（design 06 §7 的 `data-hover-gate` 门控）：指针停在归档钮上删掉该组最后一个会话 ⇒
+  滑行期间后继 workspace 行保持静息、800ms 不弹悬停卡、会话后继不启跑马灯；指针移动 1px 或按下后完整揭示恢复。
+  判据 = 同一场景修复前能收到合成 pointerenter/over（同期 0 个 pointermove，Chromium 149 实测），修复后为空；
+  WKWebView 腿的合成时机未实测，需单独复跑（打包态两 flavor 都要过）。
 - 发布/CI 基础设施：reusable workflow、vendor submodule 验收、Gateway npm 分发未决、打包闭包自检。
 - 性能遗留（P0–P2）：五条实机复测 + 第二阶段 A/B 目标（全视图 DOM ≤13,000；实测 `document.querySelectorAll('*')`=15,805 含壳 chrome，需按 `scripts/perf/measure-ui.mjs` 口径复测）；已知取舍 = 回收壳蓝点/通知暂停至该源重开、桥探测预算耗尽后转 30s 长尾（迟到 `desktopSsh` 采纳上界 30s，design 19 §3.2.4）、purged 孤儿键按指纹 K=2 淘汰且首迁移只清当前 instanceId（design 24 F5）；仍待真机验收：①隐藏/遮挡 ≥60s 的唤醒与采样实测（需最小化窗口）②打包态 SVG scope 探针（`scripts/dev/svg-resource-probe.mjs` 需活体控制面）③五条复测须含风暴档发布速率；侧栏 T2、factAt 量化与前置仪表等推迟项见 [todo/page-perf-p2.md](todo/page-perf-p2.md)。
 - Swift 壳性能 A/B：启动/大载荷 invoke p95/空闲 wakeups 需打包态；`[shell-fps]`/控制台转发在打包态被编译掉（`ShellDebug.isEnabled` 的 `!isPackaged` 守卫），打包态仲裁暂只有 Safari inspect 三角测量；0 延时定时器自激修复后的打包态判据 = 空闲安装率 <200/s、静默可见态 CPU <10%。

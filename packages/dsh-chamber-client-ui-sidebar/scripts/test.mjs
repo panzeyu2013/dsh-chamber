@@ -184,6 +184,8 @@ export const GROUPS = {
     // Row motion (the ported AnimatedRows + its key wiring, design 06 §7): the
     // byte-fidelity lock compares against the pinned vendor source.
     'test/session-rows/animated-rows.test.ts',
+    // 行位移期间的指针门控（design 06 §7）：纯判定行为测 + 机器/接线/样式条款漂移锁。
+    'test/session-rows/hover-motion-gate.test.ts',
     // Expanded-state window chrome: the darwin top strip (traffic-light band) and the
     // panel toggle it carries — geometry + wiring lock against the vendor CSS.
     'test/leading/macos-top-strip.test.ts',

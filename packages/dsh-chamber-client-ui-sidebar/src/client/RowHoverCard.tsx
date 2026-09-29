@@ -14,6 +14,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExter
 import { createPortal } from 'react-dom'
 import { writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives'
 import { createHoverIntent, HOVER_OPEN_DELAY_MS, type HoverIntent } from '@dsh-chamber/dsh-chamber-client-core/hover-intent'
+import { HOVER_GATE_SELECTOR } from './hover-motion-gate.ts'
 import cc from './sidebar-chamber.module.css'
 
 /** Feedback dwell: how long the copy success label stays in the card. */
@@ -242,7 +243,16 @@ export function RowHoverCard({
       // 外部探针标记（精确名），见卡片上的孪生标记。
       data-chamber-hovercard-anchor=""
       className={cc.hoverAnchor}
-      onPointerEnter={() => { intent.enter() }}
+      onPointerEnter={(event) => {
+        // 门控行（被位移搬到静止指针下）不得 arm 停留：否则 800ms 后卡片会自己弹开在
+        // 用户从未指向的行上。判定必须从**锚点内部**找门控行，而不是从事件目标向上找：
+        // FLIP 把行 transform 到旧位时，锚点自身那一带会先被命中（事件目标是 wrapper），
+        // 向上找会漏掉挂在行上的门控属性（headless 实测：漏判会让卡片照样 arm）。
+        // 见 hover-motion-gate.ts 头注与 design 06 §7。
+        const anchor = event.currentTarget
+        if (anchor instanceof Element && anchor.querySelector(HOVER_GATE_SELECTOR) !== null) return
+        intent.enter()
+      }}
       onPointerLeave={() => { intent.leave() }}
       // 锚点内的按下（行点击、菜单触发器）立即收卡；卡上的按下也会到达此处理器
       // （卡是 wrapper 的 React 子节点），但那是在选文本，卡片必须保持挂载。
