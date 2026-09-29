@@ -1,6 +1,6 @@
 /**
  * bridge-manifest.test.ts — 通道 manifest 生成管线测试（design 25
- * §4.4.3；docs/progress/todo/macos-swift-v1.md；§0.1-E8/B12 companion）。
+ * §4.4.3；docs/progress/todo/platform/macos-swift-v1.md；§0.1-E8/B12 companion）。
  *
  * 被测管线：scripts/emit-bridge-manifest.mjs（输入 ipc-events.ts 的
  * IPC_CHANNELS 常量表 + main 侧三文件 handle/send 注册事实 → 产出

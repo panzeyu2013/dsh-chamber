@@ -185,7 +185,7 @@ test('the pin funnel mirrors the archive funnel: in-flight guard by key, toggle 
 
 test('the pin copy is upstream verbatim in both dictionaries', () => {
   // 上游 zh 的「置顶」承诺排序（pin 会写 pinSessionOrder）；本仓首落未接置顶序——该差异
-  // 登记在 design 06 §5 与 todo/upstream-ui-parity-plan.md §1.1，文案仍取上游逐字。
+  // 登记在 design 06 §5 与 todo/upstream/upstream-ui-parity-plan.md §1.1，文案仍取上游逐字。
   assert.equal(zh['menu.pinSession'], '置顶会话')
   assert.equal(zh['menu.unpinSession'], '取消置顶')
   assert.equal(zh['actions.pin'], '置顶会话')

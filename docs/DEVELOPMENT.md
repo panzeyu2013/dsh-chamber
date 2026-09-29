@@ -135,7 +135,7 @@ pnpm run dist:desktop:win    # 打包 Windows 应用（仅 nsis；须在 Windows
 |桌面能力(M3)|AUMID/托盘候选收敛/preload loud失败已接;实机矩阵待执行|
 |决策解锁(M4)|登录自启、深链注册、open-in本地路径、SSH密码门引导已解锁(代码);NSIS卸载Run清理include已接|
 |已知限制|未签名(SmartScreen);SSH密码禁用(keys/Pageant);运行时mutation只读;0700/0600以icacls/ACL表达|
-|权威记录|`docs/design/23-windows-support.md`、`docs/progress/todo/windows-v1.md`（含基线口径）|
+|权威记录|`docs/design/23-windows-support.md`、`docs/progress/todo/platform/windows-v1.md`（含基线口径）|
 
 ## 5. CI 与发布
 

@@ -1,5 +1,7 @@
 # todo · 上游提案（chamber 不可改，等待 deepseek-harness 侧裁决）
 
+> 分类：A · 上游依赖（等 deepseek-harness 裁决）｜状态权威：本文件 + STATUS 各对应条
+
 > 均为上游提案，未排期；chamber不等待、不绕过。本文只留最小改法、动机事实与开放问题；上游落地后按 `docs/progress/README.md` 移出本表。
 
 合并来源（三条独立todo）：① selection scope（`docs/design/05-connection-manager.md` §2.2.1、`06-sidebar-enhancements.md` §「client-store作用域」）；② 设置面贡献通道T3（`docs/design/05` §5、`09-client-plugin-runtime-loading.md` §4）；③ 归档wire草案（`docs/design/24-archived-session-cleanup.md` §2/§13根治面）。
@@ -8,9 +10,9 @@
 
 上游「当前会话」是页面级单键持久化，N-ctx宿主下跨实例污染：
 
-- `@deepseek-ai/dsh-api-session-controller`（旧 pin `0.1.5-rc.2` 的取证；第四类补丁已按当前 pin 重锚，见 design 09 §3.6）`SessionRuntime` 构造里 `createSnapshotStore({}, { persist: { name: 'dsh.sessions.current' } })`（`packages/api/session-controller/src/client/sessions/service.ts:225-228`）；
-- `@deepseek-ai/dsh-client-store` 的 `attachPersistence`（`packages/client/store/src/index.ts:146`）直接读写 `localStorage.getItem/setItem(name, …)`，无scope维度；
-- 投影时selection校验后回写或清空（`current === undefined` ⇒ `this.selection.set({})`，同文件 `:628-645`）。
+- 当前 pin 的取证：选择 store 在 `dsh-client-ui-workspace` 的客户端控制器构造里仍是 `createSnapshotStore({}, { persist: { name: 'dsh.sessions.current' } })`（`lib/client.js`，**无 scope 参数**；旧 pin 的取证位置 `dsh-api-session-controller` 已随上游重构迁移，第四类补丁见 design 09 §3.6）；
+- `@deepseek-ai/dsh-client-store` 的 store 工厂**已支持 scope**（当前 pin 的 `create(scopeKey)` 在 scope 存在时把持久化名写成 `${persist}.${scopeKey}`，底层仍是 `localStorage` 单键读写）——缺的是调用点传 scope；
+- 投影时 selection 校验后回写或清空（`current === undefined` ⇒ 清空该 store；今天清的是同一个共享单键）。
 
 后果（真机问题1「切到远程server的会话时先闪出一个新会话」）：
 
@@ -20,10 +22,10 @@
 
 chamber侧缓解（不动上游事实面）：design 05 §2.2.1的open意图本地回显（揭示门/投影门/boot意图早开）消掉可感中间态；`client/early-open.ts` 的boot期早开臂只抢时间、不担正确性。无法根治：store属vendor树（不在三个fork副本内）；「逐入口代理 `window.localStorage`」在多壳异步boot交错下不安全（作用域互见、注入无法与store构造同步）——不采用。
 
-上游最小改法：`dsh-client-store` 支持scope（`defineStore.create(scopeKey)` 里 `persistKey = scopeKey === undefined ? decl.persist : ``${decl.persist}.${scopeKey}`，`packages/client/store/src/index.ts:221-224`，pin `fb2c4b9e` = `dsh-v0.1.5-rc.2`），缺的只是调用点传scope：
+上游最小改法：store 侧的 scope API 已落地（见上），**余下的只有调用点传 scope**：
 
 1. scope来源给「每个entry/壳一份」的store（宿主注入basePath/instance id最自然；chamber注入 `chamberBasePath`，官方侧可用boot参数或connection base path）；
-2. 持久化名加scope后缀，或 `defineStore.create(scope)` 重建该store（`dsh.sessions.current.<scope>`）；
+2. 持久化名加 scope 后缀，或按 scope 重建该 store（`dsh.sessions.current.<scope>`）；
 3. `current === undefined` 的清空分支**只**清自己的scope（比第2条更关键：跨实例破坏来源）。
 
 收益：各壳恢复自己上次的会话，初始导航不再凭空建空白会话。
@@ -140,21 +142,19 @@ chamber侧缓解（不动上游事实面）：design 05 §2.2.1的open意图本�
 
 ## 5. 图标资源 id 应作为组件实例私有（useId）而不是写死的 Figma id
 
-上游图标组件把 Figma 导出 id 写死在 JSX 里（`IconSettingsOutline16`/`-14`=`clip0_1450_63327`/
-`clip0_2580_121189`、`IconCordisPluginOutline14`=`clip0_1840_45990`、`IconAgentPresetOutline16`=
-`mask0_agent_preset_16`、`BrandWordmark`=`dsh-wordmark-whale-clip`/`-badge-clip`、
-`dshDropOverlayClip`），而 `url(#id)`/`mask` 的解析是**文档级**的。
+当前 pin 已把**代码图标一族**改为实例私有 id（`useId` 产出的 `__DSH_CODE_ICON_INSTANCE__*` 前缀，
+见 `dsh-client-ui-primitives` 的 `url(#…)`）——本条这一半已落地。仍写死为文档级 id 的只剩
+`BrandWordmark` 的 `dsh-wordmark-whale-clip`/`-badge-clip`（`dsh-client-ui-primitives`）与附件拖拽浮层的
+`dshDropOverlayClip`（`dsh-client-ui-attachment`），而 `url(#id)`/`mask` 的解析是**文档级**的。
 
 宿主把同一个文档用于多个实例壳（chamber 的 N-ctx）时，同一 id 被逐壳重复定义；macOS WKWebView
 在「新建形状首次绘制解析到未布局子树里的 clipper/mask」时整块失绘并把结果缓存住（重建元素才自愈，
 属性回写/揭示都不行）。真机对照与判据见 `docs/design/05-connection-manager.md` §4.2。
 
-上游最小改法（任一）：
-1. 每个图标实例用 `useId()` 前缀/后缀化它定义的资源 id（`icons/index.tsx` 的 `clipPath:"url(#clip0_…)"`
-   与同文件里的 `defs` 成对生成）；`BrandWordmark` 的 whale/badge clip 与附件拖拽浮层的
-   `dshDropOverlayClip` 同理；
-2. 或让这些 clip/mask 只依赖 `viewBox` 与路径本身（该文件里三处 `clip0_*` 矩形与 viewBox 等值，
-   删掉后无视觉差），保留真实裁剪的那几处改用实例私有 id。
+上游最小改法（任一，范围已收窄到上面两族）：
+1. `BrandWordmark` 的 whale/badge clip 与附件拖拽浮层的 `dshDropOverlayClip` 也按图标一族的先例用
+   `useId()` 前缀/后缀化资源 id；
+2. 或让这些 clip/mask 只依赖 `viewBox` 与路径本身，保留真实裁剪的那几处改用实例私有 id。
 
 chamber 侧缓解（`packages/dsh-chamber-client-core/src/svg-resource-scope.ts`，design 05 §4.2）：不改上游、
 在每个 `<svg>` 内把「自定 ∩ 自用」的资源 id 改名到文档唯一 token，外部引用复制进消费方。

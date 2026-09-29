@@ -690,7 +690,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   索引缺席或来源 stale（R14）时读数是 `unknown`，中性呈现——不点亮子代理圆环/播报，
   也不据此压制 completed/running 读数与待办条目；`runningSubagents` 保持稀疏计数供诊断。
   守卫单源 = `packages/dsh-chamber-client-core/src/session-row-state.ts` 的 `subagentActivityOf`（行读数、圆点、待办共用）；
-  上游完整性信号落地后删除本地 fallback（见 `docs/progress/todo/upstream-proposals.md` §7）。
+  上游完整性信号落地后删除本地 fallback（见 `docs/progress/todo/upstream/upstream-proposals.md` §7）。
 - **facts-only 源的 `subagentCount` 只在谱系已认证时是 busy 证据（I-12 修正 R2-G，2026-12）**：
   gateway/SSH facts 行的 `subagentCount` 是「在场子会话数」（宿主投影/谱系索引的
   cross-section），默认不是「正在干活」的证据。`completion-observation.ts` 只把**壳通道**的
@@ -826,7 +826,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
 - **置顶（pin）首落不含置顶序：已知取舍**——pin/unpin 写入口、静息标记与两个行入口都已按上游形态落地（§7），
   但上游 pin 成功后会写 `pinSessionOrder`（置顶行领跑本节、只在置顶块内可拖），本仓未接：它会与
   `sessionOrderOverride`（manual 覆盖）和 `updated` 排序的自动提升并列成第三条分区语义，并给会话拖拽加跨分区守卫
-  （上游由 `sectionMembers` + `reconcileManualOrder` 承担）。残余开放项见 `todo/upstream-ui-parity-plan.md` §1.1。
+  （上游由 `sectionMembers` + `reconcileManualOrder` 承担）。残余开放项见 `todo/upstream/upstream-ui-parity-plan.md` §1.1。
   zh 文案（上游逐字「置顶会话 / 已置顶」）的排序承诺在置顶序落地前不完全成立——**文案先行是有意的**：词典值逐字
   是既有约定，避免二次改词。另有一处来源级诚实：置顶集只有挂载 follow（基线 + `{type:'pinned'}` 增量）一条线源，
   单列表 unary 兜底来源不渲染任何标记（`pinSetKnown` 三态与归档集的 `archiveSetKnown` 同一条规矩）。
@@ -852,7 +852,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   `session.create`）一个 blank 会话并打开——包括后台预热/基线收割这类用户没点过的
   挂载；chamber 的打开意图三闸门只消除**用户可感的中间态**，不阻止那次 create。
   偏差登记见 design 05 §2.2.1「登记残余」与 STATUS「远端宿主上的空白会话残留」，
-  根治提案见 `docs/progress/todo/upstream-proposals.md` §1。
+  根治提案见 `docs/progress/todo/upstream/upstream-proposals.md` §1。
 - **完成未读对齐的明确放弃（仍成立，发布说明素材）**——下列能力是「官方位唯一
   权威」的代价，逐条登记（判定/生命周期与上游相同，偏差只在呈现）：
   - **重载即忘**：官方位是 ctx 内存 Set，桌面 reload/重启后全空；chamber 不再有
@@ -1040,7 +1040,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   的合成 ungrouped 桶不挂卡，且 derive 对不可解析的 wire 值做**稀疏写入**——`''`（unary 兜底的 cwd 派生组）
   不产出 `NaN`，否则逐字的 `createdLabel` 会画出「NaN年NaN月NaN日」），点卡片复制 cwd；展示路径为**绝对路径**
   （官方在宿主给出 home 时缩写；本仓**选择**绝对路径——`dsh-api-remotes` 的 home 事实可达，非外部约束，收敛记录见
-  `todo/upstream-ui-parity-plan.md` §2）；
+  `todo/upstream/upstream-ui-parity-plan.md` §2）；
   会话行卡 = 标题 + 相对时间 + 状态点列表 + 复制标题按钮
   （blank 行不显示时间）。开卡 dwell = 上游行内值 **800ms**（`RowHoverCard` 机器默认 500ms = vendor
   `HoverCard` 默认值；两处 call site 显式传 800，与上游 `openDelayMs: 800` 一致）。
@@ -1098,7 +1098,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   不代表该命令在本仓控件上可达。四条命令的**回调接线**：`session.search`/`workspace.add` 写被覆盖的官方浏览器 store
   （无可见消费者 ⇒ 键帽只是只读镜像）；`session.rename`/`session.archive` 打开官方 `SessionRenameDialog`/
   `SessionArchiveConfirmDialog`——两者是 `shell.overlay` 的座席，本仓 layout fork 声明该座席并用官方 AppFrame 渲染，
-  故模态真的出现（详见 `todo/upstream-ui-parity-plan.md` §1.3）。
+  故模态真的出现（详见 `todo/upstream/upstream-ui-parity-plan.md` §1.3）。
   **Rejected alternatives**（键帽面）：①不给回调不通的命令画键帽——否决：官方目录四键同面展示，本仓按官方席位
   重实现控件，只在本仓侧隐藏会让同一条命令的来源可见性不一致；②自建 `chamber.*` 复用同一默认键——否决：注册表
   在 :602 对默认键重叠抛 `Conflicting shortcut defaults`；③覆盖注册同名官方 id——否决：`ShortcutRegistry.register`

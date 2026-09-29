@@ -1,20 +1,20 @@
 # 23. Windows 支持推进方案（Windows 11 x64）
 
 > **范围与门禁：Windows 11 x64 支持契约（代码面可用；真实 Windows runner 与实机门禁尚未通过）**——本文是
-> dsh-chamber 桌面端（本地实例 + ssh/gateway 远程连接 + dsh 运行时版本管理）Windows 支持的权威契约（平台适配、运行时管理解锁纪律、妥协点与验收矩阵）；未完成门禁见 `docs/progress/STATUS.md`；台账与基线口径:`docs/progress/todo/windows-v1.md`。
+> dsh-chamber 桌面端（本地实例 + ssh/gateway 远程连接 + dsh 运行时版本管理）Windows 支持的权威契约（平台适配、运行时管理解锁纪律、妥协点与验收矩阵）；未完成门禁见 `docs/progress/STATUS.md`；台账与基线口径:`docs/progress/todo/platform/windows-v1.md`。
 
 ## 1. 范围与总原则
 
 - 目标形态:Windows 11 x64(打包态 NSIS);macOS/Linux 契约不回退,每次合入保持 mac/linux 全量回归绿。
 - 纪律:
   1. **能力先于开关**:任何 mutation/功能解锁先经 env 门控或后台单测验证,UI 开关最后翻;
-  2. **基线先行**:win32 测试 pass/skip 集合与平台门控拒绝码先固化(登记口径在 `docs/progress/todo/windows-v1.md`),每个里程碑的测试变化必须对照基线归因;
+  2. **基线先行**:win32 测试 pass/skip 集合与平台门控拒绝码先固化(登记口径在 `docs/progress/todo/platform/windows-v1.md`),每个里程碑的测试变化必须对照基线归因;
   3. **fail-closed 不撤销**:不可证即保留/拒绝的语义在 Windows 适配中一律维持;
   4. **妥协即文档**:真实平台事实(见 §5)写入发布附注,不静默、不伪称等价;
   5. **验证门控不作发布开关**:`DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1` 仅供开发/CI 验证(默认关);发布版用户自行开启不受支持(路径未经真实 Windows 实机验证)。
 - 分期标识(ID 为能力分期名,不代表进度):
   `M0` = `ci.yml` `test-windows`(windows-2022)契约腿 + 行为基线台账;
-  `M0.5` = 能力前置核查(上游 dsh win32 可跑性、electron-builder NSIS protocols 实证、Defender 计时基线、原生依赖预构建核对,任务单 `todo/windows-v1.md`);
+  `M0.5` = 能力前置核查(上游 dsh win32 可跑性、electron-builder NSIS protocols 实证、Defender 计时基线、原生依赖预构建核对,任务单 `todo/platform/windows-v1.md`);
   `M1` = §2 生命周期契约;
   `M2a` = §3 运行时管理后台能力;`M2b` = UI/门控翻转(纪律 1 门禁);
   `M3` = 桌面实机全链(托盘/关窗/通知/唤醒/updater)+ 打包闭包修复;

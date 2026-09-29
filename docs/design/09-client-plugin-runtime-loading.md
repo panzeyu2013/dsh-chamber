@@ -618,7 +618,7 @@ scope——被否：同一 document 复用 N 个实例，页面级事实不可�
 - **设置面贡献通道**：settings 页 `slots.inject('settings.section')` **已接线**——第三方插件的设置贡献在
   **它自己那台实例**的 ctx 上注册（与该实例自己的前端同一份注册），桌面设置壳渲染该台账，故「插件设置用不上/
   看不到」由构造消除（design 05 §5）。上游声明式贡献描述符 / 设置面服务契约 / Remote descriptor 上行通道仍是
-  可选提案（`docs/progress/todo/upstream-proposals.md` §2），不再是完整桥接的前置条件。
+  可选提案（`docs/progress/todo/upstream/upstream-proposals.md` §2），不再是完整桥接的前置条件。
 - 版本漂移：宿主图 rev 与复合 bundle 的合并是 union 语义，不要求两图同 rev（复合由 chamber 构建管、宿主图由
   实例插件集管）；壳版本落后/超前时多出的核心行以"特性缺席"运行（§3.5 apply 降级），绝不使实例 boot 失败。
 - **壳与后端必须同代（当前基线）**：受管 vendor 源以 `harness.commit` 的 pin 为单一事实来源——当前 pin =

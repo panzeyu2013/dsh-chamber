@@ -114,7 +114,7 @@
 **只能真机（工具箱不可替代）**：`.app` 双击/首启、WKWebView 页面装载与 §5.2 视口、W1–W7 矩阵、
 C1/C2（含 S-10 隐藏态/App Nap 与心跳）、刷新率三工况（S-48）、通知音效回落、键盘桥（S-54）、
 macOS 14.4 首启（S-50）、Developer ID/公证/stapler/spctl 与首个 build-swift 发布腿（凭据）。逐条判据在
-design 25 §8 与 `docs/progress/todo/macos-swift-v1.md`，本节只固定怎么跑与留什么。
+design 25 §8 与 `docs/progress/todo/platform/macos-swift-v1.md`，本节只固定怎么跑与留什么。
 
 ## 5. 证据与记录纪律
 

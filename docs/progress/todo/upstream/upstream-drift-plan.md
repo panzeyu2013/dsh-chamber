@@ -1,11 +1,7 @@
 # 上游漂移收口计划（batch-3 剩余项）
 
-范围：15 项上游漂移审计（对齐 pin 0.2.0-rc.1）中**仍未落地**的项。I-7（vendor 补丁 retire 检测）、
-I-8（registry 桌面 seat 镜像审计）、I-10（运行位写回契约化）、I-11（单飞悬挂有界化）、I-12（谱系压制
-与 fail-closed）、I-13（uplink 升级裁决点）、I-14（selection scope 第四类补丁）与工程环境债的
-install/artifacts 已落地；能力门
-anchors（原 E3）与验证门的 V1/V2 已收口，基线以 git 历史、`docs/design/` 与代码注释为准，本文不复述。
-每条 = 判据（源码现状）+ 方案 + 落点 + 关闭判据。上游提案（需 deepseek-harness 侧动作的）另见
+范围：15 项上游漂移审计（对齐当前 pin）中**仍未落地**的项。已完成项以 git 历史、`docs/design/` 与代码注释为准，
+本文不复述。每条 = 判据（源码现状）+ 方案 + 落点 + 关闭判据。上游提案（需 deepseek-harness 侧动作的）另见
 [upstream-proposals.md](upstream-proposals.md)。
 
 ## 批次三（P2，需实机或下一 pin）

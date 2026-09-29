@@ -1,5 +1,7 @@
 # macOS Swift 原生壳 v1：剩余门禁、验收协议与 WBS 索引
 
+> 分类：B · 平台与外部门禁（macOS 实机/凭据）｜状态权威：design 25 §8.5 与 STATUS
+
 > 路线A：Swift写壳 + Node sidecar；契约见 `docs/design/25-macos-swift-native-shell.md`。本文只留
 > 双端验收协议/中止条件与W-xx索引（代码与测试注释按编号引用契约）；开放门禁状态归 `docs/progress/STATUS.md`（矩阵design 25 §8.5）。M0–M4的执行记录、逐里程碑叙述、施工分批与工期估算不在本文（留存git历史）。
 

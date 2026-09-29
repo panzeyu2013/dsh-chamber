@@ -7,7 +7,7 @@
 > 承接并修订原 `docs/progress/todo/12-todo-archived-sessions.md`（归档单向、不可见、
 > 上游无 delete/unarchive wire 的事实核实见 git 历史）；该 todo 的方案 B
 > （控制面/主进程特权层直删）继续冻结（§2 边界 5），上游 wire 草案移入
-> `docs/progress/todo/upstream-proposals.md` §3。方案以「实例进程内的 chamber 宿主域」
+> `docs/progress/todo/upstream/upstream-proposals.md` §3。方案以「实例进程内的 chamber 宿主域」
 > 替代 B 的位置（理由见 §2）。
 >
 > 交互锚点 = chamber 侧边栏**服务器分组头行（server 行）hover 操作簇**；
