@@ -445,9 +445,11 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   自建多来源列表、**永不挂载**该注册（`sidebar.workspaces` 洞只声明不调用，I-4 锁禁止渲染该字面量）⇒ 座席只能由
   注册所有者声明，chamber 无法转交（重复声明即抛）。补丁删除上游的两行声明，chamber 侧栏在自己的 `children` 里声明
   并渲染两席（`renderSlot` 的 `fallback` 让自有 Schedule 标记与 occupant 永不并现）。无官方布局回落（无 chamber 壳时
-  座席未声明），故用 `noRetireForm`；上游若提供座席转交/共享 API 则删除该条。座席是**页面级** list slot：occupant 用固定
-  id 注册（`ui-schedule` = `schedule-mark`），`ui-slots` 对同 id 同优先级的第二条注册抛错 ⇒ 同一页面同时启用两个实例的
-  schedule bundle 属开放风险（opt-in、默认不被模板选中；STATUS 已登记，解 = 每实例 bundle 的页面级 slot id 命名空间）。
+  座席未声明），故用 `noRetireForm`；上游若提供座席转交/共享 API 则删除该条。座席是 `scope: root` 的 list 座席，
+  声明与注册都随各自 ctx：occupant 用固定 id 注册（`ui-schedule` = `schedule-mark`），`ui-slots` 对**同一 registry**
+  内同 id 同优先级的第二条注册抛错，而 N-ctx 下每个实例 boot 各持一份 registry（每 ctx 一个 `SlotRegistry`）⇒
+  「同一页面两个实例都启用 schedule bundle 必抛」在 registry 层不可复现；口径修订与仍待的实机复核见 STATUS
+  「A1 座席的 id 冲突」条，残余解 = 每实例页面级 slot id 命名空间。面板入口的落位见 design 05 §2 与 design 06 §4.7。
 - 保鲜门：`verify-upstream-touchpoints.mjs` **C9** 对 pin 住的 vendor 文件逐锚点校验（硬失败）；锚点缺失
   时先评估条目的退役形态：`retireCheck` 命中 ⇒ 报 `retire-candidate`（**仍 release-blocking**，
   remediation = 把该条移入 `vendor-patches.mjs` 的 `RETIRED_PATCHES`（`ensure` = 上游修复原文、必须

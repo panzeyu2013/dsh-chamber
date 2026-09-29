@@ -88,6 +88,12 @@ design 同批更新；已落地面的契约见 design 06 §7、design 05 §2）�
   里声明两席并渲染（行首座席的 `fallback` = 自有 `SessionScheduleIndicator`，两者永不并现，design 09 §3.6 第四类第二形态）。
 - 裁决账：曾拒「在本仓自有行内渲染官方注册项」（跨插件渲染面）与「撤销 `sidebar.workspaces` 声明」（撤销会让官方注册与第三方注入静默消失）；
   上游若提供座席转交/共享 API，则该 vendor 补丁退役（提案见 upstream-proposals.md §11）。
+- **追加（2026-09，面板入口已裁）**：`ui-schedule` 的**面板行**（`sidebar.panellist` id `schedules`）
+  与其 `main` key `schedules` 的落位落定：实例自有/第三方面板行**按其所属来源下挂**——宽态在 owning
+  source 的 server 分组内（`ServerSectionPanels`，来源头与可折叠区之间；折叠只收浏览区），rail 保留
+  上游全局面板字形行；行组件/几何/点击链与上游逐字，**密度维持上游 36px**，上游点击埋点
+  `sidebar_menu_click` 有意未复制。契约见 design 05 §2，实现见 design 06 §4.7，位置锁
+  `test/plugin-kernel/panel-entry-placement.test.ts`，投影锁 `panel-source.test.ts`。
 
 ### 1.5 重命名交互：模态 vs 行内
 
@@ -139,7 +145,8 @@ design 同批更新；已落地面的契约见 design 06 §7、design 05 §2）�
 行高/字号密度（26px 行、13px 标题、20px 命中盒）、菜单 `compact` 档、行动作簇 4px/20px、来源 accent 与
 多来源分组、折叠入场动画删除、`RowHoverCard` 自持（vendor 竞态；上游修掉即退役）、darwin vibrancy 门、
 `sidebar.workspaces` 只声明不渲染、`sidebar.toggle.badge` 不做、完成状态品牌蓝点、默认 `orderBy=manual`、
-flat/workspace-tree 与归档过滤推迟、`data-chamber-row` 锚点、归档确认对话框（本仓两段式）。
+flat/workspace-tree 与归档过滤推迟、`data-chamber-row` 锚点、归档确认对话框（本仓两段式）、
+**面板行按来源下挂**（宽态 owning server 分组 / rail 上游字形行；行几何维持上游 36px；design 05 §2 / 06 §4.7）。
 
 指针：design 06 §7、design 24 §1、STATUS 的对应条目与 `docs/checklists/upstream-touchpoints.md`（registry 门 C1–C15）。
 

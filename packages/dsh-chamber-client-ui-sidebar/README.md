@@ -8,7 +8,7 @@ multi-source session/workspace list, registered into the `sidebar` slot in
 place of the official ui-sidebar (which stays untouched in
 `vendor/harness-packages`, never in the boot graph).
 
-## alpha.2 extension holes (brand + global panels)
+## alpha.2 extension holes (brand + source-scoped panels)
 
 The shell declares and renders the three holes the alpha.2 official
 `ui-sidebar` adds, so an upstream/third-party registration never dangles:
@@ -16,13 +16,18 @@ The shell declares and renders the three holes the alpha.2 official
 - `sidebar.brand.mark` / `sidebar.brand.name` — the top-left brand row; the
   chamber wordmark stays the mark fallback and the name hole renders nothing
   when unoccupied (the rail renders the mark hole too).
-- `sidebar.panellist` (list) — global main-panel rows. `src/client/panel-source.ts`
-  mirrors the slot ledger into `{id, order, label}` metadata (label thunks are
-  resolved at read time, notifications fire only on change), the shell renders
-  one `PanelRow` per entry, and a click calls `ctx.layout.selectPanel(id)`.
-  Upstream ships an empty list, so the section is invisible by default; the
-  projection is pinned by `test/plugin-kernel/panel-source.test.ts` (the source-text
-  wiring lock that paired with it was retired by the ruling).
+- `sidebar.panellist` (list) — **source-scoped** main-panel rows.
+  `src/client/panel-source.ts` mirrors the slot ledger into `{id, order, label}`
+  metadata (label thunks are resolved at read time, notifications fire only on
+  change). The WIDE column renders one `PanelRow` per entry inside the server
+  section of the source whose ctx registered it (`ServerSectionPanels`, between
+  the source header and the foldable browsing region — a folded source keeps its
+  panel rows), and the collapsed RAIL keeps the upstream global glyph axis; a
+  click calls `ctx.layout.selectPanel(id)` in either case, so every entry mounts
+  exactly once. Upstream ships an empty list, so the section is invisible by
+  default; the projection is pinned by `test/plugin-kernel/panel-source.test.ts`
+  and the placement by `test/plugin-kernel/panel-entry-placement.test.ts`
+  (design 05 §2 / design 06 §4.7).
 
 ## Structure
 
@@ -45,10 +50,13 @@ The shell declares and renders the three holes the alpha.2 official
   keeps its slot for the 450 ms ghost grace (06 §2.2 / 05 §2.1);
   subagent-origin sessions never surface in the navigation list
   (`packages/dsh-chamber-client-core/src/derive.ts`).
-- A connected source whose snapshot fetch failed shows the error text instead
+- A connected source whose snapshot failed shows the error text instead
   of the workspace list — never masquerading as "no workspaces". Disconnected
   sources render header + status icon only (dot/spinner, phase on
-  hover/aria, no status text); all disconnected → empty hint.
+  hover/aria, no status text); all disconnected → empty hint. One deliberate
+  exception: a source's `sidebar.panellist` rows still render while it is
+  disconnected — an entry exists iff its registrant registered it, independent of
+  connection state (design 06 §4.7).
 - Live sessions carry a running dot (`sessions.list.running`), and a
   completed-but-unread session carries the **chamber brand-blue dot**
   (`.stateCompleted`, 6 px solid) — the same mark the pinned session-todo strip
@@ -74,8 +82,9 @@ The shell declares and renders the three holes the alpha.2 official
   in `client/icons.tsx` — the primitives set has no server glyph, and the
   former folder glyph read as another workspace; folder = workspace,
   monitor = server user feedback) that swaps to the collapse
-  chevron on hover — clicking collapses the source's ENTIRE workspace list
-  (search capsule, source-scope git alert and list included) WITHOUT touching
+  chevron on hover — clicking collapses the source's browsing region
+  (search capsule, source-scope git alert and list included; the source's own
+  panel rows sit ABOVE it and stay — design 06 §4.7) WITHOUT touching
   any workspace's own conversation fold state (`sourceFolded`, separate from
   `folded`), so expanding restores every workspace with its sessions exactly
   as they were.
