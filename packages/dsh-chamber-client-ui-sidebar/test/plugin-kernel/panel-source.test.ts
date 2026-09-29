@@ -1,5 +1,5 @@
 /**
- * Global panel projection tests (`sidebar.panellist`): the ledger is the authority, the projection
+ * Panel projection tests (`sidebar.panellist`): the ledger is the authority, the projection
  * is serializable metadata sorted by order (registration order as the tiebreak) and it notifies only on real change.
  *
  * MUST run through the test-only vendor loader:
