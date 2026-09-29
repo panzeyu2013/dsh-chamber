@@ -533,6 +533,15 @@
   project-add 字形，`IconProjectAddOutlineRegular`）；workspace：会话数徽标 ↔ `+`（新建
   会话）+ kebab（重命名/删除））。胶囊/菜单展开时操作簇保持显示
   （`.sourceActionsVisible`/`.rowActionsVisible`，`:has` 同步换出状态槽）。
+  **键盘焦点（Tab）与 kebab 展开共用同一个 JS 揭示状态**：`ServerSection.tsx` /
+  `ServerSectionHeader.tsx` 在头部行的 `onFocus`（React focusin）里按 `:focus-visible` 置位、
+  焦点离开整行时清除。不能只靠 CSS 的 `:has(:focus-visible)` 揭示：Blink 的 Tab 导航不认
+  `:has()` 失效出的 display 变化——同页 A/B（真实键事件、两侧 DOM/CSS 相同）里
+  `:has(:focus-visible)` 揭示的簇已 `display:inline-flex` 却仍被 Tab 跳过，JS 类揭示的簇 Tab
+  依次进入（`test/visual-lock/keyboard-reveal-reachability.test.ts` 钉住这条）。
+  **Rejected alternatives**：① 只用 CSS `:has(:focus-visible)` 承担键盘揭示——视觉可见但键盘
+  不可达（如上实证）；② 改用 `:focus-within`——指针点击后 Chromium 聚焦被点按钮，簇在鼠标
+  移开后常驻（正是本条「真正替换」的由来，08 §3.2 同述）。
 - **不再显示相对时间**：session 行不渲染"xx 前"时间单元格（`time.*` locale 键
   **保留供 hover 卡相对时间使用**；`relativeTimeBucket` 纯函数保留为共享工具）。
   相对时间列**暂不回归**（多来源密度 + 行尾状态槽取代时间列）；若未来回归需
@@ -937,7 +946,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   状态槽，胶囊展开时簇保持可见）；文案在 aria 与**官方 `Tooltip`**（来源头四个动作排序/添加工作区/
   搜索/归档清理由原生 `title` 换成设计系统 Tooltip，形状串 `side="bottom" delayMs={500}`；workspace 新建会话钮的
   label 用官方的独立键 `actions.newSession`（zh「新会话」/ en "New session"，不共用 `session.new`）；行与状态槽
-  仍原生 title）。替换为真正 display 交换；kebab 展开期间行操作保持可见（`.rowActionsVisible`）；行内
+  仍原生 title）。替换为真正 display 交换；kebab 展开或**键盘焦点（Tab）**期间行操作保持可见（`.rowActionsVisible`，键盘态见上条「悬停替换」；键盘路径只有 workspace 行与来源头部——会话行不可聚焦，其 kebab 没有键盘入口，见 STATUS「范围决策与必要取舍」）；行内
   图标按钮全量 reset（`appearance:none`/`outline:none`/grid 居中，focus-visible 用 brand 自绘环）。
   **菜单密度 = primitives `compact` 档**：三个菜单（session kebab / workspace kebab / 排序）一律原语
   `compact`（= `.compactList`），`closeOnPointerLeave` 保留（v0.2.4 即此档，属恢复发布行为）。**pin 实测值**

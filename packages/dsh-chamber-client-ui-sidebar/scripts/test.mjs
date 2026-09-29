@@ -165,6 +165,14 @@ export const GROUPS = {
   // failing file — a missing submodule must never hide the runnable suite.
   'visual-lock': [
     'test/visual-lock/sidebar-entrance-visibility.test.ts',
+    // The git occupant's rest-state footprint (design 08 §3.2): its container must
+    // leave the flex flow at rest (`data-git-occupant`) and return on exactly the
+    // action hook's reveal paths (hover / `.rowActionsVisible`). Cross-package source lock.
+    'test/visual-lock/git-occupant-rest-flow.test.ts',
+    // Keyboard reveal reachability (design 08 §3.2): the keyboard state rides the JS
+    // reveal class, because a CSS `:has(:focus-visible)` display flip is visible but
+    // not Tab-reachable. Cross-file wiring lock.
+    'test/visual-lock/keyboard-reveal-reachability.test.ts',
     // Row motion (the ported AnimatedRows + its key wiring, design 06 §7): the
     // byte-fidelity lock compares against the pinned vendor source.
     'test/session-rows/animated-rows.test.ts',

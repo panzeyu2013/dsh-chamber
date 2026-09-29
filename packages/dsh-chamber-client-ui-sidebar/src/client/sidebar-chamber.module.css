@@ -683,9 +683,11 @@
    rendered at rest (display:none — zero layout space, so the connection
    status really sits at the header's right end). Hovering the header swaps
    the cluster IN and the status OUT — a true replacement. While a search
-   capsule is open OR the sort menu is open the cluster stays shown
-   (.sourceActionsVisible) so the icon can collapse/close it; the status
-   stays out then too. */
+   capsule is open, the sort menu is open, OR the header holds KEYBOARD focus
+   (the header itself is a focusable role="button") the cluster stays shown
+   (.sourceActionsVisible, JS-driven) so the icon can collapse/close it AND
+   the keyboard can actually Tab into the buttons; the status stays out then
+   too. */
 .sourceActions {
   flex: none;
   display: none;
@@ -806,13 +808,14 @@
 /* OpenChamber SessionGroupSection swap (08 §11): a normal workspace shows
    the FOLDER glyph (project-row parity), a worktree (derived) workspace the
    git-branch glyph, at rest — and both swap to the collapse chevron on row
-   hover / KEYBOARD focus (:has(:focus-visible)) / kebab-open, in the same
+   hover / keyboard focus / kebab-open (`.rowActionsVisible`), in the same
    slot, so nothing shifts. Pointer-safe like the occupant reveal (08 §11.7):
    plain :focus-within would keep the chevron swapped in after a pointer
    click on the fold toggle (Chromium leaves focus on the clicked button),
-   leaving a hover-like glyph at rest; with :has(:focus-visible) a mouse
-   click leaves no residue and the fold direction shows on hover / keyboard
-   focus / open menu. */
+   leaving a hover-like glyph at rest; keyboard focus rides the JS state
+   (armed only for :focus-visible targets), so a mouse click leaves no
+   residue and the fold direction shows on hover / keyboard focus / open
+   menu (design 08 §3.2). */
 .foldToggleFolder .foldChevron {
   display: none;
 }
@@ -826,7 +829,6 @@
    so the .rowActionsVisible variant below is a no-op for it — one shared
    rule list, no duplicate table to keep in sync. */
 .workspaceHeader:hover .foldToggleFolder .foldChevron,
-.workspaceHeader:has(:focus-visible) .foldToggleFolder .foldChevron,
 .workspaceHeader:has(.rowActionsVisible) .foldToggleFolder .foldChevron,
 .archiveManagerGroupHeader:hover .foldToggleFolder .foldChevron,
 .archiveManagerGroupHeader:has(:focus-visible) .foldToggleFolder .foldChevron {
@@ -834,7 +836,6 @@
 }
 
 .workspaceHeader:hover .foldToggleFolder .foldFolder,
-.workspaceHeader:has(:focus-visible) .foldToggleFolder .foldFolder,
 .workspaceHeader:has(.rowActionsVisible) .foldToggleFolder .foldFolder,
 .archiveManagerGroupHeader:hover .foldToggleFolder .foldFolder,
 .archiveManagerGroupHeader:has(:focus-visible) .foldToggleFolder .foldFolder {
@@ -854,13 +855,11 @@
 }
 
 .workspaceHeader:hover .foldToggleGit .foldChevron,
-.workspaceHeader:has(:focus-visible) .foldToggleGit .foldChevron,
 .workspaceHeader:has(.rowActionsVisible) .foldToggleGit .foldChevron {
   display: inline-flex;
 }
 
 .workspaceHeader:hover .foldToggleGit .foldBranch,
-.workspaceHeader:has(:focus-visible) .foldToggleGit .foldBranch,
 .workspaceHeader:has(.rowActionsVisible) .foldToggleGit .foldBranch {
   display: none;
 }
@@ -1103,17 +1102,21 @@
 }
 
 /* Hover-swap actions: NOT rendered at rest (display:none — zero layout
-   space, so the state icon really sits at the row end). Hovering the row
-   (or keeping a kebab menu open, .rowActionsVisible) swaps them IN while
-   the trailing state slot is swapped OUT — a
-   true replacement, not a fade-over-an-invisible-gap.
-   Reveal is pointer-safe: the occupant/action reveal keys on
-   row hover, kebab-open and KEYBOARD focus (:has(:focus-visible)) — never
-   on plain :focus. Chromium focuses a clicked button on mousedown, so a
-   :focus-within reveal would keep the hover-revealed content (git occupant
-   actions, row actions) visible after the pointer leaves a just-clicked
-   row — a folded git row then showed its count AND a stray branch/delete
-   action at rest, and the count column lost its shared right edge. */
+   space, so the state icon really sits at the row end). Hovering the row, or
+   the JS-driven `.rowActionsVisible` state (kebab menu open, or the section's
+   keyboard-focus state), swaps them IN while the trailing state slot is
+   swapped OUT — a true replacement, not a fade-over-an-invisible-gap.
+   Reveal is pointer-safe and keyboard-reachable: it keys on row hover, on
+   `.rowActionsVisible`, and on KEYBOARD focus — never on plain :focus.
+   Chromium focuses a clicked button on mousedown, so a :focus-within reveal
+   would keep the hover-revealed content (git occupant actions, row actions)
+   visible after the pointer leaves a just-clicked row — a folded git row then
+   showed its count AND a stray branch/delete action at rest, and the count
+   column lost its shared right edge. For the same reason keyboard focus rides
+   the JS state (armed only for :focus-visible targets) instead of a CSS
+   `:has(:focus-visible)` rule: Blink's Tab navigation does not treat a
+   `:has()`-invalidated display change as focusable, so a CSS-only keyboard
+   reveal leaves the cluster visible but unreachable (design 08 §3.2). */
 .rowActions {
   flex: none;
   display: none;
@@ -1121,9 +1124,10 @@
   /* ONE visible cluster, ONE rhythm. The cluster's
      real membership on a git workspace header is THREE buttons, not the
      official two: the git occupant's revealed branch action (`[data-git-action]`
-     inside the sibling `.headerGit` span, SidebarGit.module.css) is the
-     cluster's leftmost member and sits in the HEADER's 4px gap. The official
-     `Rows .rowActions` 12px would therefore fall INSIDE one
+     inside the `.headerGit` span, SidebarGit.module.css) is the cluster's
+     leftmost member — that span is this cluster's SIBLING, immediately before
+     it (ServerSection.tsx), and the git package's `test/locks/slot-contract.test.ts`
+     pins that placement. The official `Rows .rowActions` 12px would fall INSIDE one
      cluster and split it 4px + 12px — the kebab reads as detached
      (「+ 与省略号之间的间隔明显更大」). The cluster takes the header /
      sheet icon rhythm, and the session row's cluster holds a single kebab,
@@ -1140,16 +1144,36 @@
 
 /* 样式钩子用 data 属性（本仓 mobile 包记录的规则，
    packages/dsh-chamber-client-ui-mobile/src/client/styles.ts:10-20，design 08 §3.2
-   描述的就是这条 hover/kebab 揭示），属性选择器不被 CSS Modules 哈希，
+   描述的就是这条 hover/`.rowActionsVisible` 揭示——键盘焦点同样落在该 JS 状态上），
+   属性选择器不被 CSS Modules 哈希，
    所以跨包选择器只在属性形式上成立。 */
 .workspaceHeader:hover [data-git-action],
-.workspaceHeader:has(:focus-visible) [data-git-action],
 .workspaceHeader:has(.rowActionsVisible) [data-git-action] {
   display: inline-flex;
 }
 
+/* Occupant CONTAINER rest/reveal (design 08 §3.2). The action hook above only
+   hides the button; the container (`[data-git-occupant]`, the `.headerGit` span in
+   SidebarWorkspaceGitLine.tsx) stays an in-flow flex item at rest — and a
+   zero-width item still consumes this header's `gap: 4px`, which parks every git
+   row's count badge 4px off the shared right column (the session rows' trailing
+   state slots / the todo count pill) while a facts-less row keeps its badge
+   flush: one column, two x positions, re-split whenever git facts land. Hiding
+   the whole item takes it out of the flow AND out of the a11y tree (its only
+   button is `display: none` anyway) on exactly the states that reveal the action,
+   so the two hooks cannot disagree — `test/visual-lock/git-occupant-rest-flow.test.ts`
+   locks the selector sets in step. Placement is untouched: the container stays
+   before (left of) the cluster. */
+.workspaceHeader [data-git-occupant] {
+  display: none;
+}
+
+.workspaceHeader:hover [data-git-occupant],
+.workspaceHeader:has(.rowActionsVisible) [data-git-occupant] {
+  display: inline-flex;
+}
+
 .workspaceHeader:hover .rowActions,
-.workspaceHeader:has(:focus-visible) .rowActions,
 .sessionRow:hover .rowActions {
   display: inline-flex;
 }
@@ -1159,20 +1183,19 @@
    every reveal path). Same data-* hook as the reveal
    rules above. */
 .workspaceHeader:hover [data-git-action]:disabled,
-.workspaceHeader:has(:focus-visible) [data-git-action]:disabled,
 .workspaceHeader:has(.rowActionsVisible) [data-git-action]:disabled {
   opacity: .42;
 }
 
 /* The row/header state indicators swap OUT while the actions are in: on
-   hover or keyboard focus, or while a kebab menu keeps them visible. */
+   hover, or while the cluster is visible (kebab menu open or keyboard focus,
+   `.rowActionsVisible`). */
 .sessionRow:hover .sessionStateSlot,
 .sessionRow:has(.rowActionsVisible) .sessionStateSlot {
   display: none;
 }
 
 .workspaceHeader:hover .workspaceCount,
-.workspaceHeader:has(:focus-visible) .workspaceCount,
 .workspaceHeader:has(.rowActionsVisible) .workspaceCount {
   display: none;
 }
@@ -1419,8 +1442,8 @@
 /* While editing in place, the fold-glyph hover/focus swap is suppressed —
    the row is in edit mode, so the chevron affordance must not displace the
    folder glyph under the pointer or the focused input. Same specificity as
-   the .workspaceHeader:hover/:has(:focus-visible) rules above, declared
-   later so they win. (A focused text input matches :focus-visible even
+   the `.workspaceHeader:hover` / `:has(.rowActionsVisible)` rules above,
+   declared later so they win. (A focused text input matches :focus-visible even
    after a pointer click, so :has(:focus-visible) covers both the keyboard
    and the mouse-armed rename.) Only the FOLDER variant is needed: in the
    flags-resolved steady state rename can never arm on a derived (worktree)

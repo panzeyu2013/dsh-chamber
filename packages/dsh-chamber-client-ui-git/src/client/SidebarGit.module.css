@@ -1,16 +1,25 @@
 /* Styles for the per-workspace Git occupant and its create/remove dialogs
    (design 08 §11). */
 
-/* OpenChamber-style entry: the create button reveals on the line's hover. */
+/* OpenChamber-style entry: the create button reveals with the row's cluster. */
 
 .headerGit {
   flex: none;
+  /* display: inline-flex is the REVEALED value. At rest the sidebar takes this
+     container out of the layout entirely (`.workspaceHeader [data-git-occupant]`,
+     0,2,0 — it beats this 0,1,0 rule): an in-flow zero-width flex item still
+     consumes the header's 4px gap, so a resting mount that renders no action is
+     invisible while its gap is not, and every git row parked its count badge 4px
+     off the shared right column (design 08 §3.2). The CONTAINER hook, not just
+     the action hook, is load-bearing for the row's right edge. */
   display: inline-flex;
   align-items: center;
   /* 2px: the sidebar sheet's own gap value. The gap is structurally inert
      anyway (this span holds at most one action), so the value is not
      load-bearing. */
   gap: 2px;
+  /* Retired branch-chip leftovers: the span holds at most one 20px action and
+     45% of the header's content box is far wider, so neither clamp can bind. */
   min-width: 0;
   max-width: 45%;
 }
@@ -181,8 +190,13 @@
 /* OpenChamber-style row actions: hidden at rest; revealed together with the
    row's own "+"/kebab cluster when the whole workspace row is hovered (the
    sidebar css reveals the `[data-git-action]` hook on .workspaceHeader:hover /
-   :has(:focus-visible) / kebab-open). Keyboard focus on the occupant also
-   reveals. The reveal is pointer-safe: it never keys on plain
+   `:has(.rowActionsVisible)`). Keyboard focus reveals too, but it rides that
+   same JS state (the section's focus handler arms `.rowActionsVisible` for
+   :focus-visible targets — design 06 §7): a CSS `:has(:focus-visible)` flip
+   would be visible yet NOT Tab-reachable in Blink, and it could never fire
+   here anyway — the action below is `display:none` at rest, so nothing inside
+   this span can hold focus before a HOST reveals it. The plugin therefore
+   brings no reveal of its own. The reveal is pointer-safe: it never keys on plain
    :focus-within, which Chromium's mousedown-focus would keep matched after
    a pointer click — a folded row would then keep its occupant action
    visible at rest next to the session count. */
@@ -207,10 +221,6 @@
   background: transparent;
   color: var(--dsw-alias-label-secondary);
   cursor: pointer;
-}
-
-.headerGit:has(:focus-visible) [data-git-action] {
-  display: inline-flex;
 }
 
 .headerGitAction:not(:disabled):hover {

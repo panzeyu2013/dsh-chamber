@@ -4,7 +4,7 @@
  * actions, the single per-source source-note live region and the folded
  * open-failure hoist. Shell state comes from useSidebarSection().
  */
-import type { RefObject } from 'react'
+import { useState, type RefObject } from 'react'
 import clsx from 'clsx'
 import {
   IconChevronRightOutlineRegular, IconLoadingOutlineRegular, IconPersonalizationOutlineRegular,
@@ -55,6 +55,13 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
     setSortMenuOpen,
     useShortcuts,
   } = useSidebarSection()
+  /**
+   * 来源头部的键盘焦点揭示态（design 08 §3.2）：静息时图标簇 `display:none`，只靠
+   * hover 揭示的话 Tab 永远进不去（来源头部本身是 `role="button"` + `tabIndex={0}`
+   * 的可聚焦元素）。与 workspace 行同理，键盘态落到 JS 驱动的 `.sourceActionsVisible`
+   * 类上——同一个类、同一条揭示路径；只认 `:focus-visible`，指针点击不触发常驻揭示。
+   */
+  const [keyboardFocus, setKeyboardFocus] = useState(false)
   // 头部动作的键帽来自页面快捷键目录（上游 WorkspaceBrowser 同款选择）：
   // 搜索 session.search、添加工作区 workspace.add；命令未注册时行缺席。
   const searchShortcut = useShortcuts(rows => rows.find(row => row.id === 'session.search'))
@@ -133,6 +140,20 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                   // 移入子按钮而 leave（与 RowHoverCard 同款），移出 header 才 leave。
                   onPointerEnter={() => { prewarmIntent().enter() }}
                   onPointerLeave={() => { prewarmIntent().leave() }}
+                  // 键盘焦点揭示（design 08 §3.2）：Tab 聚焦头部自身或其图标簇按钮时把
+                  // `.sourceActionsVisible` 置位，离开头部才收；后代按钮的 focusin/focusout
+                  // 同样冒泡到这里。
+                  onFocus={(event) => {
+                    if (event.target instanceof Element && event.target.matches(':focus-visible')) {
+                      setKeyboardFocus(true)
+                    }
+                  }}
+                  onBlur={(event) => {
+                    const next = event.relatedTarget
+                    if (!(next instanceof Node) || !event.currentTarget.contains(next)) {
+                      setKeyboardFocus(false)
+                    }
+                  }}
                   onPointerDown={(event) => {
                     // dragstart 的 target 是拖拽源（header 本身）而非按下的元素，
                     // 故必须在此记录按压是否起于 header 按钮。
@@ -239,11 +260,13 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                   {/* 头部动作（排序菜单 + 加工作区 + 来源搜索 + 归档清理）与会话行动作
                       一样 hover 才显形：静息时右侧是连接状态，悬停换成图标簇（visibility
                       切换，无重排）。搜索胶囊或排序菜单打开时图标簇常驻
-                      （.sourceActionsVisible），图标才能收起/关闭。 */}
+                      （.sourceActionsVisible），图标才能收起/关闭；键盘焦点（Tab）同样
+                      常驻——否则簇里的按钮永远不在 Tab 序里（见键盘焦点揭示态注释）。 */}
                   <span
                     className={clsx(
                       cc.sourceActions,
-                      (search?.expanded === true || sortMenuOpen === server.id) && cc.sourceActionsVisible,
+                      (search?.expanded === true || sortMenuOpen === server.id || keyboardFocus)
+                        && cc.sourceActionsVisible,
                     )}
                   >
                     {/* 每来源会话排序菜单（官方 ViewOptionsMenu 形态）：两个选项带当前项

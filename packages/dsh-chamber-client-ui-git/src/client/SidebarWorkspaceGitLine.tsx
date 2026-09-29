@@ -321,7 +321,24 @@ export function SidebarWorkspaceGitLine({
 
   return (
     <>
-      <span className={css.headerGit} role="group" aria-label={t('title')}>
+      {/* The occupant's mount is the sidebar `.rowActions` cluster's SIBLING
+          inside the workspace header row, and it carries its own cross-package
+          hook (`data-git-occupant`): the sidebar keeps it out of the layout at
+          rest (`.workspaceHeader [data-git-occupant]`, 0,2,0 — it beats this
+          span's own `.headerGit` 0,1,0), because an in-flow zero-width flex item
+          still consumes the header's 4px gap: while the mount renders no action
+          it stays invisible yet still eats that gap, parking every git row's
+          count badge 4px off the shared right column (the session rows' state
+          slots / the todo count pill; design 08 §3.2). Placement is a contract —
+          the occupant stays before (left of) the cluster, pinned by the git
+          package's `test/locks/slot-contract.test.ts`; only its rest-state
+          footprint is collapsed here. Revealed by the HOST on the same states as
+          `[data-git-action]` (hover / `.rowActionsVisible` — kebab-open or keyboard
+          focus, design 06 §7); the plugin brings no reveal of its own: this span's
+          action is `display:none` at rest, so a CSS-only `:has(:focus-visible)`
+          flip could not even fire — and Blink's Tab navigation would not reach it
+          anyway. The sidebar is this repo's only host and declares both states. */}
+      <span className={css.headerGit} data-git-occupant="" role="group" aria-label={t('title')}>
         {primary.isMain && (
           // No second-level derivation: worktrees are created only from the MAIN checkout.
           <button
