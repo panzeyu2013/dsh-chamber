@@ -263,10 +263,14 @@ export interface WorkspaceCreatedFact {
    * Optional placement anchor: the host
    * workspace id this creation sits immediately AFTER in the projection — the
    * Git plugin registers a new worktree right below its main checkout
-   * (workspace.insertBefore) while the projection would otherwise append the
-   * echoed row at the tail and make it jump once the source mounts. Absent =
-   * append at the tail (every sidebar-issued creation, whose host order is
-   * "last created is last").
+   * (workspace.insertBefore) while the projection would otherwise render the
+   * echoed row at the TAIL and make it jump once the authority lands. Absent =
+   * the echoed row goes to the tail: no reorder is coming for it. (The host
+   * itself PREPENDS every create — `workspaceIds: [id, ...state.workspaceIds]`
+   * — and takes no position argument, so for an unmounted source the echoed
+   * tail and the eventual authority position genuinely differ; that is the
+   * pre-existing shape of the sidebar "add workspace" path, which asks for no
+   * reposition.)
    */
   afterWorkspaceId?: string
   /**
@@ -276,6 +280,50 @@ export interface WorkspaceCreatedFact {
    * the ledger's path-basename rule; the mounted follow baseline still wins over both.
    */
   title?: string
+}
+
+/**
+ * One workspace PLACEMENT INTENT (design 05 §2.2 revision) — the only fact on this bridge that is
+ * published BEFORE its wire call, and the pre-create half of the workspace echo.
+ *
+ * WHY it cannot wait for the create: the host `workspace.create` prepends into the registry order
+ * (vendor `workspaceIds: [id, ...state.workspaceIds]`) and takes no position argument, so on a
+ * MOUNTED source the authoritative push already renders the new row at the list HEAD before the
+ * create answers — that is, before the host id (and therefore {@link WorkspaceCreatedFact}) exists.
+ * An intent published here lets the App hold the row at `afterWorkspaceId` from the first frame
+ * that carries it (`workspace-placement.ts`), so a worktree never animates in from the top of the
+ * list. It is an intent, not a success: a failed create is VOIDED by the failure side (a saga can
+ * die before its reposition; the TTL is the leak guard), and a missing row/anchor makes it a no-op.
+ */
+export interface WorkspacePlacementFact {
+  sourceId: string
+  /** The path the creation ASKED for — the only identity the pre-create side can key on. */
+  path: string
+  /** Host workspace id the new row must render immediately AFTER. */
+  afterWorkspaceId: string
+}
+
+/**
+ * The reposition that was supposed to justify a {@link WorkspacePlacementFact} will never land
+ * (design 05 §2.2.1) — the fact that voids the intent. Published from the FAILURE side only, at the
+ * FOUR places where the Git coordinator gives up while the host's own order is already final:
+ * the create's `insertBefore` catch, the adopt's `insertBefore` catch, and the two saga abort
+ * catches (create and adopt — either can die before its reposition step).
+ *
+ * WHY only the failure side: on success the host order walks the row off the list head, which is
+ * exactly the ledger's positional retirement — retiring there is both correct and impossible to race
+ * (the row is already rendered where the host just put it). When the reposition never lands, nothing
+ * will ever move the row off the head, so without this fact the intent would keep it at the anchor
+ * until the TTL and then let it jump back — a late surprise instead of the host's own order.
+ * `workspaceId` is the primary key once the create answered (the echo already upgraded the entry); a saga
+ * abort carries it whenever the recovery record learned it, else the REQUEST path only (realpath spelling retires by TTL).
+ */
+export interface WorkspacePlacementFailedFact {
+  sourceId: string
+  /** Present when the create已 answered (the id is the primary key then); absent when the saga
+   *  aborted before/around the create, where only the REQUEST path can match the intent. */
+  workspaceId?: string
+  path: string
 }
 
 /**
@@ -482,6 +530,10 @@ type RefreshListener = (sourceId: string) => void
 type SessionListRefreshListener = (sourceId: string) => void
 /** One successful sidebar-issued workspace creation (see WorkspaceCreatedFact). */
 type WorkspaceCreatedListener = (fact: WorkspaceCreatedFact) => void
+/** One pre-create workspace placement intent (see WorkspacePlacementFact). */
+type WorkspacePlacementListener = (fact: WorkspacePlacementFact) => void
+/** One failed placement reposition (see WorkspacePlacementFailedFact). */
+type WorkspacePlacementFailedListener = (fact: WorkspacePlacementFailedFact) => void
 /** One successful sidebar-issued workspace deletion (see WorkspaceRemovedFact). */
 type WorkspaceRemovedListener = (fact: WorkspaceRemovedFact) => void
 /** One successful sidebar-issued workspace rename (see WorkspaceRenamedFact). */
@@ -545,6 +597,8 @@ const refreshChannel = createChannel<Parameters<RefreshListener>>(() => '[dsh-ch
 const sessionListRefreshChannel = createChannel<Parameters<SessionListRefreshListener>>(
   ([sourceId]) => `[chamber] session-list refresh listener failed for ${sourceId}`)
 const workspaceCreatedChannel = createChannel<Parameters<WorkspaceCreatedListener>>(() => '[dsh-chamber] workspace-created listener threw')
+const workspacePlacementChannel = createChannel<Parameters<WorkspacePlacementListener>>(() => '[dsh-chamber] workspace-placement listener threw')
+const workspacePlacementFailedChannel = createChannel<Parameters<WorkspacePlacementFailedListener>>(() => '[dsh-chamber] workspace-placement-failed listener threw')
 const workspaceRemovedChannel = createChannel<Parameters<WorkspaceRemovedListener>>(() => '[dsh-chamber] workspace-removed listener threw')
 const workspaceRenamedChannel = createChannel<Parameters<WorkspaceRenamedListener>>(() => '[dsh-chamber] workspace-renamed listener threw')
 const sessionCreatedChannel = createChannel<Parameters<SessionCreatedListener>>(() => '[dsh-chamber] session-created listener threw')
@@ -676,6 +730,37 @@ export const chamberBridge = {
   /** App-layer subscription to workspace-creation facts; returns the unsubscribe. */
   onWorkspaceCreated(listener: WorkspaceCreatedListener): () => void {
     return workspaceCreatedChannel.subscribe(listener)
+  },
+
+  /**
+   * Call BEFORE `workspace.create` (single funnel: shared/workspace-mutations.ts) whenever the
+   * creation carries a placement anchor: publish the intent so the App can hold the row the
+   * authoritative push is about to render at the HEAD of that source's list
+   * (`withWorkspacePlacements`) — the window the id-keyed echo structurally cannot cover. Same
+   * one-way shape as the other facts; a create that never lands leaves the entry to the ledger's
+   * TTL, and the App remains the only owner of the projection.
+   */
+  reportWorkspacePlacement(fact: WorkspacePlacementFact): void {
+    workspacePlacementChannel.emit(fact)
+  },
+
+  /** App-layer subscription to workspace-placement intents; returns the unsubscribe. */
+  onWorkspacePlacement(listener: WorkspacePlacementListener): () => void {
+    return workspacePlacementChannel.subscribe(listener)
+  },
+
+  /**
+   * Call when the anchor's `workspace.insertBefore` failed (Git coordinator, best-effort catch):
+   * void that placement intent so the row follows the host's own order instead of the anchor until
+   * the TTL. Only the FAILURE side — see {@link WorkspacePlacementFailedFact}.
+   */
+  reportWorkspacePlacementFailed(fact: WorkspacePlacementFailedFact): void {
+    workspacePlacementFailedChannel.emit(fact)
+  },
+
+  /** App-layer subscription to voided placement intents; returns the unsubscribe. */
+  onWorkspacePlacementFailed(listener: WorkspacePlacementFailedListener): () => void {
+    return workspacePlacementFailedChannel.subscribe(listener)
   },
 
   /**

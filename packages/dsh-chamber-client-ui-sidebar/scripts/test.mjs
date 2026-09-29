@@ -42,6 +42,8 @@ export const GROUPS = {
     'test/session-rows/session-row-state.test.ts',
     // A4 渲染成本：memo 行 / 一次性派生 / ctxValue 依赖覆盖（源码文本锁；本包无 DOM）。
     'test/session-rows/row-render-cost.test.ts',
+    // 行动作簇：kebab + 独立归档钮（上游 ArchiveSessionRowButton 的形态移植；源码文本 + 字典值锁）。
+    'test/session-rows/session-row-actions.test.ts',
     // (facts 身份, running, stale) → 单槽记忆化的纯行为测（9-12 次读数 → 1 次派生）。
     'test/session-rows/row-state-cache.test.ts',
     // goal 三值事实：解析/最后已知/activation 合并/身份签名（design 19 §3.2.1）。
@@ -79,6 +81,8 @@ export const GROUPS = {
     // I-10 写面探测三分（contract/concrete/none）：执行端只依赖该叶面。
     'test/session-state/status-write-face.test.ts',
     'test/session-state/workspace-echo.test.ts',
+    // 位置意图（pre-create 半边）：宿主 create 的 PREPEND 短暂态按住 + 四条退场路径 + 接线锁。
+    'test/session-state/workspace-placement.test.ts',
     'test/session-state/session-echo.test.ts',
     'test/session-state/session-mutations.test.ts',
     // 归档两段式的纯逻辑：失败分类 + 活动家族 → 文案行（官方 activityLine 的逐分支对照）。

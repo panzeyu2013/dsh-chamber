@@ -91,7 +91,7 @@ export function SidebarRoot({
     renaming, setRenaming, menuOpen, toggleMenu, closeMenu, sortMenuOpen, setSortMenuOpen, commitRename,
   } = useSidebarMenus({ servers, runAction })
   // 对话框状态先于会话动作：归档的两段式确认层归 dialogs 所有（单层规则在
-  // 那里执行一次），行菜单只在宿主拒绝后代 dialogs.openArchiveConfirm 武装它。
+  // 那里执行一次），行级归档入口只在宿主拒绝后代 dialogs.openArchiveConfirm 武装它。
   const dialogs = useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors })
   const { onOpenArchiveCleanup, openWorkspaceBrowser, onDeleteWorkspace, openArchiveConfirm } = dialogs
   const { onForkSession, onNewSession, onArchiveSession } = useSidebarSessionActions({ runAction, openArchiveConfirm })

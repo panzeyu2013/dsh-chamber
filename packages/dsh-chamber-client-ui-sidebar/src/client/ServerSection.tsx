@@ -33,8 +33,10 @@ import { createPrewarmIntent, type PrewarmIntent } from '@dsh-chamber/dsh-chambe
 import { openErrorKey } from '@dsh-chamber/dsh-chamber-client-core/open-outcome'
 import { getSourceRepoLayouts, getWorkspaceGitFlag, hiddenByMainWorkspaceFold, isSourceGitFlagsLoaded } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
 import { resolveWorkspaceDrop } from '@dsh-chamber/dsh-chamber-client-core/workspace-drag-order'
-import { sessionRowDisclosure, sessionRowWindow, SESSION_ROWS_VISIBLE_FIRST } from '@dsh-chamber/dsh-chamber-client-core/session-row-window'
-import { useSidebarSection, workspaceDropEnv } from './sidebar-context.ts'
+import {
+  sessionRowDisclosure, sessionRowWindow, sessionRowWindowMotionKey, SESSION_ROWS_VISIBLE_FIRST,
+} from '@dsh-chamber/dsh-chamber-client-core/session-row-window'
+import { orderWithOverride, useSidebarSection, workspaceDropEnv } from './sidebar-context.ts'
 import { ServerSectionHeader } from './ServerSectionHeader.tsx'
 import { ServerSectionSearchCapsule, ServerSectionSearchResults } from './ServerSectionSearch.tsx'
 import { ServerSectionSessionRows } from './ServerSectionRows.tsx'
@@ -226,25 +228,33 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
               const orderedWorkspaces = (() => {
                 const real = server.workspaces.filter(workspace => workspace.ungrouped !== true)
                 const ungrouped = server.workspaces.find(workspace => workspace.ungrouped === true)
-                const override = workspaceOrderOverride[server.id]
-                let ordered: ChamberServerWorkspace[] = real
-                if (override !== undefined) {
-                  const byId = new Map(real.map(workspace => [workspace.id, workspace]))
-                  const placed = new Set<string>()
-                  const next: ChamberServerWorkspace[] = []
-                  for (const id of override) {
-                    const workspace = byId.get(id)
-                    if (workspace === undefined || placed.has(id)) continue
-                    next.push(workspace)
-                    placed.add(id)
-                  }
-                  for (const workspace of real) {
-                    if (placed.has(workspace.id)) continue
-                    next.push(workspace)
-                  }
-                  ordered = next
-                }
+                // 顺序规则与 drop 环境同源（sidebar-context 的 orderWithOverride）：
+                // 覆盖表外的新建行按宿主 PREPEND 语义前置，渲染序与拖拽锚点才看同一个头。
+                const ordered: ChamberServerWorkspace[] = orderWithOverride(
+                  real, workspaceOrderOverride[server.id], workspace => workspace.id,
+                )
                 return ungrouped === undefined ? ordered : [...ordered, ungrouped]
+              })()
+              // Folding a git MAIN workspace folds the WHOLE repository group: derived
+              // (worktree) rows — those whose git flag carries mainWorkspaceId — hide
+              // while the main is folded and return on expand; worktrees of an
+              // unregistered main stay visible. Once the main's registration vanishes
+              // (external deletion) the stale fold pref must not lock derived rows
+              // hidden with no expand control. Rows carry no destructive in-flight
+              // state (git saga surfaces at source level, rowErrors restore on expand).
+              // Computed ONCE here because BOTH consumers must agree on the row set:
+              // the walk below renders it, and the motion resetKey describes it.
+              const visibleOrderedWorkspaces = (() => {
+                const liveWorkspaceIds = new Set(server.workspaces.map(row => row.id))
+                return orderedWorkspaces.filter(workspace => {
+                  if (workspace.ungrouped === true || workspace.synthetic === true) return true
+                  const flag = getWorkspaceGitFlag(server.id, workspace.id)
+                  const mainId = flag?.mainWorkspaceId
+                  if (mainId === undefined) return true
+                  const foldedMain = viewPrefs.folded[`${server.id}/${mainId}`] === true
+                  const mainPresent = liveWorkspaceIds.has(mainId)
+                  return !hiddenByMainWorkspaceFold(flag, foldedMain, mainPresent)
+                })
               })()
               // The first insertion boundary of the list draws a top indicator while
               // the marker on the first real group is suppressed. The boundary is the
@@ -427,11 +437,36 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                       // in flight moves rows by hand, not by data (upstream gates on
                       // its native-drag flag the same way).
                       ready={server.aggregateReady === true && workspaceDrag === null && sessionDrag === null}
-                      // Order, the per-group session disclosure and the current
-                      // session (whose >200-row window enlarges around it) replace
-                      // the view and must settle instead of gliding — upstream's
-                      // JSON.stringify([animationResetKey, sessionLimits]).
-                      resetKey={JSON.stringify([orderBy, sessionRowsExpanded, currentId])}
+                      // View keys only: the order, the per-group session disclosure,
+                      // and the auto window of groups it actually CLAMPS
+                      // (sessionRowWindowMotionKey — a >visibleFirst group whose
+                      // window grows around the current session is a view
+                      // replacement and must settle instead of gliding; an
+                      // unclamped group contributes nothing, so data churn never
+                      // resigns the list). Neither the current id nor a per-group
+                      // row count may enter: a new session row becomes visible
+                      // exactly when it becomes current, and keying that commit
+                      // cancels the "+" entrance animation (design 06 §7).
+                      resetKey={JSON.stringify([orderBy, sessionRowsExpanded, sessionRowWindowMotionKey(
+                        // 与 walk 同源（visibleOrderedWorkspaces / sessionsOf）：键描述的行集就是渲染行集。
+                        // 折叠的组再滤一层：per-workspace 折叠只渲染组头、不渲染任何会话行，它的窗口
+                        // 分量对视图毫无影响，却会因当前行移走而翻键、取消别处的入场动画。
+                        // 代价 = 每渲染多跑一次 sessionsOf（updated 模式含一次排列）；只在本浏览分支
+                        // 求值，搜索/聚合错误/来源折叠分支不付这笔钱。
+                        visibleOrderedWorkspaces
+                          .filter(workspace => viewPrefs.folded[`${server.id}/${workspace.id}`] !== true)
+                          .map(workspace => {
+                          const sessions = sessionsOf(workspace)
+                          return {
+                            workspaceId: workspace.id,
+                            total: sessions.length,
+                            currentIndex: currentId === undefined
+                              ? -1
+                              : sessions.findIndex(session => session.id === currentId),
+                            expanded: sessionRowsExpanded[`${server.id}/${workspace.id}`] === true,
+                          }
+                        }),
+                      )])}
                     >
                       <>
                         {workspaceDropAtListStart && firstDropRow !== undefined
@@ -439,27 +474,6 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                           <span className={cc.listTopDropIndicator} aria-hidden="true" />
                         )}
                         {(() => {
-                          // Folding a git MAIN workspace folds the WHOLE repository
-                          // group: derived (worktree) rows — those whose git flag
-                          // carries mainWorkspaceId — hide while the main is folded
-                          // and return on expand; worktrees of an unregistered main
-                          // stay visible. Once the main's registration vanishes
-                          // (external deletion) the stale fold pref must not lock
-                          // derived rows hidden with no expand control. Rows carry
-                          // no destructive in-flight state (git saga surfaces at
-                          // source level, rowErrors restore on expand).
-                          const visibleOrderedWorkspaces = (() => {
-                            const liveWorkspaceIds = new Set(server.workspaces.map(row => row.id))
-                            return orderedWorkspaces.filter(workspace => {
-                              if (workspace.ungrouped === true || workspace.synthetic === true) return true
-                              const flag = getWorkspaceGitFlag(server.id, workspace.id)
-                              const mainId = flag?.mainWorkspaceId
-                              if (mainId === undefined) return true
-                              const foldedMain = viewPrefs.folded[`${server.id}/${mainId}`] === true
-                              const mainPresent = liveWorkspaceIds.has(mainId)
-                              return !hiddenByMainWorkspaceFold(flag, foldedMain, mainPresent)
-                            })
-                          })()
                           return visibleOrderedWorkspaces.map(workspace => {
                           const workspaceKey = `${server.id}/${workspace.id}`
                           const folded = viewPrefs.folded[workspaceKey] === true

@@ -22,6 +22,11 @@ export function useSidebarSessionActions({ runAction, openArchiveConfirm }: {
    *  row-error key `<source>/workspace/<id>/new`. */
   const newSessionRef = useRef(new Map<string, Promise<void>>())
 
+  /** 归档的每会话 in-flight 守卫（同 `newSessionRef`）：行菜单选中即关天然防连点，
+   *  常驻图标钮没有——快速双击会发两次 workspace/archiveSession（活跃会话时第二次
+   *  重复武装同一确认层），键与行错误槽同源 `<source>/session/<id>/archive`。 */
+  const archiveActionRef = useRef(new Map<string, Promise<void>>())
+
   // 分叉：在最后完成的 turn 处 fork，随后 refresh 并打开子会话。Wire
   // session.fork 只收 { sessionId, atSeq? }，子会话标题先取源标题；成功后按
   // 官方 runtime service 移植的 increasedForkTitle 做递增 rename，失败非致命
@@ -84,10 +89,12 @@ export function useSidebarSessionActions({ runAction, openArchiveConfirm }: {
   // 工作而拒绝（workspace/session-active）时，details 列出将被停止的工作，武装
   // 归档确认层；用户确认后由 dialogs.confirmArchive 带 stopActivity 重发，停止
   // 交给宿主自己的 provider（回合/子代理后代/后台任务/定时提醒）——客户端不再
-  // 有补偿停止腿。动作仍在行菜单上，drag-end 尾随 click 守卫与按行 rowErrors
+  // 有补偿停止腿。动作的两个入口（行菜单项与行内悬停钮）共用这条漏斗；drag-end 尾随 click 守卫与按行 rowErrors
   // 归因不变；拒绝本身不写行错误，其它失败照旧。
   const onArchiveSession = (server: ChamberServerAggregate, sessionId: string, displayTitle: string): void => {
-    runAction(`${server.id}/session/${sessionId}/archive`, async () => {
+    const key = `${server.id}/session/${sessionId}/archive`
+    if (archiveActionRef.current.has(key)) return
+    const task = runAction(key, async () => {
       // 唯一出口：归档同时撤下该会话的待定回声，创建后立即归档不留幽灵行。
       try {
         await archiveSessionForSource(server.id, sessionId)
@@ -103,6 +110,10 @@ export function useSidebarSessionActions({ runAction, openArchiveConfirm }: {
         return
       }
       chamberBridge.requestRefresh(server.id)
+    })
+    archiveActionRef.current.set(key, task)
+    void task.finally(() => {
+      if (archiveActionRef.current.get(key) === task) archiveActionRef.current.delete(key)
     })
   }
   return { onForkSession, onNewSession, onArchiveSession }

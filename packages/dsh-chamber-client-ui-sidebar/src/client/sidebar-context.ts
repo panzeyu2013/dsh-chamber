@@ -58,6 +58,38 @@ export function sourceAccentStyle(server: ChamberServerAggregate): { '--chamber-
  * repo-group-fold visibility. One rule set for the marker render, the
  * onDragOver gate, the drop handler and the commit — no drift between them.
  */
+/**
+ * 拖拽覆盖表 → 实际顺序的**唯一**规则，渲染序与 drop 环境序共用（两处不同序会把拖拽锚点算到
+ * 旧行上）。覆盖表只描述拖拽那一刻存在的行；不在表里的 id 是其后新建的行，而宿主把新建的
+ * workspace 插在序列头部（PREPEND）⇒ 按原序**前置**（否则新建/回声行先落表尾，位置意图的首帧
+ * 锚点判定失败，要等下一提交才滑回锚点）。override 不存在时返回原序的副本。
+ */
+export function orderWithOverride<T>(
+  items: readonly T[],
+  override: readonly string[] | undefined,
+  idOf: (item: T) => string,
+): T[] {
+  if (override === undefined) return [...items]
+  const known = new Set(override)
+  const placed = new Set<string>()
+  const ordered: T[] = []
+  for (const item of items) {
+    const id = idOf(item)
+    if (known.has(id)) continue
+    ordered.push(item)
+    placed.add(id)
+  }
+  for (const id of override) {
+    if (placed.has(id)) continue
+    const item = items.find(candidate => idOf(candidate) === id)
+    if (item === undefined) continue
+    ordered.push(item)
+    placed.add(id)
+  }
+  for (const item of items) if (!placed.has(idOf(item))) ordered.push(item)
+  return ordered
+}
+
 export function workspaceDropEnv(
   sourceId: string,
   realWorkspaceIds: readonly string[],
@@ -65,12 +97,7 @@ export function workspaceDropEnv(
   folded: Readonly<Record<string, boolean>>,
 ): WorkspaceDropEnv {
   const realSet = new Set(realWorkspaceIds)
-  const order = override === undefined
-    ? [...realWorkspaceIds]
-    : [
-        ...override.filter(id => realSet.has(id)),
-        ...realWorkspaceIds.filter(id => !override.includes(id)),
-      ]
+  const order = orderWithOverride(realWorkspaceIds, override, id => id)
   return {
     order,
     flag: id => getWorkspaceGitFlag(sourceId, id),

@@ -28,9 +28,10 @@
  * runtime-report pass-through still declares the rc.2 row ownership field.
  *
  * The tree is resolved through the vendor symlink layout
- * (vendor/harness-packages/@deepseek-ai/...). A missing tree LOUD-SKIPS the
- * vendor locks (they read nothing and must not read as green) while the chamber
- * source locks still run, so the file is never a zero-test run.
+ * (vendor/harness-packages/@deepseek-ai/...). A missing tree FAILS the vendor
+ * locks loudly (they read nothing and must not read as green); only the explicit
+ * `DSH_CHAMBER_VENDOR_ABSENT=skip` opt-out skips them, while the chamber source
+ * locks always run, so the file is never a zero-test run.
  */
 
 import { test } from 'node:test'
@@ -40,9 +41,22 @@ import { fileURLToPath } from 'node:url'
 import { normalize, stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
 const VENDOR_ROOT = fileURLToPath(new URL('../../../../vendor/harness-packages/@deepseek-ai', import.meta.url))
-const VENDOR_SKIP = existsSync(VENDOR_ROOT)
-  ? false
-  : 'vendor/harness-packages 未物化（pnpm install / 子模块缺失）：' + VENDOR_ROOT
+const VENDOR_MISSING = !existsSync(VENDOR_ROOT)
+const VENDOR_OPT_OUT = process.env.DSH_CHAMBER_VENDOR_ABSENT === 'skip'
+/**
+ * 缺树即**失败**（响亮），只有显式 `DSH_CHAMBER_VENDOR_ABSENT=skip` 才真正跳过——与
+ * sidebar 的 vendor lockstep 同款纪律：缺 submodule 时这三条锁读不到任何源，若静默 skip，
+ * 清单的 guard 会被同文件的 chamber 锁满足而整体变绿（"must not read as green"）。
+ */
+const VENDOR_SKIP = VENDOR_MISSING && VENDOR_OPT_OUT
+  ? 'vendor/harness-packages 未物化（pnpm install / 子模块缺失）+ 显式 DSH_CHAMBER_VENDOR_ABSENT=skip：' + VENDOR_ROOT
+  : false
+function assertVendorTree(): void {
+  if (VENDOR_MISSING) {
+    assert.fail('vendor/harness-packages 未物化：本 lockstep 读 pin 住的 vendor 源，缺树即失败'
+      + '（显式 DSH_CHAMBER_VENDOR_ABSENT=skip 才跳过）。')
+  }
+}
 
 /** Code-only, whitespace-normalized text of one repo-relative source file. */
 function repoSource(path: string): string {
@@ -53,6 +67,7 @@ const SESSION_CONTROLLER = 'vendor/harness-packages/@deepseek-ai/dsh-api-session
 const UI_WORKSPACE = 'vendor/harness-packages/@deepseek-ai/dsh-client-ui-workspace/src/client'
 
 test('vendor presented fact: openSession retains the target as mainView, then releases the replaced reference', { skip: VENDOR_SKIP }, () => {
+  assertVendorTree()
   const navigation = repoSource(UI_WORKSPACE + '/navigation.ts')
   assert.match(
     navigation,
@@ -72,6 +87,7 @@ test('vendor presented fact: openSession retains the target as mainView, then re
 })
 
 test('vendor presented fact: retain() starts the presented session open (retaining IS presenting)', { skip: VENDOR_SKIP }, () => {
+  assertVendorTree()
   const service = repoSource(SESSION_CONTROLLER + '/sessions/service.ts')
   assert.match(
     service,
@@ -81,6 +97,7 @@ test('vendor presented fact: retain() starts the presented session open (retaini
 })
 
 test('vendor presented fact: source counts ride the list row as retainedBy', { skip: VENDOR_SKIP }, () => {
+  assertVendorTree()
   const service = repoSource(SESSION_CONTROLLER + '/sessions/service.ts')
   const contract = repoSource(SESSION_CONTROLLER + '/contract/sessions.ts')
   assert.match(

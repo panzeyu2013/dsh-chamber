@@ -3,7 +3,7 @@
   "files": [
     {
       "path": "packages/renderer/src/App.tsx",
-      "lines": 2352,
+      "lines": 2358,
       "target": 400,
       "note": "renderer container (function-of-state mixes; stores/budgets/servers/ledger extracted)"
     },
@@ -87,7 +87,7 @@
     },
     {
       "path": "packages/dsh-chamber-client-core/src/aggregate-store.ts",
-      "lines": 984,
+      "lines": 1069,
       "target": 600,
       "note": "aggregate store types/channels/registry"
     }

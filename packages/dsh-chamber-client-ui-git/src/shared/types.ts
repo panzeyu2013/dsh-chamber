@@ -176,6 +176,8 @@ export type GitRecovery =
   | {
       kind: 'rollback-create'
       operationId: string
+      /** Host workspace id the saga already learned (placement void key when its echo upgraded the intent). */
+      workspaceId?: string
       /** Exact create facts required to correlate a replayed rollback response. */
       repoId: string
       worktreeId: string
@@ -191,6 +193,8 @@ export type GitRecovery =
       /** The worktree exists, but its creation provenance does not authorize rollback. */
       kind: 'workspace-adopt'
       operationId: string
+      /** Host workspace id the saga already learned (placement void key when its echo upgraded the intent). */
+      workspaceId?: string
       path: string
       sessionId: string
       message: string

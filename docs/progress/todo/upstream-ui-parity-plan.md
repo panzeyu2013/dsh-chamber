@@ -16,7 +16,8 @@ design 同批更新；已落地面的契约见 design 06 §7、design 05 §2）�
   菜单项 pin/unpin（`WS:3630-3643`，order 100）+ 行 hover 按钮（`WS:3649-3668`，order 200）+ 静息 `PinnedIndicator`
   （`WS:1441-1450`、行内 1636）；拖拽分区边界由 `sectionMembers` 决定；`pinnedSessionIds` 来自 registry 级 rowState。
 - 本仓：`pinnedSessionIds`/pin/unpin/`IconPin*` 在 sidebar 与 core **零命中**；`ChamberServerWorkspace.sessions`
-  无 `pinned` 字段，derive 无置顶序；行 hover 动作簇是本仓设计（kebab-only）。
+  无 `pinned` 字段，derive 无置顶序；行 hover 动作簇是本仓设计，但已按上游形态补上第二个成员
+  （kebab + 独立归档钮 `ArchiveSessionRowButton`，design 06 §7；pin 行按钮仍零支撑）。
 - 为何要裁：①这是一项**宿主写能力**（pin/unpin 会改宿主 rowState），不是样式；②完整对齐需消费上游 rowState 面
   （本仓当前只读 workspaces/sessions 两个 store）并把置顶序接进**本仓自有的会话拖拽排序**（`sessionOrderOverride`），
   与 `sidebar.workspaces.*` 座席「只声明不渲染」的既有裁决（design 24 §1、STATUS）直接相邻。
@@ -60,7 +61,7 @@ design 同批更新；已落地面的契约见 design 06 §7、design 05 §2）�
   C1 维持现状（键帽只展示，官方键按上面两类结果走）；C2 先实机验证一次（store 级的三个是否确实生效、归档在活动会话上是否静默无效），再决定登记口径。
 - 归档面：`session.archive` 在活动会话上走官方**两段式**（注入点 `WS:4193-4216` 的 `archiveRequest` +
   `settleSessionArchive`/`stopAndArchiveSession`），确认框是 `SessionArchiveConfirmDialog`（`WS:3466`，注册于 :4373-4378）——
-  与重命名模态同属 `shell.overlay` 座席，**本仓可见**；与本仓自己的两段式确认（菜单入口）不叠加：一次按键只弹官方那一层。
+  与重命名模态同属 `shell.overlay` 座席，**本仓可见**；与本仓自己的两段式确认（行菜单项/行内钮入口）不叠加：一次按键只弹官方那一层。
   `RowActionToast`（`WS:3806`，注册于 :4379-4385）同座席，归档结果提示同样可见。
 - **C2 实机判定清单**（任一来源已挂载即可；按键用 pin 的默认绑定）：
   1. 活键面：`session.new` = **⌘N** 应真的新建；`session.fork` = **⌥⌘F** 应真的分叉；`session.rename` = **⌥⌘R** 应弹出官方

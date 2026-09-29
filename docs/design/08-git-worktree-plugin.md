@@ -196,7 +196,7 @@ Git 事实不加进 App 的 session aggregate，v1 徽标只在 Git 区内；普
   （`+` ↔ kebab）一致同为 4px（此前用官方 `Rows .rowActions` 的 12px，
   一簇被切成 4px + 12px；见 06 §7「行内操作」条）。
 - **行内动作揭示 pointer-safe**：动作按钮的样式钩子是 **`data-git-action` 属性**
-  （主行「分支+」创建 / worktree 行删除，`SidebarWorkspaceGitLine.tsx:387,400`），由 sidebar
+  （主行「分支+」创建 / worktree 行删除，`SidebarWorkspaceGitLine.tsx` 中带该属性的两个按钮），由 sidebar
   侧的 hover / `:has(:focus-visible)` / kebab 展开（`.rowActionsVisible`）三条规则揭示
   （`sidebar-chamber.module.css` 的 `.workspaceHeader:hover [data-git-action]`、
   `.workspaceHeader:has(:focus-visible) [data-git-action]`、
@@ -229,7 +229,11 @@ Git 事实不加进 App 的 session aggregate，v1 徽标只在 Git 区内；普
 - **注册/创建后的定位**：dsh registry 对新建 workspace 是 **prepend（头部）**——注册在提交
   成功后立即 `workspace.insertBefore` 把新工作树移到主 checkout 之后（注册表顺序持久化；失败
   best-effort，不回滚已提交的 workspace）；adopt 的 workspace 标题按分支派生（目录 basename
-  可能与主同名）。
+  可能与主同名）。**prepend 那一窗也要盖住**：挂载来源的权威 push 在 create 回答之前就把新行
+  渲染在列表第 0 位（入场动画从最顶端开始、整列下压），因此 create 带锚点时由唯一出口在 wire
+  **之前**发布一条位置意图，投影从第一帧就把该行按在锚点后（design 05 §2.2.1 位置意图；只搬
+  权威行、只搬列表头部那一行，行被权威序放到别处即退休）；**重排失败**（best-effort catch）时
+  由同一处发布作废事实，行跟随宿主序，而不是在锚点后停到 TTL 才跳回。
 - **禁止二次派生**：创建入口只在仓库**主 checkout** 行（worktree 行只有删除）；创建对话框
   的来源下拉只提供主 checkout workspace（`createSourceOptions` 优先 `isMain`）。
   `isProjectStart` 按 repoKey 级判定。
@@ -242,7 +246,13 @@ Git 事实不加进 App 的 session aggregate，v1 徽标只在 Git 区内；普
 ### 3.3 仓库家族、折叠与拖拽顺序
 
 - **连续家族不变式**：主 checkout 与同仓库派生 workspace 构成**连续家族**（main 居首、派生
-  随后；注册表顺序持久）。家族内外无按仓库分隔的 CSS 间距（各组一律 `.workspaceGroup` 4px
+  随后；注册表顺序持久）。不变式按**渲染序**成立，从新行出现的第一帧算起：位置意图先于 wire
+  发布，宿主 create 的 prepend 短暂态不会渲染出来（否则那一帧里家族被"最顶端的新行"打断，
+  入场动画也从列表头部开始）。**边界（已登记）**：两类创建没有锚点因而走宿主自身的落点——
+  侧栏「添加工作区」（用户在挑目录，无"附属"关系）落头部；另有两类 recovery（`rollback-create` 与
+  `workspace-adopt` / `session-adopt`，其持久化记录里没有 `sourceWorkspaceId`）不带锚点也**不重排**⇒
+  这两条路恢复出来的行跟随宿主序。adopt 时主 checkout **未注册**的情形**有**尾部锚点（宿主同一次
+  `insertBefore` 退化成 append ⇒ 锚点取"当前最后一个 workspace"，design 05 §2.2.1），首帧即落在宿主收敛处，家族位置留给用户在家族内的拖拽（recovery 的价值是"先有不丢"，不是定位）。家族内外无按仓库分隔的 CSS 间距（各组一律 `.workspaceGroup` 4px
   组距）——分组完全由顺序不变式表达。
 - **单一纯裁决器** `packages/dsh-chamber-client-core/src/workspace-drag-order.ts`：marker 渲染 / onDragOver 门 / onDrop /
   提交四处同源（单测
@@ -279,7 +289,7 @@ Git 事实不加进 App 的 session aggregate，v1 徽标只在 Git 区内；普
   对象**——那是同批的图标钮语言，v0.2.4 此处为 22px/r6；24px 目标
   尺寸重新成为本模块的已登记偏差，见 design 24 §13 第 17 条与 design 06 §7。行内动作钮命中区
   见 `SidebarGit.module.css` 的 `.unregisteredAction`：分支图标 + 名称 + 健康徽标；非 ready 行
-  的状态胶囊是官方 `Tag tone="warning"`（`SidebarWorkspaceGitLine.tsx:208`，官方 11px/17px
+  的状态胶囊是官方 `Tag tone="warning"`（`SidebarWorkspaceGitLine.tsx` 里非 ready 分支的那个 `Tag`，官方 11px/17px
   胶囊词汇，本模块只保留占位类 `.unregisteredStatus`——原先手写胶囊的中性填充与行自身 hover
   填充同值，指针悬停时整块消失）。无已注册 workspace 的仓库
   在列表末尾渲染其未注册块；数据经 flags 存储的每来源仓库布局（`RepoGitLayout`）发布，侧栏
@@ -500,10 +510,10 @@ pre-remove 归档**带 `stopActivity: true`**：勾选即授权宿主停止这�
   **该门自己的 Confirm 就地执行这次删除**——一次手势即 `移除 → 勾选 → 确认`，确认后以
   `discardChanges: true` 跑同一删除路径，无需第二次「移除」。门开关由点击「移除」时选定的**授权
   种类**持有（`discard-gate.ts` 的 `nextDiscardGate`：先 dirty、后 submodule），`onConfirm`/
-  `onCancel` 才释放（`RemoveWorktreeDialog.tsx:358`）。**取消即撤销**：Cancel / 关闭 / 遮罩 /
-  Escape 都把这次门收集的授权复位为未授权（`onCancel`，`RemoveWorktreeDialog.tsx:358`），因此退出确认
+  `onCancel` 才释放（`RemoveWorktreeDialog.tsx` 的 `onCancel` 处理器）。**取消即撤销**：Cancel / 关闭 / 遮罩 /
+  Escape 都把这次门收集的授权复位为未授权（同一个 `onCancel`），因此退出确认
   绝不会留下一个"已授权但没删"的脏状态——下次「移除」重新打开同一门，用户不会在事后被静默丢弃文件；授权对话框打开期间删除对话框忽略关闭（两对话框各自在 document 上监听
-  Escape，`RemoveWorktreeDialog.tsx:215-222`）。
+  Escape，见该对话框自己的 document 级 Escape 监听）。
 - **含子模块**：行事实不含子模块信息；首次删除被 host 确定性拒绝（`worktree-submodules`，变更前、
   `retryable: false`、可关闭、不锁来源）后，对话框就地显示警示，点「移除」重开同一官方
   `RiskConfirmation`（勾选框「丢弃该工作树中的子模块检出」）；勾选后同一 `discardChanges` 授权重试
@@ -529,7 +539,7 @@ pre-remove 归档**带 `stopActivity: true`**：勾选即授权宿主停止这�
   current（blank 例外）→ runtime-unknown → running → locked → unhealthy → dirty →
   status-unknown**：`current` / `runtime-unknown` 都在 `running` **之前**，故过时
   或「仅已归档」的 running 事实无法绕过二者。
-- **未注册行删除**走**应用内官方 `RiskConfirmation`**（`SidebarWorkspaceGitLine.tsx:262`，该行原用原生 `window.confirm`，无法使用 alias token）：行内删除按钮只武装
+- **未注册行删除**走**应用内官方 `RiskConfirmation`**（`SidebarWorkspaceGitLine.tsx` 中该行渲染的 `RiskConfirmation`，该行原用原生 `window.confirm`，无法使用 alias token）：行内删除按钮只武装
   确认（勾选框「我了解该移除不可撤销」，主按钮勾选前不可用，每次关闭都重置），确认后才发出移除。该
   行**仍无对话框授权流**——dirty 沿用不对称：移除不携带 `discardChanges`，确定性拒绝 + host 英文提示
   （终端删除 modules 目录或 `--force`）。未注册块的 **missing 行**（§5.5）删除按钮不再硬禁用：行

@@ -1,6 +1,6 @@
 /**
  * 归档确认相位的纯逻辑（无可视依赖）：把首次 archive 的失败分类成「需确认」或「照旧上报」，
- * 并把宿主拒绝时列出的活动家族映射成文案行。对话框组件与行菜单动作都只是它的薄壳
+ * 并把宿主拒绝时列出的活动家族映射成文案行。对话框组件与行级归档动作都只是它的薄壳
  * （测试直接 import 本模块，不为一个纯映射拉起 React/CSS）。
  *
  * 语义对照上游 dsh-client-ui-workspace 的 archiveInjected / archiveConfirmInjected：
