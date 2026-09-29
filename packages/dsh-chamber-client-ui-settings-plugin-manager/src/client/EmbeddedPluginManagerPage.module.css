@@ -123,7 +123,10 @@
    second track. Pinned on the head row's two-child shape, never on a tag inside the
    block: the old `h1 + p` form missed upstream re-wrapping the intro as
    `div.pageIntro` (intro text + info button), leaving it live in row one, painted
-   under the first group's heading this layer hoists there. */
+   under the first group's heading this layer hoists there. Known cost of anchoring by
+   position: anything upstream later adds INSIDE that block disappears with it, with no
+   second signal — the seam lock pins only that the block starts with the repeated h1
+   and that the head row keeps two children (design 05 §5). */
 .embedded [data-plugin-panel] > [data-window-drag] > :first-child > * {
   display: none;
 }
