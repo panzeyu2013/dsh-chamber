@@ -1125,8 +1125,9 @@
    the JS-driven `.rowActionsVisible` state (kebab menu open, or the section's
    keyboard-focus state), swaps them IN while the trailing state slot is
    swapped OUT — a true replacement, not a fade-over-an-invisible-gap.
-   Reveal is pointer-safe and keyboard-reachable: it keys on row hover, on
-   `.rowActionsVisible`, and never on plain :focus. SESSION ROWS are
+   Reveal is pointer-safe and keyboard-reachable: it keys on row hover and on
+   `.rowActionsVisible` (kebab-open or keyboard focus) — never on plain :focus.
+   SESSION ROWS are
    pointer-only: the row itself has no focus seat (no tabIndex/roving), so the
    row cluster has the :hover half only. Chromium focuses a clicked button on
    mousedown, so a :focus-within reveal would keep the hover-revealed content

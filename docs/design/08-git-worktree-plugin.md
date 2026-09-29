@@ -191,8 +191,9 @@ Git 事实不加进 App 的 session aggregate，v1 徽标只在 Git 区内；普
 - occupant 渲染进 workspace 头部行内（title 与 rowActions 之间），作为行尾动作簇 `.rowActions`
   的 sibling 且位于其**之前**——这条放置是 git 包已登记的契约（`test/locks/slot-contract.test.ts`）。
   **行内不渲染分支
-  chip**：worktree 行 rest 态行尾只保留计数徽标，分支身份随行 hover / 键盘焦点 / kebab
-  揭示的动作与工作区管理对话框呈现；主 checkout 也不显示 chip（root 组只显示项目名）。
+  chip**：worktree 行 rest 态行尾只保留计数徽标，分支身份随行 hover / 键盘焦点揭示的动作
+  与工作区管理对话框呈现——**派生 worktree 行刻意无 kebab**（§3.2），kebab 那一路只在主
+  checkout；主 checkout 也不显示 chip（root 组只显示项目名）。
   行内动作图标 16px；空 workspace 组体显示"该工作区暂无会话"提示行。**揭示态下 occupant
   是行尾动作簇的最左成员**：它与 `rowActions` 之间只有头部自身的 4px 间距，故簇内
   （`+` ↔ kebab）一致同为 4px（此前用官方 `Rows .rowActions` 的 12px，
@@ -204,7 +205,8 @@ Git 事实不加进 App 的 session aggregate，v1 徽标只在 Git 区内；普
   `[data-git-action]:disabled`；按选择器锚定——行号随文件增长漂移，旧引用
   的 958-960 / 974-976 已不对）。`.rowActionsVisible` 有两个来源：kebab 展开，以及
   **键盘焦点**——后者由 `ServerSection.tsx` 的头部 `onFocus`/`onBlur`（React 的
-  focusin/focusout，按 `:focus-visible` 置位、焦点离开整行才清除）驱动，与 kebab 走同一个
+  focusin/focusout，按 `:focus-visible` 置位、焦点离开整行才清除；不发 blur 的卸载路径另按状态
+  过渡清理，见 06 §4.3）驱动，与 kebab 走同一个
   JS 状态、同一条揭示路径（键盘路径的落点是 **Tab 可达**；脚本/AT 发起的程序化聚焦是否算
   `:focus-visible` 取决于上一次交互，不在本条承诺内）。插件自身**不带**揭示规则：occupant 的动作
   rest 态 `display:none`（`SidebarGit.module.css` 的 `.headerGitAction`），只靠插件 CSS 既发不出
@@ -325,7 +327,7 @@ Git 事实不加进 App 的 session aggregate，v1 徽标只在 Git 区内；普
   对象**——那是同批的图标钮语言，v0.2.4 此处为 22px/r6；24px 目标
   尺寸重新成为本模块的已登记偏差，见 design 24 §13 第 17 条与 design 06 §7。行内动作钮命中区
   见 `SidebarGit.module.css` 的 `.unregisteredAction`：分支图标 + 名称 + 健康徽标；非 ready 行
-  的状态胶囊是官方 `Tag tone="warning"`（`SidebarWorkspaceGitLine.tsx` 中带该 tone 的那行，官方 11px/17px
+  的状态胶囊是官方 `Tag tone="warning"`（`SidebarWorkspaceGitLine.tsx` 中非 ready 分支里带该 tone 的那行，官方 11px/17px
   胶囊词汇，本模块只保留占位类 `.unregisteredStatus`——原先手写胶囊的中性填充与行自身 hover
   填充同值，指针悬停时整块消失）。无已注册 workspace 的仓库
   在列表末尾渲染其未注册块；数据经 flags 存储的每来源仓库布局（`RepoGitLayout`）发布，侧栏

@@ -530,12 +530,13 @@
   换入、状态槽 `display:none` 换出（session 行：状态环 ↔ **kebab 菜单（置顶/重命名/分叉/归档四项）+
   独立归档钮 + 独立置顶钮**（归档与置顶各是同源双出口，形态见 §7；静息置顶标记与状态槽一起换出；归档只隐藏行、不触碰会话日志；安静会话直接归档，宿主因
   仍有活跃工作而拒绝时才弹「停止并归档」确认，design 24 §5）；来源头：连接状态 ↔ 排序菜单 + 搜索 + 添加工作区（官方
-  project-add 字形，`IconProjectAddOutlineRegular`）；workspace：会话数徽标 ↔ `+`（新建
+  project-add 字形，`IconProjectAddOutlineRegular`）+ 归档清理（见 §7）；workspace：会话数徽标 ↔ `+`（新建
   会话）+ kebab（重命名/删除））。胶囊/菜单展开时操作簇保持显示
   （`.sourceActionsVisible`/`.rowActionsVisible`，`:has` 同步换出状态槽）。
   **键盘焦点（Tab）与 kebab 展开共用同一个 JS 揭示状态**：`ServerSection.tsx` /
   `ServerSectionHeader.tsx` 在头部行的 `onFocus`（React focusin）里按 `:focus-visible` 置位、
-  焦点离开整行时清除。不能只靠 CSS 的 `:has(:focus-visible)` 揭示：Blink 的 Tab 导航不认
+  焦点离开整行时清除；不发 blur 的卸载路径（行消失、行内重命名表单被替换）另按渲染/重命名
+  状态过渡清理，否则悬留的键会把该行的簇永久钉在静息态。不能只靠 CSS 的 `:has(:focus-visible)` 揭示：Blink 的 Tab 导航不认
   `:has()` 失效出的 display 变化——同页 A/B（真实键事件、两侧 DOM/CSS 相同）里
   `:has(:focus-visible)` 揭示的簇已 `display:inline-flex` 却仍被 Tab 跳过，JS 类揭示的簇 Tab
   依次进入（`test/visual-lock/keyboard-reveal-reachability.test.ts` 钉住这条）。
@@ -996,8 +997,8 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   **首落不含置顶序**：标记只陈述"在置顶集里"这一集合事实，`pinSetKnown !== true`（老宿主形状 / unary 兜底）时
   标记不出现、动作按 pin 方向出（宿主 pin 幂等，重复 pin 无害；反向才会造成假断言）；置顶序与拖拽分区守卫见 §5。
   **会话行簇是纯指针出口**：行自身无 focus 座席
-  （无 tabIndex/roving），揭示只有 `:hover` 与 kebab 展开两半；键盘焦点那一半属于 workspace 行与来源头部（JS 揭示态）
-  （要键盘可达需先给行加 focus 路径，属未决取舍）。悬停替换行尾状态槽；**不显示
+  （无 tabIndex/roving），揭示只有 `:hover` 与 kebab 展开两半（要键盘可达需先给行加 focus 路径，属未决取舍）；
+  键盘焦点那一半属于 workspace 行与来源头部（JS 揭示态）。悬停替换行尾状态槽；**不显示
   相对时间**）。**添加工作区** = 来源头部按钮（官方 project-add 字形，与搜索/排序成簇、悬停替换连接
   状态槽，胶囊展开时簇保持可见）；文案在 aria 与**官方 `Tooltip`**（来源头四个动作排序/添加工作区/
   搜索/归档清理由原生 `title` 换成设计系统 Tooltip，形状串 `side="bottom" delayMs={500}`；workspace 新建会话钮的
