@@ -20,6 +20,7 @@ import clsx from 'clsx'
 import {
   Button,
   IconChevronRightOutlineRegular,
+  IconFolderCloseRegular,
   IconFolderOpenOutlineRegular,
   IconLoadingOutlineRegular,
   IconRefreshOutlineRegular,
@@ -623,7 +624,11 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
                       onClick={() => { toggleGroupFold(group.key) }}
                     >
                       <IconChevronRightOutlineRegular size={14} className={cc.foldChevron} />
-                      {realWorkspace && <IconFolderOpenOutlineRegular size={14} className={cc.foldFolder} />}
+                      {/* Same upstream-parity state glyph as the nav workspace header:
+                          open folder while the group is expanded, closed while folded. */}
+                      {realWorkspace && (isGroupCollapsed
+                        ? <IconFolderCloseRegular size={14} className={cc.foldFolder} />
+                        : <IconFolderOpenOutlineRegular size={14} className={cc.foldFolder} />)}
                     </button>
                     <span className={cc.archiveManagerGroupTitle} title={groupTitle}>
                       {groupTitle}

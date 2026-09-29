@@ -358,7 +358,9 @@ vendorTest('上游：pin/unpin 的形态、座席顺序、文案与线协议（�
   assert.ok(ambientSnapshot.includes('pinnedSessionIds: readonly string[]'),
     '环境面的 WorkspaceSnapshot 必须仍镜像 vendor 的 pinnedSessionIds（typecheck 不会替它报警）')
   const icons = readVendor('dsh-client-ui-primitives/src/icons/index.tsx')
-  for (const icon of ['IconPinOutlineRegular', 'IconPinFillRegular'])
+  // folder 族两枚是 workspace 组头的折叠状态对（ServerSection / ArchiveManagerDialog
+  // 都 import）：展开=OpenOutline、折叠=Close。ambient 面手写，上游改名只在运行时炸。
+  for (const icon of ['IconPinOutlineRegular', 'IconPinFillRegular', 'IconFolderOpenOutlineRegular', 'IconFolderCloseRegular'])
     assert.ok(icons.includes('export const ' + icon + ' ='),
       'vendor 图标必须仍导出 ' + icon + '（ambient 面是手写的，改名只在运行时炸）')
 })

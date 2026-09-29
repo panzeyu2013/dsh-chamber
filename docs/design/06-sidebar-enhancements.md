@@ -186,7 +186,8 @@
 
 - **来源级收拢（server 折叠）**：来源头左侧新增折叠开关（与 workspace 头同款
   槽位：常态 **MONITOR 电脑字形**（folder = workspace、monitor =
-  server），行 hover/focus 换入折叠 chevron，16px 槽位无位移），点击收拢该来源
+  server；workspace 组头同槽的 folder 字形自带折叠状态——展开=开启 / 折叠=闭合，
+  design 08 §3.2），行 hover/focus 换入折叠 chevron，16px 槽位无位移），点击收拢该来源
   **整个 workspace 列表**（搜索胶囊、来源级 git 告警与 workspace 列表一并隐藏；
   搜索状态本身不动，展开后原查询恢复）。**刻意独立于每 workspace 的 `folded`**
   ——收拢服务器**不折叠 workspace 内的对话**，展开后各 workspace

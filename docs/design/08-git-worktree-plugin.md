@@ -256,7 +256,13 @@ Git 事实不加进 App 的 session aggregate，v1 徽标只在 Git 区内；普
   后 1/2/3 位数字右缘共享同一 x。
 - **折叠区图标交换**：worktree（派生）workspace 的折叠按钮常态显示 **git-branch 图标**、
   hover 才换回折叠箭头（展开=向下/折叠=向右，旋转移至 chevron 元素以免旋转分支图标）；
-  普通 workspace 常态 **folder 图标**、hover 换折叠箭头。侧栏经共享存储
+  普通 workspace 常态 **folder 图标**、hover 换折叠箭头，而 folder 字形自带组状态——
+  **展开=开启 / 折叠=闭合**（上游 `ui-workspace` ProjectRowItem 的**状态机制 parity**）。
+  归档管理对话框的组头同款，含 worktree 归属组（组头一律 folder，不走 nav 的 branch 字形）。
+  展开态沿用 primitives 的 `IconFolderOpenOutlineRegular`（1px 描边字形），不取上游的填充版
+  `IconFolderOpenRegular`——上游该对本身是 fill(open)↔stroke(close) 混族，本仓保持同族描边。
+  **未分组桶例外**：只画 chevron、无 folder 也无 accent——上游对 ungrouped 同样渲染 folder 槽，
+  本仓刻意省略。侧栏经共享存储
   （`packages/dsh-chamber-client-core/src/workspace-git-flags.ts`，插件发布、侧栏读布尔值——零 git 类型依赖）感知派生
   workspace。
 - **图标与字体层级**：两类图标 14px（project 行对等）；workspace 标题 **14px/600 主色**，

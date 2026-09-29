@@ -50,7 +50,10 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   标题与尾随单元格之间渲染。该事实稀疏，其余行的几何一字不动。状态点优先级与当前会话高亮
   （全局单选）见下方"第三轮（设计 06）"。
 - workspace 组可**折叠**（组头 chevron + 会话数徽标）；折叠状态持久化于
-  localStorage 视图偏好（`dsh-chamber.sidebar.v1`）。
+  localStorage 视图偏好（`dsh-chamber.sidebar.v1`）。组头 folder 字形同样
+  自带状态——展开=开启文件夹 / 折叠=闭合文件夹（上游 `ui-workspace`
+  ProjectRowItem 状态机制 parity；展开态沿用 primitives 的 1px 描边
+  `IconFolderOpenOutlineRegular`；design 08 §3.2）。
 - 来源组同样可**折叠**（2026-09，设计 06 §2.4）：每个来源分组头左侧槽位为
   **MONITOR 电脑字形**（自绘 `client/icons.tsx` `IconMonitorOutline16`——
   primitives 无服务器字形，原 folder 字形与 workspace 文件夹图标重合易

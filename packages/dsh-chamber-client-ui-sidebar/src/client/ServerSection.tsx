@@ -15,7 +15,7 @@ import clsx from 'clsx'
 import { SESSION_SEARCH_RESULT_LIMIT } from '@deepseek-ai/dsh-api-session-controller/client'
 import {
   IconBranchOutlineRegular, IconChevronRightOutlineRegular, IconEditOutlineRegular, IconEllipsisOutlineRegular,
-  IconFolderOpenOutlineRegular, IconNewChatOutlineRegular, IconTrashOutlineRegular, Menu, Tooltip,
+  IconFolderCloseRegular, IconFolderOpenOutlineRegular, IconNewChatOutlineRegular, IconTrashOutlineRegular, Menu, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { RowHoverCard } from './RowHoverCard.tsx'
 import { chamberBridge, type ChamberServerAggregate, type ChamberServerWorkspace } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
@@ -712,8 +712,9 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                   folded && cc.foldToggleFolded,
                                   // A worktree (derived) workspace shows the git-branch glyph
                                   // at rest and the collapse chevron on hover; a normal
-                                  // workspace shows a FOLDER glyph; the ungrouped bucket
-                                  // keeps the plain chevron.
+                                  // workspace shows a FOLDER glyph whose artwork carries the
+                                  // fold state (open / closed, upstream ui-workspace parity);
+                                  // the ungrouped bucket keeps the plain chevron.
                                   isWorktree
                                     ? cc.foldToggleGit
                                     : (workspace.ungrouped !== true && cc.foldToggleFolder),
@@ -729,8 +730,17 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                 {isWorktree && (
                                   <IconBranchOutlineRegular size={14} className={cc.foldBranch} />
                                 )}
+                                {/* Upstream ui-workspace ProjectRowItem STATE-MECHANISM parity:
+                                    the resting folder glyph itself carries the group's state —
+                                    OPEN while the group is expanded, CLOSED while folded. The
+                                    open artwork stays the primitives' 1px-stroke
+                                    IconFolderOpenOutlineRegular (upstream's pair is fill open /
+                                    stroke close); the hover chevron swap above stays exactly as
+                                    it was. */}
                                 {!isWorktree && workspace.ungrouped !== true && (
-                                  <IconFolderOpenOutlineRegular size={14} className={cc.foldFolder} />
+                                  folded
+                                    ? <IconFolderCloseRegular size={14} className={cc.foldFolder} />
+                                    : <IconFolderOpenOutlineRegular size={14} className={cc.foldFolder} />
                                 )}
                               </button>
                               {renamingThisWorkspace ? (

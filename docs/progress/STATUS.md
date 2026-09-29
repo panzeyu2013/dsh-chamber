@@ -291,6 +291,7 @@
 - live 热同步的跨来源 chunk-owner 撤销边界：页面级 `graphRows` 按 id 共享，只有 factory owner 的 remove 才撤销描述符（非 owner 保留）；**owner 自身移除而另一来源仍挂载同 id** 时描述符仍会被删（`live-graph.ts` 的 `ownsChunkDescriptor`；design 09 §3.7 ⑥）。
 - `/plugins/events` 属主是上游 HMR 宿主行（cordis.patch.yml 原文 always mounted，仅 rebuild watcher 为 dev 工具；design 09 §5）：端点被移除/改名即 live 热同步静默退回 boot 现状；失效判据 = pin 升级按 §7 复验该路由与帧形状（registry `mirror.dsh-client-hmr-events-endpoint`）。
 - git 客户端与宿主错误码重叠是有意例外（design 08；`host-client-lockstep.test.ts` 钉死）。
+- **workspace 折叠态 folder 字形**（design 08 §3.2，2026-09）：状态机制对齐上游 `ui-workspace` ProjectRowItem（展开=开启 / 折叠=闭合），展开态按裁定保留 primitives 的 1px 描边 `IconFolderOpenOutlineRegular`（不取上游填充版 `IconFolderOpenRegular`）；**按裁定不补折叠行为的源码锁**——新增的 vendor 导出锁只保证图标导出存在，Open/Close 映射写反不会被测试捕获（残余风险登记，判据 = `vendor-session-fact-contract.test.ts` 只锁导出）。
 - 移出项（P3 硬纪律）：匿名 control-plane 的认证/审计、薄壳会话面、统一索引、broker、通知中心、MCP 等不得回流；design 17/18/19/08/20/24 例外不作他域先例。
 - `--no-auth` 是醒目的可信网络有界例外（默认必须认证）。
 - Gateway state 根目录自动收紧 0700 + 属主校验（异主 fail-closed；design 17 §12）。
