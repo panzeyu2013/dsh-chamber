@@ -79,6 +79,10 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   + 行内悬停的归档钮与置顶钮（design 06 §7）；
   真实 workspace = 行内 new-chat 字形新建会话钮（worktree 行也有）+ kebab 里的重命名/
   删除（仅非 worktree 行——派生 worktree 刻意无 kebab，OpenChamber parity）。
+  派生 worktree 的 workspace 一旦成为孤儿（注册路径已消失），在常驻的「已消失」徽标旁多一个
+  常驻垃圾篓钮——worktree 行没有 kebab，工作树记录被 prune 后 Git occupant 也不再渲染，
+  它是该行唯一的显式删除入口；两个入口打开**同一个**只注销注册的删除确认
+  （design 06 §7/§11、design 08 §3.4）。
   会话行的悬停簇 = kebab + **独立归档钮与独立置顶钮**（上游 `ArchiveSessionRowButton` /
   `PinSessionRowButton`，design 06 §7）；
   归档行从不进入本投影，因此上游该钮的 unarchive 半个分支在本仓没有消费方。两处归档入口都走官方**两段式**：安静会话立即归档、
@@ -99,13 +103,13 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   的失败：那条 `role="alert"` 此时是仅存的解释，故随对话框保留到用户自行关闭
   （2026-09-11 review-fix）。任何时刻最多只有**一层**
   chamber Modal，而这条保证是加在**开启点**上的**对称闸门**、不是关于遮罩的说法：官方
-  Modal 没有焦点陷阱，nav 在每一层遮罩之后仍可 Tab 到（含始终渲染的孤儿徽标与来源头
-  控件）——因此四个开启点（武装本确认、武装归档活动确认、打开归档管理器、打开添加工作区浏览器）在其余任
+  Modal 没有焦点陷阱，nav 在每一层遮罩之后仍可 Tab 到（含始终渲染的孤儿徽标与它旁边的
+  常驻清理钮、来源头控件）——因此四个开启点（武装本确认、武装归档活动确认、打开归档管理器、打开添加工作区浏览器）在其余任
   一层已打开时都被拒绝，与用户先够到哪一个无关。两层 Modal 会各自注册 document 级
   Escape 监听、一次 Escape 关掉两层——这正是归档管理器自己拒绝第二层的理由。什么也没
   失去：每一层都可关闭（取消 / X / 遮罩 / Escape），被拒的控件在另一层消失的那一刻立即可用。
 - 行操作的可访问名带上它作用的**那一行**
-  （`action.newSession.aria` / `action.menu.workspace` / `action.menu.session` / `action.archive.aria`，
+  （`action.newSession.aria` / `action.menu.workspace` / `action.menu.session` / `action.archive.aria` / `action.orphanedCleanup.aria`，
   上游的 `{name}` 参数化形式）：一排只报「更多操作」的控件对 AT 等于没说。
   无标题会话在行内与可访问名里解析到同一个 `list.unnamed` 占位。
 - 行窗口是**双向披露**：还有隐藏行时条带给 `sessions.expand {n}`（上游文案），

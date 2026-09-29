@@ -74,6 +74,7 @@
 |N-ctx 文件动作 URL 前缀（交付卡文件夹菜单 / 聊天图片）|design 09 §3.6；design 20 §2.2|
 |（已知缺口，**勿记为通过**）右侧栏 Markdown 预览内图片仍取控制面 origin|design 09 §3.6「已知缺口（未收口，设计裁决待定）」；STATUS「N-ctx 下未收口的 document-relative 站点」|
 |Git worktree全链（真实远程Linux仓库）|design 08|
+|孤儿 workspace 注册清理（真实仓库两态：①外部删除目录；②目录+Git 记录都已 prune）。判据＝该行仍有显式删除入口且可点：②在同一会话内先以 worktree 形态出现过时为常驻清理钮，冷启/重连后为普通 kebab 项（等价，均只注销注册、会话转未分组、行消失）；Git 来源整轮失败期间入口可缺席（design 08 §6.4），须待恢复后复测|design 06 §7、§11；design 08 §3.4、§6.4|
 |归档管理器与force清理链（保护三态：无会话打开仍可删 + 顶部降级说明行 / 正在查看的会话所在树被 `skippedProtected` 跳过 / 归档即终止）|design 24 §5、§13|
 |gateway形态（生产TLS、`/chamber/*`、移动端）|design 17、21 §9|
 |移动端Web面（真机触控档、安全区、键盘）|design 17 §18.6|

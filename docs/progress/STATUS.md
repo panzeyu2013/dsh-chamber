@@ -93,7 +93,7 @@
 - 会话待办区（design 06 §8）：10 项实机门禁。
 - open-in 超集口径（裁决）：S3 = 复制路径；复制 ssh/深链与 S4 不做。
 - VS Code 深链 + open-in：macOS 实机 8 项。
-- Git Worktree（design 08）：远程 Linux 端到端 3 项 + 实机 3 项。
+- Git Worktree（design 08）：远程 Linux 端到端 3 项 + 实机 3 项（含孤儿 workspace 注册清理两态：外部删除目录 / 目录+记录都已 prune，判据见 gui-acceptance checklist）。
 - 会话创建/fork/归档侧栏收敛：四项实机验收 + 整源降级面。
 - 打开意图/工作区回声：四项实机验收 + 阶段 0 插桩判定 `early-open.ts` 去留。
 - 新 worktree 首帧落点（位置意图）与行动效：实机验收四项——①从所属 workspace 之后入场、不在列表最顶端（含主 checkout

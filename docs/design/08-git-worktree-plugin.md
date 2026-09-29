@@ -300,6 +300,10 @@ Git 事实不加进 App 的 session aggregate，v1 徽标只在 Git 区内；普
   operationId 幂等/重放复用。
 - **孤儿 workspace**：诊断与客户端投影见 §2.1（`orphaned: true`，行显示"已消失"徽标）；删除弹
   专门确认（"工作树已不存在，仅删除其注册，会话保留并转未分组"）后仅 `workspace.delete`。
+  **入口有两个、共用同一个 opener**（design 06 §7、§11）：常驻徽标，以及 sidebar 渲染的行内常驻
+  清理钮（只在 `orphaned && isWorktree` 的行上）——worktree 行没有 kebab（§3.2），且工作树记录已被
+  prune 时 Git occupant 不挂载，该钮是该行唯一的显式删除动词。动作始终 registration-only；Git 记录
+  （若仍在）留给未注册 missing 行的垃圾桶或外部 prune（§5.5 的 registration-first 不变）。
 - **竞态**：adopt 前 fresh 快照复核；未注册外部删除自愈消失；注册后外部删除
   进入孤儿流程。
 - **注册/删除预检的宽容度**：预检对路径不可解析的无关 workspace 宽容跳过（孤儿不再阻塞该
@@ -645,6 +649,12 @@ pre-remove 归档**带 `stopActivity: true`**：勾选即授权宿主停止这�
   修好为止（用户需按 §6.2 恢复纪律重试或手工核对 fresh topology）。
 - **外部 Git TOCTOU**：§5.1/§5.3/§5.5 声明的窄窗口（锁检查、目录重现、递归删除失败后的目录残留）
   只能靠紧邻终态验证缩小，不能消除。
+- **unary 抛错期间孤儿入口缺席**：`gitWorktree` 来源的一轮 unary 调用直接抛错时，客户端拿不到
+  任何新快照（只能沿用上一轮），本轮新出现的 `path-unavailable` 无从合并出客户端 `orphaned`
+  投影；若该 workspace 的旗标历史是 worktree，sidebar 行既无孤儿徽标/清理钮（design 06 §7、§11）
+  也无 kebab（`isWorktree` 门），直到下一轮成功快照或按 §6.3 重启来源。来源健康时不可达。
+  **空快照分支不在此列**：deadline / `git-unavailable` 回报的错误快照由 `effectiveSnapshot`
+  （`git-facts.ts`）在保留上一轮 repos 的同时**合并本轮 `errors`**，孤儿投影照常发布。
 
 ## 7. 工程接线与验证
 

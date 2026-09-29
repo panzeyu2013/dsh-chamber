@@ -103,6 +103,11 @@ The shell declares and renders the three holes the alpha.2 official
   archive buttons (design 06 §7); real workspace = a new-chat-glyph new-session button in the row (worktree rows
   included) plus rename / delete behind the kebab — non-worktree rows only,
   since a derived worktree deliberately keeps no kebab (OpenChamber parity).
+  An ORPHANED workspace that is a derived worktree (its registered path is gone)
+  shows a resident trash button beside the always-rendered `Missing` badge:
+  that row has no kebab and its Git occupant disappears with the pruned worktree
+  record, so this is its only explicit delete entry; both entries open the SAME
+  registration-only confirm below (design 06 §7/§11, design 08 §3.4).
   The session row's hover cluster is the kebab plus TWO dedicated buttons —
   archive and pin (upstream `ArchiveSessionRowButton` / `PinSessionRowButton`,
   design 06 §7); archived rows never
@@ -133,7 +138,8 @@ The shell declares and renders the three holes the alpha.2 official
   Modal layer is ever up, and that guarantee is a SYMMETRIC GATE on the
   openers, not a claim about the mask: the official Modal has no focus trap, so
   the nav stays tabbable behind every mask — the always-rendered orphan badge
-  and the source-header controls included — and all four openers (arming this
+  and its resident cleanup button, plus the source-header controls — and all
+  four openers (arming this
   delete confirm, arming the archive-activity confirm, opening the archive
   manager, opening the add-workspace browser)
   refuse while any of the other layers is up, in whichever order the user
@@ -143,7 +149,7 @@ The shell declares and renders the three holes the alpha.2 official
   Escape), so a refused control works again the moment the other one is gone.
 - Row-action accessible names carry the ROW they act on
   (`action.newSession.aria` / `action.menu.workspace` / `action.menu.session` /
-  `action.archive.aria`, upstream's `{name}`-parameterized form): a per-row control named with a bare
+  `action.archive.aria` / `action.orphanedCleanup.aria`, upstream's `{name}`-parameterized form): a per-row control named with a bare
   "more actions" tells AT nothing. An untitled session resolves to the same
   `list.unnamed` placeholder in the row and in its accessible name.
 - The session-row window is a TWO-WAY disclosure: while rows are hidden the

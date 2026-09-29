@@ -901,8 +901,9 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
 - **同一时刻至多一层 chamber Modal（对称门）**：
   官方 `Modal` **没有焦点陷阱**（vendor
   `ui-primitives/src/Modal.tsx`：一层 body portal 遮罩 + 每个打开实例各自一个
-  document 级 **BUBBLE** Escape 监听），而「孤儿徽标」是常驻、可 Tab 到的按钮
-  （`ServerSection.tsx` 的 `cc.orphanBadge`，在 hover 簇之外），键盘用户可 Tab 到
+  document 级 **BUBBLE** Escape 监听），而「孤儿徽标」与行内孤儿清理钮都是常驻、可 Tab 到的
+  按钮（`ServerSection.tsx` 的 `cc.orphanBadge` / `cc.orphanCleanup`，都在 hover 簇之外，
+  且共用同一个 `onDeleteWorkspace` 打开方），键盘用户可 Tab 到
   任一遮罩之后武装第二层，两层各注册 Escape 监听、一次 Esc 双关（design 24 §6 项 7
   正是归档管理器拒绝第二层的理由）。真不变量落在**打开方**、不在遮罩：
   `SidebarRoot.tsx` 的单一谓词 `otherChamberDialogOpen(self)` 被**全部四个打开方**
@@ -959,6 +960,15 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   命中盒不变。**动作簇间距**：统一走图标节奏 **4px**（`.rowActions` 与 workspace 头自身），不取官方
   `Rows .rowActions` 的 12px（只描述无 git occupant 的两项簇，含 `.headerGit` 的三项簇会被切成
   4px+12px）；`.headerGit`/`.sourceActions` 的 4px 出自命中盒 pass、随该 pass 回到 v0.2.4 的 2px。
+  **孤儿行例外**：`.orphanCleanup` 是**常驻**（不在 `.rowActions` 内、不吃 hover 揭示）的
+  20×20 `.actionIcon` 垃圾篓，静息取 `state-warn-primary` 墨色（与 `.orphanBadge` 同一条告警语言）、
+  hover 交 `.actionIconDanger`；只在 **orphaned 且 isWorktree** 的真实 workspace 行渲染
+  （`!ungrouped && !synthetic`，与头内其它控件同门）——worktree 行没有 kebab（design 08 §3.2），
+  且工作树记录消失后 Git occupant 不再挂载（`SidebarWorkspaceGitLine.tsx` 读到 `gitFactsForWorkspace`
+  为空即整块 `return null`），它是该行唯一的显式删除动词，因此**不得**收进任何 hover 揭示。
+  旗标历史缺失（记录已 prune 之后的冷启动）时 `isWorktree` 回落为 false，本钮不渲染、该行按普通
+  workspace 形态带 kebab，入口不丢；Git 来源整轮失败期间的入口缺席是已登记残余（design 08 §6.4）。
+  细节与被否方案见 §11。
   session 行簇 = **置顶/重命名/分叉/归档四项菜单的 kebab** + **独立归档钮** + **独立置顶钮**（上游 ui-workspace
   `session-actions/ArchiveSession.tsx` 的 `ArchiveSessionRowButton` 形态移植：同一簇里 kebab 之后的第二个成员，
   `IconArchiveOutlineRegular` 14px / 20px `.actionIcon` 命中盒、tooltip 用上游键 `actions.archive`
@@ -1324,3 +1334,34 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
    pin 不移除行，没有非回声不可的可见性理由）。
 5. **把 pin 序直接接进拖拽排序**（一次性全对齐）：需要先定义第三条分区语义与跨分区守卫（§5），与
    `updated` 排序的自动提升的簿记也会打架；拆成第二落，先用残余开放项（parity plan §1.1）承接。
+
+## 11. Rejected alternatives（孤儿 workspace 的删除入口）
+
+背景（2026-09 用户报告）：注册 workspace 的路径消失后，行显示 `orphaned` 的「已消失」徽标。若该
+工作树的 Git 记录也已被外部 prune，快照里没有对应 worktree 行，**Git occupant 整块不渲染**
+（`SidebarWorkspaceGitLine.tsx` 读到 `gitFactsForWorkspace` 为空即 `return null`）——行上没有任何 Git 侧删除
+控件；worktree 行又按 §7 / design 08 §3.2 没有 kebab，于是「已消失」徽标曾是唯一出口。被否方案：
+
+1. **启用 Git occupant 那个被禁用的垃圾桶**（把 `removeBlockReason` 的 missing 从 `unhealthy`
+   拆成独立原因再放行）：只覆盖"记录还在"的状态；记录已被 prune 时该控件根本不存在，且会把
+   同一图标从"Git 删除"扩到"仅注销注册"两个语义域。另注：「记录仍在、仅目录消失」态下静止时
+   只有本钮，hover 揭示后同行的 occupant 会再出一个**灰色禁用**垃圾桶（`status!=='ready'` ⇒
+   `removeBlockReason='unhealthy'`）——两种语义并存是既知成本，不是可用入口。
+2. **给 worktree 行恢复 kebab**（全量或仅孤儿态）：全量会让健康态的「删除工作区」变成绕过
+   running/dirty/locked 守卫的 registration-only 删除，或被迫转发进同一条 saga（第二扇门）；
+   仅孤儿态则把删除藏进"只有坏状态才出现"的菜单，发现性没有变好，却换来随状态变化的行形态。
+3. **只改徽标形态**（按钮外观 / 常驻提示）：零语义风险，但仍是"标签当按钮"，治标。
+4. **把徽标降级为纯状态标记**（只留新清理钮）：不可取的理由不是"唯一出口"——新钮同样常驻、
+   可 Tab，两条入口各自都够用——而是**冗余是刻意的**：徽标把"状态陈述"本身留作入口（也继续是
+   §6 单层 Modal 论证引用的常驻 opener），新钮补上通用删除字形，同一动作、同一 opener、同一层
+   闸门，故都保留。
+5. **一键链**（注销后自动接着清 Git 记录）：registration-first 是宿主不变量（注册仍在时未注册清理
+   被 `workspace-registered` 拒绝），链式动作要跨两步新增 recovery 类别；第二步交给未注册 missing
+   行的垃圾桶或外部 prune 即可（design 08 §5.5）。
+
+**已登记残余**（不进被否方案清单，见 design 08 §6.4）：只有 Git 来源的 unary 调用**直接抛错**这一
+支（客户端拿不到任何新快照）时，本轮新出现的 `path-unavailable` 无从合并出 `orphaned`；若该行
+旗标历史是 worktree，则徽标与本钮都缺席、kebab 也在 `isWorktree` 门上关闭，直到下一轮成功快照或
+按 design 08 §6.3 重启来源。空快照的 deadline/`git-unavailable` 支已由 `effectiveSnapshot`
+（`git-facts.ts`：保留上一轮 repos、合并本轮 `errors`）收口。来源健康时不可达，余下这一支按已接受
+残余登记。
