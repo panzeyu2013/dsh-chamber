@@ -292,6 +292,17 @@
 - N-ctx 单文档信任域：横向隔离推迟到每实例独立 WebContents。
 - N-ctx 原生键盘路由（RC-C4，design 25 §4.4.1）：单槽桥 ⇒ 全部已 boot 实例 accept；按活动源路由要改三层 + Swift 同构，暂不做；实机验收 = 焦点在 B 只动 B、A 独有绑定不被误 preventDefault；收口触发 = 上游给作用域或决定拆投递。
 - N-ctx 壳常驻语义收窄：local 恒留、隐藏壳最多 1、超限回收；完成边沿不依赖壳（design 06 §4.2、design 19 §3.3/§3.7）；仅实机腿未判。
+- 官方 open-in 行加载后的页级 localStorage 键（未判为缺陷）：`ui-open-in-app/src/client/controller.ts` 把
+  `OpenInAppController.choice` 落在页面级 `dsh.open-in-app.choice`，N 个实例共用一个槽；今天无可见后果
+  （header 席位读 document-relative 探针 ⇒ 空列表 ⇒ 渲染 null），header 席位一旦做成可用面即成跨实例事实，
+  届时应与 `dsh.sessions.current` 同法按 `ctx.chamberBasePath` 分键。
+- N-ctx 下未收口的 document-relative 站点（机制、代价与机器锁见 design 09 §3.6「已知缺口」；此处只记裁决面）：
+  实例侧 `ui-sidebar-documentpreview` 的 Markdown 预览图片仍解析到控制面 origin（右侧栏预览含图片的文档时图片坏）。
+  **待裁决**：A（推荐，零成本）保持降级 + 向上游提中性 base 钩子；B 把该包覆盖进 composite 并打同形前缀补丁
+  （两案的上游理由、收益/代价与跨 bundle 席位时序契约见 design 09 §3.6「已记录缺口」）。
+  B 的执行序（若裁决）：先做「实例侧行仍在 + composite 也注册」的最小实验钉死注册时序 → 覆盖 → 补丁 → 全门 + 实机。
+  触发条件：上游明确不接 A，且「预览图片在远程实例也必须可用」。
+- `chamberFileApiBase` 只在其**唯一来源**做执行期断言（`chamber-entry` 要求 `chamberBasePath === /api/i/<id>`，layout fork 仅透传）：消费端 8 处 `undefined`/空串双守卫是归一契约的一部分（design 09 §3.6），不做二次校验/归一——树内不可产生空串是设计意图，测试钉的是分支语义。
 - 远程来源会话状态与切源白屏：实现面闭合，实机/CI 项见上文「只读会话状态镜像」与「facts-only 判定侧读回退的已知窗口」。
 - `document.hasFocus()` ≡ 宿主焦点的假设（`macos/` 无焦点观测）待实机判：它只驱动通知的 `requireHidden` 门（完成点由官方位与 App `painted` 视图解除，focus 已不参与完成判定，design 06 §4.2/§9）。
 - Swift 形态的产物门已补齐、实机门仍开（design 25 §8.5）。

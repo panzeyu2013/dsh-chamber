@@ -71,6 +71,8 @@
 |子代理谱系压制（父会话闲置等子代理时不误报完成点/徽标，子代理结束即释放，断连窗口不误报）|design 19 §3.2/§3.5|
 |多实例页级持久面（两个来源各自的会话选择/折叠等 scope 互不覆盖，重载后各自恢复）|design 09 §3.6（第四类补丁）|
 |open-in拉起外部应用、图标、深链冷热启动|design 16、20 §6/§10|
+|N-ctx 文件动作 URL 前缀（交付卡文件夹菜单 / 聊天图片）|design 09 §3.6；design 20 §2.2|
+|（已知缺口，**勿记为通过**）右侧栏 Markdown 预览内图片仍取控制面 origin|design 09 §3.6「已知缺口（未收口，设计裁决待定）」；STATUS「N-ctx 下未收口的 document-relative 站点」|
 |Git worktree全链（真实远程Linux仓库）|design 08|
 |归档管理器与force清理链（保护三态：无会话打开仍可删 + 顶部降级说明行 / 正在查看的会话所在树被 `skippedProtected` 跳过 / 归档即终止）|design 24 §5、§13|
 |gateway形态（生产TLS、`/chamber/*`、移动端）|design 17、21 §9|

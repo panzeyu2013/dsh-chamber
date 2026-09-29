@@ -361,28 +361,61 @@ N-ctx 同源壳要求每个实例的 API 走自己的反代前缀 `/api/i/<id>/*
 **document-relative**（`new URL('api/file?…', document.baseURI)`、`*_ROUTE = *_PATH.slice(1)`），而单一
 N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀无处承载 ⇒ 404（用户可见的坏图）。
 裁决（以上游为准 + 最小侵入）：**不为一行 URL 去 fork 整个 `ui-chat`（82 文件 / ~11.3k 行）**，改为
-登记式 vendor 补丁集。**本集合不含 open-in**：本地目录改由实例进程内的 chamber host 包提供
+登记式 vendor 补丁集。**目录打开不在本集合内**：本地目录改由实例进程内的 chamber host 包提供
 （`dsh-chamber-seed-open-in`，设计 20 §2.2/§6 fork & supersede），不读官方路由、无需同源 URL 补丁；
 客户端半是我们自己的插件，base path 取自各 entry 的私有 ctx。
+**open-in 包本身也不在补丁集内**：官方 open-in **客户端**行仍随实例 bundle 加载，其消费的
+`deliverables[.review].file.actions` owner 路由（`api/present.open` / `api.changes.open`）由 ui-deliverables
+按 `/api/i/<id>/` 前缀下发（下表 ⑨⑩）——消费者只 `fetch(actionUrl)` ⇒ 无需覆盖或补丁 open-in 包；
+其 header 席位保持 inert。
 
 - 注册表 `packages/renderer/scripts/vendor-patches.mjs`：每条补丁 = 文件 + 理由 + 一到多处
   `expect`→`replace`，`expect` 必须**恰好命中一次**（0 次或多次 = 构建期抛错，绝不静默发出未打补丁的
   bundle）。应用点 = renderer 的 `deepseekSource().transform`（我们的 vite 配置），vendor 文件**零写入**；
   模块 id 并接受软链形式与 `realpathSync` 后的子模块形式（vite 实际给后者）。
-- 落点（当前：12 个文件 / 26 处锚点，逐锚点由触点表 C9 与 `packages/renderer/scripts/vendor-patches.test.mjs`
-  校验）：① `ui-chat` 的 `chat/AssistantMarkdown.tsx` 读取新增 root 标准 **prop**
-  `chamberFileApiBase`（chamber layout fork 经 `ctx.slots.provideRoot({ props })` 提供，值 = 本 entry 的
+- 落点（当前：16 个文件 / 38 处锚点，逐锚点由触点表 C9 与 `packages/renderer/scripts/vendor-patches.test.mjs`
+  校验；下列圈号 ①–⑪ 是 URL 类，每个圈号对应**一个**文件，其余 5 个文件属下三类：实测帧成本 2（`ReasoningRow.module.css`、`assembly.ts`）/ 逻辑缺陷 2（`use-chat-reading.ts`、`util-values`）/ 多实例正确性 1（`ui-workspace/navigation.ts`））：① `ui-chat` 的
+  `chat/AssistantMarkdown.tsx` 读取新增 root 标准
+  **prop** `chamberFileApiBase`（chamber layout fork 经 `ctx.slots.provideRoot({ props })` 提供，值 = 本 entry 的
   `ctx.chamberBasePath`），`pathImages` 以 `new URL(chamberFileApiBase + '/', document.baseURI)` 作为上游
-  `fileMediaUrl` 的解析基准；`chat/AssistantNodeView.tsx` 只把该 prop 转发进组件（vendor scoped-slots 把
-  root 标准源合并进**每个**作用域，故 session 作用域的 chat 节点也能拿到）；② `client-file-upload` 的
+  `fileMediaUrl` 的解析基准；② `chat/AssistantNodeView.tsx` 只把该 prop 转发进组件；③ `client-file-upload` 的
   `client/runtime.ts`（`api/session/uploadFileBinary`）改从服务自身 `ctx` 读 `chamberBasePath`、归一为
   `/api/i/<id>/` 前缀前置到上游 document-relative 路由——**该包已转为 composite covered**（extra-row
-  bundle 由实例提供、永不经过我们的构建）；③④ `ui-deliverables` 的 `client/present-open.ts` +
-  `client/index.ts`（`api/present.host|open`），控制器由 `apply(ctx)` 构造时接收归一前缀；⑤⑥
-  `session-log-export` 的 `client/controller.ts` + `client/index.ts`（`api/session.export`，控制器字段；
-  该包转 **covered-deferred**，否则 extra-row bundle 不经过构建）。全部保留「base path 缺失 → 回落上游
-  document-relative 行为」的形状，读取一律用 `ctx.get('chamberBasePath')`（cordis 代理对未 provide 的
-  服务**抛错**，属性读取会炸）。
+  bundle 由实例提供、永不经过我们的构建）；④⑤ `ui-deliverables` 的 `client/present-open.ts` + `client/index.ts`
+  （`api/present.host|open` 与 `api/changes.summary|diff` 的前缀下发），控制器与两个读 store 均由 `apply(ctx)`
+  构造时接收归一前缀；⑥ `client/host-read-store.ts`（两个读 store 的 wire URL；state key 保持未前缀）；
+  ⑦⑧ `session-log-export` 的 `client/controller.ts` + `client/index.ts`（`api/session.export`，控制器字段；
+  该包转 **covered-deferred**，否则 extra-row bundle 不经过构建）；⑨⑩ `ui-deliverables` 的
+  `client/Deliverables.tsx` + `client/ReviewTab.tsx`：owner 动作路由（`api/present.open` / `api.changes.open`）
+  按 `/api/i/<id>/` 前缀下发给 `deliverables[.review].file.actions` 的消费者（官方 open-in 客户端只
+  `fetch(actionUrl)`）。全部保留「base path 缺失（`undefined` 或空串）→ 回落上游 document-relative 行为」的
+  形状：组件源（①②⑨⑩⑪）读 root 标准 prop `chamberFileApiBase`——vendor scoped-slots 的 `standardProps` 把 root
+  标准源合并进**每个**作用域，故 session 作用域的 chat 节点与延迟挂载的交付卡/review 都能拿到（该合并前提由
+  `packages/renderer/test/lifecycle/vendor-file-route-base-contract.test.ts` 钉住）；其余站点读本 entry ctx 的
+  `ctx.get('chamberBasePath')`（`ctx.get` 对未 provide 返回 `undefined`；对**服务代理读属性**才抛错）。⑪ 第三处图片解析器
+  （同为组件源，读同一 root 标准 prop）：`ui-chat` 的 `chat/ChatView.tsx` 的 `fileImages`（解码后的文件引用/
+  提及图片）——它以 `document.baseURI` 为基准，N-ctx 壳下落到控制面 origin；解析基准换成本 entry 的
+  `/api/i/<id>/`，解析器收到的路径保持未前缀（前缀只属于 base）。该补丁是聊天面图片的**承重修复**：
+  `ui-primitives` 的 markdown render 先问 delegate provider（`fileImages?.resolve(file.path)`），只修
+  `pathImages` 时用户可见行为不变（该 precedence 由 `vendor-file-route-base-contract.test.ts` 钉住）。
+  vendor 侧
+  `ui-deliverables/src/client/file-actions.ts` 的 owner 注释仍写 document-relative action route（vendor 只读，
+  语义以本节为准）。
+  边界：不支持把控制面挂在反向代理**子路径**下（`chamberBasePath` 与 `document.baseURI` 都假定 origin 根；
+  子路径挂载会让前缀与基 URI 不一致）；前缀契约假定 open-in 消费者按 **opaque URL** 处理 `actionUrl`（只
+  `fetch`、不重解析）——只对 pin 住的版本成立，实例自带 open-in bundle 版本偏斜时其消费者可能自行解析，pin
+  升级检查表复核该不变量（消费者锁见 `vendor-file-route-base-contract.test.ts`）。空串回落不是输入校验：
+  `chamber-entry` 已在其唯一来源执行期断言 `=== /api/i/<id>`，消费端的双守卫只表达归一语义。
+- **已知缺口（未收口，设计裁决待定）**：右侧栏 Markdown 文档预览的图片解析器（`ui-sidebar-documentpreview` 的
+  `markdown/MarkdownBody.tsx`，同样是 `document.baseURI` 基准）**不在 composite 构建图内**——该包是官方 web-app
+  行（`packages/bundle/web-app/cordis.patch.yml`），由实例 bundle 经 host-graph 的 extra rows 运行时加载，我们的构建
+  永远看不到它的模块，故**生产端前缀补丁结构上不可用**（登记即被 vite `buildEnd` 的 applied 覆盖门拒绝：
+  `vendor patch(es) never applied`）。收口 = 覆盖裁决（§3.5：整包进 composite）。代价 = 构建面扩大 + 该包的
+  `sidebar.right.tab.document` 席位由实例侧 `ui-sidebar-right` 声明所带来的跨 bundle 注册时序契约；其 pdfjs/xlsx/
+  exceljs/fortune-sheet 等重依赖在 vendor workspace 下已可解析（先例：composite 的 `lexical`/`simple-icons`），且
+  deferred 动态块不计入 `mainGraphRaw`，故重量级依赖与 chunk 预算不是主要成本。**收口的选项/推荐/触发条件记于
+  `docs/progress/STATUS.md`**（本节只留机制）。锁 = `packages/renderer/test/lifecycle/vendor-file-route-base-contract.test.ts`
+  （resolver 形状 + 该包未进 covered 集；上游加 base 参数或该包被覆盖即红）。
 - 另一类补丁：**实测帧成本（正确性优先）**——`ui-chat` 的 `ReasoningRow.module.css` 行 sweep（`left`
   动画改为合成器 `transform`）、`ui-conversation` 的三层 rAF 发布链；每条 `reason` 必须带同一 Electron/
   显示器上的 A/B 实测（`app.getAppMetrics` 累积差）。`GenericCommandCard` 行 sweep 已随 0.1.7 上游删除，
@@ -413,6 +446,15 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   （按新 pin 重导）。无可断言形态的条目以 `noRetireForm` 写明理由。退役后的 `ensure` 断言是回归栅栏：
   上游修复一旦回退，C9 同拍变红。`packages/renderer/scripts/vendor-patches.test.mjs` 在 CI 侧验证锚点
   唯一、三分支判定、退役栅栏、改写后函数行为（含上游回落分支）与 id 形态匹配。
+
+**Rejected alternatives（owner 路由的 per-entry 前缀）**：① 把 `dsh-client-ui-open-in-app` 转
+covered-deferred 并在其消费者 `FileRouteAction` 里前缀——被否：只修好应用菜单一条链路，交付卡另一半
+（`api/changes.summary|diff`）仍要在 ui-deliverables 打补丁，改动面反而更大；且把一个官方行从「实例自带
+bundle」搬进复合构建，多一处加载路径偏离与版本歪斜面。② 控制面代理这些 document-relative 路由——被否：
+N-ctx 页面没有「当前实例」语义，违反零执行面与逐实例前缀纪律（design 01 §4）。③ 每实例独立 document
+（iframe/origin）——被否：等于推翻本设计的单页 N-ctx 前提，代价远超本缺陷。④ chamber 自建 occupant 改写
+`deliverables.file.actions` 的产出——被否：该 URL 由 owner 组件内联产出，自注册 occupant 仍要重写同一路由的产出
+（等于重写 owner 路由），而 fork 整个 ui-deliverables 的面更大（登记、版本歪斜与后续 pin 维护）。
 
 **Rejected alternatives（I-7 retire 机制）**：① 维持「锚点缺失 = 一律硬失败」——被否：无法区分施工错误与
 上游已修，每次 pin 升级都要人工重读全部补丁；② 锚点缺失即自动删除补丁/自动退役——被否：退役必须显式裁决
