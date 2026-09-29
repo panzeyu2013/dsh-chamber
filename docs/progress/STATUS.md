@@ -96,7 +96,7 @@
 - Git Worktree（design 08）：远程 Linux 端到端 3 项 + 实机 3 项。
 - 会话创建/fork/归档侧栏收敛：四项实机验收 + 整源降级面。
 - 打开意图/工作区回声：四项实机验收 + 阶段 0 插桩判定 `early-open.ts` 去留。
-- 新 worktree 首帧落点（位置意图）与行动效：实机验收三项——①从所属 workspace 之后入场、不在列表最顶端（含主 checkout
+- 新 worktree 首帧落点（位置意图）与行动效：实机验收四项——①从所属 workspace 之后入场、不在列表最顶端（含主 checkout
   折叠、恰好 200 行的组、拖拽覆盖序残留窗口）；②点 + 新建会话时新行淡入、下方行滑移，不整列瞬移（未钳制组与折叠组都不改键）；
   ③活动会话被拒绝时行菜单项与行内悬停钮都进同一确认层，跨行换靶被拒、连点不重复；④列表最底行的归档钮
   tooltip 不被 `.chamberList` 裁剪容器切掉（Tooltip 未传 portal，需一次渲染实测后接受或补上）。
@@ -208,8 +208,8 @@
   单实例或只开一个实例的 schedule bundle 时无冲突；**同一页面两个实例都加载 schedule bundle**（opt-in、默认不被 shipped 模板选中）
   会在第二条注册处抛错——须先解「每实例 bundle 的页面级 slot id 命名空间」，再放开多实例同时启用。
 - **平台腿未落地**：Windows 的 `[data-windows-titlebar]` 分支（属性已由 win32 preload 的 `markWindowsTitlebar` 写入，
-  侧栏整块未抄，收口随 design 23）与 Electron macOS 腿（标准标题栏未迁 `hiddenInset`，见「未完成」条）⇒ 这两条腿的侧栏
-  形态与上游不同，属排期而非功能选择。
+  侧栏整块未抄，收口随 design 23）⇒ Windows 腿的侧栏
+  形态与上游不同，属排期而非功能选择（Electron macOS 腿已按上游 darwin 分支收口，见第 52 行）。
 
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
@@ -270,6 +270,8 @@
 ## 范围决策与必要取舍（不做 / 推迟 / 移出 / 偏差）
 
 > 双 flavor 专项登记（S/T/P/G/D + 可达性纪律）见 [deviations.md](deviations.md)。
+
+- **两个 God 文件预算本代上调**（`scripts/gates/file-budgets.json`：`App.tsx` 2352→2358、`aggregate-store.ts` 984→1069）：worktree 放置事实/通道与行入场动画的真实增量，该表「只降不升」的本代唯一例外；两条 note 记录评审理由（2026-09 合并评审），收口方向 = 放置事实迁到 `workspace-placement.ts` 旁。
 
 - 代码质量辅助门只本地跑（2026-09-25 裁决）：8 门退出 ci/release，仍是 `check:static` 成员；代价 = CI 不再捕获这几类漂移（登记在 `static-gate-parity.mjs`）。
 - seed 自检缺包「只报不阻断」；要阻断改该 check 的 `gap` 判定。

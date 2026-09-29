@@ -24,8 +24,9 @@
 
 /* macOS desktop: the AppFrame column owns the translucent sidebar tint; an
    opaque fill here would sit on top of it and block the window vibrancy.
-   （本仓按 data-window-vibrancy 门控：只有 Swift 壳的窗口真有 material vibrancy，
-   Electron darwin 腿窗口不透明，跟着透明会把侧栏压到窗口底色上。） */
+   （本仓按 data-window-vibrancy 门控：标记由带材质的 flavor 的 documentStart 落
+   （Swift shim / Electron preload 的 darwin 分支，两 flavor 的窗口都带材质）；无材质的
+   darwin 形态不落标记，跟着透明会把侧栏压到窗口底色上。） */
 :global([data-platform='darwin'][data-window-vibrancy]) .root {
   background: transparent;
 }
