@@ -5,7 +5,7 @@
       "path": "packages/renderer/src/App.tsx",
       "lines": 2358,
       "target": 400,
-      "note": "renderer container (function-of-state mixes; stores/budgets/servers/ledger extracted)"
+      "note": "renderer container (function-of-state mixes; stores/budgets/servers/ledger extracted); +6 = the session-row entrance animation/placement wiring (feature, review-justified raise)"
     },
     {
       "path": "packages/desktop/plugin-sync.ts",
@@ -89,7 +89,7 @@
       "path": "packages/dsh-chamber-client-core/src/aggregate-store.ts",
       "lines": 1069,
       "target": 600,
-      "note": "aggregate store types/channels/registry"
+      "note": "aggregate store types/channels/registry; +85 = the worktree placement facts/channels (feature, review-justified raise; registered in STATUS)"
     }
   ]
 }
