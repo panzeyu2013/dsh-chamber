@@ -82,7 +82,7 @@ test('serving gate: ready serves, idle is unavailable, a terminal phase fast-fai
 
 test('serving gate: 投影缺席 → undefined（预算内等）；投影在场 → 合并派生相位（终态可达）', () => {
   // 直接用原始相位会让网关形态的 stopped/restart-exhausted
-  // 在 App 路径上不可达（原始 SshPhase 没有这两个值），两侧门判得不一样。
+  // 在 App 路径上不可达（global.d.ts 的相位拼写没有这两个值），两侧门判得不一样。
   assert.equal(servingGatePhase('idle', false), undefined, '投影未到 = 事实未到，不是手动断开')
   assert.equal(servingGatePhase('idle', true), 'idle', '投影到场的手动断开仍立即不可服务')
   assert.equal(servingGatePhase('stopped', true), 'stopped', '托管停机必须能进终态词表')
