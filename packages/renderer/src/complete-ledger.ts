@@ -35,6 +35,7 @@
  * 锚点（无 host 身份的运行完成后，下一份可信 host 完成据此认领身份）。身份面与水位的
  * notified/pending/outcomes 只并列存储、互不混写：水位裁定仍全部走 state()。
  */
+import { isPlainRecord } from './plain-record.ts'
 import { isWatermark, maxWatermarkValue } from './watermark.ts'
 import type { UnreadKind } from './watermark.ts'
 import type { SessionRunId } from '@dsh-chamber/dsh-stream-state'
@@ -249,12 +250,6 @@ export interface CompleteLedger {
 
 const EMPTY_ARMED: ReadonlySet<string> = new Set()
 const EMPTY_SETTLED: ReadonlyMap<string, number | undefined> = new Map()
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-  const prototype: unknown = Object.getPrototypeOf(value)
-  return prototype === Object.prototype || prototype === null
-}
 
 /**
  * 条目的成立条件只有 at（有限数）；watermark/goalId 是判定字段，坏值整条不成立。
