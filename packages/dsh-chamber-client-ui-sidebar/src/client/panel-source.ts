@@ -1,5 +1,5 @@
 /**
- * Global main-panel projection for the sidebar (`sidebar.panellist`). The slot
+ * Per-ctx main-panel projection for the sidebar (`sidebar.panellist`). The slot
  * ledger is the authority: each list registration addresses the matching key
  * of the layout's keyed `main` slot. This module mirrors registrations into a
  * serializable snapshot the shell renders — id, order, and the label resolved
@@ -43,12 +43,13 @@ function labelOf(label: string | (() => string) | undefined): string | undefined
 }
 
 /**
- * Build the sidebar's global-panel projection. Entries without an id are
- * skipped (a list entry must name the main key it addresses); the label falls
- * back to the id so a row is never nameless. Notify-only-on-change is OURS:
- * `set` runs only after the shallow row comparison, and always with a plain
- * array — never `update`, whose immer draft + dev freeze would change what
- * React observes.
+ * Build this ctx's panel projection (the wide per-source rows and the rail axis
+ * share it). Entries without an id are skipped: a list entry must name the main
+ * key it addresses (upstream would project an empty-id row here — no known
+ * registrant uses one). The label falls back to the id so a row is never
+ * nameless. Notify-only-on-change is OURS: `set` runs only after the shallow row
+ * comparison, and always with a plain array — never `update`, whose immer draft
+ * + dev freeze would change what React observes.
  */
 export function createPanelSource(): PanelSource {
   const panels = createSnapshotStore<readonly SidebarPanelMetadata[]>([])

@@ -119,7 +119,8 @@ export function apply(ctx: ClientContext): void {
     startSession(workspaceId?: Parameters<SidebarRootInjected['startSession']>[0]): void
     openSession(target: string): void
   }
-  // 全局面板轴：把 `sidebar.panellist` 注册镜像成可序列化快照供壳渲染，
+  // 来源级面板轴：把本实例 ctx 的 `sidebar.panellist` 注册镜像成可序列化快照，
+  // 宽态由 owning source 的 ServerSectionPanels 渲染、rail 态由壳的全局面板轴渲染；
   // 行点击转发到 `ctx.layout.selectPanel`（两种受支持布局都声明了它）。
   const panels = createPanelSource()
   const syncPanels = (): void => { panels.sync(ctx.slots as unknown as SlotsReader) }

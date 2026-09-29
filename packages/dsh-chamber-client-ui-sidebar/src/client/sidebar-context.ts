@@ -11,7 +11,9 @@ import { sourceAccentColor, type SessionOrderBy } from '@dsh-chamber/dsh-chamber
 import type { WorkspaceDropEnv } from '@dsh-chamber/dsh-chamber-client-core/workspace-drag-order'
 import { getWorkspaceGitFlag, hiddenByMainWorkspaceFold } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
 import type { ChamberSidebarViewPrefs } from '@dsh-chamber/dsh-chamber-client-core/view-prefs'
-import type { ShortcutsHook, SidebarRootComponentProps } from './contract/slots.ts'
+import type {
+  PanelSelectorHook, ShortcutsHook, SidebarPanelMetadata, SidebarRootComponentProps,
+} from './contract/slots.ts'
 
 export interface RenameTarget {
   sourceId: string
@@ -138,6 +140,19 @@ export interface SidebarSectionContextValue {
     owner: { sessionId: string },
     opts?: { fallback?: ReactNode },
   ) => ReactNode
+  /** Source-scoped panel entries of THIS ctx (design 05 §2): an entry belongs to
+   *  the source whose ctx registered it, so the wide column renders its row
+   *  inside that source's section (`ServerSectionPanels`) and the collapsed rail
+   *  keeps the upstream global glyph axis. Only THIS ctx's registrations appear
+   *  here — a foreign source's sidebar reads its own ledger instead. */
+  panels: readonly SidebarPanelMetadata[]
+  /** Select the panel addressed by a row, through the owning ctx's `ctx.layout`. */
+  selectPanel: (id: SidebarPanelMetadata['id']) => void
+  /** Panel-selection selector hook: a row subscribes only to its own active state. */
+  usePanelInfo: PanelSelectorHook
+  /** This sidebar entry's own `renderSlot` binding, used to render the panel
+   *  glyph of each row (both the wide section and the rail axis). */
+  renderSlot: SidebarRootComponentProps['renderSlot']
 
   viewPrefs: ChamberSidebarViewPrefs
   toggleWorkspaceFold: (serverId: string, workspaceId: string) => void
