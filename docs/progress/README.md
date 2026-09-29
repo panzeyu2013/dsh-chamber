@@ -44,14 +44,14 @@ docs/progress/
 |文件|主题|状态|
 |---|---|---|
 |[upstream-proposals.md](todo/upstream/upstream-proposals.md)|十一条上游提案（N-壳 selection scope、设置面声明式贡献通道 T3、归档 wire 草案、静默丢帧自愈、图标资源 id 实例私有、子代理生命周期、载波 open episode 身份、桌面专属家族门、bundle rev 内容派生、座席声明可转移、会话状态只读观察者与未读事实）|上游提案，未排期；chamber 侧不等待|
-|[upstream-drift-plan.md](todo/upstream/upstream-drift-plan.md)|上游漂移收口（batch-2/3）：I-7/I-8/I-10–I-15 的判据/方案/关闭、待退役块（触发 = capabilities.json retireWhen）、工程环境债、验证面缺类|未排期（批次二 P1 可先行）|
-|[upstream-ui-parity-plan.md](todo/upstream/upstream-ui-parity-plan.md)|上游 UI 对齐：行座席（A1 已收口）、schedule 事实、置顶序/时间列/快捷键、面板入口（来源级下挂）等条目的裁决与关闭条件|A1 已收口；面板入口（来源级下挂）已裁（design 05 §2 / 06 §4.7）；其余逐条判定（§1 = 待裁，§2 = 已收敛）|
+|[upstream-drift-plan.md](todo/upstream/upstream-drift-plan.md)|上游漂移剩余项：I-12/I-14/I-15 的判据/方案/关闭、已登记待退役块（触发 = capabilities.json retireWhen）、工程环境债|未排期（需实机或下一 pin）|
+|[upstream-ui-parity-plan.md](todo/upstream/upstream-ui-parity-plan.md)|上游 UI 对齐：schedule 事实、置顶序/时间列/快捷键、面板入口（来源级下挂）等条目的裁决与关闭条件|面板入口（来源级下挂）已裁（design 05 §2 / 06 §4.7）；其余逐条判定（§1 = 待裁，§2 = 维持的差异与裁决）|
 
 ### B · 平台与外部门禁（真机 / runner / 凭据 / 产物）
 
 |文件|主题|状态|
 |---|---|---|
-|[macos-swift-v1.md](todo/platform/macos-swift-v1.md)|macOS Swift 原生壳 companion：双端验收协议（W1–W7 判定/性能 A/B/中止点 A1–A8）+ WBS 索引|代码面已落地；M5 实机门在 STATUS|
+|[macos-swift-v1.md](todo/platform/macos-swift-v1.md)|macOS Swift 原生壳 companion：双端验收协议（W1–W7 判定/性能 A/B/中止点 A1–A8）+ WBS 索引|M5 实机门在 STATUS|
 |[windows-v1.md](todo/platform/windows-v1.md)|Windows v1 剩余外部门禁（M0–M6）+ 基线登记口径 + 取舍指针（权威在 design 23 §5/STATUS）|待真实 Windows runner/实机/产物|
 
 ### C · 未实现功能想法（chamber 自研）

@@ -1,5 +1,7 @@
 # 上游漂移收口计划（batch-3 剩余项）
 
+> 分类：A · 上游依赖（等 deepseek-harness 落地/对齐；chamber 不等待）｜状态权威：STATUS「上游漂移剩余实机记录」条
+
 范围：15 项上游漂移审计（对齐当前 pin）中**仍未落地**的项。已完成项以 git 历史、`docs/design/` 与代码注释为准，
 本文不复述。每条 = 判据（源码现状）+ 方案 + 落点 + 关闭判据。上游提案（需 deepseek-harness 侧动作的）另见
 [upstream-proposals.md](upstream-proposals.md)。

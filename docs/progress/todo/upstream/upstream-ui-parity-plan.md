@@ -97,7 +97,6 @@
 ## 2. 维持的差异与裁决（不再逐条论证）
 
 - **品牌回退**：mark 回退保持 chamber `BrandWordmark`（自有产品标识，rail 态已是上游 `FishLogo`）；name 洞维持空回退
-### 1.4 重命名交互：模态 vs 行内
   （上游 `brandName ?? localBuild` 的版本徽标需要构建版本事实，本仓无该事实）。属「我们自己的功能」，不列为待裁。
 - **Windows 标题栏**：随 design 23 的 Windows 腿落地时照抄上游整块 `[data-windows-titlebar]` CSS 与分支；属性本身已由
   win32 preload 的 `markWindowsTitlebar` 写入（`packages/desktop/upstream-seats.test.ts` 钉住），侧栏形态仍属该腿未落地范围。

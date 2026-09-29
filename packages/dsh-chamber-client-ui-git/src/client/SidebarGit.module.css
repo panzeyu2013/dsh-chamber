@@ -46,7 +46,7 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
-  /* Derived-workspace row geometry (design 08:289 — these rows match the
+  /* Derived-workspace row geometry (design 08 §3.4 — these rows match the
      derived workspace row): 26px row, 8px corners. The 2px rhythm is owned by
      .unregisteredSection's flex gap, not by a row margin — flex margins do not
      collapse, and a 2px margin on top of the 2px gap would double the spacing
@@ -73,7 +73,7 @@
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  /* Same type step as a derived workspace title (design 08 §3.3「图标与字体
+  /* Same type step as a derived workspace title (design 08 §3.2「图标与字体
      层级」: workspace 标题 14px/600 主色、派生 workspace 降级次级色): 14/18,
      600, demoted to secondary ink because the workspace is not registered. */
   color: var(--dsw-alias-label-secondary);

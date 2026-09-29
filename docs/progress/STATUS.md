@@ -6,7 +6,7 @@
 
 ## 未完成 / 部分完成（剩余验收）
 
-- **上游漂移批次三剩余（I-15 实机记录）**：本条只作执行序指针，六组矩阵（完成未读 P6、归档两段式 + 恢复、
+- **上游漂移剩余实机记录（I-15）**：本条只作执行序指针，六组矩阵（完成未读 P6、归档两段式 + 恢复、
   通知行为四缺口、运行位校准 60/190/310s、I-14 selection scope、I-12 谱系压制）的开放事实仍在各自条目；
   执行序已归并（`gui-acceptance-checklist.md` §4.1），**待打包态/真机各跑一次并留证据**（用户裁定：合并到主分支后再执行，
   见「设计未决」的 macOS Swift 原生壳条）。I-12 的判据落点见 design 19 §3.2/§3.5，I-14 见 design 09 §3.6。
@@ -138,9 +138,9 @@
   半开 follow 通道的陈旧集）——机制、候选落法与残余④见 design 06 §5、plan §1.1。
 - **1.2 会话行时间列**：上游行尾静息显示相对时间（`primaryStatus.trailingLabel ?? timeLabel(updatedAt…)`），本仓行尾是
   **状态槽**（品牌蓝完成点 / 14px pending / `data-chamber-*` 机器标记），相对时间只在悬停卡。
-- **1.5 重命名交互**：本仓行内表单（双击进入，拖拽/pending-click 围着它写），上游是 `shell.overlay` 模态
+- **1.4 重命名交互**：本仓行内表单（双击进入，拖拽/pending-click 围着它写），上游是 `shell.overlay` 模态
   `SessionRenameDialog` / workspace Modal。
-- **1.6 search 形态**：本仓胶囊行常驻（展开即挂载），上游在来源头内 inline 展开（`max-width .18s` + `search-skeleton`
+- **1.5 search 形态**：本仓胶囊行常驻（展开即挂载），上游在来源头内 inline 展开（`max-width .18s` + `search-skeleton`
   骨架，本仓同等 `loading` 状态下用 `search.pending` 文本）。
 
 **已裁决的本仓功能/呈现差异**（设计面见 design 06 §1–§3 与 design 05 §2；此处只登记「与上游不同」这一事实）
@@ -215,7 +215,7 @@
   原登记按此修正。
   仍需动作 = 实机同时启用两实例的 bundle，观察 console 是否出现该抛错（覆盖 `schedule-mark` 与
   `schedules` 两个 id）；若出现，再走「每实例页面级 slot id 命名空间」方案。
-- **面板轴残余（已登记，不改；证据与处置在 design 06 §4.7）**：`ui-schedule` 的页面级 localStorage
+- **面板轴残余（已登记，不改；前三条仅本条登记，42px 拖拽与点击埋点见 design 06 §4.7）**：`ui-schedule` 的页面级 localStorage
   键（`dsh.schedule.recent-time-zones.v1` 真跨实例共享；`dsh.schedule.task-tab.v1.<sessionId>` 按会话分键）、
   30s 无 `visibilityState` 门的相对时钟（隐藏视图同样在跑）、来源拖拽中点因面板行增高最多 42px
   （常见约 38px）而下移约 19–21px、面板点击埋点 `sidebar_menu_click` 未复制（按裁决不复制）。前三条是
