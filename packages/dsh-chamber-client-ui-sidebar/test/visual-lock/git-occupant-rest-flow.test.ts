@@ -18,7 +18,8 @@
  * lock re-asserts it only so the footprint mechanism cannot be satisfied by moving the
  * mount into the cluster; (2) the container's rest state REMOVES the item (a `display`
  * change, never transparent-but-present); (3) its reveal selector set is the action
- * hook's three states, so the two can never disagree; (4) the hook crosses the package
+ * hook's own — hover plus the shared `.rowActionsVisible` class (kebab-open or keyboard
+ * focus) — so the two can never disagree; (4) the hook crosses the package
  * boundary as an attribute alone, never through a hashed class name.
  *
  * This is a MECHANISM lock, not a pixel lock: the repository has no browser harness, so
@@ -125,6 +126,18 @@ test('the hook crosses the package boundary as an attribute alone', () => {
     'the plugin emits the container hook on its own span',
   )
   assert.match(gitCss, /\.headerGit\s*\{/u, 'the plugin still owns the revealed container styling')
+  // The plugin brings NO reveal of its own: its action is `display: none` at rest, so a
+  // CSS `:focus-visible` flip inside the plugin sheet could never fire anyway — the host
+  // owns every reveal state. This is the regression lock for the rule retired with the
+  // align merge (nothing else reads the plugin sheet's reveal surface).
+  for (const rule of rules(gitCss)) {
+    if (!rule.selector.includes(':focus-visible')) continue
+    assert.doesNotMatch(
+      rule.declarations,
+      /\bdisplay\s*:/u,
+      `the git plugin must not reveal anything on keyboard focus (${rule.selector})`,
+    )
+  }
   assert.doesNotMatch(
     sidebarCss,
     /_headerGit_/u,

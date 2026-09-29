@@ -26,9 +26,10 @@ const CJK = /[\u4e00-\u9fff]/u
  * The header's hover-revealed cluster (workspace row scope). Its className must keep
  * BOTH reveal sources — the kebab menu and the section's keyboard-focus state (they
  * share `.rowActionsVisible`; design 06 §7 / design 08 §3.2). Anchored on the class
- * token, not on one formatting of the clsx call: the keyboard state joined it.
+ * token as a regex, so neither a reformat of the clsx call nor a pasted duplicate can
+ * satisfy it; the word boundary keeps it off `cc.rowActionsVisible` itself.
  */
-const CLUSTER_AT = 'cc.rowActions,'
+const CLUSTER_AT = /cc\.rowActions\b/u
 
 test('the orphan worktree row renders a RESIDENT cleanup control behind the orphan gate', () => {
   const at = SECTION.indexOf('cc.orphanCleanup')
@@ -37,10 +38,12 @@ test('the orphan worktree row renders a RESIDENT cleanup control behind the orph
     'exactly one control (a pasted duplicate must fail; indexOf alone locks only the first)')
   // Resident, not hover-gated: JSX children are written after their parent's opening
   // tag, so a control appearing BEFORE the cluster's opening tag cannot be inside it.
-  const cluster = SECTION.indexOf(CLUSTER_AT)
+  const cluster = SECTION.search(CLUSTER_AT)
   assert.notEqual(cluster, -1, 'the header hover cluster must stay where it is')
   assert.ok(at < cluster, 'the cleanup control must stay OUTSIDE the hover-revealed cluster')
-  const clusterBlock = SECTION.slice(cluster, SECTION.indexOf('>', cluster))
+  // Close the slice at the NEXT attribute: a '>' search would stop inside the
+  // cluster's own onClick arrow, several lines later.
+  const clusterBlock = SECTION.slice(cluster, SECTION.indexOf('onClick', cluster))
   assert.match(clusterBlock, /cc\.rowActionsVisible/u, 'the cluster must keep its reveal class')
   assert.match(clusterBlock, /menuOpen\[workspaceKey\] === true/u, 'kebab-open reveal')
   assert.match(clusterBlock, /keyboardFocusKey === workspaceKey/u,
