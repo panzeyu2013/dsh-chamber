@@ -23,12 +23,7 @@ import { parseAuthoritativeSourceFingerprint } from './deep-link-activation.ts'
 import { BOOT_TIMEOUT_MS } from './boot-budget.ts'
 import { withDeadline } from '@dsh-chamber/dsh-stream-state'
 
-/** The real clock, injected: the instance tail wait and the boot-chain guard ride
- *  the shared primitive; their budgets stay local constants. */
-const SHELL_SCHEDULER = {
-  setTimeout: (run: () => void, ms: number): unknown => setTimeout(run, ms),
-  clearTimeout: (handle: unknown): void => { clearTimeout(handle as ReturnType<typeof setTimeout>) },
-}
+import { WAIT_SCHEDULER } from './wait-scheduler.ts'
 // The settled-boot gap fact + its identity live in boot-gap.ts (a leaf) so the
 // chamber-entry producer / shell carrier / App renderer triangle stays acyclic.
 import {
@@ -83,12 +78,6 @@ function machineCatalogForPage(): MachineCatalog {
     call: (endpoint, args, signal) => getInstanceClient('local').callUnary(endpoint, args, signal),
   })
   return pageMachineCatalog
-}
-
-/** Never-throwing error text for external runtime stores/plugins (shared impl,
- *  client-core error-text.ts): their proxies may throw from traps too. */
-function describeShellError(reason: unknown): string {
-  return describeThrown(reason)
 }
 
 /** Direct opens get 8s of list polling; queued opens keep their 68s total deadline and receive at most this remaining dispatch time. */
@@ -529,7 +518,7 @@ export function bootInstanceShell(
   try {
     modulesSystem = ensureWebModuleSystem({ loadBundle: loadModuleBundle })
   } catch (reason) {
-    moduleSystemError = describeShellError(reason)
+    moduleSystemError = describeThrown(reason)
   }
   // Const capture: TS does not narrow a mutable captured variable inside the closure below.
   const installedModulesSystem = modulesSystem
@@ -596,7 +585,7 @@ export function bootInstanceShell(
     ? Promise.resolve()
     : withDeadline<undefined>(
       previousInstanceBoot.then(() => undefined, () => undefined),
-      { ms: tailRemainingMs, onExpire: () => undefined, scheduler: SHELL_SCHEDULER },
+      { ms: tailRemainingMs, onExpire: () => undefined, scheduler: WAIT_SCHEDULER },
     ).then(() => undefined)
   ).then(() => {
     const runTask = bootChain.then(async () => {
@@ -785,7 +774,7 @@ export function bootInstanceShell(
       perfMark(PERF_MARKS.shellSettled, instanceId)
       return settled
     } catch (reason) {
-      const message = describeShellError(reason)
+      const message = describeThrown(reason)
       // catch 兜底：run() 不拒绝（失败经 bootError 上浮），但构造期/挂载期的同步异常
       // 仍可能在此抛出且 live ctx 已存在。先 dispose（移除 boot DOM / 卸载 root），重试
       // 才能干净重 boot；读取失败清单与 try 分支同规矩（teardown 前读、try 包裹、
@@ -833,7 +822,7 @@ export function bootInstanceShell(
           console.error(`[shell] boot timed out after ${BOOT_TIMEOUT_MS}ms — queue continues (late settle remains generation-gated)`)
           return undefined
         },
-        scheduler: SHELL_SCHEDULER,
+        scheduler: WAIT_SCHEDULER,
       },
     ).then(() => undefined)
     return runTask
@@ -1087,7 +1076,7 @@ function dispatchOpen(
         sessions = runtimeCtx?.sessions
         navigation = runtimeCtx === undefined ? undefined : readSessionViewNavigation(runtimeCtx)
       } catch (err) {
-        fail(new Error(describeShellError(err)))
+        fail(new Error(describeThrown(err)))
         return
       }
       if (sessions === undefined) {
@@ -1109,7 +1098,7 @@ function dispatchOpen(
       try {
         listed = sessions.list?.getSnapshot()?.byId?.[sessionId] !== undefined
       } catch (err) {
-        fail(new Error(describeShellError(err)))
+        fail(new Error(describeThrown(err)))
         return
       }
       if (listed) {
@@ -1129,7 +1118,7 @@ function dispatchOpen(
           navigation.openSession(sessionId)
           succeed()
         } catch (err) {
-          fail(new Error(describeShellError(err)))
+          fail(new Error(describeThrown(err)))
         }
         return
       }
@@ -1267,7 +1256,7 @@ export function reconnectInstanceConnection(instanceId: string): boolean {
     // true here); unreachable for this caller.
     return true
   } catch (reason) {
-    console.error(`[shell] instance ${instanceId} reconnect failed: ${describeShellError(reason)}`)
+    console.error(`[shell] instance ${instanceId} reconnect failed: ${describeThrown(reason)}`)
     return false
   }
 }
