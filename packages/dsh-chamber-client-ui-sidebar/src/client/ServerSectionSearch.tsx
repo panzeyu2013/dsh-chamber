@@ -101,7 +101,8 @@ export function ServerSectionSearchResults({ server, merged, currentRemote, curr
                 }
                 return false
               }
-              // 同一投影查询给 active-Schedule 事实（上游搜索行同样渲染该标记）；
+              // 同一投影查询给 active-Schedule 事实（上游当前 pin 只在会话行的行首座席渲染该标记，
+              // 搜索行不渲染；本仓搜索行保留旧代同址形态——有意分歧，见 checklist §4.6 第 7 行）；
               // 查不到 ⇒ false——不在可见投影内不构成对该会话日程的断言。
               const projectedHasActiveSchedule = (sessionId: string): boolean => {
                 for (const workspace of server.workspaces) {
@@ -142,9 +143,9 @@ export function ServerSectionSearchResults({ server, merged, currentRemote, curr
                                       {stateDot}
                                     </span>
                                     <span className={cc.searchResultTitle}>{resolved.title}</span>
-                                    {/* 上游在标题后、heading 内渲染该标记，本行没有
-                                        额外的 blank 门——blank（临时新会话）行已被查询
-                                        本身排除在内容搜索外。 */}
+                                    {/* 旧代上游在标题后渲染该标记（当前 pin 的搜索行已不渲染），
+                                        本行保留该形态且没有额外的 blank 门——blank（临时新会话）
+                                        行已被查询本身排除在内容搜索外。 */}
                                     {projectedHasActiveSchedule(item.sessionId) && (
                                       <SessionScheduleIndicator label={t('schedule.active')} />
                                     )}

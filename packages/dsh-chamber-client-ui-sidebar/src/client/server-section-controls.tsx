@@ -9,10 +9,11 @@ import cc from './sidebar-chamber.module.css'
 
 /**
  * Non-interactive active-Schedule marker: a markup/token mirror of the official
- * `ActiveScheduleIndicator` (module-local upstream, NOT exported) — a `role="img"`
- * span carrying the localized `schedule.active` copy as both accessible name and
- * native title around the 16px alarm-clock glyph; the enclosing row stays the only
- * action. Renders only where `hasActiveSchedule` says so.
+ * occupant of `sidebar.session.row.leading` — `ui-schedule` 的 `SessionScheduleMark.tsx`
+ * （旧代锚 `ActiveScheduleIndicator` 已随上游换代退役；本注释与 checklist §4.6 同步复核）。
+ * 本仓形态（有意分歧，行首座席内渲染）：`role="img"` span，本地化 `schedule.active` 同时作
+ * 无障碍名与原生 title，字形 16px 闹钟；上游是 12px 时钟 + 视觉隐藏计数标签。渲染仍只由
+ * `hasActiveSchedule` 决定，外层行仍是唯一动作。
  */
 export function SessionScheduleIndicator({ label }: { label: string }) {
   return (
