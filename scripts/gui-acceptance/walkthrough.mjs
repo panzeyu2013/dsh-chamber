@@ -446,8 +446,8 @@ const HOVER_DISMISS_SETTLE_MS = 250
  *
  * SELECTION IS MARKER-BASED: only rows inside `[data-chamber-hovercard-anchor]`
  * are cardable, so the ungrouped workspace bucket header — which carries
- * `data-chamber-row` and `role="treeitem"` (ServerSection.tsx:1436-1437) but is
- * rendered WITHOUT RowHoverCard on purpose (:1743-1746, deliberately card-less)
+ * `data-chamber-row` and `role="treeitem"` (ServerSection.tsx:584-586) but is
+ * rendered WITHOUT RowHoverCard on purpose (:897-905, deliberately card-less)
  * — can never be picked. A `[data-chamber-row][role="treeitem"]` selector would
  * record a false `ok:false` on an instance whose first fitting row is that bucket.
  *
@@ -457,8 +457,9 @@ const HOVER_DISMISS_SETTLE_MS = 250
  * contract failure) from "this instance really has no
  * cardable row" (INFO). The row's own title is the first non-empty text node in
  * document order: both row kinds put their title first (`cc.workspaceTitle`
- * ServerSection.tsx:1566, `cc.sessionTitle` :1949), the same value the card
- * repeats as its first block (:1752 / :2090).
+ * ServerSection.tsx:695, `cc.sessionTitle` ServerSectionRows.tsx:259), the same
+ * value the card repeats as its first block (ServerSection.tsx:912 /
+ * ServerSectionRows.tsx:405).
  */
 const HOVER_TARGETS = `(() => {
   const visible = el => {

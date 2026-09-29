@@ -218,9 +218,10 @@ export function normalizeCardText(text) {
  * Identity of a hover card with the row that raised it.
  *
  * The card's first block IS the row's own title — `cc.hoverTitle` renders
- * `workspace.title` / `sessionTitleText` (ServerSection.tsx:1752 / :2090), the
- * same value the row itself renders (`cc.workspaceTitle` :1566 / `cc.sessionTitle`
- * :1949) — and every card is rendered inside `[data-chamber-hovercard]`
+ * `workspace.title` / `sessionTitleText` (ServerSection.tsx:912 /
+ * ServerSectionRows.tsx:405), the same value the row itself renders
+ * (`cc.workspaceTitle` ServerSection.tsx:695 / `cc.sessionTitle`
+ * ServerSectionRows.tsx:259) — and every card is rendered inside `[data-chamber-hovercard]`
  * (RowHoverCard.tsx). So "the card's text contains the hovered row's title" is a
  * contract-level identity fact, not a text coincidence. Containment, not
  * equality: a session card legitimately appends time / state lines.
