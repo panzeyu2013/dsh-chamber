@@ -78,6 +78,7 @@ const PACKAGE_TESTS = [
   'test:host-open-in',
   'test:settings-bridge',
   'test:connections',
+  'test:plugin-manager',
   'test:client-web',
   'test:connection',
   'test:open-in',

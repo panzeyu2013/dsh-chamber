@@ -103,6 +103,7 @@
     "test:layout": "pnpm --filter @dsh-chamber/dsh-chamber-client-ui-layout run test",
     "test:settings-bridge": "pnpm --filter @dsh-chamber/dsh-chamber-client-ui-settings-bridge run test",
     "test:connections": "pnpm --filter @dsh-chamber/dsh-chamber-client-ui-settings-connections run test",
+    "test:plugin-manager": "pnpm --filter @dsh-chamber/dsh-chamber-client-ui-settings-plugin-manager run test",
     "test:client-web": "pnpm --filter @deepseek-ai/dsh-client-web run test",
     "test:git": "pnpm --filter @dsh-chamber/dsh-chamber-client-ui-git run test",
     "test:mobile": "pnpm --filter @dsh-chamber/dsh-client-ui-mobile run test",
