@@ -117,8 +117,11 @@
   margin-top: 24px;
 }
 
-/* The page head repeats the section's title: drop the h1 and the intro that is its
-   adjacent sibling, keep the row — its controls are the grid's second track. */
-.embedded [data-plugin-panel] > [data-window-drag] :is(h1, h1 + p) {
+/* The page head repeats the section's title: drop the h1 and the intro that follows
+   it, keep the row — its controls are the grid's second track. Upstream's intro is
+   h1 + div.pageIntro (rc.1 and rc.2 alike); the p form stays as legacy tolerance, and
+   only structural child combinators are usable here because the vendor class names are
+   CSS-module hashes. Locked by test/shell/embedded-plugin-page-seam.test.ts. */
+.embedded [data-plugin-panel] > [data-window-drag] :is(h1, h1 + p, h1 + div) {
   display: none;
 }

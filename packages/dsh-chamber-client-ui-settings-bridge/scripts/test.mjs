@@ -42,6 +42,9 @@ const GROUPS = {
   shell: [
     'test/shell/escape-owner.test.ts',
     'test/shell/disclosure-attrs.test.ts',
+    // rc.2 seam lock: the embedded plugin page hides h1 + div.pageIntro structurally
+    // (upstream intro is a DIV; the old h1 + p selector never matched it).
+    'test/shell/embedded-plugin-page-seam.test.ts',
   ],
   // bridge: 完整桥接面——outlet cell dispatch / source face / 桥接契约锁 / onboarding
   bridge: [
