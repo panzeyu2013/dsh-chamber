@@ -77,7 +77,7 @@ test('bootInstanceShell: the failure report names the plugin ids that did not ac
 test('bootInstanceShell: a hostile runtimeCtx read never replaces the boot failure report (T15)', async (t) => {
   // The sweep is an external-boundary read: the failure report the shell
   // already holds must survive a throwing runtimeCtx getter (same discipline as
-  // describeShellError / the dispatchOpen hostile-read arm) — otherwise the
+  // describeThrown / the dispatchOpen hostile-read arm) — otherwise the
   // overlay would show the trap's error instead of the boot failure.
   shellTestScope(t, { graph: 'unavailable', timers: false, silentConsole: false })
   __testSetBootError('web boot: 1 entry did not activate')

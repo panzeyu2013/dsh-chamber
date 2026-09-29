@@ -885,7 +885,15 @@
     protocolVersion: 1,
     updates: desktopUpdates,
     keyboard: desktopKeyboard,
-    shortcuts: desktopShortcuts
+    shortcuts: desktopShortcuts,
+    // Official feedback questionnaire: the machine description (computed by the
+    // Node sidecar) rides the existing info payload, read on demand.
+    deviceInfo: function () {
+      return fetchInfo(INFO_MAX_ATTEMPTS + 1).then(function (info) {
+        var value = info !== null && typeof info === 'object' ? info.deviceInfo : null
+        return typeof value === 'string' ? value : ''
+      })
+    }
   }
 
   var dshChamberApi = {
@@ -935,7 +943,9 @@
       // 不暴露（页面按自己的重试链等，避免拿到半成品）。1+10 次全败由下方
       // 失败分支用 null 标量暴露（preload.cts 的失败分支同款），两端一致。
       exposePublicSurface()
-      return null
+      // resolve 整个 payload（不是 null）：carrier 的 deviceInfo() 按需读
+      // `info.deviceInfo`；启动链的调用方忽略返回值。失败分支仍 resolve null。
+      return info
     }, function () {
       if (attemptsLeft > 1) {
         return delay(INFO_RETRY_MS).then(function () {

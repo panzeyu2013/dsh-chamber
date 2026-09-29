@@ -725,7 +725,7 @@ importers:
         version: 3.0.0(supports-color@9.4.0)
       micromark-core-commonmark:
         specifier: ^2.0.3
-        version: 2.0.3
+        version: 2.0.4
       micromark-extension-gfm:
         specifier: ^3.0.0
         version: 3.0.0
@@ -734,7 +734,7 @@ importers:
         version: 3.1.0
       micromark-factory-space:
         specifier: ^2.0.1
-        version: 2.0.1
+        version: 2.1.0
       micromark-util-character:
         specifier: ^2.1.1
         version: 2.1.1
@@ -749,7 +749,7 @@ importers:
         version: 2.0.1
       micromark-util-types:
         specifier: ^2.0.2
-        version: 2.0.2
+        version: 2.0.3
       shiki:
         specifier: ^4.3.1
         version: 4.4.3
@@ -945,6 +945,9 @@ importers:
       '@deepseek-ai/dsh-experimental-auto-review':
         specifier: workspace:*
         version: link:../dsh-experimental-auto-review
+      '@deepseek-ai/dsh-experimental-schedule-bundle':
+        specifier: workspace:*
+        version: link:../dsh-experimental-schedule-bundle
       '@deepseek-ai/dsh-experimental-voice-input-bundle':
         specifier: workspace:*
         version: link:../dsh-experimental-voice-input-bundle
@@ -1564,6 +1567,9 @@ importers:
       '@deepseek-ai/dsh-skill':
         specifier: workspace:*
         version: link:../dsh-skill
+      '@deepseek-ai/dsh-skill-filesystem':
+        specifier: workspace:*
+        version: link:../dsh-skill-filesystem
       '@types/js-yaml':
         specifier: ^4.0.9
         version: 4.0.9
@@ -1803,6 +1809,9 @@ importers:
       '@deepseek-ai/dsh-client-file-upload':
         specifier: workspace:*
         version: link:../dsh-client-file-upload
+      '@deepseek-ai/dsh-client-product-analytics':
+        specifier: workspace:*
+        version: link:../dsh-client-product-analytics
       '@deepseek-ai/dsh-client-ui-plugin-manager':
         specifier: workspace:*
         version: link:../dsh-client-ui-plugin-manager
@@ -2428,6 +2437,9 @@ importers:
       '@deepseek-ai/dsh-mcp-resources':
         specifier: workspace:*
         version: link:../dsh-mcp-resources
+      '@deepseek-ai/dsh-otel':
+        specifier: workspace:*
+        version: link:../dsh-otel
       '@deepseek-ai/dsh-permission-presets':
         specifier: workspace:*
         version: link:../dsh-permission-presets
@@ -2909,6 +2921,52 @@ importers:
         specifier: workspace:*
         version: link:../dsh-package-manifest
 
+  vendor/harness-packages/@deepseek-ai/dsh-client-product-analytics:
+    dependencies:
+      '@deepseek-ai/dsh-typert-protocol':
+        specifier: workspace:*
+        version: link:../dsh-typert-protocol
+      '@deepseek-ai/schemastery':
+        specifier: workspace:~
+        version: link:../schemastery
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../cordis
+      '@deepseek-ai/cordis-plugin-loader':
+        specifier: workspace:~
+        version: link:../cordis-plugin-loader
+      '@deepseek-ai/dsh-api-gateway':
+        specifier: workspace:*
+        version: link:../../../../packages/dsh-api-gateway
+      '@deepseek-ai/dsh-compaction':
+        specifier: workspace:*
+        version: link:../dsh-compaction
+      '@deepseek-ai/dsh-deepseek-account':
+        specifier: workspace:*
+        version: link:../dsh-deepseek-account
+      '@deepseek-ai/dsh-host-product-telemetry-otel':
+        specifier: workspace:*
+        version: link:../dsh-host-product-telemetry-otel
+      '@deepseek-ai/dsh-host-webserver':
+        specifier: workspace:*
+        version: link:../dsh-host-webserver
+      '@deepseek-ai/dsh-llm':
+        specifier: workspace:*
+        version: link:../dsh-llm
+      '@deepseek-ai/dsh-otel':
+        specifier: workspace:*
+        version: link:../dsh-otel
+      '@deepseek-ai/dsh-session':
+        specifier: workspace:*
+        version: link:../dsh-session
+      '@deepseek-ai/dsh-settings':
+        specifier: workspace:*
+        version: link:../dsh-settings
+
   vendor/harness-packages/@deepseek-ai/dsh-client-resources:
     devDependencies:
       '@deepseek-ai/cordis':
@@ -3304,6 +3362,9 @@ importers:
       '@deepseek-ai/dsh-client-locale':
         specifier: workspace:*
         version: link:../dsh-client-locale
+      '@deepseek-ai/dsh-client-product-analytics':
+        specifier: workspace:*
+        version: link:../dsh-client-product-analytics
       '@deepseek-ai/dsh-client-store':
         specifier: workspace:*
         version: link:../dsh-client-store
@@ -3494,6 +3555,9 @@ importers:
       '@deepseek-ai/dsh-client-locale':
         specifier: workspace:*
         version: link:../dsh-client-locale
+      '@deepseek-ai/dsh-client-product-analytics':
+        specifier: workspace:*
+        version: link:../dsh-client-product-analytics
       '@deepseek-ai/dsh-client-shortcuts':
         specifier: workspace:*
         version: link:../dsh-client-shortcuts
@@ -4119,6 +4183,9 @@ importers:
       '@deepseek-ai/dsh-client-locale':
         specifier: workspace:*
         version: link:../dsh-client-locale
+      '@deepseek-ai/dsh-client-product-analytics':
+        specifier: workspace:*
+        version: link:../dsh-client-product-analytics
       '@deepseek-ai/dsh-client-store':
         specifier: workspace:*
         version: link:../dsh-client-store
@@ -4396,6 +4463,9 @@ importers:
       '@deepseek-ai/dsh-client-locale':
         specifier: workspace:*
         version: link:../dsh-client-locale
+      '@deepseek-ai/dsh-client-product-analytics':
+        specifier: workspace:*
+        version: link:../dsh-client-product-analytics
       '@deepseek-ai/dsh-client-store':
         specifier: workspace:*
         version: link:../dsh-client-store
@@ -4497,7 +4567,7 @@ importers:
         version: 3.0.0(supports-color@9.4.0)
       micromark-core-commonmark:
         specifier: ^2.0.3
-        version: 2.0.3
+        version: 2.0.4
       micromark-extension-gfm:
         specifier: ^3.0.0
         version: 3.0.0
@@ -4506,7 +4576,7 @@ importers:
         version: 3.1.0
       micromark-factory-space:
         specifier: ^2.0.1
-        version: 2.0.1
+        version: 2.1.0
       micromark-util-character:
         specifier: ^2.1.1
         version: 2.1.1
@@ -4521,7 +4591,7 @@ importers:
         version: 2.0.1
       micromark-util-types:
         specifier: ^2.0.2
-        version: 2.0.2
+        version: 2.0.3
       react:
         specifier: ^18.2.0
         version: 18.2.0
@@ -4782,6 +4852,9 @@ importers:
       '@deepseek-ai/dsh-client-locale':
         specifier: workspace:*
         version: link:../dsh-client-locale
+      '@deepseek-ai/dsh-client-product-analytics':
+        specifier: workspace:*
+        version: link:../dsh-client-product-analytics
       '@deepseek-ai/dsh-client-store':
         specifier: workspace:*
         version: link:../dsh-client-store
@@ -4964,6 +5037,9 @@ importers:
       '@deepseek-ai/dsh-client-locale':
         specifier: workspace:*
         version: link:../dsh-client-locale
+      '@deepseek-ai/dsh-client-product-analytics':
+        specifier: workspace:*
+        version: link:../dsh-client-product-analytics
       '@deepseek-ai/dsh-client-store':
         specifier: workspace:*
         version: link:../dsh-client-store
@@ -5081,6 +5157,51 @@ importers:
       react:
         specifier: ^18.2.0
         version: 18.2.0
+
+  vendor/harness-packages/@deepseek-ai/dsh-client-ui-settings-session-log:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../cordis
+      '@deepseek-ai/dsh-api-remotes':
+        specifier: workspace:*
+        version: link:../dsh-api-remotes
+      '@deepseek-ai/dsh-client-locale':
+        specifier: workspace:*
+        version: link:../dsh-client-locale
+      '@deepseek-ai/dsh-client-store':
+        specifier: workspace:*
+        version: link:../dsh-client-store
+      '@deepseek-ai/dsh-client-test-runtime':
+        specifier: workspace:*
+        version: link:../dsh-client-test-runtime
+      '@deepseek-ai/dsh-client-ui-layout':
+        specifier: workspace:*
+        version: link:../dsh-client-ui-layout
+      '@deepseek-ai/dsh-client-ui-primitives':
+        specifier: workspace:*
+        version: link:../dsh-client-ui-primitives
+      '@deepseek-ai/dsh-client-ui-renderer':
+        specifier: workspace:*
+        version: link:../dsh-client-ui-renderer
+      '@deepseek-ai/dsh-client-ui-settings':
+        specifier: workspace:*
+        version: link:../dsh-client-ui-settings
+      '@deepseek-ai/dsh-client-ui-slots':
+        specifier: workspace:*
+        version: link:../dsh-client-ui-slots
+      '@types/react':
+        specifier: ~18.3.1
+        version: 18.3.31
+      '@types/react-dom':
+        specifier: ~18.3.0
+        version: 18.3.0
+      react:
+        specifier: ^18.2.0
+        version: 18.2.0
+      react-dom:
+        specifier: ^18.2.0
+        version: 18.2.0(react@18.2.0)
 
   vendor/harness-packages/@deepseek-ai/dsh-client-ui-settings-shell:
     devDependencies:
@@ -5255,6 +5376,9 @@ importers:
       '@deepseek-ai/dsh-client-locale':
         specifier: workspace:*
         version: link:../dsh-client-locale
+      '@deepseek-ai/dsh-client-product-analytics':
+        specifier: workspace:*
+        version: link:../dsh-client-product-analytics
       '@deepseek-ai/dsh-client-shortcuts':
         specifier: workspace:*
         version: link:../dsh-client-shortcuts
@@ -6190,6 +6314,9 @@ importers:
       '@deepseek-ai/dsh-client-locale':
         specifier: workspace:*
         version: link:../dsh-client-locale
+      '@deepseek-ai/dsh-client-product-analytics':
+        specifier: workspace:*
+        version: link:../dsh-client-product-analytics
       '@deepseek-ai/dsh-client-shortcuts':
         specifier: workspace:*
         version: link:../dsh-client-shortcuts
@@ -6792,6 +6919,9 @@ importers:
       '@deepseek-ai/dsh-atomic-write':
         specifier: workspace:*
         version: link:../dsh-atomic-write
+      '@deepseek-ai/dsh-client-product-analytics':
+        specifier: workspace:*
+        version: link:../dsh-client-product-analytics
       '@deepseek-ai/dsh-client-shortcuts':
         specifier: workspace:*
         version: link:../dsh-client-shortcuts
@@ -6859,8 +6989,8 @@ importers:
         specifier: ^4.2.0
         version: 4.3.1
       koffi:
-        specifier: ^3.1.0
-        version: 3.1.5
+        specifier: 3.1.1
+        version: 3.1.1
       pnpm:
         specifier: 11.7.0
         version: 11.7.0
@@ -7624,6 +7754,28 @@ importers:
         specifier: workspace:*
         version: link:../dsh-util-values
 
+  vendor/harness-packages/@deepseek-ai/dsh-experimental-schedule-bundle:
+    dependencies:
+      '@deepseek-ai/dsh-client-ui-schedule':
+        specifier: workspace:*
+        version: link:../dsh-client-ui-schedule
+      '@deepseek-ai/dsh-schedule':
+        specifier: workspace:*
+        version: link:../dsh-schedule
+      '@deepseek-ai/dsh-time-context':
+        specifier: workspace:*
+        version: link:../dsh-time-context
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../cordis
+      '@deepseek-ai/cordis-plugin-include':
+        specifier: workspace:~
+        version: link:../cordis-plugin-include
+      js-yaml:
+        specifier: ^4.2.0
+        version: 4.3.1
+
   vendor/harness-packages/@deepseek-ai/dsh-experimental-speech-to-text:
     dependencies:
       '@deepseek-ai/dsh-brand':
@@ -7949,8 +8101,8 @@ importers:
         specifier: ^4.0.3
         version: 4.0.3
       koffi:
-        specifier: ^3.1.0
-        version: 3.1.5
+        specifier: 3.1.1
+        version: 3.1.1
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:~
@@ -8387,8 +8539,8 @@ importers:
         specifier: workspace:*
         version: link:../dsh-native-command
       koffi:
-        specifier: ^3.1.0
-        version: 3.1.5
+        specifier: 3.1.1
+        version: 3.1.1
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:~
@@ -8477,24 +8629,12 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: workspace:~
         version: link:../schemastery
-      '@opentelemetry/api':
-        specifier: ^1.9.1
-        version: 1.9.1
       '@opentelemetry/api-logs':
         specifier: ^0.220.0
         version: 0.220.0
-      '@opentelemetry/core':
-        specifier: 2.9.0
-        version: 2.9.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/otlp-exporter-base':
         specifier: ^0.220.0
         version: 0.220.0(@opentelemetry/api@1.9.1)
-      '@opentelemetry/otlp-transformer':
-        specifier: ^0.220.0
-        version: 0.220.0(@opentelemetry/api@1.9.1)
-      '@opentelemetry/resources':
-        specifier: ^2.9.0
-        version: 2.10.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/sdk-logs':
         specifier: ^0.220.0
         version: 0.220.0(@opentelemetry/api@1.9.1)
@@ -8511,6 +8651,9 @@ importers:
       '@deepseek-ai/dsh-loader-smoke':
         specifier: workspace:*
         version: link:../dsh-loader-smoke
+      '@deepseek-ai/dsh-otel':
+        specifier: workspace:*
+        version: link:../dsh-otel
 
   vendor/harness-packages/@deepseek-ai/dsh-host-webserver:
     dependencies:
@@ -9218,6 +9361,40 @@ importers:
         specifier: workspace:*
         version: link:../dsh-session
 
+  vendor/harness-packages/@deepseek-ai/dsh-otel:
+    dependencies:
+      '@opentelemetry/api':
+        specifier: ^1.9.1
+        version: 1.9.1
+      '@opentelemetry/api-logs':
+        specifier: ^0.220.0
+        version: 0.220.0
+      '@opentelemetry/core':
+        specifier: 2.9.0
+        version: 2.9.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/otlp-exporter-base':
+        specifier: ^0.220.0
+        version: 0.220.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/otlp-transformer':
+        specifier: ^0.220.0
+        version: 0.220.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/resources':
+        specifier: ^2.9.0
+        version: 2.10.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/sdk-logs':
+        specifier: ^0.220.0
+        version: 0.220.0(@opentelemetry/api@1.9.1)
+      got:
+        specifier: ^14.6.6
+        version: 14.6.6
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../cordis
+      '@deepseek-ai/dsh-session':
+        specifier: workspace:*
+        version: link:../dsh-session
+
   vendor/harness-packages/@deepseek-ai/dsh-output-retention:
     devDependencies:
       '@deepseek-ai/cordis':
@@ -9711,18 +9888,30 @@ importers:
         specifier: workspace:*
         version: link:../dsh-win32-process
       koffi:
-        specifier: ^3.1.0
-        version: 3.1.5
+        specifier: 3.1.1
+        version: 3.1.1
+      yaml:
+        specifier: ^2.4.2
+        version: 2.9.0
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:~
         version: link:../cordis
+      '@deepseek-ai/cordis-plugin-include':
+        specifier: workspace:~
+        version: link:../cordis-plugin-include
+      '@deepseek-ai/cordis-plugin-loader':
+        specifier: workspace:~
+        version: link:../cordis-plugin-loader
       '@deepseek-ai/dsh-pwsh-local':
         specifier: workspace:*
         version: link:../dsh-pwsh-local
       '@deepseek-ai/dsh-sandbox-local':
         specifier: workspace:*
         version: link:../dsh-sandbox-local
+      '@deepseek-ai/dsh-skill':
+        specifier: workspace:*
+        version: link:../dsh-skill
       '@deepseek-ai/dsh-subprocess':
         specifier: workspace:*
         version: link:../dsh-subprocess
@@ -10360,8 +10549,8 @@ importers:
         specifier: workspace:~
         version: link:../schemastery
       koffi:
-        specifier: ^3.1.0
-        version: 3.1.5
+        specifier: 3.1.1
+        version: 3.1.1
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:~
@@ -10667,21 +10856,12 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: workspace:~
         version: link:../schemastery
-      '@opentelemetry/api':
-        specifier: ^1.9.1
-        version: 1.9.1
       '@opentelemetry/api-logs':
         specifier: ^0.220.0
         version: 0.220.0
-      '@opentelemetry/exporter-logs-otlp-http':
-        specifier: ^0.220.0
-        version: 0.220.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/otlp-exporter-base':
         specifier: ^0.220.0
         version: 0.220.0(@opentelemetry/api@1.9.1)
-      '@opentelemetry/resources':
-        specifier: ^2.9.0
-        version: 2.10.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/sdk-logs':
         specifier: ^0.220.0
         version: 0.220.0(@opentelemetry/api@1.9.1)
@@ -10719,6 +10899,9 @@ importers:
       '@deepseek-ai/dsh-message-feedback':
         specifier: workspace:*
         version: link:../dsh-message-feedback
+      '@deepseek-ai/dsh-otel':
+        specifier: workspace:*
+        version: link:../dsh-otel
       '@deepseek-ai/dsh-session':
         specifier: workspace:*
         version: link:../dsh-session
@@ -11833,8 +12016,8 @@ importers:
         specifier: workspace:*
         version: link:../dsh-win32-process
       koffi:
-        specifier: ^3.1.0
-        version: 3.1.5
+        specifier: 3.1.1
+        version: 3.1.1
       node-pty:
         specifier: 1.2.0-beta.15
         version: 1.2.0-beta.15(patch_hash=b40ae545608897914bd25fb009c97eeac478c34e8a910298ddcb01b746534bb0)
@@ -13514,6 +13697,9 @@ importers:
       '@deepseek-ai/dsh-client-modules':
         specifier: workspace:*
         version: link:../dsh-client-modules
+      '@deepseek-ai/dsh-client-product-analytics':
+        specifier: workspace:*
+        version: link:../dsh-client-product-analytics
       '@deepseek-ai/dsh-client-resources':
         specifier: workspace:*
         version: link:../dsh-client-resources
@@ -13589,9 +13775,6 @@ importers:
       '@deepseek-ai/dsh-client-ui-renderer':
         specifier: workspace:*
         version: link:../dsh-client-ui-renderer
-      '@deepseek-ai/dsh-client-ui-schedule':
-        specifier: workspace:*
-        version: link:../dsh-client-ui-schedule
       '@deepseek-ai/dsh-client-ui-session':
         specifier: workspace:*
         version: link:../dsh-client-ui-session
@@ -13616,6 +13799,9 @@ importers:
       '@deepseek-ai/dsh-client-ui-settings-plugins':
         specifier: workspace:*
         version: link:../dsh-client-ui-settings-plugins
+      '@deepseek-ai/dsh-client-ui-settings-session-log':
+        specifier: workspace:*
+        version: link:../dsh-client-ui-settings-session-log
       '@deepseek-ai/dsh-client-ui-settings-shell':
         specifier: workspace:*
         version: link:../dsh-client-ui-settings-shell
@@ -13715,6 +13901,9 @@ importers:
       '@deepseek-ai/dsh-host-plugin-inventory':
         specifier: workspace:*
         version: link:../dsh-host-plugin-inventory
+      '@deepseek-ai/dsh-host-product-telemetry-otel':
+        specifier: workspace:*
+        version: link:../dsh-host-product-telemetry-otel
       '@deepseek-ai/dsh-host-webserver':
         specifier: workspace:*
         version: link:../dsh-host-webserver
@@ -13736,9 +13925,6 @@ importers:
       '@deepseek-ai/dsh-plugin-manager':
         specifier: workspace:*
         version: link:../dsh-plugin-manager
-      '@deepseek-ai/dsh-schedule':
-        specifier: workspace:*
-        version: link:../dsh-schedule
       '@deepseek-ai/dsh-session-log-export':
         specifier: workspace:*
         version: link:../dsh-session-log-export
@@ -13763,9 +13949,6 @@ importers:
       '@deepseek-ai/dsh-terminal-bash':
         specifier: workspace:*
         version: link:../dsh-terminal-bash
-      '@deepseek-ai/dsh-time-context':
-        specifier: workspace:*
-        version: link:../dsh-time-context
       '@deepseek-ai/dsh-tool-ask-user':
         specifier: workspace:*
         version: link:../dsh-tool-ask-user
@@ -13857,6 +14040,9 @@ importers:
       '@deepseek-ai/dsh-fs-local':
         specifier: workspace:*
         version: link:../dsh-fs-local
+      '@deepseek-ai/dsh-otel':
+        specifier: workspace:*
+        version: link:../dsh-otel
       '@deepseek-ai/dsh-sandbox-policy':
         specifier: workspace:*
         version: link:../dsh-sandbox-policy
@@ -13960,6 +14146,9 @@ importers:
       '@deepseek-ai/dsh-launch-environment':
         specifier: workspace:*
         version: link:../dsh-launch-environment
+      '@deepseek-ai/dsh-llm-mock-server':
+        specifier: workspace:*
+        version: link:../dsh-llm-mock-server
       '@deepseek-ai/dsh-pwsh-local':
         specifier: workspace:*
         version: link:../dsh-pwsh-local
@@ -14033,6 +14222,9 @@ importers:
       '@deepseek-ai/dsh-credentials-local':
         specifier: workspace:*
         version: link:../dsh-credentials-local
+      '@deepseek-ai/dsh-deepseek-account':
+        specifier: workspace:*
+        version: link:../dsh-deepseek-account
       '@deepseek-ai/dsh-http-proxy':
         specifier: workspace:*
         version: link:../dsh-http-proxy
@@ -14170,8 +14362,8 @@ importers:
         specifier: workspace:*
         version: link:../dsh-lazy-require
       koffi:
-        specifier: ^3.1.0
-        version: 3.1.5
+        specifier: 3.1.1
+        version: 3.1.1
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:~
@@ -15313,9 +15505,22 @@ packages:
     resolution: {integrity: sha512-hloP58zRVCRSpgDxmqCWJNlizAlUgJFqG2ypq79DCvyv9tHjRYMDOcPFjzfl/A1/YxDvRCZz8wvZvmapQnKwFQ==}
     engines: {node: '>=12'}
 
+  '@keyv/serialize@1.1.1':
+    resolution: {integrity: sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA==}
+
+  '@koromix/koffi-darwin-arm64@3.1.1':
+    resolution: {integrity: sha512-+Dl0zQDh1Wb55AWOn9hp7K30qgkODvrvN+ZNkFOh81Q0oFX/rpJQtocgjAuYk2zFAcajSeVDumkcHMPwnKSXzA==}
+    cpu: [arm64]
+    os: [darwin]
+
   '@koromix/koffi-darwin-arm64@3.1.5':
     resolution: {integrity: sha512-IpqITl2fJi3QN9bTtNnygWPdK7ScSjw3xtGu8e6feYGvimCysu+spgI5KyeslY2jTnqxGS9xr8pLAbLhGJ8edA==}
     cpu: [arm64]
+    os: [darwin]
+
+  '@koromix/koffi-darwin-x64@3.1.1':
+    resolution: {integrity: sha512-cDFAKn1qdZBFLrp7dAc9QUDw3l4xAhTJbOdPWWb0LxssVicUdHcRCLZGrDsmPW2tpH6LGNNeLgqRpAoD2Mo8iA==}
+    cpu: [x64]
     os: [darwin]
 
   '@koromix/koffi-darwin-x64@3.1.5':
@@ -15323,9 +15528,19 @@ packages:
     cpu: [x64]
     os: [darwin]
 
+  '@koromix/koffi-freebsd-arm64@3.1.1':
+    resolution: {integrity: sha512-zaP7FJISI/scQW9Wa5QicY3a09WmtKBWSbmC+5nfCqPzwWe7Hx2so74Er7mPsDfCiMMR0Ya+evKbJQDkfyXicg==}
+    cpu: [arm64]
+    os: [freebsd]
+
   '@koromix/koffi-freebsd-arm64@3.1.5':
     resolution: {integrity: sha512-bP94uzseFO79NG3flpU3WxfyvltD+jzC/kN8FDZLi8J0VUZNW1Wmu8yq87KEzjX1qT9KyX4Y+elVbGqHXHTv2Q==}
     cpu: [arm64]
+    os: [freebsd]
+
+  '@koromix/koffi-freebsd-ia32@3.1.1':
+    resolution: {integrity: sha512-7GejVb688TLM8rbjfc0oezJrATxZc0dn801xWEDJekN2DgmRXu7HquGqWQ6z3NeSq7ZxEggz4T3xtlbCysQapA==}
+    cpu: [ia32]
     os: [freebsd]
 
   '@koromix/koffi-freebsd-ia32@3.1.5':
@@ -15333,14 +15548,29 @@ packages:
     cpu: [ia32]
     os: [freebsd]
 
+  '@koromix/koffi-freebsd-x64@3.1.1':
+    resolution: {integrity: sha512-XLiCFP9OFCyOoGTjAimtDKLhzhfo34WcP1ShVWxRzNCWDGjfz8BYjwd69cp/cDSUXZbxamqs4+/6vmkePq9wxA==}
+    cpu: [x64]
+    os: [freebsd]
+
   '@koromix/koffi-freebsd-x64@3.1.5':
     resolution: {integrity: sha512-h6RyBZmPMBIDWTABkJIhzDdYwSnYAJvTacHpEjbT55Arkmw1H15Rl7CFtXuEuBrqh+uivoCrRgA6vszl9CsJ9g==}
     cpu: [x64]
     os: [freebsd]
 
+  '@koromix/koffi-linux-arm64@3.1.1':
+    resolution: {integrity: sha512-HA9xINK7G4dRAkpfnBWD9VfuyIBgW1SuK+KPHjksUwRMOnhgqP8J/JqgrAzdzcDiefGBkqEacIP776OUwz7knQ==}
+    cpu: [arm64]
+    os: [linux]
+
   '@koromix/koffi-linux-arm64@3.1.5':
     resolution: {integrity: sha512-u0vCmKPu4yQDhl/ri1J6U3vDnvYtYjoZaIWb+oMbRXhVZeiqdE53MGPb+q2A7Dj2n9IbYloAfEICQbL6l0pmiQ==}
     cpu: [arm64]
+    os: [linux]
+
+  '@koromix/koffi-linux-ia32@3.1.1':
+    resolution: {integrity: sha512-jG7IFytmP8K5Qtbx0ro0ZeuX3JjSsLxmYhq+nmXDdrtOAlxIsWGynuiDLS6Jk3vOchVii2m6Y2f/L3GLG2fG5A==}
+    cpu: [ia32]
     os: [linux]
 
   '@koromix/koffi-linux-ia32@3.1.5':
@@ -15348,9 +15578,19 @@ packages:
     cpu: [ia32]
     os: [linux]
 
+  '@koromix/koffi-linux-loong64@3.1.1':
+    resolution: {integrity: sha512-CIsT1cNnih8FuU52Me/IVlJBpH28SQfoDeYPctJswgJzaARktusF7m4MUbtR1PBDjuquCVM4/vFyNdOzfPonvA==}
+    cpu: [loong64]
+    os: [linux]
+
   '@koromix/koffi-linux-loong64@3.1.5':
     resolution: {integrity: sha512-F3i2CeTcqVBUQiSRUBSEzX1VgtXmLLiZb/ouZtXHkWpTLhJNd9TH7s3CizTofci0VRqlKdexGUYhK5vzPDAAHA==}
     cpu: [loong64]
+    os: [linux]
+
+  '@koromix/koffi-linux-riscv64@3.1.1':
+    resolution: {integrity: sha512-9D6RmqeKsSvs3U6jILJU9PcAjMwKKyn7yLxNBb5k6z9PCoUoGJ3/BrhXAX0qjrLLwEiIpP/hS/40RuXvH8Lc3Q==}
+    cpu: [riscv64]
     os: [linux]
 
   '@koromix/koffi-linux-riscv64@3.1.5':
@@ -15358,14 +15598,29 @@ packages:
     cpu: [riscv64]
     os: [linux]
 
+  '@koromix/koffi-linux-x64@3.1.1':
+    resolution: {integrity: sha512-pyTcX5fePeYbt7TZAwRby69wdlRx3PT+g15ra5IYdat/Pgh3qAKEYeZ+uu7WpPGOy43p/oSRqqZoa2kORzozlA==}
+    cpu: [x64]
+    os: [linux]
+
   '@koromix/koffi-linux-x64@3.1.5':
     resolution: {integrity: sha512-2yaIg/1V0m4CiAUMzG4CIlWmq1WJ+QBMlFfaGr9su+OH5fuIqC7V3BbMiB03IwIl1VofIZO5JA4Db4lID8tpbw==}
     cpu: [x64]
     os: [linux]
 
+  '@koromix/koffi-openbsd-ia32@3.1.1':
+    resolution: {integrity: sha512-iPnPzvG2HOfdzaiG1drdkt86sAqmTPDv9mAf+5gL7mRzkeeQC88EVGboRy7eXwdXn7R+v0ntA3iQxdHrBn6yXw==}
+    cpu: [ia32]
+    os: [openbsd]
+
   '@koromix/koffi-openbsd-ia32@3.1.5':
     resolution: {integrity: sha512-8/OXd+u9omMooykhvdJPEP7u6FFzzrrFo9gOmSHc9/DPt3XkVYOtSsE97PDk6zYaAzwIYHSKjHvIXsfFwFc7sg==}
     cpu: [ia32]
+    os: [openbsd]
+
+  '@koromix/koffi-openbsd-x64@3.1.1':
+    resolution: {integrity: sha512-/Xqc3R0SVoMCYjMPZnJ9bULtRo364+dKmnQhfDrI83tSpxUHRw7HRNf12vBeL+hPgKxSBjtMpWfQ/ZIyVyLFag==}
+    cpu: [x64]
     os: [openbsd]
 
   '@koromix/koffi-openbsd-x64@3.1.5':
@@ -15373,14 +15628,29 @@ packages:
     cpu: [x64]
     os: [openbsd]
 
+  '@koromix/koffi-win32-arm64@3.1.1':
+    resolution: {integrity: sha512-JhqHauEwQvdcWUERxrV5HH/DT9W7hY1A1eU6/o8tB+yck+D3kt5elpRDBt9KjpW6h+vHPy3V0sjDvO0CXyabTA==}
+    cpu: [arm64]
+    os: [win32]
+
   '@koromix/koffi-win32-arm64@3.1.5':
     resolution: {integrity: sha512-uej3YAEKAhlfVPoIo5sOwtxhTLRVJ01LgtWrKGpnnAQU3C+Ilmaxdh+Oc2xc1G3NK30N5eCVJpyO9r3pjKC6Vw==}
     cpu: [arm64]
     os: [win32]
 
+  '@koromix/koffi-win32-ia32@3.1.1':
+    resolution: {integrity: sha512-ZRuyYmlGS/rCc966qqs0qREXDW4FRdul7rDF1VgSWHbVmdc196PUgUT+blq/GjZgTwqzeEXtMRgM+cU8krHjvA==}
+    cpu: [ia32]
+    os: [win32]
+
   '@koromix/koffi-win32-ia32@3.1.5':
     resolution: {integrity: sha512-d42jv2f4PwtJGNJS19Xfn/BRtGsBNNVkw0O0K5tkIGI+yNq4MnPTSUsaGbDIkCLNsCgk/LFqAaE8BExyCdrujA==}
     cpu: [ia32]
+    os: [win32]
+
+  '@koromix/koffi-win32-x64@3.1.1':
+    resolution: {integrity: sha512-KqHPmvj6QILhNyI/To8QSihHsijeVGIYYPBOUnXEpcnH2LuLbargY4Hd6dDeTN3Z90uUUxN+1FWz1UnhVzFOiA==}
+    cpu: [x64]
     os: [win32]
 
   '@koromix/koffi-win32-x64@3.1.5':
@@ -16003,6 +16273,10 @@ packages:
   '@sindresorhus/is@4.0.0':
     resolution: {integrity: sha512-FyD2meJpDPjyNQejSjvnhpgI/azsQkA4lGbuu5BQZfjvJ9cbRZXzeWL2HceCekW4lixO9JPesIIQkSoLjeJHNQ==}
     engines: {node: '>=10'}
+
+  '@sindresorhus/is@7.2.0':
+    resolution: {integrity: sha512-P1Cz1dWaFfR4IR+U13mqqiGsLFf1KbayybWwdd2vfctdV6hDpUkgCY0nKOLLTMSoRd/jJNjtbqzf13K8DCCXQw==}
+    engines: {node: '>=18'}
 
   '@sindresorhus/merge-streams@4.0.0':
     resolution: {integrity: sha512-tlqY9xq5ukxTUZBmoOp+m61cqwQD5pHJtFY3Mn8CA8ps6yghLH/Hw8UPdqg4OLmFW3IFlcXnQNmo/dh8HzXYIQ==}
@@ -16865,6 +17139,10 @@ packages:
     resolution: {integrity: sha512-tjwM5exMg6BGRI+kNmTntNsvdZS1X8BFYS6tnJ2hdH0kVxM6/eVZ2xy+FqStSWvYmtfFMDLIxurorHwDKfDz5Q==}
     engines: {node: '>=18'}
 
+  byte-counter@0.1.0:
+    resolution: {integrity: sha512-jheRLVMeUKrDBjVw2O5+k4EvR4t9wtxHL+bo/LxfkxsVeuGMy3a5SEGgXdAFA4FSzTrU8rQXQIrsZ3oBq5a0pQ==}
+    engines: {node: '>=20'}
+
   bytes@3.1.2:
     resolution: {integrity: sha512-/Nf7TyzTx6S3yRJObOAV7956r8cr2+Oj8AC5dt8wSP3BQAoeX58NoHyCU8P8zGkNXStjTSi6fzO6F0pBdcYbEg==}
     engines: {node: '>= 0.8'}
@@ -16876,6 +17154,14 @@ packages:
   cacheable-lookup@5.0.4:
     resolution: {integrity: sha512-2/kNscPhpcxrOigMZzbiWF7dz8ilhb/nIHU3EyZiXWXpeq/au8qJ8VhdftMkty3n7Gj6HIGalQG8oiBNB3AJgA==}
     engines: {node: '>=10.6.0'}
+
+  cacheable-lookup@7.0.0:
+    resolution: {integrity: sha512-+qJyx4xiKra8mZrcwhjMRMUhD5NR1R8esPkzIYxX96JiecFoxAXFuz/GpR3+ev4PE1WamHip78wV0vcmPQtp8w==}
+    engines: {node: '>=14.16'}
+
+  cacheable-request@13.0.19:
+    resolution: {integrity: sha512-SVXGH037+Mo1aIMO5B2UcleR43FGjFdN+M8JObSyEoQ2Mn4CODRWx28gN5jiTF0n5ItsgtIZfyargMNs8GX4kg==}
+    engines: {node: '>=18'}
 
   cacheable-request@7.0.2:
     resolution: {integrity: sha512-pouW8/FmiPQbuGpkXQ9BAPv/Mo5xDGANgSNXzTzJ8DrKGuXOssM4wIQRjfanNRh3Yu5cfYPvcorqbhg2KIJtew==}
@@ -17127,6 +17413,10 @@ packages:
 
   decode-named-character-reference@1.3.0:
     resolution: {integrity: sha512-GtpQYB283KrPp6nRw50q3U9/VfOutZOe103qlN7BPP6Ad27xYnOIWv4lPzo8HCAL+mMZofJ9KEy30fq6MfaK6Q==}
+
+  decompress-response@10.0.0:
+    resolution: {integrity: sha512-oj7KWToJuuxlPr7VV0vabvxEIiqNMo+q0NueIiL3XhtwC6FVOX7Hr1c0C4eD0bmf7Zr+S/dSf2xvkH3Ad6sU3Q==}
+    engines: {node: '>=20'}
 
   decompress-response@6.0.0:
     resolution: {integrity: sha512-aW35yZM6Bb/4oJlZncMH2LCoZtJXTRxES17vE3hoRiowU2kWHaJKFkSBDnDR+cm9J+9QhXmREyIfv0pji9ejCQ==}
@@ -17482,6 +17772,10 @@ packages:
   form-data-encoder@1.7.2:
     resolution: {integrity: sha512-qfqtYan3rxrnCk1VYaA4H+Ms9xdpPqvLZa6xmMgFvhO32x7/3J/ExcTd6qpxM0vH2GdMI+poehyBZvqfMTto8A==}
 
+  form-data-encoder@4.1.0:
+    resolution: {integrity: sha512-G6NsmEW15s0Uw9XnCg+33H3ViYRyiM0hMrMhhqQOR8NFc5GhYrI+6I3u7OTw7b91J2g8rtvMBZJDbcGb2YUniw==}
+    engines: {node: '>= 18'}
+
   form-data@2.5.6:
     resolution: {integrity: sha512-Ogz/E85h9tlfJzpI6TuFpGcHZFhLrb9Gw8wq9v40CxSCPnv7ahKr6Xgtkn0KYCDQJ8DNn5VoMO8EXr9V5PadyA==}
     engines: {node: '>= 0.12'}
@@ -17634,6 +17928,10 @@ packages:
     resolution: {integrity: sha512-o0Je4NvQObAuZPHLFoRSkdG2lTgtcynqymzg2Vupdx6PorhaT5MCbIyXG6d4D94kk8ZG57QeosgdiqfJWhEhlQ==}
     engines: {node: '>=10.19.0'}
 
+  got@14.6.6:
+    resolution: {integrity: sha512-QLV1qeYSo5l13mQzWgP/y0LbMr5Plr5fJilgAIwgnwseproEbtNym8xpLsDzeZ6MWXgNE6kdWGBjdh3zT/Qerg==}
+    engines: {node: '>=20'}
+
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
@@ -17719,6 +18017,10 @@ packages:
 
   http2-wrapper@1.0.3:
     resolution: {integrity: sha512-V+23sDMr12Wnz7iTcDeJr3O6AIxlnvT/bmaAAAP/Xda35C90p9599p0F1eHR/N1KILWSoWVAiOMFjBBXaXSMxg==}
+    engines: {node: '>=10.19.0'}
+
+  http2-wrapper@2.2.1:
+    resolution: {integrity: sha512-V5nVw1PAOgfI3Lmeaj2Exmeg7fenjhRUgz1lPSezy1CuhPYbgQtbQj4jZfEAEMlaL+vupsvhjqCyjzob0yxsmQ==}
     engines: {node: '>=10.19.0'}
 
   https-proxy-agent@7.0.0:
@@ -17938,6 +18240,12 @@ packages:
   keyv@4.0.0:
     resolution: {integrity: sha512-U7ioE8AimvRVLfw4LffyOIRhL2xVgmE8T22L6i0BucSnBUyv4w+I7VN/zVZwRKHOI6ZRUcdMdWHQ8KSUvGpEog==}
 
+  keyv@5.6.0:
+    resolution: {integrity: sha512-CYDD3SOtsHtyXeEORYRx2qBtpDJFjRTGXUtmNEMGyzYOKj1TE3tycdlho7kA1Ufx9OYWZzg52QFBGALTirzDSw==}
+
+  koffi@3.1.1:
+    resolution: {integrity: sha512-mRX6AMeeKCxSOeOopqAcLAl5jcNvge7NAG8l7rF/8gGJATI0tdHFYjteIdE0mGOtWdsrJOij+PjnP8Q9c1gwgA==}
+
   koffi@3.1.5:
     resolution: {integrity: sha512-XVwwrxg0Ca6IEUQF4YtGIU4XN0LSselFYpYvgfhh8wafCunhEEx5hPr7LZhp5QyeFA/LcRsKHTqncCdjWjWAlg==}
 
@@ -18017,6 +18325,10 @@ packages:
   lowercase-keys@2.0.0:
     resolution: {integrity: sha512-tqNXrS78oMOE73NMxK4EMLQsQowWf8jKooH9g7xPavRT706R6bkQJ6DY2Te7QukaZsulxa30wQ7bk0pm4XiHmA==}
     engines: {node: '>=8'}
+
+  lowercase-keys@3.0.0:
+    resolution: {integrity: sha512-ozCC6gdQ+glXOQsveKD0YsDy8DSQFjDTz4zyzEHNV5+JP5D62LmfDZ6o1cycFx9ouG940M5dE8C8CTewdj2YWQ==}
+    engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
 
   lru-cache@10.2.0:
     resolution: {integrity: sha512-2bIM8x+VAf6JT4bKAljS1qUWgMsqZRPGJS6FSahIMPVvctcNhyVp7AJu7quxOW9jwkryBReKZY5tY5JYv2n/7Q==}
@@ -18100,6 +18412,9 @@ packages:
   micromark-core-commonmark@2.0.3:
     resolution: {integrity: sha512-RDBrHEMSxVFLg6xvnXmb1Ayr2WzLAWjeSATAoxwKYJV94TeNavgoIdA0a9ytzDSVzBy2YKFK+emCPOEibLeCrg==}
 
+  micromark-core-commonmark@2.0.4:
+    resolution: {integrity: sha512-wxEeE8v8XVvOrxn1TZj74qYhAtTQsSqufHVS3uNVyT1MupXxhyaHk8/9xDNPh9BmL77QNDgWTkZ3RsYHB2ry7w==}
+
   micromark-extension-gfm-autolink-literal@2.1.0:
     resolution: {integrity: sha512-oOg7knzhicgQ3t4QCjCWgTmfNhvQbDDnJeVu9v81r7NltNCVmhPy1fJRX27pISafdjL+SVc4d3l48Gb6pbRypw==}
 
@@ -18133,6 +18448,9 @@ packages:
   micromark-factory-space@2.0.1:
     resolution: {integrity: sha512-zRkxjtBxxLd2Sc0d+fbnEunsTj46SWXgXciZmHq0kDYGnck/ZSGj9/wULTV95uoeYiK5hRXP2mJ98Uo4cq/LQg==}
 
+  micromark-factory-space@2.1.0:
+    resolution: {integrity: sha512-fS8hnLIjnjvdQIj39Geug8wWsR0HrYZ43KShKxNfwT7t2LOHo/LbWZEzEaSOjwtjdCsjoE6syHhonEzW0zv0+Q==}
+
   micromark-factory-title@2.0.0:
     resolution: {integrity: sha512-jY8CSxmpWLOxS+t8W+FG3Xigc0RDQA9bKMY/EwILvsesiRniiVMejYTE4wumNc2f4UbAa4WsHqe3J1QS1sli+A==}
 
@@ -18157,6 +18475,9 @@ packages:
   micromark-util-decode-string@2.0.1:
     resolution: {integrity: sha512-nDV/77Fj6eH1ynwscYTOsbK7rR//Uj0bZXBwJZRfaLEJ1iGBR6kIfNmlNqaqJf649EP0F3NWNdeJi03elllNUQ==}
 
+  micromark-util-edit-map@1.0.0:
+    resolution: {integrity: sha512-Pa2ljlsEL6sVwFaYeyrOLSYbQt73JvGbPOYFq+9AElXiSnfI5Q4465RRZ1sHv7lDjDOnGRDDaqPXqClqWK/q1Q==}
+
   micromark-util-encode@2.0.0:
     resolution: {integrity: sha512-pS+ROfCXAGLWCOc8egcBvT0kf27GoWMqtdarNfDcjb6YLuV5cM3ioG45Ys2qOVqeqSbjaKg72vU+Wby3eddPsA==}
 
@@ -18180,6 +18501,9 @@ packages:
 
   micromark-util-types@2.0.2:
     resolution: {integrity: sha512-Yw0ECSpJoViF1qTU4DC6NwtC4aWGt1EkzaQB8KPPyCRR8z9TWeV0HbEFGTO+ZY1wB22zmxnJqhPyTpOVCpeHTA==}
+
+  micromark-util-types@2.0.3:
+    resolution: {integrity: sha512-oxB2Ik03hI0gv+VNn9tnh1t1YEe9MDPptViAEgfdf3YQHsn0pzGTgCdlSCJXcwhqm8phaEuM7zeEu3QQzVBrPg==}
 
   micromark@4.0.0:
     resolution: {integrity: sha512-o/sd0nMof8kYff+TqcDx3VSrgBTcZpSvYcAHIfHhv5VAuNmisCxjhx6YmxS8PFEpb9z5WKWKPdzf0jM23ro3RQ==}
@@ -18217,6 +18541,10 @@ packages:
   mimic-response@3.1.0:
     resolution: {integrity: sha512-z0yWI+4FDrrweS8Zmt4Ej5HdJmky15+L2e6Wgn3+iK5fWzb6T3fhNFq2+MeTRb064c6Wr4N/wv0DzQTjNzHNGQ==}
     engines: {node: '>=10'}
+
+  mimic-response@4.0.0:
+    resolution: {integrity: sha512-e5ISH9xMYU0DzrT+jl8q2ze9D6eWBto+I8CNpe+VI+K2J/F/k3PdkdTdz4wvGVH4NTpo+NRYTVIuMQEMMcsLqg==}
+    engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
 
   minimatch@10.2.6:
     resolution: {integrity: sha512-vpLQEs+VLCr1nU0BXS07maYoFwlDAH0gngQuuttxIwutDFEMHq2blX+8vpgxDdK3J1PwjCJiep77OitTZ4Ll1A==}
@@ -18382,6 +18710,10 @@ packages:
     resolution: {integrity: sha512-VU4pzAuh7Kip71XEmO9aNREYAdMHFGTVj/i+CaTImS8x0i1d3jUZkXhqluy/PRgjPLMgsLQulYY3PJ/aSbSjpQ==}
     engines: {node: '>=10'}
 
+  normalize-url@8.1.1:
+    resolution: {integrity: sha512-JYc0DPlpGWB40kH5g07gGTrYuMqV653k3uBKY6uITPWds3M0ov3GaWGp9lbE3Bzngx8+XkfzgvASb9vk9JDFXQ==}
+    engines: {node: '>=14.16'}
+
   npm-run-path@6.0.0:
     resolution: {integrity: sha512-9qny7Z9DsQU8Ou39ERsPU4OZQlSTP47ShQzuKZ6PRXpYLtIFgl/DEBYEXKlvcEa+9tHVcK8CF81Y2V72qaZhWA==}
     engines: {node: '>=18'}
@@ -18447,6 +18779,10 @@ packages:
   p-cancelable@2.1.1:
     resolution: {integrity: sha512-BZOr3nRQHOntUjTrH8+Lh54smKHoHyur8We1V8DSMVrl5A2malOOwuJRnKRDjSnkoeBh4at6BwEnb5I7Jl31wg==}
     engines: {node: '>=8'}
+
+  p-cancelable@4.0.1:
+    resolution: {integrity: sha512-wBowNApzd45EIKdO1LaU+LrMBwAcjfPaYtVzV3lmfM3gf8Z4CHZsiIqlM8TZZ8okYvh5A1cP6gTfCRQtwUpaUg==}
+    engines: {node: '>=14.16'}
 
   p-limit@3.1.0:
     resolution: {integrity: sha512-TYOanM3wGwNGsZN2cVTYPArw454xnXj5qmWF1bEoAc4+cU/ol7GVh7odevjp1FNHduHc3KZMcFduxU5Xc6uJRQ==}
@@ -18761,6 +19097,10 @@ packages:
 
   responselike@2.0.1:
     resolution: {integrity: sha512-4gl03wn3hj1HP3yzgdI7d3lCkF95F21Pz4BPGvKHinyQzALR5CapwC8yIi0Rh58DEMQ/SguC03wFj2k0M/mHhw==}
+
+  responselike@4.0.2:
+    resolution: {integrity: sha512-cGk8IbWEAnaCpdAt1BHzJ3Ahz5ewDJa0KseTsE3qIRMJ3C698W8psM7byCeWVpd/Ha7FUYzuRVzXoKoM6nRUbA==}
+    engines: {node: '>=20'}
 
   restructure@3.0.2:
     resolution: {integrity: sha512-gSfoiOEA0VPE6Tukkrr7I0RBdE0s7H1eFCDBk05l1KIQT1UIKNc5JZy6jdyW6eYH3aR3g5b3PuL77rq0hvwtAw==}
@@ -19148,6 +19488,10 @@ packages:
   type-fest@0.13.1:
     resolution: {integrity: sha512-34R7HTnG0XIJcBSn5XhDd7nNFPRcXYRZrBB2O2jdKqYODldSzBAqzsWoZYYvduky73toYS/ESqxPvkDf/F0XMg==}
     engines: {node: '>=10'}
+
+  type-fest@4.26.1:
+    resolution: {integrity: sha512-yOGpmOAL7CkKe/91I5O3gPICmJNLJ1G4zFYVAsRHg7M64biSnPtRj0WNQt++bRkjYOqjWXrhnUw1utzmVErAdg==}
+    engines: {node: '>=16'}
 
   type-is@2.1.0:
     resolution: {integrity: sha512-faYHw0anBbc/kWF3zFTEnxSFOAGUX9GFbOBthvDdLsIlEoWOFOtS0zgCiQYwIskL9iGXZL3kAXD8OoZ4GmMATA==}
@@ -20515,46 +20859,93 @@ snapshots:
     dependencies:
       jsbi: 4.3.2
 
+  '@keyv/serialize@1.1.1': {}
+
+  '@koromix/koffi-darwin-arm64@3.1.1':
+    optional: true
+
   '@koromix/koffi-darwin-arm64@3.1.5':
+    optional: true
+
+  '@koromix/koffi-darwin-x64@3.1.1':
     optional: true
 
   '@koromix/koffi-darwin-x64@3.1.5':
     optional: true
 
+  '@koromix/koffi-freebsd-arm64@3.1.1':
+    optional: true
+
   '@koromix/koffi-freebsd-arm64@3.1.5':
+    optional: true
+
+  '@koromix/koffi-freebsd-ia32@3.1.1':
     optional: true
 
   '@koromix/koffi-freebsd-ia32@3.1.5':
     optional: true
 
+  '@koromix/koffi-freebsd-x64@3.1.1':
+    optional: true
+
   '@koromix/koffi-freebsd-x64@3.1.5':
+    optional: true
+
+  '@koromix/koffi-linux-arm64@3.1.1':
     optional: true
 
   '@koromix/koffi-linux-arm64@3.1.5':
     optional: true
 
+  '@koromix/koffi-linux-ia32@3.1.1':
+    optional: true
+
   '@koromix/koffi-linux-ia32@3.1.5':
+    optional: true
+
+  '@koromix/koffi-linux-loong64@3.1.1':
     optional: true
 
   '@koromix/koffi-linux-loong64@3.1.5':
     optional: true
 
+  '@koromix/koffi-linux-riscv64@3.1.1':
+    optional: true
+
   '@koromix/koffi-linux-riscv64@3.1.5':
+    optional: true
+
+  '@koromix/koffi-linux-x64@3.1.1':
     optional: true
 
   '@koromix/koffi-linux-x64@3.1.5':
     optional: true
 
+  '@koromix/koffi-openbsd-ia32@3.1.1':
+    optional: true
+
   '@koromix/koffi-openbsd-ia32@3.1.5':
+    optional: true
+
+  '@koromix/koffi-openbsd-x64@3.1.1':
     optional: true
 
   '@koromix/koffi-openbsd-x64@3.1.5':
     optional: true
 
+  '@koromix/koffi-win32-arm64@3.1.1':
+    optional: true
+
   '@koromix/koffi-win32-arm64@3.1.5':
     optional: true
 
+  '@koromix/koffi-win32-ia32@3.1.1':
+    optional: true
+
   '@koromix/koffi-win32-ia32@3.1.5':
+    optional: true
+
+  '@koromix/koffi-win32-x64@3.1.1':
     optional: true
 
   '@koromix/koffi-win32-x64@3.1.5':
@@ -21107,6 +21498,8 @@ snapshots:
   '@shikijs/vscode-textmate@10.0.2': {}
 
   '@sindresorhus/is@4.0.0': {}
+
+  '@sindresorhus/is@7.2.0': {}
 
   '@sindresorhus/merge-streams@4.0.0': {}
 
@@ -22024,11 +22417,25 @@ snapshots:
     dependencies:
       run-applescript: 7.1.0
 
+  byte-counter@0.1.0: {}
+
   bytes@3.1.2: {}
 
   bytestreamjs@2.0.1: {}
 
   cacheable-lookup@5.0.4: {}
+
+  cacheable-lookup@7.0.0: {}
+
+  cacheable-request@13.0.19:
+    dependencies:
+      '@types/http-cache-semantics': 4.2.0
+      get-stream: 9.0.1
+      http-cache-semantics: 4.2.0
+      keyv: 5.6.0
+      mimic-response: 4.0.0
+      normalize-url: 8.1.1
+      responselike: 4.0.2
 
   cacheable-request@7.0.2:
     dependencies:
@@ -22267,6 +22674,10 @@ snapshots:
   decode-named-character-reference@1.3.0:
     dependencies:
       character-entities: 2.0.2
+
+  decompress-response@10.0.0:
+    dependencies:
+      mimic-response: 4.0.0
 
   decompress-response@6.0.0:
     dependencies:
@@ -22753,6 +23164,8 @@ snapshots:
 
   form-data-encoder@1.7.2: {}
 
+  form-data-encoder@4.1.0: {}
+
   form-data@2.5.6:
     dependencies:
       asynckit: 0.4.0
@@ -22964,6 +23377,21 @@ snapshots:
       p-cancelable: 2.1.1
       responselike: 2.0.1
 
+  got@14.6.6:
+    dependencies:
+      '@sindresorhus/is': 7.2.0
+      byte-counter: 0.1.0
+      cacheable-lookup: 7.0.0
+      cacheable-request: 13.0.19
+      decompress-response: 10.0.0
+      form-data-encoder: 4.1.0
+      http2-wrapper: 2.2.1
+      keyv: 5.6.0
+      lowercase-keys: 3.0.0
+      p-cancelable: 4.0.1
+      responselike: 4.0.2
+      type-fest: 4.26.1
+
   graceful-fs@4.2.11: {}
 
   happy-dom@20.11.15:
@@ -23094,6 +23522,11 @@ snapshots:
       sshpk: 1.18.0
 
   http2-wrapper@1.0.3:
+    dependencies:
+      quick-lru: 5.1.1
+      resolve-alpn: 1.2.1
+
+  http2-wrapper@2.2.1:
     dependencies:
       quick-lru: 5.1.1
       resolve-alpn: 1.2.1
@@ -23291,6 +23724,28 @@ snapshots:
     dependencies:
       json-buffer: 3.0.1
 
+  keyv@5.6.0:
+    dependencies:
+      '@keyv/serialize': 1.1.1
+
+  koffi@3.1.1:
+    optionalDependencies:
+      '@koromix/koffi-darwin-arm64': 3.1.1
+      '@koromix/koffi-darwin-x64': 3.1.1
+      '@koromix/koffi-freebsd-arm64': 3.1.1
+      '@koromix/koffi-freebsd-ia32': 3.1.1
+      '@koromix/koffi-freebsd-x64': 3.1.1
+      '@koromix/koffi-linux-arm64': 3.1.1
+      '@koromix/koffi-linux-ia32': 3.1.1
+      '@koromix/koffi-linux-loong64': 3.1.1
+      '@koromix/koffi-linux-riscv64': 3.1.1
+      '@koromix/koffi-linux-x64': 3.1.1
+      '@koromix/koffi-openbsd-ia32': 3.1.1
+      '@koromix/koffi-openbsd-x64': 3.1.1
+      '@koromix/koffi-win32-arm64': 3.1.1
+      '@koromix/koffi-win32-ia32': 3.1.1
+      '@koromix/koffi-win32-x64': 3.1.1
+
   koffi@3.1.5:
     optionalDependencies:
       '@koromix/koffi-darwin-arm64': 3.1.5
@@ -23365,6 +23820,8 @@ snapshots:
 
   lowercase-keys@2.0.0: {}
 
+  lowercase-keys@3.0.0: {}
+
   lru-cache@10.2.0: {}
 
   lru-cache@5.1.1:
@@ -23409,7 +23866,7 @@ snapshots:
       micromark-util-decode-string: 2.0.1
       micromark-util-normalize-identifier: 2.0.0
       micromark-util-symbol: 2.0.1
-      micromark-util-types: 2.0.2
+      micromark-util-types: 2.0.3
       unist-util-stringify-position: 4.0.0
     transitivePeerDependencies:
       - supports-color
@@ -23549,23 +24006,43 @@ snapshots:
       micromark-util-symbol: 2.0.1
       micromark-util-types: 2.0.2
 
+  micromark-core-commonmark@2.0.4:
+    dependencies:
+      decode-named-character-reference: 1.3.0
+      devlop: 1.1.0
+      micromark-factory-destination: 2.0.0
+      micromark-factory-label: 2.0.0
+      micromark-factory-space: 2.1.0
+      micromark-factory-title: 2.0.0
+      micromark-factory-whitespace: 2.0.0
+      micromark-util-character: 2.1.1
+      micromark-util-chunked: 2.0.0
+      micromark-util-classify-character: 2.0.1
+      micromark-util-edit-map: 1.0.0
+      micromark-util-html-tag-name: 2.0.0
+      micromark-util-normalize-identifier: 2.0.0
+      micromark-util-resolve-all: 2.0.0
+      micromark-util-subtokenize: 2.0.0
+      micromark-util-symbol: 2.0.1
+      micromark-util-types: 2.0.3
+
   micromark-extension-gfm-autolink-literal@2.1.0:
     dependencies:
       micromark-util-character: 2.1.1
       micromark-util-sanitize-uri: 2.0.1
       micromark-util-symbol: 2.0.1
-      micromark-util-types: 2.0.2
+      micromark-util-types: 2.0.3
 
   micromark-extension-gfm-footnote@2.1.0:
     dependencies:
       devlop: 1.1.0
-      micromark-core-commonmark: 2.0.3
-      micromark-factory-space: 2.0.1
+      micromark-core-commonmark: 2.0.4
+      micromark-factory-space: 2.1.0
       micromark-util-character: 2.1.1
       micromark-util-normalize-identifier: 2.0.0
       micromark-util-sanitize-uri: 2.0.1
       micromark-util-symbol: 2.0.1
-      micromark-util-types: 2.0.2
+      micromark-util-types: 2.0.3
 
   micromark-extension-gfm-strikethrough@2.1.0:
     dependencies:
@@ -23574,27 +24051,27 @@ snapshots:
       micromark-util-classify-character: 2.0.1
       micromark-util-resolve-all: 2.0.0
       micromark-util-symbol: 2.0.1
-      micromark-util-types: 2.0.2
+      micromark-util-types: 2.0.3
 
   micromark-extension-gfm-table@2.1.1:
     dependencies:
       devlop: 1.1.0
-      micromark-factory-space: 2.0.1
+      micromark-factory-space: 2.1.0
       micromark-util-character: 2.1.1
       micromark-util-symbol: 2.0.1
-      micromark-util-types: 2.0.2
+      micromark-util-types: 2.0.3
 
   micromark-extension-gfm-tagfilter@2.0.0:
     dependencies:
-      micromark-util-types: 2.0.2
+      micromark-util-types: 2.0.3
 
   micromark-extension-gfm-task-list-item@2.1.0:
     dependencies:
       devlop: 1.1.0
-      micromark-factory-space: 2.0.1
+      micromark-factory-space: 2.1.0
       micromark-util-character: 2.1.1
       micromark-util-symbol: 2.0.1
-      micromark-util-types: 2.0.2
+      micromark-util-types: 2.0.3
 
   micromark-extension-gfm@3.0.0:
     dependencies:
@@ -23605,54 +24082,59 @@ snapshots:
       micromark-extension-gfm-tagfilter: 2.0.0
       micromark-extension-gfm-task-list-item: 2.1.0
       micromark-util-combine-extensions: 2.0.0
-      micromark-util-types: 2.0.2
+      micromark-util-types: 2.0.3
 
   micromark-extension-math@3.1.0:
     dependencies:
       '@types/katex': 0.16.8
       devlop: 1.1.0
       katex: 0.16.47
-      micromark-factory-space: 2.0.1
+      micromark-factory-space: 2.1.0
       micromark-util-character: 2.1.1
       micromark-util-symbol: 2.0.1
-      micromark-util-types: 2.0.2
+      micromark-util-types: 2.0.3
 
   micromark-factory-destination@2.0.0:
     dependencies:
       micromark-util-character: 2.1.1
       micromark-util-symbol: 2.0.1
-      micromark-util-types: 2.0.2
+      micromark-util-types: 2.0.3
 
   micromark-factory-label@2.0.0:
     dependencies:
       devlop: 1.1.0
       micromark-util-character: 2.1.1
       micromark-util-symbol: 2.0.1
-      micromark-util-types: 2.0.2
+      micromark-util-types: 2.0.3
 
   micromark-factory-space@2.0.1:
     dependencies:
       micromark-util-character: 2.1.1
       micromark-util-types: 2.0.2
 
+  micromark-factory-space@2.1.0:
+    dependencies:
+      micromark-util-character: 2.1.1
+      micromark-util-types: 2.0.3
+
   micromark-factory-title@2.0.0:
     dependencies:
-      micromark-factory-space: 2.0.1
+      micromark-factory-space: 2.1.0
       micromark-util-character: 2.1.1
       micromark-util-symbol: 2.0.1
-      micromark-util-types: 2.0.2
+      micromark-util-types: 2.0.3
 
   micromark-factory-whitespace@2.0.0:
     dependencies:
-      micromark-factory-space: 2.0.1
+      micromark-factory-space: 2.1.0
       micromark-util-character: 2.1.1
       micromark-util-symbol: 2.0.1
-      micromark-util-types: 2.0.2
+      micromark-util-types: 2.0.3
 
   micromark-util-character@2.1.1:
     dependencies:
       micromark-util-symbol: 2.0.1
-      micromark-util-types: 2.0.2
+      micromark-util-types: 2.0.3
 
   micromark-util-chunked@2.0.0:
     dependencies:
@@ -23662,12 +24144,12 @@ snapshots:
     dependencies:
       micromark-util-character: 2.1.1
       micromark-util-symbol: 2.0.1
-      micromark-util-types: 2.0.2
+      micromark-util-types: 2.0.3
 
   micromark-util-combine-extensions@2.0.0:
     dependencies:
       micromark-util-chunked: 2.0.0
-      micromark-util-types: 2.0.2
+      micromark-util-types: 2.0.3
 
   micromark-util-decode-numeric-character-reference@2.0.0:
     dependencies:
@@ -23680,6 +24162,10 @@ snapshots:
       micromark-util-decode-numeric-character-reference: 2.0.0
       micromark-util-symbol: 2.0.1
 
+  micromark-util-edit-map@1.0.0:
+    dependencies:
+      micromark-util-types: 2.0.3
+
   micromark-util-encode@2.0.0: {}
 
   micromark-util-html-tag-name@2.0.0: {}
@@ -23690,7 +24176,7 @@ snapshots:
 
   micromark-util-resolve-all@2.0.0:
     dependencies:
-      micromark-util-types: 2.0.2
+      micromark-util-types: 2.0.3
 
   micromark-util-sanitize-uri@2.0.1:
     dependencies:
@@ -23703,11 +24189,13 @@ snapshots:
       devlop: 1.1.0
       micromark-util-chunked: 2.0.0
       micromark-util-symbol: 2.0.1
-      micromark-util-types: 2.0.2
+      micromark-util-types: 2.0.3
 
   micromark-util-symbol@2.0.1: {}
 
   micromark-util-types@2.0.2: {}
+
+  micromark-util-types@2.0.3: {}
 
   micromark@4.0.0(supports-color@9.4.0):
     dependencies:
@@ -23715,8 +24203,8 @@ snapshots:
       debug: 4.4.3(supports-color@9.4.0)
       decode-named-character-reference: 1.3.0
       devlop: 1.1.0
-      micromark-core-commonmark: 2.0.3
-      micromark-factory-space: 2.0.1
+      micromark-core-commonmark: 2.0.4
+      micromark-factory-space: 2.1.0
       micromark-util-character: 2.1.1
       micromark-util-chunked: 2.0.0
       micromark-util-combine-extensions: 2.0.0
@@ -23727,7 +24215,7 @@ snapshots:
       micromark-util-sanitize-uri: 2.0.1
       micromark-util-subtokenize: 2.0.0
       micromark-util-symbol: 2.0.1
-      micromark-util-types: 2.0.2
+      micromark-util-types: 2.0.3
     transitivePeerDependencies:
       - supports-color
 
@@ -23750,6 +24238,8 @@ snapshots:
   mimic-response@1.0.1: {}
 
   mimic-response@3.1.0: {}
+
+  mimic-response@4.0.0: {}
 
   minimatch@10.2.6:
     dependencies:
@@ -23897,6 +24387,8 @@ snapshots:
 
   normalize-url@6.0.1: {}
 
+  normalize-url@8.1.1: {}
+
   npm-run-path@6.0.0:
     dependencies:
       path-key: 4.0.0
@@ -23950,6 +24442,8 @@ snapshots:
   opener@1.5.2: {}
 
   p-cancelable@2.1.1: {}
+
+  p-cancelable@4.0.1: {}
 
   p-limit@3.1.0:
     dependencies:
@@ -24249,6 +24743,10 @@ snapshots:
   responselike@2.0.1:
     dependencies:
       lowercase-keys: 2.0.0
+
+  responselike@4.0.2:
+    dependencies:
+      lowercase-keys: 3.0.0
 
   restructure@3.0.2: {}
 
@@ -24738,6 +25236,8 @@ snapshots:
 
   type-fest@0.13.1:
     optional: true
+
+  type-fest@4.26.1: {}
 
   type-is@2.1.0:
     dependencies:

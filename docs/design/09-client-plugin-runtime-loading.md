@@ -322,7 +322,7 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   只有源码、无上游 tsdown 生成的 `lib/typert.remote-client.js`；`gen-typert-remotes.mjs` 以该官方 client
   汇编的 **value import 集合为唯一选择源**，逐包校验上游标准 `./remote` exports/files 契约，把 Host face
   产物写入 chamber-owned `renderer/src/generated/typert/`，Vite 的通用 `/remote` resolver 只消费这些产物。
-  当前 23 个 contribution（`EXPECTED_MOUNT_PACKAGES` 挂载序表 + import 选择集合，含 file/session/workspace reference）由独立锁步测试
+  当前 24 个 contribution（`EXPECTED_MOUNT_PACKAGES` 挂载序表 + import 选择集合，含 file/session/workspace reference）由独立锁步测试
   固定，避免手抄包表滞后到 Rollup 才报缺模块；vendor 始终只读。
 - **失败降级与诊断语义（模块 C）**：图**通道**失败（fetch 网络错 / 非 2xx / 图畸形 / 行缺 id/url/rev）→ 降级为无额外插件继续 boot + console.error，并经 renderer-local chamberBridge 上报用户可见诊断（404/方法缺失 = `not-injected`，其余 = `graph-unreachable`；复合 bundle 仍提供完整官方壳，仅丢失 profile 新装插件；畸形图响亮报错，不做猜测式合并）；503 `instance_unavailable` 是未就绪预期态，静默。**（W3）**：**除 404 外的通道失败同样上浮 `ShellState.degraded`**（kind `graph-unavailable`，判定在 `renderer/src/source-readiness.ts` 的 `graphGapKindFor`），由 App 的非阻断 boot-gap 横幅说明并沿用「每个 ready 世代自动重挂一次」；`not-injected`（HTTP 404 或通道答 method 缺失）仍是 gateway/mobile 的合法无图形态。**取消不是来源事实**：`AbortError` 与 WebKit 的 `Fetch is aborted`（被取代的挂载、我们自己的拆除、页面被系统节流）不落任何缺口判定——同一预算内重试，预算走完仍只有取消则无图 boot + 命名诊断，重挂交给既有的图回归探测（判定归 `packages/dsh-stream-state` 的 `classifyObservation` 单一所有者；真实通道失败仍照旧上浮，取消不得掩掉它）。**自愈臂是事实、不是时刻**：结算时相位未到 ready 也把臂留成 pending，由随后第一个 ready 世代偿还（`dsh-stream-state` 的 `healPending`），每个 ready 世代至多一次。**Rejected alternatives（取消分类与自愈臂）**：把取消一律读成通道失败（缺口粘在来源上，实机形态就是「只剩空壳、只有重载能救」）；把取消读成成功（404 的 `not-injected` 与「从未得到回答」不再可分）；只在结算当刻相位已 ready 才 arm（冷启动/重连竞赛里永久丢失臂）；无上限按 ready 世代重挂（把一次瞬态缺口放大成重挂循环）。**bundle 加载**失败**不降级**——响亮失败、该实例 boot 报错呈现（§4 fail-loud）。**重建/替换竞态恢复（一轮有界恢复）**：上游 rev 是文件元数据派生的构建标识（推导与根治见 §5「vendor 侧根治」；**重建/替换**该文件才变，纯重启不变）⇒ 取图与加载之间被改写（dev 重建/重装）的行在旧 URL 上 404，一般瞬时 404 同样落此；故 `collectExtraRows` 对普通失败行重拉一次宿主图（同一 503 预算）并按 fresh URL 重载，仍失败才响亮失败（DOM script **超时**不进恢复轮：迟到 load 收敛成功、迟到 error 允许重试）；恢复成功的行以 fresh url/rev 返回（旧 rev URL 已失效，不得作为可加载源下发）。**根治在上游（vendor 只读，登记不修）**：`artifactRevision` 改为对 bundle 字节求内容哈希即可让同内容跨安装/跨宿主的 rev 一致、假 `instance-version-conflict` 整类消失（§5，提案 §11）；恢复轮只覆盖「文件被改写与取图的竞态」。**分层**：`loadModuleBundle` 失败即 throw → 该实例 boot 响亮失败；预加载成功后内核不再为额外行发起新加载，只剩 materialize/apply 失败，按下一条降级。
 - **额外行 apply 失败降级（模块 D）**：额外行**加载成功但 entry 未能 apply**（materialize 出非插件对象——如壳种子词表把某包静态注册、后端新增其 client half 后 seed 遮蔽 factory 导致的 "invalid plugin"；注册进本壳未声明的槽；重复安装壳已提供的服务）→ **降级不致命**：
@@ -361,32 +361,65 @@ N-ctx 同源壳要求每个实例的 API 走自己的反代前缀 `/api/i/<id>/*
 **document-relative**（`new URL('api/file?…', document.baseURI)`、`*_ROUTE = *_PATH.slice(1)`），而单一
 N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀无处承载 ⇒ 404（用户可见的坏图）。
 裁决（以上游为准 + 最小侵入）：**不为一行 URL 去 fork 整个 `ui-chat`（82 文件 / ~11.3k 行）**，改为
-登记式 vendor 补丁集。**本集合不含 open-in**：本地目录改由实例进程内的 chamber host 包提供
+登记式 vendor 补丁集。**目录打开不在本集合内**：本地目录改由实例进程内的 chamber host 包提供
 （`dsh-chamber-seed-open-in`，设计 20 §2.2/§6 fork & supersede），不读官方路由、无需同源 URL 补丁；
 客户端半是我们自己的插件，base path 取自各 entry 的私有 ctx。
+**open-in 包本身也不在补丁集内**：官方 open-in **客户端**行仍随实例 bundle 加载，其消费的
+`deliverables[.review].file.actions` owner 路由（`api/present.open` / `api.changes.open`）由 ui-deliverables
+按 `/api/i/<id>/` 前缀下发（下表 ⑨⑩）——消费者只 `fetch(actionUrl)` ⇒ 无需覆盖或补丁 open-in 包；
+其 header 席位保持 inert。
 
 - 注册表 `packages/renderer/scripts/vendor-patches.mjs`：每条补丁 = 文件 + 理由 + 一到多处
   `expect`→`replace`，`expect` 必须**恰好命中一次**（0 次或多次 = 构建期抛错，绝不静默发出未打补丁的
   bundle）。应用点 = renderer 的 `deepseekSource().transform`（我们的 vite 配置），vendor 文件**零写入**；
   模块 id 并接受软链形式与 `realpathSync` 后的子模块形式（vite 实际给后者）。
-- 落点（当前：12 个文件 / 26 处锚点，逐锚点由触点表 C9 与 `packages/renderer/scripts/vendor-patches.test.mjs`
-  校验）：① `ui-chat` 的 `chat/AssistantMarkdown.tsx` 读取新增 root 标准 **prop**
-  `chamberFileApiBase`（chamber layout fork 经 `ctx.slots.provideRoot({ props })` 提供，值 = 本 entry 的
+- 落点（当前：15 个文件 / 36 处锚点，逐锚点由触点表 C9 与 `packages/renderer/scripts/vendor-patches.test.mjs`
+  校验；下列圈号 ①–⑪ 是 URL 类，每个圈号对应**一个**文件，其余 4 个文件属下三/四类：实测帧成本 1（`assembly.ts`）/ 逻辑缺陷 1（`use-chat-reading.ts`）/ 多实例正确性 1（`ui-workspace/navigation.ts`）/ 座席所有权转移 1（`ui-workspace/index.ts`））：① `ui-chat` 的
+  `chat/AssistantMarkdown.tsx` 读取新增 root 标准
+  **prop** `chamberFileApiBase`（chamber layout fork 经 `ctx.slots.provideRoot({ props })` 提供，值 = 本 entry 的
   `ctx.chamberBasePath`），`pathImages` 以 `new URL(chamberFileApiBase + '/', document.baseURI)` 作为上游
-  `fileMediaUrl` 的解析基准；`chat/AssistantNodeView.tsx` 只把该 prop 转发进组件（vendor scoped-slots 把
-  root 标准源合并进**每个**作用域，故 session 作用域的 chat 节点也能拿到）；② `client-file-upload` 的
+  `fileMediaUrl` 的解析基准；② `chat/AssistantNodeView.tsx` 只把该 prop 转发进组件；③ `client-file-upload` 的
   `client/runtime.ts`（`api/session/uploadFileBinary`）改从服务自身 `ctx` 读 `chamberBasePath`、归一为
   `/api/i/<id>/` 前缀前置到上游 document-relative 路由——**该包已转为 composite covered**（extra-row
-  bundle 由实例提供、永不经过我们的构建）；③④ `ui-deliverables` 的 `client/present-open.ts` +
-  `client/index.ts`（`api/present.host|open`），控制器由 `apply(ctx)` 构造时接收归一前缀；⑤⑥
-  `session-log-export` 的 `client/controller.ts` + `client/index.ts`（`api/session.export`，控制器字段；
-  该包转 **covered-deferred**，否则 extra-row bundle 不经过构建）。全部保留「base path 缺失 → 回落上游
-  document-relative 行为」的形状，读取一律用 `ctx.get('chamberBasePath')`（cordis 代理对未 provide 的
-  服务**抛错**，属性读取会炸）。
-- 另一类补丁：**实测帧成本（正确性优先）**——`ui-chat` 的 `ReasoningRow.module.css` 行 sweep（`left`
-  动画改为合成器 `transform`）、`ui-conversation` 的三层 rAF 发布链；每条 `reason` 必须带同一 Electron/
-  显示器上的 A/B 实测（`app.getAppMetrics` 累积差）。`GenericCommandCard` 行 sweep 已随 0.1.7 上游删除，
-  对应补丁同步退役。
+  bundle 由实例提供、永不经过我们的构建）；④⑤ `ui-deliverables` 的 `client/present-open.ts` + `client/index.ts`
+  （`api/present.host|open` 与 `api/changes.summary|diff` 的前缀下发），控制器与两个读 store 均由 `apply(ctx)`
+  构造时接收归一前缀；⑥ `client/host-read-store.ts`（两个读 store 的 wire URL；state key 保持未前缀）；
+  ⑦⑧ `session-log-export` 的 `client/controller.ts` + `client/index.ts`（`api/session.export`，控制器字段；
+  该包转 **covered-deferred**，否则 extra-row bundle 不经过构建）；⑨⑩ `ui-deliverables` 的
+  `client/Deliverables.tsx` + `client/ReviewTab.tsx`：owner 动作路由（`api/present.open` / `api.changes.open`）
+  按 `/api/i/<id>/` 前缀下发给 `deliverables[.review].file.actions` 的消费者（官方 open-in 客户端只
+  `fetch(actionUrl)`）。全部保留「base path 缺失（`undefined` 或空串）→ 回落上游 document-relative 行为」的
+  形状：组件源（①②⑨⑩⑪）读 root 标准 prop `chamberFileApiBase`——vendor scoped-slots 的 `standardProps` 把 root
+  标准源合并进**每个**作用域，故 session 作用域的 chat 节点与延迟挂载的交付卡/review 都能拿到（该合并前提由
+  `packages/renderer/test/lifecycle/vendor-file-route-base-contract.test.ts` 钉住）；其余站点读本 entry ctx 的
+  `ctx.get('chamberBasePath')`（`ctx.get` 对未 provide 返回 `undefined`；对**服务代理读属性**才抛错）。⑪ 第三处图片解析器
+  （同为组件源，读同一 root 标准 prop）：`ui-chat` 的 `chat/ChatView.tsx` 的 `fileImages`（解码后的文件引用/
+  提及图片）——它以 `document.baseURI` 为基准，N-ctx 壳下落到控制面 origin；解析基准换成本 entry 的
+  `/api/i/<id>/`，解析器收到的路径保持未前缀（前缀只属于 base）。该补丁是聊天面图片的**承重修复**：
+  `ui-primitives` 的 markdown render 先问 delegate provider（`fileImages?.resolve(file.path)`），只修
+  `pathImages` 时用户可见行为不变（该 precedence 由 `vendor-file-route-base-contract.test.ts` 钉住）。
+  vendor 侧
+  `ui-deliverables/src/client/file-actions.ts` 的 owner 注释仍写 document-relative action route（vendor 只读，
+  语义以本节为准）。
+  边界：不支持把控制面挂在反向代理**子路径**下（`chamberBasePath` 与 `document.baseURI` 都假定 origin 根；
+  子路径挂载会让前缀与基 URI 不一致）；前缀契约假定 open-in 消费者按 **opaque URL** 处理 `actionUrl`（只
+  `fetch`、不重解析）——只对 pin 住的版本成立，实例自带 open-in bundle 版本偏斜时其消费者可能自行解析，pin
+  升级检查表复核该不变量（消费者锁见 `vendor-file-route-base-contract.test.ts`）。空串回落不是输入校验：
+  `chamber-entry` 已在其唯一来源执行期断言 `=== /api/i/<id>`，消费端的双守卫只表达归一语义。
+- **已知缺口（未收口，设计裁决待定）**：右侧栏 Markdown 文档预览的图片解析器（`ui-sidebar-documentpreview` 的
+  `markdown/MarkdownBody.tsx`，同样是 `document.baseURI` 基准）**不在 composite 构建图内**——该包是官方 web-app
+  行（`packages/bundle/web-app/cordis.patch.yml`），由实例 bundle 经 host-graph 的 extra rows 运行时加载，我们的构建
+  永远看不到它的模块，故**生产端前缀补丁结构上不可用**（登记即被 vite `buildEnd` 的 applied 覆盖门拒绝：
+  `vendor patch(es) never applied`）。收口 = 覆盖裁决（§3.5：整包进 composite）。代价 = 构建面扩大 + 该包的
+  `sidebar.right.tab.document` 席位由实例侧 `ui-sidebar-right` 声明所带来的跨 bundle 注册时序契约；其 pdfjs/xlsx/
+  exceljs/fortune-sheet 等重依赖在 vendor workspace 下已可解析（先例：composite 的 `lexical`/`simple-icons`），且
+  deferred 动态块不计入 `mainGraphRaw`，故重量级依赖与 chunk 预算不是主要成本。**收口的选项/推荐/触发条件记于
+  `docs/progress/STATUS.md`**（本节只留机制）。锁 = `packages/renderer/test/lifecycle/vendor-file-route-base-contract.test.ts`
+  （resolver 形状 + 该包未进 covered 集；上游加 base 参数或该包被覆盖即红）。
+- 另一类补丁：**实测帧成本（正确性优先）**——`ui-conversation` 的 `client/conversation/assembly.ts` 三层 rAF
+  发布链；每条 `reason` 必须带同一 Electron/显示器上的 A/B 实测（`app.getAppMetrics` 累积差）。`ui-chat` 的
+  `ReasoningRow.module.css` 行 sweep 已随 0.2.0 上游移入共享 `ui-primitives/TextShimmer`（合成器 keyframes）
+  而退役，`RETIRED_PATCHES` 的 `ensure` 钉住新形状；`GenericCommandCard` 行 sweep 已随 0.1.7 上游删除。
 - 第三类补丁：**模块私有状态机的逻辑缺陷（维护者裁决纳入）**——`ui-chat` 的 `chat/use-chat-reading.ts`
   采样 settle：viewport 把「仅位置变化」记为 reader 移动，位移落在跟随容差（`FOLLOW_THRESHOLD` = 24px）内时
   旧代码保留残余偏移 ⇒ 最新一行半遮在输入框上方、且不出现「回到最新」，直到下一次布局变化（实测：真实前端 12px
@@ -399,13 +432,22 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   `TypeError`；pin 住的 `doOpen` 只对 `isRemoteFailure` 写 `error`、其余原样 rethrow ⇒ 页面永久停驻 `loading`
   （间歇性：raw chunk 只对 block-start/block-end/usage/finish 出现）。修法 = 同一次调用加 `.replace(/\s+/g, ' ')`
   空白归一（V8 行为不变、WebKit 恢复）；`reason` 写明症状、接受的取舍（仅空白差异的伪造函数会通过，名字与原型身份
-  检查仍在）与删除条件（上游改为引擎无关判定）。该条同样由 C9 + `vendor-patches.test.mjs` 的**执行用例与负对照**钉住。
+  检查仍在）与删除条件（上游改为引擎无关判定）。**0.2.0 上游已改为引擎无关比较**（与本 realm 自己的
+  `Function.prototype.toString` 比），该条随之退役并移入 `RETIRED_PATCHES`，`ensure` 钉住新的比较句。
 - 第四类补丁：**N-ctx 多实例正确性（维护者裁决纳入）**——`ui-workspace` 的 `client/navigation.ts`
   Workspace selection store 用页面级 localStorage 键 `dsh.sessions.current`，而单页把 N 个实例复用进同一
   document ⇒ 两个实例共享一个选择槽，切换源会恢复（或覆盖）另一实例的当前会话（侧栏只做 owner 源回显补偿，
   store 里的外来值仍在）。store 在 vendor service 内构造、键模块私有，chamber 包无法从外部改键；补丁从
   per-entry `ctx.chamberBasePath` 取 scope（缺失即回落上游未 scoped 行为），键变为
   `dsh.sessions.current./api/i/<id>`。`reason` 必须写明跨实例症状与接受的取舍；上游自带 scope 后删除该条。
+- 第四类的**第二种形态（座席所有权转移，0.2.0 新增）**：`ui-workspace` 的 `client/index.ts` 在其
+  workspace-browser 注册里声明 `sidebar.session.row.leading` / `sidebar.session.row.hover` 两座席，而 chamber 壳
+  自建多来源列表、**永不挂载**该注册（`sidebar.workspaces` 洞只声明不调用，I-4 锁禁止渲染该字面量）⇒ 座席只能由
+  注册所有者声明，chamber 无法转交（重复声明即抛）。补丁删除上游的两行声明，chamber 侧栏在自己的 `children` 里声明
+  并渲染两席（`renderSlot` 的 `fallback` 让自有 Schedule 标记与 occupant 永不并现）。无官方布局回落（无 chamber 壳时
+  座席未声明），故用 `noRetireForm`；上游若提供座席转交/共享 API 则删除该条。座席是**页面级** list slot：occupant 用固定
+  id 注册（`ui-schedule` = `schedule-mark`），`ui-slots` 对同 id 同优先级的第二条注册抛错 ⇒ 同一页面同时启用两个实例的
+  schedule bundle 属开放风险（opt-in、默认不被模板选中；STATUS 已登记，解 = 每实例 bundle 的页面级 slot id 命名空间）。
 - 保鲜门：`verify-upstream-touchpoints.mjs` **C9** 对 pin 住的 vendor 文件逐锚点校验（硬失败）；锚点缺失
   时先评估条目的退役形态：`retireCheck` 命中 ⇒ 报 `retire-candidate`（**仍 release-blocking**，
   remediation = 把该条移入 `vendor-patches.mjs` 的 `RETIRED_PATCHES`（`ensure` = 上游修复原文、必须
@@ -413,6 +455,15 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   （按新 pin 重导）。无可断言形态的条目以 `noRetireForm` 写明理由。退役后的 `ensure` 断言是回归栅栏：
   上游修复一旦回退，C9 同拍变红。`packages/renderer/scripts/vendor-patches.test.mjs` 在 CI 侧验证锚点
   唯一、三分支判定、退役栅栏、改写后函数行为（含上游回落分支）与 id 形态匹配。
+
+**Rejected alternatives（owner 路由的 per-entry 前缀）**：① 把 `dsh-client-ui-open-in-app` 转
+covered-deferred 并在其消费者 `FileRouteAction` 里前缀——被否：只修好应用菜单一条链路，交付卡另一半
+（`api/changes.summary|diff`）仍要在 ui-deliverables 打补丁，改动面反而更大；且把一个官方行从「实例自带
+bundle」搬进复合构建，多一处加载路径偏离与版本歪斜面。② 控制面代理这些 document-relative 路由——被否：
+N-ctx 页面没有「当前实例」语义，违反零执行面与逐实例前缀纪律（design 01 §4）。③ 每实例独立 document
+（iframe/origin）——被否：等于推翻本设计的单页 N-ctx 前提，代价远超本缺陷。④ chamber 自建 occupant 改写
+`deliverables.file.actions` 的产出——被否：该 URL 由 owner 组件内联产出，自注册 occupant 仍要重写同一路由的产出
+（等于重写 owner 路由），而 fork 整个 ui-deliverables 的面更大（登记、版本歪斜与后续 pin 维护）。
 
 **Rejected alternatives（I-7 retire 机制）**：① 维持「锚点缺失 = 一律硬失败」——被否：无法区分施工错误与
 上游已修，每次 pin 升级都要人工重读全部补丁；② 锚点缺失即自动删除补丁/自动退役——被否：退役必须显式裁决
@@ -571,7 +622,7 @@ scope——被否：同一 document 复用 N 个实例，页面级事实不可�
 - 版本漂移：宿主图 rev 与复合 bundle 的合并是 union 语义，不要求两图同 rev（复合由 chamber 构建管、宿主图由
   实例插件集管）；壳版本落后/超前时多出的核心行以"特性缺席"运行（§3.5 apply 降级），绝不使实例 boot 失败。
 - **壳与后端必须同代（当前基线）**：受管 vendor 源以 `harness.commit` 的 pin 为单一事实来源——当前 pin =
-  dsh `0.1.7-rc.2` / `477b4f4205`（`packages/desktop/vendor/dsh/
+  dsh `0.2.0-rc.1` / `4878cdab`（`packages/desktop/vendor/dsh/
   pnpm-lock.yaml` 的 `@deepseek-ai/dsh` specifier 同值），三个 fork 副本与
   `release-preflight.mjs` 的 `FORK_VERSION` 同步；vendor 树是仓库内 git
   submodule（gitlink = pin，升级走 `scripts/upstream/update-vendor.mjs <tag>`）。宿主 wire 只增不改——
@@ -598,7 +649,7 @@ scope——被否：同一 document 复用 N 个实例，页面级事实不可�
   `artifactRevision` 对 bundle 文件求 `sha1(mtimeMs, ctimeMs, size)`（并写回被服务 bundle 的
   sourceMappingURL）⇒ ①同内容跨宿主/跨安装 rev 通常不同（ctime；硬链接例外），页级 first-load-wins 对同 id 永久报
   `instance-version-conflict`（chamber 只能中性化文案）；②重建/替换才改 rev，需要一轮有界恢复。
-  改为对 bundle **字节**求内容哈希即可让 ① 整类消失（§3.5，提案 §11）；vendor 只读，chamber 侧只能保留恢复轮。
+  改为对 bundle **字节**求内容哈希即可让 ① 整类消失（§3.5，提案 §10）；vendor 只读，chamber 侧只能保留恢复轮。
 - **恢复轮前提（原「每进程 nonce」模型作废）**：运行树已核 rev = metadata hash（非 per-process nonce、非内容哈希），
   「跨重启 URL 失效」前提不成立；§3.5 的恢复轮只覆盖「文件被改写与取图的竞态」。
 - **§3.7 实机验收**：**已验**（2026-09-27，随包实例经反代 + 隔离临时实例直连）：① `/api/i/<id>/plugins/events`

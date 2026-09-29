@@ -10,6 +10,9 @@
  * 不是第二事实源；投影唯一写者仍是 App 层，权威仍是挂载壳的 workspace/follow 基线。
  * createWorkspaceForSource 另带可选位置锚点 afterWorkspaceId：投影若先追加尾部、
  * 等挂载后再跳上去就是一次可见跳动（连续家族不变式按渲染序成立）。
+ * 带锚点时，该出口在 **wire 之前**先发布一条位置意图（reportWorkspacePlacement）：
+ * 宿主 create 无条件 PREPEND，挂载来源的权威 push 会在 create 返回之前就把新行渲染在
+ * 列表头部——那是 id 键回声结构上覆盖不到的一窗（见 workspace-placement.ts）。
  */
 import { chamberBridge } from './aggregate-store.ts'
 import {
@@ -41,6 +44,12 @@ export async function createWorkspaceForSource(
   path: string,
   options: WorkspaceCreationOptions = {},
 ): Promise<CreateWorkspaceResult> {
+  // 顺序是契约：意图必须在 create 之前落到 App，权威 push 一到就能把行按在锚点后。创建失败
+  // 由失败侧作废（reportWorkspacePlacementFailed）；该路径永远不会成为投影里的真实行，意图最多
+  // 是空操作，TTL 只是"一个信号都没到"的兜底。
+  if (options.afterWorkspaceId !== undefined) {
+    chamberBridge.reportWorkspacePlacement({ sourceId, path, afterWorkspaceId: options.afterWorkspaceId })
+  }
   const created = await createWorkspace(getInstanceClient(sourceId), path)
   if (options.beforePublish !== undefined) {
     try {

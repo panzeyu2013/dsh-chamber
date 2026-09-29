@@ -94,6 +94,35 @@ test('Windows caption seat: preload marker + hidden-titlebar window branch', () 
   assert.match(preload, /markWindowsTitlebar\(\);/, 'bootstrap installs the mark')
 })
 
+test('S-54: the macOS window chrome mirrors the upstream darwin branch', () => {
+  // Upstream apps/desktop/src/main.ts:219-225 (darwin): hiddenInset puts the
+  // traffic lights inside the sidebar strip, sidebar vibrancy needs the window's
+  // background to stay transparent, and 'active' keeps the material stable when
+  // the window blurs. The page side is upstream ui-web/ui-layout CSS (transparent
+  // frame, --dsh-frame-top-clearance 48px); the fullscreen mark is S-53.
+  const main = readFileSync(join(DESKTOP, 'main.ts'), 'utf8')
+  assert.match(main, /process\.platform === 'darwin'/, 'the darwin branch must exist')
+  assert.match(main, /titleBarStyle: 'hiddenInset' as const/)
+  assert.match(main, /trafficLightPosition: \{ x: 16, y: 18 \}/)
+  assert.match(main, /vibrancy: 'sidebar' as const/)
+  assert.match(main, /visualEffectState: 'active' as const/)
+  assert.match(main, /backgroundColor: '#00000000'/, 'the vibrancy material needs a transparent window background')
+  // The non-macOS/non-Windows fallback keeps the first-frame fill (no white flash).
+  assert.match(main, /: \{ backgroundColor: '#0f1115' \}/)
+})
+
+test('S-55: the darwin mark publishes the vibrancy marker the page rules gate on', () => {
+  // The page's "yield the fill to the window material" rules (renderer/styles.css
+  // .app/.instance-view, the sidebar's .root/.brand/.newSession) are gated on
+  // html[data-platform=darwin][data-window-vibrancy], never on data-platform alone;
+  // macos CrossLanguageLockstepTests locks the Swift shim half. The Electron window
+  // now carries the same material, so its preload mark must publish the marker too —
+  // without it the vibrancy stays hidden behind the page's opaque fills.
+  assert.match(preload, /dataset\.windowVibrancy = 'true'/)
+  assert.match(preload, /if \(process\.platform === 'darwin'\) document\.documentElement\.dataset\.windowVibrancy = 'true'/)
+  assert.match(preload, /dataset\.platform = process\.platform/, 'the platform mark stays (upstream preload-platform.ts)')
+})
+
 test('S-52: the carrier is installed before info hydration', () => {
   assert.ok(
     preload.indexOf('exposeDesktopCarrier();') < preload.indexOf('requestAppInfo().then('),
@@ -101,8 +130,42 @@ test('S-52: the carrier is installed before info hydration', () => {
   )
   // lastIndexOf: the rehydrate helper declares an earlier fetchInfo call, the
   // kick-off at the end of the IIFE is the one that must follow the carrier.
+  // Both indexes must exist: a renamed carrier previously made this assertion
+  // vacuously true (-1 < n).
+  const carrierInstall = shim.indexOf("defineWindowGlobal('dshDesktop', dshDesktopApi)")
+  const hydrationKickoff = shim.lastIndexOf('fetchInfo(INFO_MAX_ATTEMPTS + 1)')
+  assert.ok(carrierInstall !== -1, 'Swift: the shim must install the dshDesktop carrier')
+  assert.ok(hydrationKickoff !== -1, 'Swift: the shim must kick off info hydration')
   assert.ok(
-    shim.indexOf("defineWindowGlobal('dshDesktop', dshDesktopCarrier)") < shim.lastIndexOf('fetchInfo(INFO_MAX_ATTEMPTS + 1)'),
+    carrierInstall < hydrationKickoff,
     'Swift: the carrier must precede info hydration',
   )
+})
+
+test('S-53: the Electron flavor mirrors the fullscreen mark like the Swift shell', () => {
+  // vendor apps/desktop/src/preload-platform.ts writes html[data-fullscreen]; the
+  // Electron flavor has no preload equivalent, so main pushes the same expression on
+  // enter/leave and replays it after every load (the Swift shell does it natively in
+  // ShellWindowFullscreenMark.swift — same spelling, same dataset form).
+  const main = readFileSync(join(DESKTOP, 'main.ts'), 'utf8')
+  const swift = readFileSync(
+    join(REPO_ROOT, 'macos', 'Sources', 'DSHChamber', 'ShellWindowFullscreenMark.swift'),
+    'utf8',
+  )
+  for (const [name, text] of [['main', main], ['swift', swift]] as const) {
+    assert.match(text, /document\.documentElement\.dataset\.fullscreen = 'true'/, name + ' must set the fullscreen mark')
+    assert.match(text, /delete document\.documentElement\.dataset\.fullscreen/, name + ' must clear the fullscreen mark')
+  }
+  for (const event of ['enter-full-screen', 'leave-full-screen']) {
+    assert.ok(main.includes("'" + event + "'"), 'main must listen to ' + event)
+  }
+  assert.match(main, /did-finish-load/, 'main must replay the mark after a load')
+})
+
+test('item 71: both flavors read the questionnaire machine description from the info payload', () => {
+  // Upstream preload-app.ts exposes dshDesktop.deviceInfo() reading the info payload;
+  // the payload field is produced once in shell-ipc-settings.ts (readDeviceInfo).
+  assert.match(preload, /deviceInfo: \(\) => readAppInfo\(\)\.then/, 'preload must read the payload on demand')
+  assert.match(shim, /deviceInfo: function \(\)/, 'shim must expose deviceInfo')
+  assert.match(shim, /fetchInfo\(INFO_MAX_ATTEMPTS \+ 1\)/, 'shim must read the payload through the info channel')
 })

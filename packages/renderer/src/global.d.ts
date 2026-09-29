@@ -671,6 +671,8 @@ export interface DshChamberBridge {
   dshVersion: string | null
   version: string | null
   platform: string | null
+  /** Optional: INFO 载荷里的机器描述（item 71）；只被 dshDesktop.deviceInfo() 读取。 */
+  deviceInfo?: string | null
   desktopSsh: DesktopSshSurface
   update: UpdateSurface
   settings: SettingsSurface
@@ -751,6 +753,10 @@ export interface DshDesktopCarrier {
   }
   readonly keyboard: DesktopKeyboardApi
   readonly shortcuts: DesktopShortcutsApi
+  /** Official feedback questionnaire's machine description (`platform=…; os=…;
+   *  app_arch=…; cpu=…; memory_gib=…`, unavailable fields omitted). Optional:
+   *  an older bridge without the reader makes the client report the UA. */
+  deviceInfo?(): Promise<string>
 }
 
 declare global {

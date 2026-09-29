@@ -26,8 +26,17 @@ export function workspace(workspaceId: string, title: string, sessionIds: string
   }
 }
 
-export function snapshot(workspaces: WorkspaceRow[], sessions: SessionRow[]): InstanceSnapshot {
-  return { workspaces, sessions, archivedSessionIds: [] }
+/**
+ * 默认取**挂载生产者的形状**（两个置顶键都在场、集合为空 = 真无置顶）：老宿主形状
+ * （键缺席 = 未知集）在磁盘上已经不可达，把它当默认会让整套 derive 测试跑在一条
+ * 不存在的路径上；需要未知集的用例显式传 `pinSetKnown: false`。
+ */
+export function snapshot(
+  workspaces: WorkspaceRow[],
+  sessions: SessionRow[],
+  pin: { pinnedSessionIds?: string[]; pinSetKnown?: boolean } = { pinnedSessionIds: [], pinSetKnown: true },
+): InstanceSnapshot {
+  return { workspaces, sessions, archivedSessionIds: [], ...pin }
 }
 
 export function server(id: string, overrides: Partial<ChamberServerAggregate> = {}): ChamberServerAggregate {

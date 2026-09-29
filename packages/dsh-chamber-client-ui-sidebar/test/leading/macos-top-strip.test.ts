@@ -80,8 +80,9 @@ test('the darwin transparency rules keep the pinned upstream bodies', (context) 
   }
   // design 25 §5.6：这三组规则是「窗口 vibrancy 从侧栏列透出」的承重面，页面自身没有像素判据
   // 能发现它们被删/改。规则体与 pin 住的 vendor ui-sidebar 同名文件逐条比对；本仓选择器多一层
-  // data-window-vibrancy 门控（Electron darwin 腿没有 vibrancy，跟着透明会把侧栏压到窗口底色
-  // 上，见 design 25 §5.6 的 Rejected alternatives），故比对前只从选择器里去掉该门控。
+  // data-window-vibrancy 门控（无材质的 darwin 窗口形态下跟着透明会把侧栏压到窗口底色上，见
+  // design 25 §5.6 的 Rejected alternatives）；两 flavor 的 darwin 窗口都带材质，标记由各自
+  // documentStart 落（Swift shim / Electron preload），故比对前只从选择器里去掉该门控。
   // 缺 vendor 子模块时响亮失败并给出补救（仓内同款：control-plane host-log-bridge）——
   // 「本地绿」不能靠静默跳过换来，树在时这条体逐字比对是唯一覆盖；唯一例外是显式
   // DSH_CHAMBER_VENDOR_ABSENT=skip（见函数开头的 opt-out 分支）。

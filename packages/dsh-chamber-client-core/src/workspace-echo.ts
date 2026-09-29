@@ -100,16 +100,13 @@ export function recordPendingWorkspace(
     path: created.path,
     // Producer title hint wins (Git adopt renames to the branch right after the
     // saga); absent = the path-basename rule the cwd-derived groups use.
-    // cwd-derived groups use.
     title: created.title ?? basenameOf(created.path),
     at: now,
     // Sparse on purpose: an anchor-less create keeps the entry shape byte-identical.
-    // on identity).
     ...(created.afterWorkspaceId === undefined ? {} : { afterWorkspaceId: created.afterWorkspaceId }),
   }
   // The anchor is refreshed even when the entry is otherwise identical: this runs
   // once per create, and a stale anchor would make a fresh action's echo expire early.
-  // seconds after the user asked for it.
   const kept = rows.filter(row => canonicalPathKey(row.path) !== key && row.workspaceId !== created.workspaceId)
   return setLedgerRows(ledger, sourceId, [...kept, next])
 }
@@ -233,7 +230,6 @@ export function withWorkspaceEcho(
     // A replaced group keeps its MEMBERSHIP. Sessions reach a group only through `workspace.sessionIds` (derive.ts), so an echo
     // row carrying `sessionIds: []` would drop every member of that directory into 未分组 for the echo's whole TTL; the
     // cwd-derived membership is the best local knowledge until mount.
-    // TTL; the cwd-derived membership is the best local knowledge until mount.
     nextRows.push({ ...workspaceEchoRow(echo), sessionIds: row.sessionIds })
     replaced = true
   }

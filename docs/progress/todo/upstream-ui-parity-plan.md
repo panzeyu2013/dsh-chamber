@@ -1,7 +1,7 @@
 # 上游 UI 对齐：剩余待裁面（侧栏 / 工作区）
 
 用户报告的四例（workspace 悬停卡缺 path/创建时间、`+`/头部控件样式、长标题跑马灯、按钮与菜单快捷键提示）
-与同批判定「非有意、非 chamber 功能面」的其余条目，已按上游 pin `0.1.7-rc.2` 的代码逐字落地（旧逻辑删除、测试与
+与同批判定「非有意、非 chamber 功能面」的其余条目，已按上游 pin `0.2.0-rc.1` 的代码逐字落地（旧逻辑删除、测试与
 design 同批更新；已落地面的契约见 design 06 §7、design 05 §2）。本文件只留**仍需裁决**的差异与已裁决维持项，
 作为下一轮的入口。
 
@@ -10,19 +10,26 @@ design 同批更新；已落地面的契约见 design 06 §7、design 05 §2）�
 
 ## 1. 待裁决
 
-### 1.1 pinned 会话（本仓零支撑）
+### 1.1 pinned 会话（残余：置顶序 + 拖拽分区守卫）
 
+- 本仓：写入口与三个行面已落地（形态见 design 06 §7、checklist §4.6），不是本条开放部分。
 - 上游：树节点 `pinned: !archived.has(id) && pinned.has(id)`（`WS:450-465`）；置顶序在 `sectionMembers`（`WS:371-382`）；
   菜单项 pin/unpin（`WS:3630-3643`，order 100）+ 行 hover 按钮（`WS:3649-3668`，order 200）+ 静息 `PinnedIndicator`
   （`WS:1441-1450`、行内 1636）；拖拽分区边界由 `sectionMembers` 决定；`pinnedSessionIds` 来自 registry 级 rowState。
-- 本仓：`pinnedSessionIds`/pin/unpin/`IconPin*` 在 sidebar 与 core **零命中**；`ChamberServerWorkspace.sessions`
-  无 `pinned` 字段，derive 无置顶序；行 hover 动作簇是本仓设计（kebab-only）。
-- 为何要裁：①这是一项**宿主写能力**（pin/unpin 会改宿主 rowState），不是样式；②完整对齐需消费上游 rowState 面
-  （本仓当前只读 workspaces/sessions 两个 store）并把置顶序接进**本仓自有的会话拖拽排序**（`sessionOrderOverride`），
-  与 `sidebar.workspaces.*` 座席「只声明不渲染」的既有裁决（design 24 §1、STATUS）直接相邻。
-- 候选落法：A. 只做展示半（指示器 + 置顶序，无动作）＝无用（无人能 pin）；B. 菜单项 pin/unpin + 指示器 + 置顶序 +
-  拖拽分区守卫（不渲染 `sidebar.workspaces.session.menu.item` 座席，走本仓菜单）；C. 不落，登记为有意缺失。
-- 证据：`packages/dsh-chamber-seed-archive-cleanup/test/binding.test.ts`（宿主 state 确有该字段，本仓只做透传保护）。
+- 仍缺（本条的开放部分）：①客户端置顶序（`pinSessionOrder`）——置顶行领跑本节、只在置顶块内可拖；②拖拽的跨分区
+  守卫（上游 `sectionMembers` + `reconcileManualOrder`）；③与本仓 `sessionOrderOverride`（manual 覆盖）和
+  `updated` 排序的自动提升并列时的第三条分区语义与簿记互斥；④半开 follow 通道下的陈旧置顶标记（pin → HTTP
+  归档 → HTTP 恢复，本地集仍指该 id、unpin 变 no-op；修法 = 归档成功时本地按 vendor 同规则清 id）与未挂载
+  来源的"发送即忘"（标记无界延迟到挂载）。
+- 候选落法：A. 完整对齐（序 + 拖拽分区守卫 + 与两套既有排序的簿记互斥）；B. 只做序、不动拖拽
+  （置顶行领跑本节，拖拽仍按现有规则）；C. 维持不做（标记只陈述集合事实，序留给官方前端 ui-workspace 的
+  `pinSessionOrder`，本仓不接）。
+- 为何仍要裁：置顶序会与本仓两套既有排序语义并列，并给会话拖拽加跨分区守卫；与
+  `sidebar.workspaces.*` 座席「只声明不渲染」的既有裁决（design 24 §1、STATUS）相邻——写入口与标记的移植形态
+  （不渲染官方座席）已定，后半（序 + 守卫）仍需一次裁决。
+- 证据：`packages/dsh-chamber-seed-archive-cleanup/test/binding.test.ts`（宿主 state 确有该字段，本仓只做透传保护）；
+  `packages/dsh-chamber-client-ui-sidebar/test/session-rows/session-row-actions.test.ts` 与
+  `test/session-state/vendor-session-fact-contract.test.ts`（形态/座席/文案/线协议锁）。
 
 ### 1.2 会话行时间列
 
@@ -60,7 +67,7 @@ design 同批更新；已落地面的契约见 design 06 §7、design 05 §2）�
   C1 维持现状（键帽只展示，官方键按上面两类结果走）；C2 先实机验证一次（store 级的三个是否确实生效、归档在活动会话上是否静默无效），再决定登记口径。
 - 归档面：`session.archive` 在活动会话上走官方**两段式**（注入点 `WS:4193-4216` 的 `archiveRequest` +
   `settleSessionArchive`/`stopAndArchiveSession`），确认框是 `SessionArchiveConfirmDialog`（`WS:3466`，注册于 :4373-4378）——
-  与重命名模态同属 `shell.overlay` 座席，**本仓可见**；与本仓自己的两段式确认（菜单入口）不叠加：一次按键只弹官方那一层。
+  与重命名模态同属 `shell.overlay` 座席，**本仓可见**；与本仓自己的两段式确认（行菜单项/行内钮入口）不叠加：一次按键只弹官方那一层。
   `RowActionToast`（`WS:3806`，注册于 :4379-4385）同座席，归档结果提示同样可见。
 - **C2 实机判定清单**（任一来源已挂载即可；按键用 pin 的默认绑定）：
   1. 活键面：`session.new` = **⌘N** 应真的新建；`session.fork` = **⌥⌘F** 应真的分叉；`session.rename` = **⌥⌘R** 应弹出官方
@@ -73,14 +80,14 @@ design 同批更新；已落地面的契约见 design 06 §7、design 05 §2）�
 - STATUS 分类：本条归「无法控制的差异（外部约束）」——注册表语义与被覆盖的官方浏览器都不是本仓能改的面；
   这里保留的裁决只有「是否做 C2 实机判定 / 如何登记」。
 
-### 1.4 官方 schedule 两座席
+### 1.4 官方 schedule 两座席（已收口，A1）
 
 - 上游：ui-schedule 注册 `sidebar.session.row.leading`（idle 行活动任务标记）与 `sidebar.session.row.hover`（悬停卡任务列表）
-  （`@deepseek-ai/dsh-client-ui-schedule` 的 client bundle，两个 `sidebar.session.row.*` 注册），两座席由 `sidebar.workspaces` 的 children 表声明（`WS:4307-4314`）。
-- 本仓：未声明两座席（`sidebar.workspaces` 只声明不渲染的裁决之下），改用自有 `SessionScheduleIndicator`（标题后）
-  与自有卡片内容。
-- 为何要裁：要接官方座席，须先解开 `sidebar.workspaces` 的座席裁决（design 24 §1）或在**本仓自有行内**渲染官方座席
-  的注册项（跨插件渲染面），二者都是架构级选择。
+  （`@deepseek-ai/dsh-client-ui-schedule` 的 client bundle，两个 `sidebar.session.row.*` 注册），上游由 `sidebar.workspaces` 的 children 表声明（`WS:4307-4314`）——本仓构建里这两行由 vendor 补丁 13 号删除，改由 chamber 侧栏声明（见下）。
+- 本仓（已收口，A1 = 座席所有权转移）：上游注册里的两行声明由 vendor 补丁 13 号删除，本仓侧栏在**自己的** `children`
+  里声明两席并渲染（行首座席的 `fallback` = 自有 `SessionScheduleIndicator`，两者永不并现，design 09 §3.6 第四类第二形态）。
+- 裁决账：曾拒「在本仓自有行内渲染官方注册项」（跨插件渲染面）与「撤销 `sidebar.workspaces` 声明」（撤销会让官方注册与第三方注入静默消失）；
+  上游若提供座席转交/共享 API，则该 vendor 补丁退役（提案见 upstream-proposals.md §11）。
 
 ### 1.5 重命名交互：模态 vs 行内
 

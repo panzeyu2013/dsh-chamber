@@ -276,6 +276,93 @@ vendorTest('上游：归档准入是两段式（无 stopActivity 拒绝 + detail
     'provider 失败必须只记日志、不重抛（确认相位仍 resolve）')
 })
 
+vendorTest('上游：pin/unpin 的形态、座席顺序、文案与线协议（本仓逐字移植与 unary 出口的锚）', () => {
+  // 1) 两个入口的形态：tooltip 短名、无障碍名用行菜单长名、14px 双字形、归档行返回 null。
+  const pin = readVendor('dsh-client-ui-workspace/src/client/session-actions/PinSession.tsx')
+  assert.ok(pin.includes("t(pinned ? 'actions.unpin' : 'actions.pin')"), 'tooltip 必须仍是 actions.pin/unpin 短名')
+  assert.ok(pin.includes("aria-label={t(pinned ? 'menu.unpinSession' : 'menu.pinSession')}"),
+    '行钮无障碍名必须仍是行菜单长名（chamber 照此，不对行名参数化）')
+  assert.ok(pin.includes('<IconPinFillRegular size={14} />') && pin.includes('<IconPinOutlineRegular size={14} />'),
+    '行钮必须是 14px 双字形')
+  assert.equal((pin.match(/if \(archived\) return null/g) ?? []).length, 2,
+    '菜单项与行钮两个入口都必须对归档行返回 null（chamber 的 pin/archive 互斥押在它上面）')
+  // 2) 座席注册顺序：菜单 pin(100) 先于 rename(200)；行动作 archive(100) 先于 pin(200)（pin 最右）。
+  const index = readVendor('dsh-client-ui-workspace/src/client/index.ts')
+  assert.ok(index.includes("{ name: 'sidebar.workspaces.session.menu.item', id: 'pin', order: 100"),
+    '菜单座席的 pin 必须仍是 order 100 的首项')
+  assert.ok(index.includes("{ name: 'sidebar.workspaces.session.row.action', id: 'pin', order: 200"),
+    '行动作座席的 pin 必须仍是最右成员（order 200）')
+  const archiveSeat = index.indexOf("{ name: 'sidebar.workspaces.session.row.action', id: 'archive', order: 100")
+  const pinSeat = index.indexOf("{ name: 'sidebar.workspaces.session.row.action', id: 'pin', order: 200")
+  assert.ok(archiveSeat !== -1 && pinSeat !== -1 && archiveSeat < pinSeat,
+    'archive 必须先于 pin（座席顺序 = DOM 顺序，chamber 手写复刻同一序；-1 会让「小于」静默成立）')
+  // 3) 静息标记：非交互 role=img + row.pinned 双名。
+  const rows = readVendor('dsh-client-ui-workspace/src/client/rows/Rows.tsx')
+  // 锁在 PinnedIndicator 函数体里：全文 includes 会被别处的 role="img"/同名文本满足（上游再加一个即静默失效）。
+  const indicator = /function PinnedIndicator\([\s\S]*?\n\}/u.exec(rows)?.[0] ?? ''
+  assert.ok(indicator !== '' && indicator.includes('role="img"') && indicator.includes('aria-label={label}')
+    && indicator.includes('title={label}') && indicator.includes('<IconPinFillRegular size={14} />'),
+    '静息标记函数体必须仍是 role=img + 双名（aria/title）+ 14px 实心针')
+  // 4) 文案值：chamber 字典逐字取此处（改词值 = 本仓字典须同步）。
+  const locales = readVendor('dsh-client-ui-workspace/src/client/locales.ts')
+  for (const line of ["'menu.pinSession': '置顶会话',", "'menu.unpinSession': '取消置顶',", "'row.pinned': '已置顶',"])
+    assert.ok(locales.includes(line), 'zh 文案必须仍是 ' + line)
+  // 5) 线协议与宿主语义：单一 request.sessionId、回值 pinnedSessionIds、归档会话被拒。
+  const commands = readVendor('dsh-api-workspace-controller/src/commands.ts')
+  assert.ok(commands.includes('async pinSession(request: WorkspacePinSessionRequest): Promise<WorkspacePinValue>'),
+    'pin 必须仍是单 request 的幂等 Remote')
+  assert.ok(commands.includes('async unpinSession(request: WorkspaceUnpinSessionRequest): Promise<WorkspacePinValue>'),
+    'unpin 必须仍是单 request 的幂等 Remote')
+  const registry = readVendorSourceProviding('dsh-workspace', 'WorkspaceArchivedSessionPinError')
+  // readVendorSourceProviding 已保证「该符号恰好一个文件提供且文本里含它」——断言它本身是同义反复，
+  // 必须锁到真正的 throw 与错误映射上（chamber 的 pin/archive 互斥与行级失败分类押在这两行）。
+  assert.ok(registry.includes('throw new WorkspaceArchivedSessionPinError(sessionId)'),
+    '宿主必须仍对归档会话抛 WorkspaceArchivedSessionPinError')
+  assert.ok(commands.includes("throw new RemoteError('gateway/bad-request', error.message, {}, { cause: error })"),
+    '归档拒绝必须仍映射成 gateway/bad-request（chamber 的行级失败归因押在它上面）')
+  const pinTypes = readVendor('dsh-api-workspace-controller/src/types.ts')
+  // 接口成员必须**锁在接口体内**：同一行文本在 types.ts 里出现三次（WorkspacePinValue / WorkspaceBaseline /
+  // pinned 增量），对全文 includes 的断言在删掉某一个接口的字段后依然全绿（变异实测）。
+  const interfaceBody = (source: string, name: string): string =>
+    new RegExp('export interface ' + name + ' \\{([\\s\\S]*?)\\n\\}').exec(source)?.[1] ?? ''
+  assert.ok(interfaceBody(pinTypes, 'WorkspacePinValue').includes('readonly pinnedSessionIds: readonly SessionId[]'),
+    'pin/unpin 回值必须仍是完整置顶集 WorkspacePinValue.pinnedSessionIds')
+  // 正控：切片确实取到该接口（取空 / 取整文件 / 越界吃到相邻接口都会在这里先红——
+  // archivedSessionIds 只属于隔壁的 WorkspaceBaseline）。
+  const pinValueBody = interfaceBody(pinTypes, 'WorkspacePinValue')
+  assert.ok(pinValueBody !== '' && pinValueBody.includes('export interface') === false
+    && pinValueBody.includes('archivedSessionIds') === false,
+    'interfaceBody 必须切出 WorkspacePinValue 本体')
+  // 6) 置顶集的线源（标记的唯一事实源）：基线字段 + pinned 增量帧 + 客户端安装点 + 快照暴露面。
+  //    上游改名会让投影读到 undefined ⇒ pinSetKnown 恒 false ⇒ 标记全体静默消失而套件全绿，
+  //    所以这条锁比形态锁更要紧。
+  const baselineBody = interfaceBody(pinTypes, 'WorkspaceBaseline')
+  assert.ok(baselineBody.includes('readonly items: readonly WorkspaceView[]'),
+    'interfaceBody 必须切到 WorkspaceBaseline 本体（正控：items 是它的唯一成员）')
+  assert.ok(baselineBody.includes('readonly pinnedSessionIds: readonly SessionId[]'),
+    'follow 基线必须仍带 registry 级 pinnedSessionIds')
+  assert.ok(pinTypes.includes("{ readonly type: 'pinned'; readonly pinnedSessionIds: readonly SessionId[] }"),
+    'follow 增量必须仍有 pinned 帧（基线之外唯一的重放来源）')
+  const model = readVendor('dsh-api-workspace-controller/src/client/model.ts')
+  assert.ok(model.includes('installPinned(baseline.pinnedSessionIds)'),
+    '客户端必须仍在基线处安装置顶集')
+  assert.ok(model.includes("readonly pinnedSessionIds: WorkspacePinValue['pinnedSessionIds']"),
+    '客户端快照必须仍暴露 pinnedSessionIds（chamber 投影读它决定 pinSetKnown）')
+  // 6b) 环境面的手工镜像也要钉：真实 vendor 类型在本 checkout 没有构建产物
+  //     （workspace-controller 无 lib/types），侧栏的 `WorkspaceSnapshot` 读的就是
+  //     types/vendor-modules.d.ts 这份声明；而它在类型层面只是**可选透传**
+  //     （ProjectionWorkspaceBaseline.pinnedSessionIds? —— 删掉环境面字段 typecheck 照样绿，实测），
+  //     所以镜丢了该字段 ⇒ 未挂载来源的生产者读不到置顶集而静默，只能在这里显式钉住。
+  const ambient = readFileSync(fileURLToPath(new URL('../../../../types/vendor-modules.d.ts', import.meta.url)), 'utf8')
+  const ambientSnapshot = /export interface WorkspaceSnapshot \{([\s\S]*?)\n  \}/u.exec(ambient)?.[1] ?? ''
+  assert.ok(ambientSnapshot.includes('pinnedSessionIds: readonly string[]'),
+    '环境面的 WorkspaceSnapshot 必须仍镜像 vendor 的 pinnedSessionIds（typecheck 不会替它报警）')
+  const icons = readVendor('dsh-client-ui-primitives/src/icons/index.tsx')
+  for (const icon of ['IconPinOutlineRegular', 'IconPinFillRegular'])
+    assert.ok(icons.includes('export const ' + icon + ' ='),
+      'vendor 图标必须仍导出 ' + icon + '（ambient 面是手写的，改名只在运行时炸）')
+})
+
 vendorTest('上游：handleSessionStatus 不在 ISessions 契约里（chamber 的能力守卫与上游诉求的依据）', () => {
   const contract = readVendor('dsh-api-session-controller/src/client/contract/sessions.ts')
   assert.doesNotMatch(contract, /handleSessionStatus/,

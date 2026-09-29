@@ -24,6 +24,38 @@
       }
     },
     {
+      "id": "workspace/pinSession",
+      "note": "官方置顶 wire（幂等；归档中的会话被宿主以 bad-request 拒绝）：chamber 行悬停置顶钮与行菜单项依赖它（标记的线源与诚实性见 design 06 §5）。探针根收窄到声明该 Remote 的包——registry 服务上也有同名方法。",
+      "probe": {
+        "anchors": [
+          "packages/api/workspace-controller/src/index.ts#=literal:@Remote('pinSession')"
+        ],
+        "expect": "present"
+      },
+      "requires": [
+        "packages/dsh-chamber-client-core/src/instance-api.ts",
+        "packages/dsh-chamber-client-core/src/session-mutations.ts",
+        "packages/dsh-chamber-client-ui-sidebar/src/client/sidebar-root-sessions.ts",
+        "packages/dsh-chamber-client-ui-sidebar/src/client/ServerSectionRows.tsx"
+      ]
+    },
+    {
+      "id": "workspace/unpinSession",
+      "note": "官方取消置顶 wire（幂等，无存在性检查）：与 pinSession 同一条行级漏斗的反向半。",
+      "probe": {
+        "anchors": [
+          "packages/api/workspace-controller/src/index.ts#=literal:@Remote('unpinSession')"
+        ],
+        "expect": "present"
+      },
+      "requires": [
+        "packages/dsh-chamber-client-core/src/instance-api.ts",
+        "packages/dsh-chamber-client-core/src/session-mutations.ts",
+        "packages/dsh-chamber-client-ui-sidebar/src/client/sidebar-root-sessions.ts",
+        "packages/dsh-chamber-client-ui-sidebar/src/client/ServerSectionRows.tsx"
+      ]
+    },
+    {
       "id": "sessionStatus.completionUnread",
       "note": "官方内存完成未读位：chamber 通知/角标的完成事实唯一权威（durable 账本已随上游对齐移除，重载即忘是接受行为）。探针根 = 官方 ui-session 客户端经理（该位是客户端投影态，不在 api 包）。",
       "probe": {

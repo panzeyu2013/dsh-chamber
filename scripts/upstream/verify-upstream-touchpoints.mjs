@@ -669,7 +669,14 @@ for (const fork of FORKS) {
 
 // C10 —— 版本锚一致性 + 活版本字面量白名单（硬失败）
 {
-  const DSH_VERSION_RE = /0\.1\.[0-9]+-(?:alpha|beta|rc)\.[0-9]+/g
+  // 运行时版本必须读成 dsh 的 x.y.z-预发布 形态。
+  const VERSION_SHAPE = /^[0-9]+\.[0-9]+\.[0-9]+-(?:alpha|beta|rc)\.[0-9]+$/
+  // 活字面量扫描刻意不写成「任意 x.y.z-预发布」：chamber 自身版本（0.4.x-beta）与
+  // 依赖的 node-pty@1.2.0-beta.15 都会命中。集合 = 当前世代（读自锁文件）+ 历史
+  // 世代表（只增不改，用来抓「忘了跟锚」的旧字面量）。
+  // 扫描用「世系形态」而不是世代白名单：白名单会让表外世代（0.1.6-rc.2、0.2.0-rc.2…）静默通过。
+  // chamber 自身的清单版本（0.4.x-beta）在扫描时按根 package.json 版本过滤。
+  const ROOT_VERSION_PATH = join(ROOT, 'package.json')
   // SINGLE SOURCE = the TRACKED bundle lockfile (`bundle:dsh` regenerates it;
   // the sibling package.json is gitignored and absent in a fresh checkout).
   // When that manifest does exist locally it must agree, so a hand-edited
@@ -682,7 +689,7 @@ for (const fork of FORKS) {
   const manifestVersion = existsSync(manifestPath)
     ? JSON.parse(readFileSync(manifestPath, 'utf8'))?.dependencies?.['@deepseek-ai/dsh']
     : undefined
-  if (typeof current !== 'string' || !DSH_VERSION_RE.test(current)) {
+  if (typeof current !== 'string' || !VERSION_SHAPE.test(current)) {
     fail(`C10 无法从 packages/desktop/vendor/dsh/pnpm-lock.yaml 读出运行时版本（得到 ${JSON.stringify(current)}）`)
   } else if (manifestVersion !== undefined && manifestVersion !== current) {
     // The manifest is DERIVED local state (gitignored, rewritten by
@@ -692,7 +699,22 @@ for (const fork of FORKS) {
     warn(`C10 本工作目录的 bundle 清单 ${manifestVersion} 落后于锁文件 ${current}（派生本地状态；跑 bundle:dsh 刷新即可，不影响锚）`)
     console.log(`✓ C10 版本锚 = ${current}（单一来源 = bundle 锁文件；六锚 + 3 fork 一致）`)
   } else {
+    const ownVersion = existsSync(ROOT_VERSION_PATH)
+      ? JSON.parse(readFileSync(ROOT_VERSION_PATH, 'utf8')).version
+      : undefined
+    const DSH_VERSION_RE = /0\.[0-9]+\.[0-9]+-(?:alpha|beta|rc)\.[0-9]+(?![0-9.])/g
+    // The scanner is pinned to the 0.x lineage on purpose (chamber's own
+    // 0.4.x-beta.*, node-pty's 1.2.x-beta.* and the SemVer examples in the shell
+    // would otherwise flood the scan). A pin outside that lineage must fail loudly
+    // here rather than scanning silently empty and passing on the REQUIRED fallback.
+    if (!DSH_VERSION_RE.test(current)) {
+      DSH_VERSION_RE.lastIndex = 0
+      fail(`C10 活字面量扫描的世系形态未覆盖当前 pin ${current}（DSH_VERSION_RE 只认 0.x 预发布）——先扩展正则再升级`)
+    }
     DSH_VERSION_RE.lastIndex = 0
+    const dshLiterals = (text) => [...text.matchAll(DSH_VERSION_RE)]
+      .map((m) => m[0])
+      .filter((v) => v !== ownVersion)
     // Files MAY carry a live dsh version literal — each entry is an anchor or a
     // named diagnostic constant; a value != the pinned runtime version fails.
     // anchor:true  → 每处活字面量必须等于 current（锚/单一来源/fork 基线）
@@ -843,14 +865,14 @@ for (const fork of FORKS) {
           minifyWhitespace: true,
           legalComments: 'none',
         }).code
-        return [...code.matchAll(DSH_VERSION_RE)].map((m) => m[0])
+        return dshLiterals(code)
       }
       // yml/sh (`#`) and jsonc (`//`, `/* */`) comments are stripped with a
       // string-aware scan so a comment can never masquerade as a live literal.
       const stripped = file.endsWith('.json')
         ? stripJsonComments(src)
         : src.split('\n').map((line) => line.replace(/#.*$/, '')).join('\n')
-      return [...stripped.matchAll(DSH_VERSION_RE)].map((m) => m[0])
+      return dshLiterals(stripped)
     }
 
     const unregistered = []

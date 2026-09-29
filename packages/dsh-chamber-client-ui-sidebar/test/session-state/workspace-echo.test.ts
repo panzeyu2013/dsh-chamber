@@ -25,7 +25,7 @@ import {
   type PendingWorkspace,
   type WorkspaceEchoLedger,
 } from '@dsh-chamber/dsh-chamber-client-core'
-import { PENDING_WORKSPACE_TTL_MS, workspaceEchoRow } from '../../../dsh-chamber-client-core/src/workspace-echo.ts'
+import { PENDING_WORKSPACE_TTL_MS } from '../../../dsh-chamber-client-core/src/workspace-echo.ts'
 import { deriveServerWorkspaces } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import type { InstanceAggregate, SessionRow, WorkspaceRow } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 
@@ -155,9 +155,14 @@ test('withWorkspaceEcho: a brand-new workspace appends a real wire row at the ta
   const next = withWorkspaceEcho(base, [pending('w1', '/p/new')])
   assert.notEqual(next, base)
   assert.deepEqual(next.workspaces.map(row => row.workspaceId), ['w0', 'w1'])
-  assert.deepEqual(next.workspaces[1], workspaceEchoRow(pending('w1', '/p/new')))
+  // 可选字段断言先读未收窄的元素：`assert.deepEqual` 是 asserts 型断言，先写字面量会把
+  // 元素类型收窄成该字面量（pending 行形状，无 synthetic），后续访问即报错。
   assert.equal(next.workspaces[1]?.synthetic, undefined, 'the echo row carries a REAL host id — never synthetic')
   assert.deepEqual(next.workspaces[1]?.sessionIds, [], 'no sessions yet: the row is legitimately empty')
+  // 字面量字段断言（不调被测实现自己的 workspaceEchoRow——那是实现自比）：
+  assert.deepEqual(next.workspaces[1], {
+    workspaceId: 'w1', path: '/p/new', title: 'new', sessionIds: [], createdAt: '', updatedAt: '',
+  })
 })
 
 test('withWorkspaceEcho: an anchored creation lands right after its anchor, never at the tail', () => {
@@ -362,6 +367,11 @@ test('wiring: the single funnel publishes every workspace fact right after its w
   assert.ok(createdFact > decorate, 'decorations run BEFORE the fact: the echoed row must be born in its final shape')
   assert.ok(createdFact > createWire, 'the create fact is published only after the host accepted the create')
   assert.match(code, /afterWorkspaceId: options\.afterWorkspaceId/, 'the placement anchor rides the fact (Git worktree sits below its main checkout)')
+  // 位置意图是本出口唯一的 **wire 之前**事实：宿主 create 无条件 PREPEND，挂载来源的权威
+  // push 会在 create 回答之前就把新行渲染在列表头部（见 workspace-placement.ts）。
+  const placementIntent = code.indexOf('chamberBridge.reportWorkspacePlacement({')
+  assert.notEqual(placementIntent, -1, 'an anchor-carrying create registers its placement intent')
+  assert.ok(placementIntent < createWire, 'the placement intent is published BEFORE the wire call')
   const deleteWire = code.indexOf('await deleteWorkspace(getInstanceClient(sourceId), workspaceId)')
   const removedFact = code.indexOf('chamberBridge.reportWorkspaceRemoved({ sourceId, workspaceId, path })')
   assert.notEqual(deleteWire, -1, 'the delete funnel performs the wire call')

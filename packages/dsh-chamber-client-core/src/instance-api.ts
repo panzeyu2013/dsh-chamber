@@ -38,66 +38,8 @@ export { InstanceRpcError } from './instance-rpc-error.ts'
 export { sessionArchiveRefusal } from './instance-mutation-values.ts'
 export type { SessionArchiveActivity, SessionArchiveActivityItem } from './instance-mutation-values.ts'
 
-/** One workspace row (WorkspaceView wire shape). */
-export interface WorkspaceRow {
-  workspaceId: string
-  path: string
-  title: string
-  sessionIds: string[]
-  createdAt: string
-  updatedAt: string
-  /**
-   * True ONLY for the fallback's cwd-derived groups (`__cwd__:<path>`), which
-   * carry no host workspace identity: every workspace-scoped mutation on them
-   * fails fail-closed with `workspace/not-found`, so the sidebar must disable
-   * those affordances (ungrouped-bucket parity).
-   */
-  synthetic?: boolean
-}
-
-/** One session row (SessionSummary wire shape; title rides projections.values.title). */
-export interface SessionRow {
-  sessionId: string
-  /**
-   * Epoch ms of last activity, set only when the wire provides a number — never
-   * coerced to 0 (which would render "54y ago"). The UI hides the time cell
-   * when this is undefined OR 0.
-   */
-  updatedAt?: number
-  running: boolean
-  blank: boolean
-  /**
-   * The official display label resolved at BUILD time (`title ?? basename(cwd)
-   * ?? id` via sessionDisplayTitle), never empty. Kept separate from `title`
-   * so rename/fork copy and the archive manager never treat a directory-name
-   * fallback as a durable name; the derive re-applies the ladder when absent.
-   */
-  displayTitle?: string
-  /**
-   * The session owns at least one ACTIVE schedule (upstream
-   * `SessionNode.hasActiveSchedule`, derived from `projectionValues.schedule`).
-   * SPARSE: present only when true, so the snapshot signature stays
-   * byte-identical for schedule-less sessions.
-   */
-  hasActiveSchedule?: boolean
-  /**
-   * 投影块的序列空间（上游 `SessionProjectionHints.kind`）。`sequenced` = 宿主 live
-   * registry 为已连接会话产出，`asOfSeq` 可与同一连接的 baseline/帧比较；`cached` =
-   * 纯列表从**持久化投影缓存**读到的块，`asOfSeq` 是那条存储记录自己的水位，
-   * **不得**与已连接会话的值比较。缺省 = 线上没给（老宿主/自定义形状）。
-   */
-  projectionKind?: 'cached' | 'sequenced'
-  /**
-   * 该块在 `projectionKind` 序列空间里的水位（上游 `SessionProjectionHints.asOfSeq`）。
-   * 单独读没有意义：比较前必须先看 `projectionKind === 'sequenced'`。
-   */
-  projectionAsOfSeq?: number
-  /** Coarse durable origin (wire: absent or 'subagent'); subagent rows never surface in navigation. */
-  origin?: 'subagent'
-  cwd?: string
-  title?: string
-  parentSessionId?: string
-}
+import type { SessionRow, WorkspaceRow } from './instance-snapshot-rows.ts'
+export type { SessionRow, WorkspaceRow } from './instance-snapshot-rows.ts'
 
 /** Combined snapshot the sidebar aggregation renders. */
 export interface InstanceSnapshot {
@@ -112,6 +54,11 @@ export interface InstanceSnapshot {
    * archived sessions" from an unknown set. Absent = unknown.
    */
   archiveSetKnown?: boolean
+  /** 置顶集（宿主 registry 级 rowState，最新置顶在前）。与 `archiveSetKnown` 同规矩：
+   *  `pinSetKnown === true` 才可断言——空集才是「真无置顶」；未知的实际来路是单列表 unary
+   *  回退（挂载壳快照总带该字段），缺省 / false 一律按未知处理：无标记、动作按 pin 出。 */
+  pinnedSessionIds?: readonly string[]
+  pinSetKnown?: boolean
 }
 
 export type InstanceAggregateState = 'ok' | 'error' | 'not-connected'
@@ -123,7 +70,7 @@ export interface InstanceAggregate extends InstanceSnapshot {
 }
 
 export function emptyAggregate(state: InstanceAggregateState, error: string | null = null): InstanceAggregate {
-  return { state, workspaces: [], sessions: [], archivedSessionIds: [], archiveSetKnown: false, error }
+  return { state, workspaces: [], sessions: [], archivedSessionIds: [], archiveSetKnown: false, pinnedSessionIds: [], pinSetKnown: false, error }
 }
 
 /**
@@ -376,6 +323,10 @@ class InstanceApiClient {
       this.call('workspace/archiveSession', { args: { request: payload } }, signal),
     unarchiveSession: (payload: unknown, signal?: AbortSignal): Promise<UnaryResult<any>> =>
       this.call('workspace/unarchiveSession', { args: { request: payload } }, signal),
+    pinSession: (payload: unknown, signal?: AbortSignal): Promise<UnaryResult<any>> =>
+      this.call('workspace/pinSession', { args: { request: payload } }, signal),
+    unpinSession: (payload: unknown, signal?: AbortSignal): Promise<UnaryResult<any>> =>
+      this.call('workspace/unpinSession', { args: { request: payload } }, signal),
   }
 
   /** directoryPicker unary Remotes — POSITIONAL-argument face. */
@@ -638,7 +589,7 @@ export async function fetchInstanceSnapshot(client: InstanceApiClient): Promise<
       updatedAt: '',
       synthetic: true,
     }))
-  return { workspaces, sessions, archivedSessionIds: [], archiveSetKnown: false }
+  return { workspaces, sessions, archivedSessionIds: [], archiveSetKnown: false, pinnedSessionIds: [], pinSetKnown: false }
 }
 
 // `basenameOf` lives in derive.ts (the display-title resolver needs it, and a
@@ -777,6 +728,17 @@ export async function archiveSession(
  */
 export async function cancelSession(client: InstanceApiClient, sessionId: string): Promise<void> {
   await callAndThrow(() => client.session.cancel({ sessionId }))
+}
+
+/** workspace/pinSession unary Remote: idempotent, refuses an archived session (host).
+ *  No local fact is published — the marker set arrives on the follow push (no echo). */
+export async function pinSession(client: InstanceApiClient, sessionId: string): Promise<void> {
+  await callAndThrow(() => client.workspace.pinSession({ sessionId }))
+}
+
+/** workspace/unpinSession unary Remote: idempotent, no existence check (host). */
+export async function unpinSession(client: InstanceApiClient, sessionId: string): Promise<void> {
+  await callAndThrow(() => client.workspace.unpinSession({ sessionId }))
 }
 
 /** True when an error is the official "session is not attached" refusal —

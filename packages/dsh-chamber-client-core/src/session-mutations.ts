@@ -14,7 +14,7 @@
 import { chamberBridge } from './aggregate-store.ts'
 import type { SessionCreationOrigin } from './session-create-ledger.ts'
 import {
-  archiveSession, callAndThrow, createSession, forkSession, getInstanceClient,
+  archiveSession, callAndThrow, createSession, forkSession, getInstanceClient, pinSession, unpinSession,
 } from './instance-api.ts'
 import { reportSessionRestored } from './session-restore.ts'
 
@@ -90,4 +90,16 @@ export async function unarchiveSessionForSource(sourceId: string, sessionId: str
   const client = getInstanceClient(sourceId)
   await callAndThrow(() => client.workspace.unarchiveSession({ sessionId }))
   reportSessionRestored({ sourceId, sessionId })
+}
+
+/** 对 `sourceId` 执行官方 `workspace/pinSession`（幂等；宿主拒绝归档中的会话）。**不发布本地事实**：
+ *  置顶集只有挂载 follow 基线/增量一条线源，乐观回声会与未知集合打架；调用点
+ *  在成功后照常走 `chamberBridge.requestRefresh`，标记由下一次权威推送落定。 */
+export async function pinSessionForSource(sourceId: string, sessionId: string): Promise<void> {
+  await pinSession(getInstanceClient(sourceId), sessionId)
+}
+
+/** 对 `sourceId` 执行官方 `workspace/unpinSession`（幂等，无存在性检查）。同前：无本地事实。 */
+export async function unpinSessionForSource(sourceId: string, sessionId: string): Promise<void> {
+  await unpinSession(getInstanceClient(sourceId), sessionId)
 }

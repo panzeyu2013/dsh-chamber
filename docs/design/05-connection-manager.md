@@ -130,14 +130,17 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   `chamberBridge.requestActivateSource(sourceId)` → App 层仅切换该来源
   shell（N-ctx），不打开会话。
 - **归档会话立即从列表消失；安静会话无确认，活跃会话走官方两段式确认**（upstream-alignment
-  T2a + 0.1.7 准入）：归档动词在会话行的 kebab 菜单里，首调 `{ sessionId }` 直接提交（上游理由：
+  T2a + 0.1.7 准入）：归档动词在会话行的 kebab 菜单里（另有同一动词的行内悬停钮，design 06 §7），首调 `{ sessionId }` 直接提交（上游理由：
   归档只隐藏该行、从不触碰会话日志，故安静会话不具破坏性也无需确认，vendor ui-workspace
   `Rows.tsx:412-421`）；宿主以 `workspace/session-active` 拒绝（该会话仍有工作）时才弹 chamber
   的「停止并归档」确认，确认后带 `stopActivity: true` 重发，停止由宿主 provider 完成（design 24
   §5）。`archivedSessionIds` 过滤在 derive 层（`packages/dsh-chamber-client-core/src/derive.ts`
   纯函数），不等聚合轮询。
-- 会话行悬停操作（v1 最小集，走该来源自己的 API）：重命名/**fork**/归档（**kebab 菜单
-  三项**；行内不再有独立归档按钮——upstream-alignment T2a)——行内 fork 走 wire
+- 会话行悬停操作（v1 最小集，走该来源自己的 API）：置顶/重命名/**fork**/归档（**kebab 菜单
+  四项** + **独立归档图标钮** + **独立置顶图标钮**——归档与置顶各自的双出口，按钮形态、座席、无障碍与
+  「首落不含置顶序」的取舍见 design 06 §7/§5），置顶写面 = `workspace/pinSession`/`workspace/unpinSession`
+  （幂等 unary，无本地事实；标记的线源与三处诚实性缺口见 design 06 §5/§7）
+  ——行内 fork 走 wire
   `sessions.fork` + 标题递增（increaseTitle，对齐官方 ui-workspace），成功后打开子会话，递增
   rename 失败非致命（子会话仍创建并打开）；官方 conversation 回合尾部的 `turn-tail forkAt`
   常驻可用，两者并存。workspace 行：新建会话（`+` 按钮，在该 workspace 下创建并打开）、
@@ -182,8 +185,8 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 **揭示门的会话面信号（P3 修订；"白屏 / 直接显示载入中"交替的真机反馈）**：上面第 2 条的持有判据完全建立在 App 侧两个**异步镜像事实**上——`runtimeFacts[viewId].current`（推送）与聚合里的 session `blank` 行（未知按 blank 处理）——两者迟到或抖动时，遮罩会挂在**已经渲染好的壳**上直到 open 预算烧完（单次 8s、排队 68s 后才失败），同一动作时快时慢。修订把它收敛到**壳自己暴露的 DOM 事实**：官方会话根 `div[data-phase]`（已登记的上游锚点，见 `docs/checklists/upstream-touchpoints.md` §4 与 `scripts/upstream/mobile-anchors.mjs` 的最小断言集）。语义按相位分档：
 
 - `active`（上游值是 `settling ? 'settling' : hero ? 'hero' : 'active'` 的**兜底档**——非 hero 非 settling 即落到这里，所以 `shellPhase === 'blank'` 且 `openState ∈ {cold, error, undefined}` 而 `summaryBlank !== true`、以及会话快照缺失的组合也算 active，与"真实会话面已在屏"不是同义语，移动插件同样写作 "active (everything else)"）⇒ **立即揭幕**，即便历史仍在加载——那是壳自己的「载入历史…」面，比不透明加载层诚实；这个方向是 fail-open，取舍与残余见下；
-- `hero`（无会话 / 空白新会话）与 `settling`（已选中但内容相位仍 blank 且载入中，或等待父目录可用 `parentAvailabilityPending`；典型形态是官方初始导航自建的 blank 会话）⇒ **保持遮罩**，第 2 条"不闪空白新会话"的目的不变；只留 70s 外层保险（`SURFACE_MAX_HOLD_MS`，> 68s 排队预算；正常路径由 App 的 open 生命周期先释放意图）；
-- `absent`（会话根尚未出现，或 ui-chat 未注册的降级形态）⇒ 保持，但以**连续缺失起点**（相位从非 absent 变成 absent 的那一帧；根从未出现时即持有起点）起算的兜底窗（`SURFACE_ABSENT_FALLBACK_MS` = 2s）到期即揭幕，把解释交给壳自身的装载面与 `.boot-gap` 降级横幅——绝不出现无出口的加载层；未知 `data-phase` 取值 fail-closed 到 `hero`。
+- `hero`（无会话 / 空白新会话）与 `settling`（已选中但内容相位仍 blank 且载入中，或等待父目录可用 `parentAvailabilityPending`；典型形态是官方初始导航自建的 blank 会话）⇒ **保持遮罩**，第 2 条"不闪空白新会话"的目的不变；只留 70s 外层保险（`PRESENTATION_THRESHOLDS.surfaceMaxHoldMs`，来源 `packages/dsh-stream-state/src/tables.ts`，> 68s 排队预算；正常路径由 App 的 open 生命周期先释放意图）；
+- `absent`（会话根尚未出现，或 ui-chat 未注册的降级形态）⇒ 保持，但以**连续缺失起点**（相位从非 absent 变成 absent 的那一帧；根从未出现时即持有起点）起算的兜底窗（同表的 `PRESENTATION_THRESHOLDS.surfaceAbsentFallbackMs` = 2s）到期即揭幕，把解释交给壳自身的装载面与 `.boot-gap` 降级横幅——绝不出现无出口的加载层；未知 `data-phase` 取值 fail-closed 到 `hero`。
 
 合取式（`packages/renderer/src/components/InstanceView.tsx`）：`veilVisible = (!settled || (holdVeil === true && !surfaceRelease)) && !failureOverlayVisible`——App 仍拥有"要不要持有"（失败、身份校验、open 生命周期），P3 只决定"壳已经画出真实会话面了就别再持有"。相位观察器在**整个持有窗**内运行（`MutationObserver` + 一帧 rAF 节流，窗口结束即断开），纯判定在 leaf 模块 `packages/renderer/src/session-surface.ts`（node 直测；契约锁 `test/lifecycle/session-surface.test.ts` 与 `test/wiring/veil-layering-invariants.test.ts`）。
 
@@ -199,14 +202,15 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 
 - 权威行**按 id 胜出**，该 id 出现在挂载 push 里即从账本退休（`reconcilePendingWorkspaces`，在 ready 门**之前**执行：身份来自该来源自己的 follow 基线，与聚合是否已提交无关）；
 - **同 path 的合成组被原位替换**（真实 id 胜出；否则该目录一旦有会话就会渲染两行）；同 path 的真实行（别的 id）胜出且账本条目退休；
-- 条目随来源生命周期 / TTL（10min）收敛（TTL 挂三处时钟：本次 create、权威 push、未挂载来源唯一的 30s unary 兜底拉取）；回声行**不带 `synthetic`**（id 是真的，工作区级动作照常可用）；
+- 条目随来源生命周期 / TTL（10min）收敛（TTL 挂四处时钟：本次 create、权威 push、未挂载来源唯一的 30s unary 兜底拉取、删除事实）；回声行**不带 `synthetic`**（id 是真的，工作区级动作照常可用）；
 - **位置锚点（`afterWorkspaceId` 第二入口修订）**：Git 插件在宿主上把新 worktree 插到其主 checkout 之后（`workspace.insertBefore`），该次 create 的事实因此带锚点，`withWorkspaceEcho` 把回声行插到该投影行之后；缺省（侧栏自己的创建）追加尾部。渲染序是 design 08 §3.3 连续家族不变式的载体（拖拽裁决器直接读它），不留"先渲染在末尾、挂载收敛后再跳上去"的窗口。边界：锚点行不在投影里（权威集尚无该行）时退化为追加尾部，**绝不丢行**；**同 path 合成组被原位替换时锚点不适用**——替换规则优先（目录不跳动，见上条），家族位置由挂载 push 收敛；
+- **位置意图（pre-create 半边；"新 worktree 不应该从最顶端开始"修订）**：锚点只解决**行存在之后**的位置，而宿主 `workspace.create` 无条件 PREPEND 进注册表序（vendor `packages/workspace/workspace/src/index.ts` 写 `workspaceIds: [id, ...state.workspaceIds]`，且 create 请求只有 `{path}`，没有位置参数），客户端只能在其后补 `workspace.insertBefore`——**挂载来源**的权威 push 因而在 create 回答之前、在 id 键回声能存在之前就把新行渲染在列表第 0 位：入场动画从最顶端开始、整列下压，几个 RPC 后才滑回锚点。唯一出口因此在 **wire 之前**先发布一条位置意图（`reportWorkspacePlacement`，带**请求路径**与锚点——回答未到，路径是当时唯一身份），App 记入独立账本（`packages/dsh-chamber-client-core/src/workspace-placement.ts`）并在同一汇合点套一层 `withWorkspacePlacements`：投影**只搬动权威行**（绝不造行——造行是回声的职责），且只搬"当前是真实工作区列表头部"的那一行（头部正是 create-prepend 短暂态本身）。行一旦被权威序放到别处（重排落地 / 追加落地 / 用户拖走）意图即退休（`reconcilePendingPlacements`；唯一例外 = 把该行拖到列表**第 0 位**——它仍留在头部，与"重排仍在途"无法区分，窗口 = 该重排在途（正常 <1s）或一直不返回（TTL 兜底），失败侧作废事实会立刻结束它）；锚点消失、删除事实、来源离开同样退休；**作废事实**（`reportWorkspacePlacementFailed`）覆盖"宿主序就是最终序"的**四处**失败侧——create 与 adopt 的 `insertBefore` best-effort catch（带宿主 id + 宿主路径），以及 create / adopt 两个 saga 的重排**之前**中止（重排不会再来；两个 saga 中止都只在恢复记录是 `session-create` 变体时带得出宿主 id，否则只带请求路径——create 可能根本没提交）——让行立刻跟随宿主序；成功侧**不**发，位置判据恰好收敛在位置已经正确的那一帧。TTL 2min 只兜"根本没有落地信号"的泄漏，比回声的 10min 短一档（它覆盖的只是一次点击的 RPC 窗口）。**锚点取值规则**：宿主无位置参数，客户端只能锚定"必须排在被搬行之后"的那一行，而读序来自**已套用回声/位置意图的发布投影**（新行已排在锚点后、宿主却仍是头部）⇒ 必须显式**排除正在被搬的那一行**（`workspaceAfterAnchor`，git 插件 `shared/placement.ts`），否则发出 `insertBefore(id, id)` 会被宿主静默早退（不写 state、不广播）⇒ 注册表序永不收敛、磁盘上的家族位置永久错；主 checkout 未注册的 adopt 落点是**尾部**（无锚 append），锚点因此取"当前最后一个 workspace"，与宿主收敛到同一处。**边界清单**：一次投影只纠正"原本是真实列表头部"的那一行（并发两个带锚点创建时第二行要等下一次聚合变更；UI 的 `source.busy` 门使该形态不可达）；**空列表**（没有任何真实行）不算"锚点消失"的证据（判不了就保留，TTL 兜底；非空列表缺锚点即退休，哪怕它只是部分基线）；无锚点的创建（宿主序即最终序）回答时顺手清掉该来源**尚未被宿主 id 认领**的意图（`removeUnclaimedPlacements`，见下条拼写分歧边界）；create 回答后同一条意图被回声事实**就地升级**（补宿主 id 与宿主规范化路径），行匹配不再依赖路径写法；宿主把路径规范化成另一种拼写时（`/var` vs `/private/var`）会留下第二条仅按路径匹配的条目——**投影空操作**，只能由 TTL 或该来源的**下一次无锚创建**退休（`removeUnclaimedPlacements` 是**来源级**清扫、不是同路径匹配——同路径匹配退不掉拼写分叉的孪生条目，而它才是会认领后续行的那个；同源并发无锚创建会顺带清掉别的在途路径键意图，代价只是该行回落到宿主序，已登记的边界）；
 - **标题提示（`title?` 复审修订）**：adopt 这类"宿主标题将由后续 rename 改写"的创建随事实带上**最终标题**（Git adopt 用分支名），回声行生来就是最终标签，不会先显示路径 basename、几个 RPC 后再翻转；缺省仍是路径 basename 规则，权威 follow 基线两者都压过；
 - **装饰先于事实（`beforePublish` 复审修订）**：任何"回声行首帧就必须成立"的事实（Git 的工作树 flag、adopt 的未注册块收敛）由唯一出口在**事实发布之前**的同一同步续体里写好，而不是等 create 返回后再补——否则两个更新分属 App 状态与外部 store，能否落在同一次提交取决于调度器，行会先以普通 workspace 形态出现再翻转。装饰抛错只记录不中止：宿主上的创建已提交，渲染期装饰绝不能把成功变成 saga 的失败/补偿分支；
 - **替换的真实代价（已登记）**：换的是行的**身份**，按 `sourceId/workspaceId` 键控的 per-workspace 视图偏好（折叠态 `folded`、updated 模式的 `updatedOrder`/`sessionUpdatedAtByAccount`）不跟随新 id——旧合成键留在存储里不再命中（渲染侧跳过未知 id，属既有已接受残渣），该组可能一次性由折叠变展开；未分组序 `ungroupedOrder` 只按 sourceId 键控，不受影响。纯外观、一次性，换来"不会渲染同一目录两行"；
 - **与 git 行的联动（顺带生效，非新机制）**：Git 插件本就按"投影里的工作区 id 集合变化"即时刷新（`workspaceKeyOf`——"新增/删除工作区必须立刻刷新，否则 git 行要等 30s 轮询"），取数是 unary（`/api/i/<id>/api/gitWorktree/*`，未挂载来源同样可用）；回声让投影 id 集合变化，新建工作区的 **git 行也随之立即出现**，不必等用户点开该来源。
 
-**会话回声（session echo）**：**应用内任何**会话创建同样走唯一出口 `packages/dsh-chamber-client-core/src/session-mutations.ts`——`createSessionForSource` / `forkSessionForSource` 各做一次 wire 调用并上报 `chamberBridge.reportSessionCreated`（宿主返回的 sessionId、目标 workspaceId 与官方 `blank` 事实；fork 另带 `parentSessionId` 与递增标题提示），`archiveSessionForSource` 上报 `reportSessionRemoved`（单一回声的**撤下半**：创建后立刻归档的行不会留到 TTL）。侧栏 workspace 行的「+」、会话行菜单的 fork 与 archive、Git 插件的会话创建（create / adopt / 两类 recovery）都经它（第二入口教训见下）。App 记入渲染端账本，并在同一汇合点按固定顺序并入：`withPendingArchives`（归档墓碑，最外层，先藏掉本页刚归档的 id）→ `withWorkspaceEcho`（补齐可能刚建的工作区行）→ `withSessionEcho`（把新会话挂进那一行），三步都在 `deriveServerWorkspaces` 之前。为什么必须回声：unary 侧新建的会话进投影的两条生产者路径都到不了——①挂载壳的官方 summaries 只在连接世代拉取，此后唯一外源是宿主 `api-session/added` 的**异步广播**，竞态窗内紧接着的挂载 push 会拿还不含它的 store **整份替换**聚合；②来源未挂载时（基线收割后的稳态：工作区行仍是上次推送的**真实**行，「+」照常可点）收不到广播，30s unary 兜底的 mounted merge 又保留被冻结的推送工作区成员位，新会话只能以**未归属散落行**出现，且它仍是官方临时 blank 行时（`!blank || current` 规则）不进导航。真机形态即
+**会话回声（session echo）**：**应用内任何**会话创建同样走唯一出口 `packages/dsh-chamber-client-core/src/session-mutations.ts`——`createSessionForSource` / `forkSessionForSource` 各做一次 wire 调用并上报 `chamberBridge.reportSessionCreated`（宿主返回的 sessionId、目标 workspaceId 与官方 `blank` 事实；fork 另带 `parentSessionId` 与递增标题提示），`archiveSessionForSource` 上报 `reportSessionRemoved`（单一回声的**撤下半**：创建后立刻归档的行不会留到 TTL）。侧栏 workspace 行的「+」、会话行菜单的 fork 与 archive、Git 插件的会话创建（create / adopt / 两类 recovery）都经它（第二入口教训见下）。App 记入渲染端账本，并在同一汇合点按固定顺序并入：`withPendingArchives`（归档墓碑，最外层，先藏掉本页刚归档的 id）→ `withWorkspaceEcho`（补齐可能刚建的工作区行）→ `withWorkspacePlacements`（把宿主 create-prepend 短暂态按回锚点后，只搬权威行）→ `withSessionEcho`（把新会话挂进那一行），四步都在 `deriveServerWorkspaces` 之前。为什么必须回声：unary 侧新建的会话进投影的两条生产者路径都到不了——①挂载壳的官方 summaries 只在连接世代拉取，此后唯一外源是宿主 `api-session/added` 的**异步广播**，竞态窗内紧接着的挂载 push 会拿还不含它的 store **整份替换**聚合；②来源未挂载时（基线收割后的稳态：工作区行仍是上次推送的**真实**行，「+」照常可点）收不到广播，30s unary 兜底的 mounted merge 又保留被冻结的推送工作区成员位，新会话只能以**未归属散落行**出现，且它仍是官方临时 blank 行时（`!blank || current` 规则）不进导航。真机形态即
 "新建的会话不出现，切到那个服务器（挂载 → follow 基线）才刷新出来"。回声**不是第二事实源**：
 
 - **行 + 成员位一起并入**：成员位先按宿主 workspaceId 命中，其次按 canonical path 命中合成 cwd 组（未挂载来源没有宿主 id）；都不命中时行仍渲染，落在未分组桶。**成员位插在该工作区的头部**（宿主 `attachSession` 就是 `[sessionId, ...rest]`，manual 默认渲染序正是该数组）：追尾会让行先渲染在末尾、权威基线到达时再跳回头部——正是工作区回声用位置锚点消除的位置跳动。
@@ -236,6 +240,10 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 - **新增"工作区读通道"**（让未挂载来源直接列工作区）：`workspace.list` 已被上游删除，在 chamber 侧重造读面等于把执行面事实搬进侧栏/控制面（违 §2.3 数据纪律与 AGENTS 边界）；被否。
 - **每次工作区变更付一次后台挂载**：与"稳态 ≤1 常驻壳 / 首启每源一次后台 boot"的成本政策冲突（STATUS 已登记"不做"）；被否。
 - **回声行一律追加尾部**（锚点引入前的行为）：会把 Git 新建的 worktree 先渲染在列表末尾、挂载收敛时再跳一次，并让 design 08 §3.3 的连续家族不变式在窗口内失真；被锚点方案取代。
+- **只靠 id 键回声 + 事后 `insertBefore`**（位置意图引入前的行为）：锚点让**回声行**落位正确，但**挂载来源**的新行仍先被权威 push 渲染在列表头部再滑回原位——入场动画从最顶端开始、整列下压（真机反馈"新 worktree 有顺滑插入效果，但不应该从最顶端开始"）。要覆盖这一窗只能有一条 wire 之前的事实：被 pre-create 位置意图取代。
+- **在 create 请求里带位置**：宿主 `WorkspaceCreateRequest` 只有 `{path}`（vendor `api/workspace-controller/src/types.ts`），`workspace.insertBefore` 是独立原语；让 create 收位置要改 vendor 契约与注册表事务，且非 chamber 能单方面决定的事；被否。
+- **只加强回声：让回声在"权威行已列出"时**不**退休（锚点未满足就继续按住那一行）**：改动面更小（不加 bridge 事实），但①**要盖住的那一窗里根本不存在回声条目**——挂载来源的权威 push 先于 create 回答到达，而回声条目只能由回答产出；②改"权威即退休"契约会让同一条目与用户拖拽 / 权威重排长期打架（谁赢取决于到达顺序）；被 pre-create 位置意图取代。
+- **由插件在重排 RPC 后发布一条 settle 事实来回收意图（成功侧也发）**：多一条事实，而且 settle 与权威 push 的到达顺序不可控——settle 先到而新序未到时会先把行放回头部、下一帧再跳回锚点（200ms FLIP 的可见弹跳）；成功侧因此改走"权威序把该行移离列表头部即退休"的位置判据（收敛点恰好是位置已经正确的那一帧），只保留**失败侧**的作废事实（那里没有新序可等，宿主序就是最终序）。
 - **会话侧只依赖宿主 `api-session/added` 广播收敛**（不加本地回声）：广播与那次 open/挂载 push 是竞态，未挂载来源收不到广播；被否。
 - **会话侧缩短 unary 兜底周期 / 每次创建后再拉一次**：mounted merge 保留被冻结的推送工作区成员位，新会话只能落到未归属桶（位置跳动）、blank 行不进导航；只多了 RPC；被否。
 - **每次会话创建付一次后台挂载（复用基线收割）**：与"稳态 ≤1 常驻壳"的成本政策冲突（与工作区回声同款裁决），且温壳场景下不解决 summaries 竞态；被否。
@@ -264,7 +272,7 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   「重新加载」收口；「重新连接」只对仍持有壳的来源有效——已回收来源的该出口是 no-op，见 STATUS ⑭）。
 - **首屏基线收割（`packages/renderer/src/baseline-harvest.ts`）**：首启仅 local 挂载 + 1 个不轮转预热槽、被回收来源点击前禁预热 ⇒ N-1 个 ready 远程源稳态停留在 unary 兜底视图（合成 cwd 分组 + 空归档集），自愈臂均要求 `mounted===true`（至少推过一次快照）。收割把这类来源在同一后台预热槽挂一次，首个权威推送（真实分组 + 归档集，`archiveSetKnown:true`）后即回收，转入"已回收来源"态（保留权威聚合，会话行由 30s unary merge 刷新）。纪律：收割候选优先于普通预热且不受"回收后禁预热"抑制；每源尝试上限 2 次、失败退避 120s、挂载后 `BOOT_TIMEOUT_MS+15s` 无推送且壳已 settle 判失败并释放槽位（截止值由 `boot-budget.ts` 的 boot 预算推导且高于它）；`HARVEST_ABANDON_MS`（截止值 + boot 预算）为绝对放弃上限：壳始终不 settle（挂死的 loader/fetch）时回收并停用该源（`harvestParked`）。语义边界：回收只拆**已注册**壳；从未注册的 boot 只能自行 settle 时拆除（页面生命周期内可残留），同 id 后续挂载不受影响（shell.ts 对"上一代 boot"的等待有 boot 预算上限）。同一上限也独立看管"在途挂载"（按挂载时刻、仅未 settle 的挂载，不依赖收割意图；已 settle 者仍走截止臂）。同 id boot 尾从不提前释放（generation 记录持有者，提前释放会致同号注册覆盖）；改由 shell.ts 对"等待上一代 boot"设绝对上限（前代起始 + 两个 boot 预算，后继共享同一截止）；producer 注册表按代际栅栏（`chamberBootGeneration` 经 ctx 注入），迟到的老 boot 注册作废，teardown 不能清空健康后继通道。活动/待开视图不可回收——标记失败，让既有失败覆盖层与「重试」出现；在途壳不计入 retention 隐藏壳数。存在任一收割候选时，候选集独占后台槽（`prewarmCandidates` 只返回收割候选且返回全部候选，含排在退避候选之后的"退避已满"者）；尝试耗尽且从未拿到基线的源（`harvestParked`）不得退回普通预热；托管 dsh 终态停机或瞬态 starting/restarting 的 gateway 源（投影事实 `managedRuntimeUnusable`）不预热/不收割（boot 必然 503）；用户点开正在收割的视图 = 采用（撤销收割意图，绝不回收）；来源退役时账本同源收敛。稳态 ≤1 个后台壳（含预热）。**收割独立预算线**：温壳使普通预热槽位预算恒为 0（retention 只保 1 个隐藏壳），收割壳不受其约束；代价是最坏多一个隐藏壳（用户温壳 + 收割壳）在收割窗口内共存。**代价与已知取舍**：首启每个 ready 来源各付一次后台 boot（N 次，串行于全局 boot 链，最坏受 60s boot 预算约束）；最后收割的壳保留为温壳（不额外付预热 boot，挂载期状态事实 pending/完成点保持在线），但遇到新收割候选必须**让位**（`shouldReclaimHarvestedShell`）——否则它作为 `autoPrewarmed` 占住唯一槽位（`remaining` 恒 0）。
 - **未挂载来源的 unary 兜底表达不了"空工作区"**（修订，§2.2.1）：`fetchInstanceSnapshot` 只调 `session.list`，工作区分组由会话 cwd 反推（`__cwd__:` 合成行），刚建好、无会话的工作区在结构上不可见；已推送来源更彻底：聚合保留 pushed 工作区集（mounted merge），`planAggregateRefreshes` 只刷新"刚 ready"或"从未推送过"的来源，对它连 unary 轮询都不再发生。根因是**读通道缺失**：权威工作区集合只存在于挂载壳的 `workspace/follow` 基线（宿主把 `upsert` 广播给所有活跃 follower），chamber 补法是用户那次创建的回声（§2.2.1）——不新增 wire 读通道，也不把工作区事实搬进控制面。
-- **本修订的代码落点**：`packages/dsh-chamber-client-core/src/open-intent.ts`（意图槽 + 投影/揭示纯规则）、`packages/dsh-chamber-client-core/src/aggregate-store.ts`（桥接单例 + 回声事实通道：`WorkspaceCreatedFact`/`reportWorkspaceCreated` 等）、`packages/dsh-chamber-client-core/src/workspace-echo.ts`（回声账本 + union/去重/锚点插入纯规则）、`packages/dsh-chamber-client-core/src/workspace-mutations.ts`（**唯一事实出口**：create/delete/rename 的 wire 调用与回声事实 第二入口收口）、`.../src/client/early-open.ts`（boot 期早开臂）、`.../src/client/index.ts`（每个 ctx 挂一次早开臂）、`.../src/client/SidebarRoot.tsx`（三个变更点经唯一出口，自身不再直接上报）、`packages/dsh-chamber-client-ui-git/src/shared/coordinator.ts`（Git create / adopt / recovery 经唯一出口；create 带位置锚点，flag/未注册块由 beforePublish 装饰）、`packages/renderer/src/App.tsx`（arm/release、账本与退休含锚点、投影门、揭示门判定、holdVeil 传入）、`packages/renderer/src/components/InstanceView.tsx`（遮罩合成）、`packages/renderer/src/shell.ts`（被取代请求的丢弃：`lastRequestedSession`）。
+- **本修订的代码落点**：`packages/dsh-chamber-client-core/src/open-intent.ts`（意图槽 + 投影/揭示纯规则）、`packages/dsh-chamber-client-core/src/aggregate-store.ts`（桥接单例 + 回声事实通道：`WorkspaceCreatedFact`/`reportWorkspaceCreated` 等）、`packages/dsh-chamber-client-core/src/workspace-echo.ts`（回声账本 + union/去重/锚点插入纯规则）、`packages/dsh-chamber-client-core/src/workspace-placement.ts`（**pre-create 位置意图**账本：只搬权威行、只搬列表头部那一行、四条退场路径 + TTL）、`packages/renderer/src/host/servers.ts`（同一汇合点串 `withWorkspacePlacements`，投影缓存键覆盖该账本）、`packages/dsh-chamber-client-core/src/workspace-mutations.ts`（**唯一事实出口**：create/delete/rename 的 wire 调用与回声事实 第二入口收口）、`.../src/client/early-open.ts`（boot 期早开臂）、`.../src/client/index.ts`（每个 ctx 挂一次早开臂）、`.../src/client/SidebarRoot.tsx`（三个变更点经唯一出口，自身不再直接上报）、`packages/dsh-chamber-client-ui-git/src/shared/coordinator.ts`（Git create / adopt / recovery 经唯一出口；create 带位置锚点，flag/未注册块由 beforePublish 装饰）、`packages/renderer/src/App.tsx`（arm/release、账本与退休含锚点、投影门、揭示门判定、holdVeil 传入）、`packages/renderer/src/components/InstanceView.tsx`（遮罩合成）、`packages/renderer/src/shell.ts`（被取代请求的丢弃：`lastRequestedSession`）。
 
 **归档/删除后的侧栏幽灵行**：生产端仍从来源自己的官方 summaries 投影，但每次 mounted 基线就绪及
 连接重置后会用独立 unary `session.list` 校验；归档收缩墓碑跨 renderer 重启保存在按
@@ -307,6 +315,8 @@ interface WorkspaceCreatedFact {
   afterWorkspaceId?: string        // 位置锚点（Git 新 worktree 紧跟其主 checkout）；缺省 = 追加尾部
   title?: string                   // 创作意图标题（Git adopt 的分支名）；缺省 = 路径 basename
 }
+interface WorkspacePlacementFact { sourceId: string; path: string; afterWorkspaceId: string }  // 唯一在 wire **之前**发布的事实（pre-create 位置意图）；path = 请求路径，回答未到时唯一身份
+interface WorkspacePlacementFailedFact { sourceId: string; workspaceId?: string; path: string }  // 重排永不落地（只发失败侧）：作废该意图，行跟随宿主序。workspaceId 在 create 已回答的两处 catch 里给（主键）；两个 saga 重排前中止时同为"给得出就给"（恢复记录为 `session-create` 变体时才有宿主 id），否则只给请求路径
 interface WorkspaceRemovedFact { sourceId: string; workspaceId: string; path: string }  // path 尽力而为（快照未报告该行时为空串；账本同时按 workspaceId 匹配）
 interface WorkspaceRenamedFact { sourceId: string; workspaceId: string; title: string }
 interface InstanceRuntimeReport {
@@ -339,6 +349,10 @@ export const chamberBridge: {
   onOpenSessionOutcome(listener: (outcome: OpenSessionOutcome) => void): () => void  // 侧边栏订阅：失败行内呈现/成功清残留
   requestRefresh(sourceId: string): void                  // 侧边栏动作成功后调用
   onRefresh(listener: (sourceId: string) => void): () => void  // App 层订阅
+  reportWorkspacePlacement(fact: WorkspacePlacementFact): void // create **调用之前**上报位置意图（§2.2.1；宿主 PREPEND 的短暂态在 id 键回声能存在之前就已渲染）
+  onWorkspacePlacement(listener: (fact: WorkspacePlacementFact) => void): () => void  // App 层订阅：并入位置意图账本
+  reportWorkspacePlacementFailed(fact: WorkspacePlacementFailedFact): void  // 重排永不落地时作废该意图（只发失败侧：两处 insertBefore catch + 两个 saga 中止 catch）
+  onWorkspacePlacementFailed(listener: (fact: WorkspacePlacementFailedFact) => void): () => void  // App 层订阅：从账本撤下
   reportWorkspaceCreated(fact: WorkspaceCreatedFact): void     // 侧栏 create 成功后上报宿主 workspaceId（§2.2.1 回声事实；单向，绝不请求宿主改动）
   onWorkspaceCreated(listener: (fact: WorkspaceCreatedFact) => void): () => void  // App 层订阅：并入回声账本
   reportWorkspaceRemoved(fact: WorkspaceRemovedFact): void     // 侧栏 delete 成功后上报（撤销回声）

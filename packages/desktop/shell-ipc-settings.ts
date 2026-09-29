@@ -3,6 +3,7 @@ import type { ShellIpcCtx } from './shell-ipc-ctx.ts'
 import type { NotificationSettingsLike } from './notifications.ts'
 import { DEFAULT_CHAMBER_SETTINGS, validatePatch } from './chamber-settings.ts'
 import { IPC_CHANNELS } from './ipc-events.ts'
+import { cpus, release as osRelease, totalmem } from 'node:os'
 import { adjudicateBadgeCount, validateBadgeRequest } from './badge.ts'
 import { MAX_SHOWN_NOTIFICATION_RECEIPTS, ShownNotificationReceipts, claimNotificationDetailed, decideNotification, releaseNotificationClaim, validateNotificationRequest } from './notifications.ts'
 
@@ -106,7 +107,43 @@ export function registerSettingsHandlers(ctx: ShellIpcCtx): void {
     version,
     platform: hostFacts.platform,
     flavor: hostFacts.flavor,
+    // 官方反馈问卷的机器描述（上游 apps/desktop/src/device-info.ts 同形）。
+    // 不是 4 标量暴露面的一部分：carrier 的 deviceInfo() 按需读这一条。
+    deviceInfo: readDeviceInfo(),
   }));
+
+  /**
+   * Local machine description for the official feedback questionnaire, the
+   * upstream `apps/desktop/src/device-info.ts` shape (`platform=…; os=…;
+   * app_arch=…; cpu=…; memory_gib=…`) with unavailable fields omitted, so a
+   * refused source never fails the whole payload.
+   */
+  function readDeviceInfo(): string {
+    const fields = [`platform=${process.platform}`]
+    // `process.getSystemVersion` is Electron-only; the plain-Node sidecar flavor
+    // falls back to the kernel release (`os.version()` would carry "; " and break
+    // the name=value list the upstream format is parsed as).
+    collectDeviceField(fields, 'os', () => (typeof process.getSystemVersion === 'function'
+      ? process.getSystemVersion()
+      : osRelease()))
+    fields.push(`app_arch=${process.arch}`)
+    collectDeviceField(fields, 'cpu', () => cpus()[0]?.model)
+    collectDeviceField(fields, 'memory_gib', () => (totalmem() / 1024 ** 3).toFixed(1))
+    return fields.join('; ')
+  }
+
+  function collectDeviceField(fields: string[], name: string, read: () => string | undefined): void {
+    let value: string | undefined
+    try {
+      value = read()
+    } catch (_error) {
+      return
+    }
+    // The payload is `name=value` pairs joined by "; ": a separator inside a value
+    // would fabricate fields for whoever parses it (upstream omits only empty ones).
+    const safe = value?.replace(/[;\r\n]+/g, ' ').trim()
+    if (safe !== undefined && safe !== '') fields.push(`${name}=${safe}`)
+  }
 
   // 原生外观跟随页面主题（上游 dsh-desktop:native-theme-set）：来源是页面 bootstrap
   // 观察到的 html[data-ds-theme-source]，不是页面 API ⇒ 白名单只放三个合法值；非法值

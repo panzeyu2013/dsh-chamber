@@ -52,11 +52,47 @@ export function sourceAccentStyle(server: ChamberServerAggregate): { '--chamber-
 }
 
 /**
- * Resolver env for one source's workspace drag: display order (transient drag
- * override first, rows it does not know appended in registry order — a
- * workspace that appeared mid-drag stays a valid target), git-flag lookup and
- * repo-group-fold visibility. One rule set for the marker render, the
- * onDragOver gate, the drop handler and the commit — no drift between them.
+ * 拖拽覆盖表 → 实际顺序的**唯一**规则，渲染序与 drop 环境序共用（两处不同序会把拖拽锚点算到
+ * 旧行上）。覆盖表只描述拖拽那一刻存在的行；不在表里的 id 是其后新建的行，而宿主把新建的
+ * workspace 插在序列头部（PREPEND）⇒ 按原序**前置**（否则新建/回声行先落表尾，位置意图的首帧
+ * 锚点判定失败，要等下一提交才滑回锚点）。override 不存在时返回原序的副本。
+ */
+export function orderWithOverride<T>(
+  items: readonly T[],
+  override: readonly string[] | undefined,
+  idOf: (item: T) => string,
+): T[] {
+  if (override === undefined) return [...items]
+  const known = new Set(override)
+  const placed = new Set<string>()
+  const ordered: T[] = []
+  for (const item of items) {
+    const id = idOf(item)
+    if (known.has(id)) continue
+    ordered.push(item)
+    placed.add(id)
+  }
+  for (const id of override) {
+    if (placed.has(id)) continue
+    const item = items.find(candidate => idOf(candidate) === id)
+    if (item === undefined) continue
+    ordered.push(item)
+    placed.add(id)
+  }
+  // Duplicate-id fallback only: ids are unique in practice, so every item was
+  // already emitted by one of the two loops above.
+  for (const item of items) if (!placed.has(idOf(item))) ordered.push(item)
+  return ordered
+}
+
+/**
+ * Resolver env for one source's workspace drag: display order comes from
+ * `orderWithOverride` (the transient drag override describes the rows that
+ * existed when the drag started; rows created meanwhile keep their original
+ * order ahead of it, mirroring the host's PREPEND — a workspace that appeared
+ * mid-drag stays a valid target), plus git-flag lookup and repo-group-fold
+ * visibility. One rule set for the marker render, the onDragOver gate, the
+ * drop handler and the commit — no drift between them.
  */
 export function workspaceDropEnv(
   sourceId: string,
@@ -65,12 +101,7 @@ export function workspaceDropEnv(
   folded: Readonly<Record<string, boolean>>,
 ): WorkspaceDropEnv {
   const realSet = new Set(realWorkspaceIds)
-  const order = override === undefined
-    ? [...realWorkspaceIds]
-    : [
-        ...override.filter(id => realSet.has(id)),
-        ...realWorkspaceIds.filter(id => !override.includes(id)),
-      ]
+  const order = orderWithOverride(realWorkspaceIds, override, id => id)
   return {
     order,
     flag: id => getWorkspaceGitFlag(sourceId, id),
@@ -97,6 +128,15 @@ export interface SidebarSectionContextValue {
     key: 'sidebar.workspace.git',
     owner: { wide: boolean },
     opts: { hookContext: { sourceId: string; workspaceId: string; repoKey?: string } },
+  ) => ReactNode
+  /** chamber patch 13: the two session-row seats this shell declares (the leading
+   *  status seat and the hover-card seat) rendered with the official occurrence
+   *  share. `opts.fallback` renders when no occupant elects, so the shell's own
+   *  Schedule mark is the fallback and can never double with an occupant. */
+  renderSessionSeat: (
+    key: 'sidebar.session.row.leading' | 'sidebar.session.row.hover',
+    owner: { sessionId: string },
+    opts?: { fallback?: ReactNode },
   ) => ReactNode
 
   viewPrefs: ChamberSidebarViewPrefs
@@ -148,6 +188,8 @@ export interface SidebarSectionContextValue {
   openSession: (serverId: string, sessionId: string) => void
   onNewSession: (server: ChamberServerAggregate, workspaceId: string) => void
   onArchiveSession: (server: ChamberServerAggregate, sessionId: string, displayTitle: string) => void
+  /** `currentlyPinned` 是点击那一刻行的置顶事实（true = 该退出 unpin），不是目标方向。 */
+  onPinSession: (server: ChamberServerAggregate, sessionId: string, currentlyPinned: boolean) => void
   onForkSession: (server: ChamberServerAggregate, session: { id: string; title: string }) => void
   onDeleteWorkspace: (server: ChamberServerAggregate, workspaceId: string, title: string) => void
 }

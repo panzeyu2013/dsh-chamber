@@ -7,7 +7,7 @@ import { useRef } from 'react'
 import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { increasedForkTitle } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import { getInstanceClient, renameSession } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
-import { archiveSessionForSource, createSessionForSource, forkSessionForSource } from '@dsh-chamber/dsh-chamber-client-core/session-mutations'
+import { archiveSessionForSource, createSessionForSource, forkSessionForSource, pinSessionForSource, unpinSessionForSource } from '@dsh-chamber/dsh-chamber-client-core/session-mutations'
 import { classifyArchiveFailure, type SessionArchiveConfirmRequest } from './session-archive-confirm.ts'
 import type { RunAction } from './sidebar-root-actions.ts'
 
@@ -21,6 +21,11 @@ export function useSidebarSessionActions({ runAction, openArchiveConfirm }: {
    *  `connecting` map): a second click joins the first. Keyed like the
    *  row-error key `<source>/workspace/<id>/new`. */
   const newSessionRef = useRef(new Map<string, Promise<void>>())
+
+  /** 归档的每会话 in-flight 守卫（同 `newSessionRef`）：行菜单选中即关天然防连点，
+   *  常驻图标钮没有——快速双击会发两次 workspace/archiveSession（活跃会话时第二次
+   *  重复武装同一确认层），键与行错误槽同源 `<source>/session/<id>/archive`。 */
+  const archiveActionRef = useRef(new Map<string, Promise<void>>())
 
   // 分叉：在最后完成的 turn 处 fork，随后 refresh 并打开子会话。Wire
   // session.fork 只收 { sessionId, atSeq? }，子会话标题先取源标题；成功后按
@@ -84,10 +89,12 @@ export function useSidebarSessionActions({ runAction, openArchiveConfirm }: {
   // 工作而拒绝（workspace/session-active）时，details 列出将被停止的工作，武装
   // 归档确认层；用户确认后由 dialogs.confirmArchive 带 stopActivity 重发，停止
   // 交给宿主自己的 provider（回合/子代理后代/后台任务/定时提醒）——客户端不再
-  // 有补偿停止腿。动作仍在行菜单上，drag-end 尾随 click 守卫与按行 rowErrors
+  // 有补偿停止腿。动作的两个入口（行菜单项与行内悬停钮）共用这条漏斗；drag-end 尾随 click 守卫与按行 rowErrors
   // 归因不变；拒绝本身不写行错误，其它失败照旧。
   const onArchiveSession = (server: ChamberServerAggregate, sessionId: string, displayTitle: string): void => {
-    runAction(`${server.id}/session/${sessionId}/archive`, async () => {
+    const key = `${server.id}/session/${sessionId}/archive`
+    if (archiveActionRef.current.has(key)) return
+    const task = runAction(key, async () => {
       // 唯一出口：归档同时撤下该会话的待定回声，创建后立即归档不留幽灵行。
       try {
         await archiveSessionForSource(server.id, sessionId)
@@ -104,6 +111,32 @@ export function useSidebarSessionActions({ runAction, openArchiveConfirm }: {
       }
       chamberBridge.requestRefresh(server.id)
     })
+    archiveActionRef.current.set(key, task)
+    void task.finally(() => {
+      if (archiveActionRef.current.get(key) === task) archiveActionRef.current.delete(key)
+    })
   }
-  return { onForkSession, onNewSession, onArchiveSession }
+  /** 置顶的每会话 in-flight 守卫（同 `archiveActionRef`）：悬停钮常驻，快速双击会连发两次
+   *  **同向**的幂等调用（无回声 ⇒ 行标记不会被本地翻转；宿主对重复/不存在都是 no-op）。守卫真正
+   *  的收益是 pending 窗口内不再发第二条命令——代价是若权威推送先落定、行已翻成反向而守卫仍
+   *  持有，紧接着的反向点击会被静默吞掉（需要再点一次）。键与行错误槽同源
+   *  `<source>/session/<id>/pin`。 */
+  const pinActionRef = useRef(new Map<string, Promise<void>>())
+
+  // 置顶切换：与归档同构的一条漏斗（无确认层——上游 pin 是幂等单段，没有第二相位）。
+  // 方向由点击那一刻行的置顶标记决定；成功后照常 requestRefresh，标记由挂载 follow 的
+  // 权威置顶集落定（本仓刻意不做乐观回声）。
+  const onPinSession = (server: ChamberServerAggregate, sessionId: string, currentlyPinned: boolean): void => {
+    const key = `${server.id}/session/${sessionId}/pin`
+    if (pinActionRef.current.has(key)) return
+    const task = runAction(key, async () => {
+      await (currentlyPinned ? unpinSessionForSource : pinSessionForSource)(server.id, sessionId)
+      chamberBridge.requestRefresh(server.id)
+    })
+    pinActionRef.current.set(key, task)
+    void task.finally(() => {
+      if (pinActionRef.current.get(key) === task) pinActionRef.current.delete(key)
+    })
+  }
+  return { onForkSession, onNewSession, onArchiveSession, onPinSession }
 }

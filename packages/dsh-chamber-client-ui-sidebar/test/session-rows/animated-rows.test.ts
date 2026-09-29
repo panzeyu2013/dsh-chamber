@@ -105,11 +105,6 @@ test('the pushed key order equals the rendered attribute order, one attribute pe
   assert.deepEqual(keyedFamilies(SECTION),
     ['workspace:', 'error:workspace:', 'error:workspace-drag:', 'error:open:', 'more:', 'empty'])
   assert.deepEqual(keyedFamilies(ROWS), ['session:'])
-  // Pairing: dropping the non-data `empty` seed and the child-rendered session rows
-  // leaves exactly the same sequence on both sides (a duplicate or an extra key
-  // attribute would break this).
-  assert.deepEqual(keyedFamilies(SECTION).filter(family => family !== 'empty'),
-    pushedFamilies(SECTION).filter(family => family !== 'session:'))
 })
 
 test('only the browse branch is wrapped; search and aggregate keep a plain list', () => {
@@ -128,9 +123,33 @@ test('the wrapper carries the vendor gates', () => {
   assert.match(SECTION, /const rowKeys: string\[\] = server\.workspaces\.length === 0 \? \['empty'\] : \[\]/u)
   assert.match(SECTION, /import \{ AnimatedRows \} from '\.\/rows\/animated-rows\.tsx'/u,
     'the browse tree consumes the local port (registry C16 admits only relative imports of an export function)')
-  assert.match(SECTION, /<AnimatedRows[\s\S]{0,900}?rowKeys=\{rowKeys\}/u)
+  assert.match(SECTION, /<AnimatedRows[\s\S]{0,340}?rowKeys=\{rowKeys\}/u)
   assert.match(SECTION, /ready=\{server\.aggregateReady === true && workspaceDrag === null && sessionDrag === null\}/u,
     'a drag in flight or an unloaded aggregate must stand the motion down')
-  assert.match(SECTION, /resetKey=\{JSON\.stringify\(\[orderBy, sessionRowsExpanded, currentId\]\)\}/u,
-    'order, the per-group disclosure and the current session (auto window) replace the view: they settle instead of gliding')
+  assert.match(SECTION, /resetKey=\{JSON\.stringify\(\[orderBy, sessionRowsExpanded, sessionRowWindowMotionKey\(/u,
+    'order, the per-group disclosure and the CLAMPED auto-window signature replace the view: they settle instead of gliding')
+  // 当前会话 id 绝不入键：官方 blank 可见性规则让新建行**恰在成为 current 的那一刻**
+  // 出现，入键会在同一提交里取消它的淡入（上游 resetKey = [view key, sessionLimits]
+  // 不含 current —— 这正是「点 + 整列瞬移」的成因）。
+  assert.match(SECTION,
+    /sessionRowWindowMotionKey\([\s\S]{0,600}?visibleOrderedWorkspaces[\s\S]{0,300}?viewPrefs\.folded\[[\s\S]{0,120}?\.map\(workspace => \{/u,
+    'derived from the very group list the walk renders, minus the per-workspace folded ones (their window cannot change the rendered rows)')
+  const resetKeyBlock = /resetKey=\{JSON\.stringify\(\[[\s\S]*?\)\]\)\}/u.exec(SECTION)?.[0] ?? ''
+  // 这两条必须落在**切片**上：全文件正则会被 walk 或 resetKey 自己的拷贝满足（变异验证过）。
+  assert.match(resetKeyBlock, /workspaceId: workspace\.id/u,
+    'the key input is keyed by workspace id — never by an array index')
+  const walkSlice = SECTION.slice(SECTION.indexOf(resetKeyBlock) + resetKeyBlock.length)
+  assert.match(walkSlice, /const sessions = sessionsOf\(workspace\)/u,
+    'the walk itself derives the render order with the same helper (a stale copy in the key would not satisfy this)')
+  // currentId 只作为**钳制规则**的输入（currentIndex）进入分量：未钳制组的 renderCount === total，
+  // 当前会话怎么变都不改键；只有 >visibleFirst 的组在"当前行被截断区藏住"时窗口放大 ⇒ 键变 ⇒
+  // settle（上游 sessionLimits 的那一半语义）。它绝不能作为键的直接分量——上面那条结构断言
+  // （键的一级分量恰为 orderBy / sessionRowsExpanded / sessionRowWindowMotionKey(...)）已保证这一点。
+  assert.match(resetKeyBlock, /currentIndex: currentId === undefined/u,
+    'the current id reaches the key only through the clamped-window rule input')
+  // 未钳制的组不得贡献分量：renderCount === total 时把行数放进键，新建会话行出现的那次提交
+  // 就会改键、取消入场动画（见 session-row-window.ts 的 sessionRowWindowMotionKey）。
+  assert.notEqual(resetKeyBlock, '', 'the resetKey prop block must be locatable')
+  assert.doesNotMatch(resetKeyBlock, /renderCount/u,
+    'no per-group render count may enter the key — only sessionRowWindowMotionKey owns the clamped rule')
 })

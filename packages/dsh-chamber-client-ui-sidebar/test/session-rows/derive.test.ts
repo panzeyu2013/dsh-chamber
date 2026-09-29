@@ -58,9 +58,56 @@ import type { InstanceSnapshot, SearchRow, SessionRow, WorkspaceRow } from '@dsh
 import { server, session, snapshot, workspace } from '../support/derive-fixtures.ts'
 
 /** Workspace-store projection fixture (idle/ready) for the projectInstanceSnapshot cases. */
-function wsState(archivedSessionIds: string[] = [], items = [workspace('w1', 'Work', ['s1', 'sub'])]) {
-  return { items, archivedSessionIds, state: 'idle', phase: 'ready' }
+function wsState(
+  archivedSessionIds: string[] = [],
+  items = [workspace('w1', 'Work', ['s1', 'sub'])],
+  pinnedSessionIds?: string[],
+) {
+  return {
+    items,
+    archivedSessionIds,
+    ...(pinnedSessionIds === undefined ? {} : { pinnedSessionIds }),
+    state: 'idle',
+    phase: 'ready',
+  }
 }
+
+test('the pin marker is a set fact: an unknown set claims nothing and archived rows never carry it', () => {
+  const rows = [workspace('w1', 'Work', ['s1', 's2']), workspace('w2', 'Other', ['s3'])]
+  const sessions = [session('s1'), session('s2'), session('s3')]
+  // 权威置顶集（挂载 baseline 是唯一来源）：s1 置顶；s2 置顶但已归档 ⇒ 不出现标记。
+  const derived = deriveServerWorkspaces({
+    ...snapshot(rows, sessions),
+    pinnedSessionIds: ['s2', 's1'],
+    pinSetKnown: true,
+    archivedSessionIds: ['s2'],
+  }, 'srv-a', '', undefined, Date.now())
+  const byId = new Map(derived.flatMap(workspace => workspace.sessions.map(row => [row.id, row] as const)))
+  assert.equal(byId.get('s1')?.pinned, true)
+  // s2 置顶且已归档：可见性（sessionVisible）先把它挡在投影之外，行根本不存在——
+  // 归档排除由可见性拥有，两个行构建器里的 !archivedIds.has(...) 只是同语义的兜底。
+  assert.equal(byId.has('s2'), false, 'an archived row never enters the projection at all')
+  assert.equal(byId.get('s3')?.pinned, undefined)
+  assert.equal(derived.flatMap(workspace => workspace.sessions).filter(row => row.pinned === true).length, 1,
+    'only the non-archived pinned row carries the sparse flag')
+  // 集合未知（老宿主形状 / unary 兜底）：即使 ids 在场也不得据此渲染标记。
+  const unknown = deriveServerWorkspaces({
+    ...snapshot(rows, sessions),
+    pinnedSessionIds: ['s1'],
+    pinSetKnown: false,
+  }, 'srv-a', '', undefined, Date.now())
+  assert.equal(unknown.flatMap(workspace => workspace.sessions).every(row => row.pinned === undefined), true,
+    'an unknown pin set must never produce a marker')
+  // 第二份行构建器（未归属任何 workspace 的 stray 行，落在末尾 ungrouped 桶）也必须按集合出标记：
+  // 两份构建器各持一份同名表达式，只有其中一份有测试就是给分叉留门。
+  const stray = deriveServerWorkspaces({
+    ...snapshot(rows, [...sessions, session('s4')]),
+    pinnedSessionIds: ['s4'],
+    pinSetKnown: true,
+  }, 'srv-a', '', undefined, Date.now())
+  const strayRow = stray.flatMap(workspace => workspace.sessions).find(row => row.id === 's4')
+  assert.equal(strayRow?.pinned, true, 'the ungrouped/stray builder also carries the set-derived marker')
+})
 
 /** deriveServerWorkspaces over a fixture snapshot (label '', source srv-a unless overridden). */
 function deriveOf(
@@ -88,7 +135,14 @@ test('projectInstanceSnapshot requires complete reconnect baselines and maps ctx
     archivedSessionIds: ['old'],
     // Mounted baseline = authoritative archive set.
     archiveSetKnown: true,
+    // 该 fixture 的 baseline 没给置顶字段（老宿主形状）：集合按未知处理，绝不空集冒充实测。
+    pinnedSessionIds: [],
+    pinSetKnown: false,
   })
+  // 给了集合才算权威：空集然后才是"真无置顶"（与归档集同一条已知性规矩）。
+  const pinned = projectInstanceSnapshot(wsState(['old'], undefined, ['s1']), sessionState)
+  assert.deepEqual(pinned?.pinnedSessionIds, ['s1'])
+  assert.equal(pinned?.pinSetKnown, true)
   // The workspace completeness check is `state === 'idle'` + `phase === 'ready'`.
   // The withdrawal on `state` deviation is REQUIRED: it
   // clears the producer's content signature so an identical recovered
@@ -113,6 +167,9 @@ test('projectInstanceSnapshot requires complete reconnect baselines and maps ctx
     sessions: [{ sessionId: 's1', updatedAt: 42, running: true, blank: false, cwd: '/w1', title: 'One', displayTitle: 'One' }],
     archivedSessionIds: ['old'],
     archiveSetKnown: true,
+    // 同一 fixture 输入 ⇒ 同一未知置顶集（不是"无置顶"）。
+    pinnedSessionIds: [],
+    pinSetKnown: false,
   })
 })
 
@@ -931,9 +988,20 @@ test('deriveArchivedSessions/groupArchivedRows: newest-first, membership then ca
 test('archiveSetKnown and archivedSessions participate in the publish signatures', () => {
   const base = snapshot([], [])
   assert.notEqual(instanceSnapshotSignature({ ...base, archiveSetKnown: true }), instanceSnapshotSignature({ ...base, archiveSetKnown: false }))
+  // 置顶集同样必须参与快照签名（聚合去重门用它决定是否产出新对象；不参与则 pin 变更被吞）。
+  assert.notEqual(instanceSnapshotSignature({ ...base, pinnedSessionIds: ['s1'], pinSetKnown: true }), instanceSnapshotSignature(base))
+  // 空集下 known/unknown 也必须可分：只删 nk: 一项时，挂载态的「确实没有置顶」会被读成老宿主形状。
+  assert.notEqual(instanceSnapshotSignature({ ...base, pinnedSessionIds: [], pinSetKnown: true }),
+    instanceSnapshotSignature({ ...base, pinnedSessionIds: [], pinSetKnown: false }))
   const plain = { id: 'local', sourceFingerprint: 'fp', kind: 'local' as const, transport: 'local' as const, label: 'local', connected: true, phase: 'ready', workspaces: [], updatedAt: 1 }
   assert.notEqual(serversProjectionSignature([plain] as never),
     serversProjectionSignature([{ ...plain, archivedSessions: [{ sessionId: 's1', updatedAt: 5 }] }] as never))
+  // 置顶标记同样是 RENDERED 派生事实：它不在服务器投影签名里的话，只改置顶的发布会被
+  // App 钩子与 sidebar-root-projection 的等值闸吞掉，标记要等别的字段变化才出现/消失。
+  const row = { id: 's1', title: 'S', displayTitle: 'S', running: false, blank: false }
+  const withRow = { ...plain, workspaces: [{ id: 'w1', title: 'W', sessions: [row] }] }
+  const withMarker = { ...plain, workspaces: [{ id: 'w1', title: 'W', sessions: [{ ...row, pinned: true }] }] }
+  assert.notEqual(serversProjectionSignature([withRow] as never), serversProjectionSignature([withMarker] as never))
   assert.notEqual(serversProjectionSignature([{ ...plain, archivedSessions: [], archiveSetKnown: false }] as never),
     serversProjectionSignature([{ ...plain, archivedSessions: [], archiveSetKnown: true }] as never))
 })

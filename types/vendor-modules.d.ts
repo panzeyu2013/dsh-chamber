@@ -176,6 +176,8 @@ declare module '@deepseek-ai/dsh-api-workspace-controller/client' {
   /** Client Workspace list snapshot (ctx.workspaces.list). */
   export interface WorkspaceSnapshot {
     items: readonly WorkspaceView[]; archivedSessionIds: readonly string[]
+    /** 宿主 registry 级置顶集（最新置顶在前）；本仓投影读它派生行级 `pinned`。 */
+    pinnedSessionIds: readonly string[]
     state: 'idle' | 'loading' | 'error'; phase: 'pending' | 'ready'; error: unknown
   }
   /** Structured workspace-create failure (declared for the seam). */
@@ -429,6 +431,8 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   export const IconNewChatOutlineRegular: IconComponent
   export const IconPanelLeftOutlineRegular: IconComponent
   export const IconPersonalizationOutlineRegular: IconComponent
+  export const IconPinFillRegular: IconComponent
+  export const IconPinOutlineRegular: IconComponent
   export const IconPlayOutlineRegular: IconComponent
   export const IconPlusOutlineRegular: IconComponent
   export const IconProjectAddOutlineRegular: IconComponent

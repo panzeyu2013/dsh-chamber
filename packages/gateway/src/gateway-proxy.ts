@@ -133,12 +133,11 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
     // Root-mounted owner: same-origin absolute redirects from the managed dsh
     // are stripped to their path so a Location can never escape the public origin.
     responseBasePath: '',
-    // HTML head patches: the browser-facing official dsh frontend declares its
+    // HTML head patch: the browser-facing official dsh frontend declares its
     // index host-owned to the documented client hook
-    // (`__DSH_TRANSPORT__.ownsHost`) and receives the WebKit native-source
-    // normalization the chamber-built frontend carries as a vendor patch
-    // (html-inject.ts documents the trade-off and the delete condition);
-    // null = forward the upstream body untouched.
+    // (`__DSH_TRANSPORT__.ownsHost`); the former WebKit native-source
+    // normalization was deleted with the 0.2.0-rc.1 minimum runtime
+    // (html-inject.ts documents it); null = forward the upstream body untouched.
     injectHtmlDocument: html => {
       const result = injectDocumentHeadPatches(html)
       return result.injected ? result.html : null

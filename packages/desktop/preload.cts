@@ -523,6 +523,9 @@ export interface DshChamberBridge {
   dshVersion: string | null
   version: string | null
   platform: string | null
+  /** Optional: the INFO payload's machine description (item 71). Not part of the
+   *  exposed dshChamber surface — only the dshDesktop carrier reads it. */
+  deviceInfo?: string | null
   desktopSsh: DesktopSshSurface
   update: UpdateSurface
   settings: SettingsSurface
@@ -991,6 +994,10 @@ function exposeDesktopCarrier(): void {
     updates: desktopUpdatesApi(),
     keyboard: keyboardApi(),
     shortcuts: shortcutsApi(),
+    // Official feedback questionnaire (apps/desktop/src/preload-app.ts): the
+    // machine description rides the existing info payload, read on demand so the
+    // carrier still installs before hydration.
+    deviceInfo: () => readAppInfo().then(info => (typeof info?.deviceInfo === 'string' ? info.deviceInfo : '')),
   });
 }
 
@@ -1025,7 +1032,16 @@ function markDocumentPlatform(): void {
   // A host without a document (text-level test harnesses) skips: a real renderer
   // always has the root, which is what upstream assumes too.
   if (typeof document === 'undefined' || document === null || document.documentElement === undefined) return;
-  const mark = () => { document.documentElement.dataset.platform = process.platform; };
+  // The darwin window carries the sidebar material (main.ts's darwin branch: vibrancy
+  // 'sidebar' + transparent background), so the page's "yield the fill to the material"
+  // rules must apply: they are gated on this marker, never on data-platform alone
+  // (renderer/styles.css, the self-built sidebar). Twin of the Swift shim's mark
+  // (bridge-shim.js `dataset.windowVibrancy = 'true'`), locked by upstream-seats S-55
+  // and the macOS CrossLanguageLockstepTests.
+  const mark = () => {
+    document.documentElement.dataset.platform = process.platform;
+    if (process.platform === 'darwin') document.documentElement.dataset.windowVibrancy = 'true';
+  };
   const root = document.documentElement;
   if (root === null) window.addEventListener('DOMContentLoaded', mark);
   else mark();
@@ -1041,6 +1057,12 @@ function markDocumentPlatform(): void {
  */
 const INFO_RETRY_MS = 50;
 const INFO_MAX_ATTEMPTS = 10;
+
+/** On-demand info read for the carrier's deviceInfo(); the boot chain below keeps
+ *  its own hydration request (independent retry chains, no shared state). */
+function readAppInfo(): Promise<Partial<DshChamberBridge>> {
+  return requestAppInfo();
+}
 
 function requestAppInfo(): Promise<Partial<DshChamberBridge>> {
   return new Promise((resolve, reject) => {

@@ -101,8 +101,10 @@ export const inject = ['slots', 'layout', 'sessions', 'workspaces', 'uiSession',
 
 /**
  * Registers the sidebar shell and its service callbacks. `sidebar.workspaces` stays
- * declared (as in the official shell) so ui-workspace's registration does not fail —
- * the chamber shell renders its own multi-source list in that region instead.
+ * declared as in the official shell: an undeclared hole makes `slots.inject` skip its
+ * callback silently, so revoking the declaration would drop the official registrant
+ * (and any third-party injection) instead of failing loudly. The chamber shell renders
+ * its own multi-source list in that region instead — declared, never rendered (I-4).
  */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-chamber: sidebar dictionaries')
@@ -178,6 +180,10 @@ export function apply(ctx: ClientContext): void {
             },
           },
         },
+        // 座席转移（补丁 13）：官方会话行组件不再声明这两席，本壳代为声明；
+        // ui-schedule 等上游 occupant 的 inject 因此落到这个 sidebar 注册上。
+        'sidebar.session.row.leading': { kind: 'list', scope: 'root' },
+        'sidebar.session.row.hover': { kind: 'list', scope: 'root' },
         'sidebar.settings': { kind: 'single', scope: 'root' },
         'sidebar.footer.action': { kind: 'list', scope: 'root' },
       },

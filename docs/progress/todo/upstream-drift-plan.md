@@ -1,6 +1,6 @@
 # 上游漂移收口计划（batch-3 剩余项）
 
-范围：15 项上游漂移审计（对齐 pin 0.1.7-rc.2）中**仍未落地**的项。I-7（vendor 补丁 retire 检测）、
+范围：15 项上游漂移审计（对齐 pin 0.2.0-rc.1）中**仍未落地**的项。I-7（vendor 补丁 retire 检测）、
 I-8（registry 桌面 seat 镜像审计）、I-10（运行位写回契约化）、I-11（单飞悬挂有界化）、I-12（谱系压制
 与 fail-closed）、I-13（uplink 升级裁决点）、I-14（selection scope 第四类补丁）与工程环境债的
 install/artifacts 已落地；能力门
@@ -32,6 +32,6 @@ selection scope（两个实例各自持久化选择槽，互不覆盖）与 I-12
 ## 工程环境债（与批次并行）
 - 下一 pin 升级时落地「真 `WorkspaceRegistry` + 真 binding」的 lockstep 测试（当前只有 ad-hoc 8/8
   证据；CI 走 node_modules 解析，本地无法验证该路径）。同步复核 vendor 补丁 retire 判定与
-  `RETIRED_PATCHES` 的空缺状态（本轮 12 条补丁、0 条退役候选）。另：复核 dsh 运行时的
+  `RETIRED_PATCHES` 的当前状态（11 条补丁、2 条退役：ReasoningRow 行 sweep 与 util-values 引擎无关比较）。另：复核 dsh 运行时的
   `node-addon-require-builtin` 指纹表是否已收录桌面 Electron pin——当前 43.4.0 不在表内，
   Electron flavor 的托管宿主起不来（见 STATUS 设计未决；机制见 design 02 §2.6）。

@@ -32,12 +32,13 @@ docs/progress/
 
 |文件|主题|状态|
 |---|---|---|
-|[upstream-proposals.md](todo/upstream-proposals.md)|五条上游提案：N-壳宿主selection scope、设置面声明式贡献通道（T3）、归档会话wire草案（design 24根域）、静默丢帧自愈（design 14 §D4根治面）、图标资源 id 实例私有化（design 05 §4.2）|上游提案，未排期；chamber侧不等待|
+|[upstream-proposals.md](todo/upstream-proposals.md)|十一条上游提案（选题：N-壳宿主 selection scope、设置面声明式贡献通道（T3）、归档会话 wire 草案、静默丢帧自愈、图标资源 id 实例私有化、子代理生命周期、载波 open episode 身份、桌面专属家族门、bundle rev 内容派生、座席声明可转移、会话状态只读观察者与未读事实）|上游提案，未排期；chamber侧不等待|
 |[windows-v1.md](todo/windows-v1.md)|Windows v1剩余外部门禁（M0–M6）+ 基线登记口径（原windows-baseline.md）+ 取舍指针（权威在design 23 §5/STATUS）|待真实Windows runner/实机/产物|
 |[deferred-features.md](todo/deferred-features.md)|延后功能（未排期想法）：侧边栏 subagents 显示；open-in 超集分批 S1/S2/S3（S4 不做）与 S3/S4 降级留档形态|未排期（open-in 实机验收清单在STATUS）|
 |[macos-swift-v1.md](todo/macos-swift-v1.md)|macOS Swift原生壳：双端验收协议（W1–W7判定/性能A/B/中止点A1–A8）+ WBS W-01…W-32编号索引|代码面已落地；外部门禁状态在STATUS|
 |[refactor-plan.md](todo/refactor-plan.md)|结构性重构与清理计划：开放工作（按优先级）、门禁与用法、边界与不做、跨包重复普查口径、未删项与判面/锁步依据、产物新鲜度守卫（§8：G2/G3/G5/G7/G8）|未闭合（开放项与判据在STATUS「结构性重构与清理」条）|
 |[upstream-drift-plan.md](todo/upstream-drift-plan.md)|上游漂移收口计划（batch-2/3）：I-7/I-8/I-10–I-15 的判据/方案/关闭、已登记待退役块（~2.9k 行，触发=capabilities.json retireWhen）、工程环境债、验证面缺类（type-only 与仅测试引用的导出）|未排期（批次二 P1 可先行；batch-1 基线在 git 历史与 design 05/19/24）|
+|[upstream-ui-parity-plan.md](todo/upstream-ui-parity-plan.md)|上游 UI 对齐计划：官方行座席（A1 已收口）、schedule 事实、行内交互等条目的裁决与关闭条件|A1 已收口；其余条目按计划逐条判定|
 |[page-perf-p2.md](todo/page-perf-p2.md)|页面侧性能 P2 残项（侧栏 T2、factAt 量化、前置仪表）|推迟中（判据/证据在文件内；实机项在 STATUS「性能遗留」）|
 
 > 历史：`performance-baseline.md`、`windows-baseline.md`、`todo/electron-swift-parity-audit.md`（211 KB）与 `todo/audit-2026-12-findings.md`

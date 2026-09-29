@@ -179,6 +179,29 @@ test('commitAggregatePull: identical sessions keep the aggregate identity stable
   assert.deepEqual(merged, current)
 })
 
+test('commitAggregatePull preserves the authoritative pin set through a mounted unary pull (markers never flicker)', () => {
+  // 置顶集只有挂载 follow 基线一条线源；unary 兜底拉取若把它丢掉，标记会在 30s 看门狗
+  // 重拉时闪没。权威集必须与 workspaces/archive set 同权地穿过 mounted 合并。
+  const current: InstanceAggregate = {
+    ...mountedAggregate, archiveSetKnown: true, pinSetKnown: true, pinnedSessionIds: ['s1', 's9'],
+  }
+  const merged = commitAggregatePull(current, { ...fallbackSnapshot, sessions: mountedAggregate.sessions }, true)
+  // 可达的 identity 形态：集合在场时合并必须逐字节等于 current（去重门不因此抖动）。
+  assert.deepEqual(merged, current)
+  assert.deepEqual(merged.pinnedSessionIds, ['s1', 's9'])
+  assert.equal(merged.pinSetKnown, true)
+  // 兜底派生视图（含 synthetic 行）拿完整 fallback 提交：置顶键不得从被冻结的视图漏出去，
+  // 否则 cwd 团伙 + 陈旧行会挂着"权威置顶集"的名义继续渲染。
+  const fallbackDerived: InstanceAggregate = { ...current, workspaces: [syntheticWorkspace('/real', 'Real', ['s1'])] }
+  const degraded = commitAggregatePull(fallbackDerived, fallbackSnapshot, true)
+  assert.equal(Object.hasOwn(degraded, 'pinnedSessionIds'), false)
+  assert.equal(Object.hasOwn(degraded, 'pinSetKnown'), false)
+  // 未推送该面的来源保持稀疏：不产出键（否则 identity 去重门每次都会看到新对象）。
+  const bare = commitAggregatePull({ ...mountedAggregate }, fallbackSnapshot, true)
+  assert.equal(Object.hasOwn(bare, 'pinnedSessionIds'), false)
+  assert.equal(Object.hasOwn(bare, 'pinSetKnown'), false)
+})
+
 test('watchdog × mounted-source invariant: a ready source with a complete producer is never re-pulled, and even if pulled the commit never degrades groups/archive', () => {
   // Edge path: mounted + previously ready → no unary pull at all.
   const plan = planAggregateRefreshes(['local'], new Set(['local']), { local: true })

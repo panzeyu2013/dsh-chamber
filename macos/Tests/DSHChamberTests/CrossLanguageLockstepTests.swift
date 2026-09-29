@@ -244,9 +244,11 @@ final class CrossLanguageLockstepTests: XCTestCase {
                       "注入源码下发的必须正是这份列表")
     }
 
-    /// 窗口 vibrancy 契约锁步：Swift 壳的 shim 落 `data-window-vibrancy`，页面侧所有「让出
-    /// 底色给窗后材质」的 darwin 规则都必须按它门控。缺任一侧 → 材质不可见（页面不透明）或
-    /// Electron 腿被误伤（同为 darwin 但没有 vibrancy，透明会把侧栏/中列压到窗口底色上）。
+    /// 窗口 vibrancy 契约锁步：两个 flavor 的 darwin 窗口都带 material vibrancy（Swift
+    /// ShellWindowMaterial；Electron main 的 darwin 分支 hiddenInset + vibrancy + 透明底），
+    /// 各自的 documentStart 标记都要落 `data-window-vibrancy`；页面侧所有「让出底色给窗后
+    /// 材质」的 darwin 规则都必须按它门控。缺任一侧 → 材质不可见（页面留了不透明底）；
+    /// 只按 data-platform 门控则会在无材质的窗口形态下把侧栏/中列压到窗口底色上。
     func testWindowVibrancyMarkerLockstep() throws {
         let shim = try source("macos/Sources/DSHChamber/Resources/bridge-shim.js")
         XCTAssertTrue(shim.contains("dataset.windowVibrancy = 'true'"),
@@ -256,7 +258,7 @@ final class CrossLanguageLockstepTests: XCTestCase {
                       && renderer.contains("html[data-platform='darwin'][data-window-vibrancy] .instance-view"),
                       "renderer 的 .app/.instance-view 必须在 vibrancy 标记下让出底色（否则材质被盖住）")
         XCTAssertFalse(renderer.contains("html[data-platform='darwin'] .app"),
-                       "不得只按 data-platform 门控（Electron 腿同样命中）")
+                       "不得只按 data-platform 门控（无材质的 darwin 窗口形态会误伤）")
         let sidebar = try source("packages/dsh-chamber-client-ui-sidebar/src/client/SidebarRoot.module.css")
         for selector in [".root", ".brand", ".newSession"] {
             XCTAssertTrue(sidebar.contains("[data-platform='darwin'][data-window-vibrancy]) \(selector) {"),

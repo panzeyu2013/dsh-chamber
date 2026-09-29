@@ -12,9 +12,8 @@
  *   or `http` (direct endpoint, no child process).
  * Every registry instance carries both; the runtime resolves ONE
  * TransportProvider per spec BY TRANSPORT (design 17 §2.2: providers are
- * registered `{ ssh, http }` and a single provider serves both target kinds),
- * with a legacy kind-keyed fallback retained (transport-manager.ts). The
- * provider owns everything source-specific:
+ * registered `{ ssh, http }` and a single provider serves both target kinds).
+ * The provider owns everything source-specific:
  * - spec validation (whitelist-gated, option-injection safe),
  * - either transport-process argv (`ssh`) or a direct endpoint (`http`),
  * - stderr classification (terminal auth vs transient) and redaction,
@@ -24,11 +23,8 @@
  * ring-buffer logs, non-secret status projection, status pushes, child
  * supervision (SIGTERM → SIGKILL escalation) and the instance registry.
  *
- * v1 naming compat: the preload/renderer wire typings keep the `Ssh*` names
- * (the `SshInstanceInput`/`SshInstanceSpec`/`SshStatusProjection`/`SshLogEntry`
- * aliases below); desktop internals use the `Transport*` names. Persisted
- * entries must already carry the current `kind`+`transport` pair — the pre-v2
- * input normalization is gone (design 17 §2.2/§9.1).
+ * Persisted entries must already carry the current `kind`+`transport` pair —
+ * the pre-v2 input normalization is gone (design 17 §2.2/§9.1).
  */
 
 /** Target kinds shipped: the spec `kind` field — `dsh` (web profile, no auth
@@ -101,7 +97,7 @@ export interface TransportInstanceSpec {
   /** Target type: 'dsh' | 'gateway'; decides auth-header injection and /chamber/* mounting,
    *  NOT the transport — see `transport`. */
   kind: TransportKind
-  /** The runtime resolves the provider by this field (legacy kind-keyed fallback retained). */
+  /** The runtime resolves the provider by this field — the only resolution key (design 17 §2.2). */
   transport: TransportMethod
   host: string
   user: string | null
@@ -234,11 +230,16 @@ export interface StderrClassification {
  *  `run` = a whitelisted remote command). */
 export type TransportExecAction = 'start' | 'stop' | 'restart' | 'is-active' | 'run'
 
-/** The `run`-channel remote command whitelist — single source of truth (plugin-sync's contract A
- *  types import it). The union equals the EXECUTABLE set enforced by buildRemoteExecArgv:
- *  'base64'/'mkdir' are NOT exec commands (write-file builds them into its own shell template),
- *  so they are deliberately absent. */
-export type TransportRunCommand = 'dsh' | 'cat' | 'printf'
+/** The `run`-channel remote command vocabulary — single source of truth (plugin-sync's contract A
+ *  types import it). `buildRemoteExecArgv` ACCEPTS `cat` alone; every other member is a
+ *  refused-input shape:
+ *  - `dsh`: `dsh plugin` argv is refused by construction since the user plugin write surface
+ *    retired, and it is the shape the whitelist negative controls exercise (ssh-provider-exec's
+ *    "refuses every dsh argv" + transport-manager's "a whitelist refusal never spawns"). Do not
+ *    narrow it away: the refusals would stop being expressible and the controls would be lost.
+ *  - 'base64'/'mkdir' are NOT exec commands (write-file builds them into its own shell template),
+ *    so they are deliberately absent; `printf` was declared but produced by nobody, so it is gone. */
+export type TransportRunCommand = 'dsh' | 'cat'
 
 /** The `run` action payload: a whitelisted remote command (`exec`) or a file write over ssh stdin (`write-file`). */
 export interface TransportRunPayload {
@@ -290,7 +291,7 @@ export interface TransportSpawnLease {
 /** The provider surface the runtime drives: a provider is pure transport know-how and never sees timers, phases or the registry. */
 export interface TransportProvider {
   /** The registry key this provider declares (normally the transport method, or a test/future key);
-   *  the runtime resolves by `spec.transport` with a legacy kind-keyed fallback. */
+   *  the runtime resolves by `spec.transport` alone. */
   /**
    * Whitelist-gated spec validation (option-injection safe). Null = reject
    * the entry (dropped loudly by the registry, never silently half-kept).
@@ -350,13 +351,4 @@ export interface TransportProvider {
     payload?: TransportRunPayload,
   ): Promise<TransportExecResult>
 }
-/**
- * v1 wire-surface compat names (preload / renderer / connections typings); desktop internals use
- * the `Transport*` names above.
- */
-export type SshInstanceInput = TransportInstanceInput
-export type SshInstanceSpec = TransportInstanceSpec
-export type SshStatusProjection = TransportStatusProjection
-export type SshLogEntry = TransportLogEntry
-export type SshPhase = TransportPhase
 

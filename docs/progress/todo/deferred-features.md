@@ -44,7 +44,7 @@
 - S1远程provider家族：主进程注册表加Insiders/Cursor/Windsurf/JetBrains Gateway/`ssh://` 终端——只构造URL交OS、不启动进程；每项需实机scheme语义验证（本机现只注册 `Visual Studio Code → [vscode]` 与 `iTerm → […, ssh, …]`）。
 - S2远程文件级打开：远程来源允许文件路径（纯URL构造，不经host包）；本地仍目录限定。
 - S3收窄为「复制路径」（唯一保留的非启动出口）：侧栏既有复制模式上暴露工作区/会话路径——会话行已带 `cwd`（`sidebar/src/shared/instance-api.ts` 的 `SessionRow.cwd?`），既有 `HoverCard` 支持 `copyText`（现只复制会话标题，`ServerSection.tsx`；该行本体 `:2027`）⇒ 零新IPC、零新依赖、纯渲染层。「复制 `ssh user@host`/复制VS Code深链」不做（见 §3附录A）。
-- S4多入口：不做（理由登记STATUS）：header按钮与目标会话同排相邻，侧栏入口边际价值有限；会话行动作已集中在kebab菜单（重命名/分叉/归档，`ServerSection.tsx`），新增入口要么重复要么推翻它——不要把「会话行刻意没有kebab」当理由（该行自T2a起就有kebab；刻意无kebab的是worktree派生的workspace行，`:1288-1290`）。快捷键缺基建（vendor无keybinding注册表，只有聊天输入框keymap），自建document级监听还要处理「哪个entry是活跃视图」与chord冲突；日后做见 §3附录B。
+- S4多入口：不做（理由登记STATUS）：header按钮与目标会话同排相邻，侧栏入口边际价值有限；会话行动作在行菜单（置顶/重命名/分叉/归档）+ 行内悬停归档钮与置顶钮（`packages/dsh-chamber-client-ui-sidebar/src/client/ServerSectionRows.tsx`），新增入口要么重复要么推翻它——不要把「会话行刻意没有kebab」当理由（该行自T2a起就有kebab；刻意无kebab的是worktree派生的workspace行，`:1288-1290`）。快捷键缺基建（vendor无keybinding注册表，只有聊天输入框keymap），自建document级监听还要处理「哪个entry是活跃视图」与chord冲突；日后做见 §3附录B。
 
 ### 2. 边界（不做，登记在 design 20 §7.3）
 

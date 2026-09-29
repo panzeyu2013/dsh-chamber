@@ -73,7 +73,18 @@ test('wiring lock: the confirm phase resends with stopActivity; only a decodable
   assert.ok(layers !== null, 'the layer gate must be one synchronous ref')
   assert.doesNotMatch(layers[1], /:\s*true/u)
   assert.ok(dialogs.includes('const open = openLayersRef.current'))
-  assert.ok(dialogs.includes('openLayersRef.current.sessionArchive = true'))
+  assert.ok(dialogs.includes('open.sessionArchive = true'))
   assert.ok(dialogs.includes('openLayersRef.current.sessionArchive = false'))
+  // 跨行换靶保护：另一行的拒绝落在同一次 unary 往返窗内时，第二次武装必须被拒——否则已武装
+  // 目标被静默覆盖（连同它的 pending/error），被覆盖那行的拒绝既无行错误也无提示。
+  assert.ok(dialogs.includes('open.archiveTarget !== null && open.archiveTarget !== request.sessionId'))
+  assert.ok(dialogs.includes('open.archiveTarget === request.sessionId && open.archivePending'))
+  assert.ok(dialogs.includes('open.archiveTarget = request.sessionId'))
+  // 兜底对齐（每次提交后把四个「层在屏」布尔对齐 state）**不得整体替换 ref**：
+  // `archiveTarget`/`archivePending` 是打开方在同一 tick 声明的同步权威、不由 state 派生，
+  // 整体替换会把已武装目标与「第二段在飞」标记一起清成 undefined，跨行换靶与重复点击
+  // 两道保护随即静默失效（TS 也会因缺字段报错）。只允许属性级改写。
+  assert.doesNotMatch(dialogs, /openLayersRef\.current\s*=\s*\{/u)
+  assert.ok(dialogs.includes('const open = openLayersRef.current'))
 })
 

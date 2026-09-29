@@ -37,10 +37,27 @@ export const VENDOR_PATCH_MARKERS = [
   {
     vendorFile: 'dsh-client-ui-chat/src/client/chat/AssistantMarkdown.tsx',
     what: 'ui-chat file-API base carries the per-entry base path',
-    // Patched: `const base = chamberFileApiBase === undefined ? document.baseURI
-    // : new URL(`\${chamberFileApiBase}/`, document.baseURI).href`. The backreference
-    // pins the same minified variable on both sides of the ternary.
-    present: /([A-Za-z_$][\w$]*)\s*===\s*void 0\s*\?\s*document\.baseURI\s*:\s*new URL\(\`\$\{\1\}\/\`/,
+    // Patched: `const base = chamberFileApiBase === undefined || chamberFileApiBase === ''
+    // ? document.baseURI : new URL(`\${chamberFileApiBase}/`, document.baseURI).href`, then a
+    // resolver that passes THAT const as the FIRST argument of its URL builder. The
+    // backreference pins the minified names across the guard, the template and that argument
+    // position, so a bundle that computes the prefix and then resolves against document.baseURI
+    // cannot satisfy this marker. The callee is only shape-bound (a plain call or the
+    // `(0, callee)(...)` sequence form a different minifier may emit); no vendor helper
+    // name is bound (the chunk minifier renames
+    // those); disjointness from the sibling ChatView marker comes from the const+return shape,
+    // which that inline-argument site never has.
+    present: /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*)\s*===\s*void 0\s*\|\|\s*\2\s*===\s*(?:"{2}|'{2})\s*\?\s*document\.baseURI\s*:\s*new URL\(`\$\{\2\}\/`,?\s*document\.baseURI\)\.href\s*;?\s*return\s*\{\s*resolve:\s*[^}]{0,40}?=>\s*(?:\(\s*0\s*,\s*[A-Za-z_$][\w$]*\s*\)|[A-Za-z_$][\w$]*)\(\s*\1\s*,/,
+  },
+  {
+    vendorFile: 'dsh-client-ui-chat/src/client/chat/ChatView.tsx',
+    what: 'ui-chat chat-view file images carry the per-entry base path',
+    // Patched: the fileImages resolver inlines the same guarded ternary inside the
+    // imported fileMediaUrl(...) helper. The helper name is minifier-renamed, so the
+    // marker cannot bind the callee; disjointness from the AssistantMarkdown marker
+    // (same package chunk) comes from the `"image.open"` labels block only the chat
+    // view carries, which the guard must still precede.
+    present: /([A-Za-z_$][\w$]*)\s*===\s*void 0\s*\|\|\s*\1\s*===\s*(?:"{2}|'{2})\s*\?\s*document\.baseURI\s*:\s*new URL\(`\$\{\1\}\/`,?\s*document\.baseURI\)\.href[\s\S]{0,120}?"image\.open"/,
   },
   {
     vendorFile: 'dsh-client-file-upload/src/client/runtime.ts',
@@ -54,21 +71,27 @@ export const VENDOR_PATCH_MARKERS = [
     what: 'session-log export URL carries the per-entry base path',
     // Patched: ``\${this.chamberFileApiBase}\${SESSION_LOG_EXPORT_ROUTE}?\${query}``.
     present: /\$\{this\.chamberFileApiBase\}\$\{[A-Za-z_$][\w$]*\}\?\$\{/,
-    // Module identity: the asset declaring this route must own the marker.
+    // Chunk identity: the asset declaring this route literal must own the marker.
     route: '/api/session.export',
   },
   {
     vendorFile: 'dsh-session-log-export/src/client/index.ts',
     what: 'session-log export plugin hands the controller its base path',
     // Patched: `controller.chamberFileApiBase = basePath === undefined ? '' : `\${basePath}/``.
-    present: /chamberFileApiBase\s*=\s*[A-Za-z_$][\w$]*\s*===\s*void 0\s*\?\s*""\s*:\s*\`/,
+    present: /chamberFileApiBase\s*=\s*([A-Za-z_$][\w$]*)\s*===\s*void 0\s*\|\|\s*\1\s*===\s*""\s*\?\s*""\s*:\s*\`/,
   },
   {
     vendorFile: 'dsh-client-ui-deliverables/src/client/present-open.ts',
     what: 'ui-deliverables present routes carry the per-entry base path',
-    // Patched: `fetch(`\${this.chamberFileApiBase}\${ROUTE}`)` — the
-    // chamber-owned property, never a generic two-interpolation fetch.
-    present: /fetch\(\`\$\{this\.chamberFileApiBase\}\$\{/,
+    // Patched: BOTH routes carry the prefix - the host read
+    // (`fetch(`\${this.chamberFileApiBase}\${ROUTE}`, { signal })` consumed by `.ok` +
+    // `.json()`) and the POST open (`{ method: "POST" }`). The window is the measured
+    // 463-character gap between the two sites (host-read `.json()` to the prefixed POST)
+    // plus margin: it must stay tight so a foreign prefixed POST further out cannot join.
+    // A join across the sibling store classes is excluded by the host-read tail above.
+    // An impostor inserted INSIDE the `.json()`-to-POST gap is not excluded by the window:
+    // only the executed fixture covers that mutation — the window bounds reach, not class.
+    present: /fetch\(\`\$\{this\.chamberFileApiBase\}\$\{[A-Za-z_$][\w$]*\}`,?\s*\{\s*signal[^}]{0,40}\}\)[\s\S]{0,60}?\.json\(\)[\s\S]{0,550}?fetch\(\`\$\{this\.chamberFileApiBase\}\$\{[A-Za-z_$][\w$]*\}`,?\s*\{\s*method:\s*"POST"/,
     route: '/api/present.host',
   },
   {
@@ -84,24 +107,32 @@ export const VENDOR_PATCH_MARKERS = [
     present: /dsh\.sessions\.current["']?\s*\+\s*[A-Za-z_$][\w$]*\(/,
   },
   {
+    vendorFile: 'dsh-client-ui-workspace/src/client/index.ts',
+    what: 'the two session-row seat declarations are owned by the chamber sidebar, not the workspace-browser registration (ownership transfer)',
+    // Patched: the children map closes right after `…session.row.action`, so the
+    // two seat keys are gone; an unpatched bundle carries
+    // `"sidebar.session.row.leading"` at exactly this seam. Minified variable
+    // names after `store:` are irrelevant.
+    present: /sidebar\.workspaces\.session\.row\.action":\{kind:"list",scope:"root"\}\},store:/,
+  },
+  {
     vendorFile: 'dsh-client-ui-chat/src/client/chat/AssistantNodeView.tsx',
     what: 'ui-chat node view forwards the file-API base prop',
     // Patched: `chamberFileApiBase` closes the destructured parameter list and
-    // the component body still starts from `node.data` — the forwarding edit.
-    present: /chamberFileApiBase\s*:\s*[A-Za-z_$][\w$]*\s*\}\s*\)\s*\{\s*const\s+[A-Za-z_$][\w$]*\s*=\s*[A-Za-z_$][\w$]*\.data\s*,/,
-  },
-  {
-    vendorFile: 'dsh-client-ui-chat/src/client/chat/ReasoningRow.module.css',
-    what: 'running-row sweep animates the compositor-only keyframes',
-    // Patched: the keyframes are renamed `…-x` and animate `transform` (the CSS
-    // pipeline may rewrite `translateX` to `translate`).
-    present: /dsh-reasoning-row-sweep-x[\w-]*\{[^@]{0,160}transform:\s*translateX?\(-300px\)/,
+    // the component body still starts from `node.data` - the forwarding edit.
+    // `const` in the production chunk, `let` under the esbuild fixture's minifySyntax:
+    // the declaration keyword is not a patched fact, so accept all three.
+    present: /chamberFileApiBase\s*:\s*[A-Za-z_$][\w$]*\s*\}\s*\)\s*\{\s*(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*[A-Za-z_$][\w$]*\.data\s*,/,
   },
   {
     vendorFile: 'dsh-client-ui-conversation/src/client/conversation/assembly.ts',
     what: 'conversation scheduler carries the 80 ms slice state',
-    // Patched: the slice scheduler's monotonic timestamps are new class fields.
-    present: /lastFlushAt/,
+    // Patched: the slice scheduler's monotonic timestamps are a NEW PAIR of class fields
+    // (declared flush-then-publish). Binding both in order keeps the marker off the
+    // scheduler reads, which mention the same names in the other order. Unrelated to the
+    // file-route base goal: tightened in the same batch because the old single-name marker
+    // was the only marker a future upstream same-name read could satisfy falsely.
+    present: /lastFlushAt[^\n]{0,40}?lastPublishAt/,
   },
   {
     vendorFile: 'dsh-client-ui-chat/src/client/chat/use-chat-reading.ts',
@@ -112,20 +143,39 @@ export const VENDOR_PATCH_MARKERS = [
     present: /this\.follow\.sample\([^)]*\)[\s\S]{0,200}?if\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*this\.followTail\s*\(\)/,
   },
   {
-    vendorFile: 'dsh-util-values/src/index.ts',
-    what: 'the intrinsic-prototype check normalizes engine whitespace before comparing native source',
-    // Patched: `…toString.call(constructor).replace(/\s+/g, " ") === \`function ${name}() { [native code] }\``
-    // — the normalize sits between the call and the compare, so the marker binds the
-    // regex token to the `native code` template the compare still uses.
-    present: /\.replace\(\/\\s\+\/g,\s*["']\s["']\)\s*===[^;]{0,80}native code/,
-  },
-  {
     what: 'layout fork publishes the chamberFileApiBase root standard prop',
     // Chamber-package half of the ui-chat patch (not a vendor file): without
     // the prop the patched resolver falls back to document.baseURI, which is
     // correct for an official-layout deployment but means the N-ctx fix did
     // not land. Presence-only: the prop has no unpatched token of its own.
     present: /props:\s*[A-Za-z_$][\w$]*\s*===\s*void 0\s*\?\s*\{\}\s*:\s*\{\s*chamberFileApiBase\s*:\s*[A-Za-z_$][\w$]*\s*\}/,
+  },
+  {
+    vendorFile: 'dsh-client-ui-deliverables/src/client/Deliverables.tsx',
+    what: 'ui-deliverables delivery-card file actions carry the per-entry base path',
+    // Patched: the call site hands the consumer a prefixed owner route; an absent
+    // base stays upstream. The base is a destructured local (the minifier renames
+    // it), so the marker binds the prop name to the SAME local the prefix ternary
+    // reads, then the slot-name literal that owns this call site.
+    present: /chamberFileApiBase\s*:\s*([A-Za-z_$][\w$]*)[\s\S]{0,4000}?["']deliverables\.file\.actions["'],\s*\{\s*actionUrl:\s*\(\s*\1\s*===\s*void 0\s*\|\|\s*\1\s*===\s*(?:"{2}|'{2})\s*\?\s*(?:"{2}|'{2})\s*:\s*`\$\{\1\}\/`\s*\)\s*\+\s*[A-Za-z_$][\w$]*\(/,
+    route: '/api/present.open',
+  },
+  {
+    vendorFile: 'dsh-client-ui-deliverables/src/client/ReviewTab.tsx',
+    what: 'ui-deliverables review file actions carry the per-entry base path',
+    // Same prop-to-local binding; the slot-name literal (`deliverables.review.file.actions`)
+    // keeps the two same-chunk markers disjoint without leaning on an expression
+    // the minifier may reorder.
+    present: /chamberFileApiBase\s*:\s*([A-Za-z_$][\w$]*)[\s\S]{0,4000}?["']deliverables\.review\.file\.actions["'],\s*\{\s*actionUrl:\s*\(\s*\1\s*===\s*void 0\s*\|\|\s*\1\s*===\s*(?:"{2}|'{2})\s*\?\s*(?:"{2}|'{2})\s*:\s*`\$\{\1\}\/`\s*\)\s*\+\s*[A-Za-z_$][\w$]*\(/,
+    route: '/api/changes.open',
+  },
+  {
+    vendorFile: 'dsh-client-ui-deliverables/src/client/host-read-store.ts',
+    what: 'ui-deliverables summary and diff reads carry the per-entry base path',
+    // Patched: `this.policy.decode(await fetch(`${this.chamberFileApiBase}${url}`, { signal }))`
+    // - `policy`, `decode` and `chamberFileApiBase` are properties, never minified.
+    present: /this\.policy\.decode\(await fetch\(`\$\{this\.chamberFileApiBase\}\$\{/,
+    route: '/api/changes.summary',
   },
 ]
 
@@ -136,7 +186,7 @@ function uncoveredVendorFiles() {
     .map((patch) => patch.vendorFile)
 }
 
-/** Assets carrying a route literal (leading slash optional) = module identity. */
+/** Assets carrying a route literal (leading slash optional) = chunk identity. */
 function routeOwned(assets, route) {
   const relative = route.replace(/^\//, '')
   return assets.filter((asset) => asset.includes(route) || asset.includes(relative))
@@ -145,7 +195,7 @@ function routeOwned(assets, route) {
 /**
  * Check the emitted assets against every marker. A route-bound marker is
  * judged only inside the assets declaring its route literal, so the marker and
- * the module it belongs to can never disagree about which chunk was patched.
+ * the chunk declaring that route can never disagree about which asset was patched.
  * @param {string | readonly string[]} assets - emitted JS/CSS asset contents.
  * @returns {{ what: string }[]} failures, empty when every marker survived.
  */

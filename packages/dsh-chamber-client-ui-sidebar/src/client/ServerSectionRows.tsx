@@ -12,8 +12,9 @@
 import { Fragment, memo, useMemo, useRef } from 'react'
 import clsx from 'clsx'
 import {
-  IconArchiveOutlineRegular, IconBranchOutlineRegular, IconEditOutlineRegular, IconEllipsisOutlineRegular, Menu,
-  type MenuItem,
+  IconArchiveOutlineRegular, IconBranchOutlineRegular, IconEditOutlineRegular, IconEllipsisOutlineRegular,
+  IconPinFillRegular, IconPinOutlineRegular, Menu,
+  Tooltip, type MenuItem,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChamberServerAggregate, ChamberServerWorkspace } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { relativeTimeBucket } from '@dsh-chamber/dsh-chamber-client-core/derive'
@@ -80,9 +81,12 @@ const SessionRow = memo(function SessionRow({
     openSession,
     onForkSession,
     onArchiveSession,
+    onPinSession,
     toggleMenu,
     closeMenu,
     useShortcuts,
+    renderSessionSeat,
+    chamberInstanceId,
   } = useSidebarSection()
   // 菜单键帽来自页面快捷键目录（上游 RenameSessionMenuItem / ForkSessionMenuItem /
   // ArchiveSessionMenuItem 同款选择）：命令未注册时行缺席，键帽与 aria 一并消失。
@@ -95,9 +99,17 @@ const SessionRow = memo(function SessionRow({
     const { unit, n } = relativeTimeBucket(updatedAt, now)
     return unit === 'now' ? t('time.now') : t('time.ago', { t: t(`time.${unit}`, { n }) })
   }
-  // 行菜单条目（3 对象 + 3 元素 + 3 次 t()）每次渲染重建：按 t 记忆化——t 是
-  // 文案的唯一依赖，locale 不变时同一数组跨渲染复用。
+  // 行菜单条目（4 对象 + 4 元素 + 4 次 t()）每次渲染重建：按 t 与 session.pinned 记忆化——
+  // 两者是文案与字形的全部输入，locale / 置顶态不变时同一数组跨渲染复用。
   const menuItems = useMemo((): MenuItem[] => [
+    {
+      // 上游 PinSession 的菜单入口（order 100，先于 rename 的 200）：本仓按该文件逐字移植
+      // 菜单项形态（无分隔线/快捷键）。图标照上游 markup 传 14；本仓菜单是 compact 档，
+      // `.compactList .itemIcon svg` 会把它覆盖成 12px（design 06 §7 的 pin 实测值）。
+      id: 'pin',
+      label: t(session.pinned === true ? 'menu.unpinSession' : 'menu.pinSession'),
+      icon: session.pinned === true ? <IconPinFillRegular size={14} /> : <IconPinOutlineRegular size={14} />,
+    },
     {
       id: 'rename',
       label: t('action.rename'),
@@ -111,7 +123,7 @@ const SessionRow = memo(function SessionRow({
       icon: <IconBranchOutlineRegular size={14} />,
     },
     {
-    // 归档动词只在这里的行菜单：安静会话直接归档（只隐藏行，
+    // 归档动词的两个出口之一（行菜单项；同文件另有行内悬停钮）：安静会话直接归档（只隐藏行，
     // 不触碰会话日志）；宿主因仍有活跃工作而拒绝时才走两段式——
     // 行菜单武装确认层，确认后带 stopActivity 重发。字形尺寸是对
     // compact 槽位的刻意光学例外：compact 把图标槽缩到 14px，但 20
@@ -122,7 +134,7 @@ const SessionRow = memo(function SessionRow({
       shortcut: archiveShortcut,
       icon: <IconArchiveOutlineRegular size={16} />,
     },
-  ], [t, renameShortcut, forkShortcut, archiveShortcut])
+  ], [t, session.pinned, renameShortcut, forkShortcut, archiveShortcut])
   const sessionKey = `${server.id}/session/${session.id}`
   // 会话行（上提以便 HoverCard 包裹）。单击立即打开、零延迟；
   // 模块级 pending（按 sessionId 记）只判定同一会话在
@@ -223,11 +235,28 @@ const SessionRow = memo(function SessionRow({
       onPointerEnter={marquee.enter}
       onPointerLeave={marquee.leave}
     >
+      {/* 座席转移（补丁 13）：座席只在**本实例**（当前页面 ctx 的拥有者）的行上求值——
+          occupant（官方 ui-schedule 的 schedule-mark / 卡片任务列表）读的是本实例 Host 的
+          catalog，把外来源 sessionId 交给它只会查空并压掉回落；外来源行因此直接走自有标记
+          （与 A1 前一致）。位置与上游 Rows.tsx 的 `.slot` 同址——**标题之前**（状态位与它互斥的
+          上游语义里两者共用一个 slot；本仓的状态槽在行尾，故这里只放座席）。自有标记只在活动
+          Schedule 投影存在时作为 occupant 缺席的回落，两者永不并现。
+          上游同址守卫照搬（Rows.tsx: `!row.archived && !row.blank`）：本仓行数据不带 archived
+          （归档会话在管理器面呈现、不进入行列表），故只落 blank 半边；空白（新建）占位行整席
+          不求值，与上游「归档/空白行槽留空」同语义。 */}
+      {session.blank !== true
+        && (server.id === chamberInstanceId
+          ? renderSessionSeat(
+            'sidebar.session.row.leading',
+            { sessionId: session.id },
+            session.hasActiveSchedule === true
+              ? { fallback: <SessionScheduleIndicator label={t('schedule.active')} /> }
+              : undefined,
+          )
+          : session.hasActiveSchedule === true
+            ? <SessionScheduleIndicator label={t('schedule.active')} />
+            : null)}
       <span ref={titleRef} className={cc.sessionTitle}>{session.blank === true ? t('session.new') : sessionTitleText}</span>
-      {/* 活动 Schedule 标记位于标题与尾部单元之间；只对有该投影的行渲染，普通行几何/间距不变。 */}
-      {session.hasActiveSchedule === true && (
-        <SessionScheduleIndicator label={t('schedule.active')} />
-      )}
       {/* 空白（新建）行是临时占位：kebab（含 fork/归档）作用于不存在的内容，整簇隐藏。 */}
       {session.blank !== true && (
       <span
@@ -247,6 +276,9 @@ const SessionRow = memo(function SessionRow({
           open={menuOpenRow}
           onClose={() => closeMenu(sessionKey)}
           onSelect={(id: string) => {
+            // 与三个行内按钮同一条本仓约定：菜单在 portal 里，"按住 kebab 拖动行、在菜单上松手"
+            // 的尾随 click 会被当成一次菜单选择。pin 是首项，最容易被这一击命中；四个动作共用此门。
+            if (suppressClickRef.current) return
             closeMenu(sessionKey)
             if (id === 'rename') {
               setRenaming({
@@ -260,6 +292,8 @@ const SessionRow = memo(function SessionRow({
             } else if (id === 'archive') {
             // 标题随行传入：拒绝相位（两段式确认）要用它。
               onArchiveSession(server, session.id, session.displayTitle)
+            } else if (id === 'pin') {
+              onPinSession(server, session.id, session.pinned === true)
             }
           }}
           items={menuItems}
@@ -282,6 +316,51 @@ const SessionRow = memo(function SessionRow({
             </button>
           )}
         />
+        {/* 独立归档钮：上游 `session-actions/ArchiveSession.tsx` 的
+            `ArchiveSessionRowButton`（注册进 `sidebar.workspaces.session.row.action`，
+            order 100）——同一动作簇里 kebab 之后的第二个成员，tooltip 用上游
+            `actions.archive`、无障碍名按本仓行级政策参数化行名 `action.archive.aria`（上游同座席用泛化名——有意分歧，
+      design 06 §7；行菜单项仍是 `menu.archiveSession`）。
+            本仓不渲染官方座席，故按该文件逐字移植按钮形态（类名换成本仓
+            `.actionIcon`）。上游的 unarchive 半个分支在本仓不可达：归档行根本不进
+            导航投影（`derive.ts` 的 sessionVisible），恢复由归档管理器承担，
+            因此这里只保留归档方向，不引入死分支。 */}
+        <Tooltip label={t('actions.archive')} side="bottom" align="end" delayMs={500}>
+          <button
+            type="button"
+            className={cc.actionIcon}
+            aria-label={t('action.archive.aria', { name: session.displayTitle })}
+            onClick={() => {
+              // 本仓约定（上游该钮的 markup 无此门）：拖拽尾随 click 入口即生效，
+              // 动作类控件必须自查——否则拖拽子项结束的一击会直接发起归档。
+              if (suppressClickRef.current) return
+              onArchiveSession(server, session.id, session.displayTitle)
+            }}
+          >
+            <IconArchiveOutlineRegular size={14} />
+          </button>
+        </Tooltip>
+        {/* 独立置顶钮：上游 `session-actions/PinSession.tsx` 的 `PinSessionRowButton`（注册进
+            `sidebar.workspaces.session.row.action`，order 200 = 归档之后的最右成员）——
+            tooltip 用 `actions.pin/unpin`、无障碍名照上游用行菜单同款 `menu.pinSession/
+            unpinSession`（本仓的行名参数化只用在归档钮上，见上），字形 14。本仓不渲染官方
+            座席，故按该文件逐字移植按钮形态（类名换 `.actionIcon`）。置顶集未知
+            （`pinSetKnown !== true`）时行不宣称任何置顶事实：无标记，钮按 pin 方向出——
+            宿主 pin 幂等，重复 pin 无害，反向才有假断言。 */}
+        <Tooltip label={t(session.pinned === true ? 'actions.unpin' : 'actions.pin')} side="bottom" align="end" delayMs={500}>
+          <button
+            type="button"
+            className={cc.actionIcon}
+            aria-label={t(session.pinned === true ? 'menu.unpinSession' : 'menu.pinSession')}
+            onClick={() => {
+              // 与归档钮同一条本仓约定：拖拽尾随 click 入口即生效。
+              if (suppressClickRef.current) return
+              onPinSession(server, session.id, session.pinned === true)
+            }}
+          >
+            {session.pinned === true ? <IconPinFillRegular size={14} /> : <IconPinOutlineRegular size={14} />}
+          </button>
+        </Tooltip>
       </span>
       )}
       {/* 尾部状态槽：行右缘的圆环/圆点。hover 时行动作簇换入、本槽换出
@@ -302,6 +381,16 @@ const SessionRow = memo(function SessionRow({
       >
         {sessionStateDot(server, session)}
       </span>
+      {/* 静息置顶标记：上游 `PinnedIndicator`（`row.pinned && !row.archived`，非交互
+          `role="img"` span，无障碍名与 title 都是 `row.pinned`，14px 实心针）。上游把它
+          放在 time 单元之后、与悬停动作簇共用行右缘同一格并在 hover 时一起隐藏；本仓的行
+          右缘单元是状态槽，标记落在状态槽之后，并按同一条 hover 规则与状态槽同隐——CSS 里
+          `.sessionRow:hover .pinSlot` 与状态槽选择器成对出现。 */}
+      {session.pinned === true && (
+        <span className={cc.pinSlot} role="img" aria-label={t('row.pinned')} title={t('row.pinned')}>
+          <IconPinFillRegular size={14} />
+        </span>
+      )}
     </div>
   )
   return (
@@ -325,6 +414,9 @@ const SessionRow = memo(function SessionRow({
                   <span>{sessionStateLabel(server, session)}</span>
                 </div>
               )}
+              {/* 座席转移（补丁 13）：hover 座席（官方 ui-schedule 的任务行）落在卡片内；
+                  同上只对本实例的行求值（外来源行没有本实例 occupant 的事实面）。 */}
+              {server.id === chamberInstanceId && renderSessionSeat('sidebar.session.row.hover', { sessionId: session.id })}
             </div>
           )}
           openDelayMs={800}
@@ -353,9 +445,10 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
         const sessionDragError = rowErrors[`${server.id}/session-drag/${session.id}`]
         const sessionActionError = rowErrors[`${server.id}/session/${session.id}/rename`]
           ?? rowErrors[`${server.id}/session/${session.id}/archive`]
+          ?? rowErrors[`${server.id}/session/${session.id}/pin`]
           ?? rowErrors[`${server.id}/session/${session.id}/fork`]
           // 打开失败落在同一槽位（低优先级——同一行的
-          // rename/archive/fork 失败优先），key 模板与写入方共享。
+          // rename/archive/pin/fork 失败优先，且每行只显示这一条），key 与写入方共享。
           ?? rowErrors[openErrorKey(server.id, session.id)]
         // 空白行在不再 current 后仍被投影 = GHOST：App 按
         // BLANK_GHOST_GRACE_MS 保留它，使列表在双击窗口内不位移。

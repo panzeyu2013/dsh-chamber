@@ -236,6 +236,8 @@ function makeRemoteHost(home = '/home/u') {
       }
       return
     }
+    // Legacy arm: no run payload can carry printf any more (buildRemoteExecArgv accepts only
+    // `cat`), kept so a hand-written probe or a future read path still gets a stable answer.
     if (remoteArgv[0] === 'printf' && remoteArgv[1] === '%s' && remoteArgv[2] === '$HOME') {
       child.stdoutWrite(home)
       child.simulateExit(0)

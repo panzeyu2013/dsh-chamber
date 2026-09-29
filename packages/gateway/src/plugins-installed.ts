@@ -46,11 +46,6 @@ export const INSTALLED_MANIFEST_MAX_BYTES = 1024 * 1024
  */
 export const MATERIALIZED_VALUE_MASK = PLUGIN_MATERIALIZED_VALUE_MASK
 
-/** Is this dependency spec a local-path `file:` value? Case-insensitive. */
-export function isFileValue(spec: string): boolean {
-  return /^file:/i.test(spec)
-}
-
 export type InstalledResult =
   | {
     ok: true
