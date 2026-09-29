@@ -460,8 +460,8 @@
           "package.json": "[patch-mod] chamber 包名/版本/测试脚本（版本行走 chamber 发布）",
           "src/client/SidebarRoot.module.css": "[patch-mod] 重实现样式（多来源列表/行悬停卡/归档管理器/来源信号灯）",
           "src/client/SidebarRoot.tsx": "[patch-mod] 重实现：多来源会话列表（按工作区分组、搜索/排序/归档管理器/悬停卡片/来源信号灯）替换上游单来源 workspaces 浏览器",
-          "src/client/contract/slots.ts": "[patch-mod] chamber 座位契约（owner props 同名但按多来源扩展）",
-          "src/client/index.ts": "[patch-mod] apply：注册 chamber 侧栏 + sidebar.panellist 镜像 + workspace navigation 服务 + shell.leading 席位由本包 SidebarLeadingControls（上游同形 clone）占座",
+          "src/client/contract/slots.ts": "[patch-mod] chamber 座位契约（owner props 同名但按多来源扩展）；承接 ui-workspace 的 `sidebar.session.row.{leading,hover}` SlotMap 合并（座席所有权转移，vendor 补丁 13）",
+          "src/client/index.ts": "[patch-mod] apply：注册 chamber 侧栏 + sidebar.panellist 镜像 + workspace navigation 服务 + shell.leading 席位由本包 SidebarLeadingControls（上游同形 clone）占座；座席所有权转移后续：本包自行声明并渲染 `sidebar.session.row.{leading,hover}`（原声明由 vendor 补丁 13 删除）",
           "src/client/locales.ts": "[patch-mod] chamber 文案表（含上游没有的工作区/来源操作）",
           "src/index.ts": "[patch-mod] 包入口差异（module-system 宿主接线 + chamber 构面导出）",
           "tsconfig.json": "[patch-mod] chamber 构面（vendor paths/检查面）"
@@ -564,7 +564,7 @@
       "symbols": [
         "packages/desktop/ipc-events.ts#IPC_CHANNELS"
       ],
-      "evidence": "覆盖文件：apps/desktop/src/{preload-app,preload-platform,preload-theme,preload-windows,windows-layout,ipc}.ts。人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验载体面（data-platform / Windows caption 高度 40 / macOS 窗口 chrome（darwin 分支逐值：hiddenInset、trafficLightPosition 16,18、vibrancy sidebar、visualEffectState active、backgroundColor #00000000）/ native theme 观察者 / dshDesktop protocolVersion 1 + deviceInfo 按需读 + 相位映射），门 = packages/desktop/upstream-seats.test.ts（S-51/S-52）+ test/ipc/*（§4.5 审计表 preload-*/windows-layout/ipc 行）。",
+      "evidence": "覆盖文件：apps/desktop/src/{preload-app,preload-platform,preload-theme,preload-windows,windows-layout,ipc}.ts。人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验载体面（data-platform / Windows caption 高度 40 / macOS 窗口 chrome（darwin 分支逐值：hiddenInset、trafficLightPosition 16,18、vibrancy sidebar、visualEffectState active、backgroundColor #00000000）/ native theme 观察者 / dshDesktop protocolVersion 1 + deviceInfo 按需读 + 相位映射），门 = packages/desktop/upstream-seats.test.ts（S-51/S-52；darwin 收口 S-53/S-54）+ test/ipc/*（§4.5 审计表 preload-*/windows-layout/ipc 行）。",
       "status": "accepted",
       "rationale": "官方共享 UI 的桌面判定与 dshDesktop 载体双 flavor 锁步：preload.cts 与 Swift bridge-shim 同形承载，native theme 通道改用 chamber 前缀。browser/webview 租客与 preload-menu 臂不采用（见 §4.5 审计表）。"
     },
