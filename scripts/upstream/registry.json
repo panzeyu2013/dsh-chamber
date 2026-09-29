@@ -502,7 +502,12 @@
       "deviations": [],
       "relatedGates": [
         "packages/dsh-chamber-client-ui-sidebar/test/plugin-kernel/panel-entry-placement.test.ts",
-        "packages/dsh-chamber-client-ui-sidebar/test/plugin-kernel/panel-source.test.ts"
+        "packages/dsh-chamber-client-ui-sidebar/test/plugin-kernel/panel-source.test.ts",
+        "packages/dsh-chamber-client-ui-sidebar/test/session-rows/archived-filter.test.ts",
+        "packages/dsh-chamber-client-ui-sidebar/test/session-rows/flat-list.test.ts",
+        "packages/dsh-chamber-client-ui-sidebar/test/session-rows/pin-partition.test.ts",
+        "packages/dsh-chamber-client-ui-sidebar/test/session-rows/view-options-menu.test.ts",
+        "packages/dsh-chamber-client-ui-sidebar/test/session-rows/workspace-tree.test.ts"
       ],
       "symbols": [
         "src/client/SidebarRoot.tsx#SidebarRoot"

@@ -428,10 +428,10 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   export const IconDataOutlineRegular: IconComponent
   export const IconEditOutlineRegular: IconComponent
   export const IconEllipsisOutlineRegular: IconComponent
+  export const IconFlatListOutlineRegular: IconComponent
   /** Closed-folder state glyph (upstream ui-workspace ProjectRowItem state
    *  mechanism): the workspace group's resting folder slot, paired with the
    *  primitives' 1px-stroke open glyph IconFolderOpenOutlineRegular. */
-  export const IconFlatListOutlineRegular: IconComponent
   export const IconFolderCloseRegular: IconComponent
   export const IconFolderOpenOutlineRegular: IconComponent
   export const IconLinkOutlineRegular: IconComponent
