@@ -291,7 +291,7 @@ export interface TransportSpawnLease {
 /** The provider surface the runtime drives: a provider is pure transport know-how and never sees timers, phases or the registry. */
 export interface TransportProvider {
   /** The registry key this provider declares (normally the transport method, or a test/future key);
-   *  the runtime resolves by `spec.transport` with a legacy kind-keyed fallback. */
+   *  the runtime resolves by `spec.transport` alone. */
   /**
    * Whitelist-gated spec validation (option-injection safe). Null = reject
    * the entry (dropped loudly by the registry, never silently half-kept).

@@ -274,7 +274,7 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
   // 纪律在 serializeAuditEvent（control-plane 审计单源）——本叶只做文件绑定。
   const audit = (event: AuditEvent): void => appendAuditEvent({ file: auditLogFilePath(runtimeBaseDir) }, event)
 
-  // Transport manager：provider 缺省 = sshProvider（legacy kind-keyed 条目解析）；providers
+  // Transport manager：provider 缺省 = sshProvider（条目按 transport 解析）；providers
   // 按 TRANSPORT 注册 {ssh, http}；instancesFile = <userData>/ssh-instances.json。
   const created = createTransportManager({
     provider: sshProvider,
