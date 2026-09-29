@@ -348,6 +348,11 @@
 - 插件页不检测远端真的带 `localOnly` 包（接受不检测；design 20 §6.2/§9）。
 - 会话行/搜索结果标题墨色不照官方（静止次级、hover 主色；A1 教训；不得改回）。
 - workspace 头部行尾动作簇间距 = 4px（不跟官方 12px；不得改回）。
+- 会话行动作簇键盘不可达（同类缺陷的范围外残留）：会话行是 `role="treeitem"` 但无 `tabIndex`
+  （`ServerSectionRows.tsx`），rest 态 kebab `display:none`（`.sessionRow:hover .rowActions`）
+  ⇒ 重命名/分叉/归档没有键盘入口；修法（roving tabindex，或 kebab 常驻可聚焦再视觉换出）属设计裁决。
+  workspace 行与来源头部已在键盘揭示态下可达（`.rowActionsVisible`/`.sourceActionsVisible`，design 06 §7）；
+  来源头部在托管停机（非 `headerActivatable`，无 `tabIndex`）时其图标簇同样没有键盘入口。
 - 轨道来源点多于可视高度被裁、无滚动入口（不回退为自绘滚动条）。
 - footer 动作行 `gap: 4px` 是 chamber 增量（重抄官方块必须带上）。
 - 侧栏/git 图标钮命中区回到视觉盒（重低于 WCAG 24px；重加 rim 前必须重测）。

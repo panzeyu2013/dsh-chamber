@@ -99,6 +99,16 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
   /** 上次渲染时焦点是否在胶囊内——卸载后 activeElement 会回落，必须提前记。 */
   const capsuleHeldFocus = useRef(false)
   const searchButton = useRef<HTMLButtonElement | null>(null)
+  /**
+   * 键盘焦点揭示态（design 08 §3.2）：动作簇的 `:has(:focus-visible)` CSS 揭示只承担
+   * 视觉换入换出——Blink 的 Tab 导航看不到由 `:has()` 失效触发的 display 变化（受控
+   * 对照：同页里 `:focus-within` 驱动的簇 Tab 能进、`:has(:focus-visible)` 驱动的簇被
+   * 跳过，强制出帧也一样），所以键盘态必须同时落到 JS 驱动的 `.rowActionsVisible` 类上
+   * ——与 kebab 展开同一个类、同一条揭示路径，簇里的按钮才真的可聚焦。只认
+   * `:focus-visible`：指针点中折叠钮留下的是"聚焦但不可见"的焦点，不该常驻揭示
+   * （当年否掉 `:focus-within` 的理由）。
+   */
+  const [keyboardFocusKey, setKeyboardFocusKey] = useState<string | null>(null)
 
   /**
    * 意图预热：**本来源头部** hover 的 120ms dwell 机器，一台机器一个来源，
@@ -613,6 +623,20 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                   value: workspace.title,
                                 })
                               }}
+                              // 键盘焦点揭示（design 08 §3.2）：Tab 进入本行、以及随后进入簇内按钮时
+                              // 把 `.rowActionsVisible` 置位；焦点离开整行才收。React 的 onFocus/onBlur
+                              // 就是 focusin/focusout，后代按钮获得的焦点同样会冒泡到这里。
+                              onFocus={(event) => {
+                                if (event.target instanceof Element && event.target.matches(':focus-visible')) {
+                                  setKeyboardFocusKey(workspaceKey)
+                                }
+                              }}
+                              onBlur={(event) => {
+                                const next = event.relatedTarget
+                                if (!(next instanceof Node) || !event.currentTarget.contains(next)) {
+                                  setKeyboardFocusKey(current => (current === workspaceKey ? null : current))
+                                }
+                              }}
                               onPointerDown={workspace.ungrouped === true || workspace.synthetic === true
                                 ? undefined
                                 : (event) => {
@@ -747,17 +771,26 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                     <span className={cc.workspaceCount}>{visibleSessionCount}</span>
                                   )}
                                   {workspace.ungrouped !== true && workspace.synthetic !== true && (
-                                    // The per-workspace Git occupant lives INSIDE the header
-                                    // row (the worktree/branch surface is the row itself):
-                                    // branch chip plus create/delete; non-git workspaces get
-                                    // an empty mount.
+                                    // The per-workspace Git occupant sits INSIDE the header row
+                                    // as the `.rowActions` cluster's SIBLING right before it (the
+                                    // worktree/branch surface is the row itself): the mount renders
+                                    // the create/delete action, and a workspace with no git facts
+                                    // renders nothing at all. The mount carries `data-git-occupant`
+                                    // so the sidebar keeps it OUT of the layout at rest — an in-flow
+                                    // zero-width item still consumes the header's 4px gap and would
+                                    // park this row's count badge off the shared right column
+                                    // (design 08 §3.2).
                                     renderWorkspaceGit('sidebar.workspace.git', { wide }, {
                                       hookContext: { sourceId: server.id, workspaceId: workspace.id },
                                     })
                                   )}
                                   {!workspace.ungrouped && !workspace.synthetic && (
                                     <span
-                                      className={clsx(cc.rowActions, menuOpen[workspaceKey] === true && cc.rowActionsVisible)}
+                                      className={clsx(
+                                        cc.rowActions,
+                                        (menuOpen[workspaceKey] === true || keyboardFocusKey === workspaceKey)
+                                          && cc.rowActionsVisible,
+                                      )}
                                       onClick={(event) => {
                                         // INVARIANT (pending-click.ts): a control that stops
                                         // propagation MUST clear the pending itself — the

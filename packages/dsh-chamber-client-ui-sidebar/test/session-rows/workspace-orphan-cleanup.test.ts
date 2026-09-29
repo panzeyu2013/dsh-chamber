@@ -22,8 +22,13 @@ const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, im
 const SECTION = read('../../src/client/ServerSection.tsx')
 const CSS = read('../../src/client/sidebar-chamber.module.css')
 const CJK = /[\u4e00-\u9fff]/u
-/** The header's hover-revealed cluster (workspace row scope). */
-const CLUSTER = 'className={clsx(cc.rowActions, menuOpen[workspaceKey] === true && cc.rowActionsVisible)}'
+/**
+ * The header's hover-revealed cluster (workspace row scope). Its className must keep
+ * BOTH reveal sources — the kebab menu and the section's keyboard-focus state (they
+ * share `.rowActionsVisible`; design 06 §7 / design 08 §3.2). Anchored on the class
+ * token, not on one formatting of the clsx call: the keyboard state joined it.
+ */
+const CLUSTER_AT = 'cc.rowActions,'
 
 test('the orphan worktree row renders a RESIDENT cleanup control behind the orphan gate', () => {
   const at = SECTION.indexOf('cc.orphanCleanup')
@@ -32,9 +37,14 @@ test('the orphan worktree row renders a RESIDENT cleanup control behind the orph
     'exactly one control (a pasted duplicate must fail; indexOf alone locks only the first)')
   // Resident, not hover-gated: JSX children are written after their parent's opening
   // tag, so a control appearing BEFORE the cluster's opening tag cannot be inside it.
-  const cluster = SECTION.indexOf(CLUSTER)
+  const cluster = SECTION.indexOf(CLUSTER_AT)
   assert.notEqual(cluster, -1, 'the header hover cluster must stay where it is')
   assert.ok(at < cluster, 'the cleanup control must stay OUTSIDE the hover-revealed cluster')
+  const clusterBlock = SECTION.slice(cluster, SECTION.indexOf('>', cluster))
+  assert.match(clusterBlock, /cc\.rowActionsVisible/u, 'the cluster must keep its reveal class')
+  assert.match(clusterBlock, /menuOpen\[workspaceKey\] === true/u, 'kebab-open reveal')
+  assert.match(clusterBlock, /keyboardFocusKey === workspaceKey/u,
+    'the keyboard reveal state must ride the same class (design 06 §7)')
   // Gate: only the orphaned WORKTREE half — a plain orphaned workspace keeps its kebab.
   const gateAt = SECTION.lastIndexOf('{gitFlag?.orphaned === true', at)
   assert.notEqual(gateAt, -1, 'the control lives under the orphan-flag gate')

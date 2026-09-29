@@ -188,7 +188,9 @@ Git 事实不加进 App 的 session aggregate，v1 徽标只在 Git 区内；普
 
 ### 3.2 workspace 行呈现与行内动作
 
-- occupant 渲染进 workspace 头部行内（title 与 rowActions 之间）。**行内不渲染分支
+- occupant 渲染进 workspace 头部行内（title 与 rowActions 之间），作为行尾动作簇 `.rowActions`
+  的 sibling 且位于其**之前**——这条放置是 git 包已登记的契约（`test/locks/slot-contract.test.ts`）。
+  **行内不渲染分支
   chip**：worktree 行 rest 态行尾只保留计数徽标，分支身份随行 hover / 键盘焦点 / kebab
   揭示的动作与工作区管理对话框呈现；主 checkout 也不显示 chip（root 组只显示项目名）。
   行内动作图标 16px；空 workspace 组体显示"该工作区暂无会话"提示行。**揭示态下 occupant
@@ -197,22 +199,56 @@ Git 事实不加进 App 的 session aggregate，v1 徽标只在 Git 区内；普
   一簇被切成 4px + 12px；见 06 §7「行内操作」条）。
 - **行内动作揭示 pointer-safe**：动作按钮的样式钩子是 **`data-git-action` 属性**
   （主行「分支+」创建 / worktree 行删除，`SidebarWorkspaceGitLine.tsx` 中带该属性的两个按钮），由 sidebar
-  侧的 hover / `:has(:focus-visible)` / kebab 展开（`.rowActionsVisible`）三条规则揭示
-  （`sidebar-chamber.module.css` 的 `.workspaceHeader:hover [data-git-action]`、
-  `.workspaceHeader:has(:focus-visible) [data-git-action]`、
+  侧的两条 CSS 规则揭示（`sidebar-chamber.module.css` 的 `.workspaceHeader:hover [data-git-action]`、
   `.workspaceHeader:has(.rowActionsVisible) [data-git-action]`，禁用态 `.42` 走同钩子的
   `[data-git-action]:disabled`；按选择器锚定——行号随文件增长漂移，旧引用
-  的 958-960 / 974-976 已不对），occupant 自身也在 `:has(:focus-visible)` 下按同一钩子揭示
-  （`SidebarGit.module.css` 的 `.headerGit:has(:focus-visible) [data-git-action]`）。
+  的 958-960 / 974-976 已不对）。`.rowActionsVisible` 有两个来源：kebab 展开，以及
+  **键盘焦点**——后者由 `ServerSection.tsx` 的头部 `onFocus`/`onBlur`（React 的
+  focusin/focusout，按 `:focus-visible` 置位、焦点离开整行才清除）驱动，与 kebab 走同一个
+  JS 状态、同一条揭示路径（键盘路径的落点是 **Tab 可达**；脚本/AT 发起的程序化聚焦是否算
+  `:focus-visible` 取决于上一次交互，不在本条承诺内）。插件自身**不带**揭示规则：occupant 的动作
+  rest 态 `display:none`（`SidebarGit.module.css` 的 `.headerGitAction`），只靠插件 CSS 既发不出
+  `:has(:focus-visible)`（揭示前没有东西能先聚焦），也不会被 Blink 的 Tab 导航认到——揭示一律由
+  宿主提供（本仓唯一宿主 = 侧栏，design 06 §7）。
   **不用字面量类名**：属性选择器不被 CSS Modules 哈希，跨包模块才能匹配同一钩子（本仓既有
-  规则见 `packages/dsh-chamber-client-ui-mobile/src/client/styles.ts:10-20`；原 `git-ws-action` 全局类名已退役）。它与**折叠字形交换**（workspace
+  规则见 `packages/dsh-chamber-client-ui-mobile/src/client/styles.ts` 头注的 CROSS-PACKAGE RULE；原 `git-ws-action` 全局类名已退役）。它与**折叠字形交换**（workspace
   folder/branch ↔ chevron、source monitor ↔ chevron、rename 期抑制）同触发：
-  **`:has(:focus-visible)`** 而非 `:focus-within`——揭示状态只有三种：hover、kebab 展开
-  （`.rowActionsVisible`）、键盘焦点；而 Chromium 在 mousedown
+  **绝不 `:focus-within`**——Chromium 在 mousedown
   时聚焦被点按钮，点击折叠钮后焦点留在行内 → `:focus-within` 持续
-  命中 → 鼠标移开后折叠行右端仍常驻「计数徽标 + 动作图标」、左端字形停在 chevron。静止时动作
+  命中 → 鼠标移开后折叠行右端仍常驻「计数徽标 + 动作图标」、左端字形停在 chevron。键盘焦点也不能
+  只靠 CSS 的 `:has(:focus-visible)` 揭示：Blink 的 Tab 导航不认 `:has()` 失效出的 display
+  变化——同页 A/B（真实键事件、两侧 DOM/CSS 相同）里 `:has(:focus-visible)` 揭示的簇已
+  `display:inline-flex` 却仍被 Tab 跳过，JS 类揭示的簇 Tab 依次进入
+  （`test/visual-lock/keyboard-reveal-reachability.test.ts` 钉住）。静止时动作
   `display:none`（零布局占用、移出 Tab 序）；揭示时 chip/计数与动作**成对原位换入换出**；禁用态
   hover 保持 .42。
+- **occupant 容器 rest 态零布局占用**：动作按钮的钩子只保证按钮自身不占位；**容器**
+  （`SidebarGit.module.css` 的 `.headerGit` span）在 rest 态仍是流内的 flex item，而零宽 item
+  照样吃掉头部 `gap: 4px` —— 有 git 事实的行把计数徽标顶到共享右列左侧 4px，无事实的行则贴
+  右列，于是同一列出现两个 x，git 事实到达时整列还要重排 4px，标题可用宽度也白扣 4px。容器
+  因此发射第二条钩子 **`data-git-occupant`**（`SidebarWorkspaceGitLine.tsx`），sidebar 侧
+  `.workspaceHeader [data-git-occupant] { display: none }`（0,2,0，盖过插件自己的
+  `.headerGit { display: inline-flex }` 0,1,0）在 rest 态把整项移出布局，`hover` /
+  `:has(.rowActionsVisible)` 两条按同一状态揭示——揭示态簇几何不变
+  （容器的零宽本就无贡献，有贡献的只是它的 gap）。共享右列 = 会话行尾部状态槽 / 待办条
+  `.todoCount` / 计数徽标同一右缘。隐藏与揭示是布局与无障碍树的整体进出：rest 态容器里唯一的
+  按钮本就 `display:none`，这个空 `role="group"` 一并移出（组里没有任何可读内容），键盘焦点进到
+  行内时随同一 JS 状态一同回归（本条覆盖**布局与无障碍树的进出**：容器的动作按钮也随该状态
+  真正进入 Tab 序）；occupant 的对话框是 body portal，不受影响。**放置契约不变**：
+  occupant 仍是头部行的直接子元素、`.rowActions` 簇的 sibling 且位于其**之前**。
+  **Rejected alternatives**：① 把 slot 挪到 `.workspaceCount` 之前——只把 4px 代价从徽标位置
+  挪到标题宽度：徽标齐了，但隐藏挂载仍在布局里，不变量没立住；② `.headerGit` 加
+  `margin-left: -4px` 抵消 gap——把侧栏的 gap 值硬编码进插件（跨模块魔法数），且揭示态整簇
+  左移 4px；③ 不动容器、只保留现状——列在 git 行与非 git 行之间分裂；④ 把 slot 渲染进
+  `.rowActions` 簇内（少一条钩子、揭示状态单一来源）——被否，且有实证：它把 occupant 挪到
+  `cc.rowActions` 之后，直接打破 git 包已登记、可运行的放置锁
+  （`packages/dsh-chamber-client-ui-git/test/locks/slot-contract.test.ts`：occupant 必须渲染在
+  rowActions 之前），并顺带改了 React 事件归属——簇的 `onClick`（stopPropagation +
+  clearPendingClick）会开始吞掉 occupant 子树的点击（对话框经 React portal 仍挂在簇的 React
+  子树下），document 级 click 语义随之变化；⑤ 留在行内、改用结构/语义选择器（`:nth-child`、
+  `[role="group"]`）在侧栏侧隐藏它——语义属性不是样式钩子（仓库禁止第二套样式词汇），且头部
+  子元素增删会静默改靶；⑥ 只靠 CSS `:has(:focus-visible)` 承担键盘揭示（含 occupant 的动作）
+  ——视觉上揭示但 Tab 不可达（同页 A/B 实证），键盘可达性因此落到 JS 揭示状态上（06 §7「悬停替换」）。
 - **计数徽标右对齐**：`.workspaceCount` 用 `text-align: right`——内容盒
   `min-width: 16px` 的钳位使居中数字右缘随位数浮动（1 位约 10px、2/3 位约 5-6px），右对齐
   后 1/2/3 位数字右缘共享同一 x。
@@ -289,7 +325,7 @@ Git 事实不加进 App 的 session aggregate，v1 徽标只在 Git 区内；普
   对象**——那是同批的图标钮语言，v0.2.4 此处为 22px/r6；24px 目标
   尺寸重新成为本模块的已登记偏差，见 design 24 §13 第 17 条与 design 06 §7。行内动作钮命中区
   见 `SidebarGit.module.css` 的 `.unregisteredAction`：分支图标 + 名称 + 健康徽标；非 ready 行
-  的状态胶囊是官方 `Tag tone="warning"`（`SidebarWorkspaceGitLine.tsx` 里非 ready 分支的那个 `Tag`，官方 11px/17px
+  的状态胶囊是官方 `Tag tone="warning"`（`SidebarWorkspaceGitLine.tsx` 中带该 tone 的那行，官方 11px/17px
   胶囊词汇，本模块只保留占位类 `.unregisteredStatus`——原先手写胶囊的中性填充与行自身 hover
   填充同值，指针悬停时整块消失）。无已注册 workspace 的仓库
   在列表末尾渲染其未注册块；数据经 flags 存储的每来源仓库布局（`RepoGitLayout`）发布，侧栏
