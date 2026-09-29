@@ -260,7 +260,7 @@
   text-align: left;
 }
 
-.sessionRowsMore:hover {
+.sessionRowsMore:hover:not([data-hover-gate]) {
   color: var(--dsw-alias-label-secondary);
 }
 
@@ -781,7 +781,7 @@
    dialog's group header (one rule list, the same
    token; the dialog's header is a sibling surface, not a .workspaceHeader
    subclass). */
-.workspaceHeader:hover,
+.workspaceHeader:hover:not([data-hover-gate]),
 .archiveManagerGroupHeader:hover {
   background: var(--dsw-alias-interactive-bg-hover);
 }
@@ -847,14 +847,14 @@
    folder↔chevron hover/focus swap: the manager header has no kebab/actions,
    so the .rowActionsVisible variant below is a no-op for it — one shared
    rule list, no duplicate table to keep in sync. */
-.workspaceHeader:hover .foldToggleFolder .foldChevron,
+.workspaceHeader:hover:not([data-hover-gate]) .foldToggleFolder .foldChevron,
 .workspaceHeader:has(.rowActionsVisible) .foldToggleFolder .foldChevron,
 .archiveManagerGroupHeader:hover .foldToggleFolder .foldChevron,
 .archiveManagerGroupHeader:has(:focus-visible) .foldToggleFolder .foldChevron {
   display: inline-flex;
 }
 
-.workspaceHeader:hover .foldToggleFolder .foldFolder,
+.workspaceHeader:hover:not([data-hover-gate]) .foldToggleFolder .foldFolder,
 .workspaceHeader:has(.rowActionsVisible) .foldToggleFolder .foldFolder,
 .archiveManagerGroupHeader:hover .foldToggleFolder .foldFolder,
 .archiveManagerGroupHeader:has(:focus-visible) .foldToggleFolder .foldFolder {
@@ -873,12 +873,12 @@
   display: inline-flex;
 }
 
-.workspaceHeader:hover .foldToggleGit .foldChevron,
+.workspaceHeader:hover:not([data-hover-gate]) .foldToggleGit .foldChevron,
 .workspaceHeader:has(.rowActionsVisible) .foldToggleGit .foldChevron {
   display: inline-flex;
 }
 
-.workspaceHeader:hover .foldToggleGit .foldBranch,
+.workspaceHeader:hover:not([data-hover-gate]) .foldToggleGit .foldBranch,
 .workspaceHeader:has(.rowActionsVisible) .foldToggleGit .foldBranch {
   display: none;
 }
@@ -1027,7 +1027,7 @@
 /* Hover wash shared by the nav session rows and the archive-manager
    dialog's rows (select-all row included — one rule
    list, the same token). */
-.sessionRow:hover,
+.sessionRow:hover:not([data-hover-gate]),
 .archiveManagerRow:hover {
   background: var(--dsw-alias-interactive-bg-hover);
 }
@@ -1065,7 +1065,7 @@
   color: var(--dsw-alias-label-secondary);
 }
 
-.sessionRow:hover .sessionTitle {
+.sessionRow:hover:not([data-hover-gate]) .sessionTitle {
   color: var(--dsw-alias-label-primary);
 }
 
@@ -1090,7 +1090,7 @@
 }
 
 @media (hover: hover) {
-  .sessionRow:hover .sessionTitle,
+  .sessionRow:hover:not([data-hover-gate]) .sessionTitle,
   .sessionRow.sessionMenuOpen .sessionTitle {
     text-overflow: clip;
   }
@@ -1170,7 +1170,7 @@
    描述的就是这条 hover/`.rowActionsVisible` 揭示——键盘焦点同样落在该 JS 状态上），
    属性选择器不被 CSS Modules 哈希，
    所以跨包选择器只在属性形式上成立。 */
-.workspaceHeader:hover [data-git-action],
+.workspaceHeader:hover:not([data-hover-gate]) [data-git-action],
 .workspaceHeader:has(.rowActionsVisible) [data-git-action] {
   display: inline-flex;
 }
@@ -1191,13 +1191,13 @@
   display: none;
 }
 
-.workspaceHeader:hover [data-git-occupant],
+.workspaceHeader:hover:not([data-hover-gate]) [data-git-occupant],
 .workspaceHeader:has(.rowActionsVisible) [data-git-occupant] {
   display: inline-flex;
 }
 
-.workspaceHeader:hover .rowActions,
-.sessionRow:hover .rowActions {
+.workspaceHeader:hover:not([data-hover-gate]) .rowActions,
+.sessionRow:hover:not([data-hover-gate]) .rowActions {
   display: inline-flex;
 }
 
@@ -1205,7 +1205,7 @@
    revealed (the reveal rules set display; these keep the disabled opacity on
    every reveal path). Same data-* hook as the reveal
    rules above. */
-.workspaceHeader:hover [data-git-action]:disabled,
+.workspaceHeader:hover:not([data-hover-gate]) [data-git-action]:disabled,
 .workspaceHeader:has(.rowActionsVisible) [data-git-action]:disabled {
   opacity: .42;
 }
@@ -1213,14 +1213,14 @@
 /* The row/header state indicators swap OUT while the actions are in: on
    hover, or while the cluster is visible (kebab menu open or keyboard focus,
    `.rowActionsVisible`). */
-.sessionRow:hover .sessionStateSlot,
+.sessionRow:hover:not([data-hover-gate]) .sessionStateSlot,
 .sessionRow:has(.rowActionsVisible) .sessionStateSlot,
-.sessionRow:hover .pinSlot,
+.sessionRow:hover:not([data-hover-gate]) .pinSlot,
 .sessionRow:has(.rowActionsVisible) .pinSlot {
   display: none;
 }
 
-.workspaceHeader:hover .workspaceCount,
+.workspaceHeader:hover:not([data-hover-gate]) .workspaceCount,
 .workspaceHeader:has(.rowActionsVisible) .workspaceCount {
   display: none;
 }

@@ -20,6 +20,7 @@ import type { ChamberServerAggregate, ChamberServerWorkspace } from '@dsh-chambe
 import { relativeTimeBucket } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import { openErrorKey } from '@dsh-chamber/dsh-chamber-client-core/open-outcome'
 import { clearPendingClick, noteSessionRowClick } from '@dsh-chamber/dsh-chamber-client-core/pending-click'
+import { HOVER_GATE_ATTR } from './hover-motion-gate.ts'
 import { RowHoverCard } from './RowHoverCard.tsx'
 import { ServerSectionRenameForm, SessionScheduleIndicator } from './server-section-controls.tsx'
 import { dragOverState, rowHalf } from './server-section-model.ts'
@@ -232,7 +233,12 @@ const SessionRow = memo(function SessionRow({
         armBlankGhostForClick()
         openSession(server.id, session.id)
       }}
-      onPointerEnter={marquee.enter}
+      onPointerEnter={(event) => {
+        // 行位移把本行搬到静止指针下时浏览器会合成 pointerenter（hover-motion-gate.ts 头注
+        // 的实测），门控行不 arm 跑马灯——否则用户没指向它，标题却自己开始爬行。
+        if (event.currentTarget.hasAttribute(HOVER_GATE_ATTR)) return
+        marquee.enter()
+      }}
       onPointerLeave={marquee.leave}
     >
       {/* 座席转移（补丁 13）：座席只在**本实例**（当前页面 ctx 的拥有者）的行上求值——
