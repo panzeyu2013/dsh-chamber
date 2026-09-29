@@ -283,7 +283,7 @@
 
 > 双 flavor 专项登记（S/T/P/G/D + 可达性纪律）见 [deviations.md](deviations.md)。
 
-- **God 文件预算本代三次上调**（`scripts/gates/file-budgets.json`，该表「只降不升」的本代例外）：①`App.tsx` 2352→2358（行入场动画/放置接线）；②`aggregate-store.ts` 984→1069→1017（worktree 放置事实/通道，后随类型移出下调）；③pin 视图选项合并 `App.tsx` 2358→2374、`derive.ts` 1726→1779、`aggregate-store.ts` 1017→1024（归档筛选投影输入 / 置顶分区+flat+工作区树派生 / pinnedSessionIds·pinSetKnown 字段）。逐条 note 记录评审理由；收口方向 = 放置事实迁到 `workspace-placement.ts` 旁，新增派生面待专门重构轮。
+- **God 文件预算本代三次上调**（`scripts/gates/file-budgets.json`，该表「只降不升」的本代例外）：①`App.tsx` 2352→2358（行入场动画/放置接线）；②`aggregate-store.ts` 984→1069→1017（worktree 放置事实/通道，后随类型移出下调）；③pin 视图选项合并 `App.tsx` 2358→2374、`derive.ts` 1726→1779、`aggregate-store.ts` 1017→1024（归档筛选投影输入 / derive 内的发布闸输入与筛选线程化+类型别名，三个派生模块另在 pin-partition.ts、flat-account.ts、workspace-tree.ts / pinnedSessionIds·pinSetKnown 字段）。逐条 note 记录评审理由；收口方向 = 放置事实迁到 `workspace-placement.ts` 旁，新增派生面待专门重构轮。
 
 - 代码质量辅助门只本地跑（2026-09-25 裁决）：8 门退出 ci/release，仍是 `check:static` 成员；代价 = CI 不再捕获这几类漂移（登记在 `static-gate-parity.mjs`）。
 - seed 自检缺包「只报不阻断」；要阻断改该 check 的 `gap` 判定。

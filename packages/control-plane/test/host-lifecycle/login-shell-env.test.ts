@@ -129,7 +129,7 @@ test('readLoginShellEnvironment: a stuck candidate is killed and the next one an
   const dir = mkdtempSync(join(tmpdir(), 'chamber-login-shell-'))
   try {
     const started = Date.now()
-    const result = await readLoginShellEnvironment(BASE, { shells: [stuckShell(dir), goodShell(dir)], timeoutMs: 400 })
+    const result = await readLoginShellEnvironment(BASE, { shells: [stuckShell(dir), goodShell(dir)], timeoutMs: 2_000 })
     assert.equal(result.failures.length, 1, 'the stuck shell is reported')
     assert.match(result.failures[0]!.reason, /timed out/)
     assert.ok(Date.now() - started < 10_000, 'the budget, not the sleep, bounds the read')

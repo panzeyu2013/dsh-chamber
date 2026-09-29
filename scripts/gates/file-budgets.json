@@ -53,7 +53,7 @@
       "path": "packages/dsh-chamber-client-core/src/derive.ts",
       "lines": 1779,
       "target": 1200,
-      "note": "aggregate/session derive；2026-09-28 review-justified: RuntimeFactsOverlayRow 增加 facts 侧子代理活动三值（busy/idle/unknown，与判定侧同映射）并只在通道未声明时填补——呈现面不再由原始计数反推 running（+4，含同批删除的重复注释 −1）；棘轮随之抬到 1742；pin 落地把投影输入类型移入叶子（instance-projection-input.ts；快照行类型的叶子化记在 instance-api 条）后下调到 1727；review 又删掉一行多余的导入空行 → 1726。; +53 = the pin per-source view options (pin partition / flat account / workspace-tree derivation with their guards)"
+      "note": "aggregate/session derive；2026-09-28 review-justified: RuntimeFactsOverlayRow 增加 facts 侧子代理活动三值（busy/idle/unknown，与判定侧同映射）并只在通道未声明时填补——呈现面不再由原始计数反推 running（+4，含同批删除的重复注释 −1）；棘轮随之抬到 1742；pin 落地把投影输入类型移入叶子（instance-projection-input.ts；快照行类型的叶子化记在 instance-api 条）后下调到 1727；review 又删掉一行多余的导入空行 → 1726。; +53 = the pin per-source view options threaded through derive (publish-gate inputs, sessionVisible three-state rewrite, search/derive filter plumbing, type aliases; the three derivation modules live in pin-partition.ts / flat-account.ts / workspace-tree.ts) plus the 4-line sessionFacts publish-gate fix"
     },
     {
       "path": "packages/desktop/transport-manager.ts",
@@ -90,6 +90,12 @@
       "lines": 1024,
       "target": 600,
       "note": "aggregate store types/channels/registry; +85 = the worktree placement facts/channels (feature, review-justified raise; registered in STATUS)；ChamberServerWorkspace 移入 aggregate-types.ts（并把它自己的说明带上）后下调到 1017；+7 = pinnedSessionIds/pinSetKnown on the aggregate (pin partition source)"
+    },
+    {
+      "path": "packages/dsh-chamber-client-ui-sidebar/src/client/ServerSection.tsx",
+      "lines": 1300,
+      "target": 400,
+      "note": "sidebar section container (header + browsing region + rows + view options + pin partition); the 2026-09 pin merge added 198 net (view options, pin partition, flat and tree modes). Nearest extraction: the ordering/partition preparation block (394-469) into server-section-order.ts"
     }
   ]
 }

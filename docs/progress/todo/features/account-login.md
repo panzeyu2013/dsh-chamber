@@ -18,7 +18,7 @@
 `account-backend.ts`、应用内平台视图（`platform-view.ts` WebContentsView）、`dshDesktop` 载体扩展、
 把账号 token 带进渲染端。
 
-## 2. 现状对照（已核，pin 0.2.0-rc.1）
+## 2. 现状对照（已核于 pin 0.2.0-rc.1；rc.2 下待重核）
 
 - **宿主侧已在跑**：`dsh-base` bundle 带 `dsh-authorization` + `dsh-deepseek-account-platform`（浏览器 PKCE）；
   `dsh-web-app` bundle 带 `dsh-api-account-controller`（remote `account`）与客户端行

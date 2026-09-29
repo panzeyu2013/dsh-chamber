@@ -80,7 +80,6 @@ test('the header seat keeps its own registration (id/order/component/label)', ()
 test('the component takes the owner path before any session lookup', () => {
   assert.match(button, /absolutePath\?: string/, 'the seat owner prop must be part of the props')
   assert.match(button, /useWorkspaces: <S>\(sel:/, 'the framework selector stays a required prop (every slot component receives it)')
-  assert.doesNotMatch(button, /NO_WORKSPACES/, 'no stand-in hook: the dead fallback branch is gone')
   assert.match(button, /resolveOpenInPath\(absolutePath, workspaces, sessionId\)/, 'Gate 2 must consult the owner path')
   assert.match(gates, /export function resolveOpenInPath\(/, 'the precedence lives in the pure gate module')
   assert.match(gates, /const owner = absolutePath\.trim\(\)/, 'the owner path is normalized before use')

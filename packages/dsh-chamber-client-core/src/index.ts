@@ -35,7 +35,7 @@ export type * from './workspace-tree.ts'
 export { FLAT_ACCOUNT_KEY } from './flat-account.ts'
 export type * from './pin-partition.ts'
 export { partitionPinnedSessions } from './pin-partition.ts'
-export { normalizeWorkspacePath, owningParentFolder, workspaceTreeDepths, workspaceTreeParents } from './workspace-tree.ts'
+export { workspaceTreeDepths, workspaceTreeParents } from './workspace-tree.ts'
 export { forgetPendingWorkspaces, reconcilePendingWorkspaces, recordPendingWorkspace, removePendingWorkspace, renamePendingWorkspace, sweepPendingWorkspaces, withWorkspaceEcho } from './workspace-echo.ts'
 // 位置意图（pre-create 半边）：宿主 create 的 PREPEND 短暂态在回声能存在之前就已渲染。
 export type * from './workspace-placement.ts'
