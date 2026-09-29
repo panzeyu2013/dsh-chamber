@@ -33,8 +33,8 @@ import type {
   TransportExecResult,
   TransportInstanceInput,
   TransportInstanceSpec,
-  TransportKind,
   TransportLogEntry,
+  TransportMethod,
   TransportPhase,
   TransportProbeEndpoint,
   TransportProvider,
@@ -134,11 +134,11 @@ export interface TransportManagerOptions {
 /** createTransportManager dependencies (provider/spawn/probe/allocator injectable). */
 export interface TransportManagerDeps {
   provider: TransportProvider
-  /** Optional per-spec overrides: resolved BY TRANSPORT first (`{ ssh, http }` —
-   *  one provider per mechanism; validateSpec enforces the shipped
-   *  kind×transport matrix), then by the legacy kind key (`{ gateway }`), then
-   *  the default `provider`. A key here wins for every matching spec. */
-  providers?: Partial<Record<TransportKind, TransportProvider>>
+  /** Optional per-spec overrides: resolved BY TRANSPORT (`{ ssh, http }` — one
+   *  provider per mechanism, serving both target kinds; validateSpec enforces the
+   *  shipped kind×transport matrix), else the default `provider`. The pre-v2
+   *  kind-keyed override is gone: a `kind`-keyed entry resolves to nothing. */
+  providers?: Partial<Record<TransportMethod, TransportProvider>>
   spawnFn?: (command: string, args: readonly string[], options: SpawnOptions) => SpawnedProcess
   portProbe?: (port: number, opts?: { timeoutMs?: number; host?: string }) => Promise<boolean>
   /** One-shot endpoint identity verification; defaults to the provider's
@@ -392,7 +392,7 @@ interface CodedError extends Error {
 
 /** Exception-safe formatter for provider hooks, injected deps and event data:
  *  catch blocks are part of the state machine and must never throw. */
-export const describeTransportError = describeError
+const describeTransportError = describeError
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms))

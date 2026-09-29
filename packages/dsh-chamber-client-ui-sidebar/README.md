@@ -44,7 +44,7 @@ The shell declares and renders the three holes the alpha.2 official
   self-selects mid-boot never enters the list; a blank row that lost current
   keeps its slot for the 450 ms ghost grace (06 §2.2 / 05 §2.1);
   subagent-origin sessions never surface in the navigation list
-  (`shared/derive.ts`).
+  (`packages/dsh-chamber-client-core/src/derive.ts`).
 - A connected source whose snapshot fetch failed shows the error text instead
   of the workspace list — never masquerading as "no workspaces". Disconnected
   sources render header + status icon only (dot/spinner, phase on
@@ -80,7 +80,7 @@ The shell declares and renders the three holes the alpha.2 official
   as they were.
 - Each workspace header's icon (folder, or the git-branch glyph of a derived
   worktree) carries its own deterministic accent (`workspaceAccentStyle` in
-  `shared/derive.ts`): a golden-angle hue spread of the
+  `packages/dsh-chamber-client-core/src/derive.ts`): a golden-angle hue spread of the
   `(sourceId, family seed)` hash plus a per-workspace lightness jitter
   (56/61/66 %) at a SOFT palette (34 % saturation; 21 % for derived
   worktrees — user feedback softened the original 62/45 % jewel
@@ -97,12 +97,15 @@ The shell declares and renders the three holes the alpha.2 official
 - Session row click → `chamberBridge.requestOpenSession(sourceId, sessionId)`;
   the App layer switches to that source's shell and opens the session.
 - Row actions (v1 minimal set over the source's own unary wire client,
-  `shared/instance-api.ts`) all live in the ROW MENUS: session = rename / fork /
-  archive; real workspace = a new-chat-glyph new-session button in the row (worktree rows
+  `packages/dsh-chamber-client-core/src/instance-api.ts`) live in the ROW MENUS or on the row
+  itself: session = rename / fork / archive in the menu plus the row's own hover archive button
+  (design 06 §7); real workspace = a new-chat-glyph new-session button in the row (worktree rows
   included) plus rename / delete behind the kebab — non-worktree rows only,
   since a derived worktree deliberately keeps no kebab (OpenChamber parity).
-  There is no second hover button: the session row's archive verb is a MENU
-  ENTRY and it follows the official TWO-PHASE call — a quiet session archives
+  The session row's hover cluster is the kebab plus ONE dedicated archive
+  button (upstream `ArchiveSessionRowButton`, design 06 §7); archived rows never
+  enter this projection, so the unarchive half of that upstream button has no
+  consumer here. Both archive entries follow the official TWO-PHASE call — a quiet session archives
   immediately, with no confirmation, because archiving only hides the row and
   never touches the session log (upstream's own reason for keeping quiet
   archives out of the confirm family); the host refuses a session that still has
@@ -137,8 +140,8 @@ The shell declares and renders the three holes the alpha.2 official
   layer. Nothing is lost: every layer is dismissible (cancel / X / mask /
   Escape), so a refused control works again the moment the other one is gone.
 - Row-action accessible names carry the ROW they act on
-  (`action.newSession.aria` / `action.menu.workspace` / `action.menu.session`,
-  upstream's `{name}`-parameterized form): a per-row control named with a bare
+  (`action.newSession.aria` / `action.menu.workspace` / `action.menu.session` /
+  `action.archive.aria`, upstream's `{name}`-parameterized form): a per-row control named with a bare
   "more actions" tells AT nothing. An untitled session resolves to the same
   `list.unnamed` placeholder in the row and in its accessible name.
 - The session-row window is a TWO-WAY disclosure: while rows are hidden the
@@ -164,7 +167,7 @@ The shell declares and renders the three holes the alpha.2 official
   directory on that instance's host (remote paths are remote-server paths).
 - A non-current source's header click switches the active N-ctx view without
   opening a session (`chamberBridge.requestActivateSource`); archiving hides
-  the session immediately (`archivedSessionIds` filtered in `shared/derive.ts`).
+  the session immediately (`archivedSessionIds` filtered in `packages/dsh-chamber-client-core/src/derive.ts`).
 - The collapsed rail renders one NAMED, operable button per source (official
   `Tooltip` + `aria-label`, `aria-current` on the active source, `aria-disabled`
   on a NON-active source that cannot be activated — the active source is not an
@@ -176,15 +179,17 @@ The shell declares and renders the three holes the alpha.2 official
 
 ## Open-intent gates, the workspace echo and the session echo (design 05 §2.2.1)
 
-This package owns the page-wide open-intent slot (`shared/open-intent.ts` — the
+This package drives the page-wide open-intent slot (the module itself is client-core's) (`packages/dsh-chamber-client-core/src/open-intent.ts` — the
 same vite-shared singleton discipline as `pending-click.ts`, because the target
 instance's own ctx must read it too) together with the pure rules the App layer
-consumes, plus the workspace-echo ledger rules (`shared/workspace-echo.ts`,
-placement anchors included) and their publish site (`shared/workspace-mutations.ts`
+consumes, plus the workspace-echo ledger rules (`packages/dsh-chamber-client-core/src/workspace-echo.ts`,
+placement anchors included), the pre-create placement intent ledger that holds a
+new worktree row at its anchor from the first frame it appears
+(`packages/dsh-chamber-client-core/src/workspace-placement.ts`) and their publish site (`packages/dsh-chamber-client-core/src/workspace-mutations.ts`
 — the single funnel every in-app workspace mutation goes through: the sidebar
 dialogs and the Git worktree plugin's create/adopt/recovery alike), plus the
-session-echo ledger (`shared/session-echo.ts`) and its own single funnel
-(`shared/session-mutations.ts`). Three user-visible surfaces follow:
+session-echo ledger (`packages/dsh-chamber-client-core/src/session-echo.ts`) and its own single funnel
+(`packages/dsh-chamber-client-core/src/session-mutations.ts`). Three user-visible surfaces follow:
 
 - **Intent gates.** A source with an in-flight open projects its `current` only
   when that current IS the requested session (`projectableCurrent`), so the
@@ -202,7 +207,12 @@ session-echo ledger (`shared/session-echo.ts`) and its own single funnel
   to the authoritative row once that source's push lists it (05 §2.2.1). A Git
   worktree creation carries the placement anchor (`afterWorkspaceId` = its main
   checkout), so the row lands directly below that checkout instead of at the
-  tail, and its git flags are published by the funnel's `beforePublish` hook —
+  tail. On a MOUNTED source the anchor alone is one RPC too late: the host
+  PREPENDS, so the push carrying the row arrives before the create answers — the
+  funnel therefore publishes a **placement intent BEFORE the wire**
+  (`reportWorkspacePlacement`, keyed by the requested path, upgraded with the
+  host id by the echo), and the projection holds that row at its anchor from the
+  first frame that carries it (05 §2.2.1). Its git flags are published by the funnel's `beforePublish` hook —
   BEFORE the echo fact, not after it — so the row is born in its worktree shape
   and never renders as a plain workspace first; the adopt path also carries its
   branch title as a hint, so the row is born with its final label. The
@@ -223,7 +233,7 @@ session-echo ledger (`shared/session-echo.ts`) and its own single funnel
   workspace membership frozen, so the new id can at best appear as an
   unaccounted stray — which a provisional blank row is not allowed to render.
   A successful create therefore also publishes a one-way fact
-  (`shared/session-mutations.ts`: sidebar `+`/fork/archive and the Git plugin's
+  (`packages/dsh-chamber-client-core/src/session-mutations.ts`: sidebar `+`/fork/archive and the Git plugin's
   session creates), the App records the HOST id in a renderer-local ledger and
   projects the row INTO its workspace (`withSessionEcho` — host workspace id
   first, canonical path second), requests that source's official session-list
@@ -288,7 +298,7 @@ session-echo ledger (`shared/session-echo.ts`) and its own single funnel
   bottom until dragged).
 - View-preference persistence (06 §3, 2026-08 revision): fold state and the
   ungrouped order live in ONE shared live store under one localStorage key
-  (`dsh-chamber.sidebar.v1`, `shared/view-prefs.ts`) — a single vite-shared
+  (`dsh-chamber.sidebar.v1`, `packages/dsh-chamber-client-core/src/view-prefs.ts`) — a single vite-shared
   in-memory instance across every ctx's sidebar (`getViewPrefs`/
   `subscribeViewPrefs`/`updateViewPrefs`), writes persist + notify every
   subscriber, so a fold toggle in ANY source's sidebar propagates live to all

@@ -135,14 +135,19 @@ export async function runCreateSaga(
     throw new GitSagaError(createError)
   }
   let workspace: { workspaceId: string; path: string; created: boolean }
+  // 已学到的宿主 id：workspace 步返回后即算"已知"，即便随后的相关性断言失败也要带给调用方——
+  // 位置意图的作废事实否则只能按请求路径作键，退不掉已被回声升级成宿主 realpath 的 id 键条目。
+  let learnedWorkspaceId: string | undefined
   try {
     workspace = await deps.workspaceCreate(created.path)
+    learnedWorkspaceId = workspace.workspaceId
     assertWorkspaceCorrelation(workspace)
   } catch (workspaceError) {
     if (!created.rollbackAuthorized) {
       throw new GitSagaError(workspaceError, {
         kind: 'workspace-adopt',
         operationId: ids.operationId,
+        ...(learnedWorkspaceId === undefined ? {} : { workspaceId: learnedWorkspaceId }),
         path: created.path,
         sessionId: ids.sessionId,
         message: errorText(workspaceError),
@@ -154,6 +159,7 @@ export async function runCreateSaga(
       throw new GitSagaError(workspaceError, {
         kind: 'rollback-create',
         operationId: ids.operationId,
+        ...(learnedWorkspaceId === undefined ? {} : { workspaceId: learnedWorkspaceId }),
         repoId: created.repoId,
         worktreeId: created.worktreeId,
         commonDir: created.commonDir,

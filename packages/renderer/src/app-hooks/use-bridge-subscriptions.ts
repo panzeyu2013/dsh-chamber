@@ -34,18 +34,23 @@ import {
   intentPrewarmAllowed,
   prioritizePrewarmSource,
   reconcilePendingArchives,
+  reconcilePendingPlacements,
   reconcilePendingSessions,
   reconcilePendingWorkspaces,
   recordPendingArchive,
   recordPendingSession,
   onSessionRestored,
   recordPendingWorkspace,
+  recordWorkspacePlacement,
   removePendingArchive,
+  removePendingPlacement,
   removePendingSession,
   removePendingWorkspace,
+  removeUnclaimedPlacements,
   renamePendingWorkspace,
   runtimeReportSignature,
   sweepPendingArchives,
+  sweepPendingPlacements,
   sweepPendingSessions,
   sweepPendingWorkspaces,
   type InstanceAggregate,
@@ -55,6 +60,7 @@ import {
   type SessionArchiveLedger,
   type SessionEchoLedger,
   type WorkspaceEchoLedger,
+  type WorkspacePlacementLedger,
 } from '@dsh-chamber/dsh-chamber-client-core'
 import type { EchoStore } from '../host/echo-store.ts'
 import type { FactsStore } from '../host/facts-store.ts'
@@ -195,6 +201,7 @@ export interface BridgeSubscriptionsDeps {
   refreshAggregate: (instanceId: string, mutationTag?: number) => Promise<unknown>
   reportDeepLinkAckFailure: (delivery: RendererDeliveryCoordinates, error: unknown) => void
   selectView: (viewId: string, onApply?: (applied: boolean) => void) => boolean
+  updatePlacement: (next: WorkspacePlacementLedger) => void
   updateSessionArchive: (next: SessionArchiveLedger) => void
   updateSessionEcho: (next: SessionEchoLedger) => void
   updateWorkspaceEcho: (next: WorkspaceEchoLedger) => void
@@ -253,7 +260,7 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
   const {
     acknowledgeDeepLink, emitSessionNotification, openSession,
     stepCompletionArmFor, withdrawSource, guardStep, refreshAggregate, reportDeepLinkAckFailure, selectView,
-    updateSessionArchive, updateSessionEcho, updateWorkspaceEcho,
+    updatePlacement, updateSessionArchive, updateSessionEcho, updateWorkspaceEcho,
     aggregatePollSeqRef, aggregateRequestOwnersRef, authoritativeArchiveSetRef, autoPrewarmedRef,
     completeLedgerRef, drainPrewarmRef, factsAtRef, harvestCandidatesRef, harvestIntentRef,
     harvestStateRef, intentBudgetRef, intentPriorityRef, liveServerIdsRef, mutationRefreshSeqRef,
@@ -464,6 +471,49 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
   }, [refreshAggregate])
 
   /**
+   * 工作区**位置意图**（pre-create 半边）：唯一在 wire 之前发布的事实——宿主 create 无条件
+   * PREPEND，挂载来源的权威 push 会在 create 回答（以及 id 键回声存在）之前就把新行渲染在
+   * 列表头部。记入账本后，投影从第一帧就把该行按在锚点后（withWorkspacePlacements）。收敛点：
+   * 权威序把该行移离头部（重排落地 / 追加落地 / 用户拖走）、锚点消失、删除事实、来源离开、TTL。
+   */
+  useEffect(() => {
+    return chamberBridge.onWorkspacePlacement((fact) => {
+      const { sourceId } = fact
+      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
+      const owner = sourceLifecyclesRef.current!.capture(sourceId)
+      if (owner === null) return
+      const ledger = recordWorkspacePlacement(
+        echoStore.getSnapshot().placement,
+        sourceId,
+        { path: fact.path, afterWorkspaceId: fact.afterWorkspaceId },
+        Date.now(),
+      )
+      updatePlacement(ledger)
+    })
+  }, [updatePlacement])
+  /**
+   * 位置意图的**作废**通道（只发失败侧）：锚点重排 RPC 失败时宿主序就是最终序，意图立刻退场，
+   * 行跟随宿主——否则它会停在锚点后直到 TTL 才跳回（迟到一跳比宿主序更糟）。成功侧不发：
+   * 位置判据恰好收敛在"该行离开列表头部"那一帧，位置已经正确，无闪回。
+   */
+  useEffect(() => {
+    return chamberBridge.onWorkspacePlacementFailed((fact) => {
+      const { sourceId } = fact
+      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
+      const owner = sourceLifecyclesRef.current!.capture(sourceId)
+      if (owner === null) return
+      updatePlacement(removePendingPlacement(
+        echoStore.getSnapshot().placement,
+        sourceId,
+        {
+          path: fact.path,
+          // saga 在 create 之前/附近中止时没有宿主 id：只按请求路径匹配。
+          ...(fact.workspaceId === undefined ? {} : { workspaceId: fact.workspaceId }),
+        },
+      ))
+    })
+  }, [updatePlacement])
+  /**
    * 工作区创建回声：任一创建出口（侧栏对话框 / Git worktree 插件）上报宿主
    * workspaceId 后记入渲染端账本并并入投影（deriveServers 单一汇合点）。收敛点：
    * 挂载 push 列出同一 workspaceId / 路径（reconcilePendingWorkspaces）、来源离开
@@ -487,6 +537,22 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
         ...(fact.title === undefined ? {} : { title: fact.title }),
       }, now)
       updateWorkspaceEcho(ledger)
+      // 位置意图的**升级**：create 一回答，同一条意图就带上宿主 id 与宿主规范化路径，
+      // 行匹配不再依赖路径写法（pre-create 时只有请求路径可用，见 workspace-placement.ts）。
+      // 带锚点的创建都会有这条意图。
+      if (fact.afterWorkspaceId !== undefined) {
+        updatePlacement(recordWorkspacePlacement(
+          echoStore.getSnapshot().placement,
+          sourceId,
+          { path: fact.path, afterWorkspaceId: fact.afterWorkspaceId, workspaceId: fact.workspaceId },
+          now,
+        ))
+      } else {
+        // 无锚点 = 宿主序（PREPEND / adopt 的 append）就是最终序：该来源**尚未被宿主 id 认领**
+        // 的意图一律作废——否则拼写分歧留下的那条既认领不到 id、也退不掉，会在窗口内认领同路径
+        // 的下一次无锚创建，把新行搬到旧锚点后（见 removeUnclaimedPlacements）。
+        updatePlacement(removeUnclaimedPlacements(echoStore.getSnapshot().placement, sourceId))
+      }
     })
   }, [updateWorkspaceEcho])
   /**
@@ -506,6 +572,12 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
       let ledger = sweepPendingWorkspaces(echoStore.getSnapshot().workspace, Date.now())
       ledger = removePendingWorkspace(ledger, sourceId, { workspaceId: fact.workspaceId, path: fact.path })
       updateWorkspaceEcho(ledger)
+      // 同一撤下也退掉位置意图：窗口内 create → delete 已无可摆放的行。
+      updatePlacement(removePendingPlacement(
+        echoStore.getSnapshot().placement,
+        sourceId,
+        { workspaceId: fact.workspaceId, path: fact.path },
+      ))
     })
   }, [updateWorkspaceEcho])
   useEffect(() => {
@@ -636,6 +708,13 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
         const swept = sweepPendingWorkspaces(echoStore.getSnapshot().workspace, Date.now())
         const reconciled = reconcilePendingWorkspaces(swept, sourceId, snapshot.workspaces)
         updateWorkspaceEcho(reconciled)
+      }
+      {
+        // 位置意图的权威收敛点：权威序把该行移离列表头部（重排落地 / 追加落地 / 用户拖走）
+        // 即退休；锚点消失同样退休。行尚未进权威列表时保留——它的工作还没开始。
+        const swept = sweepPendingPlacements(echoStore.getSnapshot().placement, Date.now())
+        const reconciled = reconcilePendingPlacements(swept, sourceId, snapshot.workspaces)
+        updatePlacement(reconciled)
       }
       // 会话回声的权威收敛点：挂载壳的 follow 基线把该会话**归属**到某工作区（成员位，
       // 含合成行）即退休；刻意只看成员位（只列出而无所属时退休会把行抛进未分组桶）。

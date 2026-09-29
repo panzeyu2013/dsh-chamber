@@ -34,7 +34,7 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   （`projectableCurrent`，05 §2.2.1），运行时 boot 期间自选的 blank 会话
   因此不入列表；失去 current 的 blank 行另有 450ms ghost 宽限期保住占位
   （06 §2.2 / 05 §2.1）；subagent 来源的子会话不进入导航列表
-  （`shared/derive.ts`）。
+  （`packages/dsh-chamber-client-core/src/derive.ts`）。
 - 已连接来源的聚合拉取失败时，以错误文本代替 workspace 列表呈现——绝不
   冒充"无工作区"；未连接来源只显示分组头 + 状态提示；全部来源断开时显示
   空态提示。
@@ -61,7 +61,7 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   会话原样恢复。**用户反馈**：来源头身份圆点已移除（身份由折叠
   字形 accent + 激活左内边线 + rail 点承担；连接状态点/转圈保留右端）。
 - 每个 workspace 组头图标（文件夹，或派生 worktree 的 git-branch 字形）带
-  各自的**确定性 accent 色**（`shared/derive.ts` 的 `workspaceAccentStyle`）：
+  各自的**确定性 accent 色**（`packages/dsh-chamber-client-core/src/derive.ts` 的 `workspaceAccentStyle`）：
   `(来源 id, 家族种子)` 哈希的黄金角色相散布 + 每 workspace 明度抖动
   （56/61/66%）的**柔和色板**（饱和度 34%，worktree 21%；用户
   反馈由原 62%/45% + 44–54% 明度柔化，来源 accent 同步为
@@ -75,10 +75,12 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 - 点击会话行 → `chamberBridge.requestOpenSession(sourceId, sessionId)`；
   App 层切到该来源的 shell 并打开会话。
 - 行操作（v1 最小集，走该来源自己的 unary wire 客户端
-  `shared/instance-api.ts`）**全部收在行菜单里**：会话 = 重命名/分叉/归档；
+  `packages/dsh-chamber-client-core/src/instance-api.ts`）**收在行菜单与行内按钮**：会话 = 行菜单的重命名/分叉/归档
+  + 行内悬停归档钮（design 06 §7）；
   真实 workspace = 行内 new-chat 字形新建会话钮（worktree 行也有）+ kebab 里的重命名/
   删除（仅非 worktree 行——派生 worktree 刻意无 kebab，OpenChamber parity）。
-  不再有第二个悬停按钮——会话行的归档是**菜单项**且走官方**两段式**：安静会话立即归档、
+  会话行的悬停簇 = kebab + **一个独立归档钮**（上游 `ArchiveSessionRowButton`，design 06 §7）；
+  归档行从不进入本投影，因此上游该钮的 unarchive 半个分支在本仓没有消费方。两处归档入口都走官方**两段式**：安静会话立即归档、
   无确认（归档只隐藏该行、从不触及会话日志——上游把安静归档排除在确认家族之外的同一理由）；
   宿主因该会话仍有活跃工作而拒绝（`workspace/session-active`）时才弹「停止并归档」确认，
   确认后带 `stopActivity` 重发，停止由宿主 provider 完成（design 24 §5）。
@@ -102,7 +104,7 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   Escape 监听、一次 Escape 关掉两层——这正是归档管理器自己拒绝第二层的理由。什么也没
   失去：每一层都可关闭（取消 / X / 遮罩 / Escape），被拒的控件在另一层消失的那一刻立即可用。
 - 行操作的可访问名带上它作用的**那一行**
-  （`action.newSession.aria` / `action.menu.workspace` / `action.menu.session`，
+  （`action.newSession.aria` / `action.menu.workspace` / `action.menu.session` / `action.archive.aria`，
   上游的 `{name}` 参数化形式）：一排只报「更多操作」的控件对 AT 等于没说。
   无标题会话在行内与可访问名里解析到同一个 `list.unnamed` 占位。
 - 行窗口是**双向披露**：还有隐藏行时条带给 `sessions.expand {n}`（上游文案），
@@ -123,7 +125,7 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   服务器路径）。
 - 点击非当前来源的分组头 → 切换活动 N-ctx 视图到该来源 shell（不打开
   会话，`chamberBridge.requestActivateSource`）；归档后会话立即从列表
-  消失（`archivedSessionIds` 过滤在 `shared/derive.ts` derive 层）。
+  消失（`archivedSessionIds` 过滤在 `packages/dsh-chamber-client-core/src/derive.ts` derive 层）。
 - 折叠 rail 为每个来源渲染一个**命名的可操作按钮**（官方 `Tooltip` +
   `aria-label`、当前来源 `aria-current`、**非当前**且不可激活的来源
   `aria-disabled`——当前来源同样不是激活目标，但它用 `aria-current` 标记；名称取
@@ -132,12 +134,14 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 
 ## 打开意图闸门、工作区回声与会话回声（design 05 §2.2.1）
 
-本包持有页面级打开意图槽（`shared/open-intent.ts`——与 `pending-click.ts` 同款
+本包驱动页面级打开意图槽（模块本体在 client-core）（`packages/dsh-chamber-client-core/src/open-intent.ts`——与 `pending-click.ts` 同款
 vite shared 单例纪律，因为目标实例自己的 ctx 也要读它）及其供 App 层消费的纯
-规则，工作区回声账本规则（`shared/workspace-echo.ts`，含位置锚点）与
-**唯一**上报点（`shared/workspace-mutations.ts`——应用内任何工作区变更都经它：
+规则，工作区回声账本规则（`packages/dsh-chamber-client-core/src/workspace-echo.ts`，含位置锚点）、
+pre-create 位置意图账本（`packages/dsh-chamber-client-core/src/workspace-placement.ts`——让新 worktree 行从它出现的
+第一帧就按在锚点后）与
+**唯一**上报点（`packages/dsh-chamber-client-core/src/workspace-mutations.ts`——应用内任何工作区变更都经它：
 侧栏对话框与 Git worktree 插件的 create/adopt/recovery 同路），以及会话回声账本
-（`shared/session-echo.ts`）与它自己的唯一出口（`shared/session-mutations.ts`）。
+（`packages/dsh-chamber-client-core/src/session-echo.ts`）与它自己的唯一出口（`packages/dsh-chamber-client-core/src/session-mutations.ts`）。
 由此有三个用户可见面：
 
 - **意图闸门**：某来源有在途 open 时，只有它的当前会话**就是**请求的那个
@@ -150,7 +154,10 @@ vite shared 单例纪律，因为目标实例自己的 ctx 也要读它）及其
   带来它：该行带真实宿主 id（**不带 `synthetic`**，故工作区级动作照常可用）、
   与同路径合成组相遇时原位替换后者，并在该来源 push 列出它后交由权威行接管
   （05 §2.2.1）。Git 创建 worktree 的那次事实带位置锚点（`afterWorkspaceId` = 其主
-  checkout），行因此落在主 checkout 之后而不是列表尾部；它的 git flag 由出口的
+  checkout），行因此落在主 checkout 之后而不是列表尾部。**挂载来源**上锚点单独来晚一步：
+  宿主 create 无条件 PREPEND，带该行的 push 在 create 回答之前就到——出口因此在
+  **wire 之前**先发一条**位置意图**（`reportWorkspacePlacement`，按请求路径键控、随回声升级
+  为宿主 id），投影从第一帧就把该行按在锚点后（05 §2.2.1）。它的 git flag 由出口的
   `beforePublish` 在**事实之前**写好，行因此生来就是 worktree 形态，不会先渲染成
   普通 workspace 再翻转；adopt 另带分支名标题提示，行生来就是最终标签。
   同一通道还承载撤销/改名两半：`workspace.delete` 成功后
@@ -165,7 +172,7 @@ vite shared 单例纪律，因为目标实例自己的 ctx 也要读它）及其
   **可能还不含该 id** 的 summaries store 整份替换聚合，30s unary 兜底的 merge 又保留
   被冻结的推送工作区成员位，于是新 id 最多只能作为未归属散落行出现——而官方临时
   blank 行不允许这样渲染。因此成功创建同时发布一条单向事实
-  （`shared/session-mutations.ts`：侧栏「+」/fork/archive 与 Git 插件的会话创建），
+  （`packages/dsh-chamber-client-core/src/session-mutations.ts`：侧栏「+」/fork/archive 与 Git 插件的会话创建），
   App 把**宿主 id** 记入渲染端账本并把它并入所属工作区（`withSessionEcho`：先按
   宿主 workspaceId、再按 canonical path），随后请求该来源的官方 session-list 刷新
   （仅挂载壳有这条 seam），并在权威成员位命名该 id 时立刻退休（挂载 push，或未挂载
@@ -211,7 +218,7 @@ vite shared 单例纪律，因为目标实例自己的 ctx 也要读它）及其
   `orderServersForDisplay` 应用（存储序优先、未知 id 跳过、未列出 id 按
   投影序尾随——新来源出现在列表底部直到被拖走）。
 - **视图偏好持久化（06 §3，2026-08 修订）**：折叠状态与未分组序存于单键
-  localStorage（`dsh-chamber.sidebar.v1`，`shared/view-prefs.ts`）之上的
+  localStorage（`dsh-chamber.sidebar.v1`，`packages/dsh-chamber-client-core/src/view-prefs.ts`）之上的
   **共享实时存储**——vite shared chunk 下所有 ctx 的侧边栏共享同一内存
   实例（`getViewPrefs`/`subscribeViewPrefs`/`updateViewPrefs`），写透
   localStorage + 通知全部订阅者，任一来源的折叠/未分组序变更实时反映到

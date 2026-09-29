@@ -15,6 +15,7 @@ import {
 } from '@dsh-chamber/dsh-chamber-client-core'
 import { GitActionError, gitActionErrorCode } from './action-error.ts'
 import { GitActionLedger } from './action-ledger.ts'
+import { workspaceAfterAnchor } from './placement.ts'
 import { SerializedRefreshes } from './refresh-flight.ts'
 import { GitWorktreeRpcError, gitWorktreeApi, isAmbiguousGitRpcFailure, isDeterministicGitRejection } from './git-api.ts'
 import { canTargetSession, findWorktree, removeBlockReason } from './git-facts.ts'
@@ -343,15 +344,47 @@ function decorateWorktreeWorkspace(
  *  workspace right after its main checkout (the registry PREPENDS by default),
  *  and the title derives from the branch (the basename can equal the main's).
  *  Flag + repo layout ride `beforePublish` instead. */
-/** The workspace that currently follows `mainWorkspaceId`: `insertBefore`
- *  anchors on the workspace that must FOLLOW the moved id, so anchoring on the
- *  main itself would land the worktree ABOVE it; read from the pre-refresh order. */
-function workspaceAfterMain(sourceId: string, mainWorkspaceId: string | undefined): string | undefined {
-  if (mainWorkspaceId === undefined) return undefined
-  const order = chamberBridge.getServers().find(server => server.id === sourceId)
-    ?.workspaces.filter(workspace => workspace.ungrouped !== true).map(workspace => workspace.id) ?? []
-  const mainIndex = order.indexOf(mainWorkspaceId)
-  return mainIndex !== -1 && mainIndex + 1 < order.length ? order[mainIndex + 1] : undefined
+/** 来源在发布投影里的 workspace id 序（合成"未分组"桶除外）。**读取窗口**：
+ *  这个序已经套用了回声与位置意图——它们把新行放在锚点后，而宿主此刻仍是
+ *  PREPEND 头部，所以调用方必须显式排除"正在被搬的那一行"（见 workspaceAfterMain）。
+ *  这也正是意图在 create 之前发布、而不是靠读序决定锚点的原因。 */
+function workspaceOrder(sourceId: string): string[] {
+  return chamberBridge.getServers().find(server => server.id === sourceId)
+    ?.workspaces
+    // 合成行（synthetic 的 cwd 派生分组）也在宿主 id 空间之外：拿它当 insertBefore 锚点会被宿主
+    // 当未知 id 处理（落点与投影分歧，且挂载首推时锚点即消失）。滤掉即退化为 append，与本意同址。
+    .filter(workspace => workspace.ungrouped !== true && workspace.synthetic !== true)
+    .map(workspace => workspace.id) ?? []
+}
+
+/** 作废事实（`reportWorkspacePlacementFailed`）能带的宿主 id：saga 死时若已学到 workspace id
+ *  就带上——恢复记录是唯一载体。realpath 拼写分歧下只按请求路径退不掉那条已被回声升级成宿主
+ *  路径的 id 键条目，行会被按在锚点后直到 TTL 才跳回（正是失败侧要消灭的迟到一跳）。 */
+function placementVoidWorkspaceId(error: unknown): string | undefined {
+  const recovery = error instanceof GitSagaError ? error.recovery : undefined
+  if (recovery === undefined) return undefined
+  switch (recovery.kind) {
+    case 'session-create':
+    case 'workspace-adopt':
+    case 'rollback-create':
+      return recovery.workspaceId
+    default:
+      return undefined
+  }
+}
+
+/** The workspace that must FOLLOW the moved row: `insertBefore` anchors on the
+ *  workspace that must follow the moved id, so anchoring on the main itself would
+ *  land the worktree ABOVE it; read from the pre-refresh order.
+ *  `movedWorkspaceId` is skipped on purpose: the published projection ALREADY
+ *  renders the new row right after its anchor (echo + placement intent) while the
+ *  host still has it prepended, so anchoring on it would send
+ *  `insertBefore(id, id)` — which the host answers with a silent no-op
+ *  (vendor workspace/src/index.ts: `if (beforeId === id) return state.workspaceIds`).
+ *  The registry order would never converge, the placement intent would stay pinned
+ *  until its TTL, and the on-disk order would keep the worktree above its main. */
+function workspaceAfterMain(sourceId: string, mainWorkspaceId: string | undefined, movedWorkspaceId: string): string | undefined {
+  return workspaceAfterAnchor(workspaceOrder(sourceId), mainWorkspaceId, movedWorkspaceId)
 }
 
 async function positionAdoptedWorkspace(
@@ -365,10 +398,16 @@ async function positionAdoptedWorkspace(
     await insertWorkspaceBefore(
       getInstanceClient(sourceId),
       result.workspaceId,
-      workspaceAfterMain(sourceId, mainWorkspaceId),
+      workspaceAfterMain(sourceId, mainWorkspaceId, result.workspaceId),
     )
   } catch (error) {
     console.error('[dsh-chamber] Git adopt workspace reposition failed (best-effort):', error)
+    // 位置意图就此作废：宿主序（PREPEND）已是最终序，继续按住会让行停在锚点后直到 TTL 才跳回。
+    chamberBridge.reportWorkspacePlacementFailed({
+      sourceId,
+      workspaceId: result.workspaceId,
+      path: result.path,
+    })
   }
   if (branch === null) return
   // AWAITED (best-effort): the title must be in place before the caller's refresh.
@@ -427,9 +466,16 @@ async function performCreateSaga(
     // so the order is correct before the refresh; best-effort (never rolls back).
     if (sourceWorkspaceId !== undefined) {
       try {
-        await insertWorkspaceBefore(getInstanceClient(sourceId), result.workspaceId, workspaceAfterMain(sourceId, sourceWorkspaceId))
+        await insertWorkspaceBefore(getInstanceClient(sourceId), result.workspaceId, workspaceAfterMain(sourceId, sourceWorkspaceId, result.workspaceId))
       } catch (error) {
         console.error('[dsh-chamber] Git create workspace reposition failed (best-effort):', error)
+        // 同上：作废位置意图（只发失败侧；成功侧靠"行已离开列表头部"的位置判据退休，不会与权威
+        // push 抢时序）。
+        chamberBridge.reportWorkspacePlacementFailed({
+          sourceId,
+          workspaceId: result.workspaceId,
+          path: result.path,
+        })
       }
     }
     finishMutation(sourceId)
@@ -437,6 +483,18 @@ async function performCreateSaga(
     if (commitSession) requestOpenSession(sourceId, result.sessionId)
     return result.sessionId
   } catch (error) {
+    // saga 在重排之前就放弃 ⇒ 宿主的 PREPEND 序就是最终序：位置意图必须立刻作废，否则行会停在
+    // 锚点后直到 TTL 才跳回（迟到一跳）。create 可能根本没提交 ⇒ 请求路径是基本键；但回声升级
+    // 已把条目改键成宿主 realpath（拼写可与请求路径不同）⇒ 恢复记录带得出宿主 id 时一并带上
+    // （adopt 中止 catch 同款），否则拼写分歧下只按路径退不掉那条已升级的意图。
+    if (sourceWorkspaceId !== undefined) {
+      const workspaceId = placementVoidWorkspaceId(error)
+      chamberBridge.reportWorkspacePlacementFailed({
+        sourceId,
+        path: preview.targetPath,
+        ...(workspaceId === undefined ? {} : { workspaceId }),
+      })
+    }
     if (error instanceof GitSagaError) {
       setRecovery(sourceId, recoveryForFailure(error, previousRecovery))
       if (error.refreshNeeded || previousRecovery !== undefined) finishMutation(sourceId)
@@ -458,19 +516,28 @@ export async function createFromPreview(
   ))
 }
 
-/** adopt 的宿主事实：位置锚点（主 checkout 的 workspace id）+ 仓库身份；仓库/
- *  主行未知时锚点为空对象 = 追加到尾部（不丢行）。 */
+/** adopt 的宿主事实：位置锚点（主 checkout 的 workspace id）+ 仓库身份。 */
 interface AdoptPlacement {
   placement: WorkspaceCreationPlacement
   repoKey?: string
   mainWorkspaceId?: string
 }
 
-function adoptPlacementOf(snapshot: GitWorktreeSnapshot, path: string): AdoptPlacement {
+/** 主 checkout 未注册时的锚点：当前**最后一个** workspace——宿主对无锚 adopt 的落点就是
+ *  尾部（`insertBefore(id, undefined)` = append），所以"排在最后一个之后"与宿主收敛到同
+ *  一处，新行不再"从最顶端入场再滑到尾部"。create 之前读取，此时新行还不可能在列表里。 */
+function lastWorkspaceId(sourceId: string): string | undefined {
+  const order = workspaceOrder(sourceId)
+  return order.length === 0 ? undefined : order[order.length - 1]
+}
+
+function adoptPlacementOf(sourceId: string, snapshot: GitWorktreeSnapshot, path: string): AdoptPlacement {
   const repo = snapshot.repos.find(candidate => candidate.worktrees.some(worktree => worktree.path === path))
   const mainWorkspaceId = repo?.worktrees.find(worktree => worktree.isMain)?.workspaceId ?? undefined
+  // 主行已注册 ⇒ 紧跟主 checkout；主行未注册（未注册块正是为这类仓库存在）⇒ 尾部锚点。
+  const anchor = mainWorkspaceId ?? lastWorkspaceId(sourceId)
   return {
-    placement: mainWorkspaceId === undefined ? {} : { afterWorkspaceId: mainWorkspaceId },
+    placement: anchor === undefined ? {} : { afterWorkspaceId: anchor },
     ...(repo === undefined ? {} : { repoKey: repo.repoId }),
     ...(mainWorkspaceId === undefined ? {} : { mainWorkspaceId }),
   }
@@ -490,7 +557,7 @@ export async function createSessionHere(sourceId: string, path: string): Promise
       throw new GitActionError('fresh-facts-unavailable', 'The latest Git worktree facts are unavailable', fresh.sourceError)
     }
     // 锚点在守卫之后、闭包之外解析（闭包内 `fresh.snapshot` 重新放宽为 `| undefined`）。
-    const adopt = adoptPlacementOf(fresh.snapshot, path)
+    const adopt = adoptPlacementOf(sourceId, fresh.snapshot, path)
     const known = fresh.snapshot.repos.flatMap(repo => repo.worktrees).find(worktree => worktree.path === path)
     if (known === undefined) throw new GitActionError('worktree-not-found', 'The target worktree is not in the current source topology')
     // Re-check health against the FRESH snapshot: never target a vanished/unhealthy path.
@@ -525,6 +592,17 @@ export async function createSessionHere(sourceId: string, path: string): Promise
       requestOpenSession(sourceId, result.sessionId)
       return result.sessionId
     } catch (error) {
+      // adopt 的 saga 在**重排之前**中止（workspace 已建、session.create 失败）⇒ 没有 insertBefore
+      // 会再来，宿主序（PREPEND / 尾部 append）就是最终序：位置意图立刻作废，否则行会停在锚点后
+      // 直到 TTL 才跳回。宿主 id 只在恢复记录带得出来时给（session-create 变体），否则按请求路径作键。
+      if (adopt.placement.afterWorkspaceId !== undefined) {
+        const workspaceId = placementVoidWorkspaceId(error)
+        chamberBridge.reportWorkspacePlacementFailed({
+          sourceId,
+          path,
+          ...(workspaceId === undefined ? {} : { workspaceId }),
+        })
+      }
       if (error instanceof GitSagaError) {
         setRecovery(sourceId, recoveryForFailure(error))
         // An ambiguous adopt left workspace/session facts the aggregate must re-read.

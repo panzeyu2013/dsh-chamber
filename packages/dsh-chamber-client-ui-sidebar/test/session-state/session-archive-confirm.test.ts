@@ -73,7 +73,12 @@ test('wiring lock: the confirm phase resends with stopActivity; only a decodable
   assert.ok(layers !== null, 'the layer gate must be one synchronous ref')
   assert.doesNotMatch(layers[1], /:\s*true/u)
   assert.ok(dialogs.includes('const open = openLayersRef.current'))
-  assert.ok(dialogs.includes('openLayersRef.current.sessionArchive = true'))
+  assert.ok(dialogs.includes('open.sessionArchive = true'))
   assert.ok(dialogs.includes('openLayersRef.current.sessionArchive = false'))
+  // 跨行换靶保护：另一行的拒绝落在同一次 unary 往返窗内时，第二次武装必须被拒——否则已武装
+  // 目标被静默覆盖（连同它的 pending/error），被覆盖那行的拒绝既无行错误也无提示。
+  assert.ok(dialogs.includes('open.archiveTarget !== null && open.archiveTarget !== request.sessionId'))
+  assert.ok(dialogs.includes('open.archiveTarget === request.sessionId && open.archivePending'))
+  assert.ok(dialogs.includes('open.archiveTarget = request.sessionId'))
 })
 

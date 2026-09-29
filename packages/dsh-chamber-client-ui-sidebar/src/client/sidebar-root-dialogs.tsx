@@ -58,14 +58,22 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
    * 关闭，关闭后被拒控件立即可用（归档确认的拒绝由调用方回退成原始失败上报，见 opener）。
    * 刻意用 hoisted `function`：各 opener 与下方 arm 处理器共用一条规则（函数声明提升），
    * 但它判定的是 `openLayersRef` 而不是渲染闭包里的 state：
-   * `openArchiveConfirm` 在行菜单首调失败后（最长一个 unary 超时）才被调用，它所在闭包里的
+   * `openArchiveConfirm` 在任一行级归档入口首调失败后（最长一个 unary 超时）才被调用，它所在闭包里的
    * state 早已过期——期间键盘用户可在任一 mask 后从常驻 orphan 徽标武装删除确认，或第二个会话的
    * 首调先拒绝并武装。过期闭包看到「没有别的层」就会叠出第二层（各注册一个 Escape，一次 Esc
    * 双关），或在 `setArchiveConfirm` 上静默覆盖前一个待确认目标（连同它的 pending/error 一起
    * 清掉）。因此闸门读这个同步权威：打开方在武装的同一 tick 声明，关闭方同步释放，每次提交后再
    * 由 state 对齐兜底；state 只负责渲染。
    */
-  const openLayersRef = useRef({ delete: false, archive: false, browser: false, sessionArchive: false })
+  const openLayersRef = useRef({
+    delete: false,
+    archive: false,
+    browser: false,
+    sessionArchive: false,
+    /** 本层已武装的会话（同步权威）：跨行换靶与"第二段在飞"两道保护都读它，绝不读过期闭包里的 state。 */
+    archiveTarget: null as string | null,
+    archivePending: false,
+  })
 
   function otherChamberDialogOpen(self: 'delete' | 'archive' | 'browser' | 'sessionArchive'): boolean {
     const open = openLayersRef.current
@@ -148,7 +156,7 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
   /**
    * ARMED 归档活动确认：**唯一**会先问一次的归档场合——宿主以
    * `workspace/session-active` 拒绝，details 列出将被停止的工作（回合/子代理后代/
-   * 后台任务/定时提醒）。行菜单在首调失败后武装它，确认才发第二调（stopActivity）。
+   * 后台任务/定时提醒）。任一行级归档入口在首调失败后武装它，确认才发第二调（stopActivity）。
    * 状态放在 SHELL（同删除确认）：打开它的行可能在确认仍开着时卸载/断连，行级 rowErrors
    * 已无表面。
    */
@@ -183,15 +191,22 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
   })
 
   /**
-   * 行菜单首调失败（可解码的 session-active 拒绝）后武装。返回 false = 单层规则拒绝了这次
-   * 武装（另一个 chamber 对话框在屏；行菜单此时本不可达但键盘可达）：调用方据此保留原始
+   * 行级归档入口首调失败（可解码的 session-active 拒绝）后武装。返回 false = 单层规则拒绝了这次
+   * 武装（另一个 chamber 对话框在屏；或同一层已为另一个会话武装——跨行换靶）：调用方据此保留原始
    * 失败上报，绝不静默吞掉用户动作。
    */
   const openArchiveConfirm = (request: SessionArchiveConfirmRequest): boolean => {
     if (otherChamberDialogOpen('sessionArchive')) return false
+    const open = openLayersRef.current
+    // 跨行换靶保护：已为**另一个**会话武装时拒绝这次武装——否则后到的拒绝会静默覆盖已武装目标
+    // 并清掉它的 pending/error（不同行两次点击落在同一次 unary 往返窗内即可达，远程/SSH 源常见）。
+    if (open.sessionArchive && open.archiveTarget !== null && open.archiveTarget !== request.sessionId) return false
+    // 同一目标、第二段在飞时同样不重武装（否则会清掉 pending 闩、放行并发的第二次 stopActivity）。
+    if (open.sessionArchive && open.archiveTarget === request.sessionId && open.archivePending) return false
     // 同步声明本层：同一 tick 里的第二个拒绝（或紧随其后的其它 opener）必须看到它，
     // 而不是等下一次提交后由 state 告诉它们。
-    openLayersRef.current.sessionArchive = true
+    open.sessionArchive = true
+    open.archiveTarget = request.sessionId
     archiveConfirmOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     // 失败/在飞属于它自己的尝试：武装新目标绝不能继承上一轮的状态。
     setArchiveConfirmError(null)
@@ -203,6 +218,8 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
   /** 无条件关闭（确认路径已在同一批清掉 pending 标志）；连同显示过的失败一起丢弃。 */
   const dismissArchiveConfirm = (): void => {
     openLayersRef.current.sessionArchive = false
+    openLayersRef.current.archiveTarget = null
+    openLayersRef.current.archivePending = false
     setArchiveConfirm(null)
     setArchiveConfirmError(null)
     requestAnimationFrame(() => {
@@ -227,7 +244,8 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
     if (target === null || archiveConfirmPending) return
     setArchiveConfirmPending(true)
     setArchiveConfirmError(null)
-    void runActionWithOutcome(`${target.sourceId}/session/${target.sessionId}/archive`, async () => {
+    openLayersRef.current.archivePending = true
+    void runActionWithOutcome(`${target.sourceId}/${'session'}/${target.sessionId}/archive`, async () => {
       try {
         await archiveSessionForSource(target.sourceId, target.sessionId, { stopActivity: true })
         chamberBridge.requestRefresh(target.sourceId)
@@ -236,6 +254,7 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
         throw reason
       }
     }).then((ok) => {
+      openLayersRef.current.archivePending = false
       setArchiveConfirmPending(false)
       if (ok) dismissArchiveConfirm()
     })

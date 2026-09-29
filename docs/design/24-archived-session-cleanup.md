@@ -155,7 +155,7 @@ archiveCleanup/purge({sessionIds?, force?, protectSessionIds?}) → 同上
   「**已加载（idle/attached）**」子树，**running 永远拒绝**（含 force）。改动全落在**删除侧**，
   且是「**先停止、再删除**」，不放松任何安全守卫判据。结果口径按 `skippedRunning`/
   `skippedLoaded`/`forcedLoaded` 拆分（定义见上方 wire 注释）。**归档准入改为官方两段式**
-  （哪些会话被归档、级联与 wire 面保持原样；交互形态 = 归档动词在会话行 kebab 菜单，安静会话
+  （哪些会话被归档、级联与 wire 面保持原样；交互形态 = 归档动词的任一行级入口（行菜单项 / 行内悬停钮，design 06 §7），安静会话
   直接归档、无确认，宿主因仍有活跃工作而拒绝时才弹「停止并归档」确认——见 design 05 §2.2 /
   06 §7 与 §5「归档即终止」）。
 - **常驻保留**：官方会话列表 live 优先（`sessionQuery.listSessions()` =

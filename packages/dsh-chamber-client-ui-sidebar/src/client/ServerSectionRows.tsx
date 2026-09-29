@@ -13,7 +13,7 @@ import { Fragment, memo, useMemo, useRef } from 'react'
 import clsx from 'clsx'
 import {
   IconArchiveOutlineRegular, IconBranchOutlineRegular, IconEditOutlineRegular, IconEllipsisOutlineRegular, Menu,
-  type MenuItem,
+  Tooltip, type MenuItem,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChamberServerAggregate, ChamberServerWorkspace } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { relativeTimeBucket } from '@dsh-chamber/dsh-chamber-client-core/derive'
@@ -113,7 +113,7 @@ const SessionRow = memo(function SessionRow({
       icon: <IconBranchOutlineRegular size={14} />,
     },
     {
-    // 归档动词只在这里的行菜单：安静会话直接归档（只隐藏行，
+    // 归档动词的两个出口之一（行菜单项；同文件另有行内悬停钮）：安静会话直接归档（只隐藏行，
     // 不触碰会话日志）；宿主因仍有活跃工作而拒绝时才走两段式——
     // 行菜单武装确认层，确认后带 stopActivity 重发。字形尺寸是对
     // compact 槽位的刻意光学例外：compact 把图标槽缩到 14px，但 20
@@ -301,6 +301,30 @@ const SessionRow = memo(function SessionRow({
             </button>
           )}
         />
+        {/* 独立归档钮：上游 `session-actions/ArchiveSession.tsx` 的
+            `ArchiveSessionRowButton`（注册进 `sidebar.workspaces.session.row.action`，
+            order 100）——同一动作簇里 kebab 之后的第二个成员，tooltip 用上游
+            `actions.archive`、无障碍名按本仓行级政策参数化行名 `action.archive.aria`（上游同座席用泛化名——有意分歧，
+      design 06 §7；行菜单项仍是 `menu.archiveSession`）。
+            本仓不渲染官方座席，故按该文件逐字移植按钮形态（类名换成本仓
+            `.actionIcon`）。上游的 unarchive 半个分支在本仓不可达：归档行根本不进
+            导航投影（`derive.ts` 的 sessionVisible），恢复由归档管理器承担，
+            因此这里只保留归档方向，不引入死分支。 */}
+        <Tooltip label={t('actions.archive')} side="bottom" align="end" delayMs={500}>
+          <button
+            type="button"
+            className={cc.actionIcon}
+            aria-label={t('action.archive.aria', { name: session.displayTitle })}
+            onClick={() => {
+              // 本仓约定（上游该钮的 markup 无此门）：拖拽尾随 click 入口即生效，
+              // 动作类控件必须自查——否则拖拽子项结束的一击会直接发起归档。
+              if (suppressClickRef.current) return
+              onArchiveSession(server, session.id, session.displayTitle)
+            }}
+          >
+            <IconArchiveOutlineRegular size={14} />
+          </button>
+        </Tooltip>
       </span>
       )}
       {/* 尾部状态槽：行右缘的圆环/圆点。hover 时行动作簇换入、本槽换出

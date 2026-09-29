@@ -26,8 +26,9 @@
    rows and workspace groups, 2px rule, 06 §2.2), hover icon actions
    (workspace header: `+` new-session + three-dot kebab menu with
    rename/delete; session row: three-dot kebab menu with
-   rename/fork/archive — archive lives IN
-   that menu, so no dedicated archive button exists), inline rename, the
+   rename/fork/archive plus the dedicated archive icon button that now sits
+   after that kebab — upstream `ArchiveSessionRowButton`'s row-action seat,
+   06 §7; the same verb also stays in the menu), inline rename, the
    snapshot-fetch error line
    and inline failure text. Rides the official shell geometry (SidebarRoot
    column, fold states); this sheet owns only the region content. */
@@ -988,8 +989,8 @@
      a deliberate choice (05 §2). */
   padding: 3px 4px 3px 26px;
   /* FIXED height (26px = 3px pad + 20px actions + 3px pad, border-box): the
-     hover swap (state slot -> the row's kebab action cluster, 10px -> 20px
-     content) must NOT change the row height. A content-sized row grows
+     hover swap (state slot -> the row's action cluster, two 20px buttons + 4px gap =
+     44px) must NOT change the row height. A content-sized row grows
      2px on hover (24 -> 26); under a moving pointer the engine hit-tests
      the row's hover against a stale frame while the element under the
      cursor is already re-laid-out, so the row's :hover activates 1-3px
@@ -1109,9 +1110,10 @@
    (or keeping a kebab menu open, .rowActionsVisible) swaps them IN while
    the trailing state slot is swapped OUT — a
    true replacement, not a fade-over-an-invisible-gap.
-   Reveal is pointer-safe: the occupant/action reveal keys on
-   row hover, kebab-open and KEYBOARD focus (:has(:focus-visible)) — never
-   on plain :focus. Chromium focuses a clicked button on mousedown, so a
+   Reveal is pointer-safe: workspace-header reveal keys on header hover,
+   kebab-open and KEYBOARD focus (:has(:focus-visible)) — never on plain
+   :focus. SESSION ROWS are pointer-only: the row itself has no focus seat
+   (no tabIndex/roving), so the row cluster has the :hover half only. Chromium focuses a clicked button on mousedown, so a
    :focus-within reveal would keep the hover-revealed content (git occupant
    actions, row actions) visible after the pointer leaves a just-clicked
    row — a folded git row then showed its count AND a stray branch/delete
@@ -1128,8 +1130,9 @@
      `Rows .rowActions` 12px would therefore fall INSIDE one
      cluster and split it 4px + 12px — the kebab reads as detached
      (「+ 与省略号之间的间隔明显更大」). The cluster takes the header /
-     sheet icon rhythm, and the session row's cluster holds a single kebab,
-     where any gap is inert. The state slot / count badge these actions replace
+     sheet icon rhythm; the session row's cluster has held TWO members since the
+     dedicated archive button joined the kebab (06 §7), so its 4px is a real
+     between-buttons gap — same rhythm, no second value. The state slot these actions replace
      are swapped out while the cluster is visible, so the gap never competes
      with them. (`.headerGit` / `.sourceActions` are NOT party to this value:
      they keep their 2px.) */
@@ -1180,8 +1183,8 @@
 }
 
 /* Icon action button (the workspace new-session control, the three-dot kebab
-   trigger — the dedicated archive verb rides the session row's kebab menu):
-   20px hit box. Glyph sizes differ per icon — the kebab is the official 16px
+   trigger, and the session row's dedicated archive button — upstream
+   ArchiveSessionRowButton): 20px hit box. Glyph sizes differ per icon — the kebab is the official 16px
    ellipsis, the new-session control draws the official new-chat artwork at
    its 16px default (`IconNewChatOutlineRegular`, upstream’s own glyph on this
    seat). The full reset (appearance/

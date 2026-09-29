@@ -15,6 +15,7 @@ import {
   withPendingArchives,
   withSessionEcho,
   withWorkspaceEcho,
+  withWorkspacePlacements,
   type ChamberServerAggregate,
   type InstanceAggregate,
   type InstanceRuntimeReport,
@@ -24,6 +25,7 @@ import {
   type SessionArchiveLedger,
   type SessionEchoLedger,
   type WorkspaceEchoLedger,
+  type WorkspacePlacementLedger,
 } from '@dsh-chamber/dsh-chamber-client-core'
 import type { ConnectionSummary, HealthResponse } from '../api.ts'
 import { isFactsUsable, type SessionFactsRow, type SessionFactsSnapshot } from '../session-facts-source.ts'
@@ -148,6 +150,10 @@ export function deriveServers(
   sessionFacts: Record<string, SessionFactsSnapshot | undefined>,
   /** 可选按来源投影缓存（App 的 useServerProjectionCaches 持有）；不传即逐次全量派生。 */
   cache?: ServerProjectionCache,
+  // 工作区位置意图账本（client-core workspace-placement.ts）：与回声同一汇合点并入投影，
+  // 把宿主 create 短暂渲染在列表头部的行按在锚点后。与 sessionFacts 同理追加在参数表末尾，
+  // 不重排既有参数（接线锁按文本锚点钉 current 投影）。
+  workspacePlacements?: WorkspacePlacementLedger,
 ): ChamberServerAggregate[] {
   const servers: ChamberServerAggregate[] = []
   const liveIds = new Set<string>()
@@ -205,6 +211,7 @@ export function deriveServers(
       hostFacts[id] ?? null, pluginDiagnostics[id] ?? null, shellStates[id] ?? null,
       managedRuntime[id] ?? null, openIntents[id] ?? null,
       workspaceEcho[id] ?? null, sessionEcho[id] ?? null, sessionArchive[id] ?? null,
+      workspacePlacements?.[id] ?? null,
       activeViewId, locale,
     ]
     if (cache !== undefined) {
@@ -242,14 +249,19 @@ export function deriveServers(
       // chamber (design 05 §2.2 revision): the workspace-creation echo
       // rides the SAME projection pass — one choke point for every workspace
       // row (derived or echoed), so the echo needs no second copy inside the
-      // aggregate. `withWorkspaceEcho` is identity-preserving for an absent or
-      // empty ledger, so it adds nothing to the derive output.
+      // aggregate. `withWorkspaceEcho` and `withWorkspacePlacements` are
+      // identity-preserving for an absent or empty ledger, so they add nothing to
+      // the derive output.
       workspaces = deriveServerWorkspaces(
         // 顺序是契约：①归档墓碑先把本页刚归档的 id 并进归档集（可见性规则只认这个
-        // 字段，回声行也一并被它过滤）；②工作区回声补齐可能刚建的工作区行；③会话
-        // 回声再按 workspaceId/路径把新建的会话挂进那一行。三步都只做纯投影。
+        // 字段，回声行也一并被它过滤）；②工作区回声补齐可能刚建的工作区行；③位置意图
+        // 只搬动**权威行**（不造行），把宿主 create 短暂渲染在列表头部的行按回锚点后；
+        // ④会话回声再按 workspaceId/路径把新建的会话挂进那一行。四步都只做纯投影。
         withSessionEcho(
-          withWorkspaceEcho(withPendingArchives(aggregate, sessionArchive[id]), workspaceEcho[id]),
+          withWorkspacePlacements(
+            withWorkspaceEcho(withPendingArchives(aggregate, sessionArchive[id]), workspaceEcho[id]),
+            workspacePlacements?.[id],
+          ),
           sessionEcho[id],
         ),
         id,

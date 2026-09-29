@@ -1,7 +1,14 @@
 /**
- * Echo ledgers as ONE store. Three optimistic-projection ledgers the App keeps
+ * Echo ledgers as ONE store. Four optimistic-projection ledgers the App keeps
  * while an authoritative view has not caught up:
  *
+ * - placement: the workspace-creation PLACEMENT INTENT — the pre-create half of
+ *   the workspace echo (client-core workspace-placement.ts). The host create
+ *   prepends into the registry order and takes no position, so on a mounted
+ *   source the authoritative push renders a new worktree at the list HEAD before
+ *   the create (and with it any id-keyed echo) exists; this ledger holds the row
+ *   at its anchor from that first frame and retires as soon as the host order
+ *   moves it off the head.
  * - workspaces: a workspace created through the sidebar's unary client may be
  *   structurally invisible until that source is mounted again (unmounted
  *   sources project workspaces from session cwd, so a new empty workspace has
@@ -34,9 +41,11 @@ import type {
   SessionArchiveLedger,
   SessionEchoLedger,
   WorkspaceEchoLedger,
+  WorkspacePlacementLedger,
 } from '@dsh-chamber/dsh-chamber-client-core'
 
 export interface EchoSnapshot {
+  placement: WorkspacePlacementLedger
   workspace: WorkspaceEchoLedger
   session: SessionEchoLedger
   archive: SessionArchiveLedger
@@ -46,22 +55,20 @@ export interface EchoStore {
   subscribe(listener: () => void): () => void
   /** Synchronous latest snapshot for event callbacks. */
   getSnapshot(): EchoSnapshot
+  updatePlacement(next: WorkspacePlacementLedger): void
   updateWorkspace(next: WorkspaceEchoLedger): void
   updateSession(next: SessionEchoLedger): void
   updateArchive(next: SessionArchiveLedger): void
 }
 
-export function createEchoStore(seed?: Partial<EchoSnapshot>): EchoStore {
-  let snapshot: EchoSnapshot = {
-    workspace: seed?.workspace ?? {},
-    session: seed?.session ?? {},
-    archive: seed?.archive ?? {},
-  }
+export function createEchoStore(): EchoStore {
+  let snapshot: EchoSnapshot = { placement: {}, workspace: {}, session: {}, archive: {} }
   const listeners = createListenerSet()
   const emit = (next: Partial<EchoSnapshot>): void => {
     const merged = { ...snapshot, ...next }
     if (
-      merged.workspace === snapshot.workspace
+      merged.placement === snapshot.placement
+      && merged.workspace === snapshot.workspace
       && merged.session === snapshot.session
       && merged.archive === snapshot.archive
     ) return
@@ -71,6 +78,7 @@ export function createEchoStore(seed?: Partial<EchoSnapshot>): EchoStore {
   return {
     subscribe: listeners.subscribe,
     getSnapshot: () => snapshot,
+    updatePlacement(next) { emit({ placement: next }) },
     updateWorkspace(next) { emit({ workspace: next }) },
     updateSession(next) { emit({ session: next }) },
     updateArchive(next) { emit({ archive: next }) },

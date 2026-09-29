@@ -13,6 +13,7 @@ import {
   serversProjectionSignature,
   type ChamberServerAggregate,
   type InstanceAggregate,
+  type WorkspacePlacementLedger,
 } from '@dsh-chamber/dsh-chamber-client-core'
 import { createServerProjectionCache, deriveServers, type ServerProjectionCache } from '../../src/host/servers.ts'
 import { sourceIdForInstance } from '../../src/transport-source.ts'
@@ -105,6 +106,34 @@ test('projection cache: TTL expiry recomputes even when every input is identical
   assert.notEqual(second[1], first[1])
   assert.deepEqual(second.map(server => server.workspaces), first.map(server => server.workspaces),
     'fresh objects, same derived rows')
+})
+
+test('projection cache: the placement ledger is a cache-key component', () => {
+  // 位置意图只改**投影**（把 create-prepend 的头部行搬到锚点后）：账本变化必须让该来源重算，
+  // 否则缓存会把旧序当作"输入没变"复用（新参数 workspacePlacements 的键分量回归锁）。
+  const cache = createServerProjectionCache()
+  const head: InstanceAggregate = {
+    state: 'ok', error: null, archiveSetKnown: true, archivedSessionIds: [],
+    workspaces: [
+      { workspaceId: 'w2', path: '/w2', title: 'WT', sessionIds: [], createdAt: '', updatedAt: '' },
+      { workspaceId: 'w1', path: '/w1', title: 'Main', sessionIds: [], createdAt: '', updatedAt: '' },
+    ],
+    sessions: [],
+  }
+  const deriveWith = (aggregates: Record<string, InstanceAggregate>, placements?: WorkspacePlacementLedger) =>
+    deriveServers(READY_HEALTH, [], [], {}, aggregates,
+      {}, {}, {}, 'local', {}, {}, {}, {}, {}, {}, {}, 'zh', {}, cache, placements)
+  const placement: WorkspacePlacementLedger = {
+    local: [{ path: '/w2', afterWorkspaceId: 'w1', at: 1 }],
+  }
+  const withoutIntent = deriveWith({ local: head })
+  assert.deepEqual(withoutIntent[0].workspaces.map(workspace => workspace.id), ['w2', 'w1'],
+    'authority order is the create-prepend transient')
+  const withIntent = deriveWith({ local: head }, placement)
+  assert.notEqual(withIntent[0], withoutIntent[0], 'a ledger-only change is not a cache hit')
+  assert.deepEqual(withIntent[0].workspaces.map(workspace => workspace.id), ['w1', 'w2'])
+  // 账本身份不变 ⇒ 缓存命中（不因每次渲染重建账本数组而抖动）。
+  assert.equal(deriveWith({ local: head }, placement)[0], withIntent[0])
 })
 
 test('projection cache: a removed source releases its entry', () => {
