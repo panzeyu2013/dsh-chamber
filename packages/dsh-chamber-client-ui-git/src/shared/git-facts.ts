@@ -42,6 +42,29 @@ export function findWorktree(
 }
 
 /**
+ * The snapshot whose facts a refresh round PUBLISHES.
+ *
+ * A failed round that came back empty (deadline / git-unavailable) must not erase the
+ * last complete topology: the previous snapshot stays effective, so branch chips, fold
+ * boundaries and drag anchors do not flicker. Its path ERRORS, however, are fresh and
+ * topology-independent host verdicts (`path-unavailable` / `workspace-path-failed`) —
+ * the very projection the sidebar's orphan badge and cleanup entry ride on. Dropping
+ * them would hide a workspace whose path just vanished until some later round succeeds,
+ * so the stale window keeps the previous repos and takes this round's errors when it has
+ * any. A round WITHOUT a source error, or with repos present, always replaces wholesale
+ * (fresh progress beats stale truth).
+ */
+export function effectiveSnapshot(
+  previous: GitWorktreeSnapshot | undefined,
+  snapshot: GitWorktreeSnapshot,
+): GitWorktreeSnapshot {
+  if (previous === undefined) return snapshot
+  if (snapshot.sourceError === undefined || snapshot.repos.length > 0) return snapshot
+  if (snapshot.errors.length === 0) return previous
+  return { ...previous, errors: snapshot.errors }
+}
+
+/**
  * Base-ref picker options for the create dialog: the host's branch list
  * (`git show-ref --heads`) when non-empty, otherwise the selected repository's
  * worktree branches, deduplicated in row order.

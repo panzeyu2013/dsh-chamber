@@ -18,7 +18,7 @@ import { GitActionLedger } from './action-ledger.ts'
 import { workspaceAfterAnchor } from './placement.ts'
 import { SerializedRefreshes } from './refresh-flight.ts'
 import { GitWorktreeRpcError, gitWorktreeApi, isAmbiguousGitRpcFailure, isDeterministicGitRejection } from './git-api.ts'
-import { canTargetSession, findWorktree, removeBlockReason } from './git-facts.ts'
+import { canTargetSession, effectiveSnapshot, findWorktree, removeBlockReason } from './git-facts.ts'
 // Hidden-tab polling gate + injectable visibility face (dependency-free).
 import { isPollEligible, visibilityEvents } from './visibility-gate.ts'
 import {
@@ -246,14 +246,16 @@ async function beginRefresh(sourceId: string): Promise<GitSourceState> {
     // previous snapshot visibly stale beside the explicit error; a PARTIAL result
     // (repos present) replaces it — fresh progress beats stale truth.
     const previous = states.get(sourceId)?.snapshot
-    const staleEmpty = snapshot.sourceError !== undefined && snapshot.repos.length === 0 && previous !== undefined
     // A deadline-stale snapshot must not clear the still-valid previous flags
-    // (badges/drag boundaries would vanish) — publish the EFFECTIVE snapshot.
-    publishWorkspaceGitFlags(sourceId, staleEmpty ? previous : snapshot, previous)
+    // (badges/drag boundaries would vanish) — publish the EFFECTIVE snapshot, which
+    // still merges this round's FRESH path errors: a workspace whose path just
+    // vanished must keep its orphan projection (see effectiveSnapshot).
+    const effective = effectiveSnapshot(previous, snapshot)
+    publishWorkspaceGitFlags(sourceId, effective, previous)
     return patchSource(sourceId, {
       connected: true,
       status: snapshot.sourceError === undefined ? 'ready' : 'error',
-      snapshot: staleEmpty ? previous : snapshot,
+      snapshot: effective,
       sourceError: snapshot.sourceError,
       updatedAt: Date.now(),
     })

@@ -23,6 +23,7 @@ const GROUPS = {
   snapshot: [
     'test/snapshot/snapshot-facts.test.ts',
     'test/snapshot/host-client-lockstep.test.ts',
+    'test/snapshot/effective-snapshot.test.ts',
   ],
   // shared: the pure shared modules behind the dialog gates and the polling seam.
   shared: [
