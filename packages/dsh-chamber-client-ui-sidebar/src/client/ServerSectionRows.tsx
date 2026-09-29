@@ -12,7 +12,8 @@
 import { Fragment, memo, useMemo, useRef } from 'react'
 import clsx from 'clsx'
 import {
-  IconArchiveOutlineRegular, IconBranchOutlineRegular, IconEditOutlineRegular, IconEllipsisOutlineRegular, Menu,
+  IconArchiveOutlineRegular, IconBranchOutlineRegular, IconEditOutlineRegular, IconEllipsisOutlineRegular,
+  IconPinFillRegular, IconPinOutlineRegular, Menu,
   Tooltip, type MenuItem,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChamberServerAggregate, ChamberServerWorkspace } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
@@ -80,6 +81,7 @@ const SessionRow = memo(function SessionRow({
     openSession,
     onForkSession,
     onArchiveSession,
+    onPinSession,
     toggleMenu,
     closeMenu,
     useShortcuts,
@@ -97,9 +99,17 @@ const SessionRow = memo(function SessionRow({
     const { unit, n } = relativeTimeBucket(updatedAt, now)
     return unit === 'now' ? t('time.now') : t('time.ago', { t: t(`time.${unit}`, { n }) })
   }
-  // 行菜单条目（3 对象 + 3 元素 + 3 次 t()）每次渲染重建：按 t 记忆化——t 是
-  // 文案的唯一依赖，locale 不变时同一数组跨渲染复用。
+  // 行菜单条目（4 对象 + 4 元素 + 4 次 t()）每次渲染重建：按 t 与 session.pinned 记忆化——
+  // 两者是文案与字形的全部输入，locale / 置顶态不变时同一数组跨渲染复用。
   const menuItems = useMemo((): MenuItem[] => [
+    {
+      // 上游 PinSession 的菜单入口（order 100，先于 rename 的 200）：本仓按该文件逐字移植
+      // 菜单项形态（无分隔线/快捷键）。图标照上游 markup 传 14；本仓菜单是 compact 档，
+      // `.compactList .itemIcon svg` 会把它覆盖成 12px（design 06 §7 的 pin 实测值）。
+      id: 'pin',
+      label: t(session.pinned === true ? 'menu.unpinSession' : 'menu.pinSession'),
+      icon: session.pinned === true ? <IconPinFillRegular size={14} /> : <IconPinOutlineRegular size={14} />,
+    },
     {
       id: 'rename',
       label: t('action.rename'),
@@ -124,7 +134,7 @@ const SessionRow = memo(function SessionRow({
       shortcut: archiveShortcut,
       icon: <IconArchiveOutlineRegular size={16} />,
     },
-  ], [t, renameShortcut, forkShortcut, archiveShortcut])
+  ], [t, session.pinned, renameShortcut, forkShortcut, archiveShortcut])
   const sessionKey = `${server.id}/session/${session.id}`
   // 会话行（上提以便 HoverCard 包裹）。单击立即打开、零延迟；
   // 模块级 pending（按 sessionId 记）只判定同一会话在
@@ -266,6 +276,9 @@ const SessionRow = memo(function SessionRow({
           open={menuOpenRow}
           onClose={() => closeMenu(sessionKey)}
           onSelect={(id: string) => {
+            // 与三个行内按钮同一条本仓约定：菜单在 portal 里，"按住 kebab 拖动行、在菜单上松手"
+            // 的尾随 click 会被当成一次菜单选择。pin 是首项，最容易被这一击命中；四个动作共用此门。
+            if (suppressClickRef.current) return
             closeMenu(sessionKey)
             if (id === 'rename') {
               setRenaming({
@@ -279,6 +292,8 @@ const SessionRow = memo(function SessionRow({
             } else if (id === 'archive') {
             // 标题随行传入：拒绝相位（两段式确认）要用它。
               onArchiveSession(server, session.id, session.displayTitle)
+            } else if (id === 'pin') {
+              onPinSession(server, session.id, session.pinned === true)
             }
           }}
           items={menuItems}
@@ -325,6 +340,27 @@ const SessionRow = memo(function SessionRow({
             <IconArchiveOutlineRegular size={14} />
           </button>
         </Tooltip>
+        {/* 独立置顶钮：上游 `session-actions/PinSession.tsx` 的 `PinSessionRowButton`（注册进
+            `sidebar.workspaces.session.row.action`，order 200 = 归档之后的最右成员）——
+            tooltip 用 `actions.pin/unpin`、无障碍名照上游用行菜单同款 `menu.pinSession/
+            unpinSession`（本仓的行名参数化只用在归档钮上，见上），字形 14。本仓不渲染官方
+            座席，故按该文件逐字移植按钮形态（类名换 `.actionIcon`）。置顶集未知
+            （`pinSetKnown !== true`）时行不宣称任何置顶事实：无标记，钮按 pin 方向出——
+            宿主 pin 幂等，重复 pin 无害，反向才有假断言。 */}
+        <Tooltip label={t(session.pinned === true ? 'actions.unpin' : 'actions.pin')} side="bottom" align="end" delayMs={500}>
+          <button
+            type="button"
+            className={cc.actionIcon}
+            aria-label={t(session.pinned === true ? 'menu.unpinSession' : 'menu.pinSession')}
+            onClick={() => {
+              // 与归档钮同一条本仓约定：拖拽尾随 click 入口即生效。
+              if (suppressClickRef.current) return
+              onPinSession(server, session.id, session.pinned === true)
+            }}
+          >
+            {session.pinned === true ? <IconPinFillRegular size={14} /> : <IconPinOutlineRegular size={14} />}
+          </button>
+        </Tooltip>
       </span>
       )}
       {/* 尾部状态槽：行右缘的圆环/圆点。hover 时行动作簇换入、本槽换出
@@ -345,6 +381,16 @@ const SessionRow = memo(function SessionRow({
       >
         {sessionStateDot(server, session)}
       </span>
+      {/* 静息置顶标记：上游 `PinnedIndicator`（`row.pinned && !row.archived`，非交互
+          `role="img"` span，无障碍名与 title 都是 `row.pinned`，14px 实心针）。上游把它
+          放在 time 单元之后、与悬停动作簇共用行右缘同一格并在 hover 时一起隐藏；本仓的行
+          右缘单元是状态槽，标记落在状态槽之后，并按同一条 hover 规则与状态槽同隐——CSS 里
+          `.sessionRow:hover .pinSlot` 与状态槽选择器成对出现。 */}
+      {session.pinned === true && (
+        <span className={cc.pinSlot} role="img" aria-label={t('row.pinned')} title={t('row.pinned')}>
+          <IconPinFillRegular size={14} />
+        </span>
+      )}
     </div>
   )
   return (
@@ -399,9 +445,10 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
         const sessionDragError = rowErrors[`${server.id}/session-drag/${session.id}`]
         const sessionActionError = rowErrors[`${server.id}/session/${session.id}/rename`]
           ?? rowErrors[`${server.id}/session/${session.id}/archive`]
+          ?? rowErrors[`${server.id}/session/${session.id}/pin`]
           ?? rowErrors[`${server.id}/session/${session.id}/fork`]
           // 打开失败落在同一槽位（低优先级——同一行的
-          // rename/archive/fork 失败优先），key 模板与写入方共享。
+          // rename/archive/pin/fork 失败优先，且每行只显示这一条），key 与写入方共享。
           ?? rowErrors[openErrorKey(server.id, session.id)]
         // 空白行在不再 current 后仍被投影 = GHOST：App 按
         // BLANK_GHOST_GRACE_MS 保留它，使列表在双击窗口内不位移。

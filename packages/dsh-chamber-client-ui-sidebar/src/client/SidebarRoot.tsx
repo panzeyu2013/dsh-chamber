@@ -100,7 +100,7 @@ export function SidebarRoot({
   // 那里执行一次），行级归档入口只在宿主拒绝后代 dialogs.openArchiveConfirm 武装它。
   const dialogs = useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors })
   const { onOpenArchiveCleanup, openWorkspaceBrowser, onDeleteWorkspace, openArchiveConfirm } = dialogs
-  const { onForkSession, onNewSession, onArchiveSession } = useSidebarSessionActions({ runAction, openArchiveConfirm })
+  const { onForkSession, onNewSession, onArchiveSession, onPinSession } = useSidebarSessionActions({ runAction, openArchiveConfirm })
 
   const openSession = useCallback((serverId: string, sessionId: string): void => {
     // 新点击立即清掉该行陈旧失败文案（若再次失败，dispatch 结果会重报）。
@@ -119,7 +119,7 @@ export function SidebarRoot({
 
   // chamber：每个渲染周期一个 context value——各 per-source section 经 provider
   // （sidebar-context.ts）读取跨切面状态/动作，而不是穿三层组件传 ~40 个 prop；
-  // store/effect/commit 全归 shell，ServerSection 只消费。43 个字段逐项进依赖
+  // store/effect/commit 全归 shell，ServerSection 只消费。45 个字段逐项进依赖
   // 数组：漏一项会让 section/行读到过期值，多一项会让 memo 白算。
   const ctxValue: SidebarSectionContextValue = useMemo(() => ({
     wide,
@@ -164,6 +164,7 @@ export function SidebarRoot({
     openSession,
     onNewSession,
     onArchiveSession,
+    onPinSession,
     onForkSession,
     onDeleteWorkspace,
   }), [
@@ -174,7 +175,7 @@ export function SidebarRoot({
     dragPressOnButtonRef, sessionDropCommitted, workspaceDropCommitted, serverDropCommitted,
     ghostExpiry, armBlankGhostForClick, rowErrors, menuOpen, toggleMenu, closeMenu,
     sortMenuOpen, setSortMenuOpen, renaming, setRenaming, commitRename, onOpenArchiveCleanup,
-    openWorkspaceBrowser, openSession, onNewSession, onArchiveSession, onForkSession,
+    openWorkspaceBrowser, openSession, onNewSession, onArchiveSession, onPinSession, onForkSession,
     onDeleteWorkspace,
   ])
 

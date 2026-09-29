@@ -74,11 +74,21 @@ export const zh = {
   'orderBy.manual': '手动排序',
   'orderBy.updated': '最近更新',
   'menu.fork': '分叉会话',
+  // 置顶动词逐字取上游 ui-workspace 字典（menu.pinSession/menu.unpinSession、actions.pin/
+  // unpin、row.pinned）。zh 的「置顶」承诺了排序（上游 pin 会写 pinSessionOrder）；本仓首落
+  // 未接置顶序，该差异登记在 design 06 §5/§7 与 todo/upstream-ui-parity-plan.md §1.1。
+  'menu.pinSession': '置顶会话',
+  'menu.unpinSession': '取消置顶',
   'menu.archiveSession': '归档会话',
   // 行 hover 归档钮的 tooltip（上游 ui-workspace 字典逐字：zh「归档会话」/ en "Archive"；
   // zh 与 kebab 菜单项的 `menu.archiveSession` 同值，en 照上游按钮座席是 "Archive"（菜单项是
   // "Archive session"）；键与值都照上游的按钮座席）。
   'actions.archive': '归档会话',
+  // 行悬停置顶钮的 tooltip（上游逐字）；无障碍名照上游用行菜单同款长名，不做参数化。
+  'actions.pin': '置顶会话',
+  'actions.unpin': '取消置顶',
+  // 静息置顶标记的无障碍名与 title（上游 row.pinned 逐字）。
+  'row.pinned': '已置顶',
   // 行级图标钮的无障碍名按本仓政策参数化行名（见上方 `action.newSession.aria` 的说明）；
   // 上游同座席用的是行菜单同款泛化名，本仓在 design 06 §7 记为有意分歧。
   'action.archive.aria': '归档会话“{name}”',
@@ -251,8 +261,13 @@ export const en = {
   'orderBy.manual': 'Manual',
   'orderBy.updated': 'Last updated',
   'menu.fork': 'Fork session',
+  'menu.pinSession': 'Pin session',
+  'menu.unpinSession': 'Unpin session',
   'menu.archiveSession': 'Archive session',
   'actions.archive': 'Archive',
+  'actions.pin': 'Pin',
+  'actions.unpin': 'Unpin',
+  'row.pinned': 'Pinned',
   'action.archive.aria': 'Archive “{name}”',
   'archive.confirm.title': 'Stop and archive this session?',
   'archive.confirm.desc': '“{title}” still has work in progress. Archiving stops it first, and the stopped work will not resume on its own.',

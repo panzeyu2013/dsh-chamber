@@ -99,12 +99,13 @@ The shell declares and renders the three holes the alpha.2 official
   the App layer switches to that source's shell and opens the session.
 - Row actions (v1 minimal set over the source's own unary wire client,
   `packages/dsh-chamber-client-core/src/instance-api.ts`) live in the ROW MENUS or on the row
-  itself: session = rename / fork / archive in the menu plus the row's own hover archive button
-  (design 06 §7); real workspace = a new-chat-glyph new-session button in the row (worktree rows
+  itself: session = pin / rename / fork / archive in the menu plus the row's own hover pin and
+  archive buttons (design 06 §7); real workspace = a new-chat-glyph new-session button in the row (worktree rows
   included) plus rename / delete behind the kebab — non-worktree rows only,
   since a derived worktree deliberately keeps no kebab (OpenChamber parity).
-  The session row's hover cluster is the kebab plus ONE dedicated archive
-  button (upstream `ArchiveSessionRowButton`, design 06 §7); archived rows never
+  The session row's hover cluster is the kebab plus TWO dedicated buttons —
+  archive and pin (upstream `ArchiveSessionRowButton` / `PinSessionRowButton`,
+  design 06 §7); archived rows never
   enter this projection, so the unarchive half of that upstream button has no
   consumer here. Both archive entries follow the official TWO-PHASE call — a quiet session archives
   immediately, with no confirmation, because archiving only hides the row and

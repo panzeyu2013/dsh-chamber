@@ -7,7 +7,7 @@ import { useRef } from 'react'
 import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { increasedForkTitle } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import { getInstanceClient, renameSession } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
-import { archiveSessionForSource, createSessionForSource, forkSessionForSource } from '@dsh-chamber/dsh-chamber-client-core/session-mutations'
+import { archiveSessionForSource, createSessionForSource, forkSessionForSource, pinSessionForSource, unpinSessionForSource } from '@dsh-chamber/dsh-chamber-client-core/session-mutations'
 import { classifyArchiveFailure, type SessionArchiveConfirmRequest } from './session-archive-confirm.ts'
 import type { RunAction } from './sidebar-root-actions.ts'
 
@@ -116,5 +116,27 @@ export function useSidebarSessionActions({ runAction, openArchiveConfirm }: {
       if (archiveActionRef.current.get(key) === task) archiveActionRef.current.delete(key)
     })
   }
-  return { onForkSession, onNewSession, onArchiveSession }
+  /** 置顶的每会话 in-flight 守卫（同 `archiveActionRef`）：悬停钮常驻，快速双击会连发两次
+   *  **同向**的幂等调用（无回声 ⇒ 行标记不会被本地翻转；宿主对重复/不存在都是 no-op）。守卫真正
+   *  的收益是 pending 窗口内不再发第二条命令——代价是若权威推送先落定、行已翻成反向而守卫仍
+   *  持有，紧接着的反向点击会被静默吞掉（需要再点一次）。键与行错误槽同源
+   *  `<source>/session/<id>/pin`。 */
+  const pinActionRef = useRef(new Map<string, Promise<void>>())
+
+  // 置顶切换：与归档同构的一条漏斗（无确认层——上游 pin 是幂等单段，没有第二相位）。
+  // 方向由点击那一刻行的置顶标记决定；成功后照常 requestRefresh，标记由挂载 follow 的
+  // 权威置顶集落定（本仓刻意不做乐观回声）。
+  const onPinSession = (server: ChamberServerAggregate, sessionId: string, currentlyPinned: boolean): void => {
+    const key = `${server.id}/session/${sessionId}/pin`
+    if (pinActionRef.current.has(key)) return
+    const task = runAction(key, async () => {
+      await (currentlyPinned ? unpinSessionForSource : pinSessionForSource)(server.id, sessionId)
+      chamberBridge.requestRefresh(server.id)
+    })
+    pinActionRef.current.set(key, task)
+    void task.finally(() => {
+      if (pinActionRef.current.get(key) === task) pinActionRef.current.delete(key)
+    })
+  }
+  return { onForkSession, onNewSession, onArchiveSession, onPinSession }
 }

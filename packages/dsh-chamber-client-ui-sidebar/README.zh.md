@@ -75,11 +75,12 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 - 点击会话行 → `chamberBridge.requestOpenSession(sourceId, sessionId)`；
   App 层切到该来源的 shell 并打开会话。
 - 行操作（v1 最小集，走该来源自己的 unary wire 客户端
-  `packages/dsh-chamber-client-core/src/instance-api.ts`）**收在行菜单与行内按钮**：会话 = 行菜单的重命名/分叉/归档
-  + 行内悬停归档钮（design 06 §7）；
+  `packages/dsh-chamber-client-core/src/instance-api.ts`）**收在行菜单与行内按钮**：会话 = 行菜单的置顶/重命名/分叉/归档
+  + 行内悬停的归档钮与置顶钮（design 06 §7）；
   真实 workspace = 行内 new-chat 字形新建会话钮（worktree 行也有）+ kebab 里的重命名/
   删除（仅非 worktree 行——派生 worktree 刻意无 kebab，OpenChamber parity）。
-  会话行的悬停簇 = kebab + **一个独立归档钮**（上游 `ArchiveSessionRowButton`，design 06 §7）；
+  会话行的悬停簇 = kebab + **独立归档钮与独立置顶钮**（上游 `ArchiveSessionRowButton` /
+  `PinSessionRowButton`，design 06 §7）；
   归档行从不进入本投影，因此上游该钮的 unarchive 半个分支在本仓没有消费方。两处归档入口都走官方**两段式**：安静会话立即归档、
   无确认（归档只隐藏该行、从不触及会话日志——上游把安静归档排除在确认家族之外的同一理由）；
   宿主因该会话仍有活跃工作而拒绝（`workspace/session-active`）时才弹「停止并归档」确认，

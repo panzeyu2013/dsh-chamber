@@ -188,6 +188,8 @@ export interface SidebarSectionContextValue {
   openSession: (serverId: string, sessionId: string) => void
   onNewSession: (server: ChamberServerAggregate, workspaceId: string) => void
   onArchiveSession: (server: ChamberServerAggregate, sessionId: string, displayTitle: string) => void
+  /** `currentlyPinned` 是点击那一刻行的置顶事实（true = 该退出 unpin），不是目标方向。 */
+  onPinSession: (server: ChamberServerAggregate, sessionId: string, currentlyPinned: boolean) => void
   onForkSession: (server: ChamberServerAggregate, session: { id: string; title: string }) => void
   onDeleteWorkspace: (server: ChamberServerAggregate, workspaceId: string, title: string) => void
 }

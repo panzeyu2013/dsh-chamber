@@ -388,6 +388,22 @@
   height: 10px;
 }
 
+/* 静息置顶标记（上游 Rows.module.css 的 .pinIndicator）：居中的 14px 实心针、caption 墨色，
+   落在状态槽之后的行右缘；hover / 菜单开启时与状态槽一起换出——下方 hide 规则与状态槽选择器
+   成对（上游把标记放在 time 单元之后同样成对隐藏）。两处与上游不同，都是跟随本仓结构：
+   ①不贡献 margin——本仓 .sessionRow 自带 6px gap（上游 row gap 为 0，那 6px 就是它的全部间距，
+   scheduleIndicator 同样不减 margin）；②盒宽 20（上游 16）跟齐本仓 .actionIcon 的 20px 动作盒，
+   否则 14px 字形在 hover 换入时会横跳 2px（上游两个盒都是 16px 才使「落回静息位」成立）。 */
+.pinSlot {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--dsw-alias-label-caption);
+}
+
 /* Pending rows carry the 14px interaction icon instead of the 10px ring. */
 .sessionStateSlotPending {
   width: 14px;
@@ -989,8 +1005,8 @@
      a deliberate choice (05 §2). */
   padding: 3px 4px 3px 26px;
   /* FIXED height (26px = 3px pad + 20px actions + 3px pad, border-box): the
-     hover swap (state slot -> the row's action cluster, two 20px buttons + 4px gap =
-     44px) must NOT change the row height. A content-sized row grows
+     hover swap (state slot -> the row's action cluster, three 20px buttons + 2×4px
+     gap = 68px) must NOT change the row height. A content-sized row grows
      2px on hover (24 -> 26); under a moving pointer the engine hit-tests
      the row's hover against a stale frame while the element under the
      cursor is already re-laid-out, so the row's :hover activates 1-3px
@@ -1130,8 +1146,8 @@
      `Rows .rowActions` 12px would therefore fall INSIDE one
      cluster and split it 4px + 12px — the kebab reads as detached
      (「+ 与省略号之间的间隔明显更大」). The cluster takes the header /
-     sheet icon rhythm; the session row's cluster has held TWO members since the
-     dedicated archive button joined the kebab (06 §7), so its 4px is a real
+     sheet icon rhythm; the session row's cluster has held THREE members since the
+     dedicated archive and pin buttons joined the kebab (06 §7), so its 4px is a real
      between-buttons gap — same rhythm, no second value. The state slot these actions replace
      are swapped out while the cluster is visible, so the gap never competes
      with them. (`.headerGit` / `.sourceActions` are NOT party to this value:
@@ -1172,7 +1188,9 @@
 /* The row/header state indicators swap OUT while the actions are in: on
    hover or keyboard focus, or while a kebab menu keeps them visible. */
 .sessionRow:hover .sessionStateSlot,
-.sessionRow:has(.rowActionsVisible) .sessionStateSlot {
+.sessionRow:has(.rowActionsVisible) .sessionStateSlot,
+.sessionRow:hover .pinSlot,
+.sessionRow:has(.rowActionsVisible) .pinSlot {
   display: none;
 }
 
