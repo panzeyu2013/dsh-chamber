@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * emit-bridge-manifest.mjs — 通道 manifest 生成管线（design 25 §4.4.3；
- * docs/progress/todo/macos-swift-v1.md 的对应行）。
+ * docs/progress/todo/platform/macos-swift-v1.md 的对应行）。
  *
  * 输入（两份，缺一不可）：
  *   ① 名单源 packages/desktop/ipc-events.ts 的 `IPC_CHANNELS` 常量表：

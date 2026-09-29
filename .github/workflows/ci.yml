@@ -265,7 +265,7 @@ jobs:
   # Windows contract leg: mirrors the linux test job
   # for the platform-sensitive suites. This is where the win32-only lifecycle
   # integration tests run and where the remaining `skip: platform === 'win32'`
-  # points are tracked (docs/progress/todo/windows-v1.md holds the ledger and the recording rules).
+  # points are tracked (docs/progress/todo/platform/windows-v1.md holds the ledger and the recording rules).
   # Packaging stays in release.yml (build-windows); no smoke/builds here yet.
   test-windows:
     runs-on: windows-2022

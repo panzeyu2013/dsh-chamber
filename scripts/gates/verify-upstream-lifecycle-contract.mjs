@@ -25,7 +25,7 @@ const FILES = {
   hostFollow: join(ROOT, 'vendor/harness-checkout/packages/api/session-controller/src/history.ts'),
   clientSession: join(ROOT, 'vendor/harness-checkout/packages/api/session-controller/src/client/sessions/session.ts'),
   forkOpening: join(ROOT, 'packages/dsh-api-gateway/src/client/stream-client.ts'),
-  proposals: join(ROOT, 'docs/progress/todo/upstream-proposals.md'),
+  proposals: join(ROOT, 'docs/progress/todo/upstream/upstream-proposals.md'),
 }
 
 /** Any of these in a pinned lifecycle source means a first-frame bound exists. */

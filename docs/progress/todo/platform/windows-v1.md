@@ -1,8 +1,9 @@
 # Windows v1：剩余（未实现 / 外部门禁）、基线登记口径与取舍
 
-> 契约与决策：`docs/design/23-windows-support.md`（design 23）。M0–M4代码项通过POSIX单测（M0 CI契约腿、M1生命周期、
-> M2a env门控、M3桌面打包、M4决策解锁）。本文只留未实现/外部门禁、
-> 基线登记口径（原 `windows-baseline.md`）与取舍；每条须真实Windows/CI验证才算完成。
+> 分类：B · 平台与外部门禁（真实 Windows runner/实机/产物）｜状态权威：design 23 §5 与 STATUS
+
+> 契约与决策：`docs/design/23-windows-support.md`（design 23）。本文只留未实现/外部门禁、基线登记口径
+> （原 `windows-baseline.md`）与取舍；每条须真实 Windows/CI 验证才算完成。
 
 ## 外部门禁（需真实 Windows runner / 实机 / 产物）
 

@@ -1,9 +1,9 @@
 # 上游 UI 对齐：剩余待裁面（侧栏 / 工作区）
 
-用户报告的四例（workspace 悬停卡缺 path/创建时间、`+`/头部控件样式、长标题跑马灯、按钮与菜单快捷键提示）
-与同批判定「非有意、非 chamber 功能面」的其余条目，已按上游 pin `0.2.0-rc.1` 的代码逐字落地（旧逻辑删除、测试与
-design 同批更新；已落地面的契约见 design 06 §7、design 05 §2）。本文件只留**仍需裁决**的差异与已裁决维持项，
-作为下一轮的入口。
+> 分类：A · 上游对齐（chamber 侧裁决）｜状态权威：design 06 §7 与 STATUS
+
+本文件只留**仍需裁决**的差异（§1）与**维持的差异/裁决**（§2，不再逐条论证），作为下一轮的入口；已落地面（含
+2026-02 收敛批）的契约见 design 06 §7、design 05 §2，本文不复述。
 
 判据口径：`SB` = 安装包内未压缩的 `@deepseek-ai/dsh-client-ui-sidebar/lib/client.js` 行号；`WS` =
 `@deepseek-ai/dsh-client-ui-workspace/lib/client.js` 行号；本仓 = `packages/dsh-chamber-client-ui-sidebar`。
@@ -80,105 +80,68 @@ design 同批更新；已落地面的契约见 design 06 §7、design 05 §2）�
 - STATUS 分类：本条归「无法控制的差异（外部约束）」——注册表语义与被覆盖的官方浏览器都不是本仓能改的面；
   这里保留的裁决只有「是否做 C2 实机判定 / 如何登记」。
 
-### 1.4 官方 schedule 两座席（已收口，A1）
-
-- 上游：ui-schedule 注册 `sidebar.session.row.leading`（idle 行活动任务标记）与 `sidebar.session.row.hover`（悬停卡任务列表）
-  （`@deepseek-ai/dsh-client-ui-schedule` 的 client bundle，两个 `sidebar.session.row.*` 注册），上游由 `sidebar.workspaces` 的 children 表声明（`WS:4307-4314`）——本仓构建里这两行由 vendor 补丁 13 号删除，改由 chamber 侧栏声明（见下）。
-- 本仓（已收口，A1 = 座席所有权转移）：上游注册里的两行声明由 vendor 补丁 13 号删除，本仓侧栏在**自己的** `children`
-  里声明两席并渲染（行首座席的 `fallback` = 自有 `SessionScheduleIndicator`，两者永不并现，design 09 §3.6 第四类第二形态）。
-- 裁决账：曾拒「在本仓自有行内渲染官方注册项」（跨插件渲染面）与「撤销 `sidebar.workspaces` 声明」（撤销会让官方注册与第三方注入静默消失）；
-  上游若提供座席转交/共享 API，则该 vendor 补丁退役（提案见 upstream-proposals.md §11）。
-- **追加（2026-09，面板入口已裁）**：`ui-schedule` 的**面板行**（`sidebar.panellist` id `schedules`）
-  与其 `main` key `schedules` 的落位落定：实例自有/第三方面板行**按其所属来源下挂**——宽态在 owning
-  source 的 server 分组内（`ServerSectionPanels`，来源头与可折叠区之间；折叠只收浏览区），rail 保留
-  上游全局面板字形行；行组件/几何/点击链与上游逐字，**密度维持上游 36px**，上游点击埋点
-  `sidebar_menu_click` 有意未复制。契约见 design 05 §2，实现见 design 06 §4.7，位置锁
-  `test/plugin-kernel/panel-entry-placement.test.ts`，投影锁 `panel-source.test.ts`。
-
-### 1.5 重命名交互：模态 vs 行内
+### 1.4 重命名交互：模态 vs 行内
 
 - 上游：session 重命名走 `shell.overlay` 模态 `SessionRenameDialog`（`WS:3703/4372`）、workspace 重命名走 Modal
   （`WS:3316-3340`）。
 - 本仓：两者都是行内 `ServerSectionRenameForm`（双击进编辑，design 06 §2.2 的既有交互）。
 - 为何要裁：行内重命名是 chamber 的既定交互（且拖拽/pending-click 都围着它写），换模态是交互层重写而非样式抄齐。
 
-### 1.6 search 的展开/收起形态（inline 槽 vs 胶囊常驻）
+### 1.5 search 的展开/收起形态（inline 槽 vs 胶囊常驻）
 
 - 上游：inline 搜索槽 `max-width .18s` 展开、输入透明度/宽度过渡、`search-skeleton` 骨架行（`WS:3109-3243` +
   `WorkspaceBrowser.module.css`）；`search` 标签键已在 §2 收敛，不在此列。
 - 本仓：胶囊行常驻（展开即挂载，无过渡/骨架），是 design 06 §1 的既有形态。
 - 为何要裁：动画/骨架要新 DOM 结构与时长契约，且会改动 design 06 §1 的胶囊行设计（不是样式抄齐）。
 
-## 2. 无需裁决：已按「与上游一致」或推荐落法收敛（2026-02 复核批）
+## 2. 维持的差异与裁决（不再逐条论证）
 
 - **品牌回退**：mark 回退保持 chamber `BrandWordmark`（自有产品标识，rail 态已是上游 `FishLogo`）；name 洞维持空回退
-  （上游回退 `brandName ?? localBuild` 的版本徽标需要构建版本事实，本仓无该事实）。**属「我们自己的功能」，不再列为待裁。**
-- **Windows 标题栏**：按推荐 B —— 随 design 23 的 Windows 腿落地时照抄上游整块 `[data-windows-titlebar]`
-  CSS 与分支。**更正前提**：属性并非「永不设置」，Electron win32 的 preload 已在 `markWindowsTitlebar` 里写
-  `root.dataset.windowsTitlebar=''`（`packages/desktop/preload.cts`，`packages/desktop/upstream-seats.test.ts` 钉住）；
-  但侧栏的 Windows 形态属 design 23 未落地范围（design 23 与 `todo/windows-v1.md` 对 titlebar/侧栏零描述），
-  故照抄整块仍随该腿，不在本轮落。
-- **会话卡状态行 0–1**：维持 design 06 §7 ⑥ 的登记偏差（本仓只在有状态时渲染，不兜底常在的 `status.idle`）。
-- **search 的 `search` 标签键**：上游搜索钮 tooltip 用 `t("search")`；该键不在 workspace 命名空间，但 locale 解析会回落到
-  `common`（`dsh-client-locale/lib/client.js` 的 `lookup(ns,key) ?? lookup('common',key) ?? key`；common zh「搜索」/ en "Search"）。
-  本仓以 `search.sessions.aria`（「搜索会话」/"Search sessions"）作 aria-label——语义更具体、与上游可见文案不同，登记为文案选择（不追）。
-- **路径缩写**：上游 `abbreviateHomePath(cwd, home)` 在 home 缺席时原样返回。本仓**选择**绝对路径（范围选择，不是外部约束）：
-  `@deepseek-ai/dsh-api-remotes` 由本复合入口注册（`packages/renderer/src/chamber-entry.ts:431`），其 Remote schema 带 `home`，
-  正是上游 `useHostInfo` 读的同一面 ⇒ 事实可达，只是本仓不缩写。
-- **clear 钮命中盒**：按推荐 A 维持登记的回退命中盒 18px（上游 24px）；ink/hover/字形已是上游值；小图标钮
-  （`.actionIcon`/`.searchButton`/`.searchClear`/`.foldToggle`/`.sourceFoldToggle`）圆角统一 `--dsw-radius-xs`，
-  `.railDotButton` 是 8px 点的无圆角热区；登记在 design 06 §7。
-- **workspace 卡会话数**：维持上游形态（标题 + 路径 + 创建时间），不再加 chamber 会话数行。
-- **菜单密度数值更正（本轮复核）**：design 06 §7 原文把原语 `compact` 记成「item 26px/12px、容器 r7/pad 2px/
-  min-width 164、item r5、图标槽 14px、默认 218/4」，与 pin 的已发布 `ui-primitives/lib/Menu.module.css` 不符
-  （实测 compact：item min-height 24px / padding 2px 6px / `--dsw-radius-sm`=8px / 11px·17px、list 156px/pad 4px、
-  label 3px 6px / 10px·15px、itemIcon 12px；默认 item 34px / 13px·20px / r-md、`.list` 144px/pad 4px）。已在
-  design 06 §7、design 20、两处代码注释按实测值改写；**代码未动**（照旧传 `compact`），菜单行比侧栏 26px 列表行矮
-  2px 记为接受偏差。pin 的 `Menu` 有 `listClassName`（无 item 钩子）——若将来要把菜单抬到 26px，这是唯一干净入口。
-- **search 占位符文案**：本仓原为「搜索会话…」/ "Search sessions…"，上游 WorkspaceBrowser 字典是「搜索会话名称」/
-  "Search session names"；已按上游逐字改写（值变化、键不变，无测试引用旧值）。
-- **新建会话 tooltip 词典键**：**已对齐上游** —— 新增独立键 `actions.newSession`（zh「新会话」/ en "New session"，值与上游 pin 的字典逐字一致），
-  `ServerSection.tsx` 的 workspace `+` tooltip 改用它；`session.new`/`session.new.label` 仍服务按钮与行标签。design 06 §7 同批登记。
-
-## 3. 已裁决维持（不再逐条论证）
-
-行高/字号密度（26px 行、13px 标题、20px 命中盒）、菜单 `compact` 档、行动作簇 4px/20px、来源 accent 与
-多来源分组、折叠入场动画删除、`RowHoverCard` 自持（vendor 竞态；上游修掉即退役）、darwin vibrancy 门、
-`sidebar.workspaces` 只声明不渲染、`sidebar.toggle.badge` 不做、完成状态品牌蓝点、默认 `orderBy=manual`、
-flat/workspace-tree 与归档过滤推迟、`data-chamber-row` 锚点、归档确认对话框（本仓两段式）、
-**面板行按来源下挂**（宽态 owning server 分组 / rail 上游字形行；行几何维持上游 36px；design 05 §2 / 06 §4.7）。
+### 1.4 重命名交互：模态 vs 行内
+  （上游 `brandName ?? localBuild` 的版本徽标需要构建版本事实，本仓无该事实）。属「我们自己的功能」，不列为待裁。
+- **Windows 标题栏**：随 design 23 的 Windows 腿落地时照抄上游整块 `[data-windows-titlebar]` CSS 与分支；属性本身已由
+  win32 preload 的 `markWindowsTitlebar` 写入（`packages/desktop/upstream-seats.test.ts` 钉住），侧栏形态仍属该腿未落地范围。
+- **会话卡状态行 0–1**：维持 design 06 §7 ⑥ 的登记偏差（只在有状态时渲染，不兜底常在的 `status.idle`）。
+- **文案键选择**：搜索钮 aria-label 用 `search.sessions.aria`（上游 tooltip 键 `search` 回落到 `common`；本仓语义更具体，不追）；
+  workspace 卡复制键用 `action.copy`（上游 `t("copy")`，值/语义一致，仅键名不同，未列为偏差）；上游搜索占位符与 `+` tooltip
+  文案已逐字对齐（`actions.newSession` 等独立键）。
+- **路径缩写**：上游 `abbreviateHomePath(cwd, home)`；本仓**选择**绝对路径——`dsh-api-remotes` 的 `home` 面即上游
+  `useHostInfo` 读的同一面，事实可达，只是不缩写。
+- **clear 钮命中盒**：维持回退命中盒 18px（上游 24px）；ink/hover/字形与圆角已是上游值（登记在 design 06 §7）。
+- **workspace 卡会话数**：维持上游形态（标题 + 路径 + 创建时间），不加 chamber 会话数行。
+- **菜单密度**：照旧传 `compact`（实测值：item min-height 24px / padding 2px 6px / r-sm 8px / 11px·17px、list 156px/pad 4px、
+  label 3px 6px / 10px·15px、itemIcon 12px；默认 item 34px / 13px·20px / r-md、`.list` 144px/pad 4px），菜单行比侧栏 26px
+  行矮 2px 记为接受偏差；若要抬到 26px，pin 的 `Menu.listClassName` 是唯一干净入口。
+- **其余布局/交互维持项**：行高/字号密度（26px 行、13px 标题、20px 命中盒）、行动作簇 4px/20px、来源 accent 与多来源分组、
+  折叠入场动画删除、`RowHoverCard` 自持（vendor 竞态；上游修掉即退役）、darwin vibrancy 门、`sidebar.workspaces` 只声明不渲染、
+  `sidebar.toggle.badge` 不做、完成状态品牌蓝点、默认 `orderBy=manual`、flat/workspace-tree 与归档过滤推迟、
+  `data-chamber-row` 锚点、归档确认对话框（本仓两段式）、
+  **面板行按来源下挂**（宽态 owning server 分组 / rail 上游字形行；行几何维持上游 36px；design 05 §2 / 06 §4.7）。
 
 指针：design 06 §7、design 24 §1、STATUS 的对应条目与 `docs/checklists/upstream-touchpoints.md`（registry 门 C1–C15）。
 
-## 4. 复核发现但未落地的清洁项（非裁决）
+## 3. 复核发现但未落地的清洁项（非裁决）
 
-两轮 review 后仍未落地的都是「改了没风险但会动到注册决定/大面积排版」的项，登记备查：
-
-- `derive.ts` 的半截重复注释已分两轮清完（12 对相邻近重复 → 0，检测器：相邻注释行 token Jaccard ≥ 0.45）。
-- **命中盒几何的测试面**：`hit-area-geometry.test.ts`（一次性批测）已删，「六个小图标钮命中盒 = 视觉盒」现在只有
-  CSS 注释与 design 06 §7 登记兜着（本包 grep `18px`/`hitArea` 无测试命中）。重加 rim / 改命中盒前先补一条几何锁。
-- **补锁候选（本轮 review 的低优建议，未做）**：`RowHoverCard.tsx` 的 `onClickCapture` 无源码锁（与 `onPointerDownCapture`
-  同址调 `intent.press()`，上游 `dismissFromAnchor` 双挂）；`session-title-marquee.ts` 的 `range <= MIN_TITLE_REVEAL_PX`
-  早退与 reduced-motion 直达分支未被 4 条单测覆盖；`row-render-cost.test.ts` 的 `faces.length === 12`/`keys.length === 43`
-  等号是**有意**的收紧（合法新增一个 face/字段会红，改前先确认清单）。
-- **生效 dwell 与 C15 面**：C15 的 `TIMING_PAIRS`（`verify-upstream-touchpoints-hover.mjs` 的 `TIMING_PAIRS`）只锁
-  原子默认 500 与 `HOVER_OPEN_DELAY_MS`；两处 call site 的 `openDelayMs={800}`（`ServerSection.tsx`、`ServerSectionRows.tsx`）
-  是**生效值**却无锁。要么在侧栏测试里加一对源文本锁，要么把 TIMING_PAIRS 扩成「上游 rows call 值 == chamber call 值」
-  （后者会改 C15 判据与其 8 条夹具用例，动前先确认）。
-- **遗留锚的符号化**：本批重定位的两条锚（design 06 里那两条上游锚——`InstanceView.tsx` 的 `dismissVisibleRowCard()` 与 `SessionTodoArea.tsx` 的 `.todoHeader`——路径已核
-  准确，但仓库规范要求新锚写符号锚（`…tsx#=literal:dismissVisibleRowCard()` 形态，预算只降不升）；转换属 docs 面清理。
-- `ServerSection.tsx` 的两处 IIFE（一处是 workspace 行动作簇，一处唯一局部量是 `repoLayouts` 却包住约 550 行 JSX）与
-  自文件头部起的整体 12 空格多缩进：形态比上游绕，可无损改写为普通 const/组件结构，但会动整个文件的行号与既有
-  源码锁，留待专门一轮。
-- **投影查询四份实现**：`ServerSectionSearch.tsx` 的 `searchRowLabel`/`projectedRunning`/`projectedHasActiveSchedule`
-  各写一遍线性扫描，`server-section-model.ts` 的 `projectionHasSession` 是第四份；可收敛为一个 `findProjected`。
-- **复制文案键粒度**：上游 workspace 卡用 `t("copy")`（共享命名空间），本仓用 `action.copy`；值与语义一致，仅键名不同，
-  未列为偏差（`design 06 §7` 的「同形」指卡片结构与行为）。
+- **命中盒几何无测试锁**：六个小图标钮命中盒 = 视觉盒现在只有 CSS 注释与 design 06 §7 登记兜着；重加 rim / 改命中盒前先补一条几何锁。
+- **补锁候选（低优，未做）**：`RowHoverCard.tsx` 的 `onClickCapture` 无源码锁（与 `onPointerDownCapture` 同址调
+  `intent.press()`，上游 `dismissFromAnchor` 双挂）；`session-title-marquee.ts` 的 `range <= MIN_TITLE_REVEAL_PX` 早退与
+  reduced-motion 直达分支未被 4 条单测覆盖；`row-render-cost.test.ts` 的 `faces.length === 12`/`keys.length === 43` 等号是
+  **有意**的收紧（合法新增一个 face/字段会红，改前先确认清单）。
+- **生效 dwell 与 C15 面**：C15 的 `TIMING_PAIRS`（`verify-upstream-touchpoints-hover.mjs`）只锁原子默认 500 与
+  `HOVER_OPEN_DELAY_MS`；两处 call site 的 `openDelayMs={800}`（`ServerSection.tsx`、`ServerSectionRows.tsx`）是**生效值**却无锁。
+  要么在侧栏测试里加一对源文本锁，要么把 `TIMING_PAIRS` 扩成「上游 rows call 值 == chamber call 值」（后者会改 C15 判据与其
+  8 条夹具用例，动前先确认）。
+- **遗留锚的符号化**：design 06 里两条重定位的上游锚（`InstanceView.tsx` 的 `dismissVisibleRowCard()` 与 `SessionTodoArea.tsx`
+  的 `.todoHeader`）路径已核准确，但仓库规范要求新锚写符号锚（`…tsx#=literal:dismissVisibleRowCard()` 形态，预算只降不升）。
+- **`ServerSection.tsx` 形态**：两处 IIFE（workspace 行动作簇；唯一局部量 `repoLayouts` 却包住约 550 行 JSX）与整体 12 空格
+  多缩进可无损改写，但会动全文件行号与既有源码锁，留待专门一轮。
+- **投影查询四份实现**：`ServerSectionSearch.tsx` 的 `searchRowLabel`/`projectedRunning`/`projectedHasActiveSchedule` 各写一遍
+  线性扫描，`server-section-model.ts` 的 `projectionHasSession` 是第四份；可收敛为一个 `findProjected`。
 - **防御性 NaN 加固**：`ServerSection.tsx` 的门只判 `createdAt === undefined`，而 `createdLabel` 对任意 number 逐字格式化；
   今天不可达（唯一写入点 `derive.ts` 用 `Number.isFinite` 稀疏写入），若将来出现第二写入点需同时加有限性判定。
 
-## 5. 复用准则（下一轮沿用）
+## 4. 复用准则（下一轮沿用）
 
 1. 上游有源码路径导出 → 经 `types/vendor-modules.d.ts` + registry `vendorSourceConsumers` 直接消费；
-2. 非导出的纯函数 → 逐字拷入 + 出处注 + 语义锁测试（本轮：`session-title-marquee.ts`）；
+2. 非导出的纯函数 → 逐字拷入 + 出处注 + 语义锁测试（先例：`session-title-marquee.ts`）；
 3. 结构不同的可见面 → 只复用片段（CSS 值 / JSX 形态 / 字典键），逐值对照后替换本仓旧值。

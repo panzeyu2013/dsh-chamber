@@ -77,7 +77,7 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 | 09 | [09-client-plugin-runtime-loading.md](09-client-plugin-runtime-loading.md) | 现行 | dsh 客户端插件运行时加载：每实例合并宿主 boot 图（chamber host 包 `clientGraph/graph` + 控制面 `--patch` seed + 去重预加载 + boot.ts extraRows seam）+ 活实例装/卸热同步（design 09 §3.7，无需窗口重载）+ 信任边界 |
 | 10 | —（契约并入 [05](05-connection-manager.md) §2.3/§3） | 现行 | 侧边栏聚合改事件驱动：各来源 ctx 推投影取代 10s REST 轮询（30s 兜底仅覆盖无完整生产者来源）；不改上游 dsh |
 | 11 | [11-auto-update.md](11-auto-update.md) | 现行 | 桌面端更新提示（无弹窗、低打扰）：settings chamber「更新」块 + 静默检查、确认后下载、退出时安装（win/mac/linux，mac 需 Developer ID）、beta → stable 通道 |
-| 12 | 已由 [24-archived-session-cleanup.md](24-archived-session-cleanup.md) 承接（todo 已移出，上游 wire 草案见 [../progress/todo/upstream-proposals.md](../progress/todo/upstream-proposals.md) §3） | 现行 | 已归档会话管理（归档单向且不可见；删除动议由 design 24 承接：chamber 宿主域 + server 行 hover 动作；B 特权层冻结结论保留） |
+| 12 | 已由 [24-archived-session-cleanup.md](24-archived-session-cleanup.md) 承接（todo 已移出，上游 wire 草案见 [../progress/todo/upstream/upstream-proposals.md](../progress/todo/upstream/upstream-proposals.md) §3） | 现行 | 已归档会话管理（归档单向且不可见；删除动议由 design 24 承接：chamber 宿主域 + server 行 hover 动作；B 特权层冻结结论保留） |
 | 13 | [13-remote-plugin-management.md](13-remote-plugin-management.md) | 现行 | 远程实例插件管理：一键应用本地插件清单 + 可视化添加（provider exec 通道、spec 白名单、remoteDshHome 基准） |
 | 14 | [14-sleep-background.md](14-sleep-background.md) | 现行（v1 范围） | 睡眠/后台常驻：关窗行为（托盘/退出）、登录自启、唤醒重连、防休眠、退出保护 |
 | 15 | [15-chamber-settings-page.md](15-chamber-settings-page.md) | 现行（v1 平铺形态；统一设置页推迟） | Chamber 设置呈现：settings 壳固定入口（连接/客户端），全局与实例配置平面分离 |

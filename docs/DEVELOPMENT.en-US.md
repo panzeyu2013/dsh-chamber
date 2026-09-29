@@ -137,7 +137,7 @@ Artifacts land in `packages/desktop/release/` (electron-builder `directories.out
 |Desktop capabilities (M3)|AUMID/tray-candidate convergence/loud preload failure wired; real-machine matrix pending|
 |Decision unlocks (M4)|Login autostart, deep-link registration, open-in local paths, SSH password gate guidance unlocked (code); NSIS uninstall Run-key cleanup wired|
 |Known limits|Unsigned (SmartScreen); SSH passwords disabled (use keys/Pageant); runtime mutations read-only; 0700/0600 via icacls/ACLs|
-|Authority records|`docs/design/23-windows-support.md`, `docs/progress/todo/windows-v1.md` (baseline rules included)|
+|Authority records|`docs/design/23-windows-support.md`, `docs/progress/todo/platform/windows-v1.md` (baseline rules included)|
 
 ## 5. CI & releases
 

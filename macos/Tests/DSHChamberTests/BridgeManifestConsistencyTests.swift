@@ -1,6 +1,6 @@
 //
 //  BridgeManifestConsistencyTests.swift — Swift 白名单一致性测试
-//  （design 25 §4.4.3；docs/progress/todo/macos-swift-v1.md）。
+//  （design 25 §4.4.3；docs/progress/todo/platform/macos-swift-v1.md）。
 //
 //  职责边界：JS 侧一致性（重生成 JSON/Swift == 提交物、通道数守恒、无死键）
 //  由 packages/desktop/bridge-manifest.test.ts 保证；本测试钉 Swift 生成物

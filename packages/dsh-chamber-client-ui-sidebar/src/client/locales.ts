@@ -76,7 +76,7 @@ export const zh = {
   'menu.fork': '分叉会话',
   // 置顶动词逐字取上游 ui-workspace 字典（menu.pinSession/menu.unpinSession、actions.pin/
   // unpin、row.pinned）。zh 的「置顶」承诺了排序（上游 pin 会写 pinSessionOrder）；本仓首落
-  // 未接置顶序，该差异登记在 design 06 §5/§7 与 todo/upstream-ui-parity-plan.md §1.1。
+  // 未接置顶序，该差异登记在 design 06 §5/§7 与 todo/upstream/upstream-ui-parity-plan.md §1.1。
   'menu.pinSession': '置顶会话',
   'menu.unpinSession': '取消置顶',
   'menu.archiveSession': '归档会话',

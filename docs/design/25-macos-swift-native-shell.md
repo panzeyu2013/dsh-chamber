@@ -11,7 +11,7 @@
 >
 > 外部决策见 §10（平台策略/bundle id/更新路线/仓库落位/Node 版本），实现按推荐默认值落位（共存、
 > `com.dshchamber.native`、blocked-available、`macos/`、arm64），签核尚未完成；执行计划见
-> `docs/progress/todo/macos-swift-v1.md`。§8.1 的 P0 验证门代码面已交付；G2–G5 与 **WebKit 后台
+> `docs/progress/todo/platform/macos-swift-v1.md`。§8.1 的 P0 验证门代码面已交付；G2–G5 与 **WebKit 后台
 > 节流/存储隔离（C1/C2）** 的实机判定仍开放。
 >
 > **行号锚点**：正文中 `main.ts` 的 `:NNNN` 多数取自 P1 拆分前（5,802 行）基线；拆分后行号已漂移，
@@ -1050,7 +1050,7 @@ WKWebView 不认，故壳自建等价面（`macos/Sources/DSHChamber/ShellWindow
 
 ## 8. 实施阶段、测试与验收
 
-> companion `docs/progress/todo/macos-swift-v1.md` 持有 WBS 编号索引（W-01…W-32）、双线防漂移门禁清单、W1–W7 判定
+> companion `docs/progress/todo/platform/macos-swift-v1.md` 持有 WBS 编号索引（W-01…W-32）、双线防漂移门禁清单、W1–W7 判定
 > 标准、双端性能/产物体积 A/B 协议、中止点 A1–A8 与 dev 侧约定；分批顺序、runbook 与工期估算已随收口删除（git
 > 历史），本节只留契约性要点。
 

@@ -118,7 +118,7 @@
 - 打印/页内查找：两端皆无（`electron.d.ts:9653`无print/find role；macos grep printOperation/find = 0）；任一端将来加入口时Swift必须实现`printOperation(with:)`，否则成新缺口。
 - 许可文本随包：两端都不随任何顶层许可/第三方声明（Electron mac打包显式删LICENSE/LICENSES.chromium.html：`electronMac.js:219-221`；Swift只解bin/node：`build-sidecar.mjs`；THIRD_PARTY_NOTICES.md只在release校验）——共同缺口，需单独立项。
 - CSP frame-src（裁定）：补最窄`frame-src blob:`（`control-plane/src/index.ts:1131-1143`），HTML文档预览的blob: iframe具备渲染条件；Swift只放行非主frame（S-35）。真实渲染仍属实机（§4）。
-- test-windows腿的Windows用户路径缺口由`docs/progress/todo/windows-v1.md:51-60`台账承载，不并入本表。
+- test-windows腿的Windows用户路径缺口由`docs/progress/todo/platform/windows-v1.md:51-60`台账承载，不并入本表。
 
 ## 6. 可达性优先：纪律与盘点
 

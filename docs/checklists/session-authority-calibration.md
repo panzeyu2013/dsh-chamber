@@ -62,4 +62,4 @@
 - 契约：design 14 §D4「会话事实单一权威」；通知面 design 19 §3.2。
 - 语料：`packages/dsh-stream-state/test/authority/`、
   `packages/renderer/test/aggregate/notification-projection.test.ts`。
-- 上游残余：`docs/progress/todo/upstream-proposals.md` §4。
+- 上游残余：`docs/progress/todo/upstream/upstream-proposals.md` §4。
