@@ -414,11 +414,15 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   export type IconComponent = (props?: IconProps) => JSX.Element | null
   export const IconAgentPresetOutlineRegular: IconComponent
   export const IconAlarmClockOutlineRegular: IconComponent
+  export const IconArchiveCheckOutlineRegular: IconComponent
+  export const IconArchiveOffOutlineRegular: IconComponent
   export const IconArchiveOutlineRegular: IconComponent
   export const IconBranchOutlineRegular: IconComponent
   export const IconChecklistOutlineRegular: IconComponent
   export const IconChevronDownOutlineRegular: IconComponent
   export const IconChevronRightOutlineRegular: IconComponent
+  export const IconChevronsUpDownOutlineRegular: IconComponent
+  export const IconClockOutlineRegular: IconComponent
   export const IconCloseFillRegular: IconComponent
   export const IconCloseOutlineRegular: IconComponent
   export const IconDataOutlineRegular: IconComponent
@@ -427,10 +431,14 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   /** Closed-folder state glyph (upstream ui-workspace ProjectRowItem state
    *  mechanism): the workspace group's resting folder slot, paired with the
    *  primitives' 1px-stroke open glyph IconFolderOpenOutlineRegular. */
+  export const IconFlatListOutlineRegular: IconComponent
   export const IconFolderCloseRegular: IconComponent
   export const IconFolderOpenOutlineRegular: IconComponent
   export const IconLinkOutlineRegular: IconComponent
   export const IconLoadingOutlineRegular: IconComponent
+  export const IconQueueOutlineRegular: IconComponent
+  export const IconSlidersTwoOutlineRegular: IconComponent
+  export const IconUnarchiveOutlineRegular: IconComponent
   export const IconNewChatOutlineMedium: IconComponent
   export const IconNewChatOutlineRegular: IconComponent
   export const IconPanelLeftOutlineRegular: IconComponent
@@ -447,6 +455,7 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   export const IconStopFillRegular: IconComponent
   export const IconTrashOutlineRegular: IconComponent
   export const IconWarningOutlineRegular: IconComponent
+  export const IconWorkspaceTreeOutlineRegular: IconComponent
 }
 
 // The official Button atom, imported by the FRAME (App.tsx) by DEEP SOURCE PATH

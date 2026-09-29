@@ -9,7 +9,8 @@
 import { chamberBridge } from './aggregate-store.ts'
 import { assertSingletonModule } from './singleton.ts'
 import { isRecord } from './wire-common.ts'
-import type { SessionOrderBy } from './derive.ts'
+import { UNGROUPED_WORKSPACE_ID, type ArchivedFilter, type SessionGroupBy, type SessionOrderBy } from './derive.ts'
+import { flatAccountKey } from './flat-account.ts'
 
 assertSingletonModule('view-prefs')
 
@@ -29,6 +30,23 @@ export interface ChamberSidebarViewPrefs {
    */
   orderBy?: Record<string, SessionOrderBy>
   /**
+   * Per-source session grouping preference (upstream SessionGroupBy): key =
+   * sourceId, value = 'workspace' | 'workspace-tree' | 'flat'. OPTIONAL — old
+   * persisted payloads stay valid without a version bump (v stays 1); readers
+   * fall back to 'workspace', and the write-time prune drops entries of sources
+   * seen this session that vanished from the projection. Mirrors orderBy.
+   */
+  groupBy?: Record<string, SessionGroupBy>
+  /**
+   * Per-source archived-row visibility (upstream ArchivedFilter): key =
+   * sourceId, value = 'default' | 'show' | 'only'. OPTIONAL; same v=1 rules as
+   * orderBy. When a source's archive set is unknown (archiveSetKnown !== true)
+   * the stored value is kept, the render falls back to 'default', and the WHOLE
+   * filter axis is disabled (design 06 §3.4 honesty rule: clicking the default
+   * entry would write 'default' back and destroy the stored preference).
+   */
+  archivedFilter?: Record<string, ArchivedFilter>
+  /**
    * Updated-mode session order accounts (mirrors the official
    * ui-workspace sessionOrderByAccount): key = `${sourceId}/${workspaceId}` —
    * real workspaces AND the synthetic ungrouped bucket. Each account holds the
@@ -38,6 +56,17 @@ export interface ChamberSidebarViewPrefs {
    * OPTIONAL; pruned by the same safe source-vanished rule.
    */
   updatedOrder?: Record<string, string[]>
+  /**
+   * Per-source FLAT order account (the chamber twin of the official
+   * FLAT_SESSION_ORDER_KEY): key = sourceId, value = member ids in display
+   * order. Single-list mode's manual baseline — seeded from the composed
+   * workspace order on first observation, reconciled against membership, and
+   * mutated by in-mode drags (persisted locally, no wire commit). Manual
+   * workspace order is untouched by it; the updated-mode twin lives in
+   * `updatedOrder` under the synthetic flatAccountKey(sourceId) key (a NUL sentinel —
+   * see flat-account.ts; a real workspace id can never contain NUL).
+   */
+  flatOrder?: Record<string, string[]>
   /**
    * Updated-mode activity bookkeeping (official sessionUpdatedAtByAccount
    * mirror): account key → sessionId → last observed updatedAt. The promotion
@@ -98,7 +127,7 @@ export const VIEW_PREFS_KEY = 'dsh-chamber.sidebar.v1'
  * later default load and post-reset cache.
  */
 function defaults(): ChamberSidebarViewPrefs {
-  return { v: 1, folded: {}, ungroupedOrder: {}, orderBy: {}, updatedOrder: {}, sessionUpdatedAtByAccount: {}, seenSources: [] }
+  return { v: 1, folded: {}, ungroupedOrder: {}, orderBy: {}, groupBy: {}, archivedFilter: {}, updatedOrder: {}, flatOrder: {}, sessionUpdatedAtByAccount: {}, seenSources: [] }
 }
 
 /** Lenient structural validation: drop malformed entries, keep valid ones. */
@@ -123,11 +152,31 @@ function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
       if (value === 'manual' || value === 'updated') orderBy[key] = value
     }
   }
+  // groupBy / archivedFilter：枚举过滤，同 orderBy（缺失字段回退空对象，v 保持 1）。
+  const groupBy: Record<string, SessionGroupBy> = {}
+  if (isRecord(raw.groupBy)) {
+    for (const [key, value] of Object.entries(raw.groupBy)) {
+      if (value === 'workspace' || value === 'workspace-tree' || value === 'flat') groupBy[key] = value
+    }
+  }
+  const archivedFilter: Record<string, ArchivedFilter> = {}
+  if (isRecord(raw.archivedFilter)) {
+    for (const [key, value] of Object.entries(raw.archivedFilter)) {
+      if (value === 'default' || value === 'show' || value === 'only') archivedFilter[key] = value
+    }
+  }
   // updatedOrder：account 键 → string[]；非数组/非字符串条目丢弃，同 ungroupedOrder。
   const updatedOrder: Record<string, string[]> = {}
   if (isRecord(raw.updatedOrder)) {
     for (const [key, value] of Object.entries(raw.updatedOrder)) {
       if (Array.isArray(value)) updatedOrder[key] = value.filter((entry): entry is string => typeof entry === 'string')
+    }
+  }
+  // flatOrder：sourceId 键 → string[]，逐条校验同 ungroupedOrder。
+  const flatOrder: Record<string, string[]> = {}
+  if (isRecord(raw.flatOrder)) {
+    for (const [key, value] of Object.entries(raw.flatOrder)) {
+      if (Array.isArray(value)) flatOrder[key] = value.filter((entry): entry is string => typeof entry === 'string')
     }
   }
   // sessionUpdatedAtByAccount：嵌套逐层校验。
@@ -177,7 +226,10 @@ function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
     folded,
     ungroupedOrder,
     orderBy,
+    groupBy,
+    archivedFilter,
     updatedOrder,
+    flatOrder,
     sessionUpdatedAtByAccount,
     ...(hasSourceFolded ? { sourceFolded } : {}),
     ...(serverOrder !== undefined ? { serverOrder } : {}),
@@ -280,7 +332,10 @@ function prunePrefs(prefs: ChamberSidebarViewPrefs): ChamberSidebarViewPrefs {
   const folded = { ...prefs.folded }
   const ungroupedOrder = { ...prefs.ungroupedOrder }
   const orderBy = { ...prefs.orderBy }
+  const groupBy = { ...prefs.groupBy }
+  const archivedFilter = { ...prefs.archivedFilter }
   const updatedOrder = { ...prefs.updatedOrder }
+  const flatOrder = { ...prefs.flatOrder }
   const sessionUpdatedAtByAccount = { ...prefs.sessionUpdatedAtByAccount }
   // sourceFolded / serverOrder 同为可选字段：undefined 保持 undefined（绝不把缺失变成空对象写回）。
   const sourceFolded = prefs.sourceFolded === undefined ? undefined : { ...prefs.sourceFolded }
@@ -307,6 +362,26 @@ function prunePrefs(prefs: ChamberSidebarViewPrefs): ChamberSidebarViewPrefs {
       changed = true
     }
   }
+  // groupBy / archivedFilter 同 orderBy：只裁「本会话见过、现已消失」的来源。
+  for (const sourceId of Object.keys(groupBy)) {
+    if (knownGone(sourceId)) {
+      delete groupBy[sourceId]
+      changed = true
+    }
+  }
+  for (const sourceId of Object.keys(archivedFilter)) {
+    if (knownGone(sourceId)) {
+      delete archivedFilter[sourceId]
+      changed = true
+    }
+  }
+  // flatOrder 同 ungroupedOrder：sourceId 键，裁见过且已消失的来源。
+  for (const sourceId of Object.keys(flatOrder)) {
+    if (knownGone(sourceId)) {
+      delete flatOrder[sourceId]
+      changed = true
+    }
+  }
   // updatedOrder / sessionUpdatedAtByAccount 同 folded：只裁见过且已消失的来源；断连来源的序/簿记保留。
   for (const key of Object.keys(updatedOrder)) {
     const slash = key.indexOf('/')
@@ -320,6 +395,44 @@ function prunePrefs(prefs: ChamberSidebarViewPrefs): ChamberSidebarViewPrefs {
     const slash = key.indexOf('/')
     const sourceId = slash === -1 ? undefined : key.slice(0, slash)
     if (knownGone(sourceId)) {
+      delete sessionUpdatedAtByAccount[key]
+      changed = true
+    }
+  }
+  // 工作区级账号裁剪：来源在场且工作区集合非空时，已被删除的工作区账号（updatedOrder 与
+  // 提升簿记）不得永久驻留 localStorage。断连/未加载来源（无工作区）一律保留；合成账号
+  // （未分组桶、flat 哨兵）不是真实工作区 id，永不裁。
+  const liveWorkspaceIds = new Map<string, Set<string>>()
+  for (const server of servers) {
+    if (server.workspaces.length === 0) continue
+    // 只在**权威且未过滤**的投影上裁剪（第四轮 F1）：三态筛选会让没有归档成员的工作区整体
+    // 从投影消失，降级/未挂载兜底则会把工作区换成 __cwd__ 合成组——把"投影里没有"当成
+    // "已删除"会静默清掉活账号与提升簿记（updated 模式切换筛选后 250ms 即落盘）。
+    if ((prefs.archivedFilter?.[server.id] ?? 'default') !== 'default') continue
+    if (server.archiveSetKnown !== true) continue
+    if (server.aggregateReady !== true) continue
+    if (server.workspaces.some(workspace => workspace.synthetic === true)) continue
+    liveWorkspaceIds.set(server.id, new Set(server.workspaces.map(workspace => workspace.id)))
+  }
+  const workspaceAccountGone = (key: string): boolean => {
+    const slash = key.indexOf('/')
+    if (slash === -1) return false
+    const sourceId = key.slice(0, slash)
+    const live = liveWorkspaceIds.get(sourceId)
+    if (live === undefined) return false
+    const workspaceId = key.slice(slash + 1)
+    if (workspaceId === UNGROUPED_WORKSPACE_ID) return false
+    if (key === flatAccountKey(sourceId)) return false
+    return !live.has(workspaceId)
+  }
+  for (const key of Object.keys(updatedOrder)) {
+    if (workspaceAccountGone(key)) {
+      delete updatedOrder[key]
+      changed = true
+    }
+  }
+  for (const key of Object.keys(sessionUpdatedAtByAccount)) {
+    if (workspaceAccountGone(key)) {
       delete sessionUpdatedAtByAccount[key]
       changed = true
     }
@@ -346,7 +459,7 @@ function prunePrefs(prefs: ChamberSidebarViewPrefs): ChamberSidebarViewPrefs {
   }
   // 重建自固定字段表——显式携带 sidebarWidth 等可选字段，裁剪写入不得丢掉宽度偏好。
   return {
-    v: 1, folded, ungroupedOrder, orderBy, updatedOrder, sessionUpdatedAtByAccount,
+    v: 1, folded, ungroupedOrder, orderBy, groupBy, archivedFilter, updatedOrder, flatOrder, sessionUpdatedAtByAccount,
     ...(sourceFolded !== undefined ? { sourceFolded } : {}),
     ...(serverOrder !== undefined ? { serverOrder } : {}),
     sidebarWidth: prefs.sidebarWidth, seenSources: seen,
@@ -485,6 +598,20 @@ export function scheduleUpdatedOrderWrite(
   if (activityTimer === null) {
     activityTimer = setTimeout(() => flushScheduledActivityWrites(), VIEW_PREFS_ACTIVITY_DEBOUNCE_MS)
   }
+}
+
+/** 读口：防抖窗内 pending 的账户意图（渲染侧判等守卫用它避免旧 intent 赢过新派生）。 */
+export function peekScheduledActivityWrites(): {
+  updatedOrder: Record<string, string[]>
+  sessionUpdatedAtByAccount: Record<string, Record<string, number>>
+} {
+  const updatedOrder: Record<string, string[]> = {}
+  const sessionUpdatedAtByAccount: Record<string, Record<string, number>> = {}
+  for (const [accountKey, activity] of activityPending) {
+    updatedOrder[accountKey] = activity.order
+    sessionUpdatedAtByAccount[accountKey] = activity.timestamps
+  }
+  return { updatedOrder, sessionUpdatedAtByAccount }
 }
 
 /** 立即落盘所有防抖窗内 pending 的置顶写回（幂等；无 pending 为 no-op）。陈旧

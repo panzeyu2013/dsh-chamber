@@ -68,18 +68,30 @@ export const zh = {
   'archive.purge.note.errorSample': '· {message}',
   'action.menu.workspace': '工作区“{name}”的操作',
   'action.menu.session': '会话“{name}”的操作',
-  'action.sort': '排序',
   'action.copy': '复制',
   'orderBy.label': '排序方式',
   'orderBy.manual': '手动排序',
   'orderBy.updated': '最近更新',
+  // 视图选项三轴（上游 ui-workspace 字典逐字）：分组 / 排序 / 筛选。工作区树在本仓按
+  // 「已注册父目录」嵌套（git 家族优先，见 design 06 §3.4）。
+  'viewOptions.label': '视图选项',
+  'groupBy.label': '分组方式',
+  'groupBy.workspace': '按工作区',
+  'groupBy.workspaceTree': '按工作区树',
+  'groupBy.flat': '单列表',
+  'filterBy.label': '筛选会话',
+  'viewOptions.hideArchived': '隐藏已归档',
+  'viewOptions.showArchived': '全部对话（显示已归档）',
+  'viewOptions.onlyArchived': '仅显示已归档',
   'menu.fork': '分叉会话',
   // 置顶动词逐字取上游 ui-workspace 字典（menu.pinSession/menu.unpinSession、actions.pin/
-  // unpin、row.pinned）。zh 的「置顶」承诺了排序（上游 pin 会写 pinSessionOrder）；本仓首落
-  // 未接置顶序，该差异登记在 design 06 §5/§7 与 todo/upstream/upstream-ui-parity-plan.md §1.1。
+  // unpin、row.pinned）。zh 的「置顶」承诺了排序（上游 pin 会写 pinSessionOrder）；本仓的
+  // 渲染分区已落地，未做的只是把置顶写进本地账号，该差异登记在 design 06 §5/§7 与
+  // todo/upstream/upstream-ui-parity-plan.md §1.1。
   'menu.pinSession': '置顶会话',
   'menu.unpinSession': '取消置顶',
   'menu.archiveSession': '归档会话',
+  'menu.unarchiveSession': '取消归档',
   // 行 hover 归档钮的 tooltip（上游 ui-workspace 字典逐字：zh「归档会话」/ en "Archive"；
   // zh 与 kebab 菜单项的 `menu.archiveSession` 同值，en 照上游按钮座席是 "Archive"（菜单项是
   // "Archive session"）；键与值都照上游的按钮座席）。
@@ -89,14 +101,27 @@ export const zh = {
   'actions.unpin': '取消置顶',
   // 静息置顶标记的无障碍名与 title（上游 row.pinned 逐字）。
   'row.pinned': '已置顶',
+  // 归档行与归档提示条（上游 ui-workspace 字典逐字）：行形态、toast 三态、空态与恢复。
+  'row.archived': '已归档',
+  'actions.unarchive': '取消归档',
+  'toast.archivedNotOpenable': '已归档对话暂时无法查看，请取消归档后查看',
+  'toast.archived': '会话已归档，可',
+  'toast.stoppedAndArchived': '已停止并归档，可',
+  'toast.archivedUndo': '撤销',
+  'toast.archivedOr': '或',
+  'toast.archivedFilter': '筛选已归档会话',
+  'empty.noneArchived': '暂无已归档会话',
+  'empty.viewOthers': '查看其他会话',
   // 行级图标钮的无障碍名按本仓政策参数化行名（见上方 `action.newSession.aria` 的说明）；
   // 上游同座席用的是行菜单同款泛化名，本仓在 design 06 §7 记为有意分歧。
   'action.archive.aria': '归档会话“{name}”',
+  // 归档行的恢复钮无障碍名（同一条行名参数化政策；上游用泛化 `menu.unarchiveSession`）。
+  'action.unarchive.aria': '取消归档“{name}”',
   'action.orphanedCleanup.aria': '清理“{name}”的工作区注册（文件夹已不存在）',
-  // 归档活动确认（官方 SessionArchiveConfirmDialog 的逐字文案，desc 除外：chamber 尚无
-  // 「全部对话（显示已归档）」筛选/恢复入口，因此不承诺可恢复，只陈述停止后果）。
+  // 归档活动确认（官方 SessionArchiveConfirmDialog 逐字文案）：归档筛选与恢复入口已落地
+  // （design 06 §3.4），desc 与上游一致地承诺「可在全部对话（显示已归档）中恢复」。
   'archive.confirm.title': '停止并归档此会话？',
-  'archive.confirm.desc': '“{title}”仍有正在进行的工作。归档会先停止这些工作；被停止的工作不会自动继续。',
+  'archive.confirm.desc': '“{title}”仍有正在进行的工作。归档会先停止这些工作；之后可在侧栏筛选“全部对话（显示已归档）”中恢复会话，被停止的工作不会自动继续。',
   'archive.confirm.activity': '将被停止的工作',
   'archive.confirm.turn': '进行中的回合',
   'archive.confirm.subagents.one': '{n} 个运行中的子智能体：{names}',
@@ -256,23 +281,43 @@ export const en = {
   'archive.purge.note.errorSample': '· {message}',
   'action.menu.workspace': 'Workspace actions for {name}',
   'action.menu.session': 'Session actions for {name}',
-  'action.sort': 'Sort',
   'action.copy': 'Copy',
-  'orderBy.label': 'Sort by',
+  'orderBy.label': 'Order by',
   'orderBy.manual': 'Manual',
   'orderBy.updated': 'Last updated',
+  'viewOptions.label': 'View options',
+  'groupBy.label': 'Group by',
+  'groupBy.workspace': 'WorkSpace',
+  'groupBy.workspaceTree': 'Workspace Tree',
+  'groupBy.flat': 'In one list',
+  'filterBy.label': 'Filter sessions',
+  'viewOptions.hideArchived': 'Hide archived',
+  'viewOptions.showArchived': 'All conversations (show archived)',
+  'viewOptions.onlyArchived': 'Archived only',
   'menu.fork': 'Fork session',
   'menu.pinSession': 'Pin session',
   'menu.unpinSession': 'Unpin session',
   'menu.archiveSession': 'Archive session',
+  'menu.unarchiveSession': 'Unarchive session',
   'actions.archive': 'Archive',
   'actions.pin': 'Pin',
   'actions.unpin': 'Unpin',
   'row.pinned': 'Pinned',
+  'row.archived': 'Archived',
+  'actions.unarchive': 'Unarchive',
+  'toast.archivedNotOpenable': 'Archived sessions cannot be opened. Unarchive it to view.',
+  'toast.archived': 'Session archived. You can ',
+  'toast.stoppedAndArchived': 'Session stopped and archived. You can ',
+  'toast.archivedUndo': 'undo',
+  'toast.archivedOr': ' or ',
+  'toast.archivedFilter': 'filter archived sessions',
+  'empty.noneArchived': 'No archived sessions yet',
+  'empty.viewOthers': 'View other sessions',
   'action.archive.aria': 'Archive “{name}”',
+  'action.unarchive.aria': 'Unarchive “{name}”',
   'action.orphanedCleanup.aria': 'Clean up the workspace registration of “{name}” (its folder is gone)',
   'archive.confirm.title': 'Stop and archive this session?',
-  'archive.confirm.desc': '“{title}” still has work in progress. Archiving stops it first, and the stopped work will not resume on its own.',
+  'archive.confirm.desc': '“{title}” still has work in progress. Archiving stops it first; you can restore the session later from the “All conversations (show archived)” filter in the sidebar, and the stopped work will not resume on its own.',
   'archive.confirm.activity': 'Work that will be stopped',
   'archive.confirm.turn': 'The turn in progress',
   'archive.confirm.subagents.one': '{n} running subagent: {names}',

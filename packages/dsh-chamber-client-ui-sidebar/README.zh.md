@@ -94,7 +94,7 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   （design 06 §7/§11、design 08 §3.4）。
   会话行的悬停簇 = kebab + **独立归档钮与独立置顶钮**（上游 `ArchiveSessionRowButton` /
   `PinSessionRowButton`，design 06 §7）；
-  归档行从不进入本投影，因此上游该钮的 unarchive 半个分支在本仓没有消费方。两处归档入口都走官方**两段式**：安静会话立即归档、
+  归档行随三态筛选进出本投影（design 06 §3.4），上游该钮的 unarchive 半支在本仓**是活的**（行/菜单入口翻转为「恢复」、搜索命中行以行后文本动作恢复）。两处归档入口都走官方**两段式**：安静会话立即归档、
   无确认（归档只隐藏该行、从不触及会话日志——上游把安静归档排除在确认家族之外的同一理由）；
   宿主因该会话仍有活跃工作而拒绝（`workspace/session-active`）时才弹「停止并归档」确认，
   确认后带 `stopActivity` 重发，停止由宿主 provider 完成（design 24 §5）。
@@ -125,12 +125,12 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   展开后**同一个**控件给 `sessions.collapse` 并上报 `aria-expanded`——隐藏计数
   取自与展开无关的窗口，故收起入口不会被自己的那次展开吃掉。
 - 菜单与来源头控件：交互按上游、**密度按 chamber**。三个菜单（session kebab /
-  workspace kebab / 排序）一律用原语的 `compact` 形态——这是 v0.2.4 的行为，
+  workspace kebab / 视图选项）一律用原语的 `compact` 形态——这是 v0.2.4 的行为，
   2026-09-11 对齐轮曾改成官方默认（40px 行 / 14px 标签）与 `dense`（34px），
   比我们自己 26px 的列表行整整大一圈，故恢复；`closeOnPointerLeave` 保留。
-  来源头四个控件（排序/添加工作区/搜索/归档管理器）改骑官方
-  `Tooltip`（不再借用原生 `title`），添加工作区用官方 project-add 字形；排序
-  菜单保留 portal + `align="end"`，并由标签报出当前模式。浏览树带上可访问名
+  来源头四个控件（视图选项/添加工作区/搜索/归档管理器）改骑官方
+  `Tooltip`（不再借用原生 `title`），添加工作区用官方 project-add 字形；触发钮
+  打开三轴视图选项菜单（portal + `align="end"`、`viewOptions.label`）。浏览树带上可访问名
   `section.sessions`，与搜索结果树一致。
 - 新建工作区：每个已连接来源打开同一个应用内目录浏览对话框（browse
   directory-picker 表面，设计 05 §4），按该来源的 unary client 驱动
@@ -138,8 +138,8 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   `workspace.create`——路径须为该实例宿主上已存在的目录（远程路径即远端
   服务器路径）。
 - 点击非当前来源的分组头 → 切换活动 N-ctx 视图到该来源 shell（不打开
-  会话，`chamberBridge.requestActivateSource`）；归档后会话立即从列表
-  消失（`archivedSessionIds` 过滤在 `packages/dsh-chamber-client-core/src/derive.ts` derive 层）。
+  会话，`chamberBridge.requestActivateSource`）；归档后会话在 **default 筛选**下立即从列表
+  消失（show 保留灰显原槽位；`archivedFilter` 过滤在 `packages/dsh-chamber-client-core/src/derive.ts` derive 层）。
 - 折叠 rail 为每个来源渲染一个**命名的可操作按钮**（官方 `Tooltip` +
   `aria-label`、当前来源 `aria-current`、**非当前**且不可激活的来源
   `aria-disabled`——当前来源同样不是激活目标，但它用 `aria-current` 标记；名称取

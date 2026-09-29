@@ -74,7 +74,7 @@ export interface ServerSectionSearchResultsProps {
 }
 
 export function ServerSectionSearchResults({ server, merged, currentRemote, currentId }: ServerSectionSearchResultsProps) {
-  const { t, rowErrors, openSession } = useSidebarSection()
+  const { t, rowErrors, openSession, onUnarchiveSession, showNotice } = useSidebarSection()
   const { sessionStateLabel, sessionStatePending, sessionStateDot } = useServerSectionSessionState()
               // 标签来自来源 aggregate（可能比最新快照滞后一轮 poll）；用官方
               // display label——host 读不到标题时渲染目录名。
@@ -104,6 +104,15 @@ export function ServerSectionSearchResults({ server, merged, currentRemote, curr
               // 同一投影查询给 active-Schedule 事实（上游当前 pin 只在会话行的行首座席渲染该标记，
               // 搜索行不渲染；本仓搜索行保留旧代同址形态——有意分歧，见 checklist §4.6 第 7 行）；
               // 查不到 ⇒ false——不在可见投影内不构成对该会话日程的断言。
+              // 归档位同样来自投影（show/only 下归档行在投影内）；查不到 ⇒ false。
+              const projectedArchived = (sessionId: string): boolean => {
+                for (const workspace of server.workspaces) {
+                  const session = workspace.sessions.find(candidate => candidate.id === sessionId)
+                  if (session === undefined) continue
+                  return session.archived === true
+                }
+                return false
+              }
               const projectedHasActiveSchedule = (sessionId: string): boolean => {
                 for (const workspace of server.workspaces) {
                   const session = workspace.sessions.find(candidate => candidate.id === sessionId)
@@ -118,8 +127,10 @@ export function ServerSectionSearchResults({ server, merged, currentRemote, curr
                           {merged.items.map((item) => {
                             const resolved = searchRowLabel(item.sessionId)
                             const running = projectedRunning(item.sessionId)
-                            const stateDot = sessionStateDot(server, { id: item.sessionId, running })
-                            const stateLabel = sessionStateLabel(server, { id: item.sessionId, running })
+                            const archived = projectedArchived(item.sessionId)
+                            // 归档命中行的状态槽留空（上游同规则），活状态不再宣称。
+                            const stateDot = archived ? null : sessionStateDot(server, { id: item.sessionId, running })
+                            const stateLabel = archived ? t('row.archived') : sessionStateLabel(server, { id: item.sessionId, running })
                             const openError = rowErrors[openErrorKey(server.id, item.sessionId)]
                             return (
                               // 搜索树替换工作区树，打开失败也必须在该结果行下可见；
@@ -127,10 +138,18 @@ export function ServerSectionSearchResults({ server, merged, currentRemote, curr
                               <Fragment key={item.sessionId}>
                                 <button
                                   type="button"
-                                  className={cc.searchResultRow}
+                                  className={clsx(cc.searchResultRow, archived && cc.sessionArchived)}
                                   role="treeitem"
                                   aria-selected={item.sessionId === currentId}
-                                  onClick={() => openSession(server.id, item.sessionId)}
+                                  // 归档命中不可打开（上游同键）：点击就地提示。
+                                  aria-description={archived ? t('toast.archivedNotOpenable') : undefined}
+                                  onClick={() => {
+                                    if (archived) {
+                                      showNotice(server.id, 'archivedNotOpenable', item.sessionId)
+                                      return
+                                    }
+                                    openSession(server.id, item.sessionId)
+                                  }}
                                 >
                                   <span className={cc.searchResultHeading}>
                                     <span
@@ -157,6 +176,19 @@ export function ServerSectionSearchResults({ server, merged, currentRemote, curr
                                     <span className={cc.searchResultSnippet}>{item.snippet}</span>
                                   )}
                                 </button>
+                                {/* 归档命中的恢复入口：上游是行内 hover 字形钮；本仓搜索结果行是单一
+                                    button（role=treeitem），嵌套按钮非法，故以行后同级文本动作承载同一
+                                    `workspace/unarchiveSession` 出口（形态偏差见 design 06 §3.4）。 */}
+                                {archived && (
+                                  <button
+                                    type="button"
+                                    className={clsx(cc.archiveNoticeAction, cc.searchResultUnarchive)}
+                                    aria-label={t('action.unarchive.aria', { name: resolved.title })}
+                                    onClick={() => onUnarchiveSession(server, item.sessionId)}
+                                  >
+                                    {t('actions.unarchive')}
+                                  </button>
+                                )}
                                 {openError !== undefined && (
                                   <div className={clsx(cc.rowError, cc.sessionNested)} role="alert">{openError}</div>
                                 )}

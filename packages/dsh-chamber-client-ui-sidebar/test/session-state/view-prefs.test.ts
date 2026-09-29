@@ -47,7 +47,10 @@ class MemoryStorage implements StorageLike {
 }
 
 function defaults(): ChamberSidebarViewPrefs {
-  return { v: 1, folded: {}, ungroupedOrder: {}, orderBy: {}, updatedOrder: {}, sessionUpdatedAtByAccount: {}, seenSources: [] }
+  return {
+    v: 1, folded: {}, ungroupedOrder: {}, orderBy: {}, groupBy: {}, archivedFilter: {},
+    updatedOrder: {}, flatOrder: {}, sessionUpdatedAtByAccount: {}, seenSources: [],
+  }
 }
 
 test('loadViewPrefs returns defaults when the key is missing', () => {
@@ -62,7 +65,10 @@ test('save then load round-trips the prefs', () => {
     v: 1, folded: { 'local/w1': true, 'ssh-a/w2': false },
     ungroupedOrder: { local: ['s3', 's1', 's2'], 'ssh-a': [] },
     orderBy: { local: 'updated', 'ssh-a': 'manual' },
+    groupBy: { local: 'workspace-tree', 'ssh-a': 'flat' },
+    archivedFilter: { local: 'show' },
     updatedOrder: { 'local/w1': ['s3', 's1', 's2'], 'ssh-a/__ungrouped__': ['x'] },
+    flatOrder: { local: ['s1', 's2'] },
     sessionUpdatedAtByAccount: { 'local/w1': { s1: 100, s2: 200 } },
     seenSources: [],
   }
@@ -112,6 +118,9 @@ test('loadViewPrefs sanitizes malformed entries leniently and keeps valid ones',
         'local/w2': 'not-an-array',
         'local/w3': [1, 's3', null],
       },
+      groupBy: { local: 'flat', 'ssh-a': 'treeish', 'ssh-b': 42 },
+      archivedFilter: { 'local/w1': 'show', bad: 'hidden' },
+      flatOrder: { local: ['s1', 42, 's2'], broken: 'nope' },
       sessionUpdatedAtByAccount: {
         'local/w1': { s1: 100, s2: 200, bad: 'x' },
         'local/w2': 'not-an-object',
@@ -125,7 +134,10 @@ test('loadViewPrefs sanitizes malformed entries leniently and keeps valid ones',
     folded: { good: true },
     ungroupedOrder: { local: ['s1', 's2'], empty: [] },
     orderBy: {},
+    groupBy: { local: 'flat' },
+    archivedFilter: { 'local/w1': 'show' },
     updatedOrder: { 'local/w1': ['s1', 's2'], 'local/w3': ['s3'] },
+    flatOrder: { local: ['s1', 's2'] },
     sessionUpdatedAtByAccount: { 'local/w1': { s1: 100, s2: 200 }, 'local/w3': { s5: -1 } },
     seenSources: [],
   })
@@ -315,6 +327,49 @@ test('shared view-prefs store: safe prune — only sources SEEN then vanished ar
   assert.deepEqual(pruned.seenSources, ['local', 'ssh-b'])
 })
 
+test('the workspace-account prune gates isolate: authoritative+default prunes, every degraded shape holds (F1)', () => {
+  __resetViewPrefsForTests()
+  const both = [
+    { id: 'w1', title: 'W1', sessions: [{ id: 'a', title: 'A', displayTitle: 'A', running: false, updatedAt: 1 }] },
+    { id: 'w2', title: 'W2', sessions: [{ id: 'b', title: 'B', displayTitle: 'B', running: false, updatedAt: 2 }] },
+  ]
+  const onlyW1 = [both[0]]
+  const seed = (): void => updateViewPrefs(prev => ({
+    ...prev,
+    updatedOrder: { ...prev.updatedOrder, 'local/w1': ['a'], 'local/w2': ['b'] },
+    sessionUpdatedAtByAccount: { ...prev.sessionUpdatedAtByAccount, 'local/w1': { a: 1 }, 'local/w2': { b: 2 } },
+  }))
+  const touch = (): void => updateViewPrefs(prev => ({ ...prev, folded: { ...prev.folded, 'local/w1': true } }))
+  const authoritative = (workspaces: unknown): void =>
+    publish({ id: 'local', archiveSetKnown: true, aggregateReady: true, workspaces } as never)
+
+  // A) 正向对照（必须真的会红）：权威 + default + 未过滤 → 消失的 w2 账号被裁。
+  authoritative(both); seed(); authoritative(onlyW1); touch()
+  assert.equal(getViewPrefs().updatedOrder?.['local/w2'], undefined, 'the positive prune path must fire')
+
+  // B) 筛选门：权威投影但 archivedFilter !== default → 不裁。
+  authoritative(both); seed()
+  updateViewPrefs(prev => ({ ...prev, archivedFilter: { ...prev.archivedFilter, local: 'only' } }))
+  authoritative(onlyW1); touch()
+  assert.deepEqual(getViewPrefs().updatedOrder?.['local/w2'], ['b'], 'the archive-filter gate must hold')
+
+  // C) 出处门：default 但归档集未知/未就绪（两个 flag 都缺席）→ 不裁。
+  authoritative(both); seed()
+  updateViewPrefs(prev => ({ ...prev, archivedFilter: { ...prev.archivedFilter, local: 'default' } }))
+  publish({ id: 'local', workspaces: onlyW1 } as never)
+  touch()
+  assert.deepEqual(getViewPrefs().updatedOrder?.['local/w2'], ['b'], 'an unknown archive set must hold')
+
+  // D) 合成/降级门：archiveSetKnown 真但 aggregateReady false + synthetic 工作区 → 不裁。
+  authoritative(both); seed()
+  publish({
+    id: 'local', archiveSetKnown: true, aggregateReady: false,
+    workspaces: [{ id: '__cwd__:/a', title: '', synthetic: true, sessions: [{ id: 'x', title: 'X', displayTitle: 'X', running: false, updatedAt: 3 }] }],
+  } as never)
+  touch()
+  assert.deepEqual(getViewPrefs().updatedOrder?.['local/w1'], ['a'], 'a degraded synthetic projection must hold every real account')
+})
+
 test('loadViewPrefs never restores a persisted seenSources from storage', () => {
   // Storage carries a previous session's roster + remote prefs — restoring
   // seenSources would let the startup window wipe remote prefs. Loading must
@@ -418,6 +473,67 @@ test('orderBy persists through save/load and the shared store keeps it on unrela
   assert.deepEqual(getViewPrefs().orderBy, {})
 })
 
+// ---- groupBy / archivedFilter / flatOrder (design 06 §3; v stays 1) ----
+
+test('loadViewPrefs sanitizes groupBy and archivedFilter enums, drops illegal entries', () => {
+  const storage = new MemoryStorage()
+  storage.setItem(VIEW_PREFS_KEY, JSON.stringify({
+    v: 1,
+    folded: {},
+    ungroupedOrder: {},
+    groupBy: { local: 'flat', 'ssh-a': 'workspace-tree', 'ssh-b': 'workspace', 'ssh-c': 'treeish', 'ssh-d': 42 },
+    archivedFilter: { local: 'show', 'ssh-a': 'only', 'ssh-b': 'default', 'ssh-c': 'hidden', 'ssh-d': null },
+  }))
+  const loaded = loadViewPrefs(storage)
+  assert.deepEqual(loaded.groupBy, { local: 'flat', 'ssh-a': 'workspace-tree', 'ssh-b': 'workspace' })
+  assert.deepEqual(loaded.archivedFilter, { local: 'show', 'ssh-a': 'only', 'ssh-b': 'default' })
+})
+
+test('loadViewPrefs falls back to {} for old payloads without the new fields (v stays 1, no re-seed)', () => {
+  const storage = new MemoryStorage()
+  storage.setItem(VIEW_PREFS_KEY, JSON.stringify({
+    v: 1,
+    folded: { 'local/w1': true },
+    ungroupedOrder: { local: ['s1'] },
+  }))
+  const loaded = loadViewPrefs(storage)
+  assert.deepEqual(loaded.groupBy, {})
+  assert.deepEqual(loaded.archivedFilter, {})
+  assert.deepEqual(loaded.flatOrder, {})
+  assert.equal(loaded.folded['local/w1'], true)
+})
+
+test('groupBy/archivedFilter/flatOrder prune with the source and survive the prune rebuild', () => {
+  __resetViewPrefsForTests()
+  updateViewPrefs(prev => ({
+    ...prev,
+    groupBy: { local: 'flat', 'ssh-b': 'workspace-tree', ghost: 'flat' },
+    archivedFilter: { local: 'show', 'ssh-b': 'only', ghost: 'show' },
+    flatOrder: { local: ['s1'], 'ssh-b': ['s2'], ghost: ['s3'] },
+  }))
+  publish({}, { id: 'ssh-b', workspaces: [] })
+  updateViewPrefs(prev => ({ ...prev, folded: { ...prev.folded, 'local/w1': true } }))
+  assert.deepEqual(getViewPrefs().groupBy, { local: 'flat', 'ssh-b': 'workspace-tree', ghost: 'flat' })
+  assert.deepEqual(getViewPrefs().archivedFilter, { local: 'show', 'ssh-b': 'only', ghost: 'show' })
+  assert.deepEqual(getViewPrefs().flatOrder, { local: ['s1'], 'ssh-b': ['s2'], ghost: ['s3'] })
+  publish({})
+  updateViewPrefs(prev => ({ ...prev, folded: { ...prev.folded, 'local/w2': true } }))
+  const pruned = getViewPrefs()
+  assert.deepEqual(pruned.groupBy, { local: 'flat', ghost: 'flat' })
+  assert.deepEqual(pruned.archivedFilter, { local: 'show', ghost: 'show' })
+  assert.deepEqual(pruned.flatOrder, { local: ['s1'], ghost: ['s3'] })
+})
+
+test('updateViewPrefs re-sanitizes the new fields on every write (illegal values never persist)', () => {
+  __resetViewPrefsForTests()
+  updateViewPrefs(prev => ({ ...prev, groupBy: { local: 'flat' }, archivedFilter: { local: 'only' }, flatOrder: { local: ['s1'] } }))
+  assert.deepEqual(getViewPrefs().groupBy, { local: 'flat' })
+  updateViewPrefs(prev => ({ ...prev, groupBy: { local: 'nope' as never }, archivedFilter: { local: 'hidden' as never } }))
+  assert.deepEqual(getViewPrefs().groupBy, {})
+  assert.deepEqual(getViewPrefs().archivedFilter, {})
+  assert.deepEqual(getViewPrefs().flatOrder, { local: ['s1'] })
+})
+
 // ---- clearSourceBookkeeping (setOrderBy entering-updated clear) ----
 
 test('clearSourceBookkeeping removes only the target source keys, keeps the rest, no-op on undefined', () => {
@@ -442,7 +558,8 @@ test('sidebarWidth round-trips through save/load', () => {
   const storage = new MemoryStorage()
   const prefs: ChamberSidebarViewPrefs = {
     v: 1, folded: { 'local/w1': true }, ungroupedOrder: { local: ['s1'] },
-    orderBy: {}, updatedOrder: {}, sessionUpdatedAtByAccount: {}, sidebarWidth: 360, seenSources: [],
+    orderBy: {}, groupBy: {}, archivedFilter: {}, updatedOrder: {}, flatOrder: {},
+    sessionUpdatedAtByAccount: {}, sidebarWidth: 360, seenSources: [],
   }
   saveViewPrefs(prefs, storage)
   assert.deepEqual(loadViewPrefs(storage), prefs)
@@ -528,7 +645,8 @@ test('sidebarWidth survives the write-time prune rebuild and unrelated writes', 
 test('sourceFolded round-trips and sanitizes booleans leniently, absent stays absent', () => {
   const storage = new MemoryStorage()
   const prefs: ChamberSidebarViewPrefs = {
-    v: 1, folded: { 'local/w1': true }, ungroupedOrder: {}, orderBy: {}, updatedOrder: {},
+    v: 1, folded: { 'local/w1': true }, ungroupedOrder: {}, orderBy: {}, groupBy: {},
+    archivedFilter: {}, updatedOrder: {}, flatOrder: {},
     sessionUpdatedAtByAccount: {}, sourceFolded: { local: true, 'ssh-a': false }, seenSources: [],
   }
   saveViewPrefs(prefs, storage)
@@ -551,8 +669,9 @@ test('sourceFolded round-trips and sanitizes booleans leniently, absent stays ab
 test('serverOrder sanitizes to a deduped string array, non-arrays are dropped', () => {
   const storage = new MemoryStorage()
   const prefs: ChamberSidebarViewPrefs = {
-    v: 1, folded: {}, ungroupedOrder: {}, orderBy: {}, updatedOrder: {},
-    sessionUpdatedAtByAccount: {}, serverOrder: ['ssh-b', 'local', 'ssh-a'], seenSources: [],
+    v: 1, folded: {}, ungroupedOrder: {}, orderBy: {}, groupBy: {}, archivedFilter: {},
+    updatedOrder: {}, flatOrder: {}, sessionUpdatedAtByAccount: {},
+    serverOrder: ['ssh-b', 'local', 'ssh-a'], seenSources: [],
   }
   saveViewPrefs(prefs, storage)
   assert.deepEqual(loadViewPrefs(storage), prefs)

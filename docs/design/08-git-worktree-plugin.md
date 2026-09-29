@@ -289,6 +289,12 @@ Git 事实不加进 App 的 session aggregate，v1 徽标只在 Git 区内；普
 
 ### 3.3 仓库家族、折叠与拖拽顺序
 
+- **与「按工作区树」分组的关系（2026 对齐轮）**：design 06 §3.4 的树模式层级由上游
+  `owningParentFolder`（已注册父目录前缀）给出，但**家族优先**——派生 worktree 的显示父级取它 main
+  的父级；worktree 建在 `$DSH_HOME/worktrees`（不在主 checkout 之下），纯前缀会把家族拆开，与本节的
+  连续家族不变式冲突。无 git 家族信息时退化为纯前缀。树只改缩进、不改顺序：家族连续性与拖拽边界仍由
+  本节的不变式与裁决器单独承担。失效判据 = worktree 落点策略变化或上游引入家族/树语义时复核
+  （实现 `client-core/workspace-tree.ts`，锁 `test/session-rows/workspace-tree.test.ts`）。
 - **连续家族不变式**：主 checkout 与同仓库派生 workspace 构成**连续家族**（main 居首、派生
   随后；注册表顺序持久）。不变式按**渲染序**成立，从新行出现的第一帧算起：位置意图先于 wire
   发布，宿主 create 的 prepend 短暂态不会渲染出来（否则那一帧里家族被"最顶端的新行"打断，

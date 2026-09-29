@@ -7,13 +7,14 @@
  */
 import { createContext, useContext, type Dispatch, type MutableRefObject, type ReactNode, type SetStateAction } from 'react'
 import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
-import { sourceAccentColor, type SessionOrderBy } from '@dsh-chamber/dsh-chamber-client-core/derive'
+import { sourceAccentColor, type ArchivedFilter, type SessionGroupBy, type SessionOrderBy } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import type { WorkspaceDropEnv } from '@dsh-chamber/dsh-chamber-client-core/workspace-drag-order'
 import { getWorkspaceGitFlag, hiddenByMainWorkspaceFold } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
 import type { ChamberSidebarViewPrefs } from '@dsh-chamber/dsh-chamber-client-core/view-prefs'
 import type {
   PanelSelectorHook, ShortcutsHook, SidebarPanelMetadata, SidebarRootComponentProps,
 } from './contract/slots.ts'
+import type { SourceNotice, SourceNoticeKind } from './sidebar-root-notices.ts'
 
 export interface RenameTarget {
   sourceId: string
@@ -29,6 +30,12 @@ export interface SessionDragState {
   /** 合成 ungrouped 桶标记：提交时按 id + flag 解析账目，避免真实工作区
    *  的 wire id 恰好等于 UNGROUPED_WORKSPACE_ID 时劫持桶拖拽的锚点。 */
   ungrouped: boolean
+  /** 单列表伪账号标记（同 ungrouped 的守卫理由）：真实工作区 id 恰好等于
+   *  FLAT_ACCOUNT_KEY 时不得被 flat 分支劫持。 */
+  flat: boolean
+  /** 拖起来的那一行是否置顶：置顶块内拖拽/跨块守卫未实现（选项1），置顶源或置顶目标
+   *  一律不显示 marker、不提交——否则未分区的锚点会把行移到反向位置并写进账号/wire。 */
+  pinned: boolean
   sessionId: string
   over: { id: string; half: 'before' | 'after' } | null
 }
@@ -158,6 +165,9 @@ export interface SidebarSectionContextValue {
   toggleWorkspaceFold: (serverId: string, workspaceId: string) => void
   toggleSourceFold: (serverId: string) => void
   setOrderBy: (server: ChamberServerAggregate, mode: SessionOrderBy) => void
+  /** 视图选项另外两轴（per-source，design 06 §3.4）：分组与归档筛选。 */
+  setGroupBy: (server: ChamberServerAggregate, mode: SessionGroupBy) => void
+  setArchivedFilter: (server: ChamberServerAggregate, filter: ArchivedFilter) => void
   /** Transient optimistic drag overrides (render over the projection). */
   sessionOrderOverride: Readonly<Record<string, string[]>>
   workspaceOrderOverride: Readonly<Record<string, string[]>>
@@ -206,6 +216,12 @@ export interface SidebarSectionContextValue {
   /** `currentlyPinned` 是点击那一刻行的置顶事实（true = 该退出 unpin），不是目标方向。 */
   onPinSession: (server: ChamberServerAggregate, sessionId: string, currentlyPinned: boolean) => void
   onForkSession: (server: ChamberServerAggregate, session: { id: string; title: string }) => void
+  /** 归档行的「恢复」出口（design 06 §3.4）。 */
+  onUnarchiveSession: (server: ChamberServerAggregate, sessionId: string) => void
+  /** 来源级归档提示条：per-shell 瞬态，按 sourceId 键控（D5）。 */
+  notices: Readonly<Record<string, SourceNotice>>
+  showNotice: (sourceId: string, kind: SourceNoticeKind, sessionId: string) => void
+  dismissNotice: (sourceId: string) => void
   onDeleteWorkspace: (server: ChamberServerAggregate, workspaceId: string, title: string) => void
 }
 

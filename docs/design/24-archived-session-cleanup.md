@@ -23,15 +23,15 @@
   集合承载，`workspace.archiveSession` 幂等地把 id 追加进去；0.1.7 另补了**反向**的单条
   `workspace/unarchiveSession`（官方 UI 的撤销 toast 与「全部对话（显示已归档）」
   筛选走它），但**仍无删除会话内容的 wire**。官方默认视图仍过滤归档行（显式筛选可显示）；
-  chamber 侧默认视图同样过滤；**恢复入口已接**（归档管理器行/批量调官方单条
-  `workspace/unarchiveSession`），**浏览过滤**（镜像上游 `ArchivedFilter`）推迟（STATUS
-  范围决策节）。归档会话
+  chamber 侧默认视图同样过滤；**浏览过滤已于 2026 对齐轮落地**（镜像上游 `ArchivedFilter` 三态：
+  列表与搜索同规则、归档行置灰不可开但可原地恢复，见 design 06 §3.4），**恢复入口**两处并存
+  （归档行的「恢复」钮 + 归档管理器行/批量调官方单条 `workspace/unarchiveSession`）。归档会话
   **内容**（会话目录 + 其 subagent 起源子会话内容）永久占用实例宿主磁盘且无清除入口，
   对 gateway 服务器部署是可观察的磁盘增长来源。
-- **上游归档 UI 在 chamber 为死件（裁决）**：上游 ui-workspace 的归档/恢复/过滤贡献注册进
+- **上游归档 UI 在 chamber 为死件（裁决不变）**：上游 ui-workspace 的归档/恢复/过滤贡献注册进
   `sidebar.workspaces` 洞；chamber 保留该洞的声明（撤销会让官方注册与第三方注入静默消失：未声明槽的 `slots.inject` 不执行回调，抛错点在回调内的 `register`）但**从不渲染**，浏览区
-  由 chamber 自有多源列表拥有。归档/恢复语义因此由 chamber 列表 + 归档管理器承担，镜像上游
-  浏览 UI 不作 v1 范围。锁测试
+  由 chamber 自有多源列表拥有。归档/恢复语义因此由 chamber 列表 + 归档管理器承担；**镜像上游
+  浏览 UI（ArchivedFilter 三态）已由 chamber 列表自身实现**（design 06 §3.4），洞内官方贡献仍不渲染。锁测试
   `packages/dsh-chamber-client-ui-sidebar/test/source-runtime/sidebar-slot-declaration.test.ts`；
   取舍登记见 STATUS 范围决策节。
 - 本需求 = chamber 前端（桌面 app 与 gateway 的同一套自研 UI）为每个 server 提供
@@ -553,7 +553,7 @@ generic throw（无 status 透出）；503 `instance_unavailable` 有专类特�
   5. 列表 = 顶部全选行 + 每工作区一个可折叠组段。全选 checkbox = 选中**当前列出的全部行
      （含折叠组）**；组头 = 组复选框（原生，部分选中经 ref 设 `indeterminate` 三态 + 显式
      `aria-checked="mixed"`）+ 折叠钮 + 标题（600 字重、省略号）+ 「已归档 N 个会话」计数
-     （复用 rowCount 键）。折叠为**对话框本地视图态**（默认展开、不持久化、不与导航 folded
+     （新键 `archive.manager.rowCount.one/other`，非复用既有键）。折叠为**对话框本地视图态**（默认展开、不持久化、不与导航 folded
      互扰、只藏行不改选中）；
   6. **恢复（非破坏，0.1.7 对齐）**：每行一个「恢复」图标钮 + footer 条件渲染「恢复选中（N）」，
      都走官方 `workspace/unarchiveSession`（幂等；见 §1 与 `session-mutations.ts` 的
@@ -660,13 +660,14 @@ generic throw（无 status 透出）；503 `instance_unavailable` 有专类特�
   `en satisfies Record<SidebarKey, string>` 类型门禁保证——**typecheck:sidebar**；
   `verify:i18n` 只校验顶层双语文档对，与此无关）：`action.purgeArchived`、管理器按键
   （`archive.manager.*`：`groupSelectAria`、`selectAllAria`、`confirmDelete`/`confirmSingle`/
-  计数键、`degraded`、`listUnavailable`、`loading`、`residentPurged`）、复用既有
-  `workspace.expand/collapse`、`list.ungrouped`、`rowCount`；行内错误/信息（domainMissing /
+  计数键、`degraded`、`listUnavailable`、`loading`、`residentPurged`）、新键
+  `archive.manager.rowCount.one/other`、复用既有 `workspace.expand/collapse`、`list.ungrouped`；
+  行内错误/信息（domainMissing /
   超时 / 空态 / 部分失败 / 跳过 / force 回退说明）按 §5 走 zh 硬编码，不进 locale。
   `archive.manager.deleteAll`/`confirmAll` 不存在（独立「删除全部」已退役）。
-- 范围：**v1 不做**搜索/目录过滤；**恢复已接**（管理器调官方单条
-  `workspace/unarchiveSession`，幂等、非破坏、无确认级）；浏览过滤（`ArchivedFilter` 镜像）
-  推迟，见 STATUS 范围决策节；rail/窄栏与移动端
+- 范围：**v1 不做**搜索/目录过滤；**恢复已接**（管理器行/批量 + 列表归档行的「恢复」钮，调官方单条
+  `workspace/unarchiveSession`，幂等、非破坏、无确认级）；**浏览过滤（`ArchivedFilter` 镜像）已于
+  2026 对齐轮落地**（design 06 §3.4：列表与搜索同规则），管理器仍是批量维护面；rail/窄栏与移动端
   不做（范围声明见头部）。
 
 ## 7. 宿主包接线与分发面

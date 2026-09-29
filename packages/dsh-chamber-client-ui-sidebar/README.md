@@ -122,9 +122,9 @@ The shell declares and renders the three holes the alpha.2 official
   registration-only confirm below (design 06 §7/§11, design 08 §3.4).
   The session row's hover cluster is the kebab plus TWO dedicated buttons —
   archive and pin (upstream `ArchiveSessionRowButton` / `PinSessionRowButton`,
-  design 06 §7); archived rows never
-  enter this projection, so the unarchive half of that upstream button has no
-  consumer here. Both archive entries follow the official TWO-PHASE call — a quiet session archives
+  design 06 §7); archived rows ride the three-state filter into this projection
+  (design 06 §3.4) and the unarchive half is live (row/menu flip + search text
+  action). Both archive entries follow the official TWO-PHASE call — a quiet session archives
   immediately, with no confirmation, because archiving only hides the row and
   never touches the session log (upstream's own reason for keeping quiet
   archives out of the confirm family); the host refuses a session that still has
@@ -170,15 +170,15 @@ The shell declares and renders the three holes the alpha.2 official
   hidden count comes from an expansion-independent window, so the collapse
   entry point survives its own expansion.
 - Menus and header controls keep upstream's interaction but chamber's density:
-  all three row/header menus (session kebab, workspace kebab, sort) pass the
+  all three row/header menus (session kebab, workspace kebab, view options) pass
   primitive's `compact` form — the v0.2.4 behaviour, restored after the
   2026-09-11 alignment round had switched them to the official default (40px
   rows / 14px labels) and `dense` (34px), which read a full size larger than
   our own 26px rows; `closeOnPointerLeave` stays. The source header's four
-  controls (sort / add workspace / search / archive manager) ride the official
+  controls (view options / add workspace / search / archive manager) ride the
   `Tooltip` instead of a borrowed native `title`, add-workspace draws the
-  official project-add glyph, and the sort menu keeps the portal +
-  `align="end"`, its label naming the active mode. The browse tree carries the
+  official project-add glyph, and the trigger opens the three-axis View Options
+  menu (portal + `align="end"`, `viewOptions.label`). The browse tree carries the
   accessible name `section.sessions`, exactly like its search-results sibling.
 - Add workspace: each connected source opens one in-app directory-browser
   dialog (the browse directory-picker surface, design 05 §4) driven over THAT
@@ -186,8 +186,8 @@ The shell declares and renders the three holes the alpha.2 official
   path commits `workspace.create` on that instance — the path must be an existing
   directory on that instance's host (remote paths are remote-server paths).
 - A non-current source's header click switches the active N-ctx view without
-  opening a session (`chamberBridge.requestActivateSource`); archiving hides
-  the session immediately (`archivedSessionIds` filtered in `packages/dsh-chamber-client-core/src/derive.ts`).
+  opening a session (`chamberBridge.requestActivateSource`); archiving hides the
+  session immediately under **default** (show keeps it grayed; `archivedFilter` in `derive.ts`).
 - The collapsed rail renders one NAMED, operable button per source (official
   `Tooltip` + `aria-label`, `aria-current` on the active source, `aria-disabled`
   on a NON-active source that cannot be activated — the active source is not an

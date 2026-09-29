@@ -31,8 +31,10 @@ export function createdLabel(
 }
 
 /** Rebuild an InstanceSnapshot-shaped view of ONE source aggregate for the LOCAL search
- * matcher from already-post-filter VISIBLE rows (projection only — no raw snapshot, no
- * archivedSessionIds, so the archived filter is EMPTY); wire paths/createdAt are irrelevant. */
+ * matcher from already-post-filter VISIBLE rows. `archivedSessionIds` is rebuilt from the
+ * rows carrying the sparse `archived` bit (the raw set is not on the aggregate): the
+ * 'only' leg of deriveLocalSearchMatches classifies hits by membership, so an empty set
+ * would make every local hit invisible there; wire paths/createdAt are irrelevant. */
 export function projectionToLocalSearchSnapshot(server: ChamberServerAggregate): InstanceSnapshot {
   return {
     workspaces: server.workspaces.map(workspace => ({
@@ -53,7 +55,10 @@ export function projectionToLocalSearchSnapshot(server: ChamberServerAggregate):
       // 搜到，故 resolved display title 进入本地快照。
       displayTitle: session.displayTitle,
     }))),
-    archivedSessionIds: [],
+    // 归档行在 show/only 下进投影：把它们的 id 带回快照，搜索的 only 腿才可分类命中。
+    archivedSessionIds: server.workspaces.flatMap(workspace => workspace.sessions
+      .filter(session => session.archived === true)
+      .map(session => session.id)),
   }
 }
 

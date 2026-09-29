@@ -23,11 +23,10 @@ test('the transferred leading seat renders before the row title', () => {
 
 test('the leading seat carries the upstream blank-row guard', () => {
   // vendor ui-workspace rows/Rows.tsx guards the seat with `!row.archived &&
-  // !row.blank`; chamber's row data carries no archived flag (archived Sessions
-  // render in the archive manager), so the blank half is the one that must
-  // survive the ownership transfer — a blank (new-Session) placeholder row must
+  // !row.blank`; chamber rows now carry the sparse archived bit (three-state
+  // archive filter), so BOTH halves are ported — an archived or blank row must
   // not evaluate the seat at all.
-  const guard = rows.indexOf('session.blank !== true')
+  const guard = rows.indexOf('session.archived !== true && session.blank !== true')
   const seat = rows.indexOf("'sidebar.session.row.leading'")
   assert.ok(guard !== -1, 'the non-blank guard must exist')
   assert.ok(seat !== -1, 'the leading seat call site must exist')

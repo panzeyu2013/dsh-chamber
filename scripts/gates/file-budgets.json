@@ -3,9 +3,9 @@
   "files": [
     {
       "path": "packages/renderer/src/App.tsx",
-      "lines": 2358,
+      "lines": 2374,
       "target": 400,
-      "note": "renderer container (function-of-state mixes; stores/budgets/servers/ledger extracted); +6 = the session-row entrance animation/placement wiring (feature, review-justified raise)"
+      "note": "renderer container (function-of-state mixes; stores/budgets/servers/ledger extracted); +6 = the session-row entrance animation/placement wiring (feature, review-justified raise); +16 = the per-source archived-filter projection input (pin view-options merge)"
     },
     {
       "path": "packages/desktop/plugin-sync.ts",
@@ -51,9 +51,9 @@
     },
     {
       "path": "packages/dsh-chamber-client-core/src/derive.ts",
-      "lines": 1726,
+      "lines": 1779,
       "target": 1200,
-      "note": "aggregate/session derive；2026-09-28 review-justified: RuntimeFactsOverlayRow 增加 facts 侧子代理活动三值（busy/idle/unknown，与判定侧同映射）并只在通道未声明时填补——呈现面不再由原始计数反推 running（+4，含同批删除的重复注释 −1）；棘轮随之抬到 1742；pin 落地把投影输入类型移入叶子（instance-projection-input.ts；快照行类型的叶子化记在 instance-api 条）后下调到 1727；review 又删掉一行多余的导入空行 → 1726。"
+      "note": "aggregate/session derive；2026-09-28 review-justified: RuntimeFactsOverlayRow 增加 facts 侧子代理活动三值（busy/idle/unknown，与判定侧同映射）并只在通道未声明时填补——呈现面不再由原始计数反推 running（+4，含同批删除的重复注释 −1）；棘轮随之抬到 1742；pin 落地把投影输入类型移入叶子（instance-projection-input.ts；快照行类型的叶子化记在 instance-api 条）后下调到 1727；review 又删掉一行多余的导入空行 → 1726。; +53 = the pin per-source view options (pin partition / flat account / workspace-tree derivation with their guards)"
     },
     {
       "path": "packages/desktop/transport-manager.ts",
@@ -87,9 +87,9 @@
     },
     {
       "path": "packages/dsh-chamber-client-core/src/aggregate-store.ts",
-      "lines": 1017,
+      "lines": 1024,
       "target": 600,
-      "note": "aggregate store types/channels/registry; +85 = the worktree placement facts/channels (feature, review-justified raise; registered in STATUS)；ChamberServerWorkspace 移入 aggregate-types.ts（并把它自己的说明带上）后下调到 1017"
+      "note": "aggregate store types/channels/registry; +85 = the worktree placement facts/channels (feature, review-justified raise; registered in STATUS)；ChamberServerWorkspace 移入 aggregate-types.ts（并把它自己的说明带上）后下调到 1017；+7 = pinnedSessionIds/pinSetKnown on the aggregate (pin partition source)"
     }
   ]
 }

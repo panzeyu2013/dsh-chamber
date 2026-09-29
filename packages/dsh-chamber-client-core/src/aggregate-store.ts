@@ -73,6 +73,13 @@ export interface ChamberServerAggregate {
    */
   sessionFacts?: SourceSessionFactsMode
   workspaces: ChamberServerWorkspace[]
+  /**
+   * 宿主置顶集（registry 级 rowState，**最新置顶在前**）：pin 渲染分区的块内序来源。
+   * 缺席 = 未知集（老宿主形状 / unary 兜底）——无分区、无标记（与行标记同一出处门）。
+   */
+  pinnedSessionIds?: readonly string[]
+  /** 出处门：true 才可把 `pinnedSessionIds` 当权威集合（与 `archiveSetKnown` 同规矩）。 */
+  pinSetKnown?: boolean
   /** True when the per-instance aggregate has actually landed (workspace groups
    *  derive from session cwd facts since workspace.list was deleted upstream);
    *  git-derived rows must not render before it. Absent = not ready. */

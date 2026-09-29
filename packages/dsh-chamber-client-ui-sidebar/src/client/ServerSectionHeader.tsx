@@ -1,14 +1,17 @@
 /**
  * One source’s header row of the chamber sidebar ServerSection subtree: the
- * connection dot/spinner, fold toggle, sort menu, add-workspace/search/archive
+ * connection dot/spinner, fold toggle, view-options menu, add-workspace/search/archive
  * actions, the single per-source source-note live region and the folded
  * open-failure hoist. Shell state comes from useSidebarSection().
  */
-import { useState, type RefObject } from 'react'
+import { useMemo, useState, type RefObject } from 'react'
 import clsx from 'clsx'
 import {
-  IconChevronRightOutlineRegular, IconLoadingOutlineRegular, IconPersonalizationOutlineRegular,
-  IconProjectAddOutlineRegular, IconSearchOutlineRegular, IconTrashOutlineRegular, Menu, Tooltip,
+  IconArchiveCheckOutlineRegular, IconArchiveOffOutlineRegular, IconChevronRightOutlineRegular,
+  IconChevronsUpDownOutlineRegular, IconClockOutlineRegular, IconFlatListOutlineRegular,
+  IconFolderCloseRegular, IconLoadingOutlineRegular, IconProjectAddOutlineRegular, IconQueueOutlineRegular,
+  IconSearchOutlineRegular, IconSlidersTwoOutlineRegular, IconTrashOutlineRegular,
+  IconWorkspaceTreeOutlineRegular, Menu, Tooltip, type MenuEntry,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
@@ -16,7 +19,6 @@ import { MANAGED_RUNTIME_TRANSIENT_STATES } from '@dsh-chamber/dsh-chamber-clien
 import { clearPendingClick } from '@dsh-chamber/dsh-chamber-client-core/pending-click'
 import type { PrewarmIntent } from '@dsh-chamber/dsh-chamber-client-core/prewarm-intent'
 import { collapseSearch, expandSearch, type SourceSearchState } from '@dsh-chamber/dsh-chamber-client-core/search-state'
-import type { SidebarKey } from './locales.ts'
 import { sourceBootGapNote } from './source-boot-gap.ts'
 import { IconMonitorOutline16 } from './icons.tsx'
 import { sourceAccentStyle, useSidebarSection } from './sidebar-context.ts'
@@ -43,6 +45,8 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
     viewPrefs,
     toggleSourceFold,
     setOrderBy,
+    setGroupBy,
+    setArchivedFilter,
     openWorkspaceBrowser,
     onOpenArchiveCleanup,
     suppressClickRef,
@@ -69,10 +73,38 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
   // 可激活入口判定与 title/aria 文案（托管 dsh 停机时说明原因，而不是"切换到该实例"）。
   const headerActivatable = sourceHeaderActivatable(server, chamberInstanceId)
   const headerTitle = sourceHeaderTitle(server, chamberInstanceId, t)
-  // 头部控件用官方 Tooltip（不是借来的原生 title=）；排序触发器带上活动模式，
-  // 气泡与可访问名都承载它。
-  const sortModeKey: SidebarKey = viewPrefs.orderBy?.[server.id] === 'updated' ? 'orderBy.updated' : 'orderBy.manual'
-  const sortLabel = `${t('action.sort')} · ${t(sortModeKey)}`
+  // 头部控件用官方 Tooltip（不是借来的原生 title=）；触发器打开三轴视图选项菜单，
+  // 气泡与可访问名都报 viewOptions.label，活动排序只由 .sortActive 着色承载。
+  // 视图选项三轴的当前值（上游 ViewOptionsMenu 的 selectedIds）：分组 / 排序 / 筛选。
+  // 归档集未知（archiveSetKnown !== true）时存储值保留，但选中态按实际渲染态
+  // （hide-archived）呈现且筛选轴三项整体禁用（design 06 §3.4 的诚实规则）。
+  const groupByMode = viewPrefs.groupBy?.[server.id] ?? 'workspace'
+  const orderByMode = viewPrefs.orderBy?.[server.id] ?? 'manual'
+  const storedArchivedFilter = viewPrefs.archivedFilter?.[server.id] ?? 'default'
+  const archiveFilterKnown = server.archiveSetKnown === true
+  const archivedSelection = archiveFilterKnown
+    ? { default: 'hide-archived', show: 'show-archived', only: 'only-archived' }[storedArchivedFilter]
+    : 'hide-archived'
+  const viewOptionsLabel = t('viewOptions.label')
+  // 三轴菜单条目（17 项 + 图标元素 + selectedIds 映射）按词典与当前轴值记忆化——与行内
+  // kebab 菜单同一条纪律（ServerSectionRows 的 menuItems）。
+  const viewOptionsItems = useMemo((): MenuEntry[] => [
+    { type: 'label' as const, id: 'group-by', text: t('groupBy.label') },
+    { id: 'workspace', label: t('groupBy.workspace'), icon: <IconFolderCloseRegular /> },
+    { id: 'workspace-tree', label: t('groupBy.workspaceTree'), icon: <IconWorkspaceTreeOutlineRegular /> },
+    { id: 'flat', label: t('groupBy.flat'), icon: <IconFlatListOutlineRegular /> },
+    { type: 'separator' as const, id: 'order-by-separator' },
+    { type: 'label' as const, id: 'order-by', text: t('orderBy.label') },
+    { id: 'manual', label: t('orderBy.manual'), icon: <IconChevronsUpDownOutlineRegular /> },
+    { id: 'updated', label: t('orderBy.updated'), icon: <IconClockOutlineRegular /> },
+    { type: 'separator' as const, id: 'archived-filter-separator' },
+    { type: 'label' as const, id: 'filter-by', text: t('filterBy.label') },
+    // 归档集未知（archiveSetKnown !== true）时筛选轴三项整体禁用：非默认项不可用，默认项
+    // 也不得可点——点它会写回 'default'，把存储值抹掉（要求保留存储值，恢复已知后自动生效）。
+    { id: 'hide-archived', label: t('viewOptions.hideArchived'), icon: <IconArchiveOffOutlineRegular />, disabled: !archiveFilterKnown },
+    { id: 'show-archived', label: t('viewOptions.showArchived'), icon: <IconQueueOutlineRegular />, disabled: !archiveFilterKnown },
+    { id: 'only-archived', label: t('viewOptions.onlyArchived'), icon: <IconArchiveCheckOutlineRegular />, disabled: !archiveFilterKnown },
+  ], [t, archiveFilterKnown])
   // 来源级"数据不可信"说明：单一定居 live region（见 sourceNote 的渲染与 CSS :empty），
   // 按优先级取一句：托管不可用 > 前端能力受限（boot 缺口）> 托管瞬态 > 基线未就绪；
   // 前两条不互斥（可能既停机、壳里又留着上次挂载的缺口事实），顺序即优先级；缺口事实
@@ -257,9 +289,9 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                       />
                     )}
                   </span>
-                  {/* 头部动作（排序菜单 + 加工作区 + 来源搜索 + 归档清理）与会话行动作
+                  {/* 头部动作（视图选项菜单 + 加工作区 + 来源搜索 + 归档清理）与会话行动作
                       一样 hover 才显形：静息时右侧是连接状态，悬停换成图标簇（visibility
-                      切换，无重排）。搜索胶囊或排序菜单打开时图标簇常驻
+                      切换，无重排）。搜索胶囊或视图选项菜单打开时图标簇常驻
                       （.sourceActionsVisible），图标才能收起/关闭；键盘焦点（Tab）同样
                       常驻——否则簇里的按钮永远不在 Tab 序里（见键盘焦点揭示态注释）。 */}
                   <span
@@ -269,10 +301,11 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                         && cc.sourceActionsVisible,
                     )}
                   >
-                    {/* 每来源会话排序菜单（官方 ViewOptionsMenu 形态）：两个选项带当前项
-                        勾选（selectedIds），打开即可见活动排序；静息态由 title + aria-label
-                        + sortActive 着色承载（hover 才显形）。选择走 setOrderBy
-                        （切换记账 + 覆盖丢弃）。 */}
+                    {/* 每来源视图选项菜单（上游 ViewOptionsMenu 三段形态）：分组方式 / 排序方式 /
+                        筛选会话，各带 label 与 selectedIds 勾选；静息态由 tooltip + aria-label
+                        + sortActive 着色承载（hover 才显形）。密度保持本仓 compact 档
+                        （design 06 §7）。筛选轴在归档集未知时三项禁用、选中按实际渲染态
+                        （hide-archived）呈现，存储值保留（design 06 §3.4）。 */}
                     {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
                       <Menu
                         // Menu 密度用原语 `compact`（24px 行 / 11px 字；design 06 §7）：
@@ -285,19 +318,19 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                         onSelect={(id: string) => {
                           setSortMenuOpen(null)
                           if (id === 'manual' || id === 'updated') setOrderBy(server, id)
+                          else if (id === 'workspace' || id === 'workspace-tree' || id === 'flat') setGroupBy(server, id)
+                          else if (id === 'hide-archived') setArchivedFilter(server, 'default')
+                          else if (id === 'show-archived') setArchivedFilter(server, 'show')
+                          else if (id === 'only-archived') setArchivedFilter(server, 'only')
                         }}
-                        items={[
-                          { type: 'label' as const, id: 'sort-label', text: t('orderBy.label') },
-                          { id: 'manual', label: t('orderBy.manual') },
-                          { id: 'updated', label: t('orderBy.updated') },
-                        ]}
-                        selectedIds={[viewPrefs.orderBy?.[server.id] ?? 'manual']}
+                        items={viewOptionsItems}
+                        selectedIds={[groupByMode, orderByMode, archivedSelection]}
                         anchor={(
-                          <Tooltip label={sortLabel} side="bottom" delayMs={500}>
+                          <Tooltip label={viewOptionsLabel} side="bottom" delayMs={500}>
                             <button
                               type="button"
                               className={clsx(cc.actionIcon, viewPrefs.orderBy?.[server.id] === 'updated' && cc.sortActive)}
-                              aria-label={sortLabel}
+                              aria-label={viewOptionsLabel}
                               aria-haspopup="menu"
                               aria-expanded={sortMenuOpen === server.id}
                               onClick={(event) => {
@@ -310,7 +343,7 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                                 setSortMenuOpen(prev => (prev === server.id ? null : server.id))
                               }}
                             >
-                              <IconPersonalizationOutlineRegular size={14} />
+                              <IconSlidersTwoOutlineRegular size={14} />
                             </button>
                           </Tooltip>
                         )}

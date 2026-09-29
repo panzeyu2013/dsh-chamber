@@ -5,10 +5,11 @@ import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 
 import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { nextServerOrder, orderServersForDisplay, reconciledSessionOrder } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import { getInstanceClient, insertSessionBefore, insertWorkspaceBefore } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
+import { flatAccountKey } from '@dsh-chamber/dsh-chamber-client-core/flat-account'
 import { flushScheduledActivityWrites, getViewPrefs, updateViewPrefs, type ChamberSidebarViewPrefs } from '@dsh-chamber/dsh-chamber-client-core/view-prefs'
 import { resolveWorkspaceDrop } from '@dsh-chamber/dsh-chamber-client-core/workspace-drag-order'
 import {
-  workspaceDropEnv, type ServerDragState, type SessionDragState, type WorkspaceDragState,
+  orderWithOverride, workspaceDropEnv, type ServerDragState, type SessionDragState, type WorkspaceDragState,
 } from './sidebar-context.ts'
 import type { RunAction } from './sidebar-root-actions.ts'
 
@@ -65,6 +66,32 @@ export function useSidebarDrags({ servers, viewPrefs, sessionOrderOverride, setS
   const dragPressOnButtonRef = useRef(false)
   useNativeDragAcceptance(sessionDrag !== null || workspaceDrag !== null || serverDrag !== null)
 
+  // 看门狗：拖拽期间源从投影消失 / 断连（行卸载、外部归档、来源停机）时，dragend 可能落在
+  // 已卸载的源节点上而不达 React 的根代理处理器——拖拽态与 suppressClickRef 会永久悬留，
+  // 侧栏所有受保护点击被静音。投影变化即清（含点击抑制的兜底清）。
+  useEffect(() => {
+    const sourceAlive = (sourceId: string): boolean =>
+      servers.some(server => server.id === sourceId && server.connected === true)
+    // 实体级：源健康但**被拖的行/工作区**已离开投影（外部归档、推送刷新、行卸载）同样算丢——
+    // 否则 dragend 不达 React 时点击抑制会永久卡死（第四轮 medium）。
+    const sessionAlive = (drag: SessionDragState): boolean =>
+      sourceAlive(drag.sourceId)
+      && (servers.find(server => server.id === drag.sourceId)?.workspaces
+        .some(workspace => workspace.sessions.some(session => session.id === drag.sessionId)) ?? false)
+    const workspaceAlive = (drag: WorkspaceDragState): boolean =>
+      sourceAlive(drag.sourceId)
+      && (servers.find(server => server.id === drag.sourceId)?.workspaces
+        .some(workspace => workspace.id === drag.workspaceId) ?? false)
+    const lost = (sessionDrag !== null && !sessionAlive(sessionDrag))
+      || (workspaceDrag !== null && !workspaceAlive(workspaceDrag))
+      || (serverDrag !== null && !sourceAlive(serverDrag.sourceId))
+    if (!lost) return
+    suppressClickRef.current = false
+    setSessionDrag(null)
+    setWorkspaceDrag(null)
+    setServerDrag(null)
+  }, [servers, sessionDrag, workspaceDrag, serverDrag])
+
   // While a SERVER drag is active, a pointer outside every source section clears
   // the marker — releasing outside cancels instead of committing the last one.
   // Session/workspace drags keep release-outside-commits; a whole-group move's
@@ -91,8 +118,46 @@ export function useSidebarDrags({ servers, viewPrefs, sessionOrderOverride, setS
     over: NonNullable<SessionDragState['over']>,
   ): void => {
     if (sessionDropCommitted.current) return
+    // 置顶门（选项1，提交侧防御）：置顶块内拖拽/跨块守卫未实现，任何涉及置顶行的提交都
+    // 必须落空——显示序是分区后的，未分区的锚点会算出反向位置并写进账号/wire。
+    const allSessions = server.workspaces.flatMap(workspace => workspace.sessions)
+    const targetSession = allSessions.find(candidate => candidate.id === over.id)
+    const sourceSession = allSessions.find(candidate => candidate.id === activeDrag.sessionId)
+    // 源与目标的**当前** pinned 都重读（拖拽中途被别的 shell 置顶时同样落空；上游 Rows/WorkspaceBrowser
+    // 同规则），dragstart 快照只作兜底。
+    if (activeDrag.pinned || sourceSession?.pinned === true || targetSession?.pinned === true) return
+    // blank 落点半边归一（上游：blank 目标一律 after）。
+    const half: 'before' | 'after' = targetSession?.blank === true ? 'after' : over.half
+    const overTarget = { id: over.id, half }
     sessionDropCommitted.current = true
     setSessionDrag(null)
+    // 单列表账号：没有 workspace 行可解析；顺序只落本地账号（manual → flatOrder，
+    // updated → flatAccountKey(sourceId) 哨兵账号），不发 wire（上游 flat 账号同规则）。
+    if (activeDrag.flat) {
+      const orderBy = viewPrefs.orderBy?.[server.id] ?? 'manual'
+      // 成员序与渲染侧同一规则（override-aware orderedWorkspaces + 未分组桶尾）：否则有
+      // 工作区序 override 时锚点会算在不同列表上，持久化错误的平铺序（第四轮 F3）。
+      const realWorkspaces = server.workspaces.filter(workspace => workspace.ungrouped !== true)
+      const ungroupedWorkspace = server.workspaces.find(workspace => workspace.ungrouped === true)
+      const flatWorkspaces = [
+        ...orderWithOverride(realWorkspaces, workspaceOrderOverride[server.id], workspace => workspace.id),
+        ...(ungroupedWorkspace === undefined ? [] : [ungroupedWorkspace]),
+      ]
+      const memberIds = flatWorkspaces.flatMap(workspace => workspace.sessions.map(session => session.id))
+      const accountKey = flatAccountKey(server.id)
+      if (orderBy === 'updated') flushScheduledActivityWrites()
+      const renderedOrder = orderBy === 'updated'
+        ? reconciledSessionOrder(getViewPrefs().updatedOrder?.[accountKey] ?? [], memberIds)
+        : reconciledSessionOrder(viewPrefs.flatOrder?.[server.id] ?? [], memberIds)
+      const nextOrder = nextServerOrder(renderedOrder, activeDrag.sessionId, overTarget)
+      if (nextOrder === null) return
+      if (orderBy === 'updated') {
+        updateViewPrefs(prev => ({ ...prev, updatedOrder: { ...prev.updatedOrder, [accountKey]: nextOrder } }))
+      } else {
+        updateViewPrefs(prev => ({ ...prev, flatOrder: { ...prev.flatOrder, [server.id]: nextOrder } }))
+      }
+      return
+    }
     // Resolve by id AND the drag's ungrouped flag: a real workspace whose wire id
     // ever equaled UNGROUPED_WORKSPACE_ID must not hijack a bucket drag's anchor.
     const workspace = server.workspaces.find(candidate =>
@@ -112,7 +177,7 @@ export function useSidebarDrags({ servers, viewPrefs, sessionOrderOverride, setS
         ? reconciledSessionOrder(viewPrefs.ungroupedOrder[server.id] ?? [], wireIds)
         : sessionOrderOverride[accountKey] ?? wireIds
     // Same pure drop resolver as the server-group drag: null = no-op (vanished rows / already in place).
-    const nextOrder = nextServerOrder(renderedOrder, activeDrag.sessionId, over)
+    const nextOrder = nextServerOrder(renderedOrder, activeDrag.sessionId, overTarget)
     if (nextOrder === null) return
     if (orderBy === 'updated') {
       // Updated mode mutates the account order (shared + persisted, bucket

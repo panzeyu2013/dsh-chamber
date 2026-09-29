@@ -10,7 +10,7 @@
  * composition and the sort-menu anchor-cleanup; the header, search surface,
  * rows and pure helpers live in the sibling ServerSection* / server-section-*.
  */
-import { Fragment, memo, useEffect, useRef, useState } from 'react'
+import { Fragment, memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react'
 import clsx from 'clsx'
 import { SESSION_SEARCH_RESULT_LIMIT } from '@deepseek-ai/dsh-api-session-controller/client'
 import {
@@ -29,10 +29,13 @@ import {
   type SourceSearchState,
 } from '@dsh-chamber/dsh-chamber-client-core/search-state'
 import { clearPendingClick } from '@dsh-chamber/dsh-chamber-client-core/pending-click'
+import { FLAT_ACCOUNT_KEY, flatAccountKey } from '@dsh-chamber/dsh-chamber-client-core/flat-account'
+import { partitionPinnedSessions } from '@dsh-chamber/dsh-chamber-client-core/pin-partition'
 import { createPrewarmIntent, type PrewarmIntent } from '@dsh-chamber/dsh-chamber-client-core/prewarm-intent'
 import { openErrorKey } from '@dsh-chamber/dsh-chamber-client-core/open-outcome'
-import { getSourceRepoLayouts, getWorkspaceGitFlag, hiddenByMainWorkspaceFold, isSourceGitFlagsLoaded } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
+import { getSourceRepoLayouts, getWorkspaceGitFlag, getWorkspaceGitFlagsVersion, hiddenByMainWorkspaceFold, isSourceGitFlagsLoaded, subscribeWorkspaceGitFlags } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
 import { resolveWorkspaceDrop } from '@dsh-chamber/dsh-chamber-client-core/workspace-drag-order'
+import { workspaceTreeDepths, workspaceTreeParents } from '@dsh-chamber/dsh-chamber-client-core/workspace-tree'
 import {
   sessionRowDisclosure, sessionRowWindow, sessionRowWindowMotionKey, SESSION_ROWS_VISIBLE_FIRST,
 } from '@dsh-chamber/dsh-chamber-client-core/session-row-window'
@@ -81,9 +84,41 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
     setRenaming,
     onNewSession,
     onDeleteWorkspace,
+    setArchivedFilter,
+    onUnarchiveSession,
+    notices,
+    dismissNotice,
   } = useSidebarSection()
   // 工作区行的 New Session 键帽/aria 来自页面快捷键目录（上游 ProjectRowItem 同款选择）。
   const newSessionShortcut = useShortcuts(rows => rows.find(row => row.id === 'session.new'))
+  // 归档筛选三态（per-source 视图选项）：搜索腿、only 空态、提示条与行集都由它决定。
+  // **降级出处门**：归档集未知（archiveSetKnown !== true）时按 default 渲染、存储值保留
+  // （菜单侧同样把选中呈现为 default 并禁用整轴，两边同一条规则，design 06 §3.4）。
+  const archivedFilter = server.archiveSetKnown === true
+    ? (viewPrefs.archivedFilter?.[server.id] ?? 'default')
+    : 'default'
+  // 分组轴（per-source）：'workspace'（默认）| 'workspace-tree' | 'flat'。
+  const groupByMode = viewPrefs.groupBy?.[server.id] ?? 'workspace'
+  const flatGroupBy = groupByMode === 'flat'
+  // git flags 是独立于 servers 投影的通道（flags 更新不产生新 server 身份）：**订阅**它，
+  // 否则 ctxValue 稳定后树家族锚点 / main-fold 隐藏 / worktree 字形会冻结到下一次无关渲染。
+  const gitFlagsVersion = useSyncExternalStore(
+    subscribeWorkspaceGitFlags, getWorkspaceGitFlagsVersion, getWorkspaceGitFlagsVersion,
+  )
+  // 「按工作区树」：父级/深度一次算好（家族优先；无家族信息 = 上游纯前缀），与渲染解耦。
+  // 依赖 = 工作区集合 / 轴 / git flags 版本（flags 变化必须重算家族锚点）；非树态零成本。
+  const treeDepths = useMemo(
+    () => groupByMode !== 'workspace-tree' ? undefined : workspaceTreeDepths(workspaceTreeParents(
+      server.workspaces.map(workspace => ({
+        id: workspace.id,
+        ...(workspace.path === undefined ? {} : { path: workspace.path }),
+        ...(workspace.synthetic === true ? { synthetic: true } : {}),
+        ...(workspace.ungrouped === true ? { ungrouped: true } : {}),
+      })),
+      id => getWorkspaceGitFlag(server.id, id)?.mainWorkspaceId,
+    )),
+    [server.workspaces, server.id, groupByMode, gitFlagsVersion],
+  )
 
   // Per-source search state (capsule/query/results) and its debounced fetch
   // jobs live in ONE shared controller, so a search survives view switches and
@@ -128,9 +163,11 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
    * 的清理、来源消失……），悬留的键会在该 workspace 再现的瞬间把簇点亮；故每轮渲染后核对
    * 一次：键还在、行没了就归零（design 08 §3.2 的键盘揭示态）。
    */
-  const liveWorkspaceKeys = new Set<string>()
+  // 集合本体驻留 ref（不再每渲染新建 Set）；walk 每渲染重填，填前先清空。
+  const liveWorkspaceKeys = useRef<Set<string>>(new Set())
+  liveWorkspaceKeys.current.clear()
   useEffect(() => {
-    if (keyboardFocusKey !== null && !liveWorkspaceKeys.has(keyboardFocusKey)) setKeyboardFocusKey(null)
+    if (keyboardFocusKey !== null && !liveWorkspaceKeys.current.has(keyboardFocusKey)) setKeyboardFocusKey(null)
   })
 
   /**
@@ -199,22 +236,29 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
               const searchCapsuleMounted = server.connected
                 && viewPrefs.sourceFolded?.[server.id] !== true
                 && search?.expanded === true
-              // 展开后聚焦输入框：挂载前 ref 为空，必须等这一轮提交后再聚焦
-              if (searchCapsuleMounted && focusSearchOnMount.current) {
+              // 展开后聚焦输入框：挂载前 ref 为空，必须等这一轮提交后再聚焦。flag 在提交后的
+              // effect 里消费——渲染期消费会在被丢弃的并发渲染里把 flag 花掉（微任务还可能早于
+              // 提交），胶囊展开却不聚焦。
+              useEffect(() => {
+                if (!searchCapsuleMounted || !focusSearchOnMount.current) return
                 focusSearchOnMount.current = false
-                queueMicrotask(() => searchInput.current?.focus())
-              }
+                searchInput.current?.focus()
+              }, [searchCapsuleMounted])
               useEffect(() => {
                 // 仅当焦点确实落在胶囊里才回交给折叠按钮：任何断连都不该把用户从
                 // 别处抢回头部。判定必须在卸载之后（activeElement 已回落到 body），
                 // 用卸载前记录的"胶囊是否持有焦点"。断连会在同一批清掉搜索状态，
                 // 判定条件必须是"连接事实"而不是 expanded——折叠路径不会误抢。
-                if (prevSearchCapsuleMounted.current && !searchCapsuleMounted
+                // wasMounted 必须在更新 prev 之前取：胶囊挂载的那次提交里自动聚焦会让
+                // onFocusCapture 记下 held=true，旧写法在同一次提交里又把记录清掉，导致断连
+                // 卸载时焦点掉到 body。只在"挂载 → 卸载"的转换上清记录。
+                const wasMounted = prevSearchCapsuleMounted.current
+                prevSearchCapsuleMounted.current = searchCapsuleMounted
+                if (wasMounted && !searchCapsuleMounted
                   && capsuleHeldFocus.current && server.connected !== true) {
                   foldToggleRef.current?.focus()
                 }
-                prevSearchCapsuleMounted.current = searchCapsuleMounted
-                if (searchCapsuleMounted) capsuleHeldFocus.current = false
+                if (wasMounted && !searchCapsuleMounted) capsuleHeldFocus.current = false
               }, [searchCapsuleMounted, server.connected])
               const currentRemote = search !== undefined && search.query === query
                 ? search
@@ -222,7 +266,8 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
               // Render-side merge: the aggregate's LOCAL metadata matches
               // (title/workspace-label substring over the visible projection)
               // plus the remote content-search page. 远程腿按可见集过滤——投影已
-              // 过滤 subagent/archived/blank-non-current，"在投影里"即"可见"；
+              // 过滤 subagent 与 blank-non-current；归档行按 archivedFilter 进出投影，
+              // 因此 show/only 下归档命中同样进入可见集（搜索跟随筛选，上游同规则）；
               // 空集（断连/未就绪）时 mergeSearchResults 降级为不过滤。
               // 空 query 短路在调用点：结果树只由 query !== '' 渲染，整投影快照
               // （projectionToLocalSearchSnapshot）与可见集都只在这条分支里构建。
@@ -233,7 +278,7 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                   for (const session of workspace.sessions) visibleIds.add(session.id)
                 }
                 merged = mergeSearchResults(
-                  deriveLocalSearchMatches(projectionToLocalSearchSnapshot(server), query),
+                  deriveLocalSearchMatches(projectionToLocalSearchSnapshot(server), query, archivedFilter),
                   currentRemote,
                   SESSION_SEARCH_RESULT_LIMIT,
                   visibleIds,
@@ -306,11 +351,20 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
               // the marker on the first real group is suppressed. The boundary is the
               // first VISIBLE row of the DISPLAY order (override- and fold-aware);
               // synthetic cwd-derived groups are never drop targets.
-              const realWorkspaceIds = server.workspaces
-                .filter(workspace => workspace.ungrouped !== true && workspace.synthetic !== true)
-                .map(workspace => workspace.id)
-              const dropEnv = workspaceDropEnv(server.id, realWorkspaceIds, workspaceOrderOverride[server.id], viewPrefs.folded)
-              const firstDropRow = dropEnv.order.find(id => !dropEnv.hidden(id))
+              // 拖拽环境只为**本来源正在拖工作区**时构建（Set + 序数组 + 两个闭包 + 线性
+              // hidden() 扫描否则每渲染白付）；消费方都已在 workspaceDrag 门内。
+              const workspaceDragLive = workspaceDrag !== null && workspaceDrag.sourceId === server.id
+              const dropEnv = workspaceDragLive
+                ? workspaceDropEnv(
+                  server.id,
+                  server.workspaces
+                    .filter(workspace => workspace.ungrouped !== true && workspace.synthetic !== true)
+                    .map(workspace => workspace.id),
+                  workspaceOrderOverride[server.id],
+                  viewPrefs.folded,
+                )
+                : undefined
+              const firstDropRow = dropEnv?.order.find(id => !dropEnv.hidden(id))
               const workspaceDropAtListStart = firstDropRow !== undefined
                 && workspaceDrag !== null
                 && workspaceDrag.sourceId === server.id
@@ -322,7 +376,7 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
               // positions — a drop splitting a contiguous repo family — never render
               // a marker and never become the target.
               const workspaceDropBlocked = (targetId: string, half: 'before' | 'after'): boolean => {
-                if (workspaceDrag === null || workspaceDrag.sourceId !== server.id) return false
+                if (dropEnv === undefined || workspaceDrag === null || workspaceDrag.sourceId !== server.id) return false
                 const verdict = resolveWorkspaceDrop(dropEnv, workspaceDrag.workspaceId, { id: targetId, half })
                 return verdict.kind === 'blocked'
               }
@@ -338,8 +392,12 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
               // order swap instead of gliding every row (hoisted out of sessionsOf
               // for that reason).
               const orderBy = viewPrefs.orderBy?.[server.id] ?? 'manual'
-              const rowKeys: string[] = server.workspaces.length === 0 ? ['empty'] : []
-              const sessionsOf = (workspace: ChamberServerWorkspace): ChamberServerWorkspace['sessions'] => {
+              // 置顶分区（Phase 4，纯渲染；选项1：不写账号）：集合未知（pinSetKnown !== true）
+              // 时 pinnedOrder/pinnedIds 都为 undefined ⇒ 无置顶块（blank 占位行仍按上游无条件
+              // 提前）、行也不宣称标记。
+              const pinnedOrder = server.pinSetKnown === true ? server.pinnedSessionIds : undefined
+              const pinnedIds = pinnedOrder === undefined ? undefined : new Set(pinnedOrder)
+              const sessionsInOrder = (workspace: ChamberServerWorkspace): ChamberServerWorkspace['sessions'] => {
                 const wire = workspace.sessions
                 // updated = 手动序 + 活动置顶：渲染序取共享的 updated-order account
                 // （推导 effect 已写回 seeding/recency sort/promotion），account 不存在
@@ -365,6 +423,55 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                 }
                 return wire
               }
+              // 置顶分区叠加在模式自身的序之上（上游 sectionMembers 的位置）：manual 的块内
+              // 序取宿主「最近置顶在前」，updated 保留该模式自己的 account 序。
+              // 每渲染每工作区只算一次：resetKey 与 walk 共用同一结果（pin-partition 锁锚在
+              // 下面这行 partition 调用上）。缓存存活在本渲染的闭包里，随下一渲染整体丢弃。
+              const sessionsCache = new Map<string, ChamberServerWorkspace['sessions']>()
+              const sessionsOf = (workspace: ChamberServerWorkspace): ChamberServerWorkspace['sessions'] => {
+                const cached = sessionsCache.get(workspace.id)
+                if (cached !== undefined) return cached
+                const next = partitionPinnedSessions(sessionsInOrder(workspace), {
+                  ...(pinnedIds === undefined ? {} : { pinnedIds }),
+                  ...(pinnedOrder === undefined || orderBy === 'updated' ? {} : { pinOrder: pinnedOrder }),
+                })
+                sessionsCache.set(workspace.id, next)
+                return next
+              }
+              // 单列表（flat）：整源一个平铺账号（上游 FLAT_SESSION_ORDER_KEY 的 per-source
+              // 对应物）。顺序 = 存过的账号序（manual: flatOrder；updated: flatAccountKey(server.id) 哨兵账号）
+              // 按成员集对账；没存过就用合成序（各组显示序 → 组内会话序）。
+              const flatUpdatedAccountKey = flatAccountKey(server.id)
+              // flat 成员与 workspace 折叠无关（上游 sessionMemberIds(list)）：用未做
+              // main-fold 过滤的 orderedWorkspaces；flat 下没有表头可展开被折叠的 main。
+              const flatMemberSessions = flatGroupBy
+                ? orderedWorkspaces.flatMap(workspace => workspace.sessions)
+                : []
+              const flatSessions = (() => {
+                if (!flatGroupBy) return []
+                const stored = orderBy === 'updated'
+                  ? viewPrefs.updatedOrder?.[flatUpdatedAccountKey]
+                  : viewPrefs.flatOrder?.[server.id]
+                const ordered = (() => {
+                  if (stored === undefined) return flatMemberSessions
+                  const byId = new Map(flatMemberSessions.map(session => [session.id, session] as const))
+                  return reconciledSessionOrder(stored, flatMemberSessions.map(session => session.id))
+                    .flatMap(id => {
+                      const session = byId.get(id)
+                      return session === undefined ? [] : [session]
+                    })
+                })()
+                // flat 列表同样叠加置顶分区（上游 flat 账号 + sectionMembers 同规则）。
+                return partitionPinnedSessions(ordered, {
+                  ...(pinnedIds === undefined ? {} : { pinnedIds }),
+                  ...(pinnedOrder === undefined || orderBy === 'updated' ? {} : { pinOrder: pinnedOrder }),
+                })
+              })()
+              // 空态种子键与空态门同一条表达式（flat 下工作区可能都在、可见行却为零）。
+              const rowKeys: string[] = (flatGroupBy ? flatSessions.length === 0 : server.workspaces.length === 0)
+                ? ['empty']
+                : []
+              const flatWorkspace: ChamberServerWorkspace = { id: FLAT_ACCOUNT_KEY, title: '', sessions: flatSessions }
               return (
               <section
                 ref={sectionRef}
@@ -436,6 +543,7 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                 {server.connected ? (() => {
                   // Per-repo layouts drive the unregistered-worktree blocks and the orphan badge.
                   const repoLayouts = getSourceRepoLayouts(server.id)
+                  const notice = notices[server.id]
                   return (
                   <>
                   {/* Source-level Git alert mount (workspaceId '' = source
@@ -457,6 +565,49 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                   {serverOpenFailures.filter(failure => !projectionHasSession(server, failure.sessionId)).map(failure => (
                     <div key={failure.sessionId} className={cc.rowError} role="alert">{failure.message}</div>
                   ))}
+                  {/* 来源级归档提示条（上游 RowActionToast 的 section 内实例化，D5）：
+                      归档成功 / 停止并归档 → 撤销 + 筛选（筛选已生效时隐藏）；点击归档行
+                      不可打开 → 纯提示。自动过期，per-shell 瞬态。 */}
+                  {notice !== undefined && (
+                    <div className={cc.archiveNotice} role="alert">
+                      <span className={cc.archiveNoticeText}>
+                        {notice.kind === 'archivedNotOpenable'
+                          ? t('toast.archivedNotOpenable')
+                          : t(notice.kind === 'stoppedAndArchived' ? 'toast.stoppedAndArchived' : 'toast.archived')}
+                      </span>
+                      {notice.kind !== 'archivedNotOpenable' && (
+                        <>
+                          <button
+                            type="button"
+                            className={cc.archiveNoticeAction}
+                            onClick={() => {
+                              dismissNotice(server.id)
+                              onUnarchiveSession(server, notice.sessionId)
+                            }}
+                          >
+                            {t('toast.archivedUndo')}
+                          </button>
+                          {/* 降级出处门：归档集未知时该来源筛选轴整轴禁用（保护存储值），
+                              提示条的「筛选」捷径同样不得写 show——否则会静默覆盖存储的 only。 */}
+                          {archivedFilter === 'default' && server.archiveSetKnown === true && (
+                            <>
+                              <span className={cc.archiveNoticeText}>{t('toast.archivedOr')}</span>
+                              <button
+                                type="button"
+                                className={cc.archiveNoticeAction}
+                                onClick={() => {
+                                  dismissNotice(server.id)
+                                  setArchivedFilter(server, 'show')
+                                }}
+                              >
+                                {t('toast.archivedFilter')}
+                              </button>
+                            </>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
                   {merged !== undefined ? (
                     // An active query (query !== '', the only branch that builds
                     // 'merged') replaces the whole workspace list (header/status
@@ -497,13 +648,23 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                       // row count may enter: a new session row becomes visible
                       // exactly when it becomes current, and keying that commit
                       // cancels the "+" entrance animation (design 06 §7).
-                      resetKey={JSON.stringify([orderBy, sessionRowsExpanded, sessionRowWindowMotionKey(
-                        // 与 walk 同源（visibleOrderedWorkspaces / sessionsOf）：键描述的行集就是渲染行集。
+                      resetKey={JSON.stringify([orderBy, groupByMode, archivedFilter, sessionRowsExpanded, sessionRowWindowMotionKey(
+                        // 与 walk 同源：键描述的行集就是渲染行集。flat 用**平铺账号**一个分量
+                        // （分组列表在 flat 下根本不渲染），其余模式用 visibleOrderedWorkspaces。
                         // 折叠的组再滤一层：per-workspace 折叠只渲染组头、不渲染任何会话行，它的窗口
                         // 分量对视图毫无影响，却会因当前行移走而翻键、取消别处的入场动画。
-                        // 代价 = 每渲染多跑一次 sessionsOf（updated 模式含一次排列）；只在本浏览分支
-                        // 求值，搜索/聚合错误/来源折叠分支不付这笔钱。
-                        visibleOrderedWorkspaces
+                        // 代价 = 每工作区每渲染一次 sessionsOf（updated 模式含一次排列），且本渲染内与
+                        // walk 共用 sessionsCache；只在本浏览分支求值。
+                        flatGroupBy
+                          ? [{
+                            workspaceId: FLAT_ACCOUNT_KEY,
+                            total: flatSessions.length,
+                            currentIndex: currentId === undefined
+                              ? -1
+                              : flatSessions.findIndex(session => session.id === currentId),
+                            expanded: sessionRowsExpanded[flatAccountKey(server.id)] === true,
+                          }]
+                          : visibleOrderedWorkspaces
                           .filter(workspace => viewPrefs.folded[`${server.id}/${workspace.id}`] !== true)
                           .map(workspace => {
                           const sessions = sessionsOf(workspace)
@@ -524,10 +685,19 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                           <span className={cc.listTopDropIndicator} aria-hidden="true" />
                         )}
                         {(() => {
-                          return visibleOrderedWorkspaces.map(workspace => {
+                          // flat：整个来源是一条平铺列表（伪账号替换分组列表，标题/表头不渲染）。
+                          return (flatGroupBy ? [flatWorkspace] : visibleOrderedWorkspaces).map(workspace => {
                           const workspaceKey = `${server.id}/${workspace.id}`
-                          liveWorkspaceKeys.add(workspaceKey)
-                          const folded = viewPrefs.folded[workspaceKey] === true
+                          // 树模式下的缩进层级（0 = 顶级；家族优先的结果已折进 parents）。
+                          const treeDepth = treeDepths?.get(workspace.id) ?? 0
+                          // flat 伪账号：不渲染工作区表头，也不接工作区拖拽（会话行拖拽照常）。
+                          const flatAccount = flatGroupBy && workspace.id === FLAT_ACCOUNT_KEY
+                          // 视图状态键：flat 伪账号不得与真实 __flat__ 工作区共享 key（同 flatAccountKey
+                          // 的理由）——folded / 窗口展开都走哨兵键；DOM/motion 键仍用 workspaceKey
+                          // （与 data-row-key/rowKeys 同一套）。
+                          const accountStateKey = flatAccount ? flatAccountKey(server.id) : workspaceKey
+                          liveWorkspaceKeys.current.add(workspaceKey)
+                          const folded = viewPrefs.folded[accountStateKey] === true
                           // While THIS workspace's inline rename is active the header row
                           // hosts the edit form in place (no added list row); the flag
                           // gates form embedding, drag-off, double-click re-entry,
@@ -546,7 +716,9 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                             ? workspaceAccentStyle(server.id, workspace.id, gitFlag)
                             : undefined
                           const isWorktree = gitFlag?.isWorktree === true
-                          const sessions = sessionsOf(workspace)
+                          // flat 直接用已对账+已分区的 flatSessions，不再走 sessionsOf（否则同一
+                          // 账号在本渲染里被 reconcile+partition 第二遍，见性能修订）。
+                          const sessions = flatAccount ? flatSessions : sessionsOf(workspace)
                           // sessionsOf may include a departed blank GHOST row, so the count
                           // would be +1 for up to BLANK_GHOST_GRACE_MS; count only
                           // non-ghost sessions (the same predicate the rows use).
@@ -558,7 +730,7 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                           // 徽标与一切数据面操作仍用全量 sessions；这里只决定
                           // 渲染行数与展开条文案。当前会话行不被藏匿（窗口自动
                           // 覆盖之）。
-                          const rowsExpanded = sessionRowsExpanded[workspaceKey] === true
+                          const rowsExpanded = sessionRowsExpanded[accountStateKey] === true
                           const currentSessionIndex = currentId === undefined
                             ? -1
                             : sessions.findIndex(row => row.id === currentId)
@@ -610,7 +782,9 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                           // is the one exception: it only feeds membership/array equality). Ghost rows are keyed even
                           // when the row component drops an expired one — a stale key
                           // never clones a live row, a missing key would.
-                          rowKeys.push(`workspace:${workspace.id}`)
+                          // flat 伪账号不渲染 workspace 表头，也就不该占一个 rowKeys 位
+                          // （AnimatedRows 的 rowKeys↔data-row-key 契约）。
+                          if (!flatAccount) rowKeys.push(`workspace:${workspace.id}`)
                           if (workspaceError !== undefined) rowKeys.push(`error:workspace:${workspace.id}`)
                           if (workspaceDragError !== undefined) rowKeys.push(`error:workspace-drag:${workspace.id}`)
                           for (const session of hoistedOpenErrors) rowKeys.push(`error:open:${session.id}`)
@@ -950,11 +1124,15 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                               className={clsx(
                                 cc.workspaceGroup,
                                 workspace.ungrouped && cc.ungroupedGroup,
+                                treeDepth > 0 && cc.workspaceTreeNested,
                                 marker === 'before' && cc.dropBefore,
                                 marker === 'after' && cc.dropAfter,
                               )}
+                              // 缩进深度走 CSS 变量（同一规则服务任意层数），并留机器可读锚点。
+                              style={treeDepth > 0 ? ({ '--chamber-tree-depth': String(treeDepth) } as CSSProperties) : undefined}
+                              data-chamber-tree-depth={treeDepth > 0 ? treeDepth : undefined}
                               role="group"
-                              onDragOver={workspace.ungrouped === true || workspace.synthetic === true
+                              onDragOver={flatAccount || workspace.ungrouped === true || workspace.synthetic === true
                                 || workspaceDrag === null
                                 || workspaceDrag.sourceId !== server.id
                                 ? undefined
@@ -968,7 +1146,7 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                   }
                                   setWorkspaceDrag(current => dragOverState(current, workspace.id, half))
                                 }}
-                              onDrop={workspace.ungrouped === true || workspace.synthetic === true
+                              onDrop={flatAccount || workspace.ungrouped === true || workspace.synthetic === true
                                 || workspaceDrag === null
                                 || workspaceDrag.sourceId !== server.id
                                 ? undefined
@@ -978,7 +1156,7 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                   commitWorkspaceDrag(server, workspaceDrag, { id: workspace.id, half: rowHalf(event) })
                                 }}
                             >
-                              {workspace.createdAt === undefined ? (
+                              {flatAccount ? null : workspace.createdAt === undefined ? (
                                 // Upstream's own gate (`row.createdAt === void 0`): no
                                 // creation fact, no card. derive leaves createdAt sparse
                                 // for an unparseable wire value ('' on the cwd-derived
@@ -1037,6 +1215,7 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                 sessionMarker={sessionMarker}
                                 activeSessionDrag={activeSessionDrag}
                                 isGhostSession={isGhostSession}
+                                flat={flatAccount}
                               />
                               {hiddenVisibleCount > 0 && (
                                 <button
@@ -1047,7 +1226,7 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                   // reports its state and collapses again.
                                   aria-expanded={rowsExpanded}
                                   onClick={() => {
-                                    setSessionRowsExpanded(prev => ({ ...prev, [workspaceKey]: !rowsExpanded }))
+                                    setSessionRowsExpanded(prev => ({ ...prev, [accountStateKey]: !rowsExpanded }))
                                   }}
                                 >
                                   {rowsExpanded
@@ -1078,8 +1257,27 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                               </Fragment>
                             ))
                         })()}
-                        {server.workspaces.length === 0 && (
-                          <div className={cc.empty} data-row-key="empty">{t('list.noWorkspaces')}</div>
+                        {(flatGroupBy ? flatSessions.length === 0 : server.workspaces.length === 0) && (
+                          // 空态键在**渲染行数**上（上游同规则）：flat 模式下工作区可能都在、
+                          // 但没有任何可见行（全部被折叠/筛选隐藏），此时同样要给空态。
+                          // 空态只有一个键位（AnimatedRows 的种子键只有一份）：only 空态
+                          // 在这唯一的 empty 元素内分支，绝不渲染第二个键。
+                          <div className={cc.empty} data-row-key="empty">
+                            {archivedFilter === 'only'
+                              ? (
+                                <>
+                                  <span>{t('empty.noneArchived')}</span>
+                                  <button
+                                    type="button"
+                                    className={cc.archiveNoticeAction}
+                                    onClick={() => { setArchivedFilter(server, 'default') }}
+                                  >
+                                    {t('empty.viewOthers')}
+                                  </button>
+                                </>
+                              )
+                              : t('list.noWorkspaces')}
+                          </div>
                         )}
                         {query === '' && rowErrors[`${server.id}/add-workspace`] !== undefined && (
                           <div className={cc.rowError} role="alert">{rowErrors[`${server.id}/add-workspace`]}</div>

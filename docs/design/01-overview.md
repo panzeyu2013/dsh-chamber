@@ -71,7 +71,7 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 | 03 | [03-connections-proxy.md](03-connections-proxy.md) | 现行（核心） | 连接模型（本地 catalog 单行 + 远程注册表）+ 每实例通用反代 |
 | 04 | [04-control-plane-api-data.md](04-control-plane-api-data.md) | 现行（核心） | 管理 REST、反代 HTTP 形状、前端服务（`__DSH_BOOT__`）、数据模型 |
 | 05 | [05-connection-manager.md](05-connection-manager.md) | 现行（表面/架构，v1 权威） | 多来源会话统一导航、侧边栏插件、桥接层、N-ctx、控制面/桌面契约（§7）、安全不变量（§8） |
-| 06 | [06-sidebar-enhancements.md](06-sidebar-enhancements.md) | 现行（flat 单列表推迟） | 侧边栏增强：搜索 / 拖拽排序 / 视图持久化 / 运行时事实通道 |
+| 06 | [06-sidebar-enhancements.md](06-sidebar-enhancements.md) | 现行（含视图选项三轴 per-source） | 侧边栏增强：搜索 / 拖拽排序 / 视图持久化（分组/排序/归档筛选三轴）/ 运行时事实通道 |
 | 07 | [07-models-params.md](07-models-params.md) | 推迟（设计定稿，待上游解锁） | 模型额外参数 + 默认推理等级：链路事实、上游阻塞点、更新复查清单、实现蓝本 |
 | 08 | [08-git-worktree-plugin.md](08-git-worktree-plugin.md) | 现行 | git worktree 独立插件：实例内 host Remote + 强制打包客户端插件 + `sidebar.workspace.git` 座位 + 安全创建/无归档删除 saga |
 | 09 | [09-client-plugin-runtime-loading.md](09-client-plugin-runtime-loading.md) | 现行 | dsh 客户端插件运行时加载：每实例合并宿主 boot 图（chamber host 包 `clientGraph/graph` + 控制面 `--patch` seed + 去重预加载 + boot.ts extraRows seam）+ 活实例装/卸热同步（design 09 §3.7，无需窗口重载）+ 信任边界 |

@@ -141,16 +141,16 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 - **点击来源分组头**（非当前来源）= 切换活动来源视图：
   `chamberBridge.requestActivateSource(sourceId)` → App 层仅切换该来源
   shell（N-ctx），不打开会话。
-- **归档会话立即从列表消失；安静会话无确认，活跃会话走官方两段式确认**（upstream-alignment
+- **归档会话在 default 筛选下立即从列表消失（show/only 下按三态进投影）；安静会话无确认，活跃会话走官方两段式确认**（upstream-alignment
   T2a + 0.1.7 准入）：归档动词在会话行的 kebab 菜单里（另有同一动词的行内悬停钮，design 06 §7），首调 `{ sessionId }` 直接提交（上游理由：
   归档只隐藏该行、从不触碰会话日志，故安静会话不具破坏性也无需确认，vendor ui-workspace
-  `Rows.tsx:412-421`）；宿主以 `workspace/session-active` 拒绝（该会话仍有工作）时才弹 chamber
+  `session-actions/ArchiveSession.tsx:43/:66`）；宿主以 `workspace/session-active` 拒绝（该会话仍有工作）时才弹 chamber
   的「停止并归档」确认，确认后带 `stopActivity: true` 重发，停止由宿主 provider 完成（design 24
   §5）。`archivedSessionIds` 过滤在 derive 层（`packages/dsh-chamber-client-core/src/derive.ts`
   纯函数），不等聚合轮询。
 - 会话行悬停操作（v1 最小集，走该来源自己的 API）：置顶/重命名/**fork**/归档（**kebab 菜单
   四项** + **独立归档图标钮** + **独立置顶图标钮**——归档与置顶各自的双出口，按钮形态、座席、无障碍与
-  「首落不含置顶序」的取舍见 design 06 §7/§5），置顶写面 = `workspace/pinSession`/`workspace/unpinSession`
+  置顶行为（渲染分区已落地；块内拖拽/账号写未做）见 design 06 §3.4/§5/§7），置顶写面 = `workspace/pinSession`/`workspace/unpinSession`
   （幂等 unary，无本地事实；标记的线源与三处诚实性缺口见 design 06 §5/§7）
   ——行内 fork 走 wire
   `sessions.fork` + 标题递增（increaseTitle，对齐官方 ui-workspace），成功后打开子会话，递增
@@ -865,7 +865,8 @@ instanceId}` +
 
 ## 9. 范围边界（推迟与不做）
 
-- **推迟（维持不排期）**：flat 单列表模式（与"仅按来源分类"呈现原则有张力）。
+- **视图选项三轴（2026 对齐轮）**：每来源 flat 单列表 / 按工作区树 / 归档筛选已落地（design 06 §3.4）；
+  **跨来源平铺**（把所有来源合成一条列表）仍不做——与"仅按来源分类"呈现原则有张力。
 - 不做（v1）：跨来源移动会话、单 store 真融合（fork runtime）、会话实时推送同步、远程实例管理 UI 外壳。
 - fork 会话**在范围内**：官方 conversation 回合尾 `forkAt` 常驻可用；侧边栏会话行 kebab 菜单亦提供行内 fork（wire `sessions.fork`，对齐官方 ui-workspace），两者并存（§2.2）。
 - **残余（本版不消除）**：租客 **body portal** 浮层（官方 ui-chat 4 处 `createPortal` + chamber 2 处，z-index ≤1100）渲染到文档 body，位于**任何 stacking 边界之外**——遮罩期内这类浮层仍可能可见；顶层幕布可压过它，但会覆盖全部视图与 chamber chrome（§4 已否）。登记而非修复。

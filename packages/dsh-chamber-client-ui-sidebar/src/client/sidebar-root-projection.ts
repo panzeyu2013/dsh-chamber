@@ -7,10 +7,11 @@
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
-import { nextUpdatedOrder, orderServersForDisplay, type SessionOrderBy } from '@dsh-chamber/dsh-chamber-client-core/derive'
+import { nextUpdatedOrder, orderServersForDisplay, type ArchivedFilter, type SessionGroupBy, type SessionOrderBy } from '@dsh-chamber/dsh-chamber-client-core/derive'
+import { flatAccountKey } from '@dsh-chamber/dsh-chamber-client-core/flat-account'
 import { cachedServersProjectionSignature } from '@dsh-chamber/dsh-chamber-client-core/projection-signature-cache'
 import {
-  clearSourceBookkeeping, flushScheduledActivityWrites, getViewPrefs, scheduleUpdatedOrderWrite,
+  clearSourceBookkeeping, flushScheduledActivityWrites, getViewPrefs, peekScheduledActivityWrites, scheduleUpdatedOrderWrite,
   subscribeViewPrefs, updateViewPrefs, type ChamberSidebarViewPrefs,
 } from '@dsh-chamber/dsh-chamber-client-core/view-prefs'
 import { getWorkspaceGitFlagsVersion, subscribeWorkspaceGitFlags } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
@@ -119,6 +120,19 @@ export function useSidebarProjection() {
     })
   }
 
+  // 视图选项另外两轴（design 06 §3.4）：分组与归档筛选。都是 per-source 纯偏好
+  // 写入（无 wire、无簿记）；flat 账号的 seed 与对账在渲染/拖拽侧按需进行。
+  // 归档集未知（archiveSetKnown !== true）时本函数仍照常写入：存储值保留，禁用与
+  // 默认渲染是菜单/渲染侧的规则（design 06 §3.4）。
+  const setGroupBy = (server: ChamberServerAggregate, mode: SessionGroupBy): void => {
+    if ((viewPrefs.groupBy?.[server.id] ?? 'workspace') === mode) return
+    updateViewPrefs(prev => ({ ...prev, groupBy: { ...prev.groupBy, [server.id]: mode } }))
+  }
+  const setArchivedFilter = (server: ChamberServerAggregate, filter: ArchivedFilter): void => {
+    if ((viewPrefs.archivedFilter?.[server.id] ?? 'default') === filter) return
+    updateViewPrefs(prev => ({ ...prev, archivedFilter: { ...prev.archivedFilter, [server.id]: filter } }))
+  }
+
   // Transient optimistic order overrides, applied at render while the wire
   // commit is in flight. Cleared PER KEY against each fresh projection — never
   // wholesale: a poll that has not seen the commit must not flash the old order
@@ -182,7 +196,9 @@ export function useSidebarProjection() {
       }
       return changed ? next : prev
     })
-  }, [servers])
+    // 卫生扫描读 viewPrefs.orderBy（跨 shell 切到 updated 时立即清 manual override），
+    // 故它也是依赖：只等下一次 servers 发布可能永远等不到（安静来源）。
+  }, [servers, viewPrefs.orderBy])
 
   // Per-account updated-mode order derivation (official nextSessionOrderAccount
   // port), written through the SHARED view-prefs store, diff-guarded: an
@@ -209,8 +225,64 @@ export function useSidebarProjection() {
           byId: new Map(workspace.sessions.map(session => [session.id, session])),
         })
         if (!next.changed) continue
+        // 归档筛选会让隐藏行离开成员集：若把它的 updatedAt 记账一并丢掉，重新显示（show/only
+        // 切换）会被当成"首次观测"重新置顶。只保留**仍在归档集**的隐藏 id（第四轮 F2：不再
+        // 无界保留被删除的 id），于是再次曝光不触发提升，而清理/删除过的 id 自然离开。
+        const archivedIds = new Set((server.archivedSessions ?? []).map(row => row.sessionId))
+        const priorTs = current.sessionUpdatedAtByAccount?.[accountKey] ?? {}
+        const carried: Record<string, number> = {}
+        for (const [id, ts] of Object.entries(priorTs)) {
+          if (!(id in next.updatedAt) && archivedIds.has(id)) carried[id] = ts
+        }
+        const mergedTs = { ...next.updatedAt, ...carried }
+        // 合并后的记账与 stored 序都没变就不再排写（否则 carried 会让 changed 永久为真，
+        // 每个投影 tick 都排一次空写；第四轮 F9）。
+        // 判等对象 = pending intent（若有）优先于缓存：否则旧 pending 写会在窗末覆盖本次跳过
+        // 的新派生态（第四轮 correctness finding 2）。
+        const pendingIntent = peekScheduledActivityWrites()
+        const priorOrder = pendingIntent.updatedOrder[accountKey] ?? current.updatedOrder?.[accountKey] ?? []
+        const priorTsForCompare = pendingIntent.sessionUpdatedAtByAccount[accountKey] ?? priorTs
+        const tsEqual = Object.keys(mergedTs).length === Object.keys(priorTsForCompare).length
+          && Object.entries(mergedTs).every(([id, ts]) => priorTsForCompare[id] === ts)
+        const orderEqual = next.order.length === priorOrder.length
+          && next.order.every((id, index) => priorOrder[index] === id)
+        if (tsEqual && orderEqual) continue
         pendingOrder[accountKey] = next.order
-        pendingTimestamps[accountKey] = next.updatedAt
+        pendingTimestamps[accountKey] = mergedTs
+      }
+      // 单列表账号的 updated 序（仅该来源处于 flat 模式时维护）：成员集 = 全部可见行。
+      // 与各组 account 同一条 nextUpdatedOrder 推导与同一防抖写回。
+      if ((current.groupBy?.[server.id] ?? 'workspace') === 'flat') {
+        const flatSessions = server.workspaces.flatMap(workspace => workspace.sessions)
+        if (flatSessions.length > 0) {
+          const accountKey = flatAccountKey(server.id)
+          const next = nextUpdatedOrder({
+            sessionIds: flatSessions.map(session => session.id),
+            stored: current.updatedOrder?.[accountKey],
+            previousUpdatedAt: current.sessionUpdatedAtByAccount?.[accountKey],
+            byId: new Map(flatSessions.map(session => [session.id, session] as const)),
+          })
+          if (next.changed) {
+            const archivedIds = new Set((server.archivedSessions ?? []).map(row => row.sessionId))
+            const priorTs = current.sessionUpdatedAtByAccount?.[accountKey] ?? {}
+            const carried: Record<string, number> = {}
+            for (const [id, ts] of Object.entries(priorTs)) {
+              if (!(id in next.updatedAt) && archivedIds.has(id)) carried[id] = ts
+            }
+            const mergedTs = { ...next.updatedAt, ...carried }
+            const pendingIntent = peekScheduledActivityWrites()
+            const priorOrder = pendingIntent.updatedOrder[accountKey] ?? current.updatedOrder?.[accountKey] ?? []
+            const priorTsForCompare = pendingIntent.sessionUpdatedAtByAccount[accountKey] ?? priorTs
+            const tsEqual = Object.keys(mergedTs).length === Object.keys(priorTsForCompare).length
+              && Object.entries(mergedTs).every(([id, ts]) => priorTsForCompare[id] === ts)
+            const orderEqual = next.order.length === priorOrder.length
+              && next.order.every((id, index) => priorOrder[index] === id)
+            if (!(tsEqual && orderEqual)) {
+              pendingOrder[accountKey] = next.order
+              pendingTimestamps[accountKey] = mergedTs
+            }
+          }
+        }
       }
     }
     if (Object.keys(pendingOrder).length === 0 && Object.keys(pendingTimestamps).length === 0) return
@@ -224,7 +296,7 @@ export function useSidebarProjection() {
     }
   }, [servers, viewPrefs])
   return {
-    servers, viewPrefs, orderedServers, toggleWorkspaceFold, toggleSourceFold, setOrderBy,
+    servers, viewPrefs, orderedServers, toggleWorkspaceFold, toggleSourceFold, setOrderBy, setGroupBy, setArchivedFilter,
     sessionOrderOverride, setSessionOrderOverride, workspaceOrderOverride, setWorkspaceOrderOverride,
   }
 }

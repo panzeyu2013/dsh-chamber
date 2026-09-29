@@ -9,7 +9,7 @@
 > （拖拽按来源在代码层阻断）、运行时事实只经通道投影（控制面/App 不持有
 > 会话权威）。
 > fork 会话（侧边栏会话行 kebab 行内 fork + 官方 conversation turn-tail
-> `forkAt`）的契约在 05 §2.2/§9；flat 单列表模式维持推迟（§5）。
+> `forkAt`）的契约在 05 §2.2/§9；视图选项三轴（分组 / 排序 / 归档筛选，含 per-source flat 单列表）见 §3.4。
 
 ## 1. 会话搜索（每来源）
 
@@ -23,8 +23,10 @@
 - 标题/workspace 标签**不上 wire**——由客户端从该来源聚合快照解析
   （投影已带 per-session title；workspace 标题或未分组标签兜底）。
 - **本地元数据匹配**：本地腿对投影**可见集**做标题/所属 workspace 标题
-  **子串匹配**（大小写不敏感；archived/subagent/blank 行不进投影故不可能
-  命中），命中按 recency 排序（纯函数 `deriveLocalSearchMatches`）；
+  **子串匹配**（大小写不敏感；subagent 行不进投影，blank 行由 `deriveLocalSearchMatches` 显式
+  跳过，故都不可能命中；
+  archived 行按 `archivedFilter` 三态进出投影，故 show/only 下归档命中可现，
+  见 §3.4），命中按 recency 排序（纯函数 `deriveLocalSearchMatches`）；
   远程腿 = wire `sessions.search` 内容命中，**按投影可见集过滤**（对齐官方
   deriveSearchResults）。合并（`mergeSearchResults`）：本地优先（recency
   序）→ 远程未覆盖行按后端序追加，跨腿/腿内去重；同
@@ -87,7 +89,8 @@
 ### 2.2 交互（镜像官方 HTML5 DnD）
 
 - **可拖**：真实 workspace 组内会话行、未分组桶内会话行、真实 workspace
-  分组头。**不可拖**：未分组桶（无 wire 身份）、跨来源（代码层阻断：
+  分组头。**不可拖**：未分组桶（无 wire 身份）、blank 占位行与归档行（上游 `Rows.tsx` 的
+  `!row.blank && !row.archived` 门）、跨来源（代码层阻断：
   `active = drag.sourceId === group.sourceId && drag.accountKey === group.key`）。
 - **机制**：`draggable` 属性 + HTML5 DnD 事件；拖起时 document 级
   dragover/drop preventDefault（官方 `useNativeDragAcceptance` 移植）——
@@ -117,8 +120,8 @@
   （官方亦然，注明已知限制）。
 - **会话排序模式（对齐官方）**：每来源排序偏好 manual（默认）| updated（§3.1
   `orderBy`，来源头 hover 操作簇排序按钮打开**显式菜单**——官方 ViewOptionsMenu
-  模式，勾选标记当前模式）。**updated = 手动序 + 活动置顶（官方 ui-workspace
-  nextSessionOrderAccount 语义，不是"纯 recency 重排"）**：
+  模式，勾选标记当前模式）。**updated = 手动序 + 活动置顶（本仓 `nextUpdatedOrder` 的账号
+  语义；本 pin 的上游 updated 是纯 recency 重排 + 账号序，差异见 B1，不存在上游同名函数）**：
   - 每个 account（真实 workspace 与未分组桶各一，键 `${sourceId}/${workspaceId}`）
     持有持久化活动序（`updatedOrder`）与上次观测时间戳簿记
     （`sessionUpdatedAtByAccount`），由侧边栏推导 effect 一起写回（diff 守卫，
@@ -133,7 +136,10 @@
     切回 manual 时 updated 模式下的拖拽位置**不保留**（manual 渲染 = override ??
     wire，account 序被忽略，重进 updated 整列 recency 重排）；官方两种模式都渲染
     account 序、拖拽跨模式保留，chamber 坚持 manual 的 wire 权威（design 01 §5），
-    故 updated 是**活动视图**而非持久手动排布层。
+    故 updated 是**活动视图**而非持久手动排布层。另：上游 `setSessionOrder` 在拖拽时把 `orderBy` 切回
+    `manual`（上游 `ui-workspace` 的 `stores.ts` 账号语义），本仓拖拽只写 mode 自身账号并留在 updated（登记偏差 B5）。
+    （本仓 `reconciledSessionOrder` 对应上游 `reconcileManualOrder`（`ui-workspace` 的 `tree.ts`）的成员对账语义，
+    非上游同名函数。）
   - 投影签名（`serversProjectionSignature`）**纳入会话 updatedAt**——时间戳变化
     会重发布投影，推导 effect 才能及时置顶（排序由 account 推导驱动，该字段不可
     从签名排除）。
@@ -221,6 +227,9 @@
     folded: Record<`${sourceId}/${workspaceId}`, boolean>,
     ungroupedOrder: Record<sourceId, string[]>,
     orderBy: Record<sourceId, 'manual' | 'updated'>,
+    groupBy?: Record<sourceId, 'workspace' | 'workspace-tree' | 'flat'>,
+    archivedFilter?: Record<sourceId, 'default' | 'show' | 'only'>,
+    flatOrder?: Record<sourceId, string[]>,
     updatedOrder: Record<`${sourceId}/${workspaceId}`, string[]>,
     sessionUpdatedAtByAccount: Record<`${sourceId}/${workspaceId}`, Record<sessionId, number>>,
     sidebarWidth: number,
@@ -251,7 +260,8 @@
   rail 内控件）。chamber sidebar fork 注册 `SidebarLeadingControls`（展开 + 新建，28px / `--dsw-radius-sm`；
   宽度与 `--dsh-frame-leading-clearance` 计价锁步），layout fork 在 SlotMap 声明该 root-scoped 单席。窗口侧的红绿灯行、材质与全屏让位（leading 160→84、`.leadingSeat` 12px）见 design 25 §5.6。
 - **darwin 透明与窗口 vibrancy**：侧栏列 `.root` 在 darwin 下透明（规则体与上游 ui-sidebar 逐字同形：`.root` transparent + `.newSession` 白色洗染 + `.brand` cursor: default），让窗口材质从侧栏列透出；中列保持不透明 `--dsw-alias-bg-base`（同上游）。整条透明链（ui-web `html/body`、AppFrame `.frame`/`.sidebarCol`、本侧栏 `.root`、renderer 的 `.app`/`.instance-view`）统一按 `data-window-vibrancy` 门控——两 flavor 的 darwin 窗口都带材质，标记由各自 documentStart 落（Swift `bridge-shim.js` / Electron preload 的 darwin 分支）；无材质的 darwin 窗口形态不落标记，跟着透明会把它压到窗口底色上。窗口侧材质/灯位见 design 25 §5.6。
-- **orderBy**：每来源会话排序偏好 `'manual' | 'updated'`，默认 `manual`；
+- **orderBy / groupBy / archivedFilter**：视图选项三轴，全部 per-source（详见 §3.4）；orderBy 两态
+  `'manual' | 'updated'`，默认 `manual`；
   v 保持 1 兼容旧数据（无此键即全 manual，不重播种），sanitize 丢弃非法值。
   **默认 `manual`**（保持既有 wire 序呈现）与官方默认 `updated` 不同——有意
   取舍：多来源列表下 wire 序即用户/宿主排好的序；该默认不因官方活动提升（updated 排序）
@@ -280,9 +290,94 @@
 
 ### 3.3 代码落点
 
+- **渲染结构（性能修订，2026 对齐轮收尾）**：侧栏 context 的动作经 `useStableHandlers` 冻结身份
+  （每属性缓存闭包、调用转发到每次渲染刷新的 ref），状态字段逐项进依赖——于是 `memo(ServerSection)` /
+  `memo(SessionRow)` 真正生效；per-source 账号序**每渲染每工作区只算一次**（resetKey 与 walk 共用同一
+  缓存），flat 账号只对账/分区一次且仅在 flat 态构建（walk 直接渲染 `flatSessions`）；工作区拖拽环境
+  只在**本来源拖拽进行中**构建；树投影与三轴菜单条目各自 `useMemo`，且 ServerSection 以
+  `useSyncExternalStore(subscribeWorkspaceGitFlags, getWorkspaceGitFlagsVersion, …)` **订阅** git flags
+  版本（ctxValue 稳定后，只读 getter 的 memo 依赖不是响应式来源，家族锚点/main-fold/worktree 字形
+  会冻结）。
+  回归锁：`row-render-cost.test.ts` / `animated-rows.test.ts` / `workspace-tree.test.ts` /
+  `flat-list.test.ts` / `pin-partition.test.ts`。**已知残余（登记）**：浏览分支专属派生（`orderedWorkspaces` /
+  `visibleOrderedWorkspaces` / `rowKeys` / flat 对账）在搜索/聚合错误/折叠路径仍会计算；`__flat__` 的
+  DOM/行键命名空间与真实工作区共用（宿主 UUID 下不可达）；只有 `folded`/`sessionRowsExpanded` 用哨兵键；
+  only 空态缺上游 24px 归档/队列字形、非 only 空态复用 `list.noWorkspaces` 而非上游 `empty.none`；归档行的
+  标题双击重命名未保留（上游只拒绝打开）；视图选项菜单未设上游 200px min-width 地板；归档悬停行是纯文本
+  （上游带 14px 归档图标与 `.hoverArchived` 行类）；carry 只保留仍在归档集的隐藏 id，故 `only`→`default`
+  时被隐藏的**非归档**行仍可能被当作首次观测提升一次（渲染侧拿不到未过滤成员集，无法与"已删除"区分）。
+
 - `packages/dsh-chamber-client-core/src/view-prefs.ts` + `packages/dsh-chamber-client-core/src/index.ts` 再导出；`SidebarRoot.tsx`
   经 `getViewPrefs`/`subscribeViewPrefs`/`updateViewPrefs` 读写；
   `test/session-state/view-prefs.test.ts` 覆盖存储单例/通知/裁剪（node:test 风格）。
+
+### 3.4 视图选项三轴（per-source，2026 对齐轮）
+
+**比较单元**：单一来源的浏览面 = 上游单主机浏览器。三轴（`groupBy` / `orderBy` /
+`archivedFilter`）逐条对齐上游 `ViewOptionsMenu`，per-source 是本仓把上游「整页一份」的视图
+状态**实例化**到每个来源 section 的方式——**不计为与上游的偏差**。
+
+- **菜单**（`ServerSectionHeader.tsx`，上游 `rows/WorkspaceBrowser.tsx` 的 `ViewOptionsMenu`
+  形态副本）：分组方式（按工作区 / 按工作区树 / 单列表）→ 排序方式（手动排序 / 最近更新）→
+  筛选会话（隐藏已归档 / 全部对话（显示已归档）/ 仅显示已归档）；label + separator + icon +
+  `selectedIds` 三轴齐备，密度保持本仓 `compact`（§7，不随上游 dense）；触发钮用上游 sliders
+  字形 + `viewOptions.label` tooltip/aria。**降级**：`archiveSetKnown !== true` 时筛选轴**三项
+  整体禁用**（默认项若可点会把存储值写回 `default`）、选中按实际渲染态（隐藏已归档）呈现，
+  存储值保留，集合恢复已知后自动生效。
+- **归档筛选三态**（`client-core/derive.ts sessionVisible` 的逐分支移植）：default 隐藏归档行 /
+  show 回原槽位混入并打稀疏 `archived` 标记 / only 仅归档行且丢弃无可见成员的 workspace；
+  **列表与搜索同规则**（`deriveLocalSearchMatches` 同一参数）。投影输入链：renderer
+  `deriveServers(..., archivedFilters)` 按来源解析 + 进按来源缓存键；App 只订阅**筛选映射签名**
+  （其他 view-prefs 写不触发 App 重渲染）；发布签名带 `archived` 位。
+- **归档行形态**（上游 `Rows.tsx` 归档分支 + `ArchiveSession.tsx` 的 unarchive 半支）：置灰、
+  不可开（点击就地提示 `toast.archivedNotOpenable`）、不可拖（仍是合法落点）、状态槽留空、
+  pin 两入口缺席、归档钮/菜单项翻转为「恢复」（官方 `workspace/unarchiveSession`，失败落
+  `/unarchive` 行错误键）；**搜索命中行**同为归档形态，恢复入口以行后文本动作承载（搜索行是
+  单一 button 的 a11y 结构，嵌套按钮非法——形态差异登记在 checklist §4.6 该行，行为面与上游一致）。
+- **归档提示条**（上游 `RowActionToast` 的 section 内实例化）：落**触发来源**的 section 内、
+  折叠门内、per-shell 瞬态（`sidebar-root-notices.ts`）；三态 archived / stoppedAndArchived /
+  archivedNotOpenable；动作 = 撤销 + 筛选已归档会话（该来源已非 default **或归档集未知**时隐藏，
+  后者保护降级期存储值）；归档成功两个
+  相位（直接归档、第二段 stopActivity）都触达。
+- **only 空态**：`empty.noneArchived` + 「查看其他会话」跳回 default（单一 `data-row-key="empty"`
+  元素内分支，不新增 AnimatedRows 键位）。
+- **按工作区树**（上游 `tree.ts owningParentFolder` 的行为镜像，`client-core/workspace-tree.ts`）：
+  仅**已注册**工作区可作父节点、最近前缀胜出、大小写敏感、Windows 拼写按 `/` 比较、POSIX 反斜杠
+  是字面字符；**家族优先**：派生 worktree 的显示父级取它 main 的父级（worktree 建在
+  `$DSH_HOME/worktrees`，纯前缀会把家族拆开，design 08 §3.3），无 git 家族信息退化为纯前缀；
+  `synthetic` / 未分组桶不参与。树只改缩进（`--chamber-tree-depth`）不解序：同级顺序仍由 wire
+  序与家族约束决定，父组折叠只隐藏自己的会话行。
+- **flat 单列表**（上游 `FLAT_SESSION_ORDER_KEY` 的 per-source 对应物，
+  `client-core/flat-account.ts` 的 `FLAT_ACCOUNT_KEY`）：该来源一条平铺列表、伪账号替换分组
+  列表（不渲染工作区表头/hover 卡、不接工作区拖拽）；manual 顺序 = `flatOrder[sourceId]`
+  （缺省用合成序：各组显示序 → 组内会话序，`reconciledSessionOrder` 对账），updated 顺序 =
+  `flatAccountKey(sourceId)` 哨兵账号（NUL 哨兵，同一条 `nextUpdatedOrder` 推导与防抖写回，仅该来源为 flat 时维护）；
+  会话拖拽只写本地账号、**不发 wire**（上游 flat 账号同规则）。不做跨来源平铺（拒绝项见 §12）。
+- **pin 渲染分区**（Phase 4 选项 1，上游 `sectionMembers` 的行为镜像，
+  `client-core/pin-partition.ts`）：blank 占位 → pinned（非归档）→ 其余，各分区保序；工作区/树/
+  flat 三态共用 `sessionsOf` 叠层；manual 的块内序取宿主 `pinnedSessionIds`（「最近置顶在前」），
+  updated 保留本仓 account 序；集合出处门 `pinSetKnown`（未知 = **无置顶块**且不宣称，行标记同门；
+  blank 占位行仍按上游无条件提前）；
+  搜索结果不分区。**不做**：置顶块内拖拽、跨块守卫、把置顶写进本地账号（上游领先槽语义）——
+  由此 `unpin` 后行回自然位（登记偏差 B2，§5）。**保守守卫**：涉及置顶行的拖放（源或目标是置顶
+  行）一律不提交且不画 marker——未分区的锚点算不出分区显示序里的位置，放任会反向移动并写进
+  账号/wire；blank 目标的落点半边归一为 after（上游同规则）。
+- **登记与偏差**：A 类（架构实例化，不登记）：三轴 per-source、每来源账号、提示条 section/
+  per-shell、降级规则、无跨来源序。B 类（真实差异，STATUS 必要取舍）：B1 排序模型（默认
+  `manual` vs 上游 `updated`；manual = 宿主 wire 序 vs 上游本地账号序；updated = 本仓活动视图
+  vs 上游纯 recency）、B2 pin unpin 落点、B3 树模式家族优先、B4 树模式展开/折叠模型与拖拽父子
+  约束未照搬（上游按 ancestor 自动展开、父组折叠隐藏子组、拖拽受父子约束；本仓 folded 缺席即
+  展开、父组折叠只隐藏自己的行、拖拽无父子约束）、B5 会话拖拽不切换 `orderBy`（上游拖拽即切
+  `manual`）、B6 本地账号（flatOrder / ungroupedOrder / updated account）的成员集 = **当前可见行**，
+  拖拽提交会把隐藏（归档）成员写出账号（上游 `sessionMemberIds` 保留隐藏成员，恢复时回原槽位）、
+  B7 本地搜索匹配链（displayTitle → cwd basename → session id；上游只匹配 summary.title + workspace
+  标签）、B8 归档提示条的颜色 tone 与成功/警示字形未移植（role=alert 本就是上游 Toast 行为；文案/动作/
+  TTL 仅 hold 层对齐——上游另有 1s 淡出尾巴）、B9 会话行窗口的配额语义（上游 5 行且 blank/running/有
+  存活子代理的行豁免；本仓按位置窗口 200 行 + 当前行）、B10 本地账号中新 fork 子项落尾（上游
+  `placeFork`：新普通分叉紧邻其源；本仓按对账把未知成员追加到尾部）。
+  上游形态移植逐行登记在 checklist §4.6（ViewOptionsMenu / owningParentFolder /
+  ArchiveSession 的 unarchive 半支 / Rows 归档行 / RowActionToast / sectionMembers——**六锚点
+  五行**；另有 FLAT 账号一行）。
 
 ## 4. 运行时事实通道（完成/待交互点 + 跨来源当前会话高亮）
 
@@ -503,11 +598,13 @@
     **武装/解除事实 = 官方 `completionUnread` 位 ∪ 修正臂**（§4.1/§4.2；通知边沿继续走运行位，未变）。
     判据按此钉住：蓝点必须存在、
     `StateDot state="done"` 不得回归、运行环仍是官方 ongoing。
-  - **活动定时任务标记**：会话行在行首座席（标题之前）渲染官方；搜索结果行仍在标题之后（`ServerSectionSearch.tsx`）渲染官方
-    `ActiveScheduleIndicator` 同形标记（16px 闹钟字形 + `role="img"`，可访问名与
+  - **活动定时任务标记**：会话行在行首座席（标题之前）渲染本仓的 `SessionScheduleIndicator`
+    （官方 occupant 缺席时的回落；座席转移见 §3.4/checklist §4.6）；搜索结果行仍在标题之后
+    （`ServerSectionSearch.tsx`）渲染同形标记（16px 闹钟字形 + `role="img"`，可访问名与
     title 都是本地化 `schedule.active`，行本身仍是唯一动作），事实 = 该会话
-    `projectionValues.schedule` 非空（`derive.ts hasActiveScheduleOf`，
-    镜像 vendor ui-workspace `tree.ts:161-163`）。**稀疏字段**：只有真有活动定时
+    `projectionValues.schedule` 非空（`derive.ts hasActiveScheduleOf`）。上游同事实源自共享
+    Host 任务目录（`ui-schedule/src/client/SessionScheduleMark.tsx`；旧 `ActiveScheduleIndicator`
+    的退役登记在 checklist §4.6 行 412）。**稀疏字段**：只有真有活动定时
     任务的行发布 `hasActiveSchedule`，且该位纳入 `instanceSnapshotSignature`
     （否则置位/清位重发布同一份字节会被 producer 去重闸吞掉、标记冻结在首见值）；
     未挂载来源的 unary 兜底行读 `projections.values` 的同一事实；无定时任务的行
@@ -878,29 +975,33 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
 
 ## 5. 已知取舍与开放项
 
-- **置顶（pin）首落不含置顶序：已知取舍**——pin/unpin 写入口、静息标记与两个行入口都已按上游形态落地（§7），
-  但上游 pin 成功后会写 `pinSessionOrder`（置顶行领跑本节、只在置顶块内可拖），本仓未接：它会与
-  `sessionOrderOverride`（manual 覆盖）和 `updated` 排序的自动提升并列成第三条分区语义，并给会话拖拽加跨分区守卫
-  （上游由 `sectionMembers` + `reconcileManualOrder` 承担）。残余开放项见 `todo/upstream/upstream-ui-parity-plan.md` §1.1。
-  zh 文案（上游逐字「置顶会话 / 已置顶」）的排序承诺在置顶序落地前不完全成立——**文案先行是有意的**：词典值逐字
-  是既有约定，避免二次改词。另有一处来源级诚实：置顶集只有挂载 follow（基线 + `{type:'pinned'}` 增量）一条线源，
-  单列表 unary 兜底来源不渲染任何标记（`pinSetKnown` 三态与归档集的 `archiveSetKnown` 同一条规矩）。
-  由此还有两处来源级诚实要记：①**未挂载来源上的 pin 是"发送即忘"**——宿主会执行，但 unary 兜底没有置顶
-  线源（`pinSetKnown:false`），标记只在该来源挂载、基线到达后才出现（§10.4 的"一次推送延迟"对未挂载来源
-  不成立：延迟无界）；②**半开 follow 通道**（WS 冻结、HTTP 仍活）下，pin → HTTP 归档 → HTTP 恢复 会让本地
-  置顶集仍指着该 id（宿主归档时已清、此后的 unpin 是 no-op），标记可能一直挂到基线重放——本仓不做乐观回声，
-  修法方向见 parity plan §1.1 残余④（vendor `client/model.ts` 的归档即清同规则）。
-  行级失败槽每行只显示一条且不清陈旧键：pin 键插在 archive 与 fork 之间，
-  归档/恢复后陈旧键仍可能显示——既有族行为，pin 未改变其性质。**降级视图（`archiveSetKnown=false`）里归档行
-  也以普通行出现**：pin 钮可达、宿主以 bad-request 拒绝，失败落同一个槽，不写任何错状态。
-- **flat 单列表模式：推迟（维持不排期）**——与 05 §2.1「仅按来源分类」呈现
-  原则有张力。
-- **按工作区树分组（上游视图选项菜单的 `groupBy.workspaceTree`）：不做**——上游按
-  **父目录前缀**（`owningParentFolder`）把 workspace 嵌进树，本仓的"相邻/从属"关系由
-  git worktree 家族表达（design 08 §3.3 连续家族不变式：main 居首、派生随后，且由位置
-  意图保证从第一帧成立），父目录前缀既不是本仓的关系来源也不比它更准；`orderBy` 两态
-  （manual/updated）已在 §3.1 实现，`archivedFilter` 三态见 STATUS「不做」条（归档会话
-  不进导航投影）。
+- **置顶（pin）：渲染分区已落地（Phase 4 选项 1），残余 = 块内拖拽 + 跨块守卫 + 账号写入**——
+  pin/unpin 写入口、静息标记、两个行入口与**置顶分区**都已按上游形态落地（§7）：置顶行在其所属
+  分组、树节点与 flat 列表里领跑（上游 `sectionMembers` 的 blank → pinned → 其余三段语义，
+  `pin-partition.ts`），manual 的块内序取宿主「最近置顶在前」的 `pinnedSessionIds`，updated 保留本仓
+  account 序，搜索结果不分区（上游同）。**未做（登记）**：置顶块内拖拽与跨块守卫；把置顶写进本地
+  账号（上游 `pinSessionOrder` 的持久领先槽语义）——本仓 `unpin` 后行回它自己的自然位，而不是停在
+  非置顶块首位（登记偏差 B2，STATUS 必要取舍）。拖拽候选与残余见 `todo/upstream/upstream-ui-parity-plan.md` §1.1。
+  来源级诚实不变：置顶集只有挂载 follow（基线 + `{type:'pinned'}` 增量）一条线源，单列表 unary 兜底
+  来源不渲染任何标记、无置顶块（blank 占位行仍提前）（`pinSetKnown` 三态与归档集的 `archiveSetKnown` 同一条规矩）；
+  ①**未挂载来源上的 pin 是"发送即忘"**（unary 兜底没有置顶线源，标记/分区只在该来源挂载、基线到达后
+  才出现，延迟无界）；②**半开 follow 通道**（WS 冻结、HTTP 仍活）下 pin → HTTP 归档 → HTTP 恢复 会让
+  本地置顶集仍指着该 id（宿主归档时已清、此后的 unpin 是 no-op），直到基线重放——本仓不做乐观回声，
+  修法方向见 parity plan §1.1。行级失败槽每行只显示一条且不清陈旧键：pin 键插在 archive 与 unarchive
+  之间，归档/恢复后陈旧键仍可能显示（既有族行为）。
+- **归档筛选（`archivedFilter` 三态）已落地**（§3.4）：default 隐藏 / show 原槽位混入 / only 仅归档行
+  并丢弃无可见成员的 workspace；列表与搜索同规则；归档行置灰、不可开（点击就地提示）、不可拖（仍是
+  落点）、状态槽留空、pin 两入口缺席、归档钮/菜单项翻转为「恢复」（官方 `workspace/unarchiveSession`）；
+  归档后触发来源 section 内提示条给「撤销 / 筛选已归档会话」（上游 `RowActionToast` 的实例化，D5）；
+  only 空态可一键跳回。**降级规则（本仓特有状态）**：`archiveSetKnown !== true` 时筛选轴三项整体禁用、
+  按实际渲染态（隐藏已归档）显示选中、存储值保留，集合恢复已知后自动生效（点击默认项会把存储值写回
+  `default`，故默认项也禁用）。管理器（design 24）仍是批量维护面，purge 是其独有能力。
+- **flat 单列表已落地（per-source）**：该来源一条平铺列表（伪账号替换分组列表，不渲染工作区表头），
+  manual 走 `flatOrder[sourceId]`、updated 走 `flatAccountKey(sourceId)` 哨兵账号；会话拖拽只写本地账号、
+  不发 wire（上游 flat 账号同规则）。**不做跨来源平铺**（拒绝项见 §12）。
+- **按工作区树已落地（家族优先）**：上游 `owningParentFolder` 的已注册父目录前缀嵌套；派生 worktree 的
+  显示父级取它 main 的父级，家族不被拆开（design 08 §3.3 连续家族不变式）；无 git 家族信息时退化为
+  纯前缀。树只改缩进不改序：同级顺序仍由 wire 序与家族约束决定，父组折叠只隐藏自己的会话行。
 - 跨实例 `dsh.sessions.current` localStorage 共享键（last-writer-wins）：
   接受——镜像运行时既有行为，通道原样携带。**代价**：共享键使每个壳冷
   boot 都"没有可恢复的会话"，官方初始导航随即在其最近工作区复用/新建（宿主侧
@@ -1039,7 +1140,8 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   `IconArchiveOutlineRegular` 14px / 20px `.actionIcon` 命中盒、tooltip 用上游键 `actions.archive`
   （`side="bottom" align="end" delayMs={500}`）、无障碍名按本仓行级政策**参数化行名**（`action.archive.aria`；
   上游同座席用的是行菜单同款泛化名，本仓记为有意分歧——菜单项仍是 `menu.archiveSession`），点击走既有两段式
-  归档出口（标题随行传入）；上游该钮的 unarchive 半个分支在本仓不可达——归档行不进导航投影，恢复归归档管理器；
+  归档出口（标题随行传入）；归档筛选落地后（§3.4）归档行随三态进投影，该钮与 kebab 归档项在归档行上
+  **翻转为「恢复」**（官方 `workspace/unarchiveSession`，图标/文案/aria 同步切换，即上游同文件的 unarchive 半支）；
   kebab 里的归档项保留（快捷方式入口）。**pin 面**（上游 `session-actions/PinSession.tsx` 的两个入口 + `PinnedIndicator`，见
   checklist §4.6）：菜单项 order 100 = 菜单首项（键 `menu.pinSession`/`menu.unpinSession`）；行悬停钮 order 200 =
   归档钮之后的最右成员（tooltip 上游短名 `actions.pin`/`actions.unpin`，无障碍名**照上游**用行菜单长名——
@@ -1049,8 +1151,10 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   行结构（上游 row gap 为 0，那 6px 就是它的全部间距；上游两个盒都是 16px），已登记 checklist §4.6），
   落在状态槽之后、与状态槽共用同一条 hover 换出规则——复现上游「静息标记与悬停钮共用行右缘同一格」的替换语义
   （盒宽跟齐动作盒使 hover 换入不跳字）。
-  **首落不含置顶序**：标记只陈述"在置顶集里"这一集合事实，`pinSetKnown !== true`（老宿主形状 / unary 兜底）时
-  标记不出现、动作按 pin 方向出（宿主 pin 幂等，重复 pin 无害；反向才会造成假断言）；置顶序与拖拽分区守卫见 §5。
+  **置顶分区已落地（Phase 4 选项 1）**：置顶行领跑所属分组、树节点与 flat 列表（上游 `sectionMembers` 语义，
+  `pin-partition.ts`）；manual 块内按宿主「最近置顶在前」，updated 保留本仓 account 序；
+  `pinSetKnown !== true`（老宿主形状 / unary 兜底）时无置顶块（blank 占位行仍提前）、标记不出现、动作按 pin 方向出（宿主 pin 幂等，
+  重复 pin 无害；反向才会造成假断言）；块内拖拽与账号写入未做（§5）。
   **会话行簇是纯指针出口**：行自身无 focus 座席
   （无 tabIndex/roving），揭示只有 `:hover` 与 kebab 展开两半（要键盘可达需先给行加 focus 路径，属未决取舍）；
   键盘焦点那一半属于 workspace 行与来源头部（JS 揭示态）。悬停替换行尾状态槽；**不显示
@@ -1086,6 +1190,9 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   （=4px，官方 rows 图标钮角色值；官方 WorkspaceBrowser 的 28px 搜索钮与 24px 清除钮用 r-sm=8px，本模块因回退到
   20/18/16px 视觉盒而用 xs；`.railDotButton` 是 8px 点的无圆角热区，不声明 radius）。
 - **会话行窗口与展开条**：每个 workspace 只展开前 N 行（`sessionRowWindow`），其余由展开条揭示；
+  与上游的**配额语义差异**（登记见 §3.4 的 B9）：上游把 blank/running/有存活子代理的行排除在
+  空闲配额之外（运行中的行永不被折叠），本仓按位置窗口（首个窗口 + 当前行），第 N+1 行若在运行
+  会落在展开条之后；
   展开条用官方 `sessionOverflowButton` 几何：28px 高 / r8 / `0 12px 0 26px`（左内距取会话标题列
   26px，官方 28px）/ 12px 字 / hover 次级色。展开条是**双向 disclosure**：`aria-expanded` 报告状态，
   展开后同一控件给出 `sessions.collapse`；隐藏计数由与展开位无关的 `sessionRowDisclosure` 窗口算出
@@ -1204,7 +1311,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   ——过期 ghost 行（键仍在、`visibility:hidden` 仍占位）与自动窗口上限外的行（键仍在、组件不渲染）都不会触发退出淡出，
   下方行瞬移；要消除得让 key 集跟着渲染判定走，本轮按上游口径接受。**门控**（照抄上游语义）：
   首次指针/键盘输入才 arm；`ready = aggregateReady && 无来源/会话拖拽`；
-  `resetKey = JSON.stringify([orderBy, sessionRowsExpanded, sessionRowWindowMotionKey(…)])`——排序切换、会话窗口
+  `resetKey = JSON.stringify([orderBy, groupByMode, archivedFilter, sessionRowsExpanded, sessionRowWindowMotionKey(…)])`——排序/分组/筛选切换、会话窗口
   展开条与**被放大的自动窗口**都属「视图替换」，立即 settle 不滑动。窗口分量由 client-core
   `session-row-window.ts` 的纯函数给出，规则是**只有窗口被放大且放大后仍藏行的工作区**才记一条分量，且**只带
   workspace id**（判据 `visibleFirst < renderCount < total`：当前行落在截断区外迫使窗口长大——正是上游
@@ -1229,6 +1336,11 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
 - **行位移期间的指针门控（`hover-motion-gate.ts` + `data-hover-gate`）**：一次提交把某 keyed 行搬到**静止指针**下时，浏览器会为该行合成 boundary 事件——本机 headless Chromium 149 实测：提交后 t≈347ms 收到 `pointerover`/`pointerenter`/`mouseover`/`mouseenter`（`clientX/Y` 与按下时相同，同期 0 个 `pointermove`），随后 `:hover` 也命中它。于是三条"指针进入"路径在用户并未指向该行时被触发：① `:hover` 揭示树（整行洗色占该行盒 93.19% 像素 + 文件夹→chevron + 计数徽标换 `+`/kebab + git 占位者换入）——即「删除会话时对应的 workspace 闪一下」；② `RowHoverCard` 的 `onPointerEnter` → 800ms 停留后卡片自己弹开；③ 会话标题跑马灯 `onPointerEnter` → 标题自己开始爬行。修法是**门控而非改动画**：机器在提交后的 layout 阶段（早于本帧 hover 更新，故 `matches(':hover')` 仍是位移前的真相）用 `getAnimations({ subtree: true })` 取候选，只给**本帧正在位移且扫描时不在 `:hover`** 的 keyed 行加 `data-hover-gate`（机器不读指针坐标；这正是本帧会 latch `:hover` 的那批）；下一个真实 `pointermove`（坐标变化）或 `pointerdown` 摘门控，并对仍在指针下的行补一次 `pointerover` 让 React 重算 enter（`pointerenter/leave` 不冒泡，React 由 `pointerover/out` 合成），卡片与跑马灯语义不丢。样式侧只给**行级** `:hover` 揭示加 `:not([data-hover-gate])` 条件（含 `more:` 披露行；归档管理器、JS 揭示半边 `:has(.rowActionsVisible)`、未分组桶的 transparent 复位都不在面内；重命名态的**抑制**规则不是揭示面，但其 hover 半边必须带同一条款——`:not()` 计一个额外伪类，不带上就会被 `(0,5,0)` 的揭示反超、改名中仍交换字形）；门控行仍可点击、kebab 与键盘揭示照旧。**实测边界**：退出克隆体不是本现象成因（后继组头的标题行框与克隆体重叠始于 t≈60ms，彼时克隆体透明度已 ≤0.215，t≥83ms 像素差 ≤maxΔ7），故动画器移植体与常量一律不动；残余 = 常驻可见控件的子元素级 hover（`.foldToggle:hover` 的墨色台阶、`.orphanBadge:hover`）与原生 `title` 提示不可门控；另一类 = **无 key 的行表面**（来源表头 `.sourceHeader:hover .sourceActions`、面板行 `.panelRow:hover`、git 未注册行 `.unregisteredRow:hover`、归档管理器组头 `.archiveManagerGroupHeader:hover`）在相邻 section 因折叠/增删行瞬时变高变矮（无动画）时被搬到静止指针下，机器只认带 `data-row-key` 的动画目标、看不见它们——两类一并登记为已知边界，实机复核与 STATUS 第 ⑤ 项同看。回归锁：`test/session-rows/hover-motion-gate.test.ts`（纯判定真值表 + 机器/接线/样式条款漂移锁）与 `test/visual-lock/git-occupant-rest-flow.test.ts`、`test/session-rows/session-row-actions.test.ts` 的揭示选择器对拍（容器与动作两侧必须同时带门控，漏一侧即红）。
 - **Rejected alternatives（行位移动效）**：①*深引 vendor 源码*（`@deepseek-ai/dsh-client-ui-workspace/src/client/rows/AnimatedRows.tsx`）——registry C16 的 vendor 直穿只收「相对 import + `export function` 符号」，而原件是 `export class`，登记进 `vendorSourceConsumers` 会红；改用裸包说明符则绕开 C16 的双向登记（无登记的 vendor 直穿本仓不允许）。②*只加 CSS transition*——CSS 做不出退出克隆（被删除的行没有元素可过渡）与"仅重排才动"的 FLIP 测量，也表达不了 armed/ready/resetKey 门控。③*不做*——在 workspace 上点 `+` 新建会话时整列瞬移，正是本轮要修的观感。④*把每个工作区的渲染行数（`renderCount`）直接放进 resetKey*（首版实现，已被替换）——`total ≤ visibleFirst` 且未展开时 `renderCount === total`，于是任何行增删（新建行出现、归档、ghost 到期）都会改键、把入场动画取消掉，且数组形状让「新增 workspace」也退化为 settle；被「只有被钳制的组按 id 贡献分量」取代。⑤*由渲染层手写窗口语义*（在键里自己判断 >200 / 当前行位置）——同一规则就有了第二份实现，`sessionRowWindow` 一改就漂移；被抽出纯函数 `sessionRowWindowMotionKey` 取代。
 - **Rejected alternatives（行位移指针门控）**：①*改退出克隆体的画序*（给 `.workspaceList` 加 `z-index`，或把覆盖层挂进列表）——实测克隆体不是成因（重叠时间线与透明度见上），改了只把叠影从"盖住"变成"透出"，还要调用方耦合 vendor 未导出的覆盖层结构。②*改 vendor 动画器退出段*——`AnimatedRows` 是逐字移植体（byte-fidelity 锁 + registry/design 登记成本），且同样不针对成因。③*容器级 `pointer-events: none` 锁*——会吞掉门控行上的真实点击（门控行必须仍是可点目标）。④*只把揭示延后到动画结束*——仍是"无指令揭示"，且会把位移前已悬停的行打断成"闪掉再回来"。
+
+- **视图选项三轴的新增几何（2026 对齐轮）**：树模式嵌套缩进 = `--chamber-tree-depth × 12px`
+  （`calc()`，任意层数一条规则，§3.4）；归档提示条 `.archiveNotice` = header 之下的内联行
+  （12/18 字级、caption 墨色、可换行；`.archiveNoticeAction` 是无胶囊文本动作，hover 下划线）；
+  归档行 `.sessionArchived` 只把行标题落到 caption 墨色，**不新增行高/命中盒档位**。
 
 ## 8. 会话待办区（sidebar todo area）
 
@@ -1399,8 +1511,9 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
    三处对账，而对已挂载来源收益只是一次推送延迟（未挂载来源上标记要等挂载，见 §5）；改为 wire 成功后
    `requestRefresh` + 权威推送落定（与归档墓碑不同：
    pin 不移除行，没有非回声不可的可见性理由）。
-5. **把 pin 序直接接进拖拽排序**（一次性全对齐）：需要先定义第三条分区语义与跨分区守卫（§5），与
-   `updated` 排序的自动提升的簿记也会打架；拆成第二落，先用残余开放项（parity plan §1.1）承接。
+5. **把 pin 序写进本地账号 + 块内拖拽（上游完整版，一次性全对齐）**：需要一个持久的手动账号（本仓
+   manual 权威是宿主 wire）、跨分区拖拽守卫与 `unpin` 的领先槽语义；2026 对齐轮裁决先落**渲染分区**
+   （选项 1：不写账号、不改拖拽、`unpin` 回自然位），残余登记 parity plan §1.1 与 STATUS 必要取舍（B2）。
 
 ## 11. Rejected alternatives（孤儿 workspace 的删除入口）
 
@@ -1432,3 +1545,20 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
 按 design 08 §6.3 重启来源。空快照的 deadline/`git-unavailable` 支已由 `effectiveSnapshot`
 （`git-facts.ts`：保留上一轮 repos、合并本轮 `errors`）收口。来源健康时不可达，余下这一支按已接受
 残余登记。
+
+## 12. Rejected alternatives（视图选项三轴）
+
+1. **页面级全局提示条 / 全局置顶区**：与「全局跨来源面只有待办提醒」的裁决冲突；归档提示条改为落
+   触发来源的 section 内（per-shell 瞬态，与 `rowErrors` 同纪律）。
+2. **在 sidebar 侧后处理插入归档行**（不改进 derive）：归档行的原槽位与行形态在 renderer 投影里已被
+   过滤，后处理拿不到「记账槽位」；改为把 `archivedFilter` 作为**投影输入**（renderer `deriveServers`
+   参数 + 按来源缓存键 + 发布签名 `archived` 位）。
+3. **树模式纯前缀（完全上游）**：会把 git 家族拆开（worktree 建在 `$DSH_HOME/worktrees`，与主 checkout
+   不同父）；改**家族优先**（design 08 §3.3）。
+4. **全局 flat（跨来源一条列表）**：需要跨来源排序权威与跨来源拖拽（后者本就是 v1 不做项），与
+   per-source 实例化原则冲突；改**每来源平铺**。
+5. **降级时清掉筛选存储值**：把瞬时可用性问题固化成偏好改写；改禁用三项 + 按默认渲染 + 保留存储值
+   （并因此整体禁用——点击默认项也会把存储值写回 `default`）。
+6. **归档/置顶动作失败也弹来源提示条**：失败面仍归行级 `rowErrors` 槽（既有族约定），提示条只承载
+   归档完成/停止并归档/不可打开三种瞬态通知。
+
