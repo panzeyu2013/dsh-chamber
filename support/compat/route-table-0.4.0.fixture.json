@@ -13,7 +13,8 @@
     "recordedFrom": [
       "docs/progress/todo/notes/protocol-compat-blueprint.md section 2.1 (frozen descriptor shape) and sections 4.1/4.2 (frozen route/body shapes)",
       "packages/renderer/src/session-facts-source.ts (the shipped client parser at the freeze: the exact field paths it reads; post-freeze instrumentation excluded)",
-      "packages/control-plane/src/session-state-protocol.ts (PROTOCOL_VERSION / SESSION_STATE_FEATURES / SESSION_STATE_BASE_FEATURES single source)"
+      "packages/control-plane/src/session-state-protocol.ts (PROTOCOL_VERSION / SESSION_STATE_FEATURES / SESSION_STATE_BASE_FEATURES single source)",
+      "NOTE (post-freeze): the blueprint recorded above lived at docs/progress/todo/notes/ and was deleted with the progress cleanup (its content stays in git history); the living single sources are packages/control-plane/src/session-state-protocol.ts and design 17 §10.7."
     ],
     "postFreezeAdditions": [
       {
