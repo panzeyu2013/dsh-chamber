@@ -110,7 +110,6 @@
 - 变更文件覆盖率门未接：需 devDependency 或单进程 runner（待裁）。
 - 根级弹性回弹（S-50）：打包态实机 + macOS 14.4 复验。
 - **只读会话状态镜像（design 17 §10.7）**：实机矩阵（无 CDP Electron 阻断）、gateway/SSH 事实（running/pending/goal）与 404/降级自愈、场景级时序、DOM 断言、性能基线；跨端读回执相关用例（双客户端 E2E、read/read-all 回放）随该面退役删除。
-- **旧 desktop 对 read/read-all 的 404 兼容变化（发布说明素材，发布时写 CHANGELOG）**：v0.4.0-beta.1 客户端 `POST /chamber/session-state/read|read-all` 现在得 fail-closed 404（旧行为 = 幂等 200），跨端已读静默失效；`PROTOCOL_VERSION` 未升，tombstone 登记在 `support/compat/route-table-0.4.0.fixture.json`（`postFreezeRetirements` + `retired:true`），`packages/gateway/test/session-state/session-state-old-desktop-matrix.test.ts` 逐条 replay 断言 404 与能力位退场。
 - 事实通道降级归因（P2b）：`$events` **有投递**（2026-09-27 实测 4 分钟 18 帧 `api-session/status`，原「只收 ready」记录作废；design 19 §3.5 已更正）。11:01:08→11:02:32 已定案 = 插件管理器长 RPC（`installBundle`/`waitForInstall` 不在 `LONG_RPC_PATHS`，撞 45s 保险丝；扩容该表是待裁的修复候选）；09:29:26→09:34:56 十连败无宿主自述证据，与「事件循环长阻塞 / 外部 CPU-IO 饥饿 / 浏览器侧排队」不可区分——出口 = 窗口期差分（真观察者模块在 Node 跑默认时序 + 独立 unary 探针；宿主侧全绿而页面侧失败 ⇒ 浏览器侧）。
 - 完成身份跨通道边界（design 19 §3.2.3 R1/R2 落地后仍开放）：**无锚**完成（facts 行缺席 / 只有已见旧行 / 跨页重放的同一边沿）在两条轨道上身份不同（页内 nonce vs 水位/宿主 seq），最坏一次重复横幅、绝不漏发；已借出的宿主 seq 有单调记账（`lastAnchoredSeq`），同一事件序不再归属第二条完成。消除重复需要上游只读面让壳完成也带 `turn/end` 判别符（§3.2.7 ⑥⑦ 已按此收窄）。
 - **facts-only 判定侧读回退的已知窗口**（design 19 §3.2/§3.5）：列表播种与网关平面（快照/增量）都不带 `firstSeenByDelta`（该位只由无壳观察者的 status 首建）⇒ 无 `beforeBaseline` 首见武装窗口（idle 行等下一次 running→idle 边沿）；P2b 子代理行仍不建行、不投递，但父的 `subagentCount` 由**列表事实的 running 位 ∪ 状态帧**供养（与 P2a 网关镜像「不上 wire、仍计入 subagentCount」同形；漏掉的 status 帧由下一次基线整表重算收敛，只滞后不永久缓行）；P2b 的 status/waterfall 首建行在列表事实确认前不进快照（`identityConfirmed` 门，design 19 §3.5），`beforeBaseline` 位随之只在确认后可见——第二支窗口到不了的结论不变；上游 `observeRunning` 的第二支只在「列表基数已知且未就绪（`listKnown && baselines === 0`）」且行带 `beforeBaseline` 时启用，今天两个平面实际上都到不了该窗口（P2b 可判即 ≥1 基线；P2a 网关平面行**永不带 `firstSeenByDelta`**）；facts 不可判（`virtualRuntimeReport` 返回 undefined：host stopped/disabled/forward-skew/legacy）时无壳读清与武装一并冻结，打开意图不消点——与冻结条款一致，登记为已知边界。
@@ -249,7 +248,6 @@
 - 旧边沿孤岛：host 事件序回退而水位前进的异形上报无排序守卫（观测层收口，不恢复第二套边沿）。
 - 页面账本预热的接线对照锁：`source-lifecycle` 迁移后，「落屏写点派发 `windowReset`、绝不派发 `painted`」这条实测分歧只剩 `dsh-stream-state/src/source.ts` 的注释说明，丢的是**接线对照**那一半：两条 reducer 级不变量仍被锁（`packages/dsh-stream-state/test/source/source-lifecycle.test.ts` 的 painted 清 suppression、`source-container.test.ts` 的 windowReset 不清 suppression），但无用例阻止有人把 `painted` 接进 App 的落屏写点（会重开预热保留循环）；原锁随 `packages/renderer/test/lifecycle/source-ledger-equivalence.test.ts` 退役。
 - 页面通道模块重复实例的观测缺口：`assertSingletonModule('page-channel')` 只 `console.error`（design 26 §D5 登记为**检测器**，不是守卫）——同一 bundle 出现第二份模块实例会开出第二条页面 WS，I-1 的两件工具都看不见它；根治 = socket/订阅状态改 `Symbol.for` 全局键控（成本 vs 触发面待裁）。
-- 已发布 `CHANGELOG.md` / `docs/CHANGELOG.en-US.md` 的 beta.11 段落把可落账判定写成「只有前三类」——与 `packages/dsh-stream-state/src/evidence.ts` 的 admissible 集（含 `channel`）及 design 14 §D4 不一致；下一次发布编辑时改正（CHANGELOG 属发布期写作面）。
 - `packages/dsh-stream-state/src/evidence.ts` 的 `notServingYet` 有读者（`classifyObservation` 的 unavailable 分支）但**无生产者**：送达路径上该规则不可达，唯一置真值的是测试。保留（给未来分类器接线）还是删除待裁。
 
 ## 设计未决

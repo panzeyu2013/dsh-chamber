@@ -11,7 +11,7 @@
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
 
-## [0.4.0-beta.12] - 2026-09-29
+## [0.4.0] - 2026-09-29
 
 ### 新增
 - **孤儿工作树行有常驻的清理入口（design 06 §7、design 08 §3.4）** —— 路径已消失的孤儿工作区只亮 Missing 徽标：派生工作树行没有 kebab（design 08 §3.2），其 Git 占位者在工作树记录被剪除后也随快照消失（没有快照行 ⇒ `gitFactsForWorkspace` 为空、座席不渲染），状态胶囊成了唯一的出口。现在孤儿工作树行（`orphaned && isWorktree && !ungrouped && !synthetic`）在徽标旁常驻一枚删除钮、且位于悬停揭幕簇之外（坏行不得把唯一的删除动作藏在 hover 后面）；它复用 `onDeleteWorkspace`，与既有入口共享登记式孤儿确认、单 Modal 门与拖尾点击守卫，可访问名按仓库行动作纪律带行名参数化（`action.orphanedCleanup.aria`），徽标作为刻意的第二入口保留。
@@ -100,6 +100,7 @@
 - **发布恢复 gateway 腿** —— `release.yml` 的 `build-gateway` 去掉 job 级 `if: ${{ false }}`：正式发布重新产出 gateway tarball 与 `.sha256`（无需签名凭据，故在三条 Electron 腿之前先恢复）；workflow 头注与 `finalize-release` 注释改写为「原生壳 + gateway」范围，`needs` 全腿集与 fail-closed 语义不变（mac/win/linux 仍整腿跳过，任一腿失败即拒发）。
 - **仓库级清障与裁定锁定** —— 删除全仓唯一孤儿源码 `packages/gateway/src/util.ts`（零导入零引用，且不经包入口可达，故 `verify:no-dead-exports` 本来也看不见它）、12 处无用 import 绑定与 6 处夹具 import、`.gitignore` 里重复的 `.audit/` 块；11 个「有出口无消费者」的类型导出收窄为模块内（类型面不在死导出门判定内，该缺类已登记）；`CompleteLedgerOptions.bootToken` 这个从未被读取的选项退役，file-budgets 相应下调。侧栏的 `sidebar.workspaces` 座席保留「声明但不渲染」裁定并加源码文本锁：上游 ui-workspace 的归档/恢复/筛选贡献面必须能注册（撤声明会让注册直接抛错），浏览面仍是 chamber 列表，任何移动该裁定的改动响亮失败。
 - **页面与原生壳的常态开销下降（design 14、design 19、design 25）** —— 窗口隐藏时停止视图采样与 rAF 帧进度心跳（可见后重新武装，不再空转）、chamberBridge 发布按投影签名等值不发布、SVG 资源范围走查两趟合一、侧栏一行只派生一次读数、原生壳页面事实的 DOM 观察面收窄到必要节点：都是常驻路径的固定开销，判定语义不变。代价与边界：回收（未挂载）来源不再做 DOM 侧采样，其行内派生状态与桥探测退到长尾——探测预算耗尽后按 30s 节奏复查，迟到的 `desktopSsh` 事实采纳上界同为 30s；已被清掉的孤儿行键按来源指纹推进两代才淘汰（首次迁移只清当前 instanceId），不会把别处仍存活的键误删。完成、提问与未读的送达不受这些采样边界影响（由 facts 只读投影承担）。
+- **旧 desktop 的跨端已读回执对新宿主 fail-closed（发布说明）** —— 跨端已读与读回执随本版整体退役之后，v0.4.0-beta.1 代的旧桌面调用 `POST /chamber/session-state/read|read-all` 从幂等 200 变成 fail-closed 404（`PROTOCOL_VERSION` 未升；退役以 tombstone 记在 `support/compat/route-table-0.4.0.fixture.json` 的 `postFreezeRetirements`，`session-state-old-desktop-matrix.test.ts` 逐条 replay 断言 404 与能力位退场）：混装旧桌面与新宿主时，「手机上读过即清桌面圆点」这类跨端已读静默失效；同机页面内的完成未读不受影响。
 
 ### 修复
 - **尾部列对齐与键盘可达一次收口（design 06 §7、design 08 §3.2）** —— 每工作区的 Git 占位者挂载点在静止态仍是占位的零宽 flex 项，仍吃掉头部 4px 间距：凡有 Git 事实的行都把会话计数徽标顶偏 4px（同一列两个 x 位置，事实一到就重排），标题也少 4px；现在该挂载点带 `data-git-occupant` 容器钩子，静止态整容器移出布局（`display: none`），只在揭幕其动作的那些状态回归，占位顺序不变（git 包的 slot 契约锁钉住）。键盘可达性此前是 CSS `:has(:focus-visible)` 的显示翻转——看着揭幕了但 Tab 进不去（Blink 不把 `:has()` 引起的 display 变化当作可聚焦；真实按键同页 A/B：CSS 揭幕簇被跳过、JS class 揭幕簇被进入）：现在键盘焦点走 kebab 同一条 JS 揭幕状态（ServerSection / ServerSectionHeader 为 `:focus-visible` 目标置 `.rowActionsVisible` / `.sourceActionsVisible`，焦点离开行即清），侧栏样式表不再带这两处的 `:has(:focus-visible)` 规则，git 插件那条静止态 `display:none` 恒不触发的 `.headerGit:has(:focus-visible)` 一并删除（宿主拥有揭幕）。
@@ -110,7 +111,7 @@
 - **侧栏归档门的 authority 字段不再被 failsafe 抹掉** —— 提交失败兜底重排四个层布尔时替换了整个 gate ref，把 opener 声明的 `archiveTarget`/`archivePending` 丢成 undefined，跨行重定目标与二段在途保护因此静默失效；现在原地只更新四个布尔，并加形状锁防止整对象替换回归。
 - **已确认的会话修正不再被未调度的确认读丢掉（design 14 §D4）** —— 同一次权威读同时确认一个会话并给另一个会话发确认读时，确认读可能落在「两个窗口都未调度」的收轮路径；旧实现会在收轮时把同一轮已签发的写回丢在循环里，reducer 的修正票永不结算，此后只写 false 的 tier-3 写回对该会话永久静默。现在收轮仍结算已签发的写回（写失败照旧记 stuck），未调度的轮次依旧既不记失败也不记恢复。
 - **取消判定与恢复证据的落点收敛（design 14 §D4）** —— 壳把「取消不是证据」的判定从 host-graph 的本地副本迁到 `@dsh-chamber/dsh-stream-state` 的观测有效性分类器（真实通道失败照旧上浮，取消不得掩掉它）；页面静默看门狗的恢复证据改记在事实基线真正提交的那一点上，迟到结果不再把恢复写进旧世代。
-- **「我没被调度」不再被写进来源事实（design 14 §D4）** —— 新增观测有效性分类器（`@dsh-chamber/dsh-stream-state` 的 `evidence.ts`：`answered / deadline / unscheduled / superseded / channel / unavailable`，只有前三类可落账）与页面调度记录（`@dsh-chamber/dsh-chamber-client-core` 的 `page-schedule.ts`：rAF 心跳 + 焦点/可见性 + `document.hasFocus()`，只在**有正面证据**时判「窗口内没有被调度」），并落一条有界且可跨重载读回的判定账本（`dsh-chamber.evidence-log.v1`，控制台行 `[chamber:evidence] <verdict> booked=<bool> <owner> {…}`）。mux 基线、gateway facts 流建连 deadline、权威读、boot 图取数与侧栏权威探针从此只在页面确实被调度时才算来源事实：被 WebKit 节流/挂起的窗口里墙钟到期不再把「实例未及时应答 / 网关镜像受限」写到来源头上（未调度即静默重发；权威读两次窗口都未调度则本轮不落任何判定）。
+- **「我没被调度」不再被写进来源事实（design 14 §D4）** —— 新增观测有效性分类器（`@dsh-chamber/dsh-stream-state` 的 `evidence.ts`：`answered / deadline / unscheduled / superseded / channel / unavailable`，只有 `answered` / `deadline` / `channel` 可落账，`unscheduled` / `superseded` / `unavailable` 不落任何判定）与页面调度记录（`@dsh-chamber/dsh-chamber-client-core` 的 `page-schedule.ts`：rAF 心跳 + 焦点/可见性 + `document.hasFocus()`，只在**有正面证据**时判「窗口内没有被调度」），并落一条有界且可跨重载读回的判定账本（`dsh-chamber.evidence-log.v1`，控制台行 `[chamber:evidence] <verdict> booked=<bool> <owner> {…}`）。mux 基线、gateway facts 流建连 deadline、权威读、boot 图取数与侧栏权威探针从此只在页面确实被调度时才算来源事实：被 WebKit 节流/挂起的窗口里墙钟到期不再把「实例未及时应答 / 网关镜像受限」写到来源头上（未调度即静默重发；权威读两次窗口都未调度则本轮不落任何判定）。
 - **会话基线校验的整页闩锁退役** —— 侧栏权威基线校验此前在 4 次失败后整个页面生命周期不再重试（只能等 `connection/reset`），一次被节流的探针就能永久关掉它；现在是有界 defer（30s 下限）+ 事件驱动重臂（下一次真实 list 变更或重置），每次探针结果按 verdict 记入证据账本。
 - **原生壳的「页面 emit 失败」日志带出被抛出的 JS 异常文本** —— 启动期 `dsh-chamber:update-state-changed / runtime-state-changed / settings-changed` 推送失败此前只留一句通用「发生了JavaScript异常」；现在追加 WebKit userInfo 里的异常消息（T-25 取证面），本地卡片运行时行缺省为「未知 / 端口：—」一类现象因此能定位到具体页面异常。
 - **打包态首屏在本地实例就绪前不再把「控制面已监听」当成「本地 dsh 已 ready」（design 25 §3）** —— `runStartupTail()` 有意异步启动本地实例，旧首载门只看 sidecar ready 帧与 `/health` 2xx，页面因此在本地实例 ready 前拿到未就绪事实，把一次冷启动竞态记成「会话事实降级：实例未及时应答」并连带升级横幅。现在首载门继续读 `/health` 里的 `dsh.status`：只有**在途**相位（`starting`/`restarting`）按有界退避继续探测，其余立即载入（`ready` → 应用；`stopped`/`error`/`degraded`/`restart-exhausted` 及词表外的未知词 → 控制面，以开放诊断与恢复入口），且壳侧不设等待总期限——收敛由控制面状态机负责，时间只有一个所有者（`stopped`/`restart-exhausted` 必须立即呈现，否则「启动实例」这个唯一恢复入口会被一起藏掉）。
@@ -118,7 +119,7 @@
 - **boot 缺口的自愈臂改成事实驱动（design 09，`@dsh-chamber/dsh-stream-state`）** —— 自愈臂此前要求「结算当刻相位已 ready」，而冷启动与重连竞赛里结算总是先到，于是臂被永久丢失，实机形态是来源只剩空壳、只有重载能救。现在结算把臂留成 `healPending`，由随后第一个 ready 世代偿还，每个 ready 世代至多一次（保留「离开 ready 重新武装」的既有语义）。
 - **取消不再被当成来源事实（design 09 / 14 §D4）** —— 挂载被取代、我们自己的拆除、页面被系统节流都会让 boot 图取数以 `AbortError` 或 WebKit 的 `Fetch is aborted` 结束；旧形态把它读成通道失败，把 `graph-unavailable` 钉在来源上等一次不会再来的冷重挂。现在这类观测一律不落判定（同一预算内重试，预算走完仍只有取消则无图 boot + 命名诊断，重挂交给既有的图回归探测），真实通道失败仍照旧上浮——取消不得掩掉它。
 
-- **本地会话标题不再被降级快照短暂覆盖** —— beta7 的本地事实行提示会额外读取 session/list；当 unary 结果缺少标题投影时，会话名会回退为 workspace 目录名，直到官方快照刷新。已挂载且持续推送完整快照的来源现在跳过重复读取，同时保留未挂载来源的刷新兜底。
+- **本地会话标题不再被降级快照短暂覆盖** —— 本地事实读的提示会额外读取 `session/list`；当 unary 结果缺少标题投影时，会话名会回退为 workspace 目录名，直到官方快照刷新。已挂载且持续推送完整快照的来源现在跳过重复读取，同时保留未挂载来源的刷新兜底。
 - **SSH 实例清册的半读不再被当作权威空集** —— 连接注册表读取部分失败时，桌面此前会把它投影成一份「完整」清册，暂缺的来源会被当成已删除而剪掉；现在注册表把降级与缺行事实（`degraded` / `rosterIncomplete` / `droppedCount`）经新的健康通道交给页面，清册不确定期间不作任何「来源已删除」判定，整文件失败与行级缺行分别记账。
 - **同一次完成不再因两条通道各投递一次而双响** —— 完成事件经壳通道与 facts 源两条入口到达时，待投递账本由同一 outbox 身份派生同一投递键，合并成一条横幅；主进程的已投递回执跨宿主重载保留（一次完成一条横幅），可重试的抑制自动补发、永久性拒绝如实带原因，新一轮完成是新身份、不被吞。
 - **win32 存活探针不再只认英文 `LISTENING`** —— 新增 `Get-NetTCPConnection -State Listen` JSON 主探针（纯解析器有测试）+ 大小写不敏感的 netstat 回退，共用 500ms 缓存；非英文 Windows 不再把活着的端口判死。
