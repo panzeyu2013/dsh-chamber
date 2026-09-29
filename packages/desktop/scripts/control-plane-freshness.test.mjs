@@ -38,6 +38,9 @@ import { loadEsbuild } from '../../../scripts/lib/esbuild.mjs'
 const packageDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const distFile = join(packageDir, 'dist', 'control-plane', 'index.js')
 
+/** Verbatim constant of control-plane/src/login-shell-env.ts (the desktop login-shell read). */
+const LOGIN_SHELL_MARKER = 'DSH_DESKTOP_LOGIN_SHELL_TIMEOUT_MS'
+
 const MARKERS = [
   // §6.11.1 second trust criterion: a fact source whose name and version
   // parsers disagree about the same keys is refused, instead of silently
@@ -63,6 +66,11 @@ const MARKERS = [
   '/api/page-channel',
   'sessionFacts',
   'capability_not_found',
+  // design 02 §3.1 sibling (rc.2): the desktop login-shell read is a verbatim
+  // string constant of the bundled control plane, unique to the new module — a
+  // stale dist predating it would boot without the login-shell merge and only
+  // fail at runtime (Electron fatal dialog / sidecar exit 70).
+  LOGIN_SHELL_MARKER,
 ]
 
 test('packaged dist/control-plane carries the CURRENT protected-set read-face facts', () => {

@@ -24,6 +24,7 @@ import { computeQuitRisk, shouldHideToTray } from './chamber-settings.ts'
 import {
   createControlPlane,
   isPackagedSidecarRuntime,
+  readLoginShellEnvironmentOnce,
   type StateRootLease,
 } from './control-plane-module.ts'
 import {
@@ -426,6 +427,8 @@ let controlPlaneInstance: Awaited<ReturnType<typeof createControlPlane>> | null 
 /** <userData> host-root 租约（R2 §3.6 L2）：boot 首段取得，两条写者腿静止后释放。 */
 let hostRootLease: StateRootLease | null = null
 let shuttingDown = false
+/** Login-shell probe lifetime: aborted by shutdown so no detached group outlives the sidecar. */
+let loginShellAbort: AbortController | null = null
 /** 更新检查定时器的测试注入门（与 DSH_SIDECAR_TEST_STALL_SHUTDOWN_MS 同纪律；仅 dev/测试态
  * 生效、装配态忽略）：spawn 用例不需要真实出网，也避免 15s 首检改变 update-state 投影的确定性。 */
 const TEST_NO_UPDATE_CHECK_ENV = 'DSH_SIDECAR_TEST_NO_UPDATE_CHECK'
@@ -520,11 +523,28 @@ const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 's
         canExposeLocal: () => true,
       }
     : (headless!.localSpawnGates as unknown as SpawnGateShape)
+  // Dock 启动只继承 session manager 环境：与 Electron 腿同一读取（rc.2 对齐，
+  // design 02 §3.1 姊妹项）。读取在入口发起、首个宿主 spawn 前才 await；失败或
+  // 非法 timeout env 只告警并回退继承环境；shutdown 中止仍在跑的探测组。
+  loginShellAbort = new AbortController()
+  const loginShellEnvironment = readLoginShellEnvironmentOnce(process.env, { signal: loginShellAbort.signal })
+    .then((result) => {
+      for (const failure of result.failures) {
+        console.error(`[sidecar] 登录 shell 环境读取失败（${failure.shell}）：${failure.reason}`)
+      }
+      return result.environment
+    })
+    .catch((error: unknown) => {
+      console.error(`[sidecar] 登录 shell 环境读取配置错误，回退继承环境：${String(error)}`)
+      return process.env
+    })
   const controlPlane = createControlPlane({
     port: args.port ?? 17500,
     stateDir: stateRootDir(args.userDataDir),
     // 宿主 PATH 无 pnpm 时供给随包 launcher（design 02 §3.1）；与 main.ts 同参。
     pnpmEntry: headless!.pnpmEntry,
+    // 托管宿主继承登录 shell 环境（传入口发起的 promise，spawn-dsh 首次 spawn 前 await）。
+    hostEnv: loginShellEnvironment,
     // 租约记录的诊断 flavor：冲突方读到 sidecar 而不是笼统的 control-plane。
     stateWriter: 'sidecar',
     webDistDir,
@@ -635,6 +655,9 @@ function quitCleanupDeadlineMs(): number {
 async function shutdown(code: number): Promise<void> {
   if (shuttingDown) return
   shuttingDown = true
+  // The probe runs detached; a graceful shutdown aborts it so no shell group outlives us.
+  loginShellAbort?.abort()
+  loginShellAbort = null
   const cleanupDeadlineMs = quitCleanupDeadlineMs()
   // 更新控制器停表：定时器已 unref，退出路径再显式停掉，清理收尾期间绝不再发起网络检查；
   // stop 是 headless 附加成员（控制器契约面只保证 UpdateController）。
