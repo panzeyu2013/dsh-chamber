@@ -523,6 +523,9 @@ export interface DshChamberBridge {
   dshVersion: string | null
   version: string | null
   platform: string | null
+  /** Optional: the INFO payload's machine description (item 71). Not part of the
+   *  exposed dshChamber surface — only the dshDesktop carrier reads it. */
+  deviceInfo?: string | null
   desktopSsh: DesktopSshSurface
   update: UpdateSurface
   settings: SettingsSurface
@@ -991,6 +994,10 @@ function exposeDesktopCarrier(): void {
     updates: desktopUpdatesApi(),
     keyboard: keyboardApi(),
     shortcuts: shortcutsApi(),
+    // Official feedback questionnaire (apps/desktop/src/preload-app.ts): the
+    // machine description rides the existing info payload, read on demand so the
+    // carrier still installs before hydration.
+    deviceInfo: () => readAppInfo().then(info => (typeof info?.deviceInfo === 'string' ? info.deviceInfo : '')),
   });
 }
 
@@ -1041,6 +1048,12 @@ function markDocumentPlatform(): void {
  */
 const INFO_RETRY_MS = 50;
 const INFO_MAX_ATTEMPTS = 10;
+
+/** On-demand info read for the carrier's deviceInfo(); the boot chain below keeps
+ *  its own hydration request (independent retry chains, no shared state). */
+function readAppInfo(): Promise<Partial<DshChamberBridge>> {
+  return requestAppInfo();
+}
 
 function requestAppInfo(): Promise<Partial<DshChamberBridge>> {
   return new Promise((resolve, reject) => {

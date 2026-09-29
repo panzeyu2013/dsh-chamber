@@ -78,12 +78,13 @@
    与上游 CHROME_ROWS 清单同形。WKWebView 的 mouseDownCanMoveWindow 恒 false
    （本机实测），`isMovableByWindowBackground` 因此对页面内容失效，Swift 壳改为把标记
    行上的 mousedown 转成原生窗口拖拽（ShellWindowDrag.swift；控件命中优先，不拖）；
-   Electron 腿走 ui-web base.css 的 app-region 规则——该腿窗口仍是系统标准标题栏
-   （hiddenInset 属未落地计划，见 STATUS 的窗口 chrome 实机验收条），
-   标记在那条腿要等 hiddenInset 落地才成为拖拽面。
-   `[data-fullscreen]` 分支照上游保留：Swift 腿 2026-09 起由 `ShellWindowFullscreenMark`
-   把窗口全屏状态镜像到 html（design 25 §5.6；vendor AppFrame 的 `[data-fullscreen]`
-   座位规则随之生效），Electron 腿仍未镜像（未收口，见 STATUS 的窗口 chrome 实机验收项）。 */
+   Electron 腿走 ui-web base.css 的 app-region 规则，且窗口已按上游 darwin 分支收口
+   （main.ts：hiddenInset + 红绿灯 (16,18) + vibrancy + 透明底，锁 S-54），
+   两腿因此都以同一批标记行为拖拽面（差别只在 WKWebView 需原生转译）。
+   `[data-fullscreen]` 分支照上游保留：两 flavor 都把窗口全屏状态镜像到 html——Swift 腿
+   `ShellWindowFullscreenMark`（design 25 §5.6）、Electron 腿主进程 `main.ts` 的
+   `pushFullscreenMark`（进出全屏 + 装载完成后推送同一 dataset 表达式，锁 = upstream-seats S-53）；
+   vendor AppFrame 的 `[data-fullscreen]` 座位规则随之生效。 */
 .topStrip {
   flex: none;
   display: flex;
@@ -98,7 +99,7 @@
 }
 
 /* 全屏时红绿灯消失，开关让位到带左；上游由 preload 打 html[data-fullscreen]，
-   Swift 腿等价面见上（Electron 腿未镜像、不生效）。 */
+   两 flavor 等价面见上（Swift ShellWindowFullscreenMark / Electron pushFullscreenMark）。 */
 :global([data-fullscreen]) .topStrip {
   justify-content: flex-start;
 }

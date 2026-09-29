@@ -860,9 +860,13 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
-    // Windows：上游形态（官方 desktop main 的 win32 分支）——隐藏系统标题栏，
+    // Windows：上游形态（官方 desktop main 的 win32 分支逐值）——隐藏系统标题栏，
     // 由 titleBarOverlay 提供 caption 区；页面按 preload 打的 [data-windows-titlebar]
     // 与 --dsh-windows-titlebar-height 布局（无该标记时仍是普通标题栏）。
+    // macOS：上游形态（官方 desktop main 的 darwin 分支逐值）——hiddenInset 把红绿灯
+    // 内缩到侧栏顶部带内（页面 .topStrip 与该带同行），sidebar 材质要求窗口底色透明
+    // 才能透出（页面侧 darwin 透明底与 [data-fullscreen] 分支由 preload/main 标记驱动）；
+    // 拖拽面由页面的 data-window-drag 标记 + Chromium 原生 app-region 提供。
     // 其余平台保持首帧底色（与 dsh 前端深色主题一致，消除白屏闪烁）。
     ...(process.platform === 'win32'
       ? {
@@ -873,7 +877,17 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
             symbolColor: nativeTheme.shouldUseDarkColors ? '#f9fafb' : '#0f1115',
           },
         }
-      : { backgroundColor: '#0f1115' }),
+      : process.platform === 'darwin'
+        ? {
+            titleBarStyle: 'hiddenInset' as const,
+            trafficLightPosition: { x: 16, y: 18 },
+            vibrancy: 'sidebar' as const,
+            // 'active' keeps the vibrancy material stable when the window blurs;
+            // 'followWindow' washes the sidebar out behind an unfocused window.
+            visualEffectState: 'active' as const,
+            backgroundColor: '#00000000',
+          }
+        : { backgroundColor: '#0f1115' }),
     // 固定窗口标题：官方前端会把当前会话名投影到 document.title，不拦截
     // page-title-updated 则原生标题栏随选中会话变化。
     title: 'dsh-chamber-electron',
@@ -895,6 +909,22 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   win.on('page-title-updated', (event) => {
     event.preventDefault();
   });
+  // 上游 preload 的 `html[data-fullscreen]` 镜像（vendor apps/desktop/src/
+  // preload-platform.ts）：页面只在窗口全屏时把红绿灯那条带让给座位
+  // （--dsh-frame-leading-clearance / .leadingSeat / .topStrip 三处规则）。Electron
+  // 侧没有 preload 等价面，由 main 用同一 dataset 表达式推送，并在每次装载完成后
+  // 重放一次（导航重置 document）——与 Swift 壳 ShellWindowFullscreenMark 同形同拼写。
+  const pushFullscreenMark = (fullscreen: boolean): void => {
+    const script = fullscreen
+      ? "document.documentElement.dataset.fullscreen = 'true'"
+      : 'delete document.documentElement.dataset.fullscreen';
+    void win.webContents.executeJavaScript(script).catch(() => {
+      // 页面尚未就绪或窗口正在销毁：装载重放会补上，绝不因标记失败中断窗口生命周期。
+    });
+  };
+  win.on('enter-full-screen', () => { pushFullscreenMark(true); });
+  win.on('leave-full-screen', () => { pushFullscreenMark(false); });
+  win.webContents.on('did-finish-load', () => { pushFullscreenMark(win.isFullScreen()); });
   // The preload exposes host-impacting IPC: keep it confined to the exact
   // control-plane document — never open a popup/new WebContents (it would inherit
   // the bridge), cancel cross-origin navigation/redirects, and hand genuinely

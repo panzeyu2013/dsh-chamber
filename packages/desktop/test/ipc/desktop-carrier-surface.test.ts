@@ -1,5 +1,5 @@
 /**
- * desktop-carrier-surface.test.ts — dshDesktop 载体（rc.2 官方桌面面）锁步。
+ * desktop-carrier-surface.test.ts — dshDesktop 载体（官方桌面面）锁步。
  *
  * 为什么不是 ipc-surface-mirror.test.ts 的一部分：那个测试锁的是 **A 桥**
  * （dshChamber <-> Swift sidecar，IPC_CHANNELS / bridge-manifest.json）；本文件
@@ -10,11 +10,12 @@
  * 断言链:
  *  ① preload 的字面量表 == main 侧 DESKTOP_SHORTCUTS_CHANNELS（单源锁步）；
  *  ② preload 用常量调用 invoke/on；main.ts 用常量 handle；bridge 用常量推送；
- *  ③ dshDesktop 顶层键 = protocolVersion/updates/keyboard/shortcuts；
+ *  ③ dshDesktop 顶层键 = protocolVersion/updates/keyboard/shortcuts/deviceInfo；
  *  ④ 两 flavor 都写 dataset.platform（desktop 判定 + keyboard 必需性的触发点）；
  *  ⑤ Swift shim 的 dshDesktop：keyboard.subscribe 的 DOM 源、shortcuts 适配器、
  *     documentStart 暴露；
- *  ⑥ 通道域与 IPC_CHANNELS 零交集（A 桥 manifest 不承载 dshDesktop）。
+ *  ⑥ 通道域与 IPC_CHANNELS 零交集（A 桥 manifest 不承载 dshDesktop）；
+ *  ⑦ INFO 的 deviceInfo 描述保持上游 name=value 格式（值不带字段分隔符）。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -59,7 +60,7 @@ test('② preload 用常量 invoke/on；main 用常量 handle；bridge 用常量
     'main.ts 的 before-input-event 应推送 INPUT')
 })
 
-test('③ dshDesktop 顶层键 = protocolVersion/updates/keyboard/shortcuts', () => {
+test('③ dshDesktop 顶层键 = protocolVersion/updates/keyboard/shortcuts/deviceInfo', () => {
   const carrier = preload.match(/exposeInMainWorld\('dshDesktop', \{([\s\S]*?)\n  \}\);/)
   assert.ok(carrier !== null, 'preload.cts 应 exposeInMainWorld dshDesktop')
   const keys = new Set<string>()
@@ -67,7 +68,7 @@ test('③ dshDesktop 顶层键 = protocolVersion/updates/keyboard/shortcuts', ()
     const row = /^ {4}([a-zA-Z_$][a-zA-Z0-9_$]*):/.exec(line)
     if (row !== null) keys.add(row[1])
   }
-  assert.deepEqual([...keys].sort(), ['keyboard', 'protocolVersion', 'shortcuts', 'updates'])
+  assert.deepEqual([...keys].sort(), ['deviceInfo', 'keyboard', 'protocolVersion', 'shortcuts', 'updates'])
   const shimCarrier = shim.match(/var dshDesktopApi = \{([\s\S]*?)\n  \}/)
   assert.ok(shimCarrier !== null, 'bridge-shim.js 应声明 dshDesktopApi')
   const shimKeys = new Set<string>()
@@ -75,7 +76,7 @@ test('③ dshDesktop 顶层键 = protocolVersion/updates/keyboard/shortcuts', ()
     const row = /^ {4}([a-zA-Z_$][a-zA-Z0-9_$]*):/.exec(line)
     if (row !== null) shimKeys.add(row[1])
   }
-  assert.deepEqual([...shimKeys].sort(), ['keyboard', 'protocolVersion', 'shortcuts', 'updates'])
+  assert.deepEqual([...shimKeys].sort(), ['deviceInfo', 'keyboard', 'protocolVersion', 'shortcuts', 'updates'])
 })
 
 test('④ 两 flavor 都写 documentElement.dataset.platform', () => {
@@ -96,6 +97,18 @@ test('⑤ Swift shim：DOM 键事件源 + 真 shortcuts 适配器 + documentStar
     'shim 必须在 documentStart 暴露 dshDesktop（不依赖 info 水化）')
   assert.ok(shim.includes('shortcutsApplyEdit(edit)'),
     'shim 的 shortcuts.edit 必须是真实的会话内事务（非空 stub）')
+})
+
+test('⑦ INFO 的 deviceInfo 描述保持上游 name=value 格式', () => {
+  const settings = readFileSync(join(ROOT, 'packages', 'desktop', 'shell-ipc-settings.ts'), 'utf8')
+  // Electron-only `process.getSystemVersion` first, then the kernel release: the
+  // plain-Node sidecar flavor must NOT use os.version() (it carries "; ", which
+  // would fabricate extra fields for whoever parses the description).
+  assert.ok(!settings.includes('version as osVersion'), 'os.version() must not feed the field list')
+  assert.ok(settings.includes('release as osRelease'), 'the plain-Node fallback is the kernel release')
+  assert.ok(/replace\(\/\[;\\r\\n\]\+\/g/.test(settings),
+    'collected field values must be stripped of the separator before joining')
+  assert.ok(settings.includes("fields.join('; ')"), 'the description keeps the upstream join')
 })
 
 test('⑥ dshDesktop 通道域与 A 桥 IPC_CHANNELS 零交集', () => {

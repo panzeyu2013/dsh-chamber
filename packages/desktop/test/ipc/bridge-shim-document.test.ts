@@ -106,6 +106,23 @@ test('dshDesktop carrier exists at documentStart with the platform mark', () => 
   assert.equal(descriptor?.configurable, false)
 })
 
+test('dshDesktop.deviceInfo reads the info payload on demand (item 71, Swift flavor)', async () => {
+  const page = document('2c9e6a55-1f3d-4c56-9a09-8c7f6b5d4e31')
+  const resolve = page.window.__dshChamberResolve as (...args: unknown[]) => void
+  // Boot hydration settles the bridge first (the carrier is already installed).
+  resolve(TOKEN, page.posted[0]?.documentId, 1, { platform: 'darwin' }, null)
+  await Promise.resolve()
+  const carrier = page.window.dshDesktop as { deviceInfo?: () => Promise<string> }
+  const deviceInfo = carrier.deviceInfo
+  assert.ok(typeof deviceInfo === 'function', 'the Swift carrier must expose deviceInfo')
+  const pending = deviceInfo()
+  const request = page.posted.at(-1)
+  assert.equal(request?.method, 'dsh-chamber:info', 'deviceInfo must reuse the info channel')
+  const description = 'platform=darwin; os=26.0.1; app_arch=arm64; cpu=Apple M5 Pro; memory_gib=36.0'
+  resolve(TOKEN, request?.documentId, request?.id, { deviceInfo: description }, null)
+  assert.equal(await pending, description)
+})
+
 test('dshDesktop.keyboard delivers normalized DOM keydown with the shortcuts revision', async () => {
   const page = document('71c9d4e5-2a3b-4c5d-8e9f-0a1b2c3d4e5f')
   const carrier = page.window.dshDesktop as {
