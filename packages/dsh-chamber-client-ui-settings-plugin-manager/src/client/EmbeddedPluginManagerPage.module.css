@@ -117,8 +117,13 @@
   margin-top: 24px;
 }
 
-/* The page head repeats the section's title: drop the h1 and the intro that is its
-   adjacent sibling, keep the row — its controls are the grid's second track. */
-.embedded [data-plugin-panel] > [data-window-drag] :is(h1, h1 + p) {
+/* The page head repeats the section's title: its first block is that repeated chrome
+   (the h1 and the intro beside it), so hide the block's contents and keep the block —
+   it is the grid item that holds the heading lane, and the row's controls keep the
+   second track. Pinned on the head row's two-child shape, never on a tag inside the
+   block: the old `h1 + p` form missed upstream re-wrapping the intro as
+   `div.pageIntro` (intro text + info button), leaving it live in row one, painted
+   under the first group's heading this layer hoists there. */
+.embedded [data-plugin-panel] > [data-window-drag] > :first-child > * {
   display: none;
 }
