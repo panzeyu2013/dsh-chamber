@@ -7,5 +7,5 @@
 # Upgrade ONLY via `node scripts/upstream/update-vendor.mjs <tag>` — never by hand.
 # Keep in sync with pnpm-lock.yaml: bumping without regenerating the lockfile
 # makes `pnpm install --frozen-lockfile` fail (intended reproducibility guard).
-4878cdabd87d4041bdaff61d04c966883b9fd07a
+639ed015397290b3745d163aafe02ffee4aa3f84
 

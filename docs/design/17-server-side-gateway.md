@@ -1423,7 +1423,7 @@ chamber 客户端插件）见 §3 装配矩阵与 §10.2。
 dsh-web-mobile）、`dsh-ui-mobile`（npm 已发布）、`dsh-web-ui-mobile`、`dsh-mobile-pwa`
 （五者 MIT、均已停更）与 `dsh-meow-smooth`（唯一活跃、键盘/IME 机制最完整）。
 **实现纪律：零代码复制、完整重写**——只吸收设计决策，不 fork/搬运社区文件。重写输入：
-① dsh 基线 `v0.2.0-rc.1`（`harness.commit`），走 chamber 现有模板与构建体系；② N-ctx 多实例：
+① dsh 基线 `v0.2.0-rc.2`（`harness.commit`），走 chamber 现有模板与构建体系；② N-ctx 多实例：
 打标/样式按实例根作用域化，行为层 effect 为 document 级单实例设计（多 shell renderer 挂载时
 必须作用域化）；③ layout 事实源在 `dsh-chamber-client-ui-layout`，不注入 gateway 托管实例
 （mobile 的唯一部署），只观察官方 `data-sidebar-collapsed`；④ 选择器锚自研 DOM + fork 内

@@ -97,6 +97,9 @@
 4. `agent/request` 是否有官方监听者（`grep -rn "agent/request"` vendor）。
 5. `DeepSeekCatalogModel` 是否出现 effort/extra 字段。
 6. schemastery object 未知键行为是否改变（已知风险面：非严格 object 保留未知键）。
+7. 已保存的 `agentDefaultModel` 选择（`{provider, model, reasoningEffort}`，§2.1）对随包 pi-ai 的模型目录
+   是否仍有效：目录更新会移除旧模型 ID，失效时新会话会指向不存在的模型（release notes 明示「已保存的选择
+   可能需要重新选择」）；升级后实跑一次校验，并把失效应答（回退/提示）写进本节的复查记录。
 
 条件满足（任一条使 §3 某行变为可行）→ 按 §5 实现并更新本文状态。
 

@@ -138,8 +138,9 @@ test('missingServiceFact carries the verdict as structured facts, not as a sente
 //  - the derived union is a superset of the services the probe must cover,
 //    `sidebarRight` among them — the miss the probe exists for (ui-chat's face,
 //    whose only provider is the non-covered `ui-sidebar-right` row);
-//  - the deferred-only members are exactly the audited 11, so the
-//    roster extension is load-bearing and never quietly grows a new gap class.
+//  - the deferred-only members are exactly the audited set in
+//    AUDITED_DEFERRED_ONLY_SERVICES below (19 at this pin), so the roster
+//    extension is load-bearing and never quietly grows a new gap class.
 //
 // Maintenance at an upstream pin: re-audit the two tables below against the new
 // sources (the pin-upgrade checklist already sends the reader to the
@@ -245,6 +246,11 @@ const AUDITED_DEFERRED_ONLY_SERVICES: readonly string[] = [
   'remote.agentPresets', 'remote.credentials', 'remote.llm', 'remote.pluginInventory',
   'remote.pluginManager', 'remote.pluginRegistryProbe',
   'remote.permissionPresets', 'remote.fileReferences', 'remote.sessionReferenceResolver',
+  // rc.2: the deferred ui-user-questions row INJECTS the new remote namespace (its
+  // answer/attachWait wire). The PROVIDER is the first-screen remote composite
+  // (api-remotes mounts it; api-gateway creates the namespace), which is exactly
+  // why the member is deferred-only and joins this list.
+  'remote.userQuestions',
   'resources', 'sidebarRightTabs', 'settingsSchema',
 ]
 

@@ -375,7 +375,7 @@ interface HostEdges {
 - **捆绑**：fetch 固定版本官方 Node（arm64 + x86_64，或按 §10 决策 6 单一架构/universal），SHA-256 校验后进
   `.app/Contents/Resources/sidecar/
   node`。**摘要的信任基座在仓库内**（`build-sidecar.mjs` 的
-  `PINNED_NODE_SHA256`，逐字取自官方 `SHASUMS256.txt`）：默认版本两个 darwin 归档必须在表内，`--node-sha256` 与固定值冲突即拒绝；未固定版本（`--node-version`）回退联网 SHASUMS256.txt 并响亮说明——「没固定」不得呈现为「已校验」；升级默认版本 = 同一提交更新该表（`build-sidecar.test.mjs` 会红）。**基名必须叫 `node`**：`resolveNodeExecutable`（spawn-dsh.ts:435-447）的纯 Node 分支只在 `basename(execPath) ∈ {node,node.exe}` 时直用 process.execPath，否则回落 PATH/knownNodeLocations（nvm 等）→ 裸 'node'（系统版本不可控）；P1 加解析断言测试钉死该前提（A5；`build-sidecar.test.mjs` 断言归档成员名 + 解包后基名 + `resolveNodeExecutable` 直用分支）。Electron 分支 = execPath + ELECTRON_RUN_AS_NODE=1 + `--expose-internals`（dsh loader 的 node-addon-require-builtin 需要；updater 的 runtimeNodeExecutor 同构，`host-assembly.ts:824`）。
+  `PINNED_NODE_SHA256`，逐字取自官方 `SHASUMS256.txt`）：默认版本两个 darwin 归档必须在表内，`--node-sha256` 与固定值冲突即拒绝；未固定版本（`--node-version`）回退联网 SHASUMS256.txt 并响亮说明——「没固定」不得呈现为「已校验」；升级默认版本 = 同一提交更新该表（`build-sidecar.test.mjs` 会红）。**基名必须叫 `node`**：`resolveNodeExecutable`（`spawn-dsh.ts#resolveNodeExecutable`）的纯 Node 分支只在 `basename(execPath) ∈ {node,node.exe}` 时直用 process.execPath，否则回落 PATH/knownNodeLocations（nvm 等）→ 裸 'node'（系统版本不可控）；P1 加解析断言测试钉死该前提（A5；`build-sidecar.test.mjs` 断言归档成员名 + 解包后基名 + `resolveNodeExecutable` 直用分支）。Electron 分支 = execPath + ELECTRON_RUN_AS_NODE=1 + `--expose-internals`（dsh loader 的 node-addon-require-builtin 需要；updater 的 runtimeNodeExecutor 同构，`host-assembly.ts:824`）。
 - **必须绑 Node**：dsh 实例本身是 Node 进程（vendor dsh 由 pnpm 安装），控制面 spawn 它、dsh-runtime 安装它；pnpm 11.21.0 已随 desktop 依赖，改由 sidecar 目录内嵌 + 注入；宿主插件管理器的供给见 02 §3.1（入口仍由各 flavor 解析后交给控制面，控制面按宿主 PATH 决定是否前置 wrapper）。
 - **dsh-runtime 默认执行器恒纯 Node**（{file: process.execPath}，runtime-installer.ts:777）。
 - Node 版本策略：与 desktop 的 Electron 内置 Node 大版本对齐或取 LTS（决策 6）。
@@ -394,7 +394,7 @@ interface HostEdges {
 - 传输：sidecar stdin/stdout 行式 JSON-RPC（NDJSON）；stderr 独立为日志。**sidecar-entry 入口必须把存量 console.* 重定向到 stderr**——main.ts 端口行（:1787）、will-quit 完成串（:1673，实机门禁断言该串）等遍布代码，否则"业务原样复用"与协议纪律冲突（D2）。
 - 信封：{id, method, payload} / {id, ok, result|error} / {notify, payload}（唯一推送面）/ edge:*（sidecar→Swift 的 HostEdge 请求，Swift 执行后回响应）；id 单调。`event` 族随 `onEvent` 订阅面一并退役（桩已迁 notify；`FrameCodec` 不再分类，旧桩 event 行落未知帧丢弃）。
 - **保留入站 method（Swift → sidecar，不在 61 通道 manifest 内；单源 = `packages/desktop/node-edges.ts` `HOST_INBOUND`）**：`__host.hostFacts`、`__host.notifyClicked`、`__host.systemResume`、`__host.mainWindowShown`、`__host.deepLink {url}`（§4.5：`application(_:open:)` 冷/热启动统一入口 → core `enqueueDeepLink`）、`__host.rendererLifecycle {event}`（§5 E19 三事件映射：did-start-loading / did-finish-load / crashed / closed → core `onRendererLifecycle` 复位 ready 位 + in-flight requeue/drain）、`__host.quitFacts {quitRequested, recoveryAvailable}` → **决策投影**（§5 E1/E9/E20：core 依 chamber settings 的 `windowCloseBehavior`/`quitConfirmation` + `LOCAL_RUNNING_STATES × localProcessAlive` 用既有纯函数 `shouldHideToTray`/`computeQuitRisk` 合成，返回 `{hideOnClose, quitNeedsConfirm, quitReasons}`——判据单源在 core，Swift 只执行隐藏/退出链，绝不复制决策）。Swift 拼写单源 = `HostInboundMethod`，与 TS 表锁步由 `HostInboundMethodTests` 断言。
-- 退出纪律：清理后入站 invoke 一律回 `{error:'app is quitting', code:'app_quitting'}`（sidecar-entry.ts:396-400；与 renderer-trust 的 `createTrustedIpc` 同码同语义）；清理自身 4.5s 硬顶（`QUIT_CLEANUP_TIMEOUT_MS=5_000` − 500，早于宿主 5s SIGKILL grace 留 500ms 余量；shell-core.ts:691 / sidecar-entry.ts:691）。
+- 退出纪律：清理后入站 invoke 一律回 `{error:'app is quitting', code:'app_quitting'}`（sidecar-entry.ts:396-400；与 renderer-trust 的 `createTrustedIpc` 同码同语义）；清理自身 4.5s 硬顶（`QUIT_CLEANUP_TIMEOUT_MS=5_000` − 500，早于宿主 5s SIGKILL grace 留 500ms 余量；`shell-core.ts#QUIT_CLEANUP_TIMEOUT_MS` / `sidecar-entry.ts` 的同一硬顶 `QUIT_CLEANUP_DEADLINE_MS`）。
 - 护栏：Swift 只接受自己 spawn 的进程 fd；帧长上限与超时；非协议帧 fail-loud。事件推送经 B 桥到 Swift → A 桥 emit，事件名清单 = manifest。
 - **出站写与期限**：Swift 的 invoke 和 edge 应答共用每个 sidecar 会话独立的串行写器；排队上限为 64 帧 / 16 MiB（另有正在写的单帧 ≤4 MiB）。edge 应答越过尚未写出的普通请求，满队列时可淘汰排队请求并将其明确结算为写失败。invoke 在登记 pending 时启动全程期限（缺省 60s，页面普通 45s、长交互 720s），涵盖排队、管道背压、sidecar 执行与响应读取；过期排队帧在真正写入前丢弃。单次物理写超过 20s 时重建 sidecar；stop / 自然退出立即作废旧写器，重启使用新写器。写抛错可能留下半帧，因此同样作废整条出站传输并终止本代 sidecar，由 Supervisor 建立新协议会话。已经进入内核的写不能撤回，超时后的远端副作用须靠宿主事实对账；sidecar 对未收到 edge 应答另设普通 30s / 交互 660s 期限。
 
@@ -595,7 +595,7 @@ macOS WebKit 在**视口层**实现弹性越界：指针停在不可滚动 chrom
   chrome 上滚动，整页不得平移；作用域与 CSP 依赖见下（行为判据归 §8.5 矩阵与 S-50）。
 - **范围**：只关视口越界与链式越界；内层滚动器局部回弹不在范围内，勿当回归。
 - **CSP 依赖（指令级守卫）**：注入的 `<style>` 依赖控制面 CSP 的 `style-src 'self' 'unsafe-inline'`
-  （`packages/control-plane/src/index.ts:1136-1143`：注释 :1136-1142、指令 :1143）。页面当前**没有** meta CSP；即便
+  （`packages/control-plane/src/index.ts#createControlPlane` 的响应头组装处：注释 + 指令同段）。页面当前**没有** meta CSP；即便
   将来加入 meta `style-src 'self'`，documentStart 注入也早于其解析（本地 fixture 实测），唯一真实耦合是响应头 CSP。
   对抗复核（本地 HTTP fixture + 真实 WKWebView）实测**三种同样静默失效**的改法：① 删掉 `'unsafe-inline'`；
   ② 同一 `style-src` 再加 `'nonce-…'`/`'sha256-…'`（CSP3：出现 nonce/hash 即忽略 unsafe-inline）；③ 新增
