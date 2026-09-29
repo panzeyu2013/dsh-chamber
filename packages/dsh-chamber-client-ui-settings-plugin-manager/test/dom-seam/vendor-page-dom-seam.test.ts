@@ -12,8 +12,8 @@
  * （组形）是两个不同区域，整文件搜会命中别处的同名元素（详情标题也是 `h3`）。
  *
  * 缺 vendor 树的口径与仓内其它 vendor 锁一致：默认**响亮失败**；
- * `DSH_CHAMBER_VENDOR_ABSENT=skip` 只是本地调试出口——本文件整篇都是 vendor 锁，全跳过会被
- * 本包 test 的零测试守卫判红，换不来「本地绿」；CI 不设该变量。
+ * `DSH_CHAMBER_VENDOR_ABSENT=skip` 只是本地调试出口——本文件每个用例（含不读 vendor 的计数器
+ * 负控）都挂 vendorTest，全跳过会被本包 test 的零测试守卫判红，换不来「本地绿」；CI 不设该变量。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -89,6 +89,55 @@ const assertOrder = (text: string, tokens: readonly string[], why: string): void
   }
 }
 
+/**
+ * JSX 元素的**直接子元素**开标签序列（层 1 = `element` 自己的子）。
+ *
+ * 为什么不用正则数兄弟：`A…B` 配对形态对「多一个兄弟」不敏感——实测在页头两子之间插入第三个
+ * `<div>…</div>`、或在控件块后再追加一个，旧的两子正则**都仍然命中**（它把新元素与控件块重新
+ * 配对）。而三子会改 subgrid 的按行自动放置（首子→首轨、中项→次轨、真控件被挤到下一行的首轨），
+ * 正是本锁要抓的回归。
+ *
+ * 扫描按标签走，并跳过属性里的 `{…}` 表达式与其中的字符串——上游控件块里就有
+ * `icon={<IconPlusOutlineRegular size={13} />}`，按「第一个 `>`」截标签会在这里截错。
+ */
+const topLevelChildren = (element: string): string[] => {
+  const children: string[] = []
+  let depth = 0
+  let index = 0
+  while (index < element.length) {
+    const open = element.indexOf('<', index)
+    if (open < 0) break
+    let cursor = open + 1
+    let braces = 0
+    let quote: string | undefined
+    const closing = element[cursor] === '/'
+    if (closing) cursor += 1
+    while (cursor < element.length) {
+      const char = element[cursor]!
+      if (quote !== undefined) {
+        if (char === '\\') { cursor += 2; continue }
+        if (char === quote) quote = undefined
+        cursor += 1
+        continue
+      }
+      if (char === '"' || char === "'" || char === '`') { quote = char; cursor += 1; continue }
+      if (char === '{') braces += 1
+      else if (char === '}') braces -= 1
+      else if (char === '>' && braces === 0) break
+      cursor += 1
+    }
+    assert.ok(cursor < element.length, `JSX 标签未闭合：${element.slice(open, open + 40)}`)
+    const tag = element.slice(open, cursor + 1)
+    if (closing) depth -= 1
+    else {
+      if (depth === 1) children.push(tag)
+      if (!tag.endsWith('/>')) depth += 1
+    }
+    index = cursor + 1
+  }
+  return children
+}
+
 vendorTest('页根钩子：data-plugin-panel 仍在页面根的 <section> 上', () => {
   assert.match(pageSource(), /<section\b[^>]*\bdata-plugin-panel\b/u,
     '容纳层的根覆盖、两轨网格与 960 上限全部以 data-plugin-panel 为唯一根钩子（类名是构建期哈希）。')
@@ -107,9 +156,32 @@ vendorTest('页头行恰两子：标题块（h1 + intro + 说明钮）在前、�
   assert.match(head, /<header\b[^>]*\bdata-window-drag\b[^>]*>\s*<div\b[^>]*>\s*<h1\b/u,
     '页头行首子块必须**以重复的标题（h1）开头**：前插兄弟（哪怕一个空 div）会把首子换成别的东西，'
     + '容纳层整块隐去的就不再是重复标题，intro 重新落回行一。')
-  assert.match(head, /<header\b[^>]*\bdata-window-drag\b[^>]*>\s*<div\b[^>]*>[\s\S]*?<\/div>\s*<div\b[^>]*>[\s\S]*?<\/div>\s*<\/header>/u,
-    '页头行必须恰好两子（标题块 + 控件块，各自是一个 div）：三子会把中项塞进首轨、与首组标题同格；'
-    + '只pin 嵌套与顺序，不 pin 标题/控件的标签或类名（类名是构建期哈希）。')
+  const children = topLevelChildren(head)
+  assert.equal(children.length, 2,
+    `页头行必须恰好两子（标题块 + 控件块，实得 ${children.length}：${children.join(' / ')}）——`
+    + '第三子会改 subgrid 的按行自动放置：中项占掉由控件定尺寸的次轨，真控件被挤到下一行的首轨；'
+    + '只 pin 子元素个数与顺序，不 pin 标题/控件的标签或类名（类名是构建期哈希）。')
+  assert.match(children[0]!, /^<div\b/u, '首子必须是标题块：是一个 div，其内全部内容被容纳层隐去。')
+  assert.match(children[1]!, /^<div\b/u, '末子必须是控件块：也是一个 div，次轨由它定尺寸。')
+})
+
+// 负控挂在 vendorTest 下（它本身不读 vendor）：本文件必须保持「全跳过 = 全红」，加一个裸 test()
+// 会让缺树 + 显式 opt-out 从红变绿，把缺 vendor 的诚实失败换成假绿。
+vendorTest('负控：页头子元素计数把第三个兄弟判红（旧的两子正则形态放行）', () => {
+  const two = '<header className={css.pageHead} data-window-drag>'
+    + "<div><h1>{t('title')}</h1><div className={css.pageIntro}>{t('intro')}</div></div>"
+    + '<div className={css.toolbar}><Button icon={<IconPlusOutlineRegular size={13} />} onClick={props.openInstall} /></div>'
+    + '</header>'
+  const thirdBetween = two.replace('<div className={css.toolbar}>', '<div className={css.stray}><span>x</span></div><div className={css.toolbar}>')
+  const thirdAppended = two.replace('</header>', '<div className={css.stray}><span>x</span></div></header>')
+  assert.equal(topLevelChildren(two).length, 2,
+    '两子形态必须数成 2——控件块的属性里嵌着 icon={<Icon… />}，标签边界不能按第一个 `>` 截。')
+  assert.equal(topLevelChildren(thirdBetween).length, 3, '两子之间插第三子必须数成 3。')
+  assert.equal(topLevelChildren(thirdAppended).length, 3, '控件块之后追加第三子必须数成 3。')
+  // 负控的立论：旧的配对形态对两个变异都绿（实测），计数器因此不是过度设计。
+  const pairingForm = /<header\b[^>]*\bdata-window-drag\b[^>]*>\s*<div\b[^>]*>[\s\S]*?<\/div>\s*<div\b[^>]*>[\s\S]*?<\/div>\s*<\/header>/u
+  assert.ok(pairingForm.test(thirdBetween) && pairingForm.test(thirdAppended),
+    '负控前提：旧的配对形态确实对「第三子」放行——它若哪天变红，说明对照已无价值，可删该负控。')
 })
 
 vendorTest('分组缝：section[data-plugin-group] = [组头（h3 + 计数）在前、ul 卡列表在后]', () => {
