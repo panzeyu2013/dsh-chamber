@@ -155,12 +155,14 @@ test('withWorkspaceEcho: a brand-new workspace appends a real wire row at the ta
   const next = withWorkspaceEcho(base, [pending('w1', '/p/new')])
   assert.notEqual(next, base)
   assert.deepEqual(next.workspaces.map(row => row.workspaceId), ['w0', 'w1'])
+  // 可选字段断言先读未收窄的元素：`assert.deepEqual` 是 asserts 型断言，先写字面量会把
+  // 元素类型收窄成该字面量（pending 行形状，无 synthetic），后续访问即报错。
+  assert.equal(next.workspaces[1]?.synthetic, undefined, 'the echo row carries a REAL host id — never synthetic')
+  assert.deepEqual(next.workspaces[1]?.sessionIds, [], 'no sessions yet: the row is legitimately empty')
   // 字面量字段断言（不调被测实现自己的 workspaceEchoRow——那是实现自比）：
   assert.deepEqual(next.workspaces[1], {
     workspaceId: 'w1', path: '/p/new', title: 'new', sessionIds: [], createdAt: '', updatedAt: '',
   })
-  assert.equal(next.workspaces[1]?.synthetic, undefined, 'the echo row carries a REAL host id — never synthetic')
-  assert.deepEqual(next.workspaces[1]?.sessionIds, [], 'no sessions yet: the row is legitimately empty')
 })
 
 test('withWorkspaceEcho: an anchored creation lands right after its anchor, never at the tail', () => {
