@@ -157,15 +157,21 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // owner route (api/present.open / api/changes.open) the ui-deliverables covered
   // fork prefixes per entry (design 09 §3.6); the document seats carry only an
   // absolutePath and stay on their own per-instance source, not on open-in's host
-  // half. Its HEADER
-  // entry (id open-in-app at conversation.session.header.utilities) reads the
+  // half. Its directory entries — the header one (id open-in-app at
+  // conversation.session.header.utilities) and, since rc.2, the Files-tab one
+  // (same id at sidebar.right.tab.files.actions, owner {absolutePath}) — read the
   // document-relative open-in-app/* routes, which resolve to the control-plane
   // origin this composite page is served from (only host-graph bundle urls get
-  // the per-instance prefix — host-graph.ts toExtraRows), and the official HOST
-  // half is disabled by the per-spawn overlay while dsh-chamber-seed-open-in is
-  // seeded — so that header entry renders null here. The effective directory-open
-  // entry is @dsh-chamber/dsh-chamber-client-ui-open-in (id open-in, same slot,
-  // same order -10); the ids differ, so both list entries coexist.
+  // the per-instance prefix — host-graph.ts toExtraRows; the control plane answers
+  // the SPA fallback HTML, which the controller's json() rejects and swallows as an
+  // empty app list), and the official HOST half is disabled by the per-spawn overlay
+  // while dsh-chamber-seed-open-in is seeded — so both directory entries render null
+  // here. The effective directory-open entry is
+  // @dsh-chamber/dsh-chamber-client-ui-open-in (id open-in) in BOTH slots (header
+  // order -10 beside the vendor Session log; the rc.2 Files hole at the default
+  // order the official occupant uses); the ids differ, so list entries coexist, and
+  // if the official entries ever become live the shell shows two directory entries —
+  // the residual risk registered in design 20 §7.2 and the checklist §4.6 row.
 ]
 
 /**

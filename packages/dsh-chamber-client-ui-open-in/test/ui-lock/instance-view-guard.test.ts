@@ -113,18 +113,28 @@ test('the control uses upstream geometry and the machine catalog as its only ico
   }
 })
 
-test('the registration mirrors the official row (order), with our own id', () => {
+test('the header registration mirrors the official row (order), with our own id', () => {
   // `order: -10` is the official `open-in-app` row's own value (the official
   // plugin registers `order: -10` at this same slot), so any third-party row
   // sorts exactly as it would upstream.
   assert.ok(client.includes("'conversation.session.header.utilities'"), 'the official header utilities slot')
-  assert.ok(client.includes('order: -10'), "the registration must keep upstream's -10 row order")
+  // Block-scoped assertions: rc.2 added a second registration into the Files
+  // hole, so file-wide includes can now be satisfied by the wrong block (or by
+  // the slot constant alone). Deleting the header block must redden this test.
+  const header = client.slice(client.indexOf('OPEN_IN_HEADER_SLOT, () => ctx.slots.register'))
+  assert.ok(header.length > 0, 'the header registration block must exist')
+  const headerEnd = header.indexOf('}, OpenInButton))')
+  assert.ok(headerEnd > 0, 'the header registration block must close on its component')
+  const headerBlock = header.slice(0, headerEnd)
+  assert.ok(headerBlock.includes('order: -10'), "the header registration must keep upstream's -10 row order")
   assert.ok(!client.includes('order: -1,'), 'the retired chamber order must not come back')
   // The id deliberately stays chamber's own: the slot registry THROWS on a
   // duplicate list id at the same priority, so reusing `open-in-app` would turn
   // an accidentally materialized official row into a load failure.
-  assert.ok(client.includes("id: 'open-in'"), 'the entry keeps its own slot id')
+  assert.ok(headerBlock.includes("id: 'open-in'"), 'the entry keeps its own slot id')
   assert.ok(!client.includes("id: 'open-in-app'"), "the official row's id must not be reused")
+  assert.ok(headerBlock.includes('inject: injected,'), 'the header seat keeps the shared adapter closure')
+  assert.ok(header.includes('}, OpenInButton))'), 'the header seat keeps its component')
 })
 
 test('the .instance-view dismissal is the only bespoke menu behaviour kept', () => {

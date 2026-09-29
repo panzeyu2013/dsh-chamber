@@ -1,6 +1,7 @@
 /**
- * Chamber open-in client plugin: ONE header utility entry that opens the
- * current session's workspace in an installed app, over the per-source view-model.
+ * Chamber open-in client plugin: ONE entry component serving TWO seats — the
+ * conversation header utility entry and (rc.2) the official Files-tab
+ * directory-actions seat — over the per-source view-model.
  *
  *  - the machine catalog (installed apps + real bundle icons + local launches)
  *    is read ONCE per page from the LOCAL instance's `openInApp/*` host domain
@@ -41,10 +42,34 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
     'dsh-chamber.open-in': OpenInKey
   }
+  interface SlotMap {
+    /**
+     * Official rc.2 hole: workspace directory actions after the file tree's
+     * reload control (declared by ui-sidebar-files, occupied by ui-open-in-app).
+     * chamber occupies it too with its own list id — the official occupant's
+     * document-relative `open-in-app/*` reads fall through to the SPA-fallback
+     * HTML at the control-plane origin under N-ctx and render nothing.
+     *
+     * This mirror is the DOCUMENTATION/type half only: the package program
+     * compiles against the loose vendor declaration (SlotMap is empty there),
+     * so the source lock in test/ui-lock/files-seat-declaration.test.ts is
+     * what actually keeps the shape aligned with vendor ui-sidebar-files.
+     */
+    'sidebar.right.tab.files.actions': {
+      kind: 'list'
+      scope: 'session'
+      owner: {
+        /** Absolute directory path displayed by the file tree. */
+        readonly absolutePath: string
+      }
+    }
+  }
 }
 
 /** The official conversation header utilities slot (beside "Session log"). */
 const OPEN_IN_HEADER_SLOT = 'conversation.session.header.utilities' as const
+/** The official Files-tab directory-actions slot (rc.2). */
+const FILES_ACTIONS_SLOT = 'sidebar.right.tab.files.actions' as const
 const NS = 'dsh-chamber.open-in'
 
 export const inject = ['slots', 'locale']
@@ -127,6 +152,23 @@ export function apply(ctx: ClientContext): void {
     // right and places this button to its left.
     order: -10,
     // Neutral entry label (slot diagnostics — the user-facing copy comes from the component).
+    label: () => t('titleOpen'),
+    inject: injected,
+  }, OpenInButton))
+  // The official rc.2 Files-tab seat, same entry with the owner's directory:
+  // the file tree hands over the displayed root, so the button opens exactly
+  // what the reader is looking at. Adopted (ruling D-01 = B) after the official
+  // occupant proved inert on this page (document-relative openInApp/* reads);
+  // our per-source view-model and launch carrier are what make the seat usable
+  // across sources. Distinct id from the official 'open-in-app', same as the
+  // header seat: list entries may coexist, duplicate ids at one priority throw.
+  ctx.slots.inject(FILES_ACTIONS_SLOT, () => ctx.slots.register({
+    name: FILES_ACTIONS_SLOT,
+    id: 'open-in',
+    // No order: the official occupant keeps the default 0 and this hole has no
+    // "Session log at order 0" neighbour to sort against — list rows otherwise
+    // render in ledger order. Same inject closure as the header seat, so both
+    // seats share one per-source adapter and one per-source choice.
     label: () => t('titleOpen'),
     inject: injected,
   }, OpenInButton))

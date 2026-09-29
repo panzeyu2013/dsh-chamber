@@ -33,6 +33,8 @@ const GROUPS = {
     'test/launch-flow/open-in-view-model.test.ts',
     'test/launch-flow/source-adapter.test.ts',
     'test/launch-flow/choice-store.test.ts',
+    // Gate 2 的席主路径优先（files 座席 owner absolutePath vs header 会话工作区）。
+    'test/launch-flow/open-in-path.test.ts',
   ],
   // ui-lock: the OpenInButton menu/owner guard + the console ban over every
   // src/client/*.ts(x). The menu-density decision (compact 26px/12px) is asserted
@@ -41,6 +43,9 @@ const GROUPS = {
     // 错误文本单源锁：域内名 == sidebar describeThrown + 按钮不得使用朴素格式化。
     'test/ui-lock/hostile-error-text.test.ts',
     'test/ui-lock/instance-view-guard.test.ts',
+    // rc.2 座席锁（裁决 D-01 = B）：官方 files 洞的声明形状 + 我方自有 id 占座 +
+    // owner absolutePath 优先（纯路径判定在 launch-flow/open-in-path.test.ts）。
+    'test/ui-lock/files-seat-declaration.test.ts',
   ],
   // session-health: the conversation stream-health ladder (error ⇒ automatic
   // heal; parked loading ⇒ stall notice — the page delivery ladder re-issues it)

@@ -68,7 +68,7 @@
    header 探针/图标 404、席位渲染 null。当时的结论（「拉进复合才不会 404」）已被 §2.2/D2 取代：官方行照常
    加载，deliverables 文件动作的 owner 路由由 ui-deliverables 侧带 per-entry 前缀（design 09 §3.6），header 仍 inert。
 3. **效果依赖实例 runtime 的版本**：官方 open-in 行自 **dsh-v0.1.3-alpha.2** 才存在
-   （`packages/renderer/src/chamber-covered.ts#=literal:The official open-in client row is NOT skipped any more`）；本仓**运行时锚与源码 pin 都已是 0.2.0-rc.1**
+   （`packages/renderer/src/chamber-covered.ts#=literal:The official open-in client row is NOT skipped any more`）；本仓**运行时锚与源码 pin 都已是 0.2.0-rc.2**
    （单一来源 `packages/desktop/vendor/dsh/pnpm-lock.yaml`，`bundle-dsh.mjs:79` 兜底同值）⇒ 非主要理由。fork & supersede 不依赖该行。
 
 **补注（第 2 条的机器级复活）**：上游那条"目录/图标由承载页面的 host 回答"的不变量，在**机器级**上仍然是对的——只是本壳有 N 个 host，需要点名"哪一个是机器 host"。答案是把页面上的机器 host 钉为**本地实例**：
@@ -199,18 +199,18 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
 - **交互**：可用集 ≥1 → 官方那条分体按钮（主图标按钮 + chevron + **官方 `ui-primitives` `Menu`**）：
   `autoFocus` 焦点转移、方向键/Home/End 导航、`compact` 行（官方默认 34px → `compact` 24px/11px，随 design 06 §7 的
   「菜单密度 = primitives `compact` 档」全仓口径）、`selection="fill"` 填充、项 `icon` 真图标
-  （`OpenInButton.tsx:316-401`；props 面与 pin 的 `Menu.tsx`/`Tooltip.tsx` 对齐见
+  （`OpenInButton.tsx#OpenInButton`；props 面与 pin 的 `Menu.tsx`/`Tooltip.tsx` 对齐见
   `types/vendor-modules.d.ts`（open-in 段））。**呈现规格逐条等于官方 open-in
   分体按钮**（清单见 §7.1；对照 design 16 §6.1 与 `OpenInButton.module.css`、
   `IconChevronDownOutlineRegular`）。提示用同一 pin 的设计系统 `Tooltip`（**不再用原生 `title`**）；chevron
   带 `aria-haspopup="menu"` / `aria-expanded`，每次打开重探目录（原 bespoke `onOpening` 语义搬到
-  trigger，`OpenInButton.tsx:174`）。**插件内唯一的菜单逻辑是 N-ctx 归属**
+  trigger，`OpenInButton.tsx#OpenInButton` 内的 owner 守卫）。**插件内唯一的菜单逻辑是 N-ctx 归属**
   `instance-view-guard.ts`：打开期间观察 trigger 祖先链，`.instance-view` 带
   `instance-hidden`/`instance-pending`/`hidden`/`aria-hidden` 或断开即关闭菜单
   （`instance-view-guard.ts:49-58,164-181`）——隐藏视图的残留打开态不得随视图复活，击键不得落到隐藏视图；
 - **失败呈现**：拉起失败不再只写 `console.error`，原因随 error 装饰**就地可见**——按钮可访问名切成
   「打开失败」，`Tooltip` 显示「{openFailed}{原因}」（域载体 error 或传输层异常消息），随 error
-  装饰 2 s 后清除（`OpenInButton.tsx:298-304,309-314`）；
+  装饰 2 s 后清除（`OpenInButton.tsx#OpenInButton` 的 busy/error 装饰）；
 - **通道命名**：`OpenInChannel = 'local' | 'main'`——`local` 指"实例内我们自己服务、在这台机器上拉起"
   （不叫 `official`：池已换成我们的 fork）；它决定**拉起载体**（实例域 vs 可信 IPC），
   不决定图标（§5 图标契约）；
@@ -345,6 +345,7 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
 | 7 | 无应用来源的诚实出口（复制远端路径 / 复制 `ssh user@host` / 复制深链，零执行面） | **收窄**：只保留「复制路径」——侧栏既有 `HoverCard` 复制模式 + 会话行已带 `SessionRow.cwd`，零新 IPC；复制 ssh 命令/深链不做（形态留档 todo §3 附录 A） |
 | 8 | 多入口共用同一执行管线（侧栏会话行右键、快捷键；`runOpenInLaunch` 已是单一管线） | **不做**（理由与证据见 STATUS；形态留档 todo §3 附录 B） |
 | 9 | 拉起失败原因**用户可见**（`Tooltip` 就地呈现域错误/传输异常，随 error 装饰清除） | 已有 |
+| 10 | 官方 Files 页签目录座席 `sidebar.right.tab.files.actions`（官方 `ui-open-in-app` 占座，但读 document-relative `open-in-app/*` ⇒ N-ctx 下落控制面 SPA 回退、渲染 null）由本插件以自有 id `open-in` 同槽占座：owner `{ absolutePath }` 直取文件树显示目录，per-source 目录/记忆照旧；残余风险 = 官方条若复活会同槽双条 | 本设计（`test/ui-lock/files-seat-declaration.test.ts` + `test/launch-flow/open-in-path.test.ts`） |
 
 ### 7.3 明确不做
 
@@ -424,7 +425,7 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
   `docs/checklists/upstream-touchpoints.md` §2.5），获三层保护：**C1** 未登记差异即硬失败、**C3** 每个上游
   文件必须有 pure/patched/own/dropped 分类（上游新增文件漏分类即红）、**C2** tag 重放差异报告自动纳入本
   fork 面（advisory）。**版本锚已豁免**：C5 规则是 `fork/package.json.version == 上游同文件版本`——三个
-  既有 copy 包即如此携带上游版本（实测随 pin，当前 0.2.0-rc.1），seed 包随 chamber 发版 bump（实测 0.2.4，与
+  既有 copy 包即如此携带上游版本（实测随 pin，当前 0.2.0-rc.2），seed 包随 chamber 发版 bump（实测 0.2.4，与
   `dsh-runtime`/其他 seed 一致）；registry 每条登记 `versionAnchor: 'upstream' | 'chamber'`（既有三条 =
   upstream、本 fork = chamber），C5 只比对 `upstream`；脚本头注、C5 日志文案与触点表 §4 与之一致。实测：
   `✓ [seed-open-in] C1/C3: pure=3 patched=4 own=9 dropped=6`、`✓ C7 … openInApp/probe`、
@@ -461,6 +462,10 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
 - `docs/checklists/upstream-touchpoints.md` §4（fork 行）
 - `docs/progress/todo/deferred-features.md`（超集分批与降级留档）
 - `docs/progress/STATUS.md`（唯一进度记录）
+
+## 被否方案（Files 座席）
+
+① 给官方 `ui-open-in-app` 打前缀补丁（第四类）——需把一个官方行从实例自带 bundle 搬进复合构建，多一处加载路径偏离与版本歪斜面，且官方条复活后与自有条并排出现；② 隐藏官方条——`ui-slots` 没有隐藏他人条目的 API，官方条当前渲染 null，无对象可隐藏；故取「同槽自有占座 + 官方条保持 inert」。
 
 ## 被否方案（单源化：open-in 错误文本 + 失败路径健壮性）
 
