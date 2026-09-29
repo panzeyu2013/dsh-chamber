@@ -29,7 +29,7 @@
   **内容**（会话目录 + 其 subagent 起源子会话内容）永久占用实例宿主磁盘且无清除入口，
   对 gateway 服务器部署是可观察的磁盘增长来源。
 - **上游归档 UI 在 chamber 为死件（裁决）**：上游 ui-workspace 的归档/恢复/过滤贡献注册进
-  `sidebar.workspaces` 洞；chamber 保留该洞的声明（撤销会让注册抛错）但**从不渲染**，浏览区
+  `sidebar.workspaces` 洞；chamber 保留该洞的声明（撤销会让官方注册与第三方注入静默消失：未声明槽的 `slots.inject` 不执行回调，抛错点在回调内的 `register`）但**从不渲染**，浏览区
   由 chamber 自有多源列表拥有。归档/恢复语义因此由 chamber 列表 + 归档管理器承担，镜像上游
   浏览 UI 不作 v1 范围。锁测试
   `packages/dsh-chamber-client-ui-sidebar/test/source-runtime/sidebar-slot-declaration.test.ts`；
@@ -863,7 +863,7 @@ STATUS.md。
 
 ## 10. 宿主面事实（vendor 核对结论）
 
-vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.7-rc.2 477b4f4205）核对的宿主面
+vendor/harness-packages（pinned submodule，当前 pin dsh-v0.2.0-rc.1 4878cdab）核对的宿主面
 事实，binding 与算法以此为准。§4 step 9 的字段归属铁律即由此得出：**面**（服务方法/属性）
 自 alpha.2 b2e3b2a0 审计以来未变，但**全局字段集合**在 0.1.7 长过（新增
 `pinnedSessionIds`/`defaultWorkspaceId`），故本域不再镜像字段：
@@ -872,7 +872,7 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.7-rc.2 477b4f42
    （仅增向）/ 单条 `unarchiveSession`（public，本域未用）可用；本域写集合另需三个
    **私有**面——实例字段 `state`（官方 live global 本体，`setState` 换的就是它）、
    `setState`（**整体替换**且 `dsh-storage-domain` 的 `global.set` **不跑 `schema.parse`**，
-   0.1.7-rc.2 发行产物复核；故 zod 默认值不兜底 → 只能 read-modify-write）、`enqueueOperation`（官方串行链，集合写
+   0.2.0-rc.1 发行产物复核；故 zod 默认值不兜底 → 只能 read-modify-write）、`enqueueOperation`（官方串行链，集合写
    必须在其内）。`list()` 公开可用但**本域已不再使用**（不再重建 `workspaceIds`）。
    **成员 `sessionIds` 是 header 索引派生的
    getter**（启动/实时按 `sessionPersistence.list()` 重建）——内容删除后
@@ -1093,7 +1093,7 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.7-rc.2 477b4f42
     激活探针里要求 `stat` ⇒ 旧宿主探针 `ok:false`（activation gate fail，走 §7 C 的回退/拒绝
     语义），`hasStoredContent` 在运行期对同一缺失返回 `true`（跳过清扫、不清成员）——**能力门
     响亮失败 + 运行期 fail-closed 降级**：域的正确性依赖 `stat`，但绝不因面缺失而误清成员。
-    当前支持基线（0.1.7-rc.2）与回滚目标（0.1.3-alpha.2）都满足该面；
+    当前支持基线（0.2.0-rc.1）与回滚目标（0.1.3-alpha.2）都满足该面；
 12. **force 路径与维护相位（不声称已解决）**：dsh 在**维护相位**期间对外仍报
     `status === 'idle'`（vendor `packages/core/agent-loop/src/agent.ts`），一次 `force` purge
     因此可能删掉**维护任务仍会继续追加写入**的档。`session/cancel` 能中止**活着的**维护相位，
@@ -1164,5 +1164,5 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.7-rc.2 477b4f42
 - **archiveCleanup 契约继续两端手抄 + 宽容解码**：否决——客户端对缺失计数字段静默取 0（「已删除 0 个」的静默错误），且方法名/入参键/结果字段没有跨包锁步；改为中立契约包 `@dsh-chamber/dsh-chamber-wire`（唯一声明；seed esbuild 内联；行为锁步测试解析真实 `purge(` 签名比对键序），必需计数（6 项）缺失或非法即 loud，可选计数缺省 = 合法旧宿主。
 - **保留 `preview` 端点**（原文曾描述 wrapper）：否决——§5 已写明管理器列表来自会话快照投影且不调用 preview，wrapper 从未存在；删除宿主方法/core/类型/测试并同步本文，而不是补一个没有调用方的 RPC 面。
 - **恢复路径自造本地「取消归档」状态**（对齐上游 0.1.7 时）：否决——官方已有 `workspace/unarchiveSession`（幂等移除归档集合成员，官方撤销 toast 与「显示已归档」筛选同源）。chamber 只做入口（管理器行/批量）+ 本地墓碑清除，不新增任何本地归档权威状态；老宿主无该方法时按普通 RPC 失败如实报错，不降级成「假装恢复了」。墓碑不靠权威集合收缩收敛（集合「不再覆盖」不是收敛信号，§12 的收敛规则只退休仍被覆盖的 id），必须由恢复事实显式删除。
-- **撤销 `sidebar.workspaces` 声明**（回应「上游归档/恢复 UI 在 chamber 不可达」）：否决——该洞是官方 `ui-workspace` 的注册目标，撤声明会让其注册直接抛错（N-ctx 壳里整棵 ui-workspace 失败）；保留声明但从不渲染，浏览区由 chamber 自有多源列表拥有（锁测试 `test/source-runtime/sidebar-slot-declaration.test.ts`）。代价是上游归档/恢复/过滤贡献在 chamber 为死件，由 chamber 归档管理器承担这些语义。
+- **撤销 `sidebar.workspaces` 声明**（回应「上游归档/恢复 UI 在 chamber 不可达」）：否决——该洞是官方 `ui-workspace` 的注册目标，撤声明**不会抛错**（未声明槽的 `slots.inject` 只是不执行回调），但会让那条注册与任何第三方注入静默消失，fail-loud 语义丢失；保留声明但从不渲染，浏览区由 chamber 自有多源列表拥有（锁测试 `test/source-runtime/sidebar-slot-declaration.test.ts`）。代价是上游归档/恢复/过滤贡献在 chamber 为死件，由 chamber 归档管理器承担这些语义。
 - **registry 写入不做写后读回**（archiveCleanup 的 `setState`）：否决——官方 `setState` 是同步全局替换，但 replace/partial/patch 三种实现都可能被宿主升级换掉；写后读回并逐键比对（`registry-write-mismatch`）把「删了 A 结果 B 也丢了」变成拒绝运行，而不是把不一致留给按 id 判断的下游守卫（§4 步骤 6、§10）。

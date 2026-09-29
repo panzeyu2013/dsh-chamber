@@ -50,7 +50,6 @@ const VENDOR = fileURLToPath(new URL('../../../vendor/harness-packages/@deepseek
 const FILES = {
   markdown: VENDOR + 'dsh-client-ui-chat/src/client/chat/AssistantMarkdown.tsx',
   nodeView: VENDOR + 'dsh-client-ui-chat/src/client/chat/AssistantNodeView.tsx',
-  reasoningCss: VENDOR + 'dsh-client-ui-chat/src/client/chat/ReasoningRow.module.css',
   upload: VENDOR + 'dsh-client-file-upload/src/client/runtime.ts',
   presentOpen: VENDOR + 'dsh-client-ui-deliverables/src/client/present-open.ts',
   deliverablesIndex: VENDOR + 'dsh-client-ui-deliverables/src/client/index.ts',
@@ -58,7 +57,6 @@ const FILES = {
   exportIndex: VENDOR + 'dsh-session-log-export/src/client/index.ts',
   assembly: VENDOR + 'dsh-client-ui-conversation/src/client/conversation/assembly.ts',
   reading: VENDOR + 'dsh-client-ui-chat/src/client/chat/use-chat-reading.ts',
-  values: VENDOR + 'dsh-util-values/src/index.ts',
   workspaceNavigation: VENDOR + 'dsh-client-ui-workspace/src/client/navigation.ts',
 }
 
@@ -69,7 +67,6 @@ const IDS = {
   // reports is normally the SUBMODULE path (this is the form that matters).
   markdownReal: '/x/vendor/harness-checkout/packages/client/ui-chat/src/client/chat/AssistantMarkdown.tsx',
   nodeView: '/x/vendor/harness-checkout/packages/client/ui-chat/src/client/chat/AssistantNodeView.tsx',
-  reasoningCss: '/x/vendor/harness-checkout/packages/client/ui-chat/src/client/chat/ReasoningRow.module.css',
   uploadReal: '/x/vendor/harness-checkout/packages/client/file-upload/src/client/runtime.ts',
   presentOpen: '/x/vendor/harness-checkout/packages/client/ui-deliverables/src/client/present-open.ts',
   deliverablesIndex: '/x/vendor/harness-checkout/packages/client/ui-deliverables/src/client/index.ts',
@@ -78,8 +75,6 @@ const IDS = {
   assembly: '/x/vendor/harness-checkout/packages/client/ui-conversation/src/client/conversation/assembly.ts',
   workspaceNavigation: '/x/vendor/harness-checkout/packages/client/ui-workspace/src/client/navigation.ts',
   readingReal: '/x/vendor/harness-checkout/packages/client/ui-chat/src/client/chat/use-chat-reading.ts',
-  valuesVendor: '/x/node_modules/@deepseek-ai/dsh-util-values/src/index.ts',
-  valuesReal: '/x/vendor/harness-checkout/packages/util/values/src/index.ts',
 }
 
 /** Strip a leading export keyword so a sliced declaration can run inline. */
@@ -534,41 +529,6 @@ test('immediate publications bypass the scheduler and cancel the pending frame (
   assert.equal(immediate.frames.length, 0, 'immediate never queues a paint')
 })
 
-test('the running-row sweep animates only compositor properties (parsed patched CSS)', () => {
-  const file = 'dsh-client-ui-chat/src/client/chat/ReasoningRow.module.css'
-  const name = 'dsh-reasoning-row-sweep'
-  const source = readFileSync(FILES.reasoningCss, 'utf8')
-  const patched = applyVendorPatches(IDS.reasoningCss, source)
-  assert.notEqual(patched, undefined, file + ' must be selected through the submodule id form')
-  assert.deepEqual(patched.applied, [file])
-
-  /** Parse one @keyframes block and return the animated property names. */
-  const keyframeProperties = (css, keyframesName) => {
-    const block = new RegExp('@keyframes\\s+' + keyframesName + '\\s*\\{([\\s\\S]*?)\\n\\}').exec(css)
-    assert.notEqual(block, null, '@keyframes ' + keyframesName + ' not found')
-    const body = block[1].replace(/\/\*[\s\S]*?\*\//g, '')
-    const properties = new Set()
-    for (const match of body.matchAll(/([a-zA-Z-]+)\s*:/g)) properties.add(match[1])
-    return [...properties].sort()
-  }
-
-  const running = new RegExp('animation:\\s*(' + name + '[\\w-]*)\\s+2\\.6s ease-out infinite;').exec(patched.code)
-  assert.notEqual(running, null, 'the running row uses the sweep animation')
-  assert.equal(running[1], name + '-x')
-  assert.deepEqual(keyframeProperties(patched.code, running[1]), ['transform'],
-    'the patched sweep must animate only a compositor property')
-  assert.ok(patched.code.includes('animation: none;'), 'the reduced-motion opt-out is untouched')
-  // Negative control: the same parser reports the upstream layout property.
-  assert.deepEqual(keyframeProperties(source, name), ['left'])
-  // 0.1.7-rc.2 retired the sibling command-row sweep; a patch for a file that
-  // no longer carries the animation would be dead code.
-  assert.equal(
-    VENDOR_PATCHES.find((patch) => patch.vendorFile.includes('GenericCommandCard')),
-    undefined,
-    'the retired command-row sweep patch is deleted',
-  )
-})
-
 /**
  * The follow sampler's settle path, driven through the PATCHED class: the
  * viewport reports a reader-attributed offset (inside or beyond the follow
@@ -709,41 +669,6 @@ test('a route-bound marker is judged inside the chunk declaring its route (cross
   assert.deepEqual(failures([patched]), [])
 })
 
-test('the intrinsic-prototype patch accepts plain JSON under a multi-line Function.prototype.toString', () => {
-  const source = readFileSync(FILES.values, 'utf8')
-  const viaVendorPath = applyVendorPatches(IDS.valuesVendor, source)
-  const patched = applyVendorPatches(IDS.valuesReal, source)
-  assert.notEqual(viaVendorPath, undefined, 'the @deepseek-ai id form must match')
-  assert.notEqual(patched, undefined, 'the realpath id form must match')
-  assert.equal(viaVendorPath.code, patched.code, 'both id forms produce the same patch')
-  assert.deepEqual(patched.applied, ['dsh-util-values/src/index.ts'])
-  assert.ok(patched.code.includes('.replace(/\\s+/g'), 'the anchor was rewritten in place')
-  // The exported snapshot API is the observable face: it returns undefined for every
-  // plain object/array while the engine prints multi-line native source.
-  const slice = { from: 'function hasIntrinsicConstructor', to: 'export function isJsonValue' }
-  const upstream = evaluateSlice(source, { ...slice, binding: 'snapshotJsonValue' })
-  const fixed = evaluateSlice(patched.code, { ...slice, binding: 'snapshotJsonValue' })
-  const nativeToString = Function.prototype.toString
-  Function.prototype.toString = function toString() {
-    return String(nativeToString.call(this)).replace('{ [native code] }', '{' + NL + '    [native code]' + NL + '}')
-  }
-  let upstreamValue
-  let patchedValue
-  try {
-    upstreamValue = upstream({ a: [1, 2], b: 'x' })
-    patchedValue = fixed({ a: [1, 2], b: 'x' })
-  } finally {
-    Function.prototype.toString = nativeToString
-  }
-  // Negative control: the unpatched predicate rejects a plain value under the
-  // multi-line form - the exact defect this entry exists for.
-  assert.equal(upstreamValue, undefined)
-  assert.deepEqual(patchedValue, { a: [1, 2], b: 'x' })
-  // V8's canonical single-line form keeps working, and non-plain objects stay out.
-  assert.deepEqual(fixed({ a: [1, 2] }), { a: [1, 2] })
-  assert.equal(fixed(new Date()), undefined)
-})
-
 /**
  * A throwaway vendor root for the retirement verdicts. The real tree exercises
  * the happy path above; these fixtures drive the two failure branches.
@@ -812,9 +737,24 @@ test('the live registry declares a retirement form per patch and no orphan artif
   for (const patch of VENDOR_PATCHES) {
     assert.ok(patch.retireCheck !== undefined || patch.noRetireForm !== undefined, patch.vendorFile)
   }
-  // Nothing is retired at the current pin. Accepting a retire-candidate moves
-  // the entry here and deletes its patch + marker in the same change.
-  assert.deepEqual(RETIRED_PATCHES, [])
+  // Retired at the 0.2.0-rc.1 pin: the running-row sweep moved into the shared
+  // TextShimmer and the intrinsic check became engine-independent. A
+  // retire-candidate moves here and deletes its patch + marker in the same change.
+  assert.deepEqual(RETIRED_PATCHES.map((entry) => entry.vendorFile), [
+    'dsh-client-ui-primitives/src/TextShimmer.module.css',
+    'dsh-util-values/src/index.ts',
+  ])
+  for (const entry of RETIRED_PATCHES) {
+    assert.equal(typeof entry.reason, 'string')
+    assert.ok(entry.reason.length > 0)
+    assert.equal(typeof entry.ensure, 'string')
+  }
+  // A previously retired entry (the command-row sweep) stays deleted.
+  assert.equal(
+    VENDOR_PATCHES.find((patch) => patch.vendorFile.includes('GenericCommandCard')),
+    undefined,
+    'the retired command-row sweep patch is deleted',
+  )
   for (const marker of VENDOR_PATCH_MARKERS) {
     if (marker.vendorFile === undefined) continue
     assert.equal(

@@ -869,7 +869,7 @@ WKWebView 不认，故壳自建等价面（`macos/Sources/DSHChamber/ShellWindow
 
 ### 5.6 窗口 chrome 面（hiddenInset / 全屏标记 / 侧栏材质的等价面）
 
-§5.5 的窗口形态还需要三个上游等价面，否则页面按 `data-platform=darwin` 画的顶部带与真实窗口不成一条带。上游的量取自官方 desktop 主进程的 darwin 分支（`vendor/harness-checkout/apps/desktop/src/main.ts`：`titleBarStyle:'hiddenInset'`、`trafficLightPosition:{x:16,y:18}`、`vibrancy:'sidebar'`、`visualEffectState:'active'`、`backgroundColor:'#00000000'`）与 preload（`preload-platform.ts` 的 `dataset.fullscreen`）；本壳的量全部由本机同形窗探针实测：
+§5.5 的窗口形态还需要三个上游等价面，否则页面按 `data-platform=darwin` 画的顶部带与真实窗口不成一条带。上游的量取自官方 desktop 主进程的 darwin 分支（`vendor/harness-checkout/apps/desktop/src/main.ts`：`titleBarStyle:'hiddenInset'`、`trafficLightPosition:{x:16,y:18}`、`vibrancy:'sidebar'`、`visualEffectState:'active'`、`backgroundColor:'#00000000'`）与 preload（`preload-platform.ts` 的 `dataset.fullscreen`）；本壳的量全部由本机同形窗探针实测；**Electron flavor 自 2026-09 起也按同一组 darwin 值收口**（`packages/desktop/main.ts` 的 darwin 分支：hiddenInset / trafficLightPosition(16,18) / vibrancy sidebar / visualEffectState active / backgroundColor #00000000，锁 = `packages/desktop/upstream-seats.test.ts` S-54），两 flavor 因此共用同一份页面几何（`--dsh-frame-top-clearance: 48px`、`.topStrip`、`[data-fullscreen]`）：
 
 | 面 | 上游 | 本壳等价物 |
 |---|---|---|

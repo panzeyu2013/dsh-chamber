@@ -534,7 +534,7 @@ pnpm run test:mobile
 
 Official dsh DOM, empirically audited via CDP at **v0.1.5-alpha.2** and re-anchored
 at **v0.1.5-rc.2** — every anchor below resolved in the rc.2 tree. Under the current
-pin (v0.1.7-rc.2) the strict anchor gate resolves all 47 property anchors and the
+pin (v0.2.0-rc.1) the strict anchor gate resolves all 47 property anchors and the
 two build-time CSS-module hash tokens with 0 misses
 (`verify-mobile-anchors.mjs --require-anchor-root`); the hash tokens were re-anchored
 to the served rc.2 bundle and a zero-hit token is now a hard failure (see below). The
@@ -555,7 +555,7 @@ dialog renders INSIDE the sidebar DOM (no body portal; the drawer open state
 must use `transform: none` — an identity transform still creates a containing
 block).
 
-The vendored base is now **v0.1.7-rc.2** (harness pin `477b4f4205`; single source
+The vendored base is now **v0.2.0-rc.1** (harness pin `4878cdab`; single source
 `harness.commit`). Historical audit record: the anchors above were re-verified
 against the alpha.2 source (2026-09 re-anchor) and held at v0.1.5-rc.2 (whose
 client deltas are listed above and left those anchors, and the

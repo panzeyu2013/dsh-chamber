@@ -72,7 +72,7 @@ umask 077
 # DSH_CHAMBER_DSH_VERSION 是「内建/回退锚」默认版本（design 18 §9）：运行期
 # 可经 /chamber/runtime 切换，此常量仅决定本脚本安装的锚版本。
 # ---------------------------------------------------------------------------
-DSH_CHAMBER_DSH_VERSION="${DSH_CHAMBER_DSH_VERSION:-0.1.7-rc.2}"
+DSH_CHAMBER_DSH_VERSION="${DSH_CHAMBER_DSH_VERSION:-0.2.0-rc.1}"
 GITHUB_REPO="${DSH_CHAMBER_GITHUB_REPO:-panzeyu2013/dsh-chamber}"
 BASE_DIR="${DSH_CHAMBER_BASE_DIR:-${HOME:?HOME 环境变量未设置（可用 DSH_CHAMBER_BASE_DIR 指定安装位置）}/.dsh-chamber}"
 # 从自复制位置反推 BASE_DIR：install_self 把本脚本复制到
@@ -317,7 +317,7 @@ const SEMVER = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+
 OPS['valid-port'] = (value) => (/^[0-9]+$/.test(value) && Number(value) >= 1 && Number(value) <= 65535)
   ? 0 : RED('端口必须是 1-65535 的数字')
 OPS['valid-semver'] = (value) => SEMVER.test(value)
-  ? 0 : RED('版本必须是 canonical SemVer（如 0.1.5 或 0.2.0-beta.4）')
+  ? 0 : RED('版本必须是 canonical SemVer（如 0.1.5 或 1.0.0-rc.1）')
 OPS['valid-semver-v'] = (value) => OPS['valid-semver'](String(value).replace(/^v/, ''))
 OPS['valid-bind'] = (value) => (value === '127.0.0.1' || value === '0.0.0.0')
   ? 0 : RED('bind host 只允许 127.0.0.1（仅本机）或 0.0.0.0（全部网卡）')

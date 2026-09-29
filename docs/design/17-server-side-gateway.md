@@ -782,15 +782,15 @@ chamber 代码。chamber 插件（sidebar/layout/settings-bridge/git/open-in 等
   能登录即受信（`--no-auth` 可信网络部署同语义）——非鉴权绕过（服务端 RPC 不区分来源，该门是纯
   客户端 UI 策略）；上游移除钩子/改压缩行为则注入静默失效（fail-soft，设置退回受限态，升级 dsh 版本需
   复验）。实现与验收见 STATUS.md「http 连接链路修复（S0/S2）」。
-- **WebKit 原生源码归一（S0 头补丁之二，design 14 §D4）**：同一个 `html-inject.ts` 出口还把**只作用于内建函数**的
-   `Function.prototype.toString` 空白归一脚本插进同一批文档（与信任声明**各自幂等**：已声明 transport 钩子的文档仍会得到它）。
-   JavaScriptCore 对**内建函数**打印多行 `{ [native code] }`，而 pin 住的 `@deepseek-ai/dsh-util-values`
-   `hasIntrinsicConstructor` 与单行模板严格比较 ⇒ 判定恒假 ⇒ `snapshotJsonValue` 对普通对象/数组返回 `undefined`
-   ⇒ 官方前端的会话 raw-chunk 校验抛普通 TypeError，`doOpen` 只对远程失败写 `error`，页面永停 `loading`。
-   chamber 自建前端由 renderer 构建期的第三类 vendor 补丁覆盖（design 14 §D4）；**代理的官方前端无法在这里重建**，
-   故在出口做等价归一（V8 无变化；只有整段源码就是原生标记的函数被改写，用户函数原样返回）。
-   **取舍**：该页面的原生函数源码文本变为规范单行；**删除条件** = 上游携带引擎无关判定
-   （`docs/progress/todo/upstream-proposals.md` §9）或支持的 WebKit 基线已打印单行形式。
+- **WebKit 原生源码归一（S0 头补丁之二，design 14 §D4；已随最低 runtime 抬升删除）**：同一个 `html-inject.ts` 出口
+  曾把**只作用于内建函数**的 `Function.prototype.toString` 空白归一脚本插进同一批文档（与信任声明**各自幂等**）。
+  背景：JavaScriptCore 对**内建函数**打印多行 `{ [native code] }`，而 0.1.7-rc.2 的 `@deepseek-ai/dsh-util-values`
+  `hasIntrinsicConstructor` 与单行模板严格比较 ⇒ 判定恒假 ⇒ `snapshotJsonValue` 对普通对象/数组返回 `undefined`
+  ⇒ 官方前端的会话 raw-chunk 校验抛普通 TypeError，`doOpen` 只对远程失败写 `error`，页面永停 `loading`。
+  chamber 自建前端曾由 renderer 构建期的第三类 vendor 补丁覆盖（0.2.0 上游落地后该补丁已退役，design 14 §D4）；
+  代理的官方前端无法在这里重建，故当时在出口做等价归一（V8 无变化；只有整段源码就是原生标记的函数被改写）。
+  **0.2.0 上游已改为引擎无关比较**，且本轮把**最低支持 runtime 抬到 0.2.0-rc.1** ⇒ 该注入随本轮升级删除：
+  `html-inject.ts` 现在只注入信任声明，页面原生函数源码恢复引擎原生形态（原先的取舍随之消失）。
 - **`/chamber/` 运维仪表盘**是浏览器侧的运维面（§10）：同源 cookie 会话、Credentials 面板与 dsh
   运行时管理（版本 / 选择 / apply / rollback / restore / retry / restart / registry）；它是 gateway
   自有的运维入口，与托管前端并列，不依赖桌面插件，且**不随 ready detach**（dsh 停机窗口可轮询恢复）。
@@ -1423,7 +1423,7 @@ chamber 客户端插件）见 §3 装配矩阵与 §10.2。
 dsh-web-mobile）、`dsh-ui-mobile`（npm 已发布）、`dsh-web-ui-mobile`、`dsh-mobile-pwa`
 （五者 MIT、均已停更）与 `dsh-meow-smooth`（唯一活跃、键盘/IME 机制最完整）。
 **实现纪律：零代码复制、完整重写**——只吸收设计决策，不 fork/搬运社区文件。重写输入：
-① dsh 基线 `v0.1.7-rc.2`（`harness.commit`），走 chamber 现有模板与构建体系；② N-ctx 多实例：
+① dsh 基线 `v0.2.0-rc.1`（`harness.commit`），走 chamber 现有模板与构建体系；② N-ctx 多实例：
 打标/样式按实例根作用域化，行为层 effect 为 document 级单实例设计（多 shell renderer 挂载时
 必须作用域化）；③ layout 事实源在 `dsh-chamber-client-ui-layout`，不注入 gateway 托管实例
 （mobile 的唯一部署），只观察官方 `data-sidebar-collapsed`；④ 选择器锚自研 DOM + fork 内

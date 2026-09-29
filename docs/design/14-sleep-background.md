@@ -560,13 +560,14 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
   - **为何形态是「永久 loading」而非报错**：vendor `doOpen` 只对 `isRemoteFailure` 的错误写 `error`，普通错误原样
     rethrow；该 `TypeError` 不是远程失败 ⇒ `openState` 停在 `'loading'`，没有 error 边沿、没有自动出口
     （间歇性：raw chunk 只对 block-start/block-end/usage/finish 出现）。
-  - **修复（A 补丁）**：`packages/renderer/scripts/vendor-patches.mjs` 新增第三类补丁 `dsh-util-values/src/index.ts`——
-    同一次调用加 `.replace(/\s+/g, ' ')` 空白归一后再比较（V8 不变、WebKit 恢复）。依据 design 09 §3.6 的第三类
-    登记纪律；删除条件 = 上游携带引擎无关的内建判定后删条目（上游提案见 `docs/progress/todo/upstream-proposals.md` §9）。
-   - **作用域与第二载体**：补丁在 **renderer 构建期**生效，覆盖 chamber 自建前端（桌面两 flavor 与控制面自服务 URL）；
-     gateway `/` 代理的**实例官方前端**不经过该构建，故同一形态由 gateway 出口的 **S0 头补丁之二**覆盖——
-     `packages/gateway/src/html-inject.ts` 向同一批文档注入只作用于内建函数的 `Function.prototype.toString` 空白归一
-     （design 17 §10.5：各自幂等、取舍与删除条件同本条）。两条载体都随上游 §9 落地一并删除。
+   - **修复（A 补丁，已退役）**：本仓曾以 `packages/renderer/scripts/vendor-patches.mjs` 的第三类补丁
+     `dsh-util-values/src/index.ts` 做空白归一（V8 不变、WebKit 恢复）；**0.2.0 上游已改为引擎无关比较**
+     （与本 realm 自己的 `Function.prototype.toString` 比），补丁随之退役并移入 `RETIRED_PATCHES`（`ensure` 钉住
+     新比较句，design 09 §3.6）。
+   - **作用域与第二载体（两条载体均已退役）**：补丁在 **renderer 构建期**生效，覆盖 chamber 自建前端（桌面两 flavor 与控制面自服务 URL）；
+     gateway `/` 代理的**实例官方前端**不经过该构建，曾由 gateway 出口的 **S0 头补丁之二**做同一形态的空白归一
+     （`packages/gateway/src/html-inject.ts`，design 17 §10.5）。页面构建期载体已随 0.2.0 上游落地删除；gateway 出口载体随
+     **最低支持 runtime 抬到 0.2.0-rc.1**（该代次已携带引擎无关判定）删除——`html-inject.ts` 现在只剩信任声明。
   - **与后文防线的关系**：载波重试、单档 30 s 开帧期限、静默 socket 升级与 journal 看门狗仍是独立防线
     （静默半开 socket、慢宿主等形态）；本条修的是「页面自己抛错」这一真根因。
 - **逻辑流开帧丢失与首帧期限（ui-chat 卡死排查的客户端防线，chamber fork）**：

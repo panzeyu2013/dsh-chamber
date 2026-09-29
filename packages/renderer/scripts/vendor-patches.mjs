@@ -54,6 +54,16 @@
  * context (never a page-global knob, a URL guess or `import.meta.url`), keep
  * upstream behaviour as the fallback so an official-layout deployment is
  * unaffected, and retire once upstream scopes the fact itself.
+
+ *
+ * SAME CLASS, SECOND ADMITTED FORM (ownership transfer, admitted by maintainer
+ * ruling): a shared UI seat whose DECLARATION is owned by an upstream component
+ * the chamber shell never mounts. The shell cannot re-declare it - ui-slots
+ * throws on a second declaration of one seat - and no chamber package can
+ * transfer a declaration, so the entry deletes the upstream declaration while
+ * the shell declares the seat itself. This form has NO official-layout
+ * fallback (without the shell the seat is simply undeclared), so it MUST carry
+ * noRetireForm and state that trade-off in reason.
  *
  * RETIREMENT (upstream-drift batch-2 I-7): every entry declares EITHER
  * `retireCheck` (the pinned-upstream shape that carries the fix) or
@@ -63,6 +73,10 @@
  * entry into `RETIRED_PATCHES` with an exact `ensure` snippet, and delete the
  * patch + its artifact marker in the same change; a miss stays the plain drift
  * failure (re-derive the patch against the new pin).
+ *
+ * NUMBERING: docs, comments and tests refer to entries as "patch N" — N is the
+ * registration ordinal over the project's history (the RETIRED_PATCHES entries keep
+ * their number), not an id stored in the table.
  */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -303,39 +317,6 @@ export const VENDOR_PATCHES = Object.freeze([
   }),
   Object.freeze({
     idSuffixes: Object.freeze([
-      'dsh-client-ui-chat/src/client/chat/ReasoningRow.module.css',
-      'packages/client/ui-chat/src/client/chat/ReasoningRow.module.css',
-    ]),
-    retireCheck: Object.freeze({
-      probes: Object.freeze([
-        Object.freeze({
-          match: Object.freeze([/@keyframes/]),
-          absent: Object.freeze(['0% { left: -300px; }']),
-        }),
-      ]),
-      note: 'Upstream retargets the running-row sweep onto a compositor property (the left keyframe is gone). Delete this entry + its artifact marker and move a transform-only ensure assertion into RETIRED_PATCHES.',
-    }),
-    vendorFile: 'dsh-client-ui-chat/src/client/chat/ReasoningRow.module.css',
-    reason: 'measured 120 Hz frame cost: the running-row sweep animates `left` (-300px→100%), forcing layout+paint every frame. A/B of the REAL pinned CSS bytes with this registry applied (Electron 43.4.0 / Chromium 150 / M5 Pro 120 Hz, app.getAppMetrics cumulative deltas): 3 concurrent rows 12.3% renderer / 7.6% GPU before → 1.3% / 1.2% after; 1 row 15.4% / 9.2% → 1.0% / 1.0%. Hashed CSS-module class names make a chamber-side override unselectable from styles.css, and the sweep is upstream UX: retarget it, never delete it. The sibling command-row sweep was retired upstream in the 0.1.7 line.',
-    edits: Object.freeze([
-      Object.freeze({
-        expect: '  animation: dsh-reasoning-row-sweep 2.6s ease-out infinite;',
-        replace: '  /* chamber patch: sweep on the compositor only (vendor-patches.mjs reason) */\n'
-          + '  animation: dsh-reasoning-row-sweep-x 2.6s ease-out infinite;',
-      }),
-      Object.freeze({
-        expect: '@keyframes dsh-reasoning-row-sweep {\n  0% { left: -300px; }\n  90%, 100% { left: 100%; }\n}',
-        replace: '@keyframes dsh-reasoning-row-sweep-x {\n'
-          + '  0% { transform: translateX(-300px); }\n'
-          + "  /* 100vw exits any row width; the row's overflow:hidden clips the tail\n"
-          + '     exactly like the upstream left:100% end state. */\n'
-          + '  90%, 100% { transform: translateX(100vw); }\n'
-          + '}',
-      }),
-    ]),
-  }),
-  Object.freeze({
-    idSuffixes: Object.freeze([
       'dsh-client-ui-conversation/src/client/conversation/assembly.ts',
       'packages/client/ui-conversation/src/client/conversation/assembly.ts',
     ]),
@@ -483,26 +464,17 @@ export const VENDOR_PATCHES = Object.freeze([
   }),
   Object.freeze({
     idSuffixes: Object.freeze([
-      'dsh-util-values/src/index.ts',
-      'packages/util/values/src/index.ts',
+      'dsh-client-ui-workspace/src/client/index.ts',
+      'packages/client/ui-workspace/src/client/index.ts',
     ]),
-    retireCheck: Object.freeze({
-      probes: Object.freeze([
-        Object.freeze({
-          match: Object.freeze([/\bhasIntrinsicConstructor\b/, /\[native code\]/]),
-          absent: Object.freeze(['Function.prototype.toString.call(constructor) === `function ${name}() { [native code] }`']),
-        }),
-      ]),
-      note: 'Upstream compares native constructors engine-independently (the single-line template equality is gone). Delete this entry + its artifact marker, move the fix shape into RETIRED_PATCHES, and retire the gateway html-inject normalizer with it.',
-    }),
-    vendorFile: 'dsh-util-values/src/index.ts',
-    reason: 'engine-dependent intrinsic check (measured in the shipped Swift/WKWebView shell): JavaScriptCore prints the native form as a MULTI-LINE string (`function Object() {\n    [native code]\n}`), so the strict one-line template compare is false for EVERY realm intrinsic. snapshotJsonValue then returns undefined for every plain object and array, and opening a streaming session throws a plain TypeError in the session controller raw-chunk validation; the pinned doOpen writes openState = error only for a remote failure and rethrows everything else, so the page parks on loading forever (raw chunk records appear only for block-start/block-end/usage/finish, which is why it is intermittent). The predicate is module-private, so no chamber package can reach it; whitespace-normalizing the same call was validated against the shipped bytes under JavaScriptCore (the unpatched control still fails) and leaves V8 unchanged. Accepted trade-off: a forged function whose printed source differs from the native form only by whitespace would now pass; the name and prototype identity checks still hold. Delete this entry once upstream compares engine-independently.',
+    noRetireForm: 'no stable upstream text shape: the fix is upstream relocating the two seat declarations out of the workspace-browser registration (or an API that lets another owner take a declared child over), which cannot be asserted as text today. C9 drift failure + maintainer ruling, not an automated retire check.',
+    vendorFile: 'dsh-client-ui-workspace/src/client/index.ts',
+    reason: 'shared UI seat whose declaration is owned by an upstream component the chamber shell never mounts (fourth admitted class, ownership-transfer form): the official workspace-browser registration declares sidebar.session.row.leading / sidebar.session.row.hover, while the chamber shell renders its own multi-source list and never mounts that registration (the sidebar.workspaces hole stays declared but is never called, held by the I-4 sidebar lock). A second declaration of the same seat throws in ui-slots, and no chamber package can transfer a declaration, so only the seat owner can move it: this edit deletes the upstream declaration and the chamber sidebar declares both seats and renders them inside its own rows. Accepted trade-off: in an official-layout deployment (no chamber shell) the seats are undeclared, an occupant inject waits forever (silent), and the official row dead renderSlot calls would throw if that row were ever mounted.',
     edits: Object.freeze([
       Object.freeze({
-        expect: '      && Function.prototype.toString.call(constructor) === `function ${name}() { [native code] }`',
-        replace: '      // chamber patch: JavaScriptCore prints multi-line native source; compare a\n'
-          + '      // whitespace-normalized form so the intrinsic check is engine-independent.\n'
-          + '      && Function.prototype.toString.call(constructor).replace(/\\s+/g, \' \') === `function ${name}() { [native code] }`',
+        expect: "        'sidebar.session.row.leading': { kind: 'list', scope: 'root' },\n"
+          + "        'sidebar.session.row.hover': { kind: 'list', scope: 'root' },\n",
+        replace: '',
       }),
     ]),
   }),
@@ -677,7 +649,18 @@ export function vendorPatchRegistryProblems(patches = VENDOR_PATCHES) {
  * marker are deleted in the same change.
  * @type {readonly RetiredVendorPatch[]}
  */
-export const RETIRED_PATCHES = Object.freeze([])
+export const RETIRED_PATCHES = Object.freeze([
+  Object.freeze({
+    vendorFile: 'dsh-client-ui-primitives/src/TextShimmer.module.css',
+    reason: 'upstream moved the running-row sweep into the shared TextShimmer with compositor-only keyframes (transform only) and dropped the ui-chat ReasoningRow.module.css sweep this patch retargeted; ReasoningRow.tsx now renders TextShimmer, so the measured per-frame layout+paint cost is gone upstream.',
+    ensure: '@keyframes dsh-row-shimmer-sweep {\n  0% { transform: translateX(-100%); }',
+  }),
+  Object.freeze({
+    vendorFile: 'dsh-util-values/src/index.ts',
+    reason: 'upstream compares native constructors engine-independently (against the realm own Function.prototype.toString of Array/Object) instead of the one-line native-code template this patch whitespace-normalized, so the JavaScriptCore multi-line failure cannot occur.',
+    ensure: "Function.prototype.toString.call(constructor) === Function.prototype.toString.call(name === 'Array' ? Array : Object)",
+  }),
+])
 
 /**
  * Regression fence for retired patches.

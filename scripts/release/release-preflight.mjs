@@ -62,7 +62,7 @@ for (let i = 0; i < args.length; i++) {
 }
 
 const VERSION = positional[0]
-const FORK_VERSION = flags.forkVersion ?? '0.1.7-rc.2'
+const FORK_VERSION = flags.forkVersion ?? '0.2.0-rc.1'
 
 // ---------------------------------------------------------------------------
 // 检查器（fail-fast：任一失败即退出 1，消息指明修复方向）
@@ -423,7 +423,7 @@ function printFullBatteryNotice() {
 ────────────────────────────────────────────────────────────────
 ⚠ NOTICE — run the FULL unit battery (§3 of release-checklist.md)
   on the EXACT release commit (current HEAD: ${head}), not on the
-  merge commit it was green on (v0.2.0-beta.2 regression: the battery
+  merge commit it was green on (the 0.2.0-beta regression: the battery
   ran on eb7c22a; preload.cts changed before 0e3e8d9 → the L3
   ipc-surface-mirror lockstep test broke and only CI caught it).
 

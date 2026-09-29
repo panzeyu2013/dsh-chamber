@@ -1,7 +1,7 @@
 # 上游 UI 对齐：剩余待裁面（侧栏 / 工作区）
 
 用户报告的四例（workspace 悬停卡缺 path/创建时间、`+`/头部控件样式、长标题跑马灯、按钮与菜单快捷键提示）
-与同批判定「非有意、非 chamber 功能面」的其余条目，已按上游 pin `0.1.7-rc.2` 的代码逐字落地（旧逻辑删除、测试与
+与同批判定「非有意、非 chamber 功能面」的其余条目，已按上游 pin `0.2.0-rc.1` 的代码逐字落地（旧逻辑删除、测试与
 design 同批更新；已落地面的契约见 design 06 §7、design 05 §2）。本文件只留**仍需裁决**的差异与已裁决维持项，
 作为下一轮的入口。
 
@@ -73,14 +73,14 @@ design 同批更新；已落地面的契约见 design 06 §7、design 05 §2）�
 - STATUS 分类：本条归「无法控制的差异（外部约束）」——注册表语义与被覆盖的官方浏览器都不是本仓能改的面；
   这里保留的裁决只有「是否做 C2 实机判定 / 如何登记」。
 
-### 1.4 官方 schedule 两座席
+### 1.4 官方 schedule 两座席（已收口，A1）
 
 - 上游：ui-schedule 注册 `sidebar.session.row.leading`（idle 行活动任务标记）与 `sidebar.session.row.hover`（悬停卡任务列表）
-  （`@deepseek-ai/dsh-client-ui-schedule` 的 client bundle，两个 `sidebar.session.row.*` 注册），两座席由 `sidebar.workspaces` 的 children 表声明（`WS:4307-4314`）。
-- 本仓：未声明两座席（`sidebar.workspaces` 只声明不渲染的裁决之下），改用自有 `SessionScheduleIndicator`（标题后）
-  与自有卡片内容。
-- 为何要裁：要接官方座席，须先解开 `sidebar.workspaces` 的座席裁决（design 24 §1）或在**本仓自有行内**渲染官方座席
-  的注册项（跨插件渲染面），二者都是架构级选择。
+  （`@deepseek-ai/dsh-client-ui-schedule` 的 client bundle，两个 `sidebar.session.row.*` 注册），上游由 `sidebar.workspaces` 的 children 表声明（`WS:4307-4314`）——本仓构建里这两行由 vendor 补丁 13 号删除，改由 chamber 侧栏声明（见下）。
+- 本仓（已收口，A1 = 座席所有权转移）：上游注册里的两行声明由 vendor 补丁 13 号删除，本仓侧栏在**自己的** `children`
+  里声明两席并渲染（行首座席的 `fallback` = 自有 `SessionScheduleIndicator`，两者永不并现，design 09 §3.6 第四类第二形态）。
+- 裁决账：曾拒「在本仓自有行内渲染官方注册项」（跨插件渲染面）与「撤销 `sidebar.workspaces` 声明」（上游注册会抛错）；
+  上游若提供座席转交/共享 API，则该 vendor 补丁退役（提案见 upstream-proposals.md §11）。
 
 ### 1.5 重命名交互：模态 vs 行内
 

@@ -84,18 +84,20 @@ export const VENDOR_PATCH_MARKERS = [
     present: /dsh\.sessions\.current["']?\s*\+\s*[A-Za-z_$][\w$]*\(/,
   },
   {
+    vendorFile: 'dsh-client-ui-workspace/src/client/index.ts',
+    what: 'the two session-row seat declarations are owned by the chamber sidebar, not the workspace-browser registration (ownership transfer)',
+    // Patched: the children map closes right after `…session.row.action`, so the
+    // two seat keys are gone; an unpatched bundle carries
+    // `"sidebar.session.row.leading"` at exactly this seam. Minified variable
+    // names after `store:` are irrelevant.
+    present: /sidebar\.workspaces\.session\.row\.action":\{kind:"list",scope:"root"\}\},store:/,
+  },
+  {
     vendorFile: 'dsh-client-ui-chat/src/client/chat/AssistantNodeView.tsx',
     what: 'ui-chat node view forwards the file-API base prop',
     // Patched: `chamberFileApiBase` closes the destructured parameter list and
     // the component body still starts from `node.data` — the forwarding edit.
     present: /chamberFileApiBase\s*:\s*[A-Za-z_$][\w$]*\s*\}\s*\)\s*\{\s*const\s+[A-Za-z_$][\w$]*\s*=\s*[A-Za-z_$][\w$]*\.data\s*,/,
-  },
-  {
-    vendorFile: 'dsh-client-ui-chat/src/client/chat/ReasoningRow.module.css',
-    what: 'running-row sweep animates the compositor-only keyframes',
-    // Patched: the keyframes are renamed `…-x` and animate `transform` (the CSS
-    // pipeline may rewrite `translateX` to `translate`).
-    present: /dsh-reasoning-row-sweep-x[\w-]*\{[^@]{0,160}transform:\s*translateX?\(-300px\)/,
   },
   {
     vendorFile: 'dsh-client-ui-conversation/src/client/conversation/assembly.ts',
@@ -110,14 +112,6 @@ export const VENDOR_PATCH_MARKERS = [
     // `this.follow.sample(...)`, where upstream guards it with
     // `!scroll.movedByReader &&`. The backreference tolerates minified locals.
     present: /this\.follow\.sample\([^)]*\)[\s\S]{0,200}?if\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*this\.followTail\s*\(\)/,
-  },
-  {
-    vendorFile: 'dsh-util-values/src/index.ts',
-    what: 'the intrinsic-prototype check normalizes engine whitespace before comparing native source',
-    // Patched: `…toString.call(constructor).replace(/\s+/g, " ") === \`function ${name}() { [native code] }\``
-    // — the normalize sits between the call and the compare, so the marker binds the
-    // regex token to the `native code` template the compare still uses.
-    present: /\.replace\(\/\\s\+\/g,\s*["']\s["']\)\s*===[^;]{0,80}native code/,
   },
   {
     what: 'layout fork publishes the chamberFileApiBase root standard prop',

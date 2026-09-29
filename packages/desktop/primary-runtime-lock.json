@@ -1,8 +1,8 @@
 {
   "provenance": {
     "structure": "vendor/harness-checkout/scripts/primary-runtime/lock.json（上游 dsh 的同名锁：nodeVersion/pythonVersion/pythonRelease/targets[]/wheels[]/pythonPackages 字段名逐一对齐）",
-    "upstreamCommit": "477b4f420553e8a52c2fbccc464d7561b239c443",
-    "node": "packages/desktop/scripts/build-sidecar.mjs 的 PINNED_NODE_SHA256（nodejs.org/dist/v24.18.1/SHASUMS256.txt 逐字）；两表由 prepare-python-payload.test.mjs 锁步断言",
+    "upstreamCommit": "4878cdabd87d4041bdaff61d04c966883b9fd07a",
+    "node": "packages/desktop/scripts/build-sidecar.mjs 的 PINNED_NODE_SHA256（nodejs.org/dist/v24.18.1/SHASUMS256.txt 逐字）；两表由 prepare-python-payload.test.mjs 锁步断言。Node 载荷版本是独立轴：上游同 commit 的锁已到 24.21.0，本仓 registry 的 release.ts 条目明确不读上游 release 元数据，升级须单独裁决并重取 sha256",
     "python": "pythonVersion/pythonRelease/pythonTarget/pythonSha256/wheels 镜像上游同 commit 的锁（astral-sh/python-build-standalone release 20260901，同一构件坐标）；本仓尚未联网重下核对——首次真实构建腿会按此 sha256 fail-closed",
     "targets": "只登记本仓真实出货的平台（darwin arm64——x64 腿 2026-12 暂时移除，见 STATUS）。win-x64 与 linux 未列入：上游有 win-x64 目标，但本仓 Windows 尚未发布（design 23 外部门禁未闭），Linux 桌面同样待门禁",
     "wheels": "每 target 的 wheels[] 是平台相关轮子，顶层 wheels[] 是跨平台纯 py 轮子——与上游同分层"

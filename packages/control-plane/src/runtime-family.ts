@@ -17,7 +17,8 @@ export const RUNTIME_FAMILY_CORE: readonly string[] = [
 export const RUNTIME_FAMILY_OPT_IN_PATTERN = /^@deepseek-ai\/dsh-experimental-/
 
 /**
- * 允许出现在 F 里的官方 opt-in 包（rc.2 运行时锁文件闭包实测）。
+ * 允许出现在 F 里的官方 opt-in 包（当前 pin 的运行时锁文件闭包实测；pin 由
+ * `harness.commit` + `packages/desktop/vendor/dsh/pnpm-lock.yaml` 单一持有）。
  *
  * 事实来源：运行时根包 `@deepseek-ai/dsh` 把 opt-in 能力声明为自己的运行时依赖
  * （agent-team / voice-input / speech-to-text / auto-review 家族；其余名字由这些依赖边
@@ -36,6 +37,7 @@ export const RUNTIME_FAMILY_OPT_IN_ALLOWED: readonly string[] = [
   '@deepseek-ai/dsh-experimental-auto-review',
   '@deepseek-ai/dsh-experimental-client-ui-agent-team',
   '@deepseek-ai/dsh-experimental-client-ui-voice-input',
+  '@deepseek-ai/dsh-experimental-schedule-bundle',
   '@deepseek-ai/dsh-experimental-speech-to-text',
   '@deepseek-ai/dsh-experimental-speech-to-text-sensevoice',
   '@deepseek-ai/dsh-experimental-tool-agent-team',

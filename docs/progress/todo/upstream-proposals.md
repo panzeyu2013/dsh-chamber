@@ -8,7 +8,7 @@
 
 上游「当前会话」是页面级单键持久化，N-ctx宿主下跨实例污染：
 
-- `@deepseek-ai/dsh-api-session-controller`（pin `0.1.5-rc.2` 客户端半）`SessionRuntime` 构造里 `createSnapshotStore({}, { persist: { name: 'dsh.sessions.current' } })`（`packages/api/session-controller/src/client/sessions/service.ts:225-228`）；
+- `@deepseek-ai/dsh-api-session-controller`（旧 pin `0.1.5-rc.2` 的取证；第四类补丁已按当前 pin 重锚，见 design 09 §3.6）`SessionRuntime` 构造里 `createSnapshotStore({}, { persist: { name: 'dsh.sessions.current' } })`（`packages/api/session-controller/src/client/sessions/service.ts:225-228`）；
 - `@deepseek-ai/dsh-client-store` 的 `attachPersistence`（`packages/client/store/src/index.ts:146`）直接读写 `localStorage.getItem/setItem(name, …)`，无scope维度；
 - 投影时selection校验后回写或清空（`current === undefined` ⇒ `this.selection.set({})`，同文件 `:628-645`）。
 
@@ -208,20 +208,7 @@ fallback 与 `test/session-rows/session-row-state.test.ts` 里钉住它的契约
 分配并在重发间保持的 token）；或直接由宿主承担首帧期限（见 §4.3 的首帧期限诉求）——客户端加宽阶梯已主动退役（单档 30 s），
 上游落地后只剩客户端期限本身可再评估是否退役。
 
-## 9. `dsh-util-values` 的内建判定不得依赖引擎的源码文本
-
-现象：`hasIntrinsicConstructor`（`src/index.ts`）把 `Function.prototype.toString.call(constructor)` 的结果与单行模板
-`` `function ${name}() { [native code] }` `` 严格比较。JavaScriptCore/WKWebView 对**内建函数**打印多行文本
-（`function Object() {` + 换行 + `    [native code]` + 换行 + `}`）⇒ 该判定在 WebKit 里恒假 ⇒ `snapshotJsonValue` 对
-普通对象/数组返回 `undefined` ⇒ 流式会话在 raw chunk 校验处抛普通 `TypeError`，页面永久停驻 `loading`（间歇性：raw chunk
-只对 block-start/block-end/usage/finish 出现）。V8/Chromium 打印单行，故 Electron flavor 不受影响——这是引擎相关的宿主假设。
-
-一行修法：把同一比较改为空白归一后再比，例如
-``Function.prototype.toString.call(constructor).replace(/\s+/g, ' ') === `function ${name}() { [native code] }` ``；
-或改为不受引擎文本形态影响的判定（构造器名 + 原型身份 + 不可构造性）。本仓的两条临时载体（上游落地后一并删除）：① renderer 构建期的第三类 vendor 补丁覆盖 chamber 自建前端；② gateway 出口的 S0 头补丁之二（`packages/gateway/src/html-inject.ts`，design 17 §10.5）覆盖**代理的官方前端**（WebKit 浏览器 / 移动档）——两者都只做空白归一，语义一致。① 的登记：本仓已按前者落临时 vendor 补丁（design 09 §3.6 第三类；
-删除条件 = 上游携带引擎无关判定）。接受的取舍：仅空白差异的伪造函数会通过空白归一，名字与原型身份检查仍在。
-
-## 10. 桌面专属客户端家族的门应以宿主能力为准（非桌面宿主上的整页浮层劫持）
+## 9. 桌面专属客户端家族的门应以宿主能力为准（非桌面宿主上的整页浮层劫持）
 
 现象（chamber 0.4.0-beta.6 实测，Electron 与 Swift 两 flavor 同源页面均复现）：`dsh-client-ui-settings-account`
 的 apply 门是 `'dshDesktop' in globalThis`（载体**存在性**），而 chamber 两 flavor 为官方快捷键/更新座位必须
@@ -237,7 +224,7 @@ fallback 与 `test/session-rows/session-row-state.test.ts` 里钉住它的契约
 夺屏。chamber 侧现状 = 覆盖集跳过（design 09 §3.5 有意跳过名单③），上游落地后该覆盖条目可删（同处已写退出
 条件）。
 
-## 11. bundle rev 应由内容派生（跨宿主/跨安装稳定）
+## 10. bundle rev 应由内容派生（跨宿主/跨安装稳定）
 
 现象：pin 的 `dsh-client-modules` 用 `artifactRevision` 对 bundle 文件求
 `sha1(mtimeMs, ctimeMs, size)`（前 12 hex），并把它写回被服务 bundle 的 `sourceMappingURL`。两个后果：
@@ -251,4 +238,16 @@ rev 是文件元数据派生的构建标识；② rev 只在**重建/替换**bun
 
 chamber 侧现状 = 中性诊断文案（design 09 §3.5）+ 一轮有界恢复。退出条件：上游落地后，删 design 09 §5 的
 「vendor 侧根治」开放项与 §3.5 的恢复轮必要性说明（保留超时/迟到语义）。
+
+## 11. 座席声明应可转移：注册所有者与渲染者分离
+
+现象（chamber N-ctx 壳实测）：`sidebar.session.row.leading` / `sidebar.session.row.hover` 只能由**注册所有者**在其 `children` 表里声明，
+而实际渲染它们的是另一份行组件。上游 ui-workspace 把两座席签进自己的 workspace-browser 注册，同时只有该注册的 `Rows.tsx` 会渲染它们；
+chamber 用自建多来源侧栏渲染会话行（不挂载官方 workspace-browser），既不能转交声明、也不能用未声明的座席——重复声明按上游语义抛错，
+于是官方 schedule 插件的行标记与悬停卡任务列表在 chamber 恒不渲染。chamber 现行解法 = 构建期删掉上游注册里的两行，再由 chamber 侧栏声明并渲染
+（vendor 补丁第四类第二形态，design 09 §3.6）。
+
+上游最小改法（任一）：① 座席声明可转移/可委托——所有者能声明「由 X 渲染」（`register` 返回可转交的声明句柄，或声明时指定 renderer 而不绑定自身行实现）；
+② 把这类行座席提升为**页面级**座席（无所有者，任何会话行实现都可渲染；同 id 声明幂等合并）。
+收益：任何自建行/自建侧栏的宿主壳都能渲染官方插件的行贡献，不必构建期改写上游注册；chamber 侧该 vendor 补丁可随之退役。
 

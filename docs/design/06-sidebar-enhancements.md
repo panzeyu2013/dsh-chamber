@@ -58,8 +58,8 @@
    （**本地命中仍显示**——内容搜索失败不吞本地元数据命中；文案为「仅显示名称匹配」）；
   空 → `search.noMatches`；`hasMore` → `search.hasMore`（n=20 取常量）。
   **结果树可访问名**：`role="tree"` + `search.results.aria`
-  （浏览树同批补名，§7 a11y）；命中行在标题后与树行同样渲染活动定时任务标记
-  （§4.3）。
+  （浏览树同批补名，§7 a11y）；命中行在标题后渲染活动定时任务标记（上游 search 变体同址；
+  会话行座席在标题之前，§4.3）。
 - **取舍**：聚合拉取失败（`aggregateError`）的来源隐藏搜索入口（标题无法
   解析，与"错误行替换列表"一致）；已挂载来源标题随 store 事件即时更新；
   仅未挂载或 reconnect baseline 不完整的来源可能在 30s 兜底窗口内暂显兜底名。
@@ -625,7 +625,10 @@
   与降级保行）、`packages/renderer/src/app-hooks/use-session-facts-lifecycle.ts`
   （`stepRowHint` 是 `facts-row-hint` 的唯一 guard 调用点；两个 teardown 调 `withdrawSource`）、
   `SidebarRoot.tsx` + `sidebar-chamber.module.css`（dot 状态类 + 高亮 +
-  runningSubagents 分支 + `.scheduleIndicator` + `.railDotButton`）、
+  runningSubagents 分支 + `.scheduleIndicator` + `.railDotButton`）、`ServerSectionRows.tsx`/`RowHoverCard.tsx`
+  （A1 座席渲染：行首 `renderSlot('sidebar.session.row.leading')` 以自有 `.scheduleIndicator` 为 fallback、悬停卡内容位
+  渲染 `sidebar.session.row.hover`；两席由本仓侧栏的 `children` 声明，上游注册里的两行由 vendor 补丁 13 号删除——
+  座席所有权转移，design 09 §3.6 第四类第二形态）、
   `packages/dsh-chamber-client-core/src/derive.ts`（`hasActiveScheduleOf`；`hasActiveSchedule` 进
   `instanceSnapshotSignature`；goal 的 `parseGoalFact`/`retainGoalFacts`/
   `applyGoalActivation`/`goalFactSignature` 与 overlay 填补）、

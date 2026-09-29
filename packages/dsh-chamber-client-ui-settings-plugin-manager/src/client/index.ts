@@ -9,6 +9,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { configLedgerSource } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/config-ledger.ts'
 import { en, zh } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/locales.ts'
 import { PluginManagerController } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/manager-store.ts'
+import { PluginRefreshToast, type PluginRefreshToastFace } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/PluginRefreshToast.tsx'
 import { createNavigationStore } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/navigation-store.ts'
 import type { PluginManagerFace } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/manager-store.ts'
 import type { PluginManagerLocaleKey } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/locales.ts'
@@ -71,6 +72,19 @@ export function apply(ctx: ClientContext): void {
   const label = ctx.locale.bind(TAB_NS)
   const resolveText: PluginManagerFace['resolveText'] = text =>
     (ctx.locale as unknown as { resolveText: PluginManagerFace['resolveText'] }).resolveText(text)
+  // Upstream's refresh toast is the plugin manager's own shell.overlay seat: the
+  // face is hoisted so the settings page and the overlay toast share one
+  // controller face (upstream registers the same pair from one place).
+  const face = controller.inject(configLedger, resolveText)
+  ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+    name: 'shell.overlay',
+    id: 'plugin-manager.refresh-toast',
+    locale: MANAGER_NS,
+    inject: (): PluginRefreshToastFace => ({
+      hooks: { pluginManager: face.hooks.pluginManager },
+      dismissNotice: face.dismissNotice,
+    }),
+  }, PluginRefreshToast as never))
   let openPackage: ((packageName: string) => void) | undefined
   ctx.effect(() => ctx.reflect.provide('pluginNavigation', {
     openBundle: (packageName: string) => { openPackage?.(packageName) },
@@ -89,7 +103,7 @@ export function apply(ctx: ClientContext): void {
       label: () => label('tab'),
       locale: MANAGER_NS,
       store,
-      inject: () => controller.inject(configLedger, resolveText) as PluginManagerFace,
+      inject: () => face as PluginManagerFace,
       children: MANAGER_CHILDREN,
     }, EmbeddedPluginManagerPage as never)
   })

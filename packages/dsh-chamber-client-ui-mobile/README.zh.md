@@ -394,7 +394,7 @@ pnpm run test:mobile
 ## 锚点基线
 
 官方 dsh DOM 实测（CDP 审计在 **v0.1.5-alpha.2** 完成，并在 **v0.1.5-rc.2**
-重锚）——下列锚点在 rc.2 树中曾全部成立；当前 pin（v0.1.7-rc.2）下严格锚点门对 47 条属性
+重锚）——下列锚点在 rc.2 树中曾全部成立；当前 pin（v0.2.0-rc.1）下严格锚点门对 47 条属性
 锚点与两个 build-time CSS-module hash token 复验零命中 0
 （`verify-mobile-anchors.mjs --require-anchor-root`）；两个 hash token 已按被服务的 rc.2 产物
 重锚，零命中现为**硬失败**（见下）；alpha.2 → rc.1 的客户端改动（`ui-sidebar-*`
@@ -409,7 +409,7 @@ pnpm run test:mobile
 设置对话框渲染在侧边栏 DOM 内（无 body portal），抽屉打开态必须用
 `transform: none`（identity transform 仍是 containing block）。
 
-当前 vendored 基线为 **v0.1.7-rc.2**（harness pin `477b4f4205`；单一来源
+当前 vendored 基线为 **v0.2.0-rc.1**（harness pin `4878cdab`；单一来源
 `harness.commit`）。历史审计记录：上述锚点已对 alpha.2 源码复核（2026-09 重锚），
 并在 v0.1.5-rc.2 上复验成立（rc.1 → rc.2 的客户端改动见上，
 不触及这些锚点与本插件的叠层对位），复核同时确认：composer seat 是

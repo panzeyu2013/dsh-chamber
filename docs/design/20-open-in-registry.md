@@ -65,7 +65,7 @@
    `iconUrl` 是根相对路径（`src/client/index.ts:50`）——N-ctx 壳下页面 origin 是控制面 ⇒ 探针/图标
    404 ⇒ 只有拉进复合（covered + factory）+ 构建期 vendor 补丁与 subpath seam 才能修好。
 3. **效果依赖实例 runtime 的版本**：官方 open-in 行自 **dsh-v0.1.3-alpha.2** 才存在
-   （`packages/renderer/src/chamber-covered.ts#=literal:The official open-in client row is NOT skipped any more`）；本仓**运行时锚与源码 pin 都已是 0.1.7-rc.2**
+   （`packages/renderer/src/chamber-covered.ts#=literal:The official open-in client row is NOT skipped any more`）；本仓**运行时锚与源码 pin 都已是 0.2.0-rc.1**
    （单一来源 `packages/desktop/vendor/dsh/pnpm-lock.yaml`，`bundle-dsh.mjs:79` 兜底同值）⇒ 非主要理由。fork & supersede 不依赖该行。
 
 **补注（第 2 条的机器级复活）**：上游那条"目录/图标由承载页面的 host 回答"的不变量，在**机器级**上仍然是对的——只是本壳有 N 个 host，需要点名"哪一个是机器 host"。答案是把页面上的机器 host 钉为**本地实例**：
@@ -420,7 +420,7 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
   `docs/checklists/upstream-touchpoints.md` §2.5），获三层保护：**C1** 未登记差异即硬失败、**C3** 每个上游
   文件必须有 pure/patched/own/dropped 分类（上游新增文件漏分类即红）、**C2** tag 重放差异报告自动纳入本
   fork 面（advisory）。**版本锚已豁免**：C5 规则是 `fork/package.json.version == 上游同文件版本`——三个
-  既有 copy 包即如此携带上游版本（实测随 pin，当前 0.1.7-rc.2），seed 包随 chamber 发版 bump（实测 0.2.4，与
+  既有 copy 包即如此携带上游版本（实测随 pin，当前 0.2.0-rc.1），seed 包随 chamber 发版 bump（实测 0.2.4，与
   `dsh-runtime`/其他 seed 一致）；registry 每条登记 `versionAnchor: 'upstream' | 'chamber'`（既有三条 =
   upstream、本 fork = chamber），C5 只比对 `upstream`；脚本头注、C5 日志文案与触点表 §4 与之一致。实测：
   `✓ [seed-open-in] C1/C3: pure=3 patched=4 own=9 dropped=6`、`✓ C7 … openInApp/probe`、
@@ -435,11 +435,11 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
   模式面向 agent 工具调用、不改变宿主插件拉起应用的既有行为（官方宿主半同），但需实机确认首次拉起不弹
   权限门；
 - **runtime 依赖面**：本 fork 需要 `@deepseek-ai/dsh-native-command`
-  （`canOpenNativePath` / `openNativePath` / `runNativeCommand` / `NativeCommandRunner`；rc.2 起还包括
+  （`canOpenNativePath` / `openNativePath` / `runNativeCommand` / `NativeCommandRunner`；0.1.7-rc.2 起还包括
   Linux desktop-entry/icon helper `desktopEntryFields`/`desktopDataDirectories`/`desktopApplicationIcon`）
   与 `@deepseek-ai/dsh-subprocess`（`scrubbedParentEnv`）；`runNativeCommand` 是模块导入而非注入服务，
-  故只需 `subprocess` 一个注入（供 `resolveExecutable`）。**最低 runtime = 本批 pin（0.1.7-rc.2）**：
-  旧内置 runtime 不再声明兼容（rc.2 新导出在旧 runtime 不存在，seed 装载期会 loud 失败——刻意不跳过）；
+  故只需 `subprocess` 一个注入（供 `resolveExecutable`）。**最低 runtime = 0.2.0-rc.1（已抬；原 WebKit 归一化载体随之删除，见 design 17 §10.5）**：
+  旧内置 runtime 不再声明兼容（0.1.7-rc.2 起的新导出在更旧 runtime 不存在，seed 装载期会 loud 失败——刻意不跳过）；
 - **未实机验证项**：真实 bundle 图标在四种前端（Finder/Terminal/iTerm/Cursor）下的一致性、无应用环境
   （Linux headless/容器）下的空目录表现、`localOnly` 行在插件管理页的呈现；
 - **实机验收剩余**：macOS Finder/VS Code 实际拉起、按钮 + 下拉在 vendor 头部 utilities 行的定位/层叠、
