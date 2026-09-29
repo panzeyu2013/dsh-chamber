@@ -92,6 +92,7 @@ export const zh = {
   // 行级图标钮的无障碍名按本仓政策参数化行名（见上方 `action.newSession.aria` 的说明）；
   // 上游同座席用的是行菜单同款泛化名，本仓在 design 06 §7 记为有意分歧。
   'action.archive.aria': '归档会话“{name}”',
+  'action.orphanedCleanup.aria': '清理“{name}”的工作区注册（文件夹已不存在）',
   // 归档活动确认（官方 SessionArchiveConfirmDialog 的逐字文案，desc 除外：chamber 尚无
   // 「全部对话（显示已归档）」筛选/恢复入口，因此不承诺可恢复，只陈述停止后果）。
   'archive.confirm.title': '停止并归档此会话？',
@@ -269,6 +270,7 @@ export const en = {
   'actions.unpin': 'Unpin',
   'row.pinned': 'Pinned',
   'action.archive.aria': 'Archive “{name}”',
+  'action.orphanedCleanup.aria': 'Clean up the workspace registration of “{name}” (its folder is gone)',
   'archive.confirm.title': 'Stop and archive this session?',
   'archive.confirm.desc': '“{title}” still has work in progress. Archiving stops it first, and the stopped work will not resume on its own.',
   'archive.confirm.activity': 'Work that will be stopped',

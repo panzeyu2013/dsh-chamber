@@ -46,6 +46,8 @@ export const GROUPS = {
     'test/session-rows/seat-position.test.ts',
     // 行动作簇：kebab + 独立归档钮（上游 ArchiveSessionRowButton 的形态移植；源码文本 + 字典值锁）。
     'test/session-rows/session-row-actions.test.ts',
+    // 孤儿 workspace 行的注册清理入口：常驻清理钮 + 徽标共用 opener（源码文本 + 字典值锁）。
+    'test/session-rows/workspace-orphan-cleanup.test.ts',
     // (facts 身份, running, stale) → 单槽记忆化的纯行为测（9-12 次读数 → 1 次派生）。
     'test/session-rows/row-state-cache.test.ts',
     // goal 三值事实：解析/最后已知/activation 合并/身份签名（design 19 §3.2.1）。

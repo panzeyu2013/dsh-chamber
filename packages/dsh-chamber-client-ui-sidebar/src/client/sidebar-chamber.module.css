@@ -1499,7 +1499,9 @@
 }
 
 /* Plan A: the workspace's path no longer exists (externally deleted
-   worktree left an orphaned registration). Doubles as the cleanup button.
+   worktree left an orphaned registration). The badge is the resident status
+   marker and ONE of the two cleanup entries (the other is .orphanCleanup
+   below, which a worktree row needs because it has no kebab).
    Warn capsule = the official Tag's warning tone (ui-primitives/Tag.module.css
    `[data-tone='warning']`): ONE token tints both fill and text, so a palette
    change moves them together and neither needs a second token. */
@@ -1521,6 +1523,16 @@
 .orphanBadge:hover {
   background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
   filter: brightness(1.08);
+}
+
+/* The worktree-row half of the same cleanup: a conventional trash glyph beside
+   the badge (.actionIcon box + the shared danger hover ink). RESIDENT, never
+   inside .rowActions: once the worktree record is gone the Git occupant mounts
+   nothing, so this button is the row's only delete entry and hover must not be
+   the price of finding it. Warn ink at rest so it reads as part of the Missing
+   alert; the .actionIconDanger hover rule (higher specificity) owns pointer ink. */
+.orphanCleanup {
+  color: var(--dsw-alias-state-warn-primary);
 }
 
 /* Add-workspace affordance: a `+` icon button in the SOURCE header (next to

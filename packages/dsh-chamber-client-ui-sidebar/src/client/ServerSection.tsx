@@ -695,18 +695,52 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                   <span className={clsx(cc.workspaceTitle, isWorktree && cc.workspaceTitleGit)}>
                                     {workspace.ungrouped ? t('list.ungrouped') : workspace.title}
                                   </span>
-                                  {getWorkspaceGitFlag(server.id, workspace.id)?.orphaned === true && (
+                                  {gitFlag?.orphaned === true && (
                                     // The workspace's path no longer exists (externally
-                                    // deleted worktree left a ghost). The badge doubles as
-                                    // the cleanup entry: an orphaned WORKTREE keeps its row
-                                    // but has no kebab, so the badge opens the delete confirm.
+                                    // deleted worktree left a ghost). The badge is the
+                                    // resident status marker AND one of the two cleanup
+                                    // entries; both call the same opener.
                                     <button
                                       type="button"
                                       className={cc.orphanBadge}
                                       title={t('confirm.deleteOrphan', { title: workspace.title })}
-                                      onClick={() => onDeleteWorkspace(server, workspace.id, workspace.title)}
+                                      onClick={() => {
+                                        if (suppressClickRef.current) return
+                                        onDeleteWorkspace(server, workspace.id, workspace.title)
+                                      }}
                                     >
                                       {t('list.orphaned')}
+                                    </button>
+                                  )}
+                                  {gitFlag?.orphaned === true && isWorktree
+                                    && !workspace.ungrouped && !workspace.synthetic && (
+                                    // The conventional half of the same cleanup, and the
+                                    // one that matters here: a worktree row has no kebab
+                                    // (design 08 §3.2), and the Git occupant renders
+                                    // NOTHING once the worktree record is gone (no snapshot
+                                    // row -> no Git-side delete control), so without this
+                                    // button the "Missing" capsule was the row's only exit.
+                                    //
+                                    // Resident ON PURPOSE - never inside the hover cluster:
+                                    // a broken row must not hide its only delete behind
+                                    // hover (design 06 §7). Same opener as the badge, so the
+                                    // orphan confirm copy and the single-Modal gate apply.
+                                    //
+                                    // Flag history can be absent (cold start AFTER the record was
+                                    // pruned): isWorktree then falls back to false, this button
+                                    // does not render, and the row keeps its kebab instead - the
+                                    // entry survives, only the row's shape differs (design 06 §11).
+                                    <button
+                                      type="button"
+                                      className={clsx(cc.actionIcon, cc.actionIconDanger, cc.orphanCleanup)}
+                                      title={t('confirm.deleteOrphan', { title: workspace.title })}
+                                      aria-label={t('action.orphanedCleanup.aria', { name: workspace.title })}
+                                      onClick={() => {
+                                        if (suppressClickRef.current) return
+                                        onDeleteWorkspace(server, workspace.id, workspace.title)
+                                      }}
+                                    >
+                                      <IconTrashOutlineRegular size={14} />
                                     </button>
                                   )}
                                   {visibleSessionCount > 0 && (
