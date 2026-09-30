@@ -250,18 +250,47 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
     completedStore.setSource(sourceId, next.arms)
   }, [])
   /**
-   * 步进的 never-throw 出口：异常落环 + loud 一次（同旧纪律），控制流交给调用方。
-   * 重入闸：本步末尾写 completedStore（useSyncExternalStore 订阅面），写入触发的同步渲染
-   * 若再回调本步即成 React #185 嵌套环；闸按 id 去重、排到微任务（见 step-gate.ts）。
+   * 完成修正臂的 never-throw 出口 + 它的重入闸（本步末尾写 completedStore，见 step-gate.ts）。
    */
-  const stepGateRef = useRef<StepGate | null>(null)
+  const stepArmGateRef = useRef<StepGate | null>(null)
   const stepArmGuardedRef = useRef<(sourceId: string) => void>(() => {})
   stepArmGuardedRef.current = (sourceId: string): void => {
     factsStepGuard.guard(sourceId, 'completion-arm', () => stepArmNow(sourceId))
   }
-  stepGateRef.current ??= createStepGate(sourceId => { stepArmGuardedRef.current(sourceId) })
+  stepArmGateRef.current ??= createStepGate(sourceId => { stepArmGuardedRef.current(sourceId) })
   const stepCompletionArmFor = useCallback((sourceId: string): void => {
-    stepGateRef.current?.request(sourceId)
+    stepArmGateRef.current?.request(sourceId)
+  }, [])
+  /**
+   * facts 应用的**每来源重入闸**（React #185 环的唯一收口，新点）。
+   *
+   * WHY：`apply-session-facts` 末尾写 factsStore（`useSyncExternalStore` 订阅面），写入触发的
+   * 同步渲染若在同一调用栈再回调本步即成嵌套环，React 以 #185 中止、异常被守卫吞掉后**整拍作废**
+   * （历史证据见 `dsh-chamber.authority-log.v1`）。
+   *
+   * **闸只包 apply 一步，绝不包 reconcile/arm**：`pendingOutboxClaimsRef` 是**页级单格**
+   * （apply 写、reconcile 取并清），把 reconcile 延后会把「写-清」拆到两个栈，导致 A/B 两来源
+   * 同任务的认领互相覆盖/误清、让行门失效 ⇒ 同一完成可双横幅（2026-09-30 R1/R2/R4 复核发现）。
+   * 因此 reconcile 保持 inline guarded、arm 保持自己的闸，两者语义与改动前逐字一致。
+   *
+   * 载荷：重入被延后时只保留**最新**一份（快照累积且游标单调，见 session-facts-source），
+   * 故延迟补跑不会用旧帧覆盖新帧；非重入调用仍同步执行（闸契约）。
+   */
+  const applyGatesRef = useRef<Map<string, StepGate>>(new Map())
+  const pendingFactsRef = useRef<Map<string, { snapshot: SessionFactsSnapshot | undefined }>>(new Map())
+  const runApplyRef = useRef<(sourceId: string) => void>(() => {})
+  runApplyRef.current = (sourceId: string): void => {
+    const entry = pendingFactsRef.current.get(sourceId)
+    if (entry === undefined) return
+    pendingFactsRef.current.delete(sourceId)
+    factsStepGuard.guard(sourceId, 'apply-session-facts', () => applySessionFactsNow(sourceId, entry.snapshot))
+  }
+  const applyGateFor = useCallback((sourceId: string): StepGate => {
+    const existing = applyGatesRef.current.get(sourceId)
+    if (existing !== undefined) return existing
+    const created = createStepGate(() => { runApplyRef.current(sourceId) })
+    applyGatesRef.current.set(sourceId, created)
+    return created
   }, [])
   const pumpNotificationsRef = useRef<() => void>(() => {})
   const notificationRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -516,7 +545,7 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
     })
   }, [emitSessionNotification, persistCompletionLedger, factsStore, completionObservationRef, completeLedgerRef, sourceLifecyclesRef, bootToken, bootVerdict])
 
-  /** never-throw 出口：收敛异常落环 + loud 一次，控制流交给调用方继续（apply 出口仍会重算派生）。 */
+  /** never-throw 出口（**不经闸**：它必须与 apply 的认领写入同栈配对，见上方 applyGatesRef 注释）。 */
   const reconcileCompletions = useCallback((sourceId: string): void => {
     factsStepGuard.guard(sourceId, 'reconcile-completions', () => reconcileCompletionsNow(sourceId))
   }, [reconcileCompletionsNow, factsStepGuard])
@@ -572,13 +601,15 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
   }, [reconcileCompletions, stepCompletionArmFor])
 
   /**
-   * facts 快照的**唯一入口**（gateway 订阅 / 无壳观察者 / dropSession 共用）：never-throw ——
-   * 应用/收敛异常落环 + loud 一次；listener 因此不可能把异常抛进 session-facts-source /
-   * source-mux-facts 的 emit 环（SSE/WS 泵不被 listener 打死，也无法逃成 unhandled rejection）。
+   * facts 快照的**唯一入口**（gateway 订阅 / 无壳观察者 / dropSession 共用）：登记最新快照 +
+   * 经本来源闸请求应用。never-throw 与重入语义都在闸内（runFactsStepRef）——listener 因此
+   * 不可能把异常抛进 session-facts-source / source-mux-facts 的 emit 环（SSE/WS 泵不被
+   * listener 打死，也无法逃成 unhandled rejection）。
    */
   const applySessionFacts = useCallback((sourceId: string, snapshot: SessionFactsSnapshot | undefined): void => {
-    factsStepGuard.guard(sourceId, 'apply-session-facts', () => applySessionFactsNow(sourceId, snapshot))
-  }, [applySessionFactsNow, factsStepGuard])
+    pendingFactsRef.current.set(sourceId, { snapshot })
+    applyGateFor(sourceId).request('apply')
+  }, [applyGateFor])
 
   /**
    * 来源撤回（唯一实体，按 provenance 分域；C1）：
@@ -609,6 +640,10 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
     }
     delete prevRunningRef.current[sourceId]
     completionObservationRef.current.delete(sourceId)
+    // 撤回即作废待排空 facts：否则闸活跃期内登记的快照会在 dropSession 之后跑，
+    // 把已删来源的 facts 行复活（2026-09-30 R1 复核 F2）。
+    pendingFactsRef.current.delete(sourceId)
+    applyGatesRef.current.delete(sourceId)
     completeLedgerRef.current.withdraw(sourceId)
     persistCompletionLedger(true)
     stepCompletionArmFor(sourceId)

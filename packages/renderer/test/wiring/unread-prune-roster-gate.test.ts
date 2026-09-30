@@ -602,9 +602,11 @@ test('completion-arm wiring: the arm step is the one gate-protected, never-throw
   assert.ok(step.includes('completedStore.setSource(sourceId, next.arms)'), 'the step writes the one completed store')
   // 重入闸（React #185）：实体只经 createStepGate 补跑，公开入口是 request。
   assert.ok(hook.includes('createStepGate(sourceId => { stepArmGuardedRef.current(sourceId) })'),
-    'the rename-detected step gate must wrap the arm entity')
+    'the arm keeps its own re-entrancy gate')
+  assert.ok(hook.includes('const applyGatesRef = useRef<Map<string, StepGate>>(new Map())'),
+    'apply gets a per-source gate of its own')
   const entry = bracedBlockFrom(hook, 'const stepCompletionArmFor = useCallback(')
-  assert.ok(entry.includes('stepGateRef.current?.request(sourceId)'),
+  assert.ok(entry.includes('stepArmGateRef.current?.request(sourceId)'),
     'the public entry must go through the re-entrancy gate, never call the entity synchronously')
   // never-throw 出口：异常落环 + loud 一次，控制流交给调用方（同 reconcile/apply）。
   assert.ok(hook.includes("factsStepGuard.guard(sourceId, 'completion-arm', () => stepArmNow(sourceId))"),
@@ -767,19 +769,30 @@ test('never-throw wiring: reconcile / apply / arm and every facts listener bound
   const health = readFileSync(
     fileURLToPath(new URL('../../src/facts-health.ts', import.meta.url)), 'utf8')
 
-  // ① 完成修正臂：公开入口过重入闸，闸的 step 内是统一包装，实体裸奔。
+  // ① 完成修正臂：公开入口过它自己的重入闸，闸步骤内是统一 never-throw 包装，实体裸奔。
   assert.ok(bracedBlockFrom(hook, 'const stepCompletionArmFor = useCallback(')
-    .includes('stepGateRef.current?.request(sourceId)'),
-  'the arm entry must go through the re-entrancy gate (React #185)')
-  assert.ok(hook.includes("factsStepGuard.guard(sourceId, 'completion-arm', () => stepArmNow(sourceId))"),
-    'the gate step is still the one never-throw wrapper')
-  // ② 收敛与 facts 应用：实体与 never-throw 出口分离，对外（listener）只暴露出口。
+    .includes('stepArmGateRef.current?.request(sourceId)'),
+  'the arm entry must go through its re-entrancy gate (React #185)')
+  // ② 收敛**不经闸**（必须与 apply 的认领写同栈配对）；apply 过每来源闸。
   assert.ok(hook.includes('const reconcileCompletionsNow = useCallback('))
   assert.ok(bracedBlockFrom(hook, 'const reconcileCompletions = useCallback(')
-    .includes("factsStepGuard.guard(sourceId, 'reconcile-completions'"))
+    .includes("factsStepGuard.guard(sourceId, 'reconcile-completions'"),
+  'reconcile must stay the inline guarded step: gating it splits the page-level outbox claims write/consume across two stacks')
+  assert.ok(!hook.includes("request('reconcile-completions')"),
+    'reconcile must never be requested through a gate (cross-source claims splitting)')
   assert.ok(hook.includes('const applySessionFactsNow = useCallback('))
   assert.ok(bracedBlockFrom(hook, 'const applySessionFacts = useCallback(')
-    .includes("factsStepGuard.guard(sourceId, 'apply-session-facts'"))
+    .includes('pendingFactsRef.current.set(sourceId, { snapshot })'),
+  'apply must register the latest snapshot before requesting the gate')
+  assert.ok(bracedBlockFrom(hook, 'const applySessionFacts = useCallback(')
+    .includes("applyGateFor(sourceId).request('apply')"))
+  // ②′ apply 闸步骤体：唯一 never-throw 收口，且只排空最新快照一次。
+  const gateStep = bracedBlockFrom(hook, 'runApplyRef.current = ')
+  assert.ok(gateStep.includes("factsStepGuard.guard(sourceId, 'apply-session-facts'"),
+    'the apply gate step keeps the never-throw boundary')
+  assert.ok(gateStep.includes('pendingFactsRef.current.get(sourceId)')
+    && gateStep.includes('pendingFactsRef.current.delete(sourceId)'),
+  'apply must drain the latest pending snapshot once (coalesce, never stale)')
   assert.ok(hook.includes('guardStep: factsStepGuard'), 'the hook exposes the one guard to the bridge')
   // ③ runtime 上报：桥的 listener body 是 guarded 的本地实现。
   assert.ok(bridge.includes('const handleRuntimeReport: RuntimeReportListener ='))
@@ -817,7 +830,7 @@ test('never-throw wiring: reconcile / apply / arm and every facts listener bound
     assert.equal(source.split(needle).length - 1, 1, '每步骤恰好一个 guard 调用点: ' + step)
   }
   for (const marker of [
-    'stepArmGuardedRef.current = (sourceId: string): void => {',
+    'runApplyRef.current = ',
     'const reconcileCompletions = useCallback(',
     'const applySessionFacts = useCallback(',
   ]) {
