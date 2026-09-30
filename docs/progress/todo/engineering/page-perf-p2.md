@@ -9,12 +9,12 @@
 
 ## 1. 侧栏 T2：更细的上下文拆分与按来源缓存
 
-**证据（代码）**：sidebar 的行状态把 menuOpen/renaming/rowErrors 与 43 字段 ctxValue 放在同一条
+**证据（代码）**：sidebar 的行状态把 menuOpen/renaming/rowErrors 与全量字段 ctxValue 放在同一条
 更新通道上，任何一处的交互都会走到全部 ServerSection 与全部行；搜索通道（client-core 的
 search-state.ts）每个按键立即 notify，menus.ts 与 ServerSection.tsx 都订阅它，所以一次键入会
 重渲染所有壳的全部行；sessionsOf/orderedWorkspaces/dropEnv 每次渲染按来源重算。
 
-**已知前置（2026-02 落地时记录的实测缺口）**：T1 已给 ctxValue 加 useMemo（43 字段逐项覆盖），
+**已知前置（2026-02 落地时记录的实测缺口）**：T1 已给 ctxValue 加 useMemo（全量字段逐项覆盖），
 但各 hook 提供的动作回调（toggleMenu/closeMenu/commitSessionDrag/onNewSession 等）目前仍是每次渲染
 重建的普通函数，因此 ctxValue 只在回调身份恰好不变时命中；要拿到完整收益需先把这些回调 useCallback 化。
 

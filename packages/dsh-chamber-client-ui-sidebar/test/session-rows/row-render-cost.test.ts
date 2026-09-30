@@ -9,7 +9,7 @@
  *    （now 会让 memo 恒失效），悬停卡改成 open 时自取 Date.now()；
  * 2. 行的 13 处状态读数全走 reader，reader 内部共用 ONE memo 槽：
  *    (facts 身份, session.running, stale) 相同即同一次 sessionRowState 派生；
- * 3. SidebarRoot 的 ctxValue 走 useMemo 且 49 个字段逐项进依赖数组；
+ * 3. SidebarRoot 的 ctxValue 走 useMemo 且每个状态字段逐项进依赖数组（key 集合与 deps 动态对账）；
  * 4. 空 query 不建搜索快照、空 rowErrors 不扫全表，短路都在调用点。
  *
  * Run directly: node test/session-rows/row-render-cost.test.ts
