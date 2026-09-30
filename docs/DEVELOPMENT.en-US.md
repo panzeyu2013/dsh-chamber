@@ -193,7 +193,7 @@ scripts/
   gates/                    Per-push repository gates (run-checks entry + verify-* + CI classification + workflow gates)
   release/                  Release chain (preflight/semver/artifacts, workflow policy, packaging-manifest lockstep)
   upstream/                 Upstream pin and touchpoints (update-vendor, pin preflight, registry.json single source + generated views,
-                            C1-C15 touchpoint gates, symbol-anchor + legacy-anchor budget gates, C8 artifact gate)
+                            the full touchpoint gate, symbol-anchor + legacy-anchor budget gates, C8 artifact gate)
   perf/                     Performance measurement toolbox (boot/switch/eval/measure-ui/disk-walk + data/)
   gui-acceptance/           GUI acceptance toolbox (probe/walkthrough/mobile-walkthrough/checks)
                             (classification rules and wiring discipline: scripts/README.md)
@@ -216,8 +216,8 @@ vendor/
 |`pnpm run build:renderer`|Build the dsh-frontend bundle|
 |`pnpm run build:host-graph`|Build the host-graph package (esbuild)|
 |`pnpm run build:host-git`|Build the in-instance Git worktree host package (esbuild)|
-|`pnpm run build:host-packages`|Build host-graph, then host-git-worktree|
-|`pnpm run build:desktop`|Two host packages + renderer + control-plane compile/two-package copy + preload + dsh bundling|
+|`pnpm run build:host-packages`|Build the four host packages (graph / git-worktree / archive-cleanup / open-in), in order|
+|`pnpm run build:desktop`|Four host packages + renderer + control-plane compile/host-package copy + preload + dsh bundling|
 |`pnpm run typecheck:git`|Type-check the Git worktree client plugin|
 |`pnpm run typecheck:host-git`|Type-check the in-instance Git worktree host package|
 |`pnpm run test:git`|Run the Git worktree client-plugin tests|

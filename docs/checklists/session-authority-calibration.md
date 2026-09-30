@@ -44,7 +44,7 @@
 
 - A/B/D：位在「probe 期限 + 一次 N=2 读 + 写回自校验」内掉落；通知恰好一条、无重复。
 - C：无 `correct` / `complete` / reconnect；`progressStamp` 前进（健康裁决）。
-- 每个 running 时段不超过配额；无 reconnect 风暴（每来源每小时 reconnect ≤ maxReconnects）。
+- 每个 running 时段不超过配额；无 reconnect 风暴（每来源在配额窗口内 reconnect ≤ `maxReconnects`，冷却 `reconnectCooldownMs`；窗口与上限的单一来源 = `packages/dsh-stream-state/tables.json` 的 `ladders.authority`）。
 - E：自然掉落路径不出现多余写回。
 - 事故后能从控制面日志回读 A/B 的断开行，并能从 ring/console 回读 authority 动作。
 

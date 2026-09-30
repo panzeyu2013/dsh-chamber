@@ -3,13 +3,15 @@
 > 把chamber依赖的上游dsh从当前pin升到目标tag（形如 `dsh-vX.Y.Z-<stage>.N`）。核心约束（AGENTS.md）：**只**改chamber侧，不动dsh内容（vendor/submodule源码零修改）。命令前先 `export PATH="$HOME/.nvm/versions/node/v24.20.0/bin:$PATH"`。
 >
 > 只写可复用流程：升级叙述写 `CHANGELOG.md` 发布节，仍open的门禁写 `STATUS.md`；触点结构与每tag维护循环见同目录 [`upstream-touchpoints.md`](upstream-touchpoints.md)（§7）。
+>
+> **分工**：本文件的 §0–§7 是**阶段序**（动 pin 前 → 动 pin → rebase → 锁文件 → 运行时 → 回归 → 文档）；`upstream-touchpoints.md` §7 是**触点序**（预检 + 8 步）——同一循环的两个视图，两份都要走完（预检/审计同在动 pin 前，回归/文档收口同在动 pin 后）。判据的散文与登记在 `upstream-touchpoints.md` §6 与 `scripts/upstream/registry.json`（单一机器来源）；新增检查项**一律落在判据侧**（criteria 表 + verifier + 负例测试），本文只在 §0/§6 的既有门清单里出现，不另起并列清单。
 
 ## 0. 目标与基线（动 pin 之前的只读照面）
 
 - [ ] 取目标tag/commit：`git ls-remote --tags https://github.com/deepseek-ai/deepseek-harness.git`，或submodule内 `git -C vendor/harness-checkout fetch origin --tags && git -C vendor/harness-checkout tag -l | sort -V`；记录当前 `harness.commit`（旧pin）与目标commit。
 - [ ] 工作区与stash干净（无未提交的迁移相关工作）。
-- [ ] 预检（防「动pin才发现规模」）：`node scripts/upstream/preflight-vendor-pin.mjs <tag> --offline` ——fork pure/replay/dropped + 深引vendor seam + 上游包集合增删 + 新增client行 + 运行时npm状态；`--fail-on-replay` 可当硬门。
-- [ ] 门禁基线照面（四条都必须绿，升级后 §6要复绿）：`node scripts/upstream/verify-registry.mjs`、`node scripts/upstream/check-anchors.mjs --report`、`node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild`、`node scripts/upstream/verify-capabilities.mjs`。C11–C14（插件受保护集合）升级后仍须绿——变红按 §7改派生，**不得**改判据放行。能力面变红是**裁决输入**：`chamber-behind` / `chamber-ahead-broken` 表示消费与 pin 脱节（对齐或降级并登记），`upstream-landed` 表示某条本地替代的退役触发已到（按该条 `retireWhen` 排退役，而不是继续养本地实现）。
+- [ ] 预检（防「动pin才发现规模」）：`node scripts/upstream/preflight-vendor-pin.mjs <tag> --offline` ——fork pure/replay/**dropped 面变化（带 drop 理由）** + 深引vendor seam + 上游包集合增删 + 新增client行 + 运行时npm状态 + **名词差集（上游新增而本仓副本没有的导出 / `@Remote` 方法 / 点号座席键）**；`--fail-on-replay` 可当硬门（覆盖 fork 重放——含上游删除/搬走的镜像文件、seam、新增 client 行、移除包、dropped 能力面、未登记的缺失文件；名词差集只报不判，dropped 的测试/打包配置/README 噪声面只报不计）。
+- [ ] 门禁基线照面（四条都必须绿，升级后 §6要复绿）：`node scripts/upstream/verify-registry.mjs`、`node scripts/upstream/check-anchors.mjs --report`、`node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild`、`node scripts/upstream/verify-capabilities.mjs`。C11–C14（插件受保护集合）升级后仍须绿——变红按 `upstream-touchpoints.md` §7 第 6 步改派生，**不得**改判据放行。能力面变红是**裁决输入**：`chamber-behind` / `chamber-ahead-broken` 表示消费与 pin 脱节（对齐或降级并登记），`upstream-landed` 表示某条本地替代的退役触发已到（按该条 `retireWhen` 排退役，而不是继续养本地实现）。
 
 ## 1. 上游差异审计（只读）
 
@@ -43,7 +45,7 @@
 - [ ] api-gateway uplink 裁决点（I-13/G43）：descriptor 带 uplink 半边时保持 fail-loud（`packages/dsh-api-gateway/test/behavior/client-uplink-rejection.test.ts`）；真机出现 uplink 需求才重放旧代次客户端半边并撤销该判定。
 - [ ] 逐面验证：`test:connection`、`test:client-web`、`typecheck:client-web`、`typecheck:connection`、`test:control-plane`、`test:api-gateway`、`typecheck:api-gateway`。
 - [ ] 自建物重放（layout/sidebar fork、covered factory、vendor补丁锚点）逐项裁决：采纳或保留偏差并登记（口径见 `upstream-touchpoints.md` §1–§3）；layout fork 已登记为 chamber-named 副本（registry `seed.dsh-chamber-client-ui-layout`，§2.6），其 client index/store 副本面随 C2 报告 + 预检 vendor-seam 重放；并重审 design 09 §3.5 有意跳过名单（每条 skip 是否仍必须跳过、上游门是否已修好）。**侧栏新增内容必须提请用户裁决，不得默认拒绝**：上游若在侧栏（`sidebar.*` 任一键）新增声明、新增占用者，或把内容注册进「已声明但本壳未渲染」的键，逐条列出并交用户裁决采纳/跳过/替换，默认处置只有「上报待裁」；差集取法与登记落点见 `upstream-touchpoints.md` §7 第 5 步。
-- [ ] **内部依赖 range 按上游政策归位**（`workspace:*`，拒 caret——政策依据 `.agents/notes/implemented/process/2026-09-22-workspace-release-ranges.md`）：改动 `package.json` 后必须 `pnpm install --lockfile-only` 同步 lockfile；棘轮门 `scripts/upstream/workspace-range-ratchet.test.mjs`（覆盖 registry 的 fork/seed 集合）。
+- [ ] **内部依赖 range 按上游政策归位**（`workspace:*`，拒 caret——执行面 = 本行棘轮门 `scripts/upstream/workspace-range-ratchet.test.mjs`；原始政策记录 `.agents/notes/…` 属本地约定，不在本仓版本控制内）：改动 `package.json` 后必须 `pnpm install --lockfile-only` 同步 lockfile；棘轮门 `scripts/upstream/workspace-range-ratchet.test.mjs`（覆盖 registry 的 fork/seed 集合）。
 
 ## 4. 锁文件
 
@@ -63,7 +65,7 @@
 
 - [ ] 全量：`pnpm run check:full`（= `run-checks.mjs full`：static + typecheck + 全部包测试 + macOS/Swift腿 + 打包前冒烟）。
 - [ ] full之外的升级项：`build:renderer`、`verify:i18n`、`smoke`（未捆绑运行时的检出打印SKIP属正常；只有lockfile的 `packages/desktop/vendor/dsh` 不算已安装）。
-- [ ] 门禁复绿（§0的四条）：`verify-upstream-touchpoints.mjs`（C1/C3–C15；`--no-artifact-rebuild` 可跳产物重建）、`verify-registry.mjs`（改了 `registry.json` 必须 `registry-views.mjs --write`，生成块禁手改）、`check-anchors.mjs`（预算只降不升；迁移后 `--update-budget` 调低）、`verify-capabilities.mjs`（能力面对齐；`chamber-behind`/`chamber-ahead-broken` 先修消费面，`upstream-landed` 按条目的 `retireWhen` 排退役）。C11–C14变红时先判上游漂移还是派生写错，再改派生（B₀ 快照 / F来源 / S注册表 / wire镜像）。
+- [ ] 门禁复绿（§0的四条）：`verify-upstream-touchpoints.mjs`（触点门全量；`--no-artifact-rebuild` 可跳产物重建）、`verify-registry.mjs`（改了 `registry.json` 必须 `registry-views.mjs --write`，生成块禁手改）、`check-anchors.mjs`（预算只降不升；迁移后 `--update-budget` 调低）、`verify-capabilities.mjs`（能力面对齐；`chamber-behind`/`chamber-ahead-broken` 先修消费面，`upstream-landed` 按条目的 `retireWhen` 排退役）。C11–C14变红时先判上游漂移还是派生写错，再改派生（B₀ 快照 / F来源 / S注册表 / wire镜像）。
 - [ ] 残留扫描：`grep -rn "<上一版 pin 的版本字面量>|<上一版 commit 短哈希>" packages/ scripts/ harness.commit` 仅剩注释里的历史叙述；生产源码/脚本/配置里的「活」版本字面量必须登记在C10白名单。
 
 ## 7. 文档与记录
