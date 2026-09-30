@@ -21,6 +21,13 @@
  * re-export face is judged). An export with no importer is red unless it is
  * covered by a documented exemption.
  *
+ * KNOWN REMAINING HOLE (measured 2026-09): the own-entry skip below covers the
+ * \`import {…} from\` loop only. A package's own \`export {…} from\` barrel line still
+ * counts as a consumer, so barrel-only names stay green. Completing the skip there
+ * surfaces 31 test-only runtime exports across control-plane (15), dsh-runtime (14),
+ * client-core (1) and one more package; each needs a TEST_ONLY_EXPORT_ALLOWLIST
+ * entry or a consumer, which is a barrel-policy decision, not a drive-by edit.
+ *
  * TEST-ONLY EXPORTS. An export reachable from an entry with no production
  * importer but named by a test still needs a reason: TEST_ONLY_EXPORT_ALLOWLIST
  * names it with the reviewer's reason (typically a pinned constant the suite

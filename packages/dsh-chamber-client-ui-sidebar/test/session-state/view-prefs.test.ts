@@ -23,6 +23,7 @@ import {
   VIEW_PREFS_KEY,
 } from '../../../dsh-chamber-client-core/src/view-prefs.ts'
 import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import { clampWidth, SIDEBAR_MAX, SIDEBAR_MIN } from '../../../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-layout/src/client/columns.ts'
 import { server } from '../support/derive-fixtures.ts'
 
 /** Publish server fixtures into the shared bridge (defaults: local, connected, ready). */
@@ -604,22 +605,16 @@ test('loadViewPrefs keeps old payloads without sidebarWidth valid (v stays 1 —
 })
 
 test('the sidebarWidth clamp stays in sync with the vendor contract (columns.ts SIDEBAR_MIN/MAX)', () => {
-  // sanitizePrefs hardcodes the vendor clamp. The pinned
-  // @deepseek-ai/dsh-client-ui-layout columns.ts fixes SIDEBAR_MIN = 264,
-  // SIDEBAR_MAX = 420 and clampWidth = round-then-clamp; the vendor source
-  // cannot be imported here (outside tsconfig rootDir, no built lib/), so this
-  // test pins BOTH sides — literals mirror the vendor constants and the
-  // formula below IS clampWidth spelled out — so drift fails loudly.
-  const VENDOR_SIDEBAR_MIN = 264
-  const VENDOR_SIDEBAR_MAX = 420
-  const vendorClampWidth = (px: number): number =>
-    Math.min(VENDOR_SIDEBAR_MAX, Math.max(VENDOR_SIDEBAR_MIN, Math.round(px)))
+  // sanitizePrefs hardcodes the vendor clamp; the pinned ui-layout columns.ts is the
+  // single source (SIDEBAR_MIN/SIDEBAR_MAX/clampWidth). Import the VENDOR SOURCE here
+  // (the layout-store test does the same) so a vendor constant change fails this test
+  // instead of silently regressing a persisted width at the next restart.
   const storage = new MemoryStorage()
   for (const raw of [0, 100, 250, 263.5, 264, 279.4, 279.5, 280.4, 300, 419.4, 419.5, 420, 500, 1000, -5]) {
     storage.setItem(VIEW_PREFS_KEY, JSON.stringify({ v: 1, folded: {}, ungroupedOrder: {}, sidebarWidth: raw }))
     assert.equal(
       loadViewPrefs(storage).sidebarWidth,
-      vendorClampWidth(raw),
+      clampWidth(raw, SIDEBAR_MIN, SIDEBAR_MAX),
       `sidebarWidth ${raw} must clamp like the vendor clampWidth`,
     )
   }

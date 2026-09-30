@@ -312,7 +312,7 @@ export function __resetMembershipGracesForTests(): void {
 }
 
 /** archivedFilter 三态的行准入（上游 tree.ts 230-257）：default 藏归档、show 原槽位、only 只留归档。 */
-export function archivedRowAdmitted(filter: ArchivedFilter, isArchived: boolean): boolean {
+function archivedRowAdmitted(filter: ArchivedFilter, isArchived: boolean): boolean {
   return filter === 'show' || (filter === 'only' ? isArchived : !isArchived)
 }
 /**
