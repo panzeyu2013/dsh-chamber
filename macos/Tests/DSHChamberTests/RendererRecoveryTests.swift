@@ -41,7 +41,7 @@ final class RendererRecoveryTests: XCTestCase {
 
     // MARK: - RendererCrashAttribution（崩溃归因）
 
-    func testCrashAttributionNamesTheBootWindow() {
+    func testCrashAttributionLabelsTheLoadWindow() {
         let text = RendererCrashAttribution.describe(secondsSinceLoad: 21.4, ordinal: 1)
         XCTAssertTrue(text.contains("21.40s"), text)
         XCTAssertTrue(text.contains("boot 窗口内"), text)
@@ -61,8 +61,9 @@ final class RendererRecoveryTests: XCTestCase {
     }
 
     func testBootWindowBoundCoversTheObservedIncidents() {
-        // 实测：当前构建的两次崩溃发生在加载完成后 21.0s / 33.9s（Apple 符号化栈
-        // 落在 JSC 代码块替换）；更早构建 8 次同族。归因窗口必须覆盖它们。
+        // 边界只表达「窗口事实」（见 RendererCrashAttribution 类型注释）：早期观测有
+        // 21.0s / 33.9s 两次；2026-09-30 的 16 份复核显示存活时长 4.5min–17.6h、中位
+        // 3.4h，故 60s 不是归因阈值，只是「刚加载就崩」的窗口界。
         XCTAssertLessThan(21.0, RendererCrashAttribution.bootWindowSeconds)
         XCTAssertLessThan(33.9, RendererCrashAttribution.bootWindowSeconds)
     }

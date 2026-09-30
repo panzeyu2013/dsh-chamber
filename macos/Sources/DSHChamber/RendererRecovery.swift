@@ -76,14 +76,27 @@ public struct RendererRecoveryPolicy: Equatable {
 
 /// renderer 崩溃归因。
 ///
-/// 崩溃落在「页面加载完成后 20–34 秒」的 boot 窗口，Apple 符号化栈是 JSC 代码块
-/// 替换/JIT tier-up（入口 `JSRequestAnimationFrameCallback::invoke`）。
+/// 归因是 **JavaScriptCore 层升级（tier-up）机件的引擎缺陷**（WebKit 22625 / macOS
+/// 27.0.1）：崩溃点落在 `CodeBlock::setOptimizationThresholdBasedOnCompilationResult`
+/// （RELEASE_ASSERT，6 份且指令字节 6/6 相同）或 `ScriptExecutable::
+/// newReplacementCodeBlockFor`（空指针 far=0x78，9 份）。2026-09-30 对 16 份 WebContent
+/// 报告的逐份复核给出统一**入口链**：WebSocket 消息任务派发 → 事件监听器返回 →
+/// `MicrotaskQueue::performMicrotaskCheckpoint` → 微任务排空 → 热函数 OSR/FTL 层升级 →
+/// JSC 机件崩溃；**16/16 同为 WebSocket 消息驱动、无一含 rAF 帧**。
+///
+/// **进程寿命不是 boot 窗口的反证**：16 份按 `captureTime − procLaunch` 统计为 4.5 min–
+/// 17.6 h（中位 3.4 h，≈0.29 次/小时进程存续），但那是**另一把钟**；boot 窗口说的是
+/// 「距上次加载完成」，实测样本为 21.0 / 30.4 / 33.9 / 962 / 6094 / 53876 s（**三者落在
+/// 20–34 s**）——load-relative 语义下该观测既未被证实也未被推翻。
+/// `bootWindowSeconds` 只作**窗口事实描述**（把「刚加载就崩」与「稳定运行后崩」分开），
+/// 不得读成病因，也不得据进程寿命宣布它被推翻。
 /// 问题是**静默**：崩溃不一定留下 shell 侧痕迹，大多表现为"应用自己回到载入历史"。
 /// 把"距上次加载完成多少秒 + 本次加载窗口内第几次崩溃"写进日志，下一次发生即可
 /// 直接判定，不必再靠事后推理。
 public enum RendererCrashAttribution {
-    /// boot 窗口上界（秒）。崩溃落在 21–34s 观测范围内；取 60s 覆盖同族形态
-    /// （多来源挂载 + 插件 boot 全在同一窗口内完成）。
+    /// 「boot 窗口」上界（秒）——**窗口事实描述，不是归因**（见上方类型注释）。
+    /// 保留 60s 只为把「刚加载就崩」与「稳定运行后崩」分开：16 份实测的存活时长中位
+    /// 3.4 h，该界不承担任何因果含义。
     public static let bootWindowSeconds: Double = 60
 
     /// 崩溃时刻的归因文案（纯值，单测直测）。

@@ -160,9 +160,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 直到一次**真正成功的加载**（`didFinish`）把它复位，闸门才重新武装。
     private var recoveryGaveUp = false
     /// 崩溃归因：上次「加载完成」时刻、本次加载窗口内的崩溃次数、以及当前这次
-    /// 加载是否由崩溃恢复触发。崩溃集中在加载完成后 20–34s 且大多不留 shell 侧
-    /// 痕迹——没有这三个量就无法把
-    /// "应用自己回到载入历史"归因到渲染进程重启。
+    /// 加载是否由崩溃恢复触发。**归因是 JSC tier-up 引擎缺陷（WebKit 22625），不是
+    /// boot 窗口**：16 份报告入口链 16/16 为 WebSocket 消息派发；load-relative 样本
+    /// 21.0 / 30.4 / 33.9 / 962 / 6094 / 53876 s 只是「刚加载」与「稳定后」的分布，
+    /// 既未证实也未推翻 boot 窗口（见 RendererCrashAttribution 类型注释）。
+    /// 没有这三个量就无法把"应用自己回到载入历史"归因到渲染进程重启。
     private var lastLoadFinishedAt: Date?
     private var crashesSinceLoad = 0
     private var recoveringFromCrash = false
@@ -2340,8 +2342,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         let sinceLoad = lastLoadFinishedAt.map { now.timeIntervalSince($0) }
         lastCrashAt = now
         recoveringFromCrash = true
-        // 归因行：距上次加载完成的秒数 + 本窗口第几次崩溃。崩溃集中在
-        // boot 窗口（21–34s），因此这句是"是不是同一个形态"的第一判据。
+        // 归因行：距上次加载完成的秒数 + 本窗口第几次崩溃。它记录**窗口事实**，
+        // 不是病因（病因在 JSC tier-up 机件；boot 窗口既未证实也未推翻）。
         shellLog("[shell] Web 内容进程终止（webViewWebContentProcessDidTerminate）——"
                  + RendererCrashAttribution.describe(secondsSinceLoad: sinceLoad, ordinal: crashesSinceLoad))
         // 退出中：不重载、不上报（Electron render-process-gone 在 quitRequested
