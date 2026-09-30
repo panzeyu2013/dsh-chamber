@@ -372,7 +372,7 @@
 - 导轨开关没有稳定 DOM 锚点、也不带 `aria-expanded`（改身份锚定属设计裁决）。
 - 悬停几何/墨色没有真指针验收腿（发布前补 W-4b-`cluster` 与墨色腿）。
 - 不做 git 钩子（`core.hooksPath` 不随 clone）。
-- 上游触点 registry 单一来源：`verify:registry`/`verify:anchors` 无 Windows 执行覆盖（残余盲区）；C4/C7–C15 判据留代码只按 id 引用。
+- 上游触点 registry 单一来源：`verify:registry`/`verify:anchors` 无 Windows 执行覆盖（残余盲区）；C4/C7–C16 判据留代码只按 id 引用。
 - 推迟：工程门禁 P2 项（观察型 CI job、术语表、文档字数预算、checklist 转动作）。
 - 上游纯镜像 README 失效链接被链接门显式跳过（C1 冻结；修复面在上游）。
 - sidebar/layout 的 `main`/`types` 仍指向无人构建的 `lib/`（R4 P6 有意保留）。

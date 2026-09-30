@@ -105,8 +105,8 @@ CSS `packages/renderer/src/styles.css` 引入）+ client构面未列出的小项
 | `src/apply-injections.ts` | [dropped] | 上游当前代的 index 注入表解释器，服务 apps/web 的 __DSH_BOOT_READY__/Host rows；chamber 不消费（index.ts 刻意不导出 applyIndexInjections，package.json 也无 ./injections 子路径），注入面由 host boot graph + N-ctx kernel 接管 |
 | `src/boot-client.ts` | [dropped] | 上游当前代抽出的 bootClient/assertEntriesActive 组合；chamber kernel 在 src/boot.ts 内联 boot 建 entry+await+audit 半边并叠加 extraRows 合并 + boot-tolerance 容忍；entries.start/sync 协调半边在 chamber 无消费者（其唯一消费者 HMR 行被覆盖集 skip，见 chamber-covered.ts） |
 | `src/mount.ts` | [dropped] | 上游当前代抽出的 mountClient；chamber kernel 的 mountApp 已含同一 uiRenderer inject 挂载并附 15s 超时兜底 |
-| `tests/` | [dropped] | 上游文件有意不镜像 |
-| `tsdown.config.ts` | [dropped] | 上游文件有意不镜像 |
+| `tests/` | [dropped] | chamber 无 tsdown / 不镜像上游测试（dropped 噪声面：变化只报不计失败，见 preflight 的 isDroppedNoise） |
+| `tsdown.config.ts` | [dropped] | chamber 无 tsdown / 不镜像上游打包配置（dropped 噪声面） |
 <!-- GENERATED:registry:touchpoints.fork-mirror.client-web:end -->
 
 ### 2.3 `packages/dsh-api-gateway`（上游 `packages/api/gateway`，client 半）
@@ -137,9 +137,9 @@ pure 5（以脚本计数为准）。
 | `src/index.ts` | [dropped] | 上游 host 插件入口（chamber 不镜像 host 半） |
 | `src/stream-server.ts` | [dropped] | 上游 host 半流服务器（dropped） |
 | `src/types.ts` | [dropped] | 上游 host/aux 类型文件（源码与 inert ./types 子路径均已移除） |
-| `tests/` | [dropped] | 上游文件有意不镜像 |
+| `tests/` | [dropped] | chamber 无 tsdown / 不镜像上游测试（dropped 噪声面：变化只报不计失败） |
 | `tsconfig.host.json` | [dropped] | host 构面不镜像 |
-| `tsdown.config.ts` | [dropped] | 上游文件有意不镜像 |
+| `tsdown.config.ts` | [dropped] | chamber 不构建 lib / 不镜像上游打包配置（dropped 噪声面） |
 <!-- GENERATED:registry:touchpoints.fork-mirror.api-gateway:end -->
 
 ### 2.4 有意未镜像表（跨 fork 汇总）
@@ -189,7 +189,7 @@ host插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游README（api
 > `excludedUpstreamDirs`（那是三个同名 shadow 替换副本的清单）。覆盖 = C1/C3 分类表 +
 > C2 的 tag 间报告 + 升级预检的 vendor-seam 面（预检的 `FORK_PATHS` 只含 shadow 副本，故本条
 > 的 client index/store 上游改动以 C2 报告与 vendor-seam 形式出现，不以 fork-replay 形式出现；
-> 把它错记成 shadow fork 会让深引的 frame 文件从 vendor-seam 降级成 fork-missing）。
+> 把它错记成 shadow fork 会让深引的 frame 文件从 vendor-seam 降级成 fork-unregistered）。
 > 分类表由 registry 生成：
 
 <!-- GENERATED:registry:touchpoints.fork-mirror.layout:begin -->
@@ -450,16 +450,20 @@ preload-welcome / welcome-api / welcome-backend / welcome-window。
 - C15悬停卡自持移植的上游退役门（硬失败；形状、常数与防伪判据见 §4行：①CLOSE侧每个 `onPointerLeave` arm 的守卫必须是已提交 `open` 本身或含 `open` 的合取（顶层 `||` 析取即红——`open || intentRef.current`/`open || true` 是修复而非已知形状），②OPEN侧以 `openDelayMs` 为延迟的dwell回调只 `setPhase('open')`、至多把该定时器赋值目标的 ref 清成 `null`（其他成员写即红）、不复查指针在场，③组件体内 post-commit 回调（`useEffect`/`useLayoutEffect`/`useInsertionEffect`）fail-closed：执行关闭/相位动作的回调必须逐字命中白名单化的 pinned 形状（预览淡出 / owner-disable / Escape），其余一律判红——只锁前两项、或只查回调内的 `*.current` 读取，会在上游把指针事实挪到模块作用域/helper 或在 commit/effect 层修好那天静默放行，④`POINTER_GRACE_MS`/`openDelayMs` ↔ `HOVER_CLOSE_GRACE_MS`/`HOVER_OPEN_DELAY_MS` 逐值锁步；判定为纯函数，单测随 `verify-upstream-touchpoints-args.test.mjs` 在 `test:upgrade-tools` 跑；pin树未物化时与C1同样响亮失败）—— CI与本地均跑（CI分pre/post-install两段）。
 - C16 vendor源消费者清单与真实相对 import 双向一致（硬失败，只读，CI两段都跑；判定纯函数在 `verify-upstream-touchpoints-vendor.mjs`，负控随 `verify-upstream-touchpoints-args.test.mjs` 在 `test:upgrade-tools`/`test:scripts` 跑）：registry `vendorSourceConsumers` 与 `packages/<pkg>/src` 的真实相对 import 双向一致——登记的 (consumer, vendorFile) 必须仍被 import **且**符号集合逐条相等，每个符号在 vendor 文件里仍是 `export function`，未登记的 vendor 相对 import（或孤儿登记）即红；A 门（`pnpm run verify:package-boundaries`）读同一 registry 块放行；退役条件写在条目的 `retiresWhen`。登记行见 §3。
 - C2 `--tags <old> <new>`：tag间全部已登记fork面的重放差异报告（advisory；C2遍历registry的分类条目（fork/seed），故三条shadow副本与 `seed-open-in` 都在内），升级前先跑。
-- `scripts/upstream/preflight-vendor-pin.mjs <tag>`（只读，§7第0步）：C2的超集——
-  额外报深引vendor seam文件、上游包集合增删、新增client行、运行时npm状态；
+- `scripts/upstream/preflight-vendor-pin.mjs <tag>`（只读，§7第0步）：覆盖三个 shadow fork 面（C2 另遍历全部 fork/seed 条目，chamber-named fork 的增量见 §2.5–§2.7 与升级清单 §3）——
+  额外报深引vendor seam文件、上游包集合增删、新增client行、运行时npm状态，以及两类
+  「被吞掉的新增面」：dropped 面变化（带 drop 理由）与名词差集（上游新增而本仓副本
+  没有的导出 / `@Remote` 方法 / 点号座席键）；
   纯函数单测随 `pnpm run test:upgrade-tools` 在CI跑。
 - update-vendor.mjs完成输出提示运行本脚本；不进preinstall。
 
 ## 7. 每 tag 维护循环（预检 + 8 步）
 
+> 分工：本节是**触点序**（每 tag 的预检 + 8 步，含 0.5）；**阶段序**的执行清单（动 pin 前 / 动 pin / rebase / 锁文件 / 运行时 / 回归 / 文档）见 [`dsh-upgrade-checklist.md`](dsh-upgrade-checklist.md) 的 §0–§7。两者是同一循环的两个视图，都要走完（预检/审计同在动 pin 前，回归/文档收口同在动 pin 后）；判据只在 §6 增删，不在本节另立清单。
+>
 > 顺序硬约束：`pnpm install` 必须在 `ensure-harness-vendor.mjs`（或根 `preinstall`）之后——先install再bootstrap以0退出但只装20/304个workspace项目（vendor依赖缺失），随后 `build:renderer` 才报 `Rollup failed to resolve import "lexical"`。CI的linux/win两条腿都已是 `Bootstrap → install`。
 
-0. 预检（动pin之前）：`node scripts/upstream/preflight-vendor-pin.mjs <tag> --offline` —— 一次给出「fork pure/replay/dropped + 深引vendor seam文件 + 上游包增删 + 新增client行 + 运行时npm状态」；`--fail-on-replay` 可当硬门。（C2只报fork面，本脚本另覆盖seam与roster面。）
+0. 预检（动pin之前）：`node scripts/upstream/preflight-vendor-pin.mjs <tag> --offline` —— 一次给出「fork pure/replay + **dropped 面变化（带 registry 的 drop 理由）** + 深引vendor seam文件 + 上游包增删 + 新增client行 + 运行时npm状态 + **名词差集**」；`--fail-on-replay` 可当硬门。（C2只报fork面，本脚本另覆盖seam与roster面；dropped 面变化与名词差集是「上游新功能被 chamber 改写吞掉」的两个预检口；名词差集只报不判，dropped 的测试/配置/README 噪声面只报不计。）
 0.5. 结构登记改动只改 `scripts/upstream/registry.json`，然后
    `node scripts/upstream/registry-views.mjs --write` 重生成 §2/§9的块，
    `node scripts/upstream/verify-registry.mjs` 必须绿（手改生成块或漏改registry都红）。
@@ -474,7 +478,7 @@ preload-welcome / welcome-api / welcome-backend / welcome-window。
    无client产物、插件源码抽不到、pin身份不可判定、或锚点树 `dsh-web-frontend` 版本与pin不一致都exit 1，见 §4登记行）——
    build-time 哈希 class token 与 attribute/role/slot 同列**硬失败**：pin bump 后零命中即 exit 1，
    按移动包 README「Anchor baseline」逐条重锚（含 `official-hover-card.ts` 的两个 CSS-module token）；插件管理页容纳层的 DOM 缝先跑 §3 末条的锁步门（`pnpm --filter @dsh-chamber/dsh-chamber-client-ui-settings-plugin-manager test`；跑在 `test:plugin-manager` 腿里，红了即形状已变，按本步重锚），再按 §3 末条 grep 复核（`data-plugin-panel`、页头/详情头两条 `data-window-drag`、页头行「标题块（首子，其内内容被整块隐去）+ 控件（末子）」的两子元素序列、分组缝 `data-plugin-group` 的「组头在前、`ul` 卡列表在后」形状）：零命中或形状变化 ⇒ 按 STATUS 偏差条裁决。
-7. 运行时线单独提交（bundle-dsh刷新 + 四锚 + bin.js冒烟）；
+7. 运行时线单独提交（bundle-dsh刷新 + 六锚 + bin.js冒烟）；
 8. 文档回写：CHANGELOG/STATUS + registry刷新后重生成本表 §2/§9（`registry-views.mjs --write`，
    `verify-registry.mjs` 绿；版本值不进checklist）+ i18n重录。
 

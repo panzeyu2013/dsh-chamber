@@ -74,8 +74,9 @@ by a design document or `CHANGELOG.md`.
   `docs/checklists/upstream-touchpoints.md` §7.
 - The upstream-touchpoint registry has **one machine source**: `scripts/upstream/registry.json`
   (paths, per-file classification, criterion ids, deviation ids, one-sentence reasons).
-  `scripts/upstream/verify-upstream-touchpoints.mjs` reads it at startup (gates C1–C15, run in CI:
-  C11–C14 the plugin protected set, C15 the hover-port retirement gate), and
+  `scripts/upstream/verify-upstream-touchpoints.mjs` reads it at startup (gates C1–C16, run in CI:
+  C11–C14 the plugin protected set, C15 the hover-port retirement gate, C16 the
+  vendor-source-consumer gate), and
   `docs/checklists/upstream-touchpoints.md` §2/§9 are its **generated views** — the
   `<!-- GENERATED:registry:… -->` blocks are hand-edit forbidden
   (`node scripts/upstream/registry-views.mjs --write` regenerates them; `verify:registry` is the

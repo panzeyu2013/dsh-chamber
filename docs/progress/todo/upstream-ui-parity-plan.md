@@ -148,7 +148,7 @@ design 同批更新；已落地面的契约见 design 06 §7、design 05 §2）�
 flat/workspace-tree 与归档过滤推迟、`data-chamber-row` 锚点、归档确认对话框（本仓两段式）、
 **面板行按来源下挂**（宽态 owning server 分组 / rail 上游字形行；行几何维持上游 36px；design 05 §2 / 06 §4.7）。
 
-指针：design 06 §7、design 24 §1、STATUS 的对应条目与 `docs/checklists/upstream-touchpoints.md`（registry 门 C1–C15）。
+指针：design 06 §7、design 24 §1、STATUS 的对应条目与 `docs/checklists/upstream-touchpoints.md`（registry 触点门）。
 
 ## 4. 复核发现但未落地的清洁项（非裁决）
 

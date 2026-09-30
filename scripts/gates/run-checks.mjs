@@ -168,7 +168,7 @@ const STATIC_CHECKS = [
   // God 文件棘轮门：预算文件里的行数只许降不许升（--update-budget 同步降档），
   // target 列是 refactor 目标。只读、离线；**本地专属**（同引用环门）。
   'verify:file-budgets',
-  // C1–C15 触点门：advisory 模式（只读，不重建产物）。必须是普通门——
+  // 上游触点门全量（C1/C3–C16，判据清单见 docs/checklists/upstream-touchpoints.md §6）：advisory 模式（只读，不重建产物）。必须是普通门——
   // 否则本地 static/full 可以在 C1/C3 失败（例如把 pure 文件挪进 patched）时全绿，
   // 与 AGENTS "本地 pass = CI 同证据" 的口径矛盾。CI 两处直接调用同一命令。
   'node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild',
