@@ -934,8 +934,9 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   `display:none`（hover / 键盘焦点 / 视图选项菜单或搜索胶囊展开才显形）——2026-09 用户裁决
   「可以接受 display:none 保持静止不可见」。
 - **rail 态**：分组不渲染，保留上游全局面板字形行（`SidebarRoot.tsx` 的
-  `!wide && panels.length > 0` 守卫；字形 16/18px、tooltip、`aria-current` 与上游逐字一致
-  ——其中 16px 半支随上游行形态保留、当前不可达，`PanelRow` 的 wide 分支同此）
+  `!wide && panels.length > 0` 守卫；18px 字形、tooltip、`aria-current` 与上游 rail 形态逐字一致；
+  `PanelRow` 的上游 wide 半支（16px / title / disabled tooltip）随入口进头部成为死分支，
+  2026-10 清理时删除而非留作不可达代码）
   ⇒ 每个条目任一时刻**恰好挂载一次**（位置锁：`test/plugin-kernel/panel-entry-placement.test.ts`）。
 - **折叠只收浏览区**（搜索胶囊 / 来源级 git 提示 / 工作区列表）：入口在来源头内，折叠不隐藏它；
   折叠钮只有 `aria-expanded`、**无 `aria-controls`**，故不构成「受控区域已折叠却仍渲染其内容」的矛盾。
@@ -965,7 +966,9 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
     焦点若正停在该入口，折叠后落回 `document.body`（需重新 Tab）。入口组件无状态，无可见状态丢失；
     接受，不为此改结构（rail 不渲染 section，单站点方案在本仓不成立）。
   - 位置锁按**源码文本**钉：入口在 `.sourceActions` 内、`cc.sortActive`（视图选项）之前，
-    `ServerSectionPanels.tsx` 已删除且 `ServerSection.tsx` 不含任何面板轴挂载点（本包无 DOM）。
+    `ServerSectionPanels.tsx` 已删除且 `ServerSection.tsx` 不含任何面板轴挂载点（本包无 DOM）；
+    「不过 `connected` 门」另有一条同文件锁——header 元素到入口之间无 `server.connected`，
+    且动作簇以无条件兄弟节点打开（含 section 的 header 站点）。
   - `ui-schedule` 的**点击埋点**（上游 `selectPanel` 对 `plugins`/`schedules` 发
     `sidebar_menu_click{menu_name}`）**有意未复制**：它是遥测而非 UI 行为，且桌面壳是否上报
     产品分析是既有开放裁决（STATUS 遥测条）。若将来要逐字对齐，落点是

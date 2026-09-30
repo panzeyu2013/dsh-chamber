@@ -52,27 +52,27 @@ export class ChamberListBoundary extends Component<{ children: ReactNode }, { er
 
 /** One panel row for the collapsed rail axis (the wide column renders the compact
  *  `PanelHeaderEntry` instead): it subscribes only to its own selection state, so
- *  a panel switch re-renders the affected rows instead of the whole column. The
- *  `wide` branch is currently UNREACHABLE (the only mount site is the rail, behind
- *  `!wide`) and is kept so this component stays the upstream row form verbatim. */
+ *  a panel switch re-renders the affected rows instead of the whole column. This is
+ *  the upstream row's RAIL form only — the upstream wide half (16px glyph, title
+ *  span, `disabled` tooltip) can never render here since the wide entry moved into
+ *  the source header, so it was removed in the 2026-10 cleanup instead of being
+ *  kept as unreachable code. */
 export function PanelRow({
   id,
   label,
-  wide,
   usePanelInfo,
   selectPanel,
   renderSlot,
 }: {
   id: SidebarPanelMetadata['id']
   label: string
-  wide: boolean
   usePanelInfo: PanelSelectorHook
   selectPanel: (id: SidebarPanelMetadata['id']) => void
   renderSlot: SidebarRootComponentProps['renderSlot']
 }) {
   const active = usePanelInfo(info => info.activePanelId === id)
   return (
-    <Tooltip label={label} delayMs={500} disabled={wide}>
+    <Tooltip label={label} delayMs={500}>
       <button
         type="button"
         className={clsx(css.panelRow, active && css.panelActive)}
@@ -81,9 +81,8 @@ export function PanelRow({
         onClick={() => { selectPanel(id) }}
       >
         <span className={css.panelGlyph} aria-hidden="true">
-          {renderSlot('sidebar.panellist', { size: wide ? 16 : 18, active }, { only: id })}
+          {renderSlot('sidebar.panellist', { size: 18, active }, { only: id })}
         </span>
-        {wide && <span className={css.panelTitle}>{label}</span>}
       </button>
     </Tooltip>
   )

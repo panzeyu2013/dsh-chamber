@@ -349,7 +349,6 @@ export function SidebarRoot({
               key={panel.id}
               id={panel.id}
               label={panel.label}
-              wide={wide}
               usePanelInfo={usePanelInfo}
               selectPanel={selectPanel}
               renderSlot={renderSlot}

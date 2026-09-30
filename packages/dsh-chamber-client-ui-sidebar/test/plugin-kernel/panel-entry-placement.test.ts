@@ -20,7 +20,8 @@
  * whole-tree occurrence and slot-binding counts), so a second mount site, a
  * hand-rolled slot binding or a resurrected row container fails loud instead of
  * silently re-anchoring. The owning-gate anchor pins the ENTRY's own gate; a
- * connection gate wrapped around the whole action cluster is out of its scope.
+ * companion test pins that neither the header element, the action cluster nor the
+ * section's header site carries a connection gate ("registered is enough").
  */
 import assert from 'node:assert/strict'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
@@ -53,6 +54,8 @@ test('the global axis is rail-only and the wide entry renders inside the owning 
     'the global axis must be guarded by the rail state')
   assert.equal((root.match(/<PanelRow/g) ?? []).length, 1,
     'SidebarRoot owns exactly ONE row site (the rail)')
+  assert.ok(!root.includes('wide={wide}'),
+    'the rail row no longer forwards the retired wide prop')
   assert.equal((root.match(/<PanelHeaderEntry/g) ?? []).length, 0,
     'the wide entry comes from the source header, never from Root')
 
@@ -87,7 +90,7 @@ test('the global axis is rail-only and the wide entry renders inside the owning 
   assert.match(normalize(header),
     /\{server\.id === chamberInstanceId && \(?panels\.map\(\s*\(?panel\)?\s*=>\s*\(\s*<PanelHeaderEntry/,
     'the mount opens with the owning-source gate, never a connection gate')
-  assert.match(normalize(header), /key=\{ ?panel\.id ?\}/,
+  assert.match(normalize(header), /key=\{\s*panel\.id\s*\}/,
     'one keyed entry per ledger registration (order preserved)')
   const mapAt = header.indexOf('panels.map')
   assert.ok(mapAt !== -1 && mapAt < header.indexOf('<PanelHeaderEntry'),
@@ -97,6 +100,34 @@ test('the global axis is rail-only and the wide entry renders inside the owning 
   const viewOptions = header.indexOf('cc.sortActive')
   assert.ok(actions !== -1 && entry > actions && viewOptions > entry,
     'the entry renders inside .sourceActions, left of the view-options button')
+})
+
+test('the wide mount is connection-independent: neither the header nor its cluster is connection-gated', () => {
+  // "Registered is enough" (design 06 §4.7): the owning source's header keeps
+  // rendering while its source is disconnected, so the entry keeps rendering too.
+  // The owning-gate anchor in the first test cannot see a connection gate wrapped
+  // AROUND that gate; these locks pin the shape around it:
+  // 1. between the header element and the mount there is no server.connected.
+  const headerOpenAt = header.indexOf('<header')
+  const mountAt = header.indexOf('{server.id === chamberInstanceId && panels.map')
+  assert.ok(headerOpenAt !== -1 && mountAt > headerOpenAt,
+    'the panel-axis mount lives inside the header element')
+  assert.ok(!header.slice(headerOpenAt, mountAt).includes('server.connected'),
+    'no connection gate may sit between the header element and the panel-axis mount')
+  // 2. the action cluster opens as an unconditional JSX sibling: the last
+  // significant character before its element is a sibling boundary — the previous
+  // element's '>' (or the '}' of a stripped comment container) — never the '(' /
+  // '&' of a conditional wrapper.
+  const clusterTagAt = header.lastIndexOf('<span', header.indexOf('cc.sourceActions,'))
+  assert.ok(clusterTagAt !== -1, 'the sourceActions cluster element exists')
+  assert.match(header.slice(0, clusterTagAt).trimEnd().slice(-1), /[>}]/u,
+    'the action cluster is an unconditional sibling, never a conditional wrapper')
+  // 3. the section renders the header element itself unconditionally too (design
+  // 24 §6: a disconnected source still shows header + status).
+  const sectionHeaderAt = section.indexOf('<ServerSectionHeader')
+  assert.ok(sectionHeaderAt !== -1, 'the section renders the source header')
+  assert.match(section.slice(0, sectionHeaderAt).trimEnd().slice(-1), /[>}]/u,
+    'the source header is not behind a conditional wrapper either')
 })
 
 test('the axis mounts exactly once per form in the whole client tree and leaves no retired container', () => {
@@ -116,6 +147,8 @@ test('the axis mounts exactly once per form in the whole client tree and leaves 
   for (const style of clientStyles) {
     assert.ok(!style.includes('.sectionPanels'),
       'the retired container has no stylesheet left in any client CSS file')
+    assert.ok(!style.includes('.panelTitle'),
+      'the retired wide row title has no stylesheet left either')
   }
 })
 
@@ -138,13 +171,19 @@ test('the wide entry keeps the list contract, the compact box and the header cli
     /onSelect=\{\(id\) => \{ if \(suppressClickRef\.current\) return clearPendingClick\(\) selectPanel\(id\) \}\}/,
     'the header passes the same trailing-click / pending-click gate its sibling actions use')
 
-  // The rail row keeps the upstream form untouched (only the wide site changed).
+  // The rail row keeps the upstream RAIL form (the wide half moved away with the
+  // entry): 18px glyph, the 500ms tooltip, and no disabled/title branch left.
   assert.match(chrome, /className=\{clsx\(css\.panelRow, active && css\.panelActive\)\}/,
     'the rail row keeps the upstream row class pair')
   assert.match(chrome, /onClick=\{\(\) => \{ selectPanel\(id\) \}\}/,
     'the rail row click forwards to the injected selectPanel')
-  assert.match(chrome, /<Tooltip label=\{label\} delayMs=\{500\} disabled=\{wide\}>/,
+  assert.match(chrome, /<Tooltip label=\{label\} delayMs=\{500\}>/,
     'the upstream rail tooltip contract')
-  assert.match(chrome, /\{wide && <span className=\{css\.panelTitle\}>\{label\}<\/span>\}/,
-    'the title renders only wide, exactly as upstream')
+  assert.match(chrome, /renderSlot\('sidebar\.panellist', \{ size: 18, active \}, \{ only: id \}\)/,
+    'the rail row renders the upstream rail glyph size')
+  // The retired wide half must not linger as unreachable code or dead CSS.
+  assert.doesNotMatch(chrome, /\bwide\b/,
+    'no wide identifier is left in the chrome (the dead half is deleted, not kept)')
+  assert.doesNotMatch(chrome, /panelTitle/,
+    'the retired wide title span is gone from the chrome')
 })

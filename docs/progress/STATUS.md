@@ -219,7 +219,7 @@
   键（`dsh.schedule.recent-time-zones.v1` 真跨实例共享；`dsh.schedule.task-tab.v1.<sessionId>` 按会话分键）、
   30s 无 `visibilityState` 门的相对时钟（隐藏视图同样在跑）、面板点击埋点 `sidebar_menu_click` 未复制（按裁决不复制）。
   前两条是 extra row / 上游组件的既有行为（chamber 无补丁面），不做本仓修补；宽态入口的盒形 / 静息不可见 /
-  wide↔rail 重挂载接受偏差见 design 06 §4.7。
+  丢失上游宽态 `nav[aria-label]` 分组壳与静息选中态 / wide↔rail 重挂载接受偏差见 design 06 §4.7。
 - **平台腿未落地**：Windows 的 `[data-windows-titlebar]` 分支（属性已由 win32 preload 的 `markWindowsTitlebar` 写入，
   侧栏整块未抄，收口随 design 23）⇒ Windows 腿的侧栏
   形态与上游不同，属排期而非功能选择（Electron macOS 腿已按上游 darwin 分支收口，见第 52 行）。

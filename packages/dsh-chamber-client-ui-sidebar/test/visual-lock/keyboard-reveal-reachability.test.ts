@@ -89,8 +89,12 @@ test('the owning header is not focusable: the fold toggle is the panel-axis entr
   // is deliberately not activatable (hence role/tabIndex are dropped) — so its Tab
   // path must be the unconditional fold toggle, whose focusin bubbles to the
   // header's onFocus, which arms .sourceActionsVisible.
-  assert.match(model, /return server\.id !== chamberInstanceId && !managedUnusable\n/u,
-    'the model keeps the owning-source exclusion (line-final: a trailing || would break it)')
+  // Whitespace-collapsed: the return expression must run into the function's own
+  // closing brace, so a trailing '||' cannot hide behind a line break — and a
+  // formatting-only refactor cannot false-red either.
+  assert.match(normalize(model),
+    /return server\.id !== chamberInstanceId && !managedUnusable \}/u,
+    'the model keeps the owning-source exclusion as the whole return expression')
   assert.match(header, /const headerActivatable = sourceHeaderActivatable\(server, chamberInstanceId\)/u,
     'the header derives activatability from the model, it does not hard-code it')
   assert.match(header, /role=\{headerActivatable \? 'button' : undefined\}/u)

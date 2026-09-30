@@ -453,7 +453,9 @@
    entry mounts exactly once. Hidden while no plugin
    registers one (upstream default). Geometry mirrors the official ui-sidebar
    stylesheet (no horizontal padding — the column root owns it; 36px row height in
-   both widths) so the rows line up with the New Session button and the footer. */
+   both widths) so the rows line up with the New Session button and the footer; the
+   upstream row's wide half (16px glyph / `.panelTitle` span) is NOT mirrored — the
+   wide entry lives in the source header (2026-10 cleanup). */
 .panelList {
   flex: none;
   display: flex;
@@ -502,13 +504,6 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-}
-
-.panelTitle {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .collapsed .panelList {
