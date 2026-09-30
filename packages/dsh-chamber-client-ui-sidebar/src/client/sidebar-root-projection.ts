@@ -212,6 +212,36 @@ export function useSidebarProjection() {
     const current = getViewPrefs()
     const pendingOrder: Record<string, string[]> = {}
     const pendingTimestamps: Record<string, Record<string, number>> = {}
+    // 账号写入的统一计划（workspace 账号与 flat 账号同一条规则）。归档筛选会让隐藏行离开成员集：
+    // 若把它的 updatedAt 记账一并丢掉，重新显示（show/only 切换）会被当成"首次观测"重新置顶——
+    // 只保留**仍在归档集**的隐藏 id（第四轮 F2：不再无界保留被删除的 id），于是再次曝光不触发
+    // 提升，而清理/删除过的 id 自然离开。合并后的记账与 stored 序都没变就返回 undefined 让调用方
+    // 跳过排写（否则 carried 会让 changed 永久为真，每个投影 tick 都排一次空写；第四轮 F9）。
+    // 判等对象 = pending intent（若有）优先于缓存：否则旧 pending 写会在窗末覆盖本次跳过的新派生
+    // 态（第四轮 correctness finding 2）。
+    const planUpdatedCommit = (
+      accountKey: string,
+      next: ReturnType<typeof nextUpdatedOrder>,
+      archivedSessions: ChamberServerAggregate['archivedSessions'],
+    ): { order: string[]; timestamps: Record<string, number> } | undefined => {
+      if (!next.changed) return undefined
+      const archivedIds = new Set((archivedSessions ?? []).map(row => row.sessionId))
+      const priorTs = current.sessionUpdatedAtByAccount?.[accountKey] ?? {}
+      const carried: Record<string, number> = {}
+      for (const [id, ts] of Object.entries(priorTs)) {
+        if (!(id in next.updatedAt) && archivedIds.has(id)) carried[id] = ts
+      }
+      const mergedTs = { ...next.updatedAt, ...carried }
+      const pendingIntent = peekScheduledActivityWrites()
+      const priorOrder = pendingIntent.updatedOrder[accountKey] ?? current.updatedOrder?.[accountKey] ?? []
+      const priorTsForCompare = pendingIntent.sessionUpdatedAtByAccount[accountKey] ?? priorTs
+      const tsEqual = Object.keys(mergedTs).length === Object.keys(priorTsForCompare).length
+        && Object.entries(mergedTs).every(([id, ts]) => priorTsForCompare[id] === ts)
+      const orderEqual = next.order.length === priorOrder.length
+        && next.order.every((id, index) => priorOrder[index] === id)
+      if (tsEqual && orderEqual) return undefined
+      return { order: next.order, timestamps: mergedTs }
+    }
     for (const server of servers) {
       if (current.orderBy?.[server.id] !== 'updated') continue
       for (const workspace of server.workspaces) {
@@ -224,31 +254,10 @@ export function useSidebarProjection() {
           previousUpdatedAt: current.sessionUpdatedAtByAccount?.[accountKey],
           byId: new Map(workspace.sessions.map(session => [session.id, session])),
         })
-        if (!next.changed) continue
-        // 归档筛选会让隐藏行离开成员集：若把它的 updatedAt 记账一并丢掉，重新显示（show/only
-        // 切换）会被当成"首次观测"重新置顶。只保留**仍在归档集**的隐藏 id（第四轮 F2：不再
-        // 无界保留被删除的 id），于是再次曝光不触发提升，而清理/删除过的 id 自然离开。
-        const archivedIds = new Set((server.archivedSessions ?? []).map(row => row.sessionId))
-        const priorTs = current.sessionUpdatedAtByAccount?.[accountKey] ?? {}
-        const carried: Record<string, number> = {}
-        for (const [id, ts] of Object.entries(priorTs)) {
-          if (!(id in next.updatedAt) && archivedIds.has(id)) carried[id] = ts
-        }
-        const mergedTs = { ...next.updatedAt, ...carried }
-        // 合并后的记账与 stored 序都没变就不再排写（否则 carried 会让 changed 永久为真，
-        // 每个投影 tick 都排一次空写；第四轮 F9）。
-        // 判等对象 = pending intent（若有）优先于缓存：否则旧 pending 写会在窗末覆盖本次跳过
-        // 的新派生态（第四轮 correctness finding 2）。
-        const pendingIntent = peekScheduledActivityWrites()
-        const priorOrder = pendingIntent.updatedOrder[accountKey] ?? current.updatedOrder?.[accountKey] ?? []
-        const priorTsForCompare = pendingIntent.sessionUpdatedAtByAccount[accountKey] ?? priorTs
-        const tsEqual = Object.keys(mergedTs).length === Object.keys(priorTsForCompare).length
-          && Object.entries(mergedTs).every(([id, ts]) => priorTsForCompare[id] === ts)
-        const orderEqual = next.order.length === priorOrder.length
-          && next.order.every((id, index) => priorOrder[index] === id)
-        if (tsEqual && orderEqual) continue
-        pendingOrder[accountKey] = next.order
-        pendingTimestamps[accountKey] = mergedTs
+        const planned = planUpdatedCommit(accountKey, next, server.archivedSessions)
+        if (planned === undefined) continue
+        pendingOrder[accountKey] = planned.order
+        pendingTimestamps[accountKey] = planned.timestamps
       }
       // 单列表账号的 updated 序（仅该来源处于 flat 模式时维护）：成员集 = 全部可见行。
       // 与各组 account 同一条 nextUpdatedOrder 推导与同一防抖写回。
@@ -262,25 +271,10 @@ export function useSidebarProjection() {
             previousUpdatedAt: current.sessionUpdatedAtByAccount?.[accountKey],
             byId: new Map(flatSessions.map(session => [session.id, session] as const)),
           })
-          if (next.changed) {
-            const archivedIds = new Set((server.archivedSessions ?? []).map(row => row.sessionId))
-            const priorTs = current.sessionUpdatedAtByAccount?.[accountKey] ?? {}
-            const carried: Record<string, number> = {}
-            for (const [id, ts] of Object.entries(priorTs)) {
-              if (!(id in next.updatedAt) && archivedIds.has(id)) carried[id] = ts
-            }
-            const mergedTs = { ...next.updatedAt, ...carried }
-            const pendingIntent = peekScheduledActivityWrites()
-            const priorOrder = pendingIntent.updatedOrder[accountKey] ?? current.updatedOrder?.[accountKey] ?? []
-            const priorTsForCompare = pendingIntent.sessionUpdatedAtByAccount[accountKey] ?? priorTs
-            const tsEqual = Object.keys(mergedTs).length === Object.keys(priorTsForCompare).length
-              && Object.entries(mergedTs).every(([id, ts]) => priorTsForCompare[id] === ts)
-            const orderEqual = next.order.length === priorOrder.length
-              && next.order.every((id, index) => priorOrder[index] === id)
-            if (!(tsEqual && orderEqual)) {
-              pendingOrder[accountKey] = next.order
-              pendingTimestamps[accountKey] = mergedTs
-            }
+          const planned = planUpdatedCommit(accountKey, next, server.archivedSessions)
+          if (planned !== undefined) {
+            pendingOrder[accountKey] = planned.order
+            pendingTimestamps[accountKey] = planned.timestamps
           }
         }
       }

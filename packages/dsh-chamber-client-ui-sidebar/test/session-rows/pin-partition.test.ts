@@ -52,11 +52,14 @@ test('the section applies the partition to every mode: workspace, tree and flat 
   assert.ok(SECTION.includes('const pinnedIds = pinnedOrder === undefined ? undefined : new Set(pinnedOrder)'))
   assert.ok(SECTION.includes('const sessionsInOrder = (workspace: ChamberServerWorkspace)'),
     'the raw mode order stays its own function; the partition is layered on top')
-  assert.ok(SECTION.includes('partitionPinnedSessions(sessionsInOrder(workspace), {'),
+  assert.ok(SECTION.includes('partitionPinnedSessions(sessionsInOrder(workspace), pinOptions)'),
     'workspace and tree modes consume the partitioned order through sessionsOf')
-  assert.ok(SECTION.includes('return partitionPinnedSessions(ordered, {'), 'the flat list is partitioned too')
-  assert.ok(SECTION.includes("...(pinnedOrder === undefined || orderBy === 'updated' ? {} : { pinOrder: pinnedOrder }),"),
-    'manual uses the host pin order; updated keeps the account own order')
+  assert.ok(SECTION.includes('return partitionPinnedSessions(ordered, pinOptions)'), 'the flat list is partitioned too')
+  assert.ok(SECTION.includes('const pinOptions = {'), 'one shared options object feeds both partition sites')
+  assert.equal(SECTION.split("...(pinnedOrder === undefined || orderBy === 'updated' ? {} : { pinOrder: pinnedOrder }),").length - 1, 1,
+    'manual uses the host pin order; updated keeps the account own order - the rule exists once')
+  assert.equal(SECTION.includes('reconciledSessionOrder'), false,
+    'the stored-order replay is single-sourced in orderUngroupedSessions')
   assert.equal(SEARCH.includes('partitionPinnedSessions'), false, 'search results are never pin-partitioned (upstream rule)')
 })
 

@@ -92,7 +92,7 @@ test('the archived hover card reports 已归档 instead of done/idle', () => {
 })
 
 test('updated-mode bookkeeping survives a filter-hidden window (no re-promotion on re-exposure)', () => {
-  assert.equal((PROJ.match(/carried\[id\] = ts/g) ?? []).length, 2, 'workspace and flat accounts both carry hidden ids')
+  assert.equal((PROJ.match(/carried\[id\] = ts/g) ?? []).length, 1, 'the carry rule exists once and serves both accounts')
   assert.ok(PROJ.includes('if (!(id in next.updatedAt) && archivedIds.has(id)) carried[id] = ts'),
     'the carry is bounded to ids still in the archive set (no unbounded growth)')
 })

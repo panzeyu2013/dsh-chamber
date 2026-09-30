@@ -20,7 +20,7 @@ import {
 import { RowHoverCard } from './RowHoverCard.tsx'
 import { chamberBridge, type ChamberServerAggregate, type ChamberServerWorkspace } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import {
-  deriveLocalSearchMatches, mergeSearchResults, orderUngroupedSessions, reconciledSessionOrder,
+  deriveLocalSearchMatches, mergeSearchResults, orderUngroupedSessions,
   sanitizeSearchQuery, workspaceAccentStyle,
 } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import { type SearchRow } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
@@ -397,6 +397,12 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
               // 提前）、行也不宣称标记。
               const pinnedOrder = server.pinSetKnown === true ? server.pinnedSessionIds : undefined
               const pinnedIds = pinnedOrder === undefined ? undefined : new Set(pinnedOrder)
+              // 置顶分区选项（上游 sectionMembers 的位置）：manual 的块内序取宿主「最近置顶在前」，
+              // updated 保留该模式自己的 account 序；sessionsOf 与 flat 两个消费点共用这一份。
+              const pinOptions = {
+                ...(pinnedIds === undefined ? {} : { pinnedIds }),
+                ...(pinnedOrder === undefined || orderBy === 'updated' ? {} : { pinOrder: pinnedOrder }),
+              }
               const sessionsInOrder = (workspace: ChamberServerWorkspace): ChamberServerWorkspace['sessions'] => {
                 const wire = workspace.sessions
                 // updated = 手动序 + 活动置顶：渲染序取共享的 updated-order account
@@ -406,22 +412,13 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                 // 动画内不可感知）。manual 模式：未分组桶用存储序，工作区 override 优先。
                 if (orderBy === 'updated') {
                   const stored = viewPrefs.updatedOrder?.[`${server.id}/${workspace.id}`]
-                  if (stored === undefined) return wire
-                  const byId = new Map(wire.map(session => [session.id, session]))
-                  return reconciledSessionOrder(stored, wire.map(session => session.id)).flatMap(id => {
-                    const session = byId.get(id)
-                    return session === undefined ? [] : [session]
-                  })
+                  return stored === undefined ? wire : orderUngroupedSessions(wire, stored)
                 }
                 if (workspace.ungrouped === true) {
                   return orderUngroupedSessions(wire, viewPrefs.ungroupedOrder[server.id])
                 }
                 const override = sessionOrderOverride[`${server.id}/${workspace.id}`]
-                if (override !== undefined) {
-                  const byId = new Map(wire.map(session => [session.id, session]))
-                  return override.flatMap(id => { const session = byId.get(id); return session === undefined ? [] : [session] })
-                }
-                return wire
+                return override === undefined ? wire : orderUngroupedSessions(wire, override)
               }
               // 置顶分区叠加在模式自身的序之上（上游 sectionMembers 的位置）：manual 的块内
               // 序取宿主「最近置顶在前」，updated 保留该模式自己的 account 序。
@@ -431,10 +428,7 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
               const sessionsOf = (workspace: ChamberServerWorkspace): ChamberServerWorkspace['sessions'] => {
                 const cached = sessionsCache.get(workspace.id)
                 if (cached !== undefined) return cached
-                const next = partitionPinnedSessions(sessionsInOrder(workspace), {
-                  ...(pinnedIds === undefined ? {} : { pinnedIds }),
-                  ...(pinnedOrder === undefined || orderBy === 'updated' ? {} : { pinOrder: pinnedOrder }),
-                })
+                const next = partitionPinnedSessions(sessionsInOrder(workspace), pinOptions)
                 sessionsCache.set(workspace.id, next)
                 return next
               }
@@ -452,20 +446,9 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                 const stored = orderBy === 'updated'
                   ? viewPrefs.updatedOrder?.[flatUpdatedAccountKey]
                   : viewPrefs.flatOrder?.[server.id]
-                const ordered = (() => {
-                  if (stored === undefined) return flatMemberSessions
-                  const byId = new Map(flatMemberSessions.map(session => [session.id, session] as const))
-                  return reconciledSessionOrder(stored, flatMemberSessions.map(session => session.id))
-                    .flatMap(id => {
-                      const session = byId.get(id)
-                      return session === undefined ? [] : [session]
-                    })
-                })()
+                const ordered = stored === undefined ? flatMemberSessions : orderUngroupedSessions(flatMemberSessions, stored)
                 // flat 列表同样叠加置顶分区（上游 flat 账号 + sectionMembers 同规则）。
-                return partitionPinnedSessions(ordered, {
-                  ...(pinnedIds === undefined ? {} : { pinnedIds }),
-                  ...(pinnedOrder === undefined || orderBy === 'updated' ? {} : { pinOrder: pinnedOrder }),
-                })
+                return partitionPinnedSessions(ordered, pinOptions)
               })()
               // 空态种子键与空态门同一条表达式（flat 下工作区可能都在、可见行却为零）。
               const rowKeys: string[] = (flatGroupBy ? flatSessions.length === 0 : server.workspaces.length === 0)

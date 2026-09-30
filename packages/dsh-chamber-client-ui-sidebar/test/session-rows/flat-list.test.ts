@@ -63,5 +63,6 @@ test('the updated-mode derivation maintains the flat account only while the sour
   assert.ok(PROJ.includes("if ((current.groupBy?.[server.id] ?? 'workspace') === 'flat') {"))
   assert.ok(PROJ.includes('const flatSessions = server.workspaces.flatMap(workspace => workspace.sessions)'))
   assert.ok(PROJ.includes('flatAccountKey(server.id)'), 'the updated flat account uses the NUL-sentinel helper key')
-  assert.ok(PROJ.includes('pendingOrder[accountKey] = next.order'))
+  assert.equal((PROJ.match(/pendingOrder\[accountKey\] = planned\.order/g) ?? []).length, 2,
+    'both accounts write through the shared commit plan')
 })

@@ -378,6 +378,14 @@ export function collectPackageConsumers(pkg, repoRoot = REPO_ROOT, options = {})
     ...walkFiles(join(repoRoot, 'packages'), () => true),
     ...walkFiles(join(repoRoot, 'scripts'), () => true),
   ]
+  // The package's own root entry declares the surface; a named re-export inside it
+  // cannot be its own consumer (that self-satisfaction would mask every barrel-only
+  // name - the gate then only ever catches `export *` barrels). Other files in the
+  // same package still count: an internal importer is a real consumer of the name.
+  const ownEntryFiles = new Set([
+    join(pkg.dir, 'src', 'index.ts'),
+    join(pkg.dir, 'src', 'index.tsx'),
+  ])
   for (const absolute of files) {
     if (!/\.(?:ts|tsx|mts|mjs)$/u.test(absolute)) continue
     const rel = relative(repoRoot, absolute).split(sep).join('/')
@@ -398,8 +406,10 @@ export function collectPackageConsumers(pkg, repoRoot = REPO_ROOT, options = {})
       const resolved = resolve(dirname(absolute), source)
       return resolved === pkg.dir || resolved.startsWith(pkg.dir + sep)
     }
+    const declaresOwnSurface = ownEntryFiles.has(absolute)
     for (const entry of collectImports(text)) {
       if (!inPackage(entry.source)) continue
+      if (declaresOwnSurface) continue
       for (const name of entry.names) imported.add(name)
     }
     const memberAccesses = (binding) => {

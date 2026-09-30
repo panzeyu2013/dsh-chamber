@@ -311,11 +311,16 @@ export function __resetMembershipGracesForTests(): void {
   forkMembershipGraceByServer.clear()
 }
 
+/** archivedFilter 三态的行准入（上游 tree.ts 230-257）：default 藏归档、show 原槽位、only 只留归档。 */
+export function archivedRowAdmitted(filter: ArchivedFilter, isArchived: boolean): boolean {
+  return filter === 'show' || (filter === 'only' ? isArchived : !isArchived)
+}
 /**
  * Merge a stored ungrouped order with the wire order: wire-known ids come in
  * stored order first, then the remaining wire ids in wire order; ids unknown
  * to the wire are skipped.
  */
+
 export function reconciledSessionOrder(stored: readonly string[], wireIds: readonly string[]): string[] {
   const wire = new Set(wireIds)
   const seen = new Set<string>()
@@ -1249,12 +1254,9 @@ function sessionVisible(
     const isCurrent = session.sessionId === currentSessionId
     const isGhost = (ghostExpiry ?? 0) > now
     if (!isCurrent && !isGhost) return false
-    if (archived.has(session.sessionId)) return archivedFilter !== 'default'
-    return archivedFilter !== 'only'
+    return archivedRowAdmitted(archivedFilter, archived.has(session.sessionId))
   }
-  if (archived.has(session.sessionId)) return archivedFilter !== 'default'
-  // only：非归档行（含当前 blank 行）全部不渲染（上游 `only` 分支同规则）。
-  return archivedFilter !== 'only'
+  return archivedRowAdmitted(archivedFilter, archived.has(session.sessionId))
 }
 
 /**
@@ -1422,9 +1424,7 @@ export function deriveLocalSearchMatches(
   const matches: { sessionId: string; updatedAt?: number }[] = []
   for (const session of snapshot.sessions) {
     if (session.origin === 'subagent' || session.blank) continue
-    // 归档命中跟随 archivedFilter（上游 deriveSearchResults 同规则）。
-    const isArchived = archived.has(session.sessionId)
-    if (archivedFilter === 'default' ? isArchived : archivedFilter === 'only' ? !isArchived : false) continue
+    if (!archivedRowAdmitted(archivedFilter, archived.has(session.sessionId))) continue
     // The DISPLAY label is what the user reads, so search matches it: a row
     // labeled by its project directory must be findable by that directory,
     // not only by its durable title.
