@@ -603,8 +603,8 @@ test('completion-arm wiring: the arm step is the one gate-protected, never-throw
   // 重入闸（React #185）：实体只经 createStepGate 补跑，公开入口是 request。
   assert.ok(hook.includes('createStepGate(sourceId => { stepArmGuardedRef.current(sourceId) })'),
     'the arm keeps its own re-entrancy gate')
-  assert.ok(hook.includes('const applyGatesRef = useRef<Map<string, StepGate>>(new Map())'),
-    'apply gets a per-source gate of its own')
+  assert.ok(hook.includes('const applyPoolRef = useRef<StepPool | null>(null)'),
+    'apply gets a per-source gate pool of its own')
   const entry = bracedBlockFrom(hook, 'const stepCompletionArmFor = useCallback(')
   assert.ok(entry.includes('stepArmGateRef.current?.request(sourceId)'),
     'the public entry must go through the re-entrancy gate, never call the entity synchronously')
@@ -782,16 +782,16 @@ test('never-throw wiring: reconcile / apply / arm and every facts listener bound
     'reconcile must never be requested through a gate (cross-source claims splitting)')
   assert.ok(hook.includes('const applySessionFactsNow = useCallback('))
   assert.ok(bracedBlockFrom(hook, 'const applySessionFacts = useCallback(')
-    .includes('pendingFactsRef.current.set(sourceId, { snapshot })'),
+    .includes('pendingFactsRef.current.set(sourceId, snapshot)'),
   'apply must register the latest snapshot before requesting the gate')
   assert.ok(bracedBlockFrom(hook, 'const applySessionFacts = useCallback(')
-    .includes("applyGateFor(sourceId).request('apply')"))
+    .includes('applyPoolRef.current?.request(sourceId)'))
   // ②′ apply 闸步骤体：唯一 never-throw 收口，且只排空最新快照一次。
   const gateStep = bracedBlockFrom(hook, 'runApplyRef.current = ')
   assert.ok(gateStep.includes("factsStepGuard.guard(sourceId, 'apply-session-facts'"),
     'the apply gate step keeps the never-throw boundary')
-  assert.ok(gateStep.includes('pendingFactsRef.current.get(sourceId)')
-    && gateStep.includes('pendingFactsRef.current.delete(sourceId)'),
+  assert.ok(gateStep.includes('pendingFactsRef.current.take(sourceId)')
+    && gateStep.includes('slot.found'),
   'apply must drain the latest pending snapshot once (coalesce, never stale)')
   assert.ok(hook.includes('guardStep: factsStepGuard'), 'the hook exposes the one guard to the bridge')
   // ③ runtime 上报：桥的 listener body 是 guarded 的本地实现。

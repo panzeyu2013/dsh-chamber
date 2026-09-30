@@ -44,6 +44,7 @@ import {
   type NotificationStorageLike,
 } from '../notification-store.ts'
 import { createStepGate, type StepGate } from '../step-gate.ts'
+import { createLatestSlot, createStepPool, type StepPool } from './facts-apply-pool.ts'
 import { createFactsHealthRecorder, createFactsStepGuard, type FactsHealthRecorder, type FactsStepGuard } from '../facts-health.ts'
 
 /**
@@ -276,22 +277,15 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
    * 载荷：重入被延后时只保留**最新**一份（快照累积且游标单调，见 session-facts-source），
    * 故延迟补跑不会用旧帧覆盖新帧；非重入调用仍同步执行（闸契约）。
    */
-  const applyGatesRef = useRef<Map<string, StepGate>>(new Map())
-  const pendingFactsRef = useRef<Map<string, { snapshot: SessionFactsSnapshot | undefined }>>(new Map())
+  const pendingFactsRef = useRef(createLatestSlot<SessionFactsSnapshot | undefined>())
   const runApplyRef = useRef<(sourceId: string) => void>(() => {})
   runApplyRef.current = (sourceId: string): void => {
-    const entry = pendingFactsRef.current.get(sourceId)
-    if (entry === undefined) return
-    pendingFactsRef.current.delete(sourceId)
-    factsStepGuard.guard(sourceId, 'apply-session-facts', () => applySessionFactsNow(sourceId, entry.snapshot))
+    const slot = pendingFactsRef.current.take(sourceId)
+    if (!slot.found) return
+    factsStepGuard.guard(sourceId, 'apply-session-facts', () => applySessionFactsNow(sourceId, slot.value))
   }
-  const applyGateFor = useCallback((sourceId: string): StepGate => {
-    const existing = applyGatesRef.current.get(sourceId)
-    if (existing !== undefined) return existing
-    const created = createStepGate(() => { runApplyRef.current(sourceId) })
-    applyGatesRef.current.set(sourceId, created)
-    return created
-  }, [])
+  const applyPoolRef = useRef<StepPool | null>(null)
+  applyPoolRef.current ??= createStepPool(sourceId => { runApplyRef.current(sourceId) })
   const pumpNotificationsRef = useRef<() => void>(() => {})
   const notificationRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => {
@@ -545,7 +539,7 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
     })
   }, [emitSessionNotification, persistCompletionLedger, factsStore, completionObservationRef, completeLedgerRef, sourceLifecyclesRef, bootToken, bootVerdict])
 
-  /** never-throw 出口（**不经闸**：它必须与 apply 的认领写入同栈配对，见上方 applyGatesRef 注释）。 */
+  /** never-throw 出口（**不经闸**：它必须与 apply 的认领写入同栈配对，见上方 applyPoolRef 注释）。 */
   const reconcileCompletions = useCallback((sourceId: string): void => {
     factsStepGuard.guard(sourceId, 'reconcile-completions', () => reconcileCompletionsNow(sourceId))
   }, [reconcileCompletionsNow, factsStepGuard])
@@ -602,14 +596,14 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
 
   /**
    * facts 快照的**唯一入口**（gateway 订阅 / 无壳观察者 / dropSession 共用）：登记最新快照 +
-   * 经本来源闸请求应用。never-throw 与重入语义都在闸内（runFactsStepRef）——listener 因此
+   * 经本来源闸请求应用。never-throw 与重入语义都在闸内（runApplyRef）——listener 因此
    * 不可能把异常抛进 session-facts-source / source-mux-facts 的 emit 环（SSE/WS 泵不被
    * listener 打死，也无法逃成 unhandled rejection）。
    */
   const applySessionFacts = useCallback((sourceId: string, snapshot: SessionFactsSnapshot | undefined): void => {
-    pendingFactsRef.current.set(sourceId, { snapshot })
-    applyGateFor(sourceId).request('apply')
-  }, [applyGateFor])
+    pendingFactsRef.current.set(sourceId, snapshot)
+    applyPoolRef.current?.request(sourceId)
+  }, [])
 
   /**
    * 来源撤回（唯一实体，按 provenance 分域；C1）：
@@ -642,8 +636,8 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
     completionObservationRef.current.delete(sourceId)
     // 撤回即作废待排空 facts：否则闸活跃期内登记的快照会在 dropSession 之后跑，
     // 把已删来源的 facts 行复活（2026-09-30 R1 复核 F2）。
-    pendingFactsRef.current.delete(sourceId)
-    applyGatesRef.current.delete(sourceId)
+    pendingFactsRef.current.forget(sourceId)
+    applyPoolRef.current?.forget(sourceId)
     completeLedgerRef.current.withdraw(sourceId)
     persistCompletionLedger(true)
     stepCompletionArmFor(sourceId)

@@ -158,6 +158,9 @@ export const GROUPS = {
     'test/wiring/source-registry-wiring.test.ts',
     // 完成点步进的 #185 重入闸：非重入同步、步骤体永不嵌套、按 id 去重、微任务补跑。
     'test/wiring/step-gate.test.ts',
+    // facts apply 纯机制（每来源闸 + 最新载荷槽）的行为契约：文本锁挡不住 first-wins /
+    // 丢载荷 / 撤回后复活这类变异（2026-09-30 复核）。
+    'test/wiring/facts-apply-pool.test.ts',
     // F6 回归：durable 通知三表 + outbox 剪枝必须门控在权威 roster 水合后
     // （源码锁 + 纯谓词/假存储双证据），并锁完成修正臂的接线形状。
     'test/wiring/unread-prune-roster-gate.test.ts',
