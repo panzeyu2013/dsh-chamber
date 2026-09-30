@@ -62,7 +62,7 @@
 - [ ] 冒烟：`node packages/desktop/vendor/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js --version` = 目标版本。
 - [ ] `allowBuilds` / `DENY_BUILDS` 复核：上游新增原生依赖时显式裁决（单源生成点 + 测试钉住），不留沉默的ignored builds。
 - [ ] 上游 patch 集合变化（§17-C）：先 `cmp` 新旧补丁文件内容——**文件名变化不等于语义变化**（同字节改名只换登记锚）；内容确有变化才按四类准入重导/重锚。随后对拍 `vendor/harness-checkout/{pnpm-workspace.yaml,patches/}` 的 `patchedDependencies` 与 registry 的 `patches`（`node --test scripts/upstream/registry.test.mjs`），再跑 `pnpm --filter @dsh-chamber/desktop run bundle:dsh -- --force --refresh-lockfile` 让 runtime lock 记录 patch set；`node --test packages/desktop/scripts/upstream-patches.test.mjs` 在集合漂移或 runtimeClosure 条目未解析出 patch_hash 时红（`allowUnusedPatches` 只豁免图外条目）。
-- [ ] 根锁里无 use 边的旧快照是 pnpm 的既定保留行为（非手改信号）：收口以 frozen 安装 + 前后哈希一致为准，不手工删条目；确需清理时用一次受控非 frozen 安装并复核幂等。
+- [ ] 根锁的孤立快照（无 importer/snapshot 引用边的 `packages:`/`snapshots:` 条目）pnpm 默认保留、不自动清：确需清理时按可达性删条目，并三项核验——`pnpm install --lockfile-only` 零 diff（幂等、不回填）、`CI=true pnpm install --frozen-lockfile` 成功、CI 三平台 frozen 安装绿；任何被回填的条目说明它确有解析边，以回填为准。
 
 ## 6. 回归
 

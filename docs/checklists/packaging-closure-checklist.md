@@ -78,7 +78,7 @@ glob即闭包：`packages/desktop/package.json` 的 `build.files` 用包根三�
 
 ```sh
 count=$(ls -1 packages/desktop/*.ts packages/desktop/*.cts packages/desktop/*.mjs 2>/dev/null \
-  | grep -vE '/(loopback-http-test-server|sidecar-stub)\.ts$' \
+  | grep -v '/sidecar-stub\.ts$' \
   | grep -vc '\.test\.ts$')
 echo "root-level collected modules: $count"
 test "$count" = 76 || { echo "STALE: 名单/计数需同步（见上方 76 个）"; exit 1; }
