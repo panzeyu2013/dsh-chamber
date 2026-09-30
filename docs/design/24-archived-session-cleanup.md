@@ -529,16 +529,17 @@ generic throw（无 status 透出）；503 `instance_unavailable` 有专类特�
 位置与行为（`packages/dsh-chamber-client-ui-sidebar/src/client/SidebarRoot.tsx`
 + `ArchiveManagerDialog.tsx`）：
 
-- 锚点：来源分组头（server 行）hover 操作簇——现状三枚（排序菜单 / add-workspace `+` /
-  搜索，`cc.sourceActions`）；在簇尾一枚删除图标按钮（`IconTrashOutlineRegular`，size 14 与
-  workspace 删除一致），点击**打开归档管理器对话框**。簇宽 64→86px、header 28px 定高
-  不变，「无 reflow（垂直）」声明成立。
-- 呈现/隐藏条件与同簇按钮**逐字一致**：`server.connected && (server.aggregateError ===
+- 锚点：来源分组头（server 行）hover 操作簇——现状内建三枚（排序菜单 / add-workspace `+` /
+  搜索，`cc.sourceActions`；簇首另有每条已注册 `sidebar.panellist` 入口的条件占位）；在簇尾一枚
+  删除图标按钮（`IconTrashOutlineRegular`，size 14 与
+  workspace 删除一致），点击**打开归档管理器对话框**。簇宽 64→86px（未计条件面板入口；注册时
+  每条 +20px +2px gap）、header 28px 定高不变，「无 reflow（垂直）」声明成立。
+- 呈现/隐藏条件与同簇内建按钮**逐字一致**：`server.connected && (server.aggregateError ===
   undefined || search?.expanded === true)`；断连/聚合错误时不显示；折叠态 header 常驻、
-  按钮仍可达。
+  按钮仍可达。（**例外**：面板轴入口有意不过 `connected` 门——注册即在，见 design 06 §4.7。）
 - 交互流（**全流程 per-server 单飞**）：
   1. 点击 → `stopPropagation` + `suppressClickRef` 检查 + `clearPendingClick()`（照抄
-     同簇三件套；拖拽豁免/keydown target 守卫为泛型机制，自动覆盖新按钮）——需维护的只是
+     同簇内建三件套；拖拽豁免/keydown target 守卫为泛型机制，自动覆盖新按钮）——需维护的只是
      **注释清单**：SidebarRoot dragstart 按钮豁免注释、pending-click.ts 顶部注释、CSS 簇
      内容描述，archive-cleanup 已列名；
   2. 单飞守卫：per-server in-flight，在途时按钮 `disabled`（disabled 瞬时不可聚焦，与键盘

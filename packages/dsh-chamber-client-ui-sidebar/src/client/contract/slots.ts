@@ -31,8 +31,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      *  key of THIS ctx's instance, so an entry belongs to the source that loaded
      *  its registrant. The shell owns the button, resolves its label from list
      *  metadata, then asks `ctx.layout.selectPanel(id)`; the wide column renders
-     *  the row inside the owning source's section, while the collapsed rail keeps
-     *  the upstream global glyph axis. */
+     *  a compact action in the owning source's header, while the collapsed rail
+     *  keeps the upstream global glyph row. */
     'sidebar.panellist': { kind: 'list'; scope: 'root'; owner: SidebarPanelIconOwnerProps }
     /** The workspace/session browsing region: declared by this package's
      *  'sidebar' entry, so ui-workspace may register without error, but the

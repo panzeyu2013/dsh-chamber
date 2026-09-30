@@ -80,12 +80,13 @@ export function SidebarRoot({
   t,
   renderSlot,
 }: SidebarRootComponentProps) {
-  // 面板投影：本 ctx 的注册（默认空），宽态供 owning section、rail 态供下方的全局面板轴；
+  // 面板投影：本 ctx 的注册（默认空），宽态供 owning source 的 server 头动作簇
+  // （ServerSectionHeader 的 PanelHeaderEntry）、rail 态供下方的全局面板轴；
   // selector hook 把行重渲染限制在自身选中态。
   const panels = (usePanels as PanelsHook)(snapshot => snapshot)
   // 本包的 typecheck program 经 loose ambient seam 解析 slots 渲染共享：seam 的 renderSlot 是
   // 3 参，但内联 opts（{entryKey?, only?, fallback?}）不含 RenderOpts 的 hookContext，故下面两个
-  // cast 是类型层提升、绝不改变运行时（运行时签名是 (key, owner, opts)，按 key 分发）。面板行渲染
+  // cast 是类型层提升、绝不改变运行时（运行时签名是 (key, owner, opts)，按 key 分发）。面板入口渲染
   // 的 {only} 已在 seam 的 opts 内，无需 cast——宽 seam 类型直接透传。
   const renderWorkspaceGit = renderSlot as (
     key: 'sidebar.workspace.git',
@@ -338,9 +339,9 @@ export function SidebarRoot({
         </button>
       </Tooltip>
 
-      {/* 全局面板轴（仅 rail）：宽态的行按来源下挂在各 source 的 section 里
-          （ServerSectionPanels），折叠态没有 section 可言，故保留上游字形行——
-          每个条目在任一时刻恰好挂载一次（design 05 §2 / design 06 §4.7）。 */}
+      {/* 全局面板轴（仅 rail）：宽态的入口进 owning source 的 server 头动作簇
+          （ServerSectionHeader 的 PanelHeaderEntry），折叠态没有分组头可言，故保留
+          上游字形行——每个条目在任一时刻恰好挂载一次（design 05 §2 / design 06 §4.7）。 */}
       {!wide && panels.length > 0 && (
         <nav className={css.panelList} aria-label={t('panels.label')}>
           {panels.map(panel => (

@@ -1,8 +1,9 @@
 /**
  * One source’s header row of the chamber sidebar ServerSection subtree: the
- * connection dot/spinner, fold toggle, view-options menu, add-workspace/search/archive
- * actions, the single per-source source-note live region and the folded
- * open-failure hoist. Shell state comes from useSidebarSection().
+ * connection dot/spinner, fold toggle, the panel-axis entries (`PanelHeaderEntry`),
+ * the view-options menu, add-workspace/search/archive actions, the single
+ * per-source source-note live region and the folded open-failure hoist. Shell
+ * state comes from useSidebarSection().
  */
 import { useMemo, useState, type RefObject } from 'react'
 import clsx from 'clsx'
@@ -22,6 +23,7 @@ import { collapseSearch, expandSearch, type SourceSearchState } from '@dsh-chamb
 import { sourceBootGapNote } from './source-boot-gap.ts'
 import { IconMonitorOutline16 } from './icons.tsx'
 import { sourceAccentStyle, useSidebarSection } from './sidebar-context.ts'
+import { PanelHeaderEntry } from './sidebar-root-chrome.tsx'
 import { sourceHeaderActivatable, sourceHeaderTitle, sourceStatusKind, sourceStatusLabelKey } from './server-section-model.ts'
 import cc from './sidebar-chamber.module.css'
 
@@ -58,6 +60,10 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
     sortMenuOpen,
     setSortMenuOpen,
     useShortcuts,
+    panels,
+    usePanelInfo,
+    selectPanel,
+    renderSlot,
   } = useSidebarSection()
   /**
    * 来源头部的键盘焦点揭示态（design 08 §3.2）：静息时图标簇 `display:none`，只靠
@@ -289,9 +295,9 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                       />
                     )}
                   </span>
-                  {/* 头部动作（视图选项菜单 + 加工作区 + 来源搜索 + 归档清理）与会话行动作
-                      一样 hover 才显形：静息时右侧是连接状态，悬停换成图标簇（visibility
-                      切换，无重排）。搜索胶囊或视图选项菜单打开时图标簇常驻
+                  {/* 头部动作（面板轴入口 + 视图选项菜单 + 加工作区 + 来源搜索 + 归档清理）与会话行动作
+                      一样 hover 才显形：静息时右侧是连接状态，悬停换成图标簇（display
+                      替换，静息不占位）。搜索胶囊或视图选项菜单打开时图标簇常驻
                       （.sourceActionsVisible），图标才能收起/关闭；键盘焦点（Tab）同样
                       常驻——否则簇里的按钮永远不在 Tab 序里（见键盘焦点揭示态注释）。 */}
                   <span
@@ -301,6 +307,28 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                         && cc.sourceActionsVisible,
                     )}
                   >
+                    {/* 面板轴（`sidebar.panellist`）的宽态落点：本 ctx 注册的每条入口渲染成
+                        20px 动作图标，排在视图选项左侧、共用同一 hover 揭示簇（design 05 §2 /
+                        design 06 §4.7）。**owning 门**：每个来源都会渲染 section，但 panels 属于
+                        本壳自己的 ctx，故只在 owning（活动）来源的头里挂载一次——与旧 36px 行
+                        同一条 `server.id === chamberInstanceId` 门；否则会 N 份、且点击落回本壳
+                        的面板。**有意不过 connected 门**：条目存在与否只取决于注册者，断连来源
+                        也随簇揭示（点开的页面自呈该 Host 的失败态）。**Tab 可达**：入口随簇静息
+                        隐藏，Tab 落到恒在的折叠钮即冒泡置位 `.sourceActionsVisible`，再 Tab 进入本条。 */}
+                    {server.id === chamberInstanceId && panels.map(panel => (
+                      <PanelHeaderEntry
+                        key={panel.id}
+                        id={panel.id}
+                        label={panel.label}
+                        usePanelInfo={usePanelInfo}
+                        renderSlot={renderSlot}
+                        onSelect={(id) => {
+                          if (suppressClickRef.current) return
+                          clearPendingClick()
+                          selectPanel(id)
+                        }}
+                      />
+                    ))}
                     {/* 每来源视图选项菜单（上游 ViewOptionsMenu 三段形态）：分组方式 / 排序方式 /
                         筛选会话，各带 label 与 selectedIds 勾选；静息态由 tooltip + aria-label
                         + sortActive 着色承载（hover 才显形）。密度保持本仓 compact 档

@@ -41,7 +41,6 @@ import {
 } from '@dsh-chamber/dsh-chamber-client-core/session-row-window'
 import { orderWithOverride, useSidebarSection, workspaceDropEnv } from './sidebar-context.ts'
 import { ServerSectionHeader } from './ServerSectionHeader.tsx'
-import { ServerSectionPanels } from './ServerSectionPanels.tsx'
 import { ServerSectionSearchCapsule, ServerSectionSearchResults } from './ServerSectionSearch.tsx'
 import { ServerSectionSessionRows } from './ServerSectionRows.tsx'
 // Row motion is upstream's own animator, ported verbatim into ./rows (the vendor
@@ -501,13 +500,11 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                   searchInput={searchInput}
                   focusSearchOnMount={focusSearchOnMount}
                 />
-                {/* The panel rows sit between the header and the foldable
-                    region: the source-level fold hides the BROWSING region below
-                    (capsule, source-scope git alert, workspace list) and never
-                    the source's own panel entries (design 06 §4.7). The search
-                    state is untouched, so expanding remounts the capsule with
-                    its query intact. */}
-                {server.id === chamberInstanceId && <ServerSectionPanels />}
+                {/* The source-level fold hides only the BROWSING region below
+                    (capsule, source-scope git alert, workspace list); the panel
+                    axis lives in the header itself (design 06 §4.7), and the
+                    search state is untouched, so expanding remounts the capsule
+                    with its query intact. */}
                 {!sourceFolded && (
                 <>
                 {/* The search capsule row beneath the header; Escape clears and

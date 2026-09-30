@@ -697,8 +697,8 @@
   to { transform: rotate(360deg); }
 }
 
-/* Source-header right cluster (sort menu + search + add-workspace `+` +
-   archive-cleanup manager — design 24 §6): NOT
+/* Source-header right cluster (panel-axis entries + sort menu + search +
+   add-workspace `+` + archive-cleanup manager — design 24 §6): NOT
    rendered at rest (display:none — zero layout space, so the connection
    status really sits at the header's right end). Hovering the header swaps
    the cluster IN and the status OUT — a true replacement. While a search
@@ -1341,11 +1341,15 @@
    rows protect; the invisible rim that would square the target with WCAG
    2.2 2.5.8 is not used — see the block above (design 24 §13 item 17). */
 
-/* 排序按钮的 updated（按更新时间）态——品牌色 + 浅底，视觉可辨
-   （菜单勾选之外的可感知样式；hover 保持文字色变化）。按钮是
-   菜单入口，.sortActive 状态类承载选中态——菜单按钮的 pressed
-   语义由菜单内勾选承担。 */
-.actionIcon.sortActive {
+/* 头部图标簇的两种选中态共用一套声明——品牌色 + 浅底，视觉可辨（hover 保持文字色
+   变化，故 hover 时只剩浅底；与 .actionIcon:hover 的既有语义一致）：
+   - .sortActive：排序按钮的 updated（按更新时间）态，菜单勾选之外的可感知样式；
+     按钮是菜单入口，pressed 语义由菜单内勾选承担。
+   - .actionPanelActive：来源头面板轴入口的选中态（design 05 §2 / design 06 §4.7）
+     ——headless 图标按钮没有菜单勾选面，浅底是它唯一的选中面。
+   两者可同时成立；静息都只在 hover 揭示簇里可见。 */
+.actionIcon.sortActive,
+.actionIcon.actionPanelActive {
   color: var(--dsw-alias-brand-primary);
   background: color-mix(in srgb, var(--dsw-alias-brand-primary) 14%, transparent);
 }
@@ -2214,24 +2218,6 @@
    capsule + error ink on the official Button atom. */
 .archiveManagerDanger {
   color: var(--dsw-alias-state-error-primary);
-}
-
-/* Source-scoped panel rows (sidebar.panellist hung under its owner source;
-   design 05 §2 / design 06 §4.7). The ROW geometry stays the upstream .panelRow
-   verbatim (36px / padding 7px 8px / margin 0 2px — density is a deliberate
-   no-change); this container adds no row geometry of its own, only the section
-   inset (row box starts at 4 + its own 2px margin = the 28px source header's 6px
-   content origin) and the upstream list stack (flex column + 4px gap, copied
-   from .panelList). Accepted
-   consequence of the 4px inset: the row's hover band is ~6px narrower per side
-   than the full-bleed bands of the header/session rows; dropping the padding to
-   0 (row box at 2px) is the one-line alternative if the real machine prefers it. */
-.sectionPanels {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin: 2px 0 4px;
-  padding: 0 4px;
 }
 
 /* ===== 归档行与归档提示条（design 06 §3.4，上游 Rows.module.css 的 .archived 与

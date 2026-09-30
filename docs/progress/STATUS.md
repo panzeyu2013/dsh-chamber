@@ -215,12 +215,11 @@
   原登记按此修正。
   仍需动作 = 实机同时启用两实例的 bundle，观察 console 是否出现该抛错（覆盖 `schedule-mark` 与
   `schedules` 两个 id）；若出现，再走「每实例页面级 slot id 命名空间」方案。
-- **面板轴残余（已登记，不改；前三条仅本条登记，42px 拖拽与点击埋点见 design 06 §4.7）**：`ui-schedule` 的页面级 localStorage
+- **面板轴残余（已登记，不改；前两条仅本条登记，点击埋点见 design 06 §4.7）**：`ui-schedule` 的页面级 localStorage
   键（`dsh.schedule.recent-time-zones.v1` 真跨实例共享；`dsh.schedule.task-tab.v1.<sessionId>` 按会话分键）、
-  30s 无 `visibilityState` 门的相对时钟（隐藏视图同样在跑）、来源拖拽中点因面板行增高最多 42px
-  （常见约 38px）而下移约 19–21px、面板点击埋点 `sidebar_menu_click` 未复制（按裁决不复制）。前三条是
-  extra row / 上游组件的既有行为（chamber 无补丁面），不做本仓修补；焦点 / 色带 / nav 语义 /
-  文案 parity 的接受偏差同样见 §4.7。
+  30s 无 `visibilityState` 门的相对时钟（隐藏视图同样在跑）、面板点击埋点 `sidebar_menu_click` 未复制（按裁决不复制）。
+  前两条是 extra row / 上游组件的既有行为（chamber 无补丁面），不做本仓修补；宽态入口的盒形 / 静息不可见 /
+  wide↔rail 重挂载接受偏差见 design 06 §4.7。
 - **平台腿未落地**：Windows 的 `[data-windows-titlebar]` 分支（属性已由 win32 preload 的 `markWindowsTitlebar` 写入，
   侧栏整块未抄，收口随 design 23）⇒ Windows 腿的侧栏
   形态与上游不同，属排期而非功能选择（Electron macOS 腿已按上游 darwin 分支收口，见第 52 行）。

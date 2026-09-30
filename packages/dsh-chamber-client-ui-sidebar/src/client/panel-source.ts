@@ -43,8 +43,8 @@ function labelOf(label: string | (() => string) | undefined): string | undefined
 }
 
 /**
- * Build this ctx's panel projection (the wide per-source rows and the rail axis
- * share it). Entries without an id are skipped: a list entry must name the main
+ * Build this ctx's panel projection (the wide source-header actions and the rail
+ * axis share it). Entries without an id are skipped: a list entry must name the main
  * key it addresses (upstream would project an empty-id row here — no known
  * registrant uses one). The label falls back to the id so a row is never
  * nameless. Notify-only-on-change is OURS: `set` runs only after the shallow row

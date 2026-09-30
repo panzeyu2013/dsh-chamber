@@ -116,7 +116,7 @@
   折叠入场动画删除、`RowHoverCard` 自持（vendor 竞态；上游修掉即退役）、darwin vibrancy 门、`sidebar.workspaces` 只声明不渲染、
   `sidebar.toggle.badge` 不做、完成状态品牌蓝点、默认 `orderBy=manual`（偏差 B1）、flat/workspace-tree 与归档过滤已于 2026 对齐轮落地（per-source，design 06 §3.4）、
   `data-chamber-row` 锚点、归档确认对话框（本仓两段式）、
-  **面板行按来源下挂**（宽态 owning server 分组 / rail 上游字形行；行几何维持上游 36px；design 05 §2 / 06 §4.7）。
+  **面板轴入口按来源下挂**（宽态来源头动作簇内的紧凑入口、静息 `display:none`；rail 上游字形行；design 05 §2 / 06 §4.7）。
 
 指针：design 06 §7、design 24 §1、STATUS 的对应条目与 `docs/checklists/upstream-touchpoints.md`（registry 触点门）。
 
@@ -125,8 +125,8 @@
 - **命中盒几何无测试锁**：六个小图标钮命中盒 = 视觉盒现在只有 CSS 注释与 design 06 §7 登记兜着；重加 rim / 改命中盒前先补一条几何锁。
 - **补锁候选（低优，未做）**：`RowHoverCard.tsx` 的 `onClickCapture` 无源码锁（与 `onPointerDownCapture` 同址调
   `intent.press()`，上游 `dismissFromAnchor` 双挂）；`session-title-marquee.ts` 的 `range <= MIN_TITLE_REVEAL_PX` 早退与
-  reduced-motion 直达分支未被 4 条单测覆盖；`row-render-cost.test.ts` 的 `faces.length === 12`/`keys.length === 43` 等号是
-  **有意**的收紧（合法新增一个 face/字段会红，改前先确认清单）。
+  reduced-motion 直达分支未被 4 条单测覆盖；`row-render-cost.test.ts` 的 `faces.length === 13` 等号与 ctxValue 的
+  key==deps 动态对账是**有意**的收紧（合法新增一个 face/字段会红，改前先确认清单）。
 - **生效 dwell 与 C15 面**：C15 的 `TIMING_PAIRS`（`verify-upstream-touchpoints-hover.mjs`）只锁原子默认 500 与
   `HOVER_OPEN_DELAY_MS`；两处 call site 的 `openDelayMs={800}`（`ServerSection.tsx`、`ServerSectionRows.tsx`）是**生效值**却无锁。
   要么在侧栏测试里加一对源文本锁，要么把 `TIMING_PAIRS` 扩成「上游 rows call 值 == chamber call 值」（后者会改 C15 判据与其

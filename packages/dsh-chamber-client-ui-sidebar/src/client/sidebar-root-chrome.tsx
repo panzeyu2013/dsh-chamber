@@ -1,6 +1,7 @@
-/** Sidebar shell chrome: the panel row (rail axis and source-scoped section
- *  share it), the region error boundary and the source-dot accent helper —
- *  presentational pieces that own no shell state. */
+/** Sidebar shell chrome: the two panel-axis entry forms (the wide source
+ *  header's compact action and the collapsed rail's upstream row), the region
+ *  error boundary and the source-dot accent helper — presentational pieces that
+ *  own no shell state. */
 
 import { Component, type CSSProperties, type ReactNode } from 'react'
 import clsx from 'clsx'
@@ -49,9 +50,11 @@ export class ChamberListBoundary extends Component<{ children: ReactNode }, { er
   }
 }
 
-/** One panel row (the rail axis and the per-source section share this component):
- *  it subscribes only to its own selection state, so a panel switch re-renders the
- *  affected rows instead of the whole column. */
+/** One panel row for the collapsed rail axis (the wide column renders the compact
+ *  `PanelHeaderEntry` instead): it subscribes only to its own selection state, so
+ *  a panel switch re-renders the affected rows instead of the whole column. The
+ *  `wide` branch is currently UNREACHABLE (the only mount site is the rail, behind
+ *  `!wide`) and is kept so this component stays the upstream row form verbatim. */
 export function PanelRow({
   id,
   label,
@@ -81,6 +84,53 @@ export function PanelRow({
           {renderSlot('sidebar.panellist', { size: wide ? 16 : 18, active }, { only: id })}
         </span>
         {wide && <span className={css.panelTitle}>{label}</span>}
+      </button>
+    </Tooltip>
+  )
+}
+
+/**
+ * One panel entry as a source-header action (design 05 §2 / design 06 §4.7):
+ * the WIDE column renders each `sidebar.panellist` registration as a compact
+ * action in the header of the source that owns it, left of the view options.
+ * It rides the header's `.sourceActions` cluster, so it is `display:none` at
+ * rest and appears with its neighbours on hover or keyboard focus — the same
+ * reveal discipline as the view-options button. The glyph still comes from the
+ * list contract's owner props and the click forwards to the injected
+ * `selectPanel`, exactly like the rail row (`PanelRow`); only the box differs
+ * (the 20px `.actionIcon` instead of the upstream 36px row). The header's
+ * suppress-click / pending-click gate wraps the forwarding at the CALL SITE
+ * (ServerSectionHeader), not inside this component.
+ */
+export function PanelHeaderEntry({
+  id,
+  label,
+  usePanelInfo,
+  renderSlot,
+  onSelect,
+}: {
+  id: SidebarPanelMetadata['id']
+  label: string
+  usePanelInfo: PanelSelectorHook
+  renderSlot: SidebarRootComponentProps['renderSlot']
+  onSelect: (id: SidebarPanelMetadata['id']) => void
+}) {
+  const active = usePanelInfo(info => info.activePanelId === id)
+  return (
+    <Tooltip label={label} side="bottom" delayMs={500}>
+      <button
+        type="button"
+        className={clsx(cc.actionIcon, active && cc.actionPanelActive)}
+        aria-label={label}
+        aria-current={active ? 'page' : undefined}
+        onClick={(event) => {
+          event.stopPropagation()
+          onSelect(id)
+        }}
+      >
+        <span className={css.panelGlyph} aria-hidden="true">
+          {renderSlot('sidebar.panellist', { size: 14, active }, { only: id })}
+        </span>
       </button>
     </Tooltip>
   )

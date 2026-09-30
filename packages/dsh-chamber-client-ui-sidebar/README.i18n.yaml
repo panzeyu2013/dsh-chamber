@@ -3,5 +3,5 @@
 # authority; after editing either side, bring the other along and update both
 # hashes here (重录由 `pnpm run verify:i18n -- --write`；该门禁现在会校验这里的哈希).
 # Chamber package (design 05 §2): the READMEs describe the self-built multi-source sidebar plugin (zh = key source).
-README.md: 579b03c90f94f264ffdc6fea153a7e86c178ee20485a89172890007d74a8d1c1
-README.zh.md: 329eca8353da8b993952a1bda0662c275bf60d22a9c0166d76b84ee28107bfc0
+README.md: 91927f623a802be1d49fd25fc23c71bc8caa4cf82780f04a0ecfff751b56f0aa
+README.zh.md: 90a170948fe5a0dd84cfc9b5520127583debe2f3bd477e2dacf010fbac40e19d

@@ -33,6 +33,7 @@ const source = (relative: string): string =>
 const section = source('../../src/client/ServerSection.tsx')
 const header = source('../../src/client/ServerSectionHeader.tsx')
 const sidebarCss = source('../../src/client/sidebar-chamber.module.css')
+const model = source('../../src/client/server-section-model.ts')
 
 test('the workspace row arms .rowActionsVisible from keyboard focus', () => {
   assert.match(
@@ -81,6 +82,31 @@ test('the source header arms .sourceActionsVisible from keyboard focus', () => {
   )
   assert.match(header, /event\.target\.matches\(':focus-visible'\)[\s\S]{0,120}?setKeyboardFocus\(true\)/u)
   assert.match(header, /if \(!\(next instanceof Node\) \|\| !event\.currentTarget\.contains\(next\)\)[\s\S]{0,120}?setKeyboardFocus\(false\)/u)
+})
+
+test('the owning header is not focusable: the fold toggle is the panel-axis entry Tab path', () => {
+  // The panel-axis entry only mounts in the OWNING source's header, and that header
+  // is deliberately not activatable (hence role/tabIndex are dropped) — so its Tab
+  // path must be the unconditional fold toggle, whose focusin bubbles to the
+  // header's onFocus, which arms .sourceActionsVisible.
+  assert.match(model, /return server\.id !== chamberInstanceId && !managedUnusable\n/u,
+    'the model keeps the owning-source exclusion (line-final: a trailing || would break it)')
+  assert.match(header, /const headerActivatable = sourceHeaderActivatable\(server, chamberInstanceId\)/u,
+    'the header derives activatability from the model, it does not hard-code it')
+  assert.match(header, /role=\{headerActivatable \? 'button' : undefined\}/u)
+  assert.match(header, /tabIndex=\{headerActivatable \? 0 : undefined\}/u)
+  const headerOpen = header.indexOf('<header')
+  const focusAt = header.indexOf('onFocus=')
+  const foldAt = header.indexOf('ref={foldToggleRef}')
+  assert.ok(headerOpen !== -1 && focusAt > headerOpen && focusAt < foldAt,
+    'the reveal handler lives on the header element itself, before its children')
+  const clusterAt = header.indexOf('cc.sourceActions,')
+  const entryAt = header.indexOf('<PanelHeaderEntry')
+  const headerClose = header.indexOf('</header>')
+  assert.ok(foldAt !== -1 && clusterAt > foldAt && entryAt > clusterAt,
+    'the fold toggle precedes the action cluster, and the entry sits inside it')
+  assert.ok(headerClose > entryAt,
+    'the cluster and the entry stay inside the header element (hover/focus containment)')
 })
 
 test('no stylesheet flips these hooks on :focus-visible again', () => {

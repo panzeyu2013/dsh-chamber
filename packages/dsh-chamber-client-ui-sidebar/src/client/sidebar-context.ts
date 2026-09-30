@@ -148,17 +148,18 @@ export interface SidebarSectionContextValue {
     opts?: { fallback?: ReactNode },
   ) => ReactNode
   /** Source-scoped panel entries of THIS ctx (design 05 §2): an entry belongs to
-   *  the source whose ctx registered it, so the wide column renders its row
-   *  inside that source's section (`ServerSectionPanels`) and the collapsed rail
-   *  keeps the upstream global glyph axis. Only THIS ctx's registrations appear
-   *  here — a foreign source's sidebar reads its own ledger instead. */
+   *  the source whose ctx registered it, so the wide column renders it as a
+   *  compact action in that source's own header (`PanelHeaderEntry`) and the
+   *  collapsed rail keeps the upstream global glyph row (`PanelRow`). Only THIS
+   *  ctx's registrations appear here — a foreign source's sidebar reads its own
+   *  ledger instead. */
   panels: readonly SidebarPanelMetadata[]
-  /** Select the panel addressed by a row, through the owning ctx's `ctx.layout`. */
+  /** Select the panel addressed by an entry, through the owning ctx's `ctx.layout`. */
   selectPanel: (id: SidebarPanelMetadata['id']) => void
-  /** Panel-selection selector hook: a row subscribes only to its own active state. */
+  /** Panel-selection selector hook: a row/entry subscribes only to its own active state. */
   usePanelInfo: PanelSelectorHook
   /** This sidebar entry's own `renderSlot` binding, used to render the panel
-   *  glyph of each row (both the wide section and the rail axis). */
+   *  glyph of each entry (the wide source header and the rail axis). */
   renderSlot: SidebarRootComponentProps['renderSlot']
 
   viewPrefs: ChamberSidebarViewPrefs

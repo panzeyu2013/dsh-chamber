@@ -448,8 +448,8 @@
 }
 
 /* Rail panel axis (the upstream global panel list, rendered only while collapsed)
-   (`sidebar.panellist`): the wide column renders the rows inside each owning source's
-   section (ServerSectionPanels) and this axis takes over while collapsed, so every
+   (`sidebar.panellist`): the wide column renders the entries as compact header
+   actions (PanelHeaderEntry) and this axis takes over while collapsed, so every
    entry mounts exactly once. Hidden while no plugin
    registers one (upstream default). Geometry mirrors the official ui-sidebar
    stylesheet (no horizontal padding — the column root owns it; 36px row height in

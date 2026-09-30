@@ -627,8 +627,9 @@
   空间），状态图标/徽标因此真正位于行/头末端；悬停时操作簇 `display:inline-flex`
   换入、状态槽 `display:none` 换出（session 行：状态环 ↔ **kebab 菜单（置顶/重命名/分叉/归档四项）+
   独立归档钮 + 独立置顶钮**（归档与置顶各是同源双出口，形态见 §7；静息置顶标记与状态槽一起换出；归档只隐藏行、不触碰会话日志；安静会话直接归档，宿主因
-  仍有活跃工作而拒绝时才弹「停止并归档」确认，design 24 §5）；来源头：连接状态 ↔ 排序菜单 + 搜索 + 添加工作区（官方
-  project-add 字形，`IconProjectAddOutlineRegular`）+ 归档清理（见 §7）；workspace：会话数徽标 ↔ `+`（新建
+  仍有活跃工作而拒绝时才弹「停止并归档」确认，design 24 §5）；来源头：连接状态 ↔ 簇首的每条已注册
+  `sidebar.panellist` 紧凑入口（条件成员，见 §4.7）+ 排序菜单 + 搜索 + 添加工作区（官方
+  project-add 字形，`IconProjectAddOutlineRegular`）+ 归档清理；workspace：会话数徽标 ↔ `+`（新建
   会话）+ kebab（重命名/删除））。胶囊/菜单展开时操作簇保持显示
   （`.sourceActionsVisible`/`.rowActionsVisible`，`:has` 同步换出状态槽）。
   **键盘焦点（Tab）与 kebab 展开共用同一个 JS 揭示状态**：`ServerSection.tsx` /
@@ -919,59 +920,62 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   `<style>`（同内容，随各自 fiber 移除，良性重复）。① 的治本同本节：按活动来源
   门控，但落在 vendor 源码，需 seed/patch 路线裁定后实施。
 
-### 4.7 来源级面板轴（`sidebar.panellist` 按来源下挂）
+### 4.7 面板轴（`sidebar.panellist` 的宽态落点）
 
 **契约与 Rejected alternatives 见 design 05 §2「来源级面板轴」**；本节只记实现面与副作用。
 
-- **宽态**：行渲染在 owning source 的 server 分组内——`ServerSection.tsx` 在
-  `<ServerSectionHeader/>` 之后、`{!sourceFolded && (…)}` 之前挂
-  `ServerSectionPanels`（`server.id === chamberInstanceId` 守卫）。**折叠只收浏览区**
-  （搜索胶囊 / 来源级 git 提示 / 工作区列表），面板行不随之折叠；折叠钮只有 `aria-expanded`、
-  **无 `aria-controls`**，故不构成"受控区域已折叠却仍渲染其内容"的矛盾。
+- **宽态**：入口渲染在 owning source 的 server 头内——`ServerSectionHeader.tsx` 的
+  `.sourceActions` 动作簇首位（视图选项左侧），由 `server.id === chamberInstanceId` 门控
+  （每个来源都会渲染 section，`panels` 却属于本壳 ctx，故只在 owning/活动来源头里挂载一次；
+  与旧 36px 行同一道门，否则会 N 份且点击落回本壳面板），每个 `sidebar.panellist` 注册渲染成一个 20px
+  `.actionIcon` 按钮（`PanelHeaderEntry`，`sidebar-root-chrome.tsx`）：`usePanelInfo` 只订阅
+  自己条目的选中态，`renderSlot('sidebar.panellist', { size: 14, active }, { only: id })` 取
+  注册者的字形，点击经 `selectPanel(id)` 转发 `ctx.layout.selectPanel`。它随簇静息
+  `display:none`（hover / 键盘焦点 / 视图选项菜单或搜索胶囊展开才显形）——2026-09 用户裁决
+  「可以接受 display:none 保持静止不可见」。
 - **rail 态**：分组不渲染，保留上游全局面板字形行（`SidebarRoot.tsx` 的
-  `!wide && panels.length > 0` 守卫；字形 16/18px、tooltip、`aria-current` 与上游逐字一致）
+  `!wide && panels.length > 0` 守卫；字形 16/18px、tooltip、`aria-current` 与上游逐字一致
+  ——其中 16px 半支随上游行形态保留、当前不可达，`PanelRow` 的 wide 分支同此）
   ⇒ 每个条目任一时刻**恰好挂载一次**（位置锁：`test/plugin-kernel/panel-entry-placement.test.ts`）。
-- **行几何**：沿用上游 `.panelRow` 原值（36px / `padding 7px 8px` / `margin 0 2px` /
-  radius-md / hover 与 active 同 token），**密度有意不改**——分组里它是唯一 36px 元素属已知
-  观感；容器只做两件事：补内距（使行盒起点与 28px 来源头的 6px 内容起点对齐），并按上游
-  `.panelList` 复制列表栈（`display:flex; flex-direction:column; gap:4px`）——同源注册 ≥2 个面板时的
-  行距与上游一致。
-  行文案 `font: inherit`，随所在分组的字号。
+- **折叠只收浏览区**（搜索胶囊 / 来源级 git 提示 / 工作区列表）：入口在来源头内，折叠不隐藏它；
+  折叠钮只有 `aria-expanded`、**无 `aria-controls`**，故不构成「受控区域已折叠却仍渲染其内容」的矛盾。
 - **可达性（既有约束 + 一个新依赖）**：侧栏由活动来源的 ctx 渲染、ledger 只含该 ctx 的注册，
-  因此入口只在**拥有它的来源成为活动视图**时可见（全局轴时代同样如此）。另：宽态行还要求该来源
-  已进入 App 的 `servers` 投影（`ServerSection` 只对投影里的 source 渲染）；投影初值 / registry
-  移除先于 view 销毁的瞬时窗口内，**整个来源分组（含会话列表）一并缺席**、不是"只有面板行缺失"，
-  rail 轴不受影响（自愈，不设回退轴——那会重新引入双挂载）。
-- **断连来源**：行仍渲染（"注册即在"），点开的页面自呈该 Host 的失败态——对"断连来源只渲染
-  header + 状态"的**有意例外**。
+  因此入口只在**拥有它的来源成为活动视图**时可见（全局轴时代同样如此）。另：宽态入口还要求该来源
+  已进入 App 的 `servers` 投影；来源不在投影时 App 的 `InstanceView`（含侧栏）**整个不渲染**
+  （`packages/renderer/src/App.tsx` 的 viewId 门），不是「只有入口缺失」，rail 轴不受影响
+  （自愈，不设回退轴——那会重新引入双挂载）。
+- **断连来源**：入口仍渲染（「注册即在」，**有意不过 `connected` 门**；随头部动作簇 hover 揭示），
+  点开的页面自呈该 Host 的失败态——与其余头部动作的 connected 门不同，是对「断连来源只渲染
+  header + 状态」的**有意例外**。
 - **语言**：label thunk 由该实例自己的 locale 解析（per-ctx），与页面语言归属一致。
-- **已知副作用**：
-  - 来源拖拽的 before/after 由 `rowHalf` 用 **section 的 rect 中点**判定
-    （`server-section-model.ts#rowHalf`）：面板行使 section 增高**最多 42px**（行高 36 + 容器上下 6；
-    与下方相邻元素的外边距合并后常见约 38px），中点随之**下移约 19–21px**（上界 = 42/2），
-    "before"判定区略微变大。接受，不改 `rowHalf`（服务器/工作区/会话三种拖拽共用）。
-  - **wide↔rail 重挂载**：行的两个站点父级不同，收起/展开会卸载→重挂（上游是同一元素）⇒ 键盘
-    焦点若正停在该行，折叠后落回 `document.body`（需重新 Tab）。行组件无状态，无可见状态丢失；
+- **形态与已知副作用**：
+  - 盒形：宽态入口用 `.actionIcon`（20px 命中盒 / 14px 字形 / tertiary 墨色，hover 只变色），
+    选中态 `.actionPanelActive` 用品牌浅底（`.sortActive` 同族 token）；不复用上游 36px
+    `.panelRow` 行几何（该行只在 rail 保留）。
+  - 静息不可见：入口与视图选项同簇，不 hover 时不占位；代价是「注册即在」只在 hover / 键盘
+    可达路径上兑现（owning 头自身**不可聚焦**——`sourceHeaderActivatable` 对活动来源为 false；
+    真实键盘路径是恒在且可聚焦的折叠钮：Tab 落到它，focusin 冒泡置位 `.sourceActionsVisible`，
+    再 Tab 进入本条）。
+  - **a11y 分组壳的丢失（有意、已登记）**：上游宽态是 `nav[aria-label=panels.label]`（「全局面板」）
+    包住面板行；本仓宽态改为来源头动作簇里的裸按钮（每个按钮用注册者 label 自带可访问名），
+    `panels.label` 只在 rail 的 `nav` 上渲染。同时**选中态 `.actionPanelActive` 也只在簇现形时可见**
+    （旧 `.panelActive` 底色是可静息感知的「当前面板」标记）——两者都是「入口进头部、静息 display:none」
+    的直接后果。
+  - **wide↔rail 重挂载**：入口的两个站点父级不同，收起/展开会卸载→重挂（上游是同一元素）⇒ 键盘
+    焦点若正停在该入口，折叠后落回 `document.body`（需重新 Tab）。入口组件无状态，无可见状态丢失；
     接受，不为此改结构（rail 不渲染 section，单站点方案在本仓不成立）。
-  - **hover 色带内缩**：容器 4px 内距使行的 hover 色带比来源头 / 会话行的全宽带窄约 6px/侧，
-    换来行盒与 28px 来源头的内容起点对齐；实机眼检若偏好色带对齐，改
-    `sidebar-chamber.module.css` 的 `.sectionPanels { padding: 0 }`（一行、可逆）。
-  - **nav 的 a11y 上下文**：上游的 `nav[aria-label="全局面板"/"Global panels"]` 是列级兄弟节点，
-    本仓宽态嵌在 `<section role="group" aria-label={server.label}>` 内；文案仍取上游值（见下条），
-    这里只登记"它在来源分组内"这一语义后果。
-  - **文案 parity**：宽态 nav 的 `aria-label` 保持上游 `panels.label`（「全局面板」/“Global
-    panels”）不改写——改文案会破坏与上游逐字一致；来源身份由所在的 `role="group"` 标签承载。
-  - 侧栏滚动锚（`packages/renderer/src/sidebar-scroll-sync.ts`）：REFINE 以 `[data-chamber-row]`
-    （会话行）为锚**连同屏幕 offset 一起恢复**，面板行不是锚点、也不参与该等式；只有锚行缺失时
-    才回退 PARK 的原始 `scrollTop`——跨 profile 的高度差（行在 / 不在，±42px）只影响这条回退路径，
-    属该回退固有的近似，非本改动引入。
+  - 位置锁按**源码文本**钉：入口在 `.sourceActions` 内、`cc.sortActive`（视图选项）之前，
+    `ServerSectionPanels.tsx` 已删除且 `ServerSection.tsx` 不含任何面板轴挂载点（本包无 DOM）。
   - `ui-schedule` 的**点击埋点**（上游 `selectPanel` 对 `plugins`/`schedules` 发
     `sidebar_menu_click{menu_name}`）**有意未复制**：它是遥测而非 UI 行为，且桌面壳是否上报
     产品分析是既有开放裁决（STATUS 遥测条）。若将来要逐字对齐，落点是
     `packages/dsh-chamber-client-ui-sidebar/src/client/index.ts` 的 `selectPanel`
     （实际可达的只有 `schedules → 'cron'` 一条，`plugins` 面板在本仓已迁设置页）。
-- **Rejected alternatives**（实现面）：① 全局轴 + 分组内双渲染——一条注册两个入口，上游只有一行；
-  ② rail 不显示——丢掉上游"折叠后仍可达"；③ 26px 密度变体——本批明确维持上游几何。
+- **Rejected alternatives**（实现面）：① 36px 面板行挂在来源头与浏览区之间（早期实现；行高使
+  section 增高约 38–42px、把入口从头部动作簇割出来，拖拽中点与滚动回退锚都随之位移）——2026-09
+  用户裁决删除；② 常驻显示在状态点旁——用户明确接受静息 `display:none`；③ 全局轴 + 分组内双渲染
+  ——一条注册两个入口，上游只有一行；④ rail 不显示——丢掉上游「折叠后仍可达」；⑤ 26px 密度变体
+  ——本批明确维持上游 rail 几何。
 
 ## 5. 已知取舍与开放项
 
@@ -1159,8 +1163,9 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   （无 tabIndex/roving），揭示只有 `:hover` 与 kebab 展开两半（要键盘可达需先给行加 focus 路径，属未决取舍）；
   键盘焦点那一半属于 workspace 行与来源头部（JS 揭示态）。悬停替换行尾状态槽；**不显示
   相对时间**）。**添加工作区** = 来源头部按钮（官方 project-add 字形，与搜索/排序成簇、悬停替换连接
-  状态槽，胶囊展开时簇保持可见）；文案在 aria 与**官方 `Tooltip`**（来源头四个动作排序/添加工作区/
-  搜索/归档清理由原生 `title` 换成设计系统 Tooltip，形状串 `side="bottom" delayMs={500}`；workspace 新建会话钮的
+  状态槽，胶囊展开时簇保持可见）；文案在 aria 与**官方 `Tooltip`**（来源头内建动作——簇首的每条
+  `sidebar.panellist` 入口、排序菜单、添加工作区、搜索、归档清理——由原生 `title` 换成设计系统
+  Tooltip，形状串 `side="bottom" delayMs={500}`；workspace 新建会话钮的
   label 用官方的独立键 `actions.newSession`（zh「新会话」/ en "New session"，不共用 `session.new`）；行与状态槽
   仍原生 title）。替换为真正 display 交换；kebab 展开或**键盘焦点（Tab）**期间行操作保持可见（`.rowActionsVisible`，键盘态见上条「悬停替换」；键盘路径只有 workspace 行与来源头部——会话行不可聚焦，其 kebab 没有键盘入口，见 STATUS「范围决策与必要取舍」）；行内
   图标按钮全量 reset（`appearance:none`/`outline:none`/grid 居中，focus-visible 用 brand 自绘环）。

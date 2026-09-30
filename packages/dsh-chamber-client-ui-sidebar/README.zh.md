@@ -14,12 +14,13 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 
 - `sidebar.brand.mark` / `sidebar.brand.name`——左上品牌行；chamber 字标保持
   mark 回退，name 孔位无占用时不渲染内容（rail 同样渲染 mark 孔位）。
-- `sidebar.panellist`（list）——**来源级**主面板行。`src/client/panel-source.ts`
+- `sidebar.panellist`（list）——**来源级**主面板入口。`src/client/panel-source.ts`
   把槽位台账镜像为 `{id, order, label}` 元数据（label thunk 读取时解析、仅在
-  变化时通知）。**宽态**由 owning source 的 server 分组渲染（`ServerSectionPanels`，
-  位于来源头与可折叠区之间——折叠来源不收面板行），**rail 态**保留上游全局面板
-  字形行；两种形态都由 `PanelRow` 调 `ctx.layout.selectPanel(id)`，每个条目任一
-  时刻恰好挂载一次。上游出厂为空列表，故该区默认不可见；投影由
+  变化时通知）。**宽态**在 owning source 的 server 头内渲染紧凑入口
+  （`PanelHeaderEntry`：20px 动作盒，与视图选项同一 hover 揭示簇、排在其左侧——
+  折叠来源头仍在，入口不随浏览区收起），**rail 态**保留上游全局面板字形行
+  （`PanelRow`）；两种形态都调 `ctx.layout.selectPanel(id)`，每个条目任一时刻
+  恰好挂载一次。上游出厂为空列表，故入口默认不可见；投影由
   `test/plugin-kernel/panel-source.test.ts` 钉死，位置由
   `test/plugin-kernel/panel-entry-placement.test.ts` 钉死（design 05 §2 /
   design 06 §4.7）。
@@ -41,8 +42,9 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   （`packages/dsh-chamber-client-core/src/derive.ts`）。
 - 已连接来源的聚合拉取失败时，以错误文本代替 workspace 列表呈现——绝不
   冒充"无工作区"；未连接来源只显示分组头 + 状态提示；全部来源断开时显示
-  空态提示。**一处有意例外**：来源断开时它的 `sidebar.panellist` 面板行仍渲染
-  ——条目存在与否只取决于注册者是否注册，与连接态无关（design 06 §4.7）。
+  空态提示。**一处有意例外**：owning（活动）来源断开时，它的 `sidebar.panellist`
+  入口仍留在头部动作簇里——条目存在与否只取决于注册者是否注册，与连接态无关
+  （design 06 §4.7）。
 - 会话行带**运行指示点**（wire `sessions.list.running`），完成未读用**chamber
   品牌蓝点**（`.stateCompleted`，6px 实心）——与固定待办条带同一枚标记，**不取**
   官方 `StateDot` 的 `done` 绿：该色与来源头连接状态绿点同 token
@@ -64,8 +66,8 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   primitives 无服务器字形，原 folder 字形与 workspace 文件夹图标重合易
   误解：folder = workspace、monitor = server 用户反馈）、hover 换
   折叠 chevron——点击收拢该来源的**浏览区**
-  （搜索胶囊、来源级 git 告警与列表一并隐藏；该来源自己的面板行在浏览区之上、
-  不随之折叠——design 06 §4.7），**不动各 workspace 自身的
+  （搜索胶囊、来源级 git 告警与列表一并隐藏；owning 来源的面板入口在头部
+  动作簇内、不随之折叠——design 06 §4.7），**不动各 workspace 自身的
   对话折叠态**（`sourceFolded` 独立于 `folded`），展开后各 workspace 及其
   会话原样恢复。**用户反馈**：来源头身份圆点已移除（身份由折叠
   字形 accent + 激活左内边线 + rail 点承担；连接状态点/转圈保留右端）。
@@ -128,8 +130,9 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   workspace kebab / 视图选项）一律用原语的 `compact` 形态——这是 v0.2.4 的行为，
   2026-09-11 对齐轮曾改成官方默认（40px 行 / 14px 标签）与 `dense`（34px），
   比我们自己 26px 的列表行整整大一圈，故恢复；`closeOnPointerLeave` 保留。
-  来源头四个控件（视图选项/添加工作区/搜索/归档管理器）改骑官方
-  `Tooltip`（不再借用原生 `title`），添加工作区用官方 project-add 字形；触发钮
+  来源头内建控件（视图选项/添加工作区/搜索/归档管理器）改骑官方 `Tooltip`（不再借用原生
+  `title`）；每条已注册的 `sidebar.panellist` 入口另加一枚紧凑动作、沿用同形 Tooltip，
+  添加工作区用官方 project-add 字形；触发钮
   打开三轴视图选项菜单（portal + `align="end"`、`viewOptions.label`）。浏览树带上可访问名
   `section.sessions`，与搜索结果树一致。
 - 新建工作区：每个已连接来源打开同一个应用内目录浏览对话框（browse

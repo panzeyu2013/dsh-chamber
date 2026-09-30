@@ -114,16 +114,19 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   **Rejected alternatives**：保留侧栏插件行会把一个设置开关伪装成常驻导航功能；另写一套管理页会
   分叉上游安装、启用和配置行为。两者都由复用原管理器并迁入内置插件分页取代。
 - **来源级面板轴**（`sidebar.panellist`，实现面见 design 06 §4.7）：**实例自有/第三方注册的
-  面板行按其所属来源下挂**——宽态在该 source 的 server 分组内、rail 态保留上游全局面板字形行，
-  每个条目任一时刻恰好挂载一次。上游座席契约本身把按钮的呈现判给侧栏所有者（"the sidebar owns
-  the button"，pin 的 `packages/client/ui-sidebar/src/client/contract/slots.ts`），注册者只提供
+  面板入口按其所属来源下挂**——宽态在该 source 的 server 头内（视图选项左侧、共用头部动作簇的
+  hover 揭示；静息 `display:none`），rail 态保留上游全局面板字形行，每个条目任一时刻恰好挂载
+  一次。上游座席契约本身把按钮的呈现判给侧栏所有者（"the sidebar owns the button"，pin 的
+  `packages/client/ui-sidebar/src/client/contract/slots.ts`），注册者只提供
   `id/order/label` 与 owner props 的图标，故这是外壳权限内的排布、不是对上游契约的偏离：
   本仓只改"哪里画"。注册仍归各实例自己的 ctx（每实例一个 slots registry），"哪台启用、哪台有
   入口"由该实例的 profile 决定，chamber 不注册任何自己的面板。
   **Rejected alternatives**：① 维持上游全局轴——入口与它所属的来源脱钩，在多来源侧栏里成为全局
   chrome，与本条"侧栏服务于来源导航"的取向冲突；② 拦截/改写插件的注册——注册 key 写死在插件里、
   extra row 不经过 chamber 的构建期补丁面、把包 covered 进 composite 会让客户端半身对所有实例恒在
-  并破坏按 profile 的 opt-in；③ 壳自建任务页——违反"不重实现执行面"，内容必然与上游漂移。
+  并破坏按 profile 的 opt-in；③ 壳自建任务页——违反"不重实现执行面"，内容必然与上游漂移；
+  ④ 36px 面板行下挂在来源头与浏览区之间（早期实现）——占一行高度、把入口从头部动作簇割出，
+  2026-09 用户裁决改为头内紧凑入口并删除该行。
   面板点击的官方埋点（`sidebar_menu_click`）有意未复制，见 design 06 §4.7。
 - 当前活动来源以视觉强调（如行高亮/侧边标记），与其余来源同列表呈现。
 - 来源分组头可**点击**（非当前来源）→ 切到该来源 shell（不打开会话；见 §2.2）。

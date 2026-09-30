@@ -160,7 +160,7 @@ export const GROUPS = {
     // panel-source.ts value-imports the dsh store engine, so this file runs through
     // the test-only vendor loader (mapping it to test/support/vendor-store-double.mjs).
     { file: 'test/plugin-kernel/panel-source.test.ts', nodeArgs: ['--import', './test/support/vendor-register.mjs'] },
-    // 来源级面板轴位置锁（design 06 §4.7）：宽态挂 owning section（fold 之上）、rail 保留全局字形行，恰好一次。
+    // 面板轴位置锁（design 06 §4.7）：宽态进 owning source 的头动作簇（视图选项左侧）、rail 保留全局字形行，恰好一次。
     'test/plugin-kernel/panel-entry-placement.test.ts',
     'test/plugin-kernel/settings-shell.test.ts',
   ],

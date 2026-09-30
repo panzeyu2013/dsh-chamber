@@ -16,15 +16,16 @@ The shell declares and renders the three holes the alpha.2 official
 - `sidebar.brand.mark` / `sidebar.brand.name` — the top-left brand row; the
   chamber wordmark stays the mark fallback and the name hole renders nothing
   when unoccupied (the rail renders the mark hole too).
-- `sidebar.panellist` (list) — **source-scoped** main-panel rows.
+- `sidebar.panellist` (list) — **source-scoped** main-panel entries.
   `src/client/panel-source.ts` mirrors the slot ledger into `{id, order, label}`
   metadata (label thunks are resolved at read time, notifications fire only on
-  change). The WIDE column renders one `PanelRow` per entry inside the server
-  section of the source whose ctx registered it (`ServerSectionPanels`, between
-  the source header and the foldable browsing region — a folded source keeps its
-  panel rows), and the collapsed RAIL keeps the upstream global glyph axis; a
-  click calls `ctx.layout.selectPanel(id)` in either case, so every entry mounts
-  exactly once. Upstream ships an empty list, so the section is invisible by
+  change). The WIDE column renders one compact `PanelHeaderEntry` per entry
+  inside the header of the source whose ctx registered it — in the same
+  hover-revealed action cluster as the view options and to their left, so the
+  header stays the WIDE entry's only mount site and a folded source keeps it — and
+  the collapsed RAIL keeps the upstream global glyph row (`PanelRow`); a click
+  calls `ctx.layout.selectPanel(id)` in either case, so every entry mounts
+  exactly once. Upstream ships an empty list, so the entry is invisible by
   default; the projection is pinned by `test/plugin-kernel/panel-source.test.ts`
   and the placement by `test/plugin-kernel/panel-entry-placement.test.ts`
   (design 05 §2 / design 06 §4.7).
@@ -54,9 +55,9 @@ The shell declares and renders the three holes the alpha.2 official
   of the workspace list — never masquerading as "no workspaces". Disconnected
   sources render header + status icon only (dot/spinner, phase on
   hover/aria, no status text); all disconnected → empty hint. One deliberate
-  exception: a source's `sidebar.panellist` rows still render while it is
-  disconnected — an entry exists iff its registrant registered it, independent of
-  connection state (design 06 §4.7).
+  exception: the owning source's `sidebar.panellist` entries stay in its
+  header's action cluster while it is disconnected — an entry exists iff its
+  registrant registered it, independent of connection state (design 06 §4.7).
 - Live sessions carry a running dot (`sessions.list.running`), and a
   completed-but-unread session carries the **chamber brand-blue dot**
   (`.stateCompleted`, 6 px solid) — the same mark the pinned session-todo strip
@@ -86,8 +87,9 @@ The shell declares and renders the three holes the alpha.2 official
   former folder glyph read as another workspace; folder = workspace,
   monitor = server user feedback) that swaps to the collapse
   chevron on hover — clicking collapses the source's browsing region
-  (search capsule, source-scope git alert and list included; the source's own
-  panel rows sit ABOVE it and stay — design 06 §4.7) WITHOUT touching
+  (search capsule, source-scope git alert and list included; the owning
+  source's panel-axis entries ride the header action cluster and stay —
+  design 06 §4.7) WITHOUT touching
   any workspace's own conversation fold state (`sourceFolded`, separate from
   `folded`), so expanding restores every workspace with its sessions exactly
   as they were.
@@ -174,10 +176,12 @@ The shell declares and renders the three holes the alpha.2 official
   primitive's `compact` form — the v0.2.4 behaviour, restored after the
   2026-09-11 alignment round had switched them to the official default (40px
   rows / 14px labels) and `dense` (34px), which read a full size larger than
-  our own 26px rows; `closeOnPointerLeave` stays. The source header's four
+  our own 26px rows; `closeOnPointerLeave` stays. The source header's built-in
   controls (view options / add workspace / search / archive manager) ride the
-  `Tooltip` instead of a borrowed native `title`, add-workspace draws the
-  official project-add glyph, and the trigger opens the three-axis View Options
+  `Tooltip` instead of a borrowed native `title`; a registered
+  `sidebar.panellist` entry adds one compact action with the same Tooltip form;
+  add-workspace draws the official project-add glyph, and the trigger opens the
+  three-axis View Options
   menu (portal + `align="end"`, `viewOptions.label`). The browse tree carries the
   accessible name `section.sessions`, exactly like its search-results sibling.
 - Add workspace: each connected source opens one in-app directory-browser
