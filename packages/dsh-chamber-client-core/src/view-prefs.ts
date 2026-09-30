@@ -130,76 +130,82 @@ function defaults(): ChamberSidebarViewPrefs {
   return { v: 1, folded: {}, ungroupedOrder: {}, orderBy: {}, groupBy: {}, archivedFilter: {}, updatedOrder: {}, flatOrder: {}, sessionUpdatedAtByAccount: {}, seenSources: [] }
 }
 
+/** 宽松结构校验的四个值形状（v=1）：非法条目静默丢弃，缺失字段回退空对象。 */
+function booleanRecord(raw: unknown): Record<string, boolean> {
+  const out: Record<string, boolean> = {}
+  if (!isRecord(raw)) return out
+  for (const [key, value] of Object.entries(raw)) if (typeof value === 'boolean') out[key] = value
+  return out
+}
+
+function stringArrayRecord(raw: unknown): Record<string, string[]> {
+  const out: Record<string, string[]> = {}
+  if (!isRecord(raw)) return out
+  for (const [key, value] of Object.entries(raw)) {
+    if (Array.isArray(value)) out[key] = value.filter((entry): entry is string => typeof entry === 'string')
+  }
+  return out
+}
+
+function enumRecord<T extends string>(raw: unknown, allowed: readonly T[]): Record<string, T> {
+  const out: Record<string, T> = {}
+  if (!isRecord(raw)) return out
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === 'string' && (allowed as readonly string[]).includes(value)) out[key] = value as T
+  }
+  return out
+}
+
+function numberRecord(raw: unknown): Record<string, number> {
+  const out: Record<string, number> = {}
+  if (!isRecord(raw)) return out
+  for (const [key, value] of Object.entries(raw)) if (typeof value === 'number' && Number.isFinite(value)) out[key] = value
+  return out
+}
+
+/** 原地裁掉谓词判定的键；返回是否发生删除（裁剪写入的 changed 记账）。 */
+function pruneKeys(record: Record<string, unknown>, gone: (key: string) => boolean): boolean {
+  let changed = false
+  for (const key of Object.keys(record)) {
+    if (gone(key)) {
+      delete record[key]
+      changed = true
+    }
+  }
+  return changed
+}
+
+/** `<sourceId>/<workspaceId>` 形态的账号键 → 来源 id。 */
+function slashSource(key: string): string | undefined {
+  const slash = key.indexOf('/')
+  return slash === -1 ? undefined : key.slice(0, slash)
+}
+
 /** Lenient structural validation: drop malformed entries, keep valid ones. */
 function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
   if (!isRecord(raw) || raw.v !== 1) return defaults()
-  const folded: Record<string, boolean> = {}
-  if (isRecord(raw.folded)) {
-    for (const [key, value] of Object.entries(raw.folded)) {
-      if (typeof value === 'boolean') folded[key] = value
-    }
-  }
-  const ungroupedOrder: Record<string, string[]> = {}
-  if (isRecord(raw.ungroupedOrder)) {
-    for (const [key, value] of Object.entries(raw.ungroupedOrder)) {
-      if (Array.isArray(value)) ungroupedOrder[key] = value.filter((entry): entry is string => typeof entry === 'string')
-    }
-  }
+  const folded = booleanRecord(raw.folded)
+  const ungroupedOrder = stringArrayRecord(raw.ungroupedOrder)
   // orderBy：丢弃非法值条目；缺失字段（旧数据）回退空对象——v 保持 1。
-  const orderBy: Record<string, SessionOrderBy> = {}
-  if (isRecord(raw.orderBy)) {
-    for (const [key, value] of Object.entries(raw.orderBy)) {
-      if (value === 'manual' || value === 'updated') orderBy[key] = value
-    }
-  }
+  const orderBy = enumRecord(raw.orderBy, ['manual', 'updated'] as const)
   // groupBy / archivedFilter：枚举过滤，同 orderBy（缺失字段回退空对象，v 保持 1）。
-  const groupBy: Record<string, SessionGroupBy> = {}
-  if (isRecord(raw.groupBy)) {
-    for (const [key, value] of Object.entries(raw.groupBy)) {
-      if (value === 'workspace' || value === 'workspace-tree' || value === 'flat') groupBy[key] = value
-    }
-  }
-  const archivedFilter: Record<string, ArchivedFilter> = {}
-  if (isRecord(raw.archivedFilter)) {
-    for (const [key, value] of Object.entries(raw.archivedFilter)) {
-      if (value === 'default' || value === 'show' || value === 'only') archivedFilter[key] = value
-    }
-  }
+  const groupBy = enumRecord(raw.groupBy, ['workspace', 'workspace-tree', 'flat'] as const)
+  const archivedFilter = enumRecord(raw.archivedFilter, ['default', 'show', 'only'] as const)
   // updatedOrder：account 键 → string[]；非数组/非字符串条目丢弃，同 ungroupedOrder。
-  const updatedOrder: Record<string, string[]> = {}
-  if (isRecord(raw.updatedOrder)) {
-    for (const [key, value] of Object.entries(raw.updatedOrder)) {
-      if (Array.isArray(value)) updatedOrder[key] = value.filter((entry): entry is string => typeof entry === 'string')
-    }
-  }
+  const updatedOrder = stringArrayRecord(raw.updatedOrder)
   // flatOrder：sourceId 键 → string[]，逐条校验同 ungroupedOrder。
-  const flatOrder: Record<string, string[]> = {}
-  if (isRecord(raw.flatOrder)) {
-    for (const [key, value] of Object.entries(raw.flatOrder)) {
-      if (Array.isArray(value)) flatOrder[key] = value.filter((entry): entry is string => typeof entry === 'string')
-    }
-  }
+  const flatOrder = stringArrayRecord(raw.flatOrder)
   // sessionUpdatedAtByAccount：嵌套逐层校验。
   const sessionUpdatedAtByAccount: Record<string, Record<string, number>> = {}
   if (isRecord(raw.sessionUpdatedAtByAccount)) {
     for (const [key, value] of Object.entries(raw.sessionUpdatedAtByAccount)) {
       if (!isRecord(value)) continue
-      const timestamps: Record<string, number> = {}
-      for (const [id, at] of Object.entries(value)) {
-        if (typeof at === 'number' && Number.isFinite(at)) timestamps[id] = at
-      }
-      sessionUpdatedAtByAccount[key] = timestamps
+      sessionUpdatedAtByAccount[key] = numberRecord(value)
     }
   }
   // sourceFolded：sourceId 键，布尔过滤同 folded；缺失时不产出该键（v 保持 1）。
-  let hasSourceFolded = false
-  const sourceFolded: Record<string, boolean> = {}
-  if (isRecord(raw.sourceFolded)) {
-    hasSourceFolded = true
-    for (const [key, value] of Object.entries(raw.sourceFolded)) {
-      if (typeof value === 'boolean') sourceFolded[key] = value
-    }
-  }
+  const hasSourceFolded = isRecord(raw.sourceFolded)
+  const sourceFolded = booleanRecord(raw.sourceFolded)
   // serverOrder：仅保留字符串条目并去重（首个位置胜出）；非数组不产出该键。
   let serverOrder: string[] | undefined
   if (Array.isArray(raw.serverOrder)) {
@@ -341,64 +347,18 @@ function prunePrefs(prefs: ChamberSidebarViewPrefs): ChamberSidebarViewPrefs {
   const sourceFolded = prefs.sourceFolded === undefined ? undefined : { ...prefs.sourceFolded }
   let serverOrder = prefs.serverOrder === undefined ? undefined : [...prefs.serverOrder]
   let changed = false
-  for (const key of Object.keys(folded)) {
-    const slash = key.indexOf('/')
-    const sourceId = slash === -1 ? undefined : key.slice(0, slash)
-    if (knownGone(sourceId)) {
-      delete folded[key]
-      changed = true
-    }
-  }
-  for (const sourceId of Object.keys(ungroupedOrder)) {
-    if (knownGone(sourceId)) {
-      delete ungroupedOrder[sourceId]
-      changed = true
-    }
-  }
+  changed = pruneKeys(folded, key => knownGone(slashSource(key))) || changed
+  changed = pruneKeys(ungroupedOrder, id => knownGone(id)) || changed
   // orderBy 同 ungroupedOrder：裁掉「本会话见过、现已消失」的来源；断连来源保留。
-  for (const sourceId of Object.keys(orderBy)) {
-    if (knownGone(sourceId)) {
-      delete orderBy[sourceId]
-      changed = true
-    }
-  }
+  changed = pruneKeys(orderBy, id => knownGone(id)) || changed
   // groupBy / archivedFilter 同 orderBy：只裁「本会话见过、现已消失」的来源。
-  for (const sourceId of Object.keys(groupBy)) {
-    if (knownGone(sourceId)) {
-      delete groupBy[sourceId]
-      changed = true
-    }
-  }
-  for (const sourceId of Object.keys(archivedFilter)) {
-    if (knownGone(sourceId)) {
-      delete archivedFilter[sourceId]
-      changed = true
-    }
-  }
+  changed = pruneKeys(groupBy, id => knownGone(id)) || changed
+  changed = pruneKeys(archivedFilter, id => knownGone(id)) || changed
   // flatOrder 同 ungroupedOrder：sourceId 键，裁见过且已消失的来源。
-  for (const sourceId of Object.keys(flatOrder)) {
-    if (knownGone(sourceId)) {
-      delete flatOrder[sourceId]
-      changed = true
-    }
-  }
+  changed = pruneKeys(flatOrder, id => knownGone(id)) || changed
   // updatedOrder / sessionUpdatedAtByAccount 同 folded：只裁见过且已消失的来源；断连来源的序/簿记保留。
-  for (const key of Object.keys(updatedOrder)) {
-    const slash = key.indexOf('/')
-    const sourceId = slash === -1 ? undefined : key.slice(0, slash)
-    if (knownGone(sourceId)) {
-      delete updatedOrder[key]
-      changed = true
-    }
-  }
-  for (const key of Object.keys(sessionUpdatedAtByAccount)) {
-    const slash = key.indexOf('/')
-    const sourceId = slash === -1 ? undefined : key.slice(0, slash)
-    if (knownGone(sourceId)) {
-      delete sessionUpdatedAtByAccount[key]
-      changed = true
-    }
-  }
+  changed = pruneKeys(updatedOrder, key => knownGone(slashSource(key))) || changed
+  changed = pruneKeys(sessionUpdatedAtByAccount, key => knownGone(slashSource(key))) || changed
   // 工作区级账号裁剪：来源在场且工作区集合非空时，已被删除的工作区账号（updatedOrder 与
   // 提升簿记）不得永久驻留 localStorage。断连/未加载来源（无工作区）一律保留；合成账号
   // （未分组桶、flat 哨兵）不是真实工作区 id，永不裁。
@@ -425,27 +385,10 @@ function prunePrefs(prefs: ChamberSidebarViewPrefs): ChamberSidebarViewPrefs {
     if (key === flatAccountKey(sourceId)) return false
     return !live.has(workspaceId)
   }
-  for (const key of Object.keys(updatedOrder)) {
-    if (workspaceAccountGone(key)) {
-      delete updatedOrder[key]
-      changed = true
-    }
-  }
-  for (const key of Object.keys(sessionUpdatedAtByAccount)) {
-    if (workspaceAccountGone(key)) {
-      delete sessionUpdatedAtByAccount[key]
-      changed = true
-    }
-  }
+  changed = pruneKeys(updatedOrder, workspaceAccountGone) || changed
+  changed = pruneKeys(sessionUpdatedAtByAccount, workspaceAccountGone) || changed
   // sourceFolded 同 orderBy：只裁见过且已消失的来源。
-  if (sourceFolded !== undefined) {
-    for (const sourceId of Object.keys(sourceFolded)) {
-      if (knownGone(sourceId)) {
-        delete sourceFolded[sourceId]
-        changed = true
-      }
-    }
-  }
+  if (sourceFolded !== undefined) changed = pruneKeys(sourceFolded, id => knownGone(id)) || changed
   // serverOrder：裁掉见过且已消失的 id，其余保持相对顺序。
   if (serverOrder !== undefined) {
     const kept = serverOrder.filter(id => !knownGone(id))

@@ -24,7 +24,7 @@ import { computeQuitRisk, shouldHideToTray } from './chamber-settings.ts'
 import {
   createControlPlane,
   isPackagedSidecarRuntime,
-  readLoginShellEnvironmentOnce,
+  startLoginShellEnvironment,
   type StateRootLease,
 } from './control-plane-module.ts'
 import {
@@ -527,17 +527,10 @@ const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 's
   // design 02 §3.1 姊妹项）。读取在入口发起、首个宿主 spawn 前才 await；失败或
   // 非法 timeout env 只告警并回退继承环境；shutdown 中止仍在跑的探测组。
   loginShellAbort = new AbortController()
-  const loginShellEnvironment = readLoginShellEnvironmentOnce(process.env, { signal: loginShellAbort.signal })
-    .then((result) => {
-      for (const failure of result.failures) {
-        console.error(`[sidecar] 登录 shell 环境读取失败（${failure.shell}）：${failure.reason}`)
-      }
-      return result.environment
-    })
-    .catch((error: unknown) => {
-      console.error(`[sidecar] 登录 shell 环境读取配置错误，回退继承环境：${String(error)}`)
-      return process.env
-    })
+  const loginShellEnvironment = startLoginShellEnvironment(
+    message => { console.error(`[sidecar] ${message}`) },
+    { signal: loginShellAbort.signal },
+  )
   const controlPlane = createControlPlane({
     port: args.port ?? 17500,
     stateDir: stateRootDir(args.userDataDir),

@@ -34,7 +34,7 @@ import { applyWindowsAclTightening } from './win-acl.ts';
 import { verifyRuntimeClientClosure } from './runtime-tree-check.ts';
 import { createTrustedIpc, isChamberPermissionGranted, isExternalLinkUrl, isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
 import type { TrustedIpc } from './renderer-trust.ts';
-import { atomicWritePrivateFileNoFollow, createControlPlane, ensurePrivateDirectoryNoFollow, readLoginShellEnvironmentOnce, readPrivateFileNoFollow } from './control-plane-module.ts';
+import { atomicWritePrivateFileNoFollow, createControlPlane, ensurePrivateDirectoryNoFollow, readPrivateFileNoFollow, startLoginShellEnvironment } from './control-plane-module.ts';
 import { attemptDeepLinkProtocolRegistration, canRestoreMainWindow, decideDeepLinkProtocolRegistration, describeUnknownError, ensureLinuxProtocolDesktopFile, linuxAutostartDesktopEntry, linuxAutostartDirectory, resolveLinuxLaunchExecutable } from './deep-link.ts';
 import { createUpdateController, flashUpdateAttentionWindow } from './updater.ts';
 import { shellStrings } from './shell-locale.ts';
@@ -1419,17 +1419,10 @@ if (!gotTheLock) {
       // 只告警并回退继承环境；will-quit 终止仍在跑的探测进程组。
       const loginShellAbort = new AbortController();
       app.on('will-quit', () => { loginShellAbort.abort() });
-      const loginShellEnvironment = readLoginShellEnvironmentOnce(process.env, { signal: loginShellAbort.signal })
-        .then((result) => {
-          for (const failure of result.failures) {
-            console.warn(`[dsh-chamber] 登录 shell 环境读取失败（${failure.shell}）：${failure.reason}`);
-          }
-          return result.environment;
-        })
-        .catch((error: unknown) => {
-          console.warn(`[dsh-chamber] 登录 shell 环境读取配置错误，回退继承环境：${String(error)}`);
-          return process.env;
-        });
+      const loginShellEnvironment = startLoginShellEnvironment(
+        message => { console.warn(`[dsh-chamber] ${message}`); },
+        { signal: loginShellAbort.signal },
+      );
       controlPlane = createControlPlane({
         port: controlPlanePort,
         // 本地 dsh 的起始端口（缺省 17510）；env 覆盖只在显式设置时传入。

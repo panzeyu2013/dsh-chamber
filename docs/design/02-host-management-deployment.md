@@ -258,7 +258,9 @@ rows，不改变官方 web profile 的其它组合层。
 - **登录 shell 环境（rc.2 对齐；控制面 `login-shell-env.ts`）**：Dock/Finder/桌面启动只继承
   session manager 的环境，用户写在 `~/.zprofile`/`~/.zshrc` 的 PATH、代理与 API key 不会进入托管
   宿主与它的 agent shell/终端（与随包 pnpm shim 同一病根）。两个桌面入口（Electron main、Swift
-  sidecar）**各发起一次** `readLoginShellEnvironmentOnce(process.env)`（进程级一次读取的 promise），
+  sidecar）**各发起一次** `startLoginShellEnvironment(log, { signal })`（`login-shell-env.ts` 的共享接线：
+  内部走进程级一次读取 `readLoginShellEnvironmentOnce(process.env)`，逐条失败交给入口的 log、异常回退
+  继承环境），
   把它作为 `hostEnv` 选项交下去：控制面与窗口构造不等它，`spawn-dsh` 在**首次 spawn 前才 await**
   （上游同序）。候选 = 账号记录的登录 shell → `/bin/zsh` → `/bin/bash` → `/bin/sh`，各跑一次
   `<shell> -ilc`，以两个标记包住 `command env -0 || exit` 的输出（不等待 stdout 关闭；cwd = 用户

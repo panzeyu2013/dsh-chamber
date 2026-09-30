@@ -314,6 +314,30 @@ export function readLoginShellEnvironmentOnce(
   return onceRead
 }
 
+/**
+ * Entry wiring shared by both flavors (Electron main and the Swift sidecar): the read
+ * starts at the entry and is awaited only before the first host spawn; each failure
+ * goes to the caller's logger (prefix/level are entry-owned) and a config/probe error
+ * falls back to the inherited environment.
+ * @param log - entry-scoped logger (the message already carries the failure text).
+ * @param options - probe options (the shutdown signal aborts the process group).
+ * @returns the environment for hostEnv, resolved before the first host spawn.
+ */
+export function startLoginShellEnvironment(
+  log: (message: string) => void,
+  options: LoginShellEnvironmentOptions = {},
+): Promise<NodeJS.ProcessEnv> {
+  return readLoginShellEnvironmentOnce(process.env, options)
+    .then((result) => {
+      for (const failure of result.failures) log(`登录 shell 环境读取失败（${failure.shell}）：${failure.reason}`)
+      return result.environment
+    })
+    .catch((error: unknown) => {
+      log(`登录 shell 环境读取配置错误，回退继承环境：${String(error)}`)
+      return process.env
+    })
+}
+
 /** Test-only: forget the process-lifetime memo. */
 export function __resetLoginShellEnvironmentOnceForTests(): void {
   onceRead = undefined

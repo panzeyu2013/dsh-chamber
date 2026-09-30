@@ -1167,7 +1167,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
 export { isDshPortBaseValid, resolveNodeExecutable, sanitizeManagedDshEnv, spawnDsh } from './spawn-dsh.ts'
 /** Desktop login-shell read (design 02 §3.1 sibling): the only runtime face
  *  the desktop entries consume; probe internals stay module-private. */
-export { readLoginShellEnvironment, readLoginShellEnvironmentOnce } from './login-shell-env.ts'
+export { readLoginShellEnvironment, readLoginShellEnvironmentOnce, startLoginShellEnvironment } from './login-shell-env.ts'
 export type {
   LoginShellEnvironmentFailure,
   LoginShellEnvironmentOptions,
