@@ -1,5 +1,5 @@
 /**
- * registry.test.mjs — registry 单一来源的锁步测试：C1–C15 判据表不漂移、
+ * registry.test.mjs — registry 单一来源的锁步测试：上游触点判据表不漂移、
  * 判据分区不重不漏、verifierForks 形状/顺序/计数为"故意改才动"的 golden（删一个 fork 或改一份分类都必须在这里可见）、
  * 校验器抓退化（未知判据 / 分区缺口 / accepted 缺理由 / upstream=null 语义）、生成块 extract/apply/check 往返。
  */

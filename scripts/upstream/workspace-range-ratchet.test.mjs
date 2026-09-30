@@ -1,7 +1,7 @@
 /**
  * workspace range 政策棘轮（升级计划 §22.3.7）：上游 6 个副本/分叉的内部依赖必须写成
- * `workspace:*`（上游政策拒 caret，见
- * `.agents/notes/implemented/process/2026-09-22-workspace-release-ranges.md`）。本仓
+ * `workspace:*`（上游政策拒 caret；原始记录 `.agents/notes/…` 属本地约定、不在本仓版本控制内，
+ * 本仓执行面 = 本棘轮门）。本仓
  * 2026-12 已把三处包里的 57 个 `workspace:^` 归位；这条棘轮防止以后回潮。
  */
 import { test } from 'node:test'

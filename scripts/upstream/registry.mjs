@@ -274,7 +274,7 @@ export function validateRegistry(registry) {
       else seenNames.add(entry.name)
       if (!isPlainObject(entry.classify)) push(`${at}.classify 缺失（fork/seed 需要文件级分类）`)
       if (Array.isArray(entry.criteria) && entry.criteria.length === 0) {
-        push(`${at}.criteria 为空：分类条目至少引用一条判据（否则 C1–C15 可被整体挪进 criteriaCodeOnly 而无人发现）`)
+        push(`${at}.criteria 为空：分类条目至少引用一条判据（否则 C1–C16 可被整体挪进 criteriaCodeOnly 而无人发现）`)
       }
       // 现行分类条目必须二选一：shadow（上游进入 excludedUpstreamDirs）或 chamber-named
       // （本仓路径进入 chamberNamedForks）。否则删掉 exclusion/naming 关联后覆盖面静默消失。

@@ -33,3 +33,26 @@ selection scope（两个实例各自持久化选择槽，互不覆盖）与 I-12
   `RETIRED_PATCHES` 的当前状态（11 条补丁、2 条退役：ReasoningRow 行 sweep 与 util-values 引擎无关比较）。另：复核 dsh 运行时的
   `node-addon-require-builtin` 指纹表是否已收录桌面 Electron pin——当前 43.4.0 不在表内，
   Electron flavor 的托管宿主起不来（见 STATUS 设计未决；机制见 design 02 §2.6）。
+
+## 未落地：被吞掉的上游新增面的两条升级期检查（待 vendor 物化后实现）
+
+两条都属于「上游新功能落在 chamber 改写/不镜像的面上，静默缺席」这一类。判据（源码现状）：
+`packages/renderer/src/required-extra-rows.ts` 的 inject 探针只在**运行期**生效（升级期无门）；
+`docs/checklists/upstream-touchpoints.md` §7 第 5 步的侧栏声明差集仍是散文 grep（忘了不会红）。
+预检侧的两条口已经落地（`preflight-vendor-pin.mjs`：dropped 面变化带理由 + 名词差集），
+下面两条是该类面的判据侧闭口（P4 补 inject 探针的升级期缺口，P3 把散文 grep 脚本化），尚未实现。
+
+- **P4 首屏 inject 闭合（并入 C4，不新增 C 编号）**：对每个首屏 covered 行，读 pin 住的
+  vendor client 入口的 inject 面，断言每个成员都由 covered id / factory / 种子词提供；缺失即红
+  （rc.2 的 `shortcuts` 事故形态：fiber 停 PENDING、整个壳未注册而 boot 报成功）。
+  **阻塞**：inject 面只能从 vendor 各包的 client 入口解析，而本仓没有「包名 → client 入口文件」
+  的既有映射（上游 manifest 的 `dsh.client` 字段形状未在本仓任何脚本里被消费过）；
+  本 worktree 无 vendor 树 ⇒ 解析器无法用真实锚验证，写错会把 CI 打红。落地前置：在已物化的
+  pin 上先写只读探针跑通全部首屏 id（官方 + chamber 版），再固化成纯函数 + 负例（随 `test:upgrade-tools`）。
+- **P3 侧栏声明−渲染差集（§7 第 5 步的脚本化）**：上游 `sidebar.*` 声明集 − chamber 侧栏
+  声明/渲染集，差集逐条要求「已渲染 / 有意不渲染（带登记理由）/ 上报待裁」。按
+  `scripts/upstream/verify-mobile-anchors.mjs` 的 fail-soft + `--require-anchor-root` 严格模式落地。
+  **阻塞**：同 P4（无 vendor 树验证提取器）。
+
+关闭判据：两条在某个已物化 pin 的升级里各跑通一次（含严格模式），负例覆盖「上游新增键/成员被
+本仓吞掉」与「改名假阳性」两个方向；落地时按 §7 第 5/6 步把散文 grep 换成对脚本的引用。

@@ -192,7 +192,7 @@ scripts/
   gates/                    每次 push 的仓库门（run-checks 单入口 + verify-* + CI 判类 + workflow 门）
   release/                  发布链（release-preflight/semver/artifacts + 工作流策略 + 打包清单锁步）
   upstream/                 上游 pin 与触点（update-vendor / pin 预检 / registry.json 单一来源与生成视图 /
-                            C1–C15 触点门 / 符号锚与遗留锚预算门 / C8 产物门）
+                            触点门全量 / 符号锚与遗留锚预算门 / C8 产物门）
   perf/                     性能实测工具箱（boot/switch/eval/measure-ui/disk-walk + data/）
   gui-acceptance/           GUI 验收工具箱（probe/walkthrough/mobile-walkthrough/checks）
                             （分类规则与接线纪律见 scripts/README.md）
@@ -214,8 +214,8 @@ vendor/
 |`pnpm run build:renderer`|构建dsh前端bundle|
 |`pnpm run build:host-graph`|构建host-graph包（esbuild）|
 |`pnpm run build:host-git`|构建实例内Git worktree host包（esbuild）|
-|`pnpm run build:host-packages`|依次构建host-graph与host-git-worktree|
-|`pnpm run build:desktop`|host包+ renderer +控制面编译/host包复制+ preload+dsh封装|
+|`pnpm run build:host-packages`|依次构建host-graph / host-git-worktree / host-archive-cleanup / host-open-in四个宿主包|
+|`pnpm run build:desktop`|四个host包+ renderer +控制面编译/host包复制+ preload+dsh封装|
 |`pnpm run typecheck:git`|类型检查Git worktree客户端插件|
 |`pnpm run typecheck:host-git`|类型检查实例内Git worktree host包|
 |`pnpm run test:git`|运行Git worktree客户端插件测试|

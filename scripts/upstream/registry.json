@@ -204,7 +204,9 @@
         "droppedNotes": {
           "src/apply-injections.ts": "上游当前代的 index 注入表解释器，服务 apps/web 的 __DSH_BOOT_READY__/Host rows；chamber 不消费（index.ts 刻意不导出 applyIndexInjections，package.json 也无 ./injections 子路径），注入面由 host boot graph + N-ctx kernel 接管",
           "src/boot-client.ts": "上游当前代抽出的 bootClient/assertEntriesActive 组合；chamber kernel 在 src/boot.ts 内联 boot 建 entry+await+audit 半边并叠加 extraRows 合并 + boot-tolerance 容忍；entries.start/sync 协调半边在 chamber 无消费者（其唯一消费者 HMR 行被覆盖集 skip，见 chamber-covered.ts）",
-          "src/mount.ts": "上游当前代抽出的 mountClient；chamber kernel 的 mountApp 已含同一 uiRenderer inject 挂载并附 15s 超时兜底"
+          "src/mount.ts": "上游当前代抽出的 mountClient；chamber kernel 的 mountApp 已含同一 uiRenderer inject 挂载并附 15s 超时兜底",
+          "tests/": "chamber 无 tsdown / 不镜像上游测试（dropped 噪声面：变化只报不计失败，见 preflight 的 isDroppedNoise）",
+          "tsdown.config.ts": "chamber 无 tsdown / 不镜像上游打包配置（dropped 噪声面）"
         }
       },
       "authority": "upstream",
@@ -271,7 +273,9 @@
           "src/index.ts": "上游 host 插件入口（chamber 不镜像 host 半）",
           "src/stream-server.ts": "上游 host 半流服务器（dropped）",
           "src/types.ts": "上游 host/aux 类型文件（源码与 inert ./types 子路径均已移除）",
-          "tsconfig.host.json": "host 构面不镜像"
+          "tests/": "chamber 无 tsdown / 不镜像上游测试（dropped 噪声面：变化只报不计失败）",
+          "tsconfig.host.json": "host 构面不镜像",
+          "tsdown.config.ts": "chamber 不构建 lib / 不镜像上游打包配置（dropped 噪声面）"
         }
       },
       "authority": "chamber",
