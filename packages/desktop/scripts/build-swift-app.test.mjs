@@ -1233,23 +1233,50 @@ test('⑬ 真实 DMG：卷内含 .app + /Applications 链接，卷名 = --app-na
     const dmg = path.join(out, 'dsh-chamber-9.9.9-macos-arm64.dmg')
     const rw = path.join(out, 'dsh-chamber.rw.dmg')
     const stage = path.join(out, 'stage')
-    stageDmgVolume(path.join(out, 'dsh-chamber.app'), stage, 'dsh-chamber')
-    const create = spawnSync('hdiutil', dmgCreateArgs('dsh-chamber', stage, rw), { encoding: 'utf8' })
-    assert.equal(create.status, 0, create.stderr + create.stdout)
-    const convert = spawnSync('hdiutil', dmgConvertArgs(rw, dmg), { encoding: 'utf8' })
-    assert.equal(convert.status, 0, convert.stderr + convert.stdout)
+    // 卷名唯一化：/Volumes 是全局命名空间，而这条腿在 check:full 里进的是**全局文件池**
+    // （默认 8 jobs，与其它包的数百个文件并发；包内腿只有 3 个文件）。固定卷名会让
+    // hdiutil 的 create/attach 偶发失败（2026-09-30 实测：包内腿 37/37 绿、check:full 内
+    // 同一条测试红）。唯一卷名同时保住「卷名 = --app-name」这条判据。
+    const volumeName = `dsh-chamber-t${process.pid}-${Math.random().toString(36).slice(2, 6)}`
+    // macOS 27 起 hdiutil create 被弃用并在 stderr 恒定打弃用警告：它是**警告不是失败**
+    // （用户实测 create.status 仍为 0），断言消息里滤掉；status 仍严格判 0。
+    const clean = (r) => (r.stderr + r.stdout).split('\n')
+      .filter((line) => !/is deprecated/.test(line)).join('\n')
+    const sleep = (seconds) => spawnSync('sleep', [String(seconds)])
+    // 并发池下的瞬时失败退避重试；最终失败仍 loud（消息含完整输出，不再是只有尾部）。
+    const runRetry = (cmd, args, attempts = 3) => {
+      let last = spawnSync(cmd, args, { encoding: 'utf8' })
+      for (let index = 1; index < attempts && last.status !== 0; index += 1) {
+        sleep(0.5 * index)
+        last = spawnSync(cmd, args, { encoding: 'utf8' })
+      }
+      return last
+    }
+    stageDmgVolume(path.join(out, 'dsh-chamber.app'), stage, volumeName)
+    spawnSync('hdiutil', ['detach', volumeName, '-force'], { encoding: 'utf8' })
+    const create = runRetry('hdiutil', dmgCreateArgs(volumeName, stage, rw))
+    assert.equal(create.status, 0, clean(create))
+    const convert = runRetry('hdiutil', dmgConvertArgs(rw, dmg))
+    assert.equal(convert.status, 0, clean(convert))
     assert.ok(existsSync(dmg), 'DMG 应产出')
     const mount = path.join(out, 'mnt')
     mkdirSync(mount)
-    const attach = spawnSync('hdiutil', ['attach', '-nobrowse', '-readonly', '-mountpoint', mount, dmg], { encoding: 'utf8' })
-    assert.equal(attach.status, 0, attach.stderr + attach.stdout)
+    const attach = runRetry('hdiutil', ['attach', '-nobrowse', '-readonly', '-mountpoint', mount, dmg])
+    assert.equal(attach.status, 0, clean(attach))
     try {
-      assert.ok(existsSync(path.join(mount, 'dsh-chamber.app', 'Contents', 'Info.plist')))
+      assert.ok(existsSync(path.join(mount, `${volumeName}.app`, 'Contents', 'Info.plist')))
       assert.ok(lstatSync(path.join(mount, 'Applications')).isSymbolicLink(), '挂载卷内应有 /Applications 链接')
-      const info = spawnSync('diskutil', ['info', mount], { encoding: 'utf8' })
-      assert.match(info.stdout, /Volume Name:\s+dsh-chamber/)
+      // attach 返回时卷名可能尚未被 diskutil 登记（并发负载下更明显）：有界轮询到 ~5s。
+      let info = spawnSync('diskutil', ['info', mount], { encoding: 'utf8' })
+      for (let index = 1; index < 10; index += 1) {
+        if (new RegExp('Volume Name:\\s+' + volumeName).test(info.stdout)) break
+        sleep(0.5)
+        info = spawnSync('diskutil', ['info', mount], { encoding: 'utf8' })
+      }
+      assert.match(info.stdout, new RegExp('Volume Name:\\s+' + volumeName))
     } finally {
       spawnSync('hdiutil', ['detach', mount, '-force'], { encoding: 'utf8' })
+      assert.ok(!existsSync(path.join(mount, `${volumeName}.app`)), '测试结束必须不残留挂载内容')
     }
   } finally {
     rmSync(out, { recursive: true, force: true })

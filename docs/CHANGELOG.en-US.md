@@ -11,6 +11,23 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
 
+## [0.4.1-beta.1] - 2026-09-30
+
+### Added
+- **Per-source sidebar view options (aligned with upstream)** - each source can switch between the pin partition, a flat list and the workspace tree, with an archived filter; the pin surface matches upstream (design 06 sections 5/7/10: the kebab's pin/unpin sits before rename, the hover cluster's rightmost button is pin/unpin, the trailing state slot is followed by the non-interactive pinned marker; the write path is the official idempotent RPC with no optimistic echo, failures land in the same row-level errors, and the pin set follows the archive set's tri-state discipline).
+- **Workspace fold glyphs** - workspace and manager headers show the open/closed folder glyph for their fold state.
+- **Per-source panel axis** - sidebar panels render under their owner source (the placement is locked by a test).
+- **open-in occupies the upstream files-tab directory-actions seat** - following the rc.2 directory-action position (design 16 sections 3/5, design 20 section 6.3).
+- **Managed hosts inherit the login shell environment** - the desktop resolves the user's login shell environment before launching a managed instance (design 05).
+- **Bundled dsh frontend baseline moves to 0.2.0-rc.2** - the official frontend and connection client are aligned to that baseline.
+
+### Changed
+- **Sidebar hover reveals are gated per row** - a row that slid under the pointer no longer reveals its cluster immediately; rename suppression wins over the gated reveal, and the gate is rebuilt for the new rows after a StrictMode remount (design 06 section 7).
+- **Settings -> Built-in plugins** - the embedded plugin page's title block is hidden by position, keeping only the upstream content body.
+
+### Fixed
+- **The facts-apply re-entrancy loop (React #185)** - when the notification/facts step chain re-entered itself from the synchronous render caused by its own store write, React aborted with #185 and the never-throw guard swallowed it, voiding the whole tick; \`apply-session-facts\` now takes a per-source re-entrancy gate (non-reentrant calls stay synchronous), a re-entrant call registers and replays the latest snapshot only, and a withdrawn source's pending snapshot is dropped with the withdrawal. \`reconcile\` / \`completion-arm\` semantics are unchanged (design 19 section 3.7).
+
 ## [0.4.0] - 2026-09-29
 
 ### Added
