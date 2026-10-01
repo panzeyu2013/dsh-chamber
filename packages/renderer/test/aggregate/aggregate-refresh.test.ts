@@ -16,6 +16,7 @@ import {
   planAggregateRefreshes,
   planSessionListRefresh,
   refreshPullStillCurrent,
+  retainSessionLabels,
   remoteRetiredSourceIds,
   retireSelectedSource,
   shouldRebaselineFallbackView,
@@ -34,6 +35,7 @@ import {
   sourceIdForInstance,
   sourceIdForRawInstance,
 } from '../../src/transport-source.ts'
+import { instanceSnapshotSignature } from '@dsh-chamber/dsh-chamber-client-core'
 import type { InstanceAggregate, InstanceSnapshot } from '@dsh-chamber/dsh-chamber-client-core'
 
 // ---- commitAggregatePull ----
@@ -980,4 +982,194 @@ test('reconnect threshold: local and unknown transports are never touched by the
   for (const transport of ['local', undefined, null, '', 'tcp', 7, {}]) {
     assert.equal(reconnectStalenessMsForTransport(transport), null, String(transport))
   }
+})
+
+// ---- retainSessionLabels (connection-generation projection-store clear) ----
+
+/** One pushed session row with a durable title (the producer's good shape). */
+const titledRow = (
+  sessionId: string,
+  title: string,
+  cwd: string,
+): InstanceAggregate['sessions'][number] => ({ sessionId, running: false, blank: false, cwd, title, displayTitle: title })
+
+/** The same row as the producer pushes it while the client projection store is
+ *  cleared: no `title`, and the resolved label is the cwd basename. */
+const clearedRow = (
+  sessionId: string,
+  cwd: string,
+  displayTitle: string,
+): InstanceAggregate['sessions'][number] => ({ sessionId, running: false, blank: false, cwd, displayTitle })
+
+test('retainSessionLabels: a title-less row keeps the last known durable label (the observed clear-window shape)', () => {
+  const previous = [titledRow('s1', '阅读工作区文档并制定执行计划', '/root/projects/photo')]
+  const cleared = [clearedRow('s1', '/root/projects/photo', 'photo')]
+  const retained = retainSessionLabels(previous, cleared)
+  // Byte-identical to the last known row: the only difference the transient
+  // introduced (the label) is gone.
+  assert.deepEqual(retained[0], previous[0])
+  assert.notEqual(retained, cleared, 'a carried label must not be silenced by returning the cleared array')
+})
+
+test('retainSessionLabels: a real rename wins, unrelated/untitled rows pass through untouched', () => {
+  const previous = [titledRow('s1', 'old title', '/w'), titledRow('s2', 'untouched', '/w')]
+  const renamed = [{ ...clearedRow('s1', '/w', 'w'), title: 'new title' }, titledRow('s2', 'untouched', '/w')]
+  assert.equal(retainSessionLabels(previous, renamed), renamed, 'no row carries ⇒ identity preserved')
+  // A row whose previous counterpart had no durable title is never invented.
+  const untitledBefore = [clearedRow('s3', '/w', 'w')]
+  const later = [{ ...clearedRow('s3', '/w', 'w'), running: true }]
+  assert.equal(retainSessionLabels(untitledBefore, later)[0].title, undefined)
+  // Empty strings are "no title" on BOTH sides (same rule as sessionDisplayTitle):
+  // an incoming '' still takes the carried label, a previous '' carries nothing.
+  const emptyIncoming = [{ ...clearedRow('s1', '/w', 'w'), title: '' }]
+  assert.equal(retainSessionLabels(previous, emptyIncoming)[0].title, 'old title')
+  const emptyBefore = [{ ...clearedRow('s9', '/w', 'w'), title: '' }]
+  assert.equal(retainSessionLabels(emptyBefore, [clearedRow('s9', '/w', 'w')])[0].title, undefined)
+})
+
+test('retainSessionLabels: the carried label always wins over an incoming DERIVED displayTitle', () => {
+  // The incoming row has no durable title, so its displayTitle is derived
+  // (cwd basename / id) and must NOT shadow the carried title (a previous row
+  // without displayTitle, or with an empty one, is the reachable gap the row
+  // shape allows even though today's producers always write both fields).
+  const withoutDisplayTitle = [{ sessionId: 's1', running: false, blank: false, title: 'Real name' }]
+  const emptyDisplayTitle = [{ sessionId: 's1', running: false, blank: false, title: 'Real name', displayTitle: '' }]
+  for (const previous of [withoutDisplayTitle, emptyDisplayTitle]) {
+    const retained = retainSessionLabels(previous, [clearedRow('s1', '/root/projects/photo', 'photo')])
+    assert.equal(retained[0].title, 'Real name')
+    assert.equal(retained[0].displayTitle, 'Real name', 'the derived basename must not survive the carry')
+  }
+})
+
+test('retainSessionLabels: identity-preserving when there is nothing to carry (dedupe gate unaffected)', () => {
+  const rows = [titledRow('s1', 'title', '/w')]
+  assert.equal(retainSessionLabels(undefined, rows), rows)
+  assert.equal(retainSessionLabels([], rows), rows)
+  assert.equal(retainSessionLabels(rows, rows), rows)
+})
+
+test('retainSessionLabels: a vanished session drops its memory (no TTL needed)', () => {
+  const previous = [titledRow('s1', 'title-a', '/a'), titledRow('s2', 'title-b', '/b')]
+  const retained = retainSessionLabels(previous, [clearedRow('s1', '/a', 'a')])
+  assert.equal(retained.length, 1)
+  assert.equal(retained[0].title, 'title-a')
+  // A same-id re-add after the row disappeared starts from the NEW row.
+  assert.equal(retainSessionLabels(retained, [clearedRow('s2', '/b', 'b')])[0].title, undefined)
+})
+
+test('retainSessionLabels: the 2026-10-01 clear-window push (Harness/photo) commits no degraded label', () => {
+  // previous = the last committed aggregate; clearedPush = the push produced
+  // between the vendor client's projection-store clear and its session/list
+  // response (observed live: the sidebar row rendered "photo" for ~0.7 s).
+  const previous: InstanceAggregate = {
+    state: 'ok',
+    workspaces: [{
+      workspaceId: 'w-photo', path: '/root/projects/photo', title: 'photo',
+      sessionIds: ['session-00642886'], createdAt: 't0', updatedAt: 't1',
+    }],
+    sessions: [titledRow('session-00642886', '阅读工作区文档并制定执行计划', '/root/projects/photo')],
+    archivedSessionIds: [],
+    archiveSetKnown: true,
+    error: null,
+  }
+  const clearedPush: InstanceAggregate = {
+    ...previous,
+    sessions: [clearedRow('session-00642886', '/root/projects/photo', 'photo')],
+  }
+  const retained: InstanceAggregate = {
+    ...clearedPush,
+    sessions: retainSessionLabels(previous.sessions, clearedPush.sessions),
+  }
+  assert.deepEqual(retained.sessions, previous.sessions, 'the durable name survives the clear window')
+  // The App compares signatures at the commit gate: the retained snapshot is
+  // byte-identical to the committed aggregate, so the transient push is fully
+  // deduped (no state object, no re-render, no flicker). WITHOUT the retention
+  // the same push differs and would render the directory name.
+  assert.equal(instanceSnapshotSignature(retained), instanceSnapshotSignature(previous))
+  assert.notEqual(instanceSnapshotSignature(clearedPush), instanceSnapshotSignature(previous))
+})
+
+test('retainSessionLabels + commitAggregatePull: the unary weak label is restored and new rows pass through', () => {
+  // The mounted merge still takes the fallback rows wholesale (its own contract
+  // test pins that); the App-side retention is what keeps a pushed label across
+  // the weaker unary row. A session the fallback ADDS has no previous label and
+  // must arrive untouched.
+  const pushed: InstanceAggregate = {
+    state: 'ok',
+    workspaces: [{
+      workspaceId: 'w1', path: '/root/projects/photo', title: 'photo',
+      sessionIds: ['s1'], createdAt: 't0', updatedAt: 't1',
+    }],
+    sessions: [titledRow('s1', 'Real name', '/root/projects/photo')],
+    archivedSessionIds: [],
+    archiveSetKnown: true,
+    error: null,
+  }
+  const fallback: InstanceSnapshot = {
+    workspaces: [syntheticWorkspace('/root/projects/photo', 'photo', ['s1', 's2'])],
+    sessions: [clearedRow('s1', '/root/projects/photo', 'photo'), clearedRow('s2', '/root/projects/photo', 'photo')],
+    archivedSessionIds: [],
+  }
+  const merged = commitAggregatePull(pushed, fallback, true)
+  assert.equal(merged.sessions[0].title, undefined, 'the raw merge contract stays unchanged')
+  const committed: InstanceAggregate = {
+    ...merged,
+    sessions: retainSessionLabels(pushed.sessions, merged.sessions),
+  }
+  assert.equal(committed.sessions[0].title, 'Real name')
+  assert.equal(committed.sessions[0].displayTitle, 'Real name')
+  assert.equal(committed.sessions[1].title, undefined, 'a row the previous aggregate never knew carries nothing')
+  assert.equal(committed.sessions[1].displayTitle, 'photo')
+})
+
+test('retainSessionLabels: a commit that DOES happen (other fields degraded) still keeps the name', () => {
+  // The live clear window also drops projection-derived fields (e.g. the active
+  // schedule). The signature then differs and the App really commits — the name
+  // guarantee must not depend on the dedupe gate.
+  const previous: InstanceAggregate = {
+    state: 'ok',
+    workspaces: [],
+    sessions: [{ ...titledRow('s1', 'Real name', '/root/projects/photo'), hasActiveSchedule: true }],
+    archivedSessionIds: [],
+    archiveSetKnown: true,
+    error: null,
+  }
+  const degraded: InstanceAggregate = {
+    ...previous,
+    sessions: [{ ...clearedRow('s1', '/root/projects/photo', 'photo'), updatedAt: 42 }],
+  }
+  const retained: InstanceAggregate = {
+    ...degraded,
+    sessions: retainSessionLabels(previous.sessions, degraded.sessions),
+  }
+  assert.notEqual(instanceSnapshotSignature(retained), instanceSnapshotSignature(previous),
+    'the schedule/updatedAt loss still commits')
+  assert.equal(retained.sessions[0].title, 'Real name')
+  assert.equal(retained.sessions[0].displayTitle, 'Real name')
+})
+
+test('retainSessionLabels: the sparse schedule marker is restored in the same transient as the title', () => {
+  // A projection-store clear wipes title AND the schedule bag together; a
+  // genuine schedule-off always keeps its title (returns as-is), so the marker
+  // is only ever restored inside the title-loss transient.
+  const previous = [{ ...titledRow('s1', 'Real name', '/root/projects/photo'), hasActiveSchedule: true }]
+  const retained = retainSessionLabels(previous, [clearedRow('s1', '/root/projects/photo', 'photo')])
+  assert.equal(retained[0].title, 'Real name')
+  assert.equal(retained[0].hasActiveSchedule, true)
+  const off = [titledRow('s1', 'Real name', '/root/projects/photo')]
+  assert.equal(retainSessionLabels(previous, off), off, 'a titled row always wins: schedule-off is never kept against it')
+})
+
+test('retainSessionLabels: durable new activity ends the carry (the hard bound)', () => {
+  const previous = [{ ...titledRow('s1', 'Real name', '/w'), updatedAt: 7 }]
+  const advanced = { ...clearedRow('s1', '/w', 'w'), updatedAt: 8 }
+  assert.equal(retainSessionLabels(previous, [advanced])[0].title, undefined,
+    'an advanced updatedAt means the authority re-read the session: show the honest derived label')
+  // Equal, shrunk or absent timestamps still carry — a metadata-only shrink is
+  // not new activity.
+  assert.equal(retainSessionLabels(previous, [{ ...advanced, updatedAt: 7 }])[0].title, 'Real name')
+  assert.equal(retainSessionLabels(previous, [{ ...advanced, updatedAt: 3 }])[0].title, 'Real name')
+  assert.equal(retainSessionLabels(previous, [clearedRow('s1', '/w', 'w')])[0].title, 'Real name')
+  // No previous timestamp ⇒ no advance evidence ⇒ carry.
+  assert.equal(retainSessionLabels([titledRow('s1', 'Real name', '/w')], [advanced])[0].title, 'Real name')
 })

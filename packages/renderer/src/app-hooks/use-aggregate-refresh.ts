@@ -29,6 +29,7 @@ import {
   drainAggregateWaves,
   planAggregateRefreshes,
   refreshPullStillCurrent,
+  retainSessionLabels,
   isFallbackDerivedView,
   isSnapshotStale,
   reconnectStalenessMsForTransport,
@@ -240,12 +241,17 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
       // 工作区分组/归档集保持权威（否则 30s 空闲重拉会造成 archived-resurfacing）。
       setAggregates(prev => {
         const current = prev[instanceId]
-        const next = commitAggregatePull(
+        const committed = commitAggregatePull(
           current,
           snapshot,
           mountedSources.getSnapshot()[instanceId] === true,
           authoritativeArchiveSetRef.current[instanceId],
         )
+        // unary 兜底行可能未带 title 投影（弱标签）：已推送来源的权威标签/日程标记不得被它覆盖；
+        // 未推送/已回收来源没有 producer 会来恢复，同样保留上一份已知投影事实（硬边界见规则本体）。
+        const next = current !== undefined && current.state === 'ok'
+          ? { ...committed, sessions: retainSessionLabels(current.sessions, committed.sessions) }
+          : committed
         if (current !== undefined && current.state === 'ok'
           && instanceSnapshotSignature(current) === instanceSnapshotSignature(next)) {
           return prev
