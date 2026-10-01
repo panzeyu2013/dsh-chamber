@@ -1378,8 +1378,8 @@ chamber 客户端插件）见 §3 装配矩阵与 §10.2。
 |---|---|---|
 | 认证/授权/凭据/会话边界 | **gateway 独占**（§7：password/token/cookie、S1/S2/S5/S6） | 插件 `src/` 零认证/凭据/登录引用（grep 验证）；UA 分流开关是 gateway 配置（默认关），插件无 UA 逻辑 |
 | 登录流转（未认证移动访问 → 登录页 → 回移动入口） | **gateway 独占**（dispatch `shouldRedirectToLogin`，与桌面浏览器同流转） | 插件不注入、不重定向、不感知认证状态 |
-| UA 体验分流 | **gateway 独占**（dispatch step 4.5，认证门后，仅体验分流） | 插件不读 UA |
-| PWA 资产挂载与 SW 纪律 | gateway 占位 + 插件 P2 期 node 半部（§18.7） | SW 不缓存认证响应（§18.5） |
+| UA 体验分流（**已弃用**，D1） | **gateway 独占**（dispatch step 4.5，认证门后，仅体验分流；默认关 + 显式启用一次性弃用警告，下一 major 移除） | 插件不读 UA |
+| PWA 资产挂载与 SW 纪律 | 插件 P2 期 node 半部（§18.7）；gateway 侧不服务任何 SW/manifest（P4 占位三件套已删，§18.3） | SW 不缓存认证响应（§18.5） |
 | 布局/触控/行为层/视觉 | **插件独占** | gateway 不注入样式、不改写 HTML（流式透传；S0 头补丁注入除外，§10.5） |
 | dsh 运行时版本管理、seed registry、`/chamber/*` 运维面 | **gateway 独占**（§10.2/§10.3、design 18 §9） | 插件不感知运行时状态 |
 
@@ -1402,15 +1402,24 @@ chamber 客户端插件）见 §3 装配矩阵与 §10.2。
 
 **gateway 侧（路由层）**：
 
-- UA 体验分流（可选、默认关闭）：移动 UA 访问 `/` 时可 302 到移动入口；UA 可伪造，故**仅作体验分流，
-  不承载任何安全语义**（认证边界不变，S1/S2）。
+- UA 体验分流（**已弃用**，D1；默认关闭）：移动 UA 访问 `/` 时可 302 到移动入口；移动插件已在
+  所有设备注入，该路径只对仍依赖 UA 嗅探的旧部署保留兼容。显式启用打印一次性弃用警告，**下一 major
+  移除**；UA 可伪造，故**仅作体验分流，不承载任何安全语义**（认证边界不变，S1/S2）。弃用理由与落选
+  替代见 §20。入口路径 `--mobile-entry` 收紧为 origin-form，且**不得含 query/fragment、不得指向
+  `/auth`（含 `/auth/*`）**——后者是登录自环守卫（跳过去会把刚登录的请求弹回登录页），前者防
+  `new URL()` 把查询串/片段静默挪出 pathname；归一（`normalizeMobileEntryPath`）在 materialized
+  config 与 dispatch 比较边界都执行，非法输入启动即 exit 2（配置与用例已锁）。**未选替代**：保留
+  `new URL()` 的静默截断（操作者意图被吞、302 目标与配置文本不一致）或只打印警告不失败（错误配置拖到
+  运行时才暴露）；两者都违背本仓「其余非法入口一律 loud fail」的既有口径。
 - PWA 资产：**插件侧为权威**——`dsh-chamber-client-ui-mobile` 的 node 半部在托管实例内注册 `/pwa/*` 与
-  `/sw.js`（§18.4.5 双半部机制），gateway-proxy 全量透传使其在 gateway origin 下直接可达；gateway
-  现有 `/chamber/manifest.webmanifest`、`/chamber/sw-register.js`、`/chamber/sw.js`（空）、
-  `/chamber/mobile.html` 为 P4 占位——**插件注入实例后 gateway 侧不再注册 SW/manifest**（避免双注册与
-  "假离线"承诺，§18.5），mobile.html 保留为未注入形态的移动入口占位。SW scope：单目标反代下托管实例即
-  gateway origin，`scope: "/"` 天然实例专属；多实例同源代理（桌面 N-ctx，`/api/i/<id>/*`）才需要
-  per-instance 路径（§18.4.5）。
+  `/sw.js`（§18.4.5 双半部机制），gateway-proxy 全量透传使其在 gateway origin 下直接可达。
+  gateway 侧 P4 占位三件套（`/chamber/manifest.webmanifest`、`/chamber/sw-register.js`、
+  `/chamber/sw.js`）**已删除**：没有任何消费者引用这些 URL（HTML 的 link/SW 注册注入本身推迟到 P2），
+  `features.handle()` 与用例明确「不服务」（三路径 404，且 mobile.html 不注入 manifest/SW 注册）；
+  P2 有消费者时再与插件侧资产一起引入。`/chamber/mobile.html` 保留为弃用兼容入口（meta refresh 回
+  `/?desktop=1`，UA 分流的默认目标）。**插件注入实例后 gateway 侧不注册任何 SW/manifest**（避免
+  双注册与"假离线"承诺，§18.5）。SW scope：单目标反代下托管实例即 gateway origin，`scope: "/"`
+  天然实例专属；多实例同源代理（桌面 N-ctx，`/api/i/<id>/*`）才需要 per-instance 路径（§18.4.5）。
 - 认证交互：未认证移动访问 → 登录页（login-page 已带 viewport） → 登录后回到
   移动入口；流转与桌面浏览器一致，无新认证面。
 
@@ -1428,7 +1437,7 @@ dsh-web-mobile）、`dsh-ui-mobile`（npm 已发布）、`dsh-web-ui-mobile`、`
 必须作用域化）；③ layout 事实源在 `dsh-chamber-client-ui-layout`，不注入 gateway 托管实例
 （mobile 的唯一部署），只观察官方 `data-sidebar-collapsed`；④ 选择器锚自研 DOM + fork 内
 `data-*` 钩子，不猜官方哈希类名；⑤ 断点带触屏守卫 `(max-width:1023px) and (pointer: coarse)`
-+ 768px 手机档（社区 "PC leak" 教训）；⑥ 能力取舍：行为层必做，社区宿主路由（删除/推理等级/
++ 768px 手机档（社区 "PC leak" 教训，§18.4.2）；⑥ 能力取舍：行为层必做，社区宿主路由（删除/推理等级/
 插件市场/GitHub token）v1 不做。
 
 **18.4.1 挂载机制（社区已证明零成本）**：标准三件套 = `package.json` 的 `dsh.bundle.patch`
@@ -1436,23 +1445,44 @@ dsh-web-mobile）、`dsh-ui-mobile`（npm 已发布）、`dsh-web-ui-mobile`、`
 `window.__ModuleLoader__.load({id, factory})` + 运行时注入 `<style data-plugin-css>`。
 chamber 已有完全同构先例（design 09 方案 A + host-graph-seed `--patch` overlay），**无需新机制**；
 宿主侧能力走 dsh 实例自己的 host 插件，不越控制面边界（v1 不引入删除类）。选择器三条路线中
-chamber 走第三条：已 fork `dsh-client-web`/`ui-layout`，在 fork 内加 `data-*` 钩子；唯一
+chamber 走第三条：桌面 composite 侧已 fork `dsh-client-web`/`ui-layout` 并在 fork 内加 `data-*`
+钩子（gateway 托管实例无 fork，移动插件只锚官方属性，见 §18.4.4）；唯一
 类名例外是**局部名后缀契约**（实例 bundle 为 `[hash]_[local]`，只能用
 `:is([class$="_<local>"], [class*="_<local> "])` 形态；`_<local>_<hash>_<idx>` 是 chamber 自建壳
 命名、不属于实例 bundle）。
 
+**18.4.2 断点与 "PC leak" 不变量**：触屏档 = `(max-width: 1023px) and (pointer: coarse)`，
+768px 以下为手机档（`PHONE_TIER_QUERY`）。两档**同时**约束 CSS 与 JS——样式表每条规则都在
+媒体查询内，行为层用同一个 `matchMedia` 门装卸（composer/抽屉手势/IME 阶梯只在触屏档注册），
+`shell.overlay` 的浮动开关与遮罩在档外默认 `display: none`（否则桌面会看到无样式的幽灵按钮）。
+不读 UA：只按宽度而没有触屏守卫会在桌面窄窗误伤（社区 "PC leak" 教训）。iPad 接触控板/鼠标令
+`pointer` 翻 fine 时整档退场，是**有意接受**的兜底（D7，§18.6）。
+
 **18.4.3 布局覆盖要点（实证坑）**：
 - 三栏→单栏：`@media` 内 Grid 覆盖 `0 minmax(0,1fr) 0` + 侧栏 `position:fixed` 脱离流；
-- 抽屉 containing-block 陷阱：官方设置面板 portal 挂在 fixed 侧栏内，任何 `transform`/
-  `will-change`/`contain` 都会把它裁进抽屉 ⇒ **ui-layout fork 把设置对话框移出该 portal 即根除**；
+- 抽屉 containing-block 陷阱（**上游已根除**）：rc.2 的官方设置面板已 body portal
+  （`dsh-client-ui-settings-general` 的 `SettingsRoot` 把面板 `createPortal(…, document.body)`），
+  不再位于 fixed 侧栏内，`transform`/`will-change`/`contain` 裁不到它；gateway 单壳形态也不注入
+  ui-layout fork，无需（也无注入面）把它移出 portal。⑪「抽屉让位时不可见 `aria-modal`」组合随之
+  收口；残余真机项 = `PlatformOverlay`（账号平台全窗覆层，同为 body portal 的
+  `[role="dialog"][aria-modal="true"]`）不被本插件窄屏对话框规则误伤、叠层与 inert 交互正确（§18.6）；
 - 弹层不统一限宽：曾对所有非设置 `aria-modal` 加 `max-width`，把全幅 `ImageLightbox` 限出未变暗的
-  可点穿条带；树里三个 `role="dialog" aria-modal` 生产者各自已带视口适配 ⇒ 已删除；
+  可点穿条带；树里四个 `role="dialog" aria-modal` 生产者（`settings-general` 的设置面板、
+  ui-primitives `Modal`、ui-primitives `ImageLightbox`、`settings-account` 的 `PlatformOverlay`）
+  各自已带视口适配 ⇒ 已删除；
 - 设置面板全屏：`fixed inset:0` + 纵向滚动 + safe-area；粘滞行按官方
   `[data-slot="settings.header"]`/`settings.action`/`settings.close` 缝定位，不用位置索引；
   手机档 nav 变横向 chips（44px）；分区网格只剩 Models provider 一处 4 列→2×2（后缀契约例外锚点，
   fail-soft 回官方网格）；plugin-inventory / agent-preset 两张卡片网格几何归上游，chamber 不覆盖；
 - 会话头部：抽屉开关（官方 `IconPanelLeftOutlineRegular` + 官方 label 对，自写 `aria-expanded`、
-  无 `aria-haspopup`）与头部内容重叠 ⇒ 头部预留左 gutter；crumbs 行改换行不裁切；
+  无 `aria-haspopup`）与头部内容重叠 ⇒ 头部预留左 gutter，两条属性臂都指向 `<header>`（外
+  `[data-slot="conversation.header"]` 出口的直接子，以及 `header:has(> [data-slot="conversation.session.header"])`；
+  rc.2 的真实形状是外出口包 `<header>`、会话出口在 `<header>` 内），首行 `min-height: 48px` 是地板；
+  crumbs **保持官方单行契约**：nowrap + strip 横向平移（`overflow-x: auto`、隐藏滚动条），收缩顺序 =
+  非末段全部 `flex: 0 0 auto` 不参与，仅**末段 crumb**（rc.2 是 span，无 disabled 按钮可键；上游自带
+  220px max-width + ellipsis）吸收剩余宽度并末段 ellipsis，lineage chip 固定不挤——**曾把该行改成
+  `flex-wrap: wrap`，是回归**：lineage 计数 span 无自有类名，脱离继承的 nowrap 后 CJK 逐字断行，
+  徽标渲染成 5 行竖排（5×18px = 90px），标题行从 30px 涨到 ~96px 并挤压标题；
   「Session 日志」胶囊上游已改 more-actions 28×28 图标，插件不再按文案打标；
 - 安全区一次做全：`viewport-fit=cover` + `env(safe-area-inset-*)` + `100dvh` + `theme-color`
   跟随主题 + `interactive-widget=resizes-content`；textarea 恢复 `touch-action:auto`；
@@ -1460,14 +1490,21 @@ chamber 走第三条：已 fork `dsh-client-web`/`ui-layout`，在 fork 内加 `
   （`[data-mobile-role="details"] [data-sidebar-right-panel]` → `fixed inset:0; z-index:40`），
   网格锁不变、**刻意不加「已展开」门控**（动画同刻 `shown:false` 会让全屏盒中途失效）；抽屉/
   遮罩/开关挂官方 `shell.overlay`（独立栈上下文），面板展开期显式让位，需轨道臂 +
-  `data-rightbar-fullscreen` 两条臂；锚点注意 slot 出口是 `display:contents`，对「列的子元素」
-  定位是静默 no-op；跨栈真正解需 body portal（未做）。
+  `data-rightbar-fullscreen` 两条臂；打开的抽屉本身由 JS 给会话/右栏两列置 `inert` 并锁滚动
+  （2026-09-30；面板展开时跳过 details 列，否则面板自身失效），遮罩拦不住的键盘/AT 也进不到身后；
+  锚点注意 slot 出口是 `display:contents`，对「列的子元素」
+  定位是静默 no-op；跨栈真正解 = body portal：设置面板已由上游 body portal（D5），本插件自己的
+  抽屉/遮罩/开关仍挂官方 `shell.overlay`，与全屏右栏的叠层由上面两条让位臂处理。
 
 **18.4.4 行为层（移动端复杂度核心）**：IME 恢复（focus 丢弃循环 / editability 翻转 / pointerup
 refocus / visualViewport 判定 / 键盘补偿五层）、回车=换行、composer 自愈（30s busy 强解锁 +
-遮挡中和 + 44px 触控下限）、包装官方方法必须保持 Promise 链（返回 `originalSink()`，否则输入框
-永久卡死）、`:has()` 每 DOM 变更重算是卡顿源（改 MutationObserver + microtask）；这些补丁的
-合法落点是 `dsh-client-web` fork。
+遮挡中和 + 44px 触控下限）、**不包装官方方法**（本层只做 DOM/事件层观察与合成：Enter
+处理器要求 `contenteditable="true"`，编辑态恢复只写 DOM 属性，安装器全挂在文档级监听 +
+`MutationObserver` 上）、`:has()` 每 DOM 变更重算是卡顿源（改 MutationObserver + microtask）；这些补丁在
+gateway 单壳形态下的合法落点**就是打包的 mobile 插件本身**：托管实例跑官方 dsh（官方 ui-layout +
+官方 `dsh-client-web` 壳），没有 chamber fork 的注入面，插件只能以 DOM/事件层锚官方 `data-*`
+实现（`apply()` 内按触屏档装卸）；不假设 `dsh-client-web` fork 在场。为什么不在 gateway 注入
+ui-layout fork，见 §20。
 - **composer 可见性守卫**（390×844 真机台架实测两处硬缺陷）：① 双倍抬升——sticky `bottom` 与
   滚动器 `padding-bottom` 两臂叠加（滚动器同时是 seat 的 sticky 包含块）⇒ 只保留 seat 的
   sticky `bottom`，余量用流内 spacer；② 不 arm——按 `isKeyboardOpen` 推断在事件缺失时不动作 ⇒
@@ -1481,21 +1518,34 @@ refocus / visualViewport 判定 / 键盘补偿五层）、回车=换行、compos
 - 被否决：滚动器 padding + seat inset 两臂、调阈值/延迟重试仍走推断、`html[data-mobile-kbd]`
   第二 CSS 载体、任何可编辑焦点都抬升、插件层禁用 PDF.js、懒加载重客户端包（改上游 ⇒ 上游提案）；
 - tooltip 粘滞：官方 `Tooltip` 只有 mouseenter/leave/focus/blur，粗指针 tap 无配对 leave ⇒
-  `(pointer: coarse) and (hover: none)` 门控、只隐藏 `button[aria-label] + [role="tooltip"][data-side]`
+  `(pointer: coarse) and (hover: none)` 门控、隐藏三种形状：`button[aria-label] + [role="tooltip"][data-side]`
+  （内联兄弟气泡）、带 `aria-label` 的 `button` 被 `span`/`div` 包裹时的**包裹兄弟臂**
+  `:is(span, div):has(> button[aria-label]) + [role="tooltip"][data-side]`（气泡是外层包裹元素的
+  下一兄弟，只贴触发器的臂看不到它；官方 3 处 = 右栏文档预览缩放 +/- 与字体告警；2026-09-30 修复，
+  独立成规则以便无 `:has()` 引擎只丢该臂）与 `[role="tooltip"][data-portal][data-side]`
+  （`portal:true` 经 `createPortal` 移到 `document.body`，兄弟臂够不到，粘滞 latch 同病）
   （官方 31 处用法中 27 处匹配；4 处信息型气泡保留，第 5 处无 `data-side` 结构性排除）；
   原生 `title` 长按气泡不抑制（登记 STATUS）；
 - 抽屉点击自愈：iOS 抑制抽屉内点击的合成 click ⇒ 稳定 tap 后 120ms 内无真实 click 时从 pointerup
   目标重发非受信 bubbling click，迟到真实 click 被抑制（防双激活）；平移/滚动/表单控件/抽屉外
-  不触发（`drawer-taps.ts`）。导航后不弹键盘：IME layer-1 gesture 改按**导航区语义**丢弃程序化
-  回焦（抽屉与会话头起始的手势），composer 内/发送键/硬键盘/portal 选择器保留。
+  不触发（`drawer-taps.ts`）。**已接受取舍**（2026-09-30）：迟到的真实 click 落在**无关元素**上时
+  不取消既有 heal——它不能证明该行已被激活，取消会让这次点按彻底丢失（代价有界：heal 只重放一次
+  非受信 click，且同坐标迟到 click 仍被抑制）。导航后不弹键盘：IME layer-1 的手势分类 =
+  **最近一次 pointerdown 是否落在导航区**（`NAV_QUERY` = `[data-mobile-role="sidebar"]` 与
+  `[data-slot="conversation.session.header"]`）——分类**持久**（直到下一次 pointerdown 才覆盖），
+  但丢弃程序化回焦**只在这次 pointerdown 之后 45s 的可执行窗口**（`IME_NAV_DROP_WINDOW_MS`）
+  内生效（2026-09-30）：窗口外的
+  focusin（读屏/辅助技术/其它程序化聚焦）不再被归因给那次手势，一律保留；区外（composer seat、
+  portal 菜单、消息区）一律 `preserve`；另设 Tab/Arrow 键盘导航保留窗
+  （`IME_KEYBOARD_INTENT_MS` = 500ms），窗口内的 focusin 一律保留；发送键、硬键盘照旧保留。
 
 **18.4.5 官方机制确认与 PWA**：官方**不存在 ui-mobile 插件**（窄视口策略是流内换行，移动布局
 有意留给第三方）；官方两 manifest 体系即 chamber 走的规范（`dsh.bundle.patch` 的 YAML 数组按
 `id` 整行替换 + `dsh.client` → `clientModules` → `__DSH_BOOT__` → 不可变缓存组合脚本；加载
 顺序 bundles → profile patch → 机器级 patch → `--patch`）；纯 client 包不可被 `dsh plugin` 安装。
 官方 Web Shell 无 `viewport-fit=cover`/safe-area，只有 `manifest.webmanifest`（fullscreen），且
-**刻意不提供 service worker**（避免"误导性的不完整离线约定"）⇒ gateway 的空 `sw.js` 占位不得
-演变为假离线承诺。社区 PWA 机制（`dsh-ui-mobile`，API 面已随基线漂移，仅作参照）：node host 半
+**刻意不提供 service worker**（避免"误导性的不完整离线约定"）⇒ gateway 侧的空 `sw.js` 占位已删除
+（不服务）；P2 引入 SW 时同样不得演变为假离线承诺。社区 PWA 机制（`dsh-ui-mobile`，API 面已随基线漂移，仅作参照）：node host 半
 `webServer.tapIndex` 注入 + 浏览器半 data-attribute stamping（可复用于 N-ctx）；三栏→单栏用
 `!important` 对抗宿主内联；SW 是 origin 级、N-ctx/gateway 必须 per-instance 路径（否则缓存互相
 污染）；Web Push 走 `pushManager` + 幂等对账 + 404/410 清订阅，chamber 需要自己的移动端通知投影
@@ -1515,15 +1565,20 @@ refocus / visualViewport 判定 / 键盘补偿五层）、回车=换行、compos
 
 ### 18.6 验收门禁
 
-- 自动化：移动插件 typecheck/test（布局纯函数、断点、编辑态门控与自愈时钟、SW 注册逻辑）、
-  gateway UA 路由测试（含伪造 UA 负例）、插件 PWA 资产经 gateway 透传后的 HEAD/GET 测试
-  （`/pwa/*`、`/sw.js` 可达且内容正确、未注入形态下 gateway 占位不注册 SW）；
+- 自动化：移动插件 typecheck/test（布局纯函数、断点、编辑态门控与自愈时钟、键盘守卫几何、
+  caret reveal、tooltip 抑制形状）、gateway UA 路由测试（含伪造 UA 负例；该面已弃用，用例随兼容面
+  保留到移除）、「gateway 不服务 PWA 三件套」负例（`/chamber/sw.js`、`/chamber/sw-register.js`、
+  `/chamber/manifest.webmanifest` 三路径 404，`/chamber/mobile.html` 仍 200 且不注入 manifest/SW
+  注册）；插件 PWA 资产经 gateway 透传后的 HEAD/GET 测试（`/pwa/*`、`/sw.js` 可达且内容正确）
+  **P2 生效**——P2 有消费者时才引入插件侧资产与相应用例；
 - 实机（移动视口清单，CDP 设备模拟 + 真机抽检）：**设备模拟部分已有工具**——
   `scripts/gui-acceptance/mobile-walkthrough.mjs`（设备尺寸 + 触控模拟 ⇒ 真实 `pointer:coarse`；
   结构化断言：无横向溢出、会话头首行高度、「单字换行」行盒、命中盒；**并抓 WebSocket 帧**，
   是会话打开停滞取证的入口；判定语义由 `mobile-checks.test.mjs` 以合成事实锁定，含已知边界：
   `Emulation.setEmulatedMedia` 的 `pointer/hover` 被 Chromium 忽略、`mobile:true` 的收缩适配会让
-  `scrollWidth <= innerWidth` 恒真因而判定以 `clientWidth` 为准）与
+  `scrollWidth <= innerWidth` 恒真因而判定以 `clientWidth` 为准）；**M-9 覆盖层只读探查**
+  以**布局视口**（`document.documentElement.clientWidth/Height`）为基准，`visualViewport`
+  只作对照证据——地址栏/IME 只收缩 visual 视口，用它判定会把合法的全屏 fixed 层误报成溢出）与
   `scripts/upstream/verify-mobile-anchors.mjs`（锚点新鲜度门）。**真机抽检仍不可省**（iOS
   键盘/安全区/`100dvh`/聚焦缩放、惯性滚动与 hover 观感；走查只读，抽屉/设置/键盘补偿未断言）：
   - 触控目标 ≥44px 比例（**座席清单**：composer bar / sidebar / 会话头
@@ -1532,18 +1587,25 @@ refocus / visualViewport 判定 / 键盘补偿五层）、回车=换行、compos
   - 右栏与抽屉（决策的实机判据）：展开的右栏在 769–1023px 档**全屏**呈现、面板自带
     退出控件可点、面板展开期间抽屉与开关不可见且**不在 Tab 序**——**两档都要走查**：<768（上游
     自身全屏、本插件补齐 inset、让位靠 `data-rightbar-fullscreen` 臂）与 769–1023（本插件全屏 +
-    轨道臂）；768–1023 档内面板自带的**模式控件不可见**（翻转是 no-op）、关闭面板后
+    轨道臂）；抽屉**打开**时会话与右栏两列 `inert`（遮罩拦不住的键盘/AT 也进不到身后；右栏面板
+    已展开时 details 列除外）、768–1023 档内面板自带的**模式控件不可见**（翻转是 no-op）、关闭面板后
     抽屉回到原开合态可接受、dockkit 条并入 44px 后条高与观感（chips 保持 content-box 以免放宽分屏
     判定；**chips 行由上游 `touch-action:none` 持有，不得期望手指横滚**，越界 chip 只能靠激活邻居
     滚入视野）、面板子树 `overscroll-behavior:contain` 生效（滚动到底不得带动身后文档/工具栏）、
-    会话头座席底线落在内容盒（图标按钮约 56px，过厚则三条臂一起改 border-box）、官方浮动面板
+    **抽屉安全区**（2026-09-30 新增）：抽屉四边带 `env(safe-area-inset-*)` 且 `box-sizing: border-box`
+    （横屏刘海不压会话行/搜索框、home indicator 不压底部行），与面板安全区同批真机复验、
+    会话头三臂座席底线（actions 落**内容盒**：28px 图标按钮 + 6px padding ⇒ 渲染约 56px、行随其
+    增高；utilities/corner 两臂 `box-sizing: border-box` ⇒ 44px 即盒高）、官方浮动面板
     （380×300 @ (160,120)、z-60）与 `ContextMeter` 264px 面板在窄屏是否出屏（已登记未适配，见
-    STATUS ③④）、**iOS 安全区**：横屏刘海不得压住面板内容、home indicator 不得压住底部行（面板已带
-    `env(safe-area-inset-*)` 且 `box-sizing:border-box`，`viewport-fit=cover` 由本插件注入；真机先读
-    `getComputedStyle(panel).boxSizing` 与 `getBoundingClientRect().width` 对比 `visualViewport.width`）、
+    STATUS ③④；M-9 探查，裁决 D6）、**iOS 安全区**：横屏刘海不得压住面板内容、home indicator 不得压住
+    底部行（面板已带 `env(safe-area-inset-*)` 且 `box-sizing:border-box`，`viewport-fit=cover` 由本
+    插件注入；真机先读 `getComputedStyle(panel).boxSizing` 与 `getBoundingClientRect().width` 对比
+    `visualViewport.width`；**R5**：`[data-sidebar-right-panel]` 自身没有背景，`inset:0` + safe-area
+    padding 的条带是否会透出需设备复核）、
     键盘已弹起时打开面板的焦点归属（现沿用上游：焦点与输入留在面板之后，是否补 blur 待判）、面板在
-    抽屉已展开的 768–979 档是否被上游 `canShow` 自收起（观感待判）、设置页在抽屉内被让位隐藏时的
-    「不可见 `aria-modal`」组合（见 STATUS ⑪）、Split View / Stage Manager / 旋转跨越 768 与 1024
+    抽屉已展开的 768–979 档是否被上游 `canShow` 自收起（观感待判）、设置面板已 body portal（D5），
+    不再有「抽屉让位时不可见 `aria-modal`」的组合；残余真机项 = `PlatformOverlay`（账号平台全窗
+    覆层）与窄屏对话框规则的叠层/inert 交互、Split View / Stage Manager / 旋转跨越 768 与 1024
     边界时呈现不得在手势中途跳变（见 STATUS ⑩）；
   - 键盘补偿：键盘弹出后 composer 停在键盘顶上方且**不常驻气泡**；捏合缩放（双指放大）**不得**抬升
     composer（缩放守卫）；键盘服务于设置/提问字段时不得抬升 composer（焦点守卫）；**iOS 聚焦缩放后的
@@ -1551,21 +1613,30 @@ refocus / visualViewport 判定 / 键盘补偿五层）、回车=换行、compos
     页面上的平移不得引起 seat/滚动范围抖动**（缩放态只服务 composer 的取舍需实机确认）；提交
     （`submitting`）窗口内 seat 不得闪落；会话切换/reconnect settle 重挂 seat 后 composer 仍在键盘
     上方（幂等 arm）；**arm 期间 seat 与键盘顶之间的死区应 ≤23px**（16px 量化的正例，刘海机还须
-    确认安全区归零无双重间距）；arm 期间「回到底部」控件必须仍可点到（现落在 `--dsh-composer-height`
-    之后，见 STATUS ⑥）；Android WebView 无 `interactive-widget` 时同样生效；无工作区态按 Enter
+    确认安全区归零无双重间距）；arm 期间「回到底部」控件必须仍可点到（`_toBottomSlot`
+    随键盘位移抬升，真机复验中——该臂已入锚点门的 REQUIRED 最小集，**零发射硬失败**，pin 升级须重锚；
+    见 STATUS ⑥）；
+    Android WebView 无 `interactive-widget` 时同样生效；无工作区态按 Enter
     **打开工作区选择器**（编辑态门控的正例）、**iPad 接硬件键盘时 Ctrl/Cmd+Enter 仍走官方加速提交**
     （不得被换成换行）、**卡住的提交**（不可编辑 + `data-phase` 为 adjudicating/submitting 满 30s）
     点按可自愈，而**合法锁定态**（owner 阻断 / 父端离线 / 无会话选择器节点）点按**不得**被强解锁
-    （自愈范围的正/负例）；carry 一个待判：撑满后的回车换行必须把新行带进可视区（caret reveal 与
-    Lexical 归并的时序，见 STATUS ⑦）；
-  - 外设与档位：iPad 接触控板/鼠标时本档是否仍以 `pointer: coarse` 成立（文档假设只翻转 `hover`；
-    若翻转 `pointer`，移动档退场回落上游窄窗形态，见 STATUS ⑨）；
-  - tooltip：点按发送/停止/指令/ContextMeter/队列/侧边栏等带 aria-label 的按钮后**无**残留气泡；
+    （自愈范围的正/负例；**R3**：Lexical editable 是否随 DOM `contenteditable` 写回**未验**——
+    若不写回，自愈只恢复外观、输入未必解锁，真机需复核）；回车换行后的 caret reveal 由插件在插入后
+    按 `[data-input-scroll]` 的滚动盒签名化补做（只动宿主 scrollTop，不追 Lexical 归并时序），真机需在
+    键盘弹起态复验新行入视；
+  - 外设与档位（**D7 = 接受档位退场**）：iPad 接触控板/鼠标时若引擎把 `pointer` 翻成 fine，本档
+    （`(max-width:1023px) and (pointer:coarse)`）即退场、回落上游窄窗形态——这是**有意接受**的兜底，
+    不是缺陷：挂指针即桌面交互意图，插件不伪装 coarse（`hover` 翻转只影响 chrome 档的 tooltip 抑制，
+    正确恢复 hover 气泡）；真机仍需确认翻转实态与退场后的窄窗可用性（STATUS ⑨）；
+  - tooltip：点按发送/停止/指令/ContextMeter/队列/侧边栏等带 aria-label 的按钮后**无**残留气泡
+    （内联兄弟气泡、`span`/`div` 包裹 button 的包裹兄弟气泡与 `[data-portal]` 的 body portal 气泡
+    三种形状都要真机复验；包裹兄弟臂 2026-09-30 新增）；
     聊天统计行/代理预设卡片描述/轨迹时间轴与 kind 标签的悬停气泡仍可读（信息型气泡保留）；轨迹
     turn-rail 预览（901–1023px 触控平板）不受影响；接鼠标的触控设备 hover 气泡恢复；桌面宽度零变化；
     **原生 `title` 长按气泡为已登记取舍**（刻意手势，不抑制）；
-  - 会话头：抽屉开关不重叠头部内容、crumbs 长链/chip 换行不裁切、视图 tab（chat+trajectory 常驻）
-    44px 且**换行**不裁切——活动 tab 那条外伸 1px 的指示条必须仍与头部底线齐平（`overflow-x:auto` 的连带裁切）、头部随 tab 盒增高；抽屉里单击会话行即切换（iOS
+  - 会话头：抽屉开关不重叠头部内容、首行高度 ≤48px（48px 地板；锚点激活后待真机复验，M-5 走查断言）、
+    crumbs 长链**单行 + strip 平移**（末段 ellipsis、lineage chip 不被挤成竖排）、视图 tab
+    （chat+trajectory 常驻）44px 且**换行**不裁切——活动 tab 那条外伸 1px 的指示条必须仍与头部底线齐平（`overflow-x:auto` 的连带裁切）、头部随 tab 盒增高；抽屉里单击会话行即切换（iOS
     Safari 自愈生效）、切换不弹键盘（composer 意图焦点不受影响）；
   - 设置（手机档）：竖排 nav 变顶部横向 chips 且分类可达/可滚动、Close 固定不随内容滚走（粘滞行仍由
     两条 `data-slot` 缝锚定）、各分区（General/Models/Agent presets/Plugins+inventory）无横向溢出且
@@ -1573,13 +1644,15 @@ refocus / visualViewport 判定 / 键盘补偿五层）、回车=换行、compos
     **弹层不出屏且官方几何自足**（含全幅图像 lightbox 不得被限宽裁切）、输入框聚焦不触发页面
     缩放、键盘弹出不遮输入、深浅色与横竖屏走查、**分区 chip 切换后 options 从顶部开始（且点 nav 标题/
     选项区不复位）**；
-  - PWA：manifest 生效、SW 注册、安装引导（分期验收）。
+  - PWA（**P2 生效**）：manifest 生效、SW 注册、安装引导（分期验收）。
 
 ### 18.7 分期
 
 - **P1（内网/可信网络形态）**：移动适配插件布局/触控覆盖（抽屉、单栏、
-  弹层、设置、输入行、安全区）+ gateway UA 路由开关；
-- **P2（未实现）**：PWA 安装 + SW（壳资源离线）；
+  弹层、设置、输入行、安全区）+ gateway UA 路由开关（**已弃用**，D1：默认关、弃用警告、下一 major
+  移除；不再演进）；
+- **P2（未实现）**：PWA 安装 + SW（壳资源离线；gateway 占位三件套与插件侧资产随有消费者的实现
+  一起重新引入，见 §18.3）；
 - **P3（未实现）**：公网认证流转正式化（登录页 ↔ 移动入口）、Web Push 通知（参考社区
   实现，评估 dsh 侧能力）。
 
@@ -1599,6 +1672,20 @@ refocus / visualViewport 判定 / 键盘补偿五层）、回车=换行、compos
 
 改动触及既有契约或已交付行为时，按 `AGENTS.md` 的 PR 纪律记下「还考虑过什么、为什么落选」：
 
+**移动面裁决登记（D1–D8）**：第 18 章的 D 编号在此单源登记，正文只引用编号；每条都对应下面一个
+落选替代条目，未使用的编号如实标注，不新增裁决。
+
+| 编号 | 裁决（仍成立） | 落选替代/依据（本节对应条目） |
+|---|---|---|
+| D1 | UA 体验分流**弃用**：默认关、显式启用一次性弃用警告、下一 major 移除；插件不读 UA | 「UA 体验分流保留为一等入口」条 |
+| D2 | 停滞账本**跨发作保留**（cooldown 120s、窗口 10min、≤3 次；时钟随发作重置但配额不清零，仅会话切换〔header 锚点变化〕清账） | 「停滞账本随发作清零」条 |
+| D3 | **未使用**（无对应裁决，不指向任何条目） | — |
+| D4 | 停滞文案阈值对齐共享阶梯表 `ladders.mobile.failedMs` = **90s**（模块内旧常量 `STALL_FAILED_MS` 退役）；45s/20s 档同样**未经真机校准**（design 14 §D4） | 停滞提示证据门条内的表值修订 |
+| D5 | 设置面板由上游 body portal（`SettingsRoot` `createPortal(…, document.body)`）；**不**向 gateway 托管实例注入 ui-layout fork | 「在 gateway 托管实例注入 ui-layout fork」条 |
+| D6 | 官方浮动面板（380×300 @ (160,120)、z-60）与 `ContextMeter` 264px 在窄屏是否出屏，交给 **M-9 只读覆盖层探查**后落裁（探查未跑，暂不改造） | §18.6 实机门禁 + STATUS ③④ |
+| D7 | iPad 接触控板/鼠标若把 `pointer` 翻 fine，触屏档整体退场 = **有意接受**（不伪装 coarse；`hover` 翻转只影响 tooltip 抑制并正确恢复 hover 气泡） | §18.6「外设与档位」条 |
+| D8 | **未使用**（无对应裁决；相关 IME 手势语义直接写在 §18.4.4，未单列编号） | — |
+
 - **移动停滞提示的控制面**（实现与锚点见 `packages/dsh-chamber-client-ui-mobile/README.md`）：
   - 只留「重载」一个按钮（review 前形态）——**否决**：45s 阈值未经真机校准，健康但缓慢的打开与
     停滞同形，误报时用户只能在「无视提示」与「中断一次合法加载」间二选一；补「继续等待」把误报
@@ -1606,10 +1693,33 @@ refocus / visualViewport 判定 / 键盘补偿五层）、回车=换行、compos
   - 超时后**无条件**自动重载或自动重开会话——**否决**：违反「只观察、不代替用户决定」的边界，
     慢链路下会把可完成的一次加载变成永久循环。
   - 修订（「进入会话必须有内容，不允许静默无限加载」）：**证据门**自动重开被采纳。
-    仅当具象 `Session.openPromise` 明确为空（**无在途 open** ⇒ 慢宿主绝不被中断）且该会话的 cooldown/滚动预算
-    账本允许时，模块才调用一次 pinned `resync()`；证据不可读（缺失/抛错/宿主形态漂移）一律 `unknown` fail-closed，
-    因此上面那条「无条件」否决仍然成立。文案在 `STALL_FAILED_MS`（180s）后转硬失败面，避免把已失败的加载
-    描述成进行中。桌面档同形且更强（另有载波层升级：开帧校验 + 首帧期限 + 静默 socket 替换，design 14 §D4）。
+    仅当具象 `Session.openPromise` 明确为空（**无在途 open** ⇒ 慢宿主绝不被中断）且该会话的
+    cooldown/滚动预算账本允许时，模块才调用一次 pinned `resync()`；证据不可读（缺失/抛错/宿主形态漂移）
+    一律 `unknown` fail-closed，因此上面那条「无条件」否决仍然成立。文案在共享表的
+    `ladders.mobile.failedMs`（**90s**；模块内旧常量 `STALL_FAILED_MS` 已退役、由阶梯表驱动）后转
+    硬失败面，避免把已失败的加载描述成进行中；该 90s 与 45s/20s 档一样**未经真机校准**（design 14 §D4）。
+    桌面档同形且更强（另有载波层升级：开帧校验 + 首帧期限 + 静默 socket 替换，design 14 §D4）。
+- **移动代理面修正的落选替代**（D1/D5 与 2026-09-30 IME 手势语义、停滞账本；实现与锚点见
+  `packages/dsh-chamber-client-ui-mobile/README.md`）：
+  - **UA 体验分流保留为一等入口**（或把嗅探写强）——**否决**：移动插件已在所有设备注入，分流只制造
+    两种移动入口形态与登录回跳面；UA 可伪造，写强不改变「不是安全边界」的事实，只增加维护面。
+    落选后的形态 = 兼容面：默认关、显式启用一次性弃用警告、下一 major 移除（D1，§18.3）。
+  - **在 gateway 托管实例注入 ui-layout fork**（把设置对话框移出侧栏 portal、给布局事实一个 chamber
+    服务）——**否决**：gateway 是单壳形态，注入 fork 会造第二个布局权威，与 §18.2「layout 事实源
+    不注入 gateway」冲突；pin 的官方 `SettingsRoot` 已把面板 body portal（D5），原陷阱不存在，
+    插件只观察官方 `data-sidebar-collapsed` 即可（§18.4.3/§18.4.4）。
+  - **IME layer-1 用「时间窗 + seat 内才算打字」判定**（`Date.now() - lastPointerDown < 500 &&
+    gestureInSeat`）——**否决**：官方 submit effect 的回焦可能晚于任何短窗，超窗后一次导航手势会被
+    当打字意图、键盘重新弹起；且消息区点按/portal 菜单既非导航也不在 seat 内，seat-only 会误分类。
+    落选后的语义 = **持久分类**（`NAV_QUERY` 导航区 vs 其余 `preserve`，下一次 pointerdown 才覆盖）
+    + **45s 可执行窗口**（丢弃回焦只在该次 pointerdown 之后的窗口内执行；超窗的程序化 focusin 一律
+    保留——读屏/辅助技术与其它程序化聚焦常在任意手势之后很久才聚焦，与那次导航手势无关，按持久
+    分类全丢会误伤它们）+ Tab/Arrow 的 500ms 键盘导航保留窗（§18.4.4）。
+  - **停滞账本随发作清零**（形状/可见性一断就发一份新配额；或阈值到即重开只留一次闩锁）——**否决**：
+    闪烁的形状（滚动中、后台切换）会不断补满 resync 配额，把有界恢复变成循环；一次闩锁又会在第一次
+    空转后永久放弃（用户只剩重载）。落选后的账本 = 共享阶梯账本跨发作**保留**（cooldown 120s、
+    窗口 10min、≤3 次）：时钟随发作重置而配额不清零，只有会话切换（header 锚点变化）才清；证据门
+    仍需 `loading === true && openInFlight === false`（§18.4.4）。
 - **只读会话状态镜像的实现形态**（§10.7 carve-out，`packages/gateway/src/session-state.ts`）：
   - 在 gateway 内 headless 运行官方客户端半（`dsh-client-connection` + 会话控制器 + ui-session 插件图）——**否决**：
     需要 cordis + typert 服务图与 location/存储 stub，等于把编排面的依赖重新搬回服务端，且信任面（整张客户端插件图）
