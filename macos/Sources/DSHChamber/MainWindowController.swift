@@ -202,6 +202,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// WKWebView 是否真的关掉了自己的底（私有键 `drawsBackground` 生效 ⇒ 页面透明区能露出
     /// 窗口/材质；不可用或回读不一致时 WebKit 不透明绘制，露底色必须留主题色）。
     private var webViewIsTransparent = false
+    /// 桌面宿主路径面（上游 __DSH_HOST_PATHS__ 的 Swift 腿）：拖拽板快照服务。
+    /// webView 建好后启动、控制器销毁时停止（HostPathCatalog.swift）。
+    private var hostPaths: HostPathCatalogService?
     private var bridgeHandler: ChamberMessageHandler!
     /// 关窗决策委托（AppDelegate；见 windowShouldClose）。
     weak var closeDelegate: MainWindowCloseDeciding?
@@ -302,6 +305,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     deinit {
         hangProbeTimer?.invalidate()
+        hostPaths?.stop()
     }
 
     /// 构建 WKWebView（含 A 桥注入与消息通道）与主窗口
@@ -501,6 +505,36 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
 #endif
         self.webView = webView
+        // 宿主路径面（上游 __DSH_HOST_PATHS__）：拖拽开始/面板回执时的目录快照
+        // 经 __dshChamberHostPaths(token, payload) 推给 documentStart 的 shim 载体。
+        // 页面侧门控在 shim 里（只有屏上为本地实例才返回路径），Swift 端只给事实。
+        let hostPaths = HostPathCatalogService()
+        hostPaths.push = { [weak self] payload in
+            guard let self else { return }
+            self.evaluateJS("window.__dshChamberHostPaths && window.__dshChamberHostPaths(\(self.nativeTokenLiteral), \(Self.jsonLiteral(of: payload)))") { error in
+                if let error {
+                    // 推送失败（shim 抛错 / 求值失败）是本面唯一完全静默的失败类：留一行壳侧诊断。
+                    shellLog("[shell] 宿主路径推送失败：\(error.localizedDescription)")
+                }
+            }
+        }
+        // 指针门（公开 NSEvent API）：读门要求「本窗可见 + 按键按下 + 指针在窗框内」，清门只看
+        // 几何/可见性——释放鼠标只停住观察，快照留到指针离开（WebKit 可能在物理释放之后才派发
+        // DOM drop）。隐藏到托盘/最小化期间既不读也不留。
+        hostPaths.isDragInsideWindow = { [weak self] in
+            guard let self, let window = self.window else { return false }
+            return MainWindowController.dragGateValue(
+                isVisible: window.isVisible, isMiniaturized: window.isMiniaturized, appIsHidden: NSApp.isHidden,
+                pressedButtons: NSEvent.pressedMouseButtons, pointerInside: window.frame.contains(NSEvent.mouseLocation))
+        }
+        hostPaths.isPointerInsideWindow = { [weak self] in
+            guard let self, let window = self.window else { return false }
+            return MainWindowController.pointerGateValue(
+                isVisible: window.isVisible, isMiniaturized: window.isMiniaturized, appIsHidden: NSApp.isHidden,
+                pointerInside: window.frame.contains(NSEvent.mouseLocation))
+        }
+        hostPaths.start()
+        self.hostPaths = hostPaths
         // WKWebView 与窗口共用前端同一底色 token（#0f1115 = rgb(15,17,21)）
         // ——WKWebView 缺省白底会让首帧/重载白闪；drawsBackground=false 让页面
         // 透明区域直接露出窗口底色（亮/暗主题同值，token 常量见文件顶部）。
@@ -1334,9 +1368,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
     }
 
-    /// 主线程执行 JS（所有调用点都已收敛到主线程）
-    private func evaluateJS(_ script: String) {
-        webView.evaluateJavaScript(script, completionHandler: nil)
+    /// 主线程执行 JS（所有调用点都已收敛到主线程）；completion 只在需要诊断的调用点传。
+    private func evaluateJS(_ script: String, completion: ((Error?) -> Void)? = nil) {
+        webView.evaluateJavaScript(script) { _, error in completion?(error) }
     }
 
     // MARK: - 调试模式（WKWebView.isInspectable 运行时开关）
@@ -2602,6 +2636,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         shellLog("[shell] 文件选择面板：多选=\(request.allowsMultipleSelection) "
             + "目录=\(request.allowsDirectories) 类型数=\(request.allowedContentTypes.count)")
         FileOpenPanel.present(request, presenter: fileOpenPanelPresenter) { urls in
+            // 先推目录快照、再回执：页面 change 事件里的 pathFor 才能同步配到路径
+            // （配不到就回退上传，绝不产生错误引用）。
+            self.hostPaths?.adoptPicked(urls)
             completionHandler(urls)
         }
     }
@@ -2834,5 +2871,22 @@ final class ShellPageFactsMessageHandler: NSObject, WKScriptMessageHandler {
         }
         guard let payload = message.body as? [String: Any] else { return }
         controller?.ingestPageFacts(payload)
+    }
+}
+
+extension MainWindowController {
+    /// 拖拽读门（可测真值表）：窗口可见 + 非最小化 + App 未隐藏 + 鼠标按键按下 + 指针在窗框内。
+    static func dragGateValue(isVisible: Bool, isMiniaturized: Bool, appIsHidden: Bool,
+                              pressedButtons: Int, pointerInside: Bool) -> Bool {
+        pointerGateValue(isVisible: isVisible, isMiniaturized: isMiniaturized,
+                         appIsHidden: appIsHidden, pointerInside: pointerInside)
+            && pressedButtons != 0
+    }
+
+    /// 拖拽清门（可测真值表）：只看几何与可见性，不含按键状态——释放鼠标不等于拖拽会话结束，
+    /// DOM drop 可能在物理释放之后才派发。
+    static func pointerGateValue(isVisible: Bool, isMiniaturized: Bool, appIsHidden: Bool,
+                                 pointerInside: Bool) -> Bool {
+        isVisible && !isMiniaturized && !appIsHidden && pointerInside
     }
 }

@@ -30,7 +30,7 @@ selection scope（两个实例各自持久化选择槽，互不覆盖）与 I-12
 ## 工程环境债（与批次并行）
 - 下一 pin 升级时落地「真 `WorkspaceRegistry` + 真 binding」的 lockstep 测试（当前只有 ad-hoc 8/8
   证据；CI 走 node_modules 解析，本地无法验证该路径）。同步复核 vendor 补丁 retire 判定与
-  `RETIRED_PATCHES` 的当前状态（11 条补丁、2 条退役：ReasoningRow 行 sweep 与 util-values 引擎无关比较）。另：复核 dsh 运行时的
+  `RETIRED_PATCHES` 的当前状态（按 `packages/renderer/scripts/vendor-patches.mjs` 注册表现值复核；登记时为 2 条退役：ReasoningRow 行 sweep 与 util-values 引擎无关比较）。另：复核 dsh 运行时的
   `node-addon-require-builtin` 指纹表是否已收录桌面 Electron pin——当前 43.4.0 不在表内，
   Electron flavor 的托管宿主起不来（见 STATUS 设计未决；机制见 design 02 §2.6）。
 

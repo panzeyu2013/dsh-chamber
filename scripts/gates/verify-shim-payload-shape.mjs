@@ -131,6 +131,10 @@ export const DESKTOP_CARRIER_FUNCTIONS = new Set([
   // Native theme seat: the macOS-only data-ds-theme-source observer (upstream
   // preload-theme.ts); it invokes the internal channel, not a namespace method.
   'syncNativeTheme',
+  // Host-path carrier (upstream preload-app.ts __DSH_HOST_PATHS__): a page global
+  // with one synchronous pathFor() member, not a dshChamber namespace. The Swift
+  // shim installs the same global (bridge-shim.js), locked by upstream-seats S-56.
+  'exposeHostPaths',
 ])
 
 /** preload factory → exposed namespace name (the mapping that cannot be guessed

@@ -895,6 +895,35 @@ WKWebView 不认，故壳自建等价面（`macos/Sources/DSHChamber/ShellWindow
 - **`setWindowTitle` 保留「同值早退」**：只省一次 ~1µs 的幂等 `apply`，却让任何绕过接缝的写入永久留在默认位（`didFail` 曾如此）；改为无条件 apply 后，写标题本身即自愈点，拒早退。
 - **最小化/隐藏不做材质兜底**：上游 darwin 明确做了（electron#25368 的材质重挂间隙）；本壳材质是常驻子视图、本机探针未见间隙，但兜底只是四个幂等通知 + 一次底色切换，且与上游同形，拒不做。
 
+### 5.7 宿主路径引用面（`__DSH_HOST_PATHS__`）
+
+composer 的拖入/回形针入稿有两条分支（上游 `apps/desktop/src/preload-app.ts` 的载体，消费点在 `ui-conversation` 的 `hostPathBridge()`/`addFiles` 与 `ui-attachment` 的 drop 监听）：有宿主路径 ⇒ 记成 `@相对路径`（文件夹带尾斜杠的 folder chip、非图片文件是同形引用），没有 ⇒ 文件回退上传——**文件夹在远端来源**（载体存在但 painted 门控为假）得到上游的 `attachment.pathUnavailable`「无法获取文件夹路径，请重新拖入」（重试指引不成立，且上游在该分支整批作废——同批文件既不上传也不成引用；残余登记于 S-56），只有**纯浏览器**（无载体）才是上游「只有桌面端支持添加文件夹」文案。本仓此前两端都没有该载体，桌面壳里的文件夹拖入因此被当成浏览器处理——用户可感的桌面识别缺口。
+
+| 面 | Electron（镜像上游） | Swift（WKWebView 无该 API） |
+|---|---|---|
+| 取路径 | `packages/desktop/preload.cts` 的 `exposeHostPaths()`：`webUtils.getPathForFile(file)`（Electron 29+；无 `webUtils` 则不暴露全局 = 浏览器分支） | DOM `File` 不携带路径，只能「事件前快照 + 事件中同步配对」：`macos/Sources/DSHChamber/HostPathCatalog.swift` 的主线程 `.common` Timer 观察 `NSPasteboard(name:.drag)`（拖拽开始即有内容，`changeCount` 变化才读；读门=可见+按键+指针在窗内，清门只看几何/可见性——释放不清快照），`NSOpenPanel` 回执走 `adoptPicked`；`bridge-shim.js` 在捕获相位记录本次投递的 File 名单（`drop` 在 window、`change` 在 document） |
+| 配对 | `webUtils` 按 File 身份精确 | `pathFor(file)` = 作用域门 → 批次 → 目录条目（**唯一匹配**：目录按名（size===0 或列表无同名文件条目时可作候选），**文件要求精确字节数**；候选 0 个或 ≥2 个一律回退上传——同名同 size、同名目录+空文件跨类都不猜路径），批次只由**可信事件**（`event.isTrusted`：drop / 文件面板回执的 change）装填，目录快照必须比**上一次投递**更新（否则旧手势残留条目被拒绝）、可信 `paste` 直接清批，批次与条目各消费一次、批次门 5s、**目录快照不设 TTL**（慢速悬停没有上限；新鲜度由批次门与整体换代保证）、上限 256；配不到即 `''` |
+| 入稿归属（intake） | 两 flavor 共用 vendor 补丁：`ui-attachment` 的 document 级 drop 监听按**本壳自己的 `[data-instance]` 子树**做 containment（`scripts/vendor-patches.mjs` 两条精确改写，构建期生效、vendor 树零写入；产物 marker 由 `verify-vendor-patch-applied` 验证）——同一次 drop 只由落点所在的那个壳入稿，隐藏远端壳不再扇出（同时修掉既有的图片双附缺陷）；dragenter/dragover/dragleave 的副作用（dropEffect 否决、遮罩层、深度计数）与 drop 入稿同一归属判定。**已接受取舍**：落在所有实例壳之外的 drag/drop（chamber 侧栏、壳 chrome、跨实例 portal）不再由任何 composer 入稿（那些位置没有可达 composer）；布局里根本没有 `[data-instance]` 时按上游放行、有壳却解析不到自身则拒绝 |
+| 范围门控 | 两 flavor 共用：文档根 `data-chamber-painted-source`（`packages/renderer/src/host-path-scope.ts` 的 `publishHostPathScope`，由**屏上** `InstanceView` 按 `active` 发布 = App 的 paintedView，不是选择语义的 activeView；离开屏上 compare-and-clear）。只有屏上为本地实例才返回路径 | 同左（shim 读同一属性） |
+
+**信任定位（重要）**：`data-chamber-painted-source` 是**协作路由标记，不是安全边界**——远端实例的 client bundle 与本页同 world（design 09 §4），可以写属性或在 composer 之前调用 `pathFor`，而 `pathFor(file)` 也拿不到调用者身份。本批把三条低成本滥用路径封死：合成事件（`isTrusted`）、全系统拖拽板（Swift 指针门：窗口可见 + 按键按下 + 指针在窗框内，离开即清）、名字猜配（文件精确 size）。剩余面 =「用户真实投递 + 同页恶意代码」，登记为残余（S-56 与 STATUS）。
+
+**粘贴的 flavor 分叉**：Electron 腿照上游（dropped/picked/**pasted**）天然覆盖粘贴；Swift 腿 v1 只覆盖拖入与回形针（读 `NSPasteboard.general` 有隐私面与时序耦合，列后续项），且 shim 在可信 `paste` 时清批以免粘贴借用上一手势条目。实机矩阵按 flavor 分开验。
+
+**回形针的顺序假设**：`adoptPicked` 的 push 走异步 `evaluateJavaScript`，源码序（先推快照后回执）不等于执行序；实机判据含「回形针若改走上传即假设不成立」（fail-closed，不会给出错路径）。**参数面差异**：Swift 的 `pathFor` 接受任意 `{name,size}` 对象（同页代码可达，残余②），Electron/上游要求真 `File`（非 File 抛错→`''`）。**稳态成本**：隐藏到托盘时 0.15s 定时器仍走（容差 10%）；实测 ≈0.126% 单核，选择不按可见性停表（5+ 条 AppKit 通知的漏接风险大于收益）。
+
+- **行为锁**：`packages/desktop/upstream-seats.test.ts`（S-56：双 flavor 载体 + painted 门控**属性与 'local' 值**锁步）、`packages/desktop/test/ipc/bridge-shim-host-paths.test.ts`（门控/可信事件/精确 size/目录按名/消费一次/TTL/代际/封顶/载荷失败闭合）、`macos/Tests/DSHChamberTests/HostPathCatalogTests.swift`（顺序/去重/封顶/指针门/载荷形状）、`packages/renderer/test/frame-chrome/host-path-scope.test.ts`（标记写入/清理与接线）、`packages/renderer/scripts/vendor-patches.test.mjs`（containment 执行测试 + 未打补丁负控制 + marker 锁步；产物门 = `verify-vendor-patch-applied`）。实机验收口径见 `docs/progress/STATUS.md`。
+
+**Rejected alternatives**（本等价面的选择依据）：
+
+- **WKWebView 子类实现拖放目的地（`draggingEntered`/`performDragOperation` 读 `draggingPasteboard`）**：能否收到回调取决于 WebKit 内部拖放目标的解析（内容视图 vs WKWebView 本体），未证；且若真成为目的地，WebKit 不再合成 DOM drop，必须自己消费并重放事件。拖拽板轮询与该解析无关，先采用可验证的一条。
+- **原生消费 drop 后合成 DOM 事件**：需要伪造 `DataTransferItem.webkitGetAsEntry`（客户端据它判目录），且与 WebKit 自身合成的 drop 二选一，事件可信度/维护面都差，拒。
+- **同步 `prompt()` 桥**（WKUIDelegate 的 runJavaScriptTextInputPanel）取精确路径：阻塞 JS、非常规用法，且拖拽结束后拖拽板可能已换代；作为轮询失效时的后手保留，不进 v1。
+- **私有 SPI `_dragDestinationAction`**：本仓只容忍已有那一个 WebKit SPI（刷新率，有独立 C target 与探针），不为本面再引入，拒。
+- **不做（维持浏览器分支）**：用户可感的桌面识别缺口（本地拖入文件夹被当作浏览器），且与上游桌面行为分叉，拒。
+- **把粘贴（general pasteboard）一并纳入 v1**：读取 `NSPasteboard.general` 会把用户为别的 App 复制的文件路径读进页面（隐私面），且轮询时序与 `⌘C→⌘V` 间隔耦合；v1 先覆盖拖入与回形针，粘贴列为后续项（残余登记见 STATUS）。
+- **把 painted 门控当安全边界，或按调用者身份门控**：同一 JS realm 内没有页面可写的标记可被信任；上游签名（只有 `File`）也给不出调用者身份。要真边界只能把远端 client bundle 移进独立 realm/iframe，或对远端实例整体不暴露该全局——架构级改动，不在本批；本批只封低成本滥用面并如实登记残余。
+
 ## 6. 数据、状态兼容与共存
 
 ### 6.1 userData 目录

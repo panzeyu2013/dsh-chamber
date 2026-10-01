@@ -111,6 +111,8 @@ export const GROUPS = {
     // 渲染端 console 有界环
     'test/desktop-shell/fatal-report.test.ts',
     'test/ipc/bridge-shim-document.test.ts',
+    // 宿主路径面（上游 __DSH_HOST_PATHS__）：painted-source 门控 / 批次配对 / 消费一次。
+    'test/ipc/bridge-shim-host-paths.test.ts',
     // rc.2 dshDesktop 载体（官方 desktop preload 面）：字面量单源锁步 + 原生
     // 键盘桥行为（真 protocol + 内存存储，无 Electron/GUI）。
     'test/ipc/desktop-carrier-surface.test.ts',

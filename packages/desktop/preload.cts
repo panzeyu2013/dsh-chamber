@@ -9,7 +9,7 @@ import type { SshConfigDiscovery } from './ssh-config.ts';
 import type { UpdateState } from './updater.ts';
 import type { RuntimeState } from './dsh-runtime-controller.ts'
 import type { PluginRow as PluginRowProjection } from '@dsh-chamber/dsh-chamber-client-core/plugin-row';
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 /**
  * Desktop-carrier IPC channels (upstream apps/desktop/src/ipc.ts DESKTOP_IPC
@@ -1001,6 +1001,42 @@ function exposeDesktopCarrier(): void {
   });
 }
 
+/**
+ * Upstream apps/desktop/src/preload-app.ts:79-84 (__DSH_HOST_PATHS__): the
+ * official composer cites dropped/picked/pasted files and folders that have a
+ * real host path as `@path` references instead of uploading them; a File
+ * constructed in JS answers '' and uploads as before. webUtils exists since
+ * Electron 29 -- on a runtime without it the browser behaviour must survive
+ * (no global at all), never a pathFor that throws on every call.
+ */
+function exposeHostPaths(): void {
+  if (webUtils === undefined || typeof webUtils.getPathForFile !== 'function') return;
+  contextBridge.exposeInMainWorld('__DSH_HOST_PATHS__', {
+    pathFor: (file: File): string => {
+      // Painted-source scope (packages/renderer/src/host-path-scope.ts): the chamber
+      // renderer publishes the ON-SCREEN source onto the document root, and this preload
+      // shares the DOM (not the JS world: contextIsolation) with the page. Only the local
+      // instance's composer may resolve host paths -- a local absolute path inside a
+      // REMOTE session draft would be meaningless (upstream's desktop hosts one instance,
+      // this page hosts local + remote views).
+      let scopeLocal = false;
+      try {
+        scopeLocal = document.documentElement.getAttribute('data-chamber-painted-source') === 'local';
+      } catch {
+        scopeLocal = false;
+      }
+      if (!scopeLocal) return '';
+      try {
+        const path = webUtils.getPathForFile(file);
+        return typeof path === 'string' ? path : '';
+      } catch {
+        // Non-File arguments throw upstream; the composer must degrade to upload.
+        return '';
+      }
+    },
+  });
+}
+
 /** Upstream markDocumentPlatform() (apps/desktop/src/preload-platform.ts),
  *  mirrored verbatim: the document root carries the host platform so the
  *  shared Web UI -- including the shortcuts service's desktop detection --
@@ -1081,14 +1117,17 @@ function requestAppInfo(): Promise<Partial<DshChamberBridge>> {
   });
 }
 
-// Upstream parity bootstrap (the S-52 desktop carrier + the desktop platform
-// mark): independent of info hydration, so both are installed before the
-// bridge payload is requested -- the official shortcuts service reads
-// window.dshDesktop during boot, not after the info round-trip.
+// Upstream parity bootstrap (the S-52 desktop carrier, the desktop platform
+// mark and the host-path carrier): independent of info hydration, so each is
+// installed before the bridge payload is requested -- the official shortcuts
+// service reads window.dshDesktop during boot and the composer captures
+// __DSH_HOST_PATHS__ when its per-session inject closure is created, both
+// before any info round-trip.
 markDocumentPlatform();
 markWindowsTitlebar();
 syncNativeTheme();
 exposeDesktopCarrier();
+exposeHostPaths();
 
 requestAppInfo().then(
   (info: Partial<DshChamberBridge>) => {

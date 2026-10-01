@@ -26,7 +26,7 @@
 - [ ] 上游 release notes「其他变更」段与上游 `docs/upgrade-guide/**` 逐条过一遍：落在 chamber 托管面（profile patch/bundles、chamber 注入的 settings、chamber 读的 session 日志、chamber 渲染的官方客户端面）的破坏写进 design/STATUS；不落本仓的记「无消费者」一句。
 - [ ] SlotMap 座席键差集：对 `packages/client/**/src` 抽取 `SlotMap` 声明键与各洞的占用者（注册方），与上一代逐键对比；新增/改名/删除的键与新增占用者逐条列出——**侧栏（`sidebar.*`）与 `sidebar.right.*` 的新内容一律上报用户裁决**，其余新座席也登记，不静默跟随（与 §7 第 5 步同一纪律）。
 
-- [ ] vendor 补丁退休评估（drift I-7）：C9 现在三分——锚点命中 = 绿；锚点缺失且某条 `retireCheck` 命中 = `retire-candidate`（**仍 release-blocking**），remediation = 把该条移入 `vendor-patches.mjs` 的 `RETIRED_PATCHES`（`ensure` = 上游修复原文、必须唯一命中），同批删除补丁条目与 `verify-vendor-patch-applied` 的产物 marker，并同步 design 09 §3.6/§3 与触点表；锚点缺失且 `retireCheck` 未命中 = drift，按新 pin 重导补丁。`noRetireForm` 条目以登记理由为准。新增/重放补丁按 design 09 §3.6 的四类准入裁决；第四类（多实例正确性）只在页面级事实无法由 chamber 包重新 scoped 时准入，scope 必须取自 per-entry `chamberBasePath`（禁页面全局事实或 URL 猜测），且上游自带 scope 后删除。
+- [ ] vendor 补丁退休评估（drift I-7）：C9 现在三分——锚点命中 = 绿；锚点缺失且某条 `retireCheck` 命中 = `retire-candidate`（**仍 release-blocking**），remediation = 把该条移入 `vendor-patches.mjs` 的 `RETIRED_PATCHES`（`ensure` = 上游修复原文、必须唯一命中），同批删除补丁条目与 `verify-vendor-patch-applied` 的产物 marker，并同步 design 09 §3.6/§3 与触点表；锚点缺失且 `retireCheck` 未命中 = drift，按新 pin 重导补丁。`noRetireForm` 条目以登记理由为准。新增/重放补丁按 design 09 §3.6 的四类准入裁决；第四类（多实例正确性）只在页面级事实无法由 chamber 包重新 scoped 时准入：scope 取 per-entry `chamberBasePath`（页面级事实），或取监听器所属挂载自己的 DOM 子树祖先（document 级事件注册表，per-mount；禁页面全局事实与 URL 猜测，且每个 document 级副作用都要同一判定）；上游自带 scope 后删除。
 
 ## 2. 双线 pin 一致性
 

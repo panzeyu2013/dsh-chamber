@@ -567,16 +567,21 @@
       "upstream": "apps/desktop/src",
       "authority": "upstream",
       "criteria": [],
-      "deviations": [],
+      "deviations": [
+        "S-56"
+      ],
       "relatedGates": [
+        "macos/Tests/DSHChamberTests/HostPathCatalogTests.swift",
         "packages/desktop/test/ipc/bridge-shim-document.test.ts",
+        "packages/desktop/test/ipc/bridge-shim-host-paths.test.ts",
         "packages/desktop/test/ipc/desktop-carrier-surface.test.ts",
-        "packages/desktop/upstream-seats.test.ts"
+        "packages/desktop/upstream-seats.test.ts",
+        "packages/renderer/test/frame-chrome/host-path-scope.test.ts"
       ],
       "symbols": [
         "packages/desktop/ipc-events.ts#IPC_CHANNELS"
       ],
-      "evidence": "覆盖文件：apps/desktop/src/{preload-app,preload-platform,preload-theme,preload-windows,windows-layout,ipc}.ts。人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验载体面（data-platform / Windows caption 高度 40 / macOS 窗口 chrome（darwin 分支逐值：hiddenInset、trafficLightPosition 16,18、vibrancy sidebar、visualEffectState active、backgroundColor #00000000）/ native theme 观察者 / dshDesktop protocolVersion 1 + deviceInfo 按需读 + 相位映射），门 = packages/desktop/upstream-seats.test.ts（S-51/S-52；darwin 收口 S-53/S-54）+ test/ipc/*（§4.5 审计表 preload-*/windows-layout/ipc 行）。",
+      "evidence": "覆盖文件：apps/desktop/src/{preload-app,preload-platform,preload-theme,preload-windows,windows-layout,ipc}.ts。人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验载体面（data-platform / Windows caption 高度 40 / macOS 窗口 chrome（darwin 分支逐值：hiddenInset、trafficLightPosition 16,18、vibrancy sidebar、visualEffectState active、backgroundColor #00000000）/ native theme 观察者 / dshDesktop protocolVersion 1 + deviceInfo 按需读 + 相位映射），门 = packages/desktop/upstream-seats.test.ts（S-51/S-52；darwin 收口 S-53/S-54）+ test/ipc/*（§4.5 审计表 preload-*/windows-layout/ipc 行）。__DSH_HOST_PATHS__（apps/desktop/src/preload-app.ts）：Electron 镜像 webUtils.getPathForFile；Swift 腿因 WebKit 不暴露 DOM File 路径，以 HostPathCatalog.swift + bridge-shim 的「事件批次 × 拖拽板快照」相关性实现，两端共用文档根 data-chamber-painted-source 范围门控（屏上来源由 renderer 发布）。",
       "status": "accepted",
       "rationale": "官方共享 UI 的桌面判定与 dshDesktop 载体双 flavor 锁步：preload.cts 与 Swift bridge-shim 同形承载，native theme 通道改用 chamber 前缀。browser/webview 租客与 preload-menu 臂不采用（见 §4.5 审计表）。"
     },

@@ -177,6 +177,20 @@ export const VENDOR_PATCH_MARKERS = [
     present: /this\.policy\.decode\(await fetch\(`\$\{this\.chamberFileApiBase\}\$\{/,
     route: '/api/changes.summary',
   },
+  {
+    vendorFile: 'dsh-client-ui-attachment/src/client/drop-events.ts',
+    what: 'the drop intake is contained to the attachment view its listener belongs to',
+    // Patched shape: target instanceof Element ? target : (target instanceof Node ? target.parentElement : null),
+    // then the null guard and owner.contains(node). Element/Node are environment globals
+    // (never renamed); the unpatched module has no contains() call.
+    present: /instanceof Element\s*\?[\s\S]{0,80}instanceof Node\s*\?[\s\S]{0,60}\.parentElement[\s\S]{0,60}:\s*null[\s\S]{0,240}\.contains\([\s\S]{0,500}?(?:&&\s*[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)|if\s*\(!\s*[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)\s*\)\s*return)/u,
+  },
+  {
+    vendorFile: 'dsh-client-ui-attachment/src/client/ComposerAttachments.tsx',
+    what: 'the attachment view resolves its own [data-instance] subtree for the containment check',
+    // A string literal survives minification; only the patched component carries it.
+    present: /closest\((["'])\[data-instance\]\1\)[\s\S]{0,700}?=>\s*\{?\s*(?:return\s+)?[A-Za-z_$][\w$]*\(\s*[A-Za-z_$][\w$]*\s*,\s*[A-Za-z_$][\w$]*\s*,\s*[A-Za-z_$][\w$]*\s*,\s*[A-Za-z_$][\w$]*\s*,\s*[A-Za-z_$][\w$]*\s*\)/u,
+  },
 ]
 
 /** Registered vendor files with no marker above — every patch needs one. */

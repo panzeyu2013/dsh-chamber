@@ -117,3 +117,55 @@ test('⑥ dshDesktop 通道域与 A 桥 IPC_CHANNELS 零交集', () => {
     assert.equal(aBridge.has(channel), false, `dshDesktop 通道 ${channel} 不得进入 A 桥 manifest`)
   }
 })
+
+function loadExposeHostPaths(webUtils: unknown, painted: string | (() => string | null)) {
+  const readPainted = typeof painted === 'function' ? painted : () => painted
+  const start = preload.indexOf('function exposeHostPaths(): void {')
+  assert.notEqual(start, -1, 'preload.cts must declare exposeHostPaths')
+  // Brace-balanced slice: a signature or formatting change must not silently move the end.
+  let depth = 0
+  let end = -1
+  for (let index = preload.indexOf('{', start); index < preload.length; index += 1) {
+    const char = preload[index]
+    if (char === '{') depth += 1
+    else if (char === '}') {
+      depth -= 1
+      if (depth === 0) { end = index; break }
+    }
+  }
+  assert.notEqual(end, -1, 'exposeHostPaths must close with balanced braces')
+  const js = preload
+    .slice(start, end + 1)
+    .replace('function exposeHostPaths(): void {', 'function exposeHostPaths() {')
+    .replace('(file: File): string =>', '(file) =>')
+  const exposed: Array<{ name: string; api: { pathFor(file: unknown): string } }> = []
+  const contextBridge = {
+    exposeInMainWorld: (name: string, api: { pathFor(file: unknown): string }) => { exposed.push({ name, api }) },
+  }
+  const documentStub = {
+    documentElement: { getAttribute: (name: string) => (name === 'data-chamber-painted-source' ? readPainted() : null) },
+  }
+  const factory = new Function('webUtils', 'contextBridge', 'document', js + '\nreturn exposeHostPaths')
+  factory(webUtils, contextBridge, documentStub)()
+  return exposed
+}
+
+test('⑧ exposeHostPaths honours the painted scope and degrades without webUtils', () => {
+  assert.equal(loadExposeHostPaths(undefined, 'local').length, 0, 'no webUtils = no global (browser branch)')
+  const remote = loadExposeHostPaths({ getPathForFile: () => '/x' }, 'gateway-alpha')
+  assert.equal(remote.length, 1, 'a usable webUtils exposes the global once')
+  assert.equal(remote[0].name, '__DSH_HOST_PATHS__')
+  assert.equal(remote[0].api.pathFor({ name: 'a' }), '', 'a non-local painted source never resolves')
+  const local = loadExposeHostPaths({ getPathForFile: () => '/host/a.txt' }, 'local')
+  assert.equal(local[0].api.pathFor({}), '/host/a.txt')
+  const throwing = loadExposeHostPaths({ getPathForFile: () => { throw new Error('nope') } }, 'local')
+  assert.equal(throwing[0].api.pathFor({}), '', 'a throwing webUtils degrades to upload')
+
+  // The gate is read per call, not snapshotted at expose time: flip the attribute on an
+  // already-exposed API and the next pathFor must follow.
+  const state: { painted: string | null } = { painted: 'local' }
+  const live = loadExposeHostPaths({ getPathForFile: () => '/host/live.txt' }, () => state.painted)
+  assert.equal(live[0].api.pathFor({}), '/host/live.txt')
+  state.painted = 'gateway-alpha'
+  assert.equal(live[0].api.pathFor({}), '', 'the painted source is re-read on every call')
+})

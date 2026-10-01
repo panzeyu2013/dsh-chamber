@@ -51,7 +51,9 @@
  * store or an upstream service. Such an entry MUST state the concrete
  * cross-instance symptom and the accepted trade-off in `reason`, derive the
  * scope from the per-entry `chamberBasePath` service provided on the plugin
- * context (never a page-global knob, a URL guess or `import.meta.url`), keep
+ * context (never a page-global knob, a URL guess or `import.meta.url`), OR - for
+ * a document-level DOM-event registry no chamber package owns - from the
+ * mounting component's own subtree (THIRD ADMITTED FORM below); keep
  * upstream behaviour as the fallback so an official-layout deployment is
  * unaffected, and retire once upstream scopes the fact itself.
 
@@ -64,6 +66,18 @@
  * the shell declares the seat itself. This form has NO official-layout
  * fallback (without the shell the seat is simply undeclared), so it MUST carry
  * noRetireForm and state that trade-off in reason.
+ *
+ * FOURTH CLASS, THIRD ADMITTED FORM (per-mount DOM scope, admitted by maintainer
+ * ruling by the __DSH_HOST_PATHS__ containment patch): the page-global fact is a
+ * document-level DOM-event registry whose correct scope is the mounting
+ * component's own subtree - a per-mount fact, so `chamberBasePath` is not involved
+ * and no page-global knob may stand in for it. Such an entry MUST take the scope
+ * from the component's own mount (an ancestor resolved at call time), guard EVERY
+ * document-level side effect of the registry (not only the terminal one), keep
+ * upstream behaviour when no chamber view is mounted, refuse when the scope
+ * cannot be resolved while chamber views ARE mounted, state the accepted
+ * trade-off and the measured symptom in reason, and carry `noRetireForm`
+ * (upstream has no N-shell notion to anchor on).
  *
  * RETIREMENT (upstream-drift batch-2 I-7): every entry declares EITHER
  * `retireCheck` (the pinned-upstream shape that carries the fix) or
@@ -626,6 +640,64 @@ export const VENDOR_PATCHES = Object.freeze([
           + "      dialog: t('image.dialog'), close: t('image.close'),\n"
           + '    },\n'
           + '  }), [chamberFileApiBase, cwd, t])',
+      }),
+    ]),
+  }),
+  Object.freeze({
+    idSuffixes: Object.freeze([
+      "dsh-client-ui-attachment/src/client/drop-events.ts",
+      "packages/client/ui-attachment/src/client/drop-events.ts",
+    ]),
+    noRetireForm: "no stable upstream text shape: the fix is a containment contract (every document-level drag/drop side effect is limited to the event target own shell subtree, while the upstream viewport-left reset stays global), not a snippet - upstream has no N-shell notion to anchor on.",
+    vendorFile: "dsh-client-ui-attachment/src/client/drop-events.ts",
+    reason: "N-ctx multi-instance correctness (fourth admitted class, third admitted form = per-mount DOM scope, maintainer ruling): the drag/drop listeners live on document, which every mounted instance shell shares, so one drag or drop is seen by every shell - the on-screen composer and every hidden remote composer alike. Symptoms measured in the shipped shell: one dropped image attaches to more than one instance draft, a hidden shell vetoes the visible shell by writing dataTransfer.dropEffect = none (dragover), and it covers the visible shell with its own drop overlay (dragenter). Scope derives from the attachment mount own [data-instance] ancestor (a per-mount fact, not a page-global knob; no base path is involved), upstream behaviour remains the fallback for a layout with no instance shells, an owner that resolves to null while instance shells ARE mounted is refused (fail-closed), and the upstream viewport-left reset stays global so leaving the window always clears every shell overlay. ACCEPTED TRADE-OFF: a drag or drop landing outside every instance shell (chamber overlay, cross-instance portal) is intaken by no composer.",
+    edits: Object.freeze([
+      Object.freeze({
+        expect: " * @param setDragActive - publish whether a file drag is active.\n * @returns cleanup for exactly these listeners.\n */\nexport function installDocumentDropEvents(\n  canAcceptDrop: ComposerAttachmentsProps['canAcceptDrop'],\n  onAddFiles: ComposerAttachmentsProps['onAddFiles'],\n  dragDepth: { current: number },\n  setDragActive: (active: boolean) => void,\n): () => void {",
+        replace: " * @param setDragActive - publish whether a file drag is active.\n * @param ownerView - resolves this attachment view own subtree; a drop or\n *   drag event outside it belongs to another mounted shell and is not ours.\n * @returns cleanup for exactly these listeners.\n */\nexport function installDocumentDropEvents(\n  canAcceptDrop: ComposerAttachmentsProps['canAcceptDrop'],\n  onAddFiles: ComposerAttachmentsProps['onAddFiles'],\n  dragDepth: { current: number },\n  setDragActive: (active: boolean) => void,\n  ownerView?: () => Element | null,\n): () => void {",
+      }),
+      Object.freeze({
+        expect: "  const onDragEnter = (event: globalThis.DragEvent): void => {\n    if (fileTransfer(event) === null) return",
+        replace: "  const dropLandsInView = (event: globalThis.DragEvent): boolean => {\n    if (ownerView === undefined) return true\n    const owner = ownerView()\n    if (owner === null) return document.querySelector('[data-instance]') === null\n    const target = event.target\n    const node = target instanceof Element ? target : (target instanceof Node ? target.parentElement : null)\n    return node !== null && owner.contains(node)\n  }\n  const onDragEnter = (event: globalThis.DragEvent): void => {\n    if (!dropLandsInView(event)) return\n    if (fileTransfer(event) === null) return",
+      }),
+      Object.freeze({
+        expect: "  const onDragOver = (event: globalThis.DragEvent): void => {\n    const dataTransfer = fileTransfer(event)",
+        replace: "  const onDragOver = (event: globalThis.DragEvent): void => {\n    if (!dropLandsInView(event)) return\n    const dataTransfer = fileTransfer(event)",
+      }),
+      Object.freeze({
+        expect: "  const onDragLeave = (event: globalThis.DragEvent): void => {\n    if (fileTransfer(event) === null) return\n    dragDepth.current = Math.max(0, dragDepth.current - 1)\n    if (dragDepth.current === 0) setDragActive(false)\n    const leftViewport = event.clientX <= 0 || event.clientY <= 0\n      || event.clientX >= window.innerWidth || event.clientY >= window.innerHeight\n    if ((event.target === document.documentElement || event.target === document.body) && leftViewport) reset()\n  }",
+        replace: "  const onDragLeave = (event: globalThis.DragEvent): void => {\n    if (fileTransfer(event) === null) return\n    const leftViewport = event.clientX <= 0 || event.clientY <= 0\n      || event.clientX >= window.innerWidth || event.clientY >= window.innerHeight\n    // 上游的「指针离开视口」逃生口必须先于归属判定：目标为 html/body 的 dragleave 不属于任何壳，\n    // 但它证明拖拽会话已出窗，每个壳都要清掉自己的 overlay（OS 拖拽页面侧不保证有 dragend）。\n    if ((event.target === document.documentElement || event.target === document.body) && leftViewport) {\n      reset()\n      return\n    }\n    if (!dropLandsInView(event)) return\n    dragDepth.current = Math.max(0, dragDepth.current - 1)\n    if (dragDepth.current === 0) setDragActive(false)\n  }",
+      }),
+      Object.freeze({
+        expect: "    if (canAcceptDrop) {\n      const files = [...dataTransfer.files]",
+        replace: "    if (canAcceptDrop && dropLandsInView(event)) {\n      const files = [...dataTransfer.files]",
+      }),
+    ]),
+  }),
+  Object.freeze({
+    idSuffixes: Object.freeze([
+      "dsh-client-ui-attachment/src/client/ComposerAttachments.tsx",
+      "packages/client/ui-attachment/src/client/ComposerAttachments.tsx",
+    ]),
+    noRetireForm: "retires with the drop-events containment entry above: the owner resolver exists only to feed that check; upstream would need an N-shell-aware drag/drop contract, not a snippet.",
+    vendorFile: "dsh-client-ui-attachment/src/client/ComposerAttachments.tsx",
+    reason: "wiring half of the same fourth-class defect (third admitted form = per-mount DOM scope): threads this attachment view mount subtree into the containment check so the document-level drag/drop listeners can scope themselves per shell. Measured symptom (with the drop-events half only): hidden shells still reacted to dragenter/dragover of a drop aimed at another shell (overlay + dropEffect veto). ACCEPTED TRADE-OFF: a drag outside every instance shell is not intaken by any composer. No chamber package owns this component; the containment scope is per-mount, not a page-global knob, and a missing owner keeps upstream behaviour.",
+    edits: Object.freeze([
+      Object.freeze({
+        expect: "  const dragDepth = useRef(0)",
+        replace: "  const dragDepth = useRef(0)\n  // chamber patch: the drop listeners live on document, which every mounted\n  // instance shell shares, so every handler must be limited to events landing\n  // inside THIS attachment view own subtree (data-instance is the view root).\n  const ownerRef = useRef<HTMLSpanElement | null>(null)\n  const ownerView = useCallback((): Element | null =>\n    ownerRef.current?.closest('[data-instance]') ?? null, [])",
+      }),
+      Object.freeze({
+        expect: "    return installDocumentDropEvents(canAcceptDrop, onAddFiles, dragDepth, setDragActive)\n  }, [canAcceptDrop, onAddFiles])",
+        replace: "    return installDocumentDropEvents(canAcceptDrop, onAddFiles, dragDepth, setDragActive, ownerView)\n  }, [canAcceptDrop, onAddFiles, ownerView])",
+      }),
+      Object.freeze({
+        expect: "  return (\n    <>\n      {dragActive && (",
+        replace: "  return (\n    <span ref={ownerRef} style={{ display: 'contents' }}>\n      {dragActive && (",
+      }),
+      Object.freeze({
+        expect: "      )}\n    </>\n  )\n}",
+        replace: "      )}\n    </span>\n  )\n}",
       }),
     ]),
   }),
