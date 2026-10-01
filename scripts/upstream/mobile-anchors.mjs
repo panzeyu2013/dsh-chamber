@@ -29,9 +29,11 @@
  *     lockstep 测试钉住（`test/dom/official-hover-card.test.ts`）。
  *   direction B（上游 → 声明）：对上游全量做反向差集是不可能的（上游发射数百个
  *     锚点，插件只用其一）。所以方向 B 收窄到**门禁要求的最小断言集**
- *     {@link REQUIRED_ANCHORS}：其中每一项都必须（1）在本插件源码里被声明、
- *     （2）在上游产物里有发射点。这样「插件把自己的锚点改名/删掉」同样会红，
- *     而不只是「上游改名」。
+ *     {@link REQUIRED_ANCHORS}：`declared: 'plugin'` 的每一项都必须（1）在本插件
+ *     源码里被声明、（2）在上游产物里有发射点；`declared: 'external'` 只查（2）。
+ *     这样「插件把自己的锚点改名/删掉」同样会红，而不只是「上游改名」。
+ *     声明侧（1）不依赖上游语料，由 {@link requiredDeclarationFindings} 单独给出，
+ *     锚点根缺失时也必须先判定。
  *
  * 分级：`data-*` / `role` / `slot` 锚点零命中 ⇒ exit 1；build-time 哈希
  * class token（`_root_38jqx_` 这类，pin 一动必变、无属性形兜底）零命中同样
@@ -43,8 +45,32 @@
  * 注释用一个**保留行号**的剥离器去掉，因此证据里的 `file:line` 指回原始文件。
  */
 
-/** 上游锚点零命中时的判定分级。哈希 token 同为硬失败：pin bump 后必须重锚。 */
-export const HARD_KINDS = new Set(['attribute', 'role', 'slot', 'hash'])
+/**
+ * 上游锚点零命中时的判定分级。集合对抽取器可能产出的**全部 kind** 是全覆盖的
+ * （attribute / role / slot / hash / local-name）：零命中一律硬失败，**没有**
+ * 「降为 advisory」的第二档——哈希 token 不是例外，pin bump 后 advisory 会让门
+ * 继续绿而插件静默 no-op。将来新增 kind 必须同时加进本集合（fail-closed 默认）。
+ */
+export const HARD_KINDS = new Set(['attribute', 'role', 'slot', 'hash', 'local-name'])
+
+/**
+ * 插件源码里**禁止出现**的旧锚点形态（去注释投影逐字扫描，命中即硬失败）。
+ *
+ * 两条都是「看着像锚点、其实锚不住」的形态：
+ *   - `[data-slot="conversation.session.header"] > header`：上游的 `<header>` 是
+ *     outlet 的**祖先**（会话头槽挂在 header 的 children 里），直接子选择器在真实
+ *     DOM 上匹配不到 ⇒ 插件侧静默 no-op、走查侧静默 INFO；正确形态是
+ *     `outlet.closest("header")`（scripts/gui-acceptance/mobile-checks.mjs 与插件
+ *     侧同规）；
+ *   - `nav > span > button:disabled`：上游禁用态不再保证这个 nav>span>button 结构
+ *     （当前 pin 的样式已改用属性/别的结构表达）。
+ * 命中不是「提醒」：要么按 design 17 §18.4.3 重锚，要么删掉该规则并说明为什么
+ * 不再需要。
+ */
+export const FORBIDDEN_PATTERNS = [
+  { text: '[data-slot="conversation.session.header"] > header', note: 'header 是 outlet 的祖先，不是直接子节点' },
+  { text: 'nav > span > button:disabled', note: '上游禁用态不再保证 nav>span>button 结构' },
+]
 
 /** 本插件自己打标的属性（上游不存在，不查上游）。 */
 const OWN_ATTRIBUTE_PATTERNS = [
@@ -77,9 +103,12 @@ const STRUCTURAL_ATTRIBUTE = 'data-slot'
  * 门禁要求的最小断言集（与 §4 登记行同源）。
  *
  * `declared: 'plugin'` ⇒ 必须先在本插件源码里被抽到，否则红线（插件侧改名/删除）；
- * `declared: 'external'` ⇒ 只断言上游发射侧（供「上游在用、插件尚未点名」的锚点
- * 预留；当前 21 项全部为 `plugin`——`data-chat-flow` / `data-chat-anchor-key`
- * 已由 `session-stall.ts` 点名，故同样按两向断言）。
+ * `declared: 'external'` ⇒ 只断言上游发射侧（供「上游在用、插件尚未点名」的锚点）。
+ * 当前共 27 项 = 26 项 `plugin`（`data-chat-flow` / `data-chat-anchor-key` 已由
+ * `session-stall.ts` 点名，故同样按两向断言）+ 1 项 `external`（表末 `_crumbSeg`：
+ * 插件用结构性 `nav > span` 吃面包屑条、不点名类名，但上游一改名本门必须红）。
+ * §4 登记行的「26 项」指前一组（声明侧最小集）；`external` 项没有声明侧契约，
+ * 因此不要求该行点名。
  *
  * 这一份是**有意独立于插件源码**的最小目录：抽取器抽不到某个锚点时（插件把它
  * 改名/删掉），方向 A 看不见这条规则已经失效，只有这里会红。维护纪律：往插件里
@@ -99,8 +128,10 @@ export const REQUIRED_ANCHORS = [
   // —— 会话流锚点 ——
   { kind: 'attribute', token: 'data-chat-flow', declared: 'plugin', note: '上游会话流容器（ChatView 消息列；会话停滞判定）' },
   { kind: 'attribute', token: 'data-chat-anchor-key', declared: 'plugin', note: '上游会话流虚拟化锚 key（已渲染消息行）' },
+  { kind: 'attribute', token: 'data-portal', declared: 'plugin', note: 'ui-primitives Tooltip 冒泡（styles.ts [role="tooltip"][data-portal][data-side]）；上游 dsh-client-ui-primitives 发射' },
   // —— 会话头及其四个子座位 ——
   { kind: 'slot', token: 'conversation.session.header', declared: 'plugin', note: '会话头 slot（首行高度/无换行/44px 断言的根）' },
+  { kind: 'slot', token: 'conversation.header', declared: 'plugin', note: 'styles.ts 持久会话头 outlet（ConversationHeader 的挂载点；上游 renderSlot("conversation.header")）' },
   { kind: 'slot', token: 'conversation.session.header.actions', declared: 'plugin', note: '会话头 actions 座位（44px）' },
   { kind: 'slot', token: 'conversation.session.header.utilities', declared: 'plugin', note: '会话头 utilities 座位（44px）' },
   { kind: 'slot', token: 'conversation.session.header.corner', declared: 'plugin', note: '会话头 corner 座位（44px）' },
@@ -110,9 +141,20 @@ export const REQUIRED_ANCHORS = [
   { kind: 'attribute', token: 'data-sidebar-collapsed', declared: 'plugin', note: '轨道标志：存在=折叠、移除=展开' },
   { kind: 'attribute', token: 'data-rightbar-collapsed', declared: 'plugin', note: '轨道标志（右栏 shown 判定的一条臂）' },
   { kind: 'attribute', token: 'data-sidebar-right-panel', declared: 'plugin', note: '右栏面板自身状态（push|fullscreen）' },
+  // —— CSS-module 本地名（类名字典发射形；与 hash 同列硬失败） ——
+  // 三条都是 styles.ts 里的 `[class…="_…"]` 声明：composer bar 行、settings 模型行、
+  // 回到底部控件的键盘抬升。本地名不受 build 哈希漂移影响，是哈希 token 之外唯一
+  // 能在 pin bump 后继续锚住的形态。
+  { kind: 'local-name', token: '_row', declared: 'plugin', note: 'styles.ts composer bar 行规则（[class$="_row"]）；上游 shell CSS 发射 `._row_1alm6_55` 类名' },
+  { kind: 'local-name', token: '_modelRow', declared: 'plugin', note: 'styles.ts settings 模型行两列规则；上游 dsh-client-ui-settings-models/lib/client.js 发射 `zGbnIq_modelRow`' },
+  { kind: 'local-name', token: '_toBottomSlot', declared: 'plugin', note: 'styles.ts 回到底部控件的键盘抬升规则；上游 dsh-client-ui-chat/lib/client.js 发射 `EvIC1a_toBottomSlot`' },
+
   // —— 悬停卡 watchdog 的 build-time CSS-module token（无属性形兜底，pin bump 必重锚） ——
-  { kind: 'hash', token: '_root_38jqx_', declared: 'plugin', note: 'official-hover-card.ts OFFICIAL_CARD_ROOT_CLASS_TOKEN；rc.2 产物 index-Q6zc2uHV.js 的 Pp="_root_38jqx_3"' },
-  { kind: 'hash', token: '_card_38jqx_', declared: 'plugin', note: 'official-hover-card.ts OFFICIAL_CARD_CLASS_TOKEN；rc.2 产物 index-Q6zc2uHV.js 的 Rp="_card_38jqx_9"' },
+  { kind: 'hash', token: '_root_38jqx_', declared: 'plugin', note: 'official-hover-card.ts OFFICIAL_CARD_ROOT_CLASS_TOKEN；rc.2 产物 index-*.js 的 qp="_root_38jqx_3"' },
+  { kind: 'hash', token: '_card_38jqx_', declared: 'plugin', note: 'official-hover-card.ts OFFICIAL_CARD_CLASS_TOKEN；rc.2 产物 index-*.js 的 Gp="_card_38jqx_9"' },
+
+  // —— external 锚（只查上游发射侧：插件不点名该 class，但上游一改名/换容器即红） ——
+  { kind: 'local-name', token: '_crumbSeg', declared: 'external', note: '会话头面包屑段：上游 ConversationSessionHeader 把每一节渲染成 span（类名字典 wSkVaW_crumbSeg）；插件用结构性 nav > span 吃它，故这里只钉上游发射面' },
 ]
 
 /**
@@ -148,8 +190,16 @@ export function stripCommentsKeepingLines(source) {
         out += source[i] === '\n' ? '\n' : ' '
         i += 1
       }
-      i += 1
-      out += ' '
+      // Length conservation: both characters of a CLOSING `*/` must be emitted.
+      // The old code emitted one space for the '/', then let the for-update step
+      // over it — every terminated block comment cost one character. The
+      // index→line map happened to survive (newlines are preserved), but the
+      // documented "same length" contract was false. An UNTERMINATED comment
+      // consumes the rest of the file and must not append a phantom close.
+      if (i < source.length) {
+        out += '  '
+        i += 1 // the for-update consumes the '/'
+      }
       continue
     }
     out += ch
@@ -164,19 +214,105 @@ function lineAt(text, index) {
   return line
 }
 
+/**
+ * FORBIDDEN 匹配用的同一投影（{@link forbiddenPatternFindings}）：折叠空白、
+ * 归一转义引号、去掉只服务于字符串字面量的字符并保留选择器内容。
+ * 针文本与 haystack **必须**走同一个函数，否则两种写法的等价性就断了。
+ *
+ * @param {string} text - 源码或针文本。
+ * @returns {string} 选择器等价的压缩串。
+ */
+function forbiddenProjection(text) {
+  return text
+    .replace(/\s+/gu, '')          // 选择器换行 / 多余空格 / 制表符都不改变命中
+    .replace(/\\(["'])/g, '$1')   // 转义引号（\" / \'）与裸引号等价
+    .replace(/["'+]/g, '')          // 引号是字面量边界、+ 是拼接运算符：只用于拼写选择器
+}
+
+/**
+ * 禁用锚点形态扫描（{@link FORBIDDEN_PATTERNS}）：插件源码的去注释投影里查找，
+ * 比较前过 {@link forbiddenProjection}——空白折叠之外，同一个选择器的多种**拼写**
+ * 也必须在同一遍里命中（否则一句「换引号/转义/拼接」就绕过整条规则）：
+ *   - 转义：`'[data-slot=\"x\"] > header'`；
+ *   - 另一种引号：`"[data-slot='x'] > header"`；
+ *   - 字符串拼接：`'[data-slot="x"]' + ' > header'`。
+ * 证据里的行号取命中起点的原始行；每个进入 haystack 的字符都有自己的行号条目，
+ * 被丢掉的引号/加号不占位，所以映射始终指向原文。
+ * 注释里的提及不算（注释剥离保留行号，证据指回原文件）。
+ *
+ * @param {Array<{path: string, text: string}>} sources - 插件 `src/**` 源文件。
+ * @returns {{violations: string[], notes: string[]}}
+ */
+export function forbiddenPatternFindings(sources) {
+  const violations = []
+  const notes = []
+  for (const source of sources) {
+    const code = stripCommentsKeepingLines(source.text)
+    // Whitespace-folded haystack plus a per-character line map, so a selector
+    // split across lines (or padded with extra spaces) cannot slip through the
+    // literal matcher while evidence still points at the original line.
+    const lineOf = []
+    let haystack = ''
+    const lines = code.split('\n')
+    for (let index = 0; index < lines.length; index += 1) {
+      const squeezed = lines[index].replace(/\s+/gu, '')
+      for (let k = 0; k < squeezed.length; k += 1) {
+        const ch = squeezed[k]
+        const next = squeezed[k + 1]
+        if (ch === '\\' && (next === '"' || next === "'")) {
+          // 转义引号（\" / \'）先归一为它代表的那个引号，再随字面量边界一起
+          // 丢弃：两个源字符不产出 haystack 字符，也就不需要行号条目。
+          k += 1
+          continue
+        }
+        if (ch === '"' || ch === "'" || ch === '+') continue
+        haystack += ch
+        lineOf.push(index + 1)
+      }
+    }
+    for (const pattern of FORBIDDEN_PATTERNS) {
+      const needle = forbiddenProjection(pattern.text)
+      const at = haystack.indexOf(needle)
+      if (at === -1) continue
+      violations.push(`禁用锚点形态出现在 ${source.path}:${lineOf[at]}：${JSON.stringify(pattern.text)}（${pattern.note}）`
+        + "——按 design 17 §18.4.3 重锚，或删除该规则并说明为什么不再需要")
+    }
+  }
+  if (violations.length === 0) notes.push(`禁用锚点形态扫描：${sources.length} 个插件源文件零命中`)
+  return { violations, notes }
+}
+
 /** 正则转义。 */
 function escapeRe(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 /**
- * 从一个文件的去注释投影里抽出全部锚点声明。
+ * CSS 注释投影（保留行号）：styles.ts 把整段 CSS 放在 TS 模板字面量里，
+ * `stripCommentsKeepingLines` 会把整段当一个字符串（字符串感知），于是 **CSS 注释
+ * 里**的锚点提及（例如注释里写的 `[data-tip]` 或
+ * 「attribute anchors, not a `[class$="_handle"]` local-name rule」）会存活下来，
+ * 被抽取器误当成声明。**全部 kind** 因此都在这个投影上抽取：`/* … *​/` 一律抹成
+ * 空格（换行保留，行号可用；与 stripComments 同为等长投影）。
+ *
+ * 这个投影不是字符串感知的（CSS 注释语法里没有字符串），所以 TS 字符串里成对的
+ * `/*…*​/` 也会被抹掉——抽取面宁可少不可多：注释里的锚点不是声明，而字符串里的
+ * 选择器声明本就同时出现在真实选择器上。
+ */
+function stripCssCommentsKeepingLines(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, match => match.replace(/[^\n]/g, ' '))
+}
+
+/**
+ * 从一个文件的**双层去注释投影**里抽出全部锚点声明：先 TS 注释（字符串感知、保留
+ * 行号），再过 CSS 注释投影（上面那个）。两层都逐字符等长，索引→行号映射仍然指回
+ * 原始文件。
  *
  * @param {{ path: string, text: string }} source - 一个插件源码文件。
  * @returns {Array<{ kind: string, token: string, path: string, line: number, form: string }>}
  */
 export function extractAnchorsFromSource(source) {
-  const code = stripCommentsKeepingLines(source.text)
+  const code = stripCssCommentsKeepingLines(stripCommentsKeepingLines(source.text))
   const found = []
   const push = (kind, token, index, form) => {
     found.push({ kind, token, path: source.path, line: lineAt(code, index), form })
@@ -211,9 +347,16 @@ export function extractAnchorsFromSource(source) {
       push('slot', value[1], roleMap.index + value.index, 'ROLE_SLOT_KEYS')
     }
   }
-  // 6. build-time 哈希 class token（`_root_38jqx_` / `_card_38jqx_`）：硬失败族（pin bump 必重锚）
+  // 6. build-time 哈希 class token（`_root_38jqx_` / `_card_38jqx_`）：硬失败族（pin bump 必重锚）。
+  //    与其它 kind 一样在 CSS 注释投影上抽——注释里的哈希提及不是声明（styles.ts）。
   for (const match of code.matchAll(/_[a-z][a-z0-9]*_[a-z0-9]{5,}_/g)) {
     push('hash', match[0], match.index, 'hash-token')
+  }
+  // 7. CSS-module 本地名（`[class$="_row"]` / `[class*="_row "]` / `[class*="_row_"]`
+  //    三种生产形态）：哈希 token 一 bump 就变，本地名是唯一不受哈希漂移影响的
+  //    残余锚。token 保留前导 `_`——类名里正是它与哈希衔接（`<hash>_row` / `_row_<hash>_<idx>`）。
+  for (const match of code.matchAll(/\[class(?:\$|\*)=["\'](_[A-Za-z][A-Za-z0-9-]*)(?:[ _][^"\']*)?["\']\]/g)) {
+    push('local-name', match[1], match.index, '[class…="_…"]')
   }
   return found
 }
@@ -233,6 +376,33 @@ export function extractDeclaredAnchors(sources) {
     }
   }
   return { anchors: [...byKey.values()], byKey }
+}
+
+/**
+ * 最小断言集的**声明侧**完整性（方向 B 的一半）：`declared: 'plugin'` 的每一项都必须
+ * 在本插件源码里被抽到，否则红线（插件侧改名/删除，或该功能被移除）。
+ *
+ * 单独成函数的原因：这一半**不依赖上游锚点树**。调用方（verify-mobile-anchors.mjs）
+ * 在没有锚点根时仍必须先跑它——否则「没物化上游树」会把本仓侧的改坏一起跳过，
+ * 默认模式静默 exit 0 就成了假绿。`declared: 'external'` 只查上游发射侧，不在此列。
+ *
+ * @param {Array<{kind: string, token: string}>} anchors - 插件声明的锚点。
+ * @param {Array<object>} [required] - 门禁要求的最小断言集。
+ * @returns {{violations: string[], checked: number}} 违规文案与检查过的 plugin 项数。
+ */
+export function requiredDeclarationFindings(anchors, required = REQUIRED_ANCHORS) {
+  const declaredKeys = new Set(anchors.map(anchor => `${anchor.kind}:${anchor.token}`))
+  const violations = []
+  let checked = 0
+  for (const item of required) {
+    if (item.declared !== 'plugin') continue
+    checked += 1
+    if (!declaredKeys.has(`${item.kind}:${item.token}`)) {
+      violations.push(`最小断言集要求插件声明 ${item.kind} 锚点 ${item.token}，但源码里抽不到——插件侧改名/删除，或该锚点所属功能被移除`
+        + `（后者应把本项与 docs/checklists/upstream-touchpoints.md §4 的登记行一起删）：${item.note}`)
+    }
+  }
+  return { violations, checked }
 }
 
 /**
@@ -333,12 +503,40 @@ function roleSelectorPatterns(role) {
   return [new RegExp(`\\[role=["']${escapeRe(role)}["']\\]`)]
 }
 
+/**
+ * **对象键形**证据（`"data-x":` / `role: "dialog"` / `"data-slot": "x"`）的最小
+ * 防伪：键的起点前（跳过空白）必须是 `{`、`,` 或 `(`。真实的 props 对象里，一个
+ * 键只会出现在这三种边界之后（对象/调用参数的开头，或前一个属性之后）；把键形
+ * 写进普通文案的那一类（`console.warn("legacy \"data-chat-flow\": true")`）
+ * 引号前是单词字符，直接落选。
+ *
+ * **已知残余（有意不判）**：把整段对象形塞进字符串/模板字面量的文案在局部形态上
+ * 与真键无法区分。注释由 stripCommentsKeepingLines 剥掉，但字符串不能剥（消费形
+ * 与 renderSlot 的槽 key 本身就活在字符串里）。在本仓真实语料上做「命中是否在
+ * 字符串内」的全量词法判断已被证伪：minified 产物里的正则字面量（`/[..."]/u`）
+ * 会打乱朴素的引号计数，造成成片假红。故只做**局部边界**这一层，残余面交给
+ * 写入形/消费形的分级与人工重锚承担。
+ *
+ * @param {RegExp} pattern - 对象键形判据（无 g 也可）。
+ * @param {string} text - 文件文本。
+ * @returns {boolean} 是否存在一个处于合法对象键边界的命中。
+ */
+function objectKeyEmits(pattern, text) {
+  const global = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g')
+  let match
+  while ((match = global.exec(text)) !== null) {
+    let at = match.index - 1
+    while (at >= 0 && /\s/.test(text[at])) at -= 1
+    if (at < 0 || '{,('.includes(text[at])) return true
+    global.lastIndex = match.index + 1
+  }
+  return false
+}
+
 /** 按「写入形优先」取证据：有写入形就只报写入形，否则回落消费形（判定方决定
- *  这是硬失败还是可接受）。 */
-function evidenceByStrength(files, emissionPatternsFor, selectorPatterns) {
-  const emissions = files
-    .filter(file => emissionPatternsFor(file).some(pattern => pattern.test(file.text)))
-    .map(file => file.path)
+ *  这是硬失败还是可接受）。`emits` 是「这个文件有没有写入形」的完整判据。 */
+function evidenceByStrength(files, emits, selectorPatterns) {
+  const emissions = files.filter(file => emits(file)).map(file => file.path)
   if (emissions.length > 0) return { emissions, selectors: [] }
   const selectors = files
     .filter(file => selectorPatterns.some(pattern => pattern.test(file.text)))
@@ -350,14 +548,24 @@ function evidenceByStrength(files, emissionPatternsFor, selectorPatterns) {
 export function attributeEvidence(files, token) {
   return evidenceByStrength(
     files,
-    file => attributeEmissionPatterns(token, { fileText: file.text, path: file.path }),
+    file => {
+      const patterns = attributeEmissionPatterns(token, { fileText: file.text, path: file.path })
+      // patterns[0] 是对象键形；其余（set/toggle/removeAttribute、dataset、JSX 形）
+      // 的形态本身就足够窄，不需要边界那一层。
+      return objectKeyEmits(patterns[0], file.text) || patterns.slice(1).some(pattern => pattern.test(file.text))
+    },
     attributeSelectorPatterns(token),
   )
 }
 
 /** role 锚点：写入形 / 消费形两份证据。 */
 export function roleEvidence(files, role) {
-  return evidenceByStrength(files, () => roleEmissionPatterns(role), roleSelectorPatterns(role))
+  const patterns = roleEmissionPatterns(role)
+  return evidenceByStrength(
+    files,
+    file => objectKeyEmits(patterns[0], file.text) || patterns[1].test(file.text),
+    roleSelectorPatterns(role),
+  )
 }
 
 /**
@@ -388,7 +596,252 @@ export function slotSelectorPatterns(slot) {
 
 /** slot 锚点：写入形 / 消费形两份证据。 */
 export function slotEvidence(files, slot) {
-  return evidenceByStrength(files, () => slotEmissionPatterns(slot), slotSelectorPatterns(slot))
+  const [render, key, attribute] = slotEmissionPatterns(slot)
+  return evidenceByStrength(
+    files,
+    file => render.test(file.text) || objectKeyEmits(key, file.text) || attribute.test(file.text),
+    slotSelectorPatterns(slot),
+  )
+}
+
+/**
+ * local-name 锚点的**发射形**：上游产物的 CSS-module 类名字典，且必须是**哈希锚定**
+ * 的完整类名（点号或引号开头），两种生产形态：
+ *   - hash-first：`.zGbnIq_modelRow` / `"wSkVaW_crumbSeg"`（`<hash>_<local>`）；
+ *   - local-first：`._row_1alm6_55`（`_<local>_<hash>_<idx>`）。
+ * 哈希段除了 ≥5 个字符，还必须**含数字或大小写混合**（`[0-9]` / 相邻的
+ * `[a-z][A-Z]` / `[A-Z][a-z]`）：只看长度时 `.table_row` / `.breakpoint_modelRow`
+ * 这类「人类可读前缀 + 本地名」的静态类名同样是 ≥5 字符的 alnum 段，会被误当
+ * hash-first 证据（假绿）。四个真实本地名的哈希段都满足这条：`1alm6`（数字）、
+ * `zGbnIq` / `wSkVaW` / `EvIC1a`（大小写混合）。
+ * 裸本地名（`"modelRow"`）只是模块内部标识，不证明哈希类被发射；`.foo_row` 这类
+ * 「恰好以本地名结尾的人类可读类名」同样不算——旧判据的 `[A-Za-z0-9-]*` 前缀会
+ * 把它误当 hash-first 证据（假绿），收窄后必须真的带哈希段。
+ */
+export function localNameEmissionPatterns(token) {
+  const escaped = escapeRe(token)
+  // 先卡长度与右边界，再要求段内有数字或相邻大小写变化，最后消费整段。
+  const hash = String.raw`(?=[A-Za-z0-9]{5,}(?![A-Za-z0-9]))(?=[A-Za-z0-9]*(?:[0-9]|[a-z][A-Z]|[A-Z][a-z]))[A-Za-z0-9]{5,}`
+  return [
+    new RegExp(String.raw`(?:\.|["\'])${hash}${escaped}(?![A-Za-z0-9_-])`),
+    new RegExp(String.raw`(?:\.|["\'])${escaped}_${hash}(?:_[0-9]+)?(?![A-Za-z0-9_-])`),
+  ]
+}
+
+/** local-name 没有独立的消费形（插件侧声明本身就是选择器），返回空表。 */
+export function localNameSelectorPatterns() { return [] }
+
+/** local-name 锚点：类名字典命中 = 发射。 */
+export function localNameEvidence(files, token) {
+  const patterns = localNameEmissionPatterns(token)
+  return evidenceByStrength(files, file => patterns.some(pattern => pattern.test(file.text)), localNameSelectorPatterns())
+}
+
+/**
+ * SHAPE_RULES — 会话头形状的**有序 token + 括号平衡** tripwire（不是解析器）。
+ *
+ * 明确声明它不是解析器：只回答两个问题——
+ *   1. 上游 ConversationHeader 是否仍以 `jsxs)("header", { … })` 的**对象字面量
+ *      props** 渲染、且**在 `children:` 的值区间内**出现
+ *      `renderSlot("conversation.session.header")`（会话头槽真的挂在 header 的
+ *      children 里）；props 变量化（`jsxs)("header", props)`）时 `{` 不紧随调用，
+ *      判据判红，而不是从后文某个 `{` 里"找到"槽；三种诱饵同样判红——children 值
+ *      区间之外的 onRender 回调、config.deep、以及字符串字面量里的同文本；
+ *   2. `renderSlot("conversation.header")`（持久会话头槽 = ConversationHeader 的挂载点）
+ *      是否仍存在。
+ * 值区间由三族括号的字符串感知配对（matchingDelimiter）给出，字符串里的假命中由
+ * findSlotRender 剔掉；但模板字面量的 `${…}` 表达式不做解析，上游改写成动态
+ * key/别处渲染时本 tripwire 会报红并要求人工重锚——这是有意的 fail-closed 方向，
+ * 不是假阳。
+ */
+export const SHAPE_RULES = [
+  'jsxs)("header" 的 children 内必须出现 renderSlot("conversation.session.header")',
+  'dsh-client-ui-conversation 产物里必须存在 renderSlot("conversation.header")',
+]
+
+/**
+ * 从 code[openIndex] 的**开括号**起做字符串感知的配对扫描；返回配对闭括号的下标，
+ * 未闭合（或交叉嵌套）返回 -1。三种括号族都参与（`{}` / `[]` / `()`）：props 对象
+ * 里的数组值（`children: [ … ]`）与嵌套对象/调用都靠它定位真实边界，否则从调用后
+ * 第一个 `{` 起只数花括号会停在数组里第一个内层 `}` 上。
+ */
+function matchingDelimiter(code, openIndex) {
+  const openers = '([{'
+  const closers = ')]}'
+  const stack = []
+  let quote = null
+  for (let i = openIndex; i < code.length; i += 1) {
+    const ch = code[i]
+    if (quote !== null) {
+      if (ch === '\\') { i += 1; continue }
+      if (ch === quote) quote = null
+      continue
+    }
+    if (ch === '"' || ch === "'" || ch === '`') { quote = ch; continue }
+    const openAt = openers.indexOf(ch)
+    if (openAt !== -1) { stack.push(closers[openAt]); continue }
+    if (closers.includes(ch)) {
+      if (stack[stack.length - 1] !== ch) return -1 // 交叉嵌套：形状不再认识
+      stack.pop()
+      if (stack.length === 0) return i
+    }
+  }
+  return -1
+}
+
+/**
+ * index 是否落在字符串/模板字面量内部（字符串感知的向前扫描）。
+ * 用于把「文案里的假命中」从**代码里的发射/渲染**里剔出去。
+ */
+function insideString(text, index) {
+  let quote = null
+  for (let i = 0; i < index; i += 1) {
+    const ch = text[i]
+    if (quote !== null) {
+      if (ch === '\\') { i += 1; continue }
+      if (ch === quote) quote = null
+      continue
+    }
+    if (ch === '"' || ch === "'" || ch === '`') quote = ch
+  }
+  return quote !== null
+}
+
+/**
+ * 在一个 props 对象字面量的内部区间里定位 `children:` 的**值区间**（返回相对该区间
+ * 的 `[valueStart, valueEnd)`，定位不到返回 null）。只在顶层（相对深度 0）认这个键：
+ * 嵌套对象/回调里的 `children` 不是本对象的 prop。值区间的边界由 matchingDelimiter
+ * 给出（数组/对象/调用），标量值截到同层逗号。
+ */
+function childrenValueRange(region) {
+  let colon = -1
+  let depth = 0
+  let quote = null
+  for (let i = 0; i < region.length; i += 1) {
+    const ch = region[i]
+    if (quote !== null) {
+      if (ch === '\\') { i += 1; continue }
+      if (ch === quote) quote = null
+      continue
+    }
+    if (ch === '"' || ch === "'" || ch === '`') { quote = ch; continue }
+    if (ch === '(' || ch === '[' || ch === '{') { depth += 1; continue }
+    if (ch === ')' || ch === ']' || ch === '}') { depth -= 1; continue }
+    if (depth !== 0 || ch !== 'c') continue
+    if (!region.startsWith('children', i)) continue
+    if (i > 0 && /[\w$]/.test(region[i - 1])) continue
+    const after = region[i + "children".length]
+    if (after !== undefined && /[\w$]/.test(after)) continue
+    const colonMatch = /^\s*:/.exec(region.slice(i + "children".length))
+    if (colonMatch === null) continue
+    colon = i + "children".length + colonMatch[0].length
+    break
+  }
+  if (colon === -1) return null
+  let start = colon
+  while (start < region.length && /\s/.test(region[start])) start += 1
+  if (start >= region.length) return null
+  if ('([{'.includes(region[start])) {
+    const end = matchingDelimiter(region, start)
+    return end === -1 ? null : [start, end]
+  }
+  // 标量/引用值：扫到同层逗号或 props 对象结尾。
+  let valueDepth = 0
+  let valueQuote = null
+  for (let i = start; i < region.length; i += 1) {
+    const ch = region[i]
+    if (valueQuote !== null) {
+      if (ch === '\\') { i += 1; continue }
+      if (ch === valueQuote) valueQuote = null
+      continue
+    }
+    if (ch === '"' || ch === "'" || ch === '`') { valueQuote = ch; continue }
+    if (ch === '(' || ch === '[' || ch === '{') { valueDepth += 1; continue }
+    if (ch === ')' || ch === ']' || ch === '}') { valueDepth -= 1; continue }
+    if (ch === ',' && valueDepth === 0) return [start, i]
+  }
+  return [start, region.length]
+}
+
+/**
+ * 在 [from, to) 里找 `renderSlot("<slot>"`；字符串/模板字面量里的同文本是**文案**，
+ * 不是渲染调用（`children: ["renderSlot(\"…\")"]` 这类诱饵不算）。
+ * @returns {number} 命中下标，找不到返回 -1。
+ */
+function findSlotRender(text, slot, from = 0, to = text.length) {
+  const pattern = new RegExp(String.raw`renderSlot\(\s*["']${escapeRe(slot)}["']`, 'g')
+  pattern.lastIndex = from
+  let match
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index >= to) return -1
+    if (!insideString(text, match.index)) return match.index
+    pattern.lastIndex = match.index + 1
+  }
+  return -1
+}
+
+/**
+ * {@link SHAPE_RULES} 的扫描实现（纯函数，夹具可测）。
+ * @param {Array<{path: string, text: string}>} files - dsh-client-ui-conversation 产物。
+ * @returns {{violations: string[], notes: string[]}}
+ */
+export function conversationHeaderShapeFindings(files) {
+  const violations = []
+  const notes = []
+  const projected = files.map(file => ({ path: file.path, text: stripCommentsKeepingLines(file.text) }))
+  let headerCalls = 0
+  let objectPropsCalls = 0
+  let ordered = 0
+  for (const file of projected) {
+    const code = file.text
+    const call = /jsxs\)\(\s*["\']header["\']/g
+    let match
+    while ((match = call.exec(code)) !== null) {
+      headerCalls += 1
+      // props 必须是**紧随调用**的对象字面量：调用与 `{` 之间只允许空白/逗号/换行。
+      // 旧写法从调用之后的第一个 `{` 起做括号平衡——props 变量化
+      //（`jsxs)("header", props)`）时那个 `{` 落在无关作用域里，只要后文出现过
+      // children + renderSlot 就算命中：这正是「形状判据被 props 变量化绕过」的假绿。
+      const props = /^\s*,\s*\{/.exec(code.slice(match.index + match[0].length))
+      if (props === null) {
+        violations.push(`SHAPE_RULE 1：第 ${headerCalls} 个 \`jsxs)("header"\` 调用的 props 不是紧随其后的对象字面量`
+          + '（调用与 `{` 之间只允许空白/逗号/换行；props 变量化或包裹调用都判红）——'
+          + '会话头槽的形状无法确认，按 design 17 §18.4.3 重锚')
+        continue
+      }
+      objectPropsCalls += 1
+      const open = match.index + match[0].length + props[0].length - 1
+      const end = matchingDelimiter(code, open)
+      if (end === -1) {
+        violations.push(`SHAPE_RULE 1：第 ${headerCalls} 个 \`jsxs)("header"\` 的对象字面量括号不平衡——产物被截断或形状变了`)
+        continue
+      }
+      const region = code.slice(open + 1, end)
+      // 判据是**包含**：槽必须在 `children:` 的**值区间**里渲染。旧写法只比较两个
+      // 下标的先后（children 在槽之前就算命中），于是 `children: []` + 后面的
+      // onRender 回调 / config.deep / 文案字符串都能把形状判据骗绿；值区间由
+      // matchingDelimiter 给出，字符串里的假命中由 findSlotRender 剔掉。
+      const children = childrenValueRange(region)
+      if (children === null) continue
+      const slotAt = findSlotRender(region, 'conversation.session.header', children[0], children[1])
+      if (slotAt !== -1) ordered += 1
+    }
+  }
+  const baseSlot = /renderSlot\(\s*["\']conversation\.header["\']/
+  const hasBaseSlot = projected.some(file => baseSlot.test(file.text))
+  if (headerCalls === 0) {
+    violations.push('SHAPE_RULE 1：在 dsh-client-ui-conversation 产物里找不到 `jsxs)("header"` 调用——ConversationHeader 的渲染形状变了（design 17 §18.4.3 需按新形状重锚）')
+  } else if (ordered === 0) {
+    violations.push(`SHAPE_RULE 1：找到 ${headerCalls} 个 \`jsxs)("header"\` 调用（其中 props 是对象字面量的 ${objectPropsCalls} 个），但没有一个在 children 内渲染 renderSlot("conversation.session.header")——会话头槽被移出/删除`)
+  } else {
+    notes.push(`SHAPE_RULE 1：${ordered}/${headerCalls} 个 jsxs)("header" 的 children 内含 conversation.session.header slot`)
+  }
+  if (!hasBaseSlot) {
+    violations.push('SHAPE_RULE 2：dsh-client-ui-conversation 产物里找不到 renderSlot("conversation.header"——持久会话头槽（ConversationHeader 挂载点）消失')
+  } else {
+    notes.push('SHAPE_RULE 2：renderSlot("conversation.header") 存在')
+  }
+  return { violations, notes }
 }
 
 /**
@@ -399,8 +852,8 @@ export function slotEvidence(files, slot) {
  * @returns {string[]} 命中的文件路径（去重，稳定顺序）。
  */
 export function anchorEvidence(files, anchor) {
-  // attribute / role / slot 走同一套「写入形优先」的两级判定；hash token 只有
-  // 字面量一种形态（它本就是 advisory：pin 一动必变）。
+  // attribute / role / slot / local-name 走同一套「写入形优先」的两级判定；hash
+  // token 只有字面量一种形态（零命中同样是硬失败：pin 一动必变，必须重锚）。
   if (anchor.kind === 'attribute') {
     const { emissions, selectors } = attributeEvidence(files, anchor.token)
     return emissions.length > 0 ? emissions : selectors
@@ -413,6 +866,10 @@ export function anchorEvidence(files, anchor) {
     const { emissions, selectors } = slotEvidence(files, anchor.token)
     return emissions.length > 0 ? emissions : selectors
   }
+  if (anchor.kind === 'local-name') {
+    const { emissions, selectors } = localNameEvidence(files, anchor.token)
+    return emissions.length > 0 ? emissions : selectors
+  }
   return files.filter(file => new RegExp(escapeRe(anchor.token)).test(file.text)).map(file => file.path)
 }
 
@@ -422,6 +879,7 @@ function strengthOf(files, anchor) {
   if (anchor.kind === 'attribute') return attributeEvidence(files, anchor.token)
   if (anchor.kind === 'role') return roleEvidence(files, anchor.token)
   if (anchor.kind === 'slot') return slotEvidence(files, anchor.token)
+  if (anchor.kind === 'local-name') return localNameEvidence(files, anchor.token)
   return { emissions: anchorEvidence(files, anchor), selectors: [] }
 }
 
@@ -441,7 +899,7 @@ function noEmissionMessage(anchor, where, label, corpusName, selectorHits, extra
   const detail = selectorHits.length > 0
     ? `只有**消费方**证据（选择器/CSS：${selectorHits[0]}），没有任何写入点`
       + '——上游可能已停止发射它（留下的是死 CSS），或它的写入形态未被本门识别（dataset./toggleAttribute/其它 API 变体）'
-    : '在语料里零命中（连消费方证据都没有）'
+    : '零命中（连消费方证据都没有）'
   return `${label} ${anchor.token} 在${corpusName}${detail}。请按 design 17 §18.4.3 重锚，`
     + `或把该形态补进 scripts/upstream/mobile-anchors.mjs（声明于 ${where}）${extra === '' ? '' : `；${extra}`}`
 }
@@ -470,7 +928,6 @@ export function anchorFindings({ anchors, upstream, chamber, required = REQUIRED
   const advisories = []
   const notes = []
   const rows = []
-  const declaredKeys = new Set(anchors.map(anchor => `${anchor.kind}:${anchor.token}`))
 
   // ---- 结构性前提：data-slot 属性名本身 ----
   // 结构性前提同样只认写入形：选择器里的 `[data-slot=…]` 是消费方证据，上游把
@@ -488,6 +945,16 @@ export function anchorFindings({ anchors, upstream, chamber, required = REQUIRED
     advisories.push('未在上游产物里找到 `"data-slot": <标识符>` 的动态发射链——slot key → data-slot 值的锁步无法确认（渲染器实现可能换形）')
   } else {
     notes.push(`slot key → data-slot 发射链：${linkage[0].path}`)
+  }
+
+  // ---- SHAPE_RULES：会话头形状 tripwire（上游 ConversationHeader 重锚触发） ----
+  const conversationFiles = upstream.filter(file => /(?:^|\/)dsh-client-ui-conversation\//.test(file.path))
+  if (conversationFiles.length === 0) {
+    advisories.push('SHAPE_RULES 未执行：上游语料里没有 dsh-client-ui-conversation 产物——会话头形状 tripwire 需要该 client 半（严格模式请把完整树物化后再跑）')
+  } else {
+    const shape = conversationHeaderShapeFindings(conversationFiles)
+    violations.push(...shape.violations)
+    notes.push(...shape.notes)
   }
 
   // ---- 方向 A：插件声明的锚点 → 上游发射点 ----
@@ -509,43 +976,33 @@ export function anchorFindings({ anchors, upstream, chamber, required = REQUIRED
       continue
     }
     const evidence = strengthOf(upstream, anchor)
-    const hard = HARD_KINDS.has(anchor.kind)
+    // HARD_KINDS 覆盖抽取器的全部 kind，所以零命中直接判红；旧版「hash 零命中只
+    // advisory」的分支已删除——它不可达，且正是 pin bump 后静默 no-op 的来源。
     const proof = evidence.emissions.length > 0 ? evidence.emissions : evidence.selectors
     rows.push({
       ...anchor,
       category,
-      verdict: evidence.emissions.length > 0 ? 'ok' : (hard ? 'missing' : 'advisory'),
+      verdict: evidence.emissions.length > 0 ? 'ok' : 'missing',
       evidence: proof,
     })
     if (evidence.emissions.length === 0) {
-      const message = `${anchor.kind} 锚点 ${anchor.token} 在上游产物零命中（声明于 ${where}，形态 ${anchor.form}）`
-      if (hard) {
-        violations.push(noEmissionMessage(anchor, where, `${anchor.kind} 锚点`, '上游产物', evidence.selectors))
-      } else {
-        advisories.push(`${message}——build-time 哈希 token，pin 一动必变：属于「pin 前移必须重锚」的登记项，不判失败`)
-      }
+      violations.push(noEmissionMessage(anchor, where, `${anchor.kind} 锚点`, '上游产物', evidence.selectors))
     }
   }
 
   // ---- 方向 B：门禁要求的最小集 → 插件声明 + 上游发射 ----
+  // 声明侧与发射侧拆开：声明侧（requiredDeclarationFindings）不依赖上游语料，
+  // 调用方可在锚点根缺失时先跑它；这里合并两者，语义不变。
+  violations.push(...requiredDeclarationFindings(anchors, required).violations)
   for (const item of required) {
-    const key = `${item.kind}:${item.token}`
-    if (item.declared === 'plugin' && !declaredKeys.has(key)) {
-      violations.push(`最小断言集要求插件声明 ${item.kind} 锚点 ${item.token}，但源码里抽不到——插件侧改名/删除，或该锚点所属功能被移除`
-        + `（后者应把本项与 docs/checklists/upstream-touchpoints.md §4 的登记行一起删）：${item.note}`)
-    }
     // 与方向 A 同一条强度规则：只有**写入形**才算「上游还在发射」，选择器/CSS 是
     // 消费方证据，不能单独支撑最小断言集。
     const strength = strengthOf(upstream, item)
-    const upstreamEvidence = strength.emissions.length > 0 ? strength.emissions : strength.selectors
-    const hard = HARD_KINDS.has(item.kind)
-    if (strength.emissions.length === 0 && hard) {
+    // 同上：HARD_KINDS 全覆盖，最小断言集里不存在「零命中降 advisory」的分支。
+    if (strength.emissions.length === 0) {
       violations.push(strength.selectors.length > 0
         ? noEmissionMessage(item, '最小断言集', `${item.kind} 锚点`, '上游产物', strength.selectors, `声明侧=${item.declared}`)
         : `最小断言集要求上游发射 ${item.kind} 锚点 ${item.token}，但产物里零命中（${item.note}；声明侧=${item.declared}）`)
-    }
-    if (upstreamEvidence.length === 0 && !hard) {
-      advisories.push(`最小断言集里的 build-time 哈希 token ${item.token} 在上游产物零命中（${item.note}）`)
     }
   }
 

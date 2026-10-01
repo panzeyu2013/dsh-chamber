@@ -1,5 +1,6 @@
 /**
- * touchpoint-criteria.mjs — C1–C16 判据 id 表（纯数据、无副作用）。
+ * touchpoint-criteria.mjs — C1–C16 判据 id 表（纯数据、无副作用；唯一的外部引用是
+ * C4 的 roster 数量，从 packages/renderer/scripts/typert-remote-contract.mjs 取单一来源）。
  *
  * 用途：`scripts/upstream/registry.json` 的 `criteria` 字段与
  * `docs/checklists/upstream-touchpoints.md` §6 共用同一份 id。判据的**实现**仍在
@@ -11,11 +12,15 @@
  * id 与 registry 的关系由 `verify-registry.mjs` 兜住（`criteria` 并集 ∪
  * `criteriaCodeOnly` 必须恰为 C1–C16，不重不漏）。
  */
+// C4 的 rosters 数量是本表里唯一的活数字：从契约模块的单一来源取，不重抄
+// （曾经写死 24，而 EXPECTED_MOUNT_PACKAGES 已是 25 ⇒ 判据散文与实现漂移）。
+import { EXPECTED_MOUNT_PACKAGES } from '../../packages/renderer/scripts/typert-remote-contract.mjs'
+
 export const CRITERIA = Object.freeze({
   C1: 'fork 纯文件字节恒等：未登记补丁的文件必须与上游锚逐字节一致',
   C2: '--tags <old> <new>：已登记 fork 面的重放差异报告（advisory）',
   C3: '完整性：fork 每文件有分类、上游每文件有裁决（漏分类/漏裁决 = 硬失败）',
-  C4: 'roster：typert remote 装配契约 24（集合与顺序）、covered/factory 存在性、删包 fail-loud',
+  C4: `roster：typert remote 装配契约 ${EXPECTED_MOUNT_PACKAGES.length}（集合与顺序）、covered/factory 存在性、删包 fail-loud`,
   C5: '过期锚扫描：shadow fork package.json 版本 == 上游；submodule HEAD == harness.commit',
   C6: 'EXCLUDED 上游存在性：ensure-harness-vendor 排除的 shadow fork 源目录仍在',
   C7: '种子域锁步：gateway HOST_PACKAGE_PROBE_DOMAINS == dsh-runtime HOST_DOMAIN_PROBE_NAMES',

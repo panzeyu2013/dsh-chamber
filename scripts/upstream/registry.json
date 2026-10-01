@@ -668,6 +668,23 @@
       "evidence": "路径自动化锁步：packages/control-plane/test/page-channel/page-channel-flow.test.ts 断言 vendor 的 EVENTS_ENDPOINT 与 packages/control-plane/src/page-channel.ts 的 PLUGIN_GRAPH_SSE_PATH 逐字节一致（design 26 把该路由的抓取搬到控制面侧，所以该路由的 chamber 消费方有两个：控制面抓取 + live-graph 解析帧）。帧形状仍是人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验宿主半身注册的 exact GET/HEAD /plugins/events 路由（连接即一帧全量 graph；rebuilt 会 compose+notifyGraphChanged，带新 rev 的 graph 帧随到）与 chamber 订阅者（design 09 §3.7）的消费形状",
       "status": "accepted",
       "rationale": "上游端点属主是 always-mounted 的 HMR 宿主行（dev-only 的只是 rebuild watcher）；chamber 只消费 graph 帧做装/卸同步、不加载官方客户端半身，无自动锁步面（C16 vendorSourceConsumers 只认 vendor 源码相对导入）。端点被移除/改名时 chamber 静默退回现状（机会性契约），故接受人工复验而非新增 C 编号门；端点**路径**这一半已被上面的 flow 用例自动锁步，人工复验只覆盖帧形状与宿主半身的注册语义"
+    },
+    {
+      "id": "mirror.dsh-mobile-anchor-surface",
+      "type": "mirror",
+      "ours": "packages/dsh-chamber-client-ui-mobile",
+      "upstream": "packages/client/ui-conversation",
+      "authority": "upstream",
+      "criteria": [],
+      "deviations": [],
+      "relatedGates": [
+        "scripts/upstream/verify-mobile-anchors.test.mjs",
+        "verify:mobile-anchors"
+      ],
+      "symbols": [],
+      "evidence": "机器锁步：scripts/upstream/verify-mobile-anchors.mjs（判据 scripts/upstream/mobile-anchors.mjs；负例 scripts/upstream/verify-mobile-anchors.test.mjs）把插件声明的 data-* / role / slot / hash / local-name 锚点与锚点根下 node_modules/@deepseek-ai/** 的产物做双向差集，并对 dsh-client-ui-conversation 产物做 SHAPE_RULES 形状 tripwire、对插件源码做 FORBIDDEN_PATTERNS 扫描。该行只取 ui-conversation 作代表路径：移动锚点横跨 ui-conversation / ui-chat / ui-dockkit / ui-layout / ui-sidebar / ui-sidebar-right / ui-primitives，逐锚点清单在 docs/checklists/upstream-touchpoints.md §4 的移动锚点行。升级 pin 时按 §7 第 6 步带 --require-anchor-root 跑。",
+      "status": "accepted",
+      "rationale": "移动插件（单打包例外）的 DOM 契约押在多个上游 client 包上：槽/属性/hash/本地名有产物侧写入形可自动判，几何/视觉只能真机抽检（design 17 §18.6）。接受「锚点自动锁步 + 真机人工抽检」的双轨，不新增 C 编号门（C1/C3/C5 不覆盖 mobile，产物陈旧由 C8 盯）。"
     }
   ],
   "notes": "machine facts only; prose lives in docs/checklists/upstream-touchpoints.md"

@@ -137,7 +137,11 @@ export function applyBlocks(text, registry) {
     if (!blocks.has(id)) return { text: null, error: `generatedBlocks 声明了未定义的块: ${id}` }
     const found = extractBlock(next, id)
     if (found.error !== null) return { text: null, error: found.error }
-    next = next.replace(BEGIN(id) + found.content + END(id), BEGIN(id) + '\n' + blocks.get(id) + '\n' + END(id))
+    // Replacer FUNCTION, never a replacement string: a rendered table can carry
+    // `$&`, `$'` or `$1` (a patch note, a glob, a path), and String.replace
+    // would expand those patterns against the matched block — silently writing
+    // text the registry never rendered.
+    next = next.replace(BEGIN(id) + found.content + END(id), () => BEGIN(id) + '\n' + blocks.get(id) + '\n' + END(id))
   }
   return { text: next, error: null }
 }
