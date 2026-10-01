@@ -1,4 +1,4 @@
-import type { InstanceAggregate, InstanceSnapshot } from '@dsh-chamber/dsh-chamber-client-core'
+import type { InstanceAggregate, InstanceSnapshot, SessionRow } from '@dsh-chamber/dsh-chamber-client-core'
 
 /**
  * Decide which ready sources need an authoritative unary aggregate refresh: a
@@ -18,6 +18,77 @@ export function isFallbackDerivedView(current: InstanceAggregate | undefined): b
   return current !== undefined && current.state === 'ok'
     && current.workspaces.length > 0
     && current.workspaces.some(workspace => workspace.synthetic === true)
+}
+
+/**
+ * Carry a session's last KNOWN projection-derived row facts across a row that
+ * arrives without them. A connection generation change makes the pinned client
+ * clear every session projection store (`handleConnected`), and only the next
+ * `session/list` response re-applies the values; in that window the pushed
+ * rows carry no durable `title` — the official ladder
+ * (`title ?? basename(cwd) ?? id`) falls back to the project directory name —
+ * and lose the sparse `hasActiveSchedule` marker, so the sidebar would flash
+ * both. The same rule covers a unary fallback row that arrived without its
+ * title projection.
+ *
+ * Semantics: a non-empty incoming `title` ALWAYS wins (rename / new session,
+ * and a genuine schedule-off keeps its title too, so the marker is never kept
+ * against it); a row with no previous row, or whose previous row also carried
+ * no title, passes through untouched; a row that disappeared drops its memory
+ * with it (the caller's `previous` IS the memory). Identity-preserving when
+ * nothing is carried (an allocation optimization, not the dedupe's cause: the
+ * commit gate compares CONTENT signatures, so a push whose only degradation was
+ * the transiently missing label dedupes to no commit).
+ *
+ * BOUND (no timer, no state): the carry stops as soon as the row's `updatedAt`
+ * advances past the last known row. An advance is durable new activity, meaning
+ * the authority re-read the session and still served no title — keeping the old
+ * name past that point would report a fact the authority no longer supports.
+ * A dormant row (no advance) keeps its last known facts until it is seen with a
+ * title again, retires, or the page reloads; a wall-clock bound would only flip
+ * a session we know by name to its directory name, for no informational gain.
+ *
+ * The carried `displayTitle` is LOAD-BEARING, not decoration: the official
+ * ladder reads `displayTitle` FIRST (`session-display.ts`) and `derive.ts`
+ * feeds the row's value back into the same ladder, so carrying only `title`
+ * would still render the incoming derived basename; when the previous row has
+ * none, the carried title becomes the display title.
+ */
+export function retainSessionLabels(
+  previous: readonly SessionRow[] | undefined,
+  next: SessionRow[],
+): SessionRow[] {
+  if (previous === undefined || previous.length === 0 || next.length === 0) return next
+  const byId = new Map(previous.map(row => [row.sessionId, row]))
+  let carried = false
+  const merged = next.map(row => {
+    if (typeof row.title === 'string' && row.title !== '') return row
+    const prev = byId.get(row.sessionId)
+    if (prev === undefined) return row
+    const title = prev.title
+    if (typeof title !== 'string' || title === '') return row
+    // Durable new activity ends the carry (see BOUND above): the authority has
+    // re-read this session and still serves no title.
+    if (typeof prev.updatedAt === 'number' && typeof row.updatedAt === 'number'
+      && row.updatedAt > prev.updatedAt) return row
+    carried = true
+    // The incoming row has no durable title, so its own `displayTitle` is a
+    // DERIVED label (cwd basename / id) — never keep it: it would shadow the
+    // carried title in the official ladder (`displayTitle ?? title ?? ...`).
+    const prevDisplayTitle = prev.displayTitle
+    const displayTitle = typeof prevDisplayTitle === 'string' && prevDisplayTitle !== ''
+      ? prevDisplayTitle
+      : title
+    return {
+      ...row,
+      title,
+      displayTitle,
+      // Sparse: only a previously observed active schedule is restored, and only
+      // inside the same transient that lost the title.
+      ...(prev.hasActiveSchedule === true ? { hasActiveSchedule: true as const } : {}),
+    }
+  })
+  return carried ? merged : next
 }
 
 /**

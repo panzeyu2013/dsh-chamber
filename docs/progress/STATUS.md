@@ -399,3 +399,7 @@
 - App.tsx 未拆簇（R7）：boot/bridge/roster 簇风险不值；渲染树与 selectors 可后续搬。
 - host 域接线仍逐域手写（R14 b 方案未做）：由 `host-domain-wiring-lockstep.test.ts` ①a–⑥b lockstep 用例兜底。
 - 第三类 vendor 补丁准入（维护者裁决）：`ui-chat` `use-chat-reading.ts` settle 回贴；取舍 = 24px 内微调也回贴；上游修复后删除（登记 design 09 §3.6、触点表 §3、C9 门）。
+- **会话投影事实（标签 + 稀疏日程标记）跨代际保留的取舍（design 05 §2.3）**：连接代际变化时 vendor 清空会话投影 store，
+  会话**名**与稀疏 `hasActiveSchedule` 由 `retainSessionLabels` 同瞬时保留（0.6–0.8s 窗口对远程源可见）；
+  硬边界 = 行 `updatedAt` 前进（宿主已重读仍无 title）即停止携带——休眠行保留最后已知事实、不设墙钟上限
+  （换目录名信息量更差）。

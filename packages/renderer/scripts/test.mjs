@@ -152,6 +152,9 @@ export const GROUPS = {
   wiring: [
     // P2 单一权威链接线锁：一个策略所有者、一个执行端、App 无第二 planner。
     'test/wiring/session-authority-wiring.test.ts',
+    // 会话投影事实（标签 + 稀疏日程标记）跨代际保留（代际清空窗口 / unary 弱标签）：
+    // 规则只有一处定义，推送与 unary 两处提交点都必须经过它。
+    'test/wiring/session-label-retention-wiring.test.ts',
     // 遮罩层叠不变量（P0 租客边界 / P1 遮罩期隐藏 / P2 过渡作用域 / P3 揭幕信号）。
     'test/wiring/veil-layering-invariants.test.ts',
     // P4 源注册表接线：指纹只在 roster 刷新处换代，事件只带 epoch，退役即出表。

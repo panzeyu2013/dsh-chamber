@@ -285,6 +285,25 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   验证时保留断言等于陈述一个没有证据的事实，而清位 + 可见提示是「不知道」的诚实表达，且恢复路径
   无条件幂等；已知残余 = 宿主其实仍在跑、只是读路径坏掉时用户会暂时看不到运行环（由横幅的
   「重新加载」收口；「重新连接」只对仍持有壳的来源有效——已回收来源的该出口是 no-op，见 STATUS ⑭）。
+- **会话投影事实跨代际保留（标签 + 稀疏日程标记；2026-10 实机修复）**：连接代际变化（陈旧重连臂 / 权威 ladder / 宿主侧断开 /
+  崩溃重载）都会让 pinned 客户端执行 `handleConnected()` 并 `clear()` 每个会话的投影 store；在
+  `session/list` 回包重放 `title` 之前，生产端行缺 `title`，官方标签阶梯退到 cwd basename（实测
+  远程 SSH/gateway 源目录名闪现 0.6–0.8s；本地 loopback 的该窗口 ≈ 本地 `session/list` 往返，控制面同路径实测 p50 ≈ 92ms、p95 ≈ 130ms（n=30））。提交面用一条规则
+  兜底（`packages/renderer/src/aggregate-refresh.ts` 的 `retainSessionLabels`）：非空 incoming
+  `title` 恒胜、无前值或前值无 title 则原样、行消失即回收；两处提交（推送提交
+  `app-hooks/use-bridge-subscriptions.ts` + unary 提交 `app-hooks/use-aggregate-refresh.ts`）共用，
+  既覆盖代际清空窗口，也覆盖 unary 兜底行未带 title 的弱标签（已回收来源没有 producer 会来恢复）。
+  只丢了标签的降级推送与 current 逐字节相同，被签名去重门整条吃掉（不重渲染）；其它字段同时缺席时仍会提交一次
+  重渲染，但标签保持正确。**同瞬时的 schedule 标记**：投影 store 清空会同时丢 `hasActiveSchedule`，该稀疏标记随同一次
+  「title 缺席」一并携带——真正的 schedule 结束必带 title（命中「新 title 恒胜」的早退），因此绝不会被错保。**硬边界
+  （无定时器、无状态）**：行 `updatedAt` 比上一份前进即视为宿主已重读该会话仍无 title，携带立即停止（回落官方派生
+  标签）；无前进的休眠行保留最后已知事实，直到重新见到 title / 行退役 / 整页重载——墙钟上限只会把已知名字换成目录名，
+  信息量更差。vendor 清空行为本身不改（新代际作废旧投影是其既有语义）。**Rejected alternatives**：
+  ① 放宽/关闭重连臂——代际变化有多个独立来源（陈旧臂 300s、权威 ladder 190s、宿主/网络断开、崩溃重载、
+  隐藏唤醒），治不了根；② 改 vendor session controller 不清 store——不在本仓 fork 面，须走 vendor 补丁/
+  注册表/deviation 流程，面远大于收益；③ 只在 UI 行内记名——状态散在视图层，且搜索/待办/悬浮卡/
+  归档管理器同吃一份投射；④ producer 侧记名（`retainGoalFacts` 式）——能省掉一次推送计算，但只覆盖已挂载来源，
+  已回收/未推送来源没有 producer，unary 弱标签会永久停留（「标签是唯一差异」时的零提交已由 App 层内容签名门等价拿回）。
 - **首屏基线收割（`packages/renderer/src/baseline-harvest.ts`）**：首启仅 local 挂载 + 1 个不轮转预热槽、被回收来源点击前禁预热 ⇒ N-1 个 ready 远程源稳态停留在 unary 兜底视图（合成 cwd 分组 + 空归档集），自愈臂均要求 `mounted===true`（至少推过一次快照）。收割把这类来源在同一后台预热槽挂一次，首个权威推送（真实分组 + 归档集，`archiveSetKnown:true`）后即回收，转入"已回收来源"态（保留权威聚合，会话行由 30s unary merge 刷新）。纪律：收割候选优先于普通预热且不受"回收后禁预热"抑制；每源尝试上限 2 次、失败退避 120s、挂载后 `BOOT_TIMEOUT_MS+15s` 无推送且壳已 settle 判失败并释放槽位（截止值由 `boot-budget.ts` 的 boot 预算推导且高于它）；`HARVEST_ABANDON_MS`（截止值 + boot 预算）为绝对放弃上限：壳始终不 settle（挂死的 loader/fetch）时回收并停用该源（`harvestParked`）。语义边界：回收只拆**已注册**壳；从未注册的 boot 只能自行 settle 时拆除（页面生命周期内可残留），同 id 后续挂载不受影响（shell.ts 对"上一代 boot"的等待有 boot 预算上限）。同一上限也独立看管"在途挂载"（按挂载时刻、仅未 settle 的挂载，不依赖收割意图；已 settle 者仍走截止臂）。同 id boot 尾从不提前释放（generation 记录持有者，提前释放会致同号注册覆盖）；改由 shell.ts 对"等待上一代 boot"设绝对上限（前代起始 + 两个 boot 预算，后继共享同一截止）；producer 注册表按代际栅栏（`chamberBootGeneration` 经 ctx 注入），迟到的老 boot 注册作废，teardown 不能清空健康后继通道。活动/待开视图不可回收——标记失败，让既有失败覆盖层与「重试」出现；在途壳不计入 retention 隐藏壳数。存在任一收割候选时，候选集独占后台槽（`prewarmCandidates` 只返回收割候选且返回全部候选，含排在退避候选之后的"退避已满"者）；尝试耗尽且从未拿到基线的源（`harvestParked`）不得退回普通预热；托管 dsh 终态停机或瞬态 starting/restarting 的 gateway 源（投影事实 `managedRuntimeUnusable`）不预热/不收割（boot 必然 503）；用户点开正在收割的视图 = 采用（撤销收割意图，绝不回收）；来源退役时账本同源收敛。稳态 ≤1 个后台壳（含预热）。**收割独立预算线**：温壳使普通预热槽位预算恒为 0（retention 只保 1 个隐藏壳），收割壳不受其约束；代价是最坏多一个隐藏壳（用户温壳 + 收割壳）在收割窗口内共存。**代价与已知取舍**：首启每个 ready 来源各付一次后台 boot（N 次，串行于全局 boot 链，最坏受 60s boot 预算约束）；最后收割的壳保留为温壳（不额外付预热 boot，挂载期状态事实 pending/完成点保持在线），但遇到新收割候选必须**让位**（`shouldReclaimHarvestedShell`）——否则它作为 `autoPrewarmed` 占住唯一槽位（`remaining` 恒 0）。
 - **未挂载来源的 unary 兜底表达不了"空工作区"**（修订，§2.2.1）：`fetchInstanceSnapshot` 只调 `session.list`，工作区分组由会话 cwd 反推（`__cwd__:` 合成行），刚建好、无会话的工作区在结构上不可见；已推送来源更彻底：聚合保留 pushed 工作区集（mounted merge），`planAggregateRefreshes` 只刷新"刚 ready"或"从未推送过"的来源，对它连 unary 轮询都不再发生。根因是**读通道缺失**：权威工作区集合只存在于挂载壳的 `workspace/follow` 基线（宿主把 `upsert` 广播给所有活跃 follower），chamber 补法是用户那次创建的回声（§2.2.1）——不新增 wire 读通道，也不把工作区事实搬进控制面。
 - **本修订的代码落点**：`packages/dsh-chamber-client-core/src/open-intent.ts`（意图槽 + 投影/揭示纯规则）、`packages/dsh-chamber-client-core/src/aggregate-store.ts`（桥接单例 + 回声事实通道：`WorkspaceCreatedFact`/`reportWorkspaceCreated` 等）、`packages/dsh-chamber-client-core/src/workspace-echo.ts`（回声账本 + union/去重/锚点插入纯规则）、`packages/dsh-chamber-client-core/src/workspace-placement.ts`（**pre-create 位置意图**账本：只搬权威行、只搬列表头部那一行、四条退场路径 + TTL）、`packages/renderer/src/host/servers.ts`（同一汇合点串 `withWorkspacePlacements`，投影缓存键覆盖该账本）、`packages/dsh-chamber-client-core/src/workspace-mutations.ts`（**唯一事实出口**：create/delete/rename 的 wire 调用与回声事实 第二入口收口）、`.../src/client/early-open.ts`（boot 期早开臂）、`.../src/client/index.ts`（每个 ctx 挂一次早开臂）、`.../src/client/SidebarRoot.tsx`（三个变更点经唯一出口，自身不再直接上报）、`packages/dsh-chamber-client-ui-git/src/shared/coordinator.ts`（Git create / adopt / recovery 经唯一出口；create 带位置锚点，flag/未注册块由 beforePublish 装饰）、`packages/renderer/src/App.tsx`（arm/release、账本与退休含锚点、投影门、揭示门判定、holdVeil 传入）、`packages/renderer/src/components/InstanceView.tsx`（遮罩合成）、`packages/renderer/src/shell.ts`（被取代请求的丢弃：`lastRequestedSession`）。

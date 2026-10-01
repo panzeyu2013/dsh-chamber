@@ -6,7 +6,7 @@
  */
 import { useCallback, useEffect, type Dispatch, type SetStateAction } from 'react'
 import type { SetLedgerView } from '@dsh-chamber/dsh-stream-state'
-import { planSessionListRefresh, shouldRequestSessionListRefresh } from '../aggregate-refresh.ts'
+import { planSessionListRefresh, retainSessionLabels, shouldRequestSessionListRefresh } from '../aggregate-refresh.ts'
 import { harvestPending, harvestSatisfied, shouldReclaimHarvestedShell, type HarvestRecord } from '../baseline-harvest.ts'
 import {
   deliveryMatchesCurrentSource, routeDeepLinkActivation, SourceOwnershipRegistry,
@@ -763,9 +763,14 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
       }
       setAggregates(prev => {
         const current = prev[sourceId]
+        // 代际清空窗口（vendor clear 投影 store）里缺 title 的行不得回退已知投影事实（标签 + 稀疏
+        // schedule 标记；规则与硬边界见 retainSessionLabels）。只丢这些事实的推送与 current 内容签名相同，被去重门吃掉。
+        const retained = current !== undefined && current.state === 'ok'
+          ? { ...snapshot, sessions: retainSessionLabels(current.sessions, snapshot.sessions) }
+          : snapshot
         if (current !== undefined && current.state === 'ok'
-          && instanceSnapshotSignature(current) === instanceSnapshotSignature(snapshot)) return prev
-        return { ...prev, [sourceId]: { state: 'ok', ...snapshot, error: null } }
+          && instanceSnapshotSignature(current) === instanceSnapshotSignature(retained)) return prev
+        return { ...prev, [sourceId]: { state: 'ok', ...retained, error: null } }
       })
       // 收割完成：该源的首个挂载推送就是权威基线，标记已满足并立即回收后台壳；非收割
       // 挂载的推送同样满足基线需求——不标记会让已推送过的源在回收后又被收割白 boot 一次。
