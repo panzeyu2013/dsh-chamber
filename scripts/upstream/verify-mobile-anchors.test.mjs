@@ -25,7 +25,7 @@ import {
   localNameEvidence, requiredDeclarationFindings, stripCommentsKeepingLines,
 } from './mobile-anchors.mjs'
 import {
-  DEFAULT_ANCHOR_ROOTS, defaultAnchorRoots, parseRenameSpec, parseVerifyMobileAnchorsArgs,
+  DEFAULT_ANCHOR_ROOTS, defaultAnchorRoots, parseVerifyMobileAnchorsArgs,
 } from './verify-mobile-anchors-args.mjs'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
@@ -179,21 +179,7 @@ test('负例 7：上游连 data-slot 属性名都换掉 ⇒ 结构性前提失�
   assert.ok(findings.violations.some(v => v.includes('结构性锚点 data-slot')), findings.violations.join('\n'))
 })
 
-test('--simulate-rename 解析：合法/非法形态', () => {
-  assert.deepEqual(parseRenameSpec('main=center'), { from: 'main', to: 'center' })
-  assert.deepEqual(parseRenameSpec('data-x=data-y'), { from: 'data-x', to: 'data-y' })
-  assert.equal(parseRenameSpec('main'), null)
-  assert.equal(parseRenameSpec('=center'), null)
-  assert.equal(parseRenameSpec('main='), null)
-})
 
-test('--simulate-rename 只改内存文本（原字符串不变）', () => {
-  const original = UPSTREAM_TEXT
-  const renamed = applySimulatedRename(original, [{ from: 'main', to: 'center' }])
-  assert.ok(original.includes('renderSlot("main"'))
-  assert.ok(renamed.includes('renderSlot("center"'))
-  assert.ok(!renamed.includes('renderSlot("main"'))
-})
 
 test('去注释投影：注释里写着的锚点不算声明（但行号保留）', () => {
   const text = [

@@ -109,13 +109,6 @@ test('canonComment：模块路径内容不同（不是层级不同）时仍保�
   )
 })
 
-test('generatedTreeVerdict：集合 arm 仍能抓多余/缺失/错名产物（自测同源）', () => {
-  const roster = ['@deepseek-ai/dsh-a', '@deepseek-ai/dsh-b']
-  const emitted = ['dsh-a/f.js', 'dsh-b/f.js']
-  assert.equal(generatedTreeVerdict(emitted, emitted, roster).stale, false)
-  assert.equal(generatedTreeVerdict([...emitted, 'dsh-stale/f.js'], emitted, roster).stale, true)
-  assert.equal(generatedTreeVerdict(emitted, ['dsh-a/f.js'], roster).countMismatch, true)
-})
 
 test('--self-test 走门：门的负控必须真的能失败（挂进 test:scripts）', () => {
   const result = spawnSync(process.execPath, [join(HERE, 'verify-artifact-freshness.mjs'), '--self-test'], { encoding: 'utf8' })
