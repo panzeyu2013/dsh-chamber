@@ -77,10 +77,13 @@ Environment:
   DSH_GATEWAY_WARMUP
                       0/false disables the login-phase bundle pre-warm
                       (design 17 §10.6); 1/true or unset keeps it ON
-  DSH_GATEWAY_{HOST,PORT,DSH_PORT,PASSWORD,TOKEN,PUBLIC_ORIGIN,TRUSTED_PROXIES,TLS_CERT,TLS_KEY}
+  DSH_GATEWAY_{HOST,PORT,DSH_PORT,PASSWORD,TOKEN,PUBLIC_ORIGIN,TRUSTED_PROXIES}
                       env twins of --host / --port / --dsh-port / --ui-password /
-                      --api-token / --public-origin / --trusted-proxy / --tls-cert /
-                      --tls-key (the password twin keeps the secret out of argv)
+                      --api-token / --public-origin / --trusted-proxy (the password
+                      twin keeps the secret out of argv)
+  DSH_GATEWAY_TLS_CERT / DSH_GATEWAY_TLS_KEY
+                      env-only: the HTTPS server is not implemented yet — setting
+                      either fails startup closed (terminate TLS at a reverse proxy)
   DSH_GATEWAY_SESSION_STATE
                       0/false disables the read-only session-state routes
                       (--no-session-state); 1/true or unset keeps them ON

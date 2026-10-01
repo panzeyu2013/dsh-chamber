@@ -338,6 +338,23 @@ test('an explicit mobile-UA opt-in prints the deprecation warning once, never th
     'the deprecation notice must print once per process, not per parse: ' + result.stderr)
 })
 
+test('a rejected mobile entry fails before the deprecation notice prints', () => {
+  // Order lock: validation runs first, so a bad entry must NOT print the
+  // one-time notice (it would push the real config error into second place).
+  const configUrl = new URL('../../src/config.ts', import.meta.url).href
+  const script = 'const { parseGatewayConfig } = await import(' + JSON.stringify(configUrl) + ');'
+    + 'try { parseGatewayConfig({ mobileUaRedirect: true, mobileEntryPath: "/auth/login" }, "/tmp/state", "/tmp/dsh"); }'
+    + 'catch (error) { console.log(String(error.message)); }'
+  const result = spawnSync(process.execPath, ['--input-type=module', '--eval', script], {
+    encoding: 'utf8',
+    timeout: 10_000,
+    env: { ...process.env, DSH_GATEWAY_MOBILE_UA_REDIRECT: '' },
+  })
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /must not target the auth surface/)
+  assert.doesNotMatch(result.stderr, /deprecated/, 'validation must run before the one-time notice')
+})
+
 test('login-phase pre-warm defaults ON; input and DSH_GATEWAY_WARMUP can turn it off', () => {
   // Design 17 §10.6: the switch defaults ON (the login page's prefetch is the
   // feature); --no-warmup maps to input.warmup === false, the env is the

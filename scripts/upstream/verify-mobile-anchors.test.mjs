@@ -120,6 +120,14 @@ function run({ text = UPSTREAM_TEXT, pluginText = PLUGIN_TEXT, chamberFiles = ch
   })
 }
 
+test('applySimulatedRename：非空替换改内存文本且不改原串', () => {
+  const renamed = applySimulatedRename(UPSTREAM_TEXT, [{ from: 'main', to: 'center' }])
+  assert.ok(renamed.includes('renderSlot("center"'))
+  assert.ok(!renamed.includes('renderSlot("main"'))
+  assert.ok(UPSTREAM_TEXT.includes('renderSlot("main"'), 'the original text must stay untouched')
+})
+}
+
 test('基座：合成语料双向差集为空（门的正例）', () => {
   const findings = run()
   assert.deepEqual(findings.violations, [])

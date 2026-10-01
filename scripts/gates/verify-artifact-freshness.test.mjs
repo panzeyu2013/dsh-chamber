@@ -21,7 +21,7 @@ import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import {
-  MODULE_COMMENT_LINE, canonComment, canonRungs, generatedTreeVerdict, summarizeResults,
+  MODULE_COMMENT_LINE, canonComment, canonRungs, summarizeResults,
 } from './verify-artifact-freshness.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))

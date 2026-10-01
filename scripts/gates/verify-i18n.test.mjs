@@ -122,6 +122,15 @@ test('非 write 分支：哈希记录最新但结构不对等（镜像少一节�
   assert.match(red.stderr, /结构不对等/, '非 write 分支此前只看 drifted，结构残缺可以一路绿')
 })
 
+test('双语 README 缺 sidecar：发现面必须硬失败，不静默跳过', t => {
+  // 发现面只枚举「已存在」的 sidecar 时，删掉一份记录就能让整对静默失去校验。
+  const root = makeFixture(t, { sidecars: {}, readmes: { 'packages/pair/README.md': '# Title\n', 'packages/pair/README.zh.md': '# 标题\n' } })
+  const red = run(root)
+  assert.equal(red.status, 1, red.stdout + red.stderr)
+  assert.match(red.stderr, /双语 README 缺 README\.i18n\.yaml/)
+  assert.match(red.stderr, /packages\/pair\/README\.md/)
+})
+
 test('write 分支：sidecar 记录指向不存在的文件也必须 exit 1（不得静默重录）', t => {
   const root = makeFixture(t, { sidecars: { ghost: 'README.md: ' + sha256('whatever') + '\n' } })
   const written = run(root, ['--write'])

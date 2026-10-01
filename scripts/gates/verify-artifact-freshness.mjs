@@ -195,7 +195,7 @@ function checkPreload() {
  * @param {readonly string[]} roster - package names of the C4 contract.
  * @returns {{ added: string[], removed: string[], dirs: string[], expectedDirs: string[], countMismatch: boolean, stale: boolean }}
  */
-export function generatedTreeVerdict(before, after, roster = EXPECTED_MOUNT_PACKAGES) {
+function generatedTreeVerdict(before, after, roster = EXPECTED_MOUNT_PACKAGES) {
   const beforeSet = new Set(before)
   const afterSet = new Set(after)
   const added = after.filter((file) => !beforeSet.has(file))

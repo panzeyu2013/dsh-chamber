@@ -410,6 +410,21 @@ test('覆盖层探查：无覆盖层 INFO；fixed 无位移且溢出 FAIL；位�
 })
 
 
+test('换行：文本元素超过 80 个、扫描被截断 ⇒ INFO（「前 80 个没换行」不是「没有换行」）', () => {
+  const verdict = headerWrapVerdict(headerFacts({ texts: [text()], textsTruncated: true, textsTotal: 120 }))
+  assert.equal(verdict.ok, null, '截断后只能 INFO：未检查的元素可能有换行')
+  assert.match(verdict.evidence, /\[截断\]/)
+  assert.match(verdict.evidence, /120 个带文本元素/)
+  assert.match(verdict.evidence, /扫描截断/)
+  // 截断只限制「通过」这一侧：已扫到的换行仍是确凿事实，照旧红。
+  const wrapped = headerWrapVerdict(headerFacts({ texts: [text({ lineBoxes: 2, height: 40 })], textsTruncated: true, textsTotal: 120 }))
+  assert.equal(wrapped.ok, false)
+  // 没截断时照旧判 PASS。
+  assert.equal(headerWrapVerdict(headerFacts({ texts: [text()], textsTruncated: false })).ok, true)
+  // --require-run 把这条 INFO 改判 FAIL（走查层 addGated）。
+  assert.equal(applyRequireRun(verdict, true).ok, false)
+})
+
 test('换行：纵向 padding 非零的叶子不参与高度启发式（带内边距的单行 chip 不得假红）', () => {
   // box 高 36 = 行高 20 + 上下各 8 的 padding：单行，不是换行。
   const padded = headerWrapVerdict(headerFacts({ texts: [text({ height: 36, lineHeight: 20, paddingTop: 8, paddingBottom: 8 })] }))

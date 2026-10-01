@@ -35,6 +35,12 @@ test('isSectionChipClick: a chip button inside the settings nav resets', () => {
 })
 
 
+test('isSectionChipClick: the nav title (no button ancestor) never resets', () => {
+  const nav = new NodeStub()
+  const target = new NodeStub() // a non-button element: closest('button') is null
+  assert.equal(isSectionChipClick(target, nav), false)
+})
+
 test('isSectionChipClick: a button OUTSIDE the settings nav (Close/actions) never resets', () => {
   const nav = new NodeStub()
   const dialog = new NodeStub()
