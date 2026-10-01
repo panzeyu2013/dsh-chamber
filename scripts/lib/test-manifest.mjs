@@ -8,8 +8,9 @@
  *     through in manifest order (per-file output is buffered and flushed in
  *     declaration order, so a bounded pool never interleaves transcripts);
  *   - at most `jobs` children run at once (file-level parallelism, default
- *     min(4, cores)); `--jobs <n>` / `DSH_TEST_JOBS=<n>` / `--jobs=<n>`
- *     select it — the command line wins over the environment;
+ *     min(DEFAULT_TEST_JOBS, availableParallelism()), i.e. min(8, cores));
+ *     `--jobs <n>` / `DSH_TEST_JOBS=<n>` / `--jobs=<n>` select it — the
+ *     command line wins over the environment;
  *   - the first failure (non-zero exit, signal, spawn error or timeout) ends
  *     the run: no new child starts after a failure is recorded, and the
  *     in-flight rest is cancelled once the failure reaches the ordered flush;
@@ -30,9 +31,9 @@
  */
 
 import { spawn } from 'node:child_process'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { availableParallelism } from 'node:os'
-import { join, relative, sep } from 'node:path'
+import { dirname, join, relative, sep } from 'node:path'
 
 /** node:test summary lines: spec (`ℹ tests N`) and TAP (`# tests N`). */
 const SUMMARY_LINE = /^(?:ℹ|#) (tests|pass|fail|skipped) (\d+)\s*$/gm
@@ -143,6 +144,10 @@ export function manifestLockstepProblems({
   allowlist = [],
   platformSubsetsOfGroups = [],
   ignoredDirectories = MANIFEST_IGNORED_DIRECTORIES,
+  // 有意不列进本清单、但由**另一个声明脚本**直接跑的文件（例如 control-plane 的
+  // test/smoke.test.ts 是根 `smoke` script）。仓级 verify-test-wiring 接受同样的
+  // 接线形态；这里只是不把它误判成 manifest 缺口。
+  standaloneFiles = [],
 }) {
   const problems = []
   const fileOf = (entry) => (typeof entry === 'string' ? entry : entry.file)
@@ -154,7 +159,9 @@ export function manifestLockstepProblems({
   const listed = [...Object.values(groups).flat().map(fileOf), ...Object.values(platformFiles).flat().map(fileOf)]
   const discovered = discoverManifestTestFiles(packageRoot, ignoredDirectories)
   if (discovered.length === 0) problems.push('no test file was discovered — the lockstep assertion would be fooled by an empty set')
-  for (const file of discovered) if (!listed.includes(file)) problems.push('on-disk test file is not listed: ' + file)
+  for (const file of discovered) {
+    if (!listed.includes(file) && !standaloneFiles.includes(file)) problems.push('on-disk test file is not listed: ' + file)
+  }
   for (const file of new Set(listed)) if (!discovered.includes(file)) problems.push('listed test file is missing on disk: ' + file)
   for (const leg of platformSubsetsOfGroups) {
     const full = new Set(Object.values(groups).flat().map(fileOf))
@@ -167,6 +174,88 @@ export function manifestLockstepProblems({
     else if (!existsSync(join(packageRoot, entry.file))) problems.push('allowlist entry is missing on disk: ' + entry.file)
   }
   return problems
+}
+
+/** One path-shaped `*.test.ts|*.test.mjs` reference inside wiring text. */
+const WIRING_PATH_REFERENCE = /(?:[A-Za-z0-9_.@+-]+\/)*[A-Za-z0-9_.@+-]+\.test\.(?:ts|mjs)(?![A-Za-z0-9_.])/gu
+
+/**
+ * Every path-shaped test-file reference inside one command / helper text. Only
+ * the reference text is extracted here; whether it actually WIRES a file is
+ * decided by {@link referenceResolvesToFile} — a bare basename, an `echo`
+ * mention or a substring of another path must not count.
+ * @param {string} text - a script command, a file list entry or helper source.
+ * @returns {string[]} the matched references, in text order.
+ */
+export function wiringPathReferences(text) {
+  const references = []
+  for (const match of String(text ?? '').matchAll(WIRING_PATH_REFERENCE)) references.push(match[0])
+  return references
+}
+
+/** Lexical join + `.`/`..` collapse over '/'- or '\\'-joined segments. */
+function normalizeJoinedPath(base, reference) {
+  const segments = []
+  for (const segment of (String(base) + '/' + String(reference)).split(/[\\/]+/u)) {
+    if (segment === '' || segment === '.') continue
+    if (segment === '..') { segments.pop(); continue }
+    segments.push(segment)
+  }
+  return segments.join('/')
+}
+
+/**
+ * Does one wiring reference name exactly this test file?
+ *
+ * The reference is resolved lexically against the directory that declares it
+ * ('' = the repository root, a package-relative dir for a package manifest or
+ * helper) and compared with the file's own '/'-joined path. This is the ONE
+ * criterion the standalone exemption below and scripts/gates/verify-test-wiring.mjs
+ * share, so a bare basename substring, an `echo` mention and another package's
+ * same-named file can never wire a file they do not name.
+ * @param {string} reference - the reference text (quotes already irrelevant: the
+ *   extractor matches path-shaped substrings).
+ * @param {string} scopeDir - '/'-joined directory the reference is relative to.
+ * @param {string} file - '/'-joined path of the test file the reference must name.
+ * @returns {boolean}
+ */
+export function referenceResolvesToFile(reference, scopeDir, file) {
+  return normalizeJoinedPath(scopeDir, reference) === normalizeJoinedPath('', file)
+}
+
+/**
+ * Test files under `packageRoot` that no manifest lists but a declared script
+ * runs directly. The repo-wide verify-test-wiring gate accepts package- or
+ * root-manifest references; the per-package lockstep in runTestManifest accepts
+ * the same wiring forms so a deliberately standalone file (control-plane
+ * test/smoke.test.ts = the root `smoke` script) is not reported as a manifest
+ * gap.
+ *
+ * A reference only counts when it RESOLVES to this package's own file
+ * ({@link referenceResolvesToFile}): `echo smoke.test.ts`, a basename
+ * substring (`my-smoke.test.ts`) or the root manifest naming another package's
+ * same-named file must not exempt a file the script never runs.
+ * @param {string} packageRoot - absolute package root.
+ * @returns {string[]} package-relative standalone test files.
+ */
+export function standaloneTestFiles(packageRoot) {
+  const references = []
+  for (const manifestPath of [join(packageRoot, 'package.json'), join(packageRoot, '..', '..', 'package.json')]) {
+    let commands
+    try {
+      const scripts = JSON.parse(readFileSync(manifestPath, 'utf8')).scripts ?? {}
+      commands = Object.values(scripts).filter((command) => typeof command === 'string')
+    } catch { continue /* 清单缺失/不可读：该侧不贡献参考 */ }
+    const scopeDir = dirname(manifestPath)
+    for (const command of commands) {
+      for (const reference of wiringPathReferences(command)) references.push({ reference, scopeDir })
+    }
+  }
+  if (references.length === 0) return []
+  return discoverManifestTestFiles(packageRoot).filter(relativePath => {
+    const file = join(packageRoot, relativePath)
+    return references.some(({ reference, scopeDir }) => referenceResolvesToFile(reference, scopeDir, file))
+  })
 }
 
 export function resolveJobs(argv = [], env = process.env) {
@@ -708,6 +797,25 @@ export async function runTestManifest({
     process.exit(1)
   }
 
+  // Lockstep over the REAL package root (cheap directory walk): a manifest that
+  // forgot an on-disk test file, lists a ghost, duplicates a file or names a leg
+  // outside GROUPS is refused before anything spawns. Same verdict the packages'
+  // own guards used to duplicate; running it here makes runTestManifest — hence
+  // every package and the tests-mode dump — fail closed on a drifted manifest.
+  const lockstep = manifestLockstepProblems({
+    packageRoot,
+    groups,
+    platformFiles,
+    allowlist: zeroTestAllowlist,
+    platformSubsetsOfGroups: allowPlatformFilesOutsideGroups ? [] : Object.keys(platformFiles),
+    standaloneFiles: standaloneTestFiles(packageRoot),
+  })
+  if (lockstep.length > 0) {
+    console.error(`[test] ${label}: manifest lockstep against ${packageRoot} failed:`)
+    for (const problem of lockstep) console.error('  - ' + problem)
+    process.exit(1)
+  }
+
   const entries = collectEntries(runGroups)
   const missing = entries.filter(entry => !existsSync(join(packageRoot, entry.file)))
   if (missing.length > 0) {
@@ -734,7 +842,10 @@ export async function runTestManifest({
     return
   }
 
-  let resolvedJobs
+  // The explicit override (tests that want a deterministic pool width) wins over
+  // --jobs/DSH_TEST_JOBS: before this, `jobs` was accepted but never read, so a
+  // caller's override silently degraded to the CLI/env resolution.
+  let resolvedJobs = jobs
   if (resolvedJobs === undefined) {
     const resolution = resolveJobs(argv, env)
     if ('error' in resolution) {

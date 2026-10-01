@@ -9,10 +9,14 @@
  *   may legitimately be wired by the root manifest (`packages/control-plane/
  *   test/smoke.test.ts` is the root `smoke` script), so root references count
  *   for every package.
- * - Matching accepts the package-relative path, the root-relative path, or the
- *   bare basename, because the repository wires tests in all three forms
- *   (`node ./scripts/test.mjs` file lists, `node test/x.test.ts` chains, and
- *   `node packages/<pkg>/test/x.test.ts` root scripts).
+ * - A reference only counts when it RESOLVES to the file: a path-shaped token
+ *   (a script argument or a quoted file-list entry) is resolved against the
+ *   scope that declares it — the package dir for package evidence, the repo
+ *   root for root evidence — and compared with the file's own path. The
+ *   criterion is the shared one in `scripts/lib/test-manifest.mjs`
+ *   (`referenceResolvesToFile`), so the standalone exemption in the package
+ *   lockstep and this gate can never drift. A bare basename substring, an
+ *   `echo` mention or another package's same-named file does not wire.
  * - An empty corpus is a failure: a gate that scans nothing has not passed.
  *
  * Usage:
@@ -23,6 +27,10 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+// ONE wiring criterion for the repo-wide gate and the per-package lockstep
+// (scripts/lib/test-manifest.mjs): a reference wires a file only when it
+// RESOLVES to that file's own path.
+import { referenceResolvesToFile, wiringPathReferences } from '../lib/test-manifest.mjs'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
@@ -308,6 +316,14 @@ export function wiringEvidence(repoRoot, testFiles) {
 
 /**
  * Decide which test files no script reaches.
+ *
+ * A file is wired when a path-shaped reference in one of its scopes resolves to
+ * it: the owning package's evidence (package manifest scripts + helper sources,
+ * resolved against `packages/<pkg>`) or the root evidence (root manifest
+ * scripts + declared entry points, resolved against the repository root). The
+ * criterion is shared with the package lockstep in scripts/lib/test-manifest.mjs
+ * — a bare basename substring, an `echo` mention or another package's
+ * same-named file does not wire.
  * @param {object} input - collected inputs.
  * @param {string[]} input.testFiles - repository-relative test file paths.
  * @param {{ root: string, byPackage: Map<string, string> }} input.evidence - wiring texts.
@@ -323,12 +339,14 @@ export function findUnwiredTests({ testFiles, evidence, allowlist = UNWIRED_ALLO
       allowlisted.push(file)
       continue
     }
-    const base = file.split('/').pop() ?? file
     const segments = file.split('/')
-    const packageText = segments[0] === 'packages' ? evidence.byPackage.get(segments[1]) ?? '' : ''
-    const matches = (text) => text !== '' && (text.includes(file) || text.includes(base))
-    if (matches(evidence.root) || matches(packageText)) continue
-    unwired.push(file)
+    const scopes = [{ text: evidence.root, scopeDir: '' }]
+    if (segments[0] === 'packages' && segments.length > 2) {
+      scopes.push({ text: evidence.byPackage.get(segments[1]) ?? '', scopeDir: 'packages/' + segments[1] })
+    }
+    const wired = scopes.some(({ text, scopeDir }) => text !== ''
+      && wiringPathReferences(text).some(reference => referenceResolvesToFile(reference, scopeDir, file)))
+    if (!wired) unwired.push(file)
   }
   return { unwired, allowlisted, corpusSize: testFiles.length }
 }

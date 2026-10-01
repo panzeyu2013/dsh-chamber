@@ -42,6 +42,13 @@ export const GROUPS = {
   gates: [
     'scripts/gates/classify-ci-changes.test.mjs',
     'scripts/gates/run-checks.test.mjs',
+    // Artifact freshness: the canonComment negative control (a template-literal
+    // content line must NOT be normalized away, or a stale bundle slips through)
+    // plus the gate's own --self-test, which had no automated caller before.
+    'scripts/gates/verify-artifact-freshness.test.mjs',
+    // Bilingual sidecar discovery: indented en:/zh: records and the 40-hex git
+    // blob form are parsed and verified (the empty-corpus blind spot).
+    'scripts/gates/verify-i18n.test.mjs',
     'scripts/gates/run-script-tests.test.mjs',
     'scripts/gates/run-swift-tests.test.mjs',
     'scripts/gates/verify-md-links.test.mjs',
