@@ -9,7 +9,10 @@
  * > keyed [data-slot="main"], the rightbar column [data-rightbar-col] with its
  * docking [data-slot="rightbar"] outlet, and [data-slot="shell.overlay"]; the
  * main key's conversation renders div[data-phase] >
- * [data-slot="conversation.session.header"] > <header>.
+ * [data-slot="conversation.header"] (the outlet wrapper, display:contents) >
+ * <header> > [data-slot="conversation.session.header"] (a second, nested
+ * outlet; titleRow/tabs are its children) — the session outlet sits INSIDE
+ * <header>, not above it.
  *
  * Re-stamp contract: idempotent, and must converge whenever a root slot, a
  * frame, a column shell, or a slot OUTLET inside a resident column shell can
@@ -23,6 +26,12 @@ export const MOBILE_ROLE_ATTR = 'data-mobile-role'
 /** The roles the probe found on the stamped frame (space-separated). A frame
  *  carrying it always carries the conversation role (see stampFrame). */
 export const MOBILE_ROLES_ATTR = 'data-mobile-roles'
+/** The drawer background lock's OWNERSHIP mark (drawer-a11y.ts): the lock
+ *  writes it beside every inert attribute it sets, retracts only MARKED inert,
+ *  and withdrawStamps clears both in the same pass that drops the role
+ *  attribute — after that the lock's role-scoped query can no longer find the
+ *  node. */
+export const MOBILE_INERTED_ATTR = 'data-mobile-inerted'
 
 export type MobileColumnRole = 'sidebar' | 'conversation' | 'details'
 
@@ -44,6 +53,11 @@ export interface ElementLike {
   getAttribute(name: string): string | null
   hasAttribute(name: string): boolean
   querySelectorAll(selector: string): ArrayLike<ElementLike>
+  /** Attribute removal is OPTIONAL on this minimal face: the real DOM Element
+   *  always exposes it, while a plain-node double only carries it where the
+   *  withdraw path is exercised. Clearing a stale stamp below is therefore
+   *  capability-guarded. */
+  removeAttribute?(name: string): void
 }
 
 /** The extra face the re-stamp predicate needs: a parent chain and selector
@@ -78,6 +92,42 @@ export function findColumn(frame: ElementLike, slot: string): ElementLike | null
   return null
 }
 
+/** Remove one stamp when the element exposes attribute removal (the real DOM
+ *  always does; a minimal double may not — capability-guarded, see
+ *  ElementLike.removeAttribute). */
+function removeStamp(element: ElementLike, name: string): void {
+  if (!element.hasAttribute(name)) return
+  element.removeAttribute?.(name)
+}
+
+/** Withdraw an adaption: the frame stamps plus every role attribute inside the
+ *  frame — and, in the same pass, the drawer lock's marked inert writes on
+ *  those nodes (see MOBILE_INERTED_ATTR). querySelectorAll never includes the
+ *  frame itself, so it is handled explicitly. Called when the all-or-nothing
+ *  probe fails after an earlier successful stamp — the overlay entries gate on
+ *  data-mobile-roles, so a stale stamp would keep a dead toggle/backdrop alive
+ *  over a layout the plugin no longer adapts. */
+function withdrawStamps(frame: ElementLike): void {
+  removeStamp(frame, MOBILE_FRAME_ATTR)
+  removeStamp(frame, MOBILE_ROLES_ATTR)
+  const stamped = frame.querySelectorAll(`[${MOBILE_ROLE_ATTR}]`)
+  for (let index = 0; index < stamped.length; index += 1) {
+    const element = stamped[index]
+    if (element === undefined) continue
+    // The withdrawal is TOTAL for this plugin's own writes: once the role
+    // attribute goes, the drawer lock's role-scoped query can no longer find
+    // this node, so an inert written by that lock must be retracted HERE, with
+    // its ownership mark. A drawer-open withdraw would otherwise leave the
+    // old conversation column permanently inert. Only marked nodes are
+    // touched: an inert attribute written by any other code stays.
+    if (element.hasAttribute(MOBILE_INERTED_ATTR)) {
+      removeStamp(element, 'inert')
+      removeStamp(element, MOBILE_INERTED_ATTR)
+    }
+    removeStamp(element, MOBILE_ROLE_ATTR)
+  }
+}
+
 /**
  * Stamp the frame and columns (idempotent; returns the stamped frame, or null
  * when the frame is not adapted).
@@ -86,7 +136,10 @@ export function findColumn(frame: ElementLike, slot: string): ElementLike | null
  * conversation column is pinned by its own data-mobile-role. If upstream
  * renames the centre key, the lock would still apply and CSS Grid would drop
  * the transcript into the 0px first track — a silently blank conversation.
- * Refusing to stamp anything degrades to the official narrow layout instead.
+ * Refusing to stamp anything degrades to the official narrow layout instead,
+ * and withdraws any stamp an earlier successful probe left behind (a stale
+ * frame/role stamp would keep the grid lock and the overlay entries acting on
+ * a conversation column that no longer exists).
  */
 export function stampFrame(root: ElementLike): ElementLike | null {
   const frame = findFrame(root)
@@ -96,7 +149,10 @@ export function stampFrame(root: ElementLike): ElementLike | null {
     const column = findColumn(frame, ROLE_SLOT_KEYS[role])
     if (column !== null) columns.set(role, column)
   }
-  if (!columns.has('conversation')) return null
+  if (!columns.has('conversation')) {
+    withdrawStamps(frame)
+    return null
+  }
   for (const [role, column] of columns) column.setAttribute(MOBILE_ROLE_ATTR, role)
   frame.setAttribute(MOBILE_FRAME_ATTR, '')
   // Which of the three probe targets the running vendor DOM exposed.

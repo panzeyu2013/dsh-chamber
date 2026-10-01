@@ -8,9 +8,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  MOBILE_INERTED_ATTR,
   findFrame, findColumn, stampFrame, ROLE_SLOT_KEYS,
   isStructuralTarget, isElementNode, shouldRestamp,
 } from '../../src/client/markup.ts'
+import { applyBackgroundInert } from '../../src/client/drawer-a11y.ts'
 import { FakeNode as FakeElement, attach } from '../support/dom-double.ts'
 
 /** The inner [data-slot] outlet container (slot scope outlet). */
@@ -25,6 +27,17 @@ function columnShell(slot: string): FakeElement {
   const col = new FakeElement('div')
   attach(col, outlet(slot))
   return col
+}
+
+/** The shared DOM double predates the withdraw path and carries no
+ *  removeAttribute (the real DOM Element always does), so the test patches the
+ *  capability onto the nodes whose stamps must actually be cleared. */
+function removable<T extends FakeElement>(node: T): T {
+  Object.defineProperty(node, 'removeAttribute', {
+    configurable: true,
+    value(name: string): void { node.attributes.delete(name) },
+  })
+  return node
 }
 
 /** The with-session DOM shape used by the original tests: every column
@@ -114,6 +127,66 @@ test('stampFrame refuses to adapt a frame without the conversation column', () =
   assert.equal(details.getAttribute('data-mobile-role'), null)
 })
 
+test('stampFrame withdraws a previous stamp when a later probe fails', () => {
+  // The probe can fail AFTER a successful adaption (vendor drift or a column
+  // remount): the frame/role stamps written by the first pass must be
+  // withdrawn, or the grid lock and the overlay entries keep acting on a
+  // conversation column that no longer exists.
+  const root = new FakeElement('div')
+  root.setAttribute('data-slot', 'root')
+  const frame = removable(new FakeElement('div'))
+  attach(root, frame)
+  const sidebar = removable(attach(frame, columnShell(ROLE_SLOT_KEYS.sidebar)))
+  const conversation = removable(attach(frame, columnShell(ROLE_SLOT_KEYS.conversation)))
+  const details = removable(attach(frame, columnShell(ROLE_SLOT_KEYS.details)))
+  assert.equal(stampFrame(root), frame)
+  assert.equal(frame.getAttribute('data-mobile-roles'), 'sidebar conversation details')
+  assert.equal(conversation.getAttribute('data-mobile-role'), 'conversation')
+  // The centre key renames: findColumn(ROLE_SLOT_KEYS.conversation) misses.
+  conversation.children[0]?.setAttribute('data-slot', 'main-renamed')
+  assert.equal(stampFrame(root), null)
+  assert.equal(frame.hasAttribute('data-mobile-frame'), false)
+  assert.equal(frame.hasAttribute('data-mobile-roles'), false)
+  assert.equal(sidebar.getAttribute('data-mobile-role'), null)
+  assert.equal(conversation.getAttribute('data-mobile-role'), null)
+  assert.equal(details.getAttribute('data-mobile-role'), null)
+})
+
+test('withdrawStamps clears the drawer lock writes with the role stamps', () => {
+  // Drawer open + lock applied, then the all-or-nothing probe fails. Once the
+  // role attribute is gone the lock's role-scoped query can no longer find
+  // these nodes, so the withdraw pass must retract the MARKED inert itself —
+  // otherwise the old conversation column stays inert after the drawer closes
+  // (or the plugin unmounts).
+  const root = new FakeElement('div')
+  root.setAttribute('data-slot', 'root')
+  const frame = removable(new FakeElement('div'))
+  attach(root, frame)
+  const conversation = removable(attach(frame, columnShell(ROLE_SLOT_KEYS.conversation)))
+  const details = removable(attach(frame, columnShell(ROLE_SLOT_KEYS.details)))
+  assert.equal(stampFrame(root), frame)
+  applyBackgroundInert(root as unknown as ParentNode, true, false)
+  assert.equal(conversation.hasAttribute('inert'), true)
+  assert.equal(conversation.hasAttribute(MOBILE_INERTED_ATTR), true)
+  assert.equal(details.hasAttribute('inert'), true)
+  assert.equal(details.hasAttribute(MOBILE_INERTED_ATTR), true)
+  // The centre key renames: the next probe withdraws every stamp, the lock's
+  // writes included.
+  conversation.children[0]?.setAttribute('data-slot', 'main-renamed')
+  assert.equal(stampFrame(root), null)
+  assert.equal(conversation.hasAttribute('data-mobile-role'), false)
+  assert.equal(conversation.hasAttribute('inert'), false,
+    'the lock write must not outlive the role stamp')
+  assert.equal(conversation.hasAttribute(MOBILE_INERTED_ATTR), false)
+  assert.equal(details.hasAttribute('inert'), false)
+  assert.equal(details.hasAttribute(MOBILE_INERTED_ATTR), false)
+  // The unlock/unmount pass finds no role-scoped node any more and must stay a
+  // silent no-op (no resurrected attribute, no throw).
+  applyBackgroundInert(root as unknown as ParentNode, false, false)
+  assert.equal(conversation.hasAttribute('inert'), false)
+  assert.equal(details.hasAttribute('inert'), false)
+})
+
 // ---------------------------------------------------------------------------
 // Re-stamp predicate (design 17 §18): a slot outlet mounting inside a
 // resident column shell must count as structural, while deep content stays
@@ -171,28 +244,30 @@ test('isStructuralTarget: the same late-outlet shape works for sidebar/conversat
 test('isStructuralTarget: streaming content under the scroll body is NOT structural (streaming filter)', () => {
   const { root } = fullFrame()
   stampFrame(root)
-  // Real conversation depth: outlet > .root[data-phase] > .body >
-  // [data-conversation-scroll] > streamed messages — six hops to the frame.
+  // Real conversation depth (rc.2): the centre column's [data-slot="main"]
+  // outlet wraps the [data-slot="main.conversation"] outlet (both
+  // display:contents wrappers), then the ConversationRoot div[data-phase]
+  // whose direct child is the [data-conversation-scroll] scroll body — so
+  // streamed messages sit >=6 hops below the frame.
   const frame = findFrame(root) as FakeElement
   const conversationCol = frame.children[1]
-  const conversationOutlet = conversationCol.children[0]
+  const mainOutlet = conversationCol.children[0]
+  const conversationOutlet = attach(mainOutlet, outlet('main.conversation'))
   const rootDiv = new FakeElement('div')
   attach(conversationOutlet, rootDiv)
-  const bodyDiv = new FakeElement('div')
-  attach(rootDiv, bodyDiv)
   const scrollBody = new FakeElement('div')
   scrollBody.setAttribute('data-conversation-scroll', '')
-  attach(bodyDiv, scrollBody)
+  attach(rootDiv, scrollBody)
   const streamed = new FakeElement('div')
   attach(scrollBody, streamed)
   const block = new FakeElement('div')
   attach(scrollBody, block)
-  // Streaming nodes sit ≥6 hops below the frame: never structural.
+  // Streaming nodes sit >=5 hops below the column role: never structural.
   assert.equal(isStructuralTarget(streamed), false, 'deep streamed content never matches')
   assert.equal(isStructuralTarget(block), false, 'content directly inside the scroll body never matches')
-  // The CONVERSATION ROOT container mounting under the outlet (three hops to
-  // the column role) IS structural — a resident shell gaining its content
-  // must be re-stamped (bounded walk covers node + 4 ancestors).
+  // The CONVERSATION ROOT container mounting under the two outlets (three
+  // hops to the column role) IS structural — a resident shell gaining its
+  // content must be re-stamped (bounded walk covers node + 4 ancestors).
   assert.equal(isStructuralTarget(rootDiv), true, 'the ConversationRoot mount must re-stamp')
 })
 

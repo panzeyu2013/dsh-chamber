@@ -17,7 +17,7 @@ import {
   STALL_NOTICE_MIN_VISIBLE_PX, STALL_STYLE_TAG,
   STALL_PHASES,
   decideStallNotice, installSessionStallNotice, isRendered, isStallPhase, isStallShape,
-  noticeTopFor, probeStall, sessionStallFace, stallMessageKey,
+  noticeTopFor, probeStall, sessionHeaderElement, sessionStallFace, stallMessageKey,
 } from '../../src/client/session-stall.ts'
 import type { RenderedNodeFace, StallNodeFace } from '../../src/client/session-stall.ts'
 //  the six ladder thresholds now belong to the shared table, so the test reads them
@@ -54,25 +54,31 @@ function renderedInFakes(node: StallNodeFace): boolean {
 
 interface ConversationTree {
   readonly root: FakeNode
+  readonly container: FakeNode
   readonly phase: FakeNode | null
   readonly flow: FakeNode | null
+  /** The outer `conversation.header` outlet wrapping the `<header>`. */
+  readonly wrapper: FakeNode | null
   readonly header: FakeNode | null
   readonly slot: FakeNode | null
 }
 
 /**
  * The empirical conversation shape, straight from markup.ts's DOM map:
- * `[data-slot="main"] > div.root[data-phase] >
- * div[data-slot="conversation.session.header"] > <header>`, with the message
- * column below the same phase node:
  *   root slot > frame > conversation column > main outlet >
- *     .root[data-phase] > (header outlet > header, body > flow > rows).
- * A session-less page renders none of it (the header is session-gated).
+ *     .root[data-phase] > (
+ *       [data-slot="conversation.header"] > <header> >
+ *         [data-slot="conversation.session.header"] (display:contents outlet) >
+ *           title row + tabs,
+ *       body > flow > rows).
+ * Upstream ConversationSessionHeader returns a Fragment, so the OUTLET is a
+ * CHILD of the `<header>` that owns it — never the other way round. A
+ * session-less page renders none of it (the header is session-gated).
  */
 function conversation(options: {
   /** The phase value; `null` omits the phase node entirely. */
   phase?: string | null
-  header?: 'shown' | 'hidden' | 'absent' | 'nested'
+  header?: 'shown' | 'hidden' | 'absent' | 'stale'
   rows?: number
   flow?: boolean
   /** Extra rows outside the flow (must never count). */
@@ -99,20 +105,26 @@ function conversation(options: {
     container = phase
   }
 
+  let wrapper: FakeNode | null = null
   let slot: FakeNode | null = null
   let header: FakeNode | null = null
-  if (options.header !== 'absent') {
+  if (options.header === 'stale') {
+    // The pre-Fragment shape the plugin wrongly assumed: the outlet OWNS the
+    // header. Kept as a negative fixture — closest('header') can never see a
+    // header that is a CHILD of the outlet.
     slot = new FakeNode('div')
     slot.setAttribute('data-slot', 'conversation.session.header')
     attach(container, slot)
-    if (options.header === 'nested') {
-      const wrapper = new FakeNode('div')
-      attach(slot, wrapper)
-      header = attach(wrapper, new FakeNode('header'))
-    } else {
-      header = attach(slot, new FakeNode('header'))
-      if (options.header === 'hidden') header.display = 'none'
-    }
+    header = attach(slot, new FakeNode('header'))
+  } else if (options.header !== 'absent') {
+    wrapper = attach(container, new FakeNode('div'))
+    wrapper.setAttribute('data-slot', 'conversation.header')
+    header = attach(wrapper, new FakeNode('header'))
+    slot = attach(header, new FakeNode('div'))
+    slot.setAttribute('data-slot', 'conversation.session.header')
+    attach(slot, new FakeNode('div')) // the title/crumbs row
+    attach(slot, new FakeNode('div')).setAttribute('role', 'tablist')
+    if (options.header === 'hidden') header.display = 'none'
   }
 
   let flow: FakeNode | null = null
@@ -129,7 +141,7 @@ function conversation(options: {
       attach(column, new FakeNode('div')).setAttribute('data-chat-anchor-key', `stray${index}`)
     }
   }
-  return { root, phase, flow, header, slot }
+  return { root, container, phase, flow, header, slot, wrapper }
 }
 
 /** The end-to-end predicate the installer runs, over one double tree. */
@@ -165,7 +177,8 @@ test('every anchor is an attribute selector — no hashed class, no copy', () =>
   assert.equal(isStallPhase('engaging'), false, 'engaging never reaches data-phase')
   assert.equal(isStallPhase('blank'), false)
   assert.equal(isStallPhase(null), false)
-  assert.equal(SESSION_HEADER_QUERY, '[data-slot="conversation.session.header"] > header')
+  assert.equal(SESSION_HEADER_QUERY, '[data-slot="conversation.session.header"]',
+    'the outlet is the audited anchor: upstream returns a Fragment, so the <header> is its PARENT')
 })
 
 test('the module matches no copy — the official loading key and CJK text stay out of it', () => {
@@ -212,11 +225,27 @@ test('the notice CSS defaults to hidden OUTSIDE the tier and never blocks taps',
   }
 })
 
+test('the notice deducts BOTH landscape safe-area insets from its width', () => {
+  // Scope to the TIER rule (not the media query's own `(max-width: 1023px)`).
+  const ruleStart = STALL_NOTICE_CSS.indexOf(`.${STALL_NOTICE_CLASS} {`, STALL_NOTICE_CSS.indexOf('@media'))
+  assert.notEqual(ruleStart, -1, 'the tier rule must exist')
+  const noticeRule = STALL_NOTICE_CSS.slice(ruleStart, STALL_NOTICE_CSS.indexOf('}', ruleStart))
+  // vw spans the full viewport under viewport-fit=cover, so both notch insets
+  // must leave the width budget — a single-sided deduction still sits under a
+  // landscape notch.
+  const maxWidth = /max-width:[^;]+;/.exec(noticeRule)?.[0] ?? ''
+  assert.match(maxWidth, /env\(safe-area-inset-left,\s*0px\)/, 'the LEFT inset must narrow the notice')
+  assert.match(maxWidth, /env\(safe-area-inset-right,\s*0px\)/, 'the RIGHT inset must narrow the notice')
+  assert.match(maxWidth, /92vw/, 'the width still comes from the (safe-area-inclusive) viewport')
+  assert.match(maxWidth, /26rem/, 'the capped desktop-style width is preserved')
+})
+
 test('the notice copy exists in both dictionaries and adds no other key', () => {
   const keys = Object.keys(zh)
   assert.deepEqual(keys.filter(key => key.startsWith('dsh-chamber.mobile.stall.')), [
     'dsh-chamber.mobile.stall.message',
     'dsh-chamber.mobile.stall.messageFailed',
+    'dsh-chamber.mobile.stall.messageExhausted',
     'dsh-chamber.mobile.stall.action',
     'dsh-chamber.mobile.stall.dismiss',
   ])
@@ -242,7 +271,7 @@ test('stall shape: an active conversation with a displayed header and no rows is
 
 test('stall truth table: hero / unknown / no phase, rows, hidden header, missing flow are NOT stalled', () => {
   assert.equal(shapeOf(conversation({ phase: 'settling' })), true,
-    'settling is a real-session face (value-space assertion; which of its upstream arms can reach here is the header gate\'s business, not this predicate\'s)')
+    'settling is a real-session face (value-space assertion; which of its upstream arms can reach here is the FLOW gate\'s business — see the blank-shape test below — never the header gate\'s)')
   assert.equal(shapeOf(conversation({ phase: 'engaging' })), false,
     'engaging is an internal contract name and never reaches the attribute')
   assert.equal(shapeOf(conversation({ phase: 'blank' })), false, 'the no-conversation face is never a stall')
@@ -258,10 +287,48 @@ test('stall truth table: hero / unknown / no phase, rows, hidden header, missing
     'rows outside the flow prove nothing about the flow')
 })
 
-test('the probe requires the header to be a DIRECT child of its outlet and the phase to be an ANCESTOR of the flow', () => {
-  // A nested header inside the outlet is not the audited grammar.
-  assert.equal(shapeOf(conversation({ header: 'nested' })), false,
-    'only `[data-slot=...] > header` is the audited anchor')
+test('the REAL blank shape (header on screen, no chat flow) fails closed at the flow gate', () => {
+  // The settling/blank arm as the pinned shell renders it: ConversationMainPanel
+  // still mounts its conversation.header slot, but ui-conversation's
+  // DefaultConversationViews returns null while the session is blank
+  // (lib/client.js: `if (session.blank && conversationPhase(...) === "blank")
+  // return null`), so no [data-chat-flow] exists at all. The probe's flow gate —
+  // NOT the header gate — is what excludes this shape; the old attribution
+  // ("the header-visibility gate decides") was wrong.
+  const blank = conversation({ phase: 'settling', flow: false })
+  const header = sessionHeaderElement(blank.root as unknown as Parameters<typeof sessionHeaderElement>[0])
+  assert.ok(header !== null, 'fixture: the blank shell DOES mount the session header')
+  assert.equal(renderedInFakes(header as unknown as StallNodeFace), true,
+    'fixture: and it is visible — a visible header alone must never vouch for a stall')
+  const probe = probeStall(blank.root, { isVisible: renderedInFakes })
+  assert.equal(probe.flowPresent, false, 'the blank shell renders no flow')
+  assert.equal(probe.activeConversation, false)
+  assert.equal(probe.header, null, 'the probe returns its total no-op shape')
+  assert.equal(probe.headerVisible, false)
+  assert.equal(isStallShape(probe), false, 'header in, flow out: fail closed')
+})
+
+test('the header is the outlet\'s <header> ANCESTOR; the stale child shape resolves nothing', () => {
+  // The real (rc.2) shape: header > outlet. The probe resolves through
+  // closest(); the old direct-child combinator would match nothing.
+  const real = conversation()
+  const probe = probeStall(real.root, { isVisible: renderedInFakes })
+  assert.equal(probe.header, real.header, 'the <header> wrapping the outlet is the displayed header')
+  assert.equal(probe.headerVisible, true)
+  assert.equal(
+    sessionHeaderElement(real.root as unknown as Parameters<typeof sessionHeaderElement>[0]),
+    real.header as unknown as HTMLElement,
+  )
+  // The old assumed shape (outlet > header) is header-less: no fallback guess.
+  const stale = conversation({ header: 'stale' })
+  const staleProbe = probeStall(stale.root, { isVisible: renderedInFakes })
+  assert.equal(staleProbe.header, null, 'a header that is a CHILD of the outlet is not the displayed header')
+  assert.equal(staleProbe.headerVisible, false)
+  assert.equal(isStallShape(staleProbe), false)
+  assert.equal(
+    sessionHeaderElement(stale.root as unknown as Parameters<typeof sessionHeaderElement>[0]),
+    null,
+  )
 
   // An active phase elsewhere in the document must not vouch for this flow.
   const cross = conversation({ phase: null })
@@ -273,14 +340,17 @@ test('the probe requires the header to be a DIRECT child of its outlet and the p
   assert.equal(isStallShape(crossProbe), false)
 })
 
-test('a hidden ancestor hides the session header (display:none and visibility:hidden both count)', () => {
-  const hiddenSlot = conversation()
-  if (hiddenSlot.slot !== null) hiddenSlot.slot.display = 'none'
-  assert.equal(shapeOf(hiddenSlot), false, 'the outlet itself may be display:none (blank face)')
+test('a hidden header or wrapper hides the session header (display:none and visibility:hidden both count)', () => {
+  const hiddenHeader = conversation({ header: 'hidden' })
+  assert.equal(shapeOf(hiddenHeader), false, 'the <header> itself may be display:none (blank face)')
 
-  const invisibleSlot = conversation()
-  if (invisibleSlot.slot !== null) invisibleSlot.slot.visibility = 'hidden'
-  assert.equal(shapeOf(invisibleSlot), false, 'a visibility:hidden header is not a presented session')
+  const hiddenWrapper = conversation()
+  if (hiddenWrapper.wrapper !== null) hiddenWrapper.wrapper.display = 'none'
+  assert.equal(shapeOf(hiddenWrapper), false, 'the conversation.header outlet may be display:none (blank face)')
+
+  const invisibleWrapper = conversation()
+  if (invisibleWrapper.wrapper !== null) invisibleWrapper.wrapper.visibility = 'hidden'
+  assert.equal(shapeOf(invisibleWrapper), false, 'a visibility:hidden header wrapper is not a presented session')
 })
 
 test('the render check walks the whole ancestor chain', () => {
@@ -587,14 +657,14 @@ test('a session switch that keeps the phase node still resets (the header node i
     harness.at(mobileTable.thresholdMs)
     assert.ok(harness.notice() !== null)
 
-    // Session B: same phase node, a NEW header element under the same outlet.
-    const slot = tree.slot
-    assert.ok(slot !== null)
+    // Session B: same phase node, a NEW header subtree (the outlet lives
+    // INSIDE the new <header>).
     const oldHeader = tree.header
     assert.ok(oldHeader !== null)
     oldHeader.remove()
-    const replacement = attach(slot, new FakeNode('header'))
-    replacement.rect = { bottom: 120 }
+    const replacementHeader = attach(tree.container, new FakeNode('header'))
+    replacementHeader.rect = { bottom: 120 }
+    attach(replacementHeader, new FakeNode('div')).setAttribute('data-slot', 'conversation.session.header')
     harness.at(mobileTable.thresholdMs + mobileTable.pollMs)
     assert.equal(harness.notice(), null, 'the switched-to session gets its own window')
     harness.at(mobileTable.thresholdMs + mobileTable.pollMs + mobileTable.thresholdMs)
@@ -742,18 +812,89 @@ test('the automatic arm fires only on PROVEN loading-with-no-open, and the share
   // never releases protection on a negative elapsed time.
   const rolled = decideStallNotice({ ...parked, since: first.since, now: at - 3_600_000, records })
   assert.equal(rolled.resync, false, 'a backwards clock step holds the automatic arm')
-  // An unobserved stall ends its episode: the engine's ledger is not carried, so the
-  // next stall starts from a full quota.
+  // An unobserved stall ends its EPISODE (the clock zeroes). The rolling
+  // ledger is carried through the break now — with no records passed the
+  // default is still the empty ledger.
   const broken = decideStallNotice({ ...parked, shape: false, now: at })
   assert.deepEqual(broken.records, {})
 })
 
-test('the notice copy switches to the failure wording after the failure bound', () => {
-  assert.equal(stallMessageKey(0), 'dsh-chamber.mobile.stall.message')
-  assert.equal(stallMessageKey(mobileTable.failedMs - 1), 'dsh-chamber.mobile.stall.message')
-  assert.equal(stallMessageKey(mobileTable.failedMs), 'dsh-chamber.mobile.stall.messageFailed')
-  assert.equal(typeof zh[stallMessageKey(mobileTable.failedMs)], 'string')
-  assert.equal(typeof en[stallMessageKey(mobileTable.failedMs)], 'string')
+test('an unobserved stall keeps the rolling-window ledger (a shape flicker buys no fresh quota)', () => {
+  const parked = {
+    shape: true, pageVisible: true, since: 0, now: BASE_TIME, dismissed: false,
+    loading: true, openInFlight: false,
+  }
+  const first = decideStallNotice(parked)
+  const stalledAt = BASE_TIME + mobileTable.thresholdMs
+  const stalled = decideStallNotice({ ...parked, since: first.since, now: stalledAt })
+  assert.equal(stalled.resync, true)
+  const records = stalled.records
+  // A shape break ends the CLOCK but not the ledger: the same records come
+  // back, so the next stall cannot reset the rolling window.
+  const broken = decideStallNotice({ ...parked, since: first.since, now: stalledAt + mobileTable.pollMs, shape: false, records })
+  assert.equal(broken.since, 0, 'the clock resets')
+  assert.deepEqual(broken.records, records, 'the ledger survives the shape break')
+  // The page-visibility break behaves the same way.
+  const hidden = decideStallNotice({
+    ...parked, since: first.since, now: stalledAt + 2 * mobileTable.pollMs, pageVisible: false, records: broken.records,
+  })
+  assert.equal(hidden.since, 0)
+  assert.deepEqual(hidden.records, records, 'background time is not a ledger reset either')
+  // The stall re-forms inside the cooldown: the spent dispatch still holds.
+  const again = decideStallNotice({ ...parked, since: 0, now: stalledAt + 3 * mobileTable.pollMs, records: hidden.records })
+  assert.equal(again.resync, false, 'the cooldown still spaces the automatic arm across the flicker')
+  // A ledger-free episode (a fresh session) starts from a full quota.
+  const fresh = decideStallNotice({
+    ...parked, since: stalledAt, now: stalledAt + mobileTable.thresholdMs, records: {},
+  })
+  assert.equal(fresh.resync, true, 'a new session is not punished for the previous one')
+})
+
+test('the automatic arm surfaces the exhausted exit once the last lever is spent', () => {
+  const parked = {
+    shape: true, pageVisible: true, since: 0, now: BASE_TIME, dismissed: false,
+    loading: true, openInFlight: false,
+  }
+  const seeded = decideStallNotice(parked)
+  let since = seeded.since
+  let records = seeded.records
+  let at = BASE_TIME + mobileTable.thresholdMs
+  for (let index = 0; index < mobileTable.resyncMax; index += 1) {
+    const decision = decideStallNotice({ ...parked, since, now: at, records })
+    assert.equal(decision.resync, true, 'lever ' + index + ' must still fire')
+    assert.equal(decision.exhausted, false, 'a dispatch leaves a lever in place')
+    since = decision.since
+    records = decision.records
+    at += mobileTable.resyncCooldownMs
+  }
+  const spent = decideStallNotice({ ...parked, since, now: at, records })
+  assert.equal(spent.resync, false, 'the rolling budget is spent')
+  assert.equal(spent.exhausted, true, 'the caller must surface the manual exit')
+  assert.equal(spent.show, true, 'the notice still stands')
+  // The rolling window releases the budget: the exit is not permanent.
+  const released = decideStallNotice({
+    ...parked, since, now: at + mobileTable.resyncWindowMs, records: spent.records,
+  })
+  assert.equal(released.exhausted, false, 'the window restores the lever')
+  // A broken shape carries no exhaustion (the decision is per-episode).
+  assert.equal(decideStallNotice({ ...parked, shape: false, now: at, records: spent.records }).exhausted, false)
+})
+
+test('the notice copy is key-table driven: exhausted > failed > stalled', () => {
+  const at = (elapsedMs: number, exhausted = false): MobileKey => stallMessageKey({ elapsedMs, exhausted })
+  assert.equal(at(0), 'dsh-chamber.mobile.stall.message')
+  assert.equal(at(mobileTable.failedMs - 1), 'dsh-chamber.mobile.stall.message')
+  assert.equal(at(mobileTable.failedMs), 'dsh-chamber.mobile.stall.messageFailed')
+  // A spent recovery budget outranks the elapsed wording: the user must learn
+  // that waiting longer cannot help any more.
+  assert.equal(at(0, true), 'dsh-chamber.mobile.stall.messageExhausted',
+    'exhausted wins even before the failure bound')
+  assert.equal(at(mobileTable.failedMs, true), 'dsh-chamber.mobile.stall.messageExhausted',
+    'exhausted also outranks the failure wording')
+  for (const key of [at(0), at(mobileTable.failedMs), at(0, true)]) {
+    assert.equal(typeof zh[key], 'string', key + ' must exist in zh')
+    assert.equal(typeof en[key], 'string', key + ' must exist in en')
+  }
 })
 
 test('sessionStallFace is fail-closed on every drifted shape and resolves late services', () => {
@@ -800,6 +941,44 @@ test('sessionStallFace is fail-closed on every drifted shape and resolves late s
   })
 })
 
+test('the automatic resync never leaks an unhandled rejection and warns exactly once', async () => {
+  const originalWarn = console.warn
+  const warnings: unknown[][] = []
+  console.warn = (...args: unknown[]): void => { warnings.push(args) }
+  const rejected: unknown[] = []
+  const onUnhandled = (reason: unknown): void => { rejected.push(reason) }
+  process.on('unhandledRejection', onUnhandled)
+  try {
+    let calls = 0
+    const faceOfRejecting = (resync: () => unknown) => sessionStallFace({
+      reflect: {
+        get: (name: string) => (name === 'sessions'
+          ? {
+              list: { getSnapshot: () => ({ byId: { a: { retainedBy: { mainView: 1 } } } }) },
+              binding: () => ({ session: { openPromise: null, openState: 'loading', resync } }),
+            }
+          : undefined),
+      },
+    })
+    const face = faceOfRejecting(() => { calls += 1; return Promise.reject(new Error('resync failed')) })
+    assert.equal(face?.loading(), true, 'the face is live, not the hostile path')
+    assert.doesNotThrow(() => { face?.resync(); face?.resync() })
+    await new Promise<void>(resolve => { setImmediate(resolve) })
+    assert.equal(calls, 2, 'both calls were made')
+    assert.deepEqual(rejected, [], 'a rejected resync is caught, never left unhandled')
+    assert.equal(warnings.length, 1, 'the failure is surfaced ONCE, never silently')
+    assert.match(String(warnings[0]?.[0]), /session resync failed/)
+    // A healthy resync adds no warning.
+    const quiet = faceOfRejecting(() => undefined)
+    quiet?.resync()
+    await new Promise<void>(resolve => { setImmediate(resolve) })
+    assert.equal(warnings.length, 1, 'a resolved resync stays quiet')
+  } finally {
+    console.warn = originalWarn
+    process.off('unhandledRejection', onUnhandled)
+  }
+})
+
 test('the shipped automatic-arm limits are the documented ones', () => {
   assert.equal(mobileTable.resyncCooldownMs, 120_000)
   assert.equal(mobileTable.resyncWindowMs, 600_000)
@@ -833,6 +1012,26 @@ test('a parked open is rebuilt automatically once, and the copy turns into the f
     // Past the failure bound the copy says the content is not loaded.
     harness.at(mobileTable.thresholdMs + mobileTable.failedMs)
     assert.equal(harness.notice()?.children[0]?.textContent, zh['dsh-chamber.mobile.stall.messageFailed'])
+    dispose()
+  })
+})
+
+test('the exhausted exit uses its own copy once every resync lever is spent', () => {
+  withFakeBrowser(harness => {
+    const tree = conversation()
+    harness.document.body.appendChild(tree.root)
+    const dispose = installSessionStallNotice(key => zh[key], {
+      openInFlight: () => false,
+      loading: () => true,
+      resync: () => {},
+    })
+    // Spend all resyncMax levers, one per cooldown.
+    for (let index = 0; index < mobileTable.resyncMax; index += 1) {
+      harness.at(mobileTable.thresholdMs + index * mobileTable.resyncCooldownMs)
+    }
+    // The next poll finds the ladder spent: the copy must say waiting is over.
+    harness.at(mobileTable.thresholdMs + mobileTable.resyncMax * mobileTable.resyncCooldownMs)
+    assert.equal(harness.notice()?.children[0]?.textContent, zh['dsh-chamber.mobile.stall.messageExhausted'])
     dispose()
   })
 })

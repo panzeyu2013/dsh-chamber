@@ -55,7 +55,11 @@ export const STALL_NOTICE_CSS = `
     display: flex;
     align-items: center;
     gap: 10px;
-    max-width: min(92vw, 26rem);
+    /* Landscape notches: vw spans the FULL viewport (viewport-fit=cover), so
+       the left/right safe-area insets are deducted from the width; the
+       translateX(-50%) centring then keeps the box off both bezels. Without an
+       inset the value is byte-identical to min(92vw, 26rem). */
+    max-width: min(calc(92vw - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)), 26rem);
     padding: 8px 8px 8px 12px;
     border-radius: 12px;
     background: var(--dsw-alias-bg-layer-2);

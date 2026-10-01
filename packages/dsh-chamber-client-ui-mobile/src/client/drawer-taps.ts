@@ -12,8 +12,12 @@
  * Guards (mirrored in the pure helpers): touch tier and touch/pen only
  * (PC-leak invariant); STABLE taps only (a scrolled drawer is scroll intent);
  * BOTH endpoints inside [data-mobile-role="sidebar"] (never double-fire the
- * backdrop's own close); never form controls. Single document-level effect.
+ * backdrop's own close); never form controls. Single document-level effect
+ * (installOnce: a duplicate install would race a second pending window on the
+ * same pointerId and double-handle every tap).
  */
+import { INSTALL_KEYS, installOnce } from './composer.ts'
+
 const DRAWER_SIDEBAR_SELECTOR = '[data-mobile-role="sidebar"]'
 /** Form controls that must never receive a synthesized activation
  *  (contenteditable in every non-false state included). */
@@ -93,17 +97,29 @@ interface HealFire {
  * at event time.
  */
 export function installDrawerTapHeal(active: () => boolean): () => void {
+  return installOnce(INSTALL_KEYS.drawerTapHeal, () => installDrawerTapHealInner(active))
+}
+
+function installDrawerTapHealInner(active: () => boolean): () => void {
   // Per-pointerId origins: two simultaneous touches keep their own start. The
   // down target is kept too — healing requires the WHOLE gesture inside.
   const pointerStarts = new Map<number, { x: number; y: number; downTarget: Element | null }>()
-  let pending: PendingTap | null = null
-  /** The last heal that fired, for late-real-click suppression. */
-  let healFired: HealFire | null = null
+  // Per-pointerId pending heals: two fingers tapping two rows at once own two
+  // independent grace windows (a single slot let the second tap cancel the
+  // first one's heal).
+  const pending = new Map<number, PendingTap>()
+  /** The heals that fired recently, for late-real-click suppression: one entry
+   *  per concurrently healed tap. Pruned on every push and by the next gesture. */
+  let healFires: HealFire[] = []
 
-  const clearPending = (): void => {
-    if (pending === null) return
-    if (pending.timer !== null) clearTimeout(pending.timer)
-    pending = null
+  const clearPending = (pointerId: number): void => {
+    const record = pending.get(pointerId)
+    if (record === undefined) return
+    if (record.timer !== null) clearTimeout(record.timer)
+    pending.delete(pointerId)
+  }
+  const clearAllPending = (): void => {
+    for (const pointerId of [...pending.keys()]) clearPending(pointerId)
   }
 
   const onPointerDown = (event: PointerEvent): void => {
@@ -112,7 +128,7 @@ export function installDrawerTapHeal(active: () => boolean): () => void {
     const downTarget = event.target instanceof Element ? event.target : null
     pointerStarts.set(event.pointerId, { x: event.clientX, y: event.clientY, downTarget })
     // A new gesture disarms the post-heal suppression window.
-    healFired = null
+    healFires = []
   }
 
   const onPointerUp = (event: PointerEvent): void => {
@@ -128,21 +144,27 @@ export function installDrawerTapHeal(active: () => boolean): () => void {
     // backdrop (within the 12px slop) must not heal over its close action.
     if (!isHealableDrawerTarget(start.downTarget)) return
     if (!isHealableDrawerTarget(target)) return
-    clearPending()
+    // Replace only THIS pointer's pending heal: another finger's window is its
+    // own (pointerId is the identity a gesture never shares).
+    clearPending(event.pointerId)
     const record: PendingTap = { target, timer: null }
-    pending = record
+    pending.set(event.pointerId, record)
     // Grace window: a suppressed tap's compatibility click never arrives at
     // all, a delivered one lands right after touchend; a short grace (not a
     // bare macrotask) also absorbs engines that delay past the current task,
     // so heal and a late real click cannot both activate the row.
     record.timer = setTimeout(() => {
-      if (pending !== record) return
-      pending = null
+      if (pending.get(event.pointerId) !== record) return
+      pending.delete(event.pointerId)
       // Re-check the tier at fire time: a stale heal must not dispatch after a flip.
       if (!active()) return
       if (!record.target.isConnected) return
+      const firedAt = Date.now()
+      // Expired entries are dropped here so a long session cannot accumulate
+      // them; the new fire joins the suppression window.
+      healFires = healFires.filter(fire => firedAt - fire.time <= HEAL_SUPPRESS_MS)
+      healFires.push({ time: firedAt, x: event.clientX, y: event.clientY })
       // Untrusted by definition — React's delegated listeners still run it.
-      healFired = { time: Date.now(), x: event.clientX, y: event.clientY }
       record.target.dispatchEvent(new MouseEvent('click', {
         bubbles: true,
         cancelable: true,
@@ -156,25 +178,35 @@ export function installDrawerTapHeal(active: () => boolean): () => void {
   }
 
   const onClick = (event: MouseEvent): void => {
-    if (pending !== null) {
+    if (pending.size > 0) {
       if (!(event.target instanceof Node)) return
-      // A real click that relates to the tap target clears the pending heal in
+      // A real click that relates to a tap target clears THAT pending heal in
       // EITHER direction: at/inside the pointerup target, or on an ANCESTOR of
       // it (iOS retargets to the common down/up ancestor, which already
       // activated the row through React delegation). Our own synthesized click
-      // never reaches here: the timer clears pending before dispatching.
-      const clickInsidePending = pending.target === event.target || pending.target.contains(event.target)
-      const pendingInsideClick = event.target instanceof Element && event.target.contains(pending.target)
-      if (shouldClearPendingHeal({ atOrInsideTapTarget: clickInsidePending, ancestorOfTapTarget: pendingInsideClick })) {
-        clearPending()
+      // never reaches here: the timer clears pending before dispatching. A
+      // pending belonging to another finger's row stays armed.
+      for (const [pointerId, record] of pending) {
+        const clickInsidePending = record.target === event.target || record.target.contains(event.target)
+        const pendingInsideClick = event.target instanceof Element && event.target.contains(record.target)
+        if (shouldClearPendingHeal({ atOrInsideTapTarget: clickInsidePending, ancestorOfTapTarget: pendingInsideClick })) {
+          clearPending(pointerId)
+        }
       }
       return
     }
     // Late-real-click suppression (capture, above #root): the heal already ran
     // the activation, so stop a trusted delayed/ghost click before React sees it.
-    if (healFired === null || !event.isTrusted || !(event.target instanceof Node)) return
-    if (!isSuppressedLateClick(healFired.time, Date.now(), event.clientX - healFired.x, event.clientY - healFired.y)) return
-    healFired = null
+    if (healFires.length === 0 || !event.isTrusted || !(event.target instanceof Node)) return
+    const now = Date.now()
+    const remaining: HealFire[] = []
+    let suppressed = false
+    for (const fire of healFires) {
+      if (isSuppressedLateClick(fire.time, now, event.clientX - fire.x, event.clientY - fire.y)) suppressed = true
+      else remaining.push(fire)
+    }
+    healFires = remaining
+    if (!suppressed) return
     event.stopPropagation()
   }
 
@@ -187,8 +219,8 @@ export function installDrawerTapHeal(active: () => boolean): () => void {
     document.removeEventListener('pointerup', onPointerUp, true)
     document.removeEventListener('pointercancel', onPointerCancel, true)
     document.removeEventListener('click', onClick, true)
-    clearPending()
+    clearAllPending()
     pointerStarts.clear()
-    healFired = null
+    healFires = []
   }
 }

@@ -1,11 +1,10 @@
 /**
- * Composer behavior pure-logic tests:
- * the keyboard heuristic, the self-heal constant, the layer-1
- * navigation-gesture predicate, the layer-5 composer-visibility guard
- * (quantized offset / hysteresis arm+hold decision / scroll-end / bounded
- * verification constants) and the Enter-newline caret-reveal delta — the
- * DOM-bound installers stay integration-tested on device, the pure decision
- * functions and the load-bearing source contracts are covered here.
+ * Composer behavior tests: the pure decision functions (keyboard heuristic,
+ * the self-heal clock, IME gesture classification, visibility-guard geometry,
+ * caret reveal, viewport-token surgery), the load-bearing source contracts,
+ * and the installer behavior of the two document-level effects (self-heal and
+ * the IME ladder) — the latter driven by an inline minimal DOM double plus a
+ * controlled clock, the same pattern test/dom/session-stall.test.ts uses.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -13,7 +12,9 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
   isKeyboardOpen, BUSY_STUCK_MS, TOUCH_TIER_QUERY, PHONE_TIER_QUERY,
-  isNavigationGestureTarget, NAV_GESTURE_SELECTOR,
+  isNavigationGestureTarget, NAV_QUERY, classifyImeGesture, shouldDropImeRefocus,
+  IME_KEYBOARD_INTENT_MS, IME_NAV_DROP_WINDOW_MS, installImeLadder, installComposerSelfHeal,
+  installEditabilityRecovery, installEnterToNewline,
   kbdLiftTarget, nextKbdOffset, isAtScrollEnd, caretRevealDelta,
   KBD_ARM_PX, KBD_DISARM_PX, KBD_VERIFY_SLACK_PX, KBD_MAX_VERIFY_STEPS,
   MOBILE_KBD_ATTR, MOBILE_KBD_VAR, MOBILE_KBD_STATE_ATTR, MOBILE_KBD_SPACER_ATTR,
@@ -49,16 +50,16 @@ test('touch tier query is the single source (shared with layout source and CSS)'
 })
 
 test('layer-1 navigation-gesture selector covers drawer and session header', () => {
-  assert.ok(NAV_GESTURE_SELECTOR.includes('[data-mobile-role="sidebar"]'))
-  assert.ok(NAV_GESTURE_SELECTOR.includes('[data-slot="conversation.session.header"]'))
+  assert.ok(NAV_QUERY.includes('[data-mobile-role="sidebar"]'))
+  assert.ok(NAV_QUERY.includes('[data-slot="conversation.session.header"]'))
 })
 
 test('isNavigationGestureTarget: drawer/header gestures are navigation', () => {
   // The predicate asks closest() with the COMBINED nav selector — a drawer
   // row or a header crumb matches it (single closest call).
-  const drawerRow = new ClosestStub({ [NAV_GESTURE_SELECTOR]: true })
+  const drawerRow = new ClosestStub({ [NAV_QUERY]: true })
   assert.equal(isNavigationGestureTarget(drawerRow), true)
-  const crumb = new ClosestStub({ [NAV_GESTURE_SELECTOR]: true })
+  const crumb = new ClosestStub({ [NAV_QUERY]: true })
   assert.equal(isNavigationGestureTarget(crumb), true)
   const noMatch = new ClosestStub({})
   assert.equal(isNavigationGestureTarget(noMatch), false)
@@ -281,6 +282,7 @@ test('the guard keeps its full trigger set wired (source lock)', () => {
     "window.addEventListener('resize', onViewportChange)",
     "document.addEventListener('visibilitychange', onVisibility)",
     "document.addEventListener('focusin', onFocusIn, true)",
+    "document.addEventListener('focusout', onFocusOut, true)",
     "document.addEventListener('pointerdown', onPointerDown, true)",
     "attributeFilter: ['data-phase']",
   ]) assert.ok(source.includes(needle), `trigger registration must stay wired: ${needle}`)
@@ -309,3 +311,574 @@ test('the guard keeps ONE actuator, never pads the scrollport (source lock)', ()
     assert.ok(source.includes(`'${state}'`), `missing guard state ${state}`)
   }
 })
+
+// ---------------------------------------------------------------------------
+// IME ladder classification: the gesture is PERSISTENT, keyboard intent keeps
+// its own short window.
+// ---------------------------------------------------------------------------
+
+test('classifyImeGesture: nav regions are nav, seat/portal/message are preserve', () => {
+  assert.equal(classifyImeGesture(new ClosestStub({ [NAV_QUERY]: true })), 'nav')
+  // The seat, a portaled picker menu and the message area match NO nav
+  // selector: closest(NAV_QUERY) is null and the gesture is typing intent.
+  assert.equal(classifyImeGesture(new ClosestStub({})), 'preserve')
+  assert.equal(classifyImeGesture(null), 'preserve')
+})
+
+test('shouldDropImeRefocus decision table: nav drops inside its executable window, keyboard/seat preserve', () => {
+  // Value pins (same discipline as BUSY_STUCK_MS): the table below is written
+  // in terms of the constants, so without these a window change stays green.
+  assert.equal(IME_NAV_DROP_WINDOW_MS, 45_000)
+  assert.equal(IME_KEYBOARD_INTENT_MS, 500)
+  const now = 1_000_000
+  const table: Array<{ gesture: 'nav' | 'preserve'; gestureAt: number; keyboardAt: number; drop: boolean; note: string }> = [
+    { gesture: 'nav', gestureAt: now - 1_000, keyboardAt: 0, drop: true, note: 'a one-second-old nav gesture drops (the official submit refocus)' },
+    { gesture: 'nav', gestureAt: now - IME_NAV_DROP_WINDOW_MS + 100, keyboardAt: 0, drop: true, note: '44.9s: still inside the executable window' },
+    { gesture: 'nav', gestureAt: now - IME_NAV_DROP_WINDOW_MS, keyboardAt: 0, drop: true, note: 'the window edge is inclusive' },
+    { gesture: 'nav', gestureAt: now - IME_NAV_DROP_WINDOW_MS - 100, keyboardAt: 0, drop: false, note: '45.1s: the navigation intent has lapsed' },
+    { gesture: 'nav', gestureAt: now - 600_000, keyboardAt: 0, drop: false, note: 'ten minutes later a late refocus is NOT ours to drop' },
+    { gesture: 'preserve', gestureAt: now - 1, keyboardAt: 0, drop: false, note: 'seat/portal typing intent always preserves' },
+    { gesture: 'nav', gestureAt: now - 1_000, keyboardAt: now - 1, drop: false, note: 'a fresh Tab/Arrow intent preserves' },
+    { gesture: 'nav', gestureAt: now - 1_000, keyboardAt: now - IME_KEYBOARD_INTENT_MS + 1, drop: false, note: 'the intent window is exclusive at its edge' },
+    { gesture: 'nav', gestureAt: now - 1_000, keyboardAt: now - IME_KEYBOARD_INTENT_MS, drop: true, note: 'an expired intent lets the nav drop through again' },
+    { gesture: 'preserve', gestureAt: now - 1, keyboardAt: now - 1, drop: false, note: 'keyboard intent never turns a preserve into a drop' },
+    { gesture: 'nav', gestureAt: now + 10_000, keyboardAt: 0, drop: false, note: 'a backwards clock step fails safe' },
+  ]
+  for (const row of table) {
+    assert.equal(shouldDropImeRefocus(row.gesture, row.gestureAt, row.keyboardAt, now), row.drop, row.note)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Installer behavior: an inline minimal DOM double (this package runs no DOM
+// environment) plus a controlled clock. Patches the globals the installers
+// read and restores them; every test runs inside one synchronous block.
+// ---------------------------------------------------------------------------
+
+const FAKE_BASE_TIME = 1_000_000
+
+class FakeNodeBase {}
+
+/** The composer node the installers query. */
+class FakeComposer extends FakeNodeBase {
+  contentEditable = 'true'
+  readonly dataset: { phase?: string } = {}
+  /** The composer fingerprint reads these (text + child count). */
+  readonly childNodes: unknown[] = []
+  textContent = ''
+  private readonly attributes = new Map<string, string>()
+  blurs = 0
+  focuses = 0
+  getAttribute(name: string): string | null { return this.attributes.get(name) ?? null }
+  setAttribute(name: string, value = ''): void { this.attributes.set(name, value) }
+  contains(node: unknown): boolean { return node === this }
+  /** The composer input matches its own selector (the Enter installer resolves
+   *  the editor through closest); every other anchor is absent in this double. */
+  closest(selector: string): FakeComposer | null {
+    return selector === '[data-composer-input]' ? this : null
+  }
+  blur(): void { this.blurs += 1 }
+  focus(): void { this.focuses += 1 }
+}
+
+/** A pointer target whose closest() answers the nav selector. */
+class FakeGestureTarget extends FakeNodeBase {
+  private readonly nav: boolean
+  constructor(nav: boolean) { super(); this.nav = nav }
+  closest(selector: string): FakeGestureTarget | null {
+    return selector === NAV_QUERY && this.nav ? this : null
+  }
+}
+
+class FakeDocumentDouble {
+  activeElement: unknown = null
+  /** Every execCommand the Enter installer issues, in order. */
+  readonly execCommands: string[] = []
+  /** Per-command answer; a command not listed answers true ("supported"), a
+   *  false answer drives the insertText / manual ladder. */
+  execAnswers: Record<string, boolean> = {}
+  /** Test hook: observe (or mutate the DOM as) a command's insertion. */
+  onExec: ((command: string) => void) | null = null
+  execCommand(command: string): boolean {
+    this.execCommands.push(command)
+    this.onExec?.(command)
+    return this.execAnswers[command] ?? true
+  }
+  /** No trigger menu is open in these doubles. */
+  querySelector(): null { return null }
+  /** No live selection: the manual insert path stays unreachable. */
+  getSelection(): null { return null }
+  private readonly listeners = new Map<string, Array<(event: Record<string, unknown>) => void>>()
+  addEventListener(type: string, handler: (event: Record<string, unknown>) => void): void {
+    const list = this.listeners.get(type) ?? []
+    list.push(handler)
+    this.listeners.set(type, list)
+  }
+  removeEventListener(type: string, handler: (event: Record<string, unknown>) => void): void {
+    const list = this.listeners.get(type)
+    if (list === undefined) return
+    const index = list.indexOf(handler)
+    if (index !== -1) list.splice(index, 1)
+  }
+  /** Dispatch to every registered handler; capture/bubble is ignored because
+   *  the installers register capture-phase listeners only. The default
+   *  methods exist so a handler that consumes the event (Enter) runs. */
+  dispatch(type: string, init: Record<string, unknown> = {}): void {
+    const event = {
+      type,
+      preventDefault: (): void => {},
+      stopPropagation: (): void => {},
+      ...init,
+    }
+    for (const handler of [...(this.listeners.get(type) ?? [])]) handler(event)
+  }
+}
+
+/** Minimal MutationObserver double for the editability channel: it records
+ *  every observation and delivers an attribute record to the live observers
+ *  whose observation covers the target and watches that attribute (the DOM
+ *  delivery rule). */
+class FakeMutationObserverDouble {
+  static readonly instances: FakeMutationObserverDouble[] = []
+  readonly observations: Array<{ target: unknown; options?: Record<string, unknown> }> = []
+  disconnected = false
+  private readonly callback: (records: Array<Record<string, unknown>>) => void
+  constructor(callback: (records: Array<Record<string, unknown>>) => void) {
+    this.callback = callback
+    FakeMutationObserverDouble.instances.push(this)
+  }
+  observe(target: unknown, options?: Record<string, unknown>): void {
+    this.disconnected = false
+    this.observations.push({ target, options })
+  }
+  disconnect(): void { this.disconnected = true }
+  takeRecords(): Array<Record<string, unknown>> { return [] }
+  /** Deliver one attribute record to every covering live observer. */
+  static fireAttribute(target: unknown, attribute: string, oldValue: string | null = null): void {
+    for (const observer of FakeMutationObserverDouble.instances) {
+      if (observer.disconnected) continue
+      const covered = observer.observations.some(observation => {
+        if (observation.target === target) return true
+        const face = observation.target as { contains?: (node: unknown) => boolean } | null
+        return typeof face?.contains === 'function' && face.contains(target)
+      })
+      if (!covered) continue
+      const watched = observer.observations.some(observation => {
+        const filter = observation.options?.attributeFilter
+        return Array.isArray(filter) ? filter.includes(attribute) : observation.options?.attributes === true
+      })
+      if (watched) observer.callback([{ target, attributeName: attribute, oldValue }])
+    }
+  }
+}
+
+interface ComposerDomEnv {
+  readonly document: FakeDocumentDouble
+  root(composer: FakeComposer): ParentNode
+  at(millis: number): void
+  frames(): number
+  flushFrame(): void
+  /** Deliver one attribute mutation to every covering live observer. */
+  fireAttribute(target: unknown, attribute: string, oldValue?: string | null): void
+}
+
+function withComposerDom(run: (env: ComposerDomEnv) => void): void {
+  const globals = globalThis as unknown as Record<string, unknown>
+  const previous = {
+    document: globals.document,
+    window: globals.window,
+    HTMLElement: globals.HTMLElement,
+    Element: globals.Element,
+    Node: globals.Node,
+    MutationObserver: globals.MutationObserver,
+    requestAnimationFrame: globals.requestAnimationFrame,
+    cancelAnimationFrame: globals.cancelAnimationFrame,
+    now: Date.now,
+  }
+  const documentDouble = new FakeDocumentDouble()
+  const frames: Array<(() => void) | null> = []
+  let now = FAKE_BASE_TIME
+  globals.document = documentDouble
+  globals.window = { innerHeight: 800, visualViewport: null }
+  globals.HTMLElement = FakeNodeBase
+  globals.Element = FakeNodeBase
+  globals.Node = FakeNodeBase
+  FakeMutationObserverDouble.instances.length = 0
+  globals.MutationObserver = FakeMutationObserverDouble
+  globals.requestAnimationFrame = (handler: () => void): number => { frames.push(handler); return frames.length }
+  globals.cancelAnimationFrame = (id: number): void => { frames[id - 1] = null }
+  Date.now = (): number => now
+  try {
+    run({
+      document: documentDouble,
+      root: (composer: FakeComposer): ParentNode => ({
+        querySelector: (selector: string) => (selector === '[data-composer-input]' ? composer : null),
+        contains: (node: unknown): boolean => node === composer,
+      }) as unknown as ParentNode,
+      at: (millis: number): void => { now = FAKE_BASE_TIME + millis },
+      frames: (): number => frames.length,
+      flushFrame: (): void => { const frame = frames.shift(); frame?.() },
+      fireAttribute: (target: unknown, attribute: string, oldValue: string | null = null): void => {
+        FakeMutationObserverDouble.fireAttribute(target, attribute, oldValue)
+      },
+    })
+  } finally {
+    globals.document = previous.document
+    globals.window = previous.window
+    globals.HTMLElement = previous.HTMLElement
+    globals.Element = previous.Element
+    globals.Node = previous.Node
+    globals.MutationObserver = previous.MutationObserver
+    globals.requestAnimationFrame = previous.requestAnimationFrame
+    globals.cancelAnimationFrame = previous.cancelAnimationFrame
+    Date.now = previous.now
+  }
+}
+
+function tapComposer(env: ComposerDomEnv, composer: FakeComposer): void {
+  env.document.dispatch('pointerdown', { pointerType: 'touch', target: composer })
+}
+
+function stuckComposer(): FakeComposer {
+  const composer = new FakeComposer()
+  composer.contentEditable = 'false'
+  composer.dataset.phase = 'submitting'
+  return composer
+}
+
+test('self-heal: an early tap never restarts the 30s clock (tap@0 + tap@40s recovers)', () => {
+  withComposerDom(env => {
+    // Mounted stuck at install: the install-time DOM seed owns the clock.
+    const composer = stuckComposer()
+    const dispose = installComposerSelfHeal(env.root(composer))
+    tapComposer(env, composer)
+    assert.equal(composer.blurs, 0, 'elapsed 0 is not a stuck submit')
+    assert.equal(composer.focuses, 0)
+    env.at(40_000)
+    tapComposer(env, composer)
+    assert.equal(composer.blurs, 1, 'the clock survived the early tap')
+    assert.equal(composer.contentEditable, 'true', 'the recovery restores editability')
+    assert.equal(composer.focuses, 1, 'and refocuses the editor')
+    dispose()
+  })
+})
+
+test('self-heal: the first tap that finds it stuck starts the clock; a later tap >=30s recovers', () => {
+  withComposerDom(env => {
+    const composer = new FakeComposer() // editable at install: no clock yet
+    const dispose = installComposerSelfHeal(env.root(composer))
+    env.at(10_000)
+    composer.contentEditable = 'false'
+    composer.dataset.phase = 'submitting' // stuck appears with no observer record
+    tapComposer(env, composer)
+    assert.equal(composer.blurs, 0, 'the tap that finds it stuck only starts the clock')
+    env.at(45_000)
+    tapComposer(env, composer)
+    assert.equal(composer.blurs, 1, '35s after the first sighting')
+    dispose()
+  })
+})
+
+test('self-heal: a tap before 30s does not recover — and does not restart the window', () => {
+  withComposerDom(env => {
+    const composer = new FakeComposer()
+    const dispose = installComposerSelfHeal(env.root(composer))
+    env.at(10_000)
+    composer.contentEditable = 'false'
+    composer.dataset.phase = 'submitting'
+    tapComposer(env, composer) // starts the clock at 10s
+    env.at(39_000)
+    tapComposer(env, composer)
+    assert.equal(composer.blurs, 0, '29s after the first sighting is still inside the window')
+    env.at(40_000)
+    tapComposer(env, composer)
+    assert.equal(composer.blurs, 1, 'exactly 30s after the FIRST sighting: the early tap reset nothing')
+    dispose()
+  })
+})
+
+test('self-heal negatives: editable / not-busy / aria-disabled never recover', () => {
+  for (const sample of [
+    { name: 'editable', editable: true, phase: 'submitting', disabled: false },
+    { name: 'not in a submit window', editable: false, phase: 'plain', disabled: false },
+    { name: 'officially disabled', editable: false, phase: 'submitting', disabled: true },
+  ]) {
+    withComposerDom(env => {
+      const composer = new FakeComposer()
+      composer.contentEditable = sample.editable ? 'true' : 'false'
+      composer.dataset.phase = sample.phase
+      if (sample.disabled) composer.setAttribute('aria-disabled', 'true')
+      const dispose = installComposerSelfHeal(env.root(composer))
+      env.at(40_000)
+      tapComposer(env, composer)
+      assert.equal(composer.blurs, 0, sample.name + ': no recovery')
+      assert.equal(composer.focuses, 0, sample.name + ': no refocus')
+      assert.equal(composer.contentEditable, sample.editable ? 'true' : 'false', sample.name + ': the DOM is untouched')
+      dispose()
+    })
+  }
+})
+
+test('self-heal: its own recovery write is not answered by a second blur/refocus (ONE focus dance)', () => {
+  withComposerDom(env => {
+    const composer = stuckComposer()
+    const disposeSelfHeal = installComposerSelfHeal(env.root(composer))
+    // Layer 2 observes the same composer: without the write marker it would
+    // read the recovery's own false→true flip as a genuine one and blur+refocus
+    // a SECOND time (the double focus dance).
+    const disposeRecovery = installEditabilityRecovery(env.root(composer))
+    try {
+      tapComposer(env, composer) // the install-time DOM seed owns the clock
+      env.at(BUSY_STUCK_MS)
+      env.document.activeElement = composer
+      tapComposer(env, composer)
+      assert.equal(composer.blurs, 1, 'the self-heal recovery blurs once')
+      assert.equal(composer.focuses, 1)
+      assert.equal(composer.contentEditable, 'true', 'the recovery restored editability')
+      // The contenteditable write reaches the recovery channel as a genuine
+      // false→true flip on the focused composer.
+      env.fireAttribute(composer, 'contenteditable', 'false')
+      assert.equal(composer.blurs, 1, 'the recovery channel must not answer the self-heal write')
+      assert.equal(composer.focuses, 1)
+      // One-shot: a LATER genuine flip on the same element is recovered again.
+      env.at(BUSY_STUCK_MS + 5_000)
+      composer.contentEditable = 'false'
+      composer.contentEditable = 'true'
+      env.fireAttribute(composer, 'contenteditable', 'false')
+      assert.equal(composer.blurs, 2, 'a later genuine flip recovers normally')
+      assert.equal(composer.focuses, 2)
+    } finally {
+      disposeRecovery()
+      disposeSelfHeal()
+    }
+  })
+})
+
+test('self-heal: the write marker expires (a delayed flip outside the window is recovered)', () => {
+  withComposerDom(env => {
+    const composer = stuckComposer()
+    const disposeSelfHeal = installComposerSelfHeal(env.root(composer))
+    const disposeRecovery = installEditabilityRecovery(env.root(composer))
+    try {
+      tapComposer(env, composer)
+      env.at(BUSY_STUCK_MS)
+      env.document.activeElement = composer
+      tapComposer(env, composer)
+      assert.equal(composer.blurs, 1)
+      // The observer callback is delayed beyond the marker window (>1s): the
+      // flip is then treated as any other flip, never silently swallowed.
+      env.at(BUSY_STUCK_MS + 2_000)
+      env.fireAttribute(composer, 'contenteditable', 'false')
+      assert.equal(composer.blurs, 2, 'an expired marker does not suppress a genuine flip')
+    } finally {
+      disposeRecovery()
+      disposeSelfHeal()
+    }
+  })
+})
+
+test('ime ladder: a nav gesture drops the programmatic focus inside its executable window', () => {
+  withComposerDom(env => {
+    const composer = new FakeComposer()
+    const detach = installImeLadder(env.root(composer)).attach()
+    env.document.activeElement = composer
+    env.document.dispatch('pointerdown', { pointerType: 'touch', target: new FakeGestureTarget(true) })
+    env.at(1_000) // the official submit/commit refocus lands right after the switch
+    env.document.dispatch('focusin', { target: composer })
+    assert.equal(composer.blurs, 1, 'a fresh nav classification still drops')
+    assert.equal(env.frames(), 1, 'the drop loop is in flight')
+    detach()
+  })
+})
+
+test('ime ladder: a STALE nav gesture (ten minutes) preserves the late refocus', () => {
+  withComposerDom(env => {
+    const composer = new FakeComposer()
+    const detach = installImeLadder(env.root(composer)).attach()
+    env.document.activeElement = composer
+    env.document.dispatch('pointerdown', { pointerType: 'touch', target: new FakeGestureTarget(true) })
+    env.at(600_000) // ten minutes later: the navigation intent has expired
+    env.document.dispatch('focusin', { target: composer })
+    assert.equal(composer.blurs, 0, 'the drop window expired — the late refocus is preserved')
+    assert.equal(env.frames(), 0)
+    detach()
+  })
+})
+
+test('ime ladder: a seat/portal gesture preserves the programmatic focus', () => {
+  withComposerDom(env => {
+    const composer = new FakeComposer()
+    const detach = installImeLadder(env.root(composer)).attach()
+    env.document.activeElement = composer
+    env.document.dispatch('pointerdown', { pointerType: 'touch', target: new FakeGestureTarget(false) })
+    env.at(86_400_000)
+    env.document.dispatch('focusin', { target: composer })
+    assert.equal(composer.blurs, 0, 'typing intent is never dropped, however old')
+    assert.equal(env.frames(), 0)
+    detach()
+  })
+})
+
+test('ime ladder: a fresh Tab/Arrow keydown preserves the focus after a nav gesture', () => {
+  withComposerDom(env => {
+    const composer = new FakeComposer()
+    const detach = installImeLadder(env.root(composer)).attach()
+    env.document.activeElement = composer
+    env.document.dispatch('pointerdown', { pointerType: 'touch', target: new FakeGestureTarget(true) })
+    env.at(1_000)
+    env.document.dispatch('keydown', { key: 'Tab' })
+    env.document.dispatch('focusin', { target: composer })
+    assert.equal(composer.blurs, 0, 'keyboard navigation is preserved inside its window')
+    env.at(1_000 + IME_KEYBOARD_INTENT_MS)
+    env.document.dispatch('focusin', { target: composer })
+    assert.equal(composer.blurs, 1, 'once the keyboard-intent window expires the nav gesture drops again')
+    // Arrow keys carry the same intent as Tab.
+    env.at(1_000 + IME_KEYBOARD_INTENT_MS + 100)
+    env.document.dispatch('keydown', { key: 'ArrowDown' })
+    composer.blurs = 0
+    env.document.dispatch('focusin', { target: composer })
+    assert.equal(composer.blurs, 0, 'a fresh Arrow keydown preserves')
+    detach()
+  })
+})
+
+test('ime ladder: a typing (seat) pointerdown cancels an in-flight drop loop', () => {
+  withComposerDom(env => {
+    const composer = new FakeComposer()
+    const detach = installImeLadder(env.root(composer)).attach()
+    env.document.activeElement = composer
+    env.document.dispatch('pointerdown', { pointerType: 'touch', target: new FakeGestureTarget(true) })
+    env.document.dispatch('focusin', { target: composer })
+    assert.equal(composer.blurs, 1)
+    // The seat target: not nav (preserve) AND inside the composer seat zone
+    // (closest returns null, the input itself is the zone).
+    env.document.dispatch('pointerdown', { pointerType: 'touch', target: composer })
+    env.flushFrame()
+    assert.equal(composer.blurs, 1, 'the cancel stops the loop without another blur')
+    detach()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Double-install guard: the document-level installers hold ONE seat per key.
+// ---------------------------------------------------------------------------
+
+test('installEnterToNewline is single-seat: a double install inserts ONE newline', () => {
+  withComposerDom(env => {
+    const composer = new FakeComposer()
+    const first = installEnterToNewline()
+    const second = installEnterToNewline()
+    const enter = (): void => {
+      env.document.dispatch('keydown', {
+        key: 'Enter', target: composer, isComposing: false, keyCode: 13,
+        shiftKey: false, ctrlKey: false, metaKey: false, repeat: false,
+      })
+    }
+    enter()
+    assert.deepEqual(env.document.execCommands, ['insertLineBreak'],
+      'exactly ONE handler may intercept the Enter (two handlers = two newlines)')
+    // The duplicate's disposer is a no-op: the live install must survive it,
+    // and still exactly ONE handler runs per Enter.
+    second()
+    enter()
+    assert.deepEqual(env.document.execCommands, ['insertLineBreak', 'insertLineBreak'],
+      'the no-op disposer must not tear the original install down')
+    first()
+    enter()
+    assert.equal(env.document.execCommands.length, 2, 'after the original release the handler is gone')
+    // The key is free again: a fresh install after the release works.
+    const third = installEnterToNewline()
+    enter()
+    assert.deepEqual(env.document.execCommands,
+      ['insertLineBreak', 'insertLineBreak', 'insertLineBreak'])
+    third()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Enter guard edges: the Alt/AltGraph chords, the live composition flag and
+// the fingerprint-gated command ladder.
+// ---------------------------------------------------------------------------
+
+function pressEnter(env: ComposerDomEnv, composer: FakeComposer, init: Record<string, unknown> = {}): void {
+  env.document.dispatch('keydown', {
+    key: 'Enter', target: composer, isComposing: false, keyCode: 13,
+    shiftKey: false, ctrlKey: false, metaKey: false, altKey: false, repeat: false,
+    ...init,
+  })
+}
+
+test('enter: the Alt/AltGraph chords and a live composition are never intercepted', () => {
+  withComposerDom(env => {
+    const composer = new FakeComposer()
+    const dispose = installEnterToNewline()
+    try {
+      // AltGr arrives as Alt (and as Ctrl+Alt on Windows) or through the
+      // AltGraph modifier state: that Enter types a character, not a newline.
+      pressEnter(env, composer, { altKey: true })
+      pressEnter(env, composer, { getModifierState: (mod: string) => mod === 'AltGraph' })
+      assert.deepEqual(env.document.execCommands, [])
+      // compositionstart opens the composing flag: the final Enter of a
+      // composed input arrives with isComposing already false while the
+      // session is open.
+      env.document.dispatch('compositionstart')
+      pressEnter(env, composer)
+      assert.deepEqual(env.document.execCommands, [], 'a live composition is never intercepted')
+      env.document.dispatch('compositionend')
+      pressEnter(env, composer)
+      assert.deepEqual(env.document.execCommands, [], 'the 10ms Safari trailing window still suppresses')
+      env.at(10)
+      pressEnter(env, composer)
+      assert.deepEqual(env.document.execCommands, ['insertLineBreak'])
+    } finally {
+      dispose()
+    }
+  })
+})
+
+test('enter: the command ladder is fingerprint-gated (a lying boolean never doubles the insert)', () => {
+  withComposerDom(env => {
+    const composer = new FakeComposer()
+    let dispose = installEnterToNewline()
+    const warnings: string[] = []
+    const originalWarn = console.warn
+    console.warn = (...args: unknown[]): void => { warnings.push(args.map(String).join(' ')) }
+    try {
+      // insertLineBreak AND insertText both claim "unsupported": the manual
+      // last resort (no selection in this double) fails and is reported once.
+      env.document.execAnswers.insertLineBreak = false
+      env.document.execAnswers.insertText = false
+      pressEnter(env, composer)
+      assert.deepEqual(env.document.execCommands, ['insertLineBreak', 'insertText'],
+        'a false insertLineBreak escalates to the insertText fallback')
+      assert.equal(warnings.length, 1, 'both commands left the document unchanged → reported once')
+      pressEnter(env, composer)
+      assert.equal(warnings.length, 1, 'the warning is once per install, not per keystroke')
+      // A lying false that DID insert: insertText must not run on top of it.
+      env.document.onExec = command => { if (command === 'insertLineBreak') composer.textContent = 'line\n' }
+      env.document.execCommands.length = 0
+      pressEnter(env, composer)
+      assert.deepEqual(env.document.execCommands, ['insertLineBreak'],
+        'the fingerprint gate keeps a successful-but-false command from being doubled')
+      assert.equal(warnings.length, 1, 'nothing was left unchanged → no failure report')
+      // insertText claims "supported" but wrote nothing either: its boolean is
+      // not trusted, the manual fallback still runs (fresh install = fresh
+      // warnedOnce).
+      dispose()
+      dispose = installEnterToNewline()
+      warnings.length = 0
+      env.document.onExec = null
+      env.document.execCommands.length = 0
+      env.document.execAnswers.insertLineBreak = false
+      env.document.execAnswers.insertText = true
+      pressEnter(env, composer)
+      assert.deepEqual(env.document.execCommands, ['insertLineBreak', 'insertText'])
+      assert.equal(warnings.length, 1,
+        'a true-returning insertText that did not insert still falls through to the manual path')
+    } finally {
+      console.warn = originalWarn
+      dispose()
+    }
+  })
+})
+

@@ -46,7 +46,11 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
   `normal` 后 CJK 逐字可断，徽标渲染成五行竖排（5 × 18px = 90px），把标题行从
   30px 撑到 ~96px（2026-09-14 review-fix；**之前那条换行规则本身就是回归源**）；
 - **会话头首行（phone 档）**：单行、48px 上限，并吃顶部/右侧安全区。收缩顺序是
-  显式的——**当前 crumb**（上游用 `disabled` 渲染的那一个）吸收剩余宽度并省略号；
+  显式的——**最后一个 crumb 段**吸收剩余宽度（结构式
+  `nav > span:last-child { flex: 0 1 auto; min-width: 0 }`），段内当前 crumb
+  （`span.crumb.crumbCurrent`）借上游 `.crumb` 自带的 `max-width: 220px` +
+  `text-overflow: ellipsis` 省略号；上游把当前 crumb 渲染成裸 `span` 而非
+  `disabled` 按钮，旧 `button:disabled` 臂其实从未命中；
   **谱系 chip 不参与收缩竞争**（`flex: 0 0 auto`、44px 触控底线〔上游只有 28px
   盒〕、计数文本有界），因为它是子代理目录的唯一入口；agent-preset 座席——上游的
   `AgentPresetLabel`，是**裸 `span[icon][name]`**，也是 `headerActions` list 座席里
@@ -62,8 +66,12 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
   「右栏与抽屉的共存」）。
 - **抽屉入口门控**：浮动开关与遮罩只在抽屉真的可用时才渲染——frame 必须已打标，且
   `data-mobile-roles` 必须含 sidebar 角色。`stampFrame` 是全或无的（缺 conversation
-  列的 frame 绝不适配），因此没有这道门控时，上游一旦改掉中心列 key，就会留下一个
-  可见但点了没反应的按钮，以及盖住会话区的全屏遮罩。
+  列的 frame 绝不适配），且**探针在早先成功之后失败会撤销已打的标**（`withdrawStamps`：
+  frame 属性、`data-mobile-roles` 与 frame 内每个 role 属性），因此中心列 key 被改掉时
+  页面退化为官方窄窗布局，而不是在已不存在的列上留下网格锁与覆盖入口。门控本身覆盖
+  另一种改名：conversation 列还在、sidebar key 不在时 frame 仍会打标
+  （`data-mobile-roles` 不含 `sidebar`）；没有这道门控，可见开关唯一的作用就是翻转
+  一个没有任何东西响应的 frame 属性，外加盖住会话区的全屏遮罩。
 - **视图 tab**：`tabs.length > 1` 是**常态**而非边角——`ui-chat` 与
   `ui-trajectory` 都无条件注册 `conversation.view`，且都在默认 web bundle 里。
   官方 tab 是 13px 文字 + 25px 盒，而 tab 条既不换行也不滚动、frame 又裁掉溢出
@@ -82,7 +90,7 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
 `session-stall.ts` 只为这一状态补一个非阻断提示。判据**全部是属性锚点**——本包的锚点
 纪律禁止按哈希类名或文案匹配那句提示：
 
-2026-09-21 起，同一判据还驱动一条**自动臂**：停滞满阈值且具象 `Session.openPromise` 明确为空（无在途 open）时，模块自己调用 pinned `resync()` 重建该会话的事件流，受同款 cooldown（120s）+ 滚动预算（10 分钟 ≤3 次）约束；在途 open 绝不打断（慢宿主），读不到具象面则一律当作 `unknown` fail-closed。停滞超过 `STALL_FAILED_MS`（180s）后文案转为「会话内容未能载入」，避免把已失败的加载继续描述成进行中。触屏档没有 chamber fork，这条自动臂是该档唯一的自动恢复面。
+2026-09-21 起，同一判据还驱动一条**自动臂**：停滞满阈值、且具象会话 `openState === 'loading'`、且 `Session.openPromise` 明确为空（无在途 open）时，模块自己调用 pinned `resync()` 重建该会话的事件流，受同款 cooldown（120s）+ 滚动预算（10 分钟 ≤3 次）约束。这条证据门的两半缺一不可：健康但首轮缓慢的已开会话与停滞同形，只看 `openPromise` 会重建一个无需修复的会话；在途 open 绝不打断（慢宿主），读不到具象面则一律当作 `unknown` fail-closed。停滞超过 `LADDER_TABLES.mobile.failedMs`（90s，共享阶梯表而非模块内常量）后文案转为「会话内容未能载入」，避免把已失败的加载继续描述成进行中。触屏档没有 chamber fork，这条自动臂是该档唯一的自动恢复面。
 
 - 存在 `[data-chat-flow]` 列，且其最近的 `[data-phase]` 祖先进相为 `settling` 或
   `active`（DOM 取值空间恰为 settling / hero / active，由上游 `ConversationRoot`
@@ -102,8 +110,9 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
 
 形态的已知边界：`data-chat-anchor-key` 只由 routed node 包装层发出，因此「空会话 +
 首个提问尚未落盘（乐观提交气泡）」也满足形态，此时用户会被告知载入面停滞。要收窄
-需要上游目前不暴露的锚点（open 状态 / pending 气泡属性）；把误报代价压到零的是
-「继续等待」控件。
+**形态**需要上游目前不暴露的 DOM 锚点（open 状态 / pending 气泡属性）——上面自动臂
+的具象会话证据门只收窄**重建**，提示本身仍可能显示；把误报代价压到零的是「继续
+等待」控件。
 
 提示是 `role="status"` / `aria-live="polite"`，锚在会话头下方，除两个控件外
 `pointer-events: none`，从不抢焦点。主操作是**用户主动**的页面重载；次控件
@@ -127,9 +136,11 @@ disposer 才真正拆除。
 
 **这条规则刻意不加「已展开」门控**（`data-rightbar-collapsed`）：座位在滑出动画的
 **同一个 commit** 里就上报 `shown: false`，加了门控会让全屏盒在动画中途失效、
-面板在滑出时先缩回常规宽度。隐藏态本来也不需要门控——上游用
-`transform: translateX(100%)` + `visibility: hidden` 隐藏，而满宽 `inset: 0`
-的盒子正好落在视口右侧一屏之外，看不见也点不到。正因如此，安全区 inset 与
+面板在滑出时先缩回常规宽度。隐藏态本来也不需要依赖 frame 门控：上游隐藏的是面板内部的
+ dockkit/empty/divider 子元素（`translateX(var(--dsh-sidebar-width))` +
+`visibility: hidden`），面板元素自身恒为
+`position: absolute; right: 0; pointer-events: none`，因此满宽 `inset: 0` 的盒子
+正好落在视口右侧一屏之外，看不见也点不到。正因如此，安全区 inset 与
 `box-sizing: border-box` 都写在同一条规则里：面板自身没有声明 box-sizing，
 全树也没有全局 border-box reset，content-box 的 `left: 0` + `width: 100%` 会让
 inset 把盒子撑得比视口更宽（横屏时刘海一侧、也就是条尾控件会被切到屏外）。
@@ -146,7 +157,7 @@ details 列限定作用域。断点单测把这几半全部钉住：目标是面
 `viewport-fit=cover`，于是 `inset: 0` 是无边界的——横屏刘海 iPhone 同样落在这一
 档，刘海压住一条竖边、home indicator 压住底边。**手机档（上游自己就全屏的那一档）
 同样受益**：规则无门控，两档都拿到 inset。上游的全屏呈现自身不带任何 inset，而本档
-其他全幅 chamber 面（抽屉、设置 sheet、composer seat）都带；面板表面仍满幅绘制
+其他全幅 chamber 面（抽屉〔2026-09-30 补上 inset〕、设置 sheet、composer seat）都带；面板表面仍满幅绘制
 （背景覆盖 padding box），只是内容内缩。
 
 已展开的面板接管屏幕，因此抽屉**让位**：浮动开关与遮罩退场，已打开的抽屉转为
@@ -159,6 +170,13 @@ details 列限定作用域。断点单测把这几半全部钉住：目标是面
 `openRightbar`/`closeRightbar` 成对设置与清除，即「全屏面板已展开」期间恒存在。
 **顺序有语义**：这些选择器与打开态规则同特异性，必须排在其后（打开态自身的
 `visibility 0s` 过渡保证隐藏是即时的）。
+
+打开的抽屉同样接管背景：会话列与右栏列会被置 `inert`（每次写入都带插件自有的
+所有权标记，解锁只回收插件自己写的 inert——撤标时也与 role 标记同批回收），
+会话滚动器与 `document.body` 取 `overflow: hidden`（2026-09-30）——遮罩只吸收
+点按、不拦键盘焦点，没有 inert 时从抽屉按 Tab 会落进身后的会话区。右栏面板已
+展开时跳过 details 列（见上面的让位臂），因为把面板自己所在的列置 inert 会让可见
+的面板失效。
 
 768–1023px 这一档里，面板自己的**模式控件被隐藏**：本档把呈现钉死为全屏，上游的
 push↔fullscreen 翻转（连同一起翻转的文案）已无法改变任何东西——点「退出全屏」也会
@@ -209,21 +227,26 @@ click 控件、pane 不可分屏时自行 `disabled`，此前的整条隐藏基�
   `_<local>_<hash>_<idx>` 是 **chamber 自建壳（Vite）**的命名，从不属于实例
   bundle；此前的 `[class*="_<local>_"]` infix 形式因此命中不到任何东西，命名
   翻转时 fail-soft——保持官方网格。卡片网格不再覆盖，且本分区下存在**两个**卡片
-  网格、上游规则各不相同（2026-09-11 review-fix F3）：
-  `PluginInventorySettingsTab` 自己就在 `max-width: 680px` 把 `.cards` 收为
-  单列；而 `ui-agent-preset`（`AgentPresetSection.module.css`）**没有任何
-  断点**——其 `.cards` 是 `.section`（上限 720px）内的
-  `repeat(auto-fill, minmax(268px, 1fr))`，因此从约 580px 视口宽起上游就是
-  两列（两张 268px 卡 + 12px 间距需要 options 盒内 548px = 视口 −
-  2×(16px + 安全区)）。chamber 旧有的单列臂对该网格改动的是它**整个两列
-  区间**，即手机档约 580–768px，而不只是库存网格自身断点留下的 681–768px
-  窗口。两处网格的单列臂都已删除（2026-09-11 upstream-alignment T17b）；
+  网格、上游规则各不相同（2026-09-11 review-fix F3；库存侧 2026-09-30 重锚）：
+  `PluginInventorySettingsTab` 自己的根声明
+  `container: qSYn7G_plugin-inventory / inline-size`，并用
+  `@container qSYn7G_plugin-inventory (width <= 520px)` 把 `.cards` 收为单列
+  ——这是按 section 自身内联尺寸的**容器查询**，而非本条早前声称的
+  `max-width: 680px` 视口媒体查询；而 `ui-agent-preset`
+  （`AgentPresetSection.module.css`）**没有任何断点**——其 `.cards` 是
+  `.section`（上限 720px）内的 `repeat(auto-fill, minmax(268px, 1fr))`，因此从
+  约 580px 视口宽起上游就是两列（两张 268px 卡 + 12px 间距需要 options 盒内
+  548px = 视口 − 2×(16px + 安全区)）。chamber 旧有的单列臂对该网格改动的是它
+  **整个两列区间**，即手机档约 580–768px——库存网格的容器查询（section 宽
+  520px）折算到视口后大致落在同一档，旧臂并没有一个专属的 681–768px 窗口。
+  两处网格的单列臂都已删除（2026-09-11 upstream-alignment T17b）；
 - **设置 sheet 之外的弹层不再改写**：手机档不再给 `aria-modal` 弹层限宽
-  `100vw - 24px`（2026-09-11 upstream-alignment T6）：全树恰好三个
+  `100vw - 24px`（2026-09-11 upstream-alignment T6）：全树共有四个
   `role="dialog"` + `aria-modal="true"` 产出点，各自负责自己的视口适配——
   本 sheet、ui-primitives `Modal`（root 补 24px 内边距、dialog 为
-  `min(380px, 100%)`）、以及 `ui-attachment` 的 `ImageLightbox`（`inset: 0`
-  的 fixed 全幅背板，遮罩是 absolute `inset: 0` 层）。`inset: 0` 旁边再给
+  `min(380px, 100%)`）、ui-primitives 的 `ImageLightbox`（`inset: 0`
+  的 fixed 全幅背板，遮罩是 absolute `inset: 0` 层）、以及 `settings-account`
+  的 `PlatformOverlay`（`inset: 0`，z 1001）。`inset: 0` 旁边再给
   `max-width` 是过约束：灯箱背板被压成 `100vw - 24px` 且左对齐，右侧留下
   24px 未变暗、可点击穿透的条带；
 - **iOS 聚焦缩放**：弹窗内可编辑字段套用 composer 同款 16px 底线
@@ -248,12 +271,23 @@ click 控件、pane 不可分屏时自行 `disabled`，此前的整条隐藏基�
 之后弹出并**常驻**在刚用过的按钮上。这是粗指针（而非窄视口）的产物，因此规则
 以 `(pointer: coarse) and (hover: none)` 门控（iPad 横屏 1024px+ 同样会点按；
 接上鼠标时 hover 翻转为 hover，规则自动让位、悬停气泡恢复），并且只针对**与可
-访问名重复**的气泡——`button[aria-label] + [role="tooltip"][data-side]`（该组件
-把气泡渲染为 trigger 的紧邻下一兄弟，并带自身的 `data-side` 标记）。官方 31 处
-Tooltip 用法中 27 处是带 aria-label 的按钮，标签命名同一动作（composer 的发送/
-停止/指令/ContextMeter、队列 dock、目标栏、侧边栏、消息反馈、工作区行、聊天
-复制/分支；其中 3 处措辞略有差异——工作区搜索 ×2、轨迹加载更早——语义相同）。
-四处信息型气泡**刻意不隐藏**——聊天统计行、代理预设卡片描述（截断到 4 行）、
+访问名重复**的气泡，共**三种形态**：气泡是带 `aria-label` 触发器自身的紧邻下一
+兄弟（`button[aria-label] + [role="tooltip"][data-side]`，并带组件自己的
+`data-side` 标记）；带 `aria-label` 的 `button` 被包在 `span`/`div` 里时——官方
+有 3 处（右栏文档预览的缩放 +/- 与字体告警）以 `<span><button aria-label/></span>`
+为锚，button 是孙节点——气泡是**外层包裹元素**的下一兄弟，只贴触发器的臂看不到它，
+需要 `:is(span, div):has(> button[aria-label]) + [role="tooltip"][data-side]`
+（2026-09-30 修复）；该臂刻意独立成规则：不支持 `:has()` 的引擎只丢这一条臂，
+不会连带作废上面两条无条件臂。以及 portal 渲染的气泡
+（`[role="tooltip"][data-portal][data-side]`）——`portal: true` 经 `createPortal`
+移到 `document.body`，官方有**多处**这样的站点，兄弟关系完全不存在。
+官方 31 处 Tooltip 用法中 27 处是
+带 aria-label 的按钮，标签命名同一动作（composer 的发送/停止/指令/ContextMeter、
+队列 dock、目标栏、侧边栏、消息反馈、工作区行、聊天复制/分支；其中 3 处措辞略有
+差异——工作区搜索 ×2、轨迹加载更早——语义相同）。31/27 是**按 pin 快照**的普查
+（行号引用随 pin 漂移，规则本身只按选择器形状成立）。
+四处信息型气泡**刻意不隐藏**，因为它们的触发器没有可访问名副本——聊天统计行、
+代理预设卡片描述（截断到 4 行）、
 轨迹时间轴 span（`aria-hidden`、无点击路径）、≤620px 时的轨迹 kind 标签（可见
 标签被收起）：它们保留 sticky-hover 的小瑕疵，而不是丢掉触控用户无法从别处读到
 的内容。第五处 `role="tooltip"`（轨迹 turn-rail 预览，被 `aria-describedby`
@@ -281,11 +315,14 @@ Tooltip 用法中 27 处是带 aria-label 的按钮，标签命名同一动作�
 
 `official-hover-card.ts` 就是针对该档的文档级看护（与上面 tooltip 规则同一
 `(pointer: coarse) and (hover: none)` 门控——有 hover 能力的指针、以及全部桌面，
-都保持官方行为）。它从不触碰官方包：对一张按官方自身锚定几何
-（`card.left = wrapper.right + 8`；`card.top = wrapper.top`，或底夹的
-`card.bottom = innerHeight − 8`）与两个 CSS-module 类名 token
-（`_card_38jqx_*` / `_root_38jqx_*`）唯一匹配到某个 wrapper 的卡片，它在该 wrapper
-上派发**一次**冒泡 `pointerout`（无 related target）。React 的委托 enter/leave
+都保持官方行为）。它从不触碰官方包：对一张按官方自身锚定关系与两个 CSS-module
+类名 token（`_card_38jqx_*` / `_root_38jqx_*`）唯一匹配到某个 wrapper 的卡片，
+它在该 wrapper 上派发**一次**冒泡 `pointerout`（无 related target）。锚定关系是
+固定 pin 的原子真正渲染的两种摆放：COMPACT（`card.left = wrapper.right + 8`；
+`card.top = wrapper.top`，或底夹的 `card.bottom = innerHeight − 8`）与
+PREVIEW（`variant="preview"`，即 `ui-deliverables` 的行：卡片两侧至少越过
+wrapper 24px，并挂在其下 `top = wrapper.bottom + 8`、或在翻转时挂在其上
+`bottom = wrapper.top − 8`）。React 的委托 enter/leave
 路径把它读作「指针离开了窗口」，执行 wrapper 的 `onPointerLeave`——卡片在 DOM 里
 即原子已提交的 `open` 为真——从而 arm 原子自己的宽限关闭；这 200ms 内真实的
 `pointerenter` 会再次取消它，因此真实用户输入永远优先。触发条件：`pointerdown`
@@ -305,6 +342,9 @@ Tooltip 用法中 27 处是带 aria-label 的按钮，标签命名同一动作�
 3. 类名 token 与 vendor 构建绑定，和本包其他锚点一样，pin 升级时必须重锚。token
    过期现在会让 `verify-mobile-anchors.mjs` **硬失败（exit 1）**，而不是把看护静默降级为
    no-op；匹配器本身仍是 fail-closed（永远匹配不到卡片），**不会**误伤。
+4. 被原子 frame top-margin clamp（`overlayTopMargin`）下推的 PREVIEW 卡无法仅凭
+   矩形辨认，因此该摆放仍不被匹配、看护只 no-op 不误伤（已登记的 fail-closed
+   残余；要收口需要原子未暴露的标记）。
 
 ## 抽屉点击与键盘（触屏档）
 
@@ -317,10 +357,13 @@ Tooltip 用法中 27 处是带 aria-label 的按钮，标签命名同一动作�
   的位移）、表单控件（含任意非 false 态 contenteditable）、抽屉之外一律
   不触发；桌面路径不受影响（仅 touch/pen + 触屏档门禁）。
 - **抽屉导航不再拉起键盘**：官方 composer 会在会话切换后把焦点还给输入框，
-  在 iOS 上等于切换后立刻弹键盘——IME 阶梯 layer-1 的 gesture 判定现在只在
-  手势起始于**导航区**（抽屉会话行、会话头面包屑）时丢弃程序化回焦；点输入
-  框、发送键、鼠标/硬键盘聚焦以及 portal 型选择器流程（工作区/代理预设菜单）
-  仍保留键盘与输入意图。
+  在 iOS 上等于切换后立刻弹键盘——IME 阶梯 layer-1 的手势分类仍**持久**
+  （最近一次 pointerdown 属于导航区还是 preserve），但丢弃程序化回焦只在该次
+  pointerdown 之后的 **45s 可执行窗口**（`IME_NAV_DROP_WINDOW_MS`）内生效
+  （2026-09-30；窗口外的程序化
+  focusin 一律保留，避免把读屏/辅助技术的聚焦误判成那次导航手势）；点输入框、
+  发送键、鼠标/硬键盘聚焦以及 portal 型选择器流程（工作区/代理预设菜单）仍保留
+  键盘与输入意图。
 - **composer 可见性守卫**（IME 阶梯 layer 5，`composer.ts`
   `installComposerVisibilityGuard`）：忽略
   `interactive-widget=resizes-content` 的引擎（iOS Safari、旧 Android
@@ -345,7 +388,8 @@ Tooltip 用法中 27 处是带 aria-label 的按钮，标签命名同一动作�
   **250ms 有界轮询（4s 预算，按焦点会话一次计，指针/焦点噪声不延长）**——引擎不派发
   vv 事件也能收敛（实测 8 帧内）。
   **只服务 composer**（可编辑焦点 / composer 选区 / `KBD_EDITABLE_FOCUS_GRACE_MS`=1.2s
-  宽限窗口）；**缩放态**
+  宽限窗口；选区代理按**焦点归属**门控——焦点已到别处而 composer 里残留 STALE
+  选区时不得移动 seat）；**缩放态**
   非 composer 字段仍否决（缩放页面的平移不得驱动偏移），抽屉内输入框补 16px
   底线从源头消除聚焦缩放。arm 以 **frame 元素**为单位幂等：renderer 重挂替换
   AppFrame 而键盘仍开着时，新 frame 会被重新打标（旧 frame 的插件属性被清理）。
@@ -394,10 +438,11 @@ pnpm run test:mobile
 ## 锚点基线
 
 官方 dsh DOM 实测（CDP 审计在 **v0.1.5-alpha.2** 完成，并在 **v0.1.5-rc.2**
-重锚）——下列锚点在 rc.2 树中曾全部成立；当前 pin（v0.2.0-rc.2）下严格锚点门对 47 条属性
-锚点与两个 build-time CSS-module hash token 复验零命中 0
-（`verify-mobile-anchors.mjs --require-anchor-root`）；两个 hash token 已按被服务的 rc.2 产物
-重锚，零命中现为**硬失败**（见下）；alpha.2 → rc.1 的客户端改动（`ui-sidebar-*`
+重锚）——下列锚点在 rc.2 树中曾全部成立；当前 pin（v0.2.0-rc.2）下严格锚点门对 47 条
+属性/role/slot 锚点、3 个插件侧 local-name 类名锚点 + 1 个 external `_crumbSeg` 发射钉
+与两个 build-time CSS-module hash token 复验零命中 0
+（`verify-mobile-anchors.mjs --require-anchor-root`）；类名臂已按被服务的
+rc.2 产物重锚，零命中现为**硬失败**（见下）；alpha.2 → rc.1 的客户端改动（`ui-sidebar-*`
 的 guide/preview 行、`ui-primitives` 的 `CodeBlock` 包装层、`ui-chat` 统计对话框、
 `ui-dockkit` CSS 的两处 `z-index`、slot-catalog 文档指针）与 rc.1 → rc.2 的改动
 （`ui-{chat,deliverables,message-feedback,primitives}` 的反馈弹窗、交付卡与代码文件图标
@@ -406,8 +451,9 @@ pnpm run test:mobile
 **`rightbar`**（两个列壳及其 `[data-slot=…]` 出口包裹层都自首帧常驻——渲染器无条件
 输出该包裹层，只有其中的 docking 面按注册挂载，故打标在列壳上即收敛，见 markup.ts
 `isStructuralTarget` 与 `ROLE_SLOT_KEYS`）；composer 为 Lexical `[data-composer-input]`（无 textarea）；
-设置对话框渲染在侧边栏 DOM 内（无 body portal），抽屉打开态必须用
-`transform: none`（identity transform 仍是 containing block）。
+设置对话框由上游 body portal 渲染（rc.2 `SettingsPanel` 用
+`createPortal(…, document.body)`），抽屉的 transform 不再会把它裁进去；
+抽屉打开态仍刻意用 `transform: none`。
 
 当前 vendored 基线为 **v0.2.0-rc.2**（harness pin `639ed015`；单一来源
 `harness.commit`）。历史审计记录：上述锚点已对 alpha.2 源码复核（2026-09 重锚），
@@ -435,14 +481,16 @@ chips、加号/分屏与面板 chrome 按钮，以及被排除的 20px `[data-do
 本插件**不得**锚定的东西：`[data-dockkit-split-button]` 是 click 按钮而非拖拽
 chrome；`[role="menu"] [role="menuitem"][aria-selected]` 高亮信号在本 pin 不存在
 （ui-primitives `Menu` 不发 `aria-selected`，且它会把焦点移入菜单，其 Enter 根本
-到不了 document 处理器）；全树仍恰好三个 `aria-modal` 产出点与三个 `data-side`
+到不了 document 处理器）；全树共有四个 `aria-modal` 产出点（`settings-general`、两个 ui-primitives 弹层、`settings-account` 的 `PlatformOverlay`）与三个 `data-side`
 载体（两个 AppFrame/ConversationRoot 拖拽把手 + 那颗恒为 `role="tooltip"` 的气泡）。
 
 **会话头锚点（2026-09-14 review-fix）**，全部为属性形或结构形，已在 rc.2 树中核对：
 
 - `conversation.session.header.lineage`——会话头出口的**第四个**座席，与
   `actions` / `utilities` / `corner` 并列注册，但它渲染在 **`nav.crumbs` 内部**
-  （当前 crumb 的 `span.crumbSeg` 里），这正是它会被面包屑条挤压的原因；
+  ——最后一个 `span.crumbSeg` 里、当前 crumb `span.crumbCurrent` 的兄弟位（子代理
+  段里该座席顶替标题渲染、标题是它的 fallback）——正因如此它需要下面显式的
+  `flex: 0 0 auto` 钉住才不会被卷进收缩竞争；
 - 该座席自身的形状：根 `div` 的首个子节点是 `/` 分隔 `span`（仅 count 变体），随后是
   `button`，内含 `[span.activitySlot][span(count，无 class)][IconChevronDownOutline14]`；
 - phone 档选择器依赖的 DOM 层级：
@@ -450,8 +498,10 @@ chrome；`[role="menu"] [role="menuitem"][aria-selected]` 高亮信号在本 pin
   `div.headerUtilities` 与 `div.headerCorner[data-conversation-header-corner]` 是
   `titleRow` 的另两个子节点，`div.tabs[role=tablist]` 是 `header` 的第二个子节点——
   因此写在行上的 `> nav` 子代组合器是**静默 no-op**（`:has()` 必须是后代匹配）；
-- 当前 crumb 是 `button.crumb:disabled`（上游以 `disabled: last` 渲染），收缩顺序
-  就挂在它上面；
+- 当前 crumb 是裸 `span.crumb.crumbCurrent`，**不是** disabled 按钮；收缩顺序是
+  结构式的——末段 `nav > span:last-child`（最后一个 `span.crumbSeg`）吸收剩余
+  宽度，段内标题 span 借上游 `.crumb` 的 `max-width: 220px` +
+  `text-overflow: ellipsis` 省略，而 lineage chip 被钉在竞争之外；
 - `headerActions` 出口是 **list 座席**，本 pin 的三个注册者**都不渲染直接子
   `button`**：`agent-preset`（order −10）是 `AgentPresetLabel`，裸
   `span[icon][name]`（上游自己限 `max-width: 180px` + `overflow: hidden`，且非交互，
@@ -464,22 +514,31 @@ chrome；`[role="menu"] [role="menuitem"][aria-selected]` 高亮信号在本 pin
   的 `grid-template-columns: 0 minmax(0,1fr) 0` 锁不可能在上游改掉中心列 key 之后把
   会话内容困在 0px 第一轨（此时页面退化为官方窄窗布局）。
 
-**会话打开停滞提示的锚点（2026-09-14；取值空间 重审）**，同样全为属性形：
+**会话打开停滞提示的锚点（2026-09-14；取值空间 2026-09-30 重审）**，同样全为属性形：
 
 - `[data-chat-flow]`——`ui-chat` 的消息列；缺失即屏幕上没有会话面，其余锚点一律不读；
 - flow 的**最近** `[data-phase]` 祖先——会话根（`ConversationRoot.tsx`），其属性取值
   空间恰为 `settling` / `hero` / `active`；`hero` 是「无会话」面，而
   `conversationPhase()` 的内部名字（`blank` / `engaging`）从不到达该属性；
 - `[data-chat-anchor-key]`——已渲染的消息行（官方 `routedNode.key` 投影）；
-- `[data-slot="conversation.session.header"] > header`——头部出口与其直接 `<header>`
-  子节点，同时是**会话身份**：该出口是会话作用域槽，渲染器按会话重挂；keyed 的
-  root 作用域 `[data-phase]` 节点则会跨会话复用。
+- 包住 `conversation.session.header` 出口的 `<header>`（锚：
+  `[data-slot="conversation.header"] > header,`
+  `header:has(> [data-slot="conversation.session.header"])`）——该出口是**会话
+  身份**：它是会话作用域槽，渲染器按会话重挂；keyed 的 root 作用域
+  `[data-phase]` 节点则会跨会话复用；插件用 `outlet.closest('header')` 取值。
+- 编译局部名锚点——唯一的类名臂；全部在 `verify-mobile-anchors.mjs` 的 REQUIRED
+  最小集内，**被钉 bundle 里零发射即门禁硬失败**，绝不是静默 no-op，pin 升级必须
+  重锚：`_row`（composer 工具行）、`_modelRow`（设置 Models 行）、`_toBottomSlot`
+  （聊天「回到底部」控件，键盘守卫 armed 期间由同一 offset 抬升）。第四条
+  `_crumbSeg` 是 **external** 声明：面包屑收缩顺序是结构式的
+  （`nav > span:last-child`），插件不声明类名臂，只钉上游段类的发射面
+  （被钉 bundle 里的 `wSkVaW_crumbSeg`）。
 
-**主题观察器的锚点（）**：`data-ds-dark-theme`——`index.ts` 用
+**主题观察器的锚点**：`data-ds-dark-theme`——`index.ts` 用
 `MutationObserver.observe(document.body, { attributeFilter: ['data-ds-dark-theme', …] })`
 观察它。该 pin 上上游**唯一**的写入点是
-`document.body.toggleAttribute('data-ds-dark-theme', dark)`（`dsh-client-ui-theme` 的
-client 半）；其余引用全是 CSS 规则（`body[data-ds-dark-theme]{…}`），属消费形——
+`dsh-client-ui-layout` client 半的 `body.setAttribute`/`removeAttribute('data-ds-dark-theme')`
+（ui-theme 侧只带内联启动脚本文本）；其余引用全是 CSS 规则（`body[data-ds-dark-theme]{…}`），属消费形——
 `scripts/upstream/verify-mobile-anchors.mjs` 刻意**不**把它当作「上游仍在发射」的证据。
 若未来 pin 把写入改成 `dataset` API，属性名字面量会消失、门禁按 fail-closed 变红：
 那时应针对新的写入点重锚，而不是盲目放宽判定。
@@ -491,14 +550,15 @@ client 半）；其余引用全是 CSS 规则（`body[data-ds-dark-theme]{…}`�
 - `_root_38jqx_3` 与 `_card_38jqx_9`——**被服务的那份** bundle 里 ui-primitives
   `HoverCard` 模块的 CSS-module class token。它们是 build-time 哈希：rc.2 构建在
   `@deepseek-ai/dsh-web-frontend/dist/assets/index-*.js` 里产出它们（已对
-  `packages/desktop/vendor/dsh/` 下的随仓副本逐字节核对，压缩变量名形如
-  `Pp="_root_38jqx_3"` / `Rp="_card_38jqx_9"` / `zp="_copyable_38jqx_21"`；同名 `index-*.css`
+  `packages/desktop/vendor/dsh/` 下的随仓副本逐字节核对，压缩别名形如
+  `qp="_root_38jqx_3"` / `Gp="_card_38jqx_9"` / `Kp="_copyable_38jqx_21"`；同名 `index-*.css`
   也带这两条类选择器）。rc.2 重锚替换了上一个 pin 的 `_root_1b2ny_*` / `_card_1b2ny_*`
   对；`verify-mobile-anchors.mjs` 现在对零命中 hash token **硬失败**（此前为 advisory），
   下一次 pin 前移因此强制重锚，而不是把 watchdog 静默降级为 no-op（fail closed，绝不
   误触发）——这仍是本包唯一没有属性形兜底的锚点；
-- 锚定几何 `card.left = wrapper.right + 8`、`card.top = wrapper.top`（或贴底夹取的
-  `card.bottom = innerHeight − 8`）；
+- 锚定几何：COMPACT `card.left = wrapper.right + 8`、`card.top = wrapper.top`（或
+  贴底夹取的 `card.bottom = innerHeight − 8`），加上 PREVIEW 关系（wrapper 上/下：
+  两侧 24px containment inset、`wrapper.bottom + 8` / `wrapper.top − 8`）；
 - 卡片盒是该 wrapper 内唯一的 `[class*="_card_38jqx_"]` 元素。
 
 `test/dom/official-hover-card.test.ts` 钉住常数、被服务类名串与 src↔产物锁步，C8 钉住随包

@@ -17,6 +17,7 @@
 import { useEffect, useState } from 'react'
 import { IconPanelLeftOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import { subscribeDrawerOpen } from './layout-facts.ts'
 
 export interface MobileNavToggleInjected {
   toggleSidebar(): void
@@ -25,30 +26,15 @@ export interface MobileNavToggleInjected {
 
 export type MobileNavToggleProps = PropsRuntime<'shell.overlay'> & MobileNavToggleInjected
 
-/** The official frame: first element child of the root slot. */
-function findFrame(root: ParentNode): Element | null {
-  for (const child of root.children) {
-    if (child instanceof Element) return child
-  }
-  return null
-}
-
 export function MobileNavToggle({ toggleSidebar, t }: MobileNavToggleProps) {
   // Mirrors the drawer state for aria/tap semantics (the CSS is driven by the
-  // attribute itself). Scoped to the first root slot — N-ctx safe.
+  // attribute itself). The subscription re-resolves the frame on structural
+  // mounts (layout-facts.ts owns the rebinding), so a frame REMOUNT keeps
+  // aria-expanded/aria-label following the NEW frame instead of freezing on
+  // the detached one. Scoped to the first root slot — N-ctx safe.
   const [open, setOpen] = useState(false)
 
-  useEffect(() => {
-    const root = document.querySelector('[data-slot="root"]')
-    if (root === null) return
-    const frame = findFrame(root)
-    if (frame === null) return
-    const sync = (): void => setOpen(!frame.hasAttribute('data-sidebar-collapsed'))
-    sync()
-    const observer = new MutationObserver(sync)
-    observer.observe(frame, { attributes: true, attributeFilter: ['data-sidebar-collapsed'] })
-    return () => observer.disconnect()
-  }, [])
+  useEffect(() => subscribeDrawerOpen(setOpen), [])
 
   return (
     <>

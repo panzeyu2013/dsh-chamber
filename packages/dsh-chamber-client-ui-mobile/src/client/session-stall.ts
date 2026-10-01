@@ -25,9 +25,15 @@ export const CONVERSATION_PHASE_QUERY = '[data-phase]'
 
 /** The phases that present a REAL conversation — the ones where an empty
  *  message column is a fault rather than the correct empty face. hero (no
- *  session) is the only exclusion. settling is a real-session phase by its
- *  value space; which of its arms can reach this predicate is decided by the
- *  header-visibility gate, not here. */
+ *  session) is the only exclusion BY VALUE. The blank arms are excluded by
+ *  SHAPE instead: upstream DefaultConversationViews returns null while the
+ *  session is blank (ConversationRoot still mounts, its header slot included,
+ *  so the header CAN be on screen), hence no [data-chat-flow] is rendered at
+ *  all and probeStall fails closed at the flow gate — the header-visibility
+ *  gate is NOT what excludes them. settling keeps its seat here for the arm
+ *  whose root IS rendered with a flow (a continuable subagent awaiting its
+ *  parent catalog); the blank-shape fixture in the test file pins that
+ *  separation. */
 export const STALL_PHASES: readonly string[] = ['settling', 'active']
 
 /** Is this root phase one where an empty flow means "stalled"? */
@@ -41,8 +47,31 @@ export const CHAT_FLOW_QUERY = '[data-chat-flow]'
 /** A rendered message row (the official `routedNode.key` projection). */
 export const CHAT_ROW_QUERY = '[data-chat-anchor-key]'
 
-/** The session header: the header outlet plus its direct `<header>` child. */
-export const SESSION_HEADER_QUERY = '[data-slot="conversation.session.header"] > header'
+/**
+ * The session-header OUTLET — the only stable anchor. Upstream
+ * ConversationSessionHeader returns a Fragment, so the element that OWNS the
+ * outlet is the surrounding `<header>` (the outlet is its child, not its
+ * parent), and the outlet itself is display:contents. The old
+ * `[data-slot=...] > header` child combinator therefore never matched on the
+ * real DOM and left the stall shape permanently false.
+ */
+export const SESSION_HEADER_QUERY = '[data-slot="conversation.session.header"]'
+
+/**
+ * Resolve the displayed session `<header>` from its outlet: query the audited
+ * outlet anchor, then walk to the outlet's nearest `<header>` ancestor
+ * (`closest` includes the node itself). null when the outlet or the header is
+ * absent — the stall shape then stays false, never a guess.
+ *
+ * The DOM-free test harness drives this with a plain-node double, so the null
+ * checks are exact and `closest('header')` is typed to return
+ * `HTMLElement | null`: no `instanceof` on globals the harness does not have.
+ */
+export function sessionHeaderElement(root: ParentNode): HTMLElement | null {
+  const outlet = root.querySelector(SESSION_HEADER_QUERY)
+  if (outlet === null) return null
+  return outlet.closest('header')
+}
 
 //  The notice's presentation surface and double-install guard live in
 // session-stall-notice.ts; imported here and re-exported (public surface).
@@ -112,6 +141,9 @@ const MOBILE_STALL_LADDER = mobileStallLadder({
 /** The shared engine's per-session ledger shape (one `stall` observation). */
 export type StallLadderRecords = Readonly<Record<string, LadderRecord>>
 
+/** The single source id this watcher feeds the shared ladder. */
+const STALL_SOURCE_ID = 'stall'
+
 /** The notice decision, plus the clock and ledger it leaves behind. */
 export interface StallDecision {
   /** The first sighting of the current continuous stall, 0 when not timing. */
@@ -119,6 +151,9 @@ export interface StallDecision {
   readonly show: boolean
   /** Execute the per-session rebuild NOW (evidence + ledger allow it). */
   readonly resync: boolean
+  /** The shared ladder has NO lever left for this session: automatic recovery
+   *  is spent, only the manual reload remains (drives the copy). */
+  readonly exhausted: boolean
   readonly records: StallLadderRecords
 }
 
@@ -159,10 +194,19 @@ export function isStallShape(facts: StallShapeFacts): boolean {
  * the clock. Pure — unit-tested.
  */
 export function decideStallNotice(input: StallNoticeInput): StallDecision {
-  // A stall nobody is observing ends its episode: the ladder ledger dies with
-  // it, so the next stall starts from a full quota.
-  if (!input.shape || !input.pageVisible) return { since: 0, show: false, resync: false, records: {} }
+  // A stall nobody is observing ends its EPISODE (the clock resets — a stall
+  // must be continuous and observed), but the shared ladder's rolling window
+  // survives: a flickering shape must not hand out a fresh resync quota on
+  // every break. The caller carries the returned ledger forward.
+  if (!input.shape || !input.pageVisible) {
+    return { since: 0, show: false, resync: false, exhausted: false, records: input.records ?? {} }
+  }
   const since = input.since === 0 ? input.now : input.since
+  // The evidence gate: both halves required, exactly as the observation below
+  // reports them. plan.exhausted ALSO fires when this gate cannot be satisfied
+  // (no lever is reachable at all), which is not a spent budget — the copy may
+  // only claim exhaustion when the budget is the binding constraint.
+  const stuckEvidence = input.loading === true && input.openInFlight === false
   const plan = planLadder(
     MOBILE_STALL_LADDER,
     input.records ?? {},
@@ -170,9 +214,7 @@ export function decideStallNotice(input: StallNoticeInput): StallDecision {
       stall: {
         sticky: true,
         symptomSinceMs: since,
-        // BOTH evidences required: loading === true and nothing in flight;
-        // either unknown means no evidence (requiresStuckEvidence holds the arm).
-        stuckEvidence: input.loading === true && input.openInFlight === false,
+        stuckEvidence,
         progressStamp: 0,
         escalationBlocked: false,
       },
@@ -186,18 +228,45 @@ export function decideStallNotice(input: StallNoticeInput): StallDecision {
     since,
     show: !input.dismissed && stalled,
     resync: plan.actions.some((action) => action.tier === 'resync'),
+    // Exhausted = the plan has no lever left AND the evidence gate is
+    // satisfiable: with `stuckEvidence` true the only remaining blocker is a
+    // spent quota, so this is exactly "the automatic arm ran out of budget".
+    exhausted: plan.exhausted.includes(STALL_SOURCE_ID) && stuckEvidence,
     records: plan.records,
   }
 }
 
+/** The facts the notice copy is selected from. */
+export interface StallMessageFacts {
+  /** How long the current continuous stall has held (ms). */
+  readonly elapsedMs: number
+  /** The shared ladder spent its last lever for this session
+   *  (StallDecision.exhausted): automatic recovery can no longer fire. */
+  readonly exhausted: boolean
+}
+
 /**
- * The notice copy for a stall that has held this long: the failure wording
- * past LADDER_TABLES.mobile.failedMs. Pure — unit-tested.
+ * The copy KEY TABLE: the FIRST matching row wins and the last row matches
+ * unconditionally, so the key space is total by construction. An exhausted
+ * ladder outranks the elapsed wording: past the failure bound the user would
+ * otherwise be told "content not loaded" with no hint that the automatic
+ * recovery budget is spent. Pure — unit-tested.
  */
-export function stallMessageKey(elapsedMs: number): MobileKey {
-  return elapsedMs >= LADDER_TABLES.mobile.failedMs
-    ? 'dsh-chamber.mobile.stall.messageFailed'
-    : 'dsh-chamber.mobile.stall.message'
+const STALL_MESSAGE_TABLE: readonly {
+  readonly key: MobileKey
+  readonly when: (facts: StallMessageFacts) => boolean
+}[] = [
+  { key: 'dsh-chamber.mobile.stall.messageExhausted', when: facts => facts.exhausted },
+  { key: 'dsh-chamber.mobile.stall.messageFailed', when: facts => facts.elapsedMs >= LADDER_TABLES.mobile.failedMs },
+  { key: 'dsh-chamber.mobile.stall.message', when: () => true },
+]
+
+/** Select the notice copy key from the table above. Pure — unit-tested. */
+export function stallMessageKey(facts: StallMessageFacts): MobileKey {
+  for (const row of STALL_MESSAGE_TABLE) {
+    if (row.when(facts)) return row.key
+  }
+  return 'dsh-chamber.mobile.stall.message'
 }
 
 /**
@@ -244,11 +313,13 @@ export function probeStall(
   }
   const phaseNode = flow.closest(CONVERSATION_PHASE_QUERY)
   const activeRoot = isStallPhase(phaseNode?.getAttribute('data-phase')) ? phaseNode : null
-  const candidate = root.querySelector(SESSION_HEADER_QUERY)
-  const headerVisible = candidate !== null && options.isVisible(candidate)
+  // The probe's root is the minimal query-root face; the resolver only needs
+  // querySelector + closest, which both the real ParentNode and the double have.
+  const header = sessionHeaderElement(root as unknown as ParentNode)
+  const headerVisible = header !== null && options.isVisible(header)
   return {
     activeRoot,
-    header: headerVisible ? candidate : null,
+    header: headerVisible ? header : null,
     activeConversation: activeRoot !== null,
     headerVisible,
     flowPresent: true,
@@ -306,6 +377,10 @@ export interface StallSessionFace {
 //  session-presentation.ts (presentedSessionId + presentedConcreteSession) so the
 //  stall arm reads the official face through exactly one accessor pair.
 
+/** One warning per module lifetime: a permanently broken resync must not
+ *  flood the console at the poll cadence, but it must never fail silently. */
+let warnedOnce = false
+
 /**
  * Build the automatic arm's face from the plugin context, or undefined when
  * the concrete capability is absent (degrade to notice-only, never to a
@@ -360,7 +435,14 @@ export function sessionStallFace(
       try {
         const method = session.resync
         if (typeof method !== 'function') return
-        void (method as () => unknown).call(session)
+        // The pinned resync returns a Promise: a rejection must never surface
+        // as an unhandled rejection (Promise.resolve also absorbs a hostile
+        // thenable), and it must not vanish either — warn once.
+        void Promise.resolve((method as () => unknown).call(session)).catch((error: unknown) => {
+          if (warnedOnce) return
+          warnedOnce = true
+          console.warn('[dsh-chamber.mobile] session resync failed', error)
+        })
       } catch {
         // Fail closed: a hostile face must never throw into the poll loop.
       }
@@ -528,7 +610,10 @@ export function installSessionStallNotice(t: (key: MobileKey) => string, session
       // time discards the clock, so recomputing alone would hide it on resume.
       // A mounted notice implies dismissed is false (its only setter unmounts).
       if (decision.show || (shape && notice !== null)) {
-        mount(probe.header, stallMessageKey(decision.since === 0 ? 0 : now - decision.since))
+        mount(probe.header, stallMessageKey({
+          elapsedMs: decision.since === 0 ? 0 : now - decision.since,
+          exhausted: decision.exhausted,
+        }))
       } else unmount()
     } catch {
       // Fail closed: a notice watcher must never break the page it watches.
