@@ -20,10 +20,13 @@
 - **open-in 占用上游 files-tab 目录动作座席** —— 跟随 rc.2 的目录动作位（design 16 §3/§5、design 20 §6.3）。
 - **托管主机继承登录 shell 环境** —— 桌面侧先按用户登录 shell 解析环境，再拉起托管实例（design 05）。
 - **捆绑 dsh 前端基线升至 0.2.0-rc.2** —— 官方前端与连接客户端一并对齐该基线。
+- **打包移动客户端（design 17 §18）** —— 自研客户端插件为窄屏/触屏提供完整移动视图：视口档位与资源手术（keyed viewport token 与 theme-color 镜像，进出档位按 key 还原）、抽屉导航（安全区、inert 回收、与官方状态锁步）、composer 键盘抬升（visualViewport 观测、单执行器、停滞自愈）、会话停滞提示与自动重建（共享阶梯表；预算用尽后的文案优先）、设置面板与官方 hover card 的触屏适配；gateway 在认证边界内提供移动入口（`/chamber/mobile.html` 为兼容页，`--mobile-entry` 归一为同源路径）。
+- **本地 `@` 引用的宿主路径面（design 25 §5.7 / S-56）** —— Electron 经 `webUtils.getPathForFile` 精确取路径，Swift/WKWebView 以「拖拽板快照 + 事件批次唯一配对」补齐；两腿共用 `data-chamber-painted-source` 作用域门，vendor 补丁把 ui-attachment 的 document 级 drop 收敛到落点所在壳（同批修掉既有的图片双附），失配一律回退上传，不给错路径。
 
 ### 变更
 - **侧边栏悬停揭示改为按行门控** —— 指针下滑进入的行不再立即揭示动作簇；重命名抑制优先于门控揭示；StrictMode 重挂载后门控按新行重建（design 06 §7）。
 - **设置 → 内置插件** —— 内嵌插件页的标题块按位置隐藏，只保留上游内容本体。
+- **`--mobile-entry` 校验收紧（破坏性）** —— 入口必须是同源绝对路径、不得含查询/片段、不得指向 `/auth*`；旧版把原样值当重定向目标（半可用且静默截断），现在启动即 `exit 2`。
 
 ### 修复
 - **facts 应用步骤的重入环（React #185）** —— 通知/facts 步进链在写入 store 触发的同步渲染里再回调自身时，React 以 #185 中止且异常被 never-throw 守卫吞掉，导致整拍作废；现在 \`apply-session-facts\` 按来源过重入闸（非重入仍同步执行），重入只登记并补跑**最新**快照，撤回来源的待应用快照随撤回丢弃；\`reconcile\` 与 \`completion-arm\` 语义不变（design 19 §3.7）。
