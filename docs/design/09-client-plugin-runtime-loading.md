@@ -373,8 +373,8 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   `expect`→`replace`，`expect` 必须**恰好命中一次**（0 次或多次 = 构建期抛错，绝不静默发出未打补丁的
   bundle）。应用点 = renderer 的 `deepseekSource().transform`（我们的 vite 配置），vendor 文件**零写入**；
   模块 id 并接受软链形式与 `realpathSync` 后的子模块形式（vite 实际给后者）。
-- 落点（当前：15 个文件 / 36 处锚点，逐锚点由触点表 C9 与 `packages/renderer/scripts/vendor-patches.test.mjs`
-  校验；下列圈号 ①–⑪ 是 URL 类，每个圈号对应**一个**文件，其余 4 个文件属下三/四类：实测帧成本 1（`assembly.ts`）/ 逻辑缺陷 1（`use-chat-reading.ts`）/ 多实例正确性 1（`ui-workspace/navigation.ts`）/ 座席所有权转移 1（`ui-workspace/index.ts`））：① `ui-chat` 的
+- 落点（当前：17 个文件 / 45 处锚点，逐锚点由触点表 C9 与 `packages/renderer/scripts/vendor-patches.test.mjs`
+  校验；下列圈号 ①–⑪ 是 URL 类，每个圈号对应**一个**文件，其余 6 个文件属下三/四类：实测帧成本 1（`assembly.ts`）/ 逻辑缺陷 1（`use-chat-reading.ts`）/ 多实例正确性 3（`ui-workspace/navigation.ts` + `ui-attachment/drop-events.ts` + `ui-attachment/ComposerAttachments.tsx`）/ 座席所有权转移 1（`ui-workspace/index.ts`））：① `ui-chat` 的
   `chat/AssistantMarkdown.tsx` 读取新增 root 标准
   **prop** `chamberFileApiBase`（chamber layout fork 经 `ctx.slots.provideRoot({ props })` 提供，值 = 本 entry 的
   `ctx.chamberBasePath`），`pathImages` 以 `new URL(chamberFileApiBase + '/', document.baseURI)` 作为上游
@@ -440,6 +440,7 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   store 里的外来值仍在）。store 在 vendor service 内构造、键模块私有，chamber 包无法从外部改键；补丁从
   per-entry `ctx.chamberBasePath` 取 scope（缺失即回落上游未 scoped 行为），键变为
   `dsh.sessions.current./api/i/<id>`。`reason` 必须写明跨实例症状与接受的取舍；上游自带 scope 后删除该条。
+- 第四类的**第三种形态（per-mount DOM containment，__DSH_HOST_PATHS__ 批次新增）**：document 级 drag/drop 事件注册表无 chamber 包拥有，scope 取监听器所属挂载自己的 `[data-instance]` 子树；该注册表的每个 document 级副作用（dragenter/dragover/dragleave/drop）加同一归属判定，无实例壳时回落上游、有壳而解析不到自身则拒绝。理由与取舍见 `vendor-patches.mjs` 头部「THIRD ADMITTED FORM」与 design 25 §5.7。
 - 第四类的**第二种形态（座席所有权转移，0.2.0 新增）**：`ui-workspace` 的 `client/index.ts` 在其
   workspace-browser 注册里声明 `sidebar.session.row.leading` / `sidebar.session.row.hover` 两座席，而 chamber 壳
   自建多来源列表、**永不挂载**该注册（`sidebar.workspaces` 洞只声明不调用，I-4 锁禁止渲染该字面量）⇒ 座席只能由
@@ -480,8 +481,10 @@ scope——被否：同一 document 复用 N 个实例，页面级事实不可�
 登记纪律：新增补丁前先问「能否在 chamber 自己的包里修」；同源绝对或 document-relative URL 一类硬假设优先
 采用「可选的 chamber 标准 prop + 上游回落」的形状，使官方布局部署保持正确。实测帧成本类必须附 A/B；模块私有
 状态机的逻辑缺陷类（第三类）必须写明实测症状、接受的取舍与删除条件，并在上游携带修复后删除条目；多实例
-正确性类（第四类）必须写明跨实例症状、接受的取舍与删除条件，scope 只能取自 per-entry `chamberBasePath`
-（禁页面全局事实或 URL 猜测），且上游自带 scope 后删除。
+正确性类（第四类）必须写明跨实例症状、接受的取舍与删除条件；scope 有两种准入形态——①页面级事实（persist key /
+存储名 / document 级注册表）取自 per-entry `chamberBasePath`；②document 级事件注册表取自监听器所属挂载自己
+的 DOM 子树祖先（per-mount 事实；无 chamber 包拥有该监听器；禁页面全局事实与 URL 猜测），且该注册表的**每一个**
+document 级副作用都要加同一归属判定、无 chamber 视图时回落上游。两种形态都在上游自带 scope 后删除。
 
 **Rejected alternatives**：① 在 chamber 侧加运行时护栏（包一层滚动位置重贴/监听渲染）——被否：读策略属于
 模块私有状态机（`ChatReading` 不导出、viewport 不表达意图），chamber 侧护栏会成为尾随策略的第二个所有者，

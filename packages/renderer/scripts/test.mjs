@@ -195,6 +195,8 @@ export const GROUPS = {
     'test/frame-chrome/theme-fallback.test.ts',
     'test/frame-chrome/frame-locale.test.ts',
     'test/frame-chrome/page-language-hook.test.ts',
+    // 桌面宿主路径面的范围门控：文档根 data-chamber-painted-source 的写/读与 App 接线。
+    'test/frame-chrome/host-path-scope.test.ts',
   ],
 }
 

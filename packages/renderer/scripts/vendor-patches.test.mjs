@@ -52,6 +52,8 @@ const VENDOR = fileURLToPath(new URL('../../../vendor/harness-packages/@deepseek
 /** Real pinned vendor files. */
 const FILES = {
   markdown: VENDOR + 'dsh-client-ui-chat/src/client/chat/AssistantMarkdown.tsx',
+  attachmentDrop: VENDOR + 'dsh-client-ui-attachment/src/client/drop-events.ts',
+  attachmentComponent: VENDOR + 'dsh-client-ui-attachment/src/client/ComposerAttachments.tsx',
   nodeView: VENDOR + 'dsh-client-ui-chat/src/client/chat/AssistantNodeView.tsx',
   chatView: VENDOR + 'dsh-client-ui-chat/src/client/chat/ChatView.tsx',
   upload: VENDOR + 'dsh-client-file-upload/src/client/runtime.ts',
@@ -74,6 +76,8 @@ const IDS = {
   // The renderer resolves vendor sources through realpathSync, so the id vite
   // reports is normally the SUBMODULE path (this is the form that matters).
   markdownReal: '/x/vendor/harness-checkout/packages/client/ui-chat/src/client/chat/AssistantMarkdown.tsx',
+  attachmentDropReal: '/x/vendor/harness-checkout/packages/client/ui-attachment/src/client/drop-events.ts',
+  attachmentComponentReal: '/x/vendor/harness-checkout/packages/client/ui-attachment/src/client/ComposerAttachments.tsx',
   nodeView: '/x/vendor/harness-checkout/packages/client/ui-chat/src/client/chat/AssistantNodeView.tsx',
   chatViewReal: '/x/vendor/harness-checkout/packages/client/ui-chat/src/client/chat/ChatView.tsx',
   uploadReal: '/x/vendor/harness-checkout/packages/client/file-upload/src/client/runtime.ts',
@@ -1205,9 +1209,16 @@ test('each patch artifact marker matches its own bundled source, and no other (f
     { vendorFile: 'dsh-client-ui-deliverables/src/client/Deliverables.tsx', key: 'deliverables', real: IDS.deliverablesReal, loader: 'tsx', route: 'api/present.open' },
     { vendorFile: 'dsh-client-ui-deliverables/src/client/ReviewTab.tsx', key: 'reviewTab', real: IDS.reviewTabReal, loader: 'tsx', route: 'api/changes.open' },
     { vendorFile: 'dsh-client-ui-conversation/src/client/conversation/assembly.ts', key: 'assembly', real: IDS.assembly, loader: 'ts', route: '' },
+    { vendorFile: 'dsh-client-ui-attachment/src/client/drop-events.ts', key: 'attachmentDrop', real: IDS.attachmentDropReal, loader: 'ts', route: '' },
+    { vendorFile: 'dsh-client-ui-attachment/src/client/ComposerAttachments.tsx', key: 'attachmentComponent', real: IDS.attachmentComponentReal, loader: 'tsx', route: '' },
     { vendorFile: 'dsh-client-ui-workspace/src/client/navigation.ts', key: 'workspaceNavigation', real: IDS.workspaceNavigation, loader: 'ts', route: '' },
     { vendorFile: 'dsh-client-ui-workspace/src/client/index.ts', key: 'workspaceIndex', real: IDS.workspaceIndex, loader: 'ts', route: '' },
   ]
+  assert.deepEqual(
+    [...new Set(sources.map((source) => source.vendorFile))].sort(),
+    VENDOR_PATCHES.map((patch) => patch.vendorFile).sort(),
+    'the bundle fixture must cover every registered vendor file exactly once',
+  )
   const bundled = []
   for (const entry of sources) {
     const file = FILES[entry.key]
@@ -1220,7 +1231,7 @@ test('each patch artifact marker matches its own bundled source, and no other (f
       raw: await bundle(source, file, entry.loader) + ' ' + entry.route,
     })
   }
-  // The 16th marker has no vendorFile (the layout fork publishes the root prop). Give it the
+  // The layout marker has no vendorFile (the layout fork publishes the root prop). Give it the
   // same bundle lockstep as the vendor markers: it must match its own bundle and stay disjoint
   // from every patched and raw vendor bundle.
   const layoutFile = fileURLToPath(new URL('../../dsh-chamber-client-ui-layout/src/client/index.ts', import.meta.url))
@@ -1263,3 +1274,232 @@ test('each patch artifact marker matches its own bundled source, and no other (f
     assert.deepEqual(risky, [], 'marker binds a helper the chunk minifier renames: ' + (marker.vendorFile ?? 'layout'))
   }
 })
+
+/** Evaluate one installDocumentDropEvents body with fake document/window/Element/Node. */
+function createDropHarness(code, { Element, Node, querySelector = () => null } = {}) {
+  // Slice both module-level helpers: onDrop calls droppedDirectories too.
+  const start = code.indexOf('function droppedDirectories')
+  assert.notEqual(start, -1, 'installer slice start marker not found')
+  const js = esbuild.transformSync(unexport(code.slice(start)), { loader: 'ts' }).code
+  const listeners = new Map()
+  const windowListeners = new Map()
+  const documentElement = {}
+  const body = {}
+  const documentStub = {
+    addEventListener: (type, listener) => {
+      const list = listeners.get(type) ?? []
+      list.push(listener)
+      listeners.set(type, list)
+    },
+    removeEventListener: () => {},
+    querySelector,
+    documentElement,
+    body,
+  }
+  const windowStub = {
+    addEventListener: (type, listener) => {
+      const list = windowListeners.get(type) ?? []
+      list.push(listener)
+      windowListeners.set(type, list)
+    },
+    removeEventListener: () => {},
+    innerWidth: 1024,
+    innerHeight: 768,
+  }
+  const install = new Function('document', 'window', 'Element', 'Node', js + NL + 'return installDocumentDropEvents')(
+    documentStub, windowStub, Element, Node,
+  )
+  return {
+    install,
+    dispatch: (type, event) => {
+      for (const listener of listeners.get(type) ?? []) listener(event)
+    },
+    dispatchWindow: (type, event) => {
+      for (const listener of windowListeners.get(type) ?? []) listener(event)
+    },
+    documentElement,
+    body,
+  }
+}
+
+/** Single-installer convenience used by the intake-containment test. */
+function installDropEvents(code, options) {
+  const harness = createDropHarness(code, options)
+  return { install: harness.install, drop: (event) => harness.dispatch('drop', event) }
+}
+
+test('the attachment drop intake is contained to the view its listener belongs to (executed patched installer)', () => {
+  const source = readFileSync(FILES.attachmentDrop, 'utf8')
+  const patched = applyVendorPatches(IDS.attachmentDropReal, source)
+  assert.notEqual(patched, undefined)
+  assert.deepEqual(patched.applied, ['dsh-client-ui-attachment/src/client/drop-events.ts'])
+
+  class NodeStub {}
+  class ElementStub extends NodeStub {}
+  const insideNode = new ElementStub()
+  const outsideNode = new ElementStub()
+  const owner = { contains: (node) => node === insideNode }
+  const dropEvent = (target) => ({
+    dataTransfer: { types: ['Files'], files: [], items: [] },
+    target,
+    preventDefault: () => {},
+  })
+
+  const run = (code) => {
+    const calls = []
+    const harness = installDropEvents(code, { Element: ElementStub, Node: NodeStub })
+    harness.install(true, (files, directories) => { calls.push({ files, directories }) }, { current: 0 }, () => {}, () => owner)
+    harness.drop(dropEvent(insideNode))
+    harness.drop(dropEvent(outsideNode))
+    return calls
+  }
+
+  assert.equal(run(patched.code).length, 1, 'the patched installer intakes only the drop inside its own view')
+  assert.equal(run(source).length, 2, 'negative control: the unpatched installer intakes both (the fan-out)')
+
+  // owner 解析失败时的兜底：文档里没有任何实例壳 = 官方布局 → 按上游放行；
+  // 有壳却解析不到自己 = 挂载脱离等异常 → 拒绝（fail-closed）。
+  const dropIn = (code, querySelector) => {
+    const calls = []
+    const harness = installDropEvents(code, { Element: ElementStub, Node: NodeStub, querySelector })
+    harness.install(true, () => { calls.push(1) }, { current: 0 }, () => {}, () => null)
+    harness.drop(dropEvent(insideNode))
+    return calls.length
+  }
+  assert.equal(dropIn(patched.code, () => null), 1, 'a layout with no instance shells keeps upstream behaviour')
+  assert.equal(dropIn(patched.code, () => ({})), 0, 'an unresolvable owner beside mounted shells is refused')
+})
+
+/** Evaluate the patched ComposerAttachments with hook stubs; capture its installer wiring and wrapper element. */
+function renderAttachments(code) {
+  const start = code.indexOf('export function ComposerAttachments({')
+  assert.notEqual(start, -1, 'component slice start marker not found')
+  const js = esbuild.transformSync(unexport(code.slice(start)), { loader: 'tsx' }).code
+  const installed = []
+  const refs = []
+  const React = {
+    createElement: (type, props, ...children) => ({
+      type,
+      props: { ...(props ?? {}), children },
+    }),
+  }
+  const useState = (initial) => [initial, () => {}]
+  const useRef = (initial) => {
+    const ref = { current: initial }
+    refs.push(ref)
+    return ref
+  }
+  const useMemo = (fn) => fn()
+  const useCallback = (fn) => fn
+  const useEffect = (fn) => { fn() }
+  const installDocumentDropEvents = (...args) => { installed.push(args); return () => {} }
+  const component = new Function(
+    'React', 'useState', 'useRef', 'useMemo', 'useCallback', 'useEffect', 'installDocumentDropEvents',
+    'css', 'DropOverlay', 'AttachmentRail', 'FileCard', 'ImageLightbox',
+    'dropOverlayLabels', 'attachmentRailLabels', 'fileCardLabels', 'lightboxLabels', 'IconCloseFillRegular',
+    js + NL + 'return ComposerAttachments',
+  )(
+    React, useState, useRef, useMemo, useCallback, useEffect, installDocumentDropEvents,
+    {}, () => null, () => null, () => null, () => null, () => ({}), () => ({}), () => ({}), () => ({}), () => null,
+  )
+  const element = component({
+    attachments: [], canAcceptDrop: true, onAddFiles: () => {}, onRemoveAttachment: () => {},
+    uploads: {}, onRetryFile: () => {}, dropLimits: {}, t: (key) => key,
+  })
+  return { installed, refs, element }
+}
+
+test('the attachment component hands its own view resolver to the drop installer (executed patched component)', () => {
+  const source = readFileSync(FILES.attachmentComponent, 'utf8')
+  const patched = applyVendorPatches(IDS.attachmentComponentReal, source)
+  assert.notEqual(patched, undefined)
+  assert.deepEqual(patched.applied, ['dsh-client-ui-attachment/src/client/ComposerAttachments.tsx'])
+
+  const { installed, refs, element } = renderAttachments(patched.code)
+  assert.equal(installed.length, 1, 'the install effect runs once')
+  assert.equal(installed[0].length, 5, 'the installer receives its owner resolver as the fifth argument')
+  const ownerView = installed[0][4]
+  assert.equal(typeof ownerView, 'function')
+
+  // The wrapper carries the ref (display:contents generates no box) and the resolver reads the view root from it.
+  assert.equal(element.type, 'span')
+  assert.equal(element.props.style.display, 'contents')
+  assert.equal(element.props.ref, refs[1], 'the wrapper ref is the one the resolver reads')
+
+  const sentinel = {}
+  let selector = null
+  refs[1].current = { closest: (value) => { selector = value; return sentinel } }
+  assert.equal(ownerView(), sentinel)
+  assert.equal(selector, '[data-instance]')
+  refs[1].current = null
+  assert.equal(ownerView(), null, 'a detached mount resolves to null (the installer then fails closed)')
+
+  // Negative control: the unpatched component never passes a resolver at all.
+  const raw = renderAttachments(source)
+  assert.equal(raw.installed[0].length, 4, 'the unpatched installer call has no owner argument')
+})
+
+test('a hidden shell cannot veto or overlay the visible shell drag (executed patched handlers)', () => {
+  const source = readFileSync(FILES.attachmentDrop, 'utf8')
+  const patched = applyVendorPatches(IDS.attachmentDropReal, source)
+  assert.notEqual(patched, undefined)
+
+  class NodeStub {}
+  class ElementStub extends NodeStub {}
+  const insideNode = new ElementStub()
+  const visibleOwner = { contains: (node) => node === insideNode }
+  const hiddenOwner = { contains: () => false }
+  const run = (code) => {
+    const harness = createDropHarness(code, { Element: ElementStub, Node: NodeStub })
+    const active = []
+    harness.install(true, () => {}, { current: 0 }, (value) => { active.push(['visible', value]) }, () => visibleOwner)
+    harness.install(false, () => {}, { current: 0 }, (value) => { active.push(['hidden', value]) }, () => hiddenOwner)
+    const event = {
+      dataTransfer: { types: ['Files'], files: [], items: [], dropEffect: 'unset' },
+      target: insideNode,
+      clientX: 10,
+      clientY: 10,
+      preventDefault: () => {},
+    }
+    harness.dispatch('dragover', event)
+    harness.dispatch('dragenter', event)
+    harness.dispatch('dragleave', event)
+    return { event, active }
+  }
+
+  const patchedRun = run(patched.code)
+  assert.equal(patchedRun.event.dataTransfer.dropEffect, 'copy', 'the visible shell keeps the copy effect')
+  assert.deepEqual(patchedRun.active, [['visible', true], ['visible', false]], 'only the visible shell reacts to the whole drag sequence (enter/leave)')
+
+  // Negative control: upstream lets the hidden (false, later-registered) shell veto and overlay.
+  const rawRun = run(source)
+  assert.equal(rawRun.event.dataTransfer.dropEffect, 'none', 'negative control: the hidden shell vetoes')
+  assert.deepEqual(rawRun.active.filter(([who]) => who === 'hidden'), [['hidden', true], ['hidden', false]], 'negative control: the hidden shell reacts too')
+})
+
+test('the upstream viewport-left reset and dragend still clear the overlay (escape hatches)', () => {
+  const source = readFileSync(FILES.attachmentDrop, 'utf8')
+  const patched = applyVendorPatches(IDS.attachmentDropReal, source)
+  assert.notEqual(patched, undefined)
+
+  class NodeStub {}
+  class ElementStub extends NodeStub {}
+  const insideNode = new ElementStub()
+  const owner = { contains: (node) => node === insideNode }
+  const harness = createDropHarness(patched.code, { Element: ElementStub, Node: NodeStub })
+  const active = []
+  harness.install(true, () => {}, { current: 0 }, (value) => { active.push(value) }, () => owner)
+
+  harness.dispatch('dragenter', { dataTransfer: { types: ['Files'] }, target: insideNode, preventDefault: () => {} })
+  assert.deepEqual(active, [true])
+
+  // Target html/body + pointer outside the viewport: not owned by any shell, but the drag session left
+  // the window, so every shell must drop its own overlay (OS drags do not guarantee a page dragend).
+  harness.dispatch('dragleave', { dataTransfer: { types: ['Files'] }, target: harness.documentElement, clientX: -1, clientY: 5, preventDefault: () => {} })
+  assert.deepEqual(active, [true, false], 'leaving the viewport clears the overlay')
+
+  harness.dispatch('dragenter', { dataTransfer: { types: ['Files'] }, target: insideNode, preventDefault: () => {} })
+  harness.dispatchWindow('dragend', {})
+  assert.deepEqual(active, [true, false, true, false], 'dragend still resets')
+})
+

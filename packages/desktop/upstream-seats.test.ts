@@ -169,3 +169,34 @@ test('item 71: both flavors read the questionnaire machine description from the 
   assert.match(shim, /deviceInfo: function \(\)/, 'shim must expose deviceInfo')
   assert.match(shim, /fetchInfo\(INFO_MAX_ATTEMPTS \+ 1\)/, 'shim must read the payload through the info channel')
 })
+
+test('S-56: both flavors expose the upstream host-path carrier', () => {
+  // Upstream apps/desktop/src/preload-app.ts:79-84 (__DSH_HOST_PATHS__): the composer
+  // cites dropped/picked files and folders that have a real host path as @ references.
+  // Electron mirrors webUtils.getPathForFile exactly; the Swift shell cannot query
+  // WebKit for a DOM File path, so its shim pairs the event batch with a native
+  // drag-pasteboard catalog. Both arms install the global at documentStart and gate
+  // on the chamber renderer's painted-source document mark.
+  assert.match(preload, /contextBridge\.exposeInMainWorld\('__DSH_HOST_PATHS__'/)
+  assert.match(preload, /webUtils\.getPathForFile/)
+  assert.match(preload, /function exposeHostPaths\(\): void \{/)
+  assert.match(preload, /data-chamber-painted-source/)
+  const hostPathsCall = preload.indexOf('exposeHostPaths();')
+  const bridgeRequest = preload.indexOf('requestAppInfo().then(')
+  assert.notEqual(hostPathsCall, -1, 'Electron: the bootstrap must call exposeHostPaths()')
+  assert.notEqual(bridgeRequest, -1, 'Electron: the bridge payload request must stay')
+  assert.ok(hostPathsCall < bridgeRequest, 'Electron: the carrier must precede the bridge payload request')
+  assert.match(shim, /defineWindowGlobal\('__DSH_HOST_PATHS__', \{ pathFor: hostPathFor \}\)/)
+  assert.match(shim, /defineWindowGlobal\('__dshChamberHostPaths', adoptHostPathCatalog\)/)
+  assert.match(shim, /data-chamber-painted-source/)
+  const scope = readFileSync(join(REPO_ROOT, 'packages', 'renderer', 'src', 'host-path-scope.ts'), 'utf8')
+  assert.match(scope, /HOST_PATH_SCOPE_ATTRIBUTE = 'data-chamber-painted-source'/)
+  assert.match(scope, /export function publishHostPathScope/)
+  // The VALUE contract too: both carriers compare against the local instance id, and a
+  // rename would otherwise silently disable the carrier on both flavors with every gate
+  // green (fail-closed, but the feature dies unnoticed).
+  const localInstance = readFileSync(join(REPO_ROOT, 'packages', 'renderer', 'src', 'local-instance.ts'), 'utf8')
+  assert.match(localInstance, /LOCAL_INSTANCE_ID = 'local'/)
+  assert.match(preload, /getAttribute\('data-chamber-painted-source'\) === 'local'/)
+  assert.match(shim, /getAttribute\('data-chamber-painted-source'\) === 'local'/)
+})

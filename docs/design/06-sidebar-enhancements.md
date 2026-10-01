@@ -896,11 +896,12 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
     `theme-fallback.test.ts`（活动来源发布锁）、`required-extra-rows.test.ts`
     （两条挂载路径的装饰器形状锁）。
 - **同族残留（非本节修复面）**：同一文档里其它 document-global 状态被逐实例写/
-  监听，属同一"N-ctx 单文档"缺陷族：①**文档级 `drop` 扇出（真实缺陷）**——vendor
+  监听，属同一"N-ctx 单文档"缺陷族：①**文档级 `drop` 扇出（已修）**——vendor
   `ui-attachment` `ComposerAttachments.tsx` 在 document 挂 drop 监听且无
   containment/活动视图判定，local 与任一挂载远程同时在场时拖入图片会同时附到
-  **两个**实例的草稿（修法需 vendor patch：按 event.target 归属或按活动来源
-  门控）；②**`document.title`**（机制上仍活着，被主进程冻结窗口标题掩盖）——
+  两个实例的草稿；已按「按 event.target 归属」落地：两条构建期 vendor 补丁
+  （`scripts/vendor-patches.mjs` 的 drop-events + ComposerAttachments，按 drop 落点
+  所属 `[data-instance]` 子树 containment，design 25 §5.7）；②**`document.title`**（机制上仍活着，被主进程冻结窗口标题掩盖）——
   ui-layout fork deep-import 官方 `AppFrame`，其 `DocumentTitle` 每个壳竞争写/清；
   它**不**并入页面语言归属器（被拥有值是语言，没有会话标题投影），将来归属点是
   与 `document-theme` 同址的 ui-layout fork（按 `chamberBridge` 活动来源门控）或
@@ -916,8 +917,10 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   关闭它；SettingsShell Modal 与其它官方 portal 面仍未修，同族
   `ui-attachment/DropOverlay` 每个挂载中的 ComposerAttachments 各渲染一份（N 层
   遮罩）；⑤**主题样式表重复**——vendor `installThemeStyles` 每个实例 ctx 各插 6 个
-  `<style>`（同内容，随各自 fiber 移除，良性重复）。① 的治本同本节：按活动来源
-  门控，但落在 vendor 源码，需 seed/patch 路线裁定后实施。
+  `<style>`（同内容，随各自 fiber 移除，良性重复）。①（document 级 drop 扇出）已按「构建期
+  vendor 补丁 + 按落点壳 containment」落地：drop/dragenter/dragover/dragleave 四副作用同归属、
+  隐藏壳不再入稿或叠遮罩（design 25 §5.7，残余见 S-56）；④ 的 portal 逃逸仍未修（任意打开态
+  在程序化切换后盖在别的视图上），其中 `ui-attachment` 的 N 层遮罩已随本批 containment 消除。
 
 ### 4.7 来源级面板轴（`sidebar.panellist` 按来源下挂）
 

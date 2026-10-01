@@ -990,6 +990,180 @@
   markDocumentPlatform()
   defineWindowGlobal('dshDesktop', dshDesktopApi)
 
+  // ---- host paths（上游 apps/desktop/src/preload-app.ts 的 __DSH_HOST_PATHS__）----
+  //
+  // 官方 composer 只有在 __DSH_HOST_PATHS__ 存在且给出宿主绝对路径时才把拖入/
+  // 选择的文件夹与文件做成 @ 引用；没有载体或 path 为 '' 时回退上传（文件夹维持
+  // 上游的浏览器文案）。WKWebView 不暴露 DOM File 的路径：Swift 端在拖拽开始
+  // （drag pasteboard 已有内容）与 NSOpenPanel 回执时推来目录快照，这里用
+  // 「本事件批次 + 目录条目、各消费一次」在 drop/change 的同一同步续体里配对。
+  //
+  // 门控 = 屏上来源必须是本地实例（renderer 发布的 data-chamber-painted-source）：
+  // 远端会话草稿里写本地绝对路径是错的。批次门（不是 File 身份——dataTransfer.files
+  // 的包装对象身份没有规范保证）保证只服务用户真实投递过的 File，合成 File 猜名
+  // 也拿不到路径。不依赖 info 水化：documentStart 即暴露。
+  // 批次 = 本次手势的新鲜度门（drop/change 同一次派发内消费，5s 只是兜底窗口）；
+  // 目录 = 拖拽/选择快照，不设 TTL：新鲜度由「pathFor 必须有一次新鲜批次」+「每次拖拽/
+  // 选择整体换代」保证，慢速悬停没有上限——目录过期只会把正常拖入误判成回退。
+  var HOST_PATH_BATCH_TTL_MS = 5000
+  var HOST_PATH_MAX_ENTRIES = 256
+
+  var hostPathCatalog = { generation: 0, adoptedAt: 0, entries: [] }
+  var hostPathBatch = null // { at: number, previousDeliveryAt: number, files: [...] }
+  // 上一次「用户投递」（trusted drop/change）开始的时刻：目录必须比它更新，否则上一手势
+  // 残留的未消费条目会服务新批次并给出错误路径（同一次投递内采购的目录自然满足）。
+  var hostPathLastDeliveryAt = 0
+
+  function hostPathScopeIsLocal() {
+    if (typeof document === 'undefined' || document === null) return false
+    var root = document.documentElement
+    if (root === null || root === undefined || typeof root.getAttribute !== 'function') return false
+    return root.getAttribute('data-chamber-painted-source') === 'local'
+  }
+
+  /** 只认 UA 事件（真实 drop / 文件面板回执的 change）：合成事件不得装批。 */
+  function isTrustedUserEvent(event) {
+    return event !== null && event !== undefined && event.isTrusted === true
+  }
+
+  function rememberHostPathBatch(files) {
+    var list = []
+    var limit = files.length < HOST_PATH_MAX_ENTRIES ? files.length : HOST_PATH_MAX_ENTRIES
+    for (var i = 0; i < limit; i += 1) {
+      var file = files[i]
+      list.push({
+        name: file !== null && file !== undefined && typeof file.name === 'string' ? file.name : '',
+        size: file !== null && file !== undefined && typeof file.size === 'number' ? file.size : -1,
+        isDirectory: false,
+        used: false
+      })
+    }
+    var startedAt = Date.now()
+    hostPathBatch = { at: startedAt, previousDeliveryAt: hostPathLastDeliveryAt, files: list }
+    hostPathLastDeliveryAt = startedAt
+  }
+
+  /**
+   * 唯一的未消费匹配条目：目录按名（size===0 可作候选；列表里没有同名文件条目时也可作
+   * 候选，因为 DOM File 对目录的 size 没有实机保证），文件要求精确字节数（含 0）。
+   * 候选为 0 个或 ≥2 个一律 -1：同名同 size 的多个文件、同名目录+空文件跨类、
+   * 多个同名目录都宁可回退上传，也不按 DOM 顺序猜路径。
+   */
+  function takeUnusedHostPathIndex(list, name, size) {
+    var hasFileEntry = false
+    var fileIndex = -1
+    var fileMatches = 0
+    var dirIndex = -1
+    var dirMatches = 0
+    for (var i = 0; i < list.length; i += 1) {
+      var entry = list[i]
+      if (entry.name !== name) continue
+      if (entry.isDirectory === true) {
+        if (entry.used) continue
+        dirMatches += 1
+        if (dirIndex === -1) dirIndex = i
+      } else {
+        // hasFileEntry 看「列表里有没有同名文件条目」（含已消费的），用于判定目录回退是否合法；
+        // 候选计数只看未消费的精确 size 匹配。
+        hasFileEntry = true
+        if (entry.used || entry.size !== size) continue
+        fileMatches += 1
+        if (fileIndex === -1) fileIndex = i
+      }
+    }
+    var directoryCandidate = (size === 0 || !hasFileEntry) && dirMatches === 1 ? dirIndex : -1
+    var fileCandidate = fileMatches === 1 ? fileIndex : -1
+    if (directoryCandidate !== -1 && fileCandidate !== -1) return -1
+    if (directoryCandidate !== -1) return directoryCandidate
+    if (fileCandidate !== -1) return fileCandidate
+    return -1
+  }
+
+  /** 上游 __DSH_HOST_PATHS__.pathFor(file) 的 Swift 腿实现：同步，'' = 回退。 */
+  function hostPathFor(file) {
+    if (!hostPathScopeIsLocal()) return ''
+    if (file === null || file === undefined || typeof file !== 'object') return ''
+    var now = Date.now()
+    if (hostPathBatch === null || now - hostPathBatch.at > HOST_PATH_BATCH_TTL_MS) return ''
+    // 上一手势残留的目录快照不得服务本批次（它在本次投递开始前就存在）。
+    if (hostPathCatalog.adoptedAt < hostPathBatch.previousDeliveryAt) return ''
+    var name = typeof file.name === 'string' ? file.name : ''
+    if (name === '') return ''
+    var size = typeof file.size === 'number' ? file.size : -1
+    var batchIndex = takeUnusedHostPathIndex(hostPathBatch.files, name, size)
+    if (batchIndex === -1) return ''
+    var catalogIndex = takeUnusedHostPathIndex(hostPathCatalog.entries, name, size)
+    if (catalogIndex === -1) return ''
+    // 两边都消费一次（重复询问与陈旧复用都拿不到；intake containment 之后这条是纵深防御）。
+    hostPathBatch.files[batchIndex].used = true
+    hostPathCatalog.entries[catalogIndex].used = true
+    return hostPathCatalog.entries[catalogIndex].path
+  }
+
+  /** Swift 推入目录快照（documentStart 即定义；形状失败闭合，旧代载荷直接忽略）。 */
+  function adoptHostPathCatalog(token, payload) {
+    requireNativeToken(token)
+    if (payload === null || typeof payload !== 'object') {
+      throw new Error('dsh-chamber: malformed host-path catalog')
+    }
+    var entries = payload.entries
+    if (!Array.isArray(entries)) {
+      throw new Error('dsh-chamber: malformed host-path catalog entries')
+    }
+    var generation = typeof payload.generation === 'number' ? payload.generation : hostPathCatalog.generation + 1
+    if (generation <= hostPathCatalog.generation) return
+    var normalized = []
+    for (var i = 0; i < entries.length && i < HOST_PATH_MAX_ENTRIES; i += 1) {
+      var entry = entries[i]
+      if (entry === null || typeof entry !== 'object'
+        || typeof entry.name !== 'string' || typeof entry.path !== 'string'
+        || typeof entry.size !== 'number' || typeof entry.isDirectory !== 'boolean') {
+        throw new Error('dsh-chamber: malformed host-path catalog entry')
+      }
+      normalized.push({
+        name: entry.name,
+        path: entry.path,
+        size: entry.size,
+        isDirectory: entry.isDirectory,
+        used: false
+      })
+    }
+    hostPathCatalog = { generation: generation, adoptedAt: Date.now(), entries: normalized }
+  }
+
+  // 捕获相位：先于页面自己的 document 级监听（ui-attachment）记录本次用户投递的
+  // File 集合；只读 .files，绝不碰 items/webkitGetAsEntry（客户端的目录判定要用它）。
+  // 只认 UA 事件（isTrusted）；安装对最小 DOM 环境失败闭合。
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('drop', function (event) {
+      if (!isTrustedUserEvent(event)) return
+      var transfer = event.dataTransfer
+      if (transfer === null || transfer === undefined) return
+      if (transfer.files === null || transfer.files === undefined) return
+      rememberHostPathBatch(transfer.files)
+    }, true)
+  }
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('paste', function (event) {
+      // 粘贴不是本载体的通道（v1 只覆盖拖入/回形针）：清掉批次，防止 5s 内的粘贴借用
+      // 上一次拖入未消费的条目拿到错误路径（Electron 腿按 File 身份取路径，不依赖批次）。
+      if (!isTrustedUserEvent(event)) return
+      hostPathBatch = null
+    }, true)
+  }
+  if (typeof document !== 'undefined' && document !== null && typeof document.addEventListener === 'function') {
+    document.addEventListener('change', function (event) {
+      if (!isTrustedUserEvent(event)) return
+      var target = event.target
+      if (target === null || target === undefined || target.type !== 'file') return
+      if (target.files === null || target.files === undefined) return
+      rememberHostPathBatch(target.files)
+    }, true)
+  }
+
+  defineWindowGlobal('__dshChamberHostPaths', adoptHostPathCatalog)
+  defineWindowGlobal('__DSH_HOST_PATHS__', { pathFor: hostPathFor })
+
   /** 公开面 dshChamber 的暴露门（只暴露一次；preload 语义）。
    *  暴露时机 = info 成功（真实标量）或 1+10 次全败（null 标量，与
    *  preload.cts 失败分支一致）；documentStart 到那一刻之前不暴露，避免在

@@ -281,6 +281,16 @@ export function loadPreloadInVm(preloadSource, { info = {}, onInvoke } = {}) {
     console,
     setTimeout,
     clearTimeout,
+    // Minimal DOM face for the document-level carriers (painted source, platform mark).
+    document: {
+      activeElement: null,
+      documentElement: {
+        lang: 'en',
+        dataset: {},
+        getAttribute(name) { return name === 'data-chamber-painted-source' ? 'local' : null },
+      },
+    },
+    MutationObserver: class { observe() {} disconnect() {} },
     // The compiled preload reads process.platform for the desktop platform mark
     // (markDocumentPlatform) and process.isMainFrame for the carrier gate; the
     // vm has no host process.
@@ -291,6 +301,9 @@ export function loadPreloadInVm(preloadSource, { info = {}, onInvoke } = {}) {
         return {
           contextBridge: { exposeInMainWorld: (name, value) => { exposed[name] = value } },
           ipcRenderer,
+          // The compiled carrier must resolve a host path when webUtils exists; a missing
+          // stub would silently exercise the browser branch instead.
+          webUtils: { getPathForFile: (file) => `/probe/${String(file?.name ?? '')}` },
         }
       }
       throw new Error(`preload vm stub received unexpected require: ${String(specifier)}`)
@@ -429,6 +442,14 @@ export async function runElectronArtifactSmoke({
     }
     const harness = await inspectPreloadSurface(readFileSync(preloadEntry, 'utf8'), { info })
     const surface = assertFrozenPreloadSurface(harness.exposed.dshChamber, { expectedScalars: info })
+  const hostPaths = harness.exposed.__DSH_HOST_PATHS__
+  if (hostPaths === null || typeof hostPaths !== 'object' || typeof hostPaths.pathFor !== 'function') {
+    throw new Error(`compiled preload exposed no __DSH_HOST_PATHS__ carrier (got ${String(hostPaths)})`)
+  }
+  const hostPathProbe = hostPaths.pathFor({ name: 'probe.txt', size: 1 })
+  if (hostPathProbe !== '/probe/probe.txt') {
+    throw new Error(`__DSH_HOST_PATHS__.pathFor must return the host path (got ${String(hostPathProbe)})`)
+  }
     // The second world global: the upstream-parity dshDesktop carrier. The
     // gate asserts presence + protocolVersion + function members only; the key
     // set is owned by the desktop carrier surface test and the artifact bytes

@@ -13,6 +13,7 @@
  * tail wait cap.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { clearHostPathScope, publishHostPathScope } from '../host-path-scope.ts'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives/src/Button.tsx'
 import { dismissVisibleRowCard } from '@dsh-chamber/dsh-chamber-client-core'
 import {
@@ -52,7 +53,8 @@ interface InstanceViewProps {
   transport: ChamberTransport
   /**
    * 本视图是否是**屏上那一个**（App 的 `paintedView`，非选择 activeView）：
-   * 本组件只消费该事实（可见性类 + 悬浮卡关闭 + settle 过渡判定），不感知切换意图。
+   * 本组件消费该事实（可见性类 + 悬浮卡关闭 + settle 过渡判定），并按同一 active 把它
+   * 投影成文档根的范围门控（host-path-scope.ts）；不感知切换意图。
    */
   active: boolean
   /** 服务器显示名（骨架屏文案）。 */
@@ -550,6 +552,18 @@ export default function InstanceView({
     wasActiveRef.current = active
     if (!active) dismissVisibleRowCard()
   }, [active])
+
+  // 桌面宿主路径面的范围门控（design 25 §5.7）：屏上视图（active = App 的 paintedView）
+  // 把自己发布成文档根标记，原生载体（preload / Swift shim）在 pathFor 时同步读它——只有
+  // 本地实例的 composer 才允许把宿主绝对路径写成 @ 引用（远端视图保持上传/浏览器文案）。
+  // 离开屏上/卸载时 compare-and-clear：只清自己写的值，不擦同一次提交里新屏上视图刚写的。
+  useLayoutEffect(() => {
+    if (!active) return
+    publishHostPathScope(instanceId)
+    return () => {
+      clearHostPathScope(instanceId)
+    }
+  }, [active, instanceId])
 
   return (
     <div className={shellHeld ? `${viewClass} instance-veil-held` : viewClass} data-instance={instanceId}>
