@@ -881,7 +881,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   - **被否的替代方案**：**vendor fork 门控**（`dsh-client-locale` 纳入 in-repo
     fork 并按 `chamberInstanceId` 门控）语义等价、写入点更干净，但该包要进受保护
     集合与 upstream-touchpoints 登记、每次升级背维护，而 composite 已有同栈挂载缝
-    （`decorateMount`）；**构建期 vendor patch**（`scripts/vendor-patches.mjs` 加
+    （`decorateMount`）；**构建期 vendor patch**（`packages/renderer/scripts/vendor-patches.mjs` 加
     C9 锚点，在 `syncDocumentLanguage` 里门控 `ctx.get('chamberInstanceId')`）同样
     更干净，但埋进 vendor 文本重写、锚点是每次升级的常驻成本，仅在观察者回写被证明
     不够时升级；**只在框架侧解耦**
@@ -901,7 +901,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   `ui-attachment` `ComposerAttachments.tsx` 在 document 挂 drop 监听且无
   containment/活动视图判定，local 与任一挂载远程同时在场时拖入图片会同时附到
   两个实例的草稿；已按「按 event.target 归属」落地：两条构建期 vendor 补丁
-  （`scripts/vendor-patches.mjs` 的 drop-events + ComposerAttachments，按 drop 落点
+  （`packages/renderer/scripts/vendor-patches.mjs` 的 drop-events + ComposerAttachments，按 drop 落点
   所属 `[data-instance]` 子树 containment，design 25 §5.7）；②**`document.title`**（机制上仍活着，被主进程冻结窗口标题掩盖）——
   ui-layout fork deep-import 官方 `AppFrame`，其 `DocumentTitle` 每个壳竞争写/清；
   它**不**并入页面语言归属器（被拥有值是语言，没有会话标题投影），将来归属点是

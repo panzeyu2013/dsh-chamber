@@ -44,16 +44,16 @@ function sha256(relPath) {
  * @param {string} relPath - 仓库根相对路径。
  * @returns {string} 40 位十六进制哈希。
  */
-export function gitBlobSha1(relPath) {
+function gitBlobSha1(relPath) {
   const content = readFileSync(join(ROOT, relPath))
   return createHash('sha1').update(`blob ${content.length}\0`).update(content).digest('hex')
 }
 
 /** sidecar 的一行文件/hash 对：允许缩进（嵌套 en:/zh: 结构），hash 64 位 sha256 或 40 位 git blob。 */
-export const SIDECAR_PAIR_LINE = /^\s*(README(?:\.[A-Za-z]{2}(?:-[A-Za-z]+)?)?\.md):\s*([0-9a-f]{64}|[0-9a-f]{40})\s*$/u
+const SIDECAR_PAIR_LINE = /^\s*(README(?:\.[A-Za-z]{2}(?:-[A-Za-z]+)?)?\.md):\s*([0-9a-f]{64}|[0-9a-f]{40})\s*$/u
 
 /** 按记录位数选算法（sidecar 里写的是哪种，就用哪种校验）。 */
-export function sidecarHashAlgorithm(hash) {
+function sidecarHashAlgorithm(hash) {
   return hash.length === 64 ? 'sha256' : 'git-blob'
 }
 
@@ -116,7 +116,7 @@ export function discoverSidecars(root = ROOT) {
 /** 双语 README 却缺 sidecar 的包：发现面只枚举「已存在」的 sidecar 时，删掉一份
  *  README.i18n.yaml 就能让整对静默失去校验。README.md 与 README.zh.md 同时在场
  *  就必须有 sidecar（今天所有双语包都满足，这是一条 fail-closed 的防退化网）。 */
-export function discoverMissingSidecars(root = ROOT) {
+function discoverMissingSidecars(root = ROOT) {
   const missing = []
   for (const pkg of readdirSync(join(root, 'packages')).sort()) {
     const base = 'packages/' + pkg + '/'

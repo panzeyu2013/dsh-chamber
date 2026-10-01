@@ -108,3 +108,7 @@ packages/gateway/host-packages/
 packages/desktop/resources/primary-runtime/**
 !packages/desktop/resources/primary-runtime/README.md
 release/primary-runtime-cache/**
+
+# Transient staging dirs around the python payload assembly (prepare-python-payload.mjs
+# removes them via try/finally; a hard kill mid-build can leave one behind — never committed).
+packages/desktop/resources/.primary-runtime-staging-*/

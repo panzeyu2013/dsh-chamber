@@ -14,7 +14,7 @@
 export const USAGE_EXIT_CODE = 2
 
 /** 本机 gateway 受控锚根的环境变量名（升级/真机流程用；不再把机器路径写死）。 */
-export const GATEWAY_ANCHOR_ROOT_ENV = 'DSH_MOBILE_GATEWAY_ANCHOR_ROOT'
+const GATEWAY_ANCHOR_ROOT_ENV = 'DSH_MOBILE_GATEWAY_ANCHOR_ROOT'
 
 /** 锚点根候选（按序取第一个真的含 `node_modules/@deepseek-ai` 的）。 */
 export const DEFAULT_ANCHOR_ROOTS = [

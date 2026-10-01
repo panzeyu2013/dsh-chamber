@@ -51,7 +51,7 @@
  * 「降为 advisory」的第二档——哈希 token 不是例外，pin bump 后 advisory 会让门
  * 继续绿而插件静默 no-op。将来新增 kind 必须同时加进本集合（fail-closed 默认）。
  */
-export const HARD_KINDS = new Set(['attribute', 'role', 'slot', 'hash', 'local-name'])
+const HARD_KINDS = new Set(['attribute', 'role', 'slot', 'hash', 'local-name'])
 
 /**
  * 插件源码里**禁止出现**的旧锚点形态（去注释投影逐字扫描，命中即硬失败）。
@@ -618,7 +618,7 @@ export function slotEvidence(files, slot) {
  * 「恰好以本地名结尾的人类可读类名」同样不算——旧判据的 `[A-Za-z0-9-]*` 前缀会
  * 把它误当 hash-first 证据（假绿），收窄后必须真的带哈希段。
  */
-export function localNameEmissionPatterns(token) {
+function localNameEmissionPatterns(token) {
   const escaped = escapeRe(token)
   // 先卡长度与右边界，再要求段内有数字或相邻大小写变化，最后消费整段。
   const hash = String.raw`(?=[A-Za-z0-9]{5,}(?![A-Za-z0-9]))(?=[A-Za-z0-9]*(?:[0-9]|[a-z][A-Z]|[A-Z][a-z]))[A-Za-z0-9]{5,}`
@@ -629,7 +629,7 @@ export function localNameEmissionPatterns(token) {
 }
 
 /** local-name 没有独立的消费形（插件侧声明本身就是选择器），返回空表。 */
-export function localNameSelectorPatterns() { return [] }
+function localNameSelectorPatterns() { return [] }
 
 /** local-name 锚点：类名字典命中 = 发射。 */
 export function localNameEvidence(files, token) {
