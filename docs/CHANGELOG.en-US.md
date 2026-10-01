@@ -30,6 +30,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ### Fixed
 - **The facts-apply re-entrancy loop (React #185)** - when the notification/facts step chain re-entered itself from the synchronous render caused by its own store write, React aborted with #185 and the never-throw guard swallowed it, voiding the whole tick; \`apply-session-facts\` now takes a per-source re-entrancy gate (non-reentrant calls stay synchronous), a re-entrant call registers and replays the latest snapshot only, and a withdrawn source's pending snapshot is dropped with the withdrawal. \`reconcile\` / \`completion-arm\` semantics are unchanged (design 19 section 3.7).
+- **Session projection facts survive a connection reset (design 05 section 2.3)** - a connection generation change makes the pinned client clear every session projection store until the next session/list response refills it; inside that window the sidebar emitted rows without their durable title or the sparse hasActiveSchedule marker (observed live: a remote source showed its directory name as the session name for 0.6-0.8s). A row now carries its last known projection facts across the window: a non-empty incoming title always wins, vanished rows drop their memory, and the carry stops once updatedAt advances (no timer, no state); both commit points apply it.
 
 ## [0.4.1-beta.1] - 2026-09-30
 
