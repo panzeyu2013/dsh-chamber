@@ -93,7 +93,7 @@ export const MOBILE_CSS = `
    card description (ui-agent-preset, line-clamp:4), the trajectory
    timeline span (ui-trajectory, aria-hidden, no click path) and the
    trajectory kind tag at ≤620px (ui-trajectory, visible label collapsed)
-   — coordinates are a pin-0.2.0-rc.2 snapshot; line numbers drift with the pin,
+   — coordinates are a pin snapshot; line numbers drift with the pin,
    so re-anchor by SHAPE, not by the numbers
    — they keep the sticky-hover quirk rather than lose content a touch user
    cannot otherwise read. The tree's fifth role="tooltip" producer (ui-chat

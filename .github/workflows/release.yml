@@ -349,6 +349,11 @@ jobs:
         run: pnpm run verify:registry
       - name: Upstream anchor probe (symbol anchors + legacy budget)
         run: pnpm run verify:anchors
+      # 移动插件锚点保鲜门（design 17 §18.4.3/§18.6）：与 ci.yml 的 push 路径同一条命令
+      # （策略测试从 ci.yml 派生，缺一条即红）。本 job 同样没有锚点根，按门的 fail-soft
+      # 默认跑：本地判据真实执行，上游发射侧逐条打印未执行并保持 exit 0。
+      - name: Mobile anchor freshness (fail-soft; strict runs in the upgrade flow)
+        run: pnpm run verify:mobile-anchors
       # 能力面对齐门（I-6）：与 ci.yml 的 push 路径同一条命令（策略测试从 ci.yml 派生，
       # 缺一条即红）。chamber 已消费而 vendor 缺席 = chamber-ahead-broken；本地替代的
       # 退役触发（upstream-landed）必须在发版前暴露。
