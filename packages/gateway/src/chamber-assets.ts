@@ -16,11 +16,11 @@ export const CHAMBER_APP_HTML = `<!doctype html>
     *{box-sizing:border-box}body{margin:0;min-height:100vh;background:#0b0f14}header{position:sticky;top:0;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1rem max(1rem,calc((100vw - 74rem)/2));border-bottom:1px solid #30363d;background:rgba(11,15,20,.96)}
     h1,h2,h3,p{margin:0}h1{font-size:1.15rem}h2{font-size:1rem}h3{font-size:.9rem}.subtle,.status,small{color:#8b949e}.header-actions,.actions{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
     main{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;max-width:74rem;margin:0 auto;padding:1rem}.panel{min-width:0;display:flex;flex-direction:column;gap:.75rem;padding:1rem;border:1px solid #30363d;border-radius:.75rem;background:#161b22}.wide{grid-column:1/-1}
-    button,a.button{display:inline-flex;align-items:center;justify-content:center;min-height:2rem;padding:.35rem .75rem;border:1px solid #484f58;border-radius:1rem;background:#21262d;color:#e6edf3;font:inherit;font-size:.82rem;text-decoration:none;cursor:pointer}button.primary{border-color:#238636;background:#238636}button.danger{border-color:#da3633;color:#ff7b72}button:disabled{opacity:.5;cursor:default}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #58a6ff;outline-offset:2px}
-    fieldset{display:flex;flex-direction:column;gap:.55rem;margin:0;padding:.75rem;border:1px solid #30363d;border-radius:.6rem}legend{padding:0 .3rem;font-weight:600}.toggle,.choice{display:flex;align-items:flex-start;gap:.5rem;font-size:.9rem}.choice small{display:block;margin-top:.15rem}.custom{display:flex;flex-direction:column;gap:.3rem;font-size:.8rem;color:#8b949e}.custom input{width:100%;padding:.45rem .55rem;border:1px solid #484f58;border-radius:.4rem;background:#0d1117;color:#e6edf3}
-    select,.text-input{min-height:2rem;padding:.35rem .55rem;border:1px solid #484f58;border-radius:.4rem;background:#0d1117;color:#e6edf3;font:inherit}.runtime-controls{display:grid;grid-template-columns:minmax(12rem,1fr) auto;gap:.55rem}.runtime-controls .actions{grid-column:1/-1}.runtime-registry{display:grid;grid-template-columns:minmax(12rem,1fr) auto;gap:.55rem}.runtime-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.55rem}.runtime-facts .item{padding:.6rem}
+    button,a.button{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:.35rem .75rem;border:1px solid #484f58;border-radius:1rem;background:#21262d;color:#e6edf3;font:inherit;font-size:.82rem;text-decoration:none;cursor:pointer}button.primary{border-color:#238636;background:#238636}button.danger{border-color:#da3633;color:#ff7b72}button:disabled{opacity:.5;cursor:default}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #58a6ff;outline-offset:2px}
+    fieldset{display:flex;flex-direction:column;gap:.55rem;margin:0;padding:.75rem;border:1px solid #30363d;border-radius:.6rem}legend{padding:0 .3rem;font-weight:600}.toggle,.choice{display:flex;align-items:flex-start;gap:.5rem;font-size:.9rem}.choice small{display:block;margin-top:.15rem}.custom{display:flex;flex-direction:column;gap:.3rem;font-size:.8rem;color:#8b949e}.custom input{width:100%;padding:.45rem .55rem;border:1px solid #484f58;border-radius:.4rem;background:#0d1117;color:#e6edf3}.custom input,.custom select,.custom textarea{font-size:max(16px,.9rem)}
+    select,.text-input{min-height:2rem;padding:.35rem .55rem;border:1px solid #484f58;border-radius:.4rem;background:#0d1117;color:#e6edf3;font:inherit;font-size:max(16px,.9rem)}.runtime-controls{display:grid;grid-template-columns:minmax(12rem,1fr) auto;gap:.55rem}.runtime-controls .actions{grid-column:1/-1}.runtime-registry{display:grid;grid-template-columns:minmax(12rem,1fr) auto;gap:.55rem}.runtime-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.55rem}.runtime-facts .item{padding:.6rem}
     .list{display:flex;flex-direction:column;gap:.6rem}.item{display:flex;flex-direction:column;gap:.35rem;padding:.75rem;border-radius:.55rem;background:#0d1117;overflow-wrap:anywhere}.item-head{display:flex;justify-content:space-between;gap:.75rem;align-items:baseline}.item-head strong{min-width:0}.meta,code{color:#8b949e;font-size:.75rem;overflow-wrap:anywhere;white-space:pre-wrap}.body{font-size:.86rem;white-space:pre-wrap;overflow-wrap:anywhere}.status{min-height:1.2rem;font-size:.8rem}.status.error,.error{color:#ff7b72}.empty{padding:.5rem 0;color:#8b949e;font-size:.85rem}
-    .token-reveal{display:flex;flex-direction:column;gap:.5rem}.token-reveal[hidden]{display:none}.token-reveal textarea{width:100%;min-height:6rem;resize:vertical;font-family:ui-monospace,SFMono-Regular,monospace;font-size:.78rem}
+    .token-reveal{display:flex;flex-direction:column;gap:.5rem}.token-reveal[hidden]{display:none}.token-reveal textarea{width:100%;min-height:6rem;resize:vertical;font-family:ui-monospace,SFMono-Regular,monospace;font-size:max(16px,.78rem)}
     /* The confirmation dialog reuses this page's panel/actions/status vocabulary (.panel + .actions + .danger); only the modal shell is new. */
     .dialog-backdrop{position:fixed;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;padding:1rem;background:rgba(1,4,9,.72)}.dialog-backdrop[hidden]{display:none}.dialog{width:min(30rem,100%);max-height:calc(100vh - 2rem);overflow:auto}.dialog .actions{justify-content:flex-end}
     @media(max-width:760px){header{align-items:flex-start}main{grid-template-columns:1fr}.wide{grid-column:auto}.header-actions{justify-content:flex-end}.runtime-controls,.runtime-registry,.runtime-facts{grid-template-columns:1fr}}
@@ -839,9 +839,17 @@ ${DASHBOARD_SEMVER_JS}
 }());
 `
 
+/** The mobile light surface — a DEPRECATED landing page kept as the shunting
+ * compatibility target: the mobile client plugin is now injected on every
+ * device, so the document immediately hands the browser back to the desktop
+ * entry through a meta refresh. The manual link below stays as the fallback
+ * (a refresh-less engine, or the operator reading the page source). */
 export const MOBILE_HTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- The plugin is always injected now: hand the browser back to the desktop
+     entry. The visible link below is the no-refresh fallback. -->
+<meta http-equiv="refresh" content="0;url=/?desktop=1">
 <title>dsh gateway</title>
 <style>body{font-family:system-ui;background:#0b0f14;color:#e6edf3;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}</style>
 <main style="text-align:center;padding:2rem">

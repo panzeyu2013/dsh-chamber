@@ -47,8 +47,11 @@ export interface GatewayConfig {
   tls?: { cert: string; key: string }
   /** Explicit operator opt-in to bind externally with NO auth (default false; CLI --no-auth). */
   allowAnonymousExternal?: boolean
-  /** UA experience shunting (default OFF): authenticated mobile-browser
-   * GET/HEAD of `/` answers 302 → mobileEntryPath; UA sniffing is not security. */
+  /** UA experience shunting (default OFF; DEPRECATED — the mobile client plugin
+   * is injected on every device now, so this remains only as a compatibility
+   * surface): authenticated mobile-browser GET/HEAD of `/` answers 302 →
+   * mobileEntryPath; UA sniffing is not security. Explicitly enabling it prints
+   * a one-time deprecation warning (never an error). */
   mobileUaRedirect?: boolean
   /** Origin-form target of the mobile UA redirect (default '/chamber/mobile.html'; never absolute, never '/'). */
   mobileEntryPath?: string
@@ -92,6 +95,24 @@ export class GatewayConfigError extends Error {
   }
 }
 
+/** One-shot latch for the mobile-UA shunting deprecation notice: the config is
+ * parsed more than once in one process (tests, CLI re-entry), the operator sees
+ * the warning at most once. */
+let mobileUaRedirectDeprecationWarned = false
+
+/** The UA shunting is a compatibility surface only after the mobile client
+ * plugin became an always-injected packaged plugin: an explicit opt-in warns —
+ * never throws. Latching keeps repeated parses silent. */
+function warnMobileUaRedirectDeprecated(): void {
+  if (mobileUaRedirectDeprecationWarned) return
+  mobileUaRedirectDeprecationWarned = true
+  console.warn(
+    'gateway: --mobile-ua-redirect / DSH_GATEWAY_MOBILE_UA_REDIRECT is deprecated; '
+    + 'the mobile client plugin is injected on every device, so UA shunting remains only as a compatibility surface. '
+    + 'Serve /chamber/mobile.html directly instead.',
+  )
+}
+
 function firstEnv(...names: string[]): string | undefined {
   for (const name of names) {
     const value = process.env[name]
@@ -113,11 +134,25 @@ function envBoolean(name: string): boolean | undefined {
 
 /** Origin-form path validation; a same-origin target only — starts with '/',
  * no '//' prefix, no backslash, never the bare root (which would loop the
- * shunting). Control characters and dot-segments that URL-normalize back to
- * '/' are rejected (browsers would re-enter the loop). */
+ * shunting), and never a query/fragment (URL parsing would silently drop them
+ * while the dispatch compares pathnames only). Control characters and
+ * dot-segments that URL-normalize back to '/' are rejected (browsers would
+ * re-enter the loop), and the auth surface is off-limits (shunting '/' to
+ * /auth/login would bounce a fresh login straight back to the form). Returns
+ * the NORMALIZED pathname: the dispatch compares it against request pathnames,
+ * which `URL` has already normalized, so `/./x` must round-trip as `/x`. A
+ * normalized pathname that starts with `//` (e.g. `/.//x`, `/%2e%2e//x`) is
+ * rejected — resolving it would switch authority, turning the entry into an
+ * off-origin redirect. */
 export function normalizeMobileEntryPath(value: string): string {
   if (!value.startsWith('/') || value.startsWith('//') || value.includes('\\') || value === '/') {
     throw new GatewayConfigError(`mobile entry path must be an origin-form path (starts with '/', no '//' prefix, no backslash, and not '/'), got ${JSON.stringify(value)}`)
+  }
+  // `new URL()` would move a query/fragment out of the pathname (the dispatch
+  // compares pathnames only), so a '?' or '#' is a typo that must fail loudly
+  // rather than silently truncate the configured entry.
+  if (value.includes('?') || value.includes('#')) {
+    throw new GatewayConfigError(`mobile entry path must not contain a query or fragment ('?' or '#'), got ${JSON.stringify(value)}`)
   }
   if (/[\u0000-\u001f\u007f]/.test(value)) {
     throw new GatewayConfigError(`mobile entry path must contain no control characters, got ${JSON.stringify(value)}`)
@@ -132,7 +167,16 @@ export function normalizeMobileEntryPath(value: string): string {
   if (normalized === '/') {
     throw new GatewayConfigError(`mobile entry path must not normalize to the root (shunting loop), got ${JSON.stringify(value)}`)
   }
-  return value
+  if (normalized.startsWith('//')) {
+    throw new GatewayConfigError(`mobile entry path must not normalize to a protocol-relative path (authority switch), got ${JSON.stringify(value)}`)
+  }
+  // Checked AFTER normalization so dot-segment spellings (`/auth/./login`) are
+  // caught too: the entry sits one hop before the login form, so pointing it at
+  // the auth surface would loop every fresh login back to /auth/login.
+  if (normalized === '/auth' || normalized.startsWith('/auth/')) {
+    throw new GatewayConfigError(`mobile entry path must not target the auth surface (login self-loop), got ${JSON.stringify(value)}`)
+  }
+  return normalized
 }
 
 function canonicalOrigin(value: string, label: string): string {
@@ -227,7 +271,9 @@ export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, 
   const allowAnonymousExternal = input.allowAnonymousExternal === true
   // The entry path is validated even when the redirect stays disabled, so a
   // mistyped --mobile-entry cannot surface later as a misdirecting 302.
+  // Explicit opt-in (input or env) prints the one-time deprecation warning.
   const mobileUaRedirect = input.mobileUaRedirect ?? envBoolean('DSH_GATEWAY_MOBILE_UA_REDIRECT') ?? false
+  if (mobileUaRedirect === true) warnMobileUaRedirectDeprecated()
   const mobileEntryPath = normalizeMobileEntryPath(input.mobileEntryPath ?? DEFAULT_MOBILE_ENTRY_PATH)
   // Login-phase pre-warm ON by default; the kill switch exists for operators
   // who do not want the pre-auth route at all.

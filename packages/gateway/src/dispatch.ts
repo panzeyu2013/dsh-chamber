@@ -6,7 +6,9 @@
  * Public: /health, /auth/login (password deployments only). Pre-gate claim:
  * /plugins/** pre-warm (GET/HEAD + valid capability cookie). Behind the gate:
  * /auth credential routes, /chamber/runtime/* (not ready-gated), /chamber/* and
- * the opt-in mobile-UA 302; everything else → management API or proxy.
+ * the opt-in mobile-UA 302 (a deprecated compatibility surface: the mobile
+ * client plugin is injected on every device); everything else → management API
+ * or proxy.
  * Every auth-boundary rejection (HTTP and WS) appends one non-secret `auth_rejected`
  * event (code + client + path CATEGORY); identical refusals in a window collapse.
  */
@@ -21,7 +23,7 @@ import type { Duplex } from 'node:stream'
 import { PAGE_CHANNEL_PATH } from '@dsh-chamber/dsh-chamber-wire/page-channel'
 import type { AuthChangeProof, AuthPrincipal, AuthProvider, ChangePasswordInput, ChangeTokenInput } from './auth.ts'
 import { SESSION_COOKIE } from './auth.ts'
-import { DEFAULT_MOBILE_ENTRY_PATH } from './config.ts'
+import { DEFAULT_MOBILE_ENTRY_PATH, normalizeMobileEntryPath } from './config.ts'
 import type { GatewayProxy } from './gateway-proxy.ts'
 import type { ChamberSurface } from './routes.ts'
 import type { RuntimeRoutes } from './runtime-routes.ts'
@@ -89,17 +91,24 @@ function clientIdent(clientAddress: string | undefined, socketAddr: string | und
   return clientAddress !== undefined && clientAddress !== '' ? clientAddress : socketAddr ?? ''
 }
 
-function shouldRedirectToLogin(req: ApiRequest, pathname: string, auth: AuthProvider): boolean {
+function shouldRedirectToLogin(
+  req: ApiRequest,
+  pathname: string,
+  auth: AuthProvider,
+  mobileEntryPath: string,
+): boolean {
   if (auth.kind !== 'password' && auth.kind !== 'password+token') return false
   if (req.method !== 'GET' && req.method !== 'HEAD') return false
   if (!(headerValue(req.headers, 'accept') ?? '').toLowerCase().includes('text/html')) return false
   // Protocol/API surfaces even when a client advertises HTML: /api, /plugins,
   // /auth, and /chamber/<subpath>. Document navigations (/, /chamber, /chamber/)
-  // reach the form.
+  // reach the form. The configured mobile entry is a DOCUMENT too — it is the
+  // always-injected plugin's gateway-side surface, so an unauthenticated HTML
+  // navigation reaches the login page instead of a bare 401 JSON.
   return pathname !== '/api' && !pathname.startsWith('/api/')
     && pathname !== '/plugins' && !pathname.startsWith('/plugins/')
     && !pathname.startsWith('/auth/')
-    && !(pathname.startsWith('/chamber/') && pathname !== '/chamber/')
+    && !(pathname.startsWith('/chamber/') && pathname !== '/chamber/' && pathname !== mobileEntryPath)
 }
 
 /**
@@ -263,7 +272,8 @@ export function createGatewayDispatch(
   logger: Logger,
   requestPolicy: GatewayRequestPolicy,
   auditFile?: string | null,
-  /** UA experience shunting; default OFF. */
+  /** UA experience shunting; default OFF (deprecated compatibility surface —
+   * the mobile client plugin is injected on every device). */
   mobileUaRedirect = false,
   mobileEntryPath = DEFAULT_MOBILE_ENTRY_PATH,
   /** Auth-rejection debounce seam; defaults are production behavior. */
@@ -273,6 +283,12 @@ export function createGatewayDispatch(
    * claim), so every /plugins target keeps its usual 401/session verdict. */
   warmupDeps: WarmupDeps | null = null,
 ): GatewayDispatch {
+  // Normalize at the comparison boundary too: the entry is matched against
+  // request pathnames, which `URL` has already normalized, so a directly
+  // constructed dispatch must never compare against a raw dot-segment value.
+  // The guard itself lives in one place (config.ts) — createGateway writes the
+  // same normalized value back into the materialized config.
+  mobileEntryPath = normalizeMobileEntryPath(mobileEntryPath)
   const warmup = warmupDeps === null ? null : createWarmupController(warmupDeps)
   /** warn-once latch for an unexpected warm-up links() rejection: links()
    *  fails soft by contract, so an exception here is a visible contract break. */
@@ -534,7 +550,7 @@ export function createGatewayDispatch(
         throw error
       }
       if (principal === null) {
-        if (shouldRedirectToLogin(req, pathname, auth)) {
+        if (shouldRedirectToLogin(req, pathname, auth, mobileEntryPath)) {
           // Invalid session cookie → the expired hint; a first visit stays plain.
           const hadSession = (headerValue(req.headers, 'cookie') ?? '').split(';').some(part => part.trim().startsWith(`${SESSION_COOKIE}=`))
           // Carry the mobile-shunting escape marker through the login round-trip.
@@ -825,18 +841,27 @@ export function createGatewayDispatch(
       await getFeatures().handle(req, res, pathname)
       return true
     }
-    // 4.5 Mobile UA shunting (default off): an authenticated mobile-browser
-    // GET/HEAD of the root is a 302 to the mobile entry. UA sniffing is
-    // forgeable and carries NO security semantics — the shunting sits AFTER the
-    // gate and keeps the fallthrough staleness guard. It ignores Accept
-    // (routing sugar, not negotiation); `?desktop=1` is the escape hatch back.
+    // 4.5 Mobile UA shunting (default off, DEPRECATED compatibility surface:
+    // the mobile client plugin is injected on every device, so this path is
+    // kept only for deployments that still rely on the sniff). An authenticated
+    // mobile-browser GET/HEAD of the root is a 302 to the mobile entry. UA
+    // sniffing is forgeable and carries NO security semantics — the shunting
+    // sits AFTER the gate and keeps the fallthrough staleness guard. It ignores
+    // Accept (routing sugar, not negotiation); `?desktop=1` is the escape hatch
+    // back.
     if (mobileUaRedirect === true
       && (req.method === 'GET' || req.method === 'HEAD')
       && pathname === '/'
       && url.searchParams.get('desktop') === null
       && MOBILE_UA_PATTERN.test(headerValue(req.headers, 'user-agent') ?? '')) {
       if (rejectStaleHttp(res, authenticatedPrincipal)) return true
-      res.writeHead(302, { location: mobileEntryPath, 'cache-control': 'no-store' })
+      res.writeHead(302, {
+        location: mobileEntryPath,
+        'cache-control': 'no-store',
+        // The verdict is UA-dependent: without Vary a shared cache could replay
+        // the shunting 302 to a desktop browser.
+        vary: 'User-Agent',
+      })
       res.end()
       return true
     }

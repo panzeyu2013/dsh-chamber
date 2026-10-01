@@ -17,9 +17,9 @@ import { LOGIN_PAGE_CSP, renderLoginPage } from '../../src/login-page.ts'
 /** sha256 of the no-warm-up renders. Any non-warm-up byte drift turns these
  * red — that is the "without data the output equals the template" lock. */
 const PRE_WARMUP_SHA256 = {
-  enPristine: 'b969f4efd53780ec095c406ad01ad67b25094e9d4f8d824d4ee6dfa324be89a5',
-  zhPristine: '4f854d80676b46f3f69764001d7a094695761909678acc813027417820ba494b',
-  enInvalid: '24623ee8a14f2d3162ec4f200cfbaf3f811d2663d352f2e73e68acc6d2795029',
+  enPristine: 'f795984d7a3aff903d51572b9ab7901e9f72a82f17016da58da01d1320be908d',
+  zhPristine: 'c4585bf2ff83334007ce64c93d385987ce6eb5920d63f9b920ec3b055ca3cd78',
+  enInvalid: 'd00a0d2e8f997e986d72d2316f32910940db377831d974f8e559ab5f9f547b90',
 } as const
 
 function sha256(value: string): string {
