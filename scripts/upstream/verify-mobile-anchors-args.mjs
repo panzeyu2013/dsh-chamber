@@ -66,7 +66,7 @@ export const VERIFY_MOBILE_ANCHORS_USAGE = `verify-mobile-anchors — 移动插�
                              并要求锚点树的 dsh-web-frontend 版本与仓内 pin 一致（不一致同样
                              exit 1，lockfile 的 peer 后缀会被剥掉）。缺 shell 产物
                              （bundle/CSS）同样算语料不完整。升级流程
-                             （docs/checklists/upstream-touchpoints.md §7 第 7 步之后）必须带它跑：
+                             （docs/checklists/upstream-touchpoints.md §7 第 6 步「契约复验」）必须带它跑：
                              不带时「CI 上正常跳过」与「其实什么都没查」无法区分。
                              与 --simulate-rename 互斥（后者能凭空造证据）。
   --list                     打印从本包源码抽到的锚点表（含分类与证据计数）。

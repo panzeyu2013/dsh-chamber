@@ -394,10 +394,11 @@ export function sessionStallFace(
   if (reflect?.get === undefined) return undefined
   // Bound once: the property is optional, so call sites would each need narrowing.
   const get = reflect.get.bind(reflect)
-  /** Re-read the service on EVERY call: the mobile plugin does not inject
-   *  sessions, so apply order is not guaranteed — resolving once at install
-   *  time would silently disable the arm. rc.2 `binding` is the ONE accessor
-   *  (presentedConcreteSession reads it). */
+  /** Re-read the service on EVERY call: sessions IS injected (index.ts
+   *  injects `sessions`), but the re-read is defensive — a hard-injected
+   *  service still has no guaranteed apply order, and resolving once at
+   *  install time would silently disable the arm if it arrives later.
+   *  rc.2 `binding` is the ONE accessor (presentedConcreteSession reads it). */
   const readSessions = (): SessionsConcreteLoose | undefined => {
     try {
       const found = get('sessions', false)

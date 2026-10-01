@@ -75,10 +75,12 @@ const PLATFORM_SEED_MODULES = new Set([
 ])
 
 /** Every module reference the built factory makes, package-local chunk
- *  requests excluded. */
+ *  requests excluded. Both call shapes count: static `require(...)` AND
+ *  dynamic `import(...)` — the loader has no resolver for the latter, so an
+ *  undeclared dynamic import is the same runtime miss as a static one. */
 export function requiredModules(source) {
   const found = new Set()
-  for (const match of source.matchAll(/(?:^|[^\w$.])require\(\s*["']([^"']+)["']\s*\)/g)) {
+  for (const match of source.matchAll(/(?:^|[^\w$.])(?:require|import)\(\s*["']([^"']+)["']\s*\)/g)) {
     const spec = match[1]
     if (spec.startsWith('./') || spec.startsWith('../')) continue
     found.add(spec)
@@ -195,6 +197,20 @@ test('the inject/require check fires on an undeclared module (negative control)'
     requiredModules(CLIENT_BUNDLE_MARKER + '({ id: "x", factory: (require) => { require("./client.chunk.js") } });\n'),
     [],
   )
+})
+
+test('a dynamic import() of an undeclared module is caught too (negative control)', () => {
+  // The loader has no resolver for dynamic import, so an undeclared one fails
+  // at runtime exactly like a static require — the guard must see the call.
+  const undeclared = CLIENT_BUNDLE_MARKER
+    + '({ id: "x", factory: () => { import("@deepseek-ai/dsh-client-unknown") } });\n'
+  assert.throws(() => assertBundleRequiresAreDeclared(undeclared),
+    /neither declared in package\.json dsh\.client\.inject/)
+  // A dynamic import of a declared dependency stays legal.
+  assert.doesNotThrow(() => assertBundleRequiresAreDeclared(
+    CLIENT_BUNDLE_MARKER
+    + '({ id: "x", factory: () => { import("react") } });\n',
+  ))
 })
 
 test('the markers are satisfied by marker text, not by the file path (positive control)', () => {

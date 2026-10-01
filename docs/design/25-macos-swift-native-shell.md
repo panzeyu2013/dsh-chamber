@@ -906,7 +906,7 @@ composer 的拖入/回形针入稿有两条分支（上游 `apps/desktop/src/pre
 | 入稿归属（intake） | 两 flavor 共用 vendor 补丁：`ui-attachment` 的 document 级 drop 监听按**本壳自己的 `[data-instance]` 子树**做 containment（`scripts/vendor-patches.mjs` 两条精确改写，构建期生效、vendor 树零写入；产物 marker 由 `verify-vendor-patch-applied` 验证）——同一次 drop 只由落点所在的那个壳入稿，隐藏远端壳不再扇出（同时修掉既有的图片双附缺陷）；dragenter/dragover/dragleave 的副作用（dropEffect 否决、遮罩层、深度计数）与 drop 入稿同一归属判定。**已接受取舍**：落在所有实例壳之外的 drag/drop（chamber 侧栏、壳 chrome、跨实例 portal）不再由任何 composer 入稿（那些位置没有可达 composer）；布局里根本没有 `[data-instance]` 时按上游放行、有壳却解析不到自身则拒绝 |
 | 范围门控 | 两 flavor 共用：文档根 `data-chamber-painted-source`（`packages/renderer/src/host-path-scope.ts` 的 `publishHostPathScope`，由**屏上** `InstanceView` 按 `active` 发布 = App 的 paintedView，不是选择语义的 activeView；离开屏上 compare-and-clear）。只有屏上为本地实例才返回路径 | 同左（shim 读同一属性） |
 
-**信任定位（重要）**：`data-chamber-painted-source` 是**协作路由标记，不是安全边界**——远端实例的 client bundle 与本页同 world（design 09 §4），可以写属性或在 composer 之前调用 `pathFor`，而 `pathFor(file)` 也拿不到调用者身份。本批把三条低成本滥用路径封死：合成事件（`isTrusted`）、全系统拖拽板（Swift 指针门：窗口可见 + 按键按下 + 指针在窗框内，离开即清）、名字猜配（文件精确 size）。剩余面 =「用户真实投递 + 同页恶意代码」，登记为残余（S-56 与 STATUS）。
+**信任定位（重要）**：`data-chamber-painted-source` 是**协作路由标记，不是安全边界**——远端实例的 client bundle 与本页同 world（design 09 §4），可以写属性或在 composer 之前调用 `pathFor`，而 `pathFor(file)` 也拿不到调用者身份。本批把三条低成本滥用路径封死：合成事件（`isTrusted`）、全系统拖拽板（Swift 指针门：窗口可见 + 按键按下 + 指针在窗框内，离开即清）、名字猜配（文件精确 size）。剩余面 =「用户真实投递 + 同页恶意代码」，登记为残余（S-56 与 STATUS）。**flavor 范围**：这三条封堵只对 Swift 腿成立——Electron 腿的 `pathFor` = painted 门 + `webUtils.getPathForFile(file)`（镜像上游，**无批次/TTL/一次性消费**），同页代码持任一真实 `File` 引用即可随时取宿主路径，不需要「本批次内投递」。
 
 **粘贴的 flavor 分叉**：Electron 腿照上游（dropped/picked/**pasted**）天然覆盖粘贴；Swift 腿 v1 只覆盖拖入与回形针（读 `NSPasteboard.general` 有隐私面与时序耦合，列后续项），且 shim 在可信 `paste` 时清批以免粘贴借用上一手势条目。实机矩阵按 flavor 分开验。
 

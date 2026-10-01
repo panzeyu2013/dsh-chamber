@@ -31,7 +31,10 @@ export function MobileNavToggle({ toggleSidebar, t }: MobileNavToggleProps) {
   // attribute itself). The subscription re-resolves the frame on structural
   // mounts (layout-facts.ts owns the rebinding), so a frame REMOUNT keeps
   // aria-expanded/aria-label following the NEW frame instead of freezing on
-  // the detached one. Scoped to the first root slot — N-ctx safe.
+  // the detached one. First root slot wins (document.querySelector): the
+  // mobile client is the gateway single-shell (index.ts documents the
+  // document-level singleton), so multi-root is unreachable today; a multi-
+  // shell future must scope this to the ctx root.
   const [open, setOpen] = useState(false)
 
   useEffect(() => subscribeDrawerOpen(setOpen), [])

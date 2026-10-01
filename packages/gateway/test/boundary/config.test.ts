@@ -278,12 +278,22 @@ test('mobile entry path must be a safe origin-form path', () => {
     assert.throws(() => parseGatewayConfig({ mobileUaRedirect: true, mobileEntryPath: bad }, STATE, DSH),
       /must not contain a query or fragment/, `mobileEntryPath ${JSON.stringify(bad)} must be rejected`)
   }
+  // Flag-independent: a no-opt-in probe keeps the validation from drifting
+  // inside the (default-off) redirect branch unnoticed.
+  for (const bad of ['/chamber/mobile.html?desktop=1', '/chamber/mobile.html#top']) {
+    assert.throws(() => parseGatewayConfig({ mobileEntryPath: bad }, STATE, DSH),
+      /must not contain a query or fragment/, `mobileEntryPath ${JSON.stringify(bad)} must be rejected without the opt-in too`)
+  }
   // The auth surface can never be the mobile entry: the mobile-UA 302 of `/`
   // would bounce a fresh login straight back to form (self-loop). Checked AFTER
   // normalization, so dot-segment spellings are caught too.
   for (const bad of ['/auth/login', '/auth/./login', '/auth', '/auth/credentials']) {
     assert.throws(() => parseGatewayConfig({ mobileUaRedirect: true, mobileEntryPath: bad }, STATE, DSH),
       /must not target the auth surface/, `mobileEntryPath ${JSON.stringify(bad)} must be rejected`)
+  }
+  for (const bad of ['/auth/login', '/auth/./login']) {
+    assert.throws(() => parseGatewayConfig({ mobileEntryPath: bad }, STATE, DSH),
+      /must not target the auth surface/, `mobileEntryPath ${JSON.stringify(bad)} must be rejected without the opt-in too`)
   }
 })
 
@@ -323,7 +333,8 @@ test('an explicit mobile-UA opt-in prints the deprecation warning once, never th
   })
   assert.equal(result.status, 0, result.stderr)
   assert.match(result.stderr, /deprecated/)
-  assert.equal(result.stderr.split('deprecated').length - 1, 1,
+  const noticeLines = result.stderr.split('\n').filter(line => line.includes('deprecated'))
+  assert.equal(noticeLines.length, 1,
     'the deprecation notice must print once per process, not per parse: ' + result.stderr)
 })
 

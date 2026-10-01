@@ -39,6 +39,7 @@ CI:   dry_run 先行 → 正式 tag push → 监控 → 发布后核对
 - [ ] full之外的发布项：`build:dsh-runtime`、`typecheck:host-graph` / `typecheck:host-git` / `typecheck:host-archive-cleanup` / `typecheck:host-open-in`；`test:win32` 只能由CI跑。
 - [ ] 旧版本号残留扫描：`grep -rn "<上一发布版本>" packages/*/test* packages/*/scripts/*.test.mjs` 为空（硬编码旧shellVersion会误触发壳升级路径）。
 - [ ] `pnpm install --frozen-lockfile` 通过；`build:renderer`、`build:host-packages`、`build:desktop` 通过。
+- [ ] 产物建成后（`build:renderer` / `build:host-packages` / `build:desktop`）跑一次 `node scripts/gates/verify-artifact-freshness.mjs --require-compare`：严格档把「一类都没比过」判红，防止 clean checkout 的 SKIP 冒充通过；`check:full` 内仍按默认档（SKIP 只 loud 打印）。
 - [ ] 打包完整性自检（`packaging-closure-checklist.md` §1–§2）：main.ts传递import闭包 ⊆ `build.files`；产物齐全（dist/control-plane、dist/preload.cjs、dist/host-*-package、vendor/dsh）。tag触发的构建腿另跑afterPack断言（vendor dsh平台 / pnpm模块 / asar内dsh-runtime）；改动打包链后先dry-run（§7）。
 - [ ] Linux腿（CI）：build-linux产AppImage(x64)；非dry_run断言 `latest-linux.yml`（beta为 `beta-linux.yml`）存在且互斥、无 `.blockmap`、runtime平台前缀 `linux-`。
 - [ ] `pnpm run smoke` 通过（未封装dsh时SKIP属正常）。

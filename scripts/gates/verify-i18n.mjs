@@ -113,6 +113,20 @@ export function discoverSidecars(root = ROOT) {
   return sidecars
 }
 
+/** 双语 README 却缺 sidecar 的包：发现面只枚举「已存在」的 sidecar 时，删掉一份
+ *  README.i18n.yaml 就能让整对静默失去校验。README.md 与 README.zh.md 同时在场
+ *  就必须有 sidecar（今天所有双语包都满足，这是一条 fail-closed 的防退化网）。 */
+export function discoverMissingSidecars(root = ROOT) {
+  const missing = []
+  for (const pkg of readdirSync(join(root, 'packages')).sort()) {
+    const base = 'packages/' + pkg + '/'
+    if (!fileExists(base + 'README.md') || !fileExists(base + 'README.zh.md')) continue
+    if (fileExists(base + SIDECAR_NAME)) continue
+    missing.push(base + 'README.md')
+  }
+  return missing
+}
+
 const write = process.argv.includes('--write')
 const recordPath = join(ROOT, RECORD_FILE)
 let record = { files: {} }
@@ -157,6 +171,11 @@ for (const en of Object.keys(record.files)) {
   console.error('DRIFTED      ' + en + ' —— 记录里有一对已不存在（删掉记录或恢复文件）')
   drifted = true
   if (write) delete record.files[en]
+}
+
+for (const en of discoverMissingSidecars()) {
+  console.error('DRIFTED      ' + en + ' —— 双语 README 缺 ' + SIDECAR_NAME + '：记录文件缺席会让整对不受检（补 sidecar 或删掉其中一侧）')
+  drifted = true
 }
 
 for (const sidecar of discoverSidecars()) {

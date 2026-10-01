@@ -132,7 +132,7 @@ a session that needs no repair; an open that IS in flight is never interrupted (
 slow Host), and a face that cannot be read is `unknown` and fails closed. Past
 `LADDER_TABLES.mobile.failedMs` (90 s — the shared ladder table, not a module
 local) the copy switches to "session content not loaded" so a failed load is
-never described as one still running. The touch tier carries no
+never described as one still running. The copy is key-table driven and the exhausted entry outranks it: once the automatic arm has spent every resync lever, the copy turns to "automatic recovery exhausted" (`dsh-chamber.mobile.stall.messageExhausted`) — a spent budget is never reported as a load failure. The touch tier carries no
 chamber fork, so this arm is that tier's only automatic recovery.
 
 - a `[data-chat-flow]` column exists and its nearest `[data-phase]` ancestor

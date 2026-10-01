@@ -109,7 +109,7 @@ function warnMobileUaRedirectDeprecated(): void {
   console.warn(
     'gateway: --mobile-ua-redirect / DSH_GATEWAY_MOBILE_UA_REDIRECT is deprecated; '
     + 'the mobile client plugin is injected on every device, so UA shunting remains only as a compatibility surface. '
-    + 'Serve /chamber/mobile.html directly instead.',
+    + 'Serve / directly instead — the plugin is already injected into every managed instance.',
   )
 }
 
