@@ -273,8 +273,11 @@ export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, 
   // mistyped --mobile-entry cannot surface later as a misdirecting 302.
   // Explicit opt-in (input or env) prints the one-time deprecation warning.
   const mobileUaRedirect = input.mobileUaRedirect ?? envBoolean('DSH_GATEWAY_MOBILE_UA_REDIRECT') ?? false
-  if (mobileUaRedirect === true) warnMobileUaRedirectDeprecated()
+  // Normalize (and validate) the entry BEFORE the notice: a bad --mobile-entry
+  // must surface as the config error, not behind a deprecation line. The latch
+  // stays process-level on purpose (one notice per process).
   const mobileEntryPath = normalizeMobileEntryPath(input.mobileEntryPath ?? DEFAULT_MOBILE_ENTRY_PATH)
+  if (mobileUaRedirect === true) warnMobileUaRedirectDeprecated()
   // Login-phase pre-warm ON by default; the kill switch exists for operators
   // who do not want the pre-auth route at all.
   const warmup = input.warmup ?? envBoolean('DSH_GATEWAY_WARMUP') ?? true
