@@ -13,13 +13,34 @@
 /** 用法错误的退出码（门的硬失败用 1）。 */
 export const USAGE_EXIT_CODE = 2
 
+/** 本机 gateway 受控锚根的环境变量名（升级/真机流程用；不再把机器路径写死）。 */
+export const GATEWAY_ANCHOR_ROOT_ENV = 'DSH_MOBILE_GATEWAY_ANCHOR_ROOT'
+
 /** 锚点根候选（按序取第一个真的含 `node_modules/@deepseek-ai` 的）。 */
 export const DEFAULT_ANCHOR_ROOTS = [
-  // 本机 gateway 形态的上游锚（本任务指定的输入；别的机器上通常不存在 ⇒ fail-soft）
-  '/root/.dsh-chamber/gateway/dsh-anchor',
-  // 运行时线（desktop 自带 dsh 树物化后才有）
+  // 本机 gateway 形态的上游锚：路径从 ${GATEWAY_ANCHOR_ROOT_ENV} 读（旧版把
+  // `/root/.dsh-chamber/gateway/dsh-anchor` 写死；别的机器上它只是候选列表里
+  // 一个永远不存在的无效项）。占位符由 defaultAnchorRoots(env) 展开，未设置时该项消失。
+  '${DSH_MOBILE_GATEWAY_ANCHOR_ROOT}',
+  // 仓内运行时线（desktop 自带 dsh 树物化后才有：node_modules/@deepseek-ai/**/lib/*.js）
   'packages/desktop/vendor/dsh',
+  // macOS 打包态 app 的 sidecar vendor 树（本机实测可跑；CI/别的机器上不存在 ⇒ 跳过）。
+  // 它是"已验证可跑"的本地锚树，但因为与打包版本绑定，放在最后：in-repo 运行时线优先。
+  '/Applications/dsh-chamber.app/Contents/Resources/sidecar/vendor/dsh',
 ]
+
+/**
+ * 展开占位符后的默认锚点根候选。
+ * @param {Record<string, string|undefined>} [env]
+ * @returns {string[]}
+ */
+export function defaultAnchorRoots(env = {}) {
+  return DEFAULT_ANCHOR_ROOTS
+    // 用 replacer 函数而不是替换串：env 值里的 $& / $1 在字符串替换里会被当成
+    // 替换模式展开（路径里出现 $ 不是天方夜谭），函数形式一律按字面量插入。
+    .map(root => root.replace('${DSH_MOBILE_GATEWAY_ANCHOR_ROOT}', () => env[GATEWAY_ANCHOR_ROOT_ENV] ?? ''))
+    .filter(root => root !== '')
+}
 
 /** 用法文本的单一来源（`--help` 与用法错误共用）。 */
 export const VERIFY_MOBILE_ANCHORS_USAGE = `verify-mobile-anchors — 移动插件锚点上游保鲜门（docs/checklists/upstream-touchpoints.md §4）
@@ -33,8 +54,10 @@ export const VERIFY_MOBILE_ANCHORS_USAGE = `verify-mobile-anchors — 移动插�
   --anchor-root <dir>        上游锚点根（须含 node_modules/@deepseek-ai/**/lib/*.js
                              与 dsh-web-frontend/dist/assets/index-*.css）。
                              默认先读环境变量 DSH_MOBILE_ANCHOR_ROOT，再按
-                             ${DEFAULT_ANCHOR_ROOTS.join(' → ')}
-                             取第一个存在者。
+                             ① $DSH_MOBILE_GATEWAY_ANCHOR_ROOT（gateway 受控锚；未设置则跳过）
+                             ② packages/desktop/vendor/dsh（仓内运行时线）
+                             ③ macOS 打包 app 的 sidecar vendor 树（本机实测可用）
+                             取第一个含 node_modules/@deepseek-ai 的目录。
   --simulate-rename <a>=<b>  自测开关：把上游产物里的 token a 在**内存里**改成 b
                              （不写盘），用于证明门禁会因锚点改名而 exit 1。可重复。
   --require-anchor-root      严格模式：把所有「其实什么都没查」的路径改为 exit 1——
@@ -50,9 +73,10 @@ export const VERIFY_MOBILE_ANCHORS_USAGE = `verify-mobile-anchors — 移动插�
   --help, -h                 打印本用法并 exit 0。
 
 退出码：
-  0  全部通过（或非严格模式下的 fail-soft 跳过 / --help）
-  1  data-* / role / slot / build-time 哈希 token 锚点零命中（没有**写入形**
-     发射点）、最小断言集缺口，或严格模式下的
+  0  全部通过；锚点根缺失时上游发射侧 fail-soft 跳过（本地判据仍判定）/ --help
+  1  本地判据硬失败（禁用形态命中、最小断言集声明侧缺口——**没有锚点根也判**）、
+     data-* / role / slot / build-time 哈希 token / local-name 锚点零命中
+     （没有**写入形**发射点）、最小断言集上游缺口、SHAPE_RULES 失效，或严格模式下的
      四条「什么都没查」路径 + 版本不符
   2  用法错误（未知参数 / --simulate-rename 缺 '=' / 它与 --require-anchor-root 同用等）
 `

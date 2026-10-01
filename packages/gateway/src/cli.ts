@@ -49,9 +49,12 @@ Options:
   --cors-origin O     extra allowed origin (repeatable)
   --mobile-ua-redirect
                       redirect an authenticated mobile-browser GET/HEAD of / to
-                      --mobile-entry (design 17 §18 UA shunting; default off)
+                      --mobile-entry (design 17 §18 UA shunting; deprecated,
+                      removal in the next major; default off)
   --mobile-entry PATH origin-form target of the mobile UA redirect
-                      (default /chamber/mobile.html)
+                      (default /chamber/mobile.html); an unauthenticated HTML
+                      navigation visiting this entry answers 302 to
+                      /auth/login instead of a JSON 401
   --no-warmup
                       disable the login-phase bundle pre-warm (design 17 §10.6;
                       default ON — while a visitor is on the login page the
@@ -68,6 +71,9 @@ Options:
   -h, --help          show this help
 
 Environment:
+  DSH_GATEWAY_MOBILE_UA_REDIRECT
+                      1/true enables the deprecated mobile UA shunting
+                      (--mobile-ua-redirect); 0/false or unset keeps it OFF
   DSH_GATEWAY_WARMUP
                       0/false disables the login-phase bundle pre-warm
                       (design 17 §10.6); 1/true or unset keeps it ON

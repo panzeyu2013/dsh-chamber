@@ -52,7 +52,7 @@ test('pattern accepts the two test extensions and nothing else', () => {
   assert.equal(TEST_FILE_PATTERN.test('a.spec.ts'), false)
   assert.equal(TEST_FILE_PATTERN.test('a.test.js'), false)
 })
-test('a package-relative basename in the owning package script counts as wired', () => {
+test('a package-relative path in the owning package script counts as wired', () => {
   const verdict = findUnwiredTests({
     testFiles: ['packages/alpha/test/one.test.ts'],
     evidence: evidenceOf({ packages: { alpha: 'node test/one.test.ts' } }),
@@ -60,12 +60,35 @@ test('a package-relative basename in the owning package script counts as wired',
   assert.deepEqual(verdict.unwired, [])
   assert.equal(verdict.corpusSize, 1)
 })
-test('a file list inside the package helper script counts as wired', () => {
+test('a file list inside the package helper script counts when it names the package-relative path', () => {
   const verdict = findUnwiredTests({
     testFiles: ['packages/alpha/test/two.test.ts'],
-    evidence: evidenceOf({ packages: { alpha: "const FILES = ['two.test.ts']" } }),
+    evidence: evidenceOf({ packages: { alpha: "const FILES = ['test/two.test.ts']" } }),
   })
   assert.deepEqual(verdict.unwired, [])
+})
+test('a basename-only, echo or substring mention does not wire a file it does not name', () => {
+  const file = ['packages/alpha/test/smoke.test.ts']
+  // A bare basename does not resolve to test/smoke.test.ts from the package root.
+  assert.deepEqual(
+    findUnwiredTests({ testFiles: file, evidence: evidenceOf({ packages: { alpha: "const FILES = ['smoke.test.ts']" } }) }).unwired,
+    file,
+  )
+  // An echo of the basename is prose, not wiring.
+  assert.deepEqual(
+    findUnwiredTests({ testFiles: file, evidence: evidenceOf({ packages: { alpha: 'echo smoke.test.ts' } }) }).unwired,
+    file,
+  )
+  // A substring of another path (my-smoke.test.ts) is not the file either.
+  assert.deepEqual(
+    findUnwiredTests({ testFiles: file, evidence: evidenceOf({ packages: { alpha: 'node test/my-smoke.test.ts' } }) }).unwired,
+    file,
+  )
+  // The path that DOES resolve is the positive control for the three negatives.
+  assert.deepEqual(
+    findUnwiredTests({ testFiles: file, evidence: evidenceOf({ packages: { alpha: 'node test/smoke.test.ts' } }) }).unwired,
+    [],
+  )
 })
 test('a root manifest reference wires a package test file', () => {
   const verdict = findUnwiredTests({

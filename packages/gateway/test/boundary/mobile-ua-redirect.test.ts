@@ -99,6 +99,9 @@ test('enabled: mobile UA GET / answers 302 to the default mobile entry with no-s
   assert.equal(res.status, 302)
   assert.equal(res.headers.location, DEFAULT_MOBILE_ENTRY_PATH)
   assert.equal(res.headers['cache-control'], 'no-store')
+  // The verdict is UA-dependent: a shared cache must key the 302 on the UA or
+  // it can replay the shunting to a desktop browser.
+  assert.equal(res.headers.vary, 'User-Agent')
   assert.equal(s.httpProxyCalls, 0, 'the shunting claims the request before the proxy')
 })
 
@@ -155,6 +158,59 @@ test('a forged mobile UA cannot bypass the auth gate (401 before any shunting)',
   assert.equal(res.status, 401)
   assert.equal(JSON.parse(res.body).code, 'unauthorized')
   assert.equal(res.headers.location, undefined)
+  assert.equal(s.httpProxyCalls, 0)
+})
+
+test('unauthenticated HTML navigation to the mobile entry reaches the login page, not a bare 401', async () => {
+  const s = setup({ auth: deniedAuth() })
+  const res = await runHttp(s.dispatch, gatewayRequest('GET', DEFAULT_MOBILE_ENTRY_PATH, { accept: 'text/html' }))
+  assert.equal(res.status, 302)
+  assert.equal(res.headers.location, '/auth/login')
+  assert.equal(res.headers['cache-control'], 'no-store')
+  assert.equal(s.httpProxyCalls, 0)
+})
+
+test('the login-redirect exemption follows the CONFIGURED mobile entry path', async () => {
+  const s = setup({ auth: deniedAuth(), mobileEntryPath: '/m' })
+  const res = await runHttp(s.dispatch, gatewayRequest('GET', '/m', { accept: 'text/html' }))
+  assert.equal(res.status, 302)
+  assert.equal(res.headers.location, '/auth/login')
+  assert.equal(s.httpProxyCalls, 0)
+})
+
+test('an API Accept on the mobile entry keeps the 401 JSON shape', async () => {
+  const s = setup({ auth: deniedAuth() })
+  const res = await runHttp(s.dispatch, gatewayRequest('GET', DEFAULT_MOBILE_ENTRY_PATH, { accept: 'application/json' }))
+  assert.equal(res.status, 401)
+  assert.deepEqual(JSON.parse(res.body), { error: 'unauthorized', code: 'unauthorized' })
+  assert.equal(res.headers.location, undefined)
+  assert.equal(s.httpProxyCalls, 0)
+})
+
+test('the mobile-entry login redirect keeps the desktop escape marker and the expired hint', async () => {
+  const s = setup({ auth: deniedAuth() })
+  const desktop = await runHttp(s.dispatch, gatewayRequest('GET', DEFAULT_MOBILE_ENTRY_PATH + '?desktop=1', { accept: 'text/html' }))
+  assert.equal(desktop.status, 302)
+  assert.equal(desktop.headers.location, '/auth/login?desktop=1')
+  const expired = await runHttp(s.dispatch, gatewayRequest('GET', DEFAULT_MOBILE_ENTRY_PATH, { accept: 'text/html', cookie: 'dsh_gateway_session=stale' }))
+  assert.equal(expired.status, 302)
+  assert.equal(expired.headers.location, '/auth/login?expired=1')
+})
+
+test('a stale principal is rejected before the mobile-entry login redirect', async () => {
+  const s = setup({ auth: staleGenerationAuth() })
+  const res = await runHttp(s.dispatch, gatewayRequest('GET', DEFAULT_MOBILE_ENTRY_PATH, { accept: 'text/html' }))
+  assert.equal(res.status, 401)
+  assert.equal(JSON.parse(res.body).code, 'unauthorized')
+  assert.equal(res.headers.location, undefined)
+  assert.equal(s.httpProxyCalls, 0)
+})
+
+test('an authenticated mobile entry still reaches the chamber surface', async () => {
+  const s = setup({ auth: authenticatedAuth() })
+  const res = await runHttp(s.dispatch, gatewayRequest('GET', DEFAULT_MOBILE_ENTRY_PATH, { accept: 'text/html' }))
+  assert.equal(res.status, 200)
+  assert.equal(res.body, 'mobile entry')
   assert.equal(s.httpProxyCalls, 0)
 })
 

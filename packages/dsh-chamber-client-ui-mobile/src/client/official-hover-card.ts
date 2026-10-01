@@ -16,7 +16,8 @@
  * sees the dispatched event.
  *
  * GUARDS: only a matched wrapper/card pair with the atom's own anchor geometry
- * (exactly one wrapper; a degenerate rect or no card is a no-op); capture-phase
+ * (the compact relation or the preview variant; exactly one wrapper; a
+ * degenerate rect or no card is a no-op); capture-phase
  * pointerdown only, target and coordinates provably outside both rects (2px
  * inflation); blur / visibilitychange-hidden. Never click/key/touch dispatch;
  * no timers; try/catch fail closed; one Symbol.for double-install guard.
@@ -47,6 +48,16 @@ export const CARD_ROOT_QUERY = `[class*="${OFFICIAL_CARD_ROOT_CLASS_TOKEN}"]`
 
 /** The atom anchors the card this far right of the wrapper (px). */
 export const CARD_ANCHOR_GAP_PX = 8
+
+/** The preview variant's side inset from its width anchor (px, upstream
+ *  ui-primitives `PREVIEW_INSET`). */
+export const PREVIEW_INSET_PX = 24
+
+/** The preview variant's viewport margin on every axis (px, upstream
+ *  `VIEWPORT_MARGIN`). It shares its value with the compact anchor gap by
+ *  upstream coincidence, so it is declared separately — the two are
+ *  independent. */
+export const VIEWPORT_MARGIN_PX = 8
 
 /** Geometry tolerance (px): sub-pixel layout rounding only. */
 export const CARD_ANCHOR_TOLERANCE_PX = 2
@@ -112,11 +123,11 @@ export function isUsableAnchorRect(rect: RectLike): boolean {
 }
 
 /**
- * Is this card hung off this wrapper by the atom's own anchoring relation
+ * Is this card hung off this wrapper by the atom's COMPACT anchoring relation
  * (left = wrapper.right + 8, top = wrapper.top, or the bottom-clamped variant)?
  * Pure — unit-tested.
  */
-export function matchesCardAnchor(wrapper: RectLike, card: RectLike, viewportHeight: number): boolean {
+export function matchesCompactCardAnchor(wrapper: RectLike, card: RectLike, viewportHeight: number): boolean {
   if (!isUsableAnchorRect(wrapper) || !isFiniteRect(card)) return false
   if (Math.abs(card.left - (wrapper.right + CARD_ANCHOR_GAP_PX)) > CARD_ANCHOR_TOLERANCE_PX) return false
   if (Math.abs(card.top - wrapper.top) <= CARD_ANCHOR_TOLERANCE_PX) return true
@@ -125,6 +136,69 @@ export function matchesCardAnchor(wrapper: RectLike, card: RectLike, viewportHei
   return Number.isFinite(viewportHeight)
     && Math.abs(card.bottom - (viewportHeight - CARD_ANCHOR_GAP_PX)) <= CARD_ANCHOR_TOLERANCE_PX
     && card.top <= wrapper.top
+}
+
+/**
+ * Is this card hung off this wrapper by the atom's PREVIEW anchoring relation
+ * (variant="preview")? The pinned ui-primitives source computes, with
+ * bounds = widthAnchorRef ?? wrapper and r = wrapper:
+ *   width = min(bounds.width - 2*24, innerWidth - 2*8)
+ *   left  = max(8, min(bounds.left + 24, innerWidth - width - 8))
+ *   top   = onTop ? max(topMargin, r.top - min(h, maxHeight) - 8)
+ *                 : max(topMargin, r.bottom + 8)
+ * The WIDTH ANCHOR is a foreign element this scan cannot see (the pinned
+ * build's only preview callers pass their own container), so left is checked by
+ * CONTAINMENT: bounds contains the wrapper, hence the card must extend at least
+ * PREVIEW_INSET past the wrapper on both sides. The vertical branch is exact
+ * (below: top = wrapper.bottom + 8; above: bottom = wrapper.top - 8) because
+ * the wrapper r is the anchor on that axis. Pure — unit-tested.
+ *
+ * REGISTERED RESIDUAL (fail-closed): the frame top-margin clamp
+ * (`overlayTopMargin`, frame clearance + 20) is not derivable from rects, so a
+ * card the clamp pushed down stays unmatched — the watchdog no-ops rather than
+ * misfires. viewportWidth must be a real number; NaN (not supplied) disables
+ * the whole relation.
+ */
+export function matchesPreviewCardAnchor(
+  wrapper: RectLike,
+  card: RectLike,
+  viewportHeight: number,
+  viewportWidth: number,
+): boolean {
+  if (!isUsableAnchorRect(wrapper) || !isFiniteRect(card)) return false
+  if (!Number.isFinite(viewportWidth) || viewportWidth <= 0) return false
+  if (card.right - card.left <= 0 || card.bottom - card.top <= 0) return false
+  // Horizontal containment of the width anchor (see above), with the viewport
+  // clamp only ever tightening it.
+  if (card.left > wrapper.left + PREVIEW_INSET_PX + CARD_ANCHOR_TOLERANCE_PX) return false
+  if (card.right < wrapper.right - PREVIEW_INSET_PX - CARD_ANCHOR_TOLERANCE_PX) return false
+  // The atom keeps the card inside the 8px viewport margins on every axis.
+  if (card.left < VIEWPORT_MARGIN_PX - CARD_ANCHOR_TOLERANCE_PX) return false
+  if (card.right > viewportWidth - VIEWPORT_MARGIN_PX + CARD_ANCHOR_TOLERANCE_PX) return false
+  if (Number.isFinite(viewportHeight)) {
+    if (card.top < VIEWPORT_MARGIN_PX - CARD_ANCHOR_TOLERANCE_PX) return false
+    if (card.bottom > viewportHeight - VIEWPORT_MARGIN_PX + CARD_ANCHOR_TOLERANCE_PX) return false
+  }
+  // Below the wrapper (the common case), or above it when the atom flipped the
+  // side (onTop): both are the exact ANCHOR_GAP relation on the wrapper axis.
+  if (Math.abs(card.top - (wrapper.bottom + CARD_ANCHOR_GAP_PX)) <= CARD_ANCHOR_TOLERANCE_PX) return true
+  return Math.abs(wrapper.top - CARD_ANCHOR_GAP_PX - card.bottom) <= CARD_ANCHOR_TOLERANCE_PX
+}
+
+/**
+ * Is this card hung off this wrapper by EITHER of the atom's anchoring
+ * relations (compact, or the preview variant)? viewportWidth is the preview
+ * relation's horizontal clamp; omitting it (NaN) leaves only the compact
+ * relation, which is what every pre-preview caller asserted. Pure.
+ */
+export function matchesCardAnchor(
+  wrapper: RectLike,
+  card: RectLike,
+  viewportHeight: number,
+  viewportWidth: number = Number.NaN,
+): boolean {
+  return matchesCompactCardAnchor(wrapper, card, viewportHeight)
+    || matchesPreviewCardAnchor(wrapper, card, viewportHeight, viewportWidth)
 }
 
 /**
@@ -165,10 +239,18 @@ export function isGestureOutside(facts: GestureFacts): boolean {
  * anchors it: a card with zero or several geometric parents is skipped (an
  * ambiguous relation must never be dismissed through the wrong wrapper), and
  * no cards returns before the wrapper query. Fails closed.
+ *
+ * Pairing precedence: the compact relation first, the preview variant only for
+ * a card with NO compact wrapper. The added branch can therefore only ADD
+ * pairs — a card the old matcher already paired keeps that wrapper even when
+ * the preview relation would ambiguously match a second one. viewportWidth is
+ * the preview relation's clamp; NaN (not supplied) keeps the compact relation
+ * only.
  */
 export function scanStrandedCards<E extends ElementFace>(
   root: QueryRootFace<E>,
   viewportHeight: number,
+  viewportWidth: number = Number.NaN,
 ): Array<StrandedCardPair<E>> {
   const pairs: Array<StrandedCardPair<E>> = []
   const cards = Array.from(root.querySelectorAll(CARD_QUERY)).filter(
@@ -181,8 +263,11 @@ export function scanStrandedCards<E extends ElementFace>(
   )
   for (const card of cards) {
     const cardRect = card.getBoundingClientRect()
-    const matches = wrappers.filter(
-      wrapper => matchesCardAnchor(wrapper.getBoundingClientRect(), cardRect, viewportHeight),
+    const compact = wrappers.filter(
+      wrapper => matchesCompactCardAnchor(wrapper.getBoundingClientRect(), cardRect, viewportHeight),
+    )
+    const matches = compact.length > 0 ? compact : wrappers.filter(
+      wrapper => matchesPreviewCardAnchor(wrapper.getBoundingClientRect(), cardRect, viewportHeight, viewportWidth),
     )
     if (matches.length !== 1) continue
     pairs.push({ card, wrapper: matches[0] as E })
@@ -232,7 +317,7 @@ export function installStrandedHoverCardWatchdog(active: () => boolean): () => v
   const dismissAll = (): void => {
     try {
       if (!active()) return
-      for (const pair of scanStrandedCards(document, window.innerHeight)) dispatchBoundaryLeave(pair.wrapper)
+      for (const pair of scanStrandedCards(document, window.innerHeight, window.innerWidth)) dispatchBoundaryLeave(pair.wrapper)
     } catch {
       // Fail closed.
     }
@@ -251,7 +336,7 @@ export function installStrandedHoverCardWatchdog(active: () => boolean): () => v
       if (!(target instanceof Element)) return
       const x = event.clientX
       const y = event.clientY
-      for (const pair of scanStrandedCards(document, window.innerHeight)) {
+      for (const pair of scanStrandedCards(document, window.innerHeight, window.innerWidth)) {
         const facts: GestureFacts = {
           targetInWrapper: pair.wrapper.contains(target),
           targetInCard: pair.card.contains(target),

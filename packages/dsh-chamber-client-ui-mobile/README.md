@@ -58,9 +58,13 @@ mobile surface on three axes, all covered structurally (no hashed classes):
   30px to ~96px (2026-09-14 review-fix; the earlier wrap rule WAS the
   regression);
 - **Session header row (phone tier)**: one bounded 48px row with the top/right
-  safe-area insets applied. The shrink order is explicit — the CURRENT crumb
-  (the one upstream renders with `disabled`) absorbs the remaining width and
-  ellipsises; the lineage chip is OUT of the shrink race (`flex: 0 0 auto`, a
+  safe-area insets applied. The shrink order is explicit — the LAST crumb segment absorbs the remaining
+  width (structural `nav > span:last-child { flex: 0 1 auto; min-width: 0 }`),
+  and the current crumb inside it (`span.crumb.crumbCurrent`) ellipsises
+  through upstream's own `.crumb` (`max-width: 220px` +
+  `text-overflow: ellipsis`); upstream renders the current crumb as a bare
+  `span`, not a `disabled` button, so the earlier `button:disabled` arm was
+  dead; the lineage chip is OUT of the shrink race (`flex: 0 0 auto`, a
   44px touch floor where upstream ships a 28px box, and a bounded count label)
   because it is the only entry point to the subagent catalog; the agent-preset
   cell — upstream's `AgentPresetLabel`, a BARE `span[icon][name]` and the only
@@ -84,9 +88,15 @@ mobile surface on three axes, all covered structurally (no hashed classes):
   the drawer can actually work — the frame must be stamped AND
   `data-mobile-roles` must include the sidebar role. `stampFrame` is
   all-or-nothing (a frame whose conversation column is missing is never
-  adapted), so without this gate a vendor rename of the centre key would leave
-  a visible button whose only effect is flipping a frame attribute nothing
-  responds to, plus a full-screen scrim over the transcript.
+  adapted), and a probe that fails AFTER an earlier success WITHDRAWS the
+  stamps it left (`withdrawStamps`: the frame attribute, `data-mobile-roles`
+  and every role attribute inside the frame), so a centre-key rename degrades
+  to the official narrow layout instead of leaving a grid lock and overlay
+  entries over a column that no longer exists. The gate covers the other
+  rename: a frame whose conversation column survived but whose sidebar key did
+  not still stamps (and reports `data-mobile-roles` without `sidebar`), and
+  without the gate the visible toggle's only effect would be flipping a frame
+  attribute nothing responds to, plus a full-screen scrim over the transcript.
 - **View tabs**: `tabs.length > 1` is the NORM, not an edge case — `ui-chat`
   and `ui-trajectory` both register a `conversation.view` unconditionally and
   both ship in the default web bundle. The official tab is 13px text on a 25px
@@ -112,13 +122,17 @@ ATTRIBUTE-ONLY — the package's anchor discipline forbids matching the hint by
 its hashed class or by its copy:
 
 Since 2026-09-21 the same predicate also drives an AUTOMATIC arm: once the stall
-reaches the threshold AND the concrete `Session.openPromise` reports no open in
-flight, the module calls the pinned `resync()` to rebuild that session's journal
-stream itself, bounded by the same cooldown (120 s) and rolling budget (at most 3
-per 10 minutes). An open that IS in flight is never interrupted (a slow Host), and
-a face that cannot be read is `unknown` and fails closed. Past
-`STALL_FAILED_MS` (180 s) the copy switches to "session content not loaded" so a
-failed load is never described as one still running. The touch tier carries no
+reaches the threshold AND that session's concrete `openState === 'loading'` AND
+the concrete `Session.openPromise` reports no open in flight, the module calls
+the pinned `resync()` to rebuild that session's journal stream itself, bounded by
+the same cooldown (120 s) and rolling budget (at most 3 per 10 minutes). Both
+halves of that evidence gate are REQUIRED: a healthy open session with a slow
+first turn shares the stall SHAPE, so `openPromise === null` alone would rebuild
+a session that needs no repair; an open that IS in flight is never interrupted (a
+slow Host), and a face that cannot be read is `unknown` and fails closed. Past
+`LADDER_TABLES.mobile.failedMs` (90 s — the shared ladder table, not a module
+local) the copy switches to "session content not loaded" so a failed load is
+never described as one still running. The touch tier carries no
 chamber fork, so this arm is that tier's only automatic recovery.
 
 - a `[data-chat-flow]` column exists and its nearest `[data-phase]` ancestor
@@ -146,9 +160,11 @@ chamber fork, so this arm is that tier's only automatic recovery.
 Known limit of the shape: `data-chat-anchor-key` is emitted only by the routed
 node wrapper, so a session with an EMPTY transcript and a pending first prompt
 (the optimistic submission echo) satisfies the shape and would be told the
-loading face is stalled. Narrowing that needs an anchor upstream does not expose
-(open state / a pending-echo attribute); the dismissal control is what keeps the
-false-positive cost at zero.
+loading face is stalled. Narrowing the SHAPE needs a DOM anchor upstream does
+not expose (open state / a pending-echo attribute): the automatic arm's
+concrete-session evidence gate above narrows only the REBUILD, so the notice
+itself can still show; the dismissal control is what keeps the false-positive
+cost at zero.
 
 The notice is `role="status"` / `aria-live="polite"`, anchored under the session
 header, `pointer-events: none` except its two controls, and never takes focus.
@@ -181,9 +197,11 @@ The rule is deliberately NOT gated on the frame's shown flag
 (`data-rightbar-collapsed`): the seat reports `shown: false` in the SAME commit
 as the slide-out, so a frame-gated rule would drop the fullscreen box
 mid-animation and the panel would shrink to its normal width while sliding out.
-The hidden state needs no gate — upstream hides the panel with
-`transform: translateX(100%)` + `visibility: hidden`, and a full-width `inset: 0`
-box sits exactly one viewport to the right, invisible and untouchable. That is
+The hidden state needs no gate on the frame flag: upstream hides the panel's
+inner dockkit/empty/divider children (`translateX(var(--dsh-sidebar-width))` +
+`visibility: hidden`) while the panel element itself stays
+`position: absolute; right: 0; pointer-events: none`, so a full-width
+`inset: 0` box sits exactly one viewport to the right, untouchable. That is
 also why the safe-area insets live in this same block, and why it declares
 `box-sizing: border-box`: the panel carries no box-sizing of its own and the
 tree has no global border-box reset, so a content-box panel with `left: 0` +
@@ -206,8 +224,9 @@ edge to edge — a notched iPhone in LANDSCAPE falls in the same band, with the
 notch over one vertical edge and the home indicator under the bottom. That
 applies on the PHONE tier too, which is the band upstream itself presents
 fullscreen: the rule is ungated, so both bands get the insets. Upstream's
-fullscreen presenter carries none of its own; the drawer, the settings sheet
-and the composer seat on this tier all do. The surface still paints full-bleed —
+fullscreen presenter carries none of its own; the drawer (safe-area insets
+added 2026-09-30), the settings sheet and the composer seat on this tier all
+do. The surface still paints full-bleed —
 the background covers the padding box — only its content moves inside.
 
 A shown panel owns the screen, so the drawer YIELDS: the floating toggle and the
@@ -224,6 +243,16 @@ set and clear, i.e. present exactly while a fullscreen panel is shown. ORDER
 MATTERS: these selectors tie on specificity with the open-drawer / backdrop
 rules, so they sit after them (the open rule's `visibility 0s` transition keeps
 the hide immediate).
+
+An OPEN drawer owns the background the same way: the conversation and details
+columns are stamped `inert` (each write paired with the plugin's own ownership
+mark, so only the plugin's own inerts are ever retracted — and the stamp
+withdrawal retracts them together with the role stamps), and the conversation
+scrollport plus `document.body` get `overflow: hidden` (2026-09-30) — the backdrop absorbs
+taps but not keyboard focus, so without the stamp a Tab out of the drawer would
+land in the transcript behind it. The details column is skipped while a right
+panel is shown (the yield arms above), because inerting the panel's own column
+would make the visible panel dead.
 
 In the 768-1023px band the panel's own MODE control is hidden: this tier pins
 the fullscreen presentation, so upstream's push↔fullscreen flip (and the label
@@ -288,25 +317,30 @@ rules restructure it structurally (slot/role anchors only):
   `[class*="_<local>_"]` infix form therefore matched nothing and a naming
   flip fails SOFT — the official grid stays. The card grids are NOT touched,
   and they are **two** grids under this section with two different upstream
-  rules (2026-09-11 review-fix F3): `PluginInventorySettingsTab` `.cards`
-  collapses to one column at `max-width: 680px` itself, while `ui-agent-preset`
-  (`AgentPresetSection.module.css`) declares no breakpoint at all — its
-  `.cards` is `repeat(auto-fill, minmax(268px, 1fr))` inside a `.section`
-  capped at 720px, so upstream renders two columns from about 580px of
-  viewport width (two 268px cards plus the 12px gap need 548px inside the
-  options box: the viewport minus 2×(16px + safe-area)). The chamber's former
-  one-card-per-row arm therefore changed the Agent-presets layout across its
-  whole two-column range, about 580–768px of the phone tier — not only the
-  681–768px window the inventory grid's own breakpoint leaves. It was deleted
-  for both grids (2026-09-11 upstream-alignment T17b);
+  rules (2026-09-11 review-fix F3; the inventory rule re-anchored 2026-09-30):
+  `PluginInventorySettingsTab`'s own root declares
+  `container: qSYn7G_plugin-inventory / inline-size` and collapses `.cards` to
+  one column through `@container qSYn7G_plugin-inventory (width <= 520px)` — a
+  CONTAINER query on the section's own inline size, not the `max-width: 680px`
+  viewport media query this note used to claim — while `ui-agent-preset`
+  (`AgentPresetSection.module.css`) declares no breakpoint at all: its `.cards`
+  is `repeat(auto-fill, minmax(268px, 1fr))` inside a `.section` capped at
+  720px, so upstream renders two columns from about 580px of viewport width
+  (two 268px cards plus the 12px gap need 548px inside the options box: the
+  viewport minus 2×(16px + safe-area)). The chamber's former one-card-per-row
+  arm therefore changed the Agent-presets layout across its whole two-column
+  range, about 580–768px of the phone tier — the inventory grid's own container
+  query (520px of section width) maps to roughly the same viewport band, so the
+  arm had no narrow 681–768px window to itself. It was deleted for both grids
+  (2026-09-11 upstream-alignment T17b);
 - **Dialogs other than the settings sheet are not restyled**. The phone tier
   no longer caps `aria-modal` dialogs at `100vw - 24px` (2026-09-11
-  upstream-alignment T6): the tree has exactly three `role="dialog"`
+  upstream-alignment T6): the tree has four `role="dialog"`
   `aria-modal="true"` producers and each owns its fit — this sheet, the
   ui-primitives `Modal` (its root pads 24px and the dialog is
-  `min(380px, 100%)`), and the `ui-attachment` `ImageLightbox`, a fixed
-  full-bleed backdrop at `inset: 0` whose mask is an absolute `inset: 0`
-  layer. `max-width` beside `inset: 0` is over-constrained: the lightbox
+  `min(380px, 100%)`), the ui-primitives `ImageLightbox` (a fixed full-bleed
+  backdrop at `inset: 0` whose mask is an absolute `inset: 0` layer), and
+  `settings-account`'s `PlatformOverlay` (`inset: 0`, z 1001). `max-width` beside `inset: 0` is over-constrained: the lightbox
   backdrop shrank to `100vw - 24px`, left-anchored, leaving a 24px undimmed
   click-through strip on the right;
 - **iOS focus zoom**: editable fields inside dialogs get the composer's
@@ -337,9 +371,22 @@ that was just used. This is a coarse-pointer artifact, not a narrow-viewport
 one, so the rule is gated by `(pointer: coarse) and (hover: none)` (an iPad in
 landscape is 1024px+ and still taps; attaching a mouse flips `hover` and
 correctly restores hover tooltips) and is scoped to bubbles that duplicate an
-accessible name — `button[aria-label] + [role="tooltip"][data-side]` (the
-component renders the bubble as the trigger's immediate next sibling and marks
-it with its own `data-side`). Of the 31 official Tooltip sites, 27 are
+accessible name, in THREE shapes: the bubble that is the labelled trigger's
+own immediate next sibling (`button[aria-label] + [role="tooltip"][data-side]`,
+carrying the component's own `data-side` marker); a bubble whose labelled
+trigger is a `button` wrapped in a `span`/`div` — three official sites
+(the right-panel document preview's zoom +/- and its font warning) render
+`<span><button aria-label/></span>` as the anchor, so the button is a
+grandchild and the bubble is the WRAPPER's next sibling; that shape needs
+`:is(span, div):has(> button[aria-label]) + [role="tooltip"][data-side]`
+(2026-09-30 fix), kept as its OWN rule so an engine without `:has()` drops
+only this arm instead of invalidating the two unconditional ones — and
+portal-rendered bubbles (`[role="tooltip"][data-portal][data-side]`):
+`portal: true` sends the bubble through `createPortal` to `<body>`, where
+several official sites put it and no sibling relation survives at all.
+The 31/27 census is a PIN-BOUND snapshot of the pinned install (line-number
+citations, wherever kept, drift with every pin; the arms above are
+selector-shaped). Of the 31 official Tooltip sites, 27 are
 aria-labelled buttons whose label names the same action (composer
 send/stop/commands/ContextMeter, queue dock, goal bar, sidebar, message
 feedback, workspace rows, chat copy/branch; three phrase it slightly
@@ -385,11 +432,15 @@ either.
 `official-hover-card.ts` is a document-level watchdog for exactly that tier
 (same `(pointer: coarse) and (hover: none)` gate as the tooltip rule — a
 hover-capable pointer, and every desktop, keeps official behavior). It never
-touches the official package: for a card matched to exactly one wrapper by the
-atom's own anchoring geometry (`card.left = wrapper.right + 8`; `card.top =
-wrapper.top`, or the bottom-clamped `card.bottom = innerHeight − 8`) and the
-two CSS-module class tokens (`_card_38jqx_*` / `_root_38jqx_*`), it dispatches
-ONE bubbling `pointerout` on the wrapper with no related target. React's
+touches the official package: for a card matched to exactly one wrapper by one
+of the atom's own anchoring relations and the two CSS-module class tokens
+(`_card_38jqx_*` / `_root_38jqx_*`), it dispatches ONE bubbling `pointerout` on
+the wrapper with no related target. The relations are the two placements the
+pinned atom renders: COMPACT (`card.left = wrapper.right + 8`; `card.top =
+wrapper.top`, or the bottom-clamped `card.bottom = innerHeight − 8`) and
+PREVIEW (`variant="preview"`, the `ui-deliverables` rows: the card spans at
+least 24px past the wrapper on both sides and hangs below it at `top =
+wrapper.bottom + 8`, or above it at `bottom = wrapper.top − 8`). React's
 delegated enter/leave path reads that as "the pointer left the window" and runs
 the wrapper's `onPointerLeave`, which — with the card in the DOM, i.e. the
 atom's committed `open` true — arms the atom's own grace close; a real
@@ -418,6 +469,10 @@ idempotent, and is installed/uninstalled by `ctx.effect` behind one
    now fails `verify-mobile-anchors.mjs` hard (exit 1) instead of silently
    no-op'ing the watchdog; the matcher itself stays fail-closed (no card ever
    matches) — never a misfire.
+4. A PREVIEW card the atom's frame top-margin clamp (`overlayTopMargin`) pushed
+   down cannot be told from rects alone, so that placement stays unmatched and
+   the watchdog no-ops rather than misfires (registered fail-closed residual;
+   closing it needs a marker the atom does not expose).
 
 ## Drawer taps & keyboard (touch tier)
 
@@ -435,11 +490,15 @@ idempotent, and is installed/uninstalled by `ctx.effect` behind one
   untouched (touch/pen + touch-tier gates only).
 - **No keyboard pop on drawer navigation**: the official composer returns
   focus to the box on session switch, which pops the iOS keyboard right
-  after a drawer tap — the IME ladder's layer-1 gesture test now drops a
-  programmatic composer refocus only when the gesture started in a
-  NAVIGATION region (drawer rows, session-header breadcrumbs); composer
-  taps, send button, mouse/hardware-keyboard focus and portaled picker
-  flows (workspace/agent-preset menus) keep the keyboard / typing intent.
+  after a drawer tap — the IME ladder's layer-1 gesture classification stays
+  PERSISTENT (the last pointerdown is nav or preserve), but dropping a
+  programmatic composer refocus is executable only inside the 45 s window
+  (`IME_NAV_DROP_WINDOW_MS`) after that pointerdown (2026-09-30): a focusin
+  beyond the window is no longer attributed to the gesture and is preserved,
+  protecting screen-reader/AT and other programmatic focus. Composer taps, send
+  button,
+  mouse/hardware-keyboard focus and portaled picker flows
+  (workspace/agent-preset menus) keep the keyboard / typing intent.
 - **Composer visibility guard** (IME ladder layer 5, `composer.ts`
   `installComposerVisibilityGuard`): engines that ignore
   `interactive-widget=resizes-content` (iOS Safari, older Android WebViews)
@@ -472,7 +531,10 @@ idempotent, and is installed/uninstalled by `ctx.effect` behind one
   so an engine that delivers no viewport event on keyboard open still
   converges (measured: 8 frames). The lift is served for the composer only
   (editable focus, composer selection, the `KBD_EDITABLE_FOCUS_GRACE_MS` =
-  1200ms grace window); under ZOOM a non-composer field stays vetoed — the drawer's 13px
+  1200ms grace window; the selection proxy is gated on focus ownership — a
+  STALE selection left inside the composer while another field holds the
+  keyboard must not move the seat); under ZOOM a non-composer field stays vetoed
+  — the drawer's 13px
   search field is a common iOS focus-zoom trigger, so the drawer's fields also
   get the 16px floor at the source. Arming is idempotent per frame element, so
   a renderer remount that replaces the AppFrame while the keyboard stays open
@@ -534,10 +596,12 @@ pnpm run test:mobile
 
 Official dsh DOM, empirically audited via CDP at **v0.1.5-alpha.2** and re-anchored
 at **v0.1.5-rc.2** — every anchor below resolved in the rc.2 tree. Under the current
-pin (v0.2.0-rc.2) the strict anchor gate resolves all 47 property anchors and the
-two build-time CSS-module hash tokens with 0 misses
-(`verify-mobile-anchors.mjs --require-anchor-root`); the hash tokens were re-anchored
-to the served rc.2 bundle and a zero-hit token is now a hard failure (see below). The
+pin (v0.2.0-rc.2) the strict anchor gate resolves all 47 attribute/role/slot
+anchors, the three plugin local-name class anchors plus the external
+`_crumbSeg` emission pin, and the two build-time CSS-module hash tokens with 0
+misses (`verify-mobile-anchors.mjs --require-anchor-root`);
+the class-name arms were re-anchored to the served rc.2 bundle and a zero-hit
+one is now a hard failure (see below). The
 alpha.2 → rc.1 delta (the `ui-sidebar-*` guide/preview rows, the
 `ui-primitives` `CodeBlock` wrapper, the `ui-chat` stats dialog, two `z-index`
 additions in `ui-dockkit`'s CSS and a slot-catalog doc pointer) and the rc.1 → rc.2
@@ -551,9 +615,9 @@ emits the wrapper unconditionally; only the docking surface inside is
 registration-gated, so stamping converges on the shell, markup.ts
 `isStructuralTarget` + `ROLE_SLOT_KEYS`);
 the composer is a Lexical `[data-composer-input]` (no textarea); the settings
-dialog renders INSIDE the sidebar DOM (no body portal; the drawer open state
-must use `transform: none` — an identity transform still creates a containing
-block).
+dialog is body-portaled by upstream (rc.2 `SettingsPanel` uses
+`createPortal(…, document.body)`), so the drawer's transform no longer traps
+it; the drawer open state still uses `transform: none` deliberately.
 
 The vendored base is now **v0.2.0-rc.2** (harness pin `639ed015`; single source
 `harness.commit`). Historical audit record: the anchors above were re-verified
@@ -590,7 +654,7 @@ is a click button, not drag chrome; the `[role="menu"]
 [role="menuitem"][aria-selected]` highlight signal does not exist at this pin
 (the ui-primitives `Menu` emits no `aria-selected`, and it moves focus into the
 menu, so its Enter never reaches a document handler); and the tree still has
-exactly three `aria-modal` producers and exactly three `data-side` carriers
+exactly four `aria-modal` producers (`settings-general`, the two ui-primitives dialogs, `settings-account`'s `PlatformOverlay`) and exactly three `data-side` carriers
 (the two AppFrame/ConversationRoot drag handles and the always-`role="tooltip"`
 bubble).
 
@@ -599,8 +663,10 @@ structure-shaped and verified in the rc.2 tree:
 
 - `conversation.session.header.lineage` — a FOURTH seat of the session-header
   outlet, registered next to `actions` / `utilities` / `corner`, but rendered
-  **inside `nav.crumbs`** (inside the current crumb's `span.crumbSeg`), which is
-  what makes it the element the crumb strip can squeeze;
+  **inside `nav.crumbs`** — in the LAST `span.crumbSeg`, as the sibling of the
+  current crumb's `span.crumbCurrent` (on a subagent segment the seat renders in
+  the title's place and the title is its fallback) — which is why it needs the
+  explicit `flex: 0 0 auto` pin below to stay out of the shrink race;
 - the seat's own shape: a root `div` whose first child is the `/` separator
   `span` (count variant only), then `button` holding
   `[span.activitySlot][span(count, NO class)][IconChevronDownOutline14]`;
@@ -610,8 +676,11 @@ structure-shaped and verified in the rc.2 tree:
   as further `titleRow` children and `div.tabs[role=tablist]` as the header's
   second child — so a `> nav` child combinator on the row is a silent NO-OP
   (the `:has()` arm must be a descendant match);
-- the current crumb is `button.crumb:disabled` (upstream renders
-  `disabled: last`), which is the hook the shrink order uses;
+- the current crumb is a bare `span.crumb.crumbCurrent`, NOT a disabled
+  button; the shrink order is structural — the last `nav > span:last-child`
+  (the last `span.crumbSeg`) absorbs the remaining width, and the title span
+  inside it ellipsises through upstream's own `.crumb` (`max-width: 220px` +
+  `text-overflow: ellipsis`) while the lineage chip is pinned out of the race;
 - the `headerActions` outlet is a LIST seat whose three registrants in this pin
   render NO direct-child `button`: `agent-preset` (order −10) is
   `AgentPresetLabel`, a bare `span[icon][name]` that upstream itself bounds
@@ -629,7 +698,7 @@ structure-shaped and verified in the rc.2 tree:
   (the page degrades to the official narrow layout instead).
 
 **The session-stall notice's anchors (2026-09-14; value space re-audited
-)**, likewise attribute-only:
+2026-09-30)**, likewise attribute-only:
 
 - `[data-chat-flow]` — the `ui-chat` message column; absent means no chat
   surface is on screen, so nothing else is read;
@@ -640,16 +709,29 @@ structure-shaped and verified in the rc.2 tree:
   so a plugin matching them would be dead code;
 - `[data-chat-anchor-key]` — a rendered message row (the official
   `routedNode.key` projection);
-- `[data-slot="conversation.session.header"] > header` — the header outlet and
-  its direct `<header>` child, which is also the SESSION IDENTITY: the outlet is
-  a session-scoped slot the renderer remounts per session, unlike the keyed
-  root-scope `[data-phase]` node.
+- `<header>` wrapping the `conversation.session.header` outlet (anchor:
+  `[data-slot="conversation.header"] > header,`
+  `header:has(> [data-slot="conversation.session.header"])`) — the outlet is the
+  SESSION IDENTITY: it is a session-scoped slot the renderer remounts per
+  session, unlike the keyed root-scope `[data-phase]` node, and the plugin
+  resolves it with `outlet.closest('header')`.
+- Compile-local-name anchors — the only class-name arms. All are in
+  `verify-mobile-anchors.mjs`'s REQUIRED minimal set, so zero emission in the
+  pinned bundles is a HARD gate failure, never a silent no-op; a pin bump must
+  re-anchor them: `_row` (composer toolbar row), `_modelRow` (settings Models
+  row) and `_toBottomSlot` (chat back-to-bottom control, lifted by the same
+  keyboard offset while the guard is armed). The fourth entry, `_crumbSeg`, is
+  declared EXTERNAL: the crumb shrink order is structural
+  (`nav > span:last-child`) and declares no class arm, so only the upstream
+  emission of the segment class (`wSkVaW_crumbSeg` in the pinned bundle) is
+  pinned.
 
-**The theme observer's anchor ()**: `data-ds-dark-theme` — observed through
+**The theme observer's anchor**: `data-ds-dark-theme` — observed through
 `MutationObserver.observe(document.body, { attributeFilter: ['data-ds-dark-theme', …] })`
 in `index.ts`. Upstream's only WRITE at the pin is
-`document.body.toggleAttribute('data-ds-dark-theme', dark)` (`dsh-client-ui-theme`'s
-client half); every other reference is a CSS rule
+`body.setAttribute`/`removeAttribute('data-ds-dark-theme')` in
+`dsh-client-ui-layout`'s client half (the ui-theme side only carries the inline
+boot script); every other reference is a CSS rule
 (`body[data-ds-dark-theme]{…}`), i.e. consumption — which
 `scripts/upstream/verify-mobile-anchors.mjs` deliberately does NOT accept as proof that
 the attribute is still emitted. A pin that moves the writer to the `dataset` API
@@ -665,16 +747,18 @@ when the pin moves:
   CSS-module class tokens in the SERVED bundle. They are build-time hashes: the
   rc.2 build emits them in `@deepseek-ai/dsh-web-frontend/dist/assets/index-*.js`
   (verified byte-for-byte on the bundled copy under `packages/desktop/vendor/dsh/`,
-  where minified `Pp="_root_38jqx_3"` / `Rp="_card_38jqx_9"` /
-  `zp="_copyable_38jqx_21"`; the matching `index-*.css` carries the same two class
+  where the minified aliases are `qp="_root_38jqx_3"` / `Gp="_card_38jqx_9"` /
+  `Kp="_copyable_38jqx_21"`; the matching `index-*.css` carries the same two class
   selectors). The rc.2 re-anchor replaced the previous pin's `_root_1b2ny_*` /
   `_card_1b2ny_*` pair; `verify-mobile-anchors.mjs` now **hard-fails** a zero-hit
   hash token (it was advisory before), so the next pin move forces the re-anchor
   instead of degrading the watchdog to a silent no-op (fail closed, never a
   misfire), and this remains the one anchor in the package with no
   attribute-shaped fallback;
-- the anchoring geometry `card.left = wrapper.right + 8`, `card.top =
-  wrapper.top` (or the bottom-clamped `card.bottom = innerHeight − 8`);
+- the anchoring geometry: COMPACT `card.left = wrapper.right + 8`, `card.top =
+  wrapper.top` (or the bottom-clamped `card.bottom = innerHeight − 8`), plus
+  the PREVIEW relation above/below the wrapper (24px containment inset,
+  `wrapper.bottom + 8` / `wrapper.top − 8`);
 - the card box being the only `[class*="_card_38jqx_"]` element inside that
   wrapper.
 

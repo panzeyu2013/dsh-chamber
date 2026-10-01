@@ -110,6 +110,13 @@ export class FakeElement extends FakeNodeBase {
     walk(this)
     return out
   }
+  /** Real-DOM descendant semantics; node identity is exact, so a node
+   *  contains itself. */
+  contains(node: unknown): boolean {
+    if (node === this) return true
+    for (const child of this.children) if (child.contains(node)) return true
+    return false
+  }
   getBoundingClientRect(): FakeRect {
     this.onRect?.()
     return this.rect
@@ -201,9 +208,12 @@ export class FakeDocument {
   readonly body = new FakeElement('body')
   activeElement: FakeElement | null = null
   visibilityState = 'visible'
+  /** Injectable DOM selection (default: none — the harness's historical
+   *  semantics). The guard reads only `anchorNode`. */
+  selection: { readonly anchorNode: unknown } | null = null
   private readonly listeners = new Map<string, Array<(event: FakeEvent) => void>>()
   createElement(tagName: string): FakeElement { return new FakeElement(tagName) }
-  getSelection(): null { return null }
+  getSelection(): { readonly anchorNode: unknown } | null { return this.selection }
   addEventListener(type: string, handler: (event: FakeEvent) => void): void {
     const list = this.listeners.get(type) ?? []
     list.push(handler)
@@ -220,11 +230,40 @@ export class FakeDocument {
   }
 }
 
+/** An injectable visual viewport: offsetTop + height are the measurement the
+ *  guard reads (the visible bottom in layout coordinates), and resize/scroll
+ *  are the events it subscribes to. */
+export class FakeVisualViewport {
+  offsetTop: number
+  height: number
+  private readonly listeners = new Map<string, Array<() => void>>()
+  constructor(height: number, offsetTop = 0) {
+    this.height = height
+    this.offsetTop = offsetTop
+  }
+  addEventListener(type: string, handler: () => void): void {
+    const list = this.listeners.get(type) ?? []
+    list.push(handler)
+    this.listeners.set(type, list)
+  }
+  removeEventListener(type: string, handler: () => void): void {
+    const list = this.listeners.get(type)
+    if (list === undefined) return
+    const index = list.indexOf(handler)
+    if (index !== -1) list.splice(index, 1)
+  }
+  /** Deliver one viewport event (resize | scroll) to its subscribers. */
+  dispatch(type: string): void {
+    for (const handler of [...(this.listeners.get(type) ?? [])]) handler()
+  }
+}
+
 export class FakeWindow {
   innerHeight = 844
-  /** The Android-WebView engine this harness models: no visual viewport at
-   *  all, so no viewport event can ever arrive. */
-  visualViewport: null = null
+  /** Default: the Android-WebView engine this harness models — no visual
+   *  viewport at all, so no viewport event can ever arrive. The
+   *  `visualViewport` option injects a measurable engine instead. */
+  visualViewport: FakeVisualViewport | null = null
   private readonly listeners = new Map<string, Array<() => void>>()
   addEventListener(type: string, handler: () => void): void {
     const list = this.listeners.get(type) ?? []
@@ -237,6 +276,48 @@ export class FakeWindow {
     const index = list.indexOf(handler)
     if (index !== -1) list.splice(index, 1)
   }
+  /** Deliver one window event (resize). */
+  dispatch(type: string): void {
+    for (const handler of [...(this.listeners.get(type) ?? [])]) handler()
+  }
+}
+
+export interface FakeMutationRecord {
+  readonly target: FakeElement
+  readonly attributeName: string
+  readonly oldValue: string | null
+}
+
+/** The MutationObserver double: it records every observe() target/options and
+ *  delivers batches only when a test asks (the plain-node double runs no
+ *  microtask loop). */
+export class FakeMutationObserver {
+  readonly observations: Array<{
+    readonly target: FakeElement
+    readonly options: Record<string, unknown> | undefined
+  }> = []
+  disconnected = false
+  private readonly callback: (records: readonly FakeMutationRecord[]) => void
+  constructor(callback: (records: readonly FakeMutationRecord[]) => void, registry: FakeMutationObserver[] = []) {
+    this.callback = callback
+    registry.push(this)
+  }
+  observe(target: FakeElement, options?: Record<string, unknown>): void {
+    this.disconnected = false
+    this.observations.push({ target, options })
+  }
+  disconnect(): void { this.disconnected = true }
+  takeRecords(): readonly FakeMutationRecord[] { return [] }
+  deliver(record: FakeMutationRecord): void { this.callback([record]) }
+}
+
+export interface MutationObserverModel {
+  readonly observers: readonly FakeMutationObserver[]
+  /** Deliver an ATTRIBUTE change on `target` to every live observer whose
+   *  observation covers it (the target itself or a subtree ancestor) and whose
+   *  filter watches that attribute — the real DOM delivery rule, so an observer
+   *  still parked on a REPLACED node receives nothing. */
+  fireAttribute(target: FakeElement, attribute: string, oldValue?: string | null): void
 }
 
 export interface GuardHarnessOptions {
@@ -260,6 +341,10 @@ export interface GuardHarnessOptions {
    *  premise holds). Models the premise break the self-push probe must latch —
    *  the synthetic feedback that ramped 352 → 5984px over the poll window. */
   scrollerGrowsWithLift?: number
+  /** Inject a measurable visualViewport (the iOS-like engine): the guard must
+   *  measure the visible bottom as offsetTop + height and re-sync on its
+   *  resize/scroll events. Default: none (the no-vv engine). */
+  visualViewport?: { readonly offsetTop?: number; readonly height: number }
 }
 
 export interface GuardHarness {
@@ -273,10 +358,15 @@ export interface GuardHarness {
   readonly window: FakeWindow
   readonly clock: FakeClock
   readonly counts: { scrollerRects: number; seatRects: number }
+  /** The MutationObserver model: observed targets/options plus manual
+   *  delivery (the plain-node double has no microtask loop). */
+  readonly mutations: MutationObserverModel
   responsiveness: number
   install(): () => void
   /** Geometry moves with NO event dispatched (the silent-keyboard engine). */
   openKeyboardWithoutEvents(covered?: number): void
+  /** Point document.getSelection() at the composer (or clear it: null). */
+  setSelection(anchor: FakeElement | null): void
   pointerDown(): void
   focusIn(): void
   focusComposer(): void
@@ -312,10 +402,17 @@ export function createGuardHarness(options: GuardHarnessOptions = {}): GuardHarn
   globals.HTMLElement = FakeElement
   globals.document = documentDouble
   globals.window = windowDouble
-  globals.MutationObserver = class {
-    observe(): void {}
-    disconnect(): void {}
-    takeRecords(): [] { return [] }
+  if (options.visualViewport !== undefined) {
+    windowDouble.visualViewport = new FakeVisualViewport(
+      options.visualViewport.height,
+      options.visualViewport.offsetTop ?? 0,
+    )
+  }
+  const observers: FakeMutationObserver[] = []
+  globals.MutationObserver = class extends FakeMutationObserver {
+    constructor(callback: (records: readonly FakeMutationRecord[]) => void) {
+      super(callback, observers)
+    }
   }
   globals.setInterval = (fn: () => void, ms: number): number => clock.setInterval(fn, ms)
   globals.clearInterval = (id: number): void => { clock.clearInterval(id) }
@@ -382,6 +479,23 @@ export function createGuardHarness(options: GuardHarnessOptions = {}): GuardHarn
     window: windowDouble,
     clock,
     counts,
+    mutations: {
+      observers,
+      fireAttribute: (target: FakeElement, attribute: string, oldValue: string | null = null): void => {
+        for (const observer of observers) {
+          if (observer.disconnected) continue
+          const covered = observer.observations.some(observation =>
+            observation.target === target || observation.target.contains(target))
+          if (!covered) continue
+          const watched = observer.observations.some(observation => {
+            const filter = observation.options?.attributeFilter
+            if (Array.isArray(filter)) return filter.includes(attribute)
+            return observation.options?.attributes === true
+          })
+          if (watched) observer.deliver({ target, attributeName: attribute, oldValue })
+        }
+      },
+    },
     responsiveness: options.responsiveness ?? 1,
     install: (): (() => void) => installComposerVisibilityGuard(root as unknown as ParentNode),
     openKeyboardWithoutEvents: (value = 336): void => {
@@ -391,6 +505,9 @@ export function createGuardHarness(options: GuardHarnessOptions = {}): GuardHarn
       // seat's base IS the scrollport bottom, minus whatever lift the engine
       // already honored.
       seat.rect = rect(bottom - appliedLift * harness.responsiveness, 390, 20)
+    },
+    setSelection: (anchor: FakeElement | null): void => {
+      documentDouble.selection = anchor === null ? null : { anchorNode: anchor }
     },
     pointerDown: (): void => { documentDouble.dispatch('pointerdown', input) },
     focusIn: (): void => {

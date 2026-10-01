@@ -260,8 +260,31 @@ test('mobile entry path must be a safe origin-form path', () => {
   // Valid origin-form paths (with and without the shunting enabled) pass.
   assert.equal(parseGatewayConfig({ mobileEntryPath: '/x' }, STATE, DSH).mobileEntryPath, '/x')
   assert.equal(parseGatewayConfig({ mobileEntryPath: '/a/b.html' }, STATE, DSH).mobileEntryPath, '/a/b.html')
-  // Dot segments that normalize to a NON-root path stay acceptable.
-  assert.equal(parseGatewayConfig({ mobileEntryPath: '/./x' }, STATE, DSH).mobileEntryPath, '/./x')
+  // Dot segments that normalize to a NON-root path stay acceptable, and the
+  // parser returns the NORMALIZED pathname the dispatch compares against
+  // (request pathnames are already URL-normalized).
+  assert.equal(parseGatewayConfig({ mobileEntryPath: '/./x' }, STATE, DSH).mobileEntryPath, '/x')
+  assert.equal(parseGatewayConfig({ mobileEntryPath: '/a/../b.html' }, STATE, DSH).mobileEntryPath, '/b.html')
+  // Normalization itself can produce an authority switch: `/.//x` and
+  // `/%2e%2e//x` both normalize to `//x`, which a browser resolves off-origin.
+  for (const bad of ['/.//x', '/%2e%2e//x']) {
+    assert.throws(() => parseGatewayConfig({ mobileEntryPath: bad }, STATE, DSH),
+      /protocol-relative/, `mobileEntryPath ${JSON.stringify(bad)} must be rejected`)
+  }
+  // URL parsing would move a query/fragment OUT of the pathname while the
+  // dispatch compares pathnames only — a silent truncation, so both are
+  // explicit config errors.
+  for (const bad of ['/chamber/mobile.html?desktop=1', '/chamber/mobile.html#top']) {
+    assert.throws(() => parseGatewayConfig({ mobileUaRedirect: true, mobileEntryPath: bad }, STATE, DSH),
+      /must not contain a query or fragment/, `mobileEntryPath ${JSON.stringify(bad)} must be rejected`)
+  }
+  // The auth surface can never be the mobile entry: the mobile-UA 302 of `/`
+  // would bounce a fresh login straight back to form (self-loop). Checked AFTER
+  // normalization, so dot-segment spellings are caught too.
+  for (const bad of ['/auth/login', '/auth/./login', '/auth', '/auth/credentials']) {
+    assert.throws(() => parseGatewayConfig({ mobileUaRedirect: true, mobileEntryPath: bad }, STATE, DSH),
+      /must not target the auth surface/, `mobileEntryPath ${JSON.stringify(bad)} must be rejected`)
+  }
 })
 
 test('DSH_GATEWAY_MOBILE_UA_REDIRECT env is boolified; garbage is a config error', () => {
@@ -282,6 +305,26 @@ test('DSH_GATEWAY_MOBILE_UA_REDIRECT env is boolified; garbage is a config error
     if (previous === undefined) delete process.env.DSH_GATEWAY_MOBILE_UA_REDIRECT
     else process.env.DSH_GATEWAY_MOBILE_UA_REDIRECT = previous
   }
+})
+
+test('an explicit mobile-UA opt-in prints the deprecation warning once, never throws', () => {
+  // The notice is process-latched through console.warn, so an in-process count
+  // would depend on test order: a clean child parses the config twice with the
+  // opt-in and once with defaults, and its stderr carries exactly one notice.
+  const configUrl = new URL('../../src/config.ts', import.meta.url).href
+  const script = 'const { parseGatewayConfig } = await import(' + JSON.stringify(configUrl) + ');'
+    + 'parseGatewayConfig({ mobileUaRedirect: true }, "/tmp/state", "/tmp/dsh");'
+    + 'parseGatewayConfig({ mobileUaRedirect: true }, "/tmp/state", "/tmp/dsh");'
+    + 'parseGatewayConfig({}, "/tmp/state", "/tmp/dsh");'
+  const result = spawnSync(process.execPath, ['--input-type=module', '--eval', script], {
+    encoding: 'utf8',
+    timeout: 10_000,
+    env: { ...process.env, DSH_GATEWAY_MOBILE_UA_REDIRECT: '' },
+  })
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stderr, /deprecated/)
+  assert.equal(result.stderr.split('deprecated').length - 1, 1,
+    'the deprecation notice must print once per process, not per parse: ' + result.stderr)
 })
 
 test('login-phase pre-warm defaults ON; input and DSH_GATEWAY_WARMUP can turn it off', () => {
@@ -329,4 +372,15 @@ test('gateway serve accepts --no-session-state (flags parse end-to-end)', () => 
     { encoding: 'utf8', timeout: 10_000 })
   assert.equal(result.status, 0, result.stderr)
   assert.match(result.stdout, /--no-session-state/)
+})
+
+test('gateway serve --help documents the mobile entry semantics and the env fallback', () => {
+  const result = spawnSync(process.execPath, [CLI, 'serve', '--help'], { encoding: 'utf8', timeout: 10_000 })
+  assert.equal(result.status, 0, result.stderr)
+  // The env twin of --mobile-ua-redirect is discoverable in the Environment section.
+  assert.match(result.stdout, /Environment:/)
+  assert.match(result.stdout, /DSH_GATEWAY_MOBILE_UA_REDIRECT/)
+  // The entry's documented job: an unauthenticated HTML navigation visiting it
+  // answers 302 to /auth/login (never a bare JSON 401).
+  assert.match(result.stdout, /--mobile-entry PATH[\s\S]{0,240}\/auth\/login/)
 })

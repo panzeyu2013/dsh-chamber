@@ -23,7 +23,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import { installSvgResourceScope } from '@dsh-chamber/dsh-chamber-client-core/svg-resource-scope'
 import { en, zh, type MobileKey } from './locales.ts'
-import { MOBILE_CSS, PLUGIN_STYLE_TAG, VIEWPORT_TOKENS } from './styles.ts'
+import { MOBILE_CSS, PLUGIN_STYLE_TAG } from './styles.ts'
 import {
   ROOT_SLOT_SELECTOR,
   shouldRestamp,
@@ -31,10 +31,13 @@ import {
   type MutationLike,
 } from './markup.ts'
 import { createLayoutFactSource } from './layout-facts.ts'
+import { applyBackgroundInert } from './drawer-a11y.ts'
 import {
-  installComposerSelfHeal, installEditabilityRecovery, installEnterToNewline,
-  installImeLadder, installComposerVisibilityGuard, PHONE_TIER_QUERY, TOUCH_TIER_QUERY,
+  installComposerSelfHeal, installComposerVisibilityGuard,
+  installEditabilityRecovery, installEnterToNewline, installImeLadder,
+  PHONE_TIER_QUERY, TOUCH_TIER_QUERY,
 } from './composer.ts'
+import { createViewportAssets, type ViewportDocumentLike } from './viewport-assets.ts'
 import { installDrawerTapHeal } from './drawer-taps.ts'
 import { installSettingsSheetScrollReset } from './settings-sheet.ts'
 import {
@@ -49,7 +52,7 @@ import { MobileNavToggle, type MobileNavToggleInjected } from './MobileNavToggle
 // Installing the same scoper before the shell applies (module scope, before
 // createRoot()/first paint; ONE implementation imported from the renderer
 // source, never copied) renames the ids document-wide.
-// 同 main.tsx 的锚定赋值（同一套产物标记；未压缩的 committed bundle 也照此写）。
+// 同 main.tsx 的锚定赋值（同一套产物标记；未压缩的 build-time bundle 也照此写）。
 ;(globalThis as unknown as { __chamberSvgScopeInstalled?: unknown }).__chamberSvgScopeInstalled =
   installSvgResourceScope()
 
@@ -82,25 +85,43 @@ export function apply(ctx: ClientContext): void {
 
     // Viewport tokens are touch-tier concerns (interactive-widget for the
     // Android keyboard, viewport-fit for iOS safe areas); a desktop browser on
-    // the gateway keeps the official viewport byte-identical (PC-leak invariant).
+    // the gateway keeps the official viewport byte-identical (PC-leak
+    // invariant). The tier is a LIVE state (rotate / attach a mouse), so the
+    // matchMedia change event drives the sync and LEAVING the tier retracts
+    // exactly what the plugin added, by key — never a one-shot stamp. The
+    // keyed surgery and the theme-color mirror live in viewport-assets.ts
+    // (runnable without a browser): leaving restores the values that were
+    // there before entry, a meta replaced mid-tier is re-queried, and the
+    // newest observed official theme baseline wins over an older snapshot.
     const touchTier = window.matchMedia(TOUCH_TIER_QUERY)
-    if (touchTier.matches) {
-      const meta = document.querySelector('meta[name="viewport"]')
-      if (meta instanceof HTMLMetaElement) {
-        const content = meta.content
-        const missing = VIEWPORT_TOKENS.filter(token => !content.includes(token))
-        if (missing.length > 0) {
-          meta.content = [content, ...missing].filter(Boolean).join(', ')
-          disposers.push(() => { meta.content = content })
-        }
-      } else {
-        const created = document.createElement('meta')
-        created.name = 'viewport'
-        created.content = `width=device-width, initial-scale=1, ${VIEWPORT_TOKENS.join(', ')}`
-        document.head.appendChild(created)
-        disposers.push(() => created.remove())
+    const assets = createViewportAssets(
+      document as unknown as ViewportDocumentLike,
+      () => getComputedStyle(document.body).getPropertyValue('--dsw-alias-bg-base').trim(),
+    )
+    /** Body-attribute observer: a theme flip re-mirrors theme-color. */
+    let themeObserver: MutationObserver | null = null
+
+    const syncAssets = (): void => {
+      if (!touchTier.matches) {
+        themeObserver?.disconnect()
+        themeObserver = null
+        assets.release()
+        return
+      }
+      assets.sync()
+      if (themeObserver === null) {
+        themeObserver = new MutationObserver(() => assets.syncTheme())
+        themeObserver.observe(document.body, { attributes: true, attributeFilter: ['data-ds-dark-theme', 'class'] })
       }
     }
+    syncAssets()
+    touchTier.addEventListener('change', syncAssets)
+    disposers.push(() => {
+      touchTier.removeEventListener('change', syncAssets)
+      themeObserver?.disconnect()
+      themeObserver = null
+      assets.release()
+    })
 
     if (document.querySelector(`style[data-plugin="${PLUGIN_STYLE_TAG}"]`) === null) {
       const style = document.createElement('style')
@@ -109,25 +130,6 @@ export function apply(ctx: ClientContext): void {
       document.head.appendChild(style)
       disposers.push(() => style.remove())
     }
-
-    // theme-color mirrors the official theme: re-sync when the theme presenter
-    // flips the body attribute/dark class. The mobile surface has no theme of
-    // its own — it mirrors the shell's light/dark state for the browser chrome.
-    const existingThemeMeta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
-    const themeMeta = existingThemeMeta ?? document.createElement('meta')
-    if (existingThemeMeta === null) {
-      themeMeta.name = 'theme-color'
-      document.head.appendChild(themeMeta)
-      disposers.push(() => themeMeta.remove())
-    }
-    const syncThemeColor = (): void => {
-      const surface = getComputedStyle(document.body).getPropertyValue('--dsw-alias-bg-base').trim()
-      themeMeta.setAttribute('content', surface === '' ? '#ffffff' : surface)
-    }
-    syncThemeColor()
-    const themeObserver = new MutationObserver(syncThemeColor)
-    themeObserver.observe(document.body, { attributes: true, attributeFilter: ['data-ds-dark-theme', 'class'] })
-    disposers.push(() => themeObserver.disconnect())
 
     return () => { for (const dispose of disposers) dispose() }
   }, 'dsh-chamber: mobile assets')
@@ -138,6 +140,12 @@ export function apply(ctx: ClientContext): void {
   // trigger a re-stamp (pure shouldRestamp, unit-tested); streaming/typing
   // churn never matches. The frame-attribute channel below covers
   // attribute-only state flips. ----
+  // Structural convergence fan-out: the childList observer below is the ONE
+  // document-level structural consumer. The drawer lock subscribes to the same
+  // signal, because a REPLACED column or [data-conversation-scroll] box never
+  // saw the previous lock pass — while the drawer is open the new nodes would
+  // stay scrollable/reachable behind it. No second body observer.
+  const structuralListeners = new Set<() => void>()
   ctx.effect(() => {
     // stampFrame is idempotent (setAttribute on stable anchors): repeated
     // stamps on remounts are harmless and need no dedup bookkeeping.
@@ -165,7 +173,9 @@ export function apply(ctx: ClientContext): void {
       }
     }
     const onMutations = (mutations: MutationRecord[]): void => {
-      if (shouldRestamp(mutations as unknown as MutationLike[])) stamp()
+      if (!shouldRestamp(mutations as unknown as MutationLike[])) return
+      stamp()
+      for (const listener of structuralListeners) listener()
     }
     stamp()
     const childListObserver = new MutationObserver(onMutations)
@@ -184,25 +194,62 @@ export function apply(ctx: ClientContext): void {
   const layoutSource = createLayoutFactSource()
   ctx.effect(() => {
     let lastLocked = false
-    const lockScroll = (locked: boolean): void => {
+    /** The right panel's shown state the last lock ran against (a shown panel
+     *  keeps its own column live — see drawer-a11y.ts). Compared separately:
+     *  a panel open/close while the drawer stays open must still re-apply. */
+    let lastPanelShown: boolean | null = null
+    /** Is a right panel SHOWN? The same two yield arms the stylesheet uses:
+     *  upstream's track flag (absent = shown) and the fullscreen report. */
+    const panelShownNow = (): boolean => {
+      const frame = document.querySelector('[data-mobile-frame]')
+      return frame !== null
+        && (frame.hasAttribute('data-rightbar-fullscreen') || !frame.hasAttribute('data-rightbar-collapsed'))
+    }
+    const lockScroll = (locked: boolean, panelShown: boolean): void => {
       const containers = document.querySelectorAll('[data-conversation-scroll]')
       for (const container of containers) {
         if (container instanceof HTMLElement) {
           container.style.overflow = locked ? 'hidden' : ''
         }
       }
+      // Background accessibility lock: the open drawer covers the conversation
+      // and details columns, so neither may stay reachable while it is open
+      // (drawer-a11y.ts owns the settings-dialog body-portal relationship and
+      // the shown-panel yield).
+      applyBackgroundInert(document, locked, panelShown)
       document.body.style.overflow = locked ? 'hidden' : ''
     }
-    const sync = (): void => {
-      const locked = layoutSource.getNarrow() && !layoutSource.getCollapsed()
-      if (locked === lastLocked) return
+    /** Write the lock for a state. Unconditional: the structural signal below
+     *  re-applies it for REPLACED nodes, which the dedup in sync() would skip
+     *  while the state itself is unchanged. */
+    const publish = (locked: boolean, panelShown: boolean): void => {
       lastLocked = locked
-      lockScroll(locked)
+      lastPanelShown = panelShown
+      lockScroll(locked, panelShown)
     }
+    /** The current drawer/panel state pair, read fresh from the DOM. */
+    const currentLock = (): { locked: boolean; panelShown: boolean } => ({
+      locked: layoutSource.getNarrow() && !layoutSource.getCollapsed(),
+      panelShown: panelShownNow(),
+    })
+    const sync = (): void => {
+      const { locked, panelShown } = currentLock()
+      if (locked === lastLocked && panelShown === lastPanelShown) return
+      publish(locked, panelShown)
+    }
+    /** Structural convergence (markup re-stamp): re-apply while locked so the
+     *  new columns/scroll boxes are covered, and retract if a replacement
+     *  removed the last locked node. */
+    const onStructural = (): void => {
+      const state = currentLock()
+      if (state.locked || lastLocked) publish(state.locked, state.panelShown)
+    }
+    structuralListeners.add(onStructural)
     const unsubscribe = layoutSource.subscribe(sync)
     return () => {
+      structuralListeners.delete(onStructural)
       unsubscribe()
-      lockScroll(false)
+      lockScroll(false, false)
     }
   }, 'dsh-chamber: mobile drawer scroll lock')
 
@@ -212,10 +259,13 @@ export function apply(ctx: ClientContext): void {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return
       if (!layoutSource.getNarrow()) return
-      // A modal dialog (official settings opens inside the sidebar DOM, so
-      // drawer + dialog coexist) owns Escape: closing the drawer underneath it
-      // would double-close on one keypress.
-      const modalOpen = document.querySelector('[role="dialog"][aria-modal="true"]') !== null
+      // A foreground modal owns Escape: the official ui-primitives
+      // modalSelector is ':is([role="dialog"][aria-modal="true"], [role="menu"])'
+      // and the official shortcut/modal layer treats BOTH as keyboard owners
+      // (settings opens inside the sidebar DOM, so drawer + dialog coexist; an
+      // open menu closes itself on Escape). Closing the drawer underneath any
+      // of them would double-close on one keypress.
+      const modalOpen = document.querySelector(':is([role="dialog"][aria-modal="true"], [role="menu"])') !== null
       if (modalOpen) return
       if (!layoutSource.getCollapsed()) ctx.layout.toggleSidebar()
     }

@@ -17,7 +17,8 @@
 | `cdp.mjs` | 零依赖 CDP 客户端（Node 内置 `WebSocket`/`fetch`） |
 | `checks.mjs` | **纯判据层**：全部 pass/fail 逻辑在此，无 IO，故可在 CI 单测 |
 | `checks.test.mjs` | `checks.mjs` 的单测（`pnpm run test:scripts:gui-acceptance`，CI 跑） |
-| `mobile-walkthrough.mjs` | 移动档 CDP 走查（独立 CLI）：设备尺寸/触控模拟 + 几何断言 + WS 帧采集（`--ws-frames off\|summary\|full`，落盘前脱敏）；`--require-run` 把「没目标/没会话」的 INFO 改判 FAIL |
+| `mobile-walkthrough.mjs` | 移动档 CDP 走查（独立 CLI；`pnpm run acceptance:mobile` 同义）：设备尺寸/触控模拟 + 几何断言 + M-8 WS 帧采集（`--ws-frames off\|summary\|full`；**先脱敏后截断**，截断帧在摘要/帧文件里标注原始长度）+ M-9 覆盖层只读探查 + M-10 未预期请求/渲染层 error **真判定**（容忍表在 `checks.mjs`）。`--require-run` 把「没目标/没会话/未激活」的 INFO 改判 FAIL；**M-8/M-9/M-10 不走这道门**（M-8 是观察项、M-9 的只读扫描完成即算执行、M-10 由容忍表直接判）。`connect`/`evaluate` 失败也走 fail-soft：照样写报告、关会话。**不接受 `--mobile`**（那是桌面走查的档位名） |
+| `mobile-walkthrough.test.mjs` | 走查**驱动层**的脱敏/降级单测（`pnpm run test:gui-acceptance` 一并跑）：凭据不出现在 stdout 与任何产物、fail-soft（无目标/connect 失败/采集中断）、M-8/M-9/M-10 的判定接线与报告行序、设备尺寸跟随 `--width/--height/--dpr` |
 | `mobile-checks.mjs` | 移动档的**纯判据层**（含脱敏）：判据全部是纯函数，无 IO |
 | `mobile-checks.test.mjs` | `mobile-checks.mjs` 的单测（`pnpm run test:gui-acceptance` 一并跑） |
 
@@ -26,6 +27,19 @@
 的移动验收项）：模拟层有三条实测边界（`Emulation.setEmulatedMedia` 的
 `pointer`/`hover` 被 Chromium 忽略、`mobile:true` 的收缩适配让
 `scrollWidth <= innerWidth` 恒真、iOS/WebKit 语义造不出来）。
+
+`mobile-checks.mjs` 的探测表达式与插件源码常量锁步（`DEVICE_FACTS_EXPRESSION` 必须
+逐字包含 `markup.ts` 的 `ROOT_SLOT_SELECTOR`/`MOBILE_FRAME_ATTR`/`MOBILE_ROLE_ATTR` 与
+`composer.ts` 的 `TOUCH_TIER_QUERY`/`PHONE_TIER_QUERY`/`MOBILE_KBD_*`；由
+`mobile-checks.test.mjs` 直接读源文件断言）。M-9 只枚举 `position:fixed|absolute` 且
+z-index≥40 的可见覆盖层，报告 rect 超出**布局视口**（`documentElement.clientWidth/Height`）的项
+——不点击任何控件；visual viewport 尺寸仍采集，但只作证据（Safari 地址栏/IME 只收缩
+visual 视口，拿它当基准会把合法的全屏 fixed 层误报成溢出）。`fixed` 且无
+transform/translate 位移的越界项判 FAIL，有位移的按「故意移出视口」解释；命中 40 个上限而
+**扫描截断**时，「已扫到的没越界」只记 INFO（第 41 个以后没检查过，不能判 PASS）。
+M-9 **不参与 `--require-run`**：扫描完成即算执行，没有覆盖层仍记 INFO。
+M-8（帧采集）与 M-10（未预期 ≥400/渲染层 error）同样不进这道门：前者是观察项恒 INFO，
+后者按 `checks.mjs` 的容忍表真判定——注入未预期 500 或 error 的那一刻即 FAIL，报告与 exit code 跟着红。
 
 ## 命令
 
@@ -42,6 +56,9 @@ pnpm run acceptance:gui -- --flavor native   # 原生 flavor：自起 sidecar �
 pnpm run acceptance:gui -- --flavor native --attach --plane http://127.0.0.1:17500   # 探测运行中的原生壳控制面
 pnpm run acceptance:gui -- --flavor native --web-dist packages/desktop/dist/web    # 让 N-6 判真实 renderer 产物（壳 index + 声明资源）
 node scripts/gui-acceptance/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web   # 机器门：装配缺失或 N-6 缺 web dist 即 FAIL（ci.yml 用这一形态；该步内先 build:renderer）
+pnpm run acceptance:mobile                   # 移动档 CDP 走查（需一个开着 --remote-debugging-port 的实例；默认 9333）
+pnpm run acceptance:mobile -- --cdp-port 9333 --require-run   # 声明「该腿必须真实执行」：INFO 一律改判 FAIL（M-8/M-9/M-10 不走这道门）
+pnpm run acceptance:mobile -- --url http://127.0.0.1:17500 --auth-token-env DSH_MOBILE_AUTH_TOKEN   # 认证 gateway（凭据只从环境变量读，值永不打印）
 pnpm run test:gui-acceptance                 # 纯判据单测（无需 GUI，CI 跑）
 ```
 
@@ -49,6 +66,8 @@ pnpm run test:gui-acceptance                 # 纯判据单测（无需 GUI，CI
 
 - `gui-live-report.md` / `.json`、`dev/gui-live-report.*`（`--dev` 的实例侧）
 - `gui-walkthrough-report.md` / `.json`、`shots/*.png`
+- 移动档默认另写 `.tmp/gui-acceptance-mobile/`：`gui-mobile-walkthrough-report.md` / `.json`、
+  `mobile-ws-frames.json`（`--ws-frames off` 时不写）、`shots/*.png`
 - `dev-app.log`（`--dev` 的 Electron 日志）、`dev-user-data/`（隔离状态）
 
 退出码：有 `FAIL` 即 1；`INFO`（环境不适用，或命中"已登记容忍"）不判失败。

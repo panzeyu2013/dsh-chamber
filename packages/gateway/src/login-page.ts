@@ -270,12 +270,12 @@ h1{margin:0;display:flex;align-items:baseline;justify-content:center;gap:.45rem;
 .hint{margin:0;font-size:.82rem;line-height:1.5;color:var(--dsw-alias-label-tertiary)}
 form{display:flex;flex-direction:column;gap:.6rem}
 label.field{display:flex;flex-direction:column;gap:.35rem;font-size:.83rem;font-weight:500;color:var(--chamber-login-label-secondary)}
-#password{width:100%;min-height:2.5rem;padding:.55rem .7rem;border:1px solid var(--chamber-login-control-border);border-radius:.55rem;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:1rem;caret-color:var(--dsw-alias-brand-primary);transition:border-color .12s ease,box-shadow .12s ease}
+#password{width:100%;min-height:44px;padding:.55rem .7rem;border:1px solid var(--chamber-login-control-border);border-radius:.55rem;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:1rem;caret-color:var(--dsw-alias-brand-primary);transition:border-color .12s ease,box-shadow .12s ease}
 #password:focus{outline:none;border-color:var(--dsw-alias-brand-primary);box-shadow:0 0 0 3px var(--chamber-login-focus-ring)}
 #password[aria-invalid="true"]{border-color:var(--chamber-login-error-border)}
 #password[aria-invalid="true"]:focus{border-color:var(--dsw-alias-state-error-primary);box-shadow:0 0 0 3px var(--chamber-login-focus-ring-error)}
 #password:-webkit-autofill,#password:-webkit-autofill:hover,#password:-webkit-autofill:focus{-webkit-text-fill-color:var(--dsw-alias-label-primary);-webkit-box-shadow:0 0 0 1000px var(--dsw-alias-bg-layer-1) inset;box-shadow:0 0 0 1000px var(--dsw-alias-bg-layer-1) inset;transition:background-color 999999s ease-in-out 0s}
-button[type="submit"]{width:100%;min-height:2.5rem;padding:.55rem .8rem;border:1px solid transparent;border-radius:.55rem;background:var(--dsw-alias-button-primary-fill);color:var(--chamber-login-button-text);font:inherit;font-weight:600;letter-spacing:.01em;cursor:pointer;transition:background-color .12s ease}
+button[type="submit"]{width:100%;min-height:44px;padding:.55rem .8rem;border:1px solid transparent;border-radius:.55rem;background:var(--dsw-alias-button-primary-fill);color:var(--chamber-login-button-text);font:inherit;font-weight:600;letter-spacing:.01em;cursor:pointer;transition:background-color .12s ease}
 button[type="submit"]:hover{background:var(--dsw-alias-button-primary-hover)}
 button[type="submit"]:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}
 button[type="submit"]:active{transform:translateY(1px)}

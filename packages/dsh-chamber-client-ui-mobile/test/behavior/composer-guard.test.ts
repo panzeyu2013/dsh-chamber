@@ -86,12 +86,41 @@ test('the poll stops when focus leaves the editable (F5)', () => {
     assert.equal(h.frame.getAttribute(MOBILE_KBD_STATE_ATTR), 'armed')
     h.blur()
     // The grace window (1.2s) keeps the interval through the close animation;
-    // after it, the poll must end instead of syncing forever.
-    h.clock.advance(KBD_POLL_BUDGET_MS)
+    // after it the focusout path must end the poll — advance only PAST the
+    // grace (1.5s), well inside the 4s poll budget, so budget expiry cannot
+    // be what clears the interval (mutation: deleting the focusout listener
+    // used to stay green here).
+    h.clock.advance(1_500)
     assert.equal(h.clock.pending, 0, 'focus loss must clear the interval')
     const reads = h.counts.scrollerRects
     h.clock.advance(2_000)
     assert.equal(h.counts.scrollerRects, reads)
+  })
+})
+
+test('the visible bottom is visualViewport.offsetTop + height, and its events re-sync (F5)', () => {
+  withGuard({ covered: 336, visualViewport: { offsetTop: 200, height: 500 } }, h => {
+    const vv = h.window.visualViewport
+    assert.ok(vv !== null, 'the injected viewport must be live')
+    // innerHeight 844 is NOT the visible bottom here: 1180 (scrollport bottom)
+    // - (200 offsetTop + 500 height) = 480 → ceil((480+8)/16)*16 = 496.
+    assert.equal(h.frame.getAttribute(MOBILE_KBD_ATTR), '496')
+    assert.equal(h.frame.getAttribute(MOBILE_KBD_STATE_ATTR), 'armed')
+    /** Move the engine under the current lift (the sticky-emulating model). */
+    const moveEngine = (bottom: number): void => {
+      const lift = Number.parseFloat(h.frame.style.getPropertyValue(MOBILE_KBD_VAR) || '0')
+      h.scroller.rect = { top: bottom - 600, left: 0, width: 390, height: 600, bottom }
+      h.seat.rect = { top: bottom - lift - 20, left: 0, width: 390, height: 20, bottom: bottom - lift }
+    }
+    moveEngine(1600)
+    vv.dispatch('resize')
+    assert.equal(h.frame.getAttribute(MOBILE_KBD_ATTR), '912', '1600 - 700 = 900 → 912')
+    // A pan (offsetTop moves the visible window) arrives as a scroll event.
+    vv.height = 400
+    moveEngine(2000)
+    vv.dispatch('scroll')
+    assert.equal(h.frame.getAttribute(MOBILE_KBD_ATTR), '1408', '2000 - 600 = 1400 → 1408')
+    assert.equal(h.frame.getAttribute(MOBILE_KBD_STATE_ATTR), 'armed')
   })
 })
 
@@ -106,6 +135,33 @@ test('a focused editable OUTSIDE the composer seat leaves the guard idle (F6)', 
     assert.equal(h.root.querySelectorAll(`[${MOBILE_KBD_SPACER_ATTR}]`).length, 0)
     h.clock.advance(KBD_POLL_MS)
     assert.equal(h.frame.hasAttribute(MOBILE_KBD_ATTR), false, 'the poll must not arm a non-composer field')
+  })
+})
+
+test('activeElement=body keeps the selection fallback (original semantics)', () => {
+  withGuard({ covered: 336, focused: false }, h => {
+    // A focused body / null activeElement is the "focus is nowhere specific"
+    // state: the caret still inside the composer is then a valid proxy.
+    h.setSelection(h.input)
+    h.document.activeElement = h.document.body
+    h.pointerDown()
+    assert.equal(h.frame.getAttribute(MOBILE_KBD_STATE_ATTR), 'armed')
+    assert.equal(h.frame.getAttribute(MOBILE_KBD_ATTR), '352')
+  })
+})
+
+test('a stale composer selection + an outside editable focus leaves the seat idle (F6)', () => {
+  withGuard({ covered: 336, focused: false }, h => {
+    // The composer keeps its DOM selection while a settings-sheet /
+    // question-card field takes focus: the selection is STALE, and the
+    // keyboard belongs to that field — the seat must not move.
+    h.setSelection(h.input)
+    h.focusOutsideEditable()
+    h.pointerDown()
+    assert.equal(h.frame.getAttribute(MOBILE_KBD_STATE_ATTR), 'idle')
+    assert.equal(h.frame.hasAttribute(MOBILE_KBD_ATTR), false)
+    h.clock.advance(KBD_POLL_MS)
+    assert.equal(h.frame.hasAttribute(MOBILE_KBD_ATTR), false, 'the poll must not arm on the stale selection either')
   })
 })
 
@@ -139,6 +195,26 @@ test('a hidden active-phase root earlier in DOM order never wins the seat query 
   })
 })
 
+test('a phase node REPLACED after install re-arms the guard on its own flip (F3)', () => {
+  withGuard({ covered: 0 }, h => {
+    // The keyboard opens with no event; no sync has seen it yet.
+    h.openKeyboardWithoutEvents(336)
+    assert.equal(h.frame.getAttribute(MOBILE_KBD_STATE_ATTR), 'idle')
+    // The renderer remounts the phase subtree: the seat/scroller move under a
+    // NEW [data-phase] node (watching only the first match left it unseen).
+    const replacement = h.document.createElement('div')
+    replacement.setAttribute('data-phase', 'active')
+    h.frame.appendChild(replacement)
+    replacement.appendChild(h.scroller)
+    replacement.setAttribute('data-phase', 'inactive')
+    replacement.setAttribute('data-phase', 'active')
+    h.mutations.fireAttribute(replacement, 'data-phase')
+    assert.equal(h.frame.getAttribute(MOBILE_KBD_STATE_ATTR), 'armed',
+      'the replacement node itself must be observed')
+    assert.equal(h.frame.getAttribute(MOBILE_KBD_ATTR), '352')
+  })
+})
+
 test('dispose removes the state attribute from the frame and <html> (F4)', () => {
   withGuard({ covered: 336 }, (h, dispose) => {
     assert.equal(h.frame.getAttribute(MOBILE_KBD_STATE_ATTR), 'armed')
@@ -148,6 +224,21 @@ test('dispose removes the state attribute from the frame and <html> (F4)', () =>
     assert.equal(h.document.documentElement.hasAttribute(MOBILE_KBD_STATE_ATTR), false)
     assert.equal(h.frame.hasAttribute(MOBILE_KBD_ATTR), false)
     assert.equal(h.root.querySelectorAll(`[${MOBILE_KBD_SPACER_ATTR}]`).length, 0)
+  })
+})
+
+test('a double install is single-seat: ONE spacer, and the no-op disposer leaves it live (F7)', () => {
+  withGuard({ covered: 336 }, h => {
+    // The tier effect can re-enter; two guard instances would each insert
+    // their own spacer before the same seat and run their own poll.
+    const second = h.install()
+    assert.equal(h.root.querySelectorAll(`[${MOBILE_KBD_SPACER_ATTR}]`).length, 1,
+      'the second install must not add a second spacer')
+    assert.equal(h.frame.getAttribute(MOBILE_KBD_ATTR), '352')
+    second()
+    assert.equal(h.root.querySelectorAll(`[${MOBILE_KBD_SPACER_ATTR}]`).length, 1,
+      'the no-op second disposer must not tear the live guard down')
+    assert.equal(h.frame.getAttribute(MOBILE_KBD_STATE_ATTR), 'armed')
   })
 })
 
@@ -286,6 +377,12 @@ test('breakpoints: the drawer keeps its desktop default, layering, chrome and mo
   const backdrop = cssBlock(tier, '[data-mobile-frame]:not([data-sidebar-collapsed]) .dsh-mobile-backdrop')
   const toggle = cssBlock(tier, '.dsh-mobile-nav-toggle')
   assert.ok(drawer !== null && drawer.includes('z-index: 75'), 'drawer at 75')
+  assert.ok(drawer !== null && drawer.includes('box-sizing: border-box;'),
+    'the drawer must pad inside its own fixed box')
+  for (const side of ['top', 'right', 'bottom', 'left']) {
+    assert.ok(drawer !== null && drawer.includes('padding-' + side + ': env(safe-area-inset-' + side + ', 0px);'),
+      'the drawer must clear the ' + side + ' safe area')
+  }
   assert.ok(backdrop !== null && backdrop.includes('z-index: 74'), 'backdrop at 74')
   assert.ok(toggle !== null && toggle.includes('z-index: 76'), 'toggle at 76')
 })
@@ -396,17 +493,36 @@ test('breakpoints: retired mechanisms stay gone and sticky-hover stays suppresse
   assert.ok(!MOBILE_CSS.includes('dsh-mobile-nav-toggle-bars'), 'the CSS hamburger must stay gone')
   const code = stripCssComments(MOBILE_CSS)
   const tooltipSelectors = [...code.matchAll(/([^{}]+)\{/g)]
-    .map(match => (match[1] ?? '').trim()).map(selector => selector.replace(/:not\([^)]*\)/g, ''))
+    .map(match => (match[1] ?? '').trim().replace(/\s+/g, ' '))
+    .map(selector => selector.replace(/:not\([^)]*\)/g, ''))
     .filter(selector => /\[role\s*[~^$*|]?=\s*["']?tooltip["']?\]/.test(selector))
-  assert.deepEqual(tooltipSelectors, ['button[aria-label] + [role="tooltip"][data-side]'], 'only bubbles duplicating an accessible name may be hidden')
-  assert.match(code, /button\[aria-label\] \+ \[role="tooltip"\]\[data-side\]\s*\{\s*display:\s*none\s*!important;/)
+  assert.deepEqual(tooltipSelectors, [
+    'button[aria-label] + [role="tooltip"][data-side], [role="tooltip"][data-portal][data-side]',
+    ':is(span, div):has(> button[aria-label]) + [role="tooltip"][data-side]',
+  ], 'the THREE arms: the accessible-name sibling, the wrapped-trigger sibling (span>button) and the portal bubble')
+  assert.match(code,
+    /button\[aria-label\] \+ \[role="tooltip"\]\[data-side\],\s*\[role="tooltip"\]\[data-portal\]\[data-side\]\s*\{\s*display:\s*none\s*!important;/,
+    'the two unconditional arms must share one display:none rule')
+  assert.match(code,
+    /:is\(span, div\):has\(> button\[aria-label\]\) \+ \[role="tooltip"\]\[data-side\]\s*\{\s*display:\s*none\s*!important;/,
+    'the wrapped-trigger arm is an INDEPENDENT rule: an engine without :has() must drop only this arm')
   const coarseAt = code.indexOf('@media (pointer: coarse) and (hover: none)')
-  const ruleAt = code.indexOf('button[aria-label] + [role="tooltip"][data-side]')
-  assert.ok(coarseAt !== -1 && ruleAt > coarseAt && ruleAt < code.indexOf('@media (max-width: 1023px)'),
-    'the suppression must live in the coarse+hover tier, not the touch tier')
+  const touchAt = code.indexOf('@media (max-width: 1023px)')
+  for (const needle of [
+    'button[aria-label] + [role="tooltip"][data-side]',
+    ':is(span, div):has(> button[aria-label]) + [role="tooltip"][data-side]',
+  ]) {
+    const at = code.indexOf(needle)
+    assert.ok(coarseAt !== -1 && touchAt !== -1 && at > coarseAt && at < touchAt,
+      'the suppression must live in the coarse+hover tier, not the touch tier: ' + needle)
+  }
   // The keyboard arm rides the plugin frame stamp and the scrollport padding
   // arm must stay absent (it double-lifts the seat).
   assert.ok(code.includes('[data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-composer-seat]'))
+  assert.ok(code.includes('[data-mobile-frame][data-mobile-kbd] [data-conversation-scroll] :is([class$="_toBottomSlot"], [class*="_toBottomSlot "], [class*="_toBottomSlot_"])'),
+    'the back-to-bottom control must ride the same keyboard offset')
+  assert.ok(code.includes('bottom: calc(var(--chamber-mobile-kbd-offset, 0px) + var(--dsh-composer-height, 152px) + 16px);'),
+    'the raised to-bottom bottom composes the keyboard offset with the official sticky height')
   assert.equal(code.includes('padding-bottom: var(--chamber-mobile-kbd-offset, 0px) !important;'), false,
     'the scrollport padding arm must stay removed')
 })
@@ -417,14 +533,71 @@ test('breakpoints: the session header stays one line and degrades text only', ()
   assert.ok(nav !== null && nav.includes('flex-wrap: nowrap') && nav.includes('white-space: nowrap'),
     'the crumb strip must not wrap (the class-less lineage count has no other protection)')
   assert.ok(nav.includes('overflow-x: auto') && nav.includes('scrollbar-width: none'), 'panning replaces the clip')
-  const row = cssBlock(phone, '[data-mobile-frame] [data-slot="conversation.session.header"] > header > div:has(nav)')
+  // The header element is addressed through the REAL DOM shape: the outer
+  // conversation.header outlet parents <header>, and the session.header outlet
+  // is a child inside it — the reversed "> header" form must be gone. The two
+  // arms are INDEPENDENT rules: one shared comma list would let an engine
+  // without :has() drop the attribute arm with the :has() arm.
+  const attributeArm = '[data-mobile-frame] [data-slot="conversation.header"] > header'
+  const hasArm = '[data-mobile-frame] header:has(> [data-slot="conversation.session.header"])'
+  for (const arm of [attributeArm, hasArm]) {
+    assert.equal(countBlocks(normalizeTouchTier(), arm), 1,
+      'the touch tier must carry this arm exactly once: ' + arm)
+    assert.equal(countBlocks(phone, arm), 1,
+      'the phone tier must carry this arm exactly once: ' + arm)
+  }
+  assert.equal(cssBlock(normalizeTouchTier(), attributeArm + ', ' + hasArm), null,
+    'the two header arms must NOT share one comma list')
+  // VALUE-level gutter lock: the 44px toggle box + its 10px offset + the 8px
+  // gap = 62px, inside the left safe area. A 62px→0 edit must turn this red.
+  const gutter = cssBlock(normalizeTouchTier(), attributeArm)
+  assert.ok(gutter !== null && gutter.includes('padding-left: calc(62px + env(safe-area-inset-left, 0px)) !important;'),
+    'the touch gutter must reserve the 44px toggle box (62px total) inside the left safe area')
+  assert.ok(cssBlock(normalizeTouchTier(), hasArm)?.includes('padding-left: calc(62px + env(safe-area-inset-left, 0px)) !important;') === true,
+    'the :has() arm must carry the same 62px safe-area gutter value')
+  const phoneGutter = cssBlock(phone, attributeArm)
+  assert.ok(phoneGutter !== null
+    && phoneGutter.includes('padding-top: calc(10px + env(safe-area-inset-top, 0px)) !important;')
+    && phoneGutter.includes('padding-right: calc(12px + env(safe-area-inset-right, 0px)) !important;'),
+    'the phone tier keeps its safe-area top/right paddings on the attribute arm')
+  assert.ok(cssBlock(phone, hasArm)?.includes('padding-top: calc(10px + env(safe-area-inset-top, 0px)) !important;') === true,
+    'the phone :has() arm must carry the same paddings')
+  const row = cssBlock(phone, '[data-mobile-frame] [data-slot="conversation.session.header"] > div:has(nav)')
   assert.ok(row !== null && row.includes('min-height: 48px'), 'the title row is a 48px touch row')
   const lineage = cssBlock(phone, '[data-mobile-frame] [data-slot="conversation.session.header.lineage"] button')
   assert.ok(lineage !== null && lineage.includes('flex: 0 0 auto') && lineage.includes('min-height: 44px'),
     'the lineage chip stays out of the shrink race at a 44px target')
-  const currentCrumb = cssBlock(phone, '[data-mobile-frame] [data-slot="conversation.session.header"] nav > span > button:disabled')
-  assert.ok(currentCrumb !== null && currentCrumb.includes('flex: 1 1 auto'), 'the current crumb absorbs the remaining width and ellipsises')
+  // Structural shrink order: only the LAST crumbSeg (and its span crumb) gives
+  // width. The rc.2 current crumb is a span — no :disabled arm may exist.
+  const fixedSegments = cssBlock(phone, [
+    '[data-mobile-frame] [data-slot="conversation.session.header"] nav > span:not(:last-child),',
+    '[data-mobile-frame] [data-slot="conversation.session.header"] nav > span > button',
+  ].join(' '))
+  assert.ok(fixedSegments !== null && fixedSegments.includes('flex: 0 0 auto;'),
+    'non-last segments and every crumb button keep their intrinsic width')
+  const lastSegment = cssBlock(phone, '[data-mobile-frame] [data-slot="conversation.session.header"] nav > span:last-child')
+  assert.ok(lastSegment !== null && lastSegment.includes('flex: 0 1 auto;') && lastSegment.includes('min-width: 0;'),
+    'the last crumbSeg absorbs the remaining width')
+  const lastCrumb = cssBlock(phone, '[data-mobile-frame] [data-slot="conversation.session.header"] nav > span:last-child > span:last-of-type')
+  assert.ok(lastCrumb !== null && lastCrumb.includes('flex: 0 1 auto;') && lastCrumb.includes('min-width: 0;'),
+    'the TITLE span (last of type; the first span is the separator) shrinks and ellipsises')
+  assert.equal(cssBlock(phone, '[data-mobile-frame] [data-slot="conversation.session.header"] nav > span:last-child > span'), null,
+    'the :last-child span form must be gone — a trailing separator would win it')
+  // Zero-lineage bare crumb (no .crumb class, no inner span): its own
+  // structural ellipsis rule, kept separate so :has() cannot take other arms.
+  const bareCrumb = cssBlock(phone, '[data-mobile-frame] [data-slot="conversation.session.header"] nav > span:not(:has(span))')
+  assert.ok(bareCrumb !== null && bareCrumb.includes('overflow: hidden;') && bareCrumb.includes('text-overflow: ellipsis;'),
+    'a bare crumb segment must get the ellipsis contract structurally')
+  // hideChrome/settling has no nav in the title row, so the :has(nav) corner
+  // rule is inert there: the corner attribute must neutralize the negative
+  // margin on its own arm.
+  const corner = cssBlock(phone, '[data-mobile-frame] [data-slot="conversation.session.header"] > div > [data-conversation-header-corner]')
+  assert.ok(corner !== null && corner.includes('margin-right: 0 !important;'),
+    'the corner seat must drop its negative margin even without a nav (hideChrome/settling)')
   const code = stripCssComments(MOBILE_CSS)
+  assert.ok(!code.includes('button:disabled'), 'the rc.2 current crumb is a span — no disabled arm may survive')
+  assert.ok(!code.replace(/\s+/gu, '').includes('[data-slot="conversation.session.header"]>header'),
+    'the reversed session-outlet > header selector must be gone (whitespace-insensitive)')
   assert.ok(!code.includes('[data-slot="conversation.session.header.actions"] > button'), 'no rule may target a direct-child button: the seat has none')
   const label = cssBlock(MOBILE_CSS, '[data-mobile-frame] [data-slot="conversation.session.header.actions"] > span')
   assert.ok(label !== null && label.includes('max-width: 8em') && label.includes('min-width: 0') && !label.includes('display: none'),

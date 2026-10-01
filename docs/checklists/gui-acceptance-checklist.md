@@ -8,6 +8,7 @@
 |---|---|---|---|
 |机械A（只读探测）|每次改动控制面/反代/静态壳后；也可对安装态跑|`pnpm run acceptance:gui`|`.tmp/gui-acceptance/gui-live-report.md`|
 |机械B（界面走查）|每次改动renderer / 侧栏 / 设置面 / 布局后|`pnpm run acceptance:gui -- --attach`（已有dev实例）或 `-- --dev`（自起自关）|`gui-walkthrough-report.md` + `shots/*.png`|
+|机械B-mobile（CDP 移动档走查）|每次改动移动插件（`packages/dsh-chamber-client-ui-mobile`）或移动相关验收判据后；需一个带 `--remote-debugging-port` 的实例|`pnpm run acceptance:mobile`（`-- --cdp-port 9333`；认证 gateway 加 `--url` 与凭据环境变量；`-- --require-run` 把未执行的 INFO 改判 FAIL）|`gui-mobile-walkthrough-report.md` + `shots/*.png` + `mobile-ws-frames.json`|
 |目检|机械腿跑完后按 §3逐条看图|人|截图 + 一句结论|
 |打包态/真机|发布前，或涉及安装包、更新、深链、通知、运行时事务|见 §4 + STATUS|见 §4|
 
@@ -77,7 +78,7 @@
 |孤儿 workspace 注册清理（真实仓库两态：①外部删除目录；②目录+Git 记录都已 prune）。判据＝该行仍有显式删除入口且可点：②在同一会话内先以 worktree 形态出现过时为常驻清理钮，冷启/重连后为普通 kebab 项（等价，均只注销注册、会话转未分组、行消失）；Git 来源整轮失败期间入口可缺席（design 08 §6.4），须待恢复后复测|design 06 §7、§11；design 08 §3.4、§6.4|
 |归档管理器与force清理链（保护三态：无会话打开仍可删 + 顶部降级说明行 / 正在查看的会话所在树被 `skippedProtected` 跳过 / 归档即终止）|design 24 §5、§13|
 |gateway形态（生产TLS、`/chamber/*`、移动端）|design 17、21 §9|
-|移动端Web面（真机触控档、安全区、键盘）|design 17 §18.6|
+|移动端Web面（**CDP 设备模拟半边**见 §0 的移动走查；真机触控档、安全区、键盘只能真机）|design 17 §18.6；机器侧 `pnpm run acceptance:mobile`|
 |Linux桌面 / Windows首版|design 22 §7、23|
 
 ### 4.1 I-15 矩阵执行序（归并记录）

@@ -8,14 +8,16 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   DEFAULT_DRAIN_GRACE_MS, MANIFEST_DUMP_PREFIX, collectEntries, emptyManifestProblems, evaluateChildRun,
-  manifestLockstepProblems, parseExecutedTestCount, parseManifestDump, parseReportedTotals, resolveJobs,
-  runEntries, selectManifest, spawnCaptured,
+  manifestLockstepProblems, parseExecutedTestCount, parseManifestDump, parseReportedTotals,
+  referenceResolvesToFile, resolveJobs, runEntries, selectManifest, spawnCaptured, standaloneTestFiles,
+  wiringPathReferences,
 } from './test-manifest.mjs'
 import { roundRobinSchedule } from '../gates/run-checks.mjs'
 
@@ -513,3 +515,147 @@ test('manifestLockstepProblems: a whole manifest passes and every defect is name
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('runTestManifest refuses a manifest that misses an on-disk test file (lockstep over the real packageRoot)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-manifest-run-'))
+  try {
+    mkdirSync(join(root, 'nested'))
+    writeFileSync(join(root, 'a.test.ts'), '')
+    writeFileSync(join(root, 'nested', 'b.test.mjs'), '')
+    const runner = join(root, 'runner.mjs')
+    writeFileSync(runner, [
+      `import { runTestManifest } from ${JSON.stringify(fileURLToPath(new URL('./test-manifest.mjs', import.meta.url)))}`,
+      'await runTestManifest({',
+      "  label: 'fixture',",
+      `  packageRoot: ${JSON.stringify(root)},`,
+      "  groups: { unit: ['a.test.ts'] },",
+      '  argv: [],',
+      '})',
+      '',
+    ].join('\n'))
+    const result = spawnSync(process.execPath, [runner], { encoding: 'utf8' })
+    assert.equal(result.status, 1, result.stdout + result.stderr)
+    assert.match(result.stderr, /manifest lockstep/)
+    assert.match(result.stderr, /on-disk test file is not listed: nested\/b\.test\.mjs/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('manifestLockstepProblems: standaloneFiles (files run by another declared script) are not manifest gaps', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-manifest-standalone-'))
+  try {
+    mkdirSync(join(root, 'nested'))
+    writeFileSync(join(root, 'a.test.ts'), '')
+    writeFileSync(join(root, 'nested', 'smoke.test.ts'), '')
+    assert.deepEqual(
+      manifestLockstepProblems({
+        packageRoot: root,
+        groups: { unit: ['a.test.ts'] },
+        standaloneFiles: ['nested/smoke.test.ts'],
+      }),
+      [],
+    )
+    // Without the exemption it stays a hard defect (the call site must be explicit).
+    assert.deepEqual(
+      manifestLockstepProblems({ packageRoot: root, groups: { unit: ['a.test.ts'] } }),
+      ['on-disk test file is not listed: nested/smoke.test.ts'],
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('runTestManifest accepts a file wired by the repo-root manifest as standalone (control-plane smoke shape)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-manifest-standalone-run-'))
+  try {
+    mkdirSync(join(root, 'packages', 'fixture'), { recursive: true })
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { smoke: 'node packages/fixture/smoke.test.ts' } }))
+    writeFileSync(join(root, 'packages', 'fixture', 'package.json'), JSON.stringify({ name: 'fixture', private: true }))
+    writeFileSync(join(root, 'packages', 'fixture', 'a.test.ts'), "console.log('ℹ tests 1')\nconsole.log('ℹ pass 1')\n")
+    writeFileSync(join(root, 'packages', 'fixture', 'smoke.test.ts'), '')
+    const runner = join(root, 'packages', 'fixture', 'runner.mjs')
+    writeFileSync(runner, [
+      `import { runTestManifest } from ${JSON.stringify(fileURLToPath(new URL('./test-manifest.mjs', import.meta.url)))}`,
+      'await runTestManifest({',
+      "  label: 'fixture',",
+      `  packageRoot: ${JSON.stringify(join(root, 'packages', 'fixture'))},`,
+      "  groups: { unit: ['a.test.ts'] },",
+      '  argv: [],',
+      '})',
+      '',
+    ].join('\n'))
+    const result = spawnSync(process.execPath, [runner], { encoding: 'utf8' })
+    assert.equal(result.status, 0, result.stdout + result.stderr)
+    assert.ok(!result.stderr.includes('on-disk test file is not listed'), result.stderr)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+test('wiringPathReferences / referenceResolvesToFile：引用必须解析到文件自身路径', () => {
+  assert.deepEqual(
+    wiringPathReferences('node test/a.test.ts && node --test ./scripts/b.test.mjs'),
+    ['test/a.test.ts', './scripts/b.test.mjs'],
+  )
+  assert.deepEqual(
+    wiringPathReferences("const FILES = ['test/two.test.ts', 'c.test.mjs']"),
+    ['test/two.test.ts', 'c.test.mjs'],
+  )
+  // 不是路径引用的形状不产出候选：glob、源码映射、别的扩展名。
+  assert.deepEqual(wiringPathReferences('!*.test.ts test/*.test.ts a.test.ts.map'), [])
+  assert.equal(referenceResolvesToFile('test/a.test.ts', 'packages/alpha', 'packages/alpha/test/a.test.ts'), true)
+  assert.equal(referenceResolvesToFile('a.test.ts', 'packages/alpha', 'packages/alpha/test/a.test.ts'), false, 'basename 不解析到 test/a.test.ts')
+  assert.equal(referenceResolvesToFile('packages/alpha/test/a.test.ts', '', 'packages/alpha/test/a.test.ts'), true)
+  assert.equal(referenceResolvesToFile('packages/beta/test/a.test.ts', '', 'packages/alpha/test/a.test.ts'), false, '跨包同名路径不算')
+})
+
+test('standaloneTestFiles：只有解析到本包文件的引用才豁免（拒绝 basename/echo/跨包同名）', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-manifest-standalone-resolve-'))
+  try {
+    for (const pkg of ['alpha', 'beta', 'gamma']) {
+      mkdirSync(join(root, 'packages', pkg, 'test'), { recursive: true })
+      writeFileSync(join(root, 'packages', pkg, 'test', 'smoke.test.ts'), '')
+    }
+    // 根清单只点名 alpha 的 smoke：alpha 豁免，beta 的同名文件不得跟着豁免。
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { smoke: 'node packages/alpha/test/smoke.test.ts' } }))
+    writeFileSync(join(root, 'packages', 'alpha', 'package.json'), JSON.stringify({ name: 'alpha', private: true }))
+    writeFileSync(join(root, 'packages', 'beta', 'package.json'), JSON.stringify({ name: 'beta', private: true }))
+    // gamma 自己的清单只有 basename echo：提及不是执行。
+    writeFileSync(join(root, 'packages', 'gamma', 'package.json'), JSON.stringify({ name: 'gamma', private: true, scripts: { test: 'echo smoke.test.ts' } }))
+    assert.deepEqual(standaloneTestFiles(join(root, 'packages', 'alpha')), ['test/smoke.test.ts'])
+    assert.deepEqual(standaloneTestFiles(join(root, 'packages', 'beta')), [], '跨包同名文件不得被根清单的另一个包路径豁免')
+    assert.deepEqual(standaloneTestFiles(join(root, 'packages', 'gamma')), [], 'basename echo 不得豁免')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('runTestManifest：显式 jobs 覆盖必须真正生效（此前被静默忽略）', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-manifest-jobs-'))
+  try {
+    writeFileSync(join(root, 'a.test.mjs'), passingFixture('A'))
+    writeFileSync(join(root, 'b.test.mjs'), passingFixture('B'))
+    const runner = join(root, 'runner.mjs')
+    writeFileSync(runner, [
+      `import { runTestManifest } from ${JSON.stringify(fileURLToPath(new URL('./test-manifest.mjs', import.meta.url)))}`,
+      'await runTestManifest({',
+      "  label: 'fixture',",
+      `  packageRoot: ${JSON.stringify(root)},`,
+      "  groups: { unit: ['a.test.mjs', 'b.test.mjs'] },",
+      '  jobs: 2,',
+      '  argv: [],',
+      '})',
+      '',
+    ].join('\n'))
+    // DSH_TEST_JOBS=1 是反证：jobs 参数被忽略时池宽会落到环境值 1，而不是显式的 2。
+    const result = spawnSync(process.execPath, [runner], {
+      encoding: 'utf8',
+      env: { ...process.env, DSH_TEST_JOBS: '1', DSH_TEST_TIMING: '1' },
+    })
+    assert.equal(result.status, 0, result.stdout + result.stderr)
+    assert.match(result.stderr, /"jobs":2/, '显式 jobs 覆盖必须进到 runEntries 的池宽（timing JSON 是观测点）')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+

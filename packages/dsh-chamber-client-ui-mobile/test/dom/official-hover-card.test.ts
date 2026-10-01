@@ -30,6 +30,8 @@ import {
   COARSE_NO_HOVER_QUERY,
   OFFICIAL_CARD_CLASS_TOKEN,
   OFFICIAL_CARD_ROOT_CLASS_TOKEN,
+  PREVIEW_INSET_PX,
+  VIEWPORT_MARGIN_PX,
   dispatchBoundaryLeave,
   hasModuleClassToken,
   installStrandedHoverCardWatchdog,
@@ -37,6 +39,8 @@ import {
   isOutsideRect,
   isUsableAnchorRect,
   matchesCardAnchor,
+  matchesCompactCardAnchor,
+  matchesPreviewCardAnchor,
   scanStrandedCards,
   type ElementFace,
   type QueryRootFace,
@@ -59,8 +63,8 @@ const INDEX_CODE = readFileSync(new URL('../../src/client/index.ts', import.meta
   .replace(/^\s*\/\/.*$/gm, '')
 
 // The pinned build's real class strings (rc.2 served bundle
-// `@deepseek-ai/dsh-web-frontend/dist/assets/index-Q6zc2uHV.js`:
-// `Pp="_root_38jqx_3"`, `Rp="_card_38jqx_9"`, `zp="_copyable_38jqx_21"`).
+// `@deepseek-ai/dsh-web-frontend/dist/assets/index-5SrrfWpU.js`:
+// `qp="_root_38jqx_3"`, `Gp="_card_38jqx_9"`, `Kp="_copyable_38jqx_21"`).
 const REAL_WRAPPER_CLASS = '_root_38jqx_3'
 const REAL_CARD_CLASS = '_card_38jqx_9 _copyable_38jqx_21'
 /** A Tooltip bubble's own module (foreign hash) — never a card. */
@@ -70,6 +74,21 @@ const TOOLTIP_CLASS = '_bubble_9zq1k_5'
 const WRAPPER_RECT: RectLike = { left: 100, top: 50, right: 240, bottom: 78 }
 const CARD_RECT: RectLike = { left: 248, top: 50, right: 492, bottom: 350 }
 const VIEWPORT_HEIGHT = 800
+
+// The PREVIEW variant's geometry, built from the pinned ui-primitives source
+// (HoverCard's layout effect): the card is sized to the WIDTH ANCHOR — a
+// container the DOM scan cannot see (the pinned build's only preview callers
+// pass their own card) — and hung off the WRAPPER. With innerWidth 800 and a
+// width anchor spanning 100..700: width = min(600 - 2*24, 800 - 16) = 552 and
+// left = max(8, min(100 + 24, 800 - 552 - 8)) = 124.
+const PREVIEW_VIEWPORT_WIDTH = 800
+const PREVIEW_WIDTH_ANCHOR: RectLike = { left: 100, top: 300, right: 700, bottom: 620 }
+/** Below branch: top = wrapper.bottom + 8. */
+const PREVIEW_WRAPPER_BELOW: RectLike = { left: 140, top: 100, right: 300, bottom: 128 }
+/** Above branch (the atom flips when the room above wins): bottom = wrapper.top - 8. */
+const PREVIEW_WRAPPER_ABOVE: RectLike = { left: 140, top: 700, right: 300, bottom: 728 }
+const PREVIEW_CARD_LEFT = PREVIEW_WIDTH_ANCHOR.left + PREVIEW_INSET_PX
+const PREVIEW_CARD_RIGHT = PREVIEW_WIDTH_ANCHOR.right - PREVIEW_INSET_PX
 
 function rect(left: number, top: number, right: number, bottom: number): RectLike {
   return { left, top, right, bottom }
@@ -93,7 +112,9 @@ test('the class token matches the pinned build only, as a whole token', () => {
 
 test('the anchor relation is the atom\'s own geometry, including the bottom clamp', () => {
   // Plain case: left = wrapper.right + 8, top = wrapper.top.
-  assert.equal(matchesCardAnchor(WRAPPER_RECT, CARD_RECT, VIEWPORT_HEIGHT), true)
+  assert.equal(matchesCompactCardAnchor(WRAPPER_RECT, CARD_RECT, VIEWPORT_HEIGHT), true)
+  assert.equal(matchesCardAnchor(WRAPPER_RECT, CARD_RECT, VIEWPORT_HEIGHT), true,
+    'the combined predicate keeps the compact relation when no viewport width is supplied')
   // Sub-pixel rounding is tolerated, a shifted card is not.
   assert.equal(matchesCardAnchor(WRAPPER_RECT, rect(248.5, 50.5, 492, 350), VIEWPORT_HEIGHT), true)
   assert.equal(matchesCardAnchor(WRAPPER_RECT, rect(256, 50, 500, 350), VIEWPORT_HEIGHT), false)
@@ -115,6 +136,58 @@ test('the anchor relation is the atom\'s own geometry, including the bottom clam
   // Non-finite rects (detached nodes) fail closed.
   assert.equal(matchesCardAnchor(WRAPPER_RECT, rect(Number.NaN, 50, 492, 350), VIEWPORT_HEIGHT), false)
   assert.equal(matchesCardAnchor(rect(100, 50, Number.NaN, 78), CARD_RECT, VIEWPORT_HEIGHT), false)
+})
+
+test('the preview variant: the card spans its width anchor and hangs off the wrapper', () => {
+  assert.equal(PREVIEW_INSET_PX, 24, 'upstream PREVIEW_INSET')
+  assert.equal(VIEWPORT_MARGIN_PX, 8, 'upstream VIEWPORT_MARGIN')
+  assert.equal(CARD_ANCHOR_GAP_PX, 8, 'upstream ANCHOR_GAP')
+  // Below branch (top = wrapper.bottom + 8).
+  const below = rect(PREVIEW_CARD_LEFT, PREVIEW_WRAPPER_BELOW.bottom + CARD_ANCHOR_GAP_PX, PREVIEW_CARD_RIGHT, 336)
+  assert.equal(matchesPreviewCardAnchor(PREVIEW_WRAPPER_BELOW, below, VIEWPORT_HEIGHT, PREVIEW_VIEWPORT_WIDTH), true)
+  assert.equal(matchesCardAnchor(PREVIEW_WRAPPER_BELOW, below, VIEWPORT_HEIGHT, PREVIEW_VIEWPORT_WIDTH), true,
+    'the combined predicate accepts the preview variant when the viewport width is supplied')
+  // Above branch (bottom = wrapper.top - 8), with the card box built by the
+  // same upstream numbers: a 300px card under a wrapper at top 700.
+  const above = rect(PREVIEW_CARD_LEFT, 392, PREVIEW_CARD_RIGHT, PREVIEW_WRAPPER_ABOVE.top - CARD_ANCHOR_GAP_PX)
+  assert.equal(matchesPreviewCardAnchor(PREVIEW_WRAPPER_ABOVE, above, VIEWPORT_HEIGHT, PREVIEW_VIEWPORT_WIDTH), true)
+  // Sub-pixel rounding only.
+  assert.equal(
+    matchesPreviewCardAnchor(PREVIEW_WRAPPER_BELOW, rect(124.5, 136.5, 676, 336), VIEWPORT_HEIGHT, PREVIEW_VIEWPORT_WIDTH),
+    true,
+  )
+  // No viewport width = not decidable: fail closed on both entry points.
+  assert.equal(matchesPreviewCardAnchor(PREVIEW_WRAPPER_BELOW, below, VIEWPORT_HEIGHT, Number.NaN), false)
+  assert.equal(matchesCardAnchor(PREVIEW_WRAPPER_BELOW, below, VIEWPORT_HEIGHT), false)
+  // Horizontal containment is load-bearing: the width anchor CONTAINS the
+  // wrapper, so the card must clear PREVIEW_INSET on both sides.
+  assert.equal(
+    matchesPreviewCardAnchor(PREVIEW_WRAPPER_BELOW, rect(170, 136, 676, 336), VIEWPORT_HEIGHT, PREVIEW_VIEWPORT_WIDTH),
+    false,
+    'a card starting more than PREVIEW_INSET past the wrapper is not this anchor\'s card',
+  )
+  assert.equal(
+    matchesPreviewCardAnchor(PREVIEW_WRAPPER_BELOW, rect(124, 136, 260, 336), VIEWPORT_HEIGHT, PREVIEW_VIEWPORT_WIDTH),
+    false,
+    'a card too narrow to cover the wrapper is not this anchor\'s card',
+  )
+  // Vertical: only the two ANCHOR_GAP placements count.
+  assert.equal(
+    matchesPreviewCardAnchor(PREVIEW_WRAPPER_BELOW, rect(124, 160, 676, 360), VIEWPORT_HEIGHT, PREVIEW_VIEWPORT_WIDTH),
+    false,
+    'a card floating below the gap is not the atom\'s placement',
+  )
+  assert.equal(
+    matchesPreviewCardAnchor(PREVIEW_WRAPPER_BELOW, rect(124, 100, 676, 300), VIEWPORT_HEIGHT, PREVIEW_VIEWPORT_WIDTH),
+    false,
+    'the compact top (= wrapper.top) is not a preview placement',
+  )
+  // Off-viewport, degenerate and non-finite rects fail closed; the COMPACT
+  // fixture never reads as a preview either.
+  assert.equal(matchesPreviewCardAnchor(PREVIEW_WRAPPER_BELOW, rect(0, 136, 552, 336), VIEWPORT_HEIGHT, PREVIEW_VIEWPORT_WIDTH), false)
+  assert.equal(matchesPreviewCardAnchor(PREVIEW_WRAPPER_BELOW, rect(124, 136, 124, 336), VIEWPORT_HEIGHT, PREVIEW_VIEWPORT_WIDTH), false)
+  assert.equal(matchesPreviewCardAnchor(rect(0, 0, 0, 0), below, VIEWPORT_HEIGHT, PREVIEW_VIEWPORT_WIDTH), false)
+  assert.equal(matchesPreviewCardAnchor(WRAPPER_RECT, CARD_RECT, VIEWPORT_HEIGHT, PREVIEW_VIEWPORT_WIDTH), false)
 })
 
 test('a pointer is "outside" only when provably outside, with a fail-closed margin', () => {
@@ -237,6 +310,38 @@ test('every matched card of a document is found, in card order', () => {
     VIEWPORT_HEIGHT,
   )
   assert.deepEqual(pairs.map(pair => pair.card), [firstCard, secondCard])
+})
+
+test('the scan pairs compact FIRST and falls back to the preview variant', () => {
+  // Compact precedence: the card is wrapper A's compact card, while wrapper B
+  // ALSO satisfies the preview relation for it (B.bottom + 8 = card.top and B
+  // sits inside the card's width). The compact pair must win — the added
+  // variant may only ADD pairs, never steal one (a two-match card would be
+  // skipped and the watchdog would silently stop dismissing it).
+  const card = fakeElement('div', REAL_CARD_CLASS, rect(248, 50, 700, 350))
+  const compactWrapper = fakeElement('span', REAL_WRAPPER_CLASS, rect(100, 50, 240, 78))
+  const previewDecoy = fakeElement('span', REAL_WRAPPER_CLASS, rect(300, 14, 500, 42))
+  assert.equal(
+    matchesPreviewCardAnchor(previewDecoy.rect, card.rect, VIEWPORT_HEIGHT, PREVIEW_VIEWPORT_WIDTH),
+    true,
+    'the decoy really is a second, preview-shaped candidate (otherwise this test proves nothing)',
+  )
+  const pairs = scanStrandedCards(fakeRoot([card], [previewDecoy, compactWrapper]).face, VIEWPORT_HEIGHT, PREVIEW_VIEWPORT_WIDTH)
+  assert.equal(pairs.length, 1, 'exactly one pair, not an ambiguity skip')
+  assert.equal(pairs[0]?.wrapper, compactWrapper)
+
+  // Preview fallback: a card with no compact wrapper is paired through the
+  // preview relation — and only when the viewport width is supplied.
+  const previewCard = fakeElement('div', REAL_CARD_CLASS, rect(PREVIEW_CARD_LEFT, 136, PREVIEW_CARD_RIGHT, 336))
+  const previewWrapper = fakeElement('span', REAL_WRAPPER_CLASS, PREVIEW_WRAPPER_BELOW)
+  const previewPairs = scanStrandedCards(fakeRoot([previewCard], [previewWrapper]).face, VIEWPORT_HEIGHT, PREVIEW_VIEWPORT_WIDTH)
+  assert.equal(previewPairs.length, 1)
+  assert.equal(previewPairs[0]?.wrapper, previewWrapper)
+  assert.deepEqual(
+    scanStrandedCards(fakeRoot([previewCard], [previewWrapper]).face, VIEWPORT_HEIGHT),
+    [],
+    'no viewport width: the preview relation fails closed (the compact relation does not match either)',
+  )
 })
 
 // ------------------------------------------------------------- the dispatch
@@ -382,7 +487,7 @@ test('the JS tier gate is byte-identical to the stylesheet coarse-pointer tier',
   )
 })
 
-test('the committed client artifact ships both mitigations (source/artifact lockstep)', () => {
+test('the build-time client artifact ships both mitigations (source/artifact lockstep)', () => {
   // `exports["./client"]` points at lib/client.js and the gateway seeds that
   // file byte for byte, so a source-only change ships nothing. This lock pins
   // the SHIPPED bytes: run the package build after touching src/client/**.

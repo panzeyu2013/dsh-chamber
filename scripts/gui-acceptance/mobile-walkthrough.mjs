@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * CDP 移动档走查（`--mobile`；design 17 §18.6
- * 「CDP 设备模拟 + 真机抽检」的 CDP 设备模拟的一半）。
+ * CDP 移动档走查（独立入口；design 17 §18.6「CDP 设备模拟 + 真机抽检」的
+ * CDP 设备模拟的一半）。`--mobile` 是桌面走查的档位名，从来不是本脚本的参数
+ * （文件头不再假装支持它）。
  *
  * 与桌面走查（walkthrough.mjs）的关系：同一条 CDP 连接方式（`./cdp.mjs` 的
  * `discoverPageTarget` + `CdpSession`，零依赖、Node 内置 fetch/WebSocket）、
@@ -14,19 +15,27 @@
  *   3. 重新加载（模拟是会话级、跨导航保留），随后只做**只读测量**
  *
  * 断言（结构化，不靠截图；判据纯函数在 mobile-checks.mjs，编号即报告里的顺序）：
- *   M-0 走查环境（找不到 CDP 目标 ⇒ INFO；--require-run 时 FAIL）
+ *   M-0 走查环境（找不到 CDP 目标、或会话建立失败 ⇒ INFO；--require-run 时 FAIL；
+ *       运行中会话/采集中断 ⇒ FAIL——两种情况都照样写出报告并关会话）
  *   M-1 壳挂载成功（30s 内出现挂载标记；默认 INFO，--require-run 时 FAIL）
- *   M-2 设备模拟生效（含 pointer:coarse / hover:none / 手机档媒体查询）
+ *   M-2 设备模拟生效（含 pointer:coarse / hover:none / 手机档媒体查询；标题跟随 --width/--height/--dpr）
  *   M-3 无横向溢出（设备宽基准 + task 的 innerWidth 断言；收缩适配时明确标注）
  *   M-4 插件激活（[data-mobile-frame] 打标 + 键盘守卫诊断面；打标 PASS、无打标 INFO、--require-run 时 FAIL）
  *   M-5 会话头首行高度 ≤ 48px（无会话 ⇒ INFO；--require-run 时 FAIL）
- *   M-6 会话头内无「单字换行」（行盒数 + 高度启发式；同上）
+ *   M-6 会话头内无「单字换行」（行盒数 + 高度启发式，纵向 padding 非零的叶子只按行盒数判；
+ *       无会话 ⇒ INFO、--require-run 时 FAIL；带文本元素超过 80 个证据上限而截断时同样 INFO——没扫完不算通过）
  *   M-7 会话头内所有 button 命中盒 ≥ 44px（同上）
- *   M-8 WebSocket 帧捕获（`Network.webSocketFrameSent/Received`，落盘 JSON）
- *   M-9 走查期间的控制台/网络观察（观察项，判定沿用桌面走查的容忍表）
+ *   M-8 WebSocket 帧捕获（`Network.webSocketFrameSent/Received`；**先脱敏后截断**，落盘 JSON；
+ *       观察项恒 INFO，**不参与 --require-run**）
+ *   M-9 覆盖层只读探查（position:fixed|absolute 且 z-index≥40 的可见元素 vs **布局视口**；
+ *       不点击、不改 DOM；fixed 无位移的越界项判 FAIL；命中 40 个上限而截断时 INFO；
+ *       **不参与 --require-run**——扫描完成即算执行，没有覆盖层仍记 INFO）
+ *   M-10 走查期间的 ≥400 请求与渲染层 error（**真判定**：各自过容忍表后存在未预期项即 FAIL，
+ *       容忍表见 checks.mjs 的 TOLERATED_REQUEST_FAILURES / KNOWN_UPSTREAM_BOOT_NOISE；
+ *       **不参与 --require-run**——容忍表判的是本次观察到的事实，没有「未执行」的中间态）
  *
- * 脱敏的**已知边界**：能识别五种键名族（…token / …key /
- * authorization / cookie / password / secret / credential / session / sid / jwt）与
+ * 脱敏的**已知边界**：能识别这些键名族（…token / …key / authorization / cookie / password /
+ * secret / credential / session[-_]?id / session / sid / jwt）与
  * URL 查询串、JSON 转义形、`\u0022` 形；但**跨帧拼接**的凭据、URL **路径段/矩阵参数**里的
  * 值、以及 `webSocketFrameError.errorMessage` 里的自由文本，只有在值本身来自环境变量
  * （`--auth-token-env`/`--cookie-env`）时才一定能抹掉。不要把本工具的输出当成
@@ -41,6 +50,10 @@
  * 没有真机、没有凭据、没有实例时**优雅失败**：打印缺什么、需要什么、怎么给，
  * 写一份只含 INFO 的报告，exit 0（`--require-run` 时 exit 1）——判定语义与
  * run.mjs 一致：INFO = 本次未执行，永不冒充通过。
+ * 环境在运行中失效（`connect` 失败、`enableObservation`/`evaluate` 抛错、页面被导航走、
+ * CDP 会话断开）同样 fail-soft：不把异常抛给调用方，而是写一份带原因的报告、关掉会话后
+ * 返回。已经判过的腿原样留在报告里；中断本身记 FAIL（会话建立失败仍按「环境不可用」记
+ * INFO，`--require-run` 下记 FAIL），exit code 由汇总结果决定。
  *
  * 用法：
  *   node scripts/gui-acceptance/mobile-walkthrough.mjs --cdp-port 9333
@@ -61,9 +74,9 @@ import {
   renderMarkdown, summarize, summarizeNetFailures,
 } from './checks.mjs'
 import {
-  DEVICE_FACTS_EXPRESSION, HEADER_FACTS_EXPRESSION, MOBILE_DEVICE, applyRequireRun, deviceEmulationSteps,
-  deviceEmulationVerdict, headerFirstRowVerdict, headerWrapVerdict, hitBoxVerdict,
-  overflowVerdict, pluginActivationVerdict, redactSecrets, summarizeWebSocketFrames,
+  DEVICE_FACTS_EXPRESSION, HEADER_FACTS_EXPRESSION, MOBILE_DEVICE, OVERLAY_FACTS_EXPRESSION, applyRequireRun,
+  deviceEmulationSteps, deviceEmulationVerdict, headerFirstRowVerdict, headerWrapVerdict, hitBoxVerdict,
+  overflowVerdict, overlayProbeVerdict, pluginActivationVerdict, redactSecrets, summarizeWebSocketFrames,
 } from './mobile-checks.mjs'
 
 const ROOT_MOUNTED = `document.querySelector('#root') !== null && document.querySelector('#root').children.length > 0`
@@ -102,9 +115,14 @@ export function buildCredentialHeaders({ authTokenEnv = 'DSH_MOBILE_AUTH_TOKEN',
 
 /**
  * 把 CDP 事件流里的 WebSocket 帧收进数组（纯收集，判定在 mobile-checks）。
+ *
+ * 顺序纪律：**先脱敏、后截断**（cap 只作用在脱敏后的文本上），`payloadLength`
+ * 始终记原始长度、`truncated` 由原始长度判定。反过来的写法（先 slice 再在落盘
+ * 时脱敏）会让截断点切开一个凭据的键值上下文——正则匹配不到半截值，凭据前缀
+ * 照样进内存/摘要。导出以便单测直接钉住这个顺序。
  * @returns {{frames: object[], stop: () => void}}
  */
-function collectWebSocketFrames(session, { cap = DEFAULT_FRAME_CAP } = {}) {
+export function collectWebSocketFrames(session, { cap = DEFAULT_FRAME_CAP, redact = value => value } = {}) {
   const frames = []
   const onMessage = message => {
     const params = message.params ?? {}
@@ -122,13 +140,16 @@ function collectWebSocketFrames(session, { cap = DEFAULT_FRAME_CAP } = {}) {
     }
     if (message.method === 'Network.webSocketFrameSent' || message.method === 'Network.webSocketFrameReceived') {
       const response = params.response ?? {}
-      const payload = String(response.payloadData ?? '')
+      const raw = String(response.payloadData ?? '')
+      const safe = String(redact(raw))
       frames.push({
         direction: message.method === 'Network.webSocketFrameSent' ? 'sent' : 'received',
         opcode: response.opcode,
-        payloadLength: payload.length,
-        truncated: payload.length > cap,
-        payload: payload.slice(0, cap),
+        // 原始长度与截断标记都按 raw 记（脱敏可能改变长度）。
+        payloadLength: raw.length,
+        redactedLength: safe.length,
+        truncated: raw.length > cap,
+        payload: safe.slice(0, cap),
         at: params.timestamp ?? null,
       })
     }
@@ -220,6 +241,9 @@ export async function runMobileWalkthrough({
 
   const credentials = buildCredentialHeaders({ authTokenEnv, cookieEnv, env })
   for (const note of credentials.notes) console.log(`# ${note}`)
+  // 脱敏是**每条落盘通道**（stdout / 报告 / 帧文件）共用的同一层；两条 fail-soft
+  // 出口（无目标、运行中会话失效）也要用它，所以建在这里而不是 try 里面。
+  const scrub = value => redactSecrets(String(value), credentials.secrets)
 
   // ---- 连接：失败即「环境不可用」，打印需要什么，写 INFO 报告后返回 ----
   let target = null
@@ -230,9 +254,10 @@ export async function runMobileWalkthrough({
     connectError = error
   }
   if (target === null) {
-    const reason = connectError === null
+    // reason 可能带 URL/查询串（发现器抛出的错误），落盘与打印都先过脱敏。
+    const reason = scrub(connectError === null
       ? `/json/list 在 ${cdpPort} 上没有应答或没有 page 目标`
-      : String(connectError?.message ?? connectError)
+      : String(connectError?.message ?? connectError))
     const requirement = [
       `CDP 端口 ${cdpPort} 上没有可走的页面目标：${reason}`,
       '需要什么（任选其一）：',
@@ -245,7 +270,7 @@ export async function runMobileWalkthrough({
     console.log(requirement)
     rec.add('M-0', '走查环境（CDP 目标）', requireRun ? false : null, requirement)
     const reportPath = writeReport({
-      outDir, target: null, cdpPort, url, secrets: credentials.secrets,
+      outDir, target: null, cdpPort, url, device, secrets: credentials.secrets,
       results: rec.results, frames: null, notes: [requirement],
     })
     return {
@@ -254,21 +279,28 @@ export async function runMobileWalkthrough({
     }
   }
 
-  console.log(`# CDP 移动走查目标 ${redactSecrets(target.url, credentials.secrets)}`
-    + `（${redactSecrets(target.title, credentials.secrets)}）`)
-  const session = await connect(target.webSocketDebuggerUrl)
-  // `--ws-frames off` means off: no listener, no accumulation. (The summary is
-  // the only place raw frame bytes leave this module, so not collecting is both
-  // the honest reading of the flag and one less credential-bearing buffer.)
-  const ws = wsFrames === 'off' ? { frames: [] } : collectWebSocketFrames(session, { cap: frameCap })
-  await session.enableObservation()
-  if (Object.keys(credentials.headers).length > 0) {
-    await session.send('Network.setExtraHTTPHeaders', { headers: credentials.headers })
-  }
-
-  const shot = async name => { await session.screenshot(path.join(shots, `${name}.png`)); return `${name}.png` }
-
+  console.log(`# CDP 移动走查目标 ${scrub(target.url)}（${scrub(target.title)}）`)
+  // 会话建立、观测开启与全部采集共用一个 try：connect / enableObservation / evaluate
+  // 的失败是**可预期的运行事实**（目标在发现与 attach 之间消失、页面被导航走、CDP
+  // 会话断开），它们同样要写报告并关掉会话，而不是把异常抛给调用方（fail-soft）。
+  let session = null
+  let framesPath = null
+  let frameSummary = null
   try {
+    session = await connect(target.webSocketDebuggerUrl)
+    // `--ws-frames off` means off: no listener, no accumulation. (The summary is
+    // the only place raw frame bytes leave this module, so not collecting is both
+    // the honest reading of the flag and one less credential-bearing buffer.)
+    const ws = wsFrames === 'off' ? { frames: [] } : collectWebSocketFrames(session, {
+      cap: frameCap,
+      redact: value => redactSecrets(String(value), credentials.secrets),
+    })
+    await session.enableObservation()
+    if (Object.keys(credentials.headers).length > 0) {
+      await session.send('Network.setExtraHTTPHeaders', { headers: credentials.headers })
+    }
+
+    const shot = async name => { await session.screenshot(path.join(shots, `${name}.png`)); return `${name}.png` }
     if (url !== null) {
       await session.send('Page.navigate', { url })
       await sleep(navigateSettleMs)
@@ -303,7 +335,7 @@ export async function runMobileWalkthrough({
     const deviceFacts = await session.evaluate(DEVICE_FACTS_EXPRESSION)
     await shot('M1-device')
     const emulation = deviceEmulationVerdict(deviceFacts, device)
-    rec.add('M-2', '设备模拟生效（390×844@3x + 触控 ⇒ pointer:coarse / hover:none）', emulation.ok, emulation.evidence)
+    rec.add('M-2', `设备模拟生效（${device.width}×${device.height}@${device.deviceScaleFactor}x + 触控 ⇒ pointer:coarse / hover:none）`, emulation.ok, emulation.evidence)
 
     addGated('M-3', '无横向溢出（设备宽基准；task 的 innerWidth 断言一并报告）', overflowVerdict(deviceFacts, device))
 
@@ -319,26 +351,36 @@ export async function runMobileWalkthrough({
     const headerFacts = await session.evaluate(HEADER_FACTS_EXPRESSION)
     await shot('M2-header')
     addGated('M-5', `会话头首行高度 ≤ 48px（实测，无会话则 INFO）`, headerFirstRowVerdict(headerFacts))
-    addGated('M-6', '会话头内无「单字换行」（行盒数 + 高度启发式）', headerWrapVerdict(headerFacts))
-    addGated('M-7', '会话头内所有 button 命中盒 ≥ 44px', hitBoxVerdict(headerFacts))
+    addGated('M-6', '会话头内无「单字换行」（行盒数 + 高度启发式；纵向 padding 非零的叶子只按行盒数判）', headerWrapVerdict(headerFacts))
+    addGated('M-7', '会话头内所有 button/tab 命中盒 ≥ 44px', hitBoxVerdict(headerFacts))
 
-    // ---- 观察项：帧 + 控制台/网络（沿用桌面走查的容忍表） ----
+
+    // ---- 帧 + 控制台/网络：M-8 是观察项（恒 INFO），M-10 按 checks.mjs 的容忍表真判定 ----
     await sleep(frameSettleMs)
-    const scrub = value => redactSecrets(String(value), credentials.secrets)
-    const frameSummary = summarizeWebSocketFrames(ws.frames, { redact: scrub })
+    frameSummary = summarizeWebSocketFrames(ws.frames, { redact: scrub })
     rec.add('M-8', 'WebSocket 帧捕获（会话打开停滞的证据来源）', null,
       wsFrames === 'off'
         ? '--ws-frames off：本档不采集、不落盘、不打印帧（其余判据不受影响）'
         : `${scrub(frameSummary.summary)}\n（帧自 CDP 连接起累计——含 reload 前的那一次连接；完整帧见报告旁 mobile-ws-frames.json，payload/URL 均已脱敏；--ws-frames full 可逐帧打印）`)
     if (wsFrames === 'full') {
       for (const frame of ws.frames) {
-        console.log(`[WS] ${frame.direction} opcode=${frame.opcode ?? '-'} len=${frame.payloadLength ?? '-'} ${redactSecrets(frame.payload ?? frame.url ?? frame.error ?? '', credentials.secrets).slice(0, 300)}`)
+        console.log(`[WS] ${frame.direction} opcode=${frame.opcode ?? '-'} len=${frame.payloadLength ?? '-'}${frame.truncated === true ? ' (截断，落盘为脱敏后前缀)' : ''} ${redactSecrets(frame.payload ?? frame.url ?? frame.error ?? '', credentials.secrets).slice(0, 300)}`)
       }
     }
 
+    // ---- M-9：覆盖层只读探查（不点击、不改 DOM；**不参与 --require-run**） ----
+    // 探针跑完即算「执行过」：页面上没有覆盖层时判定本身按设计记 INFO（未命中，
+    // 不是通过），--require-run 把它改判 FAIL 只会惩罚一个确实执行了的只读扫描；
+    // 「压根没连上页面」由 M-0/M-1 负责。因此这里走 rec.add 而不是 addGated。
+    // 记录顺序贴着编号（M-8 之后、M-10 之前）：报告行序与文件头的清单一致。
+    const overlayFacts = await session.evaluate(OVERLAY_FACTS_EXPRESSION)
+    const overlay = overlayProbeVerdict(overlayFacts)
+    rec.add('M-9', '覆盖层只读探查（fixed|absolute z-index≥40 超出布局视口）', overlay.ok, overlay.evidence)
+
     const net = partitionFailures([...session.netFailures.keys()], TOLERATED_REQUEST_FAILURES)
     const consolePartition = partitionFailures(session.consoleErrors, KNOWN_UPSTREAM_BOOT_NOISE)
-    rec.add('M-9', '走查期间的 ≥400 请求与渲染层 error（观察项）', null,
+    rec.add('M-10', '走查期间无未预期的 ≥400 请求与渲染层 error（容忍表见 checks.mjs）',
+      net.unexpected.length === 0 && consolePartition.unexpected.length === 0,
       [`未预期网络：${scrub(net.unexpected.slice(0, 5).join(' | ')) || '（无）'}`,
         `已登记容忍：${scrub(net.tolerated.slice(0, 3).join(' | ')) || '（无）'}`,
         `未预期 console error：${scrub(consolePartition.unexpected.slice(0, 3).join(' | ')) || '（无）'}`,
@@ -348,7 +390,7 @@ export async function runMobileWalkthrough({
     // 凭据可以出现在 URL 查询串里（`?token=…`），不只出现在帧载荷里：每个要落盘的
     // 字符串都过一遍 redactSecrets（url /
     // meta.target / netFailures 同样落盘，漏一处等于把凭据写进了持久层）。
-    const framesPath = wsFrames === 'off' ? null : path.join(outDir, 'mobile-ws-frames.json')
+    framesPath = wsFrames === 'off' ? null : path.join(outDir, 'mobile-ws-frames.json')
     if (framesPath !== null) {
       writeFileSync(framesPath, JSON.stringify({
         meta: { target: redactSecrets(target.url, credentials.secrets), cdpPort, at: new Date().toISOString() },
@@ -367,15 +409,47 @@ export async function runMobileWalkthrough({
       results: rec.results,
       frames: framesPath === null ? null : { summary: scrub(frameSummary.summary), counts: frameSummary.counts, file: framesPath },
       netFailures: summarizeNetFailures(session.netFailures),
-      consoleErrors: session.consoleErrors.map(error => redactSecrets(error, credentials.secrets)),
-      consoleWarnings: session.consoleWarnings.map(warning => redactSecrets(warning, credentials.secrets)),
+      consoleErrors: session.consoleErrors.map(value => scrub(value)),
+      consoleWarnings: session.consoleWarnings.map(value => scrub(value)),
       notes: credentials.notes,
     })
     const counts = summarize(rec.results)
     console.log(`\n=== 移动走查：${counts.passed} pass / ${counts.failed} fail / ${counts.info} info / ${rec.results.length} checks ===\nreport: ${reportPath}\nws frames: ${framesPath ?? '(off)'}\nscreenshots: ${shots}`)
     return { results: rec.results, reportPath, framesPath, shots, skipped: false, ...counts }
+  } catch (error) {
+    // fail-soft：connect / enableObservation / evaluate 的失败在这里收口。报告照样写、
+    // 会话照样关；已经判过的腿原样留在报告里，中断本身记进 M-0（环境前提）。
+    const environmentOnly = rec.results.length === 0
+    const reason = scrub(error?.message ?? error)
+    const evidence = environmentOnly
+      ? [`CDP 会话建立失败：${reason}`,
+          `需要什么：CDP 端口 ${cdpPort} 上的页面目标必须能 attach（webSocketDebuggerUrl 可用）；本脚本不重试其它目标、也不会自己启动实例。`].join('\n')
+      : [`采集中断：${reason}`,
+          '已判定的腿原样保留在报告里；未执行的腿不会以 INFO 冒充通过——中断本身记 FAIL（会话已关闭）。'].join('\n')
+    const entry = {
+      id: 'M-0',
+      title: environmentOnly ? '走查环境（CDP 目标）' : '走查环境（CDP 会话中断）',
+      ok: environmentOnly ? (requireRun ? false : null) : false,
+      evidence,
+    }
+    // M-0 是环境前提：无论何时失败都排在报告首行，编号顺序才与文件头一致。
+    rec.results.unshift(entry)
+    const mark = entry.ok === false ? 'FAIL' : 'INFO'
+    console.log(`[${mark}] ${entry.id} ${entry.title}\n        ${entry.evidence}`)
+    const reportPath = writeReport({
+      outDir, target, cdpPort, url, device, secrets: credentials.secrets,
+      results: rec.results,
+      frames: frameSummary === null ? null : { summary: scrub(frameSummary.summary), counts: frameSummary.counts, file: framesPath },
+      netFailures: summarizeNetFailures(session?.netFailures ?? new Map()),
+      consoleErrors: (session?.consoleErrors ?? []).map(value => scrub(value)),
+      consoleWarnings: (session?.consoleWarnings ?? []).map(value => scrub(value)),
+      notes: [...credentials.notes, evidence],
+    })
+    const counts = summarize(rec.results)
+    console.log(`\n=== 移动走查（fail-soft）：${counts.passed} pass / ${counts.failed} fail / ${counts.info} info / ${rec.results.length} checks ===\nreport: ${reportPath}\nws frames: ${framesPath ?? '(off)'}\nscreenshots: ${shots}`)
+    return { results: rec.results, reportPath, framesPath, shots, skipped: environmentOnly, ...counts }
   } finally {
-    session.close()
+    if (session !== null) session.close()
   }
 }
 
@@ -393,7 +467,9 @@ function writeReport({ outDir, target, cdpPort, url, device = MOBILE_DEVICE, res
     截图目录: path.join(outDir, 'shots'),
   }
   const safeNetFailures = netFailures.map(scrub)
-  const report = renderMarkdown({ title: 'GUI 验收（移动档：CDP 设备模拟走查）', meta, results, netFailures: safeNetFailures, consoleErrors, consoleWarnings })
+  // 标题与 meta.设备 一起跟随 --width/--height/--dpr：报告用默认设备名不加尺寸会误导。
+  const title = `GUI 验收（移动档：CDP 设备模拟走查 ${device.width}×${device.height}@${device.deviceScaleFactor}x）`
+  const report = renderMarkdown({ title, meta, results, netFailures: safeNetFailures, consoleErrors, consoleWarnings })
   const withFrames = frames === null ? report
     : `${report}\n\n## WebSocket 帧\n\n\`\`\`\n${frames.summary}\n\`\`\`\n\n完整帧文件：\`${frames.file}\`（计数 ${JSON.stringify(frames.counts)}）\n`
   const withNotes = notes.length === 0 ? withFrames : `${withFrames}\n\n## 凭据与环境\n\n${notes.map(note => `- ${note}`).join('\n')}\n`
@@ -421,6 +497,9 @@ const USAGE = `用法：node scripts/gui-acceptance/mobile-walkthrough.mjs [选�
   --auth-token-env <NAME>  从该环境变量读 Bearer 凭据（默认 DSH_MOBILE_AUTH_TOKEN；值永不打印）
   --cookie-env <NAME>      从该环境变量读 Cookie 头（默认 DSH_MOBILE_COOKIE；值永不打印）
   --require-run            未执行（INFO，例如没有 CDP 目标/没有会话）计为 FAIL ⇒ exit 1
+                           （M-8 帧采集、M-9 覆盖层探查、M-10 网络/控制台观察不在此列：
+                           它们不经过这道门；M-9 的只读扫描完成即算执行，无覆盖层仍是 INFO，
+                           命中 40 个上限而截断时也是 INFO；M-10 按容忍表真判定）
   --help, -h               打印本用法并 exit 0
 
 退出码：0 = 无 FAIL（含 INFO）；1 = 有 FAIL 或 --require-run 下未执行；2 = 用法错误。
@@ -470,17 +549,26 @@ async function main(argv) {
     height: Number(values.height),
     deviceScaleFactor: Number(values.dpr),
   }
-  const result = await runMobileWalkthrough({
-    cdpPort: Number(values['cdp-port']),
-    outDir: values.out,
-    url: values.url ?? null,
-    device,
-    wsFrames: values['ws-frames'],
-    requireRun: values['require-run'],
-    authTokenEnv: values['auth-token-env'],
-    cookieEnv: values['cookie-env'],
-  })
-  process.exit(result.failed > 0 ? 1 : 0)
+  // 顶层 catch：runMobileWalkthrough 自己已把 connect/evaluate 的失败转成 fail-soft
+  // 报告，能到这里的是意料之外的异常（写盘失败等）。不打印未捕获拒绝的整段堆栈，
+  // 但也绝不假装成功：exit 1 并指出产物目录，让人知道去哪儿找半成品报告。
+  try {
+    const result = await runMobileWalkthrough({
+      cdpPort: Number(values['cdp-port']),
+      outDir: values.out,
+      url: values.url ?? null,
+      device,
+      wsFrames: values['ws-frames'],
+      requireRun: values['require-run'],
+      authTokenEnv: values['auth-token-env'],
+      cookieEnv: values['cookie-env'],
+    })
+    process.exit(result.failed > 0 ? 1 : 0)
+  } catch (error) {
+    console.error(`移动走查异常终止（exit 1）：${String(error?.stack ?? error)}`)
+    console.error(`产物目录：${values.out}（若报告已写出，以报告里的判定为准）`)
+    process.exit(1)
+  }
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {

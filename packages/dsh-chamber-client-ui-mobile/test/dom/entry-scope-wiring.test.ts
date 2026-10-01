@@ -1,6 +1,9 @@
 /**
- * Wiring locks for the mobile client entry's SVG resource scoper install
- * (design 05 §4.2). The desktop module-face test is
+ * Wiring locks for the mobile client entry (src/client/index.ts): the SVG
+ * resource scoper install (design 05 §4.2) plus the two runtime guards a
+ * refactor could silently drop — the Escape guard deferring to the official
+ * ui-primitives modalSelector, and the drawer lock re-applying on the
+ * structural convergence signal. The desktop module-face test is
  * svg-resource-scope.test.ts, so the entry-order lock below is mobile-only.
  *
  * The entry cannot be imported by a plain `node test/…` run (module-scope DOM
@@ -58,4 +61,36 @@ test('the scoper stays one implementation, imported from the client-core face', 
     !CODE.includes('data-chamber-svg-scope'),
     'a local scoper implementation in the entry would duplicate the renderer module',
   )
+})
+
+test('the Escape guard yields to the official modalSelector (dialogs AND menus)', () => {
+  // Official ui-primitives modalSelector =
+  // '[role="dialog"][aria-modal="true"], [role="menu"]': a MENU is a
+  // foreground keyboard owner too (it closes itself on Escape), so the drawer
+  // must not double-close underneath an open menu either.
+  assert.ok(
+    CODE.includes(':is([role="dialog"][aria-modal="true"], [role="menu"])'),
+    'the guard must query the official modalSelector shape',
+  )
+  assert.ok(
+    !/querySelector\('\[role="dialog"\]\[aria-modal="true"\]'\)/.test(CODE),
+    'the dialog-only form must be gone (menus own Escape too)',
+  )
+})
+
+test('the drawer lock re-applies on the structural convergence signal', () => {
+  // A replaced column or [data-conversation-scroll] box never saw the previous
+  // lock pass: while the drawer is open the lock must re-apply on the ONE
+  // structural consumer (the stamping observer), never a second body observer.
+  assert.ok(CODE.includes('structuralListeners.add(onStructural)'),
+    'the lock must subscribe to the structural fan-out')
+  assert.ok(CODE.includes('if (state.locked || lastLocked) publish(state.locked, state.panelShown)'),
+    'a structural replacement while locked must force an unconditional re-apply')
+  assert.ok(CODE.includes('structuralListeners.delete(onStructural)'),
+    'the lock subscription must be released with the effect')
+  const mutationsAt = CODE.indexOf('const onMutations')
+  const restampAt = CODE.indexOf('stamp()', mutationsAt)
+  const fanoutAt = CODE.indexOf('for (const listener of structuralListeners) listener()', mutationsAt)
+  assert.ok(mutationsAt !== -1 && restampAt !== -1 && fanoutAt !== -1 && fanoutAt > restampAt,
+    'the stamping observer must fan out AFTER the re-stamp')
 })

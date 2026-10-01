@@ -14,7 +14,7 @@ import { runTestManifest } from '../../../scripts/lib/test-manifest.mjs'
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
 const GROUPS = {
-  // artifacts: committed build outputs and their marker guards.
+  // artifacts: build-time outputs and their marker guards (lib/ is gitignored).
   // The mobile client bundle is seeded verbatim by the gateway, so a source edit
   // without a rebuild would otherwise ship the previous bundle silently; the
   // scoper install marker guard fails on exactly that (design 05 §4.2).
@@ -26,6 +26,8 @@ const GROUPS = {
     'test/behavior/composer.test.ts',
     'test/behavior/composer-guard.test.ts',
     'test/behavior/drawer-taps.test.ts',
+    // drawer background accessibility lock (inert on the covered columns)
+    'test/behavior/drawer-a11y.test.ts',
     'test/behavior/settings-sheet.test.ts',
   ],
   // state: the single presentation read (presented id + concrete Session accessor).
@@ -41,6 +43,10 @@ const GROUPS = {
     'test/dom/session-stall.test.ts',
     'test/dom/official-hover-card.test.ts',
     'test/dom/entry-scope-wiring.test.ts',
+    // viewport-token surgery + theme-color lifecycle (injected document face)
+    'test/dom/viewport-assets.test.ts',
+    // entry asset tier-sync wiring (viewport tokens + theme-color, FIX-08)
+    'test/dom/entry-viewport-tier.test.ts',
   ],
 }
 

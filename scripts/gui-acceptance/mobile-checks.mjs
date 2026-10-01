@@ -2,8 +2,9 @@
  * Pure judgement layer of the CDP mobile walkthrough.
  *
  * 与 `checks.mjs` 同一套纪律：这里没有 CDP、没有 DOM、没有 fs —— 只有
- * 「把页面测出来的事实判成 PASS / FAIL / INFO」的纯函数与那两条**页面内探测
- * 表达式**。于是判定逻辑可以用合成事实做负例测试（mobile-checks.test.mjs），
+ * 「把页面测出来的事实判成 PASS / FAIL / INFO」的纯函数与那三条**页面内探测
+ * 表达式**（设备事实 / 会话头几何 / M-9 覆盖层只读探查）。于是判定逻辑可以用
+ * 合成事实做负例测试（mobile-checks.test.mjs），
  * 而驱动层（mobile-walkthrough.mjs）只负责连 CDP、装模拟、测量、落盘。
  *
  * 设备模拟的实证结论（Electron 41 / Chromium 本机实测；这三条是**测量
@@ -60,6 +61,10 @@ export function deviceEmulationSteps(device = MOBILE_DEVICE) {
       params: {
         width: device.width,
         height: device.height,
+        // screen.* 与窗口/视口一起被这个 override 决定：不传时 Chromium 用宿主的
+        // screen 尺寸，判定层会把「screen 没落地」误读成模拟器偏差。
+        screenWidth: device.width,
+        screenHeight: device.height,
         deviceScaleFactor: device.deviceScaleFactor,
         mobile: device.mobile,
       },
@@ -90,7 +95,10 @@ export const DEVICE_FACTS_EXPRESSION = `(() => {
     visualViewport: window.visualViewport === undefined ? null
       : { width: Math.round(window.visualViewport.width), height: Math.round(window.visualViewport.height), scale: window.visualViewport.scale },
     dpr: window.devicePixelRatio,
+    // screen.* 是**落地信号**（与 dpr/maxTouchPoints/ontouchstart 同级）：判定层要求
+    // 它等于请求设备，setDeviceMetricsOverride 传了 screenWidth/screenHeight 才会成立。
     screenWidth: window.screen === undefined ? null : window.screen.width,
+    screenHeight: window.screen === undefined ? null : window.screen.height,
     maxTouchPoints: navigator.maxTouchPoints ?? 0,
     ontouchstart: 'ontouchstart' in window,
     pointerCoarse: mq('(pointer: coarse)'),
@@ -129,12 +137,21 @@ export const DEVICE_FACTS_EXPRESSION = `(() => {
  *
  * 只测**带直接文本节点**的元素（容器的固定高不能当换行证据：44px 的行里放
  * 16px 文字，高度启发式会假阳），`white-space: nowrap` 的元素按定义不换行。
+ *
+ * `paddingTop/Bottom` 一并采集：带纵向内边距的单行叶子（chip / 徽标）会被 padding
+ * 撑到 `行高 ×1.5` 之上，按 box 高度判就是假红——所以纵向 padding 非零的叶子不参与
+ * 高度启发式（判定层里，它们的真实换行只由精确的行盒数抓）。
  */
 export const HEADER_FACTS_EXPRESSION = `(() => {
-  const HEADER = '[data-slot="conversation.session.header"] > header'
+  const OUTLET = '[data-slot="conversation.session.header"]'
   const SEAT_PREFIX = '[data-slot^="conversation.session.header"]'
-  const header = document.querySelector(HEADER)
-  const outlet = document.querySelector('[data-slot="conversation.session.header"]')
+  // 锚点形状（design 17 §18.4.3）：outlet 是槽出口包装，\`<header>\` 是它的**祖先**
+  // （上游 ConversationHeader 渲染 header，会话头槽挂在它的 children 里）——所以
+  // \`outlet.closest('header')\` 与上游形状同义。旧式 \`outlet > header\` 假设 header 是
+  // outlet 的直接子节点，已列入锚点门的 FORBIDDEN_PATTERNS：它匹配不到真实 DOM 时
+  // hasHeader=false，判定层会硬失败（"锚点形状失效"），不再静默 INFO。
+  const outlet = document.querySelector(OUTLET)
+  const header = outlet === null ? null : outlet.closest('header')
   const rect = el => { const r = el.getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height), top: Math.round(r.top), left: Math.round(r.left) } }
   const visible = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
   const lineBoxes = el => {
@@ -168,6 +185,10 @@ export const HEADER_FACTS_EXPRESSION = `(() => {
       lineHeightSource: Number.isFinite(parsed) ? 'computed' : 'normal×' + ${NORMAL_LINE_HEIGHT_RATIO},
       whiteSpace: style.whiteSpace,
       fontSize: Math.round(fontSize * 100) / 100,
+      // 纵向 padding 会撑起 border-box 高度：高度启发式必须减掉它，否则一个带
+      // 上下内边距的单行叶子（chip / 徽标）会被读成「换行」——假红。
+      paddingTop: Math.round((Number.parseFloat(style.paddingTop) || 0) * 100) / 100,
+      paddingBottom: Math.round((Number.parseFloat(style.paddingBottom) || 0) * 100) / 100,
     }
   }
   const hasOwnText = el => [...el.childNodes].some(node => node.nodeType === 3 && node.textContent.trim() !== '')
@@ -175,16 +196,17 @@ export const HEADER_FACTS_EXPRESSION = `(() => {
   const headerScope = header ?? outlet
   // 候选 = 会话头子树里**直接带文本节点**的元素（含 lineage 自身：count 文本就在
   // 座位元素上，只查后代会漏掉它——首版踩过）。
-  const textElements = headerScope === null ? [] : [headerScope, ...headerScope.querySelectorAll('*')]
-    .filter(hasOwnText)
-    .slice(0, 80)
+  const allTextElements = headerScope === null ? [] : [headerScope, ...headerScope.querySelectorAll('*')].filter(hasOwnText)
+  // 80 是证据体积上限，不是"没超"的证明：超限时 textsTruncated=true，判定层把
+  // 「共 N 个、只扫了前 80 个」写进 evidence（截断必须可见）。
+  const textElements = allTextElements.slice(0, 80)
   const buttons = outlet === null ? [] : [...outlet.querySelectorAll('button')]
   const tabs = headerScope === null ? [] : [...headerScope.querySelectorAll('[role="tablist"], [role="tab"]')]
   return {
     hasOutlet: outlet !== null,
     hasHeader: header !== null,
     headerBox: header === null ? null : rect(header),
-    firstRowBox: header === null || header.firstElementChild === null ? null : rect(header.firstElementChild),
+    firstRowBox: outlet === null || outlet.firstElementChild === null ? null : rect(outlet.firstElementChild),
     headerChildren: header === null ? [] : [...header.children].map(child => ({ tag: child.tagName.toLowerCase(), box: rect(child) })),
     tabs: tabs.map(el => ({ role: el.getAttribute('role'), box: rect(el) })),
     buttons: buttons.map(el => ({
@@ -194,6 +216,8 @@ export const HEADER_FACTS_EXPRESSION = `(() => {
     })),
     lineage: lineage === null ? null : { box: rect(lineage), texts: [lineage, ...lineage.querySelectorAll('*')].filter(hasOwnText).map(textFacts) },
     texts: textElements.map(textFacts),
+    textsTruncated: allTextElements.length > textElements.length,
+    textsTotal: allTextElements.length,
     // 会话头是否真的在会话页（无会话/首启时 header 不存在 ⇒ INFO 而非 FAIL）
     sessionHeaderPresent: outlet !== null,
     rootPhase: document.querySelector('[data-phase]') === null ? null : document.querySelector('[data-phase]').getAttribute('data-phase'),
@@ -210,15 +234,46 @@ export const HEADER_FACTS_EXPRESSION = `(() => {
  *   伪造 pointer:coarse」指的正是这条。
  */
 export function deviceEmulationVerdict(facts, device = MOBILE_DEVICE) {
+  const problems = []
+  // 媒体特性仍是**硬失败**的第一层：不成立时后续几何断言测的是桌面布局。
   const mediaOk = facts.pointerCoarse === true && facts.hoverNone === true
+  if (!mediaOk) problems.push('pointer:coarse / hover:none 未同时成立（此后几何断言测的是桌面布局）')
+  // 落地信号：只有 setTouchEmulationEnabled 真正生效，命中盒/触控面才成立。
+  if (!(typeof facts.maxTouchPoints === 'number' && facts.maxTouchPoints > 0)) {
+    problems.push(`maxTouchPoints=${facts.maxTouchPoints}（触控落地信号缺失）`)
+  }
+  if (facts.ontouchstart !== true) problems.push('ontouchstart 不存在（触摸事件面未落地）')
+  if (facts.dpr !== device.deviceScaleFactor) {
+    problems.push(`devicePixelRatio=${facts.dpr} != 请求 deviceScaleFactor=${device.deviceScaleFactor}`)
+  }
+  // screen.* 与 dpr/maxTouchPoints/ontouchstart 同级的落地断言：deviceEmulationSteps
+  // 把 screenWidth/screenHeight 一并交给 setDeviceMetricsOverride，因此不符要么是
+  // 模拟没生效、要么是步骤里漏传——两种都必须红，不能只当「模拟器偏差」标注。
+  if (facts.screenWidth !== device.width || facts.screenHeight !== device.height) {
+    problems.push(`screen=${facts.screenWidth}×${facts.screenHeight} != 请求设备 ${device.width}×${device.height}（setDeviceMetricsOverride 的 screenWidth/screenHeight 未落地或步骤漏传）`)
+  }
+  // 档位蕴含（插件 composer.ts 的查询就是这两条）：请求宽落在哪一档，对应档位
+  // 媒体查询就必须为真；否则插件样式会按另一档渲染，走查结论没有意义。
+  if (device.width <= 1023 && facts.touchTier !== true) {
+    problems.push(`请求宽 ${device.width} <= 1023 但 touchTier(≤1023&coarse)=${facts.touchTier} 未成立`)
+  }
+  if (device.width <= 768 && facts.phoneTier !== true) {
+    problems.push(`请求宽 ${device.width} <= 768 但 phoneTier(≤768&coarse)=${facts.phoneTier} 未成立`)
+  }
+  // screen.* 是落地信号（与 dpr/maxTouchPoints/ontouchstart 同级参与 problems）。
+  const screenNote = facts.screenWidth === device.width && facts.screenHeight === device.height
+    ? `screen=${facts.screenWidth}×${facts.screenHeight}（与请求设备一致）`
+    : `screen=${facts.screenWidth}×${facts.screenHeight} 与请求设备 ${device.width}×${device.height} 不符`
   const evidence = [
     `请求 ${device.width}×${device.height} @${device.deviceScaleFactor}x mobile=${device.mobile} maxTouchPoints=${device.maxTouchPoints}`,
     `实测 innerWidth=${facts.innerWidth} clientWidth=${facts.clientWidth} dpr=${facts.dpr} maxTouchPoints=${facts.maxTouchPoints} ontouchstart=${facts.ontouchstart}`,
     `媒体特性 pointer:coarse=${facts.pointerCoarse} pointer:fine=${facts.pointerFine} hover:none=${facts.hoverNone} any-pointer:coarse=${facts.anyPointerCoarse}`,
-    `档位 touchTier(≤1023&coarse)=${facts.touchTier} phoneTier(≤768&coarse)=${facts.phoneTier}`,
+    `档位 touchTier(≤1023&coarse)=${facts.touchTier} phoneTier(≤768&coarse)=${facts.phoneTier}（请求宽蕴含：touchTier=${device.width <= 1023 ? '必须' : '不要求'} phoneTier=${device.width <= 768 ? '必须' : '不要求'}）`,
+    screenNote,
     mediaOk ? '' : 'CDP 限制：pointer/hover 媒体特性只能靠 Emulation.setTouchEmulationEnabled 翻转（setEmulatedMedia 的 pointer/hover 特性被忽略，实测）',
+    problems.length > 0 ? '失败项：' + problems.join('；') : '',
   ].filter(Boolean).join('\n')
-  return { ok: mediaOk, evidence }
+  return { ok: problems.length === 0, evidence }
 }
 
 /**
@@ -235,33 +290,63 @@ export function deviceEmulationVerdict(facts, device = MOBILE_DEVICE) {
  */
 export function overflowVerdict(facts, device = MOBILE_DEVICE) {
   if (facts.scrollWidth === null || facts.clientWidth === undefined) return judge(null, '拿不到滚动/视口宽度（页面未挂载？）')
-  const deviceLimit = facts.clientWidth + EPSILON
   const taskLimit = facts.innerWidth + EPSILON
   const shrinkToFit = facts.innerWidth > facts.clientWidth + EPSILON
-  const ok = facts.scrollWidth <= deviceLimit && facts.scrollWidth <= taskLimit
+  const scale = facts.visualViewport === null || facts.visualViewport === undefined ? null : facts.visualViewport.scale
+  // 判定基准必须是**设备宽**：clientWidth 只有在等于请求设备宽（±1px）时才可信。
+  // 缩放（visualViewport.scale < 1）会把布局视口/ICB 语义一起改掉，此时
+  // scrollWidth 与 clientWidth 不再是同一坐标系下的量——判 FAIL（基准不可信），
+  // 而不是把不可解释的数字当通过。
+  const untrusted = []
+  if (!(facts.clientWidth <= device.width + EPSILON)) {
+    untrusted.push(`clientWidth=${facts.clientWidth} > 请求设备宽 ${device.width}+1：ICB 不是模拟设备宽，设备宽基准不可信`)
+  }
+  if (typeof scale === 'number' && scale < 1) {
+    untrusted.push(`visualViewport.scale=${scale} < 1：页面处于缩放态，scrollWidth/clientWidth 不在同一坐标系，判定基准不可信`)
+  }
   const evidence = [
-    `scrollWidth=${facts.scrollWidth} clientWidth(设备宽基准)=${facts.clientWidth} innerWidth=${facts.innerWidth} visualViewport=${JSON.stringify(facts.visualViewport)}`,
-    `请求设备宽=${device.width}；task 断言 scrollWidth<=innerWidth+1 = ${facts.scrollWidth <= taskLimit}`,
+    `scrollWidth=${facts.scrollWidth} clientWidth(设备宽基准)=${facts.clientWidth} innerWidth=${facts.innerWidth} 请求设备宽=${device.width} visualViewport=${JSON.stringify(facts.visualViewport)}`,
+    `task 断言 scrollWidth<=innerWidth+1 = ${facts.scrollWidth <= taskLimit}`,
     shrinkToFit
       ? `收缩适配生效：innerWidth(${facts.innerWidth}) > clientWidth(${facts.clientWidth}) —— 此时 task 那条断言恒真、不可作为溢出证据；判定以设备宽为准`
       : '无收缩适配：innerWidth == clientWidth，task 断言与设备宽基准等价',
-  ].join('\n')
-  return { ok, evidence }
+  ]
+  if (untrusted.length > 0) {
+    return judge(false, [...evidence, '判定 FAIL（基准不可信，不是"内容没溢出"）：' + untrusted.join('；')].join('\n'))
+  }
+  const deviceLimit = facts.clientWidth + EPSILON
+  const ok = facts.scrollWidth <= deviceLimit && facts.scrollWidth <= taskLimit
+  return { ok, evidence: evidence.join('\n') }
 }
 
 /**
- * 会话头首行高度判定（≤ 48px）。header 不存在 ⇒ INFO（无会话可测）。
+ * 会话头锚点形状失效的硬失败文案（outlet 在、但找不到其祖先 header）。
+ * 这不是"无会话"：无会话时 outlet 也不存在（INFO）。
+ */
+function headerShapeBrokenEvidence() {
+  return '会话头锚点形状失效（硬失败）：outlet [data-slot="conversation.session.header"] 存在，但 outlet.closest("header") 为空——'
+    + '上游把 header 从 outlet 祖先链上移走/换容器了，按 design 17 §18.4.3 重锚后才能继续几何判定（首版直接子选择器正是这样静默 INFO 的）'
+}
+
+/**
+ * 会话头首行高度判定（≤ 48px）。无会话（outlet 也不存在）⇒ INFO；锚点形状失效 ⇒ FAIL；
+ * 会话头隐藏/零尺寸（首行盒宽或高 = 0）⇒ INFO——0 高恒 ≤ 上限，若判 PASS 就是
+ * 「没测到」冒充「没超标」。INFO 在 `--require-run` 下会被走查层改判 FAIL。
  */
 export function headerFirstRowVerdict(facts, maxPx = HEADER_FIRST_ROW_MAX_PX) {
+  if (facts.hasOutlet === true && facts.hasHeader !== true) return judge(false, headerShapeBrokenEvidence())
   if (facts.hasHeader !== true) {
-    return judge(null, '本次页面没有 [data-slot="conversation.session.header"] > header（无会话/首启/非会话页）——首行高度未测')
+    return judge(null, '本次页面没有 [data-slot="conversation.session.header"]（无会话/首启/非会话页）——首行高度未测')
   }
   const row = facts.firstRowBox ?? facts.headerBox
   if (row === null) return judge(null, '会话头存在但拿不到首行几何')
+  if (!(row.w > 0 && row.h > 0)) {
+    return judge(null, `会话头首行隐藏/零尺寸（${row.w}×${row.h}）——高度未测（不是通过；--require-run 下改判 FAIL）`)
+  }
   const evidence = [
-    `首行=${facts.firstRowBox === null ? '（header 无元素子节点，退回 header 自身）' : 'header.firstElementChild'} 高 ${row.h}px（上限 ${maxPx}）`,
-    `header 高 ${facts.headerBox === null ? '?' : facts.headerBox.h}px；子元素=${facts.headerChildren.map(child => `${child.tag}(${child.box.h})`).join(' ')}`,
-    `tab 条=${facts.tabs.map(tab => `${tab.role}(${tab.box.w}×${tab.box.h})`).join(' ') || '（无）'}`,
+    `首行=${facts.firstRowBox === null ? '（outlet 无元素子节点，退回 header 自身）' : 'outlet.firstElementChild'} 高 ${row.h}px（上限 ${maxPx}）`,
+    `header 高 ${facts.headerBox === null ? '?' : facts.headerBox.h}px；子元素=${(facts.headerChildren ?? []).map(child => `${child.tag}(${child.box.h})`).join(' ')}`,
+    `tab 条=${(facts.tabs ?? []).map(tab => `${tab.role}(${tab.box.w}×${tab.box.h})`).join(' ') || '（无）'}`,
   ].join('\n')
   return { ok: row.h <= maxPx, evidence }
 }
@@ -271,49 +356,194 @@ export function headerFirstRowVerdict(facts, maxPx = HEADER_FIRST_ROW_MAX_PX) {
  *
  * 两条信号：
  *   - **行盒数 > 1**（精确）：`Range.getClientRects()` 对每个行盒返回一个 rect；
- *   - **高度 > 行高 ×1.5**（启发式）：只对「文本叶子」生效——无元素
+ *   - **高 > 行高 ×1.5**（启发式）：只对「文本叶子」生效——无元素
  *     子节点、非交互控件（button/a/input…）、且 `display` 不是 flex/grid/contents。
  *     不设这个门槛，44px 高的图标按钮（`line-height: normal`）会全部假阳
- *     （本机实测：三个 44×44 的 header 按钮会被判成「换行」）。
+ *     （本机实测：三个 44×44 的 header 按钮会被判成「换行」）。纵向 padding 非零的
+ *     叶子**不参与**高度启发式：chip / 徽标那类单行叶子靠上下内边距撑高，高度单独
+ *     说明不了换行——它们的真实换行由精确的行盒数抓。
  *
  * `white-space: nowrap` 的元素按定义不换行（它的溢出是裁切问题，另论）。
  *
- * @returns {{ok: boolean|null, evidence: string}} INFO = 本次会话头里没有可测文本。
+ * @returns {{ok: boolean|null, evidence: string}} INFO = 本次会话头里没有**可见**文本
+ *   （没有带文本元素的，或文本元素全部隐藏/零行盒），或带文本元素超过 80 个证据上限
+ *   而**扫描被截断**（只扫了前 80 个，不能断言整页没有换行）——「测不到」绝不算「没换行」。
  */
 export function headerWrapVerdict(facts) {
+  if (facts.hasOutlet === true && facts.hasHeader !== true) return judge(false, headerShapeBrokenEvidence())
   if (facts.hasHeader !== true && facts.hasOutlet !== true) return judge(null, '本次页面没有会话头（无会话/首启）——换行未测')
   const candidates = facts.texts ?? []
   if (candidates.length === 0) return judge(null, '会话头内没有带直接文本节点的元素——换行未测')
+  // 有文本元素 ≠ 可测：隐藏/零尺寸元素的 lineBoxes=0，旧判定从它得 wrapped=[] ⇒ PASS，
+  // 把「一个行盒都没有」读成「没有换行」。至少要有一个可见行盒才允许下结论。
+  const measurable = candidates.filter(item => item.lineBoxes > 0)
+  if (measurable.length === 0) {
+    return judge(null, `会话头内有 ${candidates.length} 个带文本元素，但没有任何可见行盒（隐藏/零尺寸）——换行未测（不是通过；--require-run 下改判 FAIL）`)
+  }
+  // 纵向 padding 非零的叶子不参与高度启发式：`getBoundingClientRect().height` 含
+  // 上下内边距，带内边距的单行叶子会被垫过 `行高 ×1.5`——高度单独说明不了换行，
+  // 只有精确的行盒数算数。padding 字段缺失按 0 处理（老事实形状仍按原判据判）。
+  const verticalPadding = item => (item.paddingTop ?? 0) + (item.paddingBottom ?? 0)
   const heuristicApplies = item => item.lineBoxes === 1 && item.interactive !== true && item.elementChildren === 0
-    && !['flex', 'grid', 'contents', 'inline-flex'].includes(item.display)
+    && !['flex', 'grid', 'contents', 'inline-flex'].includes(item.display) && verticalPadding(item) === 0
   const wrapped = candidates.filter(item => item.whiteSpace !== 'nowrap'
     && (item.lineBoxes > 1 || (heuristicApplies(item) && item.height > item.lineHeight * 1.5)))
   const heuristicHits = wrapped.filter(item => item.lineBoxes === 1).length
   const lineageNote = facts.lineage === null
     ? 'lineage 座位不存在'
     : `lineage count=${JSON.stringify(facts.lineage.texts.map(t => t.text))} 行盒=${facts.lineage.texts.map(t => t.lineBoxes).join(',') || '（座位自身无直接文本）'}`
+  const describeHit = item => item.lineBoxes > 1
+    ? `行盒：${JSON.stringify(item.text)}（${item.seat ?? '?'} ${item.tag} 行盒=${item.lineBoxes} 高=${item.height} 行高=${item.lineHeight}(${item.lineHeightSource})）`
+    : `高度启发式：${JSON.stringify(item.text)}（${item.seat ?? '?'} ${item.tag} 高=${item.height} 行高=${item.lineHeight}(${item.lineHeightSource}) 纵向 padding=0）`
+  // 被 padding 排除在启发式之外的叶子数：报告要能解释「为什么这个高叶子没被判」。
+  const paddedExcluded = candidates.filter(item => item.lineBoxes === 1 && verticalPadding(item) !== 0).length
   const evidence = [
-    `扫描 ${candidates.length} 个带文本元素；判为换行 ${wrapped.length} 个（其中高度启发式 ${heuristicHits} 个）`,
+    `扫描 ${candidates.length} 个带文本元素；判为换行 ${wrapped.length} 个（其中高度启发式 ${heuristicHits} 个）`
+      + (paddedExcluded === 0 ? '' : `；纵向 padding 非零、只按行盒数判的叶子 ${paddedExcluded} 个`)
+      + (facts.textsTruncated === true ? `；[截断] 会话头共 ${facts.textsTotal ?? '?'} 个带文本元素，只扫描了前 ${candidates.length} 个（80 是证据上限）` : ''),
     lineageNote,
-    ...wrapped.slice(0, 6).map(item => `${item.lineBoxes > 1 ? '行盒' : '高度启发式'}：${JSON.stringify(item.text)}（${item.seat ?? '?'} ${item.tag} 行盒=${item.lineBoxes} 高=${item.height} 行高=${item.lineHeight}(${item.lineHeightSource})）`),
+    ...wrapped.slice(0, 6).map(describeHit),
   ].join('\n')
-  return { ok: wrapped.length === 0, evidence }
+  if (wrapped.length > 0) return { ok: false, evidence }
+  // 扫描截断（80 是证据上限）时「前 80 个没有换行」不是「整页没有换行」：未检查的
+  // 元素里可能有换行，只能 INFO（--require-run 下由走查层 applyRequireRun 改判 FAIL）。
+  if (facts.textsTruncated === true) {
+    return judge(null, `${evidence}\n扫描截断：只检查了前 ${candidates.length} 个带文本元素（共 ${facts.textsTotal ?? '?'} 个，80 是证据上限）——未检查的元素未判定，不能据此判「没有换行」`)
+  }
+  return { ok: true, evidence }
 }
 
 /**
- * 命中盒判定：会话头里的每个可见 button 两轴都 ≥ 44px。没有 button ⇒ INFO。
+ * 命中盒判定：会话头里的每个可见**控件**两轴都 ≥ 44px。控件 = button ∪ tab
+ * （`role="tab"` 的 44px 底线与 button 同一条；tab 盒已由 HEADER_FACTS 采集）。
+ * 没有可见控件 ⇒ INFO。同一个元素同时被两条查询命中时按几何去重
+ * （button[role=tab] 会同时出现在 buttons 与 tabs 里），去重数写进证据。
  */
 export function hitBoxVerdict(facts, minPx = HIT_BOX_MIN_PX) {
-  const buttons = (facts.buttons ?? []).filter(button => button.visible)
   if (facts.hasOutlet !== true) return judge(null, '本次页面没有会话头（无会话/首启）——命中盒未测')
-  if (buttons.length === 0) return judge(null, '会话头里没有可见 button ——命中盒未测')
-  const small = buttons.filter(button => button.box.w < minPx || button.box.h < minPx)
+  const controls = []
+  const seenGeometry = new Set()
+  let deduplicated = 0
+  const add = (kind, label, box) => {
+    const key = box.w + "×" + box.h + "@" + box.top + "," + box.left
+    if (seenGeometry.has(key)) { deduplicated += 1; return }
+    seenGeometry.add(key)
+    controls.push({ kind, label, box })
+  }
+  let hidden = 0
+  for (const button of facts.buttons ?? []) {
+    if (button.visible !== true) { hidden += 1; continue }
+    add('button', button.label ?? '', button.box)
+  }
+  for (const tab of facts.tabs ?? []) {
+    // tab 盒没有 visible 字段：0 尺寸即不可见（display:none / 未渲染）。
+    if (!(tab.box.w > 0 && tab.box.h > 0)) { hidden += 1; continue }
+    add("tab", "role=" + tab.role, tab.box)
+  }
+  if (controls.length === 0) return judge(null, '会话头里没有可见 button/tab（隐藏/零尺寸 ' + hidden + ' 个）——命中盒未测')
+  const small = controls.filter(control => control.box.w < minPx || control.box.h < minPx)
+  const describe = control => control.box.w + "×" + control.box.h + (control.label === "" ? "" : "(" + control.label + ")")
   const evidence = [
-    `可见 button ${buttons.length} 个，下限 ${minPx}px`,
-    `尺寸=${buttons.map(button => `${button.box.w}×${button.box.h}${button.label === '' ? '' : `(${button.label})`}`).join(' ')}`,
-    small.length === 0 ? '' : `不足：${small.map(button => `${button.box.w}×${button.box.h}(${button.label || '无标签'})`).join(' ')}`,
+    "可见控件 " + controls.length + " 个（button+tab 去重后" + (deduplicated > 0 ? "，去重 " + deduplicated + " 个" : "") + "；隐藏/零尺寸 " + hidden + " 个），下限 " + minPx + "px",
+    "尺寸=" + controls.map(control => control.kind + ":" + describe(control)).join(" "),
+    small.length === 0 ? "" : "不足：" + small.map(control => control.kind + ":" + describe(control)).join(" "),
   ].filter(Boolean).join('\n')
   return { ok: small.length === 0, evidence }
+}
+
+/**
+ * 新增 M-9 只读探查（design 17 §18.6 的覆盖层/遮挡观察）：枚举 position:fixed|absolute
+ * 且计算 z-index>=40 的**可见**元素，报告 rect 超出**布局视口**的项。不点击、不改 DOM。
+ *
+ * 判定（本文件定义）：**INFO** = 一个覆盖层都没有（未命中，不是通过）；**FAIL** = 某个
+ * `position:fixed` 且无 transform/translate 位移的覆盖层超出**布局视口**——fixed 层没有位移
+ * 却离开视口就是真实布局溢出。有位移的超出项按"故意移出视口"（抽屉/滑入层）解释并只作证据。
+ * **M-9 不走 applyRequireRun**：这个探针只要跑到就完成了它的工作，「页面没有覆盖层」
+ * 是合法结论（INFO），不是「该腿没执行」。
+ * 基准刻意用布局视口而非 visualViewport：Safari 地址栏/IME 只收缩 visual 视口，用它会把
+ * 合法的全屏 fixed 层（右栏面板、抽屉遮罩）误报成溢出；visual 尺寸仍采集并在证据里对照。
+ * 上限 40 个命中即截断（scanCapped 写进证据，避免遍历整页元素把证据撑爆）；
+ * **截断时「没发现越界项」只能记 INFO**——第 41 个以后没检查过，不能冒充「全页没有越界项」。
+ */
+export const OVERLAY_FACTS_EXPRESSION = `(() => {
+  const vv = window.visualViewport === undefined ? null : window.visualViewport
+  // FAIL basis = the LAYOUT viewport. A fixed/absolute element is laid out
+  // against it; Safari's bars and the IME shrink only the VISUAL viewport, so
+  // judging against the visual size reported every legitimate full-screen fixed
+  // layer (rightbar panel, drawer backdrop) as "overflowing". The visual size
+  // is still collected and reported as evidence.
+  const limitW = Math.round(document.documentElement.clientWidth)
+  const limitH = Math.round(document.documentElement.clientHeight)
+  const visualW = vv === null ? null : Math.round(vv.width)
+  const visualH = vv === null ? null : Math.round(vv.height)
+  const overlays = []
+  let capped = false
+  for (const el of document.querySelectorAll('*')) {
+    const style = getComputedStyle(el)
+    if (style.position !== 'fixed' && style.position !== 'absolute') continue
+    const z = Number.parseInt(style.zIndex, 10)
+    if (!Number.isFinite(z) || z < 40) continue
+    const r = el.getBoundingClientRect()
+    if (r.width <= 0 || r.height <= 0) continue
+    if (style.visibility === 'hidden' || style.display === 'none'
+      || (style.opacity !== '' && Number(style.opacity) === 0)) continue
+    const rect = { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }
+    overlays.push({
+      tag: el.tagName.toLowerCase(),
+      role: el.getAttribute('role'),
+      slot: el.getAttribute('data-slot'),
+      position: style.position,
+      zIndex: z,
+      // 位移属性（transform / 独立的 translate 属性）解释「故意移出视口」的覆盖层。
+      displaced: style.transform !== 'none' || (typeof style.translate === 'string' && style.translate !== 'none'),
+      rect,
+      overflows: rect.x < -1 || rect.y < -1 || rect.x + rect.w > limitW + 1 || rect.y + rect.h > limitH + 1,
+    })
+    if (overlays.length >= 40) { capped = true; break }
+  }
+  return { limitW, limitH, visualW, visualH, overlays, scanCapped: capped }
+})()`
+
+/**
+ * {@link OVERLAY_FACTS_EXPRESSION} 的判定（见其头注）。
+ * @param {object} facts
+ * @returns {{ok: boolean|null, evidence: string}}
+ */
+export function overlayProbeVerdict(facts) {
+  if (typeof facts.limitW !== 'number' || typeof facts.limitH !== 'number') {
+    return judge(null, '拿不到视口尺寸（页面未挂载？）——覆盖层探查未测')
+  }
+  const overlays = facts.overlays ?? []
+  const visualNote = typeof facts.visualW === 'number' && typeof facts.visualH === 'number'
+    && (facts.visualW !== facts.limitW || facts.visualH !== facts.limitH)
+    ? `visualViewport ${facts.visualW}×${facts.visualH} 与布局视口不一致（地址栏/键盘/缩放）——判定以布局视口为准，visual 只作证据`
+    : ''
+  const header = `视口 ${facts.limitW}×${facts.limitH}（布局视口基准）${visualNote === '' ? '' : '；' + visualNote}；position:fixed|absolute 且 z-index>=40 的可见元素 ${overlays.length} 个（上限 40${facts.scanCapped === true ? "，已截断" : ""}）`
+  if (overlays.length === 0) return judge(null, header + '——只读探查未命中（没有覆盖层），不是“通过”')
+  const overflowing = overlays.filter(overlay => overlay.overflows)
+  const unexplained = overflowing.filter(overlay => overlay.position === "fixed" && overlay.displaced !== true)
+  const describe = overlay => overlay.tag + (overlay.slot === null ? "" : "[data-slot=" + overlay.slot + "]")
+    + (overlay.role === null ? "" : "[role=" + overlay.role + "]")
+    + " z=" + overlay.zIndex + " " + overlay.position
+    + " rect=(" + overlay.rect.x + "," + overlay.rect.y + "," + overlay.rect.w + "×" + overlay.rect.h + ")"
+  const capped = facts.scanCapped === true
+  const evidence = [
+    header,
+    overflowing.length === 0
+      ? (capped
+          ? '已扫描的前 ' + overlays.length + ' 个 rect 都在视口内，但扫描在上限 40 处截断：未扫描到的元素未检查，不能据此判「全页没有越界项」'
+          : '全部覆盖层 rect 均在视口内')
+      : '超出视口 ' + overflowing.length + ' 个：' + overflowing.slice(0, 8).map(describe).join(' | '),
+    '已解释（有 transform/translate 位移）：' + overflowing.filter(overlay => overlay.displaced === true).length + ' 个；未解释（fixed 且无位移）：' + unexplained.length + ' 个',
+    unexplained.length === 0 ? '' : '判定 FAIL：fixed 覆盖层既超出视口、又没有位移属性——fixed 层离开视口只能靠位移解释，否则就是真实布局溢出',
+  ].filter(Boolean).join('\n')
+  // 截断不得冒充通过：上限 40 之前的元素没问题，不等于第 41 个以后没问题。已经扫到的
+  // 真溢出仍按 FAIL 报（那是确凿事实）；只有「没发现问题」这一侧要退成 INFO。
+  if (unexplained.length > 0) return { ok: false, evidence }
+  if (capped) {
+    return judge(null, evidence + '\n判定 INFO（扫描截断）：命中数到达上限 40，未命中元素未检查——「已扫描的部分没有越界项」不是「全页没有越界项」')
+  }
+  return { ok: true, evidence }
 }
 
 /**
@@ -354,6 +584,9 @@ export function pluginActivationVerdict(facts) {
  * (`ok === true` / `ok === false`) is returned untouched, so a pass stays a pass
  * and an existing failure keeps its own evidence.
  *
+ * Not every leg opts in: the M-9 overlay probe is a read-only scan whose completion
+ * IS its execution, so the driver records it with `rec.add`, never through this gate.
+ *
  * @param {{ok: boolean|null, evidence: string}} verdict
  * @param {boolean} requireRun - whether this run demands the leg actually ran.
  * @returns the original verdict, or its FAIL re-labelling.
@@ -389,11 +622,18 @@ export function summarizeWebSocketFrames(frames, { redact = value => value } = {
   const urls = [...new Set(frames.filter(frame => frame.direction === 'created').map(frame => frame.url ?? '(未知)'))]
   const lastSent = [...frames].reverse().find(frame => frame.direction === 'sent')
   const lastReceived = [...frames].reverse().find(frame => frame.direction === 'received')
+  // 截断必须可见：落盘/摘要都是持久层，一个被截断的帧不能只显示前缀而让人
+  // 以为那就是全部（原始长度与 truncated 标记由采集层保留）。
+  const truncationNote = frame => frame === undefined || frame.truncated !== true
+    ? ''
+    : `（已截断：原始 ${frame.payloadLength ?? '?'} 字节，落盘仅前 ${frame.payload === undefined ? '?' : String(frame.payload).length} 字节）`
+  const truncatedCount = frames.filter(frame => frame.truncated === true).length
   const summary = [
     `created=${counts.created} sent=${counts.sent} received=${counts.received} closed=${counts.closed} error=${counts.error}`,
     urls.length === 0 ? '未观察到 WebSocket 连接' : `连接=${urls.map(url => url.replace(/[?#].*$/, '')).join(', ')}`,
-    lastSent === undefined ? '' : `最后一帧上行：opcode=${lastSent.opcode} ${redact(JSON.stringify(lastSent.payload ?? '')).slice(0, 120)}`,
-    lastReceived === undefined ? '' : `最后一帧下行：opcode=${lastReceived.opcode} ${redact(JSON.stringify(lastReceived.payload ?? '')).slice(0, 120)}`,
+    lastSent === undefined ? '' : `最后一帧上行：opcode=${lastSent.opcode} ${redact(JSON.stringify(lastSent.payload ?? '')).slice(0, 120)}${truncationNote(lastSent)}`,
+    lastReceived === undefined ? '' : `最后一帧下行：opcode=${lastReceived.opcode} ${redact(JSON.stringify(lastReceived.payload ?? '')).slice(0, 120)}${truncationNote(lastReceived)}`,
+    truncatedCount === 0 ? '' : `截断帧 ${truncatedCount} 个（payloadLength 是原始长度；落盘只保留脱敏后的前缀——需要更长证据时调大 cap）`,
     counts.created > 0 && counts.sent > 0 && counts.received === 0
       ? '有上行、无下行 —— 与「会话打开停滞」的形态一致（值得人工看完整帧文件）'
       : '',
@@ -424,9 +664,10 @@ export function redactSecrets(text, secrets) {
   // `{"payload":"{\u0022Authorization\u0022:…}"}` rides through untouched.
   out = out.replace(/\\u0022/g, '"')
   // The key names that carry credentials. A prefix is allowed so the real-world
-  // spellings match too: `access_token`, `refreshToken`, `x-api-key`,
-  // `sessionId`, `apiKey`.
-  const key = '[A-Za-z0-9_.-]*(?:authorization|cookie|password|passwd|pwd|secret|credential|token|api[-_]?key|session|jwt|sid)'
+  // spellings match too: `access_token`, `refreshToken`, `x-api-key`, `apiKey`.
+  // `sessionId` / `session_id` / `session-id` (any case) are spelled out: plain
+  // `session` cannot reach them, because nothing in the family ends at the `d`.
+  const key = '[A-Za-z0-9_.-]*(?:authorization|cookie|password|passwd|pwd|secret|credential|token|api[-_]?key|session[-_]?id|session|jwt|sid)'
   return out
     // URL query / fragment: length is irrelevant (a short token is a credential)
     // and an unrelated `&param` must survive.
@@ -437,12 +678,64 @@ export function redactSecrets(text, secrets) {
     // and left the credential itself on disk.
     .replace(new RegExp(`(${key}(?:\\\\?")?\\s*[:=]\\s*)(\\\\?")[^"\\\\]*(\\\\?")`, 'gi'), '$1$2***$3')
     // COOKIE headers: the whole header value is credentials, however many
-    // `a=1; b=2` pairs it has.
-    .replace(/((?:set-)?cookie(?:\\?")?\s*[:=]\s*)(?!\\?")([^\r\n}]*)/gi, '$1***')
+    // `a=1; b=2` pairs it has — but the value is taken as ONE unit and the rest of
+    // the line is handed back untouched, so this rule can neither unbalance a JSON
+    // document (`{"cookie":{"a":1},"next":2}`) nor swallow a following key
+    // (`{"cookie":[1,2],"next":2}`). A quoted value was already taken by the rule
+    // above, hence the `(?!\\?")` skip.
+    .replace(/((?:set-)?cookie(?:\\?")?\s*[:=]\s*)(?!\\?")([^\r\n]*)/gi,
+      (match, prefix, rest) => prefix + maskCookieValue(rest, prefix.includes('\\"')))
     // Every other BARE value (header-dump shapes: `Authorization: Bearer X`):
     // one value token, optionally after an auth scheme. Deliberately does NOT run
     // to the end of the line — `"token":{"kind":"opaque","ttl":30}` is a token
     // DESCRIPTOR and redacting into it would produce unbalanced JSON in the very
     // evidence a human reads, while prose after `token:` would lose its tail.
     .replace(new RegExp(`(${key}(?:\\\\?")?\\s*[:=]\\s*)(?!\\\\?")(?:(?:Bearer|Basic|Digest|Token)\\s+)?[^\\s,}&{\\[]+`, 'gi'), '$1***')
+}
+
+/**
+ * Mask ONE cookie value out of the rest of a line (the text after `Cookie:` /
+ * `"cookie":`). A balanced `{…}`/`[…]` literal becomes a QUOTED placeholder —
+ * `"***"`, or `\"***\"` when the document around it is escaped (`escaped`) — so
+ * the enclosing JSON stays parseable; anything else is a bare header value that
+ * ends at the first `,`, `}` or `]`, and the tail is returned untouched (that is
+ * what keeps a following key on the same line alive). The cost is deliberate: a
+ * `Set-Cookie` Expires date after the first comma survives — a date is not a
+ * credential, and swallowing the rest of the line is exactly the bug this rule
+ * exists to avoid.
+ */
+function maskCookieValue(text, escaped) {
+  if (text === '') return text
+  if (text.startsWith('{') || text.startsWith('[')) {
+    const end = balancedLiteralEnd(text)
+    if (end > 0) return (escaped ? '\\"***\\"' : '"***"') + text.slice(end)
+  }
+  const stop = text.search(/[,}\]]/)
+  return '***' + (stop === -1 ? '' : text.slice(stop))
+}
+
+/**
+ * End index (exclusive) of the balanced `{…}`/`[…]` literal at the start of
+ * `text`, or -1 when it never closes. String literals are skipped and a
+ * backslash escapes the next character, so an embedded JSON document
+ * (`{\"cookie\":…}`) cannot confuse the bracket count.
+ */
+function balancedLiteralEnd(text) {
+  const stack = []
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i]
+    if (ch === '\\') { i += 1; continue }
+    if (ch === '"') {
+      i += 1
+      while (i < text.length && text[i] !== '"') { if (text[i] === '\\') i += 1; i += 1 }
+      continue
+    }
+    if (ch === '{' || ch === '[') { stack.push(ch); continue }
+    if (ch === '}' || ch === ']') {
+      if (stack.length === 0) return -1
+      stack.pop()
+      if (stack.length === 0) return i + 1
+    }
+  }
+  return -1
 }

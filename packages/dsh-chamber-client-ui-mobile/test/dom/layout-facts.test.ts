@@ -7,12 +7,13 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createLayoutFactSource } from '../../src/client/layout-facts.ts'
+import { createLayoutFactSource, subscribeDrawerOpen } from '../../src/client/layout-facts.ts'
 import { FakeNode, attach } from '../support/dom-double.ts'
 
 interface FakeMutation {
   readonly type: string
-  readonly addedNodes: readonly FakeNode[]
+  readonly addedNodes?: readonly FakeNode[]
+  readonly removedNodes?: readonly FakeNode[]
 }
 
 class FakeMutationObserver {
@@ -24,7 +25,8 @@ class FakeMutationObserver {
     this.callback = callback
     FakeMutationObserver.instances.push(this)
   }
-  observe(target: unknown): void { this.observed.push(target) }
+  readonly options: unknown[] = []
+  observe(target: unknown, options?: unknown): void { this.observed.push(target); this.options.push(options) }
   disconnect(): void { this.disconnected += 1 }
 }
 
@@ -86,8 +88,13 @@ function installDom(initialFrame: FakeNode | null) {
     fireTier(): void { for (const listener of [...tier.listeners]) listener() },
     fireBody(added: FakeNode[]): void {
       // creation order: [0] the frame attribute observer, [1] the body observer.
-      FakeMutationObserver.instances[1]?.callback([{ type: 'childList', addedNodes: added }])
+      FakeMutationObserver.instances[1]?.callback([{ type: 'childList', addedNodes: added, removedNodes: [] }])
     },
+    fireBodyRemoved(removed: FakeNode[]): void {
+      FakeMutationObserver.instances[1]?.callback([{ type: 'childList', addedNodes: [], removedNodes: removed }])
+    },
+    /** The root slot (and its frame) leave the document. */
+    unmount(): void { root = null },
     observers: (): FakeMutationObserver[] => FakeMutationObserver.instances,
     restore(): void {
       GLOBALS.document = previous.document
@@ -108,6 +115,13 @@ test('layout source: collapsed/narrow come from the official frame attribute and
     assert.deepEqual(notifications, ['false'], 'subscribe fires immediately with the current value')
     assert.equal(source.getCollapsed(), false)
     assert.equal(source.getNarrow(), true, 'the narrow flag is the touch-tier matchMedia result')
+    assert.equal(dom.observers()[0]?.observed.length, 1,
+      'a frame ALREADY mounted at construction must still be observed (the seeded-frame skip)')
+    assert.deepEqual(
+      (dom.observers()[0]?.options[0] as { attributeFilter?: readonly string[] } | undefined)?.attributeFilter,
+      ['data-sidebar-collapsed', 'data-rightbar-collapsed', 'data-rightbar-fullscreen'],
+      'the frame observer must keep listening to the sidebar AND both rightbar flags (panelShown recompute)',
+    )
 
     frame.setAttribute('data-sidebar-collapsed')
     dom.observers()[0]?.callback([{ type: 'attributes', addedNodes: [] }])
@@ -136,6 +150,38 @@ test('layout source: collapsed/narrow come from the official frame attribute and
   }
 })
 
+test('drawer-open subscription follows a REMOUNTED frame (aria freshness)', () => {
+  const first = new FakeNode('div')
+  const dom = installDom(first)
+  try {
+    const states: boolean[] = []
+    const unsubscribe = subscribeDrawerOpen(open => states.push(open))
+    assert.deepEqual(states, [true], 'an expanded frame (no collapsed attribute) reads open')
+    first.setAttribute('data-sidebar-collapsed')
+    dom.observers()[0]?.callback([{ type: 'attributes', addedNodes: [] }])
+    assert.deepEqual(states, [true, false])
+
+    // A frame REMOUNT: the old element is replaced under the root slot. The
+    // subscription must read the NEW frame, not freeze on the detached one
+    // (the stale aria-expanded bug).
+    const second = new FakeNode('div')
+    dom.mount(second)
+    dom.fireBody([second])
+    assert.deepEqual(states, [true, false, true],
+      'the remount re-reads the new frame instead of the stale attribute')
+    assert.equal(dom.observers()[0]?.observed.length, 2, 'the attribute observer rebound to the new frame')
+    second.setAttribute('data-sidebar-collapsed')
+    dom.observers()[0]?.callback([{ type: 'attributes', addedNodes: [] }])
+    assert.deepEqual(states, [true, false, true, false], 'the NEW frame now drives the state')
+
+    const disconnects = dom.observers()[0]?.disconnected ?? 0
+    unsubscribe()
+    assert.equal(dom.observers()[0]?.disconnected, disconnects + 1, 'unsubscribe disposes the source')
+  } finally {
+    dom.restore()
+  }
+})
+
 test('layout source: no frame is fail-safe collapsed, and a structural mount re-attaches', () => {
   const dom = installDom(null)
   try {
@@ -155,6 +201,42 @@ test('layout source: no frame is fail-safe collapsed, and a structural mount re-
     // Streaming content is not structural: an added deep node never re-queries.
     dom.fireBody([new FakeNode('span')])
     assert.equal(dom.observers()[0]?.observed.length, 1, 'a deep content mutation never re-attaches the frame')
+    source.dispose()
+  } finally {
+    dom.restore()
+  }
+})
+
+test('layout source: a pure frame removal drops to fail-safe collapsed and notifies', () => {
+  const frame = new FakeNode('div')
+  const dom = installDom(frame)
+  try {
+    const source = createLayoutFactSource()
+    const states: boolean[] = []
+    source.subscribe(() => states.push(source.getCollapsed()))
+    assert.deepEqual(states, [false])
+
+    // The frame (and its root slot) leave the document. The removed node has
+    // no parent chain left, so the removal candidate is the source's own
+    // current frame — without this arm the source would stay on the detached
+    // element and getCollapsed() would keep reading its stale attributes.
+    frame.remove()
+    dom.unmount()
+    dom.fireBodyRemoved([frame])
+    assert.equal(source.getCollapsed(), true,
+      'a removed frame reads collapsed (the fail-safe direction)')
+    assert.deepEqual(states, [false, true],
+      'the removal notifies so consumers do not freeze on the detached frame')
+    assert.equal(dom.observers()[0]?.disconnected, 1,
+      'the attribute observer detached with the removed frame')
+
+    // A new frame mounting later re-attaches the same source and reads open.
+    const next = new FakeNode('div')
+    dom.mount(next)
+    dom.fireBody([next])
+    assert.equal(source.getCollapsed(), false)
+    assert.equal(dom.observers()[0]?.observed.at(-1), next, 'the observer rebound to the new frame')
+    assert.deepEqual(states, [false, true, false])
     source.dispose()
   } finally {
     dom.restore()

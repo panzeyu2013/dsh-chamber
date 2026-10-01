@@ -1,5 +1,5 @@
 /**
- * SVG resource scoper artifact markers — single source for the mobile committed
+ * SVG resource scoper artifact markers — single source for the mobile build-time
  * bundle guard (`artifact-scope-marker.test.mjs`) and the post-build page guard
  * (`assert-scoper-artifact.mjs`).
  *

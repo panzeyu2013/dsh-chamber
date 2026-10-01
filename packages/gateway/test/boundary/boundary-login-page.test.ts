@@ -195,6 +195,15 @@ test('login helpers: lang detection, HTML negotiation and the desktop form actio
   assert.match(renderLoginPage({ lang: 'en', secure: true, error: 'invalid', desktop: true }), /action="\/auth\/login\?desktop=1"/)
 })
 
+test('login controls keep 44px minimum touch targets', () => {
+  // WCAG 2.5.8 (target size, minimum): the single password field and the submit
+  // control are the page's whole interaction surface on a phone.
+  const html = renderLoginPage({ lang: 'en', secure: true })
+  const style = html.slice(html.indexOf('<style>'), html.indexOf('</style>'))
+  assert.match(style, /#password\{[^}]*min-height:44px/)
+  assert.match(style, /button\[type="submit"\]\{[^}]*min-height:44px/)
+})
+
 test('API login failure keeps the JSON shape', async () => {
   const auth: AuthProvider = {
     kind: 'password',

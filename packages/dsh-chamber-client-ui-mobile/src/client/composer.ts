@@ -18,6 +18,43 @@ export const TOUCH_TIER_QUERY = '(max-width: 1023px) and (pointer: coarse)'
  *  is phone-tier CSS only. */
 export const PHONE_TIER_QUERY = '(max-width: 768px) and (pointer: coarse)'
 
+/**
+ * Double-install guard for the document-level behavior installers. The tier
+ * effect can re-enter on a fast tier flip, and a duplicate install registers a
+ * SECOND listener: two Enter intercepts (two newlines), two spacers, two heal
+ * timers. The module-level key set holds one seat per key: while a key is live
+ * a second install() is a no-op returning a no-op disposer, and only after the
+ * original disposer ran can the key be installed again.
+ */
+const ACTIVE_INSTALLS = new Set<string>()
+
+/** The install keys (ONE seat per key; drawer-taps/settings-sheet import this
+ *  table so the keys stay unique across modules). */
+export const INSTALL_KEYS = {
+  enterToNewline: 'mobile.composer.enter-to-newline',
+  editabilityRecovery: 'mobile.composer.editability-recovery',
+  imeLadder: 'mobile.composer.ime-ladder',
+  composerVisibilityGuard: 'mobile.composer.visibility-guard',
+  composerSelfHeal: 'mobile.composer.self-heal',
+  drawerTapHeal: 'mobile.drawer.tap-heal',
+  settingsSheetScrollReset: 'mobile.settings.sheet-scroll-reset',
+} as const
+
+export function installOnce(key: string, install: () => () => void): () => void {
+  if (ACTIVE_INSTALLS.has(key)) return () => {}
+  // The key is claimed only AFTER the install returned: a throwing installer
+  // must not poison the seat for every later attempt.
+  const release = install()
+  ACTIVE_INSTALLS.add(key)
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    ACTIVE_INSTALLS.delete(key)
+    release()
+  }
+}
+
 /** The editability face the gate reads (a real Element satisfies it). */
 export interface EditableFace {
   readonly contentEditable?: string
@@ -55,17 +92,21 @@ function hasHighlightedMenuOpen(): boolean {
 }
 
 /**
- * Safari composition edge: the official keymap keeps a 10ms recentlyComposing
- * window after compositionend — Safari's final keydown of a composed input
- * carries neither isComposing nor keyCode 229. Mirror the same window so a
- * finishing Enter is never intercepted.
+ * Composition state for the Enter gate. TWO arms:
+ *   - the LIVE flag (compositionstart -> true, compositionend -> false): an
+ *     engine whose final keydown already reports isComposing=false while the
+ *     composition session is still open must not be intercepted;
+ *   - the Safari trailing window: the official keymap keeps a 10ms
+ *     recentlyComposing window after compositionend, because Safari's final
+ *     keydown of a composed input carries neither isComposing nor keyCode 229.
  */
 function createComposingGuard(): { isComposingNow(): boolean; attach(): () => void } {
+  let composing = false
   let lastCompositionEnd = 0
-  const onStart = (): void => { lastCompositionEnd = 0 }
-  const onEnd = (): void => { lastCompositionEnd = Date.now() }
+  const onStart = (): void => { composing = true; lastCompositionEnd = 0 }
+  const onEnd = (): void => { composing = false; lastCompositionEnd = Date.now() }
   return {
-    isComposingNow: () => Date.now() - lastCompositionEnd < 10,
+    isComposingNow: () => composing || Date.now() - lastCompositionEnd < 10,
     attach: () => {
       document.addEventListener('compositionstart', onStart, true)
       document.addEventListener('compositionend', onEnd, true)
@@ -80,7 +121,8 @@ function createComposingGuard(): { isComposingNow(): boolean; attach(): () => vo
 /**
  * Enter inserts a line break (touch convention; the official desktop default
  * is Enter=send, which a stray tap would fire). IME composition is never
- * intercepted (isComposing AND keyCode 229, plus the Safari window).
+ * intercepted (isComposing OR keyCode 229 OR the live composition flag, plus
+ * the Safari trailing window), and neither is an Alt/AltGr chord.
  *
  * Lexical 0.49 gotcha: its root keydown listener does NOT check
  * defaultPrevented and KEY_ENTER_COMMAND (CRITICAL) fires submit regardless —
@@ -89,16 +131,18 @@ function createComposingGuard(): { isComposingNow(): boolean; attach(): () => vo
  * the no-workspace picker trigger while non-editable and owns Enter there via
  * the official React handler (see isEditableComposer).
  */
-export function installEnterToNewline(): () => void {
+function installEnterToNewlineInner(): () => void {
   const composing = createComposingGuard()
   const detachComposing = composing.attach()
   let warnedOnce = false
   const onKeyDown = (event: KeyboardEvent): void => {
-    if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return
+    if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.isComposing || event.keyCode === 229) return
     if (event.repeat) return
     // The official accelerated submit chord (Ctrl/Cmd+Enter, queue↔steer) is
-    // not a newline gesture — pass it through untouched.
-    if (event.ctrlKey || event.metaKey) return
+    // not a newline gesture — pass it through untouched. AltGr (reported as
+    // Alt, as Ctrl+Alt, or through the AltGraph modifier state) types a
+    // character: that Enter belongs to the composition path, not to us.
+    if (event.ctrlKey || event.metaKey || event.getModifierState?.('AltGraph') === true) return
     if (composing.isComposingNow()) return
     const input = event.target instanceof Element ? event.target.closest(COMPOSER_INPUT_SELECTOR) : null
     // Editability gate: the no-workspace picker wears the same attribute as
@@ -110,20 +154,23 @@ export function installEnterToNewline(): () => void {
     event.stopPropagation()
     // execCommand is deprecated but the only synchronous way into a Lexical
     // contenteditable; WebKit (iOS Safari) lacks insertLineBreak, so fall
-    // back to insertText('\n'). Its boolean only claims "supported", not that
-    // the edit happened, so the manual fallback runs ONLY when both commands
-    // failed AND the fingerprint is unchanged (never double-insert).
+    // back to insertText('\n'). An execCommand boolean only claims
+    // "supported", never that the edit happened, so the FINGERPRINT gates
+    // every escalation: insertText runs only while the document is still
+    // unchanged after insertLineBreak (a lying `false` that actually inserted
+    // must never be doubled), and the manual fallback only when the text
+    // command left the document unchanged too — even when it claimed success.
     const fingerprint = composerFingerprint(input)
-    const ok = document.execCommand('insertLineBreak')
-    if (!ok) {
-      const fallbackOk = document.execCommand('insertText', false, '\n')
-      if (!fallbackOk && fingerprint === composerFingerprint(input) && !insertLineBreakManually(input)) {
-        // The event stays consumed (falling back to Enter=send would SEND);
-        // surface the failure once per session, never per keystroke.
-        if (!warnedOnce) {
-          warnedOnce = true
-          console.warn('[dsh-chamber.mobile] composer line-break insertion failed (execCommand + DOM fallback)')
-        }
+    const lineBreakOk = document.execCommand('insertLineBreak')
+    if (!lineBreakOk && fingerprint === composerFingerprint(input)) {
+      document.execCommand('insertText', false, '\n')
+    }
+    if (!lineBreakOk && fingerprint === composerFingerprint(input) && !insertLineBreakManually(input)) {
+      // The event stays consumed (falling back to Enter=send would SEND);
+      // surface the failure once per session, never per keystroke.
+      if (!warnedOnce) {
+        warnedOnce = true
+        console.warn('[dsh-chamber.mobile] composer line-break insertion failed (execCommand + DOM fallback)')
       }
     }
     // This enter bypasses the official pipeline's caret reveal: after a
@@ -137,8 +184,14 @@ export function installEnterToNewline(): () => void {
   }
 }
 
-/** Cheap composer fingerprint (text + node count): did a false-returning
- *  execCommand actually insert? */
+/** Single-seat entry point: a duplicate install while the first is live is a
+ *  no-op — two handlers would insert TWO newlines for one Enter. */
+export function installEnterToNewline(): () => void {
+  return installOnce(INSTALL_KEYS.enterToNewline, installEnterToNewlineInner)
+}
+
+/** Cheap composer fingerprint (text + node count): did the execCommand
+ *  ladder actually write the document? Its booleans only claim "supported". */
 function composerFingerprint(input: Element | null): string {
   if (input === null) return ''
   return `${input.childNodes.length}:${input.textContent ?? ''}`
@@ -258,7 +311,26 @@ export const EDITABILITY_MUTATION_OPTIONS: MutationObserverInit = {
   attributeOldValue: true,
 }
 
-export function installEditabilityRecovery(root: ParentNode = document): () => void {
+/** The self-heal recovery write (blur -> contenteditable=true -> focus) is a
+ *  genuine false->true flip by every observable definition, so the
+ *  editability recovery channel would answer it with a SECOND blur/refocus on
+ *  the same element — the double focus dance that strands the IME. The writer
+ *  marks the element; the reader CONSUMES the mark on the flip record that
+ *  follows. The window only has to survive the observer microtask of the same
+ *  task, and one-shot consumption keeps a LATER genuine flip recoverable. */
+const SELF_HEAL_WRITE_MARKER_MS = 1_000
+
+let selfHealWrite: { readonly element: HTMLElement; readonly at: number } | null = null
+
+/** Consume the self-heal writer's mark for this element, when still live. */
+function consumeSelfHealWrite(element: HTMLElement, now: number): boolean {
+  if (selfHealWrite === null || selfHealWrite.element !== element) return false
+  if (now - selfHealWrite.at > SELF_HEAL_WRITE_MARKER_MS) return false
+  selfHealWrite = null
+  return true
+}
+
+function installEditabilityRecoveryInner(root: ParentNode): () => void {
   let current: HTMLElement | null = null
   let lastEditable: boolean | null = null
   const query = (): HTMLElement | null => {
@@ -287,13 +359,22 @@ export function installEditabilityRecovery(root: ParentNode = document): () => v
       // Only the composer's OWN flip may recover the keyboard.
       records.filter(record => record.target === input).map(record => record.oldValue),
     )) {
-      input.blur()
-      input.focus({ preventScroll: true })
+      // The self-heal channel's own write is self-identified: it must not be
+      // answered with a second blur/refocus (the double focus dance).
+      if (!consumeSelfHealWrite(input, Date.now())) {
+        input.blur()
+        input.focus({ preventScroll: true })
+      }
     }
     seed(input)
   })
   observer.observe(root, EDITABILITY_MUTATION_OPTIONS)
   return () => observer.disconnect()
+}
+
+/** Single-seat entry point (installed by index.ts once per touch-tier entry). */
+export function installEditabilityRecovery(root: ParentNode = document): () => void {
+  return installOnce(INSTALL_KEYS.editabilityRecovery, () => installEditabilityRecoveryInner(root))
 }
 
 /** Keyboard open when the visual viewport loses more than 120px AND 20% of
@@ -306,11 +387,16 @@ export function isKeyboardOpen(layoutHeight: number, visualHeight: number): bool
 /**
  * IME ladder layers 1/3/4 (layer 2 is installEditabilityRecovery; layer 5 is
  * the stylesheet arm plus installComposerVisibilityGuard):
- *   1. programmatic-focus drop loop — a focus that did not come from a
- *      pointer gesture is blurred and re-dropped for up to 12 rAF frames
- *      (the official submit effect re-focuses programmatically, leaving the
- *      IME closed on Android WebView); navigation gestures classify like
- *      programmatic focus (isNavigationGestureTarget).
+ *   1. programmatic-focus drop loop — a focus that follows a NAVIGATION
+ *      gesture is blurred and re-dropped for up to 12 rAF frames (the
+ *      official submit effect re-focuses programmatically, leaving the IME
+ *      closed on Android WebView). The classification is persistent (the last
+ *      pointerdown stands until the next one) but the drop has an EXECUTABLE
+ *      WINDOW (IME_NAV_DROP_WINDOW_MS): only a refocus that lands while the
+ *      navigation intent is still fresh is dropped, so a late official refocus
+ *      (or a stale classification from an old tap) never pops the keyboard
+ *      away from the user. Keyboard navigation (Tab/Arrow) keeps its own short
+ *      window and preserves.
  *   3. pointerup refocus — a tap inside the composer re-focuses within the
  *      gesture so the IME opens;
  *   4. visualViewport keyboard detection (feeds layer 3's guard and state).
@@ -324,7 +410,7 @@ export function isKeyboardOpen(layoutHeight: number, visualHeight: number): bool
  * regions (the official InputBar returns focus to the box on session change)
  * must be dropped, or iOS pops the keyboard right after every switch.
  */
-export const NAV_GESTURE_SELECTOR = '[data-mobile-role="sidebar"], [data-slot="conversation.session.header"]'
+export const NAV_QUERY = '[data-mobile-role="sidebar"], [data-slot="conversation.session.header"]'
 
 /** The minimal element face the navigation-gesture predicate needs. */
 export interface ClosestLike {
@@ -332,30 +418,88 @@ export interface ClosestLike {
 }
 
 /** Pure decision: did this pointer gesture start in a navigation region?
- *  Kept exported as the semantic name for drawer/session-header gestures —
- *  layer 1 does not read it (navigation regions are never inside the
- *  composer seat, so the seat test alone classifies typing intent). */
+ *  Kept exported as the semantic name for drawer/session-header gestures. */
 export function isNavigationGestureTarget(target: ClosestLike | null): boolean {
-  return target !== null && target.closest(NAV_GESTURE_SELECTOR) !== null
+  return target !== null && target.closest(NAV_QUERY) !== null
+}
+
+/** The persistent classification of one pointerdown: 'nav' = the gesture
+ *  landed in a navigation region; 'preserve' = anything else (the composer
+ *  seat, portaled menus, the message area). The value is replaced only by the
+ *  NEXT pointerdown; the drop DECISION additionally reads its age (see
+ *  IME_NAV_DROP_WINDOW_MS). */
+export type ImeGesture = 'nav' | 'preserve'
+
+/** Pure: classify one pointerdown target. */
+export function classifyImeGesture(target: ClosestLike | null): ImeGesture {
+  return isNavigationGestureTarget(target) ? 'nav' : 'preserve'
+}
+
+/** Keyboard-navigation intent window: a Tab/Arrow keydown this close to a
+ *  focusin marks that focus as keyboard navigation, never as a programmatic
+ *  refocus. */
+export const IME_KEYBOARD_INTENT_MS = 500
+
+/** How long a NAVIGATION gesture may still authorize a drop. The official
+ *  submit/commit effect re-focuses within the same gesture, so a focus that
+ *  arrives later is NOT the refocus this layer exists for — dropping it would
+ *  steal a deliberate focus (after a long read, or from an unrelated control).
+ *  45s outlasts any plausible submit round-trip and stays far inside the
+ *  session-switch interaction, while a stale classification can no longer
+ *  blur the composer minutes later. */
+export const IME_NAV_DROP_WINDOW_MS = 45_000
+
+/** Pure: should the drop loop run for this focusin? Only a NAVIGATION gesture
+ *  still inside IME_NAV_DROP_WINDOW_MS drops; a fresh Tab/Arrow keyboard intent
+ *  and every seat/portal gesture (typing intent) preserve. */
+export function shouldDropImeRefocus(
+  gesture: ImeGesture,
+  gestureAt: number,
+  keyboardIntentAt: number,
+  now: number,
+): boolean {
+  if (now - keyboardIntentAt < IME_KEYBOARD_INTENT_MS) return false
+  if (gesture !== 'nav') return false
+  const age = now - gestureAt
+  return age >= 0 && age <= IME_NAV_DROP_WINDOW_MS
 }
 
 export interface ImeLadder {
+  /** Install the ladder. Single-seat (installOnce): a second attach while the
+   *  first is live returns a no-op disposer; the returned disposer detaches
+   *  every listener AND cancels an in-flight drop loop. */
   attach(): () => void
-  isKeyboardOpen(): boolean
 }
 
 export function installImeLadder(root: ParentNode = document): ImeLadder {
-  let lastPointerDown = 0
-  /** The last pointerdown was TYPING INTENT — it started INSIDE the composer
-   *  seat. Layer 1's gesture test: a programmatic refocus after a non-seat
-   *  gesture (sidebar switch, message-area scroll/tap) must NOT count — it
-   *  would pop the iOS keyboard right after navigation. */
-  let lastPointerDownInSeat = false
+  /** The persistent classification of the LAST pointerdown AND when it
+   *  happened: the drop decision expires it after IME_NAV_DROP_WINDOW_MS. */
+  let lastGesture: ImeGesture = 'preserve'
+  let lastGestureAt = 0
+  /** The last Tab/Arrow keydown: a focusin inside IME_KEYBOARD_INTENT_MS of it
+   *  is keyboard navigation and must be preserved. */
+  let keyboardIntentAt = 0
   let keyboardOpen = false
+  /** The in-flight drop loop: its pending rAF id, its cancel-listener removal
+   *  and the cancellation flag the disposer sets. At most ONE loop runs. */
+  let dropFrame = 0
+  let dropCleanup: (() => void) | null = null
+  let dropCancelled = false
 
   const syncKeyboard = (): void => {
     const vv = window.visualViewport
     keyboardOpen = vv !== null && isKeyboardOpen(window.innerHeight, vv.height)
+  }
+
+  /** Stop the drop loop: cancel the pending frame and drop its cancel
+   *  listener. Idempotent. */
+  const stopDropLoop = (): void => {
+    if (dropFrame !== 0) {
+      cancelAnimationFrame(dropFrame)
+      dropFrame = 0
+    }
+    dropCleanup?.()
+    dropCleanup = null
   }
 
   /** Did this pointerdown land inside the composer seat (the input plus its
@@ -370,42 +514,54 @@ export function installImeLadder(root: ParentNode = document): ImeLadder {
 
   const onPointerDown = (event: PointerEvent): void => {
     // Every pointer type counts (mouse included): on a coarse-primary device
-    // a hardware-mouse click into the composer is still typing intent.
-    lastPointerDown = Date.now()
-    // Typing intent requires the seat. A mid-window message-area pointerdown
-    // is NEITHER navigation NOR typing: it must not reclassify a pending
-    // navigation refocus, nor cancel an in-flight drop loop.
-    lastPointerDownInSeat = gestureInSeat(event)
+    // a hardware-mouse click into the composer is still typing intent. BOTH
+    // halves — kind and time — are replaced by every pointerdown.
+    lastGesture = classifyImeGesture(event.target instanceof Element ? event.target : null)
+    lastGestureAt = Date.now()
+  }
+
+  const onKeyDown = (event: KeyboardEvent): void => {
+    // Tab and the arrow keys move focus: the focus they cause (or that the
+    // commit effect restores) is keyboard navigation, not a programmatic
+    // refocus.
+    if (event.key === 'Tab' || event.key.startsWith('Arrow')) keyboardIntentAt = Date.now()
   }
 
   const onFocusIn = (event: FocusEvent): void => {
     const input = root.querySelector(COMPOSER_INPUT_SELECTOR)
     if (!(input instanceof HTMLElement)) return
     if (event.target !== input && !input.contains(event.target as Node)) return
-    // Layer 1: a recent SEAT gesture is typing intent. Anything else is
-    // dropped for 12 rAF frames (the official submit effect re-focuses within
-    // the commit); a fresh seat pointerdown cancels the drop loop.
-    const fromGesture = Date.now() - lastPointerDown < 500 && lastPointerDownInSeat
-    if (fromGesture) return
+    // Layer 1: only a NAVIGATION gesture still inside its executable window
+    // drops the focus (for 12 rAF frames; the official submit effect
+    // re-focuses within the commit). A seat/portal gesture is typing intent
+    // and a fresh Tab/Arrow keydown is keyboard navigation — both preserve. A
+    // fresh seat pointerdown cancels a drop loop already in flight
+    // (onGestureCancel below).
+    if (!shouldDropImeRefocus(lastGesture, lastGestureAt, keyboardIntentAt, Date.now())) return
+    // A new focusin (the official refocus itself re-enters here) REPLACES the
+    // previous loop instead of stacking timers and listeners.
+    dropCancelled = false
+    stopDropLoop()
     let frames = 0
-    let cancelled = false
     const onGestureCancel = (event: PointerEvent): void => {
       // Only a NEW typing gesture cancels the drop loop — a neutral
       // message-area pointerdown must not interrupt a navigation drop.
-      if (gestureInSeat(event)) cancelled = true
+      if (gestureInSeat(event)) dropCancelled = true
     }
     document.addEventListener('pointerdown', onGestureCancel, true)
+    dropCleanup = () => document.removeEventListener('pointerdown', onGestureCancel, true)
     const drop = (): void => {
+      dropFrame = 0
       frames += 1
-      if (frames > 12 || cancelled) {
-        document.removeEventListener('pointerdown', onGestureCancel, true)
+      if (frames > 12 || dropCancelled) {
+        stopDropLoop()
         return
       }
       if (input === document.activeElement && !keyboardOpen) {
         input.blur()
-        requestAnimationFrame(drop)
+        dropFrame = requestAnimationFrame(drop)
       } else {
-        document.removeEventListener('pointerdown', onGestureCancel, true)
+        stopDropLoop()
       }
     }
     drop()
@@ -427,22 +583,27 @@ export function installImeLadder(root: ParentNode = document): ImeLadder {
   }
 
   return {
-    attach: () => {
+    attach: () => installOnce(INSTALL_KEYS.imeLadder, () => {
       syncKeyboard()
       document.addEventListener('pointerdown', onPointerDown, true)
+      document.addEventListener('keydown', onKeyDown, true)
       document.addEventListener('focusin', onFocusIn, true)
       document.addEventListener('pointerup', onPointerUp, true)
       window.visualViewport?.addEventListener('resize', onViewportResize)
       window.visualViewport?.addEventListener('scroll', onViewportResize)
       return () => {
+        // A pending drop frame must not fire after detach (it would blur a
+        // composer nobody asked this layer to touch any more).
+        dropCancelled = true
+        stopDropLoop()
         document.removeEventListener('pointerdown', onPointerDown, true)
+        document.removeEventListener('keydown', onKeyDown, true)
         document.removeEventListener('focusin', onFocusIn, true)
         document.removeEventListener('pointerup', onPointerUp, true)
         window.visualViewport?.removeEventListener('resize', onViewportResize)
         window.visualViewport?.removeEventListener('scroll', onViewportResize)
       }
-    },
-    isKeyboardOpen: () => keyboardOpen,
+    }),
   }
 }
 
@@ -556,7 +717,7 @@ function isComposerSelection(): boolean {
   return element.closest(COMPOSER_INPUT_SELECTOR) !== null || element.closest('[data-composer-seat]') !== null
 }
 
-export function installComposerVisibilityGuard(root: ParentNode = document): () => void {
+function installComposerVisibilityGuardInner(root: ParentNode): () => void {
   let applied = 0
   /** The measured edge moved WITH one of our own writes (see applyLift). */
   let carrierPushed = false
@@ -571,7 +732,6 @@ export function installComposerVisibilityGuard(root: ParentNode = document): () 
   let pollTimer: ReturnType<typeof setInterval> | null = null
   let pollUntil = 0
   let disposed = false
-  let phaseNode: Element | null = null
 
   /** The visible bottom edge in LAYOUT coordinates (pan + zoom included). */
   const visibleBottom = (): number => {
@@ -614,24 +774,38 @@ export function installComposerVisibilityGuard(root: ParentNode = document): () 
     carrierPushed = false
   }
 
+  /** Is this element inside the composer seat (the editor or its wrapper)? */
+  const inComposerSeat = (node: Element): boolean =>
+    node.closest(COMPOSER_INPUT_SELECTOR) !== null || node.closest('[data-composer-seat]') !== null
+
+  /** The DOM selection is a composer proxy ONLY while focus is not owned
+   *  elsewhere: a STALE selection inside the composer (the editor keeps its
+   *  DOM selection while another field takes focus) must not move the seat
+   *  while the settings sheet / a question card holds the keyboard. The
+   *  fallback is therefore allowed only when nothing (body/null) or the seat
+   *  itself owns focus. */
+  const selectionFallbackAllowed = (): boolean => {
+    const active = document.activeElement
+    if (active === null || active === document.body) return true
+    return active instanceof Element && inComposerSeat(active)
+  }
+
   /** The keyboard's owner: an editable focused now, a caret still inside the
    *  composer (the editor flips contenteditable off during submit without
    *  blurring), or either within the grace window. */
   const editableFocused = (): boolean => {
     if (isEditableFocus(document.activeElement)) return true
-    if (isComposerSelection()) return true
+    if (selectionFallbackAllowed() && isComposerSelection()) return true
     return Date.now() - lastEditableFocusAt < KBD_EDITABLE_FOCUS_GRACE_MS
   }
 
   /** Is the field the COMPOSER's? A keyboard belonging to the settings sheet
-   *  or a question card must not move the seat. */
+   *  or a question card must not move the seat — even when a stale composer
+   *  selection survives that focus change (see selectionFallbackAllowed). */
   const composerFocused = (): boolean => {
     const active = document.activeElement
-    if (active instanceof Element
-      && (active.closest(COMPOSER_INPUT_SELECTOR) !== null || active.closest('[data-composer-seat]') !== null)) {
-      return true
-    }
-    return isComposerSelection()
+    if (active instanceof Element && inComposerSeat(active)) return true
+    return selectionFallbackAllowed() && isComposerSelection()
   }
 
   /** The active conversation's sticky seat, committed only when its
@@ -663,14 +837,18 @@ export function installComposerVisibilityGuard(root: ParentNode = document): () 
   }
 
   /** The sticky seat only exists in the active phase: a phase flip must
-   *  re-arm (no viewport/focus event follows it). */
+   *  re-arm (no viewport/focus event follows it). [data-phase] is NOT unique
+   *  AND renderer remounts REPLACE the node, so watching only the current
+   *  first match left a replacement unobserved. Observe the root subtree
+   *  instead (subtree + attributeFilter): every current AND future
+   *  [data-phase] node reports, including one that mounts after install.
+   *  Idempotent — the root never changes for one installer. */
   const phaseObserver = new MutationObserver(() => sync())
+  let phaseObserved = false
   const observePhase = (): void => {
-    const node = root.querySelector('[data-phase]')
-    if (node === phaseNode) return
-    phaseObserver.disconnect()
-    phaseNode = node
-    if (node !== null) phaseObserver.observe(node, { attributes: true, attributeFilter: ['data-phase'] })
+    if (phaseObserved) return
+    phaseObserved = true
+    phaseObserver.observe(root, { attributes: true, attributeFilter: ['data-phase'], subtree: true })
   }
 
   /** Grow the flow above the seat without touching the scrollport's own box
@@ -829,12 +1007,28 @@ export function installComposerVisibilityGuard(root: ParentNode = document): () 
   }
 }
 
+/** Single-seat entry point: a duplicate install would create a SECOND spacer
+ *  before the seat and run a second 250ms poll. */
+export function installComposerVisibilityGuard(root: ParentNode = document): () => void {
+  return installOnce(INSTALL_KEYS.composerVisibilityGuard, () => installComposerVisibilityGuardInner(root))
+}
+
 /**
  * Composer self-heal: if the composer stays non-editable INSIDE A SUBMISSION
- * WINDOW for BUSY_STUCK_MS while the user taps it, force a recovery (blur →
- * restore contenteditable → refocus). The official component is editability's
- * only writer, so this fires on a genuine stuck submit; a failed recovery
- * leaves the DOM untouched.
+ * WINDOW for BUSY_STUCK_MS, force a recovery (blur → restore contenteditable →
+ * refocus). The clock SEMANTICS: the first tap that finds the composer stuck
+ * starts it (or the install-time seed, for a composer that mounted stuck);
+ * a later tap ≥ BUSY_STUCK_MS after that sighting recovers; an EARLIER tap
+ * never restarts the window — only a genuine recovery clears the clock. The
+ * official component is editability's only writer, so this fires on a genuine
+ * stuck submit; a failed recovery leaves the DOM untouched.
+ *
+ * REAL-DEVICE STATUS (STATUS 真机项, referenced by the F3 lane): this recovery
+ * writes the DOM contenteditable ATTRIBUTE only. Lexical's own `editable`
+ * editor state is NOT driven here (the plugin owns no editor handle — no
+ * editor.setEditable()/editor.update()), so whether the DOM write actually
+ * re-opens the Lexical input pipeline is UNVERIFIED on a real device. The DOM
+ * attribute is the only interface this layer owns.
  */
 export const BUSY_STUCK_MS = 30_000
 
@@ -895,7 +1089,7 @@ export const SELF_HEAL_MUTATION_OPTIONS: MutationObserverInit = {
   subtree: true,
 }
 
-export function installComposerSelfHeal(root: ParentNode = document): () => void {
+function installComposerSelfHealInner(root: ParentNode): () => void {
   let current: HTMLElement | null = null
   let lockedSince = 0
   const query = (): HTMLElement | null => {
@@ -930,7 +1124,9 @@ export function installComposerSelfHeal(root: ParentNode = document): () => void
     const input = query()
     if (input === null || !input.contains(event.target as Node)) return
     // A composer that mounted stuck has no mutation to start its clock: the
-    // tap that finds it stuck starts it.
+    // tap that finds it stuck starts it. The clock is NOT cleared here — an
+    // early tap must not restart the 30s window (that made every tap a fresh
+    // "mounted stuck" and the recovery unreachable).
     sync(input)
     if (lockedSince === 0) return
     // Re-evaluate against the live state: only a still-stuck submit recovers.
@@ -940,8 +1136,13 @@ export function installComposerSelfHeal(root: ParentNode = document): () => void
       disabled: isOfficiallyDisabled(input),
       elapsedMs: Date.now() - lockedSince,
     })
-    lockedSince = 0
     if (!recover) return
+    // Only a genuine recovery clears the clock: the writes below recuse the
+    // stuck state (and the mutation observer re-syncs it to 0 anyway).
+    lockedSince = 0
+    // Mark the write as OURS before the mutation is queued: the editability
+    // recovery channel must not answer it with a second blur/refocus.
+    selfHealWrite = { element: input, at: Date.now() }
     input.blur()
     input.contentEditable = 'true'
     input.focus({ preventScroll: true })
@@ -952,4 +1153,10 @@ export function installComposerSelfHeal(root: ParentNode = document): () => void
     observer.disconnect()
     document.removeEventListener('pointerdown', onPointerDown, true)
   }
+}
+
+/** Single-seat entry point (the recovery clock is module-visible state: a
+ *  duplicate install would double-sync the same tick). */
+export function installComposerSelfHeal(root: ParentNode = document): () => void {
+  return installOnce(INSTALL_KEYS.composerSelfHeal, () => installComposerSelfHealInner(root))
 }

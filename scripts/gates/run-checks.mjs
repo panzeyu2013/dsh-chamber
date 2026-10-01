@@ -25,8 +25,9 @@
  * --jobs is therefore a global concurrency budget, not a per-package one; a
  * package step that is not manifest-based (an && chain) executes during
  * resolution and is ordered as one pre-run section. static/typecheck pool their
- * whole-gate commands the same way (capped at 4, with DSH_TEST_JOBS=1 so a gate
- * that itself fans out cannot multiply the pool); only the ordered leftovers
+ * whole-gate commands the same way (capped at min(--jobs, 6), with
+ * DSH_TEST_JOBS=1 so a gate that itself fans out cannot multiply the pool); only
+ * the ordered leftovers
  * (artifact freshness, the darwin build→test chain) keep the serial loop,
  * because their order is a build contract.
  *
@@ -45,6 +46,12 @@
  * (`pnpm run build:artifacts`); static is read-only and fails loudly with that
  * command instead — a clean checkout bootstraps itself, and no mode silently
  * skips a gate because an artifact was absent.
+ *
+ * full additionally sets DSH_ARTIFACT_FRESHNESS_MOBILE_REBUILD=1: the artifact
+ * freshness gate then re-runs the mobile package's own build.mjs in a temp
+ * copy and byte-compares lib/client.js. tests mode has NO mobile byte compare of
+ * its own; CI covers it with the separate C8 step (verify-upstream-touchpoints.mjs
+ * rebuilds in place), and the gate prints a NOTE instead of pretending it ran.
  *
  * Exit status is 1 when any step fails (or when a mode resolves to no steps: a
  * mode that runs nothing has not passed).
@@ -160,6 +167,13 @@ const STATIC_CHECKS = [
   'verify:md-links',
   'verify:registry',
   'verify:anchors',
+  // 移动插件锚点门（design 17 §18.4.3/§18.6）：本机存在上游产物树时真实判定；
+  // CI/裸 clone 上没有该树（vendor/harness-packages 物化成 @deepseek-ai/<pkg> 源码链接树，
+  // 没有 node_modules/@deepseek-ai/**/lib/*.js；packages/desktop/vendor/dsh 只有锁文件）
+  // ⇒ **上游发射侧** fail-soft 跳过；本地判据（禁用形态、最小断言集声明侧完整性）
+  // 不依赖该树，仍然判定并可在 CI 红。严格模式由升级流程 §7 显式带
+  // --require-anchor-root 跑，不在这里伪装成「查过了」。
+  'verify:mobile-anchors',
   // 引用环门：真环（值 import 环）= 0，类型环必须命中显式 allowance（棘轮，
   // 新增环即红）。只读、离线、自带 --self-test 负控；**本地专属**（2026-09-25 裁决）：
   // ci.yml / release validation 不再承载，由 check:static 执行，static-gate-parity
@@ -612,6 +626,10 @@ export async function runMode(mode, options = {}) {
   const stepEnv = {
     ...env,
     PATH: resolve(REPO_ROOT, 'node_modules', '.bin') + delimiter + (env.PATH ?? ''),
+    // full 档启用更重的移动包 src↔lib 重建比对（tests 档本身没有移动产物字节比对，
+    // CI 由独立的 C8 step 覆盖；这里在临时副本里重跑包的 build.mjs，不写工作树）。
+    // tests 档不设，门会打 NOTE——不静默当通过。
+    ...(mode === 'full' ? { DSH_ARTIFACT_FRESHNESS_MOBILE_REBUILD: '1' } : {}),
   }
   const recordFailures = (pool) => {
     for (const record of pool.failures) {

@@ -4,9 +4,15 @@
  * columns; frame data-sidebar-collapsed|data-rightbar-collapsed) plus this
  * plugin's data-mobile-* stamps. CROSS-PACKAGE RULE: hooks are attributes,
  * never classes (classes are hashed per bundle). Exception: the composer bar
- * row and settings Models row match a compiled local name in BOTH build shapes
+ * row, the settings Models row and the conversation to-bottom slot match a
+ * compiled local name in BOTH build shapes
  * (local-first _<local>_<hash>_<idx> and hash-first [hash]_[local]) — the arm
  * keeps a suffix AND an infix term, and dropping the infix matches nothing.
+ * These local-name exceptions are NOT covered by the anchor gate (it extracts
+ * data-* / role / slot / hash tokens only): they are pinned by
+ * test/behavior/composer-guard.test.ts, and the pin-upgrade re-anchor step
+ * must re-verify each local name in the served bundles (README "Anchor
+ * baseline").
  * The model trigger instead anchors on [data-slot="conversation.input.model"].
  * Tokens are official --dsw-* / --ds-* only (no literal colors but fallbacks);
  * dark theme follows the official flip. Every rule is inside a media query
@@ -20,11 +26,21 @@
  * :not([data-sidebar-collapsed]) is the open condition;
  * data-rightbar-collapsed means "no retained track", NOT "hidden", so the
  * drawer yield also uses [data-rightbar-fullscreen] for the auto-fullscreen
- * phone case. The fixed layers (drawer/backdrop/toggle inside shell.overlay,
- * z-index 20) never paint above the fullscreen rightbar (z-40) or floating
- * host (z-60); the SETTINGS dialog renders inside the sidebar DOM, so the
- * drawer's open state uses transform: none (an identity transform would trap
- * it). The composer is a Lexical div[contenteditable][data-composer-input] —
+ * phone case. The drawer is the frame's own sidebar COLUMN taken out of the
+ * grid flow and fixed (z-75, its own root stacking layer); it is NOT a
+ * shell.overlay entry — only the floating toggle (z-76) and the backdrop
+ * (z-74) are, and those live inside shell.overlay's own z-20 layer with
+ * z-indexes of their own. The drawer deliberately outranks the fullscreen
+ * rightbar (z-40) and the floating host (z-60); the two yield arms below are
+ * what keep it off a SHOWN panel. ACCEPTED TRADEOFF: closing a panel clears
+ * [data-rightbar-fullscreen] in the same commit the slide-out starts, so an
+ * open drawer becomes visible again immediately and paints OVER the panel for
+ * its exit transition (~0.3s). Delaying the retract by the panel animation
+ * would also delay the next drawer open, so the overlap is accepted. The
+ * SETTINGS dialog is body-portaled by upstream (rc.2 SettingsPanel
+ * createPortal(..., document.body)), so the drawer's transform no longer traps
+ * it; transform: none is kept deliberately. The composer is a
+ * Lexical div[contenteditable][data-composer-input] —
  * there is NO textarea.
  */
 
@@ -49,8 +65,22 @@ export const MOBILE_CSS = `
    is 1024px+ and still taps, while attaching a mouse flips hover to hover
    and correctly restores hover tooltips — and is scoped to bubbles that
    DUPLICATE an accessible name: button[aria-label] + [role="tooltip"]
-   (the component renders the bubble as the trigger's immediate next sibling;
-   [data-side] is the component's own marker — see the preserved list below).
+   (the component renders the bubble as the trigger's immediate next sibling),
+   PLUS the WRAPPED-trigger sibling shape — three official sites render
+   <span><button aria-label/></span> as the tooltip's anchor, so the button is
+   a grandchild and the plain sibling arm cannot see it (the right-panel
+   document preview's zoom +/- and the font warning): those match
+   :is(span,div):has(> button[aria-label]) + [role="tooltip"][data-side], kept
+   as an INDEPENDENT rule so an engine without :has() drops only that arm and
+   leaves the two unconditional ones live,
+   PLUS every portal-rendered bubble: portal:true moves the same .bubble
+   (role="tooltip", data-side, data-portal) to <body> via createPortal, so the
+   sibling arm cannot reach it and its sticky-hover latch is the same
+   coarse-pointer artifact. The portal arm is structural and unconditional —
+   at <body> there is no trigger relationship left to read — so the
+   informational-bubble carve-out below applies to the SIBLING shape only.
+   [data-side] is the component's own marker on both shapes — see the
+   preserved list below.
    Of the 31 official Tooltip sites, 27 are aria-labelled buttons (composer
    send/stop/commands/ContextMeter, queue dock, goal bar, sidebar, message
    feedback, workspace rows, chat copy/branch) whose aria-label names the same
@@ -59,10 +89,12 @@ export const MOBILE_CSS = `
    install (see the module header). Four
    informational bubbles are deliberately
    NOT hidden because their trigger has no accessible duplicate: the chat
-   stats line (ui-chat:3853, ellipsized non-focusable div), the agent-preset
-   card description (ui-agent-preset:960, line-clamp:4), the trajectory
-   timeline span (ui-trajectory:6821, aria-hidden, no click path) and the
-   trajectory kind tag at ≤620px (ui-trajectory:5554, visible label collapsed)
+   stats line (ui-chat, ellipsized non-focusable div), the agent-preset
+   card description (ui-agent-preset, line-clamp:4), the trajectory
+   timeline span (ui-trajectory, aria-hidden, no click path) and the
+   trajectory kind tag at ≤620px (ui-trajectory, visible label collapsed)
+   — coordinates are a pin-0.2.0-rc.2 snapshot; line numbers drift with the pin,
+   so re-anchor by SHAPE, not by the numbers
    — they keep the sticky-hover quirk rather than lose content a touch user
    cannot otherwise read. The tree's fifth role="tooltip" producer (ui-chat
    turn-rail preview, :1735) is a non-button div WITHOUT data-side and is
@@ -70,7 +102,15 @@ export const MOBILE_CSS = `
    and its rail is container-hidden ≤900px anyway). Desktop is untouched
    (media-query scoped). */
 @media (pointer: coarse) and (hover: none) {
-  button[aria-label] + [role="tooltip"][data-side] {
+  button[aria-label] + [role="tooltip"][data-side],
+  [role="tooltip"][data-portal][data-side] {
+    display: none !important;
+  }
+
+  /* Wrapped-trigger sibling arm (see above). Its own rule on purpose: :has()
+     is unsupported on older engines, and one invalid selector in the comma
+     list above would invalidate the two unconditional arms with it. */
+  :is(span, div):has(> button[aria-label]) + [role="tooltip"][data-side] {
     display: none !important;
   }
 
@@ -162,8 +202,9 @@ export const MOBILE_CSS = `
        over the panel's left or right edge, with the home indicator under its
        bottom. Upstream's fullscreen presenter carries no env(safe-area-inset-*)
        of its own (ui-sidebar-right), while every other full-bleed chamber
-       surface on this tier does (drawer, settings sheet, composer seat); the
-       surface still paints full-bleed (background covers the padding box). */
+       surface on this tier does (drawer — its four insets were added in the
+       same review pass — settings sheet, composer seat); the surface still
+       paints full-bleed (background covers the padding box). */
     padding-top: env(safe-area-inset-top, 0px);
     padding-right: env(safe-area-inset-right, 0px);
     padding-bottom: env(safe-area-inset-bottom, 0px);
@@ -190,6 +231,16 @@ export const MOBILE_CSS = `
     left: 0 !important;
     z-index: 75;
     width: min(86vw, 280px) !important;
+    /* The drawer is the sidebar's replacement chrome and reaches the screen
+       edges under viewport-fit=cover, so it owns the same iOS safe areas every
+       other full-bleed surface on this tier carries; the tree has NO global
+       border-box reset, so the padding must be declared inside the fixed
+       width/height box. */
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
     box-shadow: var(--dsw-elevation-prominent);
     transform: translateX(-105%);
     visibility: hidden;
@@ -372,13 +423,23 @@ export const MOBILE_CSS = `
   }
 
   /* Conversation session header: the floating toggle (44px, top-left) must
-     never overlap the header content. The header is the DIRECT child of the
-     session-header slot outlet (anchor-audited shape: outlet wrapper >
-     <header> > titleRow [+ tabs]) — a structural selector, no hashed
-     classes. The gutter reserves the toggle box plus an 8px gap; padding on
-     the header (not the title row) also clears the tab strip when a session
-     has multiple views. */
-  [data-mobile-frame] [data-slot="conversation.session.header"] > header {
+     never overlap the header content. Real anchor-audited shape: the outer
+     [data-slot="conversation.header"] outlet wrapper (display:contents) is
+     the PARENT of <header>, and the [data-slot="conversation.session.header"]
+     outlet is a child INSIDE the header (titleRow/tabs are its children) —
+     the earlier "session outlet > <header>" reading was reversed. Two
+     INDEPENDENT attribute rules keep the gutter on the header element either
+     way: the outer outlet's direct child, and the header that directly parents
+     the session outlet. They must NOT share one comma list: on an engine
+     without :has() the whole list would be dropped, taking the attribute arm
+     down with it. No hashed classes. The gutter reserves the toggle box plus
+     an 8px gap (44px toggle + 8px gap + 10px toggle offset = 62px) inside the
+     left safe area and is applied to the header (not the title row), so the
+     tab strip is cleared too when a session has multiple views. */
+  [data-mobile-frame] [data-slot="conversation.header"] > header {
+    padding-left: calc(62px + env(safe-area-inset-left, 0px)) !important;
+  }
+  [data-mobile-frame] header:has(> [data-slot="conversation.session.header"]) {
     padding-left: calc(62px + env(safe-area-inset-left, 0px)) !important;
   }
 
@@ -556,6 +617,20 @@ export const MOBILE_CSS = `
        from the keyboard geometry, not from the inset. */
     padding-bottom: 0 !important;
   }
+  /* The back-to-bottom control rides the same lift. Upstream stamps
+     [data-conversation-scroll] as the sticky containing block and pins the
+     slot to bottom: calc(var(--dsh-composer-height, 152px) + 16px)
+     (ui-chat toBottomSlot, served class <hash>_toBottomSlot): without the
+     keyboard offset the control stays at the UNCOVERED composer height and
+     the raised seat covers it. The selector is the REGISTERED local-name
+     exception (module header + the composer-guard text lock; the served class
+     is [hash]_[local], so only the suffix arm can match and a naming flip
+     fails soft to the official bottom). The anchor gate now covers compiled
+     local names as a hard-fail category and REQUIRED_ANCHORS lists
+     _toBottomSlot, so a pin bump that renames it turns the gate red. */
+  [data-mobile-frame][data-mobile-kbd] [data-conversation-scroll] :is([class$="_toBottomSlot"], [class*="_toBottomSlot "], [class*="_toBottomSlot_"]) {
+    bottom: calc(var(--chamber-mobile-kbd-offset, 0px) + var(--dsh-composer-height, 152px) + 16px);
+  }
 
   /* iOS focus zoom: ANY editable field below 16px auto-zooms the page on
      focus and the page STAYS zoomed. The composer, settings fields and dialog
@@ -573,8 +648,13 @@ export const MOBILE_CSS = `
 @media (max-width: 768px) and (pointer: coarse) {
   /* Session header: one bounded row. The touch tier
      restored the official nowrap contract on the crumb strip; this tier
-     decides WHAT gives up width. Upstream ConversationSessionHeader shape:
-       header
+     decides WHAT gives up width. The header element itself is selected by the
+     real DOM shape above (outer [data-slot="conversation.header"] outlet >
+     <header>, plus the :has() arm); the row below reads the header's INSIDE,
+     where the [data-slot="conversation.session.header"] outlet
+     (display:contents) is a child of <header> and titleRow/tabs are its
+     children. Upstream ConversationSessionHeader shape:
+       [data-slot="conversation.session.header"] (outlet, display:contents)
          > div.titleRow
              > div.titleCluster > [nav.crumbs, div.headerActions]
              > div.headerUtilities
@@ -583,39 +663,70 @@ export const MOBILE_CSS = `
      The lineage chip renders INSIDE nav.crumbs (inside its crumbSeg), so it
      sits at the END of the strip and must never be the element that is
      squeezed — that is exactly how the five-line vertical badge happened. The
-     CURRENT crumb absorbs instead, which it can do textually: upstream .crumb
-     already carries max-width:220px + text-overflow:ellipsis.
+     LAST crumbSeg absorbs instead, which it can do textually: the last
+     segment's title is a span.crumb (rc.2 renders NO disabled button), and
+     upstream .crumb already carries max-width:220px + text-overflow:ellipsis.
      NOTE the :has() arm is a DESCENDANT match on purpose — the nav is
      titleRow > titleCluster > nav, so a child combinator (> nav) would be a
      silent no-op. The :has() invalidation cost stays inside the header
      subtree, never the streaming transcript. */
-  [data-mobile-frame] [data-slot="conversation.session.header"] > header {
+  /* Same two INDEPENDENT arms as the touch tier (a shared comma list would
+     lose the attribute arm wherever :has() is unsupported). */
+  [data-mobile-frame] [data-slot="conversation.header"] > header {
     padding-top: calc(10px + env(safe-area-inset-top, 0px)) !important;
     padding-right: calc(12px + env(safe-area-inset-right, 0px)) !important;
   }
-  [data-mobile-frame] [data-slot="conversation.session.header"] > header > div:has(nav) {
+  [data-mobile-frame] header:has(> [data-slot="conversation.session.header"]) {
+    padding-top: calc(10px + env(safe-area-inset-top, 0px)) !important;
+    padding-right: calc(12px + env(safe-area-inset-right, 0px)) !important;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header"] > div:has(nav) {
     flex-wrap: nowrap;
     min-height: 48px;
   }
   /* The corner seat ships margin-right:-16px against upstream's 28px header
      padding. This tier narrows that padding to 12px, so the negative margin
      now only buys overlap risk. */
-  [data-mobile-frame] [data-slot="conversation.session.header"] > header > div:has(nav) > div:last-child {
+  [data-mobile-frame] [data-slot="conversation.session.header"] > div:has(nav) > div:last-child {
     margin-right: 0 !important;
   }
-  /* Shrink order, crumb strip: the CURRENT crumb (the one upstream renders
-     with the disabled attribute) takes the remaining width and ellipsises;
-     every other crumb keeps its intrinsic width and is panned by the strip. */
-  [data-mobile-frame] [data-slot="conversation.session.header"] nav > span {
-    min-width: 0;
+  /* hideChrome/settling renders the title row WITHOUT a nav child, so the
+     :has(nav) arm above is inert exactly then and the corner seat keeps its
+     upstream -16px margin against this tier's narrowed padding. Structural
+     independent rule (the corner carries its own stable attribute). */
+  [data-mobile-frame] [data-slot="conversation.session.header"] > div > [data-conversation-header-corner] {
+    margin-right: 0 !important;
   }
+  /* Shrink order, crumb strip (STRUCTURAL: the rc.2 crumb is a span — there is
+     no disabled button to key on). Every segment except the LAST keeps its
+     intrinsic width and is panned by the strip, and every crumb button stays
+     at its intrinsic width; only the LAST segment (and the span crumb inside
+     it) may shrink. Upstream .crumb already carries max-width:220px +
+     text-overflow:ellipsis + white-space:nowrap, so the current title
+     ellipsises instead of pushing the lineage chip out of the row. */
+  [data-mobile-frame] [data-slot="conversation.session.header"] nav > span:not(:last-child),
   [data-mobile-frame] [data-slot="conversation.session.header"] nav > span > button {
+    flex: 0 0 auto;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header"] nav > span:last-child {
     flex: 0 1 auto;
     min-width: 0;
   }
-  [data-mobile-frame] [data-slot="conversation.session.header"] nav > span > button:disabled {
-    flex: 1 1 auto;
-    min-width: 4em;
+  /* The title is the LAST span of the segment (the first span is the
+     separator); last-of-type is the structural pick — a :last-child form would
+     target a trailing separator instead whenever the renderer ships one. */
+  [data-mobile-frame] [data-slot="conversation.session.header"] nav > span:last-child > span:last-of-type {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  /* Zero-lineage bare crumb (nav > span without a crumb class and with no
+     inner span): the arm above only reaches a span CHILD, so the segment's own
+     text needs the ellipsis contract itself. Its own rule on purpose: :has()
+     in a shared selector would invalidate every other arm on engines without
+     it. */
+  [data-mobile-frame] [data-slot="conversation.session.header"] nav > span:not(:has(span)) {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   /* Lineage chip: flex:0 0 auto so it is never in the shrink race, a 44px
      touch floor (upstream ships a 28px box) and a bounded, single-line count
@@ -813,13 +924,14 @@ export const MOBILE_CSS = `
     font-size: max(16px, var(--dsh-content-font-size, 16px)) !important;
   }
   /* No dialog-width rule of this plugin's own, deliberately: dialogs other
-     than the settings sheet are NOT capped. The tree has exactly three
-     role="dialog" aria-modal="true"
-     producers, and each owns its viewport fit: the settings panel above
-     (this sheet), the ui-primitives Modal (Modal.module.css pins its Root to
-     inset 0 with a 24px padding and caps the Dialog at min(380px, 100%)),
-     and the ui-attachment ImageLightbox (a fixed full-bleed backdrop at
-     inset 0 whose mask is an absolute inset-0 layer). A blanket max-width is
+     than the settings sheet are NOT capped. The tree has FOUR producers of
+     role="dialog" + aria-modal="true", and each owns its viewport fit: the
+     settings panel above (this sheet), the ui-settings-account PlatformOverlay
+     (a body portal whose overlay pins inset 0 at z-1001, the account/about
+     surfaces), the ui-primitives Modal (Modal.module.css pins its Root to
+     inset 0 with a 24px padding and caps the Dialog at min(380px, 100%)) and
+     the ui-primitives ImageLightbox (a fixed full-bleed backdrop at inset 0
+     whose mask is an absolute inset-0 layer). A blanket max-width is
      over-constrained against inset: 0: the lightbox backdrop would shrink to
      100vw-24px, left-anchored, leaving a 24px undimmed click-through strip
      on the right. The official geometries are the fit. */
@@ -850,12 +962,14 @@ export const MOBILE_CSS = `
 
 /* ---- narrow phone tier: 480px and below ----
    The session header's width budget at 390px is ~78px of title after the
-   floating toggle gutter, the two 44px icon seats, the mode chip and the
-   lineage chip. Below 480px the mode chip's LABEL is the cheapest thing to
-   drop: the chip is still the same interactive menu trigger, and clipping the
-   span (rather than removing it) keeps the accessible name intact. The
-   lineage chip keeps its digits — it is the only entry point to the subagent
-   catalog. */
+   floating toggle gutter, the two 44px icon seats, the agent-preset label and
+   the lineage chip. The agent-preset label is the only text-bearing direct
+   child of the actions seat and it is READ-ONLY (upstream's AgentPresetLabel
+   names the session's fixed composition; there is no control behind it), so
+   its LABEL is the cheapest thing to give width back: the icon stays and the
+   text clips (rather than being removed), keeping the accessible name and
+   the title attribute intact. The lineage chip keeps its digits — it is the
+   only entry point to the subagent catalog. */
 @media (max-width: 480px) and (pointer: coarse) {
   /* The headerActions seat's ONLY text-bearing direct child is upstream's
      agent-preset cell, and it is a bare span (AgentPresetLabel) — the schedule
@@ -867,7 +981,13 @@ export const MOBILE_CSS = `
      bounds that label itself (max-width 180px + nowrap + overflow hidden), so
      this tier only takes width BACK from it: the icon stays, the text clips,
      and the crumb strip keeps usable room on a narrow row instead of losing it
-     to a label the user has already read. */
+     to a label the user has already read.
+     FALLBACK ONLY: upstream AgentPresetLabel.module.css already declares
+     @container (width<=540px) { .label { display: none } }, so on every engine
+     WITH container queries the label is gone well before this tier and the
+     rule below is inert. It is kept for engines WITHOUT container-query
+     support (older WebKit), where the span keeps its own 180px max-width and
+     would otherwise eat the crumb strip. */
   [data-mobile-frame] [data-slot="conversation.session.header.actions"] > span {
     flex: 0 1 auto;
     min-width: 0;
@@ -880,23 +1000,21 @@ export const MOBILE_CSS = `
 
 /* ---- narrowest tier: 360px and below ----
    Content width is ~246px here: the crumb strip keeps the digits and the
-   chevron, the unit text and the crumb separator are the next things to go,
-   and the current crumb's floor drops so the title does not collapse to an
-   ellipsis-only box. Everything stays attribute-anchored: the count variant
-   is the only lineage shape whose root carries a leading separator span. */
+   chevron, the agent-preset label steps down once more, and the lineage count
+   label gets the tightest clip that still shows a count. The last crumbSeg
+   already shrinks on the structural arm above (the rc.2 current crumb is a
+   span, so no disabled floor is needed). Everything stays attribute-anchored.
+   The lineage label span lives INSIDE the chip's button (span.count, after
+   the optional activity span), so only the button-child arm can clip it —
+   there is no root-level span to hide (the pin's span is in the button). */
 @media (max-width: 360px) and (pointer: coarse) {
-  /* One more step for the narrowest row: the same agent-preset label. */
+  /* One more step for the narrowest row: the same agent-preset label (the
+     480px tier documents the upstream @container fallback this arm serves). */
   [data-mobile-frame] [data-slot="conversation.session.header.actions"] > span {
     max-width: 5em;
   }
-  [data-mobile-frame] [data-slot="conversation.session.header.lineage"] > div > span:first-child {
-    display: none;
-  }
   [data-mobile-frame] [data-slot="conversation.session.header.lineage"] button > span:last-of-type {
     max-width: 2.4em;
-  }
-  [data-mobile-frame] [data-slot="conversation.session.header"] nav > span > button:disabled {
-    min-width: 3em;
   }
 }
 `

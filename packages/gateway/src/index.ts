@@ -106,10 +106,12 @@ function validateMaterializedConfig(config: GatewayConfig): void {
     throw new GatewayConfigError('materialized TLS config is not implemented; terminate TLS at a trusted reverse proxy')
   }
   // A forged mobile entry could turn UA shunting into an open redirect or a
-  // self-loop — the origin-form guard the parser applies to constructors.
-  if (config.mobileUaRedirect === true) {
-    normalizeMobileEntryPath(config.mobileEntryPath ?? DEFAULT_MOBILE_ENTRY_PATH)
-  }
+  // self-loop — the origin-form guard the parser applies to constructors. The
+  // NORMALIZED value is written back so a programmatic GatewayConfig behaves
+  // exactly like one built from argv: the dispatch compares the entry against
+  // request pathnames, which `URL` has already normalized, and the CLI parser
+  // validates the entry even when the shunting stays disabled.
+  config.mobileEntryPath = normalizeMobileEntryPath(config.mobileEntryPath ?? DEFAULT_MOBILE_ENTRY_PATH)
 }
 
 export function createGateway(options: GatewayOptions): GatewayHandle {

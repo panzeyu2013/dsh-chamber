@@ -13,8 +13,10 @@
  * content-column fallback follows) after the section re-render (rAF).
  *
  * Phone tier only (a 769-1023px touch tablet keeps the official desktop modal
- * geometry). Single-instance document-level effect.
+ * geometry). Single-instance document-level effect (installOnce: a duplicate
+ * would reset the same scrollTop twice per chip click).
  */
+import { INSTALL_KEYS, installOnce } from './composer.ts'
 
 /** The settings dialog face: aria-modal dialog carrying the header seat. */
 const SETTINGS_DIALOG_SELECTOR = '[role="dialog"][aria-modal="true"]'
@@ -37,6 +39,10 @@ export function isSectionChipClick(target: ChipTargetLike | null, nav: ChipTarge
 }
 
 export function installSettingsSheetScrollReset(active: () => boolean): () => void {
+  return installOnce(INSTALL_KEYS.settingsSheetScrollReset, () => installSettingsSheetScrollResetInner(active))
+}
+
+function installSettingsSheetScrollResetInner(active: () => boolean): () => void {
   const onClick = (event: MouseEvent): void => {
     if (!active()) return
     const target = event.target instanceof Element ? event.target : null

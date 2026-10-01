@@ -1,9 +1,10 @@
 # README.i18n.yaml — 双语 README 一致性记录（人工维护）
 
 # 编辑任一 README 后需同步另一份并更新下方 sha256（`shasum -a 256`）。
-# 本文件为包级人工记录，`verify:i18n` 不自动校验（仓库纪律见家族惯例）。
+# 本文件为包级记录，`verify:i18n` 会逐条校验下方缩进条目的内容哈希
+# （`pnpm run verify:i18n -- --write` 可重录；仓库纪律见家族惯例）。
 
 en:
-  README.md: 6b5dbe13f75d87d3770ce84003d39922b3303545cf8bf2ec213f6d9d63ab6982
+  README.md: f50a1130414250d4691fdad67315bee3d2aa84115b08647bb46943091779c79a
 zh:
-  README.zh.md: 9f1dd0fa6b5f05587366b7a12b9174753ec51cf51640198d3ca533d21df20ee7
+  README.zh.md: af74a56337f65ef33029b8cc53a49c1b90e4cdd7b71215dc9441e5c9fb8aae4a

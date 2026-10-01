@@ -130,8 +130,11 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
     maxBufferedRequestBytes: MAX_BUFFERED_REQUEST_BYTES,
     httpRequest: deps.httpRequest,
     liveStreams,
-    // Root-mounted owner: same-origin absolute redirects from the managed dsh
-    // are stripped to their path so a Location can never escape the public origin.
+    // Root-mounted owner: a redirect pointing back at the managed dsh's OWN
+    // origin is rewritten to its path (responseBasePath '' strips the origin),
+    // while a cross-origin Location is forwarded exactly as the upstream sent
+    // it — the upstream is the trusted managed dsh, so its own cross-origin
+    // redirects are not rewritten here.
     responseBasePath: '',
     // HTML head patch: the browser-facing official dsh frontend declares its
     // index host-owned to the documented client hook

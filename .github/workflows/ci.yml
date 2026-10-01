@@ -130,6 +130,16 @@ jobs:
         run: pnpm run verify:registry
       - name: Upstream anchor probe (symbol anchors + legacy budget)
         run: pnpm run verify:anchors
+      # 移动插件锚点保鲜门（design 17 §18.4.3/§18.6）：本步按门的 fail-soft 默认跑。CI 物化的
+      # 是 vendor/harness-packages/@deepseek-ai/<pkg> 源码链接树（scripts/dev/ensure-harness-vendor.mjs），
+      # 结构上没有锚点根要求的 node_modules/@deepseek-ai/**/lib/*.js，也没有
+      # dsh-web-frontend/dist/assets；bundle:dsh 又是 release-only，所以严格模式在 CI 必红；
+      # 真正「必须查过」的严格入口在升级流程 §7：
+      #   node scripts/upstream/verify-mobile-anchors.mjs --require-anchor-root --anchor-root <tree>
+      # 本机有锚树（gateway 受控锚 / 打包 app 的 sidecar vendor 树 / 物化后的运行时线）时，
+      # 同一命令会真实判定并在 pin 不符时打出醒目 WARN。
+      - name: Mobile anchor freshness (fail-soft; strict runs in the upgrade flow)
+        run: pnpm run verify:mobile-anchors
       # 能力面对齐门（I-6，与本地 check:static 同一条命令）：capabilities.json 的每条
       # vendor 探针按期望判缺席/出现，chamber 已消费而 vendor 缺席 = chamber-ahead-broken，
       # 本地替代的退役触发（upstream-landed）也必须在此暴露。
