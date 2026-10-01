@@ -6,17 +6,19 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import {
-  DEVICE_FACTS_EXPRESSION, HEADER_FIRST_ROW_MAX_PX, HIT_BOX_MIN_PX, MOBILE_DEVICE, applyRequireRun,
-  deviceEmulationSteps, deviceEmulationVerdict,
-  headerFirstRowVerdict, headerWrapVerdict, hitBoxVerdict, overflowVerdict, pluginActivationVerdict,
-  redactSecrets, summarizeWebSocketFrames,
+  DEVICE_FACTS_EXPRESSION, HEADER_FACTS_EXPRESSION, HEADER_FIRST_ROW_MAX_PX, HIT_BOX_MIN_PX, MOBILE_DEVICE,
+  OVERLAY_FACTS_EXPRESSION, applyRequireRun, deviceEmulationSteps, deviceEmulationVerdict,
+  headerFirstRowVerdict, headerWrapVerdict, hitBoxVerdict, overflowVerdict, overlayProbeVerdict,
+  pluginActivationVerdict, redactSecrets, summarizeWebSocketFrames,
 } from './mobile-checks.mjs'
 /** 一台「模拟成功 + 390 宽 + 无溢出」的设备事实。 */
 const deviceFacts = (over = {}) => ({
   innerWidth: 390, innerHeight: 844, clientWidth: 390, clientHeight: 844,
   scrollWidth: 390, scrollHeight: 1200, visualViewport: { width: 390, height: 844, scale: 1 },
-  dpr: 3, screenWidth: 390, maxTouchPoints: 5, ontouchstart: true,
+  dpr: 3, screenWidth: 390, screenHeight: 844, maxTouchPoints: 5, ontouchstart: true,
   pointerCoarse: true, pointerFine: false, hoverNone: true, anyPointerCoarse: true,
   touchTier: true, phoneTier: true,
   rootSlots: 1, mobileFrames: 1, mobileRoles: ['sidebar', 'conversation', 'details'], pluginStyle: true,
@@ -27,7 +29,7 @@ const deviceFacts = (over = {}) => ({
 const text = (over = {}) => ({
   text: '12', tag: 'div', display: 'block', elementChildren: 0, interactive: false,
   seat: 'conversation.session.header.lineage', lineBoxes: 1, height: 20, lineHeight: 20,
-  lineHeightSource: 'computed', whiteSpace: 'normal', fontSize: 14, ...over,
+  lineHeightSource: 'computed', whiteSpace: 'normal', fontSize: 14, paddingTop: 0, paddingBottom: 0, ...over,
 })
 const headerFacts = (over = {}) => ({
   hasOutlet: true, hasHeader: true,
@@ -53,6 +55,10 @@ test('设备模拟步骤：三项 Emulation 调用，touch 在后（pointer:coar
   ])
   assert.equal(steps[0].params.mobile, true)
   assert.equal(steps[1].params.maxTouchPoints, 5)
+  // screen.* 是落地断言 ⇒ 模拟步骤必须真的把它传下去（只断言页面事实不够：
+  // 步骤漏传 + 宿主 screen 恰好同尺寸会让门假绿）。
+  assert.equal(steps[0].params.screenWidth, MOBILE_DEVICE.width)
+  assert.equal(steps[0].params.screenHeight, MOBILE_DEVICE.height)
 })
 
 test('溢出：设备宽基准能抓到收缩适配下的真溢出（task 的 innerWidth 断言会假绿）', () => {
@@ -74,7 +80,7 @@ test('溢出：拿不到宽度时 INFO，不冒充通过', () => {
 test('首行高度：> 48px 红；无会话头 INFO', () => {
   assert.equal(headerFirstRowVerdict(headerFacts()).ok, true)
   assert.equal(headerFirstRowVerdict(headerFacts({ firstRowBox: { w: 390, h: HEADER_FIRST_ROW_MAX_PX + 1, top: 0, left: 0 } })).ok, false)
-  assert.equal(headerFirstRowVerdict(headerFacts({ hasHeader: false, firstRowBox: null })).ok, null)
+  assert.equal(headerFirstRowVerdict(headerFacts({ hasHeader: false, hasOutlet: false, firstRowBox: null })).ok, null)
 })
 
 test('换行：行盒 > 1 即红（精确信号）', () => {
@@ -108,6 +114,34 @@ test('换行：nowrap 元素按定义不换行', () => {
 test('换行：无会话头/无文本 INFO', () => {
   assert.equal(headerWrapVerdict(headerFacts({ hasHeader: false, hasOutlet: false })).ok, null)
   assert.equal(headerWrapVerdict(headerFacts({ texts: [] })).ok, null)
+})
+
+test('M-5/M-6：会话头隐藏或零尺寸必须 INFO，不得判 PASS（0 高/0 行盒是「没测到」）', () => {
+  // M-5：0 高的首行盒恒 ≤ 48px，旧判定直接 PASS——「没测到」冒充「没超标」。
+  const zeroRow = headerFirstRowVerdict(headerFacts({ firstRowBox: { w: 390, h: 0, top: 0, left: 0 } }))
+  assert.equal(zeroRow.ok, null)
+  assert.match(zeroRow.evidence, /隐藏\/零尺寸/)
+  assert.equal(headerFirstRowVerdict(headerFacts({ firstRowBox: { w: 0, h: 44, top: 0, left: 0 } })).ok, null)
+  // firstRowBox 缺失而 headerBox 也零尺寸（整个会话头 display:none）⇒ INFO。
+  const hiddenHeader = headerFirstRowVerdict(headerFacts({
+    firstRowBox: null, headerBox: { w: 0, h: 0, top: 0, left: 0 },
+  }))
+  assert.equal(hiddenHeader.ok, null)
+  assert.match(hiddenHeader.evidence, /隐藏\/零尺寸/)
+  // 会话头可见时照旧按 ≤48px 判。
+  assert.equal(headerFirstRowVerdict(headerFacts()).ok, true)
+
+  // M-6：文本元素全隐藏（lineBoxes=0）时旧判定从 wrapped=[] 得 PASS。
+  const hiddenTexts = headerWrapVerdict(headerFacts({
+    texts: [text({ lineBoxes: 0, height: 0 }), text({ lineBoxes: 0, height: 0 })],
+  }))
+  assert.equal(hiddenTexts.ok, null)
+  assert.match(hiddenTexts.evidence, /没有任何可见行盒/)
+  // 只要有一个可见行盒就继续按原判据判定（不因个别隐藏元素降级）。
+  assert.equal(headerWrapVerdict(headerFacts({ texts: [text({ lineBoxes: 0, height: 0 }), text()] })).ok, true)
+  // --require-run 仍然把这两个 INFO 改判 FAIL（走查层 addGated；这里的 INFO 是默认档语义）。
+  assert.equal(applyRequireRun(zeroRow, true).ok, false)
+  assert.equal(applyRequireRun(hiddenTexts, true).ok, false)
 })
 
 test('命中盒：任一轴 < 44px 即红；无可见 button INFO；隐藏按钮不计', () => {
@@ -242,4 +276,223 @@ test('脱敏：URL 查询串里的凭据也抹掉（长度不限——短 token 
   const fragment = redactSecrets('https://h/#token=abc,def', [])
   assert.ok(!fragment.includes('def'), fragment)
   assert.match(fragment, /#token=\*\*\*/)
+})
+
+test('脱敏：session[-_]?id 键族（大小写不敏感）也被抹掉——plain session 盖不到它们', () => {
+  for (const spelling of ['sessionId', 'session_id', 'session-id', 'SessionId', 'SESSION_ID', 'X-Session-Id']) {
+    const out = redactSecrets('{"' + spelling + '":"abc12345"}', [])
+    assert.ok(!out.includes('abc12345'), spelling + ': ' + out)
+    assert.equal(JSON.parse(out)[spelling], '***', spelling + ': ' + out)
+  }
+  // 查询串 / 裸值两种形状共用同一 key 族，也要覆盖。
+  assert.ok(!redactSecrets('ws://h/x?sessionId=abc12345&keep=1', []).includes('abc12345'))
+  assert.ok(!redactSecrets('session_id: abc12345', []).includes('abc12345'))
+  assert.ok(!redactSecrets('X-Session-Id: abc12345', []).includes('abc12345'))
+})
+
+test('脱敏：cookie 值按一个整体抹掉——不破坏 JSON、也不吞同行后续键', () => {
+  // 数组 / 对象值（含多层嵌套）：整体换成带引号的占位符，外层 JSON 仍可解析，后续键原样保留。
+  for (const value of ['[1,2]', '{"a":"1"}', '{"a":{"b":{"c":1}}}']) {
+    const input = '{"cookie":' + value + ',"next":"KEEP"}'
+    const out = redactSecrets(input, [])
+    assert.equal(JSON.parse(out).next, 'KEEP', input + ' => ' + out)
+    assert.equal(JSON.parse(out).cookie, '***', input + ' => ' + out)
+  }
+  // 引号值走引号规则，后续键同样保留。
+  const quoted = redactSecrets('{"cookie":"a=1; b=2","next":"KEEP"}', [])
+  assert.equal(JSON.parse(quoted).next, 'KEEP')
+  assert.equal(JSON.parse(quoted).cookie, '***')
+  // 裸值（真实 Cookie 头）：整段覆盖到 `,`/`}`/`]` 为止。
+  const header = redactSecrets('Cookie: sid=SECRETFRAMETOKEN; other=1', [])
+  assert.ok(!header.includes('SECRETFRAMETOKEN'), header)
+  // 同一行后面的键不得被吞（旧规则的 `[^\\r\\n}]*` 会把它整段吃掉）。
+  const withNext = redactSecrets('Cookie: a=1, "next": 2', [])
+  assert.match(withNext, /"next": 2/, withNext)
+  assert.ok(!withNext.includes('a=1'), withNext)
+  // 转义形态（JSON 里嵌 JSON）：占位符跟着用 `\\"`，外层文档仍可解析。
+  const escaped = redactSecrets('{"payload":"{\\"cookie\\":{\\"a\\":1},\\"next\\":2}"}', [])
+  assert.equal(JSON.parse(escaped).payload, '{"cookie":"***","next":2}')
+})
+
+
+test('设备模拟：落地信号（maxTouchPoints/ontouchstart/dpr）与档位蕴含都参与硬失败', () => {
+  const noTouch = deviceEmulationVerdict(deviceFacts({ maxTouchPoints: 0 }))
+  assert.equal(noTouch.ok, false)
+  assert.match(noTouch.evidence, /maxTouchPoints=0/)
+  assert.equal(deviceEmulationVerdict(deviceFacts({ ontouchstart: false })).ok, false)
+  const lowDpr = deviceEmulationVerdict(deviceFacts({ dpr: 2 }))
+  assert.equal(lowDpr.ok, false)
+  assert.match(lowDpr.evidence, /devicePixelRatio=2/)
+  // 请求宽 <=768 ⇒ phoneTier 必须为真；<=1023 ⇒ touchTier 必须为真（否则插件按另一档渲染）。
+  const noPhone = deviceEmulationVerdict(deviceFacts({ phoneTier: false }))
+  assert.equal(noPhone.ok, false)
+  assert.match(noPhone.evidence, /phoneTier/)
+  const tablet = { ...MOBILE_DEVICE, width: 1000 }
+  // screenWidth 必须跟着“请求设备”走：它是与 dpr 同级的落地断言（1000 宽请求下
+  // 页面报 390 就是模拟没生效，判 FAIL）。
+  const tabletFacts = over => deviceFacts({ screenWidth: 1000, ...over })
+  assert.equal(deviceEmulationVerdict(tabletFacts({ phoneTier: false, touchTier: false }), tablet).ok, false)
+  assert.equal(deviceEmulationVerdict(tabletFacts({ phoneTier: false, touchTier: true }), tablet).ok, true,
+    '1000 宽不要求 phoneTier，只要求 touchTier')
+  assert.equal(deviceEmulationVerdict(deviceFacts({ phoneTier: false, touchTier: true }), tablet).ok, false,
+    '屏幕事实没跟着请求设备走（390 vs 1000）就是模拟未落地，不再只标注')
+  // screen.* 与 dpr/maxTouchPoints/ontouchstart 同级的落地断言：不符即 FAIL。
+  const screenMismatch = deviceEmulationVerdict(deviceFacts({ screenWidth: 375, screenHeight: 667 }))
+  assert.equal(screenMismatch.ok, false)
+  assert.match(screenMismatch.evidence, /screen=375×667/)
+  assert.match(screenMismatch.evidence, /失败项/)
+  // 半边不符也要红（只查宽度的旧写法会漏掉高）。
+  assert.equal(deviceEmulationVerdict(deviceFacts({ screenHeight: 667 })).ok, false)
+  // screen 读不到（无 window.screen）同样是落地信号缺失，不冒充通过。
+  const noScreen = deviceEmulationVerdict(deviceFacts({ screenWidth: null, screenHeight: null }))
+  assert.equal(noScreen.ok, false)
+  assert.match(noScreen.evidence, /screen=null×null/)
+})
+
+test('溢出：clientWidth 超出设备宽（基准不可信）或页面缩放 ⇒ FAIL，不拿不可信数字判通过', () => {
+  const wide = overflowVerdict(deviceFacts({ clientWidth: 400, scrollWidth: 400 }))
+  assert.equal(wide.ok, false)
+  assert.match(wide.evidence, /基准不可信/)
+  const zoomed = overflowVerdict(deviceFacts({ visualViewport: { width: 390, height: 844, scale: 0.5 } }))
+  assert.equal(zoomed.ok, false)
+  assert.match(zoomed.evidence, /scale=0\.5/)
+  assert.equal(overflowVerdict(deviceFacts()).ok, true, '基准可信时照旧判定')
+})
+
+test('会话头锚点形状失效：outlet 在而 closest(header) 空 ⇒ 首行/换行硬失败（不再 INFO）', () => {
+  const broken = headerFacts({ hasHeader: false, headerBox: null, headerChildren: [] })
+  const firstRow = headerFirstRowVerdict(broken)
+  assert.equal(firstRow.ok, false)
+  assert.match(firstRow.evidence, /锚点形状失效/)
+  const wrap = headerWrapVerdict(broken)
+  assert.equal(wrap.ok, false)
+  assert.match(wrap.evidence, /锚点形状失效/)
+  // 无会话（outlet 也不存在）仍是 INFO——"没有会话"与"锚点坏了"必须分开。
+  assert.equal(headerFirstRowVerdict(headerFacts({ hasHeader: false, hasOutlet: false })).ok, null)
+  assert.equal(headerWrapVerdict(headerFacts({ hasHeader: false, hasOutlet: false })).ok, null)
+})
+
+test('命中盒：tabs 与 buttons 取并集；同一控件几何去重；tab 零尺寸不计', () => {
+  const small = hitBoxVerdict(headerFacts({ buttons: [], tabs: [{ role: 'tab', box: { w: 28, h: 44, top: 0, left: 0 } }] }))
+  assert.equal(small.ok, false)
+  assert.match(small.evidence, /tab:28×44/)
+  assert.equal(hitBoxVerdict(headerFacts({ buttons: [], tabs: [{ role: 'tab', box: { w: 44, h: 44, top: 0, left: 0 } }] })).ok, true)
+  // button[role=tab] 同时出现在两个列表：按几何去重后只算一个。
+  const sameGeometry = headerFacts({
+    buttons: [{ label: 'X', visible: true, box: { w: 44, h: 44, top: 0, left: 0 } }],
+    tabs: [{ role: 'tab', box: { w: 44, h: 44, top: 0, left: 0 } }],
+  })
+  const verdict = hitBoxVerdict(sameGeometry)
+  assert.equal(verdict.ok, true)
+  assert.match(verdict.evidence, /去重 1 个/)
+  // 零尺寸 tab 不计入可见控件；全不可见 ⇒ INFO。
+  const hidden = hitBoxVerdict(headerFacts({ buttons: [], tabs: [{ role: 'tab', box: { w: 0, h: 0, top: 0, left: 0 } }] }))
+  assert.equal(hidden.ok, null)
+  assert.match(hidden.evidence, /隐藏\/零尺寸 1 个/)
+})
+
+test('覆盖层探查：无覆盖层 INFO；fixed 无位移且溢出 FAIL；位移/absolute 溢出只作证据', () => {
+  assert.equal(overlayProbeVerdict({ limitW: 390, limitH: 844, overlays: [], scanCapped: false }).ok, null)
+  const fixedOverflow = overlayProbeVerdict({ limitW: 390, limitH: 844, overlays: [
+    { tag: 'div', role: null, slot: 'shell.overlay', position: 'fixed', zIndex: 50, displaced: false, rect: { x: 0, y: 0, w: 420, h: 100 }, overflows: true },
+  ] })
+  assert.equal(fixedOverflow.ok, false)
+  assert.match(fixedOverflow.evidence, /判定 FAIL/)
+  assert.match(fixedOverflow.evidence, /shell\.overlay/)
+  const displaced = overlayProbeVerdict({ limitW: 390, limitH: 844, overlays: [
+    { tag: 'aside', role: null, slot: null, position: 'fixed', zIndex: 60, displaced: true, rect: { x: -370, y: 0, w: 370, h: 844 }, overflows: true },
+  ] })
+  assert.equal(displaced.ok, true, '有位移的 fixed 层按“故意移出视口”解释')
+  const absoluteOverflow = overlayProbeVerdict({ limitW: 390, limitH: 844, overlays: [
+    { tag: 'div', role: null, slot: null, position: 'absolute', zIndex: 41, displaced: false, rect: { x: 0, y: 0, w: 500, h: 50 }, overflows: true },
+  ] })
+  assert.equal(absoluteOverflow.ok, true, 'absolute 的溢出只报告（滚动容器内几何不按 fixed 规则判）')
+})
+
+test('换行：文本元素超过 80 个、扫描被截断 ⇒ INFO（「前 80 个没换行」不是「没有换行」）', () => {
+  const verdict = headerWrapVerdict(headerFacts({ texts: [text()], textsTruncated: true, textsTotal: 120 }))
+  assert.equal(verdict.ok, null, '截断后只能 INFO：未检查的元素可能有换行')
+  assert.match(verdict.evidence, /\[截断\]/)
+  assert.match(verdict.evidence, /120 个带文本元素/)
+  assert.match(verdict.evidence, /扫描截断/)
+  assert.match(verdict.evidence, /不能据此判「没有换行」/)
+  // 截断只限制「通过」这一侧：已扫到的换行仍是确凿事实，照旧红。
+  const wrapped = headerWrapVerdict(headerFacts({ texts: [text({ lineBoxes: 2, height: 40 })], textsTruncated: true, textsTotal: 120 }))
+  assert.equal(wrapped.ok, false)
+  // 没截断时照旧判 PASS。
+  assert.equal(headerWrapVerdict(headerFacts({ texts: [text()], textsTruncated: false })).ok, true)
+  // --require-run 把这条 INFO 改判 FAIL（走查层 addGated）。
+  assert.equal(applyRequireRun(verdict, true).ok, false)
+})
+
+test('换行：纵向 padding 非零的叶子不参与高度启发式（带内边距的单行 chip 不得假红）', () => {
+  // box 高 36 = 行高 20 + 上下各 8 的 padding：单行，不是换行。
+  const padded = headerWrapVerdict(headerFacts({ texts: [text({ height: 36, lineHeight: 20, paddingTop: 8, paddingBottom: 8 })] }))
+  assert.equal(padded.ok, true, 'padding 撑高的单行叶子不得假红：' + padded.evidence)
+  assert.match(padded.evidence, /纵向 padding 非零、只按行盒数判的叶子 1 个/)
+  // 纵向 padding 非零时**不得仅凭高度**判换行：即使高 56（内容区 40 > 30），也只看行盒数。
+  const paddedTall = headerWrapVerdict(headerFacts({ texts: [text({ height: 56, lineHeight: 20, paddingTop: 8, paddingBottom: 8 })] }))
+  assert.equal(paddedTall.ok, true, 'padding 非零时高度单独说明不了换行：' + paddedTall.evidence)
+  // 同一叶子真的换行（行盒=2）照旧红——精确信号不受 padding 影响。
+  const paddedWrapped = headerWrapVerdict(headerFacts({ texts: [text({ height: 56, lineHeight: 20, paddingTop: 8, paddingBottom: 8, lineBoxes: 2 })] }))
+  assert.equal(paddedWrapped.ok, false)
+  // 无 padding 的老事实形状：高 36 > 30 ⇒ 红（启发式只在纵向 padding 为 0 时生效）。
+  const tall = headerWrapVerdict(headerFacts({ texts: [text({ height: 36, lineHeight: 20 })] }))
+  assert.equal(tall.ok, false)
+  assert.match(tall.evidence, /高度启发式/)
+  assert.match(tall.evidence, /纵向 padding=0/)
+  // 边界：恰为 行高×1.5 不判（判据是严格大于）。
+  assert.equal(headerWrapVerdict(headerFacts({ texts: [text({ height: 30, lineHeight: 20 })] })).ok, true)
+  // 采集面必须真的带出纵向 padding，否则判定拿不到它。
+  for (const field of ['paddingTop', 'paddingBottom']) {
+    assert.ok(HEADER_FACTS_EXPRESSION.includes(field), 'HEADER_FACTS_EXPRESSION must expose ' + field)
+  }
+})
+
+test('覆盖层探查：扫描在上限 40 处截断 ⇒ INFO，证据不得写「全部在视口内」', () => {
+  const inside = { tag: 'div', role: null, slot: null, position: 'absolute', zIndex: 41, displaced: false, rect: { x: 0, y: 0, w: 380, h: 100 }, overflows: false }
+  const capped = overlayProbeVerdict({ limitW: 390, limitH: 844, overlays: [inside], scanCapped: true })
+  assert.equal(capped.ok, null, '截断时不能判 PASS：第 41 个以后没检查过')
+  assert.match(capped.evidence, /判定 INFO（扫描截断）/)
+  assert.ok(!capped.evidence.includes('全部覆盖层 rect 均在视口内'), '截断时不得写全称：' + capped.evidence)
+  assert.match(capped.evidence, /不能据此判「全页没有越界项」/)
+  // 同一份事实在未截断时照旧 PASS。
+  assert.equal(overlayProbeVerdict({ limitW: 390, limitH: 844, overlays: [inside], scanCapped: false }).ok, true)
+  // 截断中已经扫到 fixed 无位移的真溢出：确凿事实照旧 FAIL（截断只限制「通过」侧）。
+  const found = overlayProbeVerdict({ limitW: 390, limitH: 844, scanCapped: true, overlays: [
+    { tag: 'div', role: null, slot: null, position: 'fixed', zIndex: 50, displaced: false, rect: { x: 0, y: 0, w: 420, h: 100 }, overflows: true },
+  ] })
+  assert.equal(found.ok, false)
+  assert.match(found.evidence, /判定 FAIL/)
+})
+
+test('锁步：探测表达式与插件源码常量同值（markup.ts / composer.ts）', () => {
+  const repoRoot = fileURLToPath(new URL('../../', import.meta.url))
+  const readConst = (rel, name) => {
+    const source = readFileSync(repoRoot + rel, 'utf8')
+    const match = new RegExp('\\b' + name + '\\s*=\\s*').exec(source)
+    assert.ok(match !== null, name + ' must be declared in ' + rel)
+    const rest = source.slice(match.index + match[0].length)
+    const quote = rest[0]
+    assert.ok(quote === "'" || quote === '"', name + ' must be assigned a string literal in ' + rel)
+    const end = rest.indexOf(quote, 1)
+    return rest.slice(1, end)
+  }
+  const locked = [
+    readConst('packages/dsh-chamber-client-ui-mobile/src/client/markup.ts', 'ROOT_SLOT_SELECTOR'),
+    readConst('packages/dsh-chamber-client-ui-mobile/src/client/markup.ts', 'MOBILE_FRAME_ATTR'),
+    readConst('packages/dsh-chamber-client-ui-mobile/src/client/markup.ts', 'MOBILE_ROLE_ATTR'),
+    readConst('packages/dsh-chamber-client-ui-mobile/src/client/composer.ts', 'TOUCH_TIER_QUERY'),
+    readConst('packages/dsh-chamber-client-ui-mobile/src/client/composer.ts', 'PHONE_TIER_QUERY'),
+    readConst('packages/dsh-chamber-client-ui-mobile/src/client/composer.ts', 'MOBILE_KBD_ATTR'),
+    readConst('packages/dsh-chamber-client-ui-mobile/src/client/composer.ts', 'MOBILE_KBD_STATE_ATTR'),
+    readConst('packages/dsh-chamber-client-ui-mobile/src/client/composer.ts', 'MOBILE_KBD_SPACER_ATTR'),
+  ]
+  for (const value of locked) {
+    assert.ok(DEVICE_FACTS_EXPRESSION.includes(value), 'DEVICE_FACTS_EXPRESSION must carry the plugin constant ' + JSON.stringify(value))
+  }
+  // 探测表达式不得使用被锚点门禁止的旧 header 直接子选择器（形状失效时它只回 null）。
+  assert.ok(!HEADER_FACTS_EXPRESSION.includes('[data-slot="conversation.session.header"] > header'))
+  assert.ok(HEADER_FACTS_EXPRESSION.includes("outlet.closest('header')"))
+  assert.ok(OVERLAY_FACTS_EXPRESSION.includes('zIndex'))
 })
