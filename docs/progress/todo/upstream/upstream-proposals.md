@@ -251,3 +251,23 @@ chamber 用自建多来源侧栏渲染会话行（不挂载官方 workspace-brow
 ② 把这类行座席提升为**页面级**座席（无所有者，任何会话行实现都可渲染；同 id 声明幂等合并）。
 收益：任何自建行/自建侧栏的宿主壳都能渲染官方插件的行贡献，不必构建期改写上游注册；chamber 侧该 vendor 补丁可随之退役。
 
+## 12. workspace 删除的 order/remove 两帧应原子化（client store 的 unranked-sink）
+
+现象（chamber 真机）：删除一个 workspace / git worktree 时，侧栏对应行**先滑到本 section 最后一行、再消失**。
+
+根因链（pinned 0.2.0-rc.2 取证）：宿主 `dsh-workspace` 的 `deleteKnown` 先以 pending-delete 标记落盘
+"不含该 id 的 `workspaceIds`"，随后才删表行；`dsh-api-workspace-controller` 的 `WorkspaceFeed.changed`
+在第一次 state 变化上就发 `order` 帧，`remove` 帧要等表删除。客户端
+`ClientWorkspaceModel.installOrder` 把新 order 未列的项按 `rank.get(id) ?? Number.MAX_SAFE_INTEGER` 排到最后
+——两帧之间被删行仍在 `items` 里、却站在列表末尾（`items` 是宿主壳与侧栏渲染序的唯一来源），keyed 行动效
+于是把它 FLIP 到尾部；`remove` 帧到达再淡出。
+
+上游最小改法（任一）：① `WorkspaceFeed.changed` 的 state 变化分支里，若 pending-delete 的 id 已不在
+`nextOrder` 却仍在 `knownIds`，当场补发 `remove`（与 order 变化同步发布；客户端 store 的微任务代际合并
+会把中间态整帧吃掉，所有 follower 一并修好）；② `installOrder` 对不在 `workspaceIds` 里的项保留其当前位置，
+而不是沉底（该规则同时承担 `upsert` 新行的落点语义，需与创建流程一并裁决）。
+
+chamber 侧现状 = 删除意图（pre-delete 半边，design 05 §2.2.1；`packages/dsh-chamber-client-core/src/workspace-removal.ts`）：
+wire 之前发布意图，投影只摘"观察到下沉"时尾部 pending 段中真正沉下来的那部分；外部/他端删除没有本仓事实、仍是未补偿面。
+退出条件：上游落地后删除该补偿与 STATUS「无法控制的差异」条，本节移出本表。
+

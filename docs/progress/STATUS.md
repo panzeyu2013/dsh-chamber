@@ -99,6 +99,7 @@
 - open-in 超集口径（裁决）：S3 = 复制路径；复制 ssh/深链与 S4 不做。
 - VS Code 深链 + open-in：macOS 实机 8 项。
 - Git Worktree（design 08）：远程 Linux 端到端 3 项 + 实机 3 项 + 孤儿 workspace 注册清理两态 1 项（外部删除目录 / 目录+记录都已 prune，判据见 gui-acceptance checklist）。
+- **工作区删除意图（pre-delete 半边，design 05 §2.2.1）实机验收一项**（未验）：在 sidebar 删掉一个位于列表**中部**的 git worktree（或普通 workspace）——判据 = 行在**原位置**淡出、其下各行上滑，绝不出现"先滑到本 section 最后一行再消失"（展开组另按**会话粒度**检查：组内会话在下沉帧迁入未分组桶——位移总次数与旧行为相同、终态与权威一致，见 design 05 §2.2.1）；删**最后一行**时无任何位移；删除被宿主**确定性拒绝**时行不消失、不闪回——限**单次删除**（无并发意图、上一次投影的尾部仍在列表里、且投影尾部没有被本趟回声追加的行）；已登记例外（四类，逐条见 design 05 §2.2.1 边界清单）：①"宿主已提交但回答丢失"的歧义失败与"失败发生在 order 写之后"的宿主回滚路径（行可能在权威 remove / 恢复帧前于尾部重现一帧）；②上一次投影的尾部先离表（含同 id 来源重建沿用上一代缓存尾部；待删行可能提前一帧隐藏、拒绝后回闪）；③待删行被他端重排送到尾部（按已沉底摘掉）；④投影自己追加到尾部的回声行挡住走查（纠正推迟到权威 remove 帧；`archivedFilter='only'` 丢掉回声行时可见形态与未修复同形，窄窗）。四类都只影响用户已发起删除的那一行，绝不误摘无关行；另有两类主文登记的派生中断窄窗同样可能造成一次波动：非 ok / 空列表派生使 `tailWorkspaceId` 证据失效（该帧不纠正且成为新基准，纠正锁到权威帧）、尾部段被整段摘空后的无关重算回闪一次。实现落点 = `packages/dsh-chamber-client-core/src/workspace-removal.ts`（账本+投影）+ `workspace-mutations.ts`（wire 前发布/失败撤回）+ `aggregate-store.ts`（两事实与桥方法）+ `packages/renderer/src/host/servers.ts`（证据与最外层投影）、`host/echo-store.ts`（第五 slice）、`app-hooks/use-bridge-subscriptions.ts`（记入/撤下/收敛）+ `App.tsx`（sweep/退役/传参）；上游把 order/remove 原子化随 pin 落地后，本项与补偿一并退役（见「无法控制的差异」条）。
 - 会话创建/fork/归档侧栏收敛：四项实机验收 + 整源降级面。
 - 打开意图/工作区回声：四项实机验收 + 阶段 0 插桩判定 `early-open.ts` 去留。
 - 新 worktree 首帧落点（位置意图）与行动效：实机验收五项——①从所属 workspace 之后入场、不在列表最顶端（含主 checkout
@@ -222,6 +223,13 @@
   30s 无 `visibilityState` 门的相对时钟（隐藏视图同样在跑）、面板点击埋点 `sidebar_menu_click` 未复制（按裁决不复制）。
   前两条是 extra row / 上游组件的既有行为（chamber 无补丁面），不做本仓修补；宽态入口的盒形 / 静息不可见 /
   丢失上游宽态 `nav[aria-label]` 分组壳与静息选中态 / wide↔rail 重挂载接受偏差见 design 06 §4.7。
+- **删除 workspace 的两帧窗口（pinned client store 的 unranked-sink）**：上游宿主删除先提交"不含该 id 的
+  `workspaceIds`"（vendor `dsh-workspace` 的 `deleteKnown`）并发 `order` 帧，表行删除之后才发 `remove` 帧；
+  pinned `dsh-api-workspace-controller` client 的 `installOrder` 把新 order 未列的项排到最后
+  （`rank.get(id) ?? Number.MAX_SAFE_INTEGER`）⇒ 两帧之间被删行仍在 items 里、站在列表末尾（真机 = 行先滑到
+  本 section 最后一行再消失）。本仓补偿 = 删除意图（pre-delete 半边，design 05 §2.2.1）：wire 之前发布意图，
+  投影只摘"观察到下沉"时尾部连续 pending 段中真正沉下来的那一部分（向前保留到上一次投影的真实尾部）。退役条件 = 上游把 order/remove 原子化（或 `installOrder` 不再沉底）
+  随 pin 落地后，删除补偿与本节条目；未补偿面 = 外部/他端发起的删除（没有本仓事实，仍走未补偿的 store 帧）——**外部删除仍会复现同一尾部滑行**，属已登记验收预期。
 - **平台腿未落地**：Windows 的 `[data-windows-titlebar]` 分支（属性已由 win32 preload 的 `markWindowsTitlebar` 写入，
   侧栏整块未抄，收口随 design 23）⇒ Windows 腿的侧栏
   形态与上游不同，属排期而非功能选择（Electron macOS 腿见上文「macOS 窗口 chrome 实机」条）。
@@ -285,7 +293,7 @@
 
 > 双 flavor 专项登记（S/T/P/G/D + 可达性纪律）见 [deviations.md](deviations.md)。
 
-- **God 文件预算例外**（`scripts/gates/file-budgets.json`，该表「只降不升」的例外）：`App.tsx` / `aggregate-store.ts` / `derive.ts` 的当前预算高于基线，逐条 note 记评审理由（行入场动画与放置接线、worktree 放置事实/通道、pin 视图选项合并与筛选线程化；三个派生模块另在 pin-partition.ts、flat-account.ts、workspace-tree.ts 与 pinnedSessionIds·pinSetKnown 字段）。收口方向 = 放置事实迁到 `workspace-placement.ts` 旁，新增派生面待专门重构轮。
+- **God 文件预算例外**（`scripts/gates/file-budgets.json`，该表「只降不升」的例外）：`App.tsx` / `aggregate-store.ts` / `derive.ts` 的当前预算高于基线，逐条 note 记评审理由（行入场动画与放置接线、worktree 放置事实/通道、pin 视图选项合并与筛选线程化、工作区删除意图事实/通道与接线；三个派生模块另在 pin-partition.ts、flat-account.ts、workspace-tree.ts 与 pinnedSessionIds·pinSetKnown 字段）。收口方向 = 放置/删除事实迁到 `workspace-placement.ts` / `workspace-removal.ts` 旁，新增派生面待专门重构轮。
 
 - 代码质量辅助门只本地跑（2026-09-25 裁决）：8 门退出 ci/release，仍是 `check:static` 成员；代价 = CI 不再捕获这几类漂移（登记在 `static-gate-parity.mjs`）。
 - seed 自检缺包「只报不阻断」；要阻断改该 check 的 `gap` 判定。

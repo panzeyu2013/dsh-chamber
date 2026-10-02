@@ -112,7 +112,8 @@ test('the renderer projection wires the per-source filter as a projection input 
   assert.ok(APP.includes('subscribeViewPrefs'), 'App subscribes to the shared view-prefs store')
   assert.ok(APP.includes("JSON.stringify(getViewPrefs().archivedFilter ?? {})"),
     'only the filter map signature is subscribed (other prefs writes must not re-render the App)')
-  assert.ok(APP.includes('echoes.placement, archivedFilters)'), 'the map rides the deriveServers call')
+  assert.ok(APP.includes('echoes.placement, archivedFilters, echoes.removal)'),
+    'the map rides the deriveServers call (and the removal ledger is appended after it — parameter order is a wiring contract)')
   assert.ok(APP.includes('projectionCaches, archivedFilters]'), 'the map is a memo dependency')
 
   const DERIVE = read('../../../../packages/dsh-chamber-client-core/src/derive.ts')

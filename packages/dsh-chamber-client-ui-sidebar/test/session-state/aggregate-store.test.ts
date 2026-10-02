@@ -208,6 +208,28 @@ test('workspace-removal and workspace-rename facts fan out and unsubscribe exact
   assert.deepEqual(renamed, ['ssh-b/w1/项目 A'])
 })
 
+test('workspace-removing facts fan out (intent before the wire, withdrawal on failure)', () => {
+  // 删除意图（pre-delete 半边，见 client-core workspace-removal.ts）：出口在 wire 之前发布意图，
+  // 失败侧撤下；两条都是一次性单向事实，退订语义与其它事实一致。
+  const removing: string[] = []
+  const failed: string[] = []
+  const offRemoving = chamberBridge.onWorkspaceRemoving(fact => { removing.push(`${fact.sourceId}/${fact.workspaceId}`) })
+  const offFailed = chamberBridge.onWorkspaceRemovingFailed(fact => { failed.push(`${fact.sourceId}/${fact.workspaceId}`) })
+  // The intent carries the host id alone: the delete funnel holds it before the wire, so the
+  // path is neither known-only nor needed for matching (see workspace-removal.ts).
+  chamberBridge.reportWorkspaceRemoving({ sourceId: 'ssh-b', workspaceId: 'w1' })
+  chamberBridge.reportWorkspaceRemovingFailed({ sourceId: 'ssh-b', workspaceId: 'w1' })
+  chamberBridge.reportWorkspaceRemoving({ sourceId: 'local', workspaceId: 'w2' })
+  assert.deepEqual(removing, ['ssh-b/w1', 'local/w2'])
+  assert.deepEqual(failed, ['ssh-b/w1'])
+  offRemoving()
+  offFailed()
+  chamberBridge.reportWorkspaceRemoving({ sourceId: 'ssh-b', workspaceId: 'w3' })
+  chamberBridge.reportWorkspaceRemovingFailed({ sourceId: 'ssh-b', workspaceId: 'w3' })
+  assert.deepEqual(removing, ['ssh-b/w1', 'local/w2'])
+  assert.deepEqual(failed, ['ssh-b/w1'])
+})
+
 test('the active-view fact publishes on change only, and undefined is a real value', () => {
   assert.equal(chamberBridge.getActiveSource(), undefined, 'unpublished until the App writes it')
   const seen: (string | undefined)[] = []

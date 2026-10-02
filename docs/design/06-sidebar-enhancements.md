@@ -1320,7 +1320,10 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   上游口径接受的退化：上游以 list 自身 rect 做视口裁剪，本仓 `.workspaceList` 不是滚动容器（滚动在 `.chamberList`）
   ⇒ 裁剪退化为「全部相交」，屏外被删行同样克隆 + 动画（`finish` 即回收，无残留）。同类边界：**行集与 key 集来自不同判据**
   ——过期 ghost 行（键仍在、`visibility:hidden` 仍占位）与自动窗口上限外的行（键仍在、组件不渲染）都不会触发退出淡出，
-  下方行瞬移；要消除得让 key 集跟着渲染判定走，本轮按上游口径接受。**门控**（照抄上游语义）：
+  下方行瞬移；要消除得让 key 集跟着渲染判定走，本轮按上游口径接受。**删除 workspace 的 unranked-sink 瞬时不由动画器处理**：
+  pinned client store 在两帧之间把被删行排到权威列表**尾部**（design 05 §2.2.1 的删除意图头注），若照渲染序走就会
+  FLIP 到"本 section 最后一行"再淡出；投影侧的删除意图在**观察到下沉**的那一帧摘掉尾部 pending 段中真正沉下来的那部分，动画器收到的始终是"键消失"
+  （退出克隆在原位 + 下方行上滑）——除 design 05 §2.2.1 边界清单的窄窗（投影自追加的回声行挡住走查；该窗内被删行先有一次位移）**及边界①的失败撤回**（order 写之后失败 / 回答丢失时撤下意图，行在尾部重现一帧）外，动画器收到的是"键消失"——动画器与常量因此零改动，本段不是修复落点。**门控**（照抄上游语义）：
   首次指针/键盘输入才 arm；`ready = aggregateReady && 无来源/会话拖拽`；
   `resetKey = JSON.stringify([orderBy, groupByMode, archivedFilter, sessionRowsExpanded, sessionRowWindowMotionKey(…)])`——排序/分组/筛选切换、会话窗口
   展开条与**被放大的自动窗口**都属「视图替换」，立即 settle 不滑动。窗口分量由 client-core

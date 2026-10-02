@@ -1,5 +1,5 @@
 /**
- * Echo ledgers as ONE store. Four optimistic-projection ledgers the App keeps
+ * Echo ledgers as ONE store. Five optimistic-projection ledgers the App keeps
  * while an authoritative view has not caught up:
  *
  * - placement: the workspace-creation PLACEMENT INTENT — the pre-create half of
@@ -9,6 +9,13 @@
  *   the create (and with it any id-keyed echo) exists; this ledger holds the row
  *   at its anchor from that first frame and retires as soon as the host order
  *   moves it off the head.
+ * - removal: the workspace-REMOVAL INTENT — the pre-delete half
+ *   (client-core workspace-removal.ts). The host's delete commits the order
+ *   without the id before it removes the table row, and the pinned client store
+ *   sinks every item the new order does not name to the list TAIL; this ledger
+ *   lets the projection drop the doomed row on that observed sink instead of
+ *   letting the sidebar glide it to the last line and fade it out one frame
+ *   later.
  * - workspaces: a workspace created through the sidebar's unary client may be
  *   structurally invisible until that source is mounted again (unmounted
  *   sources project workspaces from session cwd, so a new empty workspace has
@@ -42,10 +49,12 @@ import type {
   SessionEchoLedger,
   WorkspaceEchoLedger,
   WorkspacePlacementLedger,
+  WorkspaceRemovalLedger,
 } from '@dsh-chamber/dsh-chamber-client-core'
 
 export interface EchoSnapshot {
   placement: WorkspacePlacementLedger
+  removal: WorkspaceRemovalLedger
   workspace: WorkspaceEchoLedger
   session: SessionEchoLedger
   archive: SessionArchiveLedger
@@ -56,18 +65,20 @@ export interface EchoStore {
   /** Synchronous latest snapshot for event callbacks. */
   getSnapshot(): EchoSnapshot
   updatePlacement(next: WorkspacePlacementLedger): void
+  updateRemoval(next: WorkspaceRemovalLedger): void
   updateWorkspace(next: WorkspaceEchoLedger): void
   updateSession(next: SessionEchoLedger): void
   updateArchive(next: SessionArchiveLedger): void
 }
 
 export function createEchoStore(): EchoStore {
-  let snapshot: EchoSnapshot = { placement: {}, workspace: {}, session: {}, archive: {} }
+  let snapshot: EchoSnapshot = { placement: {}, removal: {}, workspace: {}, session: {}, archive: {} }
   const listeners = createListenerSet()
   const emit = (next: Partial<EchoSnapshot>): void => {
     const merged = { ...snapshot, ...next }
     if (
       merged.placement === snapshot.placement
+      && merged.removal === snapshot.removal
       && merged.workspace === snapshot.workspace
       && merged.session === snapshot.session
       && merged.archive === snapshot.archive
@@ -79,6 +90,7 @@ export function createEchoStore(): EchoStore {
     subscribe: listeners.subscribe,
     getSnapshot: () => snapshot,
     updatePlacement(next) { emit({ placement: next }) },
+    updateRemoval(next) { emit({ removal: next }) },
     updateWorkspace(next) { emit({ workspace: next }) },
     updateSession(next) { emit({ session: next }) },
     updateArchive(next) { emit({ archive: next }) },

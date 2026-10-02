@@ -101,6 +101,8 @@ export const GROUPS = {
     'test/session-state/workspace-echo.test.ts',
     // 位置意图（pre-create 半边）：宿主 create 的 PREPEND 短暂态按住 + 四条退场路径 + 接线锁。
     'test/session-state/workspace-placement.test.ts',
+    // 删除意图（pre-delete 半边）：宿主删除的 unranked-sink 帧摘行 + 四条退场路径 + 接线锁。
+    'test/session-state/workspace-removal.test.ts',
     'test/session-state/session-echo.test.ts',
     'test/session-state/session-mutations.test.ts',
     // 归档两段式的纯逻辑：失败分类 + 活动家族 → 文案行（官方 activityLine 的逐分支对照）。

@@ -31,6 +31,7 @@ import {
   emptyIntentPrewarmBudget,
   forgetPendingArchives,
   forgetPendingPlacements,
+  forgetPendingRemovals,
   forgetPendingSessions,
   forgetPendingWorkspaces,
   getOpenIntentsSnapshot,
@@ -43,6 +44,7 @@ import {
   subscribeOpenIntent,
   sweepPendingArchives,
   sweepPendingPlacements,
+  sweepPendingRemovals,
   sweepPendingSessions,
   sweepPendingWorkspaces,
   type InstanceAggregate,
@@ -531,12 +533,13 @@ export default function App() {
   // （commitAggregatePull 的 mounted merge），所以 requestRefresh 无论哪条分支
   // 都刷不出这一行——表现为"必须手动点一下那个服务器"。
   // 账本是单一 store（host/echo-store.ts）：渲染与事件侧读同一份快照。
-  // 回声账本（placement/workspace/session/archive）合并为单一 store：渲染快照与事件侧
+  // 回声账本（placement/removal/workspace/session/archive）合并为单一 store：渲染快照与事件侧
   // 同步读是同一份（见 host/echo-store.ts），没有 state+ref 镜像与双写回调。
   const [echoStore] = useState(createEchoStore)
   const echoes = useSyncExternalStore(echoStore.subscribe, echoStore.getSnapshot, echoStore.getSnapshot)
   const {
     updatePlacement,
+    updateRemoval,
     updateWorkspace: updateWorkspaceEcho,
     updateSession: updateSessionEcho,
     updateArchive: updateSessionArchive,
@@ -558,14 +561,16 @@ export default function App() {
   // 权威归档集覆盖它；别处（另一个客户端）归档的仍需挂载（已知残余）。租约由
   // 兜底拉取续期（只要那份错视图还在列它，就继续藏）；权威集覆盖 / 来源退役 / 租约到期
   // 收敛。与会话回声同纪律：同一 store。
-  /** Expire echoes past their TTL. Called from every tick that can change what a source's workspace list
-   * SHOULD contain (a new creation, an authoritative mount push, each fallback pull): an echo whose
-   * convergence never arrives has no other clock. Identity preserving. */
+  /** Expire echoes past their TTL on the 30s unary fallback clock (this callback's ONLY caller): an
+   * echo whose convergence never arrives has no other clock here; the create/removal/push clocks
+   * sweep inline in use-bridge-subscriptions.ts. Identity preserving. */
   const sweepWorkspaceEcho = useCallback((): void => {
     updateWorkspaceEcho(sweepPendingWorkspaces(echoStore.getSnapshot().workspace, Date.now()))
     // 位置意图用同一批时钟（同一 TTL 语义）：创建/推送/兜底拉取都可能让它退休。
     updatePlacement(sweepPendingPlacements(echoStore.getSnapshot().placement, Date.now()))
-  }, [updatePlacement, updateWorkspaceEcho, echoStore])
+    // 删除意图同理（时钟：删除意图事实、挂载 push 的收敛、这条兜底；成功事实刻意不撤，失败事实按 id 撤下）。
+    updateRemoval(sweepPendingRemovals(echoStore.getSnapshot().removal, Date.now()))
+  }, [updatePlacement, updateRemoval, updateWorkspaceEcho, echoStore])
   /**
    * Session-echo TTL tick (three clocks: the create fact, the authoritative push, the 30s unary
    * fallback — the workspace echo adds the removal fact and therefore sweeps on four). The TTL is a leak guard, not
@@ -673,7 +678,7 @@ export default function App() {
   const servers = useMemo(
     // current 投影（侧栏高亮）跟随 **paintedView**（屏上是谁），不是选择——持有窗内用户点向 B 时
     // 屏上仍是 A，摘掉再装回 A 的高亮是纯闪烁；揭示完成那一拍 painted 变化自然交棒给 B。
-    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, correctionArms, paintedView, pluginDiagnostics, shellStates, managedRuntime, echoes.workspace, echoes.session, echoes.archive, openIntents, locale, sessionFacts, projectionCaches.servers, echoes.placement, archivedFilters),
+    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, correctionArms, paintedView, pluginDiagnostics, shellStates, managedRuntime, echoes.workspace, echoes.session, echoes.archive, openIntents, locale, sessionFacts, projectionCaches.servers, echoes.placement, archivedFilters, echoes.removal),
     [health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, correctionArms, paintedView, pluginDiagnostics, shellStates, managedRuntime, echoes, openIntents, locale, sessionFacts, projectionCaches, archivedFilters],
   )
   // chamberBridge publish 签名闸（等值不发布；签名与缓存见 app-hooks/use-server-projection-publish.ts）。
@@ -988,6 +993,8 @@ export default function App() {
     updateWorkspaceEcho(forgetPendingWorkspaces(echoStore.getSnapshot().workspace, retired))
     // 位置意图同纪律：上一代的意图不得在新来源代的列表里搬动行。
     updatePlacement(forgetPendingPlacements(echoStore.getSnapshot().placement, retired))
+    // 删除意图同纪律：上一代的删除不得在新来源代的列表里摘掉同 id 的行。
+    updateRemoval(forgetPendingRemovals(echoStore.getSnapshot().removal, retired))
     // 会话创建回声同纪律：上一代记账的会话不得在新来源代的列表里幽灵复现。
     updateSessionEcho(forgetPendingSessions(echoStore.getSnapshot().session, retired))
     // 归档墓碑同纪律：新一代来源必须是干净的（旧代的本地归档不得藏住新代的会话）。
@@ -2051,7 +2058,7 @@ export default function App() {
   useBridgeSubscriptions({
     acknowledgeDeepLink, emitSessionNotification, openSession,
     stepCompletionArmFor, withdrawSource, guardStep, refreshAggregate, reportDeepLinkAckFailure, selectView,
-    updatePlacement, updateSessionArchive, updateSessionEcho, updateWorkspaceEcho, aggregatePollSeqRef,
+    updatePlacement, updateRemoval, updateSessionArchive, updateSessionEcho, updateWorkspaceEcho, aggregatePollSeqRef,
     aggregateRequestOwnersRef, authoritativeArchiveSetRef, autoPrewarmedRef, completeLedgerRef,
     drainPrewarmRef, factsAtRef, harvestCandidatesRef, harvestIntentRef,
     harvestStateRef, intentBudgetRef, intentPriorityRef, liveServerIdsRef,

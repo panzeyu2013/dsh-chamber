@@ -35,22 +35,26 @@ import {
   prioritizePrewarmSource,
   reconcilePendingArchives,
   reconcilePendingPlacements,
+  reconcilePendingRemovals,
   reconcilePendingSessions,
   reconcilePendingWorkspaces,
   recordPendingArchive,
   recordPendingSession,
   onSessionRestored,
   recordPendingWorkspace,
+  recordPendingWorkspaceRemoval,
   recordWorkspacePlacement,
   removePendingArchive,
   removePendingPlacement,
   removePendingSession,
   removePendingWorkspace,
+  removePendingWorkspaceRemoval,
   removeUnclaimedPlacements,
   renamePendingWorkspace,
   runtimeReportSignature,
   sweepPendingArchives,
   sweepPendingPlacements,
+  sweepPendingRemovals,
   sweepPendingSessions,
   sweepPendingWorkspaces,
   type InstanceAggregate,
@@ -61,6 +65,7 @@ import {
   type SessionEchoLedger,
   type WorkspaceEchoLedger,
   type WorkspacePlacementLedger,
+  type WorkspaceRemovalLedger,
 } from '@dsh-chamber/dsh-chamber-client-core'
 import type { EchoStore } from '../host/echo-store.ts'
 import type { FactsStore } from '../host/facts-store.ts'
@@ -202,6 +207,7 @@ export interface BridgeSubscriptionsDeps {
   reportDeepLinkAckFailure: (delivery: RendererDeliveryCoordinates, error: unknown) => void
   selectView: (viewId: string, onApply?: (applied: boolean) => void) => boolean
   updatePlacement: (next: WorkspacePlacementLedger) => void
+  updateRemoval: (next: WorkspaceRemovalLedger) => void
   updateSessionArchive: (next: SessionArchiveLedger) => void
   updateSessionEcho: (next: SessionEchoLedger) => void
   updateWorkspaceEcho: (next: WorkspaceEchoLedger) => void
@@ -260,7 +266,7 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
   const {
     acknowledgeDeepLink, emitSessionNotification, openSession,
     stepCompletionArmFor, withdrawSource, guardStep, refreshAggregate, reportDeepLinkAckFailure, selectView,
-    updatePlacement, updateSessionArchive, updateSessionEcho, updateWorkspaceEcho,
+    updatePlacement, updateRemoval, updateSessionArchive, updateSessionEcho, updateWorkspaceEcho,
     aggregatePollSeqRef, aggregateRequestOwnersRef, authoritativeArchiveSetRef, autoPrewarmedRef,
     completeLedgerRef, drainPrewarmRef, factsAtRef, harvestCandidatesRef, harvestIntentRef,
     harvestStateRef, intentBudgetRef, intentPriorityRef, liveServerIdsRef, mutationRefreshSeqRef,
@@ -514,6 +520,39 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
     })
   }, [updatePlacement])
   /**
+   * 工作区**删除意图**（pre-delete 半边）：本桥面第二条在 wire 之前发布的事实，与位置意图对偶。
+   * 宿主删除先提交"不含该 id 的 workspaceIds"（registry 的 pending-delete 状态写）并发出 order 帧，
+   * pinned client store 把新 order 未列的项一律排到最后（`rank.get(id) ?? Number.MAX_SAFE_INTEGER`）
+   * ——被删的行因此仍在 items 里、却站在列表末尾，侧栏的 keyed 行动效会把它滑到最后一行；等 unary
+   * 返回再记事实，那一帧已经渲染过了（见 workspace-removal.ts 头注）。收敛点：权威列表不再列该 id
+   * （挂载 push 的 remove 帧）、失败侧撤下事实、来源离开、TTL。
+   */
+  useEffect(() => {
+    return chamberBridge.onWorkspaceRemoving((fact) => {
+      const { sourceId } = fact
+      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
+      const owner = sourceLifecyclesRef.current!.capture(sourceId)
+      if (owner === null) return
+      const now = Date.now()
+      const swept = sweepPendingRemovals(echoStore.getSnapshot().removal, now)
+      updateRemoval(recordPendingWorkspaceRemoval(swept, sourceId, fact.workspaceId, now))
+    })
+  }, [updateRemoval])
+  /**
+   * 删除意图的**失败侧撤回**：unary `workspace/delete` 拒绝/断流时行不会消失，意图必须立刻退场
+   * （成功侧不发——权威 remove 帧即收敛点，抢在它前面发 settle 只会与那次 push 抢时序，反而可能
+   * 让下沉帧在意图已撤下后才渲染）。
+   */
+  useEffect(() => {
+    return chamberBridge.onWorkspaceRemovingFailed((fact) => {
+      const { sourceId } = fact
+      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
+      const owner = sourceLifecyclesRef.current!.capture(sourceId)
+      if (owner === null) return
+      updateRemoval(removePendingWorkspaceRemoval(echoStore.getSnapshot().removal, sourceId, fact.workspaceId))
+    })
+  }, [updateRemoval])
+  /**
    * 工作区创建回声：任一创建出口（侧栏对话框 / Git worktree 插件）上报宿主
    * workspaceId 后记入渲染端账本并并入投影（deriveServers 单一汇合点）。收敛点：
    * 挂载 push 列出同一 workspaceId / 路径（reconcilePendingWorkspaces）、来源离开
@@ -715,6 +754,14 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
         const swept = sweepPendingPlacements(echoStore.getSnapshot().placement, Date.now())
         const reconciled = reconcilePendingPlacements(swept, sourceId, snapshot.workspaces)
         updatePlacement(reconciled)
+      }
+      {
+        // 删除意图的权威收敛点：权威 workspace 列表不再列该 id（remove 帧到达）即退休。空列表
+        // 不算证据（部分/瞬时基线判不了），保留给 TTL。成功侧刻意不提前退休：RPC 回答可能先于
+        // 下沉帧的渲染提交到达，早退会把那一帧的纠正弄丢。
+        const swept = sweepPendingRemovals(echoStore.getSnapshot().removal, Date.now())
+        const reconciled = reconcilePendingRemovals(swept, sourceId, snapshot.workspaces)
+        updateRemoval(reconciled)
       }
       // 会话回声的权威收敛点：挂载壳的 follow 基线把该会话**归属**到某工作区（成员位，
       // 含合成行）即退休；刻意只看成员位（只列出而无所属时退休会把行抛进未分组桶）。
