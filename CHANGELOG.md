@@ -27,6 +27,7 @@
 - **侧边栏悬停揭示改为按行门控** —— 指针下滑进入的行不再立即揭示动作簇；重命名抑制优先于门控揭示；StrictMode 重挂载后门控按新行重建（design 06 §7）。
 - **设置 → 内置插件** —— 内嵌插件页的标题块按位置隐藏，只保留上游内容本体。
 - **`--mobile-entry` 校验收紧（破坏性）** —— 入口必须是同源绝对路径、不得含查询/片段、不得指向 `/auth*`；旧版把原样值当重定向目标（半可用且静默截断），现在启动即 `exit 2`。
+- **移除归档后提示（design 06 §3.4）** —— 侧栏不再实例化上游的 RowActionToast：archived / stoppedAndArchived 两态与其 undo / show-archived 动作、按 kind 的 TTL 模型、dismiss 管线与两本字典里的死键一并删除；archivedNotOpenable 警告保留（独立触发、3s 普通 alert）。已知代价：归档集未知的降级来源上，已归档行被本地墓碑隐藏、要到该来源挂载且基线落地后才能恢复（被删掉的 6s undo 是覆盖该窗口的入口）。
 
 ### 修复
 - **facts 应用步骤的重入环（React #185）** —— 通知/facts 步进链在写入 store 触发的同步渲染里再回调自身时，React 以 #185 中止且异常被 never-throw 守卫吞掉，导致整拍作废；现在 \`apply-session-facts\` 按来源过重入闸（非重入仍同步执行），重入只登记并补跑**最新**快照，撤回来源的待应用快照随撤回丢弃；\`reconcile\` 与 \`completion-arm\` 语义不变（design 19 §3.7）。

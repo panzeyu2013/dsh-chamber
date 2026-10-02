@@ -93,7 +93,7 @@
     },
     {
       "path": "packages/dsh-chamber-client-ui-sidebar/src/client/ServerSection.tsx",
-      "lines": 1280,
+      "lines": 1243,
       "target": 400,
       "note": "sidebar section container (header + browsing region + rows + view options + pin partition); the 2026-09 pin merge added 198 net (view options, pin partition, flat and tree modes). Nearest extraction: the ordering/partition preparation block (394-469) into server-section-order.ts; −3 = the panel-axis mount moved into the source header (ServerSectionPanels deleted; design 06 §4.7)"
     }
