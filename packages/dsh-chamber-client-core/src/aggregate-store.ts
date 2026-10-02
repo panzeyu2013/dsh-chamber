@@ -282,6 +282,41 @@ export interface WorkspacePlacementFailedFact {
 }
 
 /**
+ * One workspace REMOVAL INTENT — published BEFORE its wire call, the delete-side half of the
+ * workspace echo family and the counterpart of {@link WorkspacePlacementFact}.
+ *
+ * WHY it cannot wait for the delete to answer: the host removes one workspace through TWO
+ * follow frames. The registry first commits the order WITHOUT the id (its pending-delete
+ * state write) and the workspace feed publishes `order` on that change; the `remove` frame
+ * follows the table-row deletion. The pinned client store ranks every item the new order does
+ * not name LAST (`rank.get(id) ?? Number.MAX_SAFE_INTEGER`), so between the two frames the
+ * doomed row is still listed but stands at the END of the list: the sidebar's keyed-row
+ * motion glides it to the tail and the `remove` frame then fades it out — the "row flickers
+ * to the last line, then disappears" symptom, which an RPC-answer fact could not prevent.
+ *
+ * It is an INTENT, not a success: the failure side withdraws it
+ * ({@link WorkspaceRemovingFailedFact}) so a refused delete restores the row, and the
+ * projection only acts on the store's OBSERVED tail-sink (see workspace-removal.ts).
+ */
+export interface WorkspaceRemovingFact {
+  sourceId: string
+  /** Host workspace id — the intent's only key (the delete funnel holds it before the wire;
+   *  unlike the create side, a removal never knows only a path). */
+  workspaceId: string
+}
+
+/**
+ * The workspace deletion this intent announced will not commit (refused, transport died, or the
+ * host's table-write rollback restored the order). Published from the failure side only: on
+ * success the authoritative `remove` frame retires the intent, so a settle fact would race the
+ * push. The accepted withdraw-then-re-render boundaries live in design 05 §2.2.1 — one owner.
+ */
+export interface WorkspaceRemovingFailedFact {
+  sourceId: string
+  workspaceId: string
+}
+
+/**
  * One successful sidebar-issued workspace deletion —
  * the WITHDRAW half of the workspace echo. The sidebar owns `workspace.delete`
  * for the same sources it can create on, and without this fact the echo has no
@@ -489,6 +524,10 @@ type WorkspaceCreatedListener = (fact: WorkspaceCreatedFact) => void
 type WorkspacePlacementListener = (fact: WorkspacePlacementFact) => void
 /** One failed placement reposition (see WorkspacePlacementFailedFact). */
 type WorkspacePlacementFailedListener = (fact: WorkspacePlacementFailedFact) => void
+/** One pre-delete workspace removal intent (see WorkspaceRemovingFact). */
+type WorkspaceRemovingListener = (fact: WorkspaceRemovingFact) => void
+/** One failed workspace deletion (see WorkspaceRemovingFailedFact). */
+type WorkspaceRemovingFailedListener = (fact: WorkspaceRemovingFailedFact) => void
 /** One successful sidebar-issued workspace deletion (see WorkspaceRemovedFact). */
 type WorkspaceRemovedListener = (fact: WorkspaceRemovedFact) => void
 /** One successful sidebar-issued workspace rename (see WorkspaceRenamedFact). */
@@ -554,6 +593,8 @@ const sessionListRefreshChannel = createChannel<Parameters<SessionListRefreshLis
 const workspaceCreatedChannel = createChannel<Parameters<WorkspaceCreatedListener>>(() => '[dsh-chamber] workspace-created listener threw')
 const workspacePlacementChannel = createChannel<Parameters<WorkspacePlacementListener>>(() => '[dsh-chamber] workspace-placement listener threw')
 const workspacePlacementFailedChannel = createChannel<Parameters<WorkspacePlacementFailedListener>>(() => '[dsh-chamber] workspace-placement-failed listener threw')
+const workspaceRemovingChannel = createChannel<Parameters<WorkspaceRemovingListener>>(() => '[dsh-chamber] workspace-removing listener threw')
+const workspaceRemovingFailedChannel = createChannel<Parameters<WorkspaceRemovingFailedListener>>(() => '[dsh-chamber] workspace-removing-failed listener threw')
 const workspaceRemovedChannel = createChannel<Parameters<WorkspaceRemovedListener>>(() => '[dsh-chamber] workspace-removed listener threw')
 const workspaceRenamedChannel = createChannel<Parameters<WorkspaceRenamedListener>>(() => '[dsh-chamber] workspace-renamed listener threw')
 const sessionCreatedChannel = createChannel<Parameters<SessionCreatedListener>>(() => '[dsh-chamber] session-created listener threw')
@@ -716,6 +757,39 @@ export const chamberBridge = {
   /** App-layer subscription to voided placement intents; returns the unsubscribe. */
   onWorkspacePlacementFailed(listener: WorkspacePlacementFailedListener): () => void {
     return workspacePlacementFailedChannel.subscribe(listener)
+  },
+
+  /**
+   * Call BEFORE `workspace.delete` (single funnel: shared/workspace-mutations.ts): publish the
+   * removal intent so the App can drop the doomed row on the frame where the pinned client
+   * store's unranked-sink puts it at the list TAIL (workspace-removal.ts) — waiting for the
+   * RPC answer is structurally too late, because the host emits that first frame while the
+   * delete is still committing. Same one-way shape as the placement intent; a delete that
+   * fails is withdrawn by {@link reportWorkspaceRemovingFailed}, and the App remains the only
+   * owner of the projection.
+   */
+  reportWorkspaceRemoving(fact: WorkspaceRemovingFact): void {
+    workspaceRemovingChannel.emit(fact)
+  },
+
+  /** App-layer subscription to workspace-removal intents; returns the unsubscribe. */
+  onWorkspaceRemoving(listener: WorkspaceRemovingListener): () => void {
+    return workspaceRemovingChannel.subscribe(listener)
+  },
+
+  /**
+   * Call when that `workspace.delete` fails after its intent was published (the host refused
+   * it, or the transport died): the row is NOT going away, so the intent is withdrawn and the
+   * projection restores it. Failure side only — on success the authoritative `remove` frame
+   * retires the entry, and a settle fact there would race that very push.
+   */
+  reportWorkspaceRemovingFailed(fact: WorkspaceRemovingFailedFact): void {
+    workspaceRemovingFailedChannel.emit(fact)
+  },
+
+  /** App-layer subscription to withdrawn removal intents; returns the unsubscribe. */
+  onWorkspaceRemovingFailed(listener: WorkspaceRemovingFailedListener): () => void {
+    return workspaceRemovingFailedChannel.subscribe(listener)
   },
 
   /**

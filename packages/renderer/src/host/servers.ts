@@ -16,6 +16,7 @@ import {
   withSessionEcho,
   withWorkspaceEcho,
   withWorkspacePlacements,
+  withoutPendingWorkspaceRemovals,
   type ArchivedFilter,
   type ChamberServerAggregate,
   type InstanceAggregate,
@@ -27,6 +28,7 @@ import {
   type SessionEchoLedger,
   type WorkspaceEchoLedger,
   type WorkspacePlacementLedger,
+  type WorkspaceRemovalLedger,
 } from '@dsh-chamber/dsh-chamber-client-core'
 import type { ConnectionSummary, HealthResponse } from '../api.ts'
 import { isFactsUsable, type SessionFactsRow, type SessionFactsSnapshot } from '../session-facts-source.ts'
@@ -47,6 +49,14 @@ export interface ServerProjectionCacheEntry {
   readonly key: readonly unknown[]
   readonly at: number
   readonly server: ChamberServerAggregate
+  /**
+   * 这次派生出的 server 行里最后一个**真实** workspace 的 id（跳过合成的"未分组"桶与
+   * cwd 派生组）——删除意图账本的"上一次投影的尾部"证据（见 workspace-removal.ts）：尾部那段
+   * 连续 pending 行要向前走到它为止（走到它即证明它及其之前的行没有位移），所以它让"沉到尾部的
+   * pending 段"与"本来就在尾部的行"区分开，且在同一窗口内幂等（下沉帧已经摘掉那段之后，下一次
+   * 重算仍看到上一次投影的尾部是别的行）。列表里没有真实 workspace 时缺省。
+   */
+  readonly tailWorkspaceId?: string
 }
 
 export interface ServerProjectionCache {
@@ -159,6 +169,10 @@ export function deriveServers(
   // 投影。与 workspacePlacements 同理追加在参数表末尾（既有接线锁按文本锚点钉
   // current 投影，不重排既有参数）。
   archivedFilters?: Readonly<Record<string, ArchivedFilter>>,
+  // 工作区**删除意图**账本（client-core workspace-removal.ts）：与位置意图同一汇合点并入，
+  // 在权威 store 的 unranked-sink 帧把被删行从投影里摘掉。与 workspacePlacements 同理追加在
+  // 参数表末尾（既有接线锁按文本锚点钉 current 投影，不重排既有参数）。
+  workspaceRemovals?: WorkspaceRemovalLedger,
 ): ChamberServerAggregate[] {
   const servers: ChamberServerAggregate[] = []
   const liveIds = new Set<string>()
@@ -224,16 +238,22 @@ export function deriveServers(
       managedRuntime[id] ?? null, openIntents[id] ?? null,
       workspaceEcho[id] ?? null, sessionEcho[id] ?? null, sessionArchive[id] ?? null,
       workspacePlacements?.[id] ?? null,
+      workspaceRemovals?.[id] ?? null,
       activeViewId, locale,
     ]
-    if (cache !== undefined) {
-      const hit = cache.entries.get(id)
-      if (hit !== undefined && now - hit.at <= cache.ttlMs && hit.key.length === cacheKey.length
-        && hit.key.every((value, index) => value === cacheKey[index])) {
-        servers.push(hit.server)
-        return
-      }
+    // 上一条目：既做缓存命中判定，也做删除意图的**下沉证据**（上一条目记录的"上一次投影
+    // 的真实尾部"；尾部的连续 pending 段向前走到它为止，只摘它之后沉下来的那部分——
+    // 见 workspace-removal.ts 与 ServerProjectionCacheEntry.tailWorkspaceId）。
+    const cachedEntry = cache?.entries.get(id)
+    if (cachedEntry !== undefined && now - cachedEntry.at <= cache.ttlMs && cachedEntry.key.length === cacheKey.length
+      && cachedEntry.key.every((value, index) => value === cacheKey[index])) {
+      servers.push(cachedEntry.server)
+      return
     }
+    // 同 id 重建来源的残余（已登记）：条目只在派生时按 liveIds 释放，若退役与新代首派生之间同 key
+    // 命中缓存，证据可能沿用上一代的尾部——后果只有"漏摘一次 / 提前摘一个 doomed 行"，且意图随来源
+    // 退役一并清空（forgetPendingRemovals），pending 集合为空时该证据根本用不到。
+    const previousTailWorkspaceId = cachedEntry?.tailWorkspaceId
     let archivedSessions: ChamberServerAggregate['archivedSessions']
     let archiveSetKnown: ChamberServerAggregate['archiveSetKnown']
     if (connected && aggregate !== undefined && aggregate.state === 'ok') {
@@ -268,13 +288,20 @@ export function deriveServers(
         // 顺序是契约：①归档墓碑先把本页刚归档的 id 并进归档集（可见性规则只认这个
         // 字段，回声行也一并被它过滤）；②工作区回声补齐可能刚建的工作区行；③位置意图
         // 只搬动**权威行**（不造行），把宿主 create 短暂渲染在列表头部的行按回锚点后；
-        // ④会话回声再按 workspaceId/路径把新建的会话挂进那一行。四步都只做纯投影。
-        withSessionEcho(
-          withWorkspacePlacements(
-            withWorkspaceEcho(withPendingArchives(aggregate, sessionArchive[id]), workspaceEcho[id]),
-            workspacePlacements?.[id],
+        // ④会话回声再按 workspaceId/路径把新建的会话挂进那一行；⑤删除意图在**最外层**：
+        // 它必须在回声/位置/会话三步都跑完之后再摘行——那是唯一"谁都别想把它再放回来"
+        // 的位置（回声行同 id 时也在内）。它只在观察到下沉的那一帧摘掉沉到尾部的 pending 段
+        // （向前保留到上一次投影的真实尾部），权威 remove 帧随后带走它们。五步都只做纯投影。
+        withoutPendingWorkspaceRemovals(
+          withSessionEcho(
+            withWorkspacePlacements(
+              withWorkspaceEcho(withPendingArchives(aggregate, sessionArchive[id]), workspaceEcho[id]),
+              workspacePlacements?.[id],
+            ),
+            sessionEcho[id],
           ),
-          sessionEcho[id],
+          workspaceRemovals?.[id],
+          previousTailWorkspaceId,
         ),
         id,
         '',
@@ -353,7 +380,21 @@ export function deriveServers(
     // 各出各的文案；生产者的诊断句子不过界。
     const bootGap = shellStates[id]?.degraded
     if (bootGap !== undefined && bootGap !== null) entry.bootGap = toServerBootGap(bootGap)
-    cache?.entries.set(id, { key: cacheKey, at: now, server: entry })
+    // 上一次投影的尾部（最后一个真实 workspace；未分组桶与合成组不算）：删除意图的幂等下
+    // 沉证据——同一窗口里即使再来一次重算，它仍指向别的行，被删行照旧被摘掉（见 workspace-removal.ts）。
+    let projectedTailWorkspaceId: string | undefined
+    for (let index = entry.workspaces.length - 1; index >= 0; index -= 1) {
+      const workspace = entry.workspaces[index]
+      if (workspace === undefined || workspace.ungrouped === true || workspace.synthetic === true) continue
+      projectedTailWorkspaceId = workspace.id
+      break
+    }
+    cache?.entries.set(id, {
+      key: cacheKey,
+      at: now,
+      server: entry,
+      ...(projectedTailWorkspaceId === undefined ? {} : { tailWorkspaceId: projectedTailWorkspaceId }),
+    })
     servers.push(entry)
   }
   push('local', 'local', LOCAL_INSTANCE_ID,

@@ -10,6 +10,9 @@
  * 不是第二事实源；投影唯一写者仍是 App 层，权威仍是挂载壳的 workspace/follow 基线。
  * createWorkspaceForSource 另带可选位置锚点 afterWorkspaceId：投影若先追加尾部、
  * 等挂载后再跳上去就是一次可见跳动（连续家族不变式按渲染序成立）。
+ * 删除侧同理有一条 **wire 之前**的删除意图（reportWorkspaceRemoving / 失败侧
+ * reportWorkspaceRemovingFailed，见 workspace-removal.ts）：宿主删除的 order 帧会把被删
+ * 行沉到列表尾部，等 RPC 返回再发事实就晚了一帧。
  * 带锚点时，该出口在 **wire 之前**先发布一条位置意图（reportWorkspacePlacement）：
  * 宿主 create 无条件 PREPEND，挂载来源的权威 push 会在 create 返回之前就把新行渲染在
  * 列表头部——那是 id 键回声结构上覆盖不到的一窗（见 workspace-placement.ts）。
@@ -68,13 +71,26 @@ export async function createWorkspaceForSource(
   return created
 }
 
-/** 对 `sourceId` 执行 workspace.delete，并发布撤销回声事实。`path` 尽力而为：快照未报告该行时为空串（账本同时按 workspaceId 匹配）。 */
+/**
+ * 对 `sourceId` 执行 workspace.delete，并发布撤销回声事实。`path` 尽力而为：快照未报告该行时为空串
+ * （撤销回声账本按 workspaceId 匹配）。删除意图（`reportWorkspaceRemoving`，只带宿主 id——删除出口
+ * 始终持有宿主 id、不依赖路径）是本出口第二条 **wire 之前**的事实：宿主 registry 先提交"不含该 id 的 workspaceIds"
+ * 并发出 order 帧，pinned client store 会把仍在 items 里的被删行排到列表尾部（unranked-sink）——等 RPC
+ * 返回再发事实，那一帧已经渲染成"行滑到最后一行"了（见 workspace-removal.ts）。失败侧撤下意图后原样
+ * 抛错（成功侧不发：权威 remove 帧即收敛点；"已提交但回答丢失"的歧义失败是已登记边界）。
+ */
 export async function deleteWorkspaceForSource(
   sourceId: string,
   workspaceId: string,
   path = '',
 ): Promise<void> {
-  await deleteWorkspace(getInstanceClient(sourceId), workspaceId)
+  chamberBridge.reportWorkspaceRemoving({ sourceId, workspaceId })
+  try {
+    await deleteWorkspace(getInstanceClient(sourceId), workspaceId)
+  } catch (error) {
+    chamberBridge.reportWorkspaceRemovingFailed({ sourceId, workspaceId })
+    throw error
+  }
   chamberBridge.reportWorkspaceRemoved({ sourceId, workspaceId, path })
 }
 

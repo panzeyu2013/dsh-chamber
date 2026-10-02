@@ -40,6 +40,10 @@ export { forgetPendingWorkspaces, reconcilePendingWorkspaces, recordPendingWorks
 // 位置意图（pre-create 半边）：宿主 create 的 PREPEND 短暂态在回声能存在之前就已渲染。
 export type * from './workspace-placement.ts'
 export { forgetPendingPlacements, reconcilePendingPlacements, recordWorkspacePlacement, removePendingPlacement, removeUnclaimedPlacements, sweepPendingPlacements, withWorkspacePlacements } from './workspace-placement.ts'
+// 删除意图（pre-delete 半边）：宿主删除的 order 帧把被删行沉到列表尾部（pinned client store 的
+// unranked-sink），本账本在**观察到下沉**的那一帧把它摘掉，权威 remove 帧再带走行。
+export type * from './workspace-removal.ts'
+export { forgetPendingRemovals, reconcilePendingRemovals, recordPendingWorkspaceRemoval, removePendingWorkspaceRemoval, sweepPendingRemovals, withoutPendingWorkspaceRemovals } from './workspace-removal.ts'
 export type * from './session-echo.ts'
 export { forgetPendingArchives, forgetPendingSessions, reconcilePendingArchives, reconcilePendingSessions, recordPendingArchive, recordPendingSession, refreshPendingArchives, removePendingArchive, removePendingSession, sweepPendingArchives, sweepPendingSessions, withPendingArchives, withSessionEcho } from './session-echo.ts'
 export type * from './session-restore.ts'

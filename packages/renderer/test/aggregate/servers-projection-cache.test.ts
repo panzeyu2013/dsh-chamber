@@ -14,6 +14,7 @@ import {
   type ChamberServerAggregate,
   type InstanceAggregate,
   type WorkspacePlacementLedger,
+  type WorkspaceRemovalLedger,
 } from '@dsh-chamber/dsh-chamber-client-core'
 import { createServerProjectionCache, deriveServers, type ServerProjectionCache } from '../../src/host/servers.ts'
 import { sourceIdForInstance } from '../../src/transport-source.ts'
@@ -134,6 +135,103 @@ test('projection cache: the placement ledger is a cache-key component', () => {
   assert.deepEqual(withIntent[0].workspaces.map(workspace => workspace.id), ['w1', 'w2'])
   // 账本身份不变 ⇒ 缓存命中（不因每次渲染重建账本数组而抖动）。
   assert.equal(deriveWith({ local: head }, placement)[0], withIntent[0])
+})
+
+test('projection cache: the removal ledger drops the observed tail sink (and is a cache-key component)', () => {
+  // 删除意图（pre-delete 半边，client-core workspace-removal.ts）：宿主删除的 order 帧把被删行
+  // 沉到列表尾部（pinned client store 的 unranked-sink），投影在**观察到下沉**的那一帧摘掉它；
+  // 证据 = 上一次投影的真实尾部（缓存条目记录）不是它。被删行本来就排在尾部时恒等。
+  const cache = createServerProjectionCache()
+  const order = (ids: readonly string[]): InstanceAggregate => ({
+    state: 'ok', error: null, archiveSetKnown: true, archivedSessionIds: [],
+    workspaces: ids.map(id => ({ workspaceId: id, path: '/' + id, title: id, sessionIds: [], createdAt: '', updatedAt: '' })),
+    sessions: [],
+  })
+  const deriveWith = (aggregates: Record<string, InstanceAggregate>, removals?: WorkspaceRemovalLedger, activeCache = cache) =>
+    deriveServers(READY_HEALTH, [], [], {}, aggregates,
+      {}, {}, {}, 'local', {}, {}, {}, {}, {}, {}, {}, 'zh', {}, activeCache, undefined, undefined, removals)
+  const removal: WorkspaceRemovalLedger = { local: [{ workspaceId: 'b', at: 1 }] }
+
+  // 删除在途、但行还在中间：恒等（意图绝不隐藏仍在列表中间的行）。聚合身份复用，才谈得上缓存语义。
+  const midOrder = order(['a', 'b', 'c'])
+  const before = deriveWith({ local: midOrder }, removal)
+  assert.deepEqual(before[0].workspaces.map(workspace => workspace.id), ['a', 'b', 'c'],
+    'a pending row still mid-list is never hidden')
+
+  // 宿主 order 帧：b 沉到尾部（[a,c,b]）。上一次投影的尾部是 c ⇒ 观察到下沉 ⇒ 摘掉 b。
+  const sunkOrder = order(['a', 'c', 'b'])
+  const sunk = deriveWith({ local: sunkOrder }, removal)
+  assert.deepEqual(sunk[0].workspaces.map(workspace => workspace.id), ['a', 'c'],
+    'the observed sink drops the doomed tail row instead of gliding it to the last line')
+  assert.equal(deriveWith({ local: sunkOrder }, removal)[0], sunk[0],
+    'an unchanged input set keeps the per-source cache hit')
+
+  // 账本本身是键分量：同一个聚合对象、只是没有账本 ⇒ 重算且不摘行（否则缓存会把旧结果当
+  // "输入没变"复用，行又回到尾部）。
+  const withoutIntent = deriveWith({ local: sunkOrder })
+  assert.notEqual(withoutIntent[0], sunk[0], 'a ledger-only change is not a cache hit')
+  assert.deepEqual(withoutIntent[0].workspaces.map(workspace => workspace.id), ['a', 'c', 'b'],
+    'without the intent the authority order renders as-is')
+
+  // 被删行本来就是尾部：没有位移要修 ⇒ 恒等，交给权威 remove 帧（失败撤回也不闪）。
+  const freshCache = createServerProjectionCache()
+  const lastOrder = order(['a', 'b'])
+  deriveWith({ local: lastOrder }, removal, freshCache)
+  const alreadyLast = deriveWith({ local: lastOrder }, { local: [{ workspaceId: 'b', at: 2 }] }, freshCache)
+  assert.notEqual(alreadyLast[0], undefined)
+  assert.deepEqual(alreadyLast[0]?.workspaces.map(workspace => workspace.id), ['a', 'b'],
+    'a row that was already the tail never moved, so nothing is corrected')
+})
+
+test('projection cache: overlapping removals drop together and a rolled-back order restores the rows', () => {
+  // 正确性评审 m3 的两条 deriveServers 层用例：①两个 pending 连续下沉一帧摘完；②宿主回滚 order
+  // （表删除失败）时行回原位、不误摘（旧尾部匹配证明这一帧没把它推到尾部）。
+  const cache = createServerProjectionCache()
+  const order = (ids: readonly string[]): InstanceAggregate => ({
+    state: 'ok', error: null, archiveSetKnown: true, archivedSessionIds: [],
+    workspaces: ids.map(id => ({ workspaceId: id, path: '/' + id, title: id, sessionIds: [], createdAt: '', updatedAt: '' })),
+    sessions: [],
+  })
+  const deriveWith = (aggregates: Record<string, InstanceAggregate>, removals?: WorkspaceRemovalLedger) =>
+    deriveServers(READY_HEALTH, [], [], {}, aggregates,
+      {}, {}, {}, 'local', {}, {}, {}, {}, {}, {}, {}, 'zh', {}, cache, undefined, undefined, removals)
+  const removalB: WorkspaceRemovalLedger = { local: [{ workspaceId: 'b', at: 1 }] }
+  const removalBC: WorkspaceRemovalLedger = { local: [{ workspaceId: 'b', at: 1 }, { workspaceId: 'c', at: 2 }] }
+
+  deriveWith({ local: order(['a', 'b', 'c', 'd']) })
+  const sinkB = order(['a', 'c', 'd', 'b'])
+  assert.deepEqual(deriveWith({ local: sinkB }, removalB)[0].workspaces.map(workspace => workspace.id),
+    ['a', 'c', 'd'], 'B sinks alone')
+  // C 的 order 帧：C 也沉到尾部（B 的 remove 帧尚未到达，B 仍在 items 里）⇒ 整段一帧摘完。
+  const sinkC = order(['a', 'd', 'c', 'b'])
+  assert.deepEqual(deriveWith({ local: sinkC }, removalBC)[0].workspaces.map(workspace => workspace.id),
+    ['a', 'd'], 'the whole trailing pending run is dropped in one pass')
+  // 宿主回滚：order 恢复成原序 ⇒ 旧尾部再次成为尾部 ⇒ 恒等，所有行回到原位。
+  const rolledBack = order(['a', 'b', 'c', 'd'])
+  assert.deepEqual(deriveWith({ local: rolledBack }, removalBC)[0].workspaces.map(workspace => workspace.id),
+    ['a', 'b', 'c', 'd'], 'a rolled-back order restores every row (no wrong drop)')
+})
+
+test('projection cache: a non-ok derive invalidates the sink evidence until the authority frame', () => {
+  // 评审 A 的 Minor 2（已登记边界）：意图发布后、下沉帧之前若有一次非 ok 派生，缓存条目不再带
+  // tailWorkspaceId ⇒ 下一次下沉帧没有证据、不纠正，且该帧成为新基准 ⇒ 纠正被锁到权威 remove 帧
+  // 为止（与修复前同形、自愈；不是"只差一帧"）。
+  const cache = createServerProjectionCache()
+  const order = (ids: readonly string[]): InstanceAggregate => ({
+    state: 'ok', error: null, archiveSetKnown: true, archivedSessionIds: [],
+    workspaces: ids.map(id => ({ workspaceId: id, path: '/' + id, title: id, sessionIds: [], createdAt: '', updatedAt: '' })),
+    sessions: [],
+  })
+  const deriveWith = (aggregates: Record<string, InstanceAggregate>, removals?: WorkspaceRemovalLedger) =>
+    deriveServers(READY_HEALTH, [], [], {}, aggregates,
+      {}, {}, {}, 'local', {}, {}, {}, {}, {}, {}, {}, 'zh', {}, cache, undefined, undefined, removals)
+  const removal: WorkspaceRemovalLedger = { local: [{ workspaceId: 'b', at: 1 }] }
+
+  deriveWith({ local: order(['a', 'b', 'c']) })
+  deriveWith({ local: { state: 'error', error: 'disconnected', workspaces: [], sessions: [], archivedSessionIds: [] } })
+  const sunk = deriveWith({ local: order(['a', 'c', 'b']) }, removal)
+  assert.deepEqual(sunk[0].workspaces.map(workspace => workspace.id), ['a', 'c', 'b'],
+    'no evidence ⇒ one uncorrected frame (the pre-fix shape), self-healed by the authority frame')
 })
 
 test('projection cache: a removed source releases its entry', () => {

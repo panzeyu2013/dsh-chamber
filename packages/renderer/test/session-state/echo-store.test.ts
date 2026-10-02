@@ -16,6 +16,7 @@ const pendingWorkspace2 = [{ workspaceId: 'w1', path: '/w', title: 'w', at: 6 }]
 const pendingSession = [{ sessionId: 's1', blank: false, at: 1 }]
 const pendingArchive = [{ sessionId: 's1', at: 2 }]
 const pendingPlacement = [{ path: '/w', afterWorkspaceId: 'w0', at: 3 }]
+const pendingRemoval = [{ workspaceId: 'w1', at: 4 }]
 
 test('the synchronous snapshot is the render value: one write, both readers', () => {
   const store = createEchoStore()
@@ -51,6 +52,10 @@ test('the echo ledgers are independent fields of one snapshot', () => {
   store.updatePlacement({ p: pendingPlacement })
   assert.deepEqual(store.getSnapshot().placement, { p: pendingPlacement })
   assert.deepEqual(store.getSnapshot().workspace, {}, 'a placement intent must not touch the echo ledger')
+  store.updateRemoval({ r: pendingRemoval })
+  assert.deepEqual(store.getSnapshot().removal, { r: pendingRemoval })
+  assert.deepEqual(store.getSnapshot().placement, { p: pendingPlacement }, 'a removal intent keeps the placement ledger')
+  assert.deepEqual(store.getSnapshot().workspace, {}, 'nor does it touch the echo ledger')
 })
 
 test('unsubscribed listeners are never called', () => {
