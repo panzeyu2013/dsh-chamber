@@ -244,7 +244,7 @@ const SessionRow = memo(function SessionRow({
         // 归档行占据原槽位但不可打开：就地提示（上游 notifyArchivedNotOpenable），
         // 不 arm pending、不进入打开流程。
         if (session.archived === true) {
-          showNotice(server.id, 'archivedNotOpenable', session.id)
+          showNotice(server.id)
           return
         }
         // 菜单展开或本行重命名进行中：忽略整次点击（不 arm、不开会话）。

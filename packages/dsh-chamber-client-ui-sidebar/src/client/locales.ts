@@ -101,15 +101,11 @@ export const zh = {
   'actions.unpin': '取消置顶',
   // 静息置顶标记的无障碍名与 title（上游 row.pinned 逐字）。
   'row.pinned': '已置顶',
-  // 归档行与归档提示条（上游 ui-workspace 字典逐字）：行形态、toast 三态、空态与恢复。
+  // 归档行与普通警示（上游 ui-workspace 字典逐字）：行形态、not-openable 警示、空态与恢复；
+  // 归档成功两态（archived / stoppedAndArchived）的提示条文案已随该面一起移除。
   'row.archived': '已归档',
   'actions.unarchive': '取消归档',
   'toast.archivedNotOpenable': '已归档对话暂时无法查看，请取消归档后查看',
-  'toast.archived': '会话已归档，可',
-  'toast.stoppedAndArchived': '已停止并归档，可',
-  'toast.archivedUndo': '撤销',
-  'toast.archivedOr': '或',
-  'toast.archivedFilter': '筛选已归档会话',
   'empty.noneArchived': '暂无已归档会话',
   'empty.viewOthers': '查看其他会话',
   // 行级图标钮的无障碍名按本仓政策参数化行名（见上方 `action.newSession.aria` 的说明）；
@@ -306,11 +302,6 @@ export const en = {
   'row.archived': 'Archived',
   'actions.unarchive': 'Unarchive',
   'toast.archivedNotOpenable': 'Archived sessions cannot be opened. Unarchive it to view.',
-  'toast.archived': 'Session archived. You can ',
-  'toast.stoppedAndArchived': 'Session stopped and archived. You can ',
-  'toast.archivedUndo': 'undo',
-  'toast.archivedOr': ' or ',
-  'toast.archivedFilter': 'filter archived sessions',
   'empty.noneArchived': 'No archived sessions yet',
   'empty.viewOthers': 'View other sessions',
   'action.archive.aria': 'Archive “{name}”',

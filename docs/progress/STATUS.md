@@ -351,8 +351,9 @@
   folded 缺席即展开、父组折叠只隐藏自己的行、拖拽无父子约束）；B5 会话拖拽不切换 `orderBy`（上游
   拖拽即切 `manual`，本仓留在 updated 并写 account 序）；B6 本地账号（flatOrder / ungroupedOrder /
   updated account）的成员集 = 当前可见行（上游保留隐藏成员，恢复时回原槽位）；B7 本地搜索匹配链
-  （displayTitle → cwd basename → session id；上游只匹配 summary.title + workspace 标签）；B8 归档
-  提示条的颜色 tone 与成功/警示字形未移植（role = alert 本就是上游行为；TTL 仅 hold 层对齐）；B9 会话
+  （displayTitle → cwd basename → session id；上游只匹配 summary.title + workspace 标签）；B8 归档成功不再就地提示（上游 `RowActionToast` 的 archived / stoppedAndArchived 两态按用户裁决
+  移除；保留的 archivedNotOpenable 普通警示仍未移植色 tone / 成功警示字形，role = alert 本就是上游行为、
+  TTL 仅 hold 层对齐）；B9 会话
   行窗口的配额语义（上游 5 行且 blank/running/子代理豁免）；B10 本地账号中新 fork 子项落尾（上游
   `placeFork` 紧邻其源）。
   per-source 是 N-ctx 实例化（单来源浏览面 =
@@ -367,8 +368,11 @@
   chamber 自有多源列表拥有浏览区，上游归档/恢复/过滤贡献在 chamber 为死件；锁测试
   `packages/dsh-chamber-client-ui-sidebar/test/source-runtime/sidebar-slot-declaration.test.ts`
   （design 24 §1、design 05 §2.2.1）。
-- 归档提示条（section 内、折叠门内、per-shell 瞬态）与筛选降级（`archiveSetKnown !== true` 时整轴禁用、
-  按 default 渲染、存储值保留）在**上游无对应状态**；规则与理由见 design 06 §3.4/§5。
+- 归档成功不就地提示（用户裁决移除上游 `RowActionToast` 的 archived / stoppedAndArchived 两态）与
+  筛选降级（`archiveSetKnown !== true` 时整轴禁用、按 default 渲染、存储值保留）在**上游无对应状态**；
+  保留的 `archivedNotOpenable` 普通警示（section 内、折叠门内、per-shell 瞬态）规则与理由见
+  design 06 §3.4/§5。**已知代价**：归档集未知的降级来源上，刚归档的行由本地墓碑撤下后，筛选轴禁用、
+  管理器只报 degraded，直到该来源挂载、基线到达才能恢复（被移除的 6s「撤销」按钮正是覆盖这一窗口的入口）。
 - **归档准入两段式 + 旧宿主降级**（design 24 §5）：chamber 恒发官方两段式（首调无 `stopActivity`，宿主以 `workspace/session-active` 拒绝并列出活动，确认后带 `stopActivity: true` 重发，停止由宿主 provider 完成）；**已接受的降级** = 无该准入的旧宿主上第二调原样上抛，归档不再由客户端补偿停止（旧 `stopArchivedSubtree` 腿已删，不保留）——安静会话归档照旧，带后台工作的会话在旧宿主上归档后其工作继续运行；**不做版本探测**（能力自证：只有能返回该拒绝的宿主才收到第二调）。git 的 pre-remove 归档勾选同此口径（`stopActivity` 随勾选授权，旧宿主忽略该字段，行为同前）。证据：`packages/dsh-chamber-client-core/src/instance-api.ts`（`archiveSession`/`sessionArchiveRefusal`）、`packages/dsh-chamber-client-ui-sidebar/src/client/session-archive-confirm.ts`、`packages/dsh-chamber-client-ui-git/src/shared/saga.ts`。
 - 菜单密度 = primitives `compact` 档（= `.compactList`，实测 24px 行 / 11px 字；design 06 §7），不得改回默认/dense。
 - Electron 二进制惰性安装（共享 dist）；dev 实例隔离（独立 user-data、端口 17520 起退避）。

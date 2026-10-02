@@ -212,7 +212,7 @@ test('the archived row is the upstream form: grayed, unopenable, unpinnable, arc
   assert.ok(ROWS.includes("aria-description={session.archived === true ? t('toast.archivedNotOpenable') : undefined}"))
   assert.ok(ROWS.includes('draggable={!ghost && !synthetic && session.archived !== true && session.blank !== true}'),
     'archived rows are undroppable sources, and blank (provisional) rows are excluded like upstream')
-  assert.ok(ROWS.includes("showNotice(server.id, 'archivedNotOpenable', session.id)"))
+  assert.ok(ROWS.includes('showNotice(server.id)'))
   assert.ok(ROWS.includes('{session.archived === true ? null : sessionStateDot(server, session)}'))
   // pin 两个出口在归档行缺席（菜单项 spread 门 + 悬停钮包裹门），静息标记由 derive 保证。
   assert.ok(ROWS.includes('...(session.archived === true'))
@@ -220,44 +220,38 @@ test('the archived row is the upstream form: grayed, unopenable, unpinnable, arc
   // 恢复漏斗：与归档同一条 keyed 行动作。
   assert.ok(SESSIONS.includes('const key = `${server.id}/session/${sessionId}/unarchive`'))
   assert.ok(SESSIONS.includes('await unarchiveSessionForSource(server.id, sessionId)'))
-  // 提示条：三态文案 + 筛选入口在已显示归档时隐藏 + 两个相位触达。
-  for (const key of ["'toast.stoppedAndArchived'", "'toast.archived'", "t('toast.archivedNotOpenable')"]) {
-    assert.ok(SECTION.includes(key), `the notice renders ${key}`)
-  }
-  assert.ok(SECTION.includes("archivedFilter === 'default' && server.archiveSetKnown === true && ("),
-    'the filter link hides once archived rows are visible AND is provenance-gated (it writes show)')
+  // 警示：只剩 not-openable 一态；归档成功 / 停止并归档的提示条与「撤销 + 筛选」动作已移除。
+  assert.ok(SECTION.includes("t('toast.archivedNotOpenable')"), 'the not-openable warning survives')
+  assert.equal(SECTION.includes("t('toast.archivedUndo')"), false, 'the undo action is gone with the notice')
+  assert.equal(SECTION.includes("t('toast.archivedFilter')"), false, 'the filter action is gone with the notice')
   assert.ok(SECTION.includes("t('empty.noneArchived')") && SECTION.includes("t('empty.viewOthers')"), 'the only-mode empty state')
-  assert.ok(SESSIONS.includes("showNotice(server.id, 'archived', sessionId)"))
+  assert.equal(SESSIONS.includes('showNotice'), false, 'archive success no longer raises a notice')
   const DIALOGS = read('../../src/client/sidebar-root-dialogs.tsx')
-  assert.ok(DIALOGS.includes("showNotice(target.sourceId, 'stoppedAndArchived', target.sessionId)"))
+  assert.equal(DIALOGS.includes('showNotice'), false, 'stop-and-archive no longer raises a notice')
   // 搜索结果命中行跟随（归档行不可开 + 行后恢复入口）。
   assert.ok(SEARCH.includes('const archived = projectedArchived(item.sessionId)'))
-  assert.ok(SEARCH.includes("showNotice(server.id, 'archivedNotOpenable', item.sessionId)"))
+  assert.ok(SEARCH.includes('showNotice(server.id)'))
   assert.ok(SEARCH.includes('onUnarchiveSession(server, item.sessionId)'))
 })
 
-test('the archived/notice copy is upstream verbatim in both dictionaries', () => {
+test('the archived-row/plain-warning copy is upstream verbatim in both dictionaries', () => {
   assert.equal(zh['row.archived'], '已归档')
   assert.equal(zh['menu.unarchiveSession'], '取消归档')
   assert.equal(zh['actions.unarchive'], '取消归档')
   assert.equal(zh['toast.archivedNotOpenable'], '已归档对话暂时无法查看，请取消归档后查看')
-  assert.equal(zh['toast.archived'], '会话已归档，可')
-  assert.equal(zh['toast.stoppedAndArchived'], '已停止并归档，可')
-  assert.equal(zh['toast.archivedUndo'], '撤销')
-  assert.equal(zh['toast.archivedOr'], '或')
-  assert.equal(zh['toast.archivedFilter'], '筛选已归档会话')
   assert.equal(zh['empty.noneArchived'], '暂无已归档会话')
   assert.equal(zh['empty.viewOthers'], '查看其他会话')
   assert.equal(en['row.archived'], 'Archived')
   assert.equal(en['menu.unarchiveSession'], 'Unarchive session')
   assert.equal(en['actions.unarchive'], 'Unarchive')
-  assert.equal(en['toast.archived'], 'Session archived. You can ')
-  assert.equal(en['toast.stoppedAndArchived'], 'Session stopped and archived. You can ')
-  assert.equal(en['toast.archivedUndo'], 'undo')
-  assert.equal(en['toast.archivedOr'], ' or ')
-  assert.equal(en['toast.archivedFilter'], 'filter archived sessions')
+  assert.equal(en['toast.archivedNotOpenable'], 'Archived sessions cannot be opened. Unarchive it to view.')
   assert.equal(en['empty.noneArchived'], 'No archived sessions yet')
   assert.equal(en['empty.viewOthers'], 'View other sessions')
+  // 归档成功两态的文案随提示条一起移除：字典里不得再留死键。
+  for (const key of ['toast.archived', 'toast.stoppedAndArchived', 'toast.archivedUndo', 'toast.archivedOr', 'toast.archivedFilter']) {
+    assert.equal(key in zh, false, `zh must not keep the removed notice key ${key}`)
+    assert.equal(key in en, false, `en must not keep the removed notice key ${key}`)
+  }
 })
 
 test('the button copy is upstream verbatim in both dictionaries', () => {
