@@ -245,7 +245,7 @@ export function deriveServers(
     // 的真实尾部"；尾部的连续 pending 段向前走到它为止，只摘它之后沉下来的那部分——
     // 见 workspace-removal.ts 与 ServerProjectionCacheEntry.tailWorkspaceId）。
     const cachedEntry = cache?.entries.get(id)
-    if (cachedEntry !== undefined && now - cachedEntry.at <= cache.ttlMs && cachedEntry.key.length === cacheKey.length
+    if (cachedEntry !== undefined && cache !== undefined && now - cachedEntry.at <= cache.ttlMs && cachedEntry.key.length === cacheKey.length
       && cachedEntry.key.every((value, index) => value === cacheKey[index])) {
       servers.push(cachedEntry.server)
       return
