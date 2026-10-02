@@ -31,6 +31,7 @@
 ### 修复
 - **facts 应用步骤的重入环（React #185）** —— 通知/facts 步进链在写入 store 触发的同步渲染里再回调自身时，React 以 #185 中止且异常被 never-throw 守卫吞掉，导致整拍作废；现在 \`apply-session-facts\` 按来源过重入闸（非重入仍同步执行），重入只登记并补跑**最新**快照，撤回来源的待应用快照随撤回丢弃；\`reconcile\` 与 \`completion-arm\` 语义不变（design 19 §3.7）。
 - **连接重置期间的会话投影事实保留（design 05 §2.3）** —— 连接代际变化会让客户端清空会话投影、直到下一次 session/list 回填；窗口期内侧栏行会丢失持久 title 与稀疏 hasActiveSchedule 标记（实测：远端来源在 0.6–0.8s 内把会话名显示成目录名）。现在行会携带最后一次已知的投影事实跨越该窗口：非空 title 始终优先，行消失即丢弃记忆，updatedAt 前进即停止携带（无定时器、无状态），挂载推送与 unary 回退两个提交点都适用。
+- **被删除的工作区行不再滑到列表尾部（design 05 §2.2.1 / design 06 §7）** —— 宿主先按不含被删 id 的顺序发 order follow 帧、后发 remove，窗口期内 pinned store 把未命名项排到最后，侧栏的 keyed-row 动画会把注定消失的行滑到末尾再消失。删除漏斗现在在 workspace/delete 线前先发 reportWorkspaceRemoving（未提交时由 reportWorkspaceRemovingFailed 撤回），App 在渲染末记账，投影按「上一条投影的真实尾部」摘掉尾部的 pending 段——行就地卸载；无尾部证据时保持 no-op。
 
 ## [0.4.1-beta.1] - 2026-09-30
 
