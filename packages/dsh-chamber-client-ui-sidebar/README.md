@@ -211,7 +211,7 @@ placement anchors included), the pre-create placement intent ledger that holds a
 new worktree row at its anchor from the first frame it appears
 (`packages/dsh-chamber-client-core/src/workspace-placement.ts`) and their publish site (`packages/dsh-chamber-client-core/src/workspace-mutations.ts`
 — the single funnel every in-app workspace mutation goes through: the sidebar
-dialogs and the Git worktree plugin's create/adopt/recovery alike), plus the
+dialogs and the Git worktree plugin's create/adopt/recovery alike), plus the pre-delete removal intent — the placement intent's dual — that drops the observed trailing pending run so a removed row unmounts where it stands (`packages/dsh-chamber-client-core/src/workspace-removal.ts`, published by the same funnel before the delete wire and withdrawn when the delete does not commit), plus the
 session-echo ledger (`packages/dsh-chamber-client-core/src/session-echo.ts`) and its own single funnel
 (`packages/dsh-chamber-client-core/src/session-mutations.ts`). Three user-visible surfaces follow:
 

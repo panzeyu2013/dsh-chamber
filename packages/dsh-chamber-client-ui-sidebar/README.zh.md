@@ -157,7 +157,7 @@ vite shared 单例纪律，因为目标实例自己的 ctx 也要读它）及其
 pre-create 位置意图账本（`packages/dsh-chamber-client-core/src/workspace-placement.ts`——让新 worktree 行从它出现的
 第一帧就按在锚点后）与
 **唯一**上报点（`packages/dsh-chamber-client-core/src/workspace-mutations.ts`——应用内任何工作区变更都经它：
-侧栏对话框与 Git worktree 插件的 create/adopt/recovery 同路），以及会话回声账本
+侧栏对话框与 Git worktree 插件的 create/adopt/recovery 同路），以及 pre-delete 删除意图账本（位置意图的对偶：`packages/dsh-chamber-client-core/src/workspace-removal.ts`，由同一出口在 delete 线前发布、未提交即撤回；投影按上一投影的真实尾部摘掉观察到下沉的 pending 段，让被删行就地卸载），以及会话回声账本
 （`packages/dsh-chamber-client-core/src/session-echo.ts`）与它自己的唯一出口（`packages/dsh-chamber-client-core/src/session-mutations.ts`）。
 由此有三个用户可见面：
 

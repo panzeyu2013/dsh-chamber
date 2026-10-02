@@ -88,8 +88,11 @@ test('the correction is idempotent inside the sink window', () => {
   const sunk = aggregate([row('a', '/a'), row('c', '/c'), row('b', '/repo/b')])
   const once = withoutPendingWorkspaceRemovals(sunk, pending, 'c')
   assert.deepEqual(once.workspaces.map(entry => entry.workspaceId), ['a', 'c'])
-  const twice = withoutPendingWorkspaceRemovals(sunk, pending, 'c')
+  // Fixpoint: feeding the CORRECTED projection back (with the corrected tail as
+  // evidence) must neither remove anything else nor allocate a new projection.
+  const twice = withoutPendingWorkspaceRemovals(once, pending, 'c')
   assert.deepEqual(twice.workspaces.map(entry => entry.workspaceId), ['a', 'c'])
+  assert.equal(twice, once, 'a corrected projection passes through identity-preserving')
 })
 
 test('overlapping deletes: the whole trailing pending run is dropped in one pass', () => {
@@ -294,6 +297,11 @@ test('wiring: the intent is published before the wire, withdrawn on failure, app
     'the mounted-push convergence clock sweeps the ledger too')
   const servers = read('../../../renderer/src/host/servers.ts')
   assert.match(servers, /withoutPendingWorkspaceRemovals\(/, 'the single projection pass applies the correction')
+  // 承重顺序：删除意图必须是**最外层**嵌套（回声/位置/会话三步之后）。挪到内侧时，
+  // create→delete 同窗（回声条目在 + 下沉帧到）会把已摘的 doomed 行重新 append 到尾部，
+  // 恢复修复前的尾滑——这条断言钉住嵌套形状。
+  assert.match(servers, /withoutPendingWorkspaceRemovals\(\s*withSessionEcho\(/,
+    'the removal step wraps the echo/placement/session steps (outermost), so a re-added echo row cannot survive it')
   assert.match(servers, /workspaceRemovals\?\.\[id\], previousTailWorkspaceId, \)/,
     'the sink evidence rides the projection as the THIRD ARGUMENT of the call (an identifier in a comment cannot satisfy this)')
   assert.match(servers, /\{\} : \{ tailWorkspaceId: projectedTailWorkspaceId \}/,
