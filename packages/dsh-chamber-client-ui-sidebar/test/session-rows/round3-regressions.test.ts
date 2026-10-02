@@ -1,6 +1,6 @@
 /**
  * 第三轮 review 的行为/接线锁：置顶拖放门与 blank 落半归一、拖拽看门狗、待办区归档排除、
- * sessionFacts 发布签名、提升簿记保留、焦点归还、归档悬停卡、提示条 role/断连门、flat 哨兵键
+ * sessionFacts 发布签名、提升簿记保留、焦点归还、归档悬停卡、普通警示 role/断连门、flat 哨兵键
  * 与视图键、git flags 订阅、ctx 覆盖与稳定包装、工作区账号裁剪。每条都对应第三轮的确认结论。
  * Run directly: node test/session-rows/round3-regressions.test.ts
  */
@@ -64,13 +64,13 @@ test('a lost dragend cannot leave the click-suppress flag stuck', () => {
 })
 
 test('archived rows are unopenable, not merely styled', () => {
-  assert.ok(ROWS.includes("if (session.archived === true) {\n          showNotice(server.id, 'archivedNotOpenable', session.id)\n          return\n        }"),
+  assert.ok(ROWS.includes("if (session.archived === true) {\n          showNotice(server.id)\n          return\n        }"),
     'the row click guard must return before the open path')
-  assert.ok(SEARCH.includes("if (archived) {\n                                      showNotice(server.id, 'archivedNotOpenable', item.sessionId)\n                                      return\n                                    }"),
+  assert.ok(SEARCH.includes("if (archived) {\n                                      showNotice(server.id)\n                                      return\n                                    }"),
     'the search hit guard must return before openSession')
 })
 
-test('the archive notice is an alert and is never created for a disconnected source', () => {
+test('the plain warning is an alert and is never created for a disconnected source', () => {
   assert.ok(SECTION.includes('className={cc.archiveNotice} role="alert"'))
   assert.ok(NOTICES.includes('if (!connectedRef.current.has(sourceId)) return'))
   const show = NOTICES.slice(NOTICES.indexOf('const showNotice'))

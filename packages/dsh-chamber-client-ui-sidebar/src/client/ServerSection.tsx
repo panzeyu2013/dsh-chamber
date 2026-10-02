@@ -84,13 +84,11 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
     onNewSession,
     onDeleteWorkspace,
     setArchivedFilter,
-    onUnarchiveSession,
     notices,
-    dismissNotice,
   } = useSidebarSection()
   // 工作区行的 New Session 键帽/aria 来自页面快捷键目录（上游 ProjectRowItem 同款选择）。
   const newSessionShortcut = useShortcuts(rows => rows.find(row => row.id === 'session.new'))
-  // 归档筛选三态（per-source 视图选项）：搜索腿、only 空态、提示条与行集都由它决定。
+  // 归档筛选三态（per-source 视图选项）：搜索腿、only 空态与行集都由它决定。
   // **降级出处门**：归档集未知（archiveSetKnown !== true）时按 default 渲染、存储值保留
   // （菜单侧同样把选中呈现为 default 并禁用整轴，两边同一条规则，design 06 §3.4）。
   const archivedFilter = server.archiveSetKnown === true
@@ -545,47 +543,12 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                   {serverOpenFailures.filter(failure => !projectionHasSession(server, failure.sessionId)).map(failure => (
                     <div key={failure.sessionId} className={cc.rowError} role="alert">{failure.message}</div>
                   ))}
-                  {/* 来源级归档提示条（上游 RowActionToast 的 section 内实例化，D5）：
-                      归档成功 / 停止并归档 → 撤销 + 筛选（筛选已生效时隐藏）；点击归档行
-                      不可打开 → 纯提示。自动过期，per-shell 瞬态。 */}
+                  {/* 来源级普通警示（上游 RowActionToast 的 section 内实例化，design 06 §3.4）：
+                      点击归档行不可打开 → 纯提示，自动过期，per-shell 瞬态。归档成功 /
+                      停止并归档的就地提示条已按用户裁决移除（§3.4 Rejected alternatives）。 */}
                   {notice !== undefined && (
                     <div className={cc.archiveNotice} role="alert">
-                      <span className={cc.archiveNoticeText}>
-                        {notice.kind === 'archivedNotOpenable'
-                          ? t('toast.archivedNotOpenable')
-                          : t(notice.kind === 'stoppedAndArchived' ? 'toast.stoppedAndArchived' : 'toast.archived')}
-                      </span>
-                      {notice.kind !== 'archivedNotOpenable' && (
-                        <>
-                          <button
-                            type="button"
-                            className={cc.archiveNoticeAction}
-                            onClick={() => {
-                              dismissNotice(server.id)
-                              onUnarchiveSession(server, notice.sessionId)
-                            }}
-                          >
-                            {t('toast.archivedUndo')}
-                          </button>
-                          {/* 降级出处门：归档集未知时该来源筛选轴整轴禁用（保护存储值），
-                              提示条的「筛选」捷径同样不得写 show——否则会静默覆盖存储的 only。 */}
-                          {archivedFilter === 'default' && server.archiveSetKnown === true && (
-                            <>
-                              <span className={cc.archiveNoticeText}>{t('toast.archivedOr')}</span>
-                              <button
-                                type="button"
-                                className={cc.archiveNoticeAction}
-                                onClick={() => {
-                                  dismissNotice(server.id)
-                                  setArchivedFilter(server, 'show')
-                                }}
-                              >
-                                {t('toast.archivedFilter')}
-                              </button>
-                            </>
-                          )}
-                        </>
-                      )}
+                      <span className={cc.archiveNoticeText}>{t('toast.archivedNotOpenable')}</span>
                     </div>
                   )}
                   {merged !== undefined ? (

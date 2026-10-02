@@ -2220,15 +2220,15 @@
   color: var(--dsw-alias-state-error-primary);
 }
 
-/* ===== 归档行与归档提示条（design 06 §3.4，上游 Rows.module.css 的 .archived 与
-   RowActionToast 的 section 内实例化）===== */
+/* ===== 归档行与普通警示（design 06 §3.4，上游 Rows.module.css 的 .archived 与
+   RowActionToast 的 archivedNotOpenable section 内实例化；归档成功两态提示条已移除）===== */
 
 /* 归档行：占原槽位、置灰；标题落到 caption 墨色（上游同一步阶）。 */
 .sessionArchived .sessionTitle {
   color: var(--dsw-alias-label-caption);
 }
 
-/* 来源级归档提示条：header 之下、列表之上的一行内联通知（rowError 同族版式）。 */
+/* 来源级普通警示：header 之下、列表之上的一行内联通知（rowError 同族版式）。 */
 .archiveNotice {
   display: flex;
   align-items: center;
@@ -2246,8 +2246,8 @@
   color: var(--dsw-alias-label-caption);
 }
 
-/* 内联文本动作（撤销 / 筛选已归档 / 查看其他会话）：上游 toast 的按钮在行内文字里
-   同样是无胶囊的文本动作。 */
+/* 内联文本动作（only 空态的「查看其他会话」/ 搜索命中的「恢复」）：上游 toast 的按钮
+   在行内文字里同样是无胶囊的文本动作。 */
 .archiveNoticeAction {
   border: 0;
   padding: 0 2px;

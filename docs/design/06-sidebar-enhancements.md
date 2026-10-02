@@ -334,11 +334,16 @@
   pin 两入口缺席、归档钮/菜单项翻转为「恢复」（官方 `workspace/unarchiveSession`，失败落
   `/unarchive` 行错误键）；**搜索命中行**同为归档形态，恢复入口以行后文本动作承载（搜索行是
   单一 button 的 a11y 结构，嵌套按钮非法——形态差异登记在 checklist §4.6 该行，行为面与上游一致）。
-- **归档提示条**（上游 `RowActionToast` 的 section 内实例化）：落**触发来源**的 section 内、
-  折叠门内、per-shell 瞬态（`sidebar-root-notices.ts`）；三态 archived / stoppedAndArchived /
-  archivedNotOpenable；动作 = 撤销 + 筛选已归档会话（该来源已非 default **或归档集未知**时隐藏，
-  后者保护降级期存储值）；归档成功两个
-  相位（直接归档、第二段 stopActivity）都触达。
+- **归档警示**（上游 `RowActionToast` 的 section 内实例化，2026-10 收敛）：只剩「点击归档行
+  不可打开」一态（`toast.archivedNotOpenable`），落**触发来源**的 section 内、折叠门内、per-shell
+  瞬态，3s 自动消失（上游 Toast 默认 hold；`sidebar-root-notices.ts`）。**归档成功 / 停止并归档
+  两态的就地提示条已按用户裁决移除**：归档反馈不再由侧栏承担；恢复入口留在视图选项
+  「全部对话（显示已归档）」与行/管理器上，**但归档集未知的降级来源上三者都不可用**（筛选轴整轴
+  禁用、管理器只报 degraded），刚归档的行要等该来源挂载、基线到达才可恢复——被移除的 6s「撤销」
+  按钮正是覆盖这一窗口的入口，按已知代价接受。**Rejected alternatives**：① 原样保留两态提示条
+  ——用户否掉的就是这一行，否；② 只去掉「撤销 / 筛选」动作、保留「会话已归档」文案——仍是同一条
+  多余提示，否；③ 迁移到上游 `shell.overlay` 顶部横幅——N-ctx 下无法归属触发来源（section 内
+  实例化的存在理由），且与「不要这条提示」的诉求相反，否。
 - **only 空态**：`empty.noneArchived` + 「查看其他会话」跳回 default（单一 `data-row-key="empty"`
   元素内分支，不新增 AnimatedRows 键位）。
 - **按工作区树**（上游 `tree.ts owningParentFolder` 的行为镜像，`client-core/workspace-tree.ts`）：
@@ -362,7 +367,7 @@
   由此 `unpin` 后行回自然位（登记偏差 B2，§5）。**保守守卫**：涉及置顶行的拖放（源或目标是置顶
   行）一律不提交且不画 marker——未分区的锚点算不出分区显示序里的位置，放任会反向移动并写进
   账号/wire；blank 目标的落点半边归一为 after（上游同规则）。
-- **登记与偏差**：A 类（架构实例化，不登记）：三轴 per-source、每来源账号、提示条 section/
+- **登记与偏差**：A 类（架构实例化，不登记）：三轴 per-source、每来源账号、普通警示 section/
   per-shell、降级规则、无跨来源序。B 类（真实差异，STATUS 必要取舍）：B1 排序模型（默认
   `manual` vs 上游 `updated`；manual = 宿主 wire 序 vs 上游本地账号序；updated = 本仓活动视图
   vs 上游纯 recency）、B2 pin unpin 落点、B3 树模式家族优先、B4 树模式展开/折叠模型与拖拽父子
@@ -371,8 +376,9 @@
   `manual`）、B6 本地账号（flatOrder / ungroupedOrder / updated account）的成员集 = **当前可见行**，
   拖拽提交会把隐藏（归档）成员写出账号（上游 `sessionMemberIds` 保留隐藏成员，恢复时回原槽位）、
   B7 本地搜索匹配链（displayTitle → cwd basename → session id；上游只匹配 summary.title + workspace
-  标签）、B8 归档提示条的颜色 tone 与成功/警示字形未移植（role=alert 本就是上游 Toast 行为；文案/动作/
-  TTL 仅 hold 层对齐——上游另有 1s 淡出尾巴）、B9 会话行窗口的配额语义（上游 5 行且 blank/running/有
+  标签）、B8 归档成功不再就地提示（上游 `RowActionToast` 的 archived / stoppedAndArchived 两态已按
+  用户裁决移除，§3.4；保留的 archivedNotOpenable 普通警示仍未移植色 tone / 成功警示字形——role=alert
+  本就是上游 Toast 行为、TTL 仅 hold 层对齐，上游另有 1s 淡出尾巴）、B9 会话行窗口的配额语义（上游 5 行且 blank/running/有
   存活子代理的行豁免；本仓按位置窗口 200 行 + 当前行）、B10 本地账号中新 fork 子项落尾（上游
   `placeFork`：新普通分叉紧邻其源；本仓按对账把未知成员追加到尾部）。
   上游形态移植逐行登记在 checklist §4.6（ViewOptionsMenu / owningParentFolder /
@@ -1002,7 +1008,8 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
 - **归档筛选（`archivedFilter` 三态）已落地**（§3.4）：default 隐藏 / show 原槽位混入 / only 仅归档行
   并丢弃无可见成员的 workspace；列表与搜索同规则；归档行置灰、不可开（点击就地提示）、不可拖（仍是
   落点）、状态槽留空、pin 两入口缺席、归档钮/菜单项翻转为「恢复」（官方 `workspace/unarchiveSession`）；
-  归档后触发来源 section 内提示条给「撤销 / 筛选已归档会话」（上游 `RowActionToast` 的实例化，D5）；
+  归档成功不再就地提示（上游 `RowActionToast` 的 archived / stoppedAndArchived 两态按用户裁决移除，
+  §3.4；恢复入口在视图选项与行/管理器上，归档集未知的降级来源要等挂载、基线到达）；
   only 空态可一键跳回。**降级规则（本仓特有状态）**：`archiveSetKnown !== true` 时筛选轴三项整体禁用、
   按实际渲染态（隐藏已归档）显示选中、存储值保留，集合恢复已知后自动生效（点击默认项会把存储值写回
   `default`，故默认项也禁用）。管理器（design 24）仍是批量维护面，purge 是其独有能力。
@@ -1352,7 +1359,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
 - **Rejected alternatives（行位移指针门控）**：①*改退出克隆体的画序*（给 `.workspaceList` 加 `z-index`，或把覆盖层挂进列表）——实测克隆体不是成因（重叠时间线与透明度见上），改了只把叠影从"盖住"变成"透出"，还要调用方耦合 vendor 未导出的覆盖层结构。②*改 vendor 动画器退出段*——`AnimatedRows` 是逐字移植体（byte-fidelity 锁 + registry/design 登记成本），且同样不针对成因。③*容器级 `pointer-events: none` 锁*——会吞掉门控行上的真实点击（门控行必须仍是可点目标）。④*只把揭示延后到动画结束*——仍是"无指令揭示"，且会把位移前已悬停的行打断成"闪掉再回来"。
 
 - **视图选项三轴的新增几何（2026 对齐轮）**：树模式嵌套缩进 = `--chamber-tree-depth × 12px`
-  （`calc()`，任意层数一条规则，§3.4）；归档提示条 `.archiveNotice` = header 之下的内联行
+  （`calc()`，任意层数一条规则，§3.4）；归档警示 `.archiveNotice` = header 之下的内联行
   （12/18 字级、caption 墨色、可换行；`.archiveNoticeAction` 是无胶囊文本动作，hover 下划线）；
   归档行 `.sessionArchived` 只把行标题落到 caption 墨色，**不新增行高/命中盒档位**。
 
@@ -1562,7 +1569,7 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
 
 ## 12. Rejected alternatives（视图选项三轴）
 
-1. **页面级全局提示条 / 全局置顶区**：与「全局跨来源面只有待办提醒」的裁决冲突；归档提示条改为落
+1. **页面级全局提示条 / 全局置顶区**：与「全局跨来源面只有待办提醒」的裁决冲突；归档警示改为落
    触发来源的 section 内（per-shell 瞬态，与 `rowErrors` 同纪律）。
 2. **在 sidebar 侧后处理插入归档行**（不改进 derive）：归档行的原槽位与行形态在 renderer 投影里已被
    过滤，后处理拿不到「记账槽位」；改为把 `archivedFilter` 作为**投影输入**（renderer `deriveServers`
@@ -1573,6 +1580,6 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
    per-source 实例化原则冲突；改**每来源平铺**。
 5. **降级时清掉筛选存储值**：把瞬时可用性问题固化成偏好改写；改禁用三项 + 按默认渲染 + 保留存储值
    （并因此整体禁用——点击默认项也会把存储值写回 `default`）。
-6. **归档/置顶动作失败也弹来源提示条**：失败面仍归行级 `rowErrors` 槽（既有族约定），提示条只承载
-   归档完成/停止并归档/不可打开三种瞬态通知。
+6. **归档/置顶动作失败也弹来源警示**：失败面仍归行级 `rowErrors` 槽（既有族约定），警示条只承载
+   「归档行不可打开」这一种瞬态通知（归档完成/停止并归档两态已按用户裁决移除，§3.4）。
 

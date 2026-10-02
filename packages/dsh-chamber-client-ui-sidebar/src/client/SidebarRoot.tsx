@@ -107,9 +107,9 @@ export function SidebarRoot({
     sessionOrderOverride, setSessionOrderOverride, workspaceOrderOverride, setWorkspaceOrderOverride,
   } = useSidebarProjection()
   const { rowErrors, setRowErrors, runAction, runActionWithOutcome } = useSidebarActions()
-  // 来源级归档提示条（upstream RowActionToast 的 N-ctx 实例化）：per-shell 瞬态。
-  // servers 参与：断连来源的提示与其计时器一并清除（TTL 内重连不得弹回）。
-  const { notices, showNotice, dismissNotice } = useSidebarNotices(servers)
+  // 来源级普通警示（点击归档行不可打开，upstream RowActionToast 的 N-ctx 实例化）：
+  // per-shell 瞬态。servers 参与：断连来源的警示与其计时器一并清除（TTL 内重连不得弹回）。
+  const { notices, showNotice } = useSidebarNotices(servers)
   const {
     sessionDrag, setSessionDrag, workspaceDrag, setWorkspaceDrag, serverDrag, setServerDrag,
     commitSessionDrag, commitWorkspaceDrag, commitServerDrag,
@@ -127,9 +127,9 @@ export function SidebarRoot({
   } = useSidebarMenus({ servers, runAction })
   // 对话框状态先于会话动作：归档的两段式确认层归 dialogs 所有（单层规则在
   // 那里执行一次），行级归档入口只在宿主拒绝后代 dialogs.openArchiveConfirm 武装它。
-  const dialogs = useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors, showNotice })
+  const dialogs = useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors })
   const { onOpenArchiveCleanup, openWorkspaceBrowser, onDeleteWorkspace, openArchiveConfirm } = dialogs
-  const { onForkSession, onNewSession, onArchiveSession, onUnarchiveSession, onPinSession } = useSidebarSessionActions({ runAction, openArchiveConfirm, showNotice })
+  const { onForkSession, onNewSession, onArchiveSession, onUnarchiveSession, onPinSession } = useSidebarSessionActions({ runAction, openArchiveConfirm })
 
   const openSession = useCallback((serverId: string, sessionId: string): void => {
     // 新点击立即清掉该行陈旧失败文案（若再次失败，dispatch 结果会重报）。
@@ -213,7 +213,6 @@ export function SidebarRoot({
     openSession,
     notices,
     showNotice,
-    dismissNotice,
   }), [
     wide, t, chamberInstanceId, useShortcuts, renderWorkspaceGit, renderSessionSeat, panels, selectPanel,
     usePanelInfo, renderSlot, viewPrefs, actions,
@@ -222,7 +221,7 @@ export function SidebarRoot({
     suppressClickRef,
     dragPressOnButtonRef, sessionDropCommitted, workspaceDropCommitted, serverDropCommitted,
     ghostExpiry, rowErrors, menuOpen, sortMenuOpen, setSortMenuOpen, renaming, setRenaming,
-    openSession, notices, showNotice, dismissNotice,
+    openSession, notices, showNotice,
   ])
 
   // macOS 隐藏标题栏（红绿灯浮在侧栏顶，Swift 壳 titlebarAppearsTransparent；上游官方

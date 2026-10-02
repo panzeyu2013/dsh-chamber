@@ -145,7 +145,7 @@ export function ServerSectionSearchResults({ server, merged, currentRemote, curr
                                   aria-description={archived ? t('toast.archivedNotOpenable') : undefined}
                                   onClick={() => {
                                     if (archived) {
-                                      showNotice(server.id, 'archivedNotOpenable', item.sessionId)
+                                      showNotice(server.id)
                                       return
                                     }
                                     openSession(server.id, item.sessionId)

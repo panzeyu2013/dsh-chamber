@@ -8,17 +8,14 @@ import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-cha
 import { increasedForkTitle } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import { getInstanceClient, renameSession } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 import { archiveSessionForSource, createSessionForSource, forkSessionForSource, pinSessionForSource, unarchiveSessionForSource, unpinSessionForSource } from '@dsh-chamber/dsh-chamber-client-core/session-mutations'
-import type { SourceNoticeKind } from './sidebar-root-notices.ts'
 import { classifyArchiveFailure, type SessionArchiveConfirmRequest } from './session-archive-confirm.ts'
 import type { RunAction } from './sidebar-root-actions.ts'
 
-export function useSidebarSessionActions({ runAction, openArchiveConfirm, showNotice }: {
+export function useSidebarSessionActions({ runAction, openArchiveConfirm }: {
   runAction: RunAction
   /** Arms the archive-active confirmation (owner: useSidebarDialogs). Returns
    *  false when the single-dialog-layer rule refused the arm. */
   openArchiveConfirm: (request: SessionArchiveConfirmRequest) => boolean
-  /** 来源级归档提示条（design 06 §3.4）：归档成功后就地提示「撤销 / 筛选」。 */
-  showNotice: (sourceId: string, kind: SourceNoticeKind, sessionId: string) => void
 }) {
   /** Per-workspace in-flight "+" resolution (upstream `connectWorkspace`'s
    *  `connecting` map): a second click joins the first. Keyed like the
@@ -113,8 +110,6 @@ export function useSidebarSessionActions({ runAction, openArchiveConfirm, showNo
         return
       }
       chamberBridge.requestRefresh(server.id)
-      // 上游 toast：归档成功后提示撤销 / 筛选（已显示归档时筛选项由渲染侧隐藏）。
-      showNotice(server.id, 'archived', sessionId)
     })
     archiveActionRef.current.set(key, task)
     void task.finally(() => {
