@@ -56,6 +56,8 @@ const GROUPS = {
   navigation: [
     { file: 'test/navigation/nav-active.test.ts', nodeArgs: ['--import', './test/support/vendor-register.mjs'] },
     'test/navigation/server-selector.test.ts',
+    // header 事实条的纯投影（design 15 §6）：插件集事实 → 文案/动作分类。
+    'test/navigation/plugin-notice.test.ts',
   ],
 }
 

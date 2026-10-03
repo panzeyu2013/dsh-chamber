@@ -151,7 +151,7 @@ test('bootInstanceShell: a clean run settles booted with no error and keeps the 
     assert.equal(state.error, null)
     assert.equal(__testDisposedCount(), 0)
     const [facts] = __testConfiguredContexts() as [Record<string, unknown>]
-    const { chamberReportBootDegraded, chamberMachineCatalog, ...immutableFacts } = facts
+    const { chamberReportBootDegraded, chamberMachineCatalog, chamberPluginRefresh, ...immutableFacts } = facts
     assert.deepEqual(immutableFacts, {
       chamberInstanceId: 'ssh-test-clean-2',
       chamberBasePath: '/api/i/ssh-test-clean-2',
@@ -168,6 +168,11 @@ test('bootInstanceShell: a clean run settles booted with no error and keeps the 
     const machineCatalog = chamberMachineCatalog as { entries?: unknown; iconUrl?: unknown }
     assert.equal(typeof machineCatalog.entries, 'function', 'every boot hands the entry the page machine catalog')
     assert.equal(typeof machineCatalog.iconUrl, 'function')
+    // 插件刷新控制面（design 09 §3.7 / design 15 §6）：与该实例内嵌插件管理器同 ctx 的
+    // 运行时面，单独断言（它不是每来源事实，故不进 immutableFacts）。
+    const pluginRefresh = chamberPluginRefresh as { requestRefresh?: unknown; actionStarted?: unknown }
+    assert.equal(typeof pluginRefresh.requestRefresh, 'function', 'every boot hands the entry the plugin-refresh control')
+    assert.equal(typeof pluginRefresh.actionStarted, 'function', 'a later action can close an open restart window')
   } finally {
     __testResetConfiguredContexts()
   }
@@ -558,10 +563,11 @@ test('createChamberContextSetup: immutable entry facts cannot cross when boots a
   assert.ok(a.facts.chamberMachineCatalog !== undefined, 'every entry is handed the machine catalog')
   assert.equal(a.facts.chamberMachineCatalog, b.facts.chamberMachineCatalog,
     'two entries share one page-level machine reader')
-  // …and the fact set stays exactly these five: the strict whole-object check
-  // must not silently admit a new per-entry fact.
+  // …and the fact set stays exactly these six: the strict whole-object check
+  // must not silently admit a new per-entry fact. `chamberPluginRefresh` is the
+  // per-boot plugin-refresh control face (design 09 §3.7 / design 15 §6).
   assert.deepEqual(Object.keys(a.facts).sort(), [
-    'chamberBasePath', 'chamberInstanceId', 'chamberMachineCatalog',
+    'chamberBasePath', 'chamberInstanceId', 'chamberMachineCatalog', 'chamberPluginRefresh',
     'chamberSourceFingerprint', 'chamberTransport',
   ])
   assert.throws(() => createChamberContextSetup(' ', '/api/i/ '), /empty instance id/)

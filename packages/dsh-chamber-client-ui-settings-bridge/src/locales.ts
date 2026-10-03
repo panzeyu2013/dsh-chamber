@@ -265,6 +265,18 @@ export const zh = {
   dshRuntimeEnvHint: '由 DSH_CHAMBER_DSH_PATH 指定，版本选择与切换已禁用',
   dshRuntimeInvalidationFallback: '因应用更新，已回落到内建 dsh；原选择 v{version} 保留（{at}）。',
   dshRuntimeInvalidationRecovered: '应用更新后的内建 dsh 未通过兼容性检查，已恢复原运行时 v{version}；原选择仍保留（{at}）。',
+
+  // 设置面板 header 的每来源插件刷新事实条（design 15 §6）：只收插件集事实
+  //（restart / 跨实例冲突 / 挂载失败），通道类仍归连接页与降级横幅；它不是 nav 单元。
+  pluginNoticeRestartTitle: '有插件变更尚未生效',
+  pluginNoticeRestartBody: '页面已加载 {id} 的旧构建；重新加载应用后即可看到它的设置分节。',
+  pluginNoticeConflictTitle: '插件构建不一致',
+  pluginNoticeConflictBody: '插件 {id} 已被另一实例先加载；重启本应用也不会切换，请对齐两端的运行时/插件版本。',
+  pluginNoticeLoadFailedTitle: '插件未能挂载',
+  pluginNoticeReloadAction: '重新加载应用',
+  pluginNoticeRetryingAction: '重试中…',
+  pluginNoticeRetryAction: '重试',
+  pluginNoticeConnectionsAction: '前往连接管理',
 }
 
 /** English dictionary (key-set must match `zh` exactly). */
@@ -535,6 +547,16 @@ export const en: Record<keyof typeof zh, string> = {
   dshRuntimeEnvHint: 'Set via DSH_CHAMBER_DSH_PATH — version selection and switching are disabled',
   dshRuntimeInvalidationFallback: 'After the app update, dsh fell back to the bundled runtime; the original v{version} selection is retained ({at}).',
   dshRuntimeInvalidationRecovered: 'The bundled runtime failed its compatibility probe after the app update, so runtime v{version} was restored; the original selection remains retained ({at}).',
+
+  pluginNoticeRestartTitle: 'A plugin change has not taken effect',
+  pluginNoticeRestartBody: 'This page kept the previous build of {id}; reload the app to see its settings section.',
+  pluginNoticeConflictTitle: 'Plugin build mismatch',
+  pluginNoticeConflictBody: 'Another instance already loaded {id} on this page; restarting this app will not switch it — align the runtime/plugin versions of both ends.',
+  pluginNoticeLoadFailedTitle: 'Plugin failed to mount',
+  pluginNoticeReloadAction: 'Reload app',
+  pluginNoticeRetryingAction: 'Retrying…',
+  pluginNoticeRetryAction: 'Retry',
+  pluginNoticeConnectionsAction: 'Open connections',
 } satisfies Record<SettingsBridgeKey, string>
 
 

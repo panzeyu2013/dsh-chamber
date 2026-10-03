@@ -41,6 +41,7 @@ import {
   recordPendingArchive,
   recordPendingSession,
   onSessionRestored,
+  onClientGraphResyncRequest,
   recordPendingWorkspace,
   recordPendingWorkspaceRemoval,
   recordWorkspacePlacement,
@@ -67,6 +68,7 @@ import {
   type WorkspacePlacementLedger,
   type WorkspaceRemovalLedger,
 } from '@dsh-chamber/dsh-chamber-client-core'
+import { resyncInstanceClientGraph } from '../shell.ts'
 import type { EchoStore } from '../host/echo-store.ts'
 import type { FactsStore } from '../host/facts-store.ts'
 import type { MountedSourcesStore } from '../host/mounted-sources-store.ts'
@@ -475,6 +477,23 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
       void refreshAggregate(sourceId, tag)
     })
   }, [refreshAggregate])
+
+  /**
+   * 插件刷新收敛的页面侧转发（design 09 §3.7 / design 15 §6）：设置面板对「选中来源」
+   * 发出的重试请求在这里落到该来源已挂载壳的 live-graph 重订阅上。没挂载/没 arm 的来源
+   * 只记一条 console（其收敛归该来源下一次 boot，本 hook 不排第二条阶梯）。
+   */
+  useEffect(() => {
+    return onClientGraphResyncRequest((sourceId) => {
+      try {
+        if (!resyncInstanceClientGraph(sourceId)) {
+          console.warn(`[dsh-chamber] client-graph resync for ${sourceId} skipped: no live plugin subscription`)
+        }
+      } catch (error) {
+        console.warn(`[dsh-chamber] client-graph resync for ${sourceId} threw:`, error)
+      }
+    })
+  }, [])
 
   /**
    * 工作区**位置意图**（pre-create 半边）：唯一在 wire 之前发布的事实——宿主 create 无条件

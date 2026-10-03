@@ -231,6 +231,16 @@ export interface LiveGraphSyncDeps {
 /** The handle shell.ts owns: disarm once, await the joined-in-flight pass. */
 export interface LiveGraphSync {
   disarm(): Promise<void>
+  /**
+   * Re-subscribe the page-channel `pluginGraph` topic so the host re-delivers its
+   * whole graph through the SAME frame pipeline (acceptFrame → pump → diffLiveRows).
+   * Used after a settled plugin/bundle change so a missed frame cannot leave the
+   * settings surface stale; the channel owns the socket and its retries, so this only
+   * replaces the subscription record. No-op once disarmed or when no subscription was
+   * ever armed (a holder whose boot never answered the host graph).
+   * @returns true when a subscription record was reopened.
+   */
+  resync(): boolean
 }
 
 /** Activation wait for a newly created entry (create resolves before inject settles). */
@@ -608,36 +618,50 @@ export function startLiveGraphSync(deps: LiveGraphSyncDeps): LiveGraphSync {
   let subscription: LivePluginGraphSubscription | undefined
 
   const subscribe = deps.subscribePluginGraph
-  if (subscribe !== undefined) {
-    // The page channel owns the socket, its reconnect ladder and resubscribe-on-reconnect
-    // (design 26 §D4); this reconciler never schedules a reconnect of its own. One warning
-    // per outage, ended by a delivered item or a fresh onOpen.
+  // The page channel owns the socket, its reconnect ladder and resubscribe-on-reconnect
+  // (design 26 §D4); this reconciler never schedules a reconnect of its own. One warning
+  // per outage, ended by a delivered item or a fresh onOpen.
+  const handlers: LivePluginGraphHandlers = {
+    onItem(data) {
+      if (disposed) return
+      // A delivered frame is proof the subscription works: the next outage logs again.
+      errorLogged = false
+      acceptFrame(data)
+    },
+    onOpen() {
+      if (disposed) return
+      errorLogged = false
+    },
+    onError(code, message) {
+      if (disposed || errorLogged) return
+      errorLogged = true
+      warn(`[live-graph] pluginGraph subscription for ${deps.sourceId} failed (${code}: ${message}); the page channel retries on its own`)
+    },
+  }
+  const openSubscription = (): void => {
+    if (subscribe === undefined || disposed) return
     try {
-      subscription = subscribe({
-        onItem(data) {
-          if (disposed) return
-          // A delivered frame is proof the subscription works: the next outage logs again.
-          errorLogged = false
-          acceptFrame(data)
-        },
-        onOpen() {
-          if (disposed) return
-          errorLogged = false
-        },
-        onError(code, message) {
-          if (disposed || errorLogged) return
-          errorLogged = true
-          warn(`[live-graph] pluginGraph subscription for ${deps.sourceId} failed (${code}: ${message}); the page channel retries on its own`)
-        },
-      })
+      subscription = subscribe(handlers)
     } catch (error) {
       // Opportunistic contract: a failed subscribe only switches THIS holder's live sync
       // off; it must never bubble into the settled boot.
       warn('[live-graph] page-channel subscription failed; live sync is off for this holder', error)
     }
   }
+  openSubscription()
 
   return {
+    resync(): boolean {
+      if (disposed || subscribe === undefined) return false
+      try {
+        subscription?.close()
+      } catch (error) {
+        warn(`[live-graph] pluginGraph resync unsubscribe for ${deps.sourceId} failed`, error)
+      }
+      subscription = undefined
+      openSubscription()
+      return subscription !== undefined
+    },
     disarm(): Promise<void> {
       if (disposed) return current
       disposed = true

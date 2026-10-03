@@ -361,13 +361,17 @@ chamber-settings.json，非秘密）：
    `restartLocal`，§9.3 只定义事务），非白名单终态由 `shell-ipc-runtime.ts` 的
    "did not reach ready" 响亮拒绝；gateway 腿保留
    `pollGatewayReady`（1s/120s）的 202 + status 轮询，超时/失败按分类器如实投影。
-   **窗口重载退役**：此前「重启 = 宿主重启 + 一次窗口重载」的 page-owned completion
-   （`restart-window-reload.ts`，按来源单飞、卸载不取消）已随客户端插件热重载的直接修复
-   整体移除：**新装/卸载**由 design 09 §3.7 的活实例热同步接管（宿主 hmr 报 `applied` 即把该行
+   **窗口重载退役（2026-10 修订：残余类恢复有界收口）**：此前「重启 = 宿主重启 + 一次窗口重载」的
+   page-owned completion（`restart-window-reload.ts`，按来源单飞、卸载不取消）已随客户端插件热重载的
+   直接修复整体移除：**新装/卸载**由 design 09 §3.7 的活实例热同步接管（宿主 hmr 报 `applied` 即把该行
    挂进/移出活 ctx），重启入口不再动页面；**已加载 id 的重建（rev 变化）仍换不掉实现**
    （模块表按 id first-load-wins），`restart-required` 只上报事实（同页重 boot 时该行被丢弃、实例照常
-   启动；live 保留已挂载的旧实现）——这条路径需要用户**手动重载
-   页面/重启应用**，不再有自动收尾（STATUS 登记）。
+   启动；live 保留已挂载的旧实现）。2026-10 裁决：该残余类不再只靠
+   用户手动——**用户在本页发起的插件变更结算后**，壳在有界窗口（5s）内观察到该来源的
+   `restart-required` 即按**插件刷新独立预算**（3 次/10 分钟，fail-closed，与流恢复 budget 分域）
+   自动整页重载一次；`instance-version-conflict` **不自动重载**（重启本应用也换不掉先加载者）。
+   手动入口 = 设置面板 header 事实条的「重新加载应用」（design 15 §6）。本段其余「重启入口不带
+   任何页面收尾」的接线范围不变；页面侧接线与单测见 design 09 §3.7。
    **接线范围**：本段「重启 dsh」两种形态、gateway 卡「重启 dsh」/「启动实例」、插件对话框
    footer 重启与全部 restart-to-apply、ssh 卡「重启实例」（仅 dsh 目标）都不再有任何页面级
    收尾（gateway 两态仍按 `pollGatewayReady` 确认）；本地卡「启动」/写者接管、本地
@@ -380,9 +384,21 @@ chamber-settings.json，非秘密）：
    重载才能换掉旧实现；②单插件热替换（vendor 已验证的
    `invalidate → 装载 → registry-first teardown → 清样式 → entry.refresh()` 顺序）——
    保住来源壳状态，但要在 chamber 侧重实现 HMR 换血纪律（样式重复注入、依赖闭包、
-   跨来源同 id 共享），成本风险远超收益，只登记为将来可选。
-   （原替代③「不重载只提示」当时因半自动被拒；客户端插件热重载直接修复后已成为现行形态——
-   装/卸热同步、rev 变化只上报 `restart-required`，同页重 boot 丢弃该行。）
+   跨来源同 id 共享），成本风险远超收益，只登记为将来可选；③恢复整份 `restart-window-reload.ts`
+   （所有 plugin-refresh 重启入口都 arm）——被拒：那会把「重启实例」与「插件换血」重新耦合，
+   且对不改插件集的 systemd 重启路径也 arm；2026-10 收口只在「本页插件变更结算 + 该来源 restart 事实」
+   两条件同时成立时重载，独立预算、单飞、不取消于面板卸载；④「结算后 250ms 去抖再请求」——
+   未实现：一次安装流最多两次结算，每次一次重订阅的代价有界（登记为将来项，触发条件 = 实测重连
+   churn 有代价）；**帧新鲜度捷径被移除**——曾试「`lastFrameAt >= startedAt` 即跳过重订阅」，
+   但「到过一帧」≠「最终图已到」（`rebuilt` 按条目逐帧、主题可能随后冻结），会在本应自愈的
+   丢帧场景静默 stale（design 09 §3.7①）；⑤「事实条倒计时 + 取消」——把静默重载变成可中止的
+   同意，需要新增 per-source pending-reload 事实通道，未实现（STATUS 开放项）；⑥「仅手动重载」——
+   被拒：原症状正是「不自动刷新」，只解决一半诉求。
+   **两类 restart 的区分**：`installBundle` 对「已安装包」返回的 `restart-required` 是宿主级
+   notice（不落页面 `pluginDiagnostic`、面板不误导），与 §3.7 的页面级 restart 事实是两类；
+   后者才进本收口。
+   （原替代③「不重载只提示」当时因半自动被拒；客户端插件热重载直接修复后成为现行形态——
+   装/卸热同步、rev 变化由上述有界收口；同页重 boot 丢弃该行、live 保留已挂载旧实现。）
 
 **B. connections 本地实例卡片**：加一行/chip「dsh vX」，读同一 resolve 结果，与 settings
 块同源（桥未就绪时回落 `window.dshChamber.dshVersion`）。

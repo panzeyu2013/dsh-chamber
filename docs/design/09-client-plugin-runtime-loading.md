@@ -546,9 +546,10 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
   `graphAnswered === true`（彻底出界）。整页重载不再需要；safe mode / module-system 失败从未取图，字段缺席，
   不属于该政策。
 - **范围**：只做行 **add/remove**（id 集合）。**rev 变化不换 entry**：模块表按 id first-load-wins，
-  同 id 异 rev 只上报 `restart-required`（同实例重建）/ `instance-version-conflict`（跨来源 owner），
-  等用户**手动重载页面/重启应用**收口（自动窗口重载已随热重载修复退役，design 18 §3.6 项 8）；
-  rev-conflict 的 **add 一律不建 entry**（不把旧 factory 装成新行）。
+  同 id 异 rev 只上报 `restart-required`（同实例重建）/ `instance-version-conflict`（跨来源 owner）。
+  收口有两层：**本页插件管理动作**走下方「设置面」条的结算 provenance + 有界窗口 + 独立预算自动整页重载
+  一次（事实条保留手动入口）；其它路径（ssh 服务重启、restartNow、gateway start/restart，design 18 §3.6
+  项 8）仍只上报事实、需用户手动重载。rev-conflict 的 **add 一律不建 entry**（不把旧 factory 装成新行）。
 - **算法（每个 graph 帧一次幂等 pass）**：帧 → 同一行投影（`parseGraphRows` → `dedupeCoveredRows` →
   `toExtraRows`，与 boot 取图共用，绝不写第二套解析）→ 与 mounted 集合 diff（基线取**活 loader**：
   boot extra id 且同名 entry 有 fiber；boot 期 create 失败的行视为未挂载，后续帧重试到挂载）→
@@ -587,10 +588,33 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
   回滚刚建的 entry 并删页面级 chunk-owner 行**（loader 属该代 ctx、随 ctx 回收，但 `modules.graphRows` 是
   页面共享表：不回滚会让后续消费者经 external 边复活已死插件的 chunk）；**无 fiber 的 entry 同样回滚**
   （它永远无法激活），否则下一帧 recheck 会再 create 一次同名 entry。诊断写同一栅栏。
-- **设置面零改动**：设置壳订阅选中来源 ctx 的 `settings.section` 台账（见 §4 的完整桥接边界与
-  design 05 §5），live 注册的分区经同一 ledger 通知自然出现，不需要重挂面板——机制属上游 cordis
-  `slots` 的订阅面（harness 只渲染选中来源台账持有的条目），chamber 侧**没有新增分支**，故该条无独立单测，
-  只在实机验收里目检「装包后分区即时出现」。
+- **设置面：零重挂 + 两条收敛臂（2026-10 修订）**：设置壳订阅选中来源 ctx 的 `settings.section`
+  台账（见 §4 的完整桥接边界与 design 05 §5），live 注册/移除的分区经同一 ledger 通知自然出现，
+  面板**不重挂**——机制属上游 cordis `slots` 的订阅面。但「帧丢失/被页级模块表拒绝」会让面板静默停在
+  旧台账（用户实测：装包后不刷新，Cmd+R 才出现），故补两条按来源的页面侧臂：
+  ① **resync（每结算一次，无条件）**：设置内嵌插件管理器的一次**本页动作结算**（控制器 store 的 busy/install
+  边沿；结算边沿携带该动作的**开始时刻**，与 live-graph 同一页面墙钟）经该实例 boot ctx 的控制面
+  `ctx.chamberPluginRefresh.requestRefresh(startedAt)`（壳提供、结构消费，客户端插件不新增包依赖）触发
+  live-graph **重订阅 `pluginGraph`**（关旧订阅再 subscribe；宿主每次新连接即回全量图，帧仍走
+  `acceptFrame → pump → diffLiveRows`）——丢失的 add/remove 帧据此收敛。**不做帧新鲜度捷径**：
+  「动作期间到过一帧」只证明主题发过东西（`rebuilt` 按条目逐帧、主题可能随后冻结），不证明最终图已到；
+  据此跳过重订阅会重现静默 stale（无行、无事实条、无按钮）。代价 = 每结算一次订阅重建 + 全图，
+  用户驱动、低频、有界；原批准的 250ms 去抖未实现（登记为将来项，触发条件 = 实测重连 churn 有代价）。
+  未 armed 的来源 resync 返回 false（窗口照开、只等推送事实；其彻底收敛归本节的图回归/重挂）。
+  ② **收口（provenance + 有界窗口）**：`restart-required`（同 id 旧构建已加载，模块表 first-load-wins
+  换不掉）在**有界窗口（5s）**内、且 `updatedAt >= startedAt`（本动作的帧/诊断写在动作执行期间就已落库，
+  live-graph 对同槽同事实去重（`sameFact` 不含 `updatedAt`）不会补写，故 arm 时订阅重放必须按该谓词收口，
+  而不是忽略一切重放；早于本次动作的旧事实不触发）出现时，壳按**独立持久预算**
+  （`dsh-chamber.plugin-reloads` 域，3 次/10 分钟，fail-closed）自动整页重载一次；预算拒绝/未挂载/
+  无 window 时**不消费窗口**（继续观察到死线，后续事实仍可触发）；**新动作开始即关窗**
+  （绝不打断在途安装/启停），事实到达时再按墙钟复核窗口死线（后台节流不延长窗口）；
+  `instance-version-conflict` **不自动重载**（重启也换不掉先加载者）。
+  设置面板 header（壳 chrome，**不是 nav 单元**：design 15 §1 退役的组装诊断块不复活）以 `role="status"`
+  呈现选中来源的三类插件集事实（restart / 冲突 / 挂载失败）与「重新加载应用 / 重试 / 前往连接管理」动作；
+  手动的「重新加载应用」是有意绕开自动预算/单飞的显式用户同意（代价与候选见 STATUS 开放项）。
+  单测：renderer `plugin-refresh-convergence.test.ts` + `live-graph.test.ts`（resync）、
+  settings-bridge `plugin-notice.test.ts`、settings-plugin-manager `plugin-action-tracker.test.ts`
+  与跨包接线锁 `plugin-refresh-wiring.test.ts`；实机验收见 STATUS。
 
 - **实现边界（正文未逐条展开，代码即契约）**：① 无 `await` 方法的 fiber 视为已激活（不等待、不报 pending）；
   ② recheck 发现 entry 的 fiber 消失时，先删该 entry 与页面级 chunk-owner 行，再把行塞回本次 add 重试；
@@ -674,8 +698,9 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
   `parsePluginEventFrame`/`dedupeCoveredRows`/`toExtraRows` 全部通过、URL 前缀与 12-hex rev 形状正确；
   ② 改动在册 bundle 后活帧顺序为 `graph → rebuilt(id,rev) → graph(新 rev)`（同一连接），故「忽略 rebuilt」安全；
   ③ 真实两帧喂 `diffLiveRows` 判出 `revChanged`（即 `restart-required` 路径）。**未验（开放项）**：经插件管理器
-  路径触发的一次真实 add/remove 帧、ssh/gateway 各一来源、卸载边界与回收期无迟到写入、宿主崩溃重启后活行存活
-  ——见 STATUS 的实机门禁条。**pin 源码复核（E1，2026-09-27）**：rev = `framedHash('plugin-artifact', [mtimeMs, ctimeMs, size])`
+  路径触发的一次真实 add/remove 帧、ssh/gateway 各一来源、卸载边界与回收期无迟到写入、宿主崩溃重启后活行存活，
+  以及 2026-10 增补的插件刷新收敛（设置面 header 事实条、**帧先于结算到达的 provenance 竞态**、5s 窗口自动重载
+  一次、独立预算、未挂载 no-op、在途动作不被自动重载打断）——见 STATUS 的实机门禁条。**pin 源码复核（E1，2026-09-27）**：rev = `framedHash('plugin-artifact', [mtimeMs, ctimeMs, size])`
   （`vendor/harness-checkout/packages/client/modules/src/index.ts#ClientArtifactBaseline` 三元组上的私有
   `artifactRevision()`，即 metadata hash，非内容哈希、非 per-process nonce）；
   端点字面量 `EVENTS_ENDPOINT` = `/plugins/events`（同树 `vendor/harness-checkout/packages/client/hmr/src/events.ts#EVENTS_ENDPOINT`）；活重载触发面 =
@@ -686,12 +711,13 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
   触发面事实：活重载来自 `dsh-plugin-manager` 的 `reconcileProfilePatches`
   （`lib/index.js` 约 :2033，`application: ctx.get("hmr") ? "applied" : "restart-required"`），**原始编辑
   `cordis.patch.yml`/`cordis.yml` 不触发**（实测无新帧），故「装/卸即时生效」只在插件管理器/配置编辑路径成立。
-- **重载臂退役（原「保留」裁决的反转）**：`PluginDialog.restartSourceService`（ssh 服务重启）、
+- **重载臂退役（原「保留」裁决的反转，2026-10 修订）**：`PluginDialog.restartSourceService`（ssh 服务重启）、
   `PluginDialog.doRestartNow`（seed restart-to-apply）、受管 gateway 的 start/restart 腿**不再 arm 任何页面级
   收尾**（`restart-window-reload.ts` 已删，design 18 §3.6 项 8）。§3.7 接管 id 集合变化；**但 rev 变化/重打包的
-  已加载行仍只能靠新页面**（模块表 first-load-wins，内核报 `rev-conflict('restart')`，boot 丢弃该行、不把旧 factory 当作新 rev 的行 materialize），该路径
-  现在只上报 `restart-required`、需要用户手动重载页面/重启应用，不再有自动收尾（STATUS 登记）；无 hmr 的宿主
-  插件管理器报 `restart-required` 时同理。
+  已加载行**（模块表 first-load-wins，内核报 `rev-conflict('restart')`：live 保留已挂载的旧 entry，boot 丢弃该行、
+  不把旧 factory 当作新 rev 的行 materialize）在**本页插件管理动作**路径由 §3.7 的「结算 provenance + 5s 窗口 +
+  独立预算」自动收口一次（事实条保留手动入口），不再只是手动；其它路径只上报 `restart-required`、需用户手动
+  重载页面/重启应用；无 hmr 的宿主插件管理器报 `restart-required` 时同理。
 - **Windows**：支持推进见 design 23（win32 验证随其 §7 矩阵实机门禁，见 STATUS）。
 
 ## 6. 相关文档
