@@ -16,6 +16,13 @@
  * store, which this plugin already imports) instead of restated here: a vendor pin that
  * adds a pending phase must not silently turn into an early 'settled' (the window would
  * close before the host applied the change and no new fact would follow).
+ *
+ * If this tracker is created while an action is already in flight (no store edge was
+ * observed), the first in-flight snapshot announces 'started' at that moment, so the
+ * provenance floor is late for that one action: its own earlier restart fact is rejected
+ * and the closure waits for a later change. That is the conservative direction (a missed
+ * auto-reload keeps the manual button); flooring at 0 instead would let a previous
+ * action's fact reload the page.
  */
 import type { InstallState } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/manager-store.ts'
 

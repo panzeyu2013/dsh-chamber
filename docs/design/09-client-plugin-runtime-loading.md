@@ -592,7 +592,7 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
   台账（见 §4 的完整桥接边界与 design 05 §5），live 注册/移除的分区经同一 ledger 通知自然出现，
   面板**不重挂**——机制属上游 cordis `slots` 的订阅面。但「帧丢失/被页级模块表拒绝」会让面板静默停在
   旧台账（用户实测：装包后不刷新，Cmd+R 才出现），故补两条按来源的页面侧臂：
-  ① **resync（每结算一次，无条件）**：设置内嵌插件管理器的一次**本页动作结算**（控制器 store 的 busy/install
+  ① **resync（每结算一次，无条件；唯一例外 = arm 时的同步重放已授予重载——页面已在导航）**：设置内嵌插件管理器的一次**本页动作结算**（控制器 store 的 busy/install
   边沿；结算边沿携带该动作的**开始时刻**，与 live-graph 同一页面墙钟）经该实例 boot ctx 的控制面
   `ctx.chamberPluginRefresh.requestRefresh(startedAt)`（壳提供、结构消费，客户端插件不新增包依赖）触发
   live-graph **重订阅 `pluginGraph`**（关旧订阅再 subscribe；宿主每次新连接即回全量图，帧仍走
@@ -605,14 +605,14 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
   换不掉）在**有界窗口（5s）**内、且 `updatedAt >= startedAt`（本动作的帧/诊断写在动作执行期间就已落库，
   live-graph 对同槽同事实去重（`sameFact` 不含 `updatedAt`）不会补写，故 arm 时订阅重放必须按该谓词收口，
   而不是忽略一切重放；早于本次动作的旧事实不触发）出现时，壳按**独立持久预算**
-  （`dsh-chamber.plugin-reloads` 域，3 次/10 分钟，fail-closed）自动整页重载一次；预算拒绝/未挂载/
+  （`dsh-chamber.plugin-reloads.v1` 域，3 次/10 分钟，fail-closed）自动整页重载一次；
   无 window 时**不消费窗口**（继续观察到死线，后续事实仍可触发）；**新动作开始即关窗**
   （绝不打断在途安装/启停），事实到达时再按墙钟复核窗口死线（后台节流不延长窗口）；
   `instance-version-conflict` **不自动重载**（重启也换不掉先加载者）。
   设置面板 header（壳 chrome，**不是 nav 单元**：design 15 §1 退役的组装诊断块不复活）以 `role="status"`
   呈现选中来源的三类插件集事实（restart / 冲突 / 挂载失败）与「重新加载应用 / 重试 / 前往连接管理」动作；
   手动的「重新加载应用」是有意绕开自动预算/单飞的显式用户同意（代价与候选见 STATUS 开放项）。
-  单测：renderer `plugin-refresh-convergence.test.ts` + `live-graph.test.ts`（resync）、
+  单测：renderer `plugin-refresh-convergence.test.ts` + `plugin-refresh-control.test.ts`（壳侧 reload 闸门/预算/代际栅栏）+ `live-graph.test.ts`（resync）、
   settings-bridge `plugin-notice.test.ts`、settings-plugin-manager `plugin-action-tracker.test.ts`
   与跨包接线锁 `plugin-refresh-wiring.test.ts`；实机验收见 STATUS。
 
