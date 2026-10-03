@@ -103,7 +103,12 @@ test('pathProvidesPnpm: first hit wins, entries resolve against the child cwd, P
   assert.equal(probed.length, 0)
 })
 
-test('pathProvidesPnpm: a Windows App Execution Alias (stat EACCES) counts as a hit', { skip: process.platform === 'win32' }, t => {
+// chmod(000) cannot produce EACCES for uid 0 (root/container runs), so the alias probe
+// never takes the code path this case exists for. Unrunnable there rather than failing —
+// the same uid-agnostic discipline as log-file's EPERM case.
+test('pathProvidesPnpm: a Windows App Execution Alias (stat EACCES) counts as a hit', {
+  skip: process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0),
+}, t => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-pnpm-alias-'))
   const tools = join(root, 'WindowsApps')
   const alias = join(tools, 'pnpm.EXE')
