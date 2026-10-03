@@ -2,8 +2,12 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Node.js 24+](https://img.shields.io/badge/Node.js-24%2B-brightgreen)]()
+[![Release](https://img.shields.io/github/v/release/panzeyu2013/dsh-chamber?include_prereleases&label=release)](https://github.com/panzeyu2013/dsh-chamber/releases)
+[![Downloads](https://img.shields.io/github/downloads/panzeyu2013/dsh-chamber/total)](https://github.com/panzeyu2013/dsh-chamber/releases)
 
-dsh（DeepSeek Harness）的桌面连接管理器：把本机与多台服务器的dsh实例收进一个原生窗口——本地打开即用，远程一键接入。
+dsh（DeepSeek Harness）的桌面连接管理器：把本机与任意多台服务器的dsh实例收进一个原生窗口——本地打开即用，远程经SSH隧道或认证Gateway一键接入，全部来源共用同一条dsh原生侧边栏与官方前端。
+
+macOS版本采用 **Swift/AppKit原生壳**：窗口、菜单、托盘、通知、Dock角标、深链、文件对话框、隐藏/恢复与Sparkle应用内更新都在Swift侧实现；业务由随包分发的Node sidecar承载；页面100%复用dsh官方前端，不是浏览器套壳。
 
 ## 用户界面
 
@@ -13,17 +17,31 @@ dsh（DeepSeek Harness）的桌面连接管理器：把本机与多台服务器�
 
 > English: [README.en-US.md](docs/README.en-US.md) · 开发文档 [DEVELOPMENT.md](docs/DEVELOPMENT.md) · 设计入口 [01-overview.md](docs/design/01-overview.md) · 进度 [STATUS.md](docs/progress/STATUS.md)
 
+## 为什么是 dsh-chamber
+
+- **远程是一等来源** —— 本地实例只是第一个来源：远程服务器经SSH隧道接入（应用自动建隧道并管理远端systemd），公网/团队场景经认证Gateway接入；两者与本地实例在同一条dsh原生侧边栏里平等列出。
+- **官方前端，不做第二套UI** —— 界面是dsh官方前端源码复用自建，每个实例保持原生外观与完整能力；壳未覆盖的插件行降级为「特性缺席」，绝不整boot崩溃。
+- **连接管理是唯一职责** —— 控制面只做托管、反代与静态服务：桌面loopback-only、公网Gateway默认认证；凭据只经write-only表单输入，不进入渲染层与日志；本机只以0600文件保存连接凭据（Gateway凭据优先系统密钥链加密、不可用时明文兜底），且从不回填界面。
+
+|能力|dsh-chamber|官方Desktop|SSH/隧道型社区客户端|
+|---|---|---|---|
+|本机dsh自动托管|✅|✅|✅|
+|远程实例SSH接入（隧道+远端systemd）|✅|❌|多为同步或运维面板，而非接入远端实例|
+|认证Gateway（服务器端公网形态）|✅|❌|❌|
+|多实例同窗（N-ctx）与统一侧边栏|✅|❌|部分|
+|官方前端源码复用|✅|✅|部分为WebUI打包|
+
+> 官方Desktop覆盖「只在本机用」的场景；需要**本机+多台服务器统一管理**，或把dsh以认证形态放到公网时，才需要连接管理器。
+
 ## 快速开始
 
 ### 1 · 下载安装
 
-各平台安装包见 [GitHub Releases](https://github.com/panzeyu2013/dsh-chamber/releases)：
+macOS安装包见 [GitHub Releases](https://github.com/panzeyu2013/dsh-chamber/releases)：
 
-- macOS：`dsh-chamber-<version>-<arch>.dmg`
-- Windows：NSIS安装器（`.exe`）
-- Linux：`dsh-chamber-<version>.AppImage`（x64；需FUSE或
-  `APPIMAGE_EXTRACT_AND_RUN=1`；自动更新需从可写路径启动AppImage，
-  见 `docs/design/22-linux-desktop.md`）
+- macOS（Apple Silicon）：`dsh-chamber-<version>-macos-arm64.dmg`
+
+当前为0.4.x：stable与beta通道独立，逐版本变化见 [CHANGELOG.md](CHANGELOG.md)。
 
 ### 2 · 启动应用
 
@@ -70,6 +88,7 @@ bash install-gateway.sh
 
 ## 功能特性
 
+- macOS Swift原生壳 — AppKit窗口+WKWebView；菜单/托盘/通知/角标/深链/文件对话框/隐藏恢复与应用内更新（Sparkle）均为原生实现；壳内不承载业务，页面100%复用官方前端
 - 本地dsh一键托管 — 本地实例自动启动、就绪检测、守护/回收、健康状态与宿主日志；首屏即完整dsh界面
 - 运行时版本管理（热重载） — 设置页按实例切换/升级/回滚运行时即时生效，插件更新无需重启桌面应用（本地与gateway均可）
 - 远程实例SSH接入 — 添加主机后自动建立SSH隧道并管理远端systemd服务；支持密钥或密码认证
@@ -81,21 +100,19 @@ bash install-gateway.sh
 - open-in打开注册表 — 会话头部统一打开面：本地来源在Finder/文件管理器显示目录；本地或SSH远程来源可拉起VS Code（本地 `vscode://file/`、远程Remote-SSH）；支持 `dsh-chamber://` 深链
 - 桌面通知 — 会话完成 / 提问 / 审批时推送桌面通知，点击直达会话；设置「通知」分组可开关
 - 桌面端更新 — stable与beta配置和feed独立；静默检查，设置页「更新」展示，确认后下载、退出时安装（低打扰、无弹窗）
-- 睡眠/后台常驻 — 关窗可隐藏到托盘继续运行（或退出并确认）；登录自启（macOS/Windows/Linux）；OS唤醒即时重连；保持唤醒开关
+- 睡眠/后台常驻 — 关窗可隐藏到托盘继续运行（或退出并确认）；登录自启（macOS）；OS唤醒即时重连；保持唤醒开关
 - Chamber设置页 — 设置壳固定入口：连接 / 通用；chamber全局设置与各实例配置严格分离
 - 后端版本容忍 — 实例后端dsh前端版本与chamber壳不同步时照常可用：壳未覆盖的额外插件行降级为「特性缺席」（绝不整boot崩溃）
 
 ## 常见问题
 
 - **`pnpm run smoke` 为什么打印SKIP？** — 冒烟测试需要dsh安装；找不到时打印SKIP并以0退出，属正常而非失败。
-- 远程实例需要什么？ — dsh目标需要可达的API profile；gateway目标需要已部署的 `@dsh-chamber/gateway`。两者均可经SSH隧道或显式HTTP(S) 直连；远端无需单独装web前端，UI复用本地前端并经同源反代。
-- agent preset / profile在各实例间怎么工作？ — 按实例权威：每个实例的 `settings`/`credentials`/`llm`/`agentPreset` 配置平面只在该实例一侧（本地 = 本机，远程 = 远端）。编辑远程预设须切到该来源shell的「设置 → Agent presets」页。
-- 前端从哪来？ — dsh官方前端源码复用自建；每个实例保持原生UI。
-- Windows安装慢 / 卡在"正在安装"？ — Defender逐文件实扫 ~33k个运行时文件所致，属已知取舍（design 23 F3）：等待完成或对 `%APPDATA%\@dsh-chamber\desktop` 加Defender排除目录提速；安装/更新状态行有明示。
-- Windows上SSH连接能用密码吗？ — 不能（askpass需要PE可执行）。请用密钥或ssh-agent（Pageant）——保存连接时拒绝密码并有引导提示。
-- Windows上dsh运行时版本管理？ — 推进中（design 23）：默认只读投影；开发验证经 `DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1` 开启，正式解锁以真实Windows验证记录为准。
-- Windows版为什么有SmartScreen提示？ — 安装包尚未Authenticode签名（已知取舍，design 23 F6）；sha512校验只证明下载完整性。从本仓库Release下载时选「更多信息 → 仍要运行」即可。
-- macOS上弹了录屏权限框、设置里却找不到dsh-chamber（或开关已开仍无法截图）？ — 打开「系统设置 → 隐私与安全性 → 录屏与系统录音」：列表里若有旧条目，先选中并用左下「−」删除，再用「+」把 `/Applications/dsh-chamber.app` 重新加入并打开开关，最后 **⌘Q 完全退出并重开 dsh-chamber**（升级自旧版或换过 bundle id 的机器必须「删除旧条目 → 重新加入」一次；`tccutil reset` 只能清记录，建记录只能靠这一步）。
+- **我的凭据会被存到哪里？** — 两处，都在本机：① 实例自身的配置平面（本地 = 本机dsh home，远程 = 远端dsh home，由该实例的dsh管理）；② 桌面壳在 `<userData>` 下保存的连接凭据（Gateway凭据优先系统密钥链加密、不可用时0600明文兜底；SSH密码按用户决策为0600明文兜底），用于免重录重连。凭据只经write-only表单输入，从不回填界面，也不进入渲染层或日志；Gateway安装向导写入的配置文件为0600权限。
+- **它和官方Desktop有什么区别？** — 官方Desktop覆盖「只在本机用」的场景；dsh-chamber的差异集中在远程与多机：SSH接入远端实例、认证Gateway、本地与远程同为窗口内一等来源。本地场景两者都开箱即用，按是否需要远程来选。
+- **远程实例需要什么？** — dsh目标需要可达的API profile；gateway目标需要已部署的 `@dsh-chamber/gateway`。两者均可经SSH隧道或显式HTTP(S) 直连；远端无需单独装web前端，UI复用本地前端并经同源反代。
+- **agent preset / profile在各实例间怎么工作？** — 按实例权威：每个实例的 `settings`/`credentials`/`llm`/`agentPreset` 配置平面只在该实例一侧（本地 = 本机，远程 = 远端）。编辑远程预设须切到该来源shell的「设置 → Agent presets」页。
+- **前端从哪来？** — dsh官方前端源码复用自建；每个实例保持原生UI。
+- **macOS上弹了录屏权限框、设置里却找不到dsh-chamber（或开关已开仍无法截图）？** — 打开「系统设置 → 隐私与安全性 → 录屏与系统录音」：列表里若有旧条目，先选中并用左下「−」删除，再用「+」把 `/Applications/dsh-chamber.app` 重新加入并打开开关，最后 **⌘Q 完全退出并重开 dsh-chamber**（升级自旧版或换过 bundle id 的机器必须「删除旧条目 → 重新加入」一次；`tccutil reset` 只能清记录，建记录只能靠这一步）。
 
 ## 文档
 
@@ -115,6 +132,10 @@ bash install-gateway.sh
 
 - [deepseek-harness（dsh）](https://github.com/deepseek-ai/deepseek-harness) — 被管理的宿主
 - [OpenChamber](https://github.com/openchamber/openchamber) — dsh-chamber的N-ctx设计灵感与命名来源，感谢启发！
+
+## 社区
+
+- DeepSeek Harness官方Discussions：[dsh-chamber介绍帖](https://github.com/deepseek-ai/deepseek-harness/discussions/8724)
 
 ## 贡献
 
