@@ -22,7 +22,7 @@ import {
   runMode, stepInvocation, totalJobs,
 } from './run-checks.mjs'
 import { ARTIFACTS, ensureArtifacts, formatMissingArtifacts, missingArtifacts } from '../dev/ensure-artifacts.mjs'
-import { ciUnclassifiedGateCommands, jobBlock } from './static-gate-parity.mjs'
+import { ciUnclassifiedGateCommands, jobBlock, STATIC_GATE_EXEMPTIONS } from './static-gate-parity.mjs'
 import { judgeSwiftTestReport, parseSwiftTestReport, swiftTestArgs, swiftTestEnvironment } from './run-swift-tests.mjs'
 import { smokeDecision } from './compiled-sidecar-smoke.mjs'
 import {
@@ -59,6 +59,18 @@ import {
 } from './verify-electron-artifacts.mjs'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+test('architecture gates can never be re-registered as local-only exemptions', () => {
+  // Presence in ci.yml's unclassified set and in release validation is already
+  // enforced by the two parity tests (staticGateParityProblems below and
+  // release-workflow-policy.test.mjs, which derives its list from ci.yml). What
+  // neither can catch is a triad gate being re-registered as a local-only
+  // exemption while MODES.static keeps it (one side only ⇒ parity stays green)
+  // or dropped from MODES.static while ci.yml keeps it.
+  for (const gate of ['import-cycles', 'file-budgets', 'package-boundaries']) {
+    assert.equal(STATIC_GATE_EXEMPTIONS.has(`node scripts/gates/verify-${gate}.mjs`), false, `${gate} cannot be local-only`)
+    assert.ok(MODES.static.includes(`verify:${gate}`), `${gate} must stay in the local static set`)
+  }
+})
 test('every mode resolves to at least one step', () => {
   for (const [mode, steps] of Object.entries(MODES)) {
     assert.ok(steps.length > 0, `${mode} must list at least one step`)

@@ -175,12 +175,10 @@ const STATIC_CHECKS = [
   // --require-anchor-root 跑，不在这里伪装成「查过了」。
   'verify:mobile-anchors',
   // 引用环门：真环（值 import 环）= 0，类型环必须命中显式 allowance（棘轮，
-  // 新增环即红）。只读、离线、自带 --self-test 负控；**本地专属**（2026-09-25 裁决）：
-  // ci.yml / release validation 不再承载，由 check:static 执行，static-gate-parity
-  // 的 STATIC_GATE_EXEMPTIONS 登记该单侧状态（双侧都会双向校验）。
+  // 新增环即红）。只读、离线、自带 --self-test 负控；本地、CI 与 release validation 同跑。
   'verify:import-cycles',
   // God 文件棘轮门：预算文件里的行数只许降不许升（--update-budget 同步降档），
-  // target 列是 refactor 目标。只读、离线；**本地专属**（同引用环门）。
+  // target 列是 refactor 目标。只读、离线；本地、CI 与 release validation 同跑。
   'verify:file-budgets',
   // 上游触点门全量（C1/C3–C16，判据清单见 docs/checklists/upstream-touchpoints.md §6）：advisory 模式（只读，不重建产物）。必须是普通门——
   // 否则本地 static/full 可以在 C1/C3 失败（例如把 pure 文件挪进 patched）时全绿，
@@ -211,8 +209,7 @@ const STATIC_CHECKS = [
   'verify:no-dead-exports',
   'verify:upstream-lifecycle-contract',
   // 包边界门（R4 P7）：生产面禁跨包相对 import（vendor 直穿按 registry 放行）+
-  // exports 面白名单。只读、离线、自带 --self-test 负控；**本地专属**（2026-09-25
-  // 裁决，同引用环门）：ci.yml / release validation 不再承载。
+  // exports 面白名单。只读、离线、自带 --self-test 负控；本地、CI 与 release validation 同跑。
   'verify:package-boundaries',
   'test:scripts',
 ]

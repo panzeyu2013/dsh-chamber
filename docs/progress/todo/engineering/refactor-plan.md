@@ -29,7 +29,7 @@
   ——模式名与 ci.yml / release 验证一致，本地通过即同一份证据。
 - 本重构相关三门：`verify:import-cycles`（值环 0 + 类型环 allowance——现为空）、`verify:file-budgets`
   （15 个 God 文件只降不升）、`verify:no-dead-exports`（零消费者导出即红）。
-- 现状：三门已在 `package.json` / `run-checks.mjs` 注册，但按 2026-09-25 裁决**只在本地跑**（ci.yml / release.yml 不再承载，`static-gate-parity` 的 `STATIC_GATE_EXEMPTIONS` 登记该单侧状态；STATUS「结构性重构与清理」条同记）。
+- 执行面：`verify:import-cycles` / `verify:file-budgets` 及包边界门 `verify:package-boundaries` 在本地、普通 CI、发布验证同跑；`verify:no-dead-exports` 仍为本地辅助门。`static-gate-parity` 校验两侧集合，架构三门不得进入本地专属豁免。
 
 ## 4. 边界与不做
 

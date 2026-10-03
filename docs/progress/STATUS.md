@@ -240,7 +240,7 @@
   （已裁：类型导出属文档/契约面、误报面大，理由与边界写在脚本头部）；**仅测试引用**的导出已规则化
   （`TEST_ONLY_EXPORT_ALLOWLIST`，每条一句理由，stale 即红）。
 - 验证面缺类（叶子模块）：`verify:no-dead-exports` 只沿各包 `src/index.ts` 判定「经 package entry 可达的运行时导出」，故**无入口可达的叶子模块**对它不可见——被删的 `packages/gateway/src/util.ts` 即实例，未来同类新增同样隐形。方向：新增「`packages/*/src/**/*.ts` 必须被导入或被构建程序点名」的孤儿模块门禁（误报面待设计），或并入上一条统一收口。证据：`node scripts/gates/verify-no-dead-exports.mjs`（绿）与 `packages/gateway/src/util.ts` 的删除提交说明。
-- 结构性重构与清理（未闭合；[todo/engineering/refactor-plan.md](todo/engineering/refactor-plan.md)）：三门（`verify:import-cycles`/`verify:file-budgets`/`verify:no-dead-exports`）常驻但**只本地跑**；未收口 = renderer 外三处 state/ref 镜像、`ssh-<id>` 别名与旧版本探测（保留）；跨包逐字重复可删 0 组（计划 §6）。
+- 结构性重构与清理（未闭合；[todo/engineering/refactor-plan.md](todo/engineering/refactor-plan.md)）：未收口 = renderer 外三处 state/ref 镜像、`ssh-<id>` 别名与旧版本探测（保留）；跨包逐字重复可删 0 组（计划 §6）。
 - `run-checks tests` 链式步骤可「零覆盖记通过」：manifest dump 丢失时 `requireDump` 只对 direct 生效 ⇒ tests 绿不代表 vendor 套件真跑；修法 = 无 dump 无 transcript 即硬失败。
 - CI 打包排练 CPU bound（Windows 285–342s、macOS 133–188s）：拆成独立并行 job 后 push 侧墙钟由 Windows 排练单独决定，压缩只能动排练范围/打包参数。
 - Swift 套件串行是 macOS 腿最大单项（113s，`scripts/gates/run-swift-tests.mjs`）：`swift test --parallel` 不能直接开——并行模式只在 worker 内打印分片汇总且不打印 `Test Case ... skipped` 行（G2「XCTSkip=0」判据会静默失效），套件另有多处共用固定端口（17520、17951–17953 等），须先做并行隔离与判据重设计。
@@ -295,7 +295,7 @@
 
 - **God 文件预算例外**（`scripts/gates/file-budgets.json`，该表「只降不升」的例外）：`App.tsx` / `aggregate-store.ts` / `derive.ts` 的当前预算高于基线，逐条 note 记评审理由（行入场动画与放置接线、worktree 放置事实/通道、pin 视图选项合并与筛选线程化、工作区删除意图事实/通道与接线；三个派生模块另在 pin-partition.ts、flat-account.ts、workspace-tree.ts 与 pinnedSessionIds·pinSetKnown 字段）。收口方向 = 放置/删除事实迁到 `workspace-placement.ts` / `workspace-removal.ts` 旁，新增派生面待专门重构轮。
 
-- 代码质量辅助门只本地跑（2026-09-25 裁决）：8 门退出 ci/release，仍是 `check:static` 成员；代价 = CI 不再捕获这几类漂移（登记在 `static-gate-parity.mjs`）。
+- 剩余代码质量辅助门只本地跑：i18n、文档链接、测试接线、死导出与样式 token 保持 `static-gate-parity.mjs` 的本地例外；代价 = CI 不捕获这些漂移。
 - seed 自检缺包「只报不阻断」；要阻断改该 check 的 `gap` 判定。
 - 组件工厂 + local slots 推迟（与手写镜像重合）。
 - 0.1.6 代已裁决不做 5 项：`session/writer-held`、`sidebar.toggle.badge`、`workspace-tree` 认领、`.dsh-module-fallback` 自动删除、外部仓 `plugins.bundle.config`。
