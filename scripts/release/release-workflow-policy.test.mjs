@@ -208,8 +208,11 @@ assert.ok(swiftBuild.includes('spctl --assess --type execute --verbose=4 "$ZIP_A
   'spctl must assess the app inside the zip')
 assert.ok(swiftBuild.includes('lipo -archs "$APP/Contents/MacOS/dsh-chamber"'),
   'the .app binary architecture must be asserted')
-assert.ok(swiftBuild.includes('lipo -archs "$APP/Contents/Resources/sidecar/node"'),
+assert.ok(swiftBuild.includes('lipo -archs "$APP/Contents/Resources/sidecar/dsh-chamber-helper"'),
   'the bundled node architecture must be asserted')
+assert.ok(
+  swiftBuild.includes('test "$(basename "$APP/Contents/Resources/sidecar/dsh-chamber-helper")" = "dsh-chamber-helper"'),
+  'the bundled runtime basename must be asserted (design 25 §4.3 A5 inverted: dsh-chamber-helper)')
 // Closure: the .app must carry the sidecar entrypoint, assembly package.json, the control-plane relative entry and all four host packages.
 assert.ok(swiftBuild.includes('test -f "$APP/Contents/Resources/sidecar/package.json"'))
 assert.ok(swiftBuild.includes('test -f "$APP/Contents/Resources/sidecar/dist/control-plane/index.js"'))

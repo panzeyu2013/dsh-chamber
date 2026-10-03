@@ -164,7 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         CrashDiagnostics.reportPreviousCrashIfNeeded(userDataDir: stateDir)
         crashDiagnostics = CrashDiagnostics.install(userDataDir: stateDir)
         // ① Node 路径：DSH_CHAMBER_SHELL_NODE_BIN（须可执行）→ 装配态自带
-        //    <Resources>/sidecar/node（须可执行）→ dev PATH node。皆无 →
+        //    <Resources>/sidecar/dsh-chamber-helper（须可执行）→ dev PATH node。皆无 →
         //    fatal（绝不 spawn 裸 node，也绝不拿另一个 app 的 Electron 二进制顶替）。
         let nodePath: String
         do {

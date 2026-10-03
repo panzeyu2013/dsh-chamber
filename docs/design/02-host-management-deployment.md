@@ -203,7 +203,7 @@ rows，不改变官方 web profile 的其它组合层。
     构建时收录的版本（当前表内为 43.0.0 / 44.0.0 / 45.0.0-alpha.6）。桌面 Electron pin 不在表内时
     宿主子进程直接 exit 1（`unsupported Electron runtime fingerprint`）——Electron flavor 的托管宿主
     可用性因此由 **Electron pin × addon 版本**共同决定，任一侧升级都要实机复核；纯 node 路径
-    （含 Swift sidecar 的 `Resources/sidecar/node`）不受该白名单约束。
+    （含 Swift sidecar 的 `Resources/sidecar/dsh-chamber-helper`）不受该白名单约束。
   - 兜底 → PATH 搜索 `node` → 常见安装位置（homebrew、`/usr/local/bin`、
     nvm/volta/fnm） → 最终退回裸名 `node`（仅作诊断兜底）。
 - **随包 pnpm 供给**（`withPnpmShim`，pnpm-shim.ts）：上游插件管理器在**托管宿主进程**里

@@ -14,16 +14,17 @@
  *       en.lproj/zh-Hans.lproj         ← 本地化：从资源包平移出来的
  *         Localizable.strings，**必须落在 Contents/Resources 根**（Bundle.main 与
  *         系统框架的本地化解析层）；缺席即装配期 fail（assertLocalizationsPresent）
- *       sidecar/{node,sidecar.js,package.json,dist/…}   ← build-sidecar 产物
+ *       sidecar/{dsh-chamber-helper,sidecar.js,package.json,dist/…} ← build-sidecar 产物
  *       dist/web/                     ← renderer 产物（可选；sidecar 静态伺服；
  *                                       过滤 *.map 与 .vite/，与 Electron build.files
  *                                       逐条对齐）
  *
- * 步骤：swift build（可 --skip-build）→ 组装（sidecar 必须自带可执行 node 与
- * sidecar.js，且 sidecar/package.json 版本必须等于壳版本——都在 build 时断言）→ 架构一致性断言（.app 可执行 vs 捆绑 node，lipo；
+ * 步骤：swift build（可 --skip-build）→ 组装（sidecar 必须自带可执行捆绑 Node
+ * （dsh-chamber-helper，见 scripts/lib/sidecar-assembly.mjs）与 sidecar.js，且
+ * sidecar/package.json 版本必须等于壳版本——都在 build 时断言）→ 架构一致性断言（.app 可执行 vs 捆绑 Node，lipo；
  * build-sidecar 缺省 darwin-arm64 而 swift build 跟随宿主——不一致的 .app 能
  * 签名打包、运行时才崩）→ Info.plist 渲染（plutil -lint）→ 嵌套签名
- * （sidecar/node，Developer ID 时带 hardened runtime + node 权限）→ 主签名
+ * （sidecar/dsh-chamber-helper，Developer ID 时带 hardened runtime + node 权限）→ 主签名
  * （--identity 缺省 ad-hoc `-`）→ zip（ditto）/ dmg（dmg.mjs：可写镜像 +
  * Finder 布局 + UDZO，卷内含 /Applications 快捷方式、背景箭头与图标定位）。
  *
@@ -70,6 +71,7 @@ import { isCliEntry, runCliTool } from '../../scripts/lib/cli.mjs'
 // build-swift-app.test.mjs 的反向引用）：bundle 内符号链接归一化必须与
 // sidecar 装配同源，绝不允许两份实现漂移。
 import { copyTree, normalizeSymlinks } from '../../packages/desktop/scripts/build-sidecar.mjs'
+import { BUNDLED_NODE_BASENAME, bundledNodePath } from '../../scripts/lib/sidecar-assembly.mjs'
 // beta feed 的滚动 tag 单源在 release-artifacts.mjs（release.yml 的 job env
 // 与它逐字锁步）——装配脚本据此在 dry-run 计划里断言通道 URL 形状。
 import { NATIVE_BETA_ROLLING_TAG } from '../../scripts/release/release-artifacts.mjs'
@@ -952,23 +954,27 @@ export async function runBuildSwiftApp(
       io.log(`[build-swift-app] 符号链接归一化 ${normalizedLinks} 处（树外链接实体化 / 树内相对链接改写，bundle 自包含）`)
     }
     io.log(`[build-swift-app] sidecar → ${layout.sidecarDir}`)
-    // 前置断言（build:sidecar 已保证，这里防手工/外部装配目录把 node 放错名）：
-    // sidecar 目录下任何以 node 开头的条目都必须恰好叫 node。
+    // 前置断言（build:sidecar 已保证，这里防手工/外部装配目录带回旧布局）：
+    // 改名后捆绑运行时叫 BUNDLED_NODE_BASENAME，顶层任何 node* 条目都是过期
+    // 产物（含改名前的 `node`）——它们会让 .app 带上运行时不再解析的死重，
+    // 而 build-sidecar 的改名清理只覆盖它自己的装配目录。
     const { readdirSync } = await import('node:fs')
     for (const entry of readdirSync(layout.sidecarDir)) {
-      if (entry.startsWith('node') && entry !== 'node') {
-        throw new Error(`sidecar 内 node 基名必须是 'node'（design 25 §4.3 A5）：发现 '${entry}'`)
+      if (entry.startsWith('node')) {
+        throw new Error(
+          `sidecar 顶层不得出现 node* 条目（design 25 §4.3 A5 反转：捆绑 Node 名为 '${BUNDLED_NODE_BASENAME}'）：发现 '${entry}'`,
+        )
       }
     }
     if (!existsSync(path.join(layout.sidecarDir, 'sidecar.js'))) {
       throw new Error(`sidecar 装配目录缺少 sidecar.js：${layout.sidecarDir}`)
     }
-    // 没有捆绑 node 时 runtime 会静默回落 PATH 上的系统 node——
+    // 没有捆绑 Node 时 runtime 会静默回落 PATH 上的系统 node——
     // 签名与打包都会成功，但发布物的运行时依赖构建机环境。存在性与可执行位
     // 必须在这里 fail closed（--skip-sidecar/--dry-run 才允许缺位）。
-    const bundledNode = path.join(layout.sidecarDir, 'node')
+    const bundledNode = bundledNodePath(layout.sidecarDir)
     if (!existsSync(bundledNode)) {
-      throw new Error(`sidecar 装配目录缺少捆绑 node：${bundledNode}（runtime 会回落到 PATH 上的系统 node；先跑 build:sidecar，或用 --skip-sidecar）`)
+      throw new Error(`sidecar 装配目录缺少捆绑 Node（${BUNDLED_NODE_BASENAME}）：${bundledNode}（runtime 会回落到 PATH 上的系统 node；先跑 build:sidecar，或用 --skip-sidecar）`)
     }
     const nodeStat = statSync(bundledNode)
     if (!nodeStat.isFile()) {
@@ -994,7 +1000,7 @@ export async function runBuildSwiftApp(
     throw new Error(`.app 可执行架构不含 ${options.arch}：${layout.executable}（实际 ${appArchs.join('/')}）`)
   }
   if (!options.skipSidecar) {
-    const nodeArchs = machOArchs(path.join(layout.sidecarDir, 'node'))
+    const nodeArchs = machOArchs(bundledNodePath(layout.sidecarDir))
     if (options.arch !== null && !nodeArchs.includes(options.arch)) {
       throw new Error(`捆绑 node 架构不含 ${options.arch}：实际 ${nodeArchs.join('/')}`)
     }
@@ -1056,7 +1062,7 @@ export async function runBuildSwiftApp(
       // 只有捆绑的 node 需要 JIT/可写可执行内存权限（design 25 §3.2「捆绑 node
       // 另加」）；其余嵌套原生模块（.node/dylib）用裸 hardened runtime 签名，
       // 避免无谓放大权限面。
-      const isNode = path.basename(file) === 'node'
+      const isNode = path.basename(file) === BUNDLED_NODE_BASENAME
       run('codesign', codesignArgs(options, file, isNode ? nodeEntitlements : undefined), io)
     }
     if (nested.length > 0) {

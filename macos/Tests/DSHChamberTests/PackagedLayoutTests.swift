@@ -43,7 +43,7 @@ final class PackagedLayoutTests: XCTestCase {
         }
         XCTAssertEqual(PackagedLayout.sidecarDir(resourcesDir: resources), resources + "/sidecar")
         XCTAssertEqual(PackagedLayout.sidecarScript(resourcesDir: resources), resources + "/sidecar/sidecar.js")
-        XCTAssertEqual(PackagedLayout.nodeBinary(resourcesDir: resources), resources + "/sidecar/node")
+        XCTAssertEqual(PackagedLayout.nodeBinary(resourcesDir: resources), resources + "/sidecar/dsh-chamber-helper")
         XCTAssertEqual(PackagedLayout.dshWorkspace(resourcesDir: resources), resources + "/sidecar/vendor/dsh")
         XCTAssertEqual(PackagedLayout.webDistDir(resourcesDir: resources), resources + "/dist/web")
         XCTAssertEqual(PackagedLayout.userDataDir(home: "/Users/tester"),
@@ -53,7 +53,7 @@ final class PackagedLayoutTests: XCTestCase {
     /// node 解析不得有「另一个 app 的 Electron 二进制」fail-open 缺省——
     /// 每一层都要求可执行，否则抛精确错误（调用方 fatalStartup）。
     func testResolveNode() {
-        let bundled = resources + "/sidecar/node"
+        let bundled = resources + "/sidecar/dsh-chamber-helper"
         // env 优先（显式路径须可执行）
         XCTAssertEqual(try? PackagedLayout.resolveNode(
             env: ["DSH_CHAMBER_SHELL_NODE_BIN": "/custom/node"], resourcesDir: resources,

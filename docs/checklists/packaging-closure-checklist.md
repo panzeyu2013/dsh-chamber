@@ -32,7 +32,7 @@
 
 ### 3.1 原生壳（`macos/`）专属检查
 
-- [ ] `build:sidecar` 载荷完整：`node`（官方tar + SHA校验）、`dist/web`、四个host包、`vendor/dsh`、内嵌 `pnpm` 全部就位（缺项fail-closed；`--skip-*` 只用于本地试跑）。
+- [ ] `build:sidecar` 载荷完整：`dsh-chamber-helper`（官方tar + SHA校验；基名单源 `scripts/lib/sidecar-assembly.mjs`，改名前的 `node` 会 fail-closed）、`dist/web`、四个host包、`vendor/dsh`、内嵌 `pnpm` 全部就位（缺项fail-closed；`--skip-*` 只用于本地试跑）。
 - [ ] `build:swift-app` 装配：`Contents/Resources/sidecar`、`Sparkle.framework` 嵌入 `Contents/Frameworks`、rpath指向 `@executable_path/../Frameworks`、bundle内无逃逸符号链接、`codesign --verify --deep --strict` 通过；资源包形态随后端（native 扁平 / swiftbuild `Contents/Resources`）由装配归一为扁平，缺 `bridge-shim.js` 即 loud；`--dry-run` 必须能报出解析后的路径/feed/产物名计划。
 - [ ] 产物命名与形态：`dsh-chamber-<ver>-macos-arm64.{dmg,zip}` 与Electron产物共存不覆盖；两侧release腿按精确产物名验证/上传（不再 `find|head` 或glob），避免复用输出目录带入旧版本。
 - [ ] 更新腿装配：`CFBundleShortVersionString`/`CFBundleVersion` 与tag一致，且beta与同基版本正式号不同、单调；`SUFeedURL` 按通道注入；`SUPublicEDKey` 与appcast签发私钥**必须成对**（公钥在而私钥缺、私钥在而公钥缺都是发布 FAIL；只有两把都缺才是 loud 降级「更新腿关闭」）；beta appcast的beta条目enclosure指向滚动release上真实存在的zip与`*.delta`（先传归档后传appcast），合并进来的final条目在beta腿指向版本固定的`releases/download/v<正式版tag>/`（不用会被后续正式版移走的`releases/latest`），stable刷新后则改指滚动前缀（两条路径不同）；滚动appcast同时带当前beta与最新final条目（没有keyed final时loud降级）。

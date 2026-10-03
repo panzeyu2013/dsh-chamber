@@ -16,7 +16,8 @@
  *     可执行位、资源包（只含 bridge-shim.js）、Info.plist 版本/图标/ATS、图标；
  *  ⑤b/⑤c 本地化 fail-closed：缺 .lproj（纯函数）+ 内容级（0 字节/截断/缺 .lproj
  *     的真实装配腿负例，plutil 解析；0 字节 .strings 不得 EXIT=0 报完成）；
- *  ⑥ sidecar 装配拷贝 + A5 基名反例 loud + 缺 node / node 无执行位 loud；
+ *  ⑥ sidecar 装配拷贝 + A5 基名反例 loud（顶层 node* 一律拒绝）+ 缺 helper /
+ *     无执行位 loud；
  *  ⑥b/⑥c 注入式 DMG 执行器：调用参数与步骤序列、--no-dmg 不调用、失败 loud 冒泡
  *     （Finder 布局步不真造 DMG）；
  *  ⑥d sidecar 版本相等 fail-closed：装配腿 .app 内 sidecar/package.json version
@@ -107,6 +108,7 @@ import {
 // 滚动 tag 是 release-artifacts.mjs 的单源——这里按同一常量断言 dry-run
 // 计划的通道 URL 形状（build-swift-app.mjs 也从它导入）。
 import { NATIVE_BETA_ROLLING_TAG } from '../../../scripts/release/release-artifacts.mjs'
+import { BUNDLED_NODE_BASENAME } from '../../../scripts/lib/sidecar-assembly.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const desktopDir = path.resolve(here, '..')
@@ -149,7 +151,7 @@ function writeFakeSidecar(dir, nodeArch) {
     private: true,
     type: 'module',
   }, null, 2))
-  fakeMachO(dir, 'node', nodeArch)
+  fakeMachO(dir, BUNDLED_NODE_BASENAME, nodeArch)
   return dir
 }
 
@@ -650,17 +652,18 @@ test('⑥ sidecar 拷贝 + A5 基名反例 loud', async () => {
     const layout = appLayout(out)
     assert.ok(existsSync(path.join(layout.sidecarDir, 'sidecar.js')))
     assert.ok(existsSync(path.join(layout.sidecarDir, 'package.json')))
-    assert.ok(existsSync(path.join(layout.sidecarDir, 'node')), '捆绑 node 必须随装配进 .app（P2）')
-    assert.ok((statSync(path.join(layout.sidecarDir, 'node')).mode & 0o111) !== 0, 'node 必须可执行')
+    const bundled = path.join(layout.sidecarDir, BUNDLED_NODE_BASENAME)
+    assert.ok(existsSync(bundled), '捆绑 helper 必须随装配进 .app（P2）')
+    assert.ok((statSync(bundled).mode & 0o111) !== 0, '捆绑 helper 必须可执行')
     assert.ok(result.layout)
 
-    // 反例：node 名字不对（node-v24.18.1）→ A5 loud。
+    // 反例：顶层 node* 条目（改名前的 node / 版本化文件名）→ A5 loud。
     writeFileSync(path.join(sidecar, 'node-v24.18.1'), 'not a real node')
     await assert.rejects(
       runBuildSwiftApp(parseBuildSwiftAppArgs([
         '--out', out, '--sidecar', sidecar, '--skip-build', '--skip-web-dist', '--no-sign', '--no-zip', '--no-dmg',
       ]), { log: () => {}, error: () => {} }),
-      /基名必须是 'node'/,
+      /不得出现 node\*/,
     )
   } finally {
     rmSync(out, { recursive: true, force: true })
@@ -685,7 +688,7 @@ test('⑥ 缺 sidecar.js 的装配目录 loud', async () => {
   }
 })
 
-test('⑥ 缺捆绑 node / node 无执行位 → loud（runtime 不再静默回落 PATH）', async () => {
+test('⑥ 缺捆绑 helper / 无执行位 → loud（runtime 不再静默回落 PATH）', async () => {
   const out = tempOut()
   const sidecar = mkdtempSync(path.join(tmpdir(), 'dsh-fake-sidecar-nonode-'))
   const argv = (dir) => parseBuildSwiftAppArgs([
@@ -696,10 +699,10 @@ test('⑥ 缺捆绑 node / node 无执行位 → loud（runtime 不再静默回�
     writeFileSync(path.join(sidecar, 'package.json'), '{}')
     await assert.rejects(
       runBuildSwiftApp(argv(sidecar), { log: () => {}, error: () => {} }),
-      /缺少捆绑 node/,
+      /缺少捆绑 Node/,
       '没有 node 的 sidecar 曾经能签名并打包成功（P2）',
     )
-    const node = path.join(sidecar, 'node')
+    const node = path.join(sidecar, BUNDLED_NODE_BASENAME)
     writeFileSync(node, '#!/bin/sh\n')
     chmodSync(node, 0o644)
     await assert.rejects(

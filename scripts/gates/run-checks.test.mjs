@@ -25,7 +25,12 @@ import { ARTIFACTS, ensureArtifacts, formatMissingArtifacts, missingArtifacts } 
 import { ciUnclassifiedGateCommands, jobBlock } from './static-gate-parity.mjs'
 import { judgeSwiftTestReport, parseSwiftTestReport, swiftTestArgs, swiftTestEnvironment } from './run-swift-tests.mjs'
 import { smokeDecision } from './compiled-sidecar-smoke.mjs'
-import { DEFAULT_SIDECAR_DIR, resolveNodeBinary, resolveSidecarDir } from '../lib/sidecar-assembly.mjs'
+import {
+  BUNDLED_NODE_BASENAME,
+  DEFAULT_SIDECAR_DIR,
+  resolveNodeBinary,
+  resolveSidecarDir,
+} from '../lib/sidecar-assembly.mjs'
 import {
   DESKTOP_CARRIER_FUNCTIONS,
   EXPECTED_SURFACE,
@@ -429,7 +434,7 @@ test('smokeDecision: disabled is a skip, enabled with a missing artifact is a fa
   assert.equal(smokeDecision({ ...base, entryExists: false }).action, 'fail')
   assert.equal(smokeDecision({ ...base, controlPlaneExists: false }).action, 'fail')
 })
-test('resolveSidecarDir honors the environment override; resolveNodeBinary prefers the bundled node', () => {
+test('resolveSidecarDir honors the environment override; resolveNodeBinary prefers the bundled helper', () => {
   assert.equal(resolveSidecarDir({}, '/repo'), DEFAULT_SIDECAR_DIR)
   assert.equal(resolveSidecarDir({ DSH_CHAMBER_SIDECAR_DIR: '/tmp/assembly' }, '/repo'), '/tmp/assembly')
   assert.equal(
@@ -439,8 +444,8 @@ test('resolveSidecarDir honors the environment override; resolveNodeBinary prefe
   assert.equal(resolveNodeBinary('/nonexistent-assembly-dir', '/usr/bin/node'), '/usr/bin/node')
   const dir = mkdtempSync(join(tmpdir(), 'dsh-smoke-node-'))
   try {
-    writeFileSync(join(dir, 'node'), '#!/bin/sh\n')
-    assert.equal(resolveNodeBinary(dir, '/usr/bin/node'), join(dir, 'node'))
+    writeFileSync(join(dir, BUNDLED_NODE_BASENAME), '#!/bin/sh\n')
+    assert.equal(resolveNodeBinary(dir, '/usr/bin/node'), join(dir, BUNDLED_NODE_BASENAME))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

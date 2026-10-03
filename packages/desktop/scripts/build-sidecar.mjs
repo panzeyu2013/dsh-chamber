@@ -3,10 +3,12 @@
  * build-sidecar.mjs —— Swift flavor sidecar 打包（design 25 §3.2/§4.3）
  *
  * 产物布局（design 25 §3.2「sidecar 装配目录约定」）：
- *   <out>/node                     捆绑的官方 Node（**基名必须叫 node**，
- *                                  design 25 §4.3 A5——spawn-dsh 的纯 Node
- *                                  分支只在 basename(execPath) ∈ {node,node.exe}
- *                                  时直用 process.execPath；命名 node 即零改动）
+ *   <out>/dsh-chamber-helper       捆绑的官方 Node（基名由
+ *                                  scripts/lib/sidecar-assembly.mjs 单源给定；
+ *                                  design 25 §4.3 A5 已反转——spawn-dsh 的
+ *                                  纯 Node 分支认 {node,node.exe,dsh-chamber-helper}，
+ *                                  命名 helper 是为了让监控按基名把控制面与
+ *                                  宿主进程归属到 app，而不是泛化的 node）
  *   <out>/sidecar.js               esbuild 打包的 sidecar 入口（含 shell-core
  *                                  全家 + sidecar-ctx + node-edges + dsh-runtime）
  *   <out>/dist/control-plane/…     build:control-plane 的编译产物（运行时经
@@ -24,15 +26,16 @@
  *   3. 拷贝 dist/control-plane → <out>/dist/control-plane；
  *   4. Node 捆绑：官方 tar.gz 下载（或 --node-archive 离线提供）→ SHA-256 校验
  *      （默认版本摘要固定在仓库 PINNED_NODE_SHA256；未固定版本回退
- *      SHASUMS256.txt 并响亮说明）→ 解出 bin/node → 落位 <out>/node（0755）
- *      → **基名断言**。
+ *      SHASUMS256.txt 并响亮说明）→ 解出 bin/node → 落位
+ *      <out>/<BUNDLED_NODE_BASENAME>（0755）→ **基名断言**。
  *
  * 离线/无网：--skip-node 跳过第 4 步（供 dev/CI 校验）；--dry-run 只打印计划与
  * 输入校验，不写盘、不联网。
  * **--skip-* 的诚实语义**：<out> 是持久装配目录，跳过必须产生
  * **缺位**，而不是继承既有的产物——每个 skip 开关在开工前清掉自己的目标
- * （node / sidecar.js / vendor+dsh / dist），否则残留的 node/vendor 会留在装配
- * 里被 .app 一起签名发布，而构建日志却声称「已跳过」。
+ * （helper / sidecar.js / vendor+dsh / dist），否则残留的 helper/vendor 会留在
+ * 装配里被 .app 一起签名发布，而构建日志却声称「已跳过」。改名前的 `node`
+ * 在开工时清除一次（旧装配目录是持久目录）。
  * **缺源的诚实语义**：不跳过的源缺失不是可降级状态——vendor/dsh
  * 或 pnpm 源不存在时在**任何写盘之前** fail closed（既有产物绝不冒充构建结果）；
  * pnpm 源还必须是仓库 pin 的版本（desktop dependencies.pnpm，Electron 侧同源）。
@@ -68,6 +71,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { verifyPayload } from './prepare-python-payload.mjs'
 import { isCliEntry, runCliTool } from '../../../scripts/lib/cli.mjs'
+import { BUNDLED_NODE_BASENAME, bundledNodePath } from '../../../scripts/lib/sidecar-assembly.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const desktopDir = path.resolve(here, '..')
@@ -208,7 +212,9 @@ export function assertHostPackageArtifacts(hostPackages, resolveSourceDir) {
 export function sidecarLayout(outDir) {
   return {
     outDir,
-    node: path.join(outDir, 'node'),
+    // 捆绑 Node 的落位名是 sidecar-assembly.mjs 的单源常量（改名让监控把
+    // app 派生的控制面/宿主进程按基名归属到 app，见 design 25 §4.3 A5 反转）。
+    node: bundledNodePath(outDir),
     entry: path.join(outDir, 'sidecar.js'),
     packageJson: path.join(outDir, 'package.json'),
     dist: path.join(outDir, 'dist'),
@@ -543,12 +549,12 @@ export async function sha256File(file) {
   })
 }
 
-/** A5 断言：捆绑 Node 的基名必须是 `node`（spawn-dsh 直用 execPath 的前提）。 */
+/** A5 断言：捆绑 Node 的基名必须是 BUNDLED_NODE_BASENAME（spawn-dsh 基名表的前提）。 */
 export function assertBundledNodeBasename(nodePath) {
   const base = path.basename(nodePath)
-  if (base !== 'node') {
+  if (base !== BUNDLED_NODE_BASENAME) {
     throw new Error(
-      `捆绑 Node 基名必须是 'node'（design 25 §4.3 A5：resolveNodeExecutable 的纯 Node 分支只在 basename(execPath) ∈ {node,node.exe} 时直用 process.execPath）；实际 '${base}'`,
+      `捆绑 Node 基名必须是 '${BUNDLED_NODE_BASENAME}'（design 25 §4.3 A5 反转：resolveNodeExecutable 的纯 Node 分支只在 basename(execPath) ∈ {node,node.exe,${BUNDLED_NODE_BASENAME}} 时直用 process.execPath）；实际 '${base}'`,
     )
   }
 }
@@ -783,7 +789,7 @@ async function bundleNode(options, layout, log) {
     const extracted = path.join(staging, 'node')
     if (!existsSync(extracted)) throw new Error(`解包后未找到 ${extracted}`)
     if (path.basename(extracted) !== 'node') {
-      throw new Error(`解包后基名必须是 node（design 25 §4.3 A5）：${extracted}`)
+      throw new Error(`解包成员基名必须是 node（nodeMemberPath 的固定形状）：${extracted}`)
     }
     copyFileSync(extracted, layout.node)
     chmodSync(layout.node, 0o755)
@@ -888,7 +894,10 @@ export async function runBuildSidecar(options, io = {}) {
 
   mkdirSync(layout.outDir, { recursive: true })
 
-  // 0. skip 的诚实语义（见文件头）：每个被跳过的目的地先清空，跳过 = 缺位。
+  // 0. 改名迁移：旧装配目录里的 <out>/node 会被 build-swift-app 原样拷进
+  // .app，清掉它（本脚本是装配目录的唯一写入者）。
+  rmSync(path.join(layout.outDir, 'node'), { force: true })
+  // skip 的诚实语义（见文件头）：每个被跳过的目的地先清空，跳过 = 缺位。
   if (options.skipBundle) rmSync(layout.entry, { force: true })
   if (options.skipHostPackages) rmSync(layout.dist, { recursive: true, force: true })
   if (options.skipVendor) {

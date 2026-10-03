@@ -1701,11 +1701,11 @@ jobs:
           DRY_RUN="${{ github.event.inputs.dry_run == 'true' && 'true' || 'false' }}"
           test -d "$APP"
           codesign --verify --deep --strict --verbose=2 "$APP"
-          # 装配面结构断言：sidecar 的 node 基名、sidecar 入口 + 装配
+          # 装配面结构断言：sidecar 的捆绑 Node（dsh-chamber-helper）基名、sidecar 入口 + 装配
           # package.json、control-plane 相对入口、四个 host 包、打包 shim、
           # renderer dist（装配面少任何一个，.app 都能上传成功）。
-          test -x "$APP/Contents/Resources/sidecar/node"
-          test "$(basename "$APP/Contents/Resources/sidecar/node")" = "node"
+          test -x "$APP/Contents/Resources/sidecar/dsh-chamber-helper"
+          test "$(basename "$APP/Contents/Resources/sidecar/dsh-chamber-helper")" = "dsh-chamber-helper"
           test -f "$APP/Contents/Resources/sidecar/sidecar.js"
           test -f "$APP/Contents/Resources/sidecar/package.json"
           test -f "$APP/Contents/Resources/sidecar/dist/control-plane/index.js"
@@ -1726,7 +1726,7 @@ jobs:
           # 架构断言——build-sidecar 缺省 darwin-arm64 而 swift build 跟随
           # 宿主；两者不一致的 .app 能签名打包、运行时才崩。
           APP_ARCHS="$(lipo -archs "$APP/Contents/MacOS/dsh-chamber")"
-          NODE_ARCHS="$(lipo -archs "$APP/Contents/Resources/sidecar/node")"
+          NODE_ARCHS="$(lipo -archs "$APP/Contents/Resources/sidecar/dsh-chamber-helper")"
           echo "archs: app=$APP_ARCHS node=$NODE_ARCHS"
           [[ " $APP_ARCHS " == *" arm64 "* ]] || { echo "::error::native .app 不是 arm64：$APP_ARCHS"; exit 1; }
           [[ " $NODE_ARCHS " == *" arm64 "* ]] || { echo "::error::捆绑 node 不是 arm64：$NODE_ARCHS"; exit 1; }
@@ -1751,7 +1751,7 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$ZIP_APP"
           [[ " $(lipo -archs "$ZIP_APP/Contents/MacOS/dsh-chamber") " == *" arm64 "* ]] \
             || { echo "::error::zip 内 .app 不是 arm64"; exit 1; }
-          [[ " $(lipo -archs "$ZIP_APP/Contents/Resources/sidecar/node") " == *" arm64 "* ]] \
+          [[ " $(lipo -archs "$ZIP_APP/Contents/Resources/sidecar/dsh-chamber-helper") " == *" arm64 "* ]] \
             || { echo "::error::zip 内捆绑 node 不是 arm64"; exit 1; }
           if [[ "$DRY_RUN" != "true" ]]; then
             codesign -dv --verbose=4 "$ZIP_APP" 2>&1 | tee /tmp/swift-codesign-dv.txt

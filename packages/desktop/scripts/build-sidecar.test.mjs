@@ -10,9 +10,10 @@
  *  ③c Electron pin → 内置 node 的固定表（无 Electron 二进制也无条件断言，
  *     漂移臂 loud）与 vendor/dsh 版本 + 平台装配断言（拷贝前 fail-closed）；
  *  ④ SHA-256 流式计算与不匹配检测；
- *  ⑤ **A5 断言**：捆绑 Node 基名必须叫 node——正例通过、反例 loud；
- *     并实证 resolveNodeExecutable 的纯 Node 分支前提（basename(execPath) ==
- *     'node' → 直用 execPath；其他基名 → 回落，不直用）；
+ *  ⑤ **A5 断言**：捆绑 Node 基名必须是 BUNDLED_NODE_BASENAME
+ *     （dsh-chamber-helper）——正例通过、反例 loud；并实证 resolveNodeExecutable
+ *     的纯 Node 分支以 basename 为前提（helper 基名 → 直用 execPath；其他基名
+ *     → 回落，不直用）；
  *  ⑥ --dry-run 真实子进程：输入校验通过、不写盘、不联网（exit 0）；
  *  ⑦ normalizeSymlinks：树内绝对链接→相对、树外链接→实体化、悬空→loud、
  *     幂等（cpSync 会把相对链接绝对化，bundle 因此过不了 codesign）；
@@ -74,6 +75,7 @@ import {
   sidecarLayout,
 } from './build-sidecar.mjs'
 import { platformExecutableName, resolveElectronPackageDir, sharedDistDirFor } from './electron-shared.mjs'
+import { BUNDLED_NODE_BASENAME } from '../../../scripts/lib/sidecar-assembly.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const desktopDir = path.resolve(here, '..')
@@ -122,10 +124,10 @@ test('① 参数解析：缺省值、开关与错误', () => {
   assert.throws(() => parseBuildSidecarArgs(['--out']), /缺少取值/)
 })
 
-test('① 布局：node / sidecar.js / package.json / dist/control-plane / host 包', () => {
+test('① 布局：helper / sidecar.js / package.json / dist/control-plane / host 包', () => {
   const layout = sidecarLayout('/tmp/out')
   assert.equal(layout.outDir, '/tmp/out')
-  assert.equal(layout.node, '/tmp/out/node')
+  assert.equal(layout.node, path.join('/tmp/out', BUNDLED_NODE_BASENAME))
   assert.equal(layout.entry, '/tmp/out/sidecar.js')
   assert.equal(layout.packageJson, '/tmp/out/package.json')
   assert.equal(layout.dist, '/tmp/out/dist')
@@ -433,12 +435,11 @@ test('③d vendor/dsh + pnpm 拷贝（Electron extraResources 同款过滤器）
 })
 
 test('⑤ A5：捆绑 Node 基名断言（正例通过、反例 loud）', () => {
-  assert.doesNotThrow(() => assertBundledNodeBasename('/tmp/sidecar/node'))
+  assert.doesNotThrow(() => assertBundledNodeBasename(`/tmp/sidecar/${BUNDLED_NODE_BASENAME}`))
   assert.throws(
     () => assertBundledNodeBasename('/tmp/sidecar/node-v24.18.1'),
-    /基名必须是 'node'/,
+    /基名必须是/,
   )
-  assert.throws(() => assertBundledNodeBasename('/tmp/sidecar/dsh-chamber'), /A5/)
 })
 
 test('⑤ A5 实证：resolveNodeExecutable 纯 Node 分支以 basename 为唯一前提', () => {
@@ -453,12 +454,13 @@ test('⑤ A5 实证：resolveNodeExecutable 纯 Node 分支以 basename 为唯�
     { cwd: desktopDir, encoding: 'utf8' },
   ).trim())
 
-  // 正例：基名 node → 直用 execPath、零额外 args/env（捆绑命名 node 的零改动前提）。
-  const direct = run('/tmp/assembled-sidecar/node')
-  assert.deepEqual(direct, { file: '/tmp/assembled-sidecar/node', args: [], env: {} })
+  // 正例：捆绑基名 → 直用 execPath、零额外 args/env（control-plane 的基名表
+  // 必须含 scripts/lib/sidecar-assembly.mjs 的这个常量）。
+  const direct = run(`/tmp/assembled-sidecar/${BUNDLED_NODE_BASENAME}`)
+  assert.deepEqual(direct, { file: `/tmp/assembled-sidecar/${BUNDLED_NODE_BASENAME}`, args: [], env: {} })
   // 反例：其他基名 → 绝不直用（回落 PATH/known locations，系统 node 版本不可控）。
-  const fallback = run('/tmp/assembled-sidecar/dsh-chamber')
-  assert.notEqual(fallback.file, '/tmp/assembled-sidecar/dsh-chamber')
+  const fallback = run('/tmp/assembled-sidecar/system-node')
+  assert.notEqual(fallback.file, '/tmp/assembled-sidecar/system-node')
 })
 
 test('⑥ 真实装配（--skip-node）：sidecar.js / package.json / control-plane / host 包', async () => {
@@ -509,12 +511,12 @@ test('⑥ --dry-run 子进程：输入校验通过、无写盘、无联网', asy
   }
 })
 
-test('⑨b --skip-* 产生缺位：不继承上一轮装配的 node / sidecar.js / vendor / pnpm / host 包', async () => {
+test('⑨b --skip-* 产生缺位：不继承上一轮装配的 helper / sidecar.js / vendor / pnpm / host 包', async () => {
   const out = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-skip-'))
   try {
     // 既有完整装配的遗留（含改名前的 host 包目录）。
-    writeFileSync(path.join(out, 'node'), 'stale node')
-    chmodSync(path.join(out, 'node'), 0o755)
+    writeFileSync(path.join(out, BUNDLED_NODE_BASENAME), 'stale helper')
+    chmodSync(path.join(out, BUNDLED_NODE_BASENAME), 0o755)
     writeFileSync(path.join(out, 'sidecar.js'), '// stale bundle')
     mkdirSync(path.join(out, 'vendor', 'dsh'), { recursive: true })
     writeFileSync(path.join(out, 'vendor', 'dsh', 'package.json'), '{"name":"dsh"}')
@@ -527,7 +529,7 @@ test('⑨b --skip-* 产生缺位：不继承上一轮装配的 node / sidecar.js
       '--out', out, '--skip-node', '--skip-bundle', '--skip-vendor', '--skip-host-packages',
     ]), { log: () => {}, error: () => {} })
     const layout = sidecarLayout(out)
-    assert.equal(existsSync(layout.node), false, '--skip-node 必须产生缺位（旧的 node 不得留下被一起签名发布）')
+    assert.equal(existsSync(layout.node), false, '--skip-node 必须产生缺位（旧的 helper 不得留下被一起签名发布）')
     assert.equal(existsSync(layout.entry), false, '--skip-bundle 必须产生缺位')
     assert.equal(existsSync(layout.vendorDsh), false, '--skip-vendor 必须清掉旧 vendor/dsh')
     assert.equal(existsSync(layout.pnpm), false, '--skip-vendor 必须清掉旧 pnpm')
@@ -640,9 +642,9 @@ function findElectronBinary() {
 }
 
 test('G18 装配捆绑 node 的版本 == DEFAULT_NODE_VERSION（装配存在时机械断言）', () => {
-  const bundled = path.join(desktopDir, 'release', 'sidecar', 'node')
+  const bundled = path.join(desktopDir, 'release', 'sidecar', BUNDLED_NODE_BASENAME)
   if (!existsSync(bundled)) {
-    console.log('SKIP: 本机无 sidecar 装配 node（release-only 产物；ci.yml test-macos 用 --skip-node 构建装配）——'
+    console.log('SKIP: 本机无 sidecar 装配 helper（release-only 产物；ci.yml test-macos 用 --skip-node 构建装配）——'
       + 'PINNED_NODE_SHA256 ↔ DEFAULT_NODE_VERSION 的表锁步已在 ③b 无条件断言')
     return
   }

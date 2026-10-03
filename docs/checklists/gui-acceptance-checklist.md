@@ -105,8 +105,8 @@
 
 |腿|怎么跑|看什么|留什么|
 |---|---|---|---|
-|装配|`pnpm run build:sidecar`（可选 `--dry-run`/显式 `--skip-*`）|装配目录齐 sidecar.js / dist/control-plane / vendor / node / pnpm|命令与退出码|
-|本机 .app|`pnpm run build:swift-app --no-sign`（本地不签；正式签名腿按 release 流程）|`.app` + `.dmg` 产出；`.app` 内含 `Contents/Resources/dist/web/index.html`、`sidecar/node` 可执行、`Sparkle.framework`|产物路径 + `du`/`hdiutil attach` 结论|
+|装配|`pnpm run build:sidecar`（可选 `--dry-run`/显式 `--skip-*`）|装配目录齐 sidecar.js / dist/control-plane / vendor / dsh-chamber-helper / pnpm|命令与退出码|
+|本机 .app|`pnpm run build:swift-app --no-sign`（本地不签；正式签名腿按 release 流程）|`.app` + `.dmg` 产出；`.app` 内含 `Contents/Resources/dist/web/index.html`、`sidecar/dsh-chamber-helper` 可执行、`Sparkle.framework`|产物路径 + `du`/`hdiutil attach` 结论|
 |Swift 套件|`pnpm run test:swift`|executed>0、failures==0、**skipped==0**（G23 no-skip 纪律）|runner 收尾行|
 |macOS JS 腿|`pnpm run test:macos`|darwin 锁断言 + 打包脚本套件；skipped>0 即红|退出码|
 |headless 装配验收|`node scripts/gui-acceptance/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web`（先 `pnpm run build:renderer`；指向装配目录用 `--sidecar-dir <绝对路径>`）|N-1…N-5、N-6、N-7（ready/B 桥/health/Origin 围栏/壳 index 与声明资源/SIGTERM）；机器门档下 N-6 缺 web dist 即 FAIL，默认档才 INFO|`.tmp/gui-acceptance/gui-native-report.*`|

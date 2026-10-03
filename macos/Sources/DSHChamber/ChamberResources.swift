@@ -76,12 +76,12 @@ public enum ChamberResources {
 /// 问题：dev 缺省在打包态不成立（Electron 二进制当 node、按
 /// CWD 向上找 dev 脚本 `sidecar-entry.ts`、userData 落
 /// `dsh-chamber-dev`）——Finder
-/// 双击 `.app`（CWD=/）时找不到自带 sidecar/node，跨 flavor 目录锁也各锁各的
+/// 双击 `.app`（CWD=/）时找不到自带 sidecar/dsh-chamber-helper，跨 flavor 目录锁也各锁各的
 /// 目录。本枚举把「打包态应使用的路径」收敛为**纯函数**（可单测），由
 /// AppDelegate 按 `DSH_CHAMBER_SHELL_*` 环境变量优先级消费。
 ///
 /// 装配态布局（design 25 §3.2，`macos/scripts/build-swift-app.mjs`）：
-///   <App>/Contents/Resources/sidecar/{node, sidecar.js, dist/, vendor/dsh, pnpm}
+///   <App>/Contents/Resources/sidecar/{dsh-chamber-helper, sidecar.js, dist/, vendor/dsh, pnpm}
 ///   <App>/Contents/Resources/dist/web/index.html
 /// userData 与 Electron 打包实根同根（design 25 §6.1 的「同根」不变量；双 flavor
 /// 目录锁据此互斥）。
@@ -110,8 +110,11 @@ public enum PackagedLayout {
         sidecarDir(resourcesDir: resourcesDir) + "/sidecar.js"
     }
 
+    /// 捆绑 Node 的落位名是 `scripts/lib/sidecar-assembly.mjs` 的单源常量
+    /// （BUNDLED_NODE_BASENAME = dsh-chamber-helper；design 25 §4.3 A5 反转：
+    /// 监控按可执行文件基名标注进程，名字必须让控制面/托管宿主归属到 app）。
     public static func nodeBinary(resourcesDir: String) -> String {
-        sidecarDir(resourcesDir: resourcesDir) + "/node"
+        sidecarDir(resourcesDir: resourcesDir) + "/dsh-chamber-helper"
     }
 
     public static func dshWorkspace(resourcesDir: String) -> String {
@@ -150,7 +153,7 @@ public enum PackagedLayout {
     }
 
     /// node 解析：`DSH_CHAMBER_SHELL_NODE_BIN`（显式，须可执行）→ 装配态自带
-    /// `<Resources>/sidecar/node`（须可执行）→ dev 从 PATH 找 node（逐目录
+    /// `<Resources>/sidecar/dsh-chamber-helper`（须可执行）→ dev 从 PATH 找 node（逐目录
     /// 检查可执行）→ 皆无 → 抛错。绝不能用「Electron 二进制当 Node」顶替：
     /// 那是另一个 app 的二进制（/Applications/dsh-chamber-electron.app/…），缺自带
     /// node 时绝不能拿它顶替。`isExecutable` 注入
@@ -170,7 +173,7 @@ public enum PackagedLayout {
         if isPackaged {
             guard let resourcesDir else {
                 throw PathResolutionError.packagedNodeMissing(
-                    path: "<Resources>/sidecar/node (Bundle.main.resourceURL missing)")
+                    path: "<Resources>/sidecar/dsh-chamber-helper (Bundle.main.resourceURL missing)")
             }
             let bundled = nodeBinary(resourcesDir: resourcesDir)
             guard isExecutable(bundled) else {

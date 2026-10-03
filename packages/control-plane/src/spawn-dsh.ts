@@ -438,21 +438,37 @@ async function terminateAndProveQuiet(
 }
 
 /**
+ * Basenames a bundled runtime may carry. `dsh-chamber-helper` is the Swift
+ * sidecar assembly's name for its bundled Node — single source
+ * `scripts/lib/sidecar-assembly.mjs`; design 25 §4.3 A5 is deliberately
+ * inverted so monitors attribute the control plane and every managed host to
+ * the app instead of a generic `node` row. The plain names stay for dev/CI
+ * (`--skip-node` runs the caller's interpreter) and for Electron, which never
+ * bundles a Node binary. `build-sidecar.test.mjs` locks this set to the JS
+ * constant by asserting the bundled basename takes the direct branch.
+ */
+const BUNDLED_NODE_BASENAMES: ReadonlySet<string> = new Set([
+  'node',
+  'node.exe',
+  'dsh-chamber-helper',
+])
+
+/**
  * Resolve the node executable that runs the dsh CLI entry (never a pnpm wrapper).
  * The plane may run under plain node or inside the Electron main process: a
  * Finder-launched packaged app has a minimal PATH, so `spawn('node', …)` fails with
  * ENOENT. Electron → process.execPath + ELECTRON_RUN_AS_NODE=1 (requires the
  * runAsNode fuse, which must stay enabled) and --expose-internals (dsh's loader
  * resolves internal/modules/esm/loader through the require path, which Electron's
- * patched Node requires). Plain node → process.execPath. Fallback: PATH, then
- * well-known install roots, then the bare name.
+ * patched Node requires). A bundled runtime (or plain node) → process.execPath.
+ * Fallback: PATH, then well-known install roots, then the bare name.
  */
 export function resolveNodeExecutable(): { file: string; args: string[]; env: Record<string, string> } {
   if (process.versions.electron !== undefined) {
     return { file: process.execPath, args: ['--expose-internals'], env: { ELECTRON_RUN_AS_NODE: '1' } }
   }
   const execPathName = basename(process.execPath).toLowerCase()
-  if (execPathName === 'node' || execPathName === 'node.exe') {
+  if (BUNDLED_NODE_BASENAMES.has(execPathName)) {
     return { file: process.execPath, args: [], env: {} }
   }
   const fromPath = searchPathForNode()
