@@ -16,6 +16,16 @@
  */
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+/** Whether the bare client-core specifier is replaced by the narrow shim (shell suite
+ *  default). Web-only mode (see test-dsh-web-register.mjs) leaves the real barrel in
+ *  place for tests whose module graph already loads it. */
+let shimClientCore = true
+
+/** @param {{ shimClientCore?: boolean }} [data] registration data from `register`. */
+export function initialize(data) {
+  shimClientCore = data?.shimClientCore !== false
+}
+
 const FIXTURE_URL = pathToFileURL(
   fileURLToPath(new URL('../../packages/renderer/test-fixtures/dsh-client-web.mjs', import.meta.url)),
 ).href
@@ -33,7 +43,7 @@ export async function resolve(specifier, context, nextResolve) {
   // Resolve to the two-symbol shim instead of the client-core barrel: the
   // barrel also links the source-only dsh connection/runtime packages that this
   // isolated Node test intentionally does not install or execute.
-  if (specifier === '@dsh-chamber/dsh-chamber-client-core') {
+  if (shimClientCore && specifier === '@dsh-chamber/dsh-chamber-client-core') {
     return { url: CORE_SHARED_URL, shortCircuit: true }
   }
   return nextResolve(specifier, context)

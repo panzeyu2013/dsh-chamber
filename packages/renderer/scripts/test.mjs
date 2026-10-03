@@ -168,7 +168,10 @@ export const GROUPS = {
     'test/wiring/facts-apply-pool.test.ts',
     // F6 回归：durable 通知三表 + outbox 剪枝必须门控在权威 roster 水合后
     // （源码锁 + 纯谓词/假存储双证据），并锁完成修正臂的接线形状。
-    'test/wiring/unread-prune-roster-gate.test.ts',
+    // 该文件运行时导入 use-bridge-subscriptions.ts，其模块图（2026-10 起）经 shell.ts
+    // 触达 @deepseek-ai/dsh-client-web：只需 web-only 夹具负载器，不能用替换 client-core
+    // 的 shell shim（本测试已加载真实 barrel）。
+    { file: 'test/wiring/unread-prune-roster-gate.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-dsh-web-register.mjs'] },
   ],
   // view-runtime: 视图运行时 —— 隐藏视图回收、视图过渡队列、侧栏滚动恢复、切源揭示
   'view-runtime': [
