@@ -11,7 +11,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
 
-## [0.4.1-beta.2] - 2026-10-02
+## [0.4.1] - 2026-10-03
 
 ### Added
 - **Per-source sidebar view options (aligned with upstream)** - each source can switch between the pin partition, a flat list and the workspace tree, with an archived filter; the pin surface matches upstream (design 06 sections 5/7/10: the kebab's pin/unpin sits before rename, the hover cluster's rightmost button is pin/unpin, the trailing state slot is followed by the non-interactive pinned marker; the write path is the official idempotent RPC with no optimistic echo, failures land in the same row-level errors, and the pin set follows the archive set's tri-state discipline).

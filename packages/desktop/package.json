@@ -1,6 +1,6 @@
 {
   "name": "@dsh-chamber/desktop",
-  "version": "0.4.1-beta.2",
+  "version": "0.4.1",
   "type": "module",
   "main": "main.ts",
   "scripts": {
