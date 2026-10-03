@@ -39,6 +39,11 @@ export const inject = [
 ]
 
 const MANAGER_CHILDREN = {
+  // v0.2.1-alpha.1: the upstream page renders this seat in the add-plugin menu
+  // (PluginManagerPage AddPluginMenu); we embed the page without its apply(),
+  // so our registration MUST declare every upstream child or renderSlot throws
+  // SlotOwnershipError. Locked by test/dom-seam/vendor-page-dom-seam.test.ts.
+  'plugins.add.actions': { kind: 'list', scope: 'root' },
   'plugins.item': { kind: 'list', scope: 'root' },
   'plugins.bundle.activation': { kind: 'keyed', scope: 'root' },
   'plugins.bundle.config': { kind: 'keyed', scope: 'root' },

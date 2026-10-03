@@ -17,6 +17,7 @@ import {
   deferredRegistrationFailureMessage,
   DEFERRED_EXTRA_ROW_IDS,
   injectedServices,
+  KNOWN_SERVICE_PROVIDERS,
   missingInjectedServices,
   missingServiceFact,
   registeredInjectMembers,
@@ -90,6 +91,8 @@ test('requiredServiceProbeMessage names each service, its injectors, the deadlin
     'the registered plugin injecting it must be named')
   assert.ok(withInstance.includes('provider row @deepseek-ai/dsh-client-ui-sidebar-right'),
     'the missing PROVIDER row must be named so the line localizes the cause, not only the waiter')
+  assert.equal(KNOWN_SERVICE_PROVIDERS.sidebarRightTabs, '@deepseek-ai/dsh-client-ui-sidebar-right',
+    'the sidebarRightTabs registry row maps to the same provider, so the probe names it instead of printing provider row unknown')
   assert.ok(
     requiredServiceProbeMessage([{ service: 'someUnknownService', injectedBy: ['p'] }]).includes('provider row unknown'),
     'a service with no known provider says so explicitly instead of silently omitting the provider half')

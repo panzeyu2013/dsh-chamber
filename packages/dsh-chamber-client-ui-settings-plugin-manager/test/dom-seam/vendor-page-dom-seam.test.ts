@@ -1,5 +1,5 @@
 /**
- * 插件管理页容纳层的上游 DOM 缝锁（design 05 §5；checklist §3 末条 / §7 第 6 步）。
+ * 插件管理页容纳层的上游 DOM 缝锁 + 注册子座席表锁（design 05 §5；checklist §3 末条 / §7 第 6 步）。
  *
  * `EmbeddedPluginManagerPage.module.css` 不认上游的 CSS-module 类名（构建期哈希），只认
  * 页面自己的属性钩子与**页头行的两子序列**。这条缝静默回归过一次：上游把页头 intro 从
@@ -211,4 +211,76 @@ vendorTest('页根自身的槽锚点 plugins.bundle.activation 仍是直接子�
   assert.match(pageSource(), /\brenderSlot\('plugins\.bundle\.activation'/u,
     '容纳层给 [data-plugin-panel] > [data-slot] > * 的跨轨与 960 上限是按这条直接子槽写的：'
     + '槽调用若挪进别的容器，占用者将拿不到轨道定位。')
+})
+
+/**
+ * 注册子座席表锁（v0.2.1-alpha.1 升级补）：本包内嵌官方插件管理页组件，但不加载其 apply()
+ * （官方行在复合壳里是 covered-skip），页面里的 renderSlot(...) 绑定的是本包 registration 的
+ * children 表。React 把 {renderSlot('plugins.add.actions', …)} 作为 children 传给 Menu 时即求值
+ * （与菜单是否展开无关），未声明就抛 SlotOwnershipError: slot 'plugins.add.actions' is not
+ * declared by this entry's children —— 打开「设置 → 内置插件」即崩。上游本代新增的
+ * plugins.add.actions 正是这样漏进来的；本锁把两表双向钉死。
+ */
+vendorTest('注册子座席表：MANAGER_CHILDREN 与上游 registration 的 children 双向一致', () => {
+  /** 取 start 的 { 起、按括号配平到对应 } 的整块（注释已剥；本表无字符串花括号）。 */
+  const bracedBlock = (text: string, start: string): string => {
+    const from = text.indexOf(start)
+    assert.ok(from >= 0, '源里找不到 ' + start)
+    const open = text.indexOf('{', from)
+    assert.ok(open >= 0, start + ' 后没有 {')
+    let depth = 0
+    for (let index = open; index < text.length; index += 1) {
+      if (text[index] === '{') depth += 1
+      else if (text[index] === '}') {
+        depth -= 1
+        if (depth === 0) return text.slice(open, index + 1)
+      }
+    }
+    assert.fail(start + ' 的块未闭合')
+  }
+  const specsOf = (block: string): Array<{ key: string; kind: string; scope: string }> =>
+    [...block.matchAll(/'([^']+)':\s*\{\s*kind:\s*'(single|keyed|list|chain)'\s*[,;]\s*scope:\s*'([a-z-]+)'/gu)]
+      .map((match) => ({ key: match[1]!, kind: match[2]!, scope: match[3]! }))
+  const occurrences = (block: string): number => (block.match(/:\s*\{\s*kind:\s*'/gu) ?? []).length
+  const ownSource = normalize(stripComments(readFileSync(
+    new URL('../../src/client/index.ts', import.meta.url), 'utf8')))
+  const vendorSource = normalize(stripComments(readFileSync(
+    new URL('../../../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-plugin-manager/src/client/index.ts', import.meta.url), 'utf8')))
+  assert.equal(vendorSource.split('children: {').length - 1, 1, '上游 registration 的 children 表应恰有一处')
+  assert.equal(ownSource.split('const MANAGER_CHILDREN = {').length - 1, 1, '本包 MANAGER_CHILDREN 应恰有一处')
+  const ownBlock = bracedBlock(ownSource, 'const MANAGER_CHILDREN = {')
+  const vendorBlock = bracedBlock(vendorSource, 'children: {')
+  const own = specsOf(ownBlock)
+  const vendor = specsOf(vendorBlock)
+  assert.ok(own.length > 0 && vendor.length > 0, '两表都要抽到座席键与 kind/scope')
+  assert.equal(own.length, occurrences(ownBlock), '本地每个子座席都必须被抽取（漏抽会静默放过上游新增）')
+  assert.equal(vendor.length, occurrences(vendorBlock), '上游每个子座席都必须被抽取（漏抽会静默放过新增）')
+  const ownByKey = new Map(own.map((entry) => [entry.key, entry]))
+  const vendorByKey = new Map(vendor.map((entry) => [entry.key, entry]))
+  const missing = vendor.filter((entry) => !ownByKey.has(entry.key)).map((entry) => entry.key)
+  const extra = own.filter((entry) => !vendorByKey.has(entry.key)).map((entry) => entry.key)
+  assert.deepEqual(missing, [],
+    '上游注册声明了本包未声明的子座席（页面 renderSlot 会抛 SlotOwnershipError）：' + missing.join(', '))
+  assert.deepEqual(extra, [],
+    '本包声明了上游 registration 没有的子座席（扩展必须显式登记理由并同步本锁）：' + extra.join(', '))
+  for (const entry of vendor) {
+    const ownSpec = ownByKey.get(entry.key)!
+    assert.deepEqual({ kind: ownSpec.kind, scope: ownSpec.scope }, { kind: entry.kind, scope: entry.scope },
+      '座席 ' + entry.key + ' 的 kind/scope 与上游 registration 不一致（kind 决定渲染分派，漂移即崩或错渲）')
+  }
+  // 更强的一臂：页面**实际消费**的 renderSlot 键必须全在本地 children 表里——这正是运行期
+  // throw 的充要条件，且不依赖上游把自己的新槽登记进它的 children 表（上游漏登记也照样红）。
+  const used = [...new Set([...pageSource().matchAll(/renderSlot\(\s*'([^']+)'/gu)].map((match) => match[1]!))]
+  const undeclaredUsage = used.filter((key) => !ownByKey.has(key))
+  assert.deepEqual(undeclaredUsage, [],
+    '页面 renderSlot 直接消费但本包未声明的子座席（运行期 SlotOwnershipError）：' + undeclaredUsage.join(', '))
+  assert.ok(used.length > 0, '页面至少消费一个子座席（抽取失效即红，别把空集当绿）')
+  // 负控：夹具证明抽取器能看见 kind/scope 与「少一个键」（首版只比 key、且用恒真式负控）。
+  const fixture = specsOf("{ 'plugins.add.actions': { kind: 'list', scope: 'root' }, 'plugins.bundle.config': { kind: 'keyed', scope: 'root' } }")
+  assert.deepEqual(fixture, [
+    { key: 'plugins.add.actions', kind: 'list', scope: 'root' },
+    { key: 'plugins.bundle.config', kind: 'keyed', scope: 'root' },
+  ], '负控：kind/scope 必须被抽取')
+  assert.deepEqual(fixture.filter((entry) => entry.key !== 'plugins.add.actions').map((entry) => entry.key),
+    ['plugins.bundle.config'], '负控：差集必须能看见缺键')
 })

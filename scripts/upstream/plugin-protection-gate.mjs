@@ -62,7 +62,7 @@ export const FAMILY_OPT_IN_ALLOWED = RUNTIME_FAMILY_OPT_IN_ALLOWED
  *  `libreoffice-kit-*`（office-to-pdf 带的办公套件运行时，含一个 `-wasm` 包）。 */
 const PLATFORM_PACK_RE = /^@deepseek-ai\/(?:node-addon-system-|libreoffice-kit-)/
 
-/** 闭包解析的健全性下限（当前运行时线 ≈ 291；解析坏了必须响亮）。 */
+/** 闭包解析的健全性下限（当前运行时线 ≈ 298；解析坏了必须响亮）。 */
 const MIN_FAMILY_SIZE = 200
 
 /**

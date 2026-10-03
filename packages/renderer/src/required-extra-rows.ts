@@ -239,6 +239,8 @@ export function missingServiceFact(
 export const KNOWN_SERVICE_PROVIDERS: Readonly<Record<string, string>> = {
   // vendor ui-sidebar-right/src/client/index.ts: ctx.reflect.provide('sidebarRight', …)
   sidebarRight: '@deepseek-ai/dsh-client-ui-sidebar-right',
+  // same row's tab-type registry: ctx.reflect.provide('sidebarRightTabs', …)
+  sidebarRightTabs: '@deepseek-ai/dsh-client-ui-sidebar-right',
   // the chain the row waits on: ui-sidebar-right injects `resources`, provided only by @deepseek-ai/dsh-client-resources.
   resources: '@deepseek-ai/dsh-client-resources',
 }

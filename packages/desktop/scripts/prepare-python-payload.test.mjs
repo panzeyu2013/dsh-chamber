@@ -590,7 +590,7 @@ test('⑤ CLI（main 级）：不带 --target 时按宿主解析，显式未登�
 
 /**
  * 上游唯一消费者 `@deepseek-ai/dsh-tool-workspace-dependencies` 的
- * `parsePrimaryRuntime`（当前 pin 639ed015；vendor/harness-checkout/packages/skill/
+ * `parsePrimaryRuntime`（当前 pin 5badb150；vendor/harness-checkout/packages/skill/
  * tool-workspace-dependencies/src/index.ts）**在本仓不能直接 import**：子模块自身的
  * node_modules 链接指向未构建的 lib。这里按同一份源码镜像出接受规则，并由下面的源锁
  * 用例钉住那几行——上游改规则时这条锁先红，再决定要不要跟。
@@ -662,4 +662,20 @@ test('⑥ 源锁：上游 parsePrimaryRuntime 的接受规则行仍在（改了�
   for (const marker of ["const PLATFORMS = ['win32', 'darwin', 'linux']", "['x64', 'arm64']", 'desktopVersion', "['numpy', 'pandas']"]) {
     assert.ok(source.includes(marker), '上游解析器不再含：' + marker)
   }
+})
+
+/**
+ * ⑦ pin 恒等：锁 provenance 的 upstreamCommit 必须等于 harness.commit。上游同名
+ * `scripts/primary-runtime/lock.json` 在本仓用过的两个 pin 间逐字节相同，故这行
+ * provenance 是 pin 升级时该锁唯一要动的字段；此前两代升级都同步移动过它，本次
+ * 升级首轮漏改——本锁把这种漏改变成红。
+ */
+test('⑦ 锁 provenance 的 upstreamCommit 与 harness.commit 一致（pin 升级必须同批）', () => {
+  const provenance = JSON.parse(LOCK_TEXT).provenance
+  assert.ok(provenance !== null && typeof provenance === 'object', '锁必须带 provenance 对象')
+  const pin = readFileSync(new URL('../../../harness.commit', import.meta.url), 'utf8')
+    .split('\n').map((line) => line.trim()).find((line) => line !== '' && !line.startsWith('#'))
+  assert.notEqual(pin, undefined, 'harness.commit carries the pin line')
+  assert.equal(JSON.parse(LOCK_TEXT).provenance.upstreamCommit, pin,
+    'primary-runtime lock 记录的是当前 pin；升级后必须同行更新')
 })

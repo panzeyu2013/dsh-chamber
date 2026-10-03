@@ -24,8 +24,8 @@
     // resolve @deepseek-ai/* — map them to the vendored sources instead, the same
     // source-level resolution the harness repo itself uses (tsconfig.base.json
     // paths). The wildcard covers every package the seeds reach: cordis,
-    // cosmokit, schemastery, cordis-plugin-loader, dsh-invariants,
-    // dsh-host-webserver, dsh-typert-protocol, dsh-client-modules,
+    // cosmokit, schemastery, cordis-plugin-loader, dsh-host-webserver,
+    // dsh-typert-protocol, dsh-client-modules,
     // dsh-native-command, dsh-subprocess, … — all ship a src/index.ts entry.
     //
     // The relaxations below mirror the harness per-package tsconfigs (cordis /
