@@ -1,8 +1,9 @@
 /**
  * Plugin-refresh convergence policy (design 09 §3.7): one settled plugin/bundle change of
- * THIS page re-subscribes the instance's client-plugin graph ONLY when the action's graph
- * frame has not arrived yet, and watches a bounded window for the page-level
- * `restart-required` fact that only a document reload can end.
+ * THIS page re-subscribes the instance's client-plugin graph UNCONDITIONALLY — a frame
+ * that arrived during the action does not prove the FINAL graph arrived (see the resync
+ * call below) — and watches a bounded window for the page-level `restart-required` fact
+ * that only a document reload can end.
  *
  * Provenance: the window's floor is the action's START time on the page wall clock (the
  * settled edge of plugin-action-tracker carries it). The host pushes its graph frame —

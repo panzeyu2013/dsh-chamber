@@ -1,9 +1,10 @@
 /**
  * Plugin-refresh convergence policy (design 09 §3.7 / design 15 §6).
  *
- * One settled plugin/bundle change must (a) re-subscribe the client-plugin graph ONLY
- * when the action's own frame has not arrived, and (b) watch a BOUNDED window for the
- * page-level `restart-required` fact. Provenance is the action START time: the host
+ * One settled plugin/bundle change must (a) re-subscribe the client-plugin graph
+ * unconditionally — the removed frame-freshness shortcut must not come back — and (b)
+ * watch a BOUNDED window for the page-level `restart-required` fact. Provenance is the
+ * action START time: the host
  * frame (and the fact it writes) usually lands BEFORE the RPC answer that settles the
  * action, and live-graph dedupes an identical fact — so the subscription's synchronous
  * replay of a fact from THIS action must be honored, while an older fact must not.
