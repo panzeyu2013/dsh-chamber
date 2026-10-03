@@ -412,6 +412,46 @@
   text-overflow: ellipsis;
 }
 
+/* Per-source plugin-refresh fact strip (design 15 §6): chamber-owned HEADER chrome
+   below the header row. Deliberately not a nav cell — the retired per-source assembly
+   block stays retired (design 15 §1): the nav's two groups keep their semantics. */
+.notice {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 14px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+  background: var(--dsw-alias-bg-layer-2);
+  box-sizing: border-box;
+}
+
+.noticeBody {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.noticeTitle {
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.noticeText {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+  overflow-wrap: anywhere;
+}
+
+.noticeAction {
+  flex: none;
+}
+
 .actions {
   min-width: 0;
   display: flex;

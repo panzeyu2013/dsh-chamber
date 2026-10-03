@@ -42,9 +42,10 @@
   - 0.2.0-rc.2 pin 四项：内置插件页目检、跨代 profile 对账、gateway 就地升级、0.1.6 代移动端 + 右栏终端 tab。
   - 客户端插件热同步（design 09 §3.7）剩余实机面：经插件管理器/配置编辑路径触发的一次真实 add/remove 帧、
     ssh/gateway 各一来源、卸载保证边界（factory/loadCache/style 保留面）、隐藏回收期无迟到写入、宿主崩溃重启后
-    活行存活（重连响应非 200——重启窗口内的 503/502——浏览器按规范判死；hold 层已加有界重建 ≈97s 覆盖
-    该窗口，预算耗尽才退回 boot 现状须手动重载；重建是否真覆盖重启窗口待实机）；图回归（boot 无图的 ssh 来源在
+    活行存活（重连响应非 200——重启窗口内的 503/502——浏览器按规范判死；page-channel 自带重连阶梯并在重连后
+    重订阅 pluginGraph〔design 26 §D4〕，无独立 hold 层，重启窗内的重建效果待实机）；图回归（boot 无图的 ssh 来源在
    seed + 重启后由每 60s 有界探测发现图已就绪并重挂一次，取到 profile 的 client 行）同待实机；已验范围与复现命令见 design 09 §5（不在本文件重复）。
+  - 插件刷新收敛（design 09 §3.7 2026-10 修订；design 15 §6）实机面：装/启/卸 bundle 后**不按 Cmd+R**，选中服务器的设置分节即时出现（含首装新 id、同 rev 再启用即时回来）；重建/重装（同 id 新 rev）在 5s 窗口内自动整页重载一次且不循环（独立预算 3 次/10 分钟），**宿主帧先于动作结算到达的竞态**（诊断同事实去重不补写）也必须收口；跨实例 `instance-version-conflict` 只出 header 事实条、不重载（手动「重新加载应用」仍可从事实条发起）；新动作在途时不得被自动重载打断；宿主未应用（restart-required 且运行图无新行）时面板不得谎报「重载解药」。判据 = 本目检 + `plugin-refresh-convergence.test.ts` / `live-graph.test.ts`（resync）/ `plugin-notice.test.ts` / `plugin-action-tracker.test.ts` / `plugin-refresh-wiring.test.ts`。
   - 遮罩层叠/揭幕 P0–P3（design 05 §2.2.1/§4）：W-1b 真机走查、揭幕时延（active ≤1 帧 / absent ≤2s / hero 保持）、Swift 发布包 Safari 人工抽检。
   - rc.2 新座席 `sidebar.right.tab.files.actions`（裁决 D-01 = B，design 20 §7.2）：打包态目检 = Files 页签出现 chamber「打开当前文件夹」、远端来源按 per-source 语义、记忆 per source；官方占座条保持 inert（不出现重复图标）；判据 = `files-seat-declaration.test.ts` + `open-in-path.test.ts` + 本目检。
   - rc.2 登录 shell 环境（design 02 §3.1）：Dock/Finder 启动下（Electron + Swift 两 flavor）托管宿主与 agent shell 能读到 `~/.zshrc`/`~/.zprofile` 的 PATH/代理/API key；读取失败告警可定位（Electron：启动日志/unified log；sidecar：stderr）且启动不阻塞；`DSH_*` 不被启动文件覆盖；Windows 跳过。判据 = `control-plane/test/host-lifecycle/login-shell-env.test.ts` + 本实机。
@@ -310,7 +311,9 @@
 - 连接页手写 tooltip 未走 vendor `Tooltip`：无 `role="tooltip"` 关联；未决 = 补 ARIA 或改用 vendor。
 - api-gateway fork 未重放 0.1.7-rc.2 代的 uplink 客户端半边（G43；与 0.2.0-rc.2 无关，0.2.0-rc.2 复核仍成立）：带 uplink 的 descriptor 同步抛错；证据 `client-uplink-rejection.test.ts`。
 - 插件管理 tab 钉在上游页结构上（design 05 §5）：上游改结构即回归，由本包 `test/dom-seam/` 的 vendor 源锁步门响亮报红（缺 vendor 树即失败；`test:plugin-manager`）；pin 升级按 §7 第 6 步重锚。
-- 重打包（rev 变化）的已加载 client 插件无活页面切换路径：内核按 id first-load-wins 报 `rev-conflict('restart')` 并复用旧 factory，`restart-required` 只是事实；自动窗口重载不再存在，需要用户手动重载页面/重启应用（design 09 §3.7/§5、design 18 §3.6 项 8）。
+- 重打包（rev 变化）的已加载 client 插件无活页面切换路径：内核按 id first-load-wins 报 `rev-conflict('restart')` 并复用旧 factory；**本页插件管理动作**由 design 09 §3.7 的结算 provenance + 5s 窗口 + 独立预算自动整页重载一次（宿主帧先于动作结算到达的竞态也收口），其它路径只上报 `restart-required`、需手动重载（design 09 §3.7/§5、design 18 §3.6 项 8）。**自动重载的 UX 代价未处理**：静默整页重载丢弃全部未保存草稿且与当前分节无关，无倒计时/取消；候选（事实条倒计时+取消 / 仅手动 / 仅插件分节激活时自动）见 design 18 §3.6 项 8，判据 = 本目检 + design 09 §3.7 的单测。
+- 插件刷新收敛的跨包控制面是 string-key + 结构类型（`ctx.chamberPluginRefresh`）：任一侧改名可编译通过、运行时静默 no-op；现行护住 = PM 侧跨包 source-lock（`test/trigger/plugin-refresh-wiring.test.ts`，钉住 startedAt 转发）+ 控制面缺失时的响亮告警。typed 化（PM 直接依赖 client-core 的请求缝、App 统一拥有 resync/窗口/预算）未做：代价是 PM 新增包依赖（package.json + 根 lockfile）与 per-boot 栅栏重建，登记为将来项（design 09 §3.7）。
+- pluginGraph 主题无静默看门狗：page-channel 只在 socket error/close 上恢复，宿主「活着但冻结」（不再发帧、socket 不报错）不会触发任何重订阅（keepalive 目前只被 session-facts 消费者消解）；现行自愈 = 本页动作结算即重订阅一次（无条件，design 09 §3.7）。结构替代（控制面按订阅周期发 keepalive + 客户端静默→重订阅）未实现，登记为将来项；判据 = design 26 的线协议/客户端/控制面测试面。
 - live 热同步的跨来源 chunk-owner 撤销边界：页面级 `graphRows` 按 id 共享，只有 factory owner 的 remove 才撤销描述符（非 owner 保留）；**owner 自身移除而另一来源仍挂载同 id** 时描述符仍会被删（`live-graph.ts` 的 `ownsChunkDescriptor`；design 09 §3.7 ⑥）。
 - `/plugins/events` 属主是上游 HMR 宿主行（cordis.patch.yml 原文 always mounted，仅 rebuild watcher 为 dev 工具；design 09 §5）：端点被移除/改名即 live 热同步静默退回 boot 现状；失效判据 = pin 升级按 §7 复验该路由与帧形状（registry `mirror.dsh-client-hmr-events-endpoint`）。
 - git 客户端与宿主错误码重叠是有意例外（design 08；`host-client-lockstep.test.ts` 钉死）。

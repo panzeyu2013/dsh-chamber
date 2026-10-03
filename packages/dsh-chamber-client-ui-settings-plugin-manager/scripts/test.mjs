@@ -21,6 +21,11 @@ const GROUPS = {
     'test/dom-seam/vendor-page-dom-seam.test.ts',
     'test/dom-seam/containment-selectors.test.ts',
   ],
+  // trigger: 本页插件管理器的动作结算边沿 + 收敛接线锁（纯函数/源文本，不加载 vendor）
+  trigger: [
+    'test/trigger/plugin-action-tracker.test.ts',
+    'test/trigger/plugin-refresh-wiring.test.ts',
+  ],
 }
 
 runTestManifest({

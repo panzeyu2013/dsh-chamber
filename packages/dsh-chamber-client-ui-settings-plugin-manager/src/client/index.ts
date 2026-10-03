@@ -8,13 +8,14 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { configLedgerSource } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/config-ledger.ts'
 import { en, zh } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/locales.ts'
-import { PluginManagerController } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/manager-store.ts'
+import { PluginManagerController, isInstallPending } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/manager-store.ts'
 import { PluginRefreshToast, type PluginRefreshToastFace } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/PluginRefreshToast.tsx'
 import { createNavigationStore } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/navigation-store.ts'
 import type { PluginManagerFace } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/manager-store.ts'
 import type { PluginManagerLocaleKey } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/locales.ts'
 import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/slot-contract.ts'
 import { EmbeddedPluginManagerPage } from './EmbeddedPluginManagerPage.tsx'
+import { createPluginActionTracker } from './plugin-action-tracker.ts'
 import { tabLocales, type PluginManagerTabLocaleKey } from './tab-locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -37,6 +38,24 @@ export const inject = [
   'slots', 'locale', 'remote', 'remote.pluginManager', 'remote.pluginInventory',
   'remote.pluginRegistryProbe', 'configForms',
 ]
+
+/**
+ * The per-instance control face the chamber shell provides on the boot ctx
+ * (`ctx.chamberPluginRefresh`, renderer/src/shell.ts). Structural on purpose: this
+ * package stays free of a chamber package dependency, exactly like the
+ * `chamberInstanceId` seam; absent on non-chamber shells, where the trigger no-ops.
+ */
+interface ChamberPluginRefreshControl {
+  /**
+   * One settled plugin/bundle change of this instance: resync the graph, watch for the
+   * reload fact. `startedAt` is the action's start on the page wall clock — the shell
+   * needs it because the host's graph frame (and the restart fact) usually lands before
+   * the RPC answer that settles this action.
+   */
+  requestRefresh(startedAt: number): void
+  /** A new action began: the shell closes any open restart window mid-flight. */
+  actionStarted(): void
+}
 
 const MANAGER_CHILDREN = {
   'plugins.item': { kind: 'list', scope: 'root' },
@@ -76,6 +95,28 @@ export function apply(ctx: ClientContext): void {
   // face is hoisted so the settings page and the overlay toast share one
   // controller face (upstream registers the same pair from one place).
   const face = controller.inject(configLedger, resolveText)
+  // 插件刷新收敛触发（design 09 §3.7 / design 15 §6）：本页控制器的一次
+  // 「动作在途 → 结算」边沿 = 一次用户发起的插件/组合包变更，通知所属实例的壳做
+  // client 图重同步 + 有界 restart 窗口。控制面缺席（测试夹具/非 chamber 壳）即 no-op。
+  const pluginRefresh = (ctx as ClientContext & { chamberPluginRefresh?: ChamberPluginRefreshControl }).chamberPluginRefresh
+  if (pluginRefresh !== undefined) {
+    ctx.effect(() => {
+      // The vendor predicate travels in: this plugin already imports the manager store,
+      // and a pin that adds a pending phase must reach the tracker, not be mirrored.
+      const tracker = createPluginActionTracker(isInstallPending)
+      const unsubscribe = face.hooks.pluginManager.subscribe(() => {
+        const transition = tracker.observe(face.hooks.pluginManager.getSnapshot())
+        if (transition?.kind === 'started') pluginRefresh.actionStarted()
+        else if (transition?.kind === 'settled') pluginRefresh.requestRefresh(transition.startedAt)
+      })
+      return () => { unsubscribe() }
+    }, 'settings-plugin-manager: plugin refresh convergence')
+  } else if ((ctx as ClientContext & { chamberInstanceId?: unknown }).chamberInstanceId !== undefined) {
+    // A chamber shell lacking the seam would silently stop converging (the 2026-10 fix is
+    // wired by string key + structural type across packages): stay loud, like other
+    // missing-seat diagnostics in this package.
+    console.warn('[dsh-chamber] settings-plugin-manager: chamberPluginRefresh control missing; plugin refresh will not converge')
+  }
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({
     name: 'shell.overlay',
     id: 'plugin-manager.refresh-toast',

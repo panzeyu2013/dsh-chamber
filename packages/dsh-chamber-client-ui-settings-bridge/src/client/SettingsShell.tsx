@@ -30,9 +30,10 @@ import {
   getServers, subscribeServers, type BridgeServerRow,
 } from './bridge-servers.ts'
 import {
-  chamberBridge, isChannelClassDiagnostic, recheckPluginGraphDiagnostic,
+  chamberBridge, isChannelClassDiagnostic, recheckPluginGraphDiagnostic, requestClientGraphResync,
 } from '@dsh-chamber/dsh-chamber-client-core'
 import { sectionRows } from './section-rows.ts'
+import { pluginNotice, type PluginNotice } from './plugin-notice.ts'
 import { nestedModalOwnsEscape } from './escape-owner.ts'
 import {
   getSettingsSourceFace, publishSettingsSourceSeats, settingsSourceFaceReady,
@@ -66,6 +67,22 @@ export type SettingsShellProps =
 
 /** The local instance id (always selectable, even while its host is not ready). */
 const LOCAL_INSTANCE_ID = 'local'
+
+/** How long the retry action may show "retrying" without a new fact to reset it. */
+const PLUGIN_RETRY_PENDING_MS = 4_000
+
+/** Copy for the header's plugin-refresh strip (design 15 §6); the facts live in plugin-notice.ts. */
+function noticeTitle(t: SettingsShellInjected['t'], notice: PluginNotice): string {
+  if (notice.kind === 'restart') return t('pluginNoticeRestartTitle')
+  if (notice.kind === 'conflict') return t('pluginNoticeConflictTitle')
+  return t('pluginNoticeLoadFailedTitle')
+}
+
+function noticeBody(t: SettingsShellInjected['t'], notice: PluginNotice): string {
+  if (notice.kind === 'restart') return t('pluginNoticeRestartBody', { id: notice.pluginId ?? '' })
+  if (notice.kind === 'conflict') return t('pluginNoticeConflictBody', { id: notice.pluginId ?? '' })
+  return notice.message ?? ''
+}
 
 /** Nav glyph by section id; unknown ids fall back to the settings gear (official mirror). */
 function navIcon(id: string): ReactNode {
@@ -355,6 +372,24 @@ function SettingsPanel({
     for (const server of servers) map[server.id] = server.pluginDiagnostic
     return map
   }, [servers])
+  // Per-source plugin-refresh fact (design 15 §6): header chrome only — the retired
+  // per-source assembly block is NOT resurrected as a nav cell (design 15 §1).
+  const notice = pluginNotice(selected?.pluginDiagnostic)
+  const noticeMessage = notice === undefined ? '' : noticeBody(t, notice)
+  const serverOwnedContent = active !== CONNECTIONS_SECTION_ID && active !== GENERAL_SECTION_ID
+  // The retry action has no completion event of its own: the fact is rewritten (or healed
+  // away) when the re-subscribed graph answers, so that rewrite clears the pending label.
+  // A same-fact rewrite is deduped by live-graph, though, so the label also has a bounded
+  // life of its own — a silent resync failure must not leave the button stuck forever.
+  const [retrying, setRetrying] = useState(false)
+  useEffect(() => {
+    setRetrying(false)
+  }, [selectedId, selected?.pluginDiagnostic?.updatedAt])
+  useEffect(() => {
+    if (!retrying) return
+    const handle = window.setTimeout(() => { setRetrying(false) }, PLUGIN_RETRY_PENDING_MS)
+    return () => { window.clearTimeout(handle) }
+  }, [retrying])
 
   // Per-source settled-boot gaps, keyed like the diagnostics: the graph channel
   // can answer `ok` while a surface never registered, so the card needs this
@@ -481,6 +516,46 @@ function SettingsPanel({
               <span className={css.hiddenLabel}>{t('close')}</span>
             </button>
           </div>
+          {/* Per-source plugin-refresh fact (design 15 §6): header chrome, never a nav cell. */}
+          {serverOwnedContent && selected !== undefined && selected.connected && notice !== undefined && (
+            <div className={css.notice} role="status" data-plugin-notice={notice.kind}>
+              <div className={css.noticeBody}>
+                <span className={css.noticeTitle}>{noticeTitle(t, notice)}</span>
+                {noticeMessage !== '' && <span className={css.noticeText}>{noticeMessage}</span>}
+              </div>
+              {notice.action === 'reload' && (
+                // Manual consent: deliberately bypasses the shell's automatic reload
+                // budget/single-flight (those gate the relay, not a user's click).
+                <Button variant="outline" size="sm" className={css.noticeAction} onClick={() => { window.location.reload() }}>
+                  {t('pluginNoticeReloadAction')}
+                </Button>
+              )}
+              {notice.action === 'retry' && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={css.noticeAction}
+                  disabled={retrying}
+                  onClick={() => {
+                    setRetrying(true)
+                    requestClientGraphResync(selected.id)
+                  }}
+                >
+                  {retrying ? t('pluginNoticeRetryingAction') : t('pluginNoticeRetryAction')}
+                </Button>
+              )}
+              {notice.action === 'connections' && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={css.noticeAction}
+                  onClick={() => { onSelectSection(CONNECTIONS_SECTION_ID) }}
+                >
+                  {t('pluginNoticeConnectionsAction')}
+                </Button>
+              )}
+            </div>
+          )}
           <div className={css.options}>
             {active === CONNECTIONS_SECTION_ID ? (
               /* Chamber-global connection management: independent of the selected

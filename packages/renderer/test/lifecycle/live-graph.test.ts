@@ -833,3 +833,46 @@ test('shell wiring lockstep: boot-entry disarm, settle-time arm gate, dispose di
   assert.match(live, /subscribePluginGraph\?\(handlers: LivePluginGraphHandlers\): LivePluginGraphSubscription/)
 })
 
+test('resync: closes the topic and reopens it once; a re-delivered full graph converges', async (t) => {
+  const h = harness(t)
+  h.channel.emit(graphFrame([row('@scope/a')]))
+  await tick()
+  assert.deepEqual(h.loader.entries.map(entry => entry.options?.name), ['@scope/a'])
+  assert.equal(h.sync.resync(), true)
+  assert.equal(h.channel.closeCalls, 1, 'the stale subscription record is closed before reopening')
+  assert.equal(h.channel.subscribeCalls, 2, 'exactly one fresh pluginGraph subscription')
+  // A new SSE connection answers with the whole graph (design 18 §3.6): a frame the old
+  // subscription never delivered is recovered through the SAME frame pipeline.
+  h.channel.emit(graphFrame([row('@scope/a'), row('@scope/b')]))
+  await tick()
+  assert.deepEqual(h.loader.entries.map(entry => entry.options?.name), ['@scope/a', '@scope/b'])
+})
+
+test('resync: no-op once disarmed, or when the boot never armed a subscription', async (t) => {
+  const h = harness(t)
+  await h.sync.disarm()
+  assert.equal(h.sync.resync(), false, 'a disarmed holder must not reopen the topic')
+  assert.equal(h.channel.subscribeCalls, 1)
+  const without = harness(t, { subscribePluginGraph: undefined })
+  assert.equal(without.sync.resync(), false)
+  assert.equal(without.channel.subscribeCalls, 0)
+})
+
+test('resync: a failed re-open warns and reports false; a later resync retries', async (t) => {
+  const channel = fakeSubscription()
+  let calls = 0
+  const h = harness(t, {
+    subscribePluginGraph: (handlers) => {
+      calls += 1
+      if (calls === 2) throw new Error('channel gone')
+      channel.record(handlers)
+      return channel.subscription
+    },
+  })
+  assert.equal(h.sync.resync(), false, 'a throwing re-open must not claim success')
+  assert.ok(h.warns.some(message => message.includes('page-channel subscription failed')))
+  assert.equal(h.sync.resync(), true, 'the next resync retries the re-open')
+  assert.equal(calls, 3)
+})
+
+

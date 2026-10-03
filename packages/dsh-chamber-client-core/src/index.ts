@@ -103,3 +103,8 @@ export { recordEvidence } from './evidence-log.ts'
 // page-schedule / evidence-log 同规，见 verify:no-dead-exports 的判定口径）。
 export type * from './page-channel.ts'
 export { subscribePageChannel, installPageChannelEventSourceAudit } from './page-channel.ts'
+// 页面级插件刷新请求（design 09 §3.7 / design 15 §6）：设置面按来源请求一次
+// 客户端插件图重同步。请求面只经桶导出，两个符号分别被 renderer 的桥订阅与
+// settings-bridge 的重试动作消费（fan-out 复用 aggregate-store 的 createChannel）。
+export type * from './plugin-refresh-requests.ts'
+export { onClientGraphResyncRequest, requestClientGraphResync } from './plugin-refresh-requests.ts'

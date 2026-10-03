@@ -41,6 +41,10 @@ import {
 import { readSafeModeFlag, SAFE_MODE_GLOBAL } from './safe-mode.ts'
 import { BundleLoadTimeoutError } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
 import { chamberBridge, describeThrown, type PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-core'
+// 插件刷新收敛（design 09 §3.7 / design 15 §6）：重订阅式的 client 图重同步 +
+// 有界 restart 事实窗口；预算与流恢复的 document-reload 域独立。
+import { createPluginRefreshConvergence } from './plugin-refresh-convergence.ts'
+import { documentReloadBudgetStorage, shouldReloadForPluginRefresh } from './document-reload-budget.ts'
 // The page's ONE long connection (design 26). The shell binds its own instance identity
 // here; live-graph holds no stream URL and no reconnect ladder of its own.
 import { subscribePageChannel } from '@dsh-chamber/dsh-chamber-client-core/page-channel'
@@ -220,6 +224,64 @@ export type { ShellDegradedFact } from './boot-gap.ts'
 /** One serialized boot queue shared by every instance (module/plugin discipline). */
 let bootChain: Promise<void> = Promise.resolve()
 
+/**
+ * One automatic plugin-refresh reload at a time. The quota lives in the plugin-refresh
+ * domain of document-reload-budget.ts (its OWN key/window), so a plugin reload can never
+ * consume the stream-recovery document tier; storage failure fails closed.
+ */
+let pluginRefreshReloadInFlight = false
+
+/** Close a settled plugin/bundle change whose page-level conflict only a reload can end. */
+function requestPluginRefreshReload(instanceId: string): boolean {
+  if (pluginRefreshReloadInFlight || typeof window === 'undefined') return false
+  if (!shouldReloadForPluginRefresh(documentReloadBudgetStorage(), Date.now())) {
+    console.warn(`[dsh-chamber] plugin-refresh reload for ${instanceId} denied by the reload budget`)
+    return false
+  }
+  pluginRefreshReloadInFlight = true
+  try {
+    window.location.reload()
+    return true
+  } catch (error) {
+    // A blocked navigation must not leave the single-flight flag armed forever.
+    pluginRefreshReloadInFlight = false
+    console.warn(`[dsh-chamber] plugin-refresh reload for ${instanceId} failed`, error)
+    return false
+  }
+}
+
+/**
+ * The per-boot control face provided to chamber client plugins as
+ * `ctx.chamberPluginRefresh` (structural consumers only — no cross-package type is
+ * needed, matching the `chamberInstanceId` seam). The embedded settings plugin manager
+ * calls `requestRefresh(startedAt)` once per settled plugin/bundle change of THIS instance
+ * (`startedAt` = when that action began, the provenance floor for the restart fact) and
+ * `actionStarted()` when a new one begins: the shell re-subscribes that source's
+ * client-plugin graph (unconditionally) and watches a bounded window for the page-level
+ * `restart-required` fact, which the reload closure above then ends.
+ * Fenced on the boot generation so a superseded boot can never act.
+ */
+function createPluginRefreshControl(
+  instanceId: string,
+  bootGeneration: number | undefined,
+): { requestRefresh(startedAt: number): void; actionStarted(): void; dispose(): void } {
+  const isCurrentBoot = (): boolean =>
+    bootGeneration === undefined || bootGenerations.get(instanceId) === bootGeneration
+  const convergence = createPluginRefreshConvergence({
+    resync: () => entries.get(instanceId)?.liveSync?.resync() ?? false,
+    subscribeDiagnostic: listener => chamberBridge.onPluginDiagnostic((sourceId, diagnostic) => {
+      if (sourceId !== instanceId) return
+      listener(diagnostic)
+    }),
+    requestReload: () => isCurrentBoot() && requestPluginRefreshReload(instanceId),
+  })
+  return {
+    requestRefresh: (startedAt: number) => { if (isCurrentBoot()) convergence.notifyChange(startedAt) },
+    actionStarted: () => { if (isCurrentBoot()) convergence.notifyActionStart() },
+    dispose: () => { convergence.dispose() },
+  }
+}
+
 /** Build the per-entry Context initializer: the closure owns immutable values. */
 export function createChamberContextSetup(
   instanceId: string,
@@ -228,7 +290,7 @@ export function createChamberContextSetup(
   transport: ChamberTransport = instanceId === 'local' ? 'local' : 'ssh',
   bootGeneration?: number,
   reportBootDegraded?: (report: ShellDegradedReport) => void,
-): (ctx: Pick<Context, 'provide'>) => void {
+): (ctx: Pick<Context, 'provide'> & Partial<Pick<Context, 'effect'>>) => void {
   if (instanceId.trim() === '') throw new Error('shell: empty instance id')
   if (!isChamberSourceId(instanceId)
     || (instanceId !== 'local' && rawInstanceIdFromSourceId(instanceId) === null)) {
@@ -261,7 +323,27 @@ export function createChamberContextSetup(
     if (reportBootDegraded !== undefined) {
       ctx.provide('chamberReportBootDegraded', reportBootDegraded)
     }
+    // 插件刷新收敛（design 09 §3.7 / design 15 §6）：本实例内嵌插件管理器的每次结算都
+    // 在这里收敛——重订阅 client 图（丢失帧的兜底）+ 有界窗口内的 restart 事实收口。
+    // 控制面按 ctx 提供、结构消费，chamber 客户端插件无需新增包依赖；dispose 随 ctx 生命周期。
+    const pluginRefresh = createPluginRefreshControl(instanceId, bootGeneration)
+    ctx.provide('chamberPluginRefresh', {
+      requestRefresh: (startedAt: number) => { pluginRefresh.requestRefresh(startedAt) },
+      actionStarted: () => { pluginRefresh.actionStarted() },
+    })
+    ctx.effect?.(() => () => { pluginRefresh.dispose() }, 'shell: plugin refresh convergence')
   }
+}
+
+/**
+ * One client-plugin graph resync for a mounted source: re-subscribe that shell's
+ * page-channel `pluginGraph` topic so the host re-delivers the whole graph through the
+ * existing frame pipeline. The settings surface's retry action calls this for the
+ * SELECTED source (which the caller may not own); no-op for an unknown/disarmed holder.
+ * @returns true when a live subscription was reopened.
+ */
+export function resyncInstanceClientGraph(instanceId: string): boolean {
+  return entries.get(instanceId)?.liveSync?.resync() ?? false
 }
 
 /**
