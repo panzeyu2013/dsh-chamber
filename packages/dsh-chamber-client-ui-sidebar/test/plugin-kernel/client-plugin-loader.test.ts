@@ -38,7 +38,7 @@ test('loadClientPluginRows: first-load-wins — same id+rev reuses across source
   // Same source, newer rev → restart-required.
   const restart = await loadClientPluginRows('local', [row('@scope/plugin', 'revB')], deps, collecting);
   assert.deepEqual(restart, [{ state: 'rev-conflict', row: row('@scope/plugin', 'revB'), conflict: 'restart', ownerSourceId: 'local' }]);
-  // Another source, newer rev → cross-instance version drift.
+  // Another source, newer rev → cross-instance bundle-rev drift.
   const version = await loadClientPluginRows('ssh-b', [row('@scope/plugin', 'revB')], deps, collecting);
   assert.equal(version[0]?.state, 'rev-conflict');
   assert.equal(version[0]?.state === 'rev-conflict' ? version[0].conflict : '', 'version');

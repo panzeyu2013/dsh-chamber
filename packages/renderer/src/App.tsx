@@ -155,6 +155,7 @@ import {
 import { decideServingGate, servingGatePhase, shouldDeferBootForSource } from './source-readiness.ts'
 import { harvestSatisfied } from './baseline-harvest.ts'
 import InstanceView from './components/InstanceView.tsx'
+import { ReloadPageButton } from './components/ReloadPageButton.tsx'
 import { useAggregateRefresh } from './app-hooks/use-aggregate-refresh.ts'
 import { useShellRetry } from './app-hooks/use-shell-retry.ts'
 import { useBadgeCount } from './app-hooks/use-badge-count.ts'
@@ -2187,9 +2188,7 @@ export default function App() {
                 >
                   {t('sessionStall.reconnect')}
                 </Button>
-                <Button variant="outline" onClick={() => { window.location.reload() }}>
-                  {t('sessionStall.reload')}
-                </Button>
+                <ReloadPageButton label={t('sessionStall.reload')} />
                 <Button
                   variant="outline"
                   onClick={() => { setDismissedStalls(prev => [...prev, ...visibleStalls]) }}
@@ -2338,6 +2337,7 @@ export default function App() {
             >
               {t('action.retry')}
             </Button>
+            <ReloadPageButton label={t('sessionStall.reload')} />
             {servers.length > 1 && (
               <div className="fatal-servers">
                 <span className="muted small">{t('action.switchServer')}</span>

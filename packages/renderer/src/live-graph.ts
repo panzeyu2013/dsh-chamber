@@ -536,7 +536,7 @@ export function startLiveGraphSync(deps: LiveGraphSyncDeps): LiveGraphSync {
       } else {
         facts.push({
           kind: 'restart-required', id: item.incoming.id,
-          message: `页面已加载 ${item.incoming.id} 的 ${item.mounted.row.rev} 版本，宿主已重建为 ${item.incoming.rev}；重启应用后才能切换`,
+          message: `页面已加载 ${item.incoming.id} 的构建 ${item.mounted.row.rev}，宿主已重建为 ${item.incoming.rev}；重载页面（或重启应用）后才能切换`,
         })
       }
     }

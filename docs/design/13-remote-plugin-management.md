@@ -179,7 +179,8 @@ host 包塞进普通插件 manifest schema。Git 客户端以每实例 `gitWorkt
   chamber 页面，boot 自身证明图通道）。
 - 注入结果写入实例环形缓冲日志（transport-manager `appendLog`，连接设置页远端日志面板可见）。
 - 弹窗顶部承载客户端插件运行时加载诊断详情（design 09 §3.5：状态 + 插件 id + 原因；
-  `instance-version-conflict` 为中性信息态）——实例卡片只保留状态标记，弹窗是 chamber 诊断的详情面。
+  `instance-version-conflict` 为问题态（跨实例认领 → 冲突实例 boot 被阻止），`restart-required`
+  为同实例重建 → 该行本次 boot 缺席，live 分支保留旧 entry）——实例卡片与弹窗都显示冲突详情。
   design 09 §3.7 的 live 写入（`bundle-load-failed`/`restart-required`/`instance-version-conflict`）也经
   同一单槽与 provenance CAS，故详情面同源、无需第二套投影。
 - Git worktree 客户端是 renderer 复合 entry 的首屏 covered package；它不复用 host-graph 的 installed

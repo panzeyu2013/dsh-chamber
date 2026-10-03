@@ -94,7 +94,8 @@ export type ClientRowOutcome<T extends ClientPluginRow = ClientPluginRow> =
   | { state: 'loaded'; row: T }
   /** The row's factory was already registered at the same rev (shared or earlier). */
   | { state: 'reused'; row: T }
-  /** The id is claimed at another rev: reuse the loaded factory, report the conflict. */
+  /** The id is claimed at another rev: the kernel returns the conflict WITHOUT loading,
+   *  and callers must not materialize the conflicting row. */
   | { state: 'rev-conflict'; row: T; conflict: 'restart' | 'version'; ownerSourceId: string }
   /** The bundle failed: ordinary (records rolled back) or a timeout tombstone. */
   | { state: 'failed'; row: T; error: unknown; timeout: boolean }
@@ -120,9 +121,9 @@ export interface ClientRowLoadOptions {
  * row:
  * - the id's FIRST loader owns the execution; a later consumer of the same id at the
  *   same rev awaits that same execution (never a second script);
- * - a later consumer at a DIFFERENT rev reuses the loaded factory and reports
+ * - a later consumer at a DIFFERENT rev returns a conflict without loading and reports
  *   `restart` (same source) or `version` (another source) — the page keeps the
- *   first factory;
+ *   first factory; callers must not materialize the conflicting row;
  * - an ordinary failure clears the combo + its id records so a later load (or the
  *   caller's recovery pass) may retry;
  * - a DOM-script timeout leaves a tombstone observing the original element: a late
@@ -231,6 +232,40 @@ export async function loadClientPluginRows<T extends ClientPluginRow>(
     }
   }))
   return outcomes
+}
+
+/**
+ * Read-only pre-scan of the page-level table: the rows this caller would be
+ * REFUSED at their current revision, in input order. `conflict` mirrors the
+ * kernel verdict (another source owns the id ⇒ `version`, this source ⇒
+ * `restart`); a duplicate id inside one call is judged once because the kernel
+ * resolves a later occurrence against the record the first one publishes.
+ * The boot path uses this to fail BEFORE any bundle executes or any new id is
+ * claimed, so a boot that will be blocked leaves no executed factory and no
+ * owner record behind. The kernel verdicts remain the authority: a claim that
+ * appears after this scan is still answered by {@link loadClientPluginRows}.
+ * @param sourceId - the caller's source (instance) id.
+ * @param rows - candidate rows.
+ * @returns the conflicting rows (empty when nothing conflicts).
+ */
+export function scanClientPluginRowConflicts<T extends ClientPluginRow>(
+  sourceId: string,
+  rows: readonly T[],
+): { row: T; conflict: 'restart' | 'version'; ownerSourceId: string }[] {
+  const conflicts: { row: T; conflict: 'restart' | 'version'; ownerSourceId: string }[] = []
+  const seen = new Set<string>()
+  for (const row of rows) {
+    if (seen.has(row.id)) continue
+    seen.add(row.id)
+    const owned = preloadedIds.get(row.id)
+    if (owned === undefined || owned.rev === row.rev) continue
+    conflicts.push({
+      row,
+      conflict: owned.ownerSourceId !== sourceId ? 'version' : 'restart',
+      ownerSourceId: owned.ownerSourceId,
+    })
+  }
+  return conflicts
 }
 
 /** The source that first claimed a plugin id on this page (first-load-wins owner), when known. */

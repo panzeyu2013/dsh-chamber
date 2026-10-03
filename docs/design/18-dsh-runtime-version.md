@@ -365,7 +365,8 @@ chamber-settings.json，非秘密）：
    （`restart-window-reload.ts`，按来源单飞、卸载不取消）已随客户端插件热重载的直接修复
    整体移除：**新装/卸载**由 design 09 §3.7 的活实例热同步接管（宿主 hmr 报 `applied` 即把该行
    挂进/移出活 ctx），重启入口不再动页面；**已加载 id 的重建（rev 变化）仍换不掉实现**
-   （模块表按 id first-load-wins），`restart-required` 只上报事实——这条路径需要用户**手动重载
+   （模块表按 id first-load-wins），`restart-required` 只上报事实（同页重 boot 时该行被丢弃、实例照常
+   启动；live 保留已挂载的旧实现）——这条路径需要用户**手动重载
    页面/重启应用**，不再有自动收尾（STATUS 登记）。
    **接线范围**：本段「重启 dsh」两种形态、gateway 卡「重启 dsh」/「启动实例」、插件对话框
    footer 重启与全部 restart-to-apply、ssh 卡「重启实例」（仅 dsh 目标）都不再有任何页面级
@@ -381,7 +382,7 @@ chamber-settings.json，非秘密）：
    保住来源壳状态，但要在 chamber 侧重实现 HMR 换血纪律（样式重复注入、依赖闭包、
    跨来源同 id 共享），成本风险远超收益，只登记为将来可选。
    （原替代③「不重载只提示」当时因半自动被拒；客户端插件热重载直接修复后已成为现行形态——
-   装/卸热同步、rev 变化只上报 `restart-required`。）
+   装/卸热同步、rev 变化只上报 `restart-required`，同页重 boot 丢弃该行。）
 
 **B. connections 本地实例卡片**：加一行/chip「dsh vX」，读同一 resolve 结果，与 settings
 块同源（桥未就绪时回落 `window.dshChamber.dshVersion`）。

@@ -1,8 +1,7 @@
 /**
  * pluginDiagnosticText / pluginDiagnosticTone / bannerProjection unit tests — the
  * consumer-side severity decision for client-plugin runtime diagnostics (design 09
- * §3.5): `instance-version-conflict` is informational (the page reuses the
- * first-loaded plugin revision; nothing in-app can switch it), every other non-ok
+ * §3.5): `instance-version-conflict` blocks conflicting boot; every non-ok
  * state is a problem. The card shows detail only for problems; the plugin dialog
  * always shows the full detail. bannerProjection (plan 24 B1.4) de-duplicates the
  * banner: title = short state name, detail = message ?? pluginId ?? null. Mirror of
@@ -22,8 +21,8 @@ import { en, zh } from '../../src/locales.ts'
 /** Identity translator: the key itself is the observable contract. */
 const t = (key: string): string => key
 
-test('pluginDiagnosticTone: instance-version-conflict is informational, never a problem', () => {
-  assert.equal(pluginDiagnosticTone('instance-version-conflict'), 'info')
+test('pluginDiagnosticTone: instance-version-conflict is a problem', () => {
+  assert.equal(pluginDiagnosticTone('instance-version-conflict'), 'problem')
   assert.equal(pluginDiagnosticTone('ok'), 'ok')
   for (const state of ['not-injected', 'graph-unreachable', 'bundle-load-failed', 'restart-required'] as const) {
     assert.equal(pluginDiagnosticTone(state), 'problem', state)

@@ -68,7 +68,7 @@
 - 设计 21 对齐：只读通道/seed 供给面端到端核验（发布前）、who/when tooltip 未渲染、`pollGatewayReady` 英文串。
 - 产物新鲜度：`desktop/dist/web/**`、`dist/host-*-package/**`、vendor `allowBuilds` 无守卫；G2/G3/G5/G7/G8 未落（`todo/engineering/refactor-plan.md` §8）。
 - CI 无 SMOKE PASS 腿：`smoke.test.ts` 恒 SKIP ⇒ 绿灯不代表真跑安装链。
-- A1 读面残余：F4（版本冲突输入建立不了）、F5（restart-required 报另一版本）、F6（recheck 基门漏 boot 字段）、S1（`ok` 无已装载事实）。
+- A1 读面残余：F6（recheck 基门漏 boot 字段）、S1（`ok` 无已装载事实）。
 - A2：A2-4（哨兵 vs semver）、A2-7（raw vs effective pending）。
 - A3：A3-1/2/3/4 保鲜门自证、A3-5 假过且 `--check` 未进 CI、A3-6、A3-10、A3-11、A3-13、A3-15、A3-14，另有 S1–S13 疑似面（S12 已单列）；判据 = 读失败/未检必须可与「通过」区分。
 - bundle 层生效信号（design 21 §6.6）：需新宿主事实 `bundleLayers`，两态才可区分。
@@ -310,7 +310,8 @@
 - 连接页手写 tooltip 未走 vendor `Tooltip`：无 `role="tooltip"` 关联；未决 = 补 ARIA 或改用 vendor。
 - api-gateway fork 未重放 0.1.7-rc.2 代的 uplink 客户端半边（G43；与 0.2.0-rc.2 无关，0.2.0-rc.2 复核仍成立）：带 uplink 的 descriptor 同步抛错；证据 `client-uplink-rejection.test.ts`。
 - 插件管理 tab 钉在上游页结构上（design 05 §5）：上游改结构即回归，由本包 `test/dom-seam/` 的 vendor 源锁步门响亮报红（缺 vendor 树即失败；`test:plugin-manager`）；pin 升级按 §7 第 6 步重锚。
-- 重打包（rev 变化）的已加载 client 插件无活页面切换路径：内核按 id first-load-wins 报 `rev-conflict('restart')` 并复用旧 factory，`restart-required` 只是事实；自动窗口重载不再存在，需要用户手动重载页面/重启应用（design 09 §3.7/§5、design 18 §3.6 项 8）。
+- 重打包（rev 变化）的已加载 client 插件无活页面切换路径：内核按 id first-load-wins 报 `rev-conflict('restart')`；同实例重建的 row 在 boot 里被丢弃（实例照常启动、诊断 `restart-required`，该插件本次缺席），已挂载 entry 的 live rev 变化仍保留旧 entry；自动窗口重载不再存在，需要用户手动重载页面/重启应用（design 09 §3.7/§5、design 18 §3.6 项 8）。
+- 共享插件模块表的兼容边界：跨实例同 id 异 rev 会阻止后到实例启动（预扫在任何 bundle 执行/认领发布前判定）；同实例重建则丢弃该 row、实例照常启动（`restart-required`，插件本次缺席；live 保留旧 entry；依赖它的 `external` 边会解析到页级模块表里的上一版 factory，只有 factory 缺席才落 apply 降级——已登记代价）。文件元数据 rev 可能让内容相同的独立安装冲突，同 rev 复用也不是内容证明。**页级认领记录无生产释放路径**（`preloadedIds` 只在认领者自身加载失败回滚与测试复位时清除），所以只要认领记录仍在，重试 boot 就复现同一判定（同实例为丢行、跨实例为阻止）——收口 = 只保留一个使用该插件的实例并重载页面/重启应用（连接页指引说明该收口；frame 的 fatal 覆盖层——仅跨实例阻止时出现——与 stall 横幅提供重载控件）。完整兼容需内容身份或独立执行环境设计；当前不改远端执行信任模型（design 09 §3.5、`host-graph.ts` 的 `collectExtraRows`）。
 - live 热同步的跨来源 chunk-owner 撤销边界：页面级 `graphRows` 按 id 共享，只有 factory owner 的 remove 才撤销描述符（非 owner 保留）；**owner 自身移除而另一来源仍挂载同 id** 时描述符仍会被删（`live-graph.ts` 的 `ownsChunkDescriptor`；design 09 §3.7 ⑥）。
 - `/plugins/events` 属主是上游 HMR 宿主行（cordis.patch.yml 原文 always mounted，仅 rebuild watcher 为 dev 工具；design 09 §5）：端点被移除/改名即 live 热同步静默退回 boot 现状；失效判据 = pin 升级按 §7 复验该路由与帧形状（registry `mirror.dsh-client-hmr-events-endpoint`）。
 - git 客户端与宿主错误码重叠是有意例外（design 08；`host-client-lockstep.test.ts` 钉死）。

@@ -229,14 +229,14 @@ fallback 与 `test/session-rows/session-row-state.test.ts` 里钉住它的契约
 现象：pin 的 `dsh-client-modules` 用 `artifactRevision` 对 bundle 文件求
 `sha1(mtimeMs, ctimeMs, size)`（前 12 hex），并把它写回被服务 bundle 的 `sourceMappingURL`。两个后果：
 ① **同内容跨宿主/跨安装 rev 通常不同**（ctime；仅同一底层文件的硬链接例外），而页级 first-load-wins 按 id+rev 认领，于是同一个插件
-挂在两个实例（本地 + gateway 等）时永久报 `instance-version-conflict`——chamber 只能把诊断中性化并说明
+挂在两个实例（本地 + gateway 等）时永久报 `instance-version-conflict`——chamber 只能阻止冲突实例 boot 并说明
 rev 是文件元数据派生的构建标识；② rev 只在**重建/替换**bundle 文件时变化，因此 chamber 的额外行加载必须
 保留一轮有界恢复（重拉宿主图 + 按 fresh URL 重载），否则一次重建就会让旧 URL 404 掉整轮 boot。
 
 上游最小改法：`artifactRevision` 改为对 bundle **字节**求内容哈希（combo/整图 rev 随之稳定）。收益：同内容
 跨宿主/重装 rev 一致，跨实例冲突诊断整类消失，恢复轮只剩"文件真的变了"这一种情形。
 
-chamber 侧现状 = 中性诊断文案（design 09 §3.5）+ 一轮有界恢复。退出条件：上游落地后，删 design 09 §5 的
+chamber 侧现状 = 阻止冲突 boot 的问题态诊断（design 09 §3.5）+ 一轮有界恢复。退出条件：上游落地后，删 design 09 §5 的
 「vendor 侧根治」开放项与 §3.5 的恢复轮必要性说明（保留超时/迟到语义）。
 
 ## 11. 座席声明应可转移：注册所有者与渲染者分离

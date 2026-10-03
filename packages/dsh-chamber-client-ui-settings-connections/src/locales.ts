@@ -281,7 +281,7 @@ export const zh = {
   startManagedDshFailed: '启动失败：{error}',
   startManagedDshRefused: '启动被拒绝：当前状态不可启动或运行时正忙（409 {code}），请刷新后重试',
   // 版本冲突指引 / 服务提示。
-  pluginDiagnosticVersionConflictHint: '该提示不影响启动：页面始终沿用先加载的那份插件构建。rev 由 bundle 文件的 mtime/ctime/size 派生，不是内容哈希，所以两份独立安装（甚至内容相同）的 rev 通常不同、会显示它（仅当两侧指向同一底层文件时才相同）。若该插件的功能确实异常，请让两个实例运行一致的 dsh 运行时与插件版本后重启应用再试。',
+  pluginDiagnosticVersionConflictHint: '插件构建 rev 冲突：本页在整个生命周期内保留先加载的那份 factory，所以冲突实例的启动会被阻止、该插件新 rev 的热装行也不会创建。rev 来自文件元数据，独立安装即使内容相同也可能冲突。解决办法：只保留一个使用该插件的实例，然后重载页面（或重启应用）。',
   serviceUnconfiguredHint: '未配置 systemd 服务：启动/停止/重启与「重启生效」不可用（编辑连接填写服务名后可启用）。',
 } satisfies Record<string, string>
 
@@ -568,6 +568,6 @@ export const en: Record<SettingsConnectionsKey, string> = {
   startManagedDshFailed: 'Start failed: {error}',
   startManagedDshRefused: 'Start refused: the current state is not startable or the runtime is busy (409 {code}); refresh and retry',
   // Version-conflict guidance / service hint.
-  pluginDiagnosticVersionConflictHint: 'This notice does not block startup: the page always keeps whichever plugin build loaded first. The rev derives from the bundle file\u2019s mtime/ctime/size rather than its contents, so two independent installations (even byte-identical ones) usually differ and can show it (they match only when both point at the same underlying file). If that plugin actually misbehaves, make both instances run the same dsh runtime and plugin versions, then restart the app.',
+  pluginDiagnosticVersionConflictHint: 'A plugin build revision conflict: this page keeps the first-loaded factory for its whole lifetime, so the conflicting instance’s boot is blocked and a hot-installed row of that plugin at another revision is not created. Revisions derive from file metadata, so even identical independent installations may conflict. Resolve it by keeping only one instance that uses the plugin, then reload the page (or restart the app).',
   serviceUnconfiguredHint: 'No systemd service is configured: start/stop/restart and \u201cRestart to apply\u201d are unavailable (fill in the service name when editing the connection to enable them).',
 }

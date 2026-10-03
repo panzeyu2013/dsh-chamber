@@ -65,11 +65,10 @@ export function pluginDiagnosticText(state: PluginDiagnostic['state'], t: (key: 
   }
 }
 
-/** Severity tone: a version conflict is informational, every other non-ok state is a problem.
+/** Severity tone: 'ok' is the graph's own success state, every other state is a problem.
  *  Unknown future states fall through to 'problem' (fail-safe, never silent). */
-export function pluginDiagnosticTone(state: PluginDiagnostic['state']): 'ok' | 'info' | 'problem' {
+export function pluginDiagnosticTone(state: PluginDiagnostic['state']): 'ok' | 'problem' {
   if (state === 'ok') return 'ok'
-  if (state === 'instance-version-conflict') return 'info'
   return 'problem'
 }
 

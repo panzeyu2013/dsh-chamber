@@ -40,6 +40,33 @@ import {
   hostileThrownValue, shellModule, shellTestScope, testSourceFingerprint,
 } from '../support/shell-harness.ts'
 
+test('bootInstanceShell: a conflicting factory blocks run and preserves the owning source', async (t) => {
+  shellTestScope(t, { graph: 'none', timers: false })
+  const { loadClientPluginRows, clientPluginRowOwner } = await import('../../../dsh-chamber-client-core/src/client-plugin-loader.ts')
+  const pluginId = '@scope/shell-conflict-regression'
+  await loadClientPluginRows('conflict-owner', [{ id: pluginId, rev: 'old', url: '/old.js' }],
+    { loadBundle: async () => {} }, { ordinary: 'throw', timeout: 'throw' })
+  const originalFetch = globalThis.fetch
+  t.after(() => { globalThis.fetch = originalFetch })
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    rpcId: 'conflict', result: { ok: true, value: { entries: [
+      { id: pluginId, rev: 'new', url: '/plugins/conflict.js' },
+    ] } },
+  }), { status: 200 })) as typeof fetch
+  __testResetConfiguredContexts()
+  let diagnosticState: string | undefined
+  const unsubscribe = chamberBridge.onPluginDiagnostic((id, diagnostic) => {
+    if (id === 'ssh-conflict-consumer') diagnosticState = diagnostic?.state
+  })
+  t.after(unsubscribe)
+  const state = await bootInstanceShell('ssh-conflict-consumer', '/api/i/ssh-conflict-consumer', {} as HTMLElement, () => {})
+  assert.equal(state.booted, false)
+  assert.match(state.error ?? '', /启动已阻止/)
+  assert.deepEqual(__testConfiguredContexts(), [], 'run never materializes the conflicting context')
+  assert.equal(clientPluginRowOwner(pluginId), 'conflict-owner')
+  assert.equal(diagnosticState, 'instance-version-conflict')
+})
+
 test('bootInstanceShell: a resolved-but-failed run (bootError set) settles as a failure and disposes the entry', async (t) => {
   shellTestScope(t, { graph: 'unavailable', timers: false, silentConsole: false })
   __testSetBootError('client-modules: require("@deepseek-ai/dsh-client-store") missed the module table')

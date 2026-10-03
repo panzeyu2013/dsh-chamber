@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { collectExtraRows, fetchHostGraph, findUnsatisfiableExternalDependencies, normalizeBundleUrl, toExtraRows, type ExtraModuleRow, type HostGraphRow } from '../../src/host-graph.ts'
 import {
-  BundleLoadTimeoutError, dedupeCoveredRows,
+  BundleLoadTimeoutError, clientPluginRowOwner, dedupeCoveredRows, loadClientPluginRows,
 } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
 // The channel-classification single source (audit arch-03 P2-2): the boot
 // fetch's expected state/message copy is asserted AGAINST it, never re-spelled.
@@ -85,6 +85,11 @@ function stubFetchImpl(t: TestContext, impl: typeof fetch): void {
 const envelope = (entries: unknown) => ({
   rpcId: 'r1',
   result: { ok: true, value: { rev: 'graph-rev', entries } },
+})
+
+/** One graph answer for the fixtures that need a DIFFERENT graph per fetch call. */
+const graphResponse = (body: unknown): Response => new Response(JSON.stringify(body), {
+  status: 200, headers: { 'content-type': 'application/json' },
 })
 
 /** A merged kernel row for `id` under basePath (combo-form url, rev abc123). */
@@ -943,16 +948,45 @@ test('collectExtraRows: a recovery-refetch channel failure keeps the original bu
   assert.equal(diagnostic?.pluginId, id)
 })
 
-test('collectExtraRows: a cross-instance plugin revision conflict reports instance-version-conflict (version drift, not a restart)', async (t) => {
+test('collectExtraRows: the recovery pass never materializes a row another source claimed at another rev', async (t) => {
+  // Pass 1 fails transiently (its id record is rolled back); the recovery graph is
+  // fetched and IN BETWEEN another source claims the same id at a third rev. The
+  // kernel then answers rev-conflict — a VERDICT, not an error — so a recovery that
+  // treats it as success would hand the boot a row whose factory is the other rev's.
+  const id = '@scope/recovery-pass-conflict'
+  let fetchCalls = 0
+  stubFetchImpl(t, (async () => {
+    fetchCalls += 1
+    if (fetchCalls === 1) {
+      return graphResponse(envelope([row(id, { rev: 'rev-old', url: `/plugins/??${id}&rev=rev-old` })]))
+    }
+    await loadClientPluginRows('recovery-other', [{
+      id, rev: 'rev-other', url: `/plugins/??${id}&rev=rev-other`,
+    }], { loadBundle: async () => {} }, { ordinary: 'throw', timeout: 'throw' })
+    return graphResponse(envelope([row(id, { rev: 'rev-new', url: `/plugins/??${id}&rev=rev-new` })]))
+  }) as unknown as typeof fetch)
+  const attempted: string[] = []
+  let diagnostic: { state: string; pluginId?: string; message?: string } | undefined
+  await assert.rejects(collectExtraRows('recovery-owner', '/api/i/local', {
+    loadModuleBundle: async url => { attempted.push(url); throw new Error('transient 404') },
+    reportDiagnostic: (_sourceId, next) => { diagnostic = next },
+  }), /启动已阻止/)
+  assert.equal(diagnostic?.state, 'instance-version-conflict')
+  assert.equal(diagnostic?.pluginId, id)
+  assert.match(diagnostic?.message ?? '', /factory 属于实例 recovery-other/)
+  assert.equal(attempted.length, 1, 'the fresh rev url must not load under the other rev factory')
+})
+
+test('collectExtraRows: a cross-instance plugin revision conflict reports instance-version-conflict (bundle-rev drift, not a restart)', async (t) => {
   const id = '@scope/revision-conflict-test'
   stubFetch(t, 200, envelope([row(id, { rev: 'rev-one' })]))
   await collectExtraRows('revision-source-one', '/api/i/local', { loadModuleBundle: async () => {} })
   stubFetch(t, 200, envelope([row(id, { rev: 'rev-two' })]))
   let diagnostic: { state: string; pluginId?: string; message?: string } | undefined
-  await collectExtraRows('revision-source-two', '/api/i/ssh-two', {
+  await assert.rejects(collectExtraRows('revision-source-two', '/api/i/ssh-two', {
     loadModuleBundle: async () => {},
     reportDiagnostic: (_sourceId, next) => { diagnostic = next },
-  })
+  }), /启动已阻止/)
   // A DIFFERENT instance owns the id at another rev: no app restart can
   // switch the loaded factory — the honest diagnostic names the owner
   // instance and the OBSERVABLE rev/build-artifact difference (never a version
@@ -962,8 +996,29 @@ test('collectExtraRows: a cross-instance plugin revision conflict reports instan
   assert.equal(diagnostic?.pluginId, id)
   assert.match(diagnostic?.message ?? '', /bundle rev 不同/)
   assert.match(diagnostic?.message ?? '', /mtime\/ctime\/size/, 'the copy names the real rev derivation')
-  assert.match(diagnostic?.message ?? '', /已沿用实例 revision-source-one 先加载的版本/)
+  assert.match(diagnostic?.message ?? '', /factory 属于实例 revision-source-one/)
   assert.doesNotMatch(diagnostic?.message ?? '', /插件版本不同/)
+})
+
+test('collectExtraRows: a boot blocked by a rev conflict executes and claims none of its other rows', async (t) => {
+  // A blocked boot must leave no page-level trace: executing a sibling bundle would
+  // publish a first-load-wins claim owned by an instance that never materialized, so a
+  // later instance carrying that id at another revision would be refused by a ghost.
+  const conflictId = '@scope/pre-scan-conflict'
+  const otherId = '@scope/pre-scan-other'
+  await loadClientPluginRows('pre-scan-owner', [{
+    id: conflictId, rev: 'owned-rev', url: `/plugins/??${conflictId}&rev=owned-rev`,
+  }], { loadBundle: async () => {} }, { ordinary: 'throw', timeout: 'throw' })
+  stubFetch(t, 200, envelope([
+    row(conflictId, { rev: 'other-rev', url: `/plugins/??${conflictId}&rev=other-rev` }),
+    row(otherId, { rev: 'fresh-rev', url: `/plugins/??${otherId}&rev=fresh-rev` }),
+  ]))
+  const loaded: string[] = []
+  await assert.rejects(collectExtraRows('pre-scan-blocked', '/api/i/local', {
+    loadModuleBundle: async url => { loaded.push(url) },
+  }), /启动已阻止/)
+  assert.deepEqual(loaded, [], 'a boot that cannot start must not execute any bundle')
+  assert.equal(clientPluginRowOwner(otherId), undefined, 'nor claim a row it will never materialize')
 })
 
 test('collectExtraRows: same id across instances at the SAME rev reuses without any conflict', async (t) => {
@@ -999,10 +1054,10 @@ test('collectExtraRows: versionConflict outranks restartConflict within one boot
     row(rebuiltId, { rev: 'rebuild-two' }),
   ]))
   let diagnostic: { state: string; pluginId?: string; message?: string } | undefined
-  await collectExtraRows('dual-owner', '/api/i/one', {
+  await assert.rejects(collectExtraRows('dual-owner', '/api/i/one', {
     loadModuleBundle: async () => {},
     reportDiagnostic: (_sourceId, next) => { diagnostic = next },
-  })
+  }), /启动已阻止/)
   // One boot reports one diagnostic; the cross-instance drift (unfixable by
   // any restart) outranks the same-instance rebuild (fixable by restart).
   assert.equal(diagnostic?.state, 'instance-version-conflict')
@@ -1032,10 +1087,10 @@ test('collectExtraRows: a rev conflict still logs an unsatisfiable-require fact 
   ]))
   const consoleCapture = captureConsoleError(t)
   let diagnostic: { state: string; pluginId?: string; message?: string } | undefined
-  await collectExtraRows('precedence-owner', '/api/i/one', {
+  await assert.rejects(collectExtraRows('precedence-owner', '/api/i/one', {
     loadModuleBundle: async () => {},
     reportDiagnostic: (_sourceId, next) => { diagnostic = next },
-  })
+  }), /启动已阻止/)
   assert.equal(diagnostic?.state, 'instance-version-conflict')
   assert.equal(diagnostic?.pluginId, conflicted, 'the conflict owns the single diagnostic slot')
   assert.doesNotMatch(diagnostic?.message ?? '', /无法满足/, 'the conflict message stays about the conflict')
@@ -1090,26 +1145,96 @@ test('collectExtraRows: a transient load failure is healed inside the same boot;
   assert.equal(calls, 2)
 })
 
-test('collectExtraRows: SAME instance id at a different rev reuses the loaded factory and reports restart-required', async (t) => {
-  // Boot 1 preloads revA.
+test('collectExtraRows: SAME instance id at a different rev drops that row and boots the rest', async (t) => {
+  // Boot 1 preloads revA (this instance owns the id).
   stubFetch(t, 200, envelope([row('@scope/rev-plugin', { rev: 'revA', url: '/plugins/@scope/rev-plugin/client.js?rev=revA' })]))
   const loaded: string[] = []
   await collectExtraRows('local', '/api/i/local', { loadModuleBundle: async url => { loaded.push(url) } })
   assert.deepEqual(loaded, ['/api/i/local/plugins/@scope/rev-plugin/client.js?rev=revA'])
-  // Boot 2 carries the same id at revB: already marked → no second load; the
-  // merged row still surfaces revB (the id wins, the rev is informational).
-  stubFetch(t, 200, envelope([row('@scope/rev-plugin', { rev: 'revB', url: '/plugins/@scope/rev-plugin/client.js?rev=revB' })]))
-  let diagnostic: { state: string } | undefined
+  // Boot 2 carries revB plus an unrelated fresh row: the rebuilt id must not be materialized
+  // under the revA factory, so it is dropped from THIS boot (no second load); the sibling
+  // still boots — the instance stays usable and the diagnostic names the reload that switches.
+  stubFetch(t, 200, envelope([
+    row('@scope/rev-plugin', { rev: 'revB', url: '/plugins/@scope/rev-plugin/client.js?rev=revB' }),
+    row('@scope/rev-sibling', {
+      rev: 'sib', url: '/plugins/@scope/rev-sibling/client.js?rev=sib',
+      external: ['@scope/rev-plugin/client'],
+    }),
+  ]))
+  let diagnostic: { state: string; pluginId?: string } | undefined
   const rows = await collectExtraRows('local', '/api/i/local', {
     loadModuleBundle: async url => { loaded.push(url) },
     reportDiagnostic: (_sourceId, next) => { diagnostic = next },
   })
-  const revBUrl = '/api/i/local/plugins/@scope/rev-plugin/client.js?rev=revB'
-  assert.deepEqual(rows, [
-    { ...extra('@scope/rev-plugin'), url: revBUrl, initialUrl: revBUrl, rev: 'revB' },
-  ])
-  assert.deepEqual(loaded, ['/api/i/local/plugins/@scope/rev-plugin/client.js?rev=revA'])
+  assert.deepEqual(loaded.slice(1), ['/api/i/local/plugins/@scope/rev-sibling/client.js?rev=sib'],
+    'the rebuilt id is never loaded at its new rev; the sibling still is')
+  assert.deepEqual(rows.map(row => row.id), ['@scope/rev-sibling'], 'the rebuilt row is absent from this boot')
   assert.equal(diagnostic?.state, 'restart-required')
+  assert.equal(diagnostic?.pluginId, '@scope/rev-plugin')
+  // The dependent edge is NOT reported as an unsatisfiable-require fact: the page's module
+  // table still carries the previous factory, so the sibling resolves there (a registered
+  // residual of the drop policy, design 09 §3.5).
+})
+
+test('collectExtraRows: a duplicated id at another rev never gets a ghost claim from recovery', async (t) => {
+  // The same graph carries one id twice at different revs. The later occurrence is judged
+  // against the record the earlier one published (a same-instance restart), so BOTH rows are
+  // dropped; the earlier one also failed. Recovery must not then load the fresh rev and
+  // publish an owner record for a row this boot does not carry.
+  const id = '@scope/duplicate-rev-ghost'
+  let fetchCalls = 0
+  stubFetchImpl(t, (async () => {
+    fetchCalls += 1
+    if (fetchCalls === 1) {
+      return graphResponse(envelope([
+        row(id, { rev: 'rev-one', url: `/plugins/??${id}&rev=rev-one` }),
+        row(id, { rev: 'rev-two', url: `/plugins/??${id}&rev=rev-two` }),
+      ]))
+    }
+    return graphResponse(envelope([row(id, { rev: 'rev-three', url: `/plugins/??${id}&rev=rev-three` })]))
+  }) as unknown as typeof fetch)
+  const attempted: string[] = []
+  let diagnostic: { state: string; pluginId?: string } | undefined
+  const rows = await collectExtraRows('ghost-owner', '/api/i/local', {
+    loadModuleBundle: async url => {
+      attempted.push(url)
+      throw new Error('transient 404')
+    },
+    reportDiagnostic: (_sourceId, next) => { diagnostic = next },
+  })
+  assert.deepEqual(attempted, [`/api/i/local/plugins/??${id}&rev=rev-one`],
+    'the refused rev and the recovery graph are never loaded')
+  assert.deepEqual(rows, [], 'the duplicated id is absent from this boot')
+  assert.equal(diagnostic?.state, 'restart-required')
+  assert.equal(clientPluginRowOwner(id), undefined, 'no ghost owner record survives the drop')
+})
+
+test('collectExtraRows: a recovery-window same-instance claim drops the row instead of booting it', async (t) => {
+  // The id was claimed by THIS instance at another rev while the boot was recovering (its
+  // own earlier session). The recovery verdict is a same-instance restart: the fresh row must
+  // be dropped, not returned (that would materialize it under the other rev's factory).
+  const id = '@scope/recovery-restart-drop'
+  let fetchCalls = 0
+  stubFetchImpl(t, (async () => {
+    fetchCalls += 1
+    if (fetchCalls === 1) {
+      return graphResponse(envelope([row(id, { rev: 'rev-old', url: `/plugins/??${id}&rev=rev-old` })]))
+    }
+    await loadClientPluginRows('recovery-restart-owner', [{
+      id, rev: 'rev-other', url: `/plugins/??${id}&rev=rev-other`,
+    }], { loadBundle: async () => {} }, { ordinary: 'throw', timeout: 'throw' })
+    return graphResponse(envelope([row(id, { rev: 'rev-new', url: `/plugins/??${id}&rev=rev-new` })]))
+  }) as unknown as typeof fetch)
+  const attempted: string[] = []
+  let diagnostic: { state: string; pluginId?: string } | undefined
+  const rows = await collectExtraRows('recovery-restart-owner', '/api/i/local', {
+    loadModuleBundle: async url => { attempted.push(url); throw new Error('transient 404') },
+    reportDiagnostic: (_sourceId, next) => { diagnostic = next },
+  })
+  assert.deepEqual(attempted, [`/api/i/local/plugins/??${id}&rev=rev-old`], 'the refused rev is never loaded')
+  assert.deepEqual(rows, [], 'the row is dropped; the boot still succeeds')
+  assert.equal(diagnostic?.state, 'restart-required')
+  assert.equal(diagnostic?.pluginId, id)
 })
 
 test('collectExtraRows: a duplicate id within one graph preloads once', async (t) => {

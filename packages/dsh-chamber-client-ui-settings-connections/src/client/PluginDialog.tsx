@@ -63,7 +63,7 @@ import {
   type ChamberRowDescriptor,
   type ThirdPartyLiveState,
 } from './plugin-inventory-text.ts'
-import { bannerProjection, bootGapText, pluginDiagnosticTone, type PluginDiagnostic, type ServerBootGap } from './plugin-diagnostic.ts'
+import { bannerProjection, bootGapText, type PluginDiagnostic, type ServerBootGap } from './plugin-diagnostic.ts'
 import css from './ConnectionsSection.module.css'
 
 export type PluginDialogTarget =
@@ -923,11 +923,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       {diagnosticBanner !== null
         ? (
           <p
-            className={clsx(
-              css.pluginDiagnostic,
-              css.pluginDiagnosticDetail,
-              diagnostic !== undefined && pluginDiagnosticTone(diagnostic.state) === 'problem' ? css.pluginDiagnosticProblem : css.pluginDiagnosticInfo,
-            )}
+            className={clsx(css.pluginDiagnostic, css.pluginDiagnosticDetail, css.pluginDiagnosticProblem)}
             role="status"
           >
             <strong>{diagnosticBanner.title}</strong>

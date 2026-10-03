@@ -559,7 +559,8 @@ export const chamberBridge: {
 
 **被否方案（P0/P1/P2）**：①把遮罩 z 提到壳内所有值之上、或让官方 composer 降 z——数值军备竞赛，且要 fork 官方包（越界）；②顶层（popover/dialog）幕布——实测能压过 body portal 的 z=1100，但它是**文档全局层**，会同时盖住所有视图与 chamber 自己的 chrome（含 `.boot-gap` 非模态降级横幅）；③每个视图实例各自一个 `view-transition-name`——旧/新快照名字不同，配不成组，等于没有命名过渡；④`View Transition types`（`:active-view-transition-type()`）——WebKit 支持面不确定，改用宿主 `data-vt-intent` 属性达到同样作用域；⑤租客 **body portal**（ui-chat 4 处 + chamber 2 处，z-index ≤1100）渲染在文档 body 上，**在任何 stacking 边界之外**——边界内不可消除，作为残余登记（STATUS）。 **失败呈现**：失败不由各 InstanceView 自绘（旧 `.instance-fatal` 仅重试、无导航），而由 App 在
   活动视图上统一渲染 `.fatal-overlay`——失败报告 + 重试（`retryToken` 递增 → InstanceView 复位
-  重 boot)+ **服务器切换行**（`.fatal-servers`：chamber 级逃生通道，不依赖任何 shell 挂载）。
+  重 boot)+ **重载动作**（`ReloadPageButton`：确定性 boot 失败——如跨实例 rev 冲突——重试只会复现同一
+  判定，整页重载是诚实出口）+ **服务器切换行**（`.fatal-servers`：chamber 级逃生通道，不依赖任何 shell 挂载）。
   原因：boot 失败 = 该视图的 dsh shell 从未挂载，而侧边栏（多来源导航）在 shell 内——没有
   chamber 级覆盖层，用户会被困在当前视图（只能整页刷新），违反「一个实体的失败不得
   抹除/阻断无关健康实体」不变量。dsh 壳内自绘的失败页（`AppWebEntry` 加载页的 fail-loud 报告）
@@ -623,7 +624,7 @@ export const chamberBridge: {
   把区域降为 `aria-live="off"`（同一事实已由框架横幅播报），非活动行保持 `polite`（那些来源没有横幅，
   侧栏是唯一用户面)；②**连接页**（`PluginDiagnosticLine` + 插件对话框）——与 `pluginDiagnostic` 是
   **两条独立事实**：图通道的 `ok` 不代表服务都在（缺 `sidebarRight` 时图通道恰好是 `ok`），因此**缺口
-  在场时抑制 `ok` 那一行**（problem/info 照旧渲染），缺口行取**警示色**（`pluginDiagnosticWarn`，与
+  在场时抑制 `ok` 那一行**（problem 照旧渲染），缺口行取**警示色**（`pluginDiagnosticWarn`，与
   框架横幅、侧栏来源行同一色阶)，并给 `bootGapHint` 行动提示（与
   `pluginDiagnosticVersionConflictHint` 同形)。词汇表由侧栏 shared 契约单点拥有（`ServerBootGapKind`），
   渲染包只 import 类型、各出各的文案——即 STATUS「跨边界诊断文案」那条"产出方发结构化事实、渲染方出

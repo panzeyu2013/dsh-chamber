@@ -473,7 +473,7 @@ test('a second source adding an id another source owns reports instance-version-
   await tick()
   assert.equal(second.sink.record?.state, 'instance-version-conflict')
   assert.equal(second.sink.record?.pluginId, '@scope/shared')
-  assert.match(second.sink.record?.message ?? '', /实例 local 先加载的版本/)
+  assert.match(second.sink.record?.message ?? '', /factory 属于实例 local/)
   assert.equal(second.loader.entries.length, 0)
   assert.deepEqual(second.chunkOwners, [])
   // The first source's own slot and loader are untouched.
@@ -732,7 +732,7 @@ test('a rev change owned by another source reports instance-version-conflict, no
   await tick()
   assert.equal(second.sink.record?.state, 'instance-version-conflict')
   assert.equal(second.sink.record?.pluginId, '@scope/shared')
-  assert.match(second.sink.record?.message ?? '', /实例 local 先加载的版本/)
+  assert.match(second.sink.record?.message ?? '', /factory 属于实例 local/)
 })
 
 test('a removal never drops a page-level chunk owner another source still holds', async (t) => {

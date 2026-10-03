@@ -277,16 +277,25 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   `client-plugin-loader.ts` 的 `preloadedCombos`/`preloadedIds`）显式维护：成功后才标记；普通失败删除后
   可重试；DOM script 超时因移除元素不能可靠取消，先留临时 tombstone 并观察
   `BundleLoadTimeoutError.bundleOutcome`（迟到 load 收敛为成功、迟到 error 才删除并允许重试，绝不并发
-  执行同 id 第二份 bundle）；同 id 异 rev 先到先得并上报 `restart-required`。**跨实例 rev 漂移**：同 id
+  执行同 id 第二份 bundle）；同 id 异 rev 保留原认领者，两条路径都禁止把旧 factory 作为新 rev 的行继续 materialize，但后果按认领者分档：**跨实例**认领 → 阻止该实例 boot（别的实例的实现不得回答本实例的行）；**同实例**（重建）→ 把该行从本次 boot **丢弃**（实例照常启动，诊断 `restart-required`）——live 路径保留旧 entry，fresh boot 没有可保留的 entry，丢行后实例仍然可用。判定走 `scanClientPluginRowConflicts` **预扫**：在任何 bundle 执行或新认领发布**之前**判定（被阻止的 boot 不执行其余行、不留认领记录；预扫之后新出现的认领仍由内核裁决兜底）。**跨实例 rev 漂移**：同 id
   异 rev 且首次认领者**是另一个实例**（如本地与 gateway 实例挂载同一插件）→ 改报
-  `instance-version-conflict`（呈现为中性信息态，design 13）——任何重启都无法切换（页级
+  `instance-version-conflict`（呈现为问题态，阻止冲突实例 boot）——任何重启都无法切换（页级
   first-load-wins 会原样重演）。rev 是**文件元数据事实**（`artifactRevision` = sha1(mtimeMs, ctimeMs,
   size)）而非版本或内容事实：实测两实例上同一个已发布插件的被服务 bundle 仅差 11 字节（各自
   `sourceMappingURL` 里嵌的 rev 自引用），但 rev 差异本身连「内容不同」都不证明——两份独立安装（甚至内容
   相同）通常 rev 不同（ctime；仅当两侧是同一底层文件的硬链接时才相同）。故诊断只陈述这个可观测差异，**不断言**插件版本不同（口径覆盖设置页的
-  状态标题、详情文案与指引：info 态卡片只渲染标题）；同实例异 rev
-  （重建的插件）保持 `restart-required`。跨实例**同 rev** 依旧复用、无诊断（模块表页级共享，同 id 同
-  rev = 同一 factory）。
+  状态标题、详情文案与指引：问题态卡片显示冲突详情）；同实例异 rev
+  （重建的插件）保持 `restart-required`。**同实例重建的代价（登记）**：同 id 新 boot 先按世代纪律退役旧
+  holder 再取图，被丢弃的行在本次 boot 缺席（旧视图已退役、新 boot 不带该插件）；依赖它的 `external` 边会被
+  页级模块表里的**上一版 factory** 满足（内核只在认领主自身加载失败时回滚认领，live remove 也保留 factory），
+  只有该 factory 确实缺席时才落既有 apply 降级——即依赖边可能静默绑定上一版实现（登记代价）。页内收口是整页
+  重载/重启应用：连接页指引说明该收口，frame 的 fatal 覆盖层（仅跨实例阻止时出现）与 stall 横幅提供重载控件。
+  跨实例**同 rev**
+  依旧复用、无诊断（模块表页级共享，同 id 同 rev 仍按现有模块表契约复用；元数据 rev 不构成内容一致的证明）。
+  **Rejected alternatives（冲突启动）**：仅提示后继续 materialize 会把旧实现用于新行；覆盖页级 factory 会影响先
+  加载实例及其依赖；**跨来源**若也走"丢行"则在被别的实例认领时静默少一个插件、且保留的是他人的实现，等于用
+  对方的 factory 回答本实例——故只有同实例重建丢行，跨来源仍阻止整实例 boot 并保留首个实例。独立执行环境属于
+  单独架构改造。
 - **不可满足的 external 依赖判定（boot 期）**：`findUnsatisfiableExternalDependencies` 对被保留行的
   `external` 请求判「**任何时刻都拿不到**」= 目标 id 在覆盖集内，且既无首屏 factory，也不是内核收编 id
   （`dsh-client-modules` / `dsh-client-ui-renderer`——`boot.ts` 在任何 extra bundle 执行前注册；两端锁步测试
@@ -332,7 +341,7 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   `ok`，未注入 `not-injected`，图通道失败 `graph-unreachable`，bundle 加载失败 `bundle-load-failed`，
   同 id 异 rev `restart-required`（同实例重建），跨实例漂移 `instance-version-conflict`（异 owner 实例，见
   §3.5——只陈述 rev/文件元数据差异，不断言版本不同）。**呈现面**：来源标题**不显示任何插件诊断标记**（侧边栏 `!` 徽标
-  整体移除，含异常态与信息态）；状态、插件 id 与原因只显示在连接设置页与**每实例的插件管理弹窗**（设计 13
+  整体移除，含各非 ok 状态）；状态、插件 id 与原因只显示在连接设置页与**每实例的插件管理弹窗**（设计 13
   §6）——官方 dsh「插件」settings section 是 host inventory，不承载 chamber 自有诊断。
   诊断发布还必须并命中 boot 的 current generation 与未取消阈值；同 id
   retry 已开始后，旧 graph Promise 的迟到成功/失败都没有发布权。
@@ -341,8 +350,11 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   最近一次 shell boot），可能**不经重 boot 自愈**（gateway 受管 dsh 在 boot 记下
   404 之后才带桌面同步的 chamber host 包受控重启；ssh 目标宿主包种子落地；传输
   恰好未就绪）；`bundle-load-failed`/`restart-required`/
-  `instance-version-conflict` 是 **boot 事实**——只有重 boot 才能改变合并结果，
-  任何通道复检不得触碰。连接设置页与插件弹窗故对通道类诊断执行**复检**：
+  `instance-version-conflict` 是 **boot 事实**——任何通道复检不得触碰；其中
+  `restart-required`/`instance-version-conflict` 由页级 first-load-wins 认领记录决定，
+  只要认领记录仍在（生产只在认领者自身加载失败回滚时清除），重 boot 就复现同一判定，
+  收口是重载页面/重启应用（§3.7）。
+  连接设置页与插件弹窗故对通道类诊断执行**复检**：
   连接页激活时与弹窗打开/刷新时，按 boot 拉图同一 wire（`/api/i/<id>/api/
   clientGraph/graph`、同一 envelope 与状态分类、同一消息文案）重新判定并写回
   chamberBridge（shared 面单源：`plugin-graph-recheck.ts`）。**写回纪律（防循环
@@ -653,7 +665,7 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
 - **vendor 侧根治（开放项，登记不修）**：pin 的 `dsh-client-modules` 用
   `artifactRevision` 对 bundle 文件求 `sha1(mtimeMs, ctimeMs, size)`（并写回被服务 bundle 的
   sourceMappingURL）⇒ ①同内容跨宿主/跨安装 rev 通常不同（ctime；硬链接例外），页级 first-load-wins 对同 id 永久报
-  `instance-version-conflict`（chamber 只能中性化文案）；②重建/替换才改 rev，需要一轮有界恢复。
+  `instance-version-conflict`（chamber 阻止冲突 boot，不能证明这些构建不兼容）；②重建/替换才改 rev，需要一轮有界恢复。
   改为对 bundle **字节**求内容哈希即可让 ① 整类消失（§3.5，提案 §10）；vendor 只读，chamber 侧只能保留恢复轮。
 - **恢复轮前提（原「每进程 nonce」模型作废）**：运行树已核 rev = metadata hash（非 per-process nonce、非内容哈希），
   「跨重启 URL 失效」前提不成立；§3.5 的恢复轮只覆盖「文件被改写与取图的竞态」。
@@ -677,7 +689,7 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
 - **重载臂退役（原「保留」裁决的反转）**：`PluginDialog.restartSourceService`（ssh 服务重启）、
   `PluginDialog.doRestartNow`（seed restart-to-apply）、受管 gateway 的 start/restart 腿**不再 arm 任何页面级
   收尾**（`restart-window-reload.ts` 已删，design 18 §3.6 项 8）。§3.7 接管 id 集合变化；**但 rev 变化/重打包的
-  已加载行仍只能靠新页面**（模块表 first-load-wins，内核报 `rev-conflict('restart')` 并复用旧 factory），该路径
+  已加载行仍只能靠新页面**（模块表 first-load-wins，内核报 `rev-conflict('restart')`，boot 丢弃该行、不把旧 factory 当作新 rev 的行 materialize），该路径
   现在只上报 `restart-required`、需要用户手动重载页面/重启应用，不再有自动收尾（STATUS 登记）；无 hmr 的宿主
   插件管理器报 `restart-required` 时同理。
 - **Windows**：支持推进见 design 23（win32 验证随其 §7 矩阵实机门禁，见 STATUS）。

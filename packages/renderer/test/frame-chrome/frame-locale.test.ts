@@ -120,6 +120,9 @@ test('every audited frame string is dictionary-owned (no inline literals remain)
     'use-view-scheduler.ts': readCode('../../src/app-hooks/use-view-scheduler.ts'),
     'use-bridge-subscriptions.ts': readCode('../../src/app-hooks/use-bridge-subscriptions.ts'),
     'use-notifications.ts': readCode('../../src/app-hooks/use-notifications.ts'),
+    // 共享 chrome（重载动作）：不持文案（label 由 frame 传入），但仍按 frame 按钮审计
+    //（官方 Button 原子、无内联字面量）。
+    'ReloadPageButton.tsx': readCode('../../src/components/ReloadPageButton.tsx'),
   }
   const retired = [
     '界面发生错误', '实例启动失败', '无法连接控制面', '切换到其他服务器', '正在加载',
@@ -137,7 +140,7 @@ test('every audited frame string is dictionary-owned (no inline literals remain)
     }
   }
   // …and the sites use the dictionary instead (each audited site, explicitly).
-  const app = frameSources['App.tsx'] + '\n' + frameSources['host/servers.ts'] + '\n' + frameSources['use-view-scheduler.ts'] + '\n' + frameSources['use-bridge-subscriptions.ts'] + '\n' + frameSources['use-notifications.ts']
+  const app = frameSources['App.tsx'] + '\n' + frameSources['host/servers.ts'] + '\n' + frameSources['use-view-scheduler.ts'] + '\n' + frameSources['use-bridge-subscriptions.ts'] + '\n' + frameSources['use-notifications.ts'] + '\n' + frameSources['ReloadPageButton.tsx']
   for (const call of [
     "t('fatal.boot.title')", "t('fatal.controlPlane.title')", "t('action.retry')",
     "t('action.switchServer')", "t('fatal.entries.title')", "t('source.local')",
@@ -199,6 +202,17 @@ test('the failure chrome rides the design system (T15: official Button, --dsw-* 
   assert.ok(!/className="btn/.test(app), 'the chamber-invented .btn chrome must be gone')
   assert.ok(!/<button/.test(app), 'every frame button must be the official atom')
   assert.ok(app.includes('variant="primary"') && app.includes('variant="outline"'))
+  // The deterministic boot-failure escape (a rev conflict re-runs on every retry) is the
+  // shared reload chrome on BOTH surfaces whose copy names that closure — asserted by
+  // SURFACE, not by a bare count (two copies in one surface would satisfy a count).
+  const reloadMarker = "<ReloadPageButton label={t('sessionStall.reload')} />"
+  const bootOverlayAt = app.indexOf('fatal fatal-overlay')
+  const controlPlaneOverlayAt = app.indexOf('fatal fatal-overlay', bootOverlayAt + 1)
+  assert.ok(bootOverlayAt > 0 && controlPlaneOverlayAt > bootOverlayAt, 'both fatal overlays must be present')
+  assert.equal(app.slice(0, bootOverlayAt).split(reloadMarker).length - 1, 1,
+    'the session-stall banner must offer the reload action')
+  assert.equal(app.slice(bootOverlayAt, controlPlaneOverlayAt).split(reloadMarker).length - 1, 1,
+    'the boot-failure overlay must offer the reload action')
   // The failed-plugin list the official report shows (ids, one per row).
   assert.ok(app.includes('activeShellFailedEntries.map'))
   assert.ok(app.includes('className="fatal-entry"'))
