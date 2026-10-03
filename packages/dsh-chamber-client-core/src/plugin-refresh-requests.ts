@@ -15,6 +15,12 @@
  * here (the per-source `pluginDiagnostic` fact is the outcome surface).
  */
 import { createChannel } from './aggregate-store.ts'
+import { assertSingletonModule } from './singleton.ts'
+
+// Page-level request seam, imported by the renderer shell/hook and the settings panel:
+// same singleton discipline as aggregate-store (a duplicated module would silently split
+// the request bus).
+assertSingletonModule('plugin-refresh-requests')
 
 /** App-layer handler for one source's client-plugin graph resync request. */
 type ClientGraphResyncListener = (sourceId: string) => void
@@ -22,6 +28,10 @@ type ClientGraphResyncListener = (sourceId: string) => void
 const clientGraphResyncChannel = createChannel<Parameters<ClientGraphResyncListener>>(
   () => '[dsh-chamber] client-graph resync request listener threw',
 )
+
+/** Live listener count, so a request that can never be answered is loud (the wiring
+ *  source-lock is the compile-time guard; this is the runtime one). */
+let listenerCount = 0
 
 /**
  * Ask the App layer for one client-plugin graph resync of `sourceId`: the mounted
@@ -31,6 +41,9 @@ const clientGraphResyncChannel = createChannel<Parameters<ClientGraphResyncListe
  * @param sourceId - proxy source id ('local' | '<kind>-<id>').
  */
 export function requestClientGraphResync(sourceId: string): void {
+  if (listenerCount === 0) {
+    console.warn(`[dsh-chamber] client-graph resync for ${sourceId} has no listener (App relay not mounted?)`)
+  }
   clientGraphResyncChannel.emit(sourceId)
 }
 
@@ -39,5 +52,10 @@ export function requestClientGraphResync(sourceId: string): void {
  * @param listener - called with the source id whose graph should be re-synced.
  */
 export function onClientGraphResyncRequest(listener: ClientGraphResyncListener): () => void {
-  return clientGraphResyncChannel.subscribe(listener)
+  listenerCount += 1
+  const unsubscribe = clientGraphResyncChannel.subscribe(listener)
+  return () => {
+    listenerCount -= 1
+    unsubscribe()
+  }
 }
