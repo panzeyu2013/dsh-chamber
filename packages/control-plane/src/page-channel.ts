@@ -17,8 +17,8 @@
  *
  * 流控：按 UTF-8 字节记账。本模块发送 item 时累加未确认字节，超过
  * PAGE_CHANNEL_CREDIT_WINDOW_BYTES 就 pause 该订阅的上游响应流，收到 ack 且未确认
- * 字节回到窗口内再 resume——慢实例只拖慢自己，绝不队头阻塞别的订阅。**item 永不
- * 丢弃**：pause 只是停读上游，不丢帧。客户端 ack 的口径是 item 的 `data` 字节数
+ * 字节回到窗口内再 resume——慢实例只拖慢自己，绝不队头阻塞别的订阅。**SSE item 永不
+ * 丢弃**：pause 只是停读上游，不丢帧；原生 health 超窗时仅保留最新完整快照。客户端 ack 的口径是 item 的 `data` 字节数
  * （dsh-chamber-client-core/src/page-channel.ts 的 noteConsumed），所以本模块也按
  * `data` 的 UTF-8 字节数记账，两侧必须同一口径。
  *
@@ -118,6 +118,8 @@ export interface PageChannelDeps {
   httpRequest?: HttpRequestFactory
   /** 测试注入面：信用窗口字节数（默认 PAGE_CHANNEL_CREDIT_WINDOW_BYTES），生产中不传。 */
   creditWindowBytes?: number
+  /** 测试注入面：socket 写缓冲安全上限（默认一个最大帧 + 信用窗口，容纳最大帧的 UTF-8 字节数），生产中不传。 */
+  socketBufferedLimitBytes?: number
   /** 测试注入面：上游响应头等待上限（默认代理既有的 UPSTREAM_TIMEOUT_MS）。
    *  订阅是长连接，只在上游「接受请求但迟迟不给响应头」时才需要判定失败。 */
   upstreamHeadersTimeoutMs?: number
@@ -243,6 +245,8 @@ interface SubscriptionState {
   unacked: number
   /** 上游响应流是否已因超过信用窗口而暂停。 */
   paused: boolean
+  /** Full health snapshots supersede each other while the consumer has no credit. */
+  pendingHealth: PageChannelHealthSnapshot | null
   /** 定址到的传输注册 id（health 为 null）；传输被替换时据此挑选要失败的订阅。 */
   connectionId: string | null
   response: IncomingMessage | null
@@ -393,6 +397,13 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
     warn: (message: string): void => { try { deps.logger.warn(message) } catch { /* 日志绝不打断流 */ } },
   }
   const creditWindowBytes = deps.creditWindowBytes ?? PAGE_CHANNEL_CREDIT_WINDOW_BYTES
+  // Socket-level bound: one maximum-sized frame (4× the UTF-16 char cap ≥ its UTF-8
+  // bytes) plus ONE credit window. The credit windows are per SUBSCRIPTION, so a
+  // pathological multi-subscription backlog can retire a socket that each
+  // subscription alone would have been allowed to fill — the client's resubscribe
+  // ladder then rebuilds from fresh state, which is the documented recovery for an
+  // abnormal connection (design 26 §D3: a recycling boundary, not a quota).
+  const socketBufferedLimitBytes = deps.socketBufferedLimitBytes ?? PAGE_CHANNEL_MAX_FRAME_CHARS * 4 + creditWindowBytes
   const headersTimeoutMs = deps.upstreamHeadersTimeoutMs ?? UPSTREAM_TIMEOUT_MS
   const wsPingIntervalMs = deps.wsPingIntervalMs ?? WS_PING_INTERVAL_MS
   const wsPingMissesBeforeTeardown = deps.wsPingMissesBeforeTeardown ?? WS_PING_MISSES_BEFORE_TEARDOWN
@@ -403,14 +414,30 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
   // 的 item 上限是另一个量级，绝不能拿它当入站边界。
   const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: PAGE_CHANNEL_MAX_CLIENT_FRAME_CHARS })
 
+  /** 回收一条不再可信的 socket（写缓冲越界 / 发送失败）：销毁全部订阅与上游并 terminate。
+   *  ws 的发送器会把同一个错误交给**每个**排队中的回调（callCallbacks），所以这里必须幂等
+   *  ——一次 teardown、一行日志，无论当时有多少帧在途。日志带触发时的现场数据。 */
+  function retireSocket(state: PageSocketState, reason: string): void {
+    if (state.closed) return
+    logger.warn(`page-channel: ${reason} (buffered=${String(state.ws.bufferedAmount ?? 0)}B, limit=${String(socketBufferedLimitBytes)}B, subscriptions=${String(state.subscriptions.size)}); retiring page socket`)
+    teardownSocket(state)
+    try { state.ws.terminate() } catch { /* already closed */ }
+  }
+
   /** 发送一段已序列化的文本；返回是否真的交给了传输层（socket 已消失时绝不让异常冒泡）。 */
   function sendText(state: PageSocketState, text: string): boolean {
     if (state.closed) return false
     try {
-      state.ws.send(text)
-      return true
+      if ((state.ws.bufferedAmount ?? 0) + Buffer.byteLength(text, 'utf8') > socketBufferedLimitBytes) {
+        retireSocket(state, 'socket write buffer exceeded its safety bound')
+        return false
+      }
+      state.ws.send(text, error => {
+        if (error !== undefined && error !== null) retireSocket(state, `send failed: ${errorMessage(error)}`)
+      })
+      return !state.closed
     } catch (error) {
-      logger.warn(`page-channel: send failed: ${errorMessage(error)}`)
+      retireSocket(state, `send failed: ${errorMessage(error)}`)
       return false
     }
   }
@@ -436,6 +463,7 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
   function teardownSubscription(sub: SubscriptionState): void {
     if (sub.closed) return
     sub.closed = true
+    sub.pendingHealth = null
     sub.socketState.subscriptions.delete(sub.id)
     clearHeadersTimer(sub)
     const unsubscribe = sub.producerUnsubscribe
@@ -482,15 +510,15 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
       return
     }
     // 没交给传输层就不记账：客户端根本收不到这条，也就永远不会 ack；记账会让该订阅一直停在
-    // 「超窗暂停」上直到 socket 关闭（模块头的「item 永不丢弃」只对成功发送成立）。
+    // 「超窗暂停」上直到 socket 关闭（模块头的「SSE item 永不丢弃」只对成功发送成立）。
     if (!sendText(sub.socketState, text)) return
     sub.unacked += pageChannelByteLength(data)
     if (!sub.paused && sub.unacked > creditWindowBytes) {
       sub.paused = true
-      // 日志要如实：health 是控制面原生生产者，没有上游可停读，窗口对它只是记账；
+      // health has no pausable response: subsequent full snapshots are coalesced instead.
       // 上游订阅也可能还没拿到响应（有头无体窗口），那时 stop reading 是空操作。
       const pauseScope = sub.family === 'health'
-        ? 'native producer, accounting only'
+        ? 'native producer, latest snapshot retained'
         : sub.response === null ? 'upstream response not attached yet' : 'upstream reader paused'
       logger.log('page-channel: subscription ' + sub.id + ' credit window reached (unacked='
         + String(sub.unacked) + ', ' + pauseScope + ')')
@@ -503,6 +531,15 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
     }
   }
 
+  function emitHealthSnapshot(sub: SubscriptionState, snapshot: PageChannelHealthSnapshot): void {
+    if (sub.closed) return
+    if (sub.paused) {
+      sub.pendingHealth = { ...snapshot }
+      return
+    }
+    emitItem(sub, 'message', healthPayload(snapshot))
+  }
+
   /** host 健康：控制面原生生产者，不涉及上游连接；接上生产者即 ready。 */
   function startHealthProducer(sub: SubscriptionState): void {
     // 生产者可能在 subscribeHealthEvents 期间**同步**回调（fan-out 实现没有义务异步）。
@@ -513,7 +550,7 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
     let accepting = false
     const deliver = (snapshot: PageChannelHealthSnapshot): void => {
       try {
-        emitItem(sub, 'message', healthPayload(snapshot))
+        emitHealthSnapshot(sub, snapshot)
       } catch (error) {
         failSubscription(sub, 'upstream_failed', `health producer failed: ${errorMessage(error)}`)
       }
@@ -772,6 +809,7 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
       closed: false,
       unacked: 0,
       paused: false,
+      pendingHealth: null,
       connectionId: null,
       response: null,
       headersTimer: null,
@@ -817,6 +855,9 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
     if (sub.paused && sub.unacked <= creditWindowBytes) {
       sub.paused = false
       logger.log('page-channel: subscription ' + sub.id + ' resumed after ack (unacked=' + String(sub.unacked) + ')')
+      const pendingHealth = sub.pendingHealth
+      sub.pendingHealth = null
+      if (pendingHealth !== null) emitHealthSnapshot(sub, pendingHealth)
       try {
         sub.response?.resume()
       } catch { /* 上游已经结束 */ }

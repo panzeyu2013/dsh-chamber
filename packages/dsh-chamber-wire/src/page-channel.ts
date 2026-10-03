@@ -26,8 +26,11 @@
  * that subscription's upstream reader while unacked bytes exceed
  * {@link PAGE_CHANNEL_CREDIT_WINDOW_BYTES} and resumes after the next ack. That
  * is the same property HTTP/2 gets from per-stream windows and SSH from channel
- * windows. Frame types otherwise mirror the Remote mux vocabulary (design 05) so
- * the codebase keeps ONE stream protocol shape rather than two.
+ * windows. The control-plane-native `health` family has no upstream to pause: it
+ * coalesces to the latest full snapshot while the window is exhausted and sends
+ * that on the next ack (a snapshot supersedes its predecessors by construction).
+ * Frame types otherwise mirror the Remote mux vocabulary (design 05) so the
+ * codebase keeps ONE stream protocol shape rather than two.
  */
 
 /** WebSocket path on the control-plane origin (same-origin with the page). */

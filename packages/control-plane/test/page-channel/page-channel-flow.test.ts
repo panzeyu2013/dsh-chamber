@@ -3,10 +3,12 @@
  *
  * Credit is what keeps one slow instance from head-of-line-blocking every other
  * subscription on the one page socket: unacked item bytes over the window pause
- * that subscription's upstream reader, an ack resumes it, and NOTHING is
- * dropped while paused. The upstream fake records pause()/resume() so the test
- * observes the exact mechanism rather than a timing coincidence; a small
- * injected window (and the frozen frame cap) keeps the case deterministic.
+ * that subscription's upstream reader, an ack resumes it, and no SSE item is
+ * dropped while paused (the native `health` family has no upstream to pause and
+ * coalesces to its latest FULL snapshot instead — the health cases below). The
+ * upstream fake records pause()/resume() so the test observes the exact
+ * mechanism rather than a timing coincidence; a small injected window (and the
+ * frozen frame cap) keeps the case deterministic.
  *
  * Also locked here: the upstream request discipline (host / rewritten origin /
  * accept: text/event-stream / NO accept-encoding / transport headers last /
@@ -34,6 +36,133 @@ import { clearAuthCookie, registerAuthCookie } from '../../src/browser-auth-cook
 import { waitFor } from '../support/utils.ts'
 
 const quietLogger = { log: () => {}, warn: () => {}, error: () => {} }
+
+class TestPageSocket extends EventEmitter {
+  bufferedAmount = 0
+  terminated = false
+  failure: 'throw' | 'callback' | 'deferred' | undefined
+  deferredFailures: Array<() => void> = []
+  frames: Array<{ type: string; id: string; data?: string }> = []
+  send(text: string, callback?: (error?: Error) => void): void {
+    if (this.failure === 'throw') throw new Error('write failed')
+    if (this.failure === 'callback') { callback?.(new Error('write failed')); return }
+    if (this.failure === 'deferred') this.deferredFailures.push(() => callback?.(new Error('late write failed')))
+    this.frames.push(JSON.parse(text))
+  }
+  ping(): void {}
+  terminate(): void { this.terminated = true; this.emit('close', 1006, Buffer.alloc(0)) }
+  client(frame: unknown): void { this.emit('message', Buffer.from(JSON.stringify(frame)), false) }
+  items(id: string): Array<{ type: string; id: string; data?: string }> {
+    return this.frames.filter(frame => frame.type === 'item' && frame.id === id)
+  }
+}
+
+test('health credit retains only the latest snapshot and flushes it after sufficient ACK', (t) => {
+  let deliver!: Parameters<PageChannelDeps['subscribeHealthEvents']>[0]
+  const channel = createPageChannel({
+    logger: quietLogger, creditWindowBytes: 1, resolveTargetFor: () => null,
+    subscribeHealthEvents(listener) { deliver = listener; return () => {} },
+  })
+  t.after(() => channel.closeAll())
+  const socket = new TestPageSocket()
+  channel.attachSocket(socket as never)
+  socket.client({ type: 'subscribe', id: 'health', family: 'health' })
+  deliver({ status: 'starting', port: null, error: null })
+  for (let port = 1; port <= 100; port++) deliver({ status: 'ready', port, error: null })
+  assert.equal(socket.items('health').length, 1, 'no ACK means no further writes')
+  const latest = { status: 'degraded', port: 17510, error: 'latest' }
+  deliver(latest)
+  latest.error = 'producer later mutated this object'
+  const firstBytes = Buffer.byteLength(socket.items('health')[0].data!)
+  socket.client({ type: 'ack', id: 'health', bytes: firstBytes - 2 })
+  assert.equal(socket.items('health').length, 1, 'partial ACK leaves the producer paused')
+  socket.client({ type: 'ack', id: 'health', bytes: 2 })
+  assert.equal(socket.items('health').length, 2)
+  assert.deepEqual(JSON.parse(socket.items('health')[1].data!), {
+    ok: true, dsh: { status: 'degraded', port: 17510, error: 'latest' },
+  })
+  socket.client({ type: 'ack', id: 'health', bytes: 9999 })
+  assert.equal(socket.items('health').length, 2, 'an empty pending slot never replays stale state')
+  deliver({ status: 'stopped', port: null, error: null })
+  assert.equal(socket.items('health').length, 3, 'fresh updates resume normally')
+})
+
+test('health credit is subscription-local; replacement and unsubscribe discard retained snapshots', (t) => {
+  const producers = new Set<Parameters<PageChannelDeps['subscribeHealthEvents']>[0]>()
+  const channel = createPageChannel({
+    logger: quietLogger, creditWindowBytes: 1, resolveTargetFor: () => null,
+    subscribeHealthEvents(listener) { producers.add(listener); return () => { producers.delete(listener) } },
+  })
+  t.after(() => channel.closeAll())
+  const socket = new TestPageSocket()
+  channel.attachSocket(socket as never)
+  for (const id of ['slow', 'fast']) socket.client({ type: 'subscribe', id, family: 'health' })
+  const broadcast = (status: string): void => {
+    for (const listener of producers) listener({ status, port: null, error: null })
+  }
+  broadcast('starting')
+  broadcast('ready')
+  socket.client({ type: 'ack', id: 'fast', bytes: 9999 })
+  assert.equal(socket.items('slow').length, 1)
+  assert.equal(socket.items('fast').length, 2, 'slow subscriber cannot stall another')
+  const staleListener = [...producers][0]
+  socket.client({ type: 'subscribe', id: 'slow', family: 'health' })
+  socket.client({ type: 'ack', id: 'slow', bytes: 9999 })
+  staleListener({ status: 'old incarnation', port: null, error: null })
+  assert.equal(socket.items('slow').length, 1, 'no pending state or callback survives replacement')
+  broadcast('stopped')
+  socket.client({ type: 'unsubscribe', id: 'slow' })
+  socket.client({ type: 'ack', id: 'slow', bytes: 9999 })
+  assert.equal(producers.size, 1)
+  channel.closeAll()
+  assert.equal(producers.size, 0)
+  assert.deepEqual(channel.stats(), { sockets: 0, subscriptions: 0, upstreams: 0 })
+})
+
+for (const failure of ['buffer', 'throw', 'callback', 'deferred'] as const) {
+  test(`page socket ${failure} failure retires all subscriptions and native producers`, (t) => {
+    let producers = 0
+    const channel = createPageChannel({
+      logger: quietLogger, socketBufferedLimitBytes: 1024, resolveTargetFor: () => null,
+      subscribeHealthEvents() { producers++; return () => { producers-- } },
+    })
+    t.after(() => channel.closeAll())
+    const socket = new TestPageSocket()
+    channel.attachSocket(socket as never)
+    socket.client({ type: 'subscribe', id: 'first', family: 'health' })
+    if (failure === 'buffer') socket.bufferedAmount = 1024
+    else socket.failure = failure
+    socket.client({ type: 'subscribe', id: 'second', family: 'health' })
+    if (failure === 'deferred') {
+      assert.equal(producers, 2, 'the transport failure arrives after subscription setup')
+      for (const fail of socket.deferredFailures) fail()
+    }
+    assert.equal(socket.terminated, true)
+    assert.equal(producers, 0)
+    assert.deepEqual(channel.stats(), { sockets: 0, subscriptions: 0, upstreams: 0 })
+  })
+}
+
+test('a dying page socket retires and logs once however many send callbacks report the failure', (t) => {
+  // ws hands the SAME error to every queued send callback (callCallbacks), so one
+  // transport death must not re-log or re-tear-down per in-flight frame.
+  const warnings: string[] = []
+  const channel = createPageChannel({
+    logger: { ...quietLogger, warn: message => { warnings.push(String(message)) } },
+    socketBufferedLimitBytes: 1024, resolveTargetFor: () => null,
+    subscribeHealthEvents() { return () => {} },
+  })
+  t.after(() => channel.closeAll())
+  const socket = new TestPageSocket()
+  channel.attachSocket(socket as never)
+  socket.failure = 'deferred'
+  for (const id of ['first', 'second', 'third']) socket.client({ type: 'subscribe', id, family: 'health' })
+  assert.equal(socket.deferredFailures.length, 3, 'every queued send reports its own transport failure')
+  for (const fail of socket.deferredFailures) fail()
+  assert.equal(socket.terminated, true)
+  assert.equal(warnings.filter(message => message.includes('retiring page socket')).length, 1)
+  assert.deepEqual(channel.stats(), { sockets: 0, subscriptions: 0, upstreams: 0 })
+})
 
 interface PageClient {
   ws: WebSocket
