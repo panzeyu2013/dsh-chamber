@@ -13,6 +13,7 @@ const read = (relative: string): string => readFileSync(new URL(relative, import
 
 const pmIndex = read('../../src/client/index.ts')
 const shell = read('../../../../packages/renderer/src/shell.ts')
+const control = read('../../../../packages/renderer/src/plugin-refresh-control.ts')
 const hook = read('../../../../packages/renderer/src/app-hooks/use-bridge-subscriptions.ts')
 const panel = read('../../../../packages/dsh-chamber-client-ui-settings-bridge/src/client/SettingsShell.tsx')
 
@@ -29,11 +30,15 @@ test('the shell provides the control and forwards both members without dropping 
   assert.match(shell, /ctx\.provide\('chamberPluginRefresh', \{/)
   assert.match(shell, /requestRefresh: \(startedAt: number\) => \{ pluginRefresh\.requestRefresh\(startedAt\) \}/)
   assert.match(shell, /actionStarted: \(\) => \{ pluginRefresh\.actionStarted\(\) \}/)
-  assert.match(shell, /shouldReloadForPluginRefresh\(documentReloadBudgetStorage\(\), Date\.now\(\)\)/)
+  assert.match(control, /shouldReloadForPluginRefresh\(storage\(\), now\(\)\)/)
   // No frame-freshness shortcut may come back: every settle must re-subscribe (a frame
   // that arrived during the action does not prove the final graph arrived).
   assert.doesNotMatch(shell, /lastFrameAt/)
+  assert.doesNotMatch(control, /lastFrameAt/)
   assert.match(shell, /entries\.get\(instanceId\)\?\.liveSync\?\.resync\(\) \?\? false/)
+  // The per-boot control is disposed with its ctx (the window/subscription must not
+  // outlive the boot generation it was armed for).
+  assert.match(shell, /ctx\.effect\?\.\(\(\) => \(\) => \{ pluginRefresh\.dispose\(\) \}, 'shell: plugin refresh convergence'\)/)
 })
 
 test('the renderer forwards a page-level resync request to the mounted shell', () => {

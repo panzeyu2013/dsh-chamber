@@ -235,9 +235,11 @@ export interface LiveGraphSync {
    * Re-subscribe the page-channel `pluginGraph` topic so the host re-delivers its
    * whole graph through the SAME frame pipeline (acceptFrame → pump → diffLiveRows).
    * Used after a settled plugin/bundle change so a missed frame cannot leave the
-   * settings surface stale; the channel owns the socket and its retries, so this only
-   * replaces the subscription record. No-op once disarmed or when no subscription was
-   * ever armed (a holder whose boot never answered the host graph).
+   * settings surface stale. The channel owns the socket and its retry ladder; when this
+   * is the page's last subscription, closing it closes the shared socket, and the
+   * reopened subscription reconnects (the host replays the whole graph per connection).
+   * No-op once disarmed or when no subscription was ever armed (a holder whose boot never
+   * answered the host graph).
    * @returns true when a subscription record was reopened.
    */
   resync(): boolean
@@ -367,7 +369,10 @@ export function startLiveGraphSync(deps: LiveGraphSyncDeps): LiveGraphSync {
     // retire path) cleared or replaced it, the fact must be re-published.
     if (lastWrite !== undefined && sameFact(lastWrite, record)
       && currentRecord !== undefined && sameFact(currentRecord, record)) return
-    // Write discipline: never clobber a fact another plugin id owns.
+    // Write discipline: never clobber a fact another plugin id owns. Consequence for the
+    // plugin-refresh closure (design 09 §3.7): while a foreign writer keeps the slot, this
+    // pass's restart-required is deferred; the dedupe re-checks the slot, so the fresh
+    // subscription's replay re-publishes it once the slot clears.
     if (currentRecord !== undefined
       && currentRecord.pluginId !== record.pluginId
       && !(lastWrite !== undefined && sameRecord(currentRecord, lastWrite))) return

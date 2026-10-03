@@ -42,9 +42,13 @@ import { readSafeModeFlag, SAFE_MODE_GLOBAL } from './safe-mode.ts'
 import { BundleLoadTimeoutError } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
 import { chamberBridge, describeThrown, type PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-core'
 // 插件刷新收敛（design 09 §3.7 / design 15 §6）：重订阅式的 client 图重同步 +
-// 有界 restart 事实窗口；预算与流恢复的 document-reload 域独立。
-import { createPluginRefreshConvergence } from './plugin-refresh-convergence.ts'
-import { documentReloadBudgetStorage, shouldReloadForPluginRefresh } from './document-reload-budget.ts'
+// 有界 restart 事实窗口；预算与流恢复的 document-reload 域独立。壳只做接线，
+// reload 闸门与 per-boot 栅栏在 plugin-refresh-control.ts（可单测）。
+import {
+  createPluginRefreshControl as createPluginRefreshControlFromDeps,
+  createPluginRefreshReloadGate,
+  type PluginRefreshControl,
+} from './plugin-refresh-control.ts'
 // The page's ONE long connection (design 26). The shell binds its own instance identity
 // here; live-graph holds no stream URL and no reconnect ladder of its own.
 import { subscribePageChannel } from '@dsh-chamber/dsh-chamber-client-core/page-channel'
@@ -225,29 +229,21 @@ export type { ShellDegradedFact } from './boot-gap.ts'
 let bootChain: Promise<void> = Promise.resolve()
 
 /**
- * One automatic plugin-refresh reload at a time. The quota lives in the plugin-refresh
- * domain of document-reload-budget.ts (its OWN key/window), so a plugin reload can never
- * consume the stream-recovery document tier; storage failure fails closed.
+ * One automatic plugin-refresh reload at a time, bounded by the plugin-refresh domain of
+ * document-reload-budget.ts (its OWN key/window, so a plugin reload can never consume the
+ * stream-recovery document tier; storage failure fails closed). Single-flight is a
+ * page-wide fact, so the gate is a module singleton, not a per-boot one.
  */
-let pluginRefreshReloadInFlight = false
+const pluginRefreshReloadGate = createPluginRefreshReloadGate({
+  reload: () => {
+    if (typeof window === 'undefined') throw new Error('plugin-refresh reload: no window')
+    window.location.reload()
+  },
+})
 
 /** Close a settled plugin/bundle change whose page-level conflict only a reload can end. */
 function requestPluginRefreshReload(instanceId: string): boolean {
-  if (pluginRefreshReloadInFlight || typeof window === 'undefined') return false
-  if (!shouldReloadForPluginRefresh(documentReloadBudgetStorage(), Date.now())) {
-    console.warn(`[dsh-chamber] plugin-refresh reload for ${instanceId} denied by the reload budget`)
-    return false
-  }
-  pluginRefreshReloadInFlight = true
-  try {
-    window.location.reload()
-    return true
-  } catch (error) {
-    // A blocked navigation must not leave the single-flight flag armed forever.
-    pluginRefreshReloadInFlight = false
-    console.warn(`[dsh-chamber] plugin-refresh reload for ${instanceId} failed`, error)
-    return false
-  }
+  return pluginRefreshReloadGate.request(instanceId)
 }
 
 /**
@@ -258,28 +254,24 @@ function requestPluginRefreshReload(instanceId: string): boolean {
  * (`startedAt` = when that action began, the provenance floor for the restart fact) and
  * `actionStarted()` when a new one begins: the shell re-subscribes that source's
  * client-plugin graph (unconditionally) and watches a bounded window for the page-level
- * `restart-required` fact, which the reload closure above then ends.
+ * `restart-required` fact, which the reload gate above then ends.
  * Fenced on the boot generation so a superseded boot can never act.
  */
 function createPluginRefreshControl(
   instanceId: string,
   bootGeneration: number | undefined,
-): { requestRefresh(startedAt: number): void; actionStarted(): void; dispose(): void } {
+): PluginRefreshControl {
   const isCurrentBoot = (): boolean =>
     bootGeneration === undefined || bootGenerations.get(instanceId) === bootGeneration
-  const convergence = createPluginRefreshConvergence({
+  return createPluginRefreshControlFromDeps({
+    isCurrentBoot,
     resync: () => entries.get(instanceId)?.liveSync?.resync() ?? false,
     subscribeDiagnostic: listener => chamberBridge.onPluginDiagnostic((sourceId, diagnostic) => {
       if (sourceId !== instanceId) return
       listener(diagnostic)
     }),
-    requestReload: () => isCurrentBoot() && requestPluginRefreshReload(instanceId),
+    requestReload: () => requestPluginRefreshReload(instanceId),
   })
-  return {
-    requestRefresh: (startedAt: number) => { if (isCurrentBoot()) convergence.notifyChange(startedAt) },
-    actionStarted: () => { if (isCurrentBoot()) convergence.notifyActionStart() },
-    dispose: () => { convergence.dispose() },
-  }
 }
 
 /** Build the per-entry Context initializer: the closure owns immutable values. */

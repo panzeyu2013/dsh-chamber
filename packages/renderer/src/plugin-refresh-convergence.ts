@@ -79,25 +79,34 @@ export function createPluginRefreshConvergence(deps: PluginRefreshConvergenceDep
       end()
       const openedAt = now()
       let closed = false
-      const handle = deps.subscribeDiagnostic((diagnostic) => {
-        if (closed) return
-        if (diagnostic?.state !== 'restart-required') return
-        // Triage, not "ignore the replay": a fact written during this action (the common
-        // case — the host frame lands before the RPC answer) is accepted; one from an
-        // earlier change is not.
-        if (diagnostic.updatedAt < startedAt) return
-        if (now() - openedAt > windowMs) return
-        // A denied reload (budget exhausted, single-flight, no window object) must not
-        // consume the window: keep observing until the deadline so a later fact can try.
-        if (!deps.requestReload()) return
-        closed = true
-        end()
-      })
+      let handle: (() => void) | undefined
+      try {
+        handle = deps.subscribeDiagnostic((diagnostic) => {
+          if (closed) return
+          if (diagnostic?.state !== 'restart-required') return
+          // Triage, not "ignore the replay": a fact written during this action (the common
+          // case — the host frame lands before the RPC answer) is accepted; one from an
+          // earlier change is not.
+          if (diagnostic.updatedAt < startedAt) return
+          if (now() - openedAt > windowMs) return
+          // A denied reload (budget exhausted, single-flight, no window object) must not
+          // consume the window: keep observing until the deadline so a later fact can try.
+          if (!deps.requestReload()) return
+          closed = true
+          end()
+        })
+      } catch (error) {
+        // A throwing subscription must not escape into the manager's settle edge. The
+        // resync below is still the lost-frame recovery, but without a subscription there
+        // is no window to watch (a deadline timer would only leak).
+        warn(`[dsh-chamber] plugin refresh: diagnostic subscription failed (${String(error)})`)
+      }
       unsubscribe = handle
       if (closed) {
-        // The replay already ended this window (the subscription replays synchronously),
-        // so the handle assigned above is the only thing left to close.
-        handle()
+        // The replay already ended this window (the subscription replays synchronously)
+        // and the reload is in flight: the ONE deliberate exception to "every settle
+        // re-subscribes" — a pending navigation makes the resync moot.
+        handle?.()
         unsubscribe = undefined
         return
       }
@@ -107,10 +116,16 @@ export function createPluginRefreshConvergence(deps: PluginRefreshConvergenceDep
       // arrived"; gating the resync on it would reproduce the original silent-stale
       // symptom (no row, no fact, no button). The cost is one subscription rebuild per
       // settled user action, which is bounded and rare.
-      if (!deps.resync()) {
+      let resynced = false
+      try {
+        resynced = deps.resync()
+      } catch (error) {
+        warn(`[dsh-chamber] plugin refresh: resync threw (${String(error)})`)
+      }
+      if (!resynced) {
         warn('[dsh-chamber] plugin refresh: no live client-plugin subscription to resync')
       }
-      timer = schedule(() => { end() }, windowMs)
+      if (handle !== undefined) timer = schedule(() => { end() }, windowMs)
     },
     notifyActionStart(): void {
       if (disposed) return

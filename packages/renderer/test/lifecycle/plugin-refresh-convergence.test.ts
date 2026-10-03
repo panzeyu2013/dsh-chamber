@@ -163,3 +163,32 @@ test('dispose ends the watch, clears the timer and ignores later facts', () => {
   h.diagnostics.emit(restart(1_500))
   assert.deepEqual(h.reloads, [])
 })
+
+test('instance-version-conflict never auto-reloads (no reload can switch the first owner)', () => {
+  const h = harness()
+  h.clock.now = 1_050
+  h.convergence.notifyChange(1_000)
+  h.diagnostics.emit({
+    state: 'instance-version-conflict', pluginId: '@scope/a', message: 'first-loaded wins', updatedAt: 1_100,
+  })
+  assert.deepEqual(h.reloads, [])
+  assert.equal(h.diagnostics.size, 1, 'the window keeps watching for a restart fact')
+  h.diagnostics.emit(restart(1_200))
+  assert.deepEqual(h.reloads, ['reload'])
+})
+
+test('a throwing diagnostic subscription warns, still resyncs and arms no window', () => {
+  const h = harness({ subscribeDiagnostic: () => { throw new Error('boom') } })
+  h.convergence.notifyChange(1_000)
+  assert.equal(h.warns.filter(message => message.includes('diagnostic subscription failed')).length, 1)
+  assert.deepEqual(h.resyncs, ['resync'], 'the lost-frame recovery still runs')
+  assert.equal(h.timers.length, 0, 'without a subscription there is no window to watch')
+})
+
+test('a throwing resync warns and still arms the window', () => {
+  const h = harness({ resync: () => { throw new Error('boom') } })
+  h.convergence.notifyChange(1_000)
+  assert.equal(h.warns.filter(message => message.includes('resync threw')).length, 1)
+  h.diagnostics.emit(restart(1_500))
+  assert.deepEqual(h.reloads, ['reload'])
+})

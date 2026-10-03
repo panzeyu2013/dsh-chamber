@@ -51,6 +51,8 @@ export const GROUPS = {
     'test/lifecycle/live-graph.test.ts',
     // 插件刷新收敛策略：结算→重订阅 + 有界 restart 窗口；订阅重放不得触发重载。
     'test/lifecycle/plugin-refresh-convergence.test.ts',
+    // 收敛的壳侧接线：reload 单飞/预算/忽略导航复位 + per-boot 栅栏与 dispose。
+    'test/lifecycle/plugin-refresh-control.test.ts',
     // 页面级多路复用通道客户端（design 26）：单 socket、订阅帧、item 分发、信用
     // 确认、断线重连后重订阅、关闭语义，以及 I-1 的静态断言与 EventSource 报警器。
     'test/lifecycle/page-channel.test.ts',
