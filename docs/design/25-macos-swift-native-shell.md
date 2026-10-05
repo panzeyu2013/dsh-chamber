@@ -1153,8 +1153,7 @@ loopback-http-test-server.ts 同款思路）**未实施——需 GUI 会话，�
 
 ### 8.5 P4 实机门禁矩阵（1–2 人周）
 
-逐项走查：打包态全链（控制面起动/本地实例预启动/连接/网关凭据重录/运行时版本管理与回退/插件同步/归档清理入口（无
-对话框）/通知点击/深链/隐藏恢复/唤醒补发/退出确认）；**键盘快捷键桥（rc.2）**：官方 `dsh-client-shortcuts` provider 在 desktop 运行时要求 `window.dshDesktop.keyboard`（缺即构造期 `Desktop keyboard bridge unavailable`）。Electron 腿由主进程 `before-input-event` 产出规范化 input（命中组合才投递、`setIgnoreMenuShortcuts`、blur/导航复位），偏好经 `ShortcutPersistence` 落 `<userData>/keybindings.json`（0600 原子写）；Swift 腿在 documentStart 注入的 `dshDesktop` 里以主文档 keydown/keyup 归一化投递，revision 由会话内适配器持有。Swift 边界（accepted，登记 deviations S-54）：不能 `preventDefault`（页面同样收到该键）、无子 frame/webview 与原生菜单源、偏好仅会话内存、`closeWindow` loud reject（Cmd+W 由原生菜单承担）。
+逐项走查：打包态全链（控制面起动/本地实例预启动/连接/网关凭据重录/运行时版本管理与回退/插件同步/归档管理器入口/通知点击/深链/隐藏恢复/唤醒补发/退出确认）；**键盘快捷键桥（rc.2）**：官方 `dsh-client-shortcuts` provider 在 desktop 运行时要求 `window.dshDesktop.keyboard`（缺即构造期 `Desktop keyboard bridge unavailable`）。Electron 腿由主进程 `before-input-event` 产出规范化 input（命中组合才投递、`setIgnoreMenuShortcuts`、blur/导航复位），偏好经 `ShortcutPersistence` 落 `<userData>/keybindings.json`（0600 原子写）；Swift 腿在 documentStart 注入的 `dshDesktop` 里以主文档 keydown/keyup 归一化投递，revision 由会话内适配器持有。Swift 边界（accepted，登记 deviations S-54）：不能 `preventDefault`（页面同样收到该键）、无子 frame/webview 与原生菜单源、偏好仅会话内存、`closeWindow` loud reject（Cmd+W 由原生菜单承担）。
 
 WKWebView parity 清单（W1 剪贴板、W2 菜单快捷键、W3 富文本粘贴
 与拖拽、W4 打印/查找、W5 字体/滚动/IME、W6 后台节流对 SSE/WS——**无 backgroundThrottling 等价物（C1）**、W7 刷新率

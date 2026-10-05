@@ -698,7 +698,7 @@
 }
 
 /* Source-header right cluster (panel-axis entries + sort menu + search +
-   add-workspace `+` + archive-cleanup manager — design 24 §6): NOT
+   add-workspace `+` + archive-manager entry — design 24 §6): NOT
    rendered at rest (display:none — zero layout space, so the connection
    status really sits at the header's right end). Hovering the header swaps
    the cluster IN and the status OUT — a true replacement. While a search

@@ -635,7 +635,7 @@
   独立归档钮 + 独立置顶钮**（归档与置顶各是同源双出口，形态见 §7；静息置顶标记与状态槽一起换出；归档只隐藏行、不触碰会话日志；安静会话直接归档，宿主因
   仍有活跃工作而拒绝时才弹「停止并归档」确认，design 24 §5）；来源头：连接状态 ↔ 簇首的每条已注册
   `sidebar.panellist` 紧凑入口（条件成员，见 §4.7）+ 排序菜单 + 搜索 + 添加工作区（官方
-  project-add 字形，`IconProjectAddOutlineRegular`）+ 归档清理；workspace：会话数徽标 ↔ `+`（新建
+  project-add 字形，`IconProjectAddOutlineRegular`）+ 归档管理器（归档盒字形）；workspace：会话数徽标 ↔ `+`（新建
   会话）+ kebab（重命名/删除））。胶囊/菜单展开时操作簇保持显示
   （`.sourceActionsVisible`/`.rowActionsVisible`，`:has` 同步换出状态槽）。
   **键盘焦点（Tab）与 kebab 展开共用同一个 JS 揭示状态**：`ServerSection.tsx` /
@@ -1087,10 +1087,10 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   document 级 **BUBBLE** Escape 监听），而「孤儿徽标」与行内孤儿清理钮都是常驻、可 Tab 到的
   按钮（`ServerSection.tsx` 的 `cc.orphanBadge` / `cc.orphanCleanup`，都在 hover 簇之外，
   且共用同一个 `onDeleteWorkspace` 打开方），键盘用户可 Tab 到
-  任一遮罩之后武装第二层，两层各注册 Escape 监听、一次 Esc 双关（design 24 §6 项 7
+  任一遮罩之后武装第二层，两层各注册 Escape 监听、一次 Esc 双关（design 24 §6 项 8
   正是归档管理器拒绝第二层的理由）。真不变量落在**打开方**、不在遮罩：
   `SidebarRoot.tsx` 的单一谓词 `otherChamberDialogOpen(self)` 被**全部四个打开方**
-  咨询——删除武装（`onDeleteWorkspace`）、归档管理器（`onOpenArchiveCleanup`）、
+  咨询——删除武装（`onDeleteWorkspace`）、归档管理器（`onOpenArchiveManager`）、
   归档活动确认（`openArchiveConfirm`：两段式第二调前的「停止并归档」层）、
   添加工作区浏览器（`openWorkspaceBrowser`；节 `ServerSection` 只拿得到这个带门的
   opener，拿不到裸 setter）——每个子句排除自己那一层，故**任一方向**最多只可能有一层；
@@ -1177,7 +1177,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   键盘焦点那一半属于 workspace 行与来源头部（JS 揭示态）。悬停替换行尾状态槽；**不显示
   相对时间**）。**添加工作区** = 来源头部按钮（官方 project-add 字形，与搜索/排序成簇、悬停替换连接
   状态槽，胶囊展开时簇保持可见）；文案在 aria 与**官方 `Tooltip`**（来源头内建动作——簇首的每条
-  `sidebar.panellist` 入口、排序菜单、添加工作区、搜索、归档清理——由原生 `title` 换成设计系统
+  `sidebar.panellist` 入口、排序菜单、添加工作区、搜索、归档管理器——由原生 `title` 换成设计系统
   Tooltip，形状串 `side="bottom" delayMs={500}`；workspace 新建会话钮的
   label 用官方的独立键 `actions.newSession`（zh「新会话」/ en "New session"，不共用 `session.new`）；行与状态槽
   仍原生 title）。替换为真正 display 交换；kebab 展开或**键盘焦点（Tab）**期间行操作保持可见（`.rowActionsVisible`，键盘态见上条「悬停替换」；键盘路径只有 workspace 行与来源头部——会话行不可聚焦，其 kebab 没有键盘入口，见 STATUS「范围决策与必要取舍」）；行内

@@ -174,8 +174,10 @@ export function archivePurgeNote(run: ArchivePurgeFlowResult): PurgeNote {
     return { kind: 'error', lines }
   }
   if (lines.length === 0) {
-    // Another shell may have purged meanwhile — an empty outcome must never be silent.
-    lines.push({ key: 'archive.manager.empty' })
+    // Another shell may have purged meanwhile, or only content-less resident
+    // tombstones were selected (design 24 §13-20a) — never silent, and the
+    // LIST-empty line would misreport "nothing archived" while rows are listed.
+    lines.push({ key: 'archive.purge.note.empty' })
   }
   return { kind: 'info', lines }
 }

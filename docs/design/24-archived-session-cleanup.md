@@ -35,7 +35,8 @@
   `packages/dsh-chamber-client-ui-sidebar/test/source-runtime/sidebar-slot-declaration.test.ts`；
   取舍登记见 STATUS 范围决策节。
 - 本需求 = chamber 前端（桌面 app 与 gateway 的同一套自研 UI）为每个 server 提供
-  **「删除已归档内容」**动作：
+  **归档管理器入口**（server 行 hover「查看已归档内容」；查看 / 恢复 / 删除都在管理器内），
+  其中**删除动作**：
   - 语义：永久删除该来源实例上**所有已归档会话的内容**，**级联其 subagent 起源
     子会话的内容**（逐条镜像上游 `sessions.delete` 草案语义，映射表见 §4）；
   - 保护：运行中的会话/子代理整棵子树跳过（fail-closed），绝不删除活动 agent 的
@@ -531,23 +532,30 @@ generic throw（无 status 透出）；503 `instance_unavailable` 有专类特�
 
 - 锚点：来源分组头（server 行）hover 操作簇——现状内建三枚（排序菜单 / add-workspace `+` /
   搜索，`cc.sourceActions`；簇首另有每条已注册 `sidebar.panellist` 入口的条件占位）；在簇尾一枚
-  删除图标按钮（`IconTrashOutlineRegular`，size 14 与
-  workspace 删除一致），点击**打开归档管理器对话框**。簇宽 64→86px（未计条件面板入口；注册时
+  归档图标按钮（`IconArchiveOutlineRegular`，size 14 与行内归档钮同源；tooltip 与 `aria-label`
+  同为 `action.viewArchived`「查看已归档内容」），点击**打开归档管理器对话框**。簇宽
+  64→86px（未计条件面板入口；注册时
   每条 +20px +2px gap）、header 28px 定高不变，「无 reflow（垂直）」声明成立。
+  **术语限定**：此处入口文案的「内容」指归档**条目/元数据**（管理器不读取会话内容），
+  与 §1 的可删除会话字节不是同一所指；域边界「不做内容检索/导出/投影」（§2）不变。
 - 呈现/隐藏条件与同簇内建按钮**逐字一致**：`server.connected && (server.aggregateError ===
   undefined || search?.expanded === true)`；断连/聚合错误时不显示；折叠态 header 常驻、
   按钮仍可达。（**例外**：面板轴入口有意不过 `connected` 门——注册即在，见 design 06 §4.7。）
-- 交互流（**全流程 per-server 单飞**）：
+- 交互流（**重入由单层 Modal 门 + 宿主侧单飞兜底**）：
   1. 点击 → `stopPropagation` + `suppressClickRef` 检查 + `clearPendingClick()`（照抄
-     同簇内建三件套；拖拽豁免/keydown target 守卫为泛型机制，自动覆盖新按钮）——需维护的只是
-     **注释清单**：SidebarRoot dragstart 按钮豁免注释、pending-click.ts 顶部注释、CSS 簇
-     内容描述，archive-cleanup 已列名；
-  2. 单飞守卫：per-server in-flight，在途时按钮 `disabled`（disabled 瞬时不可聚焦，与键盘
-     纪律并存）；跨 N-ctx 并发由**宿主侧单飞**（`busy` code，§3）兜底；
+     同簇内建三件套；拖拽豁免（`closest('button')`）与 pending-click 不变量都是泛型机制，
+     **没有按按钮维护的豁免名单**）——簇成员的散文描述有两处：CSS 簇注释
+     （`sidebar-chamber.module.css` 的 `.sourceActions`）与头注释
+     （`ServerSectionHeader.tsx` 的 `cc.sourceActions` 簇）；
+  2. 入口按钮**不设** in-flight `disabled`：查看入口必须始终可开（打开期间基线到达时对话框
+     自行从 degraded 重派生为列表视图）。重入由两道现存护栏兜底：**至多一层 Modal**
+     （`otherChamberDialogOpen('archive')`）与**宿主侧单飞**（`busy` code → 对话框内
+     `archive.manager.busyOther`，§3）；
   3. 对话框打开（**不发任何新读取**：行元数据 = 桥投影的 `archivedSessions` ∩
      `archivedSessionIds`，`deriveArchivedSessions`；仅元数据）；
   4. 对话框状态：**挂载基线就绪且 `archiveSetKnown:true`** 才列行；空列表（权威）时 footer
-     删除钮 disabled（`listVisible` 的 `rows.length>0` 非冗余：同派生同时门控 footer）；
+     的恢复/删除钮**整对不渲染**（`listVisible` 的 `rows.length>0` 非冗余：同派生同时门控
+     footer）；
      `archiveSetKnown:false`（unary 兜底，KNOWN DEGRADATION）与快照未落地（loading/拉取
      错误）分支只呈现说明性文本（degraded/listUnavailable/loading），**无任何破坏性动作**；
      自愈：来源挂载基线就绪后 bridge 重新发布，对话框从 server prop 自动重新派生为列表视图；
@@ -652,24 +660,32 @@ generic throw（无 status 透出）；503 `instance_unavailable` 有专类特�
   （`purgeRemovedContent`：删除的会话/子代理或清扫的孤儿成员 > 0）才清空勾选。纯跳过/纯
   保护的 run 一行未动，清空勾选会把"切换会话后重试"变成"重新勾选再重试"；行集合真正收敛
   时那条被动 prune（`pruneSet`）照旧收敛勾选。
-- 空态：`deletableSessions === 0 && deletableSubagents === 0`（双零）时不进确认，改在
-  对话框信息行呈现提示：`skippedRunning > 0` → 「没有可删除的
-  已归档会话（N 项因运行中被跳过）」，否则「没有可删除的已归档会话」。
-- 键盘可达：真实 `<button>` + **title 属性 + aria-label**（簇内按钮全部用 title 属性，无
-  Tooltip 组件——Tooltip 仅用于 rail/New Session 区域）。
+- 空态：权威列表为空（`rows.length === 0`）时对话框呈现 `archive.manager.empty`
+  （「该来源暂无已归档会话。」——查看口径，不再是「没有可删除的」）；run 层「一行未动」的
+  空结果由 `archive.purge.note.empty` 单独承载，两键**不共用**（列表里仍留着行时不得报
+  「暂无已归档会话」）。
+- 键盘可达：**对话框行**是真实 `<button>` + `title` 属性 + `aria-label`；**来源头入口**骑官方
+  `Tooltip`（`side="bottom" delayMs={500}`）+ `aria-label`，与簇内其余内建动作同形。
 - **locale 键**（en/zh；对称由 `locales.ts` 的 `SidebarKey = keyof typeof zh` +
   `en satisfies Record<SidebarKey, string>` 类型门禁保证——**typecheck:sidebar**；
-  `verify:i18n` 只校验顶层双语文档对，与此无关）：`action.purgeArchived`、管理器按键
+  `verify:i18n` 只校验顶层双语文档对，与此无关）：`action.viewArchived`、管理器按键
   （`archive.manager.*`：`groupSelectAria`、`selectAllAria`、`confirmDelete`/`confirmSingle`/
-  计数键、`degraded`、`listUnavailable`、`loading`、`residentPurged`）、新键
-  `archive.manager.rowCount.one/other`、复用既有 `workspace.expand/collapse`、`list.ungrouped`；
+  计数键、`degraded`、`listUnavailable`、`loading`、`residentPurged`、`empty`）、新键
+  `archive.manager.rowCount.one/other`、`archive.purge.note.empty`（run 空结果，与列表空态
+  分键）、复用既有 `workspace.expand/collapse`、`list.ungrouped`；
   行内错误/信息（domainMissing /
   超时 / 空态 / 部分失败 / 跳过 / force 回退说明）按 §5 走 zh 硬编码，不进 locale。
   `archive.manager.deleteAll`/`confirmAll` 不存在（独立「删除全部」已退役）。
-- 范围：**v1 不做**搜索/目录过滤；**恢复已接**（管理器行/批量 + 列表归档行的「恢复」钮，调官方单条
+- 范围：入口承诺 = 查看（管理器即浏览+维护面，删除是其中动作）；**v1 不做**搜索/目录过滤；**恢复已接**（管理器行/批量 + 列表归档行的「恢复」钮，调官方单条
   `workspace/unarchiveSession`，幂等、非破坏、无确认级）；**浏览过滤（`ArchivedFilter` 镜像）已于
   2026 对齐轮落地**（design 06 §3.4：列表与搜索同规则），管理器仍是批量维护面；rail/窄栏与移动端
   不做（范围声明见头部）。
+- **Rejected alternatives（入口呈现，本轮）**：① 保留垃圾桶字形——入口打开的是查看/恢复/删除三合一面，
+  垃圾桶为删除代言，误述动作；② 用 `IconArchiveCheckOutlineRegular`/`IconArchiveOffOutlineRegular`——
+  两枚已是视图筛选轴（仅显示/隐藏已归档）的既有字形；③ 保留 `action.purgeArchived` 键只换值——键名与
+  动作相反，且 `SidebarKey` 是编译期键集，别名只会变成死键；④ 簇内再加一枚独立「归档管理器」钮——
+  同一动作两个出口、簇宽 +20px；⑤ wire 域/纯函数一并改名——域仍只做内容清除，牵动 wire 锁步与宿主包，
+  零用户收益。以上均否决。
 
 ## 7. 宿主包接线与分发面
 
@@ -1148,9 +1164,10 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.2.0-rc.2 639ed015
 20. **常驻保留的四条残余（均为"不可见、自愈、不影响正确性"）**：
     (a) **无内容的归档 tombstone**——保留的成员不再有会话记录，需孤儿清扫（F4/G3 `stat` 证明
     无内容）才摘除；时点与代价见 §3「常驻保留」。**重跑的文案面（登记，待
-    目检）**：这类成员既无树可删（plan 无记录）又被 live 排除挡在清扫外，run 落到空态文案
-    （`archive.manager.empty`）而**不报错**——行与标注保持原样（幂等），但空态文案与列表里仍
-    有的行同现，需打包版目检确认读起来不困惑；
+    目检）**：这类成员既无树可删（plan 无记录）又被 live 排除挡在清扫外，run 落到
+    `archive.purge.note.empty`（「本次没有可删除的内容…」）而**不报错**——行与标注保持原样
+    （幂等）；该键与列表空态 `archive.manager.empty` 已分键，不再出现「暂无已归档会话」与
+    列表行同现的自相矛盾，但读起来是否清楚仍需打包版目检；
     (b) **管理器标注只在对话框生命周期内**——`residentPurged` 是对话框本地状态（不持久化，
     与 F5 独立的幽灵行 id 状态无关）：重开对话框后那行仍在列表里但没有标注（内容确已删除，
     只是少了说明）；跨开关持久须另行设计（方向：宿主把"内容已清理"做成可读事实，属本域"无

@@ -253,7 +253,7 @@ test('archivePurgeNote: an empty outcome is never silent (v1 E-n2 parity)', () =
     stop: stopResult(),
     purge: purgeResult(),
   })
-  assert.deepEqual(keysOf(note.lines), ['archive.manager.empty'])
+  assert.deepEqual(keysOf(note.lines), ['archive.purge.note.empty'])
 })
 
 test('archivePurgeNote: item errors render as an error note with bounded samples', () => {

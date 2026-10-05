@@ -1,18 +1,18 @@
 /**
  * One source’s header row of the chamber sidebar ServerSection subtree: the
  * connection dot/spinner, fold toggle, the panel-axis entries (`PanelHeaderEntry`),
- * the view-options menu, add-workspace/search/archive actions, the single
+ * the view-options menu, add-workspace/search/archive-manager actions, the single
  * per-source source-note live region and the folded open-failure hoist. Shell
  * state comes from useSidebarSection().
  */
 import { useMemo, useState, type RefObject } from 'react'
 import clsx from 'clsx'
 import {
-  IconArchiveCheckOutlineRegular, IconArchiveOffOutlineRegular, IconChevronRightOutlineRegular,
-  IconChevronsUpDownOutlineRegular, IconClockOutlineRegular, IconFlatListOutlineRegular,
-  IconFolderCloseRegular, IconLoadingOutlineRegular, IconProjectAddOutlineRegular, IconQueueOutlineRegular,
-  IconSearchOutlineRegular, IconSlidersTwoOutlineRegular, IconTrashOutlineRegular,
-  IconWorkspaceTreeOutlineRegular, Menu, Tooltip, type MenuEntry,
+  IconArchiveCheckOutlineRegular, IconArchiveOffOutlineRegular, IconArchiveOutlineRegular,
+  IconChevronRightOutlineRegular, IconChevronsUpDownOutlineRegular, IconClockOutlineRegular,
+  IconFlatListOutlineRegular, IconFolderCloseRegular, IconLoadingOutlineRegular,
+  IconProjectAddOutlineRegular, IconQueueOutlineRegular, IconSearchOutlineRegular,
+  IconSlidersTwoOutlineRegular, IconWorkspaceTreeOutlineRegular, Menu, Tooltip, type MenuEntry,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
@@ -50,7 +50,7 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
     setGroupBy,
     setArchivedFilter,
     openWorkspaceBrowser,
-    onOpenArchiveCleanup,
+    onOpenArchiveManager,
     suppressClickRef,
     dragPressOnButtonRef,
     serverDrag,
@@ -295,7 +295,7 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                       />
                     )}
                   </span>
-                  {/* 头部动作（面板轴入口 + 视图选项菜单 + 加工作区 + 来源搜索 + 归档清理）与会话行动作
+                  {/* 头部动作（面板轴入口 + 视图选项菜单 + 加工作区 + 来源搜索 + 归档管理器）与会话行动作
                       一样 hover 才显形：静息时右侧是连接状态，悬停换成图标簇（display
                       替换，静息不占位）。搜索胶囊或视图选项菜单打开时图标簇常驻
                       （.sourceActionsVisible），图标才能收起/关闭；键盘焦点（Tab）同样
@@ -439,23 +439,23 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                         </button>
                       </Tooltip>
                     )}
-                    {/* 来源行"归档管理器"：与同类动作同一 hover 显形纪律与门控；打开管理
-                        对话框（列表 + 单行/多选删除；整集删除只经显式全选，没有独立
-                        delete-all）。清理状态全在对话框内。 */}
+                    {/* 来源行「归档管理器」入口：与同类动作同一 hover 显形纪律与门控；字形与
+                        行内归档钮同源——入口承诺「查看已归档内容」，删除只是管理器内部的一个
+                        动作（查看/恢复/删除与整集显式全选规则见 design 24 §6）。 */}
                     {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
-                      <Tooltip label={t('action.purgeArchived')} side="bottom" delayMs={500}>
+                      <Tooltip label={t('action.viewArchived')} side="bottom" delayMs={500}>
                         <button
                           type="button"
                           className={cc.actionIcon}
-                          aria-label={t('action.purgeArchived')}
+                          aria-label={t('action.viewArchived')}
                           onClick={(event) => {
                             event.stopPropagation()
                             if (suppressClickRef.current) return
                             clearPendingClick()
-                            onOpenArchiveCleanup(server)
+                            onOpenArchiveManager(server)
                           }}
                         >
-                          <IconTrashOutlineRegular size={14} />
+                          <IconArchiveOutlineRegular size={14} />
                         </button>
                       </Tooltip>
                     )}

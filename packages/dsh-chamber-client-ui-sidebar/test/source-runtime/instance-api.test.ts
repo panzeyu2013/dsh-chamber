@@ -356,7 +356,7 @@ test('archiveCleanup business failures decode the NESTED domain carrier (securit
   // host domain carrier rides nested in `value` ({ok:false,error}). A busy
   // or registry-unreadable answer must surface as a thrown `${code}: …`
   // message — NEVER decode into empty counts (a second shell would otherwise
-  // show "没有可删除的已归档会话" while another purge is running).
+  // render `archive.purge.note.empty` while another purge is running).
   const client = {
     archiveCleanup: {
       purge: async () => ({ ok: true as const, value: { ok: false as const, error: { code: 'registry-unreadable', message: 'unreadable', details: {} } } }),

@@ -39,13 +39,13 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
 }) {
   const [addingWorkspace, setAddingWorkspace] = useState<string | null>(null)
   const [addingWorkspaceBusy, setAddingWorkspaceBusy] = useState(false)
-  // chamber (design 24): per-source ARCHIVE MANAGER dialog。列出该来源的归档会话（元数据来自
-  // ChamberServerAggregate.archivedSessions，对话框自身不发会话读），经可选 sessionIds 过滤器
-  // 提供逐行/多选 purge。整集删除没有独立按钮：勾选 select-all 再确认计数删除，purge 绝不覆盖
-  // 对话框列不出的行；破坏性调用在对话框内确认。
-  const [archiveCleanupServerId, setArchiveCleanupServerId] = useState<string | null>(null)
-  // Focus restore：对话框关闭时把焦点还给打开它的 trash 按钮，否则键盘用户会落到 <body>。
-  const archiveCleanupOpenerRef = useRef<HTMLElement | null>(null)
+  // chamber (design 24): per-source ARCHIVE MANAGER dialog。查看该来源的归档会话（元数据来自
+  // ChamberServerAggregate.archivedSessions，对话框自身不发会话读），行/批量恢复（官方
+  // workspace/unarchiveSession）与逐行/多选 purge 都在对话框内。整集删除没有独立按钮：勾选
+  // select-all 再确认计数删除，purge 绝不覆盖对话框列不出的行；破坏性调用在对话框内确认。
+  const [archiveManagerServerId, setArchiveManagerServerId] = useState<string | null>(null)
+  // Focus restore：对话框关闭时把焦点还给打开它的归档入口按钮，否则键盘用户会落到 <body>。
+  const archiveManagerOpenerRef = useRef<HTMLElement | null>(null)
 
   /**
    * SYMMETRIC closure：任何时刻至多一个 chamber 拥有的 Modal 层，与用户到达顺序无关。官方
@@ -53,7 +53,7 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
    * 仍可 Tab：常驻 orphan 徽标与来源头控件都在任一 mask 之后可达。两层同开则各自注册
    * Escape，一次 Escape 关掉**两层**。
    * 唯一谓词在此，每个打开方都必须查询（只闸 delete 会漏掉反向顺序）：`onDeleteWorkspace`
-   * 武装删除确认、`onOpenArchiveCleanup` 打开归档管理器、`openWorkspaceBrowser` 打开目录
+   * 武装删除确认、`onOpenArchiveManager` 打开归档管理器、`openWorkspaceBrowser` 打开目录
    * 浏览器、`openArchiveConfirm` 武装归档活动确认。拒绝不丢功能：每层都可取消/X/mask/Escape
    * 关闭，关闭后被拒控件立即可用（归档确认的拒绝由调用方回退成原始失败上报，见 opener）。
    * 刻意用 hoisted `function`：各 opener 与下方 arm 处理器共用一条规则（函数声明提升），
@@ -91,30 +91,30 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
     setAddingWorkspace(sourceId)
   }
 
-  const onOpenArchiveCleanup = (server: ChamberServerAggregate): void => {
+  const onOpenArchiveManager = (server: ChamberServerAggregate): void => {
     // 反方向：删除确认 mask 之下仍可从来源头到达（无焦点陷阱），必须同样拒绝。
     if (otherChamberDialogOpen('archive')) return
     openLayersRef.current.archive = true
-    archiveCleanupOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    setArchiveCleanupServerId(server.id)
+    archiveManagerOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    setArchiveManagerServerId(server.id)
   }
-  const closeArchiveCleanup = (): void => {
+  const closeArchiveManager = (): void => {
     openLayersRef.current.archive = false
-    setArchiveCleanupServerId(null)
+    setArchiveManagerServerId(null)
     // 关闭渲染提交后再聚焦（opener 可能已卸载——折叠 rail 或来源移除——focus() 此时是无害 no-op）。
     requestAnimationFrame(() => {
-      archiveCleanupOpenerRef.current?.focus()
-      archiveCleanupOpenerRef.current = null
+      archiveManagerOpenerRef.current?.focus()
+      archiveManagerOpenerRef.current = null
     })
   }
   // 管理器只能停留在活来源之上：会话中途消失/断连即关闭（对死实例的确认会失败进虚空）；同排序菜单清理。
   useEffect(() => {
-    if (archiveCleanupServerId === null) return
-    const server = servers.find(candidate => candidate.id === archiveCleanupServerId)
+    if (archiveManagerServerId === null) return
+    const server = servers.find(candidate => candidate.id === archiveManagerServerId)
     if (server === undefined || !server.connected) {
-      setArchiveCleanupServerId(null)
+      setArchiveManagerServerId(null)
     }
-  }, [servers, archiveCleanupServerId])
+  }, [servers, archiveManagerServerId])
 
   /**
    * 撤销事实用的 best-effort 工作区路径：投影不带 path，唯一本地来源是桥上本 ctx 的快照，
@@ -188,7 +188,7 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
     // 在飞）随即失效（类型上也要求补齐这两个字段）。
     const open = openLayersRef.current
     open.delete = deleteTarget !== null
-    open.archive = archiveCleanupServerId !== null
+    open.archive = archiveManagerServerId !== null
     open.browser = addingWorkspace !== null
     open.sessionArchive = archiveConfirm !== null
   })
@@ -389,11 +389,11 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
     setAddingWorkspaceBusy(false)
   }, [])
   return {
-    addingWorkspace, addingWorkspaceBusy, archiveCleanupServerId,
+    addingWorkspace, addingWorkspaceBusy, archiveManagerServerId,
     deleteTarget, deletePending, deleteError, deleteBodyRef,
     archiveConfirm, archiveConfirmPending, archiveConfirmError, archiveConfirmBodyRef,
-    openWorkspaceBrowser, onOpenArchiveCleanup, onDeleteWorkspace, openArchiveConfirm,
-    closeArchiveCleanup, closeDeleteWorkspace, confirmDeleteWorkspace,
+    openWorkspaceBrowser, onOpenArchiveManager, onDeleteWorkspace, openArchiveConfirm,
+    closeArchiveManager, closeDeleteWorkspace, confirmDeleteWorkspace,
     closeArchiveConfirm, confirmArchive,
     browseListDirectory, browseCreateDirectory, browsePick, browseClose,
   }
@@ -407,10 +407,10 @@ export function SidebarRootDialogs({ dialogs, servers, t, directoryBrowserT }: {
   directoryBrowserT: SidebarRootComponentProps['directoryBrowserT']
 }) {
   const {
-    addingWorkspace, addingWorkspaceBusy, archiveCleanupServerId,
+    addingWorkspace, addingWorkspaceBusy, archiveManagerServerId,
     deleteTarget, deletePending, deleteError, deleteBodyRef,
     archiveConfirm, archiveConfirmPending, archiveConfirmError, archiveConfirmBodyRef,
-    closeArchiveCleanup, closeDeleteWorkspace, confirmDeleteWorkspace,
+    closeArchiveManager, closeDeleteWorkspace, confirmDeleteWorkspace,
     closeArchiveConfirm, confirmArchive,
     browseListDirectory, browseCreateDirectory, browsePick, browseClose,
   } = dialogs
@@ -428,13 +428,13 @@ export function SidebarRootDialogs({ dialogs, servers, t, directoryBrowserT }: {
           onClose={browseClose}
         />
       )}
-      {/* chamber (design 24): per-source 归档管理器——列出归档（按工作区分组），支持逐行/
-          多选删除；整集只能经显式 select-all。仅在选定来源时挂载。 */}
-      {archiveCleanupServerId !== null && (
+      {/* chamber (design 24): per-source 归档管理器——查看归档（按工作区分组），支持逐行/
+          批量恢复与删除；整集删除只能经显式 select-all。仅在选定来源时挂载。 */}
+      {archiveManagerServerId !== null && (
         <ArchiveManagerDialog
-          server={servers.find(candidate => candidate.id === archiveCleanupServerId) ?? null}
+          server={servers.find(candidate => candidate.id === archiveManagerServerId) ?? null}
           t={t}
-          onClose={closeArchiveCleanup}
+          onClose={closeArchiveManager}
         />
       )}
       {/* chamber: 工作区删除确认——应用内 Modal（上游 chrome：outline 取消/危险确认、

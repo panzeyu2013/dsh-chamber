@@ -15,10 +15,12 @@ export const zh = {
   'action.save': '保存',
   'action.cancel': '取消',
   'action.addWorkspace': '添加工作区',
-  'action.purgeArchived': '删除已归档内容',
-  'archive.manager.empty': '没有可删除的已归档会话。',
+  // 来源头入口：打开归档管理器（查看 / 恢复 / 删除都在对话框内）。键名与 hover/aria 文案
+  // 同随动作语义（不再叫 purge——删除只是管理器内部的一个动作）。
+  'action.viewArchived': '查看已归档内容',
+  'archive.manager.empty': '该来源暂无已归档会话。',
   'archive.manager.loading': '正在获取已归档会话…',
-  'archive.manager.degraded': '此来源当前为降级视图（未挂载会话基线），无法列出已归档会话，暂不能清理。会话基线就绪后此处会自动列出，届时可逐行删除，或勾选（含全选）后批量删除。',
+  'archive.manager.degraded': '此来源当前为降级视图（未挂载会话基线），无法列出已归档会话，暂不能查看、恢复或清理。会话基线就绪后此处会自动列出，届时可逐行恢复或删除，也可勾选（含全选）后批量处理。',
   'archive.manager.listUnavailable': '无法获取已归档会话列表：',
   'archive.manager.rowCount.one': '已归档 {count} 个会话',
   'archive.manager.rowCount.other': '已归档 {count} 个会话',
@@ -50,6 +52,9 @@ export const zh = {
   // 未保护提示：无法点名"正在查看的会话"时如实说明，而不是禁用删除控件——运行中的会话仍不会被删除。
   'archive.manager.unprotected': '无法确认你正在查看的会话：本次删除不排除任何会话（运行中的会话仍不会被删除）。',
   // 归档清理的结果行（`./archive-purge.ts` 只返回 key+params，对话框用 t() 渲染）；删除没有"拒绝"分支：客户端不以"证不出当前会话"为由拒绝。
+  // 空结果行独立于 `archive.manager.empty`（后者只服务「权威列表为空」的对话框空态）：
+  // 列表里还留着行时不得报「暂无已归档会话」。
+  'archive.purge.note.empty': '本次没有可删除的内容：所选会话可能已被删除，或已无可清理内容。',
   'archive.purge.note.stopped': '已先停止 {count} 个运行中的会话。',
   'archive.purge.note.protected': '已跳过 {count} 个归档树：其中包含你正在查看的会话（未删除——切换会话后重试，或稍后重试：归档后选中可能尚未清空）。',
   'archive.purge.note.deleted': '清理完成：删除 {sessions} 个会话 / {subagents} 个子代理内容。',
@@ -233,10 +238,10 @@ export const en = {
   'action.save': 'Save',
   'action.cancel': 'Cancel',
   'action.addWorkspace': 'Add workspace',
-  'action.purgeArchived': 'Delete archived content',
-  'archive.manager.empty': 'No archived sessions to delete.',
+  'action.viewArchived': 'View archived content',
+  'archive.manager.empty': 'No archived sessions in this source.',
   'archive.manager.loading': 'Loading archived sessions…',
-  'archive.manager.degraded': 'This source is on a degraded view (no mounted session baseline) — archived sessions cannot be listed here, so cleanup is unavailable. Once the session baseline is ready the list appears here automatically and you can delete per row or after select-all.',
+  'archive.manager.degraded': 'This source is on a degraded view (no mounted session baseline) — archived sessions cannot be listed here, so viewing, restoring and cleanup are unavailable. Once the session baseline is ready the list appears here automatically; you can then restore or delete per row, or in bulk after select-all.',
   'archive.manager.listUnavailable': 'Archived session list unavailable: ',
   'archive.manager.rowCount.one': 'Archived sessions: {count}',
   'archive.manager.rowCount.other': 'Archived sessions: {count}',
@@ -262,6 +267,7 @@ export const en = {
   'archive.manager.restoreFailed': '{count} session(s) failed to restore: ',
   'archive.manager.title': 'Archived sessions',
   'archive.manager.unprotected': 'The session you are viewing cannot be confirmed: this run excludes no session (running sessions are still never deleted).',
+  'archive.purge.note.empty': 'Nothing to delete in this run: the selected sessions may already be gone, or have no content left to remove.',
   'archive.purge.note.stopped': 'Stopped {count} running session(s) first.',
   'archive.purge.note.protected': 'Skipped {count} archived tree(s): they contain the session you are viewing (not deleted — switch to another session and retry, or retry in a moment: the selection may not be cleared yet after archiving).',
   'archive.purge.note.deleted': 'Cleanup complete: deleted {sessions} session(s) / {subagents} subagent content(s).',

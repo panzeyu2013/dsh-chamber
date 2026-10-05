@@ -201,10 +201,9 @@ export interface SidebarSectionContextValue {
   setRenaming: Dispatch<SetStateAction<RenameTarget | null>>
   /** Commit the active inline rename (wire call via the shell's runAction). */
   commitRename: () => void
-  /** Server-row archive-cleanup entry: opens the archive manager dialog
-   *  (per-row / multi-select purges; whole-set deletion only through the
-   *  explicit select-all checkbox — no standalone delete-all). */
-  onOpenArchiveCleanup: (server: ChamberServerAggregate) => void
+  /** Server-row archive-manager entry: opens the dialog that views/restores the
+   *  source's archived sessions and purges per row / multi-select (no delete-all). */
+  onOpenArchiveManager: (server: ChamberServerAggregate) => void
   /** Source-header add-workspace entry (opens the directory browser). This is
    *  the shell's GUARDED opener, not the raw setter — it refuses while another
    *  chamber dialog layer is up, so the section cannot stack a second Modal by

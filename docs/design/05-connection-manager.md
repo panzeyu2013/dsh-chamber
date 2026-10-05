@@ -163,8 +163,8 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   进行行，确认后才发 wire 调用；孤儿 workspace（路径已消失、只删注册）走同一确认、只换
   说明句——**全包不再有 `window.confirm`**（OS 样式弹窗无法使用 alias token）。wire 缺失的
   方法不做（如删除会话），不发明协议——**design 24 受界例外**（用户批准，AGENTS 已
-  登记)：来源头 hover 簇新增「删除已归档内容」动作，走 chamber 自有宿主域
-  `archiveCleanup/{probe,purge}`(design 24 引入的宿主包，实例进程内权威清除归档集内容含
+  登记)：来源头 hover 簇新增「查看已归档内容」入口（打开归档管理器，删除是其中动作）；
+  删除执行走 chamber 自有宿主域 `archiveCleanup/{probe,purge}`(design 24 引入的宿主包，实例进程内权威清除归档集内容含
   subagent 级联；只删不读、运行中整棵跳过、幂等；域缺失 404 给诚实文案；host binding 已按
   design 24 §10 的 vendor 核对结论落地，见
   `packages/dsh-chamber-seed-archive-cleanup/src/binding.ts`)。详见 design 24 与 §6 宿主包清单。
