@@ -418,3 +418,4 @@
   会话**名**与稀疏 `hasActiveSchedule` 由 `retainSessionLabels` 同瞬时保留（0.6–0.8s 窗口对远程源可见）；
   硬边界 = 行 `updatedAt` 前进（宿主已重读仍无 title）即停止携带——休眠行保留最后已知事实、不设墙钟上限
   （换目录名信息量更差）。
+- 上游 experimental worktree 与 design 08 并存（alpha.2 起）：官方 base 已挂 working-directory / tool-working-directory，@deepseek-ai/dsh-experimental-tool-worktree 是默认关闭的可选 bundle；其产物没有 dsh workspace，由 design 08 的「未注册工作树」块接管（可采纳 / 可删除）。不复用其 worktrees.create：真源只有 create、无 list/remove/adopt，池 directory 只接受调用 checkout 之下的仓库内相对路径，且要求 Git >= 2.45 与调用会话 sandbox。宿主 running 位置判据自本条起读 sessionProjections 的 workingDirectory（header.cwd 兜底），会话 cd 进目标 worktree 后删除仍被拒。
