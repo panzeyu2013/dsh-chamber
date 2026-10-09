@@ -275,6 +275,19 @@ test('根安装腿 patch 通道：本仓 pnpm-workspace.yaml 与 registry.patche
   assert.deepEqual(rootSet, registry.patches.map((patch) => patch.spec + ' -> ' + patch.file).sort(),
     '根安装腿的 patch 集合必须与 registry.patches 逐条一致')
   assert.match(rootWs, /^allowUnusedPatches: true$/mu, '图外条目由 allowUnusedPatches 豁免（不被 pnpm 拒绝）')
+  const overridesBlock = /^overrides:\n(?: {2}.*\n)+/mu.exec(rootWs)?.[0]
+  assert.ok(overridesBlock !== undefined, '根 workspace 必须带 overrides（补丁版本契约：patch 键声明即解析约束）')
+  const overrides = new Map(
+    [...overridesBlock.matchAll(/^ {2}['"]?([^'":\n]+)['"]?: ['"]?([^'"\s#]+)['"]?\s*$/gmu)]
+      .map((match) => [match[1], match[2]]),
+  )
+  for (const patch of registry.patches) {
+    const at = patch.spec.lastIndexOf('@')
+    const name = patch.spec.slice(0, at)
+    const version = patch.spec.slice(at + 1)
+    assert.equal(overrides.get(name), version,
+      '根 overrides 必须把 ' + name + ' 钉到补丁版本 ' + version + '（否则该补丁在根腿静默不生效）')
+  }
   for (const patch of registry.patches) {
     assert.deepEqual(
       readFileSync(join(HERE, '..', '..', patch.file)),

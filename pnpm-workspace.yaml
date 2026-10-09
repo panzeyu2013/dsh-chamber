@@ -57,6 +57,17 @@ allowBuilds:
 # pnpm 不会在满足范围内重解析，故显式钉住。electron 自身依赖的 v5 不受影响。
 overrides:
   "@electron/get@^3.0.0": "3.1.0"
+  # 补丁版本契约（§17-C）：patch 键声明即解析约束——被补丁的依赖必须解析到补丁
+  # 声明的版本，否则 pnpm 在 allowUnusedPatches 下只警告、补丁静默不生效。
+  # 运行期腿由 packages/desktop/scripts/upstream-patches.mjs 的 renderPatchOverrides
+  # 从同一 vendor 块派生；本块在 scripts/upstream/registry.test.mjs 对拍。
+  '@earendil-works/pi-ai': 0.87.1
+  '@electron/osx-sign': 1.3.3
+  '@fortune-sheet/core': 1.0.4
+  '@fortune-sheet/react': 1.0.4
+  '@yao-pkg/pkg': 6.21.0
+  exceljs: 4.4.0
+  node-pty: 1.2.0-beta.15
 
 minimumReleaseAgeExclude:
   - '@deepseek-ai/libreoffice-kit-darwin-arm64@0.1.1'

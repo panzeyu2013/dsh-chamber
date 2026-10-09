@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { commitBundleSwap, recoverBundleSwap } from './bundle-swap.mjs';
 import { bundlePnpmLaunch } from './bundle-pnpm-launcher.mjs';
 import { renderAllowBuildsBlock, pruneRuntimeArtifacts } from '@dsh-chamber/dsh-runtime';
-import { renderRuntimeWorkspace, stageUpstreamPatches, upstreamPatchedDependencies } from './upstream-patches.mjs';
+import { assertPatchesApplied, renderRuntimeWorkspace, stageUpstreamPatches, upstreamPatchedDependencies } from './upstream-patches.mjs';
 
 /**
  * 将 dsh 官方发布包 @deepseek-ai/dsh 安装为本地运行时（方案 B）。
@@ -202,6 +202,14 @@ if (refreshLockfile) {
     [...pnpmCommand, 'install', '--lockfile-only', '--no-frozen-lockfile'],
     `显式刷新 @deepseek-ai/dsh@${VERSION} runtime lockfile…`,
   );
+}
+{
+  // 补丁版本契约（§17-C）：图内被补丁的依赖必须解析出 patch_hash，否则
+  // allowUnusedPatches 只会警告、封装出未打补丁的运行树。
+  const workLockfile = path.join(work, 'pnpm-lock.yaml');
+  if (existsSync(workLockfile)) {
+    assertPatchesApplied(readFileSync(workLockfile, 'utf8'), upstreamPatchedDependencies(), 'runtime lock');
+  }
 }
 run(
   [...pnpmCommand, 'install', '--frozen-lockfile', '--config.node-linker=hoisted'],
