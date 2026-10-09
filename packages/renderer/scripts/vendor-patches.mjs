@@ -168,9 +168,9 @@ export const VENDOR_PATCHES = Object.freeze([
       }),
       Object.freeze({
         expect: '  blocks, streaming, interrupted, renderMessageImages, groupPart, useDisclosure,\n'
-          + '  reasoningHidden = false, usePresentation, revealProcess, mentions, t,\n}: AssistantMarkdownProps) {',
+          + '  reasoningHidden = false, usePresentation, revealProcess, mentions, renderSlot, useGroupAction, t,\n}: AssistantMarkdownProps) {',
         replace: '  blocks, streaming, interrupted, renderMessageImages, groupPart, useDisclosure,\n'
-          + '  reasoningHidden = false, usePresentation, revealProcess, mentions, t, chamberFileApiBase,\n}: AssistantMarkdownProps) {',
+          + '  reasoningHidden = false, usePresentation, revealProcess, mentions, renderSlot, useGroupAction, t, chamberFileApiBase,\n}: AssistantMarkdownProps) {',
       }),
       Object.freeze({
         expect: '  const pathImages = useMemo<MarkdownPathImages>(() => {\n'
@@ -339,8 +339,10 @@ export const VENDOR_PATCHES = Object.freeze([
     reason: 'forwards the chamberFileApiBase root standard prop into AssistantMarkdown (no chamber package can thread it)',
     edits: Object.freeze([
       Object.freeze({
-        expect: '  node, groupPart, useDisclosure, useTurnData, turnProcess, openFile, renderMessageImages, fileMentions, usePresentation, t,\n}: AssistantNodeViewProps) {',
-        replace: '  node, groupPart, useDisclosure, useTurnData, turnProcess, openFile, renderMessageImages, fileMentions, usePresentation, t,\n'
+        expect: '  node, groupPart, useDisclosure, useGroupAction, useTurnData, turnProcess, openFile, renderMessageImages, fileMentions,\n'
+          + '  usePresentation, renderSlot, t,\n}: AssistantNodeViewProps) {',
+        replace: '  node, groupPart, useDisclosure, useGroupAction, useTurnData, turnProcess, openFile, renderMessageImages, fileMentions,\n'
+          + '  usePresentation, renderSlot, t,\n'
           + '  chamberFileApiBase,\n}: AssistantNodeViewProps) {',
       }),
       Object.freeze({

@@ -63,7 +63,7 @@
       // src/install.ts imports 'undici' directly (a registry dependency pnpm
       // never links into the symlinked vendor checkout) — mapped to the
       // lockfile-pinned virtual-store path.
-      "undici": ["../../node_modules/.pnpm/undici@8.10.0/node_modules/undici"]
+      "undici": ["../../node_modules/.pnpm/undici@8.11.2/node_modules/undici"]
       // 版本同步有门禁：scripts/upstream/lockfile-store-path-mappings.test.mjs（跑在
       // test:upgrade-tools）断言每条 ".pnpm/<pkg>@<ver>/" 映射的版本 == 锁文件里
       // 某个声明该依赖的 importer 解析出的版本——pin 升级把依赖版本改掉而映射没跟

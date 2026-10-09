@@ -149,7 +149,8 @@ test('the patch resolves the file-API base through the per-entry base path', () 
   assert.equal(viaVendorPath.code, patched?.code, 'both id forms produce the same patch')
   assert.deepEqual(patched.applied, ['dsh-client-ui-chat/src/client/chat/AssistantMarkdown.tsx'])
   assert.ok(patched.code.includes('chamberFileApiBase?: string | undefined'), 'the root standard prop is declared')
-  assert.ok(patched.code.includes('mentions, t, chamberFileApiBase,'), 'the prop is destructured')
+  assert.ok(patched.code.includes('mentions, renderSlot, useGroupAction, t, chamberFileApiBase,'),
+    'the prop is destructured after the alpha.2 parameter additions (renderSlot, useGroupAction)')
   // Behaviour: evaluate the patched memo with a recording resolver; the base it
   // hands the resolver must be this entry's own file-API directory.
   const start = patched.code.indexOf('  const pathImages = useMemo')

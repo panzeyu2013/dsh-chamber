@@ -184,27 +184,28 @@ vendorTest('负控：页头子元素计数把第三个兄弟判红（旧的两�
     '负控前提：旧的配对形态确实对「第三子」放行——它若哪天变红，说明对照已无价值，可删该负控。')
 })
 
-vendorTest('分组缝：section[data-plugin-group] = [组头（h3 + 计数）在前、ul 卡列表在后]', () => {
-  const group = sliceThrough(pageSource(), 'const renderGroup', 'return (')
-  assert.match(group, /<section\b[^>]*\bdata-plugin-group=\{id\}>\s*<div\b[^>]*>[\s\S]*?data-plugin-count[\s\S]*?<\/div>\s*<ul\b[^>]*>[\s\S]*?<\/ul>\s*<\/section>/u,
-    '组形必须是「首子 = 组头 div（带 data-plugin-count 计数）在前、末子 = ul 卡列表在后」：'
-    + '容纳层据此把组盒 display:contents、把首组头提进页头行首轨，卡列表留在流里；只 pin 嵌套与顺序。')
+vendorTest('分组缝：section[data-plugin-group] = [组头 div（h3 在前）在前、ul 卡列表在后]', () => {
+  const group = sliceThrough(pageSource(), 'const renderGroup', '</section>')
+  assert.match(group, /<section\b[^>]*\bdata-plugin-group=\{id\}>[\s\S]*?<div\b[^>]*>[\s\S]*?<h3\b[\s\S]*?<\/div>[\s\S]*?<ul\b[^>]*>[\s\S]*?<\/ul>/u,
+    '组形必须是「首子 = 组头 div（标题 h3 在前）在前、卡列表 ul 在后」：'
+    + '容纳层据此把组盒 display:contents、把首组头提进页头行首轨，卡列表留在流里；只 pin 嵌套与顺序。'
+    + 'alpha.2 起组头不再带计数元素（data-plugin-count 退役），ul 在整个 renderGroup 内是条件渲染。')
 })
 
-vendorTest('首组是 Official、次组是已安装（首轨该放谁的语义锚）', () => {
+vendorTest('首组是 basic、其后 extensions / bundles（首轨该放谁的语义锚）', () => {
   const page = pageSource()
-  assert.match(page, /\brenderGroup\('official', t\('officialTitle'\),/u,
-    '首组必须是 Official：容纳层把**第一个** data-plugin-group 的组头提进行一（官方 7 那一行）。')
-  assert.match(page, /\brenderGroup\('bundles', t\('bundlesTitle'\),/u,
-    '次组（已安装）的渲染调用必须仍在；组序变化即复核首轨该放谁，并同步 checklist §3 登记。')
-  assertOrder(page, ["renderGroup('official'", "renderGroup('bundles'"], 'Official 必须仍是第一个渲染的组。')
+  assert.match(page, /\brenderGroup\('basic', t\('basicTitle'\),/u,
+    '首组必须是 basic：容纳层把**第一个** data-plugin-group 的组头提进行一。alpha.2 起分组语义由'
+    + '「Official / 已安装」改为「basic / extensions / bundles」，行一的标签随之改变；组序变化即复核首轨该放谁，并同步 checklist §3 登记。')
+  assertOrder(page, ["renderGroup('basic'", "renderGroup('extensions'", "renderGroup('bundles'"],
+    '组序必须是 basic -> extensions -> bundles。')
 })
 
-vendorTest('两条 chrome 行：页头 + 详情头各带 data-window-drag', () => {
+vendorTest('chrome 行：页头 + more 视图头 + 详情头各带 data-window-drag', () => {
   const count = pageSource().split('data-window-drag').length - 1
-  assert.equal(count, 2,
-    `本页应恰有两条 data-window-drag（页头行 + 详情头，实得 ${count}）：容纳层按属性命中两条 chrome 行`
-    + '（padding-top: 0），多一条少一条都要重锚 checklist §3 末条。')
+  assert.equal(count, 3,
+    `本页应恰有三条 data-window-drag（页头、more 视图头、详情头，实得 ${count}）：页头与 more 头互斥且都是页根直接子（容纳层的行一与 padding-top 直接子规则只命中渲染中的那一条），详情头只在后代选择器里；`
+    + '多一条少一条都要重锚 checklist §3 末条。')
 })
 
 vendorTest('页根自身的槽锚点 plugins.bundle.activation 仍是直接子表达式', () => {

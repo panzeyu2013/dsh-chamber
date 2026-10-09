@@ -48,10 +48,10 @@
   ],
   "patches": [
     {
-      "spec": "@earendil-works/pi-ai@0.87.1",
-      "file": "patches/@earendil-works__pi-ai@0.87.1.patch",
+      "spec": "@earendil-works/pi-ai@1.0.2",
+      "file": "patches/@earendil-works__pi-ai@1.0.2.patch",
       "runtimeClosure": true,
-      "note": "pi-ai 流式修复；运行期闭包内的依赖（runtime lock 记录 patch_hash）"
+      "note": "pi-ai 流式修复：delta 期间不解析参数（toolcall partial 保持 {}），运行期闭包内的依赖（runtime lock 记录 patch_hash）；补丁随上游 pin 重锚"
     },
     {
       "spec": "@electron/osx-sign@1.3.3",
