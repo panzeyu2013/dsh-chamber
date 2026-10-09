@@ -15,6 +15,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import { pickEffectiveCwd } from './core-validation.ts'
 import {
   GitWorktreeCore,
   domainResult,
@@ -61,6 +62,33 @@ interface GitWorktreeHostContext extends Context {
   }
 }
 
+/** Structural view of the optional session-projection registry (alpha.2+; absent earlier). */
+interface SessionProjectionSource {
+  stateOf(session: object, key: string): unknown
+}
+
+/**
+ * Read the projected `workingDirectory` of one session.
+ * @param source - the optional registry read through `ctx.get`.
+ * @param session - the live session record.
+ * @returns the projected absolute directory, or undefined when the service, the key or a
+ *  non-string value is absent. A throwing projection collapses to undefined so the
+ *  immutable header cwd stays authoritative instead of darkening the whole source.
+ */
+function readProjectedWorkingDirectory(
+  source: SessionProjectionSource | undefined,
+  session: object,
+): string | undefined {
+  if (source === undefined) return undefined
+  try {
+    const value = source.stateOf(session, 'workingDirectory')
+    return typeof value === 'string' && value !== '' ? value : undefined
+  } catch (error) {
+    void error
+    return undefined
+  }
+}
+
 /** Remote-only facade; all validation, serialization and Git policy live in the pure core. */
 export class GitWorktreeGateway extends TypertRemoteService {
   static inject = ['workspaceRegistry', 'agents']
@@ -70,6 +98,7 @@ export class GitWorktreeGateway extends TypertRemoteService {
   constructor(ctx: Context) {
     super(ctx, 'gitWorktree')
     const host = ctx as GitWorktreeHostContext
+    const projections = ctx.get('sessionProjections') as SessionProjectionSource | undefined
     this.core = new GitWorktreeCore({
       source: {
         listWorkspaces: () => host.workspaceRegistry.list().map(workspace => ({
@@ -82,7 +111,13 @@ export class GitWorktreeGateway extends TypertRemoteService {
         listAgents: () => host.agents.list().map(agent => ({
           sessionId: String(agent.id),
           status: agent.status,
-          ...(agent.session.header.cwd === undefined ? {} : { cwd: agent.session.header.cwd }),
+          ...(() => {
+            const cwd = pickEffectiveCwd(
+              readProjectedWorkingDirectory(projections, agent.session),
+              agent.session.header.cwd,
+            )
+            return cwd === undefined ? {} : { cwd }
+          })(),
           ...(agent.session.header.parentSession === undefined
             ? {}
             : { parentSessionId: String(agent.session.header.parentSession) }),

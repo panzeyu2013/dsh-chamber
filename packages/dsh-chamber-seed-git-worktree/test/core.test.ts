@@ -24,6 +24,7 @@ import {
   type GitRunner,
   type WorkspaceFact,
 } from '../src/core.ts'
+import { pickEffectiveCwd } from '../src/core-validation.ts'
 import {
   MAIN,
   COMMON,
@@ -624,4 +625,13 @@ test('snapshot carries upstream/ahead/behind and dirty facts from the --branch s
   assert.equal(mainRow.upstream, null)
   assert.equal(mainRow.ahead, 0)
   assert.equal(mainRow.behind, 0)
+})
+
+test('pickEffectiveCwd prefers the alpha.2 workingDirectory projection over the header', () => {
+  assert.equal(pickEffectiveCwd('/repo/.agents/worktrees/task-1', '/repo'), '/repo/.agents/worktrees/task-1')
+  assert.equal(pickEffectiveCwd(undefined, '/repo'), '/repo', 'alpha.1 (no projection) falls back to the header cwd')
+  assert.equal(pickEffectiveCwd('', '/repo'), '/repo', 'an empty projection is the absent case')
+  assert.equal(pickEffectiveCwd(null, '/repo'), '/repo', 'a null projection is the absent case')
+  assert.equal(pickEffectiveCwd(42, '/repo'), '/repo', 'a non-string projection is the absent case')
+  assert.equal(pickEffectiveCwd(undefined, undefined), undefined, 'neither value yields no cwd fact')
 })
