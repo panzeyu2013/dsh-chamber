@@ -99,22 +99,27 @@ function main() {
       throw err
     }
 
-    // 2. 复核本地解析 commit == 远程 ls-remote 解析（belt-and-suspenders）
-    const localCommit = run('git', ['-C', SUBMODULE, 'rev-parse', `${tag}^{commit}`])
+    // 2. 复核本地解析 commit == 远程 ls-remote 解析（belt-and-suspenders）。
+    // 附注 tag 同时广播 tag 对象与 peeled 的 ^{} commit：plain ref pattern 只返回
+    // tag 对象，故查询 glob 并精确匹配两个 ref；轻量 tag 只有一个 ref。
+    const localCommit = run('git', ['-C', SUBMODULE, 'rev-parse', tag + '^{commit}'])
+    const localObject = run('git', ['-C', SUBMODULE, 'rev-parse', tag])
     let remotePeeled = null
     let remoteRaw = null
-    for (const line of run('git', ['ls-remote', UPSTREAM_URL, `refs/tags/${tag}`], { stdio: ['ignore', 'pipe', 'pipe'] }).split('\n')) {
+    for (const line of run('git', ['ls-remote', UPSTREAM_URL, 'refs/tags/' + tag + '*'], { stdio: ['ignore', 'pipe', 'pipe'] }).split('\n')) {
       if (line.trim() === '') continue
       const [sha, ref] = line.trim().split(/\s+/)
-      if (ref.endsWith('^{}')) remotePeeled = sha
-      else remoteRaw = sha
+      if (ref === 'refs/tags/' + tag) remoteRaw = sha
+      else if (ref === 'refs/tags/' + tag + '^{}') remotePeeled = sha
     }
     if (remotePeeled === null && remoteRaw === null) fail(`远程不存在 tag ${tag}`)
-    const remoteCommit = remotePeeled ?? remoteRaw
-    if (localCommit !== remoteCommit) {
-      fail(`tag ${tag} 远程解析 ${remoteCommit.slice(0, 12)} != 本地 fetch ${localCommit.slice(0, 12)} — 上游 tag 疑似被重推，人工确认`)
+    if (remoteRaw !== null && remoteRaw !== localObject) {
+      fail(`tag ${tag} 的 tag 对象远程 ${remoteRaw.slice(0, 12)} != 本地 ${localObject.slice(0, 12)} — 上游 tag 疑似被重推，人工确认`)
     }
-    console.log(`[update-vendor] tag ${tag} -> commit ${localCommit.slice(0, 12)}（远程一致）`)
+    if (remotePeeled !== null && remotePeeled !== localCommit) {
+      fail(`tag ${tag} 的 commit 远程 ${remotePeeled.slice(0, 12)} != 本地 ${localCommit.slice(0, 12)} — 上游 tag 疑似被重推，人工确认`)
+    }
+    console.log(`[update-vendor] tag ${tag} -> commit ${localCommit.slice(0, 12)}（远程一致${remotePeeled === null ? '，轻量 tag' : '，附注 tag'}）`)
 
     // 3. checkout submodule 到该 commit（detached）
     run('git', ['-C', SUBMODULE, 'checkout', '--detach', localCommit])
