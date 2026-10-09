@@ -7,7 +7,12 @@ import { assertSafeGitArgv, fail, safeErrorMessage } from './core-validation.ts'
 import { spawn } from 'node:child_process'
 import { isAbsolute } from 'node:path'
 
-export const HOOK_GUARD: readonly string[] = ['-c', `core.hooksPath=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`]
+export const HOOK_GUARD: readonly string[] = [
+  '-c', `core.hooksPath=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`,
+  // alpha.2's worktree service disables the configured fsmonitor on its own git spawns;
+  // the repository's `core.fsmonitor` can run a program on status, so cut it the same way.
+  '-c', 'core.fsmonitor=false',
+]
 
 /** Default bounded, shell-free local Git runner. */
 export function createLocalGitRunner(spawnGit: GitSpawner = spawn as unknown as GitSpawner): GitRunner {

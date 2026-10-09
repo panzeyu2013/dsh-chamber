@@ -25,6 +25,7 @@ import {
   type WorkspaceFact,
 } from '../src/core.ts'
 import { pickEffectiveCwd } from '../src/core-validation.ts'
+import { HOOK_GUARD } from '../src/core-git-runner.ts'
 import {
   MAIN,
   COMMON,
@@ -634,4 +635,11 @@ test('pickEffectiveCwd prefers the alpha.2 workingDirectory projection over the 
   assert.equal(pickEffectiveCwd(null, '/repo'), '/repo', 'a null projection is the absent case')
   assert.equal(pickEffectiveCwd(42, '/repo'), '/repo', 'a non-string projection is the absent case')
   assert.equal(pickEffectiveCwd(undefined, undefined), undefined, 'neither value yields no cwd fact')
+})
+
+test('the git guard disables repo hooks and the fsmonitor program', () => {
+  assert.deepEqual([...HOOK_GUARD], [
+    '-c', 'core.hooksPath=' + (process.platform === 'win32' ? 'NUL' : '/dev/null'),
+    '-c', 'core.fsmonitor=false',
+  ], 'every spawn must keep the hook and fsmonitor overrides ahead of the allowlisted argv')
 })
