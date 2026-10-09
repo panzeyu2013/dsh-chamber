@@ -48,6 +48,9 @@ interface UnregisteredRemoveTarget {
   /** The snapshot reported the directory as gone: the copy then explains the
    *  leftover-record cleanup instead of a plain removal. */
   missing: boolean
+  /** The snapshot reports uncommitted changes: the confirmation collects the
+   *  discard acknowledgement and the request then carries `discardChanges`. */
+  dirty: boolean
 }
 
 export interface SidebarWorkspaceGitInjected {
@@ -140,10 +143,11 @@ export function SidebarWorkspaceGitLine({
       <div className={css.unregisteredSection} role="group" aria-label={t('unregisteredTitle')}>
         <span className={css.unregisteredHeading}>{t('unregisteredTitle')}</span>
         {unregistered.map((worktree) => {
-          // Mirrors removeBlockReason: main/dirty/locked/unhealthy reject at the
-          // host. Asymmetry: this row has no discard authorization to collect, so
-          // dirty stays hard-blocked. A MISSING path is the deliberate exception —
-          // its directory is gone, so removal is a leftover-record cleanup.
+          // Mirrors removeBlockReason: main/locked/unhealthy reject at the host.
+          // A dirty row is NOT blocked: its confirmation carries the discard
+          // acknowledgement and the request then sends `discardChanges`. A MISSING
+          // path is the deliberate exception — its directory is gone, so removal is
+          // a leftover-record cleanup.
           const status = worktree.status
           const missing = status === 'missing'
           const blockedReason: ReturnType<typeof removeBlockReason> = worktree.isMain
@@ -154,9 +158,7 @@ export function SidebarWorkspaceGitLine({
                 ? undefined
                 : status !== 'ready'
                   ? 'unhealthy'
-                  : worktree.dirty === true
-                    ? 'dirty'
-                    : undefined
+                  : undefined
           const rowName = basenameOf(worktree.path)
           return (
             <div className={css.unregisteredRow} key={worktree.worktreeId} role="group">
@@ -190,7 +192,9 @@ export function SidebarWorkspaceGitLine({
                 disabled={busy || source.recovery !== undefined || blockedReason !== undefined}
                 title={blockedReason === undefined
                   // A missing row's removal IS the cleanup the blocked copy would point at.
-                  ? (missing ? t('unregisteredMissingRemoveTitle') : t('remove'))
+                  ? (missing
+                    ? t('unregisteredMissingRemoveTitle')
+                    : worktree.dirty === true ? t('unregisteredDirtyRemoveTitle') : t('remove'))
                   : (blockLabel(blockedReason, status, t) ?? t('remove'))}
                 aria-label={t('remove')}
                 onClick={() => {
@@ -204,6 +208,7 @@ export function SidebarWorkspaceGitLine({
                     head: worktree.head,
                     name: rowName,
                     missing,
+                    dirty: worktree.dirty === true,
                   })
                 }}
               >
@@ -221,8 +226,12 @@ export function SidebarWorkspaceGitLine({
             ? ''
             : (unregisteredRemove.missing
               ? t('unregisteredMissingRemoveConfirm')
-              : t('unregisteredRemoveConfirm')).replace('{name}', unregisteredRemove.name)}
-          acknowledgeLabel={t('unregisteredRemoveAck')}
+              : unregisteredRemove.dirty
+                ? t('unregisteredDirtyRemoveConfirm')
+                : t('unregisteredRemoveConfirm')).replace('{name}', unregisteredRemove.name)}
+          acknowledgeLabel={unregisteredRemove?.dirty === true
+            ? t('unregisteredDirtyDiscardAck')
+            : t('unregisteredRemoveAck')}
           cancelLabel={t('cancel')}
           closeLabel={t('close')}
           confirmLabel={t('removeConfirm')}
@@ -244,7 +253,7 @@ export function SidebarWorkspaceGitLine({
               path: target.path,
               branch: target.branch,
               head: target.head,
-            }).catch(() => {})
+            }, target.dirty ? { discardChanges: true } : {}).catch(() => {})
           }}
         />
       </div>

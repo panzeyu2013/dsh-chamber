@@ -16,6 +16,7 @@ import {
 import { GitActionError, gitActionErrorCode } from './action-error.ts'
 import { GitActionLedger } from './action-ledger.ts'
 import { workspaceAfterAnchor } from './placement.ts'
+import { unregisteredRemoveInput } from './remove-input.ts'
 import { SerializedRefreshes } from './refresh-flight.ts'
 import { GitWorktreeRpcError, gitWorktreeApi, isAmbiguousGitRpcFailure, isDeterministicGitRejection } from './git-api.ts'
 import { canTargetSession, effectiveSnapshot, findWorktree, removeBlockReason } from './git-facts.ts'
@@ -794,12 +795,13 @@ export async function removeWorktree(
 }
 
 /** Remove an UNREGISTERED worktree (no dsh workspace — Plan A): git-first via
- *  the host's path-based variant, no workspace.delete, no archive step. The row's
- *  delete button stays hard-disabled for dirty worktrees (no discard path wired). */
+ *  the host's path-based variant, no workspace.delete, no archive step. A dirty
+ *  worktree requires the row's explicit discard acknowledgement, which arrives
+ *  here as `discardChanges: true` (build with `unregisteredRemoveInput`). */
 export async function removeUnregisteredWorktree(
   sourceId: string,
   target: { repoId: string; worktreeId: string; path: string; branch: string | null; head: string },
-  options: { deleteBranch?: string } = {},
+  options: { deleteBranch?: string; discardChanges?: boolean } = {},
 ): Promise<void> {
   const operationId = nextId('remove')
   // Fresh refresh first: the row identity may be up to 30s stale.
@@ -808,17 +810,7 @@ export async function removeUnregisteredWorktree(
     throw new GitActionError('refresh-failed', 'Refreshing the Git worktree state failed', refreshFailure)
   }
   return runBusy(sourceId, { kind: 'remove', operationId }, async () => {
-    const input = {
-      operationId,
-      path: target.path,
-      expected: {
-        repoId: target.repoId,
-        worktreeId: target.worktreeId,
-        branch: target.branch,
-        head: target.head,
-      },
-      ...(options.deleteBranch === undefined ? {} : { deleteBranch: options.deleteBranch }),
-    }
+    const input = unregisteredRemoveInput(operationId, target, options)
     try {
       await runRemoveSaga({
         hostRemove: () => gitWorktreeApi.remove(sourceId, input, target.path),
