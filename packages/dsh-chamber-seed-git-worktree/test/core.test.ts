@@ -24,7 +24,7 @@ import {
   type GitRunner,
   type WorkspaceFact,
 } from '../src/core.ts'
-import { pickEffectiveCwd } from '../src/core-validation.ts'
+import { pickEffectiveCwd, readProjectedWorkingDirectory } from '../src/core-validation.ts'
 import { HOOK_GUARD } from '../src/core-git-runner.ts'
 import {
   MAIN,
@@ -642,4 +642,18 @@ test('the git guard disables repo hooks and the fsmonitor program', () => {
     '-c', 'core.hooksPath=' + (process.platform === 'win32' ? 'NUL' : '/dev/null'),
     '-c', 'core.fsmonitor=false',
   ], 'every spawn must keep the hook and fsmonitor overrides ahead of the allowlisted argv')
+})
+
+test('readProjectedWorkingDirectory reads through the optional registry and degrades quietly', () => {
+  const session = { header: { cwd: '/repo' } }
+  assert.equal(readProjectedWorkingDirectory({ stateOf: () => '/repo/wt' }, session), '/repo/wt',
+    'a live alpha.2 registry supplies the effective directory')
+  assert.equal(readProjectedWorkingDirectory(undefined, session), undefined,
+    'alpha.1 has no registry; the caller falls back to the header cwd')
+  assert.equal(readProjectedWorkingDirectory({ stateOf: () => 42 }, session), undefined,
+    'a non-string projection is the absent case')
+  assert.equal(readProjectedWorkingDirectory({ stateOf: () => '' }, session), undefined,
+    'an empty projection is the absent case')
+  assert.equal(readProjectedWorkingDirectory({ stateOf: () => { throw new Error('collapsed') } }, session), undefined,
+    'a throwing projection must not darken the whole source')
 })

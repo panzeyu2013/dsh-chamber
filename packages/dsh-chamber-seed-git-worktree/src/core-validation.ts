@@ -263,6 +263,33 @@ export function assertSafeGitArgv(args: readonly string[]): void {
   fail('unsafe-git-argv', `Git command '${verb ?? '<empty>'}' is outside the worktree allowlist`)
 }
 
+/** Structural view of the optional session-projection registry (alpha.2+; absent earlier). */
+export interface ProjectionSource {
+  stateOf(session: object, key: string): unknown
+}
+
+/**
+ * Read the projected `workingDirectory` of one session through an optional registry.
+ * @param source - the registry read from the host context, or undefined before alpha.2.
+ * @param session - the live session record.
+ * @returns the projected absolute directory, or undefined when the service, the key or a
+ *  non-string value is absent. A throwing projection collapses to undefined so the immutable
+ *  header cwd stays authoritative instead of darkening the whole source.
+ */
+export function readProjectedWorkingDirectory(
+  source: ProjectionSource | undefined,
+  session: object,
+): string | undefined {
+  if (source === undefined) return undefined
+  try {
+    const value = source.stateOf(session, 'workingDirectory')
+    return typeof value === 'string' && value !== '' ? value : undefined
+  } catch (error) {
+    void error
+    return undefined
+  }
+}
+
 /**
  * Pick one session's effective working directory: the alpha.2 `workingDirectory`
  * projection when it is a non-empty string, otherwise the immutable header directory.
