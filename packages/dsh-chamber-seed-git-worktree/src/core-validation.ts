@@ -294,16 +294,12 @@ export function readProjectedWorkingDirectory(
  * Pick one session's effective working directory: the alpha.2 `workingDirectory`
  * projection when it is a non-empty string, otherwise the immutable header directory.
  * @param projected - the projection value read from the optional host registry.
- * @param headerCwd - the immutable `session.header.cwd`.
- * @returns the effective absolute directory, or undefined when neither value is a string.
+ * @param headerCwd - the immutable `session.header.cwd`; any string passes through so the
+ *  core still classifies a malformed value (relative/empty) as drift and refuses fail-closed.
+ * @returns the effective directory, or undefined when neither value is a string.
  */
 export function pickEffectiveCwd(projected: unknown, headerCwd: unknown): string | undefined {
   if (typeof projected === 'string' && projected !== '') return projected
-  return typeof headerCwd === 'string' && headerCwd !== '' ? headerCwd : undefined
+  return typeof headerCwd === 'string' ? headerCwd : undefined
 }
 
-/**
- * Fixed `-c core.hooksPath=<nul>` guard prepended to every plugin git spawn. Command-line
- * `-c` is the highest-precedence config source, so a repository's own `core.hooksPath`
- * cannot override it. Read commands ignore hooksPath.
- */

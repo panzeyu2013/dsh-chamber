@@ -635,6 +635,8 @@ test('pickEffectiveCwd prefers the alpha.2 workingDirectory projection over the 
   assert.equal(pickEffectiveCwd(null, '/repo'), '/repo', 'a null projection is the absent case')
   assert.equal(pickEffectiveCwd(42, '/repo'), '/repo', 'a non-string projection is the absent case')
   assert.equal(pickEffectiveCwd(undefined, undefined), undefined, 'neither value yields no cwd fact')
+  assert.equal(pickEffectiveCwd(undefined, ''), '', 'a malformed header string passes through so core drift refuses fail-closed')
+  assert.equal(pickEffectiveCwd('relative/wt', '/abs'), 'relative/wt', 'a non-empty projection wins and core classifies the drift')
 })
 
 test('the git guard disables repo hooks and the fsmonitor program', () => {
