@@ -100,11 +100,19 @@ if (existsSync(installed) && !force) {
   const recorded = JSON.parse(readFileSync(path.join(dest, 'package.json'), 'utf8'));
   const recordedVersion = recorded.dependencies?.['@deepseek-ai/dsh'];
   if (recorded.dsh?.platform === platform && recordedVersion === VERSION) {
-    console.log(
-      `[bundle-dsh] 目标 ${dest} 已封装 @deepseek-ai/dsh@${recorded.dependencies?.['@deepseek-ai/dsh'] ?? '?'}（${platform}），跳过。`,
-    );
-    console.log(`[bundle-dsh] 使用 --force 重新拉取固定版本 @${VERSION}；升级须显式设置精确 DSH_CHAMBER_DSH_VERSION。`);
-    process.exit(0);
+    // 同版本同平台不足以跳过：普通 build 不重生成锁，补丁通道可能在版本不变的情况下变化，
+    // 故跳过前逐字节比较现有 workspace 与本次会渲染出的内容（§17-C）。
+    const staged = renderRuntimeWorkspace(renderAllowBuildsBlock(), upstreamPatchedDependencies());
+    let current;
+    try { current = readFileSync(path.join(dest, 'pnpm-workspace.yaml'), 'utf8'); } catch { current = undefined; }
+    if (current === staged) {
+      console.log(
+        `[bundle-dsh] 目标 ${dest} 已封装 @deepseek-ai/dsh@${recorded.dependencies?.['@deepseek-ai/dsh'] ?? '?'}（${platform}），patch 通道逐字节一致，跳过。`,
+      );
+      console.log(`[bundle-dsh] 使用 --force 重新拉取固定版本 @${VERSION}；升级须显式设置精确 DSH_CHAMBER_DSH_VERSION。`);
+      process.exit(0);
+    }
+    console.warn('[bundle-dsh] 现有封装的 patch 通道与当前渲染不一致（同版本补丁集/字节变化），重新封装。');
   }
   console.warn(
     `[bundle-dsh] 现有封装 ${recordedVersion ?? '未知版本'} / ${recorded.dsh?.platform ?? '未知平台'} 与要求 ${VERSION} / ${platform} 不符，重新封装。`,

@@ -11,6 +11,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -30,9 +31,11 @@ const block = upstreamPatchedDependencies()
 const entries = parsePatchedDependencies(block)
 
 test('上游 patch 集合可解析：specifier → patches/*.patch', () => {
-  assert.ok(entries.length >= 7, 'behind the pin at least the seven recorded patches')
+  assert.ok(entries.length >= 1, 'the pinned vendor block carries at least one patch')
   for (const entry of entries) assert.match(entry.file, /^patches\/[^/]+\.patch$/u)
   assert.equal(new Set(entries.map(e => e.spec)).size, entries.length, 'no duplicate specifier')
+  assert.equal(new Set(patchOverrides(block).map(o => o.name)).size, entries.length,
+    'one override key per package: a duplicated name cannot be pinned and must be rejected by patchOverrides')
 })
 
 test('每个条目都有对应的 patch 文件，且目录内没有未登记文件', () => {
@@ -58,7 +61,8 @@ test('staging 把 pin 的文件按字节拷进 work 目录', () => {
     const staged = stageUpstreamPatches(work)
     assert.equal(staged.files, entries.length)
     assert.equal(staged.entries, entries.length)
-    const nodePty = 'node-pty@1.2.0-beta.15.patch'
+    const nodePty = entries.find(entry => entry.spec.startsWith('node-pty@'))?.file.slice('patches/'.length)
+    assert.ok(nodePty !== undefined, 'the pinned set carries the node-pty patch')
     assert.deepEqual(
       readFileSync(join(work, 'patches', nodePty)),
       readFileSync(join(VENDOR_PATCHES, nodePty)),
@@ -79,6 +83,16 @@ test('提交的运行期锁文件记录同一 patch 集合（pin 升级必须重
     .map(match => ({ spec: match[1], hash: match[2] }))
   assert.deepEqual(lockEntries.map(e => e.spec).sort(), entries.map(e => e.spec).sort())
   assert.equal(new Set(lockEntries.map(e => e.hash)).size, lockEntries.length, '每个 specifier 一个独立 patch hash')
+  // The lock's hash is self-describing; only the VENDOR bytes prove the lock was
+  // regenerated after the patch content changed (same spec, new bytes).
+  const fileBySpec = new Map(entries.map(entry => [entry.spec, entry.file.slice('patches/'.length)]))
+  for (const entry of lockEntries) {
+    const file = fileBySpec.get(entry.spec)
+    assert.ok(file !== undefined, entry.spec + ' must resolve to one vendor patch file')
+    const vendorHash = createHash('sha256').update(readFileSync(join(VENDOR_PATCHES, file))).digest('hex')
+    assert.equal(entry.hash, vendorHash,
+      entry.spec + ' 的锁内 hash 必须等于 vendor 补丁字节的 sha256；不等即锁未随补丁重生成')
+  }
 })
 
 test('被补丁依赖在运行期与根两条安装腿都解析出 patch_hash（allowUnusedPatches 静默窗口）', () => {

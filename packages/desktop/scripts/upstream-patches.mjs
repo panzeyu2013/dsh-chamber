@@ -69,7 +69,7 @@ export function upstreamPatchedDependencies(workspacePath = VENDOR_WORKSPACE) {
  * @returns {{ spec: string, file: string }[]}.
  */
 export function parsePatchedDependencies(block) {
-  return [...block.matchAll(/^ {2}'?([^':\n]+)'?: (patches\/[^\n]+)$/gmu)]
+  return [...block.matchAll(/^ {2}["']?([^"':\n]+)["']?: (patches\/[^\n]+)$/gmu)]
     .map(match => ({ spec: match[1], file: match[2] }))
 }
 
@@ -86,7 +86,12 @@ export function upstreamPatchFiles(patchesDir = VENDOR_PATCHES) {
 function specName(spec) {
   const at = spec.lastIndexOf('@')
   if (at <= 0) throw new Error('[upstream-patches] 补丁键必须带精确版本（否则无法派生 override）：' + spec)
-  return { name: spec.slice(0, at), version: spec.slice(at + 1) }
+  const name = spec.slice(0, at)
+  const version = spec.slice(at + 1)
+  if (!/^(@[^/@]+\/)?[^@/\s]+$/u.test(name) || version === '') {
+    throw new Error('[upstream-patches] 补丁键形状非法（name@version）：' + spec)
+  }
+  return { name, version }
 }
 
 /** Escape one literal for a RegExp source. */
@@ -102,7 +107,15 @@ function escapeRegExp(text) {
  * @returns {{ name: string, version: string }[]} in source order.
  */
 export function patchOverrides(block) {
-  return parsePatchedDependencies(block).map(({ spec }) => specName(spec))
+  const overrides = parsePatchedDependencies(block).map(({ spec }) => specName(spec))
+  const seen = new Set()
+  for (const { name } of overrides) {
+    // One override key cannot pin two versions of the same package; pnpm would
+    // reject the duplicated YAML key later with a less direct message.
+    if (seen.has(name)) throw new Error('[upstream-patches] 同一包出现多个补丁版本，无法派生唯一 override：' + name)
+    seen.add(name)
+  }
+  return overrides
 }
 
 /**
@@ -135,12 +148,12 @@ export function assertPatchesApplied(lockText, block, label) {
   const top = /^patchedDependencies:\n(?: {2}.*\n)+/mu.exec(lockText)?.[0]
   if (top === undefined) throw new Error('[upstream-patches] ' + label + ' 缺少 patchedDependencies 块（§17-C）')
   const hashes = new Map(
-    [...top.matchAll(/^ {2}'?([^':\n]+)'?: ([0-9a-f]{64})$/gmu)].map(match => [match[1], match[2]]),
+    [...top.matchAll(/^ {2}["']?([^"':\n]+)["']?: ([0-9a-f]{64})$/gmu)].map(match => [match[1], match[2]]),
   )
   const body = lockText.replace(top, '')
   for (const { spec } of parsePatchedDependencies(block)) {
     const { name } = specName(spec)
-    if (!new RegExp("^ {2}'?" + escapeRegExp(name) + '@', 'mu').test(body)) continue
+    if (!new RegExp("^ {2}[\"']?" + escapeRegExp(name) + '@', 'mu').test(body)) continue
     const hash = hashes.get(spec)
     if (hash === undefined || !lockText.includes(spec + '(patch_hash=' + hash + ')')) {
       throw new Error('[upstream-patches] ' + label + ': ' + name

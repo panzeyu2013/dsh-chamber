@@ -244,7 +244,7 @@ test('patches 登记与 vendor pin 的 patchedDependencies 逐条一致（上游
   const vendorWs = readFileSync(join(HERE, '..', '..', 'vendor', 'harness-checkout', 'pnpm-workspace.yaml'), 'utf8')
   const block = /^patchedDependencies:\n(?: {2}.*\n)+/mu.exec(vendorWs)?.[0]
   assert.ok(block !== undefined, 'vendor pin 的 pnpm-workspace.yaml 必须带 patchedDependencies')
-  const vendorSet = [...block.matchAll(/^ {2}'?([^':\n]+)'?: (patches\/[^\n]+)$/gmu)]
+  const vendorSet = [...block.matchAll(/^ {2}["']?([^"':\n]+)["']?: (patches\/[^\n]+)$/gmu)]
     .map((match) => match[1] + ' -> ' + match[2])
     .sort()
   const registrySet = registry.patches.map((patch) => patch.spec + ' -> ' + patch.file).sort()
@@ -269,7 +269,7 @@ test('根安装腿 patch 通道：本仓 pnpm-workspace.yaml 与 registry.patche
   const rootWs = readFileSync(join(HERE, '..', '..', 'pnpm-workspace.yaml'), 'utf8')
   const block = /^patchedDependencies:\n(?: {2}.*\n)+/mu.exec(rootWs)?.[0]
   assert.ok(block !== undefined, '根 workspace 必须带 patchedDependencies（§17-C dev 腿）')
-  const rootSet = [...block.matchAll(/^ {2}'?([^':\n]+)'?: (patches\/[^\n]+)$/gmu)]
+  const rootSet = [...block.matchAll(/^ {2}["']?([^"':\n]+)["']?: (patches\/[^\n]+)$/gmu)]
     .map((match) => match[1] + ' -> ' + match[2])
     .sort()
   assert.deepEqual(rootSet, registry.patches.map((patch) => patch.spec + ' -> ' + patch.file).sort(),
