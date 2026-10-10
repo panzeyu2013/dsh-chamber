@@ -13,7 +13,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { discardAuthorized, nextDiscardGate } from '../../src/shared/discard-gate.ts'
-import { unregisteredRemoveInput } from '../../src/shared/remove-input.ts'
+import { unregisteredRemoveInput, unregisteredRemoveOptions } from '../../src/shared/remove-input.ts'
 import type { DiscardGateFacts } from '../../src/shared/discard-gate.ts'
 
 /** The dialog's facts with nothing acknowledged and nothing refused. */
@@ -91,4 +91,11 @@ test('unregistered removal carries discardChanges only when explicitly authorize
   assert.deepEqual(unregisteredRemoveInput('op', target).expected,
     { repoId: 'r-1', worktreeId: 'w-1', branch: 'task', head: 'a'.repeat(40) },
     'identity re-verification rides along on every request')
+})
+
+test('the unregistered row authorizes the discard flag only for a dirty target', () => {
+  assert.deepEqual(unregisteredRemoveOptions(false), {},
+    'a clean row must not send the force authorization')
+  assert.deepEqual(unregisteredRemoveOptions(true), { discardChanges: true },
+    'the acknowledged dirty row sends exactly the flag the host consumes')
 })

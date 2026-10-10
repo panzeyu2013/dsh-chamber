@@ -19,6 +19,7 @@ import {
   clearActionError, createSessionHere, currentSessionIsBlank, gitCoordinator, removeUnregisteredWorktree, retryRecovery,
 } from '../shared/coordinator.ts'
 import { gitActionErrorTextFor } from '../shared/action-error.ts'
+import { unregisteredRemoveOptions } from '../shared/remove-input.ts'
 import { gitFactsForWorkspace, removeBlockReason } from '../shared/git-facts.ts'
 import { removeRunningNotes } from '../shared/remove-notes.ts'
 import type { GitBusyKind, GitRecovery, GitWorktreeInfo } from '../shared/types.ts'
@@ -253,7 +254,7 @@ export function SidebarWorkspaceGitLine({
               path: target.path,
               branch: target.branch,
               head: target.head,
-            }, target.dirty ? { discardChanges: true } : {}).catch(() => {})
+            }, unregisteredRemoveOptions(target.dirty)).catch(() => {})
           }}
         />
       </div>

@@ -15,6 +15,16 @@ export interface RemoveInputTarget {
 }
 
 /**
+ * The remove options one unregistered row authorizes: the discard flag rides only
+ * after the dirty acknowledgement, never as a default.
+ * @param dirty - the row's fresh dirty fact the confirmation copy was built from.
+ * @returns the options consumed by `removeUnregisteredWorktree`.
+ */
+export function unregisteredRemoveOptions(dirty: boolean): { discardChanges?: true } {
+  return dirty ? { discardChanges: true } : {}
+}
+
+/**
  * Build the host remove input for one target.
  * @param operationId - idempotency id minted by the coordinator.
  * @param target - fresh row identity (path plus expected repo/worktree/branch/head).
