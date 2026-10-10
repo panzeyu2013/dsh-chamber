@@ -589,16 +589,24 @@ pre-remove 归档**带 `stopActivity: true`**：勾选即授权宿主停止这�
   `runningRemoveBlockNote`；旧宿主（无 `blockingRunningSessionIds` 字段）用中性
   `runningRemoveLegacyTitle` + `runningRemoveLegacyNote`——**不得声称归档状态**（编造事实）；另有
   已归档、或位于已归档会话子代理之下的运行中会话时追加 `runningRemoveArchivedNote`。
+- **running 位置判据读会话的 EFFECTIVE 目录**：`sessionProjections.stateOf(session,'workingDirectory')`
+  非空即优先，否则回退不可变的 `session.header.cwd`（`pickEffectiveCwd`）；两者都非法（相对路径 / 空串）
+  时交回 core 的 drift 校验 fail-closed。会话 cd 进某棵工作树后，该树的删除仍被 running 守卫拒绝。
   `removeBlockReason` 的判定顺序是 **main → unregistered →
   current（blank 例外）→ runtime-unknown → running → locked → unhealthy → dirty →
   status-unknown**：`current` / `runtime-unknown` 都在 `running` **之前**，故过时
   或「仅已归档」的 running 事实无法绕过二者。
 - **未注册行删除**走**应用内官方 `RiskConfirmation`**（`SidebarWorkspaceGitLine.tsx` 中该行渲染的 `RiskConfirmation`，该行原用原生 `window.confirm`，无法使用 alias token）：行内删除按钮只武装
-  确认（勾选框「我了解该移除不可撤销」，主按钮勾选前不可用，每次关闭都重置），确认后才发出移除。该
-  行**仍无对话框授权流**——dirty 沿用不对称：移除不携带 `discardChanges`，确定性拒绝 + host 英文提示
-  （终端删除 modules 目录或 `--force`）。未注册块的 **missing 行**（§5.5）删除按钮不再硬禁用：行
+  确认（勾选框「我了解该移除不可撤销」，主按钮勾选前不可用，每次关闭都重置），确认后才发出移除。
+  **dirty 行在同一确认框收集丢弃授权**：勾选文案换成「我了解该删除会丢弃工作树内的改动且不可撤销
+  （分支保留）」，`unregisteredRemoveOptions(dirty)` 只在该行被判为 dirty 时发 `discardChanges: true`；
+  clean 行不带该 flag（无需 force）。未注册块的 **missing 行**（§5.5）删除按钮不再硬禁用：行
   文案明示这是「残留记录清理」（等效该记录的 `git worktree prune`，不涉及任何文件或分支），确认文案
   单独措辞；adopt（新建会话）对 missing 行保持禁用。
+- **Rejected alternatives（未注册行 dirty 授权）**：继续对 dirty 硬禁用（只让用户在终端自行
+  `--force`）被否——行内已有官方 `RiskConfirmation`，host 的 `discardChanges` 语义就是「显式丢弃
+  工作区改动、分支保留」，单勾选文案已同时覆盖「丢弃」与「不可撤销」；再加第二个丢弃勾选框（与注册行
+  discard-gate 同形）只是重复授权，收益不抵交互成本。
 
 ### 5.5 级联（先归档）、missing 记录清理与完成写
 
