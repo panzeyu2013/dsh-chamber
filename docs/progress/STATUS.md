@@ -422,3 +422,4 @@
 - 账号链（alpha.3 起）：官方 @deepseek-ai/dsh-client-ui-settings-account 仍**有意跳过**——其 apply 以 'dshDesktop' in globalThis 分叉，桌面 carrier（官方 shortcuts/updater 座席需要）触发 shell.overlay 的 desktop-onboarding 全屏面，而 chamber 无桌面 configForms 表单使其停在加载态并 inert #root。备选 A（chamber 专属 vendor 补丁门控 overlay 注册，需扩展 C0 的运行期补丁块）与 B（仅非 dshDesktop flavor 条件 register+factory）待裁决；Web/Gateway flavor 的账号登录缺口与机制见 design 09 §3.5。
 - cua / cua-macos（alpha.3 新增实验包）：不在 web bundle 与运行期闭包；chamber 不接入（自建即重造宿主执行面），需要时由用户在 dsh profile 显式启用。
 - ServerSection god-file 预算按 alpha.3 #6062 注意力水位 feature 做 review-justified raise（1243→1273；理由见 scripts/gates/file-budgets.json 的 note）；最近提取目标 = 排序/分区准备块（server-section-order.ts）。
+- 上游 alpha.3 的 workspace 成员判定变化待复核（源码实证）：`ui-workspace` 的成员解析改为 cwd 完全限定且 ENOENT 的会话仍算成员（candidateMatches/missingSessionPaths）——原「路径缺失 → 成员被过滤」不再成立；本仓多来源分组/未分组桶的呈现前提需在真机或下一轮复验后按 design 06 §11 补记，期间不对该行为做自过滤。

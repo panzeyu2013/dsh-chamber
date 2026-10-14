@@ -773,15 +773,18 @@ Authorization/Cookie，renderer 不持 token）；内容为 gateway 进程 + 托
 chamber 代码。chamber 插件（sidebar/layout/settings-bridge/git/open-in 等）只随桌面复合 bundle
 分发，不注入 gateway 托管前端，故浏览器直连没有「连接管理 / 设置壳 / 侧边栏」等扩展面。
 
-- **官方设置页的 loopback 门控由 gateway 出口信任声明解除**（S0）：官方 `dsh-client-ui-settings` 以
+- **官方设置页的 loopback 门控由 gateway 出口信任声明解除**（S0）：官方 `dsh-client-ui-settings` 曾以
   `ctx.remote.$host.isLoopback` 决定持久化模式——`isLoopback=false`（非 loopback 主机名访问）→ `persistence='memory'`
   → 设置 scope 终态 `unavailable`。gateway 代理出口对托管 dsh 的 `text/html` 文档（≤64KiB、identity 编码、
   幂等、fail-soft）注入 `window.__DSH_TRANSPORT__={ownsHost:true}`（上游文档化钩子契约，
-  `packages/gateway/src/html-inject.ts`），使官方前端 `connection.isLoopback=true` → 设置持久化进入
-  host 模式，浏览器直连（任意 origin）的 settings/models/插件面可用并写宿主。**信任决策**：auth 门在先、
-  能登录即受信（`--no-auth` 可信网络部署同语义）——非鉴权绕过（服务端 RPC 不区分来源，该门是纯
-  客户端 UI 策略）；上游移除钩子/改压缩行为则注入静默失效（fail-soft，设置退回受限态，升级 dsh 版本需
-  复验）。实现与验收见 STATUS.md「http 连接链路修复（S0/S2）」。
+  `packages/gateway/src/html-inject.ts`），使官方前端 `connection.isLoopback=true`。
+  **alpha.3 修正**：上游已删除 settings 的 `persistence`/`'memory'` 分支，上述「设置持久化进入 host 模式」
+  的因果**不再存在**；但注入本身未必是死件——`isLoopback` 仍被 `ui-settings-general` 的 documentController
+  与 `api-request-trust` 的请求信任判定消费，二者的语义结论与注入存废须逐条复核后决定（本轮仅登记，
+  不改注入）。**信任决策**不变：auth 门在先、能登录即受信（`--no-auth` 可信网络部署同语义）——非鉴权绕过
+  （服务端 RPC 不区分来源，该门是纯客户端 UI 策略）；上游移除钩子/改压缩行为则注入静默失效（fail-soft）。
+  **Rejected alternatives**：为保留 `persistence='memory'` 而 fork `ui-settings`、或继续以该门为注入的
+  存在理由——上游删分支后两者都失去对象。实现与验收见 STATUS.md「http 连接链路修复（S0/S2）」。
 - **WebKit 原生源码归一（S0 头补丁之二，design 14 §D4；已随最低 runtime 抬升删除）**：同一个 `html-inject.ts` 出口
   曾把**只作用于内建函数**的 `Function.prototype.toString` 空白归一脚本插进同一批文档（与信任声明**各自幂等**）。
   背景：JavaScriptCore 对**内建函数**打印多行 `{ [native code] }`，而 0.1.7-rc.2 的 `@deepseek-ai/dsh-util-values`

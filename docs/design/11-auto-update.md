@@ -102,6 +102,11 @@ electron-updater 6.x **安装成功后从不删除**下载产物（`DownloadedUp
 - **发布侧**：beta = 版本精确匹配 canonical `X.Y.Z-beta.N`（如 `0.2.0-beta.1`）→ 独立
   `electron-builder.beta.yml` 显式产 `beta*.yml`；stable 用默认配置只产 `latest*.yml`；`alpha`、`rc` 与其他 prerelease 一律版本门禁拒绝。GitHub Release 的 prerelease 标志由已校验的 canonical beta 版本推导（非 workflow 输入——tag-push 时输入为空，按输入推导会把 beta feed 发到非 prerelease release，稳定客户端会把该 release 当最新并 404 在 latest.yml）；验证通过后发正式版本（`latest*.yml`）——「先内测、后提升」，契合既有 draft → finalize 手动节奏。
 - **明确不做（v1）**：百分比灰度（按客户端分桶）——需自托管 feed 侧实现；用户规模达到再评估。
+- **Rejected alternatives（alpha.3 对照）**：不采纳上游新的 installer-owned channel（`dshDesktopUpdateChannel`
+  nightly/latest 封进安装包 manifest）与 COS 人工 dispatch 发布链，也不采纳其 main-owned 确认对话框
+  （`update-dialog.ts` 的 revision 拒绝过期回答）：chamber 的通道模型以 canonical `-beta.N` 后缀判 beta、
+  feed 显式 `setFeedURL` 到精确 tag（本 §），UX 契约是「无弹窗、用户明确点击才下载」（§2）。可借鉴但未落点：
+  通道封进安装包可与版本号/上传环境解耦、确认回答带 revision——若未来出现 channel/feed 错配事故再评估。
 
 ## 5. 更新数据流与 UX
 
