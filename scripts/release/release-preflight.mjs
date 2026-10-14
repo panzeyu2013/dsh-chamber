@@ -62,7 +62,7 @@ for (let i = 0; i < args.length; i++) {
 }
 
 const VERSION = positional[0]
-const FORK_VERSION = flags.forkVersion ?? '0.2.1-alpha.2'
+const FORK_VERSION = flags.forkVersion ?? '0.2.1-alpha.3'
 
 // ---------------------------------------------------------------------------
 // 检查器（fail-fast：任一失败即退出 1，消息指明修复方向）

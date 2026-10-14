@@ -76,6 +76,8 @@ pure 16：`src/http-bridge.ts`、`src/rpc.ts`、`src/rpc-host.ts`、`src/rpc-sch
 | `src/client/liveness-triggers.ts` | [own] | chamber sleep/wake 活性触发（design 14；原生 reconnect + 离线门 + 唤醒事件旁路） |
 | `src/client/recovery-policy.ts` | [own] | chamber 每来源恢复时序策略（远端 45s/5s，本地保持上游默认） |
 | `test/` | [own] | chamber 自有测试（api-path/carrier-assembly/liveness-triggers/client-apply + fixtures（含 schemastery/fixture/recovery-config 桩 loader）） |
+| `locale/en.json` | [dropped] | 上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。 |
+| `locale/zh.json` | [dropped] | 上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。 |
 | `tests/` | [dropped] | chamber 无 tsdown / 不镜像上游测试 |
 | `tsdown.config.ts` | [dropped] | chamber 无 tsdown / 不镜像上游测试 |
 <!-- GENERATED:registry:touchpoints.fork-mirror.connection:end -->
@@ -134,6 +136,9 @@ pure 5（以脚本计数为准）。
 | `README.i18n.yaml` | [dropped] | 上游 README 不携带（fork 描述在 package.json） |
 | `README.md` | [dropped] | 上游 README 不携带（fork 描述在 package.json） |
 | `README.zh.md` | [dropped] | 上游 README 不携带（fork 描述在 package.json） |
+| `locale/en.json` | [dropped] | 上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。 |
+| `locale/zh.json` | [dropped] | 上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。 |
+| `src/access.ts` | [dropped] | 上游 alpha.3 新增的 host-half RBAC 策略文件（gateway 宿主侧 decide/allows）；本仓 fork 只取 client half（与 src/index.ts、src/stream-server.ts、src/types.ts 同口径不复制）。 |
 | `src/index.ts` | [dropped] | 上游 host 插件入口（chamber 不镜像 host 半） |
 | `src/stream-server.ts` | [dropped] | 上游 host 半流服务器（dropped） |
 | `src/types.ts` | [dropped] | 上游 host/aux 类型文件（源码与 inert ./types 子路径均已移除） |
@@ -173,6 +178,8 @@ host插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游README（api
 | `README.i18n.yaml` | [dropped] | 上游 README 不携带（fork 描述在 package.json/源码首页） |
 | `README.md` | [dropped] | 上游 README 不携带（fork 描述在 package.json/源码首页） |
 | `README.zh.md` | [dropped] | 上游 README 不携带（fork 描述在 package.json/源码首页） |
+| `locale/en.json` | [dropped] | 上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。 |
+| `locale/zh.json` | [dropped] | 上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。 |
 | `src/internals.ts` | [dropped] | 上游测试接缝（本包的接缝走 OpenInAppCore 构造注入，不需要它） |
 | `tests/` | [dropped] | 上游测试不镜像（本包 test/ 覆盖域契约） |
 | `tsdown.config.ts` | [dropped] | 上游打包配置（本包走 scripts/build.mjs） |
@@ -208,6 +215,8 @@ host插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游README（api
 | `test/` | [own] | chamber 自有测试（layout-store：共享/持久/采纳/去抖；document-theme：活动视图门控与 prime 决策） |
 | `README.i18n.yaml` | [dropped] | 上游 README 对的哈希记录不携带（fork 说明在 README.md/package.json） |
 | `README.zh.md` | [dropped] | 中文 README 不镜像（chamber 说明只有一份） |
+| `locale/en.json` | [dropped] | 上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。 |
+| `locale/zh.json` | [dropped] | 上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。 |
 | `src/client/AppFrame.module.css` | [dropped] | frame 样式不镜像：深引 vendor 源 |
 | `src/client/AppFrame.tsx` | [dropped] | frame 不镜像：深引 vendor 源（三列网格/拖拽/列解算仍是上游实现） |
 | `src/client/DocumentTitle.tsx` | [dropped] | 上游同包文件，本 fork 不镜像（vendor 树内保留） |
@@ -249,6 +258,8 @@ host插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游README（api
 | `scripts/` | [own] | chamber 自有脚本（测试 manifest 与清单守卫） |
 | `src/` | [own] | chamber 自有实现（多来源聚合、面板轴（panel-source 镜像 + ServerSectionHeader 头内紧凑入口）、来源降级、归档管理器、工作区变更/拖拽排序、client-plugin load kernel、席位 chrome、按上游逐字移植的 keyed-row FLIP 动画器 rows/animated-rows.* 等） |
 | `test/` | [own] | chamber 自有测试（按域分组：session-rows/session-state/source-runtime/plugin-kernel…） |
+| `locale/en.json` | [dropped] | 上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。 |
+| `locale/zh.json` | [dropped] | 上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。 |
 | `src/client/HeaderLeadingControls.module.css` | [dropped] | 该组件的内部样式；上游文件不镜像、也不被消费——同一 shell.leading 席位由本包 SidebarLeadingControls.module.css（上游同形 clone）实现 |
 | `src/client/HeaderLeadingControls.tsx` | [dropped] | 上游组件不镜像、不被源码路径消费；同一 shell.leading 席位由本包 SidebarLeadingControls.tsx 注册占座（src/client/index.ts；vendor-modules.d.ts 只声明本包用到的类型面） |
 | `tests/` | [dropped] | 上游测试/快照不镜像（chamber 有自建 test/） |

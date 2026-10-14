@@ -108,7 +108,12 @@ interface InstalledMethod {
 
 /** Typed Remote service augmented by generated direct namespaces and Gateway stream supervision. */
 export interface ClientRemote extends TypertClientRemote {
-  /** Create one independently cancellable, reconnecting logical stream. */
+  /**
+   * Create an independently cancellable, reconnecting logical stream.
+   * Requires interactions=answer; passive Clients use generated stream methods.
+   * @param options - domain-owned opener and generation-end classification.
+   * @returns a single-consumer stream annotated with physical generation ids.
+   */
   $stream<Item>(options: RemoteStreamOptions<Item>): RemoteStream<Item>
   /**
    * Fixed Host facts as plain reads: no store, subscription, or generation counter.
@@ -151,7 +156,7 @@ class ClientRemoteService extends Service implements ClientRemote {
   private readonly namespaces = new Map<string, RemoteNamespaceHandle>()
   private hostFacts: RemoteHostFacts | undefined
   private readonly streams: RemoteStreamMuxClient
-  private readonly events: ClientRemoteEvents
+  private readonly events: ClientRemoteEvents | undefined
   /** chamber (design 14 §D4): page-level carrier-failure fact for the active source (diagnostics only). */
   private readonly reportCarrierFailure: (error: unknown) => void
   private mutations = Promise.resolve()
@@ -169,21 +174,37 @@ class ClientRemoteService extends Service implements ClientRemote {
     const forensics = createStreamForensicsReporter({ instanceId: chamberInstanceId })
     // A page probe can flush the retained tail; the bridge is a no-op outside a DOM.
     installStreamForensicsSnapshotBridge(forensics, chamberInstanceId)
-    this.streams = new RemoteStreamMuxClient(basePath, forensics)
     const connection = ctx.get('connection') as ConnectionHandle
     this.connection = connection
+    this.streams = new RemoteStreamMuxClient({
+      basePath,
+      forensics,
+      openSocket: path => connection.openWebSocket(path),
+      waitForReconnect: connection.interactions === 'answer',
+    })
     const unsubscribeForensics = connection.generation.subscribe(() => {
       const active = connection.generation.getSnapshot()
       forensics(
         active === undefined ? 'generation-lost' : 'generation-ready',
-        active === undefined ? 'connection generation replaced' : `generation ${String(active.id)}`,
+        active === undefined ? 'connection generation replaced' : 'generation ' + String(active.id),
       )
     })
-    this.events = new ClientRemoteEvents(
-      ctx,
-      connection,
-      (endpoint, payload, signal) => this.openRemoteStream(endpoint, payload, signal),
-    )
+    if (connection.interactions === 'answer') {
+      this.events = new ClientRemoteEvents(
+        ctx,
+        connection,
+        (endpoint, payload, signal) => this.openRemoteStream(endpoint, payload, signal),
+      )
+    }
+    if (connection.interactions === 'answer') {
+      this.events = new ClientRemoteEvents(
+        ctx,
+        connection,
+        (endpoint, payload, signal) => this.openRemoteStream(endpoint, payload, signal),
+      )
+    }
+    // API callers retain a lifecycle socket even when they do not receive events.
+    // HTTP dispatch never waits for this independent connection attempt.
     if (connection.rpc.open === undefined) this.streams.start()
     let disposed = false
     let loop: ReturnType<ConnectionHandle['start']> | undefined
@@ -194,7 +215,7 @@ class ClientRemoteService extends Service implements ClientRemote {
       (ctx as { readonly chamberTransport?: unknown }).chamberTransport,
     )
     const start = (): void => {
-      if (disposed) return
+      if (disposed || connection.interactions === 'none') return
       if (connection.rpc.open === undefined) this.streams.start()
       loop = connection.start({
         onConnected: () => { this.ownerCtx.emit('connection/reset') },
@@ -210,13 +231,16 @@ class ClientRemoteService extends Service implements ClientRemote {
       disposed = true
       unsubscribeForensics()
       loop?.stop()
-      await this.events.dispose()
+      await this.events?.dispose()
       await this.streams.close()
     }, 'api-gateway.client.transport')
   }
 
   $stream<Item>(options: RemoteStreamOptions<Item>): RemoteStream<Item> {
-    // chamber patch: upstream plumbs `carrierFailed` but nothing consumes it, so with
+    if (this.connection.interactions === 'none') {
+      throw new Error('client api: $stream requires interactions=answer; use a generated stream method')
+    }
+    // chamber patch: upstream plumbs carrierFailed but nothing consumes it, so with
     // the retry patch a sustained carrier fault would be invisible; publish the fact here.
     const carrierFailed = options.carrierFailed
     return new RemoteStream(this.connection, {
@@ -260,6 +284,7 @@ class ClientRemoteService extends Service implements ClientRemote {
     event: Event,
     listener: TypertClientEventListener<Event>,
   ): () => void {
+    if (this.events === undefined) throw new Error('client api: forwarded events require interactions=answer')
     return this.events.subscribe(this.ctx, event, listener)
   }
 

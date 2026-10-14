@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url'
 // The C4 mount-order table is the single source for the generated artifact set
 // (shared with the upgrade touchpoint gate); the freshness gate imports it and
 // never re-types the roster names.
-import { EXPECTED_MOUNT_PACKAGES } from '../../packages/renderer/scripts/typert-remote-contract.mjs'
+import { EXPECTED_GENERATED_REMOTES } from '../../packages/renderer/scripts/typert-remote-contract.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const results = []
@@ -195,7 +195,7 @@ function checkPreload() {
  * @param {readonly string[]} roster - package names of the C4 contract.
  * @returns {{ added: string[], removed: string[], dirs: string[], expectedDirs: string[], countMismatch: boolean, stale: boolean }}
  */
-function generatedTreeVerdict(before, after, roster = EXPECTED_MOUNT_PACKAGES) {
+function generatedTreeVerdict(before, after, roster = EXPECTED_GENERATED_REMOTES) {
   const beforeSet = new Set(before)
   const afterSet = new Set(after)
   const added = after.filter((file) => !beforeSet.has(file))

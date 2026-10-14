@@ -22,10 +22,12 @@ const apiPathSource = readFileSync(new URL('../../../dsh-client-connection/src/a
 
 /** The private normalized field, read structurally. */
 const basePathOf = (value?: string): string =>
-  (new RemoteStreamMuxClient(value) as unknown as { basePath: string }).basePath
+  (new RemoteStreamMuxClient({ basePath: value }) as unknown as { basePath: string }).basePath
 
 test('both sides spell the same normalization rule', () => {
-  assert.ok(clientSource.includes("const normalized = basePath.replace(/\\/+$/, '')"),
+  // alpha.3: the fork constructor takes one options object, so the rule now
+  // destructures its basePath before normalizing (same expression shape as api-path).
+  assert.ok(clientSource.includes("const normalized = (options.basePath ?? '').replace(/\\/+$/, '')"),
     'stream-client.ts must strip trailing slashes')
   assert.ok(clientSource.includes("this.basePath = normalized === '' || normalized === '/api' ? '' : normalized"),
     'stream-client.ts must collapse empty and the stock /api to the no-prefix form')

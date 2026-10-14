@@ -14,6 +14,9 @@
 /** The module specifiers the shell shares into the frozen module table. */
 export const PLATFORM_MODULES = [
   'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/cordis',
+  // alpha.3 平台词（上游 client/web platform.ts 同批新增）：ui-sidebar-right 等 host 行
+  // 以外部 require 消费它们，缺词即该行失败并连带 ui-chat（对话白屏）。
+  'zod', '@tanstack/react-virtual',
   '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-slots',
 ] as const

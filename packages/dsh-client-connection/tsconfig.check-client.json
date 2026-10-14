@@ -3,6 +3,8 @@
   "files": [
     "src/api-path.ts",
     "src/client/api.ts",
+    "src/client/socket.ts",
+    "src/connect-protocol.ts",
     "src/client/carrier-assembly.ts",
     "src/client/connection.ts",
     "src/client/index.ts",

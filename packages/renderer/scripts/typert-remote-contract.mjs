@@ -51,6 +51,20 @@ export const EXPECTED_MOUNT_PACKAGES = Object.freeze([
   '@deepseek-ai/dsh-user-questions',
 ])
 
+/**
+ * Remote faces generated for self-mounted chamber-covered rows the dsh-api-remotes
+ * assembly does NOT mount: the alpha.3 access-control client value-imports its own
+ * `./remote` face and the composite covers it first-screen (ui-session/ui-workspace
+ * inject `remoteAccess`). The generated artifact roster is the assembly mount table
+ * PLUS this list; the C4 assembly assertion stays on EXPECTED_MOUNT_PACKAGES alone.
+ */
+export const EXPECTED_SELF_MOUNTED_REMOTES = Object.freeze(['@deepseek-ai/dsh-api-remote-access'])
+
+/** Every artifact gen-typert-remotes must emit (assembly mounts + self-mounted faces). */
+export const EXPECTED_GENERATED_REMOTES = Object.freeze([
+  ...EXPECTED_MOUNT_PACKAGES, ...EXPECTED_SELF_MOUNTED_REMOTES,
+])
+
 
 const REMOTE_SPECIFIER = '@deepseek-ai/(dsh-[a-z0-9]+(?:-[a-z0-9]+)*)/remote'
 const REMOTE_SUFFIX = /@deepseek-ai\/(dsh-[a-z0-9]+(?:-[a-z0-9]+)*)\/remote/g

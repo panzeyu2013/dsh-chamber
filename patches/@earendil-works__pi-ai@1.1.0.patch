@@ -11,7 +11,7 @@ index 38571b31e143e913c2bf59dad73382982e93664a..950e546197d8e84cb3edfca0012939f1
                                  type: "toolcall_delta",
                                  contentIndex: index,
 diff --git a/dist/api/bedrock-converse-stream.js b/dist/api/bedrock-converse-stream.js
-index 428af807620993a4c90ceb1a1a120d553844be32..d81d290d8b8b97f8e2cdd97cff1ebaf019c5733e 100644
+index ca40f1b4a4e99f441503cf364822073a7a6c478a..14c204261b3f6c47f8950cf44f0fb9f86cf2cda7 100644
 --- a/dist/api/bedrock-converse-stream.js
 +++ b/dist/api/bedrock-converse-stream.js
 @@ -461,7 +461,6 @@ function handleContentBlockDelta(event, blocks, output, stream) {
@@ -23,7 +23,7 @@ index 428af807620993a4c90ceb1a1a120d553844be32..d81d290d8b8b97f8e2cdd97cff1ebaf0
      }
      else if (delta?.reasoningContent) {
 diff --git a/dist/api/mistral-conversations.js b/dist/api/mistral-conversations.js
-index fbcc5e25ee6752a9c5461b41fa8544a090a17b3f..f540825c4f934f342200db72190599fe95f01d0c 100644
+index 2fc3ad343af090a919f5b71454b29f23b009fc21..64aa8a4ab2461484f22066913455518f69157857 100644
 --- a/dist/api/mistral-conversations.js
 +++ b/dist/api/mistral-conversations.js
 @@ -554,7 +554,6 @@ async function consumeChatStream(model, output, stream, mistralStream, onProvide

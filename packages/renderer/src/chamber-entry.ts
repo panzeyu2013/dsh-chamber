@@ -45,6 +45,10 @@ declare module '@deepseek-ai/cordis' {
 import * as ConnectionPlugin from '@deepseek-ai/dsh-client-connection/client'
 import * as TypertRegistry from '@deepseek-ai/dsh-typert-registry/client'
 import * as ApiGateway from '@deepseek-ai/dsh-api-gateway/client'
+// alpha.3: the access-control client face. ui-session/ui-workspace root-inject `remoteAccess`
+// (provided only here), so without this first-screen covered factory the whole
+// workspace/conversation chain stays PENDING on a degraded host graph (rc.2 shortcuts case).
+import * as ApiRemoteAccess from '@deepseek-ai/dsh-api-remote-access/client'
 import * as ApiRemotes from '@deepseek-ai/dsh-api-remotes/client'
 // provider group: the platform store word (plain module, covered factory only — never
 // ctx.plugin'd) plus the two api controllers (ctx.sessions / ctx.workspaces). All
@@ -429,6 +433,8 @@ export function apply(ctx: Context): void {
   register('@deepseek-ai/dsh-client-connection', ConnectionPlugin)
   register('@deepseek-ai/dsh-typert-registry', TypertRegistry)
   register('@deepseek-ai/dsh-api-gateway', ApiGateway)
+  // After the gateway: the access client injects `remote` (the mux owner above).
+  register('@deepseek-ai/dsh-api-remote-access', ApiRemoteAccess)
   register('@deepseek-ai/dsh-api-remotes', ApiRemotes)
   // Provider group: the store is a platform word (covered factory, no plugin); the api
   // controllers provide ctx.sessions / ctx.workspaces; ui-session/ui-chat/ui-approval are
@@ -600,6 +606,7 @@ const COVERED_FACTORIES: ReadonlyArray<readonly [id: string, factory: ClientPlug
   ['@deepseek-ai/dsh-client-connection', coveredFactory(ConnectionPlugin)],
   ['@deepseek-ai/dsh-typert-registry', coveredFactory(TypertRegistry)],
   ['@deepseek-ai/dsh-api-gateway', coveredFactory(ApiGateway)],
+  ['@deepseek-ai/dsh-api-remote-access', coveredFactory(ApiRemoteAccess)],
   ['@deepseek-ai/dsh-api-remotes', coveredFactory(ApiRemotes)],
   // provider group: the seed provides the store word too; this factory is the
   // composite-side fallback for the same require edge (seed wins). Controllers and

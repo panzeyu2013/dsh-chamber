@@ -167,9 +167,9 @@ export const VENDOR_PATCHES = Object.freeze([
           + '  chamberFileApiBase?: string | undefined\n}',
       }),
       Object.freeze({
-        expect: '  blocks, streaming, interrupted, renderMessageImages, groupPart, useDisclosure,\n'
+        expect: '  blocks, streaming, interrupted, loadImage, groupPart, useDisclosure,\n'
           + '  reasoningHidden = false, usePresentation, revealProcess, mentions, renderSlot, useGroupAction, t,\n}: AssistantMarkdownProps) {',
-        replace: '  blocks, streaming, interrupted, renderMessageImages, groupPart, useDisclosure,\n'
+        replace: '  blocks, streaming, interrupted, loadImage, groupPart, useDisclosure,\n'
           + '  reasoningHidden = false, usePresentation, revealProcess, mentions, renderSlot, useGroupAction, t, chamberFileApiBase,\n}: AssistantMarkdownProps) {',
       }),
       Object.freeze({
@@ -339,9 +339,9 @@ export const VENDOR_PATCHES = Object.freeze([
     reason: 'forwards the chamberFileApiBase root standard prop into AssistantMarkdown (no chamber package can thread it)',
     edits: Object.freeze([
       Object.freeze({
-        expect: '  node, groupPart, useDisclosure, useGroupAction, useTurnData, turnProcess, openFile, renderMessageImages, fileMentions,\n'
+        expect: '  node, groupPart, useDisclosure, useGroupAction, useTurnData, turnProcess, openFile, loadImage, fileMentions,\n'
           + '  usePresentation, renderSlot, t,\n}: AssistantNodeViewProps) {',
-        replace: '  node, groupPart, useDisclosure, useGroupAction, useTurnData, turnProcess, openFile, renderMessageImages, fileMentions,\n'
+        replace: '  node, groupPart, useDisclosure, useGroupAction, useTurnData, turnProcess, openFile, loadImage, fileMentions,\n'
           + '  usePresentation, renderSlot, t,\n'
           + '  chamberFileApiBase,\n}: AssistantNodeViewProps) {',
       }),
