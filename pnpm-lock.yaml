@@ -121,6 +121,9 @@ importers:
       '@deepseek-ai/cordis':
         specifier: workspace:*
         version: link:../../vendor/harness-packages/@deepseek-ai/cordis
+      '@deepseek-ai/dsh-api-remote-access':
+        specifier: workspace:*
+        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-api-remote-access
       '@deepseek-ai/dsh-brand':
         specifier: workspace:*
         version: link:../../vendor/harness-packages/@deepseek-ai/dsh-brand
@@ -137,7 +140,7 @@ importers:
         specifier: ^8.18.1
         version: 8.18.2
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
 
   packages/dsh-chamber-client-core:
