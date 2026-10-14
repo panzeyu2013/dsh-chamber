@@ -703,6 +703,25 @@ export const VENDOR_PATCHES = Object.freeze([
       }),
     ]),
   }),
+  Object.freeze({
+    idSuffixes: Object.freeze([
+      'dsh-client-ui-settings-account/src/client/index.ts',
+      'packages/client/ui-settings-account/src/client/index.ts',
+    ]),
+    noRetireForm: 'chamber behaviour, not an upstream re-anchor: the composite gates the official desktop-onboarding overlay off because it takes over #root and parks without desktop configForms (design 09 §3.5). Retirement = the upstream overlay stops being desktop-gated, or a chamber-side account surface replaces it; C9 drift failure + maintainer ruling, not an automated retire check.',
+    vendorFile: 'dsh-client-ui-settings-account/src/client/index.ts',
+    reason: 'the official desktop-onboarding shell.overlay seat portals a full-screen surface, zeroes + inerts #root and parks on the settings loading state under the composite (no desktop configForms settles it); the account settings section itself registers outside the desktop branch and stays',
+    edits: Object.freeze([
+      Object.freeze({
+        expect: '  if (desktop) {\n    const controller = new DesktopOnboardingController(',
+        replace: '  // chamber patch (alpha.3): gate the desktop onboarding overlay off in the\n'
+          + '  // composite — its full-screen shell.overlay seat takes over #root and parks\n'
+          + '  // without desktop configForms (design 09 §3.5). The account settings section\n'
+          + '  // registers outside this branch and stays; set the global to restore upstream.\n'
+          + '  if (desktop && (globalThis as { __dshChamberAccountOverlay?: boolean }).__dshChamberAccountOverlay === true) {\n    const controller = new DesktopOnboardingController(',
+      }),
+    ]),
+  }),
 
 ])
 

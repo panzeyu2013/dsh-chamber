@@ -180,6 +180,8 @@ export const DEFERRED_EXTRA_ROW_IDS: readonly string[] = [
   '@deepseek-ai/dsh-client-ui-deliverables',
   '@deepseek-ai/dsh-client-ui-subagent',
   '@deepseek-ai/dsh-session-log-export',
+  // Covered so the account vendor patch (overlay gate, design 09 §3.5) has a loaded row.
+  '@deepseek-ai/dsh-client-ui-settings-account',
   '@deepseek-ai/dsh-client-ui-message-feedback',
   '@deepseek-ai/dsh-client-ui-plan',
   '@deepseek-ai/dsh-client-ui-user-questions',

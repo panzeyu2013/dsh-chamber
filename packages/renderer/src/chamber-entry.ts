@@ -136,6 +136,8 @@ const DEFERRED_ROWS: ReadonlyArray<readonly [id: string, load: () => Promise<unk
   ['@deepseek-ai/dsh-client-ui-subagent', () => import('@deepseek-ai/dsh-client-ui-subagent/client')],
   // Covered so its vendor patch can carry the per-entry base path; the host half keeps the route.
   ['@deepseek-ai/dsh-session-log-export', () => import('@deepseek-ai/dsh-session-log-export/client')],
+  // Covered so the account vendor patch (overlay gate, design 09 §3.5) has a loaded row.
+  ['@deepseek-ai/dsh-client-ui-settings-account', () => import('@deepseek-ai/dsh-client-ui-settings-account/client')],
   ['@deepseek-ai/dsh-client-ui-message-feedback', () => import('@deepseek-ai/dsh-client-ui-message-feedback/client')],
   ['@deepseek-ai/dsh-client-ui-plan', () => import('@deepseek-ai/dsh-client-ui-plan/client')],
   ['@deepseek-ai/dsh-client-ui-user-questions', () => import('@deepseek-ai/dsh-client-ui-user-questions/client')],

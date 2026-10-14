@@ -264,12 +264,16 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   无该载体早退；本页载体恒在，于是它在没有桌面宿主面时也激活。其 `shell.overlay` 的 `desktop-onboarding`
   座位会 portal 全屏浮层到 `document.body` 并把 `#root` 置 0/inert；浮层状态由桌面
   **account/configForms** 事实驱动（本页没有宿主表单把它结算）⇒ 它停在「正在加载设置…」不消（实测整页被
-  接管 ≥30s），冷启动时全部实例视图 + 侧边栏都被它夺走。跳过该行 = 该家族的**激活状态**与 web 形态一致；
-  alpha.3 复核该机制仍成立。**Rejected alternatives**：① 直接 unskip——桌面 flavor 立即被全屏浮层接管（实测）；
-  ② 为该包加 chamber 专属 vendor 补丁门控 overlay 注册——需扩展 C0 的补丁块（vendor 块 + chamber 块）后可行；
-  ③ 仅非 `dshDesktop` flavor 条件 `register`+`factory`——Web/Gateway 得账号登录、桌面维持跳过。②③ 待裁决，
-  当前裁决 = 维持跳过并登记（STATUS）。
-  账户/登录面若要做，是 chamber 侧自建特性（design 05 §5），不是恢复这一行。**被拒备选**：a. 只过滤
+  接管 ≥30s），冷启动时全部实例视图 + 侧边栏都被它夺走。**alpha.3 处置 = 已接入**：构建期 vendor 补丁
+  （`vendor-patches.mjs` 的 chamber 行为条目）把该行的桌面分支门控为
+  `if (desktop && (globalThis as {...}).__dshChamberAccountOverlay === true)`，`chamber-entry` 的 DEFERRED
+  集群加载该行（covered+deferred），设置页的 account section 与 sign-in/quota/launcher 座位照常注册；
+  仅官方**全屏 onboarding overlay 默认关闭**（置 `globalThis.__dshChamberAccountOverlay = true` 可恢复官方形态）。
+  **Rejected alternatives**：① 运行期 pnpm/C0 补丁——发布 tarball 无 `src/`（仅 `lib/client.js`），源码补丁
+  无法应用，且运行期树是宿主侧、与前端插件加载无关；② 从 covered 移除交宿主图加载——vendor-patches 锁步
+  要求被打补丁的包必须绑定 `chamber-entry` 实际加载的复合行（test:1054）；③ 直接 unskip 不门控——桌面
+  flavor 立即被全屏浮层接管（实测）。
+  账户面现由官方行承载（design 05 §5 的设置壳只负责座席台账与来源下拉）。**被拒备选**：a. 只过滤
   `desktop-onboarding` 座位——座位在实例 ctx 的 apply 内注册，拦它要在渲染面新增座位 deny-list，上游换
   id/换容器即静默回归，且照付该行整包下载；b. 桩 `dshOnboarding`/`dshPlatform`——不改变 loading 门
   （停在 loading 由 configForms/account 未结算决定，`dshOnboarding` 只影响 `setActive`/`hasApiKey`），
@@ -380,7 +384,7 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   `expect`→`replace`，`expect` 必须**恰好命中一次**（0 次或多次 = 构建期抛错，绝不静默发出未打补丁的
   bundle）。应用点 = renderer 的 `deepseekSource().transform`（我们的 vite 配置），vendor 文件**零写入**；
   模块 id 并接受软链形式与 `realpathSync` 后的子模块形式（vite 实际给后者）。
-- 落点（当前：17 个文件 / 45 处锚点，逐锚点由触点表 C9 与 `packages/renderer/scripts/vendor-patches.test.mjs`
+- 落点（当前：18 个文件 / 46 处锚点，逐锚点由触点表 C9 与 `packages/renderer/scripts/vendor-patches.test.mjs`
   校验；下列圈号 ①–⑪ 是 URL 类，每个圈号对应**一个**文件，其余 6 个文件属下三/四类：实测帧成本 1（`assembly.ts`）/ 逻辑缺陷 1（`use-chat-reading.ts`）/ 多实例正确性 3（`ui-workspace/navigation.ts` + `ui-attachment/drop-events.ts` + `ui-attachment/ComposerAttachments.tsx`）/ 座席所有权转移 1（`ui-workspace/index.ts`））：① `ui-chat` 的
   `chat/AssistantMarkdown.tsx` 读取新增 root 标准
   **prop** `chamberFileApiBase`（chamber layout fork 经 `ctx.slots.provideRoot({ props })` 提供，值 = 本 entry 的
