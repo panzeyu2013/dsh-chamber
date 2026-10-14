@@ -220,7 +220,7 @@ test('the node view forwards the root standard prop into the markdown component 
     useTurnData: () => undefined,
     turnProcess: undefined,
     openFile: () => {},
-    renderMessageImages: false,
+    loadImage: false,
     fileMentions: () => undefined,
     usePresentation: undefined,
     t: 't',

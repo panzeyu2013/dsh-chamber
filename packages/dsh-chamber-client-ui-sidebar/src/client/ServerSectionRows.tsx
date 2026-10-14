@@ -14,7 +14,7 @@ import clsx from 'clsx'
 import {
   IconArchiveOutlineRegular, IconBranchOutlineRegular, IconEditOutlineRegular, IconEllipsisOutlineRegular,
   IconPinFillRegular, IconPinOutlineRegular, IconUnarchiveOutlineRegular, Menu,
-  Tooltip, type MenuItem,
+  Tooltip, writeClipboard, type MenuItem,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 // alpha.3 的 copy 字形不在本包 tsc 解析到的 primitives barrel 面里（运行时/bundler 正常），
 // 走包已导出的 ./src/* 子路径；上游 SessionId 菜单项正是这一个字形。
@@ -101,12 +101,8 @@ const SessionRow = memo(function SessionRow({
   } = useSidebarSection()
   // 上游 SessionId 菜单项的动作：复制完整会话 id，成功/失败各一条瞬态提示（design 06 §3.4）。
   const copySessionId = async (sourceId: string, sessionId: string): Promise<void> => {
-    try {
-      await navigator.clipboard.writeText(sessionId)
-      showNotice(sourceId, 'sessionIdCopied')
-    } catch {
-      showNotice(sourceId, 'sessionIdCopyFailed')
-    }
+    const copied = await writeClipboard(sessionId)
+    showNotice(sourceId, copied ? 'sessionIdCopied' : 'sessionIdCopyFailed')
   }
   // 菜单键帽来自页面快捷键目录（上游 RenameSessionMenuItem / ForkSessionMenuItem /
   // ArchiveSessionMenuItem 同款选择）：命令未注册时行缺席，键帽与 aria 一并消失。

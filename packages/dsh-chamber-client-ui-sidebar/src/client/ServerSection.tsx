@@ -683,13 +683,13 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                             ? -1
                             : sessions.findIndex(row => row.id === currentId)
                           // alpha.3 #6062：注意力行（运行中 / 子代理在跑 / 待用户 / 未读完成 /
-                          // 当前行）必须进入窗口——上游 requiredWatermark 的等价物。按非 ghost 行
-                          // 计数并受自动上限约束；水位只升不降（上游 raiseWatermarks 单调）。
+                          // 当前行）必须进入窗口——上游 requiredWatermark 的等价物。按非 ghost 且
+                          // 非 blank 行计数并受自动上限约束；水位只升不降（上游 raiseWatermarks 单调）。
                           let requiredAttentionIndex = -1
                           {
                             let seen = 0
                             sessions.forEach((session, index) => {
-                              if (isGhostSession(session)) return
+                              if (session.blank === true || isGhostSession(session)) return
                               seen += 1
                               if (seen > SESSION_ROWS_ATTENTION_AUTO_MAX) return
                               const fact = server.runtime?.sessions[session.id]
