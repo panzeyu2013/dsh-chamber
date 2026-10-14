@@ -37,6 +37,11 @@
       "@deepseek-ai/dsh-api-remote-access/client": [
         "./vendor/harness-packages/@deepseek-ai/dsh-api-remote-access/src/client/index.ts"
       ],
+      // alpha.3: the account family is a deferred covered row again; the build-time
+      // vendor patch gates its desktop onboarding overlay off (design 09 §3.5).
+      "@deepseek-ai/dsh-client-ui-settings-account/client": [
+        "./vendor/harness-packages/@deepseek-ai/dsh-client-ui-settings-account/src/client/index.ts"
+      ],
       "@dsh-chamber/dsh-chamber-client-ui-sidebar/client": [
         "./packages/renderer/src/ambient/chamber-client-plugins.d.ts"
       ],

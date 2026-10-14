@@ -247,6 +247,9 @@ const AUDITED_REQUIRED_SERVICES: readonly string[] = [
  */
 const AUDITED_DEFERRED_ONLY_SERVICES: readonly string[] = [
   'jobs', 'modules',
+  // alpha.3: the deferred account row injects the official account namespace; the
+  // provider is the first-screen remote composite (api-remotes mounts it).
+  'remote.account',
   'remote.goals', 'remote.skills', 'remote.messageFeedback', 'remote.sessionFeedback',
   'remote.agentPresets', 'remote.credentials', 'remote.llm', 'remote.pluginInventory',
   'remote.pluginManager', 'remote.pluginRegistryProbe',

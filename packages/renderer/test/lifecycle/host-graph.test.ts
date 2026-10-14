@@ -1207,25 +1207,34 @@ test('D2: the official open-in client row stays uncovered; chamber open-in stays
   assert.ok(CHAMBER_COVERED_FACTORY_IDS.includes('@dsh-chamber/dsh-chamber-client-ui-open-in'))
 })
 
-test('desktop-only account family stays skipped: no body-level onboarding takeover', async (t) => {
-  // Mechanism, cost and rejected alternatives: chamber-covered.ts (the skip entry)
-  // and design 09 §3.5 有意跳过名单③.
+test('desktop-only account family loads as a patched deferred row (overlay gated off)', async (t) => {
+  // alpha.3 contract: the row is a covered DEFERRED composite row; the build-time vendor
+  // patch gates its desktop onboarding overlay (design 09 §3.5). The takeover is
+  // prevented by the patch, not by a skip.
   const id = '@deepseek-ai/dsh-client-ui-settings-account'
   assert.ok(CHAMBER_COVERED_IDS.includes(id),
-    id + ' must stay covered: its desktop onboarding overlay hijacks the entire page (design 09 有意跳过名单)')
+    id + ' must stay covered: a host-graph row would double-register the deferred family')
   assert.ok(!CHAMBER_COVERED_FACTORY_IDS.includes(id),
-    id + ' is a skip, not a composite family: no factory may ever load it')
-  assert.ok(!DEFERRED_EXTRA_ROW_IDS.includes(id),
-    id + ' must not be listed as a deferred covered row — a deferred id IS loaded after settle')
-  // End to end through the real merge (`collectExtraRows`): if the row ever
-  // reaches the preload pass again, the body-level takeover re-arms.
+    id + ' stays factory-less: the DEFERRED cluster is its only loader')
+  assert.ok(DEFERRED_EXTRA_ROW_IDS.includes(id),
+    id + ' must be a deferred covered row — loading it is what brings the account settings section back')
+  // The raw vendor source must NOT carry the gate: the patch is a build-time transform
+  // (vendor-patches.test owns the anchor, the marker and the bundle proof).
+  const raw = readFileSync(new URL(
+    '../../../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-settings-account/src/client/index.ts',
+    import.meta.url,
+  ), 'utf8')
+  assert.equal(raw.includes('__dshChamberAccountOverlay'), false,
+    'the raw vendor source stays unpatched; the overlay gate exists only in the build transform')
+  // End to end through the real merge (`collectExtraRows`): covered rows never reach
+  // the extra preload pass, so the deferred loader stays their only entrant.
   stubFetch(t, 200, envelope([row(id)]))
   let loaded = false
   const rows = await collectExtraRows('account-skip', '/api/i/local', {
     loadModuleBundle: async () => { loaded = true },
   })
   assert.deepEqual(rows, [])
-  assert.equal(loaded, false, 'the covered account row must never be preloaded')
+  assert.equal(loaded, false, 'the covered account row must never be preloaded as an extra')
 })
 
 // ── `awaitBeforeLoad` must settle before the
