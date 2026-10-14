@@ -32,15 +32,15 @@
   - 隐藏/遮挡态节流（design 14 §D1；S-10）：最小化/完全覆盖两工况的 rAF/定时器/`visibilityState`/App Nap、隐藏 ≥60s 页面通道（`/api/page-channel`，design 26）与 Remote mux/推送不断、唤醒即时重连、30s 兜底轮询跳过 + 补偿。
   - vendor 性能补丁可见态 A/B（真实 app 同环境）。
   - 右侧栏栈真实 profile 装载时序、session v3 迁移真实存储。
-  - open-in 实例内 host 包：两代 runtime 探针（pin 0.2.1-alpha.2 需复跑，最大未验证风险）、图标/缓存/CSP/无 cookie fence/remote cwd、macOS 实机清单（目录顺序、拉起落工作区、ssh 两态、设置页行集、N-ctx、打包 seed）、Windows 盘符/UNC、第三方 scheme、fork 折入流程。
+  - open-in 实例内 host 包：两代 runtime 探针（pin 0.2.1-alpha.3 需复跑，最大未验证风险）、图标/缓存/CSP/无 cookie fence/remote cwd、macOS 实机清单（目录顺序、拉起落工作区、ssh 两态、设置页行集、N-ctx、打包 seed）、Windows 盘符/UNC、第三方 scheme、fork 折入流程。
   - 写入期终止失败闩锁（design 02 §3.4）：只能靠重启再证明。
   - 实例写者静默门拦自动启动恢复：如实 409 但按钮停 `starting`/端口 0；恢复 = 优雅重启。
   - 降级提示三处座位目检（design 05 §4）。
   - 切源后座席/字标与设置齿轮空白：真机在重构建产物上重放。
   - boot 死区收敛（design 05 §4.1）：idle 远端点会话不启 boot、`error`/托管 stopped 1.5s 宽限判死、挂死 boot 10s 给重试/⌘R、502 非阻断横幅 + 自愈。
   - idle 来源点会话排队 68s 才失败（05 §4.1）：候选 = 记推迟 open 意图、ready 重放。
-  - pin 待实机四项（rc.2 起挂账，0.2.1-alpha.2 未复跑）：内置插件页目检、跨代 profile 对账、gateway 就地升级、0.1.6 代移动端 + 右栏终端 tab。
-  - 0.2.1-alpha.2 新面实机（无 GUI 未跑）：Schedule（默认挂载：侧栏「Automation tasks」面板、任务页、会话行 clock 标记、右侧任务标签、删除 toast、每会话一份 catalog 查询）与 Developer Tools（可选 bundle、默认关：Session Inspector / NodeJS Inspector；其 `shell.bottom` 座席声明无条件必需，底栏内容仅启用后出现）在 N-ctx 双实例壳下的目检；自动判据 = C9/C11/C16 触点门 + `packages/dsh-chamber-client-ui-layout/test/frame-slots.test.ts` 的 shell.bottom 声明锁。**已知风险（评审发现，仅 Developer Tools 启用时）**：vendor inspector 底栏 iframe 走 document-relative `inspector/devtools/devtools_app.html`（vendor `packages/experimental/inspector/src/client/bottom/page.tsx`），而该路由挂在实例自身 origin、复合页 document 是控制面 origin 且只代理 `/api/i/<id>/*` ⇒ iframe 很可能落到 SPA fallback；实机确认后按 C9 用 `chamberFileApiBase` 前缀或按 open-in 模式自建占位。
+  - pin 待实机四项（rc.2 起挂账，0.2.1-alpha.3 未复跑）：内置插件页目检、跨代 profile 对账、gateway 就地升级、0.1.6 代移动端 + 右栏终端 tab。
+  - 0.2.1-alpha.3 新面实机（无 GUI 未跑）：Schedule（默认挂载：侧栏「Automation tasks」面板、任务页、会话行 clock 标记、右侧任务标签、删除 toast、每会话一份 catalog 查询）与 Developer Tools（可选 bundle、默认关：Session Inspector / NodeJS Inspector；其 `shell.bottom` 座席声明无条件必需，底栏内容仅启用后出现）在 N-ctx 双实例壳下的目检；自动判据 = C9/C11/C16 触点门 + `packages/dsh-chamber-client-ui-layout/test/frame-slots.test.ts` 的 shell.bottom 声明锁。**已知风险（评审发现，仅 Developer Tools 启用时）**：vendor inspector 底栏 iframe 走 document-relative `inspector/devtools/devtools_app.html`（vendor `packages/experimental/inspector/src/client/bottom/page.tsx`），而该路由挂在实例自身 origin、复合页 document 是控制面 origin 且只代理 `/api/i/<id>/*` ⇒ iframe 很可能落到 SPA fallback；实机确认后按 C9 用 `chamberFileApiBase` 前缀或按 open-in 模式自建占位。
   - 客户端插件热同步（design 09 §3.7）剩余实机面：经插件管理器/配置编辑路径触发的一次真实 add/remove 帧、
     ssh/gateway 各一来源、卸载保证边界（factory/loadCache/style 保留面）、隐藏回收期无迟到写入、宿主崩溃重启后
     活行存活（重连响应非 200——重启窗口内的 503/502——浏览器按规范判死；hold 层已加有界重建 ≈97s 覆盖
@@ -281,7 +281,7 @@
 - 原生窗口高度折中（S-49）待裁：Swift 786 内容 vs Electron 800 外框；宽度偏好仍 per-flavor（T-18）。
 - macOS Swift 原生壳（design 25，路线 A）：M5 实机矩阵未闭合（用户裁定的前置「合并到主分支」已满足，待执行；见 I-15 条）；残余 = 实机/GUI 验收（含 WKWebView 无 `backgroundThrottling` 等价物）、Developer ID/公证/stapler/spctl 与首个 `build-swift` 发布腿（缺凭据外部阻断）、M5 矩阵 W-28…W-32 与双端 harness、通知音效平台等价物。
 - 起始端口偏移（已定）：本地 dsh 缺省 17510（spawn 逐次 +1 至 17514）、控制面缺省 17500，仅经 `DSH_CHAMBER_DSH_PORT_BASE` / `DSH_CHAMBER_CP_PORT` 覆盖，不引入配置文件级偏移（口径见 `packages/desktop/README.md` §控制面）。
-- Electron flavor 托管宿主的运行时指纹（待裁）：当前 pin（Electron 43.4.0 × dsh 0.2.1-alpha.2 的 `node-addon-require-builtin@0.1.9`（本次换锚后需复跑复核；0.1.9 指纹表新增 44.7.0，仍未收录 43.4.0））下宿主子进程 exit 1，报 `unsupported Electron runtime fingerprint … (supported: 43.0.0 / 44.0.0 / 45.0.0-alpha.6)`，5 个起始端口全部失败——证据 `.tmp/gui-acceptance/dev-app.log`（`--dev` 验收腿）。待裁：Electron pin 对齐 addon 收录版本，或等上游 addon 收录 43.4.0（下次 pin 一并复核，见 [todo/upstream/upstream-drift-plan.md](todo/upstream/upstream-drift-plan.md) E2）。纯 node（Swift sidecar / standalone serve）不受影响。机制与指纹门见 [design 02](../design/02-host-management-deployment.md) §2.6。
+- Electron flavor 托管宿主的运行时指纹（待裁）：当前 pin（Electron 43.4.0 × dsh 0.2.1-alpha.3 的 `node-addon-require-builtin@0.1.9`（本次换锚后需复跑复核；0.1.9 指纹表新增 44.7.0，仍未收录 43.4.0））下宿主子进程 exit 1，报 `unsupported Electron runtime fingerprint … (supported: 43.0.0 / 44.0.0 / 45.0.0-alpha.6)`，5 个起始端口全部失败——证据 `.tmp/gui-acceptance/dev-app.log`（`--dev` 验收腿）。待裁：Electron pin 对齐 addon 收录版本，或等上游 addon 收录 43.4.0（下次 pin 一并复核，见 [todo/upstream/upstream-drift-plan.md](todo/upstream/upstream-drift-plan.md) E2）。纯 node（Swift sidecar / standalone serve）不受影响。机制与指纹门见 [design 02](../design/02-host-management-deployment.md) §2.6。
 - trusted-host 自定义 Host：须同步扩 trusted-host 集。
 - 多控制面 `$DSH_HOME` 冲突：进一步隔离未决。
 - 多控制面 catalog metadata 无跨进程 CAS：需锁内 reload + 字段 intent，或正式要求「并发 plane 必须不同 stateDir」。
@@ -309,7 +309,7 @@
 - 租客 body portal 不受 stacking 约束（残余，顶层幕布不做；design 05 §4 被否方案⑤）。
 - 降级事实覆盖边界：已覆盖四座；不覆盖未激活来源、壳回收清除、单槽后报覆盖、侧栏行无动作。
 - 连接页手写 tooltip 未走 vendor `Tooltip`：无 `role="tooltip"` 关联；未决 = 补 ARIA 或改用 vendor。
-- api-gateway fork 未重放 0.1.7-rc.2 代的 uplink 客户端半边（G43；与 0.2.0-rc.2 无关，0.2.1-alpha.2 复核仍成立）：带 uplink 的 descriptor 同步抛错；证据 `client-uplink-rejection.test.ts`。
+- api-gateway fork 未重放 0.1.7-rc.2 代的 uplink 客户端半边（G43；与 0.2.0-rc.2 无关，0.2.1-alpha.3 复核仍成立）：带 uplink 的 descriptor 同步抛错；证据 `client-uplink-rejection.test.ts`。
 - 插件管理 tab 钉在上游页结构上（design 05 §5）：上游改结构即回归，由本包 `test/dom-seam/` 的 vendor 源锁步门响亮报红（缺 vendor 树即失败；`test:plugin-manager`）；pin 升级按 §7 第 6 步重锚。
 - 重打包（rev 变化）的已加载 client 插件无活页面切换路径：内核按 id first-load-wins 报 `rev-conflict('restart')` 并复用旧 factory，`restart-required` 只是事实；自动窗口重载不再存在，需要用户手动重载页面/重启应用（design 09 §3.7/§5、design 18 §3.6 项 8）。
 - live 热同步的跨来源 chunk-owner 撤销边界：页面级 `graphRows` 按 id 共享，只有 factory owner 的 remove 才撤销描述符（非 owner 保留）；**owner 自身移除而另一来源仍挂载同 id** 时描述符仍会被删（`live-graph.ts` 的 `ownsChunkDescriptor`；design 09 §3.7 ⑥）。
@@ -419,3 +419,6 @@
   硬边界 = 行 `updatedAt` 前进（宿主已重读仍无 title）即停止携带——休眠行保留最后已知事实、不设墙钟上限
   （换目录名信息量更差）。
 - 上游 experimental worktree 与 design 08 并存（alpha.2 起）：官方 base 已挂 working-directory / tool-working-directory，@deepseek-ai/dsh-experimental-tool-worktree 是默认关闭的可选 bundle；其产物没有 dsh workspace，由 design 08 的「未注册工作树」块接管（可采纳 / 可删除）。不复用其 worktrees.create：真源只有 create、无 list/remove/adopt，池 directory 只接受调用 checkout 之下的仓库内相对路径，且要求 Git >= 2.45 与调用会话 sandbox。
+- 账号链（alpha.3 起）：官方 @deepseek-ai/dsh-client-ui-settings-account 仍**有意跳过**——其 apply 以 'dshDesktop' in globalThis 分叉，桌面 carrier（官方 shortcuts/updater 座席需要）触发 shell.overlay 的 desktop-onboarding 全屏面，而 chamber 无桌面 configForms 表单使其停在加载态并 inert #root。备选 A（chamber 专属 vendor 补丁门控 overlay 注册，需扩展 C0 的运行期补丁块）与 B（仅非 dshDesktop flavor 条件 register+factory）待裁决；Web/Gateway flavor 的账号登录缺口与机制见 design 09 §3.5。
+- cua / cua-macos（alpha.3 新增实验包）：不在 web bundle 与运行期闭包；chamber 不接入（自建即重造宿主执行面），需要时由用户在 dsh profile 显式启用。
+- ServerSection god-file 预算按 alpha.3 #6062 注意力水位 feature 做 review-justified raise（1243→1273；理由见 scripts/gates/file-budgets.json 的 note）；最近提取目标 = 排序/分区准备块（server-section-order.ts）。

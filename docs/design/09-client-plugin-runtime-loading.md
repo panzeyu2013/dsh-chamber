@@ -78,7 +78,10 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
   提供）来自**未覆盖**行（`ui-conversation`/`api-session-controller` 的 `fileUpload` 依赖已随
   `client-file-upload` **转为 covered** 消除，见 §3.6；rc.2 起 `ui-layout`/`ui-workspace` 的 inject 新增
   `shortcuts`——provider 仅 `dsh-client-shortcuts`——随该包 **转为 covered** 消除（它是唯一 default-export
-  class 的客户端行：复合入口挂默认绑定、factory 回同一 class）；渲染期 `useResource` 座 `resources` 因
+  class 的客户端行：复合入口挂默认绑定、factory 回同一 class）；alpha.3 起 `ui-session`/`ui-workspace` 的
+  inject 新增 `remoteAccess`——provider 仅新行 `dsh-api-remote-access`——随该行**转为 covered（首屏 factory）**
+  消除（其 `./remote` 面由 typert 生成器的自挂载附加集产出：生成 roster 26 = 装配 25 + 自挂载 1，见 §3.5）；
+  渲染期 `useResource` 座 `resources` 因
   「非任何复合插件的 inject、且不可能单独缺失」不再登记）。宿主图通道降级（返回 `[]`）或该行 apply
   失败时，`ui-chat` 的 fiber 停在 PENDING、整个 apply 被跳过、会话视图不注册，而 boot 仍报成功。
   **两级自愈**：① 取图撞上 `503 instance_unavailable`（实例仍在启动）时，shell 经 App
@@ -262,6 +265,10 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   座位会 portal 全屏浮层到 `document.body` 并把 `#root` 置 0/inert；浮层状态由桌面
   **account/configForms** 事实驱动（本页没有宿主表单把它结算）⇒ 它停在「正在加载设置…」不消（实测整页被
   接管 ≥30s），冷启动时全部实例视图 + 侧边栏都被它夺走。跳过该行 = 该家族的**激活状态**与 web 形态一致；
+  alpha.3 复核该机制仍成立。**Rejected alternatives**：① 直接 unskip——桌面 flavor 立即被全屏浮层接管（实测）；
+  ② 为该包加 chamber 专属 vendor 补丁门控 overlay 注册——需扩展 C0 的补丁块（vendor 块 + chamber 块）后可行；
+  ③ 仅非 `dshDesktop` flavor 条件 `register`+`factory`——Web/Gateway 得账号登录、桌面维持跳过。②③ 待裁决，
+  当前裁决 = 维持跳过并登记（STATUS）。
   账户/登录面若要做，是 chamber 侧自建特性（design 05 §5），不是恢复这一行。**被拒备选**：a. 只过滤
   `desktop-onboarding` 座位——座位在实例 ctx 的 apply 内注册，拦它要在渲染面新增座位 deny-list，上游换
   id/换容器即静默回归，且照付该行整包下载；b. 桩 `dshOnboarding`/`dshPlatform`——不改变 loading 门
