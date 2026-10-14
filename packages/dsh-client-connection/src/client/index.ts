@@ -20,6 +20,7 @@ import {
 } from './connection.ts'
 import { createWebConnectionRpc, type RpcFetch, type RpcStreamOpen } from './rpc.ts'
 import { assembleConnectionCarriers } from './carrier-assembly.ts'
+import { resolveInstanceBasePath } from '../api-path.ts'
 import { attachLivenessTriggers } from './liveness-triggers.ts'
 import { isLoopbackHostname } from '../loopback-hostname.ts'
 import type { ClientConnectionRpc } from '../rpc.ts'
@@ -261,6 +262,10 @@ export function installConnection(ctx: Context, options: ConnectionInstallOption
     transport,
     { createRpc: options => createWebConnectionRpc(options) },
   ).rpc
+  // chamber/alpha.3: the same resolved per-entry prefix must reach the WebSocket
+  // carrier — the mux opens its socket through openWebSocket, so a streamBaseUrl-less
+  // transport would otherwise land on the control-plane root instead of /api/i/<id>.
+  const socketBasePath = resolveInstanceBasePath(options.basePath)
   let generationSource: ConnectionGenerationSource | undefined
   let owner: ConnectionOwner | undefined
   let generationId = 0
@@ -300,7 +305,11 @@ export function installConnection(ctx: Context, options: ConnectionInstallOption
   }
   const handle: ConnectionHandle = {
     interactions,
-    openWebSocket: path => openConnectionWebSocket(path, transport?.createWebSocket, transport?.streamBaseUrl),
+    openWebSocket: path => openConnectionWebSocket(
+      transport?.streamBaseUrl === undefined ? socketBasePath + path : path,
+      transport?.createWebSocket,
+      transport?.streamBaseUrl,
+    ),
     isLoopback: transport?.ownsHost === true || pageLocation === undefined || isLoopbackHostname(pageLocation.hostname),
     generation: {
       getSnapshot: () => generation,

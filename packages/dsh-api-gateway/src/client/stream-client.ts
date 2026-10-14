@@ -796,8 +796,12 @@ export class RemoteStreamMuxClient {
    * open resets it.
    */
   private scheduleMaintain(): void {
-    // chamber patch: the autonomous self-heal loop is the ANSWERING leg's only; a
-    // passive client keeps the upstream fail-fast semantics (its lane owns reconnection).
+    // chamber patch: autonomous re-scheduling is the ANSWERING leg's only; a passive
+    // client keeps upstream's fail-fast on a lost socket (nothing waits for a rebuild).
+    // Scope note: the opening-deadline / silent-teardown escalation above still replaces
+    // a socket that provably delivered no frame in either mode — a silent socket is
+    // indistinguishable from a lost one, and a passive caller only ever fails its own
+    // streams (no lane depends on the rebuild). Registered as a deliberate asymmetry.
     if (!this.running || this.disposed || !this.waitForReconnect) return
     if (this.socket?.readyState === 1 || this.keepAlive !== undefined) return
     const elapsed = Date.now() - this.lastMaintainAt

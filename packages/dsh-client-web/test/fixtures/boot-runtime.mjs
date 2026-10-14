@@ -99,3 +99,6 @@ export function createClientModuleSystem() {
 }
 
 export function apply() {}
+
+/** react-dom surface the alpha.3 @tanstack/react-virtual import touches. */
+export const flushSync = (callback) => { callback() }

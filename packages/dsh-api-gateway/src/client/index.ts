@@ -196,13 +196,6 @@ class ClientRemoteService extends Service implements ClientRemote {
         (endpoint, payload, signal) => this.openRemoteStream(endpoint, payload, signal),
       )
     }
-    if (connection.interactions === 'answer') {
-      this.events = new ClientRemoteEvents(
-        ctx,
-        connection,
-        (endpoint, payload, signal) => this.openRemoteStream(endpoint, payload, signal),
-      )
-    }
     // API callers retain a lifecycle socket even when they do not receive events.
     // HTTP dispatch never waits for this independent connection attempt.
     if (connection.rpc.open === undefined) this.streams.start()
@@ -512,7 +505,7 @@ class ClientRemoteService extends Service implements ClientRemote {
         // downlink-only stream and dropping the caller's items.
         throw new Error(
           `client api: ${endpointOf(descriptor)} is a generated stream with descriptor.uplink, and the chamber api-gateway fork does not replay the uplink client half (deviation G43): `
-          + 'ClientUplinkQueue / ClientStreamHandle / isRemoteUplinkItem / requireStrictCodec are absent, so the call is refused instead of silently dropping the client send/end side',
+          + 'the uplink half is mirrored in stream-client but this entry never forwards an uplink into openRemoteStream, so the call is refused instead of silently dropping the client send/end side',
         )
       }
       return this.invokeStream(descriptor, projection, token, callerCtx, values, boundIdentity)

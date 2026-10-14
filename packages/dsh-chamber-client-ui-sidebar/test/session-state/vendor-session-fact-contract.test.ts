@@ -87,8 +87,12 @@ const vendorTest = (name: string, body: () => void): void => {
 
 vendorTest('上游：api-session/status 在 dsh-api-remotes 白名单里是 emit 型（无重传/无重放的根据）', () => {
   const whitelist = readVendor('dsh-api-remotes/src/remote-events.ts')
-  assert.match(whitelist, /\{ event: 'api-session\/status', mode: 'emit' \}/,
+  // alpha.3 起上游在该条上追加了 host 侧 resources 读取器（访问判定用）；mode 仍是 emit、
+  // 网关 wire 帧形状未变，故这里只钉 emit 语义与 resources 的存在，不钉整条字面量。
+  assert.match(whitelist, /\{ event: 'api-session\/status', mode: 'emit'[^}]*\}/,
     'api-session/status 必须仍是 emit 型；改成 waterfall/baseline 型意味着上游可能已给出口，守卫/写回须重推')
+  assert.match(whitelist, /resources: \{ session:/,
+    'alpha.3 的 host 侧 resources 读取器必须仍在（chamber 不消费，但它是白名单语义的一部分）')
   const remotes = readVendor('dsh-api-remotes/src/index.ts')
   assert.match(remotes, /if \(mode === 'emit'\)/,
     '转发装配的 emit 分支必须仍在（白名单是 host 全局的：任何 host 插件 emit 同名事件都会被转发）')

@@ -238,7 +238,7 @@ function checkGenerated() {
     const details = []
     if (verdict.added.length > 0) details.push('重跑多出：' + verdict.added.slice(0, 5).join(', '))
     if (verdict.removed.length > 0) details.push('重跑未产出（旧残留）：' + verdict.removed.slice(0, 5).join(', '))
-    if (verdict.countMismatch) details.push('数量 ' + now.length + ' != C4 roster ' + EXPECTED_MOUNT_PACKAGES.length)
+    if (verdict.countMismatch) details.push('数量 ' + now.length + ' != 生成 roster ' + EXPECTED_GENERATED_REMOTES.length)
     if (JSON.stringify(verdict.dirs) !== JSON.stringify(verdict.expectedDirs)) {
       details.push('目录集 != C4 roster：[' + verdict.dirs.join(', ') + '] vs [' + verdict.expectedDirs.join(', ') + ']')
     }

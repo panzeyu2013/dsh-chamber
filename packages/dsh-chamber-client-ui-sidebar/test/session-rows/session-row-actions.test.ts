@@ -221,7 +221,8 @@ test('the archived row is the upstream form: grayed, unopenable, unpinnable, arc
   assert.ok(SESSIONS.includes('const key = `${server.id}/session/${sessionId}/unarchive`'))
   assert.ok(SESSIONS.includes('await unarchiveSessionForSource(server.id, sessionId)'))
   // 警示：只剩 not-openable 一态；归档成功 / 停止并归档的提示条与「撤销 + 筛选」动作已移除。
-  assert.ok(SECTION.includes("t('toast.archivedNotOpenable')"), 'the not-openable warning survives')
+  assert.ok(SECTION.includes("'toast.archivedNotOpenable'"),
+    'the not-openable warning survives (kind ternary: the literal must stay reachable)')
   assert.equal(SECTION.includes("t('toast.archivedUndo')"), false, 'the undo action is gone with the notice')
   assert.equal(SECTION.includes("t('toast.archivedFilter')"), false, 'the filter action is gone with the notice')
   assert.ok(SECTION.includes("t('empty.noneArchived')") && SECTION.includes("t('empty.viewOthers')"), 'the only-mode empty state')

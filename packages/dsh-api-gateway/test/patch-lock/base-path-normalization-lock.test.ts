@@ -37,6 +37,18 @@ test('both sides spell the same normalization rule', () => {
     'api-path.ts must collapse empty and API_PATH to the no-prefix form')
 })
 
+test('the connection WebSocket carrier prefixes the resolved per-entry base path', () => {
+  // alpha.3 routes the mux through connection.openWebSocket; without this prefix the
+  // socket lands on the control-plane root instead of /api/i/<id>/api/remote.mux.
+  const connectionClient = readFileSync(
+    new URL('../../../dsh-client-connection/src/client/index.ts', import.meta.url), 'utf8',
+  )
+  assert.ok(
+    connectionClient.includes('transport?.streamBaseUrl === undefined ? socketBasePath + path : path'),
+    'openWebSocket must prefix the resolved base path unless an explicit streamBaseUrl wins',
+  )
+})
+
 test('the fork constructor agrees with resolveInstanceBasePath across the domain', () => {
   for (const value of [undefined, '', '/', '///', '/api', '/api/', '//api//', '/api/i/local', '/api/i/local/', '/api/i/local//', 'api/i/local']) {
     assert.equal(basePathOf(value), resolveInstanceBasePath(value), JSON.stringify(value))

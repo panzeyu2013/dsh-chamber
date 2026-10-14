@@ -195,6 +195,8 @@ const AUDITED_FIRST_SCREEN_FACES: ReadonlyArray<readonly [id: string, members: r
   ['@deepseek-ai/dsh-client-connection', []],
   ['@deepseek-ai/dsh-typert-registry', []],
   ['@deepseek-ai/dsh-api-gateway', ['typert', 'connection']],
+  // alpha.3: the access-control client every ui-session/ui-workspace injects remoteAccess from.
+  ['@deepseek-ai/dsh-api-remote-access', ['remote', 'slots']],
   ['@deepseek-ai/dsh-api-remotes', ['remote']],
   ['@deepseek-ai/dsh-api-session-controller',
     ['connection', 'fileUpload', 'typert', 'remote', 'remote.commands', 'remote.session', 'remote.subagents']],
