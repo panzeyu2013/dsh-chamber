@@ -8,14 +8,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   retainConnectedNoticeSources, SOURCE_NOTICE_TTL_MS,
-  type SourceNotices,
+  type SourceNoticeKind, type SourceNotices,
 } from './sidebar-notices-model.ts'
 
 export type { SourceNotices } from './sidebar-notices-model.ts'
 
 export interface SidebarNotices {
   notices: SourceNotices
-  showNotice: (sourceId: string) => void
+  showNotice: (sourceId: string, kind?: SourceNoticeKind) => void
 }
 
 /**
@@ -39,11 +39,11 @@ export function useSidebarNotices(
       timers.current.delete(sourceId)
     }
   }
-  const showNotice = useCallback((sourceId: string): void => {
+  const showNotice = useCallback((sourceId: string, kind: SourceNoticeKind = 'archivedNotOpenable'): void => {
     // 断连来源不落警示：渲染门（server.connected）会把它藏起来，重连后 TTL 内复活。
     if (!connectedRef.current.has(sourceId)) return
     clearTimer(sourceId)
-    setNotices(prev => ({ ...prev, [sourceId]: true }))
+    setNotices(prev => ({ ...prev, [sourceId]: kind }))
     timers.current.set(sourceId, setTimeout(() => {
       timers.current.delete(sourceId)
       setNotices((prev) => {

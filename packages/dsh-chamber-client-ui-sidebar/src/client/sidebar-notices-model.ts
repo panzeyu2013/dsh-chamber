@@ -11,8 +11,11 @@
  * 要等该来源挂载、基线到达才能恢复（design 06 §3.4 登记的已知代价）。
  */
 
-/** Per-source transient warning set: one flag per source id (always `true`). */
-export type SourceNotices = Readonly<Record<string, true>>
+/** The transient warning kinds one source can show (alpha.3 adds the SessionId copy pair). */
+export type SourceNoticeKind = 'archivedNotOpenable' | 'sessionIdCopied' | 'sessionIdCopyFailed'
+
+/** Per-source transient warning set: one kind per source id (the last write wins). */
+export type SourceNotices = Readonly<Record<string, SourceNoticeKind>>
 
 /** 上游 Toast 的默认 hold（普通警示 3s）。 */
 export const SOURCE_NOTICE_TTL_MS = 3_000
@@ -28,7 +31,7 @@ export function retainConnectedNoticeSources(
   connectedSourceIds: ReadonlySet<string>,
 ): SourceNotices {
   let changed = false
-  const next: Record<string, true> = {}
+  const next: Record<string, SourceNoticeKind> = {}
   for (const [sourceId, notice] of Object.entries(notices)) {
     if (connectedSourceIds.has(sourceId)) next[sourceId] = notice
     else changed = true
