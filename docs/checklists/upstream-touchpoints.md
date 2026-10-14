@@ -67,7 +67,7 @@ pure 16：`src/http-bridge.ts`、`src/rpc.ts`、`src/rpc-host.ts`、`src/rpc-sch
 | `src/client/index.ts` | [patch-mod] | 当前代重锚：apply(ctx) 读 entry Context 的 chamberBasePath → installConnection({basePath}) → 载波装配（design 05 §6）+ SYSTEM_RESUME_EVENT/liveness 触发（design 14 D4）+ recovery-policy 转出；上游的 installConnection/ConnectionInstallOptions/transport.rpc 原样保留 |
 | `src/client/rpc.ts` | [patch-mod] | 当前代重锚：WebConnectionRpcOptions + basePath 前缀拼装（stock 保持上游 document-relative 路由；上游二进制响应/uplink 原样保留） |
 | `tsconfig.client.json` | [patch-mod] | chamber 构面：extends ../../tsconfig.json + vendor paths + files 列表（与上游 files 增量同步维护） |
-| `tsconfig.host.json` | [patch-mod] | chamber 构面：extends ../../tsconfig.json + vendor paths + files 列表（随当前代增补 src/operator-peer.ts、src/client/rpc.ts、src/client/random-uuid.ts） |
+| `tsconfig.host.json` | [patch-mod] | chamber 构面：extends ../../tsconfig.json + vendor paths + files 列表（随当前代增补 src/peer.ts、src/client/rpc.ts、src/client/random-uuid.ts） |
 | `scripts/test.mjs` | [own] | chamber 自有测试清单（按域分组的显式 manifest；verify:test-wiring 校验可达性） |
 | `tsconfig.check-base.json` | [own] | chamber erasable-only 校验构面 |
 | `tsconfig.check-client.json` | [own] | chamber erasable-only 校验构面（files 与 client 同步） |
