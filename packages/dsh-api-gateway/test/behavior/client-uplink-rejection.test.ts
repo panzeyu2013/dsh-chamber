@@ -221,3 +221,25 @@ test('the same generated stream without an uplink still opens and yields the dow
   const payload = recorder.streams[0]?.payload as { args: Record<string, unknown> }
   assert.deepEqual(Object.entries(payload.args), [['topic', 'topic']])
 })
+
+test('the answer leg registers exactly one generation source (real Connection semantics)', () => {
+  // The alpha.3 merge once constructed ClientRemoteEvents twice; the second
+  // registerGenerationSource throws on a real handle, but the shared fake above is a
+  // no-op and stayed green. Pin the single-construction contract with real semantics.
+  let generationSources = 0
+  const connection = {
+    ...fakeConnection({ streams: [] }, ['never-delivered']),
+    interactions: 'answer',
+    registerGenerationSource: () => {
+      generationSources += 1
+      if (generationSources > 1) {
+        throw new Error('connection: a generation source is already registered')
+      }
+      return () => {}
+    },
+  }
+  const ctx = createFakeContext(connection)
+  assert.doesNotThrow(() => apply(ctx as unknown as Context),
+    'apply() must not register the events channel twice')
+  assert.equal(generationSources, 1, 'exactly one generation source must be registered')
+})
