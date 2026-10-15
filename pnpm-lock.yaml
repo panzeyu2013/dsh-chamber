@@ -121,9 +121,6 @@ importers:
       '@deepseek-ai/cordis':
         specifier: workspace:*
         version: link:../../vendor/harness-packages/@deepseek-ai/cordis
-      '@deepseek-ai/dsh-api-remote-access':
-        specifier: workspace:*
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-api-remote-access
       '@deepseek-ai/dsh-brand':
         specifier: workspace:*
         version: link:../../vendor/harness-packages/@deepseek-ai/dsh-brand

@@ -498,14 +498,14 @@ class ClientRemoteService extends Service implements ClientRemote {
     if (descriptor.mode === 'stream') {
       if (descriptor.uplink !== undefined) {
         // chamber (G43): upstream returns a ClientStreamHandle whose send/end
-        // half is the ClientUplinkQueue for descriptor.uplink; this fork never
-        // copied that half, so the generated method has no send path here.
+        // half is the ClientUplinkQueue for descriptor.uplink; this entry never
+        // wires that half (no uplink reaches openRemoteStream), so the generated method has no send path here.
         // Throw synchronously (invokeStream is an async generator and would only
         // run its body on the first next()) rather than silently opening a
         // downlink-only stream and dropping the caller's items.
         throw new Error(
-          `client api: ${endpointOf(descriptor)} is a generated stream with descriptor.uplink, and the chamber api-gateway fork does not replay the uplink client half (deviation G43): `
-          + 'the uplink half is mirrored in stream-client (ClientUplinkQueue / ClientStreamHandle / isRemoteUplinkItem / requireStrictCodec) but this entry never forwards an uplink into openRemoteStream, so the call is refused instead of silently dropping the client send/end side',
+          `client api: ${endpointOf(descriptor)} is a generated stream with descriptor.uplink, and this entry never forwards an uplink into openRemoteStream (deviation G43): `
+          + 'the uplink queue itself is mirrored in stream-client (ClientUplinkQueue) but the generated stream handle is not, so the call is refused instead of silently dropping the client send/end side',
         )
       }
       return this.invokeStream(descriptor, projection, token, callerCtx, values, boundIdentity)

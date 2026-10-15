@@ -200,7 +200,7 @@ test('a generated stream with descriptor.uplink is refused at call time, before 
       assert.ok(error instanceof Error, 'the refusal must be an explicit Error, not a RemoteResult')
       assert.match(error.message, /client api: probe\/attach/)
       assert.match(error.message, /descriptor\.uplink/)
-      assert.match(error.message, /does not replay the uplink client half/)
+      assert.match(error.message, /never forwards an uplink into openRemoteStream/)
       assert.match(error.message, /G43/)
       assert.match(error.message, /ClientUplinkQueue/)
       return true

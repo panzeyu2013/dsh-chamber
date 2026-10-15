@@ -8,9 +8,11 @@
  * PLATFORM_MODULES words the composite answers.
  *
  * The deliberate extra ids — covered but never loaded — are the skips: hmr /
- * mobile / directory-picker-native / settings-account. They are page-own rows the
- * composite replaces plus host rows the shell drops on purpose; each carries its
- * own reason below, and design 09 §3.5 有意跳过名单 owns their re-review.
+ * mobile / directory-picker-native. They are page-own rows the composite replaces
+ * plus host rows the shell drops on purpose; each carries its own reason below,
+ * and design 09 §3.5 有意跳过名单 owns their re-review. (settings-account left that
+ * list in alpha.3: covered DEFERRED row, desktop overlay gated off by the
+ * build-time vendor patch — design 09 §3.5 ③.)
  *
  * Maintenance: a plugin import added to chamber-entry.ts must append its package
  * name here in the same batch (missing ids fail LOUD at boot; extra ids are

@@ -423,7 +423,7 @@ test('findUnsatisfiableExternalDependencies: names covered requires no registrat
   const deferredId = DEFERRED_EXTRA_ROW_IDS[0]!
   const otherDeferredId = DEFERRED_EXTRA_ROW_IDS[1]!
   const coveredFactoryId = CHAMBER_COVERED_FACTORY_IDS[0]!
-  const skipId = '@deepseek-ai/dsh-client-ui-settings-account'
+  const skipId = '@deepseek-ai/dsh-client-hmr'
   const kernelAdoptedId = UI_RENDERER_ID
   assert.ok(CHAMBER_COVERED_IDS.includes(skipId), 'the fixture skip is a covered id')
   assert.ok(!CHAMBER_COVERED_FACTORY_IDS.includes(skipId), 'the fixture skip has no factory')
@@ -497,7 +497,7 @@ test('no platform seed word is a covered id without a composite factory (predica
 
 test('collectExtraRows: a require onto a skipped covered id is named with the real reason', async (t) => {
   const id = '@scope/f1-needs-account-skip'
-  const skipId = '@deepseek-ai/dsh-client-ui-settings-account'
+  const skipId = '@deepseek-ai/dsh-client-hmr'
   stubFetch(t, 200, envelope([row(id, { external: [`${skipId}/client`] })]))
   const consoleCapture = captureConsoleError(t)
   const diagnostics: { state: string; pluginId?: string; message?: string }[] = []
@@ -511,7 +511,7 @@ test('collectExtraRows: a require onto a skipped covered id is named with the re
   assert.match(diagnostics[0]!.message ?? '', new RegExp(`${id} → ${skipId}`), 'the row→id edge is named')
   assert.match(diagnostics[0]!.message ?? '', /任何时刻都拿不到/)
   assert.doesNotMatch(diagnostics[0]!.message ?? '', /延迟注册者|永不加载\)/, 'no non-existent timing claim')
-  assert.match(consoleCapture.messages.join('\n'), /settings-account/)
+  assert.match(consoleCapture.messages.join('\n'), /dsh-client-hmr/)
 })
 
 test('collectExtraRows: an `external` request onto a deferred family id reports the NAMED diagnostic', async (t) => {

@@ -56,6 +56,18 @@
  * mounting component's own subtree (THIRD ADMITTED FORM below); keep
  * upstream behaviour as the fallback so an official-layout deployment is
  * unaffected, and retire once upstream scopes the fact itself.
+ *
+ * FIFTH ADMITTED CLASS (chamber shell behaviour gate, admitted by maintainer
+ * ruling): an upstream branch or seat whose ACTIVATION is wrong under the
+ * chamber shell -- not a URL, not a measured cost, not a scoped fact. The
+ * desktop branch keys off a carrier the composite must expose for other
+ * official seats, so it arms even though the shell it assumes does not exist,
+ * and its first act (a full-screen shell.overlay) is not something a chamber
+ * package can veto without shadowing the official family. Such an entry MUST
+ * state the concrete takeover/degradation symptom and the accepted trade-off
+ * in reason, keep upstream behaviour reachable behind an explicit escape hatch
+ * (never a silent permanent disable), carry a bundle marker, and be deleted
+ * once upstream stops keying the branch off that carrier.
 
  *
  * SAME CLASS, SECOND ADMITTED FORM (ownership transfer, admitted by maintainer
@@ -719,6 +731,14 @@ export const VENDOR_PATCHES = Object.freeze([
           + '  // without desktop configForms (design 09 §3.5). The account settings section\n'
           + '  // registers outside this branch and stays; set the global to restore upstream.\n'
           + '  if (desktop && (globalThis as { __dshChamberAccountOverlay?: boolean }).__dshChamberAccountOverlay === true) {\n    const controller = new DesktopOnboardingController(',
+      }),
+      Object.freeze({
+        // The overlay registration was the only writer of that flag
+        // (:275-280 setVisible), so gating the branch alone would leave
+        // desktopOnboardingVisible truthy forever and permanently suppress the
+        // upstream AccountNoticeCard (AccountMenu reads !desktopOnboardingVisible).
+        expect: '    view: undefined, details: undefined, avatar: undefined, failed: false, loginVisible: false, desktopOnboardingVisible: desktop,',
+        replace: '    view: undefined, details: undefined, avatar: undefined, failed: false, loginVisible: false, desktopOnboardingVisible: desktop && (globalThis as { __dshChamberAccountOverlay?: boolean }).__dshChamberAccountOverlay === true,',
       }),
     ]),
   }),

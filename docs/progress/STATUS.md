@@ -263,7 +263,6 @@
 - `test:gateway` 宿主隔离：`install-script.test.ts` 仍有 2 处直接 spawn 真实安装器（当前只走用法/解析即退出），若未来走更远会再次逃逸。
 - N-ctx 文档级主题投影归属：打包态目检（须重打包）。
 - 页面语言归属：冷启动变化 ≤1、预热/收割 0；另验同帧性与降级姿态。
-- 构建后回填 `packages/renderer/scripts/check-chunk-budgets.mjs` 的 `chamberEntry` 基线（`build:renderer` 后重取样）。
 - Git 来源分支候选：打包态目检；unborn 仓库 `branches` 必空属已知残留。
 - `verify:styles` 覆盖外：`docs/**` 的 token。包级 `README.i18n.yaml` 的 sha-256 记录由 `verify:i18n` 逐条校验（含缩进的嵌套 sidecar；漂移即红、`--write` 重录）；例外 = `packages/dsh-client-{connection,web}/README.i18n.yaml` 仍是 40-hex git-blob 记录（引用仓内不存在的 `verify-translation-pairing`），不在该门覆盖内，按人工纪律维护。
 - gateway 运维页失败分支不被夹具覆盖：需夹具 `respond` non-ok 能力。
@@ -309,7 +308,7 @@
 - 租客 body portal 不受 stacking 约束（残余，顶层幕布不做；design 05 §4 被否方案⑤）。
 - 降级事实覆盖边界：已覆盖四座；不覆盖未激活来源、壳回收清除、单槽后报覆盖、侧栏行无动作。
 - 连接页手写 tooltip 未走 vendor `Tooltip`：无 `role="tooltip"` 关联；未决 = 补 ARIA 或改用 vendor。
-- api-gateway fork 未重放 0.1.7-rc.2 代的 uplink 客户端半边（G43；与 0.2.0-rc.2 无关，0.2.1-alpha.3 复核仍成立）：带 uplink 的 descriptor 同步抛错；证据 `client-uplink-rejection.test.ts`。
+- api-gateway fork 未接线 uplink 客户端半边（G43；0.2.1-alpha.3 起该半边随上游整文件重放镜像进 stream-client——`ClientUplinkQueue`/`pumpUplink` 无生产调用者）：带 uplink 的 descriptor 同步 fail-loud 抛错；证据 `client-uplink-rejection.test.ts`。
 - 插件管理 tab 钉在上游页结构上（design 05 §5）：上游改结构即回归，由本包 `test/dom-seam/` 的 vendor 源锁步门响亮报红（缺 vendor 树即失败；`test:plugin-manager`）；pin 升级按 §7 第 6 步重锚。
 - 重打包（rev 变化）的已加载 client 插件无活页面切换路径：内核按 id first-load-wins 报 `rev-conflict('restart')` 并复用旧 factory，`restart-required` 只是事实；自动窗口重载不再存在，需要用户手动重载页面/重启应用（design 09 §3.7/§5、design 18 §3.6 项 8）。
 - live 热同步的跨来源 chunk-owner 撤销边界：页面级 `graphRows` 按 id 共享，只有 factory owner 的 remove 才撤销描述符（非 owner 保留）；**owner 自身移除而另一来源仍挂载同 id** 时描述符仍会被删（`live-graph.ts` 的 `ownsChunkDescriptor`；design 09 §3.7 ⑥）。
@@ -361,7 +360,6 @@
   上游单主机浏览器），**不计偏差**。
 - 保留项（裁决）：`ALLOW_BUILDS` 的 `fs-ext` 保留；`runtime-host-adapter` 退役不采纳（夹具契约）；连接 fork `ownsGeneration()` 守卫保留为纵深防御（删除行为等价、无法被测试见证）——不要补测试。
 - 设置壳偏差：自绘 chrome、面板渲染选中源自己 boot ctx 台账（故该源壳必须挂载）、离线远端不可达占位、选择器 body portal。
-- 官方桌面账户家族不加载（design 09 §3.5 有意跳过名单③）：该行的 `dshDesktop` 门在本页成立而其 `desktop-onboarding` 浮层会接管 `#root`（本页没有 desktop 表单结算它）⇒ 冷启动整页被接管；跳过 = 与官方 web 形态一致。代价：桌面账户分节（各源实测 `signed-out`）、账户登录步骤/`settings.models.sign-in` 座与 `shell.quota-notice` 认领一并消失，凭据配置回落到 models 的 API-key 编辑路径。开放风险：skip 压在上游 id 字面量上，远端实例可跑不同 dsh ⇒ 换 id/换家族会静默复发（C4 `COVERED_SENTINELS` + `roster-parity`，后者依赖 vendor 子模块/CI）。复发兜底 = `root-takeover-watch`（design 09 §3.5）：只认 #root 内联 `style.opacity=0`（稳定态按 grace，亚 grace 抖动按 15s/3 次窗口），上报 incident 并按页面预算释放；样式表/类名隐藏、`calc()`/`var()` 与替换 #root 不在网内，释放不移除外来浮层（可能仍拦指针）；`inert`-only 合法对话框不受影响。**退出条件冲突**：若上游把该门改成宿主能力而删本覆盖条目，必须同批退役/降级本网（合法 onboarding 与劫持签名不可区分）。账户面若要做属 chamber 自建特性（design 05 §5，未排期）。
 - 上游对齐轮引入的有意偏差（仍成立）：首启阶段活动视图门；`sectionsEmpty` 占位保留；框架失败屏深引 `ui-primitives/src/Button.tsx`（主图已越 `mainGraphRaw.warn`，待决 = 拆懒化 or 上调阈值并写头注）；`Switch` 披露属性挂原语控制节点（收口需上游透传）；「开/选中」色用业务蓝（六处落点，不改官方组件）；侧栏 schedule 事实由 chamber 带过去（A1 后官方行座席同样渲染：`ui-schedule` 的 occupant 落在 leading/hover 座席，本仓 `SessionScheduleIndicator` 只作 occupant 缺席的 fallback）；会话状态标记（蓝点/14px 徽标）与 Dock 角标/桌面通知为保留偏差，判据 design 06 §4.3/§5、design 19 §3.7。
 - 默认排序 `manual`（design 06 §3.1/§3.4）；窗口标题冻结
   （Electron `dsh-chamber-electron`、壳 `dsh-chamber`）。
@@ -418,7 +416,9 @@
   会话**名**与稀疏 `hasActiveSchedule` 由 `retainSessionLabels` 同瞬时保留（0.6–0.8s 窗口对远程源可见）；
   硬边界 = 行 `updatedAt` 前进（宿主已重读仍无 title）即停止携带——休眠行保留最后已知事实、不设墙钟上限
   （换目录名信息量更差）。
-- 上游 experimental worktree 与 design 08 并存（alpha.2 起）：官方 base 已挂 working-directory / tool-working-directory，@deepseek-ai/dsh-experimental-tool-worktree 是默认关闭的可选 bundle；其产物没有 dsh workspace，由 design 08 的「未注册工作树」块接管（可采纳 / 可删除）。不复用其 worktrees.create：真源只有 create、无 list/remove/adopt，池 directory 只接受调用 checkout 之下的仓库内相对路径，且要求 Git >= 2.45 与调用会话 sandbox。
+- 上游 experimental worktree 与 design 08 并存（alpha.2 起）：官方 base 已挂 working-directory / tool-working-directory，@deepseek-ai/dsh-experimental-tool-worktree 是默认关闭的可选 bundle；其产物没有 dsh workspace，由 design 08 的「未注册工作树」块接管（可采纳 / 可删除）。不复用其 worktrees.create：真源只有 create、无 list/remove/adopt，池 directory 只接受调用 checkout 之下的仓库内相对路径，且改为 GIT_NO_LAZY_FETCH 口径（不再要求 --no-lazy-fetch / Git 2.45）。
 - cua / cua-macos（alpha.3 新增实验包）：不在 web bundle 与运行期闭包；chamber 不接入（自建即重造宿主执行面），需要时由用户在 dsh profile 显式启用。
 - ServerSection god-file 预算按 alpha.3 #6062 注意力水位 feature 做 review-justified raise（1243→1273；理由见 scripts/gates/file-budgets.json 的 note）；最近提取目标 = 排序/分区准备块（server-section-order.ts）。
-- 上游 alpha.3 的 workspace 成员判定变化待复核（源码实证）：`ui-workspace` 的成员解析改为 cwd 完全限定且 ENOENT 的会话仍算成员（candidateMatches/missingSessionPaths）——原「路径缺失 → 成员被过滤」不再成立；本仓多来源分组/未分组桶的呈现前提需在真机或下一轮复验后按 design 06 §11 补记，期间不对该行为做自过滤。
+- 上游 alpha.3 的 workspace 成员判定变化待复核（源码实证）：`ui-workspace` 的成员解析改为 cwd 完全限定且 ENOENT 的会话仍算成员（candidateMatches/missingSessionPaths）——原「路径缺失 → 成员被过滤」不再成立；本仓多来源分组/未分组桶的呈现前提需在真机或下一轮复验后按 design 08 §2.4/§3.4/§5.5 补记，期间不对该行为做自过滤。
+- 桌面 flavor（Electron/Swift 复合页）账户登录不可闭环（静态链实证，alpha.3）：desktop=true 下客户端不打开授权页，回调 origin = 控制面 origin，而 `/oauth/callback` 只注册在实例 host、控制面对未知路径走 SPA 回退（只反代 `/api/i/<id>/*`）；`settings.launcher` 座在被设置壳阴影后无渲染点，可见入口只剩 models 分节的 sign-in 座。凭据配置仍走 models API-key 路径；要做通需控制面根路径 `/oauth/callback` → 活动实例反代 + 可达 origin（多实例归属待裁）。
+- 用 `__dshChamberAccountOverlay=true` 恢复官方 onboarding 形态时，页面根接管安全网的自动释放（`maxReleases=3`）会与该合法浮层互搏（源码级必然，真机未验）：登记为恢复模式的已知代价，或把安全网降级为 report-only（待裁决）。

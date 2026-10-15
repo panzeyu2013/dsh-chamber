@@ -53,7 +53,6 @@
     "@deepseek-ai/dsh-util-crypto": "workspace:*"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-api-remote-access": "workspace:*",
     "@deepseek-ai/dsh-brand": "workspace:*",
     "@deepseek-ai/dsh-client-connection": "workspace:*",
     "@deepseek-ai/dsh-typert-registry": "workspace:*",

@@ -1040,7 +1040,7 @@ const PATCHED_BUNDLED_DEPENDENCY_IDS = Object.freeze(['@deepseek-ai/dsh-util-val
 /**
  * Covered ids the composite never loads, so a patch on one could never apply: the
  * deliberate skips `chamber-covered.ts` documents in its header (hmr / mobile /
- * directory-picker-native / settings-account) — page-own rows the composite replaces
+ * directory-picker-native) — page-own rows the composite replaces
  * plus host rows the shell drops on purpose. Without this subtraction the covered
  * check below would vouch for a package no module of which reaches the build — the
  * recorded ui-sidebar-documentpreview failure mode reached through the dedupe list

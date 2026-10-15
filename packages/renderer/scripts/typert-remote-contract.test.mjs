@@ -11,7 +11,7 @@ import {
 
 const VENDOR = fileURLToPath(new URL('../../../vendor/harness-packages/@deepseek-ai/', import.meta.url))
 
-test('0.2.1-alpha.2 dsh-api-remotes assembly and renderer generation stay in lockstep', () => {
+test('dsh-api-remotes assembly and renderer generation stay in lockstep', () => {
   const source = readFileSync(`${VENDOR}dsh-api-remotes/src/client/index.ts`, 'utf8')
   const selected = remotePackagesFromAssembly(source)
   // Mount ORDER is the runtime contract; the expected list is single-sourced

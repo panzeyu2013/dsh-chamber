@@ -44,9 +44,10 @@ installPageLanguageOwner()
   installPageChannelEventSourceAudit()
 
 // One foreign `shell.overlay` seat can zero + inert `#root` and cover the whole
-// window (the desktop-only account family did exactly this: design 09 §3.5 有意
-// 跳过名单③). The covered-set skip removes that row; this is the page-level net
-// for any future carrier-gated family — report the episode and release the hold.
+// window (the desktop-only account family did exactly this: design 09 §3.5 ③).
+// alpha.3 loads that row with its overlay gated off by the build-time vendor patch;
+// this is the page-level net for the explicit recovery mode and any future
+// carrier-gated family — report the episode and release the hold.
 installRootTakeoverWatch({
   report: facts => {
     console.error(`[shell] page root taken over: #root opacity=${facts.opacity} inert=${facts.inert} `

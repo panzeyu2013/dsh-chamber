@@ -4,9 +4,10 @@
  * WHY. Client plugins share this document with the chamber shell, so one foreign
  * `shell.overlay` seat can zero `#root` (`style.opacity = "0"`) and mark it
  * `inert`, covering the whole window (the desktop-only account family's
- * `desktop-onboarding` overlay parked on「正在加载设置…」— design 09 §3.5 有意跳过
- * 名单③). The covered-set skip removes that row; this watcher is the page-level net
- * for a future family that re-arms the same way.
+ * `desktop-onboarding` overlay parked on「正在加载设置…」— design 09 §3.5 ③).
+ * alpha.3 loads that row with its overlay gated off by the build-time vendor patch,
+ * so the auto-release only meets the explicit recovery mode and any future family
+ * that re-arms the same way; the recovery-mode interaction is registered in STATUS.
  *
  * SIGNATURE — deliberately narrow: the trigger is an INLINE `style.opacity` on the
  * page root that parses to exactly 0. `calc()`/`var()` spellings, a stylesheet or
@@ -17,8 +18,9 @@
  * (`windowMs`/`minSamples`) instead of sliding through forever — the report is the
  * net's durable half. HONEST LIMIT: a LEGITIMATE desktop onboarding (the account
  * family's own loading state) is indistinguishable from a hostile hold under this
- * signature, so the covered-set skip must be retired or this net demoted to
- * report-only IN THE SAME BATCH that re-enables that family (design 09 §3.5).
+ * signature; the family is loaded with its overlay gated off by the build-time
+ * vendor patch, so the net's auto-release only applies to the explicit recovery mode
+ * (design 09 §3.5, STATUS registers the interaction).
  *
  * WHAT A RELEASE DOES AND DOES NOT DO: it clears the inline opacity AND sets
  * `inert = false` (without the second write a released root stays input-dead,
@@ -26,7 +28,7 @@
  * the foreign overlay: on darwin that overlay is transparent but still covers the
  * viewport, so it may keep swallowing pointer events, and elsewhere its background
  * is opaque. `#root` inert ownership is NOT attributable from this signature — the
- * account family (skipped here) and settings-models' onboarding dialog both set it,
+ * account family (loaded, overlay gated off) and settings-models' onboarding dialog both set it,
  * and neither combines it with a zero opacity today.
  *
  * CLOCKLESS CORE: {@link rootTakeoverStep} is a pure reducer over caller-stamped
@@ -235,7 +237,7 @@ export function installRootTakeoverWatch(options: RootTakeoverWatchOptions): () 
             console.error(
               'page root takeover persists after ' + String(DEFAULT_ROOT_TAKEOVER_RULE.maxReleases) + ' releases; '
               + 'giving up on automatic recovery — a foreign client plugin is holding #root '
-              + '(design 09 §3.5 有意跳过名单③).',
+              + '(design 09 §3.5 ③).',
             )
             break
         }
