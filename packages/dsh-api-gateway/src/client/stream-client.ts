@@ -704,7 +704,10 @@ export class RemoteStreamMuxClient {
     return raced.settled === 'deadline' ? await connecting : (raced.value as ConnectionWebSocket)
   }
 
-  /** chamber patch: instance method so the mux route carries the per-entry base path ('' = stock route). */
+  /** chamber patch: instance method so the mux route carries the per-entry base path ('' = stock
+   * route). It deliberately ignores `__DSH_TRANSPORT__.streamBaseUrl`: the connection carrier owns
+   * that resolution and production always passes `openSocket`, so this fallback is reachable from
+   * tests or a carrier-less construction only. */
   private remoteStreamUrl(): string {
     const location = (globalThis as { location?: { origin?: string } }).location
     const base = location?.origin !== undefined && location.origin !== 'null' ? location.origin : INTERNAL_BASE
