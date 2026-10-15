@@ -125,7 +125,7 @@ test('registry 值锁：分类桶形状 + 符号锚字符串（防"同计数下�
       'packages/desktop/update-journal.ts#updateJournalState',
       'packages/desktop/update-schedule.ts#UPDATE_SCHEDULE_DEFAULTS',
       'packages/desktop/updater.ts#LINUX_UPDATE_UNSUPPORTED_REASON',
-      'packages/control-plane/src/page-channel.ts#=literal:const PLUGIN_GRAPH_SSE_PATH = '/plugins/events'',
+      "packages/control-plane/src/page-channel.ts#=literal:const PLUGIN_GRAPH_SSE_PATH = '/plugins/events'",
       'packages/renderer/src/live-graph.ts#parsePluginEventFrame',
     ],
     '符号锚是逐条 golden：改指向必须同批改本断言',
