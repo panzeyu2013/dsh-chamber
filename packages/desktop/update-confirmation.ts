@@ -1,8 +1,8 @@
 /**
  * update-confirmation.ts — the confirmation wire shape for the two update actions
- * (design 11 §4 stale-answer guard), kept as a dependency-free leaf so the wire shape
- * is unit-testable under plain node (shell-ipc-update.ts itself pulls the IPC/transport
- * graph and is exercised by the source-level wiring locks instead).
+ * (design 11 §4 stale-answer guard), kept as a dependency-free leaf so the wire shape is
+ * unit-testable under plain node and shareable by the shell wiring and its execution-level
+ * IPC test without pulling the IPC/transport graph into either.
  *
  * A confirmation carries `{ revision }` — the state generation the renderer answered
  * from. A malformed payload fails CLOSED (never "no expectation"): the shell must always

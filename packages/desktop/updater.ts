@@ -739,7 +739,8 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   // The seal and the version suffix disagree only for a mis-built artifact (the release
   // workflow forbids it). The seal wins — say so loudly instead of deriving silently.
   if (sealedChannel !== null && (sealedChannel === 'beta') !== isBetaVersion(version)) {
-    logger.warn('[updater] 通道封签与版本后缀不一致（封签=' + sealedChannel + '，版本=' + version + '），以封签为准')
+    logger.warn('[updater] 通道封签与版本后缀不一致（封签=' + sealedChannel + '，版本=' + version
+      + '）：生效通道以封签为基础，另可被 DSH_CHAMBER_UPDATE_CHANNEL 显式覆盖')
   }
   // Upstream-shaped cadence + opt-in evidence journal (both env-tunable; see the
   // module headers). Invalid env never throws at boot: loud warning + defaults.

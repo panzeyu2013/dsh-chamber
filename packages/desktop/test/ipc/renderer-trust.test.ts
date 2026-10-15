@@ -182,9 +182,16 @@ test('committed settings, registry and held-resume pushes use the non-throwing s
   assert.match(assembly, /if \(!deps\.edges\.mainWindowAlive\(\)\) \{\s*throw new Error\('status renderer changed before push'\)/,
     'the status push must re-check window liveness inside the closure (replaced-window race)')
   // alpha.3 review follow-up: the push is extracted into pushState so a refused (stale)
-  // confirmation can re-push; the invariant is the same — liveness gate, non-throwing
-  // boundary, UPDATE_STATE_CHANGED send — plus the subscribe→pushState wiring.
-  assert.match(core, /const pushState = \(updateState: UpdateState\): void => \{[\s\S]*?if \(!deps\.edges\.mainWindowAlive\(\)\) return;[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.UPDATE_STATE_CHANGED/)
+  // confirmation can re-push. The lock slices pushState's OWN body — a lazy wildcard could find
+  // the three anchors in a later sibling — and pins the subscribe→pushState wiring.
+  const pushStart = core.indexOf('const pushState = (updateState: UpdateState): void => {')
+  assert.ok(pushStart >= 0, 'the update push must stay extracted as pushState')
+  const pushEnd = core.indexOf('\n  };', pushStart)
+  assert.ok(pushEnd > pushStart, 'pushState must keep a closed body')
+  const pushBody = core.slice(pushStart, pushEnd)
+  assert.match(pushBody, /if \(!deps\.edges\.mainWindowAlive\(\)\) return;/)
+  assert.match(pushBody, /attemptCommittedRegistryPush\(\(\) => \{/)
+  assert.equal((pushBody.match(/IPC_CHANNELS\.UPDATE_STATE_CHANGED/g) ?? []).length, 1)
   assert.match(core, /updater\.subscribe\(\(updateState\) => \{[\s\S]*?pushState\(updateState\)/)
 })
 

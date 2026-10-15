@@ -671,6 +671,7 @@
         "packages/desktop/test/desktop-shell/updater-main-wiring.test.ts",
         "packages/desktop/test/desktop-shell/updater-revision.test.ts",
         "packages/desktop/test/desktop-shell/updater-watchdog.test.ts",
+        "packages/desktop/test/ipc/shell-ipc-update.test.ts",
         "packages/desktop/update-journal.test.ts",
         "packages/desktop/update-schedule.test.ts"
       ],

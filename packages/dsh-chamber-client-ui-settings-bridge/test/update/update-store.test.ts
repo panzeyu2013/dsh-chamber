@@ -291,9 +291,10 @@ test('confirmation actions forward the rendered snapshot revision to the bridge'
 })
 
 test('restart gate releases on a REFUSED bridge answer so the in-place retry can reach it', async () => {
-  // The module gate must not stay armed after a refusal: main deliberately does NOT re-push a
-  // refused restart (no state change), so a held gate would make every later click a silent
-  // no-op until an app reload.
+  // The module gate must not stay armed after a refusal: main re-pushes the CURRENT snapshot on a
+  // refused restart, but that snapshot carries no failure evidence (no restartFailureText, phase
+  // still downloaded), so the store's push-recovery rule cannot release this gate — it must reset
+  // on the refusal itself, or every later click stays a silent no-op until an app reload.
   const { surface } = fakeUpdateSurface()
   let calls = 0
   surface.restartAndInstall = async () => {
@@ -307,5 +308,35 @@ test('restart gate releases on a REFUSED bridge answer so the in-place retry can
     assert.deepEqual(await store.requestUpdateRestart(1), { ok: false, error: 'no downloaded update to install' })
     assert.deepEqual(await store.requestUpdateRestart(1), { ok: true }, 'the refusal released the module gate')
     assert.equal(calls, 2)
+  } finally { cleanup() }
+})
+
+test('a stalled download push releases the module gate so the retry reaches the bridge', async () => {
+  const { surface, push } = fakeUpdateSurface()
+  let releaseFirst: (() => void) | undefined
+  const held = new Promise<void>((resolve) => { releaseFirst = resolve })
+  let calls = 0
+  surface.download = async (revision: number) => {
+    surface.downloadRevisions.push(revision)
+    calls += 1
+    if (calls === 1) {
+      await held
+      return { ok: false, error: 'download stalled' }
+    }
+    return { ok: true }
+  }
+  const cleanup = installUpdateSurface(surface)
+  const store = await freshStore()
+  try {
+    await waitHydrated(store)
+    const pending = store.requestUpdateDownload(REVISION)
+    // Main's watchdog declared the download stalled: it released its own single-flight, accepted a
+    // retry at the CURRENT revision and pushed the failure kind. The module gate must follow.
+    push(downloadedState({ phase: 'error', revision: 2, failureKind: 'download-network' }))
+    releaseFirst?.()
+    assert.deepEqual(await pending, { ok: false, error: 'download stalled' })
+    assert.deepEqual(await store.requestUpdateDownload(2), { ok: true },
+      'the stall push released the module gate so the retry can reach the bridge')
+    assert.deepEqual(surface.downloadRevisions, [REVISION, 2])
   } finally { cleanup() }
 })

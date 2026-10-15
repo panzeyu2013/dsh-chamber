@@ -56,6 +56,12 @@ const hydration = createBridgeHydration<UpdateState, UpdateSurface>({
       || state.phase === 'error' || state.phase === 'up-to-date') {
       restartInFlight = false
     }
+    // Download-stall recovery: main's watchdog releases its own single-flight and accepts a
+    // retry at the CURRENT revision, but this module gate otherwise clears only in the pending
+    // call's finally — without this release the「更新」retry can never reach the bridge and the
+    // page shows the misleading state-changed refusal. download-network is the failure kind the
+    // watchdog publishes for a stalled download.
+    if (state.failureKind === 'download-network') downloadInFlight = false
   },
   onQuery: () => {
     // No extra shaping: a query result that wins the push-wins race is the

@@ -10,7 +10,8 @@
  *    only the shell's IPC layer, which always supplies a revision, is fail-closed;
  * ⑤ the wire-shape parser (update-confirmation.ts) fails closed on malformed payloads;
  * ⑥ the shell wiring (shell-ipc-update.ts) parses every confirmation and re-pushes the
- *    current state on refusal — a source lock, because that module pulls the IPC graph.
+ *    current state on refusal — pinned PER HANDLER by slice (the execution-level lock in
+ *    test/ipc/shell-ipc-update.test.ts owns the behaviour).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -101,15 +102,24 @@ test('⑥ isStaleConfirmation: only a numeric mismatch (past OR future) is stale
   assert.equal(isStaleConfirmation(3, -1), true)
 })
 
-test('⑦ shell wiring: every confirmation parses the payload and re-pushes on refusal', () => {
+test('⑦ shell wiring: each confirmation handler parses, fails closed and re-pushes on refusal', () => {
   const source = readFileSync(join(import.meta.dirname, '..', '..', 'shell-ipc-update.ts'), 'utf8')
-  const parses = source.split('parseConfirmationRevision(payload)').length - 1
-  assert.equal(parses, 2, 'download and restartAndInstall must both parse { revision }')
-  const resyncFailures = source.split('if (!result.ok) pushState(updater.state())').length - 1
-  assert.equal(resyncFailures, 2, 'a refused confirmation must re-push the current state (renderer resync)')
-  const resyncAll = source.split('pushState(updater.state())').length - 1
-  assert.equal(resyncAll, 4, 'BOTH refusal kinds re-push: stale/failed action AND malformed payload')
-  assert.ok(source.includes('await updater.download(revision)'), 'the parsed revision must reach download()')
+  const slice = (marker: string): string => {
+    const start = source.indexOf(marker)
+    assert.ok(start >= 0, marker + ' handler must exist')
+    const next = source.indexOf('deps.ipc.handle(', start + marker.length)
+    return source.slice(start, next === -1 ? undefined : next)
+  }
+  for (const marker of ['IPC_CHANNELS.UPDATE_DOWNLOAD', 'IPC_CHANNELS.UPDATE_RESTART']) {
+    const body = slice(marker)
+    assert.match(body, /parseConfirmationRevision\(payload\)/, marker + ' must parse the confirmation')
+    assert.match(body, /if \(revision === null\) \{[\s\S]*?pushState\(updater\.state\(\)\);[\s\S]*?return refuseInvalidConfirmation\(\);/,
+      marker + ' must fail closed AND re-push the current state on a malformed payload')
+    assert.match(body, /if \(!result\.ok\) pushState\(updater\.state\(\)\);/,
+      marker + ' must re-push the current state on a refusal')
+  }
+  assert.match(slice('IPC_CHANNELS.UPDATE_DOWNLOAD'), /await updater\.download\(revision\)/,
+    'the parsed revision must reach download()')
   assert.ok(
     source.includes('updater.restartAndInstallAsync?.(revision) ?? updater.restartAndInstall(revision)'),
     'the parsed revision must reach both restart legs',
