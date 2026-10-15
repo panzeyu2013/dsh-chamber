@@ -245,7 +245,7 @@ test('S-21: the page renders the shell-pushed phases (checking → available) an
     releases.push(() => resolve({ ok: true }))
   })
   const realDownload = surface.download.bind(surface)
-  surface.download = async () => { extraCalls.push('download'); return realDownload() }
+  surface.download = async (revision: number) => { extraCalls.push('download'); return realDownload(revision) }
   const realOpen = surface.openReleasePage.bind(surface)
   surface.openReleasePage = async (url: string) => { extraCalls.push('openReleasePage'); return realOpen(url) }
   const cleanup = installUpdateSurface(surface)
