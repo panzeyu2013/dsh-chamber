@@ -140,9 +140,10 @@ pnpm run dist:desktop
 | `desktop_ssh_plugin_list` | invoke | 远端插件清单投影（cat 远端 manifest + 本地解析；只读） |
 | `desktop_ssh_seed_host_graph` | invoke | 向远端注入 chamber host 包（idempotent，hash-skip；供给面，非插件模型写面） |
 | `desktop_local_plugin_list` | invoke | 本地插件清单（依赖值路径**脱敏**为 `file:<hidden>`；只读） |
-| `dsh-chamber:update-state` | invoke | 更新状态快照（设计 11）：`{phase, currentVersion, latestVersion, channel, downloadPercent, releaseUrl, installBlockedReason, error}`——非秘密投影 |
+| `dsh-chamber:update-state` | invoke | 更新状态快照（设计 11）：`{phase, currentVersion, latestVersion, channel, revision, downloadPercent, releaseUrl, installBlockedReason, error}`——非秘密投影（`revision` = 状态代际，确认动作回传它） |
 | `dsh-chamber:update-check` | invoke | 用户主动检查；复用周期检查路径，只做 feed 发现、不下载 |
-| `dsh-chamber:update-download` | invoke | 用户确认的「更新」动作：触发后台下载（`autoDownload=false`，不点击永不下载）；`{ok}` 或 `{error}` |
+| `dsh-chamber:update-download` | invoke | 用户确认的「更新」动作（载荷 `{revision}` = 渲染快照代际）：触发后台下载（`autoDownload=false`，不点击永不下载）；过期/缺失 revision loud 拒绝并重推当前状态；`{ok}` 或 `{error}` |
+| `dsh-chamber:update-restart` | invoke | 「重启并安装」（载荷 `{revision}`，同一过期护栏）：quitAndInstall；原生腿在场走 Sparkle 标准窗 |
 | `dsh-chamber:open-release` | invoke | 「前往下载页」：经主进程 `shell.openExternal` 打开，仅允许本仓库 GitHub 页（严格白名单） |
 | `dsh-chamber:update-state-changed` | 主进程推送 | 更新状态变化（检查/下载/就绪/失败），renderer 订阅刷新 settings「更新」部分 |
 | `desktop_ssh_status_changed` | 主进程推送 | 状态变化事件 `{id, status}` |

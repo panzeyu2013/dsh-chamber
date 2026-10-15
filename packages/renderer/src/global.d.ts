@@ -395,6 +395,10 @@ export interface UpdateState {
   currentVersion: string
   latestVersion: string | null
   channel: 'stable' | 'beta'
+  /** Monotonic state generation (mirror of updater.ts UpdateState.revision, L3 lock):
+   *  the shell echoes the revision it rendered when confirming a download/restart; an
+   *  outdated revision is refused as a stale answer (design 11 §4). */
+  revision: number
   downloadPercent: number | null
   releaseUrl: string | null
   installBlockedReason: string | null
@@ -418,9 +422,10 @@ export interface UpdateSurface {
   state(): Promise<UpdateState>
   /** User-initiated check (the「检查更新」button) — never downloads. */
   check(): Promise<{ ok: true } | { ok: false; error: string }>
-  download(): Promise<{ ok: true } | { ok: false; error: string }>
-  /** Restart into the downloaded update (the「重启并安装」button). */
-  restartAndInstall(): Promise<{ ok: true } | { ok: false; error: string }>
+  /** `revision` = the state revision this answer was rendered from (stale answers are refused). */
+  download(revision: number): Promise<{ ok: true } | { ok: false; error: string }>
+  /** Restart into the downloaded update (the「重启并安装」button); same revision echo. */
+  restartAndInstall(revision: number): Promise<{ ok: true } | { ok: false; error: string }>
   onChanged(callback: (state: UpdateState) => void): () => void
   /** Open a release page in the system browser (main-process allowlisted). */
   openReleasePage(url: string): Promise<{ ok: true } | { ok: false; error: string }>

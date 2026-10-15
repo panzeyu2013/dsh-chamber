@@ -16,7 +16,8 @@
  *     stop 可停、失败轮不抛穿；
  *  ⑮/⑯ 发现单源：原生腿在场 → 零 GitHub 出网、恰一次 kind=check、页面
  *     checking → 壳推送结果、不排静默定时器；原生腿缺席 → 既有 GitHub 检查原样；
- *  ⑰ 坏配置：能力探测原因被记录、保持 blocked，check 落 error（不停 checking）。
+ *  ⑰ 坏配置：能力探测原因被记录、保持 blocked，check 落 error（不停 checking）；
+ *  ⑱/⑲ 确认动作的 revision 护栏：过期回答绝不转发/不接受，当前代际保持既有语义。
  * 纯逻辑（无网络、无 Electron、无真实 timer 等待——⑩/⑮ 用假定时器注入）。
  */
 import { test } from 'node:test'
@@ -24,7 +25,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { isAllowedReleaseUrl } from './updater.ts'
+import { isAllowedReleaseUrl, STALE_CONFIRMATION_ERROR } from './updater.ts'
 import {
   HEADLESS_CHECK_DELAY_MS,
   HEADLESS_CHECK_INTERVAL_MS,
@@ -789,4 +790,52 @@ test('A9 回归：启动日志用分钟表述（±jitter% + 退避封顶），�
   const overriddenLine = overriddenLogs.find((entry) => entry.includes('更新检查已启动'))
   assert.match(overriddenLine!, /之后每 2min ±20%，失败退避封顶 60min/,
     'env 覆盖的周期同样按分钟表述（实际：' + overriddenLine + '）')
+})
+
+test('⑱ revision 代际与过期回答：原生腿在场也不转发过期确认', async () => {
+  const calls: string[] = []
+  const controller = createHeadlessUpdateController({
+    version: '0.2.2',
+    logger,
+    request: fakeFetch([release('v0.2.3')]),
+    nativeUpdater: {
+      async available() { return { available: true } },
+      async trigger(kind: 'check' | 'download' | 'install') { calls.push(kind); return { ok: true as const } },
+    },
+  })
+  assert.equal(controller.state().revision, 0, '初始快照 = 第 0 代')
+  controller.start()
+  await Promise.resolve(); await Promise.resolve()
+  await controller.checkNow()
+  controller.applyNativePhase({ phase: 'available', version: '0.2.3', error: null })
+  const current = controller.state().revision
+  assert.ok(current > 0, 'checking/available 推送都推进代际')
+  // 过期确认：不转发壳、不触发 kind=download。
+  assert.deepEqual(await controller.download(current - 1), { ok: false, error: STALE_CONFIRMATION_ERROR })
+  assert.deepEqual(await controller.download(current + 1), { ok: false, error: STALE_CONFIRMATION_ERROR })
+  assert.deepEqual(calls, ['check'], '过期回答绝不转发下载')
+  // 当前代际：按既有相位门转发。
+  assert.deepEqual(await controller.download(current), { ok: true })
+  assert.deepEqual(calls, ['check', 'download'])
+  controller.applyNativePhase({ phase: 'downloaded', version: '0.2.3', error: null })
+  const downloaded = controller.state().revision
+  assert.ok(downloaded > current, 'native 相位入站同样推进代际')
+  assert.deepEqual(await controller.restartAndInstallAsync!(downloaded - 1), { ok: false, error: STALE_CONFIRMATION_ERROR })
+  assert.deepEqual(await controller.restartAndInstallAsync!(downloaded + 1), { ok: false, error: STALE_CONFIRMATION_ERROR })
+  assert.deepEqual(calls, ['check', 'download'], '过期重启确认不得转发 install')
+  assert.deepEqual(await controller.restartAndInstallAsync!(downloaded), { ok: true })
+  assert.deepEqual(calls, ['check', 'download', 'install'])
+  controller.stop()
+})
+
+test('⑲ 无原生腿：过期确认先于相位拒绝，当前代际保持既有 blocked-available 语义', async () => {
+  const controller = createHeadlessUpdateController({ version: '0.2.2', logger, request: fakeFetch([release('v0.2.3')]) })
+  await controller.checkNow()
+  const current = controller.state().revision
+  assert.equal(controller.state().phase, 'available')
+  assert.deepEqual(await controller.download(current - 1), { ok: false, error: STALE_CONFIRMATION_ERROR })
+  assert.deepEqual(await controller.download(current + 1), { ok: false, error: STALE_CONFIRMATION_ERROR })
+  assert.deepEqual(await controller.download(current), { ok: false, error: NATIVE_SHELL_DOWNLOAD_REFUSAL })
+  assert.deepEqual(controller.restartAndInstall(current - 1), { ok: false, error: STALE_CONFIRMATION_ERROR })
+  assert.deepEqual(await controller.restartAndInstallAsync!(current), { ok: false, error: NATIVE_SHELL_RESTART_REFUSAL })
 })

@@ -63,7 +63,12 @@
 - `protobufjs`/`@google/genai` 放行分歧：待 M2 全新安装证据。
 - gateway 运维页缺 `recover-metadata`/`cleanup-version`/`restore-pre-rollback` 三入口（design 21 §7）；FATAL 下只能 curl。
 - apply-now 实机：macOS 打包全链、Linux 生产 TLS 全链、Windows 只读投影。
-- 桌面更新（design 11 §9）：真实 Apple 凭据跑通发布 CI + 双平台清单未在签名包确证。
+- 桌面更新（design 11 §9）：真实 Apple 凭据跑通发布 CI + 双平台清单未在签名包确证；通道封签（§4 采纳点①）
+  的**打包态实证未跑**——需一次 beta 打包确认 `package.json` 带 `dshChamberUpdateChannel=beta`、stable 包无该键
+  （extraMetadata → 运行期读回全链；dev 回退已由 `packages/desktop/test/desktop-shell/updater-channel-seal.test.ts` 钉住）。
+  既有（非本批引入）门差：`checkNow()` 在 runCheck 门跳过（检查在飞/下载停滞待决/已下载）时仍回 `{ok:true}`，而渲染侧
+  `updateCheckDisabled` 不含 `downloadStallPending` 腿 ⇒ design 11 §3.2「与主进程门逐字对齐」不成立、极端窗口下检查按钮可点但无效果。
+  待裁 = 主进程回 `{ok:false}` 还是渲染门补腿（判据：按钮可点必须有效果，或明确禁用）。
 - 认证服务端 Gateway：生产 TLS 反代/SPKI pin/`remote.mux` 断线恢复、三形态重登与撤销、`/chamber/runtime` TLS、Linux service 升级回退、`--bind 0.0.0.0`/隧道负例；凭据重置推迟、改密/轮换停机 CLI 恢复。
 - S0/S2 http（design 17 §10.5）：S2-c 未实现（前置 = 扩展 gateway patch 写入器）；剩余验收 = 打包态直连可写、断链 60–120s 自愈、升级后钩子复验。
 - 设计 21 对齐：只读通道/seed 供给面端到端核验（发布前）、who/when tooltip 未渲染、`pollGatewayReady` 英文串。
@@ -420,5 +425,5 @@
 - cua / cua-macos（alpha.3 新增实验包）：不在 web bundle 与运行期闭包；chamber 不接入（自建即重造宿主执行面），需要时由用户在 dsh profile 显式启用。
 - ServerSection god-file 预算按 alpha.3 #6062 注意力水位 feature 做 review-justified raise（1243→1273；理由见 scripts/gates/file-budgets.json 的 note）；最近提取目标 = 排序/分区准备块（server-section-order.ts）。
 - 上游 alpha.3 的 workspace 成员判定变化待复核（源码实证）：`ui-workspace` 的成员解析改为 cwd 完全限定且 ENOENT 的会话仍算成员（candidateMatches/missingSessionPaths）——原「路径缺失 → 成员被过滤」不再成立；本仓多来源分组/未分组桶的呈现前提需在真机或下一轮复验后按 design 08 §2.4/§3.4/§5.5 补记，期间不对该行为做自过滤。
-- 桌面 flavor（Electron/Swift 复合页）账户登录不可闭环（静态链实证，alpha.3）：desktop=true 下客户端不打开授权页，回调 origin = 控制面 origin，而 `/oauth/callback` 只注册在实例 host、控制面对未知路径走 SPA 回退（只反代 `/api/i/<id>/*`）；`settings.launcher` 座在被设置壳阴影后无渲染点，可见入口只剩 models 分节的 sign-in 座。凭据配置仍走 models API-key 路径；要做通需控制面根路径 `/oauth/callback` → 活动实例反代 + 可达 origin（多实例归属待裁）。
+- 桌面 flavor（Electron/Swift 复合页）账户登录不可闭环（静态链实证，alpha.3）：desktop=true 下客户端不打开授权页，回调 origin = 控制面 origin，而 `/oauth/callback` 只注册在实例 host、控制面对未知路径走 SPA 回退（只反代 `/api/i/<id>/*`）；`settings.launcher` 座在被设置壳阴影后无渲染点，可见入口只剩 models 分节的 sign-in 座。凭据配置仍走 models API-key 路径；要做通需控制面根路径 `/oauth/callback` → 活动实例反代 + 可达 origin；**归属裁决 D2-a/b/c 与前置 spike 见 [todo/features/account-login.md](todo/features/account-login.md) §3**（裁决前不落控制面代码）。
 - 用 `__dshChamberAccountOverlay=true` 恢复官方 onboarding 形态时，页面根接管安全网的自动释放（`maxReleases=3`）会与该合法浮层互搏（源码级必然，真机未验）：登记为恢复模式的已知代价，或把安全网降级为 report-only（待裁决）。

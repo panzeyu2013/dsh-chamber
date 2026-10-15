@@ -93,6 +93,8 @@ export const GROUPS = {
     'test/ipc/cross-package-contract.test.ts',
     'test/ipc/local-plugin-list-redaction.test.ts',
     'test/ipc/ipc-surface-mirror.test.ts',
+    // design 11 §4：更新确认的**执行级** fail-closed/revision 护栏（伪 ctx 驱动真实注册体）。
+    'test/ipc/shell-ipc-update.test.ts',
     // swift-side electron-free core seam gate + the Swift-flavor sidecar/B-bridge
     // surface (flat paths on purpose; kept out of the test/<domain>/ regrouping).
     'electron-free-gate.test.ts',
@@ -139,6 +141,10 @@ export const GROUPS = {
     'test/desktop-shell/updater-main-wiring.test.ts',
     // 两个 GitHub 发现面的锁步（共享 update-discovery.ts）
     'test/desktop-shell/update-discovery.test.ts',
+    // design 11 §4 采纳点②：确认回答的 revision 护栏（控制器语义 + IPC 源码锁）
+    'test/desktop-shell/updater-revision.test.ts',
+    // design 11 §4 采纳点①：构建期通道封签（优先级表 + beta.yml 封签静态断言）
+    'test/desktop-shell/updater-channel-seal.test.ts',
     // swift-side headless update controller (design 25 §7)
     'update-headless.test.ts',
     // 上游节奏单源 + 可选取证 JSONL（2026-09 对齐）

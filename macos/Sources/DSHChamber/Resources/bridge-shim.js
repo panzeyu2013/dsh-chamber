@@ -500,13 +500,14 @@
   }
 
   /** update — 5 invoke + onChanged。download/restartAndInstall 的宿主腿按
-   *  装配切换（Sparkle 转发 / blocked-available），见文件头注记；onChanged 是
+   *  装配切换（Sparkle 转发 / blocked-available），见文件头注记；两个确认动作回传
+   *  渲染快照的 revision（主进程拒收过期回答，design 11 §4）；onChanged 是
    *  preload 唯一订阅拼写（不提供 onStateChanged 别名——超集不在 preload 面内）。 */
   var update = {
     state: function () { return invoke('dsh-chamber:update-state', null) },
     check: function () { return invoke('dsh-chamber:update-check', null) },
-    download: function () { return invoke('dsh-chamber:update-download', null) },
-    restartAndInstall: function () { return invoke('dsh-chamber:update-restart', null) },
+    download: function (revision) { return invoke('dsh-chamber:update-download', { revision: revision }) },
+    restartAndInstall: function (revision) { return invoke('dsh-chamber:update-restart', { revision: revision }) },
     openReleasePage: function (url) { return invoke('dsh-chamber:open-release', { url: url }) },
     onChanged: function (callback) {
       return subscribe(PUSH_EVENTS.UPDATE_STATE_CHANGED, makePassthroughListener(callback))

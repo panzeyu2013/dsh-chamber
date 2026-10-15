@@ -111,6 +111,24 @@ function getRealNativeAutoUpdater(): NativeAutoUpdaterLike | null {
  *  the Electron controller never emits it, but both flavors render from this one Union. */
 export type UpdatePhase = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error'
 
+/** Refusal text for a confirmation carrying an outdated state revision (the shell
+ *  echoed a revision that is no longer current). The renderer re-renders from the
+ *  resynced state; the refusal itself is logged loudly by the controller and the shell. */
+export const STALE_CONFIRMATION_ERROR = 'stale confirmation: the update state changed (reload the update section and retry)'
+
+/**
+ * True when a confirmation carries an outdated state revision. `null`/`undefined` =
+ * no expectation (internal callers and tests); the shell always supplies a revision and
+ * its IPC layer fails closed on a malformed payload, so the guard is never skipped on
+ * the user-facing path.
+ */
+export function isStaleConfirmation(
+  currentRevision: number,
+  expectedRevision: number | null | undefined,
+): boolean {
+  return typeof expectedRevision === 'number' && expectedRevision !== currentRevision
+}
+
 /** Non-secret update state projection (preload + renderer mirror this shape). */
 export interface UpdateState {
   phase: UpdatePhase
@@ -118,8 +136,14 @@ export interface UpdateState {
   currentVersion: string
   /** Latest version on the configured channel; null = none known yet. */
   latestVersion: string | null
-  /** Feed channel (stable release, intrinsic `-beta.N`, or explicit dev beta opt-in). */
+  /** Feed channel: the explicit DSH_CHAMBER_UPDATE_CHANNEL=beta opt-in when set, else the
+   *  build-sealed manifest value (beta builds carry `dshChamberUpdateChannel`), else the
+   *  intrinsic `-beta.N` version suffix. */
   channel: 'stable' | 'beta'
+  /** Monotonic state generation, bumped by EVERY setState(). The shell echoes the
+   *  revision it rendered with a confirmation; any other revision is refused as a stale
+   *  answer (design 11 §4). Non-secret; the renderer mirrors this field (L3 lock). */
+  revision: number
   /** Download progress percent (0–100) while downloading. */
   downloadPercent: number | null
   /** GitHub release page for the latest version (manual-install path). */
@@ -499,17 +523,19 @@ export interface UpdateController {
   start(): void
   /** Foreground/resume nudge (window focus / powerMonitor resume). */
   noteActivity(reason: 'focus' | 'resume'): void
-  /** User-confirmed download (the「更新」button): resolve {ok} or {error}. */
-  download(): Promise<{ ok: true } | { ok: false; error: string }>
+  /** User-confirmed download (the「更新」button): resolve {ok} or {error}.
+   *  `expectedRevision` = the state revision the shell rendered (stale answers are
+   *  refused); null/undefined = no expectation (internal callers/tests). */
+  download(expectedRevision?: number | null): Promise<{ ok: true } | { ok: false; error: string }>
   /** User-initiated check (the「检查更新」button): the SAME check path as the silent check (autoDownload stays off). */
   checkNow(): Promise<{ ok: true } | { ok: false; error: string }>
   /** User-triggered restart into the downloaded update (quitAndInstall: quit + install +
    *  relaunch through the normal quit path; will-quit disposes transports/dsh first).
    *  Only a COMPLETED download on an install-capable shape may start it — core-logic enforced. */
-  restartAndInstall(): { ok: true } | { ok: false; error: string }
+  restartAndInstall(expectedRevision?: number | null): { ok: true } | { ok: false; error: string }
   /** 原生更新器（Swift flavor）的异步「重启并安装」：语义同 restartAndInstall，但结果跨进程等
    *  （转发给壳内 Sparkle 标准更新窗口）；省略 = 该 flavor 无原生安装腿。 */
-  restartAndInstallAsync?(): Promise<{ ok: true } | { ok: false; error: string }>
+  restartAndInstallAsync?(expectedRevision?: number | null): Promise<{ ok: true } | { ok: false; error: string }>
 }
 
 /** The update feed repository (single source: update-discovery.ts). */
@@ -560,11 +586,29 @@ function isBetaVersion(version: string): boolean {
   return /^\d+\.\d+\.\d+-beta\.(0|[1-9]\d*)$/.test(version)
 }
 
-function resolveChannel(version: string): 'stable' | 'beta' {
-  // A packaged beta prerelease is intrinsically a beta install; requiring an env override would make a real beta silently query stable.
-  return isBetaVersion(version) || process.env.DSH_CHAMBER_UPDATE_CHANNEL === 'beta'
-    ? 'beta'
-    : 'stable'
+/**
+ * Normalize the build-sealed channel from the packaged manifest. Only the two canonical
+ * channel names are accepted; anything else (absent key, wrong type, typo, empty string)
+ * is null = "no seal", so the caller falls back to the version-suffix/env derivation.
+ * Pure + injectable: the precedence table is unit-testable without a packaged app.
+ */
+export function normalizeSealedChannel(value: unknown): 'stable' | 'beta' | null {
+  return value === 'stable' || value === 'beta' ? value : null
+}
+
+/**
+ * Resolve the effective feed channel. Priority: the explicit DSH_CHAMBER_UPDATE_CHANNEL=beta
+ * opt-in (the documented dev/operator escape hatch — it can only ADD beta, never remove it,
+ * exactly as before the seal existed) → the build-sealed manifest value (design 11 §4: the
+ * packaged artifact states the channel it was built for, decoupled from the version-suffix
+ * convention) → canonical `-beta.N` version suffix (a packaged beta prerelease is
+ * intrinsically a beta install; requiring an env override would make a real beta silently
+ * query stable). `sealed` must already be normalized by the caller.
+ */
+function resolveChannel(version: string, sealed: 'stable' | 'beta' | null): 'stable' | 'beta' {
+  if (process.env.DSH_CHAMBER_UPDATE_CHANNEL === 'beta') return 'beta'
+  if (sealed !== null) return sealed
+  return isBetaVersion(version) ? 'beta' : 'stable'
 }
 
 /** Select an exact prerelease asset base: never contains a `latest` path and a
@@ -649,6 +693,11 @@ function probeMacDeveloperIdSignature(): Promise<boolean> {
 export interface UpdateControllerOptions {
   /** The running chamber version (desktop package.json, read by main.ts). */
   version: string
+  /** Build-sealed update channel from the packaged manifest (electron-builder
+   *  `extraMetadata.dshChamberUpdateChannel`, written by electron-builder.beta.yml).
+   *  Absent/null = derive from DSH_CHAMBER_UPDATE_CHANNEL / the version suffix (dev, and
+   *  the Swift flavor without a seal). Normalize with normalizeSealedChannel. */
+  sealedChannel?: 'stable' | 'beta' | null
   logger: {
     log: (...args: unknown[]) => void
     warn: (...args: unknown[]) => void
@@ -679,14 +728,19 @@ export interface UpdateControllerOptions {
 }
 
 export function createUpdateController(options: UpdateControllerOptions, deps?: UpdateControllerDeps): UpdateController {
-  const { version, logger } = options
+  const { version, logger, sealedChannel = null } = options
   // Real values resolved LAZILY only when the corresponding dep is absent: an injected
   // test never touches the real electron app/updater or process.platform.
   const app = deps?.app ?? getRealApp()
   const autoUpdater = deps?.autoUpdater ?? getRealAutoUpdater()
   const platform = deps?.platform ?? process.platform
   const linuxAppImage = deps?.linuxAppImage !== undefined ? deps.linuxAppImage : probeLinuxAppImage()
-  const channel = resolveChannel(version)
+  const channel = resolveChannel(version, sealedChannel)
+  // The seal and the version suffix disagree only for a mis-built artifact (the release
+  // workflow forbids it). The seal wins — say so loudly instead of deriving silently.
+  if (sealedChannel !== null && (sealedChannel === 'beta') !== isBetaVersion(version)) {
+    logger.warn('[updater] 通道封签与版本后缀不一致（封签=' + sealedChannel + '，版本=' + version + '），以封签为准')
+  }
   // Upstream-shaped cadence + opt-in evidence journal (both env-tunable; see the
   // module headers). Invalid env never throws at boot: loud warning + defaults.
   const scheduleEnv = deps?.env ?? process.env
@@ -754,6 +808,7 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
     currentVersion: version,
     latestVersion: null,
     channel,
+    revision: 0,
     downloadPercent: null,
     releaseUrl: null,
     installBlockedReason: platformBlockedReason(platform, app, linuxAppImage),
@@ -769,6 +824,10 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
     // Same one-shot rule for the classified failure: every push clears it
     // unless that push itself carries failureKind (the watchdog failures).
     if (!('failureKind' in patch)) next.failureKind = undefined
+    // Stale-answer guard source of truth: the revision advances on EVERY push, so a
+    // confirmation rendered from an older snapshot is distinguishable from the current
+    // one. Assigned AFTER the spread so a caller-supplied revision can never rewind it.
+    next.revision = state.revision + 1
     state = next
     for (const listener of listeners) listener(state)
     journal?.record(state)
@@ -786,7 +845,8 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   // latest NON-PRERELEASE release and looks for the channel yml there — a beta build would
   // 404 on beta.yml and never find updates; enable it for prerelease builds or env opt-in.
   autoUpdater.allowPrerelease = channel === 'beta'
-  // A packaged `-beta.N` build is pinned to beta from its own version. Before every beta
+  // A packaged beta is pinned to beta by the SEALED manifest channel (else by its
+  // `-beta.N` version). Before every beta
   // check runCheck replaces the baked GitHub provider with an exact-tag GenericProvider so
   // electron-updater cannot fall back from beta.yml to latest.yml.
   if (channel === 'beta') autoUpdater.channel = 'beta'
@@ -1241,9 +1301,19 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
       await runCheck()
       return { ok: true }
     },
-    async download() {
+    async download(expectedRevision?: number | null) {
       // 用户已在处理更新：Dock/任务栏注意力立即清除。
       clearUpdateAttention()
+      // Stale-answer guard (design 11 §4): the shell echoes the revision it rendered; a
+      // mismatch means the confirmed snapshot no longer exists (a newer check replaced the
+      // target). Refuse loudly — never download a version the user did not confirm.
+      if (isStaleConfirmation(state.revision, expectedRevision)) {
+        logger.warn(
+          '[updater] 拒绝过期的下载确认（回答 revision=' + String(expectedRevision)
+          + '，当前 revision=' + String(state.revision) + '）',
+        )
+        return { ok: false, error: STALE_CONFIRMATION_ERROR }
+      }
       // Only an update actually found (or a retry of a DOWNLOAD failure, which keeps
       // latestVersion) may start a download; a check failure must never download stale info.
       if (state.latestVersion === null || (state.phase !== 'available' && state.phase !== 'error')) {
@@ -1286,7 +1356,16 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
         if (stalledDownloadGeneration === generation) stalledDownloadGeneration = null
       }
     },
-    restartAndInstall() {
+    restartAndInstall(expectedRevision?: number | null) {
+      // Stale-answer guard (same discipline as download()): a restart confirmed from an
+      // outdated snapshot must not arm quitAndInstall against a newer state.
+      if (isStaleConfirmation(state.revision, expectedRevision)) {
+        logger.warn(
+          '[updater] 拒绝过期的重启确认（回答 revision=' + String(expectedRevision)
+          + '，当前 revision=' + String(state.revision) + '）',
+        )
+        return { ok: false, error: STALE_CONFIRMATION_ERROR }
+      }
       // Core-logic enforcement (same discipline as download()): only a COMPLETED download
       // on an install-capable shape may arm quitAndInstall — never a partial/doomed install.
       // Linux is refused entirely: AppImageUpdater replaces the running file and SPAWNS the

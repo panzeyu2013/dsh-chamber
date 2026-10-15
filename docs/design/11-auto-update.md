@@ -48,7 +48,7 @@
   **原生退出桥与兜底（同一条缺陷的另一半）**：控制器订阅原生 autoUpdater 的 `before-quit-for-update`（在 `quitAndInstall()` 内部、关窗之前发出——43.4.0/darwin 实测），经 `onNativeUpdaterQuitting` 回调宿主：①**每次**原生退出都重新武装关窗豁免（覆盖「首次武装已被停滞 watchdog 撤回、原生退出迟到」的窗口）；②宿主在宽限期（5s）后若进程仍未进入退出序列（`before-quit` 未到）就自行 `app.quit()`，走正常 before-quit/will-quit 清理完成退出。**此刻自退安全**：该事件只在 Squirrel 完成 staging 后发出（MacUpdater 仅在 `squirrelDownloadedUpdate` 或原生 `update-downloaded` 之后才调原生 quitAndInstall），退出即安装。**「原生腿关窗后走不到 `before-quit`」仍是未复测的观察**：typing 只保证 `before-quit` 不在所有窗口关闭前发出；兜底两种情形都安全（`before-quit` 会到时 `quitRequested` 已置位，`shouldUpdaterQuitTakeOver` 返回 false），§9 实机门禁顺带记录。原生 autoUpdater 的解析严格门控在 Electron 运行时内（`process.versions.electron`）且仅在宿主提供回调时进行：`electron` 说明符在普通 node 下解析到 npm 包，dist 缺失时会触发 ~100MB 二进制下载（实测踩中），绝不允许出现在测试路径上。
   **退出腿与重启腿对 `app.exit(1)` 的语义不同**：超时强制退出只跳过退出腿的 onQuit 安装；重启腿 NSIS 安装器已 detached 先行、AppImage 已原位替换，安装照常完成；用户不点击则退出时安装仍开启。
 - **macOS 签名前置（非 UX 分支）**：Squirrel.Mac（electron-updater mac 安装器）**要求有效 Developer ID 代码签名**。正式发布强制签名/公证/stapler/spctl，失败阻断公开；`updater.ts` 启动时仍以 `codesign -dv` 探测签名 authority（读 stderr、异步免阻塞启动），非正式 ad-hoc 包置 `installBlockedReason`，settings 响亮提示手动安装，**绝不假装自动安装可用**。dry-run ad-hoc 资产不上传/公开。
-- **channel 实现细节**：打包版本只有精确 canonical `-beta.N` 后缀时自动判 beta，不依赖未烘焙环境变量；其他 prerelease 门禁直接拒绝；`DSH_CHAMBER_UPDATE_CHANNEL=beta` 仍供开发/显式 opt-in。stable 用打包态 `app-update.yml` 的 GitHub provider；beta 每次检查前按上条解析并显式 `setFeedURL` 到精确 tag Generic feed，且必须开启 `allowPrerelease`（否则会去最新正式 release 找 `beta.yml` 而 404）；`autoUpdater.channel` setter 会重置 `allowDowngrade=true`，赋值顺序须保证 `allowDowngrade=false` 最后生效；dev 形态需 `forceDevUpdateConfig`。
+- **channel 实现细节**：打包 beta 的通道以**构建期封签**为准（`electron-builder.beta.yml` 的 `extraMetadata.dshChamberUpdateChannel` → 打包 `package.json` → 启动期 `normalizeSealedChannel` + `resolveChannel`，§4 采纳点①），无封签时才退回精确 canonical `-beta.N` 后缀；两者都不依赖未烘焙环境变量，其他 prerelease 门禁直接拒绝；`DSH_CHAMBER_UPDATE_CHANNEL=beta` 仍供开发/显式 opt-in（恒最强、只能加 beta）。stable 用打包态 `app-update.yml` 的 GitHub provider；beta 每次检查前按上条解析并显式 `setFeedURL` 到精确 tag Generic feed，且必须开启 `allowPrerelease`（否则会去最新正式 release 找 `beta.yml` 而 404）；`autoUpdater.channel` setter 会重置 `allowDowngrade=true`，赋值顺序须保证 `allowDowngrade=false` 最后生效；dev 形态需 `forceDevUpdateConfig`。
 - **Linux 形态门（design 22）**：按**运行形态**门控——打包且从可写 `$APPIMAGE` 启动（AppImage 发行形态）才启用；dev/解包/deb 保持 inert 文案（`probeLinuxAppImage`）。feed 为 `latest-linux.yml` / `beta-linux.yml`。
 - **排除项**：自托管静态 feed（仅百分比灰度需要，v1 不做，§4）。
 
@@ -82,7 +82,7 @@
   - mac 签名未配置时：「已下载（…），请手动安装」+「前往下载页」链接（经主进程 `shell.openExternal`，仅允许本仓库 GitHub 页——窗口禁 popup/navigation）。
   - 失败文案脱敏：`UpdateState.error` 以 `[path]` 替换绝对路径，完整错误只留主进程日志。
 - zh/en 文案走 `dsh-chamber.settings.bridge` 命名空间（`verify:i18n` 通过；beta 通道标注与安装受阻原因同样本地化）；样式用普通列表行（dsh design tokens），不加高亮（settings-panel 控制组/胶囊按钮词汇）。
-- **IPC 面**：`dsh-chamber:update-state`（invoke 查询）、`update-state-changed`（push）、`update-check`、`update-download`、`update-restart`、`open-release`；preload 暴露 `state`/`download`/`restartAndInstall`/`openReleasePage`/`onChanged`，主进程在 trustedIpc 边界复核每道门。渲染侧（`update-store` / `update-gate`）相位门与主进程门逐字对齐——重启可用性 = `downloaded` ∧ 安装未被阻塞 ∧ 非 linux（platform 参数传纯门）；重启成功不回位模块闸（同主进程单飞语义），重启失败按失败 push 复原（不刷新即可原位重试）；preload/renderer 的 `UpdateSurface` / `UpdateState` 与 `updater.ts` 逐字锁步。
+- **IPC 面**：`dsh-chamber:update-state`（invoke 查询）、`update-state-changed`（push）、`update-check`、`update-download`（载荷 `{revision}`）、`update-restart`（载荷 `{revision}`）、`open-release`；两个确认动作的 revision = 渲染快照代际，主进程拒收过期/缺失者并重推当前状态（§4 采纳点②），载荷形状由 `update-confirmation.ts`（纯叶片）与 `bridge-shim-surface.test.ts` 逐条锁步；preload 暴露 `state`/`check`/`download`/`restartAndInstall`/`openReleasePage`/`onChanged`，主进程在 trustedIpc 边界复核每道门；被拒的动作在 settings 行内可见（`updateActionRefused`），绝不静默 no-op。渲染侧（`update-store` / `update-gate`）相位门与主进程门逐字对齐——重启可用性 = `downloaded` ∧ 安装未被阻塞 ∧ 非 linux（platform 参数传纯门）；重启成功不回位模块闸（同主进程单飞语义），重启失败按失败 push 复原（不刷新即可原位重试）；preload / renderer 的 `UpdateSurface` / `UpdateState` 与 `updater.ts` 逐字锁步，Swift 腿的 `update-headless.ts` 同形（同一 `UpdateController` 契约）。
 
 ### 3.3 启动清理已安装版本的更新缓存
 
@@ -98,15 +98,21 @@ electron-updater 6.x **安装成功后从不删除**下载产物（`DownloadedUp
 ## 4. 滚动/灰度：通道模型（beta → stable）
 
 - **stable（默认）**：读最新正式 release 的 `latest.yml` / `latest-mac.yml`。
-- **beta**：canonical `X.Y.Z-beta.N` 应用按自身版本自动进入 beta；开发/显式 opt-in 仍可用 `DSH_CHAMBER_UPDATE_CHANNEL=beta`。消费侧只从最高规范 published beta 的精确 tag 读 `beta.yml` / `beta-mac.yml`；发现失败 fail closed，不尝试 `latest*`；settings 部分标注「beta 通道」。
+- **beta**：**优先读构建期封签的通道**——beta 构建经 `electron-builder.beta.yml` 的 `extraMetadata.dshChamberUpdateChannel` 写进打包 `package.json`（`packages/desktop/main.ts` 读回，`normalizeSealedChannel` + `resolveChannel` 解析），制品因此自证通道、与版本号后缀解耦；无封签（dev / stable / Swift 腿）时 canonical `X.Y.Z-beta.N` 应用按自身版本自动进入 beta；开发/显式 opt-in 仍可用 `DSH_CHAMBER_UPDATE_CHANNEL=beta`（**恒最强，只能加 beta 不能去 beta**，语义与封签前一致）。封签与版本后缀不一致 = 误配制品，**封签为准并 loud 记录**。消费侧只从最高规范 published beta 的精确 tag 读 `beta.yml` / `beta-mac.yml`；发现失败 fail closed，不尝试 `latest*`；settings 部分标注「beta 通道」。Swift 腿在原生腿在场时安装发现走 Sparkle appcast（T-04），本轮封签只落 Electron 腿，Swift 腿维持版本后缀推导（同一版本串下事实等价，无用户可感差异）。
 - **发布侧**：beta = 版本精确匹配 canonical `X.Y.Z-beta.N`（如 `0.2.0-beta.1`）→ 独立
   `electron-builder.beta.yml` 显式产 `beta*.yml`；stable 用默认配置只产 `latest*.yml`；`alpha`、`rc` 与其他 prerelease 一律版本门禁拒绝。GitHub Release 的 prerelease 标志由已校验的 canonical beta 版本推导（非 workflow 输入——tag-push 时输入为空，按输入推导会把 beta feed 发到非 prerelease release，稳定客户端会把该 release 当最新并 404 在 latest.yml）；验证通过后发正式版本（`latest*.yml`）——「先内测、后提升」，契合既有 draft → finalize 手动节奏。
 - **明确不做（v1）**：百分比灰度（按客户端分桶）——需自托管 feed 侧实现；用户规模达到再评估。
-- **Rejected alternatives（alpha.3 对照）**：不采纳上游新的 installer-owned channel（`dshDesktopUpdateChannel`
-  nightly/latest 封进安装包 manifest）与 COS 人工 dispatch 发布链，也不采纳其 main-owned 确认对话框
-  （`update-dialog.ts` 的 revision 拒绝过期回答）：chamber 的通道模型以 canonical `-beta.N` 后缀判 beta、
-  feed 显式 `setFeedURL` 到精确 tag（本 §），UX 契约是「无弹窗、用户明确点击才下载」（§2）。可借鉴但未落点：
-  通道封进安装包可与版本号/上传环境解耦、确认回答带 revision——若未来出现 channel/feed 错配事故再评估。
+- **Rejected alternatives（alpha.3 对照）**：
+  - **不采纳**：上游的 COS 人工 dispatch 发布链；`update-http-executor` 的传输替换（需注入 electron-updater
+    私有字段，Electron 升级即碎）；`mandatory-update` 家族（无强制更新需求）；main-owned 确认对话框
+    （`update-dialog.ts` 的 overlay/产品面）——chamber 的 UX 契约是「无弹窗、用户明确点击才下载」（§2），
+    feed 显式 `setFeedURL` 到精确 tag（本 §）。
+  - **已采纳其两个可借鉴点（本次复审翻案）**：①「通道封进安装包」——自建载体（`extraMetadata` 构建期封签
+    + 运行期读回，见本 § 的 beta 条），不抄其 nightly/latest 分类；②「确认回答带 revision」——自建载体
+    （`UpdateState.revision` 每次状态推进 +1、IPC 载荷 `{ revision }`、主进程拒收过期回答并重推当前状态，
+    见 §5），**不引入任何对话框**：护栏只在协议层。
+  - 触发条件已到（原「若出现 channel/feed 错配事故再评估」）：多窗口/重载后的旧回答可作用于新状态、
+    通道与版本后缀双源推导——两条都是纯正确性缺口，故本批落地。
 
 ## 5. 更新数据流与 UX
 
@@ -127,6 +133,11 @@ electron-updater 6.x **安装成功后从不删除**下载产物（`DownloadedUp
 ```
 
 - **失败语义**：检查/下载/校验/安装任何失败 → 静默或 settings 内响亮（安装失败绝不假装成功），**绝不阻塞启动、绝不静默降级**（`allowDowngrade=false`）。
+- **确认回答的一致性（§4 采纳点②）**：点击「更新」/「重启并安装」时，页面回传其**渲染快照**的
+  `revision`（`UpdateState.revision`，每次状态推进 +1；IPC 载荷 `{ revision }`）；主进程发现 revision 过期
+  即 loud 拒绝并重推当前状态（页面就地自愈，无需重载），并在 settings 行内给出可见文案（`updateActionRefused`）。
+  多窗口/重载后的旧回答因此不可能作用到新状态；这条护栏不引入任何对话框（本节的「无弹窗」契约不变）。
+  原生（Swift）腿同形：revision 护栏在转发 Sparkle 之前生效（标准窗的二次确认见 S-20，两者不互斥）。
 - **无弹窗清单**：主进程 dialog、托盘气泡、系统通知、settings 外的任何提示一律不出现。
 
 ## 6. 发布流程与构建产物

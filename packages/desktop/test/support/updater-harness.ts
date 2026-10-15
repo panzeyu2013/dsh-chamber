@@ -65,6 +65,8 @@ export function makeController(overrides: {
   deps?: Partial<UpdateControllerDeps>
   version?: string
   env?: Record<string, string>
+  /** Build-sealed channel (design 11 §4); absent = no seal (version suffix / env). */
+  sealedChannel?: 'stable' | 'beta' | null
 } = {}): { fake: FakeAutoUpdater; controller: UpdateController } {
   const fake = new FakeAutoUpdater()
   const deps: UpdateControllerDeps = {
@@ -83,7 +85,11 @@ export function makeController(overrides: {
       for (const [key, value] of Object.entries(overrides.env)) process.env[key] = value
     }
     const controller = createUpdateController(
-      { version: overrides.version ?? '0.1.5', logger: silentLogger },
+      {
+        version: overrides.version ?? '0.1.5',
+        logger: silentLogger,
+        ...(overrides.sealedChannel !== undefined ? { sealedChannel: overrides.sealedChannel } : {}),
+      },
       deps,
     )
     return { fake, controller }

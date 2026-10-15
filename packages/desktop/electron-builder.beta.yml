@@ -1,4 +1,10 @@
 extends: ./electron-builder.base.cjs
+# Build-sealed update channel (design 11 §4): electron-builder merges this into the
+# packaged app package.json, and the runtime reads it back (normalizeSealedChannel +
+# resolveChannel) so the ARTIFACT states the channel it was built for — decoupled from
+# the version-suffix convention. Stable builds carry no key (version suffix / env).
+extraMetadata:
+  dshChamberUpdateChannel: beta
 publish:
   - provider: github
     owner: panzeyu2013

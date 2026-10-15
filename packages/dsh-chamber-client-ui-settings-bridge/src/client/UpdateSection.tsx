@@ -328,22 +328,45 @@ export function UpdateSection({ t }: { t: UpdateTranslate }) {
   // restart-owned busy — a download click's busy can survive one render past the push.
   const [busyKind, setBusyKind] = useState<'restart' | 'download' | null>(null)
   const busy = busyKind !== null
+  // A refused confirmation (stale revision / malformed payload / controller gate) must be
+  // VISIBLE: the main process logs loudly, but a silent no-op would read as a broken button.
+  // Cleared on the next click (a refusal's resync push must NOT clear it immediately).
+  const [actionRefused, setActionRefused] = useState(false)
   const [checking, setChecking] = useState(false)
 
+  // Confirmation actions answer from the RENDERED snapshot (design 11 §4): the revision
+  // echoed with the click lets the main process refuse a stale answer instead of acting on
+  // a state the user never confirmed. The store snapshot is the authority here.
+  const revision = update?.revision ?? null
   const onUpdate = useCallback(() => {
+    if (revision === null) {
+      setActionRefused(true)
+      return
+    }
+    setActionRefused(false)
     setBusyKind('download')
-    void requestUpdateDownload().finally(() => setBusyKind(null))
-  }, [])
+    void requestUpdateDownload(revision)
+      .then((result) => { if (!result.ok) setActionRefused(true) })
+      .finally(() => setBusyKind(null))
+  }, [revision])
 
   const onRestart = useCallback(() => {
+    if (revision === null) {
+      setActionRefused(true)
+      return
+    }
+    setActionRefused(false)
     setBusyKind('restart')
     // ok → quitAndInstall armed: the app is on its way out, so keep the button
     // disabled (the main-process single-flight would refuse a second click anyway).
     // Only a refused/failed call re-enables the row for an in-place retry.
-    void requestUpdateRestart().then((result) => {
-      if (!result.ok) setBusyKind(null)
+    void requestUpdateRestart(revision).then((result) => {
+      if (!result.ok) {
+        setActionRefused(true)
+        setBusyKind(null)
+      }
     })
-  }, [])
+  }, [revision])
 
   // The click emits exactly one bridge invoke (update-store single-flight) and never
   // starts page-side discovery. The「正在检查更新…」row and every later row come from
@@ -387,6 +410,9 @@ export function UpdateSection({ t }: { t: UpdateTranslate }) {
       </div>
       {update !== null && (
         <StatusRow update={update} busyKind={busyKind} onUpdate={onUpdate} onRestart={onRestart} t={t} />
+      )}
+      {actionRefused && (
+        <p className={css.generalError} aria-live="polite">{t('updateActionRefused')}</p>
       )}
       {/* 调试模式：与更新同组（用户裁决落点）。开关默认关；开启 = 显式降低信任边界。 */}
       <DebugModeRow t={t} />

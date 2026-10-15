@@ -96,14 +96,16 @@ export async function requestUpdateCheck(): Promise<{ ok: true } | { ok: false; 
   }
 }
 
-/** The「更新」button action: user-confirmed download (autoDownload stays off). */
-export async function requestUpdateDownload(): Promise<{ ok: true } | { ok: false; error: string }> {
+/** The「更新」button action: user-confirmed download (autoDownload stays off).
+ *  `revision` = the snapshot revision this answer was rendered from; the main process
+ *  refuses a stale answer (design 11 §4) instead of downloading a newer unconfirmed target. */
+export async function requestUpdateDownload(revision: number): Promise<{ ok: true } | { ok: false; error: string }> {
   if (downloadInFlight) return { ok: false, error: 'download already in progress' }
   downloadInFlight = true
   try {
     const api = hydration.surface()
     if (api === null) return { ok: false, error: 'update bridge unavailable' }
-    return await api.download()
+    return await api.download(revision)
   } catch (error) {
     return { ok: false, error: String(error) }
   } finally {
@@ -117,8 +119,10 @@ export async function requestUpdateDownload(): Promise<{ ok: true } | { ok: fals
  * path; transports and the local dsh instance are disposed during that quit).
  * {ok:true} means the restart was armed and the caller should treat it as terminal
  * (keep busy/disabled); only a refused or failed call releases the gate for retry.
+ * `revision` = the snapshot revision this answer was rendered from (same stale-answer
+ * guard as requestUpdateDownload).
  */
-export async function requestUpdateRestart(): Promise<{ ok: true } | { ok: false; error: string }> {
+export async function requestUpdateRestart(revision: number): Promise<{ ok: true } | { ok: false; error: string }> {
   if (restartInFlight) return { ok: false, error: 'restart already in progress' }
   restartInFlight = true
   try {
@@ -127,7 +131,7 @@ export async function requestUpdateRestart(): Promise<{ ok: true } | { ok: false
       restartInFlight = false
       return { ok: false, error: 'update bridge unavailable' }
     }
-    const result = await api.restartAndInstall()
+    const result = await api.restartAndInstall(revision)
     if (!result.ok) restartInFlight = false
     return result
   } catch (error) {

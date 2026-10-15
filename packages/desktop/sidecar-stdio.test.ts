@@ -595,10 +595,15 @@ test('W-22 更新控制器：真实态 + blocked-available 契约', async () => 
   assert.equal(projection.installBlockedReason, '原生壳不支持自动安装')
   assert.equal(typeof projection.currentVersion, 'string')
   assert.equal(projection.releaseUrl, null)
-  const download = await driver.invoke('dsh-chamber:update-download', null)
-  assert.equal(download.ok, true, 'IPC 面恒 ok（控制器返回 {ok:false,error} 投影）')
+  assert.equal(typeof projection.revision, 'number', '状态投影带确认代际号（design 11 §4）')
+  // design 11 §4：确认回答必须带 { revision }；缺载荷 = 协议错误，fail-closed 拒绝。
+  const malformed = await driver.invoke('dsh-chamber:update-download', null)
+  assert.equal(malformed.ok, true, 'IPC 面恒 ok（控制器返回 {ok:false,error} 投影）')
+  assert.deepEqual(malformed.result, { ok: false, error: 'invalid update confirmation payload (expected { revision })' })
+  // 带当前代际 → 控制器按相位拒绝（blocked-available 语义不变）。
+  const download = await driver.invoke('dsh-chamber:update-download', { revision: projection.revision })
   assert.deepEqual(download.result, { ok: false, error: 'no update available' })
-  const restart = await driver.invoke('dsh-chamber:update-restart', null)
+  const restart = await driver.invoke('dsh-chamber:update-restart', { revision: projection.revision })
   assert.deepEqual(restart.result, { ok: false, error: '原生壳不支持自动更新安装（请手动下载新版本）' })
 })
 

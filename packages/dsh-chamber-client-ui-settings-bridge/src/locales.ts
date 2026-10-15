@@ -108,6 +108,8 @@ export const zh = {
   updateDownloadFailed: '更新下载失败',
   updateCheckFailed: '无法检查更新',
   updateReleaseLink: '前往下载页',
+  // 更新动作被主进程拒绝（过期回答 / 载荷非法 / 相位门）：必须可见，绝不静默无反应。
+  updateActionRefused: '本次操作未生效（更新状态已变化或该操作被拒绝）；请按当前状态重试',
   dshRuntimeTitle: 'dsh 运行时',
   // 与 dshRuntimeTitle 同文案是刻意的：nav 标签与段标题复用同一短名。
   runtimeNav: 'dsh 运行时',
@@ -374,6 +376,8 @@ export const en: Record<keyof typeof zh, string> = {
   updateDownloadFailed: 'Update download failed',
   updateCheckFailed: 'Unable to check for updates',
   updateReleaseLink: 'Go to download page',
+  // A refused update action (stale answer / malformed payload / phase gate) must be visible.
+  updateActionRefused: 'The action did not take effect (the update state changed or it was refused); retry from the current state',
   dshRuntimeTitle: 'dsh runtime',
   // Same copy as dshRuntimeTitle on purpose: nav label and section title share the short name.
   runtimeNav: 'dsh runtime',
