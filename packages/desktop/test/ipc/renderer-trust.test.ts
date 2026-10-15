@@ -181,7 +181,11 @@ test('committed settings, registry and held-resume pushes use the non-throwing s
   assert.match(assembly, /if \(deps\.edges\.mainWindowAlive\(\)\) \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.SSH_STATUS_CHANGED/)
   assert.match(assembly, /if \(!deps\.edges\.mainWindowAlive\(\)\) \{\s*throw new Error\('status renderer changed before push'\)/,
     'the status push must re-check window liveness inside the closure (replaced-window race)')
-  assert.match(core, /updater\.subscribe\(\(updateState\) => \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.UPDATE_STATE_CHANGED/)
+  // alpha.3 review follow-up: the push is extracted into pushState so a refused (stale)
+  // confirmation can re-push; the invariant is the same — liveness gate, non-throwing
+  // boundary, UPDATE_STATE_CHANGED send — plus the subscribe→pushState wiring.
+  assert.match(core, /const pushState = \(updateState: UpdateState\): void => \{[\s\S]*?if \(!deps\.edges\.mainWindowAlive\(\)\) return;[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.UPDATE_STATE_CHANGED/)
+  assert.match(core, /updater\.subscribe\(\(updateState\) => \{[\s\S]*?pushState\(updateState\)/)
 })
 
 test('renderer ACK deliveries project and preload-validates the captured lifecycle proof', () => {
