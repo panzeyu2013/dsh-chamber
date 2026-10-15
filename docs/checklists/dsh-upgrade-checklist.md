@@ -66,7 +66,7 @@
 
 ## 6. 回归
 
-- [ ] 全量：`pnpm run check:full`（= `run-checks.mjs full`：static + typecheck + 全部包测试 + macOS/Swift腿 + 打包前冒烟）。
+- [ ] 全量：`pnpm run check:full`（= `run-checks.mjs full`：static + typecheck + 全部包测试；macOS/Swift 腿仅 darwin 追加，冒烟是独立入口）。
 - [ ] full之外的升级项：`build:renderer`、`verify:i18n`、`smoke`（未捆绑运行时的检出打印SKIP属正常；只有lockfile的 `packages/desktop/vendor/dsh` 不算已安装）。
 - [ ] 门禁复绿（§0的四条）：`verify-upstream-touchpoints.mjs`（触点门全量；`--no-artifact-rebuild` 可跳产物重建）、`verify-registry.mjs`（改了 `registry.json` 必须 `registry-views.mjs --write`，生成块禁手改）、`check-anchors.mjs`（预算只降不升；迁移后 `--update-budget` 调低）、`verify-capabilities.mjs`（能力面对齐；`chamber-behind`/`chamber-ahead-broken` 先修消费面，`upstream-landed` 按条目的 `retireWhen` 排退役）。C11–C14变红时先判上游漂移还是派生写错，再改派生（B₀ 快照 / F来源 / S注册表 / wire镜像）。
 - [ ] 残留扫描：`grep -rn "<上一版 pin 的版本字面量>|<上一版 commit 短哈希>" packages/ scripts/ harness.commit` 仅剩注释里的历史叙述；生产源码/脚本/配置里的「活」版本字面量必须登记在C10白名单。

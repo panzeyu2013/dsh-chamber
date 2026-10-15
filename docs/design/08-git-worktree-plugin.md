@@ -150,6 +150,14 @@ session 或 delete 副作用。
   探针（受测窗口：锁内 preflight 后消失、最终 topology 读时消失、注册重放目标消失）。
 - host 包缺失/未生效必须显式错误（§6.3），不把“没有执行面”伪装成空仓库。
 
+### 2.5 会话成员判定（上游 alpha.3 变化，待复核）
+
+上游 alpha.3 的 `packages/workspace/workspace` 把成员解析改为 cwd 完全限定且 ENOENT 的会话**仍算成员**
+（`candidateMatches` / `missingSessionPaths`）；原「路径缺失 ⇒ 成员被过滤」不再成立。本仓侧栏按工作区分组 /
+未分组桶的前提**不自行过滤**（如实呈现缺失路径的会话），真机或下一轮复验后再决定是否按 `header.cwd` 兜底；
+STATUS「上游 alpha.3 的 workspace 成员判定变化待复核」条持有该开项。§3.3 的仓库家族/顺序与 §5.5 的 missing 记录
+清理都以「会话仍在成员集」为前提复核一次。
+
 ## 3. 客户端插件：座位、数据流与呈现
 
 ### 3.1 座位与协调器
