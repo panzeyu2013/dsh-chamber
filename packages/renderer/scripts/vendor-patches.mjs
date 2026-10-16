@@ -734,7 +734,7 @@ export const VENDOR_PATCHES = Object.freeze([
       }),
       Object.freeze({
         // The overlay registration was the only writer of that flag
-        // (:279 setVisible), so gating the branch alone would leave
+        // (:278-280 setVisible/publish), so gating the branch alone would leave
         // desktopOnboardingVisible truthy forever and permanently suppress the
         // upstream AccountNoticeStack (AccountMenu reads !desktopOnboardingVisible).
         expect: '    view: undefined, details: undefined, avatar: undefined, failed: false, loginVisible: false, desktopOnboardingVisible: desktop,',

@@ -52,3 +52,8 @@
 - 最小修复：把 registry 的 `vendorSourceConsumers` 相对 import 并入预检 seam 收集；已先在本仓
   `docs/checklists/upstream-touchpoints.md` §7 第 8 步加了「C16 消费者逐 tag 人工过一遍」的目检项。
 
+## 7. restore-lockfile-vendor-records 只增不减，无法复活**新增** specifier 边（alpha.5 五轴复核 L1）
+
+- 现状：`scripts/upstream/restore-lockfile-vendor-records.mjs` 按 HEAD 整段复活旧 importer 记录；alpha.5 的 3 条新 workspace 边（terminal-controller/ui-skill 的 devDependencies、deepseek-account 的 peer+dev）由 pnpm 的非 frozen install 自动补齐（工具自报「无需修复」），但若某轮 pnpm 裁剪了承载新边的 importer 段，复活出的旧记录不含新 specifier，frozen 会以 `specifiers don't match` 失败且无自动修复。
+- 最小修复：restore 改为「旧记录 ∪ 当前 package.json 声明的新边」并集写入；多复活出的边会被 frozen 判红（fail-closed），不引入放水。
+
