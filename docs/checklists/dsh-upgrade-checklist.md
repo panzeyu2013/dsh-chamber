@@ -35,7 +35,7 @@
 - [ ] 源码线：`node scripts/upstream/update-vendor.mjs <tag>` 原子升级（fetch+校验 → 切submodule → 写 `harness.commit` → 差量建链 → 重生成锁文件 → frozen验证）。禁止手工改gitlink / `harness.commit`。
 - [ ] index gitlink已指向目标commit：工具只切submodule HEAD与pin、不写index gitlink，而 `ensure-harness-vendor` 用index gitlink对拍 → 差量建链会以 `gitlink=<旧> != pin=<新>` 硬失败。处置：`git add vendor/harness-checkout` 后重跑同一条命令（幂等；提交时gitlink与pin同批）。
 - [ ] 源码线验证：`node scripts/dev/ensure-harness-vendor.mjs --check`（HEAD == `harness.commit`、链接集合 == 锁文件importer集合）。
-- [ ] 运行时线：`bundle-dsh.mjs` 的 `DEFAULT_DSH_VERSION` 与 `packages/desktop/vendor/dsh/package.json` 的 `@deepseek-ai/dsh` → 目标版本（先确认npm已发布；未发布则只收口源码线，运行时线留到发布后单独提交）。
+- [ ] 运行时线：`bundle-dsh.mjs` 的 `DEFAULT_DSH_VERSION` 与 `packages/desktop/vendor/dsh/package.json` 的 `@deepseek-ai/dsh` → 目标版本（先确认npm已发布；npm 未发布时**整 pin 缓行**——只收源码线不可绿：C5 要 fork 版本==上游源码树、C10 要它们==运行时锁，两者互斥）。
 - [ ] 六锚同步：`release.yml` 的 `env.DSH_CHAMBER_DSH_VERSION`、`scripts/install-gateway.sh` 的 `DSH_CHAMBER_DSH_VERSION`、`packages/gateway/package.json` 的 `dshAnchorVersion` 三源一致（preflight硬断言，不要只改一处）；其余三锚（`bundle-dsh.mjs` 兜底、desktop vendor锁文件、`release-preflight` 的 `FORK_VERSION`）随升级与 §5自动对齐。
 - [ ] 重建vendor树：`node scripts/dev/ensure-harness-vendor.mjs` → 链接数 = 目标版本包数、无告警。
 
