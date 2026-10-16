@@ -101,7 +101,7 @@ export function apply(ctx: ClientContext): void {
     const instance = handle.create()
     const store: typeof handle = { ...handle, create: () => instance }
     const navigate = (packageName: string): void => {
-      // alpha.4: the page's own Installed tab is where a bundle opened by another tab lands.
+      // The page now has tabs: a bundle opened from another tab must land on Installed.
       instance.actions.setTab('installed')
       instance.actions.setView({ kind: 'package', name: packageName })
     }

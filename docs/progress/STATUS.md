@@ -283,7 +283,7 @@
 
 - C15 hover 触发降级（提案，待 CI/产品裁决）：改触发面 + 同批改 `AGENTS.md`/`upstream-touchpoints.md`/`release-workflow-policy.test.mjs`/`static-gate-parity.mjs`/`verify-release-ci-proof.mjs`。
 - 双 flavor 接入点 parity：仍 open = S-01（EdDSA/Sparkle/安装与 delta）、G19（CI 签名打包）、S-44（授权查询/申请面）、S-10（遮挡/App Nap）、T-28（`corner-shape` 等引擎降级）；核验清单见 §4。
-- **上游 host release 变化门（#6228）在 chamber 页面不生效**：chamber 不发布/解析 boot manifest 的 `release` 字段、不运行上游 `client-modules` 客户端半边的 `ReleaseChangeGate`（该行在 `chamber-covered.ts` 覆盖集内被收编），跨 release 的图/重建帧判定由 chamber 自有 rev-drift + `restart-required` + 手动刷新承担。未决 = 是否透传 release 并复刻刷新提示（成本 M，design 09 变更），或登记为有意差异。
+- **上游 host release 变化门（#6228）在 chamber 页面不生效（未决：采纳还是登记为有意差异）**：chamber 不发布/解析 boot manifest 的 `release` 字段、不运行上游 `client-modules` 客户端半边的 `ReleaseChangeGate`（该行在 `chamber-covered.ts` 覆盖集内被收编），跨 release 的图/重建帧判定由 chamber 自有 rev-drift + `restart-required` + 手动刷新承担。采纳需透传 release 并复刻刷新提示（成本 M，design 09 变更）。
 - 原生窗口高度折中（S-49）待裁：Swift 786 内容 vs Electron 800 外框；宽度偏好仍 per-flavor（T-18）。
 - macOS Swift 原生壳（design 25，路线 A）：M5 实机矩阵未闭合（用户裁定的前置「合并到主分支」已满足，待执行；见 I-15 条）；残余 = 实机/GUI 验收（含 WKWebView 无 `backgroundThrottling` 等价物）、Developer ID/公证/stapler/spctl 与首个 `build-swift` 发布腿（缺凭据外部阻断）、M5 矩阵 W-28…W-32 与双端 harness、通知音效平台等价物。
 - 起始端口偏移（已定）：本地 dsh 缺省 17510（spawn 逐次 +1 至 17514）、控制面缺省 17500，仅经 `DSH_CHAMBER_DSH_PORT_BASE` / `DSH_CHAMBER_CP_PORT` 覆盖，不引入配置文件级偏移（口径见 `packages/desktop/README.md` §控制面）。
