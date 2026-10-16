@@ -42,3 +42,13 @@
 - 本机无 `swiftc` 时，第一次就跑 `DSH_CHAMBER_SWIFT_PARITY_SKIP=1`；本地回归用
   `node scripts/gates/run-checks.mjs tests --continue`——默认 **fail-fast**，单个环境性失败会掩盖其后的全部测试步
   （alpha.4 期实测：fail-fast 到 `test:control-plane` 时其后 20 步未跑；`--continue` 跑满 22 步后仅剩 root EACCES 一项）。
+
+## 6. 预检 seam 收集不含 C16 的相对深引（完整性轴【低】）
+
+- 现状：`scripts/upstream/preflight-vendor-pin.mjs` 的 seam 收集只匹配裸说明符形式
+  （`from '@deepseek-ai/<pkg>/src/...'`）；chamber 经 `../../../vendor/harness-packages/...` 的**相对**深引
+  （C16 登记面，如 `packages/renderer/src/host-graph.ts` ← dsh-client-modules 的 manifest 源）不在其内。
+  alpha.4 的 `client/modules` manifest 实质改动因此未出现在重放的 seam 清单里（本次由 C16 与人工复核兜住）。
+- 最小修复：把 registry 的 `vendorSourceConsumers` 相对 import 并入预检 seam 收集；已先在本仓
+  `docs/checklists/upstream-touchpoints.md` §7 第 8 步加了「C16 消费者逐 tag 人工过一遍」的目检项。
+
