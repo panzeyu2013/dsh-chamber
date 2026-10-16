@@ -504,7 +504,10 @@ command-manager-entry / duration-env / device-info.ts。
    按移动包 README「Anchor baseline」逐条重锚（含 `official-hover-card.ts` 的两个 CSS-module token）；插件管理页容纳层的 DOM 缝先跑 §3 末条的锁步门（`pnpm --filter @dsh-chamber/dsh-chamber-client-ui-settings-plugin-manager test`；跑在 `test:plugin-manager` 腿里，红了即形状已变，按本步重锚），再按 §3 末条 grep 复核（`data-plugin-panel`、页头/详情头两条 `data-window-drag`、页头行「标题块（首子，其内内容被整块隐去）+ 控件（末子）」的两子元素序列、分组缝 `data-plugin-group` 的「组头在前、`ul` 卡列表在后」形状）：零命中或形状变化 ⇒ 按 STATUS 偏差条裁决。
 7. 运行时线单独提交（bundle-dsh刷新 + 六锚 + bin.js冒烟）；
 8. 文档回写：CHANGELOG/STATUS + registry刷新后重生成本表 §2/§9（`registry-views.mjs --write`，
-   `verify-registry.mjs` 绿；版本值不进checklist）+ i18n重录。
+   `verify-registry.mjs` 绿；版本值不进checklist）+ i18n重录；另做两项**无门禁**的目检——
+   ① 全仓 docs/README 的「当前基线」版本/tag 字面量复扫（旧值只许留在历史叙述，如「…起」），
+   ② 运行时闭包 diff 的**非 experimental** 增删目检（C11 只双向看守 experimental 白名单，非 experimental
+   名字的进出没有信号；新锚点一律写符号锚，勿加 `文件:行`）。
 
 ## 8. PR 评审清单条目
 

@@ -7,7 +7,7 @@
 ## 1. update-vendor 首跑必然失败 + 恢复指引与实际处置相反（M2）
 
 - 现状：工具只切 submodule HEAD 与 `harness.commit`、不写 index gitlink，而差量建链用 index gitlink 对拍
-  （`scripts/dev/ensure-harness-vendor.mjs:103-107`）⇒ 首跑必在 step 5 失败；
+  （`scripts/dev/ensure-harness-vendor.mjs` 的 pin/gitlink 断言，函数未导出故此处只引路径）⇒ 首跑必在 step 5 失败；
   正确处置（`docs/checklists/dsh-upgrade-checklist.md` §2 第 2 条）= `git add vendor/harness-checkout` 后幂等重跑。
 - 证据：升级日志 `.tmp/a4/exec/p1-update-1.log`（step 5 报 `gitlink=2fbf4359b82f != pin=86a402200d95`）；
   `scripts/upstream/update-vendor.mjs` 的 catch 恢复指引却是「把 submodule 切回旧 pin」，与实际处置相反。
