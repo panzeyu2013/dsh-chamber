@@ -2185,6 +2185,9 @@ importers:
       '@deepseek-ai/dsh-brand':
         specifier: workspace:*
         version: link:../dsh-brand
+      '@deepseek-ai/dsh-client-connection':
+        specifier: workspace:*
+        version: link:../../../../packages/dsh-client-connection
       '@deepseek-ai/dsh-client-store':
         specifier: workspace:*
         version: link:../dsh-client-store
@@ -5915,6 +5918,9 @@ importers:
       '@deepseek-ai/dsh-client-ui-tool':
         specifier: workspace:*
         version: link:../dsh-client-ui-tool
+      '@deepseek-ai/dsh-plugin-manager':
+        specifier: workspace:*
+        version: link:../dsh-plugin-manager
       '@deepseek-ai/dsh-session':
         specifier: workspace:*
         version: link:../dsh-session
@@ -7018,6 +7024,9 @@ importers:
       '@deepseek-ai/dsh-llm':
         specifier: workspace:*
         version: link:../dsh-llm
+      '@deepseek-ai/dsh-util-values':
+        specifier: workspace:*
+        version: link:../dsh-util-values
 
   vendor/harness-packages/@deepseek-ai/dsh-deepseek-account-platform:
     dependencies:

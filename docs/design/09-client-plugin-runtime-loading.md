@@ -638,7 +638,7 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
 - 版本漂移：宿主图 rev 与复合 bundle 的合并是 union 语义，不要求两图同 rev（复合由 chamber 构建管、宿主图由
   实例插件集管）；壳版本落后/超前时多出的核心行以"特性缺席"运行（§3.5 apply 降级），绝不使实例 boot 失败。
 - **壳与后端必须同代（当前基线）**：受管 vendor 源以 `harness.commit` 的 pin 为单一事实来源——当前 pin =
-  dsh `0.2.1-alpha.4` / `86a40220`（`packages/desktop/vendor/dsh/
+  dsh `0.2.1-alpha.5` / `1517a4db`（`packages/desktop/vendor/dsh/
   pnpm-lock.yaml` 的 `@deepseek-ai/dsh` specifier 同值），三个 fork 副本与
   `release-preflight.mjs` 的 `FORK_VERSION` 同步；vendor 树是仓库内 git
   submodule（gitlink = pin，升级走 `scripts/upstream/update-vendor.mjs <tag>`）。宿主 wire 只增不改——
