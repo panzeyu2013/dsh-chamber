@@ -7,6 +7,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { configLedgerSource } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/config-ledger.ts'
+import { tabLedgerSource } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/tab-ledger.ts'
 import { en, zh } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/locales.ts'
 import { PluginManagerController } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/manager-store.ts'
 import { PluginRefreshToast, type PluginRefreshToastFace } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/PluginRefreshToast.tsx'
@@ -44,6 +45,7 @@ const MANAGER_CHILDREN = {
   // so our registration MUST declare every upstream child or renderSlot throws
   // SlotOwnershipError. Locked by test/dom-seam/vendor-page-dom-seam.test.ts.
   'plugins.add.actions': { kind: 'list', scope: 'root' },
+  'plugins.tab': { kind: 'list', scope: 'root' },
   'plugins.item': { kind: 'list', scope: 'root' },
   'plugins.bundle.activation': { kind: 'keyed', scope: 'root' },
   'plugins.bundle.config': { kind: 'keyed', scope: 'root' },
@@ -80,7 +82,7 @@ export function apply(ctx: ClientContext): void {
   // Upstream's refresh toast is the plugin manager's own shell.overlay seat: the
   // face is hoisted so the settings page and the overlay toast share one
   // controller face (upstream registers the same pair from one place).
-  const face = controller.inject(configLedger, resolveText)
+  const face = controller.inject(configLedger, tabLedgerSource(ctx), resolveText)
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({
     name: 'shell.overlay',
     id: 'plugin-manager.refresh-toast',
@@ -98,7 +100,11 @@ export function apply(ctx: ClientContext): void {
     const handle = createNavigationStore()
     const instance = handle.create()
     const store: typeof handle = { ...handle, create: () => instance }
-    const navigate = (packageName: string): void => { instance.actions.setView({ kind: 'package', name: packageName }) }
+    const navigate = (packageName: string): void => {
+      // alpha.4: the page's own Installed tab is where a bundle opened by another tab lands.
+      instance.actions.setTab('installed')
+      instance.actions.setView({ kind: 'package', name: packageName })
+    }
     openPackage = navigate
     yield () => { if (openPackage === navigate) openPackage = undefined }
     yield ctx.slots.register({

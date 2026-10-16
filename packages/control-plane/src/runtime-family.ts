@@ -43,6 +43,7 @@ export const RUNTIME_FAMILY_OPT_IN_ALLOWED: readonly string[] = [
   '@deepseek-ai/dsh-experimental-cot-translation-bundle',
   '@deepseek-ai/dsh-experimental-inspector',
   '@deepseek-ai/dsh-experimental-inspector-profile',
+  '@deepseek-ai/dsh-experimental-plugin-market-bundle',
   '@deepseek-ai/dsh-experimental-ralph-bundle',
   '@deepseek-ai/dsh-experimental-session-inspector',
   '@deepseek-ai/dsh-experimental-session-search',

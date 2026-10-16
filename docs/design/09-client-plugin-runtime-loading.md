@@ -80,7 +80,7 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
   `shortcuts`——provider 仅 `dsh-client-shortcuts`——随该包 **转为 covered** 消除（它是唯一 default-export
   class 的客户端行：复合入口挂默认绑定、factory 回同一 class）；alpha.3 起 `ui-session`/`ui-workspace` 的
   inject 新增 `remoteAccess`——provider 仅新行 `dsh-api-remote-access`——随该行**转为 covered（首屏 factory）**
-  消除（其 `./remote` 面由 typert 生成器的自挂载附加集产出：生成 roster 26 = 装配 25 + 自挂载 1，见 §3.5）；
+  消除（其 `./remote` 面由 typert 生成器的自挂载附加集产出：生成 roster 26 = 装配 25 + 自挂载 1；alpha.4 起装配表新增 `plugin-market` ⇒ roster 27 = 装配 26 + 自挂载 1，见 §3.5）；
   渲染期 `useResource` 座 `resources` 因
   「非任何复合插件的 inject、且不可能单独缺失」不再登记）。宿主图通道降级（返回 `[]`）或该行 apply
   失败时，`ui-chat` 的 fiber 停在 PENDING、整个 apply 被跳过、会话视图不注册，而 boot 仍报成功。
@@ -250,7 +250,8 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   逐条理由见 `chamber-covered.ts` 注释；
   ③ **有意跳过的宿主行**（covered、无 factory、永不加载）：mobile / directory-picker-native——理由见
   `chamber-covered.ts` 条目注释；官方桌面账户家族 alpha.3 起迁出该名单（见下「有意跳过名单」③）。独立成
-  叶模块（chamber-entry.ts 仅 re-export）以免 shell.ts 把模块表交接与整棵复合插件图拉进主 chunk。与 §3.2
+  叶模块（chamber-entry.ts 仅 re-export）以免 shell.ts 把模块表交接与整棵复合插件图拉进主 chunk。
+  alpha.4 新增的**可选客户端行不进覆盖集**：`dsh-client-ui-plugin-market`（可选组合包 `dsh-experimental-plugin-market-bundle`，shipped profile 默认关）不在 `CHAMBER_COVERED_IDS`——启用该组合包时经宿主图 extra row 加载，其 `plugins.tab` 页签由 chamber 占位页声明承接（design 05 §5）。与 §3.2
   的 union-table 修复锁步：`COVERED_FACTORIES`（首屏静态导入族的 factory 注册）中每个 id 必须在覆盖集内
   （执行期断言）。
 - **有意跳过名单（覆盖集/复合入口的显式例外）**：①官方 HMR 行（宿主半身 always mounted；dev-only 的只是 rebuild watcher）
@@ -638,7 +639,7 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
 - 版本漂移：宿主图 rev 与复合 bundle 的合并是 union 语义，不要求两图同 rev（复合由 chamber 构建管、宿主图由
   实例插件集管）；壳版本落后/超前时多出的核心行以"特性缺席"运行（§3.5 apply 降级），绝不使实例 boot 失败。
 - **壳与后端必须同代（当前基线）**：受管 vendor 源以 `harness.commit` 的 pin 为单一事实来源——当前 pin =
-  dsh `0.2.1-alpha.3` / `2fbf4359`（`packages/desktop/vendor/dsh/
+  dsh `0.2.1-alpha.4` / `86a40220`（`packages/desktop/vendor/dsh/
   pnpm-lock.yaml` 的 `@deepseek-ai/dsh` specifier 同值），三个 fork 副本与
   `release-preflight.mjs` 的 `FORK_VERSION` 同步；vendor 树是仓库内 git
   submodule（gitlink = pin，升级走 `scripts/upstream/update-vendor.mjs <tag>`）。宿主 wire 只增不改——

@@ -78,7 +78,7 @@ function lockfileDshVersion() {
     const match = /@deepseek-ai\/dsh@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/.exec(text);
     if (match !== null) return match[1];
   } catch { /* fall through to the pin */ }
-  return '0.2.1-alpha.3';
+  return '0.2.1-alpha.4';
 }
 const DEFAULT_DSH_VERSION = lockfileDshVersion();
 const BUNDLE_PNPM_VERSION = '11.21.0';

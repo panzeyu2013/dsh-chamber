@@ -35,6 +35,7 @@ export const EXPECTED_MOUNT_PACKAGES = Object.freeze([
   '@deepseek-ai/dsh-schedule',
   '@deepseek-ai/dsh-host-plugin-inventory',
   '@deepseek-ai/dsh-plugin-manager',
+  '@deepseek-ai/dsh-plugin-market',
   '@deepseek-ai/dsh-client-ui-plugin-manager',
   '@deepseek-ai/dsh-message-feedback',
   '@deepseek-ai/dsh-command-feedback',
