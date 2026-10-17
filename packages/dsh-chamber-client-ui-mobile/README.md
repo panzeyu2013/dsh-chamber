@@ -596,7 +596,7 @@ pnpm run test:mobile
 
 Official dsh DOM, empirically audited via CDP at **v0.1.5-alpha.2** and re-anchored
 at **v0.1.5-rc.2** — every anchor below resolved in the rc.2 tree. Under the current
-pin (v0.2.1-alpha.5) the strict anchor gate resolves the declared set (60 declared
+pin (v0.2.1-rc.2) the strict anchor gate resolves the declared set (60 declared
 anchors, 52 of them upstream; 27 minimal assertions) including the attribute/role/
 slot anchors, the plugin local-name class anchors, the external `_crumbSeg`
 emission pin, and the two build-time CSS-module hash tokens — 0 misses and 0
@@ -620,7 +620,7 @@ dialog is body-portaled by upstream (rc.2 `SettingsPanel` uses
 `createPortal(…, document.body)`), so the drawer's transform no longer traps
 it; the drawer open state still uses `transform: none` deliberately.
 
-The vendored base is now **v0.2.1-alpha.5** (harness pin `1517a4db`; single source
+The vendored base is now **v0.2.1-rc.2** (harness pin `687f282e`; single source
 `harness.commit`). Historical audit record: the anchors above were re-verified
 against the alpha.2 source (2026-09 re-anchor) and held at v0.1.5-rc.2 (whose
 client deltas are listed above and left those anchors, and the

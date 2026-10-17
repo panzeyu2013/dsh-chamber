@@ -2708,6 +2708,9 @@ importers:
       '@deepseek-ai/dsh-web':
         specifier: workspace:*
         version: link:../dsh-web
+      '@deepseek-ai/dsh-web-deepseek-api':
+        specifier: workspace:*
+        version: link:../dsh-web-deepseek-api
       '@deepseek-ai/dsh-web-fetch-http':
         specifier: workspace:*
         version: link:../dsh-web-fetch-http
@@ -3823,6 +3826,42 @@ importers:
       react:
         specifier: ^18.2.0
         version: 18.2.0
+
+  vendor/harness-packages/@deepseek-ai/dsh-client-ui-deepseek-model-label-1017:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../cordis
+      '@deepseek-ai/dsh-client-locale':
+        specifier: workspace:*
+        version: link:../dsh-client-locale
+      '@deepseek-ai/dsh-client-test-runtime':
+        specifier: workspace:*
+        version: link:../dsh-client-test-runtime
+      '@deepseek-ai/dsh-client-ui-model-selection':
+        specifier: workspace:*
+        version: link:../dsh-client-ui-model-selection
+      '@deepseek-ai/dsh-client-ui-primitives':
+        specifier: workspace:*
+        version: link:../dsh-client-ui-primitives
+      '@deepseek-ai/dsh-client-ui-renderer':
+        specifier: workspace:*
+        version: link:../dsh-client-ui-renderer
+      '@deepseek-ai/dsh-client-ui-slots':
+        specifier: workspace:*
+        version: link:../dsh-client-ui-slots
+      '@deepseek-ai/dsh-session':
+        specifier: workspace:*
+        version: link:../dsh-session
+      '@testing-library/react':
+        specifier: ^16.3.3
+        version: 16.3.3(@testing-library/dom@10.4.2)(@types/react-dom@19.2.4(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
+      react:
+        specifier: ^18.2.0
+        version: 18.2.0
+      react-dom:
+        specifier: ^18.2.0
+        version: 18.2.0(react@18.2.0)
 
   vendor/harness-packages/@deepseek-ai/dsh-client-ui-deliverables:
     dependencies:
@@ -14982,6 +15021,9 @@ importers:
       '@deepseek-ai/dsh-client-ui-cordis':
         specifier: workspace:*
         version: link:../dsh-client-ui-cordis
+      '@deepseek-ai/dsh-client-ui-deepseek-model-label-1017':
+        specifier: workspace:*
+        version: link:../dsh-client-ui-deepseek-model-label-1017
       '@deepseek-ai/dsh-client-ui-deliverables':
         specifier: workspace:*
         version: link:../dsh-client-ui-deliverables
@@ -15331,6 +15373,40 @@ importers:
       '@deepseek-ai/libreoffice-kit':
         specifier: ^0.1.5
         version: 0.1.5
+
+  vendor/harness-packages/@deepseek-ai/dsh-web-deepseek-api:
+    dependencies:
+      '@deepseek-ai/schemastery':
+        specifier: workspace:~
+        version: link:../schemastery
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../cordis
+      '@deepseek-ai/dsh-agent':
+        specifier: workspace:*
+        version: link:../dsh-agent
+      '@deepseek-ai/dsh-credentials':
+        specifier: workspace:*
+        version: link:../dsh-credentials
+      '@deepseek-ai/dsh-credentials-local':
+        specifier: workspace:*
+        version: link:../dsh-credentials-local
+      '@deepseek-ai/dsh-deepseek-account':
+        specifier: workspace:*
+        version: link:../dsh-deepseek-account
+      '@deepseek-ai/dsh-http-proxy':
+        specifier: workspace:*
+        version: link:../dsh-http-proxy
+      '@deepseek-ai/dsh-launch-environment':
+        specifier: workspace:*
+        version: link:../dsh-launch-environment
+      '@deepseek-ai/dsh-session':
+        specifier: workspace:*
+        version: link:../dsh-session
+      '@deepseek-ai/dsh-web':
+        specifier: workspace:*
+        version: link:../dsh-web
 
   vendor/harness-packages/@deepseek-ai/dsh-web-fetch-http:
     dependencies:

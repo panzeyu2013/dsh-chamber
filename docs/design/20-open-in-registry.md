@@ -68,7 +68,7 @@
    header 探针/图标 404、席位渲染 null。当时的结论（「拉进复合才不会 404」）已被 §2.2/D2 取代：官方行照常
    加载，deliverables 文件动作的 owner 路由由 ui-deliverables 侧带 per-entry 前缀（design 09 §3.6），header 仍 inert。
 3. **效果依赖实例 runtime 的版本**：官方 open-in 行自 **dsh-v0.1.3-alpha.2** 才存在
-   （`packages/renderer/src/chamber-covered.ts#=literal:The official open-in client row is NOT skipped any more`）；本仓**运行时锚与源码 pin 都已是 0.2.1-alpha.5**
+   （`packages/renderer/src/chamber-covered.ts#=literal:The official open-in client row is NOT skipped any more`）；本仓**运行时锚与源码 pin 都已是 0.2.1-rc.2**
    （单一来源 `packages/desktop/vendor/dsh/pnpm-lock.yaml`，`bundle-dsh.mjs:81` 兜底同值）⇒ 非主要理由。fork & supersede 不依赖该行。
 
 **补注（第 2 条的机器级复活）**：上游那条"目录/图标由承载页面的 host 回答"的不变量，在**机器级**上仍然是对的——只是本壳有 N 个 host，需要点名"哪一个是机器 host"。答案是把页面上的机器 host 钉为**本地实例**：
@@ -425,7 +425,7 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
   `docs/checklists/upstream-touchpoints.md` §2.5），获三层保护：**C1** 未登记差异即硬失败、**C3** 每个上游
   文件必须有 pure/patched/own/dropped 分类（上游新增文件漏分类即红）、**C2** tag 重放差异报告自动纳入本
   fork 面（advisory）。**版本锚已豁免**：C5 规则是 `fork/package.json.version == 上游同文件版本`——三个
-  既有 copy 包即如此携带上游版本（实测随 pin，当前 0.2.1-alpha.5），seed 包随 chamber 发版 bump（实测 0.2.4，与
+  既有 copy 包即如此携带上游版本（实测随 pin，当前 0.2.1-rc.2），seed 包随 chamber 发版 bump（实测 0.2.4，与
   `dsh-runtime`/其他 seed 一致）；registry 每条登记 `versionAnchor: 'upstream' | 'chamber'`（既有三条 =
   upstream、本 fork = chamber），C5 只比对 `upstream`；脚本头注、C5 日志文案与触点表 §4 与之一致。实测：
   `✓ [seed-open-in] C1/C3: pure=3 patched=4 own=9 dropped=6`、`✓ C7 … openInApp/probe`、
