@@ -84,7 +84,7 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
   **两级自愈**：① 取图撞上 `503 instance_unavailable`（实例仍在启动）时，shell 经 App
   注入的 `waitForServing` 门**等来源就绪**再取一次（`host-graph.ts` 的 `MAX_SERVING_WAITS` /
   `SERVING_HEAL_BUDGET_MS`，App 侧门上限 60s），而非在固定预算（10×500ms）用尽后丢掉整套 profile
-  客户端插件；② 门也用尽、或该行仍不 apply 时 boot **不再静默**：发布 `graph-unreachable` 诊断 +
+  客户端插件；每段 serving 等待后的重取有**独立的 5s 总预算**与 1.5s/尝试队列截止（不是一次性闸）；② 门也用尽、或该行仍不 apply 时 boot **不再静默**：发布 `graph-unreachable` 诊断 +
   `console.error` 点名 instance，并把 `ShellState.degraded`（kind：`graph-unavailable` /
   `required-services-missing`，另有 `deferred-registration-failed`）交给 App，由 App
   在该来源 ready 时**自动重挂一次**（每个 ready 世代一次，纯判定在 `degraded-retry.ts`）。
@@ -538,11 +538,15 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
   跟上。App 每实例补两步，判定与两次上界在 `renderer/src/graph-return.ts`（接线在
   `app-hooks/use-shell-retry.ts`）：① 共享通道重检，**每来源每 60s 至多一次**（`recheckPluginGraphDiagnostic`；
   `not-injected`/`graph-unreachable` 属 channel-class，且只在判定态变化时写回，故永久无图来源零 store 噪声）；
-  ② 诊断翻 `ok` 而该壳仍无图 ⇒ 经 App 唯一重挂 sink（retryTokens）重挂该实例一次（重新取图、装 profile 的
-  client 行、arm），每条 `ok` 记录一次。**为什么探测必须按时间而不是按 ready 世代计数**：ssh seed 流程的远端
+  ② 诊断翻 `ok` 而该壳仍无图 ⇒ 经 App 唯一重挂 sink（retryTokens）重挂该实例（重新取图、装 profile 的
+  client 行、arm），**每来源每 60s 至多一次且每 pass 全局配额 2**；时间界是必需的：boot 取图本身可能被
+  页预算拒绝并写不出新的 `ok` 记录，按记录计数会永久闩死。**为什么探测必须按时间而不是按 ready 世代计数**：ssh seed 流程的远端
   重启是 `systemctl restart`，**隧道相位保持 `ready`**（design 18 §3.6），世代计数会在宿主有图之前就用掉唯一
-  一次探测；定时探测（hook 侧的 interval + 判定里的间隔闸，二者同闸同值）保证宿主有图后 ≤60s 内被发现，且
-  与状态churn 无关。结构性上界：重挂后仍无图会写新的非 `ok` 记录（不会二次触发），取到图则
+  一次探测；定时探测（hook 侧的 interval + 判定里的间隔闸，二者同闸同值）在 N≤2 个待探来源时
+  保证宿主有图后 ≤60s 内被发现；多源时每 pass 全局配额 2（按 lastProbeAt 最旧优先轮转），上界为
+  ceil(N/2)×60s。**Rejected alternative**：每来源独立 60s 定时器（回到全源齐发，多源同时探测
+  挤占同源池）；取消配额（同上）；不轮转（尾部永久饿死）。且
+  与状态 churn 无关。结构性上界：重挂后仍无图会写新的非 `ok` 记录，并被 60s 时间界与每 pass 配额约束，取到图则
   `graphAnswered === true`（彻底出界）。整页重载不再需要；safe mode / module-system 失败从未取图，字段缺席，
   不属于该政策。
 - **范围**：只做行 **add/remove**（id 集合）。**rev 变化不换 entry**：模块表按 id first-load-wins，

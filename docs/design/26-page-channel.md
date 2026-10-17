@@ -106,6 +106,10 @@
 
 两条页面健康 SSE 迁走之后，`/api/host/health-events` 不再有生产消费方；保留它等于给 I-1 留一条回归通道，因此**删除**该 HTTP 路由（控制面内部生产者 `subscribeHealthEvents` 保留，供通道使用）。
 
+### D7 页面级同源 HTTP 预算（unary/bundle 侧）
+
+I-1 之后页面池内长连接 = 0，但**有界、可数的 unary 请求仍然共享同一条 6 槽池**。`packages/dsh-chamber-client-core/src/http-budget.ts` 是这些请求派发的唯一所有者：全局在飞 ≤ `totalMax`（4，留头寸给官方客户端与 script/import 等不可调度消费者）、`local` 车道严格保留 1 槽且**永不被队列上界拒绝**（lane 级保留，不承诺多个 local 请求下的基线优先）、bundle 子帽 2、lease watchdog 只回收不重派、fail-open 与 kill switch。队列上界（`queueMax`/`perSourceQueueMax`）只对显式带 `queueDeadlineAt` 的调用方生效：无 deadline 的调用方（bundle 行装载、gateway facts probe、plugin-capability/plugin-inventory/restart/gateway-runtime request 等用户动作）由各自生产者的单飞/波控收敛，不因队列深度被拒；bounded 调用方（mux、per-instance unary、gateway runtime poll、boot 图每段 5s 且每尝试 1.5s（serving 门后重新计时）、控制面 REST 10s）的拒绝发生在派发前，按预算错误上抛、绝不落来源事实（评审 M1–M4）。它同时提供 design 14 §D4 需要的 `dispatched` 证据：到期时仍在自有队列中的请求按 `unscheduled` 结算，绝不写成来源事实；gateway 事实 probe 的 `unscheduled` 结果按类型排除在分类器之外并重臂有界阶梯。来源退役驱逐是权威退役调用的显式选项（`retire(ids, { evict: true })`，仅 lifecycle 实例；该类还被请求世代复用），壳回收**不**驱逐仍存活来源的读取；页面拆除 `disposeAllShells` 同时驱逐 booting 代的排队请求。kill switch 开启即回到无预算语义（派发超时会重新按 `deadline` 归类），仅供现场排障。per-instance unary 的调用窗 = 排队 ≤min(timeoutMs, 10s) + 派发后 timeoutMs；git RPC 同规（排队 ≤10s、派发 60s）。boot 图的 recovery 取图被预算拒时丢弃该行但保留 `bundle-load-failed` 诊断（不落 ok）。接入面：per-instance unary（`instance-api`，透传取消 signal）、共享 `postUnary` 调用点（boot 图、graph-return、插件清单/能力）、无壳观察者 `rpc`、gateway 事实 probe、控制面 REST、gateway runtime/poll（body 在槽内消费）、设置页重启动作（`restart-action`）与 `client-plugin-loader` 的 bundle 装载。**绑定范围（残余）**：官方客户端 connection RPC、官方 module system 的 script 装载、`chamber-entry` 的 deferred 动态 chunk，以及设置页 `ConnectionsSection`/`DshRuntimeSection` 的三处直连 fetch 不经本预算（前者属 fork/上游通道，后者受行数棘轮约束）；另有 vendor file-upload 的 worker XHR（document-relative，当前控制面 404）、shiki 懒 grammar chunk、iframe/图片元素加载，以及同 origin 第二页面的独立预算实例（realm 级单例、池是 origin 级）——`totalMax=4` 的 2 槽头寸因此是假设而非强制；`globalThis.__dshChamberHttpBudget()` 提供现场读数。graph-return 的每 pass 配额按 `lastProbeAt` 最旧优先轮转（等于 60s 节拍也不饿死尾部）。HTTP 并发/队列容量常量只允许出现在本模块（参数表单源；lease 覆盖：控制面 130s、gateway runtime/restart 725s、recheck 队列 10s、poll 按剩余窗口 +5s）；图探测配额与 git 波控是各自的调度表，不共享这些数值。
+
 ## 4. 契约
 
 - wire：`packages/dsh-chamber-wire/src/page-channel.ts`——路径、族、帧、信用窗口、出/入站帧上限、解析器与构造器（两侧唯一来源）。
@@ -131,6 +135,9 @@
 5. **把 SSE 的 5s 期限改成更长/去掉期限**：只把失败推迟，不改变请求排不到 socket 的事实（本设计之前的版本已经验证过这条路无效）。
 6. **把逐实例反代的转发核心（`proxy-forward.ts`）与通道的上游适配合并成一份实现**：两者的下游形状根本不同——反代把上游流原样写给浏览器的 HTTP 响应（体上限、HTML 注入、计数器、pending upgrade 租约），通道是**服务端消费者**（逐订阅信用窗口、按帧重封、订阅级拆除）。合并要在 ws 下游重建整套反代语义，收益只是十几行头构造；真正需要共享的是**传输登记**（撤销与计数），那已按 F2 用 `onTransportRevoked` 接上，而不是靠复制转发核心。
 7. **一条多路复用 SSE 承载全部三族**：它只占 6 个槽里的 1 个，却仍然占着池——一旦这条流写阻塞/半开，unary 与它自己一起被拖住（正是要消灭的耦合）；订阅/退订/信用确认需要第二条控制通路（POST），服务端也无法发 ping，只能靠注释保活。池内长连接 = 0 是比"少占几个槽"更强的性质，所以选 WS。
+
+8. **给 unary 单开第二条 origin / 本地专用端口**：dsh 前端硬编码同源 `/api`，拆域要重建整套代理与信任面，且不解决"同一池内没有优先级"的问题；保留同源、在客户端队列里做严格保留槽是更小且可测的边界。
+9. **只把观测期限调长**：见 §D7；能证明"未派发"的只有自有队列，期限不是归因。
 
 ## 7. 验证门
 

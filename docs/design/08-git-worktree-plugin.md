@@ -172,15 +172,20 @@ Git 插件用 slot inject 占位。窄栏 occupant 返回 `null`，但 slot 不�
 
 - 订阅 neutral `chamberBridge` 获得 `local | dsh-<id> | gateway-<id>`（`ssh-<id>` 为 v2
   迁移前 legacy，17 §2.2/§9.1）和 connected 事实；
-- 每来源一个 in-flight promise，30s 轮询，新连接/动作后即时刷新；
+- 每来源一个 in-flight promise，30s tick **轮转波**（每拍最多刷新 2 个 connected 来源，
+  `pollCursor` 轮转）：单来源仍按 30s 节拍，N>2 时单源有效周期 ≈30s·ceil(N/2)——这是页面
+  6 槽同源池的波控（design 26 §D7），不是每源独立并发；新连接/动作后的即时刷新不受波控限制；
+  **Rejected alternative（全源齐发）**：每拍全源齐发是原行为，会把 N 个同源 unary 压进共享池、
+  放大本地基线被排队伪降级的窗口；逐源独立定时器等价于齐发；把 tick 压到 30s/N 会让单源节拍失衡；
 - 断连立即清该来源事实；迟到响应用 sequence 拒绝；
 - `repos` 与 path/repo 级 `errors` 并存，一个失败不抹掉其它完整实体；
 - N-ctx 所有 occupant 读同一 facts/action/recovery store，不重复轮询，切换 shell 不丢 busy
   或部分失败状态；
 - RPC 超时 60s（`RPC_TIMEOUT_MS`）：**高于**反代 upstream idle timeout（45s）与 host 的 git
   mutation 预算（30s）——浏览器绝不能在 host 仍合法工作时中止，否则已提交的 mutation 会被
-  误读成「结果不明」；Typert 业务错误为确定性判定（不重试），只有传输/超时/无效响应进
-  「不确定」分支（§6.2）。
+  误读成「结果不明」；排队 ≤10s、派发 60s（总窗 ≤70s）。预算未派发映射为本地化的
+  `not-dispatched` 确定性拒绝（不铸 recovery），并保留上次快照、短退避重试而非来源错误态。Typert 业务错误为确定性判定（不重试），
+  只有传输/超时/无效响应进「不确定」分支（§6.2）。
 
 Git 事实不加进 App 的 session aggregate，v1 徽标只在 Git 区内；普通 10s
 `requestRefresh` 不触发 Git status。未来全屏功能必须新增通用页面 slot，不由 renderer App

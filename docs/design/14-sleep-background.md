@@ -435,8 +435,8 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
      reconnect 仍要等 190s 的症状年龄，写回更要 N=2 一致。
    - **让权威读无界等待**：unary 客户端本就有 5s 预算，但注入的 seam 可以永不落定（官方
      `session.list` 单飞悬挂正是这一形态）——无界等待会把一次悬挂读变成整条 ladder 的冻结。
-     5s `withDeadline` 只把该拍记成 degraded 证据，ladder 继续按配额重试与升级；期限只结算
-     本次调用，不替调用方取消底层操作（取消仍归调用方）。
+     5s `withDeadline` 到期即 abort 本次读取（取消归读取方）：未派发 ⇒ `unscheduled booked=false`
+     并重读一次；已派发超时 ⇒ `deadline booked=true`（真故障不放宽）；ladder 继续按配额重试。
   **未闭合**：**权威清单与逐条失效判据见 `docs/progress/STATUS.md`「会话运行位卡死」
   条（编号以 STATUS 为准）**；与本设计直接相关的形态摘要：
   ① transcript 与运行位可能分别收敛（STATUS ②，需上游逐流交付统计/游标）；
@@ -695,8 +695,18 @@ chamber 的边界是「自动升级 + 显式失败面」；页面级阶梯的自
      （`dsh-chamber.evidence-log.v1`）的判定账本，控制台行
      `[chamber:evidence] <verdict> booked=<bool> <owner> {…}`。
      消费面：mux 基线（`session/list` deadline）、gateway facts 流建连 deadline（不再无条件
-     `markStale`）、权威读 `readBounded`（未调度则重读一次；两次都未调度 ⇒ 本轮不落任何判定）、
+     `markStale`）、权威读 `readBounded`（`onDispatched` 证明派发：未派发 ⇒ `unscheduled` booked=false 并重读一次；已派发超时仍 book `deadline`；两次都未派发 ⇒ 本轮不落任何判定）、
      boot 图 `fetchWithRetry`、侧栏权威探针；boot 时由 `main.tsx` 安装探针。
+      **派发记账补全（2026-10）**：`packages/dsh-chamber-client-core/src/http-budget.ts` 是页面级
+      同源 unary/bundle 派发的唯一所有者（条件有界队列——上界只约束带 `queueDeadlineAt` 的调用方、local 保留槽、bundle 子帽、fail-open、
+      kill switch）。Fetch API 没有 dispatch 事件 ⇒「请求是否真的离开客户端队列」只有自有队列可证；
+      分类器因此增加 `dispatched` 输入：`TimeoutError + dispatched===false` ⇒ `unscheduled`
+      （不落账），已派发/未知/非超时错误一律沿用旧语义（真故障不放宽）。消费面：
+      `source-mux-facts.rpc`（未派发 ⇒ 不 increment/不清 stable）、boot 图（每尝试 1.5s 队列截止；
+      未派发 ⇒ 记 `not-injected` 可探测诊断、不写 gap、不 `onGraphUnavailable`，由 graph-return
+      60s 重试）、graph-return 重检、per-instance unary 与插件清单。
+      gateway 事实 probe 的 `unscheduled`（从未派发）是类型层面的"非观测"：它进不了分类器、
+      不改快照、不降级，并按有界 probe 阶梯重臂（与 mux 基线的 `dispatched=false` 同一语义）。
   3. **闩锁退役**：侧栏 `verificationExhausted`（4 次失败后整页生命周期不再校验基线）改为
      有界 defer 下限（30 s）+ 事件驱动重臂（下一次真实 list 变更或 `connection/reset`）。
   4. **Rejected alternatives**：① **抬高 deadline / 增加重试**——throttle 窗口是秒级到分钟级，
@@ -704,7 +714,10 @@ chamber 的边界是「自动升级 + 显式失败面」；页面级阶梯的自
      ② **只静默重试、不落账**——事后无法回答「刚才那 5 s 是来源没答还是页面没被调度」，正是本轮
      排查看不到的东西。③ **只信 `document.visibilityState`**——WKWebView 失焦时它仍是 `visible`，
      那正是旧判定失效的根因；rAF 心跳缺口才是正面证据。④ **壳侧总预算 / 超时照常载入**——时间的
-     所有者只能是控制面状态机，壳不设第二时基（前一轮裁决）。
+     所有者只能是控制面状态机，壳不设第二时基（前一轮裁决）。⑤ **调大 5s/30s 期限或新增
+      verdict 词**——期限调大只把假事实推迟；新增词不带来任何判定差异（`unscheduled` 的既有契约
+      就是"这不是来源事实"），却要多维护一份词表。能证明「未派发」的只有自有派发队列，故队列与
+      证据维度同批落地。
 
 ### D5 keep-awake（v1 设置项，默认关）
 
