@@ -425,10 +425,10 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
   `docs/checklists/upstream-touchpoints.md` §2.5），获三层保护：**C1** 未登记差异即硬失败、**C3** 每个上游
   文件必须有 pure/patched/own/dropped 分类（上游新增文件漏分类即红）、**C2** tag 重放差异报告自动纳入本
   fork 面（advisory）。**版本锚已豁免**：C5 规则是 `fork/package.json.version == 上游同文件版本`——三个
-  既有 copy 包即如此携带上游版本（实测随 pin，当前 0.2.1-rc.2），seed 包随 chamber 发版 bump（实测 0.2.4，与
+  既有 copy 包即如此携带上游版本（实测随 pin，当前 0.2.1-rc.2），seed 包随 chamber 发版 bump（实测 0.4.1，与
   `dsh-runtime`/其他 seed 一致）；registry 每条登记 `versionAnchor: 'upstream' | 'chamber'`（既有三条 =
   upstream、本 fork = chamber），C5 只比对 `upstream`；脚本头注、C5 日志文案与触点表 §4 与之一致。实测：
-  `✓ [seed-open-in] C1/C3: pure=3 patched=4 own=9 dropped=6`、`✓ C7 … openInApp/probe`、
+  `✓ [seed-open-in] C1/C3: pure=3 patched=4 own=10 dropped=8`、`✓ C7 … openInApp/probe`、
   `✓ C8 生成物与 src 一致（6 组）`。（被否决的替代：携带上游版本的 copy 包 + seed 包装包——需把
   `packages/host/open-in-app` 从 vendor 树排除（破坏 C1 锚）并新增"seed 引 copy 包源码"构建边。）分歧逐条
   写在 `patched`/`dropped` 原因里并复述于包首页；

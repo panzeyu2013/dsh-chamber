@@ -595,7 +595,9 @@ pnpm run test:mobile
 ## Anchor baseline
 
 Official dsh DOM, empirically audited via CDP at **v0.1.5-alpha.2** and re-anchored
-at **v0.1.5-rc.2** — every anchor below resolved in the rc.2 tree. Under the current
+at **v0.1.5-rc.2** — every anchor below resolved in the rc.2 tree (rc.1/rc.2 in this
+section mean the v0.1.5 lineage; the current pin is always written in full as
+v0.2.1-rc.2). Under the current
 pin (v0.2.1-rc.2) the strict anchor gate resolves the declared set (60 declared
 anchors, 52 of them upstream; 27 minimal assertions) including the attribute/role/
 slot anchors, the plugin local-name class anchors, the external `_crumbSeg`

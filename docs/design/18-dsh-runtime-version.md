@@ -660,7 +660,7 @@ chamber-settings.json，非秘密）：
   gateway `<stateDir>/dsh-runtime`，非秘密，不进 `ssh-instances.json`/registry）。
 - **「单调向前」仅对壳版本成立**：应用整包更新后回落内建（新壳重基代）；运行时版本
   失效（用户选择）非单调向前——可显式选更旧版本，失效回落带数据可读性探测保护（§3.5）。
-- **chamber 发版版本集**：根包 + 全部非 fork `@dsh-chamber/*` 包（当前 17 个）
+- **chamber 发版版本集**：根包 + 全部非 fork `@dsh-chamber/*` 包（当前 21 个）
   统一 bump；`release-preflight.mjs` 的数据驱动扫描与 release.yml 断言集是唯一
   权威，新增 chamber 包自动纳入。三个 fork 副本
   （`@deepseek-ai/dsh-client-connection` / `dsh-client-web` / `dsh-api-gateway`）

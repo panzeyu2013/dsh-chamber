@@ -16,7 +16,7 @@
 | 更新产物 | mac target = `dmg` + `zip`（dmg 留首装、不产 update-info：`writeUpdateInfo: false`）；win `nsis` `differentialPackage: false` + `useZip: false`（不发 blockmap、保 7z 高压缩） | desktop `build` 配置 |
 | 发布 feed | build 走 `--publish=always`（`GH_TOKEN`）把产物含 feed 上传进 draft release；`--publish=never` **不生成** update-info yml | `.github/workflows/release.yml` |
 | 签名 | macOS 正式发布强制 Developer ID + 公证 + stapler + spctl；Windows 未签名（SmartScreen 提示，§7 的明确让步） | release.yml、§7 |
-| 版本 | 根 `dsh-chamber` + 全部 `@dsh-chamber/*` 包一致 bump（17 个）；三个 fork 副本保持上游基线版本 | `release-preflight.mjs`、§8 |
+| 版本 | 根 `dsh-chamber` + 全部 `@dsh-chamber/*` 包一致 bump（21 个）；三个 fork 副本保持上游基线版本 | `release-preflight.mjs`、§8 |
 
 
 ## 2. 目标与边界
@@ -165,7 +165,7 @@ electron-updater 6.x **安装成功后从不删除**下载产物（`DownloadedUp
 
 ## 8. 版本管理与数据兼容
 
-- chamber 版本分布于根 `dsh-chamber` + **17 个** `@dsh-chamber/*` 包（desktop/control-plane/renderer/cli/dsh-runtime/gateway + 4 个宿主种子包 client-graph/git-worktree/archive-cleanup/open-in + **7 个客户端插件包** sidebar/layout/settings-connections/settings-bridge/git/open-in/mobile），发版时**一致 bump**（semver 比较；`main.ts` 读 desktop package.json 的 version 并经 `dsh-chamber:info` 透传渲染层、注入更新控制器）。**release.yml 的 `Assert version matches package.json` 步骤复用 `release-preflight.mjs --versions-only` 数据驱动扫描器**：根 + 全部 17 个 `@dsh-chamber/*` 包必须等于目标版本，新增包自动纳入；三个 fork 副本（`@deepseek-ai/dsh-client-connection` / `dsh-client-web` / `dsh-api-gateway`）必须保持上游基线 **0.2.1-rc.2**（`release-preflight.mjs` 的 `FORK_VERSION`，随源码线 pin 移动）；发布 checklist §1/§1.5 与该硬门同口径。vendored dsh 源为 0.2.1-rc.2（单一来源 `harness.commit`）——插件版本只在 chamber 侧参与 workspace 解析，不与 dsh 源逐位对齐、也不参与比较/展示。
+- chamber 版本分布于根 `dsh-chamber` + **21 个** `@dsh-chamber/*` 包（infra 9：desktop/control-plane/renderer/cli/dsh-runtime/gateway/client-core/wire/stream-state + 4 个宿主种子包 client-graph/git-worktree/archive-cleanup/open-in + **8 个客户端插件包** sidebar/layout/settings-connections/settings-bridge/settings-plugin-manager/git/open-in/mobile），发版时**一致 bump**（semver 比较；`main.ts` 读 desktop package.json 的 version 并经 `dsh-chamber:info` 透传渲染层、注入更新控制器）。**release.yml 的 `Assert version matches package.json` 步骤复用 `release-preflight.mjs --versions-only` 数据驱动扫描器**：根 + 全部 21 个 `@dsh-chamber/*` 包必须等于目标版本，新增包自动纳入；三个 fork 副本（`@deepseek-ai/dsh-client-connection` / `dsh-client-web` / `dsh-api-gateway`）必须保持上游基线 **0.2.1-rc.2**（`release-preflight.mjs` 的 `FORK_VERSION`，随源码线 pin 移动）；发布 checklist §1/§1.5 与该硬门同口径。vendored dsh 源为 0.2.1-rc.2（单一来源 `harness.commit`）——插件版本只在 chamber 侧参与 workspace 解析，不与 dsh 源逐位对齐、也不参与比较/展示。
 - 更新只替换应用本体；`userData`（`ssh-instances.json`、state、
   `ssh-passwords.json`（schema v2 endpoint binding）、`gateway-secrets.json`
   （schema v3 target binding 桌面凭据存储：

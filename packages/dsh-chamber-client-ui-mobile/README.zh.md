@@ -438,7 +438,8 @@ pnpm run test:mobile
 ## 锚点基线
 
 官方 dsh DOM 实测（CDP 审计在 **v0.1.5-alpha.2** 完成，并在 **v0.1.5-rc.2**
-重锚）——下列锚点在 rc.2 树中曾全部成立；当前 pin（v0.2.1-rc.2）下严格锚点门解析全部
+重锚）——下列锚点在 rc.2 树中曾全部成立（本节 rc.1/rc.2 均指 v0.1.5 世系，
+当前 pin 一律写全 0.2.1-rc.2）；当前 pin（v0.2.1-rc.2）下严格锚点门解析全部
 声明锚点（共 60 条，其中 52 条为上游锚点；最小断言集 27 项），含属性/role/slot 锚点、
 插件侧 local-name 类名锚点、external `_crumbSeg` 发射钉与两个 build-time
 CSS-module hash token——在物化上游产物语料上零命中 0、advisory 0

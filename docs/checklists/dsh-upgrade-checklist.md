@@ -23,7 +23,7 @@
 - [ ] 能力面对齐：`node scripts/upstream/verify-capabilities.mjs` 逐条照面——`present` 面缺席而 chamber 已消费 = 必炸（先改消费面再动 pin）；`absent` 面出现 = 本地替代的退役触发已到（把 `retireWhen` 变成当期工作项）。
 - [ ] fork副本diff：`packages/client/connection`、`packages/client/web`、`packages/api/gateway` → 判断「冲突需合并」vs「干净采纳」（→ §3）；chamber-named 的 `packages/dsh-chamber-client-ui-layout`（registry §2.6，上游 `packages/client/ui-layout`）同样逐 diff 裁决，其深引 frame 面由预检以 vendor-seam 报告。
 - [ ] 首屏耦合审计：上游新增/改名的官方client行若被复合首屏inject → 同步host-graph降级注释；探针集合是派生的（不用加名字），但命名空间不再导出 `inject` 的漂移由 `packages/renderer/test/lifecycle/required-extra-rows.test.ts` 的逐id表兜底。
-- [ ] 上游 release notes「其他变更」段与上游 `docs/upgrade-guide/**` 逐条过一遍：落在 chamber 托管面（profile patch/bundles、chamber 注入的 settings、chamber 读的 session 日志、chamber 渲染的官方客户端面）的破坏写进 design/STATUS；不落本仓的记「无消费者」一句。注意上游 `docs/upgrade-guide/<tag>/` **可能整代缺席**（只有个别 tag 有条目）——缺席不等于无破坏变更，一律以 Release body 的四节（新增功能/体验优化/问题修复/其他变更）全量为准。
+- [ ] 上游 Release body 的四节（新增功能/体验优化/问题修复/其他变更）与 `docs/upgrade-guide/<tag>/` 逐条过一遍（该目录**可能整代缺席**，缺席不等于无破坏变更）：落在 chamber 托管面（profile patch/bundles、chamber 注入的 settings、chamber 读的 session 日志、chamber 渲染的官方客户端面）的破坏写进 design/STATUS；不落本仓的记「无消费者」一句。
 - [ ] SlotMap 座席键差集：对 `packages/client/**/src` 抽取 `SlotMap` 声明键与各洞的占用者（注册方），与上一代逐键对比；新增/改名/删除的键与新增占用者逐条列出——**侧栏（`sidebar.*`）与 `sidebar.right.*` 的新内容一律上报用户裁决**，其余新座席也登记，不静默跟随（与 §7 第 5 步同一纪律）。
 
 - [ ] vendor 补丁退休评估（drift I-7）：C9 现在三分——锚点命中 = 绿；锚点缺失且某条 `retireCheck` 命中 = `retire-candidate`（**仍 release-blocking**），remediation = 把该条移入 `vendor-patches.mjs` 的 `RETIRED_PATCHES`（`ensure` = 上游修复原文、必须唯一命中），同批删除补丁条目与 `verify-vendor-patch-applied` 的产物 marker，并同步 design 09 §3.6/§3 与触点表；锚点缺失且 `retireCheck` 未命中 = drift，按新 pin 重导补丁。`noRetireForm` 条目以登记理由为准。新增/重放补丁按 design 09 §3.6 的四类准入裁决；第四类（多实例正确性）只在页面级事实无法由 chamber 包重新 scoped 时准入：scope 取 per-entry `chamberBasePath`（页面级事实），或取监听器所属挂载自己的 DOM 子树祖先（document 级事件注册表，per-mount；禁页面全局事实与 URL 猜测，且每个 document 级副作用都要同一判定）；上游自带 scope 后删除。
@@ -36,7 +36,7 @@
 - [ ] index gitlink已指向目标commit：工具只切submodule HEAD与pin、不写index gitlink，而 `ensure-harness-vendor` 用index gitlink对拍 → 差量建链会以 `gitlink=<旧> != pin=<新>` 硬失败。处置：`git add vendor/harness-checkout` 后重跑同一条命令（幂等；提交时gitlink与pin同批）。
 - [ ] 源码线验证：`node scripts/dev/ensure-harness-vendor.mjs --check`（HEAD == `harness.commit`、链接集合 == 锁文件importer集合）。
 - [ ] 运行时线：`bundle-dsh.mjs` 的 `DEFAULT_DSH_VERSION` 与 `packages/desktop/vendor/dsh/package.json` 的 `@deepseek-ai/dsh` → 目标版本（先确认npm已发布；npm 未发布时**整 pin 缓行**——只收源码线不可绿：C5 要 fork 版本==上游源码树、C10 要它们==运行时锁，两者互斥）。
-- [ ] 六锚同步：`release.yml` 的 `env.DSH_CHAMBER_DSH_VERSION`、`scripts/install-gateway.sh` 的 `DSH_CHAMBER_DSH_VERSION`、`packages/gateway/package.json` 的 `dshAnchorVersion` 三源一致（preflight硬断言，不要只改一处）；其余三锚里只有 desktop vendor 锁文件是派生的（`bundle:dsh` 重生成）；`bundle-dsh.mjs` 的兜底常量与 `release-preflight` 的 `FORK_VERSION` 是**手改的活字面量**、且同属 C10 REQUIRED 锚——漏改即 C10 红（`bundle-dsh.mjs` 的默认版本在运行时读已提交的锁，改它也不会驱动安装，见 §5）。
+- [ ] 六锚同步：`release.yml` 的 `env.DSH_CHAMBER_DSH_VERSION`、`scripts/install-gateway.sh` 的 `DSH_CHAMBER_DSH_VERSION`、`packages/gateway/package.json` 的 `dshAnchorVersion` 三源一致（preflight硬断言，不要只改一处）；其余三锚里只有 desktop vendor 锁文件是派生的（`bundle:dsh` 重生成）；`bundle-dsh.mjs` 兜底常量与 `release-preflight` 的 `FORK_VERSION` 是**手改的活字面量**、同属 C10 REQUIRED 锚——漏改即红（默认值派生自锁，见 §5）。
 - [ ] 重建vendor树：`node scripts/dev/ensure-harness-vendor.mjs` → 链接数 = 目标版本包数、无告警。
 
 ## 3. fork 副本 rebase 与 chamber 适配
@@ -52,7 +52,7 @@
 ## 4. 锁文件
 
 - [ ] 源码线锁文件由 `update-vendor.mjs` 原子重生成（非frozen → `restore-lockfile-vendor-records.mjs` 补回 → frozen验证）；**重生成前不要单独跑 `ensure` 默认模式**（断言滞后属预期）。
-- [ ] pnpm 11会裁剪vendor importer记录 → `node scripts/upstream/restore-lockfile-vendor-records.mjs` 补回；新增vendor包需手工补importer记录（零依赖成员为单行 `key: {}`）；已删除成员不得被复活（守卫见其 `.test.mjs`）。
+- [ ] pnpm 11 会裁剪 vendor importer 记录 → `node scripts/upstream/restore-lockfile-vendor-records.mjs` 补回（只补 HEAD 已有成员）；**新增 vendor 包的 importer 由 `update-vendor` 第 6 步的非 frozen install 自动写入**（整块 dependencies/devDependencies，无需手写），restore 补不回新成员；仅当 pnpm 把新成员也裁掉时才 `pnpm install --lockfile-only` 重生成后重跑 restore。已删除成员不得被复活（守卫见其 `.test.mjs`）。
 - [ ] 已有成员的依赖集变化：脚本只增不减，pnpm裁掉该段时会复活旧记录（缺新依赖边）⇒ frozen报 `specifiers don't match`。判据 = `update-vendor` 第6步的frozen安装；失败时按字母序手工补该成员的新依赖边。
 - [ ] 收口：`pnpm install --frozen-lockfile` 通过、`ensure-harness-vendor.mjs --check` 通过、`git diff --exit-code -- pnpm-lock.yaml` 为空。
 
@@ -67,13 +67,13 @@
 ## 6. 回归
 
 - [ ] 全量：`pnpm run check:full`（= `run-checks.mjs full`：static + typecheck + 全部包测试；macOS/Swift 腿仅 darwin 追加，冒烟是独立入口）。
-- [ ] full之外的升级项：`build:renderer`、`verify:i18n`、`smoke`（未捆绑运行时的检出打印SKIP属正常；只有lockfile的 `packages/desktop/vendor/dsh` 不算已安装）。
+- [ ] full 之外的升级项：`build:renderer`、`smoke`（`verify:i18n` 是 static 第 1 步，不必单列；未捆绑运行时的检出打印 SKIP 属正常；只有 lockfile 的 `packages/desktop/vendor/dsh` 不算已安装）。
 - [ ] 门禁复绿（§0的四条）：`verify-upstream-touchpoints.mjs`（触点门全量；`--no-artifact-rebuild` 可跳产物重建）、`verify-registry.mjs`（改了 `registry.json` 必须 `registry-views.mjs --write`，生成块禁手改）、`check-anchors.mjs`（预算只降不升；迁移后 `--update-budget` 调低）、`verify-capabilities.mjs`（能力面对齐；`chamber-behind`/`chamber-ahead-broken` 先修消费面，`upstream-landed` 按条目的 `retireWhen` 排退役）。C11–C14变红时先判上游漂移还是派生写错，再改派生（B₀ 快照 / F来源 / S注册表 / wire镜像）。
-- [ ] 残留扫描：`grep -rn "<上一版 pin 的版本字面量>|<上一版 commit 短哈希>" packages/ scripts/ harness.commit` 仅剩注释里的历史叙述；生产源码/脚本/配置里的「活」版本字面量必须登记在C10白名单。
+- [ ] 残留扫描：`grep -rn "<上一版 pin 的版本字面量>|<上一版 commit 短哈希>" packages/ scripts/ docs/ .github/ harness.commit` 仅剩注释与历史叙述；生产源码/脚本/配置里的「活」版本字面量必须登记在 C10 白名单，docs 的当前值以本仓全量 grep 为准（C10 不扫 docs）。
 
 ## 7. 文档与记录
 
-- [ ] 迁移叙述（pin、fork rebase面、适配面、验证结论）写 `CHANGELOG.md` + `docs/CHANGELOG.en-US.md` 发布节，随后 `node scripts/gates/verify-i18n.mjs --write` 刷新i18n记录。
+- [ ] 迁移叙述（pin、fork rebase面、适配面、验证结论）写 `CHANGELOG.md` + `docs/CHANGELOG.en-US.md` 的发布节——**发版时才写**（升级提交本身不动 CHANGELOG），随后 `node scripts/gates/verify-i18n.mjs --write` 刷新 i18n 记录。
 - [ ] 触点结构变更走registry：`registry.json` → `registry-views.mjs --write` → `verify-registry.mjs` 绿。
-- [ ] 引用基线版本的文档（design 09/11、README、DEVELOPMENT、本目录）更新版本号，历史叙述保留。
+- [ ] 引用基线版本的文档（design 09/11/17/18/20/24、根 README、DEVELOPMENT、desktop/mobile README、本目录）更新版本号，历史叙述保留；以全仓 `git grep <旧版本字面量>` 的命中清单为准（design 文档无门禁兜底）。
 - [ ] 未落地的实机门禁与遗留偏差登记进 `docs/progress/STATUS.md`（只写仍open的项，不留已完成台账）；下次升级复用本清单复验。版本值不写进checklist。
