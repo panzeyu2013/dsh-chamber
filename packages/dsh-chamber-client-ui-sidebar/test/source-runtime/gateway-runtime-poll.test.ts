@@ -8,6 +8,7 @@ import assert from 'node:assert/strict'
 import { pollGatewayReady } from '@dsh-chamber/dsh-chamber-client-core'
 // poll.ts is package-internal (no public face, not on the barrel) — the test references the source directly.
 import { pollUntil } from '../../../dsh-chamber-client-core/src/poll.ts'
+import { resetHttpBudgetForTests } from '../../../dsh-chamber-client-core/src/http-budget.ts'
 
 /** One status-route fetch stub: HTTP `status` and a canned JSON body. */
 const stubFetch = (status: number, body: unknown): typeof fetch => (async () => ({ status, json: async () => body })) as unknown as typeof fetch
@@ -30,6 +31,31 @@ test('pollGatewayReady resolves on ready, times out honestly, and surfaces termi
   // with the gateway's operationError.
   const failedFetch = stubFetch(200, { connectionState: 'restart-exhausted', operationError: 'spawn denied' })
   await assert.rejects(pollGatewayReady('gateway-x', { fetchImpl: failedFetch, ...fast }), /restart failed: spawn denied/)
+})
+
+test('a dispatched probe that never settles still ends at the poll deadline', async () => {
+  const hanging = (() => new Promise(() => {})) as unknown as typeof fetch
+  const started = Date.now()
+  await assert.rejects(pollGatewayReady('gateway-hang', {
+    fetchImpl: hanging, pollIntervalMs: 10, timeoutMs: 80,
+  }))
+  assert.ok(Date.now() - started < 2_500, 'the poll ceiling covers a hung dispatched probe')
+})
+
+test('a stalled response body still ends at the poll deadline', async () => {
+  const stalledBody = (async () => ({
+    status: 200,
+    json: () => new Promise(() => {}),
+  })) as unknown as typeof fetch
+  try {
+    const started = Date.now()
+    await assert.rejects(pollGatewayReady('gateway-body-hang', {
+      fetchImpl: stalledBody, pollIntervalMs: 10, timeoutMs: 100,
+    }))
+    assert.ok(Date.now() - started < 2_500, 'the poll ceiling covers a stalled body')
+  } finally {
+    resetHttpBudgetForTests()
+  }
 })
 
 test('pollGatewayReady fails fast on auth/support config errors instead of blind-polling', async () => {

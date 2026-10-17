@@ -40,6 +40,7 @@
     "./todo-attention": "./src/todo-attention.ts",
     "./todo-prefs": "./src/todo-prefs.ts",
     "./flat-account": "./src/flat-account.ts",
+    "./http-budget": "./src/http-budget.ts",
     "./pin-partition": "./src/pin-partition.ts",
     "./view-prefs": "./src/view-prefs.ts",
     "./wire-common": "./src/wire-common.ts",

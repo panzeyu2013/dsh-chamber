@@ -15,8 +15,8 @@
 import {
   LADDER_TABLES,
   classifyObservation,
-  initialSessionAuthorityState,
   isAdmissible,
+  initialSessionAuthorityState,
   planLadder,
   reduceSessionAuthority,
   sessionAuthorityProbeLadder,
@@ -31,6 +31,7 @@ import {
 } from '@dsh-chamber/dsh-stream-state'
 import { hadSchedulingGap } from './page-schedule.ts'
 import { recordEvidence } from './evidence-log.ts'
+import { HttpBudgetUnscheduledError } from './http-budget.ts'
 
 export interface AuthorityOfficialRead {
   /** Every listed session; subagent rows are exported but never reconciled. */
@@ -45,7 +46,7 @@ export interface SessionAuthorityDeps {
   readonly generation: () => string
   readonly readOfficial: () => AuthorityOfficialRead
   /** undefined = transport failure (no verdict this round). */
-  readonly readAuthority: () => Promise<AuthorityRead | undefined>
+  readonly readAuthority: (signal?: AbortSignal, onDispatched?: (queuedMs: number) => void) => Promise<AuthorityRead | undefined>
   /** Budget for one authority read; expiry = degraded round (no verdict). Defaults to 5s (I-11). */
   readonly readDeadlineMs?: number
   /** Timer seam for the read budget; the I/O half defaults to the ambient scheduler. */
@@ -204,44 +205,78 @@ export class SessionAuthorityReconciler {
   }
 
   /**
-   * One authority read under a hard budget (I-11). The unary client already bounds its own
-   * fetch; this fence also covers a seam that never settles (the official store's single-flight
-   * hang is upstream's, but it must degrade this round, not freeze the ladder forever).
+   * One authority read under a hard budget (I-11). The deadline aborts the read; a read that
+   * provably never dispatched (queued in the page budget, or aborted before the grant) is
+   * `unscheduled` and never a source fact. A read that DID dispatch keeps the old deadline
+   * semantics (design 14 §D4: dispatched/unknown faults are not excused).
    */
   private async readBounded(): Promise<{ read: AuthorityRead | undefined; timedOut: boolean; skipped: boolean }> {
     const budget = this.deps.readDeadlineMs ?? AUTHORITY_READ_DEADLINE_MS
-    // At most one re-issue when the deadline expired inside an unscheduled window
-    // (WebKit throttling an unfocused/occluded page): that deadline is not a fact
-    // about the source. Only a deadline the page was awake for is booked (design 14 §D4).
+    // At most one re-issue when the deadline was unscheduled (WebKit throttling an
+    // unfocused/occluded page). A dispatched deadline ends the round immediately.
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const startedAt = this.deps.now()
-      const outcome = await withDeadline(this.deps.readAuthority(), {
-        ms: budget,
-        scheduler: this.deps.scheduler ?? AMBIENT_SCHEDULER,
-        onExpire: () => undefined,
-      })
+      let dispatched = false
+      let dispatchedQueuedMs: number | undefined
+      const controller = new AbortController()
+      let outcome: { settled: 'operation' | 'deadline'; value?: AuthorityRead | undefined }
+      try {
+        outcome = await withDeadline(
+          this.deps.readAuthority(controller.signal, (queuedMs) => {
+            dispatched = true
+            dispatchedQueuedMs = queuedMs
+          }),
+          {
+            ms: budget,
+            scheduler: this.deps.scheduler ?? AMBIENT_SCHEDULER,
+            onExpire: () => { controller.abort(); return undefined },
+          },
+        )
+      } catch (error) {
+        // A budget refusal / transport abort before the grant is a non-observation.
+        const name = error instanceof Error ? error.name : ''
+        if (!(error instanceof HttpBudgetUnscheduledError) && name !== 'AbortError' && name !== 'TimeoutError') throw error
+        const windowMs = this.deps.now() - startedAt
+        const verdict = classifyObservation({
+          outcome: 'error',
+          errorName: 'TimeoutError',
+          dispatched,
+          schedulingGap: hadSchedulingGap(startedAt, this.deps.now()),
+        })
+        const admissible = isAdmissible(verdict)
+        recordEvidence('authority-read', verdict, {
+          budgetMs: budget, windowMs, attempt,
+          ...(dispatchedQueuedMs === undefined ? {} : { queuedMs: dispatchedQueuedMs }),
+        }, admissible)
+        if (admissible) {
+          this.deps.warn('session authority read deadline exceeded (' + String(budget) + 'ms) — no verdict this round')
+          return { read: undefined, timedOut: true, skipped: false }
+        }
+        this.deps.warn('session authority read deadline before dispatch ('
+          + String(budget) + 'ms) — re-reading while the page is awake')
+        continue
+      }
       if (outcome.settled !== 'deadline') return { read: outcome.value, timedOut: false, skipped: false }
       const windowMs = this.deps.now() - startedAt
       const verdict = classifyObservation({
         outcome: 'error',
         errorName: 'TimeoutError',
+        dispatched,
         schedulingGap: hadSchedulingGap(startedAt, this.deps.now()),
       })
-      if (!isAdmissible(verdict)) {
-        recordEvidence('authority-read', verdict, { budgetMs: budget, windowMs, attempt }, false)
-        this.deps.warn('session authority read deadline during an unscheduled window ('
-          + String(budget) + 'ms) — re-reading while the page is awake')
-        continue
+      const admissible = isAdmissible(verdict)
+      recordEvidence('authority-read', verdict, {
+        budgetMs: budget, windowMs, attempt,
+        ...(dispatchedQueuedMs === undefined ? {} : { queuedMs: dispatchedQueuedMs }),
+      }, admissible)
+      if (admissible) {
+        this.deps.warn('session authority read deadline exceeded (' + String(budget) + 'ms) — no verdict this round')
+        return { read: undefined, timedOut: true, skipped: false }
       }
-      recordEvidence('authority-read', verdict, { budgetMs: budget, windowMs, attempt }, true)
-      this.deps.warn('session authority read deadline exceeded (' + String(budget) + 'ms) — no verdict this round')
-      return { read: undefined, timedOut: true, skipped: false }
+      this.deps.warn('session authority read deadline before dispatch ('
+        + String(budget) + 'ms) — re-reading while the page is awake')
     }
-    // Both windows were unscheduled: there is no valid observation either way, so this
-    // round books neither a deadline nor a success (the ladder's own no-read path owns
-    // the consequence, and the evidence ledger shows why).
-    this.deps.warn('session authority read skipped: the page was not scheduled in either window')
-    // `skipped` 把「两次都未调度」与「读缝自己没给出值」分开：后者仍是失败证据，前者不是判定。
+    this.deps.warn('session authority read skipped: no dispatched observation in either window')
     return { read: undefined, timedOut: false, skipped: true }
   }
 

@@ -10,6 +10,7 @@ import { indexSubagentDescendants } from '@dsh-chamber/dsh-chamber-client-core/s
 // not answer, and a deadline that expired while the page was not scheduled never books
 // a source fact.
 import { hadSchedulingGap, recordEvidence } from '@dsh-chamber/dsh-chamber-client-core'
+import { HttpBudgetUnscheduledError } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
 import type { SidebarRootInjected } from './contract/slots.ts'
 import { SidebarRoot } from './SidebarRoot.tsx'
 import { SidebarLeadingControls } from './SidebarLeadingControls.tsx'
@@ -302,13 +303,16 @@ export function apply(ctx: ClientContext): void {
      * （I5），显式 `running=false` 行仍是否定证据；等宿主给出 asOfSeq/游标后在此返回
      * 对应 proof，「缺席作证」再由 reducer 的 N=2 把关。
      */
-    const readAuthorityRunning = async (): Promise<AuthorityRead | undefined> => {
+    const readAuthorityRunning = async (signal?: AbortSignal, onDispatched?: (queuedMs: number) => void): Promise<AuthorityRead | undefined> => {
       try {
-        const snapshot = await fetchInstanceSnapshot(getInstanceClient(chamberInstanceId))
+        const snapshot = await fetchInstanceSnapshot(
+          getInstanceClient(chamberInstanceId), signal, onDispatched === undefined ? undefined : { onDispatched })
         const rows: Record<string, boolean> = {}
         for (const row of snapshot.sessions) rows[row.sessionId] = row.running
         return { ok: true, proof: { kind: 'none' }, rows }
       } catch (error) {
+        // Provenance for the reconciler: budget refusal (never dispatched) is not a source fact.
+        if (error instanceof HttpBudgetUnscheduledError) throw error
         console.warn(`[chamber] authority probe failed for ${chamberInstanceId} (no verdict this round):`,
           error instanceof Error ? error.message : String(error))
         return undefined
@@ -397,10 +401,12 @@ export function apply(ctx: ClientContext): void {
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error)
         // Provenance first: is this the source failing, or the page being throttled?
+        const refused = error instanceof HttpBudgetUnscheduledError
         const verdict = classifyObservation({
           outcome: 'error',
-          errorName: error instanceof Error ? error.name : undefined,
+          errorName: refused ? 'TimeoutError' : (error instanceof Error ? error.name : undefined),
           errorMessage: reason,
+          ...(refused ? { dispatched: false } : {}),
           schedulingGap: hadSchedulingGap(startedAt, Date.now()),
         })
         recordEvidence('baseline-verification', verdict, {

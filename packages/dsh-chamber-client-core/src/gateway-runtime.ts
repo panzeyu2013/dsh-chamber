@@ -17,6 +17,7 @@
 
 import { pollUntil, sleepMs } from './poll.ts'
 import { isRecord } from './wire-common.ts'
+import { HttpBudgetUnscheduledError, httpBudgetLaneFor, httpBudgetLeaseFor, httpBudgetSourceIdFromProxyPath, runWithHttpBudget } from './http-budget.ts'
 
 const REMOTE_STATUS_POLL_INTERVAL_MS = 2_000
 // The shared installer has one 10-minute wall-clock budget; a slow install must
@@ -472,30 +473,42 @@ async function request(
   url: string,
   init: { method: 'GET' | 'POST' | 'PUT'; body?: unknown; signal?: AbortSignal },
 ): Promise<{ status: number; body: unknown }> {
-  let response: Response
+  let result: { status: number; body: unknown }
   try {
-    response = await fetchImpl(url, {
-      method: init.method,
-      headers: {
-        accept: 'application/json',
-        ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
-      },
-      ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
-      cache: 'no-store',
-      credentials: 'same-origin',
+    // Same-origin dispatch budget (design 26 §D7); the body is consumed inside
+    // the slot because a slow body is a real in-flight connection. A queue abort
+    // honours the caller's signal; the lease bounds the action surface.
+    const budgetSource = httpBudgetSourceIdFromProxyPath(url)
+    result = await runWithHttpBudget({
+      sourceId: budgetSource,
+      kind: 'unary',
+      lane: httpBudgetLaneFor(budgetSource),
+      leaseMs: httpBudgetLeaseFor(12 * 60_000),
+      label: 'gateway-runtime',
       ...(init.signal !== undefined ? { signal: init.signal } : {}),
+    }, async () => {
+      const response = await fetchImpl(url, {
+        method: init.method,
+        headers: {
+          accept: 'application/json',
+          ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
+        },
+        ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+        cache: 'no-store',
+        credentials: 'same-origin',
+        ...(init.signal !== undefined ? { signal: init.signal } : {}),
+      })
+      const body: unknown = await response.json().catch(() => undefined)
+      return { status: response.status, body }
     })
   } catch (error) {
+    if (error instanceof HttpBudgetUnscheduledError) {
+      throw new RemoteRuntimeApiError('gateway runtime is busy (request not dispatched); retry shortly', null)
+    }
     const message = error instanceof Error ? error.message : String(error)
     throw new RemoteRuntimeApiError(`cannot reach the gateway runtime surface: ${message}`, null)
   }
-  let body: unknown
-  try {
-    body = await response.json()
-  } catch {
-    body = undefined
-  }
-  return { status: response.status, body }
+  return result
 }
 
 function runtimePath(chamberInstanceId: string, suffix: string): string {

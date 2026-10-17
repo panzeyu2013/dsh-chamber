@@ -69,9 +69,9 @@
     },
     {
       "path": "packages/dsh-chamber-client-core/src/instance-api.ts",
-      "lines": 1347,
+      "lines": 1327,
       "target": 900,
-      "note": "per-instance unary api surface; +19 (2026-12) carries the upstream SessionProjectionHints watermark (projectionKind/projectionAsOfSeq) so cached blocks are never compared with a connected session's values；pin 在此新增置顶集字段（+）并把快照行类型移出到 instance-snapshot-rows.ts（−），净下调到 1347"
+      "note": "per-instance unary api surface; +19 (2026-12) carries the upstream SessionProjectionHints watermark (projectionKind/projectionAsOfSeq) so cached blocks are never compared with a connected session's values；pin 在此新增置顶集字段（+）并把快照行类型移出到 instance-snapshot-rows.ts（−），净下调到 1347；随后 2026-10 页面级预算把 404 体读取抽到 instance-not-found-body.ts，并以预算接入 + 取消信号透传收口到 1327"
     },
     {
       "path": "packages/desktop/runtime-startup-host.ts",

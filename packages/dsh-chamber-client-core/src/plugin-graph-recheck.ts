@@ -17,6 +17,7 @@
 import { chamberBridge } from './aggregate-store.ts'
 import type { PluginGraphDiagnostic, PluginGraphDiagnosticState } from './aggregate-store.ts'
 import { postUnary, type UnaryPostOutcome } from './wire-common.ts'
+import { HttpBudgetUnscheduledError, httpBudgetLaneFor, httpBudgetLeaseFor, runWithHttpBudget } from './http-budget.ts'
 import {
   classifyPluginGraphOutcome, wrapGraphTransportFailure,
 } from './plugin-graph-classify.ts'
@@ -92,11 +93,21 @@ export async function recheckPluginGraphDiagnostic(
   // randomUUID() would throw → graph-unreachable).
   let outcome: UnaryPostOutcome
   try {
-    outcome = await postUnary(`/api/i/${sourceId}`, 'clientGraph/graph', {}, {
+    outcome = await runWithHttpBudget({
+      sourceId,
+      kind: 'unary',
+      lane: httpBudgetLaneFor(sourceId),
+      leaseMs: httpBudgetLeaseFor(30_000),
+      queueDeadlineAt: Date.now() + 10_000,
+      label: 'graph-return:clientGraph/graph',
+    }, () => postUnary(`/api/i/${sourceId}`, 'clientGraph/graph', {}, {
       fetchImpl: deps.fetchImpl,
       origin: deps.origin,
-    })
+    }))
   } catch (error) {
+    // A budget refusal is page-local (the request was never dispatched): treat
+    // it like the 503 "cannot judge" path and write no source state.
+    if (error instanceof HttpBudgetUnscheduledError) return 'unchanged'
     return report('graph-unreachable', wrapGraphTransportFailure(error))
   }
 

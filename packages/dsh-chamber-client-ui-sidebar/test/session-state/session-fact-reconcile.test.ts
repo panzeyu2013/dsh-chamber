@@ -23,6 +23,7 @@ import {
 import type { AuthorityOfficialRow, AuthorityRead, Scheduler } from '@dsh-chamber/dsh-stream-state'
 // 页面调度记录的唯一所有者：本文件需要一个「两次窗口都未调度」的场景（design 14 §D4）。
 import { noteFocus, resetPageScheduleForTests } from '../../../dsh-chamber-client-core/src/page-schedule.ts'
+import { HttpBudgetUnscheduledError } from '../../../dsh-chamber-client-core/src/http-budget.ts'
 
 class Harness {
   now = 0
@@ -42,7 +43,7 @@ class Harness {
   constructor(options: {
     reads?: (AuthorityRead | undefined)[]
     correctResult?: boolean
-    readAuthority?: () => Promise<AuthorityRead | undefined>
+    readAuthority?: (signal?: AbortSignal, onDispatched?: (queuedMs: number) => void) => Promise<AuthorityRead | undefined>
     correct?: (sessionIds: readonly string[]) => Promise<boolean>
     readDeadlineMs?: number
     scheduler?: Scheduler
@@ -53,10 +54,10 @@ class Harness {
       now: () => this.now,
       generation: () => this.generation,
       readOfficial: () => ({ rows: this.official, listComplete: this.listComplete }),
-      readAuthority: async () => {
+      readAuthority: async (signal, onDispatched) => {
         const next = this.reads[this.readCount]
         this.readCount += 1
-        return options.readAuthority === undefined ? next : options.readAuthority()
+        return options.readAuthority === undefined ? next : options.readAuthority(signal, onDispatched)
       },
       ...(options.readDeadlineMs === undefined ? {} : { readDeadlineMs: options.readDeadlineMs }),
       ...(options.scheduler === undefined ? {} : { scheduler: options.scheduler }),
@@ -226,7 +227,12 @@ test('the probe ladder throttles a second read inside the coalesce window', asyn
 test('a hanging authority read is fenced by the read budget (I-11), not the ladder', async () => {
   let armed = 0
   const h = new Harness({
-    readAuthority: () => new Promise<AuthorityRead | undefined>(() => {}),
+    // Dispatched-then-hangs: the real client grants the slot before fetch, so the
+    // fence must still book a deadline (a dispatched fault is not excused).
+    readAuthority: (_signal, onDispatched) => {
+      onDispatched?.(0)
+      return new Promise<AuthorityRead | undefined>(() => {})
+    },
     readDeadlineMs: 5_000,
     scheduler: {
       setTimeout: (run) => { armed += 1; run(); return armed },
@@ -241,6 +247,20 @@ test('a hanging authority read is fenced by the read budget (I-11), not the ladd
   assert.equal(h.snapshot()?.stuckSince, 60_000)
   assert.ok(h.warned.some(line => line.includes('read deadline exceeded')), h.warned.join(' | '))
   assert.match(h.records.find(entry => entry.kind === 'read-failed')?.detail ?? '', /deadline/)
+})
+
+test('a queued (never-dispatched) authority read is a non-observation, not a failure fact', async () => {
+  const h = new Harness({
+    readAuthority: async () => {
+      throw new HttpBudgetUnscheduledError('queue-deadline', 40)
+    },
+    readDeadlineMs: 5_000,
+  })
+  await h.tick(0, { s1: { running: true } })
+  await h.tick(60_000, { s1: { running: true } })
+  assert.equal(h.snapshot()?.stuckSince, undefined, 'a queue refusal is not a source deadline')
+  assert.equal(h.records.some(entry => entry.kind === 'read-failed'), false)
+  assert.ok(h.warned.some(line => line.includes('before dispatch')), h.warned.join(' | '))
 })
 
 test('a round whose windows were both unscheduled books neither a failure nor a recovery', async () => {
@@ -265,7 +285,7 @@ test('a round whose windows were both unscheduled books neither a failure nor a 
     assert.equal(h.snapshot()?.stuckSince, undefined, 'an unscheduled round is not stuck evidence')
     assert.equal(h.records.some(entry => entry.kind === 'read-failed'), false,
       'no read-failed verdict may be booked for an observation the page never got to make')
-    assert.ok(h.warned.some(line => line.includes('not scheduled in either window')), h.warned.join(' | '))
+    assert.ok(h.warned.some(line => line.includes('no dispatched observation in either window')), h.warned.join(' | '))
   } finally {
     resetPageScheduleForTests()
   }

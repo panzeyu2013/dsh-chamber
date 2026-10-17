@@ -213,8 +213,8 @@ const INSTALLED_FENCE_RETRIES = 1
 const INSTALLED_FENCE_BACKOFF_MS = 400
 
 /** Wait out the fence's backoff, cut short by the caller's signal: an aborted read must not
- *  fire its pending retry. The shared request() carries no signal, so the retry LOOP is what is
- *  abortable here — which is what bounds the request count. */
+ *  fire its pending retry. The retry LOOP is what is abortable here — which is what bounds the
+ *  request count (request() accepts a signal, but this path does not start one here). */
 function installedFenceBackoff(signal: AbortSignal | undefined): Promise<void> {
   return new Promise(resolve => {
     if (signal?.aborted === true) {

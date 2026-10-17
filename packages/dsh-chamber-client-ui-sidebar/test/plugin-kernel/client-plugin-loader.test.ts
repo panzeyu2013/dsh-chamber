@@ -10,6 +10,7 @@ import {
   dedupeCoveredRows, loadClientPluginRows,
 } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader';
 import { resetClientPluginLoaderState } from '../../../dsh-chamber-client-core/src/client-plugin-loader.ts';
+import { resetHttpBudgetForTests } from '../../../dsh-chamber-client-core/src/http-budget.ts';
 
 const row = (id: string, rev = 'r1', url = `/plugins/??${id}/client.js&rev=${rev}`) => ({ id, url, rev });
 
@@ -28,6 +29,31 @@ test('loadClientPluginRows: each unique combo url loads once; duplicate ids reus
   assert.equal(outcomes.filter(outcome => outcome.state === 'reused').length, 1, 'the duplicate id reuses the same execution');
   // The combo-sharing row is loaded (its factory comes from the shared script).
   assert.equal(outcomes.filter(outcome => outcome.row.id === '@scope/c')[0]?.state, 'loaded');
+});
+
+test('loadClientPluginRows: a wide pass is bounded by bundleMax, never refused by queue depth', async () => {
+  resetClientPluginLoaderState();
+  resetHttpBudgetForTests();
+  const loaded: string[] = [];
+  let inflight = 0;
+  let peak = 0;
+  const rows = Array.from({ length: 11 }, (_, index) => row(`@scope/wide-${index}`));
+  try {
+    const outcomes = await loadClientPluginRows('ssh-wide', rows, {
+      loadBundle: async (url: string) => {
+        loaded.push(url);
+        inflight += 1;
+        peak = Math.max(peak, inflight);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        inflight -= 1;
+      },
+    }, collecting);
+    assert.equal(loaded.length, 11, 'every unique bundle dispatches in the default configuration');
+    assert.ok(peak <= 2, 'bundleMax caps the kernel load wave (peak=' + String(peak) + ')');
+    assert.equal(outcomes.filter(outcome => outcome.state === 'failed').length, 0);
+  } finally {
+    resetHttpBudgetForTests();
+  }
 });
 
 test('loadClientPluginRows: first-load-wins — same id+rev reuses across sources, a different rev reports the conflict kind', async () => {

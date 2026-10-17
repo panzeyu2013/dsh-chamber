@@ -33,6 +33,7 @@ import {
   isRecord, postUnary,
   type UnaryPostOutcome,
 } from '@dsh-chamber/dsh-chamber-client-core'
+import { httpBudgetLaneFor, httpBudgetLeaseFor, runWithHttpBudget } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
 
 /** The upstream row id that makes the instance's official Plugins page reachable. */
 export const PLUGIN_MANAGER_ROW_ID = '@deepseek-ai/dsh-client-ui-plugin-manager'
@@ -111,10 +112,17 @@ export async function probeOfficialPluginsPage(
 ): Promise<OfficialPluginsPageCapability> {
   let outcome: UnaryPostOutcome
   try {
-    outcome = await postUnary(`/api/i/${sourceId}`, 'clientGraph/graph', {}, {
+    outcome = await runWithHttpBudget({
+      sourceId,
+      kind: 'unary',
+      lane: httpBudgetLaneFor(sourceId),
+      leaseMs: httpBudgetLeaseFor(30_000),
+      queueDeadlineAt: Date.now() + 10_000,
+      label: 'plugin-capability',
+    }, () => postUnary(`/api/i/${sourceId}`, 'clientGraph/graph', {}, {
       fetchImpl: deps.fetchImpl,
       origin: deps.origin,
-    })
+    }))
   } catch {
     return 'unknown'
   }

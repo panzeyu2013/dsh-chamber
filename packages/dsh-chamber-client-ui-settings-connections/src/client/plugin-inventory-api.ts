@@ -24,6 +24,7 @@ import {
   isRecord, postUnary, throwIfInstanceUnavailable, wrapWireError,
   type UnaryPostOutcome,
 } from '@dsh-chamber/dsh-chamber-client-core'
+import { HttpBudgetUnscheduledError, httpBudgetLaneFor, httpBudgetLeaseFor, runWithHttpBudget } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
 
 /** Lifecycle state of an entry's root Fiber, or null when it has no live root Fiber. */
 export type PluginFiberPhase = 'pending' | 'loading' | 'active' | 'failed' | 'unloading' | null
@@ -114,10 +115,20 @@ export async function loadPluginInventory(sourceId: string): Promise<PluginInven
   // loading forever; fail loud instead. The bare crypto.randomUUID() rpcId stays inside this try.
   let outcome: UnaryPostOutcome
   try {
-    outcome = await postUnary(`/api/i/${sourceId}`, 'pluginInventory/list', {}, {
+    outcome = await runWithHttpBudget({
+      sourceId,
+      kind: 'unary',
+      lane: httpBudgetLaneFor(sourceId),
+      leaseMs: httpBudgetLeaseFor(30_000),
+      queueDeadlineAt: Date.now() + 10_000,
+      label: 'plugin-inventory',
+    }, () => postUnary(`/api/i/${sourceId}`, 'pluginInventory/list', {}, {
       rpcId: crypto.randomUUID(),
-    })
+    }))
   } catch (error) {
+    if (error instanceof HttpBudgetUnscheduledError) {
+      throw new Error('实例繁忙：插件清单请求未派发，请稍后重试')
+    }
     throw wrapWireError(error)
   }
   // 503 instance_unavailable (not-ready instance, proxy honesty): the shared classifier throws the byte-identical error.

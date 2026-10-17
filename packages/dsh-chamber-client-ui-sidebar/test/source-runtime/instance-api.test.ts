@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHostDirectory, fetchInstanceSnapshot, searchSessions } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
+import { HttpBudgetUnscheduledError, acquireHttpBudget, configureHttpBudgetForTests, resetHttpBudgetForTests } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
 
 /** One wire summary row (SessionSummary shape the unary client decodes). */
 function summary(overrides: Record<string, unknown>): Record<string, unknown> {
@@ -36,6 +37,58 @@ test('fetchInstanceSnapshot 带走投影块水印（kind/asOfSeq），坏形状�
   assert.equal(byId.get('bad-kind')?.projectionKind, undefined)
   assert.equal(byId.get('bad-seq')?.projectionAsOfSeq, undefined)
   assert.equal(byId.get('nan-seq')?.projectionAsOfSeq, undefined)
+})
+
+test('instance-api budget carrier: queue expiry, dispatch proof and queued abort', async () => {
+  resetHttpBudgetForTests()
+  const restore = configureHttpBudgetForTests({ totalMax: 1, localReserve: 0, queueMax: 8 })
+  const originalFetch = globalThis.fetch
+  let fetches = 0
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    fetches += 1
+    const request = JSON.parse(String(init?.body)) as { rpcId?: string }
+    return new Response(JSON.stringify({
+      type: 'server-response', rpcId: request.rpcId, result: { ok: true, value: { items: [] } },
+    }), { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as typeof fetch
+  const client = getInstanceClient('local')
+  try {
+    const holder = await acquireHttpBudget({ sourceId: 'holder', kind: 'unary', lane: 'foreground' })
+    assert.equal(holder.kind, 'granted')
+    // Queue deadline: never dispatched -> budget class, no fetch.
+    await assert.rejects(
+      client.session.list({}, undefined, { timeoutMs: 50 }),
+      (error: unknown) => error instanceof HttpBudgetUnscheduledError
+        && (error as InstanceType<typeof HttpBudgetUnscheduledError>).reason === 'queue-deadline',
+    )
+    assert.equal(fetches, 0, 'a queued request must not fetch')
+    if (holder.kind === 'granted') holder.slot.release()
+    // Granted: dispatch proof fires exactly once, fetch once.
+    let dispatched = 0
+    await client.session.list({}, undefined, { timeoutMs: 500, onDispatched: () => { dispatched += 1 } })
+    assert.equal(dispatched, 1)
+    assert.equal(fetches, 1)
+    // Queued abort is a cancellation (AbortError), not a source fact.
+    const holder2 = await acquireHttpBudget({ sourceId: 'holder2', kind: 'unary', lane: 'foreground' })
+    const controller = new AbortController()
+    const pending = client.session.list({}, controller.signal, { timeoutMs: 500 })
+    controller.abort()
+    await assert.rejects(pending, (error: unknown) => error instanceof DOMException && error.name === 'AbortError')
+    if (holder2.kind === 'granted') holder2.slot.release()
+  } finally {
+    globalThis.fetch = originalFetch
+    resetHttpBudgetForTests()
+    restore()
+  }
+})
+
+test('fetchInstanceSnapshot keeps a budget refusal provenance (never-dispatched)', async () => {
+  const refusal = new HttpBudgetUnscheduledError('queue-deadline', 25)
+  const client = { session: { list: async () => { throw refusal } } }
+  await assert.rejects(fetchInstanceSnapshot(client as never), (error: unknown) => {
+    assert.equal(error, refusal, 'wrapWireError must not relabel a never-dispatched request')
+    return true
+  })
 })
 
 test('fetchInstanceSnapshot 绝不伪造 sessionId：非字符串行直接丢弃', async () => {

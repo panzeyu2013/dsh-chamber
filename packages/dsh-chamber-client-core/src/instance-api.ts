@@ -21,6 +21,8 @@ import {
 import { InstanceRpcError } from './instance-rpc-error.ts'
 import { pollUntil, sleepMs } from './poll.ts'
 import { mintRpcId } from './wire-common.ts'
+import { acquireHttpBudget, HttpBudgetUnscheduledError, httpBudgetLaneFor, httpBudgetLeaseFor } from './http-budget.ts'
+import { readNotFoundBody } from './instance-not-found-body.ts'
 // The archiveCleanup host domain's wire contract is SINGLE-SOURCED in the
 // neutral @dsh-chamber/dsh-chamber-wire package, which the in-host seed gateway
 // imports too; both bundles inline it (zero dependencies). The seed package's
@@ -125,14 +127,14 @@ const DEFAULT_TIMEOUT_MS = INSTANCE_UNARY_TIMEOUT_MS
  */
 const PURGE_CALL_TIMEOUT_MS = 5 * 60_000
 
-/** Per-call overrides for `call`; all optional, so existing callers keep the
- *  30s default and the generic non-2xx mapping. */
+/** Per-call overrides for `call` (all optional: existing callers keep the 30s default). */
 export interface CallOptions {
-  /** Bounded budget for this call (defaults to DEFAULT_TIMEOUT_MS). */
+  /** Bounded budget per leg (queue + fetch, each ≤ timeoutMs; defaults to DEFAULT_TIMEOUT_MS). */
   timeoutMs?: number
-  /** Map a 404 whose body is NOT `instance_not_found` to a domain-missing
-   *  error. Only the archiveCleanup accessors pass it. */
+  /** Map a 404 whose body is NOT `instance_not_found` to a domain-missing error. */
   notFoundAsDomainMissing?: boolean
+  /** Fired once the page budget grants the slot (proves the request was dispatched). */
+  onDispatched?: (queuedMs: number) => void
 }
 
 /** Browser origin with a non-browser fallback. */
@@ -141,58 +143,17 @@ function resolveOrigin(): string {
   return location?.origin !== undefined && location.origin !== 'null' ? location.origin : 'http://dsh.internal'
 }
 
-/** 404-body read cap: the domain-missing discrimination only needs the tiny
- *  `instance_not_found` code JSON. */
-const NOT_FOUND_BODY_CAP_BYTES = 4 * 1024
-
-/**
- * Bounded 404-body probe for the discrimination above: read at most
- * NOT_FOUND_BODY_CAP_BYTES and parse as JSON. Oversized or unparseable bodies
- * resolve null — the caller keeps the conservative domain-missing outcome.
- */
-async function readNotFoundBody(response: Response): Promise<{ code?: string } | null> {
-  try {
-    const body = response.body
-    if (body === null) return null
-    const reader = body.getReader()
-    const chunks: Uint8Array[] = []
-    let received = 0
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      received += value.byteLength
-      if (received > NOT_FOUND_BODY_CAP_BYTES) {
-        // Give up past the cap: cancel the rest of the stream and keep the
-        // conservative null outcome.
-        void reader.cancel().catch(() => {})
-        return null
-      }
-      chunks.push(value)
-    }
-    const bytes = new Uint8Array(received)
-    let offset = 0
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset)
-      offset += chunk.byteLength
-    }
-    const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes))
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
-    const code = (parsed as { code?: unknown }).code
-    return { code: typeof code === 'string' ? code : undefined }
-  } catch {
-    return null
-  }
-}
-
 /**
  * HTTP carrier with the per-instance proxy prefix injected before every api
  * path; `call(endpoint, payload, signal)` posts the wire envelope to
  * `/api/i/<id>/api/<endpoint>`.
  */
 class InstanceApiClient {
+  private readonly sourceId: string
   private readonly basePath: string
 
-  constructor(basePath: string) {
+  constructor(sourceId: string, basePath: string) {
+    this.sourceId = sourceId
     this.basePath = basePath
   }
 
@@ -208,59 +169,76 @@ class InstanceApiClient {
     const timeoutMs = Number.isFinite(options.timeoutMs) && (options.timeoutMs ?? 0) > 0
       ? options.timeoutMs as number
       : DEFAULT_TIMEOUT_MS
-    const requestSignal = signal === undefined
-      ? AbortSignal.timeout(timeoutMs)
-      : AbortSignal.any([AbortSignal.timeout(timeoutMs), signal])
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ type: 'client-request', rpcId, method: endpoint, payload }),
-      signal: requestSignal,
+    const budget = await acquireHttpBudget({
+      sourceId: this.sourceId,
+      kind: 'unary',
+      lane: httpBudgetLaneFor(this.sourceId),
+      leaseMs: httpBudgetLeaseFor(timeoutMs), queueDeadlineAt: Date.now() + Math.min(timeoutMs, 10_000),
+      label: 'instance:' + endpoint,
+      signal,
     })
-    if (response.status === 503) {
-      let payload503: { code?: string; error?: string } | null = null
-      try {
-        payload503 = await response.json()
-      } catch {
-        payload503 = null
-      }
-      if (payload503?.code === 'instance_unavailable') {
-        throw new InstanceUnavailableError(payload503.error ?? 'the instance is not ready')
-      }
+    if (budget.kind === 'unscheduled') {
+      if (budget.reason === 'aborted') throw new DOMException('aborted', 'AbortError')
+      throw new HttpBudgetUnscheduledError(budget.reason, budget.queuedMs)
     }
-    // A 404 that is NOT the control plane's own unknown-instance answer means a
-    // chamber host domain is not mounted (missing/old host package) — a distinct
-    // error class so the UI can project the honest recovery message. The body is
-    // read BOUNDED; an oversized or unparseable body keeps this conservative
-    // domain-missing outcome.
-    if (response.status === 404 && options.notFoundAsDomainMissing === true) {
-      const payload404 = await readNotFoundBody(response)
-      if (payload404?.code !== 'instance_not_found') {
-        // The message names the METHOD: a 404 on one domain must never claim
-        // another is missing.
-        throw new InstanceDomainMissingError(
-          `该实例未挂载 chamber 宿主域 ${endpoint}：宿主包同步/seed 后需重启 dsh 生效`,
-        )
+    try {
+      options.onDispatched?.(budget.queuedMs)
+      const requestSignal = signal === undefined
+        ? AbortSignal.timeout(timeoutMs)
+        : AbortSignal.any([AbortSignal.timeout(timeoutMs), signal])
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'client-request', rpcId, method: endpoint, payload }),
+        signal: requestSignal,
+      })
+      if (response.status === 503) {
+        let payload503: { code?: string; error?: string } | null = null
+        try {
+          payload503 = await response.json()
+        } catch {
+          payload503 = null
+        }
+        if (payload503?.code === 'instance_unavailable') {
+          throw new InstanceUnavailableError(payload503.error ?? 'the instance is not ready')
+        }
       }
-    }
-    if (!response.ok) throw new Error(`transport failure for ${endpoint}: HTTP ${response.status}`)
-    const envelope = await response.json() as {
-      type?: unknown
-      rpcId?: unknown
-      result?: { ok?: unknown; value?: unknown; error?: { code?: string; message?: string; details?: unknown } }
-    } | null
-    if (envelope?.type !== 'server-response' || envelope.rpcId !== rpcId) {
-      throw new Error(`rpcId mismatch for ${endpoint}: sent ${rpcId}, got ${String(envelope?.rpcId)}`)
-    }
-    const result = envelope.result
-    if (result?.ok === true) return { ok: true, value: result.value as T }
-    return {
-      ok: false,
-      error: {
-        code: result?.error?.code ?? 'internal',
-        message: result?.error?.message ?? '实例返回未知错误',
-        details: result?.error?.details ?? {},
-      },
+      // A 404 that is NOT the control plane's own unknown-instance answer means a
+      // chamber host domain is not mounted (missing/old host package) — a distinct
+      // error class so the UI can project the honest recovery message. The body is
+      // read BOUNDED; an oversized or unparseable body keeps this conservative
+      // domain-missing outcome.
+      if (response.status === 404 && options.notFoundAsDomainMissing === true) {
+        const payload404 = await readNotFoundBody(response)
+        if (payload404?.code !== 'instance_not_found') {
+          // The message names the METHOD: a 404 on one domain must never claim
+          // another is missing.
+          throw new InstanceDomainMissingError(
+            `该实例未挂载 chamber 宿主域 ${endpoint}：宿主包同步/seed 后需重启 dsh 生效`,
+          )
+        }
+      }
+      if (!response.ok) throw new Error(`transport failure for ${endpoint}: HTTP ${response.status}`)
+      const envelope = await response.json() as {
+        type?: unknown
+        rpcId?: unknown
+        result?: { ok?: unknown; value?: unknown; error?: { code?: string; message?: string; details?: unknown } }
+      } | null
+      if (envelope?.type !== 'server-response' || envelope.rpcId !== rpcId) {
+        throw new Error(`rpcId mismatch for ${endpoint}: sent ${rpcId}, got ${String(envelope?.rpcId)}`)
+      }
+      const result = envelope.result
+      if (result?.ok === true) return { ok: true, value: result.value as T }
+      return {
+        ok: false,
+        error: {
+          code: result?.error?.code ?? 'internal',
+          message: result?.error?.message ?? '实例返回未知错误',
+          details: result?.error?.details ?? {},
+        },
+      }
+    } finally {
+      budget.slot.release()
     }
   }
 
@@ -291,8 +269,8 @@ class InstanceApiClient {
    * bare `{args: payload}` is rejected with arguments-invalid.
    */
   readonly session = {
-    list: (payload: unknown, signal?: AbortSignal): Promise<UnaryResult<any>> =>
-      this.call('session/list', { args: { _request: payload } }, signal),
+    list: (payload: unknown, signal?: AbortSignal, options?: CallOptions): Promise<UnaryResult<any>> =>
+      this.call('session/list', { args: { _request: payload } }, signal, options),
     search: (payload: unknown, signal?: AbortSignal): Promise<UnaryResult<any>> =>
       this.call('session/search', { args: { request: payload } }, signal),
     create: (payload: unknown, signal?: AbortSignal): Promise<UnaryResult<any>> =>
@@ -371,7 +349,7 @@ const clients = new Map<string, InstanceApiClient>()
 export function getInstanceClient(instanceId: string): InstanceApiClient {
   let client = clients.get(instanceId)
   if (client === undefined) {
-    client = new InstanceApiClient(`/api/i/${instanceId}`)
+    client = new InstanceApiClient(instanceId, `/api/i/${instanceId}`)
     clients.set(instanceId, client)
   }
   return client
@@ -414,6 +392,8 @@ function wrapWireError(err: unknown): Error {
     // text.
     return err
   }
+  // Budget refusals carry provenance: never hide them behind the unreachable prefix.
+  if (err instanceof HttpBudgetUnscheduledError) return err
   if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
     return err
   }
@@ -516,10 +496,10 @@ function titleOf(summary: any): string | undefined {
  * degraded branch with no destructive action), and the mounted path must never
  * be replaced by this fallback once it has pushed.
  */
-export async function fetchInstanceSnapshot(client: InstanceApiClient): Promise<InstanceSnapshot> {
+export async function fetchInstanceSnapshot(client: InstanceApiClient, signal?: AbortSignal, options?: CallOptions): Promise<InstanceSnapshot> {
   let sessionResult: UnaryResult<{ items?: readonly unknown[] }>
   try {
-    sessionResult = await client.session.list({})
+    sessionResult = await client.session.list({}, signal, options)
   } catch (err) {
     throw wrapWireError(err)
   }

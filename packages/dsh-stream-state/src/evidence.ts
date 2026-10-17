@@ -21,7 +21,8 @@ export type ObservationVerdict =
   | 'answered'
   /** The page was scheduled for the whole window and the deadline still expired. */
   | 'deadline'
-  /** The page was NOT scheduled inside the window (throttled/occluded/suspended). */
+  /** The page was NOT scheduled inside the window (throttled/occluded/suspended), or
+   *  the observation never left chamber's own dispatch queue before its deadline. */
   | 'unscheduled'
   /** Our own teardown or a replaced generation aborted the observation. */
   | 'superseded'
@@ -43,6 +44,14 @@ export interface ObservationEvidence {
    * scheduled, because an unproven gap must not excuse a real failure.
    */
   readonly schedulingGap?: boolean | undefined
+  /**
+   * True when the transport layer had already handed the observation to the
+   * carrier; false when the deadline fired while the request was still queued in
+   * chamber's own dispatch budget (\`http-budget.ts\`) — it was never given a
+   * chance. Absent means "unknown" and preserves the previous behavior
+   * (fail-open): an unproven non-dispatch must not excuse a real source failure.
+   */
+  readonly dispatched?: boolean | undefined
   /** True for the control plane's not-serving-yet answer (503 instance_unavailable). */
   readonly notServingYet?: boolean | undefined
 }
@@ -65,6 +74,11 @@ export function classifyObservation(evidence: ObservationEvidence): ObservationV
   if (evidence.notServingYet === true) return 'unavailable'
   if (isCancellationError(evidence.errorName, evidence.errorMessage)) return 'superseded'
   if (evidence.errorName === 'TimeoutError') {
+    // A request still queued in chamber's own dispatch budget when the deadline
+    // fired was never handed to the source: a page-local artefact that books
+    // nothing (design 14 §D4). Only TimeoutError is eligible — a non-timeout
+    // transport error stays \`channel\`, so real faults are never excused.
+    if (evidence.dispatched === false) return 'unscheduled'
     return evidence.schedulingGap === true ? 'unscheduled' : 'deadline'
   }
   return 'channel'

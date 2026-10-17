@@ -54,6 +54,47 @@ test('the error NAME decides cancellation, never the message wording', () => {
   assert.equal(isAdmissible('channel'), true)
 })
 
+test('a request that never left the dispatch queue is NOT a source fact', () => {
+  // Proven non-dispatch (chamber's own budget queue) is a page-local artefact,
+  // regardless of what the page-scheduling record says.
+  assert.equal(
+    classifyObservation({ outcome: 'error', errorName: 'TimeoutError', dispatched: false }),
+    'unscheduled',
+  )
+  assert.equal(
+    classifyObservation({ outcome: 'error', errorName: 'TimeoutError', dispatched: false, schedulingGap: false }),
+    'unscheduled',
+  )
+  assert.equal(isAdmissible('unscheduled'), false)
+})
+
+test('dispatched or unknown deadlines still book: the fix must not excuse real failures', () => {
+  // Dispatched + no scheduling gap = an ordinary source deadline.
+  assert.equal(
+    classifyObservation({ outcome: 'error', errorName: 'TimeoutError', dispatched: true }),
+    'deadline',
+  )
+  assert.equal(
+    classifyObservation({ outcome: 'error', errorName: 'TimeoutError', dispatched: true, schedulingGap: false }),
+    'deadline',
+  )
+  // Absent dispatched = unknown = fail-open to the old behavior.
+  assert.equal(
+    classifyObservation({ outcome: 'error', errorName: 'TimeoutError' }),
+    'deadline',
+  )
+  // Cancellation outranks the non-dispatch bit.
+  assert.equal(
+    classifyObservation({ outcome: 'error', errorName: 'AbortError', dispatched: false }),
+    'superseded',
+  )
+  // Non-timeout transport failures are never excused by non-dispatch.
+  assert.equal(
+    classifyObservation({ outcome: 'error', errorName: 'TypeError', dispatched: false }),
+    'channel',
+  )
+})
+
 test('not-serving-yet is a phase, not a fault', () => {
   const verdict = classifyObservation({ outcome: 'error', notServingYet: true, errorMessage: '503' })
   assert.equal(verdict, 'unavailable')

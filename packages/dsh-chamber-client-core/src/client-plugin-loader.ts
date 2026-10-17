@@ -22,6 +22,7 @@
 import type { PluginGraphDiagnostic } from './aggregate-store.ts'
 import { errorMessage } from './error-text.ts'
 import { assertSingletonModule } from './singleton.ts'
+import { HttpBudgetUnscheduledError, acquireHttpBudget, httpBudgetLeaseFor } from './http-budget.ts'
 
 assertSingletonModule('client-plugin-loader')
 
@@ -174,9 +175,42 @@ export async function loadClientPluginRows<T extends ClientPluginRow>(
     if (combo === undefined) {
       // Promise.resolve().then also normalizes a synchronously throwing transport into
       // the same shared rejected promise.
+      // Bundle concurrency cap (design 26 §D7; the ceil(N/bundleMax) boot-wave cost
+      // is a STATUS calibration item): the shared
+      // budget admits at most `bundleMax` concurrent script loads, so one slow
+      // instance's boot wave cannot occupy the whole same-origin pool and starve
+      // local unary reads. The slot lives until the script really settles: on a
+      // DOM-script timeout removal does not cancel the fetch, so the slot is
+      // released by the tombstone's `bundleOutcome` instead of by the rejection.
       combo = {
         ids: new Set(),
-        load: Promise.resolve().then(() => deps.loadBundle(row.url)),
+        load: Promise.resolve().then(async () => {
+          const acquired = await acquireHttpBudget({
+            sourceId,
+            kind: 'bundle',
+            lane: 'background',
+            leaseMs: httpBudgetLeaseFor(60_000),
+            label: 'bundle:' + row.url,
+          })
+          if (acquired.kind === 'unscheduled') {
+            throw new HttpBudgetUnscheduledError(acquired.reason, acquired.queuedMs)
+          }
+          try {
+            const loaded = await deps.loadBundle(row.url)
+            acquired.slot.release()
+            return loaded
+          } catch (error) {
+            if (error instanceof BundleLoadTimeoutError) {
+              void Promise.resolve(error.bundleOutcome).then(
+                () => acquired.slot.release(),
+                () => acquired.slot.release(),
+              )
+            } else {
+              acquired.slot.release()
+            }
+            throw error
+          }
+        }),
       }
       preloadedCombos.set(row.url, combo)
     }

@@ -8,6 +8,7 @@
  * imports fetch/poll — one implementation, one call site.
  */
 import { pollGatewayReady, type GatewayPollDeps } from '@dsh-chamber/dsh-chamber-client-core'
+import { HttpBudgetUnscheduledError, httpBudgetLaneFor, httpBudgetLeaseFor, runWithHttpBudget } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
 import { classifyRestartError, runtimeRefusalText, type RuntimeRefusalKey } from './managed-restart.ts'
 import { errorMessage } from './error-text.ts'
 
@@ -39,18 +40,32 @@ export async function runManagedRestart(
   deps: Omit<GatewayPollDeps, 'action'> = {},
 ): Promise<ManagedRestartOutcome> {
   const fetchImpl = deps.fetchImpl ?? fetch
-  let response: Response
+  let result: { status: number; body: unknown }
   try {
-    response = await fetchImpl(`/api/i/${sourceId}/chamber/runtime/restart`, { method: 'POST' })
+    result = await runWithHttpBudget({
+      sourceId,
+      kind: 'unary',
+      lane: httpBudgetLaneFor(sourceId),
+      leaseMs: httpBudgetLeaseFor(12 * 60_000),
+      queueDeadlineAt: Date.now() + 10_000,
+      label: 'managed-restart',
+    }, async () => {
+      const response = await fetchImpl(`/api/i/${sourceId}/chamber/runtime/restart`, { method: 'POST' })
+      // The refusal body is part of the in-flight connection: read it inside the
+      // slot so a stalled body cannot outlive the budget (202 needs no body).
+      const body: unknown = response.status === 202 ? null : await response.json().catch(() => null)
+      return { status: response.status, body }
+    })
   } catch (error) {
+    if (error instanceof HttpBudgetUnscheduledError) {
+      return { kind: 'failed', detail: '页面繁忙：重启请求未能派发，请稍后重试' }
+    }
     return { kind: 'failed', detail: errorMessage(error) }
   }
-  if (response.status !== 202) {
+  if (result.status !== 202) {
     // The route's {error, code} refusal is localized by the shared 409 classifier (not-running vs
     // busy); every other status keeps the status-anchored/verbatim projection runtimeRefusalText owns.
-    let body: unknown = null
-    try { body = await response.json() } catch { body = null }
-    return { kind: 'refused', text: runtimeRefusalText(body, response.status, MANAGED_RESTART_REFUSAL_KEYS, t) }
+    return { kind: 'refused', text: runtimeRefusalText(result.body, result.status, MANAGED_RESTART_REFUSAL_KEYS, t) }
   }
   // The 202 only accepts the restart: the readiness poll decides whether the success note is honest
   // (pollGatewayReady owns its own 120s ceiling and classification). The poll failure is kept for the

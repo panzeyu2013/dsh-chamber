@@ -156,6 +156,7 @@ export const EXPORTS_ALLOWLIST = Object.freeze({
     './derive',
     './flat-account',
     './hover-intent',
+    './http-budget',
     './instance-api',
     './managed-runtime',
     './open-intent',

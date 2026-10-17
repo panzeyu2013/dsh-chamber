@@ -12,6 +12,7 @@
  */
 
 import { isPageChannelKeepaliveItem, subscribePageChannel, type PageChannelSubscription } from './page-channel.ts'
+import { HttpBudgetUnscheduledError, httpBudgetLeaseFor, runWithHttpBudget } from './http-budget.ts'
 
 /** 统一错误形状 {error, code?} + HTTP 状态 + 响应体 + 限流提示。 */
 export interface ApiErrorBody {
@@ -40,11 +41,21 @@ export function controlPlaneUrl(): string {
   return String(pageOrigin || injected || DEFAULT_CONTROL_PLANE_URL).replace(/\/+$/, '')
 }
 
+export class ControlPlaneBusyError extends Error {
+  readonly name = 'ControlPlaneBusyError'
+  readonly code = 'control-plane-busy'
+}
+
 export interface RequestOptions {
   method?: string
   headers?: Record<string, string>
   body?: string
+  /** Caller signal; the default ceiling below bounds a half-dead control plane. */
+  signal?: AbortSignal
 }
+
+/** Management REST ceiling: a hung request must not hold a budget slot for the lease. */
+const CONTROL_PLANE_REQUEST_TIMEOUT_MS = 120_000
 
 export async function request<T = unknown>(path: string, options: RequestOptions = {}): Promise<T> {
   const url = controlPlaneUrl() + path
@@ -54,17 +65,37 @@ export async function request<T = unknown>(path: string, options: RequestOptions
   }
 
   let res: Response
-  try {
-    res = await fetch(url, { ...options, headers, credentials: 'include' })
-  } catch (err) {
-    throw new Error(`无法访问控制面（${url}）：${err instanceof Error ? err.message : '网络错误'}`)
-  }
-
   let data: unknown = null
   try {
-    data = await res.json()
-  } catch {
-    // 非 JSON 响应（如 500 纯文本），按状态码兜底
+    // Page-level dispatch budget (design 26 §D7): management REST is background
+    // work; a saturated chamber queue must not let it occupy origin slots ahead
+    // of source reads. The body is consumed INSIDE the slot (a slow body is a
+    // real in-flight connection); the lease bounds a hung request.
+    const result = await runWithHttpBudget({
+      sourceId: 'control-plane',
+      kind: 'unary',
+      lane: 'background',
+      leaseMs: httpBudgetLeaseFor(125_000),
+      queueDeadlineAt: Date.now() + 10_000,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      label: 'control-plane:' + path,
+    }, async () => {
+      const response = await fetch(url, {
+        ...options,
+        headers,
+        credentials: 'include',
+        signal: options.signal ?? AbortSignal.timeout(CONTROL_PLANE_REQUEST_TIMEOUT_MS),
+      })
+      const body: unknown = await response.json().catch(() => undefined)
+      return { response, body }
+    })
+    res = result.response
+    data = result.body ?? null
+  } catch (err) {
+    if (err instanceof HttpBudgetUnscheduledError) {
+      throw new ControlPlaneBusyError('控制面繁忙（请求未进入派发），请稍后重试')
+    }
+    throw new Error(`无法访问控制面（${url}）：${err instanceof Error ? err.message : '网络错误'}`)
   }
 
   if (!res.ok) {

@@ -2,6 +2,7 @@
  *  surface shared by every row action; runActionWithOutcome also reports the outcome. */
 
 import { useState } from 'react'
+import { HttpBudgetUnscheduledError } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
 
 /** Signature of the shell keyed action runner (rowErrors reporting). */
 export type RunAction = (key: string, action: () => Promise<void>) => Promise<void>
@@ -27,7 +28,9 @@ export function useSidebarActions() {
     return action().then(
       () => true,
       (reason: unknown) => {
-        const message = reason instanceof Error ? reason.message : String(reason)
+        const message = reason instanceof HttpBudgetUnscheduledError
+          ? '页面繁忙：请求未能派发，请稍后重试'
+          : reason instanceof Error ? reason.message : String(reason)
         setRowErrors((prev) => ({ ...prev, [key]: message }))
         return false
       },

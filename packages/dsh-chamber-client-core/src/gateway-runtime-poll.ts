@@ -11,6 +11,7 @@
  * as terminal, and a start failure must never be reported as "restart failed".
  */
 import { pollUntil, sleepMs } from './poll.ts'
+import { HttpBudgetUnscheduledError, httpBudgetLaneFor, runWithHttpBudget } from './http-budget.ts'
 
 export type GatewayRuntimeAction = 'restart' | 'start'
 
@@ -51,13 +52,55 @@ export async function pollGatewayReady(chamberInstanceId: string, deps: GatewayP
       return { kind: 'retry' }
     },
     probe: async (): Promise<Round> => {
-      const response = await fetchImpl(`/api/i/${chamberInstanceId}/chamber/runtime/status`, { credentials: 'same-origin' })
-      if (response.status !== 200) {
-        return response.status === 401 || response.status === 403 || response.status === 404
-          ? { kind: 'config-error', status: response.status }
+      const remaining = Math.max(1, deadline - Date.now())
+      const controller = new AbortController()
+      const abortTimer = setTimeout(() => controller.abort(), remaining)
+      let raceTimer: ReturnType<typeof setTimeout> | undefined
+      let result: { status: number; payload: unknown }
+      try {
+        result = await Promise.race([
+          runWithHttpBudget({
+            sourceId: chamberInstanceId,
+            kind: 'unary',
+            lane: httpBudgetLaneFor(chamberInstanceId),
+            leaseMs: remaining + 5_000,
+            queueDeadlineAt: deadline,
+            signal: controller.signal,
+            label: 'gateway-runtime-poll',
+          }, async () => {
+            const response = await fetchImpl(`/api/i/${chamberInstanceId}/chamber/runtime/status`, {
+              credentials: 'same-origin',
+              signal: controller.signal,
+            })
+            // The body is part of the in-flight connection: a stalled body must be
+            // covered by the poll ceiling too (not read after the slot is released).
+            const payload: unknown = await response.json().catch(() => undefined)
+            return { status: response.status, payload }
+          }),
+          // A dispatched-but-silent carrier must not outlive the poll ceiling
+          // (fetch() honours the signal, but tests/fixtures may not).
+          new Promise<never>((_, reject) => {
+            raceTimer = setTimeout(() => reject(new Error('probe timeout')), remaining)
+          }),
+        ])
+      } catch (error) {
+        // A page-local queue wait / dispatch abort past the poll deadline is not an
+        // action failure: the poll loop's own deadline ends the round.
+        if (error instanceof HttpBudgetUnscheduledError || controller.signal.aborted
+          || (error instanceof Error && error.message === 'probe timeout')) {
+          return { kind: 'transient' }
+        }
+        throw error
+      } finally {
+        clearTimeout(abortTimer)
+        if (raceTimer !== undefined) clearTimeout(raceTimer)
+      }
+      if (result.status !== 200) {
+        return result.status === 401 || result.status === 403 || result.status === 404
+          ? { kind: 'config-error', status: result.status }
           : { kind: 'transient' }
       }
-      const payload = await response.json() as { connectionState?: unknown; operationError?: unknown; restart?: unknown; start?: unknown }
+      const payload = result.payload as { connectionState?: unknown; operationError?: unknown; restart?: unknown; start?: unknown }
       return {
         kind: 'status',
         connectionState: typeof payload.connectionState === 'string' ? payload.connectionState : null,

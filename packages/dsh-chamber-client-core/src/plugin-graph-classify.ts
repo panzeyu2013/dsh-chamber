@@ -13,7 +13,9 @@
  * `host-boot-graph` literal.
  *
  * CONSUMER MAPPING: `instance-unavailable` = 503 `instance_unavailable` (expected
- * pre-ready; fetchHostGraph resolves null, the recheck writes nothing); `channel` =
+ * pre-ready; fetchHostGraph resolves null, the recheck writes nothing; a page-budget
+ * refusal throws the internal not-attempted error after recording `unscheduled booked=false`
+ * and is never mapped to a source state); `channel` =
  * 404 (`not-injected`), another non-2xx (`graph-unreachable`) or a 2xx error copy
  * classified into one of those (fetchHostGraph throws
  * `HostGraphChannelError(state, message)`); `malformed` = a 2xx answer whose
