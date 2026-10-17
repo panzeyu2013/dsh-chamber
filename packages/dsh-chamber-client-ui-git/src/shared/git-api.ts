@@ -7,6 +7,7 @@ import type {
   RemoveWorktreeResult, RollbackCreateResult,
 } from './types.ts'
 import { errorMessage, isRecord } from '@dsh-chamber/dsh-chamber-client-core'
+import { HttpBudgetUnscheduledError } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
 import { normalizeGitSnapshot } from './snapshot.ts'
 // The client leg of the three-layer git timeout ladder; the control-plane lockstep test imports the same module as the client's REAL budget.
 import { RPC_TIMEOUT_MS } from './timeout-budget.ts'
@@ -90,7 +91,10 @@ export const DETERMINISTIC_HOST_RETRYABLE_OVERRIDES: ReadonlySet<string> = new S
 
 /** True for a host code the browser refuses to replay. */
 export function isDeterministicGitRejection(error: unknown): boolean {
-  return error instanceof GitWorktreeRpcError && DETERMINISTIC_GIT_REJECTION_CODES.has(error.code)
+  if (!(error instanceof GitWorktreeRpcError)) return false
+  // Client-minted: the page never dispatched the request, so nothing committed.
+  if (error.code === 'not-dispatched') return true
+  return DETERMINISTIC_GIT_REJECTION_CODES.has(error.code)
 }
 
 export interface CreateWorktreeInput {
@@ -332,6 +336,14 @@ async function callGitRemote(sourceId: string, method: string, input?: unknown):
       { timeoutMs: RPC_TIMEOUT_MS, notFoundAsDomainMissing: true },
     )
   } catch (error) {
+    // A request the page never dispatched cannot have committed: deterministic
+    // rejection (never mint "may have committed" recovery).
+    if (error instanceof HttpBudgetUnscheduledError) {
+      throw new GitWorktreeRpcError(
+        'not-dispatched',
+        'the page dispatch queue refused the request before it left the page',
+      )
+    }
     // The carrier's domain-missing class IS the definitive 404: the gitWorktree
     // Remote is not mounted, so replaying cannot help — never mint a recovery.
     if (error instanceof InstanceDomainMissingError) {

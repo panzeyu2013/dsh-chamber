@@ -45,6 +45,8 @@ export type GitActionErrorCode =
   /** The shared carrier answered a business-level refusal (`rpc-failed`); its
    *  message can come from the carrier's own fallback, so the code needs copy. */
   | 'rpc-failed'
+  /** The page dispatch queue refused the request before it left the page. */
+  | 'not-dispatched'
   /** Host refusals with dedicated copy (they arrive as GitWorktreeRpcError). */
   | 'running-agent'
   | 'worktree-invalid'

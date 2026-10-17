@@ -191,6 +191,7 @@ function syncServers(): void {
           actionError: current?.actionError,
           actionErrorCode: current?.actionErrorCode,
         })
+        lastWorkspaceKeys.set(server.id, workspaceKeyOf(server))
         refreshIds.push(server.id)
         changed = true
       } else {
@@ -262,6 +263,13 @@ async function beginRefresh(sourceId: string): Promise<GitSourceState> {
   } catch (error) {
     if ((sourceEpochs.get(sourceId) ?? 0) !== epoch || !connectedSource(sourceId)) {
       return states.get(sourceId) ?? { sourceId, connected: false, status: 'idle' }
+    }
+    // Page-local dispatch refusal: keep the last snapshot, retry shortly, and never
+    // mark the source as failed (design 08: not-dispatched is deterministic).
+    if (error instanceof GitWorktreeRpcError && error.code === 'not-dispatched') {
+      const current = states.get(sourceId)
+      setTimeout(() => { void refreshSource(sourceId) }, 3_000)
+      return current ?? { sourceId, connected: true, status: 'loading', updatedAt: Date.now() }
     }
     const sourceError: GitSourceError = { code: 'snapshot-failed', message: errorText(error) }
     return patchSource(sourceId, {
@@ -914,18 +922,34 @@ export function clearActionError(sourceId: string): void {
   }
 }
 
-/** Refresh every connected, action-idle source; existing pulls are joined. */
+/** Per-poll wave: the 30s tick refreshes at most this many connected sources,
+ *  rotating through the roster, so a wide fleet cannot fan out one unary per
+ *  source against the shared same-origin pool (design 26 §D7). Existing pulls
+ *  are still joined per source. */
+const GIT_POLL_WAVE = 2
+let pollCursor = 0
+
+/** Refresh connected, action-idle sources in a bounded rotating wave; existing pulls are joined. */
 function refreshConnectedSources(): void {
+  const eligible: string[] = []
   for (const server of chamberBridge.getServers()) {
-    if (server.connected && states.get(server.id)?.busy === undefined) void refreshSource(server.id)
+    if (server.connected && states.get(server.id)?.busy === undefined) eligible.push(server.id)
   }
+  if (eligible.length === 0) return
+  const start = pollCursor % eligible.length
+  const wave = eligible.slice(start, start + GIT_POLL_WAVE)
+  if (wave.length < GIT_POLL_WAVE) {
+    wave.push(...eligible.slice(0, Math.min(GIT_POLL_WAVE - wave.length, eligible.length - wave.length)))
+  }
+  pollCursor = (start + wave.length) % eligible.length
+  for (const sourceId of wave) void refreshSource(sourceId)
 }
 
 function start(): void {
   stopBridge = chamberBridge.subscribe(syncServers)
   syncServers()
   // Hidden-tab polling gate: the timer keeps running but skips while hidden, and
-  // becoming visible re-syncs the roster AND refreshes every connected source.
+  // becoming visible re-syncs the roster AND starts the next (wave-capped) refresh.
   onVisibilityChange = () => {
     if (visibilityEvents.read() !== 'visible') return
     syncServers()

@@ -98,6 +98,8 @@ export function removeFailureCopyKey(code: string | undefined): GitSidebarKey | 
     case 'git-host-not-loaded': return 'gitHostNotLoaded'
     // Carrier-level refusal: the raw message is the carrier's own fallback.
     case 'rpc-failed': return 'remoteCallFailed'
+    // Page-local dispatch refusal: never a source failure, localized retry copy.
+    case 'not-dispatched': return 'notDispatched'
     // ---- local preflight/guard failures (GitActionError) ----
     case 'action-in-progress': return 'actionInProgress'
     case 'recovery-pending': return 'recoveryPending'
