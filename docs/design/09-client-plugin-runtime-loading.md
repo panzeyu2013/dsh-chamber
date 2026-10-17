@@ -252,7 +252,7 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   `chamber-covered.ts` 条目注释；官方桌面账户家族 alpha.3 起迁出该名单（见下「有意跳过名单」③）。独立成
   叶模块（chamber-entry.ts 仅 re-export）以免 shell.ts 把模块表交接与整棵复合插件图拉进主 chunk。与 §3.2
   的 union-table 修复锁步：`COVERED_FACTORIES`（首屏静态导入族的 factory 注册）中每个 id 必须在覆盖集内
-  （执行期断言）。alpha.4 新增的**可选客户端行不进覆盖集**：`dsh-client-ui-plugin-market`（可选组合包 `dsh-experimental-plugin-market-bundle`，shipped profile 默认关）不在 `CHAMBER_COVERED_IDS`——启用该组合包时经宿主图 extra row 加载，其 `plugins.tab` 页签由 chamber 占位页声明承接（design 05 §5）。
+  （执行期断言）。alpha.4 新增的**可选客户端行不进覆盖集**：`dsh-client-ui-plugin-market`（可选组合包 `dsh-experimental-plugin-market-bundle`，shipped profile 默认关）不在 `CHAMBER_COVERED_IDS`——启用该组合包时经宿主图 extra row 加载，其 `plugins.tab` 页签由 chamber 占位页声明承接（design 05 §5）。rc.2 同理：新徽标行 `@deepseek-ai/dsh-client-ui-deepseek-model-label-1017`（官方 web-app 行，占 `conversation.input.model.label` 单槽，chamber 无同槽占用者）不进覆盖集、由宿主图加载；其 create-time require 只有 `react/jsx-runtime` 与 ui-primitives（后者由复合 factory 应答），不需要 factory 或 disable 行。
 - **有意跳过名单（覆盖集/复合入口的显式例外）**：①官方 HMR 行（宿主半身 always mounted；dev-only 的只是 rebuild watcher）
   `@deepseek-ai/dsh-client-hmr` 在覆盖集内但**永不加载**——它开的是 **document-relative**
   `new EventSource('plugins/events')`，单页多实例下会打到控制面 origin（SPA 回退答 `text/html`）；

@@ -58,7 +58,7 @@
 
 ## 5. 捆绑运行时
 
-- [ ] 换 pin 必须显式驱动版本：`DSH_CHAMBER_DSH_VERSION=<目标版本> pnpm --filter @dsh-chamber/desktop run bundle:dsh -- --force --refresh-lockfile`（runtime锁文件版本变化时必须 `--refresh-lockfile`，否则 `ERR_PNPM_OUTDATED_LOCKFILE`）。脚本的默认版本从**已提交的** runtime 锁派生（`lockfileDshVersion()`），只改锚不会让默认值变成目标版本，`--force` 会把旧版本原地刷新。
+- [ ] 换 pin 必须显式驱动版本：`DSH_CHAMBER_DSH_VERSION=<目标版本> pnpm --filter @dsh-chamber/desktop run bundle:dsh -- --force --refresh-lockfile`（runtime锁文件版本变化时必须 `--refresh-lockfile`，否则 `ERR_PNPM_OUTDATED_LOCKFILE`）。脚本的默认版本从**已提交的** runtime 锁派生（`lockfileDshVersion()`），只改锚不会让默认值变成目标版本，`--force` 会把旧版本原地刷新（版本已对齐且无需重装时 `--force` 可省）。
 - [ ] 冒烟：`node packages/desktop/vendor/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js --version` = 目标版本。
 - [ ] `allowBuilds` / `DENY_BUILDS` 复核：上游新增原生依赖时显式裁决（单源生成点 + 测试钉住），不留沉默的ignored builds。
 - [ ] 上游 patch 集合变化（§17-C）：先 `cmp` 新旧补丁文件内容——**文件名变化不等于语义变化**（同字节改名只换登记锚）；内容确有变化才按四类准入重导/重锚。随后对拍 `vendor/harness-checkout/{pnpm-workspace.yaml,patches/}` 的 `patchedDependencies` 与 registry 的 `patches`（`node --test scripts/upstream/registry.test.mjs`），再跑 `pnpm --filter @dsh-chamber/desktop run bundle:dsh -- --force --refresh-lockfile` 让 runtime lock 记录 patch set；`node --test packages/desktop/scripts/upstream-patches.test.mjs` 在集合漂移或 runtimeClosure 条目未解析出 patch_hash 时红（pnpm 对「图外条目」与「在图但版本不符」的条目都只警告；本仓的 `assertPatchesApplied` 对**图内**条目缺失 `patch_hash` 直接红，补丁**字节**漂移由 `upstream-patches.test.mjs` 的 vendor sha256 对拍 + 冻结安装的 `patchedDependencies` 配置校验兜底）。
