@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 import {
-  GRAPH_RETURN_PROBE_INTERVAL_MS, decideGraphReturn, planGraphReturn,
+  GRAPH_RETURN_PROBE_INTERVAL_MS, GRAPH_RETURN_REBOOT_RETRY_MS, decideGraphReturn, planGraphReturn,
   type GraphReturnFacts, type GraphReturnPassFacts,
 } from '../../src/graph-return.ts'
 import type { PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-core'
@@ -28,7 +28,7 @@ const facts = (over: Partial<GraphReturnFacts> = {}): GraphReturnFacts => ({
   diagnostic: diagnostic('not-injected'),
   nowMs: 1_000_000,
   lastProbeAt: undefined,
-  actedUpdatedAt: undefined,
+  lastRebootAt: undefined,
   ...over,
 })
 
@@ -59,13 +59,22 @@ test('a recheck that ran while the host was down (graph-unreachable) keeps the p
     'boot/row facts are never a re-check candidate')
 })
 
-test('an ok record re-boots once, and a later ok record earns a new attempt', () => {
+test('an ok record re-boots at most once per retry window', () => {
   const ok = { diagnostic: diagnostic('ok', 42) }
   assert.deepEqual(decideGraphReturn(facts(ok)), { kind: 'reboot' })
-  assert.deepEqual(decideGraphReturn(facts({ ...ok, actedUpdatedAt: 42 })), { kind: 'none' },
-    'the consumed record is the bound: a re-render cannot re-boot')
-  assert.deepEqual(decideGraphReturn(facts({ ...ok, actedUpdatedAt: 41 })), { kind: 'reboot' },
-    'a NEW ok record (another heal after another loss) is a new attempt')
+  assert.deepEqual(decideGraphReturn(facts({ ...ok, lastRebootAt: 1_000_000 })), { kind: 'none' },
+    'inside the window a re-render cannot re-boot')
+  assert.deepEqual(decideGraphReturn(facts({
+    ...ok, lastRebootAt: 1_000_000 - GRAPH_RETURN_REBOOT_RETRY_MS,
+  })), { kind: 'reboot' },
+  'the retry window earns another re-boot even if the refused boot wrote no new record')
+})
+
+test('an ok record never re-boots a source that is not ready', () => {
+  const ok = { diagnostic: diagnostic('ok') }
+  for (const phase of ['connecting', 'starting', 'error', 'stopped', undefined]) {
+    assert.deepEqual(decideGraphReturn(facts({ ...ok, phase })), { kind: 'none' }, 'phase=' + String(phase))
+  }
 })
 
 test('only an attempted-and-unanswered clean boot is in scope — the gate precedes the ok branch', () => {
@@ -82,6 +91,50 @@ test('only an attempted-and-unanswered clean boot is in scope — the gate prece
   assert.deepEqual(decideGraphReturn(facts({ ...ok, shell: { ...graphless, booted: false } })), { kind: 'none' })
   assert.deepEqual(decideGraphReturn(facts({ ...ok, shell: { ...graphless, error: 'boot failed' } })), { kind: 'none' })
   assert.deepEqual(decideGraphReturn(facts({ ...ok, shell: undefined })), { kind: 'none' })
+})
+
+test('a pass probes at most the per-pass quota and rotates without starving', () => {
+  const ids = ['s1', 's2', 's3', 's4', 's5']
+  const at = 1_000_000
+  const base = {
+    servers: ids.map(id => ({ id, phase: 'ready' })),
+    shells: Object.fromEntries(ids.map(id => [id, graphless])) as GraphReturnPassFacts['shells'],
+    diagnostics: Object.fromEntries(ids.map(id => [id, diagnostic('not-injected')])) as GraphReturnPassFacts['diagnostics'],
+    acted: new Map<string, number>(),
+    nowMs: at,
+  }
+  let probedAt = new Map<string, number>()
+  const waves: string[][] = []
+  for (let index = 0; index < 4; index += 1) {
+    const plan = planGraphReturn({ ...base, probedAt })
+    waves.push([...plan.probes])
+    probedAt = plan.probedAt
+    assert.ok(plan.probes.length <= 2, 'the per-pass quota holds')
+  }
+  assert.deepEqual(waves[0], ['s1', 's2'], 'the head of the due set goes first')
+  assert.deepEqual(waves[1], ['s3', 's4'], 'the next pass rotates to the deferred sources')
+  assert.deepEqual(waves[2], ['s5'], 'the tail is reached without waiting out the interval')
+  assert.deepEqual(waves[3], [], 'once every due source is stamped the pass is empty')
+})
+
+test('the quota rotates on the 60s timer cadence (no starvation without state churn)', () => {
+  const ids = ['s1', 's2', 's3', 's4', 's5']
+  let probedAt = new Map<string, number>()
+  const waves: string[][] = []
+  for (const nowMs of [0, 60_000, 120_000]) {
+    const plan = planGraphReturn({
+      servers: ids.map(id => ({ id, phase: 'ready' })),
+      shells: Object.fromEntries(ids.map(id => [id, graphless])) as GraphReturnPassFacts['shells'],
+      diagnostics: Object.fromEntries(ids.map(id => [id, diagnostic('not-injected')])) as GraphReturnPassFacts['diagnostics'],
+      acted: new Map(),
+      nowMs,
+      probedAt,
+    })
+    probedAt = plan.probedAt
+    waves.push([...plan.probes])
+    assert.ok(plan.probes.length <= 2, 'the per-pass quota holds on the timer cadence too')
+  }
+  assert.equal(new Set(waves.flat()).size, 5, 'every due source is probed within three cadenced passes')
 })
 
 const pass = (over: Partial<GraphReturnPassFacts> = {}): GraphReturnPassFacts => ({
@@ -103,7 +156,43 @@ test('the planner stamps a mark only in the branch that decides the action', () 
   assert.deepEqual(again.probes, [], 'the stamp is what bounds the next pass — no caller can set it early')
   const healed = planGraphReturn(pass({ diagnostics: { 'ssh-a': diagnostic('ok', 42) } }))
   assert.deepEqual(healed.reboots, [{ id: 'ssh-a', updatedAt: 42 }])
-  assert.equal(healed.acted.get('ssh-a'), 42, 'the acted mark is stamped with the consumed record')
+  assert.equal(healed.acted.get('ssh-a'), 1_000_000, 'the acted mark is the re-boot time')
+})
+
+test('a pass re-boots at most the per-pass quota', () => {
+  const ids = ['s1', 's2', 's3', 's4', 's5']
+  const base = {
+    servers: ids.map(id => ({ id, phase: 'ready' })),
+    shells: Object.fromEntries(ids.map(id => [id, graphless])) as GraphReturnPassFacts['shells'],
+    diagnostics: Object.fromEntries(ids.map(id => [id, diagnostic('ok')])) as GraphReturnPassFacts['diagnostics'],
+    probedAt: new Map<string, number>(),
+    acted: new Map<string, number>(),
+    nowMs: 1_000_000,
+  }
+  const first = planGraphReturn(base)
+  assert.deepEqual(first.reboots.map(reboot => reboot.id), ['s1', 's2'])
+  assert.equal(first.acted.size, 2)
+  const second = planGraphReturn({ ...base, acted: first.acted })
+  assert.deepEqual(second.reboots.map(reboot => reboot.id), ['s3', 's4'])
+  const third = planGraphReturn({ ...base, acted: second.acted })
+  assert.deepEqual(third.reboots.map(reboot => reboot.id), ['s5'])
+})
+
+test('reboot candidates rotate by recency so a persistent head cannot starve the tail', () => {
+  const ids = ['s1', 's2', 's3', 's4', 's5']
+  const nowMs = 1_000_000
+  const base = {
+    servers: ids.map(id => ({ id, phase: 'ready' })),
+    shells: Object.fromEntries(ids.map(id => [id, graphless])) as GraphReturnPassFacts['shells'],
+    diagnostics: Object.fromEntries(ids.map(id => [id, diagnostic('ok')])) as GraphReturnPassFacts['diagnostics'],
+    probedAt: new Map<string, number>(),
+    acted: new Map<string, number>([['s1', nowMs - 120_000], ['s2', nowMs - 120_000]]),
+    nowMs,
+  }
+  const first = planGraphReturn(base)
+  assert.deepEqual(first.reboots.map(reboot => reboot.id), ['s3', 's4'], 'never-rebooted sources go first')
+  const second = planGraphReturn({ ...base, acted: first.acted })
+  assert.deepEqual(second.reboots.map(reboot => reboot.id), ['s5', 's1'], 'oldest rebooted sources rotate next')
 })
 
 test('both marks converge on retirement, including an acted entry whose probe mark is gone', () => {

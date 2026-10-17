@@ -5,7 +5,7 @@
  * 游标幂等、serviceable、通道订阅缝的 stale/证据/生命周期语义、**源文本锁步**（对着
  * control-plane/src/session-state-protocol.ts 钉共享字面量）。
  */
-import { test } from 'node:test'
+import { beforeEach, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -28,9 +28,19 @@ import {
 import { PAGE_CHANNEL_KEEPALIVE_EVENT } from '../../../dsh-chamber-client-core/src/page-channel.ts'
 import { readEvidenceLog, resetEvidenceLogForTests } from '../../../dsh-chamber-client-core/src/evidence-log.ts'
 import { noteFocus, resetPageScheduleForTests } from '../../../dsh-chamber-client-core/src/page-schedule.ts'
+import {
+  acquireHttpBudget,
+  configureHttpBudgetForTests,
+  evictHttpBudgetSource,
+  resetHttpBudgetForTests,
+} from '../../../dsh-chamber-client-core/src/http-budget.ts'
 import { sourceSessionFactsMode } from '../../src/session-facts-mode.ts'
 import { factsChannelOf } from '../../src/completion-observation.ts'
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
+
+// 探测现在经页面级 HTTP 预算（design 26 §D7）：deferred fetch 永不结算的用例会
+// 留下占用的槽位，逐用例复位预算，避免跨用例互相饿死。
+beforeEach(() => { resetHttpBudgetForTests() })
 
 const SNAPSHOT = {
   protocol: 1,
@@ -229,6 +239,31 @@ test('a disabled answer after a healthy baseline keeps the rows (never an author
   assert.equal(snapshot.stale, true)
   assert.equal(isFactsUsable(snapshot), false)
   source.stop()
+})
+
+test('P0: a probe that never left the dispatch queue is not a gateway degradation', async () => {
+  resetHttpBudgetForTests()
+  const restore = configureHttpBudgetForTests({ totalMax: 1, localReserve: 0, queueMax: 8 })
+  const holder = await acquireHttpBudget({ sourceId: 'holder', kind: 'unary', lane: 'background' })
+  assert.equal(holder.kind, 'granted')
+  const { harness, source } = sourceOver([jsonResponse(200, { ...SNAPSHOT })], { reconnectMs: 5 })
+  try {
+    await new Promise(resolve => setTimeout(resolve, 30))
+    assert.equal(harness.calls(), 0, 'a queued probe never reaches fetch')
+    assert.equal(source.getSnapshot(), undefined, 'no observation means no degraded fact')
+    // Eviction (the only unscheduled path for an undeadlined probe) must re-arm
+    // the bounded probe ladder, not kill the facts channel (review M1/M3).
+    assert.equal(evictHttpBudgetSource('gw-verdict'), 1)
+    await new Promise(resolve => setTimeout(resolve, 30))
+    assert.equal(harness.calls(), 0, 'the retry queues behind the held slot')
+    if (holder.kind === 'granted') holder.slot.release()
+    await waitFor(() => source.getSnapshot()?.verdict === 'ok')
+    assert.equal(harness.calls(), 1, 'once a slot frees the retried probe dispatches')
+  } finally {
+    source.stop()
+    resetHttpBudgetForTests()
+    restore()
+  }
 })
 
 test('F2: a plain 5xx is unavailable (never legacy) and schedules a bounded reprobe', async () => {
@@ -864,8 +899,8 @@ test('a subscription failure inside an unscheduled window is booked=false (same 
     assert.equal(entries.length, 1)
     assert.equal(entries[0].verdict, 'unscheduled')
     assert.equal(entries[0].booked, false)
-    // 免除的是故障记账，不是载体事实：没有活载体在推进 item，stale 仍必须立起。
-    assert.equal(source.getSnapshot()?.stale, true)
+    // 未调度窗口不做来源判定：stale 也不立起（下一个 admissible 观测再决定）。
+    assert.notEqual(source.getSnapshot()?.stale, true)
   } finally {
     resetPageScheduleForTests()
     source.stop()
@@ -1303,6 +1338,10 @@ test('G1: a stale generation refetch must not free the new generation refetch si
   })
   try {
     source.update({ fingerprint: 'f1', connected: true })
+    // Dispatch now goes through the page-level budget (one async admission step
+    // before fetch), so wait for the request instead of assuming it started
+    // synchronously.
+    await waitFor(() => probe.calls() === 1)
     probe.resolve(0, SSE_PROBE_BODY)
     await waitFor(() => channel.liveCount() === 1)
     // 坏帧 ⇒ 旧代整量对账 R1 在途（refetchInFlight 立起）。

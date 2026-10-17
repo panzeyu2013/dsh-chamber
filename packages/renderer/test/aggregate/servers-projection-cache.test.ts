@@ -13,6 +13,7 @@ import {
   serversProjectionSignature,
   type ChamberServerAggregate,
   type InstanceAggregate,
+  type InstanceRuntimeReport,
   type WorkspacePlacementLedger,
   type WorkspaceRemovalLedger,
 } from '@dsh-chamber/dsh-chamber-client-core'
@@ -67,6 +68,73 @@ function derive(f: Fixture, cache?: ServerProjectionCache): ChamberServerAggrega
   return deriveServers(READY_HEALTH, [], f.remoteInstances, f.remoteStatus, f.aggregates,
     {}, {}, {}, 'local', {}, {}, {}, {}, {}, {}, {}, 'zh', {}, cache)
 }
+
+/** 读时权威门（design 19 §3.5）用的最小快照：observer 的 transient degraded。 */
+function degradedFacts(): SessionFactsSnapshot {
+  return { verdict: 'degraded', degradation: 'unavailable', serviceable: false, stale: true } as unknown as SessionFactsSnapshot
+}
+
+function deriveWithFacts(
+  f: Fixture,
+  runtimeFacts: Record<string, InstanceRuntimeReport | undefined>,
+  sessionFacts: Record<string, SessionFactsSnapshot | undefined>,
+  cache?: ServerProjectionCache,
+): ChamberServerAggregate[] {
+  return deriveServers(READY_HEALTH, [], f.remoteInstances, f.remoteStatus, f.aggregates,
+    {}, runtimeFacts, {}, 'local', {}, {}, {}, {}, {}, {}, {}, 'zh', sessionFacts, cache)
+}
+
+test('facts authority: a producer-owned source is not degraded by the no-shell observer', () => {
+  const f = fixture()
+  const facts = degradedFacts()
+  const withProducer = deriveWithFacts(
+    f,
+    { local: { stale: false } as InstanceRuntimeReport },
+    { local: facts, [REMOTE_SOURCE_ID]: facts },
+  )
+  assert.equal(
+    withProducer.find(server => server.id === 'local')?.sessionFacts,
+    undefined,
+    'producer-owned local must not inherit the observer degraded mode',
+  )
+  assert.equal(
+    withProducer.find(server => server.id === REMOTE_SOURCE_ID)?.sessionFacts,
+    'degraded',
+    'an unmounted source keeps the observer mode',
+  )
+
+  const withoutProducer = deriveWithFacts(f, {}, { local: facts })
+  assert.equal(
+    withoutProducer.find(server => server.id === 'local')?.sessionFacts,
+    'degraded',
+    'once the producer runtime row is gone the observer is authoritative again',
+  )
+
+  const staleProducer = deriveWithFacts(f, { local: { stale: true } as InstanceRuntimeReport }, { local: facts })
+  assert.equal(
+    staleProducer.find(server => server.id === 'local')?.sessionFacts,
+    'degraded',
+    'a stale residual runtime row does not own the facts',
+  )
+
+  // Version facts stay visible even when the producer owns the rows (review m9).
+  const versionFact = { ...degradedFacts(), degradation: 'forward-skew' } as SessionFactsSnapshot
+  const withVersionFact = deriveWithFacts(f, { local: { stale: false } as InstanceRuntimeReport }, { local: versionFact })
+  assert.equal(
+    withVersionFact.find(server => server.id === 'local')?.sessionFacts,
+    'degraded',
+    'a forward-skew version fact is not masked by the producer authority gate',
+  )
+
+  const cache = createServerProjectionCache()
+  const cachedFirst = deriveWithFacts(f, { local: { stale: false } as InstanceRuntimeReport }, { local: facts }, cache)
+  const cachedSecond = deriveWithFacts(f, {}, { local: facts }, cache)
+  assert.notEqual(
+    cachedSecond.find(server => server.id === 'local'),
+    cachedFirst.find(server => server.id === 'local'),
+    'authority flip invalidates the per-source projection cache',
+  )
+})
 
 test('projection cache: deriveServers reuses unchanged sources and rebuilds only the changed one', () => {
   const f = fixture()

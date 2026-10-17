@@ -44,10 +44,15 @@ test('stale or unserviceable facts can never be reported as full', () => {
 })
 
 test('the source projection maps the mode onto every aggregate entry, after the entry literal', () => {
-  assert.match(SERVERS, /const factsMode = sourceSessionFactsMode\(sessionFacts\[id\]\)\n\s*if \(factsMode !== undefined\) entry\.sessionFacts = factsMode/)
+  assert.match(SERVERS, /const factsMode = sourceSessionFactsMode\(sessionFacts\[id\]\)/)
+  // 事实权威门（design 19 §3.5）投影仍是两步：probe 档位 → producer 权威门（载波瞬态才压）。
+  assert.match(SERVERS, /const presentedFactsMode = presentedSessionFactsMode\(/)
+  assert.match(SERVERS, /sessionFacts\[id\],/)
+  assert.match(SERVERS, /producerOwnsSessionFacts\(runtimeFacts\[id\]\)/)
+  assert.match(SERVERS, /if \(presentedFactsMode !== undefined\) entry\.sessionFacts = presentedFactsMode/)
   // 位置纪律：赋值必须在 entry 字面量之后（TDZ），且在 push 帮助函数内（local/远端/网关全覆盖）。
   const entryLiteral = SERVERS.indexOf('const entry: ChamberServerAggregate = {')
-  const assignment = SERVERS.indexOf('entry.sessionFacts = factsMode')
+  const assignment = SERVERS.indexOf('entry.sessionFacts = presentedFactsMode')
   assert.ok(entryLiteral > 0 && assignment > entryLiteral, 'assignment must come after the entry literal')
 })
 

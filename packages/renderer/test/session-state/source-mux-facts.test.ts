@@ -33,6 +33,11 @@ import {
 import { isFactsDecisionUsable } from '../../src/session-facts-source.ts'
 // 证据账本的唯一家（design 14 §D4）：恢复证据的落账时机与原因清空在这里被钉死。
 import { readEvidenceLog, resetEvidenceLogForTests } from '../../../dsh-chamber-client-core/src/evidence-log.ts'
+import {
+  acquireHttpBudget,
+  configureHttpBudgetForTests,
+  resetHttpBudgetForTests,
+} from '../../../dsh-chamber-client-core/src/http-budget.ts'
 
 const SOURCE = readFileSync(fileURLToPath(new URL('../../src/source-mux-facts.ts', import.meta.url)), 'utf8')
 
@@ -1804,6 +1809,49 @@ test('B7: baseline and follow rpc deadlines surface as failures instead of hangi
       'a timed-out follow stream must be cancelled')
   } finally {
     facts.stop()
+  }
+})
+
+/** P0（design 14 §D4）：排队到期 = 从未派发 = 页面本地事实，不得记成来源故障。 */
+test('P0: a baseline queued past its deadline is not a source fact', async () => {
+  resetEvidenceLogForTests()
+  const restore = configureHttpBudgetForTests({ totalMax: 1, localReserve: 0, queueMax: 8 })
+  const holder = await acquireHttpBudget({ sourceId: 'remote-holder', kind: 'unary', lane: 'background' })
+  assert.equal(holder.kind, 'granted')
+  let fetchCalls = 0
+  const sockets: FakeSocket[] = []
+  const facts = createSourceMuxFacts({
+    sourceId: 'local', origin: 'http://cp', onSnapshot: () => {},
+    baselineTimeoutMs: 25,
+    openSocket: () => { const s = new FakeSocket(); sockets.push(s); return s },
+    fetchImpl: ((_url: string, init?: { body?: unknown }) => {
+      fetchCalls += 1
+      const body = JSON.parse(String(init?.body ?? '{}')) as { rpcId: string }
+      return Promise.resolve({
+        ok: true, status: 200,
+        json: async () => ({ type: 'server-response', rpcId: body.rpcId, result: { ok: true, value: { items: [] } } }),
+      })
+    }) as never,
+  })
+  try {
+    facts.start()
+    sockets[0].open()
+    await new Promise(resolve => setTimeout(resolve, 80))
+    assert.equal(fetchCalls, 0, 'a queued request must never reach fetch')
+    assert.equal(facts.status().baselineFailures, 0, 'non-dispatch must not book a source failure')
+    const nonDispatch = readEvidenceLog().filter(entry => entry.owner === 'mux-facts' && entry.verdict === 'unscheduled')
+    assert.ok(nonDispatch.length >= 1, 'the non-dispatch fact is recorded')
+    assert.equal(nonDispatch.every(entry => entry.booked === false), true)
+    // Recovery: once a slot frees, the retry dispatches and establishes a baseline.
+    if (holder.kind === 'granted') holder.slot.release()
+    facts.reconcile()
+    await new Promise(resolve => setTimeout(resolve, 40))
+    assert.ok(fetchCalls >= 1, 'a granted retry reaches fetch')
+    assert.ok(facts.status().baselines >= 1, 'the retry establishes a trusted baseline')
+  } finally {
+    facts.stop()
+    resetHttpBudgetForTests()
+    restore()
   }
 })
 

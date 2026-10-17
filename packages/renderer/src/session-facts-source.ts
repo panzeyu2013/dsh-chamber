@@ -64,6 +64,7 @@ import { isWatermark } from './watermark.ts'
 import { isPlainRecord } from './plain-record.ts'
 import { hadSchedulingGap, recordEvidence } from '@dsh-chamber/dsh-chamber-client-core'
 import { isPageChannelKeepaliveItem } from '@dsh-chamber/dsh-chamber-client-core/page-channel'
+import { acquireHttpBudget, httpBudgetLaneFor, httpBudgetLeaseFor, type HttpBudgetUnscheduledReason } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
 import { classifyObservation, isAdmissible } from '@dsh-chamber/dsh-stream-state'
 
 export type SessionFactsVerdict = 'ok' | 'legacy-gateway' | 'degraded'
@@ -248,6 +249,14 @@ export function isFactsDecisionUsable(snapshot: SessionFactsSnapshot): boolean {
 export type SessionFactsProbeOutcome =
   | { kind: 'response'; status: number; body?: unknown }
   | { kind: 'failure'; reason: 'timeout' | 'network' }
+
+/** One probe attempt. unscheduled means the request never left chamber's
+ *  dispatch budget (design 26 §D7): it is NOT an observation and can never reach
+ *  classifySessionFactsProbe (type-level, not a caller convention), and the
+ *  caller must re-arm its bounded probe ladder instead of marking the source. */
+export type SessionFactsProbeAttempt =
+  | SessionFactsProbeOutcome
+  | { kind: 'unscheduled'; reason: HttpBudgetUnscheduledReason | 'scheduling-gap'; queuedMs: number }
 
 /** 粗分类结果。degradation 是诊断枚举，不是用户文案。 */
 export interface SessionFactsProbe {
@@ -841,7 +850,21 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
    * 唯一——本函数只拥有 carrier。非 2xx 与坏 JSON 体以 status/body 交回、**永不 throw**；
    * 超时经 abort 归入 failure('timeout')。
    */
-  const observeProbe = async (): Promise<SessionFactsProbeOutcome> => {
+  const observeProbe = async (): Promise<SessionFactsProbeAttempt> => {
+    const probeStartedAt = now()
+    // Budget gate (design 26 §D7): wait in chamber's own dispatcher and start the
+    // 5s deadline only at dispatch, so a same-origin pool backlog cannot be
+    // recorded as the gateway source being degraded.
+    const budget = await acquireHttpBudget({
+      sourceId: options.sourceId,
+      kind: 'unary',
+      lane: httpBudgetLaneFor(options.sourceId),
+      leaseMs: httpBudgetLeaseFor(SESSION_FACTS_PROBE_TIMEOUT_MS),
+      label: 'gateway-facts-probe',
+    })
+    if (budget.kind === 'unscheduled') {
+      return { kind: 'unscheduled', reason: budget.reason, queuedMs: budget.queuedMs }
+    }
     const timeout = withTimeout()
     try {
       const response = await fetchImpl(urlFor(SESSION_FACTS_ROUTE), {
@@ -855,9 +878,22 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
       return { kind: 'response', status: response.status, ...(body === undefined ? {} : { body }) }
     } catch (error) {
       // 唯一 abort 来源是 withTimeout 的 deadline ⇒ AbortError 即 timeout，其余是 network。
+      if (isAbortError(error)) {
+        // Page throttling is not a source answer: leave the facts untouched and retry.
+        if (hadSchedulingGap(probeStartedAt, now())) {
+          recordEvidence('gateway-facts', 'unscheduled', {
+            source: options.sourceId, windowMs: now() - probeStartedAt, reason: 'scheduling-gap',
+          }, false)
+          return { kind: 'unscheduled', reason: 'scheduling-gap', queuedMs: 0 }
+        }
+        recordEvidence('gateway-facts', 'deadline', {
+          source: options.sourceId, windowMs: now() - probeStartedAt,
+        }, true)
+      }
       return { kind: 'failure', reason: isAbortError(error) ? 'timeout' : 'network' }
     } finally {
       timeout.done()
+      budget.slot.release()
     }
   }
 
@@ -963,6 +999,12 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     try {
       const outcome = await observeProbe()
       if (state.stopped || !state.connected || generation !== state.generation) return
+      // Never dispatched: not an observation. Leave the current facts untouched
+      // and re-arm the bounded probe ladder (the producer's own backoff owns it).
+      if (outcome.kind === 'unscheduled') {
+        scheduleProbe(reconnectMs)
+        return
+      }
       const { probe, parsed } = publishProbe(outcome)
       if (probe.verdict === 'ok' && parsed !== null) {
         startDelivery(parsed.mode, parsed.features)
@@ -1037,12 +1079,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     const at = now()
     // 与旧的建连 deadline 同一分类纪律：窗口内页面确实没被调度过 ⇒ unscheduled，
     // booked=false（页面自身调度的事实不能记成来源故障）；否则 channel/deadline ⇒ booked=true。
-    const verdict = classifyObservation({
-      outcome: 'error',
-      errorName: code,
-      errorMessage: message,
-      schedulingGap: hadSchedulingGap(windowStart, at),
-    })
+    const schedulingGap = hadSchedulingGap(windowStart, at)
     const detail = {
       source: options.sourceId,
       topic: 'page-channel sessionFacts',
@@ -1050,6 +1087,14 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
       message,
       windowMs: at - windowStart,
     }
+    // A throttled page made no observation: never stale the source facts for it.
+    if (schedulingGap) {
+      recordEvidence('facts-stream', 'unscheduled', detail, false)
+      diagnostic('[session-facts] channel failed during an unscheduled window ('
+        + code + '); channel resubscribes, facts untouched', new Error(message))
+      return
+    }
+    const verdict = classifyObservation({ outcome: 'error', errorName: code, errorMessage: message })
     recordEvidence('facts-stream', verdict, detail, isAdmissible(verdict))
     diagnostic(
       '[session-facts] session-facts channel failed (' + code + '); channel resubscribes, awaiting an admissible success',
@@ -1161,6 +1206,11 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     try {
       const outcome = await observeProbe()
       if (state.stopped || generation !== state.generation) return
+      // Never dispatched: not an observation (see probeOnce); re-arm the ladder.
+      if (outcome.kind === 'unscheduled') {
+        scheduleProbe(reconnectMs)
+        return
+      }
       const { probe, parsed } = publishProbe(outcome)
       if (probe.verdict === 'ok' && parsed !== null) {
         startDelivery(parsed.mode, parsed.features)

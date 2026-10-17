@@ -5,6 +5,8 @@
  * pending source matters — view switching is last-intent-wins and the path itself is never consumed.
  */
 
+import { evictHttpBudgetSource } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
+
 export interface DeepLinkActivationDecision {
   /** Remote source held until the first authoritative roster settles. */
   pendingSourceId: string | null
@@ -116,8 +118,19 @@ export class SourceOwnershipRegistry {
     return token !== null && this.#current.get(token.sourceId) === token
   }
 
-  retire(sourceIds: Iterable<string>): void {
-    for (const sourceId of sourceIds) this.#current.delete(sourceId)
+  /**
+   * Retire owners for the given source ids. Dropping the sources' never-dispatched
+   * budget requests is opt-in (`evict: true`) because this class is also reused for
+   * request-epoch invalidation (aggregate owners), whose retire() fires on ordinary
+   * snapshot pushes and mutation refreshes and must never cancel another plane's
+   * queued reads (review N1). Shell reclaim does not evict either (review m5);
+   * disposeAllShells owns the page-teardown case.
+   */
+  retire(sourceIds: Iterable<string>, options?: { evict?: boolean }): void {
+    for (const sourceId of sourceIds) {
+      this.#current.delete(sourceId)
+      if (options?.evict === true) evictHttpBudgetSource(sourceId)
+    }
   }
 
   get size(): number {

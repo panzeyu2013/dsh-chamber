@@ -41,6 +41,7 @@ import {
 import { readSafeModeFlag, SAFE_MODE_GLOBAL } from './safe-mode.ts'
 import { BundleLoadTimeoutError } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
 import { chamberBridge, describeThrown, type PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-core'
+import { evictHttpBudgetSource } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
 // 插件刷新收敛（design 09 §3.7 / design 15 §6）：重订阅式的 client 图重同步 +
 // 有界 restart 事实窗口；预算与流恢复的 document-reload 域独立。壳只做接线，
 // reload 闸门与 per-boot 栅栏在 plugin-refresh-control.ts（可单测）。
@@ -1294,11 +1295,15 @@ export function disposeAllShells(): void {
   const holders = [...entries]
   entries.clear()
   for (const [instanceId, holder] of holders) {
+    evictHttpBudgetSource(instanceId)
     void disposeHolder(instanceId, holder, 'all shells disposed')
     scheduleInstanceLifecycleOwnerCleanup(instanceId)
   }
   for (const [instanceId, gen] of bootGenerations) {
     cancelledBoots.set(instanceId, gen)
+    // Page teardown also drops a booting source's never-dispatched requests
+    // (the entry loop above only covers mounted holders).
+    evictHttpBudgetSource(instanceId)
     scheduleInstanceLifecycleOwnerCleanup(instanceId)
   }
   lastRequestedSession.clear()

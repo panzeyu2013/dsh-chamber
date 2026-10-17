@@ -24,6 +24,7 @@ import type { PluginGraphDiagnostic, PluginGraphDiagnosticState } from '@dsh-cha
 import { hadSchedulingGap, recordEvidence } from '@dsh-chamber/dsh-chamber-client-core'
 import { classifyObservation, isAdmissible } from '@dsh-chamber/dsh-stream-state'
 import { postUnary, type UnaryPostOutcome } from '@dsh-chamber/dsh-chamber-client-core/wire-common'
+import { HttpBudgetUnscheduledError, httpBudgetLaneFor, httpBudgetLeaseFor, httpBudgetSourceIdFromProxyPath, runWithHttpBudget } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
 // Envelope classification SINGLE SOURCE, also consumed by client-core's
 // plugin-graph-recheck.ts: boot and self-heal verdicts for the same wire answer
 // can never drift.
@@ -112,16 +113,37 @@ class HostGraphChannelError extends Error {
  * everything it DOES check is upstream's own check.
  */
 
+/** The page budget refused the boot fetch: nothing was attempted and the source
+ *  got no chance to answer — never a graph gap (review round 3). */
+class HostGraphNotAttemptedError extends Error {
+  readonly name = 'HostGraphNotAttemptedError'
+}
+
 export async function fetchHostGraph(basePath: string): Promise<HostGraphRow[] | null> {
   // Shared transport: postUnary (bounded unary, 30s). The bare
   // crypto.randomUUID() rpcId stays explicit so its evaluation is inside this
   // try (a no-randomUUID environment folds the throw into the local wire error).
+  const budgetSource = httpBudgetSourceIdFromProxyPath(basePath)
   let outcome: UnaryPostOutcome
   try {
-    outcome = await postUnary(basePath, 'clientGraph/graph', {}, {
+    outcome = await runWithHttpBudget({
+      sourceId: budgetSource,
+      kind: 'unary',
+      lane: httpBudgetLaneFor(budgetSource),
+      leaseMs: httpBudgetLeaseFor(30_000),
+      // Per-attempt queue bound: the 10×500ms retry budget must stay bounded even
+      // when the page pool is saturated (review M1); refusal is "cannot judge yet".
+      queueDeadlineAt: Date.now() + 1_500,
+      label: 'host-graph:clientGraph/graph',
+    }, () => postUnary(basePath, 'clientGraph/graph', {}, {
       rpcId: crypto.randomUUID(),
-    })
+    }))
   } catch (error) {
+    // A budget refusal is page-local: nothing was attempted and the caller
+    // records ONE unbooked summary line per fetch run (never a graph gap).
+    if (error instanceof HttpBudgetUnscheduledError) {
+      throw new HostGraphNotAttemptedError(error.message)
+    }
     throw new Error(wrapGraphTransportFailure(error))
   }
   // Shared HTTP/envelope classification; only this boot-policy mapping stays
@@ -322,6 +344,11 @@ export function parseGraphRows(entries: readonly PluginGraphBaseEntry[]): HostGr
 }
 
 /** The shell-owned bundle loader, injected so pure-node tests can stub it (shell.ts owns the DOM). */
+/** Attempt-start window per serving pass. An already-dispatched attempt may
+ *  outlive it by its 1.5s queue bound + the carrier's own timeout; serving waits
+ *  are bounded separately (MAX_SERVING_WAITS / SERVING_HEAL_BUDGET_MS). */
+const GRAPH_FETCH_TOTAL_BUDGET_MS = 5_000
+
 export interface CollectExtraRowsDeps {
   loadModuleBundle(url: string): Promise<void>
   reportDiagnostic?(sourceId: string, diagnostic: PluginGraphDiagnostic): void
@@ -427,19 +454,42 @@ export async function collectExtraRows(
   /** Fetch the host graph on the bounded 503-retry budget, then (with a serving
    *  gate) wait for the source to serve and retry on a fresh budget. Resolves
    *  rows, a channel error (non-503 fails fast), or `starting: true` on timeout. */
-  const fetchWithRetry = async (): Promise<{ rows: HostGraphRow[] | null; error: unknown; starting: boolean; cancelled: boolean }> => {
+  const fetchWithRetry = async (): Promise<{ rows: HostGraphRow[] | null; error: unknown; starting: boolean; cancelled: boolean; notAttempted: boolean; reachedHost: boolean }> => {
     let lastError: unknown = null
+    /** True when at least one attempt reached the host (a 503/other answer, not a budget refusal). */
+    let reachedHost = false
     /** True when at least one attempt ended in a cancelled (non-admissible) observation. */
     let cancelled = false
+    /** True when at least one attempt was refused by the page budget before dispatch. */
+    let notAttempted = false
+    /** One unbooked ledger line per run, not one per refused attempt. */
+    let refusalRecorded = false
     let servingWaits = 0
     const healDeadline = deps.waitForServing === undefined ? 0 : Date.now() + SERVING_HEAL_BUDGET_MS
     for (;;) {
+      // Per serving window: a fresh budget after waitForServing is the documented
+      // 503 recovery path (design 09), so the bound must be re-armed each window.
+      const attemptDeadline = Date.now() + GRAPH_FETCH_TOTAL_BUDGET_MS
       for (let attempt = 1; attempt <= retry.attempts; attempt++) {
+        if (Date.now() >= attemptDeadline) break
         const attemptStartedAt = Date.now()
         try {
           const entries = await fetchHostGraph(basePath)
-          if (entries !== null) return { rows: entries, error: null, starting: false, cancelled: false }
+          if (entries !== null) return { rows: entries, error: null, starting: false, cancelled: false, notAttempted: false, reachedHost: true }
+          // null = 503 instance-unavailable: the host DID answer.
+          reachedHost = true
         } catch (error) {
+          // Budget refusal: no observation was made (provenance already recorded).
+          if (error instanceof HostGraphNotAttemptedError) {
+            notAttempted = true
+            if (!refusalRecorded) {
+              refusalRecorded = true
+              recordEvidence('host-graph', 'unscheduled', {
+                instance: instanceId, reason: error.message, windowMs: Date.now() - attemptStartedAt,
+              }, false)
+            }
+          } else {
+            reachedHost = true
           // The evidence classifier owns "is this a source fact?": a WebKit cancellation
           // (superseded) or a deadline that expired while the page was not scheduled
           // (unscheduled) is NOT one (design 14 §D4) — book nothing, retry in budget.
@@ -466,24 +516,40 @@ export async function collectExtraRows(
             // already consumed its 30s timeout; retrying would only stack them).
             recordEvidence('host-graph', verdict, detail, true)
             lastError = error
-            return { rows: null, error: lastError, starting: false, cancelled: false }
+            return { rows: null, error: lastError, starting: false, cancelled: false, notAttempted, reachedHost }
+          }
           }
         }
         if (attempt < retry.attempts) await retry.sleep(retry.delayMs)
+      }
+      // Only budget refusals and the host never answered: nothing was attempted,
+      // so waiting for `ready` cannot help (and must not take 10 serving waits).
+      if (notAttempted && !reachedHost) {
+        return { rows: null, error: null, starting: true, cancelled, notAttempted, reachedHost }
       }
       // Budget gone and the channel never answered non-503 → the source is still
       // starting: wait for it (App-bounded) and retry on a fresh budget.
       if (deps.waitForServing === undefined
         || servingWaits >= MAX_SERVING_WAITS
         || Date.now() >= healDeadline) {
-        return { rows: null, error: lastError, starting: true, cancelled }
+        return { rows: null, error: lastError, starting: true, cancelled, notAttempted, reachedHost }
       }
       servingWaits += 1
       const serving = await deps.waitForServing(instanceId)
-      if (!serving) return { rows: null, error: lastError, starting: true, cancelled }
+      if (!serving) return { rows: null, error: lastError, starting: true, cancelled, notAttempted, reachedHost }
     }
   }
   const firstFetch = await fetchWithRetry()
+  if (firstFetch.notAttempted && !firstFetch.reachedHost && firstFetch.rows === null && firstFetch.error === null) {
+    // 页内派发预算拒绝：来源从未得到说话机会 ⇒ 不写 graph-unreachable、不 onGraphUnavailable。
+    // 图回归探测会在预算恢复后重试；把页内拥塞写成来源缺口正是本任务要消灭的假事实。
+    const message = `instance ${instanceId} boot graph was not attempted: page dispatch budget saturated`
+    console.error(`[shell] instance ${instanceId} boot-graph deferred: ${message}`)
+    // Channel-class (not-injected) so the graph-return probe retries in 60s; shell.degraded
+    // stays null because onGraphUnavailable is NOT called (no source gap).
+    reportDiagnostic(instanceId, 'not-injected', { message }, deps.reportDiagnostic)
+    return []
+  }
   if (firstFetch.cancelled && firstFetch.rows === null) {
     // 预算在"只有取消"的情况下走完：来源从未得到说话的机会，因此关于它不能有任何结论。
     // 无图启动是合法形态（gateway/mobile 本来就没有图），既有 graph-return 探测会在图真的
@@ -654,10 +720,15 @@ export async function collectExtraRows(
   // (its fetched URL still names the old metadata rev) — or a transient 404 —
   // fails its row. Re-fetch the graph and reload at fresh URLs; only still-failing
   // rows fail the boot.
+  let deferredLoadFailure: { row: ExtraModuleRow; error: unknown } | undefined
   if (failedRows.length > 0) {
     const secondFetch = await fetchWithRetry()
     const keptFailures: { row: ExtraModuleRow; error: unknown }[] = []
     const recoveredRows: ExtraModuleRow[] = []
+    // A page-budget refusal / cancellation gives no fresh verdict: boot without the
+    // failed rows and keep their diagnostic, but never turn page queueing into a fatal.
+    const recoveryDeferred = secondFetch.error === null && secondFetch.rows === null
+      && (secondFetch.notAttempted || secondFetch.cancelled)
     if (secondFetch.error !== null || secondFetch.rows === null) {
       // No fresh verdict (channel failed again or budget ran out): keep all failures.
       keptFailures.push(...failedRows)
@@ -726,7 +797,20 @@ export async function collectExtraRows(
           message: failure.error instanceof Error ? failure.error.message : String(failure.error),
         }, deps.reportDiagnostic)
       }
-      throw keptFailures[0]!.error
+      if (recoveryDeferred) {
+        // Drop the un-recovered rows for THIS boot, but keep the loud fact: a later
+        // `ok` must never overwrite it (a silently missing plugin is worse than a
+        // named failure). Graph-return can still retry the graph later.
+        deferredLoadFailure = keptFailures[0]
+        const failedIds = new Set(keptFailures.map(failure => failure.row.id))
+        console.error(`[shell] instance ${instanceId} rows dropped (recovery fetch deferred by page budget): `
+          + [...failedIds].join(', '))
+        for (let index = rows.length - 1; index >= 0; index -= 1) {
+          if (failedIds.has(rows[index]!.id)) rows.splice(index, 1)
+        }
+      } else {
+        throw keptFailures[0]!.error
+      }
     }
   }
   // Recovery can record one more same-instance verdict: drop its row before the rows are
@@ -743,6 +827,15 @@ export async function collectExtraRows(
     reportDiagnostic(instanceId, 'restart-required', {
       pluginId: dropped.id,
       message: restartRequiredMessage(dropped.id),
+    }, deps.reportDiagnostic)
+  } else if (deferredLoadFailure !== undefined) {
+    // The recovery pass was deferred by the page budget and its row stayed unloaded:
+    // keep the named failure instead of reporting a clean ok (review round 4).
+    reportDiagnostic(instanceId, 'bundle-load-failed', {
+      pluginId: deferredLoadFailure.row.id,
+      message: deferredLoadFailure.error instanceof Error
+        ? deferredLoadFailure.error.message
+        : String(deferredLoadFailure.error),
     }, deps.reportDiagnostic)
   } else if (unsatisfiable !== null) {
     // A kept row's create-time require can never be answered (see

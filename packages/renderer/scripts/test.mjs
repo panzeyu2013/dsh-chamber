@@ -47,6 +47,8 @@ export const GROUPS = {
     // 证据有效性层：页面调度记录（rAF 心跳/焦点/可见性 → 调度缺口）与有界持久证据账本。
     'test/lifecycle/page-schedule.test.ts',
     'test/lifecycle/evidence-log.test.ts',
+    // 页面级同源 HTTP 预算：有界派发、local 保留槽、未派发到期=非来源事实、fail-open/kill switch。
+    'test/lifecycle/http-budget.test.ts',
     // 活实例 ctx 的客户端插件热同步：帧解析 / id 集 diff / 装-卸-rev 诊断 / 撤臂栅栏。
     'test/lifecycle/live-graph.test.ts',
     // 插件刷新收敛策略：结算→重订阅 + 有界 restart 窗口；订阅重放不得触发重载。
@@ -130,6 +132,8 @@ export const GROUPS = {
     'test/session-state/notification-ledger.test.ts',
     // SSH/dsh 远端的无壳观察者（$events + 每边沿一次 session/follow）。
     'test/session-state/source-mux-facts.test.ts',
+    // 事实权威门（design 19 §3.5）：producer 在位时观察者 degraded 不得投影为来源能力。
+    'test/session-state/facts-authority.test.ts',
     // 页面级会话恢复：整页 reload 后的会话流健康座位与恢复入口（我方可靠性轮）。
     'test/session-state/session-open-recovery.test.ts',
     'test/session-state/session-content-stall.test.ts',

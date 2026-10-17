@@ -18,6 +18,7 @@ import { DEFERRED_EXTRA_ROW_IDS } from '../../src/required-extra-rows.ts'
 // (a text regex over boot-rows.ts would pin spelling, not the coupling).
 import { MODULES_ID, UI_RENDERER_ID } from '../../../dsh-client-web/src/boot-rows.ts'
 import { normalize, stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
+import { acquireHttpBudget, configureHttpBudgetForTests, resetHttpBudgetForTests } from '../../../dsh-chamber-client-core/src/http-budget.ts'
 
 // Extra-bundle URLs are `/plugins/??<id>&rev=…` combos, so the fixture and the
 // main-path assertions must pin the combo form.
@@ -43,6 +44,52 @@ function stubFetch(t: TestContext, status: number, body: unknown): { calls: { ur
   t.after(() => { globalThis.fetch = original })
   return { calls }
 }
+
+test('collectExtraRows: a page-budget refusal is not a source graph gap', async (t) => {
+  resetHttpBudgetForTests()
+  const restore = configureHttpBudgetForTests({ totalMax: 1, localReserve: 0 })
+  const holder = await acquireHttpBudget({ sourceId: 'holder', kind: 'unary', lane: 'foreground' })
+  assert.equal(holder.kind, 'granted')
+  stubFetchImpl(t, (() => { throw new Error('must not fetch') }) as unknown as typeof fetch)
+  const diagnostics: string[] = []
+  const gaps: string[] = []
+  try {
+    const rows = await collectExtraRows('budget-blocked', '/api/i/budget-blocked', {
+      loadModuleBundle: async () => { throw new Error('no rows to load') },
+      reportDiagnostic: (_sourceId, diagnostic) => {
+        diagnostics.push(String((diagnostic as { state?: unknown }).state))
+      },
+      onGraphUnavailable: (_message, kind) => { gaps.push(kind) },
+      retry: { attempts: 2, delayMs: 0, sleep: async () => {} },
+    })
+    assert.deepEqual(rows, [])
+    assert.deepEqual(diagnostics, ['not-injected'], 'a page-local refusal is recorded as probeable, never a gap')
+    assert.deepEqual(gaps, [], 'no source gap for a never-attempted boot fetch')
+  } finally {
+    if (holder.kind === 'granted') holder.slot.release()
+    resetHttpBudgetForTests()
+    restore()
+  }
+})
+
+test('collectExtraRows: a 503 window re-arms the graph budget after the serving gate', async (t) => {
+  resetHttpBudgetForTests()
+  const { calls } = stubFetch(t, 503, { code: 'instance_unavailable', error: 'not ready' })
+  const originalNow = Date.now
+  let fakeNow = originalNow()
+  Date.now = () => fakeNow
+  t.after(() => { Date.now = originalNow })
+  let waits = 0
+  await collectExtraRows('local', '/api/i/local', {
+    loadModuleBundle: async () => { throw new Error('no rows to load') },
+    reportDiagnostic: () => {},
+    onGraphUnavailable: () => {},
+    waitForServing: async () => { waits += 1; return true },
+    retry: { attempts: 10, delayMs: 600, sleep: async (ms) => { fakeNow += ms } },
+  })
+  assert.ok(waits >= 1, 'the 503 path reaches the serving gate')
+  assert.ok(calls.length > 10, 'the serving gate must re-arm a fresh attempt budget (calls=' + String(calls.length) + ')')
+})
 
 test('collectExtraRows: a cancelled observation never settles a gap', async (t) => {
   // WebKit 把被打断的 fetch 报成 `TypeError: Fetch is aborted`（挂载被取代 / 我们自己的拆除 /

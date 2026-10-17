@@ -15,6 +15,39 @@ import {
   settlePendingDeepLinkActivation,
   subscribeRosterBeforeRefresh,
 } from '../../src/deep-link-activation.ts'
+import {
+  acquireHttpBudget,
+  configureHttpBudgetForTests,
+  resetHttpBudgetForTests,
+} from '../../../dsh-chamber-client-core/src/http-budget.ts'
+
+test('eviction is opt-in: epoch retirement never cancels queued budget requests', async () => {
+  resetHttpBudgetForTests()
+  const restore = configureHttpBudgetForTests({ totalMax: 1, localReserve: 0, queueMax: 8 })
+  try {
+    const registry = new SourceOwnershipRegistry(['live'])
+    const holder = await acquireHttpBudget({ sourceId: 'live', kind: 'unary', lane: 'foreground' })
+    assert.equal(holder.kind, 'granted')
+    const queued = acquireHttpBudget({ sourceId: 'live', kind: 'unary', lane: 'foreground' })
+    await new Promise(resolve => setTimeout(resolve, 5))
+    // Request-epoch retirement is reused by aggregate owners and fires on ordinary
+    // pushes/mutations: it must not cancel another plane's queued reads (review N1).
+    registry.retire(['live'])
+    let settled = false
+    void queued.then(() => { settled = true })
+    await new Promise(resolve => setTimeout(resolve, 5))
+    assert.equal(settled, false, 'a plain retire() must not cancel queued reads')
+    // The lifecycle authority opts in explicitly.
+    registry.retire(['live'], { evict: true })
+    const dropped = await queued
+    assert.equal(dropped.kind, 'unscheduled')
+    if (dropped.kind === 'unscheduled') assert.equal(dropped.reason, 'source-retired')
+    if (holder.kind === 'granted') holder.slot.release()
+  } finally {
+    resetHttpBudgetForTests()
+    restore()
+  }
+})
 
 test('authoritative source proof accepts only local or 32-byte lowercase remote hex', () => {
   const proof = 'ab'.repeat(32)

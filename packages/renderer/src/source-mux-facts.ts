@@ -33,6 +33,7 @@
  * 同一套完成判定）。
  */
 import { hadSchedulingGap, isRecord, recordEvidence } from '@dsh-chamber/dsh-chamber-client-core'
+import { HttpBudgetUnscheduledError, acquireHttpBudget, httpBudgetLaneFor, httpBudgetLeaseFor } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
 import type {
   SessionFactsCompletedAtSource, SessionFactsRow, SessionFactsSnapshot, SessionFactsTurnEnd,
 } from './session-facts-source.ts'
@@ -1088,6 +1089,22 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
    */
   async function rpc(method: string, payload: unknown, timeoutMs: number): Promise<unknown> {
     const rpcId = 'mux-' + Math.random().toString(36).slice(2, 12)
+    // Budget gate: only a GRANTED slot may call fetch. A request whose deadline
+    // expires while it is still queued in chamber's own dispatcher was never
+    // given a chance — it must surface as HttpBudgetUnscheduledError, never as a
+    // source deadline (design 14 §D4; the browser pool itself is unobservable).
+    const budget = await acquireHttpBudget({
+      sourceId: deps.sourceId,
+      kind: 'unary',
+      lane: httpBudgetLaneFor(deps.sourceId),
+      queueDeadlineAt: Date.now() + timeoutMs,
+      leaseMs: httpBudgetLeaseFor(timeoutMs),
+      label: 'mux:' + method,
+    })
+    if (budget.kind === 'unscheduled') {
+      throw new HttpBudgetUnscheduledError(budget.reason, budget.queuedMs)
+    }
+    const budgetSlot = budget.slot
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | null = null
     const expired = new Promise<never>((_resolve, reject) => {
@@ -1120,6 +1137,7 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       return body.result.value
     } finally {
       if (timer !== null) clearTimeout(timer)
+      budgetSlot.release()
     }
   }
 
@@ -1273,11 +1291,16 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       // 失败 = 本次连接事实不可信（不能静默：必须能区分「没完成」与「观察者坏了」）。
       // 但**只有有效观测**才算来源事实：页面被节流/挂起时墙钟 deadline 会先到期，
       // 那不是来源没答，是页面没被调度（design 14 §D4 证据有效性层）。
+      // Proven non-dispatch (still queued in chamber's own budget when the
+      // deadline fired) maps to the classifier's TimeoutError+dispatched=false
+      // shape: a page-local artefact that books nothing, never a source failure.
+      const neverDispatched = error instanceof HttpBudgetUnscheduledError
       const verdict = classifyObservation({
         outcome: 'error',
-        errorName: error instanceof Error ? error.name : undefined,
+        errorName: neverDispatched ? 'TimeoutError' : (error instanceof Error ? error.name : undefined),
         errorMessage: failureText(error),
         schedulingGap: hadSchedulingGap(startedAt, now()),
+        dispatched: neverDispatched ? false : true,
       })
       const detail = {
         source: deps.sourceId,
@@ -1285,6 +1308,8 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
         budgetMs: baselineTimeoutMs,
         windowMs: now() - startedAt,
         reason: failureText(error),
+        dispatched: !neverDispatched,
+        ...(neverDispatched ? { queuedMs: error.queuedMs, queueReason: error.reason } : {}),
       }
       if (!isAdmissible(verdict)) {
         recordEvidence('mux-facts', verdict, detail, false)

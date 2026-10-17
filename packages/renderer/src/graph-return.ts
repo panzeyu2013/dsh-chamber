@@ -22,14 +22,18 @@
  *  - `reboot`: when the diagnostic turns `ok` while the settled shell still reports
  *    `graphAnswered === false`, re-boot that instance once per distinct `ok` record — the fresh
  *    boot fetches the graph, loads the extra rows and arms live sync.
- * Bounds are structural: a re-boot that still finds no graph writes a fresh non-`ok` record (no
- * second fire), and an answered boot leaves `graphAnswered === true` (out of scope).
+ * A re-boot can itself be deferred by the page budget and write no fresh diagnostic, so its
+ * bound is TIME-based (at most one per GRAPH_RETURN_REBOOT_RETRY_MS) and capped per pass
+ * (GRAPH_RETURN_REBOOT_PER_PASS); an answered boot leaves graphAnswered === true (out of scope).
  */
 import type { PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-core'
 import type { ShellState } from './shell.ts'
 
 /** Minimum spacing between two channel re-checks of one graph-less source. */
 export const GRAPH_RETURN_PROBE_INTERVAL_MS = 60_000
+
+/** Minimum spacing between two re-boots of one still-graphless source. */
+export const GRAPH_RETURN_REBOOT_RETRY_MS = 60_000
 
 /** The settled-shell slice this policy reads (a Pick, so a field rename cannot drift). */
 export type GraphReturnShellFacts = Pick<ShellState, 'booted' | 'error' | 'degraded' | 'graphAnswered'>
@@ -45,8 +49,8 @@ export interface GraphReturnFacts {
   nowMs: number
   /** When this source's last channel re-check fired (undefined = never). */
   lastProbeAt: number | undefined
-  /** The `updatedAt` of the `ok` record a re-boot already consumed (undefined = none). */
-  actedUpdatedAt: number | undefined
+  /** When this source's last re-boot fired (undefined = never). */
+  lastRebootAt: number | undefined
 }
 
 export type GraphReturnDecision =
@@ -62,9 +66,15 @@ export function decideGraphReturn(facts: GraphReturnFacts): GraphReturnDecision 
   // subscriber. Absent `graphAnswered` (safe mode / module-system failure) is never in scope.
   if (shell === undefined || shell.booted !== true || shell.error !== null
     || shell.degraded !== null || shell.graphAnswered !== false) return { kind: 'none' }
-  // The graph answers now: re-boot once per distinct `ok` record.
+  // The graph answers now: re-boot at most once per retry window (a boot that
+  // itself gets budget-deferred writes no fresh diagnostic, so a per-record bound
+  // would latch the source graphless forever).
   if (diagnostic?.state === 'ok') {
-    return diagnostic.updatedAt === facts.actedUpdatedAt ? { kind: 'none' } : { kind: 'reboot' }
+    if (facts.phase !== 'ready') return { kind: 'none' }
+    return facts.lastRebootAt !== undefined
+      && facts.nowMs - facts.lastRebootAt < GRAPH_RETURN_REBOOT_RETRY_MS
+      ? { kind: 'none' }
+      : { kind: 'reboot' }
   }
   // A channel-class record (`not-injected`, or a recheck that ran while the host was down and
   // wrote `graph-unreachable`): ask again, at most once per interval.
@@ -77,15 +87,30 @@ export function decideGraphReturn(facts: GraphReturnFacts): GraphReturnDecision 
 }
 
 /** One pass over every source: the App's inputs plus the two per-source marks. */
+/** Per-pass global probe quota: one pass may not fan out a unary per graphless
+ *  source (design 26 extension — the same-origin pool is shared). Deferred
+ *  sources keep their due state and are picked by the next pass (state-driven
+ *  passes make the rotation immediate; the 60s gate still bounds each source). */
+export const GRAPH_RETURN_PROBE_PER_PASS = 2
+
+/** Per-pass global re-boot quota (many simultaneous ok transitions must not
+ *  re-mount the whole fleet into the same saturated page budget). */
+export const GRAPH_RETURN_REBOOT_PER_PASS = 2
+
 export interface GraphReturnPassFacts {
   servers: readonly { id: string; phase: string | undefined }[]
   shells: Readonly<Record<string, GraphReturnShellFacts | undefined>>
   diagnostics: Readonly<Record<string, PluginGraphDiagnostic | undefined>>
   /** When each source's last probe fired. */
   probedAt: ReadonlyMap<string, number>
-  /** The `ok` record each source's last re-boot consumed. */
+  /** When each source's last re-boot fired. */
   acted: ReadonlyMap<string, number>
   nowMs: number
+  /** Override the per-pass quota (tests / future tuning); defaults to
+   *  {@link GRAPH_RETURN_PROBE_PER_PASS}. */
+  probePerPass?: number
+  /** Override the re-boot quota; defaults to {@link GRAPH_RETURN_REBOOT_PER_PASS}. */
+  rebootPerPass?: number
 }
 
 export interface GraphReturnPass {
@@ -114,6 +139,10 @@ export function planGraphReturn(facts: GraphReturnPassFacts): GraphReturnPass {
   }
   const probes: string[] = []
   const reboots: { id: string; updatedAt: number }[] = []
+  const rebootCandidates: { id: string; updatedAt: number; lastRebootAt: number }[] = []
+  const probePerPass = facts.probePerPass ?? GRAPH_RETURN_PROBE_PER_PASS
+  const rebootPerPass = facts.rebootPerPass ?? GRAPH_RETURN_REBOOT_PER_PASS
+  const due: { id: string; lastProbeAt: number }[] = []
   for (const server of facts.servers) {
     const diagnostic = facts.diagnostics[server.id]
     const decision = decideGraphReturn({
@@ -122,15 +151,39 @@ export function planGraphReturn(facts: GraphReturnPassFacts): GraphReturnPass {
       diagnostic,
       nowMs: facts.nowMs,
       lastProbeAt: probedAt.get(server.id),
-      actedUpdatedAt: acted.get(server.id),
+      lastRebootAt: acted.get(server.id),
     })
     if (decision.kind === 'probe') {
-      probedAt.set(server.id, facts.nowMs)
-      probes.push(server.id)
+      due.push({ id: server.id, lastProbeAt: probedAt.get(server.id) ?? Number.NEGATIVE_INFINITY })
     } else if (decision.kind === 'reboot' && diagnostic !== undefined) {
-      acted.set(server.id, diagnostic.updatedAt)
-      reboots.push({ id: server.id, updatedAt: diagnostic.updatedAt })
+      rebootCandidates.push({
+        id: server.id,
+        updatedAt: diagnostic.updatedAt,
+        lastRebootAt: acted.get(server.id) ?? Number.NEGATIVE_INFINITY,
+      })
     }
+  }
+  // Rotation by recency: the 60s interval equals the timer cadence, so a stable
+  // head order would re-claim the quota every pass and starve the tail (review
+  // M3/M4). Oldest due first; never-probed sources count as oldest.
+  due.sort((left, right) => (
+    left.lastProbeAt < right.lastProbeAt ? -1 : left.lastProbeAt > right.lastProbeAt ? 1 : 0
+  ))
+  for (const entry of due.slice(0, probePerPass)) {
+    probedAt.set(entry.id, facts.nowMs)
+    probes.push(entry.id)
+  }
+  // Re-boots are capped per pass too: many simultaneous ok transitions must not
+  // re-mount the whole fleet into the same saturated page budget. Deferred
+  // candidates stay unstamped and the next pass picks them; the time bound holds.
+  // Same recency rotation as probes: a persistent head must not claim the quota
+  // every pass while the tail never re-boots.
+  rebootCandidates.sort((left, right) => (
+    left.lastRebootAt < right.lastRebootAt ? -1 : left.lastRebootAt > right.lastRebootAt ? 1 : 0
+  ))
+  for (const entry of rebootCandidates.slice(0, rebootPerPass)) {
+    acted.set(entry.id, facts.nowMs)
+    reboots.push({ id: entry.id, updatedAt: entry.updatedAt })
   }
   return { probes, reboots, probedAt, acted }
 }

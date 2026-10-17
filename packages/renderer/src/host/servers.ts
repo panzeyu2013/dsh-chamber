@@ -33,6 +33,7 @@ import {
 import type { ConnectionSummary, HealthResponse } from '../api.ts'
 import { isFactsUsable, type SessionFactsRow, type SessionFactsSnapshot } from '../session-facts-source.ts'
 import { sourceSessionFactsMode } from '../session-facts-mode.ts'
+import { presentedSessionFactsMode, producerOwnsSessionFacts } from './facts-authority.ts'
 import { LOCAL_INSTANCE_ID } from '../local-instance.ts'
 import type { ShellState } from '../shell.ts'
 import { frameText, type FrameLocale } from '../locales.ts'
@@ -349,7 +350,17 @@ export function deriveServers(
     // 保持缺席（侧栏把缺席读作未知；臆造 full 会让能力说明在未知状态下撒谎）。
     // 位置纪律：必须在 entry 字面量**之后**（否则 TDZ 直接抛）。
     const factsMode = sourceSessionFactsMode(sessionFacts[id])
-    if (factsMode !== undefined) entry.sessionFacts = factsMode
+    // Authority gate (design 19 §3.5): while the source's runtime producer owns
+    // its live facts, the no-shell observer's transient `degraded` capability
+    // mode must not be projected — the observer's failure can be a page-local
+    // artefact (dispatch queueing / pool pressure) and the producer is the
+    // authority. full/legacy/disabled pass through unchanged (capability facts).
+    const presentedFactsMode = presentedSessionFactsMode(
+      factsMode,
+      sessionFacts[id],
+      producerOwnsSessionFacts(runtimeFacts[id]),
+    )
+    if (presentedFactsMode !== undefined) entry.sessionFacts = presentedFactsMode
     if (connected) {
       const dshVersion = hostFacts[id]?.dshVersion
       if (dshVersion !== undefined) entry.dshVersion = dshVersion

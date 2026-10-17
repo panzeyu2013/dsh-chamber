@@ -39,6 +39,7 @@ import {
   shouldRetainPushedAggregate,
   type AggregateRefreshQueue,
 } from '../aggregate-refresh.ts'
+import { HttpBudgetUnscheduledError } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
 import type { HealthResponse } from '../api.ts'
 import type { SourceOwnershipRegistry } from '../deep-link-activation.ts'
 import { LOCAL_INSTANCE_ID } from '../local-instance.ts'
@@ -269,6 +270,12 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
         return
       }
       if (!stillCurrent()) return
+      // A never-dispatched pull is page-local: keep the last aggregate and retry,
+      // never write an aggregate error (design 26 §D7).
+      if (err instanceof HttpBudgetUnscheduledError) {
+        scheduleRetry()
+        return
+      }
       // 失败说明不了推送通道，置 error 只会隐藏权威推送状态（与 withdrawal 窗口同规）；
       // 未推送源维持原 error 态与快速重试。推送与 unary 同时死亡时视图静默冻结在最后
       // 推送状态，比展示劣化/空态诚实。

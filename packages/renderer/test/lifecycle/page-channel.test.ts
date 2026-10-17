@@ -837,7 +837,8 @@ async function collectSourceFiles(): Promise<string[]> {
 const EVENT_SOURCE_ALLOWLIST = 'packages/dsh-chamber-client-core/src/page-channel.ts'
 const READER_ALLOWLIST = [
   // 有界的一次性响应体读取（404 体探测 / 就绪体读取），不是长活流。
-  'packages/dsh-chamber-client-core/src/instance-api.ts',
+  // 404 探测已抽到独立叶子（instance-api 的 dispatch-budget 集成腾行）。
+  'packages/dsh-chamber-client-core/src/instance-not-found-body.ts',
   'packages/control-plane/src/dsh-client.ts',
   'packages/gateway/src/warmup.ts',
 ]

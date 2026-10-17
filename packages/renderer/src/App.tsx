@@ -873,7 +873,7 @@ export default function App() {
       setHealth(await api.host.health())
       setHealthError(null)
       setHealthErrorAt(null)
-    } catch (err) {
+    } catch (err) { if (err instanceof Error && err.name === 'ControlPlaneBusyError') return
       setHealthError(errorMessage(err))
       setHealthErrorAt(prev => prev ?? Date.now())
     }
@@ -914,7 +914,7 @@ export default function App() {
   const retireSources = useCallback((sourceIds: ReadonlySet<string>): void => {
     const retired = new Set([...sourceIds].filter(sourceId => sourceId !== LOCAL_INSTANCE_ID))
     if (retired.size === 0) return
-    sourceLifecyclesRef.current!.retire(retired)
+    sourceLifecyclesRef.current!.retire(retired, { evict: true })
     // A retired source's generation leaves the registry with it, so a same-id re-add starts from a clean epoch.
     const liveSourceIds = new Set(
       Object.keys(sourceLedgerStoreRef.current).filter((sourceId) => !retired.has(sourceId)),

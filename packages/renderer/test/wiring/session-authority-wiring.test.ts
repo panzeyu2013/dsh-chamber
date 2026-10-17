@@ -55,6 +55,16 @@ test('the App has no second liveness planner or state machine', () => {
   assert.match(frame, /chamberBridge\.requestSessionListRefresh\(id\)/, 'the tick drives the executor')
 })
 
+test('the facts-authority gate never enters the completion/notification projection', () => {
+  // 完成通知与徽标走原始 factsChannelOf / store，不读展示门：门只允许改
+  // `entry.sessionFacts`（评审 m4 的负控）。
+  const gate = /facts-authority|presentedSessionFactsMode|producerOwnsSessionFacts/
+  assert.doesNotMatch(frame, gate)
+  assert.doesNotMatch(projection, gate)
+  assert.doesNotMatch(completeLedger, gate)
+  assert.doesNotMatch(completionObservation, gate)
+})
+
 test('the producer executes the one authority reducer + probe ladder', () => {
   assert.match(sidebar, /new SessionAuthorityReconciler\(/)
   assert.match(sidebar, /readOfficial: readOfficialProjection/)
