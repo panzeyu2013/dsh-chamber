@@ -235,10 +235,11 @@ const KERNEL_ADOPTED_IDS: readonly string[] = [
  * filtered out of the host graph, and the page's module table answers only:
  *  - the composite's FIRST-SCREEN factories (`COVERED_FACTORIES`), and
  *  - the kernel-adopted ids above.
- * Everything else covered is permanently unresolvable: the deliberate skips (hmr / mobile / directory-picker-native)
- * (hmr / mobile / directory-picker-native / the desktop account family) are never
- * loaded; the deferred families are mounted with `ctx.plugin` but never register a
- * module-table factory; page-own and replaced official rows register nothing either.
+ * Everything else covered is permanently unresolvable: the deliberate skips
+ * (hmr / mobile / directory-picker-native) are never loaded; the deferred families
+ * (the desktop account family among them, its onboarding overlay gated off at build
+ * time) are mounted with `ctx.plugin` but never register a module-table factory;
+ * page-own and replaced official rows register nothing either.
  * This is NOT a timing claim — there is no later moment at which those ids resolve,
  * which is why every qualifying id is reported the same way. Only this merge knows
  * the covered/factory/kernel sets without a round trip, so it names the miss here.
