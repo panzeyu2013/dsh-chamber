@@ -21,10 +21,12 @@ const GROUPS = {
     'test/dom-seam/vendor-page-dom-seam.test.ts',
     'test/dom-seam/containment-selectors.test.ts',
   ],
-  // trigger: 本页插件管理器的动作结算边沿 + 收敛接线锁（纯函数/源文本，不加载 vendor）
+  // trigger: 本页插件管理器的动作结算边沿 + 收敛接线锁（纯函数/源文本，不加载 vendor），
+  // 以及 vendor 三参 inject 的源锁（读 pin 住的源码，缺树响亮失败）。
   trigger: [
     'test/trigger/plugin-action-tracker.test.ts',
     'test/trigger/plugin-refresh-wiring.test.ts',
+    'test/trigger/manager-inject-signature.test.ts',
   ],
 }
 
