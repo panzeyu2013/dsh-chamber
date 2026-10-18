@@ -39,9 +39,9 @@ import {
   type LiveGraphSync, type LiveLoaderFace,
 } from './live-graph.ts'
 import { readSafeModeFlag, SAFE_MODE_GLOBAL } from './safe-mode.ts'
-import { BundleLoadTimeoutError } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
+import { BundleLoadTimeoutError, forgetInstanceGraphRelease } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
 import { chamberBridge, describeThrown, type PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-core'
-import { evictHttpBudgetSource } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
+import { evictHttpBudgetSource, httpBudgetLeaseFor, runWithHttpBudget } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
 // 插件刷新收敛（design 09 §3.7 / design 15 §6）：重订阅式的 client 图重同步 +
 // 有界 restart 事实窗口；预算与流恢复的 document-reload 域独立。壳只做接线，
 // reload 闸门与 per-boot 栅栏在 plugin-refresh-control.ts（可单测）。
@@ -135,6 +135,43 @@ export function collectFailedEntries(
  * successors first await their predecessor's full settle/teardown, then join the global tail.
  */
 const QUEUED_OPEN_TIMEOUT_MS = BOOT_TIMEOUT_MS + OPEN_WAIT_MS
+
+/** Cap for one cross-instance content-identity read (a plugin bundle, not an asset dump). */
+const IDENTITY_BUNDLE_MAX_BYTES = 4 * 1024 * 1024
+
+/**
+ * Read one served plugin bundle for cross-instance CONTENT identity (host-graph's
+ * `readPluginBundle` seam): same-origin through the instance proxy, page-budgeted,
+ * bounded in size and time. `null` = unreadable / unverifiable — the caller then
+ * stays fail-closed instead of guessing interchangeability.
+ */
+async function readPluginBundleText(sourceId: string, url: string): Promise<string | null> {
+  try {
+    return await runWithHttpBudget({
+      sourceId,
+      kind: 'bundle',
+      lane: 'background',
+      leaseMs: httpBudgetLeaseFor(15_000),
+      // Queue rather than refuse on a momentarily busy page: the boot is about to
+      // decide interchangeability, and a budget refusal must not become a source fact.
+      queueDeadlineAt: Date.now() + 1_500,
+      label: 'plugin-identity:' + url,
+    }, async () => {
+      const response = await fetch(url, { signal: AbortSignal.timeout(10_000) })
+      if (!response.ok) return null
+      // Only a JavaScript body is a bundle: an error page / JSON answer must never
+      // compare equal across two hosts and masquerade as verified content.
+      const contentType = response.headers.get('content-type') ?? ''
+      if (!/(?:java|ecma)script/i.test(contentType)) return null
+      const declared = Number(response.headers.get('content-length') ?? '')
+      if (Number.isFinite(declared) && declared > IDENTITY_BUNDLE_MAX_BYTES) return null
+      const text = await response.text()
+      return text.length > IDENTITY_BUNDLE_MAX_BYTES ? null : text
+    })
+  } catch {
+    return null
+  }
+}
 
 /** Same-origin module-script loader (ESM chunks; the stock loader uses classic scripts). */
 function loadModuleBundle(url: string): Promise<void> {
@@ -631,6 +668,7 @@ export function bootInstanceShell(
     const promise = graphFetchAttempted
       ? collectExtraRows(instanceId, basePath, {
         loadModuleBundle,
+        readPluginBundle: (url: string) => readPluginBundleText(instanceId, url),
         awaitBeforeLoad: () => chamberEval ?? Promise.resolve(),
         // A retry may start before the previous queued boot settled — the generation guard covers it.
         reportDiagnostic: reportPluginDiagnostic,
@@ -1276,6 +1314,8 @@ export function disposeInstanceShell(instanceId: string): void {
   // The record retires with the source: a same-id re-add is a new generation, and its
   // first open must not be judged as superseded by the previous incarnation's last request.
   lastRequestedSession.delete(instanceId)
+  // The release fact is one boot generation's: the next boot records its own.
+  forgetInstanceGraphRelease(instanceId)
   const holder = entries.get(instanceId)
   if (holder !== undefined) {
     entries.delete(instanceId)
@@ -1296,6 +1336,7 @@ export function disposeAllShells(): void {
   entries.clear()
   for (const [instanceId, holder] of holders) {
     evictHttpBudgetSource(instanceId)
+    forgetInstanceGraphRelease(instanceId)
     void disposeHolder(instanceId, holder, 'all shells disposed')
     scheduleInstanceLifecycleOwnerCleanup(instanceId)
   }
@@ -1304,6 +1345,7 @@ export function disposeAllShells(): void {
     // Page teardown also drops a booting source's never-dispatched requests
     // (the entry loop above only covers mounted holders).
     evictHttpBudgetSource(instanceId)
+    forgetInstanceGraphRelease(instanceId)
     scheduleInstanceLifecycleOwnerCleanup(instanceId)
   }
   lastRequestedSession.clear()

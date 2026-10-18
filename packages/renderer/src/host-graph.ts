@@ -30,15 +30,19 @@ import { HttpBudgetUnscheduledError, httpBudgetLaneFor, httpBudgetLeaseFor, http
 // can never drift.
 import {
   classifyPluginGraphOutcome, graphEntryImmediatelyMessage, graphEntryLabel, wrapGraphTransportFailure,
-  type PluginGraphBaseEntry,
+  type PluginGraphBaseEntry, type PluginGraphRelease,
 } from '@dsh-chamber/dsh-chamber-client-core/plugin-graph-classify'
 // Page-level client-plugin load kernel: the boot path and the settings bridge
 // share ONE implementation of combo/id bookkeeping, timeout tombstones and
 // rev-conflict facts; resolved through the client-core face.
 import {
+  clientPluginRowClaim,
   clientPluginRowOwner,
+  clientPluginRowRelease,
   dedupeCoveredRows,
+  isReleasePublishedPluginId,
   loadClientPluginRows,
+  recordInstanceGraphRelease,
   scanClientPluginRowConflicts,
   type ClientRowOutcome,
 } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
@@ -119,7 +123,14 @@ class HostGraphNotAttemptedError extends Error {
   readonly name = 'HostGraphNotAttemptedError'
 }
 
-export async function fetchHostGraph(basePath: string): Promise<HostGraphRow[] | null> {
+/** One answered boot graph: the composed rows plus the host's published release
+ *  identity when the wire carried a usable one (0.2.1+; older hosts have none). */
+export interface HostGraphAnswer {
+  rows: HostGraphRow[]
+  release?: PluginGraphRelease
+}
+
+export async function fetchHostGraph(basePath: string): Promise<HostGraphAnswer | null> {
   // Shared transport: postUnary (bounded unary, 30s). The bare
   // crypto.randomUUID() rpcId stays explicit so its evaluation is inside this
   // try (a no-randomUUID environment folds the throw into the local wire error).
@@ -152,7 +163,10 @@ export async function fetchHostGraph(basePath: string): Promise<HostGraphRow[] |
   if (verdict.kind === 'instance-unavailable') return null
   if (verdict.kind === 'channel') throw new HostGraphChannelError(verdict.state, verdict.message)
   if (verdict.kind === 'malformed') throw new Error(verdict.message)
-  return parseGraphRows(verdict.entries)
+  return {
+    rows: parseGraphRows(verdict.entries),
+    ...(verdict.release === undefined ? {} : { release: verdict.release }),
+  }
 }
 
 /**
@@ -280,9 +294,11 @@ export function findUnsatisfiableExternalDependencies(
  * is REFUSED by the kernel instead of being served that factory, and the boot
  * projects restart-required (same instance, rebuilt plugin) or
  * instance-version-conflict (cross-instance bundle-rev drift) from the tables in
- * the client-core face, which the settings bridge shares. A cross-instance verdict
- * blocks the conflicting boot; a same-instance one drops that row and the boot
- * continues (the closure is a document reload, or an app restart).
+ * the client-core face, which the settings bridge shares. A TRUE cross-instance
+ * verdict blocks the conflicting boot; a row known interchangeable (same host
+ * release, or verified-identical content) shares the factory without a load; a
+ * same-instance verdict drops that row and the boot continues (the closure is a
+ * document reload, or an app restart).
  */
 function reportDiagnostic(
   instanceId: string,
@@ -293,11 +309,52 @@ function reportDiagnostic(
   listener?.(instanceId, { state, ...extra, updatedAt: Date.now() })
 }
 
+/** Why a foreign row cannot share the page factory: the hosts publish different
+ *  releases, one side did not report a release at all (pre-0.2.1 host), the verified
+ *  contents differ, or the content could not be verified. */
+export type InstanceConflictReason = 'release' | 'release-unknown' | 'content' | 'unverified'
+
+/** Max cross-instance content verifications per boot: a profile plugin set is
+ *  small, and an unbounded wave would turn one boot into a bundle download. */
+const MAX_IDENTITY_VERIFICATIONS = 8
+
+/**
+ * Remove the host's rev self-reference from a served bundle before comparing
+ * contents: the host writes `//# sourceMappingURL=…&rev=<install metadata>` into
+ * every served bundle, so that line differs across independent installs of
+ * IDENTICAL bytes and must not take part in a content identity.
+ */
+export function normalizePluginBundleText(text: string): string {
+  return text.split('\n').filter(line => !line.startsWith('//# sourceMappingURL=')).join('\n')
+}
+
+/** Whether two served bundles are the SAME build (identical text once the host's
+ *  rev self-reference is removed). The only identity a profile/third-party plugin
+ *  can offer: it is not published with the dsh release. */
+export function pluginTextsShareIdentity(ownerText: string, candidateText: string): boolean {
+  return normalizePluginBundleText(ownerText) === normalizePluginBundleText(candidateText)
+}
+
 /** The cross-instance bundle-rev drift fact text (shared by the boot projection and live sync):
- *  states the FILE-METADATA fact, the factory's owner and the closure (design 09 §3.5) —
- *  never "the versions differ". */
-export function versionConflictMessage(id: string, ownerSourceId: string): string {
-  return `实例间 ${id} 的 bundle rev 不同（rev 由 bundle 文件的 mtime/ctime/size 派生，不是内容哈希；独立安装/拷贝通常不同，仅当两侧指向同一底层文件时才相同）：页面 factory 属于实例 ${ownerSourceId}，冲突行不会复用该 factory；解决办法 = 只保留一个使用该插件的实例，然后重载页面（或重启应用）`
+ *  states the FILE-METADATA fact, the releases actually in play, the factory's owner and
+ *  the actionable closure (design 09 §3.5) — never an unproven "the plugin versions differ". */
+export function versionConflictMessage(
+  id: string,
+  ownerSourceId: string,
+  ownerRelease?: string,
+  candidateRelease?: string,
+  reason: InstanceConflictReason = 'release',
+): string {
+  const owner = ownerRelease === undefined || ownerRelease === '' ? '未知' : ownerRelease
+  const candidate = candidateRelease === undefined || candidateRelease === '' ? '未知' : candidateRelease
+  const closure = reason === 'release'
+    ? '两侧 dsh 发布版本不同，不能复用同一 factory；请把该来源的 dsh 运行时升到与桌面相同的发布版本，然后重载页面（或重启应用）'
+    : reason === 'release-unknown'
+      ? '至少一侧未报告 dsh 发布版本（0.2.1 之前的宿主），无法证明可复用；请把该来源的 dsh 运行时升到与桌面相同的发布版本，然后重载页面（或重启应用）'
+      : reason === 'content'
+        ? '两侧插件构建的内容不同（已按内容校验），不能复用同一 factory；请让两侧安装同一插件构建，然后重载页面（或重启应用）'
+        : '无法证明两侧是同一构建（未通过内容校验），不能复用同一 factory；请让两侧使用同一构建，然后重载页面（或重启应用）'
+  return `实例间 ${id} 的 bundle rev 不同（rev 由 bundle 文件的 mtime/ctime/size 派生，不是内容哈希；独立安装/拷贝通常不同，仅当两侧指向同一底层文件时才相同）：页面 factory 属于实例 ${ownerSourceId}（dsh ${owner}），本实例是 dsh ${candidate}，冲突行不会复用该 factory；${closure}。`
 }
 
 /** The same-source rebuilt-bundle fact text (shared by the boot projection and live sync). */
@@ -352,6 +409,13 @@ const GRAPH_FETCH_TOTAL_BUDGET_MS = 5_000
 
 export interface CollectExtraRowsDeps {
   loadModuleBundle(url: string): Promise<void>
+  /**
+   * Read one plugin bundle's served text for cross-instance CONTENT identity:
+   * profile/third-party rows carry no release identity, so their bytes are the only
+   * interchangeable proof. Omitted = content cannot be verified, and a foreign rev
+   * conflict for such an id stays fail-closed (blocked).
+   */
+  readPluginBundle?(url: string): Promise<string | null>
   reportDiagnostic?(sourceId: string, diagnostic: PluginGraphDiagnostic): void
   /**
    * Instance-serving gate for the 503 path: `instance_unavailable` means "not
@@ -437,10 +501,13 @@ const SERVING_HEAL_BUDGET_MS = 70_000
  * reinstall) takes a new metadata rev while the fetched url still names the old
  * one, and a transient 404 lands here too; the pass re-fetches and retries at
  * fresh URLs, and only still-failing rows fail the boot. A DOM-script TIMEOUT is not recovery:
- * its tombstone observes the original element. A rev conflict is never recovered:
- * both passes route it to the single conflict diagnostic and the boot fails loud,
- * because a row materialized under another rev's factory is the one state the
- * first-load-wins module table cannot answer correctly.
+ * its tombstone observes the original element. A rev conflict is never recovered by a
+ * re-fetch: both passes route a TRUE conflict to the single diagnostic and the boot
+ * fails loud, because a row materialized under another rev's factory is the one state
+ * the first-load-wins module table cannot answer correctly. Two provable exceptions
+ * share the owner factory instead: same host release for a release-published
+ * `@deepseek-ai/*` id, or byte-identical served content for a profile/third-party id
+ * (bounded on-demand verification).
  */
 export async function collectExtraRows(
   instanceId: string,
@@ -455,7 +522,7 @@ export async function collectExtraRows(
   /** Fetch the host graph on the bounded 503-retry budget, then (with a serving
    *  gate) wait for the source to serve and retry on a fresh budget. Resolves
    *  rows, a channel error (non-503 fails fast), or `starting: true` on timeout. */
-  const fetchWithRetry = async (): Promise<{ rows: HostGraphRow[] | null; error: unknown; starting: boolean; cancelled: boolean; notAttempted: boolean; reachedHost: boolean }> => {
+  const fetchWithRetry = async (): Promise<{ rows: HostGraphRow[] | null; release?: PluginGraphRelease; error: unknown; starting: boolean; cancelled: boolean; notAttempted: boolean; reachedHost: boolean }> => {
     let lastError: unknown = null
     /** True when at least one attempt reached the host (a 503/other answer, not a budget refusal). */
     let reachedHost = false
@@ -475,8 +542,18 @@ export async function collectExtraRows(
         if (Date.now() >= attemptDeadline) break
         const attemptStartedAt = Date.now()
         try {
-          const entries = await fetchHostGraph(basePath)
-          if (entries !== null) return { rows: entries, error: null, starting: false, cancelled: false, notAttempted: false, reachedHost: true }
+          const answer = await fetchHostGraph(basePath)
+          if (answer !== null) {
+            return {
+              rows: answer.rows,
+              ...(answer.release === undefined ? {} : { release: answer.release }),
+              error: null,
+              starting: false,
+              cancelled: false,
+              notAttempted: false,
+              reachedHost: true,
+            }
+          }
           // null = 503 instance-unavailable: the host DID answer.
           reachedHost = true
         } catch (error) {
@@ -598,6 +675,10 @@ export async function collectExtraRows(
   }
   // 上方三条失败出口已 return，此处 rows 必非 null；判别式无法跨类型层关联，显式断言。
   const firstRows = firstFetch.rows as HostGraphRow[]
+  const bootRelease = firstFetch.release?.version
+  // The live path classifies foreign rev changes with the SAME identity this boot
+  // used; record it before arming the subscriber.
+  recordInstanceGraphRelease(instanceId, bootRelease)
   // The channel answered: the live subscriber may arm for this source (once per boot).
   deps.onGraphAnswered?.()
   const rows = toExtraRows(dedupeCoveredRows(firstRows, CHAMBER_COVERED_IDS), basePath)
@@ -608,6 +689,7 @@ export async function collectExtraRows(
     await deps.awaitBeforeLoad()
   }
   let versionConflict: ExtraModuleRow | undefined
+  let versionConflictReason: InstanceConflictReason = 'release'
   /** Same-instance rebuilds this boot cannot materialize: the page keeps the first-loaded
    *  factory for its lifetime, so these rows are DROPPED from this boot instead of failing
    *  it. The live path keeps its mounted old entry; a fresh boot has none to keep, and an
@@ -618,9 +700,18 @@ export async function collectExtraRows(
   const failedRows: { row: ExtraModuleRow; error: unknown }[] = []
 
   /** Record one conflict verdict: cross-instance drift blocks, a same-instance rebuild drops. */
-  const recordConflict = (found: { row: ExtraModuleRow; conflict: 'restart' | 'version' }): void => {
-    if (found.conflict === 'version') versionConflict ??= found.row
-    else if (!restartDrops.has(found.row.id)) restartDrops.set(found.row.id, found.row)
+  const recordConflict = (
+    found: { row: ExtraModuleRow; conflict: 'restart' | 'version' },
+    reason: InstanceConflictReason = 'release',
+  ): void => {
+    if (found.conflict === 'version') {
+      if (versionConflict === undefined) {
+        versionConflict = found.row
+        versionConflictReason = reason
+      }
+    } else if (!restartDrops.has(found.row.id)) {
+      restartDrops.set(found.row.id, found.row)
+    }
   }
   /** The conflict recorded so far, if any. Read through a function because the boot's
    *  flow analysis already narrowed the slots past the pre-scan, while the recovery pass
@@ -647,11 +738,18 @@ export async function collectExtraRows(
     /* Unreachable by construction (callers only block on a recorded conflict). */
     if (version === undefined) throw new Error(`实例 ${instanceId} 启动已阻止：冲突记录已丢失`)
     const ownerSourceId = clientPluginRowOwner(version.id) ?? '—'
+    const message = versionConflictMessage(
+      version.id,
+      ownerSourceId,
+      clientPluginRowRelease(version.id),
+      bootRelease,
+      versionConflictReason,
+    )
     reportDiagnostic(instanceId, 'instance-version-conflict', {
       pluginId: version.id,
-      message: versionConflictMessage(version.id, ownerSourceId),
+      message,
     }, deps.reportDiagnostic)
-    throw new Error(`实例 ${instanceId} 启动已阻止：${versionConflictMessage(version.id, ownerSourceId)}`)
+    throw new Error(`实例 ${instanceId} 启动已阻止：${message}`)
   }
   /** Unsatisfiable-dependency BOOT fact of the rows this boot carries (post-recovery when
    *  the load ran): computed + logged ONCE, because the single diagnostic slot can carry
@@ -686,9 +784,16 @@ export async function collectExtraRows(
    *  defers to recovery; the kernel throws on timeouts. */
   const applyOutcome = (outcome: ClientRowOutcome<ExtraModuleRow>): void => {
     if (outcome.state === 'rev-conflict') {
-      recordConflict(outcome)
+      const ownerRelease = clientPluginRowRelease(outcome.row.id)
+      recordConflict(
+        outcome,
+        !isReleasePublishedPluginId(outcome.row.id)
+          ? 'unverified'
+          : ownerRelease !== undefined && bootRelease !== undefined ? 'release' : 'release-unknown',
+      )
       return
     }
+    // 'shared' needs no action: the row stays and materializes under the owner factory.
     if (outcome.state === 'failed') failedRows.push({ row: outcome.row, error: outcome.error })
   }
   // A boot the page's first-load-wins table will refuse must stop BEFORE any bundle
@@ -697,15 +802,64 @@ export async function collectExtraRows(
   // carrying one of those ids at another revision is refused by an owner instance
   // that never materialized. Claims appearing AFTER this scan are still answered by
   // the kernel verdicts below (the scan is a fast path, they are the authority).
-  for (const found of scanClientPluginRowConflicts(instanceId, rows)) recordConflict(found)
+  // Cross-instance identity is decided in two steps, cheapest first:
+  //  1. the sync pre-scan shares release-published (@deepseek-ai/*) ids whose two
+  //     hosts report the SAME dsh release — the artifacts ship with that release;
+  //  2. profile/third-party ids carry no release identity, so their served bytes are
+  //     compared on demand (bounded); identical content shares, anything else stays
+  //     fail-closed and blocks below.
+  const sharedRevisions = new Map<string, string>()
+  const foreignRows: { row: ExtraModuleRow; conflict: 'version'; ownerSourceId: string }[] = []
+  for (const found of scanClientPluginRowConflicts(instanceId, rows, bootRelease)) {
+    if (found.conflict === 'restart') {
+      recordConflict(found)
+      continue
+    }
+    if (!isReleasePublishedPluginId(found.row.id)) {
+      foreignRows.push(found as { row: ExtraModuleRow; conflict: 'version'; ownerSourceId: string })
+      continue
+    }
+    const ownerRelease = clientPluginRowRelease(found.row.id)
+    recordConflict(found, ownerRelease !== undefined && bootRelease !== undefined ? 'release' : 'release-unknown')
+  }
+  // A boot already certain to block must not fetch bundle contents: the profile
+  // approvals could not change the verdict.
+  if (foreignRows.length > 0 && versionConflict === undefined) {
+    let verified = 0
+    for (const found of foreignRows) {
+      const claim = clientPluginRowClaim(found.row.id)
+      const reader = deps.readPluginBundle
+      if (claim === undefined || reader === undefined || verified >= MAX_IDENTITY_VERIFICATIONS) {
+        recordConflict(found, 'unverified')
+        continue
+      }
+      verified += 1
+      const [ownerText, candidateText] = await Promise.all([
+        reader(claim.url).catch(() => null),
+        reader(found.row.url).catch(() => null),
+      ])
+      if (ownerText !== null && candidateText !== null && pluginTextsShareIdentity(ownerText, candidateText)) {
+        // The approval is bound to THIS candidate rev: the same id rebuilt differently
+        // must be verified again, never shared on the strength of an older approval.
+        sharedRevisions.set(found.row.id, found.row.rev)
+      } else {
+        recordConflict(found, ownerText === null || candidateText === null ? 'unverified' : 'content')
+      }
+    }
+  }
   dropRestartRows()
   if (versionConflict !== undefined) {
     unsatisfiableBootFact()
     blockOnVersionConflict()
   }
+  const identityOptions = {
+    ...(bootRelease === undefined ? {} : { releaseVersion: bootRelease }),
+    ...(sharedRevisions.size === 0 ? {} : { sharedRevisions }),
+  }
   for (const outcome of await loadClientPluginRows(instanceId, rows, rowLoadDeps, {
     ordinary: 'defer',
     timeout: 'throw',
+    ...identityOptions,
   })) {
     applyOutcome(outcome)
   }
@@ -758,6 +912,7 @@ export async function collectExtraRows(
           outcomes = await loadClientPluginRows(instanceId, [fresh], rowLoadDeps, {
             ordinary: 'throw',
             timeout: 'throw',
+            ...identityOptions,
           })
         } catch (error) {
           keptFailures.push({ row: fresh, error })

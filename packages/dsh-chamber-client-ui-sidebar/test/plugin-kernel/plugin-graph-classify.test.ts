@@ -132,6 +132,20 @@ test('a valid envelope resolves the validated entries', () => {
   assert.deepEqual(classifyPluginGraphOutcome(graph(entries)), { kind: 'ok', entries })
 })
 
+test('a valid envelope carries the optional host release identity (lenient, never malformed)', () => {
+  const entries = [{ id: 'a', url: '/plugins/a', rev: 'r1' }]
+  const withRelease = (release: unknown): UnaryPostOutcome =>
+    outcome(200, envelope({ ok: true, value: { rev: 'rev', release, entries } }))
+  assert.deepEqual(
+    classifyPluginGraphOutcome(withRelease({ version: '0.2.1-rc.2', commit: '332895e' })),
+    { kind: 'ok', entries, release: { version: '0.2.1-rc.2', commit: '332895e' } },
+  )
+  // Older hosts publish none; an unusable value is ABSENT, never a malformed graph.
+  assert.deepEqual(classifyPluginGraphOutcome(graph(entries)), { kind: 'ok', entries })
+  assert.deepEqual(classifyPluginGraphOutcome(withRelease({ version: 7 })), { kind: 'ok', entries })
+  assert.deepEqual(classifyPluginGraphOutcome(withRelease('0.2.1')), { kind: 'ok', entries })
+})
+
 test('consumer lock: both consumers import this module and keep no local status branch or literal', () => {
   const renderer = normalize(stripComments(
     readFileSync(new URL('../../../renderer/src/host-graph.ts', import.meta.url), 'utf8'),

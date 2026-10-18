@@ -285,7 +285,7 @@ export const zh = {
   startManagedDshFailed: '启动失败：{error}',
   startManagedDshRefused: '启动被拒绝：当前状态不可启动或运行时正忙（409 {code}），请刷新后重试',
   // 版本冲突指引 / 服务提示。
-  pluginDiagnosticVersionConflictHint: '插件构建 rev 冲突：本页在整个生命周期内保留先加载的那份 factory，所以冲突实例的启动会被阻止、该插件新 rev 的热装行也不会创建。rev 来自文件元数据，独立安装即使内容相同也可能冲突。解决办法：只保留一个使用该插件的实例，然后重载页面（或重启应用）。',
+  pluginDiagnosticVersionConflictHint: '插件构建身份冲突：本页在整个生命周期内保留先加载的那份 factory，所以不能证明可互换的冲突实例启动会被阻止、该插件新 rev 的热装行也不会创建。可互换证明 = 同 dsh 发布版本的 @deepseek-ai/* 插件，或内容逐字节一致的 profile 插件（boot 期按需校验）；其余需让两侧使用同一 dsh 发布版本与同一构建后重载页面（或重启应用）。',
   serviceUnconfiguredHint: '未配置 systemd 服务：启动/停止/重启与「重启生效」不可用（编辑连接填写服务名后可启用）。',
 } satisfies Record<string, string>
 
@@ -576,6 +576,6 @@ export const en: Record<SettingsConnectionsKey, string> = {
   startManagedDshFailed: 'Start failed: {error}',
   startManagedDshRefused: 'Start refused: the current state is not startable or the runtime is busy (409 {code}); refresh and retry',
   // Version-conflict guidance / service hint.
-  pluginDiagnosticVersionConflictHint: 'A plugin build revision conflict: this page keeps the first-loaded factory for its whole lifetime, so the conflicting instance’s boot is blocked and a hot-installed row of that plugin at another revision is not created. Revisions derive from file metadata, so even identical independent installations may conflict. Resolve it by keeping only one instance that uses the plugin, then reload the page (or restart the app).',
+  pluginDiagnosticVersionConflictHint: 'A plugin build identity conflict: this page keeps the first-loaded factory for its whole lifetime, so a conflicting instance whose implementation cannot be proven interchangeable has its boot blocked, and a hot-installed row of that plugin at another revision is not created. Interchangeability is proven by the same dsh release for @deepseek-ai/* plugins, or by byte-identical content for profile plugins (verified on demand at boot); otherwise align both sides on the same dsh release and the same build, then reload the page (or restart the app).',
   serviceUnconfiguredHint: 'No systemd service is configured: start/stop/restart and \u201cRestart to apply\u201d are unavailable (fill in the service name when editing the connection to enable them).',
 }

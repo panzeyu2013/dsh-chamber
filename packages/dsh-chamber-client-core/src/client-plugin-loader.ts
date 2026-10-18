@@ -81,9 +81,15 @@ interface PreloadedCombo {
 /** The combo record whose script registered one id's factory. */
 interface PreloadedIdRecord {
   rev: string
+  /** Bundle endpoint this claim loaded from (foreign consumers verify content by it). */
+  url: string
   combo: PreloadedCombo
   /** Source that first claimed this id on this page (first-load-wins owner). */
   ownerSourceId: string
+  /** The claiming instance's host release version (graph `release.version`), when the
+   *  graph published one. Two hosts at the same release serve interchangeable
+   *  `@deepseek-ai/*` artifacts, so a foreign row may materialize under this factory. */
+  releaseVersion?: string
 }
 
 const preloadedCombos = new Map<string, PreloadedCombo>()
@@ -95,6 +101,11 @@ export type ClientRowOutcome<T extends ClientPluginRow = ClientPluginRow> =
   | { state: 'loaded'; row: T }
   /** The row's factory was already registered at the same rev (shared or earlier). */
   | { state: 'reused'; row: T }
+  /** Another instance's factory answers this id and the implementations are
+   *  interchangeable — same host release for a release-published id, or the caller
+   *  verified byte-identical content. Nothing was loaded; the row materializes under
+   *  the owner's factory. */
+  | { state: 'shared'; row: T; ownerSourceId: string }
   /** The id is claimed at another rev: the kernel returns the conflict WITHOUT loading,
    *  and callers must not materialize the conflicting row. */
   | { state: 'rev-conflict'; row: T; conflict: 'restart' | 'version'; ownerSourceId: string }
@@ -114,8 +125,42 @@ export interface ClientRowLoadOptions {
   ordinary: 'defer' | 'throw'
   /** Timeout failures: `throw` rejects immediately (boot); `collect` returns them as outcomes. */
   timeout: 'throw' | 'collect'
+  /** The calling instance's host release version (graph `release.version`). A foreign row
+   *  for a release-published id at ANOTHER rev shares the owner factory when this equals
+   *  the owner's recorded release. */
+  releaseVersion?: string
+  /** Caller-verified byte-identical content, keyed by id: the value is the exact
+   *  candidate REV the comparison covered. A foreign row shares the owner factory only
+   *  at that rev — an approval never transfers to a different build of the id. */
+  sharedRevisions?: ReadonlyMap<string, string>
 }
 
+/**
+ * Whether an id's bundle is published WITH the host release: the whole
+ * `@deepseek-ai/*` client surface ships inside the dsh release, so two hosts at the
+ * same release serve interchangeable artifacts. Profile/third-party plugins are
+ * host-local builds — same release says nothing about their bytes — and never
+ * qualify here (the caller may verify their content instead).
+ */
+export function isReleasePublishedPluginId(id: string): boolean {
+  return id.startsWith('@deepseek-ai/')
+}
+
+/**
+ * Whether a foreign-owned claim may answer this row without loading: both sides
+ * report the same host release and the id is release-published. Fail-closed when
+ * either release is unknown (an old host cannot prove interchangeability).
+ */
+export function canReuseForeignFactory(
+  id: string,
+  ownerRelease: string | undefined,
+  candidateRelease: string | undefined,
+): boolean {
+  return isReleasePublishedPluginId(id)
+    && ownerRelease !== undefined && ownerRelease !== ''
+    && candidateRelease !== undefined && candidateRelease !== ''
+    && ownerRelease === candidateRelease
+}
 
 /**
  * Load the given rows' bundles into the page module table, returning one verdict per
@@ -125,6 +170,10 @@ export interface ClientRowLoadOptions {
  * - a later consumer at a DIFFERENT rev returns a conflict without loading and reports
  *   `restart` (same source) or `version` (another source) — the page keeps the
  *   first factory; callers must not materialize the conflicting row;
+ * - EXCEPT when the implementations are interchangeable: a foreign row shares the
+ *   owner factory when both sides report the same host release (release-published
+ *   `@deepseek-ai/*` ids) or the caller verified byte-identical content at that
+ *   exact rev (`sharedRevisions`); the outcome is `shared` and nothing is loaded;
  * - an ordinary failure clears the combo + its id records so a later load (or the
  *   caller's recovery pass) may retry;
  * - a DOM-script timeout leaves a tombstone observing the original element: a late
@@ -142,10 +191,36 @@ export async function loadClientPluginRows<T extends ClientPluginRow>(
     const owned = preloadedIds.get(row.id)
     if (owned !== undefined) {
       if (owned.rev !== row.rev) {
+        const foreign = owned.ownerSourceId !== sourceId
+        if (foreign && (canReuseForeignFactory(row.id, owned.releaseVersion, options.releaseVersion)
+          || options.sharedRevisions?.get(row.id) === row.rev)) {
+          // The owner's factory IS the same implementation (same release for a
+          // release-published id, or caller-verified identical content at this exact
+          // rev). Nothing is loaded here, but the owner's execution must EXIST before
+          // the row materializes: await it and surface its failure exactly like the
+          // same-rev reuse path (never a silent missing factory).
+          try {
+            await owned.combo.load
+          } catch (error) {
+            deps.reportDiagnostic?.(sourceId, {
+              state: 'bundle-load-failed',
+              pluginId: row.id,
+              message: errorMessage(error),
+              updatedAt: Date.now(),
+            })
+            if (error instanceof BundleLoadTimeoutError && options.timeout === 'collect') {
+              outcomes.push({ state: 'failed', row, error, timeout: true })
+              return
+            }
+            throw error
+          }
+          outcomes.push({ state: 'shared', row, ownerSourceId: owned.ownerSourceId })
+          return
+        }
         outcomes.push({
           state: 'rev-conflict',
           row,
-          conflict: owned.ownerSourceId !== sourceId ? 'version' : 'restart',
+          conflict: foreign ? 'version' : 'restart',
           ownerSourceId: owned.ownerSourceId,
         })
         return
@@ -218,7 +293,13 @@ export async function loadClientPluginRows<T extends ClientPluginRow>(
     // the shared execution) and fold this id into the combo's rollback set; the
     // url-level map dedupes a multi-id combo (rows sharing one url await ONE load).
     combo.ids.add(row.id)
-    preloadedIds.set(row.id, { rev: row.rev, combo, ownerSourceId: sourceId })
+    preloadedIds.set(row.id, {
+      rev: row.rev,
+      url: row.url,
+      combo,
+      ownerSourceId: sourceId,
+      ...(options.releaseVersion === undefined ? {} : { releaseVersion: options.releaseVersion }),
+    })
     try {
       await combo.load
       outcomes.push({ state: 'loaded', row })
@@ -280,11 +361,13 @@ export async function loadClientPluginRows<T extends ClientPluginRow>(
  * appears after this scan is still answered by {@link loadClientPluginRows}.
  * @param sourceId - the caller's source (instance) id.
  * @param rows - candidate rows.
+ * @param releaseVersion - the caller's host release (graph `release.version`), when known.
  * @returns the conflicting rows (empty when nothing conflicts).
  */
 export function scanClientPluginRowConflicts<T extends ClientPluginRow>(
   sourceId: string,
   rows: readonly T[],
+  releaseVersion?: string,
 ): { row: T; conflict: 'restart' | 'version'; ownerSourceId: string }[] {
   const conflicts: { row: T; conflict: 'restart' | 'version'; ownerSourceId: string }[] = []
   const seen = new Set<string>()
@@ -293,9 +376,11 @@ export function scanClientPluginRowConflicts<T extends ClientPluginRow>(
     seen.add(row.id)
     const owned = preloadedIds.get(row.id)
     if (owned === undefined || owned.rev === row.rev) continue
+    const foreign = owned.ownerSourceId !== sourceId
+    if (foreign && canReuseForeignFactory(row.id, owned.releaseVersion, releaseVersion)) continue
     conflicts.push({
       row,
-      conflict: owned.ownerSourceId !== sourceId ? 'version' : 'restart',
+      conflict: foreign ? 'version' : 'restart',
       ownerSourceId: owned.ownerSourceId,
     })
   }
@@ -307,8 +392,55 @@ export function clientPluginRowOwner(id: string): string | undefined {
   return preloadedIds.get(id)?.ownerSourceId
 }
 
+/** The claiming instance's host release version for an id, when its graph published one. */
+export function clientPluginRowRelease(id: string): string | undefined {
+  return preloadedIds.get(id)?.releaseVersion
+}
+
+/** One page-level claim's load facts: the bundle endpoint, its rev and the owner release.
+ *  Foreign consumers use the URL/rev to verify content before sharing the factory. */
+export interface ClientPluginRowClaim {
+  rev: string
+  url: string
+  ownerSourceId: string
+  releaseVersion?: string
+}
+
+/** Read one claim's facts (undefined = nobody claimed the id on this page). */
+export function clientPluginRowClaim(id: string): ClientPluginRowClaim | undefined {
+  const owned = preloadedIds.get(id)
+  if (owned === undefined) return undefined
+  return {
+    rev: owned.rev,
+    url: owned.url,
+    ownerSourceId: owned.ownerSourceId,
+    ...(owned.releaseVersion === undefined ? {} : { releaseVersion: owned.releaseVersion }),
+  }
+}
+
+/** Per-instance host release versions, recorded from each answered boot graph. The live
+ *  path classifies foreign rev changes with the SAME identity the boot used. */
+const instanceReleases = new Map<string, string>()
+
+/** Record (or clear) one instance's host release version from its boot graph. */
+export function recordInstanceGraphRelease(instanceId: string, version: string | undefined): void {
+  if (version === undefined || version === '') instanceReleases.delete(instanceId)
+  else instanceReleases.set(instanceId, version)
+}
+
+/** The instance's last recorded host release version, when its graph published one. */
+export function instanceGraphRelease(instanceId: string): string | undefined {
+  return instanceReleases.get(instanceId)
+}
+
+/** Forget one instance's release fact (shell disposal / source retirement). */
+export function forgetInstanceGraphRelease(instanceId: string): void {
+  instanceReleases.delete(instanceId)
+}
+
 /** Test/diagnostic seam: forget every page-level load fact. */
 export function resetClientPluginLoaderState(): void {
   preloadedCombos.clear()
   preloadedIds.clear()
+  instanceReleases.clear()
 }

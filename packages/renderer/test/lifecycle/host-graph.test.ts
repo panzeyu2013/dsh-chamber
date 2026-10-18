@@ -188,9 +188,9 @@ function stubFetchImpl(t: TestContext, impl: typeof fetch): void {
   t.after(() => { globalThis.fetch = original })
 }
 
-const envelope = (entries: unknown) => ({
+const envelope = (entries: unknown, release?: { version: string; commit?: string }) => ({
   rpcId: 'r1',
-  result: { ok: true, value: { rev: 'graph-rev', entries } },
+  result: { ok: true, value: { rev: 'graph-rev', ...(release === undefined ? {} : { release }), entries } },
 })
 
 /** One graph answer for the fixtures that need a DIFFERENT graph per fetch call. */
@@ -209,11 +209,28 @@ test('fetchHostGraph: success resolves the entries, carrying optional fields', a
     row('@scope/pkg-a', { inject: ['@deepseek-ai/dsh-client-store'], immediately: true }),
     row('@deepseek-ai/dsh-client-hmr'),
   ]))
-  const rows = await fetchHostGraph('/api/i/local')
-  assert.deepEqual(rows, [
+  const answer = await fetchHostGraph('/api/i/local')
+  assert.deepEqual(answer?.rows, [
     { id: '@scope/pkg-a', url: '/plugins/??@scope/pkg-a&rev=abc123', rev: 'abc123', inject: ['@deepseek-ai/dsh-client-store'], immediately: true },
     { id: '@deepseek-ai/dsh-client-hmr', url: '/plugins/??@deepseek-ai/dsh-client-hmr&rev=abc123', rev: 'abc123' },
   ])
+  assert.equal(answer?.release, undefined, 'an older host publishes no release identity')
+})
+
+test('fetchHostGraph: publishes the host release identity when the wire carries one', async (t) => {
+  stubFetch(t, 200, envelope([row('@scope/pkg')], { version: '0.2.1-rc.2', commit: '332895e' }))
+  const answer = await fetchHostGraph('/api/i/local')
+  assert.deepEqual(answer?.release, { version: '0.2.1-rc.2', commit: '332895e' })
+})
+
+test('fetchHostGraph: a malformed release never fails the graph (entries are boot-critical)', async (t) => {
+  stubFetch(t, 200, {
+    rpcId: 'r1',
+    result: { ok: true, value: { rev: 'graph-rev', release: { version: 7 }, entries: [row('@scope/pkg')] } },
+  })
+  const answer = await fetchHostGraph('/api/i/local')
+  assert.equal(answer?.release, undefined, 'an unusable release is absent, not a malformed graph')
+  assert.equal(answer?.rows.length, 1)
 })
 
 test('fetchHostGraph: carries the row `external` requests (BootModuleRow parity)', async (t) => {
@@ -226,12 +243,12 @@ test('fetchHostGraph: carries the row `external` requests (BootModuleRow parity)
     row('@scope/pkg-ext', { external: ['@deepseek-ai/dsh-client-ui-tool/client', '@deepseek-ai/dsh-client-ui-dockkit'] }),
     row('@scope/pkg-no-ext'),
   ]))
-  const rows = await fetchHostGraph('/api/i/local')
-  assert.ok(rows !== null, 'a 200 envelope with entries never resolves null')
-  assert.deepEqual(rows[0]!.external, [
+  const answer = await fetchHostGraph('/api/i/local')
+  assert.ok(answer !== null, 'a 200 envelope with entries never resolves null')
+  assert.deepEqual(answer.rows[0]!.external, [
     '@deepseek-ai/dsh-client-ui-tool/client', '@deepseek-ai/dsh-client-ui-dockkit',
   ])
-  assert.equal(rows[1]!.external, undefined, 'an omitted wire field stays omitted')
+  assert.equal(answer.rows[1]!.external, undefined, 'an omitted wire field stays omitted')
 })
 
 test('fetchHostGraph: a malformed optional field throws (A4: upstream optionalStringArray)', async (t) => {
@@ -1143,6 +1160,90 @@ test('collectExtraRows: same id across instances at the SAME rev reuses without 
   assert.equal(diagnostic?.state, 'ok')
 })
 
+test('collectExtraRows: same-release @deepseek-ai ids share the owner factory across instances', async (t) => {
+  const id = '@deepseek-ai/dsh-client-ui-open-in-app'
+  const release = { version: '0.2.1-rc.2', commit: '332895e' }
+  stubFetch(t, 200, envelope([row(id, { rev: 'owner-rev', url: `/plugins/??${id}&rev=owner-rev` })], release))
+  await collectExtraRows('share-owner', '/api/i/one', { loadModuleBundle: async () => {} })
+  // Same host release, different install metadata rev: the artifacts ship with the
+  // release, so the row materializes under the owner factory instead of blocking.
+  stubFetch(t, 200, envelope([row(id, { rev: 'candidate-rev', url: `/plugins/??${id}&rev=candidate-rev` })], release))
+  let diagnostic: { state: string } | undefined
+  const loaded: string[] = []
+  const rows = await collectExtraRows('share-candidate', '/api/i/two', {
+    loadModuleBundle: async url => { loaded.push(url) },
+    reportDiagnostic: (_sourceId, next) => { diagnostic = next },
+  })
+  assert.equal(rows.length, 1, 'the shared row still materializes (under the owner factory)')
+  assert.deepEqual(loaded, [], 'nothing is loaded for an interchangeable same-release row')
+  assert.equal(diagnostic?.state, 'ok')
+})
+
+test('collectExtraRows: different host releases block and name both versions', async (t) => {
+  const id = '@deepseek-ai/dsh-client-ui-open-in-app'
+  stubFetch(t, 200, envelope([row(id, { rev: 'owner-rev' })], { version: '0.2.1-rc.2' }))
+  await collectExtraRows('version-owner', '/api/i/one', { loadModuleBundle: async () => {} })
+  stubFetch(t, 200, envelope([row(id, { rev: 'candidate-rev' })], { version: '0.2.0-rc.2' }))
+  let diagnostic: { state: string; message?: string } | undefined
+  await assert.rejects(collectExtraRows('version-candidate', '/api/i/two', {
+    loadModuleBundle: async () => {},
+    reportDiagnostic: (_sourceId, next) => { diagnostic = next },
+  }), /启动已阻止/)
+  assert.equal(diagnostic?.state, 'instance-version-conflict')
+  assert.match(diagnostic?.message ?? '', /0\.2\.1-rc\.2/, 'the owner release is named')
+  assert.match(diagnostic?.message ?? '', /0\.2\.0-rc\.2/, 'the candidate release is named')
+  assert.match(diagnostic?.message ?? '', /升到与桌面相同的发布版本/, 'the closure is the runtime upgrade')
+})
+
+test('collectExtraRows: an official row from a pre-0.2.1 host names the missing release', async (t) => {
+  const id = '@deepseek-ai/dsh-client-ui-open-in-app'
+  stubFetch(t, 200, envelope([row(id, { rev: 'owner-rev' })], { version: '0.2.1-rc.2' }))
+  await collectExtraRows('release-owner', '/api/i/one', { loadModuleBundle: async () => {} })
+  // A 0.2.0 host publishes no release identity: interchangeability cannot be proven.
+  stubFetch(t, 200, envelope([row(id, { rev: 'candidate-rev' })]))
+  let diagnostic: { state: string; message?: string } | undefined
+  await assert.rejects(collectExtraRows('release-candidate', '/api/i/two', {
+    loadModuleBundle: async () => {},
+    reportDiagnostic: (_sourceId, next) => { diagnostic = next },
+  }), /启动已阻止/)
+  assert.equal(diagnostic?.state, 'instance-version-conflict')
+  assert.match(diagnostic?.message ?? '', /未报告 dsh 发布版本/)
+  assert.match(diagnostic?.message ?? '', /0\.2\.1-rc\.2/, 'the known side is still named')
+})
+
+test('collectExtraRows: a profile id with byte-identical content shares across instances', async (t) => {
+  const id = '@scope/profile-identical'
+  const bundle = 'export const apply = () => {}\n//# sourceMappingURL=??x&rev=OWNER\n'
+  stubFetch(t, 200, envelope([row(id, { rev: 'owner-rev', url: `/plugins/??${id}&rev=owner-rev` })]))
+  await collectExtraRows('content-owner', '/api/i/one', { loadModuleBundle: async () => {} })
+  stubFetch(t, 200, envelope([row(id, { rev: 'candidate-rev', url: `/plugins/??${id}&rev=candidate-rev` })]))
+  const reads: string[] = []
+  const rows = await collectExtraRows('content-candidate', '/api/i/two', {
+    loadModuleBundle: async () => {},
+    readPluginBundle: async url => {
+      reads.push(url)
+      return url.includes('candidate-rev') ? bundle.replace('OWNER', 'CANDIDATE') : bundle
+    },
+  })
+  assert.equal(reads.length, 2, 'both served bundles are read once')
+  assert.equal(rows.length, 1, 'identical content beyond the rev self-reference shares the factory')
+})
+
+test('collectExtraRows: a profile id with different content stays fail-closed', async (t) => {
+  const id = '@scope/profile-different'
+  stubFetch(t, 200, envelope([row(id, { rev: 'owner-rev', url: `/plugins/??${id}&rev=owner-rev` })]))
+  await collectExtraRows('different-owner', '/api/i/one', { loadModuleBundle: async () => {} })
+  stubFetch(t, 200, envelope([row(id, { rev: 'candidate-rev', url: `/plugins/??${id}&rev=candidate-rev` })]))
+  let diagnostic: { state: string; message?: string } | undefined
+  await assert.rejects(collectExtraRows('different-candidate', '/api/i/two', {
+    loadModuleBundle: async () => {},
+    readPluginBundle: async url => (url.includes('candidate-rev') ? 'candidate implementation\n' : 'owner implementation\n'),
+    reportDiagnostic: (_sourceId, next) => { diagnostic = next },
+  }), /启动已阻止/)
+  assert.equal(diagnostic?.state, 'instance-version-conflict')
+  assert.match(diagnostic?.message ?? '', /内容不同/, 'the copy names the verified content difference')
+})
+
 test('collectExtraRows: versionConflict outranks restartConflict within one boot', async (t) => {
   const driftId = '@scope/dual-drift'
   const rebuiltId = '@scope/dual-rebuilt'
@@ -1551,7 +1652,7 @@ test('A4: the wire helpers are upstream\'s own and the parse stays entries-only'
     rpcId: 'r1',
     result: { ok: true, value: { entries: [{ id: '@scope/only', url: '/plugins/only', rev: 'r1' }] } },
   })
-  assert.deepEqual(await fetchHostGraph('/api/i/local'), [
+  assert.deepEqual((await fetchHostGraph('/api/i/local'))?.rows, [
     { id: '@scope/only', url: '/plugins/only', rev: 'r1' },
   ], 'an entries-only graph is a usable chamber graph')
 })

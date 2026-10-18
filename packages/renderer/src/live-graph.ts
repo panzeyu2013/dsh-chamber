@@ -43,7 +43,8 @@
 
 import { describeThrown, type PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-core'
 import {
-  clientPluginRowOwner, dedupeCoveredRows, loadClientPluginRows, type ClientRowOutcome,
+  canReuseForeignFactory, clientPluginRowOwner, clientPluginRowRelease, dedupeCoveredRows,
+  instanceGraphRelease, isReleasePublishedPluginId, loadClientPluginRows, type ClientRowOutcome,
 } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
 import { CHAMBER_COVERED_IDS } from './chamber-covered.ts'
 import {
@@ -355,11 +356,21 @@ export function startLiveGraphSync(deps: LiveGraphSyncDeps): LiveGraphSync {
       }
       return
     }
+    const ownerRelease = fact.kind === 'version-conflict' ? clientPluginRowRelease(fact.id) : undefined
+    const candidateRelease = fact.kind === 'version-conflict' ? instanceGraphRelease(deps.sourceId) : undefined
     const record: PluginGraphDiagnostic = fact.kind === 'version-conflict'
       ? {
         state: 'instance-version-conflict',
         pluginId: fact.id,
-        message: versionConflictMessage(fact.id, fact.owner),
+        message: versionConflictMessage(
+          fact.id,
+          fact.owner,
+          ownerRelease,
+          candidateRelease,
+          !isReleasePublishedPluginId(fact.id)
+            ? 'unverified'
+            : ownerRelease !== undefined && candidateRelease !== undefined ? 'release' : 'release-unknown',
+        ),
         updatedAt: now(),
       }
       : fact.kind === 'restart-required'
@@ -445,9 +456,11 @@ export function startLiveGraphSync(deps: LiveGraphSyncDeps): LiveGraphSync {
   const addRow = async (row: ExtraModuleRow, facts: LiveFact[]): Promise<void> => {
     let outcomes: ClientRowOutcome<ExtraModuleRow>[]
     try {
+      const releaseVersion = instanceGraphRelease(deps.sourceId)
       outcomes = await loadClientPluginRows(deps.sourceId, [row], { loadBundle: deps.loadBundle }, {
         ordinary: 'defer',
         timeout: 'collect',
+        ...(releaseVersion === undefined ? {} : { releaseVersion }),
       })
     } catch (error) {
       facts.push({ kind: 'load-failed', id: row.id, message: describeThrown(error) })
@@ -544,9 +557,19 @@ export function startLiveGraphSync(deps: LiveGraphSyncDeps): LiveGraphSync {
       handled.add(item.mounted.row.id)
       const owner = clientPluginRowOwner(item.incoming.id)
       if (owner !== undefined && owner !== deps.sourceId) {
-        // Another instance claimed this id first: its bundle is already in the shared
-        // kernel, so NO restart of this source can switch it — that is a version
-        // conflict, not a restart-to-apply.
+        // Another instance claimed this id first. Same host release ⇒ the owner factory
+        // IS the same release artifact: adopt the fresh row facts and keep the entry
+        // (no reload, no fact). Otherwise the page keeps the owner factory and no
+        // restart of this source can switch it — a version conflict, not a restart.
+        const ownerRelease = clientPluginRowRelease(item.incoming.id)
+        const candidateRelease = instanceGraphRelease(deps.sourceId)
+        if (canReuseForeignFactory(item.incoming.id, ownerRelease, candidateRelease)) {
+          item.mounted.row = item.incoming
+          continue
+        }
+        // The live path does not fetch/verify profile content (a per-frame cost): a
+        // content-identical profile row is proven at the next boot's pre-scan, then
+        // shared. Until then the conflict is reported without mounting.
         facts.push({ kind: 'version-conflict', id: item.incoming.id, owner })
       } else {
         facts.push({

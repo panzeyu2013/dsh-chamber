@@ -6,8 +6,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  BundleLoadTimeoutError, clientPluginRowOwner,
-  dedupeCoveredRows, loadClientPluginRows,
+  BundleLoadTimeoutError, clientPluginRowClaim, clientPluginRowOwner,
+  dedupeCoveredRows, loadClientPluginRows, scanClientPluginRowConflicts,
 } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader';
 import { resetClientPluginLoaderState } from '../../../dsh-chamber-client-core/src/client-plugin-loader.ts';
 import { resetHttpBudgetForTests } from '../../../dsh-chamber-client-core/src/http-budget.ts';
@@ -70,6 +70,88 @@ test('loadClientPluginRows: first-load-wins — same id+rev reuses across source
   assert.equal(version[0]?.state === 'rev-conflict' ? version[0].conflict : '', 'version');
   assert.equal(loaded.length, 1, 'the loaded factory is never re-executed');
   assert.equal(clientPluginRowOwner('@scope/plugin'), 'local');
+});
+
+test('loadClientPluginRows: a same-release release-published id shares the foreign factory without loading', async () => {
+  resetClientPluginLoaderState();
+  const id = '@deepseek-ai/dsh-client-ui-open-in-app';
+  const loaded: string[] = [];
+  const deps = { loadBundle: async (url: string) => { loaded.push(url); } };
+  await loadClientPluginRows('local', [row(id, 'revA')], deps, { ...collecting, releaseVersion: '0.2.1-rc.2' });
+  const shared = await loadClientPluginRows('ssh-b', [row(id, 'revB')], deps, {
+    ...collecting, releaseVersion: '0.2.1-rc.2',
+  });
+  assert.deepEqual(shared, [{ state: 'shared', row: row(id, 'revB'), ownerSourceId: 'local' }]);
+  assert.equal(loaded.length, 1, 'the owner factory is never re-executed');
+  assert.deepEqual(clientPluginRowClaim(id), {
+    rev: 'revA',
+    url: `/plugins/??${id}/client.js&rev=revA`,
+    ownerSourceId: 'local',
+    releaseVersion: '0.2.1-rc.2',
+  });
+  // A different host release, or an unknown one, stays fail-closed.
+  const different = await loadClientPluginRows('ssh-b', [row(id, 'revB')], deps, {
+    ...collecting, releaseVersion: '0.2.0-rc.2',
+  });
+  assert.equal(different[0]?.state, 'rev-conflict');
+  const unknown = await loadClientPluginRows('ssh-b', [row(id, 'revB')], deps, collecting);
+  assert.equal(unknown[0]?.state, 'rev-conflict');
+});
+
+test('loadClientPluginRows: sharedRevisions lets a caller-verified profile row share the factory, at that rev only', async () => {
+  resetClientPluginLoaderState();
+  const id = '@scope/verified-profile';
+  let loads = 0;
+  const deps = { loadBundle: async () => { loads += 1; } };
+  await loadClientPluginRows('local', [row(id, 'revA')], deps, collecting);
+  const approved = new Map([[id, 'revB']]);
+  const shared = await loadClientPluginRows('ssh-b', [row(id, 'revB')], deps, {
+    ...collecting, sharedRevisions: approved,
+  });
+  assert.deepEqual(shared, [{ state: 'shared', row: row(id, 'revB'), ownerSourceId: 'local' }]);
+  assert.equal(loads, 1);
+  // The approval is bound to the verified REV: another build of the same id is a conflict.
+  const otherBuild = await loadClientPluginRows('ssh-b', [row(id, 'revC')], deps, {
+    ...collecting, sharedRevisions: approved,
+  });
+  assert.equal(otherBuild[0]?.state, 'rev-conflict');
+  // Without the approval the same foreign call is a conflict.
+  const conflict = await loadClientPluginRows('ssh-b', [row(id, 'revB')], deps, collecting);
+  assert.equal(conflict[0]?.state, 'rev-conflict');
+  // The approval is about FOREIGN rows only: the owner's own rebuilt row still restarts.
+  const restart = await loadClientPluginRows('local', [row(id, 'revB')], deps, {
+    ...collecting, sharedRevisions: approved,
+  });
+  assert.equal(restart[0]?.state, 'rev-conflict');
+});
+
+test('loadClientPluginRows: a shared row awaits the owner execution and surfaces its failure', async () => {
+  resetClientPluginLoaderState();
+  const id = '@deepseek-ai/dsh-client-ui-sample';
+  let fail!: (error: Error) => void;
+  const pending = new Promise<void>((_resolve, reject) => { fail = reject; });
+  const owner = loadClientPluginRows('local', [row(id, 'revA')], { loadBundle: () => pending }, {
+    ordinary: 'throw', timeout: 'throw', releaseVersion: '0.2.1-rc.2',
+  });
+  // The claim is published synchronously before the owner's execution settles.
+  const shared = loadClientPluginRows('ssh-b', [row(id, 'revB')], { loadBundle: async () => {} }, {
+    ...collecting, releaseVersion: '0.2.1-rc.2',
+  });
+  fail(new Error('owner bundle exploded'));
+  await assert.rejects(owner, /owner bundle exploded/);
+  await assert.rejects(shared, /owner bundle exploded/);
+});
+
+test('scanClientPluginRowConflicts: same-release release-published ids are not conflicts', async () => {
+  resetClientPluginLoaderState();
+  const id = '@deepseek-ai/dsh-client-ui-sample';
+  await loadClientPluginRows('local', [row(id, 'revA')], { loadBundle: async () => {} }, {
+    ...collecting, releaseVersion: '0.2.1-rc.2',
+  });
+  assert.deepEqual(scanClientPluginRowConflicts('ssh-b', [row(id, 'revB')], '0.2.1-rc.2'), []);
+  assert.equal(scanClientPluginRowConflicts('ssh-b', [row(id, 'revB')], '0.2.0-rc.2').length, 1);
+  // Same-instance conflicts are never released by a matching release.
+  assert.equal(scanClientPluginRowConflicts('local', [row(id, 'revB')], '0.2.1-rc.2').length, 1);
 });
 
 test('loadClientPluginRows: an ordinary failure is deferred in the boot pass, thrown in the recovery pass, and stays retryable', async () => {

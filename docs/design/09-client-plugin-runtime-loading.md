@@ -293,25 +293,34 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   `client-plugin-loader.ts` 的 `preloadedCombos`/`preloadedIds`）显式维护：成功后才标记；普通失败删除后
   可重试；DOM script 超时因移除元素不能可靠取消，先留临时 tombstone 并观察
   `BundleLoadTimeoutError.bundleOutcome`（迟到 load 收敛为成功、迟到 error 才删除并允许重试，绝不并发
-  执行同 id 第二份 bundle）；同 id 异 rev 保留原认领者，两条路径都禁止把旧 factory 作为新 rev 的行继续 materialize，但后果按认领者分档：**跨实例**认领 → 阻止该实例 boot（别的实例的实现不得回答本实例的行）；**同实例**（重建）→ 把该行从本次 boot **丢弃**（实例照常启动，诊断 `restart-required`）——live 路径保留旧 entry，fresh boot 没有可保留的 entry，丢行后实例仍然可用。判定走 `scanClientPluginRowConflicts` **预扫**：在任何 bundle 执行或新认领发布**之前**判定（被阻止的 boot 不执行其余行、不留认领记录；预扫之后新出现的认领仍由内核裁决兜底）。**跨实例 rev 漂移**：同 id
-  异 rev 且首次认领者**是另一个实例**（如本地与 gateway 实例挂载同一插件）→ 改报
-  `instance-version-conflict`（呈现为问题态，阻止冲突实例 boot）——任何重启都无法切换（页级
-  first-load-wins 会原样重演）。rev 是**文件元数据事实**（`artifactRevision` = sha1(mtimeMs, ctimeMs,
-  size)）而非版本或内容事实：实测两实例上同一个已发布插件的被服务 bundle 仅差 11 字节（各自
-  `sourceMappingURL` 里嵌的 rev 自引用），但 rev 差异本身连「内容不同」都不证明——两份独立安装（甚至内容
-  相同）通常 rev 不同（ctime；仅当两侧是同一底层文件的硬链接时才相同）。故诊断只陈述这个可观测差异，**不断言**插件版本不同（口径覆盖设置页的
-  状态标题、详情文案与指引：问题态卡片显示冲突详情）；同实例异 rev
+  执行同 id 第二份 bundle）；同 id 异 rev 保留原认领者，两条路径都禁止把旧 factory 作为新 rev 的行继续 materialize，但后果按认领者与**可互换证明**分档：**跨实例**认领且不能证明互换 → 阻止该实例 boot（别的实例的实现不得回答本实例的行）；能证明互换 → 复用原 factory（见下）；**同实例**（重建）→ 把该行从本次 boot **丢弃**（实例照常启动，诊断 `restart-required`）——live 路径保留旧 entry，fresh boot 没有可保留的 entry，丢行后实例仍然可用。判定走 `scanClientPluginRowConflicts` **预扫**：在任何 bundle 执行或新认领发布**之前**判定（被阻止的 boot 不执行其余行、不留认领记录；预扫之后新出现的认领仍由内核裁决兜底）。**跨实例 rev 漂移**：同 id
+  异 rev 且首次认领者**是另一个实例**（如本地与 gateway 实例挂载同一插件）→ 只有先证明两侧实现
+  **可互换**才复用原 factory，否则改报 `instance-version-conflict`（呈现为问题态，阻止冲突实例
+  boot）——任何重启都无法切换（页级 first-load-wins 会原样重演）。互换证明只有两种：①
+  `@deepseek-ai/*` 的发布内插件，两端图的 `release.version`（client-modules 0.2.1+ 发布的宿主
+  身份）相同——这些 bundle 随 dsh 发布物出厂，同发布即同一构建，故复用、不加载、不报问题态；②
+  profile/第三方插件没有发布身份，boot 期按需读取两份被服务 bundle、剔除
+  `//# sourceMappingURL=…&rev=…` 自引用后比较内容（每 boot 至多 8 个；读取失败/超限即不可证明），
+  内容逐字节相同才复用。两者都不成立（release 不同或未知、内容不同、不可验证）→ 阻止 boot。rev 仍是
+  **文件元数据事实**（`artifactRevision` = sha1(mtimeMs, ctimeMs, size)）而非内容或版本身份：两份独立
+  安装（甚至内容相同）通常 rev 不同（ctime；仅当两侧是同一底层文件的硬链接时才相同），实测两实例上同一个
+  已发布插件的被服务 bundle 仅差 11 字节（各自 `sourceMappingURL` 里嵌的 rev 自引用），因此 rev 本身不再
+  作为跨实例互通判据；诊断陈述可观测差异与两侧 release（缺省“未知”），**不断言**插件版本不同（口径覆盖
+  设置页的状态标题、详情文案与指引：问题态卡片显示冲突详情）。同实例异 rev
   （重建的插件）保持 `restart-required`。**同实例重建的代价（登记）**：同 id 新 boot 先按世代纪律退役旧
   holder 再取图，被丢弃的行在本次 boot 缺席（旧视图已退役、新 boot 不带该插件）；依赖它的 `external` 边会被
   页级模块表里的**上一版 factory** 满足（内核只在认领主自身加载失败时回滚认领，live remove 也保留 factory），
   只有该 factory 确实缺席时才落既有 apply 降级——即依赖边可能静默绑定上一版实现（登记代价）。页内收口是整页
   重载/重启应用：连接页指引说明该收口，frame 的 fatal 覆盖层（仅跨实例阻止时出现）与 stall 横幅提供重载控件。
   跨实例**同 rev**
-  依旧复用、无诊断（模块表页级共享，同 id 同 rev 仍按现有模块表契约复用；元数据 rev 不构成内容一致的证明）。
-  **Rejected alternatives（冲突启动）**：仅提示后继续 materialize 会把旧实现用于新行；覆盖页级 factory 会影响先
-  加载实例及其依赖；**跨来源**若也走"丢行"则在被别的实例认领时静默少一个插件、且保留的是他人的实现，等于用
-  对方的 factory 回答本实例——故只有同实例重建丢行，跨来源仍阻止整实例 boot 并保留首个实例。独立执行环境属于
-  单独架构改造。
+  依旧复用、无诊断（模块表页级共享）；跨实例**同 release** 的 `@deepseek-ai/*` 与内容一致的 profile 插件
+  走上面的互换证明。元数据 rev 与 release 版本都不构成内容哈希证明（上游 `artifactRevision` 改为内容哈希
+  仍是根治，§5）。
+  **Rejected alternatives（冲突启动）**：仅提示后继续 materialize 会把*未经证明*的旧实现用于新行（本修订只允许
+  “同发布”或“内容逐字节一致”后复用，二者都是可检验的互换证明）；覆盖页级 factory 会影响先加载实例及其依赖；
+  **跨来源一律丢行**会在被别的实例认领时静默少一个插件、且保留的是他人的实现（等于用对方的 factory 回答本
+  实例）——故真实不互换仍阻止整实例 boot 并保留首个实例；把 release 相同直接当作内容证明也不成立（构建/补丁
+  差异），所以 profile 插件另做内容校验。独立执行环境属于单独架构改造。
 - **不可满足的 external 依赖判定（boot 期）**：`findUnsatisfiableExternalDependencies` 对被保留行的
   `external` 请求判「**任何时刻都拿不到**」= 目标 id 在覆盖集内，且既无首屏 factory，也不是内核收编 id
   （`dsh-client-modules` / `dsh-client-ui-renderer`——`boot.ts` 在任何 extra bundle 执行前注册；两端锁步测试

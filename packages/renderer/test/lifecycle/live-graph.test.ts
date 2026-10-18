@@ -11,7 +11,7 @@ import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import type { PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-core'
 import {
-  clientPluginRowOwner, loadClientPluginRows, resetClientPluginLoaderState,
+  clientPluginRowOwner, loadClientPluginRows, recordInstanceGraphRelease, resetClientPluginLoaderState,
 } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
 import { restartRequiredMessage, type ExtraModuleRow, type HostGraphRow } from '../../src/host-graph.ts'
 import { readFile } from 'node:fs/promises'
@@ -262,6 +262,55 @@ test('an add on a rev-conflict never creates an entry and reports the boot fact'
   assert.equal(h.sink.record?.message, restartRequiredMessage('@scope/a'))
   assert.equal(h.loader.entries.length, 0)
   assert.equal(h.loads.length, 0)
+})
+
+test('a same-release foreign add mounts the shared factory without loading', async (t) => {
+  const h = harness(t)
+  const id = '@deepseek-ai/dsh-client-ui-sample'
+  // Another instance claims the id at its release; the page composite has no factory
+  // for it, so the kernel serves the owner's.
+  await loadClientPluginRows('other', [extra(id)], { loadBundle: async () => undefined }, {
+    ordinary: 'defer', timeout: 'collect', releaseVersion: '0.2.1-rc.2',
+  })
+  recordInstanceGraphRelease('local', '0.2.1-rc.2')
+  h.channel.emit(graphFrame([row(id, { rev: 'rev2', url: '/plugins/??' + id + '&rev=rev2' })]))
+  await tick()
+  assert.equal(h.sink.record, undefined, 'same release ⇒ the owner factory is interchangeable')
+  assert.equal(h.loader.entries.length, 1)
+  assert.equal(h.loads.length, 0, 'the shared row is never re-executed')
+})
+
+test('a foreign rev change at the SAME release adopts the fresh row without a fact', async (t) => {
+  const h = harness(t)
+  const id = '@deepseek-ai/dsh-client-ui-sample'
+  await loadClientPluginRows('other', [extra(id)], { loadBundle: async () => undefined }, {
+    ordinary: 'defer', timeout: 'collect', releaseVersion: '0.2.1-rc.2',
+  })
+  recordInstanceGraphRelease('local', '0.2.1-rc.2')
+  h.channel.emit(graphFrame([row(id)]))
+  await tick()
+  assert.equal(h.loader.entries.length, 1)
+  h.channel.emit(graphFrame([row(id, { rev: 'rev2', url: '/plugins/??' + id + '&rev=rev2' })]))
+  await tick()
+  assert.equal(h.sink.record, undefined)
+  assert.equal(h.loader.entries.length, 1, 'the mounted entry stays')
+  assert.equal(h.loads.length, 0, 'same-rev reuse and the same-release rev change load nothing')
+})
+
+test('a foreign rev change at ANOTHER release reports the version conflict', async (t) => {
+  const h = harness(t)
+  const id = '@deepseek-ai/dsh-client-ui-sample'
+  await loadClientPluginRows('other', [extra(id)], { loadBundle: async () => undefined }, {
+    ordinary: 'defer', timeout: 'collect', releaseVersion: '0.2.1-rc.2',
+  })
+  recordInstanceGraphRelease('local', '0.2.0-rc.2')
+  h.channel.emit(graphFrame([row(id)]))
+  await tick()
+  h.channel.emit(graphFrame([row(id, { rev: 'rev2', url: '/plugins/??' + id + '&rev=rev2' })]))
+  await tick()
+  assert.equal(h.sink.record?.state, 'instance-version-conflict')
+  assert.match(h.sink.record?.message ?? '', /0\.2\.1-rc\.2/)
+  assert.match(h.sink.record?.message ?? '', /0\.2\.0-rc\.2/)
 })
 
 test('covered official rows are filtered, and an answered empty graph is a no-op', async (t) => {

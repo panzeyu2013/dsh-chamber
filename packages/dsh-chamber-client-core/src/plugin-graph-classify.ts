@@ -44,6 +44,26 @@ export type PluginGraphBaseEntry = {
   readonly rev: string
 } & Record<string, unknown>
 
+/** The host release identity published with every graph on 0.2.1+ hosts (the
+ *  client-modules package version). Optional on the wire: an older host has none,
+ *  and the client must never infer one from row revs. */
+export type PluginGraphRelease = {
+  readonly version: string
+  readonly commit?: string
+}
+
+/** Lenient, optional parse: a malformed `release` never makes the graph malformed
+ *  (only `entries` is boot-critical) — an unusable value is treated as absent. */
+export function parseGraphRelease(raw: unknown): PluginGraphRelease | undefined {
+  if (!isRecord(raw)) return undefined
+  const version = raw.version
+  if (typeof version !== 'string' || version === '') return undefined
+  const commit = raw.commit
+  return typeof commit === 'string' && commit !== ''
+    ? { version, commit }
+    : { version }
+}
+
 /** The classification of one `clientGraph/graph` unary answer. See the module
  *  header for the mapping each consumer applies to every kind. */
 export type PluginGraphChannelVerdict =
@@ -53,8 +73,9 @@ export type PluginGraphChannelVerdict =
   | { readonly kind: 'channel'; readonly state: PluginGraphChannelState; readonly message: string }
   /** A 2xx answer that violates the envelope/row wire contract. */
   | { readonly kind: 'malformed'; readonly message: string }
-  /** A valid graph; `entries` passed the shared base gate. */
-  | { readonly kind: 'ok'; readonly entries: readonly PluginGraphBaseEntry[] }
+  /** A valid graph; `entries` passed the shared base gate. `release` is the host's
+   *  published release identity when the wire carried a usable one. */
+  | { readonly kind: 'ok'; readonly entries: readonly PluginGraphBaseEntry[]; readonly release?: PluginGraphRelease }
 
 /** The HTTP-failure copy of a non-2xx channel answer (contract literal). */
 export function graphHttpFailureMessage(status: number): string {
@@ -147,5 +168,6 @@ export function classifyPluginGraphOutcome(outcome: UnaryPostOutcome): PluginGra
       return { kind: 'malformed', message: `宿主启动图：entry ${graphEntryLabel(row)} 必须携带 string id/url/rev` }
     }
   }
-  return { kind: 'ok', entries: entries as PluginGraphBaseEntry[] }
+  const release = parseGraphRelease((value as Record<string, unknown>).release)
+  return { kind: 'ok', entries: entries as PluginGraphBaseEntry[], ...(release === undefined ? {} : { release }) }
 }
