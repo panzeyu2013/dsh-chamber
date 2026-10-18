@@ -595,13 +595,16 @@ pnpm run test:mobile
 ## Anchor baseline
 
 Official dsh DOM, empirically audited via CDP at **v0.1.5-alpha.2** and re-anchored
-at **v0.1.5-rc.2** — every anchor below resolved in the rc.2 tree. Under the current
-pin (v0.2.0-rc.2) the strict anchor gate resolves all 47 attribute/role/slot
-anchors, the three plugin local-name class anchors plus the external
-`_crumbSeg` emission pin, and the two build-time CSS-module hash tokens with 0
-misses (`verify-mobile-anchors.mjs --require-anchor-root`);
-the class-name arms were re-anchored to the served rc.2 bundle and a zero-hit
-one is now a hard failure (see below). The
+at **v0.1.5-rc.2** — every anchor below resolved in the rc.2 tree (rc.1/rc.2 in this
+section mean the v0.1.5 lineage; the current pin is always written in full as
+v0.2.1-rc.2). Under the current
+pin (v0.2.1-rc.2) the strict anchor gate resolves the declared set (60 declared
+anchors, 52 of them upstream; 27 minimal assertions) including the attribute/role/
+slot anchors, the plugin local-name class anchors, the external `_crumbSeg`
+emission pin, and the two build-time CSS-module hash tokens — 0 misses and 0
+advisories over the materialized upstream product corpus
+(`verify-mobile-anchors.mjs --require-anchor-root`);
+a zero-hit anchor is a hard failure (see below). The
 alpha.2 → rc.1 delta (the `ui-sidebar-*` guide/preview rows, the
 `ui-primitives` `CodeBlock` wrapper, the `ui-chat` stats dialog, two `z-index`
 additions in `ui-dockkit`'s CSS and a slot-catalog doc pointer) and the rc.1 → rc.2
@@ -619,7 +622,7 @@ dialog is body-portaled by upstream (rc.2 `SettingsPanel` uses
 `createPortal(…, document.body)`), so the drawer's transform no longer traps
 it; the drawer open state still uses `transform: none` deliberately.
 
-The vendored base is now **v0.2.0-rc.2** (harness pin `639ed015`; single source
+The vendored base is now **v0.2.1-rc.2** (harness pin `687f282e`; single source
 `harness.commit`). Historical audit record: the anchors above were re-verified
 against the alpha.2 source (2026-09 re-anchor) and held at v0.1.5-rc.2 (whose
 client deltas are listed above and left those anchors, and the

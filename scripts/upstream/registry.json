@@ -48,10 +48,10 @@
   ],
   "patches": [
     {
-      "spec": "@earendil-works/pi-ai@0.87.1",
-      "file": "patches/@earendil-works__pi-ai@0.87.1.patch",
+      "spec": "@earendil-works/pi-ai@1.1.0",
+      "file": "patches/@earendil-works__pi-ai@1.1.0.patch",
       "runtimeClosure": true,
-      "note": "pi-ai 流式修复；运行期闭包内的依赖（runtime lock 记录 patch_hash）"
+      "note": "pi-ai 流式修复：delta 期间不解析参数（toolcall partial 保持 {}），运行期闭包内的依赖（runtime lock 记录 patch_hash）；补丁随上游 pin 重锚"
     },
     {
       "spec": "@electron/osx-sign@1.3.3",
@@ -76,6 +76,12 @@
       "file": "patches/@yao-pkg__pkg@6.21.0.patch",
       "runtimeClosure": false,
       "note": "打包工具面；不在运行期闭包（allowUnusedPatches 豁免）"
+    },
+    {
+      "spec": "app-builder-lib@26.17.0",
+      "file": "patches/app-builder-lib@26.17.0.patch",
+      "runtimeClosure": false,
+      "note": "打包工具面（DMG ULMO 格式校验，build host 执行）；不在运行期闭包（allowUnusedPatches 豁免）"
     },
     {
       "spec": "exceljs@4.4.0",
@@ -118,7 +124,7 @@
           "src/client/index.ts": "[patch-mod] 当前代重锚：apply(ctx) 读 entry Context 的 chamberBasePath → installConnection({basePath}) → 载波装配（design 05 §6）+ SYSTEM_RESUME_EVENT/liveness 触发（design 14 D4）+ recovery-policy 转出；上游的 installConnection/ConnectionInstallOptions/transport.rpc 原样保留",
           "src/client/rpc.ts": "[patch-mod] 当前代重锚：WebConnectionRpcOptions + basePath 前缀拼装（stock 保持上游 document-relative 路由；上游二进制响应/uplink 原样保留）",
           "tsconfig.client.json": "[patch-mod] chamber 构面：extends ../../tsconfig.json + vendor paths + files 列表（与上游 files 增量同步维护）",
-          "tsconfig.host.json": "[patch-mod] chamber 构面：extends ../../tsconfig.json + vendor paths + files 列表（随当前代增补 src/operator-peer.ts、src/client/rpc.ts、src/client/random-uuid.ts）"
+          "tsconfig.host.json": "[patch-mod] chamber 构面：extends ../../tsconfig.json + vendor paths + files 列表（随当前代增补 src/peer.ts、src/client/rpc.ts、src/client/random-uuid.ts）"
         },
         "own": {
           "scripts/test.mjs": "chamber 自有测试清单（按域分组的显式 manifest；verify:test-wiring 校验可达性）",
@@ -139,10 +145,14 @@
           "test/": "chamber 自有测试（api-path/carrier-assembly/liveness-triggers/client-apply + fixtures（含 schemastery/fixture/recovery-config 桩 loader））"
         },
         "dropped": [
+          "locale/en.json",
+          "locale/zh.json",
           "tests/",
           "tsdown.config.ts"
         ],
         "droppedNotes": {
+          "locale/en.json": "上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
+          "locale/zh.json": "上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
           "tests/": "chamber 无 tsdown / 不镜像上游测试",
           "tsdown.config.ts": "chamber 无 tsdown / 不镜像上游测试"
         }
@@ -261,6 +271,9 @@
           "README.i18n.yaml",
           "README.md",
           "README.zh.md",
+          "locale/en.json",
+          "locale/zh.json",
+          "src/access.ts",
           "src/index.ts",
           "src/stream-server.ts",
           "src/types.ts",
@@ -270,6 +283,9 @@
         ],
         "droppedNotes": {
           "README*": "上游 README 不携带（fork 描述在 package.json）",
+          "locale/en.json": "上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
+          "locale/zh.json": "上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
+          "src/access.ts": "上游 alpha.3 新增的 host-half RBAC 策略文件（gateway 宿主侧 decide/allows）；本仓 fork 只取 client half（与 src/index.ts、src/stream-server.ts、src/types.ts 同口径不复制）。",
           "src/index.ts": "上游 host 插件入口（chamber 不镜像 host 半）",
           "src/stream-server.ts": "上游 host 半流服务器（dropped）",
           "src/types.ts": "上游 host/aux 类型文件（源码与 inert ./types 子路径均已移除）",
@@ -344,12 +360,16 @@
           "README.i18n.yaml",
           "README.md",
           "README.zh.md",
+          "locale/en.json",
+          "locale/zh.json",
           "src/internals.ts",
           "tests/",
           "tsdown.config.ts"
         ],
         "droppedNotes": {
           "README*": "上游 README 不携带（fork 描述在 package.json/源码首页）",
+          "locale/en.json": "上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
+          "locale/zh.json": "上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
           "src/internals.ts": "上游测试接缝（本包的接缝走 OpenInAppCore 构造注入，不需要它）",
           "tests/": "上游测试不镜像（本包 test/ 覆盖域契约）",
           "tsdown.config.ts": "上游打包配置（本包走 scripts/build.mjs）"
@@ -401,6 +421,8 @@
         "dropped": [
           "README.i18n.yaml",
           "README.zh.md",
+          "locale/en.json",
+          "locale/zh.json",
           "src/client/AppFrame.module.css",
           "src/client/AppFrame.tsx",
           "src/client/DocumentTitle.tsx",
@@ -414,6 +436,8 @@
         "droppedNotes": {
           "README.i18n.yaml": "上游 README 对的哈希记录不携带（fork 说明在 README.md/package.json）",
           "README.zh.md": "中文 README 不镜像（chamber 说明只有一份）",
+          "locale/en.json": "上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
+          "locale/zh.json": "上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
           "src/client/AppFrame.module.css": "frame 样式不镜像：深引 vendor 源",
           "src/client/AppFrame.tsx": "frame 不镜像：深引 vendor 源（三列网格/拖拽/列解算仍是上游实现）",
           "src/client/DocumentTitle.tsx": "上游同包文件，本 fork 不镜像（vendor 树内保留）",
@@ -484,12 +508,16 @@
           "test/": "chamber 自有测试（按域分组：session-rows/session-state/source-runtime/plugin-kernel…）"
         },
         "dropped": [
+          "locale/en.json",
+          "locale/zh.json",
           "src/client/HeaderLeadingControls.module.css",
           "src/client/HeaderLeadingControls.tsx",
           "tests/",
           "tsdown.config.ts"
         ],
         "droppedNotes": {
+          "locale/en.json": "上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
+          "locale/zh.json": "上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
           "src/client/HeaderLeadingControls.module.css": "该组件的内部样式；上游文件不镜像、也不被消费——同一 shell.leading 席位由本包 SidebarLeadingControls.module.css（上游同形 clone）实现",
           "src/client/HeaderLeadingControls.tsx": "上游组件不镜像、不被源码路径消费；同一 shell.leading 席位由本包 SidebarLeadingControls.tsx 注册占座（src/client/index.ts；vendor-modules.d.ts 只声明本包用到的类型面）",
           "tests/": "上游测试/快照不镜像（chamber 有自建 test/）",
@@ -639,20 +667,24 @@
       "deviations": [],
       "relatedGates": [
         "packages/desktop/test/desktop-shell/updater-attention.test.ts",
+        "packages/desktop/test/desktop-shell/updater-channel-seal.test.ts",
         "packages/desktop/test/desktop-shell/updater-main-wiring.test.ts",
+        "packages/desktop/test/desktop-shell/updater-revision.test.ts",
         "packages/desktop/test/desktop-shell/updater-watchdog.test.ts",
+        "packages/desktop/test/ipc/shell-ipc-update.test.ts",
         "packages/desktop/update-journal.test.ts",
         "packages/desktop/update-schedule.test.ts"
       ],
       "symbols": [
+        "packages/desktop/update-confirmation.ts#parseConfirmationRevision",
         "packages/desktop/update-headless.ts#selectLatestReleaseVersion",
         "packages/desktop/update-journal.ts#updateJournalState",
         "packages/desktop/update-schedule.ts#UPDATE_SCHEDULE_DEFAULTS",
         "packages/desktop/updater.ts#LINUX_UPDATE_UNSUPPORTED_REASON"
       ],
-      "evidence": "覆盖文件：apps/desktop/src/{update-coordinator,update-schedule,update-journal,update-attention,update-presentation}.ts（+ update-error/http-executor 为 different-adopted，逐行见 §4.5）。人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验（上游 apps/desktop/src/update-{coordinator,journal,schedule,attention,presentation,error,http-executor}.ts、preload.cts 的 update 臂与 mandatory-update-*.ts）。上游把 schedule 的时长解析抽出 duration-env.ts（语义不变；本仓非法 env 告警回退的行为不动）；登录 shell 环境在 §4.6 手工移植登记行，不做镜像声明（该行是它的落点，不逐行见 §4.5），逐行见 §4.5 审计表",
+      "evidence": "覆盖文件：apps/desktop/src/{update-coordinator,update-schedule,update-journal,update-attention,update-presentation}.ts（+ update-error/http-executor 为 different-adopted，逐行见 §4.5）。人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验（上游 apps/desktop/src/update-{coordinator,journal,schedule,attention,presentation,error,http-executor}.ts、preload.cts 的 update 臂与 mandatory-update-*.ts）。上游把 schedule 的时长解析抽出 duration-env.ts（语义不变；本仓非法 env 告警回退的行为不动）；登录 shell 环境在 §4.6 手工移植登记行，不做镜像声明（该行是它的落点，不逐行见 §4.5），逐行见 §4.5 审计表；本次复审采纳其两个可借鉴点（自建载体，design 11 §4）：构建期通道封签（electron-builder.beta.yml 的 extraMetadata → 打包 package.json 运行期读回）与确认回答的 revision 护栏（新增 packages/desktop/update-confirmation.ts）",
       "status": "accepted",
-      "rationale": "上游有完整 electron-updater 链；chamber 自建更新链按相位/注意力/presentation 归类/journal 语义镜像其形状（§22.3.5），ours = updater.ts / update-schedule.ts / update-journal.ts / update-headless.ts + preload.cts 的 update 臂。两处明确不采用：update-http-executor 的「替换 electron-updater 传输」需要注入私有字段（Electron 升级即碎，chamber 用外部 watchdog + 忽略迟到事件），update-dialog/overlay 与 mandatory-update 家族是上游 Desktop 的产品面（design 11 §2 无弹窗硬约束）。另：T-04 —— 上游 apps/ 与 patches/ 均无 Sparkle，Swift 腿的更新链是 chamber 自建，本触点只覆盖 Electron 腿。"
+      "rationale": "上游有完整 electron-updater 链；chamber 自建更新链按相位/注意力/presentation 归类/journal 语义镜像其形状（§22.3.5），ours = updater.ts / update-schedule.ts / update-journal.ts / update-headless.ts + preload.cts 的 update 臂。两处明确不采用：update-http-executor 的「替换 electron-updater 传输」需要注入私有字段（Electron 升级即碎，chamber 用外部 watchdog + 忽略迟到事件），update-dialog/overlay 与 mandatory-update 家族是上游 Desktop 的产品面（design 11 §2 无弹窗硬约束）。已翻案采纳其两个可借鉴点（自建载体，不改「无弹窗」契约）：构建期通道封签（extraMetadata → 运行期读回，脱开版本后缀单源）与确认回答的 revision 护栏（IPC 载荷 { revision }，过期回答 loud 拒绝 + 重推状态）。另：T-04 —— 上游 apps/ 与 patches/ 均无 Sparkle，Swift 腿的更新链是 chamber 自建，本触点只覆盖 Electron 腿。"
     },
     {
       "id": "mirror.dsh-client-hmr-events-endpoint",

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { commitBundleSwap, recoverBundleSwap } from './bundle-swap.mjs';
 import { bundlePnpmLaunch } from './bundle-pnpm-launcher.mjs';
 import { renderAllowBuildsBlock, pruneRuntimeArtifacts } from '@dsh-chamber/dsh-runtime';
-import { renderRuntimeWorkspace, stageUpstreamPatches, upstreamPatchedDependencies } from './upstream-patches.mjs';
+import { assertPatchesApplied, renderRuntimeWorkspace, stageUpstreamPatches, upstreamPatchedDependencies } from './upstream-patches.mjs';
 
 /**
  * 将 dsh 官方发布包 @deepseek-ai/dsh 安装为本地运行时（方案 B）。
@@ -78,7 +78,7 @@ function lockfileDshVersion() {
     const match = /@deepseek-ai\/dsh@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/.exec(text);
     if (match !== null) return match[1];
   } catch { /* fall through to the pin */ }
-  return '0.2.0-rc.2';
+  return '0.2.1-rc.2';
 }
 const DEFAULT_DSH_VERSION = lockfileDshVersion();
 const BUNDLE_PNPM_VERSION = '11.21.0';
@@ -100,11 +100,19 @@ if (existsSync(installed) && !force) {
   const recorded = JSON.parse(readFileSync(path.join(dest, 'package.json'), 'utf8'));
   const recordedVersion = recorded.dependencies?.['@deepseek-ai/dsh'];
   if (recorded.dsh?.platform === platform && recordedVersion === VERSION) {
-    console.log(
-      `[bundle-dsh] 目标 ${dest} 已封装 @deepseek-ai/dsh@${recorded.dependencies?.['@deepseek-ai/dsh'] ?? '?'}（${platform}），跳过。`,
-    );
-    console.log(`[bundle-dsh] 使用 --force 重新拉取固定版本 @${VERSION}；升级须显式设置精确 DSH_CHAMBER_DSH_VERSION。`);
-    process.exit(0);
+    // 同版本同平台不足以跳过：普通 build 不重生成锁，补丁通道可能在版本不变的情况下变化，
+    // 故跳过前逐字节比较现有 workspace 与本次会渲染出的内容（§17-C）。
+    const staged = renderRuntimeWorkspace(renderAllowBuildsBlock(), upstreamPatchedDependencies());
+    let current;
+    try { current = readFileSync(path.join(dest, 'pnpm-workspace.yaml'), 'utf8'); } catch { current = undefined; }
+    if (current === staged) {
+      console.log(
+        `[bundle-dsh] 目标 ${dest} 已封装 @deepseek-ai/dsh@${recorded.dependencies?.['@deepseek-ai/dsh'] ?? '?'}（${platform}），patch 通道逐字节一致，跳过。`,
+      );
+      console.log(`[bundle-dsh] 使用 --force 重新拉取固定版本 @${VERSION}；升级须显式设置精确 DSH_CHAMBER_DSH_VERSION。`);
+      process.exit(0);
+    }
+    console.warn('[bundle-dsh] 现有封装的 patch 通道与当前渲染不一致（同版本补丁集/字节变化），重新封装。');
   }
   console.warn(
     `[bundle-dsh] 现有封装 ${recordedVersion ?? '未知版本'} / ${recorded.dsh?.platform ?? '未知平台'} 与要求 ${VERSION} / ${platform} 不符，重新封装。`,
@@ -202,6 +210,14 @@ if (refreshLockfile) {
     [...pnpmCommand, 'install', '--lockfile-only', '--no-frozen-lockfile'],
     `显式刷新 @deepseek-ai/dsh@${VERSION} runtime lockfile…`,
   );
+}
+{
+  // 补丁版本契约（§17-C）：图内被补丁的依赖必须解析出 patch_hash，否则
+  // allowUnusedPatches 只会警告、封装出未打补丁的运行树。
+  const workLockfile = path.join(work, 'pnpm-lock.yaml');
+  if (existsSync(workLockfile)) {
+    assertPatchesApplied(readFileSync(workLockfile, 'utf8'), upstreamPatchedDependencies(), 'runtime lock');
+  }
 }
 run(
   [...pnpmCommand, 'install', '--frozen-lockfile', '--config.node-linker=hoisted'],

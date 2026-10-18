@@ -22,7 +22,7 @@ test('the plain warning holds for the upstream Toast default 3s', () => {
 })
 
 test('a disconnected source drops its notice (identity-preserving when nothing drops)', () => {
-  const notices = { local: true as const, 'ssh-a': true as const }
+  const notices = { local: 'archivedNotOpenable' as const, 'ssh-a': 'archivedNotOpenable' as const }
   assert.equal(retainConnectedNoticeSources(notices, new Set(['local', 'ssh-a'])), notices,
     'nothing dropped keeps the same reference (no setState churn)')
   const pruned = retainConnectedNoticeSources(notices, new Set(['local']))

@@ -36,7 +36,7 @@ import { createTrustedIpc, isChamberPermissionGranted, isExternalLinkUrl, isTrus
 import type { TrustedIpc } from './renderer-trust.ts';
 import { atomicWritePrivateFileNoFollow, createControlPlane, ensurePrivateDirectoryNoFollow, readPrivateFileNoFollow, startLoginShellEnvironment } from './control-plane-module.ts';
 import { attemptDeepLinkProtocolRegistration, canRestoreMainWindow, decideDeepLinkProtocolRegistration, describeUnknownError, ensureLinuxProtocolDesktopFile, linuxAutostartDesktopEntry, linuxAutostartDirectory, resolveLinuxLaunchExecutable } from './deep-link.ts';
-import { createUpdateController, flashUpdateAttentionWindow } from './updater.ts';
+import { createUpdateController, flashUpdateAttentionWindow, normalizeSealedChannel } from './updater.ts';
 import { shellStrings } from './shell-locale.ts';
 import { acquireChamberLock } from './chamber-lock.ts';
 import { acquireHostRootLease, describeHostRootLeaseFailure } from './host-root-lease.ts';
@@ -275,7 +275,13 @@ app.on('child-process-gone', (_event, details) => {
 
 const pkgDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(pkgDir, '..', '..');
-const { version } = JSON.parse(readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
+const desktopManifest = JSON.parse(readFileSync(path.join(pkgDir, 'package.json'), 'utf8')) as {
+  version: string;
+  /** Build-sealed update channel (electron-builder.beta.yml extraMetadata): the packaged
+   *  artifact states its channel. Absent on stable/dev builds = version suffix / env. */
+  dshChamberUpdateChannel?: unknown;
+};
+const { version } = desktopManifest;
 
 function resolveBuiltinDshWorkspace(): string | null {
   if (app.isPackaged) {
@@ -1280,6 +1286,8 @@ if (!gotTheLock) {
     // release URL / short error text) and no failure blocks startup.
     const updater = createUpdateController({
       version,
+      // 通道封签（design 11 §4）：打包清单里的构建期事实优先；dev/stable 无键 = 版本后缀 + env。
+      sealedChannel: normalizeSealedChannel(desktopManifest.dshChamberUpdateChannel),
       logger: {
         log: (...args) => console.log('[updater]', ...args),
         warn: (...args) => console.warn('[updater]', ...args),

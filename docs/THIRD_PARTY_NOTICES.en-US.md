@@ -12,7 +12,7 @@ Generated with `npm run gen:notices`.
 | `@types/node` | 26.2.0 | MIT |
 | `@types/react` | 19.2.18 | MIT |
 | `@types/react-dom` | 19.2.4 | MIT |
-| `@types/ws` | 8.18.1 | MIT |
+| `@types/ws` | 8.18.2 | MIT |
 | `@vitejs/plugin-react` | 4.3.0 | MIT |
 | `anser` | 2.3.5 | MIT |
 | `clsx` | 2.1.1 | MIT |
@@ -34,7 +34,7 @@ Generated with `npm run gen:notices`.
 | `micromark-util-sanitize-uri` | 2.0.1 | MIT |
 | `micromark-util-symbol` | 2.0.1 | MIT |
 | `micromark-util-types` | 2.0.3 | MIT |
-| `node-pty` | 1.1.0 | MIT |
+| `node-pty` | 1.2.0-beta.15 | MIT |
 | `pnpm` | 11.21.0 | MIT |
 | `react` | 19.2.8 | MIT |
 | `react-dom` | 19.2.8 | MIT |

@@ -143,7 +143,7 @@
 
 > 判据同旧：surface方法是否有消费调用点（通道字符串不是判据）。
 
-- 有调用点：restartAndInstall/download/openReleasePage（`update-store.ts:117/143/157`）、runtime-management八项、onIntent、onResume、desktopSsh的instances_get/delete_connection/save_connection/set_password/set_gateway_*（sidebar）、vscodeOpenInNewWindow。
+- 有调用点：restartAndInstall/download/openReleasePage（`update-store.ts:108/134/148`）、runtime-management八项、onIntent、onResume、desktopSsh的instances_get/delete_connection/save_connection/set_password/set_gateway_*（sidebar）、vscodeOpenInNewWindow。
 - 潜伏面：无。`desktopSsh.instances_set` 删除（通道/shim 方法/preload 与 renderer 声明/生成物/pin 计数同步），原「legacy no-op 通道」偏差随之关闭。
 - 更新面修正：`kind=check`单源成立（S-21）且页面消费者真实；`kind=download/install`按kind分派到Sparkle标准窗、忙时带回真实原因（P-15/S-39），能力面携带真实error（S-38）。契约对齐由`bridge-manifest.json` + `bridge-shim-surface.test.ts` + `ipc-surface-mirror.test.ts`锁定；payload与shim运行时执行由`verify-shim-payload-shape.mjs`运行时臂锁住（G22 resolved，计数见G34）。
 

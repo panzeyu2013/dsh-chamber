@@ -63,7 +63,7 @@ pnpm run dist:desktop
 
 ### bundle-dsh：dsh 运行时封装（scripts/bundle-dsh.mjs）
 
-- **dsh 运行时 = 官方发布包**：脚本用 `pnpm add @deepseek-ai/dsh@0.2.0-rc.2`（默认精确 pin；`DSH_CHAMBER_DSH_VERSION` 只接受精确 semver 做显式升级验证，拒绝 `latest`/range/URL；`--force` 仅刷新当前精确版本）。这个 pin **只约束桌面应用内嵌的本地 runtime，不约束远程实例版本**；各远程可独立升级，连接时只检查所需协议能力是否兼容。发布包自带完整插件依赖图 + 已构建 lib，**不克隆源码、不 tsc/tsdown 构建、不需要 tsx**。
+- **dsh 运行时 = 官方发布包**：脚本把 `@deepseek-ai/dsh` 以**精确版本**（当前 `0.2.1-rc.2`）写进封装清单，再按**冻结**的 runtime 锁安装（hoisted 布局；换版本时先用 `--refresh-lockfile` 以 `--lockfile-only` 重解），装完跑 `bin.js --version` 冒烟（`DSH_CHAMBER_DSH_VERSION` 只接受精确 semver 做显式升级验证，拒绝 `latest`/range/URL；`--force` 仅刷新当前精确版本）。这个 pin **只约束桌面应用内嵌的本地 runtime，不约束远程实例版本**；各远程可独立升级，连接时只检查所需协议能力是否兼容。发布包自带完整插件依赖图 + 已构建 lib，**不克隆源码、不 tsc/tsdown 构建、不需要 tsx**。
 - 构建工具固定为 `pnpm@11.21.0`；PATH 不匹配时自动以
   `npx --yes pnpm@11.21.0` 兜底，不解析浮动 major tag。
 - pnpm 11 两个坑（bundle-dsh 已处理）：① 默认拦截依赖构建脚本 → 生成的 `pnpm-workspace.yaml` 用 `allowBuilds` 白名单放行 node-pty/koffi/protobufjs/@google/genai/@deepseek-ai/dsh-subprocess-local（原生模块）；② 默认发布年龄策略可能过滤指定版本 → 临时 workspace 使用 `minimumReleaseAge: 0`，但输入仍必须是精确 semver，不引入浮动解析。
@@ -140,9 +140,10 @@ pnpm run dist:desktop
 | `desktop_ssh_plugin_list` | invoke | 远端插件清单投影（cat 远端 manifest + 本地解析；只读） |
 | `desktop_ssh_seed_host_graph` | invoke | 向远端注入 chamber host 包（idempotent，hash-skip；供给面，非插件模型写面） |
 | `desktop_local_plugin_list` | invoke | 本地插件清单（依赖值路径**脱敏**为 `file:<hidden>`；只读） |
-| `dsh-chamber:update-state` | invoke | 更新状态快照（设计 11）：`{phase, currentVersion, latestVersion, channel, downloadPercent, releaseUrl, installBlockedReason, error}`——非秘密投影 |
+| `dsh-chamber:update-state` | invoke | 更新状态快照（设计 11）：`{phase, currentVersion, latestVersion, channel, revision, downloadPercent, releaseUrl, installBlockedReason, error}`——非秘密投影（`revision` = 状态代际，确认动作回传它） |
 | `dsh-chamber:update-check` | invoke | 用户主动检查；复用周期检查路径，只做 feed 发现、不下载 |
-| `dsh-chamber:update-download` | invoke | 用户确认的「更新」动作：触发后台下载（`autoDownload=false`，不点击永不下载）；`{ok}` 或 `{error}` |
+| `dsh-chamber:update-download` | invoke | 用户确认的「更新」动作（载荷 `{revision}` = 渲染快照代际）：触发后台下载（`autoDownload=false`，不点击永不下载）；过期/缺失 revision loud 拒绝并重推当前状态；`{ok}` 或 `{error}` |
+| `dsh-chamber:update-restart` | invoke | 「重启并安装」（载荷 `{revision}`，同一过期护栏）：quitAndInstall；原生腿在场走 Sparkle 标准窗 |
 | `dsh-chamber:open-release` | invoke | 「前往下载页」：经主进程 `shell.openExternal` 打开，仅允许本仓库 GitHub 页（严格白名单） |
 | `dsh-chamber:update-state-changed` | 主进程推送 | 更新状态变化（检查/下载/就绪/失败），renderer 订阅刷新 settings「更新」部分 |
 | `desktop_ssh_status_changed` | 主进程推送 | 状态变化事件 `{id, status}` |

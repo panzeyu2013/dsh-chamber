@@ -274,7 +274,7 @@ P(instance) = B₀ ∪ S ∪ F
 |---|---|---|---|
 | **B₀** | profile 的**安装自带组合**：web 模板默认 + installation-owned 元组 | 本仓快照常量 `PROFILE_BUNDLES_SNAPSHOT = ['@deepseek-ai/dsh-base','@deepseek-ai/dsh-web-app']`，对拍上游 `PROFILE_TEMPLATES.web.bundles`（C12） | **live `dsh.profile.bundles` 不参与保护判定**（见 6.11.2） |
 | **S** | chamber 播种物包名 | `CHAMBER_HOST_PACKAGES[].insert.name`（`control-plane/src/host-graph-seed.ts`，双端可达；结构门 C13） | 旧别名 `@dsh-chamber/dsh-host-*` 不在 S 内（历史遗留，非播种面） |
-| **F** | 运行时线族：运行时闭包中的 `@deepseek-ai/*` | **已提交**的 `packages/desktop/vendor/dsh/pnpm-lock.yaml` 闭包（平台无关，C11）；实例侧 `node_modules/@deepseek-ai/*` 仅作**等价性交叉校验**（允许差集 = 其他平台 `node-addon-system-*`） | ❌ 源码线 `vendor/harness-packages`（含 opt-in 段与 dev 包）❌ `<dsh-home>/profiles/node_modules` 的 module-fallback 农场（上游 `healProfilesModuleFallback` 维护，会残留上一代死名）❌ profile 自己的 node_modules |
+| **F** | 运行时线族：运行时闭包中的 `@deepseek-ai/*` | **已提交**的 `packages/desktop/vendor/dsh/pnpm-lock.yaml` 闭包（平台无关，C11）；实例侧 `node_modules/@deepseek-ai/*` 仅作**等价性交叉校验**（允许差集 = 其他平台 `node-addon-system-*` / `libreoffice-kit-*`） | ❌ 源码线 `vendor/harness-packages`（含 opt-in 段与 dev 包）❌ `<dsh-home>/profiles/node_modules` 的 module-fallback 农场（上游 `healProfilesModuleFallback` 维护，会残留上一代死名）❌ profile 自己的 node_modules |
 
 **事实源可达性**：local/gateway 两侧都能算出完整 P（B₀/S 是常量与注册表，F 由活动 workspace 派生，版本由 `resolveActiveRuntime()` / gateway `resolveWorkspace()` 给出）；**ssh 只有 B₀ ∪ S**（F 无远端来源）。
 F 在**名字集合**之外同时携带 **name→version 事实**（运行时线为每个名字提供的版本**集合**——同一名字可能被
@@ -382,7 +382,7 @@ R2 只看**直接 spec**；官方层的**依赖闭包**同样进入实例树（�
 
 | 门 | 断言 | 红意味着 |
 |---|---|---|
-| **C11** | 运行时线闭包含核心（`dsh`/`dsh-base`/`dsh-web-app`）、**不含** `dsh-experimental-*` 与 dev/test 包；实例树物化时枚举 == 闭包 − 其他平台 `node-addon-system-*`。核心/禁名判据与锁文件解析器**直接 import 运行时模块**（`protected-plugins.ts`，单一来源），门禁另有 ≥200 名的**解析健全性下限**（CI 专属，运行时判据是"核心锚齐全 + 无禁名"的可信性判据）。F 同时携带 §6.11.1 的 name→version 事实，但**本门判据只判名字集**（名字集合语义不变，版本事实不进 C11） | F 的来源选错（如误用含 opt-in 段的源码线 vendor 树）或上游族集合漂移 ⇒ 停升级、改派生 |
+| **C11** | 运行时线闭包含核心（`dsh`/`dsh-base`/`dsh-web-app`）、不含 dev/test 包、官方 `dsh-experimental-*` 按登记白名单双向判定（未登记红 / 已登记缺席红）；实例树物化时枚举 == 闭包 − 其他平台 `node-addon-system-*` / `libreoffice-kit-*`。核心/禁名判据与锁文件解析器**直接 import 运行时模块**（`protected-plugins.ts`，单一来源），门禁另有 ≥200 名的**解析健全性下限**（CI 专属，运行时判据是"核心锚齐全 + 无禁名"的可信性判据）。F 同时携带 §6.11.1 的 name→version 事实，但**本门判据只判名字集**（名字集合语义不变，版本事实不进 C11） | F 的来源选错（如误用含 opt-in 段的源码线 vendor 树）或上游族集合漂移 ⇒ 停升级、改派生 |
 | **C12** | 上游源码仍以 `dsh.profile.bundles` 承载层列表、以 `dsh.bundle.patch` 声明层、web 模板默认组合不变、profile workspace 仍是 hoisted + 不自动装 peer | 上游改了 profile 格式/默认组合/链接器 ⇒ 停升级，改 B₀ 快照与派生 |
 | **C13** | `HOST_*_PACKAGE_NAME` ↔ `HOST_*_INSERT` ↔ `CHAMBER_HOST_PACKAGES` 三面一一对应 | 策略与播种机制脱节（S 分量失真） |
 | **C14** | 宿主 manifest 字段集三方一致（`plugin-sync.ts` producer ↔ `preload.cts` ↔ `renderer/src/global.d.ts`）；**行类型单源**：`@dsh-chamber/dsh-chamber-wire/plugin-row` 是 `PluginRow`/`PluginRowRole` 的唯一定义，五个消费方（control-plane、client-core pass-through、`preload.cts`、renderer `global.d.ts`、settings-connections）只做 import/export type 且绑定期待名——本地同名重声明或引用面漂移即红 | 约束投影与行模型漂移（ipc-surface-mirror 只覆盖宿主接口面；行类型曾经"文档说守护、实际 0 违规也绿" 从三方文本镜像改为单源+禁重声明） |

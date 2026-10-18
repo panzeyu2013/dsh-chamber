@@ -469,12 +469,6 @@ declare module '@deepseek-ai/dsh-client-ui-primitives/src/Button.tsx' {
   } & ButtonHTMLAttributes<HTMLButtonElement>): ReactNode
 }
 
-// invariants + chamber client-plugin registration faces.
-declare module '@deepseek-ai/dsh-invariants' {
-  /** Package invariant installer (loose face). */
-  export type InvariantInstaller = (ctx: any) => void | Promise<void>
-}
-
 // Chamber client-plugin registration faces (designs 05/06/08/16).
 declare module '@dsh-chamber/dsh-chamber-client-ui-sidebar/client' {
   export const inject: string[]; export function apply(ctx: any): void

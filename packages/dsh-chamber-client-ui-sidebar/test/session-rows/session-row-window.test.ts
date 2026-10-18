@@ -9,11 +9,14 @@ import {
 
 const LIMIT = SESSION_ROWS_VISIBLE_FIRST
 
-type Over = Partial<{ total: number; currentIndex: number; expanded: boolean; visibleFirst: number }>
+type Over = Partial<{
+  total: number; currentIndex: number; expanded: boolean; visibleFirst: number; attentionIndex: number
+}>
 
 const paramsOf = (over: Over) => ({
   total: over.total ?? 10, currentIndex: over.currentIndex ?? -1,
   expanded: over.expanded ?? false, visibleFirst: over.visibleFirst ?? LIMIT,
+  ...(over.attentionIndex === undefined ? {} : { attentionIndex: over.attentionIndex }),
 })
 const window = (over: Over = {}) => sessionRowWindow(paramsOf(over))
 const disclosure = (over: Over = {}) =>
@@ -137,4 +140,15 @@ test('只有"窗口被放大且放大后仍藏行"的组按 id 记分量：默�
     JSON.stringify(['w2', 'w1']), '分量跟随 id 而非位置')
   assert.equal(sessionRowWindowMotionKey([group('w1', LIMIT + 300, LIMIT + 60), group('w2', 900, 5)]),
     enlarged, '默认窗口的组不贡献分量，只保留被放大的那个')
+})
+
+test('注意力行在默认窗口之外时窗口放大到覆盖它（alpha.3 #6062）', () => {
+  assert.deepEqual(window({ total: LIMIT + 300, attentionIndex: LIMIT + 5 }),
+    { renderCount: LIMIT + 6, hiddenCount: 294 })
+  assert.deepEqual(window({ total: LIMIT + 300, attentionIndex: 3 }),
+    { renderCount: LIMIT, hiddenCount: 300 }, '窗口内注意力行不改变默认窗口')
+  assert.deepEqual(window({ total: LIMIT + 300, currentIndex: LIMIT + 10, attentionIndex: LIMIT + 5 }),
+    { renderCount: LIMIT + 11, hiddenCount: 289 }, '当前行与注意力行取更远者')
+  assert.deepEqual(window({ total: LIMIT + 300, attentionIndex: LIMIT + 400 }),
+    { renderCount: LIMIT + 300, hiddenCount: 0 }, '注意力下标被 total 截断')
 })

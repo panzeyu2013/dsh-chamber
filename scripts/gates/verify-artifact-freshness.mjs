@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url'
 // The C4 mount-order table is the single source for the generated artifact set
 // (shared with the upgrade touchpoint gate); the freshness gate imports it and
 // never re-types the roster names.
-import { EXPECTED_MOUNT_PACKAGES } from '../../packages/renderer/scripts/typert-remote-contract.mjs'
+import { EXPECTED_GENERATED_REMOTES } from '../../packages/renderer/scripts/typert-remote-contract.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const results = []
@@ -195,7 +195,7 @@ function checkPreload() {
  * @param {readonly string[]} roster - package names of the C4 contract.
  * @returns {{ added: string[], removed: string[], dirs: string[], expectedDirs: string[], countMismatch: boolean, stale: boolean }}
  */
-function generatedTreeVerdict(before, after, roster = EXPECTED_MOUNT_PACKAGES) {
+function generatedTreeVerdict(before, after, roster = EXPECTED_GENERATED_REMOTES) {
   const beforeSet = new Set(before)
   const afterSet = new Set(after)
   const added = after.filter((file) => !beforeSet.has(file))
@@ -238,7 +238,7 @@ function checkGenerated() {
     const details = []
     if (verdict.added.length > 0) details.push('重跑多出：' + verdict.added.slice(0, 5).join(', '))
     if (verdict.removed.length > 0) details.push('重跑未产出（旧残留）：' + verdict.removed.slice(0, 5).join(', '))
-    if (verdict.countMismatch) details.push('数量 ' + now.length + ' != C4 roster ' + EXPECTED_MOUNT_PACKAGES.length)
+    if (verdict.countMismatch) details.push('数量 ' + now.length + ' != 生成 roster ' + EXPECTED_GENERATED_REMOTES.length)
     if (JSON.stringify(verdict.dirs) !== JSON.stringify(verdict.expectedDirs)) {
       details.push('目录集 != C4 roster：[' + verdict.dirs.join(', ') + '] vs [' + verdict.expectedDirs.join(', ') + ']')
     }

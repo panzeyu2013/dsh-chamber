@@ -113,6 +113,10 @@ export const zh = {
   'row.archived': '已归档',
   'actions.unarchive': '取消归档',
   'toast.archivedNotOpenable': '已归档对话暂时无法查看，请取消归档后查看',
+  // alpha.3 SessionId 菜单项（上游 order 450）：复制完整会话 id 的成功/失败提示。
+  'menu.sessionId': '查看并复制会话 ID',
+  'toast.sessionIdCopied': '已复制会话 ID',
+  'toast.sessionIdCopyFailed': '复制会话 ID 失败',
   'empty.noneArchived': '暂无已归档会话',
   'empty.viewOthers': '查看其他会话',
   // 行级图标钮的无障碍名按本仓政策参数化行名（见上方 `action.newSession.aria` 的说明）；
@@ -311,6 +315,9 @@ export const en = {
   'row.archived': 'Archived',
   'actions.unarchive': 'Unarchive',
   'toast.archivedNotOpenable': 'Archived sessions cannot be opened. Unarchive it to view.',
+  'menu.sessionId': 'View and copy session ID',
+  'toast.sessionIdCopied': 'Session ID copied',
+  'toast.sessionIdCopyFailed': 'Could not copy the session ID',
   'empty.noneArchived': 'No archived sessions yet',
   'empty.viewOthers': 'View other sessions',
   'action.archive.aria': 'Archive “{name}”',

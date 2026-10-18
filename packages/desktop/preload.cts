@@ -281,15 +281,18 @@ export type GatewayPluginSyncIpcResult =
  * checking itself never downloads (autoDownload=false); restartAndInstall()
  * is the user-triggered「重启并安装」action once the download completed —
  * the main process runs electron-updater quitAndInstall (quit + install +
- * relaunch through the normal quit path).
+ * relaunch through the normal quit path). Both confirmation actions echo the
+ * state revision they were rendered from; the main process refuses a stale
+ * revision (design 11 §4) instead of acting on a snapshot that no longer exists.
  */
 export interface UpdateSurface {
   state(): Promise<UpdateState>
   /** User-initiated check (the「检查更新」button). */
   check(): Promise<{ ok: true } | { ok: false; error: string }>
-  download(): Promise<{ ok: true } | { ok: false; error: string }>
-  /** Restart into the downloaded update (the「重启并安装」button). */
-  restartAndInstall(): Promise<{ ok: true } | { ok: false; error: string }>
+  /** `revision` = the state revision this answer was rendered from (stale answers are refused). */
+  download(revision: number): Promise<{ ok: true } | { ok: false; error: string }>
+  /** Restart into the downloaded update (the「重启并安装」button); same revision echo. */
+  restartAndInstall(revision: number): Promise<{ ok: true } | { ok: false; error: string }>
   onChanged(callback: (state: UpdateState) => void): () => void
   /** Open a release page in the system browser (main-process allowlisted). */
   openReleasePage(url: string): Promise<{ ok: true } | { ok: false; error: string }>
@@ -635,8 +638,8 @@ function updateApi(): UpdateSurface {
   return {
     state: () => ipcRenderer.invoke('dsh-chamber:update-state'),
     check: () => ipcRenderer.invoke('dsh-chamber:update-check'),
-    download: () => ipcRenderer.invoke('dsh-chamber:update-download'),
-    restartAndInstall: () => ipcRenderer.invoke('dsh-chamber:update-restart'),
+    download: (revision: number) => ipcRenderer.invoke('dsh-chamber:update-download', { revision }),
+    restartAndInstall: (revision: number) => ipcRenderer.invoke('dsh-chamber:update-restart', { revision }),
     openReleasePage: url => ipcRenderer.invoke('dsh-chamber:open-release', { url }),
     onChanged: callback => {
       if (typeof callback !== 'function') return () => {};

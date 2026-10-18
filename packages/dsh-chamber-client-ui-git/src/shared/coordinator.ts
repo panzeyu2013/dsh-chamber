@@ -20,6 +20,7 @@ import { refreshedSince } from './freshness.ts'
 import { selectPollWave } from './poll-wave.ts'
 import { notDispatchedRetryDelay } from './retry-budget.ts'
 import { workspaceAfterAnchor } from './placement.ts'
+import { unregisteredRemoveInput } from './remove-input.ts'
 import { SerializedRefreshes } from './refresh-flight.ts'
 import { GitWorktreeRpcError, gitWorktreeApi, isAmbiguousGitRpcFailure, isDeterministicGitRejection } from './git-api.ts'
 import { canTargetSession, effectiveSnapshot, findWorktree, removeBlockReason } from './git-facts.ts'
@@ -855,12 +856,13 @@ export async function removeWorktree(
 }
 
 /** Remove an UNREGISTERED worktree (no dsh workspace — Plan A): git-first via
- *  the host's path-based variant, no workspace.delete, no archive step. The row's
- *  delete button stays hard-disabled for dirty worktrees (no discard path wired). */
+ *  the host's path-based variant, no workspace.delete, no archive step. A dirty
+ *  worktree requires the row's explicit discard acknowledgement, which arrives
+ *  here as `discardChanges: true` (build with `unregisteredRemoveInput`). */
 export async function removeUnregisteredWorktree(
   sourceId: string,
   target: { repoId: string; worktreeId: string; path: string; branch: string | null; head: string },
-  options: { deleteBranch?: string } = {},
+  options: { deleteBranch?: string; discardChanges?: boolean } = {},
 ): Promise<void> {
   const operationId = nextId('remove')
   return runBusy(sourceId, { kind: 'remove', operationId }, async () => {
@@ -876,17 +878,9 @@ export async function removeUnregisteredWorktree(
     if (!refreshedSince(fresh, refreshStartedAt)) {
       throw new GitActionError('fresh-facts-unavailable', 'The latest Git worktree facts are unavailable')
     }
-    const input = {
-      operationId,
-      path: target.path,
-      expected: {
-        repoId: target.repoId,
-        worktreeId: target.worktreeId,
-        branch: target.branch,
-        head: target.head,
-      },
-      ...(options.deleteBranch === undefined ? {} : { deleteBranch: options.deleteBranch }),
-    }
+    // The host input (identity + the explicit discard/delete authorizations) is the
+    // one shared builder, so the unregistered path cannot drift from the wire shape.
+    const input = unregisteredRemoveInput(operationId, target, options)
     try {
       await runRemoveSaga({
         hostRemove: () => gitWorktreeApi.remove(sourceId, input, target.path),

@@ -21,6 +21,7 @@ function state(patch: Partial<UpdateState>): UpdateState {
     currentVersion: '0.3.2-beta.3',
     latestVersion: null,
     channel: 'stable',
+    revision: 0,
     downloadPercent: null,
     releaseUrl: null,
     installBlockedReason: null,

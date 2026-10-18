@@ -29,6 +29,19 @@
       "@deepseek-ai/dsh-client-modules/client": [
         "./packages/renderer/src/vendor-modules.d.ts"
       ],
+      // alpha.3 P0: the official access-control client face the composite covers
+      // first-screen (ui-session/ui-workspace inject `remoteAccess`). The vendor
+      // package publishes lib-only faces this repo does not build; the root program
+      // maps the one face the renderer imports to its pinned vendor source, exactly
+      // like dsh-client-modules/client above.
+      "@deepseek-ai/dsh-api-remote-access/client": [
+        "./vendor/harness-packages/@deepseek-ai/dsh-api-remote-access/src/client/index.ts"
+      ],
+      // alpha.3: the account family is a deferred covered row again; the build-time
+      // vendor patch gates its desktop onboarding overlay off (design 09 §3.5).
+      "@deepseek-ai/dsh-client-ui-settings-account/client": [
+        "./vendor/harness-packages/@deepseek-ai/dsh-client-ui-settings-account/src/client/index.ts"
+      ],
       "@dsh-chamber/dsh-chamber-client-ui-sidebar/client": [
         "./packages/renderer/src/ambient/chamber-client-plugins.d.ts"
       ],

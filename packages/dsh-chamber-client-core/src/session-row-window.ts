@@ -15,10 +15,17 @@
  *  大列表全量（~1400 行 ≈ 45k px DOM）的线性膨胀段；展开条给出完整入口。 */
 export const SESSION_ROWS_VISIBLE_FIRST = 200
 
+/** 注意力行自动抬升窗口的上限（上游 SESSION_WATERMARK_AUTO_MAX 的等价物，按非 ghost 行计数）：
+ *  超过它的注意力行不自动进入窗口，仍由展开条承接。 */
+export const SESSION_ROWS_ATTENTION_AUTO_MAX = 50
+
 export interface SessionRowWindowParams {
   total: number
   /** 当前会话行下标；-1 = 该工作区无当前会话（无保可见要求）。 */
   currentIndex: number
+  /** alpha.3 #6062：注意力行的**最高下标**（运行中 / 子代理在跑 / 待用户 / 未读完成 / 当前行）；
+   *  -1 = 无。上游 requiredWatermark 的等价物，由调用方做单调（只升不降）后传入。 */
+  attentionIndex?: number
   expanded: boolean
   visibleFirst: number
 }
@@ -29,11 +36,12 @@ export interface SessionRowWindowResult {
 }
 
 export function sessionRowWindow(params: SessionRowWindowParams): SessionRowWindowResult {
-  const { total, currentIndex, expanded, visibleFirst } = params
+  const { total, currentIndex, attentionIndex = -1, expanded, visibleFirst } = params
   if (total <= 0) return { renderCount: 0, hiddenCount: 0 }
   if (expanded) return { renderCount: total, hiddenCount: 0 }
   const neededForCurrent = currentIndex >= 0 ? Math.min(total, currentIndex + 1) : 0
-  const renderCount = Math.min(total, Math.max(visibleFirst, neededForCurrent))
+  const neededForAttention = attentionIndex >= 0 ? Math.min(total, attentionIndex + 1) : 0
+  const renderCount = Math.min(total, Math.max(visibleFirst, neededForCurrent, neededForAttention))
   return { renderCount, hiddenCount: total - renderCount }
 }
 

@@ -1,6 +1,7 @@
 /**
- * update-headless.ts —— Swift flavor（headless sidecar）更新控制器：消费面零改动
- * （UpdateController/UpdateState 不变，相位含 'installing'；settings-bridge 不感知 flavor）。
+ * update-headless.ts —— Swift flavor（headless sidecar）更新控制器：消费契约同形
+ * （UpdateController 方法集不变；UpdateState 增 `revision` 代际字段供确认动作护栏；
+ * 相位含 'installing'；settings-bridge 不感知 flavor）。
  * - 真实 check 用共享 update-discovery.ts 的有界查询 + 候选选择 → compareChamberVersions；
  *   releaseUrl 只由 releaseUrlFor 生成并经 isAllowedReleaseUrl 复核，绝不伪造 URL。
  * - 发现单源：声明原生腿后绝不查 GitHub，只发冻结边 updateNativeAction kind=check 交壳内
@@ -10,15 +11,18 @@
  * - 原生腿在场不排静默定时器；无腿时 start() 与 Electron **同源节奏**（节奏常量只在
  *   update-schedule.ts 一处：15s 首检 + 600s 基准 ±20% 抖动 + 失败退避封顶 1h；单枚自排
  *   程定时器 unref、stop() 终局、start() 幂等、noteActivity 与 Electron 同一语义）；
- *   download()/restartAndInstall() 无腿显式拒绝、有腿按相位门转发。检查/下载静默挂起由
+ *   download()/restartAndInstall() 无腿显式拒绝、有腿按相位门转发；确认动作带 revision
+ *   护栏（回答快照过期即拒绝，与 Electron 同源 isStaleConfirmation）。检查/下载静默挂起由
  *   idle 看门狗收敛，可选取证日志见 update-journal.ts。
  * - Electron-free：只 import updater.ts 的纯函数。
  */
 import {
   compareChamberVersions,
   isAllowedReleaseUrl,
+  isStaleConfirmation,
   releaseUrlFor,
   sanitizeErrorText,
+  STALE_CONFIRMATION_ERROR,
   type UpdateController,
   type UpdateState,
 } from './updater.ts'
@@ -146,6 +150,7 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
     currentVersion: deps.version,
     latestVersion: null,
     channel,
+    revision: 0,
     downloadPercent: null,
     releaseUrl: null,
     installBlockedReason: NATIVE_SHELL_INSTALL_BLOCKED_REASON,
@@ -187,7 +192,9 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
   }
 
   function setState(patch: Partial<UpdateState>): void {
-    state = { ...state, ...patch }
+    // Stale-answer guard source of truth (mirrors updater.ts): every push advances the
+    // revision; assigned after the spread so a caller-supplied value can never rewind it.
+    state = { ...state, ...patch, revision: state.revision + 1 }
     journal?.record(state)
     for (const listener of listeners) {
       // 推送腿（宿主 subscribe 回调）抛错绝不能反噬控制器：既不能让 checking 卡死，
@@ -423,7 +430,14 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
       await runCheck()
       return { ok: true }
     },
-    async download() {
+    async download(expectedRevision?: number | null) {
+      if (isStaleConfirmation(state.revision, expectedRevision)) {
+        deps.logger.warn(
+          '[updater-headless] 拒绝过期的下载确认（回答 revision=' + String(expectedRevision)
+          + '，当前 revision=' + String(state.revision) + '）',
+        )
+        return { ok: false, error: STALE_CONFIRMATION_ERROR }
+      }
       // 原生腿可用时打开 Sparkle 标准更新窗口（下载+安装是其连续流程）。冻结语义
       // 「绝不启动第二次下载」：只有 available（或 error+latestVersion 的下载重试）
       // 才转发；downloading/downloaded/installing 在飞 → 拒绝；其余相位 → 无更新。
@@ -441,11 +455,25 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
       }
       return { ok: false, error: NATIVE_SHELL_DOWNLOAD_REFUSAL }
     },
-    restartAndInstall() {
+    restartAndInstall(expectedRevision?: number | null) {
+      if (isStaleConfirmation(state.revision, expectedRevision)) {
+        deps.logger.warn(
+          '[updater-headless] 拒绝过期的重启确认（回答 revision=' + String(expectedRevision)
+          + '，当前 revision=' + String(state.revision) + '）',
+        )
+        return { ok: false, error: STALE_CONFIRMATION_ERROR }
+      }
       // 同步面保持「无原生腿」的拒绝语义（Electron 契约不变）。
       return { ok: false, error: NATIVE_SHELL_RESTART_REFUSAL }
     },
-    async restartAndInstallAsync() {
+    async restartAndInstallAsync(expectedRevision?: number | null) {
+      if (isStaleConfirmation(state.revision, expectedRevision)) {
+        deps.logger.warn(
+          '[updater-headless] 拒绝过期的重启确认（回答 revision=' + String(expectedRevision)
+          + '，当前 revision=' + String(state.revision) + '）',
+        )
+        return { ok: false, error: STALE_CONFIRMATION_ERROR }
+      }
       // 原生腿可用时：Sparkle 标准窗口的「Install and Relaunch」即本方法语义（壳在
       // willInstallUpdate 先停 sidecar，再替换 bundle 重启）。仅 downloaded 转发，在飞拒绝。
       if (state.installBlockedReason === null && deps.nativeUpdater !== undefined) {

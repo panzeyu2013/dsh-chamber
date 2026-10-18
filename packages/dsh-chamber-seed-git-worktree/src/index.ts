@@ -15,6 +15,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import { pickEffectiveCwd, readProjectedWorkingDirectory, type ProjectionSource } from './core-validation.ts'
 import {
   GitWorktreeCore,
   domainResult,
@@ -61,6 +62,15 @@ interface GitWorktreeHostContext extends Context {
   }
 }
 
+/** The cwd fact of one live agent: projection first, the immutable header cwd as fallback. */
+function cwdFact(projections: ProjectionSource | undefined, agent: { session: { header: { cwd?: string } } }): object {
+  const cwd = pickEffectiveCwd(
+    readProjectedWorkingDirectory(projections, agent.session),
+    agent.session.header.cwd,
+  )
+  return cwd === undefined ? {} : { cwd }
+}
+
 /** Remote-only facade; all validation, serialization and Git policy live in the pure core. */
 export class GitWorktreeGateway extends TypertRemoteService {
   static inject = ['workspaceRegistry', 'agents']
@@ -70,6 +80,11 @@ export class GitWorktreeGateway extends TypertRemoteService {
   constructor(ctx: Context) {
     super(ctx, 'gitWorktree')
     const host = ctx as GitWorktreeHostContext
+    // Read lazily on every call: the projection registry is provided by a sibling plugin,
+    // so a capture at construction time would freeze an undefined value for the whole
+    // instance whenever this gateway activates first.
+    const projections = (): ProjectionSource | undefined =>
+      ctx.get('sessionProjections') as ProjectionSource | undefined
     this.core = new GitWorktreeCore({
       source: {
         listWorkspaces: () => host.workspaceRegistry.list().map(workspace => ({
@@ -82,7 +97,7 @@ export class GitWorktreeGateway extends TypertRemoteService {
         listAgents: () => host.agents.list().map(agent => ({
           sessionId: String(agent.id),
           status: agent.status,
-          ...(agent.session.header.cwd === undefined ? {} : { cwd: agent.session.header.cwd }),
+          ...(cwdFact(projections(), agent)),
           ...(agent.session.header.parentSession === undefined
             ? {}
             : { parentSessionId: String(agent.session.header.parentSession) }),

@@ -22,10 +22,12 @@ const apiPathSource = readFileSync(new URL('../../../dsh-client-connection/src/a
 
 /** The private normalized field, read structurally. */
 const basePathOf = (value?: string): string =>
-  (new RemoteStreamMuxClient(value) as unknown as { basePath: string }).basePath
+  (new RemoteStreamMuxClient({ basePath: value }) as unknown as { basePath: string }).basePath
 
 test('both sides spell the same normalization rule', () => {
-  assert.ok(clientSource.includes("const normalized = basePath.replace(/\\/+$/, '')"),
+  // alpha.3: the fork constructor takes one options object, so the rule now
+  // destructures its basePath before normalizing (same expression shape as api-path).
+  assert.ok(clientSource.includes("const normalized = (options.basePath ?? '').replace(/\\/+$/, '')"),
     'stream-client.ts must strip trailing slashes')
   assert.ok(clientSource.includes("this.basePath = normalized === '' || normalized === '/api' ? '' : normalized"),
     'stream-client.ts must collapse empty and the stock /api to the no-prefix form')
@@ -33,6 +35,18 @@ test('both sides spell the same normalization rule', () => {
     'api-path.ts must strip trailing slashes')
   assert.ok(apiPathSource.includes("return base === '' || base === API_PATH ? '' : base"),
     'api-path.ts must collapse empty and API_PATH to the no-prefix form')
+})
+
+test('the connection WebSocket carrier prefixes the resolved per-entry base path', () => {
+  // alpha.3 routes the mux through connection.openWebSocket; without this prefix the
+  // socket lands on the control-plane root instead of /api/i/<id>/api/remote.mux.
+  const connectionClient = readFileSync(
+    new URL('../../../dsh-client-connection/src/client/index.ts', import.meta.url), 'utf8',
+  )
+  assert.ok(
+    connectionClient.includes('transport?.streamBaseUrl === undefined ? socketBasePath + path : path'),
+    'openWebSocket must prefix the resolved base path unless an explicit streamBaseUrl wins',
+  )
 })
 
 test('the fork constructor agrees with resolveInstanceBasePath across the domain', () => {

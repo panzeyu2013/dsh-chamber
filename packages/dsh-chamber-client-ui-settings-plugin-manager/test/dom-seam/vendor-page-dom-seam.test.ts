@@ -1,5 +1,5 @@
 /**
- * 插件管理页容纳层的上游 DOM 缝锁（design 05 §5；checklist §3 末条 / §7 第 6 步）。
+ * 插件管理页容纳层的上游 DOM 缝锁 + 注册子座席表锁（design 05 §5；checklist §3 末条 / §7 第 6 步）。
  *
  * `EmbeddedPluginManagerPage.module.css` 不认上游的 CSS-module 类名（构建期哈希），只认
  * 页面自己的属性钩子与**页头行的两子序列**。这条缝静默回归过一次：上游把页头 intro 从
@@ -184,31 +184,104 @@ vendorTest('负控：页头子元素计数把第三个兄弟判红（旧的两�
     '负控前提：旧的配对形态确实对「第三子」放行——它若哪天变红，说明对照已无价值，可删该负控。')
 })
 
-vendorTest('分组缝：section[data-plugin-group] = [组头（h3 + 计数）在前、ul 卡列表在后]', () => {
-  const group = sliceThrough(pageSource(), 'const renderGroup', 'return (')
-  assert.match(group, /<section\b[^>]*\bdata-plugin-group=\{id\}>\s*<div\b[^>]*>[\s\S]*?data-plugin-count[\s\S]*?<\/div>\s*<ul\b[^>]*>[\s\S]*?<\/ul>\s*<\/section>/u,
-    '组形必须是「首子 = 组头 div（带 data-plugin-count 计数）在前、末子 = ul 卡列表在后」：'
-    + '容纳层据此把组盒 display:contents、把首组头提进页头行首轨，卡列表留在流里；只 pin 嵌套与顺序。')
+vendorTest('分组缝：section[data-plugin-group] = [组头 div（h3 在前）在前、ul 卡列表在后]', () => {
+  const group = sliceThrough(pageSource(), 'const renderGroup', '</section>')
+  assert.match(group, /<section\b[^>]*\bdata-plugin-group=\{id\}>[\s\S]*?<div\b[^>]*>[\s\S]*?<h3\b[\s\S]*?<\/div>[\s\S]*?<ul\b[^>]*>[\s\S]*?<\/ul>/u,
+    '组形必须是「首子 = 组头 div（标题 h3 在前）在前、卡列表 ul 在后」：'
+    + '容纳层据此把组盒 display:contents、把首组头提进页头行首轨，卡列表留在流里；只 pin 嵌套与顺序。'
+    + 'alpha.2 起组头不再带计数元素（data-plugin-count 退役），ul 在整个 renderGroup 内是条件渲染。')
 })
 
-vendorTest('首组是 Official、次组是已安装（首轨该放谁的语义锚）', () => {
+vendorTest('首组是 basic、其后 extensions / bundles（首轨该放谁的语义锚）', () => {
   const page = pageSource()
-  assert.match(page, /\brenderGroup\('official', t\('officialTitle'\),/u,
-    '首组必须是 Official：容纳层把**第一个** data-plugin-group 的组头提进行一（官方 7 那一行）。')
-  assert.match(page, /\brenderGroup\('bundles', t\('bundlesTitle'\),/u,
-    '次组（已安装）的渲染调用必须仍在；组序变化即复核首轨该放谁，并同步 checklist §3 登记。')
-  assertOrder(page, ["renderGroup('official'", "renderGroup('bundles'"], 'Official 必须仍是第一个渲染的组。')
+  assert.match(page, /\brenderGroup\('basic', t\('basicTitle'\),/u,
+    '首组必须是 basic：容纳层把**第一个** data-plugin-group 的组头提进行一。alpha.2 起分组语义由'
+    + '「Official / 已安装」改为「basic / extensions / bundles」，行一的标签随之改变；组序变化即复核首轨该放谁，并同步 checklist §3 登记。')
+  assertOrder(page, ["renderGroup('basic'", "renderGroup('extensions'", "renderGroup('bundles'"],
+    '组序必须是 basic -> extensions -> bundles。')
 })
 
-vendorTest('两条 chrome 行：页头 + 详情头各带 data-window-drag', () => {
+vendorTest('chrome 行：页头 + more 视图头 + 详情头各带 data-window-drag', () => {
   const count = pageSource().split('data-window-drag').length - 1
-  assert.equal(count, 2,
-    `本页应恰有两条 data-window-drag（页头行 + 详情头，实得 ${count}）：容纳层按属性命中两条 chrome 行`
-    + '（padding-top: 0），多一条少一条都要重锚 checklist §3 末条。')
+  assert.equal(count, 3,
+    `本页应恰有三条 data-window-drag（页头、more 视图头、详情头，实得 ${count}）：页头与 more 头互斥且都是页根直接子（容纳层的行一与 padding-top 直接子规则只命中渲染中的那一条），详情头只在后代选择器里；`
+    + '多一条少一条都要重锚 checklist §3 末条。')
 })
 
 vendorTest('页根自身的槽锚点 plugins.bundle.activation 仍是直接子表达式', () => {
   assert.match(pageSource(), /\brenderSlot\('plugins\.bundle\.activation'/u,
     '容纳层给 [data-plugin-panel] > [data-slot] > * 的跨轨与 960 上限是按这条直接子槽写的：'
     + '槽调用若挪进别的容器，占用者将拿不到轨道定位。')
+})
+
+/**
+ * 注册子座席表锁（v0.2.1-alpha.1 升级补）：本包内嵌官方插件管理页组件，但不加载其 apply()
+ * （官方行在复合壳里是 covered-skip），页面里的 renderSlot(...) 绑定的是本包 registration 的
+ * children 表。React 把 {renderSlot('plugins.add.actions', …)} 作为 children 传给 Menu 时即求值
+ * （与菜单是否展开无关），未声明就抛 SlotOwnershipError: slot 'plugins.add.actions' is not
+ * declared by this entry's children —— 打开「设置 → 内置插件」即崩。上游本代新增的
+ * plugins.add.actions 正是这样漏进来的；本锁把两表双向钉死。
+ */
+vendorTest('注册子座席表：MANAGER_CHILDREN 与上游 registration 的 children 双向一致', () => {
+  /** 取 start 的 { 起、按括号配平到对应 } 的整块（注释已剥；本表无字符串花括号）。 */
+  const bracedBlock = (text: string, start: string): string => {
+    const from = text.indexOf(start)
+    assert.ok(from >= 0, '源里找不到 ' + start)
+    const open = text.indexOf('{', from)
+    assert.ok(open >= 0, start + ' 后没有 {')
+    let depth = 0
+    for (let index = open; index < text.length; index += 1) {
+      if (text[index] === '{') depth += 1
+      else if (text[index] === '}') {
+        depth -= 1
+        if (depth === 0) return text.slice(open, index + 1)
+      }
+    }
+    assert.fail(start + ' 的块未闭合')
+  }
+  const specsOf = (block: string): Array<{ key: string; kind: string; scope: string }> =>
+    [...block.matchAll(/'([^']+)':\s*\{\s*kind:\s*'(single|keyed|list|chain)'\s*[,;]\s*scope:\s*'([a-z-]+)'/gu)]
+      .map((match) => ({ key: match[1]!, kind: match[2]!, scope: match[3]! }))
+  const occurrences = (block: string): number => (block.match(/:\s*\{\s*kind:\s*'/gu) ?? []).length
+  const ownSource = normalize(stripComments(readFileSync(
+    new URL('../../src/client/index.ts', import.meta.url), 'utf8')))
+  const vendorSource = normalize(stripComments(readFileSync(
+    new URL('../../../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-plugin-manager/src/client/index.ts', import.meta.url), 'utf8')))
+  assert.equal(vendorSource.split('children: {').length - 1, 1, '上游 registration 的 children 表应恰有一处')
+  assert.equal(ownSource.split('const MANAGER_CHILDREN = {').length - 1, 1, '本包 MANAGER_CHILDREN 应恰有一处')
+  const ownBlock = bracedBlock(ownSource, 'const MANAGER_CHILDREN = {')
+  const vendorBlock = bracedBlock(vendorSource, 'children: {')
+  const own = specsOf(ownBlock)
+  const vendor = specsOf(vendorBlock)
+  assert.ok(own.length > 0 && vendor.length > 0, '两表都要抽到座席键与 kind/scope')
+  assert.equal(own.length, occurrences(ownBlock), '本地每个子座席都必须被抽取（漏抽会静默放过上游新增）')
+  assert.equal(vendor.length, occurrences(vendorBlock), '上游每个子座席都必须被抽取（漏抽会静默放过新增）')
+  const ownByKey = new Map(own.map((entry) => [entry.key, entry]))
+  const vendorByKey = new Map(vendor.map((entry) => [entry.key, entry]))
+  const missing = vendor.filter((entry) => !ownByKey.has(entry.key)).map((entry) => entry.key)
+  const extra = own.filter((entry) => !vendorByKey.has(entry.key)).map((entry) => entry.key)
+  assert.deepEqual(missing, [],
+    '上游注册声明了本包未声明的子座席（页面 renderSlot 会抛 SlotOwnershipError）：' + missing.join(', '))
+  assert.deepEqual(extra, [],
+    '本包声明了上游 registration 没有的子座席（扩展必须显式登记理由并同步本锁）：' + extra.join(', '))
+  for (const entry of vendor) {
+    const ownSpec = ownByKey.get(entry.key)!
+    assert.deepEqual({ kind: ownSpec.kind, scope: ownSpec.scope }, { kind: entry.kind, scope: entry.scope },
+      '座席 ' + entry.key + ' 的 kind/scope 与上游 registration 不一致（kind 决定渲染分派，漂移即崩或错渲）')
+  }
+  // 更强的一臂：页面**实际消费**的 renderSlot 键必须全在本地 children 表里——这正是运行期
+  // throw 的充要条件，且不依赖上游把自己的新槽登记进它的 children 表（上游漏登记也照样红）。
+  const used = [...new Set([...pageSource().matchAll(/renderSlot\(\s*'([^']+)'/gu)].map((match) => match[1]!))]
+  const undeclaredUsage = used.filter((key) => !ownByKey.has(key))
+  assert.deepEqual(undeclaredUsage, [],
+    '页面 renderSlot 直接消费但本包未声明的子座席（运行期 SlotOwnershipError）：' + undeclaredUsage.join(', '))
+  assert.ok(used.length > 0, '页面至少消费一个子座席（抽取失效即红，别把空集当绿）')
+  // 负控：夹具证明抽取器能看见 kind/scope 与「少一个键」（首版只比 key、且用恒真式负控）。
+  const fixture = specsOf("{ 'plugins.add.actions': { kind: 'list', scope: 'root' }, 'plugins.bundle.config': { kind: 'keyed', scope: 'root' } }")
+  assert.deepEqual(fixture, [
+    { key: 'plugins.add.actions', kind: 'list', scope: 'root' },
+    { key: 'plugins.bundle.config', kind: 'keyed', scope: 'root' },
+  ], '负控：kind/scope 必须被抽取')
+  assert.deepEqual(fixture.filter((entry) => entry.key !== 'plugins.add.actions').map((entry) => entry.key),
+    ['plugins.bundle.config'], '负控：差集必须能看见缺键')
 })

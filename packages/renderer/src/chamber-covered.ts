@@ -8,9 +8,11 @@
  * PLATFORM_MODULES words the composite answers.
  *
  * The deliberate extra ids — covered but never loaded — are the skips: hmr /
- * mobile / directory-picker-native / settings-account. They are page-own rows the
- * composite replaces plus host rows the shell drops on purpose; each carries its
- * own reason below, and design 09 §3.5 有意跳过名单 owns their re-review.
+ * mobile / directory-picker-native. They are page-own rows the composite replaces
+ * plus host rows the shell drops on purpose; each carries its own reason below,
+ * and design 09 §3.5 有意跳过名单 owns their re-review. (settings-account left that
+ * list in alpha.3: covered DEFERRED row, desktop overlay gated off by the
+ * build-time vendor patch — design 09 §3.5 ③.)
  *
  * Maintenance: a plugin import added to chamber-entry.ts must append its package
  * name here in the same batch (missing ids fail LOUD at boot; extra ids are
@@ -24,6 +26,8 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   '@deepseek-ai/dsh-client-connection',
   '@deepseek-ai/dsh-typert-registry',
   '@deepseek-ai/dsh-api-gateway',
+  // alpha.3: required by ui-session/ui-workspace (remoteAccess inject); first-screen.
+  '@deepseek-ai/dsh-api-remote-access',
   '@deepseek-ai/dsh-api-remotes',
   // provider group: the platform store word (a PLATFORM_MODULES seed), the two
   // api controllers (ctx.sessions / ctx.workspaces), and the three conversation
@@ -100,15 +104,10 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // pinned to `browse`.
   '@dsh-chamber/dsh-client-ui-mobile',
   '@deepseek-ai/dsh-client-ui-directory-picker-native',
-  // The official DESKTOP-only account family: apply is gated on `'dshDesktop' in
-  // globalThis` — the carrier BOTH flavors expose for the official shortcuts/
-  // updater seats (S-52/S-54) — so it activates here while the official WEB flavor
-  // returns early. Its `shell.overlay` `desktop-onboarding` seat then portals a
-  // full-screen surface, zeroes + inerts `#root` and parks on「正在加载设置…」 (no
-  // desktop configForms form resolves it here; observed parked ≥30s), taking over
-  // every instance view. Skipping the row keeps the family's activation state equal
-  // to the web flavor's; an account/sign-in surface is a chamber-side feature
-  // (design 05 §5), never this row's (design 09 §3.5 有意跳过名单③).
+  // The official desktop account family is NOT skipped any more (alpha.3): the build-time
+  // vendor patch gates its desktop-onboarding shell.overlay seat off (the overlay took
+  // over #root and parked without desktop configForms), and chamber-entry loads the row
+  // from the DEFERRED cluster, so the account settings section registers normally.
   '@deepseek-ai/dsh-client-ui-settings-account',
   // deferred families (registerDeferred dynamic imports): registered after the
   // boot settles — composite-owned namespaces all the same, so a host-graph row
@@ -191,6 +190,8 @@ export const CHAMBER_COVERED_FACTORY_IDS: readonly string[] = [
   '@deepseek-ai/dsh-client-connection',
   '@deepseek-ai/dsh-typert-registry',
   '@deepseek-ai/dsh-api-gateway',
+  // alpha.3: required by ui-session/ui-workspace (remoteAccess inject); first-screen.
+  '@deepseek-ai/dsh-api-remote-access',
   '@deepseek-ai/dsh-api-remotes',
   // provider group: the store is a platform word (registered factory, no
   // ctx.plugin); the controllers and conversation families are first-screen

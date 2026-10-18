@@ -199,8 +199,8 @@ rows，不改变官方 web profile 的其它组合层。
     的 cordis loader 经 `node-addon-require-builtin` 取 `internal/modules/esm/loader`，该
     addon 的 V8 embedder 探测在 Electron 的 patched Node 下不可用（"no compatible
     GetAlignedPointerFromEmbedderData symbol"），`--expose-internals` 的官方 require 路径可用。
-  - **指纹白名单**：该 addon（`node-addon-require-builtin@0.1.6`）内置运行时指纹表，Electron 侧只认
-    构建时收录的版本（当前表内为 43.0.0 / 44.0.0 / 45.0.0-alpha.6）。桌面 Electron pin 不在表内时
+  - **指纹白名单**：该 addon（`node-addon-require-builtin@0.1.9`）内置运行时指纹表，Electron 侧只认
+    构建时收录的版本（当前表内为 43.0.0 / 44.0.0 / 44.7.0 / 45.0.0-alpha.6）。桌面 Electron pin 不在表内时
     宿主子进程直接 exit 1（`unsupported Electron runtime fingerprint`）——Electron flavor 的托管宿主
     可用性因此由 **Electron pin × addon 版本**共同决定，任一侧升级都要实机复核；纯 node 路径
     （含 Swift sidecar 的 `Resources/sidecar/dsh-chamber-helper`）不受该白名单约束。

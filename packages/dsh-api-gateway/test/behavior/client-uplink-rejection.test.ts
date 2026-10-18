@@ -200,7 +200,7 @@ test('a generated stream with descriptor.uplink is refused at call time, before 
       assert.ok(error instanceof Error, 'the refusal must be an explicit Error, not a RemoteResult')
       assert.match(error.message, /client api: probe\/attach/)
       assert.match(error.message, /descriptor\.uplink/)
-      assert.match(error.message, /does not replay the uplink client half/)
+      assert.match(error.message, /never forwards an uplink into openRemoteStream/)
       assert.match(error.message, /G43/)
       assert.match(error.message, /ClientUplinkQueue/)
       return true
@@ -220,4 +220,26 @@ test('the same generated stream without an uplink still opens and yields the dow
   // The args bag is built with a null prototype, so read the one wire field.
   const payload = recorder.streams[0]?.payload as { args: Record<string, unknown> }
   assert.deepEqual(Object.entries(payload.args), [['topic', 'topic']])
+})
+
+test('the answer leg registers exactly one generation source (real Connection semantics)', () => {
+  // The alpha.3 merge once constructed ClientRemoteEvents twice; the second
+  // registerGenerationSource throws on a real handle, but the shared fake above is a
+  // no-op and stayed green. Pin the single-construction contract with real semantics.
+  let generationSources = 0
+  const connection = {
+    ...fakeConnection({ streams: [] }, ['never-delivered']),
+    interactions: 'answer',
+    registerGenerationSource: () => {
+      generationSources += 1
+      if (generationSources > 1) {
+        throw new Error('connection: a generation source is already registered')
+      }
+      return () => {}
+    },
+  }
+  const ctx = createFakeContext(connection)
+  assert.doesNotThrow(() => apply(ctx as unknown as Context),
+    'apply() must not register the events channel twice')
+  assert.equal(generationSources, 1, 'exactly one generation source must be registered')
 })

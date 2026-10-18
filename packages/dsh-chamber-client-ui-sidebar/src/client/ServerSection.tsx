@@ -37,7 +37,8 @@ import { getSourceRepoLayouts, getWorkspaceGitFlag, getWorkspaceGitFlagsVersion,
 import { resolveWorkspaceDrop } from '@dsh-chamber/dsh-chamber-client-core/workspace-drag-order'
 import { workspaceTreeDepths, workspaceTreeParents } from '@dsh-chamber/dsh-chamber-client-core/workspace-tree'
 import {
-  sessionRowDisclosure, sessionRowWindow, sessionRowWindowMotionKey, SESSION_ROWS_VISIBLE_FIRST,
+  sessionRowDisclosure, sessionRowWindow, sessionRowWindowMotionKey, SESSION_ROWS_ATTENTION_AUTO_MAX,
+  SESSION_ROWS_VISIBLE_FIRST,
 } from '@dsh-chamber/dsh-chamber-client-core/session-row-window'
 import { orderWithOverride, useSidebarSection, workspaceDropEnv } from './sidebar-context.ts'
 import { ServerSectionHeader } from './ServerSectionHeader.tsx'
@@ -132,6 +133,8 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
   const prevSearchCapsuleMounted = useRef(false)
   /** 上次渲染时焦点是否在胶囊内——卸载后 activeElement 会回落，必须提前记。 */
   const capsuleHeldFocus = useRef(false)
+  // alpha.3 #6062：每工作区的注意力窗口水位（只升不降，上游 raiseWatermarks 的等价物）。
+  const sessionAttentionFloorRef = useRef<Record<string, number>>({})
   const searchButton = useRef<HTMLButtonElement | null>(null)
 
   /**
@@ -548,7 +551,9 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                       停止并归档的就地提示条已按用户裁决移除（§3.4 Rejected alternatives）。 */}
                   {notice !== undefined && (
                     <div className={cc.archiveNotice} role="alert">
-                      <span className={cc.archiveNoticeText}>{t('toast.archivedNotOpenable')}</span>
+                      <span className={cc.archiveNoticeText}>{t(notice === 'archivedNotOpenable'
+                        ? 'toast.archivedNotOpenable'
+                        : notice === 'sessionIdCopied' ? 'toast.sessionIdCopied' : 'toast.sessionIdCopyFailed')}</span>
                     </div>
                   )}
                   {merged !== undefined ? (
@@ -677,11 +682,36 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                           const currentSessionIndex = currentId === undefined
                             ? -1
                             : sessions.findIndex(row => row.id === currentId)
+                          // alpha.3 #6062：注意力行（运行中 / 子代理在跑 / 待用户 / 未读完成 /
+                          // 当前行）必须进入窗口——上游 requiredWatermark 的等价物。按非 ghost 且
+                          // 非 blank 行计数并受自动上限约束；水位只升不降（上游 raiseWatermarks 单调）。
+                          let requiredAttentionIndex = -1
+                          {
+                            let seen = 0
+                            sessions.forEach((session, index) => {
+                              if (session.blank === true || isGhostSession(session)) return
+                              seen += 1
+                              if (seen > SESSION_ROWS_ATTENTION_AUTO_MAX) return
+                              const fact = server.runtime?.sessions[session.id]
+                              const attention = fact?.running === true || (fact?.runningSubagents ?? 0) > 0
+                                || fact?.pending !== undefined || fact?.completed === true
+                                || session.id === currentId
+                              if (attention) requiredAttentionIndex = index
+                            })
+                          }
+                          const previousAttentionFloor = sessionAttentionFloorRef.current[accountStateKey] ?? -1
+                          const attentionFloor = Math.max(previousAttentionFloor, requiredAttentionIndex)
+                          if (attentionFloor !== previousAttentionFloor) {
+                            sessionAttentionFloorRef.current = {
+                              ...sessionAttentionFloorRef.current, [accountStateKey]: attentionFloor,
+                            }
+                          }
                           const sessionWindow = sessionRowWindow({
                             total: sessions.length,
                             currentIndex: currentSessionIndex,
                             expanded: rowsExpanded,
                             visibleFirst: SESSION_ROWS_VISIBLE_FIRST,
+                            attentionIndex: attentionFloor,
                           })
                           const visibleSessions = sessionWindow.hiddenCount === 0
                             ? sessions

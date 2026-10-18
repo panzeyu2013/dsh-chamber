@@ -7,6 +7,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { configLedgerSource } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/config-ledger.ts'
+import { tabLedgerSource } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/tab-ledger.ts'
 import { en, zh } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/locales.ts'
 import { PluginManagerController, isInstallPending } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/manager-store.ts'
 import { PluginRefreshToast, type PluginRefreshToastFace } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/PluginRefreshToast.tsx'
@@ -58,6 +59,12 @@ interface ChamberPluginRefreshControl {
 }
 
 const MANAGER_CHILDREN = {
+  // v0.2.1-alpha.1: the upstream page renders this seat in the add-plugin menu
+  // (PluginManagerPage AddPluginMenu); we embed the page without its apply(),
+  // so our registration MUST declare every upstream child or renderSlot throws
+  // SlotOwnershipError. Locked by test/dom-seam/vendor-page-dom-seam.test.ts.
+  'plugins.add.actions': { kind: 'list', scope: 'root' },
+  'plugins.tab': { kind: 'list', scope: 'root' },
   'plugins.item': { kind: 'list', scope: 'root' },
   'plugins.bundle.activation': { kind: 'keyed', scope: 'root' },
   'plugins.bundle.config': { kind: 'keyed', scope: 'root' },
@@ -94,7 +101,7 @@ export function apply(ctx: ClientContext): void {
   // Upstream's refresh toast is the plugin manager's own shell.overlay seat: the
   // face is hoisted so the settings page and the overlay toast share one
   // controller face (upstream registers the same pair from one place).
-  const face = controller.inject(configLedger, resolveText)
+  const face = controller.inject(configLedger, tabLedgerSource(ctx), resolveText)
   // 插件刷新收敛触发（design 09 §3.7 / design 15 §6）：本页控制器的一次
   // 「动作在途 → 结算」边沿 = 一次用户发起的插件/组合包变更，通知所属实例的壳做
   // client 图重同步 + 有界 restart 窗口。控制面缺席（测试夹具/非 chamber 壳）即 no-op。
@@ -134,7 +141,11 @@ export function apply(ctx: ClientContext): void {
     const handle = createNavigationStore()
     const instance = handle.create()
     const store: typeof handle = { ...handle, create: () => instance }
-    const navigate = (packageName: string): void => { instance.actions.setView({ kind: 'package', name: packageName }) }
+    const navigate = (packageName: string): void => {
+      // The page now has tabs: a bundle opened from another tab must land on Installed.
+      instance.actions.setTab('installed')
+      instance.actions.setView({ kind: 'package', name: packageName })
+    }
     openPackage = navigate
     yield () => { if (openPackage === navigate) openPackage = undefined }
     yield ctx.slots.register({

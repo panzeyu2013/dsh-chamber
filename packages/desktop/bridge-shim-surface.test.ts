@@ -11,7 +11,8 @@
  *     ipcRenderer.invoke('…') / ipcRenderer.on('…') 字面量与 shim 的
  *     invoke('…') / subscribe(PUSH_EVENTS.KEY) 解析通道相等（含 openIn.apps
  *     的解包方法、ready/ack 的 {deliveryId,attempt} 类形状方法——本测试锁
- *     通道名，payload 键由实现注释与 Swift 集成测试覆盖）；
+ *     通道名；update 面两个确认动作的 payload 键由 ⑥ 逐条锁死，其余面的
+ *     payload 形状由实现注释与 Swift 集成测试覆盖）；
  *  ③ 顶层面：preload exposeInMainWorld('dshChamber', {…}) 的 13 个键
  *     （4 标量 + 10 命名空间）== shim dshChamberApi 键；
  *  ④ invoke 通道集：preload 全部 invoke 字面量 == shim 全部 invoke 字面量
@@ -265,7 +266,7 @@ test('④ invoke/push 通道集：preload == shim == manifest（52 invoke / 9 pu
   }
 })
 
-test('⑥ update 面 payload 形状锁步：openReleasePage {url} / 四个动作无载荷（G22 的更新面切片）', () => {
+test('⑥ update 面 payload 形状锁步：openReleasePage {url} / state|check 无载荷 / 确认动作带 {revision}（G22 的更新面切片）', () => {
   // 更新面的 payload 形状锁步：preload 与 shim 的「动作是否携带 payload、
   // 键叫什么」逐条锁死。更广的 payload 形状（notifications/deepLink/
   // runtime 请求对象）仍靠 Swift 侧监听器校验 + 集成测试。
@@ -274,13 +275,31 @@ test('⑥ update 面 payload 形状锁步：openReleasePage {url} / 四个动作
   const NO_PAYLOAD_ACTIONS: Array<[member: string, channel: string]> = [
     ['state', 'dsh-chamber:update-state'],
     ['check', 'dsh-chamber:update-check'],
+  ]
+  // 确认动作（download / restartAndInstall）必须回传渲染快照的 revision：design 11 §4
+  // 的过期回答护栏在主进程侧，两侧漏传/改键名都会让护栏静默失效——键形状逐字锁死。
+  const CONFIRM_ACTIONS: Array<[member: string, channel: string]> = [
     ['download', 'dsh-chamber:update-download'],
     ['restartAndInstall', 'dsh-chamber:update-restart'],
   ]
+  for (const [action, channel] of CONFIRM_ACTIONS) {
+    assert.match(
+      preloadMembers.get(action) ?? '',
+      new RegExp(`invoke\\('${channel}',\\s*\\{\\s*revision\\s*\\}\\)`),
+      `preload update.${action} 必须携带 { revision }（渲染快照的代际号）`,
+    )
+    assert.match(
+      shimMembers.get(action) ?? '',
+      new RegExp(`invoke\\('${channel}',\\s*\\{\\s*revision:\\s*revision\\s*\\}\\)`),
+      `shim update.${action} 必须携带 { revision: revision }（与 preload 同形）`,
+    )
+  }
   for (const [action, channel] of NO_PAYLOAD_ACTIONS) {
     // preload 不传第二实参；shim 显式传 null（同一「无载荷」语义，两种拼写）。
-    assert.ok(
-      (preloadMembers.get(action) ?? '').includes(`invoke('${channel}')`),
+    // 锚定到闭括号：.includes 会被带载荷的 invoke('ch', {…}) 前缀命中而放行。
+    assert.match(
+      preloadMembers.get(action) ?? '',
+      new RegExp(`invoke\\('${channel}'\\)`),
       `preload update.${action} 不得携带 payload（应 invoke('${channel}')）`,
     )
     assert.match(
@@ -289,7 +308,7 @@ test('⑥ update 面 payload 形状锁步：openReleasePage {url} / 四个动作
       `shim update.${action} 的无载荷拼写必须是 invoke('${channel}', null)`,
     )
   }
-  // openReleasePage 是唯一带载荷的更新动作：键必须同为 { url }。
+  // openReleasePage 的载荷是字符串：键必须同为 { url }。
   assert.match(preloadMembers.get('openReleasePage') ?? '', /invoke\('dsh-chamber:open-release',\s*\{\s*url\s*\}\)/)
   assert.match(shimMembers.get('openReleasePage') ?? '', /invoke\('dsh-chamber:open-release',\s*\{\s*url:\s*url\s*\}\)/)
 })

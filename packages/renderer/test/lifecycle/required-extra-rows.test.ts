@@ -17,6 +17,7 @@ import {
   deferredRegistrationFailureMessage,
   DEFERRED_EXTRA_ROW_IDS,
   injectedServices,
+  KNOWN_SERVICE_PROVIDERS,
   missingInjectedServices,
   missingServiceFact,
   registeredInjectMembers,
@@ -90,6 +91,8 @@ test('requiredServiceProbeMessage names each service, its injectors, the deadlin
     'the registered plugin injecting it must be named')
   assert.ok(withInstance.includes('provider row @deepseek-ai/dsh-client-ui-sidebar-right'),
     'the missing PROVIDER row must be named so the line localizes the cause, not only the waiter')
+  assert.equal(KNOWN_SERVICE_PROVIDERS.sidebarRightTabs, '@deepseek-ai/dsh-client-ui-sidebar-right',
+    'the sidebarRightTabs registry row maps to the same provider, so the probe names it instead of printing provider row unknown')
   assert.ok(
     requiredServiceProbeMessage([{ service: 'someUnknownService', injectedBy: ['p'] }]).includes('provider row unknown'),
     'a service with no known provider says so explicitly instead of silently omitting the provider half')
@@ -192,6 +195,8 @@ const AUDITED_FIRST_SCREEN_FACES: ReadonlyArray<readonly [id: string, members: r
   ['@deepseek-ai/dsh-client-connection', []],
   ['@deepseek-ai/dsh-typert-registry', []],
   ['@deepseek-ai/dsh-api-gateway', ['typert', 'connection']],
+  // alpha.3: the access-control client every ui-session/ui-workspace injects remoteAccess from.
+  ['@deepseek-ai/dsh-api-remote-access', ['remote', 'slots']],
   ['@deepseek-ai/dsh-api-remotes', ['remote']],
   ['@deepseek-ai/dsh-api-session-controller',
     ['connection', 'fileUpload', 'typert', 'remote', 'remote.commands', 'remote.session', 'remote.subagents']],
@@ -211,9 +216,9 @@ const AUDITED_FIRST_SCREEN_FACES: ReadonlyArray<readonly [id: string, members: r
   ['@deepseek-ai/dsh-client-ui-commands', ['inputTriggers', 'sessions', 'remote', 'remote.commands', 'locale']],
   ['@deepseek-ai/dsh-client-ui-input-trigger', ['sessions', 'locale']],
   ['@deepseek-ai/dsh-client-ui-workspace',
-    ['slots', 'sessions', 'workspaces', 'locale', 'remote', 'remote.directoryPicker', 'layout', 'shortcuts']],
+    ['slots', 'sessions', 'workspaces', 'locale', 'remote', 'remote.directoryPicker', 'layout', 'shortcuts', 'remoteAccess']],
   ['@deepseek-ai/dsh-client-ui-model-selection', ['commandUi', 'locale', 'sessions', 'slots', 'remote', 'remote.session']],
-  ['@deepseek-ai/dsh-client-ui-session', ['sessions', 'slots', 'remote']],
+  ['@deepseek-ai/dsh-client-ui-session', ['sessions', 'slots', 'remote', 'remoteAccess']],
   ['@deepseek-ai/dsh-client-ui-chat',
     ['slots', 'sessions', 'uiWorkspace', 'uiSession', 'uiConversation', 'locale', 'configForms', 'remote', 'remote.session', 'sidebarRight']],
   ['@deepseek-ai/dsh-client-ui-approval', ['sessions', 'remote', 'uiSession', 'slots', 'locale']],
@@ -242,6 +247,9 @@ const AUDITED_REQUIRED_SERVICES: readonly string[] = [
  */
 const AUDITED_DEFERRED_ONLY_SERVICES: readonly string[] = [
   'jobs', 'modules',
+  // alpha.3: the deferred account row injects the official account namespace; the
+  // provider is the first-screen remote composite (api-remotes mounts it).
+  'remote.account',
   'remote.goals', 'remote.skills', 'remote.messageFeedback', 'remote.sessionFeedback',
   'remote.agentPresets', 'remote.credentials', 'remote.llm', 'remote.pluginInventory',
   'remote.pluginManager', 'remote.pluginRegistryProbe',

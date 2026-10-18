@@ -13,7 +13,7 @@ import { stripComments } from '../../../scripts/dev/test-support/source-text.ts'
 
 /**
  * The pinned assembly contract: the package list `dsh-api-remotes`' client
- * half mounts into `ctx.remote()`, in apply() mount order (25 rows). Mount
+ * half mounts into `ctx.remote()`, in apply() mount order (26 rows). Mount
  * order is runtime-significant, so it is the ONE ordered table. The `/remote`
  * import selection has no runtime order semantics: callers compare its SET
  * against this same table (single source — the lockstep test
@@ -35,6 +35,7 @@ export const EXPECTED_MOUNT_PACKAGES = Object.freeze([
   '@deepseek-ai/dsh-schedule',
   '@deepseek-ai/dsh-host-plugin-inventory',
   '@deepseek-ai/dsh-plugin-manager',
+  '@deepseek-ai/dsh-plugin-market',
   '@deepseek-ai/dsh-client-ui-plugin-manager',
   '@deepseek-ai/dsh-message-feedback',
   '@deepseek-ai/dsh-command-feedback',
@@ -49,6 +50,20 @@ export const EXPECTED_MOUNT_PACKAGES = Object.freeze([
   '@deepseek-ai/dsh-api-terminal-controller',
   '@deepseek-ai/dsh-office-to-pdf',
   '@deepseek-ai/dsh-user-questions',
+])
+
+/**
+ * Remote faces generated for self-mounted chamber-covered rows the dsh-api-remotes
+ * assembly does NOT mount: the alpha.3 access-control client value-imports its own
+ * `./remote` face and the composite covers it first-screen (ui-session/ui-workspace
+ * inject `remoteAccess`). The generated artifact roster is the assembly mount table
+ * PLUS this list; the C4 assembly assertion stays on EXPECTED_MOUNT_PACKAGES alone.
+ */
+export const EXPECTED_SELF_MOUNTED_REMOTES = Object.freeze(['@deepseek-ai/dsh-api-remote-access'])
+
+/** Every artifact gen-typert-remotes must emit (assembly mounts + self-mounted faces). */
+export const EXPECTED_GENERATED_REMOTES = Object.freeze([
+  ...EXPECTED_MOUNT_PACKAGES, ...EXPECTED_SELF_MOUNTED_REMOTES,
 ])
 
 

@@ -21,10 +21,14 @@ import assert from 'node:assert/strict'
 import type { UpdateState, UpdateSurface } from '../../src/ambient/update-bridge.d.ts'
 import { updateCheckDisabled, updateRestartAvailable } from '../../src/client/update-gate.ts'
 
+/** The rendered snapshot revision every confirmation in this suite echoes. */
+const REVISION = 1
+
 /** A completed-download state (the phase a restart arm requires). */
 function downloadedState(overrides: Partial<UpdateState> = {}): UpdateState {
   return {
     phase: 'downloaded', currentVersion: '0.2.2', latestVersion: '0.3.0', channel: 'stable',
+    revision: REVISION,
     downloadPercent: 100, installBlockedReason: null, error: null, ...overrides,
     releaseUrl: 'https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.3.0',
   }
@@ -32,12 +36,14 @@ function downloadedState(overrides: Partial<UpdateState> = {}): UpdateState {
 
 /** Fake UpdateSurface with a recordable push (the store's onChanged sink). */
 function fakeUpdateSurface(): {
-  surface: UpdateSurface & { restartCalls: number }
+  surface: UpdateSurface & { restartCalls: number; downloadRevisions: number[]; restartRevisions: number[] }
   push: (state: UpdateState) => void
 } {
   let changed: ((state: UpdateState) => void) | null = null
-  const surface: UpdateSurface & { restartCalls: number } = {
+  const surface: UpdateSurface & { restartCalls: number; downloadRevisions: number[]; restartRevisions: number[] } = {
     restartCalls: 0,
+    downloadRevisions: [],
+    restartRevisions: [],
     onChanged(listener: (state: UpdateState) => void): () => void {
       changed = listener
       return () => { changed = null }
@@ -48,11 +54,13 @@ function fakeUpdateSurface(): {
     async check(): Promise<{ ok: true } | { ok: false; error: string }> {
       return { ok: true }
     },
-    async download(): Promise<{ ok: true } | { ok: false; error: string }> {
+    async download(revision: number): Promise<{ ok: true } | { ok: false; error: string }> {
+      surface.downloadRevisions.push(revision)
       return { ok: true }
     },
-    async restartAndInstall(): Promise<{ ok: true } | { ok: false; error: string }> {
+    async restartAndInstall(revision: number): Promise<{ ok: true } | { ok: false; error: string }> {
       surface.restartCalls += 1
+      surface.restartRevisions.push(revision)
       return { ok: true }
     },
     async openReleasePage(): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -94,15 +102,15 @@ test('restart recovery rule: a pushed state carrying restartFailureText releases
     // The main process ACCEPTS the restart ({ok:true} = quitAndInstall armed):
     // the module gate is deliberately NOT reset (armed-forever-quit) — a
     // second click in the quit window is refused.
-    assert.deepEqual(await store.requestUpdateRestart(), { ok: true })
+    assert.deepEqual(await store.requestUpdateRestart(REVISION), { ok: true })
     assert.equal(surface.restartCalls, 1)
-    assert.deepEqual(await store.requestUpdateRestart(), { ok: false, error: 'restart already in progress' })
+    assert.deepEqual(await store.requestUpdateRestart(REVISION), { ok: false, error: 'restart already in progress' })
     // A pushed state proving the restart FAILED — main keeps phase
     // `downloaded` and rides the one-shot restartFailureText carry — must
     // release the gate so the in-place retry goes through.
     push(downloadedState({ restartFailureText: 'Cannot read [path]' }))
     assert.equal(store.getUpdateState()?.restartFailureText, 'Cannot read [path]', 'the push updates the snapshot')
-    const retry = await store.requestUpdateRestart()
+    const retry = await store.requestUpdateRestart(REVISION)
     assert.equal(retry.ok, true, 'a failure-carrying push must release the module gate for an in-place retry')
     assert.equal(surface.restartCalls, 2)
   } finally { cleanup() }
@@ -114,13 +122,13 @@ test('restart recovery rule: a plain downloaded push WITHOUT a failure keeps the
   const store = await freshStore()
   try {
     await waitHydrated(store)
-    assert.deepEqual(await store.requestUpdateRestart(), { ok: true })
+    assert.deepEqual(await store.requestUpdateRestart(REVISION), { ok: true })
     assert.equal(surface.restartCalls, 1)
     // A plain downloaded re-push (no restartFailureText, phase stays
     // `downloaded`): not a failure proof — the armed-forever-quit semantics
     // keep the single-flight held until the actual quit.
     push(downloadedState())
-    const again = await store.requestUpdateRestart()
+    const again = await store.requestUpdateRestart(REVISION)
     assert.deepEqual(again, { ok: false, error: 'restart already in progress' },
       'a plain downloaded push must NOT release the gate (the quit is still expected)')
     assert.equal(surface.restartCalls, 1)
@@ -133,12 +141,12 @@ test('restart recovery rule: a pushed phase error releases the module gate (belt
   const store = await freshStore()
   try {
     await waitHydrated(store)
-    assert.deepEqual(await store.requestUpdateRestart(), { ok: true })
+    assert.deepEqual(await store.requestUpdateRestart(REVISION), { ok: true })
     assert.equal(surface.restartCalls, 1)
     // The phase left `downloaded` toward 'error' — a restart failure by the
     // belt rule (normally unreachable while armed, harmless when not armed).
     push(downloadedState({ phase: 'error', downloadPercent: null, error: 'Cannot read [path]' }))
-    const retry = await store.requestUpdateRestart()
+    const retry = await store.requestUpdateRestart(REVISION)
     assert.equal(retry.ok, true, 'an error-phase push must release the module gate')
     assert.equal(surface.restartCalls, 2)
   } finally { cleanup() }
@@ -150,13 +158,13 @@ test('restart recovery rule: a pushed up-to-date phase releases the module gate 
   const store = await freshStore()
   try {
     await waitHydrated(store)
-    assert.deepEqual(await store.requestUpdateRestart(), { ok: true })
+    assert.deepEqual(await store.requestUpdateRestart(REVISION), { ok: true })
     assert.equal(surface.restartCalls, 1)
     // up-to-date is equally a failure proof under the recovery rule (a
     // downloaded state is final for this version; leaving it means the
     // restart flow died and a fresh check owns the section now).
     push(downloadedState({ phase: 'up-to-date', latestVersion: null, downloadPercent: null, releaseUrl: null }))
-    const retry = await store.requestUpdateRestart()
+    const retry = await store.requestUpdateRestart(REVISION)
     assert.equal(retry.ok, true, 'an up-to-date push must release the module gate')
     assert.equal(surface.restartCalls, 2)
   } finally { cleanup() }
@@ -178,7 +186,7 @@ test('native (Sparkle) phase pushes hydrate the same snapshot the Electron path 
     push(downloadedState({ phase: 'downloaded', downloadPercent: 100, installBlockedReason: null }))
     assert.equal(store.getUpdateState()?.phase, 'downloaded')
     assert.equal(updateRestartAvailable(store.getUpdateState()?.phase, store.getUpdateState()?.installBlockedReason ?? null, 'darwin'), true)
-    assert.deepEqual(await store.requestUpdateRestart(), { ok: true })
+    assert.deepEqual(await store.requestUpdateRestart(REVISION), { ok: true })
     assert.equal(surface.restartCalls, 1)
     // installing is a distinct native phase: no second restart affordance, and
     // the single-flight stays armed (the app is being replaced, not failed).
@@ -189,7 +197,7 @@ test('native (Sparkle) phase pushes hydrate the same snapshot the Electron path 
     push(downloadedState({ phase: 'error', downloadPercent: null, error: 'sparkle boom' }))
     assert.equal(store.getUpdateState()?.phase, 'error')
     assert.equal(store.getUpdateState()?.error, 'sparkle boom')
-    assert.deepEqual(await store.requestUpdateRestart(), { ok: true })
+    assert.deepEqual(await store.requestUpdateRestart(REVISION), { ok: true })
     assert.equal(surface.restartCalls, 2)
   } finally { cleanup() }
 })
@@ -237,7 +245,7 @@ test('S-21: the page renders the shell-pushed phases (checking → available) an
     releases.push(() => resolve({ ok: true }))
   })
   const realDownload = surface.download.bind(surface)
-  surface.download = async () => { extraCalls.push('download'); return realDownload() }
+  surface.download = async (revision: number) => { extraCalls.push('download'); return realDownload(revision) }
   const realOpen = surface.openReleasePage.bind(surface)
   surface.openReleasePage = async (url: string) => { extraCalls.push('openReleasePage'); return realOpen(url) }
   const cleanup = installUpdateSurface(surface)
@@ -264,5 +272,71 @@ test('S-21: the page renders the shell-pushed phases (checking → available) an
     assert.equal(updateCheckDisabled(store.getUpdateState()?.phase), false)
     assert.deepEqual(seen, ['checking', 'available'], '页面相位序列 = 壳推送序列（无自有发现）')
     assert.deepEqual(extraCalls, [], '检查路径绝不触碰 download/openReleasePage 等其它面')
+  } finally { cleanup() }
+})
+
+test('confirmation actions forward the rendered snapshot revision to the bridge', async () => {
+  const { surface } = fakeUpdateSurface()
+  const cleanup = installUpdateSurface(surface)
+  const store = await freshStore()
+  try {
+    await waitHydrated(store)
+    // design 11 §4：确认回答携带用户所见的 revision，主进程据此拒收过期回答——
+    // store 必须原样转发该数字（不得重读快照或补默认值）。
+    assert.deepEqual(await store.requestUpdateDownload(7), { ok: true })
+    assert.deepEqual(surface.downloadRevisions, [7])
+    assert.deepEqual(await store.requestUpdateRestart(9), { ok: true })
+    assert.deepEqual(surface.restartRevisions, [9])
+  } finally { cleanup() }
+})
+
+test('restart gate releases on a REFUSED bridge answer so the in-place retry can reach it', async () => {
+  // The module gate must not stay armed after a refusal: main re-pushes the CURRENT snapshot on a
+  // refused restart, but that snapshot carries no failure evidence (no restartFailureText, phase
+  // still downloaded), so the store's push-recovery rule cannot release this gate — it must reset
+  // on the refusal itself, or every later click stays a silent no-op until an app reload.
+  const { surface } = fakeUpdateSurface()
+  let calls = 0
+  surface.restartAndInstall = async () => {
+    calls += 1
+    return calls === 1 ? { ok: false, error: 'no downloaded update to install' } : { ok: true }
+  }
+  const cleanup = installUpdateSurface(surface)
+  const store = await freshStore()
+  try {
+    await waitHydrated(store)
+    assert.deepEqual(await store.requestUpdateRestart(1), { ok: false, error: 'no downloaded update to install' })
+    assert.deepEqual(await store.requestUpdateRestart(1), { ok: true }, 'the refusal released the module gate')
+    assert.equal(calls, 2)
+  } finally { cleanup() }
+})
+
+test('a stalled download push releases the module gate so the retry reaches the bridge', async () => {
+  const { surface, push } = fakeUpdateSurface()
+  let releaseFirst: (() => void) | undefined
+  const held = new Promise<void>((resolve) => { releaseFirst = resolve })
+  let calls = 0
+  surface.download = async (revision: number) => {
+    surface.downloadRevisions.push(revision)
+    calls += 1
+    if (calls === 1) {
+      await held
+      return { ok: false, error: 'download stalled' }
+    }
+    return { ok: true }
+  }
+  const cleanup = installUpdateSurface(surface)
+  const store = await freshStore()
+  try {
+    await waitHydrated(store)
+    const pending = store.requestUpdateDownload(REVISION)
+    // Main's watchdog declared the download stalled: it released its own single-flight, accepted a
+    // retry at the CURRENT revision and pushed the failure kind. The module gate must follow.
+    push(downloadedState({ phase: 'error', revision: 2, failureKind: 'download-network' }))
+    releaseFirst?.()
+    assert.deepEqual(await pending, { ok: false, error: 'download stalled' })
+    assert.deepEqual(await store.requestUpdateDownload(2), { ok: true },
+      'the stall push released the module gate so the retry can reach the bridge')
+    assert.deepEqual(surface.downloadRevisions, [REVISION, 2])
   } finally { cleanup() }
 })

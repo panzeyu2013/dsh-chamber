@@ -35,8 +35,9 @@ function healthyNames(extra = []) {
 
 // C11 —— 运行时线族集合
 
-// v9/v6 两种锁文件键形的解析是 packages/control-plane/test/plugins/protected-plugins.test.ts:336-353
-// 的权威断言（runtimeFamilyNames 只是 familyNamesFromLockfileClosure 的纯委托）；这里只保留
+// v9/v6 两种锁文件键形的解析权威在 packages/control-plane/test/plugins/protected-plugins.test.ts
+// （名字解析 :163-180、版本解析 :304-327；runtimeFamilyNames 只是 familyNamesFromLockfileClosure
+// 的纯委托）；这里只保留
 // 该契约测试未覆盖的版本去重形态（同一包两个版本 → 一个族名）。
 test('runtimeFamilyNames: 版本去重（同一包两个版本只出一个名字）', () => {
   const lock = [
@@ -85,7 +86,7 @@ test('C11 正例：闭包健康（含登记 opt-in）+ 树只差平台分包 →
 test('C11 负例：闭包缺核心 / 未登记 opt-in / dev 包 都必须红', () => {
   const missingCore = familyFindings({ names: healthyNames().filter((n) => n !== '@deepseek-ai/dsh-web-app'), treeNames: null })
   assert.ok(missingCore.violations.some((v) => v.includes('dsh-web-app')))
-  const optIn = familyFindings({ names: healthyNames(['@deepseek-ai/dsh-experimental-inspector']), treeNames: null })
+  const optIn = familyFindings({ names: healthyNames(['@deepseek-ai/dsh-experimental-unregistered-fixture']), treeNames: null })
   assert.ok(optIn.violations.some((v) => v.includes('opt-in')), optIn.violations.join('; '))
   const devPkg = familyFindings({ names: healthyNames(['@deepseek-ai/dsh-benchmarks', '@deepseek-ai/dsh-agent-loop-testkit']), treeNames: null })
   assert.equal(devPkg.violations.length, 2, devPkg.violations.join('; '))
@@ -121,7 +122,7 @@ test('C11 note：源码线 vendor 树含 opt-in 包时只提醒（它不是 F �
   const { violations, notes } = familyFindings({
     names: healthyNames(),
     treeNames: null,
-    sourceTreeNames: ['@deepseek-ai/dsh-experimental-inspector', '@deepseek-ai/dsh-base'],
+    sourceTreeNames: ['@deepseek-ai/dsh-experimental-unregistered-fixture', '@deepseek-ai/dsh-base'],
   })
   assert.deepEqual(violations, [])
   assert.ok(notes.some((note) => note.includes('绝不是 F 的来源')), notes.join('; '))

@@ -534,7 +534,7 @@ test('findUnsatisfiableExternalDependencies: names covered requires no registrat
   const deferredId = DEFERRED_EXTRA_ROW_IDS[0]!
   const otherDeferredId = DEFERRED_EXTRA_ROW_IDS[1]!
   const coveredFactoryId = CHAMBER_COVERED_FACTORY_IDS[0]!
-  const skipId = '@deepseek-ai/dsh-client-ui-settings-account'
+  const skipId = '@deepseek-ai/dsh-client-hmr'
   const kernelAdoptedId = UI_RENDERER_ID
   assert.ok(CHAMBER_COVERED_IDS.includes(skipId), 'the fixture skip is a covered id')
   assert.ok(!CHAMBER_COVERED_FACTORY_IDS.includes(skipId), 'the fixture skip has no factory')
@@ -608,7 +608,7 @@ test('no platform seed word is a covered id without a composite factory (predica
 
 test('collectExtraRows: a require onto a skipped covered id is named with the real reason', async (t) => {
   const id = '@scope/f1-needs-account-skip'
-  const skipId = '@deepseek-ai/dsh-client-ui-settings-account'
+  const skipId = '@deepseek-ai/dsh-client-hmr'
   stubFetch(t, 200, envelope([row(id, { external: [`${skipId}/client`] })]))
   const consoleCapture = captureConsoleError(t)
   const diagnostics: { state: string; pluginId?: string; message?: string }[] = []
@@ -622,7 +622,7 @@ test('collectExtraRows: a require onto a skipped covered id is named with the re
   assert.match(diagnostics[0]!.message ?? '', new RegExp(`${id} → ${skipId}`), 'the row→id edge is named')
   assert.match(diagnostics[0]!.message ?? '', /任何时刻都拿不到/)
   assert.doesNotMatch(diagnostics[0]!.message ?? '', /延迟注册者|永不加载\)/, 'no non-existent timing claim')
-  assert.match(consoleCapture.messages.join('\n'), /settings-account/)
+  assert.match(consoleCapture.messages.join('\n'), /dsh-client-hmr/)
 })
 
 test('collectExtraRows: an `external` request onto a deferred family id reports the NAMED diagnostic', async (t) => {
@@ -1438,25 +1438,34 @@ test('D2: the official open-in client row stays uncovered; chamber open-in stays
   assert.ok(CHAMBER_COVERED_FACTORY_IDS.includes('@dsh-chamber/dsh-chamber-client-ui-open-in'))
 })
 
-test('desktop-only account family stays skipped: no body-level onboarding takeover', async (t) => {
-  // Mechanism, cost and rejected alternatives: chamber-covered.ts (the skip entry)
-  // and design 09 §3.5 有意跳过名单③.
+test('desktop-only account family loads as a patched deferred row (overlay gated off)', async (t) => {
+  // alpha.3 contract: the row is a covered DEFERRED composite row; the build-time vendor
+  // patch gates its desktop onboarding overlay (design 09 §3.5). The takeover is
+  // prevented by the patch, not by a skip.
   const id = '@deepseek-ai/dsh-client-ui-settings-account'
   assert.ok(CHAMBER_COVERED_IDS.includes(id),
-    id + ' must stay covered: its desktop onboarding overlay hijacks the entire page (design 09 有意跳过名单)')
+    id + ' must stay covered: a host-graph row would double-register the deferred family')
   assert.ok(!CHAMBER_COVERED_FACTORY_IDS.includes(id),
-    id + ' is a skip, not a composite family: no factory may ever load it')
-  assert.ok(!DEFERRED_EXTRA_ROW_IDS.includes(id),
-    id + ' must not be listed as a deferred covered row — a deferred id IS loaded after settle')
-  // End to end through the real merge (`collectExtraRows`): if the row ever
-  // reaches the preload pass again, the body-level takeover re-arms.
+    id + ' stays factory-less: the DEFERRED cluster is its only loader')
+  assert.ok(DEFERRED_EXTRA_ROW_IDS.includes(id),
+    id + ' must be a deferred covered row — loading it is what brings the account settings section back')
+  // The raw vendor source must NOT carry the gate: the patch is a build-time transform
+  // (vendor-patches.test owns the anchor, the marker and the bundle proof).
+  const raw = readFileSync(new URL(
+    '../../../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-settings-account/src/client/index.ts',
+    import.meta.url,
+  ), 'utf8')
+  assert.equal(raw.includes('__dshChamberAccountOverlay'), false,
+    'the raw vendor source stays unpatched; the overlay gate exists only in the build transform')
+  // End to end through the real merge (`collectExtraRows`): covered rows never reach
+  // the extra preload pass, so the deferred loader stays their only entrant.
   stubFetch(t, 200, envelope([row(id)]))
   let loaded = false
   const rows = await collectExtraRows('account-skip', '/api/i/local', {
     loadModuleBundle: async () => { loaded = true },
   })
   assert.deepEqual(rows, [])
-  assert.equal(loaded, false, 'the covered account row must never be preloaded')
+  assert.equal(loaded, false, 'the covered account row must never be preloaded as an extra')
 })
 
 // ── `awaitBeforeLoad` must settle before the

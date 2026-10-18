@@ -24,8 +24,8 @@
     // resolve @deepseek-ai/* — map them to the vendored sources instead, the same
     // source-level resolution the harness repo itself uses (tsconfig.base.json
     // paths). The wildcard covers every package the seeds reach: cordis,
-    // cosmokit, schemastery, cordis-plugin-loader, dsh-invariants,
-    // dsh-host-webserver, dsh-typert-protocol, dsh-client-modules,
+    // cosmokit, schemastery, cordis-plugin-loader, dsh-host-webserver,
+    // dsh-typert-protocol, dsh-client-modules,
     // dsh-native-command, dsh-subprocess, … — all ship a src/index.ts entry.
     //
     // The relaxations below mirror the harness per-package tsconfigs (cordis /
@@ -63,7 +63,7 @@
       // src/install.ts imports 'undici' directly (a registry dependency pnpm
       // never links into the symlinked vendor checkout) — mapped to the
       // lockfile-pinned virtual-store path.
-      "undici": ["../../node_modules/.pnpm/undici@8.10.0/node_modules/undici"]
+      "undici": ["../../node_modules/.pnpm/undici@8.11.2/node_modules/undici"]
       // 版本同步有门禁：scripts/upstream/lockfile-store-path-mappings.test.mjs（跑在
       // test:upgrade-tools）断言每条 ".pnpm/<pkg>@<ver>/" 映射的版本 == 锁文件里
       // 某个声明该依赖的 importer 解析出的版本——pin 升级把依赖版本改掉而映射没跟

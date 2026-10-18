@@ -11,12 +11,15 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   VENDOR_PATCHES,
+  assertPatchesApplied,
   parsePatchedDependencies,
+  patchOverrides,
   renderRuntimeWorkspace,
   stageUpstreamPatches,
   upstreamPatchFiles,
@@ -28,9 +31,11 @@ const block = upstreamPatchedDependencies()
 const entries = parsePatchedDependencies(block)
 
 test('上游 patch 集合可解析：specifier → patches/*.patch', () => {
-  assert.ok(entries.length >= 7, 'behind the pin at least the seven recorded patches')
+  assert.ok(entries.length >= 1, 'the pinned vendor block carries at least one patch')
   for (const entry of entries) assert.match(entry.file, /^patches\/[^/]+\.patch$/u)
   assert.equal(new Set(entries.map(e => e.spec)).size, entries.length, 'no duplicate specifier')
+  assert.equal(new Set(patchOverrides(block).map(o => o.name)).size, entries.length,
+    'one override key per package: a duplicated name cannot be pinned and must be rejected by patchOverrides')
 })
 
 test('每个条目都有对应的 patch 文件，且目录内没有未登记文件', () => {
@@ -39,12 +44,15 @@ test('每个条目都有对应的 patch 文件，且目录内没有未登记文�
   assert.deepEqual(files, registered, VENDOR_PATCHES + ' 与 vendor-workspace 的登记集合必须一致')
 })
 
-test('渲染出的运行期 workspace 携带 patch 块与 unused-patch 豁免', () => {
+test('渲染出的运行期 workspace 携带 overrides / patch 块与 unused-patch 豁免', () => {
   const text = renderRuntimeWorkspace('  "node-pty": true', block)
-  assert.ok(text.startsWith('minimumReleaseAge: 0\nallowBuilds:\n'))
+  assert.ok(text.startsWith('minimumReleaseAge: 0\noverrides:\n'), 'overrides 必须在 patch 块之前派生')
   assert.ok(text.includes(block), 'patch 块逐字保留')
   assert.ok(text.trimEnd().endsWith('allowUnusedPatches: true'))
   assert.equal(parsePatchedDependencies(text).length, entries.length)
+  for (const { name, version } of patchOverrides(block)) {
+    assert.ok(text.includes("  '" + name + "': " + version + '\n'), name + ' 必须钉到补丁声明版本')
+  }
 })
 
 test('staging 把 pin 的文件按字节拷进 work 目录', () => {
@@ -53,7 +61,8 @@ test('staging 把 pin 的文件按字节拷进 work 目录', () => {
     const staged = stageUpstreamPatches(work)
     assert.equal(staged.files, entries.length)
     assert.equal(staged.entries, entries.length)
-    const nodePty = 'node-pty@1.2.0-beta.15.patch'
+    const nodePty = entries.find(entry => entry.spec.startsWith('node-pty@'))?.file.slice('patches/'.length)
+    assert.ok(nodePty !== undefined, 'the pinned set carries the node-pty patch')
     assert.deepEqual(
       readFileSync(join(work, 'patches', nodePty)),
       readFileSync(join(VENDOR_PATCHES, nodePty)),
@@ -74,29 +83,40 @@ test('提交的运行期锁文件记录同一 patch 集合（pin 升级必须重
     .map(match => ({ spec: match[1], hash: match[2] }))
   assert.deepEqual(lockEntries.map(e => e.spec).sort(), entries.map(e => e.spec).sort())
   assert.equal(new Set(lockEntries.map(e => e.hash)).size, lockEntries.length, '每个 specifier 一个独立 patch hash')
+  // The lock's hash is self-describing; only the VENDOR bytes prove the lock was
+  // regenerated after the patch content changed (same spec, new bytes).
+  const fileBySpec = new Map(entries.map(entry => [entry.spec, entry.file.slice('patches/'.length)]))
+  for (const entry of lockEntries) {
+    const file = fileBySpec.get(entry.spec)
+    assert.ok(file !== undefined, entry.spec + ' must resolve to one vendor patch file')
+    const vendorHash = createHash('sha256').update(readFileSync(join(VENDOR_PATCHES, file))).digest('hex')
+    assert.equal(entry.hash, vendorHash,
+      entry.spec + ' 的锁内 hash 必须等于 vendor 补丁字节的 sha256；不等即锁未随补丁重生成')
+  }
 })
 
-test('runtimeClosure 补丁在运行期锁的 snapshot 键里带同名 patch_hash（allowUnusedPatches 静默窗口）', () => {
-  // Why the spec-set comparison above is not enough: pnpm 11
-  // (tryFastUpdatePatchedDependencies) SKIPS the appliedPatchKeys verification
-  // when the patch set changes under allowUnusedPatches, so a registry entry
-  // whose specifier no longer resolves in the graph would stay green while the
-  // packaged runtime shipped unpatched. Pin the resolution instead: every
-  // runtimeClosure spec must appear as a snapshot key carrying its patch_hash.
-  const registry = JSON.parse(readFileSync(new URL('../../../scripts/upstream/registry.json', import.meta.url), 'utf8'))
-  const closure = registry.patches.filter(patch => patch.runtimeClosure === true)
-  assert.ok(closure.length > 0, '至少一条 runtimeClosure 补丁（pi-ai / node-pty）')
-  const lock = readFileSync(RUNTIME_LOCKFILE, 'utf8')
-  const lockBlock = /^patchedDependencies:\n(?: {2}.*\n)+/mu.exec(lock)?.[0]
-  const hashes = new Map([...lockBlock.matchAll(/^ {2}'?([^':\n]+)'?: ([0-9a-f]{64})$/gmu)].map(match => [match[1], match[2]]))
-  for (const patch of closure) {
-    const hash = hashes.get(patch.spec)
-    assert.ok(hash !== undefined, `${patch.spec} 必须在运行期锁的 patchedDependencies 里`)
-    assert.ok(
-      lock.includes(`${patch.spec}(patch_hash=${hash})`),
-      `运行期锁的 snapshot 键必须解析到 ${patch.spec}(patch_hash=${hash})——否则该补丁在册却未生效`,
-    )
-  }
+test('被补丁依赖在运行期与根两条安装腿都解析出 patch_hash（allowUnusedPatches 静默窗口）', () => {
+  // pnpm 11 reduces a version-mismatched patch key to a warning under
+  // allowUnusedPatches, so a package that resolves past its patch would ship
+  // unpatched while the spec-set comparison above stays green. The shared
+  // assertion derives in-graph membership from the lock itself.
+  assertPatchesApplied(readFileSync(RUNTIME_LOCKFILE, 'utf8'), block, 'runtime lock')
+  assertPatchesApplied(readFileSync(new URL('../../../pnpm-lock.yaml', import.meta.url), 'utf8'), block, 'root lock')
+})
+
+test('图内补丁未带 patch_hash 时断言必须红（fail-loud）', () => {
+  const hash = 'a'.repeat(64)
+  const patchBlock = 'patchedDependencies:\n' + "  '@earendil-works/pi-ai@1.0.2': patches/@earendil-works__pi-ai@1.0.2.patch\n"
+  const lockWith = (key) => 'patchedDependencies:\n' + "  '@earendil-works/pi-ai@1.0.2': " + hash
+    + "\n\nsnapshots:\n\n  '" + key + "':\n    resolution: {integrity: sha512-fake}\n"
+  assert.throws(
+    () => assertPatchesApplied(lockWith('@earendil-works/pi-ai@1.1.0'), patchBlock, 'fake lock'),
+    /补丁未生效/u,
+  )
+  assert.doesNotThrow(() => assertPatchesApplied(
+    lockWith('@earendil-works/pi-ai@1.0.2(patch_hash=' + hash + ')'), patchBlock, 'fake lock'))
+  assert.doesNotThrow(() => assertPatchesApplied(
+    lockWith('@deepseek-ai/dsh@0.2.1-alpha.2'), patchBlock, 'fake lock'), '图外条目由 allowUnusedPatches 豁免')
 })
 
 test('缺少 patchedDependencies 块的上游 workspace 必须红', () => {

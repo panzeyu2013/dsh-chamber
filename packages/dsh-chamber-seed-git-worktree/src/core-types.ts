@@ -13,6 +13,10 @@ export interface WorkspaceFact {
 export interface AgentFact {
   readonly sessionId: string
   readonly status: 'idle' | 'running'
+  /** The session's EFFECTIVE directory: the alpha.2 `workingDirectory` projection when
+   *  the host registry carries it, otherwise the immutable header cwd. The archived-aware
+   *  running guard compares it against a worktree path, so a session that changed
+   *  directory still blocks removal of the worktree it moved into. */
   readonly cwd?: string
   /** The recorded parent session (`session.header.parentSession`). Loaded for EVERY
    *  agent (any status): the archived-aware running guard walks the chain from a running

@@ -52,6 +52,7 @@ const VENDOR = fileURLToPath(new URL('../../../vendor/harness-packages/@deepseek
 /** Real pinned vendor files. */
 const FILES = {
   markdown: VENDOR + 'dsh-client-ui-chat/src/client/chat/AssistantMarkdown.tsx',
+  account: VENDOR + 'dsh-client-ui-settings-account/src/client/index.ts',
   attachmentDrop: VENDOR + 'dsh-client-ui-attachment/src/client/drop-events.ts',
   attachmentComponent: VENDOR + 'dsh-client-ui-attachment/src/client/ComposerAttachments.tsx',
   nodeView: VENDOR + 'dsh-client-ui-chat/src/client/chat/AssistantNodeView.tsx',
@@ -76,6 +77,7 @@ const IDS = {
   // The renderer resolves vendor sources through realpathSync, so the id vite
   // reports is normally the SUBMODULE path (this is the form that matters).
   markdownReal: '/x/vendor/harness-checkout/packages/client/ui-chat/src/client/chat/AssistantMarkdown.tsx',
+  accountReal: '/x/vendor/harness-checkout/packages/client/ui-settings-account/src/client/index.ts',
   attachmentDropReal: '/x/vendor/harness-checkout/packages/client/ui-attachment/src/client/drop-events.ts',
   attachmentComponentReal: '/x/vendor/harness-checkout/packages/client/ui-attachment/src/client/ComposerAttachments.tsx',
   nodeView: '/x/vendor/harness-checkout/packages/client/ui-chat/src/client/chat/AssistantNodeView.tsx',
@@ -149,7 +151,8 @@ test('the patch resolves the file-API base through the per-entry base path', () 
   assert.equal(viaVendorPath.code, patched?.code, 'both id forms produce the same patch')
   assert.deepEqual(patched.applied, ['dsh-client-ui-chat/src/client/chat/AssistantMarkdown.tsx'])
   assert.ok(patched.code.includes('chamberFileApiBase?: string | undefined'), 'the root standard prop is declared')
-  assert.ok(patched.code.includes('mentions, t, chamberFileApiBase,'), 'the prop is destructured')
+  assert.ok(patched.code.includes('mentions, renderSlot, useGroupAction, t, chamberFileApiBase,'),
+    'the prop is destructured after the alpha.2 parameter additions (renderSlot, useGroupAction)')
   // Behaviour: evaluate the patched memo with a recording resolver; the base it
   // hands the resolver must be this entry's own file-API directory.
   const start = patched.code.indexOf('  const pathImages = useMemo')
@@ -217,7 +220,7 @@ test('the node view forwards the root standard prop into the markdown component 
     useTurnData: () => undefined,
     turnProcess: undefined,
     openFile: () => {},
-    renderMessageImages: false,
+    loadImage: false,
     fileMentions: () => undefined,
     usePresentation: undefined,
     t: 't',
@@ -1037,7 +1040,7 @@ const PATCHED_BUNDLED_DEPENDENCY_IDS = Object.freeze(['@deepseek-ai/dsh-util-val
 /**
  * Covered ids the composite never loads, so a patch on one could never apply: the
  * deliberate skips `chamber-covered.ts` documents in its header (hmr / mobile /
- * directory-picker-native / settings-account) — page-own rows the composite replaces
+ * directory-picker-native) — page-own rows the composite replaces
  * plus host rows the shell drops on purpose. Without this subtraction the covered
  * check below would vouch for a package no module of which reaches the build — the
  * recorded ui-sidebar-documentpreview failure mode reached through the dedupe list
@@ -1047,7 +1050,6 @@ const COVERED_BUT_NEVER_LOADED_IDS = Object.freeze([
   '@deepseek-ai/dsh-client-hmr',
   '@dsh-chamber/dsh-client-ui-mobile',
   '@deepseek-ai/dsh-client-ui-directory-picker-native',
-  '@deepseek-ai/dsh-client-ui-settings-account',
 ])
 
 test('every registered vendor patch targets a composite-covered package or dependency', () => {
@@ -1197,6 +1199,7 @@ test('each patch artifact marker matches its own bundled source, and no other (f
   // route literal rides beside its own file, and the raw bundle must reject the marker).
   const sources = [
     { vendorFile: 'dsh-client-ui-chat/src/client/chat/AssistantMarkdown.tsx', key: 'markdown', real: IDS.markdownReal, loader: 'tsx', route: '' },
+    { vendorFile: 'dsh-client-ui-settings-account/src/client/index.ts', key: 'account', real: IDS.accountReal, loader: 'ts', route: '' },
     { vendorFile: 'dsh-client-ui-chat/src/client/chat/AssistantNodeView.tsx', key: 'nodeView', real: IDS.nodeView, loader: 'tsx', route: '' },
     { vendorFile: 'dsh-client-ui-chat/src/client/chat/ChatView.tsx', key: 'chatView', real: IDS.chatViewReal, loader: 'tsx', route: '' },
     { vendorFile: 'dsh-client-ui-chat/src/client/chat/use-chat-reading.ts', key: 'reading', real: IDS.readingReal, loader: 'ts', route: '' },

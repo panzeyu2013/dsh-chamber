@@ -24,6 +24,8 @@ import {
   type GitRunner,
   type WorkspaceFact,
 } from '../src/core.ts'
+import { pickEffectiveCwd, readProjectedWorkingDirectory } from '../src/core-validation.ts'
+import { HOOK_GUARD } from '../src/core-git-runner.ts'
 import {
   MAIN,
   COMMON,
@@ -624,4 +626,36 @@ test('snapshot carries upstream/ahead/behind and dirty facts from the --branch s
   assert.equal(mainRow.upstream, null)
   assert.equal(mainRow.ahead, 0)
   assert.equal(mainRow.behind, 0)
+})
+
+test('pickEffectiveCwd prefers the alpha.2 workingDirectory projection over the header', () => {
+  assert.equal(pickEffectiveCwd('/repo/.agents/worktrees/task-1', '/repo'), '/repo/.agents/worktrees/task-1')
+  assert.equal(pickEffectiveCwd(undefined, '/repo'), '/repo', 'alpha.1 (no projection) falls back to the header cwd')
+  assert.equal(pickEffectiveCwd('', '/repo'), '/repo', 'an empty projection is the absent case')
+  assert.equal(pickEffectiveCwd(null, '/repo'), '/repo', 'a null projection is the absent case')
+  assert.equal(pickEffectiveCwd(42, '/repo'), '/repo', 'a non-string projection is the absent case')
+  assert.equal(pickEffectiveCwd(undefined, undefined), undefined, 'neither value yields no cwd fact')
+  assert.equal(pickEffectiveCwd(undefined, ''), '', 'a malformed header string passes through so core drift refuses fail-closed')
+  assert.equal(pickEffectiveCwd('relative/wt', '/abs'), 'relative/wt', 'a non-empty projection wins and core classifies the drift')
+})
+
+test('the git guard disables repo hooks and the fsmonitor program', () => {
+  assert.deepEqual([...HOOK_GUARD], [
+    '-c', 'core.hooksPath=' + (process.platform === 'win32' ? 'NUL' : '/dev/null'),
+    '-c', 'core.fsmonitor=false',
+  ], 'every spawn must keep the hook and fsmonitor overrides ahead of the allowlisted argv')
+})
+
+test('readProjectedWorkingDirectory reads through the optional registry and degrades quietly', () => {
+  const session = { header: { cwd: '/repo' } }
+  assert.equal(readProjectedWorkingDirectory({ stateOf: () => '/repo/wt' }, session), '/repo/wt',
+    'a live alpha.2 registry supplies the effective directory')
+  assert.equal(readProjectedWorkingDirectory(undefined, session), undefined,
+    'alpha.1 has no registry; the caller falls back to the header cwd')
+  assert.equal(readProjectedWorkingDirectory({ stateOf: () => 42 }, session), undefined,
+    'a non-string projection is the absent case')
+  assert.equal(readProjectedWorkingDirectory({ stateOf: () => '' }, session), undefined,
+    'an empty projection is the absent case')
+  assert.equal(readProjectedWorkingDirectory({ stateOf: () => { throw new Error('collapsed') } }, session), undefined,
+    'a throwing projection must not darken the whole source')
 })

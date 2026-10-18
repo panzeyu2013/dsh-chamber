@@ -215,7 +215,7 @@ test('resolveRuntimeFamily: 可信闭包优先；无锁文件退回树枚举；�
       assert.equal(sourceLine.ok, false, 'a closure carrying a dev/test package must be rejected')
       assert.match(sourceLine.ok ? '' : sourceLine.reason, /dev\/test package belongs to the source line/)
       writeFileSync(join(lockOnly, 'pnpm-lock.yaml'), ['lockfileVersion: \'9.0\'', 'packages:',
-        ...core, "  '@deepseek-ai/dsh-experimental-inspector@0.1.5-rc.2':"].join('\n'))
+        ...core, "  '@deepseek-ai/dsh-experimental-unregistered-fixture@0.1.5-rc.2':"].join('\n'))
       const unregistered = resolveRuntimeFamily(lockOnly)
       assert.equal(unregistered.ok, false, 'an unregistered opt-in name must be rejected')
       assert.match(unregistered.ok ? '' : unregistered.reason, /unregistered official opt-in package/)
@@ -401,7 +401,7 @@ test('resolveRuntimeFamily: 锚锁文件优先于活动树（dev 形态的活动
       "  '@deepseek-ai/dsh@0.1.5-rc.2':",
       "  '@deepseek-ai/dsh-base@0.1.5-rc.2':",
       "  '@deepseek-ai/dsh-web-app@0.1.5-rc.2':",
-      "  '@deepseek-ai/dsh-experimental-inspector@0.1.5-rc.2':",
+      "  '@deepseek-ai/dsh-experimental-unregistered-fixture@0.1.5-rc.2':",
     ].join('\n'))
     // The PINNED runtime-line lockfile does not.
     const pinned = join(pinnedDir, 'pnpm-lock.yaml')

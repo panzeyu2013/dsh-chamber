@@ -336,7 +336,10 @@
   单一 button 的 a11y 结构，嵌套按钮非法——形态差异登记在 checklist §4.6 该行，行为面与上游一致）。
 - **归档警示**（上游 `RowActionToast` 的 section 内实例化，2026-10 收敛）：只剩「点击归档行
   不可打开」一态（`toast.archivedNotOpenable`），落**触发来源**的 section 内、折叠门内、per-shell
-  瞬态，3s 自动消失（上游 Toast 默认 hold；`sidebar-root-notices.ts`）。**归档成功 / 停止并归档
+  瞬态，3s 自动消失（上游 Toast 默认 hold；`sidebar-root-notices.ts`）。alpha.3 起同一 per-source
+  瞬态通道承载 SessionId 菜单（§4）的复制反馈两态（`toast.sessionIdCopied` / `toast.sessionIdCopyFailed`）：
+  模型由「每来源一个布尔」改为 `SourceNoticeKind`（单条覆盖、同 3s、per-shell）。B8 的裁决只针对
+  归档成功 / 停止并归档两态的就地提示条，不涉及本通道。**归档成功 / 停止并归档
   两态的就地提示条已按用户裁决移除**：归档反馈不再由侧栏承担；恢复入口留在视图选项
   「全部对话（显示已归档）」与行/管理器上，**但归档集未知的降级来源上三者都不可用**（筛选轴整轴
   禁用、管理器只报 degraded），刚归档的行要等该来源挂载、基线到达才可恢复——被移除的 6s「撤销」
@@ -379,7 +382,10 @@
   标签）、B8 归档成功不再就地提示（上游 `RowActionToast` 的 archived / stoppedAndArchived 两态已按
   用户裁决移除，§3.4；保留的 archivedNotOpenable 普通警示仍未移植色 tone / 成功警示字形——role=alert
   本就是上游 Toast 行为、TTL 仅 hold 层对齐，上游另有 1s 淡出尾巴）、B9 会话行窗口的配额语义（上游 5 行且 blank/running/有
-  存活子代理的行豁免；本仓按位置窗口 200 行 + 当前行）、B10 本地账号中新 fork 子项落尾（上游
+  存活子代理的行豁免、注意力行把水位抬到覆盖它；本仓按位置窗口 200 行 + 当前行，alpha.3 起
+  #6062 注意力水位：running / `runningSubagents>0` / pending / completed / 当前行把前缀窗口抬到
+  覆盖它，按非 ghost 行计数、自动上限 50、每工作区单调 floor——上游 `requiredWatermark`/`raiseWatermarks`
+  的等价物）、B10 本地账号中新 fork 子项落尾（上游
   `placeFork`：新普通分叉紧邻其源；本仓按对账把未知成员追加到尾部）。
   上游形态移植逐行登记在 checklist §4.6（ViewOptionsMenu / owningParentFolder /
   ArchiveSession 的 unarchive 半支 / Rows 归档行 / RowActionToast / sectionMembers——**六锚点

@@ -35,6 +35,14 @@ const WEB = join(ROOT, 'desktop', 'dist', 'web')
  */
 export const VENDOR_PATCH_MARKERS = [
   {
+    vendorFile: 'dsh-client-ui-settings-account/src/client/index.ts',
+    what: 'the desktop onboarding overlay AND its onboarding-visible flag are gated off',
+    // Patched: `if (desktop && (globalThis as {...}).__dshChamberAccountOverlay === true)`.
+    // The property name exists nowhere upstream, so its presence next to the equality
+    // proves the patch reached the chunk; the minifier keeps the literal as `!0` or `true`.
+    present: /__dshChamberAccountOverlay\s*===\s*(?:!0|true)/,
+  },
+  {
     vendorFile: 'dsh-client-ui-chat/src/client/chat/AssistantMarkdown.tsx',
     what: 'ui-chat file-API base carries the per-entry base path',
     // Patched: `const base = chamberFileApiBase === undefined || chamberFileApiBase === ''

@@ -56,7 +56,12 @@ class FakeSocket {
   }
 
   close(): void {
+    if (this.readyState === FakeSocket.CLOSED) return
     this.readyState = FakeSocket.CLOSED
+    // alpha.3: the mux awaits one closure promise per socket (socketClosures) before
+    // disposal completes. Browsers deliver 'close' after close(); the fake must too,
+    // or client.close() never settles.
+    queueMicrotask(() => { this.#dispatch('close') })
   }
 
   /** Test helper: complete the handshake. */
@@ -130,7 +135,7 @@ test('a socket that dies inside the heal interval is still replaced', async (t) 
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
   t.after(() => t.mock.timers.reset())
-  const client = new RemoteStreamMuxClient()
+  const client = new RemoteStreamMuxClient({ waitForReconnect: true })
   client.start()
   await flushMicrotasks()
   assert.equal(FakeSocket.instances.length, 1, 'the first attempt must start')
@@ -155,7 +160,7 @@ test('a reconnect that fails before opening is retried', async (t) => {
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
   t.after(() => t.mock.timers.reset())
-  const client = new RemoteStreamMuxClient()
+  const client = new RemoteStreamMuxClient({ waitForReconnect: true })
   client.start()
   await flushMicrotasks()
   assert.equal(FakeSocket.instances.length, 1)
@@ -182,7 +187,7 @@ test('close disposes the mux and stops the self-heal', async (t) => {
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
   t.after(() => t.mock.timers.reset())
-  const client = new RemoteStreamMuxClient()
+  const client = new RemoteStreamMuxClient({ waitForReconnect: true })
   client.start()
   await flushMicrotasks()
   assert.equal(FakeSocket.instances.length, 1)
@@ -199,7 +204,7 @@ test('close disposes the mux and stops the self-heal', async (t) => {
 test('a handshake that never settles is abandoned on its own deadline', async (t) => {
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout'] })
-  const client = new RemoteStreamMuxClient()
+  const client = new RemoteStreamMuxClient({ waitForReconnect: true })
   client.start()
   await flushMicrotasks()
   assert.equal(FakeSocket.instances.length, 1)
@@ -223,7 +228,7 @@ test('a lane-commanded reconnect does not widen the mux heal cadence', async (t)
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
   t.after(() => t.mock.timers.reset())
-  const client = new RemoteStreamMuxClient()
+  const client = new RemoteStreamMuxClient({ waitForReconnect: true })
   client.start()
   await flushMicrotasks()
   assert.equal(FakeSocket.instances.length, 1)
@@ -262,7 +267,7 @@ test('a synchronous socket construction failure still recovers', async (t) => {
     }
   }
   ;(globalThis as { WebSocket?: unknown }).WebSocket = ThrowingSocket
-  const client = new RemoteStreamMuxClient()
+  const client = new RemoteStreamMuxClient({ waitForReconnect: true })
   // A constructor throw must not escape into the caller (an uncaught throw inside
   // the heal timer would kill recovery silently) and must still schedule retries.
   assert.doesNotThrow(() => { client.start() }, 'a construction failure must not escape the mux')
@@ -279,7 +284,7 @@ test('a silent socket is REPLACED when an opening item times out on it', async (
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const facts: Array<{ kind: string; cause: string }> = []
-  const client = new RemoteStreamMuxClient('', (kind, cause) => { facts.push({ kind, cause }) })
+  const client = new RemoteStreamMuxClient({ basePath: '', forensics: (kind, cause) => { facts.push({ kind, cause }) }, waitForReconnect: true })
   client.start()
   await flushMicrotasks()
   assert.equal(FakeSocket.instances.length, 1)
@@ -314,7 +319,7 @@ test('a logical stream torn down on a socket that never delivered a frame replac
   // the 20 s tick below must move the clock that guard reads.
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
   const facts: Array<{ kind: string; cause: string }> = []
-  const client = new RemoteStreamMuxClient('', (kind, cause) => { facts.push({ kind, cause }) })
+  const client = new RemoteStreamMuxClient({ basePath: '', forensics: (kind, cause) => { facts.push({ kind, cause }) }, waitForReconnect: true })
   client.start()
   await flushMicrotasks()
   assert.equal(FakeSocket.instances.length, 1)
@@ -347,7 +352,7 @@ test('a logical stream torn down on a socket that never delivered a frame replac
 test('a socket that delivered a frame keeps the request retry instead of being replaced', async (t) => {
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout'] })
-  const client = new RemoteStreamMuxClient()
+  const client = new RemoteStreamMuxClient({ waitForReconnect: true })
   client.start()
   await flushMicrotasks()
   FakeSocket.instances[0].openNow()
@@ -382,7 +387,7 @@ test('an opening that is never answered rebuilds the physical carrier and recove
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
   const facts: Array<{ kind: string; cause: string }> = []
-  const client = new RemoteStreamMuxClient('', (kind, cause) => { facts.push({ kind, cause }) })
+  const client = new RemoteStreamMuxClient({ basePath: '', forensics: (kind, cause) => { facts.push({ kind, cause }) }, waitForReconnect: true })
   client.start()
   await flushMicrotasks()
   assert.equal(FakeSocket.instances.length, 1)
@@ -433,7 +438,7 @@ test('an opening that is never answered rebuilds the physical carrier and recove
 test('a slow-but-answering Host keeps its carrier', async (t) => {
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
-  const client = new RemoteStreamMuxClient()
+  const client = new RemoteStreamMuxClient({ waitForReconnect: true })
   client.start()
   await flushMicrotasks()
   const socket = FakeSocket.instances[0]
@@ -507,7 +512,7 @@ test('a stream aborted inside the evidence window never judges the socket', asyn
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
   const facts: Array<{ kind: string; cause: string }> = []
-  const client = new RemoteStreamMuxClient('', (kind, cause) => { facts.push({ kind, cause }) })
+  const client = new RemoteStreamMuxClient({ basePath: '', forensics: (kind, cause) => { facts.push({ kind, cause }) }, waitForReconnect: true })
   client.start()
   await flushMicrotasks()
   FakeSocket.instances[0].openNow()
@@ -532,7 +537,7 @@ test('a teardown on a socket that delivered a frame in the meantime leaves it al
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
   const facts: Array<{ kind: string; cause: string }> = []
-  const client = new RemoteStreamMuxClient('', (kind, cause) => { facts.push({ kind, cause }) })
+  const client = new RemoteStreamMuxClient({ basePath: '', forensics: (kind, cause) => { facts.push({ kind, cause }) }, waitForReconnect: true })
   client.start()
   await flushMicrotasks()
   FakeSocket.instances[0].openNow()
@@ -561,7 +566,7 @@ test('a stream answered by its opening item clears the request miss streak', asy
   // answered sibling no longer deserves.
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
-  const client = new RemoteStreamMuxClient()
+  const client = new RemoteStreamMuxClient({ waitForReconnect: true })
   client.start()
   await flushMicrotasks()
   const socket = FakeSocket.instances[0]
@@ -621,7 +626,7 @@ test('a stream answered by its opening item clears the request miss streak', asy
 test('the retry chain inherits the miss streak its timed-out predecessor earned', async (t) => {
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
-  const client = new RemoteStreamMuxClient()
+  const client = new RemoteStreamMuxClient({ waitForReconnect: true })
   client.start()
   await flushMicrotasks()
   const socket = FakeSocket.instances[0]
@@ -664,7 +669,7 @@ test('the retry chain inherits the miss streak its timed-out predecessor earned'
 test('replacing a silent socket fails EVERY logical stream, not only the timed-out one', async (t) => {
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
-  const client = new RemoteStreamMuxClient()
+  const client = new RemoteStreamMuxClient({ waitForReconnect: true })
   client.start()
   await flushMicrotasks()
   FakeSocket.instances[0].openNow()
@@ -697,7 +702,7 @@ test('replacing a silent socket fails EVERY logical stream, not only the timed-o
 
 test('an open frame is refused when the socket was replaced before the send', async () => {
   installFakeSocket()
-  const client = new RemoteStreamMuxClient()
+  const client = new RemoteStreamMuxClient({ waitForReconnect: true })
   client.start()
   await flushMicrotasks()
   FakeSocket.instances[0].openNow()
@@ -721,7 +726,7 @@ test('an open frame is refused when the socket was replaced before the send', as
 test('consecutive genuine failures double the self-heal cadence up to its cap', async (t) => {
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
-  const client = new RemoteStreamMuxClient()
+  const client = new RemoteStreamMuxClient({ waitForReconnect: true })
   client.start()
   await flushMicrotasks()
   FakeSocket.instances[0].openNow()

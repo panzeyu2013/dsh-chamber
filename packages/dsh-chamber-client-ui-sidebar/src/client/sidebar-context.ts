@@ -14,6 +14,7 @@ import type { ChamberSidebarViewPrefs } from '@dsh-chamber/dsh-chamber-client-co
 import type {
   PanelSelectorHook, ShortcutsHook, SidebarPanelMetadata, SidebarRootComponentProps,
 } from './contract/slots.ts'
+import type { SourceNoticeKind } from './sidebar-notices-model.ts'
 import type { SourceNotices } from './sidebar-root-notices.ts'
 
 export interface RenameTarget {
@@ -220,7 +221,7 @@ export interface SidebarSectionContextValue {
   onUnarchiveSession: (server: ChamberServerAggregate, sessionId: string) => void
   /** 来源级普通警示（点击归档行不可打开）：per-shell 瞬态，按 sourceId 键控（design 06 §3.4）。 */
   notices: SourceNotices
-  showNotice: (sourceId: string) => void
+  showNotice: (sourceId: string, kind?: SourceNoticeKind) => void
   onDeleteWorkspace: (server: ChamberServerAggregate, workspaceId: string, title: string) => void
 }
 

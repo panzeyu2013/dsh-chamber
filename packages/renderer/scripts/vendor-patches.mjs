@@ -56,6 +56,18 @@
  * mounting component's own subtree (THIRD ADMITTED FORM below); keep
  * upstream behaviour as the fallback so an official-layout deployment is
  * unaffected, and retire once upstream scopes the fact itself.
+ *
+ * FIFTH ADMITTED CLASS (chamber shell behaviour gate, admitted by maintainer
+ * ruling): an upstream branch or seat whose ACTIVATION is wrong under the
+ * chamber shell -- not a URL, not a measured cost, not a scoped fact. The
+ * desktop branch keys off a carrier the composite must expose for other
+ * official seats, so it arms even though the shell it assumes does not exist,
+ * and its first act (a full-screen shell.overlay) is not something a chamber
+ * package can veto without shadowing the official family. Such an entry MUST
+ * state the concrete takeover/degradation symptom and the accepted trade-off
+ * in reason, keep upstream behaviour reachable behind an explicit escape hatch
+ * (never a silent permanent disable), carry a bundle marker, and be deleted
+ * once upstream stops keying the branch off that carrier.
 
  *
  * SAME CLASS, SECOND ADMITTED FORM (ownership transfer, admitted by maintainer
@@ -167,10 +179,10 @@ export const VENDOR_PATCHES = Object.freeze([
           + '  chamberFileApiBase?: string | undefined\n}',
       }),
       Object.freeze({
-        expect: '  blocks, streaming, interrupted, renderMessageImages, groupPart, useDisclosure,\n'
-          + '  reasoningHidden = false, usePresentation, revealProcess, mentions, t,\n}: AssistantMarkdownProps) {',
-        replace: '  blocks, streaming, interrupted, renderMessageImages, groupPart, useDisclosure,\n'
-          + '  reasoningHidden = false, usePresentation, revealProcess, mentions, t, chamberFileApiBase,\n}: AssistantMarkdownProps) {',
+        expect: '  blocks, streaming, interrupted, loadImage, groupPart, useDisclosure,\n'
+          + '  reasoningHidden = false, usePresentation, revealProcess, mentions, renderSlot, useGroupAction, t,\n}: AssistantMarkdownProps) {',
+        replace: '  blocks, streaming, interrupted, loadImage, groupPart, useDisclosure,\n'
+          + '  reasoningHidden = false, usePresentation, revealProcess, mentions, renderSlot, useGroupAction, t, chamberFileApiBase,\n}: AssistantMarkdownProps) {',
       }),
       Object.freeze({
         expect: '  const pathImages = useMemo<MarkdownPathImages>(() => {\n'
@@ -339,8 +351,10 @@ export const VENDOR_PATCHES = Object.freeze([
     reason: 'forwards the chamberFileApiBase root standard prop into AssistantMarkdown (no chamber package can thread it)',
     edits: Object.freeze([
       Object.freeze({
-        expect: '  node, groupPart, useDisclosure, useTurnData, turnProcess, openFile, renderMessageImages, fileMentions, usePresentation, t,\n}: AssistantNodeViewProps) {',
-        replace: '  node, groupPart, useDisclosure, useTurnData, turnProcess, openFile, renderMessageImages, fileMentions, usePresentation, t,\n'
+        expect: '  node, groupPart, useDisclosure, useGroupAction, useTurnData, turnProcess, openFile, loadImage, fileMentions,\n'
+          + '  usePresentation, renderSlot, t,\n}: AssistantNodeViewProps) {',
+        replace: '  node, groupPart, useDisclosure, useGroupAction, useTurnData, turnProcess, openFile, loadImage, fileMentions,\n'
+          + '  usePresentation, renderSlot, t,\n'
           + '  chamberFileApiBase,\n}: AssistantNodeViewProps) {',
       }),
       Object.freeze({
@@ -698,6 +712,33 @@ export const VENDOR_PATCHES = Object.freeze([
       Object.freeze({
         expect: "      )}\n    </>\n  )\n}",
         replace: "      )}\n    </span>\n  )\n}",
+      }),
+    ]),
+  }),
+  Object.freeze({
+    idSuffixes: Object.freeze([
+      'dsh-client-ui-settings-account/src/client/index.ts',
+      'packages/client/ui-settings-account/src/client/index.ts',
+    ]),
+    noRetireForm: 'chamber behaviour, not an upstream re-anchor: the composite gates the official desktop-onboarding overlay off because it takes over #root and parks without desktop configForms (design 09 §3.5). Retirement = the upstream overlay stops being desktop-gated, or a chamber-side account surface replaces it; C9 drift failure + maintainer ruling, not an automated retire check.',
+    vendorFile: 'dsh-client-ui-settings-account/src/client/index.ts',
+    reason: 'the official desktop-onboarding shell.overlay seat portals a full-screen surface, zeroes + inerts #root and parks on the settings loading state under the composite (no desktop configForms settles it); the account settings section itself registers outside the desktop branch and stays',
+    edits: Object.freeze([
+      Object.freeze({
+        expect: '  if (desktop) {\n    const controller = new DesktopOnboardingController(',
+        replace: '  // chamber patch (alpha.3): gate the desktop onboarding overlay off in the\n'
+          + '  // composite — its full-screen shell.overlay seat takes over #root and parks\n'
+          + '  // without desktop configForms (design 09 §3.5). The account settings section\n'
+          + '  // registers outside this branch and stays; set the global to restore upstream.\n'
+          + '  if (desktop && (globalThis as { __dshChamberAccountOverlay?: boolean }).__dshChamberAccountOverlay === true) {\n    const controller = new DesktopOnboardingController(',
+      }),
+      Object.freeze({
+        // The overlay registration was the only writer of that flag
+        // (:278-280 setVisible/publish), so gating the branch alone would leave
+        // desktopOnboardingVisible truthy forever and permanently suppress the
+        // upstream AccountNoticeStack (AccountMenu reads !desktopOnboardingVisible).
+        expect: '    view: undefined, details: undefined, avatar: undefined, failed: false, loginVisible: false, desktopOnboardingVisible: desktop,',
+        replace: '    view: undefined, details: undefined, avatar: undefined, failed: false, loginVisible: false, desktopOnboardingVisible: desktop && (globalThis as { __dshChamberAccountOverlay?: boolean }).__dshChamberAccountOverlay === true,',
       }),
     ]),
   }),

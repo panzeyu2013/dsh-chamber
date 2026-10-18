@@ -21,7 +21,8 @@ export const RUNTIME_FAMILY_OPT_IN_PATTERN = /^@deepseek-ai\/dsh-experimental-/
  * `harness.commit` + `packages/desktop/vendor/dsh/pnpm-lock.yaml` 单一持有）。
  *
  * 事实来源：运行时根包 `@deepseek-ai/dsh` 把 opt-in 能力声明为自己的运行时依赖
- * （agent-team / voice-input / speech-to-text / auto-review 家族；其余名字由这些依赖边
+ * （agent-team / voice-input / speech-to-text / auto-review / inspector / worktree / terminal /
+ * session-search / session-titles / translation / ralph / badge-skill 家族；其余名字由这些依赖边
  * 引入），上游同时把它们登记进 `OPTIONAL_BUNDLES`——语义是「运行时依赖 + 不被任何
  * shipped 模板选中 + 由插件管理器提供开关」。因此它们**确实是运行时线提供的模块**，
  * 按 F 的语义（运行时提供 ⇒ 受保护）应当在场：experimental 名字不再等于「取错了来源」。
@@ -35,13 +36,26 @@ export const RUNTIME_FAMILY_OPT_IN_ALLOWED: readonly string[] = [
   '@deepseek-ai/dsh-experimental-agent-team-profile',
   '@deepseek-ai/dsh-experimental-api-speech-to-text',
   '@deepseek-ai/dsh-experimental-auto-review',
+  '@deepseek-ai/dsh-experimental-badge-skill-bundle',
   '@deepseek-ai/dsh-experimental-client-ui-agent-team',
+  '@deepseek-ai/dsh-experimental-client-ui-cot-translation',
   '@deepseek-ai/dsh-experimental-client-ui-voice-input',
-  '@deepseek-ai/dsh-experimental-schedule-bundle',
+  '@deepseek-ai/dsh-experimental-cot-translation-bundle',
+  '@deepseek-ai/dsh-experimental-inspector',
+  '@deepseek-ai/dsh-experimental-inspector-profile',
+  '@deepseek-ai/dsh-experimental-plugin-market-bundle',
+  '@deepseek-ai/dsh-experimental-ralph-bundle',
+  '@deepseek-ai/dsh-experimental-session-inspector',
+  '@deepseek-ai/dsh-experimental-session-search',
+  '@deepseek-ai/dsh-experimental-session-titles-bundle',
   '@deepseek-ai/dsh-experimental-speech-to-text',
   '@deepseek-ai/dsh-experimental-speech-to-text-sensevoice',
+  '@deepseek-ai/dsh-experimental-terminal-bundle',
   '@deepseek-ai/dsh-experimental-tool-agent-team',
+  '@deepseek-ai/dsh-experimental-tool-worktree',
+  '@deepseek-ai/dsh-experimental-translator',
   '@deepseek-ai/dsh-experimental-voice-input-bundle',
+  '@deepseek-ai/dsh-experimental-worktree',
 ]
 
 /**

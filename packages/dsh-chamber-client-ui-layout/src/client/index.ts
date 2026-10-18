@@ -84,6 +84,13 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      */
     'rightbar': { kind: 'single'; scope: 'root'; owner: RightbarOwnerProps }
     /**
+     * Full-width bottom content below all three columns. The vendor AppFrame renders
+     * this seat unconditionally, so the declaration is mandatory (renderSlot is the
+     * entry's render authority: an undeclared key throws SlotOwnershipError at
+     * render); an empty occupant reserves no space and no Session binding is passed.
+     */
+    'shell.bottom': { kind: 'single'; scope: 'root' }
+    /**
      * Frame-wide floating layer above every column, click-through (entries opt
      * back into pointer events). Additive: a fresh `id` joins the shipped entries.
      */
@@ -173,6 +180,7 @@ export function apply(ctx: ClientContext): void {
         'sidebar': { kind: 'single', scope: 'root' },
         'main': { kind: 'keyed', scope: 'root' },
         'rightbar': { kind: 'single', scope: 'root' },
+        'shell.bottom': { kind: 'single', scope: 'root' },
         'shell.overlay': { kind: 'list', scope: 'root' },
         'shell.leading': { kind: 'single', scope: 'root' },
       },

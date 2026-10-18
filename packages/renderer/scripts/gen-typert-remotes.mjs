@@ -31,7 +31,9 @@ import { createRequire } from 'node:module'
 import { cpSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { assertRemotePackageContract, remotePackagesFromAssembly } from './typert-remote-contract.mjs'
+import {
+  assertRemotePackageContract, EXPECTED_SELF_MOUNTED_REMOTES, remotePackagesFromAssembly,
+} from './typert-remote-contract.mjs'
 
 const requireFromRenderer = createRequire(fileURLToPath(new URL('../package.json', import.meta.url)))
 // esbuild is vite's transitive dependency — resolve it through vite's tree.
@@ -56,7 +58,16 @@ const HOST_CONFIG = join(CACHE, 'host-tsconfig.json')
  */
 const REMOTE_ASSEMBLY_ENTRY = join(VENDOR, 'dsh-api-remotes/src/client/index.ts')
 const REMOTE_PACKAGES = remotePackagesFromAssembly(readFileSync(REMOTE_ASSEMBLY_ENTRY, 'utf8'))
-for (const packageName of REMOTE_PACKAGES) {
+/**
+ * Self-mounted Remote faces outside the dsh-api-remotes assembly: the alpha.3
+ * access-control client value-imports its own `./remote` face, and the chamber
+ * composite covers that client first-screen (ui-session/ui-workspace inject
+ * `remoteAccess`), so its artifact must be generated without joining the C4
+ * assembly table (which stays 26). Single source: typert-remote-contract.mjs.
+ */
+const SELF_MOUNTED_REMOTE_PACKAGES = EXPECTED_SELF_MOUNTED_REMOTES
+const GENERATED_REMOTE_PACKAGES = [...REMOTE_PACKAGES, ...SELF_MOUNTED_REMOTE_PACKAGES]
+for (const packageName of GENERATED_REMOTE_PACKAGES) {
   const packageDir = packageName.slice('@deepseek-ai/'.length)
   const manifest = JSON.parse(readFileSync(join(VENDOR, packageDir, 'package.json'), 'utf8'))
   assertRemotePackageContract(packageName, manifest)
@@ -398,7 +409,7 @@ async function main() {
     // analyzer refuses. Selecting the emitted set builds the program from
     // those packages' files plus their import closure, which reaches every
     // context key they use (agent/session/…) through the workspace paths.
-    packages: REMOTE_PACKAGES,
+    packages: GENERATED_REMOTE_PACKAGES,
   })
   const workspace = analyzer.analyze()
   // The output tree is generator-owned: WIPE it before emitting so a remote
@@ -411,7 +422,7 @@ async function main() {
   for (const face of workspace.faces) {
     const emitter = new FaceModelEmitter(face)
     for (const packageModel of face.packages) {
-      if (!REMOTE_PACKAGES.includes(packageModel.name)) continue
+      if (!GENERATED_REMOTE_PACKAGES.includes(packageModel.name)) continue
       const artifact = emitter.emit(packageModel.name)
       if (artifact.remote === undefined) continue
       const outDir = join(OUT_ROOT, packageModel.name.replace('@deepseek-ai/', ''))
@@ -421,8 +432,8 @@ async function main() {
     }
   }
   console.log(`gen-typert-remotes: emitted ${emitted} remote-client artifacts into ${OUT_ROOT}`)
-  if (emitted !== REMOTE_PACKAGES.length) {
-    console.error(`gen-typert-remotes: expected ${REMOTE_PACKAGES.length} artifacts, got ${emitted}`)
+  if (emitted !== GENERATED_REMOTE_PACKAGES.length) {
+    console.error(`gen-typert-remotes: expected ${GENERATED_REMOTE_PACKAGES.length} artifacts, got ${emitted}`)
     process.exit(1)
   }
 }

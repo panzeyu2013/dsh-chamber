@@ -14,8 +14,11 @@ import clsx from 'clsx'
 import {
   IconArchiveOutlineRegular, IconBranchOutlineRegular, IconEditOutlineRegular, IconEllipsisOutlineRegular,
   IconPinFillRegular, IconPinOutlineRegular, IconUnarchiveOutlineRegular, Menu,
-  Tooltip, type MenuItem,
+  Tooltip, writeClipboard, type MenuItem,
 } from '@deepseek-ai/dsh-client-ui-primitives'
+// alpha.3 的 copy 字形不在本包 tsc 解析到的 primitives barrel 面里（运行时/bundler 正常），
+// 走包已导出的 ./src/* 子路径；上游 SessionId 菜单项正是这一个字形。
+import { IconCopyOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives/src/icons/index.tsx'
 import type { ChamberServerAggregate, ChamberServerWorkspace } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { relativeTimeBucket } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import { openErrorKey } from '@dsh-chamber/dsh-chamber-client-core/open-outcome'
@@ -96,6 +99,11 @@ const SessionRow = memo(function SessionRow({
     renderSessionSeat,
     chamberInstanceId,
   } = useSidebarSection()
+  // 上游 SessionId 菜单项的动作：复制完整会话 id，成功/失败各一条瞬态提示（design 06 §3.4）。
+  const copySessionId = async (sourceId: string, sessionId: string): Promise<void> => {
+    const copied = await writeClipboard(sessionId)
+    showNotice(sourceId, copied ? 'sessionIdCopied' : 'sessionIdCopyFailed')
+  }
   // 菜单键帽来自页面快捷键目录（上游 RenameSessionMenuItem / ForkSessionMenuItem /
   // ArchiveSessionMenuItem 同款选择）：命令未注册时行缺席，键帽与 aria 一并消失。
   const renameShortcut = useShortcuts(rows => rows.find(row => row.id === 'session.rename'))
@@ -146,6 +154,12 @@ const SessionRow = memo(function SessionRow({
       // 归档行不带归档快捷键（上游 `shortcut={archived ? undefined : shortcut}`）。
       shortcut: session.archived === true ? undefined : archiveShortcut,
       icon: session.archived === true ? <IconUnarchiveOutlineRegular size={16} /> : <IconArchiveOutlineRegular size={16} />,
+    },
+    {
+      // 上游 SessionId（order 450，排在归档之后）：复制完整会话 id；反馈走来源级瞬态通道。
+      id: 'sessionId',
+      label: t('menu.sessionId'),
+      icon: <IconCopyOutlineRegular size={14} />,
     },
   ], [t, session.pinned, session.archived, renameShortcut, forkShortcut, archiveShortcut])
   const sessionKey = `${server.id}/session/${session.id}`
@@ -340,6 +354,8 @@ const SessionRow = memo(function SessionRow({
               }
             } else if (id === 'pin') {
               onPinSession(server, session.id, session.pinned === true)
+            } else if (id === 'sessionId') {
+              void copySessionId(server.id, session.id)
             }
           }}
           items={menuItems}
