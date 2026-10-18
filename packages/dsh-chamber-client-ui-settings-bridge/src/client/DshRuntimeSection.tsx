@@ -40,6 +40,7 @@ import {
   fetchRemoteRuntimeStatus,
   fetchRemoteRuntimeVersions,
   pollGatewayReady,
+  remoteRuntimeControl,
   pollRemoteRuntimeUntilSettled,
   remoteRuntimeAction,
   REMOTE_STATUS_POLL_TIMEOUT_MS,
@@ -1431,37 +1432,24 @@ export function DshRuntimeSection({
         }
         await surface.restart()
       } else if (instanceSource === 'gateway' && chamberInstanceId !== undefined) {
-        // The POST stays bounded by this panel's controller (a wedged hop must not
-        // leave the dialog pending forever). The readiness poll below owns its own
-        // ceiling (pollGatewayReady, 120s) and does not share this controller.
+        // The POST is budgeted and self-bounded (remoteRuntimeControl owns both the
+        // page-dispatch gate and a 30s ceiling); this panel's controller only
+        // cancels it when another restart supersedes this one. The readiness poll
+        // below owns its own ceiling (pollGatewayReady, 120s).
         restartPollAbort.current?.abort()
         const restartController = new AbortController()
         restartPollAbort.current = restartController
-        let postTimedOut = false
-        const restartTimeout = setTimeout(() => {
-          postTimedOut = true
-          restartController.abort()
-        }, REMOTE_ACTION_TIMEOUT_MS)
-        try {
-          const response = await fetch(`/api/i/${chamberInstanceId}/chamber/runtime/restart`, {
-            method: 'POST',
-            signal: restartController.signal,
-          })
-          if (response.status !== 202) {
-            // The route's 409 families get the SAME localized copy the
-            // connections card/dialog render (restart-refusal.ts); other
-            // statuses keep the server's verbatim reason, never a bare code.
-            let body: unknown = null
-            try { body = await response.json() } catch { body = null }
-            throw new Error(bridgeRestartRefusalText(body, response.status, t))
-          }
-        } catch (error) {
-          // Our own POST deadline reports itself in the section's copy; every
-          // other failure (including the refusal above) keeps its own message.
-          if (postTimedOut) throw new Error(t('dshRuntimeActionTimeout'))
-          throw error
-        } finally {
-          clearTimeout(restartTimeout)
+        const control = await remoteRuntimeControl(chamberInstanceId, 'restart', {
+          signal: restartController.signal,
+        })
+        if (control.kind === 'busy') throw new Error(t('dshRuntimeActionBusy'))
+        if (control.kind === 'timeout') throw new Error(t('dshRuntimeActionTimeout'))
+        if (control.kind === 'failed') throw control.error
+        if (control.status !== 202) {
+          // The route's 409 families get the SAME localized copy the connections
+          // card/dialog render (restart-refusal.ts); other statuses keep the
+          // server's verbatim reason, never a bare code.
+          throw new Error(bridgeRestartRefusalText(control.body, control.status, t))
         }
         // The 202 only accepts the restart; readiness is confirmed here so the
         // success note is never claimed for a restart that did not come back

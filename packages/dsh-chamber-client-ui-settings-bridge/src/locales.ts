@@ -208,6 +208,7 @@ export const zh = {
   // 应用内确认对话框的两条诚实回执：确认时动作前提已不成立，或动作超时被中止。
   dshRuntimeConfirmStale: '该动作的前提已改变（状态在确认期间更新了），本次操作未执行。请查看当前状态后重试。',
   dshRuntimeActionTimeout: '操作超时：服务端在限定时间内没有返回结果，已中止本次请求。请查看当前状态后重试。',
+  dshRuntimeActionBusy: '页面繁忙：请求未能派发，请稍后重试。',
   // gateway 托管的内建锚口径（design 18 §3.6 A1：副行「部署锚 vX」）。
   dshRuntimeDeployAnchorRow: '部署锚',
   dshRuntimeRegistryLabel: '版本源',
@@ -490,6 +491,7 @@ export const en: Record<keyof typeof zh, string> = {
   // holds at the confirm click, or the action exceeded its ceiling and was aborted.
   dshRuntimeConfirmStale: 'This action’s precondition changed while you were confirming (the status moved on), so nothing was executed. Check the current state and retry.',
   dshRuntimeActionTimeout: 'The operation timed out: the server did not answer within the limit, so the request was aborted. Check the current state and retry.',
+  dshRuntimeActionBusy: 'Page busy: the request was not dispatched; retry shortly.',
   // Gateway-hosted builtin anchor wording (design 18 §3.6 A1: 副行「部署锚」).
   dshRuntimeDeployAnchorRow: 'Deployment anchor',
   dshRuntimeRegistryLabel: 'Version source',

@@ -911,3 +911,50 @@ test('I-1：shipped 源码中不存在 EventSource 引用与流式 getReader（�
   assert.deepEqual(violations, [],
     'I-1 违例（页面长活 HTTP 流必须为 0）：\n' + violations.join('\n'))
 })
+
+/** Page-scope fetch ownership (design 26 §D7): every ambient fetch reference in page
+ *  code belongs to a budgeted carrier. A new file or count turns this red — the
+ *  static gate STATUS used to list as missing. */
+const PAGE_PACKAGE_PREFIXES = [
+  'packages/renderer/',
+  'packages/dsh-chamber-client-core/',
+  'packages/dsh-chamber-client-ui-',
+  'packages/dsh-chamber-wire/',
+  'packages/dsh-stream-state/',
+]
+const PAGE_FETCH_ALLOWLIST: Record<string, number> = {
+  // Every ambient fetch reference in PAGE code, by file. All of them live in a
+  // budgeted carrier (they are the default behind a fetchImpl seam, or the single
+  // fetch of a slot-holding caller). A new file or a changed count means a new
+  // unowned call site: route it through http-budget.ts or register it here with
+  // the reason (the copies client-web / connection / api-gateway stay out of the
+  // scan: they are upstream channels declared in design 26 §D7).
+  'packages/dsh-chamber-client-core/src/control-plane-client.ts': 1,
+  'packages/dsh-chamber-client-core/src/gateway-runtime-poll.ts': 1,
+  'packages/dsh-chamber-client-core/src/gateway-runtime.ts': 6,
+  'packages/dsh-chamber-client-core/src/instance-api.ts': 3,
+  'packages/dsh-chamber-client-core/src/wire-common.ts': 1,
+  'packages/dsh-chamber-client-ui-settings-connections/src/client/restart-action.ts': 1,
+  'packages/renderer/src/host-graph.ts': 2,
+  'packages/renderer/src/session-facts-source.ts': 1,
+  'packages/renderer/src/source-mux-facts.ts': 1,
+}
+
+test('同源 fetch 的唯一所有权：页面代码的每个调用点都经预算或已被声明（design 26 §D7）', async () => {
+  const files = await collectSourceFiles()
+  assert.ok(files.length >= 400, '扫描面必须覆盖全部页面包 src')
+  const found: Record<string, number> = {}
+  for (const file of files) {
+    const rel = relative(REPO_ROOT, file)
+    if (!PAGE_PACKAGE_PREFIXES.some(prefix => rel.startsWith(prefix))) continue
+    const code = stripComments(await readFile(file, 'utf8'))
+    // Match the ambient identifier, not just a call expression: `?? fetch`,
+    // `globalThis.fetch(` and aliases are call sites too. Type annotations
+    // ("typeof fetch") are not.
+    const count = (code.match(/(?<![A-Za-z0-9_$])(?<!typeof )fetch(?![A-Za-z0-9_$])/g) ?? []).length
+    if (count > 0) found[rel] = count
+  }
+  assert.deepEqual(found, PAGE_FETCH_ALLOWLIST,
+    '一个未声明的同源 fetch 出现了：页面预算（http-budget.ts）必须拥有这次派发，'
+    + '或把它登记为已声明残余（STATUS 的绑定范围）并同笔更新本表')
+})

@@ -11,6 +11,11 @@ import { readFileSync } from 'node:fs';
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts';
 import { MANAGED_RESTART_REFUSAL_KEYS, runManagedRestart } from '../../src/client/restart-action.ts';
 import { en, zh } from '../../src/locales.ts';
+import {
+  acquireHttpBudget,
+  configureHttpBudgetForTests,
+  resetHttpBudgetForTests,
+} from '../../../dsh-chamber-client-core/src/http-budget.ts';
 import type { RuntimeRefusalKey } from '../../src/client/managed-restart.ts';
 
 const tZh = (key: RuntimeRefusalKey): string => zh[key]
@@ -110,6 +115,39 @@ test('runManagedRestart: a 202 that never becomes ready is accepted-timeout, not
   })
   assert.deepEqual(outcome, { kind: 'accepted-timeout' })
   assert.ok(calls >= 2, 'the readiness poll must ride the injected fetch (without it this returns slowly and green)')
+})
+
+test('runManagedRestart: a page-budget refusal is a localized deterministic arm, never a fetch', async () => {
+  resetHttpBudgetForTests()
+  const restore = configureHttpBudgetForTests({ totalMax: 1, localReserve: 0, perSourceQueueMax: 0 })
+  let fetches = 0
+  try {
+    const holder = await acquireHttpBudget({ sourceId: 'other', kind: 'unary', lane: 'foreground' })
+    assert.equal(holder.kind, 'granted')
+    const outcome = await runManagedRestart('gateway-x', tEn, {
+      fetchImpl: async () => { fetches += 1; return jsonResponse(202, null) },
+    })
+    assert.deepEqual(outcome, { kind: 'refused', text: en.restartNotDispatched })
+    assert.equal(fetches, 0, 'a refused request never reaches fetch')
+  } finally {
+    resetHttpBudgetForTests()
+    restore()
+  }
+})
+
+test('runManagedRestart: the POST has its own ceiling and reports an unknown outcome', async () => {
+  const outcome = await runManagedRestart('gateway-x', tEn, {
+    requestTimeoutMs: 10,
+    fetchImpl: async (_input, init) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => {
+        const aborted = new Error('aborted')
+        aborted.name = 'AbortError'
+        reject(aborted)
+      })
+    }),
+  })
+  assert.equal(outcome.kind, 'failed')
+  assert.match((outcome as { detail: string }).detail, /timed out after 10ms; the runtime state is unknown/u)
 })
 
 test('ConnectionsSection keeps both 202 legs wired (poll → honest note)', () => {

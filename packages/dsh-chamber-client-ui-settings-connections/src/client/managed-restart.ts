@@ -80,7 +80,7 @@ export function applyRuntimeProbe(
 }
 
 /** Locale keys the connections dictionary owns for those refusals. */
-export type RuntimeRefusalKey = 'restartRefusedNotRunning' | 'restartRefusedBusy' | 'startManagedDshRefused'
+export type RuntimeRefusalKey = 'restartRefusedNotRunning' | 'restartRefusedBusy' | 'restartNotDispatched' | 'startManagedDshRefused'
 
 /**
  * Localized text for a runtime-action refusal: a 409 renders `keys[kind]` with `{code}`

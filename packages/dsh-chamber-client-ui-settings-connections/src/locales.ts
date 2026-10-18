@@ -80,6 +80,10 @@ export const zh = {
   // 409 拒绝的本地化投影：核心路由的英文 body.error 不逐字上屏，只保留 code 以维持可诊断性。
   restartRefusedNotRunning: '重启被拒绝：托管 dsh 未在运行（409 {code}）——请改用「启动实例」',
   restartRefusedBusy: '重启被拒绝：运行时正忙或正在恢复（409 {code}），请稍后重试',
+  // 页面级派发拒绝（design 26 §D7）：请求从未离开页面，绝不是来源故障。
+  restartNotDispatched: '页面繁忙：重启请求未能派发，请稍后重试',
+  inventoryNotDispatched: '页面繁忙：插件清单请求未能派发，请稍后重试',
+  startNotDispatched: '页面繁忙：启动请求未能派发，请稍后重试',
   restartNotConnected: '连接后可用',
   restartNotRunning: '托管 dsh 未在运行——请先「启动实例」',
   restartApplyInPanel: '重启生效',
@@ -370,6 +374,10 @@ export const en: Record<SettingsConnectionsKey, string> = {
   // not shown verbatim — the code stays visible so a report is still diagnosable.
   restartRefusedNotRunning: 'Restart refused: the managed dsh is not running (409 {code}) \u2014 use "Start instance" instead',
   restartRefusedBusy: 'Restart refused: the runtime is busy or recovering (409 {code}); retry shortly',
+  // Page-level dispatch refusal (design 26 §D7): the request never left the page.
+  restartNotDispatched: 'Page busy: the restart request was not dispatched; retry shortly',
+  inventoryNotDispatched: 'Page busy: the plugin inventory request was not dispatched; retry shortly',
+  startNotDispatched: 'Page busy: the start request was not dispatched; retry shortly',
   restartNotConnected: 'Available after connecting',
   restartNotRunning: 'The managed dsh is not running \u2014 use "Start instance" first',
   restartApplyInPanel: 'Restart to apply',

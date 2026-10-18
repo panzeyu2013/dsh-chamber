@@ -35,7 +35,7 @@ import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-cli
 // Type-only: pulls the settings shell's SlotMap merge ('settings.section').
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 // Managed restart/start readiness: the poll behind each card's success note.
-import { pollGatewayReady } from '@dsh-chamber/dsh-chamber-client-core'
+import { pollGatewayReady, fetchRemoteRuntimeStatus, remoteRuntimeControl } from '@dsh-chamber/dsh-chamber-client-core'
 import type {
   DesktopSshSurface, SshConfigDiscovery, SshConfigHost, SshInstanceSpec, SshLogEntry, SshStatusProjection,
 } from '../global.d.ts'
@@ -470,11 +470,9 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const probeGatewayRuntime = useCallback(async (specId: string): Promise<void> => {
     let connectionState: string | null = null
     try {
-      const response = await fetch(`/api/i/gateway-${specId}/chamber/runtime/status`)
-      if (response.status === 200) {
-        const payload = await response.json() as { connectionState?: unknown } | null
-        connectionState = typeof payload?.connectionState === 'string' ? payload.connectionState : null
-      }
+      // Budgeted reader (design 26 §D7); the 5s queue bound keeps beats from stacking.
+      const status = await fetchRemoteRuntimeStatus(`gateway-${specId}`, { queueDeadlineAt: Date.now() + 5_000 })
+      connectionState = typeof status.connectionState === 'string' ? status.connectionState : null
     } catch {
       connectionState = null
     }
@@ -499,18 +497,20 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       setRestartNotes(prev => ({ ...prev, [spec.id]: value }))
     }
     try {
-      let response: Response
-      try {
-        response = await fetch(`/api/i/${id}/chamber/runtime/start`, { method: 'POST', signal: controller.signal })
-      } catch (err) {
-        if (controller.signal.aborted) return
-        note({ tone: 'error', text: errorMessage(err) })
+      // Budgeted control POST (design 26 §D7): refusals are localized arms and the
+      // ceiling states its unknown outcome; the refusal body stays readable.
+      const control = await remoteRuntimeControl(id, 'start', { signal: controller.signal })
+      if (control.kind === 'busy' || control.kind === 'timeout') {
+        note({ tone: 'error', text: control.kind === 'busy' ? t('startNotDispatched') : 'start request timed out; unknown runtime state' })
         return
       }
-      if (response.status !== 202) {
-        let body: unknown = null
-        try { body = await response.json() } catch { body = null }
-        note({ tone: 'error', text: runtimeRefusalText(body, response.status, START_REFUSAL_KEYS, t) })
+      if (control.kind === 'failed') {
+        if (controller.signal.aborted) return
+        note({ tone: 'error', text: errorMessage(control.error) })
+        return
+      }
+      if (control.status !== 202) {
+        note({ tone: 'error', text: runtimeRefusalText(control.body, control.status, START_REFUSAL_KEYS, t) })
         return
       }
       // The 202 only accepts the start: the readiness poll decides whether the success note is honest.

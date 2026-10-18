@@ -39,7 +39,7 @@ import {
 import { gatewayReadFenceText } from './managed-restart.ts'
 import { errorMessage } from './error-text.ts'
 import { pluginRowsOf, projectInstalledRows, type InstalledRowView } from './plugin-model.ts'
-import { loadPluginInventory, type PluginInventorySnapshot } from './plugin-inventory-api.ts'
+import { inventoryErrorText, loadPluginInventory, type PluginInventorySnapshot } from './plugin-inventory-api.ts'
 import {
   capabilityProbeKey,
   officialPluginsPageSourceId,
@@ -331,11 +331,11 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       setReloading(false)
       if (hadData) {
         // reload 失败：保留旧帧并如实显示错误（不闪 loading、不谎报状态）。
-        setViewError(errorMessage(err))
+        setViewError(inventoryErrorText(err, t))
       } else {
         snapshotRef.current = null
         setSnapshot(null)
-        setViewError(errorMessage(err))
+        setViewError(inventoryErrorText(err, t))
         setViewPhase('error')
       }
     })

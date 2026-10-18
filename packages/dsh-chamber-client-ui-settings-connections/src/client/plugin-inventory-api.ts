@@ -21,10 +21,17 @@
  */
 
 import {
-  isRecord, postUnary, throwIfInstanceUnavailable, wrapWireError,
+  errorMessage, isRecord, postUnary, throwIfInstanceUnavailable, wrapWireError,
   type UnaryPostOutcome,
 } from '@dsh-chamber/dsh-chamber-client-core'
 import { HttpBudgetUnscheduledError, httpBudgetLaneFor, httpBudgetLeaseFor, runWithHttpBudget } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
+import type { SettingsConnectionsKey } from '../locales.ts'
+
+/** Localized text for an inventory read failure: a page-budget refusal is the page
+ *  being busy, not the instance failing (design 26 §D7). */
+export function inventoryErrorText(error: unknown, t: (key: SettingsConnectionsKey) => string): string {
+  return error instanceof HttpBudgetUnscheduledError ? t('inventoryNotDispatched') : errorMessage(error)
+}
 
 /** Lifecycle state of an entry's root Fiber, or null when it has no live root Fiber. */
 export type PluginFiberPhase = 'pending' | 'loading' | 'active' | 'failed' | 'unloading' | null
@@ -126,9 +133,10 @@ export async function loadPluginInventory(sourceId: string): Promise<PluginInven
       rpcId: crypto.randomUUID(),
     }))
   } catch (error) {
-    if (error instanceof HttpBudgetUnscheduledError) {
-      throw new Error('实例繁忙：插件清单请求未派发，请稍后重试')
-    }
+    // A page-dispatch refusal keeps its provenance: wrapWireError would fold every
+    // error into "实例不可达", which is exactly the wrong fact for a request that
+    // never left the page. The dialog localizes the typed error (design 26 §D7).
+    if (error instanceof HttpBudgetUnscheduledError) throw error
     throw wrapWireError(error)
   }
   // 503 instance_unavailable (not-ready instance, proxy honesty): the shared classifier throws the byte-identical error.

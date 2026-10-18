@@ -21,7 +21,7 @@
     },
     {
       "path": "packages/dsh-chamber-client-ui-settings-bridge/src/client/DshRuntimeSection.tsx",
-      "lines": 2197,
+      "lines": 2185,
       "target": 600,
       "note": "gateway + local runtime branches in one file"
     },

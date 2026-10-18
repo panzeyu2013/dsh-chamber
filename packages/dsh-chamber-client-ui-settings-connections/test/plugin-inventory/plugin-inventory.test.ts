@@ -16,6 +16,13 @@ import {
   chamberRemoteKey,
 } from '../../src/client/plugin-inventory-text.ts'
 import { stubFetch, withPageOrigin } from '../support/fixtures.ts'
+import {
+  acquireHttpBudget,
+  configureHttpBudgetForTests,
+  resetHttpBudgetForTests,
+} from '../../../dsh-chamber-client-core/src/http-budget.ts'
+import { HttpBudgetUnscheduledError } from '../../../dsh-chamber-client-core/src/http-budget.ts'
+import { en, zh } from '../../src/locales.ts'
 
 function serverResponse(rpcId: string, result: unknown): unknown {
   return { type: 'server-response', rpcId, result }
@@ -50,6 +57,27 @@ test('loadPluginInventory: posts the client-request envelope to the per-instance
   } finally {
     stub.restore()
     restoreOrigin()
+  }
+})
+
+test('loadPluginInventory: a page-budget refusal keeps its provenance and never claims the instance is down', async () => {
+  resetHttpBudgetForTests()
+  const restore = configureHttpBudgetForTests({ totalMax: 1, localReserve: 0, perSourceQueueMax: 0 })
+  let fetches = 0
+  try {
+    const holder = await acquireHttpBudget({ sourceId: 'other', kind: 'unary', lane: 'foreground' })
+    assert.equal(holder.kind, 'granted')
+    await assert.rejects(
+      loadPluginInventory('gateway-west'),
+      (error: unknown) => error instanceof HttpBudgetUnscheduledError,
+      'the typed refusal must survive the read face (the dialog localizes it)',
+    )
+    assert.equal(fetches, 0)
+    assert.equal(typeof zh.inventoryNotDispatched, 'string')
+    assert.equal(typeof en.inventoryNotDispatched, 'string')
+  } finally {
+    resetHttpBudgetForTests()
+    restore()
   }
 })
 
