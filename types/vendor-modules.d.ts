@@ -443,6 +443,7 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   export const IconNewChatOutlineRegular: IconComponent
   export const IconPanelLeftOutlineRegular: IconComponent
   export const IconPersonalizationOutlineRegular: IconComponent
+  export const IconPluginPinwheelOutlineRegular: IconComponent
   export const IconPinFillRegular: IconComponent
   export const IconPinOutlineRegular: IconComponent
   export const IconPlayOutlineRegular: IconComponent

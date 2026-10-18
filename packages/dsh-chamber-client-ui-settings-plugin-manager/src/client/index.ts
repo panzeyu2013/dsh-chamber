@@ -1,11 +1,10 @@
-/** Places the full upstream plugin manager page inside Settings → Built-in plugins. */
+/** Places the full upstream plugin manager page inside Settings → Plugin management as its own section. */
 
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
-import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { configLedgerSource } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/config-ledger.ts'
 import { tabLedgerSource } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/tab-ledger.ts'
 import { en, zh } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/locales.ts'
@@ -17,11 +16,11 @@ import type { PluginManagerLocaleKey } from '@deepseek-ai/dsh-client-ui-plugin-m
 import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/slot-contract.ts'
 import { EmbeddedPluginManagerPage } from './EmbeddedPluginManagerPage.tsx'
 import { createPluginActionTracker } from './plugin-action-tracker.ts'
-import { tabLocales, type PluginManagerTabLocaleKey } from './tab-locales.ts'
+import { sectionLocales, type PluginManagerSectionLocaleKey } from './section-locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
-    'settings.pluginManagerTab': PluginManagerTabLocaleKey
+    'settings.pluginManagerSection': PluginManagerSectionLocaleKey
     pluginManager: PluginManagerLocaleKey
   }
 }
@@ -33,7 +32,7 @@ declare module '@deepseek-ai/cordis' {
 }
 
 const MANAGER_NS = 'pluginManager'
-const TAB_NS = 'settings.pluginManagerTab'
+const SECTION_NS = 'settings.pluginManagerSection'
 
 export const inject = [
   'slots', 'locale', 'remote', 'remote.pluginManager', 'remote.pluginInventory',
@@ -76,7 +75,7 @@ const MANAGER_CHILDREN = {
 
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(MANAGER_NS, { zh, en }), 'settings-plugin-manager: manager dictionaries')
-  ctx.effect(() => ctx.locale.register(TAB_NS, tabLocales), 'settings-plugin-manager: tab dictionaries')
+  ctx.effect(() => ctx.locale.register(SECTION_NS, sectionLocales), 'settings-plugin-manager: section dictionary')
 
   const controller = new PluginManagerController(ctx)
   ctx.effect(() => () => { controller.dispose() }, 'settings-plugin-manager: controller')
@@ -95,11 +94,11 @@ export function apply(ctx: ClientContext): void {
   }, 'settings-plugin-manager: host invalidations')
 
   const configLedger = configLedgerSource(ctx)
-  const label = ctx.locale.bind(TAB_NS)
+  const sectionLabel = ctx.locale.bind(SECTION_NS)
   const resolveText: PluginManagerFace['resolveText'] = text =>
     (ctx.locale as unknown as { resolveText: PluginManagerFace['resolveText'] }).resolveText(text)
   // Upstream's refresh toast is the plugin manager's own shell.overlay seat: the
-  // face is hoisted so the settings page and the overlay toast share one
+  // face is hoisted so the settings section and the overlay toast share one
   // controller face (upstream registers the same pair from one place).
   const face = controller.inject(configLedger, tabLedgerSource(ctx), resolveText)
   // 插件刷新收敛触发（design 09 §3.7 / design 15 §6）：本页控制器的一次
@@ -137,7 +136,7 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.reflect.provide('pluginNavigation', {
     openBundle: (packageName: string) => { openPackage?.(packageName) },
   }), 'settings-plugin-manager: navigation service')
-  ctx.slots.inject('settings.plugins.tab', function* () {
+  ctx.slots.inject('settings.section', function* () {
     const handle = createNavigationStore()
     const instance = handle.create()
     const store: typeof handle = { ...handle, create: () => instance }
@@ -149,10 +148,10 @@ export function apply(ctx: ClientContext): void {
     openPackage = navigate
     yield () => { if (openPackage === navigate) openPackage = undefined }
     yield ctx.slots.register({
-      name: 'settings.plugins.tab',
-      id: 'manager',
-      order: 0,
-      label: () => label('tab'),
+      name: 'settings.section',
+      id: 'plugin-manager',
+      order: 16,
+      label: () => sectionLabel('nav'),
       locale: MANAGER_NS,
       store,
       inject: () => face as PluginManagerFace,

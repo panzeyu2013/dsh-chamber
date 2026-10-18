@@ -126,7 +126,7 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   '@deepseek-ai/dsh-client-ui-settings-plugins',
   '@deepseek-ai/dsh-client-ui-settings-plugin-inventory',
   // The upstream plugin-manager entry registers a permanent sidebar panel; the
-  // chamber replacement mounts the same page as a Built-in plugins settings tab.
+  // chamber replacement mounts the same page as its own Settings section.
   '@deepseek-ai/dsh-client-ui-plugin-manager',
   '@dsh-chamber/dsh-chamber-client-ui-settings-plugin-manager',
   '@dsh-chamber/dsh-chamber-client-ui-settings-connections',

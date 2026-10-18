@@ -1,6 +1,6 @@
 {
   "name": "@dsh-chamber/dsh-chamber-client-ui-settings-plugin-manager",
-  "description": "Chamber-hosted plugin manager tab under Settings → Built-in plugins",
+  "description": "Chamber-hosted plugin manager settings section (Settings → Plugin management)",
   "version": "0.4.2-beta.2",
   "private": true,
   "type": "module",
@@ -16,8 +16,7 @@
       "inject": [
         "@deepseek-ai/dsh-api-remotes",
         "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-ui-settings",
-        "@deepseek-ai/dsh-client-ui-settings-plugins"
+        "@deepseek-ai/dsh-client-ui-settings"
       ],
       "platform": "web"
     }

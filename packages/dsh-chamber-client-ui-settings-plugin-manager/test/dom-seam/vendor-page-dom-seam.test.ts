@@ -1,15 +1,13 @@
 /**
- * 插件管理页容纳层的上游 DOM 缝锁 + 注册子座席表锁（design 05 §5；checklist §3 末条 / §7 第 6 步）。
+ * 插件管理页容纳层的上游 DOM 缝锁（design 05 §5；checklist §3 末条 / §7 第 6 步）。
  *
- * `EmbeddedPluginManagerPage.module.css` 不认上游的 CSS-module 类名（构建期哈希），只认
- * 页面自己的属性钩子与**页头行的两子序列**。这条缝静默回归过一次：上游把页头 intro 从
- * `<p>` 包成 `div.pageIntro`（intro 文字 + 信息按钮），旧 `h1 + p` 规则不再命中，intro
- * 留在行一、与容纳层提进首轨的首组标题叠绘（实机目检才发现）。本文件直接读 pin 住的
- * vendor 源，把该层依赖的事实逐条钉住：改钩子、改两子序列、改组形即红，维护者按 checklist
- * §7 第 6 步重锚，而不是等下一次实机目检。
- *
- * 断言按**区域**取景，不整文件乱搜：页根的子树（页头行 + 槽调用）与 `renderGroup` 定义
- * （组形）是两个不同区域，整文件搜会命中别处的同名元素（详情标题也是 `h3`）。
+ * 管理页现在是设置面的独立 `settings.section`，页面自己的页头/intro/工具栏就是分节内容；
+ * 容纳层不再消费 h1 的位置、`data-plugin-group` 的组形或 `data-window-drag` 的两子序列。
+ * 它只消费三个上游自有事实：
+ *   - 页根 `data-plugin-panel`（root 去主面板 padding/height/scroll）；
+ *   - 页头/More/详情三处 `data-window-drag`（清零 28px inset）；
+ *   - 页根的直接子槽锚点 `[data-slot]`（activation 占位者取得页面列宽）。
+ * 另加注册子座席表锁：页面不加载上游 apply()，renderSlot 的每个键都必须在本包 children 表里。
  *
  * 缺 vendor 树的口径与仓内其它 vendor 锁一致：默认**响亮失败**；
  * `DSH_CHAMBER_VENDOR_ABSENT=skip` 只是本地调试出口——本文件每个用例（含不读 vendor 的计数器
@@ -67,151 +65,21 @@ const pageSource = (): string => {
   return pageSourceCache
 }
 
-/** 取 `start` 起、到其后第一个 `end`（含）的一段。 */
-const sliceThrough = (text: string, start: string, end: string): string => {
-  const from = text.indexOf(start)
-  assert.ok(from >= 0, `vendor 源里找不到 ${start}`)
-  const to = text.indexOf(end, from + start.length)
-  assert.ok(to > from, `vendor 源里 ${start} 之后找不到 ${end}`)
-  return text.slice(from, to + end.length)
-}
-
-/** 断言 `tokens` 在 `text` 里按序出现（每个都必须存在）。 */
-const assertOrder = (text: string, tokens: readonly string[], why: string): void => {
-  const positions = tokens.map((token) => {
-    const at = text.indexOf(token)
-    assert.ok(at >= 0, `vendor 源里找不到 ${token}（容纳层依赖它）`)
-    return at
-  })
-  for (let index = 1; index < positions.length; index += 1) {
-    assert.ok(positions[index - 1]! < positions[index]!,
-      `顺序必须是 ${tokens.join(' → ')}（第 ${index + 1} 项越位）：${why}`)
-  }
-}
-
-/**
- * JSX 元素的**直接子元素**开标签序列（层 1 = `element` 自己的子）。
- *
- * 为什么不用正则数兄弟：`A…B` 配对形态对「多一个兄弟」不敏感——实测在页头两子之间插入第三个
- * `<div>…</div>`、或在控件块后再追加一个，旧的两子正则**都仍然命中**（它把新元素与控件块重新
- * 配对）。而三子会改 subgrid 的按行自动放置（首子→首轨、中项→次轨、真控件被挤到下一行的首轨），
- * 正是本锁要抓的回归。
- *
- * 扫描按标签走，并跳过属性里的 `{…}` 表达式与其中的字符串——上游控件块里就有
- * `icon={<IconPlusOutlineRegular size={13} />}`，按「第一个 `>`」截标签会在这里截错。
- */
-const topLevelChildren = (element: string): string[] => {
-  const children: string[] = []
-  let depth = 0
-  let index = 0
-  while (index < element.length) {
-    const open = element.indexOf('<', index)
-    if (open < 0) break
-    let cursor = open + 1
-    let braces = 0
-    let quote: string | undefined
-    const closing = element[cursor] === '/'
-    if (closing) cursor += 1
-    while (cursor < element.length) {
-      const char = element[cursor]!
-      if (quote !== undefined) {
-        if (char === '\\') { cursor += 2; continue }
-        if (char === quote) quote = undefined
-        cursor += 1
-        continue
-      }
-      if (char === '"' || char === "'" || char === '`') { quote = char; cursor += 1; continue }
-      if (char === '{') braces += 1
-      else if (char === '}') braces -= 1
-      else if (char === '>' && braces === 0) break
-      cursor += 1
-    }
-    assert.ok(cursor < element.length, `JSX 标签未闭合：${element.slice(open, open + 40)}`)
-    const tag = element.slice(open, cursor + 1)
-    if (closing) depth -= 1
-    else {
-      if (depth === 1) children.push(tag)
-      if (!tag.endsWith('/>')) depth += 1
-    }
-    index = cursor + 1
-  }
-  return children
-}
-
 vendorTest('页根钩子：data-plugin-panel 仍在页面根的 <section> 上', () => {
   assert.match(pageSource(), /<section\b[^>]*\bdata-plugin-panel\b/u,
-    '容纳层的根覆盖、两轨网格与 960 上限全部以 data-plugin-panel 为唯一根钩子（类名是构建期哈希）。')
-})
-
-vendorTest('页头行是页根的**首**子元素且带 data-window-drag', () => {
-  assert.match(pageSource(), /<section\b[^>]*\bdata-plugin-panel\b[^>]*>\s*(?:\{\s*[A-Za-z_$][\w$]*\s*\?\s*\(\s*)?<header\b[^>]*\bdata-window-drag\b/u,
-    '页头行必须是页根的第一个子元素：前插兄弟会先占行一（首组标题落位与「组内 8px」的前提）；'
-    + 'data-window-drag 同时是隐藏标题栏下唯一的窗口拖拽面，也是容纳层两条 chrome 行的命中面。')
-})
-
-vendorTest('页头行恰两子：标题块（h1 + intro + 说明钮）在前、控件块在后', () => {
-  const head = sliceThrough(pageSource(), '<header', '</header>')
-  assertOrder(head, ["t('title')", "t('intro')", "t('infoLabel')", 'props.openInstall', '</header>'],
-    '容纳层整块隐去首子块（上游重复的标题 + intro），把末子留给次轨并为它定尺寸；顺序一变，隐去的就是别的东西。')
-  assert.match(head, /<header\b[^>]*\bdata-window-drag\b[^>]*>\s*<div\b[^>]*>\s*<h1\b/u,
-    '页头行首子块必须**以重复的标题（h1）开头**：前插兄弟（哪怕一个空 div）会把首子换成别的东西，'
-    + '容纳层整块隐去的就不再是重复标题，intro 重新落回行一。')
-  const children = topLevelChildren(head)
-  assert.equal(children.length, 2,
-    `页头行必须恰好两子（标题块 + 控件块，实得 ${children.length}：${children.join(' / ')}）——`
-    + '第三子会改 subgrid 的按行自动放置：中项占掉由控件定尺寸的次轨，真控件被挤到下一行的首轨；'
-    + '只 pin 子元素个数与顺序，不 pin 标题/控件的标签或类名（类名是构建期哈希）。')
-  assert.match(children[0]!, /^<div\b/u, '首子必须是标题块：是一个 div，其内全部内容被容纳层隐去。')
-  assert.match(children[1]!, /^<div\b/u, '末子必须是控件块：也是一个 div，次轨由它定尺寸。')
-})
-
-// 负控挂在 vendorTest 下（它本身不读 vendor）：本文件必须保持「全跳过 = 全红」，加一个裸 test()
-// 会让缺树 + 显式 opt-out 从红变绿，把缺 vendor 的诚实失败换成假绿。
-vendorTest('负控：页头子元素计数把第三个兄弟判红（旧的两子正则形态放行）', () => {
-  const two = '<header className={css.pageHead} data-window-drag>'
-    + "<div><h1>{t('title')}</h1><div className={css.pageIntro}>{t('intro')}</div></div>"
-    + '<div className={css.toolbar}><Button icon={<IconPlusOutlineRegular size={13} />} onClick={props.openInstall} /></div>'
-    + '</header>'
-  const thirdBetween = two.replace('<div className={css.toolbar}>', '<div className={css.stray}><span>x</span></div><div className={css.toolbar}>')
-  const thirdAppended = two.replace('</header>', '<div className={css.stray}><span>x</span></div></header>')
-  assert.equal(topLevelChildren(two).length, 2,
-    '两子形态必须数成 2——控件块的属性里嵌着 icon={<Icon… />}，标签边界不能按第一个 `>` 截。')
-  assert.equal(topLevelChildren(thirdBetween).length, 3, '两子之间插第三子必须数成 3。')
-  assert.equal(topLevelChildren(thirdAppended).length, 3, '控件块之后追加第三子必须数成 3。')
-  // 负控的立论：旧的配对形态对两个变异都绿（实测），计数器因此不是过度设计。
-  const pairingForm = /<header\b[^>]*\bdata-window-drag\b[^>]*>\s*<div\b[^>]*>[\s\S]*?<\/div>\s*<div\b[^>]*>[\s\S]*?<\/div>\s*<\/header>/u
-  assert.ok(pairingForm.test(thirdBetween) && pairingForm.test(thirdAppended),
-    '负控前提：旧的配对形态确实对「第三子」放行——它若哪天变红，说明对照已无价值，可删该负控。')
-})
-
-vendorTest('分组缝：section[data-plugin-group] = [组头 div（h3 在前）在前、ul 卡列表在后]', () => {
-  const group = sliceThrough(pageSource(), 'const renderGroup', '</section>')
-  assert.match(group, /<section\b[^>]*\bdata-plugin-group=\{id\}>[\s\S]*?<div\b[^>]*>[\s\S]*?<h3\b[\s\S]*?<\/div>[\s\S]*?<ul\b[^>]*>[\s\S]*?<\/ul>/u,
-    '组形必须是「首子 = 组头 div（标题 h3 在前）在前、卡列表 ul 在后」：'
-    + '容纳层据此把组盒 display:contents、把首组头提进页头行首轨，卡列表留在流里；只 pin 嵌套与顺序。'
-    + 'alpha.2 起组头不再带计数元素（data-plugin-count 退役），ul 在整个 renderGroup 内是条件渲染。')
-})
-
-vendorTest('首组是 basic、其后 extensions / bundles（首轨该放谁的语义锚）', () => {
-  const page = pageSource()
-  assert.match(page, /\brenderGroup\('basic', t\('basicTitle'\),/u,
-    '首组必须是 basic：容纳层把**第一个** data-plugin-group 的组头提进行一。alpha.2 起分组语义由'
-    + '「Official / 已安装」改为「basic / extensions / bundles」，行一的标签随之改变；组序变化即复核首轨该放谁，并同步 checklist §3 登记。')
-  assertOrder(page, ["renderGroup('basic'", "renderGroup('extensions'", "renderGroup('bundles'"],
-    '组序必须是 basic -> extensions -> bundles。')
+    '容纳层的根去主面板规则以 data-plugin-panel 为唯一根钩子（类名是构建期哈希）。')
 })
 
 vendorTest('chrome 行：页头 + more 视图头 + 详情头各带 data-window-drag', () => {
   const count = pageSource().split('data-window-drag').length - 1
   assert.equal(count, 3,
-    `本页应恰有三条 data-window-drag（页头、more 视图头、详情头，实得 ${count}）：页头与 more 头互斥且都是页根直接子（容纳层的行一与 padding-top 直接子规则只命中渲染中的那一条），详情头只在后代选择器里；`
-    + '多一条少一条都要重锚 checklist §3 末条。')
+    `本页应恰有三条 data-window-drag（页头、more 视图头、详情头，实得 ${count}）：`
+    + '容纳层只按「这些行带 data-window-drag」清零 28px 主面板 inset；新增/删除都要重锚 checklist §3 末条。')
 })
 
-vendorTest('页根自身的槽锚点 plugins.bundle.activation 仍是直接子表达式', () => {
+vendorTest('页根仍调用 plugins.bundle.activation（CSS 的 > [data-slot] 规则依赖上游 renderSlot 的直接子位置）', () => {
   assert.match(pageSource(), /\brenderSlot\('plugins\.bundle\.activation'/u,
-    '容纳层给 [data-plugin-panel] > [data-slot] > * 的跨轨与 960 上限是按这条直接子槽写的：'
-    + '槽调用若挪进别的容器，占用者将拿不到轨道定位。')
+    '本锁只钉调用存在；直接子位置由上游 renderSlot 在页根 JSX 中的位置决定——若上游把它挪进别的容器，[data-plugin-panel] > [data-slot] > * 的宽度规则会失配，需按 §7 重锚。')
 })
 
 /**
@@ -219,7 +87,7 @@ vendorTest('页根自身的槽锚点 plugins.bundle.activation 仍是直接子�
  * （官方行在复合壳里是 covered-skip），页面里的 renderSlot(...) 绑定的是本包 registration 的
  * children 表。React 把 {renderSlot('plugins.add.actions', …)} 作为 children 传给 Menu 时即求值
  * （与菜单是否展开无关），未声明就抛 SlotOwnershipError: slot 'plugins.add.actions' is not
- * declared by this entry's children —— 打开「设置 → 内置插件」即崩。上游本代新增的
+ * declared by this entry's children —— 打开「设置 → 插件管理」即崩。上游本代新增的
  * plugins.add.actions 正是这样漏进来的；本锁把两表双向钉死。
  */
 vendorTest('注册子座席表：MANAGER_CHILDREN 与上游 registration 的 children 双向一致', () => {

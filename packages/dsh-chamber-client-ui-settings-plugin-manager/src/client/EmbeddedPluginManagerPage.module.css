@@ -1,132 +1,25 @@
-/* Containment for the upstream plugin manager page inside a settings TAB body
-   (design 05 §5: it occupies settings.plugins.tab; that section owns the contract,
-   the rejected alternatives and the measured placement). Scope: the page's own
-   attributes — data-plugin-panel, data-plugin-group, data-window-drag — because the
-   upstream module class names are hashed. */
+/* Containment for the upstream plugin manager page inside a Settings section
+   (design 05 §5): the settings options area owns the scroll and the side/bottom
+   insets, and the settings dialog owns the top chrome. The page keeps its own
+   header, intro row, toolbar, page tabs, groups, and detail/more chrome. */
 
-/* Tab body, not main panel: side insets and bottom go, and the stacked column
-   becomes a two-track grid — a lane for a group's heading, then the lane the head
-   row's controls occupy (sized by the head row itself, see below) — so the first
-   group's heading can share the head row's line without ever reaching its buttons.
-   max-width keeps the upstream 960px content column shared by a group's children and
-   the spanning head row at any panel width. */
-.embedded [data-plugin-panel] {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
-  align-content: start;
-  /* Row one mixes a 22px heading with the 32px toolbar. */
-  align-items: center;
-  gap: 8px 16px;
-  padding: 0;
-  /* Pins, inert today: a wider panel or a definite parent height may not re-centre
-     the column or make the page a second scroller. */
+/* Section body, not main panel: the options area already scrolls and pads. */
+.embedded > [data-plugin-panel] {
   height: auto;
   overflow: visible;
-  max-width: 960px;
+  padding: 0;
 }
 
-/* Every child spans both tracks by default (head row's drag box, a status line, a
-   detail view, a trailing failure); the cap is the upstream one on `.page > *`,
-   restored by hand for a group's children, whose box display: contents removes. */
-.embedded [data-plugin-panel] > *,
-.embedded [data-plugin-panel] > [data-plugin-group] > * {
-  grid-column: 1 / -1;
-  min-width: 0;
-  max-width: 960px;
-}
-
-/* The page's own display: contents slot anchor (plugins.bundle.activation, currently
-   unoccupied): a future occupant is a grid item too and needs the same span and cap.
-   The settings-bridge seat anchor wraps the panel itself, so it is not matched here. */
-.embedded [data-plugin-panel] > [data-slot] > * {
-  grid-column: 1 / -1;
-  min-width: 0;
-  max-width: 960px;
-}
-
-/* Rows after the first keep the upstream 32px rhythm: 24px plus the 8px row gap. A
-   group's box is display: contents (a margin there is inert): its heading and its
-   card list follow each other at that 8px row gap instead. */
-.embedded [data-plugin-panel] > * + * {
-  margin-top: 24px;
-}
-
-/* A tab body starts below the dialog's own header, so the 28px plus macOS strip
-   inset goes on both chrome rows — the page head and every detail head. */
-.embedded [data-plugin-panel] [data-window-drag] {
+/* The settings dialog's own header replaces the page's 28px main-panel inset;
+   the page head, the more view head, and every nested detail head share it. */
+.embedded > [data-plugin-panel] [data-window-drag] {
   padding-top: 0;
 }
 
-/* The head row sits on grid row one and spans the page, so its own box stays the
-   window drag surface. */
-.embedded [data-plugin-panel] > [data-window-drag] {
-  grid-area: 1 / 1 / auto / -1;
-}
-
-/* Where the engine has subgrid the head row adopts the page's two tracks: its
-   controls land in the second one and size it, and a heading in the first one can
-   then never reach them, however long its own text grows. */
-@supports (grid-template-columns: subgrid) {
-  .embedded [data-plugin-panel] > [data-window-drag] {
-    display: grid;
-    grid-template-columns: subgrid;
-  }
-}
-
-/* Without subgrid the second track stays unsized and the heading shares row one
-   unbounded: keep the controls on top and out of its reach (the heading's
-   pointer-events: none comes from the placement rule below). The only path where the
-   label-length invariant still holds. */
-@supports not (grid-template-columns: subgrid) {
-  .embedded [data-plugin-panel] > [data-window-drag] {
-    z-index: 1;
-  }
-}
-
-/* The groups dissolve into the grid: a heading and the card list under it are then
-   placed on their own, which a group's own box cannot do while it wraps them. */
-.embedded [data-plugin-panel] > [data-plugin-group] {
-  display: contents;
-}
-
-/* The first group's heading joins row one in the first track, beside the toolbar it
-   used to sit 32px under. The `of` form names the first group itself — a sibling
-   <section> added upstream cannot steal the placement — and :first-of-type keeps the
-   placement for engines whose selector parser drops that form. */
-.embedded [data-plugin-panel] > [data-plugin-group]:is(:first-of-type, :nth-child(1 of [data-plugin-group])) > :first-child {
-  grid-area: 1 / 1;
-  /* It overlaps the head row that spans row one, and paint order puts the later box on
-     top: without this the Swift shell's drag walk finds the label instead of
-     [data-window-drag] and the press becomes a text selection. A static label needs no
-     pointer. */
-  pointer-events: none;
-}
-
-/* A label the engine cannot break (no space, no hyphen) must break anyway: it lives
-   in the heading lane, and anything wider would paint over the controls track and
-   take its clicks. */
-.embedded [data-plugin-panel] > [data-plugin-group] > :first-child,
-.embedded [data-plugin-panel] > [data-plugin-group] > :first-child * {
+/* A future plugins.bundle.activation occupant joins the page column through the
+   display:contents slot anchor; the page's own `> *` width cap cannot reach it. */
+.embedded > [data-plugin-panel] > [data-slot] > * {
+  width: 100%;
   min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-/* A later group's heading opens its own row, 24px past the 8px row gap: upstream's
-   32px between two groups. */
-.embedded [data-plugin-panel] > [data-plugin-group]:not(:is(:first-of-type, :nth-child(1 of [data-plugin-group]))) > :first-child {
-  margin-top: 24px;
-}
-
-/* The page head repeats the section's title: its first block is that repeated chrome
-   (the h1 and the intro beside it), so hide the block's contents and keep the block —
-   it is the grid item that holds the heading lane, and the row's controls keep the
-   second track. Pinned on the head row's two-child shape, never on a tag inside the
-   block: the old `h1 + p` form missed upstream re-wrapping the intro as
-   `div.pageIntro` (intro text + info button), leaving it live in row one, painted
-   under the first group's heading this layer hoists there. Known cost of anchoring by
-   position: anything upstream later adds INSIDE that block disappears with it, with no
-   second signal — the seam lock pins only that the block starts with the repeated h1
-   and that the head row keeps two children (design 05 §5). */
-.embedded [data-plugin-panel] > [data-window-drag] > :first-child > * {
-  display: none;
+  max-width: 960px;
 }

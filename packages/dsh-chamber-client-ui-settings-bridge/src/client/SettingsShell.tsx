@@ -15,7 +15,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import type { FocusEvent as ReactFocusEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import clsx from 'clsx'
-import { Button, IconAgentPresetOutlineRegular, IconChevronDownOutlineRegular, IconCloseOutlineRegular, IconDataOutlineRegular, IconLinkOutlineRegular, IconLoadingOutlineRegular, IconPersonalizationOutlineRegular, IconSettingsOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconAgentPresetOutlineRegular, IconChevronDownOutlineRegular, IconCloseOutlineRegular, IconDataOutlineRegular, IconLinkOutlineRegular, IconLoadingOutlineRegular, IconPersonalizationOutlineRegular, IconPluginPinwheelOutlineRegular, IconSettingsOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsBridgeKey } from '../locales.ts'
 import { ConnectionsSection } from '@dsh-chamber/dsh-chamber-client-ui-settings-connections/section'
@@ -89,6 +89,7 @@ function navIcon(id: string): ReactNode {
   if (id === 'models') return <IconDataOutlineRegular className={css.navIcon} size={16} />
   if (id === 'agent-presets') return <IconAgentPresetOutlineRegular className={css.navIcon} size={16} />
   if (id === 'plugins') return <IconPersonalizationOutlineRegular className={css.navIcon} size={16} />
+  if (id === 'plugin-manager') return <IconPluginPinwheelOutlineRegular className={css.navIcon} size={16} />
   return <IconSettingsOutlineRegular className={css.navIcon} size={16} />
 }
 

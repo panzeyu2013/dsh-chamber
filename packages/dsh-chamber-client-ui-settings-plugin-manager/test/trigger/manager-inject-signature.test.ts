@@ -1,9 +1,9 @@
 /**
  * vendor rc.2 三参 `PluginManagerController.inject` 的源锁（design 05 §5；dsh-upgrade-checklist §3/§7 第 6 步）。
  *
- * 本包没有自己的 tsconfig，根程序与 run-checks 的 13 个 typecheck 步都不含它——三参调用此前
- * 只有运行时测试 + 人读 vendor 两重保障。参数写反在类型剥离的运行期与「多余实参」下不会报错，
- * 也没有门禁会红。这条锁按仓内既有的 vendor 源锁口径（test/dom-seam 同款）读 pin 住的源码：
+ * 本包没有自己的 tsconfig；它经 renderer 的 chamber-entry 动态 import 进入根 pnpm run typecheck
+ * 程序（与 vendor manager 源一起），其余 12 个 face 配置不含它。三参顺序的编译面依赖这条动态链，
+ * 本锁仍按仓内既有的 vendor 源锁口径（test/dom-seam 同款）逐字钉住调用点与签名：
  *  - vendor `inject` 的参数序列必须是 (configLedger, pluginTabs, resolveText)；
  *  - 第二参在本包调用点必须仍是 `tabLedgerSource(ctx)`，且该函数仍由 vendor `tab-ledger.ts` 导出；
  *  - `hooks.pluginManager` 仍由该 face 提供（刷新收敛块消费它）。
