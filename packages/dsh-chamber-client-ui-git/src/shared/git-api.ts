@@ -11,6 +11,7 @@ import { HttpBudgetUnscheduledError } from '@dsh-chamber/dsh-chamber-client-core
 import { normalizeGitSnapshot } from './snapshot.ts'
 // The client leg of the three-layer git timeout ladder; the control-plane lockstep test imports the same module as the client's REAL budget.
 import { RPC_TIMEOUT_MS } from './timeout-budget.ts'
+import { NOT_DISPATCHED_CODE } from './not-dispatched.ts'
 
 export class GitWorktreeRpcError extends Error {
   readonly code: string
@@ -93,7 +94,7 @@ export const DETERMINISTIC_HOST_RETRYABLE_OVERRIDES: ReadonlySet<string> = new S
 export function isDeterministicGitRejection(error: unknown): boolean {
   if (!(error instanceof GitWorktreeRpcError)) return false
   // Client-minted: the page never dispatched the request, so nothing committed.
-  if (error.code === 'not-dispatched') return true
+  if (error.code === NOT_DISPATCHED_CODE) return true
   return DETERMINISTIC_GIT_REJECTION_CODES.has(error.code)
 }
 
@@ -340,7 +341,7 @@ async function callGitRemote(sourceId: string, method: string, input?: unknown):
     // rejection (never mint "may have committed" recovery).
     if (error instanceof HttpBudgetUnscheduledError) {
       throw new GitWorktreeRpcError(
-        'not-dispatched',
+        NOT_DISPATCHED_CODE,
         'the page dispatch queue refused the request before it left the page',
       )
     }

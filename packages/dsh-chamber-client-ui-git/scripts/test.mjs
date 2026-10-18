@@ -29,7 +29,10 @@ const GROUPS = {
   shared: [
     'test/shared/action-error.test.ts',
     'test/shared/discard-gate.test.ts',
+    'test/shared/freshness.test.ts',
     'test/shared/placement.test.ts',
+    'test/shared/poll-wave.test.ts',
+    'test/shared/retry-budget.test.ts',
     'test/shared/remove-notes.test.ts',
     'test/shared/visibility-gate.test.ts',
   ],

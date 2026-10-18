@@ -11,6 +11,7 @@
  * as a host refusal REUSES the host spelling (worktree-locked, worktree-dirty, main-worktree).
  */
 import type { GitSidebarKey } from '../locales.ts'
+import { NOT_DISPATCHED_CODE } from './not-dispatched.ts'
 import { describeThrown } from '@dsh-chamber/dsh-chamber-client-core'
 import { removeFailureCode, removeFailureCopyKey } from './remove-notes.ts'
 
@@ -39,14 +40,13 @@ export type GitActionErrorCode =
   /** A session cannot target an unhealthy worktree (adopt preflight). */
   | 'unhealthy-target'
   | 'archive-failed'
-  | 'refresh-failed'
   /** The instance does not serve the gitWorktree Remote (404). */
   | 'git-host-not-loaded'
   /** The shared carrier answered a business-level refusal (`rpc-failed`); its
    *  message can come from the carrier's own fallback, so the code needs copy. */
   | 'rpc-failed'
   /** The page dispatch queue refused the request before it left the page. */
-  | 'not-dispatched'
+  | typeof NOT_DISPATCHED_CODE
   /** Host refusals with dedicated copy (they arrive as GitWorktreeRpcError). */
   | 'running-agent'
   | 'worktree-invalid'

@@ -9,6 +9,7 @@
  *    archivedness (or non-archivedness) would be a fabricated fact.
  */
 import type { GitSidebarKey } from '../locales.ts'
+import { NOT_DISPATCHED_CODE } from './not-dispatched.ts'
 
 /** The running-session facts the dialog reads from one worktree row. */
 export interface RemoveRunningFacts {
@@ -99,7 +100,7 @@ export function removeFailureCopyKey(code: string | undefined): GitSidebarKey | 
     // Carrier-level refusal: the raw message is the carrier's own fallback.
     case 'rpc-failed': return 'remoteCallFailed'
     // Page-local dispatch refusal: never a source failure, localized retry copy.
-    case 'not-dispatched': return 'notDispatched'
+    case NOT_DISPATCHED_CODE: return 'notDispatched'
     // ---- local preflight/guard failures (GitActionError) ----
     case 'action-in-progress': return 'actionInProgress'
     case 'recovery-pending': return 'recoveryPending'
@@ -112,7 +113,6 @@ export function removeFailureCopyKey(code: string | undefined): GitSidebarKey | 
     case 'worktree-status-unknown': return 'dirtyUnknownBlocked'
     case 'unhealthy-target': return 'unhealthyTarget'
     case 'archive-failed': return 'archiveFailed'
-    case 'refresh-failed': return 'refreshFailed'
     default: return undefined
   }
 }

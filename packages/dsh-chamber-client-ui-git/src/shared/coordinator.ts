@@ -14,7 +14,11 @@ import {
   fetchInstanceSnapshot, getInstanceClient, InstanceRpcError,
 } from '@dsh-chamber/dsh-chamber-client-core'
 import { GitActionError, gitActionErrorCode } from './action-error.ts'
+import { NOT_DISPATCHED_CODE } from './not-dispatched.ts'
 import { GitActionLedger } from './action-ledger.ts'
+import { refreshedSince } from './freshness.ts'
+import { selectPollWave } from './poll-wave.ts'
+import { notDispatchedRetryDelay } from './retry-budget.ts'
 import { workspaceAfterAnchor } from './placement.ts'
 import { SerializedRefreshes } from './refresh-flight.ts'
 import { GitWorktreeRpcError, gitWorktreeApi, isAmbiguousGitRpcFailure, isDeterministicGitRejection } from './git-api.ts'
@@ -36,6 +40,9 @@ const listeners = createListenerSet()
 const states = new Map<string, GitSourceState>()
 const refreshFlights = new SerializedRefreshes<GitSourceState>()
 const actionLedger = new GitActionLedger()
+/** Bounded "not dispatched" retries: timer handle + attempts per source. */
+const retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const retryAttempts = new Map<string, number>()
 
 /** Connection-generation fence: a response from before disconnect/reconnect is stale. */
 const sourceEpochs = new Map<string, number>()
@@ -231,7 +238,36 @@ function syncServers(): void {
   for (const sourceId of refreshIds) void refreshSource(sourceId, true)
 }
 
+/** One bounded retry chain per source for a page-budget refusal. The chain is
+ *  tracked so detach() can clear it, and it stops after the budget (the 30s tick
+ *  keeps covering the source afterwards). */
+function scheduleNotDispatchedRetry(sourceId: string): void {
+  // Detached coordinator: a refusal arriving after stop() must not resurrect a
+  // retry chain (and the zombie state it would refresh).
+  if (retainCount === 0) return
+  if (retryTimers.has(sourceId)) return
+  const attempt = retryAttempts.get(sourceId) ?? 0
+  const delayMs = notDispatchedRetryDelay(attempt)
+  if (delayMs === null) return
+  retryAttempts.set(sourceId, attempt + 1)
+  const timer = setTimeout(() => {
+    retryTimers.delete(sourceId)
+    void refreshSource(sourceId)
+  }, delayMs)
+  retryTimers.set(sourceId, timer)
+}
+
+/** A pull that STARTED makes any pending retry redundant. */
+function clearNotDispatchedRetry(sourceId: string): void {
+  const timer = retryTimers.get(sourceId)
+  if (timer !== undefined) {
+    clearTimeout(timer)
+    retryTimers.delete(sourceId)
+  }
+}
+
 async function beginRefresh(sourceId: string): Promise<GitSourceState> {
+  clearNotDispatchedRetry(sourceId)
   const epoch = sourceEpochs.get(sourceId) ?? 0
   const current = states.get(sourceId)
   if (!connectedSource(sourceId)) {
@@ -253,6 +289,8 @@ async function beginRefresh(sourceId: string): Promise<GitSourceState> {
     // vanished must keep its orphan projection (see effectiveSnapshot).
     const effective = effectiveSnapshot(previous, snapshot)
     publishWorkspaceGitFlags(sourceId, effective, previous)
+    // A completed pull spends the retry budget: the next refusal starts over.
+    retryAttempts.delete(sourceId)
     return patchSource(sourceId, {
       connected: true,
       status: snapshot.sourceError === undefined ? 'ready' : 'error',
@@ -266,10 +304,12 @@ async function beginRefresh(sourceId: string): Promise<GitSourceState> {
     }
     // Page-local dispatch refusal: keep the last snapshot, retry shortly, and never
     // mark the source as failed (design 08: not-dispatched is deterministic).
-    if (error instanceof GitWorktreeRpcError && error.code === 'not-dispatched') {
+    if (error instanceof GitWorktreeRpcError && error.code === NOT_DISPATCHED_CODE) {
       const current = states.get(sourceId)
-      setTimeout(() => { void refreshSource(sourceId) }, 3_000)
-      return current ?? { sourceId, connected: true, status: 'loading', updatedAt: Date.now() }
+      scheduleNotDispatchedRetry(sourceId)
+      // No timestamp on the synthesized state: a deferred pull produced no facts,
+      // and an action preflight reads updatedAt as the proof that it did.
+      return current ?? { sourceId, connected: true, status: 'loading' }
     }
     const sourceError: GitSourceError = { code: 'snapshot-failed', message: errorText(error) }
     return patchSource(sourceId, {
@@ -562,9 +602,16 @@ export async function createSessionHere(sourceId: string, path: string): Promise
   const operationId = nextId('adopt')
   const sessionId = nextId('session')
   return runBusy(sourceId, { kind: 'adopt-session', operationId }, async () => {
+    const refreshStartedAt = Date.now()
     const fresh = await refreshSource(sourceId, true)
     if (fresh.snapshot === undefined || fresh.sourceError !== undefined) {
       throw new GitActionError('fresh-facts-unavailable', 'The latest Git worktree facts are unavailable', fresh.sourceError)
+    }
+    // A page-dispatch-budget refusal RESOLVES with the previous state (the polling
+    // path's deliberate behaviour, coordinator beginRefresh) instead of rejecting.
+    // An action must not accept that old state as fresh facts (design 08/26 §D7).
+    if (!refreshedSince(fresh, refreshStartedAt)) {
+      throw new GitActionError('fresh-facts-unavailable', 'The latest Git worktree facts are unavailable')
     }
     // 锚点在守卫之后、闭包之外解析（闭包内 `fresh.snapshot` 重新放宽为 `| undefined`）。
     const adopt = adoptPlacementOf(sourceId, fresh.snapshot, path)
@@ -717,9 +764,15 @@ export async function removeWorktree(
 ): Promise<RemoveWorktreeResult> {
   const operationId = nextId('remove')
   return runBusy(sourceId, { kind: 'remove', operationId }, async () => {
+    const refreshStartedAt = Date.now()
     const fresh = await refreshSource(sourceId, true)
     if (fresh.snapshot === undefined || fresh.sourceError !== undefined) {
       throw new GitActionError('fresh-facts-unavailable', 'The latest Git worktree facts are unavailable', fresh.sourceError)
+    }
+    // Never act on pre-refresh facts when the refresh was deferred by the page
+    // budget (it resolves with the previous state, see createSessionHere).
+    if (!refreshedSince(fresh, refreshStartedAt)) {
+      throw new GitActionError('fresh-facts-unavailable', 'The latest Git worktree facts are unavailable')
     }
     const found = findWorktree(fresh.snapshot, target.repoId, target.worktreeId)
     if (found === undefined) throw new GitActionError('worktree-not-found', 'The worktree no longer exists')
@@ -810,12 +863,19 @@ export async function removeUnregisteredWorktree(
   options: { deleteBranch?: string } = {},
 ): Promise<void> {
   const operationId = nextId('remove')
-  // Fresh refresh first: the row identity may be up to 30s stale.
-  const refreshFailure = await refreshSource(sourceId, true).catch((error: unknown) => error)
-  if (refreshFailure !== undefined) {
-    throw new GitActionError('refresh-failed', 'Refreshing the Git worktree state failed', refreshFailure)
-  }
   return runBusy(sourceId, { kind: 'remove', operationId }, async () => {
+    // Fresh refresh first: the row identity may be up to 30s stale. Inside the busy
+    // lease (like removeWorktree) so a second click cannot spend another forced pull.
+    const refreshStartedAt = Date.now()
+    const fresh = await refreshSource(sourceId, true)
+    if (fresh.sourceError !== undefined) {
+      throw new GitActionError('fresh-facts-unavailable', 'The latest Git worktree facts are unavailable', fresh.sourceError)
+    }
+    // The pull may have resolved WITHOUT producing facts (page-budget refusal keeps
+    // the previous state); the row identity below must not run on those.
+    if (!refreshedSince(fresh, refreshStartedAt)) {
+      throw new GitActionError('fresh-facts-unavailable', 'The latest Git worktree facts are unavailable')
+    }
     const input = {
       operationId,
       path: target.path,
@@ -927,22 +987,33 @@ export function clearActionError(sourceId: string): void {
  *  source against the shared same-origin pool (design 26 §D7). Existing pulls
  *  are still joined per source. */
 const GIT_POLL_WAVE = 2
+/** Visible-edge wave: wider than a tick, still far below the full fleet. */
+const GIT_VISIBILITY_WAVE = 4
 let pollCursor = 0
 
-/** Refresh connected, action-idle sources in a bounded rotating wave; existing pulls are joined. */
-function refreshConnectedSources(): void {
+/** Refresh connected, action-idle sources in a bounded rotating wave; existing pulls are joined.
+ *  `leading` (the active source) goes first when eligible — waking the page is about the source
+ *  the user is looking at — and does not advance the rotation cursor. */
+function refreshWave(cap: number, leading?: string): void {
   const eligible: string[] = []
   for (const server of chamberBridge.getServers()) {
     if (server.connected && states.get(server.id)?.busy === undefined) eligible.push(server.id)
   }
   if (eligible.length === 0) return
-  const start = pollCursor % eligible.length
-  const wave = eligible.slice(start, start + GIT_POLL_WAVE)
-  if (wave.length < GIT_POLL_WAVE) {
-    wave.push(...eligible.slice(0, Math.min(GIT_POLL_WAVE - wave.length, eligible.length - wave.length)))
+  let wave: readonly string[]
+  if (leading !== undefined && eligible.includes(leading)) {
+    const rest = eligible.filter(sourceId => sourceId !== leading)
+    wave = [leading, ...selectPollWave(rest, 0, Math.max(0, cap - 1)).wave]
+  } else {
+    const plan = selectPollWave(eligible, pollCursor, cap)
+    pollCursor = plan.cursor
+    wave = plan.wave
   }
-  pollCursor = (start + wave.length) % eligible.length
   for (const sourceId of wave) void refreshSource(sourceId)
+}
+
+function refreshConnectedSources(): void {
+  refreshWave(GIT_POLL_WAVE)
 }
 
 function start(): void {
@@ -953,7 +1024,10 @@ function start(): void {
   onVisibilityChange = () => {
     if (visibilityEvents.read() !== 'visible') return
     syncServers()
-    refreshConnectedSources()
+    // Waking the page refreshes more than one beat's worth (the user expects the
+    // source on screen to be current) but still not the whole fleet: the visible
+    // edge takes a wider wave, active source first (design 08 §5).
+    refreshWave(GIT_VISIBILITY_WAVE, chamberBridge.getActiveSource())
   }
   stopVisibility = visibilityEvents.onChange(onVisibilityChange)
   pollTimer = globalThis.setInterval(() => {
@@ -970,6 +1044,9 @@ function stop(): void {
   onVisibilityChange = undefined
   if (pollTimer !== undefined) globalThis.clearInterval(pollTimer)
   pollTimer = undefined
+  for (const timer of retryTimers.values()) clearTimeout(timer)
+  retryTimers.clear()
+  retryAttempts.clear()
 }
 
 export const gitCoordinator = {

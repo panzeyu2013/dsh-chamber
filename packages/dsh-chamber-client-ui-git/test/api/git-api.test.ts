@@ -6,6 +6,9 @@ import {
   isAmbiguousGitRpcFailure, isDeterministicGitRejection,
 } from '../../src/shared/git-api.ts'
 import type { PreviewCreateResult } from '../../src/shared/types.ts'
+import { NOT_DISPATCHED_CODE } from '../../src/shared/not-dispatched.ts'
+import { removeFailureCopyKey } from '../../src/shared/remove-notes.ts'
+import { en, zh } from '../../src/locales.ts'
 import { HEAD, PREVIEW_BASE, REPO_ID, WORKTREE_ID } from '../support/fixtures.ts'
 
 const PREVIEW: PreviewCreateResult = { ...PREVIEW_BASE, previewToken: 'preview-fixed' }
@@ -33,6 +36,16 @@ async function withFetch(impl: typeof fetch, run: () => Promise<void>): Promise<
     globalThis.fetch = original
   }
 }
+
+test('the not-dispatched code is one literal: minting, rejection class and copy resolve together', () => {
+  assert.equal(NOT_DISPATCHED_CODE, 'not-dispatched')
+  assert.equal(isDeterministicGitRejection(new GitWorktreeRpcError(NOT_DISPATCHED_CODE, 'page busy')), true,
+    'a page-local refusal is a deterministic rejection: replay could not have changed the page state')
+  assert.equal(removeFailureCopyKey(NOT_DISPATCHED_CODE), 'notDispatched',
+    'the minting literal must be a member of the code→copy table')
+  assert.equal(typeof zh.notDispatched, 'string')
+  assert.equal(typeof en.notDispatched, 'string')
+})
 
 test('snapshot sends exact no-argument Typert args while mutations use the one named input', async () => {
   const bodies: any[] = []

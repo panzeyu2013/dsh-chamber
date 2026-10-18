@@ -12,6 +12,7 @@ import {
 } from '../../src/shared/action-error.ts'
 import { removeFailureCopyKey } from '../../src/shared/remove-notes.ts'
 import { GitWorktreeRpcError } from '../../src/shared/git-api.ts'
+import { NOT_DISPATCHED_CODE } from '../../src/shared/not-dispatched.ts'
 import { GitSagaError } from '../../src/shared/saga.ts'
 import { en, zh, type GitSidebarKey } from '../../src/locales.ts'
 
@@ -31,7 +32,11 @@ function localCodes(): string[] {
   const start = ACTION_ERROR_SOURCE.indexOf('export type GitActionErrorCode')
   const end = ACTION_ERROR_SOURCE.indexOf('export class GitActionError')
   assert.ok(start !== -1 && end > start, 'the GitActionErrorCode union must exist')
-  return [...ACTION_ERROR_SOURCE.slice(start, end).matchAll(/'([a-z-]+)'/g)].map(match => match[1]!)
+  const literals = [...ACTION_ERROR_SOURCE.slice(start, end).matchAll(/'([a-z-]+)'/g)].map(match => match[1]!)
+  // The union also carries the shared constant (typeof NOT_DISPATCHED_CODE); the
+  // literal scan cannot see it, so it is appended explicitly — otherwise the
+  // parity net silently loses the newest code (review r3-ui A8).
+  return [...literals, NOT_DISPATCHED_CODE]
 }
 
 /** Full-line comments removed: a lock must be satisfied by CODE, never by prose. */
