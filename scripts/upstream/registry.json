@@ -151,8 +151,8 @@
           "tsdown.config.ts"
         ],
         "droppedNotes": {
-          "locale/en.json": "上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
-          "locale/zh.json": "上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
+          "locale/en.json": "上游新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
+          "locale/zh.json": "上游新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
           "tests/": "chamber 无 tsdown / 不镜像上游测试",
           "tsdown.config.ts": "chamber 无 tsdown / 不镜像上游测试"
         }
@@ -283,9 +283,9 @@
         ],
         "droppedNotes": {
           "README*": "上游 README 不携带（fork 描述在 package.json）",
-          "locale/en.json": "上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
-          "locale/zh.json": "上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
-          "src/access.ts": "上游 alpha.3 新增的 host-half RBAC 策略文件（gateway 宿主侧 decide/allows）；本仓 fork 只取 client half（与 src/index.ts、src/stream-server.ts、src/types.ts 同口径不复制）。",
+          "locale/en.json": "上游新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
+          "locale/zh.json": "上游新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
+          "src/access.ts": "上游新增的 host-half RBAC 策略文件（gateway 宿主侧 decide/allows）；本仓 fork 只取 client half（与 src/index.ts、src/stream-server.ts、src/types.ts 同口径不复制）。",
           "src/index.ts": "上游 host 插件入口（chamber 不镜像 host 半）",
           "src/stream-server.ts": "上游 host 半流服务器（dropped）",
           "src/types.ts": "上游 host/aux 类型文件（源码与 inert ./types 子路径均已移除）",
@@ -368,8 +368,8 @@
         ],
         "droppedNotes": {
           "README*": "上游 README 不携带（fork 描述在 package.json/源码首页）",
-          "locale/en.json": "上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
-          "locale/zh.json": "上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
+          "locale/en.json": "上游新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
+          "locale/zh.json": "上游新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
           "src/internals.ts": "上游测试接缝（本包的接缝走 OpenInAppCore 构造注入，不需要它）",
           "tests/": "上游测试不镜像（本包 test/ 覆盖域契约）",
           "tsdown.config.ts": "上游打包配置（本包走 scripts/build.mjs）"
@@ -436,8 +436,8 @@
         "droppedNotes": {
           "README.i18n.yaml": "上游 README 对的哈希记录不携带（fork 说明在 README.md/package.json）",
           "README.zh.md": "中文 README 不镜像（chamber 说明只有一份）",
-          "locale/en.json": "上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
-          "locale/zh.json": "上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
+          "locale/en.json": "上游新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
+          "locale/zh.json": "上游新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
           "src/client/AppFrame.module.css": "frame 样式不镜像：深引 vendor 源",
           "src/client/AppFrame.tsx": "frame 不镜像：深引 vendor 源（三列网格/拖拽/列解算仍是上游实现）",
           "src/client/DocumentTitle.tsx": "上游同包文件，本 fork 不镜像（vendor 树内保留）",
@@ -516,8 +516,8 @@
           "tsdown.config.ts"
         ],
         "droppedNotes": {
-          "locale/en.json": "上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
-          "locale/zh.json": "上游 alpha.3 新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
+          "locale/en.json": "上游新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
+          "locale/zh.json": "上游新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
           "src/client/HeaderLeadingControls.module.css": "该组件的内部样式；上游文件不镜像、也不被消费——同一 shell.leading 席位由本包 SidebarLeadingControls.module.css（上游同形 clone）实现",
           "src/client/HeaderLeadingControls.tsx": "上游组件不镜像、不被源码路径消费；同一 shell.leading 席位由本包 SidebarLeadingControls.tsx 注册占座（src/client/index.ts；vendor-modules.d.ts 只声明本包用到的类型面）",
           "tests/": "上游测试/快照不镜像（chamber 有自建 test/）",
