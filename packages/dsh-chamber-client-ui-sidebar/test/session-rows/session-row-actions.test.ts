@@ -261,3 +261,17 @@ test('the button copy is upstream verbatim in both dictionaries', () => {
   assert.equal(zh['menu.archiveSession'], '归档会话')
   assert.equal(en['menu.archiveSession'], 'Archive session')
 })
+test('a page-dispatch refusal is localized through the row-error funnel, never hardcoded', () => {
+  // One funnel for every row action; the dictionary key must exist in BOTH locales and
+  // the hook must receive the shell resolver (a hardcoded string would ship Chinese to en).
+  assert.equal(typeof zh['action.notDispatched'], 'string')
+  assert.equal(typeof en['action.notDispatched'], 'string')
+  assert.match(en['action.notDispatched'], /Page busy/u)
+  const actions = read('../../src/client/sidebar-root-actions.ts')
+  assert.match(actions, /useSidebarActions\(t: \(key: SidebarKey\) => string\)/,
+    'the hook takes the dictionary resolver instead of minting copy')
+  assert.match(actions, /t\('action\.notDispatched'\)/, 'the refusal must resolve through the dictionary')
+  assert.doesNotMatch(actions, /页面繁忙/u, 'no hardcoded copy in the action funnel')
+  assert.match(read('../../src/client/SidebarRoot.tsx'), /useSidebarActions\(t\)/,
+    'the shell must pass its own t into the funnel')
+})

@@ -3,6 +3,7 @@
 
 import { useState } from 'react'
 import { HttpBudgetUnscheduledError } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
+import type { SidebarKey } from './locales.ts'
 
 /** Signature of the shell keyed action runner (rowErrors reporting). */
 export type RunAction = (key: string, action: () => Promise<void>) => Promise<void>
@@ -10,7 +11,7 @@ export type RunAction = (key: string, action: () => Promise<void>) => Promise<vo
 /** runActionWithOutcome: identical surface, resolving whether the action settled cleanly. */
 export type RunActionWithOutcome = (key: string, action: () => Promise<void>) => Promise<boolean>
 
-export function useSidebarActions() {
+export function useSidebarActions(t: (key: SidebarKey) => string) {
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
   /** Run one keyed action; resolves AFTER it settled (a rejection already wrote rowErrors), so callers can serialize dependent commits. */
   const runAction = (key: string, action: () => Promise<void>): Promise<void> =>
@@ -28,8 +29,10 @@ export function useSidebarActions() {
     return action().then(
       () => true,
       (reason: unknown) => {
+        // A page-local dispatch refusal is not the source failing: localize it
+        // through the same dictionary every other row error uses (design 26 §D7).
         const message = reason instanceof HttpBudgetUnscheduledError
-          ? '页面繁忙：请求未能派发，请稍后重试'
+          ? t('action.notDispatched')
           : reason instanceof Error ? reason.message : String(reason)
         setRowErrors((prev) => ({ ...prev, [key]: message }))
         return false

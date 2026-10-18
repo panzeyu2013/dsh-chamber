@@ -106,7 +106,7 @@ export function SidebarRoot({
     servers, viewPrefs, orderedServers, toggleWorkspaceFold, toggleSourceFold, setOrderBy, setGroupBy, setArchivedFilter,
     sessionOrderOverride, setSessionOrderOverride, workspaceOrderOverride, setWorkspaceOrderOverride,
   } = useSidebarProjection()
-  const { rowErrors, setRowErrors, runAction, runActionWithOutcome } = useSidebarActions()
+  const { rowErrors, setRowErrors, runAction, runActionWithOutcome } = useSidebarActions(t)
   // 来源级普通警示（点击归档行不可打开，upstream RowActionToast 的 N-ctx 实例化）：
   // per-shell 瞬态。servers 参与：断连来源的警示与其计时器一并清除（TTL 内重连不得弹回）。
   const { notices, showNotice } = useSidebarNotices(servers)
