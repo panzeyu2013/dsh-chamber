@@ -607,7 +607,7 @@ export const chamberBridge: {
   ①**归属**：文案属框架面，走 `renderer/src/locales.ts` typed 字典；产出方只发 kind 与结构化事实，
   诊断原文只作诊断行（STATUS「跨边界诊断文案」）。②**可重试性由事实裁决**：`BOOT_GAP_POLICY` 是
   `Record<kind, …>`，新增 kind 不带文案与 retryable 裁决即编译失败；`planDegradedRetries` 只重挂
-  retryable 的 kind（每 ready 世代一次，见 `degraded-retry.ts`）。③**不撒谎**：kind 不能判定
+  retryable 的 kind（每 ready 世代一次，判定现归 `dsh-stream-state` 的 source 状态机 healPending/retryToken）。③**不撒谎**：kind 不能判定
   「暂时／结构性」，故文案一律"常见原因…"，且**只有在来源 ready 且本 ready 世代尚未重挂过**时才承诺
   "会自动重挂一次"（非 ready 时 self-heal 永不会来）；a11y 用 `role="status"`（不是 `alert`——几秒的
   竞态不该打断读屏)。提示**非阻断**：层 `pointer-events:none`、只有卡片接收命中；`z-index: 900` 明确

@@ -67,7 +67,7 @@
 - 认证服务端 Gateway：生产 TLS 反代/SPKI pin/`remote.mux` 断线恢复、三形态重登与撤销、`/chamber/runtime` TLS、Linux service 升级回退、`--bind 0.0.0.0`/隧道负例；凭据重置推迟、改密/轮换停机 CLI 恢复。
 - S0/S2 http（design 17 §10.5）：S2-c 未实现（前置 = 扩展 gateway patch 写入器）；剩余验收 = 打包态直连可写、断链 60–120s 自愈、升级后钩子复验。
 - 设计 21 对齐：只读通道/seed 供给面端到端核验（发布前）、who/when tooltip 未渲染、`pollGatewayReady` 英文串。
-- 产物新鲜度：`desktop/dist/web/**`、`dist/host-*-package/**`、vendor `allowBuilds` 无守卫；G2/G3/G5/G7/G8 未落（`todo/engineering/refactor-plan.md` §8）。
+- 产物新鲜度：`desktop/dist/web/**`（artifact freshness 不比较前端产物，陈旧前端也能报新鲜；关闭条件 = 加入第五类比对，或严格档强制 `build:renderer`）、`dist/host-*-package/**`、vendor `allowBuilds` 无守卫；G2/G3/G5/G7/G8 未落（`todo/engineering/refactor-plan.md` §8）。
 - CI 无 SMOKE PASS 腿：`smoke.test.ts` 恒 SKIP ⇒ 绿灯不代表真跑安装链。
 - A1 读面残余：F6（recheck 基门漏 boot 字段）、S1（`ok` 无已装载事实）。
 - A2：A2-4（哨兵 vs semver）、A2-7（raw vs effective pending）。
@@ -90,17 +90,13 @@
   （冷启动 + 多来源窗口的 `page-channel` 行与 unary 时延对账、重载/唤醒后的订阅重放）仍待跑。
 - **页面级 HTTP 预算参数待真机标定**（design 26 §D7）：`totalMax=4/localReserve=1/bundleMax=2`
   的依据是"池 6 槽留头寸"，但官方客户端实际并发与 script/import 占用未测；判据 = 真机 stats 的
-  queueMs p95、leaseExpired、本地基线成功率，以及 bundle 帽对 boot 时长（`ceil(N/2)×30s`）的影响
-  需一次打包态启动观测。
+  queueMs p50/p95（**只统计正等待**，零等待另记 `zeroWaitGrants`，否则读数会被同 tick 授予稀释成 0）、
+  leaseExpired、本地基线成功率，以及 bundle 帽对 boot 时长的影响（实测而非套用 git 波控的
+  `ceil(N/2)×30s` 公式）需一次打包态启动观测。
 - **页面级 HTTP 预算的残余通道（范围决策，design 26 §D7）**：官方客户端 connection RPC、官方
-  module system 的 script 装载、`chamber-entry` 的 deferred 动态 chunk，以及设置页
-  `ConnectionsSection`/`DshRuntimeSection` 的三处直连 fetch 不经预算（前者属 fork/上游通道，
-  后者受行数棘轮约束）。判据 = 真机 `globalThis.__dshChamberHttpBudget()` 读数 + DevTools 同源
-  in-flight；关闭条件 = 给 connection 注入只排队不改语义的 `transport.fetch`，或为设置页抽独立
-  小模块后接入。
-- **页面同源 fetch 的唯一所有权尚无静态门**（design 26 §D7）：I-1 只审 EventSource/流式 getReader，
-  新增裸 fetch 不会变红；残余通道只靠文档清单（见上条）。关闭条件 = 把 I-1 扩成 fetch 调用点
-  allowlist（经预算 + 已声明残余），新增裸调用即红。
+  module system 的 script 装载与 `chamber-entry` 的 deferred 动态 chunk 不经预算（fork/上游通道）。
+  判据 = 真机 `globalThis.__dshChamberHttpBudget()` 读数 + DevTools 同源 in-flight；
+  关闭条件 = 给 connection 注入只排队不改语义的 `transport.fetch`。
 - **boot 关键路径的 bundle 装载无排队截止**（design 26 §D7）：host-graph 已按每尝试 1.5s 截止，
   `client-plugin-loader` 的 bundle 槽仍无 queueDeadline，宽/慢远程下首屏可能等最长在飞 lease；
   判据 = 多来源冷启动的 boot 时延分布；关闭条件 = 给 bundle 槽带 boot 窗口截止并在超时走
@@ -109,16 +105,12 @@
   + XHR（document-relative，当前控制面 404）、shiki 懒 grammar chunk、iframe/图片元素加载
   共用同源池；判据 = DevTools in-flight 分类；关闭条件 = 与基路径修复同笔接入预算，或明确
   写入绑定范围。
-- **权威门的 producer 在位无年龄上界**（design 19 §3.5）：`InstanceRuntimeReport` 没有
-  `reportedAt`，producer 卡死但未卸载时压制可能是永久的；判据 = 实机长跑下 observer 恢复
-  权威的延迟；关闭条件 = report 携带时间戳、门按年龄判权威。
-- **前端产物 `packages/desktop/dist/web` 无新鲜度门**（发布就绪）：artifact freshness 不比较它，
-  陈旧前端也能报新鲜；判据 = 发布包内 manifest/entry 哈希与源码构建戳；关闭条件 = 加入第五类
-  比对，或严格档强制 `build:renderer`。
+- **权威门的 producer 在位无年龄上界**（design 19 §3.5）：判据现为「行在场 + 来源自身连接可用 +
+  `stale !== true`」（断连来源已交还 observer 权威），但 `InstanceRuntimeReport` 没有 `reportedAt`，
+  producer 卡死但未卸载时压制仍可能是永久的；判据 = 实机长跑下 observer 恢复权威的延迟；
+  关闭条件 = report 携带时间戳、门按年龄判权威。
 - **预算拒绝的 boot 诊断呈现**：当前写 `not-injected`（problem tone + 英文内部文案，≤60s 自愈）；
   关闭条件 = 中性 `dispatch-deferred` 状态或本地化抑制。
-- **graph-return 重挂在持续饱和下每 60s 循环**（有界但无退避/上限）：关闭条件 = 指数退避或
-  每源 N 次上限；判据 = 饱和窗口内单源重挂次数与壳重建抖动。
 - 页面通道的上游连接**不**计入逐实例反代的并发计数与诊断面（design 26 必要取舍：每订阅一条长活上游是 O(活跃订阅) 的设计，套用反代的 64 条并发上限就是把容量旋钮搬回来）。`pageChannel.stats()` 已暴露 `{sockets,subscriptions,upstreams}` 并有测试，但控制面当前没有诊断面消费方（`InstanceProxy.getDiagnostics()` 同样无生产消费方）——将来做运维面时从这里接。
 - **Electron 托盘图标尺寸未实机核验**（Swift 对偶面＝自持 18pt 图，`macos/Sources/DSHChamber/StatusItemIcon.swift`）：`packages/desktop/main.ts` 的 `maybeCreateTray`（`packages/desktop/main.ts#=literal:function maybeCreateTray(cp: PlaneHandle)`）把 1024×1024 的 `resources/icon.png`（打包后 `process.resourcesPath/icon.png`）原样交给 `Tray`，macOS 下是否被菜单栏自动缩放未验；判据 = 打包态托盘图标与状态栏等高、不出现被裁的大图，并与 Swift 侧 18pt 观感一致；若不缩放 ⇒ 换/缩专用托盘图，或按 T-15 纪律登记 deviations。两侧都需实机目检（Swift 侧装新构建后看菜单栏，Electron 侧同上）。
 - **macOS 原生壳：设置页窗口拖拽面实机目检**（未验）：判据 = 实机上从设置页页头行空白处按下可拖动窗口、首组标题区域不被吃成文本选择。相关：`packages/dsh-chamber-client-ui-settings-plugin-manager/src/client/EmbeddedPluginManagerPage.module.css` 的基础落位规则（首组头 `pointer-events: none`）与 `macos/Sources/DSHChamber/ShellWindowDrag.swift` 的 `[data-window-drag]` 祖先链判定；设计 05 §5。

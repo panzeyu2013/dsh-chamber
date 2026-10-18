@@ -701,12 +701,26 @@ chamber 的边界是「自动升级 + 显式失败面」；页面级阶梯的自
       同源 unary/bundle 派发的唯一所有者（条件有界队列——上界只约束带 `queueDeadlineAt` 的调用方、local 保留槽、bundle 子帽、fail-open、
       kill switch）。Fetch API 没有 dispatch 事件 ⇒「请求是否真的离开客户端队列」只有自有队列可证；
       分类器因此增加 `dispatched` 输入：`TimeoutError + dispatched===false` ⇒ `unscheduled`
-      （不落账），已派发/未知/非超时错误一律沿用旧语义（真故障不放宽）。消费面：
+      （不落账），已派发/未知/非超时错误一律沿用旧语义（真故障不放宽）。**合成错误名是契约的一部分**：
+      预算拒绝的调用方把 `errorName` 记作 `TimeoutError` 并附 `dispatched:false`，这是"可证未派发"在
+      现有词表里的唯一编码（分类器刻意不为非超时错误放宽，双锁步用例见 `dsh-stream-state`
+      的 `observation-validity.test.ts`）；真实错误名留在
+      `detail.reason`，不要为了"诚实"把它改回去——那会把拒绝写成 `channel` 并 book 成来源故障。消费面：
       `source-mux-facts.rpc`（未派发 ⇒ 不 increment/不清 stable）、boot 图（每尝试 1.5s 队列截止；
       未派发 ⇒ 记 `not-injected` 可探测诊断、不写 gap、不 `onGraphUnavailable`，由 graph-return
       60s 重试）、graph-return 重检、per-instance unary 与插件清单。
       gateway 事实 probe 的 `unscheduled`（从未派发）是类型层面的"非观测"：它进不了分类器、
       不改快照、不降级，并按有界 probe 阶梯重臂（与 mux 基线的 `dispatched=false` 同一语义）。
+      **未派发 ≠ 载体仍新鲜**：`unscheduled` 只免「来源故障」这笔账（booked=false），不豁免载体事实——
+      订阅在未调度窗口里报错仍然意味着活载体消失，gap 分支必须同时 `markStale()`（`isFactsDecisionUsable`
+      只认活载体），否则完成/通知面会把死载体的残留行当证据；只有「载体还能推进」的观测才清 stale。
+      同理，**gateway 事实 probe** 的调度缺口判定窗从 **grant 之后** 起算（`dispatchedAt`）：排队期间的旧缺口不得替派发后的
+      真超时开脱，否则归因方向与本节目标相反。**mux 基线相反**：它的 `baselineTimeoutMs` 是**载波窗**
+      （派发后整段），排队段由 `queueDeadlineAt` 限制并单列 `detail.queuedMs`——把排队时间从载波窗里扣掉会让
+      「排队 4.99s + 派发 1ms」被记成来源 deadline，正是本节要消灭的反向归因。**租约回收不是来源 liveness**：watchdog 到期写的
+      `http-budget / deadline / booked=false` 行是「槽位记账被回收」（detail 里带 `leaseMs/ageMs`），
+      不是一次来源观测，读账本时按 owner 区分；调用方的拒绝（queue-deadline/queue-full）另按
+      「每源 1s 采样」落 `unscheduled` 行，好让饱和窗口事后可解释。
   3. **闩锁退役**：侧栏 `verificationExhausted`（4 次失败后整页生命周期不再校验基线）改为
      有界 defer 下限（30 s）+ 事件驱动重臂（下一次真实 list 变更或 `connection/reset`）。
   4. **Rejected alternatives**：① **抬高 deadline / 增加重试**——throttle 窗口是秒级到分钟级，

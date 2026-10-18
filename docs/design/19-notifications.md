@@ -919,12 +919,16 @@ interface ChamberSettings {
     官方 ctx 快照的来源由该推送持续维护，提示不得再为同一来源发起重复 `session/list`。来源撤回
     mounted 状态后，后续 facts 提示重新允许补读。
     **事实权威门（2026-10）**：`packages/renderer/src/host/facts-authority.ts` 是"哪个平面可以代表
-    来源事实能力"的唯一所有者。判据 = 该来源的 runtime producer 行在场且 `stale !== true`
-    （`mountedSources` 只表示"本代推送过完整聚合"、壳死后不撤，不能当权威判据）。producer 权威
+    来源事实能力"的唯一所有者。判据 = 该来源的 runtime producer 行在场、**该来源自身连接可用**
+    （投影里的 `connected`；断连来源的 producer 行只是上次已知状态，不能靠它压制 observer）
+    且 `stale !== true`
+    （`mountedSources` 只表示"本代推送过完整聚合"、壳死后不撤，不能当权威判据）。归因是**页面本地**的：
+    observer 的 5s 基线可能在页面派发队列里排队、或被同源池压住而到期——那正是 design 26 §D7 预算层
+    要归因的东西，不是来源能力，因此 producer 在位时不许它冒充来源能力。producer 权威
     期间，只压掉**stale** 的无壳 observer 载波瞬态 `degraded`（`stale=true` 且 degradation 为
     `unavailable` 或缺失，即页面排队/断连/5xx 形状）；fresh degraded（含 2xx serviceable=false）与
     版本/服务事实（`unversioned`/`forward-skew`/`watcher-disabled`）照常呈现——门压的是页面假阴性，
-    不是来源能力真相（评审 m9）。`full`/`legacy`/`disabled` 原样
+    不是来源能力真相。`full`/`legacy`/`disabled` 原样
     保留；runtime 行被撤（回收/停机/换代）后
     observer 自动恢复权威。门只作用于 `deriveServers` 的能力字段：行 overlay、完成边沿与
     `isFactsDecisionUsable` 一律不读它（丢失完成通知是禁止的回归）。

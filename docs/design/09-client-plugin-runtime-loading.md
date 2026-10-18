@@ -83,11 +83,16 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
   失败时，`ui-chat` 的 fiber 停在 PENDING、整个 apply 被跳过、会话视图不注册，而 boot 仍报成功。
   **两级自愈**：① 取图撞上 `503 instance_unavailable`（实例仍在启动）时，shell 经 App
   注入的 `waitForServing` 门**等来源就绪**再取一次（`host-graph.ts` 的 `MAX_SERVING_WAITS` /
-  `SERVING_HEAL_BUDGET_MS`，App 侧门上限 60s），而非在固定预算（10×500ms）用尽后丢掉整套 profile
-  客户端插件；每段 serving 等待后的重取有**独立的 5s 总预算**与 1.5s/尝试队列截止（不是一次性闸）；② 门也用尽、或该行仍不 apply 时 boot **不再静默**：发布 `graph-unreachable` 诊断 +
+  `SERVING_HEAL_BUDGET_MS`，App 侧门上限 60s），而非在默认重试预算（10×500ms，被下面的每段窗口
+  截短）用尽后丢掉整套 profile 客户端插件；每段 serving 等待后的重取有**独立的 5s 窗口**与 1.5s/尝试
+  队列截止（不是一次性闸；窗口只约束派发起点，已派发的一次尝试可越界 ≤1.5s+30s，见 §D4 与 26 §D7）。
+  **Rejected alternative（真封顶在飞请求）**：把 `AbortSignal` 接进 `postUnary` 并在 5s 处中止——
+  中止后 2xx/4xx 都无从判定，会把一次真实通道回答改写成「未尝试」，且当前注入型测试无法覆盖；改名与
+  文档措辞是更小的边界。② 门也用尽、或该行仍不 apply 时 boot **不再静默**：发布 `graph-unreachable` 诊断 +
   `console.error` 点名 instance，并把 `ShellState.degraded`（kind：`graph-unavailable` /
   `required-services-missing`，另有 `deferred-registration-failed`）交给 App，由 App
-  在该来源 ready 时**自动重挂一次**（每个 ready 世代一次，纯判定在 `degraded-retry.ts`）。
+  在该来源 ready 时**自动重挂一次**（每个 ready 世代一次，纯判定现由 `dsh-stream-state` 的 source 状态机
+  提供：`healPending`/`retryToken`）。
   **W3 边界**：② 覆盖**除 `not-injected` 之外的所有通道失败**（503 预算耗尽、502/504、
   网络错误、图形非法），边界判定在叶模块 `renderer/src/source-readiness.ts` 的
   `graphGapKindFor`；`not-injected`（HTTP 404 或通道答 method 缺失）仍是 gateway/mobile
@@ -539,14 +544,16 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
   `app-hooks/use-shell-retry.ts`）：① 共享通道重检，**每来源每 60s 至多一次**（`recheckPluginGraphDiagnostic`；
   `not-injected`/`graph-unreachable` 属 channel-class，且只在判定态变化时写回，故永久无图来源零 store 噪声）；
   ② 诊断翻 `ok` 而该壳仍无图 ⇒ 经 App 唯一重挂 sink（retryTokens）重挂该实例（重新取图、装 profile 的
-  client 行、arm），**每来源每 60s 至多一次且每 pass 全局配额 2**；时间界是必需的：boot 取图本身可能被
+  client 行、arm），**每来源每 60s 起算、连续重挂按 60s×2^n 指数退避（n≤3，封顶 480s）且每 pass 全局配额 2**，
+  重挂把 shell 的 graph 真的答上来（`graphAnswered` 出界）或来源退役才复位尝试计数（一次重挂自己的 boot 会写新的
+  非 `ok` 诊断，按"诊断不再是 ok"复位会让退避永不生效）；时间界是必需的：boot 取图本身可能被
   页预算拒绝并写不出新的 `ok` 记录，按记录计数会永久闩死。**为什么探测必须按时间而不是按 ready 世代计数**：ssh seed 流程的远端
   重启是 `systemctl restart`，**隧道相位保持 `ready`**（design 18 §3.6），世代计数会在宿主有图之前就用掉唯一
   一次探测；定时探测（hook 侧的 interval + 判定里的间隔闸，二者同闸同值）在 N≤2 个待探来源时
   保证宿主有图后 ≤60s 内被发现；多源时每 pass 全局配额 2（按 lastProbeAt 最旧优先轮转），上界为
   ceil(N/2)×60s。**Rejected alternative**：每来源独立 60s 定时器（回到全源齐发，多源同时探测
-  挤占同源池）；取消配额（同上）；不轮转（尾部永久饿死）。且
-  与状态 churn 无关。结构性上界：重挂后仍无图会写新的非 `ok` 记录，并被 60s 时间界与每 pass 配额约束，取到图则
+  挤占同源池）；取消配额（同上）；不轮转（尾部永久饿死）。整条探测路径与状态 churn 无关：
+  它由时间界的定时器驱动，不依赖任何 ready 世代计数。结构性上界：重挂后仍无图会写新的非 `ok` 记录，并被 60s 时间界与每 pass 配额约束，取到图则
   `graphAnswered === true`（彻底出界）。整页重载不再需要；safe mode / module-system 失败从未取图，字段缺席，
   不属于该政策。
 - **范围**：只做行 **add/remove**（id 集合）。**rev 变化不换 entry**：模块表按 id first-load-wins，
