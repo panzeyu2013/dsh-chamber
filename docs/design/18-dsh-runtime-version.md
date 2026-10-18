@@ -100,8 +100,8 @@ reaper（回收孤儿实例）→ 快照 DSH_HOME（§3.7，断言无存活写�
 ### 3.4 激活门控与回退（自由选择模型的唯一安全网）
 
 换树后、宣布生效前跑探针列表（全部复用现有设施，**全部只读、无副作用**；
-与钉住上游 0.2.1-rc.2 wire 对齐，`REQUIRED_ACTIVATION_PROBES` 七项
-（4 项官方 + 3 项 chamber 宿主域，见 `activation-gate.ts`），slash
+与钉住上游 0.2.1-rc.2 wire 对齐，`REQUIRED_ACTIVATION_PROBES` 八项
+（4 项官方 + 4 项 chamber 宿主域，见 `activation-gate.ts`），slash
 端点；探针响应与**会话数据量彻底解耦**——会话面探针是固定小体积身份方法）：
 
 - `commands/execute` 以固定不存在 session 调用并精确期待 `session/not-found`，只验
