@@ -81,7 +81,7 @@ export interface HttpBudgetRequest {
   readonly signal?: AbortSignal
   /** 已派发槽的租约覆盖（bundle 应传 script 生命周期上界）。 */
   readonly leaseMs?: number
-  /** 诊断标签（进入 stats，不参与判定）。 */
+  /** 诊断标签（进入证据明细，不参与判定；stats 不按 label 聚合）。 */
   readonly label?: string
 }
 
@@ -134,23 +134,27 @@ export interface HttpBudgetStats {
   readonly mode: 'on' | 'off'
   readonly inflight: number
   readonly queued: number
-  /** Maximum queue wait observed (ms), NOT a queue depth. */
+  /** Maximum POSITIVE queue wait observed (ms), NOT a queue depth. */
   readonly maxQueueWaitMs: number
   readonly inflightByLane: Readonly<Record<HttpBudgetLane, number>>
   readonly inflightByKind: Readonly<Record<HttpBudgetKind, number>>
   readonly enqueued: number
   readonly granted: number
   readonly unscheduled: Readonly<Record<HttpBudgetUnscheduledReason, number>>
+  /** Percentiles over POSITIVE queue waits only (a same-tick grant is not a
+   *  wait). Calibrating against these must not be diluted by the share of
+   *  zero-wait grants — that share is reported separately as zeroWaitGrants. */
   readonly queueMsP50: number
   readonly queueMsP95: number
   readonly queueMsMax: number
+  /** Grants that needed no wait at all (queue depth 0 for this request). */
+  readonly zeroWaitGrants: number
   readonly leaseExpired: number
   readonly bypass: number
   readonly evicted: number
 }
 
 interface QueueEntry {
-  readonly id: number
   readonly request: HttpBudgetRequest
   readonly enqueuedAt: number
   resolve: (result: HttpBudgetAcquire) => void
@@ -170,18 +174,18 @@ interface ActiveSlot {
 const MODE_OFF_FLAG = '__DSH_CHAMBER_HTTP_BUDGET_OFF__'
 
 let limits: HttpBudgetLimits = HTTP_BUDGET_LIMITS
-let nextId = 1
 let nextSlotId = 1
 const queue: QueueEntry[] = []
 const active = new Map<number, ActiveSlot>()
 const recentQueueMs: number[] = []
-/** Last queue-full evidence time per source (1s sampling guard). */
-const queueFullEvidenceAt = new Map<string, number>()
+/** Last refusal evidence time per source+reason (1s sampling guard). */
+const refusalEvidenceAt = new Map<string, number>()
 let watchdogTimer: ReturnType<typeof setTimeout> | null = null
 const counters = {
   enqueued: 0,
   granted: 0,
   maxQueueWaitMs: 0,
+  zeroWaitGrants: 0,
   leaseExpired: 0,
   bypass: 0,
   evicted: 0,
@@ -227,16 +231,21 @@ function canStart(lane: HttpBudgetLane, kind: HttpBudgetKind): boolean {
   return nonLocalInflightCount() < limits.totalMax - limits.localReserve
 }
 
-function rememberQueueMs(value: number): void {
+/** Remember a POSITIVE queue wait, whatever ended the wait. Zero waittimes are
+ *  NOT samples here: mixing them in made queueMsP50/P95 read 0 in any healthy
+ *  window, which silently voided the calibration criterion STATUS takes them from. */
+function rememberQueueWait(value: number): void {
+  if (value <= 0) return
   recentQueueMs.push(value)
   if (recentQueueMs.length > 128) recentQueueMs.splice(0, recentQueueMs.length - 128)
   if (value > counters.maxQueueWaitMs) counters.maxQueueWaitMs = value
 }
 
+/** Nearest-rank percentile (1-based rank, clamped): index = ceil(ratio*n)-1. */
 function percentile(sorted: number[], ratio: number): number {
   if (sorted.length === 0) return 0
-  const index = Math.min(sorted.length - 1, Math.floor(sorted.length * ratio))
-  return sorted[index] as number
+  const rank = Math.max(1, Math.ceil(sorted.length * ratio))
+  return sorted[Math.min(sorted.length - 1, rank - 1)] as number
 }
 
 function clearEntryTimer(entry: QueueEntry): void {
@@ -253,6 +262,23 @@ function detachEntryAbort(entry: QueueEntry): void {
   }
 }
 
+/** Sampled refusal ledger (1s per source+reason): a saturated page must stay
+ *  explainable afterwards without one line per refused request. */
+function recordRefusalEvidence(
+  request: HttpBudgetRequest,
+  reason: HttpBudgetUnscheduledReason,
+  queuedMs: number,
+  extra: Record<string, unknown> = {},
+): void {
+  const key = request.sourceId + '|' + reason
+  const at = now()
+  if (at - (refusalEvidenceAt.get(key) ?? 0) < 1_000) return
+  refusalEvidenceAt.set(key, at)
+  recordEvidence('http-budget', 'unscheduled', {
+    sourceId: request.sourceId, reason, queuedMs, ...extra, label: request.label ?? null,
+  }, false)
+}
+
 function settleUnscheduled(entry: QueueEntry, reason: HttpBudgetUnscheduledReason): void {
   if (entry.settled) return
   entry.settled = true
@@ -264,7 +290,10 @@ function settleUnscheduled(entry: QueueEntry, reason: HttpBudgetUnscheduledReaso
   counters.unscheduled[reason] += 1
   // Queue-deadline is exactly the wait the STATUS calibration reads; record it so
   // queueMsP50/P95/maxQueueWaitMs are not blind to the dominant refusal path.
-  if (reason === 'queue-deadline') rememberQueueMs(queuedMs)
+  if (reason === 'queue-deadline') {
+    rememberQueueWait(queuedMs)
+    recordRefusalEvidence(entry.request, 'queue-deadline', queuedMs)
+  }
   entry.resolve({ kind: 'unscheduled', reason, queuedMs })
 }
 
@@ -347,7 +376,10 @@ function grantEntry(entry: QueueEntry): void {
   clearEntryTimer(entry)
   detachEntryAbort(entry)
   const queuedMs = now() - entry.enqueuedAt
-  rememberQueueMs(queuedMs)
+  // Only a GRANT can be a zero-wait event; a refusal that expires at once is not
+  // a grant and must not inflate the share (review: 2 zero-wait grants > 1 grant).
+  if (queuedMs <= 0) counters.zeroWaitGrants += 1
+  else rememberQueueWait(queuedMs)
   counters.granted += 1
   entry.resolve({ kind: 'granted', slot: makeSlot(entry, queuedMs), queuedMs })
 }
@@ -361,9 +393,15 @@ function pump(): void {
   }
 }
 
-function sourceQueuedCount(sourceId: string): number {
+/** Bounded-wait entries of one source. Undeadlined callers are excluded on
+ *  purpose: their producers own the bound (bundle rows, gateway facts probes,
+ *  long actions), so counting them here would let a source's own boot wave
+ *  refuse a same-source bounded read that the queue itself could still serve. */
+function sourceBoundedQueuedCount(sourceId: string): number {
   let count = 0
-  for (const entry of queue) if (entry.request.sourceId === sourceId) count += 1
+  for (const entry of queue) {
+    if (entry.request.sourceId === sourceId && entry.request.queueDeadlineAt !== undefined) count += 1
+  }
   return count
 }
 
@@ -401,7 +439,6 @@ function bypassGrant(entry: QueueEntry, reason: 'kill-switch' | 'fail-open'): Ht
  */
 export function acquireHttpBudget(request: HttpBudgetRequest): Promise<HttpBudgetAcquire> {
   const entry: QueueEntry = {
-    id: nextId++,
     request,
     enqueuedAt: now(),
     // eslint-disable-next-line @typescript-eslint/no-empty-function
@@ -415,6 +452,7 @@ export function acquireHttpBudget(request: HttpBudgetRequest): Promise<HttpBudge
     // 已过期/已取消：不排队，按 unscheduled 立即结算（kill switch 也不假放行已取消请求）。
     if (request.queueDeadlineAt !== undefined && now() >= request.queueDeadlineAt) {
       counters.unscheduled['queue-deadline'] += 1
+      recordRefusalEvidence(request, 'queue-deadline', 0)
       entry.resolve({ kind: 'unscheduled', reason: 'queue-deadline', queuedMs: 0 })
       return promise
     }
@@ -437,19 +475,12 @@ export function acquireHttpBudget(request: HttpBudgetRequest): Promise<HttpBudge
     // request (a deep queue of undeadlined producers must not reject a bounded
     // caller while capacity sits idle — review M1).
     if (!local && request.queueDeadlineAt !== undefined
-      && (queue.length >= limits.queueMax || sourceQueuedCount(request.sourceId) >= limits.perSourceQueueMax)
+      && (queue.length >= limits.queueMax || sourceBoundedQueuedCount(request.sourceId) >= limits.perSourceQueueMax)
       && !canStart(request.lane, request.kind)) {
       counters.unscheduled['queue-full'] += 1
-      const lastEvidence = queueFullEvidenceAt.get(request.sourceId) ?? 0
-      if (now() - lastEvidence >= 1_000) {
-        queueFullEvidenceAt.set(request.sourceId, now())
-        recordEvidence('http-budget', 'unscheduled', {
-          sourceId: request.sourceId,
-          reason: 'queue-full',
-          cap: queue.length >= limits.queueMax ? 'queue' : 'per-source',
-          label: request.label ?? null,
-        }, false)
-      }
+      recordRefusalEvidence(request, 'queue-full', 0, {
+        cap: queue.length >= limits.queueMax ? 'queue' : 'per-source',
+      })
       entry.resolve({ kind: 'unscheduled', reason: 'queue-full', queuedMs: 0 })
       return promise
     }
@@ -507,10 +538,14 @@ export function evictHttpBudgetSource(sourceId: string, reason = 'source-retired
     if (entry.request.sourceId !== sourceId) continue
     counters.evicted += 1
     evicted += 1
-    recordEvidence('http-budget', 'superseded', { sourceId, reason }, false)
     settleUnscheduled(entry, 'source-retired')
   }
-  queueFullEvidenceAt.delete(sourceId)
+  // ONE line per eviction call (not one per entry): page teardown can drop a
+  // whole boot generation at once, and the count is the fact that matters.
+  if (evicted > 0) recordEvidence('http-budget', 'superseded', { sourceId, reason, count: evicted }, false)
+  for (const key of [...refusalEvidenceAt.keys()]) {
+    if (key.startsWith(sourceId + '|')) refusalEvidenceAt.delete(key)
+  }
   return evicted
 }
 
@@ -537,6 +572,7 @@ export function readHttpBudgetStats(): HttpBudgetStats {
     queueMsP50: percentile(sorted, 0.5),
     queueMsP95: percentile(sorted, 0.95),
     queueMsMax: sorted.length === 0 ? 0 : (sorted[sorted.length - 1] as number),
+    zeroWaitGrants: counters.zeroWaitGrants,
     leaseExpired: counters.leaseExpired,
     bypass: counters.bypass,
     evicted: counters.evicted,
@@ -567,10 +603,11 @@ export function resetHttpBudgetForTests(): void {
     watchdogTimer = null
   }
   recentQueueMs.length = 0
-  queueFullEvidenceAt.clear()
+  refusalEvidenceAt.clear()
   counters.enqueued = 0
   counters.granted = 0
   counters.maxQueueWaitMs = 0
+  counters.zeroWaitGrants = 0
   counters.leaseExpired = 0
   counters.bypass = 0
   counters.evicted = 0
@@ -583,6 +620,14 @@ export function httpBudgetSourceIdFromProxyPath(pathOrUrl: string): string {
   return /\/api\/i\/([^/?#]+)/.exec(pathOrUrl)?.[1] ?? 'control-plane'
 }
 
+/** Budget left for the carrier after the dispatcher spent `queuedMs` of a caller's
+ *  `timeoutMs`: a 5s baseline must stay 5s end to end, never 5s + queue wait.
+ *  Pure; a non-positive remainder still allows a 1ms attempt (never 0/negative
+ *  timers, which fire immediately). */
+export function remainingDispatchBudgetMs(timeoutMs: number, queuedMs: number): number {
+  return Math.max(1, timeoutMs - Math.max(0, queuedMs))
+}
+
 /** The lane a source id belongs to: only `local` is privileged (strict reserve). */
 export function httpBudgetLaneFor(sourceId: string): HttpBudgetLane {
   return sourceId === 'local' ? 'local' : 'foreground'
@@ -590,7 +635,9 @@ export function httpBudgetLaneFor(sourceId: string): HttpBudgetLane {
 
 /** Lease with headroom over the caller's own deadline, never below the default. */
 export function httpBudgetLeaseFor(timeoutMs: number): number {
-  return Math.max(HTTP_BUDGET_LIMITS.defaultLeaseMs, timeoutMs + 5_000)
+  // Reads the LIVE limits so a test seam (or a future tuning table) changes both
+  // the dispatcher and the lease derived from it (review Minor: two sources).
+  return Math.max(limits.defaultLeaseMs, timeoutMs + 5_000)
 }
 
 // 现场可读出口（真机 inspector）：挂函数而不是快照，读数始终是最新值。

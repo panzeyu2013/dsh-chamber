@@ -58,7 +58,7 @@ export { archiveSessionForSource, createSessionForSource, forkSessionForSource, 
 export type * from './open-intent.ts'
 export { EARLY_OPEN_BUDGET_MS, EARLY_OPEN_RETRY_MS, armOpenIntent, clearOpenIntents, getOpenIntent, getOpenIntentsSnapshot, projectableCurrent, releaseOpenIntent, shouldEarlyOpenSession, shouldHoldViewVeil, subscribeOpenIntent } from './open-intent.ts'
 export type * from './gateway-runtime.ts'
-export { REMOTE_PHASES, REMOTE_RESTART, REMOTE_SOURCES, REMOTE_STATUS_POLL_TIMEOUT_MS, fetchRemoteRuntimeStatus, fetchRemoteRuntimeVersions, pollRemoteRuntimeUntilSettled, remoteRuntimeAction, remoteRuntimeActionGates, remoteRuntimeSetRegistry, resetRemoteRuntimeActivityOwners } from './gateway-runtime.ts'
+export { REMOTE_PHASES, REMOTE_RESTART, REMOTE_RUNTIME_CONTROL_TIMEOUT_MS, REMOTE_SOURCES, REMOTE_STATUS_POLL_TIMEOUT_MS, fetchRemoteRuntimeStatus, fetchRemoteRuntimeVersions, pollRemoteRuntimeUntilSettled, remoteRuntimeAction, remoteRuntimeActionGates, remoteRuntimeControl, remoteRuntimeSetRegistry, resetRemoteRuntimeActivityOwners } from './gateway-runtime.ts'
 export type * from './gateway-runtime-poll.ts'
 export { pollGatewayReady } from './gateway-runtime-poll.ts'
 export type * from './managed-runtime.ts'

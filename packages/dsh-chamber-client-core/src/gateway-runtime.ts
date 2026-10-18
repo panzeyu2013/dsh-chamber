@@ -17,7 +17,10 @@
 
 import { pollUntil, sleepMs } from './poll.ts'
 import { isRecord } from './wire-common.ts'
-import { HttpBudgetUnscheduledError, httpBudgetLaneFor, httpBudgetLeaseFor, httpBudgetSourceIdFromProxyPath, runWithHttpBudget } from './http-budget.ts'
+import {
+  HttpBudgetUnscheduledError, acquireHttpBudget, httpBudgetLaneFor, httpBudgetLeaseFor,
+  httpBudgetSourceIdFromProxyPath, remainingDispatchBudgetMs, runWithHttpBudget,
+} from './http-budget.ts'
 
 const REMOTE_STATUS_POLL_INTERVAL_MS = 2_000
 // The shared installer has one 10-minute wall-clock budget; a slow install must
@@ -471,7 +474,17 @@ function rejectionError(status: number, body: unknown): RemoteRuntimeApiError {
 async function request(
   fetchImpl: typeof fetch,
   url: string,
-  init: { method: 'GET' | 'POST' | 'PUT'; body?: unknown; signal?: AbortSignal },
+  init: {
+    method: 'GET' | 'POST' | 'PUT'
+    body?: unknown
+    signal?: AbortSignal
+    /** Bound the WAIT for a slot (poll callers): without it, a saturated page
+     *  parks one entry per beat and the queue never drains. */
+    queueDeadlineAt?: number
+    /** Ceiling from dispatch for this one request (short probes). The long
+     *  runtime actions keep none: their own cascade owns the window. */
+    timeoutMs?: number
+  },
 ): Promise<{ status: number; body: unknown }> {
   let result: { status: number; body: unknown }
   try {
@@ -483,23 +496,39 @@ async function request(
       sourceId: budgetSource,
       kind: 'unary',
       lane: httpBudgetLaneFor(budgetSource),
-      leaseMs: httpBudgetLeaseFor(12 * 60_000),
+      leaseMs: httpBudgetLeaseFor(init.timeoutMs ?? 12 * 60_000),
       label: 'gateway-runtime',
+      ...(init.queueDeadlineAt === undefined ? {} : { queueDeadlineAt: init.queueDeadlineAt }),
       ...(init.signal !== undefined ? { signal: init.signal } : {}),
-    }, async () => {
-      const response = await fetchImpl(url, {
-        method: init.method,
-        headers: {
-          accept: 'application/json',
-          ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
-        },
-        ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
-        cache: 'no-store',
-        credentials: 'same-origin',
-        ...(init.signal !== undefined ? { signal: init.signal } : {}),
-      })
-      const body: unknown = await response.json().catch(() => undefined)
-      return { status: response.status, body }
+    }, async (slot) => {
+      // The ceiling starts at dispatch and honours the caller's cancellation: a
+      // wedged probe must not hold a slot for the action-surface lease.
+      let timer: ReturnType<typeof setTimeout> | null = null
+      let signal = init.signal
+      try {
+        if (init.timeoutMs !== undefined) {
+          const controller = new AbortController()
+          timer = setTimeout(() => controller.abort(), remainingDispatchBudgetMs(init.timeoutMs!, slot.queuedMs))
+          signal = init.signal === undefined
+            ? controller.signal
+            : AbortSignal.any([init.signal, controller.signal])
+        }
+        const response = await fetchImpl(url, {
+          method: init.method,
+          headers: {
+            accept: 'application/json',
+            ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
+          },
+          ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+          cache: 'no-store',
+          credentials: 'same-origin',
+          ...(signal === undefined ? {} : { signal }),
+        })
+        const body: unknown = await response.json().catch(() => undefined)
+        return { status: response.status, body }
+      } finally {
+        if (timer !== null) clearTimeout(timer)
+      }
     })
   } catch (error) {
     if (error instanceof HttpBudgetUnscheduledError) {
@@ -518,17 +547,110 @@ function runtimePath(chamberInstanceId: string, suffix: string): string {
   return `/api/i/${chamberInstanceId}/chamber/runtime/${suffix}`
 }
 
+/** Status probes are short by contract: the panel polls them every 20s. */
+export const REMOTE_STATUS_PROBE_TIMEOUT_MS = 10_000
+
 export async function fetchRemoteRuntimeStatus(
   chamberInstanceId: string,
-  deps: { fetchImpl?: typeof fetch; signal?: AbortSignal } = {},
+  deps: { fetchImpl?: typeof fetch; signal?: AbortSignal; timeoutMs?: number; queueDeadlineAt?: number } = {},
 ): Promise<RemoteRuntimeStatus> {
   const { status, body } = await request(
     deps.fetchImpl ?? fetch,
     runtimePath(chamberInstanceId, 'status'),
-    { method: 'GET', ...(deps.signal !== undefined ? { signal: deps.signal } : {}) },
+    {
+      method: 'GET',
+      timeoutMs: deps.timeoutMs ?? REMOTE_STATUS_PROBE_TIMEOUT_MS,
+      ...(deps.queueDeadlineAt === undefined ? {} : { queueDeadlineAt: deps.queueDeadlineAt }),
+      ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
+    },
   )
   if (status === 200) return parseRemoteRuntimeStatus(body)
   throw classifiedError(status, body, 'runtime status')
+}
+
+/** POST ceiling for the restart/start control routes. They answer 202 as soon as the
+ *  action is accepted (the route only awaits one cheap status read), so a long
+ *  ceiling would only park a page-budget slot on a wedged hop. */
+export const REMOTE_RUNTIME_CONTROL_TIMEOUT_MS = 30_000
+
+export interface RemoteRuntimeControlDeps {
+  fetchImpl?: typeof fetch
+  /** Caller cancellation (panel/card unmount); the queue wait stays cancellable. */
+  signal?: AbortSignal
+  /** POST ceiling from dispatch (default 30s; tests inject a small one). */
+  timeoutMs?: number
+}
+
+export type RemoteRuntimeControlOutcome =
+  | { kind: 'response'; status: number; body: unknown }
+  /** Page dispatch refused before the request left the page (never a source fault). */
+  | { kind: 'busy' }
+  /** Our own POST ceiling fired: the runtime state is unknown. */
+  | { kind: 'timeout' }
+  | { kind: 'failed'; error: unknown }
+
+/**
+ * One budgeted restart/start control POST (design 26 §D7). The two connection-card
+ * legs and the settings panel used raw fetch here, which let a wedged hop hold a
+ * browser pool connection OUTSIDE the page budget — defeating the "2 spare slots"
+ * premise the whole budget rests on. The body is read inside the slot; a queue
+ * refusal and our own ceiling are returned as data so each surface keeps its copy.
+ */
+export async function remoteRuntimeControl(
+  chamberInstanceId: string,
+  action: 'restart' | 'start',
+  deps: RemoteRuntimeControlDeps = {},
+): Promise<RemoteRuntimeControlOutcome> {
+  const fetchImpl = deps.fetchImpl ?? fetch
+  const timeoutMs = deps.timeoutMs ?? REMOTE_RUNTIME_CONTROL_TIMEOUT_MS
+  let url: string
+  try {
+    // An invalid instance id is a failed arm, not a throw: every caller treats the
+    // four arms uniformly and never has to guard this one separately.
+    url = runtimePath(chamberInstanceId, action)
+  } catch (error) {
+    return { kind: 'failed', error }
+  }
+  let budget
+  try {
+    budget = await acquireHttpBudget({
+      sourceId: chamberInstanceId,
+      kind: 'unary',
+      lane: httpBudgetLaneFor(chamberInstanceId),
+      leaseMs: httpBudgetLeaseFor(timeoutMs),
+      queueDeadlineAt: Date.now() + 10_000,
+      ...(deps.signal === undefined ? {} : { signal: deps.signal }),
+      label: 'remote-runtime:' + action,
+    })
+  } catch (error) {
+    return { kind: 'failed', error }
+  }
+  if (budget.kind === 'unscheduled') {
+    if (budget.reason === 'aborted') return { kind: 'failed', error: new DOMException('aborted', 'AbortError') }
+    return { kind: 'busy' }
+  }
+  const slot = budget.slot
+  let timedOut = false
+  let timer: ReturnType<typeof setTimeout> | null = null
+  // Everything after the grant lives inside the try/finally: a throwing signal
+  // composition (invalid caller signal) must not leak the slot.
+  try {
+    // The ceiling starts at DISPATCH: the queue wait is bounded separately, so the
+    // carrier gets whatever budget remains of the caller's window.
+    const controller = new AbortController()
+    timer = setTimeout(() => { timedOut = true; controller.abort() },
+      Math.max(1, timeoutMs - budget.queuedMs))
+    const signal = deps.signal === undefined ? controller.signal : AbortSignal.any([deps.signal, controller.signal])
+    const response = await fetchImpl(url, { method: 'POST', signal })
+    // The refusal body is part of the in-flight connection (a 202/200 needs none).
+    const body: unknown = response.ok ? null : await response.json().catch(() => null)
+    return { kind: 'response', status: response.status, body }
+  } catch (error) {
+    return timedOut ? { kind: 'timeout' } : { kind: 'failed', error }
+  } finally {
+    if (timer !== null) clearTimeout(timer)
+    slot.release()
+  }
 }
 
 export async function fetchRemoteRuntimeVersions(

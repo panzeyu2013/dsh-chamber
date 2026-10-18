@@ -46,6 +46,13 @@ export class ControlPlaneBusyError extends Error {
   readonly code = 'control-plane-busy'
 }
 
+/** True when a control-plane REST call was REFUSED BEFORE DISPATCH (page busy):
+ *  the call never reached the control plane, so callers may retry and must not
+ *  present it as a control-plane failure. */
+export function isControlPlaneBusy(error: unknown): boolean {
+  return error instanceof ControlPlaneBusyError
+}
+
 export interface RequestOptions {
   method?: string
   headers?: Record<string, string>
@@ -84,7 +91,12 @@ export async function request<T = unknown>(path: string, options: RequestOptions
         ...options,
         headers,
         credentials: 'include',
-        signal: options.signal ?? AbortSignal.timeout(CONTROL_PLANE_REQUEST_TIMEOUT_MS),
+        // The caller's signal must not REPLACE the half-dead ceiling: compose them
+        // (a hung control plane has to release the slot even when the caller
+        // passed its own cancellation).
+        signal: options.signal === undefined
+          ? AbortSignal.timeout(CONTROL_PLANE_REQUEST_TIMEOUT_MS)
+          : AbortSignal.any([options.signal, AbortSignal.timeout(CONTROL_PLANE_REQUEST_TIMEOUT_MS)]),
       })
       const body: unknown = await response.json().catch(() => undefined)
       return { response, body }

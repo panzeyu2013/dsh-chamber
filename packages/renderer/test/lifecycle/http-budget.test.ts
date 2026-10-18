@@ -9,6 +9,8 @@ import {
   HTTP_BUDGET_LIMITS,
   HttpBudgetUnscheduledError,
   acquireHttpBudget,
+  httpBudgetLaneFor,
+  remainingDispatchBudgetMs,
   configureHttpBudgetForTests,
   evictHttpBudgetSource,
   readHttpBudgetStats,
@@ -16,6 +18,8 @@ import {
   runWithHttpBudget,
   type HttpBudgetAcquire,
 } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
+import { readEvidenceLog, resetEvidenceLogForTests } from '../../../dsh-chamber-client-core/src/evidence-log.ts'
+import { LOCAL_INSTANCE_ID } from '../../src/local-instance.ts'
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
@@ -27,6 +31,23 @@ function granted(result: HttpBudgetAcquire) {
   assert.equal(result.kind, 'granted')
   return result as Extract<HttpBudgetAcquire, { kind: 'granted' }>
 }
+
+test('the local lane literal is pinned to the renderer source id', () => {
+  // Two packages, one literal: if either side renames the local source, the strict
+  // reserve silently stops applying (design 26 §D7) — lock the pair.
+  assert.equal(LOCAL_INSTANCE_ID, 'local')
+  assert.equal(httpBudgetLaneFor(LOCAL_INSTANCE_ID), 'local')
+  assert.equal(httpBudgetLaneFor('dsh-abc'), 'foreground')
+  assert.equal(httpBudgetLaneFor('gateway-abc'), 'foreground')
+  assert.equal(httpBudgetLaneFor('control-plane'), 'foreground')
+})
+
+test('the dispatch budget is what the queue left: a 5s baseline stays 5s end to end', () => {
+  assert.equal(remainingDispatchBudgetMs(5_000, 0), 5_000)
+  assert.equal(remainingDispatchBudgetMs(5_000, 1_200), 3_800)
+  assert.equal(remainingDispatchBudgetMs(500, 900), 1, 'an over-spent budget still allows a 1ms attempt')
+  assert.equal(remainingDispatchBudgetMs(10, -5), 10, 'a negative queue wait cannot inflate the budget')
+})
 
 test('the default budget leaves headroom below the browser pool cap', () => {
   assert.ok(HTTP_BUDGET_LIMITS.totalMax < 6, 'must reserve room for non-scheduled consumers')
@@ -167,6 +188,45 @@ test('a deep queue does not reject a bounded caller while capacity is free', asy
   }
 })
 
+test('an undeadlined bundle queue never refuses a same-source bounded caller', async () => {
+  const restore = configureHttpBudgetForTests({
+    totalMax: 1, localReserve: 0, bundleMax: 2, queueMax: 64, perSourceQueueMax: 1,
+  })
+  resetEvidenceLogForTests()
+  try {
+    const holder = granted(await acquireHttpBudget(request('other')))
+    // The boot-wave shape: many undeadlined bundle rows of ONE source could be
+    // refused, so they must not consume the per-source bound of bounded reads.
+    const bundles: Promise<HttpBudgetAcquire>[] = []
+    for (let index = 0; index < 9; index += 1) {
+      bundles.push(acquireHttpBudget({ sourceId: 'boot', kind: 'bundle', lane: 'background' }))
+    }
+    await sleep(5)
+    assert.equal(readHttpBudgetStats().queued, 9)
+    const sameSource = await acquireHttpBudget(request('boot', 'foreground', { queueDeadlineAt: Date.now() + 20 }))
+    assert.equal(sameSource.kind, 'unscheduled')
+    if (sameSource.kind === 'unscheduled') {
+      assert.equal(sameSource.reason, 'queue-deadline', 'bundle depth must not team-kill a bounded read')
+    }
+    // The BOUNDED depth still refuses instantly (the cap keeps protecting the queue).
+    const firstBounded = acquireHttpBudget(request('boot', 'foreground', { queueDeadlineAt: Date.now() + 60_000 }))
+    void firstBounded
+    await sleep(2)
+    const secondBounded = await acquireHttpBudget(request('boot', 'foreground', { queueDeadlineAt: Date.now() + 60_000 }))
+    assert.equal(secondBounded.kind, 'unscheduled')
+    if (secondBounded.kind === 'unscheduled') assert.equal(secondBounded.reason, 'queue-full')
+    const refusal = readEvidenceLog().filter(entry =>
+      entry.owner === 'http-budget' && entry.detail.reason === 'queue-full')
+    assert.equal(refusal.length, 1, 'the refusal is in the ledger')
+    assert.equal(refusal[0]?.detail.cap, 'per-source', 'the per-source cap still reports its own name')
+    holder.slot.release()
+  } finally {
+    resetHttpBudgetForTests()
+    resetEvidenceLogForTests()
+    restore()
+  }
+})
+
 test('a running local request does not shrink the non-local quota twice', async () => {
   const restore = configureHttpBudgetForTests({ totalMax: 4, localReserve: 1 })
   try {
@@ -292,6 +352,132 @@ test('runWithHttpBudget releases the slot after the task and surfaces refusals',
     holder.slot.release()
     assert.equal(await queued, 'late', 'a waiting request runs once a slot frees')
     assert.equal(readHttpBudgetStats().inflight, 0)
+  } finally {
+    resetHttpBudgetForTests()
+    restore()
+  }
+})
+
+test('remoteRuntimeControl: budgeted, self-bounded, and refusal/timeout are data not faults', async () => {
+  const { remoteRuntimeControl } = await import('../../../dsh-chamber-client-core/src/gateway-runtime.ts')
+  resetHttpBudgetForTests()
+  const restore = configureHttpBudgetForTests({ totalMax: 1, localReserve: 0, perSourceQueueMax: 0 })
+  let fetches = 0
+  try {
+    const holder = granted(await acquireHttpBudget(request('other')))
+    const busy = await remoteRuntimeControl('gateway-west', 'restart', {
+      fetchImpl: (async () => { fetches += 1; return new Response(null, { status: 202 }) }) as unknown as typeof fetch,
+    })
+    assert.deepEqual(busy, { kind: 'busy' }, 'a page refusal is a data arm: the panel owns the copy')
+    assert.equal(fetches, 0, 'a refused control POST never reaches fetch')
+    holder.slot.release()
+    const accepted = await remoteRuntimeControl('gateway-west', 'start', {
+      fetchImpl: (async () => new Response(null, { status: 202 })) as unknown as typeof fetch,
+    })
+    assert.deepEqual(accepted, { kind: 'response', status: 202, body: null })
+    const refused = await remoteRuntimeControl('gateway-west', 'restart', {
+      fetchImpl: (async () => new Response(JSON.stringify({ code: 'runtime_busy' }), {
+        status: 409, headers: { 'content-type': 'application/json' },
+      })) as unknown as typeof fetch,
+    })
+    assert.equal(refused.kind, 'response')
+    if (refused.kind === 'response') {
+      assert.equal(refused.status, 409)
+      assert.deepEqual(refused.body, { code: 'runtime_busy' }, 'the refusal body stays readable for the localized projection')
+    }
+    const timedOut = await remoteRuntimeControl('gateway-west', 'restart', {
+      timeoutMs: 10,
+      fetchImpl: (async (_url: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          const aborted = new Error('aborted')
+          aborted.name = 'AbortError'
+          reject(aborted)
+        })
+      })) as unknown as typeof fetch,
+    })
+    assert.deepEqual(timedOut, { kind: 'timeout' }, 'our own ceiling reports the unknown outcome explicitly')
+  } finally {
+    resetHttpBudgetForTests()
+    restore()
+  }
+})
+
+test('stats sample positive waits only; zero-wait is counted as GRANTS, never as refusals', async () => {
+  const restore = configureHttpBudgetForTests({ totalMax: 1, localReserve: 0, perSourceQueueMax: 0 })
+  try {
+    const instant = granted(await acquireHttpBudget(request('a')))
+    instant.slot.release()
+    const holder = granted(await acquireHttpBudget(request('b')))
+    const refused = await acquireHttpBudget(request('b', 'foreground', { queueDeadlineAt: Date.now() + 60_000 }))
+    assert.equal(refused.kind, 'unscheduled')
+    const stats = readHttpBudgetStats()
+    // Two grants happened (the instant one and the holder); the refusal is not a grant.
+    assert.equal(stats.zeroWaitGrants, 2, 'only zero-wait GRANTS are counted; the instant refusal is not')
+    assert.equal(stats.granted, 2, 'the refusal is not a grant')
+    assert.equal(stats.queueMsP50, 0, 'a refusal contributes no positive sample')
+    holder.slot.release()
+  } finally {
+    resetHttpBudgetForTests()
+    restore()
+  }
+})
+
+test('stats percentiles read the positive queue wait, not the zero-wait grants around it', async () => {
+  const restore = configureHttpBudgetForTests({ totalMax: 1, localReserve: 0, queueMax: 8 })
+  try {
+    const holder = granted(await acquireHttpBudget(request('slow')))
+    const deadline = new Promise<void>((resolve) => setTimeout(resolve, 40))
+    const refused = acquireHttpBudget(request('slow', 'foreground', { queueDeadlineAt: Date.now() + 30 }))
+    await Promise.all([deadline, refused])
+    for (let index = 0; index < 20; index += 1) {
+      const slot = granted(await acquireHttpBudget(request('fast')))
+      slot.slot.release()
+    }
+    holder.slot.release()
+    const stats = readHttpBudgetStats()
+    assert.ok(stats.queueMsP50 >= 15, 'p50 is the real wait (' + String(stats.queueMsP50) + 'ms)')
+    assert.ok(stats.queueMsP95 >= 15, 'p95 is not diluted by the 20 instant grants')
+    assert.ok(stats.queueMsMax >= 15)
+    assert.equal(stats.zeroWaitGrants, 20)
+  } finally {
+    resetHttpBudgetForTests()
+    restore()
+  }
+})
+
+test('evict writes ONE ledger line with the count of dropped requests', async () => {
+  const restore = configureHttpBudgetForTests({ totalMax: 1, localReserve: 0, queueMax: 8 })
+  resetEvidenceLogForTests()
+  try {
+    const holder = granted(await acquireHttpBudget(request('holder')))
+    void acquireHttpBudget(request('gone'))
+    void acquireHttpBudget(request('gone'))
+    await sleep(5)
+    assert.equal(evictHttpBudgetSource('gone'), 2)
+    const lines = readEvidenceLog().filter(entry => entry.owner === 'http-budget' && entry.verdict === 'superseded')
+    assert.equal(lines.length, 1, 'one line per eviction call, not one per request')
+    assert.equal(lines[0]?.detail.count, 2)
+    holder.slot.release()
+  } finally {
+    resetHttpBudgetForTests()
+    resetEvidenceLogForTests()
+    restore()
+  }
+})
+
+test('remoteRuntimeControl releases the slot even when the caller signal is unusable', async () => {
+  const { remoteRuntimeControl } = await import('../../../dsh-chamber-client-core/src/gateway-runtime.ts')
+  resetHttpBudgetForTests()
+  const restore = configureHttpBudgetForTests({ totalMax: 2, localReserve: 0 })
+  let fetches = 0
+  try {
+    const outcome = await remoteRuntimeControl('gateway-west', 'restart', {
+      signal: {} as AbortSignal,
+      fetchImpl: (async () => { fetches += 1; return new Response(null, { status: 202 }) }) as unknown as typeof fetch,
+    })
+    assert.equal(outcome.kind, 'failed', 'a throwing signal composition is a failed arm, not a crash')
+    assert.equal(fetches, 0)
+    assert.equal(readHttpBudgetStats().inflight, 0, 'the granted slot must not leak on that path')
   } finally {
     resetHttpBudgetForTests()
     restore()
