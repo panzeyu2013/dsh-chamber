@@ -11,7 +11,7 @@
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
 
-## [0.4.2-beta.1] - 2026-10-18
+## [0.4.2-beta.2] - 2026-10-18
 
 ### 新增
 - **捆绑 dsh 基线升至 0.2.1-rc.2** —— 源码线、运行期与三份 fork 副本同批换锚，补丁通道与契约白名单随之重导出；官方前端带来 Git 工作树、终端、会话搜索/标题、CoT 翻译、Ralph 与 badge-skill 等官方 bundle，工作目录工具与会话级工作目录，插件市场的安装目标，Schedule/Automation 面板与可选（默认关闭）的 Developer Tools，账号通知栈，Web search 设置卡，以及 PTC code-first 的 `run_code` 契约。
@@ -33,7 +33,8 @@
 - **连接页运行时控件走预算** —— 重启 POST 有 30s 硬顶与 65s 租约，页面拒绝与超时分别本地化；卡片状态探针/启动 POST/设置面板重启 POST 全走预算 helper；typed inventory 拒绝抵达对话框，不再谎称实例不可达。
 - **侧栏「页面繁忙」行错误本地化** —— 通过新的 zh/en 键解析页面派发拒绝，不再硬编码英文。
 - **更新下载停滞闸门释放** —— watchdog 释放单飞后渲染侧模块门不再卡到 pending 的 finally：重试真正抵达 bridge，页面不再显示误导性的 state-changed 拒绝。
-- **插件图 revision 隔离** —— 任何 bundle 执行或新 claim 发布前先做只读预扫描：跨实例冲突以 `instance-version-conflict` 阻断 boot（另一实例的实现不得回答本实例的行），同实例重建只掉该行、其余照常 boot 并报 `restart-required`；诊断文案点名闭包与解法。
+- **插件图 revision 隔离（跨实例互换证明）** —— 任何 bundle 执行或新 claim 发布前先做只读预扫描：跨实例同 id 异 rev 先证明实现可互换才复用先加载 factory——同 dsh 发布版本的 `@deepseek-ai/*` 插件直接复用；profile 插件在 boot 期读取两份被服务 bundle、剔除 `sourceMappingURL` 的 rev 自引用后逐字节比较（每 boot ≤8），一致才复用；不能证明（发布版本不同/缺失、内容不同、不可验证）仍以 `instance-version-conflict` 阻断 boot。同实例重建只掉该行、其余照常 boot 并报 `restart-required`；诊断点名两侧发布版本与可执行解法（升级该来源 dsh 运行时/对齐构建后重载）。
+- **多来源挂载不再被安装元数据误判** —— 修复「本地已挂载后所有远程 gateway 首次挂载被阻止、侧栏停在会话基线尚未就绪」：独立安装的同一发布不再因文件元数据 rev 不同被判成异构建；远程来源需把 dsh 运行时升到与桌面相同的发布版本（如 0.2.1-rc.2），profile 插件内容不一致时仍按真实差异阻止。
 - **工作树守卫读取有效会话目录** —— 守卫改读 `sessionProjections` 的可变工作目录（每次调用实时读取），切到工作树里的会话不再被漏判；所有 git spawn 关闭 `core.fsmonitor`；畸形 header cwd 保持 fail-closed。
 - **注意力水位与剪贴板对齐上游** —— 水位跳过空白占位行（与官方 WorkspaceBrowser 同判），SessionId 复制统一走 `writeClipboard`，vendor patch 夹具去掉退役 prop。
 - **控制面健康快照合并与页面 socket 有界** —— 消费者停 ack 时只保留最新完整快照、下一次 ack 后补发；页面 socket 写入有上界，失败或拒绝即退役整条 socket 及其上游（幂等、只记一行），不再无限等待客户端。
