@@ -63,7 +63,17 @@
       // src/install.ts imports 'undici' directly (a registry dependency pnpm
       // never links into the symlinked vendor checkout) — mapped to the
       // lockfile-pinned virtual-store path.
-      "undici": ["../../node_modules/.pnpm/undici@8.11.2/node_modules/undici"]
+      "undici": ["../../node_modules/.pnpm/undici@8.11.2/node_modules/undici"],
+      // Every seed reaches dsh-typert-protocol, whose remote-info / types
+      // sources import 'zod' (a registry dependency of the vendor member; the
+      // symlinked checkout gets no node_modules from pnpm). A fresh CI install
+      // resolves it nowhere, so the four host typechecks only passed locally
+      // because a stale vendor node_modules masked the gap — map the lockfile
+      // pin into the virtual store like the seams above.
+      "zod": ["../../node_modules/.pnpm/zod@4.4.3/node_modules/zod"],
+      // dsh-host-webserver's src/index.ts imports 'ipaddr.js' the same way (the
+      // host-graph seed reaches that source first). Same seam, same lock pin.
+      "ipaddr.js": ["../../node_modules/.pnpm/ipaddr.js@2.5.0/node_modules/ipaddr.js"]
       // 版本同步有门禁：scripts/upstream/lockfile-store-path-mappings.test.mjs（跑在
       // test:upgrade-tools）断言每条 ".pnpm/<pkg>@<ver>/" 映射的版本 == 锁文件里
       // 某个声明该依赖的 importer 解析出的版本——pin 升级把依赖版本改掉而映射没跟
