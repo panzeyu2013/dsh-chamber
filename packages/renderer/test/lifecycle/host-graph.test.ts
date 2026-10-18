@@ -72,6 +72,65 @@ test('collectExtraRows: a page-budget refusal is not a source graph gap', async 
   }
 })
 
+test('collectExtraRows: a deferred recovery keeps the failure diagnostic and never writes ok', async (t) => {
+  // The recovery attempt is CANCELLED (page teardown / throttled carrier): no fresh
+  // verdict exists, so the boot defers instead of throwing — but a boot that DROPPED
+  // rows must never end on a clean `ok` diagnostic (design 26 §D7).
+  const diagnostics: { state?: string; pluginId?: string }[] = []
+  let calls = 0
+  stubFetchImpl(t, (async () => {
+    calls += 1
+    if (calls === 1) {
+      return graphResponse(envelope([{ id: '@scope/broken', url: '/plugins/??@scope/broken&rev=abc123', rev: 'abc123', immediately: true }]))
+    }
+    const abort = new Error('Fetch is aborted')
+    abort.name = 'TypeError'
+    return Promise.reject(abort)
+  }) as unknown as typeof fetch)
+  const rows = await collectExtraRows('deferred-recovery', '/api/i/deferred-recovery', {
+    loadModuleBundle: async () => { throw new Error('bundle exploded') },
+    reportDiagnostic: (_sourceId, diagnostic) => {
+      const d = diagnostic as { state?: unknown; pluginId?: unknown }
+      diagnostics.push({ state: String(d.state), pluginId: typeof d.pluginId === 'string' ? d.pluginId : undefined })
+    },
+    onGraphUnavailable: () => {},
+    retry: { attempts: 1, delayMs: 0, sleep: async () => {} },
+  })
+  assert.deepEqual(rows, [], 'the un-recovered row is dropped for this boot')
+  assert.ok(!diagnostics.some(entry => entry.state === 'ok'),
+    'a boot that DROPPED a row must never overwrite its named failure with ok (design 26 §D7)')
+  assert.ok(diagnostics.some(entry => entry.state === 'bundle-load-failed' && entry.pluginId === '@scope/broken'),
+    'the named failure stays on the single diagnostic slot')
+})
+
+test('collectExtraRows: a recovery the host answered (503) is a source fact and still throws', async (t) => {
+  resetHttpBudgetForTests()
+  const restore = configureHttpBudgetForTests({ totalMax: 4, localReserve: 0 })
+  let calls = 0
+  stubFetchImpl(t, (async () => {
+    calls += 1
+    if (calls === 1) {
+      return graphResponse(envelope([{ id: '@scope/broken', url: '/plugins/??@scope/broken&rev=abc123', rev: 'abc123', immediately: true }]))
+    }
+    return new Response(JSON.stringify({ code: 'instance_unavailable', error: 'not ready' }), { status: 503 })
+  }) as unknown as typeof fetch)
+  try {
+    await assert.rejects(
+      collectExtraRows('recovery-host-answered', '/api/i/recovery-host-answered', {
+        loadModuleBundle: async () => { throw new Error('bundle exploded') },
+        reportDiagnostic: () => {},
+        onGraphUnavailable: () => {},
+        retry: { attempts: 1, delayMs: 0, sleep: async () => {} },
+      }),
+      /bundle exploded/u,
+      'a host answer that still fails the row keeps the original boot failure (never a page-budget deferral)',
+    )
+  } finally {
+    resetHttpBudgetForTests()
+    restore()
+  }
+})
+
 test('collectExtraRows: a 503 window re-arms the graph budget after the serving gate', async (t) => {
   resetHttpBudgetForTests()
   const { calls } = stubFetch(t, 503, { code: 'instance_unavailable', error: 'not ready' })

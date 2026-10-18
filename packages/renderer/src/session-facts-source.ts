@@ -851,7 +851,6 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
    * 超时经 abort 归入 failure('timeout')。
    */
   const observeProbe = async (): Promise<SessionFactsProbeAttempt> => {
-    const probeStartedAt = now()
     // Budget gate (design 26 §D7): wait in chamber's own dispatcher and start the
     // 5s deadline only at dispatch, so a same-origin pool backlog cannot be
     // recorded as the gateway source being degraded.
@@ -860,11 +859,22 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
       kind: 'unary',
       lane: httpBudgetLaneFor(options.sourceId),
       leaseMs: httpBudgetLeaseFor(SESSION_FACTS_PROBE_TIMEOUT_MS),
+      // Bounded queue too: a probe that can never leave a saturated queue would
+      // park the ladder's single flight forever. A refusal re-arms the ladder
+      // (the unscheduled arm below), it never touches the source's facts.
+      queueDeadlineAt: Date.now() + SESSION_FACTS_PROBE_TIMEOUT_MS,
       label: 'gateway-facts-probe',
     })
     if (budget.kind === 'unscheduled') {
       return { kind: 'unscheduled', reason: budget.reason, queuedMs: budget.queuedMs }
     }
+    // Dispatch proof: the scheduling-gap window must start HERE, not before the
+    // budget wait. A gap that happened while this probe was still queued is not
+    // evidence about an observation the source never received — and windowing
+    // from probeStartedAt would let such a stale gap excuse a REAL timeout that
+    // expired after dispatch (the reverse of this layer's purpose).
+    const dispatchedAt = now()
+    const queuedMs = budget.slot.queuedMs
     const timeout = withTimeout()
     try {
       const response = await fetchImpl(urlFor(SESSION_FACTS_ROUTE), {
@@ -880,14 +890,14 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
       // 唯一 abort 来源是 withTimeout 的 deadline ⇒ AbortError 即 timeout，其余是 network。
       if (isAbortError(error)) {
         // Page throttling is not a source answer: leave the facts untouched and retry.
-        if (hadSchedulingGap(probeStartedAt, now())) {
+        if (hadSchedulingGap(dispatchedAt, now())) {
           recordEvidence('gateway-facts', 'unscheduled', {
-            source: options.sourceId, windowMs: now() - probeStartedAt, reason: 'scheduling-gap',
+            source: options.sourceId, windowMs: now() - dispatchedAt, queuedMs, reason: 'scheduling-gap',
           }, false)
-          return { kind: 'unscheduled', reason: 'scheduling-gap', queuedMs: 0 }
+          return { kind: 'unscheduled', reason: 'scheduling-gap', queuedMs }
         }
         recordEvidence('gateway-facts', 'deadline', {
-          source: options.sourceId, windowMs: now() - probeStartedAt,
+          source: options.sourceId, windowMs: now() - dispatchedAt, queuedMs,
         }, true)
       }
       return { kind: 'failure', reason: isAbortError(error) ? 'timeout' : 'network' }
@@ -1087,11 +1097,15 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
       message,
       windowMs: at - windowStart,
     }
-    // A throttled page made no observation: never stale the source facts for it.
+    // Unbooked verdict, but a CARRIER fact: an errored subscription is not
+    // delivering items, so the residual rows must stop being evidence
+    // (isFactsDecisionUsable). Only the source-fault booking is excused by a
+    // scheduling gap; the carrier really died either way (design 14 §D4).
     if (schedulingGap) {
       recordEvidence('facts-stream', 'unscheduled', detail, false)
       diagnostic('[session-facts] channel failed during an unscheduled window ('
-        + code + '); channel resubscribes, facts untouched', new Error(message))
+        + code + '); channel resubscribes, facts marked stale', new Error(message))
+      markStale()
       return
     }
     const verdict = classifyObservation({ outcome: 'error', errorName: code, errorMessage: message })

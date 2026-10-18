@@ -12,11 +12,15 @@ function runtime(stale?: boolean): InstanceRuntimeReport {
   return { stale } as unknown as InstanceRuntimeReport
 }
 
-test('producerOwnsSessionFacts: presence plus not-stale', () => {
-  assert.equal(producerOwnsSessionFacts(undefined), false)
-  assert.equal(producerOwnsSessionFacts(runtime(undefined)), true)
-  assert.equal(producerOwnsSessionFacts(runtime(false)), true)
-  assert.equal(producerOwnsSessionFacts(runtime(true)), false)
+test('producerOwnsSessionFacts: presence, source connectivity and not-stale', () => {
+  assert.equal(producerOwnsSessionFacts(undefined, true), false)
+  assert.equal(producerOwnsSessionFacts(runtime(undefined), true), true)
+  assert.equal(producerOwnsSessionFacts(runtime(false), true), true)
+  assert.equal(producerOwnsSessionFacts(runtime(true), true), false)
+  // A disconnected source's producer row is last-known state, not live evidence:
+  // the no-shell observer (same origin, same reachability) regains authority.
+  assert.equal(producerOwnsSessionFacts(runtime(undefined), false), false)
+  assert.equal(producerOwnsSessionFacts(runtime(false), false), false)
 })
 
 test('only the stale carrier shape is suppressed while the producer owns the source', () => {

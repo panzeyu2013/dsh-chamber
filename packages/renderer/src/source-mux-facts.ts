@@ -1105,6 +1105,11 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       throw new HttpBudgetUnscheduledError(budget.reason, budget.queuedMs)
     }
     const budgetSlot = budget.slot
+    // The baseline budget is the CARRIER window, not an end-to-end wall clock: a
+    // request that waited 4.9s in the page queue and then got 1ms of carrier time
+    // would be booked as a SOURCE deadline — the exact reverse attribution this
+    // layer exists to prevent. Queueing is bounded separately (queueDeadlineAt)
+    // and reported in detail.queuedMs.
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | null = null
     const expired = new Promise<never>((_resolve, reject) => {
@@ -1113,8 +1118,11 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
         // 'TimeoutError' is the evidence layer's machine word for "this observation
         // outlived its own budget": it separates a real deadline from cancellation
         // (superseded) and from a transport fault (channel). Never parse the text.
-        const deadline = new Error(method + ': timeout after ' + String(timeoutMs) + 'ms')
+        const deadline = new Error(method + ': timeout after ' + String(timeoutMs) + 'ms') as Error & { queuedMs?: number }
         deadline.name = 'TimeoutError'
+        // Provenance for the ledger: the queue wait is a page-local fact, not part
+        // of the carrier window that just expired.
+        deadline.queuedMs = budget.queuedMs
         reject(deadline)
       }, timeoutMs)
     })
@@ -1309,7 +1317,10 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
         windowMs: now() - startedAt,
         reason: failureText(error),
         dispatched: !neverDispatched,
-        ...(neverDispatched ? { queuedMs: error.queuedMs, queueReason: error.reason } : {}),
+        queuedMs: typeof (error as { queuedMs?: unknown }).queuedMs === 'number'
+          ? (error as { queuedMs: number }).queuedMs
+          : 0,
+        ...(neverDispatched ? { queueReason: error.reason } : {}),
       }
       if (!isAdmissible(verdict)) {
         recordEvidence('mux-facts', verdict, detail, false)

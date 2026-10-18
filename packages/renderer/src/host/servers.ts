@@ -358,7 +358,7 @@ export function deriveServers(
     const presentedFactsMode = presentedSessionFactsMode(
       factsMode,
       sessionFacts[id],
-      producerOwnsSessionFacts(runtimeFacts[id]),
+      producerOwnsSessionFacts(runtimeFacts[id], connected),
     )
     if (presentedFactsMode !== undefined) entry.sessionFacts = presentedFactsMode
     if (connected) {

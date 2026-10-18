@@ -3,7 +3,8 @@
  * session-facts capability" (design 19 §3.5).
  *
  * While a mounted shell's runtime producer owns a source's runtime facts
- * (factsStore.runtime[id] present and not stale), the no-shell observer's
+ * (factsStore.runtime[id] present, the source's own transport connected, and the
+ * report not stale), the no-shell observer's
  * transient `degraded` capability mode must not be projected as the source's
  * capability. The observer's failure can be a page-local artefact — its 5s
  * baseline can expire while queued in chamber's dispatch budget or behind
@@ -19,10 +20,15 @@ import type { InstanceRuntimeReport } from '@dsh-chamber/dsh-chamber-client-core
 import type { SourceSessionFactsMode } from '../session-facts-mode.ts'
 
 /** True when the mounted shell's runtime producer currently owns this source's
- *  live facts. `stale` means the residual row is read-only history, so the
- *  no-shell observer is authoritative again. */
-export function producerOwnsSessionFacts(runtime: InstanceRuntimeReport | undefined): boolean {
-  return runtime !== undefined && runtime.stale !== true
+ *  live facts. Two decay conditions hand authority back to the no-shell observer:
+ *  the report's own `stale` bit (a residual row is read-only history), and a
+ *  disconnected source (the producer cannot be delivering facts through a dead
+ *  transport — its row is last-known state, not live evidence). */
+export function producerOwnsSessionFacts(
+  runtime: InstanceRuntimeReport | undefined,
+  sourceConnected: boolean,
+): boolean {
+  return runtime !== undefined && sourceConnected && runtime.stale !== true
 }
 
 /** Apply the authority gate to a projected capability mode. Only the STALE carrier

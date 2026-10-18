@@ -126,6 +126,21 @@ test('facts authority: a producer-owned source is not degraded by the no-shell o
     'a forward-skew version fact is not masked by the producer authority gate',
   )
 
+  // A DISCONNECTED source's producer row is last-known state: the observer (same
+  // transport, same reachability) must speak again (design 19 §3.5).
+  const disconnected = fixture()
+  disconnected.remoteStatus = { r1: { ...readyStatus, phase: 'error' } }
+  const producerButOffline = deriveWithFacts(
+    disconnected,
+    { [REMOTE_SOURCE_ID]: { stale: false } as InstanceRuntimeReport },
+    { [REMOTE_SOURCE_ID]: facts },
+  )
+  assert.equal(
+    producerButOffline.find(server => server.id === REMOTE_SOURCE_ID)?.sessionFacts,
+    'degraded',
+    'a disconnected source never inherits producer authority',
+  )
+
   const cache = createServerProjectionCache()
   const cachedFirst = deriveWithFacts(f, { local: { stale: false } as InstanceRuntimeReport }, { local: facts }, cache)
   const cachedSecond = deriveWithFacts(f, {}, { local: facts }, cache)

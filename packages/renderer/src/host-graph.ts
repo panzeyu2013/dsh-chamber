@@ -727,8 +727,11 @@ export async function collectExtraRows(
     const recoveredRows: ExtraModuleRow[] = []
     // A page-budget refusal / cancellation gives no fresh verdict: boot without the
     // failed rows and keep their diagnostic, but never turn page queueing into a fatal.
+    // "Not attempted" only defers when NO attempt reached the host: a run whose last
+    // verdict was a host answer (503 / real 404) is a source fact and must keep the
+    // original throw, not be re-labelled as page-budget deferral (review round 2).
     const recoveryDeferred = secondFetch.error === null && secondFetch.rows === null
-      && (secondFetch.notAttempted || secondFetch.cancelled)
+      && (secondFetch.cancelled || (secondFetch.notAttempted && secondFetch.reachedHost === false))
     if (secondFetch.error !== null || secondFetch.rows === null) {
       // No fresh verdict (channel failed again or budget ran out): keep all failures.
       keptFailures.push(...failedRows)
@@ -798,9 +801,10 @@ export async function collectExtraRows(
         }, deps.reportDiagnostic)
       }
       if (recoveryDeferred) {
-        // Drop the un-recovered rows for THIS boot, but keep the loud fact: a later
-        // `ok` must never overwrite it (a silently missing plugin is worse than a
-        // named failure). Graph-return can still retry the graph later.
+        // Drop the un-recovered rows for THIS boot. The per-failure diagnostics above
+        // already carry the loud fact (one slot per failure, written in this same
+        // loop), so a second write here would only duplicate the first row's entry.
+        // Graph-return can still retry the graph later.
         deferredLoadFailure = keptFailures[0]
         const failedIds = new Set(keptFailures.map(failure => failure.row.id))
         console.error(`[shell] instance ${instanceId} rows dropped (recovery fetch deferred by page budget): `
@@ -829,14 +833,9 @@ export async function collectExtraRows(
       message: restartRequiredMessage(dropped.id),
     }, deps.reportDiagnostic)
   } else if (deferredLoadFailure !== undefined) {
-    // The recovery pass was deferred by the page budget and its row stayed unloaded:
-    // keep the named failure instead of reporting a clean ok (review round 4).
-    reportDiagnostic(instanceId, 'bundle-load-failed', {
-      pluginId: deferredLoadFailure.row.id,
-      message: deferredLoadFailure.error instanceof Error
-        ? deferredLoadFailure.error.message
-        : String(deferredLoadFailure.error),
-    }, deps.reportDiagnostic)
+    // A deferred recovery keeps the per-failure diagnostics written above (one slot,
+    // first row): never overwrite them with `ok` for a boot that DROPPED rows, and
+    // never let the unsatisfiable fact claim the same slot (design 26 §D7).
   } else if (unsatisfiable !== null) {
     // A kept row's create-time require can never be answered (see
     // findUnsatisfiableExternalDependencies). This is a BOOT fact, so it must not

@@ -13,8 +13,9 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 import {
-  GRAPH_RETURN_PROBE_INTERVAL_MS, GRAPH_RETURN_REBOOT_RETRY_MS, decideGraphReturn, planGraphReturn,
-  type GraphReturnFacts, type GraphReturnPassFacts,
+  GRAPH_RETURN_REBOOT_BACKOFF_MAX, GRAPH_RETURN_PROBE_INTERVAL_MS, GRAPH_RETURN_REBOOT_RETRY_MS,
+  decideGraphReturn, planGraphReturn, rebootRetryWindowMs,
+  type GraphRebootMark, type GraphReturnFacts, type GraphReturnPassFacts,
 } from '../../src/graph-return.ts'
 import type { PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-core'
 
@@ -28,7 +29,7 @@ const facts = (over: Partial<GraphReturnFacts> = {}): GraphReturnFacts => ({
   diagnostic: diagnostic('not-injected'),
   nowMs: 1_000_000,
   lastProbeAt: undefined,
-  lastRebootAt: undefined,
+  reboot: undefined,
   ...over,
 })
 
@@ -62,12 +63,52 @@ test('a recheck that ran while the host was down (graph-unreachable) keeps the p
 test('an ok record re-boots at most once per retry window', () => {
   const ok = { diagnostic: diagnostic('ok', 42) }
   assert.deepEqual(decideGraphReturn(facts(ok)), { kind: 'reboot' })
-  assert.deepEqual(decideGraphReturn(facts({ ...ok, lastRebootAt: 1_000_000 })), { kind: 'none' },
+  assert.deepEqual(decideGraphReturn(facts({ ...ok, reboot: { at: 1_000_000, attempts: 1 } })), { kind: 'none' },
     'inside the window a re-render cannot re-boot')
   assert.deepEqual(decideGraphReturn(facts({
-    ...ok, lastRebootAt: 1_000_000 - GRAPH_RETURN_REBOOT_RETRY_MS,
+    ...ok, reboot: { at: 1_000_000 - GRAPH_RETURN_REBOOT_RETRY_MS * 2, attempts: 1 },
   })), { kind: 'reboot' },
   'the retry window earns another re-boot even if the refused boot wrote no new record')
+})
+
+test('the real re-boot sequence grows the attempts (backoff is reachable)', () => {
+  // The planner's own stamps drive the next pass: attempts 1 -> 2 -> 3 with the
+  // window doubling each time. This is the behavior the pure window test cannot see.
+  const base = {
+    servers: [{ id: 'ssh-a', phase: 'ready' }],
+    shells: { 'ssh-a': graphless } as GraphReturnPassFacts['shells'],
+    diagnostics: { 'ssh-a': diagnostic('ok', 42) } as GraphReturnPassFacts['diagnostics'],
+    probedAt: new Map<string, number>(),
+  }
+  let acted = new Map<string, GraphRebootMark>()
+  const attempts: number[] = []
+  // Due times: first attempt at t0 (window 60s applies only once a mark exists),
+  // then +120s (attempt 2's window), then +240s (attempt 3's window).
+  for (const nowMs of [1_000_000, 1_000_000 + 120_000, 1_000_000 + 120_000 + 240_000]) {
+    const plan = planGraphReturn({ ...base, acted, nowMs })
+    assert.equal(plan.reboots.length, 1, 'the source is due at the current window')
+    acted = plan.acted
+    attempts.push(acted.get('ssh-a')!.attempts)
+  }
+  assert.deepEqual(attempts, [1, 2, 3], 'consecutive re-boots increment the attempt counter')
+  const tooEarly = planGraphReturn({ ...base, acted, nowMs: 1_000_000 + 120_000 + 240_000 + 60_000 })
+  assert.deepEqual(tooEarly.reboots, [], 'the fourth attempt waits 480s, not the base 60s')
+})
+
+test('a sticky source backs off exponentially instead of re-mounting the shell every 60s', () => {
+  // 60s, 120s, 240s, 480s, then flat at 480s.
+  assert.equal(rebootRetryWindowMs(0), GRAPH_RETURN_REBOOT_RETRY_MS)
+  assert.equal(rebootRetryWindowMs(1), GRAPH_RETURN_REBOOT_RETRY_MS * 2)
+  assert.equal(rebootRetryWindowMs(2), GRAPH_RETURN_REBOOT_RETRY_MS * 4)
+  assert.equal(rebootRetryWindowMs(3), GRAPH_RETURN_REBOOT_RETRY_MS * 8)
+  assert.equal(rebootRetryWindowMs(99), GRAPH_RETURN_REBOOT_RETRY_MS * 2 ** GRAPH_RETURN_REBOOT_BACKOFF_MAX)
+  const ok = { diagnostic: diagnostic('ok', 42) }
+  const at = (attempts: number, ago: number): GraphRebootMark => ({ at: 1_000_000 - ago, attempts })
+  // The third attempt waits 240s: one second short is blocked, the full window reboots.
+  assert.deepEqual(decideGraphReturn(facts({ ...ok, reboot: at(2, GRAPH_RETURN_REBOOT_RETRY_MS * 4 - 1) })),
+    { kind: 'none' })
+  assert.deepEqual(decideGraphReturn(facts({ ...ok, reboot: at(2, GRAPH_RETURN_REBOOT_RETRY_MS * 4) })),
+    { kind: 'reboot' })
 })
 
 test('an ok record never re-boots a source that is not ready', () => {
@@ -100,7 +141,7 @@ test('a pass probes at most the per-pass quota and rotates without starving', ()
     servers: ids.map(id => ({ id, phase: 'ready' })),
     shells: Object.fromEntries(ids.map(id => [id, graphless])) as GraphReturnPassFacts['shells'],
     diagnostics: Object.fromEntries(ids.map(id => [id, diagnostic('not-injected')])) as GraphReturnPassFacts['diagnostics'],
-    acted: new Map<string, number>(),
+    acted: new Map<string, GraphRebootMark>(),
     nowMs: at,
   }
   let probedAt = new Map<string, number>()
@@ -155,8 +196,9 @@ test('the planner stamps a mark only in the branch that decides the action', () 
   const again = planGraphReturn(pass({ probedAt: probed.probedAt }))
   assert.deepEqual(again.probes, [], 'the stamp is what bounds the next pass — no caller can set it early')
   const healed = planGraphReturn(pass({ diagnostics: { 'ssh-a': diagnostic('ok', 42) } }))
-  assert.deepEqual(healed.reboots, [{ id: 'ssh-a', updatedAt: 42 }])
-  assert.equal(healed.acted.get('ssh-a'), 1_000_000, 'the acted mark is the re-boot time')
+  assert.deepEqual(healed.reboots, [{ id: 'ssh-a' }])
+  assert.deepEqual(healed.acted.get('ssh-a'), { at: 1_000_000, attempts: 1 },
+    'the acted mark records WHEN and how many consecutive attempts')
 })
 
 test('a pass re-boots at most the per-pass quota', () => {
@@ -166,7 +208,7 @@ test('a pass re-boots at most the per-pass quota', () => {
     shells: Object.fromEntries(ids.map(id => [id, graphless])) as GraphReturnPassFacts['shells'],
     diagnostics: Object.fromEntries(ids.map(id => [id, diagnostic('ok')])) as GraphReturnPassFacts['diagnostics'],
     probedAt: new Map<string, number>(),
-    acted: new Map<string, number>(),
+    acted: new Map<string, GraphRebootMark>(),
     nowMs: 1_000_000,
   }
   const first = planGraphReturn(base)
@@ -186,7 +228,9 @@ test('reboot candidates rotate by recency so a persistent head cannot starve the
     shells: Object.fromEntries(ids.map(id => [id, graphless])) as GraphReturnPassFacts['shells'],
     diagnostics: Object.fromEntries(ids.map(id => [id, diagnostic('ok')])) as GraphReturnPassFacts['diagnostics'],
     probedAt: new Map<string, number>(),
-    acted: new Map<string, number>([['s1', nowMs - 120_000], ['s2', nowMs - 120_000]]),
+    acted: new Map<string, GraphRebootMark>([
+      ['s1', { at: nowMs - 240_000, attempts: 1 }], ['s2', { at: nowMs - 240_000, attempts: 1 }],
+    ]),
     nowMs,
   }
   const first = planGraphReturn(base)
@@ -201,16 +245,29 @@ test('both marks converge on retirement, including an acted entry whose probe ma
   const planned = planGraphReturn(pass({
     servers: [],
     probedAt: new Map(),
-    acted: new Map([['ssh-gone', 7]]),
+    acted: new Map<string, GraphRebootMark>([['ssh-gone', { at: 7, attempts: 1 }]]),
   }))
   assert.equal(planned.acted.has('ssh-gone'), false, 'an acted-only source must be pruned too')
   assert.equal(planned.probedAt.has('ssh-gone'), false)
   const kept = planGraphReturn(pass({
+    // The re-boot ledger only means anything while the graph answers ok; keep the
+    // diagnostic ok here so the assertion is about PRUNING, not about the reset.
+    diagnostics: { 'ssh-a': diagnostic('ok', 9), 'ssh-gone': diagnostic('ok', 9) },
     probedAt: new Map([['ssh-a', 5], ['ssh-gone', 5]]),
-    acted: new Map([['ssh-a', 9], ['ssh-gone', 7]]),
+    acted: new Map<string, GraphRebootMark>([['ssh-a', { at: 9, attempts: 1 }], ['ssh-gone', { at: 7, attempts: 2 }]]),
   }))
   assert.deepEqual([...kept.probedAt.keys()], ['ssh-a'], 'live marks survive the prune')
   assert.deepEqual([...kept.acted.keys()], ['ssh-a'])
+  // A re-boot's own boot writes a fresh non-ok record, so the reset must key on the
+  // graph ANSWERING (shell out of scope), not on the diagnostic leaving ok —
+  // otherwise the exponential window is unreachable (attempts stuck at 1).
+  const stillGraphless = planGraphReturn(pass({ acted: new Map<string, GraphRebootMark>([['ssh-a', { at: 9, attempts: 3 }]]) }))
+  assert.equal(stillGraphless.acted.has('ssh-a'), true, 'a still-graphless source keeps its attempt counter')
+  const answered = planGraphReturn(pass({
+    shells: { 'ssh-a': { ...graphless, graphAnswered: true } },
+    acted: new Map<string, GraphRebootMark>([['ssh-a', { at: 9, attempts: 3 }]]),
+  }))
+  assert.equal(answered.acted.has('ssh-a'), false, 'an answered shell ends the episode and resets the ledger')
 })
 
 test('wiring lockstep: App delegates to the hook, the hook drives the planner and ONE sink', async () => {

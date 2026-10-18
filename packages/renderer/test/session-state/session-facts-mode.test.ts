@@ -48,7 +48,9 @@ test('the source projection maps the mode onto every aggregate entry, after the 
   // 事实权威门（design 19 §3.5）投影仍是两步：probe 档位 → producer 权威门（载波瞬态才压）。
   assert.match(SERVERS, /const presentedFactsMode = presentedSessionFactsMode\(/)
   assert.match(SERVERS, /sessionFacts\[id\],/)
-  assert.match(SERVERS, /producerOwnsSessionFacts\(runtimeFacts\[id\]\)/)
+  // 判据除了 producer 行在场，还必须带上该来源自身的 connected（断连来源的 producer 行
+  // 只是上次已知状态，不得压掉 observer）——见 design 19 §3.5。
+  assert.match(SERVERS, /producerOwnsSessionFacts\(runtimeFacts\[id\], connected\)/)
   assert.match(SERVERS, /if \(presentedFactsMode !== undefined\) entry\.sessionFacts = presentedFactsMode/)
   // 位置纪律：赋值必须在 entry 字面量之后（TDZ），且在 push 帮助函数内（local/远端/网关全覆盖）。
   const entryLiteral = SERVERS.indexOf('const entry: ChamberServerAggregate = {')

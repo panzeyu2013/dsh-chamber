@@ -24,7 +24,7 @@ import {
   type ChamberServerAggregate,
   type PluginGraphDiagnostic,
 } from '@dsh-chamber/dsh-chamber-client-core'
-import { GRAPH_RETURN_PROBE_INTERVAL_MS, planGraphReturn } from '../graph-return.ts'
+import { GRAPH_RETURN_PROBE_INTERVAL_MS, planGraphReturn, type GraphRebootMark } from '../graph-return.ts'
 import { planDegradedSelfHeal, type ShellRetryDispatch } from '../source-readiness.ts'
 import type { ShellState } from '../shell.ts'
 
@@ -58,9 +58,10 @@ export function useShellRetry(deps: ShellRetryDeps): void {
   }, [servers, shellStates])
 
   /** Graph-return marks (graph-return.ts owns their semantics): when each source last probed and
-   *  the `ok` record each last consumed. Both are pruned against the live source set per pass. */
+   *  its re-boot ledger entry (time + consecutive attempts, which sets the exponential window).
+   *  Both are pruned against the live source set per pass. */
   const graphProbedAtRef = useRef(new Map<string, number>())
-  const graphRebootActedRef = useRef(new Map<string, number>())
+  const graphRebootActedRef = useRef(new Map<string, GraphRebootMark>())
   /** Render mirror: the interval callback below must read the LATEST inputs without re-arming. */
   const latestRef = useRef({ servers, shellStates, pluginDiagnostics })
   latestRef.current = { servers, shellStates, pluginDiagnostics }

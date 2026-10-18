@@ -27,7 +27,7 @@ import {
 } from '../../src/session-facts-source.ts'
 import { PAGE_CHANNEL_KEEPALIVE_EVENT } from '../../../dsh-chamber-client-core/src/page-channel.ts'
 import { readEvidenceLog, resetEvidenceLogForTests } from '../../../dsh-chamber-client-core/src/evidence-log.ts'
-import { noteFocus, resetPageScheduleForTests } from '../../../dsh-chamber-client-core/src/page-schedule.ts'
+import { noteFocus, notePageTick, resetPageScheduleForTests } from '../../../dsh-chamber-client-core/src/page-schedule.ts'
 import {
   acquireHttpBudget,
   configureHttpBudgetForTests,
@@ -251,8 +251,8 @@ test('P0: a probe that never left the dispatch queue is not a gateway degradatio
     await new Promise(resolve => setTimeout(resolve, 30))
     assert.equal(harness.calls(), 0, 'a queued probe never reaches fetch')
     assert.equal(source.getSnapshot(), undefined, 'no observation means no degraded fact')
-    // Eviction (the only unscheduled path for an undeadlined probe) must re-arm
-    // the bounded probe ladder, not kill the facts channel (review M1/M3).
+    // Eviction (one unscheduled path; the 5s queue deadline is the other) must
+    // re-arm the bounded probe ladder, not kill the facts channel.
     assert.equal(evictHttpBudgetSource('gw-verdict'), 1)
     await new Promise(resolve => setTimeout(resolve, 30))
     assert.equal(harness.calls(), 0, 'the retry queues behind the held slot')
@@ -261,6 +261,50 @@ test('P0: a probe that never left the dispatch queue is not a gateway degradatio
     assert.equal(harness.calls(), 1, 'once a slot frees the retried probe dispatches')
   } finally {
     source.stop()
+    resetHttpBudgetForTests()
+    restore()
+  }
+})
+
+test('P0: a gap recorded while the probe was QUEUED must not excuse a post-dispatch timeout', async () => {
+  resetEvidenceLogForTests()
+  const restore = configureHttpBudgetForTests({ totalMax: 1, localReserve: 0, queueMax: 8 })
+  const holder = await acquireHttpBudget({ sourceId: 'queue-holder', kind: 'unary', lane: 'background' })
+  assert.equal(holder.kind, 'granted')
+  let calls = 0
+  const fetchImpl = (async () => {
+    calls += 1
+    // Dispatch happens now: keep the page demonstrably scheduled from here on,
+    // then answer exactly as our own 5s deadline would (the only abort source).
+    notePageTick(Date.now())
+    const aborted = new Error('aborted')
+    aborted.name = 'AbortError'
+    throw aborted
+  }) as unknown as typeof fetch
+  const source = createSessionFactsSource({
+    sourceId: 'gw-queue-gap', fetchImpl, silenceMs: 0, reconnectMs: 5,
+  })
+  try {
+    resetPageScheduleForTests()
+    // One long gap inside the QUEUE window only, then steady ticks up to dispatch
+    // (so no NEW gap is recorded at the dispatch boundary itself).
+    notePageTick(Date.now() - 5_000)
+    notePageTick(Date.now() - 3_000)
+    notePageTick(Date.now() - 2_200)
+    notePageTick(Date.now() - 1_400)
+    notePageTick(Date.now() - 600)
+    source.update({ fingerprint: 'f1', connected: true })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(calls, 0, 'still queued: no fetch yet')
+    if (holder.kind === 'granted') holder.slot.release()
+    await waitFor(() => readEvidenceLog().some(entry => entry.owner === 'gateway-facts'))
+    const entry = readEvidenceLog().find(candidate => candidate.owner === 'gateway-facts')
+    assert.equal(entry?.verdict, 'deadline', 'the queued gap is not evidence about the dispatched attempt')
+    assert.equal(entry?.booked, true)
+  } finally {
+    source.stop()
+    resetPageScheduleForTests()
+    resetEvidenceLogForTests()
     resetHttpBudgetForTests()
     restore()
   }
@@ -899,8 +943,9 @@ test('a subscription failure inside an unscheduled window is booked=false (same 
     assert.equal(entries.length, 1)
     assert.equal(entries[0].verdict, 'unscheduled')
     assert.equal(entries[0].booked, false)
-    // 未调度窗口不做来源判定：stale 也不立起（下一个 admissible 观测再决定）。
-    assert.notEqual(source.getSnapshot()?.stale, true)
+    // 未调度窗口免的是「来源故障」记账，不是「载体已死」这件事实：stale 仍必须立起
+    // （isFactsDecisionUsable 只认活载体；下一个 admissible 观测才清）。
+    assert.equal(source.getSnapshot()?.stale, true)
   } finally {
     resetPageScheduleForTests()
     source.stop()
