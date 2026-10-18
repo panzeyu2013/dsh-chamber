@@ -38,17 +38,17 @@ test('② resolveChannel precedence: env opt-in > build seal > version suffix', 
     makeController({ version, env, ...(sealed !== undefined ? { sealedChannel: sealed } : {}) }).controller.state().channel
 
   // The seal is the artifact fact: it beats the version suffix in BOTH directions.
-  assert.equal(channelOf('0.4.1', 'beta'), 'beta', 'a stable-numbered artifact sealed beta queries beta')
-  assert.equal(channelOf('0.4.1-beta.2', 'stable'), 'stable', 'a beta-numbered artifact sealed stable queries stable')
+  assert.equal(channelOf('1.2.3', 'beta'), 'beta', 'a stable-numbered artifact sealed beta queries beta')
+  assert.equal(channelOf('1.2.3-beta.2', 'stable'), 'stable', 'a beta-numbered artifact sealed stable queries stable')
   // No seal: the canonical suffix decides (dev, and the unsealed Swift flavor).
-  assert.equal(channelOf('0.4.1-beta.2'), 'beta')
-  assert.equal(channelOf('0.4.1'), 'stable')
-  assert.equal(channelOf('0.4.1', null), 'stable')
+  assert.equal(channelOf('1.2.3-beta.2'), 'beta')
+  assert.equal(channelOf('1.2.3'), 'stable')
+  assert.equal(channelOf('1.2.3', null), 'stable')
   // The explicit opt-in stays the strongest signal and can only ADD beta (never remove it).
-  assert.equal(channelOf('0.4.1', null, { DSH_CHAMBER_UPDATE_CHANNEL: 'beta' }), 'beta')
-  assert.equal(channelOf('0.4.1', 'stable', { DSH_CHAMBER_UPDATE_CHANNEL: 'beta' }), 'beta')
+  assert.equal(channelOf('1.2.3', null, { DSH_CHAMBER_UPDATE_CHANNEL: 'beta' }), 'beta')
+  assert.equal(channelOf('1.2.3', 'stable', { DSH_CHAMBER_UPDATE_CHANNEL: 'beta' }), 'beta')
   assert.equal(
-    channelOf('0.4.1-beta.2', 'beta', { DSH_CHAMBER_UPDATE_CHANNEL: 'stable' }),
+    channelOf('1.2.3-beta.2', 'beta', { DSH_CHAMBER_UPDATE_CHANNEL: 'stable' }),
     'beta',
     'a non-beta env value never removes beta (unchanged pre-seal semantics)',
   )

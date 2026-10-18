@@ -37,7 +37,7 @@ function makeHarness(options: { asyncRestart?: boolean } = {}): Harness {
   const controller = {
     async state() {
       return {
-        phase: 'available', currentVersion: '0.4.1', latestVersion: '0.5.0', channel: 'stable',
+        phase: 'available', currentVersion: '1.2.3', latestVersion: '1.3.0', channel: 'stable',
         revision: 3, downloadPercent: null, releaseUrl: null, installBlockedReason: null, error: null,
       }
     },
