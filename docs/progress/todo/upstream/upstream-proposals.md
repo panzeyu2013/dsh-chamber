@@ -271,8 +271,6 @@ chamber 侧现状 = 删除意图（pre-delete 半边，design 05 §2.2.1；`pack
 wire 之前发布意图，投影只摘"观察到下沉"时尾部 pending 段中真正沉下来的那部分；外部/他端删除没有本仓事实、仍是未补偿面。
 退出条件：上游落地后删除该补偿与 STATUS「无法控制的差异」条，本节移出本表。
 
-
-
 ## 13. 插件管理页应可嵌入设置分节（surface=embedded）
 
 现象：上游 PluginManagerPage 是 main 面板整页（居中列、clamp(24px,4vw,48px) 侧内边距、28px 头部 inset、自有 h1+intro）。chamber 在 Settings → 插件管理 以 settings.section 复用它，容纳层只剩三条上游自有事实（页根 data-plugin-panel 去 padding/height/scroll、data-window-drag 清零 inset、[data-slot] 占位者取列宽）；页面 h1/intro/工具栏/内部分页/分组/More/详情全部原样。宿主宽度是设置面板 564px 内容列；上游若要彻底消除这层 CSS，应提供一个可嵌入面。
