@@ -1097,6 +1097,11 @@ test('collectExtraRows: the recovery pass never materializes a row another sourc
   assert.equal(diagnostic?.state, 'instance-version-conflict')
   assert.equal(diagnostic?.pluginId, id)
   assert.match(diagnostic?.message ?? '', /factory 属于实例 recovery-other/)
+  // A profile/third-party row has no published-release identity: the recovery verdict must
+  // say "could not verify", never claim the two dsh releases differ (this row's id is not
+  // @deepseek-ai/*), and never point at unknown release values as the cause.
+  assert.match(diagnostic?.message ?? '', /无法证明两侧是同一构建/)
+  assert.doesNotMatch(diagnostic?.message ?? '', /两侧 dsh 发布版本不同/)
   assert.equal(attempted.length, 1, 'the fresh rev url must not load under the other rev factory')
 })
 

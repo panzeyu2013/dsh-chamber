@@ -713,6 +713,15 @@ export async function collectExtraRows(
       restartDrops.set(found.row.id, found.row)
     }
   }
+  /** The reason a cross-instance version conflict could not share: restart verdicts
+   *  ignore it; a profile/third-party row has no release identity, and a missing
+   *  release on either side is not the same as a published-release drift. */
+  const conflictReasonFor = (id: string): InstanceConflictReason => {
+    const ownerRelease = clientPluginRowRelease(id)
+    return !isReleasePublishedPluginId(id)
+      ? 'unverified'
+      : ownerRelease !== undefined && bootRelease !== undefined ? 'release' : 'release-unknown'
+  }
   /** The conflict recorded so far, if any. Read through a function because the boot's
    *  flow analysis already narrowed the slots past the pre-scan, while the recovery pass
    *  can still record one through `recordConflict`. */
@@ -784,13 +793,7 @@ export async function collectExtraRows(
    *  defers to recovery; the kernel throws on timeouts. */
   const applyOutcome = (outcome: ClientRowOutcome<ExtraModuleRow>): void => {
     if (outcome.state === 'rev-conflict') {
-      const ownerRelease = clientPluginRowRelease(outcome.row.id)
-      recordConflict(
-        outcome,
-        !isReleasePublishedPluginId(outcome.row.id)
-          ? 'unverified'
-          : ownerRelease !== undefined && bootRelease !== undefined ? 'release' : 'release-unknown',
-      )
+      recordConflict(outcome, conflictReasonFor(outcome.row.id))
       return
     }
     // 'shared' needs no action: the row stays and materializes under the owner factory.
@@ -819,8 +822,7 @@ export async function collectExtraRows(
       foreignRows.push(found as { row: ExtraModuleRow; conflict: 'version'; ownerSourceId: string })
       continue
     }
-    const ownerRelease = clientPluginRowRelease(found.row.id)
-    recordConflict(found, ownerRelease !== undefined && bootRelease !== undefined ? 'release' : 'release-unknown')
+    recordConflict(found, conflictReasonFor(found.row.id))
   }
   // A boot already certain to block must not fetch bundle contents: the profile
   // approvals could not change the verdict.
@@ -925,7 +927,7 @@ export async function collectExtraRows(
         // first pass, so the single-diagnostic projection below owns the verdict.
         const outcome = outcomes[0]
         if (outcome !== undefined && outcome.state === 'rev-conflict') {
-          recordConflict(outcome)
+          recordConflict(outcome, conflictReasonFor(outcome.row.id))
           continue
         }
         recoveredRows.push(fresh)
