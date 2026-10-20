@@ -39,6 +39,11 @@ const UPSTREAM_TEXT = [
   'renderSlot("conversation.session.header.lineage", {}); renderSlot("shell.overlay", {})',
   'renderSlot("conversation.composer.bar", {}); renderSlot("conversation.input.model", {}); renderSlot("conversation.header", {})',
   'renderSlot("settings.section", {}); renderSlot("settings.header", {}); renderSlot("settings.action", {}); renderSlot("settings.close", {})',
+  // 2026-10 full-page plugin/automation anchors and the model-label slot.
+  'renderSlot("sidebar.panellist", {})',
+  'jsx("section", { "data-plugin-panel": true, "data-plugin-item-detail": "web-search", "data-testid": "task-manager-page" })',
+  'jsx("div", { "data-window-drag": true, "data-sidebar-right-guide-entry": "terminal", "data-provider-id": "deepseek-official" })',
+  'jsx("button", { role: "switch" })',
   'jsx("div", { "data-slot": "root", "data-conversation-scroll": "", "data-composer-seat": "", "data-composer-input": true })',
   'jsx("div", { "data-chat-flow": "", "data-chat-anchor-key": routedNode.key, "data-phase": phase })',
   'jsx("div", { "data-sidebar-collapsed": v, "data-rightbar-collapsed": v, "data-sidebar-right-panel": m })',

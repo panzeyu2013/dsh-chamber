@@ -37,6 +37,7 @@ export const INSTALL_KEYS = {
   composerVisibilityGuard: 'mobile.composer.visibility-guard',
   composerSelfHeal: 'mobile.composer.self-heal',
   drawerTapHeal: 'mobile.drawer.tap-heal',
+  drawerNavigation: 'mobile.drawer.navigation-close',
   settingsSheetScrollReset: 'mobile.settings.sheet-scroll-reset',
 } as const
 

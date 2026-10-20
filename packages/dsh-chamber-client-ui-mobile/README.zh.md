@@ -26,8 +26,8 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
 - `src/client/styles.ts` —— 单文件样式（全部媒体查询作用域，桌面零影响；
   只用官方 `--dsw-*`/`--ds-*` token）；
 - `src/client/markup.ts` / `composer.ts` / `layout-facts.ts` /
-  `drawer-taps.ts` / `settings-sheet.ts` / `official-hover-card.ts` /
-  `session-stall.ts` —— 纯逻辑 + 薄安装器（可单测）；
+  `drawer-taps.ts` / `drawer-navigation.ts` / `settings-sheet.ts` /
+  `official-hover-card.ts` / `session-stall.ts` —— 纯逻辑 + 薄安装器（可单测）；
 - `scripts/build.mjs` —— esbuild 两半构建（`dist/index.js` + `lib/client.js`）。
 
 ## 会话头部适配（触屏档）
@@ -201,9 +201,47 @@ click 控件、pane 不可分屏时自行 `disabled`，此前的整条隐藏基�
 仍然隐藏——那一个才是真正的拖拽 chrome（分隔条隐藏后，触屏分屏得到的是上游的等分，
 而不是可拖拽比例）。整个面板子树还声明了 `overscroll-behavior: contain`：全屏面板
 独占屏幕，其内部滚动不得把 overscroll 链到身后的文档。
+终端 guide 的 choose-shell 触发器用伪元素扩大命中区
+（`position: relative; ::after { inset: -12px }`），不改变布局盒；它同时被推到
+entry 文字区的右侧（`margin-left: auto`），让卡片中心在 320px 下仍是
+“新建终端”的主操作。真实 44px 盒在触发器原来的居中位置会挡住 entry 自己的
+中心点击；伪元素保留 20px 视觉控件同时给出手指 44px 目标。规则只作用于官方
+`[data-sidebar-right-guide-entry]` 根，**不是**面板内所有图标按钮：文档预览的
+缩放控件是 2px 间距浮动面板里的 28px 按钮，44px 伪元素会互相重叠、抢邻居的点击。
+dockkit tab 关闭仍排除（它本来就浮在 chip 标签上；chip 是 44px 目标）。
 一条**待实机判定**：会话头座席的底线落在**内容盒**上（既有臂保持出厂几何），
 于是带内边距的图标按钮渲染成约 56px 的盒子、头部行随之变高——若真机上读作
 顶部 chrome 过厚，可把三条头部臂一起改为 border-box（44px）。
+
+## 整页插件与自动化任务面（触屏档）
+
+0.2.1 在主列里新增整页面：Plugins（`[data-plugin-panel]`，Web search 详情根为
+`[data-plugin-item-detail]`）与 Schedule/Automation（`[data-testid="task-manager-page"]`）。
+它们不是设置 sheet，也不经过会话头，因此触屏档给它们独立的页级规则（官方页面状态
+属性，不猜哈希类名）：
+
+- **页头避让**：页面根节点承担刘海/home indicator 安全区
+  （`padding-*: env(safe-area-inset-*)`；插件根在官方 24px/4vw 左右内边距与 48px
+  底部内边距之上叠加），页头（以及 Web search 的返回行）再留 32px。浮动 44px
+  开关（10..54px + safe-area）因此不再压住标题/返回；Automation 的 `h1` 同样
+  32px。390px 下标题文字从 24 + 32 = 56px 起；834px 下 clamp 为 4vw，约 65px，
+  仍避开。
+- **44px 盒底线**：页内按钮（文字链接、刷新、加号菜单、过滤器、保存/返回）统一
+  `min-width: 44px; min-height: 44px`；开关 44×44 命中盒。
+- **插件配置字段头**：官方 `SettingsForm` 的标签 + 徽标/说明是桌面两列；手机档
+  改为标签独占一行、徽标/说明另起整行并换行（0.2.1-rc.2 的 “API Key” 说明在
+  390px 下曾越出 342px 字段约 50px，现在在字段内换行）。
+- **iOS 聚焦底线**：页内 input/select/textarea 沿用与抽屉/设置/composer 相同的
+  16px 下限。
+
+## Composer 工具栏与模型标签（phone 档）
+
+官方 composer 行会换行；phone 档强制单行。模型触发器限宽 112px，锚在
+`conversation.input.model` 座席（不是名为 “trigger” 的类，旁边的 28px
+ContextMeter 环因此保留 `flex:none`）。0.2.1-rc.2 在标签槽里追加 `1017` Tag：
+槽输出是 name + tag 的 inline-flex，按钮 cap 曾把 tag 完全裁掉（实测 168.4px
+内容塞进 112px 盒）。现在只让模型**名称**可收缩（`[data-provider-id]` 标签根
+的第一个元素子节点），尾部 Tag `flex:none`；纯文本标签仍走触发器自身的省略号。
 
 ## 设置页适配（手机档）
 
@@ -260,6 +298,9 @@ click 控件、pane 不可分屏时自行 `disabled`，此前的整条隐藏基�
 之后）把 options 滚动器（它的直接父元素）与 sheet 的兜底内容滚动器复位到
 顶部；chip 判定是纯函数且带单测的 `isSectionChipClick`（最近 `nav` 祖先为
 设置 nav 的 `button`），因此点击 nav 标题、选项区或对话框 chrome 一律不复位。
+同一个 rAF 还会把被点的 chip 滚入横向条
+（`scrollIntoView({ block: 'nearest', inline: 'nearest' })`），因此 390/360px 下
+最后的分区「Agent 预设」不会停在右边缘外；`block: 'nearest'` 不会纵向带动选项列/弹窗。
 该行为门控在**手机档**而非触屏档：769–1023px 的触控平板保留官方弹窗几何与
 官方跨分区滚动行为。
 
@@ -356,6 +397,12 @@ wrapper 24px，并挂在其下 `top = wrapper.bottom + 8`、或在翻转时挂�
   分别跟踪（多点触控安全、响应 pointercancel）。平移/滚动意图（超出 slop
   的位移）、表单控件（含任意非 false 态 contenteditable）、抽屉之外一律
   不触发；桌面路径不受影响（仅 touch/pen + 触屏档门禁）。
+- **导航后收起抽屉**（`drawer-navigation.ts`）：官方侧栏是桌面常驻列，选择主面板
+  或会话只换中心视图、不收起侧栏。手机档消费两个官方信号：sidebar 面板行点击
+  （行按钮内含 glyph 的 `[data-slot="sidebar.panellist"]` 出口；关闭延到 microtask，
+  让行自己的 React `selectPanel` 先跑）与官方 presented session id 变化
+  （`session-presentation.ts`：切会话/新建/从面板回会话）。流式/状态通知 id 不变，
+  不触发；搜索、账号菜单、工作区操作与视图选项不是导航，抽屉保持打开。
 - **抽屉导航不再拉起键盘**：官方 composer 会在会话切换后把焦点还给输入框，
   在 iOS 上等于切换后立刻弹键盘——IME 阶梯 layer-1 的手势分类仍**持久**
   （最近一次 pointerdown 属于导航区还是 preserve），但丢弃程序化回焦只在该次
@@ -440,9 +487,13 @@ pnpm run test:mobile
 官方 dsh DOM 实测（CDP 审计在 **v0.1.5-alpha.2** 完成，并在 **v0.1.5-rc.2**
 重锚）——下列锚点在 rc.2 树中曾全部成立（本节 rc.1/rc.2 均指 v0.1.5 世系，
 当前 pin 一律写全 0.2.1-rc.2）；当前 pin（v0.2.1-rc.2）下严格锚点门解析全部
-声明锚点（共 60 条，其中 52 条为上游锚点；最小断言集 27 项），含属性/role/slot 锚点、
+声明锚点（共 68 条，其中 60 条为上游锚点；最小断言集 27 项），含属性/role/slot 锚点、
 插件侧 local-name 类名锚点、external `_crumbSeg` 发射钉与两个 build-time
 CSS-module hash token——在物化上游产物语料上零命中 0、advisory 0
+（2026-10 整页面补齐 `data-plugin-panel`、`data-plugin-item-detail`、
+`data-window-drag`、`data-testid="task-manager-page"`、
+`data-sidebar-right-guide-entry`，以及模型标签槽的
+`data-provider-id` 与首/末子节点形状；全部在 pin 产物中命中）
 （`verify-mobile-anchors.mjs --require-anchor-root`）；类名臂已按被服务的
 rc.2 产物重锚，零命中现为**硬失败**（见下）；alpha.2 → rc.1 的客户端改动（`ui-sidebar-*`
 的 guide/preview 行、`ui-primitives` 的 `CodeBlock` 包装层、`ui-chat` 统计对话框、

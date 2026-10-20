@@ -53,6 +53,12 @@ function installSettingsSheetScrollResetInner(active: () => boolean): () => void
     const nav = dialog.querySelector(':scope > nav')
     if (!(nav instanceof Element)) return
     if (!isSectionChipClick(target, nav)) return
+    // The clicked chip is also the navigation affordance: on a 390px phone the
+    // four-section strip is wider than the nav (the last chip starts off-screen),
+    // so keep the chosen chip inside the horizontal scroller. scrollIntoView with
+    // block:'nearest' only moves the nav list — it must not pan the options
+    // column or the dialog.
+    const chip = target.closest('button')
     requestAnimationFrame(() => {
       let scroller = dialog.querySelector('[data-slot="settings.section"]')?.parentElement ?? null
       while (scroller instanceof HTMLElement && scroller !== dialog) {
@@ -64,6 +70,14 @@ function installSettingsSheetScrollResetInner(active: () => boolean): () => void
       // offset under the sticky header.
       const content = dialog.lastElementChild
       if (content instanceof HTMLElement) content.scrollTop = 0
+      if (chip instanceof HTMLElement && typeof chip.scrollIntoView === 'function') {
+        try {
+          chip.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+        } catch {
+          // Revealing the chip is cosmetic; a hostile engine must not break
+          // the section switch or the scroll reset.
+        }
+      }
     })
   }
   document.addEventListener('click', onClick, true)

@@ -211,6 +211,79 @@ export const MOBILE_CSS = `
     padding-left: env(safe-area-inset-left, 0px);
   }
 
+  /* Full-page destinations (Plugins / Web search / Automation) live inside the
+     main column, so they never pass through the session header's gutter. The
+     floating drawer toggle is a fixed 44px box at left 10px + safe-area (right
+     edge 54px + safe-area). The page ROOT owns the notch/home-indicator
+     insets on top of its official 24px/4vw side and 48px bottom padding; the
+     header adds the 32px toggle gutter on top. At 390 the title text starts at
+     24 + 32 = 56px (2px past the toggle); at 834 the clamp is 4vw, so ~65px.
+     Anchors are official page state, not hashed classes: [data-plugin-panel]
+     on ui-plugin-manager's page root, [data-plugin-item-detail] on its detail
+     root, and the schedule page's stable data-testid. */
+  [data-plugin-panel] {
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-right: calc(clamp(24px, 4vw, 48px) + env(safe-area-inset-right, 0px));
+    padding-bottom: calc(48px + env(safe-area-inset-bottom, 0px));
+    padding-left: calc(clamp(24px, 4vw, 48px) + env(safe-area-inset-left, 0px));
+  }
+  [data-testid="task-manager-page"] {
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+  }
+  [data-plugin-panel] > header,
+  [data-plugin-panel] > [data-plugin-item-detail] > [data-window-drag] {
+    box-sizing: border-box;
+    padding-left: 32px !important;
+  }
+  /* When the title block and toolbar no longer fit on one phone line, the
+     wrapped toolbar is the only item on its row; keep it right-aligned instead
+     of letting justify-content:space-between pin it to the page's left edge. */
+  [data-plugin-panel] > header > :last-child:not(:first-child) {
+    margin-left: auto;
+  }
+  [data-testid="task-manager-page"] h1 {
+    box-sizing: border-box;
+    padding-left: 32px;
+  }
+  /* The new full pages are ordinary desktop surfaces: their 20-32px links,
+     switches, refresh/add buttons and filter chips are far below the 44px touch
+     floor. Scope the floor to these page roots; the conversation and the
+     settings dialog keep their own deliberate floors. */
+  [data-plugin-panel] button:not([data-dockkit-tab-close]),
+  [data-testid="task-manager-page"] button:not([data-dockkit-tab-close]) {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  [data-plugin-panel] [role="switch"],
+  [data-testid="task-manager-page"] [role="switch"] {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  /* The terminal guide's choose-shell trigger is a 20px icon button inside the
+     guide entry, next to the entry's own "new terminal" button. Do NOT grow
+     its layout box: a 44px box there intercepted the entry's center tap at
+     320-360px. Extend the hit area with a pseudo-element, leaving the visual/layout
+     box untouched. Scope it to the guide entry, NOT every icon button in the
+     panel: the document-preview zoom controls are 28px buttons in a 2px-gap
+     floating panel, where 44px pseudo boxes would overlap each other and
+     steal neighbouring taps. */
+  [data-mobile-role="details"] [data-sidebar-right-panel] [data-sidebar-right-guide-entry] :is(span, div):has(> button[aria-haspopup="menu"]) {
+    margin-left: auto;
+  }
+  [data-mobile-role="details"] [data-sidebar-right-panel] [data-sidebar-right-guide-entry] button:has(svg) {
+    position: relative;
+  }
+  [data-mobile-role="details"] [data-sidebar-right-panel] [data-sidebar-right-guide-entry] button:has(svg)::after {
+    content: '';
+    position: absolute;
+    inset: -12px;
+  }
+
   /* Sidebar → fixed overlay drawer, off-canvas by default. translateX(-105%)
      keeps the shadow out of view; the open state is driven purely by the
      official frame attribute (no JS state, no React). Motion uses the
@@ -785,6 +858,38 @@ export const MOBILE_CSS = `
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* The current pin adds a trailing "1017" Tag INSIDE the model-label slot. The
+     button cap above clips the whole trigger; the slot output is an
+     inline-flex (DeepSeekModelLabel) whose intrinsic width is name + tag, so
+     without a shrink path the overflow hides the NEW badge completely (measured
+     at 390px: content 168.4px in a 112px button; badge right edge 373 > 309).
+     Keep the name as the only shrinkable part, pin the badge, and let the
+     trigger's own ellipsis contract survive for plain-text labels. Structural
+     anchors only: the slot wrapper is span[data-provider-id] (renderModelLabel),
+     the label root is its span child, and the name/tag are that root's first/last
+     element children. */
+  [data-slot="conversation.input.model"] button [data-provider-id] {
+    min-width: 0;
+    max-width: 100%;
+  }
+  [data-slot="conversation.input.model"] button [data-provider-id] > span {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  [data-slot="conversation.input.model"] button [data-provider-id] > span > span:first-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  [data-slot="conversation.input.model"] button [data-provider-id] > span > span:last-child {
+    flex: none;
+  }
 
   /* Popups (command menu, model menu, context pickers) never overflow the
      viewport horizontally. */
@@ -947,6 +1052,45 @@ export const MOBILE_CSS = `
      minimum zoom on focus. max(16px, ...) keeps the official content-size
      preference (--dsh-content-font-size) when the user set it larger. */
   [data-composer-input] {
+    font-size: max(16px, var(--dsh-content-font-size, 16px)) !important;
+  }
+
+  /* Web-search / plugin-config fields: the official SettingsForm head is a
+     two-column flex row (label + badges/hint) sized for a desktop panel. At
+     390px the label collapses to a zero-width column and the nowrap hint tag
+     runs 392px past the 342px field (the current-pin "API Key" break
+     recorded in the mobile review). Stack the head: label first, then the
+     badges/hint on their own full-width line, wrapping as prose. The field is
+     found structurally by the official input id prefix, so no hashed class or
+     localized copy is involved. */
+  [data-plugin-panel] div:has(:is(input, select, textarea)[id^="plugin-config-"]) > div:has(> label) {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    row-gap: 4px;
+  }
+  [data-plugin-panel] div:has(:is(input, select, textarea)[id^="plugin-config-"]) > div:has(> label) > label {
+    flex: 0 0 auto;
+    max-width: 100%;
+    white-space: nowrap;
+  }
+  [data-plugin-panel] div:has(:is(input, select, textarea)[id^="plugin-config-"]) > div:has(> label) > span {
+    flex: 1 1 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+  [data-plugin-panel] div:has(:is(input, select, textarea)[id^="plugin-config-"]) > div:has(> label) > span * {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  /* iOS focus zoom on the new full pages: the plugin search and schedule
+     search fields are ordinary 13-14px inputs. Keep the same 16px floor the
+     drawer, settings sheet and composer already carry. */
+  [data-plugin-panel] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  [data-plugin-panel] select,
+  [data-plugin-panel] textarea,
+  [data-testid="task-manager-page"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  [data-testid="task-manager-page"] select,
+  [data-testid="task-manager-page"] textarea {
     font-size: max(16px, var(--dsh-content-font-size, 16px)) !important;
   }
 

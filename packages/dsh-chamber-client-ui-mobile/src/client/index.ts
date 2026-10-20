@@ -39,6 +39,7 @@ import {
 } from './composer.ts'
 import { createViewportAssets, type ViewportDocumentLike } from './viewport-assets.ts'
 import { installDrawerTapHeal } from './drawer-taps.ts'
+import { installDrawerNavigationClose } from './drawer-navigation.ts'
 import { installSettingsSheetScrollReset } from './settings-sheet.ts'
 import {
   COARSE_NO_HOVER_QUERY, installStrandedHoverCardWatchdog,
@@ -298,6 +299,14 @@ export function apply(ctx: ClientContext): void {
             // iOS suppresses the compatibility click for drawer taps: heal the
             // lost activation so one tap switches sessions (drawer-taps.ts).
             installDrawerTapHeal(() => touchTier.matches),
+            // A panel row / presented-session change is a navigation: collapse
+            // the mobile drawer so the destination is not left behind it.
+            installDrawerNavigationClose({
+              active: () => touchTier.matches,
+              isOpen: () => layoutSource.getNarrow() && !layoutSource.getCollapsed(),
+              close: () => ctx.layout.toggleSidebar(),
+              sessions: ctx.sessions,
+            }),
             // Phone-tier settings sheet: switching section chips resets the
             // shared options scroller (settings-sheet.ts).
             installSettingsSheetScrollReset(() => phoneTier.matches),

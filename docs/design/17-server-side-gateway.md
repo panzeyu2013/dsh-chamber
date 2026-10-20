@@ -1589,6 +1589,12 @@ ui-layout fork，见 §20。
   - 触控目标 ≥44px 比例（**座席清单**：composer bar / sidebar / 会话头
     actions+utilities+corner / settings.section / 右栏 dockkit 条 chips+按钮 / menuitem+option）、
     无横向溢出、抽屉开合、弹层不出屏、设置全屏可滚动、输入行单行、安全区/100dvh、键盘不遮挡输入区；
+  - 整页插件/自动化面（2026-10 修复；设备模拟已过、真机待跑）：Plugins / Web search /
+    Automation 的页面根节点安全区与页头 56px 避让（浮动 toggle 10–54px）、页级按钮/开关 44px 盒、
+    Web search 字段头堆叠与 16px 输入、终端 empty-state choose-shell 的 44px
+    伪元素命中区（不改变 20px 视觉盒）、抽屉导航（panel row / presented session id）
+    后自动收起。模拟判定在 320/360/390/834 四档通过；真机仍需覆盖安全区/横屏、iOS/Android
+    键盘与真实插件保存链路。
   - 右栏与抽屉（决策的实机判据）：展开的右栏在 769–1023px 档**全屏**呈现、面板自带
     退出控件可点、面板展开期间抽屉与开关不可见且**不在 Tab 序**——**两档都要走查**：<768（上游
     自身全屏、本插件补齐 inset、让位靠 `data-rightbar-fullscreen` 臂）与 769–1023（本插件全屏 +
@@ -1748,6 +1754,8 @@ ui-layout fork，见 §20。
   - 只用 `[data-phase]` 节点当会话身份——**否决**：该节点属于按条目 key 的 root 作用域槽，切会话
     原地复用，计时、提示与「继续等待」被带进下一个会话；会话作用域的 header 子树才是上游实际重挂
     的边界。
+- **新整页插件/自动化面的移动适配**：①只依赖上游桌面布局、不补任何规则——**否决**：390px 下 Plugins 标题被浮动 toggle 压住、Web search 的 “API Key” 说明越出字段约 50px、20–32px 的按钮/开关不可触；②在网关里另建一套移动页面壳——**否决**：违反 §18「不写第二套聊天 UI」的边界，且会话/设置已经走官方 DOM；③当前方案 = 只对官方页面状态锚点（`data-plugin-panel` / `data-plugin-item-detail` / `data-testid`）补页级 CSS，字段头用 `plugin-config-*` 输入控件的结构 `:has()` 堆叠，锚点门同步覆盖。
+- **抽屉导航后收起**：①任意 sidebar 点击都收起——**否决**：搜索框、账号菜单、工作区菜单和视图选项需要抽屉保持打开；②按本地化文案匹配“插件/自动化/新建会话”——**否决**：文案随语言/上游改动漂移，且插件锚点纪律禁止 copy 匹配；③当前方案 = 官方 panel-row 的 `sidebar.panellist` 槽（点击后 microtask 收起）+ 官方 presented session id（`retainedBy.mainView`）变化，流式/状态更新不触发。
 - **网关的不可变缓存标记**（§8 附近的资产缓存段）：只按路径形状（`-<hash>.<ext>`）打标——
   **否决**：实测 0.1.0-rc.5 的 frontend-static 会把 miss SPA 回退到渲染后的 index（`text/html`
   200），「JS URL 上的一年期 HTML」会跨版本回滚长期驻留；标记必须同时看内容类型与上游缓存元数据。

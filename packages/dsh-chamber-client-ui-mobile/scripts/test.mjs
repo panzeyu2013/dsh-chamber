@@ -26,6 +26,8 @@ const GROUPS = {
     'test/behavior/composer.test.ts',
     'test/behavior/composer-guard.test.ts',
     'test/behavior/drawer-taps.test.ts',
+    // navigation close: panel-row click + presented-session change
+    'test/behavior/drawer-navigation.test.ts',
     // drawer background accessibility lock (inert on the covered columns)
     'test/behavior/drawer-a11y.test.ts',
     'test/behavior/settings-sheet.test.ts',

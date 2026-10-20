@@ -33,8 +33,9 @@ drawer layout, touch targets, safe areas, PWA phased.
 - `src/client/styles.ts` — single stylesheet (fully media-query scoped,
   desktop untouched; official `--dsw-*`/`--ds-*` tokens only);
 - `src/client/markup.ts` / `composer.ts` / `layout-facts.ts` /
-  `drawer-taps.ts` / `settings-sheet.ts` / `official-hover-card.ts` /
-  `session-stall.ts` — pure logic + thin installers (unit-testable);
+  `drawer-taps.ts` / `drawer-navigation.ts` / `settings-sheet.ts` /
+  `official-hover-card.ts` / `session-stall.ts` — pure logic + thin
+  installers (unit-testable);
 - `scripts/build.mjs` — esbuild two-half build (`dist/index.js` + `lib/client.js`).
 
 ## Session header adaptation (touch tier)
@@ -276,6 +277,18 @@ floats it at 20px inside the chip (absolute, `pointer-events` gated by
 hover/active), so the floor would inflate it into a 44px box over the chip's
 label — the chip itself is the 44px target and closing stays reachable from the
 chip menu; it is only re-centred in the taller box it now lives in.
+The terminal guide's choose-shell trigger extends its hit area with a
+pseudo-element (`position: relative; ::after { inset: -12px }`) instead of
+growing its layout box, and it is pushed to the right side of the entry's
+text block (`margin-left: auto`) so the card's center stays the primary
+"new terminal" action at 320px. A real 44px box at the trigger's original center position sat
+inside the guide entry and intercepted the entry's own center tap at 360px;
+the pseudo keeps the visual 20px control while giving the finger a 44px target. The rule is scoped to the
+official `[data-sidebar-right-guide-entry]` root, NOT to every icon button in
+the panel: the document-preview zoom controls are 28px buttons in a 2px-gap
+floating panel, where 44px pseudo boxes would overlap and steal neighbouring
+taps. The dockkit tab close stays excluded (it overlays the chip label by
+design; the chip is the 44px target).
 The split BUTTON is no longer hidden: upstream renders it as a plain click
 control that disables itself when the pane cannot split, so the earlier blanket
 hide removed a usable affordance on a false "pointer-drag chrome" premise; the
@@ -288,6 +301,57 @@ One device-judged note: the header-seat floor lands on the CONTENT box (the
 pre-existing arm was left as shipped), so padded icon buttons render ~56px boxes
 and the header row grows with them — if that reads as too much chrome on a
 phone, the three header arms can move to border-box together (44px).
+
+## Full-page plugin & automation surfaces (touch tier)
+
+0.2.1 adds whole-page destinations INSIDE the main column: the Plugins page
+(`[data-plugin-panel]`, including the Web-search detail rooted at
+`[data-plugin-item-detail]`) and the Schedule/Automation page
+(`[data-testid="task-manager-page"]`). They are not the settings sheet and do
+not pass through the session header, so the touch tier gives them their own
+page-level rules (official page-state attributes; no hashed classes):
+
+- **Toggle gutter**: the page ROOT carries the notch/home-indicator insets
+  (`padding-*: env(safe-area-inset-*)`; the plugin root keeps its official
+  24px/4vw side padding and 48px bottom padding on top), and the page head
+  (and the Web-search back row) adds 32px inside that. The floating 44px
+  toggle at 10..54px + safe-area therefore cannot cover a title or the back
+  row; the Automation page gives the same 32px to its `h1`. At 390px the
+  title text starts at 24 + 32 = 56px; at 834px the clamp is 4vw, so ~65px —
+  still clear.
+- **44px box floor**: every page button (text links, refresh, add-menu arrow,
+  filters, save/back) gets `min-width: 44px; min-height: 44px`; switches get
+  a 44x44 hit box. The settings dialog and conversation keep their own
+  deliberate floors.
+- **Plugin-config field head**: the official `SettingsForm` head is a
+  two-column label + badges row sized for a desktop panel. On the phone tier
+  it wraps: the label keeps its intrinsic single-line width
+  (`flex: 0 0 auto; white-space: nowrap`), and the badges/hint move to a
+  full-width line that wraps (`white-space: normal; overflow-wrap:
+  anywhere`). At 390px the 0.2.1-rc.2 “API Key” hint used to run ~50px past
+  the 342px field; it now wraps inside it.
+- **iOS focus floor**: page inputs/selects/textareas keep the same
+  `max(16px, var(--dsh-content-font-size, 16px))` minimum as the drawer,
+  settings sheet and composer.
+
+The schedule page's search field and the plugin search field are covered by the
+same input rule; the field head is found structurally by the official
+`plugin-config-*` id prefix (input/select/textarea), not by a localized label
+or a CSS-module hash.
+
+## Composer toolbar & model label (phone tier)
+
+The official composer row wraps; the phone tier forces one line
+(`flex-wrap: nowrap`). The model trigger is capped at 112px and anchored on
+the `conversation.input.model` seat (not a class named “trigger”, so the
+adjacent 28px ContextMeter ring keeps its `flex: none`). 0.2.1-rc.2 adds a
+trailing `1017` Tag INSIDE the label slot: the slot output is an inline-flex
+whose intrinsic width is name + tag, so the button cap used to clip the tag
+completely (measured 168.4px of content in the 112px box). The phone tier now
+makes only the model NAME shrinkable (first element child of the
+`[data-provider-id]` label root) and pins the trailing Tag
+(`flex: none`); the trigger's own ellipsis contract remains for plain-text
+labels. See “Anchor baseline” for the structural anchors.
 
 ## Settings sheet adaptation (phone tier)
 
@@ -357,7 +421,11 @@ CHIP resets the options scroller (its direct parent) and the sheet's fallback
 content scroller to the top after the section re-render (rAF); the chip test
 is the pure, unit-tested `isSectionChipClick` predicate (a `button` whose
 nearest `nav` is the settings nav), so clicks on the nav title, the options
-area or the dialog chrome never reset. The behavior is
+area or the dialog chrome never reset. The same rAF reveals the chosen chip
+in the horizontal strip (`scrollIntoView({ block: 'nearest', inline: 'nearest' })`),
+so the last section ("Agent 预设") is brought into view at 390/360px instead
+of staying cut off at the right edge; `block: 'nearest'` keeps the options
+column and the dialog from panning vertically. The behavior is
 gated on the PHONE tier, not the touch tier: a 769–1023px touch tablet keeps
 the official modal geometry and the official cross-section scroll behavior.
 
@@ -488,6 +556,17 @@ idempotent, and is installed/uninstalled by `ctx.effect` behind one
   beyond the slop), form fields (incl. contenteditable in any non-false
   state) and everything outside the drawer never heal; desktop paths are
   untouched (touch/pen + touch-tier gates only).
+- **Navigation closes the drawer** (`drawer-navigation.ts`): the official
+  sidebar is a persistent desktop column, so selecting a main panel or a
+  session changes the centre view without collapsing it. Two official signals
+  close the mobile drawer after the action: a sidebar PANEL-ROW click (the
+  row button carries its glyph's `[data-slot="sidebar.panellist"]` outlet;
+  the close is deferred to a microtask so the row's React `selectPanel`
+  runs first) and a change of the officially PRESENTED session id
+  (`session-presentation.ts`: session switch, new session, leave a panel).
+  Streaming/status notifications keep the id equal and never close it; search,
+  account menu, workspace actions and view options are not navigation and keep
+  the drawer open.
 - **No keyboard pop on drawer navigation**: the official composer returns
   focus to the box on session switch, which pops the iOS keyboard right
   after a drawer tap — the IME ladder's layer-1 gesture classification stays
@@ -598,13 +677,18 @@ Official dsh DOM, empirically audited via CDP at **v0.1.5-alpha.2** and re-ancho
 at **v0.1.5-rc.2** — every anchor below resolved in the rc.2 tree (rc.1/rc.2 in this
 section mean the v0.1.5 lineage; the current pin is always written in full as
 v0.2.1-rc.2). Under the current
-pin (v0.2.1-rc.2) the strict anchor gate resolves the declared set (60 declared
-anchors, 52 of them upstream; 27 minimal assertions) including the attribute/role/
+pin (v0.2.1-rc.2) the strict anchor gate resolves the declared set (68 declared
+anchors, 60 of them upstream; 27 minimal assertions) including the attribute/role/
 slot anchors, the plugin local-name class anchors, the external `_crumbSeg`
 emission pin, and the two build-time CSS-module hash tokens — 0 misses and 0
 advisories over the materialized upstream product corpus
 (`verify-mobile-anchors.mjs --require-anchor-root`);
-a zero-hit anchor is a hard failure (see below). The
+a zero-hit anchor is a hard failure (see below). The 2026-10 full-page surface
+pass added the official page-state anchors `data-plugin-panel`,
+`data-plugin-item-detail`, `data-window-drag`, `data-testid="task-manager-page"`
+and `data-sidebar-right-guide-entry`, plus the model-label slot wrapper
+`data-provider-id` and its first/last-child name/tag shape; all resolve in
+the pinned bundles. The
 alpha.2 → rc.1 delta (the `ui-sidebar-*` guide/preview rows, the
 `ui-primitives` `CodeBlock` wrapper, the `ui-chat` stats dialog, two `z-index`
 additions in `ui-dockkit`'s CSS and a slot-catalog doc pointer) and the rc.1 → rc.2

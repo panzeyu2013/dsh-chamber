@@ -81,10 +81,12 @@ const SECTION_SELECTOR = '[data-slot="settings.section"]'
 class SheetNode {
   readonly closestMap: Record<string, SheetNode | null> = {}
   readonly queryMap: Record<string, SheetNode | null> = {}
+  readonly scrollCalls: Array<Record<string, unknown>> = []
   parentElement: SheetNode | null = null
   lastElementChild: SheetNode | null = null
   closest(selector: string): SheetNode | null { return this.closestMap[selector] ?? null }
   querySelector(selector: string): SheetNode | null { return this.queryMap[selector] ?? null }
+  scrollIntoView(options: Record<string, unknown> = {}): void { this.scrollCalls.push(options) }
 }
 
 /** A scroller whose writes are logged: resetting an already-zero scrollTop is
@@ -118,6 +120,7 @@ interface SheetTree {
   readonly dialog: SheetNode
   /** The click target: the chip's inner span (closest -> button -> chip). */
   readonly chipTarget: SheetNode
+  readonly chip: SheetNode
   readonly nav: SheetNode
   readonly options: ScrollNode
   readonly column: ScrollNode
@@ -144,7 +147,7 @@ function sheetTree(): SheetTree {
   const chipTarget = new SheetNode()
   chipTarget.closestMap['button'] = chip
   chipTarget.closestMap[DIALOG_SELECTOR] = dialog
-  return { dialog, chipTarget, nav, options, column, content }
+  return { dialog, chipTarget, chip, nav, options, column, content }
 }
 
 interface SheetEnvironment {
@@ -210,6 +213,27 @@ test('installSettingsSheetScrollReset: a chip click resets the whole scroller ch
         assert.deepEqual(tree.content.writes, [0], 'the content column fallback is reset')
         assert.equal(tree.options.scrollTop, 0)
         assert.equal(tree.content.scrollTop, 0)
+      } finally {
+        dispose()
+      }
+    })
+  } finally {
+    frames.restore()
+  }
+})
+
+test('installSettingsSheetScrollReset: the clicked chip is revealed in the horizontal nav', () => {
+  const frames = installFrameQueue()
+  try {
+    withSheetDom(env => {
+      const tree = sheetTree()
+      const dispose = installSettingsSheetScrollReset(() => true)
+      try {
+        env.click(tree.chipTarget)
+        assert.deepEqual(tree.chip.scrollCalls, [], 'the reveal waits for the section re-render frame')
+        frames.flush()
+        assert.deepEqual(tree.chip.scrollCalls, [{ block: 'nearest', inline: 'nearest' }],
+          'the chosen chip must be brought inside the horizontally scrolling nav')
       } finally {
         dispose()
       }

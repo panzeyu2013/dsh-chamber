@@ -443,6 +443,94 @@ test('breakpoints: the 44px touch floors cover the review-fix seats', () => {
   assert.ok(modeControl !== null && modeControl.includes('display: none !important;'), 'the inert mode control is hidden in 768-1023')
 })
 
+test('breakpoints: the new full pages reserve the toggle gutter and the 44px floor', () => {
+  const touch = normalizeTouchTier()
+  const head = cssBlock(touch,
+    '[data-plugin-panel] > header, [data-plugin-panel] > [data-plugin-item-detail] > [data-window-drag]')
+  assert.ok(head !== null && head.includes('padding-left: 32px !important;'),
+    'plugin page heads and the detail back row must clear the 54px toggle edge')
+  const pluginRoot = cssBlock(touch, '[data-plugin-panel]')
+  assert.ok(pluginRoot !== null
+    && pluginRoot.includes('padding-top: env(safe-area-inset-top, 0px);')
+    && pluginRoot.includes('padding-left: calc(clamp(24px, 4vw, 48px) + env(safe-area-inset-left, 0px));')
+    && pluginRoot.includes('padding-bottom: calc(48px + env(safe-area-inset-bottom, 0px));'),
+  'the plugin page root owns the notch/home-indicator insets')
+  const scheduleRoot = cssBlock(touch, '[data-testid="task-manager-page"]')
+  assert.ok(scheduleRoot !== null
+    && scheduleRoot.includes('padding-top: env(safe-area-inset-top, 0px);')
+    && scheduleRoot.includes('padding-left: env(safe-area-inset-left, 0px);')
+    && scheduleRoot.includes('box-sizing: border-box;'),
+  'the automation page root owns the same insets without changing its content padding')
+  const scheduleTitle = cssBlock(touch, '[data-testid="task-manager-page"] h1')
+  assert.ok(scheduleTitle !== null && scheduleTitle.includes('padding-left: 32px;'),
+    'the automation title adds the 32px toggle gutter inside the root inset')
+  const buttonFloor = cssBlock(touch,
+    '[data-plugin-panel] button:not([data-dockkit-tab-close]), [data-testid="task-manager-page"] button:not([data-dockkit-tab-close])')
+  assert.ok(buttonFloor !== null && buttonFloor.includes('min-width: 44px;') && buttonFloor.includes('min-height: 44px;'),
+    'page-level buttons carry the 44px box floor')
+  const toolbar = cssBlock(touch, '[data-plugin-panel] > header > :last-child:not(:first-child)')
+  assert.ok(toolbar !== null && toolbar.includes('margin-left: auto;'),
+    'a wrapped page toolbar stays right-aligned')
+  const switchFloor = cssBlock(touch,
+    '[data-plugin-panel] [role="switch"], [data-testid="task-manager-page"] [role="switch"]')
+  assert.ok(switchFloor !== null && switchFloor.includes('min-width: 44px;') && switchFloor.includes('min-height: 44px;'),
+    'plugin-page switches get a 44x44 hit box')
+  const panelIconBase = cssBlock(touch,
+    '[data-mobile-role="details"] [data-sidebar-right-panel] [data-sidebar-right-guide-entry] button:has(svg)')
+  assert.ok(panelIconBase !== null && panelIconBase.includes('position: relative;'),
+    'the terminal guide choose-shell trigger anchors a pseudo hit area')
+  const shellTrigger = cssBlock(touch,
+    '[data-mobile-role="details"] [data-sidebar-right-panel] [data-sidebar-right-guide-entry] :is(span, div):has(> button[aria-haspopup="menu"])')
+  assert.ok(shellTrigger !== null && shellTrigger.includes('margin-left: auto;'),
+    'the choose-shell trigger moves to the entry right edge, away from the card center')
+  const panelIconHit = cssBlock(touch,
+    '[data-mobile-role="details"] [data-sidebar-right-panel] [data-sidebar-right-guide-entry] button:has(svg)::after')
+  assert.ok(panelIconHit !== null && panelIconHit.includes('inset: -12px;'),
+    'the choose-shell hit area extends to 44px without growing its layout box')
+  assert.equal(cssBlock(touch, '[data-mobile-role="details"] [data-sidebar-right-panel] button:has(svg):not([data-dockkit-tab-close])::after'), null,
+    'the pseudo must not leak to the document-preview zoom buttons')
+})
+
+test('breakpoints: web-search/plugin-config fields stack on the phone tier', () => {
+  const phone = normalizePhoneTier()
+  const head = '[data-plugin-panel] div:has(:is(input, select, textarea)[id^="plugin-config-"]) > div:has(> label)'
+  const headBlock = cssBlock(phone, head)
+  assert.ok(headBlock !== null && headBlock.includes('flex-wrap: wrap;') && headBlock.includes('row-gap: 4px;'),
+    'the two-column label/badges head wraps on a phone')
+  const label = cssBlock(phone, head + ' > label')
+  assert.ok(label !== null && label.includes('flex: 0 0 auto;') && label.includes('white-space: nowrap;'),
+    'the label keeps its intrinsic single-line width')
+  const badges = cssBlock(phone, head + ' > span')
+  assert.ok(badges !== null && badges.includes('flex: 1 1 100%;') && badges.includes('min-width: 0;'),
+    'the hint/badge line takes its own full-width row')
+  const hint = cssBlock(phone, head + ' > span *')
+  assert.ok(hint !== null && hint.includes('white-space: normal;') && hint.includes('overflow-wrap: anywhere;'),
+    'the long key-state hint wraps instead of running off-screen')
+  const fields = cssBlock(phone,
+    '[data-plugin-panel] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), [data-plugin-panel] select, [data-plugin-panel] textarea, [data-testid="task-manager-page"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), [data-testid="task-manager-page"] select, [data-testid="task-manager-page"] textarea')
+  assert.ok(fields !== null && fields.includes('font-size: max(16px, var(--dsh-content-font-size, 16px)) !important;'),
+    'page fields keep the iOS 16px focus-zoom floor')
+})
+
+test('breakpoints: the model trigger shrinks the name and keeps the 1017 badge', () => {
+  const phone = normalizePhoneTier()
+  const trigger = cssBlock(phone, '[data-slot="conversation.input.model"] button')
+  assert.ok(trigger !== null && trigger.includes('max-width: 112px !important;'),
+    'the trigger box cap is unchanged')
+  const slot = cssBlock(phone, '[data-slot="conversation.input.model"] button [data-provider-id]')
+  assert.ok(slot !== null && slot.includes('min-width: 0;') && slot.includes('max-width: 100%;'),
+    'the slot wrapper may shrink inside the trigger')
+  const root = cssBlock(phone, '[data-slot="conversation.input.model"] button [data-provider-id] > span')
+  assert.ok(root !== null && root.includes('display: flex;') && root.includes('overflow: hidden;'),
+    'the model-label root is the shrinkable flex row')
+  const name = cssBlock(phone, '[data-slot="conversation.input.model"] button [data-provider-id] > span > span:first-child')
+  assert.ok(name !== null && name.includes('text-overflow: ellipsis;') && name.includes('min-width: 0;'),
+    'the model name is the only ellipsized part')
+  const tag = cssBlock(phone, '[data-slot="conversation.input.model"] button [data-provider-id] > span > span:last-child')
+  assert.ok(tag !== null && tag.includes('flex: none;'),
+    'the trailing 1017 Tag must not shrink away')
+})
+
 test('breakpoints: the settings sheet stacks on the phone tier', () => {
   const phone = normalizePhoneTier()
   const sheet = '[role="dialog"][aria-modal="true"]:has([data-slot="settings.header"])'
