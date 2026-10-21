@@ -11,6 +11,36 @@
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
 
+## [0.4.2] - 2026-10-21
+
+### 新增
+- **捆绑 dsh 基线升至 0.2.1-rc.2** —— 源码线、运行期与三份 fork 副本同批换锚，补丁通道与契约白名单随之重导出；官方前端带来 Git 工作树、终端、会话搜索/标题、CoT 翻译、Ralph 与 badge-skill 等官方 bundle，工作目录工具与会话级工作目录，插件市场的安装目标，Schedule/Automation 面板与可选（默认关闭）的 Developer Tools，账号通知栈，Web search 设置卡，以及 PTC code-first 的 `run_code` 契约。
+- **页面级同源请求预算（design 26 §D7）** —— 页面内的管理 REST、运行时控制与 client bundle 取数共用同一个调度器：全局在飞上限加本地预留道、bundle 子帽、只约束带 deadline 调用的排队界、租约看门狗与 fail-open/kill switch；读数只采样正排队（零等待单独计数），拒绝按原因各记一行。重启/启动等运行时 POST 也走预算 helper，不再绕过队列占住同源连接。
+- **facts 权威门（design 19 §3.5）** —— 来源的会话事实能力收敛到一个 owner：已挂载壳的运行时 producer 行在场且新鲜时，no-shell observer 的陈旧降级不再投影；新鲜降级结果与版本/服务事实照常通过。
+- **插件刷新免重载收敛（design 09 §3.7 / design 15 §6）** —— 装/启/卸 bundle 后，选中服务器的设置分节即时收敛，无需 Cmd+R：错过的图帧经订阅复位补回；重建/重装（同 id 新 rev）在 5s 窗口内自动整页重载一次且不循环（独立 3 次/10 分钟预算）；跨实例版本冲突只出事实条，手动重载仍可用。
+- **Git 工作树动作的新鲜度门与有界轮询（design 08）** —— 动作前先在 busy 租约内取新鲜事实（预算拒绝不再冒充新鲜），重试收敛到 3s/6s/12s；轮询按波次（每 30s 至多两个已连接来源、游标轮转），git RPC 以 10s 加 60s 预算排队，未调度结果落本地化拒绝并保留上一快照。
+- **未注册工作树的脏删除** —— 未注册行不再硬拦脏工作树：确认框携带 discard 专属文案，只有勾选后请求才带 `discardChanges`；干净行沿用原文案且从不带该标记。
+- **侧栏会话 id 复制与注意力水位** —— 行菜单新增复制完整会话 id（成功/失败走来源级瞬态提示）；行窗口的注意力水位按 per-workspace 单调 floor 扩展，settled 行不会把可见行挤出 DOM。
+- **账号设置分节** —— 官方账号族改为从 deferred 簇加载（构建期补丁关掉桌面 onboarding 遮罩，并同批门控 `desktopOnboardingVisible`，上游通知卡不再被永久压制），账号分节的登录/配额/启动位随之上屏；登录回调缺路由的既有缺口仍登记在 STATUS。
+- **更新确认防陈旧与通道封签（design 11 §4）** —— 确认回复携带渲染时的状态 revision，陈旧/未来回复被响亮拒绝并回推当前状态；beta 构建把通道封进打包清单（显式 `DSH_CHAMBER_UPDATE_CHANNEL` 优先、封签次之、`-beta.N` 兜底；封签与版本后缀矛盾按误构建处理并记日志）。
+- **移动端整页插件/自动化面与抽屉导航（design 17 §18）** —— 整页插件面补齐移动适配：Plugins / Web search / Automation 的页面根安全区与 56px 页头避让（浮动 toggle 保持 10–54px）、页级按钮与开关 44px 盒、Web search 字段头按 `plugin-config-*` 控件结构堆叠且输入 16px、终端 empty-state choose-shell 用 44px 伪元素命中区（视觉盒仍 20px）、composer 的 112px 模型标签截断修正；抽屉侧栏在选中 panel row（官方 `sidebar.panellist` 槽，microtask 延后到行自身的 selectPanel 之后）或官方 presented session id 变化（切换会话/新建/离开面板；流式与状态更新不触发）时自动收起。
+
+### 变更
+- **归档入口改为「查看归档内容」语义** —— 来源头条目的垃圾桶字形与「Delete archived content」提示只描述破坏性一半；现在统一为归档字形与查看文案，查看/恢复/删除都在归档管理器内，空态与降级文案按查看视角重写，「未删到任何内容」单独成文案。
+- **设置 → 插件管理改为独立分节** —— 不再把上游插件管理页塞进「内置插件」的页签：manager 挂成自己的 `settings.section`（`plugin-manager`，order 16），官方 Built-in plugins 清单节保持原样，设置面从「一个页签分节」变成「清单 + 管理」两节；页面自持页头、intro、工具栏、内页签、分组、More 与详情 chrome，containment 只重置页面根、清零 28px chrome inset、给 activation 槽占用者定尺寸，并补上分节导航字形；同批修掉泛化 head-row 规则把 More 标题右对齐、隐藏其返回图标的问题。
+
+### 修复
+- **页面预算下的归因与重试** —— gateway 探针的排队窗口从派发起算（排队期空档不再豁免派发后超时）、未调度订阅失败恢复 carrier stale 标记、observer 降级同时以运行时 producer 与来源连通性为门、re-boot 账本只在图最终应答时重置并指数退避、mux 基线保留 carrier 窗口（队列时间只上报不扣减）、deferred boot recovery 不再在丢行之后写 clean ok。
+- **连接页运行时控件走预算** —— 重启 POST 有 30s 硬顶与 65s 租约，页面拒绝与超时分别本地化；卡片状态探针/启动 POST/设置面板重启 POST 全走预算 helper；typed inventory 拒绝抵达对话框，不再谎称实例不可达。
+- **侧栏「页面繁忙」行错误本地化** —— 通过新的 zh/en 键解析页面派发拒绝，不再硬编码英文。
+- **更新下载停滞闸门释放** —— watchdog 释放单飞后渲染侧模块门不再卡到 pending 的 finally：重试真正抵达 bridge，页面不再显示误导性的 state-changed 拒绝。
+- **插件图 revision 隔离（跨实例互换证明）** —— 任何 bundle 执行或新 claim 发布前先做只读预扫描：跨实例同 id 异 rev 先证明实现可互换才复用先加载 factory——同 dsh 发布版本的 `@deepseek-ai/*` 插件直接复用；profile 插件在 boot 期读取两份被服务 bundle、剔除 `sourceMappingURL` 的 rev 自引用后逐字节比较（每 boot ≤8），一致才复用；不能证明（发布版本不同/缺失、内容不同、不可验证）仍以 `instance-version-conflict` 阻断 boot。同实例重建只掉该行、其余照常 boot 并报 `restart-required`；诊断点名两侧发布版本与可执行解法（升级该来源 dsh 运行时/对齐构建后重载）。
+- **多来源挂载不再被安装元数据误判** —— 修复「本地已挂载后所有远程 gateway 首次挂载被阻止、侧栏停在会话基线尚未就绪」：独立安装的同一发布不再因文件元数据 rev 不同被判成异构建；远程来源需把 dsh 运行时升到与桌面相同的发布版本（如 0.2.1-rc.2），profile 插件内容不一致时仍按真实差异阻止。
+- **工作树守卫读取有效会话目录** —— 守卫改读 `sessionProjections` 的可变工作目录（每次调用实时读取），切到工作树里的会话不再被漏判；所有 git spawn 关闭 `core.fsmonitor`；畸形 header cwd 保持 fail-closed。
+- **注意力水位与剪贴板对齐上游** —— 水位跳过空白占位行（与官方 WorkspaceBrowser 同判），SessionId 复制统一走 `writeClipboard`，vendor patch 夹具去掉退役 prop。
+- **控制面健康快照合并与页面 socket 有界** —— 消费者停 ack 时只保留最新完整快照、下一次 ack 后补发；页面 socket 写入有上界，失败或拒绝即退役整条 socket 及其上游（幂等、只记一行），不再无限等待客户端。
+- **插件图恢复阶段的冲突归因** —— 恢复遍记录跨实例 rev 冲突时不带原因，诊断于是回落到 `release` 并声称 dsh 发布版本不一致，即使是 profile/第三方行（还可能点名未知或两侧相同的发布）；现在复用首遍的原因规则：profile 行为 `unverified`，已发布行区分 `release` / `release-unknown`。
+
 ## [0.4.2-beta.2] - 2026-10-18
 
 ### 新增
