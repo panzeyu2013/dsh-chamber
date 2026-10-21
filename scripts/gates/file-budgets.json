@@ -3,9 +3,9 @@
   "files": [
     {
       "path": "packages/renderer/src/App.tsx",
-      "lines": 2381,
+      "lines": 2448,
       "target": 400,
-      "note": "renderer container (function-of-state mixes; stores/budgets/servers/ledger extracted); +6 = the session-row entrance animation/placement wiring (feature, review-justified raise); +16 = the per-source archived-filter projection input (pin view-options merge); +7 = this file's removal wiring (2 imports + the echoStore destructure + the TTL sweep + the source-retirement drop + the projection-pass argument); record/withdraw/reconcile live in use-bridge-subscriptions.ts, which is not on this table (feature, review-justified raise; registered in STATUS). 三条增量 +6+16+7 = +29 ⇒ 基线 2352 可复算到 2381"
+      "note": "renderer container (function-of-state mixes; stores/budgets/servers/ledger extracted); +6 = the session-row entrance animation/placement wiring (feature, review-justified raise); +16 = the per-source archived-filter projection input (pin view-options merge); +7 = this file's removal wiring (2 imports + the echoStore destructure + the TTL sweep + the source-retirement drop + the projection-pass argument); record/withdraw/reconcile live in use-bridge-subscriptions.ts, which is not on this table (feature, review-justified raise; registered in STATUS). 三条增量 +6+16+7 = +29 ⇒ 基线 2352 可复算到 2381；+56 = 弱网 v1 page-channel link selector/online 重验（design 27）；+13 = local link epoch 修正/online reverify catch（review 修正）；−2 = selector 改读 remotesStore snapshot（最终 scan，取消 status ref 镜像并净删 2 行）"
     },
     {
       "path": "packages/desktop/plugin-sync.ts",
@@ -33,15 +33,15 @@
     },
     {
       "path": "packages/desktop/gateway-provider.ts",
-      "lines": 1189,
+      "lines": 1197,
       "target": 1400,
-      "note": "gateway transport provider"
+      "note": "gateway transport provider；+1 = probe failureKind classification（design 27）；+7 = session failure/superseded/no-token failureKind（review 修正）"
     },
     {
       "path": "packages/desktop/ssh-provider.ts",
-      "lines": 1420,
+      "lines": 1431,
       "target": 1500,
-      "note": "ssh transport provider"
+      "note": "ssh transport provider；+11 = probe failureKind + ConnectTimeout/ExitOnForwardFailure（design 27）"
     },
     {
       "path": "packages/dsh-chamber-client-ui-settings-connections/src/client/ConnectionsSection.tsx",
@@ -57,9 +57,9 @@
     },
     {
       "path": "packages/desktop/transport-manager.ts",
-      "lines": 1667,
+      "lines": 1907,
       "target": 1400,
-      "note": "transport lifecycle"
+      "note": "transport lifecycle；+127 = link health projection/two-failure down/reverifyAll/bind-race 重分配（design 27）；+4 = 旧/自定义 provider 缺 failureKind 时的 classifyProbeFailure 保守回退；+4 = on-demand 探针失败后替换旧健康 timer（suspect 快速复探）；+16 = verifyUp 最后期限（LINK_POLICY.probeTimeoutMs 消费）；+66 = down grace/reverifyAll 错峰/心跳 jitter/link 投影 reset（review 修正）；+5 = HTTP status 兜底分类（review 修正）；+4 = down→healthy 才 bump linkEpoch（review 修正）；+33 = down-grace 周期探针/pending forced probe/bind 重试上限（最终扫描）；另删 READY_VERIFY 别名与无消费者诊断字段净 −19"
     },
     {
       "path": "packages/gateway/src/session-state.ts",
@@ -69,9 +69,9 @@
     },
     {
       "path": "packages/dsh-chamber-client-core/src/instance-api.ts",
-      "lines": 1327,
+      "lines": 1397,
       "target": 900,
-      "note": "per-instance unary api surface; +19 (2026-12) carries the upstream SessionProjectionHints watermark (projectionKind/projectionAsOfSeq) so cached blocks are never compared with a connected session's values；pin 在此新增置顶集字段（+）并把快照行类型移出到 instance-snapshot-rows.ts（−），净下调到 1347；随后 2026-10 页面级预算把 404 体读取抽到 instance-not-found-body.ts，并以预算接入 + 取消信号透传收口到 1327"
+      "note": "per-instance unary api surface; +19 (2026-12) carries the upstream SessionProjectionHints watermark (projectionKind/projectionAsOfSeq) so cached blocks are never compared with a connected session's values；pin 在此新增置顶集字段（+）并把快照行类型移出到 instance-snapshot-rows.ts（−），净下调到 1347；随后 2026-10 页面级预算把 404 体读取抽到 instance-not-found-body.ts，并以预算接入 + 取消信号透传收口到 1327；+22 = MutationOutcomeUnknownError + 504 after-body 分类（design 27）；+27 = mutation 50s 预算/READ_ONLY 排除 + 502 after-body（review 修正）；+14 = 按 body 大小推导 mutation 预算（review 修正）；+3 = 读接口豁免注释/命名（死代码清理）；+2 = mutation 客户端预算 30min+60s cushion（最终扫描）；+2 = 结果未知不可重试标记（UI 消费）"
     },
     {
       "path": "packages/desktop/runtime-startup-host.ts",
@@ -81,9 +81,9 @@
     },
     {
       "path": "packages/desktop/host-assembly.ts",
-      "lines": 1117,
+      "lines": 1176,
       "target": 400,
-      "note": "createHostAssembly function budget (file proxy)"
+      "note": "createHostAssembly function budget (file proxy)；+39 = registration key/health-only 边沿（含抽出的 transport-registration helper；design 27）；+4 = session refresh arm 只在 register/verified 边沿；+11 = auth-fail TOCTOU 重连 5s 防循环（review 修正）；+1 = 命名 AUTH_RECOVERY_MIN_INTERVAL_MS；+2 = 注册边沿收敛到 applyTransportRegistration（可测效果 seam）；+2 = refresh 重注册保留 link health"
     },
     {
       "path": "packages/dsh-chamber-client-core/src/aggregate-store.ts",

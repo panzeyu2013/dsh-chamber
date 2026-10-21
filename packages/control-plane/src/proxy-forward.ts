@@ -11,8 +11,8 @@
  * deps.id).
  */
 
-import { request as httpRequest } from 'node:http'
-import { request as httpsRequest } from 'node:https'
+import { Agent as HttpAgent, request as httpRequest } from 'node:http'
+import { Agent as HttpsAgent, request as httpsRequest } from 'node:https'
 import type { ClientRequest, IncomingMessage } from 'node:http'
 import type { Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
@@ -48,7 +48,7 @@ export const MAX_BUFFERED_REQUEST_BYTES = 300 * 1024 * 1024
 /** Chunked/unknown-length uploads cannot be preallocated without a second
  * full-size concat buffer. Keep that path small; large browser uploads must
  * carry Content-Length and use the single-allocation path below. */
-export const MAX_UNDECLARED_REQUEST_BODY_BYTES = 32 * 1024 * 1024
+const MAX_UNDECLARED_REQUEST_BODY_BYTES = 32 * 1024 * 1024
 export const MAX_CONCURRENT_HTTP_REQUESTS = 64
 export const MAX_CONCURRENT_WS_STREAMS = 64
 export const MAX_PENDING_WS_HANDSHAKES = 16
@@ -101,6 +101,36 @@ export const LONG_RPC_UPSTREAM_TIMEOUT_MS = 30 * 60_000
 
 /** Maximum silence between client request-body chunks. */
 export const CLIENT_BODY_IDLE_TIMEOUT_MS = 30_000
+
+/** Upstream request-body transfer budget: idle resets on socket write progress, and
+ * the total budget is size-derived (a 300MiB upload at 128KiB/s caps at 30min).
+ * These are PROXY thresholds, not stream/link tables; they stay in this owner. */
+const UPLOAD_IDLE_TIMEOUT_MS = 30_000
+/** Feed the already-buffered body in bounded slices so a slow-but-progressing
+ *  uplink keeps resetting the idle timer instead of one giant write waiting for
+ *  the whole body to drain. */
+const UPLOAD_CHUNK_BYTES = 64 * 1024
+
+/** Set on the downstream response once every accepted request byte left the
+ *  upstream writable queue. Revocation uses it to answer after-body instead of
+ *  destroying the response with a bare network error. */
+export const UPSTREAM_BODY_FINISHED = Symbol('dsh.upstreamBodyFinished')
+const UPLOAD_MIN_BYTES_PER_SEC = 128 * 1024
+const UPLOAD_MAX_BUDGET_MS = 30 * 60_000
+
+/** Explicit keep-alive pools for non-pinned upstreams. The pinned HTTPS path must
+ * stay agent:false until a per-socket pin gate is proven; these agents are only
+ * selected when there is no pin. One owner may run MAX_CONCURRENT_HTTP_REQUESTS
+ * HTTP and MAX_CONCURRENT_WS_STREAMS WS requests against the same origin, so the
+ * pool is sized to their sum (64 + 64) and idle reuse is capped separately. */
+const keepAliveHttpAgent = new HttpAgent({ keepAlive: true, maxSockets: 128, maxFreeSockets: 32, keepAliveMsecs: 15_000 })
+const keepAliveHttpsAgent = new HttpsAgent({ keepAlive: true, maxSockets: 128, maxFreeSockets: 32, keepAliveMsecs: 15_000 })
+
+/** Close pooled keep-alive sockets on control-plane stop. */
+export function destroyProxyAgents(): void {
+  keepAliveHttpAgent.destroy()
+  keepAliveHttpsAgent.destroy()
+}
 
 /**
  * WebSocket heartbeat: ping cadence for the spliced mux downstream. The host
@@ -265,10 +295,9 @@ export function requiresIdentityUpstreamEncoding(method: string | undefined, pat
   return isHtmlDocumentNavigation(method, pathname, accept) || acceptsEventStream(accept)
 }
 
-export const STATUS_TEXT: Record<number, string> = {
+const STATUS_TEXT: Record<number, string> = {
+  400: 'Bad Request',
   404: 'Not Found',
-  408: 'Request Timeout',
-  413: 'Payload Too Large',
   502: 'Bad Gateway',
   503: 'Service Unavailable',
   504: 'Gateway Timeout',
@@ -381,6 +410,12 @@ export interface ProxyForwardDeps {
   httpRequest?: HttpRequestFactory
   /** Upstream timeout in ms (default UPSTREAM_TIMEOUT_MS). */
   upstreamTimeoutMs: number
+  /** Request-body transfer idle budget (default UPLOAD_IDLE_TIMEOUT_MS). */
+  uploadIdleTimeoutMs?: number
+  /** Minimum throughput used to derive the total upload budget (default 128KiB/s). */
+  uploadMinBytesPerSec?: number
+  /** Hard cap on the total upload budget (default 30min). */
+  uploadMaxBudgetMs?: number
   /** Upstream idle window for long-RPC paths. */
   longRpcUpstreamTimeoutMs?: number
   /** Long-RPC paths selecting the exemption (default LONG_RPC_PATHS; `[]` disables it). */
@@ -516,8 +551,10 @@ function waitForDrain(res: ProxyResponse): Promise<void> {
  * live only until node:http accepts them and honours writable backpressure
  * instead of queueing the whole body.
  */
-function bodySource(chunks: Buffer[]): { send: (upstream: ClientRequest) => void; stop: (upstream: ClientRequest) => void; size: number } {
-  const size = chunks.reduce((total, chunk) => total + chunk.length, 0)
+function bodySource(
+  chunks: Buffer[],
+  onProgress?: () => void,
+): { send: (upstream: ClientRequest) => void; stop: (upstream: ClientRequest) => void } {
   let index = 0
   let stopped = false
   let drainListener: (() => void) | null = null
@@ -527,6 +564,7 @@ function bodySource(chunks: Buffer[]): { send: (upstream: ClientRequest) => void
     while (index < chunks.length) {
       const accepted = upstream.write(chunks[index])
       index += 1
+      onProgress?.()
       if (!accepted) {
         drainListener = () => writeAvailable(upstream)
         upstream.once('drain', drainListener)
@@ -534,10 +572,10 @@ function bodySource(chunks: Buffer[]): { send: (upstream: ClientRequest) => void
       }
     }
     chunks.length = 0
+    onProgress?.()
     upstream.end()
   }
   return {
-    size,
     send(upstream: ClientRequest) {
       writeAvailable(upstream)
     },
@@ -583,9 +621,39 @@ function mergeVary(headers: Record<string, string | string[]>, corsHeaders: Reco
   delete corsHeaders.vary
 }
 
-/** Write a JSON error in the unified shape ({error, code}). */
-export function writeError(res: ProxyResponse, status: number, code: string, message: string, logger: Logger): void {
-  const body = JSON.stringify({ error: message, code })
+/** The shared after-body classification: only a request whose body fully left the
+ *  writable queue may have been applied by the host. */
+function writeUpstreamFailure(
+  res: ProxyResponse,
+  status: number,
+  code: string,
+  baseMessage: string,
+  logger: Logger,
+  bodyFinished: boolean,
+): void {
+  writeError(
+    res,
+    status,
+    code,
+    bodyFinished
+      ? `${baseMessage} after the request body was sent; the host may have applied it`
+      : baseMessage,
+    logger,
+    bodyFinished ? { phase: 'after-body' } : undefined,
+  )
+}
+
+/** Write a JSON error in the unified shape ({error, code}). `details` is additive
+ *  and used for the mutation outcome (after-body timeout = MAYBE APPLIED). */
+export function writeError(
+  res: ProxyResponse,
+  status: number,
+  code: string,
+  message: string,
+  logger: Logger,
+  details?: Record<string, unknown>,
+): void {
+  const body = JSON.stringify(details === undefined ? { error: message, code } : { error: message, code, details })
   try {
     res.writeHead(status, {
       'content-type': 'application/json',
@@ -620,7 +688,7 @@ export function rejectUpgrade(socket: ProxySocket, status: number, code: string,
  * after headers) "body idles" for non-SSE responses. SSE/WebSocket streams never
  * re-arm, so their lifetime is unbounded; the returned clear is idempotent.
  */
-export function armUpstreamTimeout(deps: ProxyForwardDeps, counters: ProxyForwardCounters, logger: Logger, onTimeout: () => void): () => void {
+function armUpstreamTimeout(deps: ProxyForwardDeps, counters: ProxyForwardCounters, logger: Logger, onTimeout: () => void): () => void {
   const { id, logPrefix, upstreamTimeoutMs } = deps
   let handle: ReturnType<typeof setTimeout> | null = null
   let fired = false
@@ -766,6 +834,8 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
   let responseEnded = false
   let clearTimeoutGuards = (): void => {}
   let stopBodySource = (): void => releaseBodyReservation()
+  /** True once all buffered request bytes left the upstream writable queue. */
+  let upstreamBodyFinished = false
   const cleanupClientListeners = (): void => {
     req.removeListener('aborted', onClientClose)
     res.removeListener('close', onClientClose)
@@ -787,8 +857,11 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     stopBodySource()
     controller.abort()
     releaseRequest()
-    if (!res.headersSent) writeError(res, 504, 'upstream_timeout', 'upstream request timed out', logger)
-    else res.destroy()
+    if (!res.headersSent) {
+      // After the request body has fully left our writable queue, the host may
+      // already have applied a mutation even though its response never arrived.
+      writeUpstreamFailure(res, 504, 'upstream_timeout', 'upstream request timed out', logger, upstreamBodyFinished)
+    } else res.destroy()
   }
   // Headers must arrive within upstreamTimeoutMs; a non-SSE body must not idle
   // longer (re-armed after headers). SSE/WS never re-arm. Long-RPC paths get the
@@ -806,12 +879,73 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
       timeoutAbort()
     }
     : timeoutAbort
-  let clearUpstreamTimeout = armUpstreamTimeout(timeoutDeps, counters, logger, upstreamTimeout)
-  clearTimeoutGuards = (): void => {
-    clearUpstreamTimeout()
-    clearUpstreamTimeout = () => {}
+  const requestHasBody = body !== null
+  const uploadBudgetMs = body === null
+    ? 0
+    : Math.min(
+      deps.uploadMaxBudgetMs ?? UPLOAD_MAX_BUDGET_MS,
+      Math.max(60_000, Math.ceil((body.length / Math.max(1, deps.uploadMinBytesPerSec ?? UPLOAD_MIN_BYTES_PER_SEC)) * 1_000)),
+    )
+  let timersSettled = false
+  let headersArmed = false
+  let clearUploadTimer = (): void => {}
+  let clearUpstreamTimeout = (): void => {}
+  const armHeadersTimeout = (): void => {
+    if (timersSettled || headersArmed) return
+    headersArmed = true
+    clearUploadTimer()
+    clearUpstreamTimeout = armUpstreamTimeout(timeoutDeps, counters, logger, upstreamTimeout)
   }
-  const source = body === null ? null : bodySource([body])
+  clearTimeoutGuards = (): void => {
+    timersSettled = true
+    clearUploadTimer()
+    clearUpstreamTimeout()
+    clearUpstreamTimeout = (): void => {}
+  }
+  // A downstream response can finish via an error path (e.g. transport revoke)
+  // without an upstream response: do not leave the upstream deadline armed.
+  res.once('finish', () => clearTimeoutGuards())
+  let touchUpload = (): void => {}
+  if (requestHasBody) {
+    // The request body is already buffered; the remaining transfer is the upstream
+    // socket flush. Give it a size-derived total budget instead of charging the
+    // header timeout for a slow uplink, and reset an idle timer on write progress.
+    const uploadTimer = setTimeout(() => {
+      counters.failures += 1
+      logger.log(`${deps.logPrefix}: upstream ${deps.id} upload budget exhausted (${uploadBudgetMs}ms)`)
+      timeoutAbort()
+    }, uploadBudgetMs)
+    uploadTimer.unref?.()
+    const uploadIdleMs = deps.uploadIdleTimeoutMs ?? UPLOAD_IDLE_TIMEOUT_MS
+    let uploadIdleTimer: ReturnType<typeof setTimeout> | null = null
+    const armUploadIdle = (): void => {
+      if (timersSettled || headersArmed) return
+      if (uploadIdleTimer !== null) clearTimeout(uploadIdleTimer)
+      uploadIdleTimer = setTimeout(() => {
+        counters.failures += 1
+        logger.log(`${deps.logPrefix}: upstream ${deps.id} upload idle for ${uploadIdleMs}ms`)
+        timeoutAbort()
+      }, uploadIdleMs)
+      uploadIdleTimer.unref?.()
+    }
+    touchUpload = armUploadIdle
+    armUploadIdle()
+    clearUploadTimer = (): void => {
+      clearTimeout(uploadTimer)
+      if (uploadIdleTimer !== null) clearTimeout(uploadIdleTimer)
+      uploadIdleTimer = null
+      clearUploadTimer = (): void => {}
+    }
+  } else {
+    armHeadersTimeout()
+  }
+  const sourceChunks: Buffer[] = []
+  if (body !== null) {
+    for (let offset = 0; offset < body.length; offset += UPLOAD_CHUNK_BYTES) {
+      sourceChunks.push(body.subarray(offset, Math.min(body.length, offset + UPLOAD_CHUNK_BYTES)))
+    }
+  }
+  const source = body === null ? null : bodySource(sourceChunks, touchUpload)
   // A pinned gateway target opens a FRESH https connection with the pin as its
   // trust anchor (rejectUnauthorized: false — the internal-CA case; the pin alone
   // decides trust). http targets never pin (registerTransport refuses http+pin).
@@ -822,7 +956,9 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
       method,
       headers,
       signal: controller.signal,
-      ...(tlsSpkiPin === undefined ? {} : { rejectUnauthorized: false, agent: false }),
+      ...(tlsSpkiPin === undefined
+        ? { agent: target.protocol === 'https:' ? keepAliveHttpsAgent : keepAliveHttpAgent }
+        : { rejectUnauthorized: false, agent: false }),
     })
   } catch (error) {
     cleanupClientListeners()
@@ -836,8 +972,20 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
   }
   // 'finish' means all accepted request bytes have left ClientRequest's writable
   // queue; until then the body stays charged against the process budget.
-  upstream.once('finish', stopBodySource)
-  upstream.once('close', stopBodySource)
+  upstream.once('finish', () => {
+    upstreamBodyFinished = true
+    Object.defineProperty(res, UPSTREAM_BODY_FINISHED, { value: true, configurable: true })
+    stopBodySource()
+    // All buffered request bytes left the writable queue: the upload budget is
+    // done, and only now may the upstream header/idle window start.
+    armHeadersTimeout()
+  })
+  upstream.once('close', () => {
+    stopBodySource()
+    // A closed upstream must not leave an upload/header timer armed to fire into
+    // an already-finished response.
+    clearTimeoutGuards()
+  })
   upstream.on('error', upstreamError => {
     stopBodySource()
     clearTimeoutGuards()
@@ -848,13 +996,18 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     counters.failures += 1
     logger.log(`${deps.logPrefix}: upstream ${deps.id} request failed: ${String(upstreamError)}`)
     if (!res.headersSent) {
-      writeError(res, 502, 'upstream_failed', 'upstream request failed', logger)
+      writeUpstreamFailure(res, 502, 'upstream_failed', 'upstream request failed', logger, upstreamBodyFinished)
     } else {
       res.destroy()
     }
   })
   upstream.on('response', upstreamRes => {
     clearTimeoutGuards()
+    // An early response (auth/limit middleware, POST-SSE) ends the request body's
+    // usefulness. Stop feeding it and release the byte reservation: the upload
+    // timers were just cleared, so an SSE response would otherwise leave the
+    // source and its full-body reservation alive until the client disconnects.
+    if (!upstreamBodyFinished) stopBodySource()
     const contentType = String(upstreamRes.headers['content-type'] ?? '')
     const isSse = contentType.startsWith('text/event-stream')
     const declaredLength = upstreamRes.headers['content-length']
@@ -1101,7 +1254,9 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     method: 'GET',
     headers,
     signal: controller.signal,
-    ...(tlsSpkiPin === undefined ? {} : { rejectUnauthorized: false, agent: false }),
+    ...(tlsSpkiPin === undefined
+      ? { agent: target.protocol === 'https:' ? keepAliveHttpsAgent : keepAliveHttpAgent }
+      : { rejectUnauthorized: false, agent: false }),
   })
   let requestDispatched = false
   const dispatchRequest = (): void => {

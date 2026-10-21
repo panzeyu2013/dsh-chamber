@@ -58,6 +58,14 @@ const PAGE_CHANNEL_STABLE_RESET_MS = 30_000
 /** 每次退避的抖动上限（占基数比例）：多个页面/窗口不得在同一毫秒齐步重连。 */
 const PAGE_CHANNEL_JITTER_RATIO = 0.25
 
+/** Link recovery releases parked subscriptions in small waves instead of one
+ *  same-tick stampede (first is immediate, each later one waits one slot). */
+const PAGE_CHANNEL_LINK_REJOIN_STAGGER_MS = 120
+const PAGE_CHANNEL_LINK_REJOIN_MAX_STAGGER_SLOTS = 16
+/** If a link projection silently disappears, a parked subscription must not wait
+ *  forever for a link event: force one probe subscription at this cadence. */
+const PAGE_CHANNEL_LINK_PARK_FALLBACK_MS = 30_000
+
 /**
  * 建连期限：socket 从构造到 open 的等待上限。这是本模块**唯一**的无界等待的收口：
  * 没有它，「TCP 活着但 upgrade 响应永不到达」的连接会让 subscribe 永远发不出去，
@@ -97,6 +105,35 @@ export interface PageChannelSubscription {
   close(): void
 }
 
+/**
+ * Page-level link readiness, injected by the renderer from the desktop status
+ * projection. The page channel is a loopback socket; its subscriptions can only
+ * succeed while the SOURCE link is ready. Without this seam, an outage burns the
+ * 3/5/10/20/30s subscription ladder and then makes recovery wait for the next rung.
+ */
+export interface PageChannelLink {
+  ready(sourceId: string): boolean
+  epoch(sourceId: string): number
+  subscribe(listener: (sourceId: string) => void): () => void
+}
+
+let channelLink: PageChannelLink | undefined
+let detachChannelLink: (() => void) | undefined
+
+/** Install (or clear) the source-link selector and immediately reconcile waits. */
+export function configurePageChannelLink(link: PageChannelLink | null | undefined): void {
+  detachChannelLink?.()
+  detachChannelLink = undefined
+  channelLink = link ?? undefined
+  if (channelLink === undefined) return
+  detachChannelLink = channelLink.subscribe(sourceId => reconcileLink(sourceId))
+  for (const record of subscriptions.values()) {
+    const sourceId = record.options.instanceId
+    if (sourceId !== undefined) reconcileLink(sourceId)
+  }
+}
+
+
 interface ChannelDeps {
   readonly openSocket?: (url: string) => PageChannelSocket
   readonly now: () => number
@@ -114,6 +151,7 @@ interface SubscriptionRecord {
   readonly options: PageChannelSubscriptionOptions
   retryIndex: number
   retryTimer: unknown
+  parkTimer: unknown
   pendingAck: number
   ackScheduled: boolean
   /** 本次通道连接里是否已经发过 subscribe。 */
@@ -122,6 +160,10 @@ interface SubscriptionRecord {
   readyAt: number | undefined
   /** 本轮不可用是否已经通知过（宿主机永久没有 WebSocket/origin 时不得反复打扰消费方）。 */
   notifiedUnavailable: boolean
+  /** Waiting for the source link to become ready; no subscription ladder runs. */
+  waitingForLink: boolean
+  /** Last link epoch observed for this subscription. */
+  linkEpochSeen: number
   /** 非法组合（非 health 族缺 instanceId）是否已经通知过。 */
   notifiedInvalid: boolean
   closed: boolean
@@ -231,6 +273,24 @@ function noteSubscriptionFailure(record: SubscriptionRecord): void {
   record.subscribed = false
 }
 
+function clearParkFallback(record: SubscriptionRecord): void {
+  if (record.parkTimer === undefined) return
+  deps.clearTimeout(record.parkTimer)
+  record.parkTimer = undefined
+}
+
+/** A parked subscription must not depend on a future projection edge: force one
+ *  probe subscription after a long bound; an unavailable answer re-parks it. */
+function armParkFallback(record: SubscriptionRecord): void {
+  if (record.parkTimer !== undefined) return
+  record.parkTimer = deps.setTimeout(() => {
+    record.parkTimer = undefined
+    if (record.closed || !record.waitingForLink) return
+    record.waitingForLink = false
+    if (socketOpen) record.subscribed = subscribeFrameOf(record)
+  }, PAGE_CHANNEL_LINK_PARK_FALLBACK_MS)
+}
+
 function scheduleSubReconnect(record: SubscriptionRecord): void {
   if (record.closed) return
   if (record.retryTimer !== undefined) return
@@ -267,6 +327,71 @@ function subscribeFrameOf(record: SubscriptionRecord): boolean {
   return sendFrame(pageChannelSubscribeFrame({ type: 'subscribe', id: record.id, family, instanceId }))
 }
 
+/** One link observation: reset the ladder on a new epoch, and release parked subs. */
+function reconcileLink(sourceId: string): void {
+  const link = channelLink
+  if (link === undefined) return
+  const ready = link.ready(sourceId)
+  const epoch = link.epoch(sourceId)
+  let released = 0
+  for (const record of subscriptions.values()) {
+    if (record.closed || record.options.instanceId !== sourceId) continue
+    if (record.linkEpochSeen !== epoch) {
+      record.linkEpochSeen = epoch
+      // A link epoch is the only automatic reset signal; ordinary upstream ready
+      // keeps the 30s stability window. A failed-but-unparked subscription may be
+      // sitting on the 3/5/10/20/30s ladder: release it now (the ready branch below
+      // re-subscribes with the same stagger), instead of waiting out the old rung.
+      record.retryIndex = 0
+      if (!record.subscribed && record.retryTimer !== undefined) {
+        deps.clearTimeout(record.retryTimer)
+        record.retryTimer = undefined
+        record.waitingForLink = true
+      }
+    }
+    if (!ready) {
+      // A link that went down between retry rungs must not let the old ladder
+      // fire into the control plane. Park the pending retry; the next ready edge
+      // releases it (with its own stagger slot).
+      if (record.retryTimer !== undefined) {
+        deps.clearTimeout(record.retryTimer)
+        record.retryTimer = undefined
+        record.waitingForLink = true
+      }
+      if (record.waitingForLink) armParkFallback(record)
+      continue
+    }
+    if (!record.waitingForLink) continue
+    clearParkFallback(record)
+    record.waitingForLink = false
+    if (record.retryTimer !== undefined) {
+      deps.clearTimeout(record.retryTimer)
+      record.retryTimer = undefined
+    }
+    if (!socketOpen) continue
+    // Wrap instead of clamping: clamping made every subscription after the 17th
+    // share the last slot (a same-tick burst again). A wrapped wave is bounded and
+    // keeps each later batch spread over the same 16 slots.
+    const slot = released % (PAGE_CHANNEL_LINK_REJOIN_MAX_STAGGER_SLOTS + 1)
+    released += 1
+    if (slot === 0) {
+      record.subscribed = subscribeFrameOf(record)
+      continue
+    }
+    record.retryTimer = deps.setTimeout(() => {
+      record.retryTimer = undefined
+      if (record.closed || !socketOpen) return
+      // The link flapped while this slot was waiting: park again; the next ready
+      // edge (with a new epoch) releases it.
+      if (link.ready(sourceId) !== true) {
+        record.waitingForLink = true
+        return
+      }
+      record.subscribed = subscribeFrameOf(record)
+    }, slot * PAGE_CHANNEL_LINK_REJOIN_STAGGER_MS)
+  }
+}
+
 function handleMessage(text: string): void {
   let message
   try {
@@ -279,6 +404,12 @@ function handleMessage(text: string): void {
   if (record === undefined) return
   if (message.type === 'ready') {
     record.readyAt = deps.now()
+    clearParkFallback(record)
+    record.waitingForLink = false
+    const sourceId = record.options.instanceId
+    if (sourceId !== undefined && channelLink !== undefined) {
+      record.linkEpochSeen = channelLink.epoch(sourceId)
+    }
     try {
       record.options.onOpen?.()
     } catch (error) {
@@ -298,9 +429,24 @@ function handleMessage(text: string): void {
   if (message.type === 'error') {
     noteSubscriptionFailure(record)
     notifyError(record, message.code, message.message)
+    if (message.code === 'capability_not_found') return
+    if (message.code === 'instance_unavailable' && channelLink !== undefined) {
+      const sourceId = record.options.instanceId
+      if (sourceId !== undefined && !channelLink.ready(sourceId)) {
+        // The source link is down: park instead of burning the subscription ladder.
+        // The link epoch wakes this record immediately after transport recovery.
+        record.waitingForLink = true
+        if (record.retryTimer !== undefined) {
+          deps.clearTimeout(record.retryTimer)
+          record.retryTimer = undefined
+        }
+        armParkFallback(record)
+        return
+      }
+    }
     // capability_not_found 是永久性错配（例如对 non-gateway 目标订阅 sessionFacts）：
     // 重试只会把同一件不可能的事重复 30s 一次；其余错误码都按瞬态重试。
-    if (message.code !== 'capability_not_found') scheduleSubReconnect(record)
+    scheduleSubReconnect(record)
     return
   }
   noteSubscriptionFailure(record)
@@ -315,14 +461,8 @@ function handleMessage(text: string): void {
  * （每轮结果相同，反复 onError 只会在消费方那里变成噪声）。
  */
 // 防御性标志：当前流程里永久路径（无 WebSocket/origin）**不排阶梯**，所以它的读取
-// （阶梯轮次是否重置 notifiedUnavailable）只在「先判定永久、之后又重新获得宿主能力、
-// 且那条 socket 在 open 前就关闭」的绕行路径上可达；正常路径上永久属性天然只通知一次。
-// 它不承担承重职责，也不该被当成「永久属性不重播」的证明——那个性质由「不排阶梯」保证。
-let unavailablePermanent = false
-
-function failUnavailable(reason: string, permanent = false): void {
+function failUnavailable(reason: string): void {
   deps.warn(reason + '，页面通道不可用')
-  unavailablePermanent = permanent
   // 同样的快照纪律：通知虽然走微任务，但迭代期间订阅表仍可能被别处改动。
   for (const record of [...subscriptions.values()]) {
     if (record.notifiedUnavailable) continue
@@ -345,19 +485,19 @@ function scheduleSocketReconnect(reason: string): void {
     // 可恢复的失败（构造器抛错：CSP/瞬时故障）每轮重新告知一次——消费方的 unary 兜底
     // 借此保持新鲜，否则页面健康状态会停在旧值到永远。宿主的永久属性（没有 WebSocket/
     // origin）不重播：那种失败每轮的结果都一样，只会在消费方那里变成纯噪声。
-    if (!unavailablePermanent) for (const record of subscriptions.values()) record.notifiedUnavailable = false
+    for (const record of subscriptions.values()) record.notifiedUnavailable = false
     ensureSocket()
   }, delay)
 }
 
 function openSocketNow(): void {
   if (deps.openSocket === undefined) {
-    failUnavailable('本宿主没有 WebSocket', true)
+    failUnavailable('本宿主没有 WebSocket')
     return
   }
   const url = deps.url()
   if (url === null) {
-    failUnavailable('本宿主没有页面 origin（无 location）', true)
+    failUnavailable('本宿主没有页面 origin（无 location）')
     return
   }
   generation += 1
@@ -402,12 +542,15 @@ function openSocketNow(): void {
     }
     socketOpen = true
     socketOpenedAt = deps.now()
-    unavailablePermanent = false
     for (const record of [...subscriptions.values()]) {
       record.notifiedUnavailable = false
       if (record.retryTimer !== undefined) {
         deps.clearTimeout(record.retryTimer)
         record.retryTimer = undefined
+      }
+      if (record.waitingForLink) {
+        record.subscribed = false
+        continue
       }
       record.subscribed = subscribeFrameOf(record)
     }
@@ -486,17 +629,31 @@ export function subscribePageChannel(options: PageChannelSubscriptionOptions): P
     options,
     retryIndex: 0,
     retryTimer: undefined,
+    parkTimer: undefined,
     pendingAck: 0,
     ackScheduled: false,
     subscribed: false,
     readyAt: undefined,
     notifiedUnavailable: false,
     notifiedInvalid: false,
+    waitingForLink: false,
+    linkEpochSeen: -1,
     closed: false,
+  }
+  const sourceId = options.instanceId
+  if (sourceId !== undefined && channelLink !== undefined) {
+    record.linkEpochSeen = channelLink.epoch(sourceId)
+    if (!channelLink.ready(sourceId)) {
+      // Do not spend one round-trip proving what the link selector already knows:
+      // park before the first subscribe frame and let the ready edge release it.
+      record.waitingForLink = true
+      armParkFallback(record)
+      notifyErrorDeferred(record, 'instance_unavailable', 'the source link is not ready')
+    }
   }
   subscriptions.set(id, record)
   ensureSocket()
-  if (socketOpen) record.subscribed = subscribeFrameOf(record)
+  if (socketOpen && !record.waitingForLink) record.subscribed = subscribeFrameOf(record)
   return {
     close: () => {
       if (record.closed) return
@@ -506,6 +663,7 @@ export function subscribePageChannel(options: PageChannelSubscriptionOptions): P
         deps.clearTimeout(record.retryTimer)
         record.retryTimer = undefined
       }
+      clearParkFallback(record)
       if (record.subscribed) sendFrame(pageChannelUnsubscribeFrame(id))
       if (subscriptions.size === 0) {
         // 最后一条关闭后不得再有"无人认领"的 socket：待命的重连定时器也必须撤掉，

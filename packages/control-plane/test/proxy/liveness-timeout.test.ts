@@ -7,9 +7,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { createInstanceProxy, getProcessBufferedRequestBytes } from '../../src/instance-proxy.ts'
+import { createInstanceProxy } from '../../src/instance-proxy.ts'
 import type { ProxyRequest } from '../../src/instance-proxy.ts'
-import { matchesLongRpcPath } from '../../src/proxy-forward.ts'
+import { getProcessBufferedRequestBytes, matchesLongRpcPath } from '../../src/proxy-forward.ts'
 import { startWsHeartbeat } from '../../src/ws-heartbeat.ts'
 import { DEFAULT_DSH_START_PORT } from '../../src/spawn-dsh.ts'
 import { pongFrame } from '../support/utils.ts'
@@ -193,6 +193,82 @@ test('http: request-body bytes stay reserved while upstream write is backpressur
   assert.equal(response.status, 200)
   assert.equal(proxy.getDiagnostics().bufferedRequestBytes, 0)
   assert.equal(getProcessBufferedRequestBytes(), 0)
+})
+
+test('http: a stalled upstream body flush hits the upload budget, not the header timeout', async () => {
+  const observed: { signal: AbortSignal | null } = { signal: null }
+  const fn: any = (_url: URL, options: { signal?: AbortSignal }) => {
+    observed.signal = options.signal ?? null
+    const req = new EventEmitter() as any
+    // Backpressure forever: the body never drains, so the transfer cannot finish.
+    req.write = () => false
+    req.end = () => {}
+    req.destroy = () => req.emit('close')
+    if (options.signal !== undefined) {
+      options.signal.addEventListener('abort', () => req.emit('error', new Error('Aborted')), { once: true })
+    }
+    return req
+  }
+  const proxy = proxyFor(fn, {
+    uploadMaxBudgetMs: 40,
+    uploadIdleTimeoutMs: 1_000,
+    uploadMinBytesPerSec: 1,
+    upstreamTimeoutMs: 5_000,
+    getLocalDshPort: () => 17510,
+  })
+  const response = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/upload', 'POST', { 'content-length': '5' }, 'hello'), response)
+  assert.equal(response.status, null)
+  await sleep(90)
+  assert.equal(response.status, 504)
+  assert.ok(response.body.includes('upstream_timeout'))
+  assert.equal(observed.signal?.aborted, true)
+  assert.equal(proxy.getDiagnostics().bufferedRequestBytes, 0)
+})
+
+test('http: a buffered body is fed in bounded slices so progress can reset the upload idle timer', async () => {
+  let writes = 0
+  const fn: any = () => {
+    const req = new EventEmitter() as any
+    req.write = () => { writes += 1; return true }
+    req.end = () => {
+      req.emit('finish')
+      const upstream = new EventEmitter() as any
+      upstream.statusCode = 200
+      upstream.headers = { 'content-type': 'application/json' }
+      upstream.destroy = () => upstream.emit('close')
+      req.emit('response', upstream)
+      upstream.emit('data', Buffer.from('{}'))
+      upstream.emit('end')
+    }
+    return req
+  }
+  const proxy = proxyFor(fn, { getLocalDshPort: () => 17510 })
+  const response = fakeResponse()
+  const body = 'x'.repeat(200_000)
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/upload', 'POST', { 'content-length': String(body.length) }, body), response)
+  assert.equal(response.status, 200)
+  assert.ok(writes > 1, 'one giant write would make the idle timer unreachable on a slow uplink')
+})
+
+test('http: an upstream reset after the body finished reports after-body, not a plain retryable failure', async () => {
+  const fn: any = () => {
+    const req = new EventEmitter() as any
+    req.write = () => true
+    req.end = () => {
+      req.emit('finish')
+      queueMicrotask(() => req.emit('error', new Error('socket reset after write')))
+    }
+    return req
+  }
+  const proxy = proxyFor(fn, { getLocalDshPort: () => 17510 })
+  const response = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/upload', 'POST', { 'content-length': '5' }, 'hello'), response)
+  await sleep(20)
+  assert.equal(response.status, 502)
+  const body = JSON.parse(response.body) as { code: string; details?: { phase?: string } }
+  assert.equal(body.code, 'upstream_failed')
+  assert.equal(body.details?.phase, 'after-body')
 })
 
 test('http: non-SSE timeout is idle-based and re-arms on every body chunk', async () => {

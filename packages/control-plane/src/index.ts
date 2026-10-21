@@ -29,6 +29,7 @@ import { runReaper, type ReaperEntryOutcome } from './reaper.ts'
 import {
   createInstanceProxy,
   type InstanceProxy,
+  type InstanceTransportHealth,
   type InstanceTransportRegistrationOptions,
 } from './instance-proxy.ts'
 import { createPageChannel } from './page-channel.ts'
@@ -254,6 +255,7 @@ export interface PlaneHandle {
   /** The target kind lives in connectionId; `opts.transport` carries the
    *  independent SSH/HTTP dimension. TLS pin and Host authority stay gateway-only. */
   registerInstanceTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>, opts?: InstanceTransportRegistrationOptions): void
+  setInstanceTransportHealth(connectionId: string, health: InstanceTransportHealth): void
   unregisterInstanceTransport(connectionId: string): void
   /**
    * Pre-start the local instance (desktop pre-spawn): idempotent — a
@@ -1127,6 +1129,14 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
      */
     registerInstanceTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>, opts?: InstanceTransportRegistrationOptions) {
       instanceProxy.registerTransport(connectionId, baseUrl, extraHeaders, opts)
+    },
+
+    /** Ready-state link health update; never replaces the transport. Down fails
+     *  NEW HTTP/WS at the proxy and the existing page-channel subscriptions here
+     *  (their upstream may otherwise sit half-open with no data to fail on). */
+    setInstanceTransportHealth(connectionId: string, health: InstanceTransportHealth) {
+      const changed = instanceProxy.setTransportHealth(connectionId, health)
+      if (changed && health === 'down') pageChannel.revokeConnection(connectionId, 'the instance link is down')
     },
 
     /** Unregister a remote instance transport (tunnel torn down). */

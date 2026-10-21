@@ -159,6 +159,10 @@ test('same-id re-add starts with fresh status, service projection, and logs', as
     serviceActive: null,
     remoteDshHome: null,
     logSummary: '',
+    link: {
+      state: 'healthy',
+      linkEpoch: 0,
+    },
   })
   assert.deepEqual(manager.logs('s2'), [])
 })
@@ -231,13 +235,19 @@ test('connecting → ready on tunnel-up, with the documented ssh args and a loca
   assert.equal(connecting.phase, 'connecting')
   await waitFor(() => spawnCalls.length === 1)
   assert.equal(spawnCalls[0].command, 'ssh')
-  assert.deepEqual(spawnCalls[0].args.slice(0, 5), ['-N', '-o', `ServerAliveInterval=${SERVER_ALIVE_INTERVAL_SECONDS}`, '-o', `ServerAliveCountMax=${SERVER_ALIVE_COUNT_MAX}`])
-  assert.equal(spawnCalls[0].args[5], '-L')
-  const forward = spawnCalls[0].args[6]
+  assert.deepEqual(spawnCalls[0].args.slice(0, 9), [
+    '-N',
+    '-o', 'ConnectTimeout=15',
+    '-o', 'ExitOnForwardFailure=yes',
+    '-o', `ServerAliveInterval=${SERVER_ALIVE_INTERVAL_SECONDS}`,
+    '-o', `ServerAliveCountMax=${SERVER_ALIVE_COUNT_MAX}`,
+  ])
+  assert.equal(spawnCalls[0].args[9], '-L')
+  const forward = spawnCalls[0].args[10]
   assert.match(forward, /^\d+:127\.0\.0\.1:2222$/)
   const localPort = Number(forward.split(':')[0])
   assert.ok(Number.isInteger(localPort) && localPort >= 1 && localPort <= 65535)
-  assert.equal(spawnCalls[0].args[7], 'alice@home.example.com')
+  assert.equal(spawnCalls[0].args[11], 'alice@home.example.com')
   setProbe(true)
   await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'ready')
   const status = manager.status('s1')! as StatusWithNoUrlLeak
@@ -261,8 +271,17 @@ test('a configured sshPort rides the tunnel and the systemd exec as `-p <port>`'
   manager.connect('s3')
   await waitFor(() => manager.status('s3')!.phase === 'ready')
   assert.equal(spawnCalls.length, 1)
-  const forward = spawnCalls[0].args[8]
-  assert.deepEqual(spawnCalls[0].args, ['-N', '-o', `ServerAliveInterval=${SERVER_ALIVE_INTERVAL_SECONDS}`, '-o', `ServerAliveCountMax=${SERVER_ALIVE_COUNT_MAX}`, '-p', '2202', '-L', forward, 'carol@box.example.com'])
+  const forward = spawnCalls[0].args[12]
+  assert.deepEqual(spawnCalls[0].args, [
+    '-N',
+    '-o', 'ConnectTimeout=15',
+    '-o', 'ExitOnForwardFailure=yes',
+    '-o', `ServerAliveInterval=${SERVER_ALIVE_INTERVAL_SECONDS}`,
+    '-o', `ServerAliveCountMax=${SERVER_ALIVE_COUNT_MAX}`,
+    '-p', '2202',
+    '-L', forward,
+    'carol@box.example.com',
+  ])
   assert.match(forward, /^\d+:127\.0\.0\.1:3080$/)
   assert.equal(manager.status('s3')!.sshPort, 2202)
   const resultPromise = manager.exec('s3', 'start')

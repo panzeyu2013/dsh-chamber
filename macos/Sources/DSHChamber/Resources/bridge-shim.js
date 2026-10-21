@@ -470,7 +470,7 @@
     connect: function (id) { return invoke('desktop_ssh_connect', { id: id }) },
     disconnect: function (id) { return invoke('desktop_ssh_disconnect', { id: id }) },
     status: function (id) { return invoke('desktop_ssh_status', { id: id }) },
-    reverify: function (id) { return invoke('desktop_ssh_reverify', { id: id }) },
+    reverify: function (id, reason) { return invoke('desktop_ssh_reverify', { id: id, reason: reason }) },
     logs: function (id) { return invoke('desktop_ssh_logs', { id: id }) },
     logs_clear: function (id) { return invoke('desktop_ssh_logs_clear', { id: id }) },
     start_service: function (id) { return invoke('desktop_ssh_start_service', { id: id }) },

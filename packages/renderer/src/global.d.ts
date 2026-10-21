@@ -165,6 +165,11 @@ export interface SshStatusProjection {
    */
   serviceActive: boolean | null
   logSummary: string
+  /** Ready-state link health (optional for old shims; absent = healthy). */
+  link?: {
+    state: 'healthy' | 'suspect' | 'down'
+    linkEpoch: number
+  }
 }
 
 /** One ring-buffer log line. */
@@ -332,7 +337,7 @@ export interface DesktopSshSurface {
   /** On-demand ready-state re-verification (user activation of a source/
    *  session): main runs one identity probe for a READY transport and
    *  returns the fresh status projection. */
-  reverify(id: string): Promise<SshStatusProjection | null>
+  reverify(id: string, reason?: 'user' | 'resume' | 'online'): Promise<SshStatusProjection | null>
   logs(id: string): Promise<SshLogEntry[]>
   logs_clear(id: string): Promise<boolean>
   start_service(id: string): Promise<SshExecIpcResult>

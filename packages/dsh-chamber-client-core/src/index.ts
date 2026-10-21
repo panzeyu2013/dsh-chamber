@@ -7,7 +7,7 @@
 export type * from './instance-api.ts'
 export type * from './instance-rpc-error.ts'
 export { InstanceRpcError } from './instance-rpc-error.ts'
-export { InstanceDomainMissingError, archiveSession, createHostDirectory, createSession, createWorkspace, deleteWorkspace, emptyAggregate, fetchInstanceSnapshot, forkSession, getInstanceClient, insertSessionBefore, insertWorkspaceBefore, isInstanceUnavailable, listHostDirectory, purgeArchivedSessions, releaseInstanceClient, renameSession, renameWorkspace, searchSessions, stopSessionsForPurge } from './instance-api.ts'
+export { InstanceDomainMissingError, MutationOutcomeUnknownError, archiveSession, createHostDirectory, createSession, createWorkspace, deleteWorkspace, emptyAggregate, fetchInstanceSnapshot, forkSession, getInstanceClient, insertSessionBefore, insertWorkspaceBefore, isInstanceUnavailable, listHostDirectory, purgeArchivedSessions, releaseInstanceClient, renameSession, renameWorkspace, searchSessions, stopSessionsForPurge } from './instance-api.ts'
 export type * from './workspace-mutations.ts'
 export { createWorkspaceForSource, deleteWorkspaceForSource, renameWorkspaceForSource } from './workspace-mutations.ts'
 export type * from './wire-common.ts'
@@ -102,7 +102,7 @@ export { recordEvidence } from './evidence-log.ts'
 // 注入面与测试复位面留在模块与其子路径（测试直接 import './page-channel.ts'，与
 // page-schedule / evidence-log 同规，见 verify:no-dead-exports 的判定口径）。
 export type * from './page-channel.ts'
-export { subscribePageChannel, installPageChannelEventSourceAudit } from './page-channel.ts'
+export { subscribePageChannel, installPageChannelEventSourceAudit, configurePageChannelLink } from './page-channel.ts'
 // 页面级插件刷新请求（design 09 §3.7 / design 15 §6）：设置面按来源请求一次
 // 客户端插件图重同步。请求面只经桶导出，两个符号分别被 renderer 的桥订阅与
 // settings-bridge 的重试动作消费（fan-out 复用 aggregate-store 的 createChannel）。

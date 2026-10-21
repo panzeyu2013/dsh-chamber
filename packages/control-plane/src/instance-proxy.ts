@@ -24,26 +24,21 @@ import {
 import { isLoopbackHostname, isLoopbackUpstreamBaseUrl } from './loopback.ts'
 import {
   CLIENT_BODY_IDLE_TIMEOUT_MS,
-  LONG_RPC_PATHS,
-  LONG_RPC_UPSTREAM_TIMEOUT_MS,
   MAX_BUFFERED_REQUEST_BYTES,
   MAX_CONCURRENT_HTTP_REQUESTS,
   MAX_CONCURRENT_WS_STREAMS,
   MAX_PENDING_WS_HANDSHAKES,
-  MAX_REQUEST_BODY_BYTES,
-  MAX_RESPONSE_BODY_BYTES,
-  RESPONSE_HEADER_WHITELIST,
   UPSTREAM_TIMEOUT_MS,
   WS_PING_INTERVAL_MS,
   WS_PING_MISSES_BEFORE_TEARDOWN,
   WS_STREAM_PATHS,
-  convergeLocation,
   createPendingUpgradeTracker,
+  destroyProxyAgents,
   forwardHttp,
   forwardUpgrade,
-  getProcessBufferedRequestBytes,
   rejectUpgrade,
   SPKI_PIN_PATTERN,
+  UPSTREAM_BODY_FINISHED,
   writeError,
 } from './proxy-forward.ts'
 import type { Logger } from './types.ts'
@@ -57,25 +52,6 @@ import type {
   ProxySocket,
 } from './proxy-forward.ts'
 
-// Re-export the constants/types that historically lived here so the module surface stays compatible.
-export {
-  CLIENT_BODY_IDLE_TIMEOUT_MS,
-  LONG_RPC_PATHS,
-  LONG_RPC_UPSTREAM_TIMEOUT_MS,
-  MAX_BUFFERED_REQUEST_BYTES,
-  MAX_CONCURRENT_HTTP_REQUESTS,
-  MAX_CONCURRENT_WS_STREAMS,
-  MAX_PENDING_WS_HANDSHAKES,
-  MAX_REQUEST_BODY_BYTES,
-  MAX_RESPONSE_BODY_BYTES,
-  RESPONSE_HEADER_WHITELIST,
-  UPSTREAM_TIMEOUT_MS,
-  WS_PING_INTERVAL_MS,
-  WS_PING_MISSES_BEFORE_TEARDOWN,
-  WS_STREAM_PATHS,
-  convergeLocation,
-  getProcessBufferedRequestBytes,
-}
 export type { ProxyRequest, ProxyResponse, ProxySocket }
 
 /** A parsed /api/i/<id> path. */
@@ -119,6 +95,12 @@ export interface InstanceProxyDeps {
   longRpcPaths?: readonly string[]
   /** Client upload idle timeout in ms. */
   clientBodyIdleTimeoutMs?: number
+  /** Upstream request-body idle budget (default UPLOAD_IDLE_TIMEOUT_MS). */
+  uploadIdleTimeoutMs?: number
+  /** Minimum throughput used to derive the total upload budget. */
+  uploadMinBytesPerSec?: number
+  /** Hard cap on the total upload budget. */
+  uploadMaxBudgetMs?: number
   /** WebSocket heartbeat ping cadence in ms. */
   wsPingIntervalMs?: number
   /** Overrides WS_PING_MISSES_BEFORE_TEARDOWN (see proxy-forward.ts). */
@@ -137,6 +119,10 @@ export interface InstanceProxy {
    *  non-loopback origin, while dsh+ssh and the legacy spelling stay loopback-only.
    *  `opts.tls.spkiPin` is the optional gateway+http+https certificate pin. */
   registerTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>, opts?: InstanceTransportRegistrationOptions): void
+  /** Update the ready-state link health without replacing the transport or revoking
+   *  in-flight traffic. `down` makes NEW requests fail fast with the existing
+   *  instance_unavailable 503; `suspect` still forwards. */
+  setTransportHealth(connectionId: string, health: InstanceTransportHealth): boolean
   unregisterTransport(connectionId: string): void
   getDiagnostics(): InstanceProxyDiagnostics
   /** Force-close every spliced WS stream (control-plane stop): an upgraded socket
@@ -151,7 +137,7 @@ export interface InstanceProxy {
    *  revokeTransportTraffic receives ('dsh:<id>' / 'gateway:<id>' / legacy
    *  'ssh:<id>'); it is absent for `local`, which is never registered as a transport
    *  and therefore never revoked. */
-  resolveTargetFor(instanceId: string): { baseUrl: string; connectionId?: string; headers?: Record<string, string>; tls?: { spkiPin?: string }; authority?: string } | null
+  resolveTargetFor(instanceId: string): { baseUrl: string; connectionId?: string; headers?: Record<string, string>; tls?: { spkiPin?: string }; authority?: string; health?: InstanceTransportHealth } | null
   /** Transport replacement/removal notification. Traffic that lives OUTSIDE the
    *  proxy's own tracking (the page channel opens one http.request per subscription)
    *  is invisible to revokeTransportTraffic, so an owner such as the page channel
@@ -162,10 +148,14 @@ export interface InstanceProxy {
 /** Main-process-only facts used to validate a ready transport registration. The
  * dimension is explicit because a canonical `dsh:<id>` identifies target semantics,
  * not whether its ready URL came from an SSH tunnel or HTTP direct. */
+export type InstanceTransportHealth = 'healthy' | 'suspect' | 'down'
+
 export interface InstanceTransportRegistrationOptions {
   transport?: 'ssh' | 'http'
   tls?: { spkiPin?: string }
   authority?: string
+  /** Initial ready-state health; omitted = healthy (old registrations). */
+  health?: InstanceTransportHealth
 }
 
 /** Whether an id is a valid /api/i/<id> segment ('local', 'dsh-<id>' or 'gateway-<id>';
@@ -259,7 +249,13 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
    *  Local is never registered (its baseUrl derives from the managed dshPort). A gateway
    *  record carries the bounded extra headers injected at forward time and the optional
    *  https SPKI pin applied by proxy-forward. */
-  interface TransportRecord { baseUrl: string; headers?: Record<string, string>; tls?: { spkiPin?: string }; authority?: string }
+  interface TransportRecord {
+    baseUrl: string
+    headers?: Record<string, string>
+    tls?: { spkiPin?: string }
+    authority?: string
+    health: InstanceTransportHealth
+  }
   const transports = new Map<string, TransportRecord>()
   const counters: ProxyForwardCounters = { requests: 0, failures: 0, activeStreams: 0, bufferedRequestBytes: 0, longRpcRequests: 0, longRpcTimeouts: 0 }
   let activeHttpRequests = 0
@@ -299,6 +295,22 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     const responses = liveHttpByTransport.get(connectionId)
     liveHttpByTransport.delete(connectionId)
     for (const res of responses ?? []) {
+      // If the request body already left the writable queue, the host may have
+      // applied a mutation. Answer a classified after-body failure before tearing
+      // the socket down; a bare destroy would look retryable to the client.
+      if (!res.headersSent && (res as ProxyResponse & { [UPSTREAM_BODY_FINISHED]?: boolean })[UPSTREAM_BODY_FINISHED] === true) {
+        try {
+          writeError(
+            res,
+            502,
+            'upstream_failed',
+            'the instance transport was replaced after the request body was sent; the host may have applied it',
+            logger,
+            { phase: 'after-body' },
+          )
+          continue
+        } catch { /* fall through to destroy */ }
+      }
       try { res.destroy() } catch { /* already closed */ }
     }
     pendingUpgrades.closeAll(connectionId)
@@ -326,6 +338,9 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     ...(deps.longRpcUpstreamTimeoutMs === undefined ? {} : { longRpcUpstreamTimeoutMs: deps.longRpcUpstreamTimeoutMs }),
     ...(deps.longRpcPaths === undefined ? {} : { longRpcPaths: deps.longRpcPaths }),
     clientBodyIdleTimeoutMs,
+    ...(deps.uploadIdleTimeoutMs === undefined ? {} : { uploadIdleTimeoutMs: deps.uploadIdleTimeoutMs }),
+    ...(deps.uploadMinBytesPerSec === undefined ? {} : { uploadMinBytesPerSec: deps.uploadMinBytesPerSec }),
+    ...(deps.uploadMaxBudgetMs === undefined ? {} : { uploadMaxBudgetMs: deps.uploadMaxBudgetMs }),
     wsPingIntervalMs,
     wsPingMissesBeforeTeardown,
     maxBufferedRequestBytes,
@@ -340,7 +355,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         && getLocalState() === 'ready'
         && Number.isInteger(getLocalDshPort())
         && (getLocalDshPort() ?? 0) > 0) {
-        return { baseUrl: `http://127.0.0.1:${getLocalDshPort()}` }
+        return { baseUrl: `http://127.0.0.1:${getLocalDshPort()}`, health: 'healthy' }
       }
       if (res !== null) writeError(res, 503, 'instance_unavailable', 'the local instance is not ready', logger)
       return null
@@ -367,6 +382,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     const connectionId = connectionIdForInstance(instanceId)
     return {
       baseUrl: record.baseUrl,
+      health: record.health,
       ...(connectionId === null ? {} : { connectionId }),
       ...(record.headers === undefined ? {} : { headers: { ...record.headers } }),
       ...(record.tls === undefined ? {} : { tls: { ...record.tls } }),
@@ -407,6 +423,13 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       const target = resolveTarget(parsed.id, res)
       if (target === null) {
         counters.failures += 1
+        return
+      }
+      // A DOWN link is fast-failed with the existing instance_unavailable code;
+      // suspect still forwards. No new wire code, no in-flight revoke here.
+      if (target.health === 'down') {
+        counters.failures += 1
+        writeError(res, 503, 'instance_unavailable', 'the instance link is down', logger)
         return
       }
       activeHttpRequests += 1
@@ -471,6 +494,11 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       if (target === null) {
         counters.failures += 1
         rejectUpgrade(socket, 503, 'instance_unavailable', 'no tunnel is available for this instance', logger)
+        return
+      }
+      if (target.health === 'down') {
+        counters.failures += 1
+        rejectUpgrade(socket, 503, 'instance_unavailable', 'the instance link is down', logger)
         return
       }
       const connectionId = connectionIdForInstance(parsed.id)
@@ -642,11 +670,21 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       if (transports.has(connectionId)) revokeTransportTraffic(connectionId)
       transports.set(connectionId, {
         baseUrl,
+        health: opts?.health ?? 'healthy',
         ...(extraHeaders !== undefined ? { headers: { ...extraHeaders } } : {}),
         ...(tlsSpkiPin === undefined ? {} : { tls: { spkiPin: tlsSpkiPin } }),
         ...(authority === undefined ? {} : { authority }),
       })
       logger.log(`instance-proxy: transport registered ${connectionId}`)
+    },
+
+    /** Update ready-state health without touching the registration or in-flight traffic. */
+    setTransportHealth(connectionId: string, health: InstanceTransportHealth): boolean {
+      const record = transports.get(connectionId)
+      if (record === undefined || record.health === health) return false
+      record.health = health
+      logger.log(`instance-proxy: transport ${connectionId} health ${health}`)
+      return true
     },
 
     /** Unregister a remote instance transport (tunnel torn down). */
@@ -684,6 +722,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
 
     /** Force-close every spliced WS stream (control-plane stop / app quit). */
     closeAllStreams(): void {
+      destroyProxyAgents()
       pendingUpgrades.closeAll()
       for (const stream of [...liveStreams]) {
         try {

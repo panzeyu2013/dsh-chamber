@@ -55,7 +55,7 @@ import {
 } from '@dsh-chamber/dsh-chamber-wire/page-channel'
 import { authCookieFor } from './browser-auth-cookie.ts'
 import { errorMessage } from './error-text.ts'
-import { parseInstanceId, tcpKeepAliveMsForUpstream } from './instance-proxy.ts'
+import { parseInstanceId, tcpKeepAliveMsForUpstream, type InstanceTransportHealth } from './instance-proxy.ts'
 import {
   UPSTREAM_TIMEOUT_MS,
   WS_PING_INTERVAL_MS,
@@ -97,6 +97,9 @@ export interface PageChannelTarget {
    *  所以缺省）。它正是 InstanceProxy.revokeTransportTraffic 收到的同一个字符串，
    *  通道用它把「传输被替换」的通知落到自己的订阅上。 */
   connectionId?: string
+  /** Ready-state link health; `down` fails a new subscription fast (existing
+   *  instance_unavailable code), `suspect` still opens. */
+  health?: InstanceTransportHealth
   headers?: Record<string, string>
   tls?: { spkiPin?: string }
   authority?: string
@@ -152,7 +155,7 @@ export interface PageChannel {
   /** 传输被替换/注销：失败该 connectionId 上的每条订阅（instance_unavailable）并销毁
    *  它的上游。通道自己开的 http.request 不在实例代理的 traffic 表里，所以替换隧道时
    *  必须由代理显式通知，否则旧化身会继续给页面推事实。 */
-  revokeConnection(connectionId: string): void
+  revokeConnection(connectionId: string, message?: string): void
   /** 只读计数，供诊断面观察。 */
   stats(): PageChannelStats
   /** 控制面停止：以 1012 关闭每一条活动 socket，并销毁其全部上游与生产者订阅。 */
@@ -640,6 +643,13 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
       failSubscription(sub, 'instance_unavailable', 'no transport is available for this instance')
       return
     }
+    if (target.health === 'down') {
+      // The target is registered but the link is down: fail the subscription with
+      // the existing code so the page client waits for the link epoch. Suspect
+      // still opens (the proxy forwards suspect requests).
+      failSubscription(sub, 'instance_unavailable', 'the instance link is down')
+      return
+    }
     // 记下解析出的**同一个** connectionId（InstanceProxy 的注册映射给出）：传输被
     // 替换/注销时，代理用这个字符串通知本通道，本订阅据此失败。
     sub.connectionId = target.connectionId ?? null
@@ -950,13 +960,13 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
 
   /** 传输被替换/注销：失败该 connectionId 上的每条订阅并销毁其上游。
    *  客户端的订阅重连阶梯会重新 subscribe，那时 resolveTargetFor 已解析到新传输。 */
-  function revokeConnection(connectionId: string): void {
+  function revokeConnection(connectionId: string, message?: string): void {
     let revoked = 0
     for (const state of [...liveSockets]) {
       for (const sub of [...state.subscriptions.values()]) {
         if (sub.connectionId !== connectionId) continue
         revoked += 1
-        failSubscription(sub, 'instance_unavailable', `the instance transport ${connectionId} was replaced or removed`)
+        failSubscription(sub, 'instance_unavailable', message ?? `the instance transport ${connectionId} was replaced or removed`)
       }
     }
     if (revoked > 0) {

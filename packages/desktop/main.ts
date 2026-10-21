@@ -1531,6 +1531,9 @@ if (!gotTheLock) {
     // idle；held lastResume 补发 + SYSTEM_RESUME 推送在 shell-core。
     powerMonitor.on('resume', () => {
       assembly.reconnectStaleTransports();
+      // Ready transports can be half-open after sleep: force one identity probe
+      // instead of waiting for the 60s heartbeat (or a 90s ssh keepalive).
+      assembly.reverifyAllTransports();
       // 系统唤醒同时驱动更新检查的 resume 腿：闭包读到的是已构造的实例；未构造
       // （启动早期/极晚期唤醒）时静默跳过。
       updater.noteActivity('resume');

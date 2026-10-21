@@ -1,0 +1,79 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+
+import {
+  INITIAL_LINK_HEALTH,
+  LINK_POLICY,
+  classifyProbeFailure,
+  reduceLinkHealth,
+  type LinkHealthState,
+} from '../../transport-health.ts'
+
+const suspect = (state: LinkHealthState = INITIAL_LINK_HEALTH): LinkHealthState =>
+  reduceLinkHealth(state, { kind: 'probe-failure', at: 1_000, failureClass: 'network' }).state
+
+test('one network failure only marks suspect', () => {
+  const result = reduceLinkHealth(INITIAL_LINK_HEALTH, {
+    kind: 'probe-failure', at: 1_000, failureClass: 'network', reason: 'timeout',
+  })
+  assert.equal(result.state.health, 'suspect')
+  assert.equal(result.state.consecutiveNetworkFailures, 1)
+  assert.equal(result.becameSuspect, true)
+  assert.equal(result.becameDown, false)
+  assert.equal(result.nextProbeDelayMs, LINK_POLICY.suspectProbeIntervalMs)
+})
+
+test('second consecutive network failure marks down and asks for reconnect', () => {
+  const result = reduceLinkHealth(suspect(), {
+    kind: 'probe-failure', at: 2_000, failureClass: 'network', reason: 'timeout',
+  })
+  assert.equal(result.state.health, 'down')
+  assert.equal(result.state.consecutiveNetworkFailures, 2)
+  assert.equal(result.becameDown, true)
+  assert.equal(result.nextProbeDelayMs, null)
+})
+
+test('a successful probe clears the streak and recovers from down', () => {
+  const down = reduceLinkHealth(suspect(), {
+    kind: 'probe-failure', at: 2_000, failureClass: 'network',
+  }).state
+  const result = reduceLinkHealth(down, { kind: 'probe-ok', at: 3_000 })
+  assert.equal(result.state.health, 'healthy')
+  assert.equal(result.state.consecutiveNetworkFailures, 0)
+  assert.equal(result.becameHealthy, true)
+  assert.equal(result.nextProbeDelayMs, LINK_POLICY.healthyProbeIntervalMs)
+})
+
+test('server/auth failures from healthy are suspect but do not accumulate', () => {
+  const server = reduceLinkHealth(INITIAL_LINK_HEALTH, {
+    kind: 'probe-failure', at: 1_000, failureClass: 'server', reason: '503',
+  })
+  assert.equal(server.state.health, 'suspect')
+  assert.equal(server.state.consecutiveNetworkFailures, 0)
+  assert.equal(server.becameSuspect, true)
+
+  const auth = reduceLinkHealth(INITIAL_LINK_HEALTH, {
+    kind: 'probe-failure', at: 1_000, failureClass: 'auth', reason: '401',
+  })
+  assert.equal(auth.state.health, 'suspect')
+  assert.equal(auth.state.consecutiveNetworkFailures, 0)
+})
+
+test('a non-finite clock cannot authorize down', () => {
+  const result = reduceLinkHealth(INITIAL_LINK_HEALTH, {
+    kind: 'probe-failure', at: Number.NaN, failureClass: 'network',
+  })
+  assert.equal(result.state.health, 'suspect')
+  assert.equal(result.becameDown, false)
+  assert.equal(result.nextProbeDelayMs, LINK_POLICY.suspectProbeIntervalMs)
+})
+
+test('probe classification separates network, server, auth and protocol', () => {
+  assert.equal(classifyProbeFailure({}), 'network')
+  for (const statusCode of [500, 502, 503, 504, 408, 425, 429]) {
+    assert.equal(classifyProbeFailure({ statusCode }), 'server', String(statusCode))
+  }
+  assert.equal(classifyProbeFailure({ statusCode: 401 }), 'auth')
+  assert.equal(classifyProbeFailure({ statusCode: 404 }), 'protocol')
+  assert.equal(classifyProbeFailure({ terminal: true }), 'protocol')
+})

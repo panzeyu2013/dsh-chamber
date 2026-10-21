@@ -13,6 +13,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import {
   parseInstanceId,
   parseInstancePath,
@@ -362,6 +363,61 @@ test('transport replacement and unregister revoke already-open HTTP/SSE and WS c
   const gone = fakeResponse()
   await proxy.handleHttp(fakeRequest('/api/i/ssh-rotating/api/session/list'), gone)
   assert.equal(gone.status, 503)
+})
+
+test('transport health: suspect forwards, down fails new requests without revoking in-flight traffic', async () => {
+  const upstream = fakeHttpRequest(() => ({
+    response: { status: 200, headers: { 'content-type': 'text/event-stream' }, body: null },
+  }))
+  const proxy = proxyFor(upstream.fn, { getLocalDshPort: () => 17510 })
+  proxy.registerTransport('dsh:link', 'http://127.0.0.1:22021', undefined, { health: 'healthy' })
+
+  const live = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/dsh-link/api/session/list'), live)
+  assert.equal(live.status, 200)
+
+  // Suspect still forwards: one probe failure must not fail user traffic.
+  proxy.setTransportHealth('dsh:link', 'suspect')
+  const suspect = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/dsh-link/api/session/list'), suspect)
+  assert.equal(suspect.status, 200)
+  assert.equal(live.destroyed, false, 'suspect must not revoke the in-flight stream')
+
+  // Down fast-fails NEW requests with the existing code, but leaves in-flight work
+  // for its own timeout/grace (the transport manager will unregister on confirm).
+  proxy.setTransportHealth('dsh:link', 'down')
+  const down = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/dsh-link/api/session/list'), down)
+  assert.equal(down.status, 503)
+  assert.equal(JSON.parse(down.body).code, 'instance_unavailable')
+  assert.equal(live.destroyed, false, 'health-only down must not revoke in-flight traffic')
+
+  // Recovery flips forwarding back without re-registering.
+  proxy.setTransportHealth('dsh:link', 'healthy')
+  const recovered = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/dsh-link/api/session/list'), recovered)
+  assert.equal(recovered.status, 200)
+  proxy.closeAllStreams()
+})
+
+test('revoking a transport after the request body finished answers after-body, not a bare destroy', async () => {
+  const fn: any = () => {
+    const req = new EventEmitter() as any
+    req.write = () => true
+    req.end = () => { req.emit('finish') }
+    req.destroy = () => req.emit('close')
+    return req
+  }
+  const proxy = proxyFor(fn, { getLocalDshPort: () => 17510 })
+  proxy.registerTransport('dsh:body', 'http://127.0.0.1:22031')
+  const response = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/dsh-body/api/session/create', 'POST', { 'content-length': '5' }, 'hello'), response)
+  assert.equal(response.status, null, 'the upstream has not answered yet')
+  proxy.unregisterTransport('dsh:body')
+  assert.equal(response.status, 502)
+  const body = JSON.parse(response.body) as { code: string; details?: { phase?: string } }
+  assert.equal(body.code, 'upstream_failed')
+  assert.equal(body.details?.phase, 'after-body')
 })
 
 test('local instance not ready → explicit 503, never a silent empty success', async () => {

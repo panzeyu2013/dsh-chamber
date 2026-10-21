@@ -46,6 +46,7 @@ export const zh = {
   'archive.manager.busyOther': '该实例正在执行另一处清理，请稍后重试。',
   // 页面级派发拒绝（design 26 §D7）：请求从未离开页面，不是来源故障。
   'action.notDispatched': '页面繁忙：请求未能派发，请稍后重试',
+  'action.outcomeUnknown': '结果未知：请求可能已生效，请先刷新状态，不要直接重试',
   'archive.manager.deleting': '正在删除…',
   'archive.manager.restoring': '正在恢复…',
   'archive.manager.restored': '已恢复 {count} 个会话。',
@@ -268,6 +269,7 @@ export const en = {
   'archive.manager.confirmDelete': 'Confirm delete',
   'archive.manager.busyOther': 'This instance is running another cleanup. Please retry later.',
   'action.notDispatched': 'Page busy: the request was not dispatched; retry shortly',
+  'action.outcomeUnknown': 'Outcome unknown: this may already have applied; refresh before retrying',
   'archive.manager.deleting': 'Deleting…',
   'archive.manager.restoring': 'Restoring…',
   'archive.manager.restored': 'Restored {count} session(s).',

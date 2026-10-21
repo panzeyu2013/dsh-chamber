@@ -991,14 +991,155 @@ test('ready-state heartbeat: terminal failures leave ready with no auto-retry, t
 
   let transientOutcome: TransportVerifyResult = { ok: true }
   const transient = await readyOn(t, 's1', {
-    options: { readyVerifyIntervalMs: 15, readyVerifyMinIntervalMs: 5, readyTimeoutMs: 50, retryBaseMs: 10, retryMaxMs: 20, maxRetryAttempts: 3 },
+    options: {
+      readyVerifyIntervalMs: 15,
+      readyVerifyMinIntervalMs: 5,
+      readyTimeoutMs: 50,
+      retryBaseMs: 10,
+      retryMaxMs: 20,
+      maxRetryAttempts: 3,
+      linkPolicy: { suspectProbeIntervalMs: 10, failuresBeforeDown: 2, downGraceMs: 100 },
+    },
     verifyProbe: async () => transientOutcome,
   })
-  transientOutcome = { ok: false, detail: 'connection reset' }
-  await waitFor(() => transient.manager.status('s1')!.phase === 'degraded', 3000, 'degraded after transient heartbeat failure')
+  // One network failure only marks suspect; the phase stays ready and no traffic
+  // is revoked. The second consecutive network failure marks down, then a short
+  // grace keeps the ready phase before the reconnect owns teardown.
+  transientOutcome = { ok: false, failureKind: 'network', detail: 'connection reset' }
+  await waitFor(() => transient.manager.status('s1')!.link?.state === 'suspect', 3000, 'suspect after first network failure')
+  assert.equal(transient.manager.status('s1')!.phase, 'ready', 'suspect does not leave ready')
+  await waitFor(() => transient.manager.status('s1')!.link?.state === 'down', 3000, 'down after second network failure')
+  assert.equal(transient.manager.status('s1')!.phase, 'ready', 'down grace keeps ready for in-flight traffic')
+  await waitFor(() => transient.manager.status('s1')!.phase === 'degraded', 3000, 'degraded after down grace')
   transientOutcome = { ok: true }
   await waitFor(() => transient.manager.status('s1')!.phase === 'ready', 3000, 'recovered ready')
   assert.equal(transient.manager.status('s1')!.retryAttempt, 0)
+})
+
+test('a provider without failureKind still treats an HTTP status as reachable', async t => {
+  let outcome: TransportVerifyResult = { ok: true }
+  const { manager, spawnCalls } = await readyOn(t, 's1', {
+    options: { readyVerifyIntervalMs: 15, readyVerifyMinIntervalMs: 0, linkPolicy: { suspectProbeIntervalMs: 10, failuresBeforeDown: 2 } },
+    verifyProbe: async () => outcome,
+  })
+  const spawnedAtReady = spawnCalls.length
+  outcome = { ok: false, detail: 'gateway answered HTTP 503' }
+  await waitFor(() => manager.status('s1')!.link?.state === 'suspect', 3000, 'HTTP status is reachable')
+  await sleep(80)
+  assert.equal(manager.status('s1')!.phase, 'ready')
+  assert.equal(spawnCalls.length, spawnedAtReady, 'no reconnect for a reachable status')
+})
+
+test('a reachable 5xx/429 probe is suspect but never counts toward link down', async t => {
+  let outcome: TransportVerifyResult = { ok: true }
+  const { manager, spawnCalls } = await readyOn(t, 's1', {
+    options: {
+      readyVerifyIntervalMs: 15,
+      readyVerifyMinIntervalMs: 5,
+      linkPolicy: { suspectProbeIntervalMs: 10, failuresBeforeDown: 2 },
+    },
+    verifyProbe: async () => outcome,
+  })
+  const spawnedAtReady = spawnCalls.length
+  outcome = { ok: false, failureKind: 'server', detail: 'gateway answered HTTP 503' }
+  await waitFor(() => manager.status('s1')!.link?.state === 'suspect', 3000, 'server failure marks suspect')
+  await sleep(80)
+  assert.equal(manager.status('s1')!.phase, 'ready', '503 does not leave ready')
+  assert.equal(manager.status('s1')!.link?.state, 'suspect', 'reachable failures stay suspect')
+  assert.equal(spawnCalls.length, spawnedAtReady, 'no reconnect/revoke for a reachable server failure')
+  outcome = { ok: true }
+  await waitFor(() => manager.status('s1')!.link?.state === 'healthy', 3000, 'success clears suspect')
+})
+
+test('an on-demand suspect probe replaces the old healthy timer with the fast cadence', async t => {
+  let calls = 0
+  let outcome: TransportVerifyResult = { ok: true }
+  const { manager } = await readyOn(t, 's1', {
+    options: {
+      readyVerifyIntervalMs: 60_000,
+      readyVerifyMinIntervalMs: 0,
+      linkPolicy: { suspectProbeIntervalMs: 20, failuresBeforeDown: 2 },
+    },
+    verifyProbe: async () => { calls += 1; return outcome },
+  })
+  const atReady = calls
+  outcome = { ok: false, failureKind: 'server', detail: 'gateway answered HTTP 503' }
+  manager.reverify('s1')
+  await waitFor(() => manager.status('s1')!.link?.state === 'suspect', 3000, 'user probe marks suspect')
+  // The 60s healthy timer was still armed; the failure must replace it with the
+  // short suspect cadence, otherwise the next probe waits a full minute.
+  await waitFor(() => calls >= atReady + 2, 500, 'suspect cadence re-probes quickly')
+  outcome = { ok: true }
+  await waitFor(() => manager.status('s1')!.link?.state === 'healthy', 3000, 'success clears suspect')
+})
+
+test('a never-settling verifyUp hits the probe deadline instead of freezing the heartbeat', async t => {
+  let hang = false
+  let calls = 0
+  const { manager } = await readyOn(t, 's1', {
+    options: {
+      readyVerifyIntervalMs: 60_000,
+      readyVerifyMinIntervalMs: 0,
+      linkPolicy: { probeTimeoutMs: 20, suspectProbeIntervalMs: 10, failuresBeforeDown: 2 },
+    },
+    verifyProbe: async () => {
+      calls += 1
+      if (hang) return await new Promise<never>(() => {})
+      return { ok: true }
+    },
+  })
+  hang = true
+  manager.reverify('s1')
+  await waitFor(() => manager.status('s1')!.link?.state === 'suspect', 1000, 'probe deadline marks suspect')
+  const afterTimeout = calls
+  assert.ok(afterTimeout >= 2, 'the fast suspect cadence must continue after the deadline')
+  hang = false
+  await waitFor(() => manager.status('s1')!.link?.state === 'healthy', 3000, 'a later probe recovers')
+})
+
+test('a down link that recovers inside the grace stays ready without a reconnect', async t => {
+  let outcome: TransportVerifyResult = { ok: true }
+  const { manager, spawnCalls } = await readyOn(t, 's1', {
+    options: {
+      readyVerifyIntervalMs: 60_000,
+      readyVerifyMinIntervalMs: 0,
+      linkPolicy: { suspectProbeIntervalMs: 10, failuresBeforeDown: 2, downGraceMs: 1_000 },
+    },
+    verifyProbe: async () => outcome,
+  })
+  const spawnedAtReady = spawnCalls.length
+  outcome = { ok: false, failureKind: 'network', detail: 'blackhole' }
+  manager.reverify('s1')
+  await waitFor(() => manager.status('s1')!.link?.state === 'down', 3000, 'down after two network failures')
+  // The grace itself probes; flip the link before the grace timer expires.
+  outcome = { ok: true }
+  await waitFor(() => manager.status('s1')!.link?.state === 'healthy', 3000, 'grace probe recovers')
+  assert.equal(manager.status('s1')!.phase, 'ready')
+  assert.equal(spawnCalls.length, spawnedAtReady, 'recovery in grace must not reconnect')
+})
+
+test('a forced resume probe is re-queued behind an in-flight probe', async t => {
+  let calls = 0
+  let release: (() => void) | null = null
+  let hold = false
+  const { manager } = await readyOn(t, 's1', {
+    options: { readyVerifyIntervalMs: 60_000, readyVerifyMinIntervalMs: 0 },
+    verifyProbe: async () => {
+      calls += 1
+      if (!hold) return { ok: true }
+      await new Promise<void>(resolve => { release = resolve })
+      return { ok: true }
+    },
+  })
+  hold = true
+  manager.reverify('s1', 'resume')
+  await waitFor(() => calls >= 2, 1000, 'first forced probe starts')
+  // The next resume arrives while the first is in flight: it must be remembered.
+  manager.reverify('s1', 'resume')
+  const pendingRelease = release as (() => void) | null
+  assert.ok(pendingRelease !== null)
+  pendingRelease()
+  await waitFor(() => calls >= 3, 1000, 'queued forced probe runs after the in-flight one')
 })
 
 test('reverify: one quiet-windowed on-demand probe, a no-op while not ready, and no heartbeat after leaving ready', async t => {
@@ -1014,6 +1155,14 @@ test('reverify: one quiet-windowed on-demand probe, a no-op while not ready, and
   manager.reverify('s1')
   await sleep(30)
   assert.equal(verifyCalls, atReady + 1, 'the quiet window suppresses repeat on-demand probes')
+  // Resume/online must bypass the user quiet window: a ready-but-half-open
+  // tunnel cannot wait for the next 60s tick after a network change.
+  manager.reverify('s1', 'resume')
+  await sleep(30)
+  assert.equal(verifyCalls, atReady + 2, 'resume reverify is not quiet-windowed')
+  manager.reverify('s1', 'online')
+  await sleep(30)
+  assert.equal(verifyCalls, atReady + 3, 'online reverify is not quiet-windowed')
   manager.disconnect('s1')
   await waitFor(() => manager.status('s1')!.phase === 'idle', 3000, 'idle')
   const before = verifyCalls
@@ -1037,7 +1186,7 @@ test('onVerified fires only after successful re-verifications, and a user probe 
   let outcome: TransportVerifyResult = { ok: true }
   const verified: string[] = []
   const { manager, setProbe } = makeManager(t, {
-    options: { readyVerifyIntervalMs: 15, readyVerifyMinIntervalMs: 5, readyTimeoutMs: 50, retryBaseMs: 10, retryMaxMs: 20, maxRetryAttempts: 3, slowRetryMs: 30 },
+    options: { readyVerifyIntervalMs: 15, readyVerifyMinIntervalMs: 5, readyTimeoutMs: 50, retryBaseMs: 10, retryMaxMs: 20, maxRetryAttempts: 3, slowRetryMs: 30, linkPolicy: { downGraceMs: 20 } },
     verifyProbe: async () => outcome,
   })
   setProbe(true)
@@ -1078,6 +1227,33 @@ test('onVerified fires only after successful re-verifications, and a user probe 
   gate.release = null
   await waitFor(() => verifyCalls > heldCalls, 3000, 'heartbeat chain continues after the collision')
   assert.equal(collision.manager.status('s1')!.phase, 'ready')
+})
+
+test('reverifyAll staggers a multi-instance wake wave', async t => {
+  let probes = 0
+  const { manager, setProbe } = makeManager(t, {
+    includeDefault: false,
+    instances: [
+      { id: 'a', label: 'a', host: 'a.example.com', remotePort: 3080 },
+      { id: 'b', label: 'b', host: 'b.example.com', remotePort: 3080 },
+      { id: 'c', label: 'c', host: 'c.example.com', remotePort: 3080 },
+    ],
+    options: { readyVerifyIntervalMs: 60_000, readyVerifyMinIntervalMs: 0 },
+    verifyProbe: async () => { probes += 1; return { ok: true } },
+  })
+  setProbe(true)
+  manager.connect('a')
+  manager.connect('b')
+  manager.connect('c')
+  await waitFor(() => manager.status('a')?.phase === 'ready' && manager.status('b')?.phase === 'ready' && manager.status('c')?.phase === 'ready', 3000, 'all ready')
+  const atReady = probes
+  manager.reverifyAll()
+  await sleep(20)
+  assert.equal(probes, atReady + 1, 'only the first instance probes immediately')
+  await sleep(150)
+  assert.equal(probes, atReady + 2, 'the second instance follows on its stagger slot')
+  await sleep(150)
+  assert.equal(probes, atReady + 3, 'the third instance follows on its stagger slot')
 })
 
 test('disposeAuth fires on disconnect; a removed tunnel stays tracked through disposeAsync until its real exit', async t => {

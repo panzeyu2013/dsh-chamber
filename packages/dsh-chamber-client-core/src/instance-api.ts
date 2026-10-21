@@ -115,9 +115,55 @@ export class InstanceDomainMissingError extends Error {
   }
 }
 
+/** The proxy timed out AFTER the request body was sent: the host may have applied
+ *  a mutation even though no response arrived. Callers must not auto-retry. */
+export class MutationOutcomeUnknownError extends Error {
+  readonly code = 'mutation_outcome_unknown'
+  /** Never auto-retry a mutation whose body may already have been applied. */
+  readonly retryable = false
+  constructor(endpoint: string) {
+    super(`mutation outcome unknown for ${endpoint}: request body was sent but no response arrived`)
+    this.name = 'MutationOutcomeUnknownError'
+  }
+}
+
 /** Default timeout for bounded unary calls; the single home of the 30s bound. */
 const INSTANCE_UNARY_TIMEOUT_MS = 30_000
 const DEFAULT_TIMEOUT_MS = INSTANCE_UNARY_TIMEOUT_MS
+
+/** Mutations get a budget longer than the proxy's 45s ordinary upstream window, so
+ *  the proxy's 504 after-body classification arrives before the client aborts.
+ *  Reads keep the 30s responsiveness bound. */
+const MUTATION_CALL_TIMEOUT_MS = 50_000
+/** Same slow-link floor the proxy uses to derive its upload budget. */
+const MUTATION_UPLOAD_RATE_BYTES_PER_SEC = 128 * 1024
+// Proxy upload budget caps at 30min, then its 45s header window starts. Keep a
+// 60s cushion so the proxy's after-body classification wins the race.
+const MAX_MUTATION_CALL_TIMEOUT_MS = 30 * 60_000 + 60_000
+/** Explicitly read-only faces: an after-body failure on these is not a mutation
+ *  unknown. Unknown/chamber-host endpoints default to the conservative mutation
+ *  outcome; this set is intentionally not the full read surface. */
+const READ_AFTER_BODY_EXEMPT_ENDPOINTS = new Set([
+  'session/list',
+  'session/search',
+  'directoryPicker/list',
+])
+const MUTATION_BUDGET_ENDPOINTS = new Set([
+  'session/create',
+  'session/fork',
+  'session/rename',
+  'session/cancel',
+  'workspace/create',
+  'workspace/rename',
+  'workspace/delete',
+  'workspace/insertBefore',
+  'workspace/insertSessionBefore',
+  'workspace/archiveSession',
+  'workspace/unarchiveSession',
+  'workspace/pinSession',
+  'workspace/unpinSession',
+  'directoryPicker/createDirectory',
+])
 
 /**
  * Purge call budget: deleting many archived subtrees can far exceed the 30s
@@ -166,9 +212,21 @@ class InstanceApiClient {
   ): Promise<UnaryResult<T>> {
     const url = new URL(`${this.basePath}/api/${endpoint}`, resolveOrigin())
     const rpcId = mintRpcId()
+    const requestBody = JSON.stringify({ type: 'client-request', rpcId, method: endpoint, payload })
+    const bodyBytes = new TextEncoder().encode(requestBody).length
+    // The proxy's after-body 504 can only be observed if this budget outlives the
+    // proxy's body-flush estimate + its 45s header window. Reads stay at 30s.
+    const mutationBudgetMs = Math.min(
+      MAX_MUTATION_CALL_TIMEOUT_MS,
+      Math.max(
+        MUTATION_CALL_TIMEOUT_MS,
+        MUTATION_CALL_TIMEOUT_MS + Math.ceil((bodyBytes / MUTATION_UPLOAD_RATE_BYTES_PER_SEC) * 1_000),
+      ),
+    )
+    const defaultTimeoutMs = MUTATION_BUDGET_ENDPOINTS.has(endpoint) ? mutationBudgetMs : DEFAULT_TIMEOUT_MS
     const timeoutMs = Number.isFinite(options.timeoutMs) && (options.timeoutMs ?? 0) > 0
       ? options.timeoutMs as number
-      : DEFAULT_TIMEOUT_MS
+      : defaultTimeoutMs
     const budget = await acquireHttpBudget({
       sourceId: this.sourceId,
       kind: 'unary',
@@ -189,7 +247,7 @@ class InstanceApiClient {
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ type: 'client-request', rpcId, method: endpoint, payload }),
+        body: requestBody,
         signal: requestSignal,
       })
       if (response.status === 503) {
@@ -216,6 +274,17 @@ class InstanceApiClient {
           throw new InstanceDomainMissingError(
             `该实例未挂载 chamber 宿主域 ${endpoint}：宿主包同步/seed 后需重启 dsh 生效`,
           )
+        }
+      }
+      if (response.status === 502 || response.status === 504) {
+        let payload: { details?: { phase?: unknown } } | null = null
+        try {
+          payload = await response.json()
+        } catch {
+          payload = null
+        }
+        if (payload?.details?.phase === 'after-body' && !READ_AFTER_BODY_EXEMPT_ENDPOINTS.has(endpoint)) {
+          throw new MutationOutcomeUnknownError(endpoint)
         }
       }
       if (!response.ok) throw new Error(`transport failure for ${endpoint}: HTTP ${response.status}`)
@@ -394,6 +463,7 @@ function wrapWireError(err: unknown): Error {
   }
   // Budget refusals carry provenance: never hide them behind the unreachable prefix.
   if (err instanceof HttpBudgetUnscheduledError) return err
+  if (err instanceof MutationOutcomeUnknownError) return err
   if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
     return err
   }

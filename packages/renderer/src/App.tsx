@@ -28,6 +28,7 @@ import {
   chamberBridge,
   clearOpenIntents,
 
+  configurePageChannelLink,
   emptyIntentPrewarmBudget,
   forgetPendingArchives,
   forgetPendingPlacements,
@@ -1386,6 +1387,20 @@ export default function App() {
     const unsubscribeResume = window.dshChamber?.systemResume?.onResume(() => {
       window.dispatchEvent(new Event('dsh-chamber:system-resume'))
     })
+    // Browser online is the only network-change signal available to the page in
+    // all flavors. It re-verifies READY remote transports (not just page sockets),
+    // closing the ready-but-half-open gap after Wi-Fi/cellular switches.
+    const reverifyOnOnline = (): void => {
+      const ssh = window.dshChamber?.desktopSsh
+      if (ssh === undefined) return
+      for (const instance of remotesStore.getSnapshot().instances) {
+        void ssh.reverify(instance.id, 'online').catch(() => {
+          // A reverify is best-effort; a closed window/IPC race must not surface
+          // as an unhandled rejection on the online event.
+        })
+      }
+    }
+    window.addEventListener('online', reverifyOnOnline)
     // 通知点击打开：主进程推送 notification-open → openSession（切 shell → ensureRemoteConnected →
     // openInstanceSession）。桥与 desktopSsh 同一批 expose，存在则 notifications 必存在。
     // 监听注册后立即发就绪信号：主进程只在就绪后放行推送（did-finish-load 早于本监听注册，事件不能丢）。
@@ -1464,6 +1479,7 @@ export default function App() {
       notificationReadyCancelled = true
       if (notificationReadyRetryTimer !== null) clearTimeout(notificationReadyRetryTimer)
       unsubscribe()
+      window.removeEventListener('online', reverifyOnOnline)
       unsubscribeInstances()
       unsubscribeResume?.()
       unsubscribeNotifications?.()
@@ -1477,6 +1493,57 @@ export default function App() {
     refreshRemotes,
     reportNotificationAckFailure,
   ])
+
+  // Page-channel source-link selector: a subscription must not burn its 3/5/10/20/30s
+  // ladder while the transport is down; a link epoch clears the ladder and
+  // re-subscribes immediately. The actual writer is the desktop status projection.
+  const pageChannelLinkListenersRef = useRef(new Set<(sourceId: string) => void>())
+  const localLinkEpochRef = useRef(0)
+  const localReadyRef = useRef(false)
+  const healthRef = useRef(health)
+  useEffect(() => { healthRef.current = health }, [health])
+  useEffect(() => {
+    const link = {
+      ready(sourceId: string): boolean {
+        // `rawInstanceIdFromSourceId('local')` is null by contract: check the local
+        // id BEFORE the null fallback, or this branch is unreachable and a local
+        // dsh restart never parks/releases its page subscriptions.
+        if (sourceId === LOCAL_INSTANCE_ID) return healthRef.current?.dsh?.status === 'ready'
+        const rawId = rawInstanceIdFromSourceId(sourceId)
+        if (rawId === null) return true
+        const status = remotesStore.getSnapshot().status[rawId]
+        return status?.phase === 'ready' && (status.link?.state ?? 'healthy') !== 'down'
+      },
+      epoch(sourceId: string): number {
+        if (sourceId === LOCAL_INSTANCE_ID) return localLinkEpochRef.current
+        const rawId = rawInstanceIdFromSourceId(sourceId)
+        if (rawId === null) return 0
+        return remotesStore.getSnapshot().status[rawId]?.link?.linkEpoch ?? 0
+      },
+      subscribe(listener: (sourceId: string) => void): () => void {
+        pageChannelLinkListenersRef.current.add(listener)
+        return () => { pageChannelLinkListenersRef.current.delete(listener) }
+      },
+    }
+    configurePageChannelLink(link)
+    return () => { configurePageChannelLink(null) }
+  }, [])
+  useEffect(() => {
+    const notify = (rawId: string): void => {
+      const sourceId = rawId === LOCAL_INSTANCE_ID
+        ? LOCAL_INSTANCE_ID
+        : sourceIdForRawInstance(rawId, remotesStore.getSnapshot().instances)
+      if (sourceId === null) return
+      for (const listener of pageChannelLinkListenersRef.current) listener(sourceId)
+    }
+    for (const rawId of Object.keys(remoteStatus)) notify(rawId)
+    if (health !== null) {
+      const localReady = health.dsh?.status === 'ready'
+      if (localReady && !localReadyRef.current) localLinkEpochRef.current += 1
+      localReadyRef.current = localReady
+      notify(LOCAL_INSTANCE_ID)
+    }
+  }, [remoteStatus, health])
 
   /**
    * 本地实例幂等启动：首轮连接行装载后（null = 尚未拉到）行缺失/stopped/error 均触发一次

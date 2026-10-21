@@ -644,7 +644,7 @@ localPort/origin。
   预过期刷新只覆盖"缓存 TTL 到期"，**服务端提前吊销**（远端改密轮换
   jwt-secret、gateway 重启、auth:none→要认证）与 **http 直连/隧道后实例死亡**
   在刷新定时器触发前长期呈现为 ready（绿点 + 401/502 洪流，无自动恢复）。
-  因此每个 READY 传输以 `READY_VERIFY_INTERVAL_MS`（60s）周期重跑 provider
+  因此每个 READY 传输以 `LINK_POLICY.healthyProbeIntervalMs`（60s）周期重跑 provider
   `verifyUp`：gateway 密码目标经
   `verifyGatewayPasswordSession` 的"缓存 Cookie 探测 → 401 → 失效 → 用存储密码
   单次自动重登"流，仅被吊销的会话**无感自愈**（会话轮换后经 `onVerified`

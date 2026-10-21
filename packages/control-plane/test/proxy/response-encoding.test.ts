@@ -7,17 +7,15 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import {
-  convergeLocation,
-  createInstanceProxy,
-  MAX_REQUEST_BODY_BYTES,
-} from '../../src/instance-proxy.ts'
+import { createInstanceProxy } from '../../src/instance-proxy.ts'
 import {
   acceptsEventStream,
+  convergeLocation,
   forwardHttp,
   isHashedStaticAssetPath,
   isHtmlDocumentNavigation,
   MAX_BUFFERED_REQUEST_BYTES,
+  MAX_REQUEST_BODY_BYTES,
   requiresIdentityUpstreamEncoding,
 } from '../../src/proxy-forward.ts'
 import type { ProxyForwardCounters, ProxyForwardDeps } from '../../src/proxy-forward.ts'

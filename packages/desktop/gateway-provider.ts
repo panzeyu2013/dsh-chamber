@@ -685,16 +685,16 @@ export async function verifyGatewayRuntimeIdentity(
     destroyOnSettle: true,
   })
   if (outcome.kind === 'oversize') {
-    return { ok: false, detail: 'the gateway answered an oversized runtime identity response', terminal: true }
+    return { ok: false, failureKind: 'protocol', detail: 'the gateway answered an oversized runtime identity response', terminal: true }
   }
   if (outcome.kind === 'network') {
     if (outcome.spkiMismatch) {
-      return { ok: false, detail: '证书固定不匹配（SPKI）——gateway 证书已更换或 pin 错误', terminal: true }
+      return { ok: false, failureKind: 'protocol', detail: '证书固定不匹配（SPKI）——gateway 证书已更换或 pin 错误', terminal: true }
     }
     if (outcome.timedOut) {
-      return { ok: false, detail: `the gateway did not answer the runtime identity probe within ${timeoutMs}ms` }
+      return { ok: false, failureKind: 'network', detail: `the gateway did not answer the runtime identity probe within ${timeoutMs}ms` }
     }
-    return { ok: false, detail: 'the gateway did not answer the runtime identity probe' }
+    return { ok: false, failureKind: 'network', detail: 'the gateway did not answer the runtime identity probe' }
   }
   const statusCode = outcome.status
   // 401 = auth required/rejected; 403 = an origin/Host policy rejection (design 17 §7.3:
@@ -706,25 +706,26 @@ export async function verifyGatewayRuntimeIdentity(
       : token === null
         ? 'the gateway requires authentication (401) — configure the shared token or password'
         : 'the gateway rejected the token (401) — check the shared token'
-    return { ok: false, detail, terminal: true, statusCode: 401 }
+    return { ok: false, failureKind: 'auth', detail, terminal: true, statusCode: 401 }
   }
   if (statusCode === 403) {
     const detail = 'the gateway refused the request origin/Host policy (403) — check the gateway deployment origin settings'
     return carryStatusCodes
-      ? { ok: false, detail, terminal: true, statusCode: 403 }
-      : { ok: false, detail, terminal: true }
+      ? { ok: false, failureKind: 'protocol', detail, terminal: true, statusCode: 403 }
+      : { ok: false, failureKind: 'protocol', detail, terminal: true }
   }
   if (statusCode !== 200) {
     // Authentication and deterministic client/protocol mistakes require user action;
     // every 5xx is time-dependent and stays transient for the bounded retry machinery.
     const terminal = gatewayHttpFailureIsTerminal(statusCode)
     const detail = `the gateway answered HTTP ${statusCode} to the runtime identity probe`
+    const failureKind = terminal ? 'protocol' as const : 'server' as const
     return carryStatusCodes
-      ? { ok: false, detail, terminal, statusCode }
-      : { ok: false, detail, terminal }
+      ? { ok: false, failureKind, detail, terminal, statusCode }
+      : { ok: false, failureKind, detail, terminal }
   }
   if (!isGatewayRuntimeStatus(outcome.payload)) {
-    return { ok: false, detail: 'the gateway answered an unexpected runtime identity response — it does not appear to be a compatible dsh-chamber gateway', terminal: true }
+    return { ok: false, failureKind: 'protocol', detail: 'the gateway answered an unexpected runtime identity response — it does not appear to be a compatible dsh-chamber gateway', terminal: true }
   }
   // A SUCCESS is the pure {ok:true} shape: `statusCode` rides only a real answer, so the
   // ok form never carries a stray statusCode:undefined key that deep compares trip on.
@@ -797,13 +798,20 @@ function gatewaySessionOriginFor(spec: TransportInstanceSpec): GatewaySessionOri
  *  password and 'other' protocol answers are terminal; rate_limited/auth_busy/network transient. */
 function gatewaySessionFailureToVerify(result: Extract<GatewaySessionResult, { ok: false }>): TransportVerifyResult {
   if (result.code === 'invalid_credentials' || result.code === 'other') {
-    return { ok: false, detail: result.error, terminal: true }
+    return { ok: false, detail: result.error, terminal: true, failureKind: 'protocol' }
   }
-  return { ok: false, detail: result.error }
+  // A login exchange can fail after the gateway answered: rate-limit/busy and
+  // superseded/stale are REACHABLE failures and must never count toward link down.
+  return {
+    ok: false,
+    detail: result.error,
+    failureKind: result.code === 'network' ? 'network' : 'server',
+  }
 }
 
 function gatewaySessionSuperseded(): TransportVerifyResult {
-  return { ok: false, detail: 'gateway session verification superseded by connection invalidation' }
+  // The destination answered; this is a generation race, not link loss.
+  return { ok: false, detail: 'gateway session verification superseded by connection invalidation', failureKind: 'server' }
 }
 
 /**
@@ -966,7 +974,7 @@ export const gatewayProvider: TransportProvider = {
         () => {
           const token = getGatewayToken(spec.id)
           if (token === null) {
-            return Promise.resolve({ ok: false, detail: 'no gateway bearer token configured', terminal: false })
+            return Promise.resolve({ ok: false, detail: 'no gateway bearer token configured', terminal: false, failureKind: 'server' })
           }
           return verifyGatewayEndpoint(spec.host, spec.remotePort, token, spec.insecureHttp, GATEWAY_VERIFY_TIMEOUT_MS, GATEWAY_VERIFY_MAX_BODY_BYTES, null, spec.spkiPin ?? null)
         },
