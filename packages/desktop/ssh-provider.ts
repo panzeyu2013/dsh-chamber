@@ -229,10 +229,10 @@ export async function verifyDshEndpoint(
     maxBodyBytes,
   })
   if (outcome.timeout) {
-    return { ok: false, detail: `the destination did not answer the dsh identity probe within ${timeoutMs}ms` }
+    return { ok: false, failureKind: 'network', detail: `the destination did not answer the dsh identity probe within ${timeoutMs}ms` }
   }
   if (outcome.status === null) {
-    return { ok: false, detail: 'the destination did not answer the dsh identity probe' }
+    return { ok: false, failureKind: 'network', detail: 'the destination did not answer the dsh identity probe' }
   }
   // Non-200 (404 from a non-dsh web server or an old dsh without the identity method, 403, 5xx, …):
   // classify with the dsh-signature probe before choosing the message.
@@ -242,23 +242,29 @@ export async function verifyDshEndpoint(
     // tunnel. Fail loud with the honest reason instead of "not a dsh"; the signature probe is gated
     // the same way, so the message hedges the non-dsh 401 case.
     if (outcome.status === 401) {
-      return { ok: false, detail: 'the destination answered HTTP 401 — a 0.1.2 browser-auth-gated dsh (its launch token is unrecoverable over SSH; remote attach is blocked until upstream exposes a token retrieval mechanism) or a non-dsh server', terminal: true }
+      return { ok: false, failureKind: 'auth', detail: 'the destination answered HTTP 401 — a 0.1.2 browser-auth-gated dsh (its launch token is unrecoverable over SSH; remote attach is blocked until upstream exposes a token retrieval mechanism) or a non-dsh server', terminal: true }
+    }
+    // 5xx/408/425/429 prove the destination is REACHABLE but busy; they are
+    // transient and must never become a terminal identity verdict. The link
+    // probe's server-failure class deliberately does not count toward link down.
+    if (outcome.status === 408 || outcome.status === 425 || outcome.status === 429 || outcome.status >= 500) {
+      return { ok: false, failureKind: 'server', detail: `the destination answered HTTP ${String(outcome.status)} to the dsh identity probe` }
     }
     const signature = await probeDshSignature(endpoint, Math.min(VERIFY_UP_SIGNATURE_TIMEOUT_MS, remaining()))
     if (signature !== 'none') {
-      return { ok: false, detail: 'the destination is a dsh instance, but it did not answer the dsh identity probe — check or upgrade the remote dsh', terminal: true }
+      return { ok: false, failureKind: 'protocol', detail: 'the destination is a dsh instance, but it did not answer the dsh identity probe — check or upgrade the remote dsh', terminal: true }
     }
-    return { ok: false, detail: `the destination answered HTTP ${outcome.status ?? '?'} to the dsh identity probe — it does not appear to be a dsh instance`, terminal: true }
+    return { ok: false, failureKind: 'protocol', detail: `the destination answered HTTP ${outcome.status ?? '?'} to the dsh identity probe — it does not appear to be a dsh instance`, terminal: true }
   }
   if (outcome.oversized) {
     // Only the legacy fallback arm can carry a legitimately large answer; the primary identity arm's
     // fixed-size boolean can never approach its 64 KiB cap — oversized is deterministic non-dsh evidence.
-    return { ok: false, detail: 'the destination answered an oversized dsh identity probe response — it does not appear to be a dsh instance', terminal: true }
+    return { ok: false, failureKind: 'protocol', detail: 'the destination answered an oversized dsh identity probe response — it does not appear to be a dsh instance', terminal: true }
   }
   const parsed = parseServerResponse(outcome.body, rpcId)
   if (parsed.kind !== 'ok' || parsed.envelope.result.ok !== true
     || typeof parsed.envelope.result.value !== 'boolean') {
-    return { ok: false, detail: 'the destination answered an unexpected dsh identity probe response — it does not appear to be a dsh instance', terminal: true }
+    return { ok: false, failureKind: 'protocol', detail: 'the destination answered an unexpected dsh identity probe response — it does not appear to be a dsh instance', terminal: true }
   }
   return { ok: true }
 }
@@ -336,7 +342,7 @@ async function verifyGatewayWithPasswordViaTunnel(
   () => {
     const token = getGatewayToken(spec.id)
     if (token === null) {
-      return Promise.resolve({ ok: false, detail: 'no gateway bearer token configured', terminal: false })
+      return Promise.resolve({ ok: false, detail: 'no gateway bearer token configured', terminal: false, failureKind: 'server' })
     }
     return verifyGatewayEndpointViaTunnel(endpoint, token, VERIFY_UP_TIMEOUT_MS, VERIFY_UP_MAX_BODY_BYTES, null, authority)
   })
@@ -882,9 +888,14 @@ export const sshProvider: TransportProvider = {
     // SSH keepalive (SERVER_ALIVE_*): ssh exits on its own within ~90s of a dead connection,
     // feeding the runtime's reconnect; probes also refresh NAT mappings TCP keepalives cannot.
     const keepaliveArgs = ['-o', `ServerAliveInterval=${SERVER_ALIVE_INTERVAL_SECONDS}`, '-o', `ServerAliveCountMax=${SERVER_ALIVE_COUNT_MAX}`]
+    // A black-holed host must fail the attempt quickly instead of burning the OS
+    // TCP timeout; a local -L bind failure must fail the child instead of leaving
+    // a listener that can never forward. Bind failures are re-allocated by the
+    // transport manager (not counted as a retry) when the port race is lost.
+    const connectArgs = ['-o', 'ConnectTimeout=15', '-o', 'ExitOnForwardFailure=yes']
     return spec.sshPort === null
-      ? ['-N', ...keepaliveArgs, '-L', `${localPort}:127.0.0.1:${spec.remotePort}`, target]
-      : ['-N', ...keepaliveArgs, '-p', String(spec.sshPort), '-L', `${localPort}:127.0.0.1:${spec.remotePort}`, target]
+      ? ['-N', ...connectArgs, ...keepaliveArgs, '-L', `${localPort}:127.0.0.1:${spec.remotePort}`, target]
+      : ['-N', ...connectArgs, ...keepaliveArgs, '-p', String(spec.sshPort), '-L', `${localPort}:127.0.0.1:${spec.remotePort}`, target]
   },
 
   /** Password auth: when a password is stored, return the askpass env so the tunnel spawn delivers

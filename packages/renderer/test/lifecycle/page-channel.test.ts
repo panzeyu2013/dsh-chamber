@@ -485,6 +485,143 @@ test('capability_not_found 不重试；瞬时错误按阶梯重订阅', async ()
   }
 })
 
+test('link epoch: instance_unavailable parks the subscription and the ready edge re-subscribes immediately', async () => {
+  installFakeWebSocket()
+  const listeners = new Set<(sourceId: string) => void>()
+  let ready = false
+  let epoch = 0
+  try {
+    const mod = await loadPageChannel()
+    mod.configurePageChannelLink({
+      ready: () => ready,
+      epoch: () => epoch,
+      subscribe: (listener) => {
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      },
+    })
+    let diagnostics = 0
+    const sub = mod.subscribePageChannel({
+      family: 'pluginGraph',
+      instanceId: 'dsh-a',
+      onItem: () => undefined,
+      onDiagnostic: () => { diagnostics += 1 },
+    })
+    const socket = FakeWebSocket.latest()
+    socket.open()
+    const subscribeFrames = (): number => socket.frames().filter(frame => frame.type === 'subscribe').length
+    assert.equal(subscribeFrames(), 0, 'an initially-down link must not spend a subscribe round-trip')
+    await Promise.resolve()
+    assert.equal(diagnostics, 1, 'the consumer is told once that the source is unavailable')
+
+    ready = true
+    epoch = 1
+    for (const listener of [...listeners]) listener('dsh-a')
+    assert.equal(subscribeFrames(), 1, 'a link epoch re-subscribes immediately')
+    sub.close()
+    mod.configurePageChannelLink(null)
+  } finally {
+    restoreHost()
+  }
+})
+
+test('a link epoch also wakes a failed-but-unparked subscription before its ladder rung', async () => {
+  installFakeWebSocket()
+  const listeners = new Set<(sourceId: string) => void>()
+  let ready = true
+  let epoch = 1
+  try {
+    const mod = await loadPageChannel()
+    mod.configurePageChannelLink({
+      ready: () => ready,
+      epoch: () => epoch,
+      subscribe: (listener) => {
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      },
+    })
+    const sub = mod.subscribePageChannel({ family: 'pluginGraph', instanceId: 'dsh-a', onItem: () => undefined })
+    const socket = FakeWebSocket.latest()
+    socket.open()
+    const subscribeFrames = (): number => socket.frames().filter(frame => frame.type === 'subscribe').length
+    const id = String(socket.frames()[0].id)
+    socket.message(JSON.stringify({ type: 'error', id, code: 'upstream_failed', message: 'upstream broke' }))
+    assert.equal(subscribeFrames(), 1, 'the failed subscription is waiting on its ladder')
+    epoch = 2
+    for (const listener of [...listeners]) listener('dsh-a')
+    assert.equal(subscribeFrames(), 2, 'the epoch releases the pending ladder immediately')
+    sub.close()
+    mod.configurePageChannelLink(null)
+  } finally {
+    restoreHost()
+  }
+})
+
+test('link recovery staggers a wave of parked subscriptions', async () => {
+  installFakeWebSocket()
+  const listeners = new Set<(sourceId: string) => void>()
+  let ready = false
+  let epoch = 0
+  try {
+    const mod = await loadPageChannel()
+    mod.configurePageChannelLink({
+      ready: () => ready,
+      epoch: () => epoch,
+      subscribe: (listener) => {
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      },
+    })
+    const first = mod.subscribePageChannel({ family: 'pluginGraph', instanceId: 'dsh-a', onItem: () => undefined })
+    const second = mod.subscribePageChannel({ family: 'pluginGraph', instanceId: 'dsh-a', onItem: () => undefined })
+    const socket = FakeWebSocket.latest()
+    socket.open()
+    const subscribeFrames = (): number => socket.frames().filter(frame => frame.type === 'subscribe').length
+    assert.equal(subscribeFrames(), 0, 'both subscriptions park before spending a round-trip')
+
+    ready = true
+    epoch = 1
+    for (const listener of [...listeners]) listener('dsh-a')
+    assert.equal(subscribeFrames(), 1, 'the first parked subscription resumes immediately')
+    await new Promise(resolve => { setTimeout(resolve, 60) })
+    assert.equal(subscribeFrames(), 1, 'the second waits its stagger slot')
+    await new Promise(resolve => { setTimeout(resolve, 100) })
+    assert.equal(subscribeFrames(), 2, 'the wave is released in slots, not a stampede')
+    first.close()
+    second.close()
+    mod.configurePageChannelLink(null)
+  } finally {
+    restoreHost()
+  }
+})
+
+test('a parked subscription force-probes after the 30s fallback', async (t) => {
+  installFakeWebSocket()
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  t.after(() => { t.mock.timers.reset() })
+  let ready = false
+  try {
+    const mod = await loadPageChannel()
+    mod.configurePageChannelLink({
+      ready: () => ready,
+      epoch: () => 0,
+      subscribe: () => () => {},
+    })
+    const sub = mod.subscribePageChannel({ family: 'pluginGraph', instanceId: 'dsh-a', onItem: () => undefined })
+    const socket = FakeWebSocket.latest()
+    socket.open()
+    const subscribeFrames = (): number => socket.frames().filter(frame => frame.type === 'subscribe').length
+    assert.equal(subscribeFrames(), 0, 'initially parked')
+    t.mock.timers.tick(30_000)
+    await Promise.resolve()
+    assert.equal(subscribeFrames(), 1, 'the fallback forces one probe subscription')
+    sub.close()
+    mod.configurePageChannelLink(null)
+  } finally {
+    restoreHost()
+  }
+})
+
 test('页面 origin 为 https 时通道派生 wss://（同一 origin，不得硬编码 ws）', async () => {
   installFakeWebSocket()
   let sub: { close(): void } | undefined

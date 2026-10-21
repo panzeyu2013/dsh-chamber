@@ -251,6 +251,85 @@ test('a lane-commanded reconnect does not widen the mux heal cadence', async (t)
   await client.close()
 })
 
+test('a denied lane rebuild is retried once after the 60s carrier window', async (t) => {
+  installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  t.after(() => t.mock.timers.reset())
+  const facts: string[] = []
+  const client = new RemoteStreamMuxClient({
+    forensics: (kind) => { facts.push(kind) },
+    waitForReconnect: true,
+  })
+  client.start()
+  await flushMicrotasks()
+  FakeSocket.instances[0].openNow()
+  await flushMicrotasks()
+
+  // First lane reconnect is admitted and replaces the carrier.
+  client.reconnect()
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 2, 'first reconnect replaces the socket')
+  FakeSocket.instances[1].openNow()
+  await flushMicrotasks()
+
+  // Second reconnect lands inside the one-rebuild 60s window: the reducer denies it.
+  client.reconnect()
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 2, 'the throttle must not replace immediately')
+  assert.ok(facts.includes('carrier-throttled'), 'the denial is observable')
+
+  // The denied path arms exactly one deferred replacement at the window edge.
+  t.mock.timers.tick(60_000)
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 3, 'the window edge replaces the carrier once')
+  assert.ok(facts.includes('carrier-throttle-expired'), 'the deferred retry is observable')
+  await client.close()
+})
+
+test('a closed socket bypasses the rebuild window instead of being throttled', async (t) => {
+  installFakeSocket()
+  const facts: string[] = []
+  const client = new RemoteStreamMuxClient({
+    forensics: kind => { facts.push(kind) },
+    waitForReconnect: true,
+  })
+  client.start()
+  await flushMicrotasks()
+  FakeSocket.instances[0].openNow()
+  await flushMicrotasks()
+  // First lane reconnect consumes the one-per-window rebuild budget.
+  client.reconnect()
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 2)
+  FakeSocket.instances[1].openNow()
+  await flushMicrotasks()
+  // The replacement dies, then the lane asks again inside the 60s window. A
+  // closed socket must bypass the reducer, not be swallowed as throttled.
+  FakeSocket.instances[1].dieNow()
+  await flushMicrotasks()
+  client.reconnect()
+  await flushMicrotasks()
+  assert.ok(FakeSocket.instances.length >= 3, 'a closed carrier is replaced immediately')
+  assert.equal(facts.includes('carrier-throttled'), false, 'closed bypass never reports throttled')
+  await client.close()
+})
+
+test('a burst of non-open lane reconnects does not cancel the in-flight attempt repeatedly', async (t) => {
+  installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  t.after(() => t.mock.timers.reset())
+  const client = new RemoteStreamMuxClient({ waitForReconnect: true })
+  client.start()
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 1)
+  client.reconnect()
+  client.reconnect()
+  client.reconnect()
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 2, 'the first reconnect replaces; the same-tick burst is debounced')
+  await client.close()
+})
+
 test('a synchronous socket construction failure still recovers', async (t) => {
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })

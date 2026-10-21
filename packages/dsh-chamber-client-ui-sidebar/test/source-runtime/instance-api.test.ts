@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createHostDirectory, fetchInstanceSnapshot, searchSessions } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
+import { MutationOutcomeUnknownError, createHostDirectory, fetchInstanceSnapshot, searchSessions } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 import { HttpBudgetUnscheduledError, acquireHttpBudget, configureHttpBudgetForTests, resetHttpBudgetForTests } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
 
 /** One wire summary row (SessionSummary shape the unary client decodes). */
@@ -104,6 +104,34 @@ test('fetchInstanceSnapshot 绝不伪造 sessionId：非字符串行直接丢弃
   const snapshot = await fetchInstanceSnapshot(client as never)
   assert.deepEqual(snapshot.sessions.map(row => row.sessionId), ['ok'],
     "String() 会把 ['x']/42/null/{id} 造成 'x'/'42'/'null'/'[object Object]' 这类假 id")
+})
+
+test('a 502/504 after-body failure is MutationOutcomeUnknown, never retryable failure', async () => {
+  const originalFetch = globalThis.fetch
+  try {
+    const client = getInstanceClient('local')
+    for (const [status, code] of [[504, 'upstream_timeout'], [502, 'upstream_failed']] as const) {
+      globalThis.fetch = (async () => new Response(JSON.stringify({
+        error: 'upstream failed after the request body was sent; the host may have applied it',
+        code,
+        details: { phase: 'after-body' },
+      }), { status, headers: { 'content-type': 'application/json' } })) as typeof fetch
+      await assert.rejects(
+        client.session.create({}, undefined),
+        (error: unknown) => error instanceof MutationOutcomeUnknownError,
+      )
+    }
+    // A read is not a mutation: the same wire fact must stay a retryable HTTP failure.
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      error: 'upstream failed after the body', code: 'upstream_failed', details: { phase: 'after-body' },
+    }), { status: 502, headers: { 'content-type': 'application/json' } })) as typeof fetch
+    await assert.rejects(
+      client.session.list({}, undefined, { timeoutMs: 500 }),
+      (error: unknown) => !(error instanceof MutationOutcomeUnknownError),
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
 })
 
 test('unary 错误码只承认字符串：数组 code 不得伪造 domain 词汇', async () => {

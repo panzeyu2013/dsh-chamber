@@ -157,6 +157,12 @@ export interface TransportStatusProjection {
   serviceActive: boolean | null
   /** Remote dsh home (non-secret metadata). */
   remoteDshHome: string | null
+  /**
+   * Ready-state link health. Only meaningful while `phase === 'ready'`; absent
+   * for old shims/renderers (treated as healthy). `suspect` still forwards; only
+   * `down` is fast-failed by the proxy.
+   */
+  link?: TransportLinkProjection
   logSummary: string
 }
 
@@ -189,6 +195,13 @@ export interface SpawnedProcess {
   kill(signal?: NodeJS.Signals): boolean
 }
 
+/** Ready-state link health projection; never carries credentials or a tunnel URL. */
+export interface TransportLinkProjection {
+  state: 'healthy' | 'suspect' | 'down'
+  /** Increments when the link enters a usable generation; page consumers reset on this. */
+  linkEpoch: number
+}
+
 /** The endpoint a transport exposes to probes (always the local tunnel listener 127.0.0.1:<localPort>). */
 export interface TransportProbeEndpoint {
   host: string
@@ -207,6 +220,13 @@ export interface TransportVerifyResult {
    * the bounded reconnect path applies.
    */
   terminal?: boolean
+  /**
+   * Why a non-ok probe failed. The transport manager counts only `network` toward
+   * the link-down streak; 5xx/408/425/429 (`server`) and 401 (`auth`) prove the
+   * path is reachable and must never tear the tunnel down. `protocol` is terminal.
+   * Absent = classify by `terminal` (protocol) or network, for older providers.
+   */
+  failureKind?: 'network' | 'server' | 'auth' | 'protocol'
 }
 
 /** One complete stderr line, classified by the provider. */

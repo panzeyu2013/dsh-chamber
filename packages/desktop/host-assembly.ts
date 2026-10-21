@@ -9,7 +9,7 @@
  * 不变式：零 electron import；plane 晚绑定；凭据值/cookie/会话体绝不进日志、registry 与
  * renderer 载荷（只传存在性投影与 non-secret 指纹）。
  */
-import { createHash } from 'node:crypto'
+import { applyTransportRegistration, authHeadersFingerprint, registrationKey, sanitizedRegistrationHeaders } from './transport-registration.ts'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { PlaneHandle } from '@dsh-chamber/control-plane'
@@ -133,6 +133,8 @@ export interface HostAssembly {
   }
   /** OS 唤醒 → 重探陈旧 transport（判据在 transport-reconnect 单源）。 */
   reconnectStaleTransports(): void
+  /** OS 唤醒/网络恢复 → 对 READY 远端强制一次复验（含 ready-but-half-open）。 */
+  reverifyAllTransports(): void
 }
 
 /** 装配两个 flavor 共用的宿主。async：启动前导先回收本地插件写进程账目（stale writer 证明先于任何本地 spawn/写路径）。 */
@@ -325,14 +327,15 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
   // —— live-proxy 会话自愈：仅存非秘密 sha256 指纹（headers VALUES 绝不进 map）；
   // register/onVerified 两条路径共用同一事实（否则 refresh 重注册后指纹门失效）。
   const registeredAuthFingerprints = new Map<string, string>()
-  const authHeadersFingerprint = (headers: Record<string, string> | undefined): string => {
-    const canonical = headers === undefined
-      ? 'none'
-      : Object.keys(headers).sort().map(key => `${key}:${headers[key]}`).join('|')
-    return createHash('sha256').update(canonical).digest('hex')
-  }
-  const sanitizedRegistrationHeaders = (headers: Record<string, string>): Record<string, string> | undefined =>
-    Object.keys(headers).length === 0 ? undefined : headers
+  /** The exact target/credential/transport key of the LIVE registration. A status
+   *  push that only changes link health must NOT call registerInstanceTransport:
+   *  the proxy revokes every in-flight response/stream when a connectionId is
+   *  re-registered. */
+  const registeredTargetKeys = new Map<string, string>()
+  /** Bound the auth-fail -> disconnect/connect TOCTOU retry: a second ready edge
+   *  before the first reconnect settles must not hammer the gateway. */
+  const AUTH_RECOVERY_MIN_INTERVAL_MS = 5_000
+  const authRecoveryAt = new Map<string, number>()
   // Live-proxy 会话自愈控制器（gateway-session-refresh.ts 零 electron——时钟/计时器注入
   // 为纯 Node 缺省）；ready 注册 arm / 离开 ready disarm / onVerified 指纹重注册接线在下方，
   // register 腿 = plane → registerInstanceTransport（隧道 Host authority 覆盖 + 指纹锁步）。
@@ -359,15 +362,23 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     register: (id, url, headers, tls, authority) => {
       const livePlane = plane()
       const registered = sm.listInstances().find(instance => instance.id === id)
+      const liveStatus = sm.status(id)
       if (livePlane !== null) livePlane.registerInstanceTransport(`gateway:${id}`, url, headers, {
         ...(registered === undefined ? {} : { transport: proxyTransport(registered.transport) }),
         ...(tls === undefined ? {} : tls),
         ...(authority === undefined ? {} : { authority }),
+        ...(liveStatus?.link === undefined ? {} : { health: liveStatus.link.state }),
       })
       // Keep the registered-auth fingerprint in lockstep：refresh 重注册 REPLACES 代理
       // headers——指纹门须认已轮换 cookie，否则下次 ready 探针无条件再注册（撤销在途流量）。
-      registeredAuthFingerprints.set(`gateway:${id}`, authHeadersFingerprint(
-        headers === undefined ? undefined : sanitizedRegistrationHeaders(headers),
+      const sanitized = headers === undefined ? undefined : sanitizedRegistrationHeaders(headers)
+      registeredAuthFingerprints.set(`gateway:${id}`, authHeadersFingerprint(sanitized))
+      registeredTargetKeys.set(`gateway:${id}`, registrationKey(
+        url,
+        registered?.transport,
+        sanitized,
+        tls?.tls.spkiPin,
+        authority,
       ))
     },
     // Bounded dead-cookie recovery：disconnect（idle → 控制面注销 + disarm）→ connect
@@ -629,7 +640,14 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
               // 在间隙被逐/失效而无头注册；有 token 时允许有意的 OR-principal bearer 回退。
               cp.unregisterInstanceTransport(`${status.kind}:${id}`)
               registeredAuthFingerprints.delete(`${status.kind}:${id}`)
+              registeredTargetKeys.delete(`${status.kind}:${id}`)
               sessionRefresh.disarm(id)
+              const now = Date.now()
+              if (now - (authRecoveryAt.get(id) ?? 0) < AUTH_RECOVERY_MIN_INTERVAL_MS) {
+                sm.appendLog(id, 'warn', 'gateway session changed again before recovery settled; waiting for the next ready edge')
+                return
+              }
+              authRecoveryAt.set(id, now)
               sm.appendLog(id, 'warn', 'gateway session changed before proxy registration; re-authenticating')
               // 只捕获 scope 进恢复 microtask——绝不闭包整个 facts（auth.headers 载 cookie）。
               const scope = facts.scope
@@ -648,31 +666,54 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
             }
             const connectionId = `${status.kind}:${id}`
             const headers = sanitizedRegistrationHeaders(auth.headers)
-            cp.registerInstanceTransport(
-              connectionId,
-              url,
-              headers,
-              {
-                ...(registered === undefined ? {} : { transport: proxyTransport(registered.transport) }),
-                ...(facts.spkiPin === undefined ? {} : { tls: { spkiPin: facts.spkiPin } }),
-                ...(facts.tunnelAuthority === undefined ? {} : { authority: facts.tunnelAuthority }),
+            const nextKey = registrationKey(url, status.transport, headers, facts.spkiPin, facts.tunnelAuthority)
+            applyTransportRegistration(registeredTargetKeys.get(connectionId), nextKey, {
+              // Health-only projection change: do NOT re-register (it revokes
+              // every in-flight HTTP response and WS splice).
+              setHealth: () => cp.setInstanceTransportHealth(connectionId, status.link?.state ?? 'healthy'),
+              register: () => {
+                cp.registerInstanceTransport(
+                  connectionId,
+                  url,
+                  headers,
+                  {
+                    transport: proxyTransport(status.transport),
+                    ...(facts.spkiPin === undefined ? {} : { tls: { spkiPin: facts.spkiPin } }),
+                    ...(facts.tunnelAuthority === undefined ? {} : { authority: facts.tunnelAuthority }),
+                    ...(status.link === undefined ? {} : { health: status.link.state }),
+                  },
+                )
+                registeredTargetKeys.set(connectionId, nextKey)
+                registeredAuthFingerprints.set(connectionId, authHeadersFingerprint(headers))
+                authRecoveryAt.delete(id)
+                // 每次 gateway ready 注册后 best-effort 把本地 chamber host 包 sync 进 gateway
+                // seed cache（幂等：仅版本失配重传）；手动 sync re-entry 参数经
+                // setGatewaySyncRegistration 落注册表——删除/离开 ready 撤销同表。
+                setGatewaySyncRegistration(id, { url, headers: { ...auth.headers }, spkiPin: facts.spkiPin ?? null })
+                void syncGatewayChamberPluginsFor(id, url, auth.headers, facts.spkiPin ?? null)
+                // A real registration edge starts the pre-expiry session refresh; a
+                // health-only update above must not touch its epoch.
+                sessionRefresh.arm(id)
               },
-            )
-            registeredAuthFingerprints.set(connectionId, authHeadersFingerprint(headers))
-            // 每次 gateway ready 注册后 best-effort 把本地 chamber host 包 sync 进 gateway
-            // seed cache（幂等：仅版本失配重传）；手动 sync re-entry 参数经
-            // setGatewaySyncRegistration 落注册表——删除/离开 ready 撤销同表。
-            setGatewaySyncRegistration(id, { url, headers: { ...auth.headers }, spkiPin: facts.spkiPin ?? null })
-            void syncGatewayChamberPluginsFor(id, url, auth.headers, facts.spkiPin ?? null)
-          } else {
-            cp.registerInstanceTransport(`${status.kind}:${id}`, url, undefined, {
-              transport: proxyTransport(status.transport),
             })
-            registeredAuthFingerprints.set(`${status.kind}:${id}`, authHeadersFingerprint(undefined))
+          } else {
+            const connectionId = `${status.kind}:${id}`
+            const nextKey = registrationKey(url, status.transport, undefined, undefined, undefined)
+            applyTransportRegistration(registeredTargetKeys.get(connectionId), nextKey, {
+              setHealth: () => cp.setInstanceTransportHealth(connectionId, status.link?.state ?? 'healthy'),
+              register: () => {
+                cp.registerInstanceTransport(connectionId, url, undefined, {
+                  transport: proxyTransport(status.transport),
+                  ...(status.link === undefined ? {} : { health: status.link.state }),
+                })
+                registeredTargetKeys.set(connectionId, nextKey)
+                registeredAuthFingerprints.set(connectionId, authHeadersFingerprint(undefined))
+              },
+            })
           }
-          // Live-proxy session self-healing：ready 注册即 arm 预到期 refresh（无密码目标
-          // no-op、重连后新隧道 origin 下幂等 re-arm）；dsh 目标无 auth 面 → 不 refresh。
-          if (status.kind === 'gateway') sessionRefresh.arm(id)
+          // Live-proxy session self-healing is armed on the REGISTER edge below,
+          // not on every ready status push: a health-only projection change must
+          // not bump the refresh epoch and discard an in-flight re-login.
           // One registration edge per instance.
           if (!auditRegistered.has(id)) {
             auditRegistered.add(id)
@@ -689,6 +730,8 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
       } else {
         cp.unregisterInstanceTransport(`${status.kind}:${id}`)
         registeredAuthFingerprints.delete(`${status.kind}:${id}`)
+        registeredTargetKeys.delete(`${status.kind}:${id}`)
+        authRecoveryAt.delete(id)
         // Leaving ready cancels the pre-expiry refresh.
         sessionRefresh.disarm(id)
         // Manual gateway_plugin_sync re-entry dies with the ready registration（design 21 §6.5）。
@@ -739,7 +782,10 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     if (!facts.auth.ok) return
     const connectionId = `gateway:${id}`
     const headers = sanitizedRegistrationHeaders(facts.auth.headers)
-    if (authHeadersFingerprint(headers) === registeredAuthFingerprints.get(connectionId)) return
+    if (authHeadersFingerprint(headers) === registeredAuthFingerprints.get(connectionId)) {
+      cp.setInstanceTransportHealth(connectionId, 'healthy')
+      return
+    }
     cp.registerInstanceTransport(
       connectionId,
       url,
@@ -748,9 +794,18 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
         transport: proxyTransport(registered.transport),
         ...(facts.spkiPin === undefined ? {} : { tls: { spkiPin: facts.spkiPin } }),
         ...(facts.tunnelAuthority === undefined ? {} : { authority: facts.tunnelAuthority }),
+        health: 'healthy',
       },
     )
     registeredAuthFingerprints.set(connectionId, authHeadersFingerprint(headers))
+    registeredTargetKeys.set(connectionId, registrationKey(
+      url,
+      registered.transport,
+      headers,
+      facts.spkiPin,
+      facts.tunnelAuthority,
+    ))
+    sessionRefresh.arm(id)
     sm.appendLog(id, 'info', 'gateway session re-established — proxy registration refreshed with the new session')
   })
 
@@ -1113,5 +1168,9 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
       (message, error) => console.warn(message, error),
       logTag,
     ),
+    reverifyAllTransports: () => {
+      if (deps.isQuitting()) return
+      transportManager?.reverifyAll()
+    },
   }
 }

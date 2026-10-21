@@ -3,6 +3,7 @@
 
 import { useState } from 'react'
 import { HttpBudgetUnscheduledError } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
+import { MutationOutcomeUnknownError } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 import type { SidebarKey } from './locales.ts'
 
 /** Signature of the shell keyed action runner (rowErrors reporting). */
@@ -33,7 +34,9 @@ export function useSidebarActions(t: (key: SidebarKey) => string) {
         // through the same dictionary every other row error uses (design 26 §D7).
         const message = reason instanceof HttpBudgetUnscheduledError
           ? t('action.notDispatched')
-          : reason instanceof Error ? reason.message : String(reason)
+          : reason instanceof MutationOutcomeUnknownError
+            ? t('action.outcomeUnknown')
+            : reason instanceof Error ? reason.message : String(reason)
         setRowErrors((prev) => ({ ...prev, [key]: message }))
         return false
       },

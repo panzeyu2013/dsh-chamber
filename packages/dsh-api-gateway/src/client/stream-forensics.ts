@@ -43,6 +43,8 @@ export type StreamForensicsKind =
   | 'carrier-rebuild'
   /** The reducer denied a replacement and paired it with a reopen (never a silent drop). */
   | 'carrier-throttled'
+  /** A denied replacement's single deferred retry reached the window edge. */
+  | 'carrier-throttle-expired'
 
 /**
  * Structured attribution carried by the opening facts. Every field is optional

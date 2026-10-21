@@ -376,6 +376,7 @@ async function handleInboundLine(line: string): Promise<void> {
         console.info('[sidecar] __host.systemResume 入站：core 回灌 + 陈旧 transport 重探')
         try {
           headless?.reconnectStaleTransports()
+          headless?.reverifyAllTransports()
         } catch (error) {
           console.error('[sidecar] 唤醒重探异常：' + String(error))
         }

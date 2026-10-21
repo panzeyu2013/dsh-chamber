@@ -82,6 +82,9 @@ export function fakePlane(overrides: Partial<PlaneHandle> = {}): PlaneHandle & {
     get localWritersQuiescent() { return true },
     get instanceId() { return 'test-gateway' },
     ...overrides,
+    // `Partial<PlaneHandle>` may explicitly carry undefined; keep the required
+    // method callable after the spread.
+    setInstanceTransportHealth: overrides.setInstanceTransportHealth ?? (() => {}),
     _state: state,
   }
 }

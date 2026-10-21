@@ -40,6 +40,9 @@ import {
 
 /** The real clock, injected; the bound must not hold the process open, so its handles
  *  are unref'd. Exported so the journal probe rides this same scheduler. */
+const FORCED_REBUILD_MIN_INTERVAL_MS = 50
+const THROTTLE_RETRY_FALLBACK_MS = 1_000
+
 export const UNREF_SCHEDULER = {
   setTimeout: (run: () => void, ms: number): unknown => {
     const handle = setTimeout(run, ms)
@@ -139,6 +142,14 @@ export class RemoteStreamMuxClient {
   private lastMaintainAt = 0
   private maintainIntervalMs = REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS
   private healTimer: ReturnType<typeof setTimeout> | undefined
+  /** A denied physical rebuild is retried once, at the reducer's earliest legal time.
+   *  Without this, a lane reconnect inside the 60s throttle window only re-opens the
+   *  logical stream on the SAME (possibly half-open) carrier. */
+  private throttleTimer: ReturnType<typeof setTimeout> | undefined
+  private throttleRetried = false
+  /** Non-OPEN lane reconnects cancel the in-flight attempt; a tight burst must not
+   *  turn into a connect/cancel storm. */
+  private lastForcedRebuildAt = Number.NEGATIVE_INFINITY
   private running = false
   private disposed = false
   private failure: RemoteStreamCarrierError | undefined
@@ -217,6 +228,15 @@ export class RemoteStreamMuxClient {
   ): readonly RecoveryEffect[] {
     if (this.decisionCycle === cycle) return []
     this.decisionCycle = cycle
+    // A closed/closing socket is not protected by the rebuild window: there is no
+    // healthy carrier to preserve, and a lane reconnect must never be swallowed.
+    if (this.socket === undefined || this.socket.readyState !== 1) {
+      const now = Date.now()
+      if (now - this.lastForcedRebuildAt < FORCED_REBUILD_MIN_INTERVAL_MS) return []
+      this.lastForcedRebuildAt = now
+      this.replaceSocket(failure, closeReason)
+      return []
+    }
     const effects = this.observeCarrier({
       kind: 'rebuildRequested',
       at: Date.now(), // the reducer's window is a time window
@@ -231,7 +251,66 @@ export class RemoteStreamMuxClient {
     if (decided) this.replaceSocket(failure, closeReason)
     // A refusal is paired with `reopenLogicalStream`: no exitless spinner.
     this.applyRecoveryEffects(effects, failure)
+    if (!decided && effects.some((effect) => effect.e === 'throttled')) {
+      this.armThrottleRetry(failure, closeReason, reason, streamId, streak, framesSinceSend)
+    }
     return effects
+  }
+
+  /**
+   * A denied rebuild still must not leave a lane permanently pinned to a suspect
+   * carrier. Arm ONE retry at the reducer's earliest legal time (window/in-flight
+   * spacing), then give up until the socket is replaced: the next lane event is a
+   * fresh decision, not a timer storm.
+   */
+  private armThrottleRetry(
+    failure: RemoteStreamCarrierError,
+    closeReason: string,
+    reason: RebuildReason,
+    streamId?: string,
+    streak?: number,
+    framesSinceSend?: number,
+  ): void {
+    if (this.throttleRetried || this.throttleTimer !== undefined) return
+    if (!this.running || this.disposed) return
+    const at = Date.now()
+    if (!Number.isFinite(at)) return
+    const env = this.carrierEnv
+    const last = this.carrierState.rebuildsAt.length === 0
+      ? undefined
+      : Math.max(...this.carrierState.rebuildsAt)
+    let retryAt = at + THROTTLE_RETRY_FALLBACK_MS
+    if (this.carrierState.pendingRebuild !== null && last !== undefined) {
+      retryAt = Math.max(retryAt, last + env.inFlightGraceMs)
+    }
+    if (this.carrierState.rebuildsAt.length >= env.maxRebuildsPerWindow) {
+      retryAt = Math.max(retryAt, Math.min(...this.carrierState.rebuildsAt) + env.rebuildWindowMs)
+    }
+    if (last !== undefined) retryAt = Math.max(retryAt, last + env.minRebuildSpacingMs)
+    this.throttleRetried = true
+    const timer = setTimeout(() => {
+      this.throttleTimer = undefined
+      if (!this.running || this.disposed) return
+      if (this.socket === undefined || this.socket.readyState !== 1) return
+      this.forensics?.('carrier-throttle-expired', reason)
+      this.requestCarrierRebuild(
+        failure,
+        `${closeReason} (throttle expiry)`,
+        reason,
+        this.nextDecisionCycle(),
+        streamId,
+        streak,
+        framesSinceSend,
+      )
+    }, Math.max(0, retryAt - at))
+    timer.unref?.()
+    this.throttleTimer = timer
+  }
+
+  private clearThrottleTimer(): void {
+    if (this.throttleTimer === undefined) return
+    clearTimeout(this.throttleTimer)
+    this.throttleTimer = undefined
   }
 
   /** Execute the reducer's typed effects; unknown ones are ignored so the package can
@@ -268,6 +347,8 @@ export class RemoteStreamMuxClient {
    */
   private replaceSocket(failure: RemoteStreamCarrierError, closeReason: string): void {
     if (!this.running || this.disposed) return
+    this.clearThrottleTimer()
+    this.throttleRetried = false
     const pending = this.keepAlive
     this.revision++
     // A deliberate replacement restarts from the base cadence (the reconnect is the attempt).
@@ -604,6 +685,7 @@ export class RemoteStreamMuxClient {
       this.failAll(error)
       for (const waiter of [...this.waiters]) waiter.reject(error)
       this.stopHealTimer()
+      this.clearThrottleTimer()
       // Disposing the client ends every episode, so the reducer state resets with it.
       this.carrierState = initialCarrierState()
       this.socketFrames = 0
@@ -651,8 +733,11 @@ export class RemoteStreamMuxClient {
         // chamber patch: an established socket resets the self-heal cadence.
         this.maintainIntervalMs = REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS
         this.stopHealTimer()
+        this.clearThrottleTimer()
+        this.throttleRetried = false
         this.socket = socket
         this.socketFrames = 0
+        this.observeCarrier({ kind: 'carrierOpened', at: Date.now() })
         for (const waiter of [...this.waiters]) waiter.resolve(socket)
         resolve(socket)
       }
@@ -754,6 +839,7 @@ export class RemoteStreamMuxClient {
       // chamber patch: one liveness count per delivered frame — the silent-socket
       // escalation keys on it, never on the frame's content.
       this.socketFrames += 1
+      this.observeCarrier({ kind: 'streamFrame', at: Date.now() })
       const stream = this.streams.get(frame.streamId)
       if (stream === undefined) return
       stream.inbox.push(frame)
@@ -776,6 +862,7 @@ export class RemoteStreamMuxClient {
     if (this.socket !== socket) return
     this.socket = undefined
     this.socketFrames = 0
+    this.observeCarrier({ kind: 'carrierClosed', at: Date.now() })
     this.forensics?.('socket-lost', error.message)
     if (!this.waitForReconnect) this.failure = error
     this.failAll(error)
