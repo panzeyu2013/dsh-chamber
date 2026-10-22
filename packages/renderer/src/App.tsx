@@ -37,6 +37,8 @@ import {
   forgetPendingWorkspaces,
   getOpenIntentsSnapshot,
   getViewPrefs,
+  linkEpochOf,
+  linkReady,
   subscribeViewPrefs,
   type ArchivedFilter,
   releaseInstanceClient,
@@ -1499,6 +1501,8 @@ export default function App() {
   // re-subscribes immediately. The actual writer is the desktop status projection.
   const pageChannelLinkListenersRef = useRef(new Set<(sourceId: string) => void>())
   const localLinkEpochRef = useRef(0)
+  /** The epoch the page channel was last told about (local source). */
+  const localNotifiedEpochRef = useRef(-1)
   const localReadyRef = useRef(false)
   const healthRef = useRef(health)
   useEffect(() => { healthRef.current = health }, [health])
@@ -1511,14 +1515,15 @@ export default function App() {
         if (sourceId === LOCAL_INSTANCE_ID) return healthRef.current?.dsh?.status === 'ready'
         const rawId = rawInstanceIdFromSourceId(sourceId)
         if (rawId === null) return true
-        const status = remotesStore.getSnapshot().status[rawId]
-        return status?.phase === 'ready' && (status.link?.state ?? 'healthy') !== 'down'
+        // ONE owner for the projection reading (client-core/link-projection):
+        // ready = phase ready && link.state !== 'down' (suspect forwards).
+        return linkReady(remotesStore.getSnapshot().status[rawId])
       },
       epoch(sourceId: string): number {
         if (sourceId === LOCAL_INSTANCE_ID) return localLinkEpochRef.current
         const rawId = rawInstanceIdFromSourceId(sourceId)
         if (rawId === null) return 0
-        return remotesStore.getSnapshot().status[rawId]?.link?.linkEpoch ?? 0
+        return linkEpochOf(remotesStore.getSnapshot().status[rawId])
       },
       subscribe(listener: (sourceId: string) => void): () => void {
         pageChannelLinkListenersRef.current.add(listener)
@@ -1528,6 +1533,9 @@ export default function App() {
     configurePageChannelLink(link)
     return () => { configurePageChannelLink(null) }
   }, [])
+  // Reference-diff the status map: one instance's health push must reconcile only
+  // that source, not every subscription of every source (O(N×S) per push).
+  const notifiedStatusRef = useRef<Record<string, unknown>>({})
   useEffect(() => {
     const notify = (rawId: string): void => {
       const sourceId = rawId === LOCAL_INSTANCE_ID
@@ -1536,12 +1544,26 @@ export default function App() {
       if (sourceId === null) return
       for (const listener of pageChannelLinkListenersRef.current) listener(sourceId)
     }
-    for (const rawId of Object.keys(remoteStatus)) notify(rawId)
+    const previous = notifiedStatusRef.current
+    for (const [rawId, status] of Object.entries(remoteStatus)) {
+      if (previous[rawId] === status) continue
+      previous[rawId] = status
+      notify(rawId)
+    }
+    for (const rawId of Object.keys(previous)) {
+      if (!(rawId in remoteStatus)) delete previous[rawId]
+    }
     if (health !== null) {
       const localReady = health.dsh?.status === 'ready'
       if (localReady && !localReadyRef.current) localLinkEpochRef.current += 1
+      // Only a REAL local change wakes the page channel: this effect also runs when
+      // a REMOTE status changed, and notifying the local source then would release
+      // parked local subscriptions for no reason.
+      const localChanged = localReady !== localReadyRef.current
+        || localLinkEpochRef.current !== localNotifiedEpochRef.current
       localReadyRef.current = localReady
-      notify(LOCAL_INSTANCE_ID)
+      localNotifiedEpochRef.current = localLinkEpochRef.current
+      if (localChanged) notify(LOCAL_INSTANCE_ID)
     }
   }, [remoteStatus, health])
 

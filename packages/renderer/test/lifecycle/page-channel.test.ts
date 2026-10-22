@@ -485,7 +485,7 @@ test('capability_not_found 不重试；瞬时错误按阶梯重订阅', async ()
   }
 })
 
-test('link epoch: instance_unavailable parks the subscription and the ready edge re-subscribes immediately', async () => {
+test('instance_unavailable parks the subscription and the ready edge releases it immediately', async () => {
   installFakeWebSocket()
   const listeners = new Set<(sourceId: string) => void>()
   let ready = false
@@ -978,6 +978,9 @@ const READER_ALLOWLIST = [
   'packages/dsh-chamber-client-core/src/instance-not-found-body.ts',
   'packages/control-plane/src/dsh-client.ts',
   'packages/gateway/src/warmup.ts',
+  // 官方 unary 载波的 502/504 after-body 探测（design 27 §3.5）：4KiB 上限、
+  // 超限即 cancel，一次性错误体读取，不是长活流。
+  'packages/dsh-client-connection/src/client/rpc.ts',
 ]
 
 function matchesEventSourceReference(code: string): boolean {
@@ -1069,6 +1072,10 @@ const PAGE_FETCH_ALLOWLIST: Record<string, number> = {
   'packages/dsh-chamber-client-core/src/control-plane-client.ts': 1,
   'packages/dsh-chamber-client-core/src/gateway-runtime-poll.ts': 1,
   'packages/dsh-chamber-client-core/src/gateway-runtime.ts': 6,
+  // 3 = the ONE real fetch call + the TWO words inside the single no-response
+  // vocabulary regex (fetch failed / failed to fetch; one line, counted twice).
+  // The scan counts the bare identifier, so message literals are declared here
+  // rather than hidden.
   'packages/dsh-chamber-client-core/src/instance-api.ts': 3,
   'packages/dsh-chamber-client-core/src/wire-common.ts': 1,
   'packages/dsh-chamber-client-ui-settings-connections/src/client/restart-action.ts': 1,
@@ -1099,3 +1106,89 @@ test('同源 fetch 的唯一所有权：页面代码的每个调用点都经预�
     '一个未声明的同源 fetch 出现了：页面预算（http-budget.ts）必须拥有这次派发，'
     + '或把它登记为已声明残余（STATUS 的绑定范围）并同笔更新本表')
 })
+
+test('a wave larger than the slot table releases exactly one subscription immediately', async (t) => {
+  installFakeWebSocket()
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  t.after(() => { t.mock.timers.reset() })
+  const listeners = new Set<(sourceId: string) => void>()
+  let ready = false
+  let epoch = 0
+  try {
+    const mod = await loadPageChannel()
+    mod.configurePageChannelLink({
+      ready: () => ready,
+      epoch: () => epoch,
+      subscribe: (listener) => {
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      },
+    })
+    const subs = Array.from({ length: 18 }, () => mod.subscribePageChannel({
+      family: 'pluginGraph', instanceId: 'dsh-a', onItem: () => undefined,
+    }))
+    const socket = FakeWebSocket.latest()
+    socket.open()
+    const frames = (): number => socket.frames().filter(frame => frame.type === 'subscribe').length
+    assert.equal(frames(), 0, 'all eighteen park before the recovery edge')
+    ready = true
+    epoch = 1
+    for (const listener of [...listeners]) listener('dsh-a')
+    // The wrap used to put the 18th subscription back on slot 0 (a second
+    // same-tick subscribe); exactly one immediate release is the contract.
+    assert.equal(frames(), 1, 'only the first parked subscription resumes immediately')
+    t.mock.timers.tick(1_920)
+    assert.equal(frames(), 18, 'the remaining seventeen spread over the 120ms slots')
+    for (const sub of subs) sub.close()
+    mod.configurePageChannelLink(null)
+  } finally {
+    restoreHost()
+  }
+})
+
+
+test('a link epoch does not reset the retry ladder (no hot retry under a flapping link)', async (t) => {
+  installFakeWebSocket()
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  t.after(() => { t.mock.timers.reset() })
+  const listeners = new Set<(sourceId: string) => void>()
+  let ready = true
+  let epoch = 1
+  try {
+    const mod = await loadPageChannel()
+    mod.configurePageChannelLink({
+      ready: () => ready,
+      epoch: () => epoch,
+      subscribe: (listener) => {
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      },
+    })
+    const sub = mod.subscribePageChannel({ family: 'pluginGraph', instanceId: 'dsh-a', onItem: () => undefined })
+    const socket = FakeWebSocket.latest()
+    socket.open()
+    const frames = (): number => socket.frames().filter(frame => frame.type === 'subscribe').length
+    const id = String(socket.frames()[0].id)
+    // Climb two rungs: 3s (rung 1) then 5s (rung 2).
+    socket.message(JSON.stringify({ type: 'error', id, code: 'upstream_failed', message: 'broke' }))
+    t.mock.timers.tick(4_000)
+    assert.equal(frames(), 2, 'rung 1 re-subscribes')
+    socket.message(JSON.stringify({ type: 'error', id, code: 'upstream_failed', message: 'broke again' }))
+    assert.equal(frames(), 2, 'rung 2 is pending')
+    // A recovery edge releases it immediately...
+    epoch = 2
+    for (const listener of [...listeners]) listener('dsh-a')
+    assert.equal(frames(), 3, 'the epoch still wakes the pending rung immediately')
+    // ...but the NEXT failure continues at rung 3 (10s), not back at the 3s rung.
+    socket.message(JSON.stringify({ type: 'error', id, code: 'upstream_failed', message: 'still broken' }))
+    t.mock.timers.tick(4_000)
+    assert.equal(frames(), 3, 'a 3s reset would have retried here; the ladder keeps climbing')
+    t.mock.timers.tick(9_000)
+    assert.equal(frames(), 4, 'the next rung (10s, <=25% jitter) fires')
+    sub.close()
+    mod.configurePageChannelLink(null)
+  } finally {
+    restoreHost()
+  }
+})
+

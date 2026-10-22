@@ -58,6 +58,8 @@ export const GROUPS = {
     // 页面级多路复用通道客户端（design 26）：单 socket、订阅帧、item 分发、信用
     // 确认、断线重连后重订阅、关闭语义，以及 I-1 的静态断言与 EventSource 报警器。
     'test/lifecycle/page-channel.test.ts',
+    // 页面 link 投影解读（ready/epoch 的唯一 owner，design 27 §3.1/§6.22）。
+    'test/lifecycle/link-projection.test.ts',
     // 页面根接管安全网：外部 shell.overlay 置 0 #root 的检测 / 上报 / 释放。
     'test/lifecycle/root-takeover-watch.test.ts',
     'test/lifecycle/required-extra-rows.test.ts',

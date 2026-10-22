@@ -84,7 +84,7 @@ let pageMachineCatalog: MachineCatalog | null = null
 
 function machineCatalogForPage(): MachineCatalog {
   pageMachineCatalog ??= createMachineCatalog({
-    call: (endpoint, args, signal) => getInstanceClient('local').callUnary(endpoint, args, signal),
+    call: (endpoint, args, signal, callOptions) => getInstanceClient('local').callUnary(endpoint, args, signal, callOptions),
   })
   return pageMachineCatalog
 }

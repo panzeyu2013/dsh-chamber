@@ -141,7 +141,7 @@ test('the page-level wiring this test drives is still the shell\'s own', () => {
   // `local`, handed to `createMachineCatalog` as its `call`.
   assert.ok(
     shell.includes(normalize(stripComments(
-      "createMachineCatalog({ call: (endpoint, args, signal) => getInstanceClient('local').callUnary(endpoint, args, signal), })",
+      "createMachineCatalog({ call: (endpoint, args, signal, callOptions) => getInstanceClient('local').callUnary(endpoint, args, signal, callOptions), })",
     ))),
     'shell.ts must keep wiring the LOCAL instance client\'s callUnary into createMachineCatalog',
   )
