@@ -111,7 +111,7 @@
 
 - 事实：`$stream({open})` 只给 `AbortSignal`，本地唯一身份 = `streamOpeningKey`（endpoint+payload FNV）；同键异流
   共享超时计数，调用面无法区分重试/新请求。
-- 诉求：`open(signal, { episodeId })` 或宿主分配跨重发 token；或宿主承担首帧期限（§4.3）。
+- 诉求：`open(signal, { episodeId })` 或宿主分配跨重发 token；或宿主承担首帧期限（A§4 第③条）。
 - 退出：上游落地后评估退役客户端单档 30s。
 
 ### 9. 桌面专属家族门应按宿主能力
