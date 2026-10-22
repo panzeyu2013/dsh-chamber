@@ -137,7 +137,7 @@ Artifacts land in `packages/desktop/release/` (electron-builder `directories.out
 |Desktop capabilities (M3)|AUMID/tray-candidate convergence/loud preload failure wired; real-machine matrix pending|
 |Decision unlocks (M4)|Login autostart, deep-link registration, open-in local paths, SSH password gate guidance unlocked (code); NSIS uninstall Run-key cleanup wired|
 |Known limits|Unsigned (SmartScreen); SSH passwords disabled (use keys/Pageant); runtime mutations read-only; 0700/0600 via icacls/ACLs|
-|Authority records|`docs/design/23-windows-support.md`, `docs/progress/todo/platform/windows-v1.md` (baseline rules included)|
+|Authority records|`docs/design/23-windows-support.md`, `docs/progress/TODO.md` (baseline rules included)|
 
 ## 5. CI & releases
 
@@ -181,10 +181,8 @@ packages/
                             In-instance open-in host Remote (local app catalog + icons + launches; local shape only)
 docs/
   design/                   Design documents (01 is the entry point; 05 is the surface/architecture contract (v1))
-  progress/todo/            Unimplemented feature ideas (one file each; completed ideas are removed)
-  progress/                 STATUS.md — the only progress overview (open work, undecided design,
-                            scope decisions and trade-offs); deviations.md — Electron↔Swift
-                            dual-flavor deviation register and reachability discipline
+  progress/                 STATUS.md — the only progress record; TODO.md — unscheduled plans (A upstream / B platform / C features / D engineering);
+                            deviations.md — dual-flavor deviations
   checklists/               Operational checklists (release / dsh upgrade / packaging integrity)
   *.en-US.md                English mirrors of the root docs
 scripts/

@@ -21,7 +21,6 @@ node packages/desktop/scripts/prepare-python-payload.mjs --verify packages/deskt
 
 发布腿在打包前跑 prepare、打包后用 `--verify` 对**已打包 bundle 内的路径**复核；
 `build:sidecar --require-python` 让 Swift 腿的缺件也 fail-closed。
-载荷的消费者口径见 `docs/design/25-macos-swift-native-shell.md` 与
-`docs/progress/swift-vs-upstream-differences.md` §5.2：上游不做 env 注入，
+载荷的消费者口径见 `docs/design/25-macos-swift-native-shell.md`：上游不做 env 注入，
 而是用宿主工具 `load_workspace_dependencies` 把绝对路径交给模型；本仓尚未运行
 上游 desktop-host 的 office 组装，故当前语义是「随包存在」，由发布腿的完整性校验兜底。

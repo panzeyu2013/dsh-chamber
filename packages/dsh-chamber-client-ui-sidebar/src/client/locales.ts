@@ -97,7 +97,7 @@ export const zh = {
   // 置顶动词逐字取上游 ui-workspace 字典（menu.pinSession/menu.unpinSession、actions.pin/
   // unpin、row.pinned）。zh 的「置顶」承诺了排序（上游 pin 会写 pinSessionOrder）；本仓的
   // 渲染分区已落地，未做的只是把置顶写进本地账号，该差异登记在 design 06 §5/§7 与
-  // todo/upstream/upstream-ui-parity-plan.md §1.1。
+  // TODO.md A§15.1 U1。
   'menu.pinSession': '置顶会话',
   'menu.unpinSession': '取消置顶',
   'menu.archiveSession': '归档会话',

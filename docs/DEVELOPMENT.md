@@ -135,7 +135,7 @@ pnpm run dist:desktop:win    # 打包 Windows 应用（仅 nsis；须在 Windows
 |桌面能力(M3)|AUMID/托盘候选收敛/preload loud失败已接;实机矩阵待执行|
 |决策解锁(M4)|登录自启、深链注册、open-in本地路径、SSH密码门引导已解锁(代码);NSIS卸载Run清理include已接|
 |已知限制|未签名(SmartScreen);SSH密码禁用(keys/Pageant);运行时mutation只读;0700/0600以icacls/ACL表达|
-|权威记录|`docs/design/23-windows-support.md`、`docs/progress/todo/platform/windows-v1.md`（含基线口径）|
+|权威记录|`docs/design/23-windows-support.md`、`docs/progress/TODO.md`（含基线口径）|
 
 ## 5. CI 与发布
 
@@ -180,10 +180,8 @@ packages/
                             实例内归档清理 host Remote（design 24）
 docs/
   design/                   设计文档（01 为入口；05 为表面/架构契约（v1））
-  progress/                 STATUS.md——唯一进度总览（只记未完成/部分完成项、设计未决、
-                            范围决策与必要取舍）；deviations.md——Electron↔Swift 双 flavor
-                            偏差登记与可达性纪律
-  progress/todo/            未实现功能想法（每条一个文件；只保留未完成项）
+  progress/                 STATUS.md——唯一进度记录；TODO.md——未排期计划（A 上游/B 平台/C 功能/D 工程）；
+                            deviations.md——双 flavor 偏差
   checklists/               操作清单（发布 / dsh 升级 / 打包完整性）
   *.en-US.md                各根文档的英文镜像
 scripts/
