@@ -182,8 +182,6 @@ export const GROUPS = {
     'scripts/prepare-python-payload.test.mjs',
     // 上游 pnpm patch 通道（§17-C）：pin 集合 → 运行期 workspace → runtime lock 的锁步
     'scripts/upstream-patches.test.mjs',
-    // lockstep of this manifest + the zero-test guard
-    'scripts/test-runner-lockstep.test.mjs',
   ],
 }
 

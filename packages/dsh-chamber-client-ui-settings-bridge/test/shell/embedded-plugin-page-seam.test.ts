@@ -9,9 +9,10 @@
  * More head (its first child is the back button) and is retired together with
  * the two-track/subgrid layout.
  *
- * This cross-package lock pins both sides: the upstream page shape the section
- * renders, the containment's remaining minimal facts, and the chamber's
- * settings.section registration + settings-shell nav glyph.
+ * This cross-package lock pins the upstream page shape the section renders and
+ * the chamber's settings.section registration + settings-shell nav glyph. The
+ * containment CSS invariants are owned by the plugin-manager package's
+ * containment-selectors lock, so they are not duplicated here.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -22,7 +23,6 @@ const read = (relative: string): string =>
   stripComments(readFileSync(new URL(relative, import.meta.url), 'utf8'))
 
 const page = read('../../../../vendor/harness-checkout/packages/client/ui-plugin-manager/src/client/PluginManagerPage.tsx')
-const css = read('../../../dsh-chamber-client-ui-settings-plugin-manager/src/client/EmbeddedPluginManagerPage.module.css')
 const index = read('../../../dsh-chamber-client-ui-settings-plugin-manager/src/client/index.ts')
 const shell = read('../../src/client/SettingsShell.tsx')
 const inventory = read('../../../../vendor/harness-checkout/packages/client/ui-settings-plugins/src/client/index.ts')
@@ -32,15 +32,6 @@ test('the embedded page keeps the upstream h1 + div.pageIntro shape the section 
   assert.match(page, /<header className=\{css\.pageHead\} data-window-drag>/, 'the header row stays a drag row')
   assert.match(page, /<h1 className=\{css\.pageTitle\}>/, 'the section content keeps the page title as its h1')
   assert.match(page, /<\/h1>\s*<div className=\{css\.pageIntro\}>/, 'the intro is the h1 immediate next sibling and a DIV')
-})
-
-test('the containment leaves the page header, More head and groups to upstream', () => {
-  assert.doesNotMatch(css, /display:\s*none|visibility:\s*hidden|opacity:\s*0(?:[;\s}]|$)|clip-path/u, 'no page chrome may be hidden: the section keeps its own header and the More back button')
-  assert.doesNotMatch(css, />\s*:first-child\b/u, 'no positional child rule: the More head first child is the back button')
-  assert.doesNotMatch(css, /subgrid|grid-template/u, 'no two-track/subgrid layout')
-  assert.doesNotMatch(css, /\[data-plugin-group\]/u, 'no group-hoisting rules')
-  assert.match(css, /height:\s*auto/u, 'the page root must not create a nested scroller')
-  assert.match(css, /padding-top:\s*0/u, 'the settings dialog own header replaces the main-panel 28px inset')
 })
 
 test('the chamber mounts the page as the plugin-manager settings section', () => {

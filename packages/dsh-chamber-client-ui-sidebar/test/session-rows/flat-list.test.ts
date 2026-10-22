@@ -7,9 +7,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 import { FLAT_ACCOUNT_KEY } from '@dsh-chamber/dsh-chamber-client-core/flat-account'
 
-const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
+const read = (rel: string): string => stripComments(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8'))
 const SECTION = read('../../src/client/ServerSection.tsx')
 const DRAG = read('../../src/client/sidebar-root-drag.ts')
 const PROJ = read('../../src/client/sidebar-root-projection.ts')

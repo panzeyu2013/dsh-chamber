@@ -17,16 +17,19 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 import { HOVER_GATE_ATTR, HOVER_GATE_SELECTOR, needsHoverGate } from '../../src/client/hover-motion-gate.ts'
 
-const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
+/** Source locks must see code, not comments: a commented-out line must not satisfy them. */
+const read = (rel: string): string => stripComments(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8'))
+const readCss = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8').replace(/\/\*[\s\S]*?\*\//gu, '')
 
 const GATE = read('../../src/client/hover-motion-gate.ts')
 const HOOK = read('../../src/client/use-hover-motion-gate.ts')
 const SECTION = read('../../src/client/ServerSection.tsx')
 const ROWS = read('../../src/client/ServerSectionRows.tsx')
 const CARD = read('../../src/client/RowHoverCard.tsx')
-const CSS = read('../../src/client/sidebar-chamber.module.css')
+const CSS = readCss('../../src/client/sidebar-chamber.module.css')
 
 test('only a row that moved under a stationary pointer is gated', () => {
   // 位移前就在指针下的行保留揭示：用户真实悬停绝不掉。

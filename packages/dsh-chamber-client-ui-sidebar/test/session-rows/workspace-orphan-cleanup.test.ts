@@ -16,11 +16,14 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 import { en, zh } from '../../src/client/locales.ts'
 
-const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
+/** Source locks must see code, not comments: a commented-out line must not satisfy them. */
+const read = (rel: string): string => stripComments(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8'))
+const readCss = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8').replace(/\/\*[\s\S]*?\*\//gu, '')
 const SECTION = read('../../src/client/ServerSection.tsx')
-const CSS = read('../../src/client/sidebar-chamber.module.css')
+const CSS = readCss('../../src/client/sidebar-chamber.module.css')
 const CJK = /[\u4e00-\u9fff]/u
 /**
  * The header's hover-revealed cluster (workspace row scope). Its className must keep

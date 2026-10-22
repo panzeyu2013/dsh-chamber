@@ -15,8 +15,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
-const read = (relative: string): string => readFileSync(new URL(relative, import.meta.url), 'utf8')
+/** Source locks must see code, not comments: a commented-out line must not satisfy them. */
+const read = (relative: string): string => stripComments(readFileSync(new URL(relative, import.meta.url), 'utf8'))
+const readCss = (relative: string): string => readFileSync(new URL(relative, import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//gu, '')
 
 /**
  * 取"选择器列表含 selector"的**全部**规则的声明体合并文本（去注释、空白归一）。
@@ -36,7 +39,7 @@ function decls(css: string, selector: string): string {
 }
 
 test('P0：租客根是 stacking context（veil 由结构获胜，不靠 z 值约定）', () => {
-  const css = read('../../src/styles.css')
+  const css = readCss('../../src/styles.css')
   assert.match(
     decls(css, '.instance-shell'),
     /(^| )isolation: isolate( |;|$)/,
@@ -46,7 +49,7 @@ test('P0：租客根是 stacking context（veil 由结构获胜，不靠 z 值�
 })
 
 test('P1：遮罩持有期隐藏租客，并进"隐藏壳不创建动画"门', () => {
-  const css = read('../../src/styles.css')
+  const css = readCss('../../src/styles.css')
   assert.match(
     decls(css, '.instance-view.instance-veil-held .instance-shell'),
     /visibility: hidden/,
@@ -71,7 +74,7 @@ test('P1：遮罩持有期隐藏租客，并进"隐藏壳不创建动画"门', (
 })
 
 test('P2：活动视图唯一命名 + cut 意图硬切', () => {
-  const css = read('../../src/styles.css')
+  const css = readCss('../../src/styles.css')
   assert.match(
     decls(css, '.instance-view:not(.instance-hidden):not(.instance-pending)'),
     /view-transition-name: active-instance/,

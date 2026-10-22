@@ -26,10 +26,6 @@ import { runTestManifest } from '../../../scripts/lib/test-manifest.mjs'
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
 export const GROUPS = {
-  // scripts: 测试清单自身的零测试守卫 + 清单锁步（留在 scripts/ 原地）
-  scripts: [
-    'scripts/test-runner-guard.test.mjs',
-  ],
   // session-rows: session/workspace projection, row windowing, row hover and the shell's row wiring
   'session-rows': [
     // 三处拖拽闭包共用的 over-目标推进（纯叶子）。

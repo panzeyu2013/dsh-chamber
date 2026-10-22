@@ -94,18 +94,12 @@ const GROUPS = {
     'test/windows/windows-process.test.ts',
     'test/windows/rename-retry.test.ts',
     'test/windows/win32-readonly-rm.integration.test.ts',
-    // Zero-test guard of this manifest, pinned on
-    // every leg and on the Windows one.
-    'test/windows/test-runner-guard.test.mjs',
   ],
 }
 
 const WIN32_FILES = [
   'test/windows/windows-process.test.ts',
   'test/windows/rename-retry.test.ts',
-  // Zero-test guard of this manifest; it is
-  // platform-neutral and fast, so the Windows leg pins it too.
-  'test/windows/test-runner-guard.test.mjs',
   'test/updater/coalesced-refresh.test.ts',
   'test/windows/win32-readonly-rm.integration.test.ts',
   'test/install/dist-sync.test.ts',

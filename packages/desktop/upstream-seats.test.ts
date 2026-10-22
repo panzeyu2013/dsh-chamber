@@ -12,14 +12,14 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from '../../scripts/dev/test-support/source-text.ts'
 
 const DESKTOP = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(DESKTOP, '..', '..')
-const preload = readFileSync(join(DESKTOP, 'preload.cts'), 'utf8')
-const shim = readFileSync(
-  join(REPO_ROOT, 'macos', 'Sources', 'DSHChamber', 'Resources', 'bridge-shim.js'),
-  'utf8',
-)
+/** Source locks must see code, not comments: a commented-out line must not satisfy them. */
+const read = (file: string): string => stripComments(readFileSync(file, 'utf8'))
+const preload = read(join(DESKTOP, 'preload.cts'))
+const shim = read(join(REPO_ROOT, 'macos', 'Sources', 'DSHChamber', 'Resources', 'bridge-shim.js'))
 
 test('S-52: both flavors expose the upstream dshDesktop carrier', () => {
   const arms: [string, string][] = [['preload', preload], ['shim', shim]]
@@ -49,15 +49,16 @@ test('native theme seat: the Electron arm observes data-ds-theme-source like ups
   assert.match(preload, /if \(process\.platform !== 'darwin'\) return/, 'macOS-only like upstream')
   assert.match(preload, /MutationObserver\(send\)\.observe\(document\.documentElement/,
     'the observer watches the root attribute')
-  const shellSettings = readFileSync(join(DESKTOP, 'shell-ipc-settings.ts'), 'utf8')
+  const shellSettings = read(join(DESKTOP, 'shell-ipc-settings.ts'))
   assert.match(shellSettings, /IPC_CHANNELS\.NATIVE_THEME_SET/, 'core handles the channel')
   assert.match(shellSettings, /deps\.edges\.nativeThemeSet\(source\)/, 'core routes it through the host edge')
-  const electronEdges = readFileSync(join(DESKTOP, 'electron-edges.ts'), 'utf8')
+  const electronEdges = read(join(DESKTOP, 'electron-edges.ts'))
   assert.match(electronEdges, /nativeTheme\.themeSource = source/, 'Electron sets nativeTheme.themeSource')
-  const nodeEdges = readFileSync(join(DESKTOP, 'node-edges.ts'), 'utf8')
+  const nodeEdges = read(join(DESKTOP, 'node-edges.ts'))
   assert.match(nodeEdges, /nativeThemeSet\(_source: 'light' \| 'dark' \| 'system'\)/,
     'the Swift face keeps the member for the shared edge type')
-  assert.match(nodeEdges, /显式 no-op/, 'the Swift arm documents why it does not forward the edge')
+  assert.match(nodeEdges, /nativeThemeSet\(_source: 'light' \| 'dark' \| 'system'\) \{\s*\}/,
+    'the Swift arm stays an empty no-op (the member exists only for the shared edge type)')
 })
 
 test('S-52: the carrier classifies the failed operation like upstream', () => {
@@ -83,7 +84,7 @@ test('Windows caption seat: preload marker + hidden-titlebar window branch', () 
   assert.match(preload, /root\.dataset\.windowsTitlebar = ''/)
   assert.match(preload, /root\.style\.setProperty\('--dsh-windows-titlebar-height', WINDOWS_TITLEBAR_HEIGHT \+ 'px'\)/)
   // Mirrored constants must stay equal (preload cannot import across the CJS boundary).
-  const main = readFileSync(join(DESKTOP, 'main.ts'), 'utf8')
+  const main = read(join(DESKTOP, 'main.ts'))
   const constant = /const WINDOWS_TITLEBAR_HEIGHT = (\d+);/
   const preloadHeight = preload.match(constant)?.[1]
   const mainHeight = main.match(constant)?.[1]
@@ -100,7 +101,7 @@ test('S-54: the macOS window chrome mirrors the upstream darwin branch', () => {
   // background to stay transparent, and 'active' keeps the material stable when
   // the window blurs. The page side is upstream ui-web/ui-layout CSS (transparent
   // frame, --dsh-frame-top-clearance 48px); the fullscreen mark is S-53.
-  const main = readFileSync(join(DESKTOP, 'main.ts'), 'utf8')
+  const main = read(join(DESKTOP, 'main.ts'))
   assert.match(main, /process\.platform === 'darwin'/, 'the darwin branch must exist')
   assert.match(main, /titleBarStyle: 'hiddenInset' as const/)
   assert.match(main, /trafficLightPosition: \{ x: 16, y: 18 \}/)
@@ -147,7 +148,7 @@ test('S-53: the Electron flavor mirrors the fullscreen mark like the Swift shell
   // Electron flavor has no preload equivalent, so main pushes the same expression on
   // enter/leave and replays it after every load (the Swift shell does it natively in
   // ShellWindowFullscreenMark.swift — same spelling, same dataset form).
-  const main = readFileSync(join(DESKTOP, 'main.ts'), 'utf8')
+  const main = read(join(DESKTOP, 'main.ts'))
   const swift = readFileSync(
     join(REPO_ROOT, 'macos', 'Sources', 'DSHChamber', 'ShellWindowFullscreenMark.swift'),
     'utf8',
@@ -189,13 +190,13 @@ test('S-56: both flavors expose the upstream host-path carrier', () => {
   assert.match(shim, /defineWindowGlobal\('__DSH_HOST_PATHS__', \{ pathFor: hostPathFor \}\)/)
   assert.match(shim, /defineWindowGlobal\('__dshChamberHostPaths', adoptHostPathCatalog\)/)
   assert.match(shim, /data-chamber-painted-source/)
-  const scope = readFileSync(join(REPO_ROOT, 'packages', 'renderer', 'src', 'host-path-scope.ts'), 'utf8')
+  const scope = read(join(REPO_ROOT, 'packages', 'renderer', 'src', 'host-path-scope.ts'))
   assert.match(scope, /HOST_PATH_SCOPE_ATTRIBUTE = 'data-chamber-painted-source'/)
   assert.match(scope, /export function publishHostPathScope/)
   // The VALUE contract too: both carriers compare against the local instance id, and a
   // rename would otherwise silently disable the carrier on both flavors with every gate
   // green (fail-closed, but the feature dies unnoticed).
-  const localInstance = readFileSync(join(REPO_ROOT, 'packages', 'renderer', 'src', 'local-instance.ts'), 'utf8')
+  const localInstance = read(join(REPO_ROOT, 'packages', 'renderer', 'src', 'local-instance.ts'))
   assert.match(localInstance, /LOCAL_INSTANCE_ID = 'local'/)
   assert.match(preload, /getAttribute\('data-chamber-painted-source'\) === 'local'/)
   assert.match(shim, /getAttribute\('data-chamber-painted-source'\) === 'local'/)

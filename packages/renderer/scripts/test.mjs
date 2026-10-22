@@ -32,8 +32,6 @@ export const GROUPS = {
   scripts: [
     'scripts/typert-remote-contract.test.mjs',
     'scripts/vendor-patches.test.mjs',
-    // 清单自身的零测试守卫 + 清单锁步
-    'scripts/test-runner-guard.test.mjs',
   ],
   // lifecycle: 实例启动生命周期 —— shell 引导与降级自愈、宿主图/必需行探测、首屏基线预热、page 读路
   lifecycle: [

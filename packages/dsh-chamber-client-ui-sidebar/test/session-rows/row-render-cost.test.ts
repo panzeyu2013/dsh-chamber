@@ -18,8 +18,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
-const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
+const read = (rel: string): string => stripComments(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8'))
 const ROWS = read('../../src/client/ServerSectionRows.tsx')
 const SECTION = read('../../src/client/ServerSection.tsx')
 const ROOT = read('../../src/client/SidebarRoot.tsx')

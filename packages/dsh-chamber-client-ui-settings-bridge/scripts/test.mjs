@@ -2,7 +2,7 @@
  * @dsh-chamber/dsh-chamber-client-ui-settings-bridge test manifest - authoritative
  * file list for this package test script.
  * Grouped by subject area (mirrors test/<domain>/). Every listed file runs as its
- * own node child with inherited stdio; the first failure ends the run. A listed
+ * own node child with piped stdio (buffered by the shared runner); the first failure ends the run. A listed
  * file that does not
  * exist is a failure, never a silent skip.
  * Entries: a path, or { file, nodeArgs } when a loader (--import ...) is needed.

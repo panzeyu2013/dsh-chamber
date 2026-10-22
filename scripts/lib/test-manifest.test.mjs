@@ -1,46 +1,28 @@
 /**
- * Unit lock for scripts/lib/test-manifest.mjs — the shared package test runner.
+ * Unit lock for scripts/lib/test-manifest.mjs — the shared package test runner
+ * — and for the package manifests' WIRING to it.
  *
  * The negative cases are the point: a child that exits 0 without executing a
  * node:test body, a manifest that lists nothing, and an empty group must all be
- * refused; only real pass/fail/skip corpora count as executed.
+ * refused; only real pass/fail/skip corpora count as executed. The manifests
+ * themselves are read as text (one table-driven source lock) so a package can
+ * no longer carry a private copy of the guard to pin its own data.
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   DEFAULT_DRAIN_GRACE_MS, MANIFEST_DUMP_PREFIX, collectEntries, emptyManifestProblems, evaluateChildRun,
-  manifestLockstepProblems, parseExecutedTestCount, parseManifestDump, parseReportedTotals,
+  manifestLockstepProblems, parseManifestDump, parseReportedTotals,
   referenceResolvesToFile, resolveJobs, runEntries, selectManifest, spawnCaptured, standaloneTestFiles,
   wiringPathReferences,
 } from './test-manifest.mjs'
 import { roundRobinSchedule } from '../gates/run-checks.mjs'
-
-test('parseExecutedTestCount: spec summary counts executed bodies (pass + fail)', () => {
-  const output = '\nℹ tests 7\nℹ suites 0\nℹ pass 6\nℹ fail 1\nℹ skipped 0\n'
-  assert.equal(parseExecutedTestCount(output), 7)
-})
-
-test('parseExecutedTestCount: a zero-body child is null (never a green run)', () => {
-  assert.equal(parseExecutedTestCount(''), null, 'no summary at all')
-  assert.equal(parseExecutedTestCount('hello\n'), null, 'unrelated output only')
-  assert.equal(parseExecutedTestCount('ℹ tests 0\nℹ pass 0\nℹ fail 0\n'), null, 'explicit zero tests')
-  assert.equal(parseExecutedTestCount('ℹ tests 3\nℹ pass 0\nℹ fail 0\nℹ skipped 3\n'), null, 'all skipped')
-})
-
-test('parseExecutedTestCount: the TAP summary form is recognized', () => {
-  assert.equal(parseExecutedTestCount('# tests 4\n# pass 3\n# fail 1\n'), 4)
-})
-
-test('parseExecutedTestCount: only the LAST summary block decides (nested runner transcript)', () => {
-  const output = 'ℹ tests 9\nℹ pass 9\nℹ fail 0\nchild re-ran:\nℹ tests 2\nℹ pass 1\nℹ fail 1\n'
-  assert.equal(parseExecutedTestCount(output), 2)
-})
 
 test('collectEntries: normalizes paths and { file, nodeArgs } entries in declaration order', () => {
   const entries = collectEntries({
@@ -656,6 +638,75 @@ test('runTestManifest：显式 jobs 覆盖必须真正生效（此前被静默�
     assert.match(result.stderr, /"jobs":2/, '显式 jobs 覆盖必须进到 runEntries 的池宽（timing JSON 是观测点）')
   } finally {
     rmSync(root, { recursive: true, force: true })
+  }
+})
+
+/**
+ * The package manifests used to carry five per-package guard tests that each
+ * re-asserted the shared runner's verdicts (evaluateChildRun negatives,
+ * requireNoSkips, the lockstep preflight). Those cases are owned here; what is
+ * genuinely package-specific is the WIRING — which legs, options and tables a
+ * manifest hands to the shared runner. This one test reads every package
+ * manifest as text (never imports one: an importable manifest must not run on
+ * import) and pins the generic delegation contract plus the package-specific
+ * options, so a new package is covered without another copy of the guard.
+ */
+const MANIFEST_SPECIFIC_WIRING = {
+  'control-plane': [
+    /platformFiles: \{ win32: WIN32_FILES \}/u,
+    /guard: 'registered'/u,
+    /timeoutMs: 120_000/u,
+  ],
+  'dsh-runtime': [
+    /platformFiles: \{ win32: WIN32_FILES \}/u,
+    /guard: 'registered'/u,
+  ],
+  renderer: [
+    /platformFiles: \{ win32: WIN32_FILES \}/u,
+    /timeoutMs: 120_000/u,
+  ],
+  'dsh-chamber-client-ui-sidebar': [
+    /platformFiles: \{ win32: WIN32_FILES \}/u,
+  ],
+  desktop: [
+    /platformFiles: \{ win32: WIN32_FILES, macos: MACOS_FILES \}/u,
+    /zeroTestAllowlist: ZERO_TEST_ALLOWLIST/u,
+    /requireNoSkipsLegs: \['macos'\]/u,
+    /allowPlatformFilesOutsideGroups: true/u,
+  ],
+}
+
+test('every package manifest is a wired data table for the shared runner', () => {
+  const packagesRoot = fileURLToPath(new URL('../../packages', import.meta.url))
+  const manifests = new Map()
+  for (const entry of readdirSync(packagesRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue
+    const manifest = join(packagesRoot, entry.name, 'scripts', 'test.mjs')
+    if (existsSync(manifest)) manifests.set(entry.name, readFileSync(manifest, 'utf8'))
+  }
+  assert.ok(manifests.size >= 20, 'expected every package manifest, found ' + String(manifests.size))
+  for (const [name, source] of manifests) {
+    assert.match(source, /runTestManifest\(\{/u, name + ': the manifest must delegate its run to the shared runner')
+    assert.doesNotMatch(source, /spawnSync|evaluateChildRun\(/u,
+      name + ': the manifest must not own a spawn loop or a local verdict')
+    if (source.includes('export const GROUPS')) {
+      assert.match(source, /const isMain = process\.argv\[1\] !== undefined && resolve\(process\.argv\[1\]\) === fileURLToPath\(import\.meta\.url\)/u,
+        name + ': an importable manifest must keep its CLI behind the import guard')
+    }
+    if (source.includes('export const WIN32_FILES')) {
+      assert.match(source, /platformFiles: \{ win32: WIN32_FILES/u, name + ': its exported WIN32_FILES must reach platformFiles')
+    }
+    if (source.includes('export const MACOS_FILES')) {
+      assert.match(source, /macos: MACOS_FILES/u, name + ': its exported MACOS_FILES must reach platformFiles')
+    }
+    if (source.includes('export const ZERO_TEST_ALLOWLIST')) {
+      assert.match(source, /zeroTestAllowlist: ZERO_TEST_ALLOWLIST/u, name + ': its exported allowlist must reach the runner')
+    }
+  }
+  for (const [name, patterns] of Object.entries(MANIFEST_SPECIFIC_WIRING)) {
+    const source = manifests.get(name)
+    assert.ok(source !== undefined, 'missing package manifest: ' + name)
+    for (const pattern of patterns) assert.match(source, pattern, name + ': manifest wiring drifted')
   }
 })
 

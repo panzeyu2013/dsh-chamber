@@ -1,7 +1,7 @@
 /**
  * @deepseek-ai/dsh-api-gateway test manifest - authoritative file list for this package test script.
  * Grouped by subject area (mirrors test/<domain>/). Every listed file runs as its own
- * node child with inherited stdio; the first failure ends the run - the same semantics
+ * node child with piped stdio (buffered by the shared runner); the first failure ends the run - the same semantics
  * as the inline && chain this replaces. A listed file that does not exist is a failure,
  * never a silent skip.
  *

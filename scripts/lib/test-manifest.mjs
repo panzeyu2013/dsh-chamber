@@ -407,25 +407,6 @@ export function spawnCaptured(command, args, { cwd, env, timeoutMs, maxBufferByt
 }
 
 /**
- * Executed test bodies (pass + fail) of the LAST node:test summary block.
- * Returns null when no test body executed (no summary line / tests 0 / only
- * skipped): a zero-body run must never be mistaken for a green one.
- * @param output - child stdout + stderr.
- * @returns executed test count, or null.
- */
-export function parseExecutedTestCount(output) {
-  let block = null
-  for (const match of output.matchAll(SUMMARY_LINE)) {
-    const key = match[1]
-    if (block === null || key === 'tests') block = { tests: 0, pass: 0, fail: 0, skipped: 0 }
-    block[key] = Number(match[2])
-  }
-  if (block === null || block.tests === 0) return null
-  const executed = (block.pass ?? 0) + (block.fail ?? 0)
-  return executed > 0 ? executed : null
-}
-
-/**
  * The LAST node:test summary block in `output` (a file that never entered the
  * runner prints none). `tests` counts REGISTERED tests including skipped/todo
  * ones, so a positive `tests` alone does NOT prove a test body executed.

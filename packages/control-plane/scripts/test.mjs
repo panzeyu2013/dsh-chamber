@@ -2,7 +2,7 @@
  * `pnpm run test:control-plane` (root) → `pnpm --filter @dsh-chamber/control-plane
  * run test` — the control-plane unit-test set (release-checklist §3 names this
  * script as the authoritative list). Each file runs as its own `node <file>.ts`
- * child with inherited stdio (a failure in one file stops the run non-zero).
+ * child with piped stdio (buffered by the shared runner) (a failure in one file stops the run non-zero).
  *
  * Every listed file is required: silently skipping a deleted/renamed test
  * would make the aggregate command pass with less coverage than the checklist
@@ -156,9 +156,6 @@ const GROUPS = {
     // CI leg (design 02 §5.1 parity work).
     'test/windows/win-probes.test.ts',
     'test/windows/win32-lifecycle.integration.test.ts',
-    // Zero-test guard of this manifest, pinned on
-    // every leg and on the Windows one.
-    'test/windows/test-runner-guard.test.mjs',
   ],
 }
 
@@ -167,9 +164,6 @@ const WIN32_FILES = [
   // runs the real CIM/netstat/taskkill gates on windows-2022.
   'test/windows/win-probes.test.ts',
   'test/windows/win32-lifecycle.integration.test.ts',
-  // Zero-test guard of this manifest; it is
-  // platform-neutral and fast, so the Windows leg pins it too.
-  'test/windows/test-runner-guard.test.mjs',
   // The §6.11 judgement face is platform-neutral (join/mkdtemp/tmpdir only) and
   // runs in ~25 ms, so the Windows leg gets the same pins as the POSIX legs —
   // including symlink/junction semantics of readInstalledVersion.
