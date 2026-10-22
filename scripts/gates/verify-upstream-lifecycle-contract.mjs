@@ -67,7 +67,7 @@ export function clientOpenContract(session) {
  * The fork half: the deadline must still be armed by the reducer path, and the
  * retirement condition must still be written down.
  * @param fork - stream-client source.
- * @param proposals - the upstream proposal document.
+ * @param proposals - the plan document that records the retirement condition (TODO.md).
  */
 export function forkRetirementPins(fork, proposals) {
   return {

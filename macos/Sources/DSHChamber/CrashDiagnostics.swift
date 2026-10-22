@@ -2,8 +2,8 @@
 //  CrashDiagnostics.swift
 //  DSHChamber
 //
-//  P0.2 原生崩溃最小诊断（台账 docs/progress/swift-vs-upstream-differences.md §8.a
-//  的「替代 Crashpad」半边；§8.c 明确不做 Crashpad / 不新增依赖）。
+//  P0.2 原生崩溃最小诊断（design 25 §5.4 的「替代 Crashpad」半边；
+//  该节已否决 Crashpad，不新增任何运行时依赖）。
 //
 //  面（都在 <userData>/logs/，与 ShellLog 同目录同权限）：
 //    - shell-crash.log    —— 一条崩溃记录（UTC 时间 / 信号或异常名 / bundle 版本 / pid）；
