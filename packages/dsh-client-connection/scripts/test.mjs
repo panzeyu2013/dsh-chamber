@@ -18,6 +18,7 @@ const GROUPS = {
   'base-path': [
     'test/base-path/api-path.test.ts',
     'test/base-path/carrier-assembly.test.ts',
+    'test/base-path/rpc-after-body.test.ts',
   ],
   // lifecycle: the apply/start seam it installs.
   lifecycle: [

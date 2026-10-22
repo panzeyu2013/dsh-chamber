@@ -39,6 +39,39 @@ export interface WebConnectionRpcOptions {
   openStream?: RpcStreamOpen
 }
 
+/** The proxy's after-body marker, read with a hard byte cap WHILE streaming (a
+ *  hostile/oversized error body is cancelled, never buffered). */
+async function hasAfterBodyMarker(response: Response): Promise<boolean> {
+  const body = response.body
+  if (body === null) return false
+  const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  let received = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      received += value.byteLength
+      if (received > 4096) {
+        void reader.cancel().catch(() => {})
+        return false
+      }
+      chunks.push(value)
+    }
+  } catch {
+    return false
+  }
+  const bytes = new Uint8Array(received)
+  let offset = 0
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength }
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as { details?: { phase?: unknown } } | null
+    return parsed?.details?.phase === 'after-body'
+  } catch {
+    return false
+  }
+}
+
 /** Create the browser-backed generic RPC caller: per-instance base path plus
  *  the upstream transport overrides. Owns request correlation and envelope validation. */
 export function createWebConnectionRpc(options: WebConnectionRpcOptions = {}): ClientConnectionRpc {
@@ -73,7 +106,25 @@ export function createWebConnectionRpc(options: WebConnectionRpcOptions = {}): C
         },
       )
       if (!response.ok) {
-        throw new Error(`transport failure for ${channel}/${endpoint}: HTTP ${response.status}`)
+        // chamber patch (design 27 §3.5): the control-plane proxy marks a 502/504
+        // whose request body already reached the host with `details.phase='after-body'`.
+        // An unary RPC has no safe automatic retry, so the error must say the call may
+        // have applied instead of a bare status the UI would invite the user to retry.
+        // Bounded (4096-byte cap while READING, not after) and fail-soft: anything
+        // unexpected keeps the plain transport error.
+        let lostAfterBody = false
+        if (response.status === 502 || response.status === 504) {
+          const mediaType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase()
+          if (mediaType === 'application/json') {
+            lostAfterBody = await hasAfterBodyMarker(response)
+          }
+        }
+        // The error-body read may have raced the caller's abort: an aborted call must
+        // surface as an abort, never as a transport failure it did not observe.
+        signal?.throwIfAborted()
+        throw new Error(lostAfterBody
+          ? `the host did not answer ${channel}/${endpoint} after the request was sent; the call may have applied — refresh before retrying`
+          : `transport failure for ${channel}/${endpoint}: HTTP ${response.status}`)
       }
       const mediaType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase()
       const full = mediaType === 'multipart/form-data'
