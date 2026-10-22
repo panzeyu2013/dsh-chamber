@@ -31,6 +31,7 @@ import {
   ARCHIVE_CLEANUP_PURGE_METHOD,
   archiveCleanupEndpoint,
   archiveCleanupPurgeArgs,
+  mutationCallBudgetMs,
 } from '@dsh-chamber/dsh-chamber-wire'
 export { basenameOf } from './session-display.ts'
 export { InstanceRpcError } from './instance-rpc-error.ts'
@@ -127,28 +128,64 @@ export class MutationOutcomeUnknownError extends Error {
   }
 }
 
+/**
+ * The request body reached the host but its answer was lost, and the endpoint is
+ * NOT a non-idempotent mutation: retrying is safe, so callers keep their own
+ * recovery wording (the archive purge reports "may still be running").
+ */
+export class ResponseLostError extends Error {
+  readonly code = 'response_lost'
+  readonly details: Record<string, unknown>
+  constructor(endpoint: string, details: Record<string, unknown> = {}) {
+    super(`the response to ${endpoint} was lost after the request body reached the host`)
+    this.name = 'ResponseLostError'
+    this.details = details
+  }
+}
+
+/**
+ * A transport failure that provably happened BEFORE the host saw the request
+ * (proxy budget/exhaustion/refusal codes). A mutation carrying one cannot have
+ * applied, so it must never be promoted to "outcome unknown".
+ */
+class NotForwardedError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'NotForwardedError'
+  }
+}
+
 /** Default timeout for bounded unary calls; the single home of the 30s bound. */
 const INSTANCE_UNARY_TIMEOUT_MS = 30_000
 const DEFAULT_TIMEOUT_MS = INSTANCE_UNARY_TIMEOUT_MS
 
-/** Mutations get a budget longer than the proxy's 45s ordinary upstream window, so
- *  the proxy's 504 after-body classification arrives before the client aborts.
- *  Reads keep the 30s responsiveness bound. */
-const MUTATION_CALL_TIMEOUT_MS = 50_000
-/** Same slow-link floor the proxy uses to derive its upload budget. */
-const MUTATION_UPLOAD_RATE_BYTES_PER_SEC = 128 * 1024
-// Proxy upload budget caps at 30min, then its 45s header window starts. Keep a
-// 60s cushion so the proxy's after-body classification wins the race.
-const MAX_MUTATION_CALL_TIMEOUT_MS = 30 * 60_000 + 60_000
-/** Explicitly read-only faces: an after-body failure on these is not a mutation
- *  unknown. Unknown/chamber-host endpoints default to the conservative mutation
- *  outcome; this set is intentionally not the full read surface. */
-const READ_AFTER_BODY_EXEMPT_ENDPOINTS = new Set([
-  'session/list',
-  'session/search',
-  'directoryPicker/list',
+/**
+ * The NON-IDEMPOTENT mutations this client owns. ONE table drives both the call
+ * budget and the after-body classification (the previous build had two sets with
+ * OPPOSITE defaults: the budget set defaulted to "read" while the classification
+ * set defaulted to "mutation", so a read endpoint such as `gitWorktree/snapshot`
+ * was reported as "mutation outcome unknown — do not retry").
+ *
+ * Classification is OPT-IN, not exclusion-based: an endpoint absent here is a
+ * READ by default (retrying is safe, so a lost response is not an unknown
+ * mutation). Out-of-table mutating calls declare `options.mutation: true`
+ * (the git host's write methods); idempotent destructive calls (archiveCleanup
+ * purge) deliberately stay out and keep their own "may still be running" text.
+ */
+/** Answer codes that prove the proxy/host refused the request BEFORE forwarding
+ *  it (or that the instance has no transport at all): a mutation carrying one of
+ *  these cannot have applied, so it must stay a deterministic failure. */
+const PROVEN_NOT_FORWARDED_CODES: ReadonlySet<string> = new Set([
+  'instance_unavailable',
+  'instance_not_found',
+  'resource_exhausted',
+  'body_too_large',
+  'request_timeout',
+  'capability_not_found',
+  'gateway_capability_not_found',
 ])
-const MUTATION_BUDGET_ENDPOINTS = new Set([
+
+const MUTATION_ENDPOINTS = new Set([
   'session/create',
   'session/fork',
   'session/rename',
@@ -179,6 +216,13 @@ export interface CallOptions {
   timeoutMs?: number
   /** Map a 404 whose body is NOT `instance_not_found` to a domain-missing error. */
   notFoundAsDomainMissing?: boolean
+  /**
+   * Whether this call is a NON-IDEMPOTENT mutation. Defaults to the built-in
+   * `MUTATION_ENDPOINTS` table; a caller outside that table (the git host's
+   * write methods) must opt in, so its lost answer becomes
+   * `MutationOutcomeUnknownError` instead of a plain transport failure.
+   */
+  mutation?: boolean
   /** Fired once the page budget grants the slot (proves the request was dispatched). */
   onDispatched?: (queuedMs: number) => void
 }
@@ -214,16 +258,12 @@ class InstanceApiClient {
     const rpcId = mintRpcId()
     const requestBody = JSON.stringify({ type: 'client-request', rpcId, method: endpoint, payload })
     const bodyBytes = new TextEncoder().encode(requestBody).length
-    // The proxy's after-body 504 can only be observed if this budget outlives the
-    // proxy's body-flush estimate + its 45s header window. Reads stay at 30s.
-    const mutationBudgetMs = Math.min(
-      MAX_MUTATION_CALL_TIMEOUT_MS,
-      Math.max(
-        MUTATION_CALL_TIMEOUT_MS,
-        MUTATION_CALL_TIMEOUT_MS + Math.ceil((bodyBytes / MUTATION_UPLOAD_RATE_BYTES_PER_SEC) * 1_000),
-      ),
-    )
-    const defaultTimeoutMs = MUTATION_BUDGET_ENDPOINTS.has(endpoint) ? mutationBudgetMs : DEFAULT_TIMEOUT_MS
+    // ONE derivation shared with the proxy (wire/net-budget.ts): the call budget is
+    // the proxy's worst case (upload flush budget + header window) plus a cushion,
+    // so the proxy's classified after-body answer always wins the race. Reads keep
+    // the 30s responsiveness bound.
+    const mutation = options.mutation ?? MUTATION_ENDPOINTS.has(endpoint)
+    const defaultTimeoutMs = mutation ? mutationCallBudgetMs(bodyBytes) : DEFAULT_TIMEOUT_MS
     const timeoutMs = Number.isFinite(options.timeoutMs) && (options.timeoutMs ?? 0) > 0
       ? options.timeoutMs as number
       : defaultTimeoutMs
@@ -250,44 +290,45 @@ class InstanceApiClient {
         body: requestBody,
         signal: requestSignal,
       })
-      if (response.status === 503) {
-        let payload503: { code?: string; error?: string } | null = null
-        try {
-          payload503 = await response.json()
-        } catch {
-          payload503 = null
+      if (!response.ok) {
+        // ONE bounded body read decides every non-ok answer (the body can only be
+        // consumed once). The classification is blacklist-shaped on purpose: a
+        // mutation whose answer is neither a clean RPC envelope nor a PROVEN
+        // pre-forward rejection may have applied, and no browser-specific fetch
+        // wording can be trusted to tell the difference.
+        const failurePayload = await readNotFoundBody(response)
+        const failureCode = typeof failurePayload?.code === 'string' ? failurePayload.code : null
+        if (response.status === 503 && failureCode === 'instance_unavailable') {
+          throw new InstanceUnavailableError(failurePayload?.error ?? 'the instance is not ready')
         }
-        if (payload503?.code === 'instance_unavailable') {
-          throw new InstanceUnavailableError(payload503.error ?? 'the instance is not ready')
-        }
-      }
-      // A 404 that is NOT the control plane's own unknown-instance answer means a
-      // chamber host domain is not mounted (missing/old host package) — a distinct
-      // error class so the UI can project the honest recovery message. The body is
-      // read BOUNDED; an oversized or unparseable body keeps this conservative
-      // domain-missing outcome.
-      if (response.status === 404 && options.notFoundAsDomainMissing === true) {
-        const payload404 = await readNotFoundBody(response)
-        if (payload404?.code !== 'instance_not_found') {
+        // A 404 that is NOT the control plane's own unknown-instance answer means a
+        // chamber host domain is not mounted (missing/old host package) — a distinct
+        // error class so the UI can project the honest recovery message.
+        if (response.status === 404 && options.notFoundAsDomainMissing === true
+          && failureCode !== 'instance_not_found') {
           // The message names the METHOD: a 404 on one domain must never claim
           // another is missing.
           throw new InstanceDomainMissingError(
             `该实例未挂载 chamber 宿主域 ${endpoint}：宿主包同步/seed 后需重启 dsh 生效`,
           )
         }
-      }
-      if (response.status === 502 || response.status === 504) {
-        let payload: { details?: { phase?: unknown } } | null = null
-        try {
-          payload = await response.json()
-        } catch {
-          payload = null
+        if (failurePayload?.details?.phase === 'after-body') {
+          // The body reached the host but its answer was lost. ONLY a non-idempotent
+          // mutation is an "unknown outcome" the caller must not retry; for every
+          // other endpoint retrying is safe, so the class only reports the loss.
+          if (mutation) throw new MutationOutcomeUnknownError(endpoint)
+          throw new ResponseLostError(endpoint, failurePayload.details)
         }
-        if (payload?.details?.phase === 'after-body' && !READ_AFTER_BODY_EXEMPT_ENDPOINTS.has(endpoint)) {
-          throw new MutationOutcomeUnknownError(endpoint)
+        // These codes are produced by the proxy/host BEFORE forwarding (or by the
+        // RPC layer refusing the payload): the request provably never reached the
+        // host, so a mutation must stay a deterministic failure.
+        if (failureCode !== null && PROVEN_NOT_FORWARDED_CODES.has(failureCode)) {
+          throw new NotForwardedError(`transport failure for ${endpoint}: HTTP ${response.status} (${failureCode})`)
         }
+        throw mutation
+          ? new MutationOutcomeUnknownError(endpoint)
+          : new Error(`transport failure for ${endpoint}: HTTP ${response.status}`)
       }
-      if (!response.ok) throw new Error(`transport failure for ${endpoint}: HTTP ${response.status}`)
       const envelope = await response.json() as {
         type?: unknown
         rpcId?: unknown
@@ -306,6 +347,8 @@ class InstanceApiClient {
           details: result?.error?.details ?? {},
         },
       }
+    } catch (error) {
+      throw classifyDispatchedFailure(error, endpoint, mutation, signal)
     } finally {
       budget.slot.release()
     }
@@ -464,6 +507,7 @@ function wrapWireError(err: unknown): Error {
   // Budget refusals carry provenance: never hide them behind the unreachable prefix.
   if (err instanceof HttpBudgetUnscheduledError) return err
   if (err instanceof MutationOutcomeUnknownError) return err
+  if (err instanceof ResponseLostError) return err
   if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
     return err
   }
@@ -475,10 +519,39 @@ function wrapWireError(err: unknown): Error {
  * host may have completed the work anyway, so the caller must never treat it as
  * a deterministic failure (purge keeps running past a client timeout).
  */
+/**
+ * Fetch failures carry a per-runtime wording: undici "fetch failed"/"terminated",
+ * Chromium "Failed to fetch", WebKit "Load failed", Firefox "NetworkError…".
+ * ONE vocabulary: the purge path sees the SAME message after wrapWireError prefixes
+ * it with 实例不可达：, so a second copy here would silently drop a runtime.
+ */
+const NO_RESPONSE_MESSAGE_PATTERN = /fetch failed|failed to fetch|load failed|networkerror|network request failed|terminated/i
+
 function isNoResponseError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false
-  if (error.name === 'TimeoutError' || error.name === 'AbortError') return true
-  return error.name === 'TypeError' && /fetch failed|network request failed|networkerror/i.test(error.message)
+  if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) return true
+  if (error instanceof ResponseLostError) return true
+  return error instanceof Error && error.name === 'TypeError'
+    && NO_RESPONSE_MESSAGE_PATTERN.test(error.message)
+}
+
+/**
+ * Classify a failure raised AFTER the page budget granted its slot.
+ *
+ * BLACKLIST-shaped on purpose: for a non-idempotent mutation, any failure we did
+ * not positively classify is "outcome unknown". Browser fetch errors have no
+ * stable vocabulary (Chromium "Failed to fetch", WebKit "Load failed", undici
+ * "terminated"/"fetch failed"), so a message match would silently misclassify a
+ * real mutation on whichever runtime the reviewer did not test. A deliberate
+ * caller abort stays an abort, and the decided classes pass through untouched.
+ */
+function classifyDispatchedFailure(error: unknown, endpoint: string, mutation: boolean, signal: AbortSignal | undefined): unknown {
+  if (!mutation || signal?.aborted === true) return error
+  if (error instanceof MutationOutcomeUnknownError || error instanceof ResponseLostError
+    || error instanceof InstanceUnavailableError || error instanceof InstanceDomainMissingError
+    || error instanceof NotForwardedError) {
+    return error
+  }
+  return new MutationOutcomeUnknownError(endpoint)
 }
 
 /** One directory row of a listing (DirectoryEntry shape, dsh-host-directory-picker/types). */
@@ -914,11 +987,16 @@ function optionalIdList(value: unknown, key: string): readonly string[] | undefi
  * outcomes, never deterministic failures.
  */
 function looksNoResponse(error: unknown): boolean {
+  // A classified after-body loss on a NON-mutation endpoint (archiveCleanup/purge
+  // is idempotent): the run may still be going, exactly like a client timeout.
+  if (error instanceof ResponseLostError) return true
   if (isNoResponseError(error)) return true
   if (error instanceof Error && error.message.startsWith('实例不可达：')) {
     // A proxy/gateway 504 upstream_timeout means the host MAY still be running
-    // the purge — same honest wording as a client-side timeout.
-    return /fetch failed|network request failed|networkerror|HTTP 504/i.test(error.message)
+    // the purge — same honest wording as a client-side timeout. The browser/undici
+    // wordings ride the SAME vocabulary as isNoResponseError: they arrive wrapped,
+    // so the TypeError arm above can never see them.
+    return NO_RESPONSE_MESSAGE_PATTERN.test(error.message) || /HTTP 504/i.test(error.message)
   }
   return false
 }

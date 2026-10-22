@@ -323,6 +323,12 @@ export function decodeRemoveValue(
  * URL/base path, proxy auth, the not-ready 503 class and 404 domain-missing
  * discrimination; this module keeps only the git-specific two-layer decode.
  */
+/** gitWorktree methods that CHANGE the worktree/repo. The unary carrier only
+ *  classifies a lost answer as "outcome unknown" for an opted-in mutation, and
+ *  this host domain lives outside its endpoint table; `previewCreate` plans a
+ *  creation without applying it, so it stays a read. */
+const GIT_MUTATION_METHODS: ReadonlySet<string> = new Set(['create', 'rollbackCreate', 'remove'])
+
 async function callGitRemote(sourceId: string, method: string, input?: unknown): Promise<unknown> {
   const endpoint = `gitWorktree/${method}`
   let transport: UnaryResult<unknown>
@@ -334,7 +340,7 @@ async function callGitRemote(sourceId: string, method: string, input?: unknown):
       undefined,
       // The 60s budget must stay ABOVE the proxy's 45s upstream idle window and
       // the host's 30s mutation budget; the opt-in keeps the 404 discrimination.
-      { timeoutMs: RPC_TIMEOUT_MS, notFoundAsDomainMissing: true },
+      { timeoutMs: RPC_TIMEOUT_MS, notFoundAsDomainMissing: true, mutation: GIT_MUTATION_METHODS.has(method) },
     )
   } catch (error) {
     // A request the page never dispatched cannot have committed: deterministic

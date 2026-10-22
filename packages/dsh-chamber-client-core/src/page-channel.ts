@@ -120,7 +120,9 @@ export interface PageChannelLink {
 let channelLink: PageChannelLink | undefined
 let detachChannelLink: (() => void) | undefined
 
-/** Install (or clear) the source-link selector and immediately reconcile waits. */
+/** Install (or clear) the source-link selector. Installing reconciles waits at
+ *  once; clearing just detaches — already-parked subscriptions then rely on the
+ *  30s park fallback, because there is no link state left to wake them. */
 export function configurePageChannelLink(link: PageChannelLink | null | undefined): void {
   detachChannelLink?.()
   detachChannelLink = undefined
@@ -226,8 +228,14 @@ function notifyError(record: SubscriptionRecord, code: string, message: string):
  * 置位，异步只是把**投递**推到调用方栈展开之后。
  */
 function notifyErrorDeferred(record: SubscriptionRecord, code: string, message: string): void {
+  // The INITIAL park is itself a deferred notification (the consumer cannot bind
+  // onError before subscribe() returns), so being parked is not a reason to drop
+  // it. Only a park that happened BETWEEN scheduling and delivery makes the
+  // observation stale: that is the case a link edge owns, not the deferred error.
+  const parkedWhenScheduled = record.waitingForLink
   queueMicrotask(() => {
     if (record.closed) return
+    if (!parkedWhenScheduled && record.waitingForLink) return
     notifyError(record, code, message)
   })
 }
@@ -293,6 +301,9 @@ function armParkFallback(record: SubscriptionRecord): void {
 
 function scheduleSubReconnect(record: SubscriptionRecord): void {
   if (record.closed) return
+  // A parked subscription is released by its link edge, not by the ladder: a
+  // late transient error must not re-arm a subscribe that the park already owns.
+  if (record.waitingForLink) return
   if (record.retryTimer !== undefined) return
   const ladder = PAGE_CHANNEL_SUBSCRIPTION_RETRY_DELAYS_MS
   const base = ladder[Math.min(record.retryIndex, ladder.length - 1)]
@@ -338,11 +349,13 @@ function reconcileLink(sourceId: string): void {
     if (record.closed || record.options.instanceId !== sourceId) continue
     if (record.linkEpochSeen !== epoch) {
       record.linkEpochSeen = epoch
-      // A link epoch is the only automatic reset signal; ordinary upstream ready
-      // keeps the 30s stability window. A failed-but-unparked subscription may be
-      // sitting on the 3/5/10/20/30s ladder: release it now (the ready branch below
-      // re-subscribes with the same stagger), instead of waiting out the old rung.
-      record.retryIndex = 0
+      // A link epoch releases a failed-but-unparked subscription NOW (the ready
+      // branch below re-subscribes it with its stagger slot), instead of waiting
+      // out the old rung. It deliberately does NOT reset the retry ladder: resetting
+      // it made every recovery of a flapping link restart at 3s, so a still-broken
+      // server was hit at the recovery rate instead of backing off. The ladder keeps
+      // climbing across epochs and only the 30s STABLE window (noteSubscriptionFailure)
+      // zeroes it — one owner for "this was working long enough to forget".
       if (!record.subscribed && record.retryTimer !== undefined) {
         deps.clearTimeout(record.retryTimer)
         record.retryTimer = undefined
@@ -369,10 +382,12 @@ function reconcileLink(sourceId: string): void {
       record.retryTimer = undefined
     }
     if (!socketOpen) continue
-    // Wrap instead of clamping: clamping made every subscription after the 17th
-    // share the last slot (a same-tick burst again). A wrapped wave is bounded and
-    // keeps each later batch spread over the same 16 slots.
-    const slot = released % (PAGE_CHANNEL_LINK_REJOIN_MAX_STAGGER_SLOTS + 1)
+    // Exactly ONE immediate release per wave, then slots 1..16 cycling: `released % 17`
+    // put the 18th subscription back on slot 0 (a second same-tick subscribe), which
+    // contradicted "the first releases immediately, the rest are staggered".
+    const slot = released === 0
+      ? 0
+      : 1 + ((released - 1) % PAGE_CHANNEL_LINK_REJOIN_MAX_STAGGER_SLOTS)
     released += 1
     if (slot === 0) {
       record.subscribed = subscribeFrameOf(record)
@@ -455,8 +470,8 @@ function handleMessage(text: string): void {
 }
 
 /**
- * 宿主不具备通道条件（无 WebSocket / 无页面 origin，`permanent=true`），或 socket 构造失败
- * （`permanent=false`，仍排阶梯）：如实通知每条订阅，不静默悬挂。去重粒度是**每轮重连尝试**
+ * 宿主不具备通道条件（无 WebSocket / 无页面 origin），或 socket 构造失败（仍排阶梯）：
+ * 如实通知每条订阅，不静默悬挂。去重粒度是**每轮重连尝试**
  * ——可恢复的失败每轮重新告知一次（消费方的 unary 兜底借此保持新鲜），宿主的永久属性不重播
  * （每轮结果相同，反复 onError 只会在消费方那里变成噪声）。
  */

@@ -38,6 +38,9 @@ export type OpenInAppRpcCall = (
   endpoint: string,
   args: Readonly<Record<string, unknown>>,
   signal?: AbortSignal,
+  /** `mutation` marks the non-idempotent methods (launch): a lost answer must be
+   *  "outcome unknown" rather than a retryable read failure. */
+  options?: { readonly mutation?: boolean },
 ) => Promise<unknown>
 
 export interface LocalCatalogOptions {
@@ -153,7 +156,8 @@ export function createLocalCatalog(options: LocalCatalogOptions): LocalCatalog {
     },
 
     async launch(appId: string, path: string): Promise<void> {
-      const carrier = domainCarrierOf(await options.call(OPEN_IN_APP_OPEN_METHOD, { app: appId, path }))
+      // Launching an app is an ACTION: a retry after a lost answer would launch twice.
+      const carrier = domainCarrierOf(await options.call(OPEN_IN_APP_OPEN_METHOD, { app: appId, path }, undefined, { mutation: true }))
       if (carrier === null) throw new Error('open-in host answered an unrecognizable result')
       if (!carrier.ok) throw new Error(`${carrier.error.code}: ${carrier.error.message}`)
     },
