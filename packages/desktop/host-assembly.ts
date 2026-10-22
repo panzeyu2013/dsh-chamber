@@ -10,6 +10,8 @@
  * renderer 载荷（只传存在性投影与 non-secret 指纹）。
  */
 import { applyTransportRegistration, authHeadersFingerprint, registrationKey, sanitizedRegistrationHeaders } from './transport-registration.ts'
+import { authRecoveryStillApplies, createAuthRecoveryController } from './auth-recovery.ts'
+import { connectionIdForRawInstance, linkBusyAdapter, linkFailureAdapter } from './transport-identity.ts'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { PlaneHandle } from '@dsh-chamber/control-plane'
@@ -287,6 +289,16 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
       warn: (...args) => console.warn('[transport-manager]', ...args),
       error: (...args) => console.error('[transport-manager]', ...args),
     },
+    // Our own bulk upload owns the tunnel's single TCP: the probe reads that fact
+    // from the proxy so congestion can never be booked as link death. The manager
+    // speaks RAW instance ids; the plane speaks connectionIds — the conversion is
+    // the tested one in transport-identity.ts, never an ad-hoc guess.
+    options: {
+      linkBusy: linkBusyAdapter(
+        () => sm.listInstances(),
+        connectionId => plane()?.isTransportLinkBusy(connectionId) ?? false,
+      ),
+    },
   })
   transportManager = created
   const sm = created
@@ -335,7 +347,6 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
   /** Bound the auth-fail -> disconnect/connect TOCTOU retry: a second ready edge
    *  before the first reconnect settles must not hammer the gateway. */
   const AUTH_RECOVERY_MIN_INTERVAL_MS = 5_000
-  const authRecoveryAt = new Map<string, number>()
   // Live-proxy 会话自愈控制器（gateway-session-refresh.ts 零 electron——时钟/计时器注入
   // 为纯 Node 缺省）；ready 注册 arm / 离开 ready disarm / onVerified 指纹重注册接线在下方，
   // register 腿 = plane → registerInstanceTransport（隧道 Host authority 覆盖 + 指纹锁步）。
@@ -363,23 +374,28 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
       const livePlane = plane()
       const registered = sm.listInstances().find(instance => instance.id === id)
       const liveStatus = sm.status(id)
-      if (livePlane !== null) livePlane.registerInstanceTransport(`gateway:${id}`, url, headers, {
+      if (livePlane !== null) livePlane.registerInstanceTransport(connectionIdForRawInstance(id, 'gateway'), url, headers, {
         ...(registered === undefined ? {} : { transport: proxyTransport(registered.transport) }),
         ...(tls === undefined ? {} : tls),
         ...(authority === undefined ? {} : { authority }),
         ...(liveStatus?.link === undefined ? {} : { health: liveStatus.link.state }),
       })
+      // A successful (re-)registration ends any pending auth recovery: a deferred
+      // disconnect/connect must never tear down a transport that is already
+      // registered again (the refresh path is the most likely place for this race).
+      authRecovery.cancel(id)
+      authRecoveryContext.delete(id)
       // Keep the registered-auth fingerprint in lockstep：refresh 重注册 REPLACES 代理
       // headers——指纹门须认已轮换 cookie，否则下次 ready 探针无条件再注册（撤销在途流量）。
       const sanitized = headers === undefined ? undefined : sanitizedRegistrationHeaders(headers)
-      registeredAuthFingerprints.set(`gateway:${id}`, authHeadersFingerprint(sanitized))
-      registeredTargetKeys.set(`gateway:${id}`, registrationKey(
+      registeredAuthFingerprints.set(connectionIdForRawInstance(id, 'gateway'), authHeadersFingerprint(sanitized))
+      registeredTargetKeys.set(connectionIdForRawInstance(id, 'gateway'), registrationKey({
         url,
-        registered?.transport,
-        sanitized,
-        tls?.tls.spkiPin,
+        transport: registered?.transport,
+        headers: sanitized,
+        spkiPin: tls?.tls.spkiPin,
         authority,
-      ))
+      }))
     },
     // Bounded dead-cookie recovery：disconnect（idle → 控制面注销 + disarm）→ connect
     //（verifyUp 用存储密码重认证）；每次 refresh 至多一次、仅 transport 仍 ready 且同
@@ -599,6 +615,55 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     }
   }
 
+  /**
+   * One bounded auth recovery per gateway ready push: an auth-failed ready push
+   * unregisters the proxy and must re-verify the session. The DRIVER (timers +
+   * throttle accounting) is auth-recovery.ts — unit-tested with an injected clock;
+   * this wiring only supplies the effect and the guards it needs. Throttled
+   * attempts are deferred (not dropped) so the instance cannot stay
+   * ready-but-unregistered.
+   */
+  const authRecoveryContext = new Map<string, { url: string; scope: string | undefined }>()
+  const authRecovery = createAuthRecoveryController({
+    minIntervalMs: AUTH_RECOVERY_MIN_INTERVAL_MS,
+    onDecision: (id, decision, delayMs) => {
+      // Keep the two operator-facing messages that existed before the extraction.
+      if (decision === 'now') {
+        sm.appendLog(id, 'warn', 'gateway session changed before proxy registration; re-authenticating')
+        return
+      }
+      sm.appendLog(id, 'warn', delayMs === 0
+        ? 'gateway session changed again before recovery settled; one deferred re-authentication is already armed'
+        : 'gateway session changed again before recovery settled; one deferred re-authentication is armed')
+    },
+    attempt: (id) => {
+      // Deferred one microtask: the driver calls this from inside the status push,
+      // and a synchronous disconnect/connect would re-enter the onStatusChanged
+      // emit. The guards below re-observe the instance after that hop — exactly what
+      // a deferred attempt has to do anyway.
+      queueMicrotask(() => {
+        const context = authRecoveryContext.get(id)
+        if (context === undefined) return
+        const currentStatus = sm.status(id)
+        const currentSpec = sm.listInstances().find(instance => instance.id === id)
+        const stillApplies = currentSpec !== undefined && authRecoveryStillApplies({
+          phase: currentStatus?.phase ?? 'idle',
+          readyUrlMatches: sm.readyUrl(id) === context.url,
+          kind: currentSpec.kind,
+          hasPassword: getGatewayPassword(id) !== null,
+          scopeMatches: context.scope !== undefined
+            && gatewaySessionScopeForConnection(currentSpec) === context.scope,
+        })
+        if (!stillApplies) {
+          authRecoveryContext.delete(id)
+          return
+        }
+        sm.disconnect(id)
+        sm.connect(id)
+      })
+    },
+  })
+
   // —— sm.onStatusChanged 订阅：audit transition（非秘密 phase 转换，注册边沿一次）+ ready →
   // 代理注册/凭据注入 + gateway 自动 sync + session refresh arm + 自动 seed ready 边缘 +
   // SSH_STATUS_CHANGED committed push。窗口门 = edges.mainWindowAlive()；plane 腿以 plane() 读。
@@ -638,35 +703,25 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
             if (!auth.ok) {
               // Fail closed on the verify→ready→register TOCTOU：密码 gateway 绝不因 cookie
               // 在间隙被逐/失效而无头注册；有 token 时允许有意的 OR-principal bearer 回退。
-              cp.unregisterInstanceTransport(`${status.kind}:${id}`)
-              registeredAuthFingerprints.delete(`${status.kind}:${id}`)
-              registeredTargetKeys.delete(`${status.kind}:${id}`)
+              cp.unregisterInstanceTransport(connectionIdForRawInstance(id, status.kind))
+              registeredAuthFingerprints.delete(connectionIdForRawInstance(id, status.kind))
+              registeredTargetKeys.delete(connectionIdForRawInstance(id, status.kind))
               sessionRefresh.disarm(id)
-              const now = Date.now()
-              if (now - (authRecoveryAt.get(id) ?? 0) < AUTH_RECOVERY_MIN_INTERVAL_MS) {
-                sm.appendLog(id, 'warn', 'gateway session changed again before recovery settled; waiting for the next ready edge')
-                return
-              }
-              authRecoveryAt.set(id, now)
-              sm.appendLog(id, 'warn', 'gateway session changed before proxy registration; re-authenticating')
-              // 只捕获 scope 进恢复 microtask——绝不闭包整个 facts（auth.headers 载 cookie）。
-              const scope = facts.scope
-              queueMicrotask(() => {
-                const currentStatus = sm.status(id)
-                const currentSpec = sm.listInstances().find(instance => instance.id === id)
-                if (currentStatus?.phase !== 'ready' || sm.readyUrl(id) !== url
-                  || currentSpec === undefined || currentSpec.kind !== 'gateway'
-                  || getGatewayPassword(id) === null
-                  || scope === undefined
-                  || gatewaySessionScopeForConnection(currentSpec) !== scope) return
-                sm.disconnect(id)
-                sm.connect(id)
-              })
+              // The driver owns the throttle arithmetic and the deferred timer; a
+              // throttled attempt is DEFERRED to the window edge, never dropped.
+              authRecoveryContext.set(id, { url, scope: facts.scope })
+              authRecovery.notifyFailure(id)
               return
             }
-            const connectionId = `${status.kind}:${id}`
+            const connectionId = connectionIdForRawInstance(id, status.kind)
             const headers = sanitizedRegistrationHeaders(auth.headers)
-            const nextKey = registrationKey(url, status.transport, headers, facts.spkiPin, facts.tunnelAuthority)
+            const nextKey = registrationKey({
+              url,
+              transport: status.transport,
+              headers,
+              spkiPin: facts.spkiPin,
+              authority: facts.tunnelAuthority,
+            })
             applyTransportRegistration(registeredTargetKeys.get(connectionId), nextKey, {
               // Health-only projection change: do NOT re-register (it revokes
               // every in-flight HTTP response and WS splice).
@@ -685,7 +740,8 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
                 )
                 registeredTargetKeys.set(connectionId, nextKey)
                 registeredAuthFingerprints.set(connectionId, authHeadersFingerprint(headers))
-                authRecoveryAt.delete(id)
+                authRecovery.cancel(id)
+                authRecoveryContext.delete(id)
                 // 每次 gateway ready 注册后 best-effort 把本地 chamber host 包 sync 进 gateway
                 // seed cache（幂等：仅版本失配重传）；手动 sync re-entry 参数经
                 // setGatewaySyncRegistration 落注册表——删除/离开 ready 撤销同表。
@@ -697,8 +753,8 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
               },
             })
           } else {
-            const connectionId = `${status.kind}:${id}`
-            const nextKey = registrationKey(url, status.transport, undefined, undefined, undefined)
+            const connectionId = connectionIdForRawInstance(id, status.kind)
+            const nextKey = registrationKey({ url, transport: status.transport })
             applyTransportRegistration(registeredTargetKeys.get(connectionId), nextKey, {
               setHealth: () => cp.setInstanceTransportHealth(connectionId, status.link?.state ?? 'healthy'),
               register: () => {
@@ -728,10 +784,11 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
           }
         }
       } else {
-        cp.unregisterInstanceTransport(`${status.kind}:${id}`)
-        registeredAuthFingerprints.delete(`${status.kind}:${id}`)
-        registeredTargetKeys.delete(`${status.kind}:${id}`)
-        authRecoveryAt.delete(id)
+        cp.unregisterInstanceTransport(connectionIdForRawInstance(id, status.kind))
+        registeredAuthFingerprints.delete(connectionIdForRawInstance(id, status.kind))
+        registeredTargetKeys.delete(connectionIdForRawInstance(id, status.kind))
+        authRecovery.cancel(id)
+        authRecoveryContext.delete(id)
         // Leaving ready cancels the pre-expiry refresh.
         sessionRefresh.disarm(id)
         // Manual gateway_plugin_sync re-entry dies with the ready registration（design 21 §6.5）。
@@ -780,7 +837,7 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     const facts = currentGatewayAuth(id, url, registered)
     // Fail closed like the ready registration.
     if (!facts.auth.ok) return
-    const connectionId = `gateway:${id}`
+    const connectionId = connectionIdForRawInstance(id, 'gateway')
     const headers = sanitizedRegistrationHeaders(facts.auth.headers)
     if (authHeadersFingerprint(headers) === registeredAuthFingerprints.get(connectionId)) {
       cp.setInstanceTransportHealth(connectionId, 'healthy')
@@ -798,13 +855,20 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
       },
     )
     registeredAuthFingerprints.set(connectionId, authHeadersFingerprint(headers))
-    registeredTargetKeys.set(connectionId, registrationKey(
+    registeredTargetKeys.set(connectionId, registrationKey({
       url,
-      registered.transport,
+      transport: registered.transport,
       headers,
-      facts.spkiPin,
-      facts.tunnelAuthority,
-    ))
+      spkiPin: facts.spkiPin,
+      authority: facts.tunnelAuthority,
+    }))
+    // Same rule as the ready registration: a session re-established by the probe
+    // ends any deferred auth recovery (it would otherwise disconnect a healthy link).
+    authRecovery.cancel(id)
+    authRecoveryContext.delete(id)
+    // The manual-sync entry rides the SAME registration facts: a rotated cookie must
+    // reach the next user-initiated chamber-plugin sync, not the previous one.
+    setGatewaySyncRegistration(id, { url, headers: { ...headers }, spkiPin: facts.spkiPin ?? null })
     sessionRefresh.arm(id)
     sm.appendLog(id, 'info', 'gateway session re-established — proxy registration refreshed with the new session')
   })
@@ -1075,6 +1139,13 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     boundPlane = true
     planeRef.current = planeInstance
     console.log(`${logTag} control plane bound (connectionState=${planeInstance.connectionState})`)
+    // Failure-driven probe seam (design 27 §3.2): a forwarded request that got no
+    // HTTP answer forces ONE identity probe, so a half-open link is detected in
+    // ~1s instead of waiting for the next heartbeat. The manager owns the throttle
+    // and the "healthy only / not busy" guards.
+    // connectionId ('dsh:abc') -> the manager's raw id ('abc'); a malformed id is
+    // dropped inside the adapter, never guessed (see transport-identity tests).
+    planeInstance.onTransportUpstreamFailure(linkFailureAdapter(rawId => { sm.notifyLinkFailure(rawId) }))
     // onLocalStateChange 订阅：degraded/restarting/error/restart-exhausted → 关 known-good 候选健康窗口；restart-exhausted → 自动回退事务。
     planeInstance.onLocalStateChange((snapshot) => {
       if (snapshot.status === 'degraded' || snapshot.status === 'restarting'
@@ -1127,6 +1198,8 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     } finally {
       // 计时器先停：refresh 触发绝不可竞态已 dispose 的 manager。
       sessionRefresh.dispose()
+      authRecovery.dispose()
+      authRecoveryContext.clear()
       gatewaySessions.dispose()
     }
   }

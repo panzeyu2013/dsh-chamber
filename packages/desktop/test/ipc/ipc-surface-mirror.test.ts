@@ -416,6 +416,35 @@ test('renderer connection target/input/spec mirrors desktop v2 fields including 
     'main must project SSH password existence without its value')
 })
 
+test('the renderer SshStatusProjection mirrors the desktop transport projection, link shape included', () => {
+  // preload.cts aliases the desktop type, so the renderer's hand-written mirror is
+  // the only place this shape can drift. Field names AND the nested link shape are
+  // compared: renaming linkEpoch used to pass every gate.
+  const names = (block: string): string[] => block
+    // Flatten the one nested field object so its members do not masquerade as
+    // top-level projection fields.
+    .replace(/{[^{}]*}/g, 'object')
+    .split('\n')
+    .map(line => /^([a-zA-Z_][A-Za-z0-9_]*)\??:/.exec(line.trim()))
+    .filter((match): match is RegExpExecArray => match !== null)
+    .map(match => match[1]!)
+    .sort()
+  const rendererBlock = stripComments(interfaceBlock(renderer, 'SshStatusProjection'))
+  assert.deepEqual(
+    names(rendererBlock),
+    names(stripComments(interfaceBlock(transportProvider, 'TransportStatusProjection'))),
+    'renderer SshStatusProjection drifted from transport-provider.ts',
+  )
+  assert.match(
+    rendererBlock.replace(/\s+/g, ' '),
+    /link\?: \{ state: 'healthy' \| 'suspect' \| 'down' linkEpoch: number \}/,
+    'the link projection must keep state + linkEpoch in the renderer mirror',
+  )
+  const linkType = stripComments(interfaceBlock(transportProvider, 'TransportLinkProjection')).replace(/\s+/g, ' ')
+  assert.match(linkType, /state: 'healthy' \| 'suspect' \| 'down'/)
+  assert.match(linkType, /linkEpoch: number/)
+})
+
 test('DesktopSshSurface stays in lockstep across preload / renderer mirrors (L3)', () => {
   const authoritative = interfaceMethodNames(preload, 'DesktopSshSurface')
   assert.deepEqual(interfaceMethodNames(renderer, 'DesktopSshSurface'), authoritative, 'renderer global.d.ts mirror drifted')
@@ -525,7 +554,11 @@ test('legacy credential setters are clear-only and deletion is exact-id in main'
 test('gateway ready registration and session invalidation use exact connection scope and fail-closed auth decisions', () => {
   assert.match(desktopMain, /gatewaySessionScopeForConnection\(registered\)/)
   assert.match(desktopMain, /gatewayRegistrationAuthHeaders\(token, password !== null, cookie, authProof\)/)
-  assert.match(desktopMain, /if \(!auth\.ok\)[\s\S]*gateway session changed before proxy registration; re-authenticating/)
+  // The auth-fail branch must route through the recovery DRIVER (bounded, deferred
+  // not dropped) and keep both operator messages.
+  assert.match(desktopMain, /if \(!auth\.ok\)[\s\S]*authRecovery\.notifyFailure\(id\)/)
+  assert.match(desktopMain, /gateway session changed before proxy registration; re-authenticating/)
+  assert.match(desktopMain, /gateway session changed again before recovery settled; one deferred re-authentication is armed/)
   assert.match(desktopMain, /invalidateScope\(gatewaySessionScopeForConnection\(spec\)\)/)
   assert.doesNotMatch(desktopMain, /invalidateAuthority\(/, 'remote Host authority is not a credential/session owner')
 })
