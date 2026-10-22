@@ -6,8 +6,8 @@
  * 本模块零 electron import：main.ts 只做「弹框 → 既有退出清理链 → relaunch」的
  * 接线，决策与备份语义在此直测。上游的 disableAllPlugins/sanitizeProfile 不在
  * 此实现——离线摘 dsh profile 插件属插件写面（C 分层冲突），替代动作 = 安全模式
- * 重启 + chamber 自持状态备份（理由与替代动作登记在
- * docs/progress/swift-vs-upstream-differences.md §6.4）。
+ * 重启 + chamber 自持状态备份（理由与替代动作见
+ * docs/checklists/upstream-touchpoints.md 的 fatal-recovery 行）。
  *
  * 按键纪律（S-43，上游 fatal-recovery 的 defaultId=1/cancelId=0 不跟随）：
  * **默认项与 Esc 都落安全项**——致命启动失败时安全项 = 安全模式重启，已在运行

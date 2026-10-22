@@ -36,7 +36,7 @@ export interface StatusWriteFace {
  * `ISessions` contract exposes no status write
  * (`…/client/contract/sessions.ts`), which is exactly why the write-back is a
  * `concrete` face. When upstream ships the contract method
- * (upstream-proposals §4 item 6), the vendor lockstep test reds; add the real
+ * (TODO.md A§4 item 6), the vendor lockstep test reds; add the real
  * name here in the same change — the probe then prefers it and the concrete WARN
  * disappears.
  */

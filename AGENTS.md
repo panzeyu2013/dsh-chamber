@@ -17,7 +17,7 @@ auto-started or imported by the desktop control plane, and never becomes authori
 
 This file is an action guide, not a record: it carries the purpose, the recording rules for
 `docs/progress/STATUS.md`, and the flows with a fixed procedure. Design lives in `docs/design/`
-(entry point `01-overview.md`), unimplemented ideas in `docs/progress/todo/`. The Electron↔Swift
+(entry point `01-overview.md`), unimplemented ideas in `docs/progress/TODO.md`. The Electron↔Swift
 deviation register is `docs/progress/deviations.md` (S/T/P/G/D rows plus the reachability
 discipline); STATUS keeps a one-line pointer to it instead of duplicating dual-flavor rows.
 

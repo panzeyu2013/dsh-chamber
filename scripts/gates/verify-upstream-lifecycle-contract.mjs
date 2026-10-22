@@ -25,7 +25,7 @@ const FILES = {
   hostFollow: join(ROOT, 'vendor/harness-checkout/packages/api/session-controller/src/history.ts'),
   clientSession: join(ROOT, 'vendor/harness-checkout/packages/api/session-controller/src/client/sessions/session.ts'),
   forkOpening: join(ROOT, 'packages/dsh-api-gateway/src/client/stream-client.ts'),
-  proposals: join(ROOT, 'docs/progress/todo/upstream/upstream-proposals.md'),
+  proposals: join(ROOT, 'docs/progress/TODO.md'),
 }
 
 /** Any of these in a pinned lifecycle source means a first-frame bound exists. */
@@ -99,7 +99,7 @@ export function evaluate(read = (path) => readFileSync(path, 'utf8')) {
   }
   const fork = forkRetirementPins(read(FILES.forkOpening), read(FILES.proposals))
   if (!fork.armsDeadline) failures.push('the fork no longer arms its opening deadline (openingSent/armOpeningDeadline)')
-  if (!fork.documentsRetirement) failures.push('the retirement condition is no longer documented (upstream-proposals 首帧期限/退役)')
+  if (!fork.documentsRetirement) failures.push('the retirement condition is no longer documented (TODO.md 首帧期限/退役)')
   return { failures }
 }
 
