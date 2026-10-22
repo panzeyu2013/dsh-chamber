@@ -46,6 +46,9 @@ export interface BoundedGatewayRequestOptions {
   readBodyForStatus?: (status: number) => boolean
   /** Destroy the request once settled (no keep-alive reuse on this path). */
   destroyOnSettle?: boolean
+  /** Owner cancellation (disconnect/retarget or the outer probe deadline): settles
+   *  as a network outcome so the caller's classification stays transient. */
+  signal?: AbortSignal
 }
 
 export function boundedGatewayRequest(
@@ -57,9 +60,11 @@ export function boundedGatewayRequest(
     const pin = options.spkiPin
     let settled = false
     let timedOut = false
+    let abortListener: (() => void) | null = null
     const settle = (outcome: BoundedHttpOutcome): void => {
       if (settled) return
       settled = true
+      if (abortListener !== null && options.signal !== undefined) options.signal.removeEventListener('abort', abortListener)
       if (options.destroyOnSettle === true) req.destroy()
       resolve(outcome)
     }
@@ -111,6 +116,16 @@ export function boundedGatewayRequest(
       const spkiMismatch = (error as NodeJS.ErrnoException).code === SPKI_PIN_MISMATCH_CODE
       settle({ kind: 'network', error, timedOut, spkiMismatch })
     })
+    // Owner cancellation: settle as network (transient) and destroy the request so a
+    // cancelled probe cannot finish a session rotation after its transport is gone.
+    if (options.signal !== undefined) {
+      abortListener = () => {
+        settle({ kind: 'network', error: new Error('gateway probe aborted'), timedOut: false, spkiMismatch: false })
+        req.destroy()
+      }
+      if (options.signal.aborted) abortListener()
+      else options.signal.addEventListener('abort', abortListener, { once: true })
+    }
     const timer = setTimeout(() => {
       timedOut = true
       req.destroy(new Error(options.timeoutMessage ?? `gateway request timed out after ${options.timeoutMs}ms`))

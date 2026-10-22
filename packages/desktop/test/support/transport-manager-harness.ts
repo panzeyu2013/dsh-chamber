@@ -72,7 +72,11 @@ export function makeManager(t: TestContext, overrides: {
   instances?: TransportInstanceInput[]
   random?: () => number
   provider?: TransportProvider
-  verifyProbe?: (spec: TransportInstanceSpec, endpoint: { host: string; port: number }) => Promise<TransportVerifyResult>
+  /** Shrink the provider's declared ready-probe budget (the real ssh provider
+   *  declares 5s/20s; a test that overrides `probeTimeoutMs` must also shrink
+   *  this, because the declared budget is what the manager actually uses). */
+  probeBudgetMs?: number
+  verifyProbe?: (spec: TransportInstanceSpec, endpoint: { host: string; port: number }, signal?: AbortSignal) => Promise<TransportVerifyResult>
   allocatePort?: () => Promise<number>
   logger?: { log?(message: string): void; warn?(message: string): void; error?(message: string): void }
   spawnFn?: (command: string, args: readonly string[], options: SpawnOptions) => SpawnedProcess
@@ -83,8 +87,12 @@ export function makeManager(t: TestContext, overrides: {
   const spawnTimes: number[] = []
   let probeOk = false
   const instancesFile = join(tempDir(t), 'ssh-instances.json')
+  const providerBase = overrides.provider ?? sshProvider
+  const provider = overrides.probeBudgetMs === undefined
+    ? providerBase
+    : { ...providerBase, verifyUpBudgetMs: overrides.probeBudgetMs }
   const manager = createTransportManager({
-    provider: overrides.provider ?? sshProvider,
+    provider,
     spawnFn: (command, args, options) => {
       if (overrides.spawnFn !== undefined) return overrides.spawnFn(command, args, options)
       const child = new FakeChild()

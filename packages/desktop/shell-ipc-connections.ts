@@ -391,7 +391,11 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
   // 按需 ready 态复验（用户激活来源/会话）：对 READY transport 做一次即时身份探针，
   // 死会话/端点在一个往返内翻相位，不等待周期心跳。
   deps.ipc.handle(IPC_CHANNELS.SSH_REVERIFY, (payload: unknown) => {
-    const { id, reason } = payload as { id: string; reason?: 'user' | 'resume' | 'online' };
+    const { id, reason: rawReason } = payload as { id: string; reason?: unknown };
+    // The reason is a page-supplied hint deciding whether the 10s USER quiet window
+    // applies; normalize it HERE so a null (WKWebView NSNull), a typo or a tampered
+    // string can never silently promote a user probe to a forced one.
+    const reason = rawReason === 'resume' || rawReason === 'online' ? rawReason : 'user';
     return sm.reverify(id, reason);
   });
   // 环形日志读/清：LOGS 返回有界非秘密日志（URL/密钥纪律同 status 投影），

@@ -222,8 +222,13 @@ export interface TransportVerifyResult {
   terminal?: boolean
   /**
    * Why a non-ok probe failed. The transport manager counts only `network` toward
-   * the link-down streak; 5xx/408/425/429 (`server`) and 401 (`auth`) prove the
-   * path is reachable and must never tear the tunnel down. `protocol` is terminal.
+   * the link-down streak; 5xx/408/425/429 (`server`) and a self-healed 401
+   * (`auth`) prove the path is reachable and never count as link loss.
+   * `protocol` is terminal. NOTE: a provider that cannot self-heal a 401 (the
+   * shipped dsh/gateway probes, where the credential is unrecoverable) sets
+   * `terminal: true` with it, and the manager routes terminal verdicts to
+   * failTerminal BEFORE the link reducer — so an unrecoverable auth verdict still
+   * ends the transport, it just never masquerades as a dead link.
    * Absent = classify by `terminal` (protocol) or network, for older providers.
    */
   failureKind?: 'network' | 'server' | 'auth' | 'protocol'
@@ -358,11 +363,24 @@ export interface TransportProvider {
    * pre-identity runtime tree on 404). Called once after the probe reports the endpoint up and
    * BEFORE the phase may become ready — a port merely accepting TCP is not proof of a dsh instance.
    * Absent = the transport probe is trusted alone.
-   * CONTRACT: verifyUp MUST settle within its own bounded deadline (the transport layer awaits it
-   * bare, no outer timeout); a provider that can hang would permanently occupy the connect/reverify
-   * single-flight.
+   * CONTRACT: every leg inside verifyUp is bounded by the provider; the ready-state
+   * probe additionally has an outer deadline sized by `verifyUpBudgetMs` (see below),
+   * so a hung provider cannot occupy the single-flight forever. That outer deadline
+   * is a LAST RESORT, not a budget: a provider whose composite flow legitimately
+   * outlives it would be booked as a network failure.
    */
-  verifyUp?(spec: TransportInstanceSpec, endpoint: TransportProbeEndpoint): Promise<TransportVerifyResult>
+  /** Destination-identity verification. `signal` cancels the in-flight probe when
+   *  the owner revokes the transport (disconnect/retarget) or its deadline fires:
+   *  a provider that ignores it is still correct, just less prompt. */
+  verifyUp?(spec: TransportInstanceSpec, endpoint: TransportProbeEndpoint, signal?: AbortSignal): Promise<TransportVerifyResult>
+  /**
+   * Worst-case duration of ONE `verifyUp` call, for the ready-state probe deadline.
+   * A single HTTP identity exchange fits the 5s default; a COMPOSITE flow declares
+   * the sum (the gateway password flow is login 10s → probe 5s → 401 → re-login 10s
+   * → re-probe 5s, i.e. 30s, and the providers declare 35s). Absent =
+   * LINK_POLICY.probeTimeoutMs.
+   */
+  verifyUpBudgetMs?: number | ((spec: TransportInstanceSpec) => number)
   /** Optional remote-service exec channel. Absent = exec returns an explicit error. */
   exec?(
     spec: TransportInstanceSpec,

@@ -834,3 +834,56 @@ test('the secrets store dir has no stray files after a full lifecycle', () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('an aborted gateway identity probe settles as a transient network failure', async () => {
+  // A server that accepts and never answers: only the signal can end the call.
+  const server = createServer(() => { /* never respond */ })
+  await new Promise(resolvePromise => { server.listen(0, '127.0.0.1', () => { resolvePromise(undefined) }) })
+  const port = (server.address() as AddressInfo).port
+  const controller = new AbortController()
+  const pending = verifyGatewayRuntimeIdentity({
+    host: '127.0.0.1',
+    port,
+    token: TOKEN,
+    insecure: true,
+    timeoutMs: 10_000,
+    maxBodyBytes: 1024,
+    cookie: null,
+    signal: controller.signal,
+  })
+  setTimeout(() => controller.abort(), 30)
+  const result = await pending
+  assert.equal(result.ok, false)
+  assert.equal(result.terminal, undefined, 'an abort is transient — never a terminal verdict')
+  assert.equal(result.failureKind, 'network')
+  assert.doesNotMatch(result.detail ?? '', /within 10000ms/, 'an abort must not be reported as a timeout')
+  server.closeAllConnections?.()
+  server.close()
+})
+
+test('boundedGatewayRequest: an abort is a network outcome, not a timeout', async () => {
+  const server = createServer(() => { /* never respond */ })
+  await new Promise(resolvePromise => { server.listen(0, '127.0.0.1', () => { resolvePromise(undefined) }) })
+  const port = (server.address() as AddressInfo).port
+  const controller = new AbortController()
+  const pending = boundedGatewayRequest(`http://127.0.0.1:${String(port)}/chamber/runtime/status`, {
+    method: 'GET',
+    headers: {},
+    insecure: true,
+    spkiPin: null,
+    timeoutMs: 10_000,
+    maxBodyBytes: 1024,
+    destroyOnSettle: true,
+    signal: controller.signal,
+  })
+  setTimeout(() => controller.abort(), 30)
+  const outcome = await pending
+  assert.equal(outcome.kind, 'network')
+  if (outcome.kind === 'network') {
+    assert.equal(outcome.timedOut, false, 'an abort keeps the timeout bit clear')
+    assert.equal(outcome.spkiMismatch, false)
+  }
+  server.closeAllConnections?.()
+  server.close()
+})
+

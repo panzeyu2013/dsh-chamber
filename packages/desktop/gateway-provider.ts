@@ -103,6 +103,12 @@ export const DEFAULT_GATEWAY_HTTP_PORT = 80
 
 /** Timeout of the one-shot gateway-owned runtime identity probe (verifyUp). */
 export const GATEWAY_VERIFY_TIMEOUT_MS = 5_000
+/**
+ * Worst case of ONE composite password verify: login 10s → probe 5s → 401 →
+ * re-login 10s → re-probe 5s = 30s, plus margin. Shared by the direct-http provider
+ * and the ssh tunnel branch so the two legs cannot drift.
+ */
+export const GATEWAY_VERIFY_BUDGET_MS = 35_000
 
 /** Response-body cap of the gateway identity probe. */
 export const GATEWAY_VERIFY_MAX_BODY_BYTES = 1024 * 1024
@@ -651,6 +657,10 @@ export interface GatewayIdentityProbeOptions {
   spkiPin?: string | null
   /** Carry `statusCode` on 403/non-200 results; 401 always carries it (the verifyUp flow keys on it). */
   carryStatusCodes?: boolean
+  /** Owner cancellation (disconnect/retarget or the outer probe deadline): the
+   *  request settles as a network failure instead of finishing after the transport
+   *  it was probing for is gone. */
+  signal?: AbortSignal
 }
 
 /** The single gateway runtime-identity probe core shared by the direct-http provider
@@ -683,6 +693,7 @@ export async function verifyGatewayRuntimeIdentity(
     readBodyForStatus: status => status === 200,
     // A probe never reused a keep-alive socket: destroy the request once settled.
     destroyOnSettle: true,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
   })
   if (outcome.kind === 'oversize') {
     return { ok: false, failureKind: 'protocol', detail: 'the gateway answered an oversized runtime identity response', terminal: true }
@@ -743,8 +754,19 @@ function verifyGatewayEndpoint(
   maxBodyBytes = GATEWAY_VERIFY_MAX_BODY_BYTES,
   cookie: string | null = null,
   spkiPin: string | null = null,
+  signal?: AbortSignal,
 ): Promise<TransportVerifyResult & { statusCode?: number }> {
-  return verifyGatewayRuntimeIdentity({ host, port, token, insecure, timeoutMs, maxBodyBytes, cookie, spkiPin })
+  return verifyGatewayRuntimeIdentity({
+    host,
+    port,
+    token,
+    insecure,
+    timeoutMs,
+    maxBodyBytes,
+    cookie,
+    spkiPin,
+    ...(signal === undefined ? {} : { signal }),
+  })
 }
 
 /**
@@ -829,7 +851,14 @@ export async function verifyGatewayPasswordSession(
   probe: (cookie: string | null) => Promise<TransportVerifyResult & { statusCode?: number }>,
   fallbackProbe?: () => Promise<TransportVerifyResult & { statusCode?: number }>,
 ): Promise<TransportVerifyResult> {
+  // The proof is cleared for the DURATION of the verify (a concurrent registration
+  // must not consume a session that is being re-checked). A TRANSIENT failure
+  // (network/5xx) is not a credential verdict: the prior proof is restored before
+  // returning, or the next ready push's fail-closed gate would read "no proof" and
+  // revoke/rebuild a registration whose cookie was never challenged.
+  const priorProof = sessionHooks.registrationAuthProof?.(origin) ?? null
   sessionHooks.setRegistrationAuthProof?.(origin, null)
+  let invalidated = false
   let generation = sessionHooks.generation?.(origin)
   const generationIsCurrent = (): boolean => generation === undefined
     || sessionHooks.generation?.(origin) === generation
@@ -837,6 +866,17 @@ export async function verifyGatewayPasswordSession(
     || (generationIsCurrent() && sessionHooks.cachedCookie?.(origin) === cookie)
   const adoptCurrentGeneration = (): void => {
     generation = sessionHooks.generation?.(origin)
+  }
+  const invalidateSession = (): void => {
+    invalidated = true
+    sessionHooks.invalidate?.(origin)
+  }
+  /** Transient failures keep the credential status quo; credential decisions never do. */
+  const restoreProof = (result: TransportVerifyResult): TransportVerifyResult => {
+    if (!result.ok && !invalidated && priorProof !== null && generationIsCurrent()) {
+      sessionHooks.setRegistrationAuthProof?.(origin, priorProof)
+    }
+    return result
   }
   const cached = sessionHooks.cachedCookie !== undefined ? sessionHooks.cachedCookie(origin) : null
   let cookie: string
@@ -860,8 +900,10 @@ export async function verifyGatewayPasswordSession(
           sessionHooks.setRegistrationAuthProof?.(origin, 'bearer')
           return fallback
         }
+        // A failed bearer fallback does NOT replace the password flow's more
+        // actionable classification: fall through to the login failure below.
       }
-      return gatewaySessionFailureToVerify(login)
+      return restoreProof(gatewaySessionFailureToVerify(login))
     }
     cookie = login.cookie
   }
@@ -870,10 +912,11 @@ export async function verifyGatewayPasswordSession(
   if (!generationIsCurrent()) return gatewaySessionSuperseded()
   if (first.ok && !verifiedCookieIsCurrent(cookie)) return gatewaySessionSuperseded()
   if (first.ok) sessionHooks.setRegistrationAuthProof?.(origin, 'cookie')
-  if (first.ok || first.statusCode !== 401) return first
+  if (first.ok) return first
+  if (first.statusCode !== 401) return restoreProof(first)
   // 401 with the session cookie: invalidate, then ONE automatic re-login with the stored
   // password (design 17 §9.3); a refused re-login classifies as terminal or transient.
-  sessionHooks.invalidate?.(origin)
+  invalidateSession()
   // This invalidation is owned by the current verifier, so its one allowed re-login adopts
   // the new generation; a later external invalidation trips the same post-await fences.
   adoptCurrentGeneration()
@@ -882,15 +925,16 @@ export async function verifyGatewayPasswordSession(
   if (!generationIsCurrent() || (!relogin.ok && relogin.code === 'stale')) {
     return gatewaySessionSuperseded()
   }
-  if (!relogin.ok) return gatewaySessionFailureToVerify(relogin)
+  if (!relogin.ok) return restoreProof(gatewaySessionFailureToVerify(relogin))
   if (!generationIsCurrent()) return gatewaySessionSuperseded()
   const reprobe = await probe(relogin.cookie)
   if (!generationIsCurrent()) return gatewaySessionSuperseded()
   if (reprobe.ok && !verifiedCookieIsCurrent(relogin.cookie)) return gatewaySessionSuperseded()
   if (reprobe.ok) sessionHooks.setRegistrationAuthProof?.(origin, 'cookie')
-  if (reprobe.ok || reprobe.statusCode !== 401) return reprobe
+  if (reprobe.ok) return reprobe
+  if (reprobe.statusCode !== 401) return restoreProof(reprobe)
   // Even the freshly minted session is refused — the stored password cannot authenticate this deployment.
-  sessionHooks.invalidate?.(origin)
+  invalidateSession()
   return { ok: false, detail: 'the gateway rejected the password authentication (401) — re-enter the password', terminal: true }
 }
 
@@ -954,7 +998,13 @@ export const gatewayProvider: TransportProvider = {
    *  configured token rides as Bearer and a configured password as the session Cookie
    *  (both independent, either principal accepted). Uses spec.host (BRACKETED IPv6 —
    *  URL form), NOT endpoint.host (unbracketed for net.connect). */
-  verifyUp(spec: TransportInstanceSpec, endpoint: TransportProbeEndpoint): Promise<TransportVerifyResult> {
+  /**
+   * The password-session flow is a composite: probe (5s) → 401 → re-login
+   * (GATEWAY_LOGIN_TIMEOUT_MS = 10s) → re-probe (5s), and the first login may also
+   * take 10s. Worst case 10 + 5 + 10 + 5 = 30s; the probe deadline covers it.
+   */
+  verifyUpBudgetMs: GATEWAY_VERIFY_BUDGET_MS,
+  verifyUp(spec: TransportInstanceSpec, endpoint: TransportProbeEndpoint, signal?: AbortSignal): Promise<TransportVerifyResult> {
     void endpoint
     const password = getGatewayPassword(spec.id)
     // A configured password + wired session hooks: share verifyGatewayPasswordSession
@@ -969,19 +1019,19 @@ export const gatewayProvider: TransportProvider = {
         password,
         cookie => {
           const token = getGatewayToken(spec.id)
-          return verifyGatewayEndpoint(spec.host, spec.remotePort, token, spec.insecureHttp, GATEWAY_VERIFY_TIMEOUT_MS, GATEWAY_VERIFY_MAX_BODY_BYTES, cookie, spec.spkiPin ?? null)
+          return verifyGatewayEndpoint(spec.host, spec.remotePort, token, spec.insecureHttp, GATEWAY_VERIFY_TIMEOUT_MS, GATEWAY_VERIFY_MAX_BODY_BYTES, cookie, spec.spkiPin ?? null, signal)
         },
         () => {
           const token = getGatewayToken(spec.id)
           if (token === null) {
             return Promise.resolve({ ok: false, detail: 'no gateway bearer token configured', terminal: false, failureKind: 'server' })
           }
-          return verifyGatewayEndpoint(spec.host, spec.remotePort, token, spec.insecureHttp, GATEWAY_VERIFY_TIMEOUT_MS, GATEWAY_VERIFY_MAX_BODY_BYTES, null, spec.spkiPin ?? null)
+          return verifyGatewayEndpoint(spec.host, spec.remotePort, token, spec.insecureHttp, GATEWAY_VERIFY_TIMEOUT_MS, GATEWAY_VERIFY_MAX_BODY_BYTES, null, spec.spkiPin ?? null, signal)
         },
       )
     }
     // 无会话钩子（无密码 / 未接线）：同样在使用点实时读 token。
-    return verifyGatewayEndpoint(spec.host, spec.remotePort, getGatewayToken(spec.id), spec.insecureHttp, GATEWAY_VERIFY_TIMEOUT_MS, GATEWAY_VERIFY_MAX_BODY_BYTES, null, spec.spkiPin ?? null)
+    return verifyGatewayEndpoint(spec.host, spec.remotePort, getGatewayToken(spec.id), spec.insecureHttp, GATEWAY_VERIFY_TIMEOUT_MS, GATEWAY_VERIFY_MAX_BODY_BYTES, null, spec.spkiPin ?? null, signal)
   },
 
   /** No child process → no stderr stream: a safe no-op classification for the interface. */

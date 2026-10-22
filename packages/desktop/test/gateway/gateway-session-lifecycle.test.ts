@@ -399,3 +399,40 @@ test('expiresAt reports the cached session\'s expiry instant and null when absen
     await gw.close()
   }
 })
+
+test('a transient probe failure restores the registration proof (the ready push stays health-only)', async () => {
+  const origin = { baseUrl: 'http://gateway.example.com:30809', insecureHttp: true, scope: 'test:proof-restore' }
+  let proof: 'cookie' | 'bearer' | null = 'cookie'
+  configureGatewaySessionProvider({
+    ensureSession: async () => ({ ok: true, cookie: 'sid=2' }),
+    generation: () => 1,
+    registrationAuthProof: () => proof,
+    setRegistrationAuthProof: (_origin, next) => { proof = next },
+    cachedCookie: () => 'sid=1',
+    invalidate: () => { proof = null },
+  })
+  try {
+    // Network failure on the cookie probe: not a credential verdict.
+    const transient = await verifyGatewayPasswordSession(origin, PASSWORD, async () => ({
+      ok: false, failureKind: 'network', detail: 'blackhole',
+    }) as never)
+    assert.equal(transient.ok, false)
+    assert.equal(proof, 'cookie', 'the proof comes back so the fail-closed gate does not revoke the registration')
+    // A reachable 5xx is the same kind of evidence (the destination answered, credential untested).
+    const busy = await verifyGatewayPasswordSession(origin, PASSWORD, async () => ({
+      ok: false, failureKind: 'server', detail: 'busy', statusCode: 503,
+    }) as never)
+    assert.equal(busy.ok, false)
+    assert.equal(proof, 'cookie')
+    // 401 is a CREDENTIAL verdict: invalidate + one re-login; a refused fresh session is
+    // terminal and no proof is resurrected.
+    const refused = await verifyGatewayPasswordSession(origin, PASSWORD, async () => ({
+      ok: false, statusCode: 401,
+    }) as never)
+    assert.equal(refused.ok, false)
+    assert.equal(proof, null, 'a 401 never restores the old proof')
+  } finally {
+    configureGatewaySessionProvider({})
+  }
+})
+

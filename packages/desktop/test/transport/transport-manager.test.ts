@@ -237,7 +237,7 @@ test('connecting → ready on tunnel-up, with the documented ssh args and a loca
   assert.equal(spawnCalls[0].command, 'ssh')
   assert.deepEqual(spawnCalls[0].args.slice(0, 9), [
     '-N',
-    '-o', 'ConnectTimeout=15',
+    '-o', 'ConnectTimeout=8',
     '-o', 'ExitOnForwardFailure=yes',
     '-o', `ServerAliveInterval=${SERVER_ALIVE_INTERVAL_SECONDS}`,
     '-o', `ServerAliveCountMax=${SERVER_ALIVE_COUNT_MAX}`,
@@ -274,7 +274,7 @@ test('a configured sshPort rides the tunnel and the systemd exec as `-p <port>`'
   const forward = spawnCalls[0].args[12]
   assert.deepEqual(spawnCalls[0].args, [
     '-N',
-    '-o', 'ConnectTimeout=15',
+    '-o', 'ConnectTimeout=8',
     '-o', 'ExitOnForwardFailure=yes',
     '-o', `ServerAliveInterval=${SERVER_ALIVE_INTERVAL_SECONDS}`,
     '-o', `ServerAliveCountMax=${SERVER_ALIVE_COUNT_MAX}`,

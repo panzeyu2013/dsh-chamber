@@ -41,7 +41,7 @@ import {
 // for this provider's consumers).
 import { RUN_STDOUT_MAX_BYTES, WRITE_FILE_MAX_BYTES } from './control-plane-module.ts'
 import { CHILD_LINE_MAX_CHARS, createBoundedLineProcessor } from './bounded-lines.ts'
-import { getGatewayPassword, getGatewaySessionHooks, getGatewayToken, verifyGatewayPasswordSession, verifyGatewayRuntimeIdentity } from './gateway-provider.ts'
+import { GATEWAY_VERIFY_BUDGET_MS, getGatewayPassword, getGatewaySessionHooks, getGatewayToken, verifyGatewayPasswordSession, verifyGatewayRuntimeIdentity } from './gateway-provider.ts'
 import { INSTANCE_ID_PATTERN, MAX_INSTANCE_LABEL_CHARS, signalChild } from './transport-provider.ts'
 import { isCredentialBinding, sshCredentialBinding } from './credential-binding.ts'
 import { isPlainRecord, preserveInvalidCredentialFile, removeLegacyTmpResidue } from './store-file-hygiene.ts'
@@ -157,6 +157,7 @@ export const VERIFY_UP_SIGNATURE_TIMEOUT_MS = 2_000
 export function probeDshSignature(
   endpoint: { host: string; port: number },
   timeoutMs = VERIFY_UP_SIGNATURE_TIMEOUT_MS,
+  signal?: AbortSignal,
 ): Promise<'dsh' | 'none'> {
   const deadline = Date.now() + timeoutMs
   const remaining = () => Math.max(1, deadline - Date.now())
@@ -169,6 +170,7 @@ export function probeDshSignature(
     envelope: buildClientRequest(identityRpcId, HOST_IDENTITY_METHOD, buildHostIdentityProbePayload()),
     timeoutMs: remaining(),
     maxBodyBytes: HOST_PROBE_MAX_RESPONSE_BYTES,
+    ...(signal === undefined ? {} : { signal }),
   }).then(async outcome => {
     if (outcome.timeout || outcome.status === null) return 'none'
     if (outcome.status === 200) {
@@ -191,6 +193,7 @@ export function probeDshSignature(
       envelope: buildClientRequest(legacyRpcId, LEGACY_HOST_PROBE_METHOD, buildLegacyHostProbePayload()),
       timeoutMs: remaining(),
       maxBodyBytes: VERIFY_UP_MAX_BODY_BYTES,
+      ...(signal === undefined ? {} : { signal }),
     })
     if (legacyOutcome.timeout || legacyOutcome.status === null
       || legacyOutcome.status !== 200 || legacyOutcome.oversized) return 'none'
@@ -216,6 +219,7 @@ export async function verifyDshEndpoint(
   endpoint: { host: string; port: number },
   timeoutMs = VERIFY_UP_TIMEOUT_MS,
   maxBodyBytes = HOST_PROBE_MAX_RESPONSE_BYTES,
+  signal?: AbortSignal,
 ): Promise<TransportVerifyResult> {
   // Bracketed IPv6 literals already carry their brackets in the URL.
   const url = `http://${endpoint.host}:${endpoint.port}/api/${HOST_IDENTITY_METHOD}`
@@ -227,6 +231,7 @@ export async function verifyDshEndpoint(
     envelope: buildClientRequest(rpcId, HOST_IDENTITY_METHOD, buildHostIdentityProbePayload()),
     timeoutMs,
     maxBodyBytes,
+    ...(signal === undefined ? {} : { signal }),
   })
   if (outcome.timeout) {
     return { ok: false, failureKind: 'network', detail: `the destination did not answer the dsh identity probe within ${timeoutMs}ms` }
@@ -250,7 +255,7 @@ export async function verifyDshEndpoint(
     if (outcome.status === 408 || outcome.status === 425 || outcome.status === 429 || outcome.status >= 500) {
       return { ok: false, failureKind: 'server', detail: `the destination answered HTTP ${String(outcome.status)} to the dsh identity probe` }
     }
-    const signature = await probeDshSignature(endpoint, Math.min(VERIFY_UP_SIGNATURE_TIMEOUT_MS, remaining()))
+    const signature = await probeDshSignature(endpoint, Math.min(VERIFY_UP_SIGNATURE_TIMEOUT_MS, remaining()), signal)
     if (signature !== 'none') {
       return { ok: false, failureKind: 'protocol', detail: 'the destination is a dsh instance, but it did not answer the dsh identity probe — check or upgrade the remote dsh', terminal: true }
     }
@@ -286,6 +291,7 @@ export function verifyGatewayEndpointViaTunnel(
   maxBodyBytes = VERIFY_UP_MAX_BODY_BYTES,
   cookie: string | null = null,
   authority: string | undefined = undefined,
+  signal?: AbortSignal,
 ): Promise<TransportVerifyResult & { statusCode?: number }> {
   // The shared gateway runtime-identity probe core (gateway-provider.ts):
   // http + the tunnel Host-header override, with
@@ -300,6 +306,7 @@ export function verifyGatewayEndpointViaTunnel(
     cookie,
     authority,
     carryStatusCodes: true,
+    ...(signal === undefined ? {} : { signal }),
   })
 }
 
@@ -336,15 +343,19 @@ async function verifyGatewayWithPasswordViaTunnel(
   endpoint: TransportProbeEndpoint,
   password: string,
   authority: string | undefined,
+  signal?: AbortSignal,
 ): Promise<TransportVerifyResult> {
+  // The probe legs are cancellable; the LOGIN leg (ensureSession) is not — a login
+  // that already started is fenced by the session generation, so a cancelled probe
+  // can never install a stale credential.
   return verifyGatewayPasswordSession(tunnelSessionOrigin(spec, endpoint, authority), password, cookie =>
-    verifyGatewayEndpointViaTunnel(endpoint, getGatewayToken(spec.id), VERIFY_UP_TIMEOUT_MS, VERIFY_UP_MAX_BODY_BYTES, cookie, authority),
+    verifyGatewayEndpointViaTunnel(endpoint, getGatewayToken(spec.id), VERIFY_UP_TIMEOUT_MS, VERIFY_UP_MAX_BODY_BYTES, cookie, authority, signal),
   () => {
     const token = getGatewayToken(spec.id)
     if (token === null) {
       return Promise.resolve({ ok: false, detail: 'no gateway bearer token configured', terminal: false, failureKind: 'server' })
     }
-    return verifyGatewayEndpointViaTunnel(endpoint, token, VERIFY_UP_TIMEOUT_MS, VERIFY_UP_MAX_BODY_BYTES, null, authority)
+    return verifyGatewayEndpointViaTunnel(endpoint, token, VERIFY_UP_TIMEOUT_MS, VERIFY_UP_MAX_BODY_BYTES, null, authority, signal)
   })
 }
 
@@ -892,7 +903,10 @@ export const sshProvider: TransportProvider = {
     // TCP timeout; a local -L bind failure must fail the child instead of leaving
     // a listener that can never forward. Bind failures are re-allocated by the
     // transport manager (not counted as a retry) when the port race is lost.
-    const connectArgs = ['-o', 'ConnectTimeout=15', '-o', 'ExitOnForwardFailure=yes']
+    // ConnectTimeout must stay BELOW READY_TIMEOUT_MS (10s): otherwise the manager
+    // gives up first and the ssh-side deadline can never fire, so the flag would be
+    // inert. 8s leaves the manager 2s to observe the clean ssh error.
+    const connectArgs = ['-o', 'ConnectTimeout=8', '-o', 'ExitOnForwardFailure=yes']
     return spec.sshPort === null
       ? ['-N', ...connectArgs, ...keepaliveArgs, '-L', `${localPort}:127.0.0.1:${spec.remotePort}`, target]
       : ['-N', ...connectArgs, ...keepaliveArgs, '-p', String(spec.sshPort), '-L', `${localPort}:127.0.0.1:${spec.remotePort}`, target]
@@ -937,7 +951,14 @@ export const sshProvider: TransportProvider = {
    * password-session flow (login keyed to the tunnel origin, probe with its Cookie, one invalidate
    * + re-login on 401 before the terminal password-refused state).
    */
-  verifyUp(spec: TransportInstanceSpec, endpoint: TransportProbeEndpoint) {
+  /**
+   * A dsh identity probe is ONE bounded exchange (5s, the signature re-answer is
+   * inside that deadline); a gateway target may ride the password-session flow
+   * (probe 5s → 401 → re-login 10s → re-probe 5s, with the first login up to 10s
+   * too), so it declares the 30s worst case plus margin.
+   */
+  verifyUpBudgetMs: (spec: TransportInstanceSpec) => spec.kind === 'gateway' ? GATEWAY_VERIFY_BUDGET_MS : VERIFY_UP_TIMEOUT_MS,
+  verifyUp(spec: TransportInstanceSpec, endpoint: TransportProbeEndpoint, signal?: AbortSignal) {
     if (spec.kind === 'gateway') {
       // Tunnel Host override: every request through the tunnel presents the remote LOOPBACK
       // destination authority — never spec.host, which may only be an SSH alias. The gateway's
@@ -950,13 +971,14 @@ export const sshProvider: TransportProvider = {
       // independent Bearer when present. Without hooks the token still probes normally and a
       // password-only target stays credential-free (the inert default).
       if (password !== null && getGatewaySessionHooks().ensureSession !== undefined) {
-        return verifyGatewayWithPasswordViaTunnel(spec, endpoint, password, authority)
+        return verifyGatewayWithPasswordViaTunnel(spec, endpoint, password, authority, signal)
       }
       // Read at the use point (each network exchange), never at entry — a rotation after verifyUp
       // was invoked must be observed here.
-      return verifyGatewayEndpointViaTunnel(endpoint, getGatewayToken(spec.id), VERIFY_UP_TIMEOUT_MS, VERIFY_UP_MAX_BODY_BYTES, null, authority)
+      return verifyGatewayEndpointViaTunnel(endpoint, getGatewayToken(spec.id), VERIFY_UP_TIMEOUT_MS, VERIFY_UP_MAX_BODY_BYTES, null, authority, signal)
     }
-    return verifyDshEndpoint(endpoint)
+    // Defaults for the timeout/body cap; the signal lets a disconnect cancel the probe.
+    return verifyDshEndpoint(endpoint, undefined, undefined, signal)
   },
 
   exec(spec: TransportInstanceSpec, action: TransportExecAction, deps: TransportExecDeps, payload?: TransportRunPayload): Promise<TransportExecResult> {

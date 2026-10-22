@@ -7,24 +7,47 @@
  * suspect, second-network-failure -> down transition testable without fake sockets.
  *
  * Ownership: these thresholds are DESKTOP-ONLY (one consumer: the transport
- * manager). They deliberately do not live in dsh-stream-state: that package is
- * packaged as source into node_modules and the Electron main process must not
- * import a second source-only workspace package. There is no second consumer, so
- * this is the single threshold owner for the transport link.
+ * manager). They deliberately do not live in dsh-stream-state: that package is a
+ * pure stream-lifecycle table set with its own Swift mirror, and the transport
+ * link has no page-side consumer — adding a second consumer would widen the build
+ * graph and the parity surface for no shared fact. Two independent reasons: no
+ * second consumer, and no wish to grow the packaged main-process import graph.
  */
 
 export const LINK_POLICY = {
-  /** One identity/liveness probe may take this long. */
+  /** Default probe budget for a provider that does not declare its own
+   *  `verifyUpBudgetMs` (a single HTTP identity exchange). A provider whose
+   *  verifyUp is a COMPOSITE flow (gateway password login → probe → re-login)
+   *  declares a larger budget so a legitimately slow but reachable probe is not
+   *  booked as a network failure. */
   probeTimeoutMs: 5_000,
   /** Re-probe delay while suspect (single-flight). */
   suspectProbeIntervalMs: 2_000,
-  /** Healthy-state re-verification cadence (matches the existing 60s heartbeat). */
-  healthyProbeIntervalMs: 60_000,
+  /** Re-probe delay after a REACHABLE failure (5xx/401): the path is fine, the
+   *  service is busy or the credential needs attention — retrying every 2s would
+   *  only add load. */
+  reachableProbeIntervalMs: 10_000,
+  /** Minimum gap between two FAILURE-DRIVEN forced probes for one instance. A
+   *  burst of failed requests is one event, not N: the heartbeat stays the
+   *  periodic owner, this only turns "detect at the next beat" into "detect in ~1s". */
+  failureProbeMinIntervalMs: 2_000,
+  /** Stable-link heartbeat. Held at 30s: with zero traffic this probe is the ONLY
+   *  half-open detector, so the old 60s left a ~62s blind window; 30s halves it at
+   *  the cost of one tiny identity request per instance per half minute. */
+  healthyProbeIntervalMs: 30_000,
+  /** Watch-window cadence: tighter probing for a while after a ready edge or a
+   *  health transition, when a relay/NAT is most likely to have dropped state. */
+  watchProbeIntervalMs: 10_000,
+  /** How long the watch window lasts after the last link event. */
+  watchWindowMs: 120_000,
   /** Consecutive network-level probe failures before the link is declared down. */
   failuresBeforeDown: 2,
-  /** How long a down link stays in ready (fast-failing new requests, preserving
-   *  in-flight work) before the transport reconnect owns teardown. */
-  downGraceMs: 5_000,
+  /** How long a down link keeps the ready phase (fast-failing NEW requests and
+   *  subscriptions while in-flight work finishes) before the transport reconnect
+   *  owns teardown. It must cover the design's own target black-hole scale
+   *  (10–30s): tearing the tunnel down at ~15s killed links that healed on their
+   *  own, which is exactly what the two-failure rule was meant to prevent. */
+  downGraceMs: 30_000,
 } as const
 
 export type LinkHealth = 'healthy' | 'suspect' | 'down'
@@ -34,7 +57,11 @@ export type LinkHealth = 'healthy' | 'suspect' | 'down'
 export interface LinkPolicy {
   readonly probeTimeoutMs: number
   readonly suspectProbeIntervalMs: number
+  readonly reachableProbeIntervalMs: number
+  readonly failureProbeMinIntervalMs: number
   readonly healthyProbeIntervalMs: number
+  readonly watchProbeIntervalMs: number
+  readonly watchWindowMs: number
   readonly failuresBeforeDown: number
   readonly downGraceMs: number
 }
@@ -45,9 +72,9 @@ export interface LinkPolicy {
  * - server   - the destination answered 5xx/408/425/429: reachable but busy.
  * - auth     - 401: reachable; credential handling belongs to the provider.
  * - protocol - answered and proved it is not a compatible target: terminal.
- * - none     - success.
+ * A SUCCESS never reaches this classifier (the caller sees `ok`).
  */
-export type ProbeFailureClass = 'none' | 'network' | 'server' | 'auth' | 'protocol'
+export type ProbeFailureClass = 'network' | 'server' | 'auth' | 'protocol'
 
 /** The health slice the transport manager stores per instance. */
 export interface LinkHealthState {
@@ -71,14 +98,15 @@ export type LinkHealthEvent =
   | {
     readonly kind: 'probe-failure'
     readonly at: number
-    readonly failureClass: Exclude<ProbeFailureClass, 'none'>
+    readonly failureClass: ProbeFailureClass
     readonly reason?: string
   }
 
 export interface LinkHealthReduction {
   readonly state: LinkHealthState
   readonly becameHealthy: boolean
-  readonly becameSuspect: boolean
+  /** Public transitions only: the manager logs/arms on these. A plain
+   *  suspect->suspect or healthy->healthy reduction has no transition flag. */
   readonly becameDown: boolean
   /** Delay before the next probe; null = the manager must reconnect, not probe. */
   readonly nextProbeDelayMs: number | null
@@ -127,7 +155,6 @@ export function reduceLinkHealth(
     return {
       state,
       becameHealthy: previous.health !== 'healthy',
-      becameSuspect: false,
       becameDown: false,
       nextProbeDelayMs: policy.healthyProbeIntervalMs,
     }
@@ -154,7 +181,6 @@ export function reduceLinkHealth(
         reason,
       },
       becameHealthy: false,
-      becameSuspect: previous.health !== 'suspect' && !down,
       becameDown: down && previous.health !== 'down',
       nextProbeDelayMs: down ? null : policy.suspectProbeIntervalMs,
     }
@@ -162,7 +188,8 @@ export function reduceLinkHealth(
 
   // Reachable failures (server/auth) reset the network streak: the destination
   // answered, so the path is not down. A down link recovers to suspect, not
-  // healthy, because the service still rejects the probe.
+  // healthy, because the service still rejects the probe. The slower
+  // reachable cadence is a table value, not an implicit multiple.
   return {
     state: {
       health: 'suspect',
@@ -170,8 +197,7 @@ export function reduceLinkHealth(
       reason,
     },
     becameHealthy: false,
-    becameSuspect: previous.health !== 'suspect',
     becameDown: false,
-    nextProbeDelayMs: policy.suspectProbeIntervalMs * 5,
+    nextProbeDelayMs: policy.reachableProbeIntervalMs,
   }
 }
