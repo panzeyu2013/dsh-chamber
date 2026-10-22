@@ -307,7 +307,8 @@
         "G43"
       ],
       "relatedGates": [
-        "packages/dsh-api-gateway/test/behavior/client-uplink-rejection.test.ts",
+        "packages/dsh-api-gateway/test/behavior/client-unary-result.test.ts",
+        "packages/dsh-api-gateway/test/behavior/client-uplink-support.test.ts",
         "packages/dsh-api-gateway/test/patch-lock/base-path-normalization-lock.test.ts",
         "packages/dsh-api-gateway/test/patch-lock/journal-stall-watchdog-lock.test.ts",
         "packages/dsh-api-gateway/test/patch-lock/remote-stream-carrier-retry-lock.test.ts",
@@ -327,7 +328,7 @@
         "src/client/stream-forensics.ts#createStreamForensicsReporter",
         "src/client/stream-stall-policy.ts#decideStreamStallAction"
       ],
-      "evidence": "node scripts/upstream/verify-upstream-touchpoints.mjs；升级裁决点（I-13）：descriptor 带 uplink 半边时复核 client-uplink-rejection.test.ts 的 fail-loud 判定——维持 fail-loud 为默认，真机出现 uplink 需求再重放旧代次客户端半边（G43）。",
+      "evidence": "node scripts/upstream/verify-upstream-touchpoints.mjs；升级裁决点（I-13）：descriptor 带 uplink 半边时复核 client-uplink-support.test.ts 的 ClientStreamHandle/ClientUplinkQueue 契约——真机 terminal/attach 已要求该半边，保持接线（send/end 到所选载波、dispose 终止世代）；client-unary-result.test.ts 钉住 unary 的 descriptor.result.decode 与 abort 竞态。",
       "status": "open"
     },
     {

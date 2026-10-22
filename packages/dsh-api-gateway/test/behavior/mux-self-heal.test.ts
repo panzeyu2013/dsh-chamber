@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { RemoteStream } from '../../src/client/remote-stream.ts'
-import { RemoteStreamCarrierError, RemoteStreamMuxClient } from '../../src/client/stream-client.ts'
+import { ClientUplinkQueue, RemoteStreamCarrierError, RemoteStreamMuxClient } from '../../src/client/stream-client.ts'
 import {
   REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,
   REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
@@ -130,6 +130,50 @@ const installFakeSocket = (): void => {
 const flushMicrotasks = async (): Promise<void> => {
   for (let index = 0; index < 50; index++) await Promise.resolve()
 }
+
+test('a generated stream uplink sends item and end frames on the mux', async () => {
+  installFakeSocket()
+  const client = new RemoteStreamMuxClient({ waitForReconnect: true })
+  client.start()
+  await flushMicrotasks()
+  const socket = FakeSocket.instances[0]!
+  socket.openNow()
+  await flushMicrotasks()
+
+  const controller = new AbortController()
+  const uplink = new ClientUplinkQueue('probe/attach')
+  const iterator = client.open(
+    'probe/attach',
+    { args: {} },
+    controller.signal,
+    uplink,
+  )[Symbol.asyncIterator]()
+  const opening = iterator.next()
+  await flushMicrotasks()
+  const streamId = socket.openStreamId()
+
+  const item = { type: 'write', data: 'ls' }
+  uplink.push(item)
+  uplink.end()
+  await flushMicrotasks()
+  const frames = socket.sent.map(text => JSON.parse(text) as {
+    type: string
+    streamId?: string
+    value?: unknown
+  })
+  assert.deepEqual(frames.filter(frame => frame.type === 'item'), [
+    { type: 'item', streamId, value: item },
+  ], 'send() reaches the wire as an item frame after the open frame')
+  assert.deepEqual(frames.filter(frame => frame.type === 'end'), [
+    { type: 'end', streamId },
+  ], 'end() reaches the wire as the uplink half-close')
+
+  socket.answerNow(streamId)
+  assert.deepEqual(await opening, { value: { type: 'opened' }, done: false })
+  await iterator.return?.()
+  controller.abort()
+  await client.close()
+})
 
 test('a socket that dies inside the heal interval is still replaced', async (t) => {
   installFakeSocket()

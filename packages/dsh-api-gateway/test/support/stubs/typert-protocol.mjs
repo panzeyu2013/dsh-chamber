@@ -18,7 +18,7 @@ export function remoteErrorOf(error) {
  * stub exposes the vendor's own module instead of a copy that could drift from
  * the wire boundary it guards.
  */
-export { isRemoteJsonValue } from '../../../../../vendor/harness-packages/@deepseek-ai/dsh-typert-protocol/src/json-value.ts'
+export { isRemoteJsonValue, isRemoteUplinkItem } from '../../../../../vendor/harness-packages/@deepseek-ai/dsh-typert-protocol/src/json-value.ts'
 
 /** Owned-value marker (rc.2); remote-events.ts imports it at runtime. */
 export { isTypertOwnedValue } from '../../../../../vendor/harness-packages/@deepseek-ai/dsh-typert-protocol/src/owned-value.ts'

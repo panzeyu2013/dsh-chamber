@@ -9,7 +9,7 @@
  */
 
 import { Service } from '@deepseek-ai/cordis'
-import { RemoteError, remoteErrorOf } from '@deepseek-ai/dsh-typert-protocol'
+import { RemoteError, isRemoteUplinkItem, remoteErrorOf } from '@deepseek-ai/dsh-typert-protocol'
 export type { TypertGatewayFaultDetails } from '../remote-error-codes.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import { recoveryOverridesForTransport } from '@deepseek-ai/dsh-client-connection/client'
@@ -28,6 +28,7 @@ import type {
   TypertRemoteEvent,
 } from '@deepseek-ai/dsh-typert-protocol'
 import {
+  ClientUplinkQueue,
   RemoteStreamCarrierError,
   RemoteStreamMuxClient,
 } from './stream-client.ts'
@@ -288,18 +289,21 @@ class ClientRemoteService extends Service implements ClientRemote {
    * reported at THIS boundary through the client's one reporter. The reporter is
    * idempotent per failure, so a generated stream nested inside a `$stream`
    * RemoteStream still publishes exactly one page fact.
+   * @param uplink - the Client's items: each is sent as an `item` frame, its end as `end`; its `return()`
+   * runs when the stream finishes, and its failure cancels the stream and fails the downlink.
    */
   private openRemoteStream(
     endpoint: string,
     payload: unknown,
     signal: AbortSignal,
+    uplink?: AsyncIterable<unknown>,
     noConnection = `client api: ${endpoint} has no active Connection`,
   ): AsyncIterable<unknown> {
     const connection = this.ownerCtx.get('connection') as ConnectionHandle | undefined
     if (connection === undefined) throw new Error(noConnection)
-    const local = connection.rpc.open?.('/api', endpoint, payload, signal)
+    const local = connection.rpc.open?.('/api', endpoint, payload, signal, uplink)
     const source = local === undefined
-      ? this.streams.open(endpoint, payload, signal)
+      ? this.streams.open(endpoint, payload, signal, uplink)
       : normalizeConnectionStream(local)
     return reportStreamCarrierFailures(
       source,
@@ -496,18 +500,6 @@ class ClientRemoteService extends Service implements ClientRemote {
     boundIdentity?: BoundContextIdentity,
   ): Promise<RemoteResult<unknown>> | AsyncIterable<unknown> {
     if (descriptor.mode === 'stream') {
-      if (descriptor.uplink !== undefined) {
-        // chamber (G43): upstream returns a ClientStreamHandle whose send/end
-        // half is the ClientUplinkQueue for descriptor.uplink; this entry never
-        // wires that half (no uplink reaches openRemoteStream), so the generated method has no send path here.
-        // Throw synchronously (invokeStream is an async generator and would only
-        // run its body on the first next()) rather than silently opening a
-        // downlink-only stream and dropping the caller's items.
-        throw new Error(
-          `client api: ${endpointOf(descriptor)} is a generated stream with descriptor.uplink, and this entry never forwards an uplink into openRemoteStream (deviation G43): `
-          + 'the uplink queue itself is mirrored in stream-client (ClientUplinkQueue) but the generated stream handle is not, so the call is refused instead of silently dropping the client send/end side',
-        )
-      }
       return this.invokeStream(descriptor, projection, token, callerCtx, values, boundIdentity)
     }
     return this.invoke(descriptor, projection, token, callerCtx, values, boundIdentity)
@@ -529,8 +521,17 @@ class ClientRemoteService extends Service implements ClientRemote {
     try {
       const result = await connection.rpc.call('/api', endpoint, { args: prepared.args }, prepared.signal)
       if (!mountActive(token)) return withdrawn(endpoint)
+      // A caller abort that raced the wire round-trip is still a cancellation, even
+      // when the carrier answered success first.
+      prepared.signal.throwIfAborted()
       if (!result.ok) return { ok: false, error: rebuiltFailure(result.error) }
-      return { ok: true, value: result.value }
+      // Unary results carrying type-specific values (binary fields and the like)
+      // must pass their codec's decoder before the caller sees them, exactly as
+      // the upstream client half does; stream items stay as the Host produced them.
+      const value = descriptor.result.mode === 'strict' && descriptor.result.decode !== undefined
+        ? descriptor.result.decode(result.value)
+        : result.value
+      return { ok: true, value }
     } catch (error) {
       // Carrier throws are call outcomes, not assembly faults, so they join the same
       // branch; a caller-aborted call is a cancellation even when the local throw wins
@@ -540,22 +541,31 @@ class ClientRemoteService extends Service implements ClientRemote {
     }
   }
 
-  private async *invokeStream(
+  /** Open the logical stream now and hand back its handle; `send()` before the first read queues behind the `open` frame. */
+  private invokeStream(
     descriptor: InvocationDescriptor,
     projection: ScopedProjection | undefined,
     token: MountToken,
     callerCtx: Context,
     values: readonly unknown[],
     boundIdentity?: BoundContextIdentity,
-  ): AsyncGenerator {
+  ): ClientStreamHandle {
     const endpoint = endpointOf(descriptor)
     if (!token.active) throw new Error(withdrawn(endpoint).error.message)
     const prepared = this.prepareInvocation(descriptor, projection, token, callerCtx, values, boundIdentity)
-    const stream = this.openRemoteStream(endpoint, { args: prepared.args }, prepared.signal)
-    for await (const value of stream) {
-      if (!mountActive(token)) throw new Error(withdrawn(endpoint).error.message)
-      yield value
-    }
+    // chamber (G43): the generated stream's uplink half is wired here. The queue
+    // is handed to the selected carrier (in-process Host decoder or the mux pump)
+    // so `send`/`end` reach the Host instead of being dropped; the handle owns the
+    // logical stream's one generation and disposes it by aborting that generation.
+    const generation = new AbortController()
+    const uplink = new ClientUplinkQueue(endpoint)
+    const downlink = this.openRemoteStream(
+      endpoint,
+      { args: prepared.args },
+      AbortSignal.any([prepared.signal, generation.signal]),
+      uplink,
+    )
+    return new ClientStreamHandle(endpoint, downlink, uplink, generation, token)
   }
 
   private prepareInvocation(
@@ -605,6 +615,97 @@ class ClientRemoteService extends Service implements ClientRemote {
       ? token.abort.signal
       : AbortSignal.any([token.abort.signal, callerSignal])
     return { endpoint, args, signal }
+  }
+}
+
+/**
+ * The handle a generated stream method returns: one generation of one logical
+ * stream. The downlink is iterated once; `send`/`end` feed the uplink queue the
+ * carrier pump drains; `dispose` aborts the generation and returns the carrier
+ * iterator, which sends `cancel` unless a terminal frame arrived, drops what was
+ * buffered, and ends the iteration quietly.
+ */
+class ClientStreamHandle {
+  private readonly endpoint: string
+  private readonly uplink: ClientUplinkQueue
+  private readonly generation: AbortController
+  private readonly token: MountToken
+  private readonly downlink: AsyncIterator<unknown>
+  private primed: Promise<IteratorResult<unknown>> | undefined
+  private consumed = false
+  private disposed = false
+
+  constructor(
+    endpoint: string,
+    downlink: AsyncIterable<unknown>,
+    uplink: ClientUplinkQueue,
+    generation: AbortController,
+    token: MountToken,
+  ) {
+    this.endpoint = endpoint
+    this.uplink = uplink
+    this.generation = generation
+    this.token = token
+    this.downlink = downlink[Symbol.asyncIterator]()
+    // The carrier opens the logical stream on the first pull; pulling now puts
+    // the `open` frame on the wire before any `send()`. The first read is kept
+    // for the consumer, and a failure waits for it instead of surfacing here;
+    // it also terminates the stream, so the queue closes and `send()` throws.
+    this.primed = this.downlink.next()
+    void this.primed.catch(() => { this.uplink.close() })
+  }
+
+  send(item: unknown): void {
+    if (!isRemoteUplinkItem(item)) {
+      throw new Error(`client api: ${this.endpoint} uplink item is not a lossless JSON value`)
+    }
+    this.uplink.push(item)
+  }
+
+  end(): void {
+    this.uplink.end()
+  }
+
+  dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
+    this.uplink.close()
+    this.generation.abort(new Error(`client api: ${this.endpoint} stream disposed`))
+    // Returning the carrier iterator reaches its `finally` even while nobody
+    // reads the downlink, so `cancel` goes out now and the pump stops.
+    void Promise.resolve(this.downlink.return?.()).catch(() => undefined)
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<unknown> {
+    if (this.consumed) throw new Error(`client api: ${this.endpoint} stream has one consumer`)
+    this.consumed = true
+    const iteration = this.iterate()
+    return {
+      next: () => iteration.next(),
+      // A return before the first read ends a generator that never started, so its finally would not dispose.
+      return: (value?: unknown) => {
+        this.dispose()
+        return iteration.return(value)
+      },
+    }
+  }
+
+  private async *iterate(): AsyncGenerator {
+    try {
+      while (true) {
+        const next = await (this.primed ?? this.downlink.next())
+        this.primed = undefined
+        if (this.disposed || next.done === true) return
+        if (!mountActive(this.token)) throw new Error(withdrawn(this.endpoint).error.message)
+        yield next.value
+      }
+    } catch (error) {
+      if (this.disposed) return
+      throw error
+    } finally {
+      this.dispose()
+      await this.downlink.return?.()
+    }
   }
 }
 
@@ -785,6 +886,9 @@ function requireStrictDescriptor(descriptor: InvocationDescriptor): void {
   for (const parameter of descriptor.parameters) {
     requireStrictCodec(parameter.codec, endpoint, parameter.wire)
   }
+  if (descriptor.uplink !== undefined) {
+    requireStrictCodec(descriptor.uplink.codec, endpoint, 'uplink')
+  }
   if (descriptor.invocation.kind === 'context') {
     requireStrictCodec(descriptor.invocation.codec, endpoint, descriptor.invocation.wire)
   }
@@ -803,7 +907,7 @@ function parseInput(codec: TypertCodec, value: unknown, endpoint: string, field:
   try {
     // rc.2 removed the eagerly materialized `schema` property; create() returns the
     // same strict schema, memoized on first boundary use. The client-side input
-    // gate is the chamber fork's (upstream rc.2 only decodes results).
+    // gate is the chamber fork's; unary result decode above follows upstream.
     return codec.create().parse(value)
   } catch (cause) {
     throw new Error(`client api: ${endpoint} rejected ${JSON.stringify(field)}`, { cause })

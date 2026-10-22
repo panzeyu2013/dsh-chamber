@@ -29,7 +29,12 @@ const GROUPS = {
     {
       // client/index.ts is upstream-shaped and resolves the cordis Service seam
       // plus the client-connection barrel, so this suite runs with the stubs.
-      file: 'test/behavior/client-uplink-rejection.test.ts',
+      file: 'test/behavior/client-uplink-support.test.ts',
+      nodeArgs: ['--experimental-transform-types', '--import', './test/support/register-vendor-stubs.mjs'],
+    },
+    {
+      // Generated unary-result contract: codec decode + abort-after-reply cancellation.
+      file: 'test/behavior/client-unary-result.test.ts',
       nodeArgs: ['--experimental-transform-types', '--import', './test/support/register-vendor-stubs.mjs'],
     },
     {
