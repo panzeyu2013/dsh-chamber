@@ -13,7 +13,7 @@
 - **上游 UI 对齐遗留面**：待裁差异见 §2.1，外部约束见 §2.3，明细见 [TODO.md](TODO.md) A§15。
 - **会话链重构（design 14 §D4）**：60/190/310s、ssh 写回时延、macOS 腿、集中日志面待校准；mobile `session-stall.ts` 拆分待裁；Swift `RendererRecovery`/`RendererHangWatchdog` 超 ≤90/≤60 目标且未入棘轮；反补丁波次①–④；`tests` 模式 flaky。
 - **弱网韧性 v1（design 27）**：真实 WAN/ssh 中继下的 100/300ms、1/5% 丢包、10s 黑洞、20s flap、真机睡眠/切网（resume/online 复验）与 `verifyUpBudgetMs` 复合预算（gateway 口令 35s / dsh 5s）待人工确认；本机 `pnpm run acceptance:netem` 可复跑 veth+netem（真实 tc/真代理；`NETEM_BULK_UPLOAD=1` 追加 20MB@2Mbit），不替代真实 WAN 与真机睡眠。另：打包态入站 `client-body idle` 慢上传（loopback 已证 35s `requestTimeout` 不约束）、`$events` 宿主 boot id 后续、PinnedAgent 延期（pin 仍 `agent:false`）；其余已知限制见 design 27 §6。
-- **会话运行位卡死**：①lane 复现未接 CI；②WS 半盲时 transcript 不收敛（宿主 `asOfSeq` 对账未做）；③`session.list` 单飞悬挂；④子代理行不进运行时事实（有意）；⑤隐藏期 watchdog 不 tick；⑥阈值/N=2/写回链未实机校准；⑦vendor 语义由 `vendor-session-fact-contract.test.ts` 钉住；⑧日志取证价值未验；⑨全量性缺水位；⑩集中日志面未做；⑪两处更省形态未落；⑫对话流健康臂未实机验；⑬静默半死（keepalive/游标/`ended(false)` 兜底未做）；⑭修链未闭合（契约写回、90s 界限、ssh 时延、窄缝、行为测试）；⑮运行位解析未实机校准；⑯子代理环行集与官方不同源待裁。
+- **会话运行位卡死**：①lane 复现未接 CI；②WS 半盲时 transcript 不收敛（宿主 `asOfSeq` 对账未做）；③`session.list` 单飞悬挂；④子代理行不进运行时事实（有意）；⑤隐藏期 watchdog 不 tick；⑥阈值/N=2/写回链未实机校准；⑦vendor 语义由 `vendor-session-fact-contract.test.ts` 钉住；⑧日志取证价值未验；⑨全量性缺水位；⑩集中日志面未做；⑪两处更省形态未落；⑫对话流健康臂未实机验；⑬静默半死（keepalive/游标/`ended(false)` 兜底未做）；⑭修链未闭合（契约写回、90s 界限、ssh 时延、窄缝、行为测试）；修正 provenance 的 I3 臂无 host 证据不通知，实机矩阵未跑；⑮运行位解析未实机校准；⑯子代理环行集与官方不同源待裁。
 - **会话打开停滞（design 14 §D4）**：宿主无首帧期限；触屏档无载波层、blank 恢复入口、移动端 source↔artifact 锁、FNV 键碰撞、`socket-silent` 消费面、`presented` 近似、阈值、unary 引导、取证小面、实例级回退、补读面——均待接线/退役或校准。
 - **连接稳定性**：24h 494 次 WS 关闭全为 upstream close（local 108 次、0 heartbeat lost），但独立 Node 客户端同 mux 400s 无 close ⇒ 页面侧差异；下一步抓 close code（1006/4000）并对齐 `[chamber:evidence]`。
 - **JSC 崩溃 → 静默重载**：WebKit 22625；16 份/8 天基线 ≈0.29 次/小时页面存续，入口全为 WS 消息派发；开放 = 重载后草稿复原真机验证、事实持久消费面、vendor 事件窗口淘汰。
@@ -124,7 +124,7 @@
 ## 三、设计未决
 
 - C15 hover 触发降级（提案）：改触发面 + 同批改 `AGENTS.md`/触点表/发布策略/静态门。
-- 双 flavor parity 仍 open：S-01、G19、S-44、S-10、T-28、S-54（清单见 deviations §4）。
+- 双 flavor parity 仍 open：S-01、G19、S-44、S-10、T-28、S-54（清单见 deviations §1/§2/§4）。
 - 上游 host release 门（#6228）在 chamber 不生效：未决采纳（透传 release + 复刻刷新提示）或登记有意差异。
 - S-49 原生窗口高度（786 vs 800）；宽度偏好 per-flavor（T-18）。
 - macOS Swift 壳 M5 实机矩阵未闭合；Developer ID/公证/stapler/`build-swift` 发布腿缺凭据；双端 harness/通知音效等价物未验。
