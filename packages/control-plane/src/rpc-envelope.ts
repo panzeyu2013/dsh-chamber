@@ -172,11 +172,16 @@ export function postClientRequest(options: {
   envelope: ClientRequestEnvelope
   timeoutMs: number
   maxBodyBytes: number
+  /** Cancels the in-flight probe (disconnect/retarget or the outer probe deadline):
+   *  the owner must not keep a stale session rotation alive after the transport it
+   *  was probing for is gone. Settles as a connection-level failure. */
+  signal?: AbortSignal
 }): Promise<RawUnaryOutcome> {
-  const { url, envelope, timeoutMs, maxBodyBytes } = options
+  const { url, envelope, timeoutMs, maxBodyBytes, signal } = options
   return new Promise(resolve => {
     let settled = false
     let timer: ReturnType<typeof setTimeout> | null = null
+    let abortListener: (() => void) | null = null
     const done = (outcome: RawUnaryOutcome) => {
       if (settled) return
       settled = true
@@ -184,6 +189,7 @@ export function postClientRequest(options: {
         clearTimeout(timer)
         timer = null
       }
+      if (abortListener !== null && signal !== undefined) signal.removeEventListener('abort', abortListener)
       // Destroy after settle: a late 'error' is consumed by its own handler (settled guard makes it a no-op).
       req.destroy()
       resolve(outcome)
@@ -226,6 +232,13 @@ export function postClientRequest(options: {
     // TOTAL deadline, not a socket-idle timeout: a slow endpoint must never hang the call.
     timer = setTimeout(() => done({ status: null, body: null, timeout: true, oversized: false }), timeoutMs)
     timer.unref?.()
+    // Owner cancellation (disconnect/retarget, outer probe deadline): settle as a
+    // connection-level failure so the caller's classification stays transient.
+    if (signal !== undefined) {
+      abortListener = () => done({ status: null, body: null, timeout: false, oversized: false })
+      if (signal.aborted) abortListener()
+      else signal.addEventListener('abort', abortListener, { once: true })
+    }
     req.on('error', () => done({ status: null, body: null, timeout: false, oversized: false }))
     req.end(JSON.stringify(envelope))
   })

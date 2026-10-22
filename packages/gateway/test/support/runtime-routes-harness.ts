@@ -85,6 +85,8 @@ export function fakePlane(overrides: Partial<PlaneHandle> = {}): PlaneHandle & {
     // `Partial<PlaneHandle>` may explicitly carry undefined; keep the required
     // method callable after the spread.
     setInstanceTransportHealth: overrides.setInstanceTransportHealth ?? (() => {}),
+    isTransportLinkBusy: overrides.isTransportLinkBusy ?? (() => false),
+    onTransportUpstreamFailure: overrides.onTransportUpstreamFailure ?? (() => {}),
     _state: state,
   }
 }

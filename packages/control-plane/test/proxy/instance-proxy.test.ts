@@ -29,6 +29,7 @@ import {
   fakeSocket,
   makeProxy,
   proxyFor,
+  sleep,
 } from '../support/proxy-fakes.ts'
 
 /**
@@ -389,7 +390,12 @@ test('transport health: suspect forwards, down fails new requests without revoki
   const down = fakeResponse()
   await proxy.handleHttp(fakeRequest('/api/i/dsh-link/api/session/list'), down)
   assert.equal(down.status, 503)
-  assert.equal(JSON.parse(down.body).code, 'instance_unavailable')
+  // Same wire shape as every pre-existing instance_unavailable answer: the four
+  // client classifiers key on status+code and must never see a new details field.
+  assert.deepEqual(JSON.parse(down.body), {
+    error: 'the instance link is down',
+    code: 'instance_unavailable',
+  })
   assert.equal(live.destroyed, false, 'health-only down must not revoke in-flight traffic')
 
   // Recovery flips forwarding back without re-registering.
@@ -420,6 +426,18 @@ test('revoking a transport after the request body finished answers after-body, n
   assert.equal(body.details?.phase, 'after-body')
 })
 
+test('revoking a body-less in-flight request never reports after-body', async () => {
+  const upstream = fakeHttpRequest(() => undefined) // never answers
+  const proxy = proxyFor(upstream.fn, { getLocalDshPort: () => 17510, upstreamTimeoutMs: 5_000 })
+  proxy.registerTransport('dsh:get', 'http://127.0.0.1:22032')
+  const response = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/dsh-get/api/session/list'), response)
+  assert.equal(response.status, null)
+  proxy.unregisterTransport('dsh:get')
+  assert.equal(response.status, null, 'a body-less request has no after-body answer to give')
+  assert.equal(response.destroyed, true, 'revocation tears the response down instead')
+})
+
 test('local instance not ready → explicit 503, never a silent empty success', async () => {
   const { proxy, upstream } = makeProxy({ state: 'starting', port: null })
   const res = fakeResponse()
@@ -436,5 +454,231 @@ test('unknown id answers 404 instance_not_found', async () => {
   assert.equal(res.status, 404)
   assert.equal(JSON.parse(res.body).code, 'instance_not_found')
   assert.equal(upstream.calls.length, 0)
+})
+
+
+test('a bulk upload marks the link busy until its body transfer ends', async () => {
+  // The manager suppresses probe failures while this is true: our own upload owns
+  // the tunnel's single TCP, so a probe timeout inside the window is congestion.
+  const fn: any = (_url: URL, options: { signal?: AbortSignal }) => {
+    const req = new EventEmitter() as any
+    req.write = () => false // backpressure forever: the flush cannot finish
+    req.end = () => {}
+    req.destroy = () => req.emit('close')
+    options.signal?.addEventListener('abort', () => req.emit('error', new Error('Aborted')), { once: true })
+    return req
+  }
+  const proxy = proxyFor(fn, { getLocalDshPort: () => 17510, uploadIdleTimeoutMs: 30, uploadMaxBudgetMs: 60 })
+  proxy.registerTransport('dsh:busy', 'http://127.0.0.1:22050')
+  assert.equal(proxy.isLinkBusy('dsh:busy'), false, 'idle before the request')
+  const body = 'x'.repeat(300 * 1024)
+  const res = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/dsh-busy/api/upload', 'POST', { 'content-length': String(body.length) }, body), res)
+  assert.equal(proxy.isLinkBusy('dsh:busy'), true, 'a >=256KiB body owns the link while it flushes')
+  assert.equal(proxy.isLinkBusy('local'), false, 'the local pool has no connectionId and no WAN link')
+  await sleep(80)
+  assert.equal(res.status, 504)
+  assert.equal(proxy.isLinkBusy('dsh:busy'), false, 'the transfer ended with the abort')
+  // A small RPC body never sets the flag: normal traffic must not mask link death.
+  const small: any = (_url: URL) => {
+    const req = new EventEmitter() as any
+    req.write = () => true
+    req.end = () => { req.emit('finish'); req.emit('error', new Error('boom')) }
+    req.destroy = () => {}
+    return req
+  }
+  const smallProxy = proxyFor(small, { getLocalDshPort: () => 17510 })
+  smallProxy.registerTransport('dsh:small', 'http://127.0.0.1:22051')
+  await smallProxy.handleHttp(fakeRequest('/api/i/dsh-small/api/session/create', 'POST', { 'content-length': '5' }, 'hello'), fakeResponse())
+  assert.equal(smallProxy.isLinkBusy('dsh:small'), false)
+  proxy.closeAllStreams()
+  smallProxy.closeAllStreams()
+})
+
+
+test('a transport-level upstream failure notifies the failure seam; an HTTP answer never does', async () => {
+  const failures: string[] = []
+  // 1) Socket error: no HTTP answer at all -> the failure seam fires once.
+  const erroring: any = (_url: URL) => {
+    const req = new EventEmitter() as any
+    req.write = () => true
+    req.end = () => { req.emit('finish'); queueMicrotask(() => req.emit('error', new Error('socket hang up'))) }
+    req.destroy = () => req.emit('close')
+    return req
+  }
+  const proxy = proxyFor(erroring, { getLocalDshPort: () => 17510, upstreamTimeoutMs: 200 })
+  proxy.registerTransport('dsh:seam', 'http://127.0.0.1:22060')
+  proxy.onUpstreamFailure(id => failures.push(id))
+  const failed = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/dsh-seam/api/session/list'), failed)
+  await sleep(30)
+  assert.equal(failed.status, 502)
+  assert.deepEqual(failures, ['dsh:seam'], 'one transport failure names the connection exactly once')
+
+  // 2) A host HTTP answer (even 5xx) is evidence the path WORKS: never notify.
+  const answering: any = () => {
+    const req = new EventEmitter() as any
+    req.write = () => true
+    req.end = () => {
+      req.emit('finish')
+      const upstream = new EventEmitter() as any
+      upstream.statusCode = 503
+      upstream.headers = { 'content-type': 'application/json' }
+      upstream.destroy = () => upstream.emit('close')
+      req.emit('response', upstream)
+      upstream.emit('data', Buffer.from('{"error":"busy"}'))
+      upstream.emit('end')
+    }
+    return req
+  }
+  const answerProxy = proxyFor(answering, { getLocalDshPort: () => 17510 })
+  answerProxy.registerTransport('dsh:seam2', 'http://127.0.0.1:22061')
+  const seen: string[] = []
+  answerProxy.onUpstreamFailure(id => seen.push(id))
+  await answerProxy.handleHttp(fakeRequest('/api/i/dsh-seam2/api/session/list'), fakeResponse())
+  await sleep(20)
+  assert.deepEqual(seen, [], 'a reachable answer is never link-failure evidence')
+
+  // 3) A client abort is not link evidence either.
+  const hanging: any = (_url: URL, options: { signal?: AbortSignal }) => {
+    const req = new EventEmitter() as any
+    req.write = () => true
+    req.end = () => {}
+    req.destroy = () => req.emit('close')
+    options.signal?.addEventListener('abort', () => req.emit('error', new Error('Aborted')), { once: true })
+    return req
+  }
+  const abortProxy = proxyFor(hanging, { getLocalDshPort: () => 17510, upstreamTimeoutMs: 5_000 })
+  abortProxy.registerTransport('dsh:seam3', 'http://127.0.0.1:22062')
+  const aborts: string[] = []
+  abortProxy.onUpstreamFailure(id => aborts.push(id))
+  const request = fakeRequest('/api/i/dsh-seam3/api/session/list')
+  const response = fakeResponse()
+  const pending = abortProxy.handleHttp(request, response)
+  ;(request as unknown as EventEmitter).emit('aborted')
+  await pending
+  await sleep(20)
+  assert.deepEqual(aborts, [], 'the page closing its request says nothing about the link')
+  proxy.closeAllStreams()
+  answerProxy.closeAllStreams()
+  abortProxy.closeAllStreams()
+})
+
+
+test('a response body that stops flowing is link evidence (idle after headers)', async () => {
+  // The contract's "never for a completed HTTP answer": headers arriving is not a
+  // completed answer. A body that stalls says the path stopped carrying bytes.
+  const failures: string[] = []
+  const fn: any = () => {
+    const req = new EventEmitter() as any
+    req.write = () => true
+    req.end = () => {
+      const res = new EventEmitter() as any
+      res.statusCode = 200
+      res.headers = { 'content-type': 'application/json' }
+      res.destroy = () => {}
+      res.pause = () => {}
+      res.resume = () => {}
+      req.emit('response', res)
+      res.emit('data', Buffer.from('{"partial":')) // headers + one chunk, then silence
+    }
+    return req
+  }
+  const proxy = proxyFor(fn, { getLocalDshPort: () => 17510, upstreamTimeoutMs: 40 })
+  proxy.registerTransport('dsh:stall', 'http://127.0.0.1:22070')
+  proxy.onUpstreamFailure(connectionId => failures.push(connectionId))
+  await proxy.handleHttp(fakeRequest('/api/i/dsh-stall/api/session/list'), fakeResponse())
+  await sleep(90)
+  assert.deepEqual(failures, ['dsh:stall'], 'a stalled body is link-level evidence')
+  proxy.closeAllStreams()
+})
+
+
+test('a response reset mid-body is link evidence (headers arrived, body died)', async () => {
+  const failures: string[] = []
+  const fn: any = () => {
+    const req = new EventEmitter() as any
+    req.write = () => true
+    req.end = () => {
+      const res = new EventEmitter() as any
+      res.statusCode = 200
+      res.headers = { 'content-type': 'application/json' }
+      res.destroy = () => {}
+      res.pause = () => {}
+      res.resume = () => {}
+      req.emit('response', res)
+      res.emit('data', Buffer.from('{"partial":'))
+      // Node delivers a mid-body RST on the IncomingMessage, NOT on the request.
+      queueMicrotask(() => res.emit('error', new Error('ECONNRESET')))
+    }
+    return req
+  }
+  const proxy = proxyFor(fn, { getLocalDshPort: () => 17510, upstreamTimeoutMs: 5_000 })
+  proxy.registerTransport('dsh:rst', 'http://127.0.0.1:22071')
+  proxy.onUpstreamFailure(connectionId => failures.push(connectionId))
+  await proxy.handleHttp(fakeRequest('/api/i/dsh-rst/api/session/list'), fakeResponse())
+  await sleep(30)
+  assert.deepEqual(failures, ['dsh:rst'], 'the mid-body reset is the half-open signature we need')
+  proxy.closeAllStreams()
+})
+
+
+test('a flowing downstream body keeps the link busy; a quiet one does not', async () => {
+  // A 20MB download saturates the tunnel exactly like a bulk upload: the busy
+  // window must cover DOWNSTREAM progress too (design 27 §6.16).
+  const fn: any = (_url: URL) => {
+    const req = new EventEmitter() as any
+    req.write = () => true
+    req.end = () => {
+      const upstream = new EventEmitter() as any
+      upstream.statusCode = 200
+      upstream.headers = { 'content-type': 'application/octet-stream' }
+      upstream.destroy = () => upstream.emit('close')
+      req.emit('response', upstream)
+      upstream.emit('data', Buffer.alloc(64 * 1024, 1))
+      setTimeout(() => upstream.emit('end'), 20)
+    }
+    return req
+  }
+  const proxy = proxyFor(fn, { getLocalDshPort: () => 17510, busyActivityWindowMs: 40 })
+  proxy.registerTransport('dsh:down', 'http://127.0.0.1:22080')
+  assert.equal(proxy.isLinkBusy('dsh:down'), false, 'a quiet connection is not busy')
+  const response = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/dsh-down/api/files/blob'), response)
+  assert.equal(proxy.isLinkBusy('dsh:down'), true, 'downlink bytes in the window own the link')
+  await sleep(80)
+  assert.equal(proxy.isLinkBusy('dsh:down'), false, 'the window closes once the downlink stops')
+  proxy.unregisterTransport('dsh:down')
+  proxy.closeAllStreams()
+})
+
+
+test('a response-cap 413 after a fully sent body carries the after-body marker', async () => {
+  // Upstream declares a response body over the cap. The request body left the proxy
+  // before that answer, so the mutation may have applied: the client must not be told
+  // "not forwarded".
+  const fn: any = (_url: URL) => {
+    const req = new EventEmitter() as any
+    req.write = () => true
+    req.end = () => {
+      req.emit('finish')
+      const upstream = new EventEmitter() as any
+      upstream.statusCode = 200
+      upstream.headers = { 'content-type': 'application/json', 'content-length': String(301 * 1024 * 1024) }
+      upstream.destroy = () => upstream.emit('close')
+      req.emit('response', upstream)
+    }
+    return req
+  }
+  const proxy = proxyFor(fn, { getLocalDshPort: () => 17510 })
+  proxy.registerTransport('dsh:cap', 'http://127.0.0.1:22100')
+  const response = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/dsh-cap/api/session/rename', 'POST', { 'content-length': '5' }), response)
+  await sleep(20)
+  assert.equal(response.status, 413)
+  const body = JSON.parse(String(response.body))
+  assert.equal(body.code, 'body_too_large')
+  assert.deepEqual(body.details, { phase: 'after-body' }, 'a fully sent body makes the cap answer uncertain')
+  proxy.closeAllStreams()
 })
 

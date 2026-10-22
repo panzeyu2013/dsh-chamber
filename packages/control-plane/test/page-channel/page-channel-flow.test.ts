@@ -34,6 +34,7 @@ import { createPageChannel, type PageChannelDeps } from '../../src/page-channel.
 import { SESSION_STATE_STREAM_PATH } from '../../src/session-state-protocol.ts'
 import { clearAuthCookie, registerAuthCookie } from '../../src/browser-auth-cookie.ts'
 import { waitFor } from '../support/utils.ts'
+import { proxyFor } from '../support/proxy-fakes.ts'
 
 const quietLogger = { log: () => {}, warn: () => {}, error: () => {} }
 
@@ -655,3 +656,59 @@ test('信用窗口的真实边界：一个读取块里的多条事件全部按�
   )
   assert.equal(upstream.calls[0].res.paused, true, '超过窗口后该订阅的上游确实被暂停')
 })
+
+test('every upstream chunk is reported to onDownlink with its connectionId (busy window seam)', async (t) => {
+  const upstream = fakeSseUpstream()
+  const seen: Array<{ connectionId: string; bytes: number }> = []
+  const harness = await startChannel({
+    httpRequest: upstream.fn,
+    resolveTargetFor: () => ({ baseUrl: 'http://127.0.0.1:41000', connectionId: 'dsh:busy' }),
+    onDownlink: (connectionId, bytes) => { seen.push({ connectionId, bytes }) },
+  })
+  t.after(() => harness.close())
+  const client = await harness.connect()
+  t.after(() => client.ws.close())
+
+  client.send({ type: 'subscribe', id: 'pg-down', family: 'pluginGraph', instanceId: 'dsh-busy' })
+  await client.waitForType('ready', 'pg-down')
+  const first = Buffer.from('data: first\n\n')
+  upstream.calls[0].res.emit('data', first)
+  await client.waitForType('item', 'pg-down')
+  const second = Buffer.from('data: second\n\n')
+  upstream.calls[0].res.emit('data', second)
+  await client.waitForType('item', 'pg-down')
+  assert.deepEqual(seen, [
+    { connectionId: 'dsh:busy', bytes: first.length },
+    { connectionId: 'dsh:busy', bytes: second.length },
+  ], 'the page-channel downlink feeds the SAME busy window as the proxy (one observation per chunk)')
+})
+
+
+test('the page-channel downlink observer is isolated: a throw never fails the subscription', async (t) => {
+  const upstream = fakeSseUpstream()
+  const harness = await startChannel({
+    httpRequest: upstream.fn,
+    resolveTargetFor: () => ({ baseUrl: 'http://127.0.0.1:41000', connectionId: 'dsh:boom' }),
+    onDownlink: () => { throw new Error('observer exploded') },
+  })
+  t.after(() => harness.close())
+  const client = await harness.connect()
+  t.after(() => client.ws.close())
+  client.send({ type: 'subscribe', id: 'pg-boom', family: 'pluginGraph', instanceId: 'dsh-boom' })
+  await client.waitForType('ready', 'pg-boom')
+  upstream.calls[0].res.emit('data', Buffer.from('data: still-alive\n\n'))
+  const item = await client.waitForType('item', 'pg-boom')
+  assert.equal(item.data, 'still-alive', 'the item still crosses after the observer threw')
+})
+
+test('noteDownlink feeds the same busy window as a proxy response body', async () => {
+  const proxy = proxyFor(() => { throw new Error('never used') }, { getLocalDshPort: () => 17510, busyActivityWindowMs: 40 })
+  proxy.registerTransport('dsh:page', 'http://127.0.0.1:22110')
+  assert.equal(proxy.isLinkBusy('dsh:page'), false)
+  proxy.noteDownlink('dsh:page', 4096)
+  assert.equal(proxy.isLinkBusy('dsh:page'), true, 'page-channel bytes own the link like proxy bytes')
+  await sleep(80)
+  assert.equal(proxy.isLinkBusy('dsh:page'), false, 'the window expires')
+  proxy.unregisterTransport('dsh:page')
+})
+

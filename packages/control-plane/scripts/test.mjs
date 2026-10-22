@@ -105,6 +105,8 @@ const GROUPS = {
   // proxy: 实例反向代理（HTTP/WS/SSE）、WS 帧、注入预算与静态前端服务
   'proxy': [
     'test/proxy/instance-proxy.test.ts',
+    'test/proxy/agent-pool.test.ts',
+    'test/proxy/budget-contract.test.ts',
     'test/proxy/response-encoding.test.ts',
     'test/proxy/ws-upgrade.test.ts',
     'test/proxy/liveness-timeout.test.ts',

@@ -26,7 +26,7 @@ function compositionPlane(state: { connectionState: string }, order: string[]): 
     onLocalStateChange() { return () => {} },
     refreshLocalExposure() {},
     registerInstanceTransport() {},
-    unregisterInstanceTransport() {}, setInstanceTransportHealth() {},
+    unregisterInstanceTransport() {}, setInstanceTransportHealth() {}, isTransportLinkBusy() { return false }, onTransportUpstreamFailure() {},
     getLocalDshPort() { return null },
     get port() { return 3000 },
     get connectionState() { return state.connectionState },
@@ -163,7 +163,7 @@ test('gateway start quarantines and stops a blocked verdict that left its probe 
     async stopLocal() { localStops += 1; state = 'stopped' },
     async restartLocal() {},
     onLocalStateChange() { return () => {} },
-    refreshLocalExposure() {}, registerInstanceTransport() {}, unregisterInstanceTransport() {}, setInstanceTransportHealth() {},
+    refreshLocalExposure() {}, registerInstanceTransport() {}, unregisterInstanceTransport() {}, setInstanceTransportHealth() {}, isTransportLinkBusy() { return false }, onTransportUpstreamFailure() {},
     getLocalDshPort() { return state === 'ready' ? 17510 : null },
     get port() { return 3000 }, get connectionState() { return state },
     get localProcessAlive() { return state === 'ready' }, get localWritersQuiescent() { return true },
@@ -268,7 +268,7 @@ test('gateway forwards plane.dshPort as the control-plane dshPortBase (design 17
     async restartLocal() {},
     refreshLocalExposure() {},
     registerInstanceTransport() {},
-    unregisterInstanceTransport() {}, setInstanceTransportHealth() {},
+    unregisterInstanceTransport() {}, setInstanceTransportHealth() {}, isTransportLinkBusy() { return false }, onTransportUpstreamFailure() {},
   }
   const gateway = createGateway({
     config: {
@@ -371,7 +371,7 @@ function listenerPlane(order: string[]): { plane: PlaneHandle; emit: (status: st
     async stopLocal() { emit('stopped') },
     async restartLocal() {},
     onLocalStateChange(listener) { listeners.add(listener); return () => listeners.delete(listener) },
-    refreshLocalExposure() {}, registerInstanceTransport() {}, unregisterInstanceTransport() {}, setInstanceTransportHealth() {},
+    refreshLocalExposure() {}, registerInstanceTransport() {}, unregisterInstanceTransport() {}, setInstanceTransportHealth() {}, isTransportLinkBusy() { return false }, onTransportUpstreamFailure() {},
     getLocalDshPort() { return 17510 }, get port() { return 3000 },
     get connectionState() { return state }, get localProcessAlive() { return state === 'ready' },
     get localWritersQuiescent() { return true }, get localDshPort() { return 17510 }, instanceId: 'test', seededProbeDomains: [],
@@ -605,7 +605,7 @@ test('a local startup failure rolls back the listening plane', async () => {
     async restartLocal() {},
     refreshLocalExposure() {},
     registerInstanceTransport() {},
-    unregisterInstanceTransport() {}, setInstanceTransportHealth() {},
+    unregisterInstanceTransport() {}, setInstanceTransportHealth() {}, isTransportLinkBusy() { return false }, onTransportUpstreamFailure() {},
   }
   try {
     const gateway = createGateway({
@@ -643,7 +643,7 @@ test('a plane listen failure is also rolled back and remains retryable', async (
     async restartLocal() {},
     refreshLocalExposure() {},
     registerInstanceTransport() {},
-    unregisterInstanceTransport() {}, setInstanceTransportHealth() {},
+    unregisterInstanceTransport() {}, setInstanceTransportHealth() {}, isTransportLinkBusy() { return false }, onTransportUpstreamFailure() {},
   }
   try {
     const gateway = createGateway({
@@ -806,7 +806,7 @@ test('stop() releases the stateDir lock even when the plane stop fails', async (
           onLocalStateChange() { return () => {} },
           refreshLocalExposure() {},
           registerInstanceTransport() {},
-          unregisterInstanceTransport() {}, setInstanceTransportHealth() {},
+          unregisterInstanceTransport() {}, setInstanceTransportHealth() {}, isTransportLinkBusy() { return false }, onTransportUpstreamFailure() {},
           instanceId: 'test', seededProbeDomains: [],
         })) as never,
         createProxy: (() => ({ async handleHttp() {}, async handleUpgrade() {}, closeAllStreams() {} })) as never,

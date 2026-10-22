@@ -22,6 +22,7 @@ import {
   WS_PING_MISSES_BEFORE_TEARDOWN,
   WS_STREAM_PATHS,
   createPendingUpgradeTracker,
+  createProxyAgentPair,
   forwardHttp,
   forwardUpgrade,
   isHashedStaticAssetPath,
@@ -117,8 +118,13 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
   // HTTP includes long-lived SSE: keep the downstream response until the shared
   // release callback so credential rotation can revoke it like a WS splice.
   const liveHttpRequests = new Set<{ request: ProxyRequest; response: ProxyResponse }>()
+  // The gateway has ONE upstream for its lifetime, so it owns one keep-alive pool
+  // and destroys it with the proxy (previously the shared module-level pool was
+  // never destroyed here).
+  const agents = createProxyAgentPair()
 
   const forwardDeps: ProxyForwardDeps = {
+    agents,
     id: 'local',
     logPrefix: 'gateway-proxy',
     upstreamTimeoutMs: deps.upstreamTimeoutMs ?? UPSTREAM_TIMEOUT_MS,
@@ -293,6 +299,7 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
     },
 
     closeAllStreams(): void {
+      agents.destroy()
       pendingUpgrades.closeAll()
       for (const { request, response } of [...liveHttpRequests]) {
         // request.destroy() terminates a still-uploading body; response.destroy()

@@ -222,8 +222,45 @@ test('http: a stalled upstream body flush hits the upload budget, not the header
   await sleep(90)
   assert.equal(response.status, 504)
   assert.ok(response.body.includes('upstream_timeout'))
+  assert.equal((JSON.parse(response.body) as { details?: unknown }).details, undefined,
+    'a body that never finished must not be reported as possibly applied')
   assert.equal(observed.signal?.aborted, true)
   assert.equal(proxy.getDiagnostics().bufferedRequestBytes, 0)
+})
+
+test('http: a body-less request never claims details.phase=after-body', async () => {
+  const upstream = fakeHttpRequest(() => undefined) // hang: no response, no error
+  const proxy = proxyFor(upstream.fn, { upstreamTimeoutMs: 40 })
+  const res = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'GET'), res)
+  await sleep(80)
+  assert.equal(res.status, 504)
+  const body = JSON.parse(res.body) as { code: string; details?: unknown }
+  assert.equal(body.code, 'upstream_timeout')
+  assert.equal(body.details, undefined, 'nothing can "have applied" for a GET')
+})
+
+test('http: an upstream body flush idle aborts with a plain 504 (no after-body)', async () => {
+  const fn: any = (_url: URL, options: { signal?: AbortSignal }) => {
+    const req = new EventEmitter() as any
+    // Accept one chunk, then never drain: no progress means the idle timer owns it.
+    let first = true
+    req.write = () => { const accepted = first; first = false; return accepted }
+    req.end = () => {}
+    req.destroy = () => req.emit('close')
+    if (options.signal !== undefined) {
+      options.signal.addEventListener('abort', () => req.emit('error', new Error('Aborted')), { once: true })
+    }
+    return req
+  }
+  const proxy = proxyFor(fn, { uploadIdleTimeoutMs: 20, getLocalDshPort: () => 17510 })
+  const res = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/upload', 'POST', { 'content-length': '200000' }, 'x'.repeat(200_000)), res)
+  await sleep(80)
+  assert.equal(res.status, 504)
+  const body = JSON.parse(res.body) as { code: string; details?: unknown }
+  assert.equal(body.code, 'upstream_timeout')
+  assert.equal(body.details, undefined, 'the body never finished, so its outcome is not unknown')
 })
 
 test('http: a buffered body is fed in bounded slices so progress can reset the upload idle timer', async () => {

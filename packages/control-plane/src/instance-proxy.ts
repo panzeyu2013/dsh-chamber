@@ -33,7 +33,7 @@ import {
   WS_PING_MISSES_BEFORE_TEARDOWN,
   WS_STREAM_PATHS,
   createPendingUpgradeTracker,
-  destroyProxyAgents,
+  createProxyAgentPair,
   forwardHttp,
   forwardUpgrade,
   rejectUpgrade,
@@ -47,6 +47,7 @@ import type {
   ProxyForwardCounters,
   ProxyForwardDeps,
   ProxyLiveStream,
+  ProxyAgentPair,
   ProxyRequest,
   ProxyResponse,
   ProxySocket,
@@ -109,6 +110,9 @@ export interface InstanceProxyDeps {
   maxConcurrentWsStreams?: number
   maxPendingWsHandshakes?: number
   maxBufferedRequestBytes?: number
+  /** Downlink activity window that keeps the link "busy" (default 2s; tests that
+   *  must not sleep 2s override it). */
+  busyActivityWindowMs?: number
 }
 
 /** The instance-proxy surface. */
@@ -124,6 +128,15 @@ export interface InstanceProxy {
    *  instance_unavailable 503; `suspect` still forwards. */
   setTransportHealth(connectionId: string, health: InstanceTransportHealth): boolean
   unregisterTransport(connectionId: string): void
+  /** True while OUR OWN traffic owns this connection: a bulk upload flushing
+   *  (request body >= BULK_TRANSFER_BYTES) or a downstream body that delivered
+   *  bytes inside the activity window. The transport manager treats a probe
+   *  timeout in that window as congestion, never as link death. Takes the
+   *  connectionId — the same key every other transport method uses. */
+  isLinkBusy(connectionId: string): boolean
+  /** Report downstream bytes delivered OUTSIDE this proxy's own forward paths (the
+   *  page-channel multiplex) into the same busy window. */
+  noteDownlink(connectionId: string, bytes: number): void
   getDiagnostics(): InstanceProxyDiagnostics
   /** Force-close every spliced WS stream (control-plane stop): an upgraded socket
    *  leaves the HTTP server's connection tracking, so a lingering half-open downlink
@@ -143,6 +156,10 @@ export interface InstanceProxy {
    *  is invisible to revokeTransportTraffic, so an owner such as the page channel
    *  registers here to fail its subscriptions for the replaced connectionId. */
   onTransportRevoked(listener: (connectionId: string) => void): void
+  /** Transport-level upstream failure (no completed HTTP answer) for one
+   *  connection: fresh evidence for the failure-driven re-probe. Emits the
+   *  connectionId, the transport identity every other method here uses. */
+  onUpstreamFailure(listener: (connectionId: string) => void): void
 }
 
 /** Main-process-only facts used to validate a ready transport registration. The
@@ -271,11 +288,121 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
   /** Landlords of traffic the proxy does not track itself (the page channel's
    *  per-subscription upstreams); notified from inside revokeTransportTraffic. */
   const transportRevokedListeners = new Set<(connectionId: string) => void>()
+  /** Listeners for "the upstream never answered" (see onUpstreamFailure in the
+   *  forwarding deps): the desktop turns this into ONE forced identity probe so a
+   *  half-open link is detected in ~1s instead of waiting for the 60s heartbeat. */
+  const upstreamFailureListeners = new Set<(connectionId: string) => void>()
+  /**
+   * Per-connection keep-alive pools (design 27 §3.3). A process-wide pool kept
+   * every replaced tunnel's sockets forever: each reconnect binds a NEW loopback
+   * port, so the old entries could never be reused, and a half-open socket could
+   * be handed to the next incarnation. Destroying the pool together with the
+   * connection's revocation is exact — those sockets belong to the traffic being
+   * torn down anyway.
+   */
+  const agentPairs = new Map<string, ProxyAgentPair>()
+  /**
+   * In-flight BULK request bodies per connection. Our own upload owns the single
+   * SSH TCP, so a probe that times out inside that window proves congestion, not
+   * link loss; the manager only counts probe failures when this is 0. The window
+   * is bounded by the upload idle/total budgets, so a stalled upload cannot
+   * suppress the verdict forever.
+   */
+  const bulkTransfers = new Map<string, number>()
 
   function connectionIdForInstance(id: string): string | null {
     if (id === 'local') return null
     const separator = id.indexOf('-')
     return `${id.slice(0, separator)}:${id.slice(separator + 1)}`
+  }
+
+  /**
+   * Per-connection incarnation counter. A request captures the generation when it
+   * starts; its late progress/failure callbacks must not be attributed to the NEW
+   * incarnation after a same-id replacement (the old generation's in-flight chunk
+   * would otherwise mark the new link busy, or force a probe on it, for up to the
+   * activity window).
+   */
+  const transportGenerations = new Map<string, number>()
+  function generationOf(connectionId: string | null): number {
+    return connectionId === null ? 0 : (transportGenerations.get(connectionId) ?? 0)
+  }
+
+  function notifyUpstreamFailure(connectionId: string, generation: number): void {
+    if (upstreamFailureListeners.size === 0) return
+    if (generation !== generationOf(connectionId)) return
+    for (const listener of upstreamFailureListeners) {
+      try {
+        // The connectionId is the transport identity: the owner maps it to its own
+        // instance id (a conversion that must never be re-invented per call site).
+        listener(connectionId)
+      } catch (error) {
+        logger.warn(`instance-proxy: upstream-failure listener failed: ${String(error)}`)
+      }
+    }
+  }
+
+  /** A body at or above this size is OUR bulk upload: while it flushes, a probe
+   *  timeout is congestion (the probe shares the tunnel's single TCP), never a
+   *  link-death verdict. Smaller RPC bodies are too brief to mislead. */
+  const BULK_TRANSFER_BYTES = 256 * 1024
+
+  /** A response that delivered bytes within this window means our OWN downlink is
+   *  flowing right now (a large download saturates the tunnel exactly like a bulk
+   *  upload). A probe timeout in that window is queueing, not death. The window is
+   *  short on purpose: a dead link stops delivering bytes within it, so a genuinely
+   *  gone link is classified again a couple of seconds after the transfer stalls.
+   *  Overridable for the tests that must not sleep 2s. */
+  const BUSY_ACTIVITY_WINDOW_MS = 2_000
+  const activityWindowMs = deps.busyActivityWindowMs ?? BUSY_ACTIVITY_WINDOW_MS
+  /** Epoch-ms of the last downstream byte per connection. */
+  const lastDownlinkAt = new Map<string, number>()
+
+  /** The pool key for a request target: registered connections use their
+   *  connectionId, the unregistered local instance gets one dedicated pool (it had
+   *  keep-alive before the per-connection split and must keep it). */
+  const LOCAL_AGENT_POOL = 'local'
+  function agentsFor(connectionId: string | null): ProxyAgentPair {
+    const key = connectionId ?? LOCAL_AGENT_POOL
+    const existing = agentPairs.get(key)
+    if (existing !== undefined) return existing
+    const created = createProxyAgentPair()
+    agentPairs.set(key, created)
+    return created
+  }
+
+  function releaseConnectionPool(connectionId: string): void {
+    bulkTransfers.delete(connectionId)
+    lastDownlinkAt.delete(connectionId)
+    // The incarnation counter is per LIVE registration; a stale capture must never be
+    // able to write after the connection is gone (a re-registration starts from 1).
+    transportGenerations.delete(connectionId)
+    const pair = agentPairs.get(connectionId)
+    if (pair === undefined) return
+    agentPairs.delete(connectionId)
+    try {
+      pair.destroy()
+    } catch (error) {
+      logger.warn(`instance-proxy: destroying the ${connectionId} upstream pool failed: ${String(error)}`)
+    }
+  }
+
+  /** Downstream progress is the second busy signal (an upload-only window let a
+   *  large download's queueing time out the probe and mark a healthy link down). */
+  function trackDownlink(connectionId: string | null, generation: number, bytes: number): void {
+    if (connectionId === null || bytes <= 0) return
+    // Registered AND same incarnation: a chunk from the replaced generation must not
+    // re-seed the map or mark the new link busy.
+    if (!transports.has(connectionId) || generation !== generationOf(connectionId)) return
+    lastDownlinkAt.set(connectionId, Date.now())
+  }
+
+  function trackBulkTransfer(connectionId: string | null, generation: number, delta: 1 | -1, bytes: number): void {
+    if (connectionId === null || bytes < BULK_TRANSFER_BYTES) return
+    if (generation !== generationOf(connectionId)) return
+    const next = Math.max(0, (bulkTransfers.get(connectionId) ?? 0) + delta)
+    if (next === 0) bulkTransfers.delete(connectionId)
+    else bulkTransfers.set(connectionId, next)
   }
 
   function trackHttp(connectionId: string, res: ProxyResponse): void {
@@ -434,6 +561,9 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       }
       activeHttpRequests += 1
       const connectionId = connectionIdForInstance(parsed.id)
+      // Captured at dispatch: late progress/failure callbacks of this request must not
+      // be attributed to a replacement incarnation of the same connectionId.
+      const generation = generationOf(connectionId)
       if (connectionId !== null) trackHttp(connectionId, res)
       let released = false
       const releaseRequest = () => {
@@ -454,7 +584,13 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
           ...forwardDeps,
           id: parsed.id,
           responseBasePath: `/api/i/${parsed.id}`,
-          ...(connectionId === null ? {} : { streamOwner: connectionId }),
+          agents: agentsFor(connectionId),
+          ...(connectionId === null ? {} : {
+            streamOwner: connectionId,
+            onBodyTransfer: (delta: 1 | -1, bytes: number) => trackBulkTransfer(connectionId, generation, delta, bytes),
+            onResponseProgress: (bytes: number) => trackDownlink(connectionId, generation, bytes),
+            onUpstreamFailure: () => notifyUpstreamFailure(connectionId, generation),
+          }),
         }, extraHeaders, target.tls, target.authority)
       } catch (error) {
         releaseRequest()
@@ -502,6 +638,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         return
       }
       const connectionId = connectionIdForInstance(parsed.id)
+      const generation = generationOf(connectionId)
       const releaseHandshake = pendingUpgrades.acquire(socket, connectionId ?? undefined)
       try {
         const forwardTarget = new URL(`${target.baseUrl}${parsed.rest}${parsed.search}`)
@@ -518,7 +655,12 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
           // is the RESOLVED target's host, not the source-id kind. HTTP forwarding never
           // reads this field, so handleHttp's deps stay untouched.
           tcpKeepAliveMs: tcpKeepAliveMsForUpstream(target.baseUrl),
-          ...(connectionId === null ? {} : { streamOwner: connectionId }),
+          agents: agentsFor(connectionId),
+          ...(connectionId === null ? {} : {
+            streamOwner: connectionId,
+            onUpstreamFailure: () => notifyUpstreamFailure(connectionId, generation),
+            onResponseProgress: (bytes: number) => trackDownlink(connectionId, generation, bytes),
+          }),
         }, extraHeaders, target.tls, target.authority)
       } catch (error) {
         releaseHandshake()
@@ -666,8 +808,16 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
           throw new TypeError('registerInstanceTransport: an ssh gateway authority must be remote 127.0.0.1:<port>')
         }
       }
+      // A same-id registration is a NEW incarnation: bump before the record so every
+      // in-flight request of the old generation becomes stale for the trackers.
+      transportGenerations.set(connectionId, (transportGenerations.get(connectionId) ?? 0) + 1)
       // Clone the sanctioned headers so caller mutation cannot alter a live transport after validation.
-      if (transports.has(connectionId)) revokeTransportTraffic(connectionId)
+      if (transports.has(connectionId)) {
+        revokeTransportTraffic(connectionId)
+        // The replaced incarnation's pooled upstream sockets belong to traffic that
+        // was just revoked; their loopback origin can never be reused.
+        releaseConnectionPool(connectionId)
+      }
       transports.set(connectionId, {
         baseUrl,
         health: opts?.health ?? 'healthy',
@@ -691,6 +841,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     unregisterTransport(connectionId: string) {
       const removed = transports.delete(connectionId)
       revokeTransportTraffic(connectionId)
+      releaseConnectionPool(connectionId)
       if (removed) {
         logger.log(`instance-proxy: transport unregistered ${connectionId}`)
       }
@@ -703,6 +854,11 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     /** Register a revocation listener (see the interface doc). */
     onTransportRevoked(listener: (connectionId: string) => void) {
       transportRevokedListeners.add(listener)
+    },
+
+    /** Register the "upstream never answered" listener (see the interface doc). */
+    onUpstreamFailure(listener: (connectionId: string) => void) {
+      upstreamFailureListeners.add(listener)
     },
 
     /** Plain counters (no URLs, no credentials). */
@@ -720,9 +876,24 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       }
     },
 
+    /** Downstream bytes from a path outside this proxy (page-channel): same window.
+     *  The caller passes no generation: the page channel is not incarnation-scoped and
+     *  its subscriptions are failed on revocation, so the CURRENT generation is right. */
+    noteDownlink(connectionId: string, bytes: number) {
+      trackDownlink(connectionId, generationOf(connectionId), bytes)
+    },
+
+    /** True while our own traffic owns this connection: a bulk upload flushing, or a
+     *  downstream body that delivered bytes inside the activity window. */
+    isLinkBusy(connectionId: string): boolean {
+      if ((bulkTransfers.get(connectionId) ?? 0) > 0) return true
+      const last = lastDownlinkAt.get(connectionId)
+      return last !== undefined && Date.now() - last < activityWindowMs
+    },
+
     /** Force-close every spliced WS stream (control-plane stop / app quit). */
     closeAllStreams(): void {
-      destroyProxyAgents()
+      for (const connectionId of [...agentPairs.keys()]) releaseConnectionPool(connectionId)
       pendingUpgrades.closeAll()
       for (const stream of [...liveStreams]) {
         try {

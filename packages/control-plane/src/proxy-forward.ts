@@ -12,6 +12,7 @@
  */
 
 import { Agent as HttpAgent, request as httpRequest } from 'node:http'
+import { NET_BUDGET, proxyUploadBudgetMs } from '@dsh-chamber/dsh-chamber-wire'
 import { Agent as HttpsAgent, request as httpsRequest } from 'node:https'
 import type { ClientRequest, IncomingMessage } from 'node:http'
 import type { Socket } from 'node:net'
@@ -69,7 +70,13 @@ export function getProcessBufferedRequestBytes(): number {
  * strictly above the chamber Git host's 30s mutation budget so the host result
  * wins instead of a proxy-side 504 after the mutation commits.
  */
-export const UPSTREAM_TIMEOUT_MS = 45_000
+/**
+ * Ordinary upstream header window. It comes from the WIRE budget table
+ * (`NET_BUDGET.upstreamHeaderWindowMs`) because the page client's mutation budget is
+ * derived from that same table: a second literal here would let the two owners drift
+ * (the historical failure was client 50s vs proxy 60s + 45s).
+ */
+export const UPSTREAM_TIMEOUT_MS = NET_BUDGET.upstreamHeaderWindowMs
 
 /**
  * Long-RPC upstream paths, matched EXACTLY against the RESOLVED target pathname
@@ -102,9 +109,10 @@ export const LONG_RPC_UPSTREAM_TIMEOUT_MS = 30 * 60_000
 /** Maximum silence between client request-body chunks. */
 export const CLIENT_BODY_IDLE_TIMEOUT_MS = 30_000
 
-/** Upstream request-body transfer budget: idle resets on socket write progress, and
- * the total budget is size-derived (a 300MiB upload at 128KiB/s caps at 30min).
- * These are PROXY thresholds, not stream/link tables; they stay in this owner. */
+/** Upstream request-body transfer IDLE budget (resets on socket write progress).
+ *  The TOTAL budget is size-derived and lives in the wire budget contract
+ *  (`proxyUploadBudgetMs`, design 27 §3.4) because the page client must outlive
+ *  it; only the idle window is proxy-local. */
 const UPLOAD_IDLE_TIMEOUT_MS = 30_000
 /** Feed the already-buffered body in bounded slices so a slow-but-progressing
  *  uplink keeps resetting the idle timer instead of one giant write waiting for
@@ -115,21 +123,46 @@ const UPLOAD_CHUNK_BYTES = 64 * 1024
  *  upstream writable queue. Revocation uses it to answer after-body instead of
  *  destroying the response with a bare network error. */
 export const UPSTREAM_BODY_FINISHED = Symbol('dsh.upstreamBodyFinished')
-const UPLOAD_MIN_BYTES_PER_SEC = 128 * 1024
-const UPLOAD_MAX_BUDGET_MS = 30 * 60_000
 
-/** Explicit keep-alive pools for non-pinned upstreams. The pinned HTTPS path must
- * stay agent:false until a per-socket pin gate is proven; these agents are only
- * selected when there is no pin. One owner may run MAX_CONCURRENT_HTTP_REQUESTS
- * HTTP and MAX_CONCURRENT_WS_STREAMS WS requests against the same origin, so the
- * pool is sized to their sum (64 + 64) and idle reuse is capped separately. */
-const keepAliveHttpAgent = new HttpAgent({ keepAlive: true, maxSockets: 128, maxFreeSockets: 32, keepAliveMsecs: 15_000 })
-const keepAliveHttpsAgent = new HttpsAgent({ keepAlive: true, maxSockets: 128, maxFreeSockets: 32, keepAliveMsecs: 15_000 })
+/**
+ * One owner's keep-alive pool for non-pinned upstreams. The pinned HTTPS path
+ * must stay agent:false until a per-socket pin gate is proven.
+ *
+ * The pool is PER OWNER on purpose: a single process-wide agent kept the pooled
+ * sockets of every replaced tunnel alive forever (each reconnect binds a new
+ * loopback port, so the old pool entries can never be reused) and could hand a
+ * half-open socket to the next incarnation. An instance proxy owns one per
+ * connection and destroys it exactly where that connection's in-flight traffic
+ * is revoked; the gateway owns one for its lifetime.
+ */
+export interface ProxyAgentPair {
+  readonly http: HttpAgent
+  readonly https: HttpsAgent
+  /** Destroy every socket of this pool (free and in flight). */
+  destroy(): void
+}
 
-/** Close pooled keep-alive sockets on control-plane stop. */
-export function destroyProxyAgents(): void {
-  keepAliveHttpAgent.destroy()
-  keepAliveHttpsAgent.destroy()
+export function createProxyAgentPair(): ProxyAgentPair {
+  // Sized to one owner's HTTP + WS concurrency (64 + 64); idle reuse is capped
+  // separately so a burst of finished requests cannot pin the whole budget.
+  const http = new HttpAgent({ keepAlive: true, maxSockets: 128, maxFreeSockets: 32, keepAliveMsecs: 15_000 })
+  const https = new HttpsAgent({ keepAlive: true, maxSockets: 128, maxFreeSockets: 32, keepAliveMsecs: 15_000 })
+  return {
+    http,
+    https,
+    destroy(): void {
+      http.destroy()
+      https.destroy()
+    },
+  }
+}
+
+/** The request options selecting the right pool (or a fresh connection). */
+function upstreamAgentOption(deps: ProxyForwardDeps, target: URL, pinned: boolean): { agent: HttpAgent | HttpsAgent | false; rejectUnauthorized?: false } {
+  if (pinned) return { rejectUnauthorized: false, agent: false }
+  const pool = deps.agents
+  if (pool === undefined) return { agent: false }
+  return { agent: target.protocol === 'https:' ? pool.https : pool.http }
 }
 
 /**
@@ -433,6 +466,37 @@ export interface ProxyForwardDeps {
    * design untouched.
    */
   readonly tcpKeepAliveMs?: number
+  /**
+   * Keep-alive pool for non-pinned upstreams (see `createProxyAgentPair`).
+   * `undefined` keeps the old one-shot behavior (a fresh TCP connection per
+   * request) — a caller that wants reuse must own the pool's lifetime.
+   */
+  readonly agents?: ProxyAgentPair
+  /**
+   * Request-body transfer presence: +1 when a buffered body starts flushing
+   * upstream and -1 when it stops (finish/close/error/abort), always paired.
+   * The instance proxy turns it into the "our own bulk upload owns the tunnel"
+   * fact: a probe timeout inside that window is congestion, not link death
+   * (design 27 §3.2).
+   */
+  readonly onBodyTransfer?: (delta: 1 | -1, bytes: number) => void
+  /**
+   * A TRANSPORT-level upstream failure: a socket error, a timeout without an
+   * answer, a WebSocket handshake that never completed, or a response body that
+   * stopped flowing after the headers. Every one of them is fresh evidence that
+   * the link may be half-open, so the owner can force one identity re-probe
+   * instead of waiting for the next 60s heartbeat (design 27 §3.2).
+   * Never called for a COMPLETED HTTP answer (any status) and never for a client
+   * abort: those say something about the request, not about the link.
+   */
+  readonly onUpstreamFailure?: () => void
+  /**
+   * Bytes of a RESPONSE body that reached the client (HTTP chunk or WS downstream
+   * frame). The owner keeps the link "busy" while our own downlink is flowing: a
+   * 20MB download saturates the tunnel exactly like a bulk upload, and a probe
+   * timeout in that window is queueing, not death (design 27 §6.16).
+   */
+  readonly onResponseProgress?: (bytes: number) => void
   maxBufferedRequestBytes: number
   /**
    * Browser-visible prefix for an attached instance: same-origin upstream
@@ -857,6 +921,8 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     stopBodySource()
     controller.abort()
     releaseRequest()
+    // A proxy timeout means no answer arrived: link-level evidence, not a host verdict.
+    deps.onUpstreamFailure?.()
     if (!res.headersSent) {
       // After the request body has fully left our writable queue, the host may
       // already have applied a mutation even though its response never arrived.
@@ -882,10 +948,10 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
   const requestHasBody = body !== null
   const uploadBudgetMs = body === null
     ? 0
-    : Math.min(
-      deps.uploadMaxBudgetMs ?? UPLOAD_MAX_BUDGET_MS,
-      Math.max(60_000, Math.ceil((body.length / Math.max(1, deps.uploadMinBytesPerSec ?? UPLOAD_MIN_BYTES_PER_SEC)) * 1_000)),
-    )
+    : proxyUploadBudgetMs(body.length, {
+      ...(deps.uploadMinBytesPerSec === undefined ? {} : { minBytesPerSec: deps.uploadMinBytesPerSec }),
+      ...(deps.uploadMaxBudgetMs === undefined ? {} : { maxMs: deps.uploadMaxBudgetMs }),
+    })
   let timersSettled = false
   let headersArmed = false
   let clearUploadTimer = (): void => {}
@@ -950,31 +1016,46 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
   // trust anchor (rejectUnauthorized: false — the internal-CA case; the pin alone
   // decides trust). http targets never pin (registerTransport refuses http+pin).
   const tlsSpkiPin = target.protocol === 'https:' ? tls?.spkiPin : undefined
+  // Paired +1/-1 body-transfer presence, opened only once the upstream request
+  // exists (the creation failure path must not report a transfer that never ran).
+  let bodyTransferOpen = false
+  const endBodyTransfer = (): void => {
+    if (!bodyTransferOpen) return
+    bodyTransferOpen = false
+    deps.onBodyTransfer?.(-1, body === null ? 0 : body.length)
+  }
   let upstream: ClientRequest
   try {
     upstream = request(target, {
       method,
       headers,
       signal: controller.signal,
-      ...(tlsSpkiPin === undefined
-        ? { agent: target.protocol === 'https:' ? keepAliveHttpsAgent : keepAliveHttpAgent }
-        : { rejectUnauthorized: false, agent: false }),
+      ...upstreamAgentOption(deps, target, tlsSpkiPin !== undefined),
     })
   } catch (error) {
     cleanupClientListeners()
     clearTimeoutGuards()
     releaseBodyReservation()
+    endBodyTransfer()
     throw error
+  }
+  if (requestHasBody) {
+    bodyTransferOpen = true
+    deps.onBodyTransfer?.(1, body === null ? 0 : body.length)
   }
   stopBodySource = (): void => {
     source?.stop(upstream)
     releaseBodyReservation()
+    endBodyTransfer()
   }
   // 'finish' means all accepted request bytes have left ClientRequest's writable
   // queue; until then the body stays charged against the process budget.
   upstream.once('finish', () => {
-    upstreamBodyFinished = true
-    Object.defineProperty(res, UPSTREAM_BODY_FINISHED, { value: true, configurable: true })
+    // Only a request that actually CARRIED a body can have applied anything: a
+    // body-less GET/HEAD ClientRequest fires 'finish' immediately, so gating here
+    // keeps read requests from claiming details.phase='after-body'.
+    upstreamBodyFinished = requestHasBody
+    if (requestHasBody) Object.defineProperty(res, UPSTREAM_BODY_FINISHED, { value: true, configurable: true })
     stopBodySource()
     // All buffered request bytes left the writable queue: the upload budget is
     // done, and only now may the upstream header/idle window start.
@@ -994,6 +1075,8 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     releaseRequest()
     if (abort) return
     counters.failures += 1
+    // No HTTP answer at all: the only signal that can beat the 60s heartbeat.
+    deps.onUpstreamFailure?.()
     logger.log(`${deps.logPrefix}: upstream ${deps.id} request failed: ${String(upstreamError)}`)
     if (!res.headersSent) {
       writeUpstreamFailure(res, 502, 'upstream_failed', 'upstream request failed', logger, upstreamBodyFinished)
@@ -1018,7 +1101,11 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
       cleanupClientListeners()
       releaseRequest()
       counters.failures += 1
-      writeError(res, 413, 'body_too_large', 'upstream response exceeds the 300MiB cap', logger)
+      // The request body may already be fully sent: the host could have applied the
+      // mutation before answering an unservable response. Mark it like every other
+      // after-body failure, or a client would report "not forwarded" for a call that
+      // may have applied.
+      writeUpstreamFailure(res, 413, 'body_too_large', 'upstream response exceeds the 300MiB cap', logger, upstreamBodyFinished)
       return
     }
     const headers: Record<string, string | string[]> = {}
@@ -1096,6 +1183,8 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
         clearUpstreamTimeout = armUpstreamTimeout(timeoutDeps, counters, logger, upstreamTimeout)
       }
       received += chunk.length
+      // Fresh downlink bytes: the owner's busy window (see onResponseProgress).
+      deps.onResponseProgress?.(chunk.length)
       if (!isSse && received > MAX_RESPONSE_BODY_BYTES) {
         // Explicit overflow: abort the upstream stream, never a silent truncation.
         upstreamRes.destroy()
@@ -1130,6 +1219,12 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
       cleanupClientListeners()
       releaseRequest()
       counters.failures += 1
+      // A response that dies MID-BODY (RST after the headers) is the classic
+      // half-open signature and arrives on the IncomingMessage, never on the
+      // ClientRequest — without this arm, "answered headers then reset" could only
+      // be found by the 45s idle window or the 60s heartbeat. A client abort also
+      // lands here (our teardown destroys the upstream), so it is excluded.
+      if (!controller.signal.aborted) deps.onUpstreamFailure?.()
       res.destroy()
     })
     // A client that closed mid-stream turns res.write into writeAfterFIN; consume
@@ -1246,6 +1341,9 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
   const clearUpgradeTimeout = armUpstreamTimeout(deps, counters, logger, () => {
     controller.abort()
     releaseHandshake()
+    // A handshake that never got an answer is link-level evidence, same as a
+    // stalled HTTP response (the failure-driven probe seam).
+    deps.onUpstreamFailure?.()
     rejectUpgrade(socket, 504, 'upstream_timeout', 'upstream WebSocket upgrade timed out', logger)
   })
   // S23: pinned gateway targets gate the handshake connection (see forwardHttp).
@@ -1254,9 +1352,7 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     method: 'GET',
     headers,
     signal: controller.signal,
-    ...(tlsSpkiPin === undefined
-      ? { agent: target.protocol === 'https:' ? keepAliveHttpsAgent : keepAliveHttpAgent }
-      : { rejectUnauthorized: false, agent: false }),
+    ...upstreamAgentOption(deps, target, tlsSpkiPin !== undefined),
   })
   let requestDispatched = false
   const dispatchRequest = (): void => {
@@ -1277,6 +1373,7 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     const abort = (upstreamError as Error & { name?: string }).name === 'AbortError' || controller.signal.aborted
     if (abort) return
     counters.failures += 1
+    deps.onUpstreamFailure?.()
     logger.log(`${deps.logPrefix}: upstream ${deps.id} upgrade failed: ${String(upstreamError)}`)
     // An upstream connect refusal is upstream_failed (502) — the same code the HTTP
     // path uses; 503 stays reserved for "no tunnel / not ready".
@@ -1365,7 +1462,10 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
       // setKeepAlive is the net.Socket surface (the upgrade socket is typed Duplex).
       ;(upstreamSocket as Socket).setKeepAlive(true, deps.tcpKeepAliveMs)
     }
-    // Socket splice: downstream ↔ upstream; either closing tears both.
+    // Socket splice: downstream ↔ upstream; either closing tears both. The extra
+    // data listener only observes the WS downlink for the busy window (it never
+    // consumes: the pipe's own listener does the writing).
+    upstreamSocket.on('data', (chunk: Buffer) => { deps.onResponseProgress?.(chunk.length) })
     upstreamSocket.pipe(socket as never)
     socket.pipe(upstreamSocket as never)
     // Start the liveness heartbeat after the splice is wired; downstream-only (the

@@ -114,7 +114,7 @@ function planeFake(state: { connectionState: string }): PlaneHandle {
     onLocalStateChange() { return () => {} },
     refreshLocalExposure() {},
     registerInstanceTransport() {},
-    unregisterInstanceTransport() {}, setInstanceTransportHealth() {},
+    unregisterInstanceTransport() {}, setInstanceTransportHealth() {}, isTransportLinkBusy() { return false }, onTransportUpstreamFailure() {},
     // No live port: the watcher's observer starts but its mux stays waiting,
     // so no real network access is ever attempted here.
     getLocalDshPort() { return null },

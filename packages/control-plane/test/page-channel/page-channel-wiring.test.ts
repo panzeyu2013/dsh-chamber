@@ -222,7 +222,7 @@ async function startFactsUpstream() {
   }
 }
 
-test('wiring: a down link fails existing page subscriptions and a healthy edge lets a fresh one resolve again', async (t) => {
+test('wiring: a down link fast-fails NEW subscriptions but keeps established ones until teardown', async (t) => {
   const downed = await startFactsUpstream()
   const kept = await startFactsUpstream()
   t.after(() => downed.close())
@@ -238,27 +238,40 @@ test('wiring: a down link fails existing page subscriptions and a healthy edge l
   await client.waitForType('item', 'pg-down')
   await client.waitForType('item', 'pg-keep')
 
+  // DOWN keeps the established subscription: a link that recovers inside the grace
+  // must not churn the page (the reconnect that follows the grace is what revokes).
   harness.plane.setInstanceTransportHealth('dsh:down', 'down')
+  await new Promise<void>(resolve => setTimeout(resolve, 150))
+  assert.equal(
+    client.messages.filter(message => message.type === 'error' && message.id === 'pg-down').length,
+    0,
+    'down must not fail an established page subscription',
+  )
+  assert.equal(downed.closes, 0, 'the established upstream survives the down edge')
+
+  // A NEW subscription while down fails fast at the page channel, not by opening an
+  // upstream that would sit half-open.
+  client.send({ type: 'subscribe', id: 'pg-down-2', family: 'pluginGraph', instanceId: 'dsh-down' })
+  const refused = await client.waitForType('error', 'pg-down-2')
+  assert.equal(refused.code, 'instance_unavailable')
+
+  // Teardown (what the grace expiry leads to) fails the established subscription.
+  harness.plane.unregisterInstanceTransport('dsh:down')
   const failure = await client.waitForType('error', 'pg-down')
   assert.equal(failure.code, 'instance_unavailable')
-  assert.match(failure.message, /link is down/)
-  await waitFor(() => downed.closes > 0, 5000, 'the downed upstream is destroyed')
+  assert.match(failure.message, /replaced or removed/)
+  await waitFor(() => downed.closes > 0, 5000, 'the downed upstream is destroyed at teardown')
   assert.equal(
     client.messages.filter(message => message.type === 'error' && message.id === 'pg-keep').length,
     0,
     'the other link keeps its page subscription',
   )
 
-  // New subscriptions while down fail fast at the page channel, not by opening an
-  // upstream that would sit half-open.
-  client.send({ type: 'subscribe', id: 'pg-down-2', family: 'pluginGraph', instanceId: 'dsh-down' })
-  const refused = await client.waitForType('error', 'pg-down-2')
-  assert.equal(refused.code, 'instance_unavailable')
-
-  harness.plane.setInstanceTransportHealth('dsh:down', 'healthy')
+  // Re-registering the link (a recovered incarnation) lets a fresh subscribe resolve.
+  harness.plane.registerInstanceTransport('dsh:down', downed.baseUrl)
   client.send({ type: 'subscribe', id: 'pg-down-3', family: 'pluginGraph', instanceId: 'dsh-down' })
   await client.waitForType('ready', 'pg-down-3')
-  assert.ok(downed.requests.length >= 2, 'a healthy edge opens a fresh upstream')
+  assert.ok(downed.requests.length >= 2, 'a recovered link opens a fresh upstream')
   await harness.stop()
 })
 
@@ -305,3 +318,21 @@ test('wiring: a revoked/replaced transport fails only its own subscriptions and 
 
   await harness.stop()
 })
+
+test('wiring: a suspect link still opens a new page subscription', async (t) => {
+  const upstream = await startFactsUpstream()
+  t.after(() => upstream.close())
+  const harness = await startPlane(t)
+  harness.plane.registerInstanceTransport('dsh:susp', upstream.baseUrl, undefined, { health: 'suspect' })
+  const client = await connectClient(`ws://127.0.0.1:${String(harness.plane.port)}${PAGE_CHANNEL_PATH}`)
+  t.after(() => client.ws.terminate())
+  client.send({ type: 'subscribe', id: 'pg-susp', family: 'pluginGraph', instanceId: 'dsh-susp' })
+  await client.waitForType('ready', 'pg-susp')
+  assert.equal(
+    client.messages.filter(message => message.type === 'error' && message.id === 'pg-susp').length,
+    0,
+    'suspect forwards: only down fast-fails a subscription',
+  )
+  await harness.stop()
+})
+

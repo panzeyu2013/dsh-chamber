@@ -256,6 +256,13 @@ export interface PlaneHandle {
    *  independent SSH/HTTP dimension. TLS pin and Host authority stay gateway-only. */
   registerInstanceTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>, opts?: InstanceTransportRegistrationOptions): void
   setInstanceTransportHealth(connectionId: string, health: InstanceTransportHealth): void
+  /** True while this CONNECTION is flushing our own bulk upload (link-busy signal).
+   *  Keyed by connectionId, like every other transport method here. */
+  isTransportLinkBusy(connectionId: string): boolean
+  /** A forwarded request never got a completed HTTP answer (transport-level
+   *  failure). Emits the connectionId; the owner forces one identity re-probe
+   *  instead of waiting for the heartbeat. */
+  onTransportUpstreamFailure(listener: (connectionId: string) => void): void
   unregisterInstanceTransport(connectionId: string): void
   /**
    * Pre-start the local instance (desktop pre-spawn): idempotent — a
@@ -701,6 +708,10 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     // 每个订阅都拿到创建通道时的旧状态）。
     currentHealthSnapshot: () => currentPublicLocalSnapshot(),
     resolveTargetFor: instanceId => instanceProxy.resolveTargetFor(instanceId),
+    // The channel's own SSE requests are outside the instance proxy's traffic table:
+    // without this seam a large session stream could saturate the tunnel while a
+    // probe timeout was still counted as link death (design 27 §3.2 busy).
+    onDownlink: (connectionId, bytes) => { instanceProxy.noteDownlink(connectionId, bytes) },
   })
   // 通道自己开的每条上游 http.request 不在实例代理的 traffic 表里：隧道被替换或
   // 注销时，代理显式通知，通道失败对应订阅（客户端重连阶梯会重新 subscribe，届时
@@ -1131,12 +1142,25 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       instanceProxy.registerTransport(connectionId, baseUrl, extraHeaders, opts)
     },
 
-    /** Ready-state link health update; never replaces the transport. Down fails
-     *  NEW HTTP/WS at the proxy and the existing page-channel subscriptions here
-     *  (their upstream may otherwise sit half-open with no data to fail on). */
+    /** Ready-state link health update; never replaces the transport and never
+     *  fails ESTABLISHED page-channel subscriptions. A down link still gets its
+     *  grace window (design 27 §3.2/§3.3): new requests and NEW subscriptions
+     *  fast-fail through the projection, while the teardown that follows the
+     *  grace revokes everything through the normal transport-revoked path. Failing
+     *  the subscriptions at the down edge made the grace meaningless for them. */
     setInstanceTransportHealth(connectionId: string, health: InstanceTransportHealth) {
-      const changed = instanceProxy.setTransportHealth(connectionId, health)
-      if (changed && health === 'down') pageChannel.revokeConnection(connectionId, 'the instance link is down')
+      instanceProxy.setTransportHealth(connectionId, health)
+    },
+
+    /** True while this instance flushes our own bulk request body upstream; the
+     *  transport manager reads it so a probe timeout during a self-inflicted
+     *  queue is never counted as link death. */
+    isTransportLinkBusy(connectionId: string): boolean {
+      return instanceProxy.isLinkBusy(connectionId)
+    },
+
+    onTransportUpstreamFailure(listener: (connectionId: string) => void) {
+      instanceProxy.onUpstreamFailure(listener)
     },
 
     /** Unregister a remote instance transport (tunnel torn down). */
@@ -1247,6 +1271,7 @@ export {
   CLIENT_BODY_IDLE_TIMEOUT_MS,
   convergeLocation,
   createPendingUpgradeTracker,
+  createProxyAgentPair,
   forwardHttp,
   forwardUpgrade,
   getProcessBufferedRequestBytes,
@@ -1270,6 +1295,7 @@ export {
 } from './proxy-forward.ts'
 export type {
   HttpRequestFactory,
+  ProxyAgentPair,
   ProxyForwardCounters,
   ProxyForwardDeps,
   ProxyRequest,

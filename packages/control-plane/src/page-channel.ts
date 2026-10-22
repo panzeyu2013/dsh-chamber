@@ -117,6 +117,10 @@ export interface PageChannelDeps {
   /** 把一个 `local` / `dsh-<id>` / `gateway-<id>` 实例 id 解析成上游目标；
    *  不可用时返回 null（绝不写响应——通道侧没有可写的 HTTP 响应）。 */
   resolveTargetFor(instanceId: string): PageChannelTarget | null
+  /** 下游字节观察（每个上游 SSE chunk 一次）。生产用它把页面通道自己的大流
+   *  计入实例传输的 busy 窗口：通道的请求不走实例代理的 traffic 表，没有这条
+   *  回调时一个大 session 流会灌满隧道却不被当作「我们自己的流量」。 */
+  onDownlink?: (connectionId: string, bytes: number) => void
   /** 测试注入面：出站请求工厂（默认按目标协议选 node:http/https），生产中不传。 */
   httpRequest?: HttpRequestFactory
   /** 测试注入面：信用窗口字节数（默认 PAGE_CHANNEL_CREDIT_WINDOW_BYTES），生产中不传。 */
@@ -155,7 +159,7 @@ export interface PageChannel {
   /** 传输被替换/注销：失败该 connectionId 上的每条订阅（instance_unavailable）并销毁
    *  它的上游。通道自己开的 http.request 不在实例代理的 traffic 表里，所以替换隧道时
    *  必须由代理显式通知，否则旧化身会继续给页面推事实。 */
-  revokeConnection(connectionId: string, message?: string): void
+  revokeConnection(connectionId: string): void
   /** 只读计数，供诊断面观察。 */
   stats(): PageChannelStats
   /** 控制面停止：以 1012 关闭每一条活动 socket，并销毁其全部上游与生产者订阅。 */
@@ -730,6 +734,16 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
       const parser = createSseParser(PAGE_CHANNEL_MAX_FRAME_CHARS)
       const onData = (chunk: Buffer): void => {
         if (sub.closed) return
+        // Counted BEFORE parsing: the bytes crossed the tunnel even if the frame is bad.
+        // Isolated like every other injected seam: a throwing observer must never turn
+        // into a subscription failure.
+        if (sub.connectionId !== null && deps.onDownlink !== undefined) {
+          try {
+            deps.onDownlink(sub.connectionId, chunk.length)
+          } catch (error) {
+            logger.warn('page-channel: downlink observer failed: ' + String(error))
+          }
+        }
         let events: SseEvent[]
         try {
           events = parser.push(chunk)
@@ -960,13 +974,13 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
 
   /** 传输被替换/注销：失败该 connectionId 上的每条订阅并销毁其上游。
    *  客户端的订阅重连阶梯会重新 subscribe，那时 resolveTargetFor 已解析到新传输。 */
-  function revokeConnection(connectionId: string, message?: string): void {
+  function revokeConnection(connectionId: string): void {
     let revoked = 0
     for (const state of [...liveSockets]) {
       for (const sub of [...state.subscriptions.values()]) {
         if (sub.connectionId !== connectionId) continue
         revoked += 1
-        failSubscription(sub, 'instance_unavailable', message ?? `the instance transport ${connectionId} was replaced or removed`)
+        failSubscription(sub, 'instance_unavailable', `the instance transport ${connectionId} was replaced or removed`)
       }
     }
     if (revoked > 0) {
