@@ -9,7 +9,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { reduceCarrier, reduceCarrierSequence, decideRebuild } from '../../src/carrier.ts'
+import { reduceCarrier, reduceCarrierSequence, decideRebuild, earliestRebuildAt } from '../../src/carrier.ts'
 import { initialCarrierState } from '../../src/state.ts'
 import { CARRIER_ENV, OPENING_TIMEOUT_MS, SILENT_TEARDOWN_MIN_MS } from '../../src/tables.ts'
 import type { CarrierEvent } from '../../src/state.ts'
@@ -137,6 +137,21 @@ test('decideRebuild is a pure predicate over the same tables', () => {
   assert.equal(decideRebuild(replaced.state, env, 60000), true)
   // One millisecond inside the same window it is denied again.
   assert.equal(decideRebuild(replaced.state, env, 59500), false)
+})
+
+test('earliestRebuildAt is the scheduling twin of decideRebuild', () => {
+  const initial = initialCarrierState()
+  assert.equal(earliestRebuildAt(initial, env, 0), 0, 'nothing blocks an untouched carrier')
+  const replaced = reduceCarrier(initial, { kind: 'rebuildRequested', at: 0, reason: 'socketNoFrame' }, env)
+  // The deferred retry a caller arms must land exactly where the gate opens:
+  // never earlier (a second refusal) and never later (an avoidable stall).
+  const edge = earliestRebuildAt(replaced.state, env, 500)
+  assert.equal(edge, 60_000)
+  assert.equal(decideRebuild(replaced.state, env, edge - 1), false)
+  assert.equal(decideRebuild(replaced.state, env, edge), true)
+  // No scheduling authority exists for a closed carrier or an unusable clock.
+  assert.equal(earliestRebuildAt({ ...initial, phase: 'closed' }, env, 0), Number.POSITIVE_INFINITY)
+  assert.equal(earliestRebuildAt(initial, env, Number.NaN), Number.POSITIVE_INFINITY)
 })
 
 test('the opening deadline is the recorded single tier', () => {

@@ -311,6 +311,7 @@ test('a closed socket bypasses the rebuild window instead of being throttled', a
   await flushMicrotasks()
   assert.ok(FakeSocket.instances.length >= 3, 'a closed carrier is replaced immediately')
   assert.equal(facts.includes('carrier-throttled'), false, 'closed bypass never reports throttled')
+  assert.ok(facts.includes('carrier-rebuild-bypass'), 'the bypass is visible in the forensics trace')
   await client.close()
 })
 
@@ -327,6 +328,33 @@ test('a burst of non-open lane reconnects does not cancel the in-flight attempt 
   client.reconnect()
   await flushMicrotasks()
   assert.equal(FakeSocket.instances.length, 2, 'the first reconnect replaces; the same-tick burst is debounced')
+  await client.close()
+})
+
+test('the burst guard spans the CONNECTING window (macrotask gap), not just one tick', async (t) => {
+  installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  t.after(() => t.mock.timers.reset())
+  const client = new RemoteStreamMuxClient({ waitForReconnect: true })
+  client.start()
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 1)
+  // First reconnect replaces the connecting attempt: the replacement is now ALSO
+  // connecting (this.socket stays undefined until open).
+  client.reconnect()
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 2)
+  // 1ms later, still inside the 50ms window: a second replace would cancel the
+  // fresh attempt for no gain. Before the fix this produced a third attempt.
+  t.mock.timers.tick(1)
+  client.reconnect()
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 2, 'a reconnect 1ms apart stays debounced while CONNECTING')
+  // Past the window the NEXT reconnect is honoured again.
+  t.mock.timers.tick(60)
+  client.reconnect()
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 3, 'the window expires and recovery continues')
   await client.close()
 })
 

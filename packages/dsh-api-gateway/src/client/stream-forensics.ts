@@ -45,6 +45,8 @@ export type StreamForensicsKind =
   | 'carrier-throttled'
   /** A denied replacement's single deferred retry reached the window edge. */
   | 'carrier-throttle-expired'
+  /** A NON-OPEN carrier was replaced outside the reducer's window (bypass). */
+  | 'carrier-rebuild-bypass'
 
 /**
  * Structured attribution carried by the opening facts. Every field is optional

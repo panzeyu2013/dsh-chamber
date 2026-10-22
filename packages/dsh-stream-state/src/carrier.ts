@@ -52,6 +52,35 @@ export function decideRebuild(state: CarrierState, env: CarrierEnv, at: number):
   return true
 }
 
+/**
+ * The earliest time at which {@link decideRebuild} would return true, given the
+ * state as of `at` and no further events — the scheduling twin of the gate, so a
+ * caller that must wait out a denial (the api-gateway's deferred replacement)
+ * never re-implements the window math. `Number.POSITIVE_INFINITY` = never (a
+ * closed carrier or a clock the reducer cannot reason about).
+ */
+export function earliestRebuildAt(state: CarrierState, env: CarrierEnv, at: number): number {
+  if (!isUsableAt(at) || state.phase === 'closed') return Number.POSITIVE_INFINITY
+  const last = latestRebuildAt(state)
+  // A backwards clock is not evidence the window is empty: the gate holds forever
+  // until a sane observation arrives.
+  if (Number.isFinite(last) && last >= 0 && at < last) return Number.POSITIVE_INFINITY
+  let earliest = at
+  if (state.pendingRebuild !== null && Number.isFinite(last) && last >= 0) {
+    earliest = Math.max(earliest, last + env.inFlightGraceMs)
+  }
+  const within = state.rebuildsAt.filter(stamp => stamp > at - env.rebuildWindowMs).sort((left, right) => left - right)
+  if (within.length >= env.maxRebuildsPerWindow) {
+    // Open just as enough of the oldest stamps leave the window.
+    const expiresNeeded = within.length - env.maxRebuildsPerWindow + 1
+    earliest = Math.max(earliest, within[expiresNeeded - 1]! + env.rebuildWindowMs)
+  }
+  if (Number.isFinite(last) && last >= 0) {
+    earliest = Math.max(earliest, last + env.minRebuildSpacingMs)
+  }
+  return earliest
+}
+
 /** Whether an opening-stall count has PROVEN the streak threshold (finite only). */
 function isStallProven(streak: number | undefined, threshold: number): boolean {
   if (streak === undefined || !Number.isFinite(streak)) return false

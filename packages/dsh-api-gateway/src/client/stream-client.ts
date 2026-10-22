@@ -29,6 +29,7 @@ import {
   CARRIER_ENV,
   HANDSHAKE_TIMEOUT_MS,
   SILENT_TEARDOWN_MIN_MS,
+  earliestRebuildAt,
   initialCarrierState,
   reduceCarrier,
   withDeadline,
@@ -40,9 +41,6 @@ import {
 
 /** The real clock, injected; the bound must not hold the process open, so its handles
  *  are unref'd. Exported so the journal probe rides this same scheduler. */
-const FORCED_REBUILD_MIN_INTERVAL_MS = 50
-const THROTTLE_RETRY_FALLBACK_MS = 1_000
-
 export const UNREF_SCHEDULER = {
   setTimeout: (run: () => void, ms: number): unknown => {
     const handle = setTimeout(run, ms)
@@ -51,6 +49,14 @@ export const UNREF_SCHEDULER = {
   },
   clearTimeout: (handle: unknown): void => { clearTimeout(handle as ReturnType<typeof setTimeout>) },
 }
+
+/** Floor between two forced replacements of a NON-OPEN carrier: a lane storm must
+ *  not turn into a connect/cancel storm (a socket that is not OPEN has no healthy
+ *  carrier to preserve, so the reducer's 60s window deliberately does not apply). */
+const FORCED_REBUILD_MIN_INTERVAL_MS = 50
+/** Fallback delay for a denied rebuild when the reducer state cannot give an
+ *  earlier legal time (window/in-flight spacing still wins when it can). */
+const THROTTLE_RETRY_FALLBACK_MS = 1_000
 
 const DEADLINE_SCHEDULER = {
   setTimeout: (run: () => void, ms: number): unknown => setTimeout(run, ms),
@@ -231,9 +237,17 @@ export class RemoteStreamMuxClient {
     // A closed/closing socket is not protected by the rebuild window: there is no
     // healthy carrier to preserve, and a lane reconnect must never be swallowed.
     if (this.socket === undefined || this.socket.readyState !== 1) {
+      // The burst guard protects an IN-FLIGHT attempt: while CONNECTING the socket
+      // is not published on `this.socket` yet, so the attempt itself (keepAlive) —
+      // or its cancellable candidate — is the only honest signal. Reading the socket
+      // here made the guard a no-op for the whole CONNECTING window.
+      const attemptInFlight = this.keepAlive !== undefined || this.cancelCandidate !== undefined
       const now = Date.now()
-      if (now - this.lastForcedRebuildAt < FORCED_REBUILD_MIN_INTERVAL_MS) return []
+      if (attemptInFlight && now - this.lastForcedRebuildAt < FORCED_REBUILD_MIN_INTERVAL_MS) return []
       this.lastForcedRebuildAt = now
+      // A bypassed replacement is still a replacement: keep it visible in the
+      // forensics trace even though it deliberately skips the reducer's ledger.
+      this.forensics?.('carrier-rebuild-bypass', reason)
       this.replaceSocket(failure, closeReason)
       return []
     }
@@ -275,24 +289,24 @@ export class RemoteStreamMuxClient {
     if (!this.running || this.disposed) return
     const at = Date.now()
     if (!Number.isFinite(at)) return
-    const env = this.carrierEnv
-    const last = this.carrierState.rebuildsAt.length === 0
-      ? undefined
-      : Math.max(...this.carrierState.rebuildsAt)
-    let retryAt = at + THROTTLE_RETRY_FALLBACK_MS
-    if (this.carrierState.pendingRebuild !== null && last !== undefined) {
-      retryAt = Math.max(retryAt, last + env.inFlightGraceMs)
-    }
-    if (this.carrierState.rebuildsAt.length >= env.maxRebuildsPerWindow) {
-      retryAt = Math.max(retryAt, Math.min(...this.carrierState.rebuildsAt) + env.rebuildWindowMs)
-    }
-    if (last !== undefined) retryAt = Math.max(retryAt, last + env.minRebuildSpacingMs)
+    // The reducer owns the window math; this only schedules at the time it names.
+    const earliest = earliestRebuildAt(this.carrierState, this.carrierEnv, at)
+    if (!Number.isFinite(earliest)) return
+    const retryAt = Math.max(at + THROTTLE_RETRY_FALLBACK_MS, earliest)
     this.throttleRetried = true
+    // The frame observation must be FRESH at the window edge: frames that arrive while
+    // the retry is parked prove the carrier is no longer silent, and reusing the
+    // decision-time delta would rebuild a healthy socket as if nothing arrived.
+    const framesAtArm = this.socketFrames
     const timer = setTimeout(() => {
       this.throttleTimer = undefined
       if (!this.running || this.disposed) return
       if (this.socket === undefined || this.socket.readyState !== 1) return
       this.forensics?.('carrier-throttle-expired', reason)
+      const arrivedWhileParked = Math.max(0, this.socketFrames - framesAtArm)
+      const freshFrames = framesSinceSend === undefined && arrivedWhileParked === 0
+        ? undefined
+        : (framesSinceSend ?? 0) + arrivedWhileParked
       this.requestCarrierRebuild(
         failure,
         `${closeReason} (throttle expiry)`,
@@ -300,7 +314,7 @@ export class RemoteStreamMuxClient {
         this.nextDecisionCycle(),
         streamId,
         streak,
-        framesSinceSend,
+        freshFrames,
       )
     }, Math.max(0, retryAt - at))
     timer.unref?.()
@@ -347,6 +361,10 @@ export class RemoteStreamMuxClient {
    */
   private replaceSocket(failure: RemoteStreamCarrierError, closeReason: string): void {
     if (!this.running || this.disposed) return
+    // Every replacement counts against the burst guard, including the reducer's
+    // own: otherwise a sanctioned replace followed by a lane event could force a
+    // second connect inside the 50ms window.
+    this.lastForcedRebuildAt = Date.now()
     this.clearThrottleTimer()
     this.throttleRetried = false
     const pending = this.keepAlive
@@ -523,10 +541,24 @@ export class RemoteStreamMuxClient {
           // The timed-out stream keeps its own deadline error (it was failed first);
           // the sibling must see the REPLACEMENT, so `failAll` gets its own wording.
           inbox.fail(openingFailure)
-          if (effects.some((effect) => effect.e === 'rebuildCarrier')) {
+          const rebuiltNow = effects.some((effect) => effect.e === 'rebuildCarrier')
+          if (rebuiltNow) {
             this.replaceSocket(replacementFailure, 'opening stall')
           }
           this.applyRecoveryEffects(effects, replacementFailure)
+          // A denied rebuild must not leave this lane pinned to a silent carrier:
+          // the same ONE delayed replacement the lane-reconnect refusals arm applies
+          // here too (design 27 §3.6 — every refusal gets the window-edge retry).
+          if (!rebuiltNow && effects.some((effect) => effect.e === 'throttled')) {
+            this.armThrottleRetry(
+              replacementFailure,
+              'opening stall',
+              'openingStall',
+              streamId,
+              attemptStreak,
+              this.socketFrames - framesAtSend,
+            )
+          }
           const rebuilt = effects.find((effect) => effect.e === 'rebuildCarrier')
           if (rebuilt !== undefined && rebuilt.e === 'rebuildCarrier') {
             if (rebuilt.reason === 'socketNoFrame') {
