@@ -26,9 +26,11 @@
  *     set_gateway_password(id,pw) → desktop_gateway_set_password {id,password}
  *     gateway_plugin_sync(id)    → desktop_gateway_plugin_sync {id}
  *     config_list()              → desktop_ssh_config_list（无载荷）
- *     connect/disconnect/status/reverify/logs/logs_clear/start_service/
+ *     connect/disconnect/status/logs/logs_clear/start_service/
  *       stop_service/is_active/restart_service/plugin_list/seed_host_graph(id)
  *                               → 各自 desktop_ssh_* 通道 {id}
+ *     reverify(id,reason?)      → desktop_ssh_reverify {id,reason}（reason 仅
+ *                               'user'|'resume'|'online'；sidecar 把其它值归一为 'user'）
  *     local_plugin_list()        → desktop_local_plugin_list（无载荷）
  *     onStatusChanged / onInstancesChanged → 订阅 desktop_ssh_status_changed /
  *                                 desktop_ssh_instances_changed
@@ -470,6 +472,10 @@
     connect: function (id) { return invoke('desktop_ssh_connect', { id: id }) },
     disconnect: function (id) { return invoke('desktop_ssh_disconnect', { id: id }) },
     status: function (id) { return invoke('desktop_ssh_status', { id: id }) },
+    // reason rides the payload literally (the shim-payload gate pins this shape);
+    // WKWebView may turn an undefined property into NSNull, so the SIDECAR
+    // normalizes any non-enumerated value to 'user' (the safe default) instead of
+    // trusting the page's hint.
     reverify: function (id, reason) { return invoke('desktop_ssh_reverify', { id: id, reason: reason }) },
     logs: function (id) { return invoke('desktop_ssh_logs', { id: id }) },
     logs_clear: function (id) { return invoke('desktop_ssh_logs_clear', { id: id }) },
