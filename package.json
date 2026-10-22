@@ -39,6 +39,7 @@
     "acceptance:runtime:fake-registry": "node packages/desktop/scripts/runtime-fake-registry-acceptance.mjs",
     "acceptance:runtime:mac-packaged": "node packages/desktop/scripts/runtime-mac-packaged-smoke.mjs",
     "acceptance:gui": "node scripts/gui-acceptance/run.mjs",
+    "acceptance:netem": "node scripts/acceptance/netem-link-health.mjs",
     "acceptance:mobile": "node scripts/gui-acceptance/mobile-walkthrough.mjs",
     "dev:desktop": "pnpm run build:dsh-runtime && pnpm --filter @dsh-chamber/desktop run dev",
     "dev:build": "pnpm run build:renderer && pnpm --filter @dsh-chamber/desktop run dev",

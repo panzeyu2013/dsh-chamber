@@ -125,6 +125,10 @@ export const TEST_ONLY_EXPORT_ALLOWLIST = [
   // Upstream [pure] host-plugin entry: the loader calls apply() by plugin ABI; the
   // C1 byte-parity suite imports it for the comparison.
   { package: 'dsh-client-connection', name: 'apply', reason: 'upstream [pure] host-plugin entry: dsh loader calls apply() by plugin ABI; the byte-parity suite imports it' },
+  // The proxy ⇄ client budget contract (design 27 §3.4): NET_BUDGET now has a
+  // PRODUCTION importer (the proxy's header window), so it is not test-only; the
+  // worst-case helper is consumed by the contract test (the client must outlive it).
+  { package: 'dsh-chamber-wire', name: 'proxyWorstCaseMs', reason: 'proxy worst case asserted by the budget-contract test (the client must outlive it)' },
 ]
 
 /**

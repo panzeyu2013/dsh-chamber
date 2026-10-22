@@ -3,9 +3,9 @@
   "files": [
     {
       "path": "packages/renderer/src/App.tsx",
-      "lines": 2448,
+      "lines": 2470,
       "target": 400,
-      "note": "renderer container (function-of-state mixes; stores/budgets/servers/ledger extracted); +6 = the session-row entrance animation/placement wiring (feature, review-justified raise); +16 = the per-source archived-filter projection input (pin view-options merge); +7 = this file's removal wiring (2 imports + the echoStore destructure + the TTL sweep + the source-retirement drop + the projection-pass argument); record/withdraw/reconcile live in use-bridge-subscriptions.ts, which is not on this table (feature, review-justified raise; registered in STATUS). 三条增量 +6+16+7 = +29 ⇒ 基线 2352 可复算到 2381；+56 = 弱网 v1 page-channel link selector/online 重验（design 27）；+13 = local link epoch 修正/online reverify catch（review 修正）；−2 = selector 改读 remotesStore snapshot（最终 scan，取消 status ref 镜像并净删 2 行）"
+      "note": "renderer container (function-of-state mixes; stores/budgets/servers/ledger extracted); +6 = the session-row entrance animation/placement wiring (feature, review-justified raise); +16 = the per-source archived-filter projection input (pin view-options merge); +7 = this file's removal wiring (2 imports + the echoStore destructure + the TTL sweep + the source-retirement drop + the projection-pass argument); record/withdraw/reconcile live in use-bridge-subscriptions.ts, which is not on this table (feature, review-justified raise; registered in STATUS). 三条增量 +6+16+7 = +29 ⇒ 基线 2352 可复算到 2381；+56 = 弱网 v1 page-channel link selector/online 重验（design 27）；+13 = local link epoch 修正/online reverify catch（review 修正）；−2 = selector 改读 remotesStore snapshot（最终 scan，取消 status ref 镜像并净删 2 行）；+11 = 弱网 v1 review 修复：status 引用差分（只唤醒变化的 source）与注释（design 27 §3.6）；+3 = link 投影解读改读 client-core 的 linkReady/linkEpochOf；+8 = 本地 source 只在真实变化时唤醒页通道（remote-only 更新不再重放本地停放）"
     },
     {
       "path": "packages/desktop/plugin-sync.ts",
@@ -33,15 +33,15 @@
     },
     {
       "path": "packages/desktop/gateway-provider.ts",
-      "lines": 1197,
+      "lines": 1247,
       "target": 1400,
-      "note": "gateway transport provider；+1 = probe failureKind classification（design 27）；+7 = session failure/superseded/no-token failureKind（review 修正）"
+      "note": "gateway transport provider；+1 = probe failureKind classification（design 27）；+7 = session failure/superseded/no-token failureKind（review 修正）；+3 = 复合 verifyUp 预算声明 verifyUpBudgetMs（design 27 §3.2）；+3 = 复合探针预算注释（登录 10s + 探针 5s 的真实最坏 35s）；+16 = verifyUp/verifyGatewayEndpoint/探测核心的 signal 透传；+27 = 口令会话 proof 在瞬时失败后恢复（一次网络抖动不得拆掉已注册的 gateway）；+1 = 失败的 bearer 回退不覆盖口令分类（注释）"
     },
     {
       "path": "packages/desktop/ssh-provider.ts",
-      "lines": 1431,
+      "lines": 1453,
       "target": 1500,
-      "note": "ssh transport provider；+11 = probe failureKind + ConnectTimeout/ExitOnForwardFailure（design 27）"
+      "note": "ssh transport provider；+11 = probe failureKind + ConnectTimeout/ExitOnForwardFailure（design 27）；+9 = verifyUpBudgetMs 按 kind 分档 + ConnectTimeout 8s（须低于 READY_TIMEOUT）+ 注释（design 27 §3.2）；+1 = 复合探针预算注释（最坏 30s + 余量）；+8 = verifyUp/verifyDshEndpoint/probeDshSignature 的 signal 透传；+4 = signature 次探针与口令腿的 signal 透传"
     },
     {
       "path": "packages/dsh-chamber-client-ui-settings-connections/src/client/ConnectionsSection.tsx",
@@ -57,9 +57,9 @@
     },
     {
       "path": "packages/desktop/transport-manager.ts",
-      "lines": 1907,
+      "lines": 2138,
       "target": 1400,
-      "note": "transport lifecycle；+127 = link health projection/two-failure down/reverifyAll/bind-race 重分配（design 27）；+4 = 旧/自定义 provider 缺 failureKind 时的 classifyProbeFailure 保守回退；+4 = on-demand 探针失败后替换旧健康 timer（suspect 快速复探）；+16 = verifyUp 最后期限（LINK_POLICY.probeTimeoutMs 消费）；+66 = down grace/reverifyAll 错峰/心跳 jitter/link 投影 reset（review 修正）；+5 = HTTP status 兜底分类（review 修正）；+4 = down→healthy 才 bump linkEpoch（review 修正）；+33 = down-grace 周期探针/pending forced probe/bind 重试上限（最终扫描）；另删 READY_VERIFY 别名与无消费者诊断字段净 −19"
+      "note": "transport lifecycle；+127 = link health projection/two-failure down/reverifyAll/bind-race 重分配（design 27）；+4 = 旧/自定义 provider 缺 failureKind 时的 classifyProbeFailure 保守回退；+4 = on-demand 探针失败后替换旧健康 timer（suspect 快速复探）；+16 = verifyUp 最后期限（LINK_POLICY.probeTimeoutMs 消费）；+66 = down grace/reverifyAll 错峰/心跳 jitter/link 投影 reset（review 修正）；+5 = HTTP status 兜底分类（review 修正）；+4 = down→healthy 才 bump linkEpoch（review 修正）；+33 = down-grace 周期探针/pending forced probe/bind 重试上限（最终扫描）；另删 READY_VERIFY 别名与无消费者诊断字段净 −19；+112 = review 修复：探针复合预算、grace 30s 重开与硬截止、busy 抑制、online 波次合并、jitter 收窄到健康心跳、可达失败 10s 表值（design 27 §3.2/§3.3）；+1 = 注释（leave-ready 一律清 link 投影）；+2 = jitter 只给健康心跳的判据注释（复核）；+8 = 复核修复：deadline 从 state 读、provider 预算 try/catch、注释；+32 = 失败驱动强制探针（notifyLinkFailure/节流/guard）、connect 期探针期限、阈值表；+9 = 失败驱动探针的 in-flight 语义注释与节流表清理；+55 = 心跳两级（watch 窗口）/探针取消（AbortController、期限 onTimeout）/连接期 signal 收尾；+3 = 心跳档位注释；+9 = 心跳链续接（in-flight tick 重新 arm）与离开 ready 的探针 abort"
     },
     {
       "path": "packages/gateway/src/session-state.ts",
@@ -69,9 +69,9 @@
     },
     {
       "path": "packages/dsh-chamber-client-core/src/instance-api.ts",
-      "lines": 1397,
+      "lines": 1475,
       "target": 900,
-      "note": "per-instance unary api surface; +19 (2026-12) carries the upstream SessionProjectionHints watermark (projectionKind/projectionAsOfSeq) so cached blocks are never compared with a connected session's values；pin 在此新增置顶集字段（+）并把快照行类型移出到 instance-snapshot-rows.ts（−），净下调到 1347；随后 2026-10 页面级预算把 404 体读取抽到 instance-not-found-body.ts，并以预算接入 + 取消信号透传收口到 1327；+22 = MutationOutcomeUnknownError + 504 after-body 分类（design 27）；+27 = mutation 50s 预算/READ_ONLY 排除 + 502 after-body（review 修正）；+14 = 按 body 大小推导 mutation 预算（review 修正）；+3 = 读接口豁免注释/命名（死代码清理）；+2 = mutation 客户端预算 30min+60s cushion（最终扫描）；+2 = 结果未知不可重试标记（UI 消费）"
+      "note": "per-instance unary api surface; +19 (2026-12) carries the upstream SessionProjectionHints watermark (projectionKind/projectionAsOfSeq) so cached blocks are never compared with a connected session's values；pin 在此新增置顶集字段（+）并把快照行类型移出到 instance-snapshot-rows.ts（−），净下调到 1347；随后 2026-10 页面级预算把 404 体读取抽到 instance-not-found-body.ts，并以预算接入 + 取消信号透传收口到 1327；+22 = MutationOutcomeUnknownError + 504 after-body 分类（design 27）；+27 = mutation 50s 预算/READ_ONLY 排除 + 502 after-body（review 修正）；+14 = 按 body 大小推导 mutation 预算（review 修正）；+3 = 读接口豁免注释/命名（死代码清理）；+2 = mutation 客户端预算 30min+60s cushion（最终扫描）；+2 = 结果未知不可重试标记（UI 消费）；+51 = review 修复：opt-in mutation 表、ResponseLostError、已派发丢失归 unknown、wire 预算单源（design 27 §3.5）；+19 = 复核修复：黑名单分类 + 单次错误体读取（code/error/details）+ proven-not-forwarded + 浏览器措辞；+8 = 无响应文案单一词表（purge 与 isNoResponseError 共用）"
     },
     {
       "path": "packages/desktop/runtime-startup-host.ts",
@@ -81,9 +81,9 @@
     },
     {
       "path": "packages/desktop/host-assembly.ts",
-      "lines": 1176,
+      "lines": 1249,
       "target": 400,
-      "note": "createHostAssembly function budget (file proxy)；+39 = registration key/health-only 边沿（含抽出的 transport-registration helper；design 27）；+4 = session refresh arm 只在 register/verified 边沿；+11 = auth-fail TOCTOU 重连 5s 防循环（review 修正）；+1 = 命名 AUTH_RECOVERY_MIN_INTERVAL_MS；+2 = 注册边沿收敛到 applyTransportRegistration（可测效果 seam）；+2 = refresh 重注册保留 link health"
+      "note": "createHostAssembly function budget (file proxy)。HEAD 1176 → 1249（+73）：+39 registration key/health-only 边沿（含抽出的 transport-registration helper）、+11 auth-fail TOCTOU 5s 防循环、+4 refresh arm 只在 register/verified 边沿、+4 applyTransportRegistration 收敛与 refresh 保留 link health、+25 review 修复（linkBusy 注入、上游失败缝、identity 适配器、auth 恢复驱动器/取消/守卫、proof 恢复后 manual sync 同步）、-10 删内联 auth 计时器/节流表。历史逐笔账见 git 历史。"
     },
     {
       "path": "packages/dsh-chamber-client-core/src/aggregate-store.ts",

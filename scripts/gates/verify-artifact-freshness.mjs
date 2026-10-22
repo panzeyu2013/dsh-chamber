@@ -8,8 +8,8 @@
  * 测试，因此「改了 src 没重建产物」可以一路绿到用户手里：
  *   1. packages/gateway/host-packages/<name>/ —— build:gateway 拷贝进发布包的
  *      mobile 插件（dist/index.js + lib/* 直接决定 /plugins 能否挂载）；
- *   2. packages/desktop/dist/preload.cjs —— tsc 编译产物，成员面由
- *      preload.cts 决定（G4 只比成员数，不比内容）；
+ *   2. packages/desktop/dist/preload.cjs —— tsc 编译产物，与 preload.cts 的
+ *      编译结果逐字节比对（成员面另有 G4 的锁步检查；本门比内容）；
  *   3. packages/renderer/src/generated/typert/<remote>/ —— gen-typert-remotes 的
  *      生成产物，remote 装配契约（C4）读的就是它；生成器 emit 前清空输出树，
  *      本门按「重跑前后相对补集为空 + 目录键集 == C4 roster」判集合，再逐字节
