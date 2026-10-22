@@ -47,6 +47,8 @@ export const zh = {
   // 页面级派发拒绝（design 26 §D7）：请求从未离开页面，不是来源故障。
   'action.notDispatched': '页面繁忙：请求未能派发，请稍后重试',
   'action.outcomeUnknown': '结果未知：请求可能已生效，请先刷新状态，不要直接重试',
+  // 响应丢失：请求体可能已到实例、响应没回来；与「结果未知」不同，重试是安全的。
+  'action.responseLost': '响应丢失：请求可能已到达实例，可以安全重试',
   'archive.manager.deleting': '正在删除…',
   'archive.manager.restoring': '正在恢复…',
   'archive.manager.restored': '已恢复 {count} 个会话。',
@@ -270,6 +272,7 @@ export const en = {
   'archive.manager.busyOther': 'This instance is running another cleanup. Please retry later.',
   'action.notDispatched': 'Page busy: the request was not dispatched; retry shortly',
   'action.outcomeUnknown': 'Outcome unknown: this may already have applied; refresh before retrying',
+  'action.responseLost': 'Response lost: the request may have reached the instance; retrying is safe',
   'archive.manager.deleting': 'Deleting…',
   'archive.manager.restoring': 'Restoring…',
   'archive.manager.restored': 'Restored {count} session(s).',

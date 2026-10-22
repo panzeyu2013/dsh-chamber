@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { MutationOutcomeUnknownError, createHostDirectory, fetchInstanceSnapshot, searchSessions } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
+import { MutationOutcomeUnknownError, ResponseLostError, createHostDirectory, fetchInstanceSnapshot, searchSessions } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 import { HttpBudgetUnscheduledError, acquireHttpBudget, configureHttpBudgetForTests, resetHttpBudgetForTests } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
 
 /** One wire summary row (SessionSummary shape the unary client decodes). */
@@ -121,13 +121,81 @@ test('a 502/504 after-body failure is MutationOutcomeUnknown, never retryable fa
         (error: unknown) => error instanceof MutationOutcomeUnknownError,
       )
     }
-    // A read is not a mutation: the same wire fact must stay a retryable HTTP failure.
+    // A read is not a mutation: the same wire fact is a LOST RESPONSE (retryable),
+    // never "the host may have applied it". Classification is opt-in, so an
+    // out-of-table read face (gitWorktree/snapshot through callUnary) is covered too.
     globalThis.fetch = (async () => new Response(JSON.stringify({
       error: 'upstream failed after the body', code: 'upstream_failed', details: { phase: 'after-body' },
     }), { status: 502, headers: { 'content-type': 'application/json' } })) as typeof fetch
     await assert.rejects(
       client.session.list({}, undefined, { timeoutMs: 500 }),
+      (error: unknown) => error instanceof ResponseLostError && !(error instanceof MutationOutcomeUnknownError),
+    )
+    await assert.rejects(
+      client.callUnary('gitWorktree/snapshot', {}),
+      (error: unknown) => error instanceof ResponseLostError,
+      'the git read face is read-only: a lost answer must not claim a mutation',
+    )
+    // ... while the same read face can OPT IN as a mutation at the call site.
+    await assert.rejects(
+      client.callUnary('gitWorktree/remove', {}, undefined, { mutation: true }),
+      (error: unknown) => error instanceof MutationOutcomeUnknownError,
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('a mutation that loses its transport after dispatch is outcome-unknown', async () => {
+  const originalFetch = globalThis.fetch
+  try {
+    const client = getInstanceClient('local')
+    // The answer never completes (the proxy died mid-response): a mutation may have
+    // applied, so the caller must not treat this as a retryable transport failure.
+    // The classification must NOT depend on the runtime's fetch wording: undici,
+    // Chromium and WebKit each say something different.
+    for (const message of ['fetch failed', 'Failed to fetch', 'Load failed', 'terminated']) {
+      globalThis.fetch = (async () => {
+        throw new TypeError(message)
+      }) as typeof fetch
+      await assert.rejects(
+        client.session.rename({ sessionId: 's', title: 't' }),
+        (error: unknown) => error instanceof MutationOutcomeUnknownError,
+        message,
+      )
+    }
+    // An unclassified HTTP answer on a mutation is ambiguous too (the host answered
+    // with an error, but not in the RPC envelope) — never silently retryable.
+    globalThis.fetch = (async () => new Response('{"error":"boom"}', {
+      status: 500, headers: { 'content-type': 'application/json' },
+    })) as typeof fetch
+    await assert.rejects(
+      client.session.rename({ sessionId: 's', title: 't' }),
+      (error: unknown) => error instanceof MutationOutcomeUnknownError,
+    )
+    // ...but a PROVEN pre-forward rejection stays deterministic: the host never saw it.
+    globalThis.fetch = (async () => new Response('{"error":"busy","code":"resource_exhausted"}', {
+      status: 503, headers: { 'content-type': 'application/json' },
+    })) as typeof fetch
+    await assert.rejects(
+      client.session.rename({ sessionId: 's', title: 't' }),
+      (error: unknown) => error instanceof Error && !(error instanceof MutationOutcomeUnknownError),
+    )
+    // A READ keeps the plain transport failure: retrying it is safe.
+    await assert.rejects(
+      client.session.list({}, undefined, { timeoutMs: 500 }),
       (error: unknown) => !(error instanceof MutationOutcomeUnknownError),
+    )
+    // A deliberate caller abort is not an unknown outcome: the caller knows.
+    const controller = new AbortController()
+    globalThis.fetch = (async (_url: URL, init: RequestInit) => {
+      controller.abort()
+      assert.equal((init.signal as AbortSignal).aborted, true)
+      throw new DOMException('aborted', 'AbortError')
+    }) as typeof fetch
+    await assert.rejects(
+      client.session.rename({ sessionId: 's', title: 't' }, controller.signal),
+      (error: unknown) => error instanceof Error && error.name === 'AbortError',
     )
   } finally {
     globalThis.fetch = originalFetch
@@ -1117,3 +1185,25 @@ test('fetchInstanceSnapshot carries the active-Schedule fact from the wire proje
   assert.equal('hasActiveSchedule' in (byId.get('no-bag') ?? {}), false, 'a missing bag stays key-free')
   assert.equal('hasActiveSchedule' in (byId.get('odd') ?? {}), false, 'a non-array value stays key-free')
 })
+
+test('purge: every runtime fetch wording (wrapped by 实例不可达) keeps the may-still-run copy', async () => {
+  // The browser/undici failure text is wrapped before classification, so the raw
+  // TypeError arm is unreachable here: the wrapped path must carry the vocabulary.
+  for (const wording of ['Failed to fetch', 'Load failed', 'terminated', 'fetch failed']) {
+    const client = {
+      archiveCleanup: {
+        purge: async () => { throw new Error(`实例不可达：${wording}`) },
+      },
+    }
+    await assert.rejects(() => purgeArchivedSessions(client as never, ['s1']),
+      /可能仍在进行.*重复执行是安全的/, wording)
+  }
+  // A deterministic refusal is still NOT remapped by the wrapped-message arm.
+  const refused = {
+    archiveCleanup: { purge: async () => { throw new Error('实例不可达：HTTP 400 bad request') } },
+  }
+  await assert.rejects(() => purgeArchivedSessions(refused as never, ['s1']), (error: unknown) => {
+    return error instanceof Error && !/可能仍在进行/.test(error.message)
+  })
+})
+
