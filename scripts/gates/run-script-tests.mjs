@@ -12,8 +12,10 @@
  * `<stem>.mjs` beside it) unless it is one of the documented SUBJECT_TESTS
  * locks — a lockstep over repository files has no single module to name.
  *
- * Execution mirrors each package's `scripts/test.mjs`: one node child per file
- * with inherited stdio, first failure ends the run.
+ * Execution is the SAME bounded pool as a package manifest
+ * (`runEntries`: one node child per file, manifest-order transcript, first
+ * failure ends the run, zero-test guard): the scripts suite must not grow a
+ * second runner with its own drift.
  *
  * Usage:
  *   node scripts/gates/run-script-tests.mjs                     # every group
@@ -31,7 +33,7 @@ import { walkFiles } from '../lib/walk.mjs'
 // The shared bounded-pool runner: the scripts suite uses the same file-level
 // concurrency knob (--jobs / DSH_TEST_JOBS) the package manifests use, so one
 // DSH_TEST_JOBS budget governs the whole tests mode.
-import { resolveJobs, spawnCaptured } from '../lib/test-manifest.mjs'
+import { resolveJobs, runEntries } from '../lib/test-manifest.mjs'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
@@ -122,6 +124,16 @@ export const GROUPS = {
     'scripts/gui-acceptance/probe.test.mjs',
   ],
 }
+
+/**
+ * Script tests that deliberately use a custom harness instead of node:test.
+ * They are judged by exit status alone (the pre-unification contract); every
+ * other listed test must enter node:test so the shared zero-test guard applies.
+ * The list is explicit: a new file cannot opt out of the guard silently.
+ */
+export const RAW_STATUS_TESTS = new Set([
+  'scripts/release/release-workflow-policy.test.mjs',
+])
 
 /**
  * Tests whose stem names the artifact they lock instead of a module beside them
@@ -279,58 +291,21 @@ async function main() {
     process.exit(2)
   }
 
-  // Bounded pool with manifest-order flush: transcripts never interleave and
-  // the first failure in declaration order is the one reported. A failure stops
-  // new launches and cancels the rest once it reaches the flush.
-  const results = new Array(selected.length)
-  const handles = new Map()
-  let next = 0
-  let active = 0
-  let stopped = false
-  let flushPointer = 0
-  let failed = null
-  let resolveDone
-  const done = new Promise(resolvePromise => { resolveDone = resolvePromise })
-  const limit = Math.max(1, Math.min(jobResolution.jobs, Math.max(1, selected.length)))
-  const flush = () => {
-    if (failed !== null) return
-    while (flushPointer < selected.length) {
-      const outcome = results[flushPointer]
-      if (outcome === undefined) return
-      console.log(`[script-tests] ${selected[flushPointer]}`)
-      if (outcome.stdout !== '') process.stdout.write(outcome.stdout)
-      if (outcome.stderr !== '') process.stderr.write(outcome.stderr)
-      if (outcome.status !== 0) {
-        console.error(`[script-tests] ${selected[flushPointer]} failed (exit ${outcome.status ?? `signal ${outcome.signal}`})`)
-        failed = selected[flushPointer]
-        stopped = true
-        for (const handle of handles.values()) handle.kill()
-        return
-      }
-      flushPointer += 1
-    }
+  // ONE bounded pool shared with the package manifests. A per-file label keeps
+  // the transcript sectioned; scheduling, fail-fast and the zero-test verdict
+  // are the runner's, not a local copy.
+  const entries = selected.map(file => ({
+    file,
+    group: '',
+    label: '[script-tests] ' + file,
+    nodeArgs: [],
+    rawStatus: RAW_STATUS_TESTS.has(file),
+  }))
+  const { failed } = await runEntries(entries, { packageRoot: REPO_ROOT, jobs: jobResolution.jobs })
+  if (failed !== null) {
+    console.error(`[script-tests] ${failed.entry.file} failed (${failed.reason})`)
+    process.exit(1)
   }
-  const pump = () => {
-    while (!stopped && active < limit && next < selected.length) {
-      const index = next
-      next += 1
-      const handle = spawnCaptured(process.execPath, [selected[index]], { cwd: REPO_ROOT })
-      handles.set(index, handle)
-      active += 1
-      handle.promise.then(result => {
-        active -= 1
-        handles.delete(index)
-        results[index] = result
-        if (result.status !== 0) stopped = true
-        flush()
-        pump()
-      })
-    }
-    if (active === 0) resolveDone()
-  }
-  pump()
-  await done
-  if (failed !== null) process.exit(1)
   console.log(`[script-tests] ${selected.length} file(s) passed`)
 }
 

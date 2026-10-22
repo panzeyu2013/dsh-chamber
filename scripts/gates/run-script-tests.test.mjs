@@ -5,7 +5,14 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { GROUPS, SUBJECT_TESTS, collectScriptTests, manifestProblems, resolveSelection } from './run-script-tests.mjs'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import {
+  GROUPS, RAW_STATUS_TESTS, SUBJECT_TESTS, collectScriptTests, manifestProblems, resolveSelection,
+} from './run-script-tests.mjs'
+
+const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url))
 
 test('no arguments select every group in declaration order', () => {
   const selection = resolveSelection([])
@@ -102,6 +109,18 @@ test('the shipped manifest is self-consistent: unique entries, real reasons, no 
 // The walk must not apply the repo-wide ignore union: 'release' is build output
 // elsewhere but a REAL source directory under scripts/ — applying the union
 // would drop every scripts/release test from the manifest.
+test('only the documented custom-harness tests opt out of the node:test guard', () => {
+  const listed = Object.entries(GROUPS).flatMap(([group, files]) => files.map(path => ({ group, path })))
+  for (const path of RAW_STATUS_TESTS) {
+    assert.ok(listed.some(entry => entry.path === path), path + ' must be listed by a group')
+  }
+  for (const entry of listed) {
+    if (RAW_STATUS_TESTS.has(entry.path)) continue
+    assert.match(readFileSync(join(REPO_ROOT, entry.path), 'utf8'), /from 'node:test'/u,
+      entry.path + ' must enter node:test (otherwise the zero-test guard cannot see it)')
+  }
+})
+
 test('collectScriptTests sees the scripts/release corpus', () => {
   const tests = collectScriptTests()
   assert.ok(tests.some(path => path.startsWith('scripts/release/')), tests.join(', '))
