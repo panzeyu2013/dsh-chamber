@@ -132,6 +132,19 @@ const flushMicrotasks = async (): Promise<void> => {
   for (let index = 0; index < 50; index++) await Promise.resolve()
 }
 
+/** The Connection surface apply() sees when the service owns the mux. */
+function generatedMuxConnection(): Record<string, unknown> {
+  return {
+    openWebSocket: (path: string) => new FakeSocket('ws://127.0.0.1:17500' + path),
+    rpc: {},
+    generation: { subscribe: () => () => {}, getSnapshot: () => undefined },
+    registerGenerationSource: () => () => {},
+    start: () => ({ stop: () => {} }),
+    isLoopback: true,
+    interactions: 'none',
+  }
+}
+
 test('a generated stream uplink sends item and end frames on the mux', async () => {
   installFakeSocket()
   const client = new RemoteStreamMuxClient({ waitForReconnect: true })
@@ -182,16 +195,7 @@ test('a generated handle drives the mux wire: open, then item/end, then cancel o
   // The seam the two focused suites miss: the REAL apply() service owns this mux,
   // so the generated handle's priming and disposal are observed on the wire.
   installFakeSocket()
-  const connection = {
-    openWebSocket: (path: string) => new FakeSocket('ws://127.0.0.1:17500' + path),
-    rpc: {},
-    generation: { subscribe: () => () => {}, getSnapshot: () => undefined },
-    registerGenerationSource: () => () => {},
-    start: () => ({ stop: () => {} }),
-    isLoopback: true,
-    interactions: 'none',
-  }
-  const { ctx, probe } = await mountProbe(connection, true)
+  const { ctx, probe } = await mountProbe(generatedMuxConnection(), true)
   await flushMicrotasks()
   const socket = FakeSocket.instances[0]
   assert.ok(socket !== undefined, 'the service-owned mux must construct its socket through Connection.openWebSocket')
@@ -212,6 +216,69 @@ test('a generated handle drives the mux wire: open, then item/end, then cancel o
   assert.equal(cancel.type, 'cancel', 'dispose() cancels the logical stream instead of leaving it to the host')
   assert.equal(cancel.streamId, socket.openStreamId(), 'the cancel names the one logical stream the handle opened')
   await ctx.disposeAll()
+  assert.equal(socket.readyState, FakeSocket.CLOSED, 'teardown closes the service-owned mux socket')
+})
+
+test('dispose from the delivered-item state cancels once and is idempotent', async () => {
+  installFakeSocket()
+  const { ctx, probe } = await mountProbe(generatedMuxConnection(), true)
+  await flushMicrotasks()
+  const socket = FakeSocket.instances[0]
+  assert.ok(socket !== undefined)
+  socket.openNow()
+  await flushMicrotasks()
+
+  const handle = probe.attach('topic')
+  const iterator = handle[Symbol.asyncIterator]()
+  await flushMicrotasks()
+  const streamId = socket.openStreamId()
+  socket.answerNow(streamId)
+  assert.deepEqual(await iterator.next(), { value: { type: 'opened' }, done: false })
+
+  // The handle is suspended at yield now: abort alone cannot reach the mux
+  // finally there, so this is the state that pins dispose's downlink return.
+  handle.dispose()
+  await flushMicrotasks()
+  const cancels = (): Array<{ type?: string; streamId?: string }> =>
+    socket.sent.map(text => JSON.parse(text) as { type?: string; streamId?: string })
+      .filter(frame => frame.type === 'cancel')
+  assert.equal(cancels().length, 1, 'dispose sends one cancel from the yield state')
+  assert.equal(cancels()[0]?.streamId, streamId, 'the cancel names the open logical stream')
+  assert.deepEqual(await iterator.next(), { value: undefined, done: true })
+
+  handle.dispose()
+  await flushMicrotasks()
+  assert.equal(cancels().length, 1, 'a second dispose must not duplicate the cancel')
+
+  await ctx.disposeAll()
+  assert.equal(socket.readyState, FakeSocket.CLOSED, 'teardown closes the service-owned mux socket')
+})
+
+test('a host terminal frame suppresses the dispose cancel', async () => {
+  installFakeSocket()
+  const { ctx, probe } = await mountProbe(generatedMuxConnection(), true)
+  await flushMicrotasks()
+  const socket = FakeSocket.instances[0]
+  assert.ok(socket !== undefined)
+  socket.openNow()
+  await flushMicrotasks()
+
+  const handle = probe.attach('topic')
+  const iterator = handle[Symbol.asyncIterator]()
+  await flushMicrotasks()
+  const streamId = socket.openStreamId()
+  socket.answerNow(streamId)
+  assert.deepEqual(await iterator.next(), { value: { type: 'opened' }, done: false })
+  socket.messageNow(JSON.stringify({ type: 'end', streamId }))
+  assert.deepEqual(await iterator.next(), { value: undefined, done: true },
+    'the host terminal frame ends the downlink')
+
+  handle.dispose()
+  await flushMicrotasks()
+  const types = socket.sent.map(text => (JSON.parse(text) as { type?: string }).type)
+  assert.equal(types.includes('cancel'), false, 'a terminal frame suppresses the cancel')
+  await ctx.disposeAll()
+  assert.equal(socket.readyState, FakeSocket.CLOSED, 'teardown closes the service-owned mux socket')
 })
 
 test('a socket that dies inside the heal interval is still replaced', async (t) => {

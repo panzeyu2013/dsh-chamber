@@ -69,7 +69,10 @@ interface CallRecorder {
  */
 function fakeConnection(
   recorder: CallRecorder,
-  call: (signal: AbortSignal) => Promise<{ ok: true; value: unknown }>,
+  call: (signal: AbortSignal) => Promise<
+    | { ok: true; value: unknown }
+    | { ok: false; error: { code: string; message: string; details: object } }
+  >,
 ) {
   return {
     rpc: {
@@ -139,4 +142,21 @@ test('an abort racing a successful unary reply is still a cancellation', async (
   assert.equal(result.error.code, 'gateway/cancelled')
   assert.equal(recorder.calls.length, 1)
   assert.equal(recorder.calls[0]?.signal.aborted, true)
+})
+
+test('an abort racing an error reply is still a cancellation', async () => {
+  const recorder: CallRecorder = { calls: [] }
+  const controller = new AbortController()
+  const probe = await mountProbe(
+    fakeConnection(recorder, async () => {
+      controller.abort()
+      return { ok: false, error: { code: 'probe/failed', message: 'host failed', details: {} } }
+    }),
+    unaryDescriptor('echo', stringCodec('@fixture#EchoResult'), true),
+  )
+  const result = await probe.echo('input', controller.signal)
+  assert.equal(result.ok, false, 'a cancellation must not report the raced host error')
+  if (result.ok) throw new Error('unreachable')
+  assert.equal(result.error.code, 'gateway/cancelled')
+  assert.equal(recorder.calls.length, 1)
 })
