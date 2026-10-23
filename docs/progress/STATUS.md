@@ -64,6 +64,7 @@
 
 **上游 pin 新面（无 GUI 未跑）**：
 - 基线：0.2.1-rc.2 未复跑；pin 四项（内置插件页、跨代 profile、gateway 就地升级、0.1.6 移动端 + 右栏终端）挂账。
+- 终端 attach/重连（G43）：生成式流的 uplink（输入/半关/取消帧）与断线重连待打包态真机走查；判据 = 行为用例 `packages/dsh-api-gateway/test/behavior/client-uplink-support.test.ts` + 真机。
 - alpha.4：Schedule（Automation tasks 面板/任务页/行 clock 标记/右侧任务标签/删除 toast/每会话 catalog 查询）+ Developer Tools（可选、默认关、Session/NodeJS Inspector、shell.bottom 声明）在 N-ctx 目检；判据 = C9/C11/C16 + `frame-slots`；风险 = inspector iframe document-relative 可能落 SPA fallback（C9 前缀或占位）。
 - alpha.4 Discover：启用市场 bundle 后设置→插件管理的 Discover 页签与安装链；判据 = `test:plugin-manager` 的 `plugins.tab` + C4 契约 26；风险 = inject 含 plugin-manager 行、extra row 模块表解析未测（必要时升 covered factory）。
 - alpha.5：①账号通知栈（层叠/高度过渡/空标题/空 expiresAt/未校验 JsonValue）；②模型标签三处（trigger/菜单/模型行，112px 已修）；③终端列表会话级缓存（去重/失效不重试/reset 刷新）；④右栏收起 PageUp 不横滚；⑤PTC code-first 与 persona 一致。
@@ -154,7 +155,7 @@
 - **通知边界**：P1 只覆盖有壳源；facts-only `beforeBaseline` 不可达；mobile 无该面；facts-only `subagentCount` 仅谱系已认证（watcher 无谱系保持 presence）；paused drop、complete 复用、schedule/job 不覆盖、侧栏无 goal 视觉。
 - **降级边界**：已覆盖四座；不覆盖未激活源/壳回收/单槽后报/侧栏无动作；租客 body portal 不受 stacking；连接页 tooltip 无 ARIA。
 - **插件**：管理页钉上游结构（`data-plugin-panel`/drag/slot）；重打包无活切换（`restart-required`）；模块表先证互换再复用（release 相同 / profile 字节一致 / ≤8）；刷新控制面 string-key；pluginGraph 无静默看门狗；两条重载无仲裁；chunk-owner 撤销边界；`/plugins/events` 属上游 HMR。
-- **连接/来源**：terminal/attach uplink 重连实机验收待做（行为用例 `packages/dsh-api-gateway/test/behavior/client-uplink-support.test.ts`）；open-in 官方页级 localStorage 槽（`dsh.open-in-app.choice`）待按 `chamberBasePath` 分键；N-ctx Markdown 预览仍 document-relative（A 保持降级/B 覆盖补丁待裁）；`chamberFileApiBase` 仅唯一来源断言；远程会话状态/切源白屏实现闭合（实机见 §1.4）、远端空白会话、ui-chat 老代整面失败、未挂载工作区集合仅回声+挂载 push 均按已知降级；`document.hasFocus()` 假设只驱动 `requireHidden`。v1 不做 = 单 store 真融合、控制面会话实时同步、远程实例管理 UI 外壳、跨来源平铺列表。
+- **连接/来源**：open-in 官方页级 localStorage 槽（`dsh.open-in-app.choice`）待按 `chamberBasePath` 分键；N-ctx Markdown 预览仍 document-relative（A 保持降级/B 覆盖补丁待裁）；`chamberFileApiBase` 仅唯一来源断言；远程会话状态/切源白屏实现闭合（实机见 §1.4）、远端空白会话、ui-chat 老代整面失败、未挂载工作区集合仅回声+挂载 push 均按已知降级；`document.hasFocus()` 假设只驱动 `requireHidden`。v1 不做 = 单 store 真融合、控制面会话实时同步、远程实例管理 UI 外壳、跨来源平铺列表。
 - **UI 偏差**：B1–B10（默认 manual、unpin 回自然位、家族优先、树展开/拖拽约束、拖拽不切 orderBy、账号成员=可见行、搜索链、归档无 toast、行窗口配额、fork 落尾）；`sidebar.workspaces` 声明不渲染；菜单 `compact`；窗口标题冻结；轨道点裁切；hover 几何无指针腿；导轨无锚点/aria；Git 错误码重叠；折叠 folder 字形不补源码锁。
 - **归档**：成功不就地提示 + 筛选降级（未知集禁用整轴）；两段式旧宿主降级（第二调上抛，不做版本探测）；已知代价 = 墓碑撤下后筛选禁用至挂载。
 - **运行时/桌面**：Electron 二进制惰性安装；内建版本行引导；dsh 设置面偏差（registry/https-only/周期检查/prune/`RUNTIME_RESTART`）；apply-now 纯投影门；探针契约残余；0.1.2 线降级（硬阻断/芯片隐藏/cookie 30 天/帧校验/`agentPresets`/unary 兜底/首屏整源降级/gateway ready 不蕴含托管就绪）；代理 300MiB；C3 composite 代际；C4 settings 簇；plugin localOnly 不检测。
