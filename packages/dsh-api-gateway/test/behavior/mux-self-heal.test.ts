@@ -13,6 +13,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { RemoteStream } from '../../src/client/remote-stream.ts'
 import { ClientUplinkQueue, RemoteStreamCarrierError, RemoteStreamMuxClient } from '../../src/client/stream-client.ts'
+import { mountProbe } from '../support/generated-probe.ts'
 import {
   REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,
   REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
@@ -161,6 +162,8 @@ test('a generated stream uplink sends item and end frames on the mux', async () 
     streamId?: string
     value?: unknown
   })
+  assert.deepEqual(frames.map(frame => frame.type), ['open', 'item', 'end'],
+    'the open frame precedes every queued uplink frame')
   assert.deepEqual(frames.filter(frame => frame.type === 'item'), [
     { type: 'item', streamId, value: item },
   ], 'send() reaches the wire as an item frame after the open frame')
@@ -173,6 +176,42 @@ test('a generated stream uplink sends item and end frames on the mux', async () 
   await iterator.return?.()
   controller.abort()
   await client.close()
+})
+
+test('a generated handle drives the mux wire: open, then item/end, then cancel on dispose', async () => {
+  // The seam the two focused suites miss: the REAL apply() service owns this mux,
+  // so the generated handle's priming and disposal are observed on the wire.
+  installFakeSocket()
+  const connection = {
+    openWebSocket: (path: string) => new FakeSocket('ws://127.0.0.1:17500' + path),
+    rpc: {},
+    generation: { subscribe: () => () => {}, getSnapshot: () => undefined },
+    registerGenerationSource: () => () => {},
+    start: () => ({ stop: () => {} }),
+    isLoopback: true,
+    interactions: 'none',
+  }
+  const { ctx, probe } = await mountProbe(connection, true)
+  await flushMicrotasks()
+  const socket = FakeSocket.instances[0]
+  assert.ok(socket !== undefined, 'the service-owned mux must construct its socket through Connection.openWebSocket')
+  socket.openNow()
+  await flushMicrotasks()
+
+  const frameTypes = (): string[] => socket.sent.map(text => (JSON.parse(text) as { type: string }).type)
+  const handle = probe.attach('topic')
+  handle.send({ type: 'write', data: 'ls' })
+  handle.end()
+  await flushMicrotasks()
+  assert.deepEqual(frameTypes(), ['open', 'item', 'end'],
+    'the primed open frame precedes the queued uplink frames, and end() half-closes after them')
+
+  handle.dispose()
+  await flushMicrotasks()
+  const cancel = JSON.parse(socket.sent[socket.sent.length - 1] ?? '{}') as { type?: string; streamId?: string }
+  assert.equal(cancel.type, 'cancel', 'dispose() cancels the logical stream instead of leaving it to the host')
+  assert.equal(cancel.streamId, socket.openStreamId(), 'the cancel names the one logical stream the handle opened')
+  await ctx.disposeAll()
 })
 
 test('a socket that dies inside the heal interval is still replaced', async (t) => {

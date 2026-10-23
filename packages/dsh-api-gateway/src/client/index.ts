@@ -22,6 +22,7 @@ import type {
   TypertClientRemote,
   RemoteFailure,
   RemoteResult,
+  RemoteStreamHandle,
   TypertCodec,
   TypertDisposer,
   TypertRemoteContribution,
@@ -291,6 +292,10 @@ class ClientRemoteService extends Service implements ClientRemote {
    * RemoteStream still publishes exactly one page fact.
    * @param uplink - the Client's items: each is sent as an `item` frame, its end as `end`; its `return()`
    * runs when the stream finishes, and its failure cancels the stream and fails the downlink.
+   * The uplink reaches `connection.rpc.open` verbatim, so a worker-local carrier that ignores
+   * the fourth argument (an older shell) would leave `send`/`end` queued without an error:
+   * the shell-side opener owns that half. The in-repo production path is the mux below, whose
+   * pump drains the same queue.
    */
   private openRemoteStream(
     endpoint: string,
@@ -467,7 +472,7 @@ class ClientRemoteService extends Service implements ClientRemote {
     scoped: ScopedMethod | undefined,
     callerCtx: Context,
     values: readonly unknown[],
-  ): Promise<RemoteResult<unknown>> | AsyncIterable<unknown> {
+  ): Promise<RemoteResult<unknown>> | RemoteStreamHandle<unknown, unknown> {
     if (scoped !== undefined) {
       const adapter = this.ownerCtx.typert.contexts.getClient(scoped.projection.context)
       const identity = adapter?.identity(callerCtx)
@@ -498,7 +503,7 @@ class ClientRemoteService extends Service implements ClientRemote {
     callerCtx: Context,
     values: readonly unknown[],
     boundIdentity?: BoundContextIdentity,
-  ): Promise<RemoteResult<unknown>> | AsyncIterable<unknown> {
+  ): Promise<RemoteResult<unknown>> | RemoteStreamHandle<unknown, unknown> {
     if (descriptor.mode === 'stream') {
       return this.invokeStream(descriptor, projection, token, callerCtx, values, boundIdentity)
     }
@@ -522,7 +527,9 @@ class ClientRemoteService extends Service implements ClientRemote {
       const result = await connection.rpc.call('/api', endpoint, { args: prepared.args }, prepared.signal)
       if (!mountActive(token)) return withdrawn(endpoint)
       // A caller abort that raced the wire round-trip is still a cancellation, even
-      // when the carrier answered success first.
+      // when the carrier answered success first. The check also precedes an error
+      // reply (upstream order): once the caller cancelled, a host failure that
+      // arrived after the intent never overwrites the cancellation code.
       prepared.signal.throwIfAborted()
       if (!result.ok) return { ok: false, error: rebuiltFailure(result.error) }
       // Unary results carrying type-specific values (binary fields and the like)
@@ -625,7 +632,7 @@ class ClientRemoteService extends Service implements ClientRemote {
  * iterator, which sends `cancel` unless a terminal frame arrived, drops what was
  * buffered, and ends the iteration quietly.
  */
-class ClientStreamHandle {
+class ClientStreamHandle implements RemoteStreamHandle<unknown, unknown> {
   private readonly endpoint: string
   private readonly uplink: ClientUplinkQueue
   private readonly generation: AbortController
@@ -714,7 +721,7 @@ type InvokeRemote = (
   scoped: ScopedMethod | undefined,
   callerCtx: Context,
   args: readonly unknown[],
-) => Promise<RemoteResult<unknown>> | AsyncIterable<unknown>
+) => Promise<RemoteResult<unknown>> | RemoteStreamHandle<unknown, unknown>
 
 class RemoteNamespaceService extends Service {
   private readonly methods = new Map<string, RemoteMethodRecord>()

@@ -433,8 +433,10 @@ export class RemoteStreamMuxClient {
     // DELIVERED, not a race around the first next(): a lost opening frame leaves this
     // generator suspended at `yield`, where only a timer can still reach the failure.
     // The clock starts when the consumer's FIRST pull runs this body (an async generator
-    // is lazy); every in-repo consumer iterates immediately, and a caller that only
-    // holds the stream without pulling owns no deadline (registered boundary).
+    // is lazy). A generated stream is primed by ClientStreamHandle at construction, so
+    // calling the method already arms this deadline even if the holder never iterates;
+    // only a raw caller that neither pulls nor disposes owns no deadline (registered
+    // boundary), and the handle's dispose covers that case.
     // Opaque to this module: the scheduler's handle type is its own (unknown).
     let deadlineTimer: unknown
     const clearOpeningDeadline = (): void => {

@@ -12,62 +12,17 @@
  * reach the selected carrier, that disposal terminates the generation, and that
  * the no-uplink stream path still works.
  *
- * The suite uses a fake Cordis Context (the vendor checkout ships cordis source
- * only, with no built lib the package exports point at) and a recording
- * Connection, so the generated method is observed end to end.
+ * The fixture (descriptor, codec, mount) lives in `test/support/generated-probe.ts`
+ * so the mux suite drives the same generated handle over the real wire; the
+ * Cordis Context is the shared fake that file installs.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { z } from 'zod'
 import type { Context } from '@deepseek-ai/cordis'
-import type {
-  InvocationDescriptor,
-  TypertCodec,
-} from '@deepseek-ai/dsh-typert-protocol'
 import { apply } from '../../src/client/index.ts'
 import { ClientUplinkQueue } from '../../src/client/stream-client.ts'
 import { createFakeContext } from '../support/client-service-context.ts'
-
-/** One strict codec over a string, mirroring the upstream fixture's shape. */
-function stringCodec(typeSymbol: string): TypertCodec {
-  return { mode: 'strict', typeSymbol, create: () => z.string() }
-}
-
-/**
- * The upstream `attachDescriptor()` fixture: mode 'stream', one strict topic
- * parameter, optional strict uplink codec, cancellation.
- */
-function attachDescriptor(withUplink: boolean): InvocationDescriptor {
-  return {
-    id: '@fixture/probe#probe/attach',
-    service: 'probe',
-    namespace: 'probe',
-    method: 'attach',
-    mode: 'stream',
-    invocation: { kind: 'direct' },
-    parameters: [{
-      name: 'topic',
-      wire: 'topic',
-      source: 'json',
-      codec: stringCodec('@fixture#Topic'),
-    }],
-    ...(withUplink ? { uplink: { codec: stringCodec('@fixture#AttachInput') } } : {}),
-    cancellation: { parameter: 'signal' },
-    result: stringCodec('@fixture#AttachItem'),
-  }
-}
-
-/** The generated handle as the mounted namespace exposes it. */
-interface GeneratedStreamHandle<T> extends AsyncIterable<T> {
-  send(item: unknown): void
-  end(): void
-  dispose(): void
-}
-
-/** The generated method as the mounted namespace exposes it. */
-interface GeneratedProbe {
-  attach(topic: string, signal?: AbortSignal): GeneratedStreamHandle<unknown>
-}
+import { mountProbe } from '../support/generated-probe.ts'
 
 /** Every logical stream the fake Connection was asked to open. */
 interface StreamOpenRecorder {
@@ -104,21 +59,9 @@ function fakeConnection(recorder: StreamOpenRecorder, values: readonly unknown[]
   }
 }
 
-/** Install the contribution and return the generated namespace method. */
-async function mountProbe(connection: unknown, withUplink: boolean): Promise<GeneratedProbe> {
-  const ctx = createFakeContext(connection)
-  apply(ctx as unknown as Context)
-  const remote = ctx.remote
-  assert.ok(remote !== undefined, 'apply() must register the remote service')
-  await remote.$mount({ package: '@fixture/probe', descriptors: [attachDescriptor(withUplink)] })
-  const probe = remote.probe
-  assert.ok(probe !== undefined, 'the namespace service must expose the generated method')
-  return probe as GeneratedProbe
-}
-
 test('a generated stream with descriptor.uplink returns a handle that feeds the carrier queue', async () => {
   const recorder: StreamOpenRecorder = { streams: [] }
-  const probe = await mountProbe(fakeConnection(recorder, ['one', 'two']), true)
+  const { probe } = await mountProbe(fakeConnection(recorder, ['one', 'two']), true)
   const handle = probe.attach('topic')
   assert.equal(recorder.streams.length, 1, 'the method must open the logical stream synchronously')
 
@@ -145,7 +88,7 @@ test('a generated stream with descriptor.uplink returns a handle that feeds the 
 
 test('send() refuses a value that cannot travel losslessly as one uplink item', async () => {
   const recorder: StreamOpenRecorder = { streams: [] }
-  const probe = await mountProbe(fakeConnection(recorder, []), true)
+  const { probe } = await mountProbe(fakeConnection(recorder, []), true)
   const handle = probe.attach('topic')
   assert.throws(() => handle.send(() => {}), /uplink item is not a lossless JSON value/u)
   handle.dispose()
@@ -154,7 +97,7 @@ test('send() refuses a value that cannot travel losslessly as one uplink item', 
 
 test('dispose() aborts the generation and closes the uplink queue', async () => {
   const recorder: StreamOpenRecorder = { streams: [] }
-  const probe = await mountProbe(fakeConnection(recorder, ['never-delivered']), true)
+  const { probe } = await mountProbe(fakeConnection(recorder, ['never-delivered']), true)
   const handle = probe.attach('topic')
   const opened = recorder.streams[0]!
   handle.dispose()
@@ -164,9 +107,27 @@ test('dispose() aborts the generation and closes the uplink queue', async () => 
   assert.deepEqual(await iterator.next(), { value: undefined, done: true }, 'a disposed handle ends quietly')
 })
 
+test('the handle takes one consumer and a return before the first read disposes it', async () => {
+  const recorder: StreamOpenRecorder = { streams: [] }
+  const { probe } = await mountProbe(fakeConnection(recorder, ['one']), true)
+
+  const consumed = probe.attach('topic')
+  consumed[Symbol.asyncIterator]()
+  assert.throws(() => consumed[Symbol.asyncIterator](), /stream has one consumer/u,
+    'a second iteration must be refused instead of duplicating the downlink')
+
+  const returned = probe.attach('topic')
+  const opened = recorder.streams[1]!
+  const iterator = returned[Symbol.asyncIterator]()
+  assert.deepEqual(await iterator.return?.(undefined), { value: undefined, done: true },
+    'a return before the first read ends the handle quietly')
+  assert.equal(opened.signal.aborted, true, 'the early return disposes the generation even though nothing was read')
+  assert.deepEqual(await iterator.next(), { value: undefined, done: true }, 'the handle stays done after the early return')
+})
+
 test('the same generated stream without an uplink still opens and yields the downlink', async () => {
   const recorder: StreamOpenRecorder = { streams: [] }
-  const probe = await mountProbe(fakeConnection(recorder, ['one', 'two']), false)
+  const { probe } = await mountProbe(fakeConnection(recorder, ['one', 'two']), false)
   const handle = probe.attach('topic')
   const seen: unknown[] = []
   for await (const value of handle) seen.push(value)
@@ -181,7 +142,7 @@ test('the same generated stream without an uplink still opens and yields the dow
 
 test('the answer leg registers exactly one generation source (real Connection semantics)', () => {
   // The alpha.3 merge once constructed ClientRemoteEvents twice; the second
-  // registerGenerationSource throws on a real handle, but the shared fake above is a
+  // registerGenerationSource throws on a real handle, but the shared fake is a
   // no-op and stayed green. Pin the single-construction contract with real semantics.
   let generationSources = 0
   const connection = {

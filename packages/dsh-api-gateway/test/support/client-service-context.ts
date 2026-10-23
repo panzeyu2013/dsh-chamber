@@ -23,6 +23,8 @@ export interface FakeContext {
   plugin(plugin: { name: string; apply(ctx: unknown): void }): unknown
   emit(name: string): void
   on(name: string, listener: unknown): () => void
+  /** Test teardown: run every effect disposer in reverse order, like a fiber unload. */
+  disposeAll(): Promise<void>
 }
 
 export function createFakeContext(connection: unknown): FakeContext {
@@ -40,6 +42,7 @@ export function createFakeContext(connection: unknown): FakeContext {
     target[parts[parts.length - 1] as string] = service
   }
 
+  const effects: Array<() => Promise<unknown>> = []
   const effect: FakeContext['effect'] = execute => {
     const disposers: Array<() => unknown> = []
     const result = execute()
@@ -66,6 +69,7 @@ export function createFakeContext(connection: unknown): FakeContext {
     // resolving to the callable itself would re-enter this thenable forever.
     ;(dispose as { then?: unknown }).then = (onFulfilled?: (value: unknown) => unknown) =>
       Promise.resolve(result).then(() => onFulfilled?.(undefined))
+    effects.push(dispose)
     return dispose
   }
 
@@ -78,8 +82,13 @@ export function createFakeContext(connection: unknown): FakeContext {
     }
   }
 
+  const disposeAll = async (): Promise<void> => {
+    for (const dispose of effects.splice(0).reverse()) await dispose()
+  }
+
   Object.assign(fake, {
     reflect: { props: {}, provide },
+    disposeAll,
     get: (name: string) => services[name],
     effect,
     plugin,
