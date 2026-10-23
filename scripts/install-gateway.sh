@@ -1759,6 +1759,10 @@ Environment=XDG_CONFIG_HOME=${run_home}/.config"
 [Unit]
 Description=dsh-chamber gateway (design 17 server shape)
 After=network.target
+# 惊群上限：临时性启动失败（端口竞态等）最多重试 5 次/60s 就停在 failed，
+# 而不是把 user journal 刷成噪音；确定性失败另由 RestartPreventExitStatus 拦下。
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -1775,6 +1779,11 @@ EnvironmentFile=$ENV_FILE
 ExecStart=$(systemd_exec_start "$exec_path")
 Restart=on-failure
 RestartSec=3
+# 退出码 3 = state 根被另一个写者占用（state_root_locked/duplicate）：确定性
+# 失败，重试一万次也不会变好（重启后旧 pid 被别的服务复用时尤其如此）。系统
+# 一次都不重启，单元停在 failed，systemctl status 直接呈现原因；人工修复后用
+# install-gateway.sh restart（内部先 reset-failed）恢复。
+RestartPreventExitStatus=3
 
 [Install]
 WantedBy=$(unit_wanted_by)
@@ -1805,6 +1814,10 @@ systemctl_for_mode() {
 }
 
 restart_service() {
+  # 命中 start limit / RestartPreventExitStatus 后单元停在 failed：显式 restart
+  # 必须先清掉该状态，否则文档给出的恢复路径会撞上 "start request repeated too
+  # quickly"。reset-failed 对健康单元是无操作。
+  systemctl_for_mode reset-failed dsh-chamber-gateway.service >/dev/null 2>&1 || true
   systemctl_for_mode restart dsh-chamber-gateway.service
 }
 

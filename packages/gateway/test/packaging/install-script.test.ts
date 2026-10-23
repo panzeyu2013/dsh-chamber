@@ -208,6 +208,41 @@ ${UNIT_TAIL}`, { HOME: '/decoy-home' })
   }
 })
 
+test('the systemd unit never auto-restarts a deterministic lease conflict', () => {
+  // A locked state root (exit 3) cannot heal by retrying: after a reboot the old
+  // pid is typically reused by an unrelated early-boot service, and every retry
+  // re-reads the same record. Without RestartPreventExitStatus the default
+  // 5-restarts-in-10s limit never trips (RestartSec=3 spaces attempts further
+  // apart), so the unit loops forever and buries the one actionable line.
+  const output = runLibrary(`${UNIT_PREAMBLE}
+SERVICE_USER=""
+${UNIT_TAIL}`)
+  assert.match(output, /^Restart=on-failure$/m)
+  assert.match(output, /^RestartSec=3$/m)
+  assert.match(output, /^RestartPreventExitStatus=3$/m, 'exit 3 (state root held) must never be retried')
+  const at = (directive: string): number => output.search(new RegExp('^' + directive + '$', 'm'))
+  assert.ok(at('StartLimitIntervalSec=60') > at('\\[Unit\\]') && at('StartLimitIntervalSec=60') < at('\\[Service\\]'),
+    'StartLimitIntervalSec belongs to [Unit]')
+  assert.ok(at('StartLimitBurst=5') > at('\\[Unit\\]') && at('StartLimitBurst=5') < at('\\[Service\\]'),
+    'StartLimitBurst belongs to [Unit]')
+  assert.ok(at('RestartPreventExitStatus=3') > at('\\[Service\\]') && at('RestartPreventExitStatus=3') < at('\\[Install\\]'),
+    'RestartPreventExitStatus belongs to [Service]')
+})
+
+test('an explicit restart clears a start-limit / prevented-exit failure first', () => {
+  // Otherwise the documented recovery path ("install-gateway.sh restart") hits
+  // "start request repeated too quickly" on exactly the unit the operator is
+  // trying to recover.
+  const output = runLibrary(`
+SERVICE_MODE=user
+CALLS=""
+systemctl() { CALLS="$CALLS $*"; return 0; }
+restart_service
+printf 'CALLS:%s\\n' "$CALLS"
+`)
+  assert.match(output, /CALLS: --user reset-failed dsh-chamber-gateway\.service --user restart dsh-chamber-gateway\.service/u)
+})
+
 test('write_unit resolves the run user home from passwd, not from an exported HOME', () => {
   const runUser = spawnSync('id', ['-un'], { encoding: 'utf8' }).stdout.trim()
   const output = runLibrary(`${UNIT_PREAMBLE}
