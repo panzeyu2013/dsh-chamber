@@ -309,6 +309,7 @@
       "relatedGates": [
         "packages/dsh-api-gateway/test/behavior/client-unary-result.test.ts",
         "packages/dsh-api-gateway/test/behavior/client-uplink-support.test.ts",
+        "packages/dsh-api-gateway/test/behavior/mux-self-heal.test.ts",
         "packages/dsh-api-gateway/test/patch-lock/base-path-normalization-lock.test.ts",
         "packages/dsh-api-gateway/test/patch-lock/journal-stall-watchdog-lock.test.ts",
         "packages/dsh-api-gateway/test/patch-lock/remote-stream-carrier-retry-lock.test.ts",
@@ -328,7 +329,7 @@
         "src/client/stream-forensics.ts#createStreamForensicsReporter",
         "src/client/stream-stall-policy.ts#decideStreamStallAction"
       ],
-      "evidence": "node scripts/upstream/verify-upstream-touchpoints.mjs；升级裁决点：descriptor 带 uplink 半边时复核 client-uplink-support.test.ts 的 ClientStreamHandle/ClientUplinkQueue 契约——上游 terminal/attach 取 invocation.uplink()、官方客户端用 handle.send()，故保持接线（send/end 到所选载波、dispose 发 cancel），不得退回 fail-loud；实机 attach/重连验收仍是 open 项（见 docs/progress/STATUS.md，G43）。client-unary-result.test.ts 钉住 unary 的 descriptor.result.decode 与 abort 竞态。",
+      "evidence": "node scripts/upstream/verify-upstream-touchpoints.mjs；升级裁决点：descriptor 带 uplink 半边时复核 client-uplink-support.test.ts 的 ClientStreamHandle/ClientUplinkQueue 契约——上游 terminal/attach 取 invocation.uplink()、官方客户端用 handle.send()，故保持接线（send/end 到所选载波、dispose 发 cancel，终止帧已到时除外），不得退回 fail-loud；mux-self-heal.test.ts 钉住生成 handle 的 open→item/end 线序、dispose→cancel 与终止帧例外；实机 attach/重连验收仍是 open 项（见 docs/progress/STATUS.md，G43）。client-unary-result.test.ts 钉住 unary 的 descriptor.result.decode 与 abort 竞态（成功/错误答复两侧）。",
       "status": "open"
     },
     {
