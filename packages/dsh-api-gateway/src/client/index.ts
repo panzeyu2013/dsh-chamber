@@ -290,12 +290,12 @@ class ClientRemoteService extends Service implements ClientRemote {
    * reported at THIS boundary through the client's one reporter. The reporter is
    * idempotent per failure, so a generated stream nested inside a `$stream`
    * RemoteStream still publishes exactly one page fact.
-   * @param uplink - the Client's items: each is sent as an `item` frame, its end as `end`; its `return()`
-   * runs when the stream finishes, and its failure cancels the stream and fails the downlink.
    * The uplink reaches `connection.rpc.open` verbatim, so a worker-local carrier that ignores
-   * the fourth argument (an older shell) would leave `send`/`end` queued without an error:
+   * the uplink argument (an older shell) would leave `send`/`end` queued without an error:
    * the shell-side opener owns that half. The in-repo production path is the mux below, whose
    * pump drains the same queue.
+   * @param uplink - the Client's items: each is sent as an `item` frame, its end as `end`; its `return()`
+   * runs when the stream finishes, and its failure cancels the stream and fails the downlink.
    */
   private openRemoteStream(
     endpoint: string,
