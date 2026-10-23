@@ -302,6 +302,41 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
     return { ok: false, code: 'other', error: `the gateway answered an unexpected login status (HTTP ${statusCode})` }
   }
 
+  /** Classify a login TRANSPORT failure by socket error code. The failure stays
+   *  transient ('network': the link may come back), but the text must point at
+   *  the likely cause instead of collapsing every case into "network error": a
+   *  refused or reset socket through an ESTABLISHED ssh tunnel means the gateway
+   *  process is not serving on the remote port, not that the path is broken.
+   *  Only the socket's own code is surfaced — never a message that could embed a
+   *  credential. */
+  function loginTransportFailure(error: NodeJS.ErrnoException, tunneled: boolean): Extract<GatewaySessionResult, { ok: false }> {
+    const code = error.code ?? 'unknown'
+    if (code === 'ECONNREFUSED') {
+      return {
+        ok: false,
+        code: 'network',
+        error: tunneled
+          ? 'the SSH tunnel is up but nothing on the remote gateway port accepted the login request (ECONNREFUSED) — the gateway process is probably not running; check its service on the remote host'
+          : 'nothing is listening at the gateway address (ECONNREFUSED) — the gateway process is probably not running',
+      }
+    }
+    if (code === 'ECONNRESET' || code === 'EPIPE') {
+      return {
+        ok: false,
+        code: 'network',
+        error: 'the gateway closed the login connection without answering (' + code + ') — the gateway process may have exited or failed to start'
+          + (tunneled ? '; check its service on the remote host' : ''),
+      }
+    }
+    if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+      return { ok: false, code: 'network', error: 'the gateway host name does not resolve (' + code + ')' }
+    }
+    if (code === 'EHOSTUNREACH' || code === 'ENETUNREACH') {
+      return { ok: false, code: 'network', error: 'the gateway host is unreachable (' + code + ')' }
+    }
+    return { ok: false, code: 'network', error: 'the gateway login request failed (' + code + ')' }
+  }
+
   function ensureSession(origin: GatewaySessionOrigin, password: string): Promise<GatewaySessionResult> {
     const { key, url } = resolveOrigin(origin)
     if (disposed) return Promise.resolve(staleResult())
@@ -396,7 +431,7 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
           done({ ok: false, code: 'other', error: '证书固定不匹配（SPKI）——gateway 证书已更换或 pin 错误' })
           return
         }
-        done({ ok: false, code: 'network', error: 'the gateway login request failed (network error)' })
+        done(loginTransportFailure(error, origin.authority !== undefined))
       })
       if (origin.insecureHttp || origin.spkiPin === undefined) dispatch()
     })

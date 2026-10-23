@@ -54,8 +54,8 @@ export async function startGateway(handler: (req: IncomingMessage, res: ServerRe
 /** A fake request factory (`typeof node:http request` shape) for the cases a
  * real socket cannot reach deterministically: https-scheme URL inspection
  * and network errors. */
-export function stubRequestFactory(opts: { seenUrl?: (url: unknown) => void; status?: number; setCookie?: string[] | null; networkError?: boolean } = {}): GatewayHttpRequest {
-  const { seenUrl, status = 302, setCookie = [COOKIE], networkError = false } = opts
+export function stubRequestFactory(opts: { seenUrl?: (url: unknown) => void; status?: number; setCookie?: string[] | null; networkError?: boolean; networkErrorCode?: string } = {}): GatewayHttpRequest {
+  const { seenUrl, status = 302, setCookie = [COOKIE], networkError = false, networkErrorCode = 'ECONNREFUSED' } = opts
   interface StubClientRequest {
     on(event: string, listener: (...args: unknown[]) => void): unknown
     emit(event: string, ...args: unknown[]): boolean
@@ -74,7 +74,9 @@ export function stubRequestFactory(opts: { seenUrl?: (url: unknown) => void; sta
     req.end = () => {}
     req.destroy = () => {}
     if (networkError) {
-      setImmediate(() => req.emit('error', new Error('ECONNREFUSED')))
+      // A real node failure carries the socket code on the error object; the login
+      // classifier keys on it (the message alone is not a contract).
+      setImmediate(() => req.emit('error', Object.assign(new Error('connect ' + networkErrorCode), { code: networkErrorCode })))
     } else {
       setImmediate(() => {
         const res = new EventEmitter() as unknown as StubIncomingMessage

@@ -76,6 +76,7 @@
 ### 1.5 平台、发布与外部凭据
 
 - **gateway**：Linux unit 登录环境；ssh/http cookie 注入未覆盖；旧来源插件播种 400（重建未排期）；运维页缺 `recover-metadata`/`cleanup-version`/`restore-pre-rollback`；S0/S2-c 未实现；设计 21 对齐（只读/seed 端到端、tooltip、英文串）。
+- **gateway 启动失败原因对 chamber 不可见**：`state_root_locked` 的 holder 与判定依据只进 journal；隧道通而远端端口无监听时客户端只能看到 socket 错误（现已按 ECONNREFUSED/ECONNRESET 分类并给出「gateway 可能未运行」的文案，见 `packages/desktop/gateway-session.ts`），把结构化原因回传需要一条新的远程诊断面（读 state 根的启动失败记录或 journal 尾）——未排期，是「错误透传」的剩余部分。
 - **租约身份的跨平台残差**：`bootId`/`startTicks`/`pidNamespace`/`machineId` 只有 Linux 提供（`packages/control-plane/src/process-identity.ts`）；macOS/Windows 的 v2 记录仍只有启动代际推断，同一启动内的 pid 复用保守锁定（宁锁不双写）。
 - **租约的越界拓扑（有意拒绝）**：`machineId`/`pidNamespace` 与当前环境不同的记录按「共享/迁移的 state 根」拒绝接管。容器重建而 state 根挂 volume（machine-id 与 PID namespace 都会变）与 NFS 共享根因此停在 `state_root_locked`，恢复 = 移走 `owner.json`（部署 FAQ 已写）；改成「缺省接管」会把 NFS/双容器场景变成确定性双写，故保留拒绝。判据 = `docs/design/17` §12 判定矩阵。
 - **运行时安装现场的 pid 判活**：`dsh-runtime` 的 `isPidAlive`（`cleanupStaleInstalls`，`packages/dsh-runtime/src/dsh-runtime-store.ts`）仍按「同号进程存在」判活；安装中硬崩溃 + 重启后 pid 被复用会让清理一直抛「仍有活动写进程」，托管 dsh 起不来。pid 文件只有数字、没有身份元组，修法与本轮租约同形（写 bootId+startTicks），未排期。
