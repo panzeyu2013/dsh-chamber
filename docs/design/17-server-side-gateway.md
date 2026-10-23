@@ -1068,7 +1068,9 @@ Gateway state 与 dsh `$DSH_HOME` 分离。主要文件：
 ├─ tokens.json                 # v2 信封 {schemaVersion:2, source, updatedAt, hash}, 0600
 ├─ jwt-secret                  # 0600
 ├─ password-credential         # v2 信封 {schemaVersion:2, source, updatedAt, verifier}, 0600
-├─ owner.json # state 根租约 {schemaVersion,pid,startedAt,token,scope,flavor}, O_EXCL + 回读终验, 0600
+├─ owner.json # state 根租约 v2 {schemaVersion,pid,startedAt,token,scope,flavor,
+│             #   identity{host,machineId,bootId,pidNamespace,procStartTicks}},
+│             #   O_EXCL + 回读终验, 0600
 └─ dsh-runtime/                # design 18 §9.3：版本树/current 指针/override/快照（0700）
 ```
 
@@ -1099,14 +1101,33 @@ legacy secret 到 `0600`，而 `gateway auth status` 只验证不改权限。sec
 一次**，按未配置处理），杜绝「垃圾 verifier 静默废认证」。
 
 **state 根租约（`<stateRoot>/owner.json`）**：`createGateway`（gateway 形态）或 `createControlPlane`（desktop/cli，取锁严格在首次 store 写之前）经 `acquireStateRootLease` 以 **no-follow O_EXCL** 创建
-`{schemaVersion,pid,startedAt,token,scope,flavor}`（0600，stateRoot 0700 内）+ **回读终验**持有该根：活 pid 的租约**响亮拒绝启动**
-（结构化错误 `state_root_locked` + holder pid/flavor）；同进程同根重复取 = `state_root_duplicate`；死 pid 的陈旧租约以 **rename 认领 + 字节/identity 证明**接管：
+`{schemaVersion:2,pid,startedAt,token,scope,flavor,identity{host,machineId,bootId,pidNamespace,procStartTicks}}`（0600，stateRoot 0700 内）+ **回读终验**持有该根：**身份核实为活持有者**的租约**响亮拒绝启动**
+（结构化错误 `state_root_locked` + holder pid/flavor + 判定依据）；同进程同根重复取 = `state_root_duplicate`；陈旧租约以 **rename 认领 + 字节/identity 证明**接管：
 rename 到唯一 `.stale-<pid>-<hex>` 名（仅一个竞争者成功，其余见 ENOENT 重试），再校验被移动的正是
 读到的陈旧记录；若移动了**新鲜记录**则还原（覆盖间隙中第三方的新租约——先到者胜，被覆盖者的
-**创建后所有权终验**检出位移并 fail-closed）并响亮失败。不可读的租约文件（非普通文件/symlink/inode 竞态）响亮失败（绝不销毁意外内容）；**可读但 pid 缺失/损坏或撕裂**的记录按陈旧**认领并告警**（最可能是崩溃残留）；未知 `schemaVersion` fail-closed。`release` 双重守卫：未实际持有不删，且 on-disk 完整 bytes + **token+inode** 必须仍与本次获取一致才删（仅比 pid 不足以区分同进程重取/后继者；不匹配即 `state_root_not_owner` 且绝不删除）；**exit 监听器仅在获取
-成功后注册**（模块级单一监听器只遍历已持有租约）——获取失败的进程退出时绝不删除活写者的租约。创建后**所有权终验**（回读 + identity 与刚写入一致）——被并发接管位移的获取者立即失败，绝不无锁运行。采用语义：gateway/plane/runtime-manager 共享同一 handle、只 `assertCurrent` 不释放，仅顶层 owner 在其写者静止后 `release`；`start` 自持且已释放时 `reacquire`。逃生口唯一实现 `resolveStateRoot`：`--state-dir` > `DSH_<FLAVOR>_STATE` > `DSH_CHAMBER_STATE` > `~/.dsh-chamber`（一个 state 根一个写者，第二写者 fail-closed 退出 1）。旧 `.gateway.lock` / `dsh-runtime/owner.json` 由 `retireLegacyStateLocks` 一次性退役（一个 minor 后删除该函数）。已知残差：三个进程同时接管同一
+**创建后所有权终验**检出位移并 fail-closed）并响亮失败。不可读的租约文件（非普通文件/symlink/inode 竞态）响亮失败（绝不销毁意外内容）；**可读但 pid 缺失/损坏或撕裂**的记录按陈旧**认领并告警**（最可能是崩溃残留）；未知 `schemaVersion` fail-closed（反向同理：**降级**到旧版本后读到 v2 记录会 fail-closed 并提示 unsupported schemaVersion——干净退出会删记录，只有崩溃残留才触发，降级前先确认没有 `owner.json`）。`release` 双重守卫：未实际持有不删，且 on-disk 完整 bytes + **token+inode** 必须仍与本次获取一致才删（仅比 pid 不足以区分同进程重取/后继者；不匹配即 `state_root_not_owner` 且绝不删除）；**exit 监听器仅在获取
+成功后注册**（模块级单一监听器只遍历已持有租约）——获取失败的进程退出时绝不删除活写者的租约。创建后**所有权终验**（回读 + identity 与刚写入一致）——被并发接管位移的获取者立即失败，绝不无锁运行。采用语义：gateway/plane/runtime-manager 共享同一 handle、只 `assertCurrent` 不释放，仅顶层 owner 在其写者静止后 `release`；`start` 自持且已释放时 `reacquire`。逃生口唯一实现 `resolveStateRoot`：`--state-dir` > `DSH_<FLAVOR>_STATE` > `DSH_CHAMBER_STATE` > `~/.dsh-chamber`（一个 state 根一个写者，第二写者 fail-closed 退出 **3**，见下）。旧 `.gateway.lock` / `dsh-runtime/owner.json` 由 `retireLegacyStateLocks` 一次性退役（一个 minor 后删除该函数）。
+
+**「活」的判据是持有者身份，不是 pid 存活**（2026-10 重启事故的修正）。记录 v2 带 `identity` 段，`judgeHolder` 按证据强度排序，`EPERM` 不再等价于 alive（`EPERM → present` 只表示「有同号进程」，真伪由 startTicks 判；该映射本身是权限面，root 下无法构造单测，其**后果**由「同 boot 不同 ticks ⇒ 陈旧」用例覆盖）：
+
+| 证据 | 结论 |
+|---|---|
+| `machineId` 不同 | 记录来自**另一台机器**（共享 state 根）：既非陈旧也不能接管（那里可能真有写者），`state_root_locked` |
+| `bootId` 不同 | 记录写于上一次启动，**整条作废**（与 pid 无关——重启后同号 pid 常被开机服务占用） |
+| `pidNamespace` 不同 | 同一启动内的记录却属于**另一个 PID namespace**：同号 pid 在此无名可指，同样拒绝 |
+| 进程不存在 / 僵尸（`Z`/`X`） | 陈旧 |
+| `procStartTicks` 不同 | 同一启动内的 **pid 复用**（`EPERM` 也走这条核对：`kill(pid,0)` 的成功/EPERM 只证明「有同号进程」） |
+| 以上全部一致 | 真持有者，拒绝并说明依据（身份已核实 / 无法核实） |
+
+这两条否决不是锦上添花，而是 bootId/startTicks 判据的**必要护栏**：没有 `machineId`，跨启动判据会把 NFS 共享的 state 根直接判陈旧（旧实现只是概率性出错，新判据会把它变成**确定性双写**）；没有 `pidNamespace`，startTicks 会拿另一个命名空间里的无关同号进程去比，同样确定性双写。代价是这两类越界拓扑**响亮拒绝**而不是静默双写——容器重建且 state 根挂 volume、NFS 共享根都会停在 `state_root_locked`，逃生勾子（移走记录）在错误文案与部署 FAQ 里给足，按「属主私有 + 单机 state 根」的契约这是正确取舍。
+
+读不到身份（无 `/proc`、hidepid、记录缺 ticks）一律**保守锁定**，绝不因为读不到就判死。**pid 等于本进程也不等于 duplicate**：只有身份确为本进程才报 `state_root_duplicate`，重启后旧记录的 pid 恰好等于新进程时必须走接管。**没有身份段的 v1 记录**只做启动代际推断：写入时刻（`startedAt`，回退 mtime）早于本次开机（`/proc/stat` `btime`，非 Linux 用 `now - os.uptime()`；余量 5 分钟吸收开机后的时钟步进）即判陈旧；同一次启动内写下的 v1 记录无法区分 pid 复用，保守锁定，下一次写入即升级 v2。**不重试确定性失败**：`state_root_locked`/`state_root_duplicate` 以退出码 **3** 结束（其余租约错误 = 1），gateway 单元据此设 `RestartPreventExitStatus=3`（一次都不重启）+ `StartLimitIntervalSec=60`/`StartLimitBurst=5`（临时失败最多 5 次就停在 `failed`），`install-gateway.sh restart` 先 `reset-failed` 再 restart——否则重启风暴会把唯一一条可行动信息埋进 journal。
+
+**Rejected alternatives（租约判据）**：① 只比 pid 存活且「EPERM = alive」（原实现）——这就是事故本身：重启后 2445 被 slurmctld 占用，EPERM 被读成「持有者还活着」，永远锁死；② 只用墙钟 `startedAt`——可被 NTP/虚拟机时钟恢复步进或回拨，且无法与另一个进程的启动时刻可靠比较，不构成证据；③ 用 `kill` 成功与否区分同用户/异用户——只区分权限、不区分身份，同用户的 pid 复用同样误判；④ 改用内核 flock/pidfd（随进程死亡释放，最强判据）——Node 无内建 flock，pidfd 需原生扩展与新增运行期依赖（须显式批准），跨平台成本高于收益；目录锁（design 25 §6.3）已用 flock，租约侧以 `(boot_id, starttime)` 元组近似；⑤ 把 `EPERM` 直接判成陈旧——多用户共享 state 根时会把「另一个用户真的是持有者」变成双写者，比锁死更危险。
+
+已知残差：三个进程同时接管同一
 陈旧租约时，第三个可能在还原间隙创建新租约并被覆盖——与所有 pidfile 锁相同，无内核 flock 时不可能数学
-消除；双进程场景（生产现实：systemd + 手动启动）由上述校验**证明地**闭合（`control-plane/test/state/state-root-lease.test.ts` 的 T1/T2/⑦/T9 与 13 条单进程矩阵锁定，含 T3–T6 四条生产入口 end-to-end）。
+消除；双进程场景（生产现实：systemd + 手动启动）由上述校验**证明地**闭合（`control-plane/test/state/state-root-lease.test.ts` 的 T1–T9、身份矩阵（重启 / pid 复用 / 跨命名空间 / 跨机器 / v1 代际 / 自身 pid 复用 / stat 定界）与单进程矩阵锁定，含 T3–T6 四条生产入口 end-to-end 与退出码 3；僵尸分支是代码+注释，无可移植的构造手段，故不作为测试项）。
 
 **桌面凭据存储（`<userData>/gateway-secrets.json`，schema v3）**：
 

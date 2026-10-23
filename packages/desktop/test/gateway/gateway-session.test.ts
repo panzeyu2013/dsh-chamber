@@ -189,6 +189,42 @@ test('a 3xx login answer without the session cookie is an other-failure, never a
   }
 })
 
+test('a refused login names the cause instead of collapsing into "network error"', async () => {
+  // Direct origin (no tunnel authority): nothing listens at the gateway address.
+  const direct = createGatewaySessionManager({ request: stubRequestFactory({ networkError: true }) })
+  try {
+    const origin = { baseUrl: 'http://127.0.0.1:1', insecureHttp: true, scope: 'test:refused-direct' }
+    const result = await direct.ensureSession(origin, PASSWORD)
+    assertFailure(result, 'network')
+    assert.match(result.error, /nothing is listening at the gateway address \(ECONNREFUSED\)/u)
+    assert.doesNotMatch(result.error, /network error/u)
+  } finally {
+    direct.dispose()
+  }
+  // Tunneled origin (authority present): the tunnel is up; the remote port is not.
+  const tunneled = createGatewaySessionManager({ request: stubRequestFactory({ networkError: true }) })
+  try {
+    const origin = { baseUrl: 'http://127.0.0.1:1', insecureHttp: true, scope: 'test:refused-tunnel', authority: 'gw.example.com:30801' }
+    const result = await tunneled.ensureSession(origin, PASSWORD)
+    assertFailure(result, 'network')
+    assert.match(result.error, /the SSH tunnel is up but nothing on the remote gateway port/u)
+    assert.match(result.error, /gateway process is probably not running/u)
+  } finally {
+    tunneled.dispose()
+  }
+})
+
+test('an unclassified socket failure still reports its code', async () => {
+  const mgr = createGatewaySessionManager({ request: stubRequestFactory({ networkError: true, networkErrorCode: 'EACCES' }) })
+  try {
+    const result = await mgr.ensureSession({ baseUrl: 'http://127.0.0.1:1', insecureHttp: true, scope: 'test:code' }, PASSWORD)
+    assertFailure(result, 'network')
+    assert.match(result.error, /\(EACCES\)/u)
+  } finally {
+    mgr.dispose()
+  }
+})
+
 test('a network-level failure classifies as network (unreachable gateway)', async () => {
   const mgr = createGatewaySessionManager({ request: stubRequestFactory({ networkError: true }) })
   try {

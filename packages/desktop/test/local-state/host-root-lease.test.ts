@@ -150,7 +150,9 @@ test('host-root 租约：owner.json 记录 scope/flavor，同进程重复拒绝�
     assert.equal(lease.flavor, 'desktop')
     assert.equal(lease.file, ownerFile)
     const record = JSON.parse(readFileSync(ownerFile, 'utf8')) as Record<string, unknown>
-    assert.equal(record.schemaVersion, 1)
+    // v2 adds the holder identity block the liveness verdict is built on (design 17 §12).
+    assert.equal(record.schemaVersion, 2)
+    assert.equal(typeof record.identity, 'object')
     assert.equal(record.pid, process.pid)
     assert.equal(record.scope, 'host-root')
     assert.equal(record.flavor, 'desktop')

@@ -23,7 +23,9 @@ import {
   acquireStateRootLease,
   assertDedicatedStateRoot,
   retireLegacyStateLocks,
+  stateRootLeaseExitCode,
 } from '../../src/state-root-lease.ts'
+import { bootWallClockMs, captureProcessIdentity, parseProcessStat } from '../../src/process-identity.ts'
 // T3–T6 直接跑生产入口。T6 的 desktop 双根占用只用 desktop 自己的生产函数
 // （host-root 租约 + state 根派生单源），不复制它的派生/租约逻辑。
 import { acquireHostRootLease } from '../../../desktop/host-root-lease.ts'
@@ -178,9 +180,9 @@ function runEntryPoint(args: string[], env: NodeJS.ProcessEnv = process.env): Pr
   })
 }
 
-/** 活写者拒绝的公共断言：exit 1 + code 字面量 + holder pid/flavor + root，且无栈。 */
+/** 活写者拒绝的公共断言：exit 3（确定性，不自动重启）+ code 字面量 + holder pid/flavor + root，且无栈。 */
 function assertLiveWriterRefusal(run: EntryRun, stateRoot: string, holderFlavor: string): void {
-  assert.equal(run.code, 1, 'a live state-root writer must fail the entry with exit 1; stderr=' + run.stderr)
+  assert.equal(run.code, 3, 'a live state-root writer must fail the entry with the no-retry exit code 3; stderr=' + run.stderr)
   assert.match(run.stderr, /state_root_locked/u, 'stderr must carry the machine-readable code: ' + run.stderr)
   assert.ok(run.stderr.includes('is owned by pid ' + String(process.pid) + ' '),
     'stderr must name the holder pid: ' + run.stderr)
@@ -206,13 +208,22 @@ test('单进程：记录形状 / 0700+0600 / 唯一文件 / release 幂等', { s
   assert.equal(modeOf(dir), 0o700)
   assert.equal(modeOf(leaseFile(dir)), 0o600)
   const record = readLease(dir)
-  assert.equal(record.schemaVersion, 1)
+  assert.equal(record.schemaVersion, 2)
   assert.equal(record.pid, process.pid)
   assert.equal(record.token, lease.token)
   assert.equal(record.scope, 'state-root')
   assert.equal(record.flavor, 'control-plane')
   assert.equal(typeof record.startedAt, 'number')
   assert.equal(Number.isSafeInteger(record.startedAt), true)
+  // 身份段是「活」判据的载体：pid 复用/重启的判定全靠它，写入时必须齐全。
+  const identity = record.identity as Record<string, unknown>
+  assert.equal(typeof identity, 'object')
+  assert.equal(typeof identity.procStartTicks === 'number' || identity.procStartTicks === null, true)
+  if (process.platform === 'linux') {
+    assert.match(String(identity.bootId), /^[0-9a-f-]{36}$/u)
+    assert.equal(Number.isSafeInteger(identity.procStartTicks), true)
+    assert.equal(String(identity.pidNamespace).startsWith('pid:['), true)
+  }
   assert.deepEqual(readdirSync(dir), [STATE_ROOT_LEASE_FILENAME], 'the lease is the only file the contract creates')
   assert.doesNotThrow(() => lease.assertCurrent())
   lease.release()
@@ -227,14 +238,17 @@ test('单进程：记录形状 / 0700+0600 / 唯一文件 / release 幂等', { s
 test('单进程：活属主记录拒绝（state_root_locked + holder pid/flavor）', t => {
   const dir = tempDir('cp-lease-live-')
   t.after(() => rmSync(dir, { recursive: true, force: true }))
+  // v1 记录（无身份段）+ 本启动内写入 + pid 被占用：没有「写于开机之前」的证据，
+  // 只能保守锁定。startedAt 必须晚于本次开机，否则它已可按启动代际判死。
   writeFileSync(leaseFile(dir), JSON.stringify({
-    schemaVersion: 1, pid: process.ppid, startedAt: 1, token: 'a'.repeat(48), scope: 'state-root', flavor: 'gateway',
+    schemaVersion: 1, pid: process.ppid, startedAt: Date.now(), token: 'a'.repeat(48), scope: 'state-root', flavor: 'gateway',
   }) + '\n', { mode: 0o600 })
   const error = leaseError(() => acquireStateRootLease(dir, { scope: 'state-root', flavor: 'control-plane' }))
   assert.equal(error.code, 'state_root_locked')
   assert.equal(error.pid, process.ppid)
   assert.equal(error.holder?.flavor, 'gateway')
   assert.match(error.message, /owned by pid/)
+  assert.match(error.message, /could not be verified/)
 })
 
 test('单进程：死 pid 记录被 rename 认领 + 告警', t => {
@@ -268,7 +282,7 @@ test('单进程：空/撕裂记录可认领 + 告警（O_EXCL 创建中途崩溃
 test('单进程：未知 schemaVersion fail-closed（state_root_unreadable，证据保留）', t => {
   const dir = tempDir('cp-lease-future-')
   t.after(() => rmSync(dir, { recursive: true, force: true }))
-  writeFileSync(leaseFile(dir), JSON.stringify({ schemaVersion: 2, pid: 99_999_999, token: 'c'.repeat(48) }) + '\n', { mode: 0o600 })
+  writeFileSync(leaseFile(dir), JSON.stringify({ schemaVersion: 3, pid: 99_999_999, token: 'c'.repeat(48) }) + '\n', { mode: 0o600 })
   const error = leaseError(() => acquireStateRootLease(dir, { scope: 'state-root', flavor: 'control-plane' }))
   assert.equal(error.code, 'state_root_unreadable')
   assert.match(error.message, /schemaVersion/)
@@ -354,10 +368,20 @@ test('单进程：legacy 退役——活 pid 拒绝，死 pid/空文件 identity
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const gatewayLock = join(dir, '.gateway.lock')
   const runtimeOwner = join(dir, 'dsh-runtime', 'owner.json')
-  writeFileSync(gatewayLock, JSON.stringify({ pid: process.ppid, createdAt: 1 }), { mode: 0o600 })
+  writeFileSync(gatewayLock, JSON.stringify({ pid: process.ppid, createdAt: Date.now() }), { mode: 0o600 })
   const liveError = leaseError(() => acquireStateRootLease(dir, { scope: 'state-root', flavor: 'control-plane' }))
   assert.equal(liveError.code, 'state_root_locked')
   assert.match(liveError.message, /legacy state lock/)
+  // 重启后 pid 被别的服务复用：legacy 记录写于本次开机之前 → 直接退役，不再锁死。
+  writeFileSync(gatewayLock, JSON.stringify({ pid: process.ppid, createdAt: Date.now() - 24 * 60 * 60 * 1000 }), { mode: 0o600 })
+  const rebootWarns: string[] = []
+  const afterReboot = acquireStateRootLease(dir, {
+    scope: 'state-root', flavor: 'control-plane', logger: { warn: message => rebootWarns.push(message) },
+  })
+  assert.equal(existsSync(gatewayLock), false, 'a legacy lock written before this boot must be retired')
+  assert.equal(rebootWarns.some(message => message.includes('written before this boot')), true,
+    'the retirement must name the evidence: ' + rebootWarns.join(' | '))
+  afterReboot.release()
   writeFileSync(gatewayLock, JSON.stringify({ pid: 99_999_999, createdAt: 1 }), { mode: 0o600 })
   mkdirSync(join(dir, 'dsh-runtime'), { recursive: true, mode: 0o700 })
   writeFileSync(runtimeOwner, '', { mode: 0o600 })
@@ -370,6 +394,176 @@ test('单进程：legacy 退役——活 pid 拒绝，死 pid/空文件 identity
   assert.equal(warns.some(message => message.includes('retired legacy state lock')), true)
   assert.doesNotThrow(() => retireLegacyStateLocks(dir))
   lease.release()
+})
+
+/**
+ * v2 记录构造器：identity 默认取「给定 pid 的真实身份」，用例按需覆盖单个字段，
+ * 从而在同一台机器上确定性地复现「重启」「pid 复用」「另一台机器」三种场景。
+ */
+function v2Record(overrides: { pid?: number; startedAt?: number; identity?: Record<string, unknown> } = {}): string {
+  const pid = overrides.pid ?? process.ppid
+  return JSON.stringify({
+    schemaVersion: 2,
+    pid,
+    startedAt: overrides.startedAt ?? Date.now(),
+    token: 'a'.repeat(48),
+    scope: 'state-root',
+    flavor: 'gateway',
+    identity: { ...captureProcessIdentity(pid), ...overrides.identity },
+  }) + '\n'
+}
+
+const LINUX_ONLY = { skip: process.platform !== 'linux' }
+
+test('身份：bootId + startTicks 一致 → 活持有者拒绝（不是 pid 复用）', LINUX_ONLY, t => {
+  const dir = tempDir('cp-lease-identity-live-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const bytes = v2Record()
+  writeFileSync(leaseFile(dir), bytes, { mode: 0o600 })
+  const error = leaseError(() => acquireStateRootLease(dir, { scope: 'state-root', flavor: 'control-plane' }))
+  assert.equal(error.code, 'state_root_locked')
+  assert.match(error.message, /process identity matches the lease/u)
+  assert.equal(readFileSync(leaseFile(dir), 'utf8'), bytes, 'a live holder record is never touched')
+})
+
+test('身份：bootId 变化（重启后 pid 被其它进程占用）→ 认领', LINUX_ONLY, t => {
+  const dir = tempDir('cp-lease-identity-reboot-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  // 本次事故的最小复现：记录来自上一次启动，pid 仍被占用（同号复用）。
+  writeFileSync(leaseFile(dir), v2Record({ identity: { bootId: '00000000-0000-4000-8000-000000000000' } }), { mode: 0o600 })
+  const warns: string[] = []
+  const lease = acquireStateRootLease(dir, {
+    scope: 'state-root', flavor: 'control-plane', logger: { warn: message => warns.push(message) },
+  })
+  assert.equal(readLease(dir).pid, process.pid)
+  assert.equal(warns.some(message => message.includes('previous boot')), true, warns.join(' | '))
+  lease.release()
+})
+
+test('身份：bootId 相同、startTicks 不同（同启动内 pid 复用）→ 认领', LINUX_ONLY, t => {
+  const dir = tempDir('cp-lease-identity-reuse-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const actual = captureProcessIdentity(process.ppid).procStartTicks
+  assert.notEqual(actual, null, 'Linux must expose start ticks')
+  writeFileSync(leaseFile(dir), v2Record({ identity: { procStartTicks: (actual as number) + 1 } }), { mode: 0o600 })
+  const warns: string[] = []
+  const lease = acquireStateRootLease(dir, {
+    scope: 'state-root', flavor: 'control-plane', logger: { warn: message => warns.push(message) },
+  })
+  assert.equal(warns.some(message => message.includes('different process')), true, warns.join(' | '))
+  lease.release()
+})
+
+test('身份：记录 pid 等于本进程但 bootId 不同 → 认领（不是 duplicate）', LINUX_ONLY, t => {
+  const dir = tempDir('cp-lease-identity-selfpid-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  // 重启后本进程恰好拿到旧记录的 pid：旧记录不是「本进程已持有」，不能拒绝启动。
+  writeFileSync(leaseFile(dir), v2Record({ pid: process.pid, identity: { bootId: '11111111-1111-4111-8111-111111111111' } }), { mode: 0o600 })
+  const lease = acquireStateRootLease(dir, { scope: 'state-root', flavor: 'control-plane' })
+  assert.equal(lease.held(), true)
+  assert.equal(readLease(dir).pid, process.pid)
+  lease.release()
+})
+
+test('身份：v1 记录 pid 等于本进程且写于本次开机之前 → 认领（不是 duplicate）', t => {
+  const dir = tempDir('cp-lease-legacy-selfpid-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const bootWall = bootWallClockMs()
+  assert.notEqual(bootWall, null, 'a boot epoch must be derivable on this platform')
+  writeFileSync(leaseFile(dir), JSON.stringify({
+    schemaVersion: 1,
+    pid: process.pid,
+    startedAt: (bootWall as number) - 10 * 60 * 1000,
+    token: 'c'.repeat(48),
+    scope: 'state-root',
+    flavor: 'gateway',
+  }) + '\n', { mode: 0o600 })
+  const warns: string[] = []
+  const lease = acquireStateRootLease(dir, {
+    scope: 'state-root', flavor: 'control-plane', logger: { warn: message => warns.push(message) },
+  })
+  assert.equal(lease.held(), true)
+  assert.equal(warns.some(message => message.includes('before this boot')), true, warns.join(' | '))
+  lease.release()
+})
+
+test('身份：同机跨 PID namespace 的记录 → 拒绝接管（pid 无名可指）', LINUX_ONLY, t => {
+  const dir = tempDir('cp-lease-identity-ns-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const bytes = v2Record({ identity: { pidNamespace: 'pid:[999999999]' } })
+  writeFileSync(leaseFile(dir), bytes, { mode: 0o600 })
+  const error = leaseError(() => acquireStateRootLease(dir, { scope: 'state-root', flavor: 'control-plane' }))
+  assert.equal(error.code, 'state_root_locked')
+  assert.match(error.message, /PID namespace/u)
+  assert.equal(readFileSync(leaseFile(dir), 'utf8'), bytes)
+})
+
+test('身份：另一 PID namespace 但跨启动 → 仍按陈旧认领（重启证据优先）', LINUX_ONLY, t => {
+  const dir = tempDir('cp-lease-identity-ns-boot-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  writeFileSync(leaseFile(dir), v2Record({
+    identity: { pidNamespace: 'pid:[999999999]', bootId: '00000000-0000-4000-8000-000000000000' },
+  }), { mode: 0o600 })
+  const lease = acquireStateRootLease(dir, { scope: 'state-root', flavor: 'control-plane' })
+  assert.equal(lease.held(), true)
+  lease.release()
+})
+
+test('身份：记录来自另一台机器（共享 state 根）→ 拒绝接管', LINUX_ONLY, t => {
+  const dir = tempDir('cp-lease-identity-machine-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const bytes = v2Record({ identity: { machineId: 'another-machine-id' } })
+  writeFileSync(leaseFile(dir), bytes, { mode: 0o600 })
+  const error = leaseError(() => acquireStateRootLease(dir, { scope: 'state-root', flavor: 'control-plane' }))
+  assert.equal(error.code, 'state_root_locked')
+  assert.match(error.message, /another machine/u)
+  assert.equal(readFileSync(leaseFile(dir), 'utf8'), bytes)
+})
+
+test('身份：bootId 相同但 startTicks 读不到（hidepid/EPERM）→ 保守锁定', LINUX_ONLY, t => {
+  const dir = tempDir('cp-lease-identity-unreadable-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  writeFileSync(leaseFile(dir), v2Record({ identity: { procStartTicks: null } }), { mode: 0o600 })
+  const error = leaseError(() => acquireStateRootLease(dir, { scope: 'state-root', flavor: 'control-plane' }))
+  assert.equal(error.code, 'state_root_locked')
+  assert.match(error.message, /could not be verified/u)
+})
+
+test('v1 记录写于本次开机之前（pid 被占用）→ 认领（升级路径）', t => {
+  const dir = tempDir('cp-lease-legacy-epoch-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const bootWall = bootWallClockMs()
+  assert.notEqual(bootWall, null, 'a boot epoch must be derivable on this platform')
+  writeFileSync(leaseFile(dir), JSON.stringify({
+    schemaVersion: 1,
+    pid: process.ppid,
+    startedAt: (bootWall as number) - 10 * 60 * 1000,
+    token: 'b'.repeat(48),
+    scope: 'state-root',
+    flavor: 'gateway',
+  }) + '\n', { mode: 0o600 })
+  const warns: string[] = []
+  const lease = acquireStateRootLease(dir, {
+    scope: 'state-root', flavor: 'control-plane', logger: { warn: message => warns.push(message) },
+  })
+  assert.equal(warns.some(message => message.includes('before this boot')), true, warns.join(' | '))
+  lease.release()
+})
+
+test('身份：/proc/<pid>/stat 以最后一个 ) 为字段边界（comm 含空格与括号）', () => {
+  const after = ['S', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18', '4242']
+  const parsed = parseProcessStat('1234 (worker[32]) (x) ' + after.join(' ') + '\n')
+  assert.deepEqual(parsed, { state: 'S', startTicks: 4242 })
+  assert.equal(parseProcessStat('garbage'), null)
+  assert.equal(parseProcessStat('1234 (short) S 1 2'), null)
+})
+
+test('退出码：租约冲突 = 3（不自动重启），其余租约错误 = 1', () => {
+  assert.equal(stateRootLeaseExitCode('state_root_locked'), 3)
+  assert.equal(stateRootLeaseExitCode('state_root_duplicate'), 3)
+  for (const code of ['state_root_unreadable', 'state_root_takeover_race', 'state_root_not_owner'] as const) {
+    assert.equal(stateRootLeaseExitCode(code), 1, code + ' is a retryable startup failure')
+  }
 })
 
 test('单进程：beforeStaleRename 并发缝——误移新鲜记录时还原并 fail-closed', t => {
@@ -474,7 +668,8 @@ test('T9 跨进程：陈旧记录并发认领恰好一个成功', async t => {
 })
 
 // T3–T6 entry-point 行为（R2 plan §8.1）：直接跑生产入口，断言真实 exit code 与
-// stderr；不新增 test-only 生产 helper。
+// stderr；不新增 test-only 生产 helper。exit 3 = 确定性租约冲突（systemd 单元
+// 的 RestartPreventExitStatus 依赖它），与可重试的启动失败（exit 1）区分。
 
 test('T3 entry：gateway auth reset-password 被活写者的短租约拒绝', async t => {
   const dir = tempDir('cp-lease-t3-')
@@ -493,7 +688,7 @@ test('T3 entry：gateway auth reset-password 被活写者的短租约拒绝', as
   assert.equal(existsSync(join(dir, 'jwt-secret')), false, 'no session-secret rotation happened')
 })
 
-test('T4 entry：cli serve 被 gateway 租约拒绝（exit 1 + state_root_locked + pid），且未 spawn 宿主', async t => {
+test('T4 entry：cli serve 被 gateway 租约拒绝（exit 3 + state_root_locked + pid），且未 spawn 宿主', async t => {
   const dir = tempDir('cp-lease-t4-')
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const lease = acquireStateRootLease(dir, { scope: 'state-root', flavor: 'gateway' })
@@ -506,7 +701,7 @@ test('T4 entry：cli serve 被 gateway 租约拒绝（exit 1 + state_root_locked
   assert.equal(run.stdout.includes('listening'), false, 'the refused serve never binds the HTTP surface')
 })
 
-test('T5 entry：standalone 被 gateway 租约拒绝（exit 1 + state_root_locked + pid），且未 spawn 宿主', async t => {
+test('T5 entry：standalone 被 gateway 租约拒绝（exit 3 + state_root_locked + pid），且未 spawn 宿主', async t => {
   const dir = tempDir('cp-lease-t5-')
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const lease = acquireStateRootLease(dir, { scope: 'state-root', flavor: 'gateway' })

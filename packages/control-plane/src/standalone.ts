@@ -5,12 +5,14 @@
  * Boot order: orphan reaper inside start() before the HTTP bind; the managed
  * local dsh host (web profile) is spawned on demand (first POST
  * /api/connections), not eagerly. A live state-root writer fails boot with
- * `state_root_locked` (exit 1, no stack).
+ * `state_root_locked` (exit 3, no stack): a lease conflict is deterministic,
+ * so the process exits with the "do not auto-restart" code.
  *
  * CLI: --port (default 17500), --bind (default 127.0.0.1), --state-dir
  * (explicit > $DSH_CHAMBER_STATE > ~/.dsh-chamber), --dsh-path, --help.
- * Exit codes: 0 clean shutdown (SIGTERM) / --help, 1 startup failure,
- * 2 configuration error, 130 SIGINT.
+ * Exit codes: 0 clean shutdown (SIGTERM) / --help, 1 startup failure that may be
+ * retried, 2 configuration error, 3 state root held by another writer,
+ * 130 SIGINT.
  */
 
 import { statSync } from 'node:fs'
@@ -22,6 +24,7 @@ import {
   installGracefulShutdown,
   resolveStateRoot,
   StateRootLeaseError,
+  stateRootLeaseExitCode,
 } from './index.ts'
 import type { Logger } from './types.ts'
 
@@ -48,8 +51,9 @@ Options:
                     (default $DSH_CHAMBER_DSH_PATH or <repo>/ref-dsh)
   -h, --help        show this help
 
-Exit codes: 0 clean shutdown/help, 1 startup failure, 2 configuration error,
-130 SIGINT.
+Exit codes: 0 clean shutdown/help, 1 startup failure that may be retried,
+2 configuration error, 3 state root held by another writer (no automatic
+retry), 130 SIGINT.
 `
 
 class UsageError extends Error {}
@@ -188,7 +192,7 @@ async function main(): Promise<number | null> {
     // code; never print a stack here.
     if (error instanceof StateRootLeaseError) {
       logger.error(`${error.code}: ${error.message}`)
-      return 1
+      return stateRootLeaseExitCode(error.code)
     }
     throw error
   }
