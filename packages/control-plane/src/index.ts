@@ -1466,6 +1466,7 @@ export {
   retireLegacyStateLocks,
   STATE_ROOT_LEASE_FILENAME,
   StateRootLeaseError,
+  stateRootLeaseExitCode,
 } from './state-root-lease.ts'
 export type {
   ResolveStateRootOptions,

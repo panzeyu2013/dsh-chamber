@@ -76,6 +76,9 @@
 ### 1.5 平台、发布与外部凭据
 
 - **gateway**：Linux unit 登录环境；ssh/http cookie 注入未覆盖；旧来源插件播种 400（重建未排期）；运维页缺 `recover-metadata`/`cleanup-version`/`restore-pre-rollback`；S0/S2-c 未实现；设计 21 对齐（只读/seed 端到端、tooltip、英文串）。
+- **租约身份的跨平台残差**：`bootId`/`startTicks`/`pidNamespace`/`machineId` 只有 Linux 提供（`packages/control-plane/src/process-identity.ts`）；macOS/Windows 的 v2 记录仍只有启动代际推断，同一启动内的 pid 复用保守锁定（宁锁不双写）。
+- **租约的越界拓扑（有意拒绝）**：`machineId`/`pidNamespace` 与当前环境不同的记录按「共享/迁移的 state 根」拒绝接管。容器重建而 state 根挂 volume（machine-id 与 PID namespace 都会变）与 NFS 共享根因此停在 `state_root_locked`，恢复 = 移走 `owner.json`（部署 FAQ 已写）；改成「缺省接管」会把 NFS/双容器场景变成确定性双写，故保留拒绝。判据 = `docs/design/17` §12 判定矩阵。
+- **运行时安装现场的 pid 判活**：`dsh-runtime` 的 `isPidAlive`（`cleanupStaleInstalls`，`packages/dsh-runtime/src/dsh-runtime-store.ts`）仍按「同号进程存在」判活；安装中硬崩溃 + 重启后 pid 被复用会让清理一直抛「仍有活动写进程」，托管 dsh 起不来。pid 文件只有数字、没有身份元组，修法与本轮租约同形（写 bootId+startTicks），未排期。
 - **install/runtime**：`install` 不同步锚（待裁）；dl 运行时 macOS 全链/Linux/gateway 重连/`restartLocal` 交错/ZFS EAGAIN；上游装载面 `compose()` 10.65MiB、`SubagentHeaderLineage` 缺 class、首帧超时；会话可靠性六项；`protobufjs`/`@google/genai` 待 M2 证据。
 - **桌面更新（design 11）**：真实 Apple 凭据 CI、双平台清单、通道封签打包态实证；`checkNow()` 在 runCheck 门跳过仍回 ok、渲染门缺 `downloadStallPending` 腿（待裁回 `{ok:false}` 或补腿；判据 = 按钮可点必须有效果或明确禁用）。S-52 = Sparkle quit 与在飞关窗相撞（≤2s 窗、~0.6，未实机；修 = 区分在飞决策/重复退出）。
 - **认证 Gateway**：生产 TLS/SPKI/`remote.mux` 恢复、三形态重登/撤销、`/chamber/runtime` TLS、Linux 升级回退、`--bind 0.0.0.0` 负例；凭据重置/改密 CLI。

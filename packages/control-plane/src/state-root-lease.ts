@@ -4,11 +4,18 @@
  * 契约：一个 state 根同一时刻只有一个写者，判据是 <stateRoot>/owner.json 的 O_EXCL
  * 创建与 token/inode：
  *
- *   - 活 pid：响亮拒绝（state_root_locked，携带 holder pid/flavor）；
- *   - 死 pid（ESRCH）：rename 到唯一 .stale-* 证据名，证明移动的正是先前读到的精确
+ *   - 活持有者：响亮拒绝（state_root_locked，携带 holder pid/flavor）；
+ *   - 陈旧记录：rename 到唯一 .stale-* 证据名，证明移动的正是先前读到的精确
  *     字节 + inode 后重建；任何证明缺口 fail-closed（state_root_takeover_race）；
  *   - 撕裂/空记录：认领 + 告警；release 只按 token + inode 精确删除，不匹配时
  *     state_root_not_owner 且绝不删除；同进程同根第二个 acquire 为 state_root_duplicate。
+ *
+ * 「活」的判据是**持有者身份**，不是 pid 存活：记录带 identity 段（machineId /
+ * bootId / pidNamespace / startTicks，见 process-identity.ts），判定顺序为
+ * 跨机 → 跨启动 → 跨 PID namespace → 进程不存在 → startTicks 不符，全部一致才
+ * 算「真的有人在占」。没有身份段的 v1 记录只做启动代际推断（写入时刻早于本次
+ * 开机 ⇒ 必然陈旧）；读不到身份时保守锁定。**EPERM 不再等价于 alive**：它只
+ * 说明存在同号进程，必须继续用 startTicks 核对。
  *
  * 本模块不 import electron / dsh-runtime，是 control-plane 公共面的一部分。
  */
@@ -17,6 +24,17 @@ import { renameSync, realpathSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join, parse, resolve } from 'node:path'
 import { errorMessage } from './error-text.ts'
+import {
+  EMPTY_PROCESS_IDENTITY,
+  bootWallClockMs,
+  captureProcessIdentity,
+  currentBootId,
+  currentMachineId,
+  currentPidNamespace,
+  probeProcess,
+  type ProcessIdentity,
+  type ProcessObservation,
+} from './process-identity.ts'
 import {
   createPrivateFileExclusiveNoFollow,
   ensurePrivateDirectoryNoFollow,
@@ -29,6 +47,23 @@ import {
 
 /** 唯一租约文件名（<stateRoot>/owner.json）。 */
 export const STATE_ROOT_LEASE_FILENAME = 'owner.json'
+
+/**
+ * 入口进程的「确定性租约冲突」退出码。
+ *
+ * 语义：**重试没有意义**，必须有人停掉持有者或换 state 根。systemd 单元据此设
+ * `RestartPreventExitStatus=3`，一次都不重启；临时性启动失败仍走 1。桌面
+ * sidecar 有自己的 0/3/70 分级（租约失败是 70=启动失败，3 专指 L1 目录锁冲
+ * 突），两者不共用数值契约，只在「确定性冲突不自动重启」上同义。
+ */
+const STATE_ROOT_LEASE_CONFLICT_EXIT_CODE = 3
+
+/** 租约错误 → 进程退出码。 */
+export function stateRootLeaseExitCode(code: StateRootLeaseCode): number {
+  return code === 'state_root_locked' || code === 'state_root_duplicate'
+    ? STATE_ROOT_LEASE_CONFLICT_EXIT_CODE
+    : 1
+}
 
 /** 一次性 legacy 退役路径（相对 stateRoot）。 */
 export const LEGACY_STATE_ROOT_LOCK_PATHS: readonly string[] = [
@@ -64,10 +99,26 @@ export function resolveStateRoot(options: ResolveStateRootOptions = {}): string 
   return DEFAULT_STATE_DIR
 }
 
-const LEASE_SCHEMA_VERSION = 1
+/** 写入格式：v2 = v1 + identity 段（持有者身份）。 */
+const LEASE_SCHEMA_VERSION = 2
+/**
+ * 可读格式：v1（无 identity 段）与 v2。v1 只在升级路径上出现——把它读成
+ * `future` 会让升级后的第一次启动被自己的旧记录锁死，正好复现本模块要消灭的
+ * 事故。更新版本的记录（3+）仍然 fail-closed。
+ */
+const SUPPORTED_LEASE_SCHEMA_VERSIONS: readonly number[] = [1, 2]
 const LEASE_MAX_BYTES = 16 * 1024
 const LEASE_TOKEN_BYTES = 24
 const TAKEOVER_ATTEMPTS = 3
+/**
+ * 启动代际推断的余量。
+ *
+ * 无身份段的记录只能靠「写入时刻早于本次开机」判定陈旧。开机后墙钟被 NTP 步
+ * 进时，这个推断可能把同一启动内写下的记录误判成开机前——故只在证据明显早于
+ * 开机（≥ 5 分钟）时采用。反向代价是「刚写下就重启」且 pid 恰好被复用的记录
+ * 仍会保守锁定，需要人工清理；这是有意的取舍：误判陈旧会制造双写者。
+ */
+const BOOT_EPOCH_MARGIN_MS = 5 * 60 * 1000
 
 export type StateRootLeaseScope = 'state-root' | 'host-root'
 export type StateRootLeaseFlavor = 'control-plane' | 'gateway' | 'gateway-cli' | 'desktop' | 'sidecar'
@@ -134,14 +185,39 @@ interface LeaseRecordView {
   startedAt: number | null
   token: string | null
   flavor: string | null
+  identity: ProcessIdentity
 }
 
-type RawRead = { kind: 'missing' } | { kind: 'present'; raw: string; identity: PrivateFileIdentity }
+type RawRead =
+  | { kind: 'missing' }
+  | { kind: 'present'; raw: string; identity: PrivateFileIdentity; mtimeMs: number }
 
 type Classified =
   | { kind: 'record'; record: LeaseRecordView }
   | { kind: 'torn'; reason: string }
   | { kind: 'future'; reason: string }
+
+/** 陈旧判据：每一条都是「记录里的持有者不可能还在」的可证实结论。 */
+type StaleReason =
+  | 'process-absent'
+  | 'process-zombie'
+  | 'rebooted'
+  | 'pid-reused'
+  | 'record-predates-boot'
+
+/**
+ * 对一条记录的持有者判定。
+ *
+ * - stale      记录已失效，可以 rename 认领；
+ * - live       同号进程存在且身份未能否定（verified=false 表示读不到身份）；
+ * - foreign-*  记录来自另一台机器 / 另一个 PID namespace：既不是陈旧，也不能
+ *              接管（pid 在对方的命名空间里才有意义），只能响亮失败。
+ */
+type HolderVerdict =
+  | { kind: 'stale'; reason: StaleReason }
+  | { kind: 'live'; verified: boolean }
+  | { kind: 'foreign-machine'; machineId: string; host: string | null }
+  | { kind: 'foreign-namespace'; pidNamespace: string }
 
 function comparablePath(path: string): string {
   const absolute = resolve(path)
@@ -184,7 +260,7 @@ function canonicalLeaseKey(stateRoot: string): string {
 function readRawFile(file: string, stateRoot: string): RawRead {
   try {
     const read = readPrivateFileNoFollow(file, { maxBytes: LEASE_MAX_BYTES })
-    return { kind: 'present', raw: read.value, identity: read.identity }
+    return { kind: 'present', raw: read.value, identity: read.identity, mtimeMs: read.mtimeMs }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' }
     throw new StateRootLeaseError(
@@ -203,7 +279,7 @@ function classifyRaw(raw: string): Classified {
   }
   const candidate = parsed as Record<string, unknown>
   const version = candidate.schemaVersion
-  if (version !== undefined && version !== LEASE_SCHEMA_VERSION) {
+  if (version !== undefined && (typeof version !== 'number' || !SUPPORTED_LEASE_SCHEMA_VERSIONS.includes(version))) {
     return { kind: 'future', reason: 'unsupported schemaVersion ' + String(version) }
   }
   const pid = candidate.pid
@@ -217,20 +293,85 @@ function classifyRaw(raw: string): Classified {
       startedAt: typeof candidate.startedAt === 'number' && Number.isFinite(candidate.startedAt) ? candidate.startedAt : null,
       token: typeof candidate.token === 'string' && candidate.token.length > 0 ? candidate.token : null,
       flavor: typeof candidate.flavor === 'string' ? candidate.flavor : null,
+      identity: parseRecordIdentity(candidate.identity),
     },
   }
 }
 
-function probePid(pid: number): 'alive' | 'dead' {
-  try {
-    process.kill(pid, 0)
-    return 'alive'
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code
-    if (code === 'EPERM') return 'alive'
-    if (code === 'ESRCH') return 'dead'
-    throw error
+/** 身份段的逐字段校验：任何形状不符的字段降级为 null（由判定逻辑保守处理）。 */
+function parseRecordIdentity(value: unknown): ProcessIdentity {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return { ...EMPTY_PROCESS_IDENTITY }
   }
+  const raw = value as Record<string, unknown>
+  const text = (key: string): string | null => {
+    const field = raw[key]
+    if (typeof field !== 'string') return null
+    const trimmed = field.trim()
+    if (trimmed === '' || trimmed.length > 128) return null
+    // 身份字段会被原样嵌进日志与错误文本：只收可打印 ASCII，控制字符能把
+    // 一条伪造的 journal 行塞进诊断输出（记录属主私有，但仍可能被拷贝/篡改）。
+    return /^[\x20-\x7e]+$/u.test(trimmed) ? trimmed : null
+  }
+  const ticks = raw.procStartTicks
+  return {
+    host: text('host'),
+    machineId: text('machineId'),
+    bootId: text('bootId'),
+    pidNamespace: text('pidNamespace'),
+    procStartTicks: typeof ticks === 'number' && Number.isSafeInteger(ticks) && ticks >= 0 ? ticks : null,
+  }
+}
+
+/**
+ * 判定记录里的持有者是否还占着 state 根。
+ *
+ * 判据顺序即证据强度顺序：跨机器是「不是同一个仲裁域」；bootId 不等是重启
+ * （整批作废，与 pid 无关）；同一启动内跨 PID namespace 意味着 pid 在此无名可
+ * 指；进程不存在是 ESRCH 或僵尸；startTicks 不等是同一启动内的 pid 复用——
+ * EPERM 也走这条核对，因为 `kill(pid, 0)` 的成功/EPERM 只证明「有同号进程」。
+ * 身份读不到时保守返回 live(unverified)，绝不因为读不到就判死。
+ */
+function judgeHolder(
+  record: LeaseRecordView,
+  observed: ProcessObservation,
+  mtimeMs: number | null,
+  now: number,
+): HolderVerdict {
+  const machine = currentMachineId()
+  if (record.identity.machineId !== null && machine !== null && record.identity.machineId !== machine) {
+    return { kind: 'foreign-machine', machineId: record.identity.machineId, host: record.identity.host }
+  }
+  // 重启判据在 namespace 之前：同一台机器上 bootId 不等 ⇒ 记录写者已随重启
+  // 消失，与它当时在哪个 PID namespace 无关（跨机器已在上一步排除）。
+  const boot = currentBootId()
+  const bootComparable = record.identity.bootId !== null && boot !== null
+  if (bootComparable && record.identity.bootId !== boot) return { kind: 'stale', reason: 'rebooted' }
+  const namespace = currentPidNamespace()
+  if (record.identity.pidNamespace !== null && namespace !== null && record.identity.pidNamespace !== namespace) {
+    return { kind: 'foreign-namespace', pidNamespace: record.identity.pidNamespace }
+  }
+  if (observed.presence === 'absent') {
+    const zombie = observed.state === 'Z' || observed.state === 'X' || observed.state === 'x'
+    return { kind: 'stale', reason: zombie ? 'process-zombie' : 'process-absent' }
+  }
+  if (bootComparable && observed.presence === 'present'
+    && record.identity.procStartTicks !== null && observed.startTicks !== null) {
+    return record.identity.procStartTicks === observed.startTicks
+      ? { kind: 'live', verified: true }
+      : { kind: 'stale', reason: 'pid-reused' }
+  }
+  // 没有身份段的 v1 记录：唯一可证的失效是「写入时刻早于本次开机」。记录若是
+  // 上一启动写下的，写它的进程必然已随重启消失；同启动内的 pid 复用则无证据，
+  // 保守锁定（记录会被后续版本重新写成 v2，届时即可精确判定）。
+  if (record.identity.bootId === null) {
+    const writtenAt = record.startedAt ?? mtimeMs
+    const bootWall = bootWallClockMs(now)
+    if (writtenAt !== null && bootWall !== null && writtenAt < bootWall - BOOT_EPOCH_MARGIN_MS) {
+      return { kind: 'stale', reason: 'record-predates-boot' }
+    }
+  }
+  return { kind: 'live', verified: false }
 }
 
 function parseRecordPid(raw: string): number | null {
@@ -241,26 +382,82 @@ function parseRecordPid(raw: string): number | null {
   } catch { return null }
 }
 
-function lockedError(stateRoot: string, file: string, record: LeaseRecordView): StateRootLeaseError {
+function shortId(value: string): string {
+  return value.length <= 12 ? value : value.slice(0, 12) + '…'
+}
+
+/** 判定依据的人类可读后缀：告诉操作者「为什么不是陈旧记录」。 */
+function verdictBasis(verdict: Extract<HolderVerdict, { kind: 'live' } | { kind: 'foreign-machine' } | { kind: 'foreign-namespace' }>): string {
+  if (verdict.kind === 'foreign-machine') {
+    return '; the record was written on another machine'
+      + (verdict.host === null ? '' : ' (' + verdict.host + ')')
+      + ' [' + shortId(verdict.machineId) + '], and a state root shared across machines cannot be arbitrated by pid'
+  }
+  if (verdict.kind === 'foreign-namespace') {
+    return '; the record belongs to PID namespace ' + shortId(verdict.pidNamespace)
+      + ', not this one, so its pid does not name a process here'
+  }
+  if (verdict.verified) {
+    return '; its process identity matches the lease (same boot and start time), so this is a live holder, not a reused pid'
+  }
+  return '; the pid exists but its identity could not be verified against the lease (no readable /proc entry, or the record predates the identity fields), so the lease stays locked conservatively'
+}
+
+function lockedError(
+  stateRoot: string,
+  file: string,
+  record: LeaseRecordView,
+  verdict: Extract<HolderVerdict, { kind: 'live' } | { kind: 'foreign-machine' } | { kind: 'foreign-namespace' }>,
+): StateRootLeaseError {
   const holder: StateRootLeaseHolder = { pid: record.pid, flavor: record.flavor, startedAt: record.startedAt }
-  const started = record.startedAt === null ? '' : ' (started ' + new Date(record.startedAt).toISOString() + ')'
+  // startedAt 是记录写入时刻，不是进程启动时刻——文案不冒充后者。
+  const written = record.startedAt === null ? '' : ' (record written ' + new Date(record.startedAt).toISOString() + ')'
+  const escape = verdict.kind === 'foreign-machine' || verdict.kind === 'foreign-namespace'
+    ? '; if this state root was copied, migrated or mounted from another environment, move the record aside; otherwise stop that writer'
+    : verdict.verified
+      ? '; stop it or pass an explicit --state-dir/DSH_*_STATE'
+      : '; stop the holder, or pass an explicit --state-dir/DSH_*_STATE'
   return new StateRootLeaseError(
     'state_root_locked',
     'state root ' + stateRoot + ' is owned by pid ' + record.pid
-      + (record.flavor === null ? '' : ' (' + record.flavor + ')') + started
-      + '; stop it or pass an explicit --state-dir/DSH_*_STATE (' + file + ')',
+      + (record.flavor === null ? '' : ' (' + record.flavor + ')') + written
+      + verdictBasis(verdict) + escape + ' (' + file + ')',
     { stateRoot, pid: record.pid, holder },
   )
+}
+
+/** 陈旧判据的诊断文本（接管告警里说明「凭什么判死」）。 */
+function staleReasonText(reason: StaleReason): string {
+  switch (reason) {
+    case 'process-absent': return 'owner pid is not running'
+    case 'process-zombie': return 'owner pid is a zombie (already exited)'
+    case 'rebooted': return 'record belongs to a previous boot'
+    case 'pid-reused': return 'pid now belongs to a different process (start time mismatch)'
+    case 'record-predates-boot': return 'record was written before this boot'
+  }
 }
 
 function staleEvidencePath(file: string): string {
   return file + '.stale-' + process.pid + '-' + randomBytes(4).toString('hex')
 }
 
+/** legacy 记录自称的写入时刻（startedAt / createdAt）；不可读为 null。 */
+function parseRecordTimestamp(raw: string): number | null {
+  try {
+    const parsed = JSON.parse(raw) as { startedAt?: unknown; createdAt?: unknown }
+    const value = parsed?.startedAt ?? parsed?.createdAt
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+  } catch { return null }
+}
+
 /**
- * 一次性 legacy 退役：`.gateway.lock` 与 `dsh-runtime/owner.json`。活 pid →
- * state_root_locked；不安全 → state_root_unreadable；死 pid/空/不可解析 → rename
- * 取证 + identity 精确删除。独立函数 + 单一调用点（claim()）。
+ * 一次性 legacy 退役：`.gateway.lock` 与 `dsh-runtime/owner.json`。活持有者 →
+ * state_root_locked；不安全 → state_root_unreadable；进程已不存在/空/不可解析/写于本次
+ * 开机之前 → rename 取证 + identity 精确删除。独立函数 + 单一调用点（claim()）。
+ *
+ * legacy 格式没有身份段，但同样不能把「同号进程存在」当成「老版本还活着」：
+ * 重启后 pid 被别的服务复用，正是这类文件永久锁死的路径。写入时刻早于本次开
+ * 机（含 mtime 回退）即可证明写者已随重启消失。
  */
 export function retireLegacyStateLocks(stateRoot: string, logger?: StateRootLeaseLogger): void {
   const root = resolve(stateRoot)
@@ -269,13 +466,23 @@ export function retireLegacyStateLocks(stateRoot: string, logger?: StateRootLeas
     const observed = readRawFile(file, root)
     if (observed.kind === 'missing') continue
     const pid = parseRecordPid(observed.raw)
-    if (pid !== null && probePid(pid) === 'alive') {
-      throw new StateRootLeaseError(
-        'state_root_locked',
-        'legacy state lock ' + file + ' is held by live pid ' + pid
-          + '; stop the old-version process before starting a lease-owning writer',
-        { stateRoot: root, pid, holder: { pid, flavor: null, startedAt: null } },
-      )
+    const recordedAt = pid === null ? null : parseRecordTimestamp(observed.raw)
+    let retiredWhy = ''
+    if (pid !== null) {
+      const presence = probeProcess(pid).presence
+      const writtenAt = recordedAt ?? observed.mtimeMs
+      const bootWall = bootWallClockMs()
+      const predatesBoot = writtenAt !== null && bootWall !== null && writtenAt < bootWall - BOOT_EPOCH_MARGIN_MS
+      if (presence !== 'absent' && !predatesBoot) {
+        throw new StateRootLeaseError(
+          'state_root_locked',
+          'legacy state lock ' + file + ' is held by live pid ' + pid
+            + (presence === 'unknown' ? ' (the pid could not be probed conclusively)' : '')
+            + '; stop the old-version process before starting a lease-owning writer',
+          { stateRoot: root, pid, holder: { pid, flavor: null, startedAt: recordedAt } },
+        )
+      }
+      retiredWhy = predatesBoot ? ', written before this boot' : ''
     }
     const stale = staleEvidencePath(file)
     try {
@@ -304,7 +511,7 @@ export function retireLegacyStateLocks(stateRoot: string, logger?: StateRootLeas
       )
     }
     try { removePrivateFileNoFollow(stale, observed.identity) } catch { /* unique evidence is non-authoritative */ }
-    logger?.warn('state-root-lease: retired legacy state lock ' + file + ' (owner pid ' + (pid === null ? 'unreadable' : String(pid)) + ')')
+    logger?.warn('state-root-lease: retired legacy state lock ' + file + ' (owner pid ' + (pid === null ? 'unreadable' : String(pid)) + retiredWhy + ')')
   }
 }
 
@@ -360,7 +567,7 @@ class StateRootLeaseHandle implements StateRootLease {
     if (heldLeases.get(this.#key) === this) heldLeases.delete(this.#key)
   }
 
-  /** O_EXCL 创建 / 死 pid rename 认领；成功安装本次租约，失败一律 fail-closed。 */
+  /** O_EXCL 创建 / 陈旧记录 rename 认领；成功安装本次租约，失败一律 fail-closed。 */
   claim(): void {
     assertDedicatedStateRoot(this.stateRoot)
     ensurePrivateDirectoryNoFollow(this.stateRoot, 0o700)
@@ -378,6 +585,8 @@ class StateRootLeaseHandle implements StateRootLease {
     retireLegacyStateLocks(this.stateRoot, this.#options.logger)
 
     const token = randomBytes(LEASE_TOKEN_BYTES).toString('hex')
+    // startedAt 是**记录写入**时刻（旧记录用它做启动代际推断）；进程启动时刻由
+    // identity.procStartTicks 精确表达，两者不可互换。
     const payload = JSON.stringify({
       schemaVersion: LEASE_SCHEMA_VERSION,
       pid: process.pid,
@@ -385,6 +594,7 @@ class StateRootLeaseHandle implements StateRootLease {
       token,
       scope: this.scope,
       flavor: this.flavor,
+      identity: captureProcessIdentity(process.pid),
     }) + '\n'
 
     for (let attempt = 0; attempt < TAKEOVER_ATTEMPTS; attempt += 1) {
@@ -417,8 +627,15 @@ class StateRootLeaseHandle implements StateRootLease {
           { stateRoot: this.stateRoot },
         )
       }
+      let staleReason: StaleReason | null = null
       if (classified.kind === 'record') {
-        if (classified.record.pid === process.pid) {
+        const observedProcess = probeProcess(classified.record.pid)
+        const verdict = judgeHolder(classified.record, observedProcess, observed.mtimeMs, Date.now())
+        if (verdict.kind === 'stale') {
+          staleReason = verdict.reason
+        } else if (verdict.kind === 'live' && classified.record.pid === process.pid) {
+          // 只有「身份确为本进程」才是 duplicate；重启后旧记录的 pid 恰好等于本
+          // 进程时（同号复用）它仍是陈旧记录，绝不能据此拒绝启动。
           throw new StateRootLeaseError(
             'state_root_duplicate',
             'state-root lease record already belongs to this process (pid ' + process.pid + '): ' + this.file,
@@ -428,8 +645,9 @@ class StateRootLeaseHandle implements StateRootLease {
               holder: { pid: process.pid, flavor: classified.record.flavor, startedAt: classified.record.startedAt },
             },
           )
+        } else {
+          throw lockedError(this.stateRoot, this.file, classified.record, verdict)
         }
-        if (probePid(classified.record.pid) === 'alive') throw lockedError(this.stateRoot, this.file, classified.record)
       }
       if (classified.kind === 'torn') {
         this.#options.logger?.warn('state-root-lease: claiming a torn lease record at ' + this.file + ' (' + classified.reason + ')')
@@ -463,7 +681,8 @@ class StateRootLeaseHandle implements StateRootLease {
       }
       try { removePrivateFileNoFollow(stale, observed.identity) } catch { /* unique evidence is non-authoritative */ }
       if (classified.kind === 'record') {
-        this.#options.logger?.warn('state-root-lease: took over a stale lease record at ' + this.file + ' (owner pid ' + classified.record.pid + ' is not running)')
+        this.#options.logger?.warn('state-root-lease: took over a stale lease record at ' + this.file
+          + ' (owner pid ' + classified.record.pid + ': ' + staleReasonText(staleReason ?? 'process-absent') + ')')
       }
     }
     throw new StateRootLeaseError(

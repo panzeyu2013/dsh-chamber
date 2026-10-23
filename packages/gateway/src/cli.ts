@@ -9,7 +9,7 @@
  */
 
 import { readFileSync } from 'node:fs'
-import { StateRootLeaseError, defaultDshWorkspacePath, resolveStateRoot, type Logger } from '@dsh-chamber/control-plane'
+import { StateRootLeaseError, defaultDshWorkspacePath, resolveStateRoot, stateRootLeaseExitCode, type Logger } from '@dsh-chamber/control-plane'
 import { isDshWorkspace } from '@dsh-chamber/dsh-runtime'
 import { GatewayConfigError, parseGatewayConfig } from './config.ts'
 import { findDshWorkspace } from './dsh-path.ts'
@@ -98,8 +98,9 @@ Environment:
 TLS terminates at a reverse proxy. Configure --public-origin and one or more
 exact --trusted-proxy peers; this process intentionally serves HTTP only.
 
-Exit codes: 0 clean shutdown/help, 1 startup failure, 2 configuration error,
-130 SIGINT.
+Exit codes: 0 clean shutdown/help, 1 startup failure that may be retried,
+2 configuration error, 3 state root held by another writer (deterministic: no
+automatic retry), 130 SIGINT.
 `
 
 const AUTH_HELP = `gateway auth — manage gateway credentials while the gateway is STOPPED
@@ -377,11 +378,13 @@ async function main(): Promise<number | null> {
   try {
     gateway = createGateway({ config, logger })
   } catch (error) {
-    // A live writer on this state root is a startup failure (exit 1), never a
-    // configuration error; the message names the holder and the escape hatch.
+    // A live writer on this state root is deterministic (exit 3), never a
+    // configuration error and never retried automatically: the message names the
+    // holder, the evidence and the escape hatch. The systemd unit pins
+    // RestartPreventExitStatus=3 so a reboot/pid-reuse cannot become a restart loop.
     if (error instanceof StateRootLeaseError) {
-      logger.error(error.message)
-      return 1
+      logger.error(`${error.code}: ${error.message}`)
+      return stateRootLeaseExitCode(error.code)
     }
     throw error
   }

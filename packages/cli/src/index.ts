@@ -7,7 +7,7 @@
  * JSON.stringify 原样输出。
  */
 
-import { createControlPlane, DEFAULT_CONTROL_PLANE_PORT, installGracefulShutdown, StateRootLeaseError } from '@dsh-chamber/control-plane'
+import { createControlPlane, DEFAULT_CONTROL_PLANE_PORT, installGracefulShutdown, StateRootLeaseError, stateRootLeaseExitCode } from '@dsh-chamber/control-plane'
 import { followNewLines } from './follow-filter.ts'
 
 const DEFAULT_URL = `http://127.0.0.1:${DEFAULT_CONTROL_PLANE_PORT}`
@@ -236,11 +236,12 @@ async function serveCommand({ flags }: ParsedArgs) {
   try {
     await plane.start()
   } catch (error) {
-    // 重新获取租约时的冲突（构造到 start 间 root 被接管）必须保留 stderr 的机器可读 code。
+    // 重新获取租约时的冲突（构造到 start 间 root 被接管）必须保留 stderr 的机器可读 code；
+    // 租约冲突是确定性失败，用「不自动重启」的退出码（3）与可重试的启动失败（1）分开。
     logger.error(error instanceof StateRootLeaseError
       ? `failed to start: ${error.code}: ${error.message}`
       : `failed to start: ${String(error)}`)
-    process.exit(1)
+    process.exit(error instanceof StateRootLeaseError ? stateRootLeaseExitCode(error.code) : 1)
   }
 }
 
@@ -555,6 +556,7 @@ try {
   // 状态目录租约冲突必须逐字透出机器可读 code；绝不打印 stack。
   if (err instanceof StateRootLeaseError) {
     console.error(`dsh-chamber: ${err.code}: ${err.message}`)
+    process.exit(stateRootLeaseExitCode(err.code))
   } else {
     console.error(`dsh-chamber: ${err instanceof Error ? err.message : String(err)}`)
   }
