@@ -14,6 +14,7 @@ import {
   domainResult,
   type GitCommandRequest,
   type GitWorktreeDomainError,
+  type WorkspaceFact,
 } from '../src/core.ts'
 import {
   MAIN,
@@ -241,6 +242,189 @@ test('the unregistered removal leg uses the same fresh-topology proof', async ()
   assert.equal(error.code, 'git-command-failed')
   assert.equal(error.retryable, false)
   assert.equal(mutationCalls(probe.repo, 'remove').length, 0)
+})
+
+test('the proof reaches the repository through the failure path itself when no sibling workspace exists', async () => {
+  const { core, repo, workspaces } = setup({ linked: true })
+  const { expected } = await targetOf(core)
+  const adminGitDir = `${COMMON}/worktrees/feature`
+  repo.existing.add(adminGitDir)
+  repo.revParseGitDirs.add(adminGitDir)
+  const workspaceIndex = workspaces.findIndex(candidate => candidate.workspaceId === 'ws-feature')
+  workspaces[workspaceIndex] = { ...workspaces[workspaceIndex]!, path: adminGitDir }
+  // No healthy sibling workspace: the workspace walk alone cannot find this repository,
+  // so only the failing path's own `--git-common-dir` probe can prove the target remains.
+  workspaces.splice(workspaces.findIndex(candidate => candidate.workspaceId === 'ws-main'), 1)
+
+  const refused = await domainResult(() => core.remove({
+    operationId: 'proof-single-workspace',
+    workspaceId: 'ws-feature',
+    expected,
+  }))
+  assert.ok(!refused.ok)
+  const error = (refused as { ok: false; error: GitWorktreeDomainError }).error
+  assert.equal(error.code, 'git-command-failed')
+  assert.equal(error.retryable, false)
+  assert.equal(mutationCalls(repo, 'remove').length, 0)
+  assert.ok(
+    repo.calls.some(call => call.cwd === adminGitDir && call.args.includes('--git-common-dir')),
+    'the proof probes the failing path itself (Git still answers with the common dir there)',
+  )
+})
+
+test('a vanished target directory keeps the failure retryable even when the admin row survives', async () => {
+  const probe = setup({ linked: true })
+  const { expected } = await targetOf(probe.core)
+  const adminGitDir = `${COMMON}/worktrees/feature`
+  probe.repo.existing.add(adminGitDir)
+  probe.repo.revParseGitDirs.add(adminGitDir)
+  const workspaceIndex = probe.workspaces.findIndex(candidate => candidate.workspaceId === 'ws-feature')
+  probe.workspaces[workspaceIndex] = { ...probe.workspaces[workspaceIndex]!, path: adminGitDir }
+  // The admin record still lists the worktree while its directory is gone: a committed
+  // removal can leave exactly this state (design 08 §5.3), so nothing may be proven.
+  probe.repo.existing.delete(LINKED)
+
+  const result = await domainResult(() => probe.core.remove({
+    operationId: 'proof-missing-row',
+    workspaceId: 'ws-feature',
+    expected,
+  }))
+  assert.ok(!result.ok)
+  const error = (result as { ok: false; error: GitWorktreeDomainError }).error
+  assert.equal(error.code, 'git-command-failed')
+  assert.equal(error.retryable, true, 'a missing directory cannot prove the removal never committed')
+  assert.equal(mutationCalls(probe.repo, 'remove').length, 0)
+})
+
+test('identity drift keeps the failure retryable instead of clearing the recovery', async () => {
+  const probe = setup({ linked: true })
+  const { expected } = await targetOf(probe.core)
+  const adminGitDir = `${COMMON}/worktrees/feature`
+  probe.repo.existing.add(adminGitDir)
+  probe.repo.revParseGitDirs.add(adminGitDir)
+  const workspaceIndex = probe.workspaces.findIndex(candidate => candidate.workspaceId === 'ws-feature')
+  probe.workspaces[workspaceIndex] = { ...probe.workspaces[workspaceIndex]!, path: adminGitDir }
+
+  const headDrift = await domainResult(() => probe.core.remove({
+    operationId: 'proof-head-drift',
+    workspaceId: 'ws-feature',
+    expected: { ...expected, head: 'a'.repeat(40) },
+  }))
+  assert.ok(!headDrift.ok)
+  assert.equal(
+    (headDrift as { ok: false; error: GitWorktreeDomainError }).error.retryable,
+    true,
+    'a moved HEAD means the listed row is not the bound target',
+  )
+
+  const repoDrift = await domainResult(() => probe.core.remove({
+    operationId: 'proof-repo-drift',
+    workspaceId: 'ws-feature',
+    expected: { ...expected, repoId: `repo_${'0'.repeat(64)}` },
+  }))
+  assert.ok(!repoDrift.ok)
+  assert.equal(
+    (repoDrift as { ok: false; error: GitWorktreeDomainError }).error.retryable,
+    true,
+    'rows of another repository cannot prove this target',
+  )
+})
+
+test('the proof stops at its deadline instead of walking every workspace', async () => {
+  const seed = setup({ linked: true })
+  const { expected } = await targetOf(seed.core)
+  const adminGitDir = `${COMMON}/worktrees/feature`
+  const repo = new FakeRepository()
+  repo.addLinked()
+  repo.existing.add(adminGitDir)
+  repo.existing.add('/repos/not-a-repo-a')
+  repo.existing.add('/repos/not-a-repo-b')
+  repo.revParseGitDirs.add(adminGitDir)
+  const workspaces: WorkspaceFact[] = [
+    { workspaceId: 'ws-a', path: '/repos/not-a-repo-a', sessionIds: [] },
+    { workspaceId: 'ws-b', path: '/repos/not-a-repo-b', sessionIds: [] },
+    { workspaceId: 'ws-main', path: MAIN, sessionIds: [] },
+  ]
+  let clock = 1_000
+  let commonDirProbes = 0
+  const core = coreOver({
+    workspaces,
+    // Every Git command burns 6s of the proof budget; the first common-dir probe is the
+    // removal's own discovery, the proof's probe is the one that cannot answer.
+    git: async request => {
+      clock += 6_000
+      if (request.cwd === adminGitDir && request.args.includes('--git-common-dir')) {
+        commonDirProbes += 1
+        if (commonDirProbes > 1) return { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository' }
+      }
+      return repo.runner(request)
+    },
+    fs: repo.fs,
+    now: () => clock,
+  })
+
+  const result = await domainResult(() => core.remove({
+    operationId: 'proof-deadline',
+    path: adminGitDir,
+    expected,
+  }))
+  assert.ok(!result.ok)
+  const error = (result as { ok: false; error: GitWorktreeDomainError }).error
+  assert.equal(error.code, 'git-command-failed')
+  assert.equal(error.retryable, true, 'an expired proof keeps the conservative classification')
+  assert.equal(repo.calls.some(call => call.cwd === MAIN), false, 'the walk never reached the healthy workspace')
+})
+
+test('a programming failure inside the proof never replaces the operation error', async () => {
+  const probe = setup({ linked: true })
+  const { expected } = await targetOf(probe.core)
+  const adminGitDir = `${COMMON}/worktrees/feature`
+  probe.repo.existing.add(adminGitDir)
+  probe.repo.revParseGitDirs.add(adminGitDir)
+  const workspaceIndex = probe.workspaces.findIndex(candidate => candidate.workspaceId === 'ws-feature')
+  probe.workspaces[workspaceIndex] = { ...probe.workspaces[workspaceIndex]!, path: adminGitDir }
+  let commonDirProbes = 0
+  const core = coreOver({
+    workspaces: probe.workspaces,
+    fs: probe.repo.fs,
+    git: async request => {
+      if (request.cwd === adminGitDir && request.args.includes('--git-common-dir')) {
+        commonDirProbes += 1
+        // The first probe belongs to discovery; the proof's probe hits a bug.
+        if (commonDirProbes > 1) throw new TypeError('proof exploded')
+      }
+      return probe.repo.runner(request)
+    },
+  })
+
+  const refused = await domainResult(() => core.remove({
+    operationId: 'proof-programming-failure',
+    workspaceId: 'ws-feature',
+    expected,
+  }))
+  assert.ok(!refused.ok)
+  const error = (refused as { ok: false; error: GitWorktreeDomainError }).error
+  assert.equal(error.code, 'git-command-failed')
+  assert.equal(error.retryable, true, 'an unproven target keeps the operation error as-is')
+})
+
+test('an unresolvable blocking agent cwd is proven not-removed when the target is still listed', async () => {
+  const { core, repo, agents } = setup({ linked: true })
+  const { expected } = await targetOf(core)
+  // Absolute but absent: the strict running guard cannot establish where this blocking
+  // session works, and no retry resolves it while the session runs.
+  agents.push({ sessionId: 's-drifted', status: 'running', cwd: '/gone/cwd' })
+
+  const refused = await domainResult(() => core.remove({
+    operationId: 'proof-running-cwd',
+    workspaceId: 'ws-feature',
+    expected,
+  }))
+  assert.ok(!refused.ok)
+  const error = (refused as { ok: false; error: GitWorktreeDomainError }).error
+  assert.equal(error.code, 'running-agent-cwd-unavailable')
+  assert.equal(error.retryable, false, 'the target is still listed, so the guard refusal is definitive')
+  assert.equal(mutationCalls(repo, 'remove').length, 0)
 })
 
 test('the running guard is archived-aware on the membership, path and snapshot legs', async () => {

@@ -14,6 +14,11 @@ export const MUTATION_OUTPUT_CAP = 256 * 1024
 export const PREVIEW_TTL_MS = 5 * 60_000
 export const OPERATION_TTL_MS = 24 * 60 * 60_000
 export const SNAPSHOT_DEADLINE_MS = 20_000
+/** Budget for the post-failure pre-mutation proof (design 08 §5.3): bounded so a
+ *  pathological workspace walk cannot push the remove RPC past the proxy's 45s idle
+ *  window - that would surface as an ambiguous `http-error` and re-mint the very
+ *  recovery the proof is meant to clear. Expiry keeps the failure retryable. */
+export const PROOF_DEADLINE_MS = 10_000
 /** Discovery cache TTL: rev-parse / worktree-list / show-ref results are reused within
  *  this window while the registry signature is unchanged; STATUS (dirty) always runs
  *  fresh and mutations clear the caches. */

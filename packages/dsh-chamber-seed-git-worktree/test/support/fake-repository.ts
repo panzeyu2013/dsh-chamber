@@ -64,9 +64,10 @@ export class FakeRepository {
   failNextList = false
   failListAfterAdd = false
   failListAfterRemove = false
-  /** Paths whose `rev-parse` probes die with Git's "must be run in a work tree"
-   *  (cwd is a Git directory / bare repository): the path exists but is not a
-   *  work tree root, so discovery cannot proceed. */
+  /** Paths inside a Git directory / bare repository: the path exists but is not a
+   *  work tree root. Real Git dies there for `--show-toplevel` ("fatal: this
+   *  operation must be run in a work tree") while `--git-common-dir` still answers
+   *  with the owning repository — the asymmetry the removal proof relies on. */
   readonly revParseGitDirs = new Set<string>()
   throwAfterAdd?: GitWorktreeError
   throwAfterRemove?: GitWorktreeError
@@ -124,7 +125,9 @@ export class FakeRepository {
       if (this.readDelayMs > 0) await new Promise(resolve => setTimeout(resolve, this.readDelayMs))
     }
     if (args[0] === 'rev-parse' && this.revParseGitDirs.has(request.cwd)) {
-      // The real Git die text when the probe runs inside a Git directory.
+      // Faithful to Git: only the work-tree probes die in a Git directory; the
+      // common-dir probe still resolves the owning repository.
+      if (args.includes('--git-common-dir')) return this.result(0, `${COMMON}\n`)
       return this.result(128, '', 'fatal: this operation must be run in a work tree')
     }
     if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
