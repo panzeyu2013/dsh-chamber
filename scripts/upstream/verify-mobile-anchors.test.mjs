@@ -2,9 +2,12 @@
  * verify-mobile-anchors.test.mjs — 移动锚点门的**负例**测试（纯函数层 `mobile-anchors.mjs`；
  * docs/checklists/upstream-touchpoints.md §4 登记行的「自测负例」一栏）。
  *
- * 这里逐条构造**改坏**的输入，断言门必须红（锚点零命中没有 advisory 档；仅「动态发射链缺失」
- * 与「语料缺 conversation 半」两类结构性提示走 advisory）：slot / data-* / role / hash /
- * local-name 各类锚点改名（含 `.foo_row` 裸后缀与 props 变量化的 SHAPE_RULE 形状）、最小断言集方向 B、
+ * 这里逐条构造**改坏**的输入，断言门必须红（锚点零命中没有 advisory 档；只有三类结构性提示
+ * 走 advisory：「动态发射链缺失」「语料缺 conversation 半」「SHAPE_RULE 3 的两个 rc.3 token
+ * 都不在——语料早于 rc.3」）：slot / data-* / role / hash /
+ * local-name 各类锚点改名（含 `.foo_row` 裸后缀与 props 变量化的 SHAPE_RULE 形状）、
+ * rc.3 折叠视图的两条 external 锚与 SHAPE_RULE 3（缺 aria-haspopup 即红、两者都缺只
+ * advisory）、最小断言集方向 B、
  * 无锚点根时本地判据仍须执行、chamber 跨包发射方消失、自打标假红防线、去注释投影、真语料
  * 双向差集、参数契约（未知参数/位置参数/缺值 = 用法错误 exit 2；`--help` 优先；
  * `DSH_MOBILE_ANCHOR_ROOT` 兜底）。
@@ -53,6 +56,10 @@ const UPSTREAM_TEXT = [
   'jsx("div", { "data-width-handle": "", "data-side": side, "data-ds-dark-theme": "" })',
   'jsx("button", { "data-tip": t("view") })',
   'jsx("div", { "role": "tablist" }); jsx("button", { "role": "tab" })',
+  // rc.3 会话头折叠视图：容器（data-conversation-tabs）+ More（aria-haspopup=menu），
+  // 两条都被登记成 external 锚（只查上游发射侧）。
+  'jsx("div", { className: viewTabs, "data-conversation-tabs": "" })',
+  'jsx("button", { className: viewsMore, "aria-haspopup": "menu", "aria-expanded": open })',
   'jsx("div", { "role": "dialog" }); jsx("div", { "role": "tooltip", "data-portal": true, "data-side": side })',
   'const toBottomCls = "EvIC1a_toBottomSlot"',
   // external 锚：插件用结构性 nav > span 吃面包屑条，类名由上游发（含哈希）。
@@ -103,6 +110,9 @@ const CONVERSATION_TEXT = [
   '    renderSlot("conversation.session.header", { hideChrome: blank })]',
   '});',
   'children: [renderSlot("conversation.header", {}), renderSlot("conversation.content", {})]',
+  // rc.3 折叠视图（SHAPE_RULE 3 的正例形状）：容器 role:"tablist" + More 的 aria-haspopup。
+  'jsx("div", { className: css.viewTabs, role: "tablist", "data-conversation-tabs": "" })',
+  'jsx("button", { className: css.viewsMore, "aria-haspopup": "menu", "aria-expanded": open })',
 ].join('\n')
 
 const sources = [{ path: 'plugins/mobile.ts', text: PLUGIN_TEXT }]
@@ -512,14 +522,15 @@ test('严格模式的 pin 一致性：树版本与仓内 pin 不符 ⇒ exit 1',
 })
 
 test('最小断言集本身：无重复、kind 合法，且与 §4 登记行逐项对得上', () => {
-  // 26 项声明侧最小集 + external 锚（只查上游发射侧）。§4 登记行记录的是声明侧
+  // 26 项声明侧最小集 + 3 项 external 锚（只查上游发射侧）。§4 登记行记录的是声明侧
   // 最小集（「26 项必须既在源码侧声明、又在产物侧发射」），external 项没有声明侧
   // 契约，故不要求该行点名——但必须真的存在，否则「上游在用、插件尚未点名」的
   // 锚点就没有任何门在管。
   const pluginItems = REQUIRED_ANCHORS.filter(item => item.declared === 'plugin')
   const externalItems = REQUIRED_ANCHORS.filter(item => item.declared === 'external')
   assert.equal(pluginItems.length, 26)
-  assert.ok(externalItems.length >= 1, 'external 锚至少要有一条（_crumbSeg）')
+  assert.equal(externalItems.length, 3, 'external 锚 = _crumbSeg + rc.3 折叠视图的 data-conversation-tabs / aria-haspopup')
+  assert.deepEqual(externalItems.map(item => item.token), ['_crumbSeg', 'data-conversation-tabs', 'aria-haspopup'])
   assert.equal(REQUIRED_ANCHORS.length, pluginItems.length + externalItems.length)
   const keys = REQUIRED_ANCHORS.map(item => `${item.kind}:${item.token}`)
   assert.equal(new Set(keys).size, keys.length)
@@ -750,6 +761,81 @@ test('external 锚 _crumbSeg：只查上游发射侧；上游改名即红，插�
   assert.ok(renamed.violations.some(v => v.includes('_crumbSeg')), renamed.violations.join('\n'))
   assert.ok(!renamed.violations.some(v => v.includes('_crumbSeg') && v.includes('插件声明')),
     'external 项不得产生声明侧缺口：' + renamed.violations.join('\n'))
+})
+
+test('rc.3 折叠视图的两条 external 锚：上游改名即红，且不产生声明侧缺口', () => {
+  const extracted = extractDeclaredAnchors([{ path: 'plugins/mobile.ts', text: PLUGIN_TEXT }])
+  const green = anchorFindings({
+    anchors: extracted.anchors,
+    upstream: [{ path: 'upstream/client.js', text: UPSTREAM_TEXT }],
+    chamber, required: REQUIRED_ANCHORS,
+  })
+  assert.deepEqual(green.violations, [])
+  // 上游改名（容器或 More 触发器任一）⇒ 硬失败；external 项**不得**产生声明侧缺口
+  // （插件不点名这两个属性，点名的是选择器邻接）。
+  const renamed = anchorFindings({
+    anchors: extracted.anchors,
+    upstream: [{
+      path: 'upstream/client.js',
+      text: UPSTREAM_TEXT
+        .replaceAll('"data-conversation-tabs"', '"data-conversation-tabs-v2"')
+        .replaceAll('"aria-haspopup"', '"aria-haspopup-v2"'),
+    }],
+    chamber, required: REQUIRED_ANCHORS,
+  })
+  assert.ok(renamed.violations.some(v => v.includes('data-conversation-tabs')), renamed.violations.join('\n'))
+  assert.ok(renamed.violations.some(v => v.includes('aria-haspopup')), renamed.violations.join('\n'))
+  assert.ok(!renamed.violations.some(v => v.includes('插件声明')),
+    'external 项不得产生声明侧缺口：' + renamed.violations.join('\n'))
+  // 只有消费形（插件自己的选择器）不算上游发射证据。
+  const selectorOnly = anchorFindings({
+    anchors: [], chamber: [], required: REQUIRED_ANCHORS.slice(-2),
+    upstream: [{ path: 'upstream/all.css', text: '[data-conversation-tabs] button[aria-haspopup=menu]{}' }],
+  })
+  // 结构性前提（data-slot）在这里也红，与两条 external 锚无关：只数它们自己的缺口。
+  assert.equal(selectorOnly.violations.filter(v => v.includes('data-conversation-tabs') || v.includes('aria-haspopup')).length, 2,
+    selectorOnly.violations.join('\n'))
+})
+
+test('SHAPE_RULE 3：折叠视图 tablist + More 的 aria-haspopup 缺一即红；两者都缺只 advisory', () => {
+  const path = 'up/dsh-client-ui-conversation/lib/client.js'
+  const base = [
+    'jsx("div", { className: css.viewTabs, role: "tablist", "data-conversation-tabs": "" })',
+    'jsx("button", { className: css.viewsMore, "aria-haspopup": "menu", "aria-expanded": open })',
+    'return (0, react_jsx_runtime.jsxs)("header", { children: renderSlot("conversation.session.header", {}) });',
+    'renderSlot("conversation.header", {})',
+  ].join('\n')
+  const green = conversationHeaderShapeFindings([{ path, text: base }])
+  assert.deepEqual(green.violations, [])
+  assert.deepEqual(green.advisories, [])
+  assert.ok(green.notes.some(note => note.includes('SHAPE_RULE 3')), green.notes.join(' '))
+  // 缺 More 的 aria-haspopup（容器还在）⇒ 硬失败，且点名 styles.ts:577 的 44px 规则。
+  const noMore = conversationHeaderShapeFindings([{ path, text: base.replace(', "aria-haspopup": "menu"', '') }])
+  assert.equal(noMore.violations.filter(violation => violation.includes('SHAPE_RULE 3')).length, 1,
+    noMore.violations.join(' '))
+  assert.match(noMore.violations.join(' '), /styles\.ts:577/)
+  // 反方向：容器消失、More 还在 ⇒ 同样硬失败（两个方向都是「半形状」）。
+  const noTabs = conversationHeaderShapeFindings([{ path, text: base.replace('role: "tablist", ', '') }])
+  assert.ok(noTabs.violations.some(violation => violation.includes('SHAPE_RULE 3')), noTabs.violations.join(' '))
+  // 两者都不在：rc.3 之前的语料 ⇒ advisory 不红（旧语料上不允许假红）。
+  const preRc3Text = [
+    'jsx("div", { "data-slot": "root" })',
+    'return (0, react_jsx_runtime.jsxs)("header", { children: renderSlot("conversation.session.header", {}) });',
+    'renderSlot("conversation.header", {})',
+    // 文案里的同文本不算发射（赋值右值/普通语句里的键形没有对象键边界）。
+    "const gone = 'role: \"tablist\" is gone; aria-haspopup: \"menu\" is gone'",
+  ].join('\n')
+  const preRc3 = conversationHeaderShapeFindings([{ path, text: preRc3Text }])
+  assert.deepEqual(preRc3.violations, [])
+  assert.ok(preRc3.advisories.some(advisory => advisory.includes('SHAPE_RULE 3')), preRc3.advisories.join(' '))
+  // advisory 经由 anchorFindings 一并冒泡（门的 WARN 通道），不是只存在于纯函数返回值里。
+  const propagated = anchorFindings({
+    anchors: [], chamber: [], required: [],
+    upstream: [{ path, text: preRc3Text }],
+  })
+  assert.deepEqual(propagated.violations, [])
+  assert.ok(propagated.advisories.some(advisory => advisory.includes('SHAPE_RULE 3')),
+    propagated.advisories.join(' '))
 })
 
 test('抽取：三种 [class…] 形态都抽成 local-name（token 保留前导 _）', () => {

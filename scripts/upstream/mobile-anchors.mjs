@@ -104,11 +104,14 @@ const STRUCTURAL_ATTRIBUTE = 'data-slot'
  *
  * `declared: 'plugin'` ⇒ 必须先在本插件源码里被抽到，否则红线（插件侧改名/删除）；
  * `declared: 'external'` ⇒ 只断言上游发射侧（供「上游在用、插件尚未点名」的锚点）。
- * 当前共 27 项 = 26 项 `plugin`（`data-chat-flow` / `data-chat-anchor-key` 已由
- * `session-stall.ts` 点名，故同样按两向断言）+ 1 项 `external`（表末 `_crumbSeg`：
- * 插件用结构性 `nav > span` 吃面包屑条、不点名类名，但上游一改名本门必须红）。
- * §4 登记行的「26 项」指前一组（声明侧最小集）；`external` 项没有声明侧契约，
- * 因此不要求该行点名。
+ * 当前共 29 项 = 26 项 `plugin`（`data-chat-flow` / `data-chat-anchor-key` 已由
+ * `session-stall.ts` 点名，故同样按两向断言）+ 3 项 `external`：表末的 `_crumbSeg`
+ * （插件用结构性 `nav > span` 吃面包屑条、不点名类名，但上游一改名本门必须红），
+ * 以及 rc.3 会话头折叠视图的两条发射侧锚 `data-conversation-tabs` / `aria-haspopup`
+ * （消费者是本插件 `styles.ts:577-583` 的 44px More 规则；抽取器看不见选择器邻接
+ * 关系，故只能钉上游仍在发射这两个 token，钉不了「tablist 的兄弟 span 里的
+ * menu 按钮」这一文档结构）。§4 登记行的「26 项」指前一组（声明侧最小集）；
+ * `external` 项没有声明侧契约，因此不要求该行点名。
  *
  * 这一份是**有意独立于插件源码**的最小目录：抽取器抽不到某个锚点时（插件把它
  * 改名/删掉），方向 A 看不见这条规则已经失效，只有这里会红。维护纪律：往插件里
@@ -150,11 +153,17 @@ export const REQUIRED_ANCHORS = [
   { kind: 'local-name', token: '_toBottomSlot', declared: 'plugin', note: 'styles.ts 回到底部控件的键盘抬升规则；上游 dsh-client-ui-chat/lib/client.js 发射 `EvIC1a_toBottomSlot`' },
 
   // —— 悬停卡 watchdog 的 build-time CSS-module token（无属性形兜底，pin bump 必重锚） ——
-  { kind: 'hash', token: '_root_38jqx_', declared: 'plugin', note: 'official-hover-card.ts OFFICIAL_CARD_ROOT_CLASS_TOKEN；rc.3 产物 index-*.js 的 qp="_root_38jqx_3"' },
-  { kind: 'hash', token: '_card_38jqx_', declared: 'plugin', note: 'official-hover-card.ts OFFICIAL_CARD_CLASS_TOKEN；rc.3 产物 index-*.js 的 Gp="_card_38jqx_9"' },
+  { kind: 'hash', token: '_root_38jqx_', declared: 'plugin', note: 'official-hover-card.ts OFFICIAL_CARD_ROOT_CLASS_TOKEN；rc.3 产物 index-*.js 的 CSS-module 类名绑定（构建期最小化名，逐 pin 会变）；token 本身 = styles 的 _root_38jqx_' },
+  { kind: 'hash', token: '_card_38jqx_', declared: 'plugin', note: 'official-hover-card.ts OFFICIAL_CARD_CLASS_TOKEN；rc.3 产物 index-*.js 的 CSS-module 类名绑定（构建期最小化名，逐 pin 会变）；token 本身 = styles 的 _card_38jqx_' },
 
-  // —— external 锚（只查上游发射侧：插件不点名该 class，但上游一改名/换容器即红） ——
+  // —— external 锚（只查上游发射侧：插件不点名该 class/属性，但上游一改名/换容器即红） ——
   { kind: 'local-name', token: '_crumbSeg', declared: 'external', note: '会话头面包屑段：上游 ConversationSessionHeader 把每一节渲染成 span（类名字典 wSkVaW_crumbSeg）；插件用结构性 nav > span 吃它，故这里只钉上游发射面' },
+  // rc.3 会话头折叠视图的容器与 More 触发器。插件不点名这两个属性——它的 44px 规则
+  // 用**选择器邻接**吃它们（[role=tablist] ~ span > button[aria-haspopup=menu]）——所以
+  // 只能登记成 external：本门钉「上游仍在发射这两个 token」，钉不了「二者在同一条
+  // 兄弟链上」（抽取器看不见邻接关系，真机走查与 SHAPE_RULE 3 各自补一半）。
+  { kind: 'attribute', token: 'data-conversation-tabs', declared: 'external', note: 'rc.3 折叠视图容器（上游 ui-conversation 的 ConversationSession 渲染 <div className={css.viewTabs} role="tablist" data-conversation-tabs="">；rc.3 构建产物里是对象键形 "data-conversation-tabs": ""）；消费者 = packages/dsh-chamber-client-ui-mobile/src/client/styles.ts:577-583 的 44px More 规则，抽取器看不见选择器邻接关系' },
+  { kind: 'attribute', token: 'aria-haspopup', declared: 'external', note: 'rc.3 折叠视图 More 按钮（上游 ViewsMoreMenu 的 Button 发射 aria-haspopup="menu"，编译产物里是对象键形 "aria-haspopup": "menu"）；消费者 = styles.ts:577-583 的 44px More 规则。注意同一产物里的 aria-haspopup 还有别的发射点（EnterBehaviorRow / WorkspaceChip / ContextMeter 的 dialog / 输入栏的 listbox），本锚只证明该属性仍在发射，不证明命中的就是 More' },
 ]
 
 /**
@@ -640,7 +649,7 @@ export function localNameEvidence(files, token) {
 /**
  * SHAPE_RULES — 会话头形状的**有序 token + 括号平衡** tripwire（不是解析器）。
  *
- * 明确声明它不是解析器：只回答两个问题——
+ * 明确声明它不是解析器：只回答三个问题——
  *   1. 上游 ConversationHeader 是否仍以 `jsxs)("header", { … })` 的**对象字面量
  *      props** 渲染、且**在 `children:` 的值区间内**出现
  *      `renderSlot("conversation.session.header")`（会话头槽真的挂在 header 的
@@ -648,7 +657,15 @@ export function localNameEvidence(files, token) {
  *      判据判红，而不是从后文某个 `{` 里"找到"槽；三种诱饵同样判红——children 值
  *      区间之外的 onRender 回调、config.deep、以及字符串字面量里的同文本；
  *   2. `renderSlot("conversation.header")`（持久会话头槽 = ConversationHeader 的挂载点）
- *      是否仍存在。
+ *      是否仍存在；
+ *   3. rc.3 的折叠视图**两个 token 是否同时存在**：容器 `role: "tablist"` 与 More 的
+ *      `"aria-haspopup": "menu"`（{@link VIEW_TABS_ROLE} / {@link VIEWS_MORE_MENU}）。
+ *      判据只有「同时存在」，**不**断言两者相邻——抽取器看不见选择器邻接关系，而插件
+ *      的 44px 规则（styles.ts:577-583，`[role=tablist] ~ span > button[aria-haspopup=menu]`）
+ *      吃的正是这条兄弟链。邻接由真机走查承担，本 tripwire 只防「token 整个消失」。
+ *      分级：只剩其一 ⇒ 硬失败（半形状，44px 规则必然静默 no-op）；两者都不在 ⇒
+ *      **advisory**（这份语料早于 rc.3 折叠视图，该规则自 rc.3 起才成立；在 rc.2/更早的
+ *      树上硬红就是假红——与 SHAPE_RULES 其余两条同一个 fail-soft 通道）。
  * 值区间由三族括号的字符串感知配对（matchingDelimiter）给出，字符串里的假命中由
  * findSlotRender 剔掉；但模板字面量的 `${…}` 表达式不做解析，上游改写成动态
  * key/别处渲染时本 tripwire 会报红并要求人工重锚——这是有意的 fail-closed 方向，
@@ -657,7 +674,18 @@ export function localNameEvidence(files, token) {
 export const SHAPE_RULES = [
   'jsxs)("header" 的 children 内必须出现 renderSlot("conversation.session.header")',
   'dsh-client-ui-conversation 产物里必须存在 renderSlot("conversation.header")',
+  'dsh-client-ui-conversation 产物里必须同时存在折叠视图容器 role:"tablist" 与 More 的 "aria-haspopup":"menu"（rc.3 起；两者都缺席视为 rc.3 之前的语料，只 advisory）',
 ]
+
+/**
+ * SHAPE_RULE 3 的两个 token（编译后 props 对象的**对象键形**；rc.3 源码里分别写作
+ * `<div className={css.viewTabs} role="tablist" data-conversation-tabs="">` 与
+ * More Button 的 `aria-haspopup="menu"`）。两种引号与冒号两侧的空白都认。判定用
+ * {@link objectKeyEmits}：键必须落在 `{` / `,` / `(` 之后——文案字符串里的同文本
+ * （`console.warn('role: "tablist" is gone')`）不算，与本模块其余锚点同一条防伪纪律。
+ */
+const VIEW_TABS_ROLE = /["']?role["']?\s*:\s*["']tablist["']/
+const VIEWS_MORE_MENU = /["']?aria-haspopup["']?\s*:\s*["']menu["']/
 
 /**
  * 从 code[openIndex] 的**开括号**起做字符串感知的配对扫描；返回配对闭括号的下标，
@@ -783,10 +811,13 @@ function findSlotRender(text, slot, from = 0, to = text.length) {
 /**
  * {@link SHAPE_RULES} 的扫描实现（纯函数，夹具可测）。
  * @param {Array<{path: string, text: string}>} files - dsh-client-ui-conversation 产物。
- * @returns {{violations: string[], notes: string[]}}
+ * @returns {{violations: string[], advisories: string[], notes: string[]}}
  */
 export function conversationHeaderShapeFindings(files) {
   const violations = []
+  // SHAPE_RULE 3 的「两者都不在」一档走 advisory（早于 rc.3 的语料）：与「语料里没有
+  // conversation 半 ⇒ SHAPE_RULES 未执行」同一个 fail-soft 通道，由调用方决定打印方式。
+  const advisories = []
   const notes = []
   const projected = files.map(file => ({ path: file.path, text: stripCommentsKeepingLines(file.text) }))
   let headerCalls = 0
@@ -841,7 +872,24 @@ export function conversationHeaderShapeFindings(files) {
   } else {
     notes.push('SHAPE_RULE 2：renderSlot("conversation.header") 存在')
   }
-  return { violations, notes }
+  // ---- SHAPE_RULE 3：rc.3 折叠视图（tablist 容器 + More 的 aria-haspopup=menu） ----
+  // 「有序 token」在这里只有两环：容器先于触发器出现（rc.3 产物就是这个顺序），
+  // 但判定只要求两者**同时存在**（顺序不构成判据，抽取器也看不见邻接）。
+  const hasViewTabs = projected.some(file => objectKeyEmits(VIEW_TABS_ROLE, file.text))
+  const hasViewsMore = projected.some(file => objectKeyEmits(VIEWS_MORE_MENU, file.text))
+  if (hasViewTabs && hasViewsMore) {
+    notes.push('SHAPE_RULE 3：折叠视图容器 role:"tablist" 与 More 的 "aria-haspopup":"menu" 同时存在')
+  } else if (hasViewTabs || hasViewsMore) {
+    violations.push(`SHAPE_RULE 3：dsh-client-ui-conversation 产物里 ${hasViewTabs
+      ? '有折叠视图容器 role:"tablist"，却找不到 More 的 "aria-haspopup":"menu"'
+      : '有 "aria-haspopup":"menu"，却找不到折叠视图容器 role:"tablist"'}——`
+      + 'styles.ts:577 的 44px More 规则需按新形状重锚（design 17 §18.4.3）')
+  } else {
+    advisories.push('SHAPE_RULE 3 未判定：产物里既没有 role:"tablist" 也没有 "aria-haspopup":"menu"——'
+      + '这份语料早于 rc.3 的会话头折叠视图（该规则自 rc.3 起才成立），按 fail-soft 只提示；'
+      + '若确认语料已是 rc.3+，说明折叠视图整个消失，styles.ts:577 的 44px More 规则已静默 no-op，需人工重锚')
+  }
+  return { violations, advisories, notes }
 }
 
 /**
@@ -954,6 +1002,8 @@ export function anchorFindings({ anchors, upstream, chamber, required = REQUIRED
   } else {
     const shape = conversationHeaderShapeFindings(conversationFiles)
     violations.push(...shape.violations)
+    // SHAPE_RULE 3 的「语料早于 rc.3」一档：advisory，不是硬失败（见该规则头注）。
+    advisories.push(...shape.advisories)
     notes.push(...shape.notes)
   }
 
