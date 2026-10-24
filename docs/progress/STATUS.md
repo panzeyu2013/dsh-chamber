@@ -52,6 +52,7 @@
 - **N-ctx 主题/语言**：打包态目检；冷启动变化 ≤1、预热/收割 0，另验同帧性。
 - **设置面残余**：写路径 4–8 人日（台账/字段描述符/密钥存在性）；面板要求源壳挂载；打包态冒烟。
 - **rc.3 More 行依赖延迟设置行**：`entry-customization` 的 `pluginNavigation` 只由延迟的 settings-plugin-manager 提供；该 chunk 失败/超时时宿主行停在 PENDING，会话头/右栏 More 缺席（只报该延迟行失败）。判据 = 延迟 chunk 失败 drill + 目检；座席存在但读取在处置窗口抛错时 `openPending` 无自动 flush（再次点击恢复），同 drill 覆盖。
+- **Git 工作树恢复的 reload 出口（design 08 §6.2）**：`path-unavailable` 重放、`git-timeout`/`git-spawn-failed`/`state-source-*`、终态 receipt 重放（`verifyRemovedReplay`），以及 create/rollback 的同类未尝试探测失败仍保留未决（恢复项无关闭，退出 = reload 后按 fresh topology 核对）。判据 = design 08 §5.3/§6.2。
 
 ### 1.4 打包态与真机门禁（按来源/版本）
 

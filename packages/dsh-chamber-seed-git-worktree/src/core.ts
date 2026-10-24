@@ -141,6 +141,25 @@ export type {
   WorktreeStateSource,
 } from './core-types.ts'
 
+/**
+ * Pre-mutation GIT-probe failures whose replay would run the SAME failing probe again.
+ * When no mutation was attempted AND fresh Git topology still lists the bound worktree,
+ * `remove()` serializes these with an explicit `retryable: false`. Without the flag the
+ * code keeps its host-retryable default and the client mints — or preserves — a
+ * git-remove recovery that replays the identical refusal forever (design 08 §6.2's
+ * bounded pre-mutation exception; the reported `git rev-parse ... must be run in a work
+ * tree` wedge was exactly this path). The fresh-topology check is the safety proof; the
+ * volatile operation record is only a precondition (host restart/TTL/capacity).
+ *
+ * `git-timeout` / `git-spawn-failed` are DELIBERATELY absent: they can be transient, so
+ * a replay may genuinely converge. `state-source-*` stays retryable too: a source read
+ * failure cannot prove the operation's state (design 08 §6.4).
+ */
+const PRE_MUTATION_PROBE_CODES: ReadonlySet<string> = new Set([
+  'git-command-failed',
+  'git-protocol-error',
+  'git-output-limit',
+])
 
 /** Host-independent lifecycle implementation; tests inject both Git and state. */
 export class GitWorktreeCore {
@@ -681,25 +700,106 @@ export class GitWorktreeCore {
     this.removeOperations.set(input.operationId, record)
     record.state = 'removing'
     record.updatedAt = this.now()
-    const promise = this.performRemove(input, record, existing !== undefined)
+    // Classify ONCE on the recorded promise: every waiter of the same operation id
+    // (including concurrent replays that arrive while state === 'removing') must see
+    // the same wire classification. The record itself stays 'removing' until the
+    // classification — including its fresh-topology proof — has finished, so a third
+    // caller cannot start a second mutation while the proof is in flight.
+    const promise = this.performRemove(input, record, existing !== undefined).then(
+      result => {
+        record.state = 'removed'
+        record.updatedAt = this.now()
+        record.result = result
+        return result
+      },
+      async (error: unknown) => {
+        let classified: unknown = error
+        try {
+          classified = await this.classifyRemoveFailure(error, record.attemptedRemove, input.expected)
+        } catch {
+          // The proof failing must never replace the operation's own error.
+        }
+        // A host-proven pre-mutation refusal (explicit retryable: false) leaves NO
+        // uncertainty: label it 'ready'; every other failure after the attempt stays
+        // 'uncertain'.
+        const proven = classified instanceof GitWorktreeError && classified.retryable === false
+        record.state = record.attemptedRemove && !proven ? 'uncertain' : 'ready'
+        record.updatedAt = this.now()
+        record.promise = undefined
+        throw classified
+      },
+    )
     record.promise = promise
-    try {
-      const result = await promise
-      record.state = 'removed'
-      record.updatedAt = this.now()
-      record.result = result
-      return result
-    } catch (error) {
-      // A host-proven pre-mutation refusal (explicit retryable: false) leaves NO uncertainty:
-      // label it 'ready'; every other failure after the attempt stays 'uncertain'.
-      record.state = record.attemptedRemove
-        && !(error instanceof GitWorktreeError && error.retryable === false)
-        ? 'uncertain'
-        : 'ready'
-      record.updatedAt = this.now()
-      record.promise = undefined
-      throw error
+    return await promise
+  }
+
+  /** Reclassify an un-attempted pre-mutation probe failure only when FRESH Git
+   *  topology still lists the bound worktree with the same identity. The operation
+   *  record is volatile (host restart, 24h TTL, capacity eviction), so
+   *  `attemptedRemove === false` is a precondition, never the proof: after a restart a
+   *  fresh record must still pass the topology check before the client may clear a
+   *  pending git-remove recovery. Any unproven case keeps the original retryable
+   *  classification (the conservative outcome).
+   *
+   *  `attemptBranchDelete` is not covered by `attemptedRemove`, but it swallows every
+   *  failure and runs only after a worktree mutation was attempted; no escaping error
+   *  can therefore follow a branch mutation.
+   */
+  private async classifyRemoveFailure(
+    error: unknown,
+    attemptedRemove: boolean,
+    expected: RemoveInput['expected'],
+  ): Promise<unknown> {
+    if (attemptedRemove
+      || !(error instanceof GitWorktreeError)
+      || error.retryable !== undefined
+      || !PRE_MUTATION_PROBE_CODES.has(error.code)) {
+      return error
     }
+    if (!await this.targetStillListed(expected)) return error
+    return new GitWorktreeError(error.code, error.message, {
+      retryable: false,
+      ...(error.details === undefined ? {} : { details: error.details }),
+    })
+  }
+
+  /** Fresh-topology proof: walk the source's registered workspaces (a broken one is
+   *  skipped), locate the expected repository, and require the bound worktree still
+   *  listed, present and identical (branch/HEAD). Absence or a `missing` row proves
+   *  nothing — a committed removal can leave the directory behind (design 08 §5.3) —
+   *  so the caller keeps the original retryable classification. */
+  private async targetStillListed(expected: {
+    readonly repoId: string
+    readonly worktreeId: string
+    readonly branch: string | null
+    readonly head: string
+  }): Promise<boolean> {
+    let state: SourceSnapshot
+    try {
+      state = await this.readSource()
+    } catch {
+      return false
+    }
+    const walked = new Set<string>()
+    for (const workspace of state.workspaces) {
+      let topology: WorktreeTopology
+      try {
+        topology = await this.topology(workspace.path)
+      } catch {
+        continue
+      }
+      if (walked.has(topology.commonDir)) continue
+      walked.add(topology.commonDir)
+      if (opaqueId('repo', topology.commonDir) !== expected.repoId) continue
+      const target = topology.worktrees.find(worktree => (
+        opaqueId('worktree', topology.commonDir, worktree.path) === expected.worktreeId
+      ))
+      return target !== undefined
+        && target.missing !== true
+        && target.branch === expected.branch
+        && target.head === expected.head
+    }
+    return false
   }
 
   /** A terminal result is a receipt, not a substitute for current Git facts. */

@@ -8,9 +8,16 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { GitWorktreeCore, GitWorktreeError, type GitCommandRequest } from '../src/core.ts'
+import {
+  GitWorktreeCore,
+  GitWorktreeError,
+  domainResult,
+  type GitCommandRequest,
+  type GitWorktreeDomainError,
+} from '../src/core.ts'
 import {
   MAIN,
+  COMMON,
   LINKED,
   FEATURE_HEAD,
   FakeRepository,
@@ -19,6 +26,7 @@ import {
   refuses,
   mutationCalls,
   previewNew,
+  coreOver,
   STALE,
   addStaleRecord,
 } from './support/fake-repository.ts'
@@ -61,6 +69,178 @@ test('remove rejects a running agent and stale expected state, then returns Git-
     refuses('operation-conflict'),
   )
   assert.equal(mutationCalls(repo, 'remove').length, 1)
+})
+
+test('a discovery failure with the target still listed is a proven pre-mutation refusal, not an endless replay', async () => {
+  const { core, repo, workspaces } = setup({ linked: true })
+  const { expected } = await targetOf(core)
+  // The workspace path still resolves, but it is a Git directory: the host's discovery
+  // probe dies with Git's "must be run in a work tree" (the reported stuck git-remove
+  // recovery). No worktree or registry mutation has started at this point.
+  const adminGitDir = `${COMMON}/worktrees/feature`
+  repo.existing.add(adminGitDir)
+  repo.revParseGitDirs.add(adminGitDir)
+  const workspaceIndex = workspaces.findIndex(candidate => candidate.workspaceId === 'ws-feature')
+  workspaces[workspaceIndex] = { ...workspaces[workspaceIndex]!, path: adminGitDir }
+
+  const input = { operationId: 'preflight-discovery-failure', workspaceId: 'ws-feature', expected }
+  const refused = await domainResult(() => core.remove(input))
+  assert.ok(!refused.ok)
+  const error = (refused as { ok: false; error: GitWorktreeDomainError }).error
+  assert.equal(error.code, 'git-command-failed')
+  assert.equal(error.retryable, false, 'fresh topology still lists the target, so the un-attempted probe is definitive')
+  assert.match(error.message, /must be run in a work tree/)
+  assert.equal(mutationCalls(repo, 'remove').length, 0)
+
+  // The reported stuck state is a RETRY: the same operation id must classify the same
+  // way while the cause persists (the proof is re-run, not cached).
+  const again = await domainResult(() => core.remove(input))
+  assert.ok(!again.ok)
+  const againError = (again as { ok: false; error: GitWorktreeDomainError }).error
+  assert.equal(againError.code, 'git-command-failed')
+  assert.equal(againError.retryable, false)
+  assert.equal(mutationCalls(repo, 'remove').length, 0)
+
+  // The same operation id still converges once the cause is fixed: the definitive
+  // refusal resolves the uncertainty without consuming the operation.
+  workspaces[workspaceIndex] = { ...workspaces[workspaceIndex]!, path: LINKED }
+  const removed = await core.remove(input)
+  assert.equal(removed.removed, true)
+  assert.equal(removed.replayed, true)
+  assert.deepEqual(mutationCalls(repo, 'remove').at(-1)!.args, ['worktree', 'remove', '--', LINKED])
+})
+
+test('a fresh host record after a committed removal cannot clear the recovery', async () => {
+  const first = setup({ linked: true })
+  const { expected } = await targetOf(first.core)
+  const removed = await first.core.remove({
+    operationId: 'committed-before-restart',
+    workspaceId: 'ws-feature',
+    expected,
+  })
+  assert.equal(removed.removed, true)
+  assert.equal(mutationCalls(first.repo, 'remove').length, 1)
+
+  // Simulate the documented partial-removal residual: Git removed the admin entry but
+  // left the directory behind (design 08 §5.3). A fresh host process has no operation
+  // record, so attemptedRemove:false must NOT by itself be treated as "not removed";
+  // the fresh-topology proof finds the target absent and keeps the original retryable
+  // classification.
+  first.repo.existing.add(LINKED)
+  first.repo.revParseGitDirs.add(LINKED)
+  const fresh = coreOver({ workspaces: first.workspaces, git: first.repo.runner, fs: first.repo.fs })
+  const refused = await domainResult(() => fresh.remove({
+    operationId: 'fresh-record-after-restart',
+    workspaceId: 'ws-feature',
+    expected,
+  }))
+  assert.ok(!refused.ok)
+  const error = (refused as { ok: false; error: GitWorktreeDomainError }).error
+  assert.equal(error.code, 'git-command-failed')
+  assert.equal(error.retryable, true, 'the target is absent from fresh topology, so a committed removal may be the cause')
+  assert.equal(mutationCalls(first.repo, 'remove').length, 1)
+})
+
+test('concurrent same-operationId removals receive the same classified refusal', async () => {
+  const probe = setup({ linked: true })
+  const { expected } = await targetOf(probe.core)
+  const adminGitDir = `${COMMON}/worktrees/feature`
+  probe.repo.existing.add(adminGitDir)
+  probe.repo.revParseGitDirs.add(adminGitDir)
+  const workspaceIndex = probe.workspaces.findIndex(candidate => candidate.workspaceId === 'ws-feature')
+  probe.workspaces[workspaceIndex] = { ...probe.workspaces[workspaceIndex]!, path: adminGitDir }
+  probe.repo.readDelayMs = 5
+
+  const input = { operationId: 'concurrent-preflight-probe', workspaceId: 'ws-feature', expected }
+  const results = await Promise.allSettled([probe.core.remove(input), probe.core.remove(input)])
+  for (const result of results) {
+    assert.equal(result.status, 'rejected')
+    const error = (result as PromiseRejectedResult).reason
+    assert.ok(error instanceof GitWorktreeError)
+    assert.equal(error.code, 'git-command-failed')
+    assert.equal(error.retryable, false, 'every waiter of the recorded promise must see the same classification')
+  }
+  assert.equal(mutationCalls(probe.repo, 'remove').length, 0)
+})
+
+test('the pre-mutation reclassification is code-bounded and honors explicit flags', async () => {
+  const cases = [
+    { code: 'git-command-failed', explicit: undefined, retryable: false },
+    { code: 'git-protocol-error', explicit: undefined, retryable: false },
+    { code: 'git-output-limit', explicit: undefined, retryable: false },
+    { code: 'git-timeout', explicit: undefined, retryable: true },
+    { code: 'git-spawn-failed', explicit: undefined, retryable: true },
+    { code: 'git-command-failed', explicit: true, retryable: true },
+    { code: 'git-command-failed', explicit: false, retryable: false },
+  ] as const
+
+  for (const testCase of cases) {
+    const probe = setup({ linked: true })
+    const { expected } = await targetOf(probe.core)
+    const adminGitDir = `${COMMON}/worktrees/feature`
+    probe.repo.existing.add(adminGitDir)
+    const workspaceIndex = probe.workspaces.findIndex(candidate => candidate.workspaceId === 'ws-feature')
+    probe.workspaces[workspaceIndex] = { ...probe.workspaces[workspaceIndex]!, path: adminGitDir }
+    const failure = new GitWorktreeError(
+      testCase.code,
+      `simulated ${testCase.code}`,
+      testCase.explicit === undefined ? {} : { retryable: testCase.explicit },
+    )
+    const core = coreOver({
+      workspaces: probe.workspaces,
+      git: async request => {
+        if (request.cwd === adminGitDir && request.args[0] === 'rev-parse') throw failure
+        return probe.repo.runner(request)
+      },
+      fs: probe.repo.fs,
+    })
+    const result = await domainResult(() => core.remove({
+      operationId: `probe-code-${testCase.code}-${String(testCase.explicit)}`,
+      workspaceId: 'ws-feature',
+      expected,
+    }))
+    assert.ok(!result.ok, `${testCase.code}: the probe must fail`)
+    const error = (result as { ok: false; error: GitWorktreeDomainError }).error
+    assert.equal(error.code, testCase.code)
+    assert.equal(error.retryable, testCase.retryable, `${testCase.code} explicit=${String(testCase.explicit)}`)
+    assert.equal(mutationCalls(probe.repo, 'remove').length, 0)
+  }
+})
+
+test('a source-read failure before the probe stays retryable (state-source exclusion)', async () => {
+  const probe = setup({ linked: true })
+  const { expected } = await targetOf(probe.core)
+  probe.setSourceReadHook(() => {
+    throw new GitWorktreeError('state-source-unavailable', 'offline')
+  })
+  const result = await domainResult(() => probe.core.remove({
+    operationId: 'probe-state-source',
+    workspaceId: 'ws-feature',
+    expected,
+  }))
+  assert.ok(!result.ok)
+  const error = (result as { ok: false; error: GitWorktreeDomainError }).error
+  assert.equal(error.code, 'state-source-unavailable')
+  assert.equal(error.retryable, true)
+  assert.equal(mutationCalls(probe.repo, 'remove').length, 0)
+})
+
+test('the unregistered removal leg uses the same fresh-topology proof', async () => {
+  const probe = setup({ linked: true })
+  const { expected } = await targetOf(probe.core)
+  const adminGitDir = `${COMMON}/worktrees/feature`
+  probe.repo.existing.add(adminGitDir)
+  probe.repo.revParseGitDirs.add(adminGitDir)
+  const result = await domainResult(() => probe.core.remove({
+    operationId: 'probe-unregistered',
+    expected,
+    path: adminGitDir,
+  }))
+  assert.ok(!result.ok)
+  const error = (result as { ok: false; error: GitWorktreeDomainError }).error
+  assert.equal(error.code, 'git-command-failed')
+  assert.equal(error.retryable, false)
+  assert.equal(mutationCalls(probe.repo, 'remove').length, 0)
 })
 
 test('the running guard is archived-aware on the membership, path and snapshot legs', async () => {

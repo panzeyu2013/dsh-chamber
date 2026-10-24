@@ -64,6 +64,10 @@ export class FakeRepository {
   failNextList = false
   failListAfterAdd = false
   failListAfterRemove = false
+  /** Paths whose `rev-parse` probes die with Git's "must be run in a work tree"
+   *  (cwd is a Git directory / bare repository): the path exists but is not a
+   *  work tree root, so discovery cannot proceed. */
+  readonly revParseGitDirs = new Set<string>()
   throwAfterAdd?: GitWorktreeError
   throwAfterRemove?: GitWorktreeError
   throwBeforeAdd?: GitWorktreeError
@@ -118,6 +122,10 @@ export class FakeRepository {
     const args = request.args
     if (args[0] !== 'worktree' || (args[1] !== 'add' && args[1] !== 'remove')) {
       if (this.readDelayMs > 0) await new Promise(resolve => setTimeout(resolve, this.readDelayMs))
+    }
+    if (args[0] === 'rev-parse' && this.revParseGitDirs.has(request.cwd)) {
+      // The real Git die text when the probe runs inside a Git directory.
+      return this.result(128, '', 'fatal: this operation must be run in a work tree')
     }
     if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
       const root = this.worktreeFor(request.cwd)?.path
