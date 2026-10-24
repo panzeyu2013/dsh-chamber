@@ -488,21 +488,35 @@ pnpm run test:mobile
 官方 dsh DOM 实测（CDP 审计在 **v0.1.5-alpha.2** 完成，并在 **v0.1.5-rc.2**
 重锚）——下列锚点在 rc.2 树中曾全部成立（本节 rc.1/rc.2 均指 v0.1.5 世系，
 当前 pin 一律写全 0.2.1-rc.3）；当前 pin（v0.2.1-rc.3）下严格锚点门解析全部
-声明锚点（共 68 条，其中 60 条为上游锚点；最小断言集 27 项），含属性/role/slot 锚点、
-插件侧 local-name 类名锚点、external `_crumbSeg` 发射钉与两个 build-time
+声明锚点（共 68 条，其中 60 条为上游锚点；最小断言集 29 项 = 26 项声明侧 + 3 项
+external），含属性/role/slot 锚点、
+插件侧 local-name 类名锚点、external 发射钉（`_crumbSeg`，以及 rc.3 折叠视图容器
+`data-conversation-tabs` 与其 More 触发器 `aria-haspopup`）与两个 build-time
 CSS-module hash token——在物化上游产物语料上零命中 0、advisory 0
 （2026-10 整页面补齐 `data-plugin-panel`、`data-plugin-item-detail`、
 `data-window-drag`、`data-testid="task-manager-page"`、
 `data-sidebar-right-guide-entry`，以及模型标签槽的
 `data-provider-id` 与首/末子节点形状；全部在 pin 产物中命中）
-（`verify-mobile-anchors.mjs --require-anchor-root`）；类名臂已按被服务的
+（`verify-mobile-anchors.mjs --require-anchor-root`）；该结论有前提：只有锚点根与 pin
+**同版本**时成立——`--require-anchor-root` 正是用它把版本不符改判 exit 1；否则门证明的
+是另一个版本的 DOM。本机 `rc.x` 语料与 pin 不同版时，默认运行是 fail-soft：只打印 pin
+不符的 WARN 继续判，上面那三条 rc.3 token 也就可能落在早于它们的语料上，所以只有同版本
+树上的严格运行才是本 pin 的锚点证据。类名臂已按被服务的
 rc.3 产物重锚，零命中现为**硬失败**（见下）；alpha.2 → rc.1 的客户端改动（`ui-sidebar-*`
 的 guide/preview 行、`ui-primitives` 的 `CodeBlock` 包装层、`ui-chat` 统计对话框、
 `ui-dockkit` CSS 的两处 `z-index`、slot-catalog 文档指针）与 rc.1 → rc.2 的改动
 （`ui-{chat,deliverables,message-feedback,primitives}` 的反馈弹窗、交付卡与代码文件图标
-精修）与 rc.2 → rc.3 的**会话头**改动（按宽度折叠视图页签、被折叠视图的 More 触发器、
-88px 的 `span.tabLabel` 省略；该版本另增 entry-customization 行与增量 Tooltip/Menu 变更，
-见 STATUS）不涉及下述锚点的产出源，也不改变本插件钉住的选择器/尺寸：
+精修）**不**涉及下述锚点的产出源；rc.2 → rc.3 的**会话头**改动则相反：它新增了按宽度
+折叠的视图页签（`div.tabs` 内层 `div.viewTabs[role="tablist"]` 带
+`data-conversation-tabs`）与被折叠视图的 More 触发器（`Menu` 锚点
+`span > button[aria-haspopup=menu]`，13px 省略号图标装在 `size="sm"` 按钮里），以及
+88px 的 `span.tabLabel` 省略、`entry-customization` 行与增量 Tooltip/Menu 变更。本插件
+为折叠视图新增了 **44px** 触控下限——否则进入折叠视图的唯一入口仍是上游那颗约 22px 的
+图标按钮——写成 `[role=tablist] ~ span > button[aria-haspopup=menu]`
+（`src/client/styles.ts:577-583`）；正因这条规则，rc.3 同时给门禁加了
+`data-conversation-tabs` 与 `aria-haspopup` 两条 external 锚，其移动端验收项 =
+`docs/progress/STATUS.md` §1.4「上游 pin 新面（无 GUI 未跑）」里的 `rc.3 ④`。
+其余被本插件钉住的面不被该改动影响：
 `data-sidebar-collapsed` 折叠=存在/展开=移除；中心列为 keyed **`main`** 槽、右列为
 **`rightbar`**（两个列壳及其 `[data-slot=…]` 出口包裹层都自首帧常驻——渲染器无条件
 输出该包裹层，只有其中的 docking 面按注册挂载，故打标在列壳上即收敛，见 markup.ts

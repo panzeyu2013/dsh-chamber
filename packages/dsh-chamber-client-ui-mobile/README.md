@@ -681,12 +681,21 @@ at **v0.1.5-rc.2** — every anchor below resolved in the rc.2 tree (rc.1/rc.2 i
 section mean the v0.1.5 lineage; the current pin is always written in full as
 v0.2.1-rc.3). Under the current
 pin (v0.2.1-rc.3) the strict anchor gate resolves the declared set (68 declared
-anchors, 60 of them upstream; 27 minimal assertions) including the attribute/role/
-slot anchors, the plugin local-name class anchors, the external `_crumbSeg`
-emission pin, and the two build-time CSS-module hash tokens — 0 misses and 0
-advisories over the materialized upstream product corpus
+anchors, 60 of them upstream; 29 minimal assertions = 26 declared-side + 3
+external) including the attribute/role/
+slot anchors, the plugin local-name class anchors, the external emission pins
+(`_crumbSeg`, plus rc.3's folded-view container `data-conversation-tabs` and its
+More trigger `aria-haspopup`), and the two build-time CSS-module hash tokens —
+0 misses and 0 advisories over the materialized upstream product corpus
 (`verify-mobile-anchors.mjs --require-anchor-root`);
-a zero-hit anchor is a hard failure (see below). The 2026-10 full-page surface
+a zero-hit anchor is a hard failure (see below). That zero-miss/zero-advisory
+reading is conditional: it holds only when the anchor root is the **same version**
+as the pin, which is exactly what `--require-anchor-root` enforces (a version
+mismatch exits 1) and what makes the run this pin's evidence. With a local
+`rc.x` tree of another version the default run is fail-soft — it prints the
+pin-mismatch WARN and keeps judging, so the rc.3 tokens above are then measured
+against a corpus that may predate them; only the strict run on a matching tree
+counts. The 2026-10 full-page surface
 pass added the official page-state anchors `data-plugin-panel`,
 `data-plugin-item-detail`, `data-window-drag`, `data-testid="task-manager-page"`
 and `data-sidebar-right-guide-entry`, plus the model-label slot wrapper
@@ -696,11 +705,20 @@ alpha.2 → rc.1 delta (the `ui-sidebar-*` guide/preview rows, the
 `ui-primitives` `CodeBlock` wrapper, the `ui-chat` stats dialog, two `z-index`
 additions in `ui-dockkit`'s CSS and a slot-catalog doc pointer) and the rc.1 → rc.2
 delta (feedback-dialog, delivery-card and code-file-icon refinements in
-`ui-{chat,deliverables,message-feedback,primitives}`) and the rc.2 → rc.3
-HEADER delta (folded view tabs by width, the folded-views More launcher, and an
-88px `span.tabLabel` ellipsis; the release also adds the entry-customization row
-and additive Tooltip/Menu changes, tracked in STATUS) leave this anchors'
-emitters untouched and do not change the selectors/sizes this plugin pins: `data-sidebar-collapsed`
+`ui-{chat,deliverables,message-feedback,primitives}`) leave those anchors'
+emitters untouched. The rc.2 → rc.3 HEADER delta does NOT leave the header
+untouched: it adds the folded view tabs by width — a `div.tabs` whose inner
+`div.viewTabs[role="tablist"]` carries `data-conversation-tabs` — and the
+folded-views More launcher (the `Menu` anchor `span > button[aria-haspopup=menu]`,
+a 13px ellipsis icon in a `size="sm"` button), plus an 88px `span.tabLabel`
+ellipsis, the `entry-customization` row and additive Tooltip/Menu changes. The
+plugin answers the folded views with a NEW 44px touch floor — without it the only
+entry to them stays upstream's ~22px icon button — written as
+`[role=tablist] ~ span > button[aria-haspopup=menu]` (`src/client/styles.ts:577-583`);
+that rule is why rc.3 also adds the two external anchors
+`data-conversation-tabs` and `aria-haspopup`, and its open mobile acceptance item
+is `rc.3 ④` in `docs/progress/STATUS.md` §1.4「上游 pin 新面（无 GUI 未跑）」.
+Everything else this plugin pins is unchanged by that delta: `data-sidebar-collapsed`
 present=collapsed / removed=expanded; the centre column is the keyed **`main`**
 slot and the right column is **`rightbar`** (both column shells and their
 `[data-slot=…]` outlet wrappers are resident from first paint — the renderer
