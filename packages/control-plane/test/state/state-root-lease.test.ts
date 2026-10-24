@@ -373,7 +373,16 @@ test('单进程：legacy 退役——活 pid 拒绝，死 pid/空文件 identity
   assert.equal(liveError.code, 'state_root_locked')
   assert.match(liveError.message, /legacy state lock/)
   // 重启后 pid 被别的服务复用：legacy 记录写于本次开机之前 → 直接退役，不再锁死。
-  writeFileSync(gatewayLock, JSON.stringify({ pid: process.ppid, createdAt: Date.now() - 24 * 60 * 60 * 1000 }), { mode: 0o600 })
+  // 时间戳必须相对 BOOT 时钟取（而不是 now-24h）：长开机（>24h）的机器上 now-24h
+  // 仍晚于本次开机，记录会被（正确地）判成活持有者。取开机前 10 分钟可跨过
+  // BOOT_EPOCH_MARGIN_MS 余量，且与 uptime 无关。
+  const bootWall = bootWallClockMs()
+  assert.ok(bootWall !== null, 'the boot clock must be readable for the retirement fixture')
+  writeFileSync(
+    gatewayLock,
+    JSON.stringify({ pid: process.ppid, createdAt: bootWall - 10 * 60 * 1000 }),
+    { mode: 0o600 },
+  )
   const rebootWarns: string[] = []
   const afterReboot = acquireStateRootLease(dir, {
     scope: 'state-root', flavor: 'control-plane', logger: { warn: message => rebootWarns.push(message) },
