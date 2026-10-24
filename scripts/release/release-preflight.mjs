@@ -11,6 +11,7 @@
  *       证 .github/workflows/*.yml 的 action SHA（网络解析），其余跳过。
  *   node scripts/release/release-preflight.mjs <version> --versions-only
  *       # release.yml 早期门：动态核对根、全部 packages 与 dsh 常量。
+ *   node scripts/release/release-preflight.mjs --help   # 打印用法与可用旗标（exit 0）。
  *   逃生舱：--offline 跳过网络 SHA 解析；--skip-install 跳过
  *       pnpm install --frozen-lockfile（耗时步骤，网络受限/无 store 时）。
  *       两者都会打印 SKIP 提示——发布前建议完整跑一遍。
@@ -41,7 +42,7 @@ const SELF_PATH = relative(REPO_ROOT, fileURLToPath(import.meta.url)).split(sep)
 // ---------------------------------------------------------------------------
 
 const args = process.argv.slice(2)
-const flags = { actionsOnly: false, versionsOnly: false, offline: false, skipInstall: false, allowFixme: false, forkVersion: undefined }
+const flags = { actionsOnly: false, versionsOnly: false, offline: false, skipInstall: false, allowFixme: false, help: false, forkVersion: undefined }
 const positional = []
 for (let i = 0; i < args.length; i++) {
   const arg = args[i]
@@ -50,6 +51,7 @@ for (let i = 0; i < args.length; i++) {
   else if (arg === '--offline') flags.offline = true
   else if (arg === '--skip-install') flags.skipInstall = true
   else if (arg === '--allow-fixme') flags.allowFixme = true
+  else if (arg === '--help') flags.help = true
   else if (arg === '--fork-version') {
     const next = args[i + 1]
     if (next === undefined || next.startsWith('--')) {
@@ -63,6 +65,23 @@ for (let i = 0; i < args.length; i++) {
 
 const VERSION = positional[0]
 const FORK_VERSION = flags.forkVersion ?? '0.2.1-rc.3'
+
+/** `--help` 的用法文本：入口与可用旗标；检查项与既有约定见文件头注释。 */
+function printUsage() {
+  console.log(`用法：
+  node scripts/release/release-preflight.mjs <version> [--fork-version <v>] [--offline] [--skip-install] [--allow-fixme]
+  node scripts/release/release-preflight.mjs <version> --versions-only
+  node scripts/release/release-preflight.mjs --actions-only
+
+旗标：
+  --fork-version <v>  覆盖 fork 副本基线（默认 ${FORK_VERSION}）
+  --versions-only     只核对版本一致性（release.yml 早期门）
+  --actions-only      只校验 .github/workflows/*.yml 的 action SHA（网络）
+  --offline           跳过 action SHA 网络解析
+  --skip-install      跳过 pnpm install --frozen-lockfile
+  --allow-fixme       放行 open FIXME 标记（= 显式记录的发布决定）
+  --help              打印本用法并 exit 0`)
+}
 
 // ---------------------------------------------------------------------------
 // 检查器（fail-fast：任一失败即退出 1，消息指明修复方向）
@@ -506,7 +525,10 @@ function runVersionsOnly() {
 }
 
 if (IS_MAIN) {
-  if (flags.actionsOnly) {
+  if (flags.help) {
+    printUsage()
+    process.exit(0)
+  } else if (flags.actionsOnly) {
     await runActionShaOnly()
   } else if (flags.versionsOnly) {
     if (VERSION === undefined) {
