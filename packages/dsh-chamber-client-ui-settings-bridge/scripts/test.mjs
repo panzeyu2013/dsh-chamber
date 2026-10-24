@@ -42,6 +42,9 @@ const GROUPS = {
   shell: [
     'test/shell/escape-owner.test.ts',
     'test/shell/disclosure-attrs.test.ts',
+    // 设置导航 ack 的渲染期派生锁：effect 只执行 ackPlan，依赖数组恰为
+    // [ackPlan, pendingAck, navigation]（源锁，不经过 React 壳）。
+    'test/shell/settings-ack-wiring.test.ts',
     // section seam lock: the embedded plugin page is a settings.section; its own
     // h1 + div.pageIntro stay visible, and the containment hides/re-tracks nothing.
     'test/shell/embedded-plugin-page-seam.test.ts',

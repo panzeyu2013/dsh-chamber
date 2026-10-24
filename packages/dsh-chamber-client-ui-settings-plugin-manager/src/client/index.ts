@@ -33,6 +33,12 @@ declare module '@deepseek-ai/cordis' {
       openBundle(packageName: string): void
       openList(): void
     }
+    /**
+     * 本实例设置壳的座席（per-ctx）：settings-bridge 通过 `ctx.reflect.provide` 提供。
+     * 结构声明放在这里，消费方就不必写显式类型实参——cordis 的 `get` 只接受 key
+     * （`K extends string & keyof this`），声明合并后返回值自动带 `| undefined`。
+     */
+    chamberSettingsNavigation?: { open(sectionId: string): void }
   }
 }
 
@@ -152,7 +158,7 @@ export function apply(ctx: ClientContext): void {
       // in that window must queue, not surface a TypeError.
       let seat: { open(sectionId: string): void } | undefined
       try {
-        seat = ctx.get<{ open(sectionId: string): void } | undefined>('chamberSettingsNavigation')
+        seat = ctx.get('chamberSettingsNavigation')
       } catch {
         seat = undefined
       }

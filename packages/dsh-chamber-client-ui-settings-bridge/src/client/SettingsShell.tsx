@@ -41,7 +41,7 @@ import {
   type RenderableSettingsSourceFace,
 } from './settings-source-face.ts'
 import {
-  settingsAckDecision, settingsOpenCommand, type SettingsNavigationSeat, type SettingsOpenCommand,
+  settingsAckPlan, settingsOpenCommand, type SettingsNavigationSeat, type SettingsOpenCommand,
 } from './settings-navigation.ts'
 import { BridgeEntryBoundary, BridgeOutlet, useLocaleRevision } from './bridge-outlet.tsx'
 import type { BridgeStandardSeats } from './bridge-outlet.tsx'
@@ -747,6 +747,10 @@ export function SettingsShell(props: SettingsShellProps) {
   // before that commit drops the intent (no replay after remount), while a manual visit
   // to another section waits for the requested one. The seq starts at 0, so a request
   // queued while the settings chunk was loading is consumed on mount.
+  //
+  // The ack decision itself is DERIVED DURING RENDER (ackPlan below): the effect only
+  // executes it, so correctness cannot silently regress if the effect's dependency
+  // array loses open/activeId (locked by test/shell/settings-ack-wiring.test.ts).
   const lastOpenSeq = useRef(0)
   const [pendingAck, setPendingAck] = useState<SettingsOpenCommand | undefined>(undefined)
   useEffect(() => {
@@ -763,13 +767,15 @@ export function SettingsShell(props: SettingsShellProps) {
     consume()
     return navigation.subscribe(consume)
   }, [navigation, chamberInstanceId])
+  const ackPlan = pendingAck === undefined || navigation === undefined
+    ? undefined
+    : settingsAckPlan(pendingAck, open, activeId)
   useLayoutEffect(() => {
-    if (navigation === undefined || pendingAck === undefined) return
-    const decision = settingsAckDecision(pendingAck, open, activeId)
-    if (decision !== 'ack' && decision !== 'drop') return
-    navigation.acknowledge(pendingAck.seq)
+    if (ackPlan === undefined || navigation === undefined) return
+    if (ackPlan.kind !== 'ack' && ackPlan.kind !== 'drop') return
+    navigation.acknowledge(ackPlan.seq)
     setPendingAck(undefined)
-  }, [open, activeId, pendingAck, navigation])
+  }, [ackPlan, pendingAck, navigation])
 
   // Keep the selected source mounted while the panel is open (and release the
   // hold on close/unmount): an unmounted source has no ledger to render.

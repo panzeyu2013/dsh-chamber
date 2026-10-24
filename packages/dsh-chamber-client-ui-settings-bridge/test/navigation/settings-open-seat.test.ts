@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import {
   createSettingsNavigationSeat,
   settingsAckDecision,
+  settingsAckPlan,
   settingsOpenCommand,
 } from '../../src/client/settings-navigation.ts'
 
@@ -57,6 +58,46 @@ test('settingsAckDecision: ack on the target, wait on another section, drop when
   assert.equal(settingsAckDecision(request, true, 'models'), 'wait', 'a manual visit to another section must not consume it')
   assert.equal(settingsAckDecision(request, true, 'plugin-manager'), 'ack')
   assert.equal(settingsAckDecision(request, true, undefined), 'wait')
+})
+
+test('settingsAckPlan: wait on another section, ack only when the target section is shown', () => {
+  const request = { seq: 4, sectionId: 'plugin-manager' }
+  // 已打开但停在别的分节 = wait：这次提交不消费，等用户再次访问目标分节。
+  assert.deepEqual(settingsAckPlan(request, true, 'models'), { kind: 'wait', seq: 4 })
+  // 切到目标分节的那次提交才 ack。
+  assert.deepEqual(settingsAckPlan(request, true, 'plugin-manager'), { kind: 'ack', seq: 4 })
+  // 目标分节提交前关闭 = drop：关闭动作丢弃这次意图。
+  assert.deepEqual(settingsAckPlan(request, false, undefined), { kind: 'drop', seq: 4 })
+  assert.equal(settingsAckPlan(undefined, true, 'plugin-manager'), undefined)
+})
+
+test('a close before the target commits drops the request; the acked seq never replays', () => {
+  const seat = createSettingsNavigationSeat()
+  seat.open('plugin-manager')
+  const plan = settingsAckPlan(settingsOpenCommand(seat.getRequest(), 0), false, 'models')
+  assert.deepEqual(plan, { kind: 'drop', seq: 1 })
+  if (plan === undefined) assert.fail('a closed panel must yield a drop plan')
+  seat.acknowledge(plan.seq)
+  assert.equal(seat.getRequest(), undefined, 'drop 也消费请求：显式关闭不等于“稍后再打开”')
+  // 重挂载（lastSeq 归零）也不得重放已 ack 的 seq。
+  assert.equal(settingsOpenCommand(seat.getRequest(), 0), undefined)
+})
+
+test('an unacknowledged request is still consumed after a remount (design 05: the seat outlives the shell)', () => {
+  const seat = createSettingsNavigationSeat()
+  seat.open('plugin-manager')
+  // 第一次挂载消费了请求但停在别的分节（wait），随后壳被卸载：请求仍留在座席上。
+  assert.equal(settingsAckPlan(settingsOpenCommand(seat.getRequest(), 0), true, 'models')?.kind, 'wait')
+  assert.deepEqual(seat.getRequest(), { seq: 1, sectionId: 'plugin-manager' })
+  // 重挂载的壳 lastSeq 从 0 开始，重新消费同一个请求；目标分节提交后才 ack。
+  const remounted = settingsOpenCommand(seat.getRequest(), 0)
+  assert.deepEqual(remounted, { seq: 1, sectionId: 'plugin-manager' })
+  const plan = settingsAckPlan(remounted, true, 'plugin-manager')
+  assert.equal(plan?.kind, 'ack')
+  if (plan === undefined) assert.fail('the target section render must acknowledge the request')
+  seat.acknowledge(plan.seq)
+  assert.equal(seat.getRequest(), undefined, 'ack 后同一个 seq 不再出现')
+  assert.equal(settingsOpenCommand(seat.getRequest(), 0), undefined)
 })
 
 test('open ignores an empty section id', () => {

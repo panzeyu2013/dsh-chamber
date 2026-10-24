@@ -50,6 +50,14 @@ export interface SettingsOpenCommand {
 /** What the shell does with a consumed request after a commit. */
 export type SettingsAckDecision = 'ack' | 'drop' | 'wait'
 
+/** The shell-side action for one pending request in a committed render. */
+export interface SettingsAckPlan {
+  /** What the commit settles: acknowledge, drop, or wait for the requested section. */
+  readonly kind: SettingsAckDecision
+  /** Request sequence the shell acknowledges or drops. */
+  readonly seq: number
+}
+
 /**
  * Decide a pending request's fate for the committed render. Acknowledge it when
  * its section is the one now active; drop it when the panel closed before the
@@ -69,6 +77,29 @@ export function settingsAckDecision(
   if (request === undefined) return undefined
   if (!open) return 'drop'
   return activeId === request.sectionId ? 'ack' : 'wait'
+}
+
+/**
+ * Derive the shell's ack plan for one COMMITTED render. The decision is computed
+ * during render from the committed `open`/`activeId`, and the effect only executes
+ * it, so correctness does not depend on an effect dependency list that happens to
+ * carry those two primitives. `ack` belongs to the committed render that shows the
+ * requested section; `drop` is a close before that commit (a remount must not
+ * replay it); `wait` means the panel is already open but sitting on another
+ * section, so a later visit to the target section settles this consumed request.
+ * @param command - the consumed request awaiting an acknowledge, if any.
+ * @param open - whether the panel is open in this commit.
+ * @param activeId - the section selected in this commit.
+ * @returns the plan, or undefined when no request is pending.
+ */
+export function settingsAckPlan(
+  command: SettingsOpenCommand | undefined,
+  open: boolean,
+  activeId: string | undefined,
+): SettingsAckPlan | undefined {
+  if (command === undefined) return undefined
+  const kind = settingsAckDecision(command, open, activeId)
+  return kind === undefined ? undefined : { kind, seq: command.seq }
 }
 
 /**
