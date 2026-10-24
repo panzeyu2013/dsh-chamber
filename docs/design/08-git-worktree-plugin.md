@@ -565,17 +565,23 @@ pre-remove 归档**带 `stopActivity: true`**：勾选即授权宿主停止这�
     "已证明未变更"的线上信号；客户端凭该信号把未决的 git-remove 恢复判为已解决（"未删除"）并清除
     ——§6.2「UI 保留未决」的有界例外（仅限 host 可证明的变更前拒绝；歧义失败与 definitive conflict
     行为不变）。
-- **变更前探测失败 + 目标仍在 = 确定**：删除在 `attemptedRemove` 之前失败（发现 workspace 的
-  `git rev-parse`、拓扑读取、dirty 探测等）时，host **不**把内存操作记录当作安全凭据；它从
-  来源的其它已注册 workspace 重新发现目标仓库，要求 `expected.worktreeId` 对应的行仍在
-  topology 中列出、目录存在且 branch/HEAD 相同。证明成立时，`git-command-failed` /
-  `git-protocol-error` / `git-output-limit` 以显式 `retryable: false` 序列化——客户端据此清除
-  未决的 git-remove 恢复，不再用同一 operationId 重放同一条失败探测（实测症状：workspace 路径
-  落在 Git 目录内或裸仓库时 `git rev-parse` 报 `fatal: this operation must be run in a work
-  tree`，恢复条只剩「重试」且永远失败）。目标已消失、行标记 missing、身份漂移或所有 workspace
-  都无法发现仓库（证明失败）时保持原 retryable 语义，不用易失记录冒充证明（宿主重启/记录过期
-  后尤其如此；§6.2 残余）。`git-timeout`/`git-spawn-failed` 保持 retryable（可能瞬态，重试可能
-  真的收敛）；`state-source-*` 同样保留（来源读取失败不能证明操作状态，§6.4）。
+- **变更前失败 + 目标仍在 = 确定**：删除在 `attemptedRemove` 之前失败（发现 workspace 的
+  `git rev-parse`、拓扑读取、dirty 探测、running 会话 cwd 不可解析等）时，host **不**把内存
+  操作记录当作安全凭据；它从 fresh Git 事实证明目标未动，按「由近及远」两级来源：
+  ① 失败路径自身——`rev-parse --path-format=absolute --git-common-dir` 在 Git 目录/裸仓库内
+  仍然应答（`--show-toplevel` 恰恰在那里 die），据此定位仓库并跑一次 `worktree list`；
+  ② 来源的其它已注册 workspace——逐个重发现同一仓库（损坏的跳过）。
+  两级都要求 `expected.worktreeId` 对应的行仍在 topology 中列出、目录存在且 branch/HEAD 相同。
+  证明在 `PROOF_DEADLINE_MS` 预算内完成；超预算按证明失败处理——remove RPC 必须留在反代 45s
+  idle 窗内，否则证明本身会被读成 `http-error` 歧义，把刚清除的恢复重新铸回。证明成立时
+  `git-command-failed` / `git-protocol-error` / `git-output-limit` /
+  `running-agent-cwd-unavailable` 以显式 `retryable: false` 序列化——客户端据此清除未决的
+  git-remove 恢复，不再用同一 operationId 重放同一条失败拒绝（实测症状：workspace 路径落在
+  Git 目录内或裸仓库时 `git rev-parse` 报 `fatal: this operation must be run in a work
+  tree`，恢复条只剩「重试」且永远失败）。目标已消失、行标记 missing、身份漂移、两级来源都无法
+  证明或证明超预算时保持原 retryable 语义，不用易失记录冒充证明（宿主重启/记录过期后尤其如此；
+  §6.2 残余）。`git-timeout`/`git-spawn-failed` 保持 retryable（可能瞬态，重试可能真的收敛）；
+  `state-source-*` 同样保留（来源读取失败不能证明操作状态，§6.4）。
 - **可选同时删除本地分支**（显式用户授权，是 §5.1「不删分支」的例外）：`git branch -D` 白名单新增，
   尽力一次，失败如实返回 `branchDeleteFailed` 且不阻断已删工作树（结果必须解码上报，不得静默丢弃）；
   target-absent 重放路径同样执行分支删除（`attemptBranchDelete` 三路径）。
@@ -701,15 +707,17 @@ pre-remove 归档**带 `stopActivity: true`**：勾选即授权宿主停止这�
   definitive conflict；UI 保留未决并阻止同目标新动作，不提供把“放弃”伪装成成功的按钮，用户需 reload
   后依据 fresh topology 手工核对。
 - **有界例外**：host 显式 `retryable: false` 的拒绝 = 已证明变更前未动：删除目标的 Git 探测在
-  `attemptedRemove` 之前失败且从其它 workspace 的 fresh topology 证明目标仍在（§5.3），或变更后
-  复查目标仍在、目录仍在、仍干净（§5.3）——同一删除的未决性已解决为“未删除”，客户端清除该
-  git-remove 恢复并呈现可关闭错误，不再要求无出口的重试；definitive conflict（身份漂移等）仍按
+  `attemptedRemove` 之前失败且从 fresh Git 事实（失败路径自身或其它 workspace，§5.3）证明目标仍在，
+  或变更后复查目标仍在、目录仍在、仍干净（§5.3）——同一删除的未决性已解决为“未删除”，客户端清除
+  该 git-remove 恢复并呈现可关闭错误，不再要求无出口的重试；definitive conflict（身份漂移等）仍按
   上文保留未决。
 - **Rejected alternatives（探测失败的出口）**：给来源级 recovery 增加「放弃」按钮被否——它会把可能
   已提交的删除伪装成已解决；把 `git-command-failed` 加进客户端的确定性拒绝集合也被否——同一代码
   是变更后歧义失败的正典，会把可能已提交的删除误判为确定性拒绝；按 `rev-parse` stderr 文本匹配
   被否——脆弱且脱离领域码契约；只靠进程内 `attemptedRemove` 改判也被否——宿主重启/记录过期后无法
-  证明旧进程未提交，故采用 fresh-topology 的“目标仍在”证明。把 reload 当作确定性探测失败的
+  证明旧进程未提交，故采用 fresh Git 事实的“目标仍在”证明；只从已注册 workspace 重发现仓库也被否
+  ——目标仓库常常只有目标这一个 workspace，且症状本身就是该路径的 work-tree 探测 die，遍历会正好漏掉
+  它，故先探测失败路径自身（`--git-common-dir` 仍应答）。把 reload 当作确定性探测失败的
   **解决方案**同样被否（重放结果不变）；reload 仍是记录丢失/无法证明情形（含 `path-unavailable`
   重放、create/rollback）的最后手段。
 - **既有残余（重放仍可能 retry-only）**：`path-unavailable`/`workspace-path-unavailable` 的客户端
@@ -717,8 +725,9 @@ pre-remove 归档**带 `stopActivity: true`**：勾选即授权宿主停止这�
   可能意味着上次删除已提交，清除不安全）。`git-timeout`/`git-spawn-failed`/`state-source-*`
   同样保留；终态 receipt 重放（`verifyRemovedReplay`）的失败也仍按原 retryable 语义。create/
   rollback 的未尝试探测失败也未接入 `retryable: false` 清除（其恢复类型与 git-remove 不同，清除
-  需要单独的“目标未创建/回滚未发生”证明）。以上退出均为 reload 后按 fresh topology 核对；
-  登记在 STATUS。
+  需要单独的“目标未创建/回滚未发生”证明）。证明失败本身（目标消失、行 missing、身份漂移、两级
+  来源都无法定位仓库、或超过 `PROOF_DEADLINE_MS`）同样保持 retryable——证明不了“未删除”就不得
+  清除恢复。以上退出均为 reload 后按 fresh topology 核对；登记在 STATUS。
 - **既有残余（非回归）**：脏竞态（git 因树变脏在变更前 die）因复查的"仍干净"条件不成立而保持
   retryable，其恢复重试随后撞上确定性 `worktree-dirty`（不带证明标记，恢复保留）——脏需外部清理后
   重试收敛，与 identity 漂移同属"原因可修/需外部核对"的类别。
