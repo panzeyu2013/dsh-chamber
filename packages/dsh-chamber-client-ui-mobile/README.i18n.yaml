@@ -5,6 +5,6 @@
 # （`pnpm run verify:i18n -- --write` 可重录；仓库纪律见家族惯例）。
 
 en:
-  README.md: e2fc19fdd08fb432d16d5b1751a09e5512328bee1e3bcb08078507a35c77b2ea
+  README.md: 15e74254f16da3b1dcbcb667bcf7ee451cbb8113fc2b012026747a748afe6a3c
 zh:
-  README.zh.md: 182a94efe284732d13898ec54802e43df37fd1c77149d50d1783320951100a95
+  README.zh.md: ee035026dc766b5bf9d59e1a493445d6e34c15b44a0f6aa207767f7e3fdbb886

@@ -21,6 +21,7 @@ import {
 } from '@dsh-chamber/dsh-chamber-client-core'
 import { SettingsShell } from './SettingsShell.tsx'
 import type { SettingsShellInjected } from './SettingsShell.tsx'
+import { createSettingsNavigationSeat } from './settings-navigation.ts'
 import {
   publishSettingsSourceRuntime, type SettingsSourceLocale, type SettingsSourceSlots,
 } from './settings-source-face.ts'
@@ -89,7 +90,14 @@ export function apply(ctx: ClientContext): void {
     registerRuntimeSection(ctx, chamberInstanceId, localeFace)
   }
 
-  const injected = (): SettingsShellInjected => ({ t, connectionsT, chamberInstanceId })
+  // Per-ctx settings-navigation seat (design 05 §5): another plugin in THIS boot ctx
+  // asks the shell to open one section (pluginNavigation.openList/openBundle). The seat
+  // is provided before the shell registration so a request that lands later still finds
+  // its consumer, and it stays alive across shell unmounts (the shell consumes on mount).
+  const navigation = createSettingsNavigationSeat()
+  ctx.effect(() => ctx.reflect.provide('chamberSettingsNavigation', navigation), 'dsh-chamber: settings navigation seat')
+
+  const injected = (): SettingsShellInjected => ({ t, connectionsT, chamberInstanceId, navigation })
 
   ctx.slots.inject('sidebar.settings', () => ctx.slots.register({
     name: 'sidebar.settings',

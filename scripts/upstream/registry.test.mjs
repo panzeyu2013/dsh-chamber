@@ -81,9 +81,10 @@ test('registry 值锁：分类桶形状 + 符号锚字符串（防"同计数下�
   // client-web 另以 own 登记 extra-chunk-owners.ts（design 09 动态 chunk 边界）。
   // layout（chamber-named 副本，seed.dsh-chamber-client-ui-layout）：patched 5 / own 4 /
   // ownPrefix 1 / dropped 11（frame 面深引 vendor 源、不镜像；死 tsdown.config.ts 由 P6 删除后归 dropped）。
+  // ui-sidebar dropped 7：rc.3 新增 src/client/panel-pins.ts（本壳不声明 sidebar.panellist.actions，无消费面）。
   assert.equal(
     createHash('sha256').update(JSON.stringify(shape)).digest('hex').slice(0, 16),
-    'e3df32721a62d942',
+    '4d482fdd3b38f950',
     '分类桶形状变了（桶间搬家或增删文件）——必须同批改本断言的哈希；当前形状：' + JSON.stringify(shape),
   )
   assert.deepEqual(
@@ -151,7 +152,7 @@ test('verifierForks 与迁移前内嵌 FORKS 同形：顺序、路径、分类�
   ])
   assert.deepEqual(
     forks.map((fork) => [Object.keys(fork.patched).length, Object.keys(fork.own).length, fork.ownPrefix.length, fork.dropped.length]),
-    [[10, 4, 4, 4], [9, 4, 1, 5], [7, 7, 1, 12], [4, 4, 1, 8], [5, 5, 1, 13], [11, 1, 3, 6]],
+    [[10, 4, 4, 4], [9, 4, 1, 5], [7, 7, 1, 12], [4, 4, 1, 8], [5, 5, 1, 13], [11, 1, 3, 7]],
   )
   assert.equal(forks[3].versionAnchor, 'chamber')
   assert.equal(forks[4].versionAnchor, 'chamber')

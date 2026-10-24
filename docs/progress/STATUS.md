@@ -51,6 +51,7 @@
 - **移动端 P0/P1**：14 项真机复验（首行 ≤48px、安全区、tooltip 三形、crumbs、`_toBottomSlot`、PlatformOverlay、R3/R5、IME、M-9、stale-selection、inert、Escape、preview 卡、M-10 判红；判据见 design 17 §18.6）。
 - **N-ctx 主题/语言**：打包态目检；冷启动变化 ≤1、预热/收割 0，另验同帧性。
 - **设置面残余**：写路径 4–8 人日（台账/字段描述符/密钥存在性）；面板要求源壳挂载；打包态冒烟。
+- **rc.3 More 行依赖延迟设置行**：`entry-customization` 的 `pluginNavigation` 只由延迟的 settings-plugin-manager 提供；该 chunk 失败/超时时宿主行停在 PENDING，会话头/右栏 More 缺席（只报该延迟行失败）。判据 = 延迟 chunk 失败 drill + 目检；座席存在但读取在处置窗口抛错时 `openPending` 无自动 flush（再次点击恢复），同 drill 覆盖。
 
 ### 1.4 打包态与真机门禁（按来源/版本）
 
@@ -63,7 +64,8 @@
 **Swift 运行期**：首载按 `/health` 等 ready；首屏后无周期健康探测/重启入口；`didCommit` 后缺期限；宿主 cwd/安装根两条。
 
 **上游 pin 新面（无 GUI 未跑）**：
-- 基线：0.2.1-rc.2 未复跑；pin 四项（内置插件页、跨代 profile、gateway 就地升级、0.1.6 移动端 + 右栏终端）挂账。
+- 基线：0.2.1-rc.3 未复跑；pin 四项（内置插件页、跨代 profile、gateway 就地升级、0.1.6 移动端 + 右栏终端）挂账。
+- rc.3（仅该来源）：①会话头视图折叠 + More（Trajectory 行在延迟簇注册视图，默认出现）；②右栏 guide More；③「浏览」落到设置→插件管理（plugin-navigation 座席）；④移动端 44px More 与 88px 标签省略；⑤New Session 全局按钮复用空白会话（复用保持创建时预设）。判据 = 含已打开会话的 More/浏览 走查 + 打包态真机（本次机械 live/走查未打开会话，不覆盖本行）；侧栏 More 不采纳见 §4.2。
 - 终端 attach/重连（G43）：生成式流的 uplink（输入/半关/取消帧）与断线重连待打包态真机走查；判据 = 行为用例 `packages/dsh-api-gateway/test/behavior/client-uplink-support.test.ts`、`packages/dsh-api-gateway/test/behavior/mux-self-heal.test.ts` + 真机。
 - alpha.4：Schedule（Automation tasks 面板/任务页/行 clock 标记/右侧任务标签/删除 toast/每会话 catalog 查询）+ Developer Tools（可选、默认关、Session/NodeJS Inspector、shell.bottom 声明）在 N-ctx 目检；判据 = C9/C11/C16 + `frame-slots`；风险 = inspector iframe document-relative 可能落 SPA fallback（C9 前缀或占位）。
 - alpha.4 Discover：启用市场 bundle 后设置→插件管理的 Discover 页签与安装链；判据 = `test:plugin-manager` 的 `plugins.tab` + C4 契约 26；风险 = inject 含 plugin-manager 行、extra row 模块表解析未测（必要时升 covered factory）。
@@ -134,7 +136,7 @@
 - S-49 原生窗口高度（786 vs 800）；宽度偏好 per-flavor（T-18）。
 - macOS Swift 壳 M5 实机矩阵未闭合；Developer ID/公证/stapler/`build-swift` 发布腿缺凭据；双端 harness/通知音效等价物未验。
 - 起始端口偏移已定（dsh 17510+1..17514、CP 17500，仅 env 覆盖）。
-- Electron 运行时指纹：当前 pin 43.4.0 不在 addon 表内 ⇒ 宿主 exit 1、5 端口全失败；待裁对齐 pin 或等 addon。
+- Electron 运行时指纹：当前 pin 43.4.0 不在 addon 表内 ⇒ 宿主 exit 1、5 端口全失败；待裁对齐 pin 或等 addon。2026-10 GUI 走查以 `DSH_CHAMBER_ELECTRON_DIST` 指 43.0.0 跑通——shipped 43.4.0 的启动腿仍是发布阻断项。
 - trusted-host 自定义 Host 需同步扩集；多 plane `$DSH_HOME` 隔离未决；catalog metadata 无跨进程 CAS。
 - 响应头白名单双处同步；`__DSH_BOOT__` 以 vendor `parseBootManifest` 为准。
 - 未挂载源 `workspace/follow` 只读流未决；facts forward-skew 带载荷是否算权威行集未裁。
@@ -167,3 +169,4 @@
 - **会话投影**：标签 + `hasActiveSchedule` 跨代际保留（0.6–0.8s；`updatedAt` 前进即停）。
 - **上游并存**：experimental worktree 默认关、其产物由 design 08 接管、不复用 create；cua 不接入。
 - **设置/账户**：设置壳自绘 chrome/源壳必须挂载/离线占位/body portal；上游对齐轮偏差（首启门、`sectionsEmpty`、失败屏深引、`Switch` 属性、业务蓝、schedule 事实、状态标记/Dock/通知）；桌面账户登录不可闭环（`/oauth/callback` 未反代；裁决 D2 见 [TODO.md](TODO.md) C§1）；`__dshChamberAccountOverlay` 与安全网互搏（待裁）。
+- **上游 rc.3 新面的取舍**：桌面复合体**不采纳侧栏 More**（chamber 侧栏不声明 `sidebar.panellist.actions`，`entry-customization` 的该注册停在等待态；`panel-pins.ts` 登记 `dropped`，采纳触发见 TODO A§15/U6）；gateway 的官方侧栏照常显示。**New Session 复用空白会话**（全局按钮/快捷键）：宿主把复用的空白切到默认预设；仅当该空白的 Agent 仍加载时保持创建时组成，重启后按当前定义（官方 guide 14/16/20）；chamber 的来源「+」仍按来源复用（只打开复用行，不走上游 `connectWorkspace` 的 sessionId 语义）；接受，不包裹。

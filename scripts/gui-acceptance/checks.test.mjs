@@ -72,6 +72,18 @@ test('plugin loader urls are unescaped and keep their rev query', () => {
   assert.equal(urls[1], '/plugins/??@deepseek-ai/dsh-client-modules/client.js&rev=cddf5581d5d5',
     'the &amp; entity must be decoded — the instance 404s the same path without rev')
   assert.deepEqual(parsePluginLoaderUrls(SHELL_HTML), [])
+  // The instance is mounted under /api/i/<id>/ with a <base href>; the host may
+  // declare the loader URL document-relative. Both forms are the same resource.
+  const relative = INSTANCE_HTML.replace(
+    'src="/plugins/??@deepseek-ai/dsh-client-modules/client.js&amp;rev=cddf5581d5d5"',
+    'src="plugins/??@deepseek-ai/dsh-client-modules/client.js&amp;rev=cddf5581d5d5"',
+  )
+  assert.deepEqual(parsePluginLoaderUrls(relative)[1], urls[1], 'relative loader URLs are normalised to the instance base')
+  const dotRelative = INSTANCE_HTML.replace(
+    'src="/plugins/??@deepseek-ai/dsh-client-modules/client.js&amp;rev=cddf5581d5d5"',
+    'src="./plugins/??@deepseek-ai/dsh-client-modules/client.js&amp;rev=cddf5581d5d5"',
+  )
+  assert.deepEqual(parsePluginLoaderUrls(dotRelative)[1], urls[1], 'dot-relative loader URLs are normalised too')
 })
 
 test('security headers: all four stamped, any one missing fails', () => {
@@ -879,6 +891,11 @@ test('view prefs fingerprint: only the persisted fields decide "did this leg wri
   assert.match(viewPrefsDelta(base, { ...base, sourceFolded: { local: true } }), /sourceFolded/)
   assert.equal(viewPrefsFingerprint({ present: false }), 'absent')
   assert.equal(viewPrefsDelta(null, base), null, 'no snapshot taken ⇒ no claim made')
+  // A fresh --dev instance starts without the store; the first fold creates the
+  // default shape. That is not residue; real user state still reports a delta.
+  assert.equal(viewPrefsDelta({ present: false }, base), null, 'default-store creation is not residue')
+  assert.match(viewPrefsDelta({ present: false }, { ...base, sourceFolded: { local: true } }), /sourceFolded/)
+  assert.match(viewPrefsDelta({ present: false }, { ...base, foldedKeys: 1 }), /foldedKeys/)
 })
 // Native flavor mode (native.mjs)
 

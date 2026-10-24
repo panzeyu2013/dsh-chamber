@@ -75,12 +75,13 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
 - **视图 tab**：`tabs.length > 1` 是**常态**而非边角——`ui-chat` 与
   `ui-trajectory` 都无条件注册 `conversation.view`，且都在默认 web bundle 里。
   官方 tab 是 13px 文字 + 25px 盒，而 tab 条既不换行也不滚动、frame 又裁掉溢出
-  （`AppFrame.module.css` 的 `overflow: hidden`）⇒ 出现第三个视图或更长的
-  （英文）标签就会被彻底裁掉：触屏档把 tab 盒抬到 44px 触控底线
-  （`box-sizing: border-box`，否则官方 9px 下内边距会把它变成 53px；头部的
-  `min-height: 76px` 是**下限**，行高随内容增长），并让 tab 条**换行**。
-  选择换行而非滚动是刻意的：滚动容器会把另一轴强制算成 `auto`，从而裁掉活动
-  tab 那条 2px 指示条——上游特意把它画到 tab 盒外 1px，好与头部底线齐平。
+  （`AppFrame.module.css` 的 `overflow: hidden`）；上游当前行还会按宽度折叠视图、
+  把余下项收进 More 菜单（rc.3），但该预算由 JS 量出，长（英文）标签按上游 88px 上限省略。
+  触屏档把 tab 盒抬到 44px 触控底线（`box-sizing: border-box`，否则官方 9px
+  下内边距会把它变成 53px；头部的 `min-height: 76px` 是**下限**，行高随内容增长），
+  让 tab 条**换行**作为兜底，并给 More 触发器同样的底线。选择换行而非滚动是刻意的：
+  滚动容器会把另一轴强制算成 `auto`，从而裁掉活动 tab 那条 2px 指示条——上游特意
+  把它画到 tab 盒外 1px，好与头部底线齐平。
 
 ## 会话打开停滞提示（触屏档）
 
@@ -486,7 +487,7 @@ pnpm run test:mobile
 
 官方 dsh DOM 实测（CDP 审计在 **v0.1.5-alpha.2** 完成，并在 **v0.1.5-rc.2**
 重锚）——下列锚点在 rc.2 树中曾全部成立（本节 rc.1/rc.2 均指 v0.1.5 世系，
-当前 pin 一律写全 0.2.1-rc.2）；当前 pin（v0.2.1-rc.2）下严格锚点门解析全部
+当前 pin 一律写全 0.2.1-rc.3）；当前 pin（v0.2.1-rc.3）下严格锚点门解析全部
 声明锚点（共 68 条，其中 60 条为上游锚点；最小断言集 27 项），含属性/role/slot 锚点、
 插件侧 local-name 类名锚点、external `_crumbSeg` 发射钉与两个 build-time
 CSS-module hash token——在物化上游产物语料上零命中 0、advisory 0
@@ -495,11 +496,13 @@ CSS-module hash token——在物化上游产物语料上零命中 0、advisory 
 `data-sidebar-right-guide-entry`，以及模型标签槽的
 `data-provider-id` 与首/末子节点形状；全部在 pin 产物中命中）
 （`verify-mobile-anchors.mjs --require-anchor-root`）；类名臂已按被服务的
-rc.2 产物重锚，零命中现为**硬失败**（见下）；alpha.2 → rc.1 的客户端改动（`ui-sidebar-*`
+rc.3 产物重锚，零命中现为**硬失败**（见下）；alpha.2 → rc.1 的客户端改动（`ui-sidebar-*`
 的 guide/preview 行、`ui-primitives` 的 `CodeBlock` 包装层、`ui-chat` 统计对话框、
 `ui-dockkit` CSS 的两处 `z-index`、slot-catalog 文档指针）与 rc.1 → rc.2 的改动
 （`ui-{chat,deliverables,message-feedback,primitives}` 的反馈弹窗、交付卡与代码文件图标
-精修）既不涉及下述锚点的产出源，也不改变本插件叠层所对位的层：
+精修）与 rc.2 → rc.3 的**会话头**改动（按宽度折叠视图页签、被折叠视图的 More 触发器、
+88px 的 `span.tabLabel` 省略；该版本另增 entry-customization 行与增量 Tooltip/Menu 变更，
+见 STATUS）不涉及下述锚点的产出源，也不改变本插件钉住的选择器/尺寸：
 `data-sidebar-collapsed` 折叠=存在/展开=移除；中心列为 keyed **`main`** 槽、右列为
 **`rightbar`**（两个列壳及其 `[data-slot=…]` 出口包裹层都自首帧常驻——渲染器无条件
 输出该包裹层，只有其中的 docking 面按注册挂载，故打标在列壳上即收敛，见 markup.ts
@@ -508,7 +511,7 @@ rc.2 产物重锚，零命中现为**硬失败**（见下）；alpha.2 → rc.1 
 `createPortal(…, document.body)`），抽屉的 transform 不再会把它裁进去；
 抽屉打开态仍刻意用 `transform: none`。
 
-当前 vendored 基线为 **v0.2.1-rc.2**（harness pin `687f282e`；单一来源
+当前 vendored 基线为 **v0.2.1-rc.3**（harness pin `1f81c047`；单一来源
 `harness.commit`）。历史审计记录：上述锚点已对 alpha.2 源码复核（2026-09 重锚），
 并在 v0.1.5-rc.2 上复验成立（rc.1 → rc.2 的客户端改动见上，
 不触及这些锚点与本插件的叠层对位），复核同时确认：composer seat 是
@@ -529,8 +532,9 @@ slot 出口是 `display: contents`（`SidebarRight.tsx`、
 右栏 dockkit 条 `[data-dockkit-strip]`——28px 的
 chips、加号/分屏与面板 chrome 按钮，以及被排除的 20px `[data-dockkit-tab-close]`
 ——作为触控底线座（`TabPanel.tsx`、
-`SidebarRight.tsx`）；会话头的 `role="tablist"` 条
-（`ConversationSession.tsx`，只要会话多于一个视图就渲染，实际恒在）。同时确认了
+`SidebarRight.tsx`）；会话头的 `role="tablist"` 条（rc.3 起是 `div.tabs` 内的
+`div.viewTabs[role="tablist"]`，旁边是 Menu 锚点 span 里的折叠视图 More；
+页签 label 在 88px 处省略）（`ConversationSession.tsx`，只要会话多于一个视图就渲染，实际恒在）。同时确认了
 本插件**不得**锚定的东西：`[data-dockkit-split-button]` 是 click 按钮而非拖拽
 chrome；`[role="menu"] [role="menuitem"][aria-selected]` 高亮信号在本 pin 不存在
 （ui-primitives `Menu` 不发 `aria-selected`，且它会把焦点移入菜单，其 Enter 根本
@@ -549,8 +553,10 @@ chrome；`[role="menu"] [role="menuitem"][aria-selected]` 高亮信号在本 pin
 - phone 档选择器依赖的 DOM 层级：
   `header > div.titleRow > div.titleCluster > [nav.crumbs, div.headerActions]`，
   `div.headerUtilities` 与 `div.headerCorner[data-conversation-header-corner]` 是
-  `titleRow` 的另两个子节点，`div.tabs[role=tablist]` 是 `header` 的第二个子节点——
-  因此写在行上的 `> nav` 子代组合器是**静默 no-op**（`:has()` 必须是后代匹配）；
+  `titleRow` 的另两个子节点，`div.tabs` 是 `header` 的第二个子节点——其内层
+  `div.viewTabs` 才是 `role=tablist`，其后是 rc.3 的折叠视图 More
+  （`span > button[aria-haspopup=menu]`）——因此写在行上的 `> nav` 子代组合器是
+  **静默 no-op**（`:has()` 必须是后代匹配）；
 - 当前 crumb 是裸 `span.crumb.crumbCurrent`，**不是** disabled 按钮；收缩顺序是
   结构式的——末段 `nav > span:last-child`（最后一个 `span.crumbSeg`）吸收剩余
   宽度，段内标题 span 借上游 `.crumb` 的 `max-width: 220px` +

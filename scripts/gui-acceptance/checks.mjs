@@ -29,7 +29,11 @@ export function createRecorder() {
 
 const ASSET_ATTRIBUTE = /(?:src|href)="(\/assets\/[^"]+)"/g
 const RELATIVE_ASSET_ATTRIBUTE = /(?:src|href)="\.\/(assets\/[^"]+)"/g
-const PLUGIN_LOADER_ATTRIBUTE = /(?:src|href)="(\/plugins\/\?\?[^"]+)"/g
+// The instance is mounted under /api/i/<id>/ with a <base href>, so the host may
+// declare the loader URL RELATIVE ("plugins/??…") or root-absolute ("/plugins/??…").
+// Both are the same document-relative resource; normalise to the absolute path the
+// probe fetches under the instance base.
+const PLUGIN_LOADER_ATTRIBUTE = /(?:src|href)="((?:\.\/|\/)?plugins\/\?\?[^"]+)"/g
 
 /** Root-absolute asset urls declared by a shell index.html. */
 export function parseShellAssets(html) {
@@ -47,7 +51,10 @@ export function parseInstanceAssets(html) {
  * hand-built one — is what the acceptance run must probe.
  */
 export function parsePluginLoaderUrls(html) {
-  return [...html.matchAll(PLUGIN_LOADER_ATTRIBUTE)].map(match => match[1].replace(/&amp;/g, '&'))
+  return [...html.matchAll(PLUGIN_LOADER_ATTRIBUTE)].map((match) => {
+    const url = match[1].replace(/&amp;/g, '&').replace(/^\.\//, '')
+    return url.startsWith('/') ? url : `/${url}`
+  })
 }
 
 /** The chamber shell's own markers. */
@@ -565,6 +572,17 @@ export function viewPrefsUnreadable(prefs) {
  * @returns a description such as `sourceFolded null→{"local":true}`, or null.
  */
 export function viewPrefsDelta(before, after) {
+  // A fresh --dev instance has no store key at all; the first fold round-trip
+  // necessarily creates it. Creating ONLY the default shape (no sourceFolded,
+  // no folded keys, no width/order) is not residue — design 06 §3.1 keeps
+  // sourceFolded only while collapsed. Any user state still reports a delta.
+  if (before?.present === false && after?.present === true
+    && (after.sourceFolded === null || after.sourceFolded === undefined)
+    && (after.foldedKeys ?? 0) === 0
+    && (after.orderByKeys ?? 0) === 0
+    && (after.serverOrder ?? 0) === 0
+    && (after.sidebarWidth === null || after.sidebarWidth === undefined)
+    && (after.parseError === undefined || after.parseError === null)) return null
   const fingerprintBefore = viewPrefsFingerprint(before)
   const fingerprintAfter = viewPrefsFingerprint(after)
   if (fingerprintBefore === null || fingerprintAfter === null || fingerprintBefore === fingerprintAfter) return null

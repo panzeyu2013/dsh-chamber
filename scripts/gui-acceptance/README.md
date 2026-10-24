@@ -190,6 +190,9 @@ sidecar 生命周期可终止（attach 不启动、也不终止运行中的壳�
   于是 `03-sidebar-toggled.png` 显示的是"另一个状态"而非"折叠态"——方向以证据行
   `[data-sidebar-collapsed] false → true → false` 为准（1280×768 与 rail/窄档三态都实测过）。
 - **W-4a 只覆盖首个来源节**：多来源实例里其余来源的收拢不在本腿内（一次性实例本也只有本地来源一个节）。
+- **W-4a 的新实例初始 store**：一次性实例可能没有 `dsh-chamber.sidebar.v1`；首次收拢必然创建它。只把
+  「absent → 仅默认形状（无 `sourceFolded`、无折叠项、无宽度/顺序）」视为无残留；出现 `sourceFolded`
+  或非空 folded/order 仍 FAIL（`viewPrefsDelta`）。
 - **N-ctx 多壳窗口按"可见性"收口**：非活动实例视图仍挂载在 DOM 里、只用 `visibility: hidden` 隐藏
   （`packages/renderer/src/styles.css` 的 `.instance-hidden`/`.instance-pending`），几何上仍有真实尺寸。
   因此 `DOM_FACTS` 把**计算可见性**作为事实一并带出：`pickRailToggle` 只接受可见控件，`W-4a` 只取**首个

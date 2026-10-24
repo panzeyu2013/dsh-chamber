@@ -262,6 +262,7 @@ host插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游README（api
 | `locale/zh.json` | [dropped] | 上游新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。 |
 | `src/client/HeaderLeadingControls.module.css` | [dropped] | 该组件的内部样式；上游文件不镜像、也不被消费——同一 shell.leading 席位由本包 SidebarLeadingControls.module.css（上游同形 clone）实现 |
 | `src/client/HeaderLeadingControls.tsx` | [dropped] | 上游组件不镜像、不被源码路径消费；同一 shell.leading 席位由本包 SidebarLeadingControls.tsx 注册占座（src/client/index.ts；vendor-modules.d.ts 只声明本包用到的类型面） |
+| `src/client/panel-pins.ts` | [dropped] | 上游新增的面板固定/排序铺线（内存 store，无持久化）：chamber 未声明 sidebar.panellist.actions 洞、也不渲染上游的 More 菜单，故该文件无消费面——登记 dropped 以免 C1/C3 判为漏裁决（采纳 More 时整包再消费） |
 | `tests/` | [dropped] | 上游测试/快照不镜像（chamber 有自建 test/） |
 | `tsdown.config.ts` | [dropped] | chamber 不构建 lib/（沿用上游模板形状但 chamber 树不产出该产物） |
 <!-- GENERATED:registry:touchpoints.fork-mirror.ui-sidebar:end -->

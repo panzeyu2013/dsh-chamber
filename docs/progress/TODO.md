@@ -209,6 +209,11 @@ search/add 只写被覆盖 store、openLocal 键被消费无反馈（`noPicker` 
 
 **U5 search**：本仓胶囊常驻（展开即挂载）vs 上游 inline `max-width .18s` + `search-skeleton`；动画/骨架会改 design 06 §1。
 
+**U6 侧栏 More（rc.3）**：上游 entry-customization 向 `sidebar.panellist.actions` 注册面板 More
+（Browse/Create，收起后折叠视图）；本壳未声明该洞、不渲染，`panel-pins.ts` 登记 `dropped`。候选 A 采纳
+（声明洞 + 渲染 More + 消费面板 pin；侧栏新增内容须先交用户裁决）；B 维持不采纳（当前；gateway 官方侧栏仍显示）。
+证据：`packages/dsh-chamber-client-ui-sidebar/src/client/index.ts` 子洞表、registry `dropped`。
+
 #### 15.2 维持的差异与裁决
 
 - **品牌**：mark 保持 chamber `BrandWordmark`（rail 用上游 FishLogo）；name 洞空回退（无构建版本事实）。

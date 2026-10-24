@@ -16,6 +16,7 @@ import type { PluginManagerLocaleKey } from '@deepseek-ai/dsh-client-ui-plugin-m
 import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/slot-contract.ts'
 import { EmbeddedPluginManagerPage } from './EmbeddedPluginManagerPage.tsx'
 import { createPluginActionTracker } from './plugin-action-tracker.ts'
+import { createPluginNavigation, type PluginNavigationTarget } from './plugin-navigation.ts'
 import { sectionLocales, type PluginManagerSectionLocaleKey } from './section-locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -27,12 +28,19 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    pluginNavigation: { openBundle(packageName: string): void }
+    /** Cross-plugin navigation to the Plugins page (upstream shape, rc.3 adds openList). */
+    pluginNavigation: {
+      openBundle(packageName: string): void
+      openList(): void
+    }
   }
 }
 
 const MANAGER_NS = 'pluginManager'
 const SECTION_NS = 'settings.pluginManagerSection'
+
+/** The `settings.section` id this page owns; plugin navigation targets it. */
+const PLUGIN_SECTION_ID = 'plugin-manager'
 
 export const inject = [
   'slots', 'locale', 'remote', 'remote.pluginManager', 'remote.pluginInventory',
@@ -132,24 +140,44 @@ export function apply(ctx: ClientContext): void {
       dismissNotice: face.dismissNotice,
     }),
   }, PluginRefreshToast as never))
-  let openPackage: ((packageName: string) => void) | undefined
-  ctx.effect(() => ctx.reflect.provide('pluginNavigation', {
-    openBundle: (packageName: string) => { openPackage?.(packageName) },
-  }), 'settings-plugin-manager: navigation service')
+  // Navigation service (design 05 §5): the page's view half binds when its
+  // `settings.section` declaration lands; the dialog half goes through the per-ctx
+  // `chamberSettingsNavigation` seat the settings shell provides. Both peers are
+  // deferred chunks and either may arrive first, so a request queues and the dynamic
+  // inject flushes a queued open when the seat appears (a refused seat stays queued).
+  const navigation = createPluginNavigation({
+    openSection: () => {
+      // ctx.get can throw while a service is being disposed (the cordis proxy's
+      // documented edge; same guard as the sidebar's goal-activation read). A click
+      // in that window must queue, not surface a TypeError.
+      let seat: { open(sectionId: string): void } | undefined
+      try {
+        seat = ctx.get<{ open(sectionId: string): void } | undefined>('chamberSettingsNavigation')
+      } catch {
+        seat = undefined
+      }
+      if (seat === undefined) return false
+      seat.open(PLUGIN_SECTION_ID)
+      return true
+    },
+  })
+  // Dynamic dependency: the callback runs now when the seat is already provided and
+  // when it appears later (cordis keeps the child Fiber until this plugin ctx dies).
+  ctx.inject(['chamberSettingsNavigation'], () => { navigation.retryOpen() })
+  ctx.effect(() => ctx.reflect.provide('pluginNavigation', navigation.provider), 'settings-plugin-manager: navigation service')
   ctx.slots.inject('settings.section', function* () {
     const handle = createNavigationStore()
     const instance = handle.create()
     const store: typeof handle = { ...handle, create: () => instance }
-    const navigate = (packageName: string): void => {
-      // The page now has tabs: a bundle opened from another tab must land on Installed.
+    const applyNavigation = (target: PluginNavigationTarget): void => {
+      // The page has tabs: any programmatic open lands on Installed first.
       instance.actions.setTab('installed')
-      instance.actions.setView({ kind: 'package', name: packageName })
+      instance.actions.setView(target === 'list' ? { kind: 'list' } : { kind: 'package', name: target.name })
     }
-    openPackage = navigate
-    yield () => { if (openPackage === navigate) openPackage = undefined }
+    yield navigation.attach(applyNavigation)
     yield ctx.slots.register({
       name: 'settings.section',
-      id: 'plugin-manager',
+      id: PLUGIN_SECTION_ID,
       order: 16,
       label: () => sectionLabel('nav'),
       locale: MANAGER_NS,

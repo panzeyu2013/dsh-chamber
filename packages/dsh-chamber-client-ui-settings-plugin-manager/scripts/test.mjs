@@ -25,6 +25,10 @@ const GROUPS = {
   // 以及 vendor 三参 inject 的源锁（读 pin 住的源码，缺树响亮失败）。
   trigger: [
     'test/trigger/plugin-action-tracker.test.ts',
+    // pluginNavigation provider（rc.3 openList）：视图目标与 UI 打开两半的晚到队列。
+    'test/trigger/plugin-navigation.test.ts',
+    // 跨包接线锁：服务键/座席键/壳消费路径的源文本（字符串键改错会静默 no-op）。
+    'test/trigger/plugin-navigation-wiring.test.ts',
     'test/trigger/plugin-refresh-wiring.test.ts',
     'test/trigger/manager-inject-signature.test.ts',
   ],

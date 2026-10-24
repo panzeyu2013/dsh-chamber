@@ -438,6 +438,10 @@ test('breakpoints: the 44px touch floors cover the review-fix seats', () => {
   const tablist = cssBlock(tier, '[data-slot="conversation.session.header"] [role="tablist"]')
   assert.ok(tablist !== null && tablist.includes('flex-wrap: wrap;'), 'the tab strip wraps instead of clipping')
   assert.ok(!stripCssComments(MOBILE_CSS).includes('role="tablist"]::-webkit-scrollbar'), 'the tab strip must not become a scroll container')
+  // rc.3 folds views behind a 22px More launcher inside the Menu's anchor span.
+  const more = cssBlock(tier, '[data-slot="conversation.session.header"] [role="tablist"] ~ span > button[aria-haspopup="menu"]')
+  assert.ok(more !== null && more.includes('min-width: 44px;') && more.includes('min-height: 44px;')
+    && more.includes('margin-top: 0;'), 'the folded-views More carries the 44px box floor')
   const narrowBand = tier.slice(tier.indexOf('@media (min-width: 768px)'))
   const modeControl = cssBlock(narrowBand, '[data-mobile-frame] [data-sidebar-right-mode]')
   assert.ok(modeControl !== null && modeControl.includes('display: none !important;'), 'the inert mode control is hidden in 768-1023')

@@ -40,7 +40,9 @@ test('the chamber mounts the page as the plugin-manager settings section', () =>
   assert.ok(start >= 0 && end > start, 'the settings.section registration must be present')
   const registration = index.slice(start, end)
   assert.match(registration, /name: 'settings\.section'/u)
-  assert.match(registration, /id: 'plugin-manager'/u)
+  // The id is single-sourced (the seat opens the same constant); its VALUE is pinned here.
+  assert.match(index, /const PLUGIN_SECTION_ID = 'plugin-manager'/u)
+  assert.match(registration, /id: PLUGIN_SECTION_ID/u)
   assert.match(registration, /order: 16/u, 'the section sits directly after the upstream plugins inventory (order 15)')
   assert.match(registration, /label: \(\) => sectionLabel\('nav'\)/u, 'the nav label comes from the chamber section dictionary')
   assert.match(registration, /locale: MANAGER_NS/u, "the page's t seat must be the pluginManager dictionary")

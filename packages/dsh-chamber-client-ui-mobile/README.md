@@ -101,15 +101,18 @@ mobile surface on three axes, all covered structurally (no hashed classes):
 - **View tabs**: `tabs.length > 1` is the NORM, not an edge case — `ui-chat`
   and `ui-trajectory` both register a `conversation.view` unconditionally and
   both ship in the default web bundle. The official tab is 13px text on a 25px
-  box and the strip neither wraps nor scrolls while the frame clips overflow
-  (`AppFrame.module.css` `overflow: hidden`), so a third view or a longer (en)
-  label would be unreachable: the touch tier grows the tab box to the 44px
-  floor (`box-sizing: border-box`, so the official 9px bottom padding does not
-  make it 53; the header's `min-height: 76px` is a FLOOR, so the row follows)
-  and lets the strip WRAP. Wrapping rather than scrolling is deliberate: a
-  scroll container forces the other axis to `auto` and would clip the active
-  tab's 2px bar, which upstream draws 1px past the tab box to end flush with
-  the header's bottom rule.
+  box, the strip neither wraps nor scrolls, and the frame clips overflow
+  (`AppFrame.module.css` `overflow: hidden`); the upstream row also folds views
+  by width and puts the rest behind a More menu (rc.3), but that budget is
+  JS-measured and a long (en) label is ellipsised at upstream's 88px max-width.
+  The touch tier grows
+  the tab box to the 44px floor (`box-sizing: border-box`, so the official 9px
+  bottom padding does not make it 53; the header's `min-height: 76px` is a
+  FLOOR, so the row follows), lets the strip WRAP as a fallback, and floors the
+  More launcher. Wrapping rather than scrolling is deliberate: a scroll
+  container forces the other axis to `auto` and would clip the active tab's
+  2px bar, which upstream draws 1px past the tab box to end flush with the
+  header's bottom rule.
 
 ## Session-open stall notice (touch tier)
 
@@ -676,8 +679,8 @@ pnpm run test:mobile
 Official dsh DOM, empirically audited via CDP at **v0.1.5-alpha.2** and re-anchored
 at **v0.1.5-rc.2** — every anchor below resolved in the rc.2 tree (rc.1/rc.2 in this
 section mean the v0.1.5 lineage; the current pin is always written in full as
-v0.2.1-rc.2). Under the current
-pin (v0.2.1-rc.2) the strict anchor gate resolves the declared set (68 declared
+v0.2.1-rc.3). Under the current
+pin (v0.2.1-rc.3) the strict anchor gate resolves the declared set (68 declared
 anchors, 60 of them upstream; 27 minimal assertions) including the attribute/role/
 slot anchors, the plugin local-name class anchors, the external `_crumbSeg`
 emission pin, and the two build-time CSS-module hash tokens — 0 misses and 0
@@ -693,8 +696,11 @@ alpha.2 → rc.1 delta (the `ui-sidebar-*` guide/preview rows, the
 `ui-primitives` `CodeBlock` wrapper, the `ui-chat` stats dialog, two `z-index`
 additions in `ui-dockkit`'s CSS and a slot-catalog doc pointer) and the rc.1 → rc.2
 delta (feedback-dialog, delivery-card and code-file-icon refinements in
-`ui-{chat,deliverables,message-feedback,primitives}`) touch neither this
-anchors' emitters nor the layers this plugin stacks against: `data-sidebar-collapsed`
+`ui-{chat,deliverables,message-feedback,primitives}`) and the rc.2 → rc.3
+HEADER delta (folded view tabs by width, the folded-views More launcher, and an
+88px `span.tabLabel` ellipsis; the release also adds the entry-customization row
+and additive Tooltip/Menu changes, tracked in STATUS) leave this anchors'
+emitters untouched and do not change the selectors/sizes this plugin pins: `data-sidebar-collapsed`
 present=collapsed / removed=expanded; the centre column is the keyed **`main`**
 slot and the right column is **`rightbar`** (both column shells and their
 `[data-slot=…]` outlet wrappers are resident from first paint — the renderer
@@ -706,7 +712,7 @@ dialog is body-portaled by upstream (rc.2 `SettingsPanel` uses
 `createPortal(…, document.body)`), so the drawer's transform no longer traps
 it; the drawer open state still uses `transform: none` deliberately.
 
-The vendored base is now **v0.2.1-rc.2** (harness pin `687f282e`; single source
+The vendored base is now **v0.2.1-rc.3** (harness pin `1f81c047`; single source
 `harness.commit`). Historical audit record: the anchors above were re-verified
 against the alpha.2 source (2026-09 re-anchor) and held at v0.1.5-rc.2 (whose
 client deltas are listed above and left those anchors, and the
@@ -735,7 +741,10 @@ panel-chrome buttons, and the excluded 20px `[data-dockkit-tab-close]` — as a
 touch-floor seat (`TabPanel.tsx`,
 `SidebarRight.tsx`); and the
 session header's `role="tablist"` strip, rendered whenever a session has more
-than one view and therefore always in practice (`ConversationSession.tsx`). It
+than one view and therefore always in practice, and since rc.3 the inner
+`div.viewTabs[role="tablist"]` inside `div.tabs` (the folded-views More sits
+next to it in the Menu's anchor span; the strip's labels ellipsise at 88px)
+(`ConversationSession.tsx`). It
 also verified what the plugin must NOT anchor on: `[data-dockkit-split-button]`
 is a click button, not drag chrome; the `[role="menu"]
 [role="menuitem"][aria-selected]` highlight signal does not exist at this pin
@@ -760,8 +769,10 @@ structure-shaped and verified in the rc.2 tree:
 - the DOM nesting the phone-tier selectors depend on:
   `header > div.titleRow > div.titleCluster > [nav.crumbs, div.headerActions]`,
   with `div.headerUtilities` and `div.headerCorner[data-conversation-header-corner]`
-  as further `titleRow` children and `div.tabs[role=tablist]` as the header's
-  second child — so a `> nav` child combinator on the row is a silent NO-OP
+  as further `titleRow` children and `div.tabs` as the header's second child —
+  whose inner `div.viewTabs` carries `role=tablist`, followed by the rc.3
+  folded-views More (`span > button[aria-haspopup=menu]`) — so a `> nav` child
+  combinator on the row is a silent NO-OP
   (the `:has()` arm must be a descendant match);
 - the current crumb is a bare `span.crumb.crumbCurrent`, NOT a disabled
   button; the shrink order is structural — the last `nav > span:last-child`

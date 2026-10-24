@@ -58,6 +58,8 @@ const GROUPS = {
     'test/navigation/server-selector.test.ts',
     // header 事实条的纯投影（design 15 §6）：插件集事实 → 文案/动作分类。
     'test/navigation/plugin-notice.test.ts',
+    // 设置导航座席（design 05 §5）：请求序列/确认与壳侧命令的纯函数真值表。
+    'test/navigation/settings-open-seat.test.ts',
   ],
 }
 

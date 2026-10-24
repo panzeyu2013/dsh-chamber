@@ -542,21 +542,23 @@ export const MOBILE_CSS = `
     display: none;
   }
 
-  /* Session-header view tabs ('role="tablist"'): 'tabs.length > 1' is the
-     NORM, not an edge case — ui-chat and ui-trajectory both register a
-     conversation view unconditionally, and both ship in the default web
-     bundle. The official tab box is 13px text on a 25px box and the strip
-     neither wraps nor scrolls, while the frame clips overflow
-     (AppFrame.module.css 'overflow: hidden') — a third view or a longer
-     (en) label would be simply unreachable. The strip WRAPS rather than
-     scrolling: a scroll container would clip the active tab's 2px bar, which
-     upstream draws 1px past the tab box to end flush with the header's bottom
-     rule (overflow-x:auto also forces overflow-y to compute to auto). The
-     44px floor grows the tab box — with box-sizing so the floor means the BOX
-     (the official tab pads 9px at the bottom, so a content-box floor would be
+  /* Session-header view tabs (rc.3: the inner div.viewTabs[role="tablist"],
+     inside div.tabs): 'tabs.length > 1' is the NORM, not an edge case —
+     ui-chat and ui-trajectory both register a conversation view
+     unconditionally, and both ship in the default web bundle. rc.3 folds the
+     row by width (visibleViewLimit) and puts the rest behind the More menu;
+     the strip still WRAPS rather than scrolling: a scroll container would
+     clip the active tab's 2px bar, which upstream draws 1px past the tab box
+     to end flush with the header's bottom rule (overflow-x:auto also forces
+     overflow-y to compute to auto), and folding is a JS-measured best effort
+     that must stay readable when the width budget only fits one tab. The 44px
+     floor grows the tab box — with box-sizing so the floor means the BOX (the
+     official tab pads 9px at the bottom, so a content-box floor would be
      53px); the header's 'min-height: 76px' is a FLOOR, so the row follows
      instead of clipping (its sidebar-strip alignment figure is a desktop
-     concern — on this tier the sidebar is a drawer). */
+     concern — on this tier the sidebar is a drawer). Tab labels ellipsise at
+     upstream's 88px max-width; the floor must not stretch them (the label is
+     the shrinkable child, the button is the hit target). */
   [data-slot="conversation.session.header"] [role="tablist"] {
     flex-wrap: wrap;
   }
@@ -565,6 +567,18 @@ export const MOBILE_CSS = `
     align-items: center;
     box-sizing: border-box;
     min-height: 44px;
+  }
+  /* rc.3's folded-views More: a 22px icon Button inside the Menu's anchor span
+     (div.tabs > div.viewTabs[role=tablist] + span > button). Upstream's -3px
+     top margin aligns the 22px box with the 25px tab row; the touch floor
+     changes the box, so drop the margin and let the anchor span keep its
+     flex:none. Without this the only entry to the folded views is a 22px
+     target. */
+  [data-slot="conversation.session.header"] [role="tablist"] ~ span > button[aria-haspopup="menu"] {
+    box-sizing: border-box;
+    min-width: 44px;
+    min-height: 44px;
+    margin-top: 0;
   }
 
   /* Touch targets: high-frequency controls get the 44px floor (Apple HIG;
@@ -732,7 +746,9 @@ export const MOBILE_CSS = `
              > div.titleCluster > [nav.crumbs, div.headerActions]
              > div.headerUtilities
              > div.headerCorner[data-conversation-header-corner]
-         > div.tabs[role=tablist]
+         > div.tabs
+             > div.viewTabs[role=tablist]
+             > span > button[aria-haspopup=menu]   (rc.3 folded-views More)
      The lineage chip renders INSIDE nav.crumbs (inside its crumbSeg), so it
      sits at the END of the strip and must never be the element that is
      squeezed — that is exactly how the five-line vertical badge happened. The

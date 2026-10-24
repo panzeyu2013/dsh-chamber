@@ -40,6 +40,9 @@ import {
   settingsSourceFaceRevision, subscribeSettingsSourceFaces,
   type RenderableSettingsSourceFace,
 } from './settings-source-face.ts'
+import {
+  settingsAckDecision, settingsOpenCommand, type SettingsNavigationSeat, type SettingsOpenCommand,
+} from './settings-navigation.ts'
 import { BridgeEntryBoundary, BridgeOutlet, useLocaleRevision } from './bridge-outlet.tsx'
 import type { BridgeStandardSeats } from './bridge-outlet.tsx'
 import {
@@ -59,6 +62,12 @@ export interface SettingsShellInjected {
   connectionsT: (key: string) => string
   /** The hosting boot's instance id ('local' | '<kind>-<id>'), when known. */
   chamberInstanceId?: string
+  /**
+   * The per-ctx settings-navigation seat (design 05 §5): another plugin asks this
+   * shell to open one section. Absent on a non-chamber shell, where external opens
+   * stay inert.
+   */
+  readonly navigation?: SettingsNavigationSeat
 }
 
 export type SettingsShellProps =
@@ -671,7 +680,7 @@ export function SettingsShell(props: SettingsShellProps) {
   // (useSessions / useWorkspaces / usePanelInfo / useResource /
   // useSessionPendingInteraction / root props) arrive beside it.
   const wide = props.wide === true
-  const { t, connectionsT, chamberInstanceId } = props
+  const { t, connectionsT, chamberInstanceId, navigation } = props
   const [open, setOpen] = useState(false)
   const [activeId, setActiveId] = useState<string | undefined>(undefined)
   const [servers, setServers] = useState<BridgeServerRow[]>(() => getServers())
@@ -727,6 +736,40 @@ export function SettingsShell(props: SettingsShellProps) {
       setSelectedId(defaultSelection(servers, chamberInstanceId))
     }
   }, [servers, selectedId, chamberInstanceId])
+
+  // External "open a section" requests: a plugin that wants the plugin-management page
+  // (pluginNavigation.openList/openBundle) asks this shell through its own ctx's seat.
+  // Consume the newest request, re-anchor the dropdown to THIS shell's own instance (the
+  // requested section lives in that source's ledger), and acknowledge it only AFTER the
+  // commit that shows the requested section: a teardown between consume() and commit
+  // leaves the request on the seat for the next mount instead of dropping it. pendingAck
+  // is state (not a ref), so the acknowledge belongs to the committed render: a close
+  // before that commit drops the intent (no replay after remount), while a manual visit
+  // to another section waits for the requested one. The seq starts at 0, so a request
+  // queued while the settings chunk was loading is consumed on mount.
+  const lastOpenSeq = useRef(0)
+  const [pendingAck, setPendingAck] = useState<SettingsOpenCommand | undefined>(undefined)
+  useEffect(() => {
+    if (navigation === undefined) return () => {}
+    const consume = (): void => {
+      const command = settingsOpenCommand(navigation.getRequest(), lastOpenSeq.current)
+      if (command === undefined) return
+      lastOpenSeq.current = command.seq
+      setPendingAck(command)
+      if (chamberInstanceId !== undefined) setSelectedId(chamberInstanceId)
+      setActiveId(command.sectionId)
+      setOpen(true)
+    }
+    consume()
+    return navigation.subscribe(consume)
+  }, [navigation, chamberInstanceId])
+  useLayoutEffect(() => {
+    if (navigation === undefined || pendingAck === undefined) return
+    const decision = settingsAckDecision(pendingAck, open, activeId)
+    if (decision !== 'ack' && decision !== 'drop') return
+    navigation.acknowledge(pendingAck.seq)
+    setPendingAck(undefined)
+  }, [open, activeId, pendingAck, navigation])
 
   // Keep the selected source mounted while the panel is open (and release the
   // hold on close/unmount): an unmounted source has no ledger to render.
