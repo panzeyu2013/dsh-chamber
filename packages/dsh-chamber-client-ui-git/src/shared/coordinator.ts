@@ -27,7 +27,7 @@ import { canTargetSession, effectiveSnapshot, findWorktree, removeBlockReason } 
 // Hidden-tab polling gate + injectable visibility face (dependency-free).
 import { isPollEligible, visibilityEvents } from './visibility-gate.ts'
 import {
-  GitSagaError, isProvenPreMutationRefusal, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runPreRemoveArchive,
+  GitSagaError, recoveryAfterSagaFailure, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runPreRemoveArchive,
   runRemoveSaga, runRollbackRecovery, runWorkspaceAdoptRecovery, runWorkspaceDeleteRecovery,
 } from './saga.ts'
 import { basenameOf, createListenerSet, errorMessage as errorText } from '@dsh-chamber/dsh-chamber-client-core'
@@ -718,12 +718,10 @@ async function performRemoveSaga(
   } catch (error) {
     if (error instanceof GitSagaError) {
       // A host-PROVEN pre-mutation refusal (original serialized with
-      // retryable: false — the host re-checked the topology and the target still
+      // retryable: false — the host re-checked Git facts and the target still
       // exists) resolves a pending replay as "not removed": clear the recovery
       // instead of preserving an endless same-reason retry with no dismiss.
-      setRecovery(sourceId, isProvenPreMutationRefusal(error)
-        ? undefined
-        : recoveryForFailure(error, previousRecovery))
+      setRecovery(sourceId, recoveryAfterSagaFailure(error, previousRecovery))
       if (error.refreshNeeded || previousRecovery !== undefined) finishMutation(sourceId)
     }
     throw error

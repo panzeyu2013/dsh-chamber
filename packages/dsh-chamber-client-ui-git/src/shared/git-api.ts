@@ -51,8 +51,11 @@ export function isAmbiguousGitRpcFailure(error: unknown): boolean {
  * LOCKSTEP POINT: must stay disjoint from the host's `RETRYABLE_CODES`
  * (`packages/dsh-chamber-seed-git-worktree/src/core.ts`) except for
  * {@link DETERMINISTIC_HOST_RETRYABLE_OVERRIDES}, and cover every code the host
- * proves to be a pre-mutation refusal; the cross-package lockstep test fails on
- * any other divergence, so a code added or renamed must be mirrored here.
+ * refuses WITHOUT an explicit `retryable` flag. A code that carries an explicit
+ * `retryable: false` is proven pre-mutation per OPERATION and is cleared by that
+ * flag (saga `isProvenPreMutationRefusal`), so it must not be added here: the same
+ * code (`git-command-failed`) also surfaces from post-mutation ambiguity. The
+ * cross-package lockstep test fails on any other divergence.
  */
 export const DETERMINISTIC_GIT_REJECTION_CODES: ReadonlySet<string> = new Set([
   'invalid-input',

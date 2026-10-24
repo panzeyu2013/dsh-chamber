@@ -45,6 +45,21 @@ export function isProvenPreMutationRefusal(error: GitSagaError): boolean {
     && error.original.retryable === false
 }
 
+/** The recovery to keep after a saga failure. A host-proven pre-mutation refusal
+ *  resolves a pending replay as "not removed", so the entry is cleared instead of
+ *  retrying the same doomed operationId (design 08 §6.2). This is the single
+ *  decision point the coordinator applies; everything else preserves the previous
+ *  unknown state. */
+export function recoveryAfterSagaFailure(
+  error: GitSagaError,
+  previous?: GitRecovery,
+): GitRecovery | undefined {
+  // Only a pending git-REMOVE replay is resolved by the proof: any other recovery
+  // (workspace-delete exists only after a removal receipt) keeps its own policy.
+  if (previous?.kind === 'git-remove' && isProvenPreMutationRefusal(error)) return undefined
+  return recoveryForFailure(error, previous)
+}
+
 export interface CreateSagaDeps {
   hostCreate(input: { previewToken: string; operationId: string }): Promise<CreateWorktreeResult>
   hostRollback(

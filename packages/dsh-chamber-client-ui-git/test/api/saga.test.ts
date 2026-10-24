@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
-  GitSagaError, isProvenPreMutationRefusal, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runPreRemoveArchive,
+  GitSagaError, isProvenPreMutationRefusal, recoveryAfterSagaFailure, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runPreRemoveArchive,
   runRemoveSaga, runRollbackRecovery, runWorkspaceAdoptRecovery, runWorkspaceDeleteRecovery,
 } from '../../src/shared/saga.ts'
 import {
@@ -309,6 +309,37 @@ test('only a host-proven pre-mutation refusal may clear a pending git-remove rec
     new GitWorktreeRpcError('git-command-failed', 'refused', undefined, false),
     deleteRecovery,
   )), false)
+
+  // The coordinator's single decision point applies exactly that rule: a proven refusal
+  // clears a pending git-remove entry; every other failure keeps it with the new message.
+  const pendingRemove: GitRecovery = { kind: 'git-remove', ...REMOVE_REQUEST, message: 'ambiguous' }
+  assert.equal(
+    recoveryAfterSagaFailure(
+      new GitSagaError(new GitWorktreeRpcError('git-command-failed', 'refused', undefined, false)),
+      pendingRemove,
+    ),
+    undefined,
+  )
+  assert.equal(
+    recoveryAfterSagaFailure(new GitSagaError(new Error('boom')), pendingRemove)?.message,
+    'boom',
+  )
+  assert.equal(
+    recoveryAfterSagaFailure(
+      new GitSagaError(new GitWorktreeRpcError('git-command-failed', 'refused', undefined, true)),
+      pendingRemove,
+    )?.message,
+    'git-command-failed: refused',
+  )
+  // A workspace-delete recovery exists only after a removal receipt; the remove proof
+  // must not clear it.
+  assert.equal(
+    recoveryAfterSagaFailure(
+      new GitSagaError(new GitWorktreeRpcError('git-command-failed', 'refused', undefined, false)),
+      deleteRecovery,
+    )?.kind,
+    'workspace-delete',
+  )
 })
 
 test('remove is Git-first; ambiguous response retains the exact operation and opaque expectation', async () => {

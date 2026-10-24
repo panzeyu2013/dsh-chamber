@@ -339,8 +339,44 @@ test('error-code lockstep: the client deterministic set covers every host classi
   }
 })
 
+test('host flag-only pre-mutation proofs stay outside the static deterministic set', () => {
+  // core.ts PROVEN_PRE_MUTATION_CODES proves "nothing was removed" per OPERATION and
+  // serializes an explicit retryable: false. The client must react to that flag, NOT to
+  // a static list: the same codes (git-command-failed / git-protocol-error) also carry
+  // post-mutation ambiguity when the flag is absent.
+  assert.ok(HOST_PROVEN_PRE_MUTATION_CODES.includes('git-command-failed'),
+    'the host proof set must still contain the reclassified discovery code')
+  for (const code of HOST_PROVEN_PRE_MUTATION_CODES) {
+    assert.ok(RETRYABLE_CODES.has(code), `'${code}' must stay host-retryable by default`)
+    assert.equal(
+      isAmbiguousGitRpcFailure(new GitWorktreeRpcError(code, 'refused', undefined, false)),
+      false,
+      `'${code}' with an explicit retryable: false is a definitive refusal`,
+    )
+    assert.equal(
+      isDeterministicGitRejection(new GitWorktreeRpcError(code, 'refused', undefined, false)),
+      false,
+      `'${code}' is cleared by the flag, never by the static deterministic set`,
+    )
+    assert.equal(
+      isAmbiguousGitRpcFailure(new GitWorktreeRpcError(code, 'refused', undefined, true)),
+      true,
+      `'${code}' with retryable: true stays ambiguous`,
+    )
+  }
+})
+
 /** Host codes emitted with an explicit `retryable: false` (core.ts: the typed
  *  submodule gate, plus the commitBoundRemove reclassification). The client must
  *  classify each one deterministically; the reclassification path reuses the
  *  inner error's code and is covered by the flag, not by this list. */
 const HOST_EXPLICIT_PRE_MUTATION_CODES = ['worktree-submodules']
+
+/** Host codes the removal proof may serialize with an explicit `retryable: false`
+ *  (core.ts `PROVEN_PRE_MUTATION_CODES`). Parsed from the host source because the
+ *  set is an internal constant, not a wire vocabulary. */
+const HOST_PROVEN_PRE_MUTATION_CODES = (() => {
+  const block = /const PROVEN_PRE_MUTATION_CODES: ReadonlySet<string> = new Set\(\[[^\]]*\]\)/u
+    .exec(HOST_CORE_SOURCE)?.[0] ?? ''
+  return [...block.matchAll(/'([a-z][a-z0-9]*(?:-[a-z0-9]+)*)'/gu)].map(match => match[1]!)
+})()
