@@ -41,7 +41,7 @@
 |遮罩层叠：遮罩可见期内租客元素不得画在其上（作用域=活动视图；租客命中记FAIL，body portal 只记，无遮罩帧/无锚点记INFO）|`W-1b`|design 05 §4（租客层叠边界）、§2.2.1|
 |侧栏多来源结构（`[data-chamber-section]` / `[data-chamber-row]` / `[data-session-id]`）|`W-2`|design 05 §2、06|
 |首启模态可关闭/可走完（非首启记INFO）|`W-3`|design 05 §5（onboarding阶段）|
-|侧栏rail折叠/展开：控件结构定位（侧栏头部图标钮，按计算可见性只取可见视图；候选为空或并列即FAIL）+ 效果锚定（官方frame属性 `[data-sidebar-collapsed]` 出现/消失；复原用同一元素、按身份寻址）+ 写入边界（本次点击不得改动 `dsh-chamber.sidebar.v1`）；点错控件、未复原、定位不到、写了偏好都FAIL|`W-4`|design 06 §3.1（ui-layout fork的折叠与宽度共享）、05 §6|
+|侧栏rail折叠/展开：控件结构定位（侧栏头部图标钮，按计算可见性只取可见视图；候选为空或并列即FAIL）+ 效果锚定（官方frame属性 `[data-sidebar-collapsed]` 出现/消失；复原用同一元素、按身份寻址）+ 写入边界（本次点击不得写入用户状态：新建实例首次建出的 store 若只有默认形状（无 `sourceFolded`/折叠键/宽度/顺序）不算残留，出现任意用户状态即 FAIL，判据 `viewPrefsDelta`）；点错控件、未复原、定位不到、写入用户状态都FAIL|`W-4`|design 06 §3.1（ui-layout fork的折叠与宽度共享）、05 §6|
 |来源级收拢：来源节整列表收拢且几何可见（`aria-expanded` 翻转 + 来源节高度收缩、展开恢复；几何非有限数即FAIL）+ 往返后不留持久化残留（`sourceFolded`；快照读不到按未检查FAIL）；只覆盖首个来源节；会写该偏好，**只在 `--dev` 跑**，`--attach` 记INFO|`W-4a`|design 06 §2.4、§3.1（`sourceFolded`）|
 |行悬停卡片（`[data-chamber-hovercard]` 计数）：悬停升起一张、含该行标题、移开消失；竞态腿先测本机dwell→React提交窗口（~5ms轮询标记，最后未见时刻为严格下界，多次取最大），再由 `raceBandForWindow()` 取确定性偏移、12次试验0搁浅（`dwell+10..60ms` 仅下界不可判别——见README；窗口测不到或 ≤2ms记「不具区分力」INFO，绝不记PASS）；A→B换行至多一张且收在B；blur / `visibilitychange`（hidden）清卡（实例确无可悬停行时INFO；有锚点形状却无 `[data-chamber-hovercard-anchor]` 记FAIL）。INFO**只**表示「没执行/没区分力」：结束行报 `（N 项 INFO 未执行）`；要真跑真判别用 `--require-hover`，四条腿INFO一律改记FAIL|`W-4b`、`W-4b-race`、`W-4b-swap`、`W-4b-dismiss`|design 06 §7（悬停卡片：锚点/搁浅/互斥/失焦清卡）|
 |设置面从侧栏座席打开、插槽渲染且**无 `[data-slot-error]`**|`W-5`、`W-6`|design 05 §5（完整桥接）|
@@ -58,7 +58,7 @@
 - 首帧与切换：骨架→内容无FOUC/双骨架；侧栏、设置面在浅/深色下都不漏底、不叠字（design 06 §4.6）。
 - 设置面：导航高亮跟随、来源下拉显示当前来源、每页标题与分组层级正确（design 05 §5）。
 - 会话头视图 More/折叠（`entry-customization` 面）：先在实例里建/选一个工作区（一次性实例无工作区时会先拉起目录选择器）；打开含 ≥2 个视图的会话，窄列下被折叠的视图出现在 More 菜单；点「浏览」后设置面打开在「插件管理」分节；右栏 guide More 的「浏览」同一落点；侧栏 panel More 在桌面复合体**不出现**、gateway 官方侧栏出现（design 05 §5 / STATUS §4.2）。
-- 移动端 More/标签（触屏档）：会话头 More 命中盒 ≥44×44、长标签按上游 88px 省略、菜单行 44px 底线；判据 = `pnpm run acceptance:mobile` + 目检（design 17 §18.4）。
+- 移动端 More/标签（触屏档）：会话头 More 命中盒 ≥44×44、长标签按上游 88px 省略、菜单行 44px 底线；判据 = `pnpm run acceptance:mobile` + 目检（`packages/dsh-chamber-client-ui-mobile/README.md`「View tabs」；design 17 §18.4 是社区借鉴，不含该页签判据）。
 - 多来源侧栏：分组归属（来源 → 工作区 → 会话）、状态点、待办条带与角标不串行（design 05/06）。
 - 失败呈现：任何降级/不可达是否如实显示（比「没坏」更重要，design 03 §3.3）。
 - 插件刷新收敛（机械腿未覆盖：需真实安装流；判据 design 09 §3.7 / 15 §6）：装/启/卸一个 bundle 后不按 Cmd+R，

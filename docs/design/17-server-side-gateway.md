@@ -368,11 +368,12 @@ trusted proxy 缺失、重复、含逗号或非法的 XFF 时，client identity 
   `GATEWAY_PROXY_CSP`（gateway-only 放宽）：`script-src` 放开 inline（被代理的文档是
   上游自己的内联 `__DSH_BOOT__`/loader 脚本不带 nonce，本进程只插入 S0 头补丁（仅信任声明；原 WebKit 原生源码归一已随最低 runtime 抬升删除，见 §10.5）、不为不属于
   自己的脚本回填 nonce）；`base-uri` 取 `'self'` 而非 `'none'`——上游
-  `@deepseek-ai/dsh-host-frontend-static` 每个 renderIndex 文档都注入 `<base href="/">`，
-  `'none'` 会让浏览器拒绝该元素。该放宽按「元素必须生效」记账：固定 pin 下 `serveStatic`
-  只在 dist 根与 index 路径渲染 HTML（其余路径是文件读取，miss 即 404），相对资源 URL 本就
-  解析正确；只有上游真的用 index 回答深链（其注释所称的 "SPA-fallback paths"）时，该元素才
-  决定 `./assets/…` 是否按站点根解析。其余指令与 shell 的 nonce CSP 逐字一致。
+  `@deepseek-ai/dsh-host-frontend-static` 每个 renderIndex 文档都注入 `<base href="./">`（当前
+  pin 的 `src/index.ts` 逐字如此；不是 `"/"`），`'none'` 会让浏览器拒绝该元素。该放宽按
+  「元素必须生效」记账：固定 pin 下 `serveStatic` 只在 dist 根与 index 路径渲染 HTML
+  （其余路径是文件读取，miss 即 404），相对资源 URL 本就解析正确；只有上游真的用 index 回答
+  深链（其注释所称的 "SPA-fallback paths"）时，该元素才决定 `./assets/…` 相对**文档路径**
+  （而非站点根）解析——`./` 的语义正是前者。其余指令与 shell 的 nonce CSP 逐字一致。
 
 桌面端对 401 的**可行动三态分类**（探针层，非秘密 detail）：
 
