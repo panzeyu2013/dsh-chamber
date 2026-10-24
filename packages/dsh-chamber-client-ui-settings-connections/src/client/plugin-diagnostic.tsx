@@ -3,7 +3,9 @@
  * plugin-graph load outcome, surfaced on the chamber-global connections page — never on top of the
  * official dsh「插件」settings section.
  *
- * `instance-version-conflict` blocks conflicting boot and is styled as a problem.
+ * `instance-version-conflict` is a problem-toned drift fact: the boot reuses the page's
+ * existing factory and is never failed for the drift, so this page is its only surface.
+ * The tone stays 'problem' because the drift needs a human decision (align the runtimes).
  * Boot and live graph diagnostics share the same provenance-fenced slot.
  * The card also renders the instance's settled-boot GAP — a DIFFERENT fact. The graph channel may
  * legitimately answer `ok` while a service the page's frontend injects was never provided ("session

@@ -137,9 +137,40 @@ test('loadClientPluginRows: a shared row awaits the owner execution and surfaces
   const shared = loadClientPluginRows('ssh-b', [row(id, 'revB')], { loadBundle: async () => {} }, {
     ...collecting, releaseVersion: '0.2.1-rc.2',
   });
+  // A recovery pass keeps the throw policy: the owner's failure is surfaced loud.
+  const strict = loadClientPluginRows('ssh-c', [row(id, 'revB')], { loadBundle: async () => {} }, {
+    ordinary: 'throw', timeout: 'throw', releaseVersion: '0.2.1-rc.2',
+  });
   fail(new Error('owner bundle exploded'));
   await assert.rejects(owner, /owner bundle exploded/);
-  await assert.rejects(shared, /owner bundle exploded/);
+  // The boot pass DEFERS an ordinary owner failure: the owner's claim is rolled back and
+  // this caller can load its own build on the recovery pass — another instance's
+  // transient failure must not fail this boot.
+  const collected = await shared;
+  assert.equal(collected[0]?.state, 'failed');
+  await assert.rejects(strict, /owner bundle exploded/);
+});
+
+test('loadClientPluginRows: reuseForeignBuilds shares any foreign build, awaits the owner, and never restarts the owner', async () => {
+  resetClientPluginLoaderState();
+  const id = '@deepseek-ai/dsh-client-ui-sample';
+  let loads = 0;
+  const deps = { loadBundle: async () => { loads += 1; } };
+  await loadClientPluginRows('local', [row(id, 'revA')], deps, collecting);
+  // The boot policy accepts the foreign build (the page keeps ONE factory per id), so the
+  // kernel takes the shared branch instead of reporting a conflict — at ANY rev, without
+  // reading or executing the foreign bundle.
+  const shared = await loadClientPluginRows('ssh-b', [row(id, 'revB')], deps, {
+    ...collecting, reuseForeignBuilds: true,
+  });
+  assert.deepEqual(shared, [{ state: 'shared', row: row(id, 'revB'), ownerSourceId: 'local' }]);
+  assert.equal(loads, 1, 'the foreign build is never loaded');
+  // The policy is about FOREIGN rows only: the owner's own rebuilt row still restarts.
+  const restart = await loadClientPluginRows('local', [row(id, 'revB')], deps, {
+    ...collecting, reuseForeignBuilds: true,
+  });
+  assert.equal(restart[0]?.state, 'rev-conflict');
+  assert.equal(restart[0]?.state === 'rev-conflict' ? restart[0].conflict : '', 'restart');
 });
 
 test('scanClientPluginRowConflicts: same-release release-published ids are not conflicts', async () => {

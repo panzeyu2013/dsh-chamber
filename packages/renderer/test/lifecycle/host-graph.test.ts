@@ -2,7 +2,7 @@ import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { collectExtraRows, fetchHostGraph, findUnsatisfiableExternalDependencies, normalizeBundleUrl, toExtraRows, type ExtraModuleRow, type HostGraphRow } from '../../src/host-graph.ts'
+import { collectExtraRows, fetchHostGraph, findUnsatisfiableExternalDependencies, normalizeBundleUrl, toExtraRows, versionConflictMessage, type ExtraModuleRow, type HostGraphRow } from '../../src/host-graph.ts'
 import {
   BundleLoadTimeoutError, clientPluginRowOwner, dedupeCoveredRows, loadClientPluginRows,
 } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
@@ -1074,8 +1074,8 @@ test('collectExtraRows: a recovery-refetch channel failure keeps the original bu
 test('collectExtraRows: the recovery pass never materializes a row another source claimed at another rev', async (t) => {
   // Pass 1 fails transiently (its id record is rolled back); the recovery graph is
   // fetched and IN BETWEEN another source claims the same id at a third rev. The
-  // kernel then answers rev-conflict — a VERDICT, not an error — so a recovery that
-  // treats it as success would hand the boot a row whose factory is the other rev's.
+  // kernel shares that foreign factory (reuse policy) — a VERDICT, not an error — so
+  // the boot keeps the fresh row and reports the drift without executing its URL.
   const id = '@scope/recovery-pass-conflict'
   let fetchCalls = 0
   stubFetchImpl(t, (async () => {
@@ -1090,10 +1090,12 @@ test('collectExtraRows: the recovery pass never materializes a row another sourc
   }) as unknown as typeof fetch)
   const attempted: string[] = []
   let diagnostic: { state: string; pluginId?: string; message?: string } | undefined
-  await assert.rejects(collectExtraRows('recovery-owner', '/api/i/local', {
+  const rows = await collectExtraRows('recovery-owner', '/api/i/local', {
     loadModuleBundle: async url => { attempted.push(url); throw new Error('transient 404') },
     reportDiagnostic: (_sourceId, next) => { diagnostic = next },
-  }), /启动已阻止/)
+  })
+  assert.equal(rows.length, 1, 'the reused row survives the boot')
+  assert.equal(rows[0]!.rev, 'rev-new', "the recovery's fresh revision is what surfaces")
   assert.equal(diagnostic?.state, 'instance-version-conflict')
   assert.equal(diagnostic?.pluginId, id)
   assert.match(diagnostic?.message ?? '', /factory 属于实例 recovery-other/)
@@ -1102,19 +1104,22 @@ test('collectExtraRows: the recovery pass never materializes a row another sourc
   // @deepseek-ai/*), and never point at unknown release values as the cause.
   assert.match(diagnostic?.message ?? '', /无法证明两侧是同一构建/)
   assert.doesNotMatch(diagnostic?.message ?? '', /两侧 dsh 发布版本不同/)
-  assert.equal(attempted.length, 1, 'the fresh rev url must not load under the other rev factory')
+  assert.match(diagnostic?.message ?? '', /不阻断启动/)
+  assert.ok(!attempted.some(url => url.includes('rev-new')), 'the fresh rev url must not load under the other rev factory')
 })
 
-test('collectExtraRows: a cross-instance plugin revision conflict reports instance-version-conflict (bundle-rev drift, not a restart)', async (t) => {
+test('collectExtraRows: a cross-instance plugin revision conflict is reported and the owner factory is reused', async (t) => {
   const id = '@scope/revision-conflict-test'
   stubFetch(t, 200, envelope([row(id, { rev: 'rev-one' })]))
   await collectExtraRows('revision-source-one', '/api/i/local', { loadModuleBundle: async () => {} })
   stubFetch(t, 200, envelope([row(id, { rev: 'rev-two' })]))
   let diagnostic: { state: string; pluginId?: string; message?: string } | undefined
-  await assert.rejects(collectExtraRows('revision-source-two', '/api/i/ssh-two', {
+  const rows = await collectExtraRows('revision-source-two', '/api/i/ssh-two', {
     loadModuleBundle: async () => {},
     reportDiagnostic: (_sourceId, next) => { diagnostic = next },
-  }), /启动已阻止/)
+  })
+  assert.equal(rows.length, 1, 'the conflicting row still materializes under the owner factory')
+  assert.match(diagnostic?.message ?? '', /不阻断启动/, 'the copy says the boot continued')
   // A DIFFERENT instance owns the id at another rev: no app restart can
   // switch the loaded factory — the honest diagnostic names the owner
   // instance and the OBSERVABLE rev/build-artifact difference (never a version
@@ -1128,10 +1133,9 @@ test('collectExtraRows: a cross-instance plugin revision conflict reports instan
   assert.doesNotMatch(diagnostic?.message ?? '', /插件版本不同/)
 })
 
-test('collectExtraRows: a boot blocked by a rev conflict executes and claims none of its other rows', async (t) => {
-  // A blocked boot must leave no page-level trace: executing a sibling bundle would
-  // publish a first-load-wins claim owned by an instance that never materialized, so a
-  // later instance carrying that id at another revision would be refused by a ghost.
+test('collectExtraRows: a conflicted boot still executes and claims its other rows', async (t) => {
+  // The page accepts the owner's factory for the conflicted id, so the boot runs: its
+  // other rows must still execute and publish their claims (no ghost, no half boot).
   const conflictId = '@scope/pre-scan-conflict'
   const otherId = '@scope/pre-scan-other'
   await loadClientPluginRows('pre-scan-owner', [{
@@ -1142,11 +1146,13 @@ test('collectExtraRows: a boot blocked by a rev conflict executes and claims non
     row(otherId, { rev: 'fresh-rev', url: `/plugins/??${otherId}&rev=fresh-rev` }),
   ]))
   const loaded: string[] = []
-  await assert.rejects(collectExtraRows('pre-scan-blocked', '/api/i/local', {
+  const rows = await collectExtraRows('pre-scan-reused', '/api/i/local', {
     loadModuleBundle: async url => { loaded.push(url) },
-  }), /启动已阻止/)
-  assert.deepEqual(loaded, [], 'a boot that cannot start must not execute any bundle')
-  assert.equal(clientPluginRowOwner(otherId), undefined, 'nor claim a row it will never materialize')
+  })
+  assert.equal(rows.length, 2, 'the conflicted row and its sibling both reach the boot')
+  assert.equal(clientPluginRowOwner(otherId), 'pre-scan-reused', 'the sibling is claimed by this boot')
+  assert.deepEqual(loaded, ['/api/i/local/plugins/??@scope/pre-scan-other&rev=fresh-rev'],
+    'only the row this boot actually loads executes')
 })
 
 test('collectExtraRows: same id across instances at the SAME rev reuses without any conflict', async (t) => {
@@ -1184,20 +1190,56 @@ test('collectExtraRows: same-release @deepseek-ai ids share the owner factory ac
   assert.equal(diagnostic?.state, 'ok')
 })
 
-test('collectExtraRows: different host releases block and name both versions', async (t) => {
+test('versionConflictMessage: boot names reuse, live names the uncreated hot row', () => {
+  const boot = versionConflictMessage('@scope/x', 'local', '0.2.1-rc.3', '0.2.1-rc.2', 'release', 'boot')
+  assert.match(boot, /该行沿用该 factory 且不阻断启动/)
+  const live = versionConflictMessage('@scope/x', 'local', '0.2.1-rc.3', '0.2.1-rc.2', 'release', 'live')
+  assert.match(live, /热装行本次未创建/)
+  assert.doesNotMatch(live, /不阻断启动/)
+  assert.match(live, /factory 属于实例 local/)
+})
+
+test('collectExtraRows: a conflicting row waits for the owner execution and never loads its own build', async (t) => {
+  // The reuse policy is load-bearing at the ROW level, not just in the kernel unit test:
+  // the boot must not settle before the owner factory exists, and it must never execute
+  // the candidate build as a second registration.
+  const id = '@scope/await-owner'
+  let releaseOwner!: () => void
+  const ownerGate = new Promise<void>(resolve => { releaseOwner = resolve })
+  const owner = loadClientPluginRows('await-owner-src', [
+    row(id, { rev: 'owner-rev', url: `/plugins/??${id}&rev=owner-rev` }),
+  ], { loadBundle: () => ownerGate }, { ordinary: 'throw', timeout: 'throw' })
+  stubFetch(t, 200, envelope([row(id, { rev: 'candidate-rev', url: `/plugins/??${id}&rev=candidate-rev` })]))
+  const loaded: string[] = []
+  let settled = false
+  const boot = collectExtraRows('await-candidate', '/api/i/two', {
+    loadModuleBundle: async url => { loaded.push(url) },
+  }).finally(() => { settled = true })
+  await new Promise(resolve => setTimeout(resolve, 30))
+  assert.equal(settled, false, 'the boot awaits the owner execution (reuseForeignBuilds)')
+  releaseOwner()
+  await owner
+  const rows = await boot
+  assert.equal(rows.length, 1)
+  assert.deepEqual(loaded, [], 'the candidate never executes its own build')
+})
+
+test('collectExtraRows: different host releases reuse the owner factory and name both versions', async (t) => {
   const id = '@deepseek-ai/dsh-client-ui-open-in-app'
   stubFetch(t, 200, envelope([row(id, { rev: 'owner-rev' })], { version: '0.2.1-rc.2' }))
   await collectExtraRows('version-owner', '/api/i/one', { loadModuleBundle: async () => {} })
   stubFetch(t, 200, envelope([row(id, { rev: 'candidate-rev' })], { version: '0.2.0-rc.2' }))
   let diagnostic: { state: string; message?: string } | undefined
-  await assert.rejects(collectExtraRows('version-candidate', '/api/i/two', {
+  const rows = await collectExtraRows('version-candidate', '/api/i/two', {
     loadModuleBundle: async () => {},
     reportDiagnostic: (_sourceId, next) => { diagnostic = next },
-  }), /启动已阻止/)
+  })
+  assert.equal(rows.length, 1, 'the row materializes under the owner factory')
   assert.equal(diagnostic?.state, 'instance-version-conflict')
   assert.match(diagnostic?.message ?? '', /0\.2\.1-rc\.2/, 'the owner release is named')
   assert.match(diagnostic?.message ?? '', /0\.2\.0-rc\.2/, 'the candidate release is named')
   assert.match(diagnostic?.message ?? '', /升到与桌面相同的发布版本/, 'the closure is the runtime upgrade')
+  assert.match(diagnostic?.message ?? '', /不阻断启动/, 'the copy says the boot continued')
 })
 
 test('collectExtraRows: an official row from a pre-0.2.1 host names the missing release', async (t) => {
@@ -1207,10 +1249,11 @@ test('collectExtraRows: an official row from a pre-0.2.1 host names the missing 
   // A 0.2.0 host publishes no release identity: interchangeability cannot be proven.
   stubFetch(t, 200, envelope([row(id, { rev: 'candidate-rev' })]))
   let diagnostic: { state: string; message?: string } | undefined
-  await assert.rejects(collectExtraRows('release-candidate', '/api/i/two', {
+  const rows = await collectExtraRows('release-candidate', '/api/i/two', {
     loadModuleBundle: async () => {},
     reportDiagnostic: (_sourceId, next) => { diagnostic = next },
-  }), /启动已阻止/)
+  })
+  assert.equal(rows.length, 1, 'the unknown-release row still reuses the owner factory')
   assert.equal(diagnostic?.state, 'instance-version-conflict')
   assert.match(diagnostic?.message ?? '', /未报告 dsh 发布版本/)
   assert.match(diagnostic?.message ?? '', /0\.2\.1-rc\.2/, 'the known side is still named')
@@ -1234,17 +1277,18 @@ test('collectExtraRows: a profile id with byte-identical content shares across i
   assert.equal(rows.length, 1, 'identical content beyond the rev self-reference shares the factory')
 })
 
-test('collectExtraRows: a profile id with different content stays fail-closed', async (t) => {
+test('collectExtraRows: a profile id with different content is reused and names the difference', async (t) => {
   const id = '@scope/profile-different'
   stubFetch(t, 200, envelope([row(id, { rev: 'owner-rev', url: `/plugins/??${id}&rev=owner-rev` })]))
   await collectExtraRows('different-owner', '/api/i/one', { loadModuleBundle: async () => {} })
   stubFetch(t, 200, envelope([row(id, { rev: 'candidate-rev', url: `/plugins/??${id}&rev=candidate-rev` })]))
   let diagnostic: { state: string; message?: string } | undefined
-  await assert.rejects(collectExtraRows('different-candidate', '/api/i/two', {
+  const rows = await collectExtraRows('different-candidate', '/api/i/two', {
     loadModuleBundle: async () => {},
     readPluginBundle: async url => (url.includes('candidate-rev') ? 'candidate implementation\n' : 'owner implementation\n'),
     reportDiagnostic: (_sourceId, next) => { diagnostic = next },
-  }), /启动已阻止/)
+  })
+  assert.equal(rows.length, 1, 'the differing row still reuses the page factory')
   assert.equal(diagnostic?.state, 'instance-version-conflict')
   assert.match(diagnostic?.message ?? '', /内容不同/, 'the copy names the verified content difference')
 })
@@ -1266,10 +1310,11 @@ test('collectExtraRows: versionConflict outranks restartConflict within one boot
     row(rebuiltId, { rev: 'rebuild-two' }),
   ]))
   let diagnostic: { state: string; pluginId?: string; message?: string } | undefined
-  await assert.rejects(collectExtraRows('dual-owner', '/api/i/one', {
+  const rows = await collectExtraRows('dual-owner', '/api/i/one', {
     loadModuleBundle: async () => {},
     reportDiagnostic: (_sourceId, next) => { diagnostic = next },
-  }), /启动已阻止/)
+  })
+  assert.equal(rows.length, 1, 'the drift row is reused; the rebuilt row is dropped')
   // One boot reports one diagnostic; the cross-instance drift (unfixable by
   // any restart) outranks the same-instance rebuild (fixable by restart).
   assert.equal(diagnostic?.state, 'instance-version-conflict')
@@ -1299,10 +1344,10 @@ test('collectExtraRows: a rev conflict still logs an unsatisfiable-require fact 
   ]))
   const consoleCapture = captureConsoleError(t)
   let diagnostic: { state: string; pluginId?: string; message?: string } | undefined
-  await assert.rejects(collectExtraRows('precedence-owner', '/api/i/one', {
+  await collectExtraRows('precedence-owner', '/api/i/one', {
     loadModuleBundle: async () => {},
     reportDiagnostic: (_sourceId, next) => { diagnostic = next },
-  }), /启动已阻止/)
+  })
   assert.equal(diagnostic?.state, 'instance-version-conflict')
   assert.equal(diagnostic?.pluginId, conflicted, 'the conflict owns the single diagnostic slot')
   assert.doesNotMatch(diagnostic?.message ?? '', /无法满足/, 'the conflict message stays about the conflict')

@@ -142,8 +142,8 @@ const IDENTITY_BUNDLE_MAX_BYTES = 4 * 1024 * 1024
 /**
  * Read one served plugin bundle for cross-instance CONTENT identity (host-graph's
  * `readPluginBundle` seam): same-origin through the instance proxy, page-budgeted,
- * bounded in size and time. `null` = unreadable / unverifiable — the caller then
- * stays fail-closed instead of guessing interchangeability.
+ * bounded in size and time. `null` = unreadable / unverifiable — the caller reports
+ * the drift as `unverified`; the row still reuses the page factory.
  */
 async function readPluginBundleText(sourceId: string, url: string): Promise<string | null> {
   try {

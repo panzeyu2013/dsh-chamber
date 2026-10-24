@@ -11,13 +11,14 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
 
-## [0.4.3-beta.1] - 2026-10-24
+## [0.4.3-beta.2] - 2026-10-24
 
 ### Added
 - **Weak-link resilience with bounded recovery (design 27)** - a link sub-state sits on top of the transport phases: one network-level probe failure is only **suspect** (forwarding continues) and a second consecutive failure is **down**, reusing `instance_unavailable`; a 5 s down grace plus resume/online forced probes and `reverifyAll` close the half-open window that the SSH keepalive used to hide for 60-90 s before reconnecting. Uploads carry their own budget by body size with an idle timeout; a mutation whose request body already reached the host reports `details.phase=after-body` instead of claiming a safe retry; page-channel subscriptions reset on a new link epoch; and a closed carrier socket is no longer held by the 60 s rebuild window.
 - **Bundled dsh baseline moves to 0.2.1-rc.3 (1f81c047)** - the source line, the runtime bundle and the three fork copies move together; the official frontend brings the session-header folded views with More, the right-rail guide More, plugin navigation (`pluginNavigation.openList/openBundle`) that routes Browse to Settings -> Plugin manager, the mobile 44 px More button and 88 px label ellipsis, and the global New Session button reusing a blank session; chamber adds the `chamberSettingsNavigation` seat and the rc.3 anchor set (the rc.3 sidebar More / entry analytics surface is deliberately not adopted; design 05 section 4.2).
 
 ### Changed
+- **Cross-instance plugin build drift no longer blocks an instance** - when two sources run different dsh releases (for example desktop 0.2.1-rc.3 and gateway 0.2.1-rc.2), the same client plugin necessarily carries a different bundle rev: the page keeps only the first-loaded factory, and the conflicting instance now reuses that implementation (the kernel's `reuseForeignBuilds` awaits the owner's execution) so the boot completes; a same-instance rebuild still drops only that row (`restart-required`). The drift is reported only on the connections page, naming both dsh releases and the closure, and no longer raises the fatal overlay. Trade-off: a build reused across releases may not match the host's expectations (missing regions or misbehavior), so availability wins over blocking; this reverts the cross-instance block shipped since 0.4.2-beta.2 (design 09 section 3.5).
 - **Lease conflicts become deterministic exit code 3** - while another writer owns the state root the gateway no longer restarts every 3 s: a lease conflict stops immediately with exit code 3 (retryable startup failures stay 1), the generated unit pins `RestartPreventExitStatus=3` with a 60 s / 5-start limit, and `install-gateway.sh` runs `reset-failed` before restarting; operator steps live in `docs/deploy/deploy-gateway.md` section 9.
 
 ### Fixed

@@ -11,13 +11,14 @@
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
 
-## [0.4.3-beta.1] - 2026-10-24
+## [0.4.3-beta.2] - 2026-10-24
 
 ### 新增
 - **弱网韧性与有界恢复（design 27）** —— 在传输相位之上加一层链路子状态：单次网络级探测失败只判 **suspect**（转发继续），连续两次才判 **down** 并复用 `instance_unavailable`；5s down 宽限加 resume/online 强制探测与 `reverifyAll`，把 SSH keepalive 遮住的半开窗口（原 60–90s）关在重连之前。上传按 body 大小单独预算并带 idle 超时；请求体已送达宿主的 mutation 以 `details.phase=after-body` 如实上报，不再谎称可安全重试；页面通道订阅随链路代次重置，已关闭的 carrier socket 不再受 60s 重建窗口限制。
 - **捆绑 dsh 基线升至 0.2.1-rc.3（1f81c047）** —— 源码线、运行期与三份 fork 副本同批换锚；官方前端带来会话头折叠视图与 More、右栏 guide More、把「浏览」落到设置 → 插件管理的插件导航（`pluginNavigation.openList/openBundle`）、移动端 44px More 与 88px 标签省略，以及全局「新会话」复用空白会话；chamber 侧补 `chamberSettingsNavigation` 座席与 rc.3 锚点集（rc.3 的侧栏 More / entry analytics 面有意不采纳，判据 = design 05 §4.2）。
 
 ### 变更
+- **跨实例插件构建漂移不再阻断实例启动** —— 两个来源的 dsh 发布不同（如桌面 0.2.1-rc.3 与 gateway 0.2.1-rc.2）时，同一客户端插件的 bundle rev 必然不同：页面只保留先加载的那份 factory，现在让该实例的冲突行直接沿用这份实现（内核 `reuseForeignBuilds` 会 await 属主执行），boot 照常完成；同实例重建仍只丢该行（`restart-required`）。冲突事实只落在连接页诊断，文案点名两侧 dsh 发布版本与收口方式，不再触发 fatal 覆盖层。取舍：跨发布复用的构建可能与宿主预期不一致（缺块/行为异常），可用性优先于阻断；回退自 0.4.2-beta.2 起的跨实例阻断（design 09 §3.5）。
 - **租约冲突改为确定性退出码 3** —— state 根被另一写者持有时 gateway 不再每 3s 重启：租约冲突以退出码 3 直接停止（可重试的启动失败仍是 1），生成的 unit 固化 `RestartPreventExitStatus=3` 与 60s/5 次启动上限，`install-gateway.sh` 重启前先 `reset-failed`；运维步骤见 `docs/deploy/deploy-gateway.md` §9。
 
 ### 修复

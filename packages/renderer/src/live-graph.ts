@@ -343,9 +343,12 @@ export function startLiveGraphSync(deps: LiveGraphSyncDeps): LiveGraphSync {
     if (fact === undefined) {
       // No fact: heal OUR OWN previous fact only (a boot fact stays untouched
       // unless this pass positively handled that plugin id).
+      // A boot-written version conflict is NOT healed by a no-fact frame: the claim's
+      // owner and the page's factory did not change, only this pass stopped mentioning it.
       if (currentRecord !== undefined
         && ((lastWrite !== undefined && sameRecord(currentRecord, lastWrite))
-          || (currentRecord.pluginId !== undefined && handled.has(currentRecord.pluginId)))) {
+          || (currentRecord.state !== 'instance-version-conflict'
+            && currentRecord.pluginId !== undefined && handled.has(currentRecord.pluginId)))) {
         const ok: PluginGraphDiagnostic = { state: 'ok', updatedAt: now() }
         // A repeated no-fact frame must not rewrite the same ok record (the wall clock
         // makes updatedAt differ every pass).
@@ -370,6 +373,9 @@ export function startLiveGraphSync(deps: LiveGraphSyncDeps): LiveGraphSync {
           !isReleasePublishedPluginId(fact.id)
             ? 'unverified'
             : ownerRelease !== undefined && candidateRelease !== undefined ? 'release' : 'release-unknown',
+          // The live path REFUSES to create the hot row (the running view cannot switch
+          // factories), so its copy must not claim the row was reused.
+          'live',
         ),
         updatedAt: now(),
       }

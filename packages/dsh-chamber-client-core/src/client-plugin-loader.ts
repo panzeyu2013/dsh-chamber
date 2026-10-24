@@ -101,10 +101,10 @@ export type ClientRowOutcome<T extends ClientPluginRow = ClientPluginRow> =
   | { state: 'loaded'; row: T }
   /** The row's factory was already registered at the same rev (shared or earlier). */
   | { state: 'reused'; row: T }
-  /** Another instance's factory answers this id and the implementations are
-   *  interchangeable — same host release for a release-published id, or the caller
-   *  verified byte-identical content. Nothing was loaded; the row materializes under
-   *  the owner's factory. */
+  /** Another instance's factory answers this id and the caller accepted it — same host
+   *  release for a release-published id, caller-verified byte-identical content, or the
+   *  caller's foreign-reuse policy. Nothing was loaded; the row materializes under the
+   *  owner's factory. */
   | { state: 'shared'; row: T; ownerSourceId: string }
   /** The id is claimed at another rev: the kernel returns the conflict WITHOUT loading,
    *  and callers must not materialize the conflicting row. */
@@ -133,6 +133,12 @@ export interface ClientRowLoadOptions {
    *  candidate REV the comparison covered. A foreign row shares the owner factory only
    *  at that rev — an approval never transfers to a different build of the id. */
   sharedRevisions?: ReadonlyMap<string, string>
+  /** Caller policy: a foreign row at another rev is answered by the owner's factory —
+   *  the page keeps first-load-wins anyway — so treat it exactly like a verified share
+   *  (await the owner's execution, never materialize before it settles) instead of
+   *  returning `rev-conflict`. The caller owns the user-facing explanation: the
+   *  kernel reports no conflict for a row it was told to reuse. */
+  reuseForeignBuilds?: boolean
 }
 
 /**
@@ -170,10 +176,11 @@ export function canReuseForeignFactory(
  * - a later consumer at a DIFFERENT rev returns a conflict without loading and reports
  *   `restart` (same source) or `version` (another source) — the page keeps the
  *   first factory; callers must not materialize the conflicting row;
- * - EXCEPT when the implementations are interchangeable: a foreign row shares the
- *   owner factory when both sides report the same host release (release-published
- *   `@deepseek-ai/*` ids) or the caller verified byte-identical content at that
- *   exact rev (`sharedRevisions`); the outcome is `shared` and nothing is loaded;
+ * - EXCEPT when the implementations are interchangeable or the caller accepts the
+ *   foreign build: a foreign row shares the owner factory when both sides report the
+ *   same host release (release-published `@deepseek-ai/*` ids), the caller verified
+ *   byte-identical content at that exact rev (`sharedRevisions`), or the caller opted
+ *   into foreign reuse (`reuseForeignBuilds`); the outcome is `shared`, nothing loads;
  * - an ordinary failure clears the combo + its id records so a later load (or the
  *   caller's recovery pass) may retry;
  * - a DOM-script timeout leaves a tombstone observing the original element: a late
@@ -193,7 +200,8 @@ export async function loadClientPluginRows<T extends ClientPluginRow>(
       if (owned.rev !== row.rev) {
         const foreign = owned.ownerSourceId !== sourceId
         if (foreign && (canReuseForeignFactory(row.id, owned.releaseVersion, options.releaseVersion)
-          || options.sharedRevisions?.get(row.id) === row.rev)) {
+          || options.sharedRevisions?.get(row.id) === row.rev
+          || options.reuseForeignBuilds === true)) {
           // The owner's factory IS the same implementation (same release for a
           // release-published id, or caller-verified identical content at this exact
           // rev). Nothing is loaded here, but the owner's execution must EXIST before
@@ -208,8 +216,16 @@ export async function loadClientPluginRows<T extends ClientPluginRow>(
               message: errorMessage(error),
               updatedAt: Date.now(),
             })
-            if (error instanceof BundleLoadTimeoutError && options.timeout === 'collect') {
+            const timeout = error instanceof BundleLoadTimeoutError
+            if (timeout && options.timeout === 'collect') {
               outcomes.push({ state: 'failed', row, error, timeout: true })
+              return
+            }
+            // An ORDINARY owner failure rolls the owner's claim back, so this caller can
+            // load its own build on the recovery pass: defer exactly like the loaded
+            // branch — another instance's transient failure must not fail this boot.
+            if (!timeout && options.ordinary === 'defer') {
+              outcomes.push({ state: 'failed', row, error, timeout: false })
               return
             }
             throw error
@@ -350,15 +366,15 @@ export async function loadClientPluginRows<T extends ClientPluginRow>(
 }
 
 /**
- * Read-only pre-scan of the page-level table: the rows this caller would be
- * REFUSED at their current revision, in input order. `conflict` mirrors the
- * kernel verdict (another source owns the id ⇒ `version`, this source ⇒
- * `restart`); a duplicate id inside one call is judged once because the kernel
- * resolves a later occurrence against the record the first one publishes.
- * The boot path uses this to fail BEFORE any bundle executes or any new id is
- * claimed, so a boot that will be blocked leaves no executed factory and no
- * owner record behind. The kernel verdicts remain the authority: a claim that
- * appears after this scan is still answered by {@link loadClientPluginRows}.
+ * Read-only pre-scan of the page-level table: the rows whose id is already claimed
+ * at ANOTHER revision, in input order. `conflict` mirrors the kernel verdict
+ * (another source owns the id ⇒ `version`, this source ⇒ `restart`); a duplicate
+ * id inside one call is judged once because the kernel resolves a later occurrence
+ * against the record the first one publishes. Callers use it BEFORE any bundle
+ * executes for two decisions: drop a same-instance rebuild (`restart`) and report a
+ * cross-instance drift (`version`) — with `reuseForeignBuilds` the kernel never
+ * refuses a foreign row, so this scan no longer gates the boot's success. A claim
+ * that appears after this scan still reaches {@link loadClientPluginRows}.
  * @param sourceId - the caller's source (instance) id.
  * @param rows - candidate rows.
  * @param releaseVersion - the caller's host release (graph `release.version`), when known.

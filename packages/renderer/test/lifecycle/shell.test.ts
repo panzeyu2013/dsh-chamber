@@ -40,7 +40,7 @@ import {
   hostileThrownValue, shellModule, shellTestScope, testSourceFingerprint,
 } from '../support/shell-harness.ts'
 
-test('bootInstanceShell: a conflicting factory blocks run and preserves the owning source', async (t) => {
+test('bootInstanceShell: a conflicting factory reuses the owning source and boots', async (t) => {
   shellTestScope(t, { graph: 'none', timers: false })
   const { loadClientPluginRows, clientPluginRowOwner } = await import('../../../dsh-chamber-client-core/src/client-plugin-loader.ts')
   const pluginId = '@scope/shell-conflict-regression'
@@ -60,9 +60,9 @@ test('bootInstanceShell: a conflicting factory blocks run and preserves the owni
   })
   t.after(unsubscribe)
   const state = await bootInstanceShell('ssh-conflict-consumer', '/api/i/ssh-conflict-consumer', {} as HTMLElement, () => {})
-  assert.equal(state.booted, false)
-  assert.match(state.error ?? '', /启动已阻止/)
-  assert.deepEqual(__testConfiguredContexts(), [], 'run never materializes the conflicting context')
+  assert.equal(state.booted, true, 'the drift no longer fails the boot')
+  assert.equal(state.error, null)
+  assert.equal(__testConfiguredContexts().length, 1, 'the boot materializes its context under the owner factory')
   assert.equal(clientPluginRowOwner(pluginId), 'conflict-owner')
   assert.equal(diagnosticState, 'instance-version-conflict')
 })

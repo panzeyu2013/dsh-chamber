@@ -1,8 +1,8 @@
 /**
  * pluginDiagnosticText / pluginDiagnosticTone / bannerProjection unit tests — the
  * consumer-side severity decision for client-plugin runtime diagnostics (design 09
- * §3.5): `instance-version-conflict` blocks conflicting boot; every non-ok
- * state is a problem. The card shows detail only for problems; the plugin dialog
+ * §3.5): `instance-version-conflict` is a problem-toned drift fact (the boot reuses
+ * the owner factory and never fails for it); every non-ok state is a problem. The card shows detail only for problems; the plugin dialog
  * always shows the full detail. bannerProjection (plan 24 B1.4) de-duplicates the
  * banner: title = short state name, detail = message ?? pluginId ?? null. Mirror of
  * the action-hint.test.ts style: plain node:test, no dsh, no React.

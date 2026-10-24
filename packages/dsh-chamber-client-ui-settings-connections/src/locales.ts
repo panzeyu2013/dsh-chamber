@@ -285,7 +285,7 @@ export const zh = {
   startManagedDshFailed: '启动失败：{error}',
   startManagedDshRefused: '启动被拒绝：当前状态不可启动或运行时正忙（409 {code}），请刷新后重试',
   // 版本冲突指引 / 服务提示。
-  pluginDiagnosticVersionConflictHint: '插件构建身份冲突：本页在整个生命周期内保留先加载的那份 factory，所以不能证明可互换的冲突实例启动会被阻止、该插件新 rev 的热装行也不会创建。可互换证明 = 同 dsh 发布版本的 @deepseek-ai/* 插件，或内容逐字节一致的 profile 插件（boot 期按需校验）；其余需让两侧使用同一 dsh 发布版本与同一构建后重载页面（或重启应用）。',
+  pluginDiagnosticVersionConflictHint: '插件构建身份冲突：本页在整个生命周期内只保留先加载的那份 factory，所以跨实例的 rev 漂移会沿用该 factory 并在这里提示，不阻止实例启动。同 dsh 发布版本的 @deepseek-ai/* 插件、或内容逐字节一致的 profile 插件（boot 期按需校验）不产生这条提示；若该实例出现界面异常，请让两侧使用同一 dsh 发布版本与同一构建后重载页面（或重启应用）。',
   serviceUnconfiguredHint: '未配置 systemd 服务：启动/停止/重启与「重启生效」不可用（编辑连接填写服务名后可启用）。',
 } satisfies Record<string, string>
 
@@ -576,6 +576,6 @@ export const en: Record<SettingsConnectionsKey, string> = {
   startManagedDshFailed: 'Start failed: {error}',
   startManagedDshRefused: 'Start refused: the current state is not startable or the runtime is busy (409 {code}); refresh and retry',
   // Version-conflict guidance / service hint.
-  pluginDiagnosticVersionConflictHint: 'A plugin build identity conflict: this page keeps the first-loaded factory for its whole lifetime, so a conflicting instance whose implementation cannot be proven interchangeable has its boot blocked, and a hot-installed row of that plugin at another revision is not created. Interchangeability is proven by the same dsh release for @deepseek-ai/* plugins, or by byte-identical content for profile plugins (verified on demand at boot); otherwise align both sides on the same dsh release and the same build, then reload the page (or restart the app).',
+  pluginDiagnosticVersionConflictHint: 'A plugin build identity conflict: this page keeps only the first-loaded factory for its whole lifetime, so a cross-instance revision drift reuses that factory and is reported here without blocking the instance. The same dsh release for @deepseek-ai/* plugins, or byte-identical content for profile plugins (verified on demand at boot), produces no such hint; if the instance misbehaves, align both sides on the same dsh release and the same build, then reload the page (or restart the app).',
   serviceUnconfiguredHint: 'No systemd service is configured: start/stop/restart and \u201cRestart to apply\u201d are unavailable (fill in the service name when editing the connection to enable them).',
 }

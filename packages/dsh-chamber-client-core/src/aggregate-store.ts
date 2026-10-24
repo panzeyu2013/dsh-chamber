@@ -169,8 +169,8 @@ export type PluginGraphDiagnosticState =
   | 'bundle-load-failed'
   | 'restart-required'
   /** Cross-instance bundle-rev drift: the same plugin id was first claimed on
-   *  this page by a DIFFERENT instance at another rev — the conflicting boot is
-   *  blocked; closure = one instance using it + a page reload (never a version claim). */
+   *  this page by a DIFFERENT instance at another rev. The instance keeps booting on
+   *  that factory; closure = align the two runtimes, then reload (never a version claim). */
   | 'instance-version-conflict'
 
 export interface PluginGraphDiagnostic {

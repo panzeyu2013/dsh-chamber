@@ -291,14 +291,12 @@ export function findUnsatisfiableExternalDependencies(
  * script registers EVERY id its query names, so one script URL must never
  * execute twice. First-load-wins: the first combo to execute a factory owns
  * that id for the page's lifetime; a later consumer carrying it at another rev
- * is REFUSED by the kernel instead of being served that factory, and the boot
- * projects restart-required (same instance, rebuilt plugin) or
- * instance-version-conflict (cross-instance bundle-rev drift) from the tables in
- * the client-core face, which the settings bridge shares. A TRUE cross-instance
- * verdict blocks the conflicting boot; a row known interchangeable (same host
- * release, or verified-identical content) shares the factory without a load; a
- * same-instance verdict drops that row and the boot continues (the closure is a
- * document reload, or an app restart).
+ * cannot load a second copy and materializes under the owner's factory (the
+ * kernel awaits that execution: `reuseForeignBuilds`). A same-instance verdict
+ * drops the rebuilt row (restart-required: a reload switches it); a cross-instance
+ * verdict is accepted and ALWAYS reported as instance-version-conflict from the
+ * tables in the client-core face, which the settings bridge shares — the boot is
+ * never failed for it, so the drift surfaces only on the connections page.
  */
 function reportDiagnostic(
   instanceId: string,
@@ -336,25 +334,32 @@ export function pluginTextsShareIdentity(ownerText: string, candidateText: strin
 }
 
 /** The cross-instance bundle-rev drift fact text (shared by the boot projection and live sync):
- *  states the FILE-METADATA fact, the releases actually in play, the factory's owner and
- *  the actionable closure (design 09 §3.5) — never an unproven "the plugin versions differ". */
+ *  states the FILE-METADATA fact, the releases actually in play, the factory's owner, what the
+ *  page DID (reuse that factory; the boot was not blocked) and the conditional closure
+ *  (design 09 §3.5) — never an unproven "the plugin versions differ". */
 export function versionConflictMessage(
   id: string,
   ownerSourceId: string,
   ownerRelease?: string,
   candidateRelease?: string,
   reason: InstanceConflictReason = 'release',
+  /** Which surface states the fact: the boot reuses the row, a live hot-install
+   *  refuses to create its entry (the running view cannot switch factories). */
+  surface: 'boot' | 'live' = 'boot',
 ): string {
   const owner = ownerRelease === undefined || ownerRelease === '' ? '未知' : ownerRelease
   const candidate = candidateRelease === undefined || candidateRelease === '' ? '未知' : candidateRelease
   const closure = reason === 'release'
-    ? '两侧 dsh 发布版本不同，不能复用同一 factory；请把该来源的 dsh 运行时升到与桌面相同的发布版本，然后重载页面（或重启应用）'
+    ? '两侧 dsh 发布版本不同，跨发布复用的构建可能与宿主预期不一致；如该实例界面异常，请把其 dsh 运行时升到与桌面相同的发布版本后重载页面（或重启应用）'
     : reason === 'release-unknown'
-      ? '至少一侧未报告 dsh 发布版本（0.2.1 之前的宿主），无法证明可复用；请把该来源的 dsh 运行时升到与桌面相同的发布版本，然后重载页面（或重启应用）'
+      ? '至少一侧未报告 dsh 发布版本（0.2.1 之前的宿主），无法证明两侧可互换；如该实例界面异常，请把该来源的 dsh 运行时升到与桌面相同的发布版本后重载页面（或重启应用）'
       : reason === 'content'
-        ? '两侧插件构建的内容不同（已按内容校验），不能复用同一 factory；请让两侧安装同一插件构建，然后重载页面（或重启应用）'
-        : '无法证明两侧是同一构建（未通过内容校验），不能复用同一 factory；请让两侧使用同一构建，然后重载页面（或重启应用）'
-  return `实例间 ${id} 的 bundle rev 不同（rev 由 bundle 文件的 mtime/ctime/size 派生，不是内容哈希；独立安装/拷贝通常不同，仅当两侧指向同一底层文件时才相同）：页面 factory 属于实例 ${ownerSourceId}（dsh ${owner}），本实例是 dsh ${candidate}，冲突行不会复用该 factory；${closure}。`
+        ? '两侧插件的构建内容不同（已按内容校验），复用的是页面先加载的构建；如该实例界面异常，请让两侧安装同一插件构建后重载页面（或重启应用）'
+        : '无法证明两侧是同一构建（未通过内容校验），复用的是页面先加载的构建；如该实例界面异常，请让两侧使用同一构建后重载页面（或重启应用）'
+  const action = surface === 'live'
+    ? '该 rev 的热装行本次未创建（页面保留先加载的构建），重载页面后按启动规则复用'
+    : '该行沿用该 factory 且不阻断启动'
+  return `实例间 ${id} 的 bundle rev 不同（rev 由 bundle 文件的 mtime/ctime/size 派生，不是内容哈希；独立安装/拷贝通常不同，仅当两侧指向同一底层文件时才相同）：页面 factory 属于实例 ${ownerSourceId}（dsh ${owner}），本实例是 dsh ${candidate}，${action}；${closure}。`
 }
 
 /** The same-source rebuilt-bundle fact text (shared by the boot projection and live sync). */
@@ -412,8 +417,8 @@ export interface CollectExtraRowsDeps {
   /**
    * Read one plugin bundle's served text for cross-instance CONTENT identity:
    * profile/third-party rows carry no release identity, so their bytes are the only
-   * interchangeable proof. Omitted = content cannot be verified, and a foreign rev
-   * conflict for such an id stays fail-closed (blocked).
+   * interchangeable proof. Omitted = content cannot be verified, so the boot reports
+   * the drift as `unverified` while the row still reuses the page factory.
    */
   readPluginBundle?(url: string): Promise<string | null>
   reportDiagnostic?(sourceId: string, diagnostic: PluginGraphDiagnostic): void
@@ -502,12 +507,12 @@ const SERVING_HEAL_BUDGET_MS = 70_000
  * one, and a transient 404 lands here too; the pass re-fetches and retries at
  * fresh URLs, and only still-failing rows fail the boot. A DOM-script TIMEOUT is not recovery:
  * its tombstone observes the original element. A rev conflict is never recovered by a
- * re-fetch: both passes route a TRUE conflict to the single diagnostic and the boot
- * fails loud, because a row materialized under another rev's factory is the one state
- * the first-load-wins module table cannot answer correctly. Two provable exceptions
- * share the owner factory instead: same host release for a release-published
- * `@deepseek-ai/*` id, or byte-identical served content for a profile/third-party id
- * (bounded on-demand verification).
+ * re-fetch: the page holds ONE factory per id, so a CROSS-INSTANCE drift is reported and the
+ * row materializes under the owner's factory (the kernel awaits that execution), while a
+ * SAME-INSTANCE rebuild drops its row. The scans above own the diagnostic (the connections
+ * page's only surface); the kernel only shares/awaits: same host release for a
+ * release-published `@deepseek-ai/*` id, byte-identical served content for a profile id, or
+ * the caller's reuse policy.
  */
 export async function collectExtraRows(
   instanceId: string,
@@ -699,7 +704,7 @@ export async function collectExtraRows(
   /** Rows whose fresh load failed ordinary (not a DOM-script timeout): recovery candidates. */
   const failedRows: { row: ExtraModuleRow; error: unknown }[] = []
 
-  /** Record one conflict verdict: cross-instance drift blocks, a same-instance rebuild drops. */
+  /** Record one conflict verdict: cross-instance drift is reported and reused, a same-instance rebuild drops. */
   const recordConflict = (
     found: { row: ExtraModuleRow; conflict: 'restart' | 'version' },
     reason: InstanceConflictReason = 'release',
@@ -722,6 +727,26 @@ export async function collectExtraRows(
       ? 'unverified'
       : ownerRelease !== undefined && bootRelease !== undefined ? 'release' : 'release-unknown'
   }
+  /** Whether the cross-instance drift already reached the connections-page slot. It is
+   *  reported as soon as it is known (before the load) so a boot that later fails for
+   *  ANOTHER reason still leaves the fact behind; the projection re-calls this. */
+  let versionConflictReported = false
+  const reportVersionConflict = (): void => {
+    const conflicted = versionConflict
+    if (conflicted === undefined || versionConflictReported) return
+    versionConflictReported = true
+    const ownerSourceId = clientPluginRowOwner(conflicted.id) ?? '—'
+    reportDiagnostic(instanceId, 'instance-version-conflict', {
+      pluginId: conflicted.id,
+      message: versionConflictMessage(
+        conflicted.id,
+        ownerSourceId,
+        clientPluginRowRelease(conflicted.id),
+        bootRelease,
+        versionConflictReason,
+      ),
+    }, deps.reportDiagnostic)
+  }
   /** The conflict recorded so far, if any. Read through a function because the boot's
    *  flow analysis already narrowed the slots past the pre-scan, while the recovery pass
    *  can still record one through `recordConflict`. */
@@ -739,26 +764,6 @@ export async function collectExtraRows(
       const row = rows[index]!
       if (restartDrops.has(row.id) || droppedUrls.has(row.url)) rows.splice(index, 1)
     }
-  }
-  /** Stop the boot loud on a recorded CROSS-INSTANCE conflict (design 09 §3.5): this
-   *  instance's row must never be materialized under another instance's factory. */
-  function blockOnVersionConflict(): never {
-    const version = versionConflict
-    /* Unreachable by construction (callers only block on a recorded conflict). */
-    if (version === undefined) throw new Error(`实例 ${instanceId} 启动已阻止：冲突记录已丢失`)
-    const ownerSourceId = clientPluginRowOwner(version.id) ?? '—'
-    const message = versionConflictMessage(
-      version.id,
-      ownerSourceId,
-      clientPluginRowRelease(version.id),
-      bootRelease,
-      versionConflictReason,
-    )
-    reportDiagnostic(instanceId, 'instance-version-conflict', {
-      pluginId: version.id,
-      message,
-    }, deps.reportDiagnostic)
-    throw new Error(`实例 ${instanceId} 启动已阻止：${message}`)
   }
   /** Unsatisfiable-dependency BOOT fact of the rows this boot carries (post-recovery when
    *  the load ran): computed + logged ONCE, because the single diagnostic slot can carry
@@ -787,10 +792,10 @@ export async function collectExtraRows(
     loadBundle: deps.loadModuleBundle,
     ...(deps.reportDiagnostic === undefined ? {} : { reportDiagnostic: deps.reportDiagnostic }),
   }
-  /** Map one kernel verdict into this boot's policy: a rev conflict is recorded
-   *  and blocks the boot after the single-diagnostic projection (the row is never
-   *  materialized under the owner's factory), an ordinary first-pass failure
-   *  defers to recovery; the kernel throws on timeouts. */
+  /** Map one kernel verdict into this boot's policy: a same-instance rebuild is dropped
+   *  after the single-diagnostic projection; a cross-instance drift is reused (the row
+   *  materializes under the owner's factory) and reported; an ordinary first-pass
+   *  failure defers to recovery; the kernel throws on timeouts. */
   const applyOutcome = (outcome: ClientRowOutcome<ExtraModuleRow>): void => {
     if (outcome.state === 'rev-conflict') {
       recordConflict(outcome, conflictReasonFor(outcome.row.id))
@@ -799,18 +804,20 @@ export async function collectExtraRows(
     // 'shared' needs no action: the row stays and materializes under the owner factory.
     if (outcome.state === 'failed') failedRows.push({ row: outcome.row, error: outcome.error })
   }
-  // A boot the page's first-load-wins table will refuse must stop BEFORE any bundle
-  // executes or any new id is claimed: a blocked boot that preloaded its other rows
-  // would leave executed factories and owner records behind, so a later instance
-  // carrying one of those ids at another revision is refused by an owner instance
-  // that never materialized. Claims appearing AFTER this scan are still answered by
-  // the kernel verdicts below (the scan is a fast path, they are the authority).
+  // The page's first-load-wins table keeps ONE factory per id, so a row at another
+  // revision can only materialize under the owner's factory. This scan decides what
+  // that means BEFORE any bundle executes: a same-instance rebuild is dropped (the
+  // page keeps the first factory; restart-required) and cross-instance drift is
+  // accepted + reported (instance-version-conflict) — never a boot failure. Claims
+  // appearing AFTER this scan are caught by the later sync scans and the recovery pass
+  // (this one is a fast path); the kernel itself only shares/awaits a foreign row
+  // (`reuseForeignBuilds`) or reports a same-instance restart.
   // Cross-instance identity is decided in two steps, cheapest first:
-  //  1. the sync pre-scan shares release-published (@deepseek-ai/*) ids whose two
+  //  1. the sync pre-scan recognizes release-published (@deepseek-ai/*) ids whose two
   //     hosts report the SAME dsh release — the artifacts ship with that release;
   //  2. profile/third-party ids carry no release identity, so their served bytes are
-  //     compared on demand (bounded); identical content shares, anything else stays
-  //     fail-closed and blocks below.
+  //     compared on demand (bounded); identical content needs no warning, anything
+  //     else is reported while the owner's factory answers the row.
   const sharedRevisions = new Map<string, string>()
   const foreignRows: { row: ExtraModuleRow; conflict: 'version'; ownerSourceId: string }[] = []
   for (const found of scanClientPluginRowConflicts(instanceId, rows, bootRelease)) {
@@ -824,8 +831,8 @@ export async function collectExtraRows(
     }
     recordConflict(found, conflictReasonFor(found.row.id))
   }
-  // A boot already certain to block must not fetch bundle contents: the profile
-  // approvals could not change the verdict.
+  // One recorded conflict already names the drift on the connections page; a second
+  // profile verdict could only repeat the same warning (the single slot carries one).
   if (foreignRows.length > 0 && versionConflict === undefined) {
     let verified = 0
     for (const found of foreignRows) {
@@ -849,14 +856,22 @@ export async function collectExtraRows(
       }
     }
   }
-  dropRestartRows()
-  if (versionConflict !== undefined) {
-    unsatisfiableBootFact()
-    blockOnVersionConflict()
+  // A claim published while the pre-scan verified contents (its awaits) is invisible to
+  // that sync pass; one cheap re-scan keeps the connections-page fact honest AND drops a
+  // late same-instance rebuild BEFORE the load (a kept row would execute it again).
+  for (const found of scanClientPluginRowConflicts(instanceId, rows, bootRelease)) {
+    if (sharedRevisions.get(found.row.id) === found.row.rev) continue
+    recordConflict(found, conflictReasonFor(found.row.id))
   }
+  dropRestartRows()
+  // Written BEFORE the load: a boot that later fails for another reason keeps the fact.
+  reportVersionConflict()
   const identityOptions = {
     ...(bootRelease === undefined ? {} : { releaseVersion: bootRelease }),
-    ...(sharedRevisions.size === 0 ? {} : { sharedRevisions }),
+    // `sharedRevisions` is deliberately NOT passed: the reuse policy already answers
+    // every foreign row, so the verified-content map only decides whether this boot
+    // emits a warning (the scans above), never the kernel verdict.
+    reuseForeignBuilds: true,
   }
   for (const outcome of await loadClientPluginRows(instanceId, rows, rowLoadDeps, {
     ordinary: 'defer',
@@ -908,6 +923,11 @@ export async function collectExtraRows(
           keptFailures.push(failure)
           continue
         }
+        // A claim published AFTER the boot pre-scan (another instance booted in between,
+        // or a late first-load) is invisible to it — the scan is a fast path. Re-check
+        // this one row so the drift still reaches the diagnostic while the kernel shares.
+        const [lateConflict] = scanClientPluginRowConflicts(instanceId, [fresh], bootRelease)
+        if (lateConflict !== undefined) recordConflict(lateConflict, conflictReasonFor(fresh.id))
         let outcomes: ClientRowOutcome<ExtraModuleRow>[]
         try {
           // No further recovery to defer to — throw so the kept-failure set is exact.
@@ -920,11 +940,10 @@ export async function collectExtraRows(
           keptFailures.push({ row: fresh, error })
           continue
         }
-        // A rev conflict is a VERDICT, not an error: the kernel kept the first
-        // factory and refused to load this row, so treating it as recovered would
-        // hand the boot a different rev's url under that factory — the exact
-        // materialization the boot conflict policy forbids. Same two slots as the
-        // first pass, so the single-diagnostic projection below owns the verdict.
+        // A rev conflict is a VERDICT, not an error: with `reuseForeignBuilds` a
+        // foreign row is SHARED, so a verdict here is the same-instance rebuild —
+        // the boot drops that row and the projection below owns the fact. Treating
+        // it as recovered would re-execute a bundle at a superseded revision.
         const outcome = outcomes[0]
         if (outcome !== undefined && outcome.state === 'rev-conflict') {
           recordConflict(outcome, conflictReasonFor(outcome.row.id))
@@ -946,11 +965,11 @@ export async function collectExtraRows(
     if (keptFailures.length > 0) {
       // A conflict recorded during this pass must not go silent just because the boot
       // also carries load failures: the thrown reason owns the single diagnostic slot,
-      // so the other boot fact is logged instead of dropped.
+      // so the other boot fact is logged instead of projected.
       const alsoConflicted = recordedConflict()
       if (alsoConflicted !== undefined) {
         console.error(`[shell] instance ${instanceId} row ${alsoConflicted.id} also carries a rev conflict; `
-          + 'the boot stops on the load failure first (the conflict facts are logged, not projected)')
+          + 'the boot stops on the load failure first (the drift fact is logged)')
       }
       for (const failure of keptFailures) {
         reportDiagnostic(instanceId, 'bundle-load-failed', {
@@ -975,15 +994,26 @@ export async function collectExtraRows(
       }
     }
   }
+  // A claim can appear while the load/recovery passes await their scripts — the sync
+  // pre-scan cannot see it. One final scan keeps the "always reported" promise and drops
+  // a late same-instance rebuild before the rows are returned.
+  for (const found of scanClientPluginRowConflicts(instanceId, rows, bootRelease)) {
+    if (sharedRevisions.get(found.row.id) === found.row.rev) continue
+    recordConflict(found, conflictReasonFor(found.row.id))
+  }
   // Recovery can record one more same-instance verdict: drop its row before the rows are
   // consumed, so "recorded ⇒ absent" holds for every path that reaches the projection.
   dropRestartRows()
-  // A shared factory cannot answer a different revision safely: the boot stops before
-  // its rows reach loader.create (the pre-scan already covered the steady state).
   const unsatisfiable = unsatisfiableBootFact()
-  if (versionConflict !== undefined) blockOnVersionConflict()
+  const conflicted = versionConflict
   const dropped = restartDrops.values().next().value
-  if (dropped !== undefined) {
+  if (conflicted !== undefined) {
+    // Cross-instance drift is NOT a boot failure: the row reused the page's factory,
+    // and this diagnostic is the only surface that names the drift (design 09 §3.5).
+    // It outranks a same-instance restart fact for the single slot: a rebuild heals on
+    // reload, a cross-release mismatch does not. Already written before the load.
+    reportVersionConflict()
+  } else if (dropped !== undefined) {
     // The rebuilt plugin is absent from THIS boot (the page keeps the first factory for its
     // lifetime): the instance stays usable and the diagnostic names the reload that switches.
     reportDiagnostic(instanceId, 'restart-required', {
