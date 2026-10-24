@@ -18,9 +18,10 @@ import {
   RAIL_TOGGLE_BAND_MAX_TOP_PX, RAIL_TOGGLE_BOX_MAX_PX, RAIL_TOGGLE_LEFT_FRACTION, TOLERATED_REQUEST_FAILURES,
   applyRequireHover, cardIdentityHolds, createRecorder, deriveSourceIds, hasSecurityHeaders, hoverCardVerdict,
   hoverDismissVerdict, hoverExclusiveVerdict, hoverRaceVerdict, isHonestError, isInstanceIndex, isShellIndex,
-  isWriterQuiescent, leakedFileContent, normalizeCardText, parseInstanceAssets, parsePluginLoaderUrls,
-  parseShellAssets, partitionFailures, pickRailToggle, raceBandForWindow, railToggleVerdict, renderMarkdown,
-  railFactsSnapshot, safeJson, sourceFoldVerdict, summarize, summarizeNetFailures, veilLayeringVerdict,
+  isWriterQuiescent, leakedFileContent, normalizeCardText, parseBaseHref, parseInstanceAssets,
+  parsePluginLoaderUrls, parseShellAssets, partitionFailures, pickRailToggle, raceBandForWindow,
+  railToggleVerdict, renderMarkdown, railFactsSnapshot, resolveDeclaredUrl, safeJson, sourceFoldVerdict,
+  summarize, summarizeNetFailures, veilLayeringVerdict,
   viewPrefsDelta, viewPrefsFingerprint, viewPrefsUnreadable, writerEvidence,
 } from './checks.mjs'
 // The two page-level click expressions are imported so CI can run the REAL strings against a fake
@@ -28,6 +29,8 @@ import {
 import {
   CLICK_STASHED_BUTTON, VEIL_LAYERING_PROBE_INSTALL, VEIL_LAYERING_PROBE_READ, clickButtonAt,
 } from './walkthrough.mjs'
+// 一处回归直接驱动真实的 --live 探针：实例文档声明 URL 的解析决定 IP-2/IP-3 的判定。
+import { runLiveAcceptance } from './probe.mjs'
 // Native flavor mode helpers: the native walkthrough drives the sidecar assembly the packaged Swift shell spawns (WKWebView has no CDP).
 import {
   nativePreflight,
@@ -40,9 +43,9 @@ import {
 const SHELL_HTML = `<!doctype html><html lang="zh-CN"><head><title>dsh-chamber</title>
 <script type="module" crossorigin src="/assets/chamber-abc.js"></script>
 <link rel="stylesheet" href="/assets/chamber-def.css"></head><body><div id="root"></div></body></html>`
-const INSTANCE_HTML = `<!doctype html><html lang="en"><head><base href="/">
-<link rel="preload" as="script" href="/plugins/??@deepseek-ai/dsh-typert-registry/client.js,@deepseek-ai/dsh-api-gateway/client.js">
-<script src="/plugins/??@deepseek-ai/dsh-client-modules/client.js&amp;rev=cddf5581d5d5"></script>
+const INSTANCE_HTML = `<!doctype html><html lang="en"><head><base href="./">
+<link rel="preload" as="script" href="plugins/??@deepseek-ai/dsh-typert-registry/client.js,@deepseek-ai/dsh-api-gateway/client.js">
+<script src="./plugins/??@deepseek-ai/dsh-client-modules/client.js&amp;rev=cddf5581d5d5"></script>
 <script type="module" crossorigin src="./assets/index-Df-65__b.js"></script>
 <script>window.__DSH_BOOT__={"version":"0.1.5-rc.1"}</script>
 <link rel="stylesheet" href="./assets/index-b24khbeK.css"></head><body></body></html>`
@@ -55,7 +58,7 @@ test('shell index: doctype + the chamber marker, and never a look-alike', () => 
 
 test('instance index: boot manifest + <base href> are both required', () => {
   assert.equal(isInstanceIndex(200, INSTANCE_HTML), true)
-  assert.equal(isInstanceIndex(200, INSTANCE_HTML.replace(/<base href="\/">/, '')), false,
+  assert.equal(isInstanceIndex(200, INSTANCE_HTML.replace(/<base href="\.\/">/, '')), false,
     'without the base tag the per-entry rewrite is missing')
   assert.equal(isInstanceIndex(200, SHELL_HTML), false)
 })
@@ -66,24 +69,114 @@ test('asset parsing keeps only what the document itself declares', () => {
   assert.deepEqual(parseShellAssets('<html></html>'), [])
 })
 
-test('plugin loader urls are unescaped and keep their rev query', () => {
+test('plugin loader urls are decoded and kept as declared for the document base to resolve', () => {
   const urls = parsePluginLoaderUrls(INSTANCE_HTML)
   assert.equal(urls.length, 2)
-  assert.equal(urls[1], '/plugins/??@deepseek-ai/dsh-client-modules/client.js&rev=cddf5581d5d5',
+  assert.equal(urls[0], 'plugins/??@deepseek-ai/dsh-typert-registry/client.js,@deepseek-ai/dsh-api-gateway/client.js',
+    'the pinned host declares loader rows document-relative (client-modules comboReference)')
+  assert.equal(urls[1], './plugins/??@deepseek-ai/dsh-client-modules/client.js&rev=cddf5581d5d5',
     'the &amp; entity must be decoded — the instance 404s the same path without rev')
   assert.deepEqual(parsePluginLoaderUrls(SHELL_HTML), [])
-  // The instance is mounted under /api/i/<id>/ with a <base href>; the host may
-  // declare the loader URL document-relative. Both forms are the same resource.
-  const relative = INSTANCE_HTML.replace(
-    'src="/plugins/??@deepseek-ai/dsh-client-modules/client.js&amp;rev=cddf5581d5d5"',
-    'src="plugins/??@deepseek-ai/dsh-client-modules/client.js&amp;rev=cddf5581d5d5"',
-  )
-  assert.deepEqual(parsePluginLoaderUrls(relative)[1], urls[1], 'relative loader URLs are normalised to the instance base')
-  const dotRelative = INSTANCE_HTML.replace(
-    'src="/plugins/??@deepseek-ai/dsh-client-modules/client.js&amp;rev=cddf5581d5d5"',
-    'src="./plugins/??@deepseek-ai/dsh-client-modules/client.js&amp;rev=cddf5581d5d5"',
-  )
-  assert.deepEqual(parsePluginLoaderUrls(dotRelative)[1], urls[1], 'dot-relative loader URLs are normalised too')
+  // A root-absolute declaration stays root-absolute. Prefixing `/` onto the relative
+  // form (the old normalisation) erased the difference the probe has to see: with
+  // <base href="./"> the browser resolves it to the ORIGIN root, not the instance prefix.
+  const rootAbsolute = INSTANCE_HTML.replace('href="plugins/', 'href="/plugins/')
+  assert.equal(parsePluginLoaderUrls(rootAbsolute)[0],
+    '/plugins/??@deepseek-ai/dsh-typert-registry/client.js,@deepseek-ai/dsh-api-gateway/client.js')
+})
+
+test('base resolution: the document base decides, root-absolute never rides the instance prefix', () => {
+  const documentUrl = 'http://127.0.0.1:17500/api/i/local/'
+  // 钉住的宿主注入 ./（host/frontend-static/src/index.ts:119）；不声明 base 的文档
+  // 以自己的 URL 为 base（HTML 的 fallback base URL）。
+  assert.equal(parseBaseHref(INSTANCE_HTML), './')
+  assert.equal(parseBaseHref(SHELL_HTML), null)
+  const baseHref = parseBaseHref(INSTANCE_HTML)
+  const declared = parsePluginLoaderUrls(INSTANCE_HTML)[1]
+  assert.equal(resolveDeclaredUrl(declared, { documentUrl, baseHref }),
+    '/api/i/local/plugins/??@deepseek-ai/dsh-client-modules/client.js&rev=cddf5581d5d5')
+  // 文档相对（裸写或 ./ 前缀）落在实例前缀下。
+  assert.equal(resolveDeclaredUrl('plugins/??a/client.js&rev=r', { documentUrl, baseHref }),
+    '/api/i/local/plugins/??a/client.js&rev=r')
+  assert.equal(resolveDeclaredUrl('./plugins/??a/client.js&rev=r', { documentUrl, baseHref }),
+    '/api/i/local/plugins/??a/client.js&rev=r')
+  assert.equal(resolveDeclaredUrl('assets/index-abc.js', { documentUrl, baseHref }), '/api/i/local/assets/index-abc.js')
+  // 根绝对解析到 ORIGIN 根——浏览器就是这么做，这也是两种形态不等价的根据。
+  assert.equal(resolveDeclaredUrl('/plugins/??a/client.js&rev=r', { documentUrl, baseHref }),
+    '/plugins/??a/client.js&rev=r')
+  // base 是另一个决定落点的输入：同一段相对 URL 在 "/" base 下也被重新定根。
+  assert.equal(resolveDeclaredUrl('plugins/??a/client.js&rev=r', { documentUrl, baseHref: '/' }),
+    '/plugins/??a/client.js&rev=r')
+  // 无 <base href> 时文档 URL 自身即 base。
+  assert.equal(resolveDeclaredUrl('plugins/??a/client.js&rev=r', { documentUrl }),
+    '/api/i/local/plugins/??a/client.js&rev=r')
+  // 跨源/无法解析的声明一律拒绝，绝不去别处取。
+  for (const declaredUrl of ['https://evil.example/x.js', '//evil.example/x.js', 'data:text/javascript,1', '']) {
+    assert.equal(resolveDeclaredUrl(declaredUrl, { documentUrl, baseHref }), null, `${declaredUrl} must not resolve`)
+  }
+})
+
+/**
+ * 回归：实例页的 base 是 `./`，探针必须按浏览器语义解析声明 URL。
+ * 旧行为把 base 路径直接拼到声明 URL 前（`base + url`），于是根绝对 `/plugins/…`
+ * 即使在其真实落点（origin 根）404 也报 PASS；现在根绝对按 origin 根探、404 即 FAIL，
+ * 相对形式仍走实例前缀并通过。
+ */
+test('live probe: a root-absolute plugin URL that 404s at the origin root FAILs, the relative form passes', async () => {
+  const loaderPath = '??@scope/x/client.js&rev=r'
+  let instanceHtml = ''
+  const server = createServer((request, response) => {
+    const target = request.url ?? '/'
+    if (target === '/health') {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end('{"status":"ok","dsh":{"status":"ready"}}')
+      return
+    }
+    if (target === '/api/i/local/') {
+      response.writeHead(200, { 'content-type': 'text/html' })
+      response.end(instanceHtml)
+      return
+    }
+    // 实例确实在代理前缀下提供该资源；ORIGIN 根什么都不提供（落到下面的 404）。
+    if (target === `/api/i/local/plugins/${loaderPath}` || target === '/api/i/local/assets/index-abc.js') {
+      response.writeHead(200, { 'content-type': 'application/javascript' })
+      response.end('/* instance resource */')
+      return
+    }
+    response.writeHead(404, { 'content-type': 'application/json' })
+    response.end('{"error":"not_found","code":"not_found"}')
+  })
+  // 升级探测要有个答复，否则探针会等一个没人拥有的 socket。
+  server.on('upgrade', (_request, socket) => {
+    socket.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const origin = `http://127.0.0.1:${server.address().port}`
+  const outDir = mkdtempSync(path.join(tmpdir(), 'dsh-gui-base-'))
+  try {
+    const run = async (declared) => {
+      instanceHtml = `<!doctype html><html lang="en"><head><base href="./">
+<script src="${declared}"></script>
+<script type="module" crossorigin src="./assets/index-abc.js"></script>
+<script>window.__DSH_BOOT__={"version":"0.1.5-rc.1"}</script></head><body></body></html>`
+      const { results } = await runLiveAcceptance({
+        planeOrigin: origin, instanceOrigin: origin, sourceIds: [], outDir,
+      })
+      return new Map(results.map(entry => [entry.id, entry]))
+    }
+    const relative = await run(`plugins/${loaderPath}`)
+    assert.equal(relative.get('IP-2').ok, true, '实例资源的 ./assets 声明按实例前缀解析')
+    assert.equal(relative.get('IP-3').ok, true, '相对声明落在实例前缀，实例提供该资源')
+    // 同一个资源声明成根绝对：浏览器问的是 origin 根（那里没有它）。旧代码把实例
+    // 前缀拼到两种形态上，因此这里会取到实例资源并 PASS。
+    const rootAbsolute = await run(`/plugins/${loaderPath}`)
+    assert.equal(rootAbsolute.get('IP-3').ok, false, '根绝对声明按 origin 根解析：404 必须 FAIL')
+    assert.match(rootAbsolute.get('IP-3').evidence, /404/)
+  } finally {
+    server.closeAllConnections()
+    await new Promise(resolve => server.close(resolve))
+    rmSync(outDir, { recursive: true, force: true })
+  }
 })
 
 test('security headers: all four stamped, any one missing fails', () => {

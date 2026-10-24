@@ -13,8 +13,8 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import {
   createRecorder, deriveSourceIds, hasSecurityHeaders, isHonestError, isInstanceIndex, isShellIndex,
-  isWriterQuiescent, leakedFileContent, parseInstanceAssets, parsePluginLoaderUrls, parseShellAssets,
-  renderMarkdown, safeJson, summarizeNetFailures, writerEvidence,
+  isWriterQuiescent, leakedFileContent, parseBaseHref, parseInstanceAssets, parsePluginLoaderUrls,
+  parseShellAssets, renderMarkdown, resolveDeclaredUrl, safeJson, summarizeNetFailures, writerEvidence,
 } from './checks.mjs'
 
 /** Raw request target (fetch normalizes; the origin-form fence must see the raw one). */
@@ -223,10 +223,20 @@ export async function runLiveAcceptance({
   instanceCheck('IP-1', '实例反代根返回 dsh 前端', isInstanceIndex(instance.status, instance.body),
     `status=${instance.status} bytes=${instance.body.length}`)
 
+  // Declared urls resolve the way the browser resolves them: the instance page's own
+  // <base href> against the document url, then each url against that base. The
+  // pinned base is "./", so a document-relative declaration stays under the instance
+  // prefix while a root-absolute one goes to the origin root — concatenating the
+  // prefix onto both would probe the relative resource for either form.
+  const documentUrl = `${planeOrigin}${base}/`
+  const baseHref = parseBaseHref(instance.body)
+  const resolveDeclared = url => resolveDeclaredUrl(url, { documentUrl, baseHref })
+
   const instanceAssets = parseInstanceAssets(instance.body).slice(0, 4)
   const instanceAssetResults = []
   for (const asset of instanceAssets) {
-    const probe = await get(planeOrigin, `${base}/${asset}`)
+    const target = resolveDeclared(asset)
+    const probe = target === null ? { status: 'unresolved' } : await get(planeOrigin, target)
     instanceAssetResults.push(`${asset}→${probe.status}`)
   }
   instanceCheck('IP-2', '实例资源经 /api/i/<id> 反代', instanceAssets.length > 0 && instanceAssetResults.every(item => item.endsWith('→200')),
@@ -235,8 +245,13 @@ export async function runLiveAcceptance({
   const pluginUrls = parsePluginLoaderUrls(instance.body).slice(0, 3)
   const pluginResults = []
   for (const url of pluginUrls) {
-    const probe = await get(planeOrigin, `${base}${url}`)
-    pluginResults.push(`${probe.status} ${url.slice(0, 60)}…(${probe.body.length}B)`)
+    const target = resolveDeclared(url)
+    if (target === null) {
+      pluginResults.push(`unresolved ${url.slice(0, 60)}…`)
+      continue
+    }
+    const probe = await get(planeOrigin, target)
+    pluginResults.push(`${probe.status} ${target.slice(0, 60)}…(${probe.body.length}B)`)
   }
   instanceCheck('IP-3', '多入口插件包按声明 URL 可取（含 rev）',
     pluginUrls.length > 0 && pluginResults.every(item => item.startsWith('200')), pluginResults.join(' | ') || '（无声明插件 URL）')
@@ -266,8 +281,13 @@ export async function runLiveAcceptance({
       const probe = await get(planeOrigin, `/api/i/${sourceId}/`)
       if (isInstanceIndex(probe.status, probe.body)) {
         const asset = parseInstanceAssets(probe.body)[0]
-        const assetProbe = asset === undefined ? { status: 'n/a' } : await get(planeOrigin, `/api/i/${sourceId}/${asset}`)
-        ready.push(`${sourceId}(asset=${assetProbe.status})`)
+        const assetTarget = asset === undefined ? null : resolveDeclaredUrl(asset, {
+          documentUrl: `${planeOrigin}/api/i/${sourceId}/`,
+          baseHref: parseBaseHref(probe.body),
+        })
+        if (asset === undefined) ready.push(`${sourceId}(asset=n/a)`)
+        else if (assetTarget === null) ready.push(`${sourceId}(asset=unresolved)`)
+        else ready.push(`${sourceId}(asset=${(await get(planeOrigin, assetTarget)).status})`)
       } else {
         unavailable.push(`${sourceId}:${probe.status}${probe.body.includes('instance_unavailable') ? '(instance_unavailable)' : ''}`)
       }

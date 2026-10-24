@@ -29,10 +29,13 @@ export function createRecorder() {
 
 const ASSET_ATTRIBUTE = /(?:src|href)="(\/assets\/[^"]+)"/g
 const RELATIVE_ASSET_ATTRIBUTE = /(?:src|href)="\.\/(assets\/[^"]+)"/g
-// The instance is mounted under /api/i/<id>/ with a <base href>, so the host may
-// declare the loader URL RELATIVE ("plugins/??…") or root-absolute ("/plugins/??…").
-// Both are the same document-relative resource; normalise to the absolute path the
-// probe fetches under the instance base.
+const BASE_HREF_ATTRIBUTE = /<base\s[^>]*?href="([^"]*)"/i
+// The pinned host stamps `<base href="./">` into every rendered index
+// (vendor/harness-checkout/packages/host/frontend-static/src/index.ts:119) and its
+// loader rows are document-relative (`plugins/??…`, client-modules
+// `comboReference`). A root-absolute `/plugins/??…` is accepted by this parser but
+// is NOT the same resource in a browser: it resolves to the ORIGIN root. The
+// declared form is therefore kept verbatim — resolution is resolveDeclaredUrl's job.
 const PLUGIN_LOADER_ATTRIBUTE = /(?:src|href)="((?:\.\/|\/)?plugins\/\?\?[^"]+)"/g
 
 /** Root-absolute asset urls declared by a shell index.html. */
@@ -40,21 +43,70 @@ export function parseShellAssets(html) {
   return [...html.matchAll(ASSET_ATTRIBUTE)].map(match => match[1])
 }
 
-/** Instance-relative asset urls declared by a proxied dsh index.html. */
+/** Document-relative (`./assets/…`) asset urls declared by a proxied dsh index.html. */
 export function parseInstanceAssets(html) {
   return [...html.matchAll(RELATIVE_ASSET_ATTRIBUTE)].map(match => match[1])
 }
 
 /**
- * Multi-entry plugin loader urls. The `rev` query is part of the contract: the
+ * The `<base href>` a proxied instance page declares, verbatim, or null when it
+ * declares none. The value is a URL fragment, not a path: `./` keeps every
+ * document-relative reference under the instance prefix, while `/` re-roots it onto
+ * the origin. Only {@link resolveDeclaredUrl} may interpret it.
+ * @param html - the proxied instance index document.
+ * @returns the declared base href, or null.
+ */
+export function parseBaseHref(html) {
+  const declared = BASE_HREF_ATTRIBUTE.exec(html)
+  return declared === null ? null : declared[1].replace(/&amp;/g, '&')
+}
+
+/**
+ * Multi-entry plugin loader urls, exactly as the document declares them (entities
+ * decoded, a leading `./` kept). The `rev` query is part of the contract: the
  * instance answers 404 for the same path without it, so the declared URL — not a
- * hand-built one — is what the acceptance run must probe.
+ * hand-built one — is what the acceptance run probes. The FORM is load-bearing too
+ * and stays untouched: prefixing a `/` here would erase the only difference between
+ * a document-relative and an origin-absolute declaration.
+ * @param html - the proxied instance index document.
+ * @returns the declared loader urls, in document order.
  */
 export function parsePluginLoaderUrls(html) {
-  return [...html.matchAll(PLUGIN_LOADER_ATTRIBUTE)].map((match) => {
-    const url = match[1].replace(/&amp;/g, '&').replace(/^\.\//, '')
-    return url.startsWith('/') ? url : `/${url}`
-  })
+  return [...html.matchAll(PLUGIN_LOADER_ATTRIBUTE)].map(match => match[1].replace(/&amp;/g, '&'))
+}
+
+/**
+ * Resolve one URL a proxied instance document declares into the control-plane
+ * request target, with the browser's own algorithm: `<base href>` resolved against
+ * the document URL, then the declared URL resolved against that (`new URL(url, base)`),
+ * never string concatenation.
+ *
+ * The difference is the point of this function. Under the pinned `<base href="./">`
+ * a document-relative `plugins/??…` lands under the instance prefix
+ * (`/api/i/<id>/plugins/??…`), while a root-absolute `/plugins/??…` lands on the
+ * ORIGIN root, where the control plane serves nothing. Concatenating the instance
+ * prefix onto both fetches the first form twice and reports a PASS for a resource
+ * the browser never loads.
+ * @param declaredUrl - the attribute value as written in the document.
+ * @param options.documentUrl - the absolute URL the document was fetched from.
+ * @param options.baseHref - the document's `<base href>` value, or null/absent when
+ *   it declares none (the document URL is then the base, per HTML's fallback base URL).
+ * @returns the origin-form target (`/path?query`), or null when the declared URL is
+ *   empty, cannot be resolved, or resolves off the document's origin.
+ */
+export function resolveDeclaredUrl(declaredUrl, { documentUrl, baseHref = null } = {}) {
+  if (typeof declaredUrl !== 'string' || declaredUrl === '') return null
+  try {
+    const page = new URL(documentUrl)
+    const base = new URL(baseHref ?? '', page)
+    const resolved = new URL(declaredUrl, base)
+    if (resolved.origin !== page.origin) return null
+    return `${resolved.pathname}${resolved.search}`
+  } catch {
+    // A malformed declaration is the document's own fact, not a crash: the caller
+    // records "cannot probe" and the check fails closed.
+    return null
+  }
 }
 
 /** The chamber shell's own markers. */
