@@ -666,9 +666,11 @@ test('⑥ 源锁：上游 parsePrimaryRuntime 的接受规则行仍在（改了�
 
 /**
  * ⑦ pin 恒等：锁 provenance 的 upstreamCommit 必须等于 harness.commit。上游同名
- * `scripts/primary-runtime/lock.json` 在本仓用过的两个 pin 间逐字节相同，故这行
- * provenance 是 pin 升级时该锁唯一要动的字段；此前两代升级都同步移动过它，本次
- * 升级首轮漏改——本锁把这种漏改变成红。
+ * `scripts/primary-runtime/lock.json` 跨 pin 会变（rc.3 起 nodeVersion 到 24.21.0，
+ * nodeSha256 随之更换），两个 pin 间并非逐字节相同；本锁镜像的是上游字段名与
+ * python 坐标，Node 载荷版本是独立轴（见 provenance.node）。因此 pin 升级时本锁
+ * 必须同步移动的字段是 provenance.upstreamCommit；此前升级漏改过它——本锁把这种
+ * 漏改变成红。
  */
 test('⑦ 锁 provenance 的 upstreamCommit 与 harness.commit 一致（pin 升级必须同批）', () => {
   const provenance = JSON.parse(LOCK_TEXT).provenance
