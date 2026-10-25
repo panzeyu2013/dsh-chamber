@@ -32,8 +32,9 @@ import cc from './sidebar-chamber.module.css'
 import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { groupArchivedRows, workspaceAccentStyle, type ArchivedSessionGroup } from '@dsh-chamber/dsh-chamber-client-core/derive'
-import { getInstanceClient } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
+import { getInstanceClient, isInstanceUnavailable } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 import { unarchiveSessionForSource } from '@dsh-chamber/dsh-chamber-client-core/session-mutations'
+import { actionErrorKeyForState } from './action-error-copy.ts'
 import { archivePurgeNote, purgeRemovedContent, runArchivePurge } from './archive-purge.ts'
 import { getWorkspaceGitFlag, isSourceGitFlagsLoaded } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
 import type { SidebarKey } from './locales.ts'
@@ -325,10 +326,11 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
         if (!mountedRef.current) return
         const message = error instanceof Error ? error.message : String(error)
         // `busy:` 分支的说明文案进字典（产品可见文案一律在类型化字典里）；线协议
-        // 原文按政策原样透出，不翻译。
+        // 原文按政策原样透出，不翻译。not-ready 503 例外：它是本客户端包装的相位
+        // 事实（带英文尾巴），与行级动作共用同一套本地化（design 02 §3.5）。
         const friendly = message.startsWith('busy:')
           ? t('archive.manager.busyOther')
-          : message
+          : isInstanceUnavailable(error) ? t(actionErrorKeyForState(error.state)) : message
         setNote({ kind: 'error', text: friendly })
       } finally {
         if (mountedRef.current) setBusyKind(null)
@@ -357,7 +359,11 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
             await unarchiveSessionForSource(server.id, id)
             restored += 1
           } catch (error) {
-            if (failure === null) failure = error instanceof Error ? error.message : String(error)
+            if (failure === null) {
+              failure = isInstanceUnavailable(error)
+                ? t(actionErrorKeyForState(error.state))
+                : error instanceof Error ? error.message : String(error)
+            }
           }
         }
         // 不在这里刷新：恢复事实本身是清墓碑与生产端 purge 墓碑释放的唯一信号，重列

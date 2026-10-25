@@ -230,8 +230,8 @@ WS   /api/i/<id>/api/remote.mux    → 实例 WS  /api/remote.mux
 
 ### 3.3 失败语义（fail-loud）
 
-原则：实例传输失败**绝不伪装成空成功**——无隧道/未就绪 → **503**（code
-`instance_unavailable`）；上游连接拒绝/超时 → 502 / 504 显式错误（脱敏，
+原则：实例传输失败**绝不伪装成空成功**——无隧道/不可服务（本地状态 ∉ `{ready, degraded}`，
+见 02 §3.5）→ **503**（code `instance_unavailable`）；上游连接拒绝/超时 → 502 / 504 显式错误（脱敏，
 不泄上游 host:port）；实例 id 未知 → 404。错误码与响应形状的完整表见 **04 §4.2**
 （本文不再枚举）。
 

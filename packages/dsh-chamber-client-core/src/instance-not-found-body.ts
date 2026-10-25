@@ -1,7 +1,8 @@
 /**
- * Bounded 404-body probe for the per-instance unary client's domain-missing
- * discrimination. Extracted from instance-api.ts so the god-file budget can pay
- * for the dispatch-budget integration (net-negative move, behaviour unchanged):
+ * Bounded ERROR-body probe for the per-instance unary client: the 404
+ * domain-missing discrimination AND the 503 not-ready phase (details.state).
+ * Extracted from instance-api.ts so the god-file budget can pay for the
+ * dispatch-budget integration (net-negative move, behaviour unchanged):
  * the domain-missing decision only needs the tiny \`instance_not_found\` code JSON.
  */
 

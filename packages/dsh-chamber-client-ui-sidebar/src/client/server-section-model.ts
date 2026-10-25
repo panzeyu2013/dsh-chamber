@@ -124,7 +124,9 @@ export function sourceStatusLabelKey(server: ChamberServerAggregate): SidebarKey
   if (phase === 'connecting') return 'status.connecting'
   if (phase === 'starting') return 'status.starting'
   if (phase === 'restarting') return 'status.restarting'
-  if (phase === 'degraded') return 'status.reconnecting'
+  // Local degraded is still SERVING (design 02 §3.5) — only a remote transport's
+  // degraded phase is a reconnect phase (design 17 §10.6).
+  if (phase === 'degraded') return server.kind === 'local' ? 'status.degradedServing' : 'status.reconnecting'
   if (phase === 'error') return 'status.error'
   if (phase === 'stopped') return 'status.stopped'
   if (phase === 'restart-exhausted') return 'status.restartExhausted'

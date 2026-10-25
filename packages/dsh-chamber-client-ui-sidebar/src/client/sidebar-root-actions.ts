@@ -2,9 +2,7 @@
  *  surface shared by every row action; runActionWithOutcome also reports the outcome. */
 
 import { useState } from 'react'
-import { HttpBudgetUnscheduledError } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
-import { isInstanceUnavailable, MutationOutcomeUnknownError, ResponseLostError } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
-import { actionErrorKeyForState } from './action-error-key.ts'
+import { actionErrorText } from './action-error-copy.ts'
 import type { SidebarKey } from './locales.ts'
 
 /** Signature of the shell keyed action runner (rowErrors reporting). */
@@ -31,24 +29,9 @@ export function useSidebarActions(t: (key: SidebarKey) => string) {
     return action().then(
       () => true,
       (reason: unknown) => {
-        // A page-local dispatch refusal is not the source failing: localize it
-        // through the same dictionary every other row error uses (design 26 §D7).
-        const message = reason instanceof HttpBudgetUnscheduledError
-          ? t('action.notDispatched')
-          : reason instanceof MutationOutcomeUnknownError
-            ? t('action.outcomeUnknown')
-            : reason instanceof ResponseLostError
-              // The body reached the instance and the answer was lost; unlike an
-              // unknown mutation this is safe to retry, but the raw English
-              // sentence must not leak into a localized row error.
-              ? t('action.responseLost')
-              // The proxy's not-ready 503 is a phase, not a row failure: show a
-              // localized recovery line, never the raw gateway body. The next
-              // same-key action clears it (the key is deleted above).
-              : isInstanceUnavailable(reason)
-                ? t(actionErrorKeyForState(reason.state))
-                : reason instanceof Error ? reason.message : String(reason)
-        setRowErrors((prev) => ({ ...prev, [key]: message }))
+        // ONE copy decision (action-error-copy.ts) — the next same-key action
+        // clears the row error (the key is deleted above).
+        setRowErrors((prev) => ({ ...prev, [key]: actionErrorText(reason, t) }))
         return false
       },
     )

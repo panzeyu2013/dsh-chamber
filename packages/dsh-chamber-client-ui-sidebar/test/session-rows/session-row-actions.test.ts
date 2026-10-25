@@ -22,7 +22,10 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 import { en, zh } from '../../src/client/locales.ts'
-import { actionErrorKeyForState } from '../../src/client/action-error-key.ts'
+import { actionErrorKeyForState, actionErrorText } from '../../src/client/action-error-copy.ts'
+import { HttpBudgetUnscheduledError } from '../../../dsh-chamber-client-core/src/http-budget.ts'
+import { MutationOutcomeUnknownError, ResponseLostError } from '../../../dsh-chamber-client-core/src/instance-api.ts'
+import { InstanceUnavailableError } from '../../../dsh-chamber-client-core/src/wire-error.ts'
 
 /** Source locks must see code, not comments: a commented-out line must not satisfy them. */
 const read = (rel: string): string => stripComments(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8'))
@@ -273,29 +276,42 @@ test('a page-dispatch refusal is localized through the row-error funnel, never h
   assert.equal(typeof en['action.notDispatched'], 'string')
   assert.match(en['action.notDispatched'], /Page busy/u)
   const actions = read('../../src/client/sidebar-root-actions.ts')
+  const copy = read('../../src/client/action-error-copy.ts')
   assert.match(actions, /useSidebarActions\(t: \(key: SidebarKey\) => string\)/,
     'the hook takes the dictionary resolver instead of minting copy')
-  assert.match(actions, /t\('action\.notDispatched'\)/, 'the refusal must resolve through the dictionary')
-  assert.doesNotMatch(actions, /页面繁忙/u, 'no hardcoded copy in the action funnel')
+  assert.match(actions, /actionErrorText\(reason, t\)/,
+    'the funnel must delegate to the ONE copy decision')
+  assert.match(copy, /t\('action\.notDispatched'\)/, 'the refusal must resolve through the dictionary')
+  assert.doesNotMatch(actions + copy, /页面繁忙/u, 'no hardcoded copy in the action funnel')
   assert.match(read('../../src/client/SidebarRoot.tsx'), /useSidebarActions\(t\)/,
     'the shell must pass its own t into the funnel')
 })
-test('not-ready action errors map the proxy phase to existing localized copy', () => {
+test('action-error copy is one runtime-reachable decision, phase-aware and never the raw body', () => {
+  const t = (key: string) => key
+  // Phase → copy (design 02 §3.5): retrying phases vs TERMINAL ones — copy that says
+  // "retry shortly" for a stopped/exhausted instance is a false promise.
   const expected = [
     ['starting', 'action.instanceStarting'],
     ['restarting', 'action.instanceStarting'],
     ['degraded', 'action.instanceDegraded'],
     ['restart-exhausted', 'action.instanceRestartExhausted'],
+    ['stopped', 'action.instanceNotRunning'],
+    ['error', 'action.instanceNotRunning'],
     [undefined, 'action.instanceUnavailable'],
-    ['stopped', 'action.instanceUnavailable'],
-    ['error', 'action.instanceUnavailable'],
+    ['unknown-state', 'action.instanceUnavailable'],
   ] as const
   for (const [state, key] of expected) {
     assert.equal(actionErrorKeyForState(state), key, String(state))
-    assert.equal(typeof zh[key], 'string', `zh missing ${key}`)
-    assert.equal(typeof en[key], 'string', `en missing ${key}`)
+    // Proven through the RUNTIME path (a source-text regex cannot see reachability).
+    assert.equal(
+      actionErrorText(new InstanceUnavailableError('实例未就绪：the local dsh instance is not ready', state), t),
+      key,
+      `copy for ${String(state)}`,
+    )
   }
-  const actions = read('../../src/client/sidebar-root-actions.ts')
-  assert.match(actions, /t\(actionErrorKeyForState\(reason\.state\)\)/,
-    'the funnel must use the single phase mapping, never a second hand-written branch')
+  // Every other funnel class keeps its own localized line — no raw English leaks.
+  assert.equal(actionErrorText(new MutationOutcomeUnknownError('x'), t), 'action.outcomeUnknown')
+  assert.equal(actionErrorText(new ResponseLostError('x'), t), 'action.responseLost')
+  assert.equal(actionErrorText(new HttpBudgetUnscheduledError('queue-full', 5), t), 'action.notDispatched')
+  assert.equal(actionErrorText(new Error('boom'), t), 'boom')
 })

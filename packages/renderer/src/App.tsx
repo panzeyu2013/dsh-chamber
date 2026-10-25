@@ -1570,16 +1570,16 @@ export default function App() {
 
   /**
    * 本地实例幂等启动：首轮连接行装载后（null = 尚未拉到）行缺失/stopped/error 均触发一次
-   * POST /api/connections（幂等）。一旦 ready 即不再 POST。POST 失败**不置位**——下一个连接行
-   * 轮询周期（30s）重试，直到成功或出现 ready 行。远程实例自动连接独立于此，互不阻塞。
+   * POST /api/connections（幂等）。一旦可服务（ready|degraded，design 02 §3.5）即不再 POST；失败
+   * **不置位**——下一个连接行轮询周期（30s）重试，直到成功或出现可服务行。远程自动连接独立于此。
    */
   const localBootedRef = useRef(false)
   useEffect(() => {
     if (connections === null) return
     if (localBootedRef.current) return
     const local = connections.find(c => c.connectionId === LOCAL_INSTANCE_ID && c.kind === 'local')
-    // A serving local connection must never reach createLocal: `degraded` is
-    // still serving (design 02 §3.5), and startImpl would tear the child down.
+    // A serving local connection must never reach createLocal: `degraded` is still
+    // serving (design 02 §3.5), so the POST would be a pointless no-op round trip.
     if (local !== undefined && isServiceableLocalStatus(local.status)) {
       localBootedRef.current = true
       return

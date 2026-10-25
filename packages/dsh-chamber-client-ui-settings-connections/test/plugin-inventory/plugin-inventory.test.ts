@@ -94,16 +94,34 @@ test('loadPluginInventory: a business failure throws a loud message with code, n
   }
 })
 
-test('inventoryErrorText: a not-ready 503 is localized, never the raw gateway body', () => {
-  const notReady = new InstanceUnavailableError('实例未就绪：the local dsh instance is not ready', 'degraded')
-  assert.equal(inventoryErrorText(notReady, key => key), 'inventoryInstanceUnavailable')
-  assert.equal(inventoryErrorText(new Error('boom'), key => key), 'boom')
+test('inventoryErrorText: a not-ready 503 is localized by phase, never the raw gateway body', () => {
+  const t = (key: string) => key
+  // A retrying phase and a terminal one must not share copy: a stopped or
+  // restart-exhausted instance never becomes ready by waiting.
+  for (const state of ['starting', 'restarting', 'degraded', undefined]) {
+    assert.equal(inventoryErrorText(new InstanceUnavailableError('x', state), t), 'inventoryInstanceUnavailable', String(state))
+  }
+  for (const state of ['stopped', 'error']) {
+    assert.equal(inventoryErrorText(new InstanceUnavailableError('x', state), t), 'restartNotRunning', state)
+  }
+  assert.equal(inventoryErrorText(new InstanceUnavailableError('x', 'restart-exhausted'), t), 'inventoryRestartExhausted')
+  assert.equal(inventoryErrorText(new Error('boom'), t), 'boom')
 })
 
-test('loadPluginInventory: the proxy explicit 503 instance_unavailable folds into an honest not-ready error', async () => {
+test('loadPluginInventory: the proxy explicit 503 throws the SHARED not-ready class (carrier identity)', async () => {
   const stub = stubFetch(503, { code: 'instance_unavailable', error: 'no transport is available for this instance' })
   try {
-    await assert.rejects(loadPluginInventory('gateway-west'), /实例未就绪：no transport is available for this instance/)
+    await assert.rejects(
+      () => loadPluginInventory('gateway-west'),
+      (error: unknown) => {
+        // The carrier itself must throw wire-error's class: a bare Error here would make
+        // isInstanceUnavailable() false and leak the raw body into the dialog.
+        assert.ok(error instanceof InstanceUnavailableError)
+        assert.match(error.message, /实例未就绪：no transport is available for this instance/)
+        assert.equal(inventoryErrorText(error, key => key), 'inventoryInstanceUnavailable')
+        return true
+      },
+    )
   } finally {
     stub.restore()
   }
@@ -206,4 +224,26 @@ test('chamberRemoteKey: live Loader state derives the remote label, never a cons
   assert.equal(chamberRemoteKey(disabled, HOST_GRAPH_PACKAGE), 'chamberRemoteInjectedUnknown')
   // Absent → 未注入.
   assert.equal(chamberRemoteKey(entries, '@dsh-chamber/never-installed'), 'chamberRemoteNotInjected')
+})
+
+test('inventoryErrorText: the management REST carrier folds the same 503, phase included', () => {
+  // /chamber/plugins and the installed list go through request(), which throws an
+  // ApiError (status + body), not wire-error's class. Same proxy 503, same copy —
+  // and a 503 with another code (resource_exhausted) is NOT a not-ready phase.
+  const t = (key: string) => key
+  const apiError = Object.assign(new Error('请求失败 503 /api/i/gateway-west/chamber/plugins（instance_unavailable）：the local dsh instance is not ready'), {
+    status: 503,
+    body: { code: 'instance_unavailable', error: 'the local dsh instance is not ready', details: { state: 'restart-exhausted' } },
+  })
+  assert.equal(inventoryErrorText(apiError, t), 'inventoryRestartExhausted')
+  const stopped = Object.assign(new Error('请求失败 503'), {
+    status: 503,
+    body: { code: 'instance_unavailable', details: { state: 'stopped' } },
+  })
+  assert.equal(inventoryErrorText(stopped, t), 'restartNotRunning')
+  const otherCode = Object.assign(new Error('请求失败 503 resource_exhausted'), {
+    status: 503,
+    body: { code: 'resource_exhausted' },
+  })
+  assert.equal(inventoryErrorText(otherCode, t), '请求失败 503 resource_exhausted')
 })

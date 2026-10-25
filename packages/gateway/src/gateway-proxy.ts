@@ -177,10 +177,11 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
   function resolveTarget(res: ProxyResponse | null): URL | null {
     const port = getLocalDshPort()
     const state = getLocalState()
-    // `degraded` still serves (design 02 §3.5 / design 27 §I3): one failed
-    // health probe must not turn the whole gateway into a 503. `starting` and
-    // `restarting` remain refused — the port may still name the previous/dead
-    // child, so a port-only gate would forward into a dead socket.
+    // `degraded` still serves (design 02 §3.5; design 27 §I3 forwards suspect
+    // links): one failed health probe must not turn the whole gateway into a 503.
+    // `starting`/`restarting` remain refused — `restarting` keeps the old port,
+    // which may name the dead child, so a port-only gate would forward into a
+    // dead socket.
     if (isServiceableLocalState(state) && Number.isInteger(port) && (port ?? 0) > 0 && (deps.canExposeLocal?.() ?? true)) {
       return new URL(`http://127.0.0.1:${port}`)
     }

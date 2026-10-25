@@ -397,7 +397,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     }).catch(err => {
       if (cancelled) return
       setSeedCache(null)
-      setSeedCacheError(errorMessage(err))
+      setSeedCacheError(inventoryErrorText(err, t))
     })
     return () => { cancelled = true }
   }, [gatewayId, reloadNonce])
@@ -416,7 +416,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     }).catch(err => {
       if (cancelled) return
       setInstalled(null)
-      setInstalledError(errorMessage(err))
+      setInstalledError(inventoryErrorText(err, t))
     })
     return () => { cancelled = true; controller.abort() }
   }, [gatewayId, reloadNonce])

@@ -202,9 +202,10 @@ export function deriveServers(
     // 合并值，而两套词表都含 `error`——若让消费者重新分类合并后的 phase，
     // SSH/隧道失败会被误诊为"托管 dsh 停机"。
     const runtimeState = kind === 'gateway' ? managedRuntime[id] : null
-    const transportUsable = kind === 'local'
-      ? transportPhase === 'ready'
-      : transportPhase === 'ready' || transportPhase === 'degraded'
+    // Serving transport: degraded still serves on both arms (design 02 §3.5). The
+    // managed-runtime projection below is gateway-only, but keeping ONE table here
+    // stops a future local consumer from silently re-judging degraded as down.
+    const transportUsable = transportPhase === 'ready' || transportPhase === 'degraded'
     const managedDown = kind === 'gateway' && transportUsable && managedRuntimeDown(runtimeState)
     // 托管态的**瞬态**（starting/restarting）同样投影进 phase：此时隧道是好的、
     // 但 dsh 还没起来，绿点会撒谎。degraded 保持传输态

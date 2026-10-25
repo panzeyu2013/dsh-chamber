@@ -72,10 +72,11 @@ test('isServiceableLocalState: ready and degraded only (design 02 §3.5)', () =>
 test('start() on degraded is idempotent: a serving child is never torn down', async () => {
   const stateDir = tempDir()
   let spawns = 0
+  let stops = 0
   let probeCalls = 0
   const spawnDsh = async (): Promise<SpawnedDsh> => {
     spawns += 1
-    return { child: { on: () => {}, exitCode: null }, port: DEFAULT_DSH_START_PORT, stop: async () => {} }
+    return { child: { on: () => {}, exitCode: null }, port: DEFAULT_DSH_START_PORT, stop: async () => { stops += 1 } }
   }
   const probeHostIdentity: ProbeIdentityFn = async () => {
     probeCalls += 1
@@ -101,8 +102,12 @@ test('start() on degraded is idempotent: a serving child is never torn down', as
     assert.equal(local.getState(), 'ready')
     await waitUntil(() => local.getState() === 'degraded')
     const before = spawns
+    const portBefore = local.getDshPort()
     await local.start()
     assert.equal(spawns, before, 'degraded still serves; start() must not respawn it')
+    assert.equal(stops, 0, 'the serving child must not be torn down (a no-op must not stop it)')
+    assert.equal(local.getDshPort(), portBefore, 'the serving port must survive an idempotent start')
+    assert.equal(local.hasLiveProcess(), true, 'the serving child stays alive')
     assert.equal(local.getState(), 'degraded')
   } finally {
     await local.stop().catch(() => {})

@@ -80,9 +80,9 @@ export interface InstanceProxyDiagnostics {
 /** createInstanceProxy deps. */
 export interface InstanceProxyDeps {
   logger: Logger
-  /** The managed local instance state ('ready' when serviceable). */
+  /** The managed local instance state ('ready'|'degraded' are serviceable, design 02 §3.5). */
   getLocalState(): string
-  /** The managed local instance port (null when not ready). */
+  /** The managed local instance port (null while stopped/spawn-failed). */
   getLocalDshPort(): number | null
   /** False while a newly spawned runtime is quarantined behind activation probes;
    *  internal main-process probes use the direct host port. */
@@ -481,16 +481,21 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     if (id === 'local') {
       const state = getLocalState()
       // `degraded` still serves (design 02 §3.5): one failed health probe must
-      // not black out every request. `starting`/`restarting` stay refused — the
-      // port may still name the previous/dead child.
-      if ((deps.canExposeLocal?.() ?? true)
+      // not black out every request. `restarting` stays refused: it keeps the old
+      // port, which may name the dead child, so port liveness never substitutes
+      // for the state table (`starting` has already cleared its port).
+      const exposed = deps.canExposeLocal?.() ?? true
+      if (exposed
         && isServiceableLocalState(state)
         && Number.isInteger(getLocalDshPort())
         && (getLocalDshPort() ?? 0) > 0) {
         return { baseUrl: `http://127.0.0.1:${getLocalDshPort()}`, health: 'healthy' }
       }
       if (res !== null) {
-        writeError(res, 503, 'instance_unavailable', 'the local instance is not ready', logger, { state })
+        // While the activation gate is closed the state belongs to a quarantined
+        // candidate: that lifecycle is an INTERNAL fact and must not escape the
+        // public error face (index.ts keeps /health at 'starting' for it).
+        writeError(res, 503, 'instance_unavailable', 'the local instance is not ready', logger, exposed ? { state } : undefined)
       }
       return null
     }
@@ -636,7 +641,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       const target = resolveTarget(parsed.id, null)
       if (target === null) {
         counters.failures += 1
-        rejectUpgrade(socket, 503, 'instance_unavailable', 'no tunnel is available for this instance', logger)
+        rejectUpgrade(socket, 503, 'instance_unavailable', parsed.id === 'local' ? 'the local instance is not ready' : 'no tunnel is available for this instance', logger)
         return
       }
       if (target.health === 'down') {

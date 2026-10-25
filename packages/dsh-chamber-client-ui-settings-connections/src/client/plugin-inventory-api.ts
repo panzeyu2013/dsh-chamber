@@ -27,13 +27,38 @@ import {
 import { HttpBudgetUnscheduledError, httpBudgetLaneFor, httpBudgetLeaseFor, runWithHttpBudget } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
 import type { SettingsConnectionsKey } from '../locales.ts'
 
+/** The proxy's not-ready 503 reaches this package through TWO carriers: the typed
+ *  instance client (wire-error's class) and the management REST carrier
+ *  ('ApiError' = status + body, used by /chamber/plugins and the installed list).
+ *  Both carry the same details.state; one classifier must read both, or a dialog
+ *  localizes one read and prints the raw body for the other. */
+function notReadyState(error: unknown): { notReady: boolean; state?: string } {
+  if (isInstanceUnavailable(error)) return { notReady: true, state: error.state }
+  const carrier = error as {
+    status?: unknown
+    body?: { code?: unknown; details?: { state?: unknown } | null } | null
+  } | null
+  if (carrier?.status === 503 && carrier.body?.code === 'instance_unavailable') {
+    const state = carrier.body.details?.state
+    return { notReady: true, state: typeof state === 'string' ? state : undefined }
+  }
+  return { notReady: false }
+}
+
 /** Localized text for an inventory read failure: a page-budget refusal is the page
  *  being busy, not the instance failing (design 26 §D7). */
 export function inventoryErrorText(error: unknown, t: (key: SettingsConnectionsKey) => string): string {
   if (error instanceof HttpBudgetUnscheduledError) return t('inventoryNotDispatched')
   // The proxy's not-ready 503 is a phase, not a broken inventory: localize it
   // instead of leaking the raw gateway body ("the local dsh instance is not ready").
-  if (isInstanceUnavailable(error)) return t('inventoryInstanceUnavailable')
+  // Terminal phases get terminal copy — retrying a stopped or restart-exhausted
+  // instance never succeeds, so the line must name the manual start (02 §3.5).
+  const notReady = notReadyState(error)
+  if (notReady.notReady) {
+    if (notReady.state === 'restart-exhausted') return t('inventoryRestartExhausted')
+    if (notReady.state === 'stopped' || notReady.state === 'error') return t('restartNotRunning')
+    return t('inventoryInstanceUnavailable')
+  }
   return errorMessage(error)
 }
 

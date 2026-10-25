@@ -1256,3 +1256,32 @@ test('purge: every runtime fetch wording (wrapped by 实例不可达) keeps the 
   })
 })
 
+
+test('not-ready carrier: an old body, an unknown phase and a malformed phase stay honest', () => {
+  const throwFor = (body: unknown): unknown => {
+    try {
+      throwIfInstanceUnavailable({ status: 503, ok: false, body } as never)
+    } catch (error) {
+      return error
+    }
+    return null
+  }
+  // An older control plane carries no details: the class and message must survive,
+  // and state stays undefined so the UI falls back to the generic not-ready copy.
+  const old = throwFor({ code: 'instance_unavailable', error: 'not ready' })
+  assert.ok(old instanceof InstanceUnavailableError)
+  assert.equal((old as InstanceUnavailableError).state, undefined)
+  assert.equal((old as Error).message, '实例未就绪：not ready')
+  // An unknown phase rides through untouched (the mapping table decides the copy).
+  const unknown = throwFor({ code: 'instance_unavailable', error: 'x', details: { state: 'some-future-state' } })
+  assert.equal((unknown as InstanceUnavailableError).state, 'some-future-state')
+  // A malformed phase is dropped, never crashes the carrier.
+  for (const bad of [7, null, {}, ['degraded']]) {
+    const malformed = throwFor({ code: 'instance_unavailable', error: 'x', details: { state: bad } })
+    assert.ok(malformed instanceof InstanceUnavailableError)
+    assert.equal((malformed as InstanceUnavailableError).state, undefined)
+  }
+  // No details at all (null) is the same as absent.
+  const nullDetails = throwFor({ code: 'instance_unavailable', error: 'x', details: null })
+  assert.equal((nullDetails as InstanceUnavailableError).state, undefined)
+})

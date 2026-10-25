@@ -184,11 +184,25 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 
 > **本地 `degraded` 仍服务**：02 §3.5 把 `degraded` 定义为“失败计数 ≥1 且 < 阈值，仍在服务”，
 > 因此本地/网关反代必须把它与 `ready` 同表放行；只有状态不可服务（`starting/restarting/
-> stopped/error/restart-exhausted`）或 activation gate 关闭时才 503（后者可带 `state=ready`）。
-> `starting/restarting` 期间端口可能仍指向旧/死子进程，故不得
-> 用“端口存活”替代状态判定。503 body 可带 additive `details.state`，旧客户端忽略即兼容。
+> stopped/error/restart-exhausted`）才能 503。activation gate 关闭时 503 **不带** `details`：
+> 被隔离候选的生命周期是内部事实，公共错误面不得与 `/health` 的 `starting` 互相矛盾。
+> `restarting` 期间端口仍可能指向已死的旧子进程（`starting` 的端口已置空），故不得
+> 用“端口存活”替代状态判定。503 body 可带 additive `details.state`，旧客户端忽略即兼容；
+> 该字段只有 HTTP 503 携带——WS upgrade 的 503 reject 帧没有 details 通道，WS 侧不得依赖它。
 > 同一张表也约束幂等启动与页面自动启动：`degraded` 的本地连接不得被 `start()` 拆掉重建，
 > 页面不得因 `degraded` 触发 `createLocal`，本地 page-channel link 也不得因此停放订阅。
+
+**Rejected alternatives（degraded 服务化）**：
+
+- **继续对 `degraded` 503、靠客户端重试**：一次 5s 探针失败就让仍在服务的宿主整窗不可用（实测
+  一次窗口 25–175s；最坏到 02 §3.5 的 ≈10min 检出预算），重试只会把请求堆在门口。
+- **以端口存活替代状态判定**：`restarting` 期间端口仍可能指向已死的旧子进程，端口 gate 会把
+  请求转发进死 socket；所以放行表只认状态。`starting` 反例不成立（端口已置空）——这正是不能
+  把这条理由简化成“端口不可靠”的原因。
+- **只放行反代、不放行幂等启动与页面自动启动**：`start()` 会拆掉仍在服务的子进程，而页面每轮
+  连接行轮询都会调 `createLocal`——修复会被自己的入口抵消。
+- **删掉 `degraded`（探测失败直接重启）**：重启代价远高于继续服务，且丢掉“失败计数 ≥1 但仍在
+  服务”这一诊断事实（连接页如实的降级状态）。
 
 ### 4.4 页面级多路复用通道（WS，design 26）
 

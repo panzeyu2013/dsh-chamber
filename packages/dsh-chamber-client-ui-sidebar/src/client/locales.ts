@@ -53,6 +53,8 @@ export const zh = {
   'action.instanceDegraded': '实例正在恢复，请稍后重试',
   'action.instanceUnavailable': '实例暂未就绪，请稍后重试',
   'action.instanceRestartExhausted': '实例自动重启已耗尽，请在连接页启动',
+  // 终态（stopped/error）重试永远不会成功，文案必须点名人工启动。
+  'action.instanceNotRunning': '实例未运行，请在连接页启动',
   'archive.manager.deleting': '正在删除…',
   'archive.manager.restoring': '正在恢复…',
   'archive.manager.restored': '已恢复 {count} 个会话。',
@@ -168,6 +170,8 @@ export const zh = {
   'status.starting': '启动中',
   'status.restarting': '重启中',
   'status.reconnecting': '重连中',
+  // 本地托管 dsh 的 degraded 不是重连相位：探针失败但仍在服务（design 02 §3.5）。
+  'status.degradedServing': '降级（仍在服务）',
   'status.error': '错误',
   'status.stopped': '已停止',
   'status.restartExhausted': '启动失败',
@@ -281,6 +285,7 @@ export const en = {
   'action.instanceDegraded': 'The instance is degraded and recovering; retry shortly',
   'action.instanceUnavailable': 'The instance is not ready; retry shortly',
   'action.instanceRestartExhausted': 'Automatic restarts are exhausted; start the instance in Connections',
+  'action.instanceNotRunning': 'The instance is not running; start it in Connections',
   'archive.manager.deleting': 'Deleting…',
   'archive.manager.restoring': 'Restoring…',
   'archive.manager.restored': 'Restored {count} session(s).',
@@ -369,6 +374,7 @@ export const en = {
   'status.starting': 'Starting',
   'status.restarting': 'Restarting',
   'status.reconnecting': 'Reconnecting',
+  'status.degradedServing': 'Degraded (still serving)',
   'status.error': 'Error',
   'status.stopped': 'Stopped',
   'status.restartExhausted': 'Restart exhausted',

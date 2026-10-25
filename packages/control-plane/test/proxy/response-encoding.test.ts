@@ -461,6 +461,9 @@ test('local activation quarantine rejects HTTP and WebSocket before either reach
   await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'POST', {}, '{}'), response)
   assert.equal(response.status, 503)
   assert.equal(JSON.parse(response.body).code, 'instance_unavailable')
+  // A quarantined candidate's lifecycle is an internal fact: the public 503 must not
+  // carry `details.state` (the HTTP face would contradict /health's 'starting').
+  assert.equal(JSON.parse(response.body).details, undefined)
 
   const socket = fakeSocket()
   await proxy.handleUpgrade(
@@ -469,6 +472,8 @@ test('local activation quarantine rejects HTTP and WebSocket before either reach
     Buffer.alloc(0),
   )
   assert.ok(socket.written.includes('503'))
+  // Local instances have no tunnel: the WS refusal must name the real cause.
+  assert.ok(socket.written.includes('the local instance is not ready'))
   assert.equal(upstream.calls.length, 0)
 })
 

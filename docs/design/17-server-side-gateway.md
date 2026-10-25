@@ -869,8 +869,9 @@ inert；复核实测）——要让响应头也条件化需把「是否下发了
 保持文档顺序。真机对照：用户网关实抓的 3 次真实 bundle 请求（组合包 preload 的解码形 + 组合包所在的
 `phase:"application"` 行 + 组合包不含的 `dsh-chamber-mcp` 行）在修正后**全部被覆盖**（修正前只覆盖 1 条）。
 
-**失败封闭**：无端口/不可服务（本地连接状态 ∉ `{ready, degraded}`；`degraded` 仍服务，
-预取照常）503 `instance_unavailable`，上游错误 502 `upstream_failed`，调用方看不到上游正文。
+**失败封闭**：无端口/端口非法、不可服务（本地连接状态 ∉ `{ready, degraded}`；`degraded` 仍服务，
+预取照常）、或 activation gate 关闭（见 04 §4.2）→ 503 `instance_unavailable`（HTTP body 带
+additive `details.state`；WS reject 帧不带），上游错误 502 `upstream_failed`，调用方看不到上游正文。
 
 **Rejected alternatives**：
 
@@ -883,10 +884,15 @@ inert；复核实测）——要让响应头也条件化需把「是否下发了
 - **禁用重量级客户端插件**：那是用删功能换流量，不是缓存；预热让同一份 bundle 首次出现在关键路径之外，
   功能集不动。
 - **`degraded` 继续 503（已否决，反代/预取同用）**：一次 5s 健康探针失败会把仍在服务的宿主
-  变成 25–175s 的全量 503；02 §3.5 明确定义 `degraded` 仍在服务，27 §I3 也要求 `suspect`
-  转发。改为放行 `degraded`，只对 `starting/restarting/stopped/error/restart-exhausted`
-  503；代价是真正卡死的宿主以 45s 超时/504 显式失败而非快速 503，20 次失败后的自动重启仍是
-  兜底。**不以端口存活替代状态判定**：`restarting` 期间端口可能仍指向已死的旧子进程。
+  变成整窗不可用——直到下一次探活成功（周期 30s），最坏到 20 次失败后的重启（02 §3.5 的
+  ≈10min 检出预算），实测一次窗口 25–175s；02 §3.5 明确定义 `degraded` 仍在服务，27 §I3
+  也要求 `suspect` 转发。改为放行 `degraded`，只对
+  `starting/restarting/stopped/error/restart-exhausted` 503；代价是真正卡死的宿主以 45s
+  超时/504 显式失败而非快速 503，20 次失败后的自动重启仍是兜底。**不以端口存活替代状态判定**：
+  `restarting` 期间端口可能仍指向已死的旧子进程（`starting` 的端口已置空）。**请求失败不加速
+  恢复**：降级只有 30s 周期探测一条通道（02 §3.5 的传输触发仍是设计预留），所以「活着但
+  不再服务」的宿主最长约 20×30s≈10min 才触发重启；activation gate 关闭时 503 不带
+  `details`（被隔离候选的内部生命周期不逃逸）。
 
 ### 10.7 只读会话状态镜像（裁决：carve-out）
 

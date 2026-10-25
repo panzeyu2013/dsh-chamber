@@ -5,10 +5,12 @@
  * extraction + the spawn-minted browser-auth cookie + the split in-process
  * cache (60 s success / 10 s failure), and the bounded per-client rate limiter.
  *
- * Plain node:test + node:assert, no new deps. This file imports ONLY
- * src/warmup.ts (node builtins) so it runs even in a checkout without the
- * workspace node_modules link; the dispatch-level wiring (pre-auth claim,
- * 405 audit, login→href join) lives in boundary-login-page.test.ts.
+ * Plain node:test + node:assert, no new deps. This file imports src/warmup.ts
+ * (node builtins) plus the shared serviceability predicate from
+ * @dsh-chamber/control-plane — the ONE serving table the gateway proxy uses — so
+ * it needs the workspace link like any other gateway suite; the dispatch-level
+ * wiring (pre-auth claim, 405 audit, login→href join) lives in
+ * boundary-login-page.test.ts.
  * Run with `node packages/gateway/test/boundary/warmup.test.ts`.
  */
 
@@ -398,12 +400,21 @@ test('route: a valid grant fails closed with 503 instance_unavailable when the d
 })
 
 test('route: degraded still serves the prefetch (design 02 §3.5)', async () => {
-  // Port 1 refuses immediately, so the prefetch fails upstream (502) rather
-  // than at the readiness gate; the point is that degraded is NOT 503.
-  const res = new FakeResponse()
-  const outcome = await controller({ port: 1, state: 'degraded' }).handle(grantedRequest(), res, bundleUrl())
-  assert.deepEqual(outcome, { kind: 'proxied' })
-  assert.notEqual(res.status, 503)
+  // A REAL upstream answer: the point is that a degraded host keeps its warm cache
+  // working. "not 503" would pass on an upstream failure (502) too, so assert the
+  // bundle itself comes back.
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/javascript' })
+    res.end('export const warm = 1')
+  })
+  const port = await listen(server)
+  try {
+    const res = new FakeResponse()
+    const outcome = await controller({ port, state: 'degraded' }).handle(grantedRequest(), res, bundleUrl())
+    assert.deepEqual(outcome, { kind: 'proxied' })
+    assert.equal(res.status, 200)
+    assert.match(res.body.toString('utf8'), /warm = 1/)
+  } finally { await close(server) }
 })
 
 test('route: the dsh port bound keeps out-of-range ports fail-closed (no spurious refusal)', async () => {
