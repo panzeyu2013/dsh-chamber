@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url'
 import { existsSync, statSync } from 'node:fs'
 import type { ConnectionRowView } from './api.ts'
 import { createCatalog } from './catalog.ts'
-import { createLocalConnection } from './local-connection.ts'
+import { createLocalConnection, isServiceableLocalState } from './local-connection.ts'
 import type { LocalConnectionDeps } from './local-connection.ts'
 import { createApi } from './api.ts'
 import { runReaper, type ReaperEntryOutcome } from './reaper.ts'
@@ -672,7 +672,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       if (typeof accentColor === 'string' && accentColor !== '') row.accentColor = accentColor
       catalog.upsertConnection(row)
     }
-    if (local.getState() === 'ready') return { connection: connectionRowView(), spawned: false }
+    if (isServiceableLocalState(local.getState())) return { connection: connectionRowView(), spawned: false }
     await local.start()
     return { connection: connectionRowView(), spawned: true }
   }
@@ -1199,6 +1199,9 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
 }
 
 export { isDshPortBaseValid, resolveNodeExecutable, sanitizeManagedDshEnv, spawnDsh } from './spawn-dsh.ts'
+// Serving-state predicate shared by the local and gateway reverse proxies and the
+// login-phase warmup: `degraded` is still serving (design 02 §3.5).
+export { isServiceableLocalState } from './local-connection.ts'
 /** Desktop login-shell read (design 02 §3.1 sibling): the only runtime face
  *  the desktop entries consume; probe internals stay module-private. */
 export { readLoginShellEnvironment, readLoginShellEnvironmentOnce, startLoginShellEnvironment } from './login-shell-env.ts'

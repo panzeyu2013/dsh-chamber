@@ -3,7 +3,8 @@
 
 import { useState } from 'react'
 import { HttpBudgetUnscheduledError } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
-import { MutationOutcomeUnknownError, ResponseLostError } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
+import { isInstanceUnavailable, MutationOutcomeUnknownError, ResponseLostError } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
+import { actionErrorKeyForState } from './action-error-key.ts'
 import type { SidebarKey } from './locales.ts'
 
 /** Signature of the shell keyed action runner (rowErrors reporting). */
@@ -41,7 +42,12 @@ export function useSidebarActions(t: (key: SidebarKey) => string) {
               // unknown mutation this is safe to retry, but the raw English
               // sentence must not leak into a localized row error.
               ? t('action.responseLost')
-              : reason instanceof Error ? reason.message : String(reason)
+              // The proxy's not-ready 503 is a phase, not a row failure: show a
+              // localized recovery line, never the raw gateway body. The next
+              // same-key action clears it (the key is deleted above).
+              : isInstanceUnavailable(reason)
+                ? t(actionErrorKeyForState(reason.state))
+                : reason instanceof Error ? reason.message : String(reason)
         setRowErrors((prev) => ({ ...prev, [key]: message }))
         return false
       },

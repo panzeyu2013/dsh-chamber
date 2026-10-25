@@ -148,6 +148,15 @@ test('upgrade: a 503 instance resolution rejects the socket explicitly', async (
   assert.equal(upstream.calls.length, 0)
 })
 
+test('upgrade: local degraded still forwards (design 02 §3.5)', async () => {
+  const upstream = fakeHttpRequest(() => ({ upgrade: { status: 101, headers: {} } }))
+  const proxy = proxyFor(upstream.fn, { getLocalState: () => 'degraded', getLocalDshPort: () => 17510 })
+  const socket = fakeSocket()
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), socket, Buffer.alloc(0))
+  assert.equal(upstream.calls.length, 1, 'degraded must reach the upstream upgrade')
+  assert.match(socket.written, /101/, 'the degraded upgrade must be accepted, not 503')
+})
+
 test('upgrade: a non-101 upstream reply rejects explicitly (no unhandled stream)', async () => {
   // The instance answers the WS upgrade with a plain HTTP response (unknown
   // path / connection plugin not mounted): the proxy must drain-and-destroy

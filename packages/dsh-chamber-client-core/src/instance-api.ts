@@ -21,6 +21,7 @@ import {
 import { InstanceRpcError } from './instance-rpc-error.ts'
 import { pollUntil, sleepMs } from './poll.ts'
 import { mintRpcId } from './wire-common.ts'
+import { InstanceUnavailableError } from './wire-error.ts'
 import { acquireHttpBudget, HttpBudgetUnscheduledError, httpBudgetLaneFor, httpBudgetLeaseFor } from './http-budget.ts'
 import { readNotFoundBody } from './instance-not-found-body.ts'
 // The archiveCleanup host domain's wire contract is SINGLE-SOURCED in the
@@ -87,18 +88,14 @@ export type UnaryResult<T = unknown> =
 
 /**
  * The control plane answers non-ready instances with an explicit
- * `instance_unavailable` 503 (proxy honesty); this error carries the proxy's
- * message so callers surface "not ready" instead of generic transport text.
+ * `instance_unavailable` 503 (proxy honesty). The class lives in
+ * `wire-error.ts` so the typed instance client and the plugin-inventory reader
+ * throw ONE identity; re-exported here for the existing import sites.
  */
-export class InstanceUnavailableError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'InstanceUnavailableError'
-  }
-}
+export { InstanceUnavailableError }
 
 /** True when a wire failure is the proxy's explicit not-ready 503. */
-export function isInstanceUnavailable(err: unknown): boolean {
+export function isInstanceUnavailable(err: unknown): err is InstanceUnavailableError {
   return err instanceof InstanceUnavailableError
 }
 
@@ -299,7 +296,8 @@ class InstanceApiClient {
         const failurePayload = await readNotFoundBody(response)
         const failureCode = typeof failurePayload?.code === 'string' ? failurePayload.code : null
         if (response.status === 503 && failureCode === 'instance_unavailable') {
-          throw new InstanceUnavailableError(failurePayload?.error ?? 'the instance is not ready')
+          const state = typeof failurePayload?.details?.state === 'string' ? failurePayload.details.state : undefined
+          throw new InstanceUnavailableError(failurePayload?.error ?? 'the instance is not ready', state)
         }
         // A 404 that is NOT the control plane's own unknown-instance answer means a
         // chamber host domain is not mounted (missing/old host package) — a distinct
@@ -495,9 +493,9 @@ function resultError(result: UnaryResult): Error | null {
  */
 function wrapWireError(err: unknown): Error {
   if (err instanceof InstanceUnavailableError) {
-    // Keep the class identity (isInstanceUnavailable) — the message gets the
-    // honest not-ready prefix.
-    return new InstanceUnavailableError(`实例未就绪：${err.message}`)
+    // Keep the class identity (isInstanceUnavailable) and the additive phase
+    // state — the message gets the honest not-ready prefix.
+    return new InstanceUnavailableError(`实例未就绪：${err.message}`, err.state)
   }
   if (err instanceof InstanceDomainMissingError) {
     // Keep the class identity: the message already carries the honest recovery

@@ -397,6 +397,15 @@ test('route: a valid grant fails closed with 503 instance_unavailable when the d
   }
 })
 
+test('route: degraded still serves the prefetch (design 02 §3.5)', async () => {
+  // Port 1 refuses immediately, so the prefetch fails upstream (502) rather
+  // than at the readiness gate; the point is that degraded is NOT 503.
+  const res = new FakeResponse()
+  const outcome = await controller({ port: 1, state: 'degraded' }).handle(grantedRequest(), res, bundleUrl())
+  assert.deepEqual(outcome, { kind: 'proxied' })
+  assert.notEqual(res.status, 503)
+})
+
 test('route: the dsh port bound keeps out-of-range ports fail-closed (no spurious refusal)', async () => {
   assert.equal(isValidDshPort(1), true)
   assert.equal(isValidDshPort(65535), true)

@@ -173,7 +173,7 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 | 情形 | 结果 |
 |---|---|
 | Origin 非当前 Host 精确同源且不在显式 allowlist（包括 `null` 或其他回环端口） | 403 `{error, code:'origin_forbidden'}`（转发前拒绝） |
-| 实例 phase != ready（无隧道 / 未就绪） | 503 `{error, code:'instance_unavailable'}`（fail-loud，03 §3.3） |
+| 实例不可服务（无隧道；本地连接状态 ∉ `{ready, degraded}`） | 503 `{error, code:'instance_unavailable'}`（fail-loud，03 §3.3） |
 | 请求体上传超时 | 408 `{error, code:'request_timeout'}` |
 | 请求体预算耗尽（进程级并发缓冲上限） | 503 `{error, code:'resource_exhausted'}` |
 | 上游连接拒绝 / 请求失败 | 502 `{error, code:'upstream_failed'}`（脱敏） |
@@ -181,6 +181,14 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 | id 未知 | 404 `{error, code:'instance_not_found'}` |
 | WS 路径不在 `WS_STREAM_PATHS` 白名单（唯一在册路径 `/api/remote.mux`） | 404 `{error, code:'instance_not_found'}`（upgrade 前拒绝，§4.1） |
 | 已声明请求体 > 300MiB、未知长度请求体 > 32MiB / 响应体 > 300MiB | 413 `{error, code:'body_too_large'}` / 取消上游流 + 413 |
+
+> **本地 `degraded` 仍服务**：02 §3.5 把 `degraded` 定义为“失败计数 ≥1 且 < 阈值，仍在服务”，
+> 因此本地/网关反代必须把它与 `ready` 同表放行；只有状态不可服务（`starting/restarting/
+> stopped/error/restart-exhausted`）或 activation gate 关闭时才 503（后者可带 `state=ready`）。
+> `starting/restarting` 期间端口可能仍指向旧/死子进程，故不得
+> 用“端口存活”替代状态判定。503 body 可带 additive `details.state`，旧客户端忽略即兼容。
+> 同一张表也约束幂等启动与页面自动启动：`degraded` 的本地连接不得被 `start()` 拆掉重建，
+> 页面不得因 `degraded` 触发 `createLocal`，本地 page-channel link 也不得因此停放订阅。
 
 ### 4.4 页面级多路复用通道（WS，design 26）
 

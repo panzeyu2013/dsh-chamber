@@ -194,6 +194,42 @@ test('not ready → 503 instance_unavailable (proxy honesty)', async () => {
   assert.equal(res.status, 503)
 })
 
+test('degraded still serves HTTP (design 02 §3.5: degraded is still serving)', async () => {
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end('{"ok":true}')
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as { port: number }).port
+  try {
+    const proxy = createGatewayProxy({ logger: quietLogger, getLocalDshPort: () => port, getLocalState: () => 'degraded' })
+    const res = fakeResponse()
+    await proxy.handleHttp(fakeRequest('/api/session/list'), res)
+    // The forward dispatches asynchronously — wait for the upstream answer.
+    const deadline = Date.now() + 3_000
+    while (res.status === null) {
+      if (Date.now() >= deadline) throw new Error('upstream never answered the degraded forward')
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    assert.notEqual(res.status, 503, 'one failed health probe must not black out the gateway')
+    assert.equal(res.status, 200)
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
+test('restarting stays 503 and carries the state detail (port may still name the dead child)', async () => {
+  const proxy = createGatewayProxy({ logger: quietLogger, getLocalDshPort: () => 17510, getLocalState: () => 'restarting' })
+  const res = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/'), res)
+  assert.equal(res.status, 503)
+  assert.deepEqual(JSON.parse(res.body), {
+    error: 'the local dsh instance is not ready',
+    code: 'instance_unavailable',
+    details: { state: 'restarting' },
+  })
+})
+
 test('WS: an unknown WebSocket path is rejected with 404', async () => {
   const proxy = createGatewayProxy({ logger: quietLogger, getLocalDshPort: () => 17510, getLocalState: () => 'ready' })
   const socket = fakeSocket()

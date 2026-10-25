@@ -15,6 +15,7 @@
  */
 
 import { authCookieFor } from './browser-auth-cookie.ts'
+import { isServiceableLocalState } from './local-connection.ts'
 import {
   GATEWAY_SESSION_COOKIE_NAME,
   GATEWAY_SESSION_COOKIE_VALUE_MAX_CHARS,
@@ -478,13 +479,19 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
    *  instance is unknown/unavailable (loud, never silent). */
   function resolveTarget(id: string, res: ProxyResponse | null): TransportRecord | null {
     if (id === 'local') {
+      const state = getLocalState()
+      // `degraded` still serves (design 02 §3.5): one failed health probe must
+      // not black out every request. `starting`/`restarting` stay refused — the
+      // port may still name the previous/dead child.
       if ((deps.canExposeLocal?.() ?? true)
-        && getLocalState() === 'ready'
+        && isServiceableLocalState(state)
         && Number.isInteger(getLocalDshPort())
         && (getLocalDshPort() ?? 0) > 0) {
         return { baseUrl: `http://127.0.0.1:${getLocalDshPort()}`, health: 'healthy' }
       }
-      if (res !== null) writeError(res, 503, 'instance_unavailable', 'the local instance is not ready', logger)
+      if (res !== null) {
+        writeError(res, 503, 'instance_unavailable', 'the local instance is not ready', logger, { state })
+      }
       return null
     }
     // dsh-<id> → dsh:<id>; gateway-<id> → gateway:<id>; ssh-<id> → legacy dsh alias.

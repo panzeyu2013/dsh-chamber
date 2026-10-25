@@ -146,6 +146,7 @@ import { errorMessage } from './status.ts'
 import type { SshInstancesHealth } from './global.d.ts'
 import {
   instanceBasePath,
+  isServiceableLocalStatus,
   rawInstanceIdFromSourceId,
   sourceIdForInstance,
   sourceIdForRawInstance,
@@ -1512,7 +1513,7 @@ export default function App() {
         // `rawInstanceIdFromSourceId('local')` is null by contract: check the local
         // id BEFORE the null fallback, or this branch is unreachable and a local
         // dsh restart never parks/releases its page subscriptions.
-        if (sourceId === LOCAL_INSTANCE_ID) return healthRef.current?.dsh?.status === 'ready'
+        if (sourceId === LOCAL_INSTANCE_ID) return isServiceableLocalStatus(healthRef.current?.dsh?.status)
         const rawId = rawInstanceIdFromSourceId(sourceId)
         if (rawId === null) return true
         // ONE owner for the projection reading (client-core/link-projection):
@@ -1554,7 +1555,7 @@ export default function App() {
       if (!(rawId in remoteStatus)) delete previous[rawId]
     }
     if (health !== null) {
-      const localReady = health.dsh?.status === 'ready'
+      const localReady = isServiceableLocalStatus(health.dsh?.status)
       if (localReady && !localReadyRef.current) localLinkEpochRef.current += 1
       // Only a REAL local change wakes the page channel: this effect also runs when
       // a REMOTE status changed, and notifying the local source then would release
@@ -1577,7 +1578,9 @@ export default function App() {
     if (connections === null) return
     if (localBootedRef.current) return
     const local = connections.find(c => c.connectionId === LOCAL_INSTANCE_ID && c.kind === 'local')
-    if (local !== undefined && local.status === 'ready') {
+    // A serving local connection must never reach createLocal: `degraded` is
+    // still serving (design 02 §3.5), and startImpl would tear the child down.
+    if (local !== undefined && isServiceableLocalStatus(local.status)) {
       localBootedRef.current = true
       return
     }

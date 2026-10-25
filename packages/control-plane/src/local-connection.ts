@@ -24,6 +24,18 @@ export type ConnectionState =
   | 'stopped' | 'starting' | 'ready' | 'degraded'
   | 'restarting' | 'restart-exhausted' | 'error'
 
+/**
+ * Whether the managed local dsh is alive and still serving. `degraded` means at
+ * least one health probe failed but the process was NOT restarted and the host
+ * keeps serving (design 02 §3.5); every serving gate — the local and gateway
+ * reverse proxies, the warmup prefetch and the renderer aggregate poll — must
+ * accept it. `starting`/`restarting` are explicitly NOT serviceable: the port
+ * may still name the previous/dead child, and the host is not ready yet.
+ */
+export function isServiceableLocalState(state: string): boolean {
+  return state === 'ready' || state === 'degraded'
+}
+
 /** The spawned dsh child surface used by this adapter. */
 export interface SpawnedDsh {
   child: {
@@ -651,7 +663,9 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
     if (stopping) throw connectionBusy('local connection is stopping')
     if (startPromise !== null) return startPromise
     const ownedStart = (async () => {
-      if (state === 'ready') return
+      // `degraded` is still serving (design 02 §3.5): an idempotent start must
+      // not tear down a live child. A real restart goes through restartLocal().
+      if (isServiceableLocalState(state)) return
       epoch += 1
       // Abort any in-flight health probe from the previous generation: its verdict must not land here.
       healthGeneration.abort()
@@ -786,9 +800,11 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
 
     /**
      * Start (or restart) the connection: terminate a stale child, spawn a fresh dsh
-     * web profile, land on ready. Idempotent while starting; a ready connection is
-     * left untouched. Any in-flight restart is aborted via the epoch bump, and the
-     * restart window/counter state is reset. Returns the connection row.
+     * web profile, land on ready. Idempotent while starting; a serviceable
+     * connection (`ready` or still-serving `degraded`, design 02 §3.5) is left
+     * untouched — use restartLocal() for a real refresh. Any in-flight restart is
+     * aborted via the epoch bump, and the restart window/counter state is reset.
+     * Returns the connection row.
      */
     start: startImpl,
 
