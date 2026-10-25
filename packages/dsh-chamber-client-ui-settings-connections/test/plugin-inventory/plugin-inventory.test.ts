@@ -9,7 +9,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { loadPluginInventory, type PluginInventorySnapshot } from '../../src/client/plugin-inventory-api.ts'
+import { inventoryErrorText, loadPluginInventory, type PluginInventorySnapshot } from '../../src/client/plugin-inventory-api.ts'
 import {
   GIT_WORKTREE_PACKAGE,
   HOST_GRAPH_PACKAGE,
@@ -22,6 +22,7 @@ import {
   resetHttpBudgetForTests,
 } from '../../../dsh-chamber-client-core/src/http-budget.ts'
 import { HttpBudgetUnscheduledError } from '../../../dsh-chamber-client-core/src/http-budget.ts'
+import { InstanceUnavailableError } from '../../../dsh-chamber-client-core/src/wire-error.ts'
 import { en, zh } from '../../src/locales.ts'
 
 function serverResponse(rpcId: string, result: unknown): unknown {
@@ -91,6 +92,12 @@ test('loadPluginInventory: a business failure throws a loud message with code, n
   } finally {
     stub.restore()
   }
+})
+
+test('inventoryErrorText: a not-ready 503 is localized, never the raw gateway body', () => {
+  const notReady = new InstanceUnavailableError('实例未就绪：the local dsh instance is not ready', 'degraded')
+  assert.equal(inventoryErrorText(notReady, key => key), 'inventoryInstanceUnavailable')
+  assert.equal(inventoryErrorText(new Error('boom'), key => key), 'boom')
 })
 
 test('loadPluginInventory: the proxy explicit 503 instance_unavailable folds into an honest not-ready error', async () => {

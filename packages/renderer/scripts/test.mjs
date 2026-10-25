@@ -81,6 +81,9 @@ export const GROUPS = {
     // 呈现事实的 vendor 源文本锁：shell 的 openSession 路由 + rc.2 retainedBy 计数。
     'test/lifecycle/vendor-presented-fact-contract.test.ts',
     'test/lifecycle/source-readiness.test.ts',
+    // Local serviceability: `degraded` still serves (design 02 §3.5) and keeps
+    // aggregate polling alive; the remote transport arm stays `ready`-only.
+    'test/lifecycle/transport-source.test.ts',
     // The self-heal decision's truth table, expressed against the container
     // (the planner keeps its own copy).
     'test/lifecycle/degraded-retry-decision.test.ts',

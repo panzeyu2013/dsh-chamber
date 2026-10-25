@@ -351,6 +351,7 @@ import {
   sessionPurgeClosure,
   upwardChainComplete,
 } from '../../../dsh-chamber-client-core/src/instance-api.ts'
+import { throwIfInstanceUnavailable } from '../../../dsh-chamber-client-core/src/wire-error.ts'
 import {
   ARCHIVE_CLEANUP_PURGE_METHOD,
   archiveCleanupEndpoint,
@@ -643,16 +644,64 @@ test('purge wrapper maps no-response outcomes to honest retry copy (design 24 §
   await assert.rejects(() => purgeArchivedSessions(proxiedTimeout as never, ['s1']), /可能仍在进行.*重复执行是安全的/)
 })
 
-test('503 classification: not-ready answers surface as InstanceUnavailableError (not-ready prefix)', async () => {
-  const notReady = (async () => jsonResponse({ code: 'instance_unavailable', error: 'instance is still starting' }, 503)) as typeof fetch
+test('503 classification: not-ready answers surface as InstanceUnavailableError (not-ready prefix + state)', async () => {
+  const notReady = (async () => jsonResponse({
+    code: 'instance_unavailable',
+    error: 'instance is still starting',
+    details: { state: 'starting' },
+  }, 503)) as typeof fetch
   await withFetch(notReady, async () => {
     const client = getInstanceClient('local')
-    // The prefix comes from the wrapper-level wrapWireError.
+    // The prefix comes from the wrapper-level wrapWireError; the additive
+    // details.state must survive the bounded failure-body read.
     await assert.rejects(
       () => client.archiveCleanup.purge(['s1'], true, []),
-      (error: unknown) => error instanceof InstanceUnavailableError,
+      (error: unknown) => {
+        assert.ok(error instanceof InstanceUnavailableError)
+        assert.equal((error as InstanceUnavailableError).state, 'starting')
+        return true
+      },
     )
   })
+})
+
+test('503 re-wrap through fetchInstanceSnapshot preserves details.state', async () => {
+  const notReady = (async () => jsonResponse({
+    code: 'instance_unavailable',
+    error: 'the local dsh instance is not ready',
+    details: { state: 'degraded' },
+  }, 503)) as typeof fetch
+  await withFetch(notReady, async () => {
+    await assert.rejects(
+      () => fetchInstanceSnapshot(getInstanceClient('local')),
+      (error: unknown) => {
+        assert.ok(error instanceof InstanceUnavailableError)
+        assert.equal((error as InstanceUnavailableError).state, 'degraded')
+        assert.equal(error.message, '实例未就绪：the local dsh instance is not ready')
+        return true
+      },
+    )
+  })
+})
+
+test('throwIfInstanceUnavailable shares InstanceUnavailableError identity and carries details.state', () => {
+  assert.throws(
+    () => throwIfInstanceUnavailable({
+      status: 503,
+      ok: false,
+      body: {
+        code: 'instance_unavailable',
+        error: 'the local dsh instance is not ready',
+        details: { state: 'degraded' },
+      },
+    } as never),
+    (error: unknown) => {
+      assert.ok(error instanceof InstanceUnavailableError, 'the plugin-inventory carrier must throw the same class')
+      assert.equal((error as InstanceUnavailableError).state, 'degraded')
+      assert.equal(error.message, '实例未就绪：the local dsh instance is not ready')
+      return true
+    },
+  )
 })
 
 test('purgeArchivedSessions always sends {sessionIds, force:true, protectSessionIds} — one shape, no legacy legs (2026-09 protection amendment)', async () => {

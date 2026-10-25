@@ -13,6 +13,7 @@
 
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
+import { isServiceableLocalState } from '@dsh-chamber/control-plane'
 
 /** The warm-up capability cookie name. */
 export const WARMUP_COOKIE_NAME = 'dsh_gateway_warmup'
@@ -470,7 +471,9 @@ export function createWarmupController(deps: WarmupDeps): WarmupController {
 
   function readyPort(): number | null {
     const port = deps.getLocalDshPort()
-    if (deps.getLocalState() !== 'ready') return null
+    // `degraded` still serves (design 02 §3.5); the prefetch is an optimization,
+    // so a failed probe should not discard a still-serving host's warm cache.
+    if (!isServiceableLocalState(deps.getLocalState())) return null
     if (!isValidDshPort(port)) return null
     if (!(deps.canExposeLocal?.() ?? true)) return null
     return port

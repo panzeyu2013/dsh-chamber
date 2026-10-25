@@ -26,6 +26,7 @@ import {
   forwardHttp,
   forwardUpgrade,
   isHashedStaticAssetPath,
+  isServiceableLocalState,
   rejectUpgrade,
   writeError,
   type Logger,
@@ -175,10 +176,17 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
    * transaction is in flight — the candidate tree must not serve online users. */
   function resolveTarget(res: ProxyResponse | null): URL | null {
     const port = getLocalDshPort()
-    if (getLocalState() === 'ready' && Number.isInteger(port) && (port ?? 0) > 0 && (deps.canExposeLocal?.() ?? true)) {
+    const state = getLocalState()
+    // `degraded` still serves (design 02 §3.5 / design 27 §I3): one failed
+    // health probe must not turn the whole gateway into a 503. `starting` and
+    // `restarting` remain refused — the port may still name the previous/dead
+    // child, so a port-only gate would forward into a dead socket.
+    if (isServiceableLocalState(state) && Number.isInteger(port) && (port ?? 0) > 0 && (deps.canExposeLocal?.() ?? true)) {
       return new URL(`http://127.0.0.1:${port}`)
     }
-    if (res !== null) writeError(res, 503, 'instance_unavailable', 'the local dsh instance is not ready', logger)
+    if (res !== null) {
+      writeError(res, 503, 'instance_unavailable', 'the local dsh instance is not ready', logger, { state })
+    }
     return null
   }
 

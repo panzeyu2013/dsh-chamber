@@ -83,6 +83,7 @@ export const zh = {
   // 页面级派发拒绝（design 26 §D7）：请求从未离开页面，绝不是来源故障。
   restartNotDispatched: '页面繁忙：重启请求未能派发，请稍后重试',
   inventoryNotDispatched: '页面繁忙：插件清单请求未能派发，请稍后重试',
+  inventoryInstanceUnavailable: '实例暂未就绪（正在启动或恢复），请稍后重试',
   startNotDispatched: '页面繁忙：启动请求未能派发，请稍后重试',
   restartNotConnected: '连接后可用',
   restartNotRunning: '托管 dsh 未在运行——请先「启动实例」',
@@ -377,6 +378,7 @@ export const en: Record<SettingsConnectionsKey, string> = {
   // Page-level dispatch refusal (design 26 §D7): the request never left the page.
   restartNotDispatched: 'Page busy: the restart request was not dispatched; retry shortly',
   inventoryNotDispatched: 'Page busy: the plugin inventory request was not dispatched; retry shortly',
+  inventoryInstanceUnavailable: 'The instance is not ready yet (starting or recovering); retry shortly',
   startNotDispatched: 'Page busy: the start request was not dispatched; retry shortly',
   restartNotConnected: 'Available after connecting',
   restartNotRunning: 'The managed dsh is not running \u2014 use "Start instance" first',

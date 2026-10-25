@@ -13,12 +13,35 @@ export function wrapWireError(error: unknown): Error {
   return new Error(`实例不可达：${message}`)
 }
 
+/**
+ * The proxy's explicit not-ready 503. Kept in this dependency-free module so
+ * BOTH carriers (the typed instance client and the plugin-inventory reader)
+ * throw the SAME class: `isInstanceUnavailable()` must recognize every 503,
+ * otherwise a surface can only match Chinese text. `state` is the additive
+ * `details.state` a newer proxy may carry (`starting|restarting|degraded|…`),
+ * optional so an older proxy's body stays valid.
+ */
+export class InstanceUnavailableError extends Error {
+  readonly state?: string
+
+  constructor(message: string, state?: string) {
+    super(message)
+    this.name = 'InstanceUnavailableError'
+    this.state = state
+  }
+}
+
 /** Throw the not-ready error (`实例未就绪：` + body.error, '实例尚未就绪' default —
  *  a dead branch: control-plane 503 bodies always carry `error`). */
 export function throwIfInstanceUnavailable(outcome: UnaryPostOutcome): void {
   if (outcome.status !== 503) return
-  const body = outcome.body as { code?: string; error?: string } | null
+  const body = outcome.body as {
+    code?: string
+    error?: string
+    details?: { state?: unknown } | null
+  } | null
   if (body?.code === 'instance_unavailable') {
-    throw new Error(`实例未就绪：${body.error ?? '实例尚未就绪'}`)
+    const state = typeof body.details?.state === 'string' ? body.details.state : undefined
+    throw new InstanceUnavailableError(`实例未就绪：${body.error ?? '实例尚未就绪'}`, state)
   }
 }

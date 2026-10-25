@@ -447,6 +447,27 @@ test('local instance not ready → explicit 503, never a silent empty success', 
   assert.equal(upstream.calls.length, 0)
 })
 
+test('local degraded still forwards (design 02 §3.5: degraded is still serving)', async () => {
+  const { proxy, upstream } = makeProxy({ state: 'degraded', port: 17510 })
+  const res = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'GET'), res)
+  assert.equal(res.status, 200)
+  assert.equal(upstream.calls.length, 1, 'one failed probe must not black out local traffic')
+})
+
+test('local restarting stays 503 and carries the state detail', async () => {
+  const { proxy, upstream } = makeProxy({ state: 'restarting', port: 17510 })
+  const res = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'GET'), res)
+  assert.equal(res.status, 503)
+  assert.deepEqual(JSON.parse(res.body), {
+    error: 'the local instance is not ready',
+    code: 'instance_unavailable',
+    details: { state: 'restarting' },
+  })
+  assert.equal(upstream.calls.length, 0)
+})
+
 test('unknown id answers 404 instance_not_found', async () => {
   const { proxy, upstream } = makeProxy()
   const res = fakeResponse()

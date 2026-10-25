@@ -22,6 +22,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 import { en, zh } from '../../src/client/locales.ts'
+import { actionErrorKeyForState } from '../../src/client/action-error-key.ts'
 
 /** Source locks must see code, not comments: a commented-out line must not satisfy them. */
 const read = (rel: string): string => stripComments(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8'))
@@ -278,4 +279,23 @@ test('a page-dispatch refusal is localized through the row-error funnel, never h
   assert.doesNotMatch(actions, /页面繁忙/u, 'no hardcoded copy in the action funnel')
   assert.match(read('../../src/client/SidebarRoot.tsx'), /useSidebarActions\(t\)/,
     'the shell must pass its own t into the funnel')
+})
+test('not-ready action errors map the proxy phase to existing localized copy', () => {
+  const expected = [
+    ['starting', 'action.instanceStarting'],
+    ['restarting', 'action.instanceStarting'],
+    ['degraded', 'action.instanceDegraded'],
+    ['restart-exhausted', 'action.instanceRestartExhausted'],
+    [undefined, 'action.instanceUnavailable'],
+    ['stopped', 'action.instanceUnavailable'],
+    ['error', 'action.instanceUnavailable'],
+  ] as const
+  for (const [state, key] of expected) {
+    assert.equal(actionErrorKeyForState(state), key, String(state))
+    assert.equal(typeof zh[key], 'string', `zh missing ${key}`)
+    assert.equal(typeof en[key], 'string', `en missing ${key}`)
+  }
+  const actions = read('../../src/client/sidebar-root-actions.ts')
+  assert.match(actions, /t\(actionErrorKeyForState\(reason\.state\)\)/,
+    'the funnel must use the single phase mapping, never a second hand-written branch')
 })

@@ -9,7 +9,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { createLocalConnection } from '../../src/local-connection.ts'
+import { createLocalConnection, isServiceableLocalState } from '../../src/local-connection.ts'
 import { CATALOG_FILE, createCatalog } from '../../src/catalog.ts'
 import { DEFAULT_DSH_START_PORT } from '../../src/spawn-dsh.ts'
 import { logPathFor } from '../../src/host-logs.ts'
@@ -55,6 +55,55 @@ test('local connection carries one captured control-plane UUID into the spawn ow
   try {
     await local.start()
     assert.equal(observedOwner, ownerInstanceId)
+  } finally {
+    await local.stop().catch(() => {})
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('isServiceableLocalState: ready and degraded only (design 02 §3.5)', () => {
+  assert.equal(isServiceableLocalState('ready'), true)
+  assert.equal(isServiceableLocalState('degraded'), true)
+  for (const state of ['starting', 'restarting', 'stopped', 'error', 'restart-exhausted']) {
+    assert.equal(isServiceableLocalState(state), false, state)
+  }
+})
+
+test('start() on degraded is idempotent: a serving child is never torn down', async () => {
+  const stateDir = tempDir()
+  let spawns = 0
+  let probeCalls = 0
+  const spawnDsh = async (): Promise<SpawnedDsh> => {
+    spawns += 1
+    return { child: { on: () => {}, exitCode: null }, port: DEFAULT_DSH_START_PORT, stop: async () => {} }
+  }
+  const probeHostIdentity: ProbeIdentityFn = async () => {
+    probeCalls += 1
+    if (probeCalls === 1) return true
+    throw new Error('health probe failed')
+  }
+  const local = createLocalConnection({
+    stateDir,
+    dshHome: join(stateDir, 'home'),
+    dshWorkspacePath: join(stateDir, 'ws'),
+    logger: silentLogger,
+    options: {
+      healthIntervalMs: 25,
+      healthProbeTimeoutMs: 500,
+      healthResultCacheMs: 0,
+      failureThrottleMs: 0,
+      restartFailureThreshold: 100,
+    },
+    deps: { spawnDsh, probeHostIdentity },
+  })
+  try {
+    await local.start()
+    assert.equal(local.getState(), 'ready')
+    await waitUntil(() => local.getState() === 'degraded')
+    const before = spawns
+    await local.start()
+    assert.equal(spawns, before, 'degraded still serves; start() must not respawn it')
+    assert.equal(local.getState(), 'degraded')
   } finally {
     await local.stop().catch(() => {})
     rmSync(stateDir, { recursive: true, force: true })

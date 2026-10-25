@@ -21,7 +21,7 @@
  */
 
 import {
-  errorMessage, isRecord, postUnary, throwIfInstanceUnavailable, wrapWireError,
+  errorMessage, isInstanceUnavailable, isRecord, postUnary, throwIfInstanceUnavailable, wrapWireError,
   type UnaryPostOutcome,
 } from '@dsh-chamber/dsh-chamber-client-core'
 import { HttpBudgetUnscheduledError, httpBudgetLaneFor, httpBudgetLeaseFor, runWithHttpBudget } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
@@ -30,7 +30,11 @@ import type { SettingsConnectionsKey } from '../locales.ts'
 /** Localized text for an inventory read failure: a page-budget refusal is the page
  *  being busy, not the instance failing (design 26 §D7). */
 export function inventoryErrorText(error: unknown, t: (key: SettingsConnectionsKey) => string): string {
-  return error instanceof HttpBudgetUnscheduledError ? t('inventoryNotDispatched') : errorMessage(error)
+  if (error instanceof HttpBudgetUnscheduledError) return t('inventoryNotDispatched')
+  // The proxy's not-ready 503 is a phase, not a broken inventory: localize it
+  // instead of leaking the raw gateway body ("the local dsh instance is not ready").
+  if (isInstanceUnavailable(error)) return t('inventoryInstanceUnavailable')
+  return errorMessage(error)
 }
 
 /** Lifecycle state of an entry's root Fiber, or null when it has no live root Fiber. */

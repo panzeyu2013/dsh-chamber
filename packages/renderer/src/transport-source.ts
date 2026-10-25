@@ -84,8 +84,14 @@ export function instanceBasePath(sourceId: string): string {
   return `/api/i/${sourceId}`
 }
 
-/** 实例可被聚合轮询：对齐反代契约——只有 `ready` 才放行，否则显式 503；
- *  starting/degraded/connecting 期间轮询只会收获 503，故一律按未连接呈现（不轮询、无错误刷屏）。 */
+/** 本地托管 dsh 的可服务状态：`degraded` 仍在服务（design 02 §3.5），必须与
+ *  control-plane 的 `isServiceableLocalState` 同表；`starting/restarting` 不可服务。 */
+export function isServiceableLocalStatus(status: string | undefined): boolean {
+  return status === 'ready' || status === 'degraded'
+}
+
+/** 实例可被聚合轮询：对齐反代契约——本地 `ready|degraded` 放行，其它状态显式 503；
+ *  远程传输仍只认 `ready`（degraded 是重连相位，不是可服务事实）。 */
 export function instanceConnected(
   kind: 'local' | TransportKind,
   health: HealthResponse | null,
@@ -93,8 +99,7 @@ export function instanceConnected(
   instanceId: string,
 ): boolean {
   if (kind === 'local') {
-    const status = health?.dsh?.status
-    return status === 'ready'
+    return isServiceableLocalStatus(health?.dsh?.status)
   }
   const status = remoteStatus[instanceId]
   // A registry kind switch and its IPC pushes are separate messages: a briefly-stale READY
