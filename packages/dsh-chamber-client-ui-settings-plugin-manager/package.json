@@ -1,7 +1,7 @@
 {
   "name": "@dsh-chamber/dsh-chamber-client-ui-settings-plugin-manager",
   "description": "Chamber-hosted plugin manager settings section (Settings → Plugin management)",
-  "version": "0.4.3-beta.3",
+  "version": "0.4.3",
   "private": true,
   "type": "module",
   "exports": {

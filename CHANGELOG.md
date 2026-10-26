@@ -11,6 +11,30 @@
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
 
+## [0.4.3] - 2026-10-26
+
+### 新增
+- **弱网韧性与有界恢复（design 27）** —— 在传输相位之上加一层链路子状态：单次网络级探测失败只判 **suspect**（转发继续），连续两次才判 **down** 并复用 `instance_unavailable`；5s down 宽限加 resume/online 强制探测与 `reverifyAll`，把 SSH keepalive 遮住的半开窗口（原 60–90s）关在重连之前。上传按 body 大小单独预算并带 idle 超时；请求体已送达宿主的 mutation 以 `details.phase=after-body` 如实上报，不再谎称可安全重试；页面通道订阅随链路代次重置，已关闭的 carrier socket 不再受 60s 重建窗口限制。
+- **捆绑 dsh 基线升至 0.2.1-rc.3（1f81c047）** —— 源码线、运行期与三份 fork 副本同批换锚；官方前端带来会话头折叠视图与 More、右栏 guide More、把「浏览」落到设置 → 插件管理的插件导航（`pluginNavigation.openList/openBundle`）、移动端 44px More 与 88px 标签省略，以及全局「新会话」复用空白会话；chamber 侧补 `chamberSettingsNavigation` 座席与 rc.3 锚点集（rc.3 的侧栏 More / entry analytics 面有意不采纳，判据 = design 05 §4.2）。
+
+### 变更
+- **跨实例插件构建漂移不再阻断实例启动** —— 两个来源的 dsh 发布不同（如桌面 0.2.1-rc.3 与 gateway 0.2.1-rc.2）时，同一客户端插件的 bundle rev 必然不同：页面只保留先加载的那份 factory，现在让该实例的冲突行直接沿用这份实现（内核 `reuseForeignBuilds` 会 await 属主执行），boot 照常完成；同实例重建仍只丢该行（`restart-required`）。冲突事实只落在连接页诊断，文案点名两侧 dsh 发布版本与收口方式，不再触发 fatal 覆盖层。取舍：跨发布复用的构建可能与宿主预期不一致（缺块/行为异常），可用性优先于阻断；回退 0.4.2 起的跨实例阻断（design 09 §3.5）。
+- **租约冲突改为确定性退出码 3** —— state 根被另一写者持有时 gateway 不再每 3s 重启：租约冲突以退出码 3 直接停止（可重试的启动失败仍是 1），生成的 unit 固化 `RestartPreventExitStatus=3` 与 60s/5 次启动上限，`install-gateway.sh` 重启前先 `reset-failed`；运维步骤见 `docs/deploy/deploy-gateway.md` §9。
+
+### 修复
+- **本地 dsh 的 degraded 窗口不再把每个新请求变成 503** —— design 02 §3.5 把 `degraded` 定义为「失败计数 ≥1 但仍在服务」，
+  但本地/网关反代、登录页预热与页面聚合轮询都只认 `ready`：一次 5s 健康探测失败就把之后的新请求全部变成
+  `instance_unavailable`（实测窗口 25–175s）。现在放行 `ready|degraded`，只对
+  `starting/restarting/stopped/error/restart-exhausted` 503；幂等 `start()`/`createLocal` 不再拆掉仍在服务的子进程，
+  页面自动启动与 page-channel 链接也不再按停机处理。503 体新增 additive `details.state`（激活门关闭时不带，
+  被隔离候选的生命周期不外泄），侧栏与插件清单按相位本地化（启动/恢复中、自动重启耗尽、未运行），
+  归档管理器的清理/恢复错误同样本地化；WS 升级拒绝保持无 `details` 的旧形，本地文案改为「未就绪」。
+- **重启后 state 根不再被复用的 pid 永久锁死** —— 租约记录升到 schema v2，按身份元组（host / machineId / bootId / pidNamespace / procStartTicks）判定持有者：记录写于上一次开机、属于另一 PID namespace、来自另一台机器或 start ticks 不符时按陈旧认领；EPERM 只表示「该 pid 有进程」，改由 start ticks 复核；v1 记录按启动代际推断，legacy `.gateway.lock` / `dsh-runtime/owner.json` 同规则退役。
+- **gateway 登录失败按 socket 码归因** —— ECONNREFUSED（隧道通但远端端口未被服务）、ECONNRESET/EPIPE（进程已死或未启动）与其它原始码分别给出说明，不再一律折叠成「网络错误」；重试语义不变。
+- **终端 attach/重连恢复生成式流契约** —— 上游 `terminal/attach` 是带 `descriptor.uplink` 的生成式流，fork 曾以 fail-loud 拒绝，导致 attach 与重连必失败；现在为生成方法接上 `ClientStreamHandle`（send/end 经 `ClientUplinkQueue` 进双 carrier），unary 结果走 `descriptor.result.decode`，取消与成功应答的竞态按 `gateway/cancelled` 上报。
+- **Git 工作树删除不再卡在无法关闭的重试** —— 变更前失败的删除改从 fresh Git 事实证明目标未动：先探测失败路径自身（`--git-common-dir` 在 Git 目录/裸仓库内仍应答），再回退到其它已注册 workspace；两级都要求目标行仍在列出、目录存在且 branch/HEAD 相同。证明成立时以显式 `retryable: false` 让客户端清除未决的 git-remove 恢复；证明有 10s 预算，`git-timeout`/`git-spawn-failed`/`state-source-*` 与证明失败保持可重试，同一证明也覆盖 blocking 会话 cwd 不可解析的拒绝。
+- **设置插件管理的座席读取与确认决策定形** —— `chamberSettingsNavigation` 按普通 key 读取（显式类型实参在 cordis 重载下不编译），确认在渲染期导出、不再依赖 effect 的依赖表，wait / drop-before-commit / remount 三个席位状态补上真值表与 wiring 锁。
+
 ## [0.4.3-beta.3] - 2026-10-26
 
 ### 新增

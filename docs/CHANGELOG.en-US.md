@@ -11,6 +11,33 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
 
+## [0.4.3] - 2026-10-26
+
+### Added
+- **Weak-link resilience with bounded recovery (design 27)** - a link sub-state sits on top of the transport phases: one network-level probe failure is only **suspect** (forwarding continues) and a second consecutive failure is **down**, reusing `instance_unavailable`; a 5 s down grace plus resume/online forced probes and `reverifyAll` close the half-open window that the SSH keepalive used to hide for 60-90 s before reconnecting. Uploads carry their own budget by body size with an idle timeout; a mutation whose request body already reached the host reports `details.phase=after-body` instead of claiming a safe retry; page-channel subscriptions reset on a new link epoch; and a closed carrier socket is no longer held by the 60 s rebuild window.
+- **Bundled dsh baseline moves to 0.2.1-rc.3 (1f81c047)** - the source line, the runtime bundle and the three fork copies move together; the official frontend brings the session-header folded views with More, the right-rail guide More, plugin navigation (`pluginNavigation.openList/openBundle`) that routes Browse to Settings -> Plugin manager, the mobile 44 px More button and 88 px label ellipsis, and the global New Session button reusing a blank session; chamber adds the `chamberSettingsNavigation` seat and the rc.3 anchor set (the rc.3 sidebar More / entry analytics surface is deliberately not adopted; design 05 section 4.2).
+
+### Changed
+- **Cross-instance plugin build drift no longer blocks an instance** - when two sources run different dsh releases (for example desktop 0.2.1-rc.3 and gateway 0.2.1-rc.2), the same client plugin necessarily carries a different bundle rev: the page keeps only the first-loaded factory, and the conflicting instance now reuses that implementation (the kernel's `reuseForeignBuilds` awaits the owner's execution) so the boot completes; a same-instance rebuild still drops only that row (`restart-required`). The drift is reported only on the connections page, naming both dsh releases and the closure, and no longer raises the fatal overlay. Trade-off: a build reused across releases may not match the host's expectations (missing regions or misbehavior), so availability wins over blocking; this reverts the cross-instance block shipped since 0.4.2 (design 09 section 3.5).
+- **Lease conflicts become deterministic exit code 3** - while another writer owns the state root the gateway no longer restarts every 3 s: a lease conflict stops immediately with exit code 3 (retryable startup failures stay 1), the generated unit pins `RestartPreventExitStatus=3` with a 60 s / 5-start limit, and `install-gateway.sh` runs `reset-failed` before restarting; operator steps live in `docs/deploy/deploy-gateway.md` section 9.
+
+### Fixed
+- **A degraded local dsh no longer turns every new request into a 503** - design 02 section 3.5 defines `degraded` as
+  "failures >= 1 but still serving", yet the local and gateway reverse proxies, the login-page warm-up and the page
+  aggregate poll only accepted `ready`: one failed 5 s health probe turned every following request into
+  `instance_unavailable` (observed windows 25-175 s). They now accept `ready|degraded` and 503 only for
+  `starting/restarting/stopped/error/restart-exhausted`; the idempotent `start()`/`createLocal` no longer tears a
+  serving child down, and page auto-start plus the page-channel link no longer treat the instance as down. The 503
+  body gains an additive `details.state` (absent while the activation gate is closed, so a quarantined candidate
+  lifecycle never escapes), the sidebar and plugin inventory localize by phase (starting/recovering, restarts
+  exhausted, not running), and the archive manager localizes its cleanup/restore failures; the WS upgrade refusal
+  keeps its old shape without `details`, but the local refusal now reads "not ready" instead of "no tunnel".
+- **A reused pid no longer locks the state root after a reboot** - lease records move to schema v2 and judge the holder by an identity tuple (host, machineId, bootId, pidNamespace, procStartTicks): a record written before this boot, in another PID namespace, on another machine or with mismatched start ticks is stale and reclaimed; EPERM only means "a process with this pid exists" and is now verified by start ticks; v1 records fall back to boot-epoch inference, and legacy `.gateway.lock` / `dsh-runtime/owner.json` records retire under the same rule.
+- **Gateway login failures name their cause** - ECONNREFUSED through an established tunnel (the remote port is not served), ECONNRESET/EPIPE (the process died or never started) and any other code are reported distinctly instead of collapsing into "network error"; the retry semantics are unchanged.
+- **Terminal attach and reconnect restore the generated-stream contract** - upstream `terminal/attach` is a generated stream with `descriptor.uplink`, which the fork refused fail-loud, so attach and reconnect always failed; generated methods now get a `ClientStreamHandle` (send/end feed `ClientUplinkQueue` into both carriers), unary results pass through `descriptor.result.decode`, and an abort racing a successful reply reports `gateway/cancelled`.
+- **Git worktree removal no longer wedges on a retry-only recovery** - a removal that fails before any mutation now proves from fresh Git facts that nothing moved: it probes the failing path itself (`--git-common-dir` still answers inside a Git directory or bare repository), falls back to the other registered workspaces, and either source requires the target row still listed, present and unchanged (branch/HEAD). A proven refusal serializes an explicit `retryable: false` so the client clears the pending git-remove recovery; the proof runs on a 10 s budget, `git-timeout`/`git-spawn-failed`/`state-source-*` and an unproven target stay retryable, and the same proof covers a blocking session whose cwd cannot be resolved.
+- **The settings plugin manager's seat read and acknowledgement decision are shaped** - `chamberSettingsNavigation` is read as a plain key (an explicit type argument does not compile under the cordis overloads), acknowledgement is derived during render instead of depending on the effect's dependency list, and the wait / drop-before-commit / remount seat states gain their truth table and wiring lock.
+
 ## [0.4.3-beta.3] - 2026-10-26
 
 ### Added
