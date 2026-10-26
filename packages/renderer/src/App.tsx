@@ -2273,7 +2273,7 @@ export default function App() {
                     for (const id of visibleStalls) {
                       const lastReconnectAt = lastReconnectAtRef.current[id]
                       if (lastReconnectAt !== undefined && at - lastReconnectAt < AGGREGATE_RECONNECT_BACKOFF_MS) continue
-                      if (!reconnectInstanceConnection(id)) continue
+                      if (!reconnectInstanceConnection(id, 'manual')) continue
                       lastReconnectAtRef.current = { ...lastReconnectAtRef.current, [id]: at }
                     }
                   }}

@@ -1361,8 +1361,17 @@ export function disposeAllShells(): void {
  * holder / no ctx are no-ops; external access is try/catch-wrapped; errors logged, never
  * thrown). Returns true only when reconnect() was invoked, so callers can decide whether a
  * no-op attempt consumes their backoff window.
+ *
+ * `reason` is the caller tag and is REQUIRED: the stale and fallback arms have no other
+ * attribution, and a caller that forgot the tag would be silently mislabelled. The
+ * success line is INSPECTOR-LIVE only (console.warn is not captured by the desktop
+ * console ring, which keeps error level); the durable trail stays the carrier's
+ * `dsh-chamber:stream-forensics` facts plus the control-plane's WS close line.
  */
-export function reconnectInstanceConnection(instanceId: string): boolean {
+export function reconnectInstanceConnection(
+  instanceId: string,
+  reason: 'stale' | 'fallback' | 'authority' | 'manual',
+): boolean {
   const holder = entries.get(instanceId)
   if (holder === undefined) return false
   try {
@@ -1373,11 +1382,17 @@ export function reconnectInstanceConnection(instanceId: string): boolean {
     const connection = (ctx as { connection?: { reconnect(): void } }).connection
     if (connection === undefined || typeof connection.reconnect !== 'function') return false
     connection.reconnect()
+    // One bounded attribution line per attempt (the arms are backoff-bounded, so this
+    // cannot storm). Isolated: a throwing logger must not turn a successful reconnect
+    // into `false` (the caller would skip its backoff bookkeeping and retry every tick).
+    try {
+      console.warn(`[renderer] connection reconnect: ${instanceId} (${reason})`)
+    } catch { /* logging never decides the reconnect outcome */ }
     // ConnectionHandle.reconnect() is a silent no-op with no owner (deep no-op still reports
     // true here); unreachable for this caller.
     return true
-  } catch (reason) {
-    console.error(`[shell] instance ${instanceId} reconnect failed: ${describeThrown(reason)}`)
+  } catch (error) {
+    console.error(`[shell] instance ${instanceId} reconnect failed: ${describeThrown(error)}`)
     return false
   }
 }

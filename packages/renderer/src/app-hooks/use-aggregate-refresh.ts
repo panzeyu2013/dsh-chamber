@@ -536,7 +536,7 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
       // exponential backoff to an immediate retry (MANUAL_RECONNECT), so a ready-but-dead
       // target probes at a fixed ~60s cadence until the main-process reverify flips it to
       // not-connected. Bounded and intended.
-      if (reconnectInstanceConnection(id)) {
+      if (reconnectInstanceConnection(id, 'stale')) {
         lastReconnectAtRef.current[id] = now
         reconnectedThisTick.add(id)
       }
@@ -550,7 +550,7 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
         now,
         reconnectBackoffMs,
       })) continue
-      if (reconnectInstanceConnection(id)) {
+      if (reconnectInstanceConnection(id, 'fallback')) {
         lastReconnectAtRef.current[id] = now
         reconnectedThisTick.add(id)
       }
@@ -591,7 +591,7 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
             continue
           }
           console.warn(`[renderer] session-authority: reconciler stuck for ${action.sourceId}; reconnecting`)
-          if (reconnectInstanceConnection(action.sourceId)) {
+          if (reconnectInstanceConnection(action.sourceId, 'authority')) {
             lastReconnectAtRef.current = { ...lastReconnectAtRef.current, [action.sourceId]: now }
             reconnectedThisTick.add(action.sourceId)
           }
