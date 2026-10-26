@@ -45,8 +45,9 @@ Options:
   --bind ADDR       listen address (default ${DEFAULT_BIND})
   --state-dir DIR   control-plane state root (--state-dir > $DSH_CHAMBER_STATE >
                     ${DEFAULT_STATE_DIR}); one state root has exactly ONE writer —
-                    a live holder on the same root fails boot (state_root_locked),
-                    so pass this or DSH_CHAMBER_STATE to move it
+                    an active or unverifiable lease record on the same root
+                    fails boot (state_root_locked, exit 3), so pass this or
+                    DSH_CHAMBER_STATE to move it
   --dsh-path PATH   dsh workspace path override
                     (default $DSH_CHAMBER_DSH_PATH or <repo>/ref-dsh)
   -h, --help        show this help
@@ -187,9 +188,10 @@ async function main(): Promise<number | null> {
       dshWorkspacePath,
     })
   } catch (error) {
-    // A live writer on this state root is a startup failure (exit 1), never a
-    // configuration error. The stderr line must start with the machine-readable
-    // code; never print a stack here.
+    // A lease conflict on this state root is a startup failure that must not be
+    // retried (exit 3 for locked/duplicate; 1 for the retryable lease errors),
+    // never a configuration error. The machine-readable code is the first token of
+    // the stderr line; never print a stack here.
     if (error instanceof StateRootLeaseError) {
       logger.error(`${error.code}: ${error.message}`)
       return stateRootLeaseExitCode(error.code)

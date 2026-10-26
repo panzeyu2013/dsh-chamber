@@ -247,6 +247,7 @@ test('单进程：活属主记录拒绝（state_root_locked + holder pid/flavor�
   assert.equal(error.code, 'state_root_locked')
   assert.equal(error.pid, process.ppid)
   assert.equal(error.holder?.flavor, 'gateway')
+  assert.equal(error.holderKind, 'unverified')
   assert.match(error.message, /owned by pid/)
   assert.match(error.message, /could not be verified/)
 })
@@ -299,6 +300,49 @@ test('单进程：同进程同根第二个租约拒绝，release 后可再取', 
   const second = acquireStateRootLease(dir, { scope: 'state-root', flavor: 'control-plane' })
   assert.notEqual(second.token, first.token)
   second.release()
+})
+
+test('单进程：磁盘上属于本进程的新鲜记录 → duplicate（附逃生提示）', { skip: process.platform !== 'linux' }, t => {
+  const dir = tempDir('cp-lease-dup-record-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  // A record written by THIS process that the in-memory registry does not know
+  // (e.g. a previous handle in the same process): the refusal must explain how to
+  // recover, not just say "belongs to this process".
+  writeFileSync(leaseFile(dir), v2Record({ pid: process.pid }), { mode: 0o600 })
+  const error = leaseError(() => acquireStateRootLease(dir, { scope: 'state-root', flavor: 'control-plane' }))
+  assert.equal(error.code, 'state_root_duplicate')
+  assert.match(error.message, /move the record aside/u, 'a duplicate refusal must carry an escape hatch')
+})
+
+test('记录文本按可打印收窄：控制字符与超长 flavor 不进错误文案', t => {
+  // The record is owner-private but can be copied or tampered with; flavor is
+  // interpolated verbatim into the journal line and the error text, so a newline
+  // would forge a second diagnostic line. The readable-text rule is shared with
+  // the identity fields (same sanitizer) and is pinned here for flavor, the field
+  // this change newly routed through it.
+  const forged = 'gateway\n2026-01-01T00:00:00Z fake journal line'
+  for (const item of [
+    { label: 'control characters', flavor: forged },
+    { label: 'overlong', flavor: 'g'.repeat(129) },
+  ]) {
+    const dir = tempDir('cp-lease-flavor-' + item.label.replace(/ /gu, '-') + '-')
+    t.after(() => rmSync(dir, { recursive: true, force: true }))
+    // v1 (no identity block) keeps the record LIVE-but-unverified on every
+    // platform, so the refusal path runs without needing /proc facts.
+    writeFileSync(leaseFile(dir), JSON.stringify({
+      schemaVersion: 1,
+      pid: process.ppid,
+      startedAt: Date.now(),
+      token: 'a'.repeat(48),
+      scope: 'state-root',
+      flavor: item.flavor,
+    }) + '\n', { mode: 0o600 })
+    const error = leaseError(() => acquireStateRootLease(dir, { scope: 'state-root', flavor: 'control-plane' }))
+    assert.equal(error.code, 'state_root_locked')
+    assert.equal(error.holder?.flavor, null, item.label + ': an unreadable flavor must be masked')
+    assert.ok(!error.message.includes('fake journal line'), item.label + ': forged text never reaches the message')
+    assert.ok(!error.message.includes('\n'), item.label + ': the diagnostic stays one line')
+  }
 })
 
 test('单进程：release 只删本租约（successor 在场时 state_root_not_owner）', t => {
@@ -431,6 +475,7 @@ test('身份：bootId + startTicks 一致 → 活持有者拒绝（不是 pid �
   writeFileSync(leaseFile(dir), bytes, { mode: 0o600 })
   const error = leaseError(() => acquireStateRootLease(dir, { scope: 'state-root', flavor: 'control-plane' }))
   assert.equal(error.code, 'state_root_locked')
+  assert.equal(error.holderKind, 'live', 'consumers may only say "gateway is running" for a verified holder')
   assert.match(error.message, /process identity matches the lease/u)
   assert.equal(readFileSync(leaseFile(dir), 'utf8'), bytes, 'a live holder record is never touched')
 })
@@ -503,6 +548,7 @@ test('身份：同机跨 PID namespace 的记录 → 拒绝接管（pid 无名�
   writeFileSync(leaseFile(dir), bytes, { mode: 0o600 })
   const error = leaseError(() => acquireStateRootLease(dir, { scope: 'state-root', flavor: 'control-plane' }))
   assert.equal(error.code, 'state_root_locked')
+  assert.equal(error.holderKind, 'foreign-namespace')
   assert.match(error.message, /PID namespace/u)
   assert.equal(readFileSync(leaseFile(dir), 'utf8'), bytes)
 })
@@ -525,16 +571,18 @@ test('身份：记录来自另一台机器（共享 state 根）→ 拒绝接管
   writeFileSync(leaseFile(dir), bytes, { mode: 0o600 })
   const error = leaseError(() => acquireStateRootLease(dir, { scope: 'state-root', flavor: 'control-plane' }))
   assert.equal(error.code, 'state_root_locked')
+  assert.equal(error.holderKind, 'foreign-machine')
   assert.match(error.message, /another machine/u)
   assert.equal(readFileSync(leaseFile(dir), 'utf8'), bytes)
 })
 
-test('身份：bootId 相同但 startTicks 读不到（hidepid/EPERM）→ 保守锁定', LINUX_ONLY, t => {
+test('身份：同 boot 但 startTicks 缺失（hidepid / 旧记录形态）→ 保守锁定', LINUX_ONLY, t => {
   const dir = tempDir('cp-lease-identity-unreadable-')
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   writeFileSync(leaseFile(dir), v2Record({ identity: { procStartTicks: null } }), { mode: 0o600 })
   const error = leaseError(() => acquireStateRootLease(dir, { scope: 'state-root', flavor: 'control-plane' }))
   assert.equal(error.code, 'state_root_locked')
+  assert.equal(error.holderKind, 'unverified')
   assert.match(error.message, /could not be verified/u)
 })
 
@@ -557,6 +605,18 @@ test('v1 记录写于本次开机之前（pid 被占用）→ 认领（升级路
   })
   assert.equal(warns.some(message => message.includes('before this boot')), true, warns.join(' | '))
   lease.release()
+})
+
+test('bootWallClockMs 是开机时刻，不是当前时间（独立 oracle：/proc/stat btime）', LINUX_ONLY, () => {
+  // The v1 generation-inference cases above build their fixtures with
+  // bootWallClockMs() itself; if that function returned "now" they would still be
+  // green while every v1 record older than the margin was declared stale (a
+  // double-write). Pin the value against an independent source instead.
+  const line = readFileSync('/proc/stat', 'utf8').split('\n').find(entry => entry.startsWith('btime '))
+  assert.ok(line, 'Linux /proc/stat exposes btime')
+  const seconds = Number(line.slice('btime '.length).trim())
+  assert.equal(bootWallClockMs(), seconds * 1000)
+  assert.ok(Date.now() - seconds * 1000 > 60_000, 'this test needs a machine up for over a minute')
 })
 
 test('身份：/proc/<pid>/stat 以最后一个 ) 为字段边界（comm 含空格与括号）', () => {

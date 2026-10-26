@@ -152,7 +152,10 @@ test('host-root 租约：owner.json 记录 scope/flavor，同进程重复拒绝�
     const record = JSON.parse(readFileSync(ownerFile, 'utf8')) as Record<string, unknown>
     // v2 adds the holder identity block the liveness verdict is built on (design 17 §12).
     assert.equal(record.schemaVersion, 2)
-    assert.equal(typeof record.identity, 'object')
+    // Pin the field set: an empty object would satisfy a bare typeof check while
+    // the verdict silently loses every fact it keys on.
+    assert.deepEqual(Object.keys(record.identity as Record<string, unknown>).sort(),
+      ['bootId', 'host', 'machineId', 'pidNamespace', 'procStartTicks'])
     assert.equal(record.pid, process.pid)
     assert.equal(record.scope, 'host-root')
     assert.equal(record.flavor, 'desktop')

@@ -119,8 +119,8 @@ function usage() {
   DSH_CHAMBER_DSH_PATH dsh 工作区路径（serve --dsh-path 的默认值）
 
 serve 的状态目录按 --state-dir > DSH_CHAMBER_STATE > ~/.dsh-chamber 解析；同一状态
-目录同一时刻只允许一个写者，已有活写者时启动失败（stderr 含 state_root_locked），
-停掉对方或显式指定 --state-dir。
+目录同一时刻只允许一个写者，已有活写者或无法核实的租约记录时启动失败（stderr 含
+state_root_locked，退出码 3），停掉对方、移走该记录或显式指定 --state-dir。
 `)
 }
 

@@ -82,9 +82,8 @@
 ### 1.5 平台、发布与外部凭据
 
 - **gateway**：Linux unit 登录环境；ssh/http cookie 注入未覆盖；旧来源插件播种 400（重建未排期）；运维页缺 `recover-metadata`/`cleanup-version`/`restore-pre-rollback`；S0/S2-c 未实现；设计 21 对齐（只读/seed 端到端、tooltip、英文串）。
-- **gateway 启动失败原因对 chamber 不可见**：`state_root_locked` 的 holder 与判定依据只进 journal；隧道通而远端端口无监听时客户端只能看到 socket 错误（现已按 ECONNREFUSED/ECONNRESET 分类并给出「gateway 可能未运行」的文案，见 `packages/desktop/gateway-session.ts`），把结构化原因回传需要一条新的远程诊断面（读 state 根的启动失败记录或 journal 尾）——未排期，是「错误透传」的剩余部分。
-- **租约身份的跨平台残差**：`bootId`/`startTicks`/`pidNamespace`/`machineId` 只有 Linux 提供（`packages/control-plane/src/process-identity.ts`）；macOS/Windows 的 v2 记录仍只有启动代际推断，同一启动内的 pid 复用保守锁定（宁锁不双写）。
-- **租约的越界拓扑（有意拒绝）**：`machineId`/`pidNamespace` 与当前环境不同的记录按「共享/迁移的 state 根」拒绝接管。容器重建而 state 根挂 volume（machine-id 与 PID namespace 都会变）与 NFS 共享根因此停在 `state_root_locked`，恢复 = 移走 `owner.json`（部署 FAQ 已写）；改成「缺省接管」会把 NFS/双容器场景变成确定性双写，故保留拒绝。判据 = `docs/design/17` §12 判定矩阵。
+- **gateway 启动失败原因对 chamber 不可见**：`state_root_locked` 的 holder 与判定依据只进 journal；客户端目前只能按 socket 码给归因文案（`packages/desktop/gateway-session.ts`），看不到持有者类别与拒绝依据，把结构化原因回传需要一条新的远程诊断面（读 state 根的启动失败记录或 journal 尾）——未排期，是「错误透传」的剩余部分。
+- **租约身份的跨平台残差**：`bootId`/`procStartTicks`/`pidNamespace`/`machineId` 只有 Linux 提供（`packages/control-plane/src/process-identity.ts`）；macOS/Windows 的 v2 记录仍只有启动代际推断（依赖墙钟，步进超过 5 分钟余量时可能误判陈旧），同一启动内的 pid 复用保守锁定（宁锁不双写）。跨机护栏要求记录与本机都读得到 machineId，缺失时按「属主私有、单机」契约处理（design 17 §12）。
 - **运行时安装现场的 pid 判活**：`dsh-runtime` 的 `isPidAlive`（`cleanupStaleInstalls`，`packages/dsh-runtime/src/dsh-runtime-store.ts`）仍按「同号进程存在」判活；安装中硬崩溃 + 重启后 pid 被复用会让清理一直抛「仍有活动写进程」，托管 dsh 起不来。pid 文件只有数字、没有身份元组，修法与本轮租约同形（写 bootId+startTicks），未排期。
 - **install/runtime**：`install` 不同步锚（待裁）；dl 运行时 macOS 全链/Linux/gateway 重连/`restartLocal` 交错/ZFS EAGAIN；上游装载面 `compose()` 10.65MiB、`SubagentHeaderLineage` 缺 class、首帧超时；会话可靠性六项；`protobufjs`/`@google/genai` 待 M2 证据。
 - **桌面更新（design 11）**：真实 Apple 凭据 CI、双平台清单、通道封签打包态实证；`checkNow()` 在 runCheck 门跳过仍回 ok、渲染门缺 `downloadStallPending` 腿（待裁回 `{ok:false}` 或补腿；判据 = 按钮可点必须有效果或明确禁用）。S-52 = Sparkle quit 与在飞关窗相撞（≤2s 窗、~0.6，未实机；修 = 区分在飞决策/重复退出）。
@@ -155,7 +154,7 @@
 - **不做/推迟**：组件工厂 + local slots；0.1.6 五项（`writer-held`/`toggle.badge`/`workspace-tree` 认领/`.dsh-module-fallback`/外部仓 `plugins.bundle.config`）；依赖声明补齐待 lockfile；工程门禁 P2；git 钩子。
 - **移出项（P3）**：匿名 control-plane 认证/审计、薄壳会话面、统一索引、broker、通知中心、MCP 不得回流；design 17/18/19/08/20/24 例外不作他域先例。
 - **构建/注册**：构建产物移出 git（`build:artifacts` 自举）；注册表降级不剪不落盘（fail-closed）；上游纯镜像 README 死链跳过（C1）；sidebar/layout `lib` 目标与镜像 exports 有意保留。
-- **安全/发布**：`--no-auth` 有界例外；Gateway state 0700 + 属主；safeStorage 诚实回退；Windows 无 Authenticode、macOS 不出 x64；发布面临时收窄（三腿 `if:` 跳过，恢复删三处 + finalize）。
+- **安全/发布**：`--no-auth` 有界例外；Gateway state 0700 + 属主；safeStorage 诚实回退；Windows 无 Authenticode、macOS 不出 x64；发布面临时收窄（三腿 `if:` 跳过，恢复删三处 + finalize）；state 根租约对越界拓扑（容器重建挂 volume、NFS 共享根）响亮拒绝，恢复 = 移走 `owner.json`（design 17 §12）。
 - **N-ctx**：单文档信任域；原生键盘单槽（全部 boot 实例 accept）；壳常驻（local 恒留/隐藏最多 1/超限回收）；文档主题/页面语言归 §1.3。
 - **registry/元工程**：触点 registry 单一来源、无 Windows 覆盖；R10 文本锁未全量改 import 断言；settings-plugin-manager 无 typecheck 程序（其 vendor client 面未铺成独立 program），`ctx.get` 显式类型实参一类编译错误只有该包 wiring 测试的反向源锁兜底；R11 布局助手受 Swift 锚点；pnpm shim 待打包实机；state 根租约 legacy 一个 minor 后删；Windows 覆盖缺口 R2/R14；R15 ui-layout 分类表；App.tsx 未拆簇；host 域逐域手写有 lockstep；第三类 vendor 补丁（`use-chat-reading`）；ServerSection 预算 raise（1243→1273）；alpha.3 workspace 成员判定待复核；cua 不接入。
 

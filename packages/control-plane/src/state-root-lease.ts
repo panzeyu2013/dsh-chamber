@@ -51,8 +51,9 @@ export const STATE_ROOT_LEASE_FILENAME = 'owner.json'
 /**
  * 入口进程的「确定性租约冲突」退出码。
  *
- * 语义：**重试没有意义**，必须有人停掉持有者或换 state 根。systemd 单元据此设
- * `RestartPreventExitStatus=3`，一次都不重启；临时性启动失败仍走 1。桌面
+ * 语义：**不自动重启**，必须有人停掉持有者或换 state 根（重试本身未必有害，但确定性
+ * 冲突下反复重启只会淹没 journal）。systemd 单元据此设
+ * `RestartPreventExitStatus=2 3`（2 = 配置错误），一次都不重启；临时性启动失败仍走 1。桌面
  * sidecar 有自己的 0/3/70 分级（租约失败是 70=启动失败，3 专指 L1 目录锁冲
  * 突），两者不共用数值契约，只在「确定性冲突不自动重启」上同义。
  */
@@ -136,6 +137,14 @@ export interface StateRootLeaseHolder {
   startedAt: number | null
 }
 
+/**
+ * 锁错误的持有者判定类别。
+ *
+ * 消费方（gateway auth / CLI 文案）据此区分「核实为活的 gateway」与「外机 / 外命名空间 /
+ * 无法核实」——后者不能沿用 "gateway is running (pid N)"，那个 pid 在本机可能毫无意义。
+ */
+export type StateRootLeaseHolderKind = 'live' | 'unverified' | 'foreign-machine' | 'foreign-namespace'
+
 export interface StateRootLeaseLogger {
   warn(message: string): void
 }
@@ -145,11 +154,17 @@ export class StateRootLeaseError extends Error {
   readonly stateRoot: string
   readonly pid: number | null
   readonly holder: StateRootLeaseHolder | null
+  readonly holderKind: StateRootLeaseHolderKind | null
 
   constructor(
     code: StateRootLeaseCode,
     message: string,
-    fields: { stateRoot: string; pid?: number | null; holder?: StateRootLeaseHolder | null },
+    fields: {
+      stateRoot: string
+      pid?: number | null
+      holder?: StateRootLeaseHolder | null
+      holderKind?: StateRootLeaseHolderKind | null
+    },
   ) {
     super(message)
     this.name = 'StateRootLeaseError'
@@ -157,6 +172,7 @@ export class StateRootLeaseError extends Error {
     this.stateRoot = fields.stateRoot
     this.pid = fields.pid ?? null
     this.holder = fields.holder ?? null
+    this.holderKind = fields.holderKind ?? null
   }
 }
 
@@ -292,10 +308,27 @@ function classifyRaw(raw: string): Classified {
       pid,
       startedAt: typeof candidate.startedAt === 'number' && Number.isFinite(candidate.startedAt) ? candidate.startedAt : null,
       token: typeof candidate.token === 'string' && candidate.token.length > 0 ? candidate.token : null,
-      flavor: typeof candidate.flavor === 'string' ? candidate.flavor : null,
+      flavor: printableRecordText(candidate.flavor),
       identity: parseRecordIdentity(candidate.identity),
     },
   }
+}
+
+/** 记录里可展示的文本字段上限（会原样进入日志与错误文本）。 */
+const MAX_RECORD_TEXT_CHARS = 128
+
+/**
+ * 记录里可展示的文本字段：拒绝超长与非可打印字符。
+ *
+ * 这些字段（identity.*、flavor）会被原样嵌进 journal 与错误文本：一个控制字符就能
+ * 伪造一行 journal 诊断。记录属主私有，但仍可能被拷贝/篡改，故读取侧一律按此收窄
+ * （写入侧取自 hostname()/machine-id 等系统事实，不额外过滤）。
+ */
+function printableRecordText(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (trimmed === '' || trimmed.length > MAX_RECORD_TEXT_CHARS) return null
+  return /^[\x20-\x7e]+$/u.test(trimmed) ? trimmed : null
 }
 
 /** 身份段的逐字段校验：任何形状不符的字段降级为 null（由判定逻辑保守处理）。 */
@@ -304,15 +337,7 @@ function parseRecordIdentity(value: unknown): ProcessIdentity {
     return { ...EMPTY_PROCESS_IDENTITY }
   }
   const raw = value as Record<string, unknown>
-  const text = (key: string): string | null => {
-    const field = raw[key]
-    if (typeof field !== 'string') return null
-    const trimmed = field.trim()
-    if (trimmed === '' || trimmed.length > 128) return null
-    // 身份字段会被原样嵌进日志与错误文本：只收可打印 ASCII，控制字符能把
-    // 一条伪造的 journal 行塞进诊断输出（记录属主私有，但仍可能被拷贝/篡改）。
-    return /^[\x20-\x7e]+$/u.test(trimmed) ? trimmed : null
-  }
+  const text = (key: string): string | null => printableRecordText(raw[key])
   const ticks = raw.procStartTicks
   return {
     host: text('host'),
@@ -331,6 +356,11 @@ function parseRecordIdentity(value: unknown): ProcessIdentity {
  * 指；进程不存在是 ESRCH 或僵尸；startTicks 不等是同一启动内的 pid 复用——
  * EPERM 也走这条核对，因为 `kill(pid, 0)` 的成功/EPERM 只证明「有同号进程」。
  * 身份读不到时保守返回 live(unverified)，绝不因为读不到就判死。
+ *
+ * 前提：**跨机护栏要求记录与本机都读得到 machineId**（/etc/machine-id）。两侧任一为
+ * null 时无法把记录归属到本机，此时 bootId 不等仍按「同一台机器的重启」处理（否则无
+ * machine-id 的容器/精简镜像每次崩溃后都会永久锁死）；这是「state 根属主私有、单机」
+ * 契约下的取舍，跨机共享根必须两侧都有 machine-id——见 design 17 §12 的残差说明。
  */
 function judgeHolder(
   record: LeaseRecordView,
@@ -416,13 +446,18 @@ function lockedError(
     ? '; if this state root was copied, migrated or mounted from another environment, move the record aside; otherwise stop that writer'
     : verdict.verified
       ? '; stop it or pass an explicit --state-dir/DSH_*_STATE'
-      : '; stop the holder, or pass an explicit --state-dir/DSH_*_STATE'
+      : '; stop the holder if it is running, or move the record aside after confirming no other writer, or pass an explicit --state-dir/DSH_*_STATE'
   return new StateRootLeaseError(
     'state_root_locked',
     'state root ' + stateRoot + ' is owned by pid ' + record.pid
       + (record.flavor === null ? '' : ' (' + record.flavor + ')') + written
       + verdictBasis(verdict) + escape + ' (' + file + ')',
-    { stateRoot, pid: record.pid, holder },
+    {
+      stateRoot,
+      pid: record.pid,
+      holder,
+      holderKind: verdict.kind === 'live' ? (verdict.verified ? 'live' : 'unverified') : verdict.kind,
+    },
   )
 }
 
@@ -634,11 +669,13 @@ class StateRootLeaseHandle implements StateRootLease {
         if (verdict.kind === 'stale') {
           staleReason = verdict.reason
         } else if (verdict.kind === 'live' && classified.record.pid === process.pid) {
-          // 只有「身份确为本进程」才是 duplicate；重启后旧记录的 pid 恰好等于本
-          // 进程时（同号复用）它仍是陈旧记录，绝不能据此拒绝启动。
+          // 判定为活（含「无法核实」——外机记录的同号 pid 也可能等于本进程）且 pid 是
+          // 本进程才是 duplicate；重启后旧记录的 pid 恰好等于本进程时它必须已被判陈旧
+          // （bootId/ticks），绝不能凭 pid 相等拒绝启动。
           throw new StateRootLeaseError(
             'state_root_duplicate',
-            'state-root lease record already belongs to this process (pid ' + process.pid + '): ' + this.file,
+            'state-root lease record already belongs to this process (pid ' + process.pid
+              + '); if no other writer is running, move the record aside: ' + this.file,
             {
               stateRoot: this.stateRoot,
               pid: process.pid,

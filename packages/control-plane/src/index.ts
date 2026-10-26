@@ -1475,6 +1475,7 @@ export type {
   ResolveStateRootOptions,
   StateRootLease,
   StateRootLeaseFlavor,
+  StateRootLeaseHolderKind,
   StateRootLeaseOptions,
   StateRootLeaseScope,
 } from './state-root-lease.ts'
