@@ -305,8 +305,10 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
   /** Classify a login TRANSPORT failure by socket error code. The failure stays
    *  transient ('network': the link may come back), but the text must point at
    *  the likely cause instead of collapsing every case into "network error": a
-   *  refused or reset socket through an ESTABLISHED ssh tunnel means the gateway
-   *  process is not serving on the remote port, not that the path is broken.
+   *  refused or reset socket through an ssh tunnel means the gateway process (or
+   *  the tunnel's forward) is not serving, not that the path is broken. The copy
+   *  never asserts WHICH of the two is down: a local -L forward refuses locally
+   *  when it is gone and resets when the remote port is closed.
    *  Only the socket's own code is surfaced — never a message that could embed a
    *  credential. */
   function loginTransportFailure(error: NodeJS.ErrnoException, tunneled: boolean): Extract<GatewaySessionResult, { ok: false }> {
@@ -316,7 +318,7 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
         ok: false,
         code: 'network',
         error: tunneled
-          ? 'the SSH tunnel is up but nothing on the remote gateway port accepted the login request (ECONNREFUSED) — the gateway process is probably not running; check its service on the remote host'
+          ? 'the login connection was refused (ECONNREFUSED) — the gateway may not be running, or the SSH tunnel/forward may be down; check the gateway service and the tunnel on the remote host'
           : 'nothing is listening at the gateway address (ECONNREFUSED) — the gateway process is probably not running',
       }
     }

@@ -201,14 +201,57 @@ test('a refused login names the cause instead of collapsing into "network error"
   } finally {
     direct.dispose()
   }
-  // Tunneled origin (authority present): the tunnel is up; the remote port is not.
+  // Tunneled origin (authority present): a refusal may be the gateway process OR
+  // the tunnel's forward, so the copy must not assert that the tunnel is up.
   const tunneled = createGatewaySessionManager({ request: stubRequestFactory({ networkError: true }) })
   try {
     const origin = { baseUrl: 'http://127.0.0.1:1', insecureHttp: true, scope: 'test:refused-tunnel', authority: 'gw.example.com:30801' }
     const result = await tunneled.ensureSession(origin, PASSWORD)
     assertFailure(result, 'network')
-    assert.match(result.error, /the SSH tunnel is up but nothing on the remote gateway port/u)
-    assert.match(result.error, /gateway process is probably not running/u)
+    assert.match(result.error, /the login connection was refused \(ECONNREFUSED\)/u)
+    assert.match(result.error, /gateway may not be running, or the SSH tunnel\/forward may be down/u)
+    assert.doesNotMatch(result.error, /the SSH tunnel is up/u, 'the copy must not assert a liveness fact it cannot observe')
+  } finally {
+    tunneled.dispose()
+  }
+})
+
+test('reset, DNS and unreachable socket failures each name their own cause', async () => {
+  const cases = [
+    { code: 'ECONNRESET', pattern: /closed the login connection without answering \(ECONNRESET\)/u },
+    { code: 'EPIPE', pattern: /closed the login connection without answering \(EPIPE\)/u },
+    { code: 'ENOTFOUND', pattern: /host name does not resolve \(ENOTFOUND\)/u },
+    { code: 'EAI_AGAIN', pattern: /host name does not resolve \(EAI_AGAIN\)/u },
+    { code: 'EHOSTUNREACH', pattern: /host is unreachable \(EHOSTUNREACH\)/u },
+    { code: 'ENETUNREACH', pattern: /host is unreachable \(ENETUNREACH\)/u },
+  ]
+  for (const item of cases) {
+    const mgr = createGatewaySessionManager({
+      request: stubRequestFactory({ networkError: true, networkErrorCode: item.code }),
+    })
+    try {
+      const result = await mgr.ensureSession(
+        { baseUrl: 'http://127.0.0.1:1', insecureHttp: true, scope: 'test:code:' + item.code },
+        PASSWORD,
+      )
+      assertFailure(result, 'network')
+      assert.match(result.error, item.pattern, item.code)
+      assert.doesNotMatch(result.error, /network error/u)
+    } finally {
+      mgr.dispose()
+    }
+  }
+  // A reset through a tunnel still points the operator at the remote service.
+  const tunneled = createGatewaySessionManager({
+    request: stubRequestFactory({ networkError: true, networkErrorCode: 'ECONNRESET' }),
+  })
+  try {
+    const result = await tunneled.ensureSession(
+      { baseUrl: 'http://127.0.0.1:1', insecureHttp: true, scope: 'test:code:tunnel', authority: 'gw.example.com:30801' },
+      PASSWORD,
+    )
+    assertFailure(result, 'network')
+    assert.match(result.error, /check its service on the remote host/u)
   } finally {
     tunneled.dispose()
   }
