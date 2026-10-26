@@ -18,7 +18,7 @@ import {
 } from '../../src/carrier.ts'
 import { initialCarrierState } from '../../src/state.ts'
 import { CARRIER_ENV, OPENING_TIMEOUT_MS, SILENT_TEARDOWN_MIN_MS } from '../../src/tables.ts'
-import type { CarrierEvent } from '../../src/state.ts'
+import type { CarrierEvent, RebuildReason } from '../../src/state.ts'
 
 const env = CARRIER_ENV
 
@@ -404,12 +404,19 @@ test('P3: the opening ledger is bounded and evicts oldest-first', () => {
 })
 
 test('the evidence/heuristic rebuild classification is exhaustive and lane is heuristic', () => {
-  // The exhaustive Record inside the reducer makes a NEW RebuildReason a compile error;
-  // this pins the decision for every existing member, so a silent re-classification also
-  // fails here. Only evidence-backed refusals may be retried at the rebuild-window edge.
-  for (const reason of ['socketNoFrame', 'openingStall', 'teardownNoFrame', 'handshakeTimeout'] as const) {
-    assert.equal(isEvidenceBackedRebuild(reason), true, reason + ' is carrier evidence')
+  // BOTH layers pin the decision: the exhaustive Record inside the reducer makes a new
+  // RebuildReason a compile error, and this Record makes the TEST decide its value, so a
+  // new member cannot be added with the assertion silently skipping it. Only
+  // evidence-backed refusals may be retried at the rebuild-window edge.
+  const expected: Readonly<Record<RebuildReason, boolean>> = {
+    socketNoFrame: true,
+    openingStall: true,
+    teardownNoFrame: true,
+    handshakeTimeout: true,
+    laneReconnect: false,
   }
-  assert.equal(isEvidenceBackedRebuild('laneReconnect'), false,
-    'a lane reconnect is a heuristic: retrying it at the window edge is the 60s metronome')
+  for (const reason of Object.keys(expected) as RebuildReason[]) {
+    assert.equal(isEvidenceBackedRebuild(reason), expected[reason],
+      reason + (expected[reason] ? ' is carrier evidence' : ' is a heuristic'))
+  }
 })

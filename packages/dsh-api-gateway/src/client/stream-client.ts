@@ -55,9 +55,11 @@ export const UNREF_SCHEDULER = {
  *  not turn into a connect/cancel storm (a socket that is not OPEN has no healthy
  *  carrier to preserve, so the reducer's 60s window deliberately does not apply). */
 const FORCED_REBUILD_MIN_INTERVAL_MS = 50
-/** Fallback delay for a denied rebuild when the reducer state cannot give an
- *  earlier legal time (window/in-flight spacing still wins when it can). */
-const THROTTLE_RETRY_FALLBACK_MS = 1_000
+/** Minimum wait before a denied rebuild's ONE deferred retry. The reducer always names
+ *  a FUTURE time here (when it names nothing at all, `earliestRebuildAt` is Infinity and
+ *  no retry is armed), so this floor only refuses a sub-second re-entry: it can push the
+ *  retry up to 1s past the window edge, and the edge cases arm at least that early. */
+const THROTTLE_RETRY_MIN_WAIT_MS = 1_000
 
 const DEADLINE_SCHEDULER = {
   setTimeout: (run: () => void, ms: number): unknown => setTimeout(run, ms),
@@ -200,9 +202,11 @@ export class RemoteStreamMuxClient {
   reconnect(): void {
     if (!this.running || this.disposed) return
     this.forensics?.('socket-reconnect', 'reconnect requested by the connection lane')
-    // A lane-commanded reconnect opens its own decision cycle so the burst guard cannot
-    // swallow it. It is NOT carrier evidence: the reducer's 60s window may still refuse
-    // the replacement, and a refusal is deliberately not re-armed (see armThrottleRetry).
+    // A lane-commanded reconnect opens its own decision cycle, so a request already
+    // decided this cycle cannot suppress it. (The 50ms non-OPEN burst guard still can,
+    // and may: a lane storm must not become a connect/cancel storm.) It is NOT carrier
+    // evidence: the reducer's 60s window may still refuse the replacement, and a refusal
+    // is deliberately not re-armed (see armThrottleRetry).
     this.requestCarrierRebuild(
       new RemoteStreamReconnectRequest('api gateway: Remote stream reconnect requested'),
       'reconnect requested',
@@ -268,13 +272,21 @@ export class RemoteStreamMuxClient {
     if (decided) this.replaceSocket(failure, closeReason)
     // A refusal is paired with `reopenLogicalStream`: no exitless spinner.
     this.applyRecoveryEffects(effects, failure)
-    if (!decided && effects.some((effect) => effect.e === 'throttled')) {
-      this.armThrottleRetry(failure, closeReason, reason, streamId, streak, framesSinceSend)
+    // The arm reads the reducer's VERDICT, not this call's request: the frame
+    // observation rewrites `openingStall` into `socketNoFrame` when the socket
+    // delivered nothing, and a reclassification of either reason must not silently
+    // drop the retry of the other (design 14 §D4: the reducer owns the classification).
+    const throttled = effects.find((effect) => effect.e === 'throttled')
+    if (!decided && throttled !== undefined && throttled.e === 'throttled') {
+      this.armThrottleRetry(failure, closeReason, throttled.reason, streamId, streak, framesSinceSend)
     }
     return effects
   }
 
   /**
+   * `reason` is the reducer's VERDICT for the refusal (a request-side reason is only
+   * its input), so the classification and the forensic detail follow one decision.
+   *
    * A denied EVIDENCE-BACKED rebuild (an expired opening, a silent teardown)
    * still must not leave a stream pinned to a suspect carrier: arm ONE retry at the
    * reducer's earliest legal time (window/in-flight spacing), then give up until the
@@ -311,7 +323,7 @@ export class RemoteStreamMuxClient {
     // The reducer owns the window math; this only schedules at the time it names.
     const earliest = earliestRebuildAt(this.carrierState, this.carrierEnv, at)
     if (!Number.isFinite(earliest)) return
-    const retryAt = Math.max(at + THROTTLE_RETRY_FALLBACK_MS, earliest)
+    const retryAt = Math.max(at + THROTTLE_RETRY_MIN_WAIT_MS, earliest)
     this.throttleRetried = true
     // The frame observation must be FRESH at the window edge: frames that arrive while
     // the retry is parked prove the carrier is no longer silent, and reusing the
@@ -571,12 +583,15 @@ export class RemoteStreamMuxClient {
           // A denied rebuild must not leave this lane pinned to a silent carrier: this
           // is evidence (an expired opening on a frame-less socket), so it arms the ONE
           // delayed replacement at the window edge. Lane refusals do NOT arm (design 27
-          // §3.6) — the reducer classifies which reasons are evidence.
-          if (!rebuiltNow && effects.some((effect) => effect.e === 'throttled')) {
+          // §3.6) — the reducer classifies which reasons are evidence, and the arm takes
+          // the reducer's VERDICT (`socketNoFrame` when the socket delivered nothing,
+          // `openingStall` only once the streak proves the stall), never a literal.
+          const throttled = effects.find((effect) => effect.e === 'throttled')
+          if (!rebuiltNow && throttled !== undefined && throttled.e === 'throttled') {
             this.armThrottleRetry(
               replacementFailure,
               'opening stall',
-              'openingStall',
+              throttled.reason,
               streamId,
               attemptStreak,
               this.socketFrames - framesAtSend,

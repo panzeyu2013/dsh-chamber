@@ -468,8 +468,10 @@ test('a denied EVIDENCE-backed rebuild is still retried at the 60s carrier windo
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
   t.after(() => t.mock.timers.reset())
   const facts: string[] = []
+  // kind|cause, so the refusal's REASON (not just its existence) is asserted below.
+  const causes: string[] = []
   const client = new RemoteStreamMuxClient({
-    forensics: (kind) => { facts.push(kind) },
+    forensics: (kind, cause) => { facts.push(kind); causes.push(kind + '|' + String(cause)) },
     waitForReconnect: true,
   })
   client.start()
@@ -509,6 +511,13 @@ test('a denied EVIDENCE-backed rebuild is still retried at the 60s carrier windo
   await flushMicrotasks()
   assert.equal(FakeSocket.instances.length, 3, 'the replacement fires exactly at the window edge')
   assert.ok(facts.includes('carrier-throttle-expired'), 'the evidence-backed retry is observable')
+  // The arm reports the reducer's VERDICT, not the caller's request: a frame-less
+  // expiry is `socketNoFrame`, so the deferred retry is classified as evidence even if
+  // `openingStall` were ever reclassified (design 14 §D4 / carrier REBUILD_REASON_KIND).
+  assert.ok(causes.includes('carrier-throttle-expired|socketNoFrame'),
+    'the deferred retry carries the verdict reason')
+  assert.equal(causes.includes('carrier-throttle-expired|openingStall'), false,
+    'the request-side literal must not leak into the arm')
   await client.close()
 })
 
