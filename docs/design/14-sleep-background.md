@@ -172,7 +172,9 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 
 > **单一所有者（会话链重构，Phase A + B1–B3 已落地）**：本节的判定与记忆不再散落在各执行器里。
 > ① **载波**：四条替换入口收敛为 `RemoteStreamMuxClient.requestCarrierRebuild`，判定由共享 reducer
-> （`packages/dsh-stream-state` 的 `reduceCarrier`/`decideRebuild` + `tables.json`）持有，执行器只执行返回的 effects；
+> （`packages/dsh-stream-state` 的 `reduceCarrier`/`decideRebuild` + `tables.json`）持有，执行器执行返回的
+> effects，并只消费包给出的两个纯谓词（`earliestRebuildAt` 的窗口时刻、`isEvidenceBackedRebuild` 的
+> 证据/启发式分类）；本地不保存 reason 清单，延迟重排的 reason 取 effect 的裁决值而不是请求字面量；
 > **静默判定也在 reducer（P3）**：执行器随 `rebuildRequested` 上报 `framesSinceSend`（本次发帧以来自当前 socket 收到的帧数），
 > 零帧把 `openingStall` 归为 `socketNoFrame`（不受 streak 门限），有帧则任何显式静默 reason 都被拒绝；宿主只回读 effect 的
 > reason 作为取证标签，不再自判。开帧期限/握手期限/静默下限与 `remote-retry-policy` 的常量副本已退役（G-G 锁步条目随之删除，17 锁/11 退役）。

@@ -181,11 +181,13 @@ mutation → `MutationOutcomeUnknownError`（不得重试）；非 mutation →
   窗：没有健康载波可保；多次非 OPEN 替换按 50ms 下限防抖（`replaceSocket` 自身也
   刷新该时间戳），并补一条 `carrier-rebuild-bypass` 取证。
 - socket 仍 open 但 reducer 拒绝 rebuild 时，只有**证据型**请求在窗口/间距到期点做**一次**
-  延迟替换（`carrier-throttle-expired` 取证），随后交给下一次真实边沿；证据型拒绝仍先
+  延迟替换（`carrier-throttle-expired` 取证；重试至少 1s 后，若窗口边不足 1s 则最多推迟 1s），
+  随后交给下一次真实边沿；证据型拒绝仍先
   `reopenLogicalStream`（lane 拒绝没有 streamId，重开由连接泵完成，见下），不留空转。
   可到达的两条证据腿：opening 期限（reducer 的拒绝 reason 可为 `socketNoFrame`（零帧）或
-  `openingStall`；执行器 arm 携带的是请求侧 `openingStall`，所以 expired 的 detail 只会是
-  `openingStall`/`teardownNoFrame`）与 teardown 的 `teardownNoFrame`。`handshakeTimeout`
+  `openingStall`（有帧越阈值））与 teardown 的 `teardownNoFrame`；**arm 与 expired/rebuild
+  的取证都取 reducer 的裁决 reason**（不取请求侧字面量），所以零帧与阈值型在延迟替换的
+  detail 里可区分。`handshakeTimeout`
   虽是 union 成员，但本驱动没有发射点：握手到期只 reject 连接候选，pre-OPEN 的替换走
   non-OPEN bypass 或连接泵的 maintain 退避，不经本窗口。**lane reconnect 的拒绝不排期**：
   lane 请求是启发式（“代际丢了/可能陈旧”），不是载波证据——它已经由 non-OPEN bypass 或
@@ -258,14 +260,14 @@ mutation → `MutationOutcomeUnknownError`（不得重试）；非 mutation →
 24. connect 期 verifyUp 有与 ready 探针相同的外层期限（provider 声明预算）与可取消 signal（期限到点/disconnect 都会 abort）；两条 provider 腿都已透传（ssh：`verifyDshEndpoint`/`probeDshSignature`/`verifyGatewayEndpointViaTunnel`；gateway：`verifyGatewayRuntimeIdentity`→`boundedGatewayRequest`），provider 若忽略 signal 仍只会跑到自己的超时。该期限（gateway 35s）**可以长于** `READY_TIMEOUT_MS`（10s，只管端口/可达性）：一个慢但成功的复合复验不应被 ready 期限杀掉；若失败，重试路径照常。gateway 的**口令登录腿**（`ensureSession`）不在 signal 覆盖内：会话管理器只在 `invalidate` 时递增 generation，围栏（`generationIsCurrent`/`verifiedCookieIsCurrent`）能挡住的正是「探针失败后又被外部 invalidate」的迟到登录；一个从未 invalidate 的迟到登录可能完成并写缓存，这是登录腿的已知边界（它不写注册态，下一次探针会重新判定）。
 25. 每连接 agent 池已有**真实 socket** 用例（同连接复用、两条连接各自成池、替换/注销后新开连接）；auth 恢复有驱动器级组装用例（见 §6.15）；veth+netem 真实链路验收已入库（13 项断言 + opt-in 上传 3 项，含「宽限期内恢复不重连」「reverifyAll 在 ready+down 上 <1.5s 恢复」「20MB@2Mbit 上传期间不判 down」），但真实 WAN/ssh 中继与真机睡眠仍只能人工跑。
 26. `dsh-api-gateway` 的 opening 拒绝后「窗口边缘一次替换」只有代码路径与短窗口用例（mux-self-heal 覆盖替换/防抖/帧增量刷新），没有 60s **真时钟**用例：真实窗口长度由 `dsh-stream-state` 的 reducer 表决定，测试用注入时钟覆盖该表。**2026-10 修订**：lane 腿已移出延迟替换（§3.6），新增 300s 虚拟时钟回归用例证明“lane 拒绝不排期”，并新增一条证据型拒绝（opening 期限 → 窗口边缘替换）的**注入时钟完整窗口**用例（仍无真时钟/真机用例）；证据腿的真机 soak 仍开放。
-27. **lane 拒绝不排期后的取舍（2026-10）**：半开载波的兜底从“窗口边必补一次”变为“证据腿之一”——30s 开帧期限（零帧 ⇒ `socketNoFrame`）与 15s 静默 teardown（握手期限不在此列：pre-OPEN 的失败走 non-OPEN bypass 或泵的 maintain 退避，见 §3.6）；最坏多等一个证据预算（合成时序实测 +≈28s，之后立即或下一窗口边缘替换，未发现永久恢复洞）。“已 ready 后静默、且没有新流”的偶发自愈不在载波层：它由渲染器聚合臂的 staleness 常量兜底（http ≈120s / ssh ≈300s，`packages/renderer/src/aggregate-refresh.ts` 的 `AGGREGATE_RECONNECT_HTTP_STALE_MS`/`..._SSH_STALE_MS`；design 14 §D4 把这形态记为传输层看门狗），本改动不改变它。**已知边界（边界赛跑，不是“必漏”）**：`SILENT_TEARDOWN_MIN_MS`（15s）与本地/unknown 的 `generationReadyTimeoutMs`（15s）同值，teardown 判定是 `Date.now() − sentAt`，而 `sentAt` 在握手之后才打 ⇒ readiness 超时中止时该差值 `= 15000 − 握手时延`。虚拟钟下第二轮（socket 已 OPEN、同毫秒）必过；真机取决于定时器迟到是否 ≥ open 发送延迟，**不保证**。登记为开放项，本次不改阈值（改值可做但会扩大“短命零帧”的误判面）。
+27. **lane 拒绝不排期后的取舍（2026-10）**：半开载波的兜底从“窗口边必补一次”变为“证据腿之一”——30s 开帧期限（零帧 ⇒ `socketNoFrame`）与 15s 静默 teardown（握手期限不在此列：pre-OPEN 的失败走 non-OPEN bypass 或泵的 maintain 退避，见 §3.6）；最坏多等一个证据预算（合成时序探针 +≈28s；该探针未入库，仓内可复核的只有注入时钟下的窗口边用例与表值上界 30s/15s），之后立即或下一窗口边缘替换，未发现永久恢复洞。“已 ready 后静默、且没有新流”的偶发自愈不在载波层：它由渲染器聚合臂的 staleness 常量兜底（http ≈120s / ssh ≈300s，`packages/renderer/src/aggregate-refresh.ts` 的 `AGGREGATE_RECONNECT_HTTP_STALE_MS`/`..._SSH_STALE_MS`；design 14 §D4 把这形态记为传输层看门狗），本改动不改变它。该兜底有前置：源 **`mounted`**（本代际至少 push 过一次）、transport ∈ {http, ssh} 且非 local（`reconnectStalenessMsForTransport`/`shouldReconnectStaleMounted`）；`mounted=false` 或 local/unknown 的源没有载波级自动恢复，恢复 = 下一次新流的 30s 证据或消费者动作（用户可见面 = 未打开会话），登记为该条的窄边界。**已知边界（边界赛跑，不是“必漏”）**：`SILENT_TEARDOWN_MIN_MS`（15s）与本地/unknown 的 `generationReadyTimeoutMs`（15s）同值，teardown 判定是 `Date.now() − sentAt`，而 `sentAt` 在握手之后才打 ⇒ readiness 超时中止时该差值 `= 15000 − 握手时延`。虚拟钟下第二轮（socket 已 OPEN、同毫秒）必过；真机取决于定时器迟到是否 ≥ open 发送延迟，**不保证**。登记为开放项，本次不改阈值（改值可做但会扩大“短命零帧”的误判面）。
 
 ## 7. 测试与门禁
 
 - `desktop/transport-health`：link reducer 单测（suspect/down/可达失败 10s 节奏/NaN/恢复）。
 - `desktop`：suspect 不累积可达失败、两次 down + 确认窗（测试用短窗 override；生产 30s 由 LINK_POLICY 字面量钉住）、resume/online 复验、reverifyAll 与 online 波次 120ms 错峰、**bind 重分配**（stderr 命中 → 换端口、retryAttempt 不增、第 4 次回退阶梯）、探针复合预算（ready 与 connect 两处 + provider 35s/5s 断言）、**失败驱动强制探针**（节流/仅 healthy/避开 busy/非 ready no-op）、**心跳两级**（ready 后 10s 观察窗 → 稳定档；相邻两拍 180–700ms 判别两档）、**探针取消与链续接**（期限到点的 abort 发生在相位仍 ready 时；in-flight tick 之后心跳链继续）、grace 重开、busy 抑制、linkEpoch 三点、SSH argv、registration key 对象签名/health-only 决策/分隔符碰撞、auth 恢复决策（纯函数）、驱动器（注入时钟的节流/延迟/取消）与恢复守卫（五轴 fail-closed）、口令会话 proof 在瞬时失败后恢复。
   代理注册层的「单次失败不 unregister」**没有组装态用例**（host-assembly 无 fake plane+sm 测试）：manager 层的 status 单测只能证明失败只到 suspect；proof 恢复把该路径在 provider 层钉住（见 §6.15）。
-- `dsh-stream-state`：流表/ Swift parity 保持不变（本设计不改其表）。
+- `dsh-stream-state`：流表/Swift parity 保持不变（本设计不改其表）；本设计新增的 `REBUILD_REASON_KIND` + `isEvidenceBackedRebuild`（§4）由 `test/carrier/carrier-lifecycle.test.ts` 的逐 reason 分类用例与 tsc 的穷尽 Record 双重钉住。
 - `control-plane`：suspect 转发（含 suspect 下新订阅可成立）/down 503 与既有同形/health 不 revoke、body-less 与未完成体都不带 after-body、上传 idle 与预算、wire 预算排序不变量、bulk 上传的 busy 事实（≥256KiB 置位、小体不置位、结束即清）、**上游失败缝**（socket 错误、mid-body RST 与“头已到但体停流”通知一次；完整 HTTP 应答与客户端 abort 从不通知）、**下游字节的 busy 窗口**（流中为真、窗口到期为假）、**每连接池真实 socket 复用/销毁**、**page-channel 下行并入同一窗口**（每 chunk 一次、带 connectionId）。
 - `renderer`：page-channel 既有阶梯/握手/信用测试 + link epoch/初始 park/错峰释放（含 18 条 > 16 槽的轮转与“epoch 不清阶梯”）。
 - `dsh-client-connection`（vendor fork）：502/504 + after-body ⇒「可能已生效」分类文案；无 mark/非 JSON/超长体（边读边判 4KiB 上限）保持原 transport 文案。
