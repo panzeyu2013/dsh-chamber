@@ -11,7 +11,7 @@
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
 
-## [0.4.3-beta.2] - 2026-10-24
+## [0.4.3-beta.3] - 2026-10-26
 
 ### 新增
 - **弱网韧性与有界恢复（design 27）** —— 在传输相位之上加一层链路子状态：单次网络级探测失败只判 **suspect**（转发继续），连续两次才判 **down** 并复用 `instance_unavailable`；5s down 宽限加 resume/online 强制探测与 `reverifyAll`，把 SSH keepalive 遮住的半开窗口（原 60–90s）关在重连之前。上传按 body 大小单独预算并带 idle 超时；请求体已送达宿主的 mutation 以 `details.phase=after-body` 如实上报，不再谎称可安全重试；页面通道订阅随链路代次重置，已关闭的 carrier socket 不再受 60s 重建窗口限制。
@@ -22,6 +22,13 @@
 - **租约冲突改为确定性退出码 3** —— state 根被另一写者持有时 gateway 不再每 3s 重启：租约冲突以退出码 3 直接停止（可重试的启动失败仍是 1），生成的 unit 固化 `RestartPreventExitStatus=3` 与 60s/5 次启动上限，`install-gateway.sh` 重启前先 `reset-failed`；运维步骤见 `docs/deploy/deploy-gateway.md` §9。
 
 ### 修复
+- **本地 dsh 的 degraded 窗口不再把每个新请求变成 503** —— design 02 §3.5 把 `degraded` 定义为「失败计数 ≥1 但仍在服务」，
+  但本地/网关反代、登录页预热与页面聚合轮询都只认 `ready`：一次 5s 健康探测失败就把之后的新请求全部变成
+  `instance_unavailable`（实测窗口 25–175s）。现在放行 `ready|degraded`，只对
+  `starting/restarting/stopped/error/restart-exhausted` 503；幂等 `start()`/`createLocal` 不再拆掉仍在服务的子进程，
+  页面自动启动与 page-channel 链接也不再按停机处理。503 体新增 additive `details.state`（激活门关闭时不带，
+  被隔离候选的生命周期不外泄），侧栏与插件清单按相位本地化（启动/恢复中、自动重启耗尽、未运行），
+  归档管理器的清理/恢复错误同样本地化；WS 升级拒绝保持无 `details` 的旧形，本地文案改为「未就绪」。
 - **重启后 state 根不再被复用的 pid 永久锁死** —— 租约记录升到 schema v2，按身份元组（host / machineId / bootId / pidNamespace / procStartTicks）判定持有者：记录写于上一次开机、属于另一 PID namespace、来自另一台机器或 start ticks 不符时按陈旧认领；EPERM 只表示「该 pid 有进程」，改由 start ticks 复核；v1 记录按启动代际推断，legacy `.gateway.lock` / `dsh-runtime/owner.json` 同规则退役。
 - **gateway 登录失败按 socket 码归因** —— ECONNREFUSED（隧道通但远端端口未被服务）、ECONNRESET/EPIPE（进程已死或未启动）与其它原始码分别给出说明，不再一律折叠成「网络错误」；重试语义不变。
 - **终端 attach/重连恢复生成式流契约** —— 上游 `terminal/attach` 是带 `descriptor.uplink` 的生成式流，fork 曾以 fail-loud 拒绝，导致 attach 与重连必失败；现在为生成方法接上 `ClientStreamHandle`（send/end 经 `ClientUplinkQueue` 进双 carrier），unary 结果走 `descriptor.result.decode`，取消与成功应答的竞态按 `gateway/cancelled` 上报。

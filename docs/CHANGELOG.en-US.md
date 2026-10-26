@@ -11,7 +11,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
 
-## [0.4.3-beta.2] - 2026-10-24
+## [0.4.3-beta.3] - 2026-10-26
 
 ### Added
 - **Weak-link resilience with bounded recovery (design 27)** - a link sub-state sits on top of the transport phases: one network-level probe failure is only **suspect** (forwarding continues) and a second consecutive failure is **down**, reusing `instance_unavailable`; a 5 s down grace plus resume/online forced probes and `reverifyAll` close the half-open window that the SSH keepalive used to hide for 60-90 s before reconnecting. Uploads carry their own budget by body size with an idle timeout; a mutation whose request body already reached the host reports `details.phase=after-body` instead of claiming a safe retry; page-channel subscriptions reset on a new link epoch; and a closed carrier socket is no longer held by the 60 s rebuild window.
@@ -22,6 +22,16 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 - **Lease conflicts become deterministic exit code 3** - while another writer owns the state root the gateway no longer restarts every 3 s: a lease conflict stops immediately with exit code 3 (retryable startup failures stay 1), the generated unit pins `RestartPreventExitStatus=3` with a 60 s / 5-start limit, and `install-gateway.sh` runs `reset-failed` before restarting; operator steps live in `docs/deploy/deploy-gateway.md` section 9.
 
 ### Fixed
+- **A degraded local dsh no longer turns every new request into a 503** - design 02 section 3.5 defines `degraded` as
+  "failures >= 1 but still serving", yet the local and gateway reverse proxies, the login-page warm-up and the page
+  aggregate poll only accepted `ready`: one failed 5 s health probe turned every following request into
+  `instance_unavailable` (observed windows 25-175 s). They now accept `ready|degraded` and 503 only for
+  `starting/restarting/stopped/error/restart-exhausted`; the idempotent `start()`/`createLocal` no longer tears a
+  serving child down, and page auto-start plus the page-channel link no longer treat the instance as down. The 503
+  body gains an additive `details.state` (absent while the activation gate is closed, so a quarantined candidate
+  lifecycle never escapes), the sidebar and plugin inventory localize by phase (starting/recovering, restarts
+  exhausted, not running), and the archive manager localizes its cleanup/restore failures; the WS upgrade refusal
+  keeps its old shape without `details`, but the local refusal now reads "not ready" instead of "no tunnel".
 - **A reused pid no longer locks the state root after a reboot** - lease records move to schema v2 and judge the holder by an identity tuple (host, machineId, bootId, pidNamespace, procStartTicks): a record written before this boot, in another PID namespace, on another machine or with mismatched start ticks is stale and reclaimed; EPERM only means "a process with this pid exists" and is now verified by start ticks; v1 records fall back to boot-epoch inference, and legacy `.gateway.lock` / `dsh-runtime/owner.json` records retire under the same rule.
 - **Gateway login failures name their cause** - ECONNREFUSED through an established tunnel (the remote port is not served), ECONNRESET/EPIPE (the process died or never started) and any other code are reported distinctly instead of collapsing into "network error"; the retry semantics are unchanged.
 - **Terminal attach and reconnect restore the generated-stream contract** - upstream `terminal/attach` is a generated stream with `descriptor.uplink`, which the fork refused fail-loud, so attach and reconnect always failed; generated methods now get a `ClientStreamHandle` (send/end feed `ClientUplinkQueue` into both carriers), unary results pass through `descriptor.result.decode`, and an abort racing a successful reply reports `gateway/cancelled`.
