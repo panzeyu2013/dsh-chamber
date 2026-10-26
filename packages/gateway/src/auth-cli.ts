@@ -51,9 +51,18 @@ function acquireStoppedStore(
   } catch (error) {
     if (error instanceof StateRootLeaseError
       && (error.code === 'state_root_locked' || error.code === 'state_root_duplicate')) {
-      throw new Error(error.pid !== null
-        ? `gateway is running (pid ${error.pid}); ${runningHint}`
-        : `gateway is running; ${runningHint}`)
+      // "gateway is running (pid N)" is only honest for a holder we verified (or
+      // for the duplicate case, where the pid is this process). The lease verdict
+      // can also be foreign-machine / foreign-namespace / unverifiable, where that
+      // pid may belong to another host or namespace — telling the operator to use
+      // the web UI (or to kill that pid) would then be wrong. Those cases carry
+      // their own evidence and escape hatch in the message.
+      if (error.code === 'state_root_duplicate' || error.holderKind === 'live') {
+        throw new Error(error.pid !== null
+          ? `gateway is running (pid ${error.pid}); ${runningHint}`
+          : `gateway is running; ${runningHint}`)
+      }
+      throw new Error(error.message)
     }
     throw error instanceof Error ? error : new Error(String(error))
   }

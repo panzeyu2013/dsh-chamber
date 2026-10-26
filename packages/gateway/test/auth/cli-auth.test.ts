@@ -78,6 +78,29 @@ test('gateway auth reset-password refuses while a live writer holds the state-ro
   } finally { cleanup() }
 })
 
+test('gateway auth names a foreign lease record instead of claiming a running gateway', { skip: process.platform !== 'linux' }, async () => {
+  const { dir, cleanup } = tempDir()
+  try {
+    // A record from another machine (shared/migrated state root): the pid may not
+    // even exist locally, so the "gateway is running (pid N)" copy would be a lie.
+    writeFileSync(join(dir, 'owner.json'), JSON.stringify({
+      schemaVersion: 2,
+      pid: process.pid,
+      startedAt: Date.now(),
+      token: 'f'.repeat(48),
+      scope: 'state-root',
+      flavor: 'gateway',
+      identity: { host: 'other-host', machineId: 'another-machine-id', bootId: null, pidNamespace: null, procStartTicks: null },
+    }) + '\n', { mode: 0o600 })
+    await assert.rejects(
+      () => gatewayAuthResetPassword(dir, NEW_PASSWORD, silentLogger),
+      (error: unknown) => error instanceof Error
+        && /another machine/.test(error.message)
+        && !/gateway is running/.test(error.message),
+    )
+  } finally { cleanup() }
+})
+
 test('gateway auth reset-password rejects an out-of-bounds password with a usage error', async () => {
   const { dir, cleanup } = tempDir()
   try {
