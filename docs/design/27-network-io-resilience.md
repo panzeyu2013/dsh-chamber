@@ -180,10 +180,18 @@ mutation → `MutationOutcomeUnknownError`（不得重试）；非 mutation →
 - 载波 socket **非 OPEN**（closed/closing 或仍在 CONNECTING）时绕过 60s rebuild
   窗：没有健康载波可保；多次非 OPEN 替换按 50ms 下限防抖（`replaceSocket` 自身也
   刷新该时间戳），并补一条 `carrier-rebuild-bypass` 取证。
-- socket 仍 open 但 reducer 拒绝 rebuild 时，只在窗口/间距到期点做**一次**延迟替换
-  （`carrier-throttle-expired` 取证），随后交给下一次真实边沿；拒绝本身仍先
-  `reopenLogicalStream`，不留空转。lane reconnect、teardown 与 opening-deadline
-  三条腿的拒绝都走同一次延迟替换。
+- socket 仍 open 但 reducer 拒绝 rebuild 时，只有**证据型**请求在窗口/间距到期点做**一次**
+  延迟替换（`carrier-throttle-expired` 取证），随后交给下一次真实边沿；证据型拒绝仍先
+  `reopenLogicalStream`（lane 拒绝没有 streamId，重开由连接泵完成，见下），不留空转。
+  可到达的两条证据腿：opening 期限（reducer 的拒绝 reason 可为 `socketNoFrame`（零帧）或
+  `openingStall`；执行器 arm 携带的是请求侧 `openingStall`，所以 expired 的 detail 只会是
+  `openingStall`/`teardownNoFrame`）与 teardown 的 `teardownNoFrame`。`handshakeTimeout`
+  虽是 union 成员，但本驱动没有发射点：握手到期只 reject 连接候选，pre-OPEN 的替换走
+  non-OPEN bypass 或连接泵的 maintain 退避，不经本窗口。**lane reconnect 的拒绝不排期**：
+  lane 请求是启发式（“代际丢了/可能陈旧”），不是载波证据——它已经由 non-OPEN bypass 或
+  逻辑流重开满足，真实载波故障各有自己的证据腿重新入队。排期它会把“每窗口最多一次重建”
+  的上限变成 60s 排期：延迟替换杀掉新 socket 上活着的代际 → lane 在窗口内再次被拒 → 再排期，
+  形成健康载波上永久的一分钟一次重建（`mux-self-heal` 有 300s 虚拟时钟回归用例）。
 
 ## 4. 模块落点
 
@@ -203,7 +211,8 @@ mutation → `MutationOutcomeUnknownError`（不得重试）；非 mutation →
 | `packages/dsh-chamber-wire/net-budget` | 上传/头窗/mutation 预算的唯一推导 + 排序不变量 |
 | `packages/dsh-chamber-client-core` | page-channel link selector/epoch 唤醒/等待/错峰释放；`link-projection`（ready/epoch 投影的唯一解读）；`MutationOutcomeUnknownError`/`ResponseLostError` |
 | `packages/dsh-client-connection`（vendor fork） | `[patch-mod]`：502/504 + after-body 的官方 unary 分类文案 |
-| `packages/dsh-api-gateway` | closed socket 绕过 rebuild 窗；denied 到期一次延迟替换；内部 carrier 事件（不发 wire） |
+| `packages/dsh-api-gateway` | closed socket 绕过 rebuild 窗；**证据型** denied 到期一次延迟替换（lane 拒绝不排期）；内部 carrier 事件（不发 wire） |
+| `packages/dsh-stream-state` | 模块内穷尽 `REBUILD_REASON_KIND` + `isEvidenceBackedRebuild`：证据/启发式的分类归 reducer（新 reason 不分类即编译失败）；**表值/Swift 未动** |
 | `packages/renderer` | `configurePageChannelLink`、online 重验、`reverify(id,reason)` |
 
 ## 5. 明确不做（v1）
@@ -248,7 +257,8 @@ mutation → `MutationOutcomeUnknownError`（不得重试）；非 mutation →
 23. registration key 的**编码**已对象化（`registrationKey({url,transport,headers,spkiPin,authority})`）：位置漂移在类型上不可能，五个字段都是 string（spkiPin/authority 互换仍能编译），由 key 的字段顺序编码、碰撞用例与四调用点的字段映射测试兜住；四个调用点的**字段装配**仍来自不同事实源（状态推送 / refresh facts / onVerified），只共享编码与指纹。onVerified 的指纹门仍只比较 headers 子集，其余字段变化由状态推送的 key 比较兜住。
 24. connect 期 verifyUp 有与 ready 探针相同的外层期限（provider 声明预算）与可取消 signal（期限到点/disconnect 都会 abort）；两条 provider 腿都已透传（ssh：`verifyDshEndpoint`/`probeDshSignature`/`verifyGatewayEndpointViaTunnel`；gateway：`verifyGatewayRuntimeIdentity`→`boundedGatewayRequest`），provider 若忽略 signal 仍只会跑到自己的超时。该期限（gateway 35s）**可以长于** `READY_TIMEOUT_MS`（10s，只管端口/可达性）：一个慢但成功的复合复验不应被 ready 期限杀掉；若失败，重试路径照常。gateway 的**口令登录腿**（`ensureSession`）不在 signal 覆盖内：会话管理器只在 `invalidate` 时递增 generation，围栏（`generationIsCurrent`/`verifiedCookieIsCurrent`）能挡住的正是「探针失败后又被外部 invalidate」的迟到登录；一个从未 invalidate 的迟到登录可能完成并写缓存，这是登录腿的已知边界（它不写注册态，下一次探针会重新判定）。
 25. 每连接 agent 池已有**真实 socket** 用例（同连接复用、两条连接各自成池、替换/注销后新开连接）；auth 恢复有驱动器级组装用例（见 §6.15）；veth+netem 真实链路验收已入库（13 项断言 + opt-in 上传 3 项，含「宽限期内恢复不重连」「reverifyAll 在 ready+down 上 <1.5s 恢复」「20MB@2Mbit 上传期间不判 down」），但真实 WAN/ssh 中继与真机睡眠仍只能人工跑。
-26. `dsh-api-gateway` 的 opening 拒绝后「窗口边缘一次替换」只有代码路径与短窗口用例（mux-self-heal 覆盖替换/防抖/帧增量刷新），没有 60s 真时钟用例：真实窗口长度由 `dsh-stream-state` 的 reducer 表决定，测试用注入时钟覆盖该表。
+26. `dsh-api-gateway` 的 opening 拒绝后「窗口边缘一次替换」只有代码路径与短窗口用例（mux-self-heal 覆盖替换/防抖/帧增量刷新），没有 60s **真时钟**用例：真实窗口长度由 `dsh-stream-state` 的 reducer 表决定，测试用注入时钟覆盖该表。**2026-10 修订**：lane 腿已移出延迟替换（§3.6），新增 300s 虚拟时钟回归用例证明“lane 拒绝不排期”，并新增一条证据型拒绝（opening 期限 → 窗口边缘替换）的**注入时钟完整窗口**用例（仍无真时钟/真机用例）；证据腿的真机 soak 仍开放。
+27. **lane 拒绝不排期后的取舍（2026-10）**：半开载波的兜底从“窗口边必补一次”变为“证据腿之一”——30s 开帧期限（零帧 ⇒ `socketNoFrame`）与 15s 静默 teardown（握手期限不在此列：pre-OPEN 的失败走 non-OPEN bypass 或泵的 maintain 退避，见 §3.6）；最坏多等一个证据预算（合成时序实测 +≈28s，之后立即或下一窗口边缘替换，未发现永久恢复洞）。“已 ready 后静默、且没有新流”的偶发自愈不在载波层：它由渲染器聚合臂的 staleness 常量兜底（http ≈120s / ssh ≈300s，`packages/renderer/src/aggregate-refresh.ts` 的 `AGGREGATE_RECONNECT_HTTP_STALE_MS`/`..._SSH_STALE_MS`；design 14 §D4 把这形态记为传输层看门狗），本改动不改变它。**已知边界（边界赛跑，不是“必漏”）**：`SILENT_TEARDOWN_MIN_MS`（15s）与本地/unknown 的 `generationReadyTimeoutMs`（15s）同值，teardown 判定是 `Date.now() − sentAt`，而 `sentAt` 在握手之后才打 ⇒ readiness 超时中止时该差值 `= 15000 − 握手时延`。虚拟钟下第二轮（socket 已 OPEN、同毫秒）必过；真机取决于定时器迟到是否 ≥ open 发送延迟，**不保证**。登记为开放项，本次不改阈值（改值可做但会扩大“短命零帧”的误判面）。
 
 ## 7. 测试与门禁
 
@@ -261,7 +271,7 @@ mutation → `MutationOutcomeUnknownError`（不得重试）；非 mutation →
 - `dsh-client-connection`（vendor fork）：502/504 + after-body ⇒「可能已生效」分类文案；无 mark/非 JSON/超长体（边读边判 4KiB 上限）保持原 transport 文案。
 - `desktop/transport-identity`：raw id ⇄ connectionId 的换算 + 两个 seam 适配器（manager ⇄ plane 双向，含连字符 id 与畸形 id）。
 - `desktop/gateway-provider`：abort 的探测归类（`boundedGatewayRequest` → network、`timedOut=false`；`verifyGatewayRuntimeIdentity` → 非终态 network failure）。
-- `dsh-api-gateway`：mux self-heal 用例（非 OPEN bypass + `carrier-rebuild-bypass` 取证 + lane 拒绝到期一次替换 + 防抖）；opening 拒绝的延迟替换只有代码路径，无真时钟用例（见 §6）。
+- `dsh-api-gateway`：mux self-heal 用例（非 OPEN bypass + `carrier-rebuild-bypass` 取证 + **lane 拒绝不排期（300s 虚拟时钟回归）** + **证据型拒绝仍在窗口边缘替换一次（60s 注入时钟）** + 防抖）；opening/teardown 证据腿的真机 soak 仍开放（见 §6.26/§6.27）。
 - **veth+netem 真实链路验收**（`pnpm run acceptance:netem`，root+CAP_NET_ADMIN，不入 CI，13 项断言 + opt-in 上传 3 项）：300ms RTT+2% 丢包下 ready、never down、heals；黑洞 → suspect → down 且相位在宽限期内保持 ready；宽限期内强制探针恢复**且相位历史无 connecting**；超宽限期离 ready 且**距观测到的 down 边沿 ≥ 2.5s**（实测 3005ms vs grace 3000ms）；恢复后重连成功；`reverifyAll`（OS resume/online）在 ready+down 上 **<1.5s** 恢复（周期节奏为 5s，故只可能来自强制 seam）；**opt-in `NETEM_BULK_UPLOAD=1`**：20MB@2mbit 经真实实例代理完成、busy 窗口观测为真、上传期间链路从不判 down（manager 的 `linkBusy` 即生产接线）。真实 WAN/ssh 中继与真机睡眠仍需一次人工确认。
 
 ## 8. Rejected alternatives
@@ -296,5 +306,26 @@ mutation → `MutationOutcomeUnknownError`（不得重试）；非 mutation →
   阶梯跨 epoch 继续爬升，30s 稳定窗才归零。
 - **registration key 继续用五个位置参数**：五个字符串互换在类型上合法，会把真实重注册
   静默变成 health-only；改为对象签名，位置错误变成类型错误。
+- **给 lane 拒绝也排一次延迟替换**（旧形态）：把“每窗口最多一次重建”的上限变成 60s
+  排期；每次排期执行都杀掉新 socket 上活着的代际，制造下一次 lane 拒绝，健康载波上形成
+  一分钟一次重建（真实模块 + 生产退避复现为 5 次/5 分钟，socket 寿命恒 60000ms）。拒绝。
+- **把“证据 vs 启发式”的分类留在执行器**（denylist）：看似只动 fork 一行，但把共享包的
+  判定搬进执行器，违反 design 14 §D4 ① 与 `dsh-stream-state` 的“消费方不得自带策略”；
+  且 denylist 对**未来新增的启发式 reason** 是 fail-open（会静默复发同类节拍器）。改为
+  `dsh-stream-state` 的模块内穷尽表（`REBUILD_REASON_KIND`）+ 导出谓词
+  `isEvidenceBackedRebuild`（新 reason 不分类即编译失败），执行器只剩一行判定。
+- **用帧增量单独判“载波健康”并据此跳过/强制重试**（例如 arm 时 `socketFrames > 0`）：
+  arm 时新 socket 恰好 0 帧（generation source 在 sink 之后才 open），production 时序下与
+  旧形态逐项相同；若挪到到期点单独判，又会按“30s 前有过 ready 帧”误判静默载波。拒绝。
+  （实现保留的是另一件事：parked 期间到达的帧作为 **fresh delta 交给 reducer 观察**
+  （`framesAtArm`/`arrivedWhileParked`/`freshFrames`），由 `delivered` 判定决定是否
+  `silent-not-proven`，那是既有语义，不是本方案的健康判据。）
+- **用 `phase === 'silent'` 判静默**：reducer 没有任何事件写入 `'silent'`（`carrier.ts`
+  里唯一提到它的分支只会 silent→open），OPEN 的静默 socket 仍是 `'open'`，等价于“窗口边一律不重试”，会吞掉
+  证据型替换（实测把真死载波的重建从 91s 推到 96.6s）。拒绝。
+- **把重试原因（timeout/lost/manual）下传到载波层**：就绪超时不是载波证据（慢宿主同样
+  超时）；pending retry 只在新 socket open 时被清、generation 恢复不清，超时后宿主变 ready
+  仍会在边缘重建健康 socket——把同一类假阳性换个成因，且要跨 fork 改公开类型。拒绝
+  （若将来要做，先做“generation ready 取消 pending retry”）。
 - **让官方 unary 自动重试 after-body 失败**：官方链路本来无重试，且重试会复制 mutation；
   只在 fork 侧把该 502/504 分类成「可能已生效」，不改重试语义。

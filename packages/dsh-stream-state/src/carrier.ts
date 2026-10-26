@@ -81,6 +81,37 @@ export function earliestRebuildAt(state: CarrierState, env: CarrierEnv, at: numb
   return earliest
 }
 
+/**
+ * Which rebuild requests carry CARRIER EVIDENCE, and which are only a heuristic.
+ *
+ * The reducer owns this classification (design 14 §D4: the executor performs effects
+ * and must not encode policy of its own). `laneReconnect` is the connection lane
+ * reacting to a lost or possibly-stale generation - a heuristic: lane loss is
+ * EDGE-TRIGGERED (every failed generation requests again while the carrier is unusable,
+ * and stops asking once a generation is ready), whereas a timer cannot tell "the
+ * carrier is bad" from "the generation happened to restart". A real carrier fault
+ * always re-requests with its own evidence (expired opening, silent teardown), so a
+ * lane request never needs a window-edge retry against the carrier.
+ *
+ * The record is EXHAUSTIVE over {@link RebuildReason} on purpose: adding a reason
+ * without classifying it here is a compile error, so a future heuristic cannot
+ * silently inherit the evidence-backed window-edge retry.
+ */
+type RebuildReasonKind = 'evidence' | 'heuristic'
+
+const REBUILD_REASON_KIND: Readonly<Record<RebuildReason, RebuildReasonKind>> = {
+  socketNoFrame: 'evidence',
+  openingStall: 'evidence',
+  teardownNoFrame: 'evidence',
+  handshakeTimeout: 'evidence', // classified for completeness; this driver emits no such request
+  laneReconnect: 'heuristic',
+}
+
+/** Whether a refused rebuild of this reason is worth retrying at the rebuild window's edge. */
+export function isEvidenceBackedRebuild(reason: RebuildReason): boolean {
+  return REBUILD_REASON_KIND[reason] === 'evidence'
+}
+
 /** Whether an opening-stall count has PROVEN the streak threshold (finite only). */
 function isStallProven(streak: number | undefined, threshold: number): boolean {
   if (streak === undefined || !Number.isFinite(streak)) return false

@@ -128,6 +128,9 @@ const installFakeSocket = (): void => {
   ;(globalThis as { location?: unknown }).location = { origin: 'http://127.0.0.1:17500' }
 }
 
+const count = (facts: readonly string[], kind: string): number =>
+  facts.filter(entry => entry === kind).length
+
 const flushMicrotasks = async (): Promise<void> => {
   for (let index = 0; index < 50; index++) await Promise.resolve()
 }
@@ -401,7 +404,7 @@ test('a lane-commanded reconnect does not widen the mux heal cadence', async (t)
   await client.close()
 })
 
-test('a denied lane rebuild is retried once after the 60s carrier window', async (t) => {
+test('a denied LANE rebuild is not rescheduled (no 60s carrier metronome)', async (t) => {
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
   t.after(() => t.mock.timers.reset())
@@ -428,11 +431,129 @@ test('a denied lane rebuild is retried once after the 60s carrier window', async
   assert.equal(FakeSocket.instances.length, 2, 'the throttle must not replace immediately')
   assert.ok(facts.includes('carrier-throttled'), 'the denial is observable')
 
-  // The denied path arms exactly one deferred replacement at the window edge.
-  t.mock.timers.tick(60_000)
+  // REGRESSION (design 27 §3.6): a lane request is a heuristic, not carrier evidence.
+  // Re-arming this refusal is the 60s metronome — the deferred replacement fails the
+  // live generation on the new socket, the lane retries inside the window, is refused,
+  // and arms the next edge forever. Five windows later nothing may have been armed.
+  t.mock.timers.tick(300_000)
   await flushMicrotasks()
-  assert.equal(FakeSocket.instances.length, 3, 'the window edge replaces the carrier once')
-  assert.ok(facts.includes('carrier-throttle-expired'), 'the deferred retry is observable')
+  assert.equal(FakeSocket.instances.length, 2, 'a refused LANE request must not be rescheduled')
+  assert.equal(facts.includes('carrier-throttle-expired'), false,
+    'no deferred replacement may fire for a heuristic request')
+
+  // The lane's next attempt needs no carrier: the window is free again, the guard never
+  // touched the budget, so this request is ADMITTED and replaces the socket.
+  client.reconnect()
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 3,
+    'the next lane edge is admitted once the window has freed')
+
+  // And a logical stream still lands on the live socket (no reboot of the mux).
+  FakeSocket.instances[2].openNow()
+  await flushMicrotasks()
+  const controller = new AbortController()
+  const iterator = client.open('events', { args: {} }, controller.signal)[Symbol.asyncIterator]()
+  const opening = iterator.next()
+  await flushMicrotasks()
+  const streamId = FakeSocket.instances[2].openStreamId()
+  FakeSocket.instances[2].answerNow(streamId)
+  assert.deepEqual(await opening, { value: { type: 'opened' }, done: false })
+  await iterator.return?.()
+  controller.abort()
+  await client.close()
+})
+
+test('a denied EVIDENCE-backed rebuild is still retried at the 60s carrier window edge', async (t) => {
+  installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  t.after(() => t.mock.timers.reset())
+  const facts: string[] = []
+  const client = new RemoteStreamMuxClient({
+    forensics: (kind) => { facts.push(kind) },
+    waitForReconnect: true,
+  })
+  client.start()
+  await flushMicrotasks()
+  FakeSocket.instances[0].openNow()
+  await flushMicrotasks()
+
+  // Consume the one-rebuild budget so the next request is refused.
+  client.reconnect()
+  await flushMicrotasks()
+  FakeSocket.instances[1].openNow()
+  await flushMicrotasks()
+
+  // A refused LANE request in the same window must not spend the evidence budget: the
+  // guard returns before the per-socket latch is set, so the evidence arm below still
+  // schedules. (This is the "shared latch" hazard the old shape had.)
+  client.reconnect()
+  await flushMicrotasks()
+  assert.equal(count(facts, 'carrier-throttled'), 1, 'the lane refusal is observable')
+
+  // One stream whose opening item never arrives on a socket that delivers no frame:
+  // the 30s opening deadline is real evidence, and the window refuses it.
+  const controller = new AbortController()
+  const iterator = client.open('hang', { args: {} }, controller.signal)[Symbol.asyncIterator]()
+  void iterator.next().catch(() => {})
+  await flushMicrotasks()
+  t.mock.timers.tick(OPENING_TIMEOUT_MS)
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 2, 'an evidence refusal never replaces immediately')
+  assert.equal(count(facts, 'carrier-throttled'), 2, 'the evidence-backed request is refused')
+
+  // EDGE, not "eventually": nothing at 59.999s, the replacement at 60.000s.
+  t.mock.timers.tick(29_999)
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 2, 'no replacement before the window edge')
+  t.mock.timers.tick(1)
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 3, 'the replacement fires exactly at the window edge')
+  assert.ok(facts.includes('carrier-throttle-expired'), 'the evidence-backed retry is observable')
+  await client.close()
+})
+
+test('a denied teardownNoFrame rebuild is still retried at the 60s carrier window edge', async (t) => {
+  installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  t.after(() => t.mock.timers.reset())
+  const facts: string[] = []
+  const client = new RemoteStreamMuxClient({
+    forensics: (kind) => { facts.push(kind) },
+    waitForReconnect: true,
+  })
+  client.start()
+  await flushMicrotasks()
+  FakeSocket.instances[0].openNow()
+  await flushMicrotasks()
+
+  // Consume the one-rebuild budget.
+  client.reconnect()
+  await flushMicrotasks()
+  FakeSocket.instances[1].openNow()
+  await flushMicrotasks()
+
+  // A stream that never sees a frame is torn down by its consumer after the silent
+  // floor: that is the teardown evidence leg, whose refusal must still be rescheduled.
+  const controller = new AbortController()
+  const iterator = client.open('teardown', { args: {} }, controller.signal)[Symbol.asyncIterator]()
+  void iterator.next().catch(() => {})
+  await flushMicrotasks()
+  t.mock.timers.tick(SILENT_TEARDOWN_MIN_MS)
+  await flushMicrotasks()
+  // Abort (not return()): the generator is suspended in inbox.next(), where return()
+  // cannot run the finally; the abort listener settles the episode.
+  controller.abort()
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 2, 'the teardown evidence does not replace immediately')
+  assert.ok(facts.includes('carrier-throttled'), 'the teardown refusal is observable')
+
+  t.mock.timers.tick(60_000 - SILENT_TEARDOWN_MIN_MS - 1)
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 2, 'no replacement before the window edge')
+  t.mock.timers.tick(1)
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 3, 'the teardown evidence fires at the window edge')
+  assert.ok(facts.includes('carrier-throttle-expired'), 'the teardown retry is observable')
   await client.close()
 })
 

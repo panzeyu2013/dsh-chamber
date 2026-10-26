@@ -25,7 +25,8 @@
 - **完成身份/判读窗口**：无锚完成跨通道身份不同（最坏重复一条横幅）；`lastAnchoredSeq` 已有单调记账；消除需上游 `turn/end` 判别符。facts-only 源无 `beforeBaseline` 首见窗口、P2b 行 `identityConfirmed` 门、facts 不可判时读清/武装冻结。
 - **性能遗留（P0–P2）**：五条实机复测 + 全视图 DOM ≤13,000（实测 15,805 含壳 chrome）；已知取舍（蓝点/通知暂停、桥探测 30s 长尾、purged 孤儿键 K=2）；待真机 = 隐藏 ≥60s 唤醒、SVG scope 探针、风暴档发布速率。
 - **Swift 壳性能 A/B**：启动/大载荷 p95/空闲 wakeups 待打包态；`[shell-fps]` 被 `!isPackaged` 编译掉；判据 = 空闲安装率 <200/s、静默 CPU <10%。
-- **页面侧残余**：流级预算表外 2s/8 两份未锁；forensics request/snapshot 半通道、carrier `openingAnswered` 无生产消费者；五条结构性重复/死分支；lane reconnect 注释与行为不符。
+- **页面侧残余**：流级预算表外 2s/8 两份未锁；forensics request/snapshot 半通道、carrier `openingAnswered` 无生产消费者；五条结构性重复/死分支。
+- **载波重建节拍（design 27 §3.6/§6.26/§6.27）**：①真机 soak 待跑——验收判据 = 不再出现「`carrier-throttled[laneReconnect]` → `carrier-throttle-expired` → `carrier-rebuild`」三连；对齐面 = `control-plane.log` 的 `closed (cause, ≈60000ms)` + 页面 `dsh-chamber:stream-forensics`（代理日志不含 close code，要 code 需另加日志）；②15s/15s 边界赛跑（teardown 判定的差值 = `15000 − 握手时延`，首轮取决于定时器迟到）见 §6.27，收紧要动表值，未裁；③聚合看门狗两臂仍会每 120s(http)/300s(ssh)（replay 不刷新 `snapshotAt` 时退化 60s）产生一次**合法**换代际 ⇒ 三处 UI 仍按其节奏闪；「同批处理 vs 接受并写明」未裁；④三条臂的 caller tag 只在 inspector 在场时可见（warn 级不进 console 环），真机 soak 的归因手段待验证。
 
 ### 1.2 通知、未读与归档
 

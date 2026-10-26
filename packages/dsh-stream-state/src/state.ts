@@ -4,7 +4,13 @@
  */
 
 /** Physical carrier phase. `silent` is "WebSocket OPEN but nothing arrives" - the
- * state neither `open` nor `closed` can express. */
+ * state neither `open` nor `closed` can express.
+ *
+ * NOTE (2026-10 scan): no transition assigns `'silent'` today - the frame-silence
+ * verdict lives in the rebuild path (`framesSinceSend`), and `streamFrame` only
+ * transitions silent -> open. The member is kept as the declared vocabulary; a policy
+ * that reads `phase === 'silent'` is currently a no-op (design 27 §8 records why it
+ * cannot stand in for "the carrier is healthy"). Retire or wire it deliberately. */
 export type CarrierPhase = 'connecting' | 'open' | 'silent' | 'replacing' | 'closed'
 
 /**
