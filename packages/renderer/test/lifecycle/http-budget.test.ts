@@ -429,16 +429,20 @@ test('stats percentiles read the positive queue wait, not the zero-wait grants a
     const deadline = new Promise<void>((resolve) => setTimeout(resolve, 40))
     const refused = acquireHttpBudget(request('slow', 'foreground', { queueDeadlineAt: Date.now() + 30 }))
     await Promise.all([deadline, refused])
+    // Free the slot BEFORE the instant grants: leaving the holder in place made the
+    // first grant wait for the 60s lease to be reclaimed by the watchdog, so this one
+    // test took ~65s and crossed the runner's per-file cap whenever the pool was
+    // loaded. The percentile claim is unchanged.
+    holder.slot.release()
     for (let index = 0; index < 20; index += 1) {
       const slot = granted(await acquireHttpBudget(request('fast')))
       slot.slot.release()
     }
-    holder.slot.release()
     const stats = readHttpBudgetStats()
     assert.ok(stats.queueMsP50 >= 15, 'p50 is the real wait (' + String(stats.queueMsP50) + 'ms)')
     assert.ok(stats.queueMsP95 >= 15, 'p95 is not diluted by the 20 instant grants')
     assert.ok(stats.queueMsMax >= 15)
-    assert.equal(stats.zeroWaitGrants, 20)
+    assert.equal(stats.zeroWaitGrants, 21, 'the holder plus the 20 instant grants are all zero-wait')
   } finally {
     resetHttpBudgetForTests()
     restore()
