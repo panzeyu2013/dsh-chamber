@@ -1759,8 +1759,9 @@ Environment=XDG_CONFIG_HOME=${run_home}/.config"
 [Unit]
 Description=dsh-chamber gateway (design 17 server shape)
 After=network.target
-# 惊群上限：临时性启动失败（端口竞态等）最多重试 5 次/60s 就停在 failed，
-# 而不是把 user journal 刷成噪音；确定性失败另由 RestartPreventExitStatus 拦下。
+# 惊群上限：60s 窗口内最多 5 次启动尝试（RestartSec=3 ⇒ 首启 + 约 4 次重启，
+# 约 12–15s 内停到 failed）。它是**速率上限**不是生命周期封顶：间隔 >12s 的崩溃
+# 循环仍会约 4 次/分继续，但不再把 journal 刷成每 3 秒一条。
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
@@ -1779,11 +1780,12 @@ EnvironmentFile=$ENV_FILE
 ExecStart=$(systemd_exec_start "$exec_path")
 Restart=on-failure
 RestartSec=3
-# 退出码 3 = state 根被另一个写者占用（state_root_locked/duplicate）：确定性
-# 失败，重试一万次也不会变好（重启后旧 pid 被别的服务复用时尤其如此）。系统
-# 一次都不重启，单元停在 failed，systemctl status 直接呈现原因；人工修复后用
-# install-gateway.sh restart（内部先 reset-failed）恢复。
-RestartPreventExitStatus=3
+# 不自动重启的退出码：
+#   3 = state 根被另一个写者占用（state_root_locked/duplicate），必然重现；
+#   2 = 配置/用法错误（ExecStart 参数由本单元固定，重试不会改变配置）。
+# 系统一次都不重启，单元停在 failed，systemctl status 直接呈现原因；人工修复后
+# 用 install-gateway.sh restart（内部先 reset-failed）恢复。
+RestartPreventExitStatus=2 3
 
 [Install]
 WantedBy=$(unit_wanted_by)

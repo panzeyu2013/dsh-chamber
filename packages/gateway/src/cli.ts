@@ -35,7 +35,8 @@ Options:
   --state-dir DIR     state root (default $DSH_GATEWAY_STATE > $DSH_CHAMBER_STATE
                       > ~/.dsh-chamber); one state root has exactly ONE writer —
                       a second gateway/serve/standalone on the same root is
-                      refused (exit 1), so pass this or DSH_*_STATE to move it
+                      refused (exit 3 = deterministic, never auto-restarted),
+                      so pass this or DSH_*_STATE to move it
   --dsh-path PATH     builtin anchor dsh workspace (design 18 §9.3 resolution:
                       $DSH_GATEWAY_DSH_PATH env > runtime override > this anchor;
                       default: repo-adjacent checkout if found)
@@ -381,7 +382,8 @@ async function main(): Promise<number | null> {
     // A live writer on this state root is deterministic (exit 3), never a
     // configuration error and never retried automatically: the message names the
     // holder, the evidence and the escape hatch. The systemd unit pins
-    // RestartPreventExitStatus=3 so a reboot/pid-reuse cannot become a restart loop.
+    // RestartPreventExitStatus=2 3 so a reboot/pid-reuse (3) or a bad config (2)
+    // cannot become a restart loop.
     if (error instanceof StateRootLeaseError) {
       logger.error(`${error.code}: ${error.message}`)
       return stateRootLeaseExitCode(error.code)
