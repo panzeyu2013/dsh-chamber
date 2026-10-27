@@ -99,7 +99,8 @@
         "ci": true,
         "release": false
       },
-      "reason": "runs inside the hand-written ci.yml test-macos composite step (the shim shape is macOS-only); release validation has no macOS job. Not a generated step: the macOS leg is hand-maintained and the composite step runs it together with other payload checks."
+      "reason": "runs inside the hand-written ci.yml test-macos composite step (the shim shape is macOS-only); release validation has no macOS job. Not a generated step: the macOS leg is hand-maintained and the composite step runs it together with other payload checks.",
+      "coveredBy": "ci.yml test-macos: Bridge manifest + shim surface + payload shape lockstep"
     },
     {
       "id": "docs.md-links",

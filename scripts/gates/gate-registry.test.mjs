@@ -21,7 +21,7 @@ const fixture = () => ({
   gates: [
     {
       id: 'arch.one', title: 'One', command: 'verify:import-cycles', modes: ['static'], tier: 'architecture',
-      surfaces: { local: true, ci: true, release: true },
+      surfaces: { local: true, ci: true, release: true }, coveredBy: 'ci.yml test: composite step',
     },
     {
       id: 'tests.pkg', title: 'Pkg', command: 'test:runtime', modes: ['tests'], tier: 'test',
@@ -91,6 +91,19 @@ test('a proof gate must be placed on release validation, on a legal ci job and o
   assert.ok(check({ ...base, workflow: { ciJob: 'test', order: 'post' } }).length > 0, 'a workflow without releaseJob must be rejected')
   assert.ok(check({ ...base, workflow: { ciJob: 'test', releaseJob: 'validation', order: 'late' } }).length > 0, 'an invalid order must be rejected')
   assert.deepEqual(check({ ...base, proof: true, workflow: { ciJob: 'test', releaseJob: 'validation', order: 'post' } }), [])
+})
+
+test('a static gate on the ci surface must name its placement', () => {
+  const gate = {
+    id: 'arch.unplaced', title: 'Unplaced', command: 'verify:import-cycles', modes: ['static'], tier: 'policy',
+    surfaces: { local: true, ci: true, release: false }, reason: 'release does not run it',
+  }
+  const check = value => validateGateRegistry({ gates: [value] }, { scripts, exists })
+  assert.match(check(gate).join(';'), /no workflow placement or coveredBy/u,
+    'an unplaced static gate would run locally while never running in CI')
+  assert.deepEqual(check({ ...gate, coveredBy: 'ci.yml test-macos: composite step' }), [])
+  assert.deepEqual(check({ ...gate, surfaces: { local: true, ci: true, release: true },
+    workflow: { ciJob: 'test', releaseJob: 'validation', order: 'post' } }), [])
 })
 
 test('duplicate / malformed ids are rejected', () => {

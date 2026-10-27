@@ -97,6 +97,15 @@ export function validateGateRegistry(registry, { scripts = rootScripts(), exists
         if (workflow.order !== 'pre' && workflow.order !== 'post') problems.push(at + '.workflow.order must be pre or post')
       }
     }
+    // A static gate runs as its own CI step. Without a placement it is derived into
+    // `run-checks static` and never appears in ci.yml while the registry still claims the ci
+    // surface — exactly the drift static-gate-parity caught before it was deleted. A
+    // hand-written composite step (the macOS payload lockstep) must name itself in coveredBy.
+    if (surfaces.ci === true && Array.isArray(gate.modes) && gate.modes.includes('static')
+      && gate.workflow === undefined
+      && (typeof gate.coveredBy !== 'string' || gate.coveredBy.trim() === '')) {
+      problems.push(at + ' is a static gate on the ci surface but has no workflow placement or coveredBy')
+    }
     if (gate.proof !== undefined && typeof gate.proof !== 'boolean') problems.push(at + '.proof must be boolean when present')
     if (gate.proof === true) {
       // A proof gate that is not placed on a job silently leaves REQUIRED_JOB_STEPS
