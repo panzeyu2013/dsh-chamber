@@ -82,7 +82,7 @@
 ### 1.5 平台、发布与外部凭据
 
 - **gateway**：Linux unit 登录环境；ssh/http cookie 注入未覆盖；旧来源插件播种 400（重建未排期）；运维页缺 `recover-metadata`/`cleanup-version`/`restore-pre-rollback`；S0/S2-c 未实现；设计 21 对齐（只读/seed 端到端、tooltip、英文串）。
-- **gateway 启动失败原因对 chamber 不可见**：`state_root_locked` 的 holder 与判定依据只进 journal；客户端只能拿到 socket 级的归因文案（已按 ECONNREFUSED/ECONNRESET/EPIPE 分类并指向 gateway 服务与隧道，`packages/desktop/gateway-session.ts:314`），看不到持有者类别与拒绝依据，把结构化原因回传需要一条新的远程诊断面（读 state 根的启动失败记录或 journal 尾）——未排期，是「错误透传」的剩余部分。
+- **gateway 启动失败原因对 chamber 不可见**：`state_root_locked` 的 holder 与判定依据只进 journal；客户端只能拿到 socket 级的归因文案（已按 ECONNREFUSED/ECONNRESET/EPIPE 分类并指向 gateway 服务与隧道，`packages/desktop/gateway-session.ts` 的登录传输分类），看不到持有者类别与拒绝依据，把结构化原因回传需要一条新的远程诊断面（读 state 根的启动失败记录或 journal 尾）——未排期，是「错误透传」的剩余部分。
 - **租约身份的跨平台残差**：`bootId`/`procStartTicks`/`pidNamespace`/`machineId` 只有 Linux 提供（`packages/control-plane/src/process-identity.ts`）；macOS/Windows 的 v2 记录仍只有启动代际推断（依赖墙钟，步进超过 5 分钟余量时可能误判陈旧），同一启动内的 pid 复用保守锁定（宁锁不双写）。跨机护栏要求记录与本机都读得到 machineId，缺失时按「属主私有、单机」契约处理（design 17 §12）。
 - **运行时安装现场的 pid 判活**：`dsh-runtime` 的 `isPidAlive`（`cleanupStaleInstalls`，`packages/dsh-runtime/src/dsh-runtime-store.ts`）仍按「同号进程存在」判活；安装中硬崩溃 + 重启后 pid 被复用会让清理一直抛「仍有活动写进程」，托管 dsh 起不来。pid 文件只有数字、没有身份元组，修法与本轮租约同形（写 bootId+startTicks），未排期。
 - **install/runtime**：`install` 不同步锚（待裁）；dl 运行时 macOS 全链/Linux/gateway 重连/`restartLocal` 交错/ZFS EAGAIN；上游装载面 `compose()` 10.65MiB、`SubagentHeaderLineage` 缺 class、首帧超时；会话可靠性六项；`protobufjs`/`@google/genai` 待 M2 证据。
