@@ -3,22 +3,19 @@
  * instance-api.ts / plugin-graph-recheck.ts、settings-connections 的
  * plugin-inventory-api.ts、renderer 的 host-graph.ts）各自手写同一套 unary
  * 调用机件，这里只放「同体/同语义」的纯件，零行为差异：
- * - isRecord：函数体逐字同体；只取本包消费方的签名 `Record<string, unknown>`（调用点
- *   只做字符串键读取，收窄差异在该面无行为差异）；
+ * - isRecord：单源在 wire 叶 `@dsh-chamber/dsh-chamber-wire/json-guards`，这里只 re-export
+ *   （renderer / client-core / wire 共享同一实现，不再各存一份同体函数）；
  * - mintRpcId：正文逐字来自 instance-api.ts，crypto.randomUUID 主路径与各载体的裸
  *   调用等价，`rpc-` 回退沿用其零依赖实现（仅全局 crypto/Date/Math）。
  * 未共享：server-response 信封断言/解析、503 instance_unavailable 分类与文案、
  * sleep/delay、路径 basename——各载体动作或文案不同体，共享等于把本地策略配置化。
- * 本模块零运行时依赖、零 node 内建、零 import（renderer composite 静态 import，必须
- * 保持纯浏览器可达）。
+ * 本模块零运行时依赖、零 node 内建，只 import wire 叶（renderer composite 静态 import，
+ * 必须保持纯浏览器可达）。
  */
 
-/** True for any non-null, non-array object (a Record-shaped wire object).
- *  Boundary semantics match the carrier copies verbatim: an empty object and a
- *  Date are records; arrays, null, and non-objects are not. */
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
+/** True for any non-null, non-array object (a Record-shaped wire object) — the wire leaf
+ *  holds the one implementation; empty objects and Dates are records, arrays/null are not. */
+export { isRecord } from '@dsh-chamber/dsh-chamber-wire/json-guards'
 
 /** Correlation id minted per unary request and echoed by the server-response
  *  envelope (verbatim from instance-api.ts). The `rpc-` fallback only fires where
