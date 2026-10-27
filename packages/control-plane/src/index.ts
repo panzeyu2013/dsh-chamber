@@ -1411,7 +1411,7 @@ export {
   SESSION_STATE_PROTOCOL_VERSION,
   SESSION_STATE_SESSION_ID_MAX_CHARS,
   SESSION_STATE_STREAM_PATH,
-} from './session-state-protocol.ts'
+} from '@dsh-chamber/dsh-chamber-wire/session-state'
 export type {
   SessionStateCapability,
   SessionStateCapabilityKind,
@@ -1437,7 +1437,7 @@ export type {
   SessionTurnEndCause,
   SessionTurnEndDisposition,
   SessionTurnEndKind,
-} from './session-state-protocol.ts'
+} from '@dsh-chamber/dsh-chamber-wire/session-state'
 export {
   createSessionMux,
   DEFAULT_BASELINE_TIMEOUT_MS,

@@ -31,7 +31,7 @@ import {
   PAGE_CHANNEL_PATH,
 } from '@dsh-chamber/dsh-chamber-wire/page-channel'
 import { createPageChannel, type PageChannelDeps } from '../../src/page-channel.ts'
-import { SESSION_STATE_STREAM_PATH } from '../../src/session-state-protocol.ts'
+import { SESSION_STATE_STREAM_PATH } from '@dsh-chamber/dsh-chamber-wire/session-state'
 import { clearAuthCookie, registerAuthCookie } from '../../src/browser-auth-cookie.ts'
 import { waitFor } from '../support/utils.ts'
 import { proxyFor } from '../support/proxy-fakes.ts'
@@ -280,7 +280,7 @@ test('上游路由锁步：插件图字面量与 vendor EVENTS_ENDPOINT 一致�
     '通道的插件图上游路径必须与 vendor EVENTS_ENDPOINT 逐字节一致')
   // 会话事实路径不得再写一份字面量：前缀的唯一来源是同包的协议常量。
   assert.ok(source.includes('const SESSION_FACTS_SSE_PATH = SESSION_STATE_STREAM_PATH'),
-    '会话事实上游路径只许引用 session-state-protocol 的常量')
+    '会话事实上游路径只许引用 @dsh-chamber/dsh-chamber-wire 的协议常量')
   assert.equal(SESSION_STATE_STREAM_PATH, '/chamber/session-state/stream')
 })
 

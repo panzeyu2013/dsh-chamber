@@ -1,5 +1,6 @@
 /**
- * session-state-protocol.ts unit tests: descriptor parsing, the
+ * Session-state protocol unit tests (the contract now lives in
+ * @dsh-chamber/dsh-chamber-wire/src/session-state.ts): descriptor parsing, the
  * capability matrix (404 / 503-disabled / unversioned / 5xx+timeout /
  * forward-skew / ok), the frozen feature tuple + coverage net, and the turn/end
  * classification that closes R12 (completed counts; aborted+user does not;
@@ -23,12 +24,11 @@ import {
   SESSION_STATE_ROUTES,
   SESSION_STATE_STREAM_PATH,
   sessionStateFeatureSupport,
-  sessionStateNoteKey,
   type SessionStateFeature,
   type SessionTurnEnd,
   type SessionTurnEndCause,
   type SessionTurnEndKind,
-} from '../../src/session-state-protocol.ts'
+} from '@dsh-chamber/dsh-chamber-wire/session-state'
 
 const OK_DESCRIPTOR = {
   protocol: PROTOCOL_VERSION,
@@ -246,20 +246,6 @@ test('parseSessionStateDescriptor: unknown fields ignored, invalid fields null',
   assert.equal(parseSessionStateDescriptor([1, 2]), null)
 })
 
-// ---------------------------------------------------------------------------
-// 用户可见键
-// ---------------------------------------------------------------------------
-
-test('sessionStateNoteKey: ok is silent; every degraded kind has a unique non-empty key', () => {
-  assert.equal(sessionStateNoteKey('ok'), null)
-  const keys = new Set<string>()
-  for (const kind of ['legacy-gateway', 'disabled', 'unversioned', 'unavailable', 'forward-skew'] as const) {
-    const key = sessionStateNoteKey(kind)
-    assert.ok(typeof key === 'string' && key.length > 0, kind)
-    keys.add(key)
-  }
-  assert.equal(keys.size, 5)
-})
 
 // ---------------------------------------------------------------------------
 // turn/end 分类（R12）

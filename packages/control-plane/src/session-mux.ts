@@ -28,18 +28,29 @@ import {
   type SessionTurnEnd,
   type SessionTurnEndCause,
   type SessionTurnEndKind,
-} from './session-state-protocol.ts'
+} from '@dsh-chamber/dsh-chamber-wire/session-state'
+import {
+  REMOTE_EVENT_STREAM_ENDPOINT,
+  REMOTE_STREAM_MUX_PATH,
+  buildSessionFollowPayload,
+  parseGoalActivationFact,
+  parseProjectedGoalFact,
+} from '@dsh-chamber/dsh-chamber-wire/mux-frame'
+import { isRecord, isWatermark } from '@dsh-chamber/dsh-chamber-wire/json-guards'
 import { errorMessage } from './error-text.ts'
 
 /**
- * Exact WebSocket route carrying every Typert Remote stream; the values mirror
- * packages/dsh-api-gateway/src/stream-protocol.ts (the in-repo copy of the pinned vendor
- * wire). This package must not depend on that package; the literals are pinned against its
- * source so a vendor rename fails loud.
+ * Exact WebSocket route carrying every Typert Remote stream. The literals now live in the
+ * wire leaf (@dsh-chamber/dsh-chamber-wire/mux-frame) and are re-exported here so this
+ * package's public face is unchanged; the pin against
+ * packages/dsh-api-gateway/src/stream-protocol.ts stays a loud-fail contract there.
  */
-export const REMOTE_STREAM_MUX_PATH = '/api/remote.mux'
-/** Gateway-internal logical stream carrying the forwarded event family. */
-export const REMOTE_EVENT_STREAM_ENDPOINT = '$events'
+export {
+  FOLLOW_MAX_MESSAGES,
+  REMOTE_EVENT_STREAM_ENDPOINT,
+  REMOTE_STREAM_MUX_PATH,
+  buildSessionFollowPayload,
+} from '@dsh-chamber/dsh-chamber-wire/mux-frame'
 /** Unary endpoint answering one delivered waterfall. */
 export const REMOTE_EVENT_RESULT_ENDPOINT = '$events/result'
 /** Empty standard Remote payload opening the forwarded-event stream. */
@@ -61,8 +72,6 @@ export const DEFAULT_MUX_RECONNECT_MAX_MS = 15_000
 export const DEFAULT_BASELINE_TIMEOUT_MS = 15_000
 /** One-shot follow deadline; the completion edge read must stay bounded. */
 export const DEFAULT_FOLLOW_TIMEOUT_MS = 2_000
-/** How many tail messages a completion-edge follow asks for. */
-export const FOLLOW_MAX_MESSAGES = 8
 /** Bound on frames queued behind an in-flight baseline before the queue is dropped and a fresh reconciliation requested. */
 export const MAX_QUEUED_EVENTS_FRAMES = 256
 /** `session/list` response cap: a full baseline can exceed the 1 MiB unary default, so the baseline call raises it deliberately. */
@@ -331,40 +340,6 @@ export function parseRemoteEventFrame(value: unknown): RemoteEventFrame | null {
   return { type: 'unknown' }
 }
 
-/**
- * Project the `goal` key out of one `session/list` item's projection block.
- * The pinned host value is
- * `{ goal: { id, revision, objective, phase, blockedReason?, maxGoalRounds }, roundsStarted, createdAt, updatedAt } | null`;
- * ONLY id/revision/phase/updatedAt survive this projector — objective and
- * blockedReason are dropped here by construction (privacy whitelist).
- * @param value - one untrusted `session/list` item.
- * @returns `undefined` = key absent or shape unparsable (unknown; never
- *   silently "no goal"), `null` = explicit no current goal, an object = the
- *   whitelisted fact.
- */
-function parseProjectedGoalFact(value: Record<string, unknown>): SessionStateGoalFact | null | undefined {
-  const projections = value.projections
-  if (!isRecord(projections)) return undefined
-  const values = projections.values
-  if (!isRecord(values) || !Object.hasOwn(values, 'goal')) return undefined
-  const raw = values.goal
-  if (raw === null) return null
-  if (!isRecord(raw) || !isRecord(raw.goal)) return undefined
-  const id = raw.goal.id
-  const revision = raw.goal.revision
-  const phase = raw.goal.phase
-  if (typeof id !== 'string' || id.length === 0) return undefined
-  if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1) return undefined
-  if (typeof phase !== 'string' || !GOAL_PHASES.has(phase)) return undefined
-  const fact: SessionStateGoalFact = {
-    goalId: id,
-    revision,
-    phase: phase as SessionStateGoalFact['phase'],
-  }
-  if (isWatermark(raw.updatedAt)) fact.updatedAt = raw.updatedAt
-  return fact
-}
-
 /** Project one untrusted `session/list` item through the privacy whitelist. */
 export function parseSessionListBaselineItem(value: unknown): SessionListBaselineItem | null {
   if (!isRecord(value)) return null
@@ -401,12 +376,6 @@ export function parseSessionListBaselineItems(value: unknown): SessionListBaseli
     items.push(item)
   }
   return items
-}
-
-/** One-shot `session/follow` request for a completion edge (exactly one
- *  follow per observed true→false edge; never N resident follow streams). */
-export function buildSessionFollowPayload(sessionId: string, maxMessages = FOLLOW_MAX_MESSAGES): unknown {
-  return { args: { request: { address: { kind: 'session', sessionId }, maxMessages } } }
 }
 
 /** Deterministic exponential backoff delay for one reconnect attempt
@@ -563,15 +532,8 @@ const USER_QUESTIONS_EVENT = 'user-questions/request'
  *  `{ sessionId, goal?: { id, revision, activation } }`. Its emit-type delivery
  *  has no replay, so a missed edge degrades activation to unknown. */
 const GOAL_ACTIVATION_CHANGED_EVENT = 'goal/activation-changed'
-const GOAL_PHASES: ReadonlySet<string> = new Set(['active', 'paused', 'blocked', 'complete'])
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
 
-function isWatermark(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
-}
 
 /**
  * Create one session-state mux. It connects lazily (start/kick), reconciles a full
@@ -846,25 +808,19 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
       return
     }
     if (event === GOAL_ACTIVATION_CHANGED_EVENT) {
-      const payload = args[0]
-      if (!isRecord(payload)) return
-      const sessionId = payload.sessionId
-      if (typeof sessionId !== 'string' || sessionId.length === 0) return
-      // `goal` absent = the host reports no current goal; a present view carries
-      // the activation and the exact goal id it belongs to (identity binding).
-      const goal = payload.goal
-      if (goal === undefined) {
-        deps.onGoalActivation?.({ sessionId, goalId: null, activation: null })
-        return
+      // Wire leaf owns the shape rules: `goal` absent = no current goal, a present
+      // non-record goal / unknown activation = shape drift, a missing id = unbound
+      // edge (identity binding). This layer only maps the fact onto the three-variant
+      // event union.
+      const fact = parseGoalActivationFact(args[0])
+      if (fact === null) return
+      if (fact.activation === null) {
+        deps.onGoalActivation?.({ sessionId: fact.sessionId, goalId: null, activation: null })
+      } else if (fact.goalId === null) {
+        deps.onGoalActivation?.({ sessionId: fact.sessionId, goalId: null, activation: fact.activation })
+      } else {
+        deps.onGoalActivation?.({ sessionId: fact.sessionId, goalId: fact.goalId, activation: fact.activation })
       }
-      if (!isRecord(goal)) return
-      const activation = goal.activation
-      if (activation !== 'armed' && activation !== 'disarmed') return
-      const id = goal.id
-      // A missing/empty id is an unbound edge (null); it may act on the row's
-      // current known goal, never guessed onto the previous goal's row.
-      const goalId = typeof id === 'string' && id.length > 0 ? id : null
-      deps.onGoalActivation?.({ sessionId, goalId, activation })
       return
     }
     // api-session/error and every other forwarded event are dropped without reading their payload.

@@ -8,7 +8,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { PROTOCOL_VERSION } from '../../../control-plane/src/session-state-protocol.ts'
+import { PROTOCOL_VERSION } from '@dsh-chamber/dsh-chamber-wire/session-state'
 import {
   MAX_PENDING_GOAL_ACTIVATIONS,
   createChamberSessionState,

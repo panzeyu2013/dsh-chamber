@@ -20,7 +20,7 @@
 |---|---|---|
 | 会话状态检测 | **已有事实源**：06 §4 运行时事实通道——每个已挂载 ctx 的侧边栏插件注册 generation-safe runtime producer，上报每会话 `{running, completed, pending}`（运行位按官方 `status?.running ?? row.running` 解析；`completed` = 官方 `sessionStatus.completionUnread` 位，稀疏携带，App 只 OR 入一条修正臂——**有壳**隐藏来源的 `current` 行 ∪ **无壳**（facts-only provenance）来源的逐行 host 运行边沿，06 §4.2；facts 行集 = 顶层会话，子代理行已在源侧排除）（`pending = 'approval' \| 'plan-review' \| 'question'`，来自 vendor sessions store 的实时 mux 交互状态） | `packages/dsh-chamber-client-ui-sidebar/src/client/index.ts`；`packages/renderer/src/App.tsx` |
 | 会话标题/来源 label | App 聚合已持有（`aggregates[sourceId].sessions[].title`、`server.label`） | `App.tsx` `deriveServers` |
-| goal 活性事实 | 运行时事实行 `goal?: GoalFact \| null`（三值：缺席 = unknown / `null` = 明确无 goal / 对象 = 有 goal；`{goalId, revision, phase, activation?, updatedAt?}`）。P1 来自挂载壳的会话投影 `projectionValues.goal`，P2a/P2b 来自只读 `session/list` 投影 + `$events` 的 activation 事件 | `packages/dsh-chamber-client-core/src/derive.ts`、`packages/control-plane/src/session-state-protocol.ts`（06 §4.1、17 §10.7） |
+| goal 活性事实 | 运行时事实行 `goal?: GoalFact \| null`（三值：缺席 = unknown / `null` = 明确无 goal / 对象 = 有 goal；`{goalId, revision, phase, activation?, updatedAt?}`）。P1 来自挂载壳的会话投影 `projectionValues.goal`，P2a/P2b 来自只读 `session/list` 投影 + `$events` 的 activation 事件 | `packages/dsh-chamber-client-core/src/derive.ts`、`packages/dsh-chamber-wire/src/session-state.ts`（06 §4.1、17 §10.7；浏览器经 client-core 的 `./session-state` 具名面） |
 | 窗口隐藏场景 | 设计 14：关窗 hide 到托盘 / macOS 无窗常驻——**窗口不可见时用户对会话完成与等待输入一无所知**（蓝点/pending 徽标只在窗口内） | 设计 14 |
 | 设置存储 | chamber 全局设置 `chamber-settings.json`（主进程权威、`dsh-chamber:settings-get/set` IPC + push、`validatePatch` 白名单） | `packages/desktop/chamber-settings.ts` |
 
@@ -1225,8 +1225,8 @@ OpenChamber 参考实现：`packages/electron/main.mjs` 的 `desktop_tray_update
   仍应用」的 F14 回归、B4-1 缓存上限 2000/LRU/warn-once/`evictedCount` 诊断回归、
   禁 `goals/get` 源文本锁）、`session-row-state`（两个门与压制后
   state）与 `todo-attention` 的 goal 压制用例。
-- `test:control-plane`：`session-state-protocol` 的可选 capability（
-  `session-state.goal` 绝不进 BASE/缺失不降级）与 `session-mux` 的 goal 白名单投影/
+- `test:control-plane`：wire 叶子 `packages/dsh-chamber-wire/src/session-state.ts`
+  的可选 capability（`session-state.goal` 绝不进 BASE/缺失不降级）与 `session-mux` 的 goal 白名单投影/
   activation 路由用例。`test:gateway`：`session-state` 的 goal 合并/持久化（activation
   剥除）、ready 边沿清空、旧端矩阵 fixture 的 additive 步与 features 宣告。
 - `test:settings-bridge`：通知设置纯函数（模块 `notifications-settings.ts`；用例在

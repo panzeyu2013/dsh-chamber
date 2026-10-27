@@ -62,7 +62,7 @@ import {
   WS_PING_MISSES_BEFORE_TEARDOWN,
   type HttpRequestFactory,
 } from './proxy-forward.ts'
-import { SESSION_STATE_STREAM_PATH } from './session-state-protocol.ts'
+import { SESSION_STATE_STREAM_PATH } from '@dsh-chamber/dsh-chamber-wire/session-state'
 import { attachSpkiPinVerifier } from './spki-pin.ts'
 import type { Logger } from './types.ts'
 import type { ApiRequest } from './api.ts'
@@ -76,7 +76,7 @@ const PLUGIN_GRAPH_SSE_PATH = '/plugins/events'
 
 /**
  * 上游会话事实 SSE：gateway 能力面。**不写字面量**——路由前缀的单一来源是
- * session-state-protocol.ts 的 SESSION_STATE_STREAM_PATH（同包，重命名即跟着走）。
+ * wire 叶 (@dsh-chamber/dsh-chamber-wire/session-state) 的 SESSION_STATE_STREAM_PATH。
  */
 const SESSION_FACTS_SSE_PATH = SESSION_STATE_STREAM_PATH
 

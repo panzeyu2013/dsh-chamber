@@ -66,6 +66,7 @@
  * state machine is node:test-runnable.
  */
 import type { InstanceRuntimeReport } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import { parseGoalActivationFact } from '@dsh-chamber/dsh-chamber-client-core/mux-frame'
 import type { GoalFact } from '@dsh-chamber/dsh-chamber-client-core/session-row-state'
 
 /** The two deterministic activation values of the forwarded event. */
@@ -142,6 +143,16 @@ export function parseGoalActivationEvent(
       : undefined
   if (sessionId === undefined) return undefined
   if (Object.hasOwn(record, 'goal')) {
+    // Frozen wire shape: the wire leaf owns the rules (goal absent = no goal, a
+    // non-record goal / unknown activation = drift, a missing id = unbound).
+    if (typeof record.sessionId === 'string' && record.sessionId !== '') {
+      const fact = parseGoalActivationFact(record)
+      if (fact === null) return undefined
+      return fact.goalId === null
+        ? { sessionId: fact.sessionId, activation: fact.activation }
+        : { sessionId: fact.sessionId, activation: fact.activation, goalId: fact.goalId }
+    }
+    // Legacy id-alias shape keeps the local rules (the pinned wire never emits it).
     const goal = record.goal
     if (goal === undefined) return { sessionId, activation: null }
     if (goal === null || typeof goal !== 'object' || Array.isArray(goal)) return undefined

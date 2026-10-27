@@ -2,13 +2,14 @@
  * Gateway session-state facts source。只读、浏览器安全（零 Node import；unary 面只用
  * fetch / 定时器，增量面走 page-channel 的 `sessionFacts` 逻辑订阅）。
  *
- * 分类**粗粒度且只有一份**：classifySessionFactsProbe 是本客户端唯一分类器（权威分类器在
- * control-plane 的 session-state-protocol，状态语义逐条对齐；本包不能 import 它）；probe
+ * 分类**粗粒度且只有一份**：classifySessionFactsProbe 是本客户端唯一分类器（协议常量、wire
+ * 类型与 turn-end 分类器的唯一实现在 @dsh-chamber/dsh-chamber-wire/session-state，经
+ * client-core 的具名面进入浏览器；本文件只保留客户端防御性投影）；probe
  * 与对账重取都调用它，模块内不得再内联判定：404 ⇒ legacy-gateway（首探从未有过协议行 =
  * 空权威快照；曾有历史后 = 保留旧行 + 标不可用）；503 + session_state_disabled / mode off
  * ⇒ watcher-disabled；其余非 ok ⇒ degraded；2xx 且 protocol 命中 ⇒ ok。共享字面量（route
- * 路径 / protocol / session_state_disabled / serviceable / completedAtSource）是跨包单一
- * 来源，不得本地改写。
+ * 路径 / protocol / session_state_disabled / serviceable / completedAtSource）来自 wire 单源，
+ * 本文件的同名导出一律是它的别名，不得回写字面量。
  *
  * 两面纪律：**权威面**永远是 unary 快照（探测/对账走 SESSION_FACTS_ROUTE；网关快照是权威
  * 行集，绝不依赖通道）。**增量面**是通道订阅：一条页面 WS 上的逻辑流，事件名 + data 原文与
@@ -20,14 +21,14 @@
  * **绝不**带 title/cwd/消息。
  */
 
-/** 快照路由后缀；与 control-plane 的 SESSION_STATE_PATH 逐字节相同（跨包锁步，不得本地改写）。 */
-export const SESSION_FACTS_ROUTE = '/chamber/session-state'
+/** 快照路由后缀（单源 = wire 的 SESSION_STATE_PATH；本文件不再写第二份字面量）。 */
+export const SESSION_FACTS_ROUTE = SESSION_STATE_PATH
 
-/** 本客户端支持的接口主版本；与 control-plane 的 PROTOCOL_VERSION 锁步。 */
-export const SESSION_FACTS_PROTOCOL_VERSION = 1
+/** 本客户端支持的接口主版本（单源 = wire 的 PROTOCOL_VERSION）。 */
+export const SESSION_FACTS_PROTOCOL_VERSION = PROTOCOL_VERSION
 
-/** 503 kill-switch body 的稳定错误码（锁步字面量）。 */
-export const SESSION_FACTS_DISABLED_CODE = 'session_state_disabled'
+/** 503 kill-switch body 的稳定错误码（单源 = wire）。 */
+export const SESSION_FACTS_DISABLED_CODE = SESSION_STATE_DISABLED_CODE
 
 /** 探测超时（一次调用预算 5s；control-plane 的探测路由同预算，两侧各自持有字面量）。 */
 export const SESSION_FACTS_PROBE_TIMEOUT_MS = 5_000
@@ -60,6 +61,18 @@ export const SESSION_FACTS_DIAGNOSTICS_REFETCH_MAX = 3
  */
 export const SESSION_FACTS_DIAGNOSTICS_REFETCH_MIN_MS = 30_000
 
+import {
+  PROTOCOL_VERSION,
+  SESSION_STATE_DISABLED_CODE,
+  SESSION_STATE_PATH,
+  type SessionStateCompletedAtSource,
+  type SessionStateGoalFact,
+  type SessionStateMode,
+  type SessionStatePendingKind,
+  type SessionStateRow,
+  type SessionTurnEndCause,
+  type SessionTurnEndKind,
+} from '@dsh-chamber/dsh-chamber-client-core/session-state'
 import { isWatermark } from './watermark.ts'
 import { isPlainRecord } from './plain-record.ts'
 import { hadSchedulingGap, recordEvidence } from '@dsh-chamber/dsh-chamber-client-core'
@@ -75,21 +88,15 @@ export type SessionFactsDegradation =
   | 'forward-skew'
   | 'unavailable'
   | null
-export type SessionFactsMode = 'sse' | 'poll' | 'off'
-export type SessionFactsPendingKind = 'approval' | 'question'
-export type SessionFactsCompletedAtSource = 'observed' | 'reconstructed'
+export type SessionFactsMode = SessionStateMode
+export type SessionFactsPendingKind = SessionStatePendingKind
+export type SessionFactsCompletedAtSource = SessionStateCompletedAtSource
 export type SessionFactsRowHint = 'added' | 'removed' | 'changed'
 
-/** wire turn/end.reason.kind 族（与协议模块的 SessionTurnEndKind 同词汇）。 */
-export type SessionFactsTurnEndKind =
-  | 'completed'
-  | 'aborted'
-  | 'blocked'
-  | 'error'
-  | 'max-tokens'
-  | 'interrupted'
-/** wire aborted cause 族（缺失 = 字段缺席，绝不臆造 legacy）。 */
-export type SessionFactsTurnEndCause = 'user' | 'parent' | 'hook' | 'disposed' | 'legacy'
+/** wire turn/end.reason.kind 族（单源 = wire 的 SessionTurnEndKind）。 */
+export type SessionFactsTurnEndKind = SessionTurnEndKind
+/** wire aborted cause 族（单源 = wire 的 SessionTurnEndCause）。 */
+export type SessionFactsTurnEndCause = SessionTurnEndCause
 
 /** 判定输入；形状与 client-core 的 TurnEndFact 结构兼容（完成观测/通知投影共用）。 */
 export interface SessionFactsTurnEnd {
@@ -104,16 +111,10 @@ export interface SessionFactsTurnEnd {
  * activation?,updatedAt?}）。renderer 侧与 sidebar 的 GoalFact 同形但不 import
  * （本模块保持低层、只吃 wire）；**绝不带 objective/blockedReason**。
  */
-export interface SessionFactsGoalFact {
-  goalId: string
-  revision: number
-  phase: 'active' | 'paused' | 'blocked' | 'complete'
-  activation?: 'armed' | 'disarmed'
-  updatedAt?: number
-}
+export type SessionFactsGoalFact = SessionStateGoalFact
 
 /** 一行会话事实（wire SessionStateRow 的防御性投影）。 */
-export interface SessionFactsRow {
+export interface SessionFactsRow extends Omit<SessionStateRow, 'lastRunningAt' | 'lastTurnEnd'> {
   sessionId: string
   running: boolean
   pendingKind: SessionFactsPendingKind | null

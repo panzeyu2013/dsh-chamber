@@ -34,7 +34,7 @@ import {
   type SessionListBaselineItem,
   type SessionMux,
 } from '../../src/session-mux.ts'
-import { classifyTurnEnd, type SessionStatePendingKind } from '../../src/session-state-protocol.ts'
+import { classifyTurnEnd, type SessionStatePendingKind } from '@dsh-chamber/dsh-chamber-wire/session-state'
 
 const wait = (ms: number) => new Promise<void>(resolve => { setTimeout(resolve, ms) })
 const flush = async () => { await wait(0); await wait(0) }

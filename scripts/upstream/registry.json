@@ -564,9 +564,9 @@
         "packages/renderer/test/session-state/source-mux-facts-goal.test.ts"
       ],
       "symbols": [
-        "packages/renderer/src/source-mux-facts.ts#parseProjectedGoalFact",
-        "src/session-state-protocol.ts#SessionStateGoalActivationEvent",
-        "src/session-state-protocol.ts#SessionStateGoalFact"
+        "packages/dsh-chamber-wire/src/session-state.ts#SessionStateGoalActivationEvent",
+        "packages/dsh-chamber-wire/src/session-state.ts#SessionStateGoalFact",
+        "packages/renderer/src/source-mux-facts.ts#parseProjectedGoalFact"
       ],
       "evidence": "人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验",
       "status": "accepted",

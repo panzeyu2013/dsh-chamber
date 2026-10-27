@@ -25,6 +25,18 @@
       "types": "./src/runtime-status.ts",
       "default": "./src/runtime-status.ts"
     },
+    "./mux-frame": {
+      "types": "./src/mux-frame.ts",
+      "default": "./src/mux-frame.ts"
+    },
+    "./json-guards": {
+      "types": "./src/json-guards.ts",
+      "default": "./src/json-guards.ts"
+    },
+    "./session-state": {
+      "types": "./src/session-state.ts",
+      "default": "./src/session-state.ts"
+    },
     "./package.json": "./package.json"
   },
   "license": "MIT"

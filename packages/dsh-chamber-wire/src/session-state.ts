@@ -1,18 +1,22 @@
 /**
- * Session-state wire contract — THE single source for the read-only
- * /chamber/session-state facts shared by the watcher server (gateway), the desktop
- * session-facts probe and the renderer's fact projection.
+ * Session-state wire contract — the single source for the read-only /chamber/session-state
+ * facts shared by the watcher server (gateway), the desktop probe and the renderer.
  *
- *   - `protocol` is the INTERFACE version, independent of product version; unknown
- *     feature ids are ignored and never degrade the source.
+ * Moved here from packages/control-plane/src/session-state-protocol.ts: the contract is
+ * a host↔client wire, and the browser half may not import a host package. Host-specific
+ * transport, persistence and scheduling stay in each host.
+ *
+ *   - protocol is the INTERFACE version, independent of product version; unknown feature
+ *     ids are ignored and never degrade the source.
  *   - Only HTTP 404 is a VERSION fact (legacy-gateway); 5xx and timeouts are
  *     unavailable — a starting gateway must never be labelled "not upgraded".
- *   - A missing advertised-required feature ⇒ forward-skew with the exact ids.
- *   - `completedAtSource` distinguishes an observed completion edge from a gap
+ *   - A missing advertised-required feature => forward-skew with the exact ids.
+ *   - completedAtSource distinguishes an observed completion edge from a gap
  *     reconstruction; only an observed completion may feed a notification.
- *   - `completed` counts as a completion, `aborted`+cause=user is a user stop
- *     (never unread), the rest neutral.
+ *   - completed counts as a completion, aborted+cause=user is a user stop, the rest neutral.
  */
+
+import { isPlainRecord, isWatermark } from './json-guards.ts'
 
 /**
  * Interface major version of the /chamber/session-state wire. A semantic change
@@ -31,6 +35,9 @@ export const SESSION_STATE_PATH = '/chamber/session-state'
 /** SSE increment route; `id:` is a monotonic per-source cursor and
  *  `Last-Event-ID` resumes from it (heartbeat comments never carry an id). */
 export const SESSION_STATE_STREAM_PATH = `${SESSION_STATE_PATH}/stream`
+
+/** Stable kill-switch code carried by a 503 body (observer switched off). */
+export const SESSION_STATE_DISABLED_CODE = 'session_state_disabled'
 
 /** The two claimed paths in canonical order. */
 export const SESSION_STATE_ROUTES = Object.freeze([
@@ -89,7 +96,7 @@ export const SESSION_STATE_BASE_FEATURES: readonly SessionStateFeature[] = Objec
 
 /**
  * Stable, structured degradation codes: wire-independent diagnostics the client maps
- * to user-visible copy through sessionStateNoteKey, never by parsing prose.
+ * to user-visible copy by the client's own verdict mapping, never by parsing prose.
  */
 export const SESSION_STATE_DEGRADATION_CODES = Object.freeze([
   /** pre-0.4.0 gateway: the route set is absent (HTTP 404). */
@@ -373,18 +380,6 @@ export interface SessionStateCapability {
 /** Disposition of one turn/end fact for the unread predicate (R12). */
 export type SessionTurnEndDisposition = 'completed' | 'user-stopped' | 'neutral'
 
-/** Narrow an untrusted value to a plain JSON object. */
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-  const prototype: unknown = Object.getPrototypeOf(value)
-  return prototype === Object.prototype || prototype === null
-}
-
-/** A non-negative safe-integer watermark (host or observer clock domain). */
-function isWatermark(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
-}
-
 /** Filter advertised ids to the known frozen set (unknown ids are ignored). */
 function knownFeatures(raw: readonly string[]): readonly SessionStateFeature[] {
   return raw.filter((feature): feature is SessionStateFeature => KNOWN_SESSION_STATE_FEATURES.has(feature))
@@ -527,25 +522,9 @@ export function classifySessionStateProbe(
 /** Recognize the 503 kill-switch body ({error|code:'session_state_disabled'}, including nested error.code). */
 function isSessionStateDisabledBody(body: unknown): boolean {
   if (!isPlainRecord(body)) return false
-  if (body.error === 'session_state_disabled' || body.code === 'session_state_disabled') return true
+  if (body.error === SESSION_STATE_DISABLED_CODE || body.code === SESSION_STATE_DISABLED_CODE) return true
   const nested = body.error
-  return isPlainRecord(nested) && nested.code === 'session_state_disabled'
-}
-
-/**
- * Map one verdict kind to its user-visible copy key, or null for `ok`. The exhaustive
- * switch (no default) makes a new verdict kind a compile error, so a degraded source
- * can never render silently. The sidebar owns the translations; this owns the key set.
- */
-export function sessionStateNoteKey(kind: SessionStateCapabilityKind): string | null {
-  switch (kind) {
-    case 'ok': return null
-    case 'legacy-gateway': return 'source.sessionState.legacyGateway'
-    case 'disabled': return 'source.sessionState.disabled'
-    case 'unversioned': return 'source.sessionState.unversioned'
-    case 'unavailable': return 'source.sessionState.unavailable'
-    case 'forward-skew': return 'source.sessionState.forwardSkew'
-  }
+  return isPlainRecord(nested) && nested.code === SESSION_STATE_DISABLED_CODE
 }
 
 /**

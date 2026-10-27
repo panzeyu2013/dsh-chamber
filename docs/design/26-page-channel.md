@@ -71,7 +71,7 @@
 
 帧里带 `instanceId`（与 `/api/i/<id>` 同一套 id：`local` / `dsh-*` / `gateway-*`）。控制面按 id 解析目标（本地 dsh 端口或已注册的 tunnel/gateway 传输记录），为每个订阅独立打开上游。页面侧不存在"每个实例一条 socket"的概念，因此**新增实例只增加控制面的上游连接**。
 
-上游路由的单一来源：`sessionFacts` 走 `SESSION_STATE_STREAM_PATH`（`session-state-protocol.ts` 的常量，模块内不再写第二份字面量）；`pluginGraph` 的 `/plugins/events` 与 vendor `@deepseek-ai/dsh-client-hmr` 的 `EVENTS_ENDPOINT` 锁步（registry `mirror.dsh-client-hmr-events-endpoint`，由 flow 用例断言）。
+上游路由的单一来源：`sessionFacts` 走 `SESSION_STATE_STREAM_PATH`（wire 叶 `packages/dsh-chamber-wire/src/session-state.ts` 的常量，模块内不再写第二份字面量）；`pluginGraph` 的 `/plugins/events` 与 vendor `@deepseek-ai/dsh-client-hmr` 的 `EVENTS_ENDPOINT` 锁步（registry `mirror.dsh-client-hmr-events-endpoint`，由 flow 用例断言）。
 
 上游订阅与实例反代共用同一套传输登记：目标被替换/注销时（tunnel 重注册、gateway 传输失效），控制面按登记连接撤销该连接上的订阅并回 `instance_unavailable`，客户端按自己的阶梯重订阅到新传输——旧 incarnation 的流不会被继续消费。
 

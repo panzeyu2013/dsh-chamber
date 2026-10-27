@@ -17,13 +17,13 @@
  * 各自语义决定「不改变 / 不通知 / 回落 0」。
  */
 
+import { isWatermark } from '@dsh-chamber/dsh-chamber-client-core/json-guards'
+
 /** 通知身份的三个 kind（与历史载荷同一词表）——放零依赖叶以避免 complete-ledger ⇄ notification-store 类型环。 */
 export type UnreadKind = 'complete' | 'ask' | 'request'
 
-/** 合法水位：非负安全整数（NaN / Infinity / 小数 / 负数 / 字符串都不是）。 */
-export function isWatermark(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
-}
+/** 合法水位：非负安全整数（单源 = wire 叶的 isWatermark；本文件不再自带实现）。 */
+export { isWatermark }
 
 /** 取若干候选水位中的最大合法值；无合法值时为 0（调用方决定 0 是「缺失」还是「极小」）。 */
 export function maxWatermarkValue(...values: readonly (number | null | undefined)[]): number {

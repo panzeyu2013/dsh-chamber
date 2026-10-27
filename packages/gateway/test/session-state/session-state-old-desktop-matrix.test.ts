@@ -45,7 +45,7 @@ import {
   SESSION_STATE_ROUTES,
   classifySessionStateProbe,
   parseSessionStateDescriptor,
-} from '../../../control-plane/src/session-state-protocol.ts'
+} from '@dsh-chamber/dsh-chamber-wire/session-state'
 import { createChamberInstalled } from '../../src/plugins-installed.ts'
 import { createChamberPlugins } from '../../src/plugins.ts'
 import { createChamberSurface } from '../../src/routes.ts'

@@ -22,7 +22,7 @@ const TARGET_KINDS = ['dsh', 'gateway'] as const
 
 /** Legacy source-id input remains parseable even though normalized IPC specs use TransportKind exclusively. */
 type LegacyTransportKind = 'ssh'
-type KindedInstance = { id: string; kind: TransportKind | LegacyTransportKind }
+export type KindedInstance = { id: string; kind: TransportKind | LegacyTransportKind }
 
 // Raw source-id grammar (dsh-<id>/gateway-<id>/ssh-<id>): the wire authority is desktop
 // transport-provider.ts INSTANCE_ID_PATTERN (every provider validates through it);

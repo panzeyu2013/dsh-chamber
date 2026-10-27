@@ -37,7 +37,21 @@ import { HttpBudgetUnscheduledError, acquireHttpBudget, httpBudgetLaneFor, httpB
 import type {
   SessionFactsCompletedAtSource, SessionFactsRow, SessionFactsSnapshot, SessionFactsTurnEnd,
 } from './session-facts-source.ts'
+import {
+  FOLLOW_MAX_MESSAGES,
+  REMOTE_EVENT_STREAM_ENDPOINT,
+  REMOTE_STREAM_MUX_PATH,
+  buildSessionFollowPayload,
+  parseGoalActivationFact,
+  parseProjectedGoalFact,
+} from '@dsh-chamber/dsh-chamber-client-core/mux-frame'
 import { isWatermark } from './watermark.ts'
+import {
+  classifyTurnEnd,
+  type SessionTurnEndCause,
+  type SessionTurnEndDisposition,
+  type SessionTurnEndKind,
+} from '@dsh-chamber/dsh-chamber-client-core/session-state'
 import { TABLE_SNAPSHOT, classifyObservation, isAdmissible } from '@dsh-chamber/dsh-stream-state'
 
 export interface MuxSocket {
@@ -75,8 +89,9 @@ export interface SourceMuxDeps {
   carrierGraceMs?: number
 }
 
-export const MUX_PATH = '/api/remote.mux'
-export const EVENTS_ENDPOINT = '$events'
+/** 上游 mux 路径/事件端点：单源 = wire 叶（remote.mux 契约）。 */
+export const MUX_PATH = REMOTE_STREAM_MUX_PATH
+export const EVENTS_ENDPOINT = REMOTE_EVENT_STREAM_ENDPOINT
 /** 基线 unary deadline——半死隧道下「挂起」必须在预算内变成可数的失败。 */
 export const DEFAULT_BASELINE_TIMEOUT_MS = 5_000
 /** 完成边沿读尾 deadline（对齐 control-plane/session-mux.ts 的 2s 预算）。 */
@@ -189,13 +204,13 @@ export function openEventsFrame(streamId = 'events'): string {
   return JSON.stringify({ type: 'open', streamId, endpoint: EVENTS_ENDPOINT, payload: { args: {} } })
 }
 
-/** turn/end 分类（与 gateway watcher 同规）。 */
-export function classifyTurnEndWire(reason: unknown): 'completed' | 'user-stopped' | 'neutral' {
+/** turn/end 分类（单源 = wire 的 classifyTurnEnd；此处只把原始 reason 归一成 wire 形状）。 */
+export function classifyTurnEndWire(reason: unknown): SessionTurnEndDisposition {
   if (reason === null || typeof reason !== 'object') return 'neutral'
   const value = reason as { kind?: unknown; cause?: unknown }
-  if (value.kind === 'completed') return 'completed'
-  if (value.kind === 'aborted') return value.cause === 'user' ? 'user-stopped' : 'neutral'
-  return 'neutral'
+  if (typeof value.kind !== 'string') return 'neutral'
+  const cause = typeof value.cause === 'string' ? value.cause as SessionTurnEndCause : null
+  return classifyTurnEnd({ kind: value.kind as SessionTurnEndKind, cause, at: 0, seq: null })
 }
 
 interface ParsedFrame {
@@ -270,44 +285,11 @@ export function emptyRow(sessionId: string, running: boolean, updatedAt: number)
   }
 }
 
-/** goal 相位白名单（与控制面 P2a 的 GOAL_PHASES 同词表）。 */
-const GOAL_PHASES: ReadonlySet<string> = new Set<SourceMuxGoalPhase>(['active', 'paused', 'blocked', 'complete'])
-
-/** goal 水位校验（安全整数且 >= 0；与 control-plane P2a / gateway 同规）。 */
-function isGoalWatermark(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
-}
-
 /**
- * 从一条 `session/list` item（`api-session/added` 同形）的投影块里**只**取 goal
- * 白名单。冻结 wire：`projections.values.goal =
- * { goal: { id, revision, phase, objective?, blockedReason?, ... }, roundsStarted, createdAt, updatedAt } | null`。
- * 本解析器从不读 objective/blockedReason/maxGoalRounds/roundsStarted，也不触碰
- * title/cwd/todos/inbox 等其余投影键 —— 它们在解析处即被丢弃（隐私白名单）。
- *
- * 校验与控制面 P2a 的 parseProjectedGoalFact 同规：id 非空、revision 安全整数且
- * >= 1、phase 命中词表；任一不符（或嵌套形状不符）= unknown。
- * @returns `undefined` = 键缺席/形状不符（unknown，绝不臆造「无 goal」）；
- *   `null` = 宿主明确无当前 goal；对象 = 白名单事实。
+ * goal 投影解析的唯一实现 = wire 叶的 parseProjectedGoalFact（隐私白名单 + 三值语义）。
+ * 本模块只再导出，公开面与 anchor 不变；规则漂移只会发生在叶子一处。
  */
-export function parseProjectedGoalFact(item: Record<string, unknown>): SourceMuxGoalFact | null | undefined {
-  const projections = item.projections
-  if (!isRecord(projections)) return undefined
-  const values = projections.values
-  if (!isRecord(values) || !Object.hasOwn(values, 'goal')) return undefined
-  const raw = values.goal
-  if (raw === null) return null
-  if (!isRecord(raw) || !isRecord(raw.goal)) return undefined
-  const id = raw.goal.id
-  const revision = raw.goal.revision
-  const phase = raw.goal.phase
-  if (typeof id !== 'string' || id === '') return undefined
-  if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1) return undefined
-  if (typeof phase !== 'string' || !GOAL_PHASES.has(phase)) return undefined
-  const fact: SourceMuxGoalFact = { goalId: id, revision, phase: phase as SourceMuxGoalPhase }
-  if (isGoalWatermark(raw.updatedAt)) fact.updatedAt = raw.updatedAt
-  return fact
-}
+export { parseProjectedGoalFact }
 
 /**
  * 子代理行的源侧判定：host `session/list` item 的 `origin === 'subagent'`。
@@ -455,17 +437,9 @@ export function parseStatusArgs(args: unknown): { sessionId: string; running: bo
  * `goalId` 供进程内缓存绑定目标身份；id 缺失/非串 = null（未绑定，镜像 P2a 宽松）。
  */
 export function parseGoalActivationArgs(args: unknown): { sessionId: string; activation: SourceMuxGoalActivation | null; goalId: string | null } | null {
-  const payload = Array.isArray(args) ? args[0] : args
-  if (!isRecord(payload)) return null
-  const sessionId = payload.sessionId
-  if (typeof sessionId !== 'string' || sessionId === '') return null
-  const goal = payload.goal
-  if (goal === undefined) return { sessionId, activation: null, goalId: null }
-  if (!isRecord(goal)) return null
-  const activation = goal.activation
-  if (activation !== 'armed' && activation !== 'disarmed') return null
-  const goalId = typeof goal.id === 'string' && goal.id !== '' ? goal.id : null
-  return { sessionId, activation, goalId }
+  // 形状规则（goal 缺席 = 无 goal、非对象/未知 activation = 漂移、缺 id = 未绑定）在 wire 叶，
+  // 三个宿主共用一份；这里只做 emit args 的数组解包。
+  return parseGoalActivationFact(Array.isArray(args) ? args[0] : args)
 }
 
 /**
@@ -504,13 +478,11 @@ function withoutGoalActivation(goal: SourceMuxGoalFact): SourceMuxGoalFact {
   return next
 }
 
-/** 完成边沿读尾一次取多少条尾记录（与 control-plane/session-mux.ts 的预算一致）。 */
-export const FOLLOW_MAX_MESSAGES = 8
+/** 完成边沿读尾一次取多少条尾记录（单源 = wire 叶，与 control-plane/session-mux.ts 同值）。 */
+export { FOLLOW_MAX_MESSAGES }
 
-/** session/follow 载荷：Remote 形参名是 request（写错会得到 gateway/arguments-invalid）。 */
-export function followPayload(sessionId: string, maxMessages = FOLLOW_MAX_MESSAGES): unknown {
-  return { args: { request: { address: { kind: 'session', sessionId }, maxMessages } } }
-}
+/** session/follow 载荷：单源 = wire 叶的 buildSessionFollowPayload（Remote 形参名是 request）。 */
+export const followPayload = buildSessionFollowPayload
 
 export interface FollowTailRead {
   /** 原始 tail turn/end（legacy 形原样保存；records 形补齐 at/seq）。 */

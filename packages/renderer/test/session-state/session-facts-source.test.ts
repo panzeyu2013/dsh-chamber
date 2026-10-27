@@ -2,20 +2,16 @@
  * SessionFactsSource 纯契约。
  *
  * 覆盖：粗分类全分支（404=版本事实；5xx/超时绝不是「旧网关」）、快照/增量项解析、
- * 游标幂等、serviceable、通道订阅缝的 stale/证据/生命周期语义、**源文本锁步**（对着
- * control-plane/src/session-state-protocol.ts 钉共享字面量）。
+ * 游标幂等、serviceable、通道订阅缝的 stale/证据/生命周期语义。共享字面量由编译期
+ * import 保证（wire 单源 → client-core 具名面），不再用源文本比对。
  */
 import { beforeEach, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import {
   SESSION_FACTS_DISABLED_CODE,
   __resetSessionFactsGoalWarningForTests,
   SESSION_FACTS_DIAGNOSTICS_REFETCH_MAX,
   SESSION_FACTS_DIAGNOSTICS_REFETCH_MIN_MS,
-  SESSION_FACTS_PROTOCOL_VERSION,
-  SESSION_FACTS_ROUTE,
   applySessionFactsDelta,
   classifySessionFactsProbe,
   createSessionFactsSource,
@@ -36,7 +32,6 @@ import {
 } from '../../../dsh-chamber-client-core/src/http-budget.ts'
 import { sourceSessionFactsMode } from '../../src/session-facts-mode.ts'
 import { factsChannelOf } from '../../src/completion-observation.ts'
-import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
 // 探测现在经页面级 HTTP 预算（design 26 §D7）：deferred fetch 永不结算的用例会
 // 留下占用的槽位，逐用例复位预算，避免跨用例互相饿死。
@@ -650,24 +645,6 @@ test('delta: host gate updates ride the frame', () => {
   })
   assert.equal(outcome.next?.hostState, 'stopped')
   assert.equal(outcome.next?.serviceable, false)
-})
-
-test('lockstep: our route/protocol/disabled literals are pinned to the control-plane single source', () => {
-  const protocolSource = stripComments(readFileSync(
-    fileURLToPath(new URL('../../../control-plane/src/session-state-protocol.ts', import.meta.url)),
-    'utf8',
-  ))
-  // 权威模块的字面量（源文本口径；本包不能 import 它）。
-  assert.ok(protocolSource.includes("export const SESSION_STATE_PATH = '/chamber/session-state'"))
-  assert.ok(protocolSource.includes('SESSION_STATE_STREAM_PATH = `${SESSION_STATE_PATH}/stream`'))
-  assert.ok(protocolSource.includes('export const PROTOCOL_VERSION = 1'))
-  assert.ok(protocolSource.includes('session_state_disabled'))
-  assert.ok(protocolSource.includes('serviceable'))
-  assert.ok(protocolSource.includes('completedAtSource'))
-  // 本侧常量逐字节相同（read/read-all 回执已随旧读水位退役，路由常量不再存在）。
-  assert.equal(SESSION_FACTS_ROUTE, '/chamber/session-state')
-  assert.equal(SESSION_FACTS_PROTOCOL_VERSION, 1)
-  assert.equal(SESSION_FACTS_DISABLED_CODE, 'session_state_disabled')
 })
 
 async function waitFor(condition: () => boolean, timeoutMs = 1_000): Promise<void> {

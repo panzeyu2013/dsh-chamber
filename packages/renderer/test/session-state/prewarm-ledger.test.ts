@@ -10,9 +10,11 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { createPrewarmLedger, publishPrewarmInstrument, recordPrewarm } from '../../src/prewarm-ledger.ts'
 
-const APP = readFileSync(fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8')
-// drainPrewarm 在视图调度 hook —— attempt 锚点钉在最终落点；
-// hit（selectView）与 cancelled（retireSources）仍在 App，读 APP。
+// hit（selectView）已随视图选择抽到 app-hooks/use-view-selection.ts，cancelled 仍在 App；
+// 枚举 frame（App + 每个 app-hook）同时覆盖两处，且不会因下一次抽取而失效。
+import { appWiringFrame } from '../support/wiring-sources.ts'
+const APP = appWiringFrame().text
+// drainPrewarm 在视图调度 hook —— attempt 锚点钉在最终落点。
 const SCHEDULER = readFileSync(
   fileURLToPath(new URL('../../src/app-hooks/use-view-scheduler.ts', import.meta.url)),
   'utf8',

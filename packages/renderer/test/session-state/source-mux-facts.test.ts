@@ -41,29 +41,24 @@ import {
 
 const SOURCE = readFileSync(fileURLToPath(new URL('../../src/source-mux-facts.ts', import.meta.url)), 'utf8')
 
-test('lockstep: the mux route and $events literals match the control-plane and api-gateway sources', () => {
-  // This package cannot import either server package; the literals are pinned
-  // against both source texts so a vendor rename or a fork-side edit fails loud
-  // (control-plane pins the api-gateway copy in its own suite; this closes the
-  // renderer leg of the triangle).
+test('lockstep: the mux route/$events literals are pinned against the api-gateway fork', () => {
+  // The values are declared once in the wire leaf and imported by both chamber hosts;
+  // the fork is the one copy nobody imports, so its source text stays pinned here
+  // (a vendor rename or a fork-side edit must fail loud). The frozen values stay
+  // asserted because a silent value change breaks every existing client.
   assert.equal(MUX_PATH, '/api/remote.mux')
   assert.equal(EVENTS_ENDPOINT, '$events')
-  const sources = {
-    'control-plane/src/session-mux.ts': readFileSync(
-      new URL('../../../control-plane/src/session-mux.ts', import.meta.url), 'utf8'),
-    'dsh-api-gateway/src/stream-protocol.ts': readFileSync(
-      new URL('../../../dsh-api-gateway/src/stream-protocol.ts', import.meta.url), 'utf8'),
-  }
-  for (const [label, source] of Object.entries(sources)) {
-    assert.ok(source.includes(`export const REMOTE_STREAM_MUX_PATH = '${MUX_PATH}'`),
-      label + ' must declare REMOTE_STREAM_MUX_PATH = ' + JSON.stringify(MUX_PATH))
-    assert.ok(source.includes(`export const REMOTE_EVENT_STREAM_ENDPOINT = '${EVENTS_ENDPOINT}'`),
-      label + ' must declare REMOTE_EVENT_STREAM_ENDPOINT = ' + JSON.stringify(EVENTS_ENDPOINT))
-  }
-  assert.match(sources['control-plane/src/session-mux.ts'], /REMOTE_EVENT_RESULT_ENDPOINT = '\$events\/result'/)
+  const fork = readFileSync(
+    new URL('../../../dsh-api-gateway/src/stream-protocol.ts', import.meta.url), 'utf8')
+  assert.ok(fork.includes(`export const REMOTE_STREAM_MUX_PATH = '${MUX_PATH}'`),
+    'dsh-api-gateway must declare REMOTE_STREAM_MUX_PATH = ' + JSON.stringify(MUX_PATH))
+  assert.ok(fork.includes(`export const REMOTE_EVENT_STREAM_ENDPOINT = '${EVENTS_ENDPOINT}'`),
+    'dsh-api-gateway must declare REMOTE_EVENT_STREAM_ENDPOINT = ' + JSON.stringify(EVENTS_ENDPOINT))
+  const controlPlane = readFileSync(
+    new URL('../../../control-plane/src/session-mux.ts', import.meta.url), 'utf8')
+  assert.match(controlPlane, /REMOTE_EVENT_RESULT_ENDPOINT = '\$events\/result'/)
   // 瀑布事件字面锁步（C2-9）：观察者 waterfallPendingKind 按字面分类 pendingKind，控制面用
   // 常量声明同一组字面——任一侧改名都必须让本锁变红（之前只锁了路由与端点）。
-  const controlPlane = sources['control-plane/src/session-mux.ts']
   for (const [literal, classification] of [
     ['approval/request', 'approval'],
     ['user-questions/request', 'question'],

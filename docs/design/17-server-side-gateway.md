@@ -905,8 +905,18 @@ additive `details.state`；WS reject 帧不带），上游错误 502 `upstream_f
 > （`virtual-runtime-report` 虚拟投影 + 完成修正臂的 `factsOnly` 路径，design 06 §4.1/§4.2、
 > design 19 §3.2/§3.5）：
 > 镜像不造完成权威，也不见「正在阅读」的清除语义。实现面见 `packages/gateway/src/session-state.ts` 与
-> `packages/control-plane/src/session-state-protocol.ts`；仍开放的实机/CI 权威验收见
+> `packages/dsh-chamber-wire/src/session-state.ts`（wire 叶；原 control-plane 的 protocol 模块已并入）；仍开放的实机/CI 权威验收见
 > `docs/progress/STATUS.md`「只读会话状态镜像」条。
+
+**被否方案（协议实现的归属）**：
+
+- **留在 control-plane、由 wire 再导出**：wire 是零依赖叶（浏览器与宿主种子包都内联它），
+  control-plane 是 Node 侧包；再导出会把 Node 图牵进浏览器打包图，并让「协议由谁定义」出现第二份答案——
+  这正是 P1-A 要消灭的。
+- **在 wire 与 control-plane 各留一份、用文本锁步**：两半的解析规则已经漂移过一次（隐私白名单、
+  unknown-vs-null），文本锁只能证明字面相同，证明不了语义相同。
+- **代码生成协议文件**：解析语义（能力矩阵、forward-skew、turn-end 分类）是手写判定，生成器只是把同一份
+  手写逻辑换个位置，还多一条构建链与漂移面。
 
 **边界（review 判据，任一不成立即越界）**：
 
@@ -1018,7 +1028,7 @@ additive `details.state`；WS reject 帧不带），上游错误 502 `upstream_f
   **计数口径**：只有两处容量淘汰计数——保留边 cap 淘汰与行容量淘汰随行清边；
   `applyRemoved`、baseline 单阶段缺席 prune、no-goal 事件与 `clearGoalActivations` 的清边
   都**不计**（不是容量损失）。`dropped.goalActivations` 是**加法诊断键**（协议声明在
-  `packages/control-plane/src/session-state-protocol.ts` 的 `SessionStateDiagnostics.dropped`；
+  `packages/dsh-chamber-wire/src/session-state.ts` 的 `SessionStateDiagnostics.dropped`；
   `status().dropped` 与持久文档 `dropped` 同形，旧客户端不进 diagnostics）：flush 把当时
   的进程内累计值写进持久文档，但加载校验把 `goalActivations` **一律归一为
   0**（缺键/坏值与携带非零值同路，重启不继承）；保留边本身**不落盘**。旧端矩阵 fixture

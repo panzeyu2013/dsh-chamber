@@ -1,8 +1,4 @@
-/** 纯记录判定单一来源：排除 null / 数组 / 类实例（原型必须是 Object.prototype 或 null）。
- *  facts 解析（session-facts-source）、通知落盘解析（notification-store）与完成账本
- *  （complete-ledger）曾各写一份逐字相同的实现；几份必须保持同解，故归口到这里。 */
-export function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-  const prototype: unknown = Object.getPrototypeOf(value)
-  return prototype === Object.prototype || prototype === null
-}
+/** 纯记录判定单一来源 = wire 叶的 isPlainRecord（排除 null / 数组 / 类实例）。
+ *  facts 解析、通知落盘解析与完成账本共用这一份；本文件只保留具名面，
+ *  避免 renderer 内再次长出第二实现。 */
+export { isPlainRecord } from '@dsh-chamber/dsh-chamber-client-core/json-guards'
