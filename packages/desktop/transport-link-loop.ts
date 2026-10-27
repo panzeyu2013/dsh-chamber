@@ -54,6 +54,12 @@ export function createLinkLoop(deps: LinkLoopDeps) {
   const { applyLinkHealth, clearDownGrace, probeBudgetFor, readyProbeEndpoint } = linkHealth
   let reverifyGeneration = 0
   const reverifyTimers = new Set<ReturnType<typeof setTimeout>>()
+  /** Keep phase ready (and in-flight work alive) for a bounded grace after down.
+   *  EVERY down edge restarts the window (a link that recovered to `suspect` and
+   *  fell back to down got its first window cut short otherwise). New requests and
+   *  new subscriptions fail fast via the projection; the transport reconnect only
+   *  takes ownership when the window expires. An in-flight probe may extend the
+   *  timer, but never past `downGraceDeadlineAt`. */
   function armDownGrace(id: string, state: InstanceState, reason: string): void {
     clearDownGrace(state)
     const spec = instances.get(id)

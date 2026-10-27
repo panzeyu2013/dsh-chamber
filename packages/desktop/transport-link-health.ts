@@ -108,12 +108,5 @@ export function createLinkHealth(deps: LinkHealthDeps) {
     }
   }
 
-  /** Keep phase ready (and in-flight work alive) for a bounded grace after down.
-   *  EVERY down edge restarts the window (a link that recovered to `suspect` and
-   *  fell back to down got its first window cut short otherwise). New requests and
-   *  new subscriptions fail fast via the projection; the transport reconnect only
-   *  takes ownership when the window expires. An in-flight probe may extend the
-   *  timer, but never past `downGraceDeadlineAt`. */
-
   return { readyProbeEndpoint, applyLinkHealth, cancelReadyVerify, clearDownGrace, probeBudgetFor }
 }

@@ -578,9 +578,9 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 |---|---|---|---|
 |1|三处 state/ref 镜像：`packages/dsh-chamber-client-ui-sidebar/src/client/sidebar-root-projection.ts`（serversRef）、`packages/renderer/src/components/InstanceView.tsx`（activeRef/settledRef）、`packages/dsh-chamber-client-ui-settings-bridge/src/client/DshRuntimeSection.tsx`（confirmLaunchRef）|未收口（其余已收口，基线在 git 历史与各 host store 注释）|渲染值走 useSyncExternalStore 小 store（单源）、事件回调读 store 的 getSnapshot()，删 ref 镜像；不引入状态库/新包|
 |2|settings 两分支合流：`DshRuntimeSection` 的 gateway/local 共享 controller|未动|runtime-management / 设置桥套件绿；先补 parity 测试再合并|
-|3|逐包棘轮收尾：file-budgets.json 的 37 条只降不升（含新叶、4 条 ceiling、FROZEN 行；行数与缺口**以表为准**，不在文档里复写）|逐轮下降中：App 拆出 28 个 app-hook；transport-manager 拆出 registry/link-loop/link-health/instance-state；gateway session-state 拆出 types/features/store/store-codec/observer/sse（store 的 codec+validators 已独立，1056→800）；host-assembly 拆出 exit/registry-transition。目标与缺口一律看 node scripts/gates/verify-file-budgets.mjs --report|verify:file-budgets 恒绿；**待裁决**：新模块仍需人工登记；host-assembly 成对抽取与 transport exec 的取舍见 STATUS §三|
+|3|逐包棘轮收尾：file-budgets.json 的 38 条只降不升（含新叶、4 条 ceiling、FROZEN 行；行数与缺口**以表为准**，不在文档里复写）|逐轮下降中；目标与缺口一律看 node scripts/gates/verify-file-budgets.mjs --report|verify:file-budgets 恒绿；**待裁决**：新模块仍需人工登记；host-assembly 成对抽取与 transport exec 的取舍见 STATUS §三|
 |4|§1.5 的审计开放项|未动|各自条目内|
-|5|desktop/host-assembly.ts 1249 → **1163**（B4-1 退出腿 `host-exit.ts` 75 行；B4-2a 注册表提交转移 `host-registry-transition.ts` 99 行，`main-side-files.mjs` 单一名单同步、bridge-manifest 重生成后逐字节不变）；剩余 `sm.onStatusChanged` 订阅回调（~204 行，28 个自由变量）|B4-2b|未动：28 依赖的订阅体，抽出需要依赖容器或保持边界|
+|5|desktop/host-assembly.ts 1249 → **1163**（B4-1 退出腿 `host-exit.ts` 75 行；B4-2a 注册表提交转移 `host-registry-transition.ts` 99 行，`main-side-files.mjs` 单一名单同步、bridge-manifest 重生成后逐字节不变）；剩余 `sm.onStatusChanged` 订阅回调（~204 行，28 个自由变量）|B4-2b|未动：判据见 STATUS §三（与 onVerified 成对抽成同一工厂，预计 −158 行）；当前 file-budgets 记为 FROZEN|
 |6|App 残余编排的依赖容器化（`retireSources`+`refreshRemotes`+`JSX` 共 ≈75 个自由标识符）|未决：逐字搬会得到 ≈75 字段的入参对象，不如现状；需先裁决「单一 AppRuntime 容器」是否值得（会改变模块边界而非减少耦合）|裁决后要么引入容器并继续切，要么把「App 编排核心」登记为有意保留的边界|
 
 #### 1.2 已核结论（不再排期）
@@ -594,7 +594,7 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 - 证据选择：`node scripts/gates/run-checks.mjs <static|tests|typecheck|full>`（`--list` 看完整计划）——
   模式名与 ci.yml / release 验证一致（**例外清单**见 STATUS §1.6：手写 host typecheck、macOS 腿、C8 rebuild、remote-state acceptance、notices diff、gateway pack smoke、SVG scoper、Windows manifest 均无模式），其余本地通过即同一份证据（darwin-only 门只在 macOS 上被模式包含：8 条 `macos.*` 属 darwin 的 tests 模式，CI 侧仍是手写步骤）。
 - 本重构相关三门：`verify:import-cycles`（值环 0 + 类型环 allowance——现为空）、`verify:file-budgets`
-  （37 个 God 文件只降不升）、`verify:no-dead-exports`（零消费者导出即红）。
+  （38 个 God 文件只降不升）、`verify:no-dead-exports`（零消费者导出即红）。
 - 执行面：`verify:import-cycles` / `verify:file-budgets` 及包边界门 `verify:package-boundaries` 在本地、
   普通 CI、发布验证同跑；`verify:no-dead-exports` 仍为本地辅助门。门成员资格已单源到
   `scripts/gates/gate-surfaces.json`（loader `gate-registry.mjs`，`run-checks` 只派生模式；数据不变量：

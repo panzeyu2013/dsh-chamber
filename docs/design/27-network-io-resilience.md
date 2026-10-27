@@ -250,7 +250,7 @@ mutation → `MutationOutcomeUnknownError`（不得重试）；非 mutation →
 14. manager 的兜底分类会从 detail 的 `HTTP nnn` 取 statusCode；shipped provider 的普通失败都显式声明 `failureKind`（gateway 口令 401 的终态走 `terminal:true`，不声明 failureKind），该兜底只对旧/自定义 provider 生效（防御性双写）。
 15. host-assembly 的 auth 恢复接线已抽成可测驱动器（`auth-recovery.ts`：节流/延迟/取消/取消后重试，注入时钟的组装态用例）与纯守卫 `authRecoveryStillApplies`（phase/readyUrl/kind/口令/scope 五轴 fail-closed 用例）；**每个注册边沿**（状态推送 register / sessionRefresh.register / onVerified）都会取消待发的延迟恢复，尝试本身延后一个 microtask 以避开 onStatusChanged 重入。装配侧只剩观测取值，没有 fake plane+sm 的整链集成用例。
 16. 下载拥塞已有第二信号：下游字节（实例代理的 HTTP chunk / remote.mux 的 WS 帧 / page-channel SSE 经 `onDownlink`）进入 2s busy 窗口，窗口内探针失败只记录不计判；残余是 2s 窗口本身的代价——真死链路在下游停流后最多 2s 才恢复计数，且任何活跃流量都会短暂抑制判定。
-17. `file-budgets.json` 的 note 是逐轮增量账本（算术可复算），不是结构说明；`proxy-forward` 与 client `page-channel` 未上棘轮。
+17. `file-budgets.json` 的 `lines` 只降不升（棘轮；`--update-budget` 拒绝上调）；`target` 是评审判定的收口目标，下调直接改，**上调必须在该行 `note` 写出边界理由**（结构性切分后允许把 note 写成结构说明，但不得用它替代 `lines` 的算术）。`kind: ceiling` 标「不指望缩」，`FROZEN` 是「已登记为有意保留的边界」；`proxy-forward` 与 client `page-channel` 未上棘轮。
 18. 页面的 `reverify(reason)` 是提示而非授权：IPC 边界把非枚举值归一为 `user`，shim 原样转发；这是信任边界上的规范化，不做跨进程校验。
 19. 零业务流量时的半开仍只能靠心跳发现：稳定档 30s（最坏 ≈32s + 30s 确认窗），ready 边沿/健康迁移后的 120s 观察窗内 10s。没有「不探就知」的本地信号（宿主 mux 无 keepalive 契约、ssh 层 keepalive 只判 TCP 死且调快会误杀可自愈的黑洞），故这是成本与盲窗的折中；一次真实转发的传输级失败仍会立刻触发受节流的强制探针（2s 一次、仅 healthy、避开 busy）。
 20. 官方前端自己的 mutation（message/send、goals/*、approval/*、commands/execute 等）走 vendor 客户端：`dsh-client-connection` 的 `[patch-mod]` 现在识别 502/504 + `details.phase=after-body`，把错误写成「可能已生效、刷新后再重试」。官方 unary 本来没有自动重试，故这只是诚实分类，不改变重试语义；客户端 UI 是否展示该措辞由官方决定。
@@ -261,6 +261,14 @@ mutation → `MutationOutcomeUnknownError`（不得重试）；非 mutation →
 25. 每连接 agent 池已有**真实 socket** 用例（同连接复用、两条连接各自成池、替换/注销后新开连接）；auth 恢复有驱动器级组装用例（见 §6.15）；veth+netem 真实链路验收已入库（13 项断言 + opt-in 上传 3 项，含「宽限期内恢复不重连」「reverifyAll 在 ready+down 上 <1.5s 恢复」「20MB@2Mbit 上传期间不判 down」），但真实 WAN/ssh 中继与真机睡眠仍只能人工跑。
 26. `dsh-api-gateway` 的 opening 拒绝后「窗口边缘一次替换」只有代码路径与短窗口用例（mux-self-heal 覆盖替换/防抖/帧增量刷新），没有 60s **真时钟**用例：真实窗口长度由 `dsh-stream-state` 的 reducer 表决定，测试用注入时钟覆盖该表。**2026-10 修订**：lane 腿已移出延迟替换（§3.6），新增 300s 虚拟时钟回归用例证明“lane 拒绝不排期”，并新增一条证据型拒绝（opening 期限 → 窗口边缘替换）的**注入时钟完整窗口**用例（仍无真时钟/真机用例）；证据腿的真机 soak 仍开放。
 27. **lane 拒绝不排期后的取舍（2026-10）**：半开载波的兜底从“窗口边必补一次”变为“证据腿之一”——30s 开帧期限（零帧 ⇒ `socketNoFrame`）与 15s 静默 teardown（握手期限不在此列：pre-OPEN 的失败走 non-OPEN bypass 或泵的 maintain 退避，见 §3.6）；最坏多等一个证据预算（合成时序探针 +≈28s；该探针未入库，仓内可复核的只有注入时钟下的窗口边用例与表值上界 30s/15s），之后立即或下一窗口边缘替换，未发现永久恢复洞。“已 ready 后静默、且没有新流”的偶发自愈不在载波层：它由渲染器聚合臂的 staleness 常量兜底（http ≈120s / ssh ≈300s，`packages/renderer/src/aggregate-refresh.ts` 的 `AGGREGATE_RECONNECT_HTTP_STALE_MS`/`..._SSH_STALE_MS`；design 14 §D4 把这形态记为传输层看门狗），本改动不改变它。该兜底有前置：源 **`mounted`**（本代际至少 push 过一次）、transport ∈ {http, ssh} 且非 local（`reconnectStalenessMsForTransport`/`shouldReconnectStaleMounted`）；`mounted=false` 或 local/unknown 的源没有载波级自动恢复，恢复 = 下一次新流的 30s 证据或消费者动作（用户可见面 = 未打开会话），登记为该条的窄边界。**已知边界（边界赛跑，不是“必漏”）**：`SILENT_TEARDOWN_MIN_MS`（15s）与本地/unknown 的 `generationReadyTimeoutMs`（15s）同值，teardown 判定是 `Date.now() − sentAt`，而 `sentAt` 在握手之后才打 ⇒ readiness 超时中止时该差值 `= 15000 − 握手时延`。虚拟钟下第二轮（socket 已 OPEN、同毫秒）必过；真机取决于定时器迟到是否 ≥ open 发送延迟，**不保证**。登记为开放项，本次不改阈值（改值可做但会扩大“短命零帧”的误判面）。
+
+**被否方案（预算账本的口径）**：
+
+- **恢复逐行增量账本**（每行 `+N/−M` 复算）：结构切分后同一行的增量跨多个提交，逐字复算不再可行，账本会与 `--report` 的实测值打架。
+- **只许下调 `target`、不许上调**：会把「已登记为有意保留的边界」逼回一个永远达不到的目标，读者继续按目标找行数，反而失真。
+- **由门禁自动推导 `target`**：`target` 是评审判定（拆到哪一层为止），机器推不出来；门禁只能校验形状（`lines` 不升、ceiling 的 target > lines）。
+
+选：`lines` 仍只降不升，`target` 上调必须在 `note` 写出理由（本轮 38 条里只有 App 与 host-assembly 两行上调，其余下行或不动）。
 
 ## 7. 测试与门禁
 

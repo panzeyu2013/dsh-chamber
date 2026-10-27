@@ -15,7 +15,7 @@
       "packages/renderer/src/session-facts-source.ts (the shipped client parser at the freeze: the exact field paths it reads; post-freeze instrumentation excluded)",
       "packages/control-plane/src/session-state-protocol.ts (PROTOCOL_VERSION / SESSION_STATE_FEATURES / SESSION_STATE_BASE_FEATURES single source)",
       "NOTE (post-freeze): the blueprint recorded above lived at docs/progress/todo/notes/ and was deleted with the progress cleanup (its content stays in git history); the living single sources are packages/control-plane/src/session-state-protocol.ts and design 17 §10.7.",
-      "NOTE (append-only, 2026-10-27): the protocol module moved to packages/dsh-chamber-wire/src/session-state.ts (P1-A cutover). The frozen descriptors above are unchanged and still describe protocolVersion 1; this note only re-points the 'living single source' sentence."
+      "NOTE (append-only, 2026-10-27): the protocol module moved to packages/dsh-chamber-wire/src/session-state.ts (P1-A cutover). The frozen descriptors above are unchanged and still describe protocolVersion 1; this note supersedes the 'living single source' sentence above (the path it names no longer exists)."
     ],
     "postFreezeAdditions": [
       {

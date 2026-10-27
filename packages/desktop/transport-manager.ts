@@ -1197,6 +1197,8 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
   })
   const { loadInstances, saveInstances, listInstances } = registry
 
+  /** Start (or restart) the transport for one instance: idempotent while
+   *  connecting/ready; a manual connect resets retry and clears the pending reconnect. */
   function connect(id: string): TransportStatusProjection | null {
     if (disposed) return status(id)
     if (!instances.has(id)) {

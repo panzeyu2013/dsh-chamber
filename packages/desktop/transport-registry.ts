@@ -261,8 +261,5 @@ export function createTransportRegistry(deps: TransportRegistryDeps) {
     return [...instances.values()].map(spec => ({ ...spec }))
   }
 
-  /** Start (or restart) the transport for one instance: idempotent while
-   *  connecting/ready; a manual connect resets retry and clears the pending reconnect. */
-
   return { loadInstances, saveInstances, listInstances }
 }

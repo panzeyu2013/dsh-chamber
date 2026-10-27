@@ -1262,7 +1262,7 @@ export default function App() {
   // 用它同拍撤回归档/观测轨与边沿记忆，否则断连窗口会把旧壳记忆当虚拟证据（INV-7）。
   withdrawSourceRef.current = withdrawSource
 
-  // 事实源生命周期簇：gateway 只读事实源与无壳观察者的创建/收敛/退订、focus/blur 步进臂、
+  // 事实源生命周期簇：gateway 只读事实源与无壳观察者的创建/收敛/退订、
   // pagehide/hidden 落盘 flush（无返回值；调用面全在既有 ref/回调上）。
   useSessionFactsLifecycle({
     servers, applySessionFacts, notificationImmediateSave,

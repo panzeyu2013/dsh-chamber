@@ -22,7 +22,7 @@
  *
  * 产出（写入位置默认相对本脚本所在仓库）：
  *   A. packages/desktop/bridge-manifest.json（提交物）——
- *      { "invoke": [{channel,key}×61], "push": [{channel,key}×8],
+ *      { "invoke": [{channel,key}×52], "push": [{channel,key}×9],
  *        "counts": {invoke,push,total} }，两数组均按 IPC_CHANNELS 定义序。
  *   B. macos/Sources/DSHChamber/Generated/BridgeManifest.swift（生成物、
  *      提交）——`enum BridgeManifest` 两份 Set<String>（invokeChannels /
