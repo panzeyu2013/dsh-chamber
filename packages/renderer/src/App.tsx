@@ -1199,11 +1199,8 @@ export default function App() {
     localReadyRef, localLinkEpochRef, localNotifiedEpochRef,
   })
 
-  /**
-   * 本地实例幂等启动：首轮连接行装载后（null = 尚未拉到）行缺失/stopped/error 均触发一次
-   * POST /api/connections（幂等）。一旦 ready 即不再 POST。POST 失败**不置位**——下一个连接行
-   * 轮询周期（30s）重试，直到成功或出现 ready 行。远程实例自动连接独立于此，互不阻塞。
-   */
+  // 首触连接引导持两个 ref：本地幂等启动（可服务 = ready|degraded，失败不置位、下个轮询重试）
+  // 与远程首次 connect 的语义见 app-hooks/use-connection-bootstrap.ts。
   const localBootedRef = useRef(false)
   const knownRemoteIdsRef = useRef<Set<string>>(new Set())
   // 首触连接引导（本地幂等启动 + 远程新实例自动 connect）：实现在 app-hooks/use-connection-bootstrap.ts。
