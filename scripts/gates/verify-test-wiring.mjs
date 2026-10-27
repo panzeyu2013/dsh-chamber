@@ -412,7 +412,10 @@ function main() {
     ...swiftVerdict.missingTargets.map(path => `${path} — declared testTarget has no Swift file (empty test target)`),
     ...swiftWiringProblems({
       script: swiftScript,
-      runChecksText: readTextOrNull(join(REPO_ROOT, 'scripts', 'gates', 'run-checks.mjs')) ?? '',
+      // The darwin gate set is declared in the machine source (gate-surfaces.json);
+      // run-checks only derives from it now, so both texts are the wiring surface.
+      runChecksText: (readTextOrNull(join(REPO_ROOT, 'scripts', 'gates', 'run-checks.mjs')) ?? '')
+        + (readTextOrNull(join(REPO_ROOT, 'scripts', 'gates', 'gate-surfaces.json')) ?? ''),
     }),
   ]
   if (swiftTargets.length === 0) swiftProblems.push('macos/Package.swift declares no testTarget — nothing would compile')

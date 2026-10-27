@@ -43,6 +43,11 @@ export const GROUPS = {
   // own failure modes, the doc/test-wiring gates and the workflow-scalar gate.
   gates: [
     'scripts/gates/classify-ci-changes.test.mjs',
+    // The gate-surface registry is the machine source every consumer derives from;
+    // its negative controls prove each data invariant rejects bad data.
+    'scripts/gates/gate-registry.test.mjs',
+    // The generated workflow block: renderer quoting rules + freshness controls.
+    'scripts/gates/gate-workflow-views.test.mjs',
     'scripts/gates/run-checks.test.mjs',
     // Artifact freshness: the canonComment negative control (a template-literal
     // content line must NOT be normalized away, or a stale bundle slips through)

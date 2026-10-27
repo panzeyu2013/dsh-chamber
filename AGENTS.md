@@ -114,10 +114,12 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
   review-only is deliberate: a green gate never means this one was satisfied.
 - Pick the evidence for a change with `node scripts/gates/run-checks.mjs <static|tests|typecheck|full>`
   (or `--list` to see the plan) instead of recalling the set from CI YAML: the modes name the gates
-  ci.yml and release validation run, so a local pass is the same evidence. Two documented asymmetries
-  remain: `verify:shim-payload` executes in ci.yml's macOS leg as a direct script, and ci.yml's
-  `smoke` / `release-preflight --actions-only` have no mode (`smoke` is an explicit policy-test
-  exemption, not a silent omission).
+  ci.yml and release validation run, so a local pass is the same evidence **for every gate the selected mode
+  contains** (a darwin-only gate is absent from a linux run). The gates that still live outside the
+  modes are enumerated in
+  `docs/progress/STATUS.md` §1.6 (hand-written host typechecks, the macOS-only jobs, the C8 rebuild,
+  remote-state acceptance, the notices diff, the gateway pack smoke, the renderer SVG scoper assertion
+  and the Windows manifests); a green local run never proves those.
 
 ## Runtime Boundaries
 
@@ -127,7 +129,7 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
 | `packages/dsh-runtime` | Shared host-agnostic dsh runtime version management core (design 18); adapted by the desktop main process and the gateway, which never share runtime state |
 | `packages/renderer` | Self-built dsh frontend: composite entry build, per-instance host-graph merge and extra-entry preloading, N-ctx multi-instance orchestration, notification edge projection, boot manifest (designs 09, 19) |
 | `packages/dsh-chamber-client-core` | Shared chamber client kernel every chamber client package consumes: multi-source session/workspace projection, the chamberBridge singleton, the page-level client-plugin load kernel, the per-instance unary client, the page-level multiplex channel client (one socket for every long-lived stream, design 26), the settings-seat contract plus the framework-free runtime-management / SVG-resource-scope leaf contracts, and the page-level same-origin HTTP dispatch budget (design 26 §D7). Source-only: consumers resolve the TypeScript sources through its named faces and the seed bundle inlines them (designs 05, 09, 26) |
-| `packages/dsh-chamber-wire` | Neutral host↔client wire contracts for the chamber host domains (design 24 `archiveCleanup` first; design 26 adds the page-channel stream protocol): domain/method names, argument tables and frames shared by the in-host seed bundles and the client packages. Zero runtime dependencies; the source is inlined by the seed esbuild bundle and the client bundles |
+| `packages/dsh-chamber-wire` | Neutral host↔client wire contracts for the chamber host domains (design 24 `archiveCleanup` first; design 26 adds the page-channel stream protocol; P1-A moves the session-state contract here as `./session-state`, with `./json-guards` and `./mux-frame`): domain/method names, argument tables and frames shared by the in-host seed bundles and the client packages. Zero runtime dependencies; the source is inlined by the seed esbuild bundle and the client bundles |
 | `packages/dsh-stream-state` | Pure, clockless lifecycle state for the session/stream chain (design 14 §D4): reducers take observations and return typed recovery actions, and every threshold lives in tables. Zero runtime dependencies, no timers, no DOM, no imports from any existing chamber module |
 | `packages/dsh-client-connection` | In-repo copy of the official connection client plus the per-entry base-path patch |
 | `packages/dsh-client-web` | In-repo copy of the official web shell with the N-ctx boot re-base (design 09) |

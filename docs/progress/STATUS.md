@@ -95,10 +95,11 @@
 ### 1.6 一致性债务与门禁缺口
 
 - **导出/门禁**：type-only 导出不判；无入口叶子模块不判（方向 = 孤儿模块门）；`TEST_ONLY_EXPORT_ALLOWLIST` 已规则化；`run-checks tests` 零覆盖可过；`verify:styles` 不覆盖 docs token；`verify:anchors` 无 Windows 覆盖；`install-gateway.sh` 走 npm 绕单源；`test:gateway` 仍有 2 处真装器 spawn。
-- **重构/测试**：renderer 外三处 state/ref 镜像、`ssh-<id>` 别名、跨包重复 0 组（[TODO.md](TODO.md) D§1）；CI 打包排练 CPU；Swift 串行 113s（并行会丢 XCTSkip 判据）；升级线残余 = fatal 恢复框键位走查、node-pty 补偿复核。
+- **重构/测试**：renderer 外三处 state/ref 镜像、`ssh-<id>` 别名、跨包重复 0 组（[TODO.md](TODO.md) D§1）；god-file 预算现登记 37 条（含 12 个新文件；4 条 `kind:ceiling` 单列，`--report` 的缺口只按可减目标合计；gateway store 的 codec 已按 R1-A 拆出），但新模块仍需**人工**登记才受保护；CI 打包排练 CPU；Swift 串行 113s（并行会丢 XCTSkip 判据）；升级线残余 = fatal 恢复框键位走查、node-pty 补偿复核。
 - **隐私/平台**：`DSH_TELEMETRY_DISABLED` 不覆盖 `session-log-deepseek`，桌面是否默认 opt-out 未裁；`isMainFrame` 归属缺陷；docs 锚点过期（D15）；私有文件纪律三实现；`client-web` 未用 `ui-theme`；layout `ThemePresenter` 残留；wire A–F、sanitize/win-probes、dashboard 第三份 UI、A-U3/A-F16、dual-host。
 - **低优 UX**：hover-only、徽标窄窗、en 单数、aria-label、ssh done 态、PluginDialog DOM 测试、对账空态、versionsEpoch、30s 文案、内联 effect。
-- **其他**：`verify:i18n` 的 40-hex 例外；gateway 失败分支夹具；归档保护闭包测试；通知收敛器遗留；旧边沿孤岛；页面账本预热接线锁；page-channel 重复实例只报错；`notServingYet` 无生产者；Git 分支候选；B 桥写端行为夹具。
+- **门单源残余（2026-10-27 复核）**：① 5 个 typecheck（`typecheck:host-graph/host-git/host-archive-cleanup/host-open-in` 与 `typecheck:gateway`）只存在于 `ci.yml` 与 `release.yml` 的手写多行 run（gateway 另见 Windows 腿的 `ci.yml`），registry 无条目 → 四个模式都不含它们，“modes 名字即 CI 所跑”对这 5 步不成立（`seed-client-graph` 的唯一检查完全在模式之外）；② `proof:true` 只覆盖 release 校验 job 的 3/16 个生成门步，`C8` rebuild、remote-state acceptance、third-party notices、`release-preflight --actions-only`、renderer SVG scoper 断言、gateway pack/install smoke 均非 proof-required（proof 集合与 65 条 id→command 现已由 golden 钉住，改动必须同批改断言）；③ 同一 job 里 typecheck 与 typecheck:runtime 各跑两次（手写块 + `run-checks typecheck`）；④ `release-preflight.mjs` 的全量 battery 与 registry 漂移（漏 6 项、多列 4 项，无测试守）；⑤ Windows 腿结构上进不了 registry（`gate-registry.mjs` 的 platform 校验只允许 darwin），8 条 `macos.*` 门无生成块、靠手写步骤执行（命令等价但无 lockstep 测试）。修①需裁决：把手写步并入生成块，或补 registry 条目。
+- **其他**：`verify:i18n` 的 40-hex 例外；lockfile 断言（`git diff --exit-code -- pnpm-lock.yaml`，`ci.yml` 与 `release.yml` 的多个 job）不在任何模式里，只由 `verify-release-ci-proof.mjs` 的 `NON_GATE_STEPS` 按步骤名保护；gateway 失败分支夹具；归档保护闭包测试；通知收敛器遗留；旧边沿孤岛；页面账本预热接线锁；page-channel 重复实例只报错；`notServingYet` 无生产者；Git 分支候选；B 桥写端行为夹具。
 
 ## 二、差异（功能面 / 外部约束）
 
@@ -142,6 +143,8 @@
 - trusted-host 自定义 Host 需同步扩集；多 plane `$DSH_HOME` 隔离未决；catalog metadata 无跨进程 CAS。
 - 响应头白名单双处同步；`__DSH_BOOT__` 以 vendor `parseBootManifest` 为准。
 - 未挂载源 `workspace/follow` 只读流未决；facts forward-skew 带载荷是否算权威行集未裁。
+- P1 结构性收口的两处“编排核心”按**风险/收益**保留，而非“需要依赖容器”：`retireSources`（App 678-827，外部绑定约 75 个、线性扇出）与 `refreshRemotes`（838-936，99 行、约 23 个自由变量）可继续拆成 3 段 + 按域输入对象，但收益主要是可测的注销不变量（per-source closers 登记表），行数有限；host-assembly 的订阅体按上一条成对抽即可。seam 级拆分的边界：wire 契约与 gate 单源在 registry/生成块内受约束；renderer 28 个 app-hook、desktop/gateway 12 个新模块登记在 file-budgets.json（37 条）；未拆的两处编排核心即上一条。
+- host-assembly 的 `sm.onStatusChanged` 订阅体**可以抽**，但必须与 `onVerified` **成对**抽成同一工厂（二者共享 `registeredTargetKeys`/`registeredAuthFingerprints`）：工厂在组合根原位调用一次、仍同步订阅，注册时机不变。此前的“必须内联”判断不成立；真约束只剩两处：fail-closed 分支的 `return` 语义逐字保留（现 698-710）与 6 个同工厂闭包状态的归属。抽完预计 -158 行（1163 → ~1005）。
 
 ## 四、范围决策与必要取舍（不做 / 推迟 / 移出 / 偏差）
 

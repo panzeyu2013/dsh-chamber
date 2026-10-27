@@ -22,7 +22,7 @@ import {
   runMode, stepInvocation, totalJobs,
 } from './run-checks.mjs'
 import { ARTIFACTS, ensureArtifacts, formatMissingArtifacts, missingArtifacts } from '../dev/ensure-artifacts.mjs'
-import { ciUnclassifiedGateCommands, jobBlock, STATIC_GATE_EXEMPTIONS } from './static-gate-parity.mjs'
+import { loadGateRegistry } from './gate-registry.mjs'
 import { judgeSwiftTestReport, parseSwiftTestReport, swiftTestArgs, swiftTestEnvironment } from './run-swift-tests.mjs'
 import { smokeDecision } from './compiled-sidecar-smoke.mjs'
 import {
@@ -59,16 +59,19 @@ import {
 } from './verify-electron-artifacts.mjs'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-test('architecture gates can never be re-registered as local-only exemptions', () => {
-  // Presence in ci.yml's unclassified set and in release validation is already
-  // enforced by the two parity tests (staticGateParityProblems below and
-  // release-workflow-policy.test.mjs, which derives its list from ci.yml). What
-  // neither can catch is a triad gate being re-registered as a local-only
-  // exemption while MODES.static keeps it (one side only ⇒ parity stays green)
-  // or dropped from MODES.static while ci.yml keeps it.
-  for (const gate of ['import-cycles', 'file-budgets', 'package-boundaries']) {
-    assert.equal(STATIC_GATE_EXEMPTIONS.has(`node scripts/gates/verify-${gate}.mjs`), false, `${gate} cannot be local-only`)
-    assert.ok(MODES.static.includes(`verify:${gate}`), `${gate} must stay in the local static set`)
+test('architecture gates stay registered on every surface', () => {
+  // The loader validates the invariant (architecture may never be local-only); this
+  // pins the triad itself so a rename or a tier change cannot quietly drop a gate
+  // out of the architecture family while every other surface stays green.
+  const registry = loadGateRegistry()
+  for (const id of ['arch.import-cycles', 'arch.file-budgets', 'arch.package-boundaries']) {
+    const entry = registry.gates.find(candidate => candidate.id === id)
+    assert.ok(entry !== undefined, id + ' must exist in the gate registry')
+    assert.equal(entry.tier, 'architecture', id + ' must stay in the architecture tier')
+    assert.deepEqual(entry.surfaces, { local: true, ci: true, release: true }, id + ' must run on every surface')
+  }
+  for (const step of ['verify:import-cycles', 'verify:file-budgets', 'verify:package-boundaries']) {
+    assert.ok(MODES.static.includes(step), step + ' must stay in the local static set')
   }
 })
 test('every mode resolves to at least one step', () => {
@@ -350,6 +353,18 @@ test('G32/G33: the darwin tests mode carries the executed-assembly gates ci.yml 
     for (const gate of gates) assert.ok(MODES.full.includes(gate), `check:full must run ${gate}`)
     // A gate must not run before the build that produces what it executes.
     const assemblyBuild = 'pnpm run build:sidecar --skip-node --skip-vendor --skip-host-packages'
+    // Order comparisons are vacuous when an operand is missing (indexOf -> -1), so prove
+    // existence BEFORE comparing positions.
+    for (const step of [
+      assemblyBuild,
+      'pnpm run build:renderer',
+      'pnpm --filter @dsh-chamber/desktop run build:preload',
+      'test:sidecar:compiled',
+      'node scripts/gates/verify-electron-artifacts.mjs',
+      'node scripts/gui-acceptance/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web',
+    ]) {
+      assert.ok(MODES.tests.includes(step), 'the order assertions below are vacuous unless this step exists: ' + step)
+    }
     assert.ok(MODES.tests.indexOf(assemblyBuild) < MODES.tests.indexOf('test:sidecar:compiled'),
       'the sidecar assembly build must precede the compiled sidecar smoke')
     assert.ok(MODES.tests.indexOf(assemblyBuild)
@@ -795,15 +810,16 @@ test('the REAL compiled Electron artifacts execute when present (loud skip other
     'the COMPILED preload must expose the 9 dshDesktop carrier members')
 })
 
-// G35: the real-repository parity assertion (MODES.static ↔ ci.yml's
-// unclassified gate steps, with the drift negative controls) lives in
-// verify-workflow-action-pins.test.mjs; this file keeps only the member the
-// parity check cannot see (a step dropped on BOTH sides stays parity-clean).
+// G35: the matrix must stay on the push path. With the gate registry as the single
+// source, "registered for the ci job" is the fact that survives a rename; the ci.yml
+// text is read too so a hand-removed step cannot hide behind the registry.
 test('G35: the fault-injection matrix runs on the push path too, not only from check:static', () => {
-  const scripts = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')).scripts
-  const job = jobBlock(readFileSync(join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8'), 'test')
-  const ciCommands = ciUnclassifiedGateCommands(job, scripts)
-  assert.ok(ciCommands.some(command => command.includes('remote-state-injection-matrix')))
+  const registry = loadGateRegistry()
+  const gate = registry.gates.find(entry => entry.command.includes('remote-state-injection-matrix'))
+  assert.ok(gate !== undefined, 'the matrix must stay registered')
+  assert.equal(gate.workflow?.ciJob, 'test', 'the matrix must stay on the push path')
+  const ci = readFileSync(join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8')
+  assert.ok(ci.includes('- name: ' + gate.title), 'the generated ci block must carry the matrix step')
 })
 
 // ---- untracked build artifacts: ensure-artifacts + the run-checks pre-step.

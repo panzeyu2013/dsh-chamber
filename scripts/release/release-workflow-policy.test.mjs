@@ -761,6 +761,17 @@ assert.match(workflow, /needs: \[validation, create-release, build-gateway, buil
 const ciWorkflow = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8')
 const ciTestJob = jobBlock(ciWorkflow, 'test')
 
+/** Root manifest scripts, so 'pnpm run x' and its node command compare equal. */
+const rootScriptCommands = JSON.parse(
+  readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).scripts
+
+/** Canonical spelling of one gate command: a root script resolves to its node command. */
+function canonicalRun(command) {
+  const match = /^pnpm run ([A-Za-z0-9:_-]+)$/u.exec(command)
+  const script = match === null ? undefined : rootScriptCommands[match[1]]
+  return typeof script === 'string' && script.startsWith('node ') ? script.trim() : command
+}
+
 /** Every gate command a job runs: `run:` blocks, inline or multi-line. */
 function gateCommands(jobText) {
   const commands = new Set()
@@ -776,7 +787,7 @@ function gateCommands(jobText) {
       [/^(git diff --exit-code -- [^\s]+)/, match => match[1]],
     ]) {
       const match = line.match(pattern)
-      if (match) { commands.add(normalize(match)); break }
+      if (match) { commands.add(canonicalRun(normalize(match))); break }
     }
   }
   return [...commands].sort()
@@ -789,15 +800,18 @@ const EXEMPT = new Map([
   ['node scripts/gates/classify-ci-changes.mjs', 'push-path plumbing, not a gate: it only decides whether the expensive chain is worth running, and release validation always runs that chain in full, so there is nothing to classify.'],
 ])
 
-const missingGates = gateCommands(ciTestJob).filter(gate => !validation.includes(gate) && !EXEMPT.has(gate))
+const validationCommands = new Set(gateCommands(validation))
+const exemptCommands = new Set([...EXEMPT.keys()].map(canonicalRun))
+const missingGates = gateCommands(ciTestJob).filter(gate => !validationCommands.has(gate) && !exemptCommands.has(gate))
 assert.deepEqual(
   missingGates,
   [],
   `release validation must run every gate the push path runs (or list it in EXEMPT with a reason). Missing: ${missingGates.join(', ')}`)
 // An exemption that stops being needed must be removed, not left to rot.
+const pushCommands = gateCommands(ciTestJob)
 for (const gate of EXEMPT.keys()) {
   assert.ok(
-    gateCommands(ciTestJob).includes(gate),
+    pushCommands.includes(canonicalRun(gate)),
     `EXEMPT lists ${gate}, but the push path no longer runs it — drop the exemption`,
   )
   assert.ok(

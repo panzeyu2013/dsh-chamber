@@ -4,10 +4,12 @@
  * The push path runs an expensive chain (install → type checks → every unit
  * suite → builds → gateway pack). A change that touches nothing but prose
  * cannot break any of it, so this classifier decides whether that chain runs at
- * all. The cheap, file-only gates (workflow action pins, i18n pairs, design
- * tokens, upstream-touchpoint registry, release-workflow policy, the tooling
- * unit tests) are NOT classified: they run on every event, so a prose change
- * still gets the gates that can actually see it (i18n drift lives in prose).
+ * all. The cheap, file-only gates that are wired on the push path (workflow
+ * action pins, upstream-touchpoint registry, release-workflow policy, the tooling
+ * unit tests) are NOT classified: they run on every event. The i18n pair,
+ * design-token and markdown-link gates are local-only (surfaces.ci=false in
+ * gate-surfaces.json), so a prose-only change gets no CI evidence from them;
+ * run check:static locally when touching docs.
  *
  * Direction of the decision is deliberate: the allowlist below names what is
  * *prose*, and everything else — every unknown path, every path outside the
@@ -24,7 +26,7 @@ import { pathToFileURL } from 'node:url'
 /**
  * Path prefixes that cannot affect the build/test chain. Keep this list short
  * and literal; `docs/**` is prose, and the checked-in i18n hash record lives
- * under it (its gate is always-run).
+ * under it (its gate is local-only, not CI-evidenced).
  */
 export const PROSE_ONLY_PREFIXES = ['docs/']
 

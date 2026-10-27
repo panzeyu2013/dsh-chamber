@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { classifyEntry, parseArgs, validateBudget } from './verify-file-budgets.mjs'
+import { classifyEntry, effectiveTarget, parseArgs, validateBudget } from './verify-file-budgets.mjs'
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -31,6 +31,12 @@ test('a malformed entry is rejected instead of silently passing', () => {
   for (const bad of malformed) {
     assert.ok(validateBudget(bad).length > 0, 'a malformed table must not validate: ' + JSON.stringify(bad))
   }
+})
+
+test('budget kinds are validated: only ceiling, and only above the ratified size', () => {
+  assert.ok(validateBudget({ files: [{ path: 'a.ts', lines: 10, target: 4, kind: 'cap' }] }).length > 0, 'unknown kind must be rejected')
+  assert.ok(validateBudget({ files: [{ path: 'a.ts', lines: 10, target: 4, kind: 'ceiling' }] }).length > 0, 'a ceiling below the ratified size is a normal target, not a ceiling')
+  assert.deepEqual(validateBudget({ files: [{ path: 'a.ts', lines: 10, target: 12, kind: 'ceiling' }] }), [])
 })
 
 test('the ratchet classifier names every failure mode', () => {
@@ -55,4 +61,10 @@ test('the real ratified table validates and is exactly current', () => {
     const actual = text.split('\n').length - (text.endsWith('\n') ? 1 : 0)
     assert.equal(classifyEntry(entry, actual), 'ok', entry.path + ': run --update-budget in the same change that shrinks it')
   }
+})
+
+test('a ceiling row cannot inflate the reduction budget', () => {
+  assert.equal(effectiveTarget({ lines: 10, target: 4 }), 4)
+  assert.equal(effectiveTarget({ lines: 10, target: 10 }), 10)
+  assert.equal(effectiveTarget({ lines: 10, target: 25 }), 10)
 })

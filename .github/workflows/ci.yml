@@ -58,13 +58,6 @@ jobs:
           CI_AFTER: ${{ github.sha }}
           CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: node scripts/gates/classify-ci-changes.mjs
-      - name: Verify workflow action pins
-        run: node scripts/gates/verify-workflow-action-pins.mjs
-      # The pin check above reads the workflows as TEXT, so it stays green on a
-      # file GitHub refuses to parse; this closes that gap without adding a YAML
-      # dependency.
-      - name: Verify workflow YAML scalars
-        run: node scripts/gates/verify-workflow-yaml-scalars.mjs
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
           version: 11.21.0
@@ -79,17 +72,15 @@ jobs:
       # drift) and is idempotent (no-op when the link set is unchanged).
       - name: Bootstrap vendor tree (verify pin + ensure links)
         run: node scripts/dev/ensure-harness-vendor.mjs
-      # Upstream-touchpoint registry gates (docs/checklists/upstream-touchpoints.md):
-      # C1 pure fork files must stay byte-identical, C3 every fork/upstream file
-      # has a ruling, C5 anchors must not go stale, C6 EXCLUDED dirs must exist,
-      # C9 vendor patch anchors must match the pin, C11–C14 plugin protection
-      # (runtime family set / profile contract / seed registry / manifest mirror,
-      # design 21 §6.11) — all file-only, so they run before the install
-      # (fail fast). C8 (build-time artifacts == sources)
-      # rebuilds with esbuild and therefore needs node_modules — it runs in the
-      # post-install step below; here it is explicitly advisory.
+      # GENERATED:gates:ci.test.pre:begin
+      - name: Verify workflow action pins
+        run: pnpm run verify:workflows
+      - name: Verify workflow YAML scalars
+        run: pnpm run verify:workflow-yaml
+      # Upstream touchpoint registry C1/C3-C16 (advisory mode: reads, never rebuilds artifacts). File-only, runs before the install for fail-fast.
       - name: Upstream touchpoint registry (C1/C3/C4/C5/C6/C7/C9/C10 + C11–C15)
         run: node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild
+      # GENERATED:gates:ci.test.pre:end
       - run: pnpm install --frozen-lockfile
         if: steps.classify.outputs.code == 'true'
       # 构建期产物不入 git：C8 默认模式先快照再就地重建-比对，clean checkout
@@ -110,6 +101,40 @@ jobs:
       - name: Assert lockfile not rewritten
         if: steps.classify.outputs.code == 'true'
         run: git diff --exit-code -- pnpm-lock.yaml
+      # GENERATED:gates:ci.test.post:begin
+      # Upstream registry: schema/canonical/reference checks plus generated-view freshness. Needs the bootstrapped vendor tree; file-only, never behind the classifier.
+      - name: Upstream registry integrity (schema/references/views)
+        run: pnpm run verify:registry
+      # Anchor probe: registry symbol anchors resolvable + the legacy file:line budget ratcheted (only down).
+      - name: Upstream anchor probe (symbol anchors + legacy budget)
+        run: pnpm run verify:anchors
+      # Fail-soft by design: this checkout has no anchor root, so only the local criteria judge; the strict run is the upgrade flow (--require-anchor-root).
+      - name: Mobile anchor freshness (fail-soft; strict runs in the upgrade flow)
+        run: pnpm run verify:mobile-anchors
+      - name: Architecture import cycles
+        run: pnpm run verify:import-cycles
+      - name: Architecture file budgets
+        run: pnpm run verify:file-budgets
+      # Capability alignment: a chamber-consumed vendor probe that disappears or a landed upstream replacement turns this red.
+      - name: Upstream capability alignment (chamber-behind / upstream-landed)
+        run: node scripts/upstream/verify-capabilities.mjs
+      - name: Remote-state fault-injection matrix
+        run: node scripts/gates/remote-state-injection-matrix.mjs
+      - name: Stream-state differential replay (recorded vectors, drift = failure)
+        run: node scripts/refactor/equivalence.mjs
+      # Cross-language lockstep for the stream-state tables (Swift mirror compiles Foundation-only, in a temp dir).
+      - name: Stream-state Swift parity (cross-language lockstep)
+        run: node scripts/gates/verify-stream-state-swift-parity.mjs
+      - name: Ladder-table parity (B4 lockstep over the four recovery ladders)
+        run: node scripts/gates/verify-ladder-table-parity.mjs
+      - name: Upstream lifecycle contract (first-frame bound retirement tripwire)
+        run: pnpm run verify:upstream-lifecycle-contract
+      - name: Architecture package boundaries
+        run: pnpm run verify:package-boundaries
+      # Every scripts/ suite through the one entry (gates, upstream, release, gui-acceptance); the GUI driving layer stays local (needs a display).
+      - name: Script unit tests — single entry (gates / upstream / release / gui-acceptance)
+        run: pnpm run test:scripts
+      # GENERATED:gates:ci.test.post:end
       - name: Type check (tsc + chamber host packages + gateway)
         if: steps.classify.outputs.code == 'true'
         run: |
@@ -120,66 +145,10 @@ jobs:
           pnpm run typecheck:host-open-in
           pnpm run typecheck:gateway
           pnpm run typecheck:runtime
-      # Upstream registry single source: schema/canonical/reference checks,
-      # the coverage net (checklist headings ↔ entries, chamberNamedForks,
-      # ensure-harness-vendor EXCLUDED) and generated-view freshness; the anchor probe
-      # keeps registry symbol anchors resolvable and the legacy 文件:行 budget ratcheted
-      # (只降不升). File-only gates, so NOT behind the classifier; both need the
-      # bootstrapped vendor tree (Bootstrap step above).
-      - name: Upstream registry integrity (schema/references/views)
-        run: pnpm run verify:registry
-      - name: Upstream anchor probe (symbol anchors + legacy budget)
-        run: pnpm run verify:anchors
-      - name: Architecture import cycles
-        run: pnpm run verify:import-cycles
-      - name: Architecture file budgets
-        run: pnpm run verify:file-budgets
-      - name: Architecture package boundaries
-        run: pnpm run verify:package-boundaries
-      # 移动插件锚点保鲜门（design 17 §18.4.3/§18.6）：本步按门的 fail-soft 默认跑。CI 物化的
-      # 是 vendor/harness-packages/@deepseek-ai/<pkg> 源码链接树（scripts/dev/ensure-harness-vendor.mjs），
-      # 结构上没有锚点根要求的 node_modules/@deepseek-ai/**/lib/*.js，也没有
-      # dsh-web-frontend/dist/assets；bundle:dsh 又是 release-only，所以严格模式在 CI 必红；
-      # 真正「必须查过」的严格入口在升级流程 §7：
-      #   node scripts/upstream/verify-mobile-anchors.mjs --require-anchor-root --anchor-root <tree>
-      # 本机有锚树（gateway 受控锚 / 打包 app 的 sidecar vendor 树 / 物化后的运行时线）时，
-      # 同一命令会真实判定并在 pin 不符时打出醒目 WARN。
-      - name: Mobile anchor freshness (fail-soft; strict runs in the upgrade flow)
-        run: pnpm run verify:mobile-anchors
-      # 能力面对齐门（I-6，与本地 check:static 同一条命令）：capabilities.json 的每条
-      # vendor 探针按期望判缺席/出现，chamber 已消费而 vendor 缺席 = chamber-ahead-broken，
-      # 本地替代的退役触发（upstream-landed）也必须在此暴露。
-      - name: Upstream capability alignment (chamber-behind / upstream-landed)
-        run: node scripts/upstream/verify-capabilities.mjs
-      # Stream-state gates. File-only, so NOT behind
-      # the classifier: the differential replay must keep showing zero behavioral
-      # drift against the recorded vectors, and the Swift carrier-decision mirror
-      # must stay in lockstep with the TS table (the cross-language half of the
-      # single source of truth). Both are named in run-checks.mjs static, and this
-      # file must list them too — a gate that only exists locally is not a gate.
-      - name: Stream-state differential replay (recorded vectors, drift = failure)
-        run: pnpm run verify:stream-state-equivalence
-      - name: Stream-state Swift parity (cross-language lockstep)
-        run: pnpm run verify:stream-state-swift-parity
-      - name: Ladder-table parity (B4 lockstep over the four recovery ladders)
-        run: pnpm run verify:ladder-table-parity
-      - name: Upstream lifecycle contract (first-frame bound retirement tripwire)
-        run: pnpm run verify:upstream-lifecycle-contract
       - name: Workflow action pins resolve upstream (release-preflight --actions-only)
         run: node scripts/release/release-preflight.mjs --actions-only
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # Every scripts/ suite through one entry (scripts/gates/run-script-tests.mjs;
-      # manifest + naming rules in scripts/README.md §分类规则 3): the gate suites
-      # (CI classifier, gate runners, doc/link/wiring gates, workflow scalars), the
-      # upstream pin/touchpoint tooling (pin preflight classification, lockfile
-      # vendor-record restore, the upstream gate's CLI guard — a mistyped flag must
-      # not silently trigger its in-place artifact rebuild), the release chain
-      # policy + packaging lockstep, and the GUI acceptance judgement layer (its
-      # driving layer needs a display, so it stays a local gate —
-      # docs/checklists/gui-acceptance-checklist.md).
-      - name: Script unit tests — single entry (gates / upstream / release / gui-acceptance)
-        run: pnpm run test:scripts
       # One entry for the package test set: the same mode is what
       # `pnpm run check:tests` runs locally, so the push path and a developer's
       # terminal cannot drift. Adding or renaming a package suite means editing
@@ -194,11 +163,6 @@ jobs:
       - name: Remote-state acceptance matrix
         if: steps.classify.outputs.code == 'true'
         run: node scripts/gates/remote-state-acceptance.mjs --node "$(command -v node)" --out .tmp/acceptance/remote-state.json
-      # 故障注入矩阵：与本地 check:static 同一条命令 —— 单源化要求
-      # 静态集合两侧一致（check:static ↔ 这条 push 路径）；它是 file-only 的，故不挂
-      # classifier。release 验证必须同步（release-workflow-policy 从 ci.yml 派生断言）。
-      - name: Remote-state fault-injection matrix
-        run: node scripts/gates/remote-state-injection-matrix.mjs
       # Client plugin compiler faces, same single entry as `pnpm run check:typecheck`.
       - name: Client plugin type checks — single entry (sidebar / git / layout / connections / settings-bridge / client-web / connection / api-gateway / open-in / mobile)
         if: steps.classify.outputs.code == 'true'

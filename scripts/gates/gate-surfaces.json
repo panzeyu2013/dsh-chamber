@@ -1,0 +1,1028 @@
+{
+  "$comment": "Single machine source for gate membership. Derived consumers: scripts/gates/run-checks.mjs (modes), the workflow step blocks, the release proof. surfaces.* means \"runs as a step/entry on that surface\"; a false surface must carry a reason.",
+  "version": 1,
+  "gates": [
+    {
+      "id": "policy.i18n",
+      "title": "Documentation pair consistency (zh/en)",
+      "command": "verify:i18n",
+      "modes": [
+        "static"
+      ],
+      "tier": "policy",
+      "surfaces": {
+        "local": true,
+        "ci": false,
+        "release": false
+      },
+      "reason": "local-only by decision (2026-09-25): house-style/documentation gate; CI carries what needs a platform, a clean checkout or a shipped-behaviour contract (verify-i18n also runs inside release-preflight, a release procedure step, not a workflow step)"
+    },
+    {
+      "id": "quality.style-tokens",
+      "title": "Upstream design-token conformance",
+      "command": "verify:styles",
+      "modes": [
+        "static"
+      ],
+      "tier": "quality",
+      "surfaces": {
+        "local": true,
+        "ci": false,
+        "release": false
+      },
+      "reason": "local-only by decision (2026-09-25): house-style/documentation gate; CI carries what needs a platform, a clean checkout or a shipped-behaviour contract"
+    },
+    {
+      "id": "policy.workflow-pins",
+      "title": "Verify workflow action pins",
+      "command": "verify:workflows",
+      "modes": [
+        "static"
+      ],
+      "tier": "policy",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      },
+      "proof": true,
+      "workflow": {
+        "ciJob": "test",
+        "releaseJob": "validation",
+        "order": "pre"
+      }
+    },
+    {
+      "id": "policy.workflow-yaml",
+      "title": "Verify workflow YAML scalars",
+      "command": "verify:workflow-yaml",
+      "modes": [
+        "static"
+      ],
+      "tier": "policy",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      },
+      "workflow": {
+        "ciJob": "test",
+        "releaseJob": "validation",
+        "order": "pre"
+      }
+    },
+    {
+      "id": "quality.test-wiring",
+      "title": "Every test file is reachable from a running script",
+      "command": "verify:test-wiring",
+      "modes": [
+        "static"
+      ],
+      "tier": "quality",
+      "surfaces": {
+        "local": true,
+        "ci": false,
+        "release": false
+      },
+      "reason": "local-only by decision (2026-09-25): house-style/documentation gate; CI carries what needs a platform, a clean checkout or a shipped-behaviour contract"
+    },
+    {
+      "id": "payload.shim",
+      "title": "Preload shim payload shape",
+      "command": "verify:shim-payload",
+      "modes": [
+        "static"
+      ],
+      "tier": "policy",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": false
+      },
+      "reason": "runs inside the hand-written ci.yml test-macos composite step (the shim shape is macOS-only); release validation has no macOS job. Not a generated step: the macOS leg is hand-maintained and the composite step runs it together with other payload checks."
+    },
+    {
+      "id": "docs.md-links",
+      "title": "Relative markdown links resolve",
+      "command": "verify:md-links",
+      "modes": [
+        "static"
+      ],
+      "tier": "quality",
+      "surfaces": {
+        "local": true,
+        "ci": false,
+        "release": false
+      },
+      "reason": "local-only by decision (2026-09-25): house-style/documentation gate; CI carries what needs a platform, a clean checkout or a shipped-behaviour contract"
+    },
+    {
+      "id": "upstream.registry",
+      "title": "Upstream registry integrity (schema/references/views)",
+      "command": "verify:registry",
+      "modes": [
+        "static"
+      ],
+      "tier": "upstream",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      },
+      "proof": true,
+      "workflow": {
+        "ciJob": "test",
+        "releaseJob": "validation",
+        "order": "post"
+      },
+      "note": "Upstream registry: schema/canonical/reference checks plus generated-view freshness. Needs the bootstrapped vendor tree; file-only, never behind the classifier."
+    },
+    {
+      "id": "upstream.anchors",
+      "title": "Upstream anchor probe (symbol anchors + legacy budget)",
+      "command": "verify:anchors",
+      "modes": [
+        "static"
+      ],
+      "tier": "upstream",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      },
+      "proof": true,
+      "workflow": {
+        "ciJob": "test",
+        "releaseJob": "validation",
+        "order": "post"
+      },
+      "note": "Anchor probe: registry symbol anchors resolvable + the legacy file:line budget ratcheted (only down)."
+    },
+    {
+      "id": "upstream.mobile-anchors",
+      "title": "Mobile anchor freshness (fail-soft; strict runs in the upgrade flow)",
+      "command": "verify:mobile-anchors",
+      "modes": [
+        "static"
+      ],
+      "tier": "upstream",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      },
+      "workflow": {
+        "ciJob": "test",
+        "releaseJob": "validation",
+        "order": "post"
+      },
+      "note": "Fail-soft by design: this checkout has no anchor root, so only the local criteria judge; the strict run is the upgrade flow (--require-anchor-root)."
+    },
+    {
+      "id": "arch.import-cycles",
+      "title": "Architecture import cycles",
+      "command": "verify:import-cycles",
+      "modes": [
+        "static"
+      ],
+      "tier": "architecture",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      },
+      "workflow": {
+        "ciJob": "test",
+        "releaseJob": "validation",
+        "order": "post"
+      }
+    },
+    {
+      "id": "arch.file-budgets",
+      "title": "Architecture file budgets",
+      "command": "verify:file-budgets",
+      "modes": [
+        "static"
+      ],
+      "tier": "architecture",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      },
+      "workflow": {
+        "ciJob": "test",
+        "releaseJob": "validation",
+        "order": "post"
+      }
+    },
+    {
+      "id": "upstream.touchpoints",
+      "title": "Upstream touchpoint registry (C1/C3/C4/C5/C6/C7/C9/C10 + C11–C15)",
+      "command": "node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild",
+      "modes": [
+        "static"
+      ],
+      "tier": "upstream",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      },
+      "workflow": {
+        "ciJob": "test",
+        "releaseJob": "validation",
+        "order": "pre"
+      },
+      "note": "Upstream touchpoint registry C1/C3-C16 (advisory mode: reads, never rebuilds artifacts). File-only, runs before the install for fail-fast."
+    },
+    {
+      "id": "upstream.capabilities",
+      "title": "Upstream capability alignment (chamber-behind / upstream-landed)",
+      "command": "node scripts/upstream/verify-capabilities.mjs",
+      "modes": [
+        "static"
+      ],
+      "tier": "upstream",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      },
+      "workflow": {
+        "ciJob": "test",
+        "releaseJob": "validation",
+        "order": "post"
+      },
+      "note": "Capability alignment: a chamber-consumed vendor probe that disappears or a landed upstream replacement turns this red."
+    },
+    {
+      "id": "test.remote-injection",
+      "title": "Remote-state fault-injection matrix",
+      "command": "node scripts/gates/remote-state-injection-matrix.mjs",
+      "modes": [
+        "static"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      },
+      "workflow": {
+        "ciJob": "test",
+        "releaseJob": "validation",
+        "order": "post"
+      }
+    },
+    {
+      "id": "refactor.equivalence",
+      "title": "Stream-state differential replay (recorded vectors, drift = failure)",
+      "command": "node scripts/refactor/equivalence.mjs",
+      "modes": [
+        "static"
+      ],
+      "tier": "quality",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      },
+      "workflow": {
+        "ciJob": "test",
+        "releaseJob": "validation",
+        "order": "post"
+      }
+    },
+    {
+      "id": "parity.stream-state-swift",
+      "title": "Stream-state Swift parity (cross-language lockstep)",
+      "command": "node scripts/gates/verify-stream-state-swift-parity.mjs",
+      "modes": [
+        "static"
+      ],
+      "tier": "policy",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      },
+      "workflow": {
+        "ciJob": "test",
+        "releaseJob": "validation",
+        "order": "post"
+      },
+      "note": "Cross-language lockstep for the stream-state tables (Swift mirror compiles Foundation-only, in a temp dir)."
+    },
+    {
+      "id": "parity.ladder-tables",
+      "title": "Ladder-table parity (B4 lockstep over the four recovery ladders)",
+      "command": "node scripts/gates/verify-ladder-table-parity.mjs",
+      "modes": [
+        "static"
+      ],
+      "tier": "policy",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      },
+      "workflow": {
+        "ciJob": "test",
+        "releaseJob": "validation",
+        "order": "post"
+      }
+    },
+    {
+      "id": "quality.dead-exports",
+      "title": "Dead-export scan",
+      "command": "verify:no-dead-exports",
+      "modes": [
+        "static"
+      ],
+      "tier": "quality",
+      "surfaces": {
+        "local": true,
+        "ci": false,
+        "release": false
+      },
+      "reason": "local-only by decision (2026-09-25): house-style/documentation gate; CI carries what needs a platform, a clean checkout or a shipped-behaviour contract"
+    },
+    {
+      "id": "upstream.lifecycle-contract",
+      "title": "Upstream lifecycle contract (first-frame bound retirement tripwire)",
+      "command": "verify:upstream-lifecycle-contract",
+      "modes": [
+        "static"
+      ],
+      "tier": "upstream",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      },
+      "workflow": {
+        "ciJob": "test",
+        "releaseJob": "validation",
+        "order": "post"
+      }
+    },
+    {
+      "id": "arch.package-boundaries",
+      "title": "Architecture package boundaries",
+      "command": "verify:package-boundaries",
+      "modes": [
+        "static"
+      ],
+      "tier": "architecture",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      },
+      "workflow": {
+        "ciJob": "test",
+        "releaseJob": "validation",
+        "order": "post"
+      }
+    },
+    {
+      "id": "test.scripts",
+      "title": "Script unit tests — single entry (gates / upstream / release / gui-acceptance)",
+      "command": "test:scripts",
+      "modes": [
+        "static"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      },
+      "workflow": {
+        "ciJob": "test",
+        "releaseJob": "validation",
+        "order": "post"
+      },
+      "note": "Every scripts/ suite through the one entry (gates, upstream, release, gui-acceptance); the GUI driving layer stays local (needs a display)."
+    },
+    {
+      "id": "typecheck.root",
+      "title": "Type check (root program)",
+      "command": "typecheck",
+      "modes": [
+        "typecheck"
+      ],
+      "tier": "typecheck",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "typecheck.runtime",
+      "title": "Type check (dsh-runtime)",
+      "command": "typecheck:runtime",
+      "modes": [
+        "typecheck"
+      ],
+      "tier": "typecheck",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "typecheck.sidebar",
+      "title": "Type check (sidebar)",
+      "command": "typecheck:sidebar",
+      "modes": [
+        "typecheck"
+      ],
+      "tier": "typecheck",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "typecheck.git",
+      "title": "Type check (git plugin)",
+      "command": "typecheck:git",
+      "modes": [
+        "typecheck"
+      ],
+      "tier": "typecheck",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "typecheck.layout",
+      "title": "Type check (layout)",
+      "command": "typecheck:layout",
+      "modes": [
+        "typecheck"
+      ],
+      "tier": "typecheck",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "typecheck.connections",
+      "title": "Type check (connections)",
+      "command": "typecheck:connections",
+      "modes": [
+        "typecheck"
+      ],
+      "tier": "typecheck",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "typecheck.settings-bridge",
+      "title": "Type check (settings bridge)",
+      "command": "typecheck:settings-bridge",
+      "modes": [
+        "typecheck"
+      ],
+      "tier": "typecheck",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "typecheck.client-web",
+      "title": "Type check (client web)",
+      "command": "typecheck:client-web",
+      "modes": [
+        "typecheck"
+      ],
+      "tier": "typecheck",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "typecheck.connection",
+      "title": "Type check (connection client)",
+      "command": "typecheck:connection",
+      "modes": [
+        "typecheck"
+      ],
+      "tier": "typecheck",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "typecheck.api-gateway",
+      "title": "Type check (api gateway)",
+      "command": "typecheck:api-gateway",
+      "modes": [
+        "typecheck"
+      ],
+      "tier": "typecheck",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "typecheck.stream-state",
+      "title": "Type check (stream state)",
+      "command": "typecheck:stream-state",
+      "modes": [
+        "typecheck"
+      ],
+      "tier": "typecheck",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "typecheck.open-in",
+      "title": "Type check (open-in)",
+      "command": "typecheck:open-in",
+      "modes": [
+        "typecheck"
+      ],
+      "tier": "typecheck",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "typecheck.mobile",
+      "title": "Type check (mobile)",
+      "command": "typecheck:mobile",
+      "modes": [
+        "typecheck"
+      ],
+      "tier": "typecheck",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.runtime",
+      "title": "Package tests: dsh-runtime",
+      "command": "test:runtime",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.control-plane",
+      "title": "Package tests: control-plane",
+      "command": "test:control-plane",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.api-gateway",
+      "title": "Package tests: api-gateway",
+      "command": "test:api-gateway",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.stream-state",
+      "title": "Package tests: stream-state",
+      "command": "test:stream-state",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.desktop",
+      "title": "Package tests: desktop",
+      "command": "test:desktop",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.gateway",
+      "title": "Package tests: gateway",
+      "command": "test:gateway",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.renderer-shell",
+      "title": "Package tests: renderer",
+      "command": "test:renderer-shell",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.sidebar",
+      "title": "Package tests: sidebar",
+      "command": "test:sidebar",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.layout",
+      "title": "Package tests: layout",
+      "command": "test:layout",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.git",
+      "title": "Package tests: git",
+      "command": "test:git",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.host-git",
+      "title": "Package tests: seed git-worktree",
+      "command": "test:host-git",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.host-archive-cleanup",
+      "title": "Package tests: seed archive-cleanup",
+      "command": "test:host-archive-cleanup",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.host-open-in",
+      "title": "Package tests: seed open-in",
+      "command": "test:host-open-in",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.settings-bridge",
+      "title": "Package tests: settings-bridge",
+      "command": "test:settings-bridge",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.connections",
+      "title": "Package tests: settings-connections",
+      "command": "test:connections",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.plugin-manager",
+      "title": "Package tests: plugin manager",
+      "command": "test:plugin-manager",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.client-web",
+      "title": "Package tests: client-web",
+      "command": "test:client-web",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.connection",
+      "title": "Package tests: connection",
+      "command": "test:connection",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.open-in",
+      "title": "Package tests: open-in",
+      "command": "test:open-in",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.mobile",
+      "title": "Package tests: mobile",
+      "command": "test:mobile",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.cli",
+      "title": "Package tests: cli",
+      "command": "test:cli",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.artifact-freshness",
+      "title": "Build-time artifacts match sources (local compare)",
+      "command": "node scripts/gates/verify-artifact-freshness.mjs",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "macos.swift-tests",
+      "title": "Swift tests (release configuration)",
+      "command": "test:swift",
+      "modes": [
+        "tests"
+      ],
+      "tier": "assembly",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": false
+      },
+      "platform": "darwin",
+      "reason": "macOS-only assembly leg; release validation has no macOS job (native artifacts are proven by build-swift)"
+    },
+    {
+      "id": "macos.lock-packaging",
+      "title": "Darwin lock + packaging-script suites",
+      "command": "test:macos",
+      "modes": [
+        "tests"
+      ],
+      "tier": "assembly",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": false
+      },
+      "platform": "darwin",
+      "reason": "macOS-only assembly leg; release validation has no macOS job"
+    },
+    {
+      "id": "macos.sidecar-build",
+      "title": "Build sidecar assembly",
+      "command": "pnpm run build:sidecar --skip-node --skip-vendor --skip-host-packages",
+      "modes": [
+        "tests"
+      ],
+      "tier": "assembly",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": false
+      },
+      "platform": "darwin",
+      "reason": "macOS-only assembly leg; release validation has no macOS job"
+    },
+    {
+      "id": "macos.sidecar-smoke",
+      "title": "Compiled sidecar smoke",
+      "command": "test:sidecar:compiled",
+      "modes": [
+        "tests"
+      ],
+      "tier": "assembly",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": false
+      },
+      "platform": "darwin",
+      "reason": "macOS-only assembly leg; release validation has no macOS job"
+    },
+    {
+      "id": "macos.renderer-build",
+      "title": "Renderer build (shell index + assets)",
+      "command": "pnpm run build:renderer",
+      "modes": [
+        "tests"
+      ],
+      "tier": "assembly",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": false
+      },
+      "platform": "darwin",
+      "reason": "macOS-only assembly leg; release validation has no macOS job"
+    },
+    {
+      "id": "macos.gui-acceptance",
+      "title": "Native assembly acceptance (GUI)",
+      "command": "node scripts/gui-acceptance/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web",
+      "modes": [
+        "tests"
+      ],
+      "tier": "assembly",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": false
+      },
+      "platform": "darwin",
+      "reason": "macOS-only assembly leg; release validation has no macOS job"
+    },
+    {
+      "id": "macos.preload-build",
+      "title": "Preload build",
+      "command": "pnpm --filter @dsh-chamber/desktop run build:preload",
+      "modes": [
+        "tests"
+      ],
+      "tier": "assembly",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": false
+      },
+      "platform": "darwin",
+      "reason": "macOS-only assembly leg; release validation has no macOS job"
+    },
+    {
+      "id": "macos.electron-artifacts",
+      "title": "Compiled Electron artifacts smoke",
+      "command": "node scripts/gates/verify-electron-artifacts.mjs",
+      "modes": [
+        "tests"
+      ],
+      "tier": "assembly",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": false
+      },
+      "platform": "darwin",
+      "reason": "macOS-only assembly leg; release validation has no macOS job"
+    }
+  ]
+}

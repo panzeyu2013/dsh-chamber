@@ -62,175 +62,33 @@ import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
 import { delimiter, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ensureArtifacts } from '../dev/ensure-artifacts.mjs'
+import { deriveModes, loadGateRegistry, validateGateRegistry } from './gate-registry.mjs'
 import {
   MANIFEST_DUMP_ENV, TIMING_ENV, parseManifestDump, resolveJobs, runEntries, spawnCaptured,
 } from '../lib/test-manifest.mjs'
 
-/** Package test suites, in the order the CI job runs them. */
-const PACKAGE_TESTS = [
-  'test:runtime',
-  'test:control-plane',
-  'test:api-gateway',
-  // Pure lifecycle reducers: no deps, no artifacts, so a
-  // structural break in the shared model fails first and names itself.
-  'test:stream-state',
-  'test:desktop',
-  'test:gateway',
-  'test:renderer-shell',
-  'test:sidebar',
-  'test:layout',
-  'test:git',
-  'test:host-git',
-  'test:host-archive-cleanup',
-  'test:host-open-in',
-  'test:settings-bridge',
-  'test:connections',
-  'test:plugin-manager',
-  'test:client-web',
-  'test:connection',
-  'test:open-in',
-  'test:mobile',
-  'test:cli',
-]
-
 /**
- * Compiler faces checked on every push. `typecheck` is the ROOT program
- * (tsconfig.json: control-plane / cli / renderer / desktop / gateway sources).
- * It runs first, matching ci.yml: local `check:typecheck` could otherwise be green while the root
- * program regressed.
+ * Gate membership is NOT declared here. The machine source is
+ * gate-surfaces.json (loader: gate-registry.mjs); this file owns execution order
+ * inside a mode, the artifact pre-step and the pool scheduling.
  */
-const CLIENT_TYPECHECKS = [
-  'typecheck',
-  // ci.yml already runs the runtime project's compiler face on both paths
-  // (push + release validation); the local mode mirrors it so a type defect in
-  // packages/dsh-runtime cannot pass every local gate while CI is the first to see it.
-  'typecheck:runtime',
-  'typecheck:sidebar',
-  'typecheck:git',
-  'typecheck:layout',
-  'typecheck:connections',
-  'typecheck:settings-bridge',
-  'typecheck:client-web',
-  'typecheck:connection',
-  'typecheck:api-gateway',
-  'typecheck:stream-state',
-  'typecheck:open-in',
-  'typecheck:mobile',
-]
+const GATE_REGISTRY = loadGateRegistry()
+const REGISTRY_PROBLEMS = validateGateRegistry(GATE_REGISTRY)
+if (REGISTRY_PROBLEMS.length > 0) {
+  console.error('run-checks: gate-surfaces.json is invalid:', REGISTRY_PROBLEMS)
+  process.exit(2)
+}
 
-/**
- * macOS/Swift-only leg: `test:swift` is the XCTest suite (run-swift-tests.mjs
- * pins `-c release` and fails on any XCTSkip), `test:macos` runs the
- * darwin O_EXLOCK lock assertions and the two packaging-script suites
- * (plutil/codesign/ditto/hdiutil + the SwiftPM .build output). Both are
- * appended only on darwin — never on the ubuntu test job / release validation.
- * The CI entry point is ci.yml's test-macos job; a local `check:tests` on
- * darwin needs `pnpm run build:control-plane` first (the packaging suites read
- * dist/control-plane). `test:swift` runs first so its release build satisfies
- * the packaging suite's `.build/release` precondition.
- *
- * The same leg also carries the executed-assembly gates ci.yml's
- * test-macos job runs — the compiled sidecar smoke (the shipped sidecar.js
- * boots, DSH_CHAMBER_SIDECAR_COMPILED=1 so a missing assembly is a hard
- * failure), the native acceptance (the sidecar the packaged Swift shell spawns
- * launches and serves; `--require-assembly` turns the loud SKIP into a FAIL,
- * so deleting the build step cannot turn this gate green, and it now also
- * requires N-6 to execute — hence `build:renderer` + `--web-dist` below,
- * otherwise the shell index/asset leg would silently stay INFO), and the
- * compiled Electron artifacts smoke (control-plane boot + frozen preload
- * surface). The
- * sidecar assembly is built here exactly as ci.yml builds it
- * (--skip-node/--skip-vendor/--skip-host-packages) so the mode is
- * self-contained; the Electron gate needs build:preload because a
- * control-plane-only tree is the partial build that gate refuses by design.
- */
-const MACOS_CHECKS = process.platform === 'darwin' ? [
-  'test:swift',
-  'test:macos',
-  'pnpm run build:sidecar --skip-node --skip-vendor --skip-host-packages',
-  'test:sidecar:compiled',
-  // N-6（壳 index + 声明资源）必须在机器门档下真执行：先产 renderer，再显式指给验收器。
-  'pnpm run build:renderer',
-  'node scripts/gui-acceptance/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web',
-  'pnpm --filter @dsh-chamber/desktop run build:preload',
-  'node scripts/gates/verify-electron-artifacts.mjs',
-] : []
-
-/** Repository-level policy and documentation gates. */
-const STATIC_CHECKS = [
-  'verify:i18n',
-  'verify:styles',
-  'verify:workflows',
-  'verify:workflow-yaml',
-  'verify:test-wiring',
-  'verify:shim-payload',
-  'verify:md-links',
-  'verify:registry',
-  'verify:anchors',
-  // 移动插件锚点门（design 17 §18.4.3/§18.6）：本机存在上游产物树时真实判定；
-  // CI/裸 clone 上没有该树（vendor/harness-packages 物化成 @deepseek-ai/<pkg> 源码链接树，
-  // 没有 node_modules/@deepseek-ai/**/lib/*.js；packages/desktop/vendor/dsh 只有锁文件）
-  // ⇒ **上游发射侧** fail-soft 跳过；本地判据（禁用形态、最小断言集声明侧完整性）
-  // 不依赖该树，仍然判定并可在 CI 红。严格模式由升级流程 §7 显式带
-  // --require-anchor-root 跑，不在这里伪装成「查过了」。
-  'verify:mobile-anchors',
-  // 引用环门：真环（值 import 环）= 0，类型环必须命中显式 allowance（棘轮，
-  // 新增环即红）。只读、离线、自带 --self-test 负控；本地、CI 与 release validation 同跑。
-  'verify:import-cycles',
-  // God 文件棘轮门：预算文件里的行数只许降不许升（--update-budget 同步降档），
-  // target 列是 refactor 目标。只读、离线；本地、CI 与 release validation 同跑。
-  'verify:file-budgets',
-  // 上游触点门全量（C1/C3–C16，判据清单见 docs/checklists/upstream-touchpoints.md §6）：advisory 模式（只读，不重建产物）。必须是普通门——
-  // 否则本地 static/full 可以在 C1/C3 失败（例如把 pure 文件挪进 patched）时全绿，
-  // 与 AGENTS "本地 pass = CI 同证据" 的口径矛盾。CI 两处直接调用同一命令。
-  'node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild',
-  // 能力面对齐门（I-6）：capabilities.json × vendor 源树，逐条判 aligned/chamber-behind/
-  // chamber-ahead-broken/upstream-landed/probe-unresolvable（前两类 + upstream-landed
-  // 即红：退役触发到了就必须处理）。只读、离线、自带 --self-test 负控，故属 static。
-  'node scripts/upstream/verify-capabilities.mjs',
-  // 远端完成未读/切源的故障注入矩阵：快、离线、自带 --self-test 负控。
-  'node scripts/gates/remote-state-injection-matrix.mjs',
-  // 差分回放：把旧路轨迹与新 reducer 的 effects 对着 vectors.json 比一遍。
-  // 纯 node、无依赖、离线，故属 static；drift≠0 即红（差异必须在 DIVERGENCE.md 登记）。
-  'node scripts/refactor/equivalence.mjs',
-  // Stream-state 的 Swift 镜像锁步：编译 Foundation-only 的
-  // packages/dsh-stream-state/swift/CarrierDecision.swift 并对着共享 tables.json 断言。
-  // 只读、离线、临时目录内编译（不写工作树），故属 static 模式；
-  // 负控：node scripts/... --simulate-skip 会明确打印 SKIP。
-  'node scripts/gates/verify-stream-state-swift-parity.mjs',
-  // 四条恢复阶梯的阈值锁步——值记在共享 tables.json，仍各自持有常量的模块
-  // 由本门逐个比对（漂移即红；模块删掉常量正是退役，不算失败）。
-  // 只读、离线、无依赖，故属 static 模式。
-  'node scripts/gates/verify-ladder-table-parity.mjs',
-  // G-H 死面扫描：遍历工作区全部 packages/*/src/index.ts，每个运行时导出必须有一个
-  // 生产 importer，否则红；显式豁免必须带理由且不得过期。运行期装载包（dsh loader /
-  // client-plugin loader）单列理由不做判定；待收窄包按 PENDING_PACKAGES（owner + 退役
-  // 阶段）抑制并打印，名单僵尸即红。当前全绿且名单为空（client-core 桶已收敛为生产面）。
-  'verify:no-dead-exports',
-  'verify:upstream-lifecycle-contract',
-  // 包边界门（R4 P7）：生产面禁跨包相对 import（vendor 直穿按 registry 放行）+
-  // exports 面白名单。只读、离线、自带 --self-test 负控；本地、CI 与 release validation 同跑。
-  'verify:package-boundaries',
-  'test:scripts',
-]
+/** Named gate groups derived from the registry; keep names disjoint from script names. */
+export const MODES = deriveModes(GATE_REGISTRY)
 
 /**
  * Modes whose steps consume the untracked build artifacts (scripts/dev/
- * ensure-artifacts.mjs). `tests`/`typecheck`/`full` self-bootstrap: the
- * pre-step builds what is missing before any step runs. `static` is the
+ * ensure-artifacts.mjs). tests/typecheck/full self-bootstrap; static is the
  * read-only gate set — it must NEVER write the working tree, so a missing
- * artifact is a loud failure that names `pnpm run build:artifacts` instead of a
- * silent skip or a hidden rebuild.
+ * artifact is a loud failure that names the build command instead of a silent skip.
  */
 export const ARTIFACT_MODES = new Set(['static', 'typecheck', 'tests', 'full'])
-
-/** Named gate groups. Keep the names disjoint from script names to avoid confusion. */
-export const MODES = {
-  static: STATIC_CHECKS,
-  tests: [...PACKAGE_TESTS, 'node scripts/gates/verify-artifact-freshness.mjs', ...MACOS_CHECKS],
-  typecheck: CLIENT_TYPECHECKS,
-  full: [...STATIC_CHECKS, ...CLIENT_TYPECHECKS, ...PACKAGE_TESTS, 'node scripts/gates/verify-artifact-freshness.mjs', ...MACOS_CHECKS],
-}
 
 /**
  * Repository gates (the static and per-package typecheck steps). They are whole
@@ -238,7 +96,18 @@ export const MODES = {
  * pools them as command entries. Their child env pins DSH_TEST_JOBS=1: a gate
  * that itself fans out (test:scripts) must not multiply the pool.
  */
-const GATE_STEPS = new Set([...STATIC_CHECKS, ...CLIENT_TYPECHECKS])
+const GATE_STEPS = new Set([...MODES.static, ...MODES.typecheck])
+
+/**
+ * Package-test steps: registry tier 'test', mode 'tests', declared as a bare root
+ * script (the artifact-freshness node step and the darwin assembly gates stay serial).
+ */
+const PACKAGE_TEST_STEPS = new Set(
+  GATE_REGISTRY.gates
+    .filter(gate => gate.tier === 'test' && gate.modes.includes('tests')
+      && !gate.command.startsWith('node ') && !gate.command.startsWith('pnpm '))
+    .map(gate => gate.command),
+)
 
 /**
  * Resolve the pnpm invocation used for one step.
@@ -342,7 +211,7 @@ export function rootScripts(repoRoot = REPO_ROOT) {
  * command is exactly the manifest invocation. The run-checks artifact pre-step
  * already ensured the artifacts the ensure-artifacts preamble would build, so
  * the preamble is redundant here; anything else falls back to its pnpm step.
- * @param {string} step - one PACKAGE_TESTS entry.
+ * @param {string} step - one package-test step (registry tier 'test').
  * @param {object} [facts] - injectable repository facts (tests).
  * @param {Map<string, { dir: string, test: string }>} [facts.packages] - package name -> facts.
  * @param {Record<string, string>} [facts.scripts] - root scripts.
@@ -672,7 +541,7 @@ export async function runMode(mode, options = {}) {
   // Phase 2 — package tests share ONE global file pool: the per-package pnpm
   // invocation only resolves the manifest, so a slow package cannot hold the
   // run behind its own tail and a small package is not handed a private pool.
-  const packageSteps = steps.filter(step => PACKAGE_TESTS.includes(step))
+  const packageSteps = steps.filter(step => PACKAGE_TEST_STEPS.has(step))
   if (packageSteps.length > 0 && (keepGoing || failed.length === 0)) {
     const launch = options.launchStep ?? (async (step) => {
       // A manifest package resolves in-place (no pnpm startup); a non-manifest
@@ -720,7 +589,7 @@ export async function runMode(mode, options = {}) {
 
   // Phase 3 — ordered leftovers (artifact freshness, the darwin build→test
   // chain) keep the serial loop: their order is a contract, not a preference.
-  const serialSteps = steps.filter(step => !GATE_STEPS.has(step) && !PACKAGE_TESTS.includes(step))
+  const serialSteps = steps.filter(step => !GATE_STEPS.has(step) && !PACKAGE_TEST_STEPS.has(step))
   for (const step of serialSteps) {
     if (failed.length > 0 && !keepGoing) break
     const invocation = directNodeInvocation(step) ?? directTscInvocation(step) ?? stepInvocation(step, pnpm)

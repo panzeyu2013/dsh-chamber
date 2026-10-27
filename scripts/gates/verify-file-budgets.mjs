@@ -62,6 +62,8 @@ export function validateBudget(budget) {
     else seen.add(entry.path)
     if (!Number.isSafeInteger(entry.lines) || entry.lines < 0) errors.push(`${at}.lines must be a non-negative integer`)
     if (!Number.isSafeInteger(entry.target) || entry.target < 0) errors.push(`${at}.target must be a non-negative integer`)
+    if (entry.kind !== undefined && entry.kind !== 'ceiling') errors.push(`${at}.kind must be "ceiling" when present`)
+    if (entry.kind === 'ceiling' && entry.target <= entry.lines) errors.push(at + ': ceiling requires target above .lines')
   })
   return errors
 }
@@ -78,6 +80,14 @@ export function classifyEntry(entry, actual) {
   return 'ok'
 }
 
+/**
+ * The reduction a row can actually contribute: a CEILING row (target above the
+ * ratified size) contributes nothing, so it cannot inflate the table's remaining-work
+ * arithmetic with fake slack. Leaves pinned at their current size contribute zero.
+ */
+export function effectiveTarget(entry) {
+  return Math.min(entry.target, entry.lines)
+}
 function readBudget() {
   return JSON.parse(readFileSync(BUDGET_PATH, 'utf8'))
 }
@@ -171,11 +181,17 @@ function main() {
   }
   const width = Math.max(...rows.map((row) => row.path.length))
   for (const row of rows) {
-    const met = row.actual !== null && row.actual <= row.target ? ' TARGET-MET' : ''
+    const ceiling = row.kind === 'ceiling'
+    const frozen = !ceiling && row.target >= row.lines && classifyEntry(row, row.actual) === 'ok'
+    const met = ceiling
+      ? ' CEILING'
+      : frozen
+        ? ' FROZEN'
+        : (row.actual !== null && row.actual <= row.target ? ' TARGET-MET' : '')
     console.log(`${row.path.padEnd(width)}  ${String(row.actual).padStart(5)} / ratified ${String(row.lines).padStart(5)} / target ${String(row.target).padStart(5)}${met}`)
   }
   const total = rows.reduce((sum, row) => sum + (row.actual ?? 0), 0)
-  const totalTarget = rows.reduce((sum, row) => sum + row.target, 0)
+  const totalTarget = rows.reduce((sum, row) => sum + effectiveTarget(row), 0)
   console.log(`god-file budget: ${rows.length} file(s), ${total} lines now, ${totalTarget} at target (-${total - totalTarget} to go)`)
   if (report) return
   if (failed) {
@@ -183,4 +199,4 @@ function main() {
     process.exitCode = 1
   }
 }
-main()
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main()

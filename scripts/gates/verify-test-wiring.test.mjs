@@ -225,13 +225,11 @@ test('the shipped Swift corpus, manifest script and gate entry stay in lockstep'
   const manifest = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'))
   const script = findSwiftTestScript(manifest)
   assert.ok(script !== null, 'root package.json must expose a swift test script')
-  assert.deepEqual(
-    swiftWiringProblems({
-      script,
-      runChecksText: readFileSync(join(repoRoot, 'scripts/gates/run-checks.mjs'), 'utf8'),
-    }),
-    [],
-  )
+  // The darwin gate set lives in the machine source (gate-surfaces.json); run-checks
+  // only derives from it, so the wiring surface is both texts together.
+  const wiringText = readFileSync(join(repoRoot, 'scripts/gates/run-checks.mjs'), 'utf8')
+    + readFileSync(join(repoRoot, 'scripts/gates/gate-surfaces.json'), 'utf8')
+  assert.deepEqual(swiftWiringProblems({ script, runChecksText: wiringText }), [])
   const targets = parseSwiftTestTargets(readFileSync(join(repoRoot, 'macos/Package.swift'), 'utf8'))
   assert.deepEqual(targets.map(target => target.name), ['DSHChamberTests'])
 })

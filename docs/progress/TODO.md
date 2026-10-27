@@ -96,7 +96,7 @@
   冻结 + 纳入 `API_REMOTE_FORWARDED_EVENTS`；③observer 角色或 `session/list` pending 投影（避免只读方撞瀑布）；
   ④宿主持久 per-session unread/pending 投影。
 - 下游现状：chamber 已移除本地 durable 未读账本，权威 = 官方内存 `completionUnread`（重载即忘）；只读镜像协议
-  单源 `session-state-protocol.ts`，watcher `packages/gateway/src/session-state.ts`。
+  单源 `packages/dsh-chamber-wire/src/session-state.ts`（A-1 落地；浏览器经 client-core 具名面），watcher `packages/gateway/src/session-state.ts`。
 - 退出：上游 1–4 落地后删 watcher 的补洞逻辑。
 
 ### 7. 子代理生命周期/计数与完整性信号（P5）
@@ -578,8 +578,10 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 |---|---|---|---|
 |1|三处 state/ref 镜像：`packages/dsh-chamber-client-ui-sidebar/src/client/sidebar-root-projection.ts`（serversRef）、`packages/renderer/src/components/InstanceView.tsx`（activeRef/settledRef）、`packages/dsh-chamber-client-ui-settings-bridge/src/client/DshRuntimeSection.tsx`（confirmLaunchRef）|未收口（其余已收口，基线在 git 历史与各 host store 注释）|渲染值走 useSyncExternalStore 小 store（单源）、事件回调读 store 的 getSnapshot()，删 ref 镜像；不引入状态库/新包|
 |2|settings 两分支合流：`DshRuntimeSection` 的 gateway/local 共享 controller|未动|runtime-management / 设置桥套件绿；先补 parity 测试再合并|
-|3|逐包棘轮收尾：`file-budgets.json` 的 16 个文件只降不升|逐轮下降中|`verify:file-budgets` + `check:static`/`check:tests` 恒绿|
+|3|逐包棘轮收尾：file-budgets.json 的 37 条只降不升（含新叶、4 条 ceiling、FROZEN 行；行数与缺口**以表为准**，不在文档里复写）|逐轮下降中：App 拆出 28 个 app-hook；transport-manager 拆出 registry/link-loop/link-health/instance-state；gateway session-state 拆出 types/features/store/store-codec/observer/sse（store 的 codec+validators 已独立，1056→800）；host-assembly 拆出 exit/registry-transition。目标与缺口一律看 node scripts/gates/verify-file-budgets.mjs --report|verify:file-budgets 恒绿；**待裁决**：新模块仍需人工登记；host-assembly 成对抽取与 transport exec 的取舍见 STATUS §三|
 |4|§1.5 的审计开放项|未动|各自条目内|
+|5|desktop/host-assembly.ts 1249 → **1163**（B4-1 退出腿 `host-exit.ts` 75 行；B4-2a 注册表提交转移 `host-registry-transition.ts` 99 行，`main-side-files.mjs` 单一名单同步、bridge-manifest 重生成后逐字节不变）；剩余 `sm.onStatusChanged` 订阅回调（~204 行，28 个自由变量）|B4-2b|未动：28 依赖的订阅体，抽出需要依赖容器或保持边界|
+|6|App 残余编排的依赖容器化（`retireSources`+`refreshRemotes`+`JSX` 共 ≈75 个自由标识符）|未决：逐字搬会得到 ≈75 字段的入参对象，不如现状；需先裁决「单一 AppRuntime 容器」是否值得（会改变模块边界而非减少耦合）|裁决后要么引入容器并继续切，要么把「App 编排核心」登记为有意保留的边界|
 
 #### 1.2 已核结论（不再排期）
 
@@ -590,12 +592,19 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 #### 1.3 门禁与用法
 
 - 证据选择：`node scripts/gates/run-checks.mjs <static|tests|typecheck|full>`（`--list` 看完整计划）——
-  模式名与 ci.yml / release 验证一致，本地通过即同一份证据。
+  模式名与 ci.yml / release 验证一致（**例外清单**见 STATUS §1.6：手写 host typecheck、macOS 腿、C8 rebuild、remote-state acceptance、notices diff、gateway pack smoke、SVG scoper、Windows manifest 均无模式），其余本地通过即同一份证据（darwin-only 门只在 macOS 上被模式包含：8 条 `macos.*` 属 darwin 的 tests 模式，CI 侧仍是手写步骤）。
 - 本重构相关三门：`verify:import-cycles`（值环 0 + 类型环 allowance——现为空）、`verify:file-budgets`
-  （16 个 God 文件只降不升）、`verify:no-dead-exports`（零消费者导出即红）。
+  （37 个 God 文件只降不升）、`verify:no-dead-exports`（零消费者导出即红）。
 - 执行面：`verify:import-cycles` / `verify:file-budgets` 及包边界门 `verify:package-boundaries` 在本地、
-  普通 CI、发布验证同跑；`verify:no-dead-exports` 仍为本地辅助门。`static-gate-parity` 校验两侧集合，
-  架构三门不得进入本地专属豁免。
+  普通 CI、发布验证同跑；`verify:no-dead-exports` 仍为本地辅助门。门成员资格已单源到
+  `scripts/gates/gate-surfaces.json`（loader `gate-registry.mjs`，`run-checks` 只派生模式；数据不变量：
+  命令可解析、`release ⇒ ci`、architecture 类不得 local-only、缺表面必须带理由）。`ci.yml` 与
+  `release.yml` 的 static 步骤已由 `gate-workflow-views.mjs` 从 registry 生成（四个标记块
+  `ci.test.pre/post`、`release.validation.pre/post`；pre 块在 install 之前，保持原 fail-fast 次序；
+  `--check` 与保鲜测试守 freshness；步骤标题不变，故发布证明的步骤名不受影响）。`static-gate-parity`
+  已删除，它原先的手写豁免改为 registry 的 surfaces/reason（当前 65 条里 5 条 `local-only`、1 条 macOS
+  复合步、其余均为生成块或 run-checks 入口），本地↔CI 的一致性改由「生成块与 registry 的双射 +
+  数据不变量（命令可解析、`release ⇒ ci`、architecture 不得 local-only、缺表面必须带理由；`workflow` 三字段齐全且 `ciJob ∈ CI_JOB_IDS`、有 workflow 即要求 ci+release 两面为真；`proof` 必须是布尔、落在 release.validation、且两面为真）」保证。已做：`REQUIRED_JOB_STEPS` 由 `proof:true` 派生（C5）；proof 集合与 65 条 id→command 已由 golden 钉住。
 
 #### 1.4 边界与不做
 
@@ -608,12 +617,19 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 
 - **renderer reconnect 记账**：`App.tsx` 的 `retireSources` 仍缺 `sessionListRefreshAt/Pending`、
   `authoritativeArchiveSet`（同 id 换代泄漏）。收口 = 单一 `reconnectSource(id)` + 生命周期参与者注册表。
-- **session-state 语义多实现**：协议在 control-plane（`session-state-protocol.ts` + `session-mux.ts`）、
-  gateway（`session-state.ts`）、renderer（`session-facts-source.ts` + `source-mux-facts.ts`）各有一份；
-  守卫/助手跨包重复（登记时 `isWatermark` 命中 11 个文件、`isPlainRecord` 7 个），锁步只有源码文本测试；
-  `classifyTurnEndWire` 仍与 `classifyTurnEnd` 成对。死面已部分消失（`effectiveReadMark`、
-  `SESSION_STATE_PROBE_TIMEOUT_MS` 已不存在），仍在的 `sessionStateNoteKey` / `SESSION_STATE_ROUTES`
-  由单测锁住。收口方向 = 共享协议叶子（或生成物）+ 删死面。
+- **session-state 语义单源（A-1/A-2/A-3 已收口；残余为刻意差异）**：协议常量、wire 类型、descriptor
+  解析、capability 分类与 turn-end 分类单源在 `packages/dsh-chamber-wire/src/session-state.ts`；mux 路径、
+  `$events` 端点、follow 载荷、goal 投影白名单与 `goal/activation-changed` 归一化单源在
+  `packages/dsh-chamber-wire/src/mux-frame.ts`；`isPlainRecord`/`isRecord`/`isWatermark` 单源在
+  `packages/dsh-chamber-wire/src/json-guards.ts`（浏览器经 client-core 的 `./session-state`、`./mux-frame`、
+  `./json-guards` 具名面）。renderer 的 `parseProjectedGoalFact` / `parseGoalActivationArgs`、control-plane
+  的内联 activation 分支与 mux 守卫、sidebar 的冻结形解析都已委托给叶子；源码文本锁步测试只保留 fork 侧
+  （api-gateway）与瀑布字面量两类；死面 `sessionStateNoteKey` 已删除（`SESSION_STATE_ROUTES` 仍被 gateway
+  冻结路由矩阵消费）。**刻意的残余差异（不得「顺手统一」）**：①外层 frame 容器解析仍分两处
+  （`parseMuxServerFrame` ⇄ `parseMuxFrame`，容器与返回形状不同，只共享内层语义）；②status args 的对象形
+  仍只有 renderer 接受；③`packages/desktop/store-file-hygiene.ts` 的同名守卫是**宽松**变体（任意非数组对象），
+  语义与 wire 的 plain-record 不同，已在文件内注明；④fork `dsh-api-gateway/src/stream-protocol.ts` 的实现按
+  pin 重放纪律保留。
 - **插件三链路流水线**：local/ssh/gateway 各自 validate→confirm→remove/add→restart→verify；desktop
   `plugin-sync.ts` 与客户端行投影（settings-connections 的 `plugin-model.ts`/`save-host.ts`）仍两套。
   收口方向 = 一个 `PluginMutationPlan` + 三个薄执行器。

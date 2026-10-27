@@ -31,6 +31,7 @@
  */
 import { realpathSync } from 'node:fs'
 import { sleep } from '../lib/cli.mjs'
+import { loadGateRegistry, CI_JOB_IDS } from '../gates/gate-registry.mjs'
 import { argv, env, exit } from 'node:process'
 import { fileURLToPath } from 'node:url'
 
@@ -45,7 +46,7 @@ import { fileURLToPath } from 'node:url'
  *  minutes of NSIS/electron-builder work no longer extend the contract legs'
  *  wall clock, but the rehearsals themselves stay required: the split moved
  *  the STEPS to a parallel job, it did not drop any coverage). */
-export const REQUIRED_JOBS = ['test', 'test-windows', 'test-windows-pack', 'test-macos', 'test-macos-pack']
+export const REQUIRED_JOBS = [...CI_JOB_IDS]
 
 /**
  * The load-bearing steps of each required job. Job-level success alone is not a
@@ -56,11 +57,9 @@ export const REQUIRED_JOBS = ['test', 'test-windows', 'test-windows-pack', 'test
  * API step names, and release-workflow-policy.test.mjs pins them against ci.yml
  * itself, so a rename is a deliberate two-file edit rather than silent drift.
  */
-export const REQUIRED_JOB_STEPS = {
+const NON_GATE_STEPS = {
   test: [
     'Type check (tsc + chamber host packages + gateway)',
-    'Upstream registry integrity (schema/references/views)',
-    'Upstream anchor probe (symbol anchors + legacy budget)',
     'Assert lockfile not rewritten',
     'Package unit tests — single entry (runtime / control-plane / desktop / gateway / renderer-shell / client+host plugins)',
     'Client plugin type checks — single entry (sidebar / git / layout / connections / settings-bridge / client-web / connection / api-gateway / open-in / mobile)',
@@ -108,6 +107,23 @@ export const REQUIRED_JOB_STEPS = {
     'macOS packaging rehearsal (ad-hoc, no publish, no credentials)',
   ],
 }
+
+/**
+ * Proof-required GATE steps, derived from the gate registry: an entry with
+ * `proof: true` and a ci placement must appear (and conclude success) on that job.
+ * The table above keeps only the non-gate load-bearing steps (plumbing, compiler
+ * faces, packaging rehearsals); adding a proof gate is a registry edit, not a
+ * third hand-maintained list.
+ */
+function proofGateSteps(job) {
+  return loadGateRegistry().gates
+    .filter(gate => gate.proof === true && gate.workflow?.ciJob === job)
+    .map(gate => gate.title)
+}
+
+export const REQUIRED_JOB_STEPS = Object.fromEntries(
+  Object.entries(NON_GATE_STEPS).map(([job, steps]) => [job, [...steps, ...proofGateSteps(job)]]),
+)
 
 /**
  * Pick the candidate proof runs for one commit: push runs on the base branch,
