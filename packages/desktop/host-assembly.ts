@@ -18,15 +18,10 @@ import type { PlaneHandle } from '@dsh-chamber/control-plane'
 import type { ChamberSettings } from './chamber-settings.ts'
 import { writeSettingsFile } from './chamber-settings.ts'
 import { IPC_CHANNELS } from './ipc-events.ts'
-import {
-  auditLogFilePath, captureNotificationSource, chamberSettingsFilePath, gatewaySecretsFilePath, instancesFilePath,
-  LOCAL_RUNNING_STATES, localDshHomeDir, ownsNotificationSource, projectInstanceSecrets,
-  projectNotificationSourceInstances, proxyTransport, readDshVersion, resolveActiveRuntime,
-  RUNTIME_ABORT_REASON, sshPasswordsFilePath, syncNotificationSourceRegistry,
-  type HostMessageOptions, type NotificationSourceToken, type ProjectedRegistryInstance,
-  type ShellAssemblyCtx,
-} from './shell-core.ts'
-import { attemptCommittedRegistryPush, computeRemovedInstanceIds, computeRetiredInstanceIds, createTransportManager, type TransportManager } from './transport-manager.ts'
+import {auditLogFilePath, captureNotificationSource, chamberSettingsFilePath, gatewaySecretsFilePath, instancesFilePath, localDshHomeDir, ownsNotificationSource, projectNotificationSourceInstances, proxyTransport, readDshVersion, resolveActiveRuntime, sshPasswordsFilePath, syncNotificationSourceRegistry, type HostMessageOptions, type NotificationSourceToken, type ShellAssemblyCtx} from './shell-core.ts'
+import {attemptCommittedRegistryPush, createTransportManager, type TransportManager} from './transport-manager.ts'
+import { createHostExit } from './host-exit.ts'
+import { createRegistryTransition } from './host-registry-transition.ts'
 import { reconnectStaleTransports } from './transport-reconnect.ts'
 import type { TransportInstanceSpec } from './transport-provider.ts'
 import { cleanupStaleAskpassHelpers, configureSshPasswordStore, probeChamberHostLive, sshProvider } from './ssh-provider.ts'
@@ -873,68 +868,11 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     sm.appendLog(id, 'info', 'gateway session re-established — proxy registration refreshed with the new session')
   })
 
-  /**
-   * Finish every committed registry transition through the source-lifecycle authority：旋转
-   * renderer/native-notification 证明、撤销精确 plugin-seed owner、发布 committed roster。
-   * 证明投影/代际同步/队列退役清理在 shell-core；活跃原生通知退役经
-   * edges.retireNotificationsForSources。元数据/secret 持久化归事务（connection-save.ts）。
-   */
-  const publishRegistryTransition = (
-    before: readonly TransportInstanceSpec[],
-    after: readonly TransportInstanceSpec[],
-  ): ProjectedRegistryInstance[] => {
-    const projected = projectNotificationSourceInstances(after)
-    if (JSON.stringify(before) === JSON.stringify(after)) {
-      return projected.map(projectInstanceSecrets)
-    }
-    const projectedSaved = projected.map(projectInstanceSecrets)
-
-    const removedIds = computeRemovedInstanceIds(before, after)
-    // Manual gateway-sync re-entry dies with the instance：removed 行绝不保留后续还能同步的注册。
-    for (const id of removedIds) {
-      setGatewaySyncRegistration(id, null)
-    }
-    const retiredIds = computeRetiredInstanceIds(before, after)
-    const afterById = new Map(after.map(instance => [instance.id, instance]))
-    const reseedIds: string[] = []
-    for (const previous of before) {
-      const current = afterById.get(previous.id)
-      if (current === undefined || operationalFingerprint(previous) !== operationalFingerprint(current)) {
-        readySeedEdges.forget(previous.id)
-        hostPackageSeeding.revoke(previous.id)
-        // service/home 编辑后仍是 dsh+ssh 目标的同 id 替换 → 若已完成即显式 reseed（普通重连由 ready 边缘拾取）。
-        if (current?.kind === 'dsh' && current.transport === 'ssh') reseedIds.push(previous.id)
-      }
-    }
-
-    const retiredNotificationSources = new Set(syncNotificationSourceRegistry(projected))
-    if (retiredNotificationSources.size > 0) {
-      deps.edges.retireNotificationsForSources(retiredNotificationSources)
-    }
-
-    // A service/home edit may complete while the transport is already ready：显式 seed 替换
-    // owner（仅 ready 实例可达：startAutomaticHostSeed 经 findRemoteTarget + 单飞注册表）。
-    for (const id of reseedIds) {
-      if (sm.status(id)?.phase === 'ready') startAutomaticHostSeed(id)
-    }
-
-    // Committed lifecycle push（{removedIds, retiredIds} 文本被 renderer-trust 锚定；窗口门 =
-    // edges.mainWindowAlive，push 前竞态复查；无窗口常驻期间由下次查询兜底）。
-    if (deps.edges.mainWindowAlive()) {
-      const pushed = attemptCommittedRegistryPush(() => {
-        if (!deps.edges.mainWindowAlive()) {
-          throw new Error('registry renderer changed before push')
-        }
-        if (!deps.edges.rendererPush(IPC_CHANNELS.SSH_INSTANCES_CHANGED, { removedIds, retiredIds })) {
-          throw new Error('registry renderer push failed')
-        }
-      })
-      if (!pushed.sent) {
-        console.warn(`${logTag} registry 已保存但 lifecycle push 失败（等待 renderer 重拉）：${pushed.error}`)
-      }
-    }
-    return projectedSaved;
-  }
+  // 注册表提交转移（证明投影/代际同步/seed owner 撤销/committed push）是命名模块；App 只注入句柄。
+  const { publishRegistryTransition } = createRegistryTransition({
+    sm, edges: deps.edges, logTag, operationalFingerprint, readySeedEdges, hostPackageSeeding,
+    startAutomaticHostSeed,
+  })
 
   // —— dsh runtime 管理宿主 ——
   // pnpm 入口由 flavor 经 pnpm-launcher 单源解析后注入；node 执行器两 flavor 同表达式：
@@ -1184,45 +1122,21 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
   // 优雅回收腿：传输层 + 插件子进程 + runtime 安装器 + gateway 会话 + session refresh 计时器
   //（main will-quit 与 sidecar SIGTERM 同源：quitting 门先置位 → abort 在飞事务 → 并行回收
   // → session refresh/gateway 会话清理）。
-  const dispose = async (): Promise<void> => {
-    deps.markQuitting()
-    runtimeState.startBlocked = true
-    // abort 文案单源（shell-core RUNTIME_ABORT_REASON）。
-    runtimeState.operationAbort?.abort(new Error(RUNTIME_ABORT_REASON))
-    try {
-      await Promise.allSettled([
-        transportManager?.disposeAsync().catch((err) => console.error(`${logTag} 传输层关闭失败：`, err)),
-        disposeRuntimeInstaller().catch((err) => console.error(`${logTag} 运行时安装器关闭失败：`, err)),
-        runtimeState.operation?.catch((err) => console.error(`${logTag} 运行时事务关闭失败：`, err)),
-      ])
-    } finally {
-      // 计时器先停：refresh 触发绝不可竞态已 dispose 的 manager。
-      sessionRefresh.dispose()
-      authRecovery.dispose()
-      authRecoveryContext.clear()
-      gatewaySessions.dispose()
-    }
-  }
-  // 关窗/退出事实投影：settings 实时 holder + localProcessAlive 判据（state 显示 running 不够，
-  // restart backoff 期间会误报）；updateDownloadReady 由 flavor 注入。
-  const quitFacts = (): {
-    windowCloseBehavior: ChamberSettings['windowCloseBehavior']
-    quitConfirmation: boolean
-    localRunning: boolean
-    updateDownloadReady: boolean
-  } => {
-    const livePlane = plane()
-    const localRunning = livePlane !== null
-      && LOCAL_RUNNING_STATES.has(livePlane.connectionState)
-      && livePlane.localProcessAlive
-    return {
-      windowCloseBehavior: deps.settings.current().windowCloseBehavior,
-      quitConfirmation: deps.settings.current().quitConfirmation,
-      localRunning,
-      updateDownloadReady: deps.updateQuitExempt(),
-    }
-  }
-
+  const exitLeg = createHostExit({
+    runtimeState,
+    transportManager,
+    disposeRuntimeInstaller,
+    sessionRefresh,
+    authRecovery,
+    authRecoveryContext,
+    gatewaySessions,
+    markQuitting: deps.markQuitting,
+    settings: deps.settings,
+    updateQuitExempt: deps.updateQuitExempt,
+    plane,
+    logTag,
+  })
+  const { dispose, quitFacts } = exitLeg
   return {
     ctx,
     localSpawnGates,

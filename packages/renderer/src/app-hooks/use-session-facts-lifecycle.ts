@@ -1,6 +1,6 @@
 /**
  * 事实源生命周期簇：gateway 只读事实源与 SSH/dsh 远端无壳观察者的创建/收敛/退订，
- * 外加 focus/blur 步进完成臂与 pagehide/hidden 落盘 flush 两条全局监听。
+ * 外加 pagehide/hidden 落盘 flush 这条全局监听。
  * 稳定签名（id + 化身指纹 + connected）决定重探/停订阅；判定与状态仍在既有纯模块与 App
  * 的 ref/state 容器里，本 hook 只做订阅生命周期装配。
  */
@@ -19,7 +19,6 @@ export interface SessionFactsLifecycleDeps {
   /** deriveServers 的当前投影（签名与收敛都从最新 servers 读）。 */
   servers: ChamberServerAggregate[]
   applySessionFacts: (sourceId: string, snapshot: SessionFactsSnapshot | undefined) => void
-  /** 完成点步进（focus/blur 的重算入口；臂本体在 use-notifications）。 */
   /** 通知落盘合并器（pagehide/hidden/unmount 走它的关键路径 flush；hook 只调用不拥有）。 */
   notificationImmediateSave: NotificationSaveCoalescer
   /** 聚合簇的「无法确认」标记（行刷新提示的 unverified 拒绝输入）。 */
@@ -32,7 +31,7 @@ export interface SessionFactsLifecycleDeps {
   refreshAggregateRef: { current: (sourceId: string) => void }
   /** 已发布完整权威快照的来源；这类来源不需要 facts 提示再走 unary 会话列表。 */
   mountedSources: MountedSourcesStore
-  /** 已挂载来源的运行时事实（focus 重算的键空间之一）。 */
+  /** 已挂载来源的运行时事实（步进/收敛的输入之一）。 */
   factsStore: FactsStore
   /** 活跃事实源实例（gateway 来源；指纹变化 = 新化身重探）。 */
   sessionFactsSourcesRef: { current: Map<string, SessionFactsSource> }

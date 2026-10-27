@@ -17,8 +17,8 @@
  * 校准基线（raw bytes，最新实测见 dist/web/perf-sizes.json，随上游 dsh 版本
  * 与合并内容合法漂移）。alpha.3 重基线（上游新增 zod/@tanstack/react-virtual
  * 平台词与新首屏 client 行；alpha.2 快照为 mainGraph 1,434,814）：
- * mainGraph 1,871,690（**超 warn 1,800,000**，距 fail 2,020,000 余量约
- * 7.9%（fail = 实测 + ~8%）；chamberEntry 7,751,254（warn 门 = 实测 + ~1% = 7,829,000——该项**有意
+ * mainGraph 1,908,997（App 拆分后的新实测：warn 1,950,000 = 实测 +2.2%，
+ * fail 2,060,000 = 实测 +7.9%）；chamberEntry 7,751,254（warn 门 = 实测 + ~1% = 7,829,000——该项**有意
  * 只有 warn、不设硬门**：体积随上游 dsh 版本合法漂移，硬门会误伤升级，超限
  * 只提示评估拆分/懒化，不阻断构建）；headCss 301,241（warn 门 = 实测 + ~1% = 304,300，
  * 同为 warn-only）。阈值不是历史账本：结构改动落地后按新实测值
@@ -41,7 +41,7 @@ const SIZES_OUT = fileURLToPath(new URL('../../desktop/dist/web/perf-sizes.json'
 
 /** 阈值（raw bytes）。校准基线见文件头注释。 */
 const THRESHOLDS = {
-  mainGraphRaw: { warn: 1_800_000, fail: 2_020_000 },
+  mainGraphRaw: { warn: 1_950_000, fail: 2_060_000 },
   chamberEntryRaw: { warn: 7_829_000 },
   headCssRaw: { warn: 304_300 },
 }

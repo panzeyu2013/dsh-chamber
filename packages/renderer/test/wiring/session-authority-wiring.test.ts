@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
+import { appHookFiles, appWiringFrame } from '../support/wiring-sources.ts'
 
 const app = stripComments(readFileSync(fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8'))
 const sidebar = stripComments(readFileSync(
@@ -32,11 +33,10 @@ const factsMode = stripComments(readFileSync(
   fileURLToPath(new URL('../../src/session-facts-mode.ts', import.meta.url)), 'utf8'))
 const clientCore = stripComments(readFileSync(
   fileURLToPath(new URL('../../../dsh-chamber-client-core/src/derive.ts', import.meta.url)), 'utf8'))
-const aggregateHook = stripComments(readFileSync(
-  fileURLToPath(new URL('../../src/app-hooks/use-aggregate-refresh.ts', import.meta.url)), 'utf8'))
-const factsHook = stripComments(readFileSync(
-  fileURLToPath(new URL('../../src/app-hooks/use-session-facts-lifecycle.ts', import.meta.url)), 'utf8'))
-const frame = app + '\n' + notificationsHook + '\n' + aggregateHook + '\n' + factsHook
+// The frame is ENUMERATED (App.tsx + every app-hooks module), never concatenated by
+// hand: a newly extracted hook cannot fall out of the frame and turn the doesNotMatch
+// locks below vacuously true.
+const { text: frame } = appWiringFrame()
 const projection = stripComments(readFileSync(
   fileURLToPath(new URL('../../src/notification-projection.ts', import.meta.url)), 'utf8'))
 const logStore = stripComments(readFileSync(
@@ -47,6 +47,16 @@ const correctionMarks = stripComments(readFileSync(
   fileURLToPath(new URL('../../../dsh-chamber-client-core/src/session-correction-marks.ts', import.meta.url)), 'utf8'))
 const statusWriteFace = stripComments(readFileSync(
   fileURLToPath(new URL('../../../dsh-chamber-client-ui-sidebar/src/client/status-write-face.ts', import.meta.url)), 'utf8'))
+
+test('the wiring frame enumerates every app-hooks module (no hand-written union)', () => {
+  const { files } = appWiringFrame()
+  const hooks = appHookFiles()
+  assert.equal(files[0], 'App.tsx', 'the frame must start at the composition root')
+  assert.ok(hooks.length >= 10, 'the seam directory must stay non-trivial（得到 ' + String(hooks.length) + '）')
+  for (const hook of hooks) {
+    assert.ok(files.includes('app-hooks/' + hook), 'a hook fell out of the wiring frame: ' + hook)
+  }
+})
 
 test('the App has no second liveness planner or state machine', () => {
   assert.doesNotMatch(frame, /planSessionLiveness|sessionLivenessRef|markSessionLiveness/)

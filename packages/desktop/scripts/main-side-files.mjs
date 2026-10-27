@@ -28,4 +28,7 @@ export const MAIN_SIDE_FILES = [
   'shell-ipc-runtime.ts',
   'runtime-startup-host.ts',
   'host-assembly.ts',
+  // committed registry push（SSH_INSTANCES_CHANGED）随 B4-2a 抽到独立模块：
+  // 名单是唯一来源，注册点迁移只改这里，manifest 方向判定与 IPC 面锁步同拍。
+  'host-registry-transition.ts',
 ]

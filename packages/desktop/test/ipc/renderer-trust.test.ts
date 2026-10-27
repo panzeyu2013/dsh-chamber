@@ -168,13 +168,14 @@ test('committed settings, registry and held-resume pushes use the non-throwing s
   // pushSettingsChanged, the held-resume push and the updater state push live in
   // shell-core.installIpcHandlers (their send leaves go through HostEdges rendererPush with the
   // non-throwing attemptCommittedRegistryPush wrapper); the assertions read shell-core.ts. The
-  // remaining push anchors (instances / status) now live in the SINGLE shared assembly
-  // (host-assembly.ts) consumed by both flavors — the assertion reads that source of truth,
-  // still requiring the window-liveness gate, the race re-check inside the closure and the
-  // non-throwing boundary.
+  // remaining push anchors (instances / status) live in the SINGLE shared assembly consumed by
+  // both flavors: host-assembly.ts keeps the status push, the committed-registry push moved to
+  // host-registry-transition.ts (B4-2a), so the assertion reads their union — still requiring
+  // the window-liveness gate, the race re-check inside the closure and the non-throwing boundary.
   const core = readFileSync(new URL('../../shell-core.ts', import.meta.url), 'utf8')
     + readFileSync(new URL('../../shell-ipc-update.ts', import.meta.url), 'utf8')
   const assembly = readFileSync(new URL('../../host-assembly.ts', import.meta.url), 'utf8')
+    + readFileSync(new URL('../../host-registry-transition.ts', import.meta.url), 'utf8')
   assert.match(core, /function pushSettingsChanged\(\): void \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
   assert.match(core, /function pushHeldSystemResume[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
   assert.match(assembly, /IPC_CHANNELS\.SSH_INSTANCES_CHANGED[\s\S]*?return projectedSaved;/)

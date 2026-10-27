@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { createRemotesStore } from '../../src/host/remotes-store.ts'
+import { appWiringFrame } from '../support/wiring-sources.ts'
 import type { SshInstanceSpec, SshStatusProjection } from '../../src/global.d.ts'
 
 const spec = (id: string): SshInstanceSpec => ({
@@ -72,7 +73,9 @@ test('identity-preserving writes stay silent, real changes notify once', () => {
 
 test('the App and the bridge hook keep ONE remotes store, not ref mirrors', () => {
   const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
-  const app = read('../../src/App.tsx')
+  // The store is created in app-hooks/use-app-registry.ts now; the enumerated frame
+  // (App + every app-hook) is the wiring surface the lock reads.
+  const app = appWiringFrame().text
   assert.match(app, /createRemotesStore/, 'one store instance')
   assert.match(app, /remotesStore\.getSnapshot\(\)/, 'event-side reads go through the store snapshot')
   for (const file of [app, read('../../src/app-hooks/use-bridge-subscriptions.ts')]) {

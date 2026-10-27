@@ -7,10 +7,8 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-
 import { createRosterGate, rosterSettled } from '../../src/host/roster-gate.ts'
+import { appWiringFrame } from '../support/wiring-sources.ts'
 
 test('a fresh gate is unsettled; settle() marks the CURRENT generation', () => {
   const gate = createRosterGate()
@@ -57,7 +55,9 @@ test('subscribers fire once per real change and no-op writes stay silent', () =>
 })
 
 test('the App consumes the gate and keeps no state/ref mirror of it', () => {
-  const app = readFileSync(fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8')
+  // The gate is created in app-hooks/use-app-registry.ts now; the lock reads the
+  // enumerated frame so a further extraction cannot empty it.
+  const app = appWiringFrame().text
   assert.match(app, /createRosterGate/, 'the App must own one gate instance')
   assert.match(app, /rosterGate\.isSettled\(\)/, 'replay decisions read the single source synchronously')
   assert.doesNotMatch(app, /remoteRosterSettledRef|rosterListenerReadyRef/, 'the mirrored refs must not come back')

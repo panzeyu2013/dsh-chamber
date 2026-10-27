@@ -306,7 +306,9 @@ test('wiring: the intent is published before the wire, withdrawn on failure, app
     'the sink evidence rides the projection as the THIRD ARGUMENT of the call (an identifier in a comment cannot satisfy this)')
   assert.match(servers, /\{\} : \{ tailWorkspaceId: projectedTailWorkspaceId \}/,
     'and is recorded on the per-source cache entry as the conditional field VALUE (not a comment mention)')
-  const app = read('../../../renderer/src/App.tsx')
+  // The deriveServers call lives in the projection hook after the App decomposition:
+  // the lock follows the wiring, not a file name.
+  const app = read('../../../renderer/src/App.tsx') + ' ' + read('../../../renderer/src/app-hooks/use-projection-publish.ts')
   assert.match(app, /sessionFacts, projectionCaches\.servers, echoes\.placement, archivedFilters, echoes\.removal\)/,
     'the SAME deriveServers call carries BOTH the per-source cache (the sink evidence lives on its entry) and the removal ledger — dropping either silently degrades the correction to the old flicker; the cache parameter is the load-bearing half')
   assert.match(app, /updateRemoval\(sweepPendingRemovals\(echoStore\.getSnapshot\(\)\.removal, Date\.now\(\)\)\)/,

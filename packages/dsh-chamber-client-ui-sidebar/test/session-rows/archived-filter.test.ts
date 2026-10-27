@@ -108,7 +108,9 @@ test('the renderer projection wires the per-source filter as a projection input 
   assert.ok(SERVERS.includes("        current,\n        undefined,\n        archivedFilter,"),
     'the filter reaches deriveServerWorkspaces in the archivedFilter slot')
 
-  const APP = read('../../../../packages/renderer/src/App.tsx')
+  // The view-prefs subscription and the deriveServers call moved into the projection
+  // hook with the App decomposition; the source lock follows the wiring.
+  const APP = read('../../../../packages/renderer/src/App.tsx') + ' ' + read('../../../../packages/renderer/src/app-hooks/use-projection-publish.ts')
   assert.ok(APP.includes('subscribeViewPrefs'), 'App subscribes to the shared view-prefs store')
   assert.ok(APP.includes("JSON.stringify(getViewPrefs().archivedFilter ?? {})"),
     'only the filter map signature is subscribed (other prefs writes must not re-render the App)')

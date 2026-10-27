@@ -56,6 +56,9 @@ import { NOTIFICATION_OUTBOX_KEY, createNotificationOutbox } from '../../src/not
 const APP = readFileSync(fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8')
 // A6：桥探测 effect 已抽到 app-hook（App.tsx 行数棘轮），其源码锁读 hook 文件。
 const PROBE = readFileSync(fileURLToPath(new URL('../../src/app-hooks/use-ssh-bridge-probe.ts', import.meta.url)), 'utf8')
+// A6b：registry 簇（三个否决/形态位 + warn-once ref）已逐字抽到 app-hook；位声明与类型
+// 在 hook 源码上，App 只保留接线与唯一调用点。
+const REGISTRY = readFileSync(fileURLToPath(new URL('../../src/app-hooks/use-app-registry.ts', import.meta.url)), 'utf8')
 
 /** 从 marker 起的第一个花括号块（含嵌套）。先 stripComments：注释文本里的花括号
  *  不得参与深度计数（按既有惯例共享实现仍保留字符串/模板字面量；S6 收尾修正）。 */
@@ -85,7 +88,10 @@ test('F6 wiring: the durable notification prunes are all inside the roster-settl
   const gateImport = APP.slice(APP.lastIndexOf('import {', importAt), importAt)
   assert.ok(gateImport.includes('durableUnreadPruneAllowed'), 'the gate predicate comes from the hook module')
   assert.ok(gateImport.includes('useBridgeSubscriptions'), 'the bridge subscription hook comes from the same module')
-  assert.ok(gateImport.includes('DesktopBridgeVerdict'), 'the no-bridge verdict type is imported with the predicate')
+  assert.ok(
+    REGISTRY.includes("import type { DesktopBridgeVerdict } from './use-bridge-subscriptions.ts'"),
+    'the no-bridge verdict type is imported with the predicate (by the registry hook that owns the bit)',
+  )
   assert.equal(APP.split('durableUnreadPruneAllowed(').length - 1, 1, 'one gate call, one expression')
   // abstract 结构：结算位是 rosterGate（host/roster-gate.ts）的同步 isSettled()，不是 state+ref 对。
   const gate = bracedBlockFrom(
@@ -117,7 +123,7 @@ test('F6 wiring: the durable notification prunes are all inside the roster-settl
 test('F11 wiring: the no-bridge verdict comes only from the bounded probe budget', () => {
   // 形态状态：初值 'pending'（首帧桥必缺席，不能断言无桥）。
   assert.ok(
-    APP.includes("const [bridgeVerdict, setBridgeVerdict] = useState<DesktopBridgeVerdict>('pending')"),
+    REGISTRY.includes("const [bridgeVerdict, setBridgeVerdict] = useState<DesktopBridgeVerdict>('pending')"),
     'the verdict starts pending (first frame cannot distinguish a late bridge from no bridge)',
   )
   // A6：探测 effect 抽到 app-hook 后，语义锁跟着代码落在 hook 源码上；App 只剩这一处接线。
@@ -346,7 +352,7 @@ test('F6 storage fake: the native outbox journal converges through the same gate
 test('F13 wiring: the registry-degraded probe gates the settle, recovers, and warns once', () => {
   // state 与 warn-once ref 存在（degraded 位是剪枝 effect 的重跑依赖）。
   assert.ok(
-    APP.includes('const [registryDegraded, setRegistryDegraded] = useState(false)'),
+    REGISTRY.includes('const [registryDegraded, setRegistryDegraded] = useState(false)'),
     'the degraded bit must be React state (effect re-runs when it flips)',
   )
   assert.equal(APP.split('registryDegradedWarnedRef').length - 1, 3, 'one warn-once ref: declaration + guard + write')
@@ -429,7 +435,7 @@ test('V5-A wiring: an incomplete health answer still installs the legal rows and
   assert.ok(!branch.includes('remotesStore.setInstances('), 'roster installation belongs to the shared path, not the warn branch')
   // state 是剪枝 effect 的重跑依赖；warn-once ref 一个，声明 + 守卫 + 写入。
   assert.ok(
-    APP.includes('const [rosterIncomplete, setRosterIncomplete] = useState(false)'),
+    REGISTRY.includes('const [rosterIncomplete, setRosterIncomplete] = useState(false)'),
     'the incomplete bit must be React state (effect re-runs when it flips)',
   )
   assert.equal(APP.split('rosterIncompleteWarnedRef').length - 1, 3, 'one warn-once ref: declaration + guard + write')

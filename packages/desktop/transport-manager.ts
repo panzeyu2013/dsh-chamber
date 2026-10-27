@@ -12,14 +12,18 @@
  *   this module raw. Provider/spawn/probe/allocator/RNG are injectable.
  */
 
+import { createTransportRegistry, type SaveInstancesProvenance } from './transport-registry.ts'
+import { createLinkHealth } from './transport-link-health.ts'
+import { createLinkLoop } from './transport-link-loop.ts'
+import type { InstanceState } from './transport-instance-state.ts'
+export type { SaveInstancesProvenance } from './transport-registry.ts'
 import { EventEmitter } from 'node:events'
 import { spawn } from 'node:child_process'
 import type { SpawnOptions } from 'node:child_process'
+import { signalChild } from './transport-provider.ts'
 import net from 'node:net'
-import { existsSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { MAX_TRANSPORT_INSTANCES, signalChild } from './transport-provider.ts'
-import { liveTransportIdentityChanged } from './credential-identity.ts'
+
 // Failure text is single-sourced in describe-error.ts; the export name stays.
 import { describeError } from './describe-error.ts'
 // Owner-only atomic replace (O_EXCL tmp + 0600 + fsync + rename) — the registry
@@ -27,16 +31,7 @@ import { describeError } from './describe-error.ts'
 import { atomicWritePrivateFileNoFollow, ensurePrivateDirectoryNoFollow } from './control-plane-module.ts'
 import { CHILD_LINE_MAX_CHARS, createBoundedLineProcessor } from './bounded-lines.ts'
 import { findFreeEphemeralPort } from './free-port.ts'
-import {
-  INITIAL_LINK_HEALTH,
-  LINK_POLICY,
-  classifyProbeFailure,
-  reduceLinkHealth,
-  type LinkHealthReduction,
-  type LinkHealthState,
-  type LinkPolicy,
-  type ProbeFailureClass,
-} from './transport-health.ts'
+import {INITIAL_LINK_HEALTH, LINK_POLICY, type LinkPolicy} from './transport-health.ts'
 import type {
   SpawnedProcess,
   TransportExecAction,
@@ -67,10 +62,6 @@ const RING_LOG_TRUNCATION_SUFFIX = ' … [truncated]'
 /** How long the transport has to come up (local port accept / endpoint probe) before degraded. */
 export const READY_TIMEOUT_MS = 10_000
 
-/** Stagger between instances in one wake wave (OS resume / browser online). One
- *  owner: `reverifyAll` and the coalesced `online` wave share it. */
-const WAKE_STAGGER_MS = 120
-
 /** Poll interval while waiting for the transport to come up. */
 export const PROBE_INTERVAL_MS = 100
 
@@ -91,17 +82,6 @@ export const RETRY_MAX_MS = 30_000
  * connect()/disconnect() cancels the probe.
  */
 export const SLOW_RETRY_MS = 60_000
-
-/**
- * Ready-state re-verification cadence for a READY transport: a transport that
- * came up once has no liveness signal — a direct endpoint (or a remote dsh dead
- * behind a healthy tunnel) never exits, and a revoked gateway session is only
- * noticed at expiry. Every ready transport re-runs its provider verifyUp on
- * this cadence, so a gateway 401 re-logs in once with the stored password and a
- * merely-revoked session self-heals. Failures classify exactly like
- * connect-time: terminal → error:requires_user_action, transient → bounded
- * reconnect. reverify() accelerates one probe within the quiet window.
- */
 
 /** Quiet window between a completed re-verification and a USER-INITIATED
  *  reverify(): the periodic cadence is the authority, rapid clicks must not pile
@@ -250,7 +230,6 @@ export function attemptCommittedRegistryPush(push: () => void):
  * 读成权威空注册表），只做内存回滚以维持调用方的 rollback 判定。V5-A 的
  * rosterIncomplete 位同理：补偿回滚不清零，且 roster 不完整期间同样跳过写盘
  * （把「行级丢弃后的部分快照」写回磁盘会让下次启动把「部分」读成「完整」）。 */
-export type SaveInstancesProvenance = 'authoritative' | 'compensation'
 
 /** The runtime surface returned by createTransportManager. */
 export interface TransportManager {
@@ -375,66 +354,6 @@ function execIdentityChanged(a: TransportInstanceSpec, b: TransportInstanceSpec)
 }
 
 /** Internal per-instance runtime state (phase machine + logs; never persisted). */
-interface InstanceState {
-  phase: TransportPhase
-  localPort: number | null
-  child: SpawnedProcess | null
-  childExited: boolean
-  authFailed: boolean
-  retryAttempt: number
-  requiresUserAction: boolean
-  /** Class of the terminal failure behind requiresUserAction ('auth' = transport/
-   *  credential-level, 'endpoint' = instance-level terminal probe failure — the
-   *  transport reached the destination and the answer rejected the connection);
-   *  null otherwise. Projected so an endpoint failure never masquerades as SSH
-   *  auth failure. */
-  userActionKind: 'auth' | 'endpoint' | null
-  serviceActive: boolean | null
-  logSummary: string
-  reconnectTimer: ReturnType<typeof setTimeout> | null
-  readyLoop: AbortController | null
-  logs: TransportLogEntry[]
-  /** Monotonic transport attempt counter: stale startTransport invocations and
-   *  delayed exits of replaced children are recognized and ignored. */
-  tunnelEpoch: number
-  /** Monotonic exec-generation counter, incremented on disconnect: execs started
-   *  before it are stale and never write state (removed-and-reused id, kind
-   *  switch, field-edit restart). */
-  execEpoch: number
-  /** In-flight provider exec children of THIS instance, SIGTERMed by disconnect
-   *  (a disconnect cancels the execs it owns) plus the global set on dispose. */
-  execChildren: Set<SpawnedProcess>
-  /** Pending ready-state re-verification timer (armed on ready, canceled on
-   *  leaving ready — see LINK_POLICY.healthyProbeIntervalMs). */
-  readyProbeTimer: ReturnType<typeof setTimeout> | null
-  /** Down -> reconnect grace: keeps phase ready while health=down. */
-  downGraceTimer: ReturnType<typeof setTimeout> | null
-  /** Hard end of the grace window (downGraceMs + the probing provider's budget):
-   *  an in-flight probe may extend the timer up to here, never beyond. */
-  downGraceDeadlineAt: number
-  /** Cancels the in-flight endpoint verification of THIS transport generation
-   *  (disconnect/retarget or the probe deadline). */
-  probeAbort: AbortController | null
-  /** Epoch-ms of the last link event (ready edge or health transition): the
-   *  heartbeat picks the tight watch cadence while it is fresh. */
-  lastLinkEventAt: number
-  /** A forced probe arrived while verifyInFlight; run one more after it settles. */
-  pendingForcedProbe: boolean
-  /** One in-flight ready-state re-verification per instance (single-flight:
-   *  the periodic heartbeat and a user-initiated reverify never overlap). */
-  verifyInFlight: boolean
-  /** Epoch-ms of the last completed ready-state re-verification (0 = none);
-   *  the user-initiated quiet window reads it. */
-  lastVerifyAt: number
-  /** A local -L bind race (ExitOnForwardFailure). Re-allocated without burning a retry. */
-  portBindFailed: boolean
-  /** Bound the bind-race re-allocation loop; after this, normal retry/error takes over. */
-  portBindRetries: number
-  /** Ready-state link health; reset for every fresh transport attempt. */
-  link: LinkHealthState
-  /** Increments on every entry into ready (initial or recovery); page reset key. */
-  linkEpoch: number
-}
 
 /** Error that may carry a machine-readable code. */
 interface CodedError extends Error {
@@ -543,10 +462,6 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
    *  SIGKILL/real exit and askpass-lease release. */
   const tunnelKillEscalations = new Map<SpawnedProcess, ReturnType<typeof setTimeout>>()
   const bus = new EventEmitter()
-  /** One staggered wake wave at a time; a newer reverifyAll supersedes older timers. */
-  let reverifyGeneration = 0
-  const reverifyTimers = new Set<ReturnType<typeof setTimeout>>()
-
   function sameOperationalSpec(left: TransportInstanceSpec | undefined, right: TransportInstanceSpec): boolean {
     return left !== undefined
       && left.id === right.id
@@ -815,465 +730,37 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
   /** The endpoint a READY transport probes: the LIVE tunnel listener (ssh) or the
    *  direct endpoint (http) — same derivation as connect-time, so it sees the
    *  exact destination the proxy reaches. null when none (defensive). */
-  function readyProbeEndpoint(
-    spec: TransportInstanceSpec,
-    providerForSpec: TransportProvider,
-    state: InstanceState,
-  ): TransportProbeEndpoint | null {
-    if (providerForSpec.buildStartArgs !== undefined) {
-      // Tunnel mode: the probe rides the live tunnel listener (loopback).
-      return state.localPort === null ? null : { host: '127.0.0.1', port: state.localPort }
-    }
-    try {
-      return providerForSpec.probeTarget?.(spec) ?? { host: spec.host, port: spec.remotePort }
-    } catch {
-      // A throwing probeTarget has no probeable endpoint — skip the probe.
-      return null
-    }
-  }
+  const linkHealth = createLinkHealth({ linkPolicy, emitStatus, appendLogInternal, warn })
+  const {
+    cancelReadyVerify, clearDownGrace, probeBudgetFor,
+  } = linkHealth
 
-  /** Publish one link-health transition; probe timestamps alone do not wake the renderer. */
-  function applyLinkHealth(
-    id: string,
-    state: InstanceState,
-    event: Parameters<typeof reduceLinkHealth>[1],
-  ): LinkHealthReduction {
-    const before = state.link
-    const reduction = reduceLinkHealth(before, event, linkPolicy)
-    state.link = reduction.state
-    // A down->healthy recovery is a new usable link generation and must wake the
-    // page channel. A suspect->healthy recovery never left ready and is deliberately
-    // health-only: bumping linkEpoch here would invalidate the 30s stability window
-    // on every probe flap.
-    if (reduction.becameHealthy && before.health !== 'suspect') state.linkEpoch += 1
-    // Leaving `down` cancels the pending confirmation window: a later down edge
-    // must start a FRESH one instead of inheriting the old deadline.
-    if (before.health === 'down' && reduction.state.health !== 'down') clearDownGrace(state)
-    const changed = before.health !== reduction.state.health
-      || before.reason !== reduction.state.reason
-    // Every real transition opens (or extends) the watch window: the next heartbeat
-    // uses the tight cadence, so a link that just flapped is re-sampled in ~10s
-    // instead of waiting out the stable 30s beat.
-    if (changed) state.lastLinkEventAt = Date.now()
-    if (changed) {
-      appendLogInternal(state, reduction.becameDown ? 'warn' : 'info',
-        `link ${before.health} → ${reduction.state.health}`
-        + (reduction.state.reason === null ? '' : ` (${reduction.state.reason})`))
-      emitStatus(id, state)
-    }
-    return reduction
-  }
+  const linkLoop = createLinkLoop({
+    states,
+    instances,
+    linkPolicy,
+    linkHealth,
+    bus,
+    isDisposed: () => disposed,
+    isCurrentState,
+    failTerminal,
+    scheduleReconnect,
+    appendLogInternal,
+    resolveProvider,
+    doRandom,
+    doVerify,
+    verifyProbe,
+    warn,
+    readyVerifyIntervalMs,
+    readyVerifyMinIntervalMs,
+    status,
+    linkBusy: options.linkBusy,
+    explicitReadyVerifyInterval: options.readyVerifyIntervalMs !== undefined,
+  })
+  const {
+    armReadyVerify, cancelOnlineWave, notifyLinkFailure, reverify, reverifyAll, cancelReverify, lastFailureProbeAt, withProbeDeadline,
+  } = linkLoop
 
-  /** Cancel one instance's pending ready-state re-verification timer. */
-  function cancelReadyVerify(state: InstanceState): void {
-    if (state.readyProbeTimer !== null) {
-      clearTimeout(state.readyProbeTimer)
-      state.readyProbeTimer = null
-    }
-    // The quiet window belongs to ONE ready incarnation: a verification completed
-    // right before leaving ready must not suppress the next generation's first
-    // user reverify (the reconnect's connect-time check is not one).
-    state.lastVerifyAt = 0
-  }
-
-  /** Clear the down->reconnect grace. */
-  function clearDownGrace(state: InstanceState): void {
-    state.downGraceDeadlineAt = 0
-    if (state.downGraceTimer === null) return
-    clearTimeout(state.downGraceTimer)
-    state.downGraceTimer = null
-  }
-
-  /** The budget one ready-state probe needs: the provider's declared composite
-   *  budget, else the single-exchange default. */
-  function probeBudgetFor(spec: TransportInstanceSpec, providerForSpec: TransportProvider): number {
-    try {
-      const declared = typeof providerForSpec.verifyUpBudgetMs === 'function'
-        ? providerForSpec.verifyUpBudgetMs(spec)
-        : providerForSpec.verifyUpBudgetMs
-      return typeof declared === 'number' && Number.isFinite(declared) && declared > 0
-        ? declared
-        : linkPolicy.probeTimeoutMs
-    } catch (error) {
-      // A provider-declared budget is an optimization, never a reason to skip the
-      // grace: a throwing declaration falls back to the table value.
-      warn(`transport-manager: verifyUpBudgetMs threw for ${spec.id}; using the table fallback: ${describeTransportError(error)}`)
-      return linkPolicy.probeTimeoutMs
-    }
-  }
-
-  /** Keep phase ready (and in-flight work alive) for a bounded grace after down.
-   *  EVERY down edge restarts the window (a link that recovered to `suspect` and
-   *  fell back to down got its first window cut short otherwise). New requests and
-   *  new subscriptions fail fast via the projection; the transport reconnect only
-   *  takes ownership when the window expires. An in-flight probe may extend the
-   *  timer, but never past `downGraceDeadlineAt`. */
-  function armDownGrace(id: string, state: InstanceState, reason: string): void {
-    clearDownGrace(state)
-    const spec = instances.get(id)
-    const budgetMs = spec === undefined ? linkPolicy.probeTimeoutMs : probeBudgetFor(spec, resolveProvider(spec))
-    state.downGraceDeadlineAt = Date.now() + linkPolicy.downGraceMs + budgetMs
-    const expire = (): void => {
-      state.downGraceTimer = null
-      if (!isCurrentState(id, state) || state.phase !== 'ready' || state.link.health !== 'down') return
-      // Read the deadline from the state (the single record of this window), so a
-      // cleared/re-armed grace can never be extended by a stale closure.
-      if (state.verifyInFlight && Date.now() < state.downGraceDeadlineAt) {
-        state.downGraceTimer = setTimeout(expire, 1_000)
-        state.downGraceTimer.unref?.()
-        return
-      }
-      scheduleReconnect(id, state, `link remained down after grace: ${reason}`)
-    }
-    state.downGraceTimer = setTimeout(expire, linkPolicy.downGraceMs)
-    state.downGraceTimer.unref?.()
-  }
-
-  /** Arm the periodic ready-state re-verification for one READY transport. */
-  /**
-   * Stable vs watch-window heartbeat. Right after a ready edge or a health
-   * transition, a relay/NAT is most likely to have dropped state, so the link is
-   * sampled every 10s for two minutes; once it has been quiet-and-healthy for
-   * longer, the 30s heartbeat is enough. 30s (not 60s) is deliberate: with zero
-   * traffic the heartbeat is the ONLY half-open detector (design 27 §6.19).
-   */
-  function heartbeatCadence(state: InstanceState): number {
-    const sinceEvent = Date.now() - state.lastLinkEventAt
-    const inWatch = sinceEvent >= 0 && sinceEvent < linkPolicy.watchWindowMs
-    // An EXPLICIT readyVerifyIntervalMs pins one cadence (the determinism seam the
-    // transport tests drive): the two-tier window is a production default only, so a
-    // test that says "probe every 40ms" is never overridden by the watch tier.
-    if (!inWatch || options.readyVerifyIntervalMs !== undefined) return readyVerifyIntervalMs
-    return linkPolicy.watchProbeIntervalMs
-  }
-
-  function armReadyVerify(id: string, state: InstanceState, delayMs?: number): void {
-    if (state.readyProbeTimer !== null) return
-    const spec = instances.get(id)
-    if (spec === undefined) return
-    const providerForSpec = resolveProvider(spec)
-    // Only targets with a REAL identity verifier get a heartbeat.
-    if (verifyProbe === undefined && providerForSpec.verifyUp === undefined) return
-    // The healthy cadence arrives either implicit (undefined) or as the reducer's
-    // stable value; both keep the jitter. Failure-driven cadences never get it.
-    const healthyCadence = delayMs === undefined || delayMs === linkPolicy.healthyProbeIntervalMs
-    const effectiveDelay = delayMs ?? (state.link.health === 'healthy'
-      ? heartbeatCadence(state)
-      : linkPolicy.suspectProbeIntervalMs)
-    // Jitter belongs to the HEALTHY heartbeat only (spread N instances across the
-    // minute). The failure-driven cadences are already the anti-storm mechanism;
-    // jittering a 2s/10s re-probe would only blur the table's values.
-    const jitter = healthyCadence && effectiveDelay >= 10_000
-      ? Math.floor((doRandom() - 0.5) * effectiveDelay * 0.2)
-      : 0
-    const timer = setTimeout(() => {
-      state.readyProbeTimer = null
-      void verifyReadyTransport(id, state, 'periodic')
-    }, Math.max(1, effectiveDelay + jitter))
-    timer.unref?.()
-    state.readyProbeTimer = timer
-  }
-
-  /** Provider verifyUp promises are contractually bounded; this is the manager's
-   *  last-resort deadline so a buggy/never-settling verifier cannot freeze the
-   *  heartbeat with verifyInFlight=true forever. */
-  async function withProbeDeadline<T>(operation: Promise<T>, timeoutMs: number, onTimeout?: () => void): Promise<T> {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const deadline = new Promise<T>((_resolve, reject) => {
-      timer = setTimeout(() => {
-        // Cancel the underlying operation first: a probed gateway must not finish a
-        // session rotation after its deadline (and a disconnected transport must not
-        // keep a request alive at all).
-        onTimeout?.()
-        reject(new Error('probe deadline exceeded'))
-      }, timeoutMs)
-      timer.unref?.()
-    })
-    try {
-      return await Promise.race([operation, deadline])
-    } finally {
-      if (timer !== undefined) clearTimeout(timer)
-    }
-  }
-
-  /**
-   * One ready-state identity re-verification — shared by the periodic heartbeat
-   * and reverify(). Runs the SAME verifyUp seam as the connect-time check, so a
-   * gateway 401 re-logs in once with the stored password and a revoked session
-   * self-heals; failures classify exactly like connect-time (terminal →
-   * failTerminal endpoint class, transient → scheduleReconnect). A transition or
-   * registry change while in flight drops the result.
-   */
-  async function verifyReadyTransport(
-    id: string,
-    state: InstanceState,
-    source: 'periodic' | 'user' | 'resume' | 'online' | 'failure',
-  ): Promise<void> {
-    if (disposed || !isCurrentState(id, state) || state.phase !== 'ready') return
-    if (state.verifyInFlight) {
-      // A forced wake/online probe must not be lost behind the periodic heartbeat.
-      if (source !== 'periodic') state.pendingForcedProbe = true
-      // The timer that just fired is CONSUMED. Without a re-arm, an in-flight probe
-      // of an older incarnation (or one that outlives its window) becomes the last
-      // tick: the heartbeat chain dies until some other event fires.
-      if (state.readyProbeTimer === null) armReadyVerify(id, state)
-      return
-    }
-    // ONLY user reverifies are quiet-windowed. Resume/online must be able to force
-    // the first probe after a network change; otherwise a ready-but-half-open
-    // tunnel waits for the next heartbeat tick.
-    if (source === 'user' && state.lastVerifyAt !== 0
-      && Date.now() - state.lastVerifyAt < readyVerifyMinIntervalMs) return
-    const spec = instances.get(id)
-    if (spec === undefined) return
-    const providerForSpec = resolveProvider(spec)
-    // Same real-verifier gate: a target with nothing to re-check must not run the
-    // trivial passthrough probe and emit a spurious 'verified'.
-    if (verifyProbe === undefined && providerForSpec.verifyUp === undefined) return
-    const endpoint = readyProbeEndpoint(spec, providerForSpec, state)
-    if (endpoint === null) {
-      // Defensive: a READY transport always has a probeable endpoint. Warn loud and
-      // re-arm so this silent return never kills the periodic chain.
-      warn(`transport-manager: ready-state probe skipped for ${id}: no probeable endpoint while ready`)
-      if (state.readyProbeTimer === null) armReadyVerify(id, state)
-      return
-    }
-    const epoch = state.tunnelEpoch
-    // The deadline covers the WHOLE provider flow (a gateway password verify is
-    // login → probe → 401 → re-login → re-probe; capping it at the single-exchange
-    // budget booked a slow-but-reachable link as a network failure).
-    const probeBudgetMs = probeBudgetFor(spec, providerForSpec)
-    state.verifyInFlight = true
-    // The probe is cancellable: the deadline aborts it (instead of leaving an orphan
-    // request that could still rotate a gateway session), and so does a disconnect.
-    const probeAbort = new AbortController()
-    state.probeAbort = probeAbort
-    let verification: TransportVerifyResult
-    try {
-      verification = await withProbeDeadline(doVerify(spec, endpoint, probeAbort.signal), probeBudgetMs, () => { probeAbort.abort() })
-    } catch (verifyError) {
-      // A throwing verifier is a transient NETWORK failure, never a crash.
-      warn(`transport-manager: ready-state endpoint verification threw: ${describeTransportError(verifyError)}`)
-      verification = { ok: false, detail: 'ready-state endpoint verification failed', failureKind: 'network' }
-    } finally {
-      state.verifyInFlight = false
-      if (state.probeAbort === probeAbort) state.probeAbort = null
-      if (state.pendingForcedProbe) {
-        state.pendingForcedProbe = false
-        queueMicrotask(() => {
-          if (disposed || !isCurrentState(id, state) || state.phase !== 'ready') return
-          void verifyReadyTransport(id, state, 'resume')
-        })
-      }
-    }
-    // The machine may have moved while in flight — drop the stale result.
-    if (disposed || !isCurrentState(id, state) || state.phase !== 'ready' || epoch !== state.tunnelEpoch) return
-    const completedAt = Date.now()
-    state.lastVerifyAt = completedAt
-    if (verification.ok) {
-      applyLinkHealth(id, state, { kind: 'probe-ok', at: completedAt })
-      clearDownGrace(state)
-      // Chain-continuation invariant: after ANY successful verification while
-      // current/ready the periodic chain must continue — a user reverify that ate
-      // the tick via single-flight must restore it, or the heartbeat silently dies.
-      if (state.readyProbeTimer === null) armReadyVerify(id, state)
-      // A successful probe is the only moment a session may have rotated inside
-      // verifyUp (401 → re-login): surface it so the proxy can re-register.
-      for (const listener of bus.listeners('verified')) {
-        try {
-          listener(id)
-        } catch (listenerError) {
-          warn(`transport-manager verified listener threw: ${describeTransportError(listenerError)}`)
-        }
-      }
-      return
-    }
-    const reason = verification.detail ?? 'the endpoint is not a dsh instance'
-    // Providers should set failureKind explicitly. For older/custom providers the
-    // fallback reads the verdict AND the status inside `detail` ("HTTP 404"), so it
-    // can yield protocol just as well as network — a terminal-looking answer ends
-    // the transport instead of counting toward link loss.
-    const statusMatch = /\bHTTP (\d{3})\b/i.exec(verification.detail ?? '')
-    const fallbackClass = classifyProbeFailure({
-      ...(statusMatch === null ? {} : { statusCode: Number(statusMatch[1]) }),
-      terminal: verification.terminal === true,
-    })
-    const failureClass: ProbeFailureClass = verification.failureKind ?? fallbackClass
-    if (verification.terminal === true || failureClass === 'protocol') {
-      failTerminal(id, state, reason, true, 'endpoint')
-      return
-    }
-    // Our own bulk upload owns the tunnel's single TCP: a probe timeout inside
-    // that window proves congestion, not link death. Re-probe without counting,
-    // so a 20MB@2Mbps upload cannot fast-fail and tear down its own transport.
-    if (failureClass === 'network' && options.linkBusy?.(id) === true) {
-      appendLogInternal(state, 'info',
-        `probe failed while a bulk upload owns the link; not counted as link loss (${reason})`)
-      if (state.readyProbeTimer !== null) {
-        clearTimeout(state.readyProbeTimer)
-        state.readyProbeTimer = null
-      }
-      armReadyVerify(id, state, linkPolicy.suspectProbeIntervalMs)
-      return
-    }
-    const reduction = applyLinkHealth(id, state, {
-      kind: 'probe-failure',
-      at: completedAt,
-      failureClass,
-      reason,
-    })
-    if (reduction.becameDown) {
-      // Keep ready for the bounded grace: the proxy fast-fails NEW requests and
-      // subscriptions through the health projection while in-flight uploads and
-      // streams finish. Keep probing, or a link that recovers inside the grace
-      // would still be torn down blindly at expiry. The pending healthy timer (an
-      // on-demand probe may have run with it armed) must be replaced, never left
-      // to swallow the grace cadence.
-      armDownGrace(id, state, `ready-state verification down: ${reason}`)
-      if (state.readyProbeTimer !== null) {
-        clearTimeout(state.readyProbeTimer)
-        state.readyProbeTimer = null
-      }
-      armReadyVerify(id, state, linkPolicy.suspectProbeIntervalMs)
-      return
-    }
-    // Suspect/reachable failures keep the tunnel and re-probe on the reducer's
-    // cadence. They must never revoke in-flight traffic. An on-demand probe may
-    // have run while the healthy periodic timer was still armed: replace that timer
-    // with the short suspect cadence instead of waiting out the old window.
-    if (state.readyProbeTimer !== null) {
-      clearTimeout(state.readyProbeTimer)
-      state.readyProbeTimer = null
-    }
-    armReadyVerify(id, state, reduction.nextProbeDelayMs ?? undefined)
-  }
-
-  /**
-   * One `online` wake wave. The page reports the browser event per instance, so
-   * without coalescing a wake fires N probes in the same tick; the manager owns
-   * the same 120ms stagger `reverifyAll` uses.
-   */
-  const pendingOnlineReverify = new Set<string>()
-  const onlineReverifyTimers = new Set<ReturnType<typeof setTimeout>>()
-  let onlineWaveTimer: ReturnType<typeof setTimeout> | null = null
-
-  function flushOnlineWave(): void {
-    onlineWaveTimer = null
-    const ids = [...pendingOnlineReverify]
-    pendingOnlineReverify.clear()
-    let slot = 0
-    for (const id of ids) {
-      const delay = slot === 0 ? 0 : slot * WAKE_STAGGER_MS
-      slot += 1
-      if (delay === 0) {
-        const current = states.get(id)
-        if (current !== undefined) void verifyReadyTransport(id, current, 'online')
-        continue
-      }
-      const timer = setTimeout(() => {
-        onlineReverifyTimers.delete(timer)
-        if (disposed) return
-        const current = states.get(id)
-        if (current === undefined || current.phase !== 'ready') return
-        void verifyReadyTransport(id, current, 'online')
-      }, delay)
-      timer.unref?.()
-      onlineReverifyTimers.add(timer)
-    }
-  }
-
-  function cancelOnlineWave(): void {
-    pendingOnlineReverify.clear()
-    if (onlineWaveTimer !== null) {
-      clearTimeout(onlineWaveTimer)
-      onlineWaveTimer = null
-    }
-    for (const timer of onlineReverifyTimers) clearTimeout(timer)
-    onlineReverifyTimers.clear()
-  }
-
-  /** Epoch-ms of the last failure-driven forced probe per instance (debounce). */
-  const lastFailureProbeAt = new Map<string, number>()
-
-  /**
-   * Fresh evidence from a REAL forwarded request that never got an HTTP answer
-   * (socket error / proxy timeout): force ONE identity probe now instead of
-   * waiting for the next heartbeat. Deliberately conservative:
-   * - only while the link is still `healthy` (suspect/down already has a cadence);
-   * - not while our own bulk upload owns the tunnel (congestion, not death);
-   * - no overlap with an in-flight probe, and at most one per
-   *   `failureProbeMinIntervalMs` (a burst of failed requests is one event).
-   */
-  function notifyLinkFailure(id: string): void {
-    const state = states.get(id)
-    if (state === undefined || state.phase !== 'ready') return
-    if (state.link.health !== 'healthy') return
-    if (options.linkBusy?.(id) === true) return
-    if (state.verifyInFlight) {
-      // The in-flight probe is about to produce a fresher verdict than this
-      // request-level observation (it succeeds ⇒ the link is up now and the failed
-      // request was a host-level problem; it fails ⇒ the cadence already owns the
-      // verdict). Queueing another forced probe here would double every probe under
-      // a burst and defeat the throttle.
-      return
-    }
-    const now = Date.now()
-    if (!Number.isFinite(now)) return
-    if (now - (lastFailureProbeAt.get(id) ?? 0) < linkPolicy.failureProbeMinIntervalMs) return
-    lastFailureProbeAt.set(id, now)
-    void verifyReadyTransport(id, state, 'failure')
-  }
-
-  /** Public on-demand ready-state re-verification (desktop_ssh_reverify): one
-   *  immediate identity probe for the instance the user is about to act on, so a
-   *  dead session/endpoint flips within one round-trip. No-op unless ready. */
-  function reverify(id: string, reason: 'user' | 'resume' | 'online' = 'user'): TransportStatusProjection | null {
-    const state = states.get(id)
-    if (state === undefined) return status(id)
-    if (reason === 'online') {
-      pendingOnlineReverify.add(id)
-      if (onlineWaveTimer === null) {
-        onlineWaveTimer = setTimeout(flushOnlineWave, 0)
-        onlineWaveTimer.unref?.()
-      }
-      return status(id)
-    }
-    void verifyReadyTransport(id, state, reason)
-    return status(id)
-  }
-
-  /** Re-probe every READY remote after an OS/network wake. Suspect/down included;
-   *  a healthy link is also probed so a ready-but-half-open tunnel cannot wait
-   *  for the next heartbeat tick. Error/degraded instances are handled by connect(). */
-  function reverifyAll(): void {
-    const generation = ++reverifyGeneration
-    for (const timer of reverifyTimers) clearTimeout(timer)
-    reverifyTimers.clear()
-    let slot = 0
-    for (const id of instances.keys()) {
-      const state = states.get(id)
-      if (state === undefined || state.phase !== 'ready') continue
-      const delay = slot === 0 ? 0 : slot * WAKE_STAGGER_MS
-      slot += 1
-      if (delay === 0) {
-        void verifyReadyTransport(id, state, 'resume')
-        continue
-      }
-      const timer = setTimeout(() => {
-        reverifyTimers.delete(timer)
-        if (generation !== reverifyGeneration) return
-        const current = states.get(id)
-        if (current === undefined || current !== state || current.phase !== 'ready') return
-        void verifyReadyTransport(id, state, 'resume')
-      }, delay)
-      timer.unref?.()
-      reverifyTimers.add(timer)
-    }
-  }
-
-  /** The transport process exit handler: ignored while idle; auth failure is
-   *  terminal; a ready drop or pre-ready death enters the bounded reconnect path.
-   *  An exit of a REPLACED child is ignored — it must not kill the fresh transport. */
   function onChildExit(id: string, state: InstanceState, child: SpawnedProcess, code: number | null, signal: NodeJS.Signals | null) {
     // Clear global tracking before registry ownership: removal may already have
     // deleted the state while this child releases its provider/askpass lease.
@@ -1684,249 +1171,32 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     }
   }
 
-  /** Non-null exactly while the LAST registry load failed: the in-memory set
-   *  is then NOT the file's contents, so an empty list must never be read as
-   *  an authoritative empty registry. Cleared by a successful load or by an
-   *  AUTHORITATIVE saveInstances() rebuild; a COMPENSATION rollback write
-   *  deliberately keeps it (see SaveInstancesProvenance). Never credential
-   *  material. */
-  let registryLoadFailure: string | null = null
-
-  /** True while the LAST successful load dropped rows (invalid entry or
-   *  duplicate id): the file has content the in-memory roster does not
-   *  represent, so the roster is a PARTIAL authority. Cleared by a drop-free
-   *  successful load or an AUTHORITATIVE saveInstances() rebuild; a
-   *  COMPENSATION rollback keeps it and, while it is set, skips the disk write
-   *  (writing the partial snapshot back would make the next launch read a
-   *  partial file as complete). Never credential material. */
-  let registryIncomplete = false
-  /** Rows the LAST load dropped (invalid entries + duplicate ids). */
-  let registryDroppedCount = 0
-
-  /** Load the persisted instance set; a missing file is an empty set. */
-  function loadInstances(): TransportInstanceSpec[] {
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(readFileSync(instancesFile, 'utf8'))
-    } catch (error: unknown) {
-      if ((error as CodedError | undefined)?.code === 'ENOENT') {
-        // A missing live file is a healthy empty set only while no preserved
-        // .corrupt sibling exists: after a corrupt preservation the previous
-        // registry contents are unknown, never a healthy empty set.
-        const preservedCorrupt = existsSync(`${instancesFile}.corrupt`)
-        registryLoadFailure = preservedCorrupt
-          ? 'ssh-instances file is missing while its preserved .corrupt copy exists; registry contents unknown'
-          : null
-        if (!preservedCorrupt) {
-          // Drop-free successful load: the roster-incomplete bit clears too.
-          registryIncomplete = false
-          registryDroppedCount = 0
-        }
-        return listInstances()
-      }
-      // Corrupt instance file: loud failure, never a fake-empty set; the caller
-      // (desktop main) preserves the file before starting empty.
-      const wrapped: CodedError = new Error(`ssh-instances file is corrupt: ${describeTransportError(error)}`)
-      wrapped.code = 'ssh_instances_corrupt'
-      registryLoadFailure = wrapped.message
-      throw wrapped
-    }
-    if (!Array.isArray(parsed)) {
-      const wrapped: CodedError = new Error('ssh-instances file does not contain an array')
-      wrapped.code = 'ssh_instances_corrupt'
-      registryLoadFailure = wrapped.message
-      throw wrapped
-    }
-    if (parsed.length > MAX_TRANSPORT_INSTANCES) {
-      const wrapped: CodedError = new Error(`ssh-instances file exceeds the ${MAX_TRANSPORT_INSTANCES}-instance limit`)
-      wrapped.code = 'ssh_instances_too_many'
-      registryLoadFailure = wrapped.message
-      throw wrapped
-    }
-    const dropped: unknown[] = []
-    const seenIds = new Set<string>()
-    let duplicates = 0
-    for (const entry of parsed) {
-      // A null/non-object entry must never throw inside provider resolution: drop
-      // it loudly with the other invalid entries (the per-entry defense).
-      if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
-        dropped.push(entry)
-        continue
-      }
-      // Provider selection is transport-keyed; the entry must already carry
-      // the current kind+transport pair (pre-v2 rows are dropped loudly).
-      const providerFor = resolveProvider(entry as { kind?: unknown; transport?: unknown })
-      const normalized = providerFor.validateSpec(entry)
-      if (normalized === null) {
-        dropped.push(entry)
-        continue
-      }
-      if (seenIds.has(normalized.id)) {
-        // Duplicate persisted ids: first wins (last-wins would silently flip the registry).
-        duplicates += 1
-        continue
-      }
-      seenIds.add(normalized.id)
-      instances.set(normalized.id, normalized)
-    }
-    if (dropped.length > 0) warn(`transport-manager: dropped ${dropped.length} invalid instance(s) from ${instancesFile}`)
-    if (duplicates > 0) warn(`transport-manager: dropped ${duplicates} duplicate id(s) from ${instancesFile} (first wins)`)
-    // V5-A: the parse succeeded, but rows were dropped — the disk file HAS
-    // content this process cannot represent (a provider-rejected entry, or a
-    // duplicate id), so the in-memory roster is a PARTIAL view. The health
-    // probe reports rosterIncomplete so the renderer refuses to retire durable
-    // unread keys from it (the typical trigger is a new-writer/old-reader
-    // field drift). A drop-free load or an authoritative save clears it.
-    registryDroppedCount = dropped.length + duplicates
-    registryIncomplete = registryDroppedCount > 0
-    registryLoadFailure = null
-    return listInstances()
-  }
-
   /**
-   * Persist a new instance set (atomic write) and align the registry: instances
-   * that disappeared are disconnected and removed. Save is an all-or-nothing
-   * proposal — one invalid/provider-mismatched entry or duplicate id rejects the
-   * whole replacement before persistence or live transport mutation (load-time
-   * recovery stays lenient). Instances whose target kind, transport method or
-   * parameters changed revoke the old tunnel and exec generations before
-   * publication, and teardown always runs while the OLD spec is still
-   * authoritative so provider-owned resources observe the old kind.
-   * `provenance` defaults to `'authoritative'`; a `'compensation'` rollback keeps
-   * both registry health bits and skips the disk write while either is closed
-   * (F19/V5-A; see SaveInstancesProvenance). An AUTHORITATIVE write rebuilds the
-   * file and clears both bits.
+   * Persisted-registry load health (F13/V5-A). One object so the registry module can
+   * mutate it through a stable reference; the accessors below read the same fields.
+   * Never credential material.
    */
-  function saveInstances(
-    next: TransportInstanceInput[],
-    provenance: SaveInstancesProvenance = 'authoritative',
-  ): TransportInstanceSpec[] {
-    if (!Array.isArray(next)) {
-      const error: CodedError = new Error('instances must be an array')
-      error.code = 'ssh_instances_invalid'
-      throw error
-    }
-    if (next.length > MAX_TRANSPORT_INSTANCES) {
-      const error: CodedError = new Error(`instances exceed the ${MAX_TRANSPORT_INSTANCES}-instance limit`)
-      error.code = 'ssh_instances_too_many'
-      throw error
-    }
-    const kept: TransportInstanceSpec[] = []
-    const restartIds: string[] = []
-    const stopBeforeReplaceIds: string[] = []
-    const projectionResetIds: string[] = []
-    const seenIds = new Set<string>()
-    for (const [index, entry] of next.entries()) {
-      // Save is all-or-nothing: a malformed entry rejects the whole roster before
-      // any persistence, credential commit, or runtime mutation.
-      if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
-        const error: CodedError = new Error(`instance at index ${index} is invalid`)
-        error.code = 'ssh_instances_invalid'
-        throw error
-      }
-      const providerFor = resolveProvider(entry as { kind?: unknown; transport?: unknown })
-      const normalized = providerFor.validateSpec(entry)
-      if (normalized === null) {
-        const error: CodedError = new Error(`instance at index ${index} is invalid for its transport provider`)
-        error.code = 'ssh_instances_invalid'
-        throw error
-      }
-      if (seenIds.has(normalized.id)) {
-        const error: CodedError = new Error(`duplicate instance id at index ${index}`)
-        error.code = 'ssh_instances_duplicate'
-        throw error
-      }
-      seenIds.add(normalized.id)
-      const previous = instances.get(normalized.id)
-      const state = previous === undefined ? undefined : states.get(normalized.id)
-      if (previous !== undefined && execIdentityChanged(previous, normalized)) {
-        projectionResetIds.push(normalized.id)
-      }
-      // transport/insecureHttp/SPKI are part of the live-transport identity:
-      // switching mechanism, scheme or pin while live must restart the transport so
-      // projection/proxy URL never disagrees; none of these is a credential, so the
-      // token/password survive the edit. Field set single-sourced in
-      // credential-identity.ts.
-      const transportFieldsChanged = previous !== undefined && liveTransportIdentityChanged(previous, normalized)
-      if (transportFieldsChanged && state !== undefined) {
-        // Always revoke the old generation, including the between-child gap of a
-        // multi-stage exec; only an actually live transport is restarted.
-        stopBeforeReplaceIds.push(normalized.id)
-        if (state.phase !== 'idle') restartIds.push(normalized.id)
-      }
-      kept.push(normalized)
-    }
-    // Persist BEFORE mutating the in-memory registry: a failed write throws while
-    // the registry and every live transport stay untouched, so runtime and UI never
-    // diverge; connection-save.ts coordinates the secondary stores and rollback.
-    // F19/V5-A: a COMPENSATION rollback never writes while the degraded or
-    // incomplete gate is closed — an authoritative-looking empty/partial snapshot
-    // would make the next launch settle (and prune durable keys from) a roster it
-    // cannot trust. Memory still accepts `next` so connection-save.ts can verify
-    // the rollback against the pre-transaction snapshot.
-    if (provenance === 'compensation' && registryLoadFailure !== null) {
-      warn(`transport-manager: registry load is degraded; skipping the compensation write of ${kept.length} instance(s) (live file left untouched, degraded gate stays closed)`)
-    } else if (provenance === 'compensation' && registryIncomplete) {
-      warn(`transport-manager: registry roster is incomplete; skipping the compensation write of ${kept.length} instance(s) (live file left untouched, incomplete gate stays closed)`)
-    } else {
-      writeFileAtomic(instancesFile, `${JSON.stringify(kept, undefined, 2)}\n`)
-    }
-    // An AUTHORITATIVE write is new registry truth: the file was rebuilt, so both
-    // load-health bits clear here (a compensation keeps them closed).
-    if (provenance === 'authoritative') {
-      registryLoadFailure = null
-      registryIncomplete = false
-      registryDroppedCount = 0
-    }
-    const nextIds = new Set(kept.map(entry => entry.id))
-    for (const id of [...instances.keys()]) {
-      if (!nextIds.has(id)) {
-        const removedSpec = instances.get(id)
-        log(`transport-manager: instance ${id} removed from the set; disconnecting its transport`)
-        disconnect(id)
-        // The instance is GONE: drop its runtime state so a later same-id reuse
-        // starts clean. An in-flight exec of the removed instance can never write
-        // into the NEW state (stale via the execEpoch bump; this is authoritative).
-        states.delete(id)
-        lastFailureProbeAt.delete(id)
-        // Request final cleanup of every provider-owned generation on REMOVAL:
-        // purge never invalidates a still-running child's askpass environment.
-        if (removedSpec !== undefined) resolveProvider(removedSpec).purgeAuth?.(removedSpec)
-      }
-    }
-    // Stop changed transports BEFORE replacing `instances`: disconnect() resolves
-    // the provider from the current entry and would otherwise unregister the wrong target.
-    for (const id of stopBeforeReplaceIds) {
-      log(`transport-manager: instance ${id} transport kind/parameters changed; stopping old transport`)
-      disconnect(id)
-      // A same-id operational replacement is a fresh runtime generation: drop the
-      // retired state's ring/projections so they never present as replacement facts.
-      states.delete(id)
-      lastFailureProbeAt.delete(id)
-    }
-    instances.clear()
-    for (const entry of kept) instances.set(entry.id, entry)
-    // Provider-specific fields cannot cross a kind boundary (an SSH systemd result never appears on a gateway status).
-    for (const id of projectionResetIds) {
-      const state = states.get(id)
-      if (state !== undefined) state.serviceActive = null
-    }
-    // Parameters changed while live: start a fresh transport under the new spec
-    // (disconnect is idempotent; connect reads the now-updated registry).
-    for (const id of restartIds) {
-      log(`transport-manager: instance ${id} transport kind/parameters changed; starting replacement transport`)
-      connect(id)
-    }
-    return listInstances()
+  const registryState: { loadFailure: string | null; incomplete: boolean; droppedCount: number } = {
+    loadFailure: null,
+    incomplete: false,
+    droppedCount: 0,
   }
+  const registry = createTransportRegistry({
+    instances,
+    states,
+    instancesFile,
+    state: registryState,
+    log,
+    warn,
+    writeFileAtomic,
+    resolveProvider,
+    connect: (id) => { connect(id) },
+    disconnect: (id) => { disconnect(id) },
+    execIdentityChanged,
+    lastFailureProbeAt,
+  })
+  const { loadInstances, saveInstances, listInstances } = registry
 
-  /** The current instance set (non-secret metadata). */
-  function listInstances(): TransportInstanceSpec[] {
-    return [...instances.values()].map(spec => ({ ...spec }))
-  }
-
-  /** Start (or restart) the transport for one instance: idempotent while
-   *  connecting/ready; a manual connect resets retry and clears the pending reconnect. */
   function connect(id: string): TransportStatusProjection | null {
     if (disposed) return status(id)
     if (!instances.has(id)) {
@@ -2076,9 +1346,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
   /** Stop every transport, cancel in-flight execs, drop all listeners (app quit). */
   function dispose() {
     disposed = true
-    reverifyGeneration += 1
-    for (const timer of reverifyTimers) clearTimeout(timer)
-    reverifyTimers.clear()
+    cancelReverify()
     cancelOnlineWave()
     for (const id of [...states.keys()]) disconnect(id)
     // Hygiene sweep: a state that never left ready must not keep a probe timer.
@@ -2113,10 +1381,10 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
 
   return {
     loadInstances,
-    registryDegraded: () => registryLoadFailure !== null,
-    loadFailure: () => registryLoadFailure,
-    registryIncomplete: () => registryIncomplete,
-    loadDroppedCount: () => registryDroppedCount,
+    registryDegraded: () => registryState.loadFailure !== null,
+    loadFailure: () => registryState.loadFailure,
+    registryIncomplete: () => registryState.incomplete,
+    loadDroppedCount: () => registryState.droppedCount,
     saveInstances,
     listInstances,
     connect,

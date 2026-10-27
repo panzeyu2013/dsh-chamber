@@ -3,26 +3,28 @@
   "files": [
     {
       "path": "packages/renderer/src/App.tsx",
-      "lines": 2473,
-      "target": 400,
-      "note": "renderer container (function-of-state mixes; stores/budgets/servers/ledger extracted); +6 = the session-row entrance animation/placement wiring (feature, review-justified raise); +16 = the per-source archived-filter projection input (pin view-options merge); +7 = this file's removal wiring (2 imports + the echoStore destructure + the TTL sweep + the source-retirement drop + the projection-pass argument); record/withdraw/reconcile live in use-bridge-subscriptions.ts, which is not on this table (feature, review-justified raise; registered in STATUS). 三条增量 +6+16+7 = +29 ⇒ 基线 2352 可复算到 2381；+56 = 弱网 v1 page-channel link selector/online 重验（design 27）；+13 = local link epoch 修正/online reverify catch（review 修正）；−2 = selector 改读 remotesStore snapshot（最终 scan，取消 status ref 镜像并净删 2 行）；+11 = 弱网 v1 review 修复：status 引用差分（只唤醒变化的 source）与注释（design 27 §3.6）；+3 = link 投影解读改读 client-core 的 linkReady/linkEpochOf；+8 = 本地 source 只在真实变化时唤醒页通道（remote-only 更新不再重放本地停放）；+3 = 本地 degraded 服务化（isServiceableLocalStatus 调用点 + createLocal 门注释，design 02 §3.5 / design 04 §4.3，review 认可的必要增量）"
+      "lines": 1842,
+      "target": 1600,
+      "note": "App is the composition root: state containers + 28 named app-hooks + the view shell. Raised by 4 lines in the 2026-10-27 re-review to restore the missing withdrawSourceRef backfill (a text-locked INV-7 seam). +3 at the rebase onto the 0.4.3 line = the degraded-serviceability port: the isServiceableLocalStatus import and the note at the local link.ready arm (design 02 §3.5), the same +3 the release itself recorded. Target 1600 = after retireSources/refreshRemotes move; the JSX shell stays as the recorded boundary."
     },
     {
       "path": "packages/desktop/plugin-sync.ts",
       "lines": 1097,
       "target": 1200,
-      "note": "plugin mutation pipeline (three surfaces share one file)"
+      "note": "plugin mutation pipeline (three surfaces share one file)",
+      "kind": "ceiling"
     },
     {
       "path": "packages/desktop/shell-core.ts",
       "lines": 1318,
-      "target": 1600,
-      "note": "shell assembly + IPC ctx (blocks the shell-ipc type cycle)"
+      "target": 1450,
+      "note": "shell assembly + IPC ctx (blocks the shell-ipc type cycle)",
+      "kind": "ceiling"
     },
     {
       "path": "packages/dsh-chamber-client-ui-settings-bridge/src/client/DshRuntimeSection.tsx",
       "lines": 2185,
-      "target": 600,
+      "target": 1100,
       "note": "gateway + local runtime branches in one file"
     },
     {
@@ -35,13 +37,15 @@
       "path": "packages/desktop/gateway-provider.ts",
       "lines": 1247,
       "target": 1400,
-      "note": "gateway transport provider；+1 = probe failureKind classification（design 27）；+7 = session failure/superseded/no-token failureKind（review 修正）；+3 = 复合 verifyUp 预算声明 verifyUpBudgetMs（design 27 §3.2）；+3 = 复合探针预算注释（登录 10s + 探针 5s 的真实最坏 35s）；+16 = verifyUp/verifyGatewayEndpoint/探测核心的 signal 透传；+27 = 口令会话 proof 在瞬时失败后恢复（一次网络抖动不得拆掉已注册的 gateway）；+1 = 失败的 bearer 回退不覆盖口令分类（注释）"
+      "note": "gateway transport provider；+1 = probe failureKind classification（design 27）；+7 = session failure/superseded/no-token failureKind（review 修正）；+3 = 复合 verifyUp 预算声明 verifyUpBudgetMs（design 27 §3.2）；+3 = 复合探针预算注释（登录 10s + 探针 5s 的真实最坏 35s）；+16 = verifyUp/verifyGatewayEndpoint/探测核心的 signal 透传；+27 = 口令会话 proof 在瞬时失败后恢复（一次网络抖动不得拆掉已注册的 gateway）；+1 = 失败的 bearer 回退不覆盖口令分类（注释）",
+      "kind": "ceiling"
     },
     {
       "path": "packages/desktop/ssh-provider.ts",
       "lines": 1453,
-      "target": 1500,
-      "note": "ssh transport provider；+11 = probe failureKind + ConnectTimeout/ExitOnForwardFailure（design 27）；+9 = verifyUpBudgetMs 按 kind 分档 + ConnectTimeout 8s（须低于 READY_TIMEOUT）+ 注释（design 27 §3.2）；+1 = 复合探针预算注释（最坏 30s + 余量）；+8 = verifyUp/verifyDshEndpoint/probeDshSignature 的 signal 透传；+4 = signature 次探针与口令腿的 signal 透传"
+      "target": 1600,
+      "note": "ssh transport provider；+11 = probe failureKind + ConnectTimeout/ExitOnForwardFailure（design 27）；+9 = verifyUpBudgetMs 按 kind 分档 + ConnectTimeout 8s（须低于 READY_TIMEOUT）+ 注释（design 27 §3.2）；+1 = 复合探针预算注释（最坏 30s + 余量）；+8 = verifyUp/verifyDshEndpoint/probeDshSignature 的 signal 透传；+4 = signature 次探针与口令腿的 signal 透传",
+      "kind": "ceiling"
     },
     {
       "path": "packages/dsh-chamber-client-ui-settings-connections/src/client/ConnectionsSection.tsx",
@@ -57,15 +61,15 @@
     },
     {
       "path": "packages/desktop/transport-manager.ts",
-      "lines": 2138,
-      "target": 1400,
-      "note": "transport lifecycle；+127 = link health projection/two-failure down/reverifyAll/bind-race 重分配（design 27）；+4 = 旧/自定义 provider 缺 failureKind 时的 classifyProbeFailure 保守回退；+4 = on-demand 探针失败后替换旧健康 timer（suspect 快速复探）；+16 = verifyUp 最后期限（LINK_POLICY.probeTimeoutMs 消费）；+66 = down grace/reverifyAll 错峰/心跳 jitter/link 投影 reset（review 修正）；+5 = HTTP status 兜底分类（review 修正）；+4 = down→healthy 才 bump linkEpoch（review 修正）；+33 = down-grace 周期探针/pending forced probe/bind 重试上限（最终扫描）；另删 READY_VERIFY 别名与无消费者诊断字段净 −19；+112 = review 修复：探针复合预算、grace 30s 重开与硬截止、busy 抑制、online 波次合并、jitter 收窄到健康心跳、可达失败 10s 表值（design 27 §3.2/§3.3）；+1 = 注释（leave-ready 一律清 link 投影）；+2 = jitter 只给健康心跳的判据注释（复核）；+8 = 复核修复：deadline 从 state 读、provider 预算 try/catch、注释；+32 = 失败驱动强制探针（notifyLinkFailure/节流/guard）、connect 期探针期限、阈值表；+9 = 失败驱动探针的 in-flight 语义注释与节流表清理；+55 = 心跳两级（watch 窗口）/探针取消（AbortController、期限 onTimeout）/连接期 signal 收尾；+3 = 心跳档位注释；+9 = 心跳链续接（in-flight tick 重新 arm）与离开 ready 的探针 abort"
+      "lines": 1406,
+      "target": 1300,
+      "note": "Transport manager: registry/link-loop/link-health/instance-state extracted (B2). Target 1300 assumes the exec channel (~110 lines) moves next; the leftover tunnel lifecycle callbacks form one call graph and are the recorded core."
     },
     {
       "path": "packages/gateway/src/session-state.ts",
-      "lines": 1847,
-      "target": 900,
-      "note": "gateway session state routes + store + SSE; 相对已提交棘轮 1742 → 现值 1805（+63，全部 review-justified 2026-12）: +18: subagent rows are excluded at this source (single commitDelta filter + origin-transition removal) so child sessions can never reach the desktop as completion subjects (design 19 §3.2); the flip guard also requires the row to have existed, so first-seen subagent rows are never announced as removals and a subagent-to-top-level row still rides the delta; −1: commitDelta also filters absent rows, matching snapshotFor, never projecting a stop edge for a row the baseline no longer lists（S3 单阶段缺席删除，design 17 §10.7）; +30（S1/S3 收尾）: S1 身份门（StoredRow.originKnown 位 + commitDelta/snapshotFor 共用 isDeliverable + 门开那一拍的 delta 投递 + 持久化校验）与 S3 单阶段缺席删除; +16（第三轮 review 修复）: S1 收紧为**只认列表事实**——删除进程级 baselineSeen 及其全部读写，未确认身份的 status/activity/pending 行一律不投递（design 17 §10.7）+ T2 wire diagnostics.baselines 改读 store 的「成功且完整基线」计数（含 poll 档；observer 自计数另放 muxBaselines）+ T5 删除门槛（applyRemoved/enforceLimits 只对曾可投递行补 removed、容量淘汰补 pendingEdges.delete、死分支与注释清理）。棘轮随之抬到 1805; +28（2026-12 C2-6）: 行退役（基线缺席单阶段删除 + applyRemoved）同拍按 sessionId 清 waterfall 配对 `pendingEvents`（与 renderer `source-mux-facts.pendingWaterfalls` 同规：旧 eventId 的迟到 cancel 不得清同 id 重建后的新待决位，配对表也不得无界增长），含 releasePendingEventsFor / releasePendingEventsAbsentFrom 两个 helper 与两处调用。棘轮随之抬到 1833。+30（2026-09-28 review 修复，review-justified）: 子代理边界结论清理（进入/离开 origin='subagent' 边界 clearConclusion + pendingEdges.delete，堵身份翻面泄漏）、容量淘汰补 recomputeSubagentCounts、pending/cancel 帧补 present 位、去掉无引用导出的 export；棘轮随之抬到 1847（本笔 +30 行新增、同批删除 16 行，净 +14，可由 1833 复算）。"
+      "lines": 117,
+      "target": 130,
+      "note": "Facade only: createSessionStateService plus named re-exports; the store/observer/SSE bodies live in session-state/. Target 130 is the facade itself (routes+store+SSE descriptions in the old note belong to the split modules)."
     },
     {
       "path": "packages/dsh-chamber-client-core/src/instance-api.ts",
@@ -76,14 +80,14 @@
     {
       "path": "packages/desktop/runtime-startup-host.ts",
       "lines": 1290,
-      "target": 500,
+      "target": 900,
       "note": "createRuntimeStartupHost function budget (file proxy)"
     },
     {
       "path": "packages/desktop/host-assembly.ts",
-      "lines": 1249,
-      "target": 400,
-      "note": "createHostAssembly function budget (file proxy)。HEAD 1176 → 1249（+73）：+39 registration key/health-only 边沿（含抽出的 transport-registration helper）、+11 auth-fail TOCTOU 5s 防循环、+4 refresh arm 只在 register/verified 边沿、+4 applyTransportRegistration 收敛与 refresh 保留 link health、+25 review 修复（linkBusy 注入、上游失败缝、identity 适配器、auth 恢复驱动器/取消/守卫、proof 恢复后 manual sync 同步）、-10 删内联 auth 计时器/节流表。历史逐笔账见 git 历史。"
+      "lines": 1163,
+      "target": 1163,
+      "note": "Composition root: exit leg and committed registry transition extracted (B4). Frozen at its current size: the remaining onStatusChanged/onVerified pair moves four mutable maps into a third module, so it is a recorded boundary decision, not a line-count task."
     },
     {
       "path": "packages/dsh-chamber-client-core/src/aggregate-store.ts",
@@ -94,8 +98,134 @@
     {
       "path": "packages/dsh-chamber-client-ui-sidebar/src/client/ServerSection.tsx",
       "lines": 1273,
-      "target": 400,
+      "target": 1197,
       "note": "sidebar section container (header + browsing region + rows + view options + pin partition); the 2026-09 pin merge added 198 net (view options, pin partition, flat and tree modes). Nearest extraction: the ordering/partition preparation block (394-469) into server-section-order.ts; −3 = the panel-axis mount moved into the source header (ServerSectionPanels deleted; design 06 §4.7); +30 = alpha.3 #6062 attention-watermark window (requiredAttentionIndex + monotonic per-workspace floor, upstream WorkspaceBrowser parity; feature, review-justified raise; registered in STATUS)"
+    },
+    {
+      "path": "packages/gateway/src/session-state/sse.ts",
+      "lines": 221,
+      "target": 120,
+      "note": "SSE/routes surface split out of gateway session-state.ts (B3-1). One factory: bounded per-stream queue, keepalive, stream cap, Last-Event-ID resume. Target = the factory plus its limits; growth must be review-justified."
+    },
+    {
+      "path": "packages/gateway/src/session-state/observer.ts",
+      "lines": 312,
+      "target": 200,
+      "note": "Mux→store observer split out of gateway session-state.ts (B3-2): baseline/edge/pending mutations, one bounded follow per completion edge, host gate refresh, and the four cadence limits it owns. Target = the factory plus its limits."
+    },
+    {
+      "path": "packages/gateway/src/session-state/store.ts",
+      "lines": 800,
+      "target": 800,
+      "note": "Persisted session-state store: the delta ring, persistence/debounce, corrupt-aside recovery and the eight apply* methods. Everything closure-free moved to store-codec.ts (document/row codec + validators, R1-A + validation layer): 1056 -> 800. The remaining body shares rows/ring/deltaSessions/pendingEdges, so the next cut would need a shared mutable context - negative."
+    },
+    {
+      "path": "packages/desktop/transport-registry.ts",
+      "lines": 268,
+      "target": 200,
+      "note": "Persisted transport registry split out of transport-manager.ts (B2-1): load/save/list, corrupt-aside recovery, load-health state and the two write gates (degraded/incomplete compensation skip). Target 200 leaves room to lift the doc-shape validators into their own leaf."
+    },
+    {
+      "path": "packages/desktop/transport-link-loop.ts",
+      "lines": 430,
+      "target": 300,
+      "note": "Link-health loop split out of transport-manager (B2-2b): down grace, ready heartbeat + single-flight verify, online wake wave, link failure notifier, bounded reverify ladder, probe deadline. verifyProbe is OPTIONAL (undefined keeps the no-real-verifier skip gate live)."
+    },
+    {
+      "path": "packages/desktop/transport-instance-state.ts",
+      "lines": 68,
+      "target": 68,
+      "note": "InstanceState leaf split out of transport-manager (B2-0). Registering it keeps the ratchet from leaking into a file nobody watches."
+    },
+    {
+      "path": "packages/desktop/transport-link-health.ts",
+      "lines": 119,
+      "target": 119,
+      "note": "Link-health helpers split out of transport-manager (B2-2a). No state of its own; guarded so the leaf cannot silently grow back into a manager."
+    },
+    {
+      "path": "packages/desktop/host-exit.ts",
+      "lines": 75,
+      "target": 75,
+      "note": "Exit leg (dispose + quitFacts) split out of host-assembly (B4-1). Every handle is injected; the module owns no lifecycle."
+    },
+    {
+      "path": "packages/desktop/host-registry-transition.ts",
+      "lines": 99,
+      "target": 99,
+      "note": "Committed registry transition split out of host-assembly (B4-2a). Guards the proof rotation/seed revoke/push seam."
+    },
+    {
+      "path": "packages/desktop/transport-registration.ts",
+      "lines": 71,
+      "target": 71,
+      "note": "Registration key/apply helper (earlier extraction). Guarded for the same reason as the other transport leaves."
+    },
+    {
+      "path": "packages/gateway/src/session-state-types.ts",
+      "lines": 147,
+      "target": 147,
+      "note": "Shared store/observer/chamber contracts (B3-0). Types only; the leaf exists to break the facade cycle."
+    },
+    {
+      "path": "packages/gateway/src/session-state/features.ts",
+      "lines": 36,
+      "target": 39,
+      "note": "Mode feature set + host-state normalizer (B3-3). Split out so store and facade share one source without a cycle."
+    },
+    {
+      "path": "packages/renderer/src/app-hooks/use-bridge-subscriptions.ts",
+      "lines": 981,
+      "target": 981,
+      "note": "Bridge-subscription cluster (deep-link/echo/mount snapshot/runtime report). Registered after the completeness review found >200-line hooks unguarded. Frozen at its current size (target == lines): these are single-closure hooks with no identified seam; a split needs input-surface reduction first."
+    },
+    {
+      "path": "packages/renderer/src/app-hooks/use-notifications.ts",
+      "lines": 663,
+      "target": 663,
+      "note": "Notification projection cluster (completion observation/ledger/native outbox). Unregistered until the completeness review; guard it so the next addition is reviewed. Frozen at its current size (target == lines): these are single-closure hooks with no identified seam; a split needs input-surface reduction first."
+    },
+    {
+      "path": "packages/renderer/src/app-hooks/use-aggregate-refresh.ts",
+      "lines": 658,
+      "target": 658,
+      "note": "Aggregate refresh cluster (unary snapshots/bounded waves/edge polling/staleness watchdog). Frozen at its current size (target == lines): these are single-closure hooks with no identified seam; a split needs input-surface reduction first."
+    },
+    {
+      "path": "packages/renderer/src/app-hooks/use-view-scheduler.ts",
+      "lines": 400,
+      "target": 400,
+      "note": "View scheduler cluster (prewarm eligibility/harvest retention/reclaim/background phase)."
+    },
+    {
+      "path": "packages/renderer/src/app-hooks/use-badge-count.ts",
+      "lines": 283,
+      "target": 283,
+      "note": "Badge count projection."
+    },
+    {
+      "path": "packages/renderer/src/app-hooks/use-session-facts-lifecycle.ts",
+      "lines": 270,
+      "target": 270,
+      "note": "Session-facts lifecycle cluster (facts sources / shell-less observers / pagehide flush). Raised in the 2026-10-27 correctness review: the focus/blur completion-arm effect had been lost, and restoring it (+19 lines) is the behaviour the module header always promised."
+    },
+    {
+      "path": "packages/desktop/transport-health.ts",
+      "lines": 203,
+      "target": 203,
+      "note": "Link-health reducer + probe classification leaf."
+    },
+    {
+      "path": "packages/desktop/transport-provider.ts",
+      "lines": 392,
+      "target": 392,
+      "note": "Transport provider contract + spec validation leaf."
+    },
+    {
+      "path": "packages/gateway/src/session-state/store-codec.ts",
+      "lines": 285,
+      "target": 285,
+      "note": "Persisted document shape + row codec (R1-A + validation layer): types, goal whitelist/merge, wire projection, row factory, emptyDocument and the load-time validators. Pure functions over (row, clock); the only importer is store.ts."
     }
   ]
 }

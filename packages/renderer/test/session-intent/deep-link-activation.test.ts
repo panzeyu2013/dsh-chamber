@@ -352,15 +352,19 @@ test('authoritative roster installs its change listener before the initial refre
 })
 
 test('App wires bounded listener-before-ready retry for deep-link and notifications', () => {
-  // 深链订阅 effect 与桥订阅簇同在 hook。接线锁对本测试的两个落点
-  // （App.tsx + use-bridge-subscriptions.ts）取并集判 presence（不放松任何一条），
-  // 顺序型切片各自取实际持有该 effect 的文件。
+  // 深链订阅 effect 与桥订阅簇同在 hook。接线锁对本测试的三个落点
+  // （App.tsx + use-bridge-subscriptions.ts + use-notification-open-replay.ts）取并集判
+  // presence（不放松任何一条），顺序型切片各自取实际持有该 effect 的文件。
   const app = readFileSync(new URL('../../src/App.tsx', import.meta.url), 'utf8')
   const bridge = readFileSync(
     new URL('../../src/app-hooks/use-bridge-subscriptions.ts', import.meta.url),
     'utf8',
   )
-  const source = app + '\n' + bridge
+  const replay = readFileSync(
+    new URL('../../src/app-hooks/use-notification-open-replay.ts', import.meta.url),
+    'utf8',
+  )
+  const source = app + '\n' + bridge + '\n' + replay
   assert.match(source, /setTimeout\(signalNotificationReady, LISTENER_READY_RETRY_MS\)/)
   assert.match(source, /setTimeout\(signalReady, LISTENER_READY_RETRY_MS\)/)
   assert.match(source, /subscribeRosterBeforeRefresh/)

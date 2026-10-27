@@ -11,7 +11,13 @@
 
 import { renameSync, rmSync } from 'node:fs'
 
-/** Plain-object guard shared by the store validators. */
+/**
+ * LOOSE object guard shared by the store validators: any non-array object passes.
+ * Deliberately NOT the wire leaf's prototype-checking `isPlainRecord`: these stores
+ * validate JSON.parse output, and tightening the predicate here would silently reject
+ * values the validators accepted before. A caller that needs "plain JSON object
+ * only" must import the wire guard instead.
+ */
 export function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
