@@ -748,8 +748,8 @@
   `SidebarRoot.tsx` + `sidebar-chamber.module.css`（dot 状态类 + 高亮 +
   runningSubagents 分支 + `.scheduleIndicator` + `.railDotButton`）、`ServerSectionRows.tsx`/`RowHoverCard.tsx`
   （A1 座席渲染：行首 `renderSlot('sidebar.session.row.leading')` 以自有 `.scheduleIndicator` 为 fallback、悬停卡内容位
-  渲染 `sidebar.session.row.hover`；两席由本仓侧栏的 `children` 声明，上游注册里的两行由 vendor 补丁 13 号删除——
-  座席所有权转移，design 09 §3.6 第四类第二形态）、
+  渲染 `sidebar.session.row.hover`；两席由本仓侧栏的 `children` 声明，上游注册里的三行（0.2.2 起含 `sidebar.session.row.trailing`）
+  由 vendor 补丁删除，`trailing` 本轮不采纳——座席所有权转移，design 09 §3.6 第四类第二形态）、
   `packages/dsh-chamber-client-core/src/derive.ts`（`hasActiveScheduleOf`；`hasActiveSchedule` 进
   `instanceSnapshotSignature`；goal 的 `parseGoalFact`/`retainGoalFacts`/
   `applyGoalActivation`/`goalFactSignature` 与 overlay 填补）、

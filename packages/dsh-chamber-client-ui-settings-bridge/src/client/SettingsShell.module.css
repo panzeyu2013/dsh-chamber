@@ -155,7 +155,9 @@
 }
 
 .navCell:hover {
-  background: var(--dsw-specific-sidebar-nav-item-hover);
+  /* 0.2.2: upstream 删除了 --dsw-specific-sidebar-nav-item-hover；改用本壳已用的
+     通用交互悬停 alias。 */
+  background: var(--dsw-alias-interactive-bg-hover);
 }
 
 .navCell.active {

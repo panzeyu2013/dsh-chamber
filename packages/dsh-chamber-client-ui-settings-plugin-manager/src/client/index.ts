@@ -10,6 +10,9 @@ import { tabLedgerSource } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/c
 import { en, zh } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/locales.ts'
 import { PluginManagerController, isInstallPending } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/manager-store.ts'
 import { PluginRefreshToast, type PluginRefreshToastFace } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/PluginRefreshToast.tsx'
+// 0.2.2: the page drives its sticky/compact header from this face (header-scroll.ts); the
+// upstream registration synthesizes it onto the manager face the same way.
+import { createPluginHeaderRef } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/header-scroll.ts'
 import { createNavigationStore } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/navigation-store.ts'
 import type { PluginManagerFace } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/manager-store.ts'
 import type { PluginManagerLocaleKey } from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/locales.ts'
@@ -188,7 +191,7 @@ export function apply(ctx: ClientContext): void {
       label: () => sectionLabel('nav'),
       locale: MANAGER_NS,
       store,
-      inject: () => face as PluginManagerFace,
+      inject: () => ({ ...face, createHeaderRef: createPluginHeaderRef }) as PluginManagerFace,
       children: MANAGER_CHILDREN,
     }, EmbeddedPluginManagerPage as never)
   })

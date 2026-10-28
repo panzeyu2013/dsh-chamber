@@ -288,8 +288,9 @@ vendorTest('上游：pin/unpin 的形态、座席顺序、文案与线协议（�
     '行钮无障碍名必须仍是行菜单长名（chamber 照此，不对行名参数化）')
   assert.ok(pin.includes('<IconPinFillRegular size={14} />') && pin.includes('<IconPinOutlineRegular size={14} />'),
     '行钮必须是 14px 双字形')
-  assert.equal((pin.match(/if \(archived\) return null/g) ?? []).length, 2,
-    '菜单项与行钮两个入口都必须对归档行返回 null（chamber 的 pin/archive 互斥押在它上面）')
+  // 0.2.2：两个入口的守卫合并成 `archived || !allowed`（新增访问快照门），归档互斥语义不变。
+  assert.equal((pin.match(/if \(archived \|\| !allowed\) return null/g) ?? []).length, 2,
+    '菜单项与行钮两个入口都必须对归档行（或访问门拒绝）返回 null（chamber 的 pin/archive 互斥押在它上面）')
   // 2) 座席注册顺序：菜单 pin(100) 先于 rename(200)；行动作 archive(100) 先于 pin(200)（pin 最右）。
   const index = readVendor('dsh-client-ui-workspace/src/client/index.ts')
   assert.ok(index.includes("{ name: 'sidebar.workspaces.session.menu.item', id: 'pin', order: 100"),

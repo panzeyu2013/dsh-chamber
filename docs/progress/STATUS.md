@@ -67,7 +67,7 @@
 **Swift 运行期**：首载按 `/health` 等 ready；首屏后无周期健康探测/重启入口；`didCommit` 后缺期限；宿主 cwd/安装根两条。
 
 **上游 pin 新面（无 GUI 未跑）**：
-- 基线：0.2.1-rc.3 未复跑；pin 四项（内置插件页、跨代 profile、gateway 就地升级、0.1.6 移动端 + 右栏终端）挂账。
+- 基线：0.2.2-alpha.2 未复跑（其新面并入下方各行）；pin 四项（内置插件页、跨代 profile、gateway 就地升级、0.1.6 移动端 + 右栏终端）挂账。
 - rc.3（仅该来源）：①会话头视图折叠 + More（Trajectory 行在延迟簇注册视图，默认出现）；②右栏 guide More；③「浏览」落到设置→插件管理（plugin-navigation 座席）；④移动端 44px More 与 88px 标签省略；⑤New Session 全局按钮复用空白会话（复用保持创建时预设）。判据 = 含已打开会话的 More/浏览 走查 + 打包态真机（本次机械 live/走查未打开会话，不覆盖本行）；⑤ 另判：已有空白会话（含非默认预设）时点全局「新会话」→ 会话行数不增、落回同一 `[data-session-id]`、预设不变；杀宿主重启后按当前定义重判。侧栏 More 不采纳见 §4.2。
 - 终端 attach/重连（G43）：生成式流的 uplink（输入/半关/取消帧）与断线重连待打包态真机走查；判据 = 行为用例 `packages/dsh-api-gateway/test/behavior/client-uplink-support.test.ts`、`packages/dsh-api-gateway/test/behavior/mux-self-heal.test.ts` + 真机。
 - alpha.4：Schedule（Automation tasks 面板/任务页/行 clock 标记/右侧任务标签/删除 toast/每会话 catalog 查询）+ Developer Tools（可选、默认关、Session/NodeJS Inspector、shell.bottom 声明）在 N-ctx 目检；判据 = C9/C11/C16 + `frame-slots`；风险 = inspector iframe document-relative 可能落 SPA fallback（C9 前缀或占位）。
@@ -100,6 +100,15 @@
 - **低优 UX**：hover-only、徽标窄窗、en 单数、aria-label、ssh done 态、PluginDialog DOM 测试、对账空态、versionsEpoch、30s 文案、内联 effect。
 - **门单源残余**：① 5 个 typecheck（`typecheck:host-graph/host-git/host-archive-cleanup/host-open-in` 与 `typecheck:gateway`）只存在于 `ci.yml` 与 `release.yml` 的手写多行 run（gateway 另见 Windows 腿的 `ci.yml`），registry 无条目 → 四个模式都不含它们，“modes 名字即 CI 所跑”对这 5 步不成立（`seed-client-graph` 的唯一检查完全在模式之外）；② `proof:true` 只覆盖 release 校验 job 的 3/16 个生成门步，`C8` rebuild、remote-state acceptance、third-party notices、`release-preflight --actions-only`、renderer SVG scoper 断言、gateway pack/install smoke 均非 proof-required（proof 集合与 65 条 id→command 现已由 golden 钉住，改动必须同批改断言）；③ 同一 job 里 typecheck 与 typecheck:runtime 各跑两次（手写块 + `run-checks typecheck`）；④ `release-preflight.mjs` 的全量 battery 与 registry 漂移（漏 6 项、多列 4 项，无测试守）；⑤ Windows 腿结构上进不了 registry（`gate-registry.mjs` 的 platform 校验只允许 darwin），8 条 `macos.*` 门无生成块、靠手写步骤执行（命令等价但无 lockstep 测试）。修①需裁决：把手写步并入生成块，或补 registry 条目；⑥ 生成块之外的手写步骤仍无覆盖网——`gate-workflow-views --check` 只比对四个标记块，旧 `static-gate-parity` 扫整个 job 的能力没有等价替代（静态门的 CI 落位已由 registry 不变量「`workflow` 或 `coveredBy`」拦下，其余步骤仍需人工对照）。
 - **其他**：`verify:i18n` 的 40-hex 例外；lockfile 断言（`git diff --exit-code -- pnpm-lock.yaml`，`ci.yml` 与 `release.yml` 的多个 job）不在任何模式里，只由 `verify-release-ci-proof.mjs` 的 `NON_GATE_STEPS` 按步骤名保护；gateway 失败分支夹具；归档保护闭包测试；通知收敛器遗留；旧边沿孤岛；页面账本预热接线锁；page-channel 重复实例只报错；`notServingYet` 无生产者；Git 分支候选；B 桥写端行为夹具。
+
+### 1.7 0.2.2-alpha.2 升级的余项（pin 已换）
+
+- **已跑的腿**：`run-checks tests` 22/22、`run-checks static` 21/22（仅 `verify-stream-state-swift-parity`——容器无 swiftc，由 macOS 腿负责）、`typecheck`（owned 全清）、`build:renderer` 与产物 marker 19/19。**未跑**：`smoke`（本机端口被多实例占用）、打包态与真机（`gui-acceptance-checklist.md` §4 的 0.2.2 新面：会话头折叠 + More、右栏 guide More、插件导航「浏览」、44px More / 88px 省略、全局新会话复用、Schedule / Developer tools、8 语言、file-drag 图片拖拽、文字选区浮条）。
+- **新增官方 client 行的处置（消费即可，不 covered）**：0.2.2 闭包新增的 `dsh-client-ui-action-cards` / `dsh-client-ui-creation-recommendations` / `dsh-client-ui-plugin-recommendations` / `dsh-message-quotes` / `dsh-cua` 都以宿主图 extra row 默认载入并注册各自产品面（各自 inject 的槽由官方行提供），chamber 不镜像、不替换、也不登记 covered；`ui-file-drag` 是唯一必须首屏闭合的（`ui-chat` 根 inject 直接依赖它），已按 shortcuts/remoteAccess 先例升 covered factory。新增行若某天成为首屏根 inject 的强制依赖，按同一先例处理。
+- **本轮未接入（裁决保留）**：会话被动 API（events/state/wait/projections/follow）、`pluginChanges` 服务、异步 `sessionProjections` 句柄迁移（seed-git-worktree 仍懒读 `ctx.get` 并保留 `header.cwd` 回退）；`sidebar.session.row.trailing` 不采纳 ⇒ 上游"会话行插件图标"在 chamber 行永久缺位（产品取舍）；web fork 只补了 `asset`（refusing bootstrap require），`resolveAsset` 未透传（当前闭包内无消费者——含 `require.asset` 的两行都被 covered；将来主机图/插件市场装入含资产的 bundle 时需按实例基路径解析，见 design 09 §3.5/§3.6）。
+- **已知降级/外部约束**：补丁后壳外 drag 不再 `preventDefault`，导航拦截依赖 Electron/Swift 两壳；官方 UI 8 语言而 chamber 自撰文案 zh/en（非 zh 回落 en）；**Node 下限待裁**：dsh 0.2.2 的 `engines` 是 `>=24.9`（`packages/desktop/vendor/dsh/node_modules/@deepseek-ai/dsh/package.json`），根已抬到 `>=24.9.0`，但 `packages/gateway/package.json` 与 `install-gateway.sh` 仍是 `>=22`——在 Node 22/23 上安装 gateway 会拿到跑不起来的运行时，抬与不抬是发布裁决。
+- **首屏体积告警**：`build:renderer` 的两条 warn 已越线（chamber entry 8.19 MB vs 7.83 MB、head CSS 320 KB vs 304 KB）；增量主要来自 0.2.2 的 `lexical`（ui-conversation 新编辑器，约 295 KB）与既有的 `simple-icons` 整桶（约 5.0 MB，本轮未动）。只 warn 不 fail；阈值未上调（上调会把增长藏起来），是否拆分/懒载是独立工作项。
+- **收尾前**：`CHANGELOG.md` 发布节（仅发版时写）。
 
 ## 二、差异（功能面 / 外部约束）
 

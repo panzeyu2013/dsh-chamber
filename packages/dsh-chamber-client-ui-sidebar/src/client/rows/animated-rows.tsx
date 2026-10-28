@@ -76,9 +76,7 @@ export class AnimatedRows extends Component<AnimatedRowsProps> {
       const clone = row.element.cloneNode(true) as HTMLElement
       clone.removeAttribute('data-row-key')
       clone.inert = true
-      clone.style.setProperty(
-        '--dsh-workspace-indent', getComputedStyle(row.element).getPropertyValue('--dsh-workspace-indent'),
-      )
+      clone.style.paddingInlineStart = getComputedStyle(row.element).paddingInlineStart
       removed.set(key, { ...row, element: clone })
     }
     return { positions, removed }

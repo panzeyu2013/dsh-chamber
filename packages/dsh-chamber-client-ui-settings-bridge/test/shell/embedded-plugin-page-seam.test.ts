@@ -30,8 +30,12 @@ const inventory = read('../../../../vendor/harness-checkout/packages/client/ui-s
 test('the embedded page keeps the upstream h1 + div.pageIntro shape the section renders', () => {
   assert.match(page, /data-plugin-panel/, 'the page panel attribute is the containment root')
   assert.match(page, /<header className=\{css\.pageHead\} data-window-drag>/, 'the header row stays a drag row')
-  assert.match(page, /<h1 className=\{css\.pageTitle\}>/, 'the section content keeps the page title as its h1')
-  assert.match(page, /<\/h1>\s*<div className=\{css\.pageIntro\}>/, 'the intro is the h1 immediate next sibling and a DIV')
+  // 0.2.2: both header parts carry data-plugin-header-part (title/intro) and the page
+  // drives sticky/compact geometry from them; the sibling relationship is unchanged.
+  assert.match(page, /<h1 className=\{css\.pageTitle\} data-plugin-header-part="title">/,
+    'the section content keeps the page title as its h1 (header part = title)')
+  assert.match(page, /<\/h1>\s*<div className=\{css\.pageIntro\} data-plugin-header-part="intro">/,
+    'the intro is the h1 immediate next sibling and a DIV (header part = intro)')
 })
 
 test('the chamber mounts the page as the plugin-manager settings section', () => {
@@ -47,7 +51,10 @@ test('the chamber mounts the page as the plugin-manager settings section', () =>
   assert.match(registration, /label: \(\) => sectionLabel\('nav'\)/u, 'the nav label comes from the chamber section dictionary')
   assert.match(registration, /locale: MANAGER_NS/u, "the page's t seat must be the pluginManager dictionary")
   assert.match(registration, /store,/u, 'the navigation store must ride the registration')
-  assert.match(registration, /inject: \(\) => face as PluginManagerFace/u, 'the controller face must ride the registration')
+  // 0.2.2: the page also drives its sticky/compact header through the injected face
+  // (createHeaderRef); the chamber synthesizes it onto the controller face like upstream does.
+  assert.match(registration, /inject: \(\) => \(\{ \.\.\.face, createHeaderRef: createPluginHeaderRef \}\) as PluginManagerFace/u,
+    'the controller face plus the header-layout face must ride the registration')
   assert.match(registration, /children: MANAGER_CHILDREN/u, 'the page children table must be declared')
   assert.doesNotMatch(index, /settings\.plugins\.tab/u, 'the old inventory-tab embedding is retired')
   assert.match(shell, /id === 'plugin-manager'/u, 'the settings shell needs a nav glyph for the new section id')

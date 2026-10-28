@@ -34,8 +34,9 @@ import {
  *   `@deepseek-ai/*`，故只能按原文判定）。
  * - C12 profile 契约锚：上游仍以 `dsh.profile.bundles` 承载层列表、以
  *   `dsh.bundle.patch` 声明层、web 模板默认组合不变、profile workspace 仍是
- *   hoisted + 不自动装 peer。三个锚点文件（profile 读取/初始化、plugin-manager
- *   的 reconcile、CLI 的 init 入口）都必须可读。任一漂移 ⇒ 停升级、改派生（B₀ 快照）。
+ *   hoisted + 不自动装 peer。四个锚点文件（profile 读取/初始化、plugin-manager
+ *   的 reconcile、CLI 的 init 入口、official-bundles 的层列表与默认组合常量）都必须可读。
+ *   任一漂移 ⇒ 停升级、改派生（B₀ 快照）。
  * - C13 播种注册表结构：`HOST_*_PACKAGE_NAME` 常量 ↔ `HOST_*_INSERT` 行 ↔
  *   `CHAMBER_HOST_PACKAGES` 注册表三面一一对应（漏登记即 S 分量失真）。
  * - C14 plugin-row 单源 + manifest 三方镜像：行形状的唯一声明在 wire 的
@@ -58,9 +59,10 @@ export const FAMILY_FORBIDDEN = RUNTIME_FAMILY_FORBIDDEN
 /** 官方 opt-in 段：只允许登记白名单内的名字（同源）。 */
 export const FAMILY_OPT_IN_ALLOWED = RUNTIME_FAMILY_OPT_IN_ALLOWED
 
-/** 平台分包：允许「闭包有、本平台树无」——`node-addon-system-*`（原生插件）与
- *  `libreoffice-kit-*`（office-to-pdf 带的办公套件运行时，含一个 `-wasm` 包）。 */
-const PLATFORM_PACK_RE = /^@deepseek-ai\/(?:node-addon-system-|libreoffice-kit-)/
+/** 平台分包：允许「闭包有、本平台树无」——`node-addon-system-*`（原生插件）、
+ *  `libreoffice-kit-*`（office-to-pdf 带的办公套件运行时，含一个 `-wasm` 包），
+ *  以及 `experimental-cua-macos`（package.json `os: ["darwin"]`：linux/win 安装树按平台跳过它）。 */
+const PLATFORM_PACK_RE = /^@deepseek-ai\/(?:node-addon-system-|libreoffice-kit-|dsh-experimental-cua-macos)/
 
 /** 闭包解析的健全性下限（当前运行时线 ≈ 298；解析坏了必须响亮）。 */
 const MIN_FAMILY_SIZE = 200
@@ -162,16 +164,18 @@ export function familyFindings({ names, treeNames, sourceTreeNames = null, lockf
 /**
  * 上游 profile 契约的锚点集合。每条 = 一个概念 + 命中任一候选即算通过。
  * 空白归一（连续空白 → 单空格）后再匹配，因此只对**词法**漂移敏感，不对缩进/换行敏感。
- * 全部锚点在 pin 住的上游源码上实测命中，三个来源：
+ * 全部锚点在 pin 住的上游源码上实测命中，四个来源：
  * - `profile` = `packages/boot/app-boot/src/profile.ts`（manifest 模型、init 与加载）；
+ * - `bundles` = `packages/util/official-bundles/src/bundles.ts`（0.2.2 起官方组合包模板与
+ *   `DEFAULT_PROFILE_BUNDLES` 从 app-boot 挪到这里；profile.ts 只再消费它）；
  * - `manager` = `packages/boot/plugin-manager/src/operations.ts`（rc.2 起 `dsh plugin`
  *   的 pnpm 转发与 reconcile 落在这里，apps/cli/src/plugin.ts 只剩入口壳）；
  * - `plugin` = `apps/cli/src/plugin.ts`（CLI 入口：init 走模板组合）。
  */
 export const PROFILE_CONTRACT_ANCHORS = [
-  { file: 'profile', label: 'web 模板默认组合（B₀ 快照的对拍对象）', needles: ["web: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']"] },
+  { file: 'bundles', label: 'web 模板默认组合（B₀ 快照的对拍对象）', needles: ["web: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']"] },
   { file: 'profile', label: '模板表存在', needles: ['PROFILE_TEMPLATES'] },
-  { file: 'profile', label: '无模板 profile 的默认组合常量', needles: ['DEFAULT_PROFILE_BUNDLES'] },
+  { file: 'bundles', label: '无模板 profile 的默认组合常量', needles: ['DEFAULT_PROFILE_BUNDLES'] },
   { file: 'profile', label: 'profile workspace 链接器', needles: ['nodeLinker: hoisted'] },
   { file: 'profile', label: 'profile workspace 不自动装 peer', needles: ['autoInstallPeers: false'] },
   { file: 'profile', label: '层列表落盘键 dsh.profile.bundles', needles: ['dsh: { profile: { bundles:'] },
@@ -191,17 +195,17 @@ function normalizeWhitespace(text) {
  * C12 判据。
  *
  * @param {{ profileSource: string | null, pluginSource: string | null,
- *   managerSource: string | null }} input
- *   三个上游源码文本（profile / plugin-manager / CLI 入口）；null = 该文件读不到。
+ *   managerSource: string | null, bundlesSource?: string | null }} input
+ *   四个上游源码文本（profile / plugin-manager / CLI 入口 / official-bundles）；null = 该文件读不到。
  *   **全部**读不到 = 子模块未物化（调用方给出 note，不当违规——C1/C3/C5 已经会对缺失
  *   子模块响亮失败）；**部分**读不到 = 改名/搬移，是违规（任一文件搬走时，它所属的锚点
  *   会被静默丢掉且连 note 都没有）。
  * @returns {{ violations: string[], notes: string[] }}
  */
-export function profileContractFindings({ profileSource, pluginSource, managerSource }) {
+export function profileContractFindings({ profileSource, pluginSource, managerSource, bundlesSource }) {
   const violations = []
   const notes = []
-  const sources = { profile: profileSource, plugin: pluginSource, manager: managerSource }
+  const sources = { profile: profileSource, plugin: pluginSource, manager: managerSource, bundles: bundlesSource }
   const owners = new Map()
   for (const anchor of PROFILE_CONTRACT_ANCHORS) {
     owners.set(anchor.file, (owners.get(anchor.file) ?? 0) + 1)

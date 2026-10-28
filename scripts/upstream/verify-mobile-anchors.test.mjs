@@ -67,8 +67,8 @@ const UPSTREAM_TEXT = [
   '.wSkVaW_crumbSeg{align-items:center}',
   'jsx("div", { "role": "menu" }); jsx("div", { "role": "menuitem" }); jsx("div", { "role": "listbox" }); jsx("div", { "role": "option" })',
   'const stamped = { "data-slot": slotKey }',
-  'const cls = "_root_38jqx_3"',
-  'const cls2 = "_card_38jqx_9"',
+  'const cls = "_root_bgejw_3"',
+  'const cls2 = "_card_bgejw_9"',
   // CSS-module 类名字典的两种生产形态（local-name 判据的发射形）
   '._row_1alm6_55 { flex-wrap: nowrap }',
   'const modelCls = "zGbnIq_modelRow"',
@@ -96,8 +96,8 @@ const PLUGIN_TEXT = [
   "const r = '[data-slot=\"conversation.header\"]'",
   'const s = \'[role="tooltip"][data-portal][data-side]\'',
   'const t = \'[class$="_toBottomSlot"]\'',
-  "export const CARD = '_root_38jqx_'",
-  "export const CARD_BODY = '_card_38jqx_'",
+  "export const CARD = '_root_bgejw_'",
+  "export const CARD_BODY = '_card_bgejw_'",
 ].join('\n')
 
 const CHAMBER_TEXT = 'jsx("span", { "data-git-action": "" })'
@@ -161,17 +161,17 @@ test('负例 2：上游把 data-* 属性改名 ⇒ 硬失败', () => {
 })
 
 test('负例 3：上游把 build-time 哈希 token 改名 ⇒ 硬失败（pin bump 必须重锚）', () => {
-  const renamed = UPSTREAM_TEXT.replaceAll('_root_38jqx_', '_root_zzzzz_')
+  const renamed = UPSTREAM_TEXT.replaceAll('_root_bgejw_', '_root_zzzzz_')
   const findings = run({ text: renamed })
-  assert.ok(findings.violations.some(v => v.includes('_root_38jqx_')), findings.violations.join('\n'))
-  assert.ok(findings.advisories.every(a => !a.includes('_root_38jqx_')),
+  assert.ok(findings.violations.some(v => v.includes('_root_bgejw_')), findings.violations.join('\n'))
+  assert.ok(findings.advisories.every(a => !a.includes('_root_bgejw_')),
     'hash 零命中不得再降为 advisory: ' + findings.advisories.join('\n'))
 })
 
 test('负例 3b（方向 B）：插件把哈希 token 从源码里删掉 ⇒ 最小断言集硬失败', () => {
-  const pluginText = PLUGIN_TEXT.replace("export const CARD = '_root_38jqx_'", '')
+  const pluginText = PLUGIN_TEXT.replace("export const CARD = '_root_bgejw_'", '')
   const findings = run({ pluginText })
-  assert.ok(findings.violations.some(v => v.includes('_root_38jqx_') && v.includes('插件')),
+  assert.ok(findings.violations.some(v => v.includes('_root_bgejw_') && v.includes('插件')),
     findings.violations.join('\n'))
 })
 
@@ -908,7 +908,7 @@ test('CSS 注释投影：全部 kind 都在投影上抽取，注释里的声明�
     text: [
       'export const CSS = "/* [data-chat-flow] used to live here */"',
       'export const CLS = "/* [class$=\\"_row\\"] { color: red } */"',
-      'export const HASH = "/* _root_38jqx_ */"',
+      'export const HASH = "/* _root_bgejw_ */"',
     ].join('\n'),
   }
   assert.deepEqual(extractAnchorsFromSource(commentOnly).map(anchor => anchor.kind + ':' + anchor.token), [])

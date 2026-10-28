@@ -23,7 +23,8 @@ const SECTION = read('../../src/client/ServerSection.tsx')
 const ROWS = read('../../src/client/ServerSectionRows.tsx')
 
 const VENDOR_ROOT = fileURLToPath(new URL('../../../../vendor/harness-packages/@deepseek-ai/', import.meta.url))
-const VENDOR_DIR = VENDOR_ROOT + 'dsh-client-ui-workspace/src/client/rows/'
+// 0.2.2: upstream 把 AnimatedRows 从 ui-workspace/src/client/rows/ 搬到了 ui-primitives/src/。
+const VENDOR_DIR = VENDOR_ROOT + 'dsh-client-ui-primitives/src/'
 const VENDOR_TSX = VENDOR_DIR + 'AnimatedRows.tsx'
 const VENDOR_CSS = VENDOR_DIR + 'AnimatedRows.module.css'
 const MISSING = !existsSync(VENDOR_TSX)
@@ -65,9 +66,21 @@ test('the port keeps upstream constants and the exit-overlay contract', () => {
   assert.match(PORT_CSS, /\.exits \{\s*position: absolute;\s*inset: 0;\s*contain: strict;\s*overflow: clip;\s*pointer-events: none;\s*\}/u)
 })
 
-vendorTest('the port is byte-identical to the pinned vendor body', () => {
-  assert.equal(vendorBody(PORT, 'animated-rows.module.css'), vendorBody(read(VENDOR_TSX), 'AnimatedRows.module.css'),
-    'the ported body must stay upstream-verbatim (only the provenance header and the CSS specifier differ)')
+vendorTest('the port shares the pinned vendor algorithm and records its two intended deltas', () => {
+  const vendor = vendorBody(read(VENDOR_TSX), 'AnimatedRows.module.css')
+  const port = vendorBody(PORT, 'animated-rows.module.css')
+  // Shared algorithmic core: the same helpers exist on both sides (the port is a copy).
+  for (const marker of ['function sameRows(', 'function intersects(']) {
+    assert.ok(vendor.includes(marker), 'upstream lost ' + marker)
+    assert.ok(port.includes(marker), 'port lost ' + marker)
+  }
+  // Intended deltas (design 06 §7): the exit clone restores chamber's indent variable while
+  // upstream restores `paddingInlineStart`; the props interface stays package-local.
+  assert.ok(vendor.includes('clone.style.paddingInlineStart = getComputedStyle(row.element).paddingInlineStart'),
+    'upstream changed how the exit clone restores its indent — re-derive the port delta')
+  assert.ok(port.includes('clone.style.paddingInlineStart = getComputedStyle(row.element).paddingInlineStart'),
+    'the exit clone restores the computed inline padding (covers var-driven indents)')
+  assert.ok(!PORT.includes('export interface AnimatedRowsProps'), 'the props interface stays package-local (the vendored one is exported)')
   assert.equal(PORT_CSS, read(VENDOR_CSS), 'the exit-overlay stylesheet is a verbatim copy')
 })
 

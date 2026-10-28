@@ -74,17 +74,18 @@ test('registry 值锁：分类桶形状 + 符号锚字符串（防"同计数下�
   ])
   // 值锁：api-gateway 桶按合并后的 registry 重算（载波重试纯函数 / 页面事实 / 静默看门狗策略 /
   // 生命周期取证事实 / journal 补丁 / 仓内测试清单）；形状变化必须同批改本哈希。
-  // alpha.3 触点漂移后的当前事实：connection dropped 4（tests/、tsdown.config.ts、locale/en+zh）；
-  // client-web dropped 5（apply-injections / boot-client / mount / tests / tsdown.config.ts）；
-  // connection/api-gateway/seed-open-in/layout/ui-sidebar 各 +2 locale/（上游 alpha.3 新增目录，本仓不镜像）。
+  // locale 面按目录前缀登记：一个 "locale/" 覆盖该目录下全部语言文件（C1/C3 的 dropped 接受
+  // 尾斜杠前缀，见 verify-upstream-touchpoints 的 within()），上游再加语言不再逐文件追加。
+  // 有 locale 目录的五个 fork/seed（connection、api-gateway、seed-open-in、layout、ui-sidebar）因此
+  // 各少一条 dropped 记录；client-web 的镜像里从来没有 locale 目录（其 dropped 计数不变）。
   // seed-open-in / client-web 的 own 含 scripts/test.mjs（测试清单统一委托共享 runner）；
   // client-web 另以 own 登记 extra-chunk-owners.ts（design 09 动态 chunk 边界）。
-  // layout（chamber-named 副本，seed.dsh-chamber-client-ui-layout）：patched 5 / own 4 /
-  // ownPrefix 1 / dropped 11（frame 面深引 vendor 源、不镜像；死 tsdown.config.ts 由 P6 删除后归 dropped）。
-  // ui-sidebar dropped 7：rc.3 新增 src/client/panel-pins.ts（本壳不声明 sidebar.panellist.actions，无消费面）。
+  // layout（chamber-named 副本）的 frame 面按深引 vendor 源、不镜像；死 tsdown.config.ts 由 P6 删除后归
+  // dropped；ui-sidebar 的 src/client/panel-pins.ts 不镜像（本壳不声明 sidebar.panellist.actions，无消费面）。
+  // 计数以本文件下方 verifierForks 的 deepEqual 为唯一来源，注释不重复计数。
   assert.equal(
     createHash('sha256').update(JSON.stringify(shape)).digest('hex').slice(0, 16),
-    '4d482fdd3b38f950',
+    '5d7c5fc7e8b4e62c',
     '分类桶形状变了（桶间搬家或增删文件）——必须同批改本断言的哈希；当前形状：' + JSON.stringify(shape),
   )
   assert.deepEqual(
@@ -139,6 +140,26 @@ test('判据分区：entries.criteria ∪ criteriaCodeOnly == C1–C16，不重�
   assert.equal(used.filter((id) => codeOnly.includes(id)).length, 0)
 })
 
+test('dropped 与 droppedNotes 双向覆盖：每条 dropped 有理由，每个理由键命中至少一条 dropped', () => {
+  // 只做数据面断言：匹配语义与 preflight/views 的四份实现保持一致（exact / 尾斜杠前缀 / * 通配不跨 /）。
+  const globToRe = (key) => new RegExp('^' + key.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*') + '$')
+  const matches = (key, path) => key.endsWith('/')
+    ? path.startsWith(key)
+    : key.includes('*') ? globToRe(key).test(path) : key === path
+  const problems = []
+  for (const entry of registry.entries) {
+    if (entry.classify === undefined) continue
+    const dropped = entry.classify.dropped ?? []
+    const notes = entry.classify.droppedNotes ?? {}
+    for (const path of dropped) {
+      if (!Object.keys(notes).some((key) => matches(key, path))) problems.push(entry.id + ': dropped 无理由: ' + path)
+    }
+    for (const key of Object.keys(notes)) {
+      if (!dropped.some((path) => matches(key, path))) problems.push(entry.id + ': droppedNotes 键未命中任何 dropped: ' + key)
+    }
+  }
+  assert.deepEqual(problems, [])
+})
 test('verifierForks 与迁移前内嵌 FORKS 同形：顺序、路径、分类计数、版本锚', () => {
   const forks = verifierForks(registry)
   assert.deepEqual(forks.map((fork) => fork.name), ['connection', 'client-web', 'api-gateway', 'seed-open-in', 'layout', 'ui-sidebar'])
@@ -152,7 +173,7 @@ test('verifierForks 与迁移前内嵌 FORKS 同形：顺序、路径、分类�
   ])
   assert.deepEqual(
     forks.map((fork) => [Object.keys(fork.patched).length, Object.keys(fork.own).length, fork.ownPrefix.length, fork.dropped.length]),
-    [[10, 4, 4, 4], [9, 4, 1, 5], [7, 7, 1, 12], [4, 4, 1, 8], [5, 5, 1, 13], [11, 1, 3, 7]],
+    [[10, 4, 4, 3], [9, 4, 1, 5], [7, 7, 1, 11], [4, 4, 1, 7], [5, 5, 1, 12], [11, 1, 3, 6]],
   )
   assert.equal(forks[3].versionAnchor, 'chamber')
   assert.equal(forks[4].versionAnchor, 'chamber')

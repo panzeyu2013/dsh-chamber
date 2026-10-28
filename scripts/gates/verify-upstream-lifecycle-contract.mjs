@@ -22,7 +22,9 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..')
 
 const FILES = {
-  hostFollow: join(ROOT, 'vendor/harness-checkout/packages/api/session-controller/src/history.ts'),
+  // 0.2.2: the generator moved out of history.ts into the web controller (the history
+  // module became the pagination split); the contract reads the new home.
+  hostFollow: join(ROOT, 'vendor/harness-checkout/packages/api/session-controller/src/web/controller.ts'),
   clientSession: join(ROOT, 'vendor/harness-checkout/packages/api/session-controller/src/client/sessions/session.ts'),
   forkOpening: join(ROOT, 'packages/dsh-api-gateway/src/client/stream-client.ts'),
   proposals: join(ROOT, 'docs/progress/TODO.md'),

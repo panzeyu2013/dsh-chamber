@@ -28,6 +28,8 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   '@deepseek-ai/dsh-api-gateway',
   // alpha.3: required by ui-session/ui-workspace (remoteAccess inject); first-screen.
   '@deepseek-ai/dsh-api-remote-access',
+  // 0.2.2: required by ui-chat/ui-attachment (fileDrag inject); first-screen.
+  '@deepseek-ai/dsh-client-ui-file-drag',
   '@deepseek-ai/dsh-api-remotes',
   // provider group: the platform store word (a PLATFORM_MODULES seed), the two
   // api controllers (ctx.sessions / ctx.workspaces), and the three conversation
@@ -192,6 +194,8 @@ export const CHAMBER_COVERED_FACTORY_IDS: readonly string[] = [
   '@deepseek-ai/dsh-api-gateway',
   // alpha.3: required by ui-session/ui-workspace (remoteAccess inject); first-screen.
   '@deepseek-ai/dsh-api-remote-access',
+  // 0.2.2: required by ui-chat/ui-attachment (fileDrag inject); first-screen.
+  '@deepseek-ai/dsh-client-ui-file-drag',
   '@deepseek-ai/dsh-api-remotes',
   // provider group: the store is a platform word (registered factory, no
   // ctx.plugin); the controllers and conversation families are first-screen

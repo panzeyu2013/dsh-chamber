@@ -397,6 +397,9 @@ function refusingBootstrapRequire(): BundleRequire {
     async: async (specifier: string): Promise<never> => {
       throw new Error(message(specifier, 'async '))
     },
+    // 0.2.2: ClientBundleRequire gained `asset(reference)` (package-asset URLs); the
+    // bootstrap require resolves nothing external, so it refuses like the others.
+    asset: refuse,
   })
 }
 

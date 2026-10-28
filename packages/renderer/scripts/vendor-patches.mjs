@@ -179,9 +179,9 @@ export const VENDOR_PATCHES = Object.freeze([
           + '  chamberFileApiBase?: string | undefined\n}',
       }),
       Object.freeze({
-        expect: '  blocks, streaming, interrupted, loadImage, groupPart, useDisclosure,\n'
+        expect: '  blocks, streaming, textInteractionSource = false, interrupted, loadImage, groupPart, useDisclosure,\n'
           + '  reasoningHidden = false, usePresentation, revealProcess, mentions, renderSlot, useGroupAction, t,\n}: AssistantMarkdownProps) {',
-        replace: '  blocks, streaming, interrupted, loadImage, groupPart, useDisclosure,\n'
+        replace: '  blocks, streaming, textInteractionSource = false, interrupted, loadImage, groupPart, useDisclosure,\n'
           + '  reasoningHidden = false, usePresentation, revealProcess, mentions, renderSlot, useGroupAction, t, chamberFileApiBase,\n}: AssistantMarkdownProps) {',
       }),
       Object.freeze({
@@ -515,12 +515,13 @@ export const VENDOR_PATCHES = Object.freeze([
       'dsh-client-ui-workspace/src/client/index.ts',
       'packages/client/ui-workspace/src/client/index.ts',
     ]),
-    noRetireForm: 'no stable upstream text shape: the fix is upstream relocating the two seat declarations out of the workspace-browser registration (or an API that lets another owner take a declared child over), which cannot be asserted as text today. C9 drift failure + maintainer ruling, not an automated retire check.',
+    noRetireForm: 'no stable upstream text shape: the fix is upstream relocating the seat declarations out of the workspace-browser registration (or an API that lets another owner take a declared child over), which cannot be asserted as text today. C9 drift failure + maintainer ruling, not an automated retire check.',
     vendorFile: 'dsh-client-ui-workspace/src/client/index.ts',
-    reason: 'shared UI seat whose declaration is owned by an upstream component the chamber shell never mounts (fourth admitted class, ownership-transfer form): the official workspace-browser registration declares sidebar.session.row.leading / sidebar.session.row.hover, while the chamber shell renders its own multi-source list and never mounts that registration (the sidebar.workspaces hole stays declared but is never called, held by the I-4 sidebar lock). A second declaration of the same seat throws in ui-slots, and no chamber package can transfer a declaration, so only the seat owner can move it: this edit deletes the upstream declaration and the chamber sidebar declares both seats and renders them inside its own rows. Accepted trade-off: in an official-layout deployment (no chamber shell) the seats are undeclared, an occupant inject waits forever (silent), and the official row dead renderSlot calls would throw if that row were ever mounted.',
+    reason: 'shared UI seat whose declaration is owned by an upstream component the chamber shell never mounts (fourth admitted class, ownership-transfer form): the official workspace-browser registration declares sidebar.session.row.leading / sidebar.session.row.trailing / sidebar.session.row.hover (trailing is new upstream; the chamber sidebar owns its rows and does not adopt that seat this round), while the chamber shell renders its own multi-source list and never mounts that registration (the sidebar.workspaces hole stays declared but is never called, held by the I-4 sidebar lock). A second declaration of the same seat throws in ui-slots, and no chamber package can transfer a declaration, so only the seat owner can move it: this edit deletes the three upstream declarations, and the chamber sidebar re-declares only leading and hover, rendering them inside its own rows (trailing stays deliberately unadopted; the upstream `inline` marker (ui-slots: span anchors / span error placeholders instead of div) is a render hint for the official row and is not mirrored, because the chamber row owns its own geometry and its CSS was built against the div anchor). Accepted trade-off: in an official-layout deployment (no chamber shell) the seats are undeclared, an occupant inject waits forever (silent), and the official row dead renderSlot calls would throw if that row were ever mounted.',
     edits: Object.freeze([
       Object.freeze({
-        expect: "        'sidebar.session.row.leading': { kind: 'list', scope: 'root' },\n"
+        expect: "        'sidebar.session.row.leading': { kind: 'list', scope: 'root', inline: true },\n"
+          + "        'sidebar.session.row.trailing': { kind: 'list', scope: 'root', inline: true },\n"
           + "        'sidebar.session.row.hover': { kind: 'list', scope: 'root' },\n",
         replace: '',
       }),
@@ -627,8 +628,8 @@ export const VENDOR_PATCHES = Object.freeze([
     reason: 'the chat view resolves decoded file-reference images against document.baseURI, which is the control-plane origin in the N-ctx shell: mentioned-image previews 404 (the sibling pathImages provider in AssistantMarkdown already carries the same prop)',
     edits: Object.freeze([
       Object.freeze({
-        expect: '  usePresentation, useProjection, t,\n}: ChatViewSlotProps) {',
-        replace: '  usePresentation, useProjection, t, chamberFileApiBase,\n}: ChatViewSlotProps & {\n'
+        expect: '  usePresentation, useProjection, useInteractionIds, dispatchInteraction, t, fileDrag,\n}: ChatViewSlotProps) {',
+        replace: '  usePresentation, useProjection, useInteractionIds, dispatchInteraction, t, fileDrag, chamberFileApiBase,\n}: ChatViewSlotProps & {\n'
           + '  /**\n'
           + '   * chamber patch: this entry\'s API base path (`/api/i/<id>`, no trailing\n'
           + '   * slash), absent when the chamber fact is absent. A file-API URL must\n'
@@ -643,17 +644,18 @@ export const VENDOR_PATCHES = Object.freeze([
       }),
       Object.freeze({
         // The labels block is upstream text the resolver edit leaves alone: binding it
-        // keeps this deps anchor from moving onto a sibling memo with the same `[cwd, t]`.
+        // keeps this deps anchor from moving onto a sibling memo that shares the same
+        // `cwd` / `t` dependencies.
         expect: '    labels: {\n'
           + "      open: t('image.open'), loading: t('image.loading'), failed: t('image.failed'),\n"
           + "      dialog: t('image.dialog'), close: t('image.close'),\n"
           + '    },\n'
-          + '  }), [cwd, t])',
+          + '  }), [cwd, t, fileDrag, sessionId])',
         replace: '    labels: {\n'
           + "      open: t('image.open'), loading: t('image.loading'), failed: t('image.failed'),\n"
           + "      dialog: t('image.dialog'), close: t('image.close'),\n"
           + '    },\n'
-          + '  }), [chamberFileApiBase, cwd, t])',
+          + '  }), [chamberFileApiBase, cwd, t, fileDrag, sessionId])',
       }),
     ]),
   }),
@@ -667,12 +669,12 @@ export const VENDOR_PATCHES = Object.freeze([
     reason: "N-ctx multi-instance correctness (fourth admitted class, third admitted form = per-mount DOM scope, maintainer ruling): the drag/drop listeners live on document, which every mounted instance shell shares, so one drag or drop is seen by every shell - the on-screen composer and every hidden remote composer alike. Symptoms measured in the shipped shell: one dropped image attaches to more than one instance draft, a hidden shell vetoes the visible shell by writing dataTransfer.dropEffect = none (dragover), and it covers the visible shell with its own drop overlay (dragenter). Scope derives from the attachment mount own [data-instance] ancestor (a per-mount fact, not a page-global knob; no base path is involved), upstream behaviour remains the fallback for a layout with no instance shells, an owner that resolves to null while instance shells ARE mounted is refused (fail-closed), and the upstream viewport-left reset stays global so leaving the window always clears every shell overlay. ACCEPTED TRADE-OFF: a drag or drop landing outside every instance shell (chamber overlay, cross-instance portal) is intaken by no composer.",
     edits: Object.freeze([
       Object.freeze({
-        expect: " * @param setDragActive - publish whether a file drag is active.\n * @returns cleanup for exactly these listeners.\n */\nexport function installDocumentDropEvents(\n  canAcceptDrop: ComposerAttachmentsProps['canAcceptDrop'],\n  onAddFiles: ComposerAttachmentsProps['onAddFiles'],\n  dragDepth: { current: number },\n  setDragActive: (active: boolean) => void,\n): () => void {",
-        replace: " * @param setDragActive - publish whether a file drag is active.\n * @param ownerView - resolves this attachment view own subtree; a drop or\n *   drag event outside it belongs to another mounted shell and is not ours.\n * @returns cleanup for exactly these listeners.\n */\nexport function installDocumentDropEvents(\n  canAcceptDrop: ComposerAttachmentsProps['canAcceptDrop'],\n  onAddFiles: ComposerAttachmentsProps['onAddFiles'],\n  dragDepth: { current: number },\n  setDragActive: (active: boolean) => void,\n  ownerView?: () => Element | null,\n): () => void {",
+        expect: " * @param setDragActive - publish whether a file drag is active.\n * @param readFileDrag - resolve an original image retained by this application during a browser drag.\n * @returns cleanup for exactly these listeners.\n */\nexport function installDocumentDropEvents(\n  canAcceptDrop: ComposerAttachmentsProps['canAcceptDrop'],\n  onAddFiles: ComposerAttachmentsProps['onAddFiles'],\n  dragDepth: { current: number },\n  setDragActive: (active: boolean) => void,\n  readFileDrag: (transfer: DataTransfer) => File | undefined,\n): () => void {",
+        replace: " * @param setDragActive - publish whether a file drag is active.\n * @param readFileDrag - resolve an original image retained by this application during a browser drag.\n * @param ownerView - resolves this attachment view own subtree; a drop or\n *   drag event outside it belongs to another mounted shell and is not ours.\n * @returns cleanup for exactly these listeners.\n */\nexport function installDocumentDropEvents(\n  canAcceptDrop: ComposerAttachmentsProps['canAcceptDrop'],\n  onAddFiles: ComposerAttachmentsProps['onAddFiles'],\n  dragDepth: { current: number },\n  setDragActive: (active: boolean) => void,\n  readFileDrag: (transfer: DataTransfer) => File | undefined,\n  ownerView?: () => Element | null,\n): () => void {",
       }),
       Object.freeze({
-        expect: "  const onDragEnter = (event: globalThis.DragEvent): void => {\n    if (fileTransfer(event) === null) return",
-        replace: "  const dropLandsInView = (event: globalThis.DragEvent): boolean => {\n    if (ownerView === undefined) return true\n    const owner = ownerView()\n    if (owner === null) return document.querySelector('[data-instance]') === null\n    const target = event.target\n    const node = target instanceof Element ? target : (target instanceof Node ? target.parentElement : null)\n    return node !== null && owner.contains(node)\n  }\n  const onDragEnter = (event: globalThis.DragEvent): void => {\n    if (!dropLandsInView(event)) return\n    if (fileTransfer(event) === null) return",
+        expect: "  const onDragEnter = (event: globalThis.DragEvent): void => {\n    const dataTransfer = fileTransfer(event)\n    if (dataTransfer === null) return",
+        replace: "  const dropLandsInView = (event: globalThis.DragEvent): boolean => {\n    if (ownerView === undefined) return true\n    const owner = ownerView()\n    if (owner === null) return document.querySelector('[data-instance]') === null\n    const target = event.target\n    const node = target instanceof Element ? target : (target instanceof Node ? target.parentElement : null)\n    return node !== null && owner.contains(node)\n  }\n  const onDragEnter = (event: globalThis.DragEvent): void => {\n    if (!dropLandsInView(event)) return\n    const dataTransfer = fileTransfer(event)\n    if (dataTransfer === null) return",
       }),
       Object.freeze({
         expect: "  const onDragOver = (event: globalThis.DragEvent): void => {\n    const dataTransfer = fileTransfer(event)",
@@ -683,8 +685,8 @@ export const VENDOR_PATCHES = Object.freeze([
         replace: "  const onDragLeave = (event: globalThis.DragEvent): void => {\n    if (fileTransfer(event) === null) return\n    const leftViewport = event.clientX <= 0 || event.clientY <= 0\n      || event.clientX >= window.innerWidth || event.clientY >= window.innerHeight\n    // 上游的「指针离开视口」逃生口必须先于归属判定：目标为 html/body 的 dragleave 不属于任何壳，\n    // 但它证明拖拽会话已出窗，每个壳都要清掉自己的 overlay（OS 拖拽页面侧不保证有 dragend）。\n    if ((event.target === document.documentElement || event.target === document.body) && leftViewport) {\n      reset()\n      return\n    }\n    if (!dropLandsInView(event)) return\n    dragDepth.current = Math.max(0, dragDepth.current - 1)\n    if (dragDepth.current === 0) setDragActive(false)\n  }",
       }),
       Object.freeze({
-        expect: "    if (canAcceptDrop) {\n      const files = [...dataTransfer.files]",
-        replace: "    if (canAcceptDrop && dropLandsInView(event)) {\n      const files = [...dataTransfer.files]",
+        expect: "    if (canAcceptDrop) {\n      const image = dataTransfer.types.includes(FILE_DRAG_TOKEN_TYPE) ? readFileDrag(dataTransfer) : undefined",
+        replace: "    if (canAcceptDrop && dropLandsInView(event)) {\n      const image = dataTransfer.types.includes(FILE_DRAG_TOKEN_TYPE) ? readFileDrag(dataTransfer) : undefined",
       }),
     ]),
   }),
@@ -702,8 +704,8 @@ export const VENDOR_PATCHES = Object.freeze([
         replace: "  const dragDepth = useRef(0)\n  // chamber patch: the drop listeners live on document, which every mounted\n  // instance shell shares, so every handler must be limited to events landing\n  // inside THIS attachment view own subtree (data-instance is the view root).\n  const ownerRef = useRef<HTMLSpanElement | null>(null)\n  const ownerView = useCallback((): Element | null =>\n    ownerRef.current?.closest('[data-instance]') ?? null, [])",
       }),
       Object.freeze({
-        expect: "    return installDocumentDropEvents(canAcceptDrop, onAddFiles, dragDepth, setDragActive)\n  }, [canAcceptDrop, onAddFiles])",
-        replace: "    return installDocumentDropEvents(canAcceptDrop, onAddFiles, dragDepth, setDragActive, ownerView)\n  }, [canAcceptDrop, onAddFiles, ownerView])",
+        expect: "    return installDocumentDropEvents(canAcceptDrop, onAddFiles, dragDepth, setDragActive, readFileDrag)\n  }, [canAcceptDrop, onAddFiles, readFileDrag])",
+        replace: "    return installDocumentDropEvents(canAcceptDrop, onAddFiles, dragDepth, setDragActive, readFileDrag, ownerView)\n  }, [canAcceptDrop, onAddFiles, readFileDrag, ownerView])",
       }),
       Object.freeze({
         expect: "  return (\n    <>\n      {dragActive && (",

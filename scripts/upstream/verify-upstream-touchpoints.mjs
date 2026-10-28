@@ -43,11 +43,11 @@
  *       官方 opt-in（`dsh-experimental-*`）按**登记白名单**放行（运行时根包自己声明
  *       的 opt-in 依赖确实属于 F）：未登记名字红（取错来源/上游新提升），已登记名字
  *       不再出现也红（上游移除/改名）。实例树物化时另做等价性交叉校验（允许差集 =
- *       其他平台 `node-addon-system-*` / `libreoffice-kit-*`）
+ *       其他平台 `node-addon-system-*` / `libreoffice-kit-*` / `dsh-experimental-cua-macos`）
  *   C12 profile 契约锚（硬失败）：上游源码仍以 `dsh.profile.bundles` 承载层列表、
  *       以 `dsh.bundle.patch` 声明层、web 模板默认组合不变、profile workspace 仍是
- *       hoisted + 不自动装 peer；任一漂移 ⇒ 停升级、改派生（B₀ 快照）。三个锚点文件
- *       （app-boot profile.ts / plugin-manager operations.ts / CLI plugin.ts）都必须可读：
+ *       hoisted + 不自动装 peer；任一漂移 ⇒ 停升级、改派生（B₀ 快照）。四个锚点文件
+ *       （app-boot profile.ts / plugin-manager operations.ts / CLI plugin.ts / official-bundles bundles.ts）都必须可读：
  *       树部分物化时缺文件 = 改名/搬移（违规），只有整体未物化才降级为 note
  *   C13 播种注册表结构（硬失败）：`HOST_*_PACKAGE_NAME` 常量 ↔ `HOST_*_INSERT` 行 ↔
  *       `CHAMBER_HOST_PACKAGES` 注册表三面一一对应（S 分量与播种机制脱节即红）
@@ -302,6 +302,10 @@ for (const fork of FORKS) {
     }
   }
   for (const f of forkFiles) {
+    // dropped 的语义是「上游文件有意不镜像」：fork 里出现 dropped 登记面下的文件说明登记过期/覆盖了真实文件。
+    if (droppedExact.includes(f) || within(f, droppedPrefix)) {
+      violations.push(`fork 里有落在 dropped 登记面下的文件（dropped 语义是上游文件不存在）: ${f}`)
+    }
     if (!upstreamFiles.includes(f)) {
       const isOwnFile = ownKeys.has(f) || within(f, [...(fork.ownPrefix ?? [])])
       if (!isOwnFile) {
@@ -967,10 +971,12 @@ for (const fork of FORKS) {
 
   // C12 —— profile 契约锚（上游源码；子模块未物化时由 C1/C3/C5 响亮失败）
   const profileSourcePath = join(SUBMODULE, 'packages', 'boot', 'app-boot', 'src', 'profile.ts')
+  const bundlesSourcePath = join(SUBMODULE, 'packages', 'util', 'official-bundles', 'src', 'bundles.ts')
   const managerSourcePath = join(SUBMODULE, 'packages', 'boot', 'plugin-manager', 'src', 'operations.ts')
   const pluginSourcePath = join(SUBMODULE, 'apps', 'cli', 'src', 'plugin.ts')
   const c12 = profileContractFindings({
     profileSource: existsSync(profileSourcePath) ? readFileSync(profileSourcePath, 'utf8') : null,
+    bundlesSource: existsSync(bundlesSourcePath) ? readFileSync(bundlesSourcePath, 'utf8') : null,
     managerSource: existsSync(managerSourcePath) ? readFileSync(managerSourcePath, 'utf8') : null,
     pluginSource: existsSync(pluginSourcePath) ? readFileSync(pluginSourcePath, 'utf8') : null,
   })

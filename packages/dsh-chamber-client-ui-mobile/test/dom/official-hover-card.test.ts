@@ -64,9 +64,9 @@ const INDEX_CODE = readFileSync(new URL('../../src/client/index.ts', import.meta
 
 // The pinned build's real class strings (rc.2 served bundle
 // `@deepseek-ai/dsh-web-frontend/dist/assets/index-5SrrfWpU.js`:
-// `qp="_root_38jqx_3"`, `Gp="_card_38jqx_9"`, `Kp="_copyable_38jqx_21"`).
-const REAL_WRAPPER_CLASS = '_root_38jqx_3'
-const REAL_CARD_CLASS = '_card_38jqx_9 _copyable_38jqx_21'
+// `qp="_root_bgejw_3"`, `Gp="_card_bgejw_9"`, `Kp="_copyable_bgejw_21"`).
+const REAL_WRAPPER_CLASS = '_root_bgejw_3'
+const REAL_CARD_CLASS = '_card_bgejw_9 _copyable_bgejw_21'
 /** A Tooltip bubble's own module (foreign hash) — never a card. */
 const TOOLTIP_CLASS = '_bubble_9zq1k_5'
 
@@ -103,8 +103,8 @@ test('the class token matches the pinned build only, as a whole token', () => {
   assert.equal(hasModuleClassToken(TOOLTIP_CLASS, OFFICIAL_CARD_CLASS_TOKEN), false)
   assert.equal(hasModuleClassToken('_card_aa11b_13', OFFICIAL_CARD_CLASS_TOKEN), false)
   // The token must be a whole class: not a longer word, not a substring of one.
-  assert.equal(hasModuleClassToken('_card_38jqx_x', OFFICIAL_CARD_CLASS_TOKEN), false)
-  assert.equal(hasModuleClassToken('foo_card_38jqx_13', OFFICIAL_CARD_CLASS_TOKEN), false)
+  assert.equal(hasModuleClassToken('_card_bgejw_x', OFFICIAL_CARD_CLASS_TOKEN), false)
+  assert.equal(hasModuleClassToken('foo_card_bgejw_13', OFFICIAL_CARD_CLASS_TOKEN), false)
   assert.equal(hasModuleClassToken('', OFFICIAL_CARD_CLASS_TOKEN), false)
   assert.equal(hasModuleClassToken(null, OFFICIAL_CARD_CLASS_TOKEN), false)
   assert.equal(hasModuleClassToken(undefined, OFFICIAL_CARD_CLASS_TOKEN), false)

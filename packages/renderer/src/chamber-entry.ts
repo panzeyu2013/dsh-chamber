@@ -49,6 +49,10 @@ import * as ApiGateway from '@deepseek-ai/dsh-api-gateway/client'
 // (provided only here), so without this first-screen covered factory the whole
 // workspace/conversation chain stays PENDING on a degraded host graph (rc.2 shortcuts case).
 import * as ApiRemoteAccess from '@deepseek-ai/dsh-api-remote-access/client'
+// 0.2.2: ui-chat/ui-attachment root-inject `fileDrag`, provided only by this row. Same
+// rc.2 shortcuts failure mode: without a first-screen covered factory the conversation
+// chain stays PENDING on a host graph that never emits the row (older remote instance).
+import * as ClientFileDrag from '@deepseek-ai/dsh-client-ui-file-drag/client'
 import * as ApiRemotes from '@deepseek-ai/dsh-api-remotes/client'
 // provider group: the platform store word (plain module, covered factory only — never
 // ctx.plugin'd) plus the two api controllers (ctx.sessions / ctx.workspaces). All
@@ -398,14 +402,11 @@ export function apply(ctx: Context): void {
   // probes exactly that derived union (upstream reads the same declaration off `fiber.inject`);
   // the recorded id is the mount identity. The deferred cluster extends the same roster as
   // chunks mount and re-arms one pass.
-  // Deferred-only members (no first-screen declaration) — 19, each provided by first-screen
-  // composite plugins only, never by another deferred family: `jobs`, `modules`, `remote.goals`,
-  // `remote.skills`, `remote.messageFeedback`, `remote.sessionFeedback`, `remote.agentPresets`,
-  // `remote.credentials`, `remote.llm`, `remote.pluginInventory`, `remote.pluginManager`,
-  // `remote.pluginRegistryProbe`, `remote.permissionPresets`, `remote.fileReferences`,
-  // `remote.sessionReferenceResolver`, `remote.userQuestions` (rc.2), `resources`,
-  // `sidebarRightTabs`, `settingsSchema`. Without the re-arm such a member would pend with no
-  // diagnostic, the silent gap this probe closes.
+  // Deferred-only members (no first-screen declaration) are each provided by first-screen
+  // composite plugins only, never by another deferred family; the audited table is
+  // AUDITED_DEFERRED_ONLY_SERVICES in required-extra-rows.test.ts (single source — do not
+  // re-count here). Without the re-arm such a member would pend with no diagnostic, the
+  // silent gap this probe closes.
   const registered: RegisteredPluginInject[] = []
   /** Probe re-arm hand-off; filled when the probe effect installs. */
   const probeRearm: ProbeRearmSlot = {}
@@ -437,6 +438,8 @@ export function apply(ctx: Context): void {
   register('@deepseek-ai/dsh-api-gateway', ApiGateway)
   // After the gateway: the access client injects `remote` (the mux owner above).
   register('@deepseek-ai/dsh-api-remote-access', ApiRemoteAccess)
+  // Before the conversation families: ui-chat/ui-attachment inject `fileDrag`.
+  register('@deepseek-ai/dsh-client-ui-file-drag', ClientFileDrag)
   register('@deepseek-ai/dsh-api-remotes', ApiRemotes)
   // Provider group: the store is a platform word (covered factory, no plugin); the api
   // controllers provide ctx.sessions / ctx.workspaces; ui-session/ui-chat/ui-approval are
@@ -609,6 +612,7 @@ const COVERED_FACTORIES: ReadonlyArray<readonly [id: string, factory: ClientPlug
   ['@deepseek-ai/dsh-typert-registry', coveredFactory(TypertRegistry)],
   ['@deepseek-ai/dsh-api-gateway', coveredFactory(ApiGateway)],
   ['@deepseek-ai/dsh-api-remote-access', coveredFactory(ApiRemoteAccess)],
+  ['@deepseek-ai/dsh-client-ui-file-drag', coveredFactory(ClientFileDrag)],
   ['@deepseek-ai/dsh-api-remotes', coveredFactory(ApiRemotes)],
   // provider group: the seed provides the store word too; this factory is the
   // composite-side fallback for the same require edge (seed wins). Controllers and
