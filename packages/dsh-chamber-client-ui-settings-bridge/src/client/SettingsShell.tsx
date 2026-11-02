@@ -83,13 +83,11 @@ const PLUGIN_RETRY_PENDING_MS = 4_000
 /** Copy for the header's plugin-refresh strip (design 15 §6); the facts live in plugin-notice.ts. */
 function noticeTitle(t: SettingsShellInjected['t'], notice: PluginNotice): string {
   if (notice.kind === 'restart') return t('pluginNoticeRestartTitle')
-  if (notice.kind === 'conflict') return t('pluginNoticeConflictTitle')
   return t('pluginNoticeLoadFailedTitle')
 }
 
 function noticeBody(t: SettingsShellInjected['t'], notice: PluginNotice): string {
   if (notice.kind === 'restart') return t('pluginNoticeRestartBody', { id: notice.pluginId ?? '' })
-  if (notice.kind === 'conflict') return t('pluginNoticeConflictBody', { id: notice.pluginId ?? '' })
   return notice.message ?? ''
 }
 
@@ -552,16 +550,6 @@ function SettingsPanel({
                   }}
                 >
                   {retrying ? t('pluginNoticeRetryingAction') : t('pluginNoticeRetryAction')}
-                </Button>
-              )}
-              {notice.action === 'connections' && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className={css.noticeAction}
-                  onClick={() => { onSelectSection(CONNECTIONS_SECTION_ID) }}
-                >
-                  {t('pluginNoticeConnectionsAction')}
                 </Button>
               )}
             </div>

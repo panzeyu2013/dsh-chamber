@@ -1,7 +1,7 @@
 /**
  * Plugin-refresh wiring lock (cross-package source lock; the dom-seam group's precedent):
  * the manager's settle trigger, the shell's control face + forwarding, the App-level retry
- * relay and the panel's three notice actions. The control face is a string key + structural
+ * relay and the panel's two notice actions. The control face is a string key + structural
  * type, so a rename on either side would compile and silently no-op at runtime; the shapes
  * (above all: the start time must not be dropped) are therefore pinned as source text.
  */
@@ -46,9 +46,12 @@ test('the renderer forwards a page-level resync request to the mounted shell', (
   assert.match(hook, /resyncInstanceClientGraph/)
 })
 
-test('the panel exposes the three notice actions and the manual retry request', () => {
+test('the panel exposes the two notice actions and the manual retry request', () => {
   assert.match(panel, /pluginNotice\(selected\?\.pluginDiagnostic\)/)
   assert.match(panel, /requestClientGraphResync\(selected\.id\)/)
-  assert.match(panel, /onSelectSection\(CONNECTIONS_SECTION_ID\)/)
   assert.match(panel, /window\.location\.reload\(\)/)
+  // The cross-instance conflict has no strip action: its surface is the connections page's
+  // per-instance diagnostic line. The nav cell's own onSelectSection(CONNECTIONS_SECTION_ID)
+  // is NOT a notice action — asserting that pattern was a false lock.
+  assert.doesNotMatch(panel, /notice\.action === 'connections'/)
 })
