@@ -53,8 +53,8 @@ test('the chamber mounts the page as the plugin-manager settings section', () =>
   assert.match(registration, /store,/u, 'the navigation store must ride the registration')
   // 0.2.2: the page also drives its sticky/compact header through the injected face
   // (createHeaderRef); the chamber synthesizes it onto the controller face like upstream does.
-  assert.match(registration, /inject: \(\) => \(\{ \.\.\.face, createHeaderRef: createPluginHeaderRef \}\) as PluginManagerFace/u,
-    'the controller face plus the header-layout face must ride the registration')
+  assert.match(registration, /inject: \(\) => \(\{ \.\.\.face, createHeaderRef: createPluginHeaderRef \}\) as PluginManagerFace & PluginHeaderLayoutFace/u,
+    'the controller face plus the header-layout face must ride the registration (the intersection is the type lock)')
   assert.match(registration, /children: MANAGER_CHILDREN/u, 'the page children table must be declared')
   assert.doesNotMatch(index, /settings\.plugins\.tab/u, 'the old inventory-tab embedding is retired')
   assert.match(shell, /id === 'plugin-manager'/u, 'the settings shell needs a nav glyph for the new section id')

@@ -154,10 +154,12 @@
   text-align: left;
 }
 
-.navCell:hover {
-  /* 0.2.2: upstream 删除了 --dsw-specific-sidebar-nav-item-hover；改用本壳已用的
-     通用交互悬停 alias。 */
-  background: var(--dsw-alias-interactive-bg-hover);
+/* 0.2.2: upstream 删除了 --dsw-specific-sidebar-nav-item-hover；改用通用交互悬停 alias，
+   并照上游同款加 hover 能力门（触屏上粘滞的 :hover 不再把整格染色）。 */
+@media (hover: hover) {
+  .navCell:hover {
+    background-color: var(--dsw-alias-interactive-bg-hover);
+  }
 }
 
 .navCell.active {
