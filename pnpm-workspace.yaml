@@ -75,7 +75,11 @@ overrides:
   node-pty: 1.2.0-beta.15
 
 minimumReleaseAgeExclude:
-  # 与 vendor pin 的 minimumReleaseAgeExclude 集合对齐（Office 引擎与其 API 同批发布）。
+  # 只登记本仓安装腿会解析到的条目（vendor pin 同名块是全集，本仓是其子集：上游独有的
+  # node-addon-* 等不在此列）。新增一条的判据 = 该包确实进本仓安装图且上游同块已豁免。
+  # 带本地补丁的发布（oar）：补丁随该 release 走，等 release age 等于让补丁失效。
+  - '@botiverse/oar@0.67.0'
+  # Office 引擎与其 API 同批发布。
   - '@deepseek-ai/libreoffice-kit@0.1.5'
   - '@deepseek-ai/libreoffice-kit-darwin-arm64@0.1.5'
   - '@deepseek-ai/libreoffice-kit-darwin-x64@0.1.5'
@@ -85,7 +89,7 @@ minimumReleaseAgeExclude:
   # Fresh pi-ai releases carry the model catalog updates that are the whole
   # point of bumping it; waiting out the release age would defeat that.
   - '@earendil-works/pi-ai@1.3.0'
-  - '@earendil-works/pi-telemetry@1.1.0'
+  - '@earendil-works/pi-telemetry@1.3.0'
 
 # 上游 pnpm patch channel（§17-C，与 vendor pin 逐字一致）：集合与字节来自
 # vendor/harness-checkout/{pnpm-workspace.yaml,patches/}，仓内 patches/ 为其副本；
