@@ -1283,9 +1283,11 @@ connection-target scope 所有的目标；重登有界（一次 + 429 退避）�
 
 ## 15. 包、CI 与发布
 
-`@dsh-chamber/gateway` 构建为 `dist/index.js` 与带 shebang 的 `dist/cli.js`，要求
-Node 22+；package export 不指向源码 TypeScript。根脚本包含 `build:gateway`、
-`typecheck:gateway`、`test:gateway`。
+`@dsh-chamber/gateway` 构建为 `dist/index.js` 与带 shebang 的 `dist/cli.js`；package export
+不指向源码 TypeScript。根脚本包含 `build:gateway`、`typecheck:gateway`、`test:gateway`。
+**Node 下限跟随 pin 的 dsh 运行期 `engines`**（当前 ≥24.9；单一来源是运行期锁里那句
+`engines`，本包的 `engines` 与安装器 `preflight` 同批对齐并判到 minor）：产物语法目标
+（esbuild `node22`）只约束编译产物，是另一条轴，不设运行下限。
 
 运行时版本管理（design 18 §9）：`@dsh-chamber/dsh-runtime` 以 workspace devDependency
 经 `scripts/build.mjs` 与 control-plane 一起打入 `dist/`；gateway 另新增钉版本运行时
