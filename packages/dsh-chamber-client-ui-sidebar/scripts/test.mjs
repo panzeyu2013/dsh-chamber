@@ -127,6 +127,9 @@ export const GROUPS = {
     // I-4 锁：sidebar.workspaces 保留声明但永不渲染（上游 ui-workspace 注册不抛，
     // chamber 自有多源列表拥有浏览区）。
     'test/source-runtime/sidebar-slot-declaration.test.ts',
+    // Vendor value lock for the --dsh-sidebar-* geometry words the shell publishes
+    // (the bundled upstream CSS reads them; drift re-breaks its calc()/gap).
+    'test/source-runtime/sidebar-root-geometry-vars.test.ts',
     'test/source-runtime/instance-mutation-values.test.ts',
     'test/source-runtime/control-plane-client.test.ts',
     'test/source-runtime/source-boot-gap.test.ts',

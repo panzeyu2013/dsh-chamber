@@ -41,3 +41,17 @@ test('sidebar.workspaces is declared for registrant compatibility but never rend
   assert.ok(calls.length > 0, 'the rendered-slot list must be extractable, otherwise this lock is vacuous')
   assert.equal(calls.includes('sidebar.workspaces'), false, 'no render call may be added later')
 })
+
+test('the seat transfer keeps leading/hover declared and never adopts trailing', () => {
+  // vendor patch 13 deletes the upstream three-row declaration (ui-workspace/src/client/index.ts),
+  // so THIS registration is the only declarer. Losing either row silently stops the official
+  // occupant's slots.inject (e.g. ui-schedule's schedule-mark) with no error.
+  assert.match(runtime, /'sidebar\.session\.row\.leading': \{ kind: 'list', scope: 'root' \}/,
+    'the leading row must stay declared (patch 13 removed the upstream declaration)')
+  assert.match(runtime, /'sidebar\.session\.row\.hover': \{ kind: 'list', scope: 'root' \}/,
+    'the hover row must stay declared (patch 13 removed the upstream declaration)')
+  assert.doesNotMatch(slots, /'sidebar\.session\.row\.trailing'/,
+    'trailing is deliberately not adopted (design 06 §10 / design 09 §3.6): declaring it without a renderer would strand occupants')
+  assert.doesNotMatch(runtime, /'sidebar\.session\.row\.trailing'/,
+    'the runtime children table must not adopt trailing either')
+})
