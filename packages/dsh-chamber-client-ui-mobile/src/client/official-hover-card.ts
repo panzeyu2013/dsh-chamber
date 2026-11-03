@@ -23,7 +23,7 @@
  * no timers; try/catch fail closed; one Symbol.for double-install guard.
  *
  * TOKENS are pinned-build CSS-module names: re-anchor when the vendored dsh pin
- * moves. The rc.2 served bundle
+ * moves. The pinned served bundle
  * (`@deepseek-ai/dsh-web-frontend/dist/assets/index-*.{js,css}`) emits
  * `_root_bgejw_3` / `_card_bgejw_9`;
  * `scripts/upstream/verify-mobile-anchors.mjs` hard-fails a zero-hit hash token,

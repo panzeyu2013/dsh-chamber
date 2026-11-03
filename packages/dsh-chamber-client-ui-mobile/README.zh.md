@@ -621,12 +621,12 @@ chrome；`[role="menu"] [role="menuitem"][aria-selected]` 高亮信号在本 pin
 一并重审：
 
 - `_root_bgejw_3` 与 `_card_bgejw_9`——**被服务的那份** bundle 里 ui-primitives
-  `HoverCard` 模块的 CSS-module class token。它们是 build-time 哈希：rc.2 构建在
+  `HoverCard` 模块的 CSS-module class token。它们是 build-time 哈希：当前 pin 的构建在
   `@deepseek-ai/dsh-web-frontend/dist/assets/index-*.js` 里产出它们（已对
-  `packages/desktop/vendor/dsh/` 下的随仓副本逐字节核对，压缩别名形如
-  `qp="_root_bgejw_3"` / `Gp="_card_bgejw_9"` / `Kp="_copyable_bgejw_21"`；同名 `index-*.css`
-  也带这两条类选择器）。rc.2 重锚替换了上一个 pin 的 `_root_1b2ny_*` / `_card_1b2ny_*`
-  对；`verify-mobile-anchors.mjs` 现在对零命中 hash token **硬失败**（此前为 advisory），
+  `packages/desktop/vendor/dsh/` 下的随仓副本逐字节核对，压缩别名是
+  `Cj="_root_bgejw_3"` / `$j="_card_bgejw_9"` / `Sj="_copyable_bgejw_21"`；同名 `index-*.css`
+  也带这两条类选择器）。本轮重锚替换了上一个 pin 的 `_root_38jqx_*` / `_card_38jqx_*`
+  对（那一对替换过 `_root_1b2ny_*` / `_card_1b2ny_*`）；`verify-mobile-anchors.mjs` 现在对零命中 hash token **硬失败**（此前为 advisory），
   下一次 pin 前移因此强制重锚，而不是把 watchdog 静默降级为 no-op（fail closed，绝不
   误触发）——这仍是本包唯一没有属性形兜底的锚点；
 - 锚定几何：COMPACT `card.left = wrapper.right + 8`、`card.top = wrapper.top`（或

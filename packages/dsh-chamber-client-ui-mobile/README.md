@@ -861,12 +861,13 @@ when the pin moves:
 
 - `_root_bgejw_3` and `_card_bgejw_9` — the ui-primitives `HoverCard` module's
   CSS-module class tokens in the SERVED bundle. They are build-time hashes: the
-  rc.2 build emits them in `@deepseek-ai/dsh-web-frontend/dist/assets/index-*.js`
+  pinned build emits them in `@deepseek-ai/dsh-web-frontend/dist/assets/index-*.js`
   (verified byte-for-byte on the bundled copy under `packages/desktop/vendor/dsh/`,
-  where the minified aliases are `qp="_root_bgejw_3"` / `Gp="_card_bgejw_9"` /
-  `Kp="_copyable_bgejw_21"`; the matching `index-*.css` carries the same two class
-  selectors). The rc.2 re-anchor replaced the previous pin's `_root_1b2ny_*` /
-  `_card_1b2ny_*` pair; `verify-mobile-anchors.mjs` now **hard-fails** a zero-hit
+  where the minified aliases are `Cj="_root_bgejw_3"` / `$j="_card_bgejw_9"` /
+  `Sj="_copyable_bgejw_21"`; the matching `index-*.css` carries the same class
+  selectors). The current re-anchor replaced the previous pin's `_root_38jqx_*` /
+  `_card_38jqx_*` pair (which had replaced `_root_1b2ny_*` / `_card_1b2ny_*`);
+  `verify-mobile-anchors.mjs` **hard-fails** a zero-hit
   hash token (it was advisory before), so the next pin move forces the re-anchor
   instead of degrading the watchdog to a silent no-op (fail closed, never a
   misfire), and this remains the one anchor in the package with no

@@ -62,9 +62,9 @@ const INDEX_CODE = readFileSync(new URL('../../src/client/index.ts', import.meta
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .replace(/^\s*\/\/.*$/gm, '')
 
-// The pinned build's real class strings (rc.2 served bundle
-// `@deepseek-ai/dsh-web-frontend/dist/assets/index-5SrrfWpU.js`:
-// `qp="_root_bgejw_3"`, `Gp="_card_bgejw_9"`, `Kp="_copyable_bgejw_21"`).
+// The pinned build's real class strings (served bundle
+// `@deepseek-ai/dsh-web-frontend/dist/assets/index--TtJvO-i.js`:
+// `Cj="_root_bgejw_3"`, `$j="_card_bgejw_9"`, `Sj="_copyable_bgejw_21"`).
 const REAL_WRAPPER_CLASS = '_root_bgejw_3'
 const REAL_CARD_CLASS = '_card_bgejw_9 _copyable_bgejw_21'
 /** A Tooltip bubble's own module (foreign hash) — never a card. */
