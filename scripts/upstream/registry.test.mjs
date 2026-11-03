@@ -275,6 +275,33 @@ test('patches 登记与 vendor pin 的 patchedDependencies 逐条一致（上游
   assert.ok(registry.patches.some((patch) => patch.runtimeClosure), '至少一条落在运行期闭包（否则 patch 通道没接上）')
 })
 
+test('runtimeClosure 与提交的运行期锁一致：true 当且仅当运行期图内该包带 patch_hash', () => {
+  // The flag is a claim about the RUNTIME leg, not about the root/dev leg: both
+  // workspace files list every patch, only the runtime lock proves which ones
+  // actually resolve in the shipped graph (the rest are allowUnusedPatches
+  // exemptions). A stale flag would mislead the next pin upgrade, so derive it.
+  const lockPath = join(HERE, '..', '..', 'packages', 'desktop', 'vendor', 'dsh', 'pnpm-lock.yaml')
+  const lock = readFileSync(lockPath, 'utf8')
+  const block = /^patchedDependencies:\n(?: {2}.*\n)+/mu.exec(lock)?.[0]
+  assert.ok(block !== undefined, '运行期锁必须带 patchedDependencies')
+  const hashes = new Map(
+    [...block.matchAll(/^ {2}["']?([^"':\n]+)["']?: ([0-9a-f]{64})$/gmu)].map((match) => [match[1], match[2]]),
+  )
+  const body = lock.replace(block, '')
+  const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+  for (const patch of registry.patches) {
+    const at = patch.spec.lastIndexOf('@')
+    const name = patch.spec.slice(0, at)
+    const inGraph = new RegExp("^ {2}[\"']?" + escapeRegExp(name) + '@', 'mu').test(body)
+    const hash = hashes.get(patch.spec)
+    const patched = hash !== undefined && lock.includes(patch.spec + '(patch_hash=' + hash + ')')
+    assert.equal(inGraph, patched,
+      patch.spec + ' 在运行期图内却没有 patch_hash（allowUnusedPatches 静默窗口，§17-C）')
+    assert.equal(patch.runtimeClosure, patched,
+      patch.spec + ' 的 runtimeClosure 必须等于运行期锁是否带 patch_hash（flag 说的是运行期腿，不是根/dev 腿）')
+  }
+})
+
 test('patches 抓退化：坏 specifier / 坏文件路径 / 重复 spec 一律红', () => {
   const badSpec = clone(); badSpec.patches[0].spec = 'not-a-spec'
   assert.ok(validateRegistry(badSpec).some((item) => item.includes('patches[0].spec')))
