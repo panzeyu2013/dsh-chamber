@@ -748,8 +748,8 @@
   `SidebarRoot.tsx` + `sidebar-chamber.module.css`（dot 状态类 + 高亮 +
   runningSubagents 分支 + `.scheduleIndicator` + `.railDotButton`）、`ServerSectionRows.tsx`/`RowHoverCard.tsx`
   （A1 座席渲染：行首 `renderSlot('sidebar.session.row.leading')` 以自有 `.scheduleIndicator` 为 fallback、悬停卡内容位
-  渲染 `sidebar.session.row.hover`；两席由本仓侧栏的 `children` 声明，上游注册里的三行（0.2.2 起含 `sidebar.session.row.trailing`）
-  由 vendor 补丁删除，`trailing` 本轮不采纳——座席所有权转移，design 09 §3.6 第四类第二形态）、
+  渲染 `sidebar.session.row.hover`；两席由本仓侧栏的 `children` 声明，上游注册里的三行（当前 pin 起含 `sidebar.session.row.trailing`）
+  由 vendor 补丁删除，`trailing` 不采纳（已决，见 §10）——座席所有权转移，design 09 §3.6 第四类第二形态）、
   `packages/dsh-chamber-client-core/src/derive.ts`（`hasActiveScheduleOf`；`hasActiveSchedule` 进
   `instanceSnapshotSignature`；goal 的 `parseGoalFact`/`retainGoalFacts`/
   `applyGoalActivation`/`goalFactSignature` 与 overlay 填补）、
@@ -1318,10 +1318,12 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   隐藏壳的 WebKit 丢绘）与修复契约见 design 05 §4.2。
 
 - **行位移动效（自持移植上游 `AnimatedRows`，与入场退役不矛盾）**：浏览树的行增删/换位由
-  `src/client/rows/animated-rows.tsx`（上游 ui-workspace `rows/AnimatedRows.tsx` 逐字移植，含来源头注）
+  `src/client/rows/animated-rows.tsx`（上游 `dsh-client-ui-primitives/src/AnimatedRows.tsx` 逐字移植，含来源头注；
+  唯一 delta = props 接口留作包内、不 export）
   承担——换位的行 FLIP 滑到位（`ROW_GLIDE_MS = 200`，ease-out），进入行淡入，退出行克隆成 `inert` 覆盖层
   淡出（`ROW_FADE_MS = 100`，`fill: 'forwards'`）。**接入面只有浏览树**：`ServerSection` 用
-  `<AnimatedRows className={cc.workspaceList} label={t('section.sessions')}>` 取代原列表容器 div，搜索分支
+  `<AnimatedRows className={cc.workspaceList} role="tree" label={t('section.sessions')}>` 取代原列表容器 div（`role`/`label` 都是
+  调用方传入的上游 prop），搜索分支
   与聚合错误分支各自保留裸 `cc.workspaceList`（搜索结果自带 `role="tree"`，不参与动画）。**key 契约**：
   `rowKeys` 在渲染 walk 中按同一 DOM 序 push（`workspace:` / `error:workspace:` / `error:workspace-drag:` /
   `error:open:` / `session:` / `more:`，空列表初始化 `empty`），与元素上的 `data-row-key` 一一对应
@@ -1361,7 +1363,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   定义（这里不手写窗口语义），行为上无影响；`prefers-reduced-motion: reduce` 整体跳过；每次动画 `finish` 即 `cancel()`，静止态永远是元素自身样式。
   回归锁：`test/session-rows/animated-rows.test.ts`（移植体与 pin 住的上游逐字一致 + 常量/key 契约/门控）。
 - **行位移期间的指针门控（`hover-motion-gate.ts` + `data-hover-gate`）**：一次提交把某 keyed 行搬到**静止指针**下时，浏览器会为该行合成 boundary 事件——本机 headless Chromium 149 实测：提交后 t≈347ms 收到 `pointerover`/`pointerenter`/`mouseover`/`mouseenter`（`clientX/Y` 与按下时相同，同期 0 个 `pointermove`），随后 `:hover` 也命中它。于是三条"指针进入"路径在用户并未指向该行时被触发：① `:hover` 揭示树（整行洗色占该行盒 93.19% 像素 + 文件夹→chevron + 计数徽标换 `+`/kebab + git 占位者换入）——即「删除会话时对应的 workspace 闪一下」；② `RowHoverCard` 的 `onPointerEnter` → 800ms 停留后卡片自己弹开；③ 会话标题跑马灯 `onPointerEnter` → 标题自己开始爬行。修法是**门控而非改动画**：机器在提交后的 layout 阶段（早于本帧 hover 更新，故 `matches(':hover')` 仍是位移前的真相）用 `getAnimations({ subtree: true })` 取候选，只给**本帧正在位移且扫描时不在 `:hover`** 的 keyed 行加 `data-hover-gate`（机器不读指针坐标；这正是本帧会 latch `:hover` 的那批）；下一个真实 `pointermove`（坐标变化）或 `pointerdown` 摘门控，并对仍在指针下的行补一次 `pointerover` 让 React 重算 enter（`pointerenter/leave` 不冒泡，React 由 `pointerover/out` 合成），卡片与跑马灯语义不丢。样式侧只给**行级** `:hover` 揭示加 `:not([data-hover-gate])` 条件（含 `more:` 披露行；归档管理器、JS 揭示半边 `:has(.rowActionsVisible)`、未分组桶的 transparent 复位都不在面内；重命名态的**抑制**规则不是揭示面，但其 hover 半边必须带同一条款——`:not()` 计一个额外伪类，不带上就会被 `(0,5,0)` 的揭示反超、改名中仍交换字形）；门控行仍可点击、kebab 与键盘揭示照旧。**实测边界**：退出克隆体不是本现象成因（后继组头的标题行框与克隆体重叠始于 t≈60ms，彼时克隆体透明度已 ≤0.215，t≥83ms 像素差 ≤maxΔ7），故动画器移植体与常量一律不动；残余 = 常驻可见控件的子元素级 hover（`.foldToggle:hover` 的墨色台阶、`.orphanBadge:hover`）与原生 `title` 提示不可门控；另一类 = **无 key 的行表面**（来源表头 `.sourceHeader:hover .sourceActions`、面板行 `.panelRow:hover`、git 未注册行 `.unregisteredRow:hover`、归档管理器组头 `.archiveManagerGroupHeader:hover`）在相邻 section 因折叠/增删行瞬时变高变矮（无动画）时被搬到静止指针下，机器只认带 `data-row-key` 的动画目标、看不见它们——两类一并登记为已知边界，实机复核与 STATUS 第 ⑤ 项同看。回归锁：`test/session-rows/hover-motion-gate.test.ts`（纯判定真值表 + 机器/接线/样式条款漂移锁）与 `test/visual-lock/git-occupant-rest-flow.test.ts`、`test/session-rows/session-row-actions.test.ts` 的揭示选择器对拍（容器与动作两侧必须同时带门控，漏一侧即红）。
-- **Rejected alternatives（行位移动效）**：①*深引 vendor 源码*（`@deepseek-ai/dsh-client-ui-workspace/src/client/rows/AnimatedRows.tsx`）——registry C16 的 vendor 直穿只收「相对 import + `export function` 符号」，而原件是 `export class`，登记进 `vendorSourceConsumers` 会红；改用裸包说明符则绕开 C16 的双向登记（无登记的 vendor 直穿本仓不允许）。②*只加 CSS transition*——CSS 做不出退出克隆（被删除的行没有元素可过渡）与"仅重排才动"的 FLIP 测量，也表达不了 armed/ready/resetKey 门控。③*不做*——在 workspace 上点 `+` 新建会话时整列瞬移，正是本轮要修的观感。④*把每个工作区的渲染行数（`renderCount`）直接放进 resetKey*（首版实现，已被替换）——`total ≤ visibleFirst` 且未展开时 `renderCount === total`，于是任何行增删（新建行出现、归档、ghost 到期）都会改键、把入场动画取消掉，且数组形状让「新增 workspace」也退化为 settle；被「只有被钳制的组按 id 贡献分量」取代。⑤*由渲染层手写窗口语义*（在键里自己判断 >200 / 当前行位置）——同一规则就有了第二份实现，`sessionRowWindow` 一改就漂移；被抽出纯函数 `sessionRowWindowMotionKey` 取代。
+- **Rejected alternatives（行位移动效）**：①*深引 vendor 源码*（`@deepseek-ai/dsh-client-ui-primitives/src/AnimatedRows.tsx`）——registry C16 的 vendor 直穿只收「相对 import + `export function` 符号」，而原件是 `export class`，登记进 `vendorSourceConsumers` 会红；改用裸包说明符则绕开 C16 的双向登记（无登记的 vendor 直穿本仓不允许）。②*只加 CSS transition*——CSS 做不出退出克隆（被删除的行没有元素可过渡）与"仅重排才动"的 FLIP 测量，也表达不了 armed/ready/resetKey 门控。③*不做*——在 workspace 上点 `+` 新建会话时整列瞬移，正是本轮要修的观感。④*把每个工作区的渲染行数（`renderCount`）直接放进 resetKey*（首版实现，已被替换）——`total ≤ visibleFirst` 且未展开时 `renderCount === total`，于是任何行增删（新建行出现、归档、ghost 到期）都会改键、把入场动画取消掉，且数组形状让「新增 workspace」也退化为 settle；被「只有被钳制的组按 id 贡献分量」取代。⑤*由渲染层手写窗口语义*（在键里自己判断 >200 / 当前行位置）——同一规则就有了第二份实现，`sessionRowWindow` 一改就漂移；被抽出纯函数 `sessionRowWindowMotionKey` 取代。
 - **Rejected alternatives（行位移指针门控）**：①*改退出克隆体的画序*（给 `.workspaceList` 加 `z-index`，或把覆盖层挂进列表）——实测克隆体不是成因（重叠时间线与透明度见上），改了只把叠影从"盖住"变成"透出"，还要调用方耦合 vendor 未导出的覆盖层结构。②*改 vendor 动画器退出段*——`AnimatedRows` 是逐字移植体（byte-fidelity 锁 + registry/design 登记成本），且同样不针对成因。③*容器级 `pointer-events: none` 锁*——会吞掉门控行上的真实点击（门控行必须仍是可点目标）。④*只把揭示延后到动画结束*——仍是"无指令揭示"，且会把位移前已悬停的行打断成"闪掉再回来"。
 
 - **视图选项三轴的新增几何（2026 对齐轮）**：树模式嵌套缩进 = `--chamber-tree-depth × 12px`
@@ -1541,6 +1543,12 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
 5. **把 pin 序写进本地账号 + 块内拖拽（上游完整版，一次性全对齐）**：需要一个持久的手动账号（本仓
    manual 权威是宿主 wire）、跨分区拖拽守卫与 `unpin` 的领先槽语义；2026 对齐轮裁决先落**渲染分区**
    （选项 1：不写账号、不改拖拽、`unpin` 回自然位），残余登记 parity plan §1.1 与 STATUS 必要取舍（B2）。
+
+6. **采纳上游第三座席 `trailing`（行尾插件图标）**：该座席由上游 `sidebar.workspaces` 注册声明，而 chamber 不挂载
+   该注册（洞只声明不调用），声明只能随 vendor 补丁转移；采纳它还要把行几何改成可内联（`inline: true` 是
+   span/div 渲染提示）并为行尾图标提供产品面，与 chamber 行几何「动作簇 4px/20px、命中盒=视觉盒」（§3.4/§7）
+   直接冲突。裁决 = 补丁删除三行声明、chamber 只声明并渲染 leading/hover，`trailing` 缺位作为已知差异登记
+   （design 09 §3.6 的 Rejected alternatives）。
 
 ## 11. Rejected alternatives（孤儿 workspace 的删除入口）
 

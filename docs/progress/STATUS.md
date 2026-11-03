@@ -55,6 +55,7 @@
 - **设置面残余**：写路径 4–8 人日（台账/字段描述符/密钥存在性）；面板要求源壳挂载；打包态冒烟。
 - **rc.3 More 行依赖延迟设置行**：`entry-customization` 的 `pluginNavigation` 只由延迟的 settings-plugin-manager 提供，宿主行停在 PENDING ⇒ 会话头/右栏 More 缺席。延迟簇的 `Promise.all`（`registerDeferred`，`packages/renderer/src/chamber-entry.ts`）无 deadline：chunk **reject** 时按行 id 上报、只该延迟行失败（延迟簇其余行照常挂载）；chunk **悬挂**时整簇不挂载且零报告。判据 = 延迟 chunk 失败 drill + 悬挂 drill + 目检；座席存在但读取在处置窗口抛错时 `openPending` 无自动 flush（再次点击恢复），同 drill 覆盖。
 - **Git 工作树恢复的 reload 出口**：证明失败/超预算、`path-unavailable` 重放、`git-timeout`/`git-spawn-failed`/`state-source-*`、终态 receipt 重放、create/rollback 的未尝试探测失败仍无关闭入口（退出 = reload 后按 fresh Git 事实核对）；细则 = design 08 §5.3/§6.2。
+- **未接入的上游服务面**：会话被动 API（events/state/wait/projections/follow）、`pluginChanges`、异步 `sessionProjections` 句柄迁移（seed-git-worktree 仍懒读 `ctx.get` 并保留 `header.cwd` 回退）；接入点 = design 09 §3.5/§3.6 的复合入口与 seam，需要时按同一注册表接入。
 
 ### 1.4 打包态与真机门禁（按来源/版本）
 
@@ -69,9 +70,10 @@
 **上游 pin 新面（无 GUI 未跑）**：
 - 基线：0.2.2-alpha.2 未复跑（其新面并入下方各行）；pin 四项（内置插件页、跨代 profile、gateway 就地升级、0.1.6 移动端 + 右栏终端）挂账。
 - rc.3（仅该来源）：①会话头视图折叠 + More（Trajectory 行在延迟簇注册视图，默认出现）；②右栏 guide More；③「浏览」落到设置→插件管理（plugin-navigation 座席）；④移动端 44px More 与 88px 标签省略；⑤New Session 全局按钮复用空白会话（复用保持创建时预设）。判据 = 含已打开会话的 More/浏览 走查 + 打包态真机（本次机械 live/走查未打开会话，不覆盖本行）；⑤ 另判：已有空白会话（含非默认预设）时点全局「新会话」→ 会话行数不增、落回同一 `[data-session-id]`、预设不变；杀宿主重启后按当前定义重判。侧栏 More 不采纳见 §4.2。
+- 0.2.2（仅该来源）：官方 8 语言界面（chamber 自撰文案仍 zh/en，layout 快捷键标签随上游镜像 8 语言）、`fileDrag` 图片拖拽与文字选区浮条、官方新 client 行（action-cards / creation-recommendations / plugin-recommendations / message-quotes / cua）在 N-ctx 目检；判据 = 打包态真机（机械 live/走查不覆盖本行）；风险 = 新行若成为首屏根 inject 的强制依赖须升 covered factory（design 09 §3.5）。
 - 终端 attach/重连（G43）：生成式流的 uplink（输入/半关/取消帧）与断线重连待打包态真机走查；判据 = 行为用例 `packages/dsh-api-gateway/test/behavior/client-uplink-support.test.ts`、`packages/dsh-api-gateway/test/behavior/mux-self-heal.test.ts` + 真机。
 - alpha.4：Schedule（Automation tasks 面板/任务页/行 clock 标记/右侧任务标签/删除 toast/每会话 catalog 查询）+ Developer Tools（可选、默认关、Session/NodeJS Inspector、shell.bottom 声明）在 N-ctx 目检；判据 = C9/C11/C16 + `frame-slots`；风险 = inspector iframe document-relative 可能落 SPA fallback（C9 前缀或占位）。
-- alpha.4 Discover：启用市场 bundle 后设置→插件管理的 Discover 页签与安装链；判据 = `test:plugin-manager` 的 `plugins.tab` + C4 契约 26；风险 = inject 含 plugin-manager 行、extra row 模块表解析未测（必要时升 covered factory）。
+- alpha.4 Discover：启用市场 bundle 后设置→插件管理的 Discover 页签与安装链；判据 = `test:plugin-manager` 的 `plugins.tab` + C4 契约 27；风险 = inject 含 plugin-manager 行、extra row 模块表解析未测（必要时升 covered factory）。
 - alpha.5：①账号通知栈（层叠/高度过渡/空标题/空 expiresAt/未校验 JsonValue）；②模型标签三处（trigger/菜单/模型行，112px 已修）；③终端列表会话级缓存（去重/失效不重试/reset 刷新）；④右栏收起 PageUp 不横滚；⑤PTC code-first 与 persona 一致。
 - alpha.5 观察：portal 逃出实例子树（隐藏管不到、onShown 不校验 → 可能提前 ack/跨壳叠加）；required-extra-rows 不覆盖 host-graph 行（inject 缺失静默 PENDING）。
 - rc.2（仅该来源）：①Web 搜索开关（默认关、三命名空间字段与凭据、sendOriginalQuestion 128 字符、下次搜索生效、回退前先关）；②模型徽标三处（112px 回归已修，菜单/模型行待目检）；③web-deepseek-api 凭据/available；④日志 body.thinking 可选 log-only。
@@ -84,7 +86,7 @@
 - **gateway**：Linux unit 登录环境；ssh/http cookie 注入未覆盖；旧来源插件播种 400（重建未排期）；运维页缺 `recover-metadata`/`cleanup-version`/`restore-pre-rollback`；S0/S2-c 未实现；设计 21 对齐（只读/seed 端到端、tooltip、英文串）。
 - **gateway 启动失败原因对 chamber 不可见**：`state_root_locked` 的 holder 与判定依据只进 journal；客户端只能拿到 socket 级的归因文案（已按 ECONNREFUSED/ECONNRESET/EPIPE 分类并指向 gateway 服务与隧道，`packages/desktop/gateway-session.ts` 的登录传输分类），看不到持有者类别与拒绝依据，把结构化原因回传需要一条新的远程诊断面（读 state 根的启动失败记录或 journal 尾）——未排期，是「错误透传」的剩余部分。
 - **租约身份的跨平台残差**：`bootId`/`procStartTicks`/`pidNamespace`/`machineId` 只有 Linux 提供（`packages/control-plane/src/process-identity.ts`）；macOS/Windows 的 v2 记录仍只有启动代际推断（依赖墙钟，步进超过 5 分钟余量时可能误判陈旧），同一启动内的 pid 复用保守锁定（宁锁不双写）。跨机护栏要求记录与本机都读得到 machineId，缺失时按「属主私有、单机」契约处理（design 17 §12）。
-- **运行时安装现场的 pid 判活**：`dsh-runtime` 的 `isPidAlive`（`cleanupStaleInstalls`，`packages/dsh-runtime/src/dsh-runtime-store.ts`）仍按「同号进程存在」判活；安装中硬崩溃 + 重启后 pid 被复用会让清理一直抛「仍有活动写进程」，托管 dsh 起不来。pid 文件只有数字、没有身份元组，修法与本轮租约同形（写 bootId+startTicks），未排期。
+- **运行时安装现场的 pid 判活**：`dsh-runtime` 的 `isPidAlive`（`cleanupStaleInstalls`，`packages/dsh-runtime/src/dsh-runtime-store.ts`）仍按「同号进程存在」判活；安装中硬崩溃 + 重启后 pid 被复用会让清理一直抛「仍有活动写进程」，托管 dsh 起不来。pid 文件只有数字、没有身份元组，修法与租约修复同形（写 bootId+startTicks），未排期。
 - **install/runtime**：`install` 不同步锚（待裁）；dl 运行时 macOS 全链/Linux/gateway 重连/`restartLocal` 交错/ZFS EAGAIN；上游装载面 `compose()` 10.65MiB、`SubagentHeaderLineage` 缺 class、首帧超时；会话可靠性六项；`protobufjs`/`@google/genai` 待 M2 证据。
 - **桌面更新（design 11）**：真实 Apple 凭据 CI、双平台清单、通道封签打包态实证；`checkNow()` 在 runCheck 门跳过仍回 ok、渲染门缺 `downloadStallPending` 腿（待裁回 `{ok:false}` 或补腿；判据 = 按钮可点必须有效果或明确禁用）。S-52 = Sparkle quit 与在飞关窗相撞（≤2s 窗、~0.6，未实机；修 = 区分在飞决策/重复退出）。
 - **认证 Gateway**：生产 TLS/SPKI/`remote.mux` 恢复、三形态重登/撤销、`/chamber/runtime` TLS、Linux 升级回退、`--bind 0.0.0.0` 负例；凭据重置/改密 CLI。
@@ -100,15 +102,7 @@
 - **低优 UX**：hover-only、徽标窄窗、en 单数、aria-label、ssh done 态、PluginDialog DOM 测试、对账空态、versionsEpoch、30s 文案、内联 effect。
 - **门单源残余**：① 5 个 typecheck（`typecheck:host-graph/host-git/host-archive-cleanup/host-open-in` 与 `typecheck:gateway`）只存在于 `ci.yml` 与 `release.yml` 的手写多行 run（gateway 另见 Windows 腿的 `ci.yml`），registry 无条目 → 四个模式都不含它们，“modes 名字即 CI 所跑”对这 5 步不成立（`seed-client-graph` 的唯一检查完全在模式之外）；② `proof:true` 只覆盖 release 校验 job 的 3/16 个生成门步，`C8` rebuild、remote-state acceptance、third-party notices、`release-preflight --actions-only`、renderer SVG scoper 断言、gateway pack/install smoke 均非 proof-required（proof 集合与 65 条 id→command 现已由 golden 钉住，改动必须同批改断言）；③ 同一 job 里 typecheck 与 typecheck:runtime 各跑两次（手写块 + `run-checks typecheck`）；④ `release-preflight.mjs` 的全量 battery 与 registry 漂移（漏 6 项、多列 4 项，无测试守）；⑤ Windows 腿结构上进不了 registry（`gate-registry.mjs` 的 platform 校验只允许 darwin），8 条 `macos.*` 门无生成块、靠手写步骤执行（命令等价但无 lockstep 测试）。修①需裁决：把手写步并入生成块，或补 registry 条目；⑥ 生成块之外的手写步骤仍无覆盖网——`gate-workflow-views --check` 只比对四个标记块，旧 `static-gate-parity` 扫整个 job 的能力没有等价替代（静态门的 CI 落位已由 registry 不变量「`workflow` 或 `coveredBy`」拦下，其余步骤仍需人工对照）。
 - **其他**：`verify:i18n` 的 40-hex 例外；lockfile 断言（`git diff --exit-code -- pnpm-lock.yaml`，`ci.yml` 与 `release.yml` 的多个 job）不在任何模式里，只由 `verify-release-ci-proof.mjs` 的 `NON_GATE_STEPS` 按步骤名保护；gateway 失败分支夹具；归档保护闭包测试；通知收敛器遗留；旧边沿孤岛；页面账本预热接线锁；page-channel 重复实例只报错；`notServingYet` 无生产者；Git 分支候选；B 桥写端行为夹具。
-
-### 1.7 0.2.2-alpha.2 升级的余项（pin 已换）
-
-- **已跑的腿**：`run-checks tests` 22/22、`run-checks static` 21/22（仅 `verify-stream-state-swift-parity`——容器无 swiftc，由 macOS 腿负责）、`typecheck`（owned 全清）、`build:renderer` 与产物 marker 19/19。**未跑**：`smoke`（本机端口被多实例占用）、打包态与真机（`gui-acceptance-checklist.md` §4 的 0.2.2 新面：会话头折叠 + More、右栏 guide More、插件导航「浏览」、44px More / 88px 省略、全局新会话复用、Schedule / Developer tools、8 语言、file-drag 图片拖拽、文字选区浮条）。
-- **新增官方 client 行的处置（消费即可，不 covered）**：0.2.2 闭包新增的 `dsh-client-ui-action-cards` / `dsh-client-ui-creation-recommendations` / `dsh-client-ui-plugin-recommendations` / `dsh-message-quotes` / `dsh-cua` 都以宿主图 extra row 默认载入并注册各自产品面（各自 inject 的槽由官方行提供），chamber 不镜像、不替换、也不登记 covered；`ui-file-drag` 是唯一必须首屏闭合的（`ui-chat` 根 inject 直接依赖它），已按 shortcuts/remoteAccess 先例升 covered factory。新增行若某天成为首屏根 inject 的强制依赖，按同一先例处理。
-- **本轮未接入（裁决保留）**：会话被动 API（events/state/wait/projections/follow）、`pluginChanges` 服务、异步 `sessionProjections` 句柄迁移（seed-git-worktree 仍懒读 `ctx.get` 并保留 `header.cwd` 回退）；`sidebar.session.row.trailing` 不采纳 ⇒ 上游"会话行插件图标"在 chamber 行永久缺位（产品取舍）；web fork 只补了 `asset`（refusing bootstrap require），`resolveAsset` 未透传（当前闭包内无消费者——含 `require.asset` 的两行都被 covered；将来主机图/插件市场装入含资产的 bundle 时需按实例基路径解析，见 design 09 §3.5/§3.6）。
-- **已知降级/外部约束**：补丁后壳外 drag 不再 `preventDefault`，导航拦截依赖 Electron/Swift 两壳；官方 UI 8 语言而 chamber 自撰文案 zh/en（非 zh 回落 en）；**Node 下限待裁**：dsh 0.2.2 的 `engines` 是 `>=24.9`（`packages/desktop/vendor/dsh/node_modules/@deepseek-ai/dsh/package.json`），根已抬到 `>=24.9.0`，但 `packages/gateway/package.json` 与 `install-gateway.sh` 仍是 `>=22`——在 Node 22/23 上安装 gateway 会拿到跑不起来的运行时，抬与不抬是发布裁决。
-- **首屏体积告警**：`build:renderer` 的两条 warn 已越线（chamber entry 8.19 MB vs 7.83 MB、head CSS 320 KB vs 304 KB）；增量主要来自 0.2.2 的 `lexical`（ui-conversation 新编辑器，约 295 KB）与既有的 `simple-icons` 整桶（约 5.0 MB，本轮未动）。只 warn 不 fail；阈值未上调（上调会把增长藏起来），是否拆分/懒载是独立工作项。
-- **收尾前**：`CHANGELOG.md` 发布节（仅发版时写）。
+- **首屏体积**：`build:renderer` 两条 warn 已越线（chamber entry 与 head CSS）；增量含 `lexical`（ui-conversation 编辑器）与既有的 `simple-icons` 整桶。只 warn 不 fail，阈值不上调（上调会把增长藏起来）；拆分/懒载未排期。
 
 ## 二、差异（功能面 / 外部约束）
 
@@ -116,7 +110,7 @@
 
 ### 2.1 待裁（与 chamber 功能/契约相冲）
 
-- **U1 pinned**：分区已落地；缺块内拖拽/跨块守卫、账号写入（B2）、半开 follow 陈旧标记；候选 A 完整/B 现分区/C 不做（已否）。
+- **U1 pinned**：分区已定；缺块内拖拽/跨块守卫、账号写入（B2）、半开 follow 陈旧标记；候选 A 完整/B 现分区/C 不做（已否）。
 - **U2 时间列**：上游行尾相对时间 vs 本仓状态槽；候选 A 状态槽静息分支/B 双尾随/C 不落。
 - **U3 快捷键**：四活键（new/fork/archive/rename）；三死键（search/add/openLocal）；注册表封死覆盖，候选 C1 维持/C2 实机判定。
 - **U4 重命名**：行内表单 vs 上游 `shell.overlay` 模态。
@@ -128,6 +122,7 @@
 - **呈现**：行尾状态槽（时间只在卡）、会话卡状态 0–1、`compact` 菜单（24px/11px）、命中盒=视觉盒、两级标题墨色、动作簇 4px/20px、footer 4px。
 - **不做**：`sidebar.toggle.badge`、`sidebar.workspaces` 官方归档/恢复/过滤贡献、跨来源移动；flat/树按 per-source。
 - **未照搬的上游交互**：重命名无 trim/重名校验、折叠组 `+` 不展开、搜索不 reveal、添加工作区不自动开会话、rail 无 add、删除确认按 unary 结果关、open-in 分体控件未整控件禁用/portal/key。重议 = 上游退役或交互面重启时并裁。
+- **语言面**：官方 UI 8 语言；chamber 自撰文案 zh/en（非 zh 回落 en），layout 快捷键标签随上游镜像 8 语言。
 
 ### 2.3 无法控制的差异（外部约束）
 
@@ -139,6 +134,9 @@
 - **面板轴**：`ui-schedule` 页面级 localStorage 键、30s 无 visibility 门、点击埋点未复制；宽态入口盒形/aria 分组/重挂载偏差见 design 06 §4.7。
 - **删除 workspace 两帧**：宿主 order/remove 非原子 + client `installOrder` 沉底 ⇒ 行先滑尾；本仓删除意图补偿；外部删除仍复现；上游原子化后退役。
 - **平台腿**：Windows `[data-windows-titlebar]` 未抄 ⇒ 侧栏形态不同（排期，非功能选择）。
+- **壳外拖拽**：补丁后壳外 drag 不再 `preventDefault`，落点导航拦截由 Electron/Swift 两壳各自提供（第三方壳需自带，否则拖入只产生浏览器默认行为）。
+- **拖出原生臂缺载体**：随包 `ui-file-drag` 的原生拖出要求 `globalThis.dshDesktop.protocolVersion === 1 && dshDesktop.fileDrag`（`{prepare,cancel,start,release}`）；Electron preload 的 `exposeDesktopCarrier` 只暴露 protocolVersion/updates/keyboard/shortcuts/deviceInfo ⇒ 走浏览器臂（objectURL + DownloadURL），拖到 Finder/资源管理器是「下载式」而非原字节借用。功能可用、属新特性降级；判据 = 打包态真机（原生臂接通后回验原字节与资源借用）。
+- **插件页头滚动面 inert**：`createHeaderRef` 已随座席注入，但 `EmbeddedPluginManagerPage.module.css` 让 `.page` 高度自适应，页内 `pageBody` 不再自滚 ⇒ sticky/compact 页头不触发（静态页头在，无崩溃）。裁决 = 保持现状或改容器滚动契约。
 
 ## 三、设计未决
 
