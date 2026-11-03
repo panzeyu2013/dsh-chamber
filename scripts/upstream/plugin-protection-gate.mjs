@@ -62,9 +62,9 @@ export const FAMILY_OPT_IN_ALLOWED = RUNTIME_FAMILY_OPT_IN_ALLOWED
 /** 平台分包：允许「闭包有、本平台树无」——`node-addon-system-*`（原生插件）、
  *  `libreoffice-kit-*`（office-to-pdf 带的办公套件运行时，含一个 `-wasm` 包），
  *  以及 `experimental-cua-macos`（package.json `os: ["darwin"]`：linux/win 安装树按平台跳过它）。 */
-const PLATFORM_PACK_RE = /^@deepseek-ai\/(?:node-addon-system-|libreoffice-kit-|dsh-experimental-cua-macos)/
+const PLATFORM_PACK_RE = /^@deepseek-ai\/(?:node-addon-system-|libreoffice-kit-|dsh-experimental-cua-macos(?:$|-))/u
 
-/** 闭包解析的健全性下限（当前运行时线 ≈ 298；解析坏了必须响亮）。 */
+/** 闭包解析的健全性下限：解析坏了必须响亮（真实规模由 C11 的族集合与锁文件断言，这里只兜「明显不完整」）。 */
 const MIN_FAMILY_SIZE = 200
 
 /**

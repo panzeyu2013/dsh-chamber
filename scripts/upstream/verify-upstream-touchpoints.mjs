@@ -264,6 +264,14 @@ const FORKS = verifierForks(REGISTRY)
 /** ensure-harness-vendor EXCLUDED（fork 影子覆盖的上游包）——C6 存在性哨兵。 */
 const EXCLUDED_UPSTREAM_DIRS = REGISTRY.excludedUpstreamDirs
 
+
+/** 按目录前缀登记、且承诺「只承载数据文件」的 dropped 面：上游一旦往里放代码/类型，
+ *  前缀登记就会把它静默吞掉，必须改成按文件重裁（registry 的 droppedNotes 里写着同一句
+ *  人工承诺；这里把它变成门）。`tests/` 不在此列——它本来就是代码。 */
+const DATA_ONLY_DROPPED_PREFIXES = ['locale/']
+/** 代码/类型文件（含 ESM/CJS 与 TS 的 .mts/.cts）：出现在纯数据面即需重裁。 */
+const CODE_FILE_RE = /\.(?:[cm]?[jt]sx?)$/u
+
 /** C8 advisory 模式：绝不写盘（CI install 前那段就是靠它）。 */
 const noArtifactRebuild = args.noArtifactRebuild
 /** C2 的 tag 区间（advisory），由守卫保证「恰好两个值」。 */
@@ -287,6 +295,16 @@ for (const fork of FORKS) {
   const patchedKeys = new Set(Object.keys(fork.patched))
   let pure = 0
   let violations = []
+  // 前缀登记的纯数据面：上游若把代码/类型放进该目录，前缀会把新文件整批吞掉，
+  // 所以这里先于逐个文件的分类判定把它判红（判据见 DATA_ONLY_DROPPED_PREFIXES）。
+  for (const prefix of droppedPrefix.filter((p) => DATA_ONLY_DROPPED_PREFIXES.includes(p))) {
+    for (const f of upstreamFiles) {
+      if (!within(f, [prefix])) continue
+      if (CODE_FILE_RE.test(f)) {
+        violations.push(`dropped 前缀 ${prefix} 登记为纯数据面，但上游出现了代码/类型文件（须按文件重裁）: ${f}`)
+      }
+    }
+  }
   for (const f of upstreamFiles) {
     if (droppedExact.includes(f) || within(f, droppedPrefix)) continue
     if (!forkFiles.includes(f)) {
