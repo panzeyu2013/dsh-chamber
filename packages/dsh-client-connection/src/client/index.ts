@@ -125,7 +125,9 @@ export interface ClientTransportHooks {
   /**
    * Package-asset resolver for the module system, present when the page cannot
    * request `plugins/<package>/assets/<path>` itself (the worker tunnel): it
-   * maps each reference to a URL the page can load. Absent in the served web app.
+   * maps each reference to a URL the page can load. The web boot seam forwards it
+   * to the module system (`__DSH_TRANSPORT__` → `ClientModuleCreateOptions.resolveAsset`);
+   * absent in the served web app, where the identity default is correct.
    */
   resolveAsset?(reference: string): string
   /**
