@@ -42,13 +42,15 @@ test('evaluate names the retirement when the vendor half lands a bound', () => {
     proposals: '首帧期限 ... 退役',
   }
   const read = (path) => {
-    if (path.includes('history.ts')) return sources.host
+    if (path.endsWith('web/controller.ts') || path.includes('history.ts')) return sources.host
     if (path.includes('session.ts')) return sources.client
     if (path.includes('stream-client.ts')) return sources.fork
     return sources.proposals
   }
   assert.deepEqual(evaluate(read).failures, [])
-  const flips = evaluate((path) => path.includes('history.ts') ? "async *follow() { yield { type: 'snapshot' }; AbortSignal.timeout(1) }" : read(path))
+  const flips = evaluate((path) => (path.endsWith('web/controller.ts') || path.includes('history.ts'))
+    ? "async *follow() { yield { type: 'snapshot' }; AbortSignal.timeout(1) }"
+    : read(path))
   assert.equal(flips.failures.length, 1)
   assert.match(flips.failures[0] ?? '', /UPSTREAM LANDED A FIRST-FRAME BOUND/u)
 })
