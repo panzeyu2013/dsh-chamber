@@ -247,7 +247,9 @@ export const KNOWN_SERVICE_PROVIDERS: Readonly<Record<string, string>> = {
   // the chain the row waits on: ui-sidebar-right injects `resources`, provided only by @deepseek-ai/dsh-client-resources.
   resources: '@deepseek-ai/dsh-client-resources',
   // 0.2.2: ui-chat (client/apply.ts) and ui-attachment inject `fileDrag`; the provider is the composite's
-  // covered first-screen factory, so a host graph without the row still gets the service.
+  // covered first-screen factory (CHAMBER_COVERED_FACTORY_IDS), so a host graph without the row still
+  // gets the service. A probe hit here therefore means the composite factory never ran — not a missing
+  // extra host-graph row; the diagnostic below names both possibilities for that reason.
   fileDrag: '@deepseek-ai/dsh-client-ui-file-drag',
 }
 

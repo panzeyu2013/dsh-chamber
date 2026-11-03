@@ -403,10 +403,10 @@ export function apply(ctx: Context): void {
   // the recorded id is the mount identity. The deferred cluster extends the same roster as
   // chunks mount and re-arms one pass.
   // Deferred-only members (no first-screen declaration) are each provided by first-screen
-  // composite plugins only, never by another deferred family; the audited table is
-  // AUDITED_DEFERRED_ONLY_SERVICES in required-extra-rows.test.ts (single source — do not
-  // re-count here). Without the re-arm such a member would pend with no diagnostic, the
-  // silent gap this probe closes.
+  // composite plugins only, never by another deferred family; never re-count them here — the
+  // audited roster lives in required-extra-rows.test.ts (AUDITED_DEFERRED_ONLY_SERVICES) and
+  // that lock fails when this probe's derived union and the table disagree. Without the re-arm
+  // such a member would pend with no diagnostic, the silent gap this probe closes.
   const registered: RegisteredPluginInject[] = []
   /** Probe re-arm hand-off; filled when the probe effect installs. */
   const probeRearm: ProbeRearmSlot = {}
