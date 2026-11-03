@@ -72,7 +72,7 @@ umask 077
 # DSH_CHAMBER_DSH_VERSION 是「内建/回退锚」默认版本（design 18 §9）：运行期
 # 可经 /chamber/runtime 切换，此常量仅决定本脚本安装的锚版本。
 # ---------------------------------------------------------------------------
-DSH_CHAMBER_DSH_VERSION="${DSH_CHAMBER_DSH_VERSION:-0.2.1-rc.3}"
+DSH_CHAMBER_DSH_VERSION="${DSH_CHAMBER_DSH_VERSION:-0.2.2-alpha.2}"
 GITHUB_REPO="${DSH_CHAMBER_GITHUB_REPO:-panzeyu2013/dsh-chamber}"
 BASE_DIR="${DSH_CHAMBER_BASE_DIR:-${HOME:?HOME 环境变量未设置（可用 DSH_CHAMBER_BASE_DIR 指定安装位置）}/.dsh-chamber}"
 # 从自复制位置反推 BASE_DIR：install_self 把本脚本复制到
@@ -143,6 +143,22 @@ warn() { if [[ -t 1 ]]; then printf '\033[1;33m[gateway]\033[0m %s\n' "$*"; else
 die()  { spinner_stop; if [[ -t 2 ]]; then printf '\033[1;31m[gateway]\033[0m %s\n' "$*" >&2; else printf '[gateway] %s\n' "$*" >&2; fi; exit 1; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# node 下限是 install 与 update 的共用前置（下限由 pin 住的 dsh 运行期包自己的 `engines`
+# 决定：design 17 §15 / design 18 §9，不是本脚本或 CI 的工具链版本）。node 22/23 与
+# 24.0–24.8 上 pnpm 仍会把运行期装好，然后在 dsh 启动处才失败——所以判到 minor 并报真数。
+# 产物语法目标（esbuild node22）是另一条轴：只约束编译产物，不设运行下限。
+require_node_floor() {
+  have node || die "缺少 node(≥24.9):gateway 运行依赖 node,请先安装(https://nodejs.org)"
+  local node_ver node_major node_minor
+  node_ver=$(node --version 2>/dev/null || true)
+  node_major=$(printf '%s' "$node_ver" | sed 's/^v\([0-9][0-9]*\).*/\1/' || true)
+  node_minor=$(printf '%s' "$node_ver" | sed 's/^v[0-9][0-9]*\.\([0-9][0-9]*\).*/\1/' || true)
+  [[ "$node_major" =~ ^[0-9]+$ && "$node_minor" =~ ^[0-9]+$ ]] \
+    || die "无法解析 node 版本：${node_ver:-未知}（需要 ≥24.9，https://nodejs.org）"
+  (( node_major > 24 || (node_major == 24 && node_minor >= 9) )) \
+    || die "node 版本过低：${node_ver}，需要 ≥24.9（pin 住的 dsh 运行期要求；https://nodejs.org）"
+}
 
 # Indirect assignment without eval. Interactive values include passwords,
 # origins and filesystem paths, so a quote in user input must remain data even
@@ -928,7 +944,7 @@ verify_offline_tgz() {
 
 # 拉取 GitHub Releases 全部可用版本（最新在前，最多 100 个）写入 RELEASE_LIST：
 #   每行 <版本>|<预发布:0/1>|<有gateway资产:0/1>|<发布日期>，仅收录 canonical SemVer。
-# 用 node 解析（preflight 已保证 node ≥22），
+# 用 node 解析（preflight 已保证 node ≥24.9），
 # 对 GitHub 的美化（多行缩进）与压缩 JSON 都健壮（release 之间是 '},  {' 带缩进
 # 格式）。成功且非空返回 0；网络失败或
 # 无合法版本返回 1（调用方决定报错或回退手动输入）。
@@ -1632,6 +1648,21 @@ stage_local_version() {
 
 # `current` may only be absent or a symlink. Create the replacement beside it
 # and rename over the old symlink so readers see either complete target.
+# local 形态的启动器：把当前 node 的绝对路径烧进 wrapper（systemd 默认 PATH 可能不含 nvm 等）。
+# install 与 update 都走这里：update 换树时同步换解释器，避免出现「调用者 PATH 已是新 node、
+# 服务仍跑安装时那个旧 node」——该迁移失败要到 dsh 启动处才显形。换解释器不换树：回滚只
+# 还原 current 指针，启动器仍指向 current/dist/cli.js。
+write_local_launcher() {
+  mkdir -p "$LOCAL_BIN_DIR"
+  local node_bin
+  node_bin=$(command -v node 2>/dev/null || printf "node")
+  cat > "$LOCAL_BIN_DIR/gateway" <<EOF
+#!/usr/bin/env bash
+exec "$node_bin" "$GATEWAY_DIR/current/dist/cli.js" "\$@"
+EOF
+  chmod +x "$LOCAL_BIN_DIR/gateway"
+}
+
 switch_local_current() {
   local target="$1"
   [[ -d "$target" ]] || { warn "gateway 目标版本目录不存在：$target"; return 1; }
@@ -2675,14 +2706,7 @@ do_install() {
       stage_local_version "$tgz_src" "$VERSION" || die "本地 gateway 资产 staging/校验失败"
     fi
     switch_local_current "$VERSIONS_DIR/${VERSION}" || die "切换 gateway/current 失败"
-    mkdir -p "$LOCAL_BIN_DIR"
-    local node_bin=""
-    node_bin=$(command -v node 2>/dev/null || printf "node")   # 绝对路径:systemd 默认 PATH 可能不含 nvm 等
-    cat > "$LOCAL_BIN_DIR/gateway" <<EOF
-#!/usr/bin/env bash
-exec "$node_bin" "$GATEWAY_DIR/current/dist/cli.js" "\$@"
-EOF
-    chmod +x "$LOCAL_BIN_DIR/gateway"
+    write_local_launcher
   fi
 
   # 4) 跨形态覆盖安装先收拾旧形态残留(旧 systemd unit/旧前台进程;快照已于 2.5 读取)
@@ -3134,6 +3158,7 @@ cmd_restart() {
 }
 
 cmd_update() {
+  require_node_floor
   ensure_private_layout
   acquire_lock
   # 私有布局与 install 一致收敛 0700（update 不重走向导，单独补齐）。
@@ -3450,6 +3475,10 @@ cmd_update() {
     npm install -g --no-audit --no-fund "$target_tgz" || failure_reason="npm 安装新版本失败"
   else
     switch_local_current "$new_local_target" || failure_reason="原子切换 gateway/current 失败"
+    # 解释器与树同批更新：切换成功后重写启动器（失败时旧启动器仍指向 current，回滚不受影响）。
+    if [[ -z "$failure_reason" ]]; then
+      write_local_launcher || failure_reason="重写 local 启动器失败"
+    fi
   fi
 
   # ---- dsh 内建锚同步执行（stage 就绪后原子交换；失败并入统一回滚）----
@@ -3779,16 +3808,7 @@ esac
 # 前置检查:node 是 gateway 运行依赖;curl 仅在线下载需要(离线包可跳过)。
 # 检查放在参数解析后、进入向导前,让小白第一时间看到缺什么而不是装到一半才失败。
 preflight() {
-  have node || die "缺少 node(≥22):gateway 运行依赖 node,请先安装(https://nodejs.org)"
-  # 文案声称 ≥22 就必须真的查版本：node 18/20 会在源码树 dsh 路径的
-  # `node --import tsx/esm` 或 gateway 本体处中途失败，报错要前置且诚实。
-  # 运行时下限与工具链（CI/开发统一 24）分离：产物为 esbuild node22 语法
-  # 目标，node 22（maintenance LTS）仍在官方支持期内。
-  local node_ver node_major
-  node_ver=$(node --version 2>/dev/null || true)
-  node_major=$(printf '%s' "$node_ver" | sed 's/^v\([0-9][0-9]*\).*/\1/' || true)
-  [[ "$node_major" =~ ^[0-9]+$ && "$node_major" -ge 22 ]] \
-    || die "node 版本过低：${node_ver:-未知}，需要 ≥22（https://nodejs.org）"
+  require_node_floor
   if [[ -z "$OFFLINE_TGZ" ]]; then
     have curl || die "缺少 curl:下载安装包需要 curl(离线包模式可用 --tgz 跳过)"
   else

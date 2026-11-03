@@ -222,7 +222,8 @@ test('the node view forwards the root standard prop into the markdown component 
     openFile: () => {},
     loadImage: false,
     fileMentions: () => undefined,
-    usePresentation: undefined,
+    // 0.2.2: the node view reads the folded-replies policy through this hook.
+    usePresentation: (select) => select({ foldedReplies: 'none' }),
     t: 't',
     ...(basePath === undefined ? {} : { chamberFileApiBase: basePath }),
   })
@@ -250,8 +251,8 @@ test('the chat view file images resolve from the per-entry base path (executed m
   const patched = applyVendorPatches(IDS.chatViewReal, source)
   assert.notEqual(patched, undefined)
   assert.deepEqual(patched.applied, ['dsh-client-ui-chat/src/client/chat/ChatView.tsx'])
-  assert.ok(patched.code.includes('useProjection, t, chamberFileApiBase,'), 'the prop is destructured out of the composed props')
-  assert.ok(patched.code.includes('}), [chamberFileApiBase, cwd, t])'), 'the memo depends on the base path')
+  assert.ok(patched.code.includes('useInteractionIds, dispatchInteraction, t, fileDrag, chamberFileApiBase,'), 'the prop is destructured out of the composed props')
+  assert.ok(patched.code.includes('}), [chamberFileApiBase, cwd, t, fileDrag, sessionId])'), 'the memo depends on the base path')
 
   // Behaviour: evaluate the patched memo with a recording resolver; the base it
   // hands the resolver must be this entry's own file-API directory, and the
@@ -262,28 +263,31 @@ test('the chat view file images resolve from the per-entry base path (executed m
     assert.notEqual(start, -1)
     assert.notEqual(end, -1)
     const js = esbuild.transformSync(code.slice(start, end) + NL + '  ' + deps + NL + 'return fileImages', { loader: 'tsx' }).code
-    const makeFileImages = new Function('useMemo', 'fileMediaUrl', 'resolveWorkspacePath', 'document', 'cwd', 't', 'chamberFileApiBase', js)
+    const makeFileImages = new Function('useMemo', 'fileMediaUrl', 'resolveWorkspacePath', 'sessionFileAddress', 'document', 'cwd', 't', 'chamberFileApiBase', 'fileDrag', 'sessionId', js)
     let seen
     const images = makeFileImages(
       (factory) => factory(),
       (base, path) => { seen = base + '|' + path; return seen },
       (_cwd, path) => path,
+      (_sessionId, path) => path,
       { baseURI: 'http://127.0.0.1:30800/' },
       '/work',
       (key) => key,
       prop,
+      {},
+      'session-1',
     )
     assert.equal(images.resolve('/tmp/a.png'), seen)
     return seen
   }
   // Upstream fallback: absent OR empty base keeps the document itself.
-  assert.equal(baseFor(patched.code, '}), [chamberFileApiBase, cwd, t])', undefined), 'http://127.0.0.1:30800/|/tmp/a.png')
-  assert.equal(baseFor(patched.code, '}), [chamberFileApiBase, cwd, t])', ''), 'http://127.0.0.1:30800/|/tmp/a.png',
+  assert.equal(baseFor(patched.code, '}), [chamberFileApiBase, cwd, t, fileDrag, sessionId])', undefined), 'http://127.0.0.1:30800/|/tmp/a.png')
+  assert.equal(baseFor(patched.code, '}), [chamberFileApiBase, cwd, t, fileDrag, sessionId])', ''), 'http://127.0.0.1:30800/|/tmp/a.png',
     'an empty chamber fact stays document-relative, not origin-root')
   // Chamber: the per-entry prefix becomes the resolver's directory.
-  assert.equal(baseFor(patched.code, '}), [chamberFileApiBase, cwd, t])', '/api/i/local'), 'http://127.0.0.1:30800/api/i/local/|/tmp/a.png')
+  assert.equal(baseFor(patched.code, '}), [chamberFileApiBase, cwd, t, fileDrag, sessionId])', '/api/i/local'), 'http://127.0.0.1:30800/api/i/local/|/tmp/a.png')
   // Negative control: the unpatched memo ignores the prop entirely.
-  assert.equal(baseFor(source, '}), [cwd, t])', '/api/i/local'), 'http://127.0.0.1:30800/|/tmp/a.png')
+  assert.equal(baseFor(source, '}), [cwd, t, fileDrag, sessionId])', '/api/i/local'), 'http://127.0.0.1:30800/|/tmp/a.png')
 })
 
 
@@ -330,7 +334,9 @@ test('the ui-deliverables controller prefixes both present routes (executed patc
   const makeController = (code, basePath) => {
     const calls = []
     const Controller = evaluateSlice(code, {
-      from: 'export const PRESENTED_SUCCESS_HOLD_MS',
+      // 0.2.2: the controller file no longer declares PRESENTED_SUCCESS_HOLD_MS; the class is
+      // the stable slice root (its imports are supplied as params below).
+      from: 'export class PresentedOpenController',
       params: {
         createSnapshotStore: fakeSnapshotStore,
         presentedFileUrl: (sessionId, seq, index) => 'api/present.open?sessionId=' + sessionId + '&seq=' + seq + '&index=' + index,
@@ -1309,8 +1315,10 @@ function createDropHarness(code, { Element, Node, querySelector = () => null } =
     innerWidth: 1024,
     innerHeight: 768,
   }
-  const install = new Function('document', 'window', 'Element', 'Node', js + NL + 'return installDocumentDropEvents')(
-    documentStub, windowStub, Element, Node,
+  // 0.2.2: the module imports FILE_DRAG_TOKEN_TYPE from dsh-util-file-drag; the slice keeps
+  // the reference but not the import, so feed the literal the pinned util exports.
+  const install = new Function('document', 'window', 'Element', 'Node', 'FILE_DRAG_TOKEN_TYPE', js + NL + 'return installDocumentDropEvents')(
+    documentStub, windowStub, Element, Node, 'application/x-dsh-file',
   )
   return {
     install,
@@ -1342,8 +1350,10 @@ test('the attachment drop intake is contained to the view its listener belongs t
   const insideNode = new ElementStub()
   const outsideNode = new ElementStub()
   const owner = { contains: (node) => node === insideNode }
+  // 0.2.2 intakes only when the resolved file list is non-empty (an empty drop is a no-op),
+  // so the fixture has to carry one file for the intake path to be observable.
   const dropEvent = (target) => ({
-    dataTransfer: { types: ['Files'], files: [], items: [] },
+    dataTransfer: { types: ['Files'], files: [{ name: 'a.png' }], items: [] },
     target,
     preventDefault: () => {},
   })
@@ -1351,7 +1361,7 @@ test('the attachment drop intake is contained to the view its listener belongs t
   const run = (code) => {
     const calls = []
     const harness = installDropEvents(code, { Element: ElementStub, Node: NodeStub })
-    harness.install(true, (files, directories) => { calls.push({ files, directories }) }, { current: 0 }, () => {}, () => owner)
+    harness.install(true, (files, directories) => { calls.push({ files, directories }) }, { current: 0 }, () => {}, () => undefined, () => owner)
     harness.drop(dropEvent(insideNode))
     harness.drop(dropEvent(outsideNode))
     return calls
@@ -1365,7 +1375,7 @@ test('the attachment drop intake is contained to the view its listener belongs t
   const dropIn = (code, querySelector) => {
     const calls = []
     const harness = installDropEvents(code, { Element: ElementStub, Node: NodeStub, querySelector })
-    harness.install(true, () => { calls.push(1) }, { current: 0 }, () => {}, () => null)
+    harness.install(true, () => { calls.push(1) }, { current: 0 }, () => {}, () => undefined, () => null)
     harness.drop(dropEvent(insideNode))
     return calls.length
   }
@@ -1420,8 +1430,8 @@ test('the attachment component hands its own view resolver to the drop installer
 
   const { installed, refs, element } = renderAttachments(patched.code)
   assert.equal(installed.length, 1, 'the install effect runs once')
-  assert.equal(installed[0].length, 5, 'the installer receives its owner resolver as the fifth argument')
-  const ownerView = installed[0][4]
+  assert.equal(installed[0].length, 6, 'the installer receives the file-drag resolver and then its owner resolver')
+  const ownerView = installed[0][5]
   assert.equal(typeof ownerView, 'function')
 
   // The wrapper carries the ref (display:contents generates no box) and the resolver reads the view root from it.
@@ -1439,7 +1449,7 @@ test('the attachment component hands its own view resolver to the drop installer
 
   // Negative control: the unpatched component never passes a resolver at all.
   const raw = renderAttachments(source)
-  assert.equal(raw.installed[0].length, 4, 'the unpatched installer call has no owner argument')
+  assert.equal(raw.installed[0].length, 5, 'the unpatched installer call has no owner argument')
 })
 
 test('a hidden shell cannot veto or overlay the visible shell drag (executed patched handlers)', () => {
@@ -1455,8 +1465,8 @@ test('a hidden shell cannot veto or overlay the visible shell drag (executed pat
   const run = (code) => {
     const harness = createDropHarness(code, { Element: ElementStub, Node: NodeStub })
     const active = []
-    harness.install(true, () => {}, { current: 0 }, (value) => { active.push(['visible', value]) }, () => visibleOwner)
-    harness.install(false, () => {}, { current: 0 }, (value) => { active.push(['hidden', value]) }, () => hiddenOwner)
+    harness.install(true, () => {}, { current: 0 }, (value) => { active.push(['visible', value]) }, () => undefined, () => visibleOwner)
+    harness.install(false, () => {}, { current: 0 }, (value) => { active.push(['hidden', value]) }, () => undefined, () => hiddenOwner)
     const event = {
       dataTransfer: { types: ['Files'], files: [], items: [], dropEffect: 'unset' },
       target: insideNode,
@@ -1491,7 +1501,7 @@ test('the upstream viewport-left reset and dragend still clear the overlay (esca
   const owner = { contains: (node) => node === insideNode }
   const harness = createDropHarness(patched.code, { Element: ElementStub, Node: NodeStub })
   const active = []
-  harness.install(true, () => {}, { current: 0 }, (value) => { active.push(value) }, () => owner)
+  harness.install(true, () => {}, { current: 0 }, (value) => { active.push(value) }, () => undefined, () => owner)
 
   harness.dispatch('dragenter', { dataTransfer: { types: ['Files'] }, target: insideNode, preventDefault: () => {} })
   assert.deepEqual(active, [true])

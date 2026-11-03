@@ -262,22 +262,22 @@ test('the instance-served preview package URL surface stays exactly the recorded
 
 test('the markdown delegate provider outranks pathImages, so the chat fileImages patch is load-bearing', { skip: VENDOR_SKIP }, () => {
   const render = vendorSource(join(VENDOR_ROOT, 'dsh-client-ui-primitives/src/markdown/render.tsx'))
+  // 0.2.2 拆分出 resolved 中间量并加了 freshImageUrl 的缓存 bust；委托优先级不变：
+  // fileImages 解析成功即胜出，pathImages 只在委托缺席时兜底。
   assert.ok(
-    render.includes(
-      'const src = (file === undefined ? undefined : fileImages?.resolve(file.path)) ?? imageSource(destination, pathImages)',
-    ),
+    render.includes('const resolved = file === undefined ? undefined : fileImages?.resolve(file.path)'),
     'the delegate-provider precedence moved: re-check which chat resolver owns the image URL',
   )
 
   // Execute the precedence expression itself: the delegate provider must win when it
   // resolves, and the pathImages fallback must still serve when it does not.
-  const marker = 'const src = (file === undefined ? undefined : fileImages?.resolve(file.path)) ?? imageSource(destination, pathImages)'
+  const marker = 'const src = resolved === undefined ? imageSource(destination, pathImages, load) : freshImageUrl(resolved, load)'
   assert.notEqual(render.indexOf(marker), -1, 'the delegate-precedence expression moved; re-derive the executed check')
   const expression = marker.slice('const src = '.length)
-  const resolve = new Function('file', 'fileImages', 'imageSource', 'destination', 'pathImages', 'return (' + expression + ')') as unknown as (...args: unknown[]) => unknown
-  const delegate = { resolve: (path: string) => 'FILE:' + path }
-  assert.equal(resolve({ path: 'x.png' }, delegate, () => 'PATH', 'a.png', {}), 'FILE:x.png', 'the delegate provider must outrank pathImages')
-  assert.equal(resolve(undefined, delegate, () => 'PATH', 'a.png', {}), 'PATH', 'without a file result the pathImages fallback must still serve')
+  const resolve = new Function('resolved', 'imageSource', 'freshImageUrl', 'destination', 'pathImages', 'load', 'return (' + expression + ')') as unknown as (...args: unknown[]) => unknown
+  const fresh = (url: string): string => 'FRESH:' + url
+  assert.equal(resolve('FILE:x.png', () => 'PATH', fresh, 'a.png', {}, 0), 'FRESH:FILE:x.png', 'the delegate provider must outrank pathImages')
+  assert.equal(resolve(undefined, () => 'PATH', fresh, 'a.png', {}, 0), 'PATH', 'without a file result the pathImages fallback must still serve')
 })
 
 test('the deliverables file-action route is only ever fetched, never re-parsed', { skip: VENDOR_SKIP }, () => {

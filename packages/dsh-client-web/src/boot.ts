@@ -31,7 +31,7 @@ import { installWindowDragRecall } from './window-drag/recall.ts'
 import './base.css'
 
 /** Module transport hook replaced by jsdom tests. */
-export type BootSeams = Pick<ClientModuleCreateOptions, 'loadBundle'>
+export type BootSeams = Pick<ClientModuleCreateOptions, 'loadBundle' | 'resolveAsset'>
 
 /** Boot perf-mark guard, inlined because this package cannot depend on the renderer
  *  (the renderer owns the mark-name registry). Observational only: missing API or
@@ -358,13 +358,20 @@ export function ensureWebModuleSystem(seams?: BootSeams): ClientModuleSystem {
   }
 
   // The transport hook wins over constructor seams only when the transport defines it.
+  // NOTE: the chamber shell parks one shared module system on its first call (see
+  // `ensureWebModuleSystem`); a later AppWebEntry with `resolveAsset` in its options cannot
+  // retrofit it — only the `__DSH_TRANSPORT__` read above reaches that already-created system:
+  // a carrier that owns bundle AND package-asset bytes (the worker tunnel) supplies both,
+  // the served web app neither (same-origin script tags and identity asset refs are the
+  // module system's defaults).
   const transport = (globalThis as {
-    __DSH_TRANSPORT__?: { loadBundle?: ClientModuleCreateOptions['loadBundle'] }
+    __DSH_TRANSPORT__?: Pick<ClientModuleCreateOptions, 'loadBundle' | 'resolveAsset'>
   }).__DSH_TRANSPORT__
   const modules = target.create({
     boot: win.__DSH_BOOT__,
     staticModules: getStaticModules(),
     ...transport?.loadBundle === undefined ? {} : { loadBundle: transport.loadBundle },
+    ...transport?.resolveAsset === undefined ? {} : { resolveAsset: transport.resolveAsset },
     ...seams,
   })
   win.__DSH_MODULES__ = modules
@@ -397,6 +404,9 @@ function refusingBootstrapRequire(): BundleRequire {
     async: async (specifier: string): Promise<never> => {
       throw new Error(message(specifier, 'async '))
     },
+    // 0.2.2: ClientBundleRequire gained `asset(reference)` (package-asset URLs); the
+    // bootstrap require resolves nothing external, so it refuses like the others.
+    asset: refuse,
   })
 }
 

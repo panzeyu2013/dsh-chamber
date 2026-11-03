@@ -48,10 +48,16 @@
   ],
   "patches": [
     {
-      "spec": "@earendil-works/pi-ai@1.1.0",
-      "file": "patches/@earendil-works__pi-ai@1.1.0.patch",
+      "spec": "@botiverse/oar@0.67.0",
+      "file": "patches/@botiverse__oar@0.67.0.patch",
+      "runtimeClosure": false,
+      "note": "oar 委派（experimental subagent-oar）依赖；上游 build/dev 图依赖，不在运行期闭包（allowUnusedPatches 豁免；运行期锁只登记补丁、无该包快照）；补丁随上游 pin 重锚"
+    },
+    {
+      "spec": "@earendil-works/pi-ai@1.3.0",
+      "file": "patches/@earendil-works__pi-ai@1.3.0.patch",
       "runtimeClosure": true,
-      "note": "pi-ai 流式修复：delta 期间不解析参数（toolcall partial 保持 {}），运行期闭包内的依赖（runtime lock 记录 patch_hash）；补丁随上游 pin 重锚"
+      "note": "pi-ai 流式修复：delta 期间不解析参数（toolcall partial 保持 {}），并回放 Gemini thought_signature（写入 block.thoughtSignature + convertMessages 透传 extra_content.google.thought_signature）；运行期闭包内的依赖（runtime lock 记录 patch_hash）；补丁随上游 pin 重锚"
     },
     {
       "spec": "@electron/osx-sign@1.3.3",
@@ -88,6 +94,24 @@
       "file": "patches/exceljs@4.4.0.patch",
       "runtimeClosure": false,
       "note": "excel 载荷依赖；不在运行期闭包（allowUnusedPatches 豁免）"
+    },
+    {
+      "spec": "lexical@0.49.0",
+      "file": "patches/lexical@0.49.0.patch",
+      "runtimeClosure": false,
+      "note": "ui-conversation 编辑器（Lexical）依赖，上游 devDependencies；随上游 pin 补丁集进入本仓，不在运行期闭包（allowUnusedPatches 豁免）"
+    },
+    {
+      "spec": "mdast-util-gfm-autolink-literal@2.0.1",
+      "file": "patches/mdast-util-gfm-autolink-literal@2.0.1.patch",
+      "runtimeClosure": false,
+      "note": "Markdown GFM 自动链接解析（client 面）；随上游 pin 补丁集进入本仓，不在运行期闭包（allowUnusedPatches 豁免）"
+    },
+    {
+      "spec": "micromark-extension-gfm-autolink-literal@2.1.0",
+      "file": "patches/micromark-extension-gfm-autolink-literal@2.1.0.patch",
+      "runtimeClosure": false,
+      "note": "Markdown GFM 自动链接扩展（client 面）；随上游 pin 补丁集进入本仓，不在运行期闭包（allowUnusedPatches 豁免）"
     },
     {
       "spec": "node-pty@1.2.0-beta.15",
@@ -145,14 +169,12 @@
           "test/": "chamber 自有测试（api-path/carrier-assembly/liveness-triggers/client-apply + fixtures（含 schemastery/fixture/recovery-config 桩 loader））"
         },
         "dropped": [
-          "locale/en.json",
-          "locale/zh.json",
+          "locale/",
           "tests/",
           "tsdown.config.ts"
         ],
         "droppedNotes": {
-          "locale/en.json": "上游新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
-          "locale/zh.json": "上游新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
+          "locale/": "上游 fork 文案目录整体不镜像（chamber 侧文案与多来源界面自有实现，该 fork 无 locale 消费面）——按目录前缀登记，免逐语言追加；该目录只承载发布面文案数据，若上游把代码/类型放进此目录需重裁。",
           "tests/": "chamber 无 tsdown / 不镜像上游测试",
           "tsdown.config.ts": "chamber 无 tsdown / 不镜像上游测试"
         }
@@ -271,8 +293,7 @@
           "README.i18n.yaml",
           "README.md",
           "README.zh.md",
-          "locale/en.json",
-          "locale/zh.json",
+          "locale/",
           "src/access.ts",
           "src/index.ts",
           "src/stream-server.ts",
@@ -283,8 +304,7 @@
         ],
         "droppedNotes": {
           "README*": "上游 README 不携带（fork 描述在 package.json）",
-          "locale/en.json": "上游新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
-          "locale/zh.json": "上游新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
+          "locale/": "上游 fork 文案目录整体不镜像（chamber 侧文案与多来源界面自有实现，该 fork 无 locale 消费面）——按目录前缀登记，免逐语言追加；该目录只承载发布面文案数据，若上游把代码/类型放进此目录需重裁。",
           "src/access.ts": "上游新增的 host-half RBAC 策略文件（gateway 宿主侧 decide/allows）；本仓 fork 只取 client half（与 src/index.ts、src/stream-server.ts、src/types.ts 同口径不复制）。",
           "src/index.ts": "上游 host 插件入口（chamber 不镜像 host 半）",
           "src/stream-server.ts": "上游 host 半流服务器（dropped）",
@@ -362,16 +382,14 @@
           "README.i18n.yaml",
           "README.md",
           "README.zh.md",
-          "locale/en.json",
-          "locale/zh.json",
+          "locale/",
           "src/internals.ts",
           "tests/",
           "tsdown.config.ts"
         ],
         "droppedNotes": {
           "README*": "上游 README 不携带（fork 描述在 package.json/源码首页）",
-          "locale/en.json": "上游新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
-          "locale/zh.json": "上游新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
+          "locale/": "上游 fork 文案目录整体不镜像（chamber 侧文案与多来源界面自有实现，该 fork 无 locale 消费面）——按目录前缀登记，免逐语言追加；该目录只承载发布面文案数据，若上游把代码/类型放进此目录需重裁。",
           "src/internals.ts": "上游测试接缝（本包的接缝走 OpenInAppCore 构造注入，不需要它）",
           "tests/": "上游测试不镜像（本包 test/ 覆盖域契约）",
           "tsdown.config.ts": "上游打包配置（本包走 scripts/build.mjs）"
@@ -423,8 +441,7 @@
         "dropped": [
           "README.i18n.yaml",
           "README.zh.md",
-          "locale/en.json",
-          "locale/zh.json",
+          "locale/",
           "src/client/AppFrame.module.css",
           "src/client/AppFrame.tsx",
           "src/client/DocumentTitle.tsx",
@@ -438,8 +455,7 @@
         "droppedNotes": {
           "README.i18n.yaml": "上游 README 对的哈希记录不携带（fork 说明在 README.md/package.json）",
           "README.zh.md": "中文 README 不镜像（chamber 说明只有一份）",
-          "locale/en.json": "上游新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
-          "locale/zh.json": "上游新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
+          "locale/": "上游 fork 文案目录整体不镜像（chamber 侧文案与多来源界面自有实现，该 fork 无 locale 消费面）——按目录前缀登记，免逐语言追加；该目录只承载发布面文案数据，若上游把代码/类型放进此目录需重裁。",
           "src/client/AppFrame.module.css": "frame 样式不镜像：深引 vendor 源",
           "src/client/AppFrame.tsx": "frame 不镜像：深引 vendor 源（三列网格/拖拽/列解算仍是上游实现）",
           "src/client/DocumentTitle.tsx": "上游同包文件，本 fork 不镜像（vendor 树内保留）",
@@ -488,7 +504,7 @@
           "README.md": "[own-divergent] chamber 多来源侧栏说明，非上游镜像",
           "README.zh.md": "[own-divergent] 同 README.md（中文镜像）",
           "package.json": "[patch-mod] chamber 包名/版本/测试脚本（版本行走 chamber 发布）",
-          "src/client/SidebarRoot.module.css": "[patch-mod] 重实现样式（多来源列表/行悬停卡/归档管理器/来源信号灯）；rc.3 上游在本文件加 More 菜单样式（`.moreAnchor` 锚点包装、`.panelRow[aria-expanded='true']` 悬停底色、`.moreMenu` 288px + 视口上限）并把 `.panelList` 行距 4px→2px；本仓决定：不采纳（侧栏 More/条目 analytics 面），采纳时须整包重放该文件（design 06 §4.7；docs/progress/STATUS.md §4.2）",
+          "src/client/SidebarRoot.module.css": "[patch-mod] 重实现样式（多来源列表/行悬停卡/归档管理器/来源信号灯）；rc.3 上游在本文件加 More 菜单样式（`.moreAnchor` 锚点包装、`.panelRow[aria-expanded='true']` 悬停底色、`.moreMenu` 288px + 视口上限）并把 `.panelList` 行距 4px→2px；本仓决定：不采纳（侧栏 More/条目 analytics 面），采纳时须整包重放该文件（design 06 §4.7；docs/progress/STATUS.md §4.2）；本 pin 起上游在本文件发布 `--dsh-sidebar-*` 变量契约与几何（inline-padding 8px、row-padding 12px、label-gap 6px、paint-inset 3px），本仓壳自持 12px inline padding 但发布其余三个词（消费方是随包出货的 ui-workspace/ui-settings-* CSS；这些组件在 `.root` 子树挂载就需要定义，缺失会让整条 calc/`gap` 声明失效——稳态它们不在场，当前只修官方 settings 壳的回落路径）",
           "src/client/SidebarRoot.tsx": "[patch-mod] 重实现：多来源会话列表（按工作区分组、搜索/排序/归档管理器/悬停卡片/来源信号灯）替换上游单来源 workspaces 浏览器；面板轴：宽态入口由 owning source 的 server 头动作簇渲染（ServerSectionHeader 的 PanelHeaderEntry，视图选项左侧），本文件的 sidebar.panellist 轴降为 rail-only（design 05 §2 / 06 §4.7）；rc.3 上游在本文件加条目 analytics（`officialEntry` 把 plugins/schedules 映射为 plugin/cron，经注入的 `trackEntryClick` 上报 `sidebar_menu_click`，panel 行与 New Session 以 position=sidebar/titlebar 区分）与 More 启动器 `PanelMoreMenu`（`Menu` 里渲染 `sidebar.panellist.actions`、按 `entryPins` 过滤未固定行且 FIXED_PANEL_ID 恒显示）；本仓决定：不采纳（侧栏 More/条目 analytics 面），采纳时须整包重放该文件（design 05 §2 / 06 §4.7；docs/progress/STATUS.md §4.2）",
           "src/client/contract/slots.ts": "[patch-mod] chamber 座位契约（owner props 同名但按多来源扩展）；承接 ui-workspace 的 `sidebar.session.row.{leading,hover}` SlotMap 合并（座席所有权转移，vendor 补丁 13）；sidebar.panellist 的来源级措辞与面板选择器别名 PanelSelectorHook（= SnapshotSelectorHook<PanelInfo>）；rc.3 上游在本文件新增 `sidebar.panellist.actions` 洞与 `SidebarPanelActionEntry`/`SidebarPanelActionsOwnerProps`（entries/onOpen/onPinnedChange/onDismiss）、注入面 `setPinned` 与 `trackEntryClick`（`ProductEventMap['sidebar_menu_click']`）、hooks 的 `entryPins`/`entryActions` 快照，并把该洞并入根组件 props 的 slot 并集；本仓决定：不采纳（侧栏 More/条目 analytics 面，该洞与 panel-pins 一并 dropped），采纳时须整包重放该文件（design 05 §2 / 06 §4.7；docs/progress/STATUS.md §4.2）",
           "src/client/index.ts": "[patch-mod] apply：注册 chamber 侧栏 + 面板轴投影（sidebar.panellist 镜像 → 宽态供 owning server 头、rail 供字形轴）+ workspace navigation 服务 + shell.leading 席位由本包 SidebarLeadingControls（上游同形 clone）占座；座席所有权转移后续：本包自行声明并渲染 `sidebar.session.row.{leading,hover}`（原声明由 vendor 补丁 13 删除）；rc.3 上游在本文件接入 `createPanelPins` 与 `entryActions`（由 `entriesOfSlot('sidebar.panellist.actions')` 派生）、子洞表登记该洞、注入面加 `setPinned`/`trackEntryClick`（原 `selectPanel` 内的 plugins/schedules 上报移入 PanelRow），并导出两个新 owner 类型；本仓决定：不采纳（侧栏 More/条目 analytics 面），采纳时须整包重放该文件（design 06 §4.7；docs/progress/STATUS.md §4.2）",
@@ -510,8 +526,7 @@
           "test/": "chamber 自有测试（按域分组：session-rows/session-state/source-runtime/plugin-kernel…）"
         },
         "dropped": [
-          "locale/en.json",
-          "locale/zh.json",
+          "locale/",
           "src/client/HeaderLeadingControls.module.css",
           "src/client/HeaderLeadingControls.tsx",
           "src/client/panel-pins.ts",
@@ -519,8 +534,7 @@
           "tsdown.config.ts"
         ],
         "droppedNotes": {
-          "locale/en.json": "上游新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
-          "locale/zh.json": "上游新增的 fork 文案目录；本仓 fork 不复制发布面 locale（chamber 侧文案/多来源界面自有实现，该 fork 无 locale 消费面）——登记 dropped 以免 C1/C3 判为漏裁决。",
+          "locale/": "上游 fork 文案目录整体不镜像（chamber 侧文案与多来源界面自有实现，该 fork 无 locale 消费面）——按目录前缀登记，免逐语言追加；该目录只承载发布面文案数据，若上游把代码/类型放进此目录需重裁。",
           "src/client/HeaderLeadingControls.module.css": "该组件的内部样式；上游文件不镜像、也不被消费——同一 shell.leading 席位由本包 SidebarLeadingControls.module.css（上游同形 clone）实现",
           "src/client/HeaderLeadingControls.tsx": "上游组件不镜像、不被源码路径消费；同一 shell.leading 席位由本包 SidebarLeadingControls.tsx 注册占座（src/client/index.ts；vendor-modules.d.ts 只声明本包用到的类型面）",
           "src/client/panel-pins.ts": "上游新增的面板固定/排序铺线（内存 store，无持久化）：chamber 未声明 sidebar.panellist.actions 洞、也不渲染上游的 More 菜单，故该文件无消费面——登记 dropped 以免 C1/C3 判为漏裁决（采纳 More 时整包再消费）",

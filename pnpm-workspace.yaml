@@ -61,8 +61,12 @@ overrides:
   # 声明的版本，否则 pnpm 在 allowUnusedPatches 下只警告、补丁静默不生效。
   # 运行期腿由 packages/desktop/scripts/upstream-patches.mjs 的 renderPatchOverrides
   # 从同一 vendor 块派生；本块在 scripts/upstream/registry.test.mjs 对拍。
-  '@earendil-works/pi-ai': 1.1.0
+  '@botiverse/oar': 0.67.0
+  '@earendil-works/pi-ai': 1.3.0
   app-builder-lib: 26.17.0
+  lexical: 0.49.0
+  mdast-util-gfm-autolink-literal: 2.0.1
+  micromark-extension-gfm-autolink-literal: 2.1.0
   '@electron/osx-sign': 1.3.3
   '@fortune-sheet/core': 1.0.4
   '@fortune-sheet/react': 1.0.4
@@ -71,7 +75,11 @@ overrides:
   node-pty: 1.2.0-beta.15
 
 minimumReleaseAgeExclude:
-  # 与 vendor pin 的 minimumReleaseAgeExclude 集合对齐（Office 引擎与其 API 同批发布）。
+  # 只登记本仓安装腿会解析到的条目（vendor pin 同名块是全集，本仓是其子集：上游独有的
+  # node-addon-* 等不在此列）。新增一条的判据 = 该包确实进本仓安装图且上游同块已豁免。
+  # 带本地补丁的发布（oar）：补丁随该 release 走，等 release age 等于让补丁失效。
+  - '@botiverse/oar@0.67.0'
+  # Office 引擎与其 API 同批发布。
   - '@deepseek-ai/libreoffice-kit@0.1.5'
   - '@deepseek-ai/libreoffice-kit-darwin-arm64@0.1.5'
   - '@deepseek-ai/libreoffice-kit-darwin-x64@0.1.5'
@@ -80,20 +88,24 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/libreoffice-kit-wasm@0.1.5'
   # Fresh pi-ai releases carry the model catalog updates that are the whole
   # point of bumping it; waiting out the release age would defeat that.
-  - '@earendil-works/pi-ai@1.1.0'
-  - '@earendil-works/pi-telemetry@1.1.0'
+  - '@earendil-works/pi-ai@1.3.0'
+  - '@earendil-works/pi-telemetry@1.3.0'
 
 # 上游 pnpm patch channel（§17-C，与 vendor pin 逐字一致）：集合与字节来自
 # vendor/harness-checkout/{pnpm-workspace.yaml,patches/}，仓内 patches/ 为其副本；
 # registry 的 patches 字段是单一登记面，scripts/upstream/registry.test.mjs 对拍。
 # allowUnusedPatches：本仓 dev 安装图只用其中一部分（其余属上游 dev/build 图）。
 patchedDependencies:
-  '@earendil-works/pi-ai@1.1.0': patches/@earendil-works__pi-ai@1.1.0.patch
+  '@botiverse/oar@0.67.0': patches/@botiverse__oar@0.67.0.patch
+  '@earendil-works/pi-ai@1.3.0': patches/@earendil-works__pi-ai@1.3.0.patch
   '@electron/osx-sign@1.3.3': patches/@electron__osx-sign@1.3.3.patch
   '@fortune-sheet/core@1.0.4': patches/@fortune-sheet__core@1.0.4.patch
   '@fortune-sheet/react@1.0.4': patches/@fortune-sheet__react@1.0.4.patch
   '@yao-pkg/pkg@6.21.0': patches/@yao-pkg__pkg@6.21.0.patch
   app-builder-lib@26.17.0: patches/app-builder-lib@26.17.0.patch
   exceljs@4.4.0: patches/exceljs@4.4.0.patch
+  lexical@0.49.0: patches/lexical@0.49.0.patch
+  mdast-util-gfm-autolink-literal@2.0.1: patches/mdast-util-gfm-autolink-literal@2.0.1.patch
+  micromark-extension-gfm-autolink-literal@2.1.0: patches/micromark-extension-gfm-autolink-literal@2.1.0.patch
   node-pty@1.2.0-beta.15: patches/node-pty@1.2.0-beta.15.patch
 allowUnusedPatches: true

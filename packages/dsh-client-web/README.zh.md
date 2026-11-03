@@ -8,7 +8,7 @@ Web 外壳内核：`new AppWebEntry(container, options?).run()` 通过两阶段�
 
 `PLATFORM_MODULES`（src/platform.ts）是共享模块接口的唯一真源：种子表 key、tsdown 客户端 external 和 vite alias 集都是它的投影。
 
-可选的覆盖参数 `options` 会为外部 `<script>` 执行无法到达页面上下文的环境转发模块系统的 `loadBundle` 传输覆盖（`BootSeams`），另含 chamber 补丁的每实例 `extraRows`（宿主图客户端插件行合并进 boot rows；bundle 由 chamber 外壳预加载，其激活失败降级而非让 boot 失败——版本容忍）。
+可选的覆盖参数 `options` 会为外部 `<script>` 执行或包资产 URL 无法到达页面上下文的环境转发模块系统的 `loadBundle`/`resolveAsset` 传输覆盖（`BootSeams`，预注入的 `__DSH_TRANSPORT__` 读同样两个成员），另含 chamber 补丁的每实例 `extraRows`（宿主图客户端插件行合并进 boot rows；bundle 由 chamber 外壳预加载，其激活失败降级而非让 boot 失败——版本容忍）。
 
 浏览器标题投影已随应用移至 ui-renderer 行（rc.8）；chamber 桌面壳本就冻结原生标题栏。
 

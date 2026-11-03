@@ -966,6 +966,34 @@ test('the host-safe stub really intercepts a bare systemctl from a harness body'
     'the injected stub must intercept the installer\'s bare systemctl call')
 })
 
+test('require_node_floor gates on the pinned dsh engine floor (major.minor)', () => {
+  // The floor follows the pinned dsh runtime engines (design 17 §15), so the check must bite
+  // BELOW 24.9 even when the major is current — a major-only test would pass Node 24.0.
+  const dir = mkdtempSync(join(tmpdir(), 'gateway-node-floor-'))
+  const bin = join(dir, 'bin')
+  mkdirSync(bin, { recursive: true })
+  const fakeNode = (version: string): void => {
+    writeFileSync(join(bin, 'node'), `#!/usr/bin/env bash\nprintf '%s\\n' '${version}'\n`, { mode: 0o755 })
+  }
+  const path = `${bin}:${process.env.PATH ?? ''}`
+  const runFloor = () => runLibraryResult('require_node_floor', { PATH: path })
+  try {
+    fakeNode('v24.8.9')
+    const below = runFloor()
+    assert.notEqual(below.status, 0, 'Node 24.8 must be refused: the floor is 24.9, not 24')
+    assert.match(below.stderr, /需要 ≥24\.9/u)
+    fakeNode('v22.22.3')
+    assert.notEqual(runFloor().status, 0, 'Node 22 must be refused')
+    fakeNode('v24.9.0')
+    const floor = runFloor()
+    assert.equal(floor.status, 0, floor.stderr)
+    fakeNode('v25.1.0')
+    assert.equal(runFloor().status, 0, 'a newer major is accepted')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('every harness is composed through harnessSource (host-global stubs cannot be bypassed)', () => {
   // The cross-mode cleanup calls BARE `systemctl` with the fixed unit name
   // `dsh-chamber-gateway.service` (scripts/install-gateway.sh:2619-2623), so a

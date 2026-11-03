@@ -1,7 +1,8 @@
 /**
- * Keyed-row motion, copied verbatim from upstream ui-workspace
- * `rows/AnimatedRows.tsx` (`ROW_FADE_MS`, `ROW_GLIDE_MS`, `sameRows`,
- * `intersects`, `AnimatedRows`): rows whose position changed glide there
+ * Keyed-row motion, copied from the pinned vendor body
+ * `@deepseek-ai/dsh-client-ui-primitives/src/AnimatedRows.tsx` (`ROW_FADE_MS`,
+ * `ROW_GLIDE_MS`, `sameRows`, `intersects`, `AnimatedRows`); the only delta is
+ * that the props interface stays package-local. Rows whose position changed glide there
  * (FLIP), entering rows fade in, and leaving rows are cloned inert into an
  * overlay and fade out. It starts moving only after the first pointer or
  * keyboard input inside the list, stands down while `ready` is false (data not
@@ -10,16 +11,18 @@
  * resting state is the element's own style, so no frame can freeze an
  * invisible-but-clickable row (the entrance-animation retirement, design 06 §7).
  */
-import { Component, createRef, type ReactNode } from 'react'
+import { Component, createRef, type AriaRole, type ReactNode } from 'react'
 import css from './animated-rows.module.css'
 
 const ROW_FADE_MS = 100
 const ROW_GLIDE_MS = 200
 
+/** Keyed row content, list semantics, and animation readiness. */
 interface AnimatedRowsProps {
   children: ReactNode
   className: string
-  label: string
+  role?: AriaRole
+  label?: string
   /** Unique DOM-order keys matching the rendered data-row-key attributes. */
   rowKeys: readonly string[]
   ready: boolean
@@ -49,7 +52,7 @@ function intersects(row: DOMRect, viewport: DOMRect): boolean {
 }
 
 /**
- * Animates keyed sidebar rows only when their rendered membership or order changes.
+ * Animates keyed rows only when their rendered membership or order changes.
  * Motion starts after the first pointer or keyboard input inside the mounted list.
  * The parent supplies a positioned container for the inert exit overlay.
  */
@@ -76,9 +79,7 @@ export class AnimatedRows extends Component<AnimatedRowsProps> {
       const clone = row.element.cloneNode(true) as HTMLElement
       clone.removeAttribute('data-row-key')
       clone.inert = true
-      clone.style.setProperty(
-        '--dsh-workspace-indent', getComputedStyle(row.element).getPropertyValue('--dsh-workspace-indent'),
-      )
+      clone.style.paddingInlineStart = getComputedStyle(row.element).paddingInlineStart
       removed.set(key, { ...row, element: clone })
     }
     return { positions, removed }
@@ -181,7 +182,7 @@ export class AnimatedRows extends Component<AnimatedRowsProps> {
       <div
         ref={this.list}
         className={this.props.className}
-        role="tree"
+        role={this.props.role}
         aria-label={this.props.label}
         onPointerDownCapture={() => { this.armed = true }}
         onKeyDownCapture={() => { this.armed = true }}

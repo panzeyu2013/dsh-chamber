@@ -23,9 +23,9 @@
  * no timers; try/catch fail closed; one Symbol.for double-install guard.
  *
  * TOKENS are pinned-build CSS-module names: re-anchor when the vendored dsh pin
- * moves. The rc.2 served bundle
+ * moves. The pinned served bundle
  * (`@deepseek-ai/dsh-web-frontend/dist/assets/index-*.{js,css}`) emits
- * `_root_38jqx_3` / `_card_38jqx_9`;
+ * `_root_bgejw_3` / `_card_bgejw_9`;
  * `scripts/upstream/verify-mobile-anchors.mjs` hard-fails a zero-hit hash token,
  * so a stale token is a red gate, never a silent no-op (the matcher itself stays
  * fail-closed and can only ever no-op, never misfire).
@@ -37,10 +37,10 @@
 export const COARSE_NO_HOVER_QUERY = '(pointer: coarse) and (hover: none)'
 
 /** The official HoverCard module's root token (`_root_<hash>_<line>`). */
-export const OFFICIAL_CARD_ROOT_CLASS_TOKEN = '_root_38jqx_'
+export const OFFICIAL_CARD_ROOT_CLASS_TOKEN = '_root_bgejw_'
 
 /** The official HoverCard module's card token (`_card_<hash>_<line>`). */
-export const OFFICIAL_CARD_CLASS_TOKEN = '_card_38jqx_'
+export const OFFICIAL_CARD_CLASS_TOKEN = '_card_bgejw_'
 
 /** Candidate prefilter selectors (attribute substring), validated by token. */
 export const CARD_QUERY = `[class*="${OFFICIAL_CARD_CLASS_TOKEN}"]`

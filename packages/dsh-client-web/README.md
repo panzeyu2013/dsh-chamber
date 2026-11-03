@@ -8,7 +8,7 @@ Shell self-sufficiency (web2 hard rule): the kernel value-imports no plugin pack
 
 `PLATFORM_MODULES` (src/platform.ts) is the single source of truth for shared modules: seed-table keys, tsdown client externals, and the Vite alias set are its projections.
 
-The optional override parameter `options` forwards the module system's `loadBundle` transport override (`BootSeams`) for environments where external `<script>` execution cannot reach the page context, plus the chamber patch's per-instance `extraRows` (host-graph client-plugin rows merged into the boot rows; their bundles are pre-loaded by the chamber shell, and their activation failures degrade instead of failing the boot — version tolerance).
+The optional override parameter `options` forwards the module system's transport overrides (`loadBundle` + `resolveAsset`, `BootSeams`, and the same two members read off a pre-injected `__DSH_TRANSPORT__`) for environments where external `<script>` execution or package-asset URLs cannot reach the page context, plus the chamber patch's per-instance `extraRows` (host-graph client-plugin rows merged into the boot rows; their bundles are pre-loaded by the chamber shell, and their activation failures degrade instead of failing the boot — version tolerance).
 
 Browser-title projection moved to the ui-renderer row with the application (rc.8); the chamber desktop shell freezes the native titlebar anyway.
 

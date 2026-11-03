@@ -188,13 +188,24 @@ test('tokensMissingFromCopy: the kind must match, and a commented-out declaratio
   assert.deepEqual(tokensMissingFromCopy(upstream, replayed), [])
 })
 
-test('isDroppedNoise: tests / packaging config / README are noise, capability faces are not', () => {
+test('isDroppedNoise: tests / packaging config / README / locale are noise, capability faces are not', () => {
   assert.equal(isDroppedNoise('tests/a.test.ts'), true)
   assert.equal(isDroppedNoise('src/tests/a.test.ts'), true)
   assert.equal(isDroppedNoise('tsdown.config.ts'), true)
   assert.equal(isDroppedNoise('README.md'), true)
   assert.equal(isDroppedNoise('README.i18n.yaml'), true)
   assert.equal(isDroppedNoise('src/README.md'), true)
+  // 文案数据按目录前缀登记并整体不镜像：上游新增/改语言不得变成每次升级的"需处理"行。
+  assert.equal(isDroppedNoise('locale/de.json'), true)
+  assert.equal(isDroppedNoise('locale/zh.json'), true)
+  // 只认包根 locale/ 下的 *.json：同名前缀、子目录与非数据文件必须留在"需处理"里，
+  // 否则「上游把代码/类型搬进 locale/」会被噪声化沉默。
+  assert.equal(isDroppedNoise('locale.ts'), false)
+  assert.equal(isDroppedNoise('locales/en.json'), false)
+  assert.equal(isDroppedNoise('locale/'), false)
+  assert.equal(isDroppedNoise('locale/sub/de.json'), false)
+  assert.equal(isDroppedNoise('locale/index.ts'), false)
+  assert.equal(isDroppedNoise('src/locale/zh.json'), false)
   assert.equal(isDroppedNoise('src/mount.ts'), false)
   assert.equal(isDroppedNoise('src/index.ts'), false)
 })

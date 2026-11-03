@@ -142,7 +142,7 @@ test('missingServiceFact carries the verdict as structured facts, not as a sente
 //    `sidebarRight` among them — the miss the probe exists for (ui-chat's face,
 //    whose only provider is the non-covered `ui-sidebar-right` row);
 //  - the deferred-only members are exactly the audited set in
-//    AUDITED_DEFERRED_ONLY_SERVICES below (19 at this pin), so the roster
+//    AUDITED_DEFERRED_ONLY_SERVICES below (the table is the only list; no count here), so the roster
 //    extension is load-bearing and never quietly grows a new gap class.
 //
 // Maintenance at an upstream pin: re-audit the two tables below against the new
@@ -197,6 +197,8 @@ const AUDITED_FIRST_SCREEN_FACES: ReadonlyArray<readonly [id: string, members: r
   ['@deepseek-ai/dsh-api-gateway', ['typert', 'connection']],
   // alpha.3: the access-control client every ui-session/ui-workspace injects remoteAccess from.
   ['@deepseek-ai/dsh-api-remote-access', ['remote', 'slots']],
+  // 0.2.2: ui-chat/ui-attachment inject fileDrag; provided by this first-screen covered row.
+  ['@deepseek-ai/dsh-client-ui-file-drag', ['slots', 'locale']],
   ['@deepseek-ai/dsh-api-remotes', ['remote']],
   ['@deepseek-ai/dsh-api-session-controller',
     ['connection', 'fileUpload', 'typert', 'remote', 'remote.commands', 'remote.session', 'remote.subagents']],
@@ -220,7 +222,7 @@ const AUDITED_FIRST_SCREEN_FACES: ReadonlyArray<readonly [id: string, members: r
   ['@deepseek-ai/dsh-client-ui-model-selection', ['commandUi', 'locale', 'sessions', 'slots', 'remote', 'remote.session']],
   ['@deepseek-ai/dsh-client-ui-session', ['sessions', 'slots', 'remote', 'remoteAccess']],
   ['@deepseek-ai/dsh-client-ui-chat',
-    ['slots', 'sessions', 'uiWorkspace', 'uiSession', 'uiConversation', 'locale', 'configForms', 'remote', 'remote.session', 'sidebarRight']],
+    ['slots', 'sessions', 'uiWorkspace', 'uiSession', 'uiConversation', 'locale', 'configForms', 'connection', 'remote', 'remote.session', 'sidebarRight', 'fileDrag']],
   ['@deepseek-ai/dsh-client-ui-approval', ['sessions', 'remote', 'uiSession', 'slots', 'locale']],
   ['@deepseek-ai/dsh-client-ui-directory-picker-browse', ['slots', 'uiWorkspace', 'locale']],
 ]
@@ -259,6 +261,8 @@ const AUDITED_DEFERRED_ONLY_SERVICES: readonly string[] = [
   // (api-remotes mounts it; api-gateway creates the namespace), which is exactly
   // why the member is deferred-only and joins this list.
   'remote.userQuestions',
+  // 0.2.2: the deferred rows gained the tool-results namespace (same first-screen provider).
+  'remote.toolResults',
   'resources', 'sidebarRightTabs', 'settingsSchema',
 ]
 

@@ -579,8 +579,8 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                     <AnimatedRows
                       className={cc.workspaceList}
                       // The browse tree keeps the tree/treeitem semantics the search
-                      // branch replaces with its own named tree.
-                      label={t('section.sessions')}
+                      // branch replaces with its own named tree (upstream: caller props).
+                      role="tree" label={t('section.sessions')}
                       rowKeys={rowKeys}
                       // Motion only while the list is the interaction target: a drag
                       // in flight moves rows by hand, not by data (upstream gates on

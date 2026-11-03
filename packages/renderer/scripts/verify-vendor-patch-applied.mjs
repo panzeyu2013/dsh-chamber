@@ -116,9 +116,9 @@ export const VENDOR_PATCH_MARKERS = [
   },
   {
     vendorFile: 'dsh-client-ui-workspace/src/client/index.ts',
-    what: 'the two session-row seat declarations are owned by the chamber sidebar, not the workspace-browser registration (ownership transfer)',
+    what: 'the three session-row seat declarations are owned by the chamber sidebar, not the workspace-browser registration (ownership transfer)',
     // Patched: the children map closes right after `…session.row.action`, so the
-    // two seat keys are gone; an unpatched bundle carries
+    // three seat keys are gone (trailing is 0.2.2's third seat); an unpatched bundle carries
     // `"sidebar.session.row.leading"` at exactly this seam. Minified variable
     // names after `store:` are irrelevant.
     present: /sidebar\.workspaces\.session\.row\.action":\{kind:"list",scope:"root"\}\},store:/,
@@ -130,7 +130,9 @@ export const VENDOR_PATCH_MARKERS = [
     // the component body still starts from `node.data` - the forwarding edit.
     // `const` in the production chunk, `let` under the esbuild fixture's minifySyntax:
     // the declaration keyword is not a patched fact, so accept all three.
-    present: /chamberFileApiBase\s*:\s*[A-Za-z_$][\w$]*\s*\}\s*\)\s*\{\s*(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*[A-Za-z_$][\w$]*\.data\s*,/,
+    // 0.2.2 起函数体首行前可能被压出一个 `var <id>;` 提升（`{var N;const z=e.data,…`），
+    // 故允许一个可选的 var 声明前缀；声明关键字与 `=<x>.data,` 仍是补丁事实。
+    present: /chamberFileApiBase\s*:\s*[A-Za-z_$][\w$]*\s*\}\s*\)\s*\{\s*(?:var\s+[A-Za-z_$][\w$]*\s*;\s*)?(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*[A-Za-z_$][\w$]*\.data\s*,/,
   },
   {
     vendorFile: 'dsh-client-ui-conversation/src/client/conversation/assembly.ts',
@@ -197,7 +199,9 @@ export const VENDOR_PATCH_MARKERS = [
     vendorFile: 'dsh-client-ui-attachment/src/client/ComposerAttachments.tsx',
     what: 'the attachment view resolves its own [data-instance] subtree for the containment check',
     // A string literal survives minification; only the patched component carries it.
-    present: /closest\((["'])\[data-instance\]\1\)[\s\S]{0,700}?=>\s*\{?\s*(?:return\s+)?[A-Za-z_$][\w$]*\(\s*[A-Za-z_$][\w$]*\s*,\s*[A-Za-z_$][\w$]*\s*,\s*[A-Za-z_$][\w$]*\s*,\s*[A-Za-z_$][\w$]*\s*,\s*[A-Za-z_$][\w$]*\s*\)/u,
+    // Six arguments after the 0.2.2 upstream signature: canAcceptDrop, onAddFiles, dragDepth,
+    // setDragActive, readFileDrag, then the chamber owner resolver.
+    present: /closest\((["'])\[data-instance\]\1\)[\s\S]{0,700}?=>\s*\{?\s*(?:return\s+)?[A-Za-z_$][\w$]*\(\s*[A-Za-z_$][\w$]*\s*,\s*[A-Za-z_$][\w$]*\s*,\s*[A-Za-z_$][\w$]*\s*,\s*[A-Za-z_$][\w$]*\s*,\s*[A-Za-z_$][\w$]*\s*,\s*[A-Za-z_$][\w$]*\s*\)/u,
   },
 ]
 

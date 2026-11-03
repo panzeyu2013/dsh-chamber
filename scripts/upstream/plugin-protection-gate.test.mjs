@@ -138,10 +138,18 @@ export const PROFILE_TEMPLATES: Record<string, ProfileTemplate> = {
 }
 nodeLinker: hoisted
 autoInstallPeers: false
-export const DEFAULT_PROFILE_BUNDLES: readonly string[] = ['@deepseek-ai/dsh-base']
       dsh: { profile: { bundles: [...bundles] } },
   const bundle = bundleManifest.dsh?.bundle
   throw new Error('dsh.bundle.patch must be a file path or a list of file paths')
+`
+// 0.2.2 起官方组合包模板与 DEFAULT_PROFILE_BUNDLES 在 util/official-bundles。
+const BUNDLES_OK = `
+export const PROFILE_TEMPLATES: Record<string, ProfileTemplate> = {
+  web: {
+    bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'],
+  },
+}
+export const DEFAULT_PROFILE_BUNDLES: readonly string[] = ['@deepseek-ai/dsh-base']
 `
 const MANAGER_OK = `
  * then reconcile the \`dsh.profile.bundles\` layer list
@@ -154,27 +162,27 @@ const PLUGIN_OK = `
 `
 
 test('C12 正例：空白扰动（换行/缩进不同）不影响命中', () => {
-  const { violations } = profileContractFindings({ profileSource: PROFILE_OK, managerSource: MANAGER_OK, pluginSource: PLUGIN_OK })
+  const { violations } = profileContractFindings({ profileSource: PROFILE_OK, bundlesSource: BUNDLES_OK, managerSource: MANAGER_OK, pluginSource: PLUGIN_OK })
   assert.deepEqual(violations, [])
 })
 
 test('C12 负例：模板默认组合改了 / 链接器改了 / 层声明机制改了 都必须红', () => {
-  const driftedTemplate = PROFILE_OK.replace(
+  const driftedTemplate = BUNDLES_OK.replace(
     "bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']",
     "bundles: ['@deepseek-ai/dsh-base']",
   )
-  assert.ok(profileContractFindings({ profileSource: driftedTemplate, managerSource: MANAGER_OK, pluginSource: PLUGIN_OK })
+  assert.ok(profileContractFindings({ profileSource: PROFILE_OK, bundlesSource: driftedTemplate, managerSource: MANAGER_OK, pluginSource: PLUGIN_OK })
     .violations.some((v) => v.includes('模板默认组合')))
   const driftedLinker = PROFILE_OK.replace('autoInstallPeers: false', 'autoInstallPeers: true')
-  assert.ok(profileContractFindings({ profileSource: driftedLinker, managerSource: MANAGER_OK, pluginSource: PLUGIN_OK })
+  assert.ok(profileContractFindings({ profileSource: driftedLinker, bundlesSource: BUNDLES_OK, managerSource: MANAGER_OK, pluginSource: PLUGIN_OK })
     .violations.some((v) => v.includes('不自动装 peer')))
   const driftedDecl = MANAGER_OK.replace('dsh?.bundle?.patch', 'dsh?.layer?.patch')
-  assert.ok(profileContractFindings({ profileSource: PROFILE_OK, managerSource: driftedDecl, pluginSource: PLUGIN_OK })
+  assert.ok(profileContractFindings({ profileSource: PROFILE_OK, bundlesSource: BUNDLES_OK, managerSource: driftedDecl, pluginSource: PLUGIN_OK })
     .violations.some((v) => v.includes('dsh.bundle.patch')))
 })
 
 test('C12 未物化子模块：只 note，不违规（缺失子模块由 C1/C3/C5 响亮失败）', () => {
-  const { violations, notes } = profileContractFindings({ profileSource: null, managerSource: null, pluginSource: null })
+  const { violations, notes } = profileContractFindings({ profileSource: null, bundlesSource: null, managerSource: null, pluginSource: null })
   assert.deepEqual(violations, [])
   assert.ok(notes.some((note) => note.includes('未物化')))
 })
@@ -182,9 +190,11 @@ test('C12 未物化子模块：只 note，不违规（缺失子模块由 C1/C3/C
 test('C12 部分缺失：树已部分物化，缺的那个文件必须算违规（2026-09-13 round-2 review F1）', () => {
   // The dangerous shape: one anchor file renamed/moved while the others still read fine —
   // its anchors would vanish silently (no violation, not even a note) while the rest looks locked.
-  const pluginGone = profileContractFindings({ profileSource: PROFILE_OK, managerSource: MANAGER_OK, pluginSource: null })
+  const pluginGone = profileContractFindings({ profileSource: PROFILE_OK, bundlesSource: BUNDLES_OK, managerSource: MANAGER_OK, pluginSource: null })
   assert.ok(pluginGone.violations.some((v) => v.includes('plugin')), pluginGone.violations.join('; '))
-  const managerGone = profileContractFindings({ profileSource: PROFILE_OK, managerSource: null, pluginSource: PLUGIN_OK })
+  const managerGone = profileContractFindings({ profileSource: PROFILE_OK, bundlesSource: BUNDLES_OK, managerSource: null, pluginSource: PLUGIN_OK })
+  const bundlesGone = profileContractFindings({ profileSource: PROFILE_OK, bundlesSource: null, managerSource: MANAGER_OK, pluginSource: PLUGIN_OK })
+  assert.ok(bundlesGone.violations.some((v) => v.includes('bundles')), bundlesGone.violations.join('; '))
   assert.ok(managerGone.violations.some((v) => v.includes('manager')), managerGone.violations.join('; '))
   assert.ok(!pluginGone.notes.some((note) => note.includes('未物化')),
     'a partially materialized tree is not the "not materialized" case')
@@ -435,10 +445,12 @@ test('真实仓库：C14 manifest 三方字段集 + plugin-row 单源（消费�
 
 test('真实仓库：C12 在上游子模块物化时零违规（未物化则跳过）', () => {
   const profilePath = join(REPO_ROOT, 'vendor', 'harness-checkout', 'packages', 'boot', 'app-boot', 'src', 'profile.ts')
+  const bundlesPath = join(REPO_ROOT, 'vendor', 'harness-checkout', 'packages', 'util', 'official-bundles', 'src', 'bundles.ts')
   const managerPath = join(REPO_ROOT, 'vendor', 'harness-checkout', 'packages', 'boot', 'plugin-manager', 'src', 'operations.ts')
   const pluginPath = join(REPO_ROOT, 'vendor', 'harness-checkout', 'apps', 'cli', 'src', 'plugin.ts')
   const { violations, notes } = profileContractFindings({
     profileSource: existsSync(profilePath) ? readFileSync(profilePath, 'utf8') : null,
+    bundlesSource: existsSync(bundlesPath) ? readFileSync(bundlesPath, 'utf8') : null,
     managerSource: existsSync(managerPath) ? readFileSync(managerPath, 'utf8') : null,
     pluginSource: existsSync(pluginPath) ? readFileSync(pluginPath, 'utf8') : null,
   })

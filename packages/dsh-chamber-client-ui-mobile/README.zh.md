@@ -358,7 +358,7 @@ ContextMeter 环因此保留 `flex:none`）。0.2.1-rc.2 在标签槽里追加 `
 `official-hover-card.ts` 就是针对该档的文档级看护（与上面 tooltip 规则同一
 `(pointer: coarse) and (hover: none)` 门控——有 hover 能力的指针、以及全部桌面，
 都保持官方行为）。它从不触碰官方包：对一张按官方自身锚定关系与两个 CSS-module
-类名 token（`_card_38jqx_*` / `_root_38jqx_*`）唯一匹配到某个 wrapper 的卡片，
+类名 token（`_card_bgejw_*` / `_root_bgejw_*`）唯一匹配到某个 wrapper 的卡片，
 它在该 wrapper 上派发**一次**冒泡 `pointerout`（无 related target）。锚定关系是
 固定 pin 的原子真正渲染的两种摆放：COMPACT（`card.left = wrapper.right + 8`；
 `card.top = wrapper.top`，或底夹的 `card.bottom = innerHeight − 8`）与
@@ -487,7 +487,7 @@ pnpm run test:mobile
 
 官方 dsh DOM 实测（CDP 审计在 **v0.1.5-alpha.2** 完成，并在 **v0.1.5-rc.2**
 重锚）——下列锚点在 rc.2 树中曾全部成立（本节 rc.1/rc.2 均指 v0.1.5 世系，
-当前 pin 一律写全 0.2.1-rc.3）；当前 pin（v0.2.1-rc.3）下严格锚点门解析全部
+当前 pin 一律写全 0.2.2-alpha.2）；当前 pin（v0.2.2-alpha.2）下严格锚点门解析全部
 声明锚点（共 68 条，其中 60 条为上游锚点；最小断言集 29 项 = 26 项声明侧 + 3 项
 external），含属性/role/slot 锚点、
 插件侧 local-name 类名锚点、external 发射钉（`_crumbSeg`，以及 rc.3 折叠视图容器
@@ -525,7 +525,7 @@ rc.3 产物重锚，零命中现为**硬失败**（见下）；alpha.2 → rc.1 
 `createPortal(…, document.body)`），抽屉的 transform 不再会把它裁进去；
 抽屉打开态仍刻意用 `transform: none`。
 
-当前 vendored 基线为 **v0.2.1-rc.3**（harness pin `1f81c047`；单一来源
+当前 vendored 基线为 **v0.2.2-alpha.2**（harness pin `f3803c96`；单一来源
 `harness.commit`）。历史审计记录：上述锚点已对 alpha.2 源码复核（2026-09 重锚），
 并在 v0.1.5-rc.2 上复验成立（rc.1 → rc.2 的客户端改动见上，
 不触及这些锚点与本插件的叠层对位），复核同时确认：composer seat 是
@@ -620,19 +620,19 @@ chrome；`[role="menu"] [role="menuitem"][aria-selected]` 高亮信号在本 pin
 而不只写在上面那一节）：** `official-hover-card.ts` 用三项事实匹配官方原子，pin 移动时
 一并重审：
 
-- `_root_38jqx_3` 与 `_card_38jqx_9`——**被服务的那份** bundle 里 ui-primitives
-  `HoverCard` 模块的 CSS-module class token。它们是 build-time 哈希：rc.2 构建在
+- `_root_bgejw_3` 与 `_card_bgejw_9`——**被服务的那份** bundle 里 ui-primitives
+  `HoverCard` 模块的 CSS-module class token。它们是 build-time 哈希：当前 pin 的构建在
   `@deepseek-ai/dsh-web-frontend/dist/assets/index-*.js` 里产出它们（已对
-  `packages/desktop/vendor/dsh/` 下的随仓副本逐字节核对，压缩别名形如
-  `qp="_root_38jqx_3"` / `Gp="_card_38jqx_9"` / `Kp="_copyable_38jqx_21"`；同名 `index-*.css`
-  也带这两条类选择器）。rc.2 重锚替换了上一个 pin 的 `_root_1b2ny_*` / `_card_1b2ny_*`
-  对；`verify-mobile-anchors.mjs` 现在对零命中 hash token **硬失败**（此前为 advisory），
+  `packages/desktop/vendor/dsh/` 下的随仓副本逐字节核对，压缩别名是
+  `Cj="_root_bgejw_3"` / `$j="_card_bgejw_9"` / `Sj="_copyable_bgejw_21"`；同名 `index-*.css`
+  也带这两条类选择器）。本轮重锚替换了上一个 pin 的 `_root_38jqx_*` / `_card_38jqx_*`
+  对（那一对替换过 `_root_1b2ny_*` / `_card_1b2ny_*`）；`verify-mobile-anchors.mjs` 现在对零命中 hash token **硬失败**（此前为 advisory），
   下一次 pin 前移因此强制重锚，而不是把 watchdog 静默降级为 no-op（fail closed，绝不
   误触发）——这仍是本包唯一没有属性形兜底的锚点；
 - 锚定几何：COMPACT `card.left = wrapper.right + 8`、`card.top = wrapper.top`（或
   贴底夹取的 `card.bottom = innerHeight − 8`），加上 PREVIEW 关系（wrapper 上/下：
   两侧 24px containment inset、`wrapper.bottom + 8` / `wrapper.top − 8`）；
-- 卡片盒是该 wrapper 内唯一的 `[class*="_card_38jqx_"]` 元素。
+- 卡片盒是该 wrapper 内唯一的 `[class*="_card_bgejw_"]` 元素。
 
 `test/dom/official-hover-card.test.ts` 钉住常数、被服务类名串与 src↔产物锁步，C8 钉住随包
 字节；`verify-mobile-anchors.mjs` 是能看到被服务 bundle 哈希变化的那道门（对照

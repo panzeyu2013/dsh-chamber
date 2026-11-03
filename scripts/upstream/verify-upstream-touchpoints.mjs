@@ -43,11 +43,11 @@
  *       官方 opt-in（`dsh-experimental-*`）按**登记白名单**放行（运行时根包自己声明
  *       的 opt-in 依赖确实属于 F）：未登记名字红（取错来源/上游新提升），已登记名字
  *       不再出现也红（上游移除/改名）。实例树物化时另做等价性交叉校验（允许差集 =
- *       其他平台 `node-addon-system-*` / `libreoffice-kit-*`）
+ *       其他平台 `node-addon-system-*` / `libreoffice-kit-*` / `dsh-experimental-cua-macos`）
  *   C12 profile 契约锚（硬失败）：上游源码仍以 `dsh.profile.bundles` 承载层列表、
  *       以 `dsh.bundle.patch` 声明层、web 模板默认组合不变、profile workspace 仍是
- *       hoisted + 不自动装 peer；任一漂移 ⇒ 停升级、改派生（B₀ 快照）。三个锚点文件
- *       （app-boot profile.ts / plugin-manager operations.ts / CLI plugin.ts）都必须可读：
+ *       hoisted + 不自动装 peer；任一漂移 ⇒ 停升级、改派生（B₀ 快照）。四个锚点文件
+ *       （app-boot profile.ts / plugin-manager operations.ts / CLI plugin.ts / official-bundles bundles.ts）都必须可读：
  *       树部分物化时缺文件 = 改名/搬移（违规），只有整体未物化才降级为 note
  *   C13 播种注册表结构（硬失败）：`HOST_*_PACKAGE_NAME` 常量 ↔ `HOST_*_INSERT` 行 ↔
  *       `CHAMBER_HOST_PACKAGES` 注册表三面一一对应（S 分量与播种机制脱节即红）
@@ -264,6 +264,14 @@ const FORKS = verifierForks(REGISTRY)
 /** ensure-harness-vendor EXCLUDED（fork 影子覆盖的上游包）——C6 存在性哨兵。 */
 const EXCLUDED_UPSTREAM_DIRS = REGISTRY.excludedUpstreamDirs
 
+
+/** 按目录前缀登记、且承诺「只承载数据文件」的 dropped 面：上游一旦往里放代码/类型，
+ *  前缀登记就会把它静默吞掉，必须改成按文件重裁（registry 的 droppedNotes 里写着同一句
+ *  人工承诺；这里把它变成门）。`tests/` 不在此列——它本来就是代码。 */
+const DATA_ONLY_DROPPED_PREFIXES = ['locale/']
+/** 代码/类型文件（含 ESM/CJS 与 TS 的 .mts/.cts）：出现在纯数据面即需重裁。 */
+const CODE_FILE_RE = /\.(?:[cm]?[jt]sx?)$/u
+
 /** C8 advisory 模式：绝不写盘（CI install 前那段就是靠它）。 */
 const noArtifactRebuild = args.noArtifactRebuild
 /** C2 的 tag 区间（advisory），由守卫保证「恰好两个值」。 */
@@ -287,6 +295,16 @@ for (const fork of FORKS) {
   const patchedKeys = new Set(Object.keys(fork.patched))
   let pure = 0
   let violations = []
+  // 前缀登记的纯数据面：上游若把代码/类型放进该目录，前缀会把新文件整批吞掉，
+  // 所以这里先于逐个文件的分类判定把它判红（判据见 DATA_ONLY_DROPPED_PREFIXES）。
+  for (const prefix of droppedPrefix.filter((p) => DATA_ONLY_DROPPED_PREFIXES.includes(p))) {
+    for (const f of upstreamFiles) {
+      if (!within(f, [prefix])) continue
+      if (CODE_FILE_RE.test(f)) {
+        violations.push(`dropped 前缀 ${prefix} 登记为纯数据面，但上游出现了代码/类型文件（须按文件重裁）: ${f}`)
+      }
+    }
+  }
   for (const f of upstreamFiles) {
     if (droppedExact.includes(f) || within(f, droppedPrefix)) continue
     if (!forkFiles.includes(f)) {
@@ -302,6 +320,10 @@ for (const fork of FORKS) {
     }
   }
   for (const f of forkFiles) {
+    // dropped 的语义是「上游文件有意不镜像」：fork 里出现 dropped 登记面下的文件说明登记过期/覆盖了真实文件。
+    if (droppedExact.includes(f) || within(f, droppedPrefix)) {
+      violations.push(`fork 里有落在 dropped 登记面下的文件（dropped 语义是上游文件不存在）: ${f}`)
+    }
     if (!upstreamFiles.includes(f)) {
       const isOwnFile = ownKeys.has(f) || within(f, [...(fork.ownPrefix ?? [])])
       if (!isOwnFile) {
@@ -967,10 +989,12 @@ for (const fork of FORKS) {
 
   // C12 —— profile 契约锚（上游源码；子模块未物化时由 C1/C3/C5 响亮失败）
   const profileSourcePath = join(SUBMODULE, 'packages', 'boot', 'app-boot', 'src', 'profile.ts')
+  const bundlesSourcePath = join(SUBMODULE, 'packages', 'util', 'official-bundles', 'src', 'bundles.ts')
   const managerSourcePath = join(SUBMODULE, 'packages', 'boot', 'plugin-manager', 'src', 'operations.ts')
   const pluginSourcePath = join(SUBMODULE, 'apps', 'cli', 'src', 'plugin.ts')
   const c12 = profileContractFindings({
     profileSource: existsSync(profileSourcePath) ? readFileSync(profileSourcePath, 'utf8') : null,
+    bundlesSource: existsSync(bundlesSourcePath) ? readFileSync(bundlesSourcePath, 'utf8') : null,
     managerSource: existsSync(managerSourcePath) ? readFileSync(managerSourcePath, 'utf8') : null,
     pluginSource: existsSync(pluginSourcePath) ? readFileSync(pluginSourcePath, 'utf8') : null,
   })

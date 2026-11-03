@@ -505,7 +505,7 @@ either.
 hover-capable pointer, and every desktop, keeps official behavior). It never
 touches the official package: for a card matched to exactly one wrapper by one
 of the atom's own anchoring relations and the two CSS-module class tokens
-(`_card_38jqx_*` / `_root_38jqx_*`), it dispatches ONE bubbling `pointerout` on
+(`_card_bgejw_*` / `_root_bgejw_*`), it dispatches ONE bubbling `pointerout` on
 the wrapper with no related target. The relations are the two placements the
 pinned atom renders: COMPACT (`card.left = wrapper.right + 8`; `card.top =
 wrapper.top`, or the bottom-clamped `card.bottom = innerHeight − 8`) and
@@ -679,8 +679,8 @@ pnpm run test:mobile
 Official dsh DOM, empirically audited via CDP at **v0.1.5-alpha.2** and re-anchored
 at **v0.1.5-rc.2** — every anchor below resolved in the rc.2 tree (rc.1/rc.2 in this
 section mean the v0.1.5 lineage; the current pin is always written in full as
-v0.2.1-rc.3). Under the current
-pin (v0.2.1-rc.3) the strict anchor gate resolves the declared set (68 declared
+v0.2.2-alpha.2). Under the current
+pin (v0.2.2-alpha.2) the strict anchor gate resolves the declared set (68 declared
 anchors, 60 of them upstream; 29 minimal assertions = 26 declared-side + 3
 external) including the attribute/role/
 slot anchors, the plugin local-name class anchors, the external emission pins
@@ -730,7 +730,7 @@ dialog is body-portaled by upstream (rc.2 `SettingsPanel` uses
 `createPortal(…, document.body)`), so the drawer's transform no longer traps
 it; the drawer open state still uses `transform: none` deliberately.
 
-The vendored base is now **v0.2.1-rc.3** (harness pin `1f81c047`; single source
+The vendored base is now **v0.2.2-alpha.2** (harness pin `f3803c96`; single source
 `harness.commit`). Historical audit record: the anchors above were re-verified
 against the alpha.2 source (2026-09 re-anchor) and held at v0.1.5-rc.2 (whose
 client deltas are listed above and left those anchors, and the
@@ -859,14 +859,15 @@ too, so they are listed here rather than only in the feature section above):**
 `official-hover-card.ts` matches the official atom by three facts, all re-audited
 when the pin moves:
 
-- `_root_38jqx_3` and `_card_38jqx_9` — the ui-primitives `HoverCard` module's
+- `_root_bgejw_3` and `_card_bgejw_9` — the ui-primitives `HoverCard` module's
   CSS-module class tokens in the SERVED bundle. They are build-time hashes: the
-  rc.2 build emits them in `@deepseek-ai/dsh-web-frontend/dist/assets/index-*.js`
+  pinned build emits them in `@deepseek-ai/dsh-web-frontend/dist/assets/index-*.js`
   (verified byte-for-byte on the bundled copy under `packages/desktop/vendor/dsh/`,
-  where the minified aliases are `qp="_root_38jqx_3"` / `Gp="_card_38jqx_9"` /
-  `Kp="_copyable_38jqx_21"`; the matching `index-*.css` carries the same two class
-  selectors). The rc.2 re-anchor replaced the previous pin's `_root_1b2ny_*` /
-  `_card_1b2ny_*` pair; `verify-mobile-anchors.mjs` now **hard-fails** a zero-hit
+  where the minified aliases are `Cj="_root_bgejw_3"` / `$j="_card_bgejw_9"` /
+  `Sj="_copyable_bgejw_21"`; the matching `index-*.css` carries the same class
+  selectors). The current re-anchor replaced the previous pin's `_root_38jqx_*` /
+  `_card_38jqx_*` pair (which had replaced `_root_1b2ny_*` / `_card_1b2ny_*`);
+  `verify-mobile-anchors.mjs` **hard-fails** a zero-hit
   hash token (it was advisory before), so the next pin move forces the re-anchor
   instead of degrading the watchdog to a silent no-op (fail closed, never a
   misfire), and this remains the one anchor in the package with no
@@ -875,7 +876,7 @@ when the pin moves:
   wrapper.top` (or the bottom-clamped `card.bottom = innerHeight − 8`), plus
   the PREVIEW relation above/below the wrapper (24px containment inset,
   `wrapper.bottom + 8` / `wrapper.top − 8`);
-- the card box being the only `[class*="_card_38jqx_"]` element inside that
+- the card box being the only `[class*="_card_bgejw_"]` element inside that
   wrapper.
 
 `test/dom/official-hover-card.test.ts` pins the constants, the served class

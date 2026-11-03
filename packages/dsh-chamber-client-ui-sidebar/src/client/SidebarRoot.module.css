@@ -7,7 +7,17 @@
    mid-slide. */
 
 .root {
+  /* Chamber shell owns 12px inline padding (its own geometry, upstream moved to 8px).
+     The other three words exist because the pinned upstream CSS that ships in these
+     bundles (ui-workspace rows, ui-settings-* panels) reads them: an undefined var makes
+     the consuming calc()/gap declaration invalid and the rule drops. Today those
+     components are not mounted in steady state (the chamber shell replaces the browser
+     and shadows the official settings root), so this only repairs the fallback path;
+     the values mirror upstream's words and are locked by the vendor test. */
   --dsh-sidebar-inline-padding: 12px;
+  --dsh-sidebar-row-padding: 12px;
+  --dsh-sidebar-label-gap: 6px;
+  --dsh-sidebar-paint-inset: 3px;
   display: flex;
   flex-direction: column;
   height: 100%;

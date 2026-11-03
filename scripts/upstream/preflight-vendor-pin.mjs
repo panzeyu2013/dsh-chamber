@@ -34,7 +34,7 @@
  * 退出码：默认 0（advisory；第 4 问的②只报不判——改名/搬代码会带来假阳性，
  * 复核清单的价值在"列出来"，不在"判红"）；`--fail-on-replay` 时若存在需人工
  * 重放项（fork 面 / seam / 新增 client 行 / 移除包 / **dropped 面的能力面变化** /
- * 上游删除 / **未登记的缺失文件**）则 1——测试/打包配置/README 这类 dropped 噪声面
+ * 上游删除 / **未登记的缺失文件**）则 1——测试/打包配置/README/文案数据 这类 dropped 噪声面
  * 只报不计（见 {@link isDroppedNoise}），否则上游每次功能提交都会打红这个 flag。
  * 只依赖内置模块 + git（+ 可选 npm view）；不写工作树、不动 submodule 的 HEAD
  * （`git diff` 只读对象库；若 tag 对象不在本地会提示 fetch 命令而不自动 fetch）。
@@ -153,15 +153,19 @@ export function droppedReasonFor(fork, relPath) {
 }
 
 /**
- * dropped 面里的"噪声面"：chamber 有意不镜像的测试 / 打包配置 / README。它们变了照样
- * 列出来，但默认不算"需人工处理"——上游几乎每次功能提交都动测试，把它们计入硬门会让
- * --fail-on-replay 常年红，最后被当成噪声忽略。
+ * dropped 面里的"噪声面"：chamber 有意不镜像的测试 / 打包配置 / README / 文案目录。它们变了
+ * 照样列出来，但默认不算"需人工处理"——上游几乎每次功能提交都动测试与文案，把它们计入硬门
+ * 会让 --fail-on-replay 常年红，最后被当成噪声忽略。文案目录（`locale/`）按目录登记在
+ * registry 的 dropped 里且这些 fork 无 locale 消费面，故与测试同属噪声。
  * @param relPath - 相对该 fork 上游包根的路径。
  */
 export function isDroppedNoise(relPath) {
   return relPath.startsWith('tests/') || relPath.includes('/tests/')
     || relPath === 'tsdown.config.ts' || relPath.endsWith('/tsdown.config.ts')
     || /(?:^|\/)README(?:\.[^/]*)?$/.test(relPath)
+    // 只认 fork 包根下的 locale/*.json（registry 登记的 locale/ 就是文件面）——
+    // 同名前缀（locale.ts）、子目录（src/locale/x）与非数据文件不算噪声，必须留在“需处理”里。
+    || /^locale\/[^/]+\.json$/.test(relPath)
 }
 
 /**
@@ -634,7 +638,7 @@ function main() {
         }
       }
       if (droppedNoiseItems.length > 0) {
-        console.log('[preflight] dropped 噪声面变化 ' + droppedNoiseItems.length + ' 个（测试/打包配置/README，只报不计失败）：' + droppedNoiseItems.slice(0, 8).map(item => item.file).join(', '))
+        console.log('[preflight] dropped 噪声面变化 ' + droppedNoiseItems.length + ' 个（测试/打包配置/README/文案数据，只报不计失败）：' + droppedNoiseItems.slice(0, 8).map(item => item.file).join(', '))
       }
     }
     if (report.nounCandidates.length > 0) {

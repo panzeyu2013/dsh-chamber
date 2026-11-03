@@ -1283,9 +1283,11 @@ connection-target scope 所有的目标；重登有界（一次 + 429 退避）�
 
 ## 15. 包、CI 与发布
 
-`@dsh-chamber/gateway` 构建为 `dist/index.js` 与带 shebang 的 `dist/cli.js`，要求
-Node 22+；package export 不指向源码 TypeScript。根脚本包含 `build:gateway`、
-`typecheck:gateway`、`test:gateway`。
+`@dsh-chamber/gateway` 构建为 `dist/index.js` 与带 shebang 的 `dist/cli.js`；package export
+不指向源码 TypeScript。根脚本包含 `build:gateway`、`typecheck:gateway`、`test:gateway`。
+**Node 下限跟随 pin 的 dsh 运行期 `engines`**（当前 ≥24.9；单一来源是运行期锁里那句
+`engines`，本包的 `engines` 与安装器 `preflight` 同批对齐并判到 minor）：产物语法目标
+（esbuild `node22`）只约束编译产物，是另一条轴，不设运行下限。
 
 运行时版本管理（design 18 §9）：`@dsh-chamber/dsh-runtime` 以 workspace devDependency
 经 `scripts/build.mjs` 与 control-plane 一起打入 `dist/`；gateway 另新增钉版本运行时
@@ -1484,7 +1486,7 @@ chamber 客户端插件）见 §3 装配矩阵与 §10.2。
 dsh-web-mobile）、`dsh-ui-mobile`（npm 已发布）、`dsh-web-ui-mobile`、`dsh-mobile-pwa`
 （五者 MIT、均已停更）与 `dsh-meow-smooth`（唯一活跃、键盘/IME 机制最完整）。
 **实现纪律：零代码复制、完整重写**——只吸收设计决策，不 fork/搬运社区文件。重写输入：
-① dsh 基线 `v0.2.1-rc.3`（`harness.commit`），走 chamber 现有模板与构建体系；② N-ctx 多实例：
+① dsh 基线 `v0.2.2-alpha.2`（`harness.commit`），走 chamber 现有模板与构建体系；② N-ctx 多实例：
 打标/样式按实例根作用域化，行为层 effect 为 document 级单实例设计（多 shell renderer 挂载时
 必须作用域化）；③ layout 事实源在 `dsh-chamber-client-ui-layout`，不注入 gateway 托管实例
 （mobile 的唯一部署），只观察官方 `data-sidebar-collapsed`；④ 选择器锚自研 DOM + fork 内

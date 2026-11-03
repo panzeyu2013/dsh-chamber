@@ -36,7 +36,7 @@
  *     锚点根缺失时也必须先判定。
  *
  * 分级：`data-*` / `role` / `slot` 锚点零命中 ⇒ exit 1；build-time 哈希
- * class token（`_root_38jqx_` 这类，pin 一动必变、无属性形兜底）零命中同样
+ * class token（`_root_bgejw_` 这类，pin 一动必变、无属性形兜底）零命中同样
  * ⇒ exit 1——它只能由「pin 前移后重锚」修复，advisory 会让门在 pin bump 后继续
  * 绿而插件静默 no-op，所以本门把它升为硬失败（重锚证据与产物路径见
  * packages/dsh-chamber-client-ui-mobile/README.md「Anchor baseline」）。
@@ -153,8 +153,8 @@ export const REQUIRED_ANCHORS = [
   { kind: 'local-name', token: '_toBottomSlot', declared: 'plugin', note: 'styles.ts 回到底部控件的键盘抬升规则；上游 dsh-client-ui-chat/lib/client.js 发射 `EvIC1a_toBottomSlot`' },
 
   // —— 悬停卡 watchdog 的 build-time CSS-module token（无属性形兜底，pin bump 必重锚） ——
-  { kind: 'hash', token: '_root_38jqx_', declared: 'plugin', note: 'official-hover-card.ts OFFICIAL_CARD_ROOT_CLASS_TOKEN；rc.3 产物 index-*.js 的 CSS-module 类名绑定（构建期最小化名，逐 pin 会变）；token 本身 = styles 的 _root_38jqx_' },
-  { kind: 'hash', token: '_card_38jqx_', declared: 'plugin', note: 'official-hover-card.ts OFFICIAL_CARD_CLASS_TOKEN；rc.3 产物 index-*.js 的 CSS-module 类名绑定（构建期最小化名，逐 pin 会变）；token 本身 = styles 的 _card_38jqx_' },
+  { kind: 'hash', token: '_root_bgejw_', declared: 'plugin', note: 'official-hover-card.ts OFFICIAL_CARD_ROOT_CLASS_TOKEN；0.2.2 产物 index-*.js 的 CSS-module 类名绑定（构建期最小化名，逐 pin 会变）；token 本身 = styles 的 _root_bgejw_' },
+  { kind: 'hash', token: '_card_bgejw_', declared: 'plugin', note: 'official-hover-card.ts OFFICIAL_CARD_CLASS_TOKEN；0.2.2 产物 index-*.js 的 CSS-module 类名绑定（构建期最小化名，逐 pin 会变）；token 本身 = styles 的 _card_bgejw_' },
 
   // —— external 锚（只查上游发射侧：插件不点名该 class/属性，但上游一改名/换容器即红） ——
   { kind: 'local-name', token: '_crumbSeg', declared: 'external', note: '会话头面包屑段：上游 ConversationSessionHeader 把每一节渲染成 span（类名字典 wSkVaW_crumbSeg）；插件用结构性 nav > span 吃它，故这里只钉上游发射面' },
@@ -356,7 +356,7 @@ export function extractAnchorsFromSource(source) {
       push('slot', value[1], roleMap.index + value.index, 'ROLE_SLOT_KEYS')
     }
   }
-  // 6. build-time 哈希 class token（`_root_38jqx_` / `_card_38jqx_`）：硬失败族（pin bump 必重锚）。
+  // 6. build-time 哈希 class token（`_root_bgejw_` / `_card_bgejw_`）：硬失败族（pin bump 必重锚）。
   //    与其它 kind 一样在 CSS 注释投影上抽——注释里的哈希提及不是声明（styles.ts）。
   for (const match of code.matchAll(/_[a-z][a-z0-9]*_[a-z0-9]{5,}_/g)) {
     push('hash', match[0], match.index, 'hash-token')

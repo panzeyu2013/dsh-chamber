@@ -231,7 +231,8 @@ export function missingServiceFact(
 }
 
 /**
- * The known NON-COVERED host-graph rows that PROVIDE a probed service, keyed by
+ * The known provider packages (a covered first-screen factory or a NON-COVERED
+ * host-graph row) that PROVIDE a probed service, keyed by
  * cordis service name. The roster knows only the INJECTORS (plugins pending on a
  * service); the actionable half is usually the missing PROVIDER row, which the
  * single banner slot must be able to name. Ids are upstream package names, pinned
@@ -245,6 +246,11 @@ export const KNOWN_SERVICE_PROVIDERS: Readonly<Record<string, string>> = {
   sidebarRightTabs: '@deepseek-ai/dsh-client-ui-sidebar-right',
   // the chain the row waits on: ui-sidebar-right injects `resources`, provided only by @deepseek-ai/dsh-client-resources.
   resources: '@deepseek-ai/dsh-client-resources',
+  // 0.2.2: ui-chat (client/apply.ts) and ui-attachment inject `fileDrag`; the provider is the composite's
+  // covered first-screen factory (CHAMBER_COVERED_FACTORY_IDS), so a host graph without the row still
+  // gets the service. A probe hit here therefore means the composite factory never ran — not a missing
+  // extra host-graph row; the diagnostic below names both possibilities for that reason.
+  fileDrag: '@deepseek-ai/dsh-client-ui-file-drag',
 }
 
 /**

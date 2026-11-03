@@ -26,7 +26,7 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseReleaseVersion } from './release-semver.mjs'
@@ -64,7 +64,7 @@ for (let i = 0; i < args.length; i++) {
 }
 
 const VERSION = positional[0]
-const FORK_VERSION = flags.forkVersion ?? '0.2.1-rc.3'
+const FORK_VERSION = flags.forkVersion ?? '0.2.2-alpha.2'
 
 /** `--help` 的用法文本：入口与可用旗标；检查项与既有约定见文件头注释。 */
 function printUsage() {
@@ -170,6 +170,23 @@ function checkRuntimeSourceLine() {
     fail(c, `runtime dsh=${match[1]} != fork/source baseline=${FORK_VERSION} — 双线互斥窗口：` +
       `源码线已是 ${FORK_VERSION} wire，旧 host 不提供斜杠方法（本地 spawn 探针必败/远端判非 dsh/gateway features 全灭）。` +
       `先 npm publish @deepseek-ai/dsh@${FORK_VERSION}，再 bundle:dsh -- --force --refresh-lockfile + release.yml env + install-gateway.sh 同步`)
+  }
+  // The constant above is hand-maintained; bind it to the SOURCE pin so the three
+  // anchor copies (this constant, release.yml env, install-gateway.sh default) cannot
+  // drift together away from the checked-out upstream. Skip when the submodule is not
+  // materialised (the pin itself is asserted by verify-upstream-touchpoints C5).
+  const vendorPkg = join(REPO_ROOT, 'vendor', 'harness-checkout', 'package.json')
+  if (existsSync(vendorPkg)) {
+    const pinned = JSON.parse(readFileSync(vendorPkg, 'utf8')).version
+    if (pinned !== FORK_VERSION) {
+      fail(c, `vendor pin version=${pinned} != fork/source baseline=${FORK_VERSION} — FORK_VERSION 必须随源码线 pin 移动（harness.commit 的 tag 版本）`)
+    }
+  } else {
+    // Say it out loud: a green line must not be read as "the pin was compared".
+    // The release job checks out without submodules, so this binding only runs where the
+    // vendor tree exists; the pin itself stays covered by verify-upstream-touchpoints C5/C10.
+    console.log('SKIP vendor pin binding — vendor/harness-checkout absent (C5/C10 still bind the pin; '
+      + 'run the full preflight on a materialised vendor tree to compare version↔FORK_VERSION)')
   }
   ok(c, `runtime dsh ${match[1]} == source baseline ${FORK_VERSION}`)
 }

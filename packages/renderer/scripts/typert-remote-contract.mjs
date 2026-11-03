@@ -13,7 +13,7 @@ import { stripComments } from '../../../scripts/dev/test-support/source-text.ts'
 
 /**
  * The pinned assembly contract: the package list `dsh-api-remotes`' client
- * half mounts into `ctx.remote()`, in apply() mount order (26 rows). Mount
+ * half mounts into `ctx.remote()`, in apply() mount order (27 rows). Mount
  * order is runtime-significant, so it is the ONE ordered table. The `/remote`
  * import selection has no runtime order semantics: callers compare its SET
  * against this same table (single source — the lockstep test
@@ -37,6 +37,7 @@ export const EXPECTED_MOUNT_PACKAGES = Object.freeze([
   '@deepseek-ai/dsh-plugin-manager',
   '@deepseek-ai/dsh-plugin-market',
   '@deepseek-ai/dsh-client-ui-plugin-manager',
+  '@deepseek-ai/dsh-client-ui-trajectory',
   '@deepseek-ai/dsh-message-feedback',
   '@deepseek-ai/dsh-command-feedback',
   '@deepseek-ai/dsh-client-file-upload',
