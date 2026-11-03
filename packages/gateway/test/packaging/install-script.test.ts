@@ -746,6 +746,103 @@ cmd_update
   }
 })
 
+test('update re-bakes the local launcher with the node it runs under', () => {
+  // The service runs the interpreter baked into $BASE_DIR/bin/gateway at install time.
+  // An update invoked from a newer node used to leave that path stale, so the floor
+  // check could pass while the service kept a node that may not exist any more.
+  const base = mkdtempSync(join(tmpdir(), 'gateway-installer-update-launcher-'))
+  const bin = join(base, 'node-bin')
+  mkdirSync(bin, { recursive: true })
+  const realNode = process.execPath
+  writeFileSync(join(bin, 'node'), `#!/usr/bin/env bash
+if [[ "\${1:-}" == "--version" ]]; then printf '%s\\n' 'v24.9.0'; exit 0; fi
+exec '${realNode}' "$@"
+`, { mode: 0o755 })
+  const oldTree = join(base, 'gateway', 'versions', '1.0.0')
+  try {
+    writeGatewayTree(oldTree, '1.0.0')
+    const result = runLibraryResult(`
+mkdir -p "$GATEWAY_DIR" "$VERSIONS_DIR/1.0.0"
+ln -s "$VERSIONS_DIR/1.0.0" "$GATEWAY_DIR/current"
+VERSION=1.0.0
+INSTALL_METHOD=local
+GATEWAY_PORT=30801
+DSH_PORT=30800
+BIND_HOST=127.0.0.1
+PUBLIC_ORIGIN=""
+TRUSTED_PROXY=""
+SERVICE_MODE=user
+DSH_WS=/tmp/dsh
+NO_AUTH=1
+ENV_ANCHOR=0
+UI_PASSWORD=""
+API_TOKEN=""
+write_config
+
+# The launcher baked at install time points at an interpreter that is gone now.
+mkdir -p "$BASE_DIR/bin"
+printf '#!/usr/bin/env bash\\nexec %s "$GATEWAY_DIR/current/dist/cli.js" "$@"\\n' /nonexistent/node > "$BASE_DIR/bin/gateway"
+chmod +x "$BASE_DIR/bin/gateway"
+
+VERSION=v2.0.0
+resolve_version() { VERSION="\${VERSION#v}"; }
+download_verify() { mkdir -p "$1"; : > "$1/dsh-chamber-gateway-$VERSION.tgz"; }
+stage_local_version() { mkdir -p "$VERSIONS_DIR/$2"; }
+systemctl_for_mode() { [[ "$1" == "is-active" ]] && return 1; return 0; }
+launch_identity() { printf 'identity-1'; }
+write_unit() { return 0; }
+restart_service() { return 0; }
+health_wait() { return 0; }
+cmd_update
+`, { DSH_CHAMBER_BASE_DIR: base, PATH: `${bin}:${process.env.PATH ?? ''}` })
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`)
+    const launcher = readFileSync(join(base, 'bin', 'gateway'), 'utf8')
+    assert.ok(launcher.includes(`${bin}/node`), `update must re-bake the launcher with the node it ran under: ${launcher}`)
+    assert.doesNotMatch(launcher, /\/nonexistent\/node/, 'the stale interpreter path must be replaced')
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+test('update refuses to start below the pinned node floor without touching the tree', () => {
+  const base = mkdtempSync(join(tmpdir(), 'gateway-installer-update-floor-'))
+  const bin = join(base, 'node-bin')
+  mkdirSync(bin, { recursive: true })
+  writeFileSync(join(bin, 'node'), '#!/usr/bin/env bash\nprintf \'%s\\n\' \'v24.8.0\'\n', { mode: 0o755 })
+  const oldTree = join(base, 'gateway', 'versions', '1.0.0')
+  try {
+    writeGatewayTree(oldTree, '1.0.0')
+    const result = runLibraryResult(`
+mkdir -p "$GATEWAY_DIR" "$VERSIONS_DIR/1.0.0"
+ln -s "$VERSIONS_DIR/1.0.0" "$GATEWAY_DIR/current"
+VERSION=1.0.0
+INSTALL_METHOD=local
+GATEWAY_PORT=30801
+DSH_PORT=30800
+BIND_HOST=127.0.0.1
+PUBLIC_ORIGIN=""
+TRUSTED_PROXY=""
+SERVICE_MODE=user
+DSH_WS=/tmp/dsh
+NO_AUTH=1
+ENV_ANCHOR=0
+UI_PASSWORD=""
+API_TOKEN=""
+write_config
+
+VERSION=v2.0.0
+resolve_version() { printf 'resolved\\n' > "$BASE_DIR/resolved-input"; VERSION="\${VERSION#v}"; }
+cmd_update
+`, { DSH_CHAMBER_BASE_DIR: base, PATH: `${bin}:${process.env.PATH ?? ''}` })
+    assert.notEqual(result.status, 0, 'a node below the pinned floor must stop the update')
+    assert.match(`${result.stdout}${result.stderr}`, /需要 ≥24\.9/u)
+    assert.equal(existsSync(join(base, 'resolved-input')), false, 'the floor must bite before the version resolves')
+    assert.equal(readlinkSync(join(base, 'gateway', 'current')), oldTree, 'a refused update must not move the pointer')
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
 test('foreground update restores the old local pointer and relaunches after target launch failure', () => {
   const base = mkdtempSync(join(tmpdir(), 'gateway-installer-foreground-rollback-'))
   const oldTree = join(base, 'gateway', 'versions', '1.0.0')
