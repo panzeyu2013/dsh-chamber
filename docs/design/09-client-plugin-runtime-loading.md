@@ -655,7 +655,7 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
   （绝不打断在途安装/启停），事实到达时再按墙钟复核窗口死线（后台节流不延长窗口）；
   `instance-version-conflict` **不自动重载**（重启也换不掉先加载者）。
   设置面板 header（壳 chrome，**不是 nav 单元**：design 15 §1 退役的组装诊断块不复活）以 `role="status"`
-  呈现选中来源的三类插件集事实（restart / 冲突 / 挂载失败）与「重新加载应用 / 重试 / 前往连接管理」动作；
+  呈现选中来源的两类**可动作**插件集事实（`restart-required` / `bundle-load-failed`）与「重新加载应用 / 重试」动作；`instance-version-conflict` 不投影、也不自动重载（boot 事实、无就地动作，唯一面 = 连接页；2026-11 取舍见 design 15 §6）；
   手动的「重新加载应用」是有意绕开自动预算/单飞的显式用户同意（代价与候选见 STATUS 开放项）。
   单测：renderer `plugin-refresh-convergence.test.ts` + `plugin-refresh-control.test.ts`（壳侧 reload 闸门/预算/代际栅栏）+ `live-graph.test.ts`（resync）、
   settings-bridge `plugin-notice.test.ts`、settings-plugin-manager `plugin-action-tracker.test.ts`
