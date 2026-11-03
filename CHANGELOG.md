@@ -11,6 +11,24 @@
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
 
+## [0.4.4-beta.1] - 2026-11-03
+
+### 新增
+- **捆绑 dsh 基线升至 0.2.2-alpha.2（f3803c96）** —— 源码线、运行期与三份 fork 副本同批换锚；官方前端带来 8 语言界面（chamber 自撰文案仍 zh/en，非 zh 回落 en，layout 快捷键标签随上游镜像）、`fileDrag` 图片拖拽与文字选区浮条，以及动作卡、创建建议、插件推荐、消息引用与 CUA 等新的客户端行（均按官方行加载，不进本仓覆盖集）。
+
+### 变更
+- **设置页顶部提示条不再重复跨实例插件冲突** —— 提示条只投影可操作的插件事实（重启后生效、bundle 加载失败）；跨实例 bundle 漂移是 boot 事实、页内没有可执行的修复动作，仍只在连接页的按实例诊断行与插件对话框呈现，打开设置不再反复出现该提示。
+- **gateway 安装与更新要求 Node ≥24.9** —— 安装器在任何写操作前检查 major.minor 并报出实际版本（Node 22/23 与 24.0–24.8 直接拒绝）；update 同步重写本地启动器的 node 绝对路径，避免「调用者已是新 node、服务仍跑安装时旧 node」的半升级。
+- **gateway 确定性启动失败不再自动重启** —— systemd 单元把 2（配置/用法错误）与 3（state 根租约冲突）都列入 `RestartPreventExitStatus`，启动上限明确为 60s/5 次的速率上限；容器形态建议 `--restart=on-failure:N`。
+
+### 修复
+- **健康载波不再每分钟重建一次** —— 被 60s 重建窗拒绝的 lane 重连不再在窗口边缘排期（旧形态会在健康载波上形成 60s 一次的重建节拍，并替换仍在出帧的连接）；只有证据型拒绝（开帧期限零帧、静默 teardown）保留一次窗口边缘替换，半开载波由 30s 开帧期限兜底（最坏多等约 28s）。
+- **租约冲突的报错按持有者类别归因** —— `StateRootLeaseError` 新增 live / unverified / foreign-machine / foreign-namespace 四类；`gateway auth reset-password` 与 CLI 不再把外机/外命名空间/无法核实的记录说成「gateway is running (pid N)」，而是给出判定依据与退出方式；记录中的 flavor 等文本字段按可打印 ASCII 收窄，防止伪造 journal 行。
+- **桌面登录失败不再断言隧道在线** —— 经 SSH 隧道收到 ECONNREFUSED 时，文案改为「登录连接被拒绝」，同时指向 gateway 服务与隧道/转发；本地 -L 转发在隧道消失时本地拒绝、远端端口关闭时 reset，原文案无法从 socket 码判断是哪一侧。
+- **远程实例插件的包内资产经 carrier 解析** —— web fork 的 refusing bootstrap require 补上 `asset(reference)`，`BootSeams` 同时携带 `loadBundle` 与 `resolveAsset`（显式 seam 优先，其次 `__DSH_TRANSPORT__`），worker 隧道下插件包资产不再回退成身份引用。
+- **侧栏会话行补齐可访问名与上游几何 token** —— `AnimatedRows` 改为调用方传入 role/label（浏览树显式 `role="tree"` 与名称），并发布上游样式表读取的三个 `--dsh-sidebar-*` 几何变量；未定义变量会让对应 `calc()`/`gap` 失效。
+- **触屏上插件管理导航不再残留 hover 底色** —— 导航格沿用上游 `@media (hover: hover)` 门，粘滞 hover 状态不再整格染色。
+
 ## [0.4.3] - 2026-10-26
 
 ### 新增
